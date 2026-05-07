@@ -1,0 +1,28 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "housegate_lib",
+    srcs = [
+        "main.go",
+        "secret.go",
+    ],
+    data = [
+        "//configs:exported_configs_example",
+    ],
+    importpath = "housegate/housegate/cmd",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//:housegate",
+        "//pkg/config",
+        "//pkg/secretsload",
+        "@com_github_prometheus_client_golang//prometheus/promhttp",
+        "@sentio-core//common/flags",
+        "@sentio-core//common/log",
+    ],
+)
+
+go_binary(
+    name = "housegate",
+    embed = [":housegate_lib"],
+    visibility = ["//visibility:public"],
+)

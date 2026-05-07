@@ -1,0 +1,38 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "sidecar",
+    srcs = [
+        "config.go",
+        "signer.go",
+        "upstream_select.go",
+    ],
+    importpath = "housegate/housegate/pkg/plugins/sidecar",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/auth",
+        "//pkg/chproto",
+        "//pkg/network",
+        "//pkg/plugin",
+        "@com_github_ethereum_go_ethereum//common",
+        "@sentio-core//common/log",
+    ],
+)
+
+go_test(
+    name = "sidecar_test",
+    srcs = [
+        "signer_test.go",
+        "upstream_select_test.go",
+    ],
+    embed = [":sidecar"],
+    deps = [
+        "//pkg/auth",
+        "//pkg/chproto",
+        "//pkg/chsession",
+        "//pkg/network",
+        "//pkg/plugin",
+        "@org_golang_x_crypto//sha3",
+        "@sentio-core//network/registry",
+    ],
+)

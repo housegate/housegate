@@ -1,0 +1,26 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "sessionstate",
+    srcs = [
+        "config.go",
+        "tracker.go",
+    ],
+    importpath = "housegate/housegate/pkg/plugins/sessionstate",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/chproto",
+        "//pkg/chsession",
+        "//pkg/plugin",
+    ],
+)
+
+go_test(
+    name = "sessionstate_test",
+    srcs = ["tracker_test.go"],
+    embed = [":sessionstate"],
+    deps = [
+        "//pkg/chproto",
+        "//pkg/chsession",
+    ],
+)

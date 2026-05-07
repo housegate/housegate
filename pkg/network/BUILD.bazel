@@ -1,0 +1,48 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "network",
+    srcs = [
+        "inmemory.go",
+        "inmemory_commitgate_observer.go",
+        "permission_commitgate_observer.go",
+        "redis.go",
+        "rpc.go",
+        "types.go",
+        "yaml.go",
+    ],
+    importpath = "housegate/housegate/pkg/network",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/chproto",
+        "//pkg/plugins/commitgate",
+        "//pkg/sqlmeta",
+        "@com_github_bytedance_sonic//:sonic",
+        "@com_github_redis_go_redis_v9//:go-redis",
+        "@in_yaml_go_yaml_v3//:yaml",
+        "@sentio-core//common/log",
+        "@sentio-core//common/statemirror",
+        "@sentio-core//network/registry",
+        "@sentio-core//network/state",
+    ],
+)
+
+go_test(
+    name = "network_test",
+    srcs = [
+        "inmemory_commitgate_observer_test.go",
+        "permission_commitgate_observer_test.go",
+        "rpc_test.go",
+        "yaml_test.go",
+    ],
+    data = ["//configs:exported_configs_example"],
+    embed = [":network"],
+    deps = [
+        "//pkg/chproto",
+        "//pkg/plugins/commitgate",
+        "//pkg/plugins/sidecar",
+        "//pkg/sqlmeta",
+        "@sentio-core//network/registry",
+        "@sentio-core//network/state",
+    ],
+)

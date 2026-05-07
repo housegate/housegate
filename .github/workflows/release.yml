@@ -1,0 +1,282 @@
+name: Release
+
+# Manually-triggered end-to-end release: compute the next version,
+# push an annotated tag, build binaries for linux/amd64 and
+# darwin/arm64 via Bazel (cross-compiled from linux using the zig
+# hermetic_cc_toolchain registered in MODULE.bazel), publish a GitHub
+# Release with both binaries + a combined SHA256SUMS attached, and
+# push a container image to ghcr.io tagged with the version + latest.
+#
+# Default bump=auto policy:
+#   - First cut on a UTC day → minor bump
+#   - Subsequent cuts the same UTC day → patch bump
+#   - No prior tag → bootstrap to v0.1.0
+# Override by selecting `major`, `minor`, or `patch` explicitly.
+#
+# This is one workflow on purpose: the default GITHUB_TOKEN cannot
+# trigger another workflow from a tag-push event, so splitting "cut tag"
+# and "build+publish" into separate workflows would leave the second
+# stage stranded. Anyone who wants to release from a manually-pushed
+# tag can re-run this workflow with `bump=patch` after retracting the
+# bad tag, or push the tag with a PAT.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Version bump strategy (auto = patch on same UTC day, otherwise minor)'
+        required: true
+        type: choice
+        default: auto
+        options:
+          - auto
+          - major
+          - minor
+          - patch
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    name: Cut, build, publish
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 45
+    steps:
+      - name: Validate trigger ref is main
+        run: |
+          if [[ "${{ github.ref }}" != "refs/heads/main" ]]; then
+            echo "::error::Release must be run against main, got ${{ github.ref }}"
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Compute next tag
+        id: next
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          set -euo pipefail
+          today="$(date -u +%Y-%m-%d)"
+          echo "today_utc=$today"
+
+          # Latest semver tag of the form vX.Y.Z (no suffixes).
+          last="$(git tag --list 'v*' --sort=-v:refname \
+                  | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+                  | head -n 1 || true)"
+
+          if [ -z "$last" ]; then
+            new="v0.1.0"
+            reason="bootstrap (no prior vX.Y.Z tag found)"
+          else
+            # Tag creation date in UTC. `creatordate` handles both annotated
+            # and lightweight tags (falls back to committer date for the
+            # latter). `:unix` gives epoch seconds so we can format with date.
+            last_ts="$(git for-each-ref --format='%(creatordate:unix)' "refs/tags/$last")"
+            last_date="$(date -u -d "@$last_ts" +%Y-%m-%d)"
+            echo "last_tag=$last cut=$last_date"
+
+            IFS='.' read -r major minor patch <<< "${last#v}"
+
+            bump="$BUMP"
+            if [ "$bump" = "auto" ]; then
+              if [ "$last_date" = "$today" ]; then
+                bump=patch
+                reason="same UTC day as $last → patch bump"
+              else
+                bump=minor
+                reason="new UTC day (last cut $last_date) → minor bump"
+              fi
+            else
+              reason="explicit bump=$bump"
+            fi
+
+            case "$bump" in
+              major) major=$((major + 1)); minor=0; patch=0 ;;
+              minor) minor=$((minor + 1)); patch=0 ;;
+              patch) patch=$((patch + 1)) ;;
+              *) echo "Unknown bump: $bump" >&2; exit 1 ;;
+            esac
+            new="v${major}.${minor}.${patch}"
+          fi
+
+          # Fail early if the computed tag already exists (e.g. racing runs,
+          # or someone ran with an explicit bump that collides).
+          if git rev-parse --verify --quiet "refs/tags/$new" >/dev/null; then
+            echo "Tag $new already exists; refusing to overwrite." >&2
+            exit 1
+          fi
+
+          echo "Next tag: $new ($reason)"
+          {
+            echo "next=$new"
+            echo "reason=$reason"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Configure git identity
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+
+      - name: Create and push annotated tag
+        env:
+          NEW_TAG: ${{ steps.next.outputs.next }}
+          REASON: ${{ steps.next.outputs.reason }}
+        run: |
+          git tag -a "$NEW_TAG" -m "Release $NEW_TAG ($REASON)"
+          git push origin "$NEW_TAG"
+
+      - uses: bazelbuild/setup-bazelisk@v3
+
+      # - name: Mount bazel cache
+      #   uses: actions/cache@v4
+      #   with:
+      #     path: '~/.cache/bazel-disk-housegate'
+      #     key: bazel
+
+      - name: Build binaries (linux/amd64, darwin/arm64)
+        run: |
+          set -euo pipefail
+          # Cross-compile via zig. linux_amd64_gnu.2.31 is registered in
+          # MODULE.bazel; darwin_arm64 is registered on-demand via
+          # --extra_toolchains because it can't be the host toolchain on
+          # macOS (zig's lld rejects Apple's `-Wl,-x`). On the Linux CI
+          # runner this is fine — zig is only used as a cross-compiler.
+          # static=true is linux-only — macOS has no static libc, and
+          # pure-Go code is effectively static for the Go portion anyway;
+          # cgo bits (secp256k1) link against the platform's stub
+          # frameworks via zig.
+          bazel build \
+            --platforms=@rules_go//go/toolchain:linux_amd64 \
+            --@rules_go//go/config:static=true \
+            //cmd:housegate
+          cp -f bazel-bin/cmd/housegate_/housegate /tmp/housegate-linux-amd64
+
+          bazel build \
+            --extra_toolchains=@zig_sdk//toolchain:darwin_arm64 \
+            --platforms=@rules_go//go/toolchain:darwin_arm64 \
+            //cmd:housegate
+          cp -f bazel-bin/cmd/housegate_/housegate /tmp/housegate-darwin-arm64
+
+      - name: Stage release assets
+        env:
+          NEW_TAG: ${{ steps.next.outputs.next }}
+          REPO_NAME: ${{ github.event.repository.name }}
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          for arch in linux-amd64 darwin-arm64; do
+            out="${REPO_NAME}-${NEW_TAG}-${arch}"
+            cp -f "/tmp/housegate-${arch}" "release/${out}"
+            chmod +x "release/${out}"
+          done
+          ( cd release && sha256sum "${REPO_NAME}"-* > SHA256SUMS )
+          ls -l release
+          cat release/SHA256SUMS
+
+      - name: Compute container image ref
+        id: image
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # ghcr.io requires the image path to be lowercase; github.repository
+          # preserves the original casing so we normalize it explicitly.
+          ref=$(echo "ghcr.io/${REPO}" | tr '[:upper:]' '[:lower:]')
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "Image base: $ref"
+
+      - name: Build container image
+        env:
+          NEW_TAG: ${{ steps.next.outputs.next }}
+          IMAGE_REF: ${{ steps.image.outputs.ref }}
+        run: |
+          set -euo pipefail
+          # Build context = a temp dir with just the Dockerfile and the
+          # already-built linux/amd64 binary, so docker daemon doesn't
+          # have to upload the whole repo.
+          ctx=$(mktemp -d)
+          trap 'rm -rf "$ctx"' EXIT
+          cp Dockerfile "$ctx/"
+          cp "/tmp/housegate-linux-amd64" "$ctx/housegate"
+
+          docker build \
+            -t "${IMAGE_REF}:${NEW_TAG}" \
+            -t "${IMAGE_REF}:latest" \
+            "$ctx"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push container image
+        env:
+          NEW_TAG: ${{ steps.next.outputs.next }}
+          IMAGE_REF: ${{ steps.image.outputs.ref }}
+        run: |
+          set -euo pipefail
+          docker push "${IMAGE_REF}:${NEW_TAG}"
+          docker push "${IMAGE_REF}:latest"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        env:
+          IMAGE_REF: ${{ steps.image.outputs.ref }}
+          NEW_TAG: ${{ steps.next.outputs.next }}
+          REPO: ${{ github.repository }}
+        with:
+          tag_name: ${{ steps.next.outputs.next }}
+          name: ${{ steps.next.outputs.next }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          body: |
+            ### Install
+
+            **Container image:**
+            ```sh
+            docker pull ${{ steps.image.outputs.ref }}:${{ steps.next.outputs.next }}
+            ```
+
+            **Linux (amd64):**
+            ```sh
+            curl -L -o ${{ github.event.repository.name }} https://github.com/${{ github.repository }}/releases/download/${{ steps.next.outputs.next }}/${{ github.event.repository.name }}-${{ steps.next.outputs.next }}-linux-amd64
+            chmod +x ${{ github.event.repository.name }}
+            ```
+
+            **macOS (Apple Silicon):**
+            ```sh
+            curl -L -o ${{ github.event.repository.name }} https://github.com/${{ github.repository }}/releases/download/${{ steps.next.outputs.next }}/${{ github.event.repository.name }}-${{ steps.next.outputs.next }}-darwin-arm64
+            chmod +x ${{ github.event.repository.name }}
+            ```
+
+            ---
+          files: |
+            release/${{ github.event.repository.name }}-*-linux-amd64
+            release/${{ github.event.repository.name }}-*-darwin-arm64
+            release/SHA256SUMS
+
+      - name: Summary
+        env:
+          NEW_TAG: ${{ steps.next.outputs.next }}
+          REASON: ${{ steps.next.outputs.reason }}
+          IMAGE_REF: ${{ steps.image.outputs.ref }}
+        run: |
+          {
+            echo "## Released \`$NEW_TAG\`"
+            echo
+            echo "**Reason:** $REASON"
+            echo
+            echo "**Binaries:** linux/amd64, darwin/arm64"
+            echo
+            echo "**Image:** \`${IMAGE_REF}:${NEW_TAG}\` (also tagged \`latest\`)"
+            echo
+            echo "[View release](https://github.com/${{ github.repository }}/releases/tag/$NEW_TAG)"
+          } >> "$GITHUB_STEP_SUMMARY"

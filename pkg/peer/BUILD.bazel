@@ -1,0 +1,31 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "peer",
+    srcs = [
+        "handshake.go",
+        "parser.go",
+    ],
+    importpath = "housegate/housegate/pkg/peer",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/auth",
+        "//pkg/credentials",
+        "//pkg/network",
+        "//pkg/route",
+    ],
+)
+
+go_test(
+    name = "peer_test",
+    srcs = [
+        "handshake_test.go",
+        "parser_test.go",
+    ],
+    embed = [":peer"],
+    deps = [
+        "//pkg/auth",
+        "//pkg/credentials",
+        "//pkg/network",
+    ],
+)

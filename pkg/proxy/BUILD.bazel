@@ -1,0 +1,40 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "proxy",
+    srcs = [
+        "observer.go",
+        "packet_names.go",
+        "relay.go",
+        "server.go",
+    ],
+    importpath = "housegate/housegate/pkg/proxy",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/chproto",
+        "//pkg/chsession",
+        "//pkg/plugin",
+        "@com_github_clickhouse_ch_go//proto",
+        "@com_github_prometheus_client_golang//prometheus",
+        "@sentio-core//common/log",
+    ],
+)
+
+go_test(
+    name = "proxy_test",
+    srcs = [
+        "commitgate_e2e_test.go",
+        "relay_helpers_test.go",
+        "relay_test.go",
+        "server_test.go",
+    ],
+    embed = [":proxy"],
+    deps = [
+        "//pkg/chproto",
+        "//pkg/chsession",
+        "//pkg/plugin",
+        "//pkg/plugins/commitgate",
+        "//pkg/sqlmeta",
+        "@com_github_clickhouse_ch_go//proto",
+    ],
+)

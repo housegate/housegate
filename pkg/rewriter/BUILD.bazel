@@ -1,0 +1,38 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "rewriter",
+    srcs = [
+        "aliases.go",
+        "args.go",
+        "sentio.go",
+        "sentio_table_mapper.go",
+        "types.go",
+    ],
+    importpath = "housegate/housegate/pkg/rewriter",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/cluster",
+        "//pkg/credentials",
+        "//pkg/network",
+        "//pkg/peer",
+        "//pkg/route",
+        "//pkg/sqlmeta",
+        "//protos",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//credentials/insecure",
+        "@org_golang_google_grpc//keepalive",
+        "@sentio-core//common/log",
+        "@sentio-core//network/registry",
+    ],
+)
+
+go_test(
+    name = "rewriter_test",
+    srcs = ["sentio_test.go"],
+    embed = [":rewriter"],
+    deps = [
+        "//pkg/network",
+        "@sentio-core//network/registry",
+    ],
+)

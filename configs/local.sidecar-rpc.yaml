@@ -1,0 +1,42 @@
+# Sidecar-mode config that auto-discovers its upstream via a sentio
+# storage-node JSON-RPC endpoint.
+#
+# This is the rpcUrl variant of NetworkState: instead of pointing
+# `network_state.source` at a Redis statemirror or a YAML fixture, point
+# it at an http(s) URL and the proxy will speak the four sentio_* JSON-RPC
+# methods (getIndexerInfos / getIndexerInfoById / getDatabaseInfoById /
+# getDatabaseInfoByAccount) to discover a permissioned peer per session.
+#
+# Sidecar.Upstream is intentionally absent — leaving it empty hands
+# upstream selection to the sidecar Selector, which queries the rpc
+# endpoint and picks a permissioned indexer (or any bound peer for
+# brand-new accounts).
+#
+# Provide the signing key via env var (do NOT commit a real key here):
+#   export HOUSEGATE_SIDECAR_KEY=0xYOUR_PRIVATE_KEY_HEX
+#   ./housegate -config ./configs/local.sidecar-rpc.yaml
+
+listen: "0.0.0.0:10005"
+metrics_listen: "0.0.0.0:10095"
+dial_timeout: "5s"
+idle_timeout: "5m"
+shutdown_timeout: "30s"
+stats_interval: "10s"
+max_connection_lifetime: "24h"
+streaming_buf_size: 131072
+validate_checksum: false
+
+sidecar:
+  mode: true
+  # No upstream — Selector picks one via NetworkState (RPC) below.
+  private_key_hex: "0x03bef7ad0f263e542a6bc04ba07ca41a958e5ed6e44a504deaec98aebf04d8b2"
+
+network_state:
+  # http(s):// scheme triggers the RpcNetworkState backend.
+  source: "http://64.38.144.158:10003"
+
+logging:
+  queries: true
+  data: false
+  max_query_bytes: 300
+  max_data_bytes: 200

@@ -1,0 +1,16 @@
+load("@protobuf//bazel:proto_library.bzl", "proto_library")
+load("//bazel/golang:go_proto_library.bzl", "go_proto_library")
+
+proto_library(
+    name = "protos_proto",
+    srcs = ["rewriter.proto"],
+    visibility = ["//visibility:public"],
+)
+
+go_proto_library(
+    name = "protos",
+    compilers = ["@rules_go//proto:go_grpc"],
+    importpath = "housegate/housegate/protos",
+    proto = ":protos_proto",
+    visibility = ["//visibility:public"],
+)

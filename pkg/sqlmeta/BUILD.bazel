@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "sqlmeta",
+    srcs = [
+        "accessed_table.go",
+        "privilege_category.go",
+        "privilege_delta.go",
+        "statement_type.go",
+    ],
+    importpath = "housegate/housegate/pkg/sqlmeta",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "sqlmeta_test",
+    srcs = ["privilege_category_test.go"],
+    embed = [":sqlmeta"],
+)

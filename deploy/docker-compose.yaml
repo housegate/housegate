@@ -1,0 +1,37 @@
+services:
+  clickhouse-1:
+    image: clickhouse/clickhouse-server:25.9
+    ports:
+      - "9011:9000/tcp"
+      - "8123:8123/tcp"
+    volumes:
+      - /tmp/docker/data/clickhouse-1:/var/lib/clickhouse
+      - /tmp/docker/data/clickhouse-1/_log:/var/log/clickhouse-server
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    environment:
+      - CLICKHOUSE_PASSWORD=password
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+      - CLICKHOUSE_DB=my_database
+    restart: on-failure
+  clickhouse-2:
+    image: clickhouse/clickhouse-server:25.9
+    ports:
+      - "9012:9000/tcp"
+      - "8124:8123/tcp"
+    volumes:
+      - /tmp/docker/data/clickhouse-2:/var/lib/clickhouse
+      - /tmp/docker/data/clickhouse-2/_log:/var/log/clickhouse-server
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    environment:
+      - CLICKHOUSE_PASSWORD=password
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+      - CLICKHOUSE_DB=my_database
+    restart: on-failure

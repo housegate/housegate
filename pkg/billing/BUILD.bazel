@@ -1,0 +1,18 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "billing",
+    srcs = [
+        "client.go",
+        "usage_client.go",
+    ],
+    importpath = "housegate/housegate/pkg/billing",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_redis_go_redis_v9//:go-redis",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//credentials/insecure",
+        "@sentio-core//common/log",
+        "@sentio-core//service/usage/protos",
+    ],
+)

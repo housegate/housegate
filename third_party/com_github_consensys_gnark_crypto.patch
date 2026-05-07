@@ -1,0 +1,648 @@
+diff --color -ruN a/ecc/bls12-381/fp/BUILD.bazel b/ecc/bls12-381/fp/BUILD.bazel
+--- a/ecc/bls12-381/fp/BUILD.bazel	2026-04-27 18:36:28
++++ b/ecc/bls12-381/fp/BUILD.bazel	2026-04-27 18:43:02
+@@ -7,9 +7,9 @@
+         "doc.go",
+         "element.go",
+         "element_amd64.go",
+-        "element_amd64.s",
++        ":gen_element_amd64_s",
+         "element_arm64.go",
+-        "element_arm64.s",
++        ":gen_element_arm64_s",
+         "element_exp.go",
+         "element_purego.go",
+         "vector.go",
+@@ -52,4 +52,24 @@
+         "@com_github_leanovate_gopter//prop:go_default_library",
+         "@com_github_stretchr_testify//require",
+     ],
++)
++
++genrule(
++    name = "gen_element_arm64_s",
++    srcs = [
++        "element_arm64.s",
++        "//field/asm/element_6w:element_6w_arm64.s",
++    ],
++    outs = ["gen_element_arm64.s"],
++    cmd = "head -8 $(location element_arm64.s) > $@; cat $(location //field/asm/element_6w:element_6w_arm64.s) >> $@",
++)
++
++genrule(
++    name = "gen_element_amd64_s",
++    srcs = [
++        "element_amd64.s",
++        "//field/asm/element_6w:element_6w_amd64.s",
++    ],
++    outs = ["gen_element_amd64.s"],
++    cmd = "head -8 $(location element_amd64.s) > $@; cat $(location //field/asm/element_6w:element_6w_amd64.s) >> $@",
+ )
+diff --color -ruN a/ecc/bls12-381/fr/BUILD.bazel b/ecc/bls12-381/fr/BUILD.bazel
+--- a/ecc/bls12-381/fr/BUILD.bazel	2026-04-27 18:37:00
++++ b/ecc/bls12-381/fr/BUILD.bazel	2026-04-27 18:43:02
+@@ -7,9 +7,9 @@
+         "doc.go",
+         "element.go",
+         "element_amd64.go",
+-        "element_amd64.s",
++        ":gen_element_amd64_s",
+         "element_arm64.go",
+-        "element_arm64.s",
++        ":gen_element_arm64_s",
+         "element_exp.go",
+         "element_purego.go",
+         "generator.go",
+@@ -55,4 +55,24 @@
+         "@com_github_leanovate_gopter//prop:go_default_library",
+         "@com_github_stretchr_testify//require",
+     ],
++)
++
++genrule(
++    name = "gen_element_arm64_s",
++    srcs = [
++        "element_arm64.s",
++        "//field/asm/element_4w:element_4w_arm64.s",
++    ],
++    outs = ["gen_element_arm64.s"],
++    cmd = "head -8 $(location element_arm64.s) > $@; cat $(location //field/asm/element_4w:element_4w_arm64.s) >> $@",
++)
++
++genrule(
++    name = "gen_element_amd64_s",
++    srcs = [
++        "element_amd64.s",
++        "//field/asm/element_4w:element_4w_amd64.s",
++    ],
++    outs = ["gen_element_amd64.s"],
++    cmd = "head -8 $(location element_amd64.s) > $@; cat $(location //field/asm/element_4w:element_4w_amd64.s) >> $@",
+ )
+diff --color -ruN a/ecc/bn254/fp/BUILD.bazel b/ecc/bn254/fp/BUILD.bazel
+--- a/ecc/bn254/fp/BUILD.bazel	2026-04-27 18:37:17
++++ b/ecc/bn254/fp/BUILD.bazel	2026-04-27 18:43:02
+@@ -7,9 +7,9 @@
+         "doc.go",
+         "element.go",
+         "element_amd64.go",
+-        "element_amd64.s",
++        ":gen_element_amd64_s",
+         "element_arm64.go",
+-        "element_arm64.s",
++        ":gen_element_arm64_s",
+         "element_exp.go",
+         "element_purego.go",
+         "vector.go",
+@@ -53,4 +53,24 @@
+         "@com_github_leanovate_gopter//prop:go_default_library",
+         "@com_github_stretchr_testify//require",
+     ],
++)
++
++genrule(
++    name = "gen_element_arm64_s",
++    srcs = [
++        "element_arm64.s",
++        "//field/asm/element_4w:element_4w_arm64.s",
++    ],
++    outs = ["gen_element_arm64.s"],
++    cmd = "head -8 $(location element_arm64.s) > $@; cat $(location //field/asm/element_4w:element_4w_arm64.s) >> $@",
++)
++
++genrule(
++    name = "gen_element_amd64_s",
++    srcs = [
++        "element_amd64.s",
++        "//field/asm/element_4w:element_4w_amd64.s",
++    ],
++    outs = ["gen_element_amd64.s"],
++    cmd = "head -8 $(location element_amd64.s) > $@; cat $(location //field/asm/element_4w:element_4w_amd64.s) >> $@",
+ )
+diff --color -ruN a/ecc/bn254/fr/BUILD.bazel b/ecc/bn254/fr/BUILD.bazel
+--- a/ecc/bn254/fr/BUILD.bazel	2026-04-27 18:37:36
++++ b/ecc/bn254/fr/BUILD.bazel	2026-04-27 18:43:02
+@@ -7,9 +7,9 @@
+         "doc.go",
+         "element.go",
+         "element_amd64.go",
+-        "element_amd64.s",
++        ":gen_element_amd64_s",
+         "element_arm64.go",
+-        "element_arm64.s",
++        ":gen_element_arm64_s",
+         "element_exp.go",
+         "element_purego.go",
+         "generator.go",
+@@ -55,4 +55,24 @@
+         "@com_github_leanovate_gopter//prop:go_default_library",
+         "@com_github_stretchr_testify//require",
+     ],
++)
++
++genrule(
++    name = "gen_element_arm64_s",
++    srcs = [
++        "element_arm64.s",
++        "//field/asm/element_4w:element_4w_arm64.s",
++    ],
++    outs = ["gen_element_arm64.s"],
++    cmd = "head -8 $(location element_arm64.s) > $@; cat $(location //field/asm/element_4w:element_4w_arm64.s) >> $@",
++)
++
++genrule(
++    name = "gen_element_amd64_s",
++    srcs = [
++        "element_amd64.s",
++        "//field/asm/element_4w:element_4w_amd64.s",
++    ],
++    outs = ["gen_element_amd64.s"],
++    cmd = "head -8 $(location element_amd64.s) > $@; cat $(location //field/asm/element_4w:element_4w_amd64.s) >> $@",
+ )
+diff --color -ruN a/field/asm/element_4w/BUILD.bazel b/field/asm/element_4w/BUILD.bazel
+--- a/field/asm/element_4w/BUILD.bazel	2026-04-27 18:36:07
++++ b/field/asm/element_4w/BUILD.bazel	2026-04-27 18:36:15
+@@ -16,3 +16,8 @@
+     actual = ":element_4w",
+     visibility = ["//visibility:public"],
+ )
++
++exports_files(
++    ["element_4w_amd64.s", "element_4w_arm64.s"],
++    visibility = ["//visibility:public"],
++)
+diff --color -ruN a/field/asm/element_6w/BUILD.bazel b/field/asm/element_6w/BUILD.bazel
+--- a/field/asm/element_6w/BUILD.bazel	2026-04-27 18:36:07
++++ b/field/asm/element_6w/BUILD.bazel	2026-04-27 18:36:15
+@@ -16,3 +16,8 @@
+     actual = ":element_6w",
+     visibility = ["//visibility:public"],
+ )
++
++exports_files(
++    ["element_6w_amd64.s", "element_6w_arm64.s"],
++    visibility = ["//visibility:public"],
++)
+diff --color -ruN a/ecc/bls12-377/fp/BUILD.bazel b/ecc/bls12-377/fp/BUILD.bazel
+--- a/ecc/bls12-377/fp/BUILD.bazel	2026-04-27 18:48:24
++++ b/ecc/bls12-377/fp/BUILD.bazel	2026-04-27 18:48:24
+@@ -7,9 +7,9 @@
+         "doc.go",
+         "element.go",
+         "element_amd64.go",
+-        "element_amd64.s",
++        ":gen_element_amd64_s",
+         "element_arm64.go",
+-        "element_arm64.s",
++        ":gen_element_arm64_s",
+         "element_exp.go",
+         "element_purego.go",
+         "element_utils.go",
+@@ -53,4 +53,24 @@
+         "@com_github_leanovate_gopter//prop:go_default_library",
+         "@com_github_stretchr_testify//require",
+     ],
++)
++
++genrule(
++    name = "gen_element_arm64_s",
++    srcs = [
++        "element_arm64.s",
++        "//field/asm/element_6w:element_6w_arm64.s",
++    ],
++    outs = ["gen_element_arm64.s"],
++    cmd = "head -8 $(location element_arm64.s) > $@; cat $(location //field/asm/element_6w:element_6w_arm64.s) >> $@",
++)
++
++genrule(
++    name = "gen_element_amd64_s",
++    srcs = [
++        "element_amd64.s",
++        "//field/asm/element_6w:element_6w_amd64.s",
++    ],
++    outs = ["gen_element_amd64.s"],
++    cmd = "head -8 $(location element_amd64.s) > $@; cat $(location //field/asm/element_6w:element_6w_amd64.s) >> $@",
+ )
+diff --color -ruN a/ecc/bls12-377/fr/BUILD.bazel b/ecc/bls12-377/fr/BUILD.bazel
+--- a/ecc/bls12-377/fr/BUILD.bazel	2026-04-27 18:48:23
++++ b/ecc/bls12-377/fr/BUILD.bazel	2026-04-27 18:48:23
+@@ -7,9 +7,9 @@
+         "doc.go",
+         "element.go",
+         "element_amd64.go",
+-        "element_amd64.s",
++        ":gen_element_amd64_s",
+         "element_arm64.go",
+-        "element_arm64.s",
++        ":gen_element_arm64_s",
+         "element_exp.go",
+         "element_purego.go",
+         "generator.go",
+@@ -55,4 +55,24 @@
+         "@com_github_leanovate_gopter//prop:go_default_library",
+         "@com_github_stretchr_testify//require",
+     ],
++)
++
++genrule(
++    name = "gen_element_arm64_s",
++    srcs = [
++        "element_arm64.s",
++        "//field/asm/element_4w:element_4w_arm64.s",
++    ],
++    outs = ["gen_element_arm64.s"],
++    cmd = "head -8 $(location element_arm64.s) > $@; cat $(location //field/asm/element_4w:element_4w_arm64.s) >> $@",
++)
++
++genrule(
++    name = "gen_element_amd64_s",
++    srcs = [
++        "element_amd64.s",
++        "//field/asm/element_4w:element_4w_amd64.s",
++    ],
++    outs = ["gen_element_amd64.s"],
++    cmd = "head -8 $(location element_amd64.s) > $@; cat $(location //field/asm/element_4w:element_4w_amd64.s) >> $@",
+ )
+diff --color -ruN a/ecc/bls24-315/fr/BUILD.bazel b/ecc/bls24-315/fr/BUILD.bazel
+--- a/ecc/bls24-315/fr/BUILD.bazel	2026-04-27 18:48:23
++++ b/ecc/bls24-315/fr/BUILD.bazel	2026-04-27 18:48:23
+@@ -7,9 +7,9 @@
+         "doc.go",
+         "element.go",
+         "element_amd64.go",
+-        "element_amd64.s",
++        ":gen_element_amd64_s",
+         "element_arm64.go",
+-        "element_arm64.s",
++        ":gen_element_arm64_s",
+         "element_exp.go",
+         "element_purego.go",
+         "generator.go",
+@@ -55,4 +55,24 @@
+         "@com_github_leanovate_gopter//prop:go_default_library",
+         "@com_github_stretchr_testify//require",
+     ],
++)
++
++genrule(
++    name = "gen_element_arm64_s",
++    srcs = [
++        "element_arm64.s",
++        "//field/asm/element_4w:element_4w_arm64.s",
++    ],
++    outs = ["gen_element_arm64.s"],
++    cmd = "head -8 $(location element_arm64.s) > $@; cat $(location //field/asm/element_4w:element_4w_arm64.s) >> $@",
++)
++
++genrule(
++    name = "gen_element_amd64_s",
++    srcs = [
++        "element_amd64.s",
++        "//field/asm/element_4w:element_4w_amd64.s",
++    ],
++    outs = ["gen_element_amd64.s"],
++    cmd = "head -8 $(location element_amd64.s) > $@; cat $(location //field/asm/element_4w:element_4w_amd64.s) >> $@",
+ )
+diff --color -ruN a/ecc/bls24-317/fr/BUILD.bazel b/ecc/bls24-317/fr/BUILD.bazel
+--- a/ecc/bls24-317/fr/BUILD.bazel	2026-04-27 18:48:23
++++ b/ecc/bls24-317/fr/BUILD.bazel	2026-04-27 18:48:23
+@@ -7,9 +7,9 @@
+         "doc.go",
+         "element.go",
+         "element_amd64.go",
+-        "element_amd64.s",
++        ":gen_element_amd64_s",
+         "element_arm64.go",
+-        "element_arm64.s",
++        ":gen_element_arm64_s",
+         "element_exp.go",
+         "element_purego.go",
+         "generator.go",
+@@ -55,4 +55,24 @@
+         "@com_github_leanovate_gopter//prop:go_default_library",
+         "@com_github_stretchr_testify//require",
+     ],
++)
++
++genrule(
++    name = "gen_element_arm64_s",
++    srcs = [
++        "element_arm64.s",
++        "//field/asm/element_4w:element_4w_arm64.s",
++    ],
++    outs = ["gen_element_arm64.s"],
++    cmd = "head -8 $(location element_arm64.s) > $@; cat $(location //field/asm/element_4w:element_4w_arm64.s) >> $@",
++)
++
++genrule(
++    name = "gen_element_amd64_s",
++    srcs = [
++        "element_amd64.s",
++        "//field/asm/element_4w:element_4w_amd64.s",
++    ],
++    outs = ["gen_element_amd64.s"],
++    cmd = "head -8 $(location element_amd64.s) > $@; cat $(location //field/asm/element_4w:element_4w_amd64.s) >> $@",
+ )
+diff --color -ruN a/ecc/bw6-633/fp/BUILD.bazel b/ecc/bw6-633/fp/BUILD.bazel
+--- a/ecc/bw6-633/fp/BUILD.bazel	2026-04-27 18:48:24
++++ b/ecc/bw6-633/fp/BUILD.bazel	2026-04-27 18:48:24
+@@ -8,9 +8,9 @@
+         "doc.go",
+         "element.go",
+         "element_amd64.go",
+-        "element_amd64.s",
++        ":gen_element_amd64_s",
+         "element_arm64.go",
+-        "element_arm64.s",
++        ":gen_element_arm64_s",
+         "element_exp.go",
+         "element_purego.go",
+         "vector.go",
+@@ -53,4 +53,24 @@
+         "@com_github_leanovate_gopter//prop:go_default_library",
+         "@com_github_stretchr_testify//require",
+     ],
++)
++
++genrule(
++    name = "gen_element_arm64_s",
++    srcs = [
++        "element_arm64.s",
++        "//field/asm/element_10w:element_10w_arm64.s",
++    ],
++    outs = ["gen_element_arm64.s"],
++    cmd = "head -8 $(location element_arm64.s) > $@; cat $(location //field/asm/element_10w:element_10w_arm64.s) >> $@",
++)
++
++genrule(
++    name = "gen_element_amd64_s",
++    srcs = [
++        "element_amd64.s",
++        "//field/asm/element_10w:element_10w_amd64.s",
++    ],
++    outs = ["gen_element_amd64.s"],
++    cmd = "head -8 $(location element_amd64.s) > $@; cat $(location //field/asm/element_10w:element_10w_amd64.s) >> $@",
+ )
+diff --color -ruN a/ecc/bw6-761/fp/BUILD.bazel b/ecc/bw6-761/fp/BUILD.bazel
+--- a/ecc/bw6-761/fp/BUILD.bazel	2026-04-27 18:48:24
++++ b/ecc/bw6-761/fp/BUILD.bazel	2026-04-27 18:48:24
+@@ -8,9 +8,9 @@
+         "doc.go",
+         "element.go",
+         "element_amd64.go",
+-        "element_amd64.s",
++        ":gen_element_amd64_s",
+         "element_arm64.go",
+-        "element_arm64.s",
++        ":gen_element_arm64_s",
+         "element_exp.go",
+         "element_purego.go",
+         "vector.go",
+@@ -53,4 +53,24 @@
+         "@com_github_leanovate_gopter//prop:go_default_library",
+         "@com_github_stretchr_testify//require",
+     ],
++)
++
++genrule(
++    name = "gen_element_arm64_s",
++    srcs = [
++        "element_arm64.s",
++        "//field/asm/element_12w:element_12w_arm64.s",
++    ],
++    outs = ["gen_element_arm64.s"],
++    cmd = "head -8 $(location element_arm64.s) > $@; cat $(location //field/asm/element_12w:element_12w_arm64.s) >> $@",
++)
++
++genrule(
++    name = "gen_element_amd64_s",
++    srcs = [
++        "element_amd64.s",
++        "//field/asm/element_12w:element_12w_amd64.s",
++    ],
++    outs = ["gen_element_amd64.s"],
++    cmd = "head -8 $(location element_amd64.s) > $@; cat $(location //field/asm/element_12w:element_12w_amd64.s) >> $@",
+ )
+diff --color -ruN a/ecc/bw6-761/fr/BUILD.bazel b/ecc/bw6-761/fr/BUILD.bazel
+--- a/ecc/bw6-761/fr/BUILD.bazel	2026-04-27 18:48:24
++++ b/ecc/bw6-761/fr/BUILD.bazel	2026-04-27 18:48:24
+@@ -7,9 +7,9 @@
+         "doc.go",
+         "element.go",
+         "element_amd64.go",
+-        "element_amd64.s",
++        ":gen_element_amd64_s",
+         "element_arm64.go",
+-        "element_arm64.s",
++        ":gen_element_arm64_s",
+         "element_exp.go",
+         "element_purego.go",
+         "generator.go",
+@@ -54,4 +54,24 @@
+         "@com_github_leanovate_gopter//prop:go_default_library",
+         "@com_github_stretchr_testify//require",
+     ],
++)
++
++genrule(
++    name = "gen_element_arm64_s",
++    srcs = [
++        "element_arm64.s",
++        "//field/asm/element_6w:element_6w_arm64.s",
++    ],
++    outs = ["gen_element_arm64.s"],
++    cmd = "head -8 $(location element_arm64.s) > $@; cat $(location //field/asm/element_6w:element_6w_arm64.s) >> $@",
++)
++
++genrule(
++    name = "gen_element_amd64_s",
++    srcs = [
++        "element_amd64.s",
++        "//field/asm/element_6w:element_6w_amd64.s",
++    ],
++    outs = ["gen_element_amd64.s"],
++    cmd = "head -8 $(location element_amd64.s) > $@; cat $(location //field/asm/element_6w:element_6w_amd64.s) >> $@",
+ )
+diff --color -ruN a/ecc/grumpkin/fp/BUILD.bazel b/ecc/grumpkin/fp/BUILD.bazel
+--- a/ecc/grumpkin/fp/BUILD.bazel	2026-04-27 18:48:23
++++ b/ecc/grumpkin/fp/BUILD.bazel	2026-04-27 18:48:24
+@@ -7,9 +7,9 @@
+         "doc.go",
+         "element.go",
+         "element_amd64.go",
+-        "element_amd64.s",
++        ":gen_element_amd64_s",
+         "element_arm64.go",
+-        "element_arm64.s",
++        ":gen_element_arm64_s",
+         "element_exp.go",
+         "element_purego.go",
+         "vector.go",
+@@ -53,4 +53,24 @@
+         "@com_github_leanovate_gopter//prop:go_default_library",
+         "@com_github_stretchr_testify//require",
+     ],
++)
++
++genrule(
++    name = "gen_element_arm64_s",
++    srcs = [
++        "element_arm64.s",
++        "//field/asm/element_4w:element_4w_arm64.s",
++    ],
++    outs = ["gen_element_arm64.s"],
++    cmd = "head -8 $(location element_arm64.s) > $@; cat $(location //field/asm/element_4w:element_4w_arm64.s) >> $@",
++)
++
++genrule(
++    name = "gen_element_amd64_s",
++    srcs = [
++        "element_amd64.s",
++        "//field/asm/element_4w:element_4w_amd64.s",
++    ],
++    outs = ["gen_element_amd64.s"],
++    cmd = "head -8 $(location element_amd64.s) > $@; cat $(location //field/asm/element_4w:element_4w_amd64.s) >> $@",
+ )
+diff --color -ruN a/ecc/grumpkin/fr/BUILD.bazel b/ecc/grumpkin/fr/BUILD.bazel
+--- a/ecc/grumpkin/fr/BUILD.bazel	2026-04-27 18:48:24
++++ b/ecc/grumpkin/fr/BUILD.bazel	2026-04-27 18:48:24
+@@ -7,9 +7,9 @@
+         "doc.go",
+         "element.go",
+         "element_amd64.go",
+-        "element_amd64.s",
++        ":gen_element_amd64_s",
+         "element_arm64.go",
+-        "element_arm64.s",
++        ":gen_element_arm64_s",
+         "element_exp.go",
+         "element_purego.go",
+         "vector.go",
+@@ -53,4 +53,24 @@
+         "@com_github_leanovate_gopter//prop:go_default_library",
+         "@com_github_stretchr_testify//require",
+     ],
++)
++
++genrule(
++    name = "gen_element_arm64_s",
++    srcs = [
++        "element_arm64.s",
++        "//field/asm/element_4w:element_4w_arm64.s",
++    ],
++    outs = ["gen_element_arm64.s"],
++    cmd = "head -8 $(location element_arm64.s) > $@; cat $(location //field/asm/element_4w:element_4w_arm64.s) >> $@",
++)
++
++genrule(
++    name = "gen_element_amd64_s",
++    srcs = [
++        "element_amd64.s",
++        "//field/asm/element_4w:element_4w_amd64.s",
++    ],
++    outs = ["gen_element_amd64.s"],
++    cmd = "head -8 $(location element_amd64.s) > $@; cat $(location //field/asm/element_4w:element_4w_amd64.s) >> $@",
+ )
+diff --color -ruN a/ecc/stark-curve/fp/BUILD.bazel b/ecc/stark-curve/fp/BUILD.bazel
+--- a/ecc/stark-curve/fp/BUILD.bazel	2026-04-27 18:48:23
++++ b/ecc/stark-curve/fp/BUILD.bazel	2026-04-27 18:48:23
+@@ -7,9 +7,9 @@
+         "doc.go",
+         "element.go",
+         "element_amd64.go",
+-        "element_amd64.s",
++        ":gen_element_amd64_s",
+         "element_arm64.go",
+-        "element_arm64.s",
++        ":gen_element_arm64_s",
+         "element_exp.go",
+         "element_purego.go",
+         "vector.go",
+@@ -53,4 +53,24 @@
+         "@com_github_leanovate_gopter//prop:go_default_library",
+         "@com_github_stretchr_testify//require",
+     ],
++)
++
++genrule(
++    name = "gen_element_arm64_s",
++    srcs = [
++        "element_arm64.s",
++        "//field/asm/element_4w:element_4w_arm64.s",
++    ],
++    outs = ["gen_element_arm64.s"],
++    cmd = "head -8 $(location element_arm64.s) > $@; cat $(location //field/asm/element_4w:element_4w_arm64.s) >> $@",
++)
++
++genrule(
++    name = "gen_element_amd64_s",
++    srcs = [
++        "element_amd64.s",
++        "//field/asm/element_4w:element_4w_amd64.s",
++    ],
++    outs = ["gen_element_amd64.s"],
++    cmd = "head -8 $(location element_amd64.s) > $@; cat $(location //field/asm/element_4w:element_4w_amd64.s) >> $@",
+ )
+diff --color -ruN a/ecc/stark-curve/fr/BUILD.bazel b/ecc/stark-curve/fr/BUILD.bazel
+--- a/ecc/stark-curve/fr/BUILD.bazel	2026-04-27 18:48:23
++++ b/ecc/stark-curve/fr/BUILD.bazel	2026-04-27 18:48:23
+@@ -7,9 +7,9 @@
+         "doc.go",
+         "element.go",
+         "element_amd64.go",
+-        "element_amd64.s",
++        ":gen_element_amd64_s",
+         "element_arm64.go",
+-        "element_arm64.s",
++        ":gen_element_arm64_s",
+         "element_purego.go",
+         "vector.go",
+         "vector_amd64.go",
+@@ -52,4 +52,24 @@
+         "@com_github_leanovate_gopter//prop:go_default_library",
+         "@com_github_stretchr_testify//require",
+     ],
++)
++
++genrule(
++    name = "gen_element_arm64_s",
++    srcs = [
++        "element_arm64.s",
++        "//field/asm/element_4w:element_4w_arm64.s",
++    ],
++    outs = ["gen_element_arm64.s"],
++    cmd = "head -8 $(location element_arm64.s) > $@; cat $(location //field/asm/element_4w:element_4w_arm64.s) >> $@",
++)
++
++genrule(
++    name = "gen_element_amd64_s",
++    srcs = [
++        "element_amd64.s",
++        "//field/asm/element_4w:element_4w_amd64.s",
++    ],
++    outs = ["gen_element_amd64.s"],
++    cmd = "head -8 $(location element_amd64.s) > $@; cat $(location //field/asm/element_4w:element_4w_amd64.s) >> $@",
+ )
+diff --color -ruN a/field/asm/element_10w/BUILD.bazel b/field/asm/element_10w/BUILD.bazel
+--- a/field/asm/element_10w/BUILD.bazel	2026-04-27 18:48:24
++++ b/field/asm/element_10w/BUILD.bazel	2026-04-27 18:48:24
+@@ -16,3 +16,8 @@
+     actual = ":element_10w",
+     visibility = ["//visibility:public"],
+ )
++
++exports_files(
++    ["element_10w_amd64.s", "element_10w_arm64.s"],
++    visibility = ["//visibility:public"],
++)
+diff --color -ruN a/field/asm/element_12w/BUILD.bazel b/field/asm/element_12w/BUILD.bazel
+--- a/field/asm/element_12w/BUILD.bazel	2026-04-27 18:48:24
++++ b/field/asm/element_12w/BUILD.bazel	2026-04-27 18:48:24
+@@ -16,3 +16,8 @@
+     actual = ":element_12w",
+     visibility = ["//visibility:public"],
+ )
++
++exports_files(
++    ["element_12w_amd64.s", "element_12w_arm64.s"],
++    visibility = ["//visibility:public"],
++)

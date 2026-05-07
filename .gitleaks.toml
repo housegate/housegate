@@ -1,0 +1,40 @@
+# gitleaks config for housegate.
+#
+# Extends the upstream default ruleset and allowlists the handful of
+# committed test fixtures so the pre-commit hook (scripts/git-hooks/pre-commit)
+# isn't drowned in false positives.
+#
+# Editing rule: every entry below is a hole — keep the list minimal,
+# prefer path allowlists over regex allowlists, and document why.
+
+title = "housegate gitleaks config"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Committed local-dev fixtures with throwaway secp256k1 keys"
+# Local-dev YAML configs ship with disposable secp256k1 keys so the
+# proxy binary boots out-of-the-box. Anyone who treats them as live
+# credentials is doing something deeply wrong; rotate via
+# scripts/setup-local-test-key.sh if a leak is suspected.
+paths = [
+    '''^configs/local\..*\.yaml$''',
+]
+
+[[allowlists]]
+description = "Test code with obvious-fake keys"
+# proxy_test.go and the cmd-library-mode design doc both use the
+# alphabetically-sequential 0x0123...cdef sentinel as a stand-in for a
+# real private key. Pattern is unmistakable but matches the
+# eth-private-key shape.
+paths = [
+    '''^proxy_test\.go$''',
+    '''^docs/superpowers/.*\.md$''',
+]
+regexes = [
+    '''0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef''',
+    # Zero-fill placeholders left by the 2026-04-29 git-filter-repo
+    # scrub of historical pre-rotation keys. 40-hex addr or 64-hex priv.
+    '''0x0{40,64}''',
+]

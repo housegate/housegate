@@ -1,0 +1,8 @@
+filegroup(
+    name = "exported_configs_example",
+    srcs = glob([
+        "*.yaml",
+        "*.json",
+    ]),
+    visibility = ["//visibility:public"],
+)

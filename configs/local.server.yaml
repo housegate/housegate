@@ -1,0 +1,64 @@
+indexer_id: 1000
+relay_private_key_hex: "0xae7994a689c33f681f55be5af5e7889d8a316f39a98d504c523c0c2e52de13b5"
+relay_public_key_hex: "0x502c3e68f3Cc4aC2c283aD67139a51b20D07424e"
+peer_token_ttl: "1h"
+
+listen: "0.0.0.0:10001"
+internal_listen: "0.0.0.0:20001"
+upstream: "localhost:9000"
+metrics_listen: "0.0.0.0:10091"
+dial_timeout: "5s"
+idle_timeout: "5m"
+shutdown_timeout: "30s"
+stats_interval: "10s"
+max_connection_lifetime: "24h"
+streaming_buf_size: 131072
+validate_checksum: false
+
+credential_replace_enabled: true
+ckh_manager_config_path: "./configs/local.clickhouse_manager.yaml.age"
+
+redis_default_addr: "localhost:6379"
+
+# network_state.source is auto-detected by suffix: a `.yaml` / `.yml`
+# value loads an InMemoryNetworkState fixture; anything else is a
+# Redis address (empty falls back to redis_default_addr above).
+# Swap to "configs/local.network_state.yaml" for the offline path.
+network_state:
+  source: "./configs/local.network_state.yaml"
+
+auth:
+  enabled: true
+  allow_no_auth: false
+  allowed_addresses:
+  max_token_age: "1m"
+
+# Rewriter owns logical↔physical database mapping for this deployment.
+# physical_database is the single real ClickHouse DB that hosts every
+# logical DB; the rewrite plugin uses it both as the database_map
+# target value and as the wire-level hello.Database substitution.
+rewriter:
+  enabled: true
+  service_addr: "localhost:50051"
+  timeout: "5s"
+  physical_database: testnet
+  delimiter: "."
+  enable_static_mapping: false
+
+sidecar:
+  mode: false
+
+usage:
+  enabled: false
+
+concurrency_limit:
+  enabled: false
+  per_user: 0
+  timeout: "60s"
+  fail_open: true
+
+logging:
+  queries: true
+  data: false
+  max_query_bytes: 300
+  max_data_bytes: 200

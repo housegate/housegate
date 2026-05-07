@@ -1,0 +1,33 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "plugin",
+    srcs = [
+        "chain.go",
+        "context.go",
+        "forward_aware.go",
+        "hooks.go",
+        "plugin.go",
+    ],
+    importpath = "housegate/housegate/pkg/plugin",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/chproto",
+        "//pkg/chsession",
+        "//pkg/sqlmeta",
+        "@sentio-core//common/log",
+    ],
+)
+
+go_test(
+    name = "plugin_test",
+    srcs = [
+        "chain_test.go",
+        "hooks_test.go",
+    ],
+    embed = [":plugin"],
+    deps = [
+        "//pkg/chproto",
+        "//pkg/chsession",
+    ],
+)

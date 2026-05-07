@@ -1,0 +1,30 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "auth",
+    srcs = [
+        "eth_validator.go",
+        "jws.go",
+        "relay_signer.go",
+        "signer.go",
+        "types.go",
+    ],
+    importpath = "housegate/housegate/pkg/auth",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_ethereum_go_ethereum//crypto",
+        "@org_golang_x_crypto//sha3",
+        "@sentio-core//common/log",
+    ],
+)
+
+go_test(
+    name = "auth_test",
+    srcs = [
+        "eth_validator_test.go",
+        "peer_signer_test.go",
+        "relay_signer_test.go",
+    ],
+    embed = [":auth"],
+    deps = ["@com_github_ethereum_go_ethereum//crypto"],
+)

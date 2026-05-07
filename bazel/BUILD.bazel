@@ -1,0 +1,5 @@
+sh_binary(
+    name = "docker",
+    srcs = ["docker.sh"],
+    visibility = ["//visibility:public"],
+)

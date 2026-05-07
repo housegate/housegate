@@ -1,0 +1,634 @@
+package proxy
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"io"
+	"net"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/ClickHouse/ch-go/proto"
+
+	"housegate/housegate/pkg/chproto"
+	"housegate/housegate/pkg/chsession"
+	"housegate/housegate/pkg/plugin"
+)
+
+func TestRelay_Handshake_PopulatesSessionState(t *testing.T) {
+	clientProxy, proxyClient := net.Pipe()
+	upstreamProxy, proxyUpstream := net.Pipe()
+	defer clientProxy.Close()
+	defer upstreamProxy.Close()
+
+	// Pre-wire the upstream side to respond with a ServerHello once the
+	// proxy forwards ClientHello.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		// Drain the ClientHello the proxy forwards to us. Use a read deadline
+		// so we don't block forever.
+		_ = upstreamProxy.SetReadDeadline(time.Now().Add(2 * time.Second))
+		buf := make([]byte, 4096)
+		_, _ = upstreamProxy.Read(buf)
+
+		// Write a ServerHello.
+		srv := &proto.ServerHello{
+			Name:        "test-server",
+			Major:       24,
+			Minor:       1,
+			Revision:    54453,
+			Timezone:    "UTC",
+			DisplayName: "test-display",
+		}
+		var b proto.Buffer
+		srv.EncodeAware(&b, 54453)
+		_, _ = upstreamProxy.Write(b.Buf)
+	}()
+
+	// Client side: feed a ClientHello into the proxy's client side, then
+	// drain any bytes the proxy writes back (the ServerHello echo).
+	go func() {
+		var b proto.Buffer
+		(&proto.ClientHello{
+			Name:            "test-client",
+			Major:           1,
+			Minor:           0,
+			ProtocolVersion: 54453,
+			Database:        "default",
+			User:            "alice",
+			Password:        "",
+		}).Encode(&b)
+		_, _ = clientProxy.Write(b.Buf)
+		// Read (and discard) whatever the proxy sends back so WriteServerHello
+		// does not block on the full pipe buffer.
+		_ = clientProxy.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, _ = io.Copy(&bytes.Buffer{}, clientProxy)
+	}()
+
+	sess := chsession.New(1, proxyClient)
+	up := chproto.NewCodec(proxyUpstream, chproto.DirToUpstream)
+	if err := sess.BindUpstream(context.Background(), up); err != nil {
+		t.Fatalf("BindUpstream: %v", err)
+	}
+
+	r := &Relay{sess: sess, hooks: plugin.NoopHooks{}, obs: nil}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := r.handshake(ctx); err != nil {
+		t.Fatalf("handshake: %v", err)
+	}
+
+	snap := sess.State().Snapshot()
+	if snap.ClientRevision == 0 {
+		t.Fatalf("ClientRevision not set after handshake: %+v", snap)
+	}
+	if snap.Database != "default" {
+		t.Fatalf("Database=%q, want default", snap.Database)
+	}
+	// MappedUser should default to hello.User when no plugin overrides.
+	if snap.MappedUser != "alice" {
+		t.Fatalf("MappedUser=%q, want alice", snap.MappedUser)
+	}
+
+	<-done
+}
+
+func TestRelay_Run_QueryForwardAndEndOfStream(t *testing.T) {
+	clientProxy, proxyClient := net.Pipe()
+	upstreamProxy, proxyUpstream := net.Pipe()
+	defer clientProxy.Close()
+	defer upstreamProxy.Close()
+
+	// --- upstream scripting ---
+	go func() {
+		// 1. Drain ClientHello from proxy.
+		_ = upstreamProxy.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		drain := make([]byte, 4096)
+		_, _ = upstreamProxy.Read(drain)
+		// 2. Write ServerHello.
+		srv := &proto.ServerHello{
+			Name: "test", Major: 24, Minor: 1, Revision: 54453,
+			Timezone: "UTC", DisplayName: "test",
+		}
+		var b proto.Buffer
+		srv.EncodeAware(&b, 54453)
+		_, _ = upstreamProxy.Write(b.Buf)
+		// 3. Drain forwarded Query.
+		_ = upstreamProxy.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		_, _ = upstreamProxy.Read(drain)
+		// 4. Write EndOfStream back to client.
+		var eos proto.Buffer
+		eos.PutUVarInt(uint64(proto.ServerCodeEndOfStream))
+		_, _ = upstreamProxy.Write(eos.Buf)
+	}()
+
+	// --- client scripting ---
+	go func() {
+		var b proto.Buffer
+		(&proto.ClientHello{
+			Name: "c", Major: 1, ProtocolVersion: 54453,
+			Database: "default", User: "alice",
+		}).Encode(&b)
+		_, _ = clientProxy.Write(b.Buf)
+
+		// After handshake, send a Query.
+		time.Sleep(100 * time.Millisecond)
+		var qb proto.Buffer
+		(&proto.Query{
+			ID: "qid", Body: "SELECT 1",
+			Info: proto.ClientInfo{
+				ProtocolVersion: 54453, Major: 24, Minor: 1,
+				Interface: proto.InterfaceTCP,
+				Query:     proto.ClientQueryInitial,
+			},
+		}).EncodeAware(&qb, 54453)
+		_, _ = clientProxy.Write(qb.Buf)
+	}()
+
+	sess := chsession.New(1, proxyClient)
+	up := chproto.NewCodec(proxyUpstream, chproto.DirToUpstream)
+	_ = sess.BindUpstream(context.Background(), up)
+
+	obs := &fakePacketObserver{}
+	r := NewRelay(sess, plugin.NoopHooks{}, obs, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	runErr := make(chan error, 1)
+	go func() { runErr <- r.Run(ctx) }()
+
+	// Read forwarded EndOfStream from the client side.
+	_ = clientProxy.SetReadDeadline(time.Now().Add(1 * time.Second))
+	// We need to drain the ServerHello first (which the handshake echoed),
+	// then the EndOfStream.
+	sink := make([]byte, 512)
+	n, err := clientProxy.Read(sink)
+	if err != nil {
+		t.Fatalf("read ServerHello from client side: %v", err)
+	}
+	// The first byte(s) include ServerHello; continue reading until we see
+	// the EOS type (5).
+	gotEOS := false
+	for !gotEOS {
+		for i := 0; i < n; i++ {
+			if sink[i] == byte(proto.ServerCodeEndOfStream) {
+				gotEOS = true
+				break
+			}
+		}
+		if gotEOS {
+			break
+		}
+		n, err = clientProxy.Read(sink)
+		if err != nil {
+			break
+		}
+	}
+	if !gotEOS {
+		t.Fatalf("did not see EndOfStream type (5) on client stream")
+	}
+
+	// Close the client side so Run exits.
+	clientProxy.Close()
+	select {
+	case <-runErr:
+	case <-time.After(1 * time.Second):
+		t.Fatalf("Run did not return after client close")
+	}
+
+	// Wire-level observer: one Query ClientPacket, non-zero bytes each
+	// direction, and at least EndOfStream on the server side. We don't
+	// pin exact counts because the upstream→client path is chunk-based
+	// and may collapse ServerHello + EndOfStream into one read depending
+	// on net.Pipe scheduling.
+	obs.mu.Lock()
+	defer obs.mu.Unlock()
+	if !containsString(obs.clientPackets, "Query") {
+		t.Errorf("clientPackets=%v, expected to include Query", obs.clientPackets)
+	}
+	if obs.bytes["client_to_upstream"] == 0 {
+		t.Errorf("bytes[client_to_upstream]=0, expected >0 after forwarding Query")
+	}
+	if obs.bytes["upstream_to_client"] == 0 {
+		t.Errorf("bytes[upstream_to_client]=0, expected >0 after receiving ServerHello+EOS")
+	}
+}
+
+type fakePacketObserver struct {
+	mu            sync.Mutex
+	clientPackets []string
+	serverPackets []string
+	bytes         map[string]float64
+	dataBlocks    []string
+}
+
+func (f *fakePacketObserver) ClientPacket(t string) {
+	f.mu.Lock()
+	f.clientPackets = append(f.clientPackets, t)
+	f.mu.Unlock()
+}
+
+func (f *fakePacketObserver) ServerPacket(t string) {
+	f.mu.Lock()
+	f.serverPackets = append(f.serverPackets, t)
+	f.mu.Unlock()
+}
+
+func (f *fakePacketObserver) BytesTransferred(direction string, n float64) {
+	f.mu.Lock()
+	if f.bytes == nil {
+		f.bytes = make(map[string]float64)
+	}
+	f.bytes[direction] += n
+	f.mu.Unlock()
+}
+
+func (f *fakePacketObserver) StreamingDataBlock(mode string) {
+	f.mu.Lock()
+	f.dataBlocks = append(f.dataBlocks, mode)
+	f.mu.Unlock()
+}
+
+func containsString(xs []string, want string) bool {
+	for _, x := range xs {
+		if x == want {
+			return true
+		}
+	}
+	return false
+}
+
+// exceptionRecordingHooks captures OnException + OnQueryComplete invocations so
+// tests can assert that the relay decoded an upstream Exception packet
+// and dispatched it through the chain before firing OnQueryComplete.
+type exceptionRecordingHooks struct {
+	plugin.NoopHooks
+	mu              sync.Mutex
+	exceptions      []*chproto.Exception
+	queryCompletes  int
+}
+
+func (h *exceptionRecordingHooks) OnException(_ context.Context, _ chsession.Session, exc *chproto.Exception) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.exceptions = append(h.exceptions, exc)
+	return nil
+}
+
+func (h *exceptionRecordingHooks) OnQueryComplete(_ context.Context, _ chsession.Session) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.queryCompletes++
+}
+
+// TestRelay_UpstreamException_FiresOnException drives a synthetic
+// Exception packet through Relay.upstreamToClient and asserts that
+// the decoded Exception is dispatched via Hooks.OnException with the
+// expected fields, ahead of OnQueryComplete.
+func TestRelay_UpstreamException_FiresOnException(t *testing.T) {
+	clientProxy, proxyClient := net.Pipe()
+	upstreamProxy, proxyUpstream := net.Pipe()
+	defer clientProxy.Close()
+	defer upstreamProxy.Close()
+
+	// Client side: drain whatever the relay writes (the Exception
+	// bytes are spliced through unchanged).
+	go func() {
+		_ = clientProxy.SetReadDeadline(time.Now().Add(2 * time.Second))
+		sink := make([]byte, 4096)
+		for {
+			if _, err := clientProxy.Read(sink); err != nil {
+				return
+			}
+		}
+	}()
+
+	const rev = 54453
+	sess := chsession.New(1, proxyClient)
+	up := chproto.NewCodec(proxyUpstream, chproto.DirToUpstream)
+	up.SetRevision(rev)
+	// BindUpstream without a handshake; we are unit-testing
+	// upstreamToClient in isolation.
+	if err := sess.BindUpstream(context.Background(), up); err != nil {
+		t.Fatalf("BindUpstream: %v", err)
+	}
+
+	hooks := &exceptionRecordingHooks{}
+	r := &Relay{sess: sess, hooks: hooks, obs: nil}
+
+	// Encode an Exception packet on the upstream side.
+	go func() {
+		var b proto.Buffer
+		b.PutUVarInt(uint64(proto.ServerCodeException))
+		exc := proto.Exception{
+			Code:    60,
+			Name:    "DB::Exception",
+			Message: "Table not found",
+			Stack:   "",
+			Nested:  false,
+		}
+		exc.EncodeAware(&b, rev)
+		_, _ = upstreamProxy.Write(b.Buf)
+		// Close so upstreamToClient sees io.EOF and returns.
+		_ = upstreamProxy.Close()
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err := r.upstreamToClient(ctx)
+	if err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("upstreamToClient: %v", err)
+	}
+
+	hooks.mu.Lock()
+	defer hooks.mu.Unlock()
+	if len(hooks.exceptions) != 1 {
+		t.Fatalf("OnException fired %d times, want 1; queryCompletes=%d", len(hooks.exceptions), hooks.queryCompletes)
+	}
+	got := hooks.exceptions[0]
+	if got.Message != "Table not found" {
+		t.Errorf("Exception.Message=%q, want %q", got.Message, "Table not found")
+	}
+	if int(got.Code) != 60 {
+		t.Errorf("Exception.Code=%d, want 60", got.Code)
+	}
+	if got.Name != "DB::Exception" {
+		t.Errorf("Exception.Name=%q, want DB::Exception", got.Name)
+	}
+	if hooks.queryCompletes != 1 {
+		t.Errorf("OnQueryComplete fired %d times, want 1", hooks.queryCompletes)
+	}
+}
+
+// rewritingExceptionHooks mutates exc.Message in OnException to mimic
+// what the rewrite plugin's RewriteErrorMessage path does.
+type rewritingExceptionHooks struct {
+	plugin.NoopHooks
+	rewriteTo string
+}
+
+func (h *rewritingExceptionHooks) OnException(_ context.Context, _ chsession.Session, exc *chproto.Exception) error {
+	exc.Message = h.rewriteTo
+	return nil
+}
+
+// TestRelay_UpstreamException_RewrittenMessageReachesClient verifies
+// that when OnException mutates exc.Message, the relay re-encodes the
+// exception and forwards the rewritten message to the client (rather
+// than the original raw bytes that were already on the wire).
+func TestRelay_UpstreamException_RewrittenMessageReachesClient(t *testing.T) {
+	clientProxy, proxyClient := net.Pipe()
+	upstreamProxy, proxyUpstream := net.Pipe()
+	defer clientProxy.Close()
+	defer upstreamProxy.Close()
+
+	const rev = 54453
+
+	// Capture everything the relay writes to the client side, then
+	// decode it as a server-direction Exception packet.
+	clientGot := make(chan []byte, 1)
+	go func() {
+		_ = clientProxy.SetReadDeadline(time.Now().Add(2 * time.Second))
+		var buf bytes.Buffer
+		sink := make([]byte, 4096)
+		for {
+			n, err := clientProxy.Read(sink)
+			if n > 0 {
+				buf.Write(sink[:n])
+			}
+			if err != nil {
+				clientGot <- buf.Bytes()
+				return
+			}
+		}
+	}()
+
+	sess := chsession.New(1, proxyClient)
+	cli := sess.Client()
+	cli.SetRevision(rev)
+	up := chproto.NewCodec(proxyUpstream, chproto.DirToUpstream)
+	up.SetRevision(rev)
+	if err := sess.BindUpstream(context.Background(), up); err != nil {
+		t.Fatalf("BindUpstream: %v", err)
+	}
+
+	hooks := &rewritingExceptionHooks{rewriteTo: "Table tenant1.events not found"}
+	r := &Relay{sess: sess, hooks: hooks, obs: nil}
+
+	go func() {
+		var b proto.Buffer
+		b.PutUVarInt(uint64(proto.ServerCodeException))
+		exc := proto.Exception{
+			Code:    60,
+			Name:    "DB::Exception",
+			Message: "Table physical_db_1.tenant1_events not found",
+			Stack:   "",
+			Nested:  false,
+		}
+		exc.EncodeAware(&b, rev)
+		_, _ = upstreamProxy.Write(b.Buf)
+		_ = upstreamProxy.Close()
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err := r.upstreamToClient(ctx)
+	if err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("upstreamToClient: %v", err)
+	}
+	_ = proxyClient.Close()
+
+	raw := <-clientGot
+	if len(raw) == 0 {
+		t.Fatal("no bytes written to client")
+	}
+	if raw[0] != byte(chproto.ServerExceptionCode) {
+		t.Fatalf("client got first byte %d, want ServerExceptionCode (%d)", raw[0], chproto.ServerExceptionCode)
+	}
+	got := tryDecodeException(raw, rev)
+	if got == nil {
+		t.Fatalf("client bytes did not decode as Exception: %x", raw)
+	}
+	if got.Message != hooks.rewriteTo {
+		t.Errorf("client Exception.Message=%q, want %q (the rewrite)", got.Message, hooks.rewriteTo)
+	}
+	if int(got.Code) != 60 {
+		t.Errorf("client Exception.Code=%d, want 60", got.Code)
+	}
+	if got.Name != "DB::Exception" {
+		t.Errorf("client Exception.Name=%q, want DB::Exception", got.Name)
+	}
+}
+
+// TestWriteEndOfStreamToClient verifies the helper writes exactly one
+// ServerEndOfStreamCode byte to its writer. This is the primitive used
+// by the AbortWithSuccess branch in clientToUpstream.
+func TestWriteEndOfStreamToClient(t *testing.T) {
+	c, peer := net.Pipe()
+	t.Cleanup(func() {
+		_ = c.Close()
+		_ = peer.Close()
+	})
+
+	go func() {
+		_ = writeEndOfStreamToClient(c)
+	}()
+
+	buf := make([]byte, 4)
+	_ = peer.SetReadDeadline(time.Now().Add(time.Second))
+	n, err := peer.Read(buf)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 byte, got %d", n)
+	}
+	if buf[0] != byte(chproto.ServerEndOfStreamCode) {
+		t.Fatalf("expected ServerEndOfStreamCode (%d), got %d", chproto.ServerEndOfStreamCode, buf[0])
+	}
+}
+
+// abortWithSuccessHooks is a Hooks impl whose OnQuery sets
+// qctx.AbortWithSuccess=true and returns nil — emulating commitgate's
+// behaviour after an Observer returns ErrAbortWithSuccess. It also counts
+// OnQueryComplete invocations so the test can assert exactly-once firing.
+type abortWithSuccessHooks struct {
+	plugin.NoopHooks
+	mu             sync.Mutex
+	onQueryCalls   int
+	queryCompletes int
+}
+
+func (h *abortWithSuccessHooks) OnQuery(_ context.Context, qctx *plugin.QueryContext) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.onQueryCalls++
+	qctx.AbortWithSuccess = true
+	return nil
+}
+
+func (h *abortWithSuccessHooks) OnQueryComplete(_ context.Context, _ chsession.Session) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.queryCompletes++
+}
+
+// TestRelay_ClientToUpstream_AbortWithSuccess plugs a fake plugin that
+// sets qctx.AbortWithSuccess=true into the per-query loop, sends a real
+// Query packet from a simulated client, and asserts:
+//   - the client receives exactly one ServerEndOfStreamCode byte
+//   - the simulated upstream conn receives zero bytes
+//   - OnQueryComplete fires exactly once for the aborted query
+//
+// The test drives clientToUpstream directly (rather than the full Run)
+// because the post-handshake Codec state is what we want to exercise.
+func TestRelay_ClientToUpstream_AbortWithSuccess(t *testing.T) {
+	clientProxy, proxyClient := net.Pipe()
+	upstreamProxy, proxyUpstream := net.Pipe()
+	defer clientProxy.Close()
+	defer upstreamProxy.Close()
+
+	const rev = 54453
+
+	// Simulated upstream: drain anything written so writes don't block.
+	// We assert later that nothing was written by counting bytes.
+	upstreamBytes := make(chan int, 1)
+	go func() {
+		_ = upstreamProxy.SetReadDeadline(time.Now().Add(2 * time.Second))
+		buf := make([]byte, 4096)
+		total := 0
+		for {
+			n, err := upstreamProxy.Read(buf)
+			total += n
+			if err != nil {
+				upstreamBytes <- total
+				return
+			}
+		}
+	}()
+
+	// Simulated client: send a Query packet, then read the relay's
+	// response into clientReadCh.
+	clientReadCh := make(chan []byte, 1)
+	go func() {
+		// Query.EncodeAware prepends the ClientCodeQuery type byte itself —
+		// do not add it twice.
+		var qb proto.Buffer
+		(&proto.Query{
+			ID: "qid", Body: "CREATE TABLE t (a UInt8) ENGINE=Memory",
+			Info: proto.ClientInfo{
+				ProtocolVersion: rev, Major: 24, Minor: 1,
+				Interface: proto.InterfaceTCP,
+				Query:     proto.ClientQueryInitial,
+			},
+		}).EncodeAware(&qb, rev)
+		_, _ = clientProxy.Write(qb.Buf)
+
+		_ = clientProxy.SetReadDeadline(time.Now().Add(2 * time.Second))
+		buf := make([]byte, 64)
+		n, _ := clientProxy.Read(buf)
+		clientReadCh <- buf[:n]
+	}()
+
+	sess := chsession.New(1, proxyClient)
+	sess.Client().SetRevision(rev)
+	up := chproto.NewCodec(proxyUpstream, chproto.DirToUpstream)
+	up.SetRevision(rev)
+	if err := sess.BindUpstream(context.Background(), up); err != nil {
+		t.Fatalf("BindUpstream: %v", err)
+	}
+
+	hooks := &abortWithSuccessHooks{}
+	r := &Relay{sess: sess, hooks: hooks, obs: nil}
+
+	// Drive clientToUpstream until the simulated client closes.
+	loopErrCh := make(chan error, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go func() { loopErrCh <- r.clientToUpstream(ctx) }()
+
+	// Read the relay's reply to the client. This should be exactly one
+	// byte: ServerEndOfStreamCode.
+	got := <-clientReadCh
+	if len(got) != 1 {
+		t.Fatalf("client got %d bytes, want 1; bytes=%v", len(got), got)
+	}
+	if got[0] != byte(chproto.ServerEndOfStreamCode) {
+		t.Fatalf("client[0]=%d, want ServerEndOfStreamCode (%d)",
+			got[0], chproto.ServerEndOfStreamCode)
+	}
+
+	// Tear down so clientToUpstream returns.
+	clientProxy.Close()
+	upstreamProxy.Close()
+	select {
+	case err := <-loopErrCh:
+		if err != nil && !errors.Is(err, io.EOF) {
+			// EOF (or wrapped EOF) is expected once the client side closes.
+			t.Logf("clientToUpstream returned: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("clientToUpstream did not return after client close")
+	}
+
+	// Upstream must have received zero bytes — the AbortWithSuccess
+	// branch skips up.WriteQuery entirely.
+	upBytes := <-upstreamBytes
+	if upBytes != 0 {
+		t.Errorf("upstream received %d bytes, want 0", upBytes)
+	}
+
+	// Hook bookkeeping: OnQuery fired once, OnQueryComplete fired
+	// exactly once for the aborted query.
+	hooks.mu.Lock()
+	defer hooks.mu.Unlock()
+	if hooks.onQueryCalls != 1 {
+		t.Errorf("OnQuery fired %d times, want 1", hooks.onQueryCalls)
+	}
+	if hooks.queryCompletes != 1 {
+		t.Errorf("OnQueryComplete fired %d times, want 1 (exactly once per query)", hooks.queryCompletes)
+	}
+}

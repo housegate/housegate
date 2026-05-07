@@ -1,0 +1,27 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "chsession",
+    srcs = [
+        "errors.go",
+        "identity.go",
+        "session.go",
+        "state.go",
+    ],
+    importpath = "housegate/housegate/pkg/chsession",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/chproto",
+        "@com_github_clickhouse_ch_go//proto",
+    ],
+)
+
+go_test(
+    name = "chsession_test",
+    srcs = ["state_test.go"],
+    embed = [":chsession"],
+    deps = [
+        "//pkg/chproto",
+        "@com_github_clickhouse_ch_go//proto",
+    ],
+)

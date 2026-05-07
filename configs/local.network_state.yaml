@@ -1,0 +1,152 @@
+# Example network state — fixture config the proxy can load via
+# `network_state_yaml` to substitute for a live Redis statemirror in
+# local development and integration tests.
+#
+# Loaded by pkg/network.LoadNetworkStateFromYAML(); the schema is
+# defined by networkStateYAML in pkg/network/yaml.go and the leaf
+# structs are sentio-core types (IndexerInfo, ProcessorAllocation,
+# ProcessorInfo, DatabaseInfo) so field names match what the
+# Redis-backed implementation reads.
+#
+# Five top-level sections — only `indexer_infos` is strictly required;
+# the others can be omitted when a deployment doesn't exercise the
+# corresponding lookup path.
+
+# ---------------------------------------------------------------------
+# indexer_infos — connection info for every known indexer node.
+# Keyed by uint64 indexer id. The proxy reads `clickhouse_proxy_port`
+# when dialling a peer proxy via remote() / __route__.
+# ---------------------------------------------------------------------
+indexer_infos:
+  1:
+    indexer_id: 1
+    indexer_url: "10.0.0.11"
+    compute_node_rpc_port: 10001
+    storage_node_rpc_port: 10002
+    clickhouse_proxy_port: 9001
+  2:
+    indexer_id: 2
+    indexer_url: "10.0.0.12"
+    compute_node_rpc_port: 10001
+    storage_node_rpc_port: 10002
+    clickhouse_proxy_port: 9001
+  1000:
+    indexer_id: 1000
+    indexer_url: "localhost"
+    clickhouse_proxy_port: 10001
+  1001:
+    indexer_id: 1001
+    indexer_url: "localhost"
+    clickhouse_proxy_port: 10002
+
+# ---------------------------------------------------------------------
+# processor_allocations — which indexer(s) host each processor's data.
+# Keyed by processor id (the bare name, NOT the "sentio_" prefix). The
+# first entry is the primary; additional entries describe replicas.
+# ---------------------------------------------------------------------
+processor_allocations:
+  coinbase:
+    - processor_id: "coinbase"
+      indexer_id: 1
+  pancakeswap:
+    - processor_id: "pancakeswap"
+      indexer_id: 2
+
+# ---------------------------------------------------------------------
+# processor_infos — processor-level metadata (entity schema + version).
+# Used by SQL rewriting to map sentio_<processor>.<table> references
+# to the physical table layout the indexer materialises.
+#
+# entity_schema is the GraphQL schema as a YAML block string; leave it
+# empty when the test scenario doesn't exercise schema-aware rewrites.
+# ---------------------------------------------------------------------
+processor_infos:
+  coinbase:
+    processor_id: "coinbase"
+    entity_schema: |
+      type Transfer @entity {
+        id: ID!
+        from: String
+        to: String
+        amount: BigInt
+        blockNumber: BigInt
+      }
+    entity_schema_version: 1
+  pancakeswap123:
+    processor_id: "pancakeswap123"
+    entity_schema_version: 0
+
+# ---------------------------------------------------------------------
+# database_infos — registry-level metadata for user-facing databases.
+# Keyed by Database id. Owner gets implicit DbAuthAdmin in permission
+# checks. db_type follows the on-chain enum: 0 = USER, 1 = PROCESSOR.
+# tables / operators may be omitted when not exercised by the test.
+# ---------------------------------------------------------------------
+database_infos:
+  database1:
+    database_id: "database1"
+    db_type: 0  # USER
+    creator: "0xabcdef0000000000000000000000000000000001"
+    owner:   "0xabcdef0000000000000000000000000000000001"
+    indexer_id: 1
+    operators:
+      - "0xabcdef0000000000000000000000000000000002"
+    tables:
+      - table_id: "events"
+        table_type: "MergeTree"
+      - table_id: "transactions"
+        table_type: "MergeTree"
+  database2:
+    database_id: "database2"
+    db_type: 0  # PROCESSOR
+    creator: "0x0000000000000000000000000000000000000000"
+    owner:   "0x0000000000000000000000000000000000000000"
+    indexer_id: 1
+    processor_id: "coinbase"
+    operators: []
+    tables: []
+  d1: # short name to test non-alphanumeric handling in permissions keys
+    database_id: "d1"
+    db_type: 0  # USER
+  d2:
+    database_id: "d2"
+    db_type: 0  # USER
+    indexer_id: 1000
+  d3:
+    database_id: "d3"
+    db_type: 0  # USER
+    indexer_id: 1001
+
+# ---------------------------------------------------------------------
+# database_permissions — per-account permission bitmaps.
+# Keyed by AccountAddress (lower-case Ethereum address as a string).
+# The inner value can be expressed three ways; pick the most readable
+# for each entry:
+#
+#   - YAML list of names:  ["read", "write", "admin"]   ← preferred
+#   - single name:         "read"
+#   - integer bitmap:      3                            ← read|write
+#                                                          (matches
+#                                                          sentio-core
+#                                                          wire format)
+#
+# Names are case-insensitive (read|write|admin). Unknown names cause
+# load to fail rather than silently degrade to 0.
+#
+# An account who only owns a database does NOT need an entry here:
+# AccountHasPermissionForDatabase grants implicit DbAuthAdmin to the
+# Owner field of the matching database_infos entry.
+# ---------------------------------------------------------------------
+database_permissions:
+  "0xabcdef0000000000000000000000000000000002":
+    database1: ["read", "write"]
+    database2: "read"
+  "0xabcdef0000000000000000000000000000000003":
+    database1: ["read"]
+  "0xabcdef0000000000000000000000000000000004":
+    # Integer bitmap form — equivalent to ["read", "write", "admin"].
+    database1: 7
+  "0xb5757c11d515b9d70785b338d85efed045892187":
+#    d1: ["read", "write", "admin"]
+    d2: ["read", "write", "admin"]
+    d3: ["read", "write", "admin"]

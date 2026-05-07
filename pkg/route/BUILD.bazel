@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "route",
+    srcs = ["parser.go"],
+    importpath = "housegate/housegate/pkg/route",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "route_test",
+    srcs = ["parser_test.go"],
+    embed = [":route"],
+)

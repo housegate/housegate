@@ -1,0 +1,17 @@
+package rewriter
+
+// aliases.go — re-export the network types this package consumes so
+// callers can use them by short name without an extra import.
+
+import "housegate/housegate/pkg/network"
+
+type (
+	IndexerInfo         = network.IndexerInfo
+	ProcessorAllocation = network.ProcessorAllocation
+	ProcessorInfo       = network.ProcessorInfo
+	AccountAddress      = network.AccountAddress
+	NetworkState        = network.State
+)
+
+// Re-exported in-memory state for tests/external callers.
+var NewInMemoryNetworkState = network.NewInMemoryNetworkState

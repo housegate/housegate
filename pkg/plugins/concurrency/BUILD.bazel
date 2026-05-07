@@ -1,0 +1,36 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "concurrency",
+    srcs = [
+        "config.go",
+        "limiter.go",
+        "redislimiter.go",
+        "resolvers.go",
+    ],
+    importpath = "housegate/housegate/pkg/plugins/concurrency",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/cfgtypes",
+        "//pkg/chsession",
+        "//pkg/plugin",
+        "@com_github_redis_go_redis_v9//:go-redis",
+        "@sentio-core//common/log",
+    ],
+)
+
+go_test(
+    name = "concurrency_test",
+    srcs = [
+        "limiter_e2e_test.go",
+        "limiter_test.go",
+    ],
+    embed = [":concurrency"],
+    deps = [
+        "//pkg/chproto",
+        "//pkg/chsession",
+        "//pkg/plugin",
+        "@com_github_alicebob_miniredis_v2//:miniredis",
+        "@com_github_redis_go_redis_v9//:go-redis",
+    ],
+)

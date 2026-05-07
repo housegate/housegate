@@ -1,0 +1,57 @@
+# Bazel build outputs
+/bazel-*
+
+# Bazel lock file (generated, may want to commit for reproducibility)
+# MODULE.bazel.lock
+
+# Go build artifacts
+/clickhouse-proxy
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Binary files
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Go coverage files
+*.out
+coverage.txt
+
+# Compiled Object files, Static and Dynamic libs
+*.o
+*.a
+
+# Local configuration
+config*.json
+# Age private keys — NEVER commit. See docs/secrets.md for how they are
+# injected into the running binary.
+*.age-key
+*.age-identity
+age-keys.txt
+.ck_runtime/
+tests/data/
+tests/bin/
+tests/*.log
+external/ck_remote_proxy_linux
+CONTEXT_SUMMARY.md
+
+clickhouse-proxy-linux
+integration_test_client-linux
+/proxy
+
+# git worktrees for isolated dev
+.worktrees/

@@ -1,0 +1,28 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "usage",
+    srcs = [
+        "config.go",
+        "usage.go",
+    ],
+    importpath = "housegate/housegate/pkg/plugins/usage",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/billing",
+        "//pkg/plugin",
+        "@sentio-core//common/log",
+    ],
+)
+
+go_test(
+    name = "usage_test",
+    srcs = ["usage_test.go"],
+    embed = [":usage"],
+    deps = [
+        "//pkg/billing",
+        "//pkg/chproto",
+        "//pkg/chsession",
+        "//pkg/plugin",
+    ],
+)

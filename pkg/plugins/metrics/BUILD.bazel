@@ -1,0 +1,20 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "metrics",
+    srcs = ["plugin.go"],
+    importpath = "housegate/housegate/pkg/plugins/metrics",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/chproto",
+        "//pkg/chsession",
+        "//pkg/plugin",
+    ],
+)
+
+go_test(
+    name = "metrics_test",
+    srcs = ["plugin_test.go"],
+    embed = [":metrics"],
+    deps = ["//pkg/chproto"],
+)

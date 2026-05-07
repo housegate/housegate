@@ -1,0 +1,108 @@
+module(
+    name = "housegate",
+    version = "1.0",
+)
+
+bazel_dep(name = "platforms", version = "1.0.0")
+bazel_dep(name = "rules_go", version = "0.60.0")
+bazel_dep(name = "gazelle", version = "0.47.0")
+bazel_dep(name = "protobuf", version = "33.5")
+bazel_dep(name = "rules_multirun", version = "0.13.0")
+bazel_dep(name = "aspect_bazel_lib", version = "2.22.5")
+bazel_dep(name = "bazel_skylib", version = "1.9.0")
+bazel_dep(name = "rules_oci", version = "2.2.7")
+bazel_dep(name = "sentio-core", version = "0.0.0")
+git_override(
+    module_name = "sentio-core",
+    commit = "8f1c1b48d382ab587b86f707a82520fa80bc2796",
+    patch_strip = 1,
+    patches = [
+        "//third_party:sentio-core.patch",
+    ],
+    remote = "https://github.com/sentioxyz/sentio-core",
+)
+
+go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
+go_sdk.download(version = "1.25.9")
+
+go_deps = use_extension("@gazelle//:extensions.bzl", "go_deps")
+go_deps.from_file(go_mod = "//:go.mod")
+use_repo(go_deps, "com_github_alicebob_miniredis_v2", "com_github_bytedance_sonic", "com_github_clickhouse_ch_go", "com_github_ethereum_go_ethereum", "com_github_prometheus_client_golang", "com_github_redis_go_redis_v9", "com_github_segmentio_asm", "in_yaml_go_yaml_v3", "io_filippo_age", "io_opentelemetry_go_otel_trace", "org_golang_google_grpc", "org_golang_google_protobuf", "org_golang_x_crypto", "org_golang_x_sync", "org_golang_x_sys")
+
+# Overrides below only apply when housegate is the root module (standalone
+# build). When housegate is consumed as a dep (e.g. by sentio-node), these
+# tags are skipped and the consumer's root MODULE.bazel must supply
+# equivalent overrides for shared transitive deps.
+go_deps_dev = use_extension("@gazelle//:extensions.bzl", "go_deps", dev_dependency = True)
+go_deps_dev.module_override(
+    patch_strip = 1,
+    patches = ["//third_party:com_github_ethereum_go_ethereum_secp256k1.patch"],
+    path = "github.com/ethereum/go-ethereum",
+)
+go_deps_dev.module_override(
+    patch_strip = 1,
+    patches = ["//third_party:com_github_consensys_gnark_crypto.patch"],
+    path = "github.com/consensys/gnark-crypto",
+)
+go_deps_dev.gazelle_override(
+    build_file_generation = "off",
+    path = "github.com/wasmerio/wasmer-go",
+)
+go_deps_dev.gazelle_default_attributes(
+    directives = ["gazelle:proto disable"],
+)
+
+bazel_dep(name = "hermetic_cc_toolchain", version = "4.1.0")
+
+toolchains = use_extension("@hermetic_cc_toolchain//toolchain:ext.bzl", "toolchains")
+use_repo(toolchains, "zig_sdk")
+
+register_toolchains(
+    "@zig_sdk//toolchain:linux_amd64_gnu.2.31",
+    # NOTE: zig's darwin_arm64 toolchain is for CROSS-COMPILE FROM LINUX
+    # only (hermetic_cc_toolchain does not support darwin as a build host
+    # — zig's lld rejects Apple's `-Wl,-x` linker flag, breaking native
+    # macOS builds). CI passes it via --extra_toolchains so it's
+    # registered only for the cross-compile step. Local macOS users build
+    # with the auto-detected Apple clang via cc_toolchain_resolution.
+)
+
+PLATFORMS = [
+    "linux/amd64",
+]
+
+oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
+oci.pull(
+    name = "go_base_image",
+    image = "gcr.io/distroless/base",
+    platforms = PLATFORMS,
+    tag = "debug",
+)
+use_repo(oci, "go_base_image")
+oci.pull(
+    name = "python_base_image",
+    image = "ghcr.io/sentioxyz/python",
+    platforms = PLATFORMS,
+    tag = "3.10-1.4.0",
+)
+use_repo(oci, "python_base_image")
+oci.pull(
+    name = "node_base_image",
+    image = "ghcr.io/sentioxyz/node",
+    platforms = PLATFORMS,
+    tag = "24-1.4.2",
+)
+use_repo(oci, "node_base_image")
+oci.pull(
+    name = "clickhouse_client_image",
+    image = "docker.io/clickhouse/clickhouse-server",
+    platforms = PLATFORMS,
+    tag = "head-alpine",
+)
+use_repo(oci, "clickhouse_client_image", "clickhouse_client_image_linux_amd64", "go_base_image_linux_amd64", "move_base_image", "move_base_image_linux_amd64", "node_base_image_linux_amd64", "python_base_image_linux_amd64")
+oci.pull(
+    name = "move_base_image",
+    image = "docker.io/google/cloud-sdk",
+    platforms = PLATFORMS,
+    tag = "slim",
+)

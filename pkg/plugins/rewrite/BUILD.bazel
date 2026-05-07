@@ -1,0 +1,31 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "rewrite",
+    srcs = [
+        "config.go",
+        "rewriter.go",
+    ],
+    importpath = "housegate/housegate/pkg/plugins/rewrite",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/cfgtypes",
+        "//pkg/chproto",
+        "//pkg/chsession",
+        "//pkg/plugin",
+        "//pkg/rewriter",
+        "@sentio-core//common/log",
+    ],
+)
+
+go_test(
+    name = "rewrite_test",
+    srcs = ["rewriter_test.go"],
+    embed = [":rewrite"],
+    deps = [
+        "//pkg/chproto",
+        "//pkg/chsession",
+        "//pkg/plugin",
+        "//pkg/rewriter",
+    ],
+)

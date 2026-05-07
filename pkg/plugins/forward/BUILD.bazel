@@ -1,0 +1,37 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "forward",
+    srcs = [
+        "forward.go",
+        "use_regex.go",
+    ],
+    importpath = "housegate/housegate/pkg/plugins/forward",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/auth",
+        "//pkg/chproto",
+        "//pkg/chsession",
+        "//pkg/credentials",
+        "//pkg/network",
+        "//pkg/peer",
+        "//pkg/plugin",
+        "@sentio-core//common/log",
+    ],
+)
+
+go_test(
+    name = "forward_test",
+    srcs = [
+        "forward_test.go",
+        "use_regex_test.go",
+    ],
+    embed = [":forward"],
+    deps = [
+        "//pkg/auth",
+        "//pkg/chproto",
+        "//pkg/chsession",
+        "//pkg/network",
+        "//pkg/plugin",
+    ],
+)

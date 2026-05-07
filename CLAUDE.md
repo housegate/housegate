@@ -1,0 +1,163 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+It describes the **current state** of the code (what exists today, build/test commands, known rough edges). For the canonical north-star design, see [housegate/docs/docs/architecture.md](https://github.com/housegate/docs/blob/main/docs/architecture.md). The legacy god-file `*Proxy` has been removed; the live code is the plugin-based relay described here.
+
+## Build & Test
+
+The canonical build system is **Bazel 8.5.1 + Bzlmod**. The Makefile, CI, and production image all go through Bazel — the `go build` / `go test` paths in README work for simple cases but are not the ground truth.
+
+```bash
+bazel build //cmd:housegate      # proxy binary (output: bazel-bin/cmd/housegate_/housegate)
+bazel test //...                       # all tests
+bazel test //pkg/proxy:proxy_test      # main test target (all proxy tests compiled into one)
+make build / make test                 # Makefile delegates to Bazel
+
+bazel test //pkg/proxy:proxy_test --test_filter='TestConfigValidate'   # single test / regex
+bazel test //pkg/proxy:proxy_test --test_arg=-test.v                   # verbose output
+```
+
+**`go test ./...` does NOT work out-of-the-box** — it panics in `protos/rewriter.pb.go` init due to a protobuf version skew with vendored deps. Always use Bazel for tests. If you edit a `.proto` or add deps, run `bazel mod tidy && bazel run //:gazelle`.
+
+**Some tests need external services** (`rewriter_e2e_test.go` needs a gRPC rewriter on `localhost:50051`). Before claiming a regression, diff your failing-test set against a clean `main` build — matching set = no regression.
+
+## Current Architecture (what exists today)
+
+housegate is a **ClickHouse native TCP (port 9000) proxy** — not HTTP. It parses the stateful binary protocol at packet granularity. Understanding four cross-cutting concepts is essential:
+
+### 1. Two runtime modes (one binary, selected at startup)
+
+`Config.Mode()` in [pkg/config/config.go](pkg/config/config.go) decides the mode; each has different required fields (enforced by `Config.Validate()`):
+
+| Mode | Trigger | Role |
+|---|---|---|
+| **Server** | `sidecar.mode != true` | Terminates client TCP, auths JWS, runs the full plugin chain. With `shard` or `upstream` configured: rewrites SQL via gRPC `sql-rewriter` and forwards to local ClickHouse replica(s); requires `ckh_manager_config_path`. With *neither* configured ("router-only" deployment): no rewriter runs, every session falls through to a NetworkState peer-pick that forwards the connection to a bound peer — the role the legacy forwarding-only mode used to play. Always requires `network_state.source` (yaml or redis). Optional `internal_listen` adds a second listener that pre-flags every session as `IsPeerTrusted` + `IsInternalPort` for peer-only traffic. |
+| **Sidecar** | `sidecar.mode: true` | Runs next to a CH client; signs queries with an Ethereum private key (JWS), forwards to a remote server-mode proxy. Either `sidecar.upstream` (pinned target) or `network_state.source` (auto-discover via two-tier `Selector` — permissioned indexers first, bootstrap fallback to any bound peer for new accounts) plus `sidecar.private_key_hex`. |
+
+Two prefixed envelopes can ride in the ClientHello user/password fields, both pipe-delimited and designed to nest:
+
+- **`__route__|<target>|<realUser>`** — proxy-to-proxy routing. Handled by `routeplugin.Stripper` in [pkg/plugins/route/](pkg/plugins/route/). Once Stripper marks the session, `PluginChain` bypasses every non-`RouteAware` plugin (auth, rewrite, state, usage, concurrency) for the rest of the connection — the routed flow only runs `Signer` + `metrics`.
+- **`__peer__|<address>` + peer-relay JWS in password** — cross-housegate authentication for the inbound side of `remote()` calls between proxies. Handled by `credential.Plugin` in [pkg/plugins/credential/](pkg/plugins/credential/). Once validated, `SessionState.IsPeerTrusted = true` and `PluginChain` skips plugins that opt out via `PeerTrustAware.RunOnPeerTrust() == false` — auth (qhash mismatch is unavoidable on already-rewritten inner SQL), rewrite (would double-prefix already-prefixed table names), and commitgate (the originating proxy that ran the rewriter already gated this; without rewrite running here every statement would surface as Unspecified and the Permission observer would unconditionally reject) all bypass; concurrency / usage / sessionstate / metrics keep firing. The two markers compose: a routed *and* peer-trusted session applies the route filter first, then the peer-trust filter on the survivors. Full design: [docs/superpowers/specs/2026-04-28-peer-trust-design.md](docs/superpowers/specs/2026-04-28-peer-trust-design.md).
+
+### 2. Multi-proxy / sidecar routing topology
+
+Production runs many server-mode housegates side by side, one per indexer. A sidecar's `clickhouse-client` may issue `USE tenant2` where `tenant2` lives on a *different* server proxy than the one the sidecar is talking to. The proxy network resolves this transparently. Full design: [docs/superpowers/specs/2026-04-28-two-port-server-mode.md](docs/superpowers/specs/2026-04-28-two-port-server-mode.md). The four moving pieces:
+
+**a) Two listeners per server with distinct trust postures.** When `internal_listen` is configured, `buildServer` binds a second `*proxy.Server` whose `PreflagSession` stamps every accepted session with `IsPeerTrusted=true` + `IsInternalPort=true` *before* OnHello runs ([build.go::buildServer](build.go), [pkg/chsession/state.go](pkg/chsession/state.go)). Externally-reachable clients (sidecars, local CH `remote()` loopbacks) hit the external port and run the full plugin chain; only peer housegates may reach the internal port — typically firewalled to peer subnets. `routeplugin.Stripper` hard-rejects any `__route__` envelope arriving on the internal port to prevent forwarding loops; the receiving proxy serves the connection itself.
+
+**b) `__route__` + `__peer__` envelope nesting on `remote()` loopbacks.** The architectural invariant is **"a ClickHouse instance only ever opens TCP to its co-located housegate."** The rewriter therefore emits `remote('local-housegate:external', ...)` clauses with two prefixed values in the user/password fields: `__route__|<peer-addr>|__peer__|<self-address>` as `user`, peer-relay JWS as `password`. The local Stripper peels the route envelope on the loopback hop and forwards the connection to `<peer-addr>` (typically the peer's internal port); the receiving proxy's `credential.Plugin` validates the `__peer__` JWS and marks `IsPeerTrusted`. This is the existing path in [pkg/rewriter/sentio.go](pkg/rewriter/sentio.go) (`buildSentioTableMappings`, `buildRemoteUpstreams`) and is unchanged by the two-port work.
+
+**c) Forward-decision plugin pivots whole sessions, not just queries.** When the rewriter's `remote()` per-clause routing is too coarse — e.g. the sidecar opens a session whose entire scope is one logical DB hosted elsewhere — `forward.Plugin` ([pkg/plugins/forward/](pkg/plugins/forward/)) runs on the external-port chain only and fires twice:
+- **OnHello:** if `hello.Database` resolves to a peer indexer via `NetworkState.RetrieveDatabaseInfo`, `Session.RebindToPeer` swaps the upstream codec to that peer's internal port using a freshly-signed `__peer__` handshake (`pkg/peer.SignPeerHello`). The session's hello/addendum runs against the new upstream; the cached `PeerServerHelloRaw` is what the relay echoes to the client. Sets `IsForwarding=true` on the session.
+- **OnQuery (USE detection):** a narrow regex (`use_regex.go`) catches standalone `USE <name>` and re-runs the same lookup; mismatch triggers another `RebindToPeer`. Cross-DB SQL inside a single statement (`tenant1.x JOIN tenant2.y`) is *not* re-routed at the session level — it falls back to the rewriter's per-clause `remote()` path described in (b).
+
+The `ForwardAware` marker mirrors `PeerTrustAware` (default-on, opt-out): plugins that should fire on the *originating* proxy regardless (auth, metrics, concurrency, usage, sessionstate, credential) implement `RunOnForward()=true`; plugins that belong to the *host* proxy (rewrite, commitgate) implement `RunOnForward()=false`.
+
+**d) Sidecar auto-discovery via NetworkState.** Sidecars no longer need a pinned `sidecar.upstream`; setting `network_state.source` instead lets `pkg/plugins/sidecar.Selector` pick a server-mode proxy per session. The two-tier algorithm reads `RetrieveDatabasePermissions(account)` against `RetrieveAllIndexerInfos()`:
+1. **Permissioned tier** — random pick across indexers hosting at least one DB the sidecar's account has perms on (the normal path).
+2. **Bootstrap tier** — random pick across any bound indexer when tier 1 is empty. Covers brand-new accounts that have not run their first `CREATE DATABASE` yet (chicken-and-egg). Emits warn log + `clickhouse_proxy_sidecar_bootstrap_fallback_total` so operators can spot accounts that should not be in the bootstrap path.
+Once the sidecar lands on *any* server proxy, that proxy's `forward.Plugin` handles the rest via (c) above. A pinned `sidecar.upstream` still works as an explicit override.
+
+**Router-only server (no shard, no upstream).** A server-mode housegate with neither `shard` nor `upstream` is the routing-only role the legacy `forwarding-only` mode used to play. `buildServer`'s dialer falls through to `pickRandomBoundProxy(ns, selfPort)` (3-attempt retry, self-exclusion via `selfListenPort` + `isLocalAddress`) when no plugin set a route target. The rewriter is auto-disabled in this configuration; only `network_state.source` is required.
+
+### 3. Packet-level streaming pipeline
+
+[pkg/proxy/server.go](pkg/proxy/server.go) + [pkg/proxy/relay.go](pkg/proxy/relay.go) drive a `Codec` ([pkg/chproto/codec.go](pkg/chproto/codec.go)) per direction and fire plugin hooks from [pkg/plugin/chain.go](pkg/plugin/chain.go):
+
+```
+Server.handle → Relay.Run
+  └─ Relay.handshake (relay.go)
+       1. client.ReadPacket(ClientHello)  → OnHello chain (credential, route, state)
+       2. upstream.WriteClientHello + upstream.ReadPacket(ServerHello)
+            ServerHello is returned as both Decoded + Raw; the chunked caps
+            (proto_send/recv_chunked_srv) are rewritten to "notchunked"
+            before the raw bytes are echoed to the client — see hello.go.
+       3. client.NegotiateAddendum(ProposedRecv/Send="notchunked") + upstream.SendAddendum
+            The negotiate call is READ-ONLY (ch-go client never expects a
+            reply); forwarding to upstream is explicit.
+  └─ Relay.clientToUpstream  (goroutine, packet-by-packet)
+       client.ReadPacket(ClientQueryCode) → OnQuery chain (auth, usage,
+         concurrency, forward, rewrite, commitgate, route signer, metrics)
+         → up.WriteQuery / up.Splice for non-decoded packets
+         (Data/Ping/Cancel/...). HelloPlugins (route stripper, credential,
+         forward, sessionstate, rewrite) fire on the ClientHello packet
+         only — sessionstate has no OnQuery hook today.
+  └─ Relay.upstreamToClient (goroutine, byte-copy stream)
+       up.ReadRaw(buf) → client.Conn().Write(buf). NO per-packet parse: the
+       first byte of each chunk is sniffed heuristically for
+       EndOfStream/Exception to fire OnQueryComplete and clear
+       ActiveRewrite — best-effort trade-off on chunk/packet alignment.
+```
+
+Key non-obvious invariants driven by this design:
+- **One `Codec` per net.Conn; one `proto.Reader` per Codec.** The codec feeds proto.Reader through a 1-byte-at-a-time `captureByteReader` so its inner bufio never prefetches across a packet boundary. Creating a fresh proto.Reader per packet — an older design — stranded prefetched bytes the moment the client pipelined addendum+query in one TCP segment.
+- **Chunked protocol is force-disabled.** The codec does not yet implement `ChunkedReader` / `ChunkedWriter`; see Known Rough Edges.
+- **ReadPacket on the upstream codec is used only during handshake.** After handshake, the upstream codec is read via `ReadRaw` and is only written via typed writers (`WriteQuery`, `SendAddendum`). See codec.go's `ReadRaw` doc — mixing `ReadPacket` with `ReadRaw` on the same codec breaks the capture/buffer invariant.
+
+### 4. SQL rewriter is a separate gRPC service
+
+The proxy **never parses SQL itself**. [pkg/plugins/rewrite/rewriter.go](pkg/plugins/rewrite/rewriter.go) is the QueryPlugin; it owns one [pkg/rewriter](pkg/rewriter)-built `Rewriter` per connection, which delegates to an external gRPC `sql-rewriter` (protos in [protos/rewriter.proto](protos/rewriter.proto)). Rewriter is **fail-open by default** (rewriter down → original SQL forwarded, only a warn log). Table mapping decisions consult `sentio-core` `TableMapper` + Redis `NetworkState` + `ProcessorRegistry`. The rewriter response is what populates `qctx.StatementType` / `AccessedTables` / `TableRewrites` / `DatabaseRewrites` / `PrivilegesDeltas` — every downstream plugin (commitgate, observers) reads those fields rather than re-parsing SQL.
+
+When a remote table maps to another housegate (cross-indexer routing), the rewriter emits `remote()` clauses with two pieces of state in the user/password fields: a `__route__|<peer-addr>|__peer__|<self-address>` envelope as `user`, and a peer-relay JWS (audience = peer's indexer-id, signed by the relay private key, no qhash) as `password`. The local Stripper peels the route envelope on the loopback leg; the receiving proxy's credential plugin peels the peer envelope and marks the session `IsPeerTrusted` so its auth + rewrite skip themselves. Falls back to the legacy static-credential path (`credentials.CredentialProvider.GetCredentialForIndexer`) when no peer signer is wired. Both `remote()` emission paths in [pkg/rewriter/sentio.go](pkg/rewriter/sentio.go) (`buildSentioTableMappings` static-mapping path; `buildRemoteUpstreams` dynamic-mapping path) funnel through one `resolveRemoteCredentials` helper.
+
+## Key Modules
+
+- **[pkg/chproto/](pkg/chproto/)** — `Codec` (one proto.Reader per codec fed through a 1-byte capturing reader), `ReadPacket` / `Splice` tagged-union reader, `ReadRaw` byte-copy escape hatch, addendum negotiation, `rewriteServerHelloChunkedToNotChunked` workaround, `walkDataBlock` for compressed-frame skip.
+- **[pkg/chsession/](pkg/chsession/)** — `Session` interface + `SessionState` (`Database` / `LogicalDatabase` / `Settings` / `RouteTarget` / `IsPeerTrusted` / `PeerAddress` / `HasActiveRewrite`, replayable on upstream rebind). Atomic upstream-pointer swap.
+- **[pkg/route/](pkg/route/)** — `__route__|<target>|<realUser>` envelope encoder/parser (`Format` / `Parse` / `Delim`); shared `|` delimiter convention with `pkg/peer`. No external deps.
+- **[pkg/peer/](pkg/peer/)** — `__peer__|<address>` envelope encoder/parser; reuses `route.Delim`.
+- **[pkg/auth/](pkg/auth/)** — Validators + signers shared by sidecar / relay / peer-trust paths. `Signer` / `Validator` for SQL-binding JWS (`SignToken(sql)` / `ValidateQuery(meta)`). `PeerSigner` / `PeerValidator` for handshake-time peer-relay JWS (`SignPeerLogin(audience, ttl)` / `ValidatePeerLogin(token, expectedAud)`). One `RelaySigner` instance satisfies both Signer interfaces; one `EthValidator` instance satisfies both Validator interfaces — same secp256k1 key, distinct payload schemas (`JWSPayload` vs `JWSPeerPayload`) with `purpose` claim domain-separation.
+- **[pkg/plugin/](pkg/plugin/)** — `Hooks` interface + `PluginChain` composing `HelloPlugin` / `QueryPlugin` / `QueryCompletePlugin` / `ExceptionPlugin` / `ClosePlugin`. Two marker interfaces gate which plugins fire:
+  - `RouteAware.RunOnRouted()` — opt-IN (default = skip on routed). Production opters: `routeplugin.Stripper`, `routeplugin.Signer`, `metricsplugin.Plugin`.
+  - `PeerTrustAware.RunOnPeerTrust()` — opt-OUT (default = run on peer-trust). Production opters: `authplugin.Plugin`, `rewrite.Plugin`, `commitgate.Plugin`. Lifecycle hooks (OnConnect / OnDisconnect / OnClose) and OnHello are exempt from the peer-trust filter — the credential plugin lives in OnHello and is what flips the flag.
+- **[pkg/plugins/](pkg/plugins/)** — each subdir is one plugin + its Config: `auth`, `credential` (also detects `__peer__|` envelopes and validates the JWS via `PeerValidator`, sets `IsPeerTrusted`), `concurrency`, `sessionstate` (OnHello-only USE/SET tracker + logical↔physical DB mapping), `forward` (OnHello peer-rebind + OnQuery USE-rebind, `ForwardAware` mark), `rewrite` (AST rewriter via gRPC; `PeerTrustAware`/`ForwardAware` opt-out — also rewrites SHOW TABLES / SHOW DATABASES into metadata-shaped SELECTs via the rewriter service, so there is no separate `dbrewriter` plugin), `route` (split into `Stripper` / `Signer`, both `RouteAware`), `sidecar`, `usage`, `metrics`, `commitgate` (server-mode-only DDL/DCL gate; runs `Observer` hooks before CREATE/DROP DATABASE, CREATE/DROP TABLE, GRANT, REVOKE reach CH; observers may return `ErrAbortWithSuccess` to short-circuit with a synthetic EndOfStream — the path used for on-chain CREATE/DROP DATABASE).
+- **[pkg/proxy/server.go](pkg/proxy/server.go) + [relay.go](pkg/proxy/relay.go)** — `Server` + `Relay` driving the codecs above through the plugin chain. [pkg/proxy/observer.go](pkg/proxy/observer.go) holds the global Prometheus metric registrations and the `MetricsObserver` adapter shared by Relay (wire-level counters) and the metrics plugin (semantic events).
+
+Cross-cutting:
+- **[pkg/cluster/](pkg/cluster/)** — replica management: connection pool (LIFO, `atomic.Bool` for in-use), active+passive health check, 4 routing strategies (round-robin / random / least-conn / weighted). **No tests currently** — add when modifying.
+- **[protos/](protos/)** — `rewriter.proto` (the SQL rewrite gRPC contract).
+- **[housegate (root package)](proxy.go)** — embeddable library API: `Proxy` interface + `Options` struct + `New(opts) (Proxy, error)`. Dependency assembly + plugin chain wiring lives in [build.go](build.go) (`buildServer` / `buildSidecar`); the redis pool factory is in [redis.go](redis.go). `New` dispatches by `Config.Mode()` and returns a `*proxyImpl` that owns its resource teardown via `Run` / `RunWith`. Library hosts import this package directly; the binary just wraps it.
+- **[cmd/main.go](cmd/main.go)** — standalone-binary shell: flag parsing, `secret-*` subcommand dispatch, signal-context wiring, `/metrics` HTTP server, then `housegate.New(opts).Run(ctx)`. No domain logic.
+
+## Known Rough Edges
+
+Works end-to-end against ClickHouse 26.x; these are the current blind spots:
+
+- **Chunked protocol is not implemented in the codec.** To avoid the client negotiating chunked framing, `rewriteServerHelloChunkedToNotChunked` in [hello.go](pkg/chproto/hello.go) rewrites the server's `proto_send_chunked_srv` / `proto_recv_chunked_srv` advertisements to `"notchunked"` before echoing ServerHello, and `NegotiateAddendum` is called with `ProposedRecv/Send="notchunked"` so upstream also agrees. This costs throughput for large Data blocks vs. what ClickHouse's chunked transport would deliver, but keeps the packet loop correct. Follow-up: wire `ChunkedReader`/`ChunkedWriter` into `Codec` and drop both workarounds.
+- **`decodeServerHello` runs before `SetRevision`**, so ch-go only reads `name/major/minor/revision` and stops. `SessionState.Timezone` / `ServerDisplayName` come out empty. Harmless — the raw ServerHello bytes flow to the client correctly via the Raw pass-through — but any plugin that reads those fields from state will see empties today.
+- **`upstream → client` Exception decoding is best-effort.** Relay first-byte-detects `ServerExceptionCode` and decodes the packet from the buffered chunk to fire `OnException`, then `OnQueryComplete`. If a chunk starts mid-packet (rare — CH typically flushes Exception as its own write), the hook is missed. Plugins relying on this for billing/state-rollback should accept best-effort delivery and pair with idempotent operations. EndOfStream is detected via the same first-byte heuristic but not decoded (no body to consume).
+- **`ErrorReverseMap` remains a no-op stub** ([pkg/plugins/rewrite/error_map.go](pkg/plugins/rewrite/error_map.go)). The rewriter has not yet grown a `RewriteErrorMessage` RPC, so reverse-mapping inside `OnException` is not wired. The hook itself fires correctly via best-effort decode.
+- **Prometheus metrics are `init()`-registered globals** in [pkg/proxy/observer.go](pkg/proxy/observer.go) via `prometheus.MustRegister`. Importing the proxy package twice panics on duplicate registration — work around with `//nolint` in tests until the registry is injected.
+- **`grpc.DialContext` + `WithBlock()`** in the rewriter factory is deprecated — rewriter service unavailable at startup fails the server if `ckhMgr != nil`.
+- **README JSON config examples contain `//` comments** which break `json.Unmarshal`. Do not copy them verbatim.
+
+Logical ↔ physical database multiplexing:
+- A deployment can host many "logical" databases on a single physical ClickHouse database by prefixing table names: physical `<physical_db>`.`<logical_db><delim><table>` appears to logical users as `<logical_db>`.`<table>` (default `<delim>` = `_`). When `state.physical_database` is set, the `sessionstate` plugin rewrites `hello.Database` and `USE <name>` to the physical name and the `rewrite` plugin's `OnHello` mirrors it onto `SessionState.Database`; `SessionState.LogicalDatabase` retains what the user typed. The same `state.physical_database` value is read by [pkg/rewriter/sentio.go](pkg/rewriter/sentio.go)'s `buildDatabaseMap`/`buildDynamicArgs` and forwarded to the gRPC sql-rewriter as `RewriteTableDynamicArgs.physical_database` + per-logical `database_map` entries. The rewriter service is then responsible for prefixing unqualified table references in `SELECT` / `DESCRIBE` / `EXISTS TABLE` / `SHOW CREATE TABLE` and for rewriting `SHOW TABLES` / `SHOW DATABASES` into metadata-shaped SELECTs that synthesize the visible-database list from that map. There is no separate proxy-side `dbrewriter` config block — every transformation lives in the rewriter service.
+
+## Encrypted config files (age)
+
+[pkg/secretsload](pkg/secretsload) transparently decrypts age-encrypted config files at load time. The proxy binary ships `secret-keygen` / `secret-encrypt` / `secret-decrypt` / `secret-edit` subcommands so operators can manage ciphertext without extra tools. Identity is injected via `HOUSEGATE_AGE_IDENTITY` or `HOUSEGATE_AGE_IDENTITY_FILE`; on Linux the decrypted plaintext lives in a `memfd` (never hits disk). Full operator guide: [docs/secrets.md](docs/secrets.md). The wrapper is applied to both the main config path and `ckh_manager_config_path` in [cmd/main.go](cmd/main.go).
+
+## Adding a Plugin
+
+A new plugin is a 4-file change under `pkg/plugins/<name>/` plus a one-line wiring addition in `build.go`'s `buildServer` (or `buildSidecar` if it should fire in sidecar mode). Package naming rules (`authplugin`/`routeplugin` avoid leaf-package collisions), hook-interface choice, Redis factory usage, plugin-chain ordering, and copyable templates live in [.claude/skills/add-housegate-plugin/SKILL.md](.claude/skills/add-housegate-plugin/SKILL.md). Skim it before adding anything to the chain.
+
+## Conventions
+
+- **Logging**: use `sentioxyz/sentio-core/common/log` (aliased as `log`). It wraps Zap; never use `fmt.Println` or stdlib `log`. Prefer the structured and context-aware forms below. Most of the existing codebase still uses the printf-style `log.Infof` / `log.Warnf` / `log.Fatalf` — that is legacy. New code should migrate to:
+  - **Structured key-value logging** via the `*w` family (`log.Infow`, `log.Debugw`, `log.Warnw`, `log.Errorw`). Example: `log.Infow("handshake complete", "conn", connID, "user", user, "upstream", addr)`. Preferred over `Infof` because fields are machine-parseable (Zap emits them as JSON in prod).
+  - **Context-carried loggers** via `log.FromContext` (or `log.FromContextWithTrace` when OTel trace/span IDs should be attached): `ctx, logger := log.FromContext(ctx, "conn", connID)` then `logger.Infow("query done", "rows", n)`. Subsequent calls that receive `ctx` recover the same enriched logger — you don't need to re-pass `conn` through every helper. This is the preferred way to thread per-connection/per-query context through the packet loop, rewriter, validator, etc.
+  - Legacy printf-style messages use bracketed prefixes (`[conn 1]`, `[validator]`, `[eth_validator]`, `[config]`) to compensate for the lack of structured fields; don't add those prefixes when using `Infow`/`FromContext` — put the same info as key-value pairs instead.
+- **Errors**: wrap with `fmt.Errorf("context: %w", err)`. Aggregate startup config errors via `errors.Join` (see `Config.Validate`).
+- **Duration fields in config**: custom `Duration` type accepts `"5s"`-style strings and nanosecond integers; values `< 1s` trigger a warning because operators often confuse seconds vs. nanoseconds.
+- **English first for code and comments.** Identifiers, docstrings, and inline comments should be English by default. Some legacy comments are in Chinese (e.g. `// 超过此时间后连接将被关闭`); leave those as-is when you touch nearby code, but do not add new non-English comments. User-facing operator messages (log output, error strings returned to CLI operators) are also English. The exceptions are CI-parsed emoji/Chinese markers in `tools/run_full_test.sh` output, which the GitHub summary depends on.
+- **Don't merge to `main` if Bazel tests regress vs. baseline.** Integration failures that exist on `main` are not regressions but must not grow.
+- **Codec read invariants**:
+  - **One `Codec` per `net.Conn`; one `proto.Reader` per `Codec`.** Never replace `Codec.r` or construct a new `proto.Reader(c.br)` mid-connection — the 1-byte capture discipline is what prevents prefetched bytes from being orphaned across packet reads. If you need the exact bytes of a packet for zero-copy forwarding, use `Packet.Raw` (populated when decoded types request it) or `Codec.Splice`.
+  - **Don't mix `ReadPacket` with `ReadRaw` on the same codec.** `ReadRaw` drains `c.br` directly and bypasses the capture reader; subsequent `ReadPacket` would disagree about what bytes have been consumed. Relay uses `ReadPacket` on the client codec (full packet loop) and on the upstream codec only during handshake, then switches the upstream codec to `ReadRaw`-only.
+  - **`NegotiateAddendum` is read-only** and must not be taught otherwise: ClickHouse's addendum is strictly client → server (ch-go's client `encodeAddendum` + flush + return, no read). Forwarding the resolved addendum to upstream is the caller's explicit responsibility via `upstream.SendAddendum(res)`.
+
+## CI
+
+[.github/workflows/ci.yml](.github/workflows/ci.yml) builds static linux/amd64 binaries, SCPs them to a remote host (`proxy1-proxy4` instances), and runs a distributed shell-based test (`run_full_test.sh`). The CI output parses Chinese emoji markers (`✅ 通过`, `❌ 失败`, `⚠️ 跳过`) from the test script — if you change those markers, the GitHub summary breaks.

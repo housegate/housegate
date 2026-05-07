@@ -1,0 +1,39 @@
+startup --max_idle_secs=0
+
+# Common Bazel settings
+build --enable_bzlmod
+
+# for gazelle extension
+common --experimental_isolated_extension_usages
+
+# protobuf toolchain (built-in since protobuf@33.4)
+common --incompatible_enable_proto_toolchain_resolution
+build --incompatible_enable_cc_toolchain_resolution
+common --@protobuf//bazel/toolchains:prefer_prebuilt_protoc
+# Ensure that we don't accidentally build protobuf or gRPC
+common --per_file_copt=external/.*protobuf.*@--PROTOBUF_WAS_NOT_SUPPOSED_TO_BE_BUILT
+common --host_per_file_copt=external/.*protobuf.*@--PROTOBUF_WAS_NOT_SUPPOSED_TO_BE_BUILT
+common --per_file_copt=external/.*grpc.*@--GRPC_WAS_NOT_SUPPOSED_TO_BE_BUILT
+common --host_per_file_copt=external/.*grpc.*@--GRPC_WAS_NOT_SUPPOSED_TO_BE_BUILT
+
+build --java_runtime_version=remotejdk_11 --tool_java_runtime_version=remotejdk_11
+build --disk_cache=~/.cache/bazel-disk-housegate
+build --experimental_disk_cache_gc_max_size=50G
+build --action_env=PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+build --nobuild_tests_only
+build --show_result=50
+build --incompatible_default_to_explicit_init_py
+
+# ci
+build:ci --build_metadata=ROLE=CI
+build:ci --experimental_disk_cache_gc_idle_delay=3s
+build:ci --show_loading_progress=no
+build:ci --curses=no --color=yes
+build:ci --platforms=//:linux_amd64
+test:ci --test_output=all
+
+# prod
+run:prod --ui_event_filters=-info,-stdout,-stderr --noshow_progress
+
+# Load other personal settings
+try-import %workspace%/.bazelrc.local

@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+
+jobs:
+  build:
+    name: Build
+    # Self-hosted runners must never execute code from forked PRs — a
+    # malicious fork could exfiltrate cached credentials or pivot into
+    # the runner's network. Skip the job entirely when the PR's head
+    # repo is not this repo. `push` events from main are unaffected.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v5
+      - uses: bazelbuild/setup-bazelisk@v3
+      # - name: Mount bazel cache
+      #   uses: actions/cache@v4
+      #   with:
+      #     path: "~/.cache/bazel-disk-housegate"
+      #     key: bazel
+
+      - name: Build All
+        run: bazel build //...
+
+      # - name: Build & Test All
+      #   run: bazel test --config=ci //...

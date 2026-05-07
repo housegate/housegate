@@ -1,0 +1,32 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "secretsload",
+    srcs = [
+        "anonfile_linux.go",
+        "anonfile_other.go",
+        "edit.go",
+        "secretsload.go",
+    ],
+    importpath = "housegate/housegate/pkg/secretsload",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@io_filippo_age//:age",
+        "@io_filippo_age//armor",
+    ] + select({
+        "@rules_go//go/platform:android": [
+            "@org_golang_x_sys//unix",
+        ],
+        "@rules_go//go/platform:linux": [
+            "@org_golang_x_sys//unix",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+go_test(
+    name = "secretsload_test",
+    srcs = ["secretsload_test.go"],
+    embed = [":secretsload"],
+    deps = ["@io_filippo_age//:age"],
+)

@@ -1,0 +1,34 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "commitgate",
+    srcs = [
+        "args_validator.go",
+        "observer.go",
+        "plugin.go",
+    ],
+    importpath = "housegate/housegate/pkg/plugins/commitgate",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/chproto",
+        "//pkg/chsession",
+        "//pkg/plugin",
+        "//pkg/sqlmeta",
+        "@sentio-core//common/log",
+    ],
+)
+
+go_test(
+    name = "commitgate_test",
+    srcs = [
+        "args_validator_test.go",
+        "plugin_test.go",
+    ],
+    embed = [":commitgate"],
+    deps = [
+        "//pkg/chproto",
+        "//pkg/chsession",
+        "//pkg/plugin",
+        "//pkg/sqlmeta",
+    ],
+)

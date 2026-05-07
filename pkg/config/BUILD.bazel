@@ -1,0 +1,30 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "config",
+    srcs = ["config.go"],
+    importpath = "housegate/housegate/pkg/config",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/cfgtypes",
+        "//pkg/cluster",
+        "//pkg/plugins/auth",
+        "//pkg/plugins/concurrency",
+        "//pkg/plugins/rewrite",
+        "//pkg/plugins/sessionstate",
+        "//pkg/plugins/sidecar",
+        "//pkg/plugins/usage",
+        "@in_yaml_go_yaml_v3//:yaml",
+        "@sentio-core//common/log",
+    ],
+)
+
+go_test(
+    name = "config_test",
+    srcs = ["config_test.go"],
+    embed = [":config"],
+    deps = [
+        "//pkg/cluster",
+        "//pkg/plugins/sidecar",
+    ],
+)

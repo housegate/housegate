@@ -1,0 +1,35 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "chproto",
+    srcs = [
+        "addendum.go",
+        "codec.go",
+        "compress.go",
+        "exception.go",
+        "features.go",
+        "hello.go",
+        "packet.go",
+        "query.go",
+    ],
+    importpath = "housegate/housegate/pkg/chproto",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_clickhouse_ch_go//compress",
+        "@com_github_clickhouse_ch_go//proto",
+        "@com_github_segmentio_asm//bswap",
+        "@io_opentelemetry_go_otel_trace//:trace",
+    ],
+)
+
+go_test(
+    name = "chproto_test",
+    srcs = [
+        "addendum_test.go",
+        "codec_test.go",
+        "compress_test.go",
+        "query_codec_test.go",
+    ],
+    embed = [":chproto"],
+    deps = ["@com_github_clickhouse_ch_go//proto"],
+)

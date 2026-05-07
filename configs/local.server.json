@@ -1,0 +1,55 @@
+{
+  "listen": ":10001",
+  "upstream": "127.0.0.1:9000",
+  "metrics_listen": ":10091",
+  "dial_timeout": "5s",
+  "idle_timeout": "5m",
+  "shutdown_timeout": "30s",
+  "stats_interval": "10s",
+  "max_connection_lifetime": "24h",
+  "streaming_buf_size": 131072,
+  "validate_checksum": false,
+
+  "credential_replace_enabled": true,
+  "ckh_manager_config_path": "./configs/local.clickhouse_manager.yaml",
+
+  "redis_default_addr": "localhost:6379",
+
+  "network_state": {
+    "source": "localhost:6379"
+  },
+
+  "auth": {
+    "enabled": false,
+    "allow_no_auth": true,
+    "max_token_age": "1m"
+  },
+
+  "rewriter": {
+    "service_addr": "",
+    "timeout": "5s",
+    "physical_database": "testnet"
+  },
+
+  "sidecar": {
+    "mode": false
+  },
+
+  "usage": {
+    "enabled": false
+  },
+
+  "concurrency_limit": {
+    "enabled": false,
+    "per_user": 0,
+    "timeout": "60s",
+    "fail_open": true
+  },
+
+  "logging": {
+    "queries": true,
+    "data": false,
+    "max_query_bytes": 300,
+    "max_data_bytes": 200
+  }
+}

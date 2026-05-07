@@ -1,0 +1,34 @@
+--- a/MODULE.bazel	2026-05-06 13:23:47
++++ b/MODULE.bazel	2026-05-06 13:23:47
+@@ -76,31 +76,6 @@
+ go_deps = use_extension("@gazelle//:extensions.bzl", "go_deps")
+ 
+ # to be removed as dependency
+-# <<< REMOVE_START >>>
+-go_deps.module_override(
+-    patch_strip = 1,
+-    patches = ["//third_party:com_github_ethereum_go_ethereum_secp256k1.patch"],
+-    path = "github.com/ethereum/go-ethereum",
+-)
+-go_deps.module_override(
+-    patch_strip = 1,
+-    patches = ["//third_party:com_github_consensys_gnark_crypto.patch"],
+-    path = "github.com/consensys/gnark-crypto",
+-)
+-go_deps.module_override(
+-    patch_strip = 1,
+-    patches = ["//third_party:com_github_bytedance_sonic.patch"],
+-    path = "github.com/bytedance/sonic",
+-)
+-go_deps.gazelle_override(
+-    build_file_generation = "off",
+-    path = "github.com/wasmerio/wasmer-go",
+-)
+-go_deps.gazelle_default_attributes(
+-    directives = ["gazelle:proto disable"],
+-)
+-
+-# <<< REMOVE_END >>>
+ #
+ go_deps.from_file(go_mod = "//:go.mod")
+ use_repo(

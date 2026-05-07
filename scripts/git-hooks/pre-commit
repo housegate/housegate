@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+#
+# pre-commit hook — runs gitleaks against staged content to catch
+# accidentally-staged secrets before they hit the local commit object.
+#
+# Wired up via `core.hooksPath` (see scripts/install-git-hooks.sh).
+# Allowlist + rules live in .gitleaks.toml at the repo root.
+#
+# Bypass: `git commit --no-verify` (use sparingly — push hook can't
+# catch what you skip here).
+# Skip without bypassing other hooks: `HOUSEGATE_SKIP_GITLEAKS=1 git commit`.
+
+set -euo pipefail
+
+if [[ "${HOUSEGATE_SKIP_GITLEAKS:-0}" == "1" ]]; then
+    echo "pre-commit: HOUSEGATE_SKIP_GITLEAKS=1 — skipping gitleaks scan." >&2
+    exit 0
+fi
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+    cat >&2 <<'EOF'
+pre-commit: gitleaks not found in PATH. Install it with:
+    brew install gitleaks            # macOS
+    # or: https://github.com/gitleaks/gitleaks/releases
+Skipping secret scan for this commit. Re-install to re-enable.
+EOF
+    exit 0
+fi
+
+repo_root="$(git rev-parse --show-toplevel)"
+
+# `gitleaks git --staged` scans only what's staged for this commit
+# (good for pre-commit per gitleaks docs). Default exit code 1 on
+# findings, which aborts the commit.
+gitleaks git --staged --redact --no-banner --config "${repo_root}/.gitleaks.toml" "${repo_root}"

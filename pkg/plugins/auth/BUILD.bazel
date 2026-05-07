@@ -1,0 +1,18 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "auth",
+    srcs = [
+        "config.go",
+        "jws.go",
+    ],
+    importpath = "housegate/housegate/pkg/plugins/auth",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/auth",
+        "//pkg/cfgtypes",
+        "//pkg/chsession",
+        "//pkg/plugin",
+        "@sentio-core//common/log",
+    ],
+)
