@@ -55,6 +55,9 @@ type Session interface {
 	//   - IsForwarding and RouteTarget are CLEARED on success so the chain
 	//     stops treating the session as forwarded — auth/usage/concurrency
 	//     resume on the local side, and IsRouted() returns false again
+	//   - Database replay is skipped because hello.Database already selected
+	//     the physical upstream DB, and the triggering client USE query still
+	//     flows through the normal query path after the rebind
 	//
 	// Same ownership rule as RebindToPeer: newUp is taken on nil-return,
 	// retained by the caller on error.
@@ -160,7 +163,7 @@ func (s *sessionImpl) RebindToLocal(ctx context.Context, newUp *chproto.Codec, h
 	// time and relay.handshake has already consumed them.
 	s.state.mu.Unlock()
 	s.swapAndCloseOld(newUp)
-	return s.state.Replay(ctx, newUp)
+	return s.state.ReplaySettings(ctx, newUp)
 }
 
 // handshakeNewUpstream runs the standard ClientHello → ServerHello →
