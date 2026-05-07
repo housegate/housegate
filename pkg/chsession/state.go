@@ -209,32 +209,32 @@ func (s *SessionState) Snapshot() SessionStateSnapshot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	snap := SessionStateSnapshot{
-		ClientHostname:    s.ClientHostname,
-		ClientVersion:     s.ClientVersion,
-		ClientRevision:    s.ClientRevision,
-		ServerDisplayName: s.ServerDisplayName,
-		Timezone:          s.Timezone,
-		ChunkedRecv:       s.ChunkedRecv,
-		ChunkedSend:       s.ChunkedSend,
-		AuthenticatedUser: s.AuthenticatedUser,
-		MappedUser:        s.MappedUser,
-		MappedPassword:    s.MappedPassword,
-		Identity:          s.Identity,
-		Database:          s.Database,
-		LogicalDatabase:   s.LogicalDatabase,
-		RouteTarget:       s.RouteTarget,
+		ClientHostname:      s.ClientHostname,
+		ClientVersion:       s.ClientVersion,
+		ClientRevision:      s.ClientRevision,
+		ServerDisplayName:   s.ServerDisplayName,
+		Timezone:            s.Timezone,
+		ChunkedRecv:         s.ChunkedRecv,
+		ChunkedSend:         s.ChunkedSend,
+		AuthenticatedUser:   s.AuthenticatedUser,
+		MappedUser:          s.MappedUser,
+		MappedPassword:      s.MappedPassword,
+		Identity:            s.Identity,
+		Database:            s.Database,
+		LogicalDatabase:     s.LogicalDatabase,
+		RouteTarget:         s.RouteTarget,
 		IsPeerTrusted:       s.IsPeerTrusted,
 		PeerAddress:         s.PeerAddress,
 		IsForwardedFromPeer: s.IsForwardedFromPeer,
 		IsInternalPort:      s.IsInternalPort,
 		IsForwarding:        s.IsForwarding,
-		LastQueryID:       s.LastQueryID,
-		LastClientInfo:    s.LastClientInfo,
-		LastRewriteArgs:   s.LastRewriteArgs,
-		HasActiveRewrite:  s.HasActiveRewrite,
-		CommitGateEvent:   s.CommitGateEvent,
-		Maintenance:       s.maintenance,
-		PlatformOperator:  s.platformOperator,
+		LastQueryID:         s.LastQueryID,
+		LastClientInfo:      s.LastClientInfo,
+		LastRewriteArgs:     s.LastRewriteArgs,
+		HasActiveRewrite:    s.HasActiveRewrite,
+		CommitGateEvent:     s.CommitGateEvent,
+		Maintenance:         s.maintenance,
+		PlatformOperator:    s.platformOperator,
 	}
 	if len(s.Settings) > 0 {
 		snap.Settings = make(map[string]chproto.Setting, len(s.Settings))
@@ -474,6 +474,18 @@ func (s *SessionState) SetPlatformOperator(v bool) {
 // Settings are iterated in sorted key order so replay is deterministic and
 // testable.
 func (s *SessionState) Replay(ctx context.Context, up *chproto.Codec) error {
+	return s.replay(ctx, up, true)
+}
+
+// ReplaySettings re-applies only session-level settings to a newly bound
+// upstream. It intentionally skips Database replay for rebind paths whose
+// ClientHello already selected the desired upstream database and whose
+// triggering client USE query will still flow through the normal query path.
+func (s *SessionState) ReplaySettings(ctx context.Context, up *chproto.Codec) error {
+	return s.replay(ctx, up, false)
+}
+
+func (s *SessionState) replay(ctx context.Context, up *chproto.Codec, includeDatabase bool) error {
 	s.mu.RLock()
 	db := s.Database
 	settings := make(map[string]chproto.Setting, len(s.Settings))
@@ -482,7 +494,7 @@ func (s *SessionState) Replay(ctx context.Context, up *chproto.Codec) error {
 	}
 	s.mu.RUnlock()
 
-	if db != "" {
+	if includeDatabase && db != "" {
 		q := &chproto.Query{
 			Body: fmt.Sprintf("USE %s", db),
 			Info: chproto.ClientInfo{

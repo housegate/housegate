@@ -429,7 +429,11 @@ func TestSession_RebindToLocal(t *testing.T) {
 		t.Fatalf("local CH received User=%q, want %q", gotUser, "default")
 	}
 
-	// Verify Replay ran on the new upstream.
+	// Verify RebindToLocal did not emit an internal USE query. The local
+	// hello already selected physical_db, and the triggering client USE
+	// still flows through the normal query path after rebind; replaying a
+	// second USE here can surface an unauthenticated internal query through
+	// proxy upstreams.
 	localClient.Close()
 	<-done
 	capturedMu.Lock()
@@ -438,8 +442,8 @@ func TestSession_RebindToLocal(t *testing.T) {
 	if bytes.Contains(got, []byte("USE stale_logical_db")) {
 		t.Errorf("Replay used stale logical database; captured=%q", got)
 	}
-	if !bytes.Contains(got, []byte("USE physical_db")) {
-		t.Errorf("Replay missing USE physical_db; captured=%q", got)
+	if bytes.Contains(got, []byte("USE physical_db")) {
+		t.Errorf("RebindToLocal must not replay USE physical_db; captured=%q", got)
 	}
 	if !bytes.Contains(got, []byte("SET max_execution_time=30")) {
 		t.Errorf("Replay missing SET max_execution_time; captured=%q", got)
