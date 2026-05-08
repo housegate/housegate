@@ -95,7 +95,7 @@ func TestPlugin_InjectsOwnerAsPayerSetting(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	got := findSetting(qctx.Query.Settings, PayerSettingKey)
+	got := findSetting(qctx.Query.Settings, auth.PayerSettingKey)
 	want := "'" + owner + "'"
 	if got != want {
 		t.Errorf("payer setting: got %q, want %q", got, want)
@@ -116,8 +116,8 @@ func TestPlugin_OmitsPayerSettingWhenOwnerUnset(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if v := findSetting(qctx.Query.Settings, PayerSettingKey); v != "" {
-		t.Errorf("expected no %q setting, got %q", PayerSettingKey, v)
+	if v := findSetting(qctx.Query.Settings, auth.PayerSettingKey); v != "" {
+		t.Errorf("expected no %q setting, got %q", auth.PayerSettingKey, v)
 	}
 }
 
