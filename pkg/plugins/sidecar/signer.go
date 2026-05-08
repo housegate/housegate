@@ -19,13 +19,6 @@ import (
 	"housegate/housegate/pkg/plugin"
 )
 
-// PayerSettingKey is the per-query Setting that overrides the billed
-// account when the signing key is an operator key rather than the
-// payer's own. Mirrors pkg/plugins/usage.payerSettingKey on the
-// upstream side; kept duplicated to avoid pulling the usage plugin
-// into the sidecar import graph.
-const PayerSettingKey = "SQL_x_payer"
-
 // Observer is the narrow metrics surface this plugin depends on. Left
 // as an interface so the plugin has no hard dependency on pkg/proxy
 // (which would cycle via pkg/plugin). *proxy.MetricsObserver satisfies
@@ -81,7 +74,7 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 		// pkg/plugins/usage/usage.go). The signer then becomes the
 		// operator for this Owner, gated by IsOperator() on-chain.
 		qctx.Query.Settings = append(qctx.Query.Settings, chproto.Setting{
-			Key:    PayerSettingKey,
+			Key:    auth.PayerSettingKey,
 			Value:  "'" + p.Owner + "'",
 			Custom: true,
 		})

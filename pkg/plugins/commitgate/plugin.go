@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"sentioxyz/sentio-core/common/log"
 
+	"housegate/housegate/pkg/auth"
 	"housegate/housegate/pkg/chproto"
 	"housegate/housegate/pkg/chsession"
 	"housegate/housegate/pkg/plugin"
@@ -237,9 +239,31 @@ func buildEvent(qctx *plugin.QueryContext) *Event {
 		user = qctx.Session.State().Account()
 	}
 
+	// Operator-on-behalf-of-owner: when the sidecar injects a
+	// SQL_x_payer setting (the same value the usage plugin uses to
+	// pivot per-query billing), surface it as Event.Owner so
+	// observers gate / bill against the owner instead of the JWS
+	// signer. Same quote-stripping convention as
+	// pkg/plugins/usage/usage.go (Field::restoreFromDump wraps
+	// Custom strings in `'…'`).
+	//
+	// Owner stays empty when the setting is absent or equals User
+	// — the legacy single-key sidecar path. Validation of the
+	// operator-of relation is the observer's responsibility (see
+	// PermissionCommitGateObserver, which calls IsOperator on-chain
+	// before treating Owner as the effective principal).
+	owner := ""
+	if v, ok := settings[auth.PayerSettingKey]; ok {
+		owner = strings.ToLower(strings.Trim(strings.TrimSpace(v), "\"'"))
+	}
+	if owner != "" && owner == strings.ToLower(user) {
+		owner = ""
+	}
+
 	ev := &Event{
 		Type:             qctx.StatementType,
 		User:             user,
+		Owner:            owner,
 		QueryID:          queryID,
 		OriginalSQL:      qctx.OriginalSQL,
 		RewrittenSQL:     qctx.RewrittenSQL,

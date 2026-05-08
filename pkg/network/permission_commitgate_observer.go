@@ -86,6 +86,12 @@ type PermissionCommitGateObserver struct {
 // RedisNetworkState used by the rewriter so that permission and
 // database_map decisions stay consistent (both consult the same
 // statemirror snapshot).
+//
+// Operator-on-behalf-of-owner DDL/DCL (sidecar with `--sidecar-owner`)
+// is satisfied via State.IsOperator, which production wires off the
+// statemirror's MappingOperators hash; sentio-node's permissions event
+// handler keeps that hash in sync with the on-chain Permissions
+// contract.
 func NewPermissionCommitGateObserver(ns State) *PermissionCommitGateObserver {
 	return &PermissionCommitGateObserver{ns: ns}
 }
@@ -148,7 +154,7 @@ func (o *PermissionCommitGateObserver) SubscribedTypes() []sqlmeta.StatementType
 // BeforeStatement is the gate. nil = allow; non-nil error aborts the
 // query (relay synthesises an Exception to the client; ClickHouse is
 // not contacted).
-func (o *PermissionCommitGateObserver) BeforeStatement(_ context.Context, ev *commitgate.Event) error {
+func (o *PermissionCommitGateObserver) BeforeStatement(ctx context.Context, ev *commitgate.Event) error {
 	if ev.Type == sqlmeta.StatementTypeUnspecified {
 		return fmt.Errorf("permission: rewriter did not classify statement (Unspecified); refusing to forward")
 	}
@@ -166,6 +172,22 @@ func (o *PermissionCommitGateObserver) BeforeStatement(_ context.Context, ev *co
 		return fmt.Errorf("permission: %s requires an authenticated account", ev.Type)
 	}
 
+	// Effective principal resolution. When the sidecar acted as an
+	// operator on behalf of an owner (SQL_x_payer setting), the JWS
+	// signer (ev.User) is NOT the principal whose perms gate this
+	// statement — the owner (ev.Owner) is. Validate the operator-of
+	// relation against State.IsOperator (mirrored from the on-chain
+	// Permissions contract via sentio-node's event handler) before
+	// swapping in the owner; otherwise a malicious sidecar could
+	// claim any arbitrary owner.
+	account := AccountAddress(ev.User)
+	if ev.Owner != "" {
+		if !o.ns.IsOperator(AccountAddress(ev.Owner), AccountAddress(ev.User)) {
+			return fmt.Errorf("permission: %s is not an operator of %s", ev.User, ev.Owner)
+		}
+		account = AccountAddress(ev.Owner)
+	}
+
 	if len(ev.AccessedTables) == 0 {
 		// Empty AccessedTables is legitimate for FROM-less SELECT
 		// (`SELECT 1`, `SELECT version()`) and SHOW DATABASES — no
@@ -178,7 +200,6 @@ func (o *PermissionCommitGateObserver) BeforeStatement(_ context.Context, ev *co
 		return fmt.Errorf("permission: %s requires a target database (rewriter surfaced no AccessedTables)", ev.Type)
 	}
 
-	account := AccountAddress(ev.User)
 	for _, a := range ev.AccessedTables {
 		if a.LogicalDatabase == "" {
 			return fmt.Errorf("permission: %s has unresolved logical database for table %q", ev.Type, a.OriginalTable)

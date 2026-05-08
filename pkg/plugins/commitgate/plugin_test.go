@@ -278,6 +278,69 @@ func TestOnQuery_EventExtraction(t *testing.T) {
 	}
 }
 
+// TestOnQuery_OwnerFromPayerSetting verifies that when the sidecar
+// injects SQL_x_payer (operator-on-behalf-of-owner mode), buildEvent
+// surfaces the owner address as Event.Owner — case-folded, quote-
+// stripped, and zeroed-out when it equals the JWS signer.
+func TestOnQuery_OwnerFromPayerSetting(t *testing.T) {
+	cases := []struct {
+		name      string
+		settings  []chproto.Setting
+		signer    string
+		wantOwner string
+	}{
+		{
+			name:      "no_payer_setting",
+			settings:  nil,
+			signer:    "0xa1e4252cfc8f1a14350d4b25ee2f97809a177117",
+			wantOwner: "",
+		},
+		{
+			name: "payer_quote_wrapped",
+			settings: []chproto.Setting{{
+				Key:    "SQL_x_payer",
+				Value:  "'0x8bc30C01497Bec83901E7d2D63502aC311370161'",
+				Custom: true,
+			}},
+			signer:    "0xa1e4252cfc8f1a14350d4b25ee2f97809a177117",
+			wantOwner: "0x8bc30c01497bec83901e7d2d63502ac311370161",
+		},
+		{
+			name: "payer_equals_signer_zeroed",
+			settings: []chproto.Setting{{
+				Key:    "SQL_x_payer",
+				Value:  "'0xA1E4252cfC8f1a14350d4B25Ee2f97809a177117'",
+				Custom: true,
+			}},
+			signer:    "0xa1e4252cfc8f1a14350d4b25ee2f97809a177117",
+			wantOwner: "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			obs := &fakeObserver{types: []sqlmeta.StatementType{sqlmeta.StatementTypeCreateDatabase}}
+			p := NewPlugin([]Observer{obs})
+			qctx := newQctx(sqlmeta.StatementTypeCreateDatabase, []sqlmeta.AccessedTable{tableEntry("logical1", "", "logical1")})
+			qctx.Session = newSession(tc.signer)
+			qctx.Query.Settings = tc.settings
+			if err := p.OnQuery(context.Background(), qctx); err != nil {
+				t.Fatalf("OnQuery: %v", err)
+			}
+			if len(obs.calls) != 1 {
+				t.Fatalf("observer fired %d times, want 1", len(obs.calls))
+			}
+			ev := obs.calls[0]
+			if ev.Owner != tc.wantOwner {
+				t.Errorf("Owner=%q, want %q", ev.Owner, tc.wantOwner)
+			}
+			// User stays the JWS signer regardless of owner claim.
+			if ev.User != tc.signer {
+				t.Errorf("User=%q, want %q", ev.User, tc.signer)
+			}
+		})
+	}
+}
+
 //  5. Empty AccessedTables / empty LogicalDatabase no longer abort at
 //     the framework level — the observer sees the empty shape and
 //     decides. Mirrors the SELECT-1 / FROM-less compute path that the

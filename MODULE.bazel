@@ -14,7 +14,7 @@ bazel_dep(name = "rules_oci", version = "2.2.7")
 bazel_dep(name = "sentio-core", version = "0.0.0")
 git_override(
     module_name = "sentio-core",
-    commit = "8f1c1b48d382ab587b86f707a82520fa80bc2796",
+    commit = "b0ec2941dc80e48539295ced9309dabc3214686b",
     patch_strip = 1,
     patches = [
         "//third_party:sentio-core.patch",
