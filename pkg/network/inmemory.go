@@ -15,12 +15,9 @@ type InMemoryNetworkState struct {
 	ProcessorAllocations map[string][]ProcessorAllocation
 	IndexerInfos         map[uint64]IndexerInfo
 	ProcessorInfos       map[string]ProcessorInfo
-	// DatabaseInfos is keyed by Database (a string alias from
-	// sentio-core's registry package).
-	DatabaseInfos map[Database]DatabaseInfo
-	// DatabasePermissions maps an account address to the permission
-	// bitmap it holds against each database.
-	DatabasePermissions map[AccountAddress]DatabasePermissions
+	DatabaseInfos        map[Database]DatabaseInfo
+	DatabasePermissions  map[AccountAddress]DatabasePermissions
+	Operators            map[AccountAddress]map[AccountAddress]bool
 }
 
 // NewInMemoryNetworkState returns an empty InMemoryNetworkState with
@@ -32,6 +29,7 @@ func NewInMemoryNetworkState() *InMemoryNetworkState {
 		ProcessorInfos:       make(map[string]ProcessorInfo),
 		DatabaseInfos:        make(map[Database]DatabaseInfo),
 		DatabasePermissions:  make(map[AccountAddress]DatabasePermissions),
+		Operators:            make(map[AccountAddress]map[AccountAddress]bool),
 	}
 }
 
@@ -115,6 +113,42 @@ func (s *InMemoryNetworkState) AccountHasPermissionForDatabase(account AccountAd
 		auth |= perms[database]
 	}
 	return auth&registry.DbAuth(action) != 0, nil
+}
+
+func (s *InMemoryNetworkState) IsOperator(owner, signer AccountAddress) bool {
+	if owner == "" || signer == "" {
+		return false
+	}
+	if owner == signer {
+		return true
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	ops, ok := s.Operators[owner]
+	if !ok {
+		return false
+	}
+	return ops[signer]
+}
+
+func (s *InMemoryNetworkState) SetOperator(owner, signer AccountAddress, allowed bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !allowed {
+		if ops, ok := s.Operators[owner]; ok {
+			delete(ops, signer)
+			if len(ops) == 0 {
+				delete(s.Operators, owner)
+			}
+		}
+		return
+	}
+	ops, ok := s.Operators[owner]
+	if !ok {
+		ops = map[AccountAddress]bool{}
+		s.Operators[owner] = ops
+	}
+	ops[signer] = true
 }
 
 func (s *InMemoryNetworkState) Type() StateType {

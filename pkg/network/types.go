@@ -92,6 +92,8 @@ type State interface {
 	// mirror lookup fails.
 	AccountHasPermissionForDatabase(account AccountAddress, database Database, action registry.Action) (bool, error)
 
+	IsOperator(owner, signer AccountAddress) bool
+
 	Type() StateType
 }
 

@@ -248,6 +248,14 @@ func (r *RpcNetworkState) AccountHasPermissionForDatabase(account AccountAddress
 	return false, fmt.Errorf("rpc network state: AccountHasPermissionForDatabase not supported")
 }
 
+// IsOperator: not supported by the RPC backend. The server-side
+// PermissionCommitGateObserver runs against RedisNetworkState (which
+// reads from the on-chain mirror); sidecar mode never invokes this
+// method.
+func (r *RpcNetworkState) IsOperator(owner, signer AccountAddress) bool {
+	return owner != "" && owner == signer
+}
+
 // Type returns StateTypeRpc.
 func (r *RpcNetworkState) Type() StateType { return StateTypeRpc }
 

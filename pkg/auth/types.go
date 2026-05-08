@@ -26,6 +26,7 @@ const (
 	AuthTokenSettingKey        = "SQL_x_auth_token"
 	MaintenanceSettingKey      = "SQL_sentio_maintenance"
 	PlatformOperatorSettingKey = "SQL_sentio_platform_operator"
+	PayerSettingKey            = "SQL_x_payer"
 )
 
 // QueryMeta describes one ClickHouse Query as the Validator sees it.

@@ -101,6 +101,26 @@ type Event struct {
 	// string when the session is unauthenticated.
 	User string
 
+	// Owner is the on-behalf-of account when the JWS signer (User)
+	// is acting as an *operator* — i.e. the upstream should treat
+	// `Owner` (not `User`) as the principal that gets billed and
+	// holds the on-chain Owner bit. Sourced from the SQL_x_payer
+	// query setting that the sidecar plugin already injects when
+	// configured with `--sidecar-owner=<O>`.
+	//
+	// buildEvent populates Owner only when SQL_x_payer is present
+	// AND the address differs from User (after lowercasing). It
+	// does NOT validate the operator-of relation — that's the
+	// observer's job (see PermissionCommitGateObserver, which
+	// calls State.IsOperator).
+	//
+	// Empty when no SQL_x_payer setting was supplied or when it
+	// equals User (the legacy single-key sidecar path). Hosts that
+	// implement billing or grant the Owner bit MUST treat Owner
+	// (when non-empty) as the effective principal; User stays the
+	// JWS-authenticated signer for audit / log correlation.
+	Owner string
+
 	// AccessedTables lists every (logical db, table) the statement
 	// touches, populated from the rewriter's
 	// `original_accessed_tables` (proto tag 12). The dispatcher does

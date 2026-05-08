@@ -175,6 +175,36 @@ func (r *RedisNetworkState) AccountHasPermissionForDatabase(account AccountAddre
 	return r.dbRegistry.AccountHasPermission(ctx, account, database, action)
 }
 
+func (r *RedisNetworkState) IsOperator(owner, signer AccountAddress) bool {
+	if owner == "" || signer == "" {
+		return false
+	}
+	if owner == signer {
+		return true
+	}
+	ctx := context.Background()
+	value, ok, err := r.mirror.Get(ctx, statemirror.MappingOperators, string(owner))
+	if err != nil {
+		log.Warnfe(err, "failed to read operators for owner=%v", owner)
+		return false
+	}
+	if !ok {
+		return false
+	}
+	var signers []string
+	if err := decodeJSON(value, &signers); err != nil {
+		log.Warnfe(err, "failed to decode operators owner=%v", owner)
+		return false
+	}
+	target := string(signer)
+	for _, s := range signers {
+		if s == target {
+			return true
+		}
+	}
+	return false
+}
+
 // Close tears down the underlying Redis connection.
 func (r *RedisNetworkState) Close() error {
 	return r.redisClient.Close()

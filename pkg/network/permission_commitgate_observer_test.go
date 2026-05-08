@@ -505,6 +505,63 @@ func TestPermission_PublicAddress_SelfLookupSkipped(t *testing.T) {
 	}
 }
 
+// TestPermission_Operator_Allowed: when the JWS signer is a registered
+// operator of the owner (per InMemoryNetworkState.Operators, which
+// production wires off the on-chain Permissions contract via the
+// statemirror), the observer evaluates DDL/DCL perms against the
+// OWNER's bitmap (not the signer's). Owner has Owner bit on `foo`,
+// signer (operator) has nothing → DROP DATABASE succeeds.
+func TestPermission_Operator_Allowed(t *testing.T) {
+	owner := AccountAddress("0xa1e4252cfc8f1a14350d4b25ee2f97809a177117")
+	signer := AccountAddress("0xcb4d7ec41a9098420f97ae393a38b0299f6efb64")
+	st := fixturePerm("foo", owner, "", 0)
+	st.SetOperator(owner, signer, true)
+	o := newPermObserver(st)
+
+	ev := newEvent(sqlmeta.StatementTypeDropDatabase, string(signer), "foo", "")
+	ev.Owner = string(owner)
+	if err := o.BeforeStatement(context.Background(), ev); err != nil {
+		t.Errorf("operator with valid isOperator(owner, signer) should pass DROP DATABASE on owner's db; got %v", err)
+	}
+}
+
+// TestPermission_Operator_NotAuthorized: signer claims owner via
+// SQL_x_payer / Event.Owner but State.IsOperator returns false →
+// reject with a clear error; the signer's own perms (or lack thereof)
+// are irrelevant.
+func TestPermission_Operator_NotAuthorized(t *testing.T) {
+	owner := AccountAddress("0xa1e4252cfc8f1a14350d4b25ee2f97809a177117")
+	signer := AccountAddress("0xcb4d7ec41a9098420f97ae393a38b0299f6efb64")
+	st := fixturePerm("foo", owner, "", 0)
+	o := newPermObserver(st) // no operator relation registered
+
+	ev := newEvent(sqlmeta.StatementTypeDropDatabase, string(signer), "foo", "")
+	ev.Owner = string(owner)
+	err := o.BeforeStatement(context.Background(), ev)
+	if err == nil {
+		t.Fatalf("unauthorized operator must be rejected")
+	}
+	if !strings.Contains(err.Error(), "not an authorized operator") {
+		t.Errorf("error should mention operator-of failure, got %v", err)
+	}
+}
+
+// TestPermission_NoOwner_LegacyPath: when Event.Owner is empty (legacy
+// single-key sidecar), the observer behaves exactly as before — gates
+// on the signer's bitmap. Confirms the operator block is fully no-op
+// for backwards compatibility.
+func TestPermission_NoOwner_LegacyPath(t *testing.T) {
+	owner := AccountAddress("0xa1e4252cfc8f1a14350d4b25ee2f97809a177117")
+	st := fixturePerm("foo", owner, "", 0)
+	o := newPermObserver(st)
+
+	ev := newEvent(sqlmeta.StatementTypeDropDatabase, string(owner), "foo", "")
+	// Owner intentionally empty.
+	if err := o.BeforeStatement(context.Background(), ev); err != nil {
+		t.Errorf("legacy single-key path (Owner==\"\") should pass for owner; got %v", err)
+	}
+}
+
 func TestPermission_OnStatementExceptionNoOp(t *testing.T) {
 	// The observer is read-only; OnStatementException is a no-op.
 	// This test guards against accidental introduction of mutating

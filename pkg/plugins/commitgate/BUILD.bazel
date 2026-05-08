@@ -10,6 +10,7 @@ go_library(
     importpath = "housegate/housegate/pkg/plugins/commitgate",
     visibility = ["//visibility:public"],
     deps = [
+        "//pkg/auth",
         "//pkg/chproto",
         "//pkg/chsession",
         "//pkg/plugin",
