@@ -142,7 +142,10 @@ func TestSessionState_Replay_EmitsUseAndSet(t *testing.T) {
 //  2. Reads the peer's ServerHello, negotiating the revision.
 //  3. Sends the addendum (forcing notchunked framing).
 //  4. Swaps the upstream pointer.
-//  5. Replays Database and Settings via SessionState.Replay.
+//  5. Does NOT replay Database/Settings. Forward-pivot replay queries are
+//     proxy-generated and therefore do not carry the client's JWS auth
+//     setting; the peer hello plus the triggering client query carry the
+//     database switch instead.
 func TestSession_RebindToPeer(t *testing.T) {
 	// rev must be >= chproto.RevisionMinAddendum (54458) so SendAddendum fires,
 	// and < chproto.RevisionMinChunkedPackets (54470) so the ServerHello the
@@ -162,7 +165,9 @@ func TestSession_RebindToPeer(t *testing.T) {
 		t.Fatalf("BindUpstream: %v", err)
 	}
 
-	// Pre-populate replayable state.
+	// Pre-populate replayable state. RebindToPeer must not emit it on the
+	// peer proxy connection because those internal Query packets would not
+	// carry the client's per-query JWS auth setting.
 	sess.State().SetDatabase("tenant1")
 	sess.State().AddSetting("max_execution_time", chproto.Setting{Key: "max_execution_time", Value: "30"})
 
@@ -214,7 +219,7 @@ func TestSession_RebindToPeer(t *testing.T) {
 			return
 		}
 
-		// Drain remaining bytes (addendum + replay queries) so writes don't block.
+		// Drain remaining bytes (addendum only; no replay queries) so writes don't block.
 		capturedMu.Lock()
 		_, _ = io.Copy(&captured, peerServer)
 		capturedMu.Unlock()
@@ -262,7 +267,7 @@ func TestSession_RebindToPeer(t *testing.T) {
 	}
 
 	// Close the client end so io.Copy in the goroutine unblocks, then assert
-	// replay content.
+	// no unauthenticated replay content was emitted.
 	peerClient.Close()
 	<-done // deterministic: wait for the goroutine's io.Copy to finish
 
@@ -270,11 +275,11 @@ func TestSession_RebindToPeer(t *testing.T) {
 	got := captured.Bytes()
 	capturedMu.Unlock()
 
-	if !bytes.Contains(got, []byte("USE tenant1")) {
-		t.Fatalf("Replay did not emit USE tenant1; captured=%q", got)
+	if bytes.Contains(got, []byte("USE tenant1")) {
+		t.Fatalf("RebindToPeer must not replay USE tenant1; captured=%q", got)
 	}
-	if !bytes.Contains(got, []byte("SET max_execution_time=30")) {
-		t.Fatalf("Replay did not emit SET max_execution_time; captured=%q", got)
+	if bytes.Contains(got, []byte("SET max_execution_time=30")) {
+		t.Fatalf("RebindToPeer must not replay SET max_execution_time; captured=%q", got)
 	}
 }
 
