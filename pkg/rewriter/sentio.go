@@ -251,13 +251,16 @@ func (f *SentioNetworkFactory) Close() error {
 
 // sentioRewriter is the per-connection Rewriter. It is intentionally
 // small — all heavy resources live on the Factory; the per-conn state
-// is just (factory pointer + session reference + last SQL).
+// is just (factory pointer + session reference + last SQL + last
+// effective account so RewriteErrorMessage can reuse the same gating
+// principal Rewrite used).
 type sentioRewriter struct {
 	factory *SentioNetworkFactory
 	sess    Session
 
-	mu      sync.Mutex
-	lastSQL string
+	mu                   sync.Mutex
+	lastSQL              string
+	lastEffectiveAccount string
 
 	closed atomic.Bool
 }
@@ -285,13 +288,14 @@ func (r *sentioRewriter) Close() error {
 // InvalidRewriteRequest); UnsupportedStatement is downgraded to
 // (sql, nil) since "rewriter doesn't handle it" is a passthrough
 // signal, not a failure.
-func (r *sentioRewriter) Rewrite(ctx context.Context, sql string) (RewriteResult, error) {
+func (r *sentioRewriter) Rewrite(ctx context.Context, sql, effectiveAccount string) (RewriteResult, error) {
 	if r.closed.Load() {
 		return RewriteResult{}, fmt.Errorf("rewriter closed")
 	}
 
 	r.mu.Lock()
 	r.lastSQL = sql
+	r.lastEffectiveAccount = effectiveAccount
 	r.mu.Unlock()
 
 	// Static-args path is opt-in. When disabled, we skip phase 1
@@ -312,7 +316,7 @@ func (r *sentioRewriter) Rewrite(ctx context.Context, sql string) (RewriteResult
 		staticArgs = buildStaticArgs(localMap, remoteMap)
 	}
 
-	dbMap, knownPhys, err := r.factory.buildDatabaseMap(r.sess.Account())
+	dbMap, knownPhys, err := r.factory.buildDatabaseMap(effectiveAccount)
 	if err != nil {
 		return RewriteResult{}, fmt.Errorf("build database map: %w", err)
 	}
@@ -419,12 +423,23 @@ func (r *sentioRewriter) RewriteErrorMessage(ctx context.Context, message string
 	}
 	r.mu.Lock()
 	sql := r.lastSQL
+	effectiveAccount := r.lastEffectiveAccount
 	r.mu.Unlock()
 	if sql == "" {
 		return message, nil
 	}
 
-	dbMap, knownPhys, err := r.factory.buildDatabaseMap(r.sess.Account())
+	// effectiveAccount is the principal the originating Rewrite call
+	// gated against (owner when SQL_x_payer was validated, signer
+	// otherwise). Reuse it so the reverse-map sees the same database_map
+	// — falling back to sess.Account() would lose owner-only logical DBs
+	// from the map and miss reverse-mappings for them. Empty when
+	// Rewrite has not run on this connection yet (sql == "" already
+	// returned above).
+	if effectiveAccount == "" {
+		effectiveAccount = r.sess.Account()
+	}
+	dbMap, knownPhys, err := r.factory.buildDatabaseMap(effectiveAccount)
 	if err != nil {
 		return message, fmt.Errorf("build database map: %w", err)
 	}

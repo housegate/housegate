@@ -25,7 +25,7 @@ func (stubRewriterFactory) Close() error { return nil }
 
 type stubRewriter struct{}
 
-func (stubRewriter) Rewrite(_ context.Context, sql string) (rewriter.RewriteResult, error) {
+func (stubRewriter) Rewrite(_ context.Context, sql, _ string) (rewriter.RewriteResult, error) {
 	return rewriter.RewriteResult{SQL: sql}, nil
 }
 func (stubRewriter) RewriteErrorMessage(_ context.Context, msg string) (string, error) {

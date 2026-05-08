@@ -115,8 +115,18 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	if rw == nil {
 		return nil
 	}
+	// Effective principal: when the auth plugin validated an
+	// operator-on-behalf-of-owner relation it stamped qctx.Owner; the
+	// rewriter's database_map must then be built from the OWNER's perms
+	// so the operator can SELECT/INSERT against the owner's logical DBs.
+	// Falls back to the JWS signer (Session.Account()) when no Owner is
+	// in flight — the legacy single-principal path.
+	effectiveAccount := qctx.Owner
+	if effectiveAccount == "" {
+		effectiveAccount = qctx.Session.State().Account()
+	}
 	start := time.Now()
-	res, err := rw.Rewrite(ctx, qctx.OriginalSQL)
+	res, err := rw.Rewrite(ctx, qctx.OriginalSQL, effectiveAccount)
 	if p.Observer != nil {
 		p.Observer.Rewritten(time.Since(start).Seconds())
 	}

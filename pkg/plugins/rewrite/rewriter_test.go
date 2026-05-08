@@ -24,13 +24,15 @@ func TestPlugin_RunOnForward_False(t *testing.T) {
 // the rewriter run when it should be skipped will be visible as a
 // changed RewrittenSQL.
 type fakeRewriter struct {
-	out          string
-	rewriteCalls int
-	errMsgCalls  int
+	out                 string
+	rewriteCalls        int
+	errMsgCalls         int
+	lastEffectiveAccount string
 }
 
-func (f *fakeRewriter) Rewrite(_ context.Context, _ string) (rewriter.RewriteResult, error) {
+func (f *fakeRewriter) Rewrite(_ context.Context, _, effectiveAccount string) (rewriter.RewriteResult, error) {
 	f.rewriteCalls++
+	f.lastEffectiveAccount = effectiveAccount
 	return rewriter.RewriteResult{SQL: f.out}, nil
 }
 
