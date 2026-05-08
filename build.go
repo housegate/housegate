@@ -428,7 +428,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	metrics := metricsplugin.New(obs)
 
 	queryPlugins := []plugin.QueryPlugin{
-		&authplugin.Plugin{Validator: validator},
+		&authplugin.Plugin{Validator: validator, State: ns},
 		&usage.Plugin{Client: usageClient},
 	}
 	queryCompletePlugins := []plugin.QueryCompletePlugin{}

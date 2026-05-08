@@ -183,7 +183,7 @@ func (o *PermissionCommitGateObserver) BeforeStatement(ctx context.Context, ev *
 	account := AccountAddress(ev.User)
 	if ev.Owner != "" {
 		if !o.ns.IsOperator(AccountAddress(ev.Owner), AccountAddress(ev.User)) {
-			return fmt.Errorf("permission: %s is not an operator of %s", ev.User, ev.Owner)
+			return fmt.Errorf("permission: %s is not an authorized operator of %s", ev.User, ev.Owner)
 		}
 		account = AccountAddress(ev.Owner)
 	}

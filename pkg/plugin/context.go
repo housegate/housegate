@@ -28,6 +28,22 @@ type QueryContext struct {
 	RewrittenSQL string
 	Query        *chproto.Query
 
+	// Owner is the on-behalf-of principal when the JWS signer is acting
+	// as an *operator* — i.e. the proxy must gate the query against the
+	// owner's permissions instead of the signer's. Sourced by the auth
+	// plugin from the per-query SQL_x_payer setting after validating the
+	// operator-of-owner relation via State.IsOperator. Empty when the
+	// signer is acting on its own behalf or when no SQL_x_payer setting
+	// was supplied.
+	//
+	// Plugins downstream of auth (rewrite, commitgate) MUST treat Owner
+	// (when non-empty) as the effective principal for permission and
+	// database-map decisions; Session.Account() / Identity.UserID stays
+	// the JWS-authenticated signer for audit and log correlation.
+	//
+	// Lifetime is bounded by the query — never retained across calls.
+	Owner string
+
 	// RewriteArgs is the rewriter argument set used to produce RewrittenSQL.
 	// It is kept as `any` so this package does not need to know about the
 	// rewriter implementation. Plugins that need to read it (e.g. error

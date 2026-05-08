@@ -107,16 +107,25 @@ type Rewriter interface {
 	// log and forward the original SQL unchanged so that a flaky
 	// rewriter never takes down query traffic.
 	//
+	// effectiveAccount is the principal whose database permissions gate
+	// the per-query database_map sent to the rewriter service. Pass the
+	// owner address when the JWS signer is acting as an operator
+	// on-behalf-of-owner (qctx.Owner populated by the auth plugin) and
+	// the bare signer otherwise. An empty string falls back to "no
+	// account" — auth-off / anonymous semantics from buildDatabaseMap.
+	//
 	// On error, the returned RewriteResult is the zero value and must
 	// not be inspected. On success, RewriteResult.SQL is always set
 	// (equal to the input when nothing changed); the other fields are
 	// best-effort — see the RewriteResult docs for when they're empty.
-	Rewrite(ctx context.Context, sql string) (RewriteResult, error)
+	Rewrite(ctx context.Context, sql, effectiveAccount string) (RewriteResult, error)
 
 	// RewriteErrorMessage reverse-maps any rewritten table or database
 	// names appearing in `message` so that exception text references
 	// the names the client used. Uses the SQL of the most recent
-	// successful Rewrite call as context.
+	// successful Rewrite call as context, plus the effectiveAccount
+	// captured during that call (so error reverse-mapping sees the same
+	// database_map the originating Rewrite did).
 	RewriteErrorMessage(ctx context.Context, message string) (rewroteMessage string, err error)
 
 	// Close releases any per-connection resources. Safe to call

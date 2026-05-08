@@ -239,22 +239,22 @@ func buildEvent(qctx *plugin.QueryContext) *Event {
 		user = qctx.Session.State().Account()
 	}
 
-	// Operator-on-behalf-of-owner: when the sidecar injects a
-	// SQL_x_payer setting (the same value the usage plugin uses to
-	// pivot per-query billing), surface it as Event.Owner so
-	// observers gate / bill against the owner instead of the JWS
-	// signer. Same quote-stripping convention as
-	// pkg/plugins/usage/usage.go (Field::restoreFromDump wraps
-	// Custom strings in `'…'`).
-	//
-	// Owner stays empty when the setting is absent or equals User
-	// — the legacy single-key sidecar path. Validation of the
-	// operator-of relation is the observer's responsibility (see
-	// PermissionCommitGateObserver, which calls IsOperator on-chain
-	// before treating Owner as the effective principal).
-	owner := ""
-	if v, ok := settings[auth.PayerSettingKey]; ok {
-		owner = strings.ToLower(strings.Trim(strings.TrimSpace(v), "\"'"))
+	// Operator-on-behalf-of-owner: prefer qctx.Owner (set by the auth
+	// plugin after a successful State.IsOperator(owner, signer) check)
+	// so the gate validates exactly what the rewriter already gated
+	// against. Falls back to re-parsing SQL_x_payer from Settings for
+	// deployments where auth-side resolution is disabled (e.g. tests
+	// that don't wire State, or auth-disabled router-only proxies):
+	// the PermissionCommitGateObserver still invokes IsOperator on its
+	// own State handle in BeforeStatement, so the relation is enforced
+	// either way. Same quote-stripping convention as
+	// pkg/plugins/usage/usage.go (Field::restoreFromDump wraps Custom
+	// strings in `'…'`).
+	owner := strings.ToLower(strings.TrimSpace(qctx.Owner))
+	if owner == "" {
+		if v, ok := settings[auth.PayerSettingKey]; ok {
+			owner = strings.ToLower(strings.Trim(strings.TrimSpace(v), "\"'"))
+		}
 	}
 	if owner != "" && owner == strings.ToLower(user) {
 		owner = ""
