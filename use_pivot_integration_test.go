@@ -128,9 +128,8 @@ func handleFakePeerConnWithQueryCapture(
 	codec.SetRevision(fakeRevision)
 
 	// Step 4: Read Query packets until the connection closes.
-	// Relay's Replay() may send USE/SET packets first, followed by the
-	// original client USE. We capture all of them so the test can search
-	// for the user-sent USE tenant2.
+	// RebindToPeer does not replay USE/SET internally; the user-sent
+	// USE tenant2 should be the query that crosses to the peer.
 	for {
 		// Reset deadline per packet so we don't time out on short waits.
 		_ = c.SetDeadline(time.Now().Add(3 * time.Second))
@@ -332,9 +331,6 @@ func TestPhase3UsePivot_USEMidSession_PivotsToFakePeer(t *testing.T) {
 	}
 
 	// Step 12: assert the USE tenant2 query crossed to the peer.
-	// Replay may also send queries (e.g. a USE for the prior empty Database,
-	// which Replay skips because Database is still ""), so we drain all
-	// captured queries and look for the user's USE.
 	sawUse := false
 	deadline := time.NewTimer(2 * time.Second)
 	defer deadline.Stop()

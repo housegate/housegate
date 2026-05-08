@@ -30,8 +30,11 @@ type Session interface {
 
 	// RebindToPeer performs the peer handshake on newUp (writing ClientHello,
 	// reading ServerHello, negotiating notchunked addendum), then atomically
-	// swaps the bound upstream to newUp and replays Database+Settings via
-	// SessionState.Replay.
+	// swaps the bound upstream to newUp. It intentionally does not replay
+	// Database/Settings: forward-pivot traffic lands on another proxy's
+	// auth path, and proxy-generated replay queries do not carry the
+	// client's per-query JWS. The peer hello selects the target database;
+	// the triggering client query still flows through the normal path.
 	//
 	// Used by the forward plugin to pivot a session onto a peer's
 	// internal-port. peerHello must carry the peer-relay envelope
@@ -140,7 +143,7 @@ func (s *sessionImpl) RebindToPeer(ctx context.Context, newUp *chproto.Codec, pe
 	s.state.PeerRevision = rev
 	s.state.mu.Unlock()
 	s.swapAndCloseOld(newUp)
-	return s.state.Replay(ctx, newUp)
+	return nil
 }
 
 // RebindToLocal implements Session.RebindToLocal.
