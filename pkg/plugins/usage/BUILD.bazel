@@ -10,8 +10,8 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/billing",
+        "//pkg/log",
         "//pkg/plugin",
-        "@sentio-core//common/log",
     ],
 )
 

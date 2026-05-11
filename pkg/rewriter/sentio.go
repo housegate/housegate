@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"sentioxyz/sentio-core/common/log"
+	"housegate/housegate/pkg/log"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"

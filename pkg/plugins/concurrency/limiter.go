@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"sync"
 
-	log "sentioxyz/sentio-core/common/log"
+	"housegate/housegate/pkg/log"
 
 	"housegate/housegate/pkg/chsession"
 	"housegate/housegate/pkg/plugin"

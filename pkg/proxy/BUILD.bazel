@@ -13,10 +13,10 @@ go_library(
     deps = [
         "//pkg/chproto",
         "//pkg/chsession",
+        "//pkg/log",
         "//pkg/plugin",
         "@com_github_clickhouse_ch_go//proto",
         "@com_github_prometheus_client_golang//prometheus",
-        "@sentio-core//common/log",
     ],
 )
 

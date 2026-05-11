@@ -6,7 +6,7 @@ import (
 	"net"
 	"strings"
 
-	log "sentioxyz/sentio-core/common/log"
+	"housegate/housegate/pkg/log"
 )
 
 // Manager is the top-level cluster manager for a single shard.

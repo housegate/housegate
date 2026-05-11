@@ -13,10 +13,10 @@ go_library(
         "//pkg/chproto",
         "//pkg/chsession",
         "//pkg/credentials",
+        "//pkg/log",
         "//pkg/network",
         "//pkg/peer",
         "//pkg/plugin",
-        "@sentio-core//common/log",
     ],
 )
 

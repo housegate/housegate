@@ -14,8 +14,8 @@ go_library(
     deps = [
         "//pkg/chproto",
         "//pkg/chsession",
+        "//pkg/log",
         "//pkg/sqlmeta",
-        "@sentio-core//common/log",
     ],
 )
 

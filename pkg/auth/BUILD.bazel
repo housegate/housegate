@@ -12,9 +12,9 @@ go_library(
     importpath = "housegate/housegate/pkg/auth",
     visibility = ["//visibility:public"],
     deps = [
+        "//pkg/log",
         "@com_github_ethereum_go_ethereum//crypto",
         "@org_golang_x_crypto//sha3",
-        "@sentio-core//common/log",
     ],
 )
 

@@ -6,7 +6,7 @@ import (
 
 	"housegate/housegate/pkg/chproto"
 	"housegate/housegate/pkg/chsession"
-	"sentioxyz/sentio-core/common/log"
+	"housegate/housegate/pkg/log"
 )
 
 // PluginChain composes lists of typed plugins into a single Hooks value.

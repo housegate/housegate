@@ -23,7 +23,7 @@ import (
 	"sync"
 	"time"
 
-	"sentioxyz/sentio-core/common/log"
+	"housegate/housegate/pkg/log"
 
 	"housegate/housegate/pkg/chproto"
 	"housegate/housegate/pkg/chsession"

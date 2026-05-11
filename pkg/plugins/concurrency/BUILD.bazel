@@ -13,9 +13,9 @@ go_library(
     deps = [
         "//pkg/cfgtypes",
         "//pkg/chsession",
+        "//pkg/log",
         "//pkg/plugin",
         "@com_github_redis_go_redis_v9//:go-redis",
-        "@sentio-core//common/log",
     ],
 )
 

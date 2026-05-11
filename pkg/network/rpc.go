@@ -26,7 +26,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"sentioxyz/sentio-core/common/log"
+	"housegate/housegate/pkg/log"
 	"sentioxyz/sentio-core/network/registry"
 	"sentioxyz/sentio-core/network/state"
 )

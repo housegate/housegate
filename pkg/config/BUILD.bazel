@@ -8,6 +8,7 @@ go_library(
     deps = [
         "//pkg/cfgtypes",
         "//pkg/cluster",
+        "//pkg/log",
         "//pkg/plugins/auth",
         "//pkg/plugins/concurrency",
         "//pkg/plugins/rewrite",
@@ -15,7 +16,6 @@ go_library(
         "//pkg/plugins/sidecar",
         "//pkg/plugins/usage",
         "@in_yaml_go_yaml_v3//:yaml",
-        "@sentio-core//common/log",
     ],
 )
 

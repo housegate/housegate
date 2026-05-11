@@ -15,12 +15,12 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/chproto",
+        "//pkg/log",
         "//pkg/plugins/commitgate",
         "//pkg/sqlmeta",
         "@com_github_bytedance_sonic//:sonic",
         "@com_github_redis_go_redis_v9//:go-redis",
         "@in_yaml_go_yaml_v3//:yaml",
-        "@sentio-core//common/log",
         "@sentio-core//common/statemirror",
         "@sentio-core//network/registry",
         "@sentio-core//network/state",

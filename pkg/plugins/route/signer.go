@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"sentioxyz/sentio-core/common/log"
+	"housegate/housegate/pkg/log"
 
 	"housegate/housegate/pkg/auth"
 	"housegate/housegate/pkg/chproto"

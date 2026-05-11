@@ -10,20 +10,21 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"sync"
 
 	"golang.org/x/sync/errgroup"
 
-	ckhmanager "sentioxyz/sentio-core/common/clickhousemanager"
-
 	"github.com/redis/go-redis/v9"
 
 	"housegate/housegate/pkg/auth"
 	"housegate/housegate/pkg/billing"
+	ckhmanager "sentioxyz/sentio-core/common/clickhousemanager"
 	"housegate/housegate/pkg/cluster"
 	"housegate/housegate/pkg/config"
 	"housegate/housegate/pkg/credentials"
+	"housegate/housegate/pkg/log"
 	"housegate/housegate/pkg/network"
 	"housegate/housegate/pkg/plugins/commitgate"
 	"housegate/housegate/pkg/rewriter"
@@ -128,11 +129,10 @@ type Options struct {
 	GetIndexerId func() uint64
 
 	// Logger receives the proxy's own lifecycle messages (listener
-	// binding, RunWith warnings, ...). nil = a sentio-core adapter is
-	// used so standalone behaviour is unchanged. The interface is
-	// intentionally tiny (Debugw/Infow/Warnw/Errorw, zap-style sugared
-	// k/v pairs); see Logger for the contract.
-	Logger Logger
+	// binding, RunWith warnings, ...). nil = pkg/log.Default() is used,
+	// which falls back to slog.Default(). Library hosts inject any
+	// *slog.Logger here; no proprietary interface to implement.
+	Logger *slog.Logger
 }
 
 // New validates Config and resolves every synchronously-resolvable
@@ -170,9 +170,11 @@ func New(opts Options) (Proxy, error) {
 		opts.GetIndexerId = func() uint64 { return id }
 	}
 
-	logger := opts.Logger
-	if logger == nil {
-		logger = defaultLogger()
+	var logger *log.Logger
+	if opts.Logger != nil {
+		logger = log.NewFromSlog(opts.Logger)
+	} else {
+		logger = log.Default()
 	}
 
 	rf := newRedisFactory(opts.Config, opts.RedisClients)
@@ -208,7 +210,7 @@ type proxyImpl struct {
 	built        *builtServer
 	redisFac     *redisFactory
 	getIndexerId func() uint64
-	logger       Logger
+	logger       *log.Logger
 
 	addrMu sync.Mutex
 	addr   net.Addr

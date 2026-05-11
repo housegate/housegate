@@ -14,6 +14,7 @@ go_library(
     deps = [
         "//pkg/cluster",
         "//pkg/credentials",
+        "//pkg/log",
         "//pkg/network",
         "//pkg/peer",
         "//pkg/route",
@@ -22,7 +23,6 @@ go_library(
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//credentials/insecure",
         "@org_golang_google_grpc//keepalive",
-        "@sentio-core//common/log",
         "@sentio-core//network/registry",
     ],
 )

@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	log "sentioxyz/sentio-core/common/log"
+	"housegate/housegate/pkg/log"
 )
 
 // PooledConn wraps a net.Conn with pool metadata.

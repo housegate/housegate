@@ -12,9 +12,9 @@ go_library(
         "//pkg/cfgtypes",
         "//pkg/chproto",
         "//pkg/chsession",
+        "//pkg/log",
         "//pkg/plugin",
         "//pkg/rewriter",
-        "@sentio-core//common/log",
     ],
 )
 

@@ -13,6 +13,6 @@ go_library(
     importpath = "housegate/housegate/pkg/cluster",
     visibility = ["//visibility:public"],
     deps = [
-        "@sentio-core//common/log",
+        "//pkg/log",
     ],
 )

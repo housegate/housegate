@@ -15,7 +15,7 @@ import (
 	"fmt"
 	"strings"
 
-	log "sentioxyz/sentio-core/common/log"
+	"housegate/housegate/pkg/log"
 
 	"housegate/housegate/pkg/billing"
 	"housegate/housegate/pkg/plugin"
