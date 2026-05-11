@@ -145,7 +145,6 @@ rewriter 是物理/逻辑数据库映射的唯一权威。连接上的每条 SQL
 | `rewriter.timeout` | duration | 否 | `5s` | 单次 gRPC 超时 |
 | `rewriter.physical_database` | string | 否 | `` | 本部署中承载所有 logical database 的那个唯一物理 ClickHouse 数据库。空 = 同时关闭 `database_map` 和 `hello.Database` 替换 |
 | `rewriter.delimiter` | string | 否 | `_` | `<logical>` 与 `<original_table>` 之间的分隔符 |
-| `rewriter.enable_static_mapping` | bool | 否 | `false` | 启用 static-args 路径（sentio table-name 虚拟化）。默认关闭 — 单次 round-trip，仅携带 `dynamic_args` |
 
 ### `sidecar` — Sidecar 模式设置
 

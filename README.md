@@ -145,7 +145,6 @@ The rewriter is the canonical owner of physical/logical database mapping. Every 
 | `rewriter.timeout` | duration | No | `5s` | Per-call gRPC timeout |
 | `rewriter.physical_database` | string | No | `` | The single physical ClickHouse database that hosts every logical database in this deployment. Empty disables both `database_map` and the `hello.Database` substitution |
 | `rewriter.delimiter` | string | No | `_` | Separator inserted between `<logical>` and `<original_table>` |
-| `rewriter.enable_static_mapping` | bool | No | `false` | Enable the static-args path (sentio table-name virtualisation). Off by default — single round-trip with `dynamic_args` only |
 
 ### `sidecar` — Sidecar-Mode Settings
 

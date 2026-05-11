@@ -5,9 +5,8 @@
 //
 //   - Factory is the long-lived process-wide object. It holds the gRPC
 //     connection to the sql-rewriter service, a NetworkState reference,
-//     a SentioNetworkTableMapperFactory, an Options snapshot, and any
-//     optional cluster manager / credential provider used to render
-//     remote() table references.
+//     an Options snapshot, and any optional cluster manager / credential
+//     provider used to render remote() table references.
 //
 //   - Rewriter is the per-connection stateful view. The proxy creates
 //     one Rewriter per client connection (lazily, on the first OnQuery
@@ -134,7 +133,7 @@ type Rewriter interface {
 }
 
 // Factory builds per-connection Rewriters using the shared resources
-// it owns (gRPC client, NetworkState, table-mapper factory, options).
+// it owns (gRPC client, NetworkState, options).
 //
 // One Factory is constructed at proxy startup and shared across every
 // connection; tearing it down with Close shuts the gRPC connection and
@@ -219,16 +218,6 @@ type Options struct {
 	// rewriter use its default" (currently "_").
 	Delim string
 
-	// EnableStaticMapping toggles the SELECT-side static-args path.
-	// When true, the rewriter does a phase-1 call to enumerate
-	// accessed tables, resolves each via the SentioNetworkTableMapper,
-	// and sends the resulting RewriteTableStaticArgs alongside the
-	// dynamic args on the phase-2 call. When false, the phase-1 hop
-	// is skipped entirely and the rewrite is a single round-trip
-	// carrying only dynamic_args — meaningful latency win for
-	// deployments that don't use sentio table-name virtualisation.
-	EnableStaticMapping bool
-
 	// AuthEnabled signals whether the proxy is running with
 	// authentication on. It changes how anonymous connections (no
 	// account on the session) are handled by the rewriter:
@@ -245,49 +234,6 @@ type Options struct {
 	// Wired from cfg.Auth.Enabled in cmd.
 	AuthEnabled bool
 }
-
-// TableWithDatabase pairs a database with a table for the
-// table_with_database_map rewrite operation.
-type TableWithDatabase struct {
-	Database string
-	Table    string
-}
-
-// RemoteTable describes a remote() function call target the rewriter
-// should generate.
-//
-// Security note: the password is sent in plaintext to the sql-rewriter
-// gRPC service so it can render `remote('addr','db','tbl','user','pwd')`.
-// This is acceptable on a trusted internal network; if the channel
-// could be observed, switch to TLS.
-type RemoteTable struct {
-	Addr     string
-	Database string
-	Table    string
-	User     string
-	Password string
-}
-
-// ParsedTable carries one virtual-table reference extracted from a SQL
-// body alongside the processor that owns it.
-//
-// Note: with the deprecation of the `sentio_<id>.<table>` prefix, the
-// dbPart of a `<db>.<table>` reference IS the logical database — which
-// happens to equal the processorId for processor-replica databases.
-// ParsedTable.ProcessorId carries that same string for backwards
-// compatibility with the table-mapper factory signature.
-type ParsedTable struct {
-	FullMatch   string // e.g. "coinbase.transfer"
-	ProcessorId string // e.g. "coinbase" — same as the dbPart
-	TableName   string // e.g. "transfer"
-}
-
-// SentioNetworkTableMapperFactory builds a SentioNetworkTableMapper for
-// one (processorId, indexer, processor info) tuple.
-type SentioNetworkTableMapperFactory func(
-	ctx context.Context,
-	processorId string, indexerInfo IndexerInfo, processorInfo ProcessorInfo,
-) (SentioNetworkTableMapper, error)
 
 // PeerSigner produces a peer-relay JWS authenticating this proxy to
 // another housegate identified by audience. Defined here to keep

@@ -20,7 +20,6 @@ import (
 
 	"housegate/housegate/pkg/auth"
 	"housegate/housegate/pkg/billing"
-	ckhmanager "sentioxyz/sentio-core/common/clickhousemanager"
 	"housegate/housegate/pkg/cluster"
 	"housegate/housegate/pkg/config"
 	"housegate/housegate/pkg/credentials"
@@ -73,7 +72,6 @@ type Options struct {
 	// The operator-visible source field is irrelevant in that path even
 	// if non-empty.
 	NetworkState network.State
-	CkhManager   ckhmanager.Manager
 	Validator    auth.Validator
 	Rewriter     rewriter.Factory
 	CredProvider credentials.CredentialProvider
@@ -137,7 +135,7 @@ type Options struct {
 
 // New validates Config and resolves every synchronously-resolvable
 // dependency. Errors here are fail-fast configuration / connectivity
-// errors (cfg validate, NetworkState dial, ckhmanager load, rewriter
+// errors (cfg validate, NetworkState dial, credential file parse, rewriter
 // factory startup, billing client connect, signer key parse,
 // concurrency-limit redis dial). After New returns successfully,
 // Run/RunWith only returns listener errors and ctx cancellation.
