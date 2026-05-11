@@ -108,6 +108,8 @@ HOUSEGATE_AGE_IDENTITY_FILE=~/.housegate.age \
 | `stats_interval` | duration | 否 | `10s` | 周期性包统计日志间隔 |
 | `streaming_buf_size` | int | 否 | `131072` | 流式协议解析器 bufio 大小（字节） |
 | `validate_checksum` | bool | 否 | `false` | 校验压缩 Data 块的 CityHash128 校验和 |
+| `log_level` | string | 否 | `info` | housegate 自身日志的默认 level。接受 `debug`/`info`/`warn`/`error`/`fatal`（大小写不敏感）以及 slog 的偏移语法（`DEBUG+1`）。CLI 覆盖：`-log-level`；环境变量：`HOUSEGATE_LOG_LEVEL`。 |
+| `log_file` | string | 否 | `` (stderr) | 将 housegate 自身日志重定向到该文件（`O_APPEND \| O_CREATE`，关闭 ANSI 颜色）。轮转交给外部工具（`logrotate`）。CLI 覆盖：`-log-file`；环境变量：`HOUSEGATE_LOG_FILE`。 |
 
 ### 顶层 — 跨切面凭证
 
@@ -424,6 +426,7 @@ p, err := housegate.New(housegate.Options{
     //   Cluster             cluster.Cluster
     //   CommitGateObservers []commitgate.Observer
     //   RedisClients        map[string]*redis.Client
+    //   Logger              *slog.Logger  // 任意 slog.Logger；nil → pkg/log 默认
 })
 if err != nil { return err }
 

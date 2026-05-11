@@ -127,9 +127,9 @@ go_library(
     deps = [
         "//pkg/cfgtypes",      # if Config has Duration
         "//pkg/chsession",     # almost always
+        "//pkg/log",           # housegate's slog-based logger
         "//pkg/plugin",        # always
         # ... your leaf packages
-        "@sentio-core//common/log",
     ],
 )
 

@@ -108,6 +108,8 @@ HOUSEGATE_AGE_IDENTITY_FILE=~/.housegate.age \
 | `stats_interval` | duration | No | `10s` | Periodic packet-stat log interval |
 | `streaming_buf_size` | int | No | `131072` | Streaming protocol parser bufio size (bytes) |
 | `validate_checksum` | bool | No | `false` | Validate CityHash128 checksums on compressed Data blocks |
+| `log_level` | string | No | `info` | Default level for housegate's own log output. Accepts `debug`/`info`/`warn`/`error`/`fatal` (case-insensitive) and slog's offset syntax (`DEBUG+1`). CLI override: `-log-level`; env: `HOUSEGATE_LOG_LEVEL`. |
+| `log_file` | string | No | `` (stderr) | Redirect housegate's own log output to this file (`O_APPEND \| O_CREATE`, ANSI off). Rotation is external (`logrotate`). CLI override: `-log-file`; env: `HOUSEGATE_LOG_FILE`. |
 
 ### Top-Level — Cross-Cutting Credentials
 
@@ -424,6 +426,7 @@ p, err := housegate.New(housegate.Options{
     //   Cluster             cluster.Cluster
     //   CommitGateObservers []commitgate.Observer
     //   RedisClients        map[string]*redis.Client
+    //   Logger              *slog.Logger  // any slog.Logger; nil → pkg/log default
 })
 if err != nil { return err }
 
