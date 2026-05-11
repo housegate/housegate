@@ -23,7 +23,7 @@ import (
 	"strings"
 	"time"
 
-	"sentioxyz/sentio-core/common/log"
+	"housegate/housegate/pkg/log"
 
 	"go.yaml.in/yaml/v3"
 
@@ -61,6 +61,23 @@ type Config struct {
 	MaxConnectionLifetime Duration `json:"max_connection_lifetime"  yaml:"max_connection_lifetime"`
 	StreamingBufSize      int      `json:"streaming_buf_size"       yaml:"streaming_buf_size"`
 	ValidateChecksum      bool     `json:"validate_checksum"        yaml:"validate_checksum"`
+
+	// LogLevel is the package-default log level applied by cmd/housegate
+	// at startup via log.SetLevel. Case-insensitive; accepts "debug",
+	// "info", "warn", "error", "fatal", as well as slog's offset syntax
+	// ("DEBUG+1"). Empty = "info". Library hosts that inject their own
+	// *slog.Logger via Options.Logger should manage level on their own
+	// handler — this field only governs the default Logger.
+	LogLevel string `json:"log_level"                yaml:"log_level"`
+
+	// LogFile redirects cmd/housegate's own log output (housegate code +
+	// sentio-core transitive deps via its own -log-file mechanism) to the
+	// given path. Empty = stderr. ANSI color is disabled when writing to
+	// a file. Operators should manage rotation externally (logrotate /
+	// copy-truncate); the file is opened O_APPEND|O_CREATE. Like
+	// LogLevel, this only governs the cmd binary's default Logger —
+	// library hosts manage their own destination via Options.Logger.
+	LogFile string `json:"log_file"                 yaml:"log_file"`
 
 	// --- Cross-cutting credentials & integrations (top-level) ---
 
@@ -221,6 +238,9 @@ func (c *Config) Validate() error {
 	}
 	if c.StreamingBufSize < 0 {
 		errs = append(errs, fmt.Errorf("streaming_buf_size must be >= 0 (got %d)", c.StreamingBufSize))
+	}
+	if _, err := log.ParseLevel(c.LogLevel); err != nil {
+		errs = append(errs, fmt.Errorf("log_level: %w", err))
 	}
 
 	switch c.Mode() {

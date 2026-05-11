@@ -8,11 +8,6 @@ import (
 	"strconv"
 	"time"
 
-	ckhmanager "sentioxyz/sentio-core/common/clickhousemanager"
-	"sentioxyz/sentio-core/common/log"
-	"sentioxyz/sentio-core/network/sqlrewriter"
-	"sentioxyz/sentio-core/service/processor/models"
-
 	"housegate/housegate/pkg/auth"
 	"housegate/housegate/pkg/billing"
 	"housegate/housegate/pkg/chproto"
@@ -20,6 +15,7 @@ import (
 	"housegate/housegate/pkg/cluster"
 	"housegate/housegate/pkg/config"
 	"housegate/housegate/pkg/credentials"
+	"housegate/housegate/pkg/log"
 	"housegate/housegate/pkg/network"
 	"housegate/housegate/pkg/plugin"
 	authplugin "housegate/housegate/pkg/plugins/auth"
@@ -37,6 +33,10 @@ import (
 	"housegate/housegate/pkg/rewriter"
 	"housegate/housegate/pkg/secretsload"
 	"housegate/housegate/pkg/sqlmeta"
+
+	ckhmanager "sentioxyz/sentio-core/common/clickhousemanager"
+	"sentioxyz/sentio-core/network/sqlrewriter"
+	"sentioxyz/sentio-core/service/processor/models"
 
 	"github.com/redis/go-redis/v9"
 )

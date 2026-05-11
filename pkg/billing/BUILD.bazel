@@ -9,10 +9,10 @@ go_library(
     importpath = "housegate/housegate/pkg/billing",
     visibility = ["//visibility:public"],
     deps = [
+        "//pkg/log",
         "@com_github_redis_go_redis_v9//:go-redis",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//credentials/insecure",
-        "@sentio-core//common/log",
         "@sentio-core//service/usage/protos",
     ],
 )

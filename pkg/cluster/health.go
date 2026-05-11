@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	log "sentioxyz/sentio-core/common/log"
+	"housegate/housegate/pkg/log"
 )
 
 // ReplicaHealth tracks the health state of a single replica.

@@ -13,9 +13,9 @@ go_library(
         "//pkg/auth",
         "//pkg/chproto",
         "//pkg/chsession",
+        "//pkg/log",
         "//pkg/plugin",
         "//pkg/sqlmeta",
-        "@sentio-core//common/log",
     ],
 )
 

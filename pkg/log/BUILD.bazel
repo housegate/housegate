@@ -1,0 +1,18 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "log",
+    srcs = [
+        "context.go",
+        "log.go",
+        "sample.go",
+    ],
+    importpath = "housegate/housegate/pkg/log",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "log_test",
+    srcs = ["log_test.go"],
+    embed = [":log"],
+)

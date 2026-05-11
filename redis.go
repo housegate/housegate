@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"sentioxyz/sentio-core/common/log"
+	"housegate/housegate/pkg/log"
 
 	"github.com/redis/go-redis/v9"
 

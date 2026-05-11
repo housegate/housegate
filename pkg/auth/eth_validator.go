@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"sentioxyz/sentio-core/common/log"
+	"housegate/housegate/pkg/log"
 )
 
 // EthValidator validates queries using secp256k1 signatures produced by

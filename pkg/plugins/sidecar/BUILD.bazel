@@ -12,10 +12,10 @@ go_library(
     deps = [
         "//pkg/auth",
         "//pkg/chproto",
+        "//pkg/log",
         "//pkg/network",
         "//pkg/plugin",
         "@com_github_ethereum_go_ethereum//common",
-        "@sentio-core//common/log",
     ],
 )
 

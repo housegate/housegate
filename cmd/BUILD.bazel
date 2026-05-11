@@ -3,6 +3,7 @@ load("@rules_go//go:def.bzl", "go_binary", "go_library")
 go_library(
     name = "housegate_lib",
     srcs = [
+        "console_handler.go",
         "main.go",
         "secret.go",
     ],
@@ -14,10 +15,9 @@ go_library(
     deps = [
         "//:housegate",
         "//pkg/config",
+        "//pkg/log",
         "//pkg/secretsload",
         "@com_github_prometheus_client_golang//prometheus/promhttp",
-        "@sentio-core//common/flags",
-        "@sentio-core//common/log",
     ],
 )
 

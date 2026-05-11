@@ -12,7 +12,6 @@ go_library(
     name = "housegate",
     srcs = [
         "build.go",
-        "logger.go",
         "proxy.go",
         "redis.go",
     ],
@@ -26,6 +25,7 @@ go_library(
         "//pkg/cluster",
         "//pkg/config",
         "//pkg/credentials",
+        "//pkg/log",
         "//pkg/network",
         "//pkg/plugin",
         "//pkg/plugins/auth",
@@ -46,7 +46,6 @@ go_library(
         "@com_github_redis_go_redis_v9//:go-redis",
         "@org_golang_x_sync//errgroup",
         "@sentio-core//common/clickhousemanager",
-        "@sentio-core//common/log",
         "@sentio-core//network/sqlrewriter",
         "@sentio-core//service/processor/models",
     ],

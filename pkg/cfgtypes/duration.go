@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"time"
 
-	log "sentioxyz/sentio-core/common/log"
+	"housegate/housegate/pkg/log"
 )
 
 // Duration wraps time.Duration to allow human-friendly strings in JSON

@@ -13,7 +13,7 @@ import (
 	"fmt"
 	"time"
 
-	log "sentioxyz/sentio-core/common/log"
+	"housegate/housegate/pkg/log"
 	usageProtos "sentioxyz/sentio-core/service/usage/protos"
 
 	"github.com/redis/go-redis/v9"

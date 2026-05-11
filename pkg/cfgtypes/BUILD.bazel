@@ -5,5 +5,5 @@ go_library(
     srcs = ["duration.go"],
     importpath = "housegate/housegate/pkg/cfgtypes",
     visibility = ["//visibility:public"],
-    deps = ["@sentio-core//common/log"],
+    deps = ["//pkg/log"],
 )

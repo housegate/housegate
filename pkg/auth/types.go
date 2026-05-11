@@ -15,7 +15,7 @@ package auth
 import (
 	"context"
 
-	"sentioxyz/sentio-core/common/log"
+	"housegate/housegate/pkg/log"
 )
 
 // AuthTokenSettingKey is the ClickHouse Query Setting key that carries a

@@ -13,13 +13,11 @@ import (
 	"os/signal"
 	"syscall"
 
-	"sentioxyz/sentio-core/common/flags"
-	"sentioxyz/sentio-core/common/log"
-
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"housegate/housegate"
 	"housegate/housegate/pkg/config"
+	"housegate/housegate/pkg/log"
 	"housegate/housegate/pkg/secretsload"
 )
 
@@ -27,6 +25,13 @@ func main() {
 	if handled, exit := secretSubcommand(); handled {
 		os.Exit(exit)
 	}
+
+	// Install the console handler before anything logs so our slog-based
+	// pkg/log records share the zap-development format with sentio-core's
+	// own transitive-dep logs (envconf, clickhousemanager, ...). Level is
+	// driven by pkg/log's LevelVar so log.SetLevel still applies.
+	// loadConfigWithOverrides may swap the writer to a file later.
+	log.SetDefault(log.New(newConsoleHandler(os.Stderr, log.DefaultLevelVar(), true)))
 
 	cfg := loadConfigWithOverrides()
 	logStartupBanner(&cfg)
@@ -62,8 +67,20 @@ func loadConfigWithOverrides() config.Config {
 	dialTimeout := flag.String("dial-timeout", "", "upstream dial timeout, e.g. 5s (overrides config/env)")
 	idleTimeout := flag.String("idle-timeout", "", "connection idle timeout, e.g. 5m (overrides config/env)")
 	logQueries := flag.Bool("log-queries", true, "log SQL query content")
+	logLevel := flag.String("log-level", "", `package-default log level: "debug" / "info" / "warn" / "error" / "fatal" (overrides config/env HOUSEGATE_LOG_LEVEL)`)
+	// -log-file is registered transitively by sentio-core/common/log (still
+	// imported via clickhousemanager in cmd/sentio_adapter.go). We pick up
+	// its value via flag.Lookup inside maybeSwapLogFile, so a single flag
+	// controls both sentio-core's writer and ours.
 
-	flags.ParseAndInitLogFlag()
+	flag.Parse()
+
+	// Stage-1 log-destination resolve: take effect immediately so any
+	// log emitted by config.Load (e.g. "no config file provided") already
+	// lands in the right place. Stage-2 below covers yaml-only configs.
+	if swapped := maybeSwapLogFile(""); swapped {
+		// already pointed at file via flag/env
+	}
 
 	explicitFlags := make(map[string]bool)
 	flag.Visit(func(f *flag.Flag) { explicitFlags[f.Name] = true })
@@ -119,11 +136,62 @@ func loadConfigWithOverrides() config.Config {
 	if explicitFlags["log-queries"] {
 		cfg.Logging.Queries = *logQueries
 	}
+	if explicitFlags["log-level"] {
+		cfg.LogLevel = *logLevel
+	} else if env := config.EnvOrDefault("HOUSEGATE_LOG_LEVEL", ""); env != "" && cfg.LogLevel == "" {
+		cfg.LogLevel = env
+	}
 
 	if err := cfg.Validate(); err != nil {
 		log.Fatale(err, "config validation failed")
 	}
+
+	// Apply the resolved level before anything else logs. Validate already
+	// confirmed parseability; ignore the error.
+	if lv, err := log.ParseLevel(cfg.LogLevel); err == nil {
+		log.SetLevel(lv)
+	}
+
+	// Stage-2 log-destination resolve: covers the yaml-only case (no
+	// flag, no env). If stage-1 already swapped, maybeSwapLogFile no-ops.
+	maybeSwapLogFile(cfg.LogFile)
 	return cfg
+}
+
+// logFileSwapped is set once maybeSwapLogFile has redirected pkg/log to a
+// file, so a later call with a yaml-only path doesn't override an explicit
+// flag/env destination.
+var logFileSwapped bool
+
+// maybeSwapLogFile redirects pkg/log to a file when one is configured.
+// Precedence inside this call: -log-file flag > HOUSEGATE_LOG_FILE env >
+// the provided fallback (cfg.LogFile from yaml/json).
+//
+// Returns true if a swap was performed (this call or any earlier one).
+func maybeSwapLogFile(fallback string) bool {
+	if logFileSwapped {
+		return true
+	}
+	logFile := fallback
+	if lf := flag.Lookup("log-file"); lf != nil {
+		if v := lf.Value.String(); v != "" {
+			logFile = v
+		}
+	}
+	if logFile == "" {
+		logFile = config.EnvOrDefault("HOUSEGATE_LOG_FILE", "")
+	}
+	if logFile == "" {
+		return false
+	}
+	f, err := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		log.Fatalfe(err, "open log file %q", logFile)
+	}
+	// color = false: ANSI escapes don't belong in a file.
+	log.SetDefault(log.New(newConsoleHandler(f, log.DefaultLevelVar(), false)))
+	logFileSwapped = true
+	return true
 }
 
 func logStartupBanner(cfg *config.Config) {

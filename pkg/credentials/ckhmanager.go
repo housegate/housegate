@@ -9,8 +9,7 @@ import (
 	"fmt"
 
 	ckhmanager "sentioxyz/sentio-core/common/clickhousemanager"
-	log "sentioxyz/sentio-core/common/log"
-
+	"housegate/housegate/pkg/log"
 	"housegate/housegate/pkg/network"
 )
 

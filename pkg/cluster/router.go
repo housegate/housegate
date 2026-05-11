@@ -6,7 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	log "sentioxyz/sentio-core/common/log"
+	"housegate/housegate/pkg/log"
 )
 
 // RoutingStrategy defines how to select a replica within a shard.
