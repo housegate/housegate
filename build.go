@@ -31,12 +31,7 @@ import (
 	"housegate/housegate/pkg/plugins/usage"
 	"housegate/housegate/pkg/proxy"
 	"housegate/housegate/pkg/rewriter"
-	"housegate/housegate/pkg/secretsload"
 	"housegate/housegate/pkg/sqlmeta"
-
-	ckhmanager "sentioxyz/sentio-core/common/clickhousemanager"
-	"sentioxyz/sentio-core/network/sqlrewriter"
-	"sentioxyz/sentio-core/service/processor/models"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -80,59 +75,30 @@ func loadNetworkState(cfg *config.Config, rf *redisFactory) (network.State, erro
 	return redisState, nil
 }
 
-// loadCkhManager loads the sentio-core ClickHouse manager from
-// cfg.CkhManagerConfigPath, transparently decrypting age-encrypted
-// files via secretsload. Returns (nil, nil) when no config path is
-// configured (router-only deployments don't need a manager because
-// they never run the SQL rewriter).
-func loadCkhManager(cfg *config.Config) (ckhmanager.Manager, error) {
-	if cfg.CkhManagerConfigPath == "" {
-		return nil, nil
-	}
-	resolved, err := secretsload.Resolve(cfg.CkhManagerConfigPath)
-	if err != nil {
-		return nil, fmt.Errorf("resolve ckh_manager_config_path: %w", err)
-	}
-	mgr := ckhmanager.LoadManager(resolved.Path, ckhmanager.LoadAllowEmptySharding())
-	resolved.Cleanup() // unlinks memfd/tempfile; safe even if LoadManager still holds its own fd.
-	if mgr == nil {
-		return nil, fmt.Errorf("failed to load ClickHouse manager from %s", cfg.CkhManagerConfigPath)
-	}
-	log.Infow("loaded ClickHouse manager", "path", cfg.CkhManagerConfigPath)
-	return mgr, nil
-}
-
-// buildRewriterFactory constructs the SQL rewriter factory backed by
-// the sentio-core TableMapper. Returns nil (and logs a warning) when
-// the rewriter service is unavailable at startup — the relay path
-// tolerates a nil factory by skipping rewriting entirely.
-func buildRewriterFactory(cfg *config.Config, ns network.State, ckhMgr ckhmanager.Manager) rewriter.Factory {
+// buildRewriterFactory constructs the SQL rewriter factory that dials
+// the external sql-rewriter gRPC service. Returns nil (and logs a
+// warning) when the rewriter service is unavailable at startup — the
+// relay path tolerates a nil factory by skipping rewriting entirely.
+func buildRewriterFactory(cfg *config.Config, ns network.State) rewriter.Factory {
 	// Router-only deployments (no shard, no upstream) never invoke the
 	// rewriter — every session gets forwarded to a peer instead.
 	if cfg.Shard == nil && cfg.Upstream == "" {
 		log.Info("router-only mode: SQL rewriter disabled")
 		return nil
 	}
-	privateKeyHex := cfg.RelayPrivateKeyHex
-	tableMapperFactory := func(ctx context.Context, processorId string,
-		indexerInfo network.IndexerInfo, processorInfo network.ProcessorInfo) (rewriter.SentioNetworkTableMapper, error) {
-		return sqlrewriter.NewTableMapper(privateKeyHex, processorId, 0, models.TablePatternNetworkV1, ckhMgr, indexerInfo, processorInfo)
-	}
-	log.Infow("using sentio-core TableMapper", "ckh_manager_config", cfg.CkhManagerConfigPath)
 
 	rwConfig := rewriter.Options{
-		Enabled:             true,
-		ServiceAddr:         cfg.Rewriter.ServiceAddr,
-		Upstream:            cfg.Upstream,
-		Listen:              cfg.Listen,
-		CallbackAddr:        cfg.CallbackUrl,
-		Timeout:             cfg.Rewriter.Timeout.Duration,
-		PhysicalDatabase:    cfg.Rewriter.PhysicalDatabase,
-		AuthEnabled:         cfg.Auth.Enabled,
-		Delim:               cfg.Rewriter.Delimiter,
-		EnableStaticMapping: cfg.Rewriter.EnableStaticMapping,
+		Enabled:          true,
+		ServiceAddr:      cfg.Rewriter.ServiceAddr,
+		Upstream:         cfg.Upstream,
+		Listen:           cfg.Listen,
+		CallbackAddr:     cfg.CallbackUrl,
+		Timeout:          cfg.Rewriter.Timeout.Duration,
+		PhysicalDatabase: cfg.Rewriter.PhysicalDatabase,
+		AuthEnabled:      cfg.Auth.Enabled,
+		Delim:            cfg.Rewriter.Delimiter,
 	}
-	rwf, err := rewriter.NewSentioNetworkFactory(rwConfig, ns, tableMapperFactory)
+	rwf, err := rewriter.NewSentioNetworkFactory(rwConfig, ns)
 	if err != nil {
 		log.Warne(err, "failed to create rewriter factory, rewriting disabled")
 		return nil
@@ -302,22 +268,11 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		opts.CommitGateObservers...,
 	)
 
-	var ckhMgr ckhmanager.Manager
-	if opts.CkhManager != nil {
-		ckhMgr = opts.CkhManager
-	} else {
-		var err error
-		ckhMgr, err = loadCkhManager(cfg)
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	var rwFactory rewriter.Factory
 	if opts.Rewriter != nil {
 		rwFactory = opts.Rewriter
 	} else {
-		rwFactory = buildRewriterFactory(cfg, ns, ckhMgr)
+		rwFactory = buildRewriterFactory(cfg, ns)
 		if rwf, ok := rwFactory.(*rewriter.SentioNetworkFactory); ok && rwf != nil {
 			rwf.SetGetIndexerId(opts.GetIndexerId)
 			pushTeardown(func() { rwf.Close() })
@@ -356,8 +311,11 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	var credProvider credentials.CredentialProvider
 	if opts.CredProvider != nil {
 		credProvider = opts.CredProvider
-	} else if cfg.CredentialReplaceEnabled && ckhMgr != nil {
-		cp := credentials.NewCkhManagerCredentialProvider(ckhMgr, cfg.RelayPrivateKeyHex)
+	} else if cfg.CredentialReplaceEnabled && cfg.CkhManagerConfigPath != "" {
+		cp, err := credentials.LoadCkhManagerYAMLProvider(cfg.CkhManagerConfigPath)
+		if err != nil {
+			return nil, fmt.Errorf("load credential provider: %w", err)
+		}
 		credProvider = cp
 		// Same caller-injected guard as SetClusterManager above: only wire
 		// the credential provider into the rewriter factory when the lib

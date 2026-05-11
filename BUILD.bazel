@@ -45,9 +45,6 @@ go_library(
         "//pkg/sqlmeta",
         "@com_github_redis_go_redis_v9//:go-redis",
         "@org_golang_x_sync//errgroup",
-        "@sentio-core//common/clickhousemanager",
-        "@sentio-core//network/sqlrewriter",
-        "@sentio-core//service/processor/models",
     ],
 )
 

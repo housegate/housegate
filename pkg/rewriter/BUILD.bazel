@@ -6,7 +6,6 @@ go_library(
         "aliases.go",
         "args.go",
         "sentio.go",
-        "sentio_table_mapper.go",
         "types.go",
     ],
     importpath = "housegate/housegate/pkg/rewriter",

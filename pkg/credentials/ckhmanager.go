@@ -1,77 +1,97 @@
 package credentials
 
-// ckhmanager.go — CredentialProvider backed by sentio-core's
-// ckhmanager. The manager knows per-shard ClickHouse credentials; the
-// provider looks them up using the AdminRole (maps to the "subgraph"
-// credential key in the manager config).
+// ckhmanager.go — CredentialProvider that parses the sentio-core
+// ckhmanager YAML config format directly. housegate only consumes the
+// `credential.subgraph` block (username + password), so we drop the
+// transitive sentio-core dependency and own the parse here.
+//
+// The full ckhmanager schema (roles, settings, shards, addresses,
+// tiers, ...) is ignored on purpose — both legacy GetConnInfo paths
+// (default shard and per-indexer NewShardByStateIndexer) resolved to
+// the same credentials["subgraph"] entry and discarded everything else.
+// See git history for the previous ckhmanager.Manager-backed impl.
 
 import (
 	"fmt"
+	"os"
 
-	ckhmanager "sentioxyz/sentio-core/common/clickhousemanager"
+	"go.yaml.in/yaml/v3"
+
 	"housegate/housegate/pkg/log"
 	"housegate/housegate/pkg/network"
+	"housegate/housegate/pkg/secretsload"
 )
 
-type ckhManagerCredentialProvider struct {
-	ckhMgr        ckhmanager.Manager
-	privateKeyHex string // Ethereum private key for proxy auth (passed to WithPrivateKeyHex)
+// ckhManagerYAML captures the only fields housegate consumes from a
+// sentio-core ckhmanager config file. Unknown fields (roles, shards,
+// settings, ...) are silently ignored by yaml.Unmarshal, so the same
+// config files keep working unchanged.
+//
+// The `<<: [*alias]` merge-key syntax used in production configs is
+// resolved by go.yaml.in/yaml/v3 before our struct sees the value, so
+// `credential.subgraph` ends up populated with the username/password
+// merged from the referenced role anchor.
+type ckhManagerYAML struct {
+	Credential struct {
+		Subgraph struct {
+			Username string `yaml:"username"`
+			Password string `yaml:"password"`
+		} `yaml:"subgraph"`
+	} `yaml:"credential"`
 }
 
-// NewCkhManagerCredentialProvider returns a CredentialProvider that
-// resolves credentials by delegating to ckhmanager. privateKeyHex is
-// the relay private key used for proxy-to-proxy auth (may be empty when
-// relay signing is disabled).
-func NewCkhManagerCredentialProvider(ckhMgr ckhmanager.Manager, privateKeyHex string) CredentialProvider {
-	return &ckhManagerCredentialProvider{ckhMgr: ckhMgr, privateKeyHex: privateKeyHex}
+// staticCredentialProvider returns the same (username, password) pair
+// for every call. Matches the legacy ckhmanager behaviour: the manager
+// reused one global credential map across default- and per-indexer
+// shards, and our GetConnInfo calls discarded the per-shard address.
+type staticCredentialProvider struct {
+	username string
+	password string
 }
 
-// GetDefaultCredential returns the admin credential from the default
-// shard. AdminRole resolves to the "subgraph" credential key inside the
-// ckhmanager config.
-func (p *ckhManagerCredentialProvider) GetDefaultCredential() (string, string, error) {
-	defaultIndex := p.ckhMgr.DefaultIndex()
-	shard := p.ckhMgr.GetShardByIndex(defaultIndex)
-	if shard == nil {
-		return "", "", fmt.Errorf("default shard (index %d) not found", defaultIndex)
-	}
-
-	options := []func(*ckhmanager.ShardingParameter){
-		ckhmanager.WithUnderlyingProxy(true),
-		ckhmanager.WithRole(ckhmanager.AdminRole),
-	}
-	if p.privateKeyHex != "" {
-		options = append(options, ckhmanager.WithPrivateKeyHex(p.privateKeyHex))
-	}
-
-	username, password, _, _, err := shard.GetConnInfo(options...)
+// LoadCkhManagerYAMLProvider parses the sentio-core ckhmanager config
+// at `path` and returns a CredentialProvider seeded with
+// `credential.subgraph.{username, password}`. age-encrypted files
+// (`.age` suffix) are decrypted transparently via pkg/secretsload
+// using HOUSEGATE_AGE_IDENTITY[_FILE].
+//
+// Returns an error when the path is unreadable, the YAML is malformed,
+// or the `credential.subgraph.username` field is empty (treated as
+// misconfigured rather than silently returning anonymous creds).
+func LoadCkhManagerYAMLProvider(path string) (CredentialProvider, error) {
+	resolved, err := secretsload.Resolve(path)
 	if err != nil {
-		return "", "", fmt.Errorf("get default credential: %w", err)
+		return nil, fmt.Errorf("resolve %s: %w", path, err)
 	}
-	log.Debugw("default credential resolved", "source", "credential_provider", "user", username)
-	return username, password, nil
+	defer resolved.Cleanup()
+
+	data, err := os.ReadFile(resolved.Path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+
+	var doc ckhManagerYAML
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	if doc.Credential.Subgraph.Username == "" {
+		return nil, fmt.Errorf("%s: missing credential.subgraph.username", path)
+	}
+
+	log.Infow("loaded ckh manager credentials",
+		"path", path,
+		"user", doc.Credential.Subgraph.Username,
+	)
+	return &staticCredentialProvider{
+		username: doc.Credential.Subgraph.Username,
+		password: doc.Credential.Subgraph.Password,
+	}, nil
 }
 
-// GetCredentialForIndexer creates a temporary shard for the indexer and
-// retrieves its admin credential.
-func (p *ckhManagerCredentialProvider) GetCredentialForIndexer(indexerInfo network.IndexerInfo) (string, string, error) {
-	shard := p.ckhMgr.NewShardByStateIndexer(indexerInfo)
-	if shard == nil {
-		return "", "", fmt.Errorf("failed to create shard for indexer %d", indexerInfo.IndexerId)
-	}
+func (p *staticCredentialProvider) GetDefaultCredential() (string, string, error) {
+	return p.username, p.password, nil
+}
 
-	options := []func(*ckhmanager.ShardingParameter){
-		ckhmanager.WithUnderlyingProxy(true),
-		ckhmanager.WithRole(ckhmanager.AdminRole),
-	}
-	if p.privateKeyHex != "" {
-		options = append(options, ckhmanager.WithPrivateKeyHex(p.privateKeyHex))
-	}
-
-	username, password, _, _, err := shard.GetConnInfo(options...)
-	if err != nil {
-		return "", "", fmt.Errorf("get credential for indexer %d: %w", indexerInfo.IndexerId, err)
-	}
-	log.Debugw("indexer credential resolved", "source", "credential_provider", "indexer", indexerInfo.IndexerId, "user", username)
-	return username, password, nil
+func (p *staticCredentialProvider) GetCredentialForIndexer(_ network.IndexerInfo) (string, string, error) {
+	return p.username, p.password, nil
 }

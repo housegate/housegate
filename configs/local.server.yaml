@@ -43,7 +43,6 @@ rewriter:
   timeout: "5s"
   physical_database: testnet
   delimiter: "."
-  enable_static_mapping: false
 
 sidecar:
   mode: false

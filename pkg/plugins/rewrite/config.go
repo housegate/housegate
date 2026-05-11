@@ -21,14 +21,4 @@ type Config struct {
 	// Delimiter is the character used to separate logical database names
 	// in the rewriter's output. Defaults to ".".
 	Delimiter string `json:"delimiter" yaml:"delimiter"`
-
-	// EnableStaticMapping turns on the static-args path inside the
-	// rewriter: when true, every Rewrite call does a phase-1 hop to
-	// enumerate accessed tables, runs SentioNetworkTableMapper on
-	// each, and ships the resulting RewriteTableStaticArgs alongside
-	// the dynamic args. When false (the default), the static path is
-	// skipped entirely and rewrites are a single round-trip carrying
-	// only dynamic_args. Operators who don't run sentio table-name
-	// virtualisation should leave this off.
-	EnableStaticMapping bool `json:"enable_static_mapping" yaml:"enable_static_mapping"`
 }

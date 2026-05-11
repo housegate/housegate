@@ -95,24 +95,23 @@ func privilegesDeltasFromProto(in []*pb.PrivilegeDelta) []sqlmeta.PrivilegeDelta
 // SentioNetworkFactory is the production Factory implementation. It
 // owns the gRPC connection to the sql-rewriter service and the
 // long-lived references the per-connection Rewriters need
-// (NetworkState, table-mapper factory, callback addr, and optional
-// cluster manager / credential provider).
+// (NetworkState, callback addr, and optional cluster manager /
+// credential provider).
 //
 // Construction dials the rewriter service synchronously and fails
 // fast if it cannot connect — the proxy treats a missing rewriter as
 // "rewriting disabled" rather than continuing to retry forever.
 type SentioNetworkFactory struct {
-	options            Options
-	networkState       network.State
-	grpcConn           *grpc.ClientConn
-	grpcClient         pb.RewriterServiceClient
-	tableMapperFactory SentioNetworkTableMapperFactory
-	callbackAddr       string                         // resolved address for remote() callback
-	clusterMgr         cluster.Cluster                // optional, for multi-replica isLocal detection
-	credProvider       credentials.CredentialProvider // optional, for remote() credential replacement
-	getIndexerId       func() uint64                  // optional, identifies "this proxy" for remote-upstream routing
-	peerSigner         PeerSigner                     // optional, mints peer-relay JWS for remote() calls
-	peerTokenTTL       time.Duration                  // peer JWS validity window; 0 → 5m default
+	options      Options
+	networkState network.State
+	grpcConn     *grpc.ClientConn
+	grpcClient   pb.RewriterServiceClient
+	callbackAddr string                         // resolved address for remote() callback
+	clusterMgr   cluster.Cluster                // optional, for multi-replica isLocal detection
+	credProvider credentials.CredentialProvider // optional, for remote() credential replacement
+	getIndexerId func() uint64                  // optional, identifies "this proxy" for remote-upstream routing
+	peerSigner   PeerSigner                     // optional, mints peer-relay JWS for remote() calls
+	peerTokenTTL time.Duration                  // peer JWS validity window; 0 → 5m default
 }
 
 // peerLoginTokenTTL is the default validity window of the peer-relay
@@ -132,15 +131,10 @@ type SentioNetworkFactory struct {
 const peerLoginTokenTTL = 1 * time.Minute
 
 // NewSentioNetworkFactory dials the sql-rewriter gRPC service and
-// returns a Factory that produces per-connection Rewriters. The
-// table-mapper factory must be supplied — it is the bridge to
-// sentio-core's TableMapper.
-func NewSentioNetworkFactory(opts Options, state network.State, tableMapperFactory SentioNetworkTableMapperFactory) (*SentioNetworkFactory, error) {
+// returns a Factory that produces per-connection Rewriters.
+func NewSentioNetworkFactory(opts Options, state network.State) (*SentioNetworkFactory, error) {
 	if opts.ServiceAddr == "" {
 		return nil, fmt.Errorf("rewriter service_addr is required when rewriter is enabled")
-	}
-	if opts.EnableStaticMapping && tableMapperFactory == nil {
-		return nil, fmt.Errorf("table mapper factory is required when EnableStaticMapping=true (must be backed by sentio-core TableMapper)")
 	}
 
 	callbackAddr := resolveCallbackAddr(opts.CallbackAddr, opts.Upstream, opts.Listen)
@@ -169,12 +163,11 @@ func NewSentioNetworkFactory(opts Options, state network.State, tableMapperFacto
 	log.Infow("connected to rewriter service", "service_addr", opts.ServiceAddr)
 
 	return &SentioNetworkFactory{
-		options:            opts,
-		networkState:       state,
-		grpcConn:           conn,
-		grpcClient:         pb.NewRewriterServiceClient(conn),
-		tableMapperFactory: tableMapperFactory,
-		callbackAddr:       callbackAddr,
+		options:      opts,
+		networkState: state,
+		grpcConn:     conn,
+		grpcClient:   pb.NewRewriterServiceClient(conn),
+		callbackAddr: callbackAddr,
 	}, nil
 }
 
@@ -272,14 +265,10 @@ func (r *sentioRewriter) Close() error {
 
 // Rewrite is the unified entry point. Flow:
 //
-//  1. Phase 1 — call rewriter with empty options to get
-//     `original_accessed_tables` (used to discover SELECT-side
-//     tables we need to mapper-resolve).
-//  2. Build SelectStmtArgs from the table mapper for the discovered
-//     tables, build DynamicArgs from the auth-filtered network state.
-//  3. Phase 2 — call rewriter with both arg arms; the rewriter
-//     applies whichever matches the parsed statement type.
-//  4. Stash the input SQL so RewriteErrorMessage can use it as
+//  1. Build DynamicArgs from the auth-filtered network state.
+//  2. Call the rewriter gRPC service with the dynamic-args arm; the
+//     rewriter applies whichever rule matches the parsed statement type.
+//  3. Stash the input SQL so RewriteErrorMessage can use it as
 //     context.
 //
 // Error handling: callers (the rewrite plugin) are expected to be
@@ -298,24 +287,6 @@ func (r *sentioRewriter) Rewrite(ctx context.Context, sql, effectiveAccount stri
 	r.lastEffectiveAccount = effectiveAccount
 	r.mu.Unlock()
 
-	// Static-args path is opt-in. When disabled, we skip phase 1
-	// (the empty-options call that enumerates accessed tables) and
-	// every sentio table-mapper lookup, sending only dynamic_args on
-	// a single round-trip.
-	var staticArgs *pb.RewriteTableStaticArgs
-	if r.factory.options.EnableStaticMapping {
-		astTableNames, err := r.discoverAccessedTables(ctx, sql)
-		if err != nil {
-			return RewriteResult{}, fmt.Errorf("phase 1 AST parse: %w", err)
-		}
-		tables := r.parseTables(astTableNames)
-		localMap, remoteMap, err := r.factory.buildSentioTableMappings(ctx, tables)
-		if err != nil {
-			return RewriteResult{}, fmt.Errorf("build sentio table mappings: %w", err)
-		}
-		staticArgs = buildStaticArgs(localMap, remoteMap)
-	}
-
 	dbMap, knownPhys, err := r.factory.buildDatabaseMap(effectiveAccount)
 	if err != nil {
 		return RewriteResult{}, fmt.Errorf("build database map: %w", err)
@@ -323,7 +294,7 @@ func (r *sentioRewriter) Rewrite(ctx context.Context, sql, effectiveAccount stri
 	logicalToRemote, remoteUpstreams := r.factory.buildRemoteUpstreams(dbMap)
 	dynArgs := buildDynamicArgs(dbMap, knownPhys, r.sess.LogicalDatabaseName(), r.sess.PhysicalDatabaseName(), r.factory.options.Delim, logicalToRemote, remoteUpstreams)
 
-	if staticArgs == nil && len(dbMap) == 0 && len(knownPhys) == 0 && r.sess.LogicalDatabaseName() == "" {
+	if len(dbMap) == 0 && len(knownPhys) == 0 && r.sess.LogicalDatabaseName() == "" {
 		// Nothing to do — no mappings, no session context. No gRPC
 		// call, so classification / accessed-tables / rewrite maps
 		// are unknown.
@@ -332,11 +303,11 @@ func (r *sentioRewriter) Rewrite(ctx context.Context, sql, effectiveAccount stri
 
 	req := &pb.RewriteSQLRequest{
 		Sql:     sql,
-		Options: []*pb.RewriteOption{rewriteOption(staticArgs, dynArgs)},
+		Options: []*pb.RewriteOption{rewriteOption(dynArgs)},
 	}
 	resp, err := r.callWithTimeout(ctx, req)
 	if err != nil {
-		return RewriteResult{}, fmt.Errorf("phase 2 rewrite: %w", err)
+		return RewriteResult{}, fmt.Errorf("rewrite: %w", err)
 	}
 	switch resp.Code {
 	case pb.RewriteCode_Success:
@@ -449,7 +420,7 @@ func (r *sentioRewriter) RewriteErrorMessage(ctx context.Context, message string
 	req := &pb.RewriteErrorMessageRequest{
 		Sql:          sql,
 		ErrorMessage: message,
-		Options:      []*pb.RewriteOption{rewriteOption(nil, dynArgs)},
+		Options:      []*pb.RewriteOption{rewriteOption(dynArgs)},
 	}
 	timeout := r.factory.options.Timeout
 	if timeout == 0 {
@@ -469,34 +440,6 @@ func (r *sentioRewriter) RewriteErrorMessage(ctx context.Context, message string
 	return resp.ErrorAfterRewrite, nil
 }
 
-// discoverAccessedTables runs a phase-1 rewrite call with empty
-// options to obtain the list of tables the SQL references. The
-// rewriter returns structured AccessedTable entries (proto tag 12);
-// we project each to "<original_db>.<original_table>" for parseTables
-// to consume. Entries with an empty OriginalDatabase project to a
-// bare table name and parseTables filters them out — phase 1 only
-// resolves sentio table mappings for fully-qualified references.
-func (r *sentioRewriter) discoverAccessedTables(ctx context.Context, sql string) ([]string, error) {
-	resp, err := r.callWithTimeout(ctx, &pb.RewriteSQLRequest{Sql: sql})
-	if err != nil {
-		return nil, fmt.Errorf("gRPC: %w", err)
-	}
-	switch resp.Code {
-	case pb.RewriteCode_Success:
-		entries := resp.GetOriginalAccessedTables()
-		out := make([]string, 0, len(entries))
-		for _, t := range entries {
-			out = append(out, t.GetOriginalDatabase()+"."+t.GetOriginalTable())
-		}
-		return out, nil
-	case pb.RewriteCode_UnsupportedStatement:
-		// Phase 2 will short-circuit the same way.
-		return nil, nil
-	default:
-		return nil, fmt.Errorf("phase 1 (code=%s): %s", resp.Code, resp.Message)
-	}
-}
-
 // callWithTimeout wraps the gRPC Rewrite call with the configured
 // per-call timeout.
 func (r *sentioRewriter) callWithTimeout(ctx context.Context, req *pb.RewriteSQLRequest) (*pb.RewriteSQLResponse, error) {
@@ -507,30 +450,6 @@ func (r *sentioRewriter) callWithTimeout(ctx context.Context, req *pb.RewriteSQL
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	return r.factory.grpcClient.Rewrite(ctxWithTimeout, req)
-}
-
-// parseTables splits "<db>.<table>" references into ParsedTable. With
-// the deprecation of the `sentio_<id>.` prefix, the dbPart IS the
-// logical database / processor id.
-func (r *sentioRewriter) parseTables(astTableNames []string) []ParsedTable {
-	seen := make(map[string]bool)
-	var out []ParsedTable
-	for _, name := range astTableNames {
-		if seen[name] {
-			continue
-		}
-		parts := strings.SplitN(name, ".", 2)
-		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-			continue
-		}
-		seen[name] = true
-		out = append(out, ParsedTable{
-			FullMatch:   name,
-			ProcessorId: parts[0],
-			TableName:   parts[1],
-		})
-	}
-	return out
 }
 
 // resolveRemoteCredentials returns the (user, password) pair the
@@ -568,76 +487,6 @@ func (f *SentioNetworkFactory) resolveRemoteCredentials(peerIndexerInfo network.
 			"indexer_id", peerIndexerInfo.IndexerId, "err", err)
 	}
 	return "", ""
-}
-
-// buildSentioTableMappings resolves each ParsedTable to either a
-// local "<database>.<physical_table>" mapping or a remote() mapping,
-// using the table-mapper factory + NetworkState.
-func (f *SentioNetworkFactory) buildSentioTableMappings(ctx context.Context, tables []ParsedTable) (map[string]TableWithDatabase, map[string]RemoteTable, error) {
-	if len(tables) == 0 {
-		return nil, nil, nil
-	}
-	localMap := make(map[string]TableWithDatabase)
-	remoteMap := make(map[string]RemoteTable)
-
-	processorTables := make(map[string][]ParsedTable)
-	for _, t := range tables {
-		processorTables[t.ProcessorId] = append(processorTables[t.ProcessorId], t)
-	}
-
-	for processorId, pTables := range processorTables {
-		allocations, ok := f.networkState.RetrieveProcessorAllocation(processorId)
-		if !ok || len(allocations) == 0 {
-			log.Debugw("no processor allocation, skipping sentio table rewrite", "processor_id", processorId)
-			continue
-		}
-		allocation := allocations[0]
-
-		indexerInfo, ok := f.networkState.RetrieveIndexerInfo(allocation.IndexerId)
-		if !ok {
-			return nil, nil, fmt.Errorf("indexer info not found for indexer_id=%d (processor_id=%s)", allocation.IndexerId, processorId)
-		}
-
-		processorInfo, ok := f.networkState.RetrieveProcessorInfo(processorId)
-		if !ok {
-			processorInfo = network.ProcessorInfo{ProcessorId: processorId}
-		}
-
-		mapper, err := f.tableMapperFactory(ctx, processorId, indexerInfo, processorInfo)
-		if err != nil {
-			return nil, nil, fmt.Errorf("create table mapper for processor_id=%s: %w", processorId, err)
-		}
-		database := mapper.Database()
-
-		indexerAddr := fmt.Sprintf("%s:%d", indexerInfo.IndexerUrl, indexerInfo.ClickhouseProxyPort)
-		isLocal := false
-		if f.clusterMgr != nil {
-			isLocal = f.clusterMgr.HasReplica(indexerAddr)
-		} else {
-			isLocal = indexerAddr == f.options.Upstream
-		}
-
-		all := mapper.All()
-		for _, t := range pTables {
-			physical, ok := all[t.TableName]
-			if !ok {
-				continue
-			}
-			if isLocal {
-				localMap[t.FullMatch] = TableWithDatabase{Database: database, Table: physical}
-				continue
-			}
-			user, password := f.resolveRemoteCredentials(indexerInfo)
-			remoteMap[t.FullMatch] = RemoteTable{
-				Addr:     f.callbackAddr,
-				Database: database,
-				Table:    physical,
-				User:     route.FormatRouteUser(indexerAddr, user),
-				Password: password,
-			}
-		}
-	}
-	return localMap, remoteMap, nil
 }
 
 // buildDatabaseMap returns the database_map (logical → physical) and
