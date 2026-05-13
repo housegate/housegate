@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "registry",
+    srcs = [
+        "access.go",
+        "databases.go",
+        "inmemory.go",
+        "topology.go",
+    ],
+    importpath = "housegate/housegate/pkg/registry",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "registry_test",
+    srcs = ["inmemory_test.go"],
+    deps = [":registry"],
+)
