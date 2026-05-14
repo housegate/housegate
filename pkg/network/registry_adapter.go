@@ -118,9 +118,20 @@ func (a *RegistryAdapter) IsOperator(owner, signer string) bool {
 	return a.s.IsOperator(AccountAddress(owner), AccountAddress(signer))
 }
 
+// --- DatabaseMetadata
+
+func (a *RegistryAdapter) ProcessorId(databaseId string) (string, bool) {
+	info, ok := a.s.RetrieveDatabaseInfo(Database(databaseId))
+	if !ok || info.ProcessorId == "" {
+		return "", false
+	}
+	return info.ProcessorId, true
+}
+
 // Compile-time checks.
 var (
-	_ registry.Topology  = (*RegistryAdapter)(nil)
-	_ registry.Databases = (*RegistryAdapter)(nil)
-	_ registry.Access    = (*RegistryAdapter)(nil)
+	_ registry.Topology         = (*RegistryAdapter)(nil)
+	_ registry.Databases        = (*RegistryAdapter)(nil)
+	_ registry.Access           = (*RegistryAdapter)(nil)
+	_ registry.DatabaseMetadata = (*RegistryAdapter)(nil)
 )

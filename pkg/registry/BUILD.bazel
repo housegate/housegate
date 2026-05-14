@@ -6,6 +6,7 @@ go_library(
         "access.go",
         "databases.go",
         "inmemory.go",
+        "metadata.go",
         "topology.go",
     ],
     importpath = "housegate/housegate/pkg/registry",

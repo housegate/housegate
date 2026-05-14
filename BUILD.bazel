@@ -42,7 +42,6 @@ go_library(
         "//pkg/proxy",
         "//pkg/registry",
         "//pkg/rewriter",
-        "//pkg/secretsload",
         "//pkg/sqlmeta",
         "@com_github_redis_go_redis_v9//:go-redis",
         "@org_golang_x_sync//errgroup",

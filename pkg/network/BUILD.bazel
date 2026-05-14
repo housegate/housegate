@@ -34,6 +34,7 @@ go_test(
     srcs = [
         "inmemory_commitgate_observer_test.go",
         "permission_commitgate_observer_test.go",
+        "registry_adapter_test.go",
         "rpc_test.go",
         "yaml_test.go",
     ],
