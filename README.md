@@ -116,7 +116,7 @@ HOUSEGATE_AGE_IDENTITY_FILE=~/.housegate.age \
 | Key | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
 | `relay_private_key_hex` | string | No | `` | Ethereum private key used to sign proxy-to-proxy (`__route__`) JWS tokens. All relays in a cluster should share this key, and its address must be in `auth.allowed_addresses`. |
-| `ckh_manager_config_path` | string | Yes (relay) | `` | `sentio-core` ClickHouseManager config path; the SQL rewriter needs it to resolve table mappings |
+| `ckh_manager_config_path` | string | Yes (relay) | `` | Legacy ClickHouseManager config path; the SQL rewriter needs it to resolve table mappings |
 | `credential_replace_enabled` | bool | No | `true` | Replace client-supplied ClickHouse credentials with operator-managed ones before forwarding upstream |
 | `redis_default_addr` | string | No | `` | Fallback Redis address used whenever a feature section leaves its own `redis_addr` blank |
 

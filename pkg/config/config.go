@@ -71,7 +71,7 @@ type Config struct {
 	LogLevel string `json:"log_level"                yaml:"log_level"`
 
 	// LogFile redirects cmd/housegate's own log output (housegate code +
-	// sentio-core transitive deps via its own -log-file mechanism) to the
+	// any transitive deps that honour the -log-file flag) to the
 	// given path. Empty = stderr. ANSI color is disabled when writing to
 	// a file. Operators should manage rotation externally (logrotate /
 	// copy-truncate); the file is opened O_APPEND|O_CREATE. Like

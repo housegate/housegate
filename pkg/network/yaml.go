@@ -22,13 +22,13 @@ type networkStateYAML struct {
 
 // databasePermYAMLMap is map[Database]dbAuthYAML — one indirection so
 // the inner permission can be either a YAML list (["read", "write"])
-// or an integer bitmap (matches sentio-core's wire encoding).
+// or an integer bitmap (matches the upstream wire encoding).
 type databasePermYAMLMap map[Database]dbAuthYAML
 
 // dbAuthYAML accepts permissions in three forms:
 //   - YAML list of named flags:    ["read", "write", "admin"]
 //   - YAML scalar string flag:     "admin"
-//   - YAML integer bitmap:         3   (= read|write, sentio-core wire format)
+//   - YAML integer bitmap:         3   (= read|write, upstream wire format)
 //
 // All three resolve to the same registry.DbAuth bitmap. Unknown flag
 // names error out at load time so a typo ("rread") doesn't silently

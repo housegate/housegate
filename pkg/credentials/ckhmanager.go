@@ -1,9 +1,9 @@
 package credentials
 
-// ckhmanager.go — CredentialProvider that parses the sentio-core
+// ckhmanager.go — CredentialProvider that parses the legacy
 // ckhmanager YAML config format directly. housegate only consumes the
 // `credential.subgraph` block (username + password), so we drop the
-// transitive sentio-core dependency and own the parse here.
+// transitive ckhmanager dependency and own the parse here.
 //
 // The full ckhmanager schema (roles, settings, shards, addresses,
 // tiers, ...) is ignored on purpose — both legacy GetConnInfo paths
@@ -22,7 +22,7 @@ import (
 )
 
 // ckhManagerYAML captures the only fields housegate consumes from a
-// sentio-core ckhmanager config file. Unknown fields (roles, shards,
+// legacy ckhmanager config file. Unknown fields (roles, shards,
 // settings, ...) are silently ignored by yaml.Unmarshal, so the same
 // config files keep working unchanged.
 //
@@ -48,7 +48,7 @@ type staticCredentialProvider struct {
 	password string
 }
 
-// LoadCkhManagerYAMLProvider parses the sentio-core ckhmanager config
+// LoadCkhManagerYAMLProvider parses the legacy ckhmanager config
 // at `path` and returns a CredentialProvider seeded with
 // `credential.subgraph.{username, password}`. age-encrypted files
 // (`.age` suffix) are decrypted transparently via pkg/secretsload

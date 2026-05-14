@@ -5,7 +5,7 @@
 // is a read-only consumer.
 //
 // Types defined here are standalone — JSON and YAML tags are kept
-// wire-compatible with sentio-core's network/state package so YAML
+// wire-compatible with the upstream statemirror producer so YAML
 // fixtures and RPC payloads exchange unchanged. Future schema
 // additions must be mirrored explicitly; there is no transitive
 // type-alias path.
@@ -59,9 +59,9 @@ type DatabasePermissions = map[Database]DbAuth
 const WildcardAddress AccountAddress = "0x0000000000000000000000000000000000000000"
 
 // IndexerInfo carries the network-visible address of a single indexer
-// node (URL + per-service ports). JSON/YAML tags match the producer
-// (sentio-core/network/state.IndexerInfo) so wire-format compatibility
-// is preserved.
+// node (URL + per-service ports). JSON/YAML tags match the upstream
+// statemirror producer's IndexerInfo so wire-format compatibility is
+// preserved.
 type IndexerInfo struct {
 	IndexerId           uint64 `json:"indexerId" yaml:"indexer_id"`
 	IndexerUrl          string `json:"indexerUrl" yaml:"indexer_url"`
@@ -72,21 +72,21 @@ type IndexerInfo struct {
 }
 
 // ProcessorAllocation links a processor to the indexer(s) that host
-// its data. Wire-compatible with sentio-core/network/state.
+// its data. Wire-compatible with the upstream statemirror producer.
 type ProcessorAllocation struct {
 	ProcessorId string `json:"processorId" yaml:"processor_id"`
 	IndexerId   uint64 `json:"indexerId" yaml:"indexer_id"`
 }
 
 // ProcessorInfo is processor-level metadata used for table-name
-// rewriting. Wire-compatible with sentio-core/network/state.
+// rewriting. Wire-compatible with the upstream statemirror producer.
 type ProcessorInfo struct {
 	ProcessorId         string `json:"processorId" yaml:"processor_id"`
 	EntitySchema        string `json:"entitySchema" yaml:"entity_schema"`
 	EntitySchemaVersion int32  `json:"entitySchemaVersion" yaml:"entity_schema_version"`
 }
 
-// DatabaseType mirrors sentio-core's on-chain Types.DatabaseType enum:
+// DatabaseType mirrors the on-chain Types.DatabaseType enum:
 // USER = 0 (user-owned database), PROCESSOR = 1 (processor replica).
 type DatabaseType uint8
 
