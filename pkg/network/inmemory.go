@@ -7,9 +7,13 @@ import (
 	"housegate/housegate/pkg/registry"
 )
 
-// InMemoryNetworkState is a test-friendly State backed by plain
-// maps. Exported fields let tests assemble state directly; the type
-// still honours the interface's read methods.
+// InMemoryNetworkState is the in-memory implementation of
+// registry.Registry used by YAML fixtures and tests. The
+// commitgate observers in this package mutate the exported fields
+// directly under InMemoryNetworkState.mu when DDL/DCL events fire;
+// the public read methods translate the producer-shaped fat
+// records (IndexerInfo, DatabaseInfo, ...) into the slim
+// registry.Registry vocabulary at the boundary.
 type InMemoryNetworkState struct {
 	mu                   sync.RWMutex
 	ProcessorAllocations map[string][]ProcessorAllocation
@@ -21,7 +25,7 @@ type InMemoryNetworkState struct {
 }
 
 // NewInMemoryNetworkState returns an empty InMemoryNetworkState with
-// non-nil maps.
+// all maps initialised.
 func NewInMemoryNetworkState() *InMemoryNetworkState {
 	return &InMemoryNetworkState{
 		ProcessorAllocations: make(map[string][]ProcessorAllocation),
@@ -33,89 +37,104 @@ func NewInMemoryNetworkState() *InMemoryNetworkState {
 	}
 }
 
-func (s *InMemoryNetworkState) RetrieveProcessorAllocation(processorId ProcessorId) ([]ProcessorAllocation, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	allocs, ok := s.ProcessorAllocations[processorId]
-	return allocs, ok
-}
+// --- registry.Topology
 
-func (s *InMemoryNetworkState) RetrieveIndexerInfo(indexerId IndexId) (IndexerInfo, bool) {
+func (s *InMemoryNetworkState) ProxyByIndexerId(indexerId uint64) (registry.ProxyAddress, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	info, ok := s.IndexerInfos[indexerId]
-	return info, ok
-}
-
-func (s *InMemoryNetworkState) RetrieveProcessorInfo(processorId ProcessorId) (ProcessorInfo, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	info, ok := s.ProcessorInfos[processorId]
-	return info, ok
-}
-
-func (s *InMemoryNetworkState) RetrieveAllIndexerInfos() map[uint64]IndexerInfo {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	cp := make(map[uint64]IndexerInfo, len(s.IndexerInfos))
-	for k, v := range s.IndexerInfos {
-		cp[k] = v
-	}
-	return cp
-}
-
-func (s *InMemoryNetworkState) RetrieveDatabaseInfo(database Database) (DatabaseInfo, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	info, ok := s.DatabaseInfos[database]
-	return info, ok
-}
-
-func (s *InMemoryNetworkState) RetrieveAllDatabaseInfos() map[Database]DatabaseInfo {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	cp := make(map[Database]DatabaseInfo, len(s.DatabaseInfos))
-	for k, v := range s.DatabaseInfos {
-		cp[k] = v
-	}
-	return cp
-}
-
-func (s *InMemoryNetworkState) RetrieveDatabasePermissions(account AccountAddress) (DatabasePermissions, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	perms, ok := s.DatabasePermissions[account]
 	if !ok {
+		return registry.ProxyAddress{}, false
+	}
+	return registry.ProxyAddress{
+		Url:           info.IndexerUrl,
+		HousegatePort: info.ClickhouseProxyPort,
+	}, true
+}
+
+func (s *InMemoryNetworkState) AllIndexers() map[uint64]registry.ProxyAddress {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make(map[uint64]registry.ProxyAddress, len(s.IndexerInfos))
+	for id, info := range s.IndexerInfos {
+		out[id] = registry.ProxyAddress{
+			Url:           info.IndexerUrl,
+			HousegatePort: info.ClickhouseProxyPort,
+		}
+	}
+	return out
+}
+
+// --- registry.Databases
+
+func (s *InMemoryNetworkState) Get(id string) (registry.Database, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	info, ok := s.DatabaseInfos[Database(id)]
+	if !ok {
+		return registry.Database{}, false
+	}
+	return convertDatabase(info), true
+}
+
+func (s *InMemoryNetworkState) All() map[string]registry.Database {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make(map[string]registry.Database, len(s.DatabaseInfos))
+	for db, info := range s.DatabaseInfos {
+		out[string(db)] = convertDatabase(info)
+	}
+	return out
+}
+
+// --- registry.Access
+
+// PermissionsFor returns the per-database permission bitmap for an
+// account. The map merges the account's explicit grants with any
+// wildcard grants held by WildcardAddress; callers should treat the
+// returned map as opaque and not modify it.
+func (s *InMemoryNetworkState) PermissionsFor(account string) (map[string]registry.DbAuth, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	addr := AccountAddress(account)
+	perms, ok := s.DatabasePermissions[addr]
+	wildcard, wildcardOk := s.DatabasePermissions[WildcardAddress]
+	if !ok && !wildcardOk {
 		return nil, false
 	}
-	cp := make(DatabasePermissions, len(perms))
-	for k, v := range perms {
-		cp[k] = v
+	out := make(map[string]registry.DbAuth, len(perms)+len(wildcard))
+	if ok {
+		for db, auth := range perms {
+			out[string(db)] = auth
+		}
 	}
-	return cp, true
+	if wildcardOk && addr != WildcardAddress {
+		for db, auth := range wildcard {
+			out[string(db)] |= auth
+		}
+	}
+	return out, true
 }
 
-// AccountHasPermissionForDatabase checks whether `account` has the
-// permission bit `action` on `database`. The Owner bit is expected to
-// be stored explicitly in DatabasePermissions — no implicit promotion
-// from DatabaseInfo.Owner. An unknown database is an error.
-func (s *InMemoryNetworkState) AccountHasPermissionForDatabase(account AccountAddress, database Database, action registry.Action) (bool, error) {
+func (s *InMemoryNetworkState) HasPermission(account, database string, action registry.Action) (bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-
-	_, ok := s.DatabaseInfos[database]
-	if !ok {
+	if _, ok := s.DatabaseInfos[Database(database)]; !ok {
 		return false, fmt.Errorf("database not found: %s", database)
 	}
-
 	auth := registry.DbAuth(0)
-	if perms, ok := s.DatabasePermissions[account]; ok {
-		auth |= perms[database]
+	if perms, ok := s.DatabasePermissions[AccountAddress(account)]; ok {
+		auth |= perms[Database(database)]
 	}
-	return auth&registry.DbAuth(action) != 0, nil
+	if AccountAddress(account) != WildcardAddress {
+		if perms, ok := s.DatabasePermissions[WildcardAddress]; ok {
+			auth |= perms[Database(database)]
+		}
+	}
+	return promotePermissionBits(auth)&registry.DbAuth(action) != 0, nil
 }
 
-func (s *InMemoryNetworkState) IsOperator(owner, signer AccountAddress) bool {
+func (s *InMemoryNetworkState) IsOperator(owner, signer string) bool {
 	if owner == "" || signer == "" {
 		return false
 	}
@@ -124,13 +143,15 @@ func (s *InMemoryNetworkState) IsOperator(owner, signer AccountAddress) bool {
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	ops, ok := s.Operators[owner]
+	ops, ok := s.Operators[AccountAddress(owner)]
 	if !ok {
 		return false
 	}
-	return ops[signer]
+	return ops[AccountAddress(signer)]
 }
 
+// SetOperator is a test/dev helper: mark signer as an authorised
+// operator for owner (allowed=true) or revoke (allowed=false).
 func (s *InMemoryNetworkState) SetOperator(owner, signer AccountAddress, allowed bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -151,9 +172,23 @@ func (s *InMemoryNetworkState) SetOperator(owner, signer AccountAddress, allowed
 	ops[signer] = true
 }
 
-func (s *InMemoryNetworkState) Type() StateType {
-	return StateTypeInMemory
+// convertDatabase translates the producer-shaped DatabaseInfo into
+// the slim registry.Database that the proxy chain consumes.
+func convertDatabase(info DatabaseInfo) registry.Database {
+	var tables []registry.Table
+	if len(info.Tables) > 0 {
+		tables = make([]registry.Table, len(info.Tables))
+		for i, t := range info.Tables {
+			tables[i] = registry.Table{Id: t.TableId}
+		}
+	}
+	return registry.Database{
+		IndexerId:     info.IndexerId,
+		PendingDelete: info.PendingDelete,
+		Tables:        tables,
+	}
 }
 
-// Compile-time check the test fake satisfies the production interface.
-var _ State = (*InMemoryNetworkState)(nil)
+// Compile-time check that InMemoryNetworkState satisfies the
+// consumer-side contract housegate's proxy chain depends on.
+var _ registry.Registry = (*InMemoryNetworkState)(nil)

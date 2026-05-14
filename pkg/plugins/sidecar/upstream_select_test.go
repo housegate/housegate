@@ -28,7 +28,7 @@ func buildNS(t *testing.T,
 	for k, v := range perms {
 		ns.DatabasePermissions[k] = v
 	}
-	return network.NewRegistryAdapter(ns)
+	return ns
 }
 
 // fixedRand returns a *rand.Rand seeded with `seed` so picks are
@@ -144,7 +144,7 @@ func TestSelector_Pick_NoBoundIndexers_Errors(t *testing.T) {
 }
 
 func TestSelector_Pick_EmptyState_Errors(t *testing.T) {
-	reg := network.NewRegistryAdapter(network.NewInMemoryNetworkState())
+	reg := network.NewInMemoryNetworkState()
 	sel := &Selector{Topology: reg, Databases: reg, Access: reg, Account: "0xalice"}
 	_, err := sel.Pick(fixedRand(0))
 	if err == nil {

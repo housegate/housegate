@@ -1,20 +1,19 @@
 package network
 
-// rpc.go — JSON-RPC-backed read-only NetworkState consumer for sidecar
+// rpc.go — JSON-RPC-backed read-only registry.Registry for sidecar
 // mode. Hits a sentio storage-node JSON-RPC endpoint (e.g.
-// http://node.example.com:10003) and translates four sentio_* methods to
-// the State interface methods sidecar.Selector consults:
+// http://node.example.com:10003) and translates four sentio_* methods
+// to the registry.Registry methods sidecar.Selector consults:
 //
-//   sentio_getIndexerInfos          -> RetrieveAllIndexerInfos
-//   sentio_getIndexerInfoById       -> RetrieveIndexerInfo
-//   sentio_getDatabaseInfoById      -> RetrieveDatabaseInfo
-//   sentio_getDatabaseInfoByAccount -> RetrieveDatabasePermissions
+//   sentio_getIndexerInfos          -> AllIndexers
+//   sentio_getIndexerInfoById       -> ProxyByIndexerId
+//   sentio_getDatabaseInfoById      -> Get
+//   sentio_getDatabaseInfoByAccount -> PermissionsFor
 //
-// Methods used only by server mode (RetrieveProcessorAllocation,
-// RetrieveProcessorInfo, RetrieveAllDatabaseInfos,
-// AccountHasPermissionForDatabase) return zero values + false; this
-// backend is intentionally restricted to sidecar use today, and config
-// validation rejects it in server mode.
+// Methods that have no JSON-RPC counterpart (All, HasPermission)
+// return zero-value/error responses. This backend is intentionally
+// restricted to sidecar use; config validation rejects it in server
+// mode where the missing methods would be exercised.
 
 import (
 	"bytes"
@@ -30,9 +29,10 @@ import (
 	"housegate/housegate/pkg/registry"
 )
 
-// RpcNetworkState is a read-only State backed by a sentio storage-node
-// JSON-RPC endpoint. Concurrency-safe: nextID is atomic; the http
-// client is goroutine-safe; no other state is held between calls.
+// RpcNetworkState is a read-only registry.Registry backed by a sentio
+// storage-node JSON-RPC endpoint. Concurrency-safe: nextID is atomic;
+// the http client is goroutine-safe; no other state is held between
+// calls.
 type RpcNetworkState struct {
 	endpoint string
 	client   *http.Client
@@ -50,8 +50,9 @@ type RpcOptions struct {
 	HTTPClient *http.Client
 }
 
-// NewRpcNetworkState returns a State reading from the given JSON-RPC
-// endpoint. The endpoint must be a full URL, e.g. http://host:port .
+// NewRpcNetworkState returns a registry.Registry reading from the
+// given JSON-RPC endpoint. The endpoint must be a full URL, e.g.
+// http://host:port .
 func NewRpcNetworkState(endpoint string, opts RpcOptions) (*RpcNetworkState, error) {
 	if endpoint == "" {
 		return nil, fmt.Errorf("rpc network state: endpoint is required")
@@ -143,73 +144,93 @@ func (r *RpcNetworkState) call(ctx context.Context, method string, params []inte
 	return true, nil
 }
 
-// RetrieveAllIndexerInfos calls sentio_getIndexerInfos. Returns a non-nil
-// (possibly empty) map on success; nil signals the call itself failed
-// so callers can distinguish "no indexers" from "lookup error".
-func (r *RpcNetworkState) RetrieveAllIndexerInfos() map[uint64]IndexerInfo {
+// --- registry.Topology
+
+// AllIndexers calls sentio_getIndexerInfos. Returns a non-nil
+// (possibly empty) map on success; nil signals the call itself
+// failed so callers can distinguish "no indexers" from "lookup
+// error".
+func (r *RpcNetworkState) AllIndexers() map[uint64]registry.ProxyAddress {
 	var infos []IndexerInfo
 	ok, err := r.call(context.Background(), "sentio_getIndexerInfos", nil, &infos)
 	if err != nil {
 		log.Warnfe(err, "rpc: getIndexerInfos failed")
 		return nil
 	}
-	out := make(map[uint64]IndexerInfo, len(infos))
+	out := make(map[uint64]registry.ProxyAddress, len(infos))
 	if !ok {
 		return out
 	}
 	for _, info := range infos {
-		out[info.IndexerId] = info
+		out[info.IndexerId] = registry.ProxyAddress{
+			Url:           info.IndexerUrl,
+			HousegatePort: info.ClickhouseProxyPort,
+		}
 	}
 	return out
 }
 
-// RetrieveIndexerInfo calls sentio_getIndexerInfoById. ok=false signals
+// ProxyByIndexerId calls sentio_getIndexerInfoById. ok=false signals
 // either a network-level error (logged) or a JSON-null result.
-func (r *RpcNetworkState) RetrieveIndexerInfo(indexerId IndexId) (IndexerInfo, bool) {
+func (r *RpcNetworkState) ProxyByIndexerId(indexerId uint64) (registry.ProxyAddress, bool) {
 	var info IndexerInfo
 	ok, err := r.call(context.Background(), "sentio_getIndexerInfoById", []interface{}{indexerId}, &info)
 	if err != nil {
 		log.Warnfe(err, "rpc: getIndexerInfoById id=%v failed", indexerId)
-		return IndexerInfo{}, false
+		return registry.ProxyAddress{}, false
 	}
 	if !ok {
-		return IndexerInfo{}, false
+		return registry.ProxyAddress{}, false
 	}
-	return info, true
+	return registry.ProxyAddress{
+		Url:           info.IndexerUrl,
+		HousegatePort: info.ClickhouseProxyPort,
+	}, true
 }
 
-// RetrieveDatabaseInfo calls sentio_getDatabaseInfoById.
-func (r *RpcNetworkState) RetrieveDatabaseInfo(database Database) (DatabaseInfo, bool) {
+// --- registry.Databases
+
+// Get calls sentio_getDatabaseInfoById.
+func (r *RpcNetworkState) Get(database string) (registry.Database, bool) {
 	var info DatabaseInfo
-	ok, err := r.call(context.Background(), "sentio_getDatabaseInfoById", []interface{}{string(database)}, &info)
+	ok, err := r.call(context.Background(), "sentio_getDatabaseInfoById", []interface{}{database}, &info)
 	if err != nil {
 		log.Warnfe(err, "rpc: getDatabaseInfoById id=%v failed", database)
-		return DatabaseInfo{}, false
+		return registry.Database{}, false
 	}
 	if !ok {
-		return DatabaseInfo{}, false
+		return registry.Database{}, false
 	}
-	return info, true
+	return convertDatabase(info), true
 }
 
-// RetrieveDatabasePermissions calls sentio_getDatabaseInfoByAccount and
-// returns a map granting DbAuthOwner on every database the account owns.
-// The RPC returns a list (an account can own multiple databases across
+// All has no JSON-RPC counterpart (no enumeration method); returns an
+// empty map so callers that range over it stay safe.
+func (r *RpcNetworkState) All() map[string]registry.Database {
+	return map[string]registry.Database{}
+}
+
+// --- registry.Access
+
+// PermissionsFor calls sentio_getDatabaseInfoByAccount and returns a
+// map granting DbAuthOwner on every database the account owns. The
+// RPC returns a list (an account can own multiple databases across
 // indexers); the schema does not yet model a per-account permission
 // bitmap, so sidecar.Selector only needs "which databases is this
-// account allowed to query at all", which is satisfied by mapping each
-// owned database to DbAuthOwner (Owner implies all capabilities).
+// account allowed to query at all", which is satisfied by mapping
+// each owned database to DbAuthOwner (Owner implies all capabilities).
 //
 // An account with no database returns (empty-but-non-nil map, true) —
-// matches the State contract: ok=false is reserved for lookup failure.
-func (r *RpcNetworkState) RetrieveDatabasePermissions(account AccountAddress) (DatabasePermissions, bool) {
+// matches the registry.Access contract: ok=false is reserved for
+// lookup failure.
+func (r *RpcNetworkState) PermissionsFor(account string) (map[string]registry.DbAuth, bool) {
 	var infos []DatabaseInfo
-	ok, err := r.call(context.Background(), "sentio_getDatabaseInfoByAccount", []interface{}{string(account)}, &infos)
+	ok, err := r.call(context.Background(), "sentio_getDatabaseInfoByAccount", []interface{}{account}, &infos)
 	if err != nil {
 		log.Warnfe(err, "rpc: getDatabaseInfoByAccount account=%v failed", account)
 		return nil, false
 	}
-	out := make(DatabasePermissions, len(infos))
+	out := make(map[string]registry.DbAuth, len(infos))
 	if !ok {
 		return out, true
 	}
@@ -217,46 +238,25 @@ func (r *RpcNetworkState) RetrieveDatabasePermissions(account AccountAddress) (D
 		if info.DatabaseId == "" {
 			continue
 		}
-		out[Database(info.DatabaseId)] = registry.DbAuthOwner
+		out[info.DatabaseId] = registry.DbAuthOwner
 	}
 	return out, true
 }
 
-// RetrieveProcessorAllocation: not supported by the RPC backend.
-// Sidecar mode never calls this; server-mode wiring is rejected by
-// config validation.
-func (r *RpcNetworkState) RetrieveProcessorAllocation(processorId ProcessorId) ([]ProcessorAllocation, bool) {
-	return nil, false
+// HasPermission has no JSON-RPC counterpart in the sidecar mode this
+// backend serves; server-side gates run against the redis-statemirror
+// path instead. Always returns an error.
+func (r *RpcNetworkState) HasPermission(account, database string, action registry.Action) (bool, error) {
+	return false, fmt.Errorf("rpc network state: HasPermission not supported")
 }
 
-// RetrieveProcessorInfo: not supported by the RPC backend (server-mode only).
-func (r *RpcNetworkState) RetrieveProcessorInfo(processorId ProcessorId) (ProcessorInfo, bool) {
-	return ProcessorInfo{}, false
-}
-
-// RetrieveAllDatabaseInfos: not supported — the RPC has no enumeration
-// method. Returns an empty map so callers that range over it stay safe.
-func (r *RpcNetworkState) RetrieveAllDatabaseInfos() map[Database]DatabaseInfo {
-	return map[Database]DatabaseInfo{}
-}
-
-// AccountHasPermissionForDatabase: not supported by the RPC backend.
-// Server-mode-only entrypoint; sidecar.Selector consults
-// RetrieveDatabasePermissions directly.
-func (r *RpcNetworkState) AccountHasPermissionForDatabase(account AccountAddress, database Database, action registry.Action) (bool, error) {
-	return false, fmt.Errorf("rpc network state: AccountHasPermissionForDatabase not supported")
-}
-
-// IsOperator: not supported by the RPC backend. The server-side
-// PermissionCommitGateObserver runs against RedisNetworkState (which
-// reads from the on-chain mirror); sidecar mode never invokes this
-// method.
-func (r *RpcNetworkState) IsOperator(owner, signer AccountAddress) bool {
+// IsOperator has no JSON-RPC counterpart. Returns true only for the
+// trivial owner==signer case; the server-side
+// PermissionCommitGateObserver runs against the redis-mirror path
+// (sentio-node's adapter) where IsOperator is fully supported.
+func (r *RpcNetworkState) IsOperator(owner, signer string) bool {
 	return owner != "" && owner == signer
 }
 
-// Type returns StateTypeRpc.
-func (r *RpcNetworkState) Type() StateType { return StateTypeRpc }
-
-// Compile-time check the rpc backend satisfies State.
-var _ State = (*RpcNetworkState)(nil)
+// Compile-time check the rpc backend satisfies registry.Registry.
+var _ registry.Registry = (*RpcNetworkState)(nil)

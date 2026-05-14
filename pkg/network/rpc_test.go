@@ -95,17 +95,7 @@ func TestNewRpcNetworkState_EmptyEndpoint(t *testing.T) {
 	}
 }
 
-func TestRpcNetworkState_Type(t *testing.T) {
-	rpc, err := network.NewRpcNetworkState("http://example.invalid", network.RpcOptions{})
-	if err != nil {
-		t.Fatalf("NewRpcNetworkState: %v", err)
-	}
-	if rpc.Type() != network.StateTypeRpc {
-		t.Errorf("Type=%q want %q", rpc.Type(), network.StateTypeRpc)
-	}
-}
-
-func TestRpcNetworkState_RetrieveAllIndexerInfos(t *testing.T) {
+func TestRpcNetworkState_AllIndexers(t *testing.T) {
 	rpc, _ := newFakeRpc(t, map[string]rpcMethod{
 		"sentio_getIndexerInfos": func(_ []interface{}) (interface{}, *rpcErrEnvelope) {
 			return []network.IndexerInfo{
@@ -115,19 +105,19 @@ func TestRpcNetworkState_RetrieveAllIndexerInfos(t *testing.T) {
 		},
 	})
 
-	all := rpc.RetrieveAllIndexerInfos()
+	all := rpc.AllIndexers()
 	if len(all) != 2 {
-		t.Fatalf("want 2 infos, got %d (%v)", len(all), all)
+		t.Fatalf("want 2 entries, got %d (%v)", len(all), all)
 	}
-	if all[0].IndexerUrl != "node-a" {
-		t.Errorf("indexer 0: got %q", all[0].IndexerUrl)
+	if all[0].Url != "node-a" {
+		t.Errorf("indexer 0: got %q", all[0].Url)
 	}
-	if all[1].ClickhouseProxyPort != 9002 {
-		t.Errorf("indexer 1 port: got %d", all[1].ClickhouseProxyPort)
+	if all[1].HousegatePort != 9002 {
+		t.Errorf("indexer 1 port: got %d", all[1].HousegatePort)
 	}
 }
 
-func TestRpcNetworkState_RetrieveAllIndexerInfos_Empty(t *testing.T) {
+func TestRpcNetworkState_AllIndexers_Empty(t *testing.T) {
 	// Server returns an empty array — caller must see a non-nil empty
 	// map (nil is reserved for transport errors).
 	rpc, _ := newFakeRpc(t, map[string]rpcMethod{
@@ -135,7 +125,7 @@ func TestRpcNetworkState_RetrieveAllIndexerInfos_Empty(t *testing.T) {
 			return []network.IndexerInfo{}, nil
 		},
 	})
-	all := rpc.RetrieveAllIndexerInfos()
+	all := rpc.AllIndexers()
 	if all == nil {
 		t.Error("empty array: want non-nil map for ok-but-empty")
 	}
@@ -144,7 +134,7 @@ func TestRpcNetworkState_RetrieveAllIndexerInfos_Empty(t *testing.T) {
 	}
 }
 
-func TestRpcNetworkState_RetrieveIndexerInfo(t *testing.T) {
+func TestRpcNetworkState_ProxyByIndexerId(t *testing.T) {
 	rpc, _ := newFakeRpc(t, map[string]rpcMethod{
 		"sentio_getIndexerInfoById": func(params []interface{}) (interface{}, *rpcErrEnvelope) {
 			id, _ := params[0].(float64)
@@ -155,19 +145,19 @@ func TestRpcNetworkState_RetrieveIndexerInfo(t *testing.T) {
 		},
 	})
 
-	info, ok := rpc.RetrieveIndexerInfo(1)
+	addr, ok := rpc.ProxyByIndexerId(1)
 	if !ok {
 		t.Fatal("hit: want ok=true")
 	}
-	if info.IndexerUrl != "node-b" || info.ClickhouseProxyPort != 9002 {
-		t.Errorf("hit: got %+v", info)
+	if addr.Url != "node-b" || addr.HousegatePort != 9002 {
+		t.Errorf("hit: got %+v", addr)
 	}
-	if _, ok := rpc.RetrieveIndexerInfo(999); ok {
+	if _, ok := rpc.ProxyByIndexerId(999); ok {
 		t.Error("miss: want ok=false")
 	}
 }
 
-func TestRpcNetworkState_RetrieveDatabaseInfo(t *testing.T) {
+func TestRpcNetworkState_Get(t *testing.T) {
 	rpc, _ := newFakeRpc(t, map[string]rpcMethod{
 		"sentio_getDatabaseInfoById": func(params []interface{}) (interface{}, *rpcErrEnvelope) {
 			id, _ := params[0].(string)
@@ -178,16 +168,16 @@ func TestRpcNetworkState_RetrieveDatabaseInfo(t *testing.T) {
 		},
 	})
 
-	info, ok := rpc.RetrieveDatabaseInfo("db-1")
-	if !ok || info.IndexerId != 7 {
-		t.Errorf("hit: ok=%v info=%+v", ok, info)
+	db, ok := rpc.Get("db-1")
+	if !ok || db.IndexerId != 7 {
+		t.Errorf("hit: ok=%v db=%+v", ok, db)
 	}
-	if _, ok := rpc.RetrieveDatabaseInfo("db-other"); ok {
+	if _, ok := rpc.Get("db-other"); ok {
 		t.Error("miss: want ok=false")
 	}
 }
 
-func TestRpcNetworkState_RetrieveDatabasePermissions(t *testing.T) {
+func TestRpcNetworkState_PermissionsFor(t *testing.T) {
 	rpc, _ := newFakeRpc(t, map[string]rpcMethod{
 		"sentio_getDatabaseInfoByAccount": func(params []interface{}) (interface{}, *rpcErrEnvelope) {
 			acct, _ := params[0].(string)
@@ -202,14 +192,14 @@ func TestRpcNetworkState_RetrieveDatabasePermissions(t *testing.T) {
 		},
 	})
 
-	perms, ok := rpc.RetrieveDatabasePermissions("0xabc")
+	perms, ok := rpc.PermissionsFor("0xabc")
 	if !ok {
 		t.Fatal("owned account: want ok=true")
 	}
 	if len(perms) != 2 {
 		t.Fatalf("owned account: want 2 entries, got %v", perms)
 	}
-	for _, db := range []network.Database{"db-1", "db-2"} {
+	for _, db := range []string{"db-1", "db-2"} {
 		auth, has := perms[db]
 		if !has {
 			t.Fatalf("owned account: want %s in perms, got %v", db, perms)
@@ -220,7 +210,7 @@ func TestRpcNetworkState_RetrieveDatabasePermissions(t *testing.T) {
 	}
 
 	// Unknown account → null result, still ok=true with empty map.
-	perms, ok = rpc.RetrieveDatabasePermissions("0xunknown")
+	perms, ok = rpc.PermissionsFor("0xunknown")
 	if !ok {
 		t.Fatal("unknown account: want ok=true")
 	}
@@ -238,12 +228,12 @@ func TestRpcNetworkState_RpcErrorEnvelope(t *testing.T) {
 			return nil, &rpcErrEnvelope{Code: -32000, Message: "boom"}
 		},
 	})
-	if _, ok := rpc.RetrieveIndexerInfo(1); ok {
+	if _, ok := rpc.ProxyByIndexerId(1); ok {
 		t.Error("rpc error: want ok=false")
 	}
 	// All-indexers transport failure returns nil (not empty map) so
 	// the caller can distinguish "lookup failed" from "no indexers".
-	if all := rpc.RetrieveAllIndexerInfos(); all != nil {
+	if all := rpc.AllIndexers(); all != nil {
 		t.Errorf("rpc error: want nil map, got %v", all)
 	}
 }
@@ -251,22 +241,16 @@ func TestRpcNetworkState_RpcErrorEnvelope(t *testing.T) {
 func TestRpcNetworkState_UnsupportedServerMethods(t *testing.T) {
 	rpc, _ := network.NewRpcNetworkState("http://example.invalid", network.RpcOptions{})
 
-	if _, ok := rpc.RetrieveProcessorAllocation("p"); ok {
-		t.Error("ProcessorAllocation: want ok=false on rpc backend")
+	if all := rpc.All(); all == nil || len(all) != 0 {
+		t.Errorf("All: want empty (non-nil) map, got %v", all)
 	}
-	if _, ok := rpc.RetrieveProcessorInfo("p"); ok {
-		t.Error("ProcessorInfo: want ok=false on rpc backend")
-	}
-	if all := rpc.RetrieveAllDatabaseInfos(); all == nil || len(all) != 0 {
-		t.Errorf("AllDatabaseInfos: want empty (non-nil) map, got %v", all)
-	}
-	if _, err := rpc.AccountHasPermissionForDatabase("a", "d", registry.Read); err == nil {
-		t.Error("AccountHasPermissionForDatabase: want error on rpc backend")
+	if _, err := rpc.HasPermission("a", "d", registry.Read); err == nil {
+		t.Error("HasPermission: want error on rpc backend")
 	}
 }
 
 // TestRpcNetworkState_SelectorIntegration runs the actual sidecar
-// Selector against an RPC-backed State end-to-end.
+// Selector against an RPC-backed Registry end-to-end.
 func TestRpcNetworkState_SelectorIntegration(t *testing.T) {
 	const account = "0xabc"
 
@@ -295,8 +279,7 @@ func TestRpcNetworkState_SelectorIntegration(t *testing.T) {
 	})
 
 	// Permissioned tier: account owns db-1 on indexer 1.
-	reg := network.NewRegistryAdapter(rpc)
-	sel := &sidecar.Selector{Topology: reg, Databases: reg, Access: reg, Account: string(account)}
+	sel := &sidecar.Selector{Topology: rpc, Databases: rpc, Access: rpc, Account: account}
 	choice, err := sel.Pick(rand.New(rand.NewSource(1)))
 	if err != nil {
 		t.Fatalf("Pick(owned account): %v", err)
@@ -309,7 +292,7 @@ func TestRpcNetworkState_SelectorIntegration(t *testing.T) {
 	}
 
 	// Bootstrap tier: unknown account falls through to any bound peer.
-	selBoot := &sidecar.Selector{Topology: reg, Databases: reg, Access: reg, Account: "0xstranger"}
+	selBoot := &sidecar.Selector{Topology: rpc, Databases: rpc, Access: rpc, Account: "0xstranger"}
 	bootChoice, err := selBoot.Pick(rand.New(rand.NewSource(1)))
 	if err != nil {
 		t.Fatalf("Pick(unknown account): %v", err)

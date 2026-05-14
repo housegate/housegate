@@ -37,9 +37,9 @@ func TestLoadExampleConfig(t *testing.T) {
 		t.Error("database_permissions: expected at least one entry")
 	}
 
-	// RetrieveAllDatabaseInfos must echo what was loaded.
-	all := s.RetrieveAllDatabaseInfos()
+	// All must echo what was loaded.
+	all := s.All()
 	if len(all) != len(s.DatabaseInfos) {
-		t.Errorf("RetrieveAllDatabaseInfos count=%d, want %d", len(all), len(s.DatabaseInfos))
+		t.Errorf("All count=%d, want %d", len(all), len(s.DatabaseInfos))
 	}
 }
