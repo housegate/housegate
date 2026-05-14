@@ -27,7 +27,7 @@ func main() {
 	}
 
 	// Install the console handler before anything logs so our slog-based
-	// pkg/log records share the zap-development format with any sentio-core
+	// pkg/log records share the zap-development format with any
 	// transitive-dep logs that still flow through. Level is driven by
 	// pkg/log's LevelVar so log.SetLevel still applies.
 	// loadConfigWithOverrides may swap the writer to a file later.
@@ -68,7 +68,7 @@ func loadConfigWithOverrides() config.Config {
 	idleTimeout := flag.String("idle-timeout", "", "connection idle timeout, e.g. 5m (overrides config/env)")
 	logQueries := flag.Bool("log-queries", true, "log SQL query content")
 	logLevel := flag.String("log-level", "", `package-default log level: "debug" / "info" / "warn" / "error" / "fatal" (overrides config/env HOUSEGATE_LOG_LEVEL)`)
-	// -log-file may be registered transitively by sentio-core/common/log
+	// -log-file may be registered transitively by another logging package
 	// when something in the dependency graph still imports it. We pick up
 	// its value via flag.Lookup inside maybeSwapLogFile (nil-safe — falls
 	// through to HOUSEGATE_LOG_FILE / cfg.LogFile when the flag is absent).

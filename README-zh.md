@@ -116,7 +116,7 @@ HOUSEGATE_AGE_IDENTITY_FILE=~/.housegate.age \
 | Key | 类型 | 必填 | 默认值 | 说明 |
 |-----|------|------|--------|------|
 | `relay_private_key_hex` | string | 否 | `` | 用于签 proxy-to-proxy（`__route__`）JWS token 的以太坊私钥。集群内所有 relay 应共用，且其地址必须出现在 `auth.allowed_addresses` 中。 |
-| `ckh_manager_config_path` | string | 是（relay） | `` | `sentio-core` ClickHouseManager 配置路径；SQL rewriter 解析 table mapping 时需要 |
+| `ckh_manager_config_path` | string | 是（relay） | `` | 旧版 ClickHouseManager 配置路径；SQL rewriter 解析 table mapping 时需要 |
 | `credential_replace_enabled` | bool | 否 | `true` | 转发到 upstream 前用运维管理的凭证替换客户端 ClickHouse 凭证 |
 | `redis_default_addr` | string | 否 | `` | 当某个特性 section 自己的 `redis_addr` 留空时使用的 Redis 兜底地址 |
 

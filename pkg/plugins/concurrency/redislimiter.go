@@ -2,10 +2,10 @@ package concurrency
 
 // redislimiter.go — Redis + Lua concurrency limiter, generic dimension model.
 //
-// Adapted from sentio-core/common/requestlimiter. The original tracks four
-// hardcoded dimensions (user / project / IP / tier); this port generalises
-// to N dimensions passed per-call. Adding a new dimension is one
-// resolver-fn change in the Plugin; the limiter and Lua scripts stay put.
+// Adapted from an upstream request-limiter that tracked four hardcoded
+// dimensions (user / project / IP / tier); this port generalises to N
+// dimensions passed per-call. Adding a new dimension is one resolver-fn
+// change in the Plugin; the limiter and Lua scripts stay put.
 //
 // Storage model is unchanged: one Redis sorted set per (dimension, value),
 // member = limiterID, score = acquire timestamp. ZREMRANGEBYSCORE on every
@@ -101,7 +101,7 @@ func keyOf(dimName, value string) string {
 	return b.String()
 }
 
-// acquireScript is a variadic-key port of sentio-core's acquire.lua.
+// acquireScript is a variadic-key port of the upstream acquire.lua.
 //
 //	KEYS    = one Redis key per dimension
 //	ARGV[1] = current timestamp (seconds since epoch)

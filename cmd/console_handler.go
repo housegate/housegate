@@ -13,9 +13,9 @@ import (
 	"housegate/housegate/pkg/log"
 )
 
-// consoleHandler is a slog.Handler whose output visually matches sentio-core's
-// zap "development" encoder, so housegate's own logs and sentio-core
-// transitive deps' logs share one pattern.
+// consoleHandler is a slog.Handler whose output visually matches a
+// zap "development" encoder, so housegate's own logs and any transitive
+// deps' logs share one pattern.
 //
 // Format (TAB-separated columns):
 //

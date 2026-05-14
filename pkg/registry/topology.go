@@ -4,9 +4,9 @@
 // housegate's proxy chain consumes; implementations are supplied by the
 // embedder.
 //
-// The package deliberately avoids sentio-core types — its vocabulary is
-// the narrow slice of fields housegate actually reads. Producers that
-// have richer data should adapt at the boundary.
+// The package deliberately avoids external producer types — its
+// vocabulary is the narrow slice of fields housegate actually reads.
+// Producers that have richer data should adapt at the boundary.
 package registry
 
 // ProxyAddress is the dialing target for a peer housegate instance

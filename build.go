@@ -357,7 +357,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		usageClient = opts.UsageClient
 	} else if cfg.Usage.Enabled && cfg.Usage.SentioNodeAddr != "" {
 		// The in-process sentio-node usage client was moved out of
-		// housegate (it pulled in a sentio-core proto dep). Embedders
+		// housegate (it pulled in an external proto dep). Embedders
 		// must inject via Options.UsageClient; the standalone binary
 		// gets a no-op until a host wires one up.
 		log.Warnw("usage tracking requested in config but no UsageClient was injected; query billing disabled (embedders must supply Options.UsageClient)",

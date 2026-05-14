@@ -4,8 +4,8 @@
 #
 # Loaded by pkg/network.LoadNetworkStateFromYAML(); the schema is
 # defined by networkStateYAML in pkg/network/yaml.go and the leaf
-# structs are sentio-core types (IndexerInfo, ProcessorAllocation,
-# ProcessorInfo, DatabaseInfo) so field names match what the
+# structs (IndexerInfo, ProcessorAllocation, ProcessorInfo,
+# DatabaseInfo) keep field names wire-compatible with what the
 # Redis-backed implementation reads.
 #
 # Five top-level sections — only `indexer_infos` is strictly required;
@@ -127,7 +127,7 @@ database_infos:
 #   - single name:         "read"
 #   - integer bitmap:      3                            ← read|write
 #                                                          (matches
-#                                                          sentio-core
+#                                                          upstream
 #                                                          wire format)
 #
 # Names are case-insensitive (read|write|admin). Unknown names cause
