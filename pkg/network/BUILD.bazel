@@ -6,7 +6,6 @@ go_library(
         "inmemory.go",
         "inmemory_commitgate_observer.go",
         "permission_commitgate_observer.go",
-        "registry_adapter.go",
         "rpc.go",
         "types.go",
         "yaml.go",
@@ -29,7 +28,6 @@ go_test(
     srcs = [
         "inmemory_commitgate_observer_test.go",
         "permission_commitgate_observer_test.go",
-        "registry_adapter_test.go",
         "rpc_test.go",
         "yaml_test.go",
     ],

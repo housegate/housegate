@@ -20,81 +20,6 @@ import (
 	"housegate/housegate/pkg/registry"
 )
 
-// State is the read-only view of the network the proxy consumes.
-// Implementations are in-memory (InMemoryNetworkState) for tests and
-// YAML fixtures, RPC-backed (RpcNetworkState) for sidecar mode, and
-// embedder-injected (sentio-node's Redis adapter) for production.
-//
-// All methods must be safe for concurrent use — every query handler
-// goroutine reads from a single shared State, and an embedder-supplied
-// implementation may be receiving updates concurrently.
-//
-// Lookup methods return (zero, false) when the key is not known and
-// reserve error returns for cases where the lookup itself failed
-// (network partition, malformed mirror entry, missing prerequisite).
-// "Not found" is not an error — callers commonly probe for existence.
-//
-// AccountHasPermissionForDatabase is the one exception: an unknown
-// database is reported as an error because permission checks against
-// non-existent databases almost always indicate a caller bug.
-type State interface {
-	// RetrieveProcessorAllocation returns which indexers host
-	// processorId. The slice is owned by the caller — implementations
-	// must not retain it for later mutation. Returns ok=false when no
-	// allocation exists for processorId.
-	RetrieveProcessorAllocation(processorId ProcessorId) ([]ProcessorAllocation, bool)
-
-	// RetrieveIndexerInfo returns connection information (URL + port
-	// numbers) for indexerId. Returns ok=false when the indexer is
-	// unknown to the network state.
-	RetrieveIndexerInfo(indexerId IndexId) (IndexerInfo, bool)
-
-	// RetrieveProcessorInfo returns processor metadata (entity schema
-	// + schema version). Used by SQL rewriting to know which physical
-	// table layout a processor's queries should target.
-	RetrieveProcessorInfo(processorId ProcessorId) (ProcessorInfo, bool)
-
-	// RetrieveAllIndexerInfos returns a snapshot of every known
-	// indexer keyed by indexer id. The returned map is owned by the
-	// caller and safe to retain. Forwarding-only proxies use this to
-	// enumerate routing targets.
-	RetrieveAllIndexerInfos() map[uint64]IndexerInfo
-
-	// RetrieveDatabaseInfo returns the metadata record (indexer
-	// assignment, db type, owning processor, pending-delete state)
-	// for a logical database. Returns ok=false when the database has
-	// not been declared in the network registry.
-	RetrieveDatabaseInfo(database Database) (DatabaseInfo, bool)
-
-	// RetrieveAllDatabaseInfos returns a snapshot of every known
-	// logical database keyed by Database id. The returned map is
-	// owned by the caller. The rewriter uses this for anonymous
-	// connections, where every database is considered accessible
-	// (the auth filter is skipped because there is no account to
-	// scope it by).
-	RetrieveAllDatabaseInfos() map[Database]DatabaseInfo
-
-	// RetrieveDatabasePermissions returns the per-database permission
-	// bitmap an account holds. The map is owned by the caller. An
-	// account that exists but has no permissions on record returns
-	// (empty-map, true); ok=false signals the lookup itself failed
-	// (e.g. mirror unavailable).
-	RetrieveDatabasePermissions(account AccountAddress) (DatabasePermissions, bool)
-
-	// AccountHasPermissionForDatabase reports whether `account` has
-	// the permission bit `action` on `database`. The standard
-	// hierarchy (Owner ⇒ Admin|Write|Read; Write ⇒ Read) is applied
-	// by implementations.
-	//
-	// Returns an error when the database is not found, or when the
-	// underlying mirror lookup fails.
-	AccountHasPermissionForDatabase(account AccountAddress, database Database, action Action) (bool, error)
-
-	IsOperator(owner, signer AccountAddress) bool
-
-	Type() StateType
-}
-
 // IndexId is the dense uint64 identifier for an indexer. Statemirror
 // keys indexers by stringified id; the in-memory form is uint64.
 type IndexId = uint64
@@ -196,11 +121,3 @@ type DatabaseInfo struct {
 func ParseIndexerId(s string) (IndexId, error) {
 	return strconv.ParseUint(s, 10, 64)
 }
-
-type StateType string
-
-const (
-	StateTypeRedis    StateType = "redis"
-	StateTypeInMemory StateType = "in_memory"
-	StateTypeRpc      StateType = "rpc"
-)

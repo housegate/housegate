@@ -24,8 +24,8 @@ import (
 	"housegate/housegate/pkg/config"
 	"housegate/housegate/pkg/credentials"
 	"housegate/housegate/pkg/log"
-	"housegate/housegate/pkg/network"
 	"housegate/housegate/pkg/plugins/commitgate"
+	"housegate/housegate/pkg/registry"
 	"housegate/housegate/pkg/rewriter"
 )
 
@@ -63,15 +63,15 @@ type Proxy interface {
 type Options struct {
 	Config *config.Config // required
 
-	// NetworkState, if non-nil, replaces the network.State that
+	// NetworkState, if non-nil, replaces the registry.Registry that
 	// housegate would otherwise construct from Config.NetworkState.Source
-	// (e.g. Redis-backed or YAML fixture). Embedding hosts (e.g.
-	// sentio-node) inject a read-only chain-backed state directly. When
-	// set, BOTH the network_state.source validation rule AND the source
-	// value itself are bypassed; the injected state is used verbatim.
-	// The operator-visible source field is irrelevant in that path even
-	// if non-empty.
-	NetworkState network.State
+	// (e.g. YAML fixture or sidecar-mode RPC backend). Embedding hosts
+	// (e.g. sentio-node) inject a redis-statemirror-backed implementation
+	// directly. When set, BOTH the network_state.source validation rule
+	// AND the source value itself are bypassed; the injected registry is
+	// used verbatim. The operator-visible source field is irrelevant in
+	// that path even if non-empty.
+	NetworkState registry.Registry
 	Validator    auth.Validator
 	Rewriter     rewriter.Factory
 	CredProvider credentials.CredentialProvider

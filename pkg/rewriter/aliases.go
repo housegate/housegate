@@ -10,7 +10,6 @@ type (
 	ProcessorAllocation = network.ProcessorAllocation
 	ProcessorInfo       = network.ProcessorInfo
 	AccountAddress      = network.AccountAddress
-	NetworkState        = network.State
 )
 
 // Re-exported in-memory state for tests/external callers.

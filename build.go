@@ -48,7 +48,7 @@ import (
 // (sentio-node) must construct it themselves and inject via
 // Options.NetworkState. Specifying a Redis source through cfg returns
 // an error directing operators to the injection path.
-func loadNetworkState(cfg *config.Config, rf *redisFactory) (network.State, error) {
+func loadNetworkState(cfg *config.Config, rf *redisFactory) (registry.Registry, error) {
 	if cfg.NetworkState.IsYAMLSource() {
 		yamlState, err := network.LoadNetworkStateFromYAML(cfg.NetworkState.Source)
 		if err != nil {
@@ -220,26 +220,24 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			"platform_operator_addresses", len(cfg.Auth.PlatformOperatorAddresses))
 	}
 
-	var ns network.State
+	var reg registry.Registry
 	if opts.NetworkState != nil {
-		ns = opts.NetworkState
+		reg = opts.NetworkState
 	} else {
 		var err error
-		ns, err = loadNetworkState(cfg, rf)
+		reg, err = loadNetworkState(cfg, rf)
 		if err != nil {
 			return nil, err
 		}
 	}
-	log.Infow("network state loaded", "type", ns.Type(), "source", cfg.NetworkState.Source)
-	// reg is the narrow-interface view of ns that every plugin
-	// constructed below consumes. ns itself is retained for Type()
-	// dispatch and the InMemoryNetworkState type-assertion path; PR3
-	// removes both once pkg/network goes away.
-	reg := network.NewRegistryAdapter(ns)
-	switch ns.Type() {
-	case network.StateTypeInMemory:
+	log.Infow("network state loaded", "source", cfg.NetworkState.Source)
+	// InMemoryNetworkState (YAML fixtures, dev mode) carries enough
+	// state for the in-memory commitgate observer to mutate as DDL
+	// passes through. Other Registry implementations (RPC backend,
+	// sentio-node's redis adapter) are opaque to this wiring path.
+	if ims, ok := reg.(*network.InMemoryNetworkState); ok {
 		opts.CommitGateObservers = append(opts.CommitGateObservers, network.NewInMemoryCommitGateObserver(
-			ns.(*network.InMemoryNetworkState), []sqlmeta.StatementType{
+			ims, []sqlmeta.StatementType{
 				sqlmeta.StatementTypeCreateDatabase, sqlmeta.StatementTypeDropDatabase,
 				sqlmeta.StatementTypeCreateTable, sqlmeta.StatementTypeDropTable,
 				sqlmeta.StatementTypeGrant, sqlmeta.StatementTypeRevoke,
@@ -542,7 +540,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		// session to a random bound peer discovered via NetworkState.
 		// Three dial attempts cover the common case where the first
 		// random pick is briefly unreachable.
-		if ns == nil {
+		if reg == nil {
 			return nil, fmt.Errorf("no cluster manager, no upstream, and no NetworkState — nowhere to forward")
 		}
 		var lastErr error
@@ -670,20 +668,19 @@ func buildSidecarDialer(opts Options, rf *redisFactory, account string, obs *pro
 		}, nil
 	}
 
-	var ns network.State
+	var reg registry.Registry
 	if opts.NetworkState != nil {
-		ns = opts.NetworkState
+		reg = opts.NetworkState
 	} else {
 		var err error
-		ns, err = loadNetworkState(cfg, rf)
+		reg, err = loadNetworkState(cfg, rf)
 		if err != nil {
 			return nil, err
 		}
 	}
-	if ns == nil {
+	if reg == nil {
 		return nil, fmt.Errorf("sidecar auto-discovery: NetworkState is nil")
 	}
-	reg := network.NewRegistryAdapter(ns)
 	selector := &sidecar.Selector{
 		Topology:  reg,
 		Databases: reg,

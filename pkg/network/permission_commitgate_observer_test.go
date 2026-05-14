@@ -34,7 +34,7 @@ func fixturePerm(db Database, owner AccountAddress, account AccountAddress, perm
 }
 
 func newPermObserver(st *InMemoryNetworkState) *PermissionCommitGateObserver {
-	return NewPermissionCommitGateObserver(NewRegistryAdapter(st))
+	return NewPermissionCommitGateObserver(st)
 }
 
 // TestPermission_RejectsUnspecified: principle #1 — an unclassified
