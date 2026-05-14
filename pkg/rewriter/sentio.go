@@ -21,10 +21,10 @@ import (
 	"housegate/housegate/pkg/credentials"
 	"housegate/housegate/pkg/network"
 	"housegate/housegate/pkg/peer"
+	"housegate/housegate/pkg/registry"
 	"housegate/housegate/pkg/route"
 	"housegate/housegate/pkg/sqlmeta"
 	pb "housegate/housegate/protos"
-	"sentioxyz/sentio-core/network/registry"
 )
 
 // statementTypeFromProto narrows the protobuf enum to the
@@ -103,7 +103,7 @@ func privilegesDeltasFromProto(in []*pb.PrivilegeDelta) []sqlmeta.PrivilegeDelta
 // "rewriting disabled" rather than continuing to retry forever.
 type SentioNetworkFactory struct {
 	options      Options
-	networkState network.State
+	registry     registry.Registry
 	grpcConn     *grpc.ClientConn
 	grpcClient   pb.RewriterServiceClient
 	callbackAddr string                         // resolved address for remote() callback
@@ -132,7 +132,7 @@ const peerLoginTokenTTL = 1 * time.Minute
 
 // NewSentioNetworkFactory dials the sql-rewriter gRPC service and
 // returns a Factory that produces per-connection Rewriters.
-func NewSentioNetworkFactory(opts Options, state network.State) (*SentioNetworkFactory, error) {
+func NewSentioNetworkFactory(opts Options, reg registry.Registry) (*SentioNetworkFactory, error) {
 	if opts.ServiceAddr == "" {
 		return nil, fmt.Errorf("rewriter service_addr is required when rewriter is enabled")
 	}
@@ -164,7 +164,7 @@ func NewSentioNetworkFactory(opts Options, state network.State) (*SentioNetworkF
 
 	return &SentioNetworkFactory{
 		options:      opts,
-		networkState: state,
+		registry:     reg,
 		grpcConn:     conn,
 		grpcClient:   pb.NewRewriterServiceClient(conn),
 		callbackAddr: callbackAddr,
@@ -465,26 +465,30 @@ func (r *sentioRewriter) callWithTimeout(ctx context.Context, req *pb.RewriteSQL
 //
 // Without a peer signer (or when signing fails), falls back to the
 // legacy credential-provider lookup (static ClickHouse credentials).
-func (f *SentioNetworkFactory) resolveRemoteCredentials(peerIndexerInfo network.IndexerInfo) (user, password string) {
+func (f *SentioNetworkFactory) resolveRemoteCredentials(peerIndexerId uint64) (user, password string) {
+	// peer.SignPeerHello reads only target.IndexerId; supply a stub with
+	// that single field. (PR3 will refactor peer to take the id directly
+	// once pkg/network is removed.)
+	stub := network.IndexerInfo{IndexerId: peerIndexerId}
 	if f.peerSigner != nil {
 		ttl := f.peerTokenTTL
 		if ttl <= 0 {
 			ttl = peerLoginTokenTTL
 		}
-		u, p, err := peer.SignPeerHello(f.peerSigner, ttl, peerIndexerInfo, nil)
+		u, p, err := peer.SignPeerHello(f.peerSigner, ttl, stub, nil)
 		if err == nil {
 			return u, p
 		}
 		log.Warnw("peer-relay sign failed; falling back to credProvider",
-			"indexer_id", peerIndexerInfo.IndexerId, "err", err)
+			"indexer_id", peerIndexerId, "err", err)
 	}
 	if f.credProvider != nil {
-		u, p, err := peer.SignPeerHello(nil, 0, peerIndexerInfo, f.credProvider)
+		u, p, err := peer.SignPeerHello(nil, 0, stub, f.credProvider)
 		if err == nil {
 			return u, p
 		}
 		log.Warnw("credential lookup failed",
-			"indexer_id", peerIndexerInfo.IndexerId, "err", err)
+			"indexer_id", peerIndexerId, "err", err)
 	}
 	return "", ""
 }
@@ -525,22 +529,22 @@ func (f *SentioNetworkFactory) buildDatabaseMap(account string) (map[string]stri
 			return nil, []string{f.options.PhysicalDatabase}, nil
 		}
 		// Auth disabled deployment — every known DB is fair game.
-		all := f.networkState.RetrieveAllDatabaseInfos()
+		all := f.registry.All()
 		dbMap := make(map[string]string, len(all))
 		for db, info := range all {
 			if info.PendingDelete {
 				continue
 			}
-			dbMap[string(db)] = f.options.PhysicalDatabase
+			dbMap[db] = f.options.PhysicalDatabase
 		}
 		return dbMap, []string{f.options.PhysicalDatabase}, nil
 	}
 
-	perms, _ := f.networkState.RetrieveDatabasePermissions(network.AccountAddress(account))
+	perms, _ := f.registry.PermissionsFor(account)
 	// Bulk-fetch the full database snapshot once so we can filter out
 	// pending-delete logicals without an O(N) round-trip per permission
 	// entry against the statemirror.
-	allDBs := f.networkState.RetrieveAllDatabaseInfos()
+	allDBs := f.registry.All()
 	dbMap := make(map[string]string, len(perms))
 	for db, auth := range perms {
 		if auth&(registry.DbAuthRead|registry.DbAuthWrite|registry.DbAuthAdmin|registry.DbAuthOwner) == 0 {
@@ -549,7 +553,7 @@ func (f *SentioNetworkFactory) buildDatabaseMap(account string) (map[string]stri
 		if info, ok := allDBs[db]; ok && info.PendingDelete {
 			continue
 		}
-		dbMap[string(db)] = f.options.PhysicalDatabase
+		dbMap[db] = f.options.PhysicalDatabase
 	}
 	return dbMap, []string{f.options.PhysicalDatabase}, nil
 }
@@ -589,11 +593,11 @@ func (f *SentioNetworkFactory) buildRemoteUpstreams(databaseMap map[string]strin
 	// production. Bulk-fetch each map once and resolve every logical
 	// against the cached snapshot — keeps the rewrite path at two
 	// Redis hits regardless of how many logicals the account holds.
-	allDBs := f.networkState.RetrieveAllDatabaseInfos()
+	allDBs := f.registry.All()
 	if len(allDBs) == 0 {
 		return nil, nil
 	}
-	var allIndexers map[uint64]network.IndexerInfo // lazy: only fetch if a remote logical is found
+	var allIndexers map[uint64]registry.ProxyAddress // lazy: only fetch if a remote logical is found
 
 	var (
 		logicalToIndex  map[string]string
@@ -601,7 +605,7 @@ func (f *SentioNetworkFactory) buildRemoteUpstreams(databaseMap map[string]strin
 	)
 
 	for logical := range databaseMap {
-		info, ok := allDBs[network.Database(logical)]
+		info, ok := allDBs[logical]
 		if !ok {
 			continue
 		}
@@ -609,18 +613,18 @@ func (f *SentioNetworkFactory) buildRemoteUpstreams(databaseMap map[string]strin
 			continue
 		}
 		if allIndexers == nil {
-			allIndexers = f.networkState.RetrieveAllIndexerInfos()
+			allIndexers = f.registry.AllIndexers()
 		}
-		indexerInfo, ok := allIndexers[info.IndexerId]
+		peerAddr, ok := allIndexers[info.IndexerId]
 		if !ok {
 			log.Warnw("remote upstream skipped: indexer info missing",
 				"logical", logical, "indexer_id", info.IndexerId)
 			continue
 		}
-		if indexerInfo.IndexerUrl == "" || indexerInfo.ClickhouseProxyPort == 0 {
+		if peerAddr.Url == "" || peerAddr.HousegatePort == 0 {
 			log.Warnw("remote upstream skipped: indexer info incomplete",
 				"logical", logical, "indexer_id", info.IndexerId,
-				"url", indexerInfo.IndexerUrl, "port", indexerInfo.ClickhouseProxyPort)
+				"url", peerAddr.Url, "port", peerAddr.HousegatePort)
 			continue
 		}
 
@@ -631,8 +635,8 @@ func (f *SentioNetworkFactory) buildRemoteUpstreams(databaseMap map[string]strin
 		}
 		logicalToIndex[logical] = key
 		if _, exists := remoteUpstreams[key]; !exists {
-			user, password := f.resolveRemoteCredentials(indexerInfo)
-			peerAddr := fmt.Sprintf("%s:%d", indexerInfo.IndexerUrl, indexerInfo.ClickhouseProxyPort)
+			user, password := f.resolveRemoteCredentials(info.IndexerId)
+			peerAddrStr := fmt.Sprintf("%s:%d", peerAddr.Url, peerAddr.HousegatePort)
 			// Mirror the static-path convention: dial the local
 			// callback address and smuggle the real peer target via
 			// the route envelope. CH-A only ever needs reachability to
@@ -643,7 +647,7 @@ func (f *SentioNetworkFactory) buildRemoteUpstreams(databaseMap map[string]strin
 			// failure mode than the static path and a firewall pain.
 			remoteUpstreams[key] = &pb.RewriteTableDynamicArgs_RemoteUpstream{
 				Addr:     f.callbackAddr,
-				User:     route.FormatRouteUser(peerAddr, user),
+				User:     route.FormatRouteUser(peerAddrStr, user),
 				Password: password,
 			}
 		}

@@ -13,8 +13,8 @@ go_library(
         "//pkg/auth",
         "//pkg/chproto",
         "//pkg/log",
-        "//pkg/network",
         "//pkg/plugin",
+        "//pkg/registry",
         "@com_github_ethereum_go_ethereum//common",
     ],
 )
@@ -32,6 +32,7 @@ go_test(
         "//pkg/chsession",
         "//pkg/network",
         "//pkg/plugin",
+        "//pkg/registry",
         "@org_golang_x_crypto//sha3",
         "@sentio-core//network/registry",
     ],

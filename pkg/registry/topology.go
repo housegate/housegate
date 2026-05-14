@@ -15,7 +15,19 @@ package registry
 // HousegatePort rather than the producer-side "ClickhouseProxyPort".
 type ProxyAddress struct {
 	Url           string
-	HousegatePort int
+	HousegatePort uint16
+}
+
+// Registry is the union of Topology, Databases, and Access — the
+// full read-only network view housegate consumes as a single
+// dependency. Callers that need only a subset should depend on the
+// narrower interface; this composite exists for wiring sites
+// (proxy.Options, multi-method plugins) where it's natural to pass
+// one value.
+type Registry interface {
+	Topology
+	Databases
+	Access
 }
 
 // Topology resolves indexer ids to dialing targets.

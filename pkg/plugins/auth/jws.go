@@ -15,8 +15,8 @@ import (
 
 	"housegate/housegate/pkg/auth"
 	"housegate/housegate/pkg/chsession"
-	"housegate/housegate/pkg/network"
 	"housegate/housegate/pkg/plugin"
+	"housegate/housegate/pkg/registry"
 )
 
 // Plugin authenticates queries using the supplied Validator.
@@ -24,17 +24,18 @@ import (
 // A nil Validator makes the plugin a no-op (every query passes), matching
 // the legacy "auth disabled" behaviour.
 //
-// State, when non-nil, gates the operator-on-behalf-of-owner path: if a
-// query carries a SQL_x_payer setting whose value differs from the
+// Access, when non-nil, gates the operator-on-behalf-of-owner path: if
+// a query carries a SQL_x_payer setting whose value differs from the
 // recovered JWS signer, the plugin validates the operator-of-owner
-// relation via State.IsOperator and (on success) writes the owner address
-// into qctx.Owner so downstream plugins (rewrite, commitgate) gate
-// against the owner's permissions instead of the signer's. A nil State
-// disables this resolution entirely — SQL_x_payer is then ignored at
-// this layer and only the legacy commitgate-side path applies.
+// relation via Access.IsOperator and (on success) writes the owner
+// address into qctx.Owner so downstream plugins (rewrite, commitgate)
+// gate against the owner's permissions instead of the signer's. A nil
+// Access disables this resolution entirely — SQL_x_payer is then
+// ignored at this layer and only the legacy commitgate-side path
+// applies.
 type Plugin struct {
 	Validator auth.Validator
-	State     network.State
+	Access    registry.Access
 }
 
 func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
@@ -140,17 +141,17 @@ func (p *Plugin) resolveOwner(ctx context.Context, qctx *plugin.QueryContext, si
 	if owner == strings.ToLower(signer) {
 		return nil
 	}
-	if p.State == nil {
-		// No State wired — we cannot validate IsOperator at this
+	if p.Access == nil {
+		// No Access wired — we cannot validate IsOperator at this
 		// layer. Leave qctx.Owner empty so the rewriter falls back to
 		// the signer's perms and let the commitgate observer's own
 		// IsOperator check (if wired) gate the DDL/DCL.
 		_, logger := log.FromContext(ctx)
-		logger.Debugw("auth: SQL_x_payer present but State unwired; skipping owner resolution",
+		logger.Debugw("auth: SQL_x_payer present but Access unwired; skipping owner resolution",
 			"signer", signer, "owner", owner)
 		return nil
 	}
-	if !p.State.IsOperator(network.AccountAddress(owner), network.AccountAddress(signer)) {
+	if !p.Access.IsOperator(owner, signer) {
 		return fmt.Errorf("auth: %s is not an operator of %s", signer, owner)
 	}
 	qctx.Owner = owner

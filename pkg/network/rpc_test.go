@@ -296,7 +296,8 @@ func TestRpcNetworkState_SelectorIntegration(t *testing.T) {
 	})
 
 	// Permissioned tier: account owns db-1 on indexer 1.
-	sel := &sidecar.Selector{NS: rpc, Account: account}
+	reg := network.NewRegistryAdapter(rpc)
+	sel := &sidecar.Selector{Topology: reg, Databases: reg, Access: reg, Account: string(account)}
 	choice, err := sel.Pick(rand.New(rand.NewSource(1)))
 	if err != nil {
 		t.Fatalf("Pick(owned account): %v", err)
@@ -304,12 +305,12 @@ func TestRpcNetworkState_SelectorIntegration(t *testing.T) {
 	if choice.IsBootstrap {
 		t.Errorf("owned account: expected permissioned tier, got bootstrap")
 	}
-	if choice.Indexer.IndexerId != 1 {
-		t.Errorf("owned account: want indexer 1, got %+v", choice.Indexer)
+	if choice.IndexerId != 1 {
+		t.Errorf("owned account: want indexer 1, got %+v", choice)
 	}
 
 	// Bootstrap tier: unknown account falls through to any bound peer.
-	selBoot := &sidecar.Selector{NS: rpc, Account: "0xstranger"}
+	selBoot := &sidecar.Selector{Topology: reg, Databases: reg, Access: reg, Account: "0xstranger"}
 	bootChoice, err := selBoot.Pick(rand.New(rand.NewSource(1)))
 	if err != nil {
 		t.Fatalf("Pick(unknown account): %v", err)

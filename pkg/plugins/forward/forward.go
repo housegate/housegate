@@ -36,14 +36,16 @@ import (
 	"housegate/housegate/pkg/network"
 	"housegate/housegate/pkg/peer"
 	"housegate/housegate/pkg/plugin"
+	"housegate/housegate/pkg/registry"
 )
 
 // Plugin pivots a session to a peer's internal-port at handshake time when
 // hello.Database resolves to a database hosted on a different indexer.
 // Cross-DB SQL (without USE) still flows through the rewriter's remote() path.
 type Plugin struct {
-	NetworkState  network.State
-	SelfIndexerID network.IndexId
+	Topology      registry.Topology
+	Databases     registry.Databases
+	SelfIndexerID uint64
 	PeerSigner    auth.PeerSigner
 	PeerTokenTTL  time.Duration
 	// Fallback is the static credential provider used when PeerSigner is nil.
@@ -103,7 +105,7 @@ func (p *Plugin) OnHello(ctx context.Context, sess chsession.Session, hello *chp
 		// per-query logical→physical translation.
 		return nil
 	}
-	info, ok := p.NetworkState.RetrieveDatabaseInfo(network.Database(hello.Database))
+	info, ok := p.Databases.Get(hello.Database)
 	if !ok {
 		return fmt.Errorf("Code: 81. DB::Exception: Database %s doesn't exist", hello.Database)
 	}
@@ -115,12 +117,12 @@ func (p *Plugin) OnHello(ctx context.Context, sess chsession.Session, hello *chp
 
 // pivotToPeer dials the peer's internal-port and drives RebindToPeer so
 // subsequent client packets are forwarded transparently.
-func (p *Plugin) pivotToPeer(ctx context.Context, sess chsession.Session, hello *chproto.ClientHello, peerIndexer network.IndexId) error {
-	peerInfo, ok := p.NetworkState.RetrieveIndexerInfo(peerIndexer)
+func (p *Plugin) pivotToPeer(ctx context.Context, sess chsession.Session, hello *chproto.ClientHello, peerIndexer uint64) error {
+	peerAddr, ok := p.Topology.ProxyByIndexerId(peerIndexer)
 	if !ok {
-		return fmt.Errorf("indexer %d not found in NetworkState", peerIndexer)
+		return fmt.Errorf("indexer %d not found in topology", peerIndexer)
 	}
-	addr := fmt.Sprintf("%s:%d", peerInfo.IndexerUrl, peerInfo.ClickhouseProxyPort)
+	addr := fmt.Sprintf("%s:%d", peerAddr.Url, peerAddr.HousegatePort)
 
 	dialer := p.dialPeer
 	if dialer == nil {
@@ -143,7 +145,11 @@ func (p *Plugin) pivotToPeer(ctx context.Context, sess chsession.Session, hello 
 	// SQL — without it, the peer would skip rewrite (legacy remote()
 	// loopback contract) and the host's logical→physical table mapping
 	// would never be applied.
-	user, password, err := peer.SignPeerHelloForwarded(p.PeerSigner, p.PeerTokenTTL, peerInfo, p.Fallback)
+	// peer.SignPeerHelloForwarded reads target.IndexerId only; supply a
+	// stub IndexerInfo with that one field. (PR3 will refactor peer to
+	// take the id directly when pkg/network is removed.)
+	peerInfoStub := network.IndexerInfo{IndexerId: peerIndexer}
+	user, password, err := peer.SignPeerHelloForwarded(p.PeerSigner, p.PeerTokenTTL, peerInfoStub, p.Fallback)
 	if err != nil {
 		if closer, ok := up.Conn().(interface{ Close() error }); ok {
 			_ = closer.Close()
@@ -205,7 +211,7 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	if !ok {
 		return nil
 	}
-	info, found := p.NetworkState.RetrieveDatabaseInfo(network.Database(newDB))
+	info, found := p.Databases.Get(newDB)
 	if !found {
 		return nil // let CH return the real "doesn't exist" error
 	}
@@ -225,11 +231,11 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 		return p.rebindToLocal(ctx, sess, newDB)
 	}
 
-	peerInfo, ok := p.NetworkState.RetrieveIndexerInfo(info.IndexerId)
+	peerAddr, ok := p.Topology.ProxyByIndexerId(info.IndexerId)
 	if !ok {
-		return fmt.Errorf("indexer %d not found in NetworkState", info.IndexerId)
+		return fmt.Errorf("indexer %d not found in topology", info.IndexerId)
 	}
-	newAddr := fmt.Sprintf("%s:%d", peerInfo.IndexerUrl, peerInfo.ClickhouseProxyPort)
+	newAddr := fmt.Sprintf("%s:%d", peerAddr.Url, peerAddr.HousegatePort)
 
 	if newAddr == st.GetRouteTarget() {
 		return nil // already on the right peer — skip

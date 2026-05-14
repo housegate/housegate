@@ -30,6 +30,7 @@ import (
 	"housegate/housegate/pkg/plugins/sidecar"
 	"housegate/housegate/pkg/plugins/usage"
 	"housegate/housegate/pkg/proxy"
+	"housegate/housegate/pkg/registry"
 	"housegate/housegate/pkg/rewriter"
 	"housegate/housegate/pkg/sqlmeta"
 
@@ -79,7 +80,7 @@ func loadNetworkState(cfg *config.Config, rf *redisFactory) (network.State, erro
 // the external sql-rewriter gRPC service. Returns nil (and logs a
 // warning) when the rewriter service is unavailable at startup — the
 // relay path tolerates a nil factory by skipping rewriting entirely.
-func buildRewriterFactory(cfg *config.Config, ns network.State) rewriter.Factory {
+func buildRewriterFactory(cfg *config.Config, reg registry.Registry) rewriter.Factory {
 	// Router-only deployments (no shard, no upstream) never invoke the
 	// rewriter — every session gets forwarded to a peer instead.
 	if cfg.Shard == nil && cfg.Upstream == "" {
@@ -98,7 +99,7 @@ func buildRewriterFactory(cfg *config.Config, ns network.State) rewriter.Factory
 		AuthEnabled:      cfg.Auth.Enabled,
 		Delim:            cfg.Rewriter.Delimiter,
 	}
-	rwf, err := rewriter.NewSentioNetworkFactory(rwConfig, ns)
+	rwf, err := rewriter.NewSentioNetworkFactory(rwConfig, reg)
 	if err != nil {
 		log.Warne(err, "failed to create rewriter factory, rewriting disabled")
 		return nil
@@ -236,6 +237,11 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		}
 	}
 	log.Infow("network state loaded", "type", ns.Type(), "source", cfg.NetworkState.Source)
+	// reg is the narrow-interface view of ns that every plugin
+	// constructed below consumes. ns itself is retained for Type()
+	// dispatch and the InMemoryNetworkState type-assertion path; PR3
+	// removes both once pkg/network goes away.
+	reg := network.NewRegistryAdapter(ns)
 	switch ns.Type() {
 	case network.StateTypeInMemory:
 		opts.CommitGateObservers = append(opts.CommitGateObservers, network.NewInMemoryCommitGateObserver(
@@ -254,7 +260,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	// gating on the same flag.
 	if cfg.Auth.Enabled {
 		opts.CommitGateObservers = append(
-			[]commitgate.Observer{network.NewPermissionCommitGateObserver(ns)},
+			[]commitgate.Observer{network.NewPermissionCommitGateObserver(reg)},
 			opts.CommitGateObservers...,
 		)
 	}
@@ -272,7 +278,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	if opts.Rewriter != nil {
 		rwFactory = opts.Rewriter
 	} else {
-		rwFactory = buildRewriterFactory(cfg, ns)
+		rwFactory = buildRewriterFactory(cfg, reg)
 		if rwf, ok := rwFactory.(*rewriter.SentioNetworkFactory); ok && rwf != nil {
 			rwf.SetGetIndexerId(opts.GetIndexerId)
 			pushTeardown(func() { rwf.Close() })
@@ -386,7 +392,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	metrics := metricsplugin.New(obs)
 
 	queryPlugins := []plugin.QueryPlugin{
-		&authplugin.Plugin{Validator: validator, State: ns},
+		&authplugin.Plugin{Validator: validator, Access: reg},
 		&usage.Plugin{Client: usageClient},
 	}
 	queryCompletePlugins := []plugin.QueryCompletePlugin{}
@@ -414,7 +420,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 
 	sessstatePlug := &sessionstate.Plugin{Config: cfg.State}
 
-	var selfIndexerID network.IndexId
+	var selfIndexerID uint64
 	if opts.GetIndexerId != nil {
 		selfIndexerID = opts.GetIndexerId()
 	} else {
@@ -444,7 +450,8 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	}
 
 	forwardPlug := &forward.Plugin{
-		NetworkState:     ns,
+		Topology:         reg,
+		Databases:        reg,
 		SelfIndexerID:    selfIndexerID,
 		PeerSigner:       peerSigner,
 		PeerTokenTTL:     cfg.PeerTokenTTL.Duration,
@@ -552,7 +559,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		}
 		var lastErr error
 		for i := 0; i < maxRouterOnlyDialAttempts; i++ {
-			target, err := pickRandomBoundProxy(ns, selfPort)
+			target, err := pickRandomBoundProxy(reg, selfPort)
 			if err != nil {
 				return nil, err
 			}
@@ -688,7 +695,13 @@ func buildSidecarDialer(opts Options, rf *redisFactory, account string, obs *pro
 	if ns == nil {
 		return nil, fmt.Errorf("sidecar auto-discovery: NetworkState is nil")
 	}
-	selector := &sidecar.Selector{NS: ns, Account: network.AccountAddress(account)}
+	reg := network.NewRegistryAdapter(ns)
+	selector := &sidecar.Selector{
+		Topology:  reg,
+		Databases: reg,
+		Access:    reg,
+		Account:   account,
+	}
 	log.Infow("sidecar proxy mode: signing queries with NetworkState upstream auto-discovery",
 		"address", account, "network_state_source", cfg.NetworkState.Source)
 
@@ -703,7 +716,7 @@ func buildSidecarDialer(opts Options, rf *redisFactory, account string, obs *pro
 		}
 		if choice.IsBootstrap {
 			log.Warnw("sidecar bootstrap fallback: no permissioned databases for account",
-				"account", account, "indexer_id", choice.Indexer.IndexerId, "addr", choice.Addr())
+				"account", account, "indexer_id", choice.IndexerId, "addr", choice.Addr())
 			obs.SidecarBootstrapFallback()
 		}
 		return dialRaw(ctx, choice.Addr(), cfg.DialTimeout.Duration)
@@ -719,20 +732,20 @@ func dialRaw(ctx context.Context, addr string, timeout time.Duration) (*chproto.
 	return chproto.NewCodec(conn, chproto.DirToUpstream), nil
 }
 
-func pickRandomBoundProxy(ns network.State, selfPort int) (string, error) {
-	all := ns.RetrieveAllIndexerInfos()
+func pickRandomBoundProxy(topo registry.Topology, selfPort int) (string, error) {
+	all := topo.AllIndexers()
 	if len(all) == 0 {
 		return "", fmt.Errorf("router-only: no indexer infos in network state")
 	}
 	addrs := make([]string, 0, len(all))
-	for _, info := range all {
-		if info.ClickhouseProxyPort == 0 {
+	for _, addr := range all {
+		if addr.HousegatePort == 0 {
 			continue
 		}
-		if selfPort > 0 && int(info.ClickhouseProxyPort) == selfPort && isLocalAddress(info.IndexerUrl) {
+		if selfPort > 0 && int(addr.HousegatePort) == selfPort && isLocalAddress(addr.Url) {
 			continue
 		}
-		addrs = append(addrs, fmt.Sprintf("%s:%d", info.IndexerUrl, info.ClickhouseProxyPort))
+		addrs = append(addrs, fmt.Sprintf("%s:%d", addr.Url, addr.HousegatePort))
 	}
 	if len(addrs) == 0 {
 		return "", fmt.Errorf("router-only: no bound proxies (all self or unbound)")

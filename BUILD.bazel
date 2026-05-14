@@ -40,6 +40,7 @@ go_library(
         "//pkg/plugins/sidecar",
         "//pkg/plugins/usage",
         "//pkg/proxy",
+        "//pkg/registry",
         "//pkg/rewriter",
         "//pkg/secretsload",
         "//pkg/sqlmeta",
