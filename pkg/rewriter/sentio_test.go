@@ -27,7 +27,7 @@ func TestBuildDatabaseMap_FiltersPendingDelete(t *testing.T) {
 				PhysicalDatabase: "phys",
 				AuthEnabled:      false,
 			},
-			networkState: st,
+			registry: network.NewRegistryAdapter(st),
 		}
 		dbMap, _, err := f.buildDatabaseMap("")
 		if err != nil {
@@ -52,7 +52,7 @@ func TestBuildDatabaseMap_FiltersPendingDelete(t *testing.T) {
 				PhysicalDatabase: "phys",
 				AuthEnabled:      true,
 			},
-			networkState: st,
+			registry: network.NewRegistryAdapter(st),
 		}
 		dbMap, _, err := f.buildDatabaseMap("alice")
 		if err != nil {

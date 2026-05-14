@@ -17,6 +17,7 @@ go_library(
         "//pkg/network",
         "//pkg/peer",
         "//pkg/plugin",
+        "//pkg/registry",
     ],
 )
 

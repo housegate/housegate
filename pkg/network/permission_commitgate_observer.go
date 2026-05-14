@@ -4,10 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"sentioxyz/sentio-core/network/registry"
-
 	"housegate/housegate/pkg/chproto"
 	"housegate/housegate/pkg/plugins/commitgate"
+	"housegate/housegate/pkg/registry"
 	"housegate/housegate/pkg/sqlmeta"
 )
 
@@ -78,22 +77,22 @@ import (
 // state. Retries are trivially idempotent and OnStatementException is
 // a no-op.
 type PermissionCommitGateObserver struct {
-	ns State
+	reg registry.Registry
 }
 
 // NewPermissionCommitGateObserver wires the observer against any
-// State implementation. Production deployments should pass the same
-// RedisNetworkState used by the rewriter so that permission and
+// registry.Registry implementation. Production deployments should pass
+// the same registry the rewriter uses so that permission and
 // database_map decisions stay consistent (both consult the same
 // statemirror snapshot).
 //
 // Operator-on-behalf-of-owner DDL/DCL (sidecar with `--sidecar-owner`)
-// is satisfied via State.IsOperator, which production wires off the
-// statemirror's MappingOperators hash; sentio-node's permissions event
-// handler keeps that hash in sync with the on-chain Permissions
-// contract.
-func NewPermissionCommitGateObserver(ns State) *PermissionCommitGateObserver {
-	return &PermissionCommitGateObserver{ns: ns}
+// is satisfied via registry.Access.IsOperator, which production wires
+// off the statemirror's MappingOperators hash; sentio-node's
+// permissions event handler keeps that hash in sync with the on-chain
+// Permissions contract.
+func NewPermissionCommitGateObserver(reg registry.Registry) *PermissionCommitGateObserver {
+	return &PermissionCommitGateObserver{reg: reg}
 }
 
 // permissionPolicy maps a StatementType to the registry.DbAuth bit
@@ -182,7 +181,7 @@ func (o *PermissionCommitGateObserver) BeforeStatement(ctx context.Context, ev *
 	// claim any arbitrary owner.
 	account := AccountAddress(ev.User)
 	if ev.Owner != "" {
-		if !o.ns.IsOperator(AccountAddress(ev.Owner), AccountAddress(ev.User)) {
+		if !o.reg.IsOperator(ev.Owner, ev.User) {
 			return fmt.Errorf("permission: %s is not an authorized operator of %s", ev.User, ev.Owner)
 		}
 		account = AccountAddress(ev.Owner)
@@ -263,7 +262,7 @@ func (o *PermissionCommitGateObserver) checkAccess(account AccountAddress, db Da
 	if db == systemDatabase && required == registry.DbAuthRead {
 		return nil
 	}
-	info, infoOk := o.ns.RetrieveDatabaseInfo(db)
+	info, infoOk := o.reg.Get(string(db))
 	if !infoOk {
 		return fmt.Errorf("permission: database %q is not registered with this proxy", db)
 	}
@@ -276,19 +275,20 @@ func (o *PermissionCommitGateObserver) checkAccess(account AccountAddress, db Da
 		return fmt.Errorf("permission: database %q is pending deletion", db)
 	}
 	auth := registry.DbAuth(0)
+	dbKey := string(db)
 	// Lookup miss is treated as "no perms on file" — the final
 	// &-test fails and the query is rejected with a clear
 	// per-account message.
-	if perms, permsOk := o.ns.RetrieveDatabasePermissions(account); permsOk {
-		auth |= perms[db]
+	if perms, permsOk := o.reg.PermissionsFor(string(account)); permsOk {
+		auth |= perms[dbKey]
 	}
 	// PublicAccountAddress acts as a wildcard grantee: anything it
 	// holds on `db` is unioned into the caller's effective bitmap.
 	// Skip the lookup when the caller IS the public address to avoid
 	// a redundant fetch.
 	if account != PublicAccountAddress {
-		if pubPerms, pubOk := o.ns.RetrieveDatabasePermissions(PublicAccountAddress); pubOk {
-			auth |= pubPerms[db]
+		if pubPerms, pubOk := o.reg.PermissionsFor(string(PublicAccountAddress)); pubOk {
+			auth |= pubPerms[dbKey]
 		}
 	}
 	auth = promotePermissionBits(auth)

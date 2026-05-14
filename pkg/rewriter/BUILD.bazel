@@ -16,13 +16,13 @@ go_library(
         "//pkg/log",
         "//pkg/network",
         "//pkg/peer",
+        "//pkg/registry",
         "//pkg/route",
         "//pkg/sqlmeta",
         "//protos",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//credentials/insecure",
         "@org_golang_google_grpc//keepalive",
-        "@sentio-core//network/registry",
     ],
 )
 

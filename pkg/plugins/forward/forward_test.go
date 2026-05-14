@@ -59,8 +59,10 @@ func newTestForwardPlugin(t *testing.T, ns *fakeNS, selfIndexerID uint64) *Plugi
 	if err != nil {
 		t.Fatalf("NewRelaySigner: %v", err)
 	}
+	reg := network.NewRegistryAdapter(ns.s)
 	return &Plugin{
-		NetworkState:  ns.s,
+		Topology:      reg,
+		Databases:     reg,
 		SelfIndexerID: selfIndexerID,
 		PeerSigner:    signer,
 		PeerTokenTTL:  time.Minute,

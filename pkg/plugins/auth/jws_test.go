@@ -60,7 +60,7 @@ func TestOnQuery_NoPayer(t *testing.T) {
 	ns := network.NewInMemoryNetworkState()
 	p := &Plugin{
 		Validator: &fakeValidator{res: auth.ValidationResult{Address: testSigner}},
-		State:     ns,
+		Access:    network.NewRegistryAdapter(ns),
 	}
 	qctx, _ := newQctx(t)
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
@@ -77,7 +77,7 @@ func TestOnQuery_PayerEqualsSigner(t *testing.T) {
 	ns := network.NewInMemoryNetworkState()
 	p := &Plugin{
 		Validator: &fakeValidator{res: auth.ValidationResult{Address: testSigner}},
-		State:     ns,
+		Access:    network.NewRegistryAdapter(ns),
 	}
 	qctx, _ := newQctx(t, payerSetting(strings.ToUpper(testSigner)))
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
@@ -95,7 +95,7 @@ func TestOnQuery_OperatorAuthorized(t *testing.T) {
 	ns.SetOperator(network.AccountAddress(testOwner), network.AccountAddress(testSigner), true)
 	p := &Plugin{
 		Validator: &fakeValidator{res: auth.ValidationResult{Address: testSigner}},
-		State:     ns,
+		Access:    network.NewRegistryAdapter(ns),
 	}
 	qctx, _ := newQctx(t, payerSetting("0x"+strings.ToUpper(testOwner[2:])))
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
@@ -112,7 +112,7 @@ func TestOnQuery_OperatorNotAuthorized(t *testing.T) {
 	ns := network.NewInMemoryNetworkState() // no operator relation registered
 	p := &Plugin{
 		Validator: &fakeValidator{res: auth.ValidationResult{Address: testSigner}},
-		State:     ns,
+		Access:    network.NewRegistryAdapter(ns),
 	}
 	qctx, _ := newQctx(t, payerSetting(testOwner))
 	err := p.OnQuery(context.Background(), qctx)
@@ -134,7 +134,7 @@ func TestOnQuery_OperatorNotAuthorized(t *testing.T) {
 func TestOnQuery_StateUnwiredFallsBack(t *testing.T) {
 	p := &Plugin{
 		Validator: &fakeValidator{res: auth.ValidationResult{Address: testSigner}},
-		State:     nil,
+		Access:    nil,
 	}
 	qctx, _ := newQctx(t, payerSetting(testOwner))
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
@@ -152,7 +152,7 @@ func TestOnQuery_PayerWithoutSigner(t *testing.T) {
 	ns := network.NewInMemoryNetworkState()
 	p := &Plugin{
 		Validator: &fakeValidator{res: auth.ValidationResult{Address: ""}},
-		State:     ns,
+		Access:    network.NewRegistryAdapter(ns),
 	}
 	qctx, _ := newQctx(t, payerSetting(testOwner))
 	err := p.OnQuery(context.Background(), qctx)
@@ -174,7 +174,7 @@ func TestOnQuery_MaintenanceSkipsOwner(t *testing.T) {
 	// reject. Maintenance must bypass that.
 	p := &Plugin{
 		Validator: &fakeValidator{res: auth.ValidationResult{Address: testSigner, Maintenance: true}},
-		State:     ns,
+		Access:    network.NewRegistryAdapter(ns),
 	}
 	qctx, _ := newQctx(t, payerSetting(testOwner))
 	if err := p.OnQuery(context.Background(), qctx); err != nil {

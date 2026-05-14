@@ -7,6 +7,7 @@ go_library(
         "inmemory_commitgate_observer.go",
         "permission_commitgate_observer.go",
         "redis.go",
+        "registry_adapter.go",
         "rpc.go",
         "types.go",
         "yaml.go",
@@ -17,6 +18,7 @@ go_library(
         "//pkg/chproto",
         "//pkg/log",
         "//pkg/plugins/commitgate",
+        "//pkg/registry",
         "//pkg/sqlmeta",
         "@com_github_bytedance_sonic//:sonic",
         "@com_github_redis_go_redis_v9//:go-redis",
@@ -32,6 +34,7 @@ go_test(
     srcs = [
         "inmemory_commitgate_observer_test.go",
         "permission_commitgate_observer_test.go",
+        "registry_adapter_test.go",
         "rpc_test.go",
         "yaml_test.go",
     ],

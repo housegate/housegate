@@ -13,8 +13,8 @@ go_library(
         "//pkg/cfgtypes",
         "//pkg/chsession",
         "//pkg/log",
-        "//pkg/network",
         "//pkg/plugin",
+        "//pkg/registry",
     ],
 )
 
