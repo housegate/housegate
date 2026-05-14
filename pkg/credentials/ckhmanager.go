@@ -18,7 +18,6 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"housegate/housegate/pkg/log"
-	"housegate/housegate/pkg/network"
 	"housegate/housegate/pkg/secretsload"
 )
 
@@ -92,6 +91,6 @@ func (p *staticCredentialProvider) GetDefaultCredential() (string, string, error
 	return p.username, p.password, nil
 }
 
-func (p *staticCredentialProvider) GetCredentialForIndexer(_ network.IndexerInfo) (string, string, error) {
+func (p *staticCredentialProvider) GetCredentialForIndexer(_ uint64) (string, string, error) {
 	return p.username, p.password, nil
 }

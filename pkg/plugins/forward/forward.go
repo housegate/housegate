@@ -33,7 +33,6 @@ import (
 	"housegate/housegate/pkg/chproto"
 	"housegate/housegate/pkg/chsession"
 	"housegate/housegate/pkg/credentials"
-	"housegate/housegate/pkg/network"
 	"housegate/housegate/pkg/peer"
 	"housegate/housegate/pkg/plugin"
 	"housegate/housegate/pkg/registry"
@@ -145,11 +144,7 @@ func (p *Plugin) pivotToPeer(ctx context.Context, sess chsession.Session, hello 
 	// SQL — without it, the peer would skip rewrite (legacy remote()
 	// loopback contract) and the host's logical→physical table mapping
 	// would never be applied.
-	// peer.SignPeerHelloForwarded reads target.IndexerId only; supply a
-	// stub IndexerInfo with that one field. (PR3 will refactor peer to
-	// take the id directly when pkg/network is removed.)
-	peerInfoStub := network.IndexerInfo{IndexerId: peerIndexer}
-	user, password, err := peer.SignPeerHelloForwarded(p.PeerSigner, p.PeerTokenTTL, peerInfoStub, p.Fallback)
+	user, password, err := peer.SignPeerHelloForwarded(p.PeerSigner, p.PeerTokenTTL, peerIndexer, p.Fallback)
 	if err != nil {
 		if closer, ok := up.Conn().(interface{ Close() error }); ok {
 			_ = closer.Close()

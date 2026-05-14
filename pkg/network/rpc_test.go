@@ -16,8 +16,7 @@ import (
 
 	"housegate/housegate/pkg/network"
 	"housegate/housegate/pkg/plugins/sidecar"
-	"sentioxyz/sentio-core/network/registry"
-	"sentioxyz/sentio-core/network/state"
+	"housegate/housegate/pkg/registry"
 )
 
 // JSON-RPC 2.0 wire envelope (local copy — tests the public boundary).
@@ -109,7 +108,7 @@ func TestRpcNetworkState_Type(t *testing.T) {
 func TestRpcNetworkState_RetrieveAllIndexerInfos(t *testing.T) {
 	rpc, _ := newFakeRpc(t, map[string]rpcMethod{
 		"sentio_getIndexerInfos": func(_ []interface{}) (interface{}, *rpcErrEnvelope) {
-			return []state.IndexerInfo{
+			return []network.IndexerInfo{
 				{IndexerId: 0, IndexerUrl: "node-a", ClickhouseProxyPort: 9001},
 				{IndexerId: 1, IndexerUrl: "node-b", ClickhouseProxyPort: 9002},
 			}, nil
@@ -133,7 +132,7 @@ func TestRpcNetworkState_RetrieveAllIndexerInfos_Empty(t *testing.T) {
 	// map (nil is reserved for transport errors).
 	rpc, _ := newFakeRpc(t, map[string]rpcMethod{
 		"sentio_getIndexerInfos": func(_ []interface{}) (interface{}, *rpcErrEnvelope) {
-			return []state.IndexerInfo{}, nil
+			return []network.IndexerInfo{}, nil
 		},
 	})
 	all := rpc.RetrieveAllIndexerInfos()
@@ -150,7 +149,7 @@ func TestRpcNetworkState_RetrieveIndexerInfo(t *testing.T) {
 		"sentio_getIndexerInfoById": func(params []interface{}) (interface{}, *rpcErrEnvelope) {
 			id, _ := params[0].(float64)
 			if uint64(id) == 1 {
-				return state.IndexerInfo{IndexerId: 1, IndexerUrl: "node-b", ClickhouseProxyPort: 9002}, nil
+				return network.IndexerInfo{IndexerId: 1, IndexerUrl: "node-b", ClickhouseProxyPort: 9002}, nil
 			}
 			return nil, nil
 		},
@@ -173,7 +172,7 @@ func TestRpcNetworkState_RetrieveDatabaseInfo(t *testing.T) {
 		"sentio_getDatabaseInfoById": func(params []interface{}) (interface{}, *rpcErrEnvelope) {
 			id, _ := params[0].(string)
 			if id == "db-1" {
-				return state.DatabaseInfo{DatabaseId: "db-1", IndexerId: 7}, nil
+				return network.DatabaseInfo{DatabaseId: "db-1", IndexerId: 7}, nil
 			}
 			return nil, nil
 		},
@@ -194,7 +193,7 @@ func TestRpcNetworkState_RetrieveDatabasePermissions(t *testing.T) {
 			acct, _ := params[0].(string)
 			if strings.EqualFold(acct, "0xabc") {
 				// Real wire shape: an account may own multiple databases.
-				return []state.DatabaseInfo{
+				return []network.DatabaseInfo{
 					{DatabaseId: "db-1", IndexerId: 1},
 					{DatabaseId: "db-2", IndexerId: 2},
 				}, nil
@@ -271,7 +270,7 @@ func TestRpcNetworkState_UnsupportedServerMethods(t *testing.T) {
 func TestRpcNetworkState_SelectorIntegration(t *testing.T) {
 	const account = "0xabc"
 
-	indexerInfos := []state.IndexerInfo{
+	indexerInfos := []network.IndexerInfo{
 		{IndexerId: 0, IndexerUrl: "node-a", ClickhouseProxyPort: 9001},
 		{IndexerId: 1, IndexerUrl: "node-b", ClickhouseProxyPort: 9002},
 	}
@@ -282,14 +281,14 @@ func TestRpcNetworkState_SelectorIntegration(t *testing.T) {
 		"sentio_getDatabaseInfoByAccount": func(params []interface{}) (interface{}, *rpcErrEnvelope) {
 			acct, _ := params[0].(string)
 			if acct == account {
-				return []state.DatabaseInfo{{DatabaseId: "db-1", IndexerId: 1}}, nil
+				return []network.DatabaseInfo{{DatabaseId: "db-1", IndexerId: 1}}, nil
 			}
 			return nil, nil
 		},
 		"sentio_getDatabaseInfoById": func(params []interface{}) (interface{}, *rpcErrEnvelope) {
 			id, _ := params[0].(string)
 			if id == "db-1" {
-				return state.DatabaseInfo{DatabaseId: "db-1", IndexerId: 1}, nil
+				return network.DatabaseInfo{DatabaseId: "db-1", IndexerId: 1}, nil
 			}
 			return nil, nil
 		},

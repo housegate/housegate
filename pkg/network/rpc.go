@@ -27,8 +27,7 @@ import (
 	"time"
 
 	"housegate/housegate/pkg/log"
-	"sentioxyz/sentio-core/network/registry"
-	"sentioxyz/sentio-core/network/state"
+	"housegate/housegate/pkg/registry"
 )
 
 // RpcNetworkState is a read-only State backed by a sentio storage-node
@@ -148,7 +147,7 @@ func (r *RpcNetworkState) call(ctx context.Context, method string, params []inte
 // (possibly empty) map on success; nil signals the call itself failed
 // so callers can distinguish "no indexers" from "lookup error".
 func (r *RpcNetworkState) RetrieveAllIndexerInfos() map[uint64]IndexerInfo {
-	var infos []state.IndexerInfo
+	var infos []IndexerInfo
 	ok, err := r.call(context.Background(), "sentio_getIndexerInfos", nil, &infos)
 	if err != nil {
 		log.Warnfe(err, "rpc: getIndexerInfos failed")
@@ -167,7 +166,7 @@ func (r *RpcNetworkState) RetrieveAllIndexerInfos() map[uint64]IndexerInfo {
 // RetrieveIndexerInfo calls sentio_getIndexerInfoById. ok=false signals
 // either a network-level error (logged) or a JSON-null result.
 func (r *RpcNetworkState) RetrieveIndexerInfo(indexerId IndexId) (IndexerInfo, bool) {
-	var info state.IndexerInfo
+	var info IndexerInfo
 	ok, err := r.call(context.Background(), "sentio_getIndexerInfoById", []interface{}{indexerId}, &info)
 	if err != nil {
 		log.Warnfe(err, "rpc: getIndexerInfoById id=%v failed", indexerId)
@@ -181,7 +180,7 @@ func (r *RpcNetworkState) RetrieveIndexerInfo(indexerId IndexId) (IndexerInfo, b
 
 // RetrieveDatabaseInfo calls sentio_getDatabaseInfoById.
 func (r *RpcNetworkState) RetrieveDatabaseInfo(database Database) (DatabaseInfo, bool) {
-	var info state.DatabaseInfo
+	var info DatabaseInfo
 	ok, err := r.call(context.Background(), "sentio_getDatabaseInfoById", []interface{}{string(database)}, &info)
 	if err != nil {
 		log.Warnfe(err, "rpc: getDatabaseInfoById id=%v failed", database)
@@ -204,7 +203,7 @@ func (r *RpcNetworkState) RetrieveDatabaseInfo(database Database) (DatabaseInfo,
 // An account with no database returns (empty-but-non-nil map, true) —
 // matches the State contract: ok=false is reserved for lookup failure.
 func (r *RpcNetworkState) RetrieveDatabasePermissions(account AccountAddress) (DatabasePermissions, bool) {
-	var infos []state.DatabaseInfo
+	var infos []DatabaseInfo
 	ok, err := r.call(context.Background(), "sentio_getDatabaseInfoByAccount", []interface{}{string(account)}, &infos)
 	if err != nil {
 		log.Warnfe(err, "rpc: getDatabaseInfoByAccount account=%v failed", account)

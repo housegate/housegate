@@ -19,7 +19,6 @@ import (
 
 	"housegate/housegate/pkg/cluster"
 	"housegate/housegate/pkg/credentials"
-	"housegate/housegate/pkg/network"
 	"housegate/housegate/pkg/peer"
 	"housegate/housegate/pkg/registry"
 	"housegate/housegate/pkg/route"
@@ -466,16 +465,12 @@ func (r *sentioRewriter) callWithTimeout(ctx context.Context, req *pb.RewriteSQL
 // Without a peer signer (or when signing fails), falls back to the
 // legacy credential-provider lookup (static ClickHouse credentials).
 func (f *SentioNetworkFactory) resolveRemoteCredentials(peerIndexerId uint64) (user, password string) {
-	// peer.SignPeerHello reads only target.IndexerId; supply a stub with
-	// that single field. (PR3 will refactor peer to take the id directly
-	// once pkg/network is removed.)
-	stub := network.IndexerInfo{IndexerId: peerIndexerId}
 	if f.peerSigner != nil {
 		ttl := f.peerTokenTTL
 		if ttl <= 0 {
 			ttl = peerLoginTokenTTL
 		}
-		u, p, err := peer.SignPeerHello(f.peerSigner, ttl, stub, nil)
+		u, p, err := peer.SignPeerHello(f.peerSigner, ttl, peerIndexerId, nil)
 		if err == nil {
 			return u, p
 		}
@@ -483,7 +478,7 @@ func (f *SentioNetworkFactory) resolveRemoteCredentials(peerIndexerId uint64) (u
 			"indexer_id", peerIndexerId, "err", err)
 	}
 	if f.credProvider != nil {
-		u, p, err := peer.SignPeerHello(nil, 0, stub, f.credProvider)
+		u, p, err := peer.SignPeerHello(nil, 0, peerIndexerId, f.credProvider)
 		if err == nil {
 			return u, p
 		}

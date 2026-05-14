@@ -5,11 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"sentioxyz/sentio-core/network/registry"
-	"sentioxyz/sentio-core/network/state"
-
 	"housegate/housegate/pkg/chproto"
 	"housegate/housegate/pkg/plugins/commitgate"
+	"housegate/housegate/pkg/registry"
 	"housegate/housegate/pkg/sqlmeta"
 )
 
@@ -20,7 +18,7 @@ func fixturePerm(db Database, owner AccountAddress, account AccountAddress, perm
 	st := NewInMemoryNetworkState()
 	st.DatabaseInfos[db] = DatabaseInfo{
 		DatabaseId: string(db),
-		Tables:     []state.TableInfo{},
+		Tables:     []TableInfo{},
 	}
 	// Give the owner the Owner bit so promotion tests work.
 	if owner != "" {

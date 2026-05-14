@@ -2,17 +2,7 @@ load("@rules_go//go:def.bzl", "go_library")
 
 go_library(
     name = "billing",
-    srcs = [
-        "client.go",
-        "usage_client.go",
-    ],
+    srcs = ["usage_client.go"],
     importpath = "housegate/housegate/pkg/billing",
     visibility = ["//visibility:public"],
-    deps = [
-        "//pkg/log",
-        "@com_github_redis_go_redis_v9//:go-redis",
-        "@org_golang_google_grpc//:grpc",
-        "@org_golang_google_grpc//credentials/insecure",
-        "@sentio-core//service/usage/protos",
-    ],
 )

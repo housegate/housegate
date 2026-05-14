@@ -6,8 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	sentioregistry "sentioxyz/sentio-core/network/registry"
-
 	"housegate/housegate/pkg/network"
 	"housegate/housegate/pkg/registry"
 )
@@ -51,7 +49,7 @@ func TestSelector_Pick_PermissionedTier(t *testing.T) {
 		map[network.AccountAddress]network.DatabasePermissions{
 			// alice has perms only on tenantA → indexer 1 is the only
 			// permissioned target.
-			"0xalice": {"tenantA": sentioregistry.DbAuthRead},
+			"0xalice": {"tenantA": registry.DbAuthRead},
 		},
 	)
 
@@ -106,7 +104,7 @@ func TestSelector_Pick_BootstrapFallback_PermsButNoBoundIndexer(t *testing.T) {
 			"tenantC": {DatabaseId: "tenantC", IndexerId: 99},
 		},
 		map[network.AccountAddress]network.DatabasePermissions{
-			"0xalice": {"tenantC": sentioregistry.DbAuthRead},
+			"0xalice": {"tenantC": registry.DbAuthRead},
 		},
 	)
 

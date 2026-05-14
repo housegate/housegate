@@ -3,8 +3,6 @@ package network_test
 import (
 	"testing"
 
-	"sentioxyz/sentio-core/network/state"
-
 	"housegate/housegate/pkg/network"
 )
 
@@ -13,11 +11,11 @@ import (
 // test exists so the reservation is at least behaviour-covered.
 func TestRegistryAdapter_ProcessorId(t *testing.T) {
 	st := network.NewInMemoryNetworkState()
-	st.DatabaseInfos["owned"] = state.DatabaseInfo{
+	st.DatabaseInfos["owned"] = network.DatabaseInfo{
 		DatabaseId:  "owned",
 		ProcessorId: "proc-1",
 	}
-	st.DatabaseInfos["userdb"] = state.DatabaseInfo{
+	st.DatabaseInfos["userdb"] = network.DatabaseInfo{
 		DatabaseId: "userdb", // no ProcessorId — user database
 	}
 

@@ -30,7 +30,8 @@ func WithContext(ctx context.Context, l *Logger) context.Context {
 // When kv is non-empty the enriched Logger is also rebound to the returned
 // ctx so downstream callers that pull it out via From see the same fields.
 //
-// Mirrors sentioxyz/sentio-core/common/log.FromContext semantics:
+// Mirrors a "ctx-as-logger" pattern: bind kv pairs once at the entry
+// point of a request and let downstream code read them back:
 //
 //	ctx, logger := log.FromContext(ctx, "session", id, "remote_addr", addr)
 //	logger.Infow("hello")

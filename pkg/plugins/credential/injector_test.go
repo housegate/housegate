@@ -10,7 +10,6 @@ import (
 	"housegate/housegate/pkg/auth"
 	"housegate/housegate/pkg/chproto"
 	"housegate/housegate/pkg/chsession"
-	"housegate/housegate/pkg/network"
 	"housegate/housegate/pkg/peer"
 )
 
@@ -28,8 +27,7 @@ func TestOnHello_PeerEnvelope_IndexerIDZero(t *testing.T) {
 	}
 	validator := auth.NewEthValidator([]string{signer.Address()}, time.Hour, true, false, "", nil)
 
-	target := network.IndexerInfo{IndexerId: 0, IndexerUrl: "self", ClickhouseProxyPort: 9000}
-	user, password, err := peer.SignPeerHello(signer, time.Minute, target, nil)
+	user, password, err := peer.SignPeerHello(signer, time.Minute, 0, nil)
 	if err != nil {
 		t.Fatalf("SignPeerHello: %v", err)
 	}
@@ -58,8 +56,7 @@ func TestOnHello_PeerEnvelope_AudienceMismatch(t *testing.T) {
 	signer, _ := auth.NewRelaySigner(signerKeyHex)
 	validator := auth.NewEthValidator([]string{signer.Address()}, time.Hour, true, false, "", nil)
 
-	target := network.IndexerInfo{IndexerId: 7}
-	user, password, _ := peer.SignPeerHello(signer, time.Minute, target, nil)
+	user, password, _ := peer.SignPeerHello(signer, time.Minute, 7, nil)
 
 	p := &Plugin{
 		PeerValidator:    validator,

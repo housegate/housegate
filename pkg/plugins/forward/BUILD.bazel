@@ -14,7 +14,6 @@ go_library(
         "//pkg/chsession",
         "//pkg/credentials",
         "//pkg/log",
-        "//pkg/network",
         "//pkg/peer",
         "//pkg/plugin",
         "//pkg/registry",

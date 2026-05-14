@@ -1,14 +1,14 @@
 // Package network owns the view the proxy has of the sentio
 // decentralized indexer network — which processors are allocated to
 // which indexers, how to reach an indexer's ClickHouse proxy, and so
-// on. The concrete producer is a Redis-backed statemirror; the proxy is
-// a read-only consumer.
+// on. The concrete producer is a Redis-backed statemirror; the proxy
+// is a read-only consumer.
 //
-// Types defined here are intentionally minimal — State is the
-// interface that downstream code (rewriter, credentials, legacy proxy)
-// programs against; IndexerInfo / ProcessorAllocation / ProcessorInfo
-// are aliases to the authoritative sentio-core types so data stays byte
-// compatible with the network's shared schema.
+// Types defined here are standalone — JSON and YAML tags are kept
+// wire-compatible with sentio-core's network/state package so YAML
+// fixtures and RPC payloads exchange unchanged. Future schema
+// additions must be mirrored explicitly; there is no transitive
+// type-alias path.
 //
 // Nothing in pkg/network imports pkg/proxy, pkg/config, or plugins —
 // the dependency flows the other way.
@@ -17,17 +17,17 @@ package network
 import (
 	"strconv"
 
-	"sentioxyz/sentio-core/network/registry"
-	"sentioxyz/sentio-core/network/state"
+	"housegate/housegate/pkg/registry"
 )
 
 // State is the read-only view of the network the proxy consumes.
-// Implementations are typically Redis-backed (RedisNetworkState) in
-// production and in-memory (InMemoryNetworkState) in tests.
+// Implementations are in-memory (InMemoryNetworkState) for tests and
+// YAML fixtures, RPC-backed (RpcNetworkState) for sidecar mode, and
+// embedder-injected (sentio-node's Redis adapter) for production.
 //
 // All methods must be safe for concurrent use — every query handler
-// goroutine reads from a single shared State, and the Redis-backed
-// implementation may be receiving statemirror updates concurrently.
+// goroutine reads from a single shared State, and an embedder-supplied
+// implementation may be receiving updates concurrently.
 //
 // Lookup methods return (zero, false) when the key is not known and
 // reserve error returns for cases where the lookup itself failed
@@ -35,8 +35,7 @@ import (
 // "Not found" is not an error — callers commonly probe for existence.
 //
 // AccountHasPermissionForDatabase is the one exception: an unknown
-// database is reported as an error to match the sentio-core
-// userDbRegistry contract, because permission checks against
+// database is reported as an error because permission checks against
 // non-existent databases almost always indicate a caller bug.
 type State interface {
 	// RetrieveProcessorAllocation returns which indexers host
@@ -61,10 +60,10 @@ type State interface {
 	// enumerate routing targets.
 	RetrieveAllIndexerInfos() map[uint64]IndexerInfo
 
-	// RetrieveDatabaseInfo returns the metadata record (owner,
-	// indexer assignment, db type) for a logical database. Returns
-	// ok=false when the database has not been declared in the
-	// network registry.
+	// RetrieveDatabaseInfo returns the metadata record (indexer
+	// assignment, db type, owning processor, pending-delete state)
+	// for a logical database. Returns ok=false when the database has
+	// not been declared in the network registry.
 	RetrieveDatabaseInfo(database Database) (DatabaseInfo, bool)
 
 	// RetrieveAllDatabaseInfos returns a snapshot of every known
@@ -83,86 +82,117 @@ type State interface {
 	RetrieveDatabasePermissions(account AccountAddress) (DatabasePermissions, bool)
 
 	// AccountHasPermissionForDatabase reports whether `account` has
-	// the permission bit `action` on `database`. The owner of a
-	// database implicitly has DbAuthAdmin; the effective auth is
-	// (per-account-bitmap | owner-bit) AND'd against `action`.
+	// the permission bit `action` on `database`. The standard
+	// hierarchy (Owner ⇒ Admin|Write|Read; Write ⇒ Read) is applied
+	// by implementations.
 	//
-	// Returns an error when the database is not found (matches
-	// sentio-core userDbRegistry semantics), or when the underlying
-	// mirror lookup fails.
-	AccountHasPermissionForDatabase(account AccountAddress, database Database, action registry.Action) (bool, error)
+	// Returns an error when the database is not found, or when the
+	// underlying mirror lookup fails.
+	AccountHasPermissionForDatabase(account AccountAddress, database Database, action Action) (bool, error)
 
 	IsOperator(owner, signer AccountAddress) bool
 
 	Type() StateType
 }
 
-// Type aliases to sentio-core so callers operate on the canonical
-// shared schema without their own import of the sentio packages.
-//
-// Aliasing (vs wrapping) is deliberate: serialised JSON / YAML must
-// stay byte-for-byte identical to what the network producers emit,
-// and any future field added on the sentio side flows through with
-// zero proxy changes.
-type (
-	// IndexId is the dense uint64 identifier the network state uses
-	// for indexers. Statemirror keys indexers by string but the
-	// canonical in-memory form is uint64.
-	IndexId = uint64
+// IndexId is the dense uint64 identifier for an indexer. Statemirror
+// keys indexers by stringified id; the in-memory form is uint64.
+type IndexId = uint64
 
-	// ProcessorId is the string identifier of a Sentio processor
-	// (e.g. "coinbase", "pancakeswap123"). Used as both the
-	// allocation key and the db-prefix when rewriting "sentio_<id>."
-	// table references.
-	ProcessorId = string
+// ProcessorId is the string identifier of a Sentio processor (e.g.
+// "coinbase", "pancakeswap123").
+type ProcessorId = string
 
-	// IndexerInfo carries the network-visible address of a single
-	// indexer node (URL + per-service ports). The proxy reads
-	// ClickhouseProxyPort to dial peer proxies in remote() / __route__
-	// flows.
-	IndexerInfo = state.IndexerInfo
+// Database is the canonical id type for a logical user database.
+// Distinct from `string` only at the type-system level — values are
+// plain strings on the wire.
+type Database string
 
-	// ProcessorAllocation links a processor to the indexer(s) that
-	// host its data. The first allocation in the slice is the
-	// primary; replicas (if any) follow.
-	ProcessorAllocation = state.ProcessorAllocation
+// AccountAddress is an account identifier (Ethereum address as a
+// string). Distinct from Database so the compiler catches
+// argument-order mistakes in permission lookups.
+type AccountAddress string
 
-	// ProcessorInfo is processor-level metadata used for table-name
-	// rewriting (schema -> physical name mapping).
-	ProcessorInfo = state.ProcessorInfo
+// DbAuth is the bitmap of permissions an account holds on one
+// database. Aliased to pkg/registry's identical type so both packages
+// agree byte-for-byte and conversions are zero-cost.
+type DbAuth = registry.DbAuth
 
-	// DatabaseInfo describes a logical user-facing database: its
-	// type, the indexer that hosts its tables, owning processor (for
-	// PROCESSOR-type databases), and pending-delete state. Ownership
-	// and access are tracked exclusively via DatabasePermissions
-	// bitmaps (Owner / Admin / Write / Read).
-	DatabaseInfo = state.DatabaseInfo
+// Action is the permission bit a caller is checking for. Aliased to
+// pkg/registry for the same reason as DbAuth.
+type Action = registry.Action
 
-	// TableInfo is a single table entry inside DatabaseInfo.Tables.
-	// Aliased here so callers that mutate the table list (e.g. the
-	// in-memory commitgate observer) don't need a direct dep on
-	// sentio-core/network/state.
-	TableInfo = state.TableInfo
+// DatabasePermissions is the per-account permission bitmap keyed by
+// Database. Combine bits with bitwise OR; check individual bits using
+// registry.DbAuthRead / DbAuthWrite / DbAuthAdmin / DbAuthOwner.
+type DatabasePermissions = map[Database]DbAuth
 
-	// Database is the canonical id type for a logical user database.
-	// Distinct from `string` only at the type-system level — values
-	// are plain strings on the wire.
-	Database = registry.Database
+// WildcardAddress is the all-zeros account whose permissions are
+// unioned into every caller's effective bitmap. A grant to this
+// address means "everyone has this permission" and is the encoding
+// the smart-contract layer uses for public reads.
+const WildcardAddress AccountAddress = "0x0000000000000000000000000000000000000000"
 
-	// AccountAddress is an account identifier (Ethereum address as a
-	// string). Distinct from Database so the compiler catches
-	// argument-order mistakes in permission lookups.
-	AccountAddress = registry.Address
+// IndexerInfo carries the network-visible address of a single indexer
+// node (URL + per-service ports). JSON/YAML tags match the producer
+// (sentio-core/network/state.IndexerInfo) so wire-format compatibility
+// is preserved.
+type IndexerInfo struct {
+	IndexerId           uint64 `json:"indexerId" yaml:"indexer_id"`
+	IndexerUrl          string `json:"indexerUrl" yaml:"indexer_url"`
+	ComputeNodeRpcPort  uint16 `json:"computeNodeRpcPort" yaml:"compute_node_rpc_port"`
+	StorageNodeRpcPort  uint16 `json:"storageNodeRpcPort" yaml:"storage_node_rpc_port"`
+	ClickhouseProxyPort uint16 `json:"clickhouseProxyPort" yaml:"clickhouse_proxy_port"`
+	Signer              string `json:"signer" yaml:"signer"`
+}
 
-	// DatabasePermissions is the per-account permission bitmap keyed
-	// by Database. Each value is a registry.DbAuth bitmap; combine
-	// with bitwise OR. Use registry.DbAuthRead / DbAuthWrite /
-	// DbAuthAdmin to read individual bits.
-	DatabasePermissions = map[Database]registry.DbAuth
+// ProcessorAllocation links a processor to the indexer(s) that host
+// its data. Wire-compatible with sentio-core/network/state.
+type ProcessorAllocation struct {
+	ProcessorId string `json:"processorId" yaml:"processor_id"`
+	IndexerId   uint64 `json:"indexerId" yaml:"indexer_id"`
+}
+
+// ProcessorInfo is processor-level metadata used for table-name
+// rewriting. Wire-compatible with sentio-core/network/state.
+type ProcessorInfo struct {
+	ProcessorId         string `json:"processorId" yaml:"processor_id"`
+	EntitySchema        string `json:"entitySchema" yaml:"entity_schema"`
+	EntitySchemaVersion int32  `json:"entitySchemaVersion" yaml:"entity_schema_version"`
+}
+
+// DatabaseType mirrors sentio-core's on-chain Types.DatabaseType enum:
+// USER = 0 (user-owned database), PROCESSOR = 1 (processor replica).
+type DatabaseType uint8
+
+const (
+	DatabaseTypeUser      DatabaseType = 0
+	DatabaseTypeProcessor DatabaseType = 1
 )
 
-// ParseIndexerId parses a decimal-encoded indexer id. Handy when the id
-// arrives as a Redis field key (statemirror keys indexers by string id).
+// TableInfo is a single table entry inside DatabaseInfo.Tables.
+type TableInfo struct {
+	TableId   string `json:"tableId" yaml:"table_id"`
+	TableType string `json:"tableType" yaml:"table_type"`
+}
+
+// DatabaseInfo describes a logical user-facing database: its type,
+// the indexer hosting its tables, owning processor (for PROCESSOR-type
+// databases), and pending-delete state. Ownership and access are
+// tracked exclusively via DatabasePermissions bitmaps (Owner / Admin /
+// Write / Read).
+type DatabaseInfo struct {
+	DatabaseId    string       `json:"databaseId" yaml:"database_id"`
+	DbType        DatabaseType `json:"dbType" yaml:"db_type"`
+	IndexerId     uint64       `json:"indexerId" yaml:"indexer_id"`
+	ProcessorId   string       `json:"processorId,omitempty" yaml:"processor_id,omitempty"`
+	PendingDelete bool         `json:"pendingDelete" yaml:"pending_delete"`
+	Tables        []TableInfo  `json:"tables,omitempty" yaml:"tables,omitempty"`
+}
+
+// ParseIndexerId parses a decimal-encoded indexer id. Handy when the
+// id arrives as a Redis hash field key (statemirror keys indexers by
+// stringified id).
 func ParseIndexerId(s string) (IndexId, error) {
 	return strconv.ParseUint(s, 10, 64)
 }

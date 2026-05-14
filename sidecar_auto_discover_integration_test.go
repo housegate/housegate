@@ -25,12 +25,11 @@ import (
 
 	"github.com/ClickHouse/ch-go/proto"
 
-	"sentioxyz/sentio-core/network/registry"
-
 	"housegate/housegate/pkg/auth"
 	"housegate/housegate/pkg/chproto"
 	"housegate/housegate/pkg/config"
 	"housegate/housegate/pkg/network"
+	"housegate/housegate/pkg/registry"
 	sidecarcfg "housegate/housegate/pkg/plugins/sidecar"
 	"housegate/housegate/pkg/proxy"
 )
