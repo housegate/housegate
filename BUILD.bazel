@@ -72,9 +72,9 @@ go_test(
         "//pkg/plugins/rewrite",
         "//pkg/plugins/sidecar",
         "//pkg/proxy",
+        "//pkg/registry",
         "//pkg/rewriter",
         "@com_github_clickhouse_ch_go//proto",
-        "@sentio-core//network/registry",
     ],
 )
 

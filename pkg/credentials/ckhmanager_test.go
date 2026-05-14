@@ -4,8 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"housegate/housegate/pkg/network"
 )
 
 // sampleYAML mirrors the on-disk layout of
@@ -64,7 +62,7 @@ func TestLoadCkhManagerYAMLProvider_ResolvesSubgraphMergeKey(t *testing.T) {
 		t.Fatalf("GetDefaultCredential = (%q, %q), want (admin_user, admin_pw) — merge key likely not resolved", u, pw)
 	}
 
-	u2, pw2, err := cp.GetCredentialForIndexer(network.IndexerInfo{IndexerId: 42})
+	u2, pw2, err := cp.GetCredentialForIndexer(42)
 	if err != nil {
 		t.Fatalf("GetCredentialForIndexer: %v", err)
 	}

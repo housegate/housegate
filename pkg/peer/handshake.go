@@ -7,7 +7,6 @@ import (
 
 	"housegate/housegate/pkg/auth"
 	"housegate/housegate/pkg/credentials"
-	"housegate/housegate/pkg/network"
 )
 
 // SignPeerHello builds the (user, password) pair for a TCP handshake from one
@@ -26,10 +25,10 @@ import (
 func SignPeerHello(
 	signer auth.PeerSigner,
 	ttl time.Duration,
-	target network.IndexerInfo,
+	targetIndexerId uint64,
 	fallback credentials.CredentialProvider,
 ) (user, password string, err error) {
-	return signPeerHello(signer, ttl, target, fallback, false)
+	return signPeerHello(signer, ttl, targetIndexerId, fallback, false)
 }
 
 // SignPeerHelloForwarded is the forward-pivot variant: emits the
@@ -43,21 +42,21 @@ func SignPeerHello(
 func SignPeerHelloForwarded(
 	signer auth.PeerSigner,
 	ttl time.Duration,
-	target network.IndexerInfo,
+	targetIndexerId uint64,
 	fallback credentials.CredentialProvider,
 ) (user, password string, err error) {
-	return signPeerHello(signer, ttl, target, fallback, true)
+	return signPeerHello(signer, ttl, targetIndexerId, fallback, true)
 }
 
 func signPeerHello(
 	signer auth.PeerSigner,
 	ttl time.Duration,
-	target network.IndexerInfo,
+	targetIndexerId uint64,
 	fallback credentials.CredentialProvider,
 	forwarded bool,
 ) (user, password string, err error) {
 	if signer != nil {
-		audience := strconv.FormatUint(target.IndexerId, 10)
+		audience := strconv.FormatUint(targetIndexerId, 10)
 		token, signErr := signer.SignPeerLogin(audience, ttl)
 		if signErr != nil {
 			return "", "", fmt.Errorf("sign peer login (audience=%s): %w", audience, signErr)
@@ -78,9 +77,9 @@ func signPeerHello(
 	if fallback == nil {
 		return "", "", fmt.Errorf("no peer signer and no static credential provider")
 	}
-	u, p, credErr := fallback.GetCredentialForIndexer(target)
+	u, p, credErr := fallback.GetCredentialForIndexer(targetIndexerId)
 	if credErr != nil {
-		return "", "", fmt.Errorf("no static credential for indexer %d: %w", target.IndexerId, credErr)
+		return "", "", fmt.Errorf("no static credential for indexer %d: %w", targetIndexerId, credErr)
 	}
 	return u, p, nil
 }

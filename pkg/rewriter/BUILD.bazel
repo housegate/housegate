@@ -32,6 +32,6 @@ go_test(
     embed = [":rewriter"],
     deps = [
         "//pkg/network",
-        "@sentio-core//network/registry",
+        "//pkg/registry",
     ],
 )

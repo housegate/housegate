@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync"
 
-	"sentioxyz/sentio-core/network/registry"
+	"housegate/housegate/pkg/registry"
 )
 
 // InMemoryNetworkState is a test-friendly State backed by plain

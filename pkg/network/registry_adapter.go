@@ -11,8 +11,6 @@ package network
 
 import (
 	"housegate/housegate/pkg/registry"
-
-	sentioregistry "sentioxyz/sentio-core/network/registry"
 )
 
 // RegistryAdapter wraps a State so it satisfies registry.Topology,
@@ -104,13 +102,10 @@ func (a *RegistryAdapter) PermissionsFor(account string) (map[string]registry.Db
 }
 
 func (a *RegistryAdapter) HasPermission(account, database string, action registry.Action) (bool, error) {
-	// DbAuth/Action bit values are byte-compatible across the new and
-	// sentio-core registries (Read=1, Write=2, Admin=4, Owner=8), so a
-	// numeric cast preserves semantics.
 	return a.s.AccountHasPermissionForDatabase(
 		AccountAddress(account),
 		Database(database),
-		sentioregistry.Action(action),
+		action,
 	)
 }
 

@@ -4,9 +4,8 @@ import (
 	"sort"
 	"testing"
 
-	"sentioxyz/sentio-core/network/registry"
-
 	"housegate/housegate/pkg/network"
+	"housegate/housegate/pkg/registry"
 )
 
 // TestBuildDatabaseMap_FiltersPendingDelete: a logical database whose

@@ -11,16 +11,6 @@ bazel_dep(name = "rules_multirun", version = "0.13.0")
 bazel_dep(name = "aspect_bazel_lib", version = "2.22.5")
 bazel_dep(name = "bazel_skylib", version = "1.9.0")
 bazel_dep(name = "rules_oci", version = "2.2.7")
-bazel_dep(name = "sentio-core", version = "0.0.0")
-git_override(
-    module_name = "sentio-core",
-    commit = "b0ec2941dc80e48539295ced9309dabc3214686b",
-    patch_strip = 1,
-    patches = [
-        "//third_party:sentio-core.patch",
-    ],
-    remote = "https://github.com/sentioxyz/sentio-core",
-)
 
 go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
 go_sdk.download(version = "1.25.9")
@@ -43,10 +33,6 @@ go_deps_dev.module_override(
     patch_strip = 1,
     patches = ["//third_party:com_github_consensys_gnark_crypto.patch"],
     path = "github.com/consensys/gnark-crypto",
-)
-go_deps_dev.gazelle_override(
-    build_file_generation = "off",
-    path = "github.com/wasmerio/wasmer-go",
 )
 go_deps_dev.gazelle_default_attributes(
     directives = ["gazelle:proto disable"],

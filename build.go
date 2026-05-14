@@ -42,9 +42,12 @@ import (
 // `.yml` value loads an InMemoryNetworkState fixture (local-dev /
 // integration tests, no Redis needed); an http(s) URL constructs an
 // RpcNetworkState pointing at a sentio storage-node JSON-RPC endpoint
-// (sidecar mode only — server-mode validation rejects this scheme);
-// anything else is treated as a Redis address for the statemirror
-// consumer.
+// (sidecar mode only — server-mode validation rejects this scheme).
+//
+// The Redis-backed backend is no longer built in-process; embedders
+// (sentio-node) must construct it themselves and inject via
+// Options.NetworkState. Specifying a Redis source through cfg returns
+// an error directing operators to the injection path.
 func loadNetworkState(cfg *config.Config, rf *redisFactory) (network.State, error) {
 	if cfg.NetworkState.IsYAMLSource() {
 		yamlState, err := network.LoadNetworkStateFromYAML(cfg.NetworkState.Source)
@@ -64,16 +67,7 @@ func loadNetworkState(cfg *config.Config, rf *redisFactory) (network.State, erro
 		log.Infow("network state loaded from RPC", "endpoint", cfg.NetworkState.Source)
 		return rpcState, nil
 	}
-	nsRedisClient, err := rf.get(cfg.NetworkState.Source)
-	if err != nil {
-		return nil, fmt.Errorf("network state redis: %w", err)
-	}
-	redisState, err := network.NewRedisNetworkState(nsRedisClient)
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize Redis network state: %w", err)
-	}
-	log.Infow("network state loaded from Redis", "addr", cfg.ResolveRedisAddr(cfg.NetworkState.Source))
-	return redisState, nil
+	return nil, fmt.Errorf("network_state.source %q is not a YAML or RPC source; in-process Redis is no longer supported — embedders must inject NetworkState via Options.NetworkState (e.g. sentio-node)", cfg.NetworkState.Source)
 }
 
 // buildRewriterFactory constructs the SQL rewriter factory that dials
@@ -364,18 +358,12 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	if opts.UsageClient != nil {
 		usageClient = opts.UsageClient
 	} else if cfg.Usage.Enabled && cfg.Usage.SentioNodeAddr != "" {
-		usageRedis, err := rf.get(cfg.Usage.RedisAddr)
-		if err != nil {
-			return nil, fmt.Errorf("usage redis: %w", err)
-		}
-		uc, err := billing.NewClient(cfg.Usage.SentioNodeAddr, usageRedis)
-		if err != nil {
-			log.Warne(err, "failed to create usage client, query billing disabled")
-		} else {
-			usageClient = uc
-			pushTeardown(func() { uc.Close() })
-			log.Infow("query usage reporting enabled", "sentio_node", cfg.Usage.SentioNodeAddr)
-		}
+		// The in-process sentio-node usage client was moved out of
+		// housegate (it pulled in a sentio-core proto dep). Embedders
+		// must inject via Options.UsageClient; the standalone binary
+		// gets a no-op until a host wires one up.
+		log.Warnw("usage tracking requested in config but no UsageClient was injected; query billing disabled (embedders must supply Options.UsageClient)",
+			"sentio_node", cfg.Usage.SentioNodeAddr)
 	}
 
 	var concurrencyRedis *redis.Client

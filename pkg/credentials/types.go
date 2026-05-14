@@ -8,8 +8,6 @@
 // plugin packages; the dependency flows the other way.
 package credentials
 
-import "housegate/housegate/pkg/network"
-
 // CredentialProvider sources real ClickHouse credentials so the proxy
 // can replace a client's placeholder credentials before forwarding.
 type CredentialProvider interface {
@@ -18,8 +16,10 @@ type CredentialProvider interface {
 	// credential replacement is enabled.
 	GetDefaultCredential() (username, password string, err error)
 
-	// GetCredentialForIndexer returns credentials for a remote indexer's
-	// ClickHouse — used for remote() function calls targeting other
-	// indexers discovered via NetworkState.
-	GetCredentialForIndexer(indexerInfo network.IndexerInfo) (username, password string, err error)
+	// GetCredentialForIndexer returns credentials for a remote
+	// indexer's ClickHouse — used for remote() function calls
+	// targeting peer indexers. indexerId scopes the lookup; today's
+	// static implementation ignores it, but per-indexer providers
+	// (future) discriminate on this value.
+	GetCredentialForIndexer(indexerId uint64) (username, password string, err error)
 }

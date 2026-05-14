@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"housegate/housegate/pkg/log"
-	"sentioxyz/sentio-core/network/registry"
+	"housegate/housegate/pkg/registry"
 
 	"go.yaml.in/yaml/v3"
 )

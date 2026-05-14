@@ -4,11 +4,10 @@ import (
 	"context"
 	"fmt"
 
-	"housegate/housegate/pkg/log"
-	"sentioxyz/sentio-core/network/registry"
-
 	"housegate/housegate/pkg/chproto"
+	"housegate/housegate/pkg/log"
 	"housegate/housegate/pkg/plugins/commitgate"
+	"housegate/housegate/pkg/registry"
 	"housegate/housegate/pkg/sqlmeta"
 
 	"github.com/bytedance/sonic"

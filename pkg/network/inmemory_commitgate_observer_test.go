@@ -5,10 +5,9 @@ import (
 	"reflect"
 	"testing"
 
-	"sentioxyz/sentio-core/network/registry"
-
 	"housegate/housegate/pkg/chproto"
 	"housegate/housegate/pkg/plugins/commitgate"
+	"housegate/housegate/pkg/registry"
 	"housegate/housegate/pkg/sqlmeta"
 )
 
