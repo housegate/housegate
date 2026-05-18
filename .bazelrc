@@ -1,5 +1,13 @@
 startup --max_idle_secs=0
 
+# Workspace status command — populates x_defs placeholders ({STABLE_GIT_COMMIT}, etc.)
+common --workspace_status_command=tools/workspace_status.sh
+# --stamp activates x_defs substitution from workspace_status.sh; without
+# it the {STABLE_*}/{BUILD_*} placeholders are baked in as literal strings
+# and `housegate --version` reports "(devel)". STABLE_ keys re-link only
+# when their value changes, so the cache cost is bounded.
+build --stamp
+
 # Common Bazel settings
 build --enable_bzlmod
 

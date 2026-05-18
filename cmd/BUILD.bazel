@@ -17,6 +17,7 @@ go_library(
         "//pkg/config",
         "//pkg/log",
         "//pkg/secretsload",
+        "//pkg/version",
         "@com_github_prometheus_client_golang//prometheus/promhttp",
     ],
 )
@@ -25,4 +26,11 @@ go_binary(
     name = "housegate",
     embed = [":housegate_lib"],
     visibility = ["//visibility:public"],
+    # x_defs placeholders below are substituted from workspace_status.sh.
+    # Substitution requires `--stamp` — enabled by default in //.bazelrc.
+    x_defs = {
+        "housegate/housegate/pkg/version.Version": "{STABLE_GIT_TAG}",
+        "housegate/housegate/pkg/version.GitCommit": "{STABLE_GIT_COMMIT}",
+        "housegate/housegate/pkg/version.BuildTime": "{BUILD_TIMESTAMP}",
+    },
 )
