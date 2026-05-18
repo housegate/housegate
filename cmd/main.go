@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
@@ -19,6 +20,7 @@ import (
 	"housegate/housegate/pkg/config"
 	"housegate/housegate/pkg/log"
 	"housegate/housegate/pkg/secretsload"
+	"housegate/housegate/pkg/version"
 )
 
 func main() {
@@ -54,6 +56,7 @@ func main() {
 // the file/env config. Override precedence: CLI flag > env var >
 // config file > built-in default.
 func loadConfigWithOverrides() config.Config {
+	showVersion := flag.Bool("version", false, "print version information and exit")
 	configPath := flag.String("config", config.EnvOrDefault("HOUSEGATE_CONFIG", ""), "path to JSON config file (optional)")
 
 	sidecarMode := flag.Bool("sidecar", false, "enable sidecar mode (token-signing pass-through proxy)")
@@ -74,6 +77,11 @@ func loadConfigWithOverrides() config.Config {
 	// through to HOUSEGATE_LOG_FILE / cfg.LogFile when the flag is absent).
 
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(version.Info())
+		os.Exit(0)
+	}
 
 	// Stage-1 log-destination resolve: take effect immediately so any
 	// log emitted by config.Load (e.g. "no config file provided") already
