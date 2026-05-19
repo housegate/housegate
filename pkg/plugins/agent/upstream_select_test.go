@@ -1,4 +1,4 @@
-package sidecar
+package agent
 
 import (
 	"errors"

@@ -16,7 +16,7 @@ We want one codebase to serve two consumers:
 ## Non-goals
 
 - No behavior changes to the on-the-wire protocol or plugin chain.
-- No new modes or features. The three runtime modes (`server` / `sidecar` / `forwarding-only`) stay exactly as they are; the library exposes all three through `cfg.Mode()` dispatch.
+- No new modes or features. The three runtime modes (`server` / `agent` / `forwarding-only`) stay exactly as they are; the library exposes all three through `cfg.Mode()` dispatch.
 - No swap to functional-options style for the public API. A flat `Options` struct is enough for the cardinality we have and keeps godoc readable.
 - No public API for `*cluster.PooledConn` replacement. Library users injecting a `Cluster` use `cluster.PooledConn` as the return type — the pool's connection lifetime stays internal to the cluster package.
 
@@ -27,9 +27,9 @@ We want one codebase to serve two consumers:
 ```
 housegate/                       (new — module root, import path "housegate/housegate")
 ├── proxy.go                     Proxy interface + Options + New()
-├── build.go                     dep assembly (was cmd/main.go runServer/runSidecar/
+├── build.go                     dep assembly (was cmd/main.go runServer/runAgent/
 │                                runForwarding) + plugin chain wiring (was cmd/serve.go
-│                                serveServer/serveSidecar/serveForwarding)
+│                                serveServer/serveAgent/serveForwarding)
 └── redis.go                     redisFactory (moved from cmd/main.go)
 
 cmd/                             (slimmed)
@@ -129,7 +129,7 @@ func New(opts Options) (Proxy, error)
 These are extracted from concrete types as the discussion landed. They're consumed by existing plugins, so the interface lives next to the concrete impl, not in the housegate top-level package.
 
 ```go
-// pkg/auth — used by pkg/plugins/route.Signer and pkg/plugins/sidecar.Plugin
+// pkg/auth — used by pkg/plugins/route.Signer and pkg/plugins/agent.Plugin
 type Signer interface {
     Address() string
     SignToken(sql string) (string, error)
@@ -159,7 +159,7 @@ Plugin field types switch from `*concrete` to interface:
 | Field | Old | New |
 |---|---|---|
 | `pkg/plugins/route.Signer.Signer` | `*auth.RelaySigner` | `auth.Signer` |
-| `pkg/plugins/sidecar.Plugin.Signer` | `*auth.RelaySigner` | `auth.Signer` |
+| `pkg/plugins/agent.Plugin.Signer` | `*auth.RelaySigner` | `auth.Signer` |
 | `pkg/plugins/usage.Plugin.Client` | `*billing.Client` | `billing.UsageClient` |
 | `pkg/rewriter.SentioNetworkFactory.clusterMgr` (private) | `*cluster.Manager` | `cluster.Cluster` |
 | `pkg/rewriter.(*SentioNetworkFactory).SetClusterManager` arg | `*cluster.Manager` | `cluster.Cluster` |
@@ -217,9 +217,9 @@ Everything that's purely operator-facing (signal handling, `/metrics` HTTP, `sec
 | Old location | New location | Notes |
 |---|---|---|
 | `cmd/main.go: runServer` | `housegate/build.go: buildServer` (private) | Used by `New` when `cfg.Mode() == ModeServer` |
-| `cmd/main.go: runSidecar` | `housegate/build.go: buildSidecar` (private) | |
+| `cmd/main.go: runAgent` | `housegate/build.go: buildAgent` (private) | |
 | `cmd/main.go: runForwarding` | `housegate/build.go: buildForwarding` (private) | |
-| `cmd/serve.go: serveServer / serveSidecar / serveForwarding` | merged into the build* functions; the listener bind moves into `Proxy.RunWith` | One concrete `proxyImpl` struct holds the assembled `*proxy.Server` + the lifecycle cleanup func; its `RunWith` calls `srv.Serve(ctx, ln)` |
+| `cmd/serve.go: serveServer / serveAgent / serveForwarding` | merged into the build* functions; the listener bind moves into `Proxy.RunWith` | One concrete `proxyImpl` struct holds the assembled `*proxy.Server` + the lifecycle cleanup func; its `RunWith` calls `srv.Serve(ctx, ln)` |
 | `cmd/main.go: redisFactory` | `housegate/redis.go: redisFactory` | Stays unexported in housegate; the public Options exposes `RedisClients map[string]*redis.Client` instead |
 | `cmd/main.go: loadNetworkState / loadCkhManager / buildRewriterFactory / buildClusterManager` | `housegate/build.go` | Unexported — internal building blocks |
 | `cmd/main.go: dialRaw / pickRandomBoundProxy / selfListenPort / isLocalAddress` | `housegate/build.go` | Unexported — used only by the forwarding-mode builder |
@@ -259,7 +259,7 @@ Ordering matches the existing `defer` stack in `runServer`.
 
 Two new test categories:
 
-1. **Unit tests for the new `housegate` package** — table-driven `TestNew_DispatchByMode` covering server / sidecar / forwarding-only with minimal config; assert that the returned `*proxyImpl` has the expected plugin-chain shape (or smoke that it serves a single bind-and-close cycle on `:0`).
+1. **Unit tests for the new `housegate` package** — table-driven `TestNew_DispatchByMode` covering server / agent / forwarding-only with minimal config; assert that the returned `*proxyImpl` has the expected plugin-chain shape (or smoke that it serves a single bind-and-close cycle on `:0`).
 
 2. **Roundtrip integration test** — `housegate.New(Options{Config: minimalServerCfg, NetworkState: yamlState}).RunWith(ctx, listenZero)` then dial `Addr()` with a tiny ClickHouse client mock; verifies the lib path is wire-equivalent to the binary path.
 

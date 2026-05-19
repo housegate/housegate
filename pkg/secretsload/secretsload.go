@@ -83,7 +83,7 @@ func LoadIdentities() ([]age.Identity, error) {
 
 // LoadRecipients resolves age recipients (public keys) from env or extra.
 // extra entries (raw "age1..." strings) are appended, letting callers add
-// recipients parsed from CLI flags or sidecar files.
+// recipients parsed from CLI flags or companion files.
 func LoadRecipients(extra ...string) ([]age.Recipient, error) {
 	var lines []string
 	if env := os.Getenv(EnvRecipients); env != "" {

@@ -592,7 +592,7 @@ In `proxy.go`'s `Options` struct, add (after the existing dependency overrides):
 // ClickHouse is contacted. Empty / nil = no commitgate plugin
 // is wired.
 //
-// Server mode only. Sidecar / forwarding-only modes ignore this
+// Server mode only. Agent / forwarding-only modes ignore this
 // field — they forward to a server-mode proxy that fires its own
 // gate. Routed (proxy-to-proxy) sessions also skip the plugin.
 //
@@ -625,7 +625,7 @@ if len(opts.CommitGateObservers) > 0 {
 
 The position is **after** rewrite (so `qctx.StatementType` and `qctx.AccessedTables` are populated) and **before** `routeplugin.Signer` (so we abort before JWS signing).
 
-- [ ] **Step 2: Confirm `buildSidecar` and `buildForwarding` are NOT touched**
+- [ ] **Step 2: Confirm `buildAgent` and `buildForwarding` are NOT touched**
 
 Quick grep: `grep -n "CommitGate\|commitgate" /Users/uranuswch/Dev/housegate/housegate/build.go` — should appear only in `buildServer`.
 
@@ -870,5 +870,5 @@ EOF
 
 - Late-binding `Proxy.RegisterCommitGate(...)` API — Options-only registration in v1.
 - Post-execute / compensation hook — host-side reconciler if needed.
-- Sidecar-mode gate — single point of enforcement is server-mode.
+- Agent-mode gate — single point of enforcement is server-mode.
 - `RENAME TABLE` / `ALTER TABLE` gating.

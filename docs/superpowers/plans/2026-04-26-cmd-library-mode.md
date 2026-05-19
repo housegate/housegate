@@ -6,7 +6,7 @@
 
 **Goal:** Refactor housegate so the same codebase serves both the standalone binary (current operator UX, untouched) and a library API (`housegate.New(opts).Run(ctx)`) that other Go services and tests can embed.
 
-**Architecture:** Add a new top-level package at module root (`housegate/housegate` import path, `package housegate`). It exposes a small `Proxy` interface and a flat `Options` struct. All dependency assembly + plugin chain wiring (currently spread across `cmd/main.go runServer/runSidecar/runForwarding` and `cmd/serve.go serveServer/serveSidecar/serveForwarding`) moves into the new package. `cmd/main.go` becomes a thin shell: flag parsing, secret-* dispatch, signal context, `/metrics` HTTP, then `housegate.New(opts).Run(ctx)`. Three small interfaces are extracted along the way (`auth.Signer`, `billing.UsageClient`, `cluster.Cluster`) so library users can inject their own implementations.
+**Architecture:** Add a new top-level package at module root (`housegate/housegate` import path, `package housegate`). It exposes a small `Proxy` interface and a flat `Options` struct. All dependency assembly + plugin chain wiring (currently spread across `cmd/main.go runServer/runAgent/runForwarding` and `cmd/serve.go serveServer/serveAgent/serveForwarding`) moves into the new package. `cmd/main.go` becomes a thin shell: flag parsing, secret-* dispatch, signal context, `/metrics` HTTP, then `housegate.New(opts).Run(ctx)`. Three small interfaces are extracted along the way (`auth.Signer`, `billing.UsageClient`, `cluster.Cluster`) so library users can inject their own implementations.
 
 **Tech Stack:** Go 1.24, Bazel 8.5.1 (Bzlmod), gRPC, Redis (go-redis/v9), Prometheus client_golang, sentio-core/log.
 
@@ -23,7 +23,7 @@ These three tasks each extract one interface and switch its consumer to use it. 
 **Files:**
 - Create: `pkg/auth/signer.go`
 - Modify: `pkg/plugins/route/signer.go:35` (field type)
-- Modify: `pkg/plugins/sidecar/signer.go:36` (field type)
+- Modify: `pkg/plugins/agent/signer.go:36` (field type)
 - Modify: `pkg/plugins/route/BUILD.bazel` (no dep change expected; verify after edit)
 
 - [ ] **Step 1: Create the interface file**
@@ -69,9 +69,9 @@ type Signer struct {
 
 (Only the field type changes; all method calls on `p.Signer` already match the interface — `SignToken`, no other access.)
 
-- [ ] **Step 4: Switch `sidecar.Plugin.Signer` field to interface**
+- [ ] **Step 4: Switch `agent.Plugin.Signer` field to interface**
 
-Modify `pkg/plugins/sidecar/signer.go` line 36:
+Modify `pkg/plugins/agent/signer.go` line 36:
 
 ```go
 type Plugin struct {
@@ -82,7 +82,7 @@ type Plugin struct {
 
 - [ ] **Step 5: Run the existing tests for the two plugins to confirm zero behavior change**
 
-Run: `bazel test //pkg/plugins/route:route_test //pkg/plugins/sidecar:sidecar_test`
+Run: `bazel test //pkg/plugins/route:route_test //pkg/plugins/agent:agent_test`
 Expected: PASS (same set as on `main`).
 
 - [ ] **Step 6: Run the full plugin/proxy test suite**
@@ -93,11 +93,11 @@ Expected: PASS (same set as on `main`).
 - [ ] **Step 7: Commit**
 
 ```bash
-git add pkg/auth/signer.go pkg/plugins/route/signer.go pkg/plugins/sidecar/signer.go
+git add pkg/auth/signer.go pkg/plugins/route/signer.go pkg/plugins/agent/signer.go
 git commit -m "$(cat <<'EOF'
 refactor(auth): extract Signer interface, switch plugins to consume it
 
-Plugins routeplugin.Signer and sidecar.Plugin now hold auth.Signer
+Plugins routeplugin.Signer and agent.Plugin now hold auth.Signer
 instead of *auth.RelaySigner. *RelaySigner continues to satisfy it
 via a compile-time assertion in pkg/auth/signer.go. No behavior
 change.
@@ -474,7 +474,7 @@ git commit -m "$(cat <<'EOF'
 feat(housegate): add root package skeleton (Proxy/Options/New)
 
 New is a not-implemented stub at this point; Phase 3 fills the body
-by moving cmd/main.go's runServer/runSidecar/runForwarding logic
+by moving cmd/main.go's runServer/runAgent/runForwarding logic
 and cmd/serve.go's serve* helpers into the housegate package.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
@@ -776,7 +776,7 @@ EOF
 
 ### Task 7: Move per-mode builders into housegate
 
-This task moves the bodies of `runServer`/`runSidecar`/`runForwarding` (from `cmd/main.go`) and `serveServer`/`serveSidecar`/`serveForwarding` (from `cmd/serve.go`) into housegate, **merged** into three private functions: `buildServer`/`buildSidecar`/`buildForwarding`. Each returns a constructed `*proxy.Server` plus a teardown closure; it does not call `srv.Serve` (that's the next task). This produces a buildable but-not-yet-wired version.
+This task moves the bodies of `runServer`/`runAgent`/`runForwarding` (from `cmd/main.go`) and `serveServer`/`serveAgent`/`serveForwarding` (from `cmd/serve.go`) into housegate, **merged** into three private functions: `buildServer`/`buildAgent`/`buildForwarding`. Each returns a constructed `*proxy.Server` plus a teardown closure; it does not call `srv.Serve` (that's the next task). This produces a buildable but-not-yet-wired version.
 
 **Files:**
 - Modify: `build.go` — append the three buildXxx functions plus shared helpers (`dialRaw`, `pickRandomBoundProxy`, `selfListenPort`, `isLocalAddress`)
@@ -807,7 +807,7 @@ import (
     metricsplugin "housegate/housegate/pkg/plugins/metrics"
     "housegate/housegate/pkg/plugins/rewrite"
     routeplugin "housegate/housegate/pkg/plugins/route"
-    "housegate/housegate/pkg/plugins/sidecar"
+    "housegate/housegate/pkg/plugins/agent"
     statePlugin "housegate/housegate/pkg/plugins/state"
     "housegate/housegate/pkg/plugins/usage"
     "housegate/housegate/pkg/proxy"
@@ -1079,25 +1079,25 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 }
 ```
 
-- [ ] **Step 3: Move `serveSidecar` body into `buildSidecar`**
+- [ ] **Step 3: Move `serveAgent` body into `buildAgent`**
 
 Append to `build.go`:
 
 ```go
-func buildSidecar(opts Options) (*builtServer, error) {
+func buildAgent(opts Options) (*builtServer, error) {
     cfg := opts.Config
 
     var signer auth.Signer
     if opts.Signer != nil {
         signer = opts.Signer
     } else {
-        s, err := auth.NewRelaySigner(cfg.Sidecar.PrivateKeyHex)
+        s, err := auth.NewRelaySigner(cfg.Agent.PrivateKeyHex)
         if err != nil {
-            return nil, fmt.Errorf("failed to create sidecar signer: %w", err)
+            return nil, fmt.Errorf("failed to create agent signer: %w", err)
         }
         signer = s
-        log.Infow("sidecar proxy mode: signing queries",
-            "address", s.Address(), "upstream", cfg.Sidecar.Upstream)
+        log.Infow("agent proxy mode: signing queries",
+            "address", s.Address(), "upstream", cfg.Agent.Upstream)
     }
 
     obs := proxy.NewMetricsObserver()
@@ -1106,14 +1106,14 @@ func buildSidecar(opts Options) (*builtServer, error) {
         ConnLifecyclePlugins:     []plugin.ConnLifecyclePlugin{metrics},
         HandshakeCompletePlugins: []plugin.HandshakeCompletePlugin{metrics},
         QueryPlugins: []plugin.QueryPlugin{
-            &sidecar.Plugin{Signer: signer, Observer: obs},
+            &agent.Plugin{Signer: signer, Observer: obs},
             metrics,
         },
         ExceptionPlugins: []plugin.ExceptionPlugin{metrics},
     }
 
     dialer := func(ctx context.Context, _ chsession.Session) (*chproto.Codec, error) {
-        return dialRaw(ctx, cfg.Sidecar.Upstream, cfg.DialTimeout.Duration)
+        return dialRaw(ctx, cfg.Agent.Upstream, cfg.DialTimeout.Duration)
     }
 
     srv := proxy.NewServerWithObserver(chain, dialer, obs)
@@ -1274,7 +1274,7 @@ deps = [
     "//pkg/plugins/metrics",
     "//pkg/plugins/rewrite",
     "//pkg/plugins/route",
-    "//pkg/plugins/sidecar",
+    "//pkg/plugins/agent",
     "//pkg/plugins/state",
     "//pkg/plugins/usage",
     "//pkg/proxy",
@@ -1303,7 +1303,7 @@ Expected: both succeed. cmd is still using its own copies; the new code in `hous
 ```bash
 git add build.go BUILD.bazel
 git commit -m "$(cat <<'EOF'
-feat(housegate): port per-mode builders into the lib (buildServer/Sidecar/Forwarding)
+feat(housegate): port per-mode builders into the lib (buildServer/Agent/Forwarding)
 
 Mirrors cmd/main.go run* and cmd/serve.go serve* but: (1) takes deps
 from Options when present, (2) constructs cluster.Manager without
@@ -1348,8 +1348,8 @@ func New(opts Options) (Proxy, error) {
     var built *builtServer
     var err error
     switch opts.Config.Mode() {
-    case config.ModeSidecar:
-        built, err = buildSidecar(opts)
+    case config.ModeAgent:
+        built, err = buildAgent(opts)
     case config.ModeForwardingOnly:
         opts.Config.ForwardingOnly = true
         built, err = buildForwarding(opts, rf)
@@ -1525,9 +1525,9 @@ func main() {
 func loadConfigWithOverrides() config.Config {
     configPath := flag.String("config", config.EnvOrDefault("CK_CONFIG", ""), "path to JSON config file (optional)")
 
-    sidecarMode := flag.Bool("sidecar", false, "enable sidecar mode (token-signing pass-through proxy)")
-    sidecarUpstream := flag.String("sidecar-upstream", "", "server-side proxy address, e.g. 10.0.0.8:9001 (required in sidecar mode)")
-    sidecarKey := flag.String("sidecar-key", "", "sidecar Ethereum private key hex for JWS signing (prefer env var CK_SIDECAR_KEY)")
+    agentMode := flag.Bool("agent", false, "enable agent mode (token-signing pass-through proxy)")
+    agentUpstream := flag.String("agent-upstream", "", "server-side proxy address, e.g. 10.0.0.8:9001 (required in agent mode)")
+    agentKey := flag.String("agent-key", "", "agent Ethereum private key hex for JWS signing (prefer env var CK_AGENT_KEY)")
 
     listenAddr := flag.String("listen", "", "proxy listen address, e.g. :9001 (overrides config/env)")
     metricsAddr := flag.String("metrics-listen", "", "Prometheus metrics listen address, e.g. :9091 (overrides config/env)")
@@ -1553,14 +1553,14 @@ func loadConfigWithOverrides() config.Config {
     cfg := config.Load(cfgPath)
     cfgCleanup()
 
-    if explicitFlags["sidecar"] {
-        cfg.Sidecar.Mode = *sidecarMode
+    if explicitFlags["agent"] {
+        cfg.Agent.Mode = *agentMode
     }
-    if explicitFlags["sidecar-upstream"] {
-        cfg.Sidecar.Upstream = *sidecarUpstream
+    if explicitFlags["agent-upstream"] {
+        cfg.Agent.Upstream = *agentUpstream
     }
-    if explicitFlags["sidecar-key"] {
-        cfg.Sidecar.PrivateKeyHex = *sidecarKey
+    if explicitFlags["agent-key"] {
+        cfg.Agent.PrivateKeyHex = *agentKey
     }
     if explicitFlags["listen"] {
         cfg.Listen = *listenAddr
@@ -1733,16 +1733,16 @@ import (
     "housegate/housegate/pkg/network"
 )
 
-// minimalSidecarConfig returns a config that satisfies cfg.Validate
-// for sidecar mode. The signing key is a deterministic test key.
-func minimalSidecarConfig(t *testing.T) *config.Config {
+// minimalAgentConfig returns a config that satisfies cfg.Validate
+// for agent mode. The signing key is a deterministic test key.
+func minimalAgentConfig(t *testing.T) *config.Config {
     t.Helper()
     cfg := config.Default()
     cfg.Listen = "127.0.0.1:0"
     cfg.MetricsListen = "127.0.0.1:0"
-    cfg.Sidecar.Mode = true
-    cfg.Sidecar.Upstream = "127.0.0.1:1" // we won't dial it
-    cfg.Sidecar.PrivateKeyHex = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    cfg.Agent.Mode = true
+    cfg.Agent.Upstream = "127.0.0.1:1" // we won't dial it
+    cfg.Agent.PrivateKeyHex = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
     return &cfg
 }
 
@@ -1754,7 +1754,7 @@ func minimalForwardingConfig(t *testing.T) *config.Config {
     cfg := config.Default()
     cfg.Listen = "127.0.0.1:0"
     cfg.MetricsListen = "127.0.0.1:0"
-    // Empty upstream + no shard + not sidecar = forwarding-only
+    // Empty upstream + no shard + not agent = forwarding-only
     return &cfg
 }
 
@@ -1764,8 +1764,8 @@ func TestNew_RequiresConfig(t *testing.T) {
     }
 }
 
-func TestNew_SidecarMode(t *testing.T) {
-    p, err := New(Options{Config: minimalSidecarConfig(t)})
+func TestNew_AgentMode(t *testing.T) {
+    p, err := New(Options{Config: minimalAgentConfig(t)})
     if err != nil {
         t.Fatalf("New: %v", err)
     }
@@ -1801,10 +1801,10 @@ func TestNew_ForwardingMode_AcceptsInjectedNetworkState(t *testing.T) {
 }
 
 // TestRunWith_BindAndCancel proves the round-trip: New → RunWith on a
-// :0 listener, cancel ctx, RunWith returns. Sidecar mode is the
+// :0 listener, cancel ctx, RunWith returns. Agent mode is the
 // simplest mode to exercise here because it has no external deps.
 func TestRunWith_BindAndCancel(t *testing.T) {
-    p, err := New(Options{Config: minimalSidecarConfig(t)})
+    p, err := New(Options{Config: minimalAgentConfig(t)})
     if err != nil {
         t.Fatalf("New: %v", err)
     }
@@ -1856,7 +1856,7 @@ test(housegate): mode dispatch + RunWith bind-and-cancel coverage
 
 Covers the New() error contract (Config required, NetworkState
 injection works, forwarding-only without NetworkState fails fast),
-sidecar happy path, and a full round-trip with RunWith on a :0
+agent happy path, and a full round-trip with RunWith on a :0
 listener.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
@@ -1885,7 +1885,7 @@ Expected: same pass/fail set as on `main`. CLAUDE.md notes that `pkg/rewriter:re
 Run: `git diff --stat main && git log --oneline main..HEAD`
 Expected: a clean, reviewable series of ~7-9 commits; the diff should show:
 - New files: `proxy.go`, `redis.go`, `build.go`, `proxy_test.go`, `BUILD.bazel`, `pkg/auth/signer.go`, `pkg/billing/usage_client.go`, `pkg/cluster/cluster_iface.go`
-- Modified files: `pkg/plugins/route/signer.go`, `pkg/plugins/sidecar/signer.go`, `pkg/plugins/usage/usage.go`, `pkg/rewriter/sentio.go`, `cmd/main.go`, `cmd/BUILD.bazel`
+- Modified files: `pkg/plugins/route/signer.go`, `pkg/plugins/agent/signer.go`, `pkg/plugins/usage/usage.go`, `pkg/rewriter/sentio.go`, `cmd/main.go`, `cmd/BUILD.bazel`
 - Deleted: `cmd/serve.go`
 - Untouched: every other plugin, every codec, every test besides our new one.
 

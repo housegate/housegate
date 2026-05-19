@@ -1,14 +1,14 @@
-# Local sidecar-mode config.
+# Local agent-mode config.
 #
-# Run a sidecar next to a CH client; every Query gets a JWS injected,
+# Run an agent next to a CH client; every Query gets a JWS injected,
 # then the packet stream is forwarded to a server-mode housegate
 # (configs/local.yaml listens on :10001 by default).
 #
 # Provide the signing key via env var (do NOT commit a real key here):
-#   export HOUSEGATE_SIDECAR_KEY=0xYOUR_PRIVATE_KEY_HEX
-#   ./housegate -config ./configs/local.sidecar.yaml
+#   export HOUSEGATE_AGENT_KEY=0xYOUR_PRIVATE_KEY_HEX
+#   ./housegate -config ./configs/local.agent.yaml
 #
-# HOUSEGATE_SIDECAR_KEY / HOUSEGATE_SIDECAR_UPSTREAM / HOUSEGATE_SIDECAR=true override the
+# HOUSEGATE_AGENT_KEY / HOUSEGATE_AGENT_UPSTREAM / HOUSEGATE_AGENT=true override the
 # corresponding fields below at startup.
 
 listen: "0.0.0.0:10003"
@@ -21,7 +21,7 @@ max_connection_lifetime: "24h"
 streaming_buf_size: 131072
 validate_checksum: false
 
-sidecar:
+agent:
   mode: true
   private_key_hex: "0x03bef7ad0f263e542a6bc04ba07ca41a958e5ed6e44a504deaec98aebf04d8b2"
 

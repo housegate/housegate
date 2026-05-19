@@ -1,18 +1,18 @@
 package housegate
 
-// sidecar_auto_discover_integration_test.go — end-to-end test for sidecar
+// agent_auto_discover_integration_test.go — end-to-end test for agent
 // upstream auto-discovery (permissioned tier + bootstrap fallback).
 //
 // Origin: docs/superpowers/specs/2026-04-28-two-port-server-mode.md
 //
-// Exercises buildSidecarDialer with two fake indexer-proxy listeners
+// Exercises buildAgentDialer with two fake indexer-proxy listeners
 // and an InMemoryNetworkState. Confirms:
 //
-//   1. Permissioned tier — when the sidecar's account has perms on a
+//   1. Permissioned tier — when the agent's account has perms on a
 //      database hosted by indexer A, every Pick lands on A's port.
 //   2. Bootstrap tier — when the account has no perms, picks distribute
 //      across every bound indexer (no permissioned filter applies).
-//   3. Explicit Sidecar.Upstream wins — even when NetworkState is
+//   3. Explicit Agent.Upstream wins — even when NetworkState is
 //      configured, an explicit address overrides the Selector path.
 
 import (
@@ -29,9 +29,9 @@ import (
 	"housegate/housegate/pkg/chproto"
 	"housegate/housegate/pkg/config"
 	"housegate/housegate/pkg/network"
-	"housegate/housegate/pkg/registry"
-	sidecarcfg "housegate/housegate/pkg/plugins/sidecar"
+	agentcfg "housegate/housegate/pkg/plugins/agent"
 	"housegate/housegate/pkg/proxy"
+	"housegate/housegate/pkg/registry"
 )
 
 // startFakeIndexerProxy stands up a TCP listener that accepts a
@@ -87,13 +87,13 @@ func indexerInfoForAddr(t *testing.T, id uint64, addr string) network.IndexerInf
 	}
 }
 
-// minimalSidecarCfgAutoDiscover returns a Config in sidecar-mode with
+// minimalAgentCfgAutoDiscover returns a Config in agent-mode with
 // an empty Upstream — Selector path is the one under test.
-func minimalSidecarCfgAutoDiscover(t *testing.T) *config.Config {
+func minimalAgentCfgAutoDiscover(t *testing.T) *config.Config {
 	t.Helper()
 	cfg := config.Default()
 	cfg.Listen = "127.0.0.1:0"
-	cfg.Sidecar = sidecarcfg.Config{
+	cfg.Agent = agentcfg.Config{
 		Mode:          true,
 		PrivateKeyHex: testRelayKeyHex,
 	}
@@ -112,7 +112,7 @@ func codecRemoteAddr(c *chproto.Codec) string {
 	return ""
 }
 
-func TestSidecarAutoDiscover_PermissionedTier(t *testing.T) {
+func TestAgentAutoDiscover_PermissionedTier(t *testing.T) {
 	addrA := startFakeIndexerProxy(t)
 	addrB := startFakeIndexerProxy(t)
 
@@ -131,14 +131,14 @@ func TestSidecarAutoDiscover_PermissionedTier(t *testing.T) {
 		"dbOnA": registry.DbAuthRead, // perms only on dbOnA → indexer 1
 	}
 
-	cfg := minimalSidecarCfgAutoDiscover(t)
-	bs, err := buildSidecar(Options{
+	cfg := minimalAgentCfgAutoDiscover(t)
+	bs, err := buildAgent(Options{
 		Config:       cfg,
 		NetworkState: ns,
 		Signer:       signer,
 	}, nil)
 	if err != nil {
-		t.Fatalf("buildSidecar: %v", err)
+		t.Fatalf("buildAgent: %v", err)
 	}
 	defer bs.teardown()
 	if len(bs.listeners) != 1 {
@@ -149,12 +149,12 @@ func TestSidecarAutoDiscover_PermissionedTier(t *testing.T) {
 	// via the public Dial method since the codec it returns is the
 	// upstream we care about. Without that, run the dialer logic
 	// directly via the package-private helper.
-	dialer, err := buildSidecarDialer(Options{
+	dialer, err := buildAgentDialer(Options{
 		Config:       cfg,
 		NetworkState: ns,
 	}, nil, account, proxy.NewMetricsObserver())
 	if err != nil {
-		t.Fatalf("buildSidecarDialer: %v", err)
+		t.Fatalf("buildAgentDialer: %v", err)
 	}
 
 	const trials = 30
@@ -181,7 +181,7 @@ func TestSidecarAutoDiscover_PermissionedTier(t *testing.T) {
 	}
 }
 
-func TestSidecarAutoDiscover_BootstrapTier_NoPerms(t *testing.T) {
+func TestAgentAutoDiscover_BootstrapTier_NoPerms(t *testing.T) {
 	addrA := startFakeIndexerProxy(t)
 	addrB := startFakeIndexerProxy(t)
 
@@ -196,23 +196,23 @@ func TestSidecarAutoDiscover_BootstrapTier_NoPerms(t *testing.T) {
 	ns.IndexerInfos[2] = indexerInfoForAddr(t, 2, addrB)
 	// No DatabaseInfos and no DatabasePermissions — brand-new account.
 
-	cfg := minimalSidecarCfgAutoDiscover(t)
-	bs, err := buildSidecar(Options{
+	cfg := minimalAgentCfgAutoDiscover(t)
+	bs, err := buildAgent(Options{
 		Config:       cfg,
 		NetworkState: ns,
 		Signer:       signer,
 	}, nil)
 	if err != nil {
-		t.Fatalf("buildSidecar: %v", err)
+		t.Fatalf("buildAgent: %v", err)
 	}
 	defer bs.teardown()
 
-	dialer, err := buildSidecarDialer(Options{
+	dialer, err := buildAgentDialer(Options{
 		Config:       cfg,
 		NetworkState: ns,
 	}, nil, account, proxy.NewMetricsObserver())
 	if err != nil {
-		t.Fatalf("buildSidecarDialer: %v", err)
+		t.Fatalf("buildAgentDialer: %v", err)
 	}
 
 	// Use a fairly high trial count so randomness almost certainly hits
@@ -240,8 +240,8 @@ func TestSidecarAutoDiscover_BootstrapTier_NoPerms(t *testing.T) {
 	}
 }
 
-func TestSidecarAutoDiscover_ExplicitUpstreamOverride(t *testing.T) {
-	// When cfg.Sidecar.Upstream is set, the Selector path is skipped.
+func TestAgentAutoDiscover_ExplicitUpstreamOverride(t *testing.T) {
+	// When cfg.Agent.Upstream is set, the Selector path is skipped.
 	// We verify by setting Upstream to a port we control and providing
 	// a NetworkState pointing at a DIFFERENT port — every dial should
 	// land on Upstream.
@@ -257,25 +257,25 @@ func TestSidecarAutoDiscover_ExplicitUpstreamOverride(t *testing.T) {
 	ns := network.NewInMemoryNetworkState()
 	ns.IndexerInfos[1] = indexerInfoForAddr(t, 1, addrIndexer)
 
-	cfg := minimalSidecarCfgAutoDiscover(t)
-	cfg.Sidecar.Upstream = addrUpstream
+	cfg := minimalAgentCfgAutoDiscover(t)
+	cfg.Agent.Upstream = addrUpstream
 
-	bs, err := buildSidecar(Options{
+	bs, err := buildAgent(Options{
 		Config:       cfg,
 		NetworkState: ns,
 		Signer:       signer,
 	}, nil)
 	if err != nil {
-		t.Fatalf("buildSidecar: %v", err)
+		t.Fatalf("buildAgent: %v", err)
 	}
 	defer bs.teardown()
 
-	dialer, err := buildSidecarDialer(Options{
+	dialer, err := buildAgentDialer(Options{
 		Config:       cfg,
 		NetworkState: ns,
 	}, nil, account, proxy.NewMetricsObserver())
 	if err != nil {
-		t.Fatalf("buildSidecarDialer: %v", err)
+		t.Fatalf("buildAgentDialer: %v", err)
 	}
 
 	const trials = 10

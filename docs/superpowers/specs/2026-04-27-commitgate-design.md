@@ -43,7 +43,7 @@ applies (inversely) to `DROP`.
   the external system; we explicitly do not gate it.
 - **`ALTER TABLE` is out of scope.** Schema-level changes do not change
   ownership in the motivating model.
-- **No `commitgate` support in sidecar / forwarding-only modes.** Both
+- **No `commitgate` support in agent / forwarding-only modes.** Both
   modes forward to a server-mode proxy that already runs the chain — gating
   in two places would risk double-fire. Server-mode is the single point of
   enforcement.
@@ -472,7 +472,7 @@ the host's responsibility, **explicitly so**.
 
 ### 4.10 Mode & route applicability
 
-- **Server mode only.** `buildSidecar` and `buildForwarding` do NOT wire
+- **Server mode only.** `buildAgent` and `buildForwarding` do NOT wire
   the plugin. Both forward upstream to a server-mode proxy that fires its
   own gate — single point of enforcement.
 - **Not `RouteAware`.** Routed (proxy-to-proxy via `__route__<target>`)
@@ -506,7 +506,7 @@ queryPlugins = append(queryPlugins,
 (`cgPlug.SubscribedTypes()` is a small helper for log visibility — returns
 the union of all observers' subscribed types.)
 
-No other wiring changes. `buildSidecar` / `buildForwarding` are not
+No other wiring changes. `buildAgent` / `buildForwarding` are not
 touched.
 
 ## 6. Files
@@ -608,10 +608,10 @@ packet reaches the upstream and the client receives an Exception.
    to revert its in-memory mutations when ClickHouse rejects the DDL.
 2. **Late-binding `Proxy.RegisterCommitGate(...)`?** Out of scope for v1;
    can be added without breaking `Options`-style callers.
-3. **Sidecar-side gate?** If hosts want chain commits to happen at the
-   sidecar instead of the server proxy, we can add a sidecar variant —
+3. **Agent-side gate?** If hosts want chain commits to happen at the
+   agent instead of the server proxy, we can add a agent variant —
    but the chain commit must be a single source of truth, so the *server*
-   plugin would need to be configurable to skip when the sidecar already
+   plugin would need to be configurable to skip when the agent already
    handled it. Defer until demand.
 
 ## 10. Implementation prerequisites

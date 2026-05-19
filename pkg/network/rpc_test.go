@@ -1,8 +1,8 @@
 package network_test
 
 // External test package so we can also pull in
-// housegate/housegate/pkg/plugins/sidecar for the Selector integration
-// test (sidecar imports network — internal-package test would cycle).
+// housegate/housegate/pkg/plugins/agent for the Selector integration
+// test (agent imports network — internal-package test would cycle).
 // We re-declare the JSON-RPC wire envelope locally so the test can
 // fake-serve it without touching unexported types in pkg/network.
 
@@ -15,7 +15,7 @@ import (
 	"testing"
 
 	"housegate/housegate/pkg/network"
-	"housegate/housegate/pkg/plugins/sidecar"
+	"housegate/housegate/pkg/plugins/agent"
 	"housegate/housegate/pkg/registry"
 )
 
@@ -249,7 +249,7 @@ func TestRpcNetworkState_UnsupportedServerMethods(t *testing.T) {
 	}
 }
 
-// TestRpcNetworkState_SelectorIntegration runs the actual sidecar
+// TestRpcNetworkState_SelectorIntegration runs the actual agent
 // Selector against an RPC-backed Registry end-to-end.
 func TestRpcNetworkState_SelectorIntegration(t *testing.T) {
 	const account = "0xabc"
@@ -279,7 +279,7 @@ func TestRpcNetworkState_SelectorIntegration(t *testing.T) {
 	})
 
 	// Permissioned tier: account owns db-1 on indexer 1.
-	sel := &sidecar.Selector{Topology: rpc, Databases: rpc, Access: rpc, Account: account}
+	sel := &agent.Selector{Topology: rpc, Databases: rpc, Access: rpc, Account: account}
 	choice, err := sel.Pick(rand.New(rand.NewSource(1)))
 	if err != nil {
 		t.Fatalf("Pick(owned account): %v", err)
@@ -292,7 +292,7 @@ func TestRpcNetworkState_SelectorIntegration(t *testing.T) {
 	}
 
 	// Bootstrap tier: unknown account falls through to any bound peer.
-	selBoot := &sidecar.Selector{Topology: rpc, Databases: rpc, Access: rpc, Account: "0xstranger"}
+	selBoot := &agent.Selector{Topology: rpc, Databases: rpc, Access: rpc, Account: "0xstranger"}
 	bootChoice, err := selBoot.Pick(rand.New(rand.NewSource(1)))
 	if err != nil {
 		t.Fatalf("Pick(unknown account): %v", err)

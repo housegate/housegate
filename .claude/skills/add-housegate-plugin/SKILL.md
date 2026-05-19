@@ -23,7 +23,7 @@ pkg/<leaf>/                Reusable leaves: auth, billing, credentials, network,
                            Plugins import these — NOT pkg/proxy
 pkg/cfgtypes/              cfgtypes.Duration (use this in your Config for time fields)
 pkg/config/                Root Config — gets a new field that holds your plugin's Config
-build.go (root)            Wires plugin into the chain (buildServer / buildSidecar / buildForwarding)
+build.go (root)            Wires plugin into the chain (buildServer / buildAgent / buildForwarding)
 ```
 
 **Plugins MUST NOT import `pkg/proxy`.** That's the architectural invariant — plugins depend on small leaf packages, not on the god package. If you find yourself wanting to import `pkg/proxy`, the type you need probably belongs in a leaf package; extract it.
@@ -57,7 +57,7 @@ pkg/plugins/<name>/
 
 **Package name caveat — if your plugin name collides with a leaf package, rename the package (NOT the directory).**
 
-Example: `pkg/plugins/auth/` package is `authplugin` (because `pkg/auth` is also `package auth`). Same trick for `pkg/plugins/route/` (`package routeplugin`). Other plugin packages (concurrency, sidecar, usage, credential, rewrite, state) keep their natural name because no collision exists.
+Example: `pkg/plugins/auth/` package is `authplugin` (because `pkg/auth` is also `package auth`). Same trick for `pkg/plugins/route/` (`package routeplugin`). Other plugin packages (concurrency, agent, usage, credential, rewrite, state) keep their natural name because no collision exists.
 
 #### Plugin file template
 
@@ -176,7 +176,7 @@ Add the dep to `pkg/config/BUILD.bazel` (`deps` of both `config` library and `co
 
 ### Step 4 — Wire into the lib
 
-Edit `build.go` at the module root (`housegate` package). Build your plugin in `buildServer` (and/or `buildSidecar` / `buildForwarding` if it should fire there too) — that's where the existing wiring lives:
+Edit `build.go` at the module root (`housegate` package). Build your plugin in `buildServer` (and/or `buildAgent` / `buildForwarding` if it should fire there too) — that's where the existing wiring lives:
 
 ```go
 import (

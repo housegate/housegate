@@ -257,7 +257,7 @@ func TestEthValidator_MaintenanceRejectedFromAllowedNonIndexer(t *testing.T) {
 }
 
 func TestEthValidator_MaintenanceRejectedWhenNoIndexerConfigured(t *testing.T) {
-	// indexerAddress is empty (e.g. observer-mode housegate or sidecar).
+	// indexerAddress is empty (e.g. observer-mode housegate or agent).
 	// Any maintenance request must be rejected outright.
 	privKeyHex := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	privKey, _ := crypto.HexToECDSA(privKeyHex)

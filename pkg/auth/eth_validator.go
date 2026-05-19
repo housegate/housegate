@@ -232,7 +232,7 @@ func (v *EthValidator) validateJWSJSON(token, sql string) (string, error) {
 //
 // Surrounding `'` / `"` are trimmed before matching: clickhouse-go's
 // CustomSetting wraps every Custom-flagged string value through
-// Field::restoreFromDump (single-quoted form), and sidecar/route
+// Field::restoreFromDump (single-quoted form), and agent/route
 // signers do the same so CH parses the value correctly. The validator
 // trims the same quoting on AuthTokenSettingKey above; mirror it here
 // so the maintenance check is invariant to the client's wire format.

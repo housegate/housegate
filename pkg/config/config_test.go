@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"housegate/housegate/pkg/cluster"
-	"housegate/housegate/pkg/plugins/sidecar"
+	"housegate/housegate/pkg/plugins/agent"
 )
 
 func TestDurationUnmarshal(t *testing.T) {
@@ -57,7 +57,7 @@ func TestConfigMode(t *testing.T) {
 		cfg  Config
 		want Mode
 	}{
-		{"sidecar beats everything", Config{Sidecar: sidecar.Config{Mode: true}, Upstream: "x", Shard: &cluster.ShardConfig{}}, ModeSidecar},
+		{"agent beats everything", Config{Agent: agent.Config{Mode: true}, Upstream: "x", Shard: &cluster.ShardConfig{}}, ModeAgent},
 		{"server with upstream", Config{Listen: ":9001", Upstream: "ch:9000"}, ModeServer},
 		{"server with shard", Config{Listen: ":9001", Shard: &cluster.ShardConfig{}}, ModeServer},
 		{"router-only server when nothing bound", Config{Listen: ":9001"}, ModeServer},
@@ -204,9 +204,9 @@ func TestConfig_Validate_ServerMode_InternalListenOptional(t *testing.T) {
 
 func TestConfigValidate(t *testing.T) {
 	baseServer := minimalServerConfig(t)
-	baseSidecar := Config{
+	baseAgent := Config{
 		Listen: ":9001",
-		Sidecar: sidecar.Config{
+		Agent: agent.Config{
 			Mode:          true,
 			Upstream:      "proxy:9001",
 			PrivateKeyHex: "0xdeadbeef",
@@ -228,7 +228,7 @@ func TestConfigValidate(t *testing.T) {
 		wantContain []string // substrings the error must contain
 	}{
 		{name: "server happy path", cfg: baseServer, wantErr: false},
-		{name: "sidecar happy path", cfg: baseSidecar, wantErr: false},
+		{name: "agent happy path", cfg: baseAgent, wantErr: false},
 		{name: "router-only server happy path", cfg: baseRouterOnly, wantErr: false},
 
 		{
@@ -251,63 +251,63 @@ func TestConfigValidate(t *testing.T) {
 			wantErr: true, wantContain: []string{"ckh_manager_config_path"},
 		},
 		{
-			name: "sidecar missing private key",
-			cfg:  baseSidecar, mutate: func(c *Config) { c.Sidecar.PrivateKeyHex = "" },
-			wantErr: true, wantContain: []string{"sidecar.private_key_hex"},
+			name: "agent missing private key",
+			cfg:  baseAgent, mutate: func(c *Config) { c.Agent.PrivateKeyHex = "" },
+			wantErr: true, wantContain: []string{"agent.private_key_hex"},
 		},
 		{
-			name: "sidecar owner optional", cfg: baseSidecar,
-			mutate:  func(c *Config) { c.Sidecar.Owner = "" },
+			name: "agent owner optional", cfg: baseAgent,
+			mutate:  func(c *Config) { c.Agent.Owner = "" },
 			wantErr: false,
 		},
 		{
-			name: "sidecar owner valid hex address", cfg: baseSidecar,
-			mutate:  func(c *Config) { c.Sidecar.Owner = "0x1111111111111111111111111111111111111111" },
+			name: "agent owner valid hex address", cfg: baseAgent,
+			mutate:  func(c *Config) { c.Agent.Owner = "0x1111111111111111111111111111111111111111" },
 			wantErr: false,
 		},
 		{
-			name: "sidecar owner invalid hex address", cfg: baseSidecar,
-			mutate:  func(c *Config) { c.Sidecar.Owner = "not-an-address" },
-			wantErr: true, wantContain: []string{"sidecar.owner"},
+			name: "agent owner invalid hex address", cfg: baseAgent,
+			mutate:  func(c *Config) { c.Agent.Owner = "not-an-address" },
+			wantErr: true, wantContain: []string{"agent.owner"},
 		},
 		{
-			name: "sidecar missing upstream and network_state",
-			cfg:  baseSidecar, mutate: func(c *Config) {
-				c.Sidecar.Upstream = ""
+			name: "agent missing upstream and network_state",
+			cfg:  baseAgent, mutate: func(c *Config) {
+				c.Agent.Upstream = ""
 				c.NetworkState.Source = ""
 				c.RedisDefaultAddr = ""
 			},
-			wantErr: true, wantContain: []string{"sidecar.upstream", "network_state"},
+			wantErr: true, wantContain: []string{"agent.upstream", "network_state"},
 		},
 		{
-			name: "sidecar auto-discovery via yaml network_state",
-			cfg:  baseSidecar, mutate: func(c *Config) {
-				c.Sidecar.Upstream = ""
+			name: "agent auto-discovery via yaml network_state",
+			cfg:  baseAgent, mutate: func(c *Config) {
+				c.Agent.Upstream = ""
 				c.NetworkState.Source = "configs/local.network_state.yaml"
 			},
 			wantErr: false,
 		},
 		{
-			name: "sidecar auto-discovery via redis network_state",
-			cfg:  baseSidecar, mutate: func(c *Config) {
-				c.Sidecar.Upstream = ""
+			name: "agent auto-discovery via redis network_state",
+			cfg:  baseAgent, mutate: func(c *Config) {
+				c.Agent.Upstream = ""
 				c.RedisDefaultAddr = "127.0.0.1:6379"
 			},
 			wantErr: false,
 		},
 		{
-			name: "sidecar auto-discovery via rpc network_state",
-			cfg:  baseSidecar, mutate: func(c *Config) {
-				c.Sidecar.Upstream = ""
+			name: "agent auto-discovery via rpc network_state",
+			cfg:  baseAgent, mutate: func(c *Config) {
+				c.Agent.Upstream = ""
 				c.RedisDefaultAddr = ""
 				c.NetworkState.Source = "http://node.example.com:10003"
 			},
 			wantErr: false,
 		},
 		{
-			name: "sidecar auto-discovery via https rpc",
-			cfg:  baseSidecar, mutate: func(c *Config) {
-				c.Sidecar.Upstream = ""
+			name: "agent auto-discovery via https rpc",
+			cfg:  baseAgent, mutate: func(c *Config) {
+				c.Agent.Upstream = ""
 				c.RedisDefaultAddr = ""
 				c.NetworkState.Source = "https://node.example.com:10003"
 			},
@@ -319,7 +319,7 @@ func TestConfigValidate(t *testing.T) {
 				c.RedisDefaultAddr = ""
 				c.NetworkState.Source = "http://node.example.com:10003"
 			},
-			wantErr: true, wantContain: []string{"RPC backend", "sidecar-mode only"},
+			wantErr: true, wantContain: []string{"RPC backend", "agent-mode only"},
 		},
 		{
 			name: "router-only server missing redis",
@@ -342,8 +342,8 @@ func TestConfigValidate(t *testing.T) {
 			wantErr: true, wantContain: []string{"network_state.source", "ckh_manager_config_path"},
 		},
 		{
-			name: "sidecar ignores server-mode requirements",
-			cfg:  baseSidecar, mutate: func(c *Config) {
+			name: "agent ignores server-mode requirements",
+			cfg:  baseAgent, mutate: func(c *Config) {
 				c.RedisDefaultAddr = ""
 				c.CkhManagerConfigPath = ""
 			},

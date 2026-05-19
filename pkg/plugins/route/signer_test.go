@@ -31,7 +31,7 @@ var _ auth.Signer = (*stubSigner)(nil)
 // IsRouted() naively returned RouteTarget != "". The downstream
 // effect: Signer appended ProxyA's relay JWS to query.Settings, and
 // ProxyB's auth plugin's settings-map last-wins parsing recovered the
-// relay address as the user identity instead of the sidecar's.
+// relay address as the user identity instead of the agent's.
 //
 // IsRouted() now excludes forward-pivoted sessions; this test asserts
 // the chain semantics: a session with both RouteTarget set AND

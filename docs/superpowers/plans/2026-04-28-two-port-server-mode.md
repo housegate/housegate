@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make every server-mode housegate a valid sidecar entry point by resolving the logical database to its host proxy at handshake time and on each `USE`, transparently rebinding the session's upstream to the correct peer's internal-port. Collapse the historic forwarding-only mode into server mode.
+**Goal:** Make every server-mode housegate a valid agent entry point by resolving the logical database to its host proxy at handshake time and on each `USE`, transparently rebinding the session's upstream to the correct peer's internal-port. Collapse the historic forwarding-only mode into server mode.
 
-**Architecture:** Server mode grows a second listener (`internal_listen_addr`) for peer-only traffic; connections there are pre-flagged `IsPeerTrusted=true` and Stripper hard-rejects any `__route__` envelope as an invariant violation. A new `forward` plugin sits before `rewrite` on the external-port chain, looks up `RetrieveDatabaseInfo(hello.Database)` at OnHello and the same on `USE` detection at OnQuery, and rebinds the session to the resolved peer's internal-port via an extended `Session.RebindUpstream`. A new `ForwardAware` marker (opt-out, mirrors `PeerTrustAware`) skips `rewrite`, `commitgate`, `dbrewriter` on forwarded sessions while keeping `auth`, `metrics`, `usage`, `concurrency` running on the entry proxy. Sidecar drops its fixed `sidecar_upstream` and reads NetworkState to pick a random permissioned peer (with a bootstrap fallback to any bound peer for new accounts).
+**Architecture:** Server mode grows a second listener (`internal_listen_addr`) for peer-only traffic; connections there are pre-flagged `IsPeerTrusted=true` and Stripper hard-rejects any `__route__` envelope as an invariant violation. A new `forward` plugin sits before `rewrite` on the external-port chain, looks up `RetrieveDatabaseInfo(hello.Database)` at OnHello and the same on `USE` detection at OnQuery, and rebinds the session to the resolved peer's internal-port via an extended `Session.RebindUpstream`. A new `ForwardAware` marker (opt-out, mirrors `PeerTrustAware`) skips `rewrite`, `commitgate`, `dbrewriter` on forwarded sessions while keeping `auth`, `metrics`, `usage`, `concurrency` running on the entry proxy. Agent drops its fixed `agent_upstream` and reads NetworkState to pick a random permissioned peer (with a bootstrap fallback to any bound peer for new accounts).
 
 **Tech Stack:** Go 1.22+, Bazel 8.5.1 + Bzlmod, ClickHouse native TCP protocol via `ch-go`, secp256k1 JWS, Redis NetworkState (statemirror), stdlib `testing`.
 
@@ -21,7 +21,7 @@ User preference: never push to `main`; every change is feature-branch + PR. This
 | 1 | `feat/internal-port-listener` | main |
 | 2 | `feat/forward-decision-hello` | Phase 1 merged |
 | 3 | `feat/forward-decision-use` | Phase 2 merged |
-| 4 | `feat/sidecar-auto-discover` | Phase 3 merged (Phase 2 also OK) |
+| 4 | `feat/agent-auto-discover` | Phase 3 merged (Phase 2 also OK) |
 | 5 | `chore/remove-forwarding-only-mode` | Phase 4 merged |
 
 Within a phase, every task ends with a commit. Tests must be green at every commit (Bazel: `bazel test //pkg/proxy:proxy_test //pkg/plugins/...:all` minimum).
@@ -48,7 +48,7 @@ Within a phase, every task ends with a commit. Tests must be green at every comm
 - `pkg/rewriter/sentio.go` — replace `resolveRemoteCredentials` body with call to `peer.SignPeerHello`
 - `pkg/plugins/route/stripper.go` — hard-reject `__route__` when session is on internal-port
 - `pkg/plugins/rewrite/`, `commitgate/`, `dbrewriter/` — implement `ForwardAware` opt-out
-- `pkg/plugins/sidecar/` + `build.go::buildSidecar` — NetworkState-driven upstream selection
+- `pkg/plugins/agent/` + `build.go::buildAgent` — NetworkState-driven upstream selection
 - `CLAUDE.md` — updated mode set + topology diagram (Phase 5)
 
 **Deleted (Phase 5):**
@@ -679,7 +679,7 @@ gh pr create --title "feat: internal-port listener for peer-only traffic" --body
 - Internal listener pre-flags sessions \`IsPeerTrusted=true\` + \`IsInternalPort=true\`
 - Stripper hard-rejects \`__route__\` envelope on internal-port (invariant: CH only talks to local proxy)
 
-This is Phase 1 of the two-port server-mode design — sets up infrastructure with no behavior change for existing deployments. Subsequent phases add the forward-decision plugin (Phase 2), USE rebind (Phase 3), and sidecar auto-discovery (Phase 4).
+This is Phase 1 of the two-port server-mode design — sets up infrastructure with no behavior change for existing deployments. Subsequent phases add the forward-decision plugin (Phase 2), USE rebind (Phase 3), and agent auto-discovery (Phase 4).
 
 Spec: docs/superpowers/specs/2026-04-28-two-port-server-mode.md
 
@@ -702,7 +702,7 @@ Wait for review + merge before starting Phase 2.
 
 # Phase 2 — Forward-decision plugin (OnHello) + RebindUpstream-to-peer
 
-**Goal of phase:** sidecar can connect to any server proxy and have its session pivoted at handshake time to whichever peer hosts `hello.Database`. Cross-DB SQL still falls back to the rewriter's `remote()` path. USE rebind comes in Phase 3.
+**Goal of phase:** agent can connect to any server proxy and have its session pivoted at handshake time to whichever peer hosts `hello.Database`. Cross-DB SQL still falls back to the rewriter's `remote()` path. USE rebind comes in Phase 3.
 
 **Branch:** `feat/forward-decision-hello`
 
@@ -1660,14 +1660,14 @@ rewriter's remote() path on locally-served sessions."
 
 ---
 
-## Task 2.7: Phase 2 integration test — sidecar → A → pivots to B at hello
+## Task 2.7: Phase 2 integration test — agent → A → pivots to B at hello
 
 **Files:**
 - Test: `cmd/integration/two_proxy_pivot_test.go` (new) or extend existing integration test layout
 
 - [ ] **Step 1: Write the integration test**
 
-Spin up two `buildServer` instances (A and B) sharing an in-memory NetworkState that says `tenant2 → indexer-B`. Connect a fake sidecar (just a chproto client) to A, send `ClientHello{Database: "tenant2"}`, send a no-op `Query` (e.g., `SELECT 1`), assert: A's metrics show one forwarded session; B's metrics show one peer-trusted incoming session; the query response comes back to the client.
+Spin up two `buildServer` instances (A and B) sharing an in-memory NetworkState that says `tenant2 → indexer-B`. Connect a fake agent (just a chproto client) to A, send `ClientHello{Database: "tenant2"}`, send a no-op `Query` (e.g., `SELECT 1`), assert: A's metrics show one forwarded session; B's metrics show one peer-trusted incoming session; the query response comes back to the client.
 
 ```go
 func TestTwoProxyPivot_HelloDatabaseRoutesToPeer(t *testing.T) {
@@ -1712,7 +1712,7 @@ Expected: PASS.
 
 ```bash
 git add cmd/integration/two_proxy_pivot_test.go
-git commit -m "integration: sidecar→A→pivot-to-B at hello time"
+git commit -m "integration: agent→A→pivot-to-B at hello time"
 ```
 
 ---
@@ -2059,19 +2059,19 @@ Wait for merge.
 
 ---
 
-# Phase 4 — Sidecar auto-discovery
+# Phase 4 — Agent auto-discovery
 
-**Goal of phase:** sidecar reads NetworkState; picks a permissioned random peer; falls back to any bound peer for new accounts. Bootstrap fallback is logged + metered.
+**Goal of phase:** agent reads NetworkState; picks a permissioned random peer; falls back to any bound peer for new accounts. Bootstrap fallback is logged + metered.
 
-**Branch:** `feat/sidecar-auto-discover`
+**Branch:** `feat/agent-auto-discover`
 
 ```bash
-git switch main && git pull --ff-only && git switch -c feat/sidecar-auto-discover
+git switch main && git pull --ff-only && git switch -c feat/agent-auto-discover
 ```
 
 ---
 
-## Task 4.1: Add `sidecar_network_state` config block
+## Task 4.1: Add `agent_network_state` config block
 
 **Files:**
 - Modify: `pkg/config/config.go`
@@ -2080,36 +2080,36 @@ git switch main && git pull --ff-only && git switch -c feat/sidecar-auto-discove
 - [ ] **Step 1: Write the failing test**
 
 ```go
-func TestConfig_Validate_Sidecar_AutoDiscover(t *testing.T) {
-    cfg := minimalSidecarConfig(t)
-    cfg.Sidecar.Upstream = ""  // auto-discover
-    cfg.Sidecar.NetworkState = config.NetworkStateConfig{Source: "yaml://test.yaml"}
+func TestConfig_Validate_Agent_AutoDiscover(t *testing.T) {
+    cfg := minimalAgentConfig(t)
+    cfg.Agent.Upstream = ""  // auto-discover
+    cfg.Agent.NetworkState = config.NetworkStateConfig{Source: "yaml://test.yaml"}
 
     if err := cfg.Validate(); err != nil {
-        t.Fatalf("auto-discover sidecar must validate: %v", err)
+        t.Fatalf("auto-discover agent must validate: %v", err)
     }
 
-    cfg.Sidecar.Upstream = ""
-    cfg.Sidecar.NetworkState = config.NetworkStateConfig{}
+    cfg.Agent.Upstream = ""
+    cfg.Agent.NetworkState = config.NetworkStateConfig{}
     if err := cfg.Validate(); err == nil {
-        t.Fatalf("auto-discover sidecar without NetworkState must error")
+        t.Fatalf("auto-discover agent without NetworkState must error")
     }
 }
 ```
 
 - [ ] **Step 2: Run, verify fail; add field; verify pass; commit**
 
-In `pkg/config/config.go`, in `SidecarConfig` struct add:
+In `pkg/config/config.go`, in `AgentConfig` struct add:
 
 ```go
 NetworkState NetworkStateConfig `yaml:"network_state" json:"network_state"`
 ```
 
-In `Sidecar.Validate()`, accept either non-empty `Upstream` or non-empty `NetworkState.Source`:
+In `Agent.Validate()`, accept either non-empty `Upstream` or non-empty `NetworkState.Source`:
 
 ```go
 if c.Upstream == "" && !c.NetworkState.IsConfigured() {
-    return fmt.Errorf("sidecar: must set either upstream or network_state")
+    return fmt.Errorf("agent: must set either upstream or network_state")
 }
 ```
 
@@ -2117,7 +2117,7 @@ Run, commit:
 
 ```bash
 git add pkg/config/config.go pkg/config/config_test.go
-git commit -m "config: sidecar accepts network_state for upstream auto-discovery"
+git commit -m "config: agent accepts network_state for upstream auto-discovery"
 ```
 
 ---
@@ -2125,8 +2125,8 @@ git commit -m "config: sidecar accepts network_state for upstream auto-discovery
 ## Task 4.2: Implement two-tier upstream selector
 
 **Files:**
-- Create: `pkg/plugins/sidecar/upstream_select.go`
-- Test: `pkg/plugins/sidecar/upstream_select_test.go`
+- Create: `pkg/plugins/agent/upstream_select.go`
+- Test: `pkg/plugins/agent/upstream_select_test.go`
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2178,10 +2178,10 @@ func TestSelectUpstream_NoBoundIndexers_Errors(t *testing.T) {
 
 - [ ] **Step 2: Run, verify fail; implement; run, verify pass; commit**
 
-`pkg/plugins/sidecar/upstream_select.go`:
+`pkg/plugins/agent/upstream_select.go`:
 
 ```go
-package sidecar
+package agent
 
 import (
     "errors"
@@ -2240,8 +2240,8 @@ func (s *Selector) Pick(r *rand.Rand) (Choice, error) {
 Run, verify pass, commit:
 
 ```bash
-git add pkg/plugins/sidecar/upstream_select.go pkg/plugins/sidecar/upstream_select_test.go
-git commit -m "sidecar: two-tier random upstream selector
+git add pkg/plugins/agent/upstream_select.go pkg/plugins/agent/upstream_select_test.go
+git commit -m "agent: two-tier random upstream selector
 
 Permissioned tier first; bootstrap fallback to any bound peer for new
 accounts (open question §8.1 of spec)."
@@ -2249,46 +2249,46 @@ accounts (open question §8.1 of spec)."
 
 ---
 
-## Task 4.3: Wire selector into `buildSidecar` + observability
+## Task 4.3: Wire selector into `buildAgent` + observability
 
 **Files:**
-- Modify: `build.go::buildSidecar`
-- Test: integration in `cmd/integration/sidecar_auto_discover_test.go`
+- Modify: `build.go::buildAgent`
+- Test: integration in `cmd/integration/agent_auto_discover_test.go`
 
 - [ ] **Step 1: Write integration test**
 
-Set up two server-mode proxies + a sidecar configured with `NetworkState` only (no `Upstream`). Sidecar dials, asserts it lands on a permissioned indexer when perms are set; on a random indexer when no perms (and the bootstrap-fallback log line + metric appear).
+Set up two server-mode proxies + a agent configured with `NetworkState` only (no `Upstream`). Agent dials, asserts it lands on a permissioned indexer when perms are set; on a random indexer when no perms (and the bootstrap-fallback log line + metric appear).
 
-- [ ] **Step 2: Wire selector in `buildSidecar`**
+- [ ] **Step 2: Wire selector in `buildAgent`**
 
 Replace the fixed-upstream dialer with one that calls `Selector.Pick` per session:
 
 ```go
-selector := &sidecar.Selector{NS: sidecarNS, Account: deriveAddress(cfg.Sidecar.PrivateKeyHex)}
+selector := &agent.Selector{NS: agentNS, Account: deriveAddress(cfg.Agent.PrivateKeyHex)}
 dialer := func(ctx context.Context, sess chsession.Session) (*chproto.Codec, error) {
     choice, err := selector.Pick(rand.New(rand.NewSource(time.Now().UnixNano())))
     if err != nil {
-        return nil, fmt.Errorf("sidecar select upstream: %w", err)
+        return nil, fmt.Errorf("agent select upstream: %w", err)
     }
     if choice.IsBootstrap {
-        log.Warnw("sidecar bootstrap fallback: no permissioned DBs",
+        log.Warnw("agent bootstrap fallback: no permissioned DBs",
             "account", selector.Account, "chosen", choice.Indexer.IndexerId)
-        sidecarBootstrapFallbackTotal.WithLabelValues(selector.Account).Inc()
+        agentBootstrapFallbackTotal.WithLabelValues(selector.Account).Inc()
     }
     return chproto.DialNew(ctx, choice.Addr())
 }
 ```
 
-Honor `cfg.Sidecar.Upstream` as override when set.
+Honor `cfg.Agent.Upstream` as override when set.
 
 - [ ] **Step 3: Run integration test, commit**
 
 ```bash
-git add build.go pkg/plugins/sidecar/ cmd/integration/sidecar_auto_discover_test.go
-git commit -m "build: sidecar auto-discovers upstream from NetworkState
+git add build.go pkg/plugins/agent/ cmd/integration/agent_auto_discover_test.go
+git commit -m "build: agent auto-discovers upstream from NetworkState
 
 Permissioned-random first; bootstrap fallback for new accounts emits
-log + sidecar_bootstrap_fallback_total metric. sidecar_upstream still
+log + agent_bootstrap_fallback_total metric. agent_upstream still
 honored as override when set."
 ```
 
@@ -2298,8 +2298,8 @@ honored as override when set."
 
 ```bash
 bazel test //...
-git push -u origin feat/sidecar-auto-discover
-gh pr create --title "feat: sidecar auto-discovers upstream from NetworkState" --body '...'
+git push -u origin feat/agent-auto-discover
+gh pr create --title "feat: agent auto-discovers upstream from NetworkState" --body '...'
 ```
 
 Wait for merge.
@@ -2370,14 +2370,14 @@ In `pkg/config/config.go`:
 
 ```go
 func (c *Config) Mode() Mode {
-    if c.Sidecar.Mode {
-        return ModeSidecar
+    if c.Agent.Mode {
+        return ModeAgent
     }
     return ModeServer
 }
 
 const (
-    ModeSidecar Mode = "sidecar"
+    ModeAgent Mode = "agent"
     ModeServer  Mode = "server"
 )
 ```
@@ -2390,7 +2390,7 @@ In `build.go`, delete:
 - `buildForwarding` (lines 546–597)
 - `pickRandomBoundProxy` (lines 608–627)
 
-Update `New(opts)` to dispatch only on `ModeSidecar` vs `ModeServer`.
+Update `New(opts)` to dispatch only on `ModeAgent` vs `ModeServer`.
 
 - [ ] **Step 3: Run full test suite**
 
@@ -2470,7 +2470,7 @@ Run after writing the plan. Findings recorded inline.
 | §6.2 USE detection | Phase 3.1/3.2 |
 | §6.3 cross-DB SQL falls back | implicit — forward plugin doesn't peek SQL bodies; rewriter `remote()` path unchanged |
 | §7 ForwardAware marker | Phase 2.2/2.3 |
-| §8 sidecar selection | Phase 4.1/4.2/4.3 |
+| §8 agent selection | Phase 4.1/4.2/4.3 |
 | §8.1 bootstrap fallback | Phase 4.2 (Selector) + 4.3 (logging/metric) |
 | §9 RebindUpstream-to-peer | Phase 2.4 (`RebindToPeer`) |
 | §10 config | Phase 1.1 + Phase 4.1 |

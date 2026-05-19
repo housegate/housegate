@@ -59,10 +59,10 @@ func loadConfigWithOverrides() config.Config {
 	showVersion := flag.Bool("version", false, "print version information and exit")
 	configPath := flag.String("config", config.EnvOrDefault("HOUSEGATE_CONFIG", ""), "path to JSON config file (optional)")
 
-	sidecarMode := flag.Bool("sidecar", false, "enable sidecar mode (token-signing pass-through proxy)")
-	sidecarUpstream := flag.String("sidecar-upstream", "", "server-side proxy address, e.g. 10.0.0.8:9001 (required in sidecar mode)")
-	sidecarKey := flag.String("sidecar-key", "", "sidecar Ethereum private key hex for JWS signing (prefer env var HOUSEGATE_SIDECAR_KEY)")
-	sidecarOwner := flag.String("sidecar-owner", "", "billed Ethereum address (owner) when -sidecar-key is an operator key (overrides config/env HOUSEGATE_SIDECAR_OWNER)")
+	agentMode := flag.Bool("agent", false, "enable agent mode (token-signing pass-through proxy)")
+	agentUpstream := flag.String("agent-upstream", "", "server-side proxy address, e.g. 10.0.0.8:9001 (required in agent mode)")
+	agentKey := flag.String("agent-key", "", "agent Ethereum private key hex for JWS signing (prefer env var HOUSEGATE_AGENT_KEY)")
+	agentOwner := flag.String("agent-owner", "", "billed Ethereum address (owner) when -agent-key is an operator key (overrides config/env HOUSEGATE_AGENT_OWNER)")
 
 	stateSource := flag.String("state", "", "NetworkState source: yaml path, redis addr, or RPC URL e.g. http://node:10003 (overrides config/env HOUSEGATE_NETWORK_STATE_SOURCE)")
 	listenAddr := flag.String("listen", "", "proxy listen address, e.g. :9001 (overrides config/env)")
@@ -106,17 +106,17 @@ func loadConfigWithOverrides() config.Config {
 	cfg := config.Load(cfgPath)
 	cfgCleanup()
 
-	if explicitFlags["sidecar"] {
-		cfg.Sidecar.Mode = *sidecarMode
+	if explicitFlags["agent"] {
+		cfg.Agent.Mode = *agentMode
 	}
-	if explicitFlags["sidecar-upstream"] {
-		cfg.Sidecar.Upstream = *sidecarUpstream
+	if explicitFlags["agent-upstream"] {
+		cfg.Agent.Upstream = *agentUpstream
 	}
-	if explicitFlags["sidecar-key"] {
-		cfg.Sidecar.PrivateKeyHex = *sidecarKey
+	if explicitFlags["agent-key"] {
+		cfg.Agent.PrivateKeyHex = *agentKey
 	}
-	if explicitFlags["sidecar-owner"] {
-		cfg.Sidecar.Owner = *sidecarOwner
+	if explicitFlags["agent-owner"] {
+		cfg.Agent.Owner = *agentOwner
 	}
 	if explicitFlags["state"] {
 		cfg.NetworkState.Source = *stateSource

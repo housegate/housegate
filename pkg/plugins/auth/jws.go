@@ -116,7 +116,7 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 //
 // Falls back to a no-op when:
 //   - SQL_x_payer is absent.
-//   - SQL_x_payer equals the signer (legacy single-key sidecar path).
+//   - SQL_x_payer equals the signer (legacy single-key agent path).
 //   - The signer is empty (anonymous / auth-disabled deployments).
 //   - State is nil (no IsOperator backend wired). In this case the
 //     legacy commitgate-side validation path remains the sole gate.

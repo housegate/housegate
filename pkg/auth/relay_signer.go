@@ -1,7 +1,7 @@
 package auth
 
 // relay_signer.go — RelaySigner produces JWS tokens for proxy-to-proxy
-// and sidecar-to-server authentication.
+// and agent-to-server authentication.
 //
 // All proxies in a deployment share the same relay private key; the
 // corresponding address must be in EthValidator.AllowedAddresses on the

@@ -278,7 +278,7 @@ func TestOnQuery_EventExtraction(t *testing.T) {
 	}
 }
 
-// TestOnQuery_OwnerFromPayerSetting verifies that when the sidecar
+// TestOnQuery_OwnerFromPayerSetting verifies that when the agent
 // injects SQL_x_payer (operator-on-behalf-of-owner mode), buildEvent
 // surfaces the owner address as Event.Owner — case-folded, quote-
 // stripped, and zeroed-out when it equals the JWS signer.

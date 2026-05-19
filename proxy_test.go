@@ -11,16 +11,16 @@ import (
 	"housegate/housegate/pkg/network"
 )
 
-// minimalSidecarConfig returns a config that satisfies cfg.Validate
-// for sidecar mode. The signing key is a deterministic test key.
-func minimalSidecarConfig(t *testing.T) *config.Config {
+// minimalAgentConfig returns a config that satisfies cfg.Validate
+// for agent mode. The signing key is a deterministic test key.
+func minimalAgentConfig(t *testing.T) *config.Config {
 	t.Helper()
 	cfg := config.Default()
 	cfg.Listen = "127.0.0.1:0"
 	cfg.MetricsListen = "127.0.0.1:0"
-	cfg.Sidecar.Mode = true
-	cfg.Sidecar.Upstream = "127.0.0.1:1" // we won't dial it
-	cfg.Sidecar.PrivateKeyHex = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	cfg.Agent.Mode = true
+	cfg.Agent.Upstream = "127.0.0.1:1" // we won't dial it
+	cfg.Agent.PrivateKeyHex = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	return &cfg
 }
 
@@ -42,7 +42,7 @@ func minimalRouterOnlyConfig(t *testing.T) *config.Config {
 	cfg.Listen = "127.0.0.1:0"
 	cfg.MetricsListen = "127.0.0.1:0"
 	cfg.RedisDefaultAddr = "127.0.0.1:1" // satisfies Validate; never actually dialed
-	// Empty upstream + no shard + not sidecar = router-only server.
+	// Empty upstream + no shard + not agent = router-only server.
 	return &cfg
 }
 
@@ -52,8 +52,8 @@ func TestNew_RequiresConfig(t *testing.T) {
 	}
 }
 
-func TestNew_SidecarMode(t *testing.T) {
-	p, err := New(Options{Config: minimalSidecarConfig(t)})
+func TestNew_AgentMode(t *testing.T) {
+	p, err := New(Options{Config: minimalAgentConfig(t)})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -134,10 +134,10 @@ func TestNew_RejectsEmptySourceWithoutInjection(t *testing.T) {
 }
 
 // TestRunWith_BindAndCancel proves the round-trip: New → RunWith on a
-// :0 listener, cancel ctx, RunWith returns. Sidecar mode is the
+// :0 listener, cancel ctx, RunWith returns. Agent mode is the
 // simplest mode to exercise here because it has no external deps.
 func TestRunWith_BindAndCancel(t *testing.T) {
-	p, err := New(Options{Config: minimalSidecarConfig(t)})
+	p, err := New(Options{Config: minimalAgentConfig(t)})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

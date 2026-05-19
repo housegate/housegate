@@ -17,10 +17,10 @@ import (
 	"filippo.io/age"
 )
 
-// RecipientsFromSidecar reads public keys from "<target>.recipients", one per
-// line, comments (#) allowed. Returns nil if the sidecar is absent — callers
-// should combine with env/flag sources via LoadRecipients.
-func RecipientsFromSidecar(target string) ([]string, error) {
+// RecipientsFromCompanion reads public keys from "<target>.recipients", one
+// per line, comments (#) allowed. Returns nil if the companion file is absent
+// — callers should combine with env/flag sources via LoadRecipients.
+func RecipientsFromCompanion(target string) ([]string, error) {
 	f, err := os.Open(target + ".recipients")
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -42,15 +42,15 @@ func RecipientsFromSidecar(target string) ([]string, error) {
 }
 
 // ResolveRecipients combines explicit flag-provided keys, env (HOUSEGATE_AGE_RECIPIENTS),
-// and the sidecar "<target>.recipients" file into a single recipient list.
+// and the companion "<target>.recipients" file into a single recipient list.
 // Sources are unioned; duplicates are allowed but harmless to age.
 func ResolveRecipients(target string, extra []string) ([]age.Recipient, error) {
-	sidecar, err := RecipientsFromSidecar(target)
+	companion, err := RecipientsFromCompanion(target)
 	if err != nil {
-		return nil, fmt.Errorf("read sidecar recipients: %w", err)
+		return nil, fmt.Errorf("read companion recipients: %w", err)
 	}
 	combined := append([]string(nil), extra...)
-	combined = append(combined, sidecar...)
+	combined = append(combined, companion...)
 	return LoadRecipients(combined...)
 }
 

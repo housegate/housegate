@@ -1,12 +1,12 @@
-// Package sidecar implements SidecarSignerPlugin, used in sidecar-mode
-// proxies to authenticate every outgoing query against an upstream
-// server-mode proxy.
+// Package agent implements the agent-mode signer plugin, used in
+// agent-mode proxies to authenticate every outgoing query against an
+// upstream server-mode proxy.
 //
 // Unlike the route signer (which only signs queries belonging to a routed
-// session) this plugin signs unconditionally, because every query a
-// sidecar emits must be authenticated before it reaches the server-mode
+// session) this plugin signs unconditionally, because every query an
+// agent emits must be authenticated before it reaches the server-mode
 // proxy.
-package sidecar
+package agent
 
 import (
 	"context"
@@ -24,8 +24,8 @@ import (
 // (which would cycle via pkg/plugin). *proxy.MetricsObserver satisfies
 // it.
 type Observer interface {
-	SidecarTokenInjected()
-	SidecarTokenError()
+	AgentTokenInjected()
+	AgentTokenError()
 }
 
 // Plugin signs each outgoing Query.Body and injects the JWS as the
@@ -56,9 +56,9 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	token, err := p.Signer.SignToken(qctx.Query.Body)
 	if err != nil {
 		if p.Observer != nil {
-			p.Observer.SidecarTokenError()
+			p.Observer.AgentTokenError()
 		}
-		return fmt.Errorf("sidecar-sign: %w", err)
+		return fmt.Errorf("agent-sign: %w", err)
 	}
 	qctx.Query.Settings = append(qctx.Query.Settings, chproto.Setting{
 		Key: auth.AuthTokenSettingKey,
@@ -80,10 +80,10 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 		})
 	}
 	if p.Observer != nil {
-		p.Observer.SidecarTokenInjected()
+		p.Observer.AgentTokenInjected()
 	}
 	_, logger := log.FromContext(ctx)
-	logger.Debugw("sidecar signer: injected auth token", auth.AuthTokenSettingKey, token)
+	logger.Debugw("agent signer: injected auth token", auth.AuthTokenSettingKey, token)
 	return nil
 }
 

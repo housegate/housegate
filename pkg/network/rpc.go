@@ -1,9 +1,9 @@
 package network
 
-// rpc.go — JSON-RPC-backed read-only registry.Registry for sidecar
+// rpc.go — JSON-RPC-backed read-only registry.Registry for agent
 // mode. Hits a sentio storage-node JSON-RPC endpoint (e.g.
 // http://node.example.com:10003) and translates four sentio_* methods
-// to the registry.Registry methods sidecar.Selector consults:
+// to the registry.Registry methods agent.Selector consults:
 //
 //   sentio_getIndexerInfos          -> AllIndexers
 //   sentio_getIndexerInfoById       -> ProxyByIndexerId
@@ -12,7 +12,7 @@ package network
 //
 // Methods that have no JSON-RPC counterpart (All, HasPermission)
 // return zero-value/error responses. This backend is intentionally
-// restricted to sidecar use; config validation rejects it in server
+// restricted to agent use; config validation rejects it in server
 // mode where the missing methods would be exercised.
 
 import (
@@ -216,7 +216,7 @@ func (r *RpcNetworkState) All() map[string]registry.Database {
 // map granting DbAuthOwner on every database the account owns. The
 // RPC returns a list (an account can own multiple databases across
 // indexers); the schema does not yet model a per-account permission
-// bitmap, so sidecar.Selector only needs "which databases is this
+// bitmap, so agent.Selector only needs "which databases is this
 // account allowed to query at all", which is satisfied by mapping
 // each owned database to DbAuthOwner (Owner implies all capabilities).
 //
@@ -243,7 +243,7 @@ func (r *RpcNetworkState) PermissionsFor(account string) (map[string]registry.Db
 	return out, true
 }
 
-// HasPermission has no JSON-RPC counterpart in the sidecar mode this
+// HasPermission has no JSON-RPC counterpart in the agent mode this
 // backend serves; server-side gates run against the redis-statemirror
 // path instead. Always returns an error.
 func (r *RpcNetworkState) HasPermission(account, database string, action registry.Action) (bool, error) {

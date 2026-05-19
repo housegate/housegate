@@ -86,7 +86,7 @@ type PermissionCommitGateObserver struct {
 // database_map decisions stay consistent (both consult the same
 // statemirror snapshot).
 //
-// Operator-on-behalf-of-owner DDL/DCL (sidecar with `--sidecar-owner`)
+// Operator-on-behalf-of-owner DDL/DCL (agent with `--agent-owner`)
 // is satisfied via registry.Access.IsOperator, which production wires
 // off the statemirror's MappingOperators hash; sentio-node's
 // permissions event handler keeps that hash in sync with the on-chain
@@ -171,13 +171,13 @@ func (o *PermissionCommitGateObserver) BeforeStatement(ctx context.Context, ev *
 		return fmt.Errorf("permission: %s requires an authenticated account", ev.Type)
 	}
 
-	// Effective principal resolution. When the sidecar acted as an
+	// Effective principal resolution. When the agent acted as an
 	// operator on behalf of an owner (SQL_x_payer setting), the JWS
 	// signer (ev.User) is NOT the principal whose perms gate this
 	// statement — the owner (ev.Owner) is. Validate the operator-of
 	// relation against State.IsOperator (mirrored from the on-chain
 	// Permissions contract via sentio-node's event handler) before
-	// swapping in the owner; otherwise a malicious sidecar could
+	// swapping in the owner; otherwise a malicious agent could
 	// claim any arbitrary owner.
 	account := AccountAddress(ev.User)
 	if ev.Owner != "" {

@@ -6,23 +6,23 @@
 
 ## 1. Goal
 
-A sidecar's `clickhouse-client` connects through a sidecar housegate to an
-upstream server-mode housegate. Today the sidecar's upstream is a single
+A agent's `clickhouse-client` connects through a agent housegate to an
+upstream server-mode housegate. Today the agent's upstream is a single
 fixed proxy; if the user issues `USE tenant2` and `tenant2` happens to be
 hosted on a *different* server-mode proxy, the session dies with
 `Code: 81. DB::Exception: Database tenant2 doesn't exist`.
 
-We want every server-mode proxy to be a valid entry point for any sidecar:
+We want every server-mode proxy to be a valid entry point for any agent:
 the proxy resolves the logical database to its actual host proxy at
 **handshake time** and again on each `USE`, transparently rebinding the
-session's upstream to the correct server-mode peer when needed. Sidecars
+session's upstream to the correct server-mode peer when needed. Agents
 discover entry points by reading NetworkState rather than holding a
 configured upstream.
 
 To express this cleanly, server mode grows **two listeners** with
 distinct trust postures:
 
-- **External port** — sidecars and local CH `remote()` loopbacks land here.
+- **External port** — agents and local CH `remote()` loopbacks land here.
   Full plugin chain runs (auth, forward-decision, rewrite, …).
 - **Internal port** — only peer housegates dial here. Connections are
   pre-flagged `IsPeerTrusted = true`; auth + rewrite are skipped via the
@@ -43,10 +43,10 @@ router-only server.
 - **Not changing the rewriter.** All `remote()` emission rules, including
   the `__route__` + `__peer__` double envelope and the loopback to local
   housegate, are unchanged.
-- **Not collapsing sidecar mode.** Sidecar's deployment topology (next to
+- **Not collapsing agent mode.** Agent's deployment topology (next to
   the client, holding the signing key) is fundamentally different from
   server mode's; merging would pollute config schema. Server mode and
-  sidecar mode remain distinct.
+  agent mode remain distinct.
 - **Not replacing CH-to-CH network controls.** The invariant "CH only
   talks to its own housegate" is enforced at the network layer (firewall
   / SG); this spec assumes that and relies on it.
@@ -80,12 +80,12 @@ Consequences:
 
 ```
       (signs JWS)                                        (validates JWS)
-sidecar ───────────────────────► external-port ──┐
+agent ───────────────────────► external-port ──┐
                                                  │
 local CH `remote()` ──► loopback ────────────────┤   external-port chain
    to local housegate                            │   • Stripper (peels __route__)
                                                  │   • credential (peer-trust if __peer__)
-                                                 │   • auth (validates sidecar JWS)
+                                                 │   • auth (validates agent JWS)
                                                  │   • forward-decision  ◄── NEW
                                                  │   • rewrite, sessionstate, usage, ...
                                                  │
@@ -117,11 +117,11 @@ flags to pre-flag and which marker filters apply.
 
 | Aspect | external-port | internal-port |
 |---|---|---|
-| Accepted dialers | sidecars, local CH `remote()` loopbacks | peer housegates only |
+| Accepted dialers | agents, local CH `remote()` loopbacks | peer housegates only |
 | Pre-flagged session state | none | `IsPeerTrusted = true`, `PeerAddress = <validated>` |
 | Stripper (`__route__`) | runs (loopback path) | **rejected**: receiving `__route__` on internal-port is a misconfig; close the connection |
 | credential (`__peer__`) | runs when envelope present | runs (validates the JWS that was injected by the dialing peer) |
-| auth | runs (validates sidecar JWS) | skipped via `PeerTrustAware.RunOnPeerTrust=false` |
+| auth | runs (validates agent JWS) | skipped via `PeerTrustAware.RunOnPeerTrust=false` |
 | forward-decision | **new**, runs | does not apply (internal-port never forwards onward) |
 | rewrite | runs | skipped via `PeerTrustAware` |
 | commitgate | runs | skipped via `PeerTrustAware` |
@@ -216,7 +216,7 @@ Opt-outs:
 
 | Plugin | RunOnForward | Reason |
 |---|---|---|
-| auth | **true** | sidecar JWS is verified once at the entry proxy regardless of forwarding |
+| auth | **true** | agent JWS is verified once at the entry proxy regardless of forwarding |
 | metrics | true | local proxy still wants per-session counters |
 | concurrency | true | forwarding consumes a local connection slot too |
 | usage | true | local proxy bills the originating client even when forwarded |
@@ -229,13 +229,13 @@ Opt-outs:
 The chain filter is one new conditional in `pkg/plugin/chain.go` next to
 the existing `RouteAware` / `PeerTrustAware` checks.
 
-## 8. Sidecar upstream selection
+## 8. Agent upstream selection
 
-Sidecar stops carrying a fixed `sidecar_upstream`. At dial time it
+Agent stops carrying a fixed `agent_upstream`. At dial time it
 selects from NetworkState in two tiers:
 
 ```
-account     = sidecar.account                    // Eth addr from sidecar_private_key_hex
+account     = agent.account                    // Eth addr from agent_private_key_hex
 perms       = NetworkState.RetrieveDatabasePermissions(account)
 bound       = []   // any bound indexer
 permissioned = []  // bound indexers hosting at least one DB the account can access
@@ -253,16 +253,16 @@ case len(permissioned) > 0:
     upstream = permissioned[rand]                  // normal path
 case len(bound) > 0:
     upstream = bound[rand]                         // bootstrap fallback (§8.1)
-    log.Warnw("sidecar bootstrap fallback: no permissioned DBs",
+    log.Warnw("agent bootstrap fallback: no permissioned DBs",
               "account", account, "chosen", upstream.IndexerId)
-    metric: sidecar_bootstrap_fallback_total{account=…}.Inc()
+    metric: agent_bootstrap_fallback_total{account=…}.Inc()
 default:
     return error("no bound indexers in NetworkState")
 }
 ```
 
 Random selection across the chosen tier balances load and gives free
-failover (next session re-rolls). The sidecar reconnects on upstream
+failover (next session re-rolls). The agent reconnects on upstream
 failure naturally; no additional retry policy beyond what the TCP/relay
 layer already does.
 
@@ -292,12 +292,12 @@ during implementation.
 
 Config:
 
-- `sidecar_upstream` becomes optional. When set, it overrides
-  auto-discovery (used for tests and for ops to pin sidecars to a
+- `agent_upstream` becomes optional. When set, it overrides
+  auto-discovery (used for tests and for ops to pin agents to a
   specific server).
-- New: `sidecar_network_state` block (Redis/YAML, same shape as
-  server-mode's `network_state_redis`) so the sidecar can read
-  NetworkState. This is the only material new dep on the sidecar.
+- New: `agent_network_state` block (Redis/YAML, same shape as
+  server-mode's `network_state_redis`) so the agent can read
+  NetworkState. This is the only material new dep on the agent.
 
 ## 9. RebindUpstream-to-peer
 
@@ -336,11 +336,11 @@ ckh_manager_config_path: "..."
 shard:
   ...
 
-# sidecar mode
-sidecar_mode: true
-sidecar_private_key_hex: "..."
-sidecar_upstream: ""                    # optional override; empty = auto-discover
-sidecar_network_state:                  # NEW
+# agent mode
+agent_mode: true
+agent_private_key_hex: "..."
+agent_upstream: ""                    # optional override; empty = auto-discover
+agent_network_state:                  # NEW
   redis: { ... }                        # same schema as server's network_state_redis
 ```
 
@@ -355,8 +355,8 @@ Backward compat:
   router-only servers automatically — `Config.Mode()` no longer returns
   `Forwarding`. They keep working without config changes; the upgrade is
   pure code-side.
-- Existing sidecar configs with `sidecar_upstream` set keep that pin
-  until ops empties it and sets `sidecar_network_state`.
+- Existing agent configs with `agent_upstream` set keep that pin
+  until ops empties it and sets `agent_network_state`.
 
 ## 11. Migration & phasing
 
@@ -365,13 +365,13 @@ Each phase is independently shippable and rollback-able.
 | Phase | Change | Risk |
 |---|---|---|
 | 1 | Add `internal_listen_addr` listener with `IsPeerTrusted=true` pre-flag + Stripper-rejection. Existing peer traffic keeps using external-port; verify on internal-port in staging. | low |
-| 2 | Add `forward-decision` plugin (OnHello only). Sidecar still uses fixed `sidecar_upstream`. Pointing a sidecar at any server proxy now works for any DB. | medium — `RebindUpstream` to peer is new code path |
+| 2 | Add `forward-decision` plugin (OnHello only). Agent still uses fixed `agent_upstream`. Pointing a agent at any server proxy now works for any DB. | medium — `RebindUpstream` to peer is new code path |
 | 3 | Extend `forward-decision` with USE rebind. Replay verified against peer's internal-port. | medium — replay correctness |
-| 4 | Sidecar auto-discovery from NetworkState. | low |
+| 4 | Agent auto-discovery from NetworkState. | low |
 | 5 | Delete `Config.Mode() == Forwarding` branch, `buildForwarding`, `pickRandomBoundProxy`. | trivial cleanup |
 
 Each phase has a feature flag (`enable_forward_decision`,
-`enable_internal_port`, `enable_sidecar_auto_discover`) so the rollback
+`enable_internal_port`, `enable_agent_auto_discover`) so the rollback
 is config-only.
 
 ## 12. Open questions
@@ -396,12 +396,12 @@ is config-only.
    wanted local. If the local CH has no `default` database, they get a
    real CH error. Acceptable; matches today's UX.
 5. **Bootstrap fallback abuse vector.** A user with no permissions can
-   open a sidecar session via §8.1 fallback. They land on a random
+   open a agent session via §8.1 fallback. They land on a random
    indexer, but every action (other than CREATE DATABASE) fails at
    auth/permission. Worth a connection-rate limit on bootstrap-fallback
    sessions per account to avoid trivial connection-flood DoS? Probably
    yes; defer to ops if needed. Today's threat model says no since the
-   sidecar pubkey is already gated by who has the private key.
+   agent pubkey is already gated by who has the private key.
 
 ## 13. File map
 
@@ -434,8 +434,8 @@ is config-only.
   [dbrewriter/](pkg/plugins/dbrewriter/): implement `ForwardAware`.
 - [pkg/proxy/config.go](pkg/proxy/config.go): add
   `internal_listen_addr`, drop `Forwarding` from `Mode()`.
-- Sidecar: [pkg/plugins/sidecar/](pkg/plugins/sidecar/) +
-  [build.go](build.go) `buildSidecar`: read `sidecar_network_state`,
+- Agent: [pkg/plugins/agent/](pkg/plugins/agent/) +
+  [build.go](build.go) `buildAgent`: read `agent_network_state`,
   pick upstream by permissioned random.
 
 **Deleted**:

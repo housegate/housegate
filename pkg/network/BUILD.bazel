@@ -35,8 +35,8 @@ go_test(
     embed = [":network"],
     deps = [
         "//pkg/chproto",
+        "//pkg/plugins/agent",
         "//pkg/plugins/commitgate",
-        "//pkg/plugins/sidecar",
         "//pkg/registry",
         "//pkg/sqlmeta",
     ],

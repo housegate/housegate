@@ -394,7 +394,7 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 			// remote() was actually caused by SQL_x_auth_token going
 			// out without Custom=true + Field-dump quoting, which
 			// failed setting application before executeQuery — fixed in
-			// the route/sidecar Signer.
+			// the route/agent Signer.
 			logger.Debugw("query forwarded to upstream",
 				"query_id", q.ID,
 				"upstream", upstreamAddr(up),
