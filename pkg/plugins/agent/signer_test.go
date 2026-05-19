@@ -1,4 +1,4 @@
-package sidecar
+package agent
 
 import (
 	"context"
@@ -171,8 +171,8 @@ func TestPlugin_SignsBodyNotOriginalSQL(t *testing.T) {
 
 // decodeJWSPayloadQHash parses a JWS compact token (header.payload.sig) and
 // returns the qhash from its payload. We do not verify the signature here —
-// SidecarSignerPlugin only delegates signing to RelaySigner, which has its
-// own coverage in pkg/proxy.
+// the agent signer plugin only delegates signing to RelaySigner, which has
+// its own coverage in pkg/proxy.
 func decodeJWSPayloadQHash(token string) (string, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {

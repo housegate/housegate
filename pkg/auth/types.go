@@ -20,7 +20,7 @@ import (
 
 // AuthTokenSettingKey is the ClickHouse Query Setting key that carries a
 // JWS authentication token from client to server. Both the signer
-// (sidecar plugin, relay signer plugin) and the verifier (EthValidator)
+// (agent plugin, relay signer plugin) and the verifier (EthValidator)
 // consult this constant; any change must be made in lockstep.
 const (
 	AuthTokenSettingKey        = "SQL_x_auth_token"

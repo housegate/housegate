@@ -15,14 +15,14 @@ A lightweight ClickHouse native TCP protocol proxy. Sits transparently between c
 - **Part 2 — Running House Gate**
   - [1. Standalone Mode](#1-standalone-mode)
     - [1.1 Relay Mode](#11-relay-mode)
-    - [1.2 Sidecar Mode](#12-sidecar-mode)
+    - [1.2 Agent Mode](#12-agent-mode)
     - [1.3 Router-Only Server](#13-router-only-server)
   - [2. Library Mode](#2-library-mode)
 - **Part 3 — How Multi-Proxy Routing Works**
   - [Topology overview](#topology-overview)
   - [Two listeners per server (external / internal)](#two-listeners-per-server-external--internal)
   - [Forward-decision plugin](#forward-decision-plugin)
-  - [Sidecar auto-discovery](#sidecar-auto-discovery)
+  - [Agent auto-discovery](#agent-auto-discovery)
   - [Cross-shard `remote()` envelopes](#cross-shard-remote-envelopes)
 
 ---
@@ -47,7 +47,7 @@ HOUSEGATE_LISTEN=":9001" HOUSEGATE_UPSTREAM="localhost:9000" \
   bazel-bin/cmd/housegate_/housegate
 ```
 
-For anything beyond a single-upstream smoke test (auth, SQL rewriting, shard routing, sidecar mode), use a config file — see [Part 1 — Configuration](#config-file).
+For anything beyond a single-upstream smoke test (auth, SQL rewriting, shard routing, agent mode), use a config file — see [Part 1 — Configuration](#config-file).
 
 ## Build
 
@@ -87,7 +87,7 @@ HOUSEGATE_AGE_IDENTITY_FILE=~/.housegate.age \
   bazel-bin/cmd/housegate_/housegate -config config.json.age
 ```
 
-> **Hierarchical keys.** Each plugin owns a section: `auth`, `rewriter`, `sidecar`, `usage`, `concurrency_limit`, `state`, `logging`, `network_state`. Old flat keys (`auth_enabled`, `log_queries`, `sidecar_mode`, `network_state_redis`, the `dbrewriter` block, …) are no longer recognized.
+> **Hierarchical keys.** Each plugin owns a section: `auth`, `rewriter`, `agent`, `usage`, `concurrency_limit`, `state`, `logging`, `network_state`. Old flat keys (`auth_enabled`, `log_queries`, `agent_mode`, `network_state_redis`, the `dbrewriter` block, …) are no longer recognized.
 
 > **Duration format:** all `duration` keys accept human-readable strings (`"5s"`, `"1m"`, `"24h"`) or raw nanosecond integers. Values below 1s emit a warning — operators often confuse seconds vs. nanoseconds.
 
@@ -97,9 +97,9 @@ HOUSEGATE_AGE_IDENTITY_FILE=~/.housegate.age \
 
 | Key | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
-| `listen` | string | Yes | `:9001` | TCP listen address for the native ClickHouse protocol (the **external port** — sidecars and local CH `remote()` loopbacks land here) |
+| `listen` | string | Yes | `:9001` | TCP listen address for the native ClickHouse protocol (the **external port** — agents and local CH `remote()` loopbacks land here) |
 | `internal_listen` | string | No | `` (empty) | Optional second TCP listener restricted to peer housegates. Sessions accepted here are pre-flagged `IsPeerTrusted=true` + `IsInternalPort=true`; auth and rewrite are skipped, `__route__` envelopes are rejected. Bind to a peer-only subnet via firewall/SG. See [Part 3](#part-3--how-multi-proxy-routing-works). |
-| `upstream` | string | No | `` (empty) | Single-upstream address. Ignored when `shard` is set. Empty + no `shard` + not sidecar ⇒ router-only server (every session is forwarded to a peer via NetworkState — see [§1.3](#13-router-only-server)). |
+| `upstream` | string | No | `` (empty) | Single-upstream address. Ignored when `shard` is set. Empty + no `shard` + not agent ⇒ router-only server (every session is forwarded to a peer via NetworkState — see [§1.3](#13-router-only-server)). |
 | `metrics_listen` | string | No | `:9091` | Prometheus metrics HTTP address |
 | `dial_timeout` | duration | No | `5s` | Upstream dial timeout |
 | `idle_timeout` | duration | No | `5m` | Idle client connection timeout |
@@ -146,13 +146,13 @@ The rewriter is the canonical owner of physical/logical database mapping. Every 
 | `rewriter.physical_database` | string | No | `` | The single physical ClickHouse database that hosts every logical database in this deployment. Empty disables both `database_map` and the `hello.Database` substitution |
 | `rewriter.delimiter` | string | No | `_` | Separator inserted between `<logical>` and `<original_table>` |
 
-### `sidecar` — Sidecar-Mode Settings
+### `agent` — Agent-Mode Settings
 
 | Key | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
-| `sidecar.mode` | bool | No | `false` | Enable sidecar mode |
-| `sidecar.upstream` | string | Conditional | `` | Pinned server-side proxy address (e.g. `10.0.0.8:9001`). **Either** this **or** a top-level `network_state.source` must be set. When unset, sidecar auto-discovers a server-mode peer per session via NetworkState (see [§Sidecar auto-discovery](#sidecar-auto-discovery)). |
-| `sidecar.private_key_hex` | string | Yes (sidecar) | `` | Sidecar's Ethereum private key for JWS signing. Prefer `HOUSEGATE_SIDECAR_KEY` env or an age-encrypted config over a plaintext file. |
+| `agent.mode` | bool | No | `false` | Enable agent mode |
+| `agent.upstream` | string | Conditional | `` | Pinned server-side proxy address (e.g. `10.0.0.8:9001`). **Either** this **or** a top-level `network_state.source` must be set. When unset, agent auto-discovers a server-mode peer per session via NetworkState (see [§Agent auto-discovery](#agent-auto-discovery)). |
+| `agent.private_key_hex` | string | Yes (agent) | `` | Agent's Ethereum private key for JWS signing. Prefer `HOUSEGATE_AGENT_KEY` env or an age-encrypted config over a plaintext file. |
 
 ### `usage` — Billing / Usage Reporting
 
@@ -240,8 +240,8 @@ Mode is **inferred from the config**, not a flag:
 
 | Trigger | Mode |
 |---------|------|
-| `sidecar.mode: true` | Sidecar |
-| `upstream` or `shard` set (and not sidecar) | Server (with local CH) |
+| `agent.mode: true` | Agent |
+| `upstream` or `shard` set (and not agent) | Server (with local CH) |
 | neither set | Server (router-only — forwards to peers via NetworkState) |
 
 Press `Ctrl+C` for a graceful shutdown; final stats are printed before exit. On startup the proxy logs its resolved mode and key settings:
@@ -318,9 +318,9 @@ Shard-aware (per-replica pool + routing):
 }
 ```
 
-### 1.2 Sidecar Mode
+### 1.2 Agent Mode
 
-No local ClickHouse — every query is signed with `sidecar.private_key_hex` and forwarded to a relay-mode proxy at `sidecar.upstream`. Server-side features (rewriting, shard routing) are disabled.
+No local ClickHouse — every query is signed with `agent.private_key_hex` and forwarded to a relay-mode proxy at `agent.upstream`. Server-side features (rewriting, shard routing) are disabled.
 
 Config-file form:
 
@@ -329,35 +329,35 @@ Config-file form:
   "listen": ":9001",
   "metrics_listen": ":9091",
 
-  "sidecar": {
+  "agent": {
     "mode": true,
     "upstream": "10.0.0.8:9001",
-    "private_key_hex": "0xYOUR_SIDECAR_PRIVATE_KEY_HERE"
+    "private_key_hex": "0xYOUR_AGENT_PRIVATE_KEY_HERE"
   }
 }
 ```
 
-Sidecar can also start without a config file, via CLI flags or env vars:
+Agent can also start without a config file, via CLI flags or env vars:
 
 ```bash
 # CLI flags
 bazel-bin/cmd/housegate_/housegate \
-  -sidecar -sidecar-upstream 10.0.0.8:9001 \
-  -sidecar-key 0xYOUR_PRIVATE_KEY_HERE -listen :9001
+  -agent -agent-upstream 10.0.0.8:9001 \
+  -agent-key 0xYOUR_PRIVATE_KEY_HERE -listen :9001
 
 # Env vars (recommended for secrets)
-HOUSEGATE_SIDECAR=true \
-HOUSEGATE_SIDECAR_UPSTREAM=10.0.0.8:9001 \
-HOUSEGATE_SIDECAR_KEY=0xYOUR_PRIVATE_KEY_HERE \
+HOUSEGATE_AGENT=true \
+HOUSEGATE_AGENT_UPSTREAM=10.0.0.8:9001 \
+HOUSEGATE_AGENT_KEY=0xYOUR_PRIVATE_KEY_HERE \
 HOUSEGATE_LISTEN=:9001 \
 bazel-bin/cmd/housegate_/housegate
 
 # Mixed (env for secret, flags for routing)
-HOUSEGATE_SIDECAR_KEY=0xYOUR_PRIVATE_KEY_HERE \
-bazel-bin/cmd/housegate_/housegate -sidecar -sidecar-upstream 10.0.0.8:9001
+HOUSEGATE_AGENT_KEY=0xYOUR_PRIVATE_KEY_HERE \
+bazel-bin/cmd/housegate_/housegate -agent -agent-upstream 10.0.0.8:9001
 ```
 
-> **Security:** CLI flags are visible in process listings (`ps`, `/proc`). Always prefer `HOUSEGATE_SIDECAR_KEY` or a config file for the private key.
+> **Security:** CLI flags are visible in process listings (`ps`, `/proc`). Always prefer `HOUSEGATE_AGENT_KEY` or a config file for the private key.
 
 Override priority (highest → lowest): CLI flags → env vars → config file → built-in defaults.
 
@@ -365,9 +365,9 @@ All CLI flags:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-sidecar` | `false` | Enable sidecar mode (overrides `sidecar.mode`) |
-| `-sidecar-upstream` | (empty) | Server-side proxy address |
-| `-sidecar-key` | (empty) | Ethereum private key for JWS signing |
+| `-agent` | `false` | Enable agent mode (overrides `agent.mode`) |
+| `-agent-upstream` | (empty) | Server-side proxy address |
+| `-agent-key` | (empty) | Ethereum private key for JWS signing |
 | `-listen` | `:9001` | Proxy listen address |
 | `-metrics-listen` | `:9091` | Prometheus metrics address |
 | `-dial-timeout` | `5s` | Upstream dial timeout |
@@ -387,7 +387,7 @@ A server-mode housegate with **no local ClickHouse** (no `shard`, no `upstream`)
 }
 ```
 
-The dialer falls through to a random peer with a non-zero `ClickhouseProxyPort` from `RetrieveAllIndexerInfos()` and excludes itself (`selfListenPort` + `isLocalAddress` check). On dial failure it retries up to three peers before erroring back to the client. If a sidecar's USE picks a different host, the receiving router-only server pivots the session via the forward-decision plugin just like any other server-mode proxy — see [Part 3](#part-3--how-multi-proxy-routing-works).
+The dialer falls through to a random peer with a non-zero `ClickhouseProxyPort` from `RetrieveAllIndexerInfos()` and excludes itself (`selfListenPort` + `isLocalAddress` check). On dial failure it retries up to three peers before erroring back to the client. If a agent's USE picks a different host, the receiving router-only server pivots the session via the forward-decision plugin just like any other server-mode proxy — see [Part 3](#part-3--how-multi-proxy-routing-works).
 
 ## 2. Library Mode
 
@@ -458,7 +458,7 @@ See the design spec at [docs/superpowers/specs/2026-04-26-cmd-library-mode-desig
 
 # Part 3 — How Multi-Proxy Routing Works
 
-A production deployment runs many server-mode housegates side by side, one per indexer. A sidecar's `clickhouse-client` may issue `USE tenantB` where `tenantB` is hosted on a *different* server-mode proxy than the one the sidecar is currently talking to. The proxy network resolves this transparently. Full design: [docs/superpowers/specs/2026-04-28-two-port-server-mode.md](docs/superpowers/specs/2026-04-28-two-port-server-mode.md).
+A production deployment runs many server-mode housegates side by side, one per indexer. A agent's `clickhouse-client` may issue `USE tenantB` where `tenantB` is hosted on a *different* server-mode proxy than the one the agent is currently talking to. The proxy network resolves this transparently. Full design: [docs/superpowers/specs/2026-04-28-two-port-server-mode.md](docs/superpowers/specs/2026-04-28-two-port-server-mode.md).
 
 ## Topology overview
 
@@ -470,10 +470,10 @@ A production deployment runs many server-mode housegates side by side, one per i
                               ▼
    ┌──────────────────────────────────────────────────────────────────────┐
    │                                                                      │
-   │  sidecar (client side)                                               │
-   │   • signs every query JWS with sidecar.private_key_hex               │
+   │  agent (client side)                                               │
+   │   • signs every query JWS with agent.private_key_hex               │
    │   • picks a server-mode peer per session via Selector (auto-disco)   │
-   │     OR uses pinned sidecar.upstream                                  │
+   │     OR uses pinned agent.upstream                                  │
    │                                                                      │
    └────────────┬─────────────────────────────────────────────────────────┘
                 │  ClientHello + JWS in password
@@ -515,11 +515,11 @@ When `internal_listen` is set, [`buildServer`](build.go) binds a second `*proxy.
 
 | Aspect | external port (`listen`) | internal port (`internal_listen`) |
 |---|---|---|
-| Accepted dialers | sidecars, local CH `remote()` loopbacks | peer housegates only (firewall-enforced) |
+| Accepted dialers | agents, local CH `remote()` loopbacks | peer housegates only (firewall-enforced) |
 | Pre-flagged session state | none | `IsPeerTrusted = true`, `IsInternalPort = true` |
 | `__route__` envelope | accepted (loopback path) | **rejected** by `routeplugin.Stripper` to prevent forwarding loops |
 | `__peer__` envelope | accepted when present | accepted (validates the dialing peer's JWS) |
-| `auth` plugin | runs (validates sidecar JWS) | skipped (`PeerTrustAware.RunOnPeerTrust=false`) |
+| `auth` plugin | runs (validates agent JWS) | skipped (`PeerTrustAware.RunOnPeerTrust=false`) |
 | `forward-decision` | runs | does not apply (internal port never forwards onward) |
 | `rewrite`, `commitgate` | run | skipped (peer-trust opt-out) |
 | `metrics`, `usage`, `concurrency`, `sessionstate` | run | run |
@@ -538,12 +538,12 @@ Cross-DB SQL inside a single statement (`tenant1.x JOIN tenant2.y`) is **not** r
 
 The `ForwardAware` marker mirrors `PeerTrustAware` (default-on, opt-out). Plugins that should fire on the *originating* proxy regardless of forwarding (auth, metrics, concurrency, usage, sessionstate, credential) keep firing; plugins that belong to the *host* proxy (rewrite, commitgate) implement `RunOnForward()=false`.
 
-## Sidecar auto-discovery
+## Agent auto-discovery
 
-When `sidecar.upstream` is empty, [`pkg/plugins/sidecar.Selector`](pkg/plugins/sidecar/upstream_select.go) picks a server-mode peer per session via a two-tier algorithm against `network_state.source`:
+When `agent.upstream` is empty, [`pkg/plugins/agent.Selector`](pkg/plugins/agent/upstream_select.go) picks a server-mode peer per session via a two-tier algorithm against `network_state.source`:
 
 ```
-account = derive_address(sidecar.private_key_hex)
+account = derive_address(agent.private_key_hex)
 perms   = NetworkState.RetrieveDatabasePermissions(account)
 
 permissioned = indexers hosting at least one DB in `perms` AND with a non-zero ClickhouseProxyPort
@@ -558,9 +558,9 @@ default:                     return error("no bound indexers")
 
 **Bootstrap fallback.** A brand-new account has no permissions on any database — by construction, because they haven't created one yet. Failing the connection at dial time would lock new users out of `CREATE DATABASE` (chicken-and-egg). When `permissioned` is empty but `bound` is non-empty, the Selector picks a random bound indexer anyway; their first `CREATE DATABASE` lands there, `commitgate` registers the new DB in NetworkState, and subsequent sessions resolve correctly.
 
-The bootstrap path emits a warn log and increments the `clickhouse_proxy_sidecar_bootstrap_fallback_total` Prometheus counter so operators can spot accounts that should not be in the bootstrap path.
+The bootstrap path emits a warn log and increments the `clickhouse_proxy_agent_bootstrap_fallback_total` Prometheus counter so operators can spot accounts that should not be in the bootstrap path.
 
-Random selection across the chosen tier balances load and gives free failover (the next session re-rolls). A pinned `sidecar.upstream` still works as an explicit override.
+Random selection across the chosen tier balances load and gives free failover (the next session re-rolls). A pinned `agent.upstream` still works as an explicit override.
 
 ## Cross-shard `remote()` envelopes
 

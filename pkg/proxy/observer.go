@@ -49,17 +49,17 @@ var (
 		Buckets: prometheus.DefBuckets,
 	})
 
-	sidecarTokensInjected = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "clickhouse_proxy_sidecar_tokens_injected_total",
-		Help: "Total JWS tokens injected by sidecar proxy",
+	agentTokensInjected = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "clickhouse_proxy_agent_tokens_injected_total",
+		Help: "Total JWS tokens injected by agent proxy",
 	})
-	sidecarTokenErrors = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "clickhouse_proxy_sidecar_token_errors_total",
-		Help: "Total JWS token signing errors in sidecar mode",
+	agentTokenErrors = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "clickhouse_proxy_agent_token_errors_total",
+		Help: "Total JWS token signing errors in agent mode",
 	})
-	sidecarBootstrapFallbackTotal = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "clickhouse_proxy_sidecar_bootstrap_fallback_total",
-		Help: "Total sidecar upstream picks that fell back to the bootstrap tier (account had no permissioned indexer)",
+	agentBootstrapFallbackTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "clickhouse_proxy_agent_bootstrap_fallback_total",
+		Help: "Total agent upstream picks that fell back to the bootstrap tier (account had no permissioned indexer)",
 	})
 )
 
@@ -73,9 +73,9 @@ func init() {
 	prometheus.MustRegister(rewriteDuration)
 	prometheus.MustRegister(streamingDataBlocksTotal)
 	prometheus.MustRegister(handshakeDuration)
-	prometheus.MustRegister(sidecarTokensInjected)
-	prometheus.MustRegister(sidecarTokenErrors)
-	prometheus.MustRegister(sidecarBootstrapFallbackTotal)
+	prometheus.MustRegister(agentTokensInjected)
+	prometheus.MustRegister(agentTokenErrors)
+	prometheus.MustRegister(agentBootstrapFallbackTotal)
 }
 
 type MetricsObserver struct{}
@@ -136,6 +136,6 @@ func (m *MetricsObserver) HandshakeCompleted(duration float64) {
 	handshakeDuration.Observe(duration)
 }
 
-func (m *MetricsObserver) SidecarTokenInjected()      { sidecarTokensInjected.Inc() }
-func (m *MetricsObserver) SidecarTokenError()         { sidecarTokenErrors.Inc() }
-func (m *MetricsObserver) SidecarBootstrapFallback()  { sidecarBootstrapFallbackTotal.Inc() }
+func (m *MetricsObserver) AgentTokenInjected()     { agentTokensInjected.Inc() }
+func (m *MetricsObserver) AgentTokenError()        { agentTokenErrors.Inc() }
+func (m *MetricsObserver) AgentBootstrapFallback() { agentBootstrapFallbackTotal.Inc() }

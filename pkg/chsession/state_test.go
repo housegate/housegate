@@ -288,9 +288,9 @@ func TestSession_RebindToPeer(t *testing.T) {
 // forward.Plugin.pivotToPeer calls SetRouteTarget to memoize the current
 // peer for OnQuery USE detection, but the side effect IsRouted()=true
 // would cause routeplugin.Signer (RouteAware-opt-in) to fire on
-// forward-pivoted sessions and overwrite the sidecar's per-query JWS in
+// forward-pivoted sessions and overwrite the agent's per-query JWS in
 // settings with the relay's JWS. The receiving proxy's auth plugin then
-// validated the relay JWS instead of the sidecar's, recovering the wrong
+// validated the relay JWS instead of the agent's, recovering the wrong
 // account.
 //
 // IsRouted() must return false for forward-pivoted sessions even though

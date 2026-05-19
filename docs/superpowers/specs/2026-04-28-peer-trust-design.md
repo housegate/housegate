@@ -275,10 +275,10 @@ peer means adding its eth address there; no separate peer-only list.
    Per-peer keys would allow finer-grained revocation but require
    either NetworkState to publish per-peer pubkeys or a static config
    map. Not motivated yet.
-3. **Sidecar peer trust.** Sidecars don't currently have peer-trust
-   handshake logic on inbound — they only sign outbound. If a sidecar
+3. **Agent peer trust.** Agents don't currently have peer-trust
+   handshake logic on inbound — they only sign outbound. If a agent
    ever needs to accept a peer-routed connection, the credential
-   plugin's wiring would have to be extended into `buildSidecar`.
+   plugin's wiring would have to be extended into `buildAgent`.
 4. **Loop prevention.** A peer-trusted session that itself emits
    `remote()` would mint another peer JWS through this proxy's
    rewriter. There is no max-hop counter today; the natural backstop

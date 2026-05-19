@@ -3243,7 +3243,7 @@ import (
 // Server accepts TCP connections, constructs a Session per connection, and
 // hands it to Relay.
 //
-// UpstreamDialer is mode-specific (server / sidecar / forwarding-only) and
+// UpstreamDialer is mode-specific (server / agent / forwarding-only) and
 // supplied at construction time. Hooks is the composed PluginChain.
 type Server struct {
 	Hooks          Hooks
@@ -3302,8 +3302,8 @@ func dialUpstreamForCluster(mgr *cluster.Manager) func(context.Context, chsessio
 	}
 }
 
-// dialUpstreamForSidecar / dialUpstreamForForwarding have analogous bodies;
-// they wrap the sidecar gRPC or forwarding address chosen at construction.
+// dialUpstreamForAgent / dialUpstreamForForwarding have analogous bodies;
+// they wrap the agent gRPC or forwarding address chosen at construction.
 // Implementations are added in main.go wiring in Step 3.
 ```
 
@@ -3387,7 +3387,7 @@ srv := proxy.NewServer(chain, dialUpstreamFor(cfg, clusterMgr))
 return srv.Serve(ctx, ln)
 ```
 
-Where `dialUpstreamFor(cfg, mgr)` returns the mode-appropriate dialer (server / sidecar / forwarding).
+Where `dialUpstreamFor(cfg, mgr)` returns the mode-appropriate dialer (server / agent / forwarding).
 
 - [ ] **Step 4: Regenerate Bazel build files and run the full test suite.**
 

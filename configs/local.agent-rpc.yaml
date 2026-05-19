@@ -1,4 +1,4 @@
-# Sidecar-mode config that auto-discovers its upstream via a sentio
+# Agent-mode config that auto-discovers its upstream via a sentio
 # storage-node JSON-RPC endpoint.
 #
 # This is the rpcUrl variant of NetworkState: instead of pointing
@@ -7,14 +7,14 @@
 # methods (getIndexerInfos / getIndexerInfoById / getDatabaseInfoById /
 # getDatabaseInfoByAccount) to discover a permissioned peer per session.
 #
-# Sidecar.Upstream is intentionally absent — leaving it empty hands
-# upstream selection to the sidecar Selector, which queries the rpc
+# Agent.Upstream is intentionally absent — leaving it empty hands
+# upstream selection to the agent Selector, which queries the rpc
 # endpoint and picks a permissioned indexer (or any bound peer for
 # brand-new accounts).
 #
 # Provide the signing key via env var (do NOT commit a real key here):
-#   export HOUSEGATE_SIDECAR_KEY=0xYOUR_PRIVATE_KEY_HEX
-#   ./housegate -config ./configs/local.sidecar-rpc.yaml
+#   export HOUSEGATE_AGENT_KEY=0xYOUR_PRIVATE_KEY_HEX
+#   ./housegate -config ./configs/local.agent-rpc.yaml
 
 listen: "0.0.0.0:10005"
 metrics_listen: "0.0.0.0:10095"
@@ -26,7 +26,7 @@ max_connection_lifetime: "24h"
 streaming_buf_size: 131072
 validate_checksum: false
 
-sidecar:
+agent:
   mode: true
   # No upstream — Selector picks one via NetworkState (RPC) below.
   private_key_hex: "0x03bef7ad0f263e542a6bc04ba07ca41a958e5ed6e44a504deaec98aebf04d8b2"

@@ -14,12 +14,12 @@ import (
 // Observer is the narrow metrics surface this plugin depends on. Left
 // as an interface so the plugin has no hard dependency on pkg/proxy
 // (which would cycle via pkg/plugin). *proxy.MetricsObserver satisfies
-// it. The proxy-to-proxy ("relay") signer reuses the same sidecar
+// it. The proxy-to-proxy ("relay") signer reuses the same agent
 // token counters because both emit identical JWS tokens — operators
 // care about total JWS volume, not which signer path produced it.
 type Observer interface {
-	SidecarTokenInjected()
-	SidecarTokenError()
+	AgentTokenInjected()
+	AgentTokenError()
 }
 
 // Signer signs every query in a routed session with the shared relay
@@ -53,7 +53,7 @@ func (p *Signer) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	token, err := p.Signer.SignToken(qctx.OriginalSQL)
 	if err != nil {
 		if p.Observer != nil {
-			p.Observer.SidecarTokenError()
+			p.Observer.AgentTokenError()
 		}
 		return fmt.Errorf("relay signer: sign token: %w", err)
 	}
@@ -71,7 +71,7 @@ func (p *Signer) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 		Custom: true,
 	})
 	if p.Observer != nil {
-		p.Observer.SidecarTokenInjected()
+		p.Observer.AgentTokenInjected()
 	}
 	_, logger := log.FromContext(ctx)
 	logger.Debugw("relay signer: injected relay token", auth.AuthTokenSettingKey, token)

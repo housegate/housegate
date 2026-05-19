@@ -71,7 +71,7 @@ Environment:
   HOUSEGATE_AGE_IDENTITY_FILE  path to a file with one identity per line (decrypt)
   HOUSEGATE_AGE_RECIPIENTS     comma-separated public keys (encrypt/edit)
 
-Sidecar file:
+Companion file:
   If "<target>.recipients" exists (one pubkey per line, '#' comments allowed),
   its keys are merged into the recipient set on encrypt/edit. Useful for
   committing "who can read this file" alongside the ciphertext in git.

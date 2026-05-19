@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# scripts/daemon.sh — interactive launcher for housegate in sidecar mode.
+# scripts/daemon.sh — interactive launcher for housegate in agent mode.
 #
 # Auto-detects the host OS/arch, downloads the matching binary from the
 # latest GitHub release (verifying the published SHA256), caches it under
@@ -18,8 +18,8 @@
 #
 # Env-var equivalents (any flag wins over the corresponding env):
 #   HOUSEGATE_NETWORK_STATE_SOURCE  → --state
-#   HOUSEGATE_SIDECAR_KEY           → --private-key
-#   HOUSEGATE_SIDECAR_OWNER         → --owner
+#   HOUSEGATE_AGENT_KEY           → --private-key
+#   HOUSEGATE_AGENT_OWNER         → --owner
 #   HOUSEGATE_LISTEN                → --listen
 #   HOUSEGATE_VERSION               → --version  (skips the "latest" lookup)
 #   HOUSEGATE_BIN                   → use this binary instead of downloading
@@ -35,7 +35,7 @@ usage() {
     cat <<EOF
 Usage: scripts/daemon.sh [OPTIONS]
 
-Launches the housegate daemon in sidecar mode. The matching release binary
+Launches the housegate daemon in agent mode. The matching release binary
 is downloaded automatically the first time, then cached and reused.
 
 Options:
@@ -45,8 +45,8 @@ Options:
                          ./configs/local.network_state.yaml
                          redis.example.com:6379
                          http://rpc.example.com:8000
-  --private-key HEX    Sidecar Ethereum private key (0x-prefixed hex).
-                       Prefer the HOUSEGATE_SIDECAR_KEY env var so the value
+  --private-key HEX    Agent Ethereum private key (0x-prefixed hex).
+                       Prefer the HOUSEGATE_AGENT_KEY env var so the value
                        doesn't sit in shell history.
   --owner ADDR         Optional billed owner address (0x-prefixed Ethereum
                        address) when --private-key is an operator key
@@ -60,8 +60,8 @@ Options:
   -h, --help           Show this help and exit.
 
 Env vars (flags win):
-  HOUSEGATE_NETWORK_STATE_SOURCE, HOUSEGATE_SIDECAR_KEY,
-  HOUSEGATE_SIDECAR_OWNER, HOUSEGATE_LISTEN, HOUSEGATE_VERSION,
+  HOUSEGATE_NETWORK_STATE_SOURCE, HOUSEGATE_AGENT_KEY,
+  HOUSEGATE_AGENT_OWNER, HOUSEGATE_LISTEN, HOUSEGATE_VERSION,
   HOUSEGATE_BIN, HOUSEGATE_CACHE_DIR
 
 Cache: ${CACHE_DIR}
@@ -72,8 +72,8 @@ EOF
 err() { echo "error: $*" >&2; exit 1; }
 
 state="${HOUSEGATE_NETWORK_STATE_SOURCE:-https://testnet-gateway.sentio.xyz}"
-private_key="${HOUSEGATE_SIDECAR_KEY:-}"
-owner="${HOUSEGATE_SIDECAR_OWNER:-}"
+private_key="${HOUSEGATE_AGENT_KEY:-}"
+owner="${HOUSEGATE_AGENT_OWNER:-}"
 listen="${HOUSEGATE_LISTEN:-}"
 version="${HOUSEGATE_VERSION:-}"
 binary="${HOUSEGATE_BIN:-}"
@@ -229,7 +229,7 @@ prompt_required() {
     fi
 }
 
-prompt_required private_key "Sidecar private key (hex, hidden): " 1
+prompt_required private_key "Agent private key (hex, hidden): " 1
 
 # Normalize the hex prefix so users can paste with or without 0x.
 [[ "$private_key" == 0x* ]] || private_key="0x${private_key}"
@@ -260,7 +260,7 @@ fi
 
 # ---------------------------------------------------------------------
 # Launch. Pass private key + state through env so they don't appear in
-# argv / process listings. -sidecar enables sidecar mode at the binary.
+# argv / process listings. -agent enables agent mode at the binary.
 # ---------------------------------------------------------------------
 echo
 echo "Launching daemon..."
@@ -271,6 +271,6 @@ echo "  key:     ${private_key:0:6}…${private_key: -4} (redacted)"
 [[ -n "$owner" ]] && echo "  owner:   $owner"
 echo
 
-HOUSEGATE_SIDECAR_KEY="$private_key" \
-HOUSEGATE_SIDECAR_OWNER="$owner" \
-exec "$binary" -sidecar -listen "$listen" -state "$state"
+HOUSEGATE_AGENT_KEY="$private_key" \
+HOUSEGATE_AGENT_OWNER="$owner" \
+exec "$binary" -agent -listen "$listen" -state "$state"

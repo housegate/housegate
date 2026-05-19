@@ -545,7 +545,7 @@ func TestPermission_Operator_NotAuthorized(t *testing.T) {
 }
 
 // TestPermission_NoOwner_LegacyPath: when Event.Owner is empty (legacy
-// single-key sidecar), the observer behaves exactly as before — gates
+// single-key agent), the observer behaves exactly as before — gates
 // on the signer's bitmap. Confirms the operator block is fully no-op
 // for backwards compatibility.
 func TestPermission_NoOwner_LegacyPath(t *testing.T) {

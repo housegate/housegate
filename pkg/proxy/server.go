@@ -17,7 +17,7 @@ import (
 // Server accepts TCP connections, constructs a Session per connection, and
 // hands it to Relay.
 //
-// UpstreamDialer is mode-specific (server / sidecar) and supplied at
+// UpstreamDialer is mode-specific (server / agent) and supplied at
 // construction time. Hooks is the composed plugin chain.
 //
 // Design: docs/superpowers/specs/2026-04-21-clickhouse-tcp-conn-interface-design.md
@@ -155,7 +155,7 @@ func (s *Server) handle(ctx context.Context, c net.Conn) {
 	// Dial happens inside Relay.handshake AFTER OnHello so routing
 	// plugins can populate SessionState.RouteTarget before the dialer
 	// reads it. Wrapping it as the closure passed in keeps the
-	// per-mode dialer signature stable (server / sidecar / forwarding
+	// per-mode dialer signature stable (server / agent / forwarding
 	// each plug their own).
 	r := NewRelay(sess, s.Hooks, s.Observer, UpstreamDialer(s.UpstreamDialer))
 	if err := r.Run(ctx); err != nil {

@@ -44,7 +44,7 @@ rewriter:
   physical_database: testnet
   delimiter: "."
 
-sidecar:
+agent:
   mode: false
 
 usage:

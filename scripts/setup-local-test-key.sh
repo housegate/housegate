@@ -5,13 +5,13 @@
 #
 #   configs/local.server.yaml             relay_{private,public}_key_hex
 #   configs/local.server-mock-remote.yaml relay_{private,public}_key_hex
-#   configs/local.sidecar.yaml            sidecar.private_key_hex
-#   configs/local.sidecar-rpc.yaml        sidecar.private_key_hex
-#   configs/local.network_state.yaml      database_permissions key for the sidecar
+#   configs/local.agent.yaml              agent.private_key_hex
+#   configs/local.agent-rpc.yaml          agent.private_key_hex
+#   configs/local.network_state.yaml      database_permissions key for the agent
 #
 # Run this once after cloning a fresh tree, or any time you suspect the
 # committed local keys have been compromised. The script is idempotent —
-# it reads the current sidecar private key from sidecar.yaml to figure
+# it reads the current agent private key from agent.yaml to figure
 # out which database_permissions entry to rotate.
 #
 # Requires: go (project default), bash, sed.
@@ -33,20 +33,20 @@ eval_with_prefix() {
 }
 
 # ---------------------------------------------------------------------
-# 1. Discover the OLD sidecar address so we know which database_permissions
-#    key to rewrite. We do this from local.sidecar.yaml (which is what
+# 1. Discover the OLD agent address so we know which database_permissions
+#    key to rewrite. We do this from local.agent.yaml (which is what
 #    pairs with network_state.yaml in the test fixtures).
 # ---------------------------------------------------------------------
-old_sidecar_priv=$(
-    grep -E '^[[:space:]]*private_key_hex:' configs/local.sidecar.yaml \
+old_agent_priv=$(
+    grep -E '^[[:space:]]*private_key_hex:' configs/local.agent.yaml \
         | sed -E 's/.*"([^"]+)".*/\1/' \
         | head -1
 )
-if [[ -z "$old_sidecar_priv" ]]; then
-    echo "could not extract old sidecar private_key_hex from configs/local.sidecar.yaml" >&2
+if [[ -z "$old_agent_priv" ]]; then
+    echo "could not extract old agent private_key_hex from configs/local.agent.yaml" >&2
     exit 1
 fi
-eval_with_prefix OLD_SIDECAR "${GENKEY[@]}" -from-priv "$old_sidecar_priv"
+eval_with_prefix OLD_AGENT "${GENKEY[@]}" -from-priv "$old_agent_priv"
 
 # ---------------------------------------------------------------------
 # 2. Generate three fresh keypairs.
@@ -57,8 +57,8 @@ eval_with_prefix A "${GENKEY[@]}"
 echo "Generating relay key for proxy B (configs/local.server-mock-remote.yaml)..."
 eval_with_prefix B "${GENKEY[@]}"
 
-echo "Generating sidecar key (configs/local.sidecar*.yaml + network_state.yaml)..."
-eval_with_prefix SIDECAR "${GENKEY[@]}"
+echo "Generating agent key (configs/local.agent*.yaml + network_state.yaml)..."
+eval_with_prefix AGENT "${GENKEY[@]}"
 
 # ---------------------------------------------------------------------
 # 3. Patch each file. sed -i.bak works on both BSD (macOS) and GNU sed;
@@ -74,16 +74,16 @@ sed -i.bak \
     -e "s|^relay_public_key_hex:.*|relay_public_key_hex: \"${B_ADDRESS_CHECKSUM}\"|" \
     configs/local.server-mock-remote.yaml
 
-# Both sidecar configs share one identity — the network_state fixture
-# only grants permissions to a single sidecar account.
+# Both agent configs share one identity — the network_state fixture
+# only grants permissions to a single agent account.
 sed -i.bak \
-    -e "s|^\([[:space:]]*\)private_key_hex:.*|\1private_key_hex: \"${SIDECAR_PRIVATE_KEY}\"|" \
-    configs/local.sidecar.yaml configs/local.sidecar-rpc.yaml
+    -e "s|^\([[:space:]]*\)private_key_hex:.*|\1private_key_hex: \"${AGENT_PRIVATE_KEY}\"|" \
+    configs/local.agent.yaml configs/local.agent-rpc.yaml
 
-# Replace the sidecar's account address inside database_permissions. The
+# Replace the agent's account address inside database_permissions. The
 # YAML convention (per the file's own header) is lower-case.
 sed -i.bak \
-    -e "s|\"${OLD_SIDECAR_ADDRESS_LOWER}\"|\"${SIDECAR_ADDRESS_LOWER}\"|g" \
+    -e "s|\"${OLD_AGENT_ADDRESS_LOWER}\"|\"${AGENT_ADDRESS_LOWER}\"|g" \
     configs/local.network_state.yaml
 
 find configs -name '*.bak' -delete
@@ -97,8 +97,8 @@ Done. New addresses (private keys are committed inside the YAML files):
 
   Proxy A relay:  ${A_ADDRESS_CHECKSUM}
   Proxy B relay:  ${B_ADDRESS_CHECKSUM}
-  Sidecar:        ${SIDECAR_ADDRESS_CHECKSUM}
-                  (lower-case form in network_state.yaml: ${SIDECAR_ADDRESS_LOWER})
+  Agent:          ${AGENT_ADDRESS_CHECKSUM}
+                  (lower-case form in network_state.yaml: ${AGENT_ADDRESS_LOWER})
 
-Old sidecar address rotated out of network_state.yaml: ${OLD_SIDECAR_ADDRESS_LOWER}
+Old agent address rotated out of network_state.yaml: ${OLD_AGENT_ADDRESS_LOWER}
 EOF

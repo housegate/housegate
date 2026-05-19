@@ -13,7 +13,7 @@ go_library(
         "//pkg/plugins/concurrency",
         "//pkg/plugins/rewrite",
         "//pkg/plugins/sessionstate",
-        "//pkg/plugins/sidecar",
+        "//pkg/plugins/agent",
         "//pkg/plugins/usage",
         "@in_yaml_go_yaml_v3//:yaml",
     ],
@@ -25,6 +25,6 @@ go_test(
     embed = [":config"],
     deps = [
         "//pkg/cluster",
-        "//pkg/plugins/sidecar",
+        "//pkg/plugins/agent",
     ],
 )

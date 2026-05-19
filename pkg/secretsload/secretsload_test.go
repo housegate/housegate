@@ -141,21 +141,21 @@ func TestLoadRecipientsFromEnvAndExtra(t *testing.T) {
 	}
 }
 
-func TestRecipientsFromSidecar(t *testing.T) {
+func TestRecipientsFromCompanion(t *testing.T) {
 	_, r1 := newTestIdentity(t)
 	_, r2 := newTestIdentity(t)
 	dir := t.TempDir()
 	target := filepath.Join(dir, "f.yaml.age")
-	sidecar := target + ".recipients"
+	companion := target + ".recipients"
 	contents := "# comment\n\n" + r1.String() + "\n" + r2.String() + "\n"
-	if err := os.WriteFile(sidecar, []byte(contents), 0o600); err != nil {
+	if err := os.WriteFile(companion, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, err := RecipientsFromSidecar(target)
+	got, err := RecipientsFromCompanion(target)
 	if err != nil {
-		t.Fatalf("RecipientsFromSidecar: %v", err)
+		t.Fatalf("RecipientsFromCompanion: %v", err)
 	}
 	if len(got) != 2 {
-		t.Fatalf("expected 2 recipients in sidecar, got %d: %v", len(got), got)
+		t.Fatalf("expected 2 recipients in companion, got %d: %v", len(got), got)
 	}
 }

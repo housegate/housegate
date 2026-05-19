@@ -15,14 +15,14 @@
 - **Part 2 — 运行 House Gate**
   - [1. Standalone 模式](#1-standalone-模式)
     - [1.1 Relay 模式](#11-relay-模式)
-    - [1.2 Sidecar 模式](#12-sidecar-模式)
+    - [1.2 Agent 模式](#12-agent-模式)
     - [1.3 Router-Only Server（路由型 Server）](#13-router-only-server路由型-server)
   - [2. Library 模式](#2-library-模式)
 - **Part 3 — 多 Proxy 路由原理**
   - [拓扑总览](#拓扑总览)
   - [Server 的双监听端口（external / internal）](#server-的双监听端口external--internal)
   - [forward-decision 插件](#forward-decision-插件)
-  - [Sidecar 自动发现 upstream](#sidecar-自动发现-upstream)
+  - [Agent 自动发现 upstream](#agent-自动发现-upstream)
   - [跨分片 `remote()` 信封](#跨分片-remote-信封)
 
 ---
@@ -47,7 +47,7 @@ HOUSEGATE_LISTEN=":9001" HOUSEGATE_UPSTREAM="localhost:9000" \
   bazel-bin/cmd/housegate_/housegate
 ```
 
-如果需要单 upstream 之外的功能（鉴权、SQL 重写、分片路由、sidecar 模式等），用配置文件 — 见 [Part 1 — 配置](#配置文件)。
+如果需要单 upstream 之外的功能（鉴权、SQL 重写、分片路由、agent 模式等），用配置文件 — 见 [Part 1 — 配置](#配置文件)。
 
 ## 构建
 
@@ -87,7 +87,7 @@ HOUSEGATE_AGE_IDENTITY_FILE=~/.housegate.age \
   bazel-bin/cmd/housegate_/housegate -config config.json.age
 ```
 
-> **配置项分层。** 每个 plugin 拥有自己的 section：`auth`、`rewriter`、`sidecar`、`usage`、`concurrency_limit`、`state`、`logging`、`network_state`。旧的扁平 key（`auth_enabled`、`log_queries`、`sidecar_mode`、`network_state_redis`，以及 `dbrewriter` block 等）已不再被识别。
+> **配置项分层。** 每个 plugin 拥有自己的 section：`auth`、`rewriter`、`agent`、`usage`、`concurrency_limit`、`state`、`logging`、`network_state`。旧的扁平 key（`auth_enabled`、`log_queries`、`agent_mode`、`network_state_redis`，以及 `dbrewriter` block 等）已不再被识别。
 
 > **Duration 格式：** 所有 `duration` 字段接受人类可读字符串（`"5s"`、`"1m"`、`"24h"`）或裸纳秒整数。小于 1s 的值会触发 warning — 运维经常把秒和纳秒搞混。
 
@@ -97,9 +97,9 @@ HOUSEGATE_AGE_IDENTITY_FILE=~/.housegate.age \
 
 | Key | 类型 | 必填 | 默认值 | 说明 |
 |-----|------|------|--------|------|
-| `listen` | string | 是 | `:9001` | native ClickHouse 协议的 TCP 监听地址（**external 端口** — sidecar 和本地 CH 的 `remote()` 回环都打在这里） |
+| `listen` | string | 是 | `:9001` | native ClickHouse 协议的 TCP 监听地址（**external 端口** — agent 和本地 CH 的 `remote()` 回环都打在这里） |
 | `internal_listen` | string | 否 | `` (空) | 可选的第二个 TCP 监听端口，仅供其他 housegate 节点拨入。打在这里的 session 启动前就被预设为 `IsPeerTrusted=true` + `IsInternalPort=true`；auth 和 rewrite 自动跳过，`__route__` 信封直接拒绝。请通过防火墙 / SG 把它绑定到 peer-only 子网。详见 [Part 3](#part-3--多-proxy-路由原理)。|
-| `upstream` | string | 否 | `` (空) | 单 upstream 地址。设置 `shard` 时被忽略。空 + 没有 `shard` + 不是 sidecar ⇒ router-only server（每个 session 都通过 NetworkState 转发到 peer — 见 [§1.3](#13-router-only-server路由型-server)）。 |
+| `upstream` | string | 否 | `` (空) | 单 upstream 地址。设置 `shard` 时被忽略。空 + 没有 `shard` + 不是 agent ⇒ router-only server（每个 session 都通过 NetworkState 转发到 peer — 见 [§1.3](#13-router-only-server路由型-server)）。 |
 | `metrics_listen` | string | 否 | `:9091` | Prometheus metrics HTTP 地址 |
 | `dial_timeout` | duration | 否 | `5s` | 连 upstream 的 dial 超时 |
 | `idle_timeout` | duration | 否 | `5m` | 客户端连接空闲超时 |
@@ -146,13 +146,13 @@ rewriter 是物理/逻辑数据库映射的唯一权威。连接上的每条 SQL
 | `rewriter.physical_database` | string | 否 | `` | 本部署中承载所有 logical database 的那个唯一物理 ClickHouse 数据库。空 = 同时关闭 `database_map` 和 `hello.Database` 替换 |
 | `rewriter.delimiter` | string | 否 | `_` | `<logical>` 与 `<original_table>` 之间的分隔符 |
 
-### `sidecar` — Sidecar 模式设置
+### `agent` — Agent 模式设置
 
 | Key | 类型 | 必填 | 默认值 | 说明 |
 |-----|------|------|--------|------|
-| `sidecar.mode` | bool | 否 | `false` | 启用 sidecar 模式 |
-| `sidecar.upstream` | string | 条件必填 | `` | 固定的 server-side proxy 地址（如 `10.0.0.8:9001`）。**该字段** 与顶层 `network_state.source` **二者必填其一**。留空时 sidecar 会基于 NetworkState 在每个 session 自动选一个 server-mode peer（详见 [§Sidecar 自动发现 upstream](#sidecar-自动发现-upstream)）。 |
-| `sidecar.private_key_hex` | string | 是（sidecar） | `` | sidecar 的以太坊私钥，用于 JWS 签名。优先用 `HOUSEGATE_SIDECAR_KEY` 环境变量或 age 加密配置文件，不要明文写在配置里。 |
+| `agent.mode` | bool | 否 | `false` | 启用 agent 模式 |
+| `agent.upstream` | string | 条件必填 | `` | 固定的 server-side proxy 地址（如 `10.0.0.8:9001`）。**该字段** 与顶层 `network_state.source` **二者必填其一**。留空时 agent 会基于 NetworkState 在每个 session 自动选一个 server-mode peer（详见 [§Agent 自动发现 upstream](#agent-自动发现-upstream)）。 |
+| `agent.private_key_hex` | string | 是（agent） | `` | agent 的以太坊私钥，用于 JWS 签名。优先用 `HOUSEGATE_AGENT_KEY` 环境变量或 age 加密配置文件，不要明文写在配置里。 |
 
 ### `usage` — 计费 / 用量上报
 
@@ -240,8 +240,8 @@ bazel run //cmd:housegate -- -config config.json
 
 | 触发条件 | 模式 |
 |----------|------|
-| `sidecar.mode: true` | Sidecar |
-| 配置了 `upstream` 或 `shard`（且不是 sidecar） | Server（带本地 CH） |
+| `agent.mode: true` | Agent |
+| 配置了 `upstream` 或 `shard`（且不是 agent） | Server（带本地 CH） |
 | 都没配 | Server（router-only — 通过 NetworkState 转发到 peer） |
 
 按 `Ctrl+C` 进入 graceful shutdown；退出前会打印最终统计。启动时 proxy 会输出解析出来的模式与关键设置：
@@ -318,9 +318,9 @@ Shard 感知（每副本连接池 + 路由）：
 }
 ```
 
-### 1.2 Sidecar 模式
+### 1.2 Agent 模式
 
-无本地 ClickHouse — 每条 query 用 `sidecar.private_key_hex` 签名后转发给 `sidecar.upstream` 上的 relay-mode proxy。Server-side 的特性（重写、分片路由）都关闭。
+无本地 ClickHouse — 每条 query 用 `agent.private_key_hex` 签名后转发给 `agent.upstream` 上的 relay-mode proxy。Server-side 的特性（重写、分片路由）都关闭。
 
 配置文件方式：
 
@@ -329,35 +329,35 @@ Shard 感知（每副本连接池 + 路由）：
   "listen": ":9001",
   "metrics_listen": ":9091",
 
-  "sidecar": {
+  "agent": {
     "mode": true,
     "upstream": "10.0.0.8:9001",
-    "private_key_hex": "0xYOUR_SIDECAR_PRIVATE_KEY_HERE"
+    "private_key_hex": "0xYOUR_AGENT_PRIVATE_KEY_HERE"
   }
 }
 ```
 
-Sidecar 也可以不带配置文件启动，用 CLI flag 或环境变量：
+Agent 也可以不带配置文件启动，用 CLI flag 或环境变量：
 
 ```bash
 # CLI flag
 bazel-bin/cmd/housegate_/housegate \
-  -sidecar -sidecar-upstream 10.0.0.8:9001 \
-  -sidecar-key 0xYOUR_PRIVATE_KEY_HERE -listen :9001
+  -agent -agent-upstream 10.0.0.8:9001 \
+  -agent-key 0xYOUR_PRIVATE_KEY_HERE -listen :9001
 
 # 环境变量（推荐用于 secret）
-HOUSEGATE_SIDECAR=true \
-HOUSEGATE_SIDECAR_UPSTREAM=10.0.0.8:9001 \
-HOUSEGATE_SIDECAR_KEY=0xYOUR_PRIVATE_KEY_HERE \
+HOUSEGATE_AGENT=true \
+HOUSEGATE_AGENT_UPSTREAM=10.0.0.8:9001 \
+HOUSEGATE_AGENT_KEY=0xYOUR_PRIVATE_KEY_HERE \
 HOUSEGATE_LISTEN=:9001 \
 bazel-bin/cmd/housegate_/housegate
 
 # 混合（secret 走环境变量，路由走 flag）
-HOUSEGATE_SIDECAR_KEY=0xYOUR_PRIVATE_KEY_HERE \
-bazel-bin/cmd/housegate_/housegate -sidecar -sidecar-upstream 10.0.0.8:9001
+HOUSEGATE_AGENT_KEY=0xYOUR_PRIVATE_KEY_HERE \
+bazel-bin/cmd/housegate_/housegate -agent -agent-upstream 10.0.0.8:9001
 ```
 
-> **安全提示：** CLI flag 在进程列表（`ps`、`/proc`）中是可见的。请优先用 `HOUSEGATE_SIDECAR_KEY` 或配置文件传私钥。
+> **安全提示：** CLI flag 在进程列表（`ps`、`/proc`）中是可见的。请优先用 `HOUSEGATE_AGENT_KEY` 或配置文件传私钥。
 
 覆盖优先级（高 → 低）：CLI flag → 环境变量 → 配置文件 → 内置默认值。
 
@@ -365,9 +365,9 @@ bazel-bin/cmd/housegate_/housegate -sidecar -sidecar-upstream 10.0.0.8:9001
 
 | Flag | 默认值 | 说明 |
 |------|--------|------|
-| `-sidecar` | `false` | 启用 sidecar 模式（覆盖 `sidecar.mode`） |
-| `-sidecar-upstream` | (空) | server-side proxy 地址 |
-| `-sidecar-key` | (空) | JWS 签名用的以太坊私钥 |
+| `-agent` | `false` | 启用 agent 模式（覆盖 `agent.mode`） |
+| `-agent-upstream` | (空) | server-side proxy 地址 |
+| `-agent-key` | (空) | JWS 签名用的以太坊私钥 |
 | `-listen` | `:9001` | proxy 监听地址 |
 | `-metrics-listen` | `:9091` | Prometheus metrics 地址 |
 | `-dial-timeout` | `5s` | upstream dial 超时 |
@@ -387,7 +387,7 @@ bazel-bin/cmd/housegate_/housegate -sidecar -sidecar-upstream 10.0.0.8:9001
 }
 ```
 
-dialer 在没有 plugin 设置 route target 时，会落到一个兜底分支：从 `RetrieveAllIndexerInfos()` 里随机挑一个 `ClickhouseProxyPort` 非零的 peer，并通过 `selfListenPort` + `isLocalAddress` 排除自身。dial 失败时最多重试三个 peer 才向客户端报错。如果 sidecar 接下来又通过 `USE` 切到了别的 host，接收方的 router-only server 会和任何普通 server-mode proxy 一样，靠 forward-decision 插件把整个 session 转移过去 — 详见 [Part 3](#part-3--多-proxy-路由原理)。
+dialer 在没有 plugin 设置 route target 时，会落到一个兜底分支：从 `RetrieveAllIndexerInfos()` 里随机挑一个 `ClickhouseProxyPort` 非零的 peer，并通过 `selfListenPort` + `isLocalAddress` 排除自身。dial 失败时最多重试三个 peer 才向客户端报错。如果 agent 接下来又通过 `USE` 切到了别的 host，接收方的 router-only server 会和任何普通 server-mode proxy 一样，靠 forward-decision 插件把整个 session 转移过去 — 详见 [Part 3](#part-3--多-proxy-路由原理)。
 
 ## 2. Library 模式
 
@@ -458,7 +458,7 @@ if err := p.Run(ctx); err != nil { return err }
 
 # Part 3 — 多 Proxy 路由原理
 
-线上部署里通常会有多个 server-mode housegate 并排跑，每个 indexer 一个。Sidecar 上的 `clickhouse-client` 可能会发出 `USE tenantB`，但 `tenantB` 实际并不在当前 sidecar 正在通信的那个 server-mode proxy 上，而在另一个 proxy 上。整个 proxy 网络要透明地解决这个问题。完整设计见 [docs/superpowers/specs/2026-04-28-two-port-server-mode.md](docs/superpowers/specs/2026-04-28-two-port-server-mode.md)。
+线上部署里通常会有多个 server-mode housegate 并排跑，每个 indexer 一个。Agent 上的 `clickhouse-client` 可能会发出 `USE tenantB`，但 `tenantB` 实际并不在当前 agent 正在通信的那个 server-mode proxy 上，而在另一个 proxy 上。整个 proxy 网络要透明地解决这个问题。完整设计见 [docs/superpowers/specs/2026-04-28-two-port-server-mode.md](docs/superpowers/specs/2026-04-28-two-port-server-mode.md)。
 
 ## 拓扑总览
 
@@ -470,10 +470,10 @@ if err := p.Run(ctx); err != nil { return err }
                               ▼
    ┌──────────────────────────────────────────────────────────────────────┐
    │                                                                      │
-   │  sidecar（客户端侧）                                                  │
-   │   • 用 sidecar.private_key_hex 给每条 query 签 JWS                   │
+   │  agent（客户端侧）                                                  │
+   │   • 用 agent.private_key_hex 给每条 query 签 JWS                   │
    │   • 通过 Selector 在每个 session 自选一个 server-mode peer          │
-   │     （或使用固定的 sidecar.upstream）                                │
+   │     （或使用固定的 agent.upstream）                                │
    │                                                                      │
    └────────────┬─────────────────────────────────────────────────────────┘
                 │  ClientHello + JWS（在 password 字段里）
@@ -515,11 +515,11 @@ if err := p.Run(ctx); err != nil { return err }
 
 | 维度 | external 端口（`listen`） | internal 端口（`internal_listen`） |
 |---|---|---|
-| 谁能拨进来 | sidecar、本地 CH 的 `remote()` 回环 | 仅其它 housegate（靠防火墙强制） |
+| 谁能拨进来 | agent、本地 CH 的 `remote()` 回环 | 仅其它 housegate（靠防火墙强制） |
 | Session 预设状态 | 无 | `IsPeerTrusted = true`、`IsInternalPort = true` |
 | `__route__` 信封 | 接受（loopback 路径） | **拒绝**（`routeplugin.Stripper` 直接关闭，避免转发环） |
 | `__peer__` 信封 | 出现时接受 | 接受（验证发起 peer 的 JWS） |
-| `auth` 插件 | 运行（验证 sidecar JWS） | 跳过（`PeerTrustAware.RunOnPeerTrust=false`） |
+| `auth` 插件 | 运行（验证 agent JWS） | 跳过（`PeerTrustAware.RunOnPeerTrust=false`） |
 | `forward-decision` | 运行 | 不适用（internal 端口不再向外转发） |
 | `rewrite`、`commitgate` | 运行 | 跳过（peer-trust 主动 opt-out） |
 | `metrics`、`usage`、`concurrency`、`sessionstate` | 运行 | 运行 |
@@ -538,12 +538,12 @@ if err := p.Run(ctx); err != nil { return err }
 
 `ForwardAware` 标记接口和 `PeerTrustAware` 一样，是默认开启 / 主动 opt-out 的设计。无论是否在转发都应该在源 proxy 上跑的插件（auth、metrics、concurrency、usage、sessionstate、credential）保持运行；属于 *host* proxy 那一侧的插件（rewrite、commitgate）则实现 `RunOnForward()=false`。
 
-## Sidecar 自动发现 upstream
+## Agent 自动发现 upstream
 
-当 `sidecar.upstream` 留空时，[`pkg/plugins/sidecar.Selector`](pkg/plugins/sidecar/upstream_select.go) 会按 `network_state.source` 在每个 session 用一个两层算法挑 server-mode peer：
+当 `agent.upstream` 留空时，[`pkg/plugins/agent.Selector`](pkg/plugins/agent/upstream_select.go) 会按 `network_state.source` 在每个 session 用一个两层算法挑 server-mode peer：
 
 ```
-account = derive_address(sidecar.private_key_hex)
+account = derive_address(agent.private_key_hex)
 perms   = NetworkState.RetrieveDatabasePermissions(account)
 
 permissioned = 至少持有 perms 中某个 DB、且 ClickhouseProxyPort 非零的 indexer
@@ -558,9 +558,9 @@ default:                     return error("no bound indexers")
 
 **Bootstrap 兜底。** 全新账户在所有数据库上都没有权限 — 因为它还没创建过任何数据库。如果在 dial 阶段就拒绝它，会导致新用户连 `CREATE DATABASE` 都跑不起来（先有鸡还是先有蛋）。所以当 `permissioned` 为空但 `bound` 非空时，Selector 仍会随机挑一个 bound indexer；用户的第一条 `CREATE DATABASE` 会落到那台机器上，`commitgate` 把这个新数据库注册回 NetworkState，后续 session 就能正常解析了。
 
-Bootstrap 路径会打 warn 日志，并把 Prometheus counter `clickhouse_proxy_sidecar_bootstrap_fallback_total` 自增 1，方便运维识别那些不该走 bootstrap 路径的账户。
+Bootstrap 路径会打 warn 日志，并把 Prometheus counter `clickhouse_proxy_agent_bootstrap_fallback_total` 自增 1，方便运维识别那些不该走 bootstrap 路径的账户。
 
-在选定 tier 内做随机选择既能均衡负载，也免费送一个 fail-over 机制（下一次 session 重新 roll）。固定 `sidecar.upstream` 仍然有效，作为显式的 override。
+在选定 tier 内做随机选择既能均衡负载，也免费送一个 fail-over 机制（下一次 session 重新 roll）。固定 `agent.upstream` 仍然有效，作为显式的 override。
 
 ## 跨分片 `remote()` 信封
 

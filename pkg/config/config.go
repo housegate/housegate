@@ -29,11 +29,11 @@ import (
 
 	"housegate/housegate/pkg/cfgtypes"
 	"housegate/housegate/pkg/cluster"
+	"housegate/housegate/pkg/plugins/agent"
 	authplugin "housegate/housegate/pkg/plugins/auth"
 	"housegate/housegate/pkg/plugins/concurrency"
 	"housegate/housegate/pkg/plugins/rewrite"
 	"housegate/housegate/pkg/plugins/sessionstate"
-	"housegate/housegate/pkg/plugins/sidecar"
 	"housegate/housegate/pkg/plugins/usage"
 )
 
@@ -90,7 +90,7 @@ type Config struct {
 	IndexerID uint64 `json:"indexer_id"                yaml:"indexer_id"`
 
 	// RelayPrivateKeyHex is the proxy-level secp256k1 signing key
-	// used both for the existing relay/sidecar SQL-binding JWS and
+	// used both for the existing relay/agent SQL-binding JWS and
 	// for the peer-relay JWS injected into rewritten remote() calls.
 	// Hex with or without a leading 0x. Empty disables both signers.
 	RelayPrivateKeyHex string `json:"relay_private_key_hex"     yaml:"relay_private_key_hex"`
@@ -130,7 +130,7 @@ type Config struct {
 
 	Auth             authplugin.Config   `json:"auth"              yaml:"auth"`
 	Rewriter         rewrite.Config      `json:"rewriter"          yaml:"rewriter"`
-	Sidecar          sidecar.Config      `json:"sidecar"           yaml:"sidecar"`
+	Agent            agent.Config        `json:"agent"             yaml:"agent"`
 	Usage            usage.Config        `json:"usage"             yaml:"usage"`
 	ConcurrencyLimit concurrency.Config  `json:"concurrency_limit" yaml:"concurrency_limit"`
 	State            sessionstate.Config `json:"state"             yaml:"state"`
@@ -159,7 +159,7 @@ type LoggingConfig struct {
 //     dependency). Schema is documented in pkg/network/yaml.go and an
 //     example sits at configs/local.network_state.yaml.
 //   - `http://` / `https://` → treat as a sentio storage-node JSON-RPC
-//     endpoint and back the State with RpcNetworkState. Sidecar-only;
+//     endpoint and back the State with RpcNetworkState. Agent-only;
 //     server mode rejects this scheme.
 //   - anything else → treat as a Redis address for the statemirror
 //     consumer. Empty falls back to top-level `redis_default_addr`.
@@ -195,15 +195,15 @@ func (c *Config) ResolveRedisAddr(sectionAddr string) string {
 // Mode returns the active runtime mode implied by the config.
 //
 // Two runtime modes:
-//   - ModeSidecar — sidecar.mode = true. Signs queries with an Ethereum
+//   - ModeAgent — agent.mode = true. Signs queries with an Ethereum
 //     key, forwards them to a remote server-mode proxy.
 //   - ModeServer — everything else. Hosts client connections, runs the
 //     full plugin chain, and routes to local replicas (when shard or
 //     upstream is configured) or peers (when neither is — "router-only"
 //     deployment, equivalent to the legacy forwarding-only mode).
 func (c *Config) Mode() Mode {
-	if c.Sidecar.Mode {
-		return ModeSidecar
+	if c.Agent.Mode {
+		return ModeAgent
 	}
 	return ModeServer
 }
@@ -213,15 +213,15 @@ type Mode int
 
 const (
 	ModeServer Mode = iota
-	ModeSidecar
+	ModeAgent
 )
 
 func (m Mode) String() string {
 	switch m {
 	case ModeServer:
 		return "server"
-	case ModeSidecar:
-		return "sidecar"
+	case ModeAgent:
+		return "agent"
 	default:
 		return "unknown"
 	}
@@ -244,31 +244,31 @@ func (c *Config) Validate() error {
 	}
 
 	switch c.Mode() {
-	case ModeSidecar:
-		if err := c.Sidecar.Validate(); err != nil {
+	case ModeAgent:
+		if err := c.Agent.Validate(); err != nil {
 			errs = append(errs, err)
 		}
-		// The sidecar's upstream may come from either an explicit address
+		// The agent's upstream may come from either an explicit address
 		// or an auto-discovery NetworkState lookup. At least one must be
 		// configured.
-		if c.Sidecar.Upstream == "" &&
+		if c.Agent.Upstream == "" &&
 			!c.NetworkState.IsYAMLSource() &&
 			!c.NetworkState.IsRpcSource() &&
 			c.ResolveRedisAddr(c.NetworkState.Source) == "" {
-			errs = append(errs, errors.New("sidecar.upstream is required, or set network_state.source to a YAML path (.yaml/.yml), an RPC URL (http(s)://), or a Redis address (or top-level redis_default_addr) for upstream auto-discovery"))
+			errs = append(errs, errors.New("agent.upstream is required, or set network_state.source to a YAML path (.yaml/.yml), an RPC URL (http(s)://), or a Redis address (or top-level redis_default_addr) for upstream auto-discovery"))
 		}
 	case ModeServer:
 		// NetworkState is needed both for cross-shard rewriter routing
 		// (when shard/upstream is set) and for router-only fallback
 		// dialing (when neither is set). It is therefore always
 		// required in server mode. The rpc backend exposes only the
-		// methods sidecar.Selector needs and would silently misbehave
+		// methods agent.Selector needs and would silently misbehave
 		// for server-mode lookups, so reject it explicitly.
 		switch {
 		case c.NetworkState.IsYAMLSource():
 			// ok
 		case c.NetworkState.IsRpcSource():
-			errs = append(errs, errors.New("network_state.source: RPC backend (http(s)://) is sidecar-mode only — use a YAML path (.yaml/.yml) or a Redis address in server mode"))
+			errs = append(errs, errors.New("network_state.source: RPC backend (http(s)://) is agent-mode only — use a YAML path (.yaml/.yml) or a Redis address in server mode"))
 		case c.ResolveRedisAddr(c.NetworkState.Source) != "":
 			// ok
 		default:
@@ -362,11 +362,11 @@ func Default() Config {
 			ServiceAddr: EnvOrDefault("HOUSEGATE_REWRITER_ADDR", "localhost:50051"),
 			Timeout:     Duration{5 * time.Second},
 		},
-		Sidecar: sidecar.Config{
-			Mode:          EnvOrDefault("HOUSEGATE_SIDECAR", "") == "true",
-			Upstream:      EnvOrDefault("HOUSEGATE_SIDECAR_UPSTREAM", ""),
-			PrivateKeyHex: EnvOrDefault("HOUSEGATE_SIDECAR_KEY", ""),
-			Owner:         EnvOrDefault("HOUSEGATE_SIDECAR_OWNER", ""),
+		Agent: agent.Config{
+			Mode:          EnvOrDefault("HOUSEGATE_AGENT", "") == "true",
+			Upstream:      EnvOrDefault("HOUSEGATE_AGENT_UPSTREAM", ""),
+			PrivateKeyHex: EnvOrDefault("HOUSEGATE_AGENT_KEY", ""),
+			Owner:         EnvOrDefault("HOUSEGATE_AGENT_OWNER", ""),
 		},
 		Usage: usage.Config{
 			Enabled: false,

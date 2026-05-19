@@ -1,4 +1,4 @@
-package sidecar
+package agent
 
 import (
 	"errors"
@@ -11,9 +11,9 @@ import (
 // ErrNoNetworkState is returned by Selector.Pick when the selector has
 // no registry backing it. Distinct from "state has zero indexers"
 // because nil deps are a wiring bug, not an empty network.
-var ErrNoNetworkState = errors.New("sidecar selector: no network state")
+var ErrNoNetworkState = errors.New("agent selector: no network state")
 
-// Selector picks an upstream proxy address for a sidecar session by
+// Selector picks an upstream proxy address for an agent session by
 // consulting the registry. The selection is two-tier:
 //
 //  1. Permissioned tier — indexers that host at least one logical
@@ -25,7 +25,7 @@ var ErrNoNetworkState = errors.New("sidecar selector: no network state")
 //     The caller is expected to log + meter these picks so operators
 //     can spot accounts that should not be in the bootstrap path.
 //
-// Selector is read-only; callers create one per sidecar process and
+// Selector is read-only; callers create one per agent process and
 // re-use it across sessions, providing fresh randomness on each Pick.
 type Selector struct {
 	// Topology, Databases, Access are the read-only registry consumers
@@ -35,7 +35,7 @@ type Selector struct {
 	Databases registry.Databases
 	Access    registry.Access
 
-	// Account is the sidecar's Ethereum address (derived from
+	// Account is the agent's Ethereum address (derived from
 	// PrivateKeyHex). Used as the lookup key for Access.PermissionsFor.
 	Account string
 }
@@ -103,6 +103,6 @@ func (s *Selector) Pick(r *rand.Rand) (Choice, error) {
 		e := bound[r.Intn(len(bound))]
 		return Choice{IndexerId: e.id, Address: e.addr, IsBootstrap: true}, nil
 	default:
-		return Choice{}, errors.New("sidecar selector: no bound indexers in network state")
+		return Choice{}, errors.New("agent selector: no bound indexers in network state")
 	}
 }

@@ -105,8 +105,8 @@ type Event struct {
 	// is acting as an *operator* — i.e. the upstream should treat
 	// `Owner` (not `User`) as the principal that gets billed and
 	// holds the on-chain Owner bit. Sourced from the SQL_x_payer
-	// query setting that the sidecar plugin already injects when
-	// configured with `--sidecar-owner=<O>`.
+	// query setting that the agent plugin already injects when
+	// configured with `--agent-owner=<O>`.
 	//
 	// buildEvent populates Owner only when SQL_x_payer is present
 	// AND the address differs from User (after lowercasing). It
@@ -115,7 +115,7 @@ type Event struct {
 	// calls State.IsOperator).
 	//
 	// Empty when no SQL_x_payer setting was supplied or when it
-	// equals User (the legacy single-key sidecar path). Hosts that
+	// equals User (the legacy single-key agent path). Hosts that
 	// implement billing or grant the Owner bit MUST treat Owner
 	// (when non-empty) as the effective principal; User stays the
 	// JWS-authenticated signer for audit / log correlation.

@@ -6,7 +6,7 @@ package registry
 // only when a real consumer needs the field.
 type Database struct {
 	// IndexerId is the indexer hosting this database's physical tables.
-	// Used by forward/sidecar/rewriter to decide local vs. remote and to
+	// Used by forward/agent/rewriter to decide local vs. remote and to
 	// resolve the peer dialing target via Topology.
 	IndexerId uint64
 

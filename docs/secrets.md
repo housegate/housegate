@@ -73,7 +73,7 @@ Recipients are collected from (in order, all merged into one set):
 2. `HOUSEGATE_AGE_RECIPIENTS` env var (comma-separated)
 3. Sibling `<target>.recipients` file (one pubkey per line, `#` comments)
 
-The sidecar file is the recommended production layout — commit it next to
+The companion file is the recommended production layout — commit it next to
 the ciphertext in git so "who can read this file" is explicit and reviewable.
 
 ### `housegate secret-decrypt`
@@ -170,7 +170,7 @@ to the host cannot read it from a different process's view.
 ## Key rotation
 
 1. Generate a new binary key: `housegate secret-keygen -o binary-v2.key`
-2. Add its public key to every `<file>.recipients` sidecar.
+2. Add its public key to every `<file>.recipients` companion.
 3. Re-encrypt in place, preserving all existing recipients:
    ```
    for f in configs/*.age; do
@@ -182,7 +182,7 @@ to the host cannot read it from a different process's view.
    ```
 4. Deploy binaries with the new `HOUSEGATE_AGE_IDENTITY` injected. Both old and
    new keys decrypt during the rollout window.
-5. Once the rollout is stable, remove the old pubkey from the sidecar
+5. Once the rollout is stable, remove the old pubkey from the companion
    files, re-encrypt again, and destroy the old private key.
 
 (For single-recipient workflows or large file sets, `age --decrypt | age
@@ -196,7 +196,7 @@ configs/
   local.yaml                        # references ckh_manager.local.yaml.age
   ckh_manager.prod.yaml.age         # ciphertext, committed
   ckh_manager.prod.yaml.age.recipients
-                                    # sidecar: binary pubkey + admin pubkey, committed
+                                    # companion: binary pubkey + admin pubkey, committed
   ckh_manager.local.yaml            # dev-only plaintext, gitignored
 ```
 

@@ -65,7 +65,7 @@ type Options struct {
 
 	// NetworkState, if non-nil, replaces the registry.Registry that
 	// housegate would otherwise construct from Config.NetworkState.Source
-	// (e.g. YAML fixture or sidecar-mode RPC backend). Embedding hosts
+	// (e.g. YAML fixture or agent-mode RPC backend). Embedding hosts
 	// (e.g. sentio-node) inject a redis-statemirror-backed implementation
 	// directly. When set, BOTH the network_state.source validation rule
 	// AND the source value itself are bypassed; the injected registry is
@@ -86,7 +86,7 @@ type Options struct {
 	// ClickHouse is contacted. Empty / nil = no commitgate plugin
 	// is wired.
 	//
-	// Server mode only. Sidecar mode ignores this field — sidecars
+	// Server mode only. Agent mode ignores this field — agents
 	// forward to a server-mode proxy that fires its own gate. Routed
 	// (proxy-to-proxy) sessions also skip the plugin.
 	//
@@ -179,13 +179,13 @@ func New(opts Options) (Proxy, error) {
 
 	var built *builtServer
 	var err error
-	// Two runtime modes: sidecar signs+forwards client queries to a
+	// Two runtime modes: agent signs+forwards client queries to a
 	// remote proxy; server hosts client connections (with or without
 	// a local shard — when both shard and upstream are absent, every
 	// session is forwarded to a peer via NetworkState).
 	switch opts.Config.Mode() {
-	case config.ModeSidecar:
-		built, err = buildSidecar(opts, rf)
+	case config.ModeAgent:
+		built, err = buildAgent(opts, rf)
 	default: // ModeServer
 		built, err = buildServer(opts, rf)
 	}

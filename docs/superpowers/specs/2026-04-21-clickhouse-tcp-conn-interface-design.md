@@ -8,7 +8,7 @@
 
 ## 1. Problem & Goals
 
-Today all ClickHouse native TCP handling lives in `pkg/proxy/proxy.go` (~1800 LOC): handshake, packet loop, handshake routing, sidecar signing, forwarding, compressed Data-block frame probing, Prometheus metrics, and every piece of per-connection state are co-located. Dependencies are injected after construction via seven `Set*` methods on `*Proxy`, and test isolation is poor (init-registered Prometheus globals panic on double-import).
+Today all ClickHouse native TCP handling lives in `pkg/proxy/proxy.go` (~1800 LOC): handshake, packet loop, handshake routing, agent signing, forwarding, compressed Data-block frame probing, Prometheus metrics, and every piece of per-connection state are co-located. Dependencies are injected after construction via seven `Set*` methods on `*Proxy`, and test isolation is poor (init-registered Prometheus globals panic on double-import).
 
 The target architecture (CLAUDE.md §"Target Architecture") calls for a `pkg/protocol/` codec plus a `pkg/proxy/session.go` + `relay.go` split. This spec defines the two central abstractions — **Codec (layer A)** and **Session (layer C)** — that make that split concrete.
 
@@ -460,7 +460,7 @@ type Server struct {
     hooks Hooks
     ctx   context.Context
     log   *zap.Logger
-    // upstream factory varies by mode (server / sidecar / forwarding-only),
+    // upstream factory varies by mode (server / agent / forwarding-only),
     // supplied by cmd/proxy/main.go
     dialUpstream func(ctx context.Context, s chsession.Session) (*chproto.Codec, error)
 }
@@ -483,7 +483,7 @@ func (s *Server) handle(c net.Conn) {
 }
 ```
 
-The three deployment modes (server / sidecar / forwarding-only) differ only in `dialUpstream` and which plugins are wired into `Hooks`. The Codec, Session, and Relay code are identical across modes.
+The three deployment modes (server / agent / forwarding-only) differ only in `dialUpstream` and which plugins are wired into `Hooks`. The Codec, Session, and Relay code are identical across modes.
 
 ---
 

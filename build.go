@@ -18,6 +18,7 @@ import (
 	"housegate/housegate/pkg/log"
 	"housegate/housegate/pkg/network"
 	"housegate/housegate/pkg/plugin"
+	"housegate/housegate/pkg/plugins/agent"
 	authplugin "housegate/housegate/pkg/plugins/auth"
 	"housegate/housegate/pkg/plugins/commitgate"
 	"housegate/housegate/pkg/plugins/concurrency"
@@ -27,7 +28,6 @@ import (
 	"housegate/housegate/pkg/plugins/rewrite"
 	routeplugin "housegate/housegate/pkg/plugins/route"
 	"housegate/housegate/pkg/plugins/sessionstate"
-	"housegate/housegate/pkg/plugins/sidecar"
 	"housegate/housegate/pkg/plugins/usage"
 	"housegate/housegate/pkg/proxy"
 	"housegate/housegate/pkg/registry"
@@ -42,7 +42,7 @@ import (
 // `.yml` value loads an InMemoryNetworkState fixture (local-dev /
 // integration tests, no Redis needed); an http(s) URL constructs an
 // RpcNetworkState pointing at a sentio storage-node JSON-RPC endpoint
-// (sidecar mode only — server-mode validation rejects this scheme).
+// (agent mode only — server-mode validation rejects this scheme).
 //
 // The Redis-backed backend is no longer built in-process; embedders
 // (sentio-node) must construct it themselves and inject via
@@ -138,7 +138,7 @@ func buildClusterManager(cfg *config.Config) (*cluster.Manager, error) {
 type serverListener struct {
 	Server     *proxy.Server
 	ListenAddr string
-	Label      string // "external" | "internal" | "sidecar" | "forwarding"
+	Label      string // "external" | "internal" | "agent" | "forwarding"
 }
 
 // builtServer is what each per-mode builder returns to the proxyImpl.
@@ -603,16 +603,16 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	}, nil
 }
 
-func buildSidecar(opts Options, rf *redisFactory) (*builtServer, error) {
+func buildAgent(opts Options, rf *redisFactory) (*builtServer, error) {
 	cfg := opts.Config
 
 	var signer auth.Signer
 	if opts.Signer != nil {
 		signer = opts.Signer
 	} else {
-		s, err := auth.NewRelaySigner(cfg.Sidecar.PrivateKeyHex)
+		s, err := auth.NewRelaySigner(cfg.Agent.PrivateKeyHex)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create sidecar signer: %w", err)
+			return nil, fmt.Errorf("failed to create agent signer: %w", err)
 		}
 		signer = s
 	}
@@ -623,19 +623,19 @@ func buildSidecar(opts Options, rf *redisFactory) (*builtServer, error) {
 		ConnLifecyclePlugins:     []plugin.ConnLifecyclePlugin{metrics},
 		HandshakeCompletePlugins: []plugin.HandshakeCompletePlugin{metrics},
 		QueryPlugins: []plugin.QueryPlugin{
-			&sidecar.Plugin{Signer: signer, Observer: obs, Owner: cfg.Sidecar.Owner},
+			&agent.Plugin{Signer: signer, Observer: obs, Owner: cfg.Agent.Owner},
 			metrics,
 		},
 		ExceptionPlugins: []plugin.ExceptionPlugin{metrics},
 	}
 
 	// Two ways to choose an upstream:
-	//   1. Explicit cfg.Sidecar.Upstream — pinned target, no NetworkState
+	//   1. Explicit cfg.Agent.Upstream — pinned target, no NetworkState
 	//      lookup. Useful for hermetic deployments and integration tests.
 	//   2. Auto-discovery via Selector — read NetworkState (yaml or
 	//      redis-backed) and pick a random permissioned peer per session.
 	//      Validation in pkg/config guarantees one of the two is set.
-	dialer, err := buildSidecarDialer(opts, rf, signer.Address(), obs)
+	dialer, err := buildAgentDialer(opts, rf, signer.Address(), obs)
 	if err != nil {
 		return nil, err
 	}
@@ -645,26 +645,26 @@ func buildSidecar(opts Options, rf *redisFactory) (*builtServer, error) {
 
 	return &builtServer{
 		listeners: []serverListener{
-			{Server: srv, ListenAddr: cfg.Listen, Label: "sidecar"},
+			{Server: srv, ListenAddr: cfg.Listen, Label: "agent"},
 		},
 		preServe: func(context.Context) {},
 		teardown: func() {},
 	}, nil
 }
 
-// buildSidecarDialer returns the per-session upstream dialer for sidecar
-// mode. When cfg.Sidecar.Upstream is set, every dial returns that exact
+// buildAgentDialer returns the per-session upstream dialer for agent
+// mode. When cfg.Agent.Upstream is set, every dial returns that exact
 // address. Otherwise, NetworkState is loaded once at build time and a
 // Selector picks a random permissioned peer (or any bound peer for
 // brand-new accounts) for each new session.
-func buildSidecarDialer(opts Options, rf *redisFactory, account string, obs *proxy.MetricsObserver) (func(context.Context, chsession.Session) (*chproto.Codec, error), error) {
+func buildAgentDialer(opts Options, rf *redisFactory, account string, obs *proxy.MetricsObserver) (func(context.Context, chsession.Session) (*chproto.Codec, error), error) {
 	cfg := opts.Config
 
-	if cfg.Sidecar.Upstream != "" {
-		log.Infow("sidecar proxy mode: signing queries",
-			"address", account, "upstream", cfg.Sidecar.Upstream)
+	if cfg.Agent.Upstream != "" {
+		log.Infow("agent proxy mode: signing queries",
+			"address", account, "upstream", cfg.Agent.Upstream)
 		return func(ctx context.Context, _ chsession.Session) (*chproto.Codec, error) {
-			return dialRaw(ctx, cfg.Sidecar.Upstream, cfg.DialTimeout.Duration)
+			return dialRaw(ctx, cfg.Agent.Upstream, cfg.DialTimeout.Duration)
 		}, nil
 	}
 
@@ -679,15 +679,15 @@ func buildSidecarDialer(opts Options, rf *redisFactory, account string, obs *pro
 		}
 	}
 	if reg == nil {
-		return nil, fmt.Errorf("sidecar auto-discovery: NetworkState is nil")
+		return nil, fmt.Errorf("agent auto-discovery: NetworkState is nil")
 	}
-	selector := &sidecar.Selector{
+	selector := &agent.Selector{
 		Topology:  reg,
 		Databases: reg,
 		Access:    reg,
 		Account:   account,
 	}
-	log.Infow("sidecar proxy mode: signing queries with NetworkState upstream auto-discovery",
+	log.Infow("agent proxy mode: signing queries with NetworkState upstream auto-discovery",
 		"address", account, "network_state_source", cfg.NetworkState.Source)
 
 	return func(ctx context.Context, _ chsession.Session) (*chproto.Codec, error) {
@@ -697,12 +697,12 @@ func buildSidecarDialer(opts Options, rf *redisFactory, account string, obs *pro
 		r := rand.New(rand.NewSource(time.Now().UnixNano()))
 		choice, err := selector.Pick(r)
 		if err != nil {
-			return nil, fmt.Errorf("sidecar select upstream: %w", err)
+			return nil, fmt.Errorf("agent select upstream: %w", err)
 		}
 		if choice.IsBootstrap {
-			log.Warnw("sidecar bootstrap fallback: no permissioned databases for account",
+			log.Warnw("agent bootstrap fallback: no permissioned databases for account",
 				"account", account, "indexer_id", choice.IndexerId, "addr", choice.Addr())
-			obs.SidecarBootstrapFallback()
+			obs.AgentBootstrapFallback()
 		}
 		return dialRaw(ctx, choice.Addr(), cfg.DialTimeout.Duration)
 	}, nil

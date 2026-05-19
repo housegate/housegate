@@ -89,7 +89,7 @@ type SessionState struct {
 	// than a rewriter-emitted remote() loopback. The chain's peer-trust
 	// filter ignores the auth/rewrite opt-out when this flag is set —
 	// a forward-pivoted session arrives with the client's raw SQL, so
-	// rewrite must run locally on this proxy and the original sidecar
+	// rewrite must run locally on this proxy and the original agent
 	// JWS still validates (qhash matches the unrewritten body).
 	//
 	// Always implies IsPeerTrusted; the credential plugin sets both
@@ -302,9 +302,9 @@ func (s *SessionState) GetRouteTarget() string {
 //
 //   - routeplugin.Signer (RouteAware-opt-in, internally guarded by
 //     IsRouted()) does NOT inject the relay JWS — the receiving peer
-//     already validates the original sidecar's per-query JWS, and
+//     already validates the original agent's per-query JWS, and
 //     duplicating SQL_x_auth_token would let the relay's token
-//     overwrite the sidecar's in the receiver's settings map.
+//     overwrite the agent's in the receiver's settings map.
 //   - non-RouteAware plugins (auth, usage, concurrency, forward
 //     itself for subsequent USE detection) keep firing on the
 //     forwarded leg of the session.

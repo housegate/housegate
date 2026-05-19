@@ -703,7 +703,7 @@ var _ ForwardAware = (*pivotingQueryPlugin)(nil)
 
 // TestPluginChain_OnQuery_PivotMidChainSkipsLaterOptOutPlugins is the
 // regression for the stale-snapshot bug found 2026-04-29 by a user
-// running a real sidecar→ProxyA→ProxyB pivot: when forward.Plugin's
+// running a real agent→ProxyA→ProxyB pivot: when forward.Plugin's
 // OnQuery fires SetForwarding(true) mid-chain, plugins that come after
 // it in QueryPlugins and implement RunOnForward()=false (rewrite,
 // commitgate, dbrewriter) MUST be skipped. The earlier code captured
