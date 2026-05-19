@@ -366,6 +366,7 @@ func Default() Config {
 			Mode:          EnvOrDefault("HOUSEGATE_SIDECAR", "") == "true",
 			Upstream:      EnvOrDefault("HOUSEGATE_SIDECAR_UPSTREAM", ""),
 			PrivateKeyHex: EnvOrDefault("HOUSEGATE_SIDECAR_KEY", ""),
+			Owner:         EnvOrDefault("HOUSEGATE_SIDECAR_OWNER", ""),
 		},
 		Usage: usage.Config{
 			Enabled: false,

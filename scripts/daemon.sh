@@ -19,6 +19,7 @@
 # Env-var equivalents (any flag wins over the corresponding env):
 #   HOUSEGATE_NETWORK_STATE_SOURCE  → --state
 #   HOUSEGATE_SIDECAR_KEY           → --private-key
+#   HOUSEGATE_SIDECAR_OWNER         → --owner
 #   HOUSEGATE_LISTEN                → --listen
 #   HOUSEGATE_VERSION               → --version  (skips the "latest" lookup)
 #   HOUSEGATE_BIN                   → use this binary instead of downloading
@@ -47,6 +48,10 @@ Options:
   --private-key HEX    Sidecar Ethereum private key (0x-prefixed hex).
                        Prefer the HOUSEGATE_SIDECAR_KEY env var so the value
                        doesn't sit in shell history.
+  --owner ADDR         Optional billed owner address (0x-prefixed Ethereum
+                       address) when --private-key is an operator key
+                       signing on behalf of an owner account. Omit when the
+                       signer pays for itself.
   --listen ADDR        Listen address. Default: random free port on 127.0.0.1.
   --version TAG        Pin a specific release tag (e.g. v0.6.0). Default:
                        resolved from the GitHub "latest" release.
@@ -55,8 +60,9 @@ Options:
   -h, --help           Show this help and exit.
 
 Env vars (flags win):
-  HOUSEGATE_NETWORK_STATE_SOURCE, HOUSEGATE_SIDECAR_KEY, HOUSEGATE_LISTEN,
-  HOUSEGATE_VERSION, HOUSEGATE_BIN, HOUSEGATE_CACHE_DIR
+  HOUSEGATE_NETWORK_STATE_SOURCE, HOUSEGATE_SIDECAR_KEY,
+  HOUSEGATE_SIDECAR_OWNER, HOUSEGATE_LISTEN, HOUSEGATE_VERSION,
+  HOUSEGATE_BIN, HOUSEGATE_CACHE_DIR
 
 Cache: ${CACHE_DIR}
 Missing required values are prompted for interactively.
@@ -67,6 +73,7 @@ err() { echo "error: $*" >&2; exit 1; }
 
 state="${HOUSEGATE_NETWORK_STATE_SOURCE:-https://testnet-gateway.sentio.xyz}"
 private_key="${HOUSEGATE_SIDECAR_KEY:-}"
+owner="${HOUSEGATE_SIDECAR_OWNER:-}"
 listen="${HOUSEGATE_LISTEN:-}"
 version="${HOUSEGATE_VERSION:-}"
 binary="${HOUSEGATE_BIN:-}"
@@ -75,11 +82,13 @@ while (( $# )); do
     case "$1" in
         --state=*)        state="${1#*=}"; shift ;;
         --private-key=*)  private_key="${1#*=}"; shift ;;
+        --owner=*)        owner="${1#*=}"; shift ;;
         --listen=*)       listen="${1#*=}"; shift ;;
         --version=*)      version="${1#*=}"; shift ;;
         --bin=*)          binary="${1#*=}"; shift ;;
         --state)          state="${2:-}"; shift 2 ;;
         --private-key)    private_key="${2:-}"; shift 2 ;;
+        --owner)          owner="${2:-}"; shift 2 ;;
         --listen)         listen="${2:-}"; shift 2 ;;
         --version)        version="${2:-}"; shift 2 ;;
         --bin)            binary="${2:-}"; shift 2 ;;
@@ -225,6 +234,15 @@ prompt_required private_key "Sidecar private key (hex, hidden): " 1
 # Normalize the hex prefix so users can paste with or without 0x.
 [[ "$private_key" == 0x* ]] || private_key="0x${private_key}"
 
+# --owner is optional; when set it must be a 0x-prefixed Ethereum address
+# (the binary's validator also rejects malformed values, but failing here
+# avoids spinning up before the user sees the message).
+if [[ -n "$owner" ]]; then
+    if ! [[ "$owner" =~ ^0x[0-9a-fA-F]{40}$ ]]; then
+        err "--owner must be a 0x-prefixed 20-byte Ethereum address, got: $owner"
+    fi
+fi
+
 # ---------------------------------------------------------------------
 # Pick a random free port if --listen wasn't given. Uses python3 to ask
 # the kernel for an available port — more robust than guessing.
@@ -250,7 +268,9 @@ echo "  binary:  $binary"
 echo "  listen:  $listen"
 echo "  state:   $state"
 echo "  key:     ${private_key:0:6}…${private_key: -4} (redacted)"
+[[ -n "$owner" ]] && echo "  owner:   $owner"
 echo
 
 HOUSEGATE_SIDECAR_KEY="$private_key" \
+HOUSEGATE_SIDECAR_OWNER="$owner" \
 exec "$binary" -sidecar -listen "$listen" -state "$state"
