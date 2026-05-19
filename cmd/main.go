@@ -62,7 +62,7 @@ func loadConfigWithOverrides() config.Config {
 	sidecarMode := flag.Bool("sidecar", false, "enable sidecar mode (token-signing pass-through proxy)")
 	sidecarUpstream := flag.String("sidecar-upstream", "", "server-side proxy address, e.g. 10.0.0.8:9001 (required in sidecar mode)")
 	sidecarKey := flag.String("sidecar-key", "", "sidecar Ethereum private key hex for JWS signing (prefer env var HOUSEGATE_SIDECAR_KEY)")
-	sidecarOwner := flag.String("sidecar-owner", "", "billed Ethereum address (owner) when -sidecar-key is an operator key")
+	sidecarOwner := flag.String("sidecar-owner", "", "billed Ethereum address (owner) when -sidecar-key is an operator key (overrides config/env HOUSEGATE_SIDECAR_OWNER)")
 
 	stateSource := flag.String("state", "", "NetworkState source: yaml path, redis addr, or RPC URL e.g. http://node:10003 (overrides config/env HOUSEGATE_NETWORK_STATE_SOURCE)")
 	listenAddr := flag.String("listen", "", "proxy listen address, e.g. :9001 (overrides config/env)")
