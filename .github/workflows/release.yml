@@ -240,6 +240,12 @@ jobs:
           body: |
             ### Install
 
+            **Homebrew (macOS / Linux):**
+            ```sh
+            brew tap housegate/housegate
+            brew install housegate
+            ```
+
             **Container image:**
             ```sh
             docker pull ${{ steps.image.outputs.ref }}:${{ steps.next.outputs.next }}
