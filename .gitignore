@@ -55,3 +55,7 @@ integration_test_client-linux
 
 # git worktrees for isolated dev
 .worktrees/
+.claude/settings.local.json
+
+# personal, untracked pre-commit extension (CLAUDE.md review)
+scripts/git-hooks/pre-commit.local

@@ -12,6 +12,24 @@
 
 set -euo pipefail
 
+repo_root="$(git rev-parse --show-toplevel)"
+
+# --- per-developer extension point -------------------------------------------
+# Once this hook has decided the commit may proceed, run an optional,
+# untracked local step if the developer has one. Teammates without
+# scripts/git-hooks/pre-commit.local are unaffected. It is skipped when the
+# commit is being aborted (e.g. gitleaks found a secret), and its own exit
+# status never changes the commit outcome.
+run_local_pre_commit() {
+    local rc=$?
+    if [[ $rc -eq 0 ]]; then
+        local local_hook="${repo_root}/scripts/git-hooks/pre-commit.local"
+        [[ -x "$local_hook" ]] && { "$local_hook" || true; }
+    fi
+    exit "$rc"
+}
+trap run_local_pre_commit EXIT
+
 if [[ "${HOUSEGATE_SKIP_GITLEAKS:-0}" == "1" ]]; then
     echo "pre-commit: HOUSEGATE_SKIP_GITLEAKS=1 — skipping gitleaks scan." >&2
     exit 0
@@ -26,8 +44,6 @@ Skipping secret scan for this commit. Re-install to re-enable.
 EOF
     exit 0
 fi
-
-repo_root="$(git rev-parse --show-toplevel)"
 
 # `gitleaks git --staged` scans only what's staged for this commit
 # (good for pre-commit per gitleaks docs). Default exit code 1 on
