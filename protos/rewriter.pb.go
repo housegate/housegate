@@ -190,25 +190,28 @@ func (RewriteCode) EnumDescriptor() ([]byte, []int) {
 type StatementType int32
 
 const (
-	StatementType_STATEMENT_TYPE_UNSPECIFIED       StatementType = 0
-	StatementType_STATEMENT_TYPE_SELECT            StatementType = 1
-	StatementType_STATEMENT_TYPE_USE               StatementType = 2
-	StatementType_STATEMENT_TYPE_SHOW_TABLES       StatementType = 3
-	StatementType_STATEMENT_TYPE_SHOW_CREATE_TABLE StatementType = 4
-	StatementType_STATEMENT_TYPE_EXISTS_TABLE      StatementType = 5
-	StatementType_STATEMENT_TYPE_CREATE_TABLE      StatementType = 6
-	StatementType_STATEMENT_TYPE_DROP_TABLE        StatementType = 7
-	StatementType_STATEMENT_TYPE_ALTER_TABLE       StatementType = 8
-	StatementType_STATEMENT_TYPE_RENAME_TABLE      StatementType = 9
-	StatementType_STATEMENT_TYPE_INSERT            StatementType = 10
-	StatementType_STATEMENT_TYPE_UPDATE            StatementType = 11
-	StatementType_STATEMENT_TYPE_DELETE            StatementType = 12
-	StatementType_STATEMENT_TYPE_CREATE_DATABASE   StatementType = 13
-	StatementType_STATEMENT_TYPE_SHOW_DATABASES    StatementType = 14
-	StatementType_STATEMENT_TYPE_DROP_DATABASE     StatementType = 15
-	StatementType_STATEMENT_TYPE_TRUNCATE_TABLE    StatementType = 16
-	StatementType_STATEMENT_TYPE_GRANT             StatementType = 17
-	StatementType_STATEMENT_TYPE_REVOKE            StatementType = 18
+	StatementType_STATEMENT_TYPE_UNSPECIFIED              StatementType = 0
+	StatementType_STATEMENT_TYPE_SELECT                   StatementType = 1
+	StatementType_STATEMENT_TYPE_USE                      StatementType = 2
+	StatementType_STATEMENT_TYPE_SHOW_TABLES              StatementType = 3
+	StatementType_STATEMENT_TYPE_SHOW_CREATE_TABLE        StatementType = 4
+	StatementType_STATEMENT_TYPE_EXISTS_TABLE             StatementType = 5
+	StatementType_STATEMENT_TYPE_CREATE_TABLE             StatementType = 6
+	StatementType_STATEMENT_TYPE_DROP_TABLE               StatementType = 7
+	StatementType_STATEMENT_TYPE_ALTER_TABLE              StatementType = 8
+	StatementType_STATEMENT_TYPE_RENAME_TABLE             StatementType = 9
+	StatementType_STATEMENT_TYPE_INSERT                   StatementType = 10
+	StatementType_STATEMENT_TYPE_UPDATE                   StatementType = 11
+	StatementType_STATEMENT_TYPE_DELETE                   StatementType = 12
+	StatementType_STATEMENT_TYPE_CREATE_DATABASE          StatementType = 13
+	StatementType_STATEMENT_TYPE_SHOW_DATABASES           StatementType = 14
+	StatementType_STATEMENT_TYPE_DROP_DATABASE            StatementType = 15
+	StatementType_STATEMENT_TYPE_TRUNCATE_TABLE           StatementType = 16
+	StatementType_STATEMENT_TYPE_GRANT                    StatementType = 17
+	StatementType_STATEMENT_TYPE_REVOKE                   StatementType = 18
+	StatementType_STATEMENT_TYPE_CREATE_VIEW              StatementType = 19
+	StatementType_STATEMENT_TYPE_CREATE_MATERIALIZED_VIEW StatementType = 20
+	StatementType_STATEMENT_TYPE_DROP_VIEW                StatementType = 21
 )
 
 // Enum value maps for StatementType.
@@ -233,27 +236,33 @@ var (
 		16: "STATEMENT_TYPE_TRUNCATE_TABLE",
 		17: "STATEMENT_TYPE_GRANT",
 		18: "STATEMENT_TYPE_REVOKE",
+		19: "STATEMENT_TYPE_CREATE_VIEW",
+		20: "STATEMENT_TYPE_CREATE_MATERIALIZED_VIEW",
+		21: "STATEMENT_TYPE_DROP_VIEW",
 	}
 	StatementType_value = map[string]int32{
-		"STATEMENT_TYPE_UNSPECIFIED":       0,
-		"STATEMENT_TYPE_SELECT":            1,
-		"STATEMENT_TYPE_USE":               2,
-		"STATEMENT_TYPE_SHOW_TABLES":       3,
-		"STATEMENT_TYPE_SHOW_CREATE_TABLE": 4,
-		"STATEMENT_TYPE_EXISTS_TABLE":      5,
-		"STATEMENT_TYPE_CREATE_TABLE":      6,
-		"STATEMENT_TYPE_DROP_TABLE":        7,
-		"STATEMENT_TYPE_ALTER_TABLE":       8,
-		"STATEMENT_TYPE_RENAME_TABLE":      9,
-		"STATEMENT_TYPE_INSERT":            10,
-		"STATEMENT_TYPE_UPDATE":            11,
-		"STATEMENT_TYPE_DELETE":            12,
-		"STATEMENT_TYPE_CREATE_DATABASE":   13,
-		"STATEMENT_TYPE_SHOW_DATABASES":    14,
-		"STATEMENT_TYPE_DROP_DATABASE":     15,
-		"STATEMENT_TYPE_TRUNCATE_TABLE":    16,
-		"STATEMENT_TYPE_GRANT":             17,
-		"STATEMENT_TYPE_REVOKE":            18,
+		"STATEMENT_TYPE_UNSPECIFIED":              0,
+		"STATEMENT_TYPE_SELECT":                   1,
+		"STATEMENT_TYPE_USE":                      2,
+		"STATEMENT_TYPE_SHOW_TABLES":              3,
+		"STATEMENT_TYPE_SHOW_CREATE_TABLE":        4,
+		"STATEMENT_TYPE_EXISTS_TABLE":             5,
+		"STATEMENT_TYPE_CREATE_TABLE":             6,
+		"STATEMENT_TYPE_DROP_TABLE":               7,
+		"STATEMENT_TYPE_ALTER_TABLE":              8,
+		"STATEMENT_TYPE_RENAME_TABLE":             9,
+		"STATEMENT_TYPE_INSERT":                   10,
+		"STATEMENT_TYPE_UPDATE":                   11,
+		"STATEMENT_TYPE_DELETE":                   12,
+		"STATEMENT_TYPE_CREATE_DATABASE":          13,
+		"STATEMENT_TYPE_SHOW_DATABASES":           14,
+		"STATEMENT_TYPE_DROP_DATABASE":            15,
+		"STATEMENT_TYPE_TRUNCATE_TABLE":           16,
+		"STATEMENT_TYPE_GRANT":                    17,
+		"STATEMENT_TYPE_REVOKE":                   18,
+		"STATEMENT_TYPE_CREATE_VIEW":              19,
+		"STATEMENT_TYPE_CREATE_MATERIALIZED_VIEW": 20,
+		"STATEMENT_TYPE_DROP_VIEW":                21,
 	}
 )
 
@@ -282,6 +291,55 @@ func (x StatementType) Number() protoreflect.EnumNumber {
 // Deprecated: Use StatementType.Descriptor instead.
 func (StatementType) EnumDescriptor() ([]byte, []int) {
 	return file_protos_rewriter_proto_rawDescGZIP(), []int{3}
+}
+
+type OptimizeCode int32
+
+const (
+	OptimizeCode_OptimizeOK            OptimizeCode = 0
+	OptimizeCode_OptimizeSyntaxError   OptimizeCode = 1
+	OptimizeCode_OptimizeUnoptimizable OptimizeCode = 2
+)
+
+// Enum value maps for OptimizeCode.
+var (
+	OptimizeCode_name = map[int32]string{
+		0: "OptimizeOK",
+		1: "OptimizeSyntaxError",
+		2: "OptimizeUnoptimizable",
+	}
+	OptimizeCode_value = map[string]int32{
+		"OptimizeOK":            0,
+		"OptimizeSyntaxError":   1,
+		"OptimizeUnoptimizable": 2,
+	}
+)
+
+func (x OptimizeCode) Enum() *OptimizeCode {
+	p := new(OptimizeCode)
+	*p = x
+	return p
+}
+
+func (x OptimizeCode) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (OptimizeCode) Descriptor() protoreflect.EnumDescriptor {
+	return file_protos_rewriter_proto_enumTypes[4].Descriptor()
+}
+
+func (OptimizeCode) Type() protoreflect.EnumType {
+	return &file_protos_rewriter_proto_enumTypes[4]
+}
+
+func (x OptimizeCode) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use OptimizeCode.Descriptor instead.
+func (OptimizeCode) EnumDescriptor() ([]byte, []int) {
+	return file_protos_rewriter_proto_rawDescGZIP(), []int{4}
 }
 
 type PrivilegeDelta_Action int32
@@ -317,11 +375,11 @@ func (x PrivilegeDelta_Action) String() string {
 }
 
 func (PrivilegeDelta_Action) Descriptor() protoreflect.EnumDescriptor {
-	return file_protos_rewriter_proto_enumTypes[4].Descriptor()
+	return file_protos_rewriter_proto_enumTypes[5].Descriptor()
 }
 
 func (PrivilegeDelta_Action) Type() protoreflect.EnumType {
-	return &file_protos_rewriter_proto_enumTypes[4]
+	return &file_protos_rewriter_proto_enumTypes[5]
 }
 
 func (x PrivilegeDelta_Action) Number() protoreflect.EnumNumber {
@@ -366,11 +424,11 @@ func (x PrivilegeDelta_Scope) String() string {
 }
 
 func (PrivilegeDelta_Scope) Descriptor() protoreflect.EnumDescriptor {
-	return file_protos_rewriter_proto_enumTypes[5].Descriptor()
+	return file_protos_rewriter_proto_enumTypes[6].Descriptor()
 }
 
 func (PrivilegeDelta_Scope) Type() protoreflect.EnumType {
-	return &file_protos_rewriter_proto_enumTypes[5]
+	return &file_protos_rewriter_proto_enumTypes[6]
 }
 
 func (x PrivilegeDelta_Scope) Number() protoreflect.EnumNumber {
@@ -1298,6 +1356,142 @@ func (x *PrivilegeDelta) GetGrantOption() bool {
 	return false
 }
 
+type OptimizeRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Sql           string                 `protobuf:"bytes,1,opt,name=sql,proto3" json:"sql,omitempty"`
+	TableSizes    map[string]uint64      `protobuf:"bytes,2,rep,name=table_sizes,json=tableSizes,proto3" json:"table_sizes,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`
+	DefaultSize   *uint64                `protobuf:"varint,3,opt,name=default_size,json=defaultSize,proto3,oneof" json:"default_size,omitempty"`
+	SwapThreshold *float64               `protobuf:"fixed64,4,opt,name=swap_threshold,json=swapThreshold,proto3,oneof" json:"swap_threshold,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *OptimizeRequest) Reset() {
+	*x = OptimizeRequest{}
+	mi := &file_protos_rewriter_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OptimizeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OptimizeRequest) ProtoMessage() {}
+
+func (x *OptimizeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_protos_rewriter_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OptimizeRequest.ProtoReflect.Descriptor instead.
+func (*OptimizeRequest) Descriptor() ([]byte, []int) {
+	return file_protos_rewriter_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *OptimizeRequest) GetSql() string {
+	if x != nil {
+		return x.Sql
+	}
+	return ""
+}
+
+func (x *OptimizeRequest) GetTableSizes() map[string]uint64 {
+	if x != nil {
+		return x.TableSizes
+	}
+	return nil
+}
+
+func (x *OptimizeRequest) GetDefaultSize() uint64 {
+	if x != nil && x.DefaultSize != nil {
+		return *x.DefaultSize
+	}
+	return 0
+}
+
+func (x *OptimizeRequest) GetSwapThreshold() float64 {
+	if x != nil && x.SwapThreshold != nil {
+		return *x.SwapThreshold
+	}
+	return 0
+}
+
+type OptimizeResponse struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Code             OptimizeCode           `protobuf:"varint,1,opt,name=code,proto3,enum=rewriter.OptimizeCode" json:"code,omitempty"`
+	Message          string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	SqlAfterOptimize string                 `protobuf:"bytes,3,opt,name=sql_after_optimize,json=sqlAfterOptimize,proto3" json:"sql_after_optimize,omitempty"`
+	SwapApplied      bool                   `protobuf:"varint,4,opt,name=swap_applied,json=swapApplied,proto3" json:"swap_applied,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *OptimizeResponse) Reset() {
+	*x = OptimizeResponse{}
+	mi := &file_protos_rewriter_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OptimizeResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OptimizeResponse) ProtoMessage() {}
+
+func (x *OptimizeResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_protos_rewriter_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OptimizeResponse.ProtoReflect.Descriptor instead.
+func (*OptimizeResponse) Descriptor() ([]byte, []int) {
+	return file_protos_rewriter_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *OptimizeResponse) GetCode() OptimizeCode {
+	if x != nil {
+		return x.Code
+	}
+	return OptimizeCode_OptimizeOK
+}
+
+func (x *OptimizeResponse) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+func (x *OptimizeResponse) GetSqlAfterOptimize() string {
+	if x != nil {
+		return x.SqlAfterOptimize
+	}
+	return ""
+}
+
+func (x *OptimizeResponse) GetSwapApplied() bool {
+	if x != nil {
+		return x.SwapApplied
+	}
+	return false
+}
+
 type RewriteErrorMessageRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Sql           string                 `protobuf:"bytes,1,opt,name=sql,proto3" json:"sql,omitempty"`
@@ -1309,7 +1503,7 @@ type RewriteErrorMessageRequest struct {
 
 func (x *RewriteErrorMessageRequest) Reset() {
 	*x = RewriteErrorMessageRequest{}
-	mi := &file_protos_rewriter_proto_msgTypes[12]
+	mi := &file_protos_rewriter_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1321,7 +1515,7 @@ func (x *RewriteErrorMessageRequest) String() string {
 func (*RewriteErrorMessageRequest) ProtoMessage() {}
 
 func (x *RewriteErrorMessageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_protos_rewriter_proto_msgTypes[12]
+	mi := &file_protos_rewriter_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1334,7 +1528,7 @@ func (x *RewriteErrorMessageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RewriteErrorMessageRequest.ProtoReflect.Descriptor instead.
 func (*RewriteErrorMessageRequest) Descriptor() ([]byte, []int) {
-	return file_protos_rewriter_proto_rawDescGZIP(), []int{12}
+	return file_protos_rewriter_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *RewriteErrorMessageRequest) GetSql() string {
@@ -1369,7 +1563,7 @@ type RewriteErrorMessageResponse struct {
 
 func (x *RewriteErrorMessageResponse) Reset() {
 	*x = RewriteErrorMessageResponse{}
-	mi := &file_protos_rewriter_proto_msgTypes[13]
+	mi := &file_protos_rewriter_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1381,7 +1575,7 @@ func (x *RewriteErrorMessageResponse) String() string {
 func (*RewriteErrorMessageResponse) ProtoMessage() {}
 
 func (x *RewriteErrorMessageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_protos_rewriter_proto_msgTypes[13]
+	mi := &file_protos_rewriter_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1394,7 +1588,7 @@ func (x *RewriteErrorMessageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RewriteErrorMessageResponse.ProtoReflect.Descriptor instead.
 func (*RewriteErrorMessageResponse) Descriptor() ([]byte, []int) {
-	return file_protos_rewriter_proto_rawDescGZIP(), []int{13}
+	return file_protos_rewriter_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *RewriteErrorMessageResponse) GetCode() RewriteCode {
@@ -1428,7 +1622,7 @@ type RewriteLimitArgs_ReplaceLimit struct {
 
 func (x *RewriteLimitArgs_ReplaceLimit) Reset() {
 	*x = RewriteLimitArgs_ReplaceLimit{}
-	mi := &file_protos_rewriter_proto_msgTypes[14]
+	mi := &file_protos_rewriter_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1440,7 +1634,7 @@ func (x *RewriteLimitArgs_ReplaceLimit) String() string {
 func (*RewriteLimitArgs_ReplaceLimit) ProtoMessage() {}
 
 func (x *RewriteLimitArgs_ReplaceLimit) ProtoReflect() protoreflect.Message {
-	mi := &file_protos_rewriter_proto_msgTypes[14]
+	mi := &file_protos_rewriter_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1480,7 +1674,7 @@ type RewriteCommonTableExprArgs_CommonTableExpr struct {
 
 func (x *RewriteCommonTableExprArgs_CommonTableExpr) Reset() {
 	*x = RewriteCommonTableExprArgs_CommonTableExpr{}
-	mi := &file_protos_rewriter_proto_msgTypes[15]
+	mi := &file_protos_rewriter_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1492,7 +1686,7 @@ func (x *RewriteCommonTableExprArgs_CommonTableExpr) String() string {
 func (*RewriteCommonTableExprArgs_CommonTableExpr) ProtoMessage() {}
 
 func (x *RewriteCommonTableExprArgs_CommonTableExpr) ProtoReflect() protoreflect.Message {
-	mi := &file_protos_rewriter_proto_msgTypes[15]
+	mi := &file_protos_rewriter_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1535,7 +1729,7 @@ type RewriteTableStaticArgs_RemoteTable struct {
 
 func (x *RewriteTableStaticArgs_RemoteTable) Reset() {
 	*x = RewriteTableStaticArgs_RemoteTable{}
-	mi := &file_protos_rewriter_proto_msgTypes[17]
+	mi := &file_protos_rewriter_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1547,7 +1741,7 @@ func (x *RewriteTableStaticArgs_RemoteTable) String() string {
 func (*RewriteTableStaticArgs_RemoteTable) ProtoMessage() {}
 
 func (x *RewriteTableStaticArgs_RemoteTable) ProtoReflect() protoreflect.Message {
-	mi := &file_protos_rewriter_proto_msgTypes[17]
+	mi := &file_protos_rewriter_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1608,7 +1802,7 @@ type RewriteTableStaticArgs_TableWithDatabase struct {
 
 func (x *RewriteTableStaticArgs_TableWithDatabase) Reset() {
 	*x = RewriteTableStaticArgs_TableWithDatabase{}
-	mi := &file_protos_rewriter_proto_msgTypes[18]
+	mi := &file_protos_rewriter_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1620,7 +1814,7 @@ func (x *RewriteTableStaticArgs_TableWithDatabase) String() string {
 func (*RewriteTableStaticArgs_TableWithDatabase) ProtoMessage() {}
 
 func (x *RewriteTableStaticArgs_TableWithDatabase) ProtoReflect() protoreflect.Message {
-	mi := &file_protos_rewriter_proto_msgTypes[18]
+	mi := &file_protos_rewriter_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1661,7 +1855,7 @@ type RewriteTableDynamicArgs_RemoteUpstream struct {
 
 func (x *RewriteTableDynamicArgs_RemoteUpstream) Reset() {
 	*x = RewriteTableDynamicArgs_RemoteUpstream{}
-	mi := &file_protos_rewriter_proto_msgTypes[23]
+	mi := &file_protos_rewriter_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1673,7 +1867,7 @@ func (x *RewriteTableDynamicArgs_RemoteUpstream) String() string {
 func (*RewriteTableDynamicArgs_RemoteUpstream) ProtoMessage() {}
 
 func (x *RewriteTableDynamicArgs_RemoteUpstream) ProtoReflect() protoreflect.Message {
-	mi := &file_protos_rewriter_proto_msgTypes[23]
+	mi := &file_protos_rewriter_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1727,7 +1921,7 @@ type RewriteSettingsArgs_Setting struct {
 
 func (x *RewriteSettingsArgs_Setting) Reset() {
 	*x = RewriteSettingsArgs_Setting{}
-	mi := &file_protos_rewriter_proto_msgTypes[26]
+	mi := &file_protos_rewriter_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1739,7 +1933,7 @@ func (x *RewriteSettingsArgs_Setting) String() string {
 func (*RewriteSettingsArgs_Setting) ProtoMessage() {}
 
 func (x *RewriteSettingsArgs_Setting) ProtoReflect() protoreflect.Message {
-	mi := &file_protos_rewriter_proto_msgTypes[26]
+	mi := &file_protos_rewriter_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1850,7 +2044,7 @@ type PrivilegeDelta_Grantee struct {
 
 func (x *PrivilegeDelta_Grantee) Reset() {
 	*x = PrivilegeDelta_Grantee{}
-	mi := &file_protos_rewriter_proto_msgTypes[29]
+	mi := &file_protos_rewriter_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1862,7 +2056,7 @@ func (x *PrivilegeDelta_Grantee) String() string {
 func (*PrivilegeDelta_Grantee) ProtoMessage() {}
 
 func (x *PrivilegeDelta_Grantee) ProtoReflect() protoreflect.Message {
-	mi := &file_protos_rewriter_proto_msgTypes[29]
+	mi := &file_protos_rewriter_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1976,7 +2170,7 @@ const file_protos_rewriter_proto_rawDesc = "" +
 	"bool_value\x18\x04 \x01(\bH\x00R\tboolValue\x12\x1d\n" +
 	"\tint_value\x18\x05 \x01(\x05H\x00R\bintValue\x12#\n" +
 	"\fuint64_value\x18\x06 \x01(\x04H\x00R\vuint64ValueB\a\n" +
-	"\x05value\"\xa7\x03\n" +
+	"\x05value\"\xbd\x03\n" +
 	"\rRewriteOption\x12#\n" +
 	"\x02op\x18\x01 \x01(\x0e2\x13.rewriter.RewriteOpR\x02op\x12H\n" +
 	"\x0ftable_name_args\x18\x02 \x01(\v2\x1e.rewriter.RewriteTableNameArgsH\x00R\rtableNameArgs\x12;\n" +
@@ -1986,7 +2180,7 @@ const file_protos_rewriter_proto_rawDesc = "" +
 	"offsetArgs\x12D\n" +
 	"\rsettings_args\x18\x05 \x01(\v2\x1d.rewriter.RewriteSettingsArgsH\x00R\fsettingsArgs\x12[\n" +
 	"\x16common_table_expr_args\x18\x06 \x01(\v2$.rewriter.RewriteCommonTableExprArgsH\x00R\x13commonTableExprArgsB\a\n" +
-	"\x05value\"X\n" +
+	"\x05valueJ\x04\b\a\x10\bR\x0ejoin_swap_args\"X\n" +
 	"\x11RewriteSQLRequest\x12\x10\n" +
 	"\x03sql\x18\x01 \x01(\tR\x03sql\x121\n" +
 	"\aoptions\x18\x02 \x03(\v2\x17.rewriter.RewriteOptionR\aoptions\"\xf2\x05\n" +
@@ -2037,7 +2231,23 @@ const file_protos_rewriter_proto_rawDesc = "" +
 	"\x05Scope\x12\x15\n" +
 	"\x11SCOPE_UNSPECIFIED\x10\x00\x12\x0f\n" +
 	"\vSCOPE_TABLE\x10\x01\x12\x12\n" +
-	"\x0eSCOPE_DATABASE\x10\x02\"\x86\x01\n" +
+	"\x0eSCOPE_DATABASE\x10\x02\"\xa6\x02\n" +
+	"\x0fOptimizeRequest\x12\x10\n" +
+	"\x03sql\x18\x01 \x01(\tR\x03sql\x12J\n" +
+	"\vtable_sizes\x18\x02 \x03(\v2).rewriter.OptimizeRequest.TableSizesEntryR\n" +
+	"tableSizes\x12&\n" +
+	"\fdefault_size\x18\x03 \x01(\x04H\x00R\vdefaultSize\x88\x01\x01\x12*\n" +
+	"\x0eswap_threshold\x18\x04 \x01(\x01H\x01R\rswapThreshold\x88\x01\x01\x1a=\n" +
+	"\x0fTableSizesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\x04R\x05value:\x028\x01B\x0f\n" +
+	"\r_default_sizeB\x11\n" +
+	"\x0f_swap_threshold\"\xa9\x01\n" +
+	"\x10OptimizeResponse\x12*\n" +
+	"\x04code\x18\x01 \x01(\x0e2\x16.rewriter.OptimizeCodeR\x04code\x12\x18\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\x12,\n" +
+	"\x12sql_after_optimize\x18\x03 \x01(\tR\x10sqlAfterOptimize\x12!\n" +
+	"\fswap_applied\x18\x04 \x01(\bR\vswapApplied\"\x86\x01\n" +
 	"\x1aRewriteErrorMessageRequest\x12\x10\n" +
 	"\x03sql\x18\x01 \x01(\tR\x03sql\x12#\n" +
 	"\rerror_message\x18\x02 \x01(\tR\ferrorMessage\x121\n" +
@@ -2045,13 +2255,13 @@ const file_protos_rewriter_proto_rawDesc = "" +
 	"\x1bRewriteErrorMessageResponse\x12)\n" +
 	"\x04code\x18\x01 \x01(\x0e2\x15.rewriter.RewriteCodeR\x04code\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12.\n" +
-	"\x13error_after_rewrite\x18\x03 \x01(\tR\x11errorAfterRewrite*w\n" +
+	"\x13error_after_rewrite\x18\x03 \x01(\tR\x11errorAfterRewrite*\x8e\x01\n" +
 	"\tRewriteOp\x12\x14\n" +
 	"\x10TableNameRewrite\x10\x00\x12\x10\n" +
 	"\fLimitRewrite\x10\x01\x12\x11\n" +
 	"\rOffsetRewrite\x10\x02\x12\x13\n" +
 	"\x0fSettingsRewrite\x10\x03\x12\x1a\n" +
-	"\x16CommonTableExprRewrite\x10\x04*8\n" +
+	"\x16CommonTableExprRewrite\x10\x04\"\x04\b\x05\x10\x05*\x0fJoinSwapRewrite*8\n" +
 	"\vSettingType\x12\n" +
 	"\n" +
 	"\x06String\x10\x00\x12\b\n" +
@@ -2064,7 +2274,7 @@ const file_protos_rewriter_proto_rawDesc = "" +
 	"\vSyntaxError\x10\x01\x12\x10\n" +
 	"\fRewriteError\x10\x02\x12\x18\n" +
 	"\x14UnsupportedStatement\x10\x03\x12\x19\n" +
-	"\x15InvalidRewriteRequest\x10\x04*\xdc\x04\n" +
+	"\x15InvalidRewriteRequest\x10\x04*\xc7\x05\n" +
 	"\rStatementType\x12\x1e\n" +
 	"\x1aSTATEMENT_TYPE_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15STATEMENT_TYPE_SELECT\x10\x01\x12\x16\n" +
@@ -2085,10 +2295,19 @@ const file_protos_rewriter_proto_rawDesc = "" +
 	"\x1cSTATEMENT_TYPE_DROP_DATABASE\x10\x0f\x12!\n" +
 	"\x1dSTATEMENT_TYPE_TRUNCATE_TABLE\x10\x10\x12\x18\n" +
 	"\x14STATEMENT_TYPE_GRANT\x10\x11\x12\x19\n" +
-	"\x15STATEMENT_TYPE_REVOKE\x10\x122\xbf\x01\n" +
+	"\x15STATEMENT_TYPE_REVOKE\x10\x12\x12\x1e\n" +
+	"\x1aSTATEMENT_TYPE_CREATE_VIEW\x10\x13\x12+\n" +
+	"'STATEMENT_TYPE_CREATE_MATERIALIZED_VIEW\x10\x14\x12\x1c\n" +
+	"\x18STATEMENT_TYPE_DROP_VIEW\x10\x15*R\n" +
+	"\fOptimizeCode\x12\x0e\n" +
+	"\n" +
+	"OptimizeOK\x10\x00\x12\x17\n" +
+	"\x13OptimizeSyntaxError\x10\x01\x12\x19\n" +
+	"\x15OptimizeUnoptimizable\x10\x022\x84\x02\n" +
 	"\x0fRewriterService\x12F\n" +
 	"\aRewrite\x12\x1b.rewriter.RewriteSQLRequest\x1a\x1c.rewriter.RewriteSQLResponse\"\x00\x12d\n" +
-	"\x13RewriteErrorMessage\x12$.rewriter.RewriteErrorMessageRequest\x1a%.rewriter.RewriteErrorMessageResponse\"\x00B\x1cZ\x1ahousegate/housegate/protosb\x06proto3"
+	"\x13RewriteErrorMessage\x12$.rewriter.RewriteErrorMessageRequest\x1a%.rewriter.RewriteErrorMessageResponse\"\x00\x12C\n" +
+	"\bOptimize\x12\x19.rewriter.OptimizeRequest\x1a\x1a.rewriter.OptimizeResponse\"\x00B\x1cZ\x1ahousegate/housegate/protosb\x06proto3"
 
 var (
 	file_protos_rewriter_proto_rawDescOnce sync.Once
@@ -2102,90 +2321,98 @@ func file_protos_rewriter_proto_rawDescGZIP() []byte {
 	return file_protos_rewriter_proto_rawDescData
 }
 
-var file_protos_rewriter_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
-var file_protos_rewriter_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
+var file_protos_rewriter_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
+var file_protos_rewriter_proto_msgTypes = make([]protoimpl.MessageInfo, 33)
 var file_protos_rewriter_proto_goTypes = []any{
 	(RewriteOp)(0),                                     // 0: rewriter.RewriteOp
 	(SettingType)(0),                                   // 1: rewriter.SettingType
 	(RewriteCode)(0),                                   // 2: rewriter.RewriteCode
 	(StatementType)(0),                                 // 3: rewriter.StatementType
-	(PrivilegeDelta_Action)(0),                         // 4: rewriter.PrivilegeDelta.Action
-	(PrivilegeDelta_Scope)(0),                          // 5: rewriter.PrivilegeDelta.Scope
-	(*RewriteLimitArgs)(nil),                           // 6: rewriter.RewriteLimitArgs
-	(*RewriteOffsetArgs)(nil),                          // 7: rewriter.RewriteOffsetArgs
-	(*RewriteCommonTableExprArgs)(nil),                 // 8: rewriter.RewriteCommonTableExprArgs
-	(*RewriteTableStaticArgs)(nil),                     // 9: rewriter.RewriteTableStaticArgs
-	(*RewriteTableDynamicArgs)(nil),                    // 10: rewriter.RewriteTableDynamicArgs
-	(*RewriteTableNameArgs)(nil),                       // 11: rewriter.RewriteTableNameArgs
-	(*RewriteSettingsArgs)(nil),                        // 12: rewriter.RewriteSettingsArgs
-	(*RewriteOption)(nil),                              // 13: rewriter.RewriteOption
-	(*RewriteSQLRequest)(nil),                          // 14: rewriter.RewriteSQLRequest
-	(*RewriteSQLResponse)(nil),                         // 15: rewriter.RewriteSQLResponse
-	(*AccessedTable)(nil),                              // 16: rewriter.AccessedTable
-	(*PrivilegeDelta)(nil),                             // 17: rewriter.PrivilegeDelta
-	(*RewriteErrorMessageRequest)(nil),                 // 18: rewriter.RewriteErrorMessageRequest
-	(*RewriteErrorMessageResponse)(nil),                // 19: rewriter.RewriteErrorMessageResponse
-	(*RewriteLimitArgs_ReplaceLimit)(nil),              // 20: rewriter.RewriteLimitArgs.ReplaceLimit
-	(*RewriteCommonTableExprArgs_CommonTableExpr)(nil), // 21: rewriter.RewriteCommonTableExprArgs.CommonTableExpr
-	nil, // 22: rewriter.RewriteCommonTableExprArgs.CteMapEntry
-	(*RewriteTableStaticArgs_RemoteTable)(nil),       // 23: rewriter.RewriteTableStaticArgs.RemoteTable
-	(*RewriteTableStaticArgs_TableWithDatabase)(nil), // 24: rewriter.RewriteTableStaticArgs.TableWithDatabase
-	nil, // 25: rewriter.RewriteTableStaticArgs.TableMapEntry
-	nil, // 26: rewriter.RewriteTableStaticArgs.RemoteTableMapEntry
-	nil, // 27: rewriter.RewriteTableStaticArgs.TableWithDatabaseMapEntry
-	nil, // 28: rewriter.RewriteTableDynamicArgs.DatabaseMapEntry
-	(*RewriteTableDynamicArgs_RemoteUpstream)(nil), // 29: rewriter.RewriteTableDynamicArgs.RemoteUpstream
-	nil,                                 // 30: rewriter.RewriteTableDynamicArgs.LogicalDatabaseToRemoteUpstreamIndexEntry
-	nil,                                 // 31: rewriter.RewriteTableDynamicArgs.RemoteUpstreamsEntry
-	(*RewriteSettingsArgs_Setting)(nil), // 32: rewriter.RewriteSettingsArgs.Setting
-	nil,                                 // 33: rewriter.RewriteSQLResponse.TableRewritesEntry
-	nil,                                 // 34: rewriter.RewriteSQLResponse.DatabaseRewritesEntry
-	(*PrivilegeDelta_Grantee)(nil),      // 35: rewriter.PrivilegeDelta.Grantee
+	(OptimizeCode)(0),                                  // 4: rewriter.OptimizeCode
+	(PrivilegeDelta_Action)(0),                         // 5: rewriter.PrivilegeDelta.Action
+	(PrivilegeDelta_Scope)(0),                          // 6: rewriter.PrivilegeDelta.Scope
+	(*RewriteLimitArgs)(nil),                           // 7: rewriter.RewriteLimitArgs
+	(*RewriteOffsetArgs)(nil),                          // 8: rewriter.RewriteOffsetArgs
+	(*RewriteCommonTableExprArgs)(nil),                 // 9: rewriter.RewriteCommonTableExprArgs
+	(*RewriteTableStaticArgs)(nil),                     // 10: rewriter.RewriteTableStaticArgs
+	(*RewriteTableDynamicArgs)(nil),                    // 11: rewriter.RewriteTableDynamicArgs
+	(*RewriteTableNameArgs)(nil),                       // 12: rewriter.RewriteTableNameArgs
+	(*RewriteSettingsArgs)(nil),                        // 13: rewriter.RewriteSettingsArgs
+	(*RewriteOption)(nil),                              // 14: rewriter.RewriteOption
+	(*RewriteSQLRequest)(nil),                          // 15: rewriter.RewriteSQLRequest
+	(*RewriteSQLResponse)(nil),                         // 16: rewriter.RewriteSQLResponse
+	(*AccessedTable)(nil),                              // 17: rewriter.AccessedTable
+	(*PrivilegeDelta)(nil),                             // 18: rewriter.PrivilegeDelta
+	(*OptimizeRequest)(nil),                            // 19: rewriter.OptimizeRequest
+	(*OptimizeResponse)(nil),                           // 20: rewriter.OptimizeResponse
+	(*RewriteErrorMessageRequest)(nil),                 // 21: rewriter.RewriteErrorMessageRequest
+	(*RewriteErrorMessageResponse)(nil),                // 22: rewriter.RewriteErrorMessageResponse
+	(*RewriteLimitArgs_ReplaceLimit)(nil),              // 23: rewriter.RewriteLimitArgs.ReplaceLimit
+	(*RewriteCommonTableExprArgs_CommonTableExpr)(nil), // 24: rewriter.RewriteCommonTableExprArgs.CommonTableExpr
+	nil, // 25: rewriter.RewriteCommonTableExprArgs.CteMapEntry
+	(*RewriteTableStaticArgs_RemoteTable)(nil),       // 26: rewriter.RewriteTableStaticArgs.RemoteTable
+	(*RewriteTableStaticArgs_TableWithDatabase)(nil), // 27: rewriter.RewriteTableStaticArgs.TableWithDatabase
+	nil, // 28: rewriter.RewriteTableStaticArgs.TableMapEntry
+	nil, // 29: rewriter.RewriteTableStaticArgs.RemoteTableMapEntry
+	nil, // 30: rewriter.RewriteTableStaticArgs.TableWithDatabaseMapEntry
+	nil, // 31: rewriter.RewriteTableDynamicArgs.DatabaseMapEntry
+	(*RewriteTableDynamicArgs_RemoteUpstream)(nil), // 32: rewriter.RewriteTableDynamicArgs.RemoteUpstream
+	nil,                                 // 33: rewriter.RewriteTableDynamicArgs.LogicalDatabaseToRemoteUpstreamIndexEntry
+	nil,                                 // 34: rewriter.RewriteTableDynamicArgs.RemoteUpstreamsEntry
+	(*RewriteSettingsArgs_Setting)(nil), // 35: rewriter.RewriteSettingsArgs.Setting
+	nil,                                 // 36: rewriter.RewriteSQLResponse.TableRewritesEntry
+	nil,                                 // 37: rewriter.RewriteSQLResponse.DatabaseRewritesEntry
+	(*PrivilegeDelta_Grantee)(nil),      // 38: rewriter.PrivilegeDelta.Grantee
+	nil,                                 // 39: rewriter.OptimizeRequest.TableSizesEntry
 }
 var file_protos_rewriter_proto_depIdxs = []int32{
-	20, // 0: rewriter.RewriteLimitArgs.replace_limit:type_name -> rewriter.RewriteLimitArgs.ReplaceLimit
-	22, // 1: rewriter.RewriteCommonTableExprArgs.cte_map:type_name -> rewriter.RewriteCommonTableExprArgs.CteMapEntry
-	25, // 2: rewriter.RewriteTableStaticArgs.table_map:type_name -> rewriter.RewriteTableStaticArgs.TableMapEntry
-	26, // 3: rewriter.RewriteTableStaticArgs.remote_table_map:type_name -> rewriter.RewriteTableStaticArgs.RemoteTableMapEntry
-	27, // 4: rewriter.RewriteTableStaticArgs.table_with_database_map:type_name -> rewriter.RewriteTableStaticArgs.TableWithDatabaseMapEntry
-	28, // 5: rewriter.RewriteTableDynamicArgs.database_map:type_name -> rewriter.RewriteTableDynamicArgs.DatabaseMapEntry
-	30, // 6: rewriter.RewriteTableDynamicArgs.logical_database_to_remote_upstream_index:type_name -> rewriter.RewriteTableDynamicArgs.LogicalDatabaseToRemoteUpstreamIndexEntry
-	31, // 7: rewriter.RewriteTableDynamicArgs.remote_upstreams:type_name -> rewriter.RewriteTableDynamicArgs.RemoteUpstreamsEntry
-	10, // 8: rewriter.RewriteTableNameArgs.dynamic_args:type_name -> rewriter.RewriteTableDynamicArgs
-	9,  // 9: rewriter.RewriteTableNameArgs.static_args:type_name -> rewriter.RewriteTableStaticArgs
-	32, // 10: rewriter.RewriteSettingsArgs.settings:type_name -> rewriter.RewriteSettingsArgs.Setting
+	23, // 0: rewriter.RewriteLimitArgs.replace_limit:type_name -> rewriter.RewriteLimitArgs.ReplaceLimit
+	25, // 1: rewriter.RewriteCommonTableExprArgs.cte_map:type_name -> rewriter.RewriteCommonTableExprArgs.CteMapEntry
+	28, // 2: rewriter.RewriteTableStaticArgs.table_map:type_name -> rewriter.RewriteTableStaticArgs.TableMapEntry
+	29, // 3: rewriter.RewriteTableStaticArgs.remote_table_map:type_name -> rewriter.RewriteTableStaticArgs.RemoteTableMapEntry
+	30, // 4: rewriter.RewriteTableStaticArgs.table_with_database_map:type_name -> rewriter.RewriteTableStaticArgs.TableWithDatabaseMapEntry
+	31, // 5: rewriter.RewriteTableDynamicArgs.database_map:type_name -> rewriter.RewriteTableDynamicArgs.DatabaseMapEntry
+	33, // 6: rewriter.RewriteTableDynamicArgs.logical_database_to_remote_upstream_index:type_name -> rewriter.RewriteTableDynamicArgs.LogicalDatabaseToRemoteUpstreamIndexEntry
+	34, // 7: rewriter.RewriteTableDynamicArgs.remote_upstreams:type_name -> rewriter.RewriteTableDynamicArgs.RemoteUpstreamsEntry
+	11, // 8: rewriter.RewriteTableNameArgs.dynamic_args:type_name -> rewriter.RewriteTableDynamicArgs
+	10, // 9: rewriter.RewriteTableNameArgs.static_args:type_name -> rewriter.RewriteTableStaticArgs
+	35, // 10: rewriter.RewriteSettingsArgs.settings:type_name -> rewriter.RewriteSettingsArgs.Setting
 	0,  // 11: rewriter.RewriteOption.op:type_name -> rewriter.RewriteOp
-	11, // 12: rewriter.RewriteOption.table_name_args:type_name -> rewriter.RewriteTableNameArgs
-	6,  // 13: rewriter.RewriteOption.limit_args:type_name -> rewriter.RewriteLimitArgs
-	7,  // 14: rewriter.RewriteOption.offset_args:type_name -> rewriter.RewriteOffsetArgs
-	12, // 15: rewriter.RewriteOption.settings_args:type_name -> rewriter.RewriteSettingsArgs
-	8,  // 16: rewriter.RewriteOption.common_table_expr_args:type_name -> rewriter.RewriteCommonTableExprArgs
-	13, // 17: rewriter.RewriteSQLRequest.options:type_name -> rewriter.RewriteOption
+	12, // 12: rewriter.RewriteOption.table_name_args:type_name -> rewriter.RewriteTableNameArgs
+	7,  // 13: rewriter.RewriteOption.limit_args:type_name -> rewriter.RewriteLimitArgs
+	8,  // 14: rewriter.RewriteOption.offset_args:type_name -> rewriter.RewriteOffsetArgs
+	13, // 15: rewriter.RewriteOption.settings_args:type_name -> rewriter.RewriteSettingsArgs
+	9,  // 16: rewriter.RewriteOption.common_table_expr_args:type_name -> rewriter.RewriteCommonTableExprArgs
+	14, // 17: rewriter.RewriteSQLRequest.options:type_name -> rewriter.RewriteOption
 	2,  // 18: rewriter.RewriteSQLResponse.code:type_name -> rewriter.RewriteCode
 	3,  // 19: rewriter.RewriteSQLResponse.statement_type:type_name -> rewriter.StatementType
-	33, // 20: rewriter.RewriteSQLResponse.table_rewrites:type_name -> rewriter.RewriteSQLResponse.TableRewritesEntry
-	34, // 21: rewriter.RewriteSQLResponse.database_rewrites:type_name -> rewriter.RewriteSQLResponse.DatabaseRewritesEntry
-	16, // 22: rewriter.RewriteSQLResponse.original_accessed_tables:type_name -> rewriter.AccessedTable
-	17, // 23: rewriter.RewriteSQLResponse.privileges_deltas:type_name -> rewriter.PrivilegeDelta
-	4,  // 24: rewriter.PrivilegeDelta.action:type_name -> rewriter.PrivilegeDelta.Action
-	5,  // 25: rewriter.PrivilegeDelta.scope:type_name -> rewriter.PrivilegeDelta.Scope
-	35, // 26: rewriter.PrivilegeDelta.grantees:type_name -> rewriter.PrivilegeDelta.Grantee
-	13, // 27: rewriter.RewriteErrorMessageRequest.options:type_name -> rewriter.RewriteOption
-	2,  // 28: rewriter.RewriteErrorMessageResponse.code:type_name -> rewriter.RewriteCode
-	21, // 29: rewriter.RewriteCommonTableExprArgs.CteMapEntry.value:type_name -> rewriter.RewriteCommonTableExprArgs.CommonTableExpr
-	23, // 30: rewriter.RewriteTableStaticArgs.RemoteTableMapEntry.value:type_name -> rewriter.RewriteTableStaticArgs.RemoteTable
-	24, // 31: rewriter.RewriteTableStaticArgs.TableWithDatabaseMapEntry.value:type_name -> rewriter.RewriteTableStaticArgs.TableWithDatabase
-	29, // 32: rewriter.RewriteTableDynamicArgs.RemoteUpstreamsEntry.value:type_name -> rewriter.RewriteTableDynamicArgs.RemoteUpstream
-	1,  // 33: rewriter.RewriteSettingsArgs.Setting.type:type_name -> rewriter.SettingType
-	14, // 34: rewriter.RewriterService.Rewrite:input_type -> rewriter.RewriteSQLRequest
-	18, // 35: rewriter.RewriterService.RewriteErrorMessage:input_type -> rewriter.RewriteErrorMessageRequest
-	15, // 36: rewriter.RewriterService.Rewrite:output_type -> rewriter.RewriteSQLResponse
-	19, // 37: rewriter.RewriterService.RewriteErrorMessage:output_type -> rewriter.RewriteErrorMessageResponse
-	36, // [36:38] is the sub-list for method output_type
-	34, // [34:36] is the sub-list for method input_type
-	34, // [34:34] is the sub-list for extension type_name
-	34, // [34:34] is the sub-list for extension extendee
-	0,  // [0:34] is the sub-list for field type_name
+	36, // 20: rewriter.RewriteSQLResponse.table_rewrites:type_name -> rewriter.RewriteSQLResponse.TableRewritesEntry
+	37, // 21: rewriter.RewriteSQLResponse.database_rewrites:type_name -> rewriter.RewriteSQLResponse.DatabaseRewritesEntry
+	17, // 22: rewriter.RewriteSQLResponse.original_accessed_tables:type_name -> rewriter.AccessedTable
+	18, // 23: rewriter.RewriteSQLResponse.privileges_deltas:type_name -> rewriter.PrivilegeDelta
+	5,  // 24: rewriter.PrivilegeDelta.action:type_name -> rewriter.PrivilegeDelta.Action
+	6,  // 25: rewriter.PrivilegeDelta.scope:type_name -> rewriter.PrivilegeDelta.Scope
+	38, // 26: rewriter.PrivilegeDelta.grantees:type_name -> rewriter.PrivilegeDelta.Grantee
+	39, // 27: rewriter.OptimizeRequest.table_sizes:type_name -> rewriter.OptimizeRequest.TableSizesEntry
+	4,  // 28: rewriter.OptimizeResponse.code:type_name -> rewriter.OptimizeCode
+	14, // 29: rewriter.RewriteErrorMessageRequest.options:type_name -> rewriter.RewriteOption
+	2,  // 30: rewriter.RewriteErrorMessageResponse.code:type_name -> rewriter.RewriteCode
+	24, // 31: rewriter.RewriteCommonTableExprArgs.CteMapEntry.value:type_name -> rewriter.RewriteCommonTableExprArgs.CommonTableExpr
+	26, // 32: rewriter.RewriteTableStaticArgs.RemoteTableMapEntry.value:type_name -> rewriter.RewriteTableStaticArgs.RemoteTable
+	27, // 33: rewriter.RewriteTableStaticArgs.TableWithDatabaseMapEntry.value:type_name -> rewriter.RewriteTableStaticArgs.TableWithDatabase
+	32, // 34: rewriter.RewriteTableDynamicArgs.RemoteUpstreamsEntry.value:type_name -> rewriter.RewriteTableDynamicArgs.RemoteUpstream
+	1,  // 35: rewriter.RewriteSettingsArgs.Setting.type:type_name -> rewriter.SettingType
+	15, // 36: rewriter.RewriterService.Rewrite:input_type -> rewriter.RewriteSQLRequest
+	21, // 37: rewriter.RewriterService.RewriteErrorMessage:input_type -> rewriter.RewriteErrorMessageRequest
+	19, // 38: rewriter.RewriterService.Optimize:input_type -> rewriter.OptimizeRequest
+	16, // 39: rewriter.RewriterService.Rewrite:output_type -> rewriter.RewriteSQLResponse
+	22, // 40: rewriter.RewriterService.RewriteErrorMessage:output_type -> rewriter.RewriteErrorMessageResponse
+	20, // 41: rewriter.RewriterService.Optimize:output_type -> rewriter.OptimizeResponse
+	39, // [39:42] is the sub-list for method output_type
+	36, // [36:39] is the sub-list for method input_type
+	36, // [36:36] is the sub-list for extension type_name
+	36, // [36:36] is the sub-list for extension extendee
+	0,  // [0:36] is the sub-list for field type_name
 }
 
 func init() { file_protos_rewriter_proto_init() }
@@ -2206,7 +2433,8 @@ func file_protos_rewriter_proto_init() {
 		(*RewriteOption_SettingsArgs)(nil),
 		(*RewriteOption_CommonTableExprArgs)(nil),
 	}
-	file_protos_rewriter_proto_msgTypes[26].OneofWrappers = []any{
+	file_protos_rewriter_proto_msgTypes[12].OneofWrappers = []any{}
+	file_protos_rewriter_proto_msgTypes[28].OneofWrappers = []any{
 		(*RewriteSettingsArgs_Setting_StringValue)(nil),
 		(*RewriteSettingsArgs_Setting_BoolValue)(nil),
 		(*RewriteSettingsArgs_Setting_IntValue)(nil),
@@ -2217,8 +2445,8 @@ func file_protos_rewriter_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_protos_rewriter_proto_rawDesc), len(file_protos_rewriter_proto_rawDesc)),
-			NumEnums:      6,
-			NumMessages:   30,
+			NumEnums:      7,
+			NumMessages:   33,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
@@ -2246,6 +2474,7 @@ const _ = grpc.SupportPackageIsVersion6
 type RewriterServiceClient interface {
 	Rewrite(ctx context.Context, in *RewriteSQLRequest, opts ...grpc.CallOption) (*RewriteSQLResponse, error)
 	RewriteErrorMessage(ctx context.Context, in *RewriteErrorMessageRequest, opts ...grpc.CallOption) (*RewriteErrorMessageResponse, error)
+	Optimize(ctx context.Context, in *OptimizeRequest, opts ...grpc.CallOption) (*OptimizeResponse, error)
 }
 
 type rewriterServiceClient struct {
@@ -2274,10 +2503,20 @@ func (c *rewriterServiceClient) RewriteErrorMessage(ctx context.Context, in *Rew
 	return out, nil
 }
 
+func (c *rewriterServiceClient) Optimize(ctx context.Context, in *OptimizeRequest, opts ...grpc.CallOption) (*OptimizeResponse, error) {
+	out := new(OptimizeResponse)
+	err := c.cc.Invoke(ctx, "/rewriter.RewriterService/Optimize", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RewriterServiceServer is the server API for RewriterService service.
 type RewriterServiceServer interface {
 	Rewrite(context.Context, *RewriteSQLRequest) (*RewriteSQLResponse, error)
 	RewriteErrorMessage(context.Context, *RewriteErrorMessageRequest) (*RewriteErrorMessageResponse, error)
+	Optimize(context.Context, *OptimizeRequest) (*OptimizeResponse, error)
 }
 
 // UnimplementedRewriterServiceServer can be embedded to have forward compatible implementations.
@@ -2289,6 +2528,9 @@ func (*UnimplementedRewriterServiceServer) Rewrite(context.Context, *RewriteSQLR
 }
 func (*UnimplementedRewriterServiceServer) RewriteErrorMessage(context.Context, *RewriteErrorMessageRequest) (*RewriteErrorMessageResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RewriteErrorMessage not implemented")
+}
+func (*UnimplementedRewriterServiceServer) Optimize(context.Context, *OptimizeRequest) (*OptimizeResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Optimize not implemented")
 }
 
 func RegisterRewriterServiceServer(s *grpc.Server, srv RewriterServiceServer) {
@@ -2331,6 +2573,24 @@ func _RewriterService_RewriteErrorMessage_Handler(srv interface{}, ctx context.C
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RewriterService_Optimize_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(OptimizeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RewriterServiceServer).Optimize(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/rewriter.RewriterService/Optimize",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RewriterServiceServer).Optimize(ctx, req.(*OptimizeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 var _RewriterService_serviceDesc = grpc.ServiceDesc{
 	ServiceName: "rewriter.RewriterService",
 	HandlerType: (*RewriterServiceServer)(nil),
@@ -2342,6 +2602,10 @@ var _RewriterService_serviceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RewriteErrorMessage",
 			Handler:    _RewriterService_RewriteErrorMessage_Handler,
+		},
+		{
+			MethodName: "Optimize",
+			Handler:    _RewriterService_Optimize_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

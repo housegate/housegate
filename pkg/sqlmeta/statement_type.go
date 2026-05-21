@@ -36,6 +36,10 @@ const (
 	StatementTypeTruncateTable   StatementType = 16
 	StatementTypeGrant           StatementType = 17
 	StatementTypeRevoke          StatementType = 18
+
+	StatementTypeCreateView             StatementType = 19
+	StatementTypeCreateMaterializedView StatementType = 20
+	StatementTypeDropView               StatementType = 21
 )
 
 // String returns a short human label, matching the proto enum names
@@ -86,6 +90,12 @@ func (s StatementType) String() string {
 		return "GRANT"
 	case StatementTypeRevoke:
 		return "REVOKE"
+	case StatementTypeCreateView:
+		return "CREATE_VIEW"
+	case StatementTypeCreateMaterializedView:
+		return "CREATE_MATERIALIZED_VIEW"
+	case StatementTypeDropView:
+		return "DROP_VIEW"
 	default:
 		return "STATEMENT_TYPE(" + strconv.Itoa(int(s)) + ")"
 	}

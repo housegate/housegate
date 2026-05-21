@@ -35,6 +35,8 @@ enum RewriteOp {
     // Inject named CTEs into the WITH clause of every SELECT subquery
     // that references them. See RewriteCommonTableExprArgs.
     CommonTableExprRewrite = 4;
+    reserved 5;
+    reserved "JoinSwapRewrite";
 }
 
 message RewriteLimitArgs {
@@ -316,6 +318,12 @@ message RewriteSettingsArgs {
 
 message RewriteOption {
     RewriteOp op = 1;
+    // Tag 7 used to carry `join_swap_args` (JoinSwapRewrite). Moved out to
+    // the standalone Optimize RPC — see service definition at the bottom of
+    // this file. Reserved to prevent accidental reuse if a Go/C++ client
+    // built against the old schema sends it.
+    reserved 7;
+    reserved "join_swap_args";
     oneof value {
         RewriteTableNameArgs table_name_args = 2;
         RewriteLimitArgs limit_args = 3;
@@ -477,6 +485,15 @@ enum StatementType {
     // REVOKE — symmetric to GRANT. SQL rewritten to
     // `SELECT '<original SQL minus ON CLUSTER>' AS rstmt`.
     STATEMENT_TYPE_REVOKE = 18;
+
+    // CREATE VIEW <v> AS SELECT ...
+    STATEMENT_TYPE_CREATE_VIEW = 19;
+
+    // CREATE MATERIALIZED VIEW <v> [TO <target>] AS SELECT ...
+    STATEMENT_TYPE_CREATE_MATERIALIZED_VIEW = 20;
+
+    // DROP VIEW <v>
+    STATEMENT_TYPE_DROP_VIEW = 21;
 }
 
 message RewriteSQLResponse {
@@ -741,6 +758,71 @@ message PrivilegeDelta {
 service RewriterService {
     rpc Rewrite (RewriteSQLRequest) returns (RewriteSQLResponse) {}
     rpc RewriteErrorMessage (RewriteErrorMessageRequest) returns (RewriteErrorMessageResponse) {}
+    // Apply performance-only optimizations to an already-rewritten (i.e.
+    // physical) SQL string. Currently the only optimization is JOIN
+    // left/right swap based on caller-supplied physical-table sizes. The
+    // call is best-effort: any failure path (parse error, no JOIN to swap,
+    // unsupported statement) returns `sql_after_optimize == request.sql`
+    // and a non-OK OptimizeCode — callers can always fall back to running
+    // the input SQL unchanged.
+    rpc Optimize (OptimizeRequest) returns (OptimizeResponse) {}
+}
+
+// Apply optimizations to a SQL string that has already been through Rewrite.
+// Kept separate from Rewrite so callers (1) can collect physical-table size
+// metadata between the two calls — Rewrite's response tells them which
+// physical tables the SQL touches — and (2) get a clean fallback: if
+// Optimize fails, the pre-Optimize SQL is still safe to execute.
+message OptimizeRequest {
+    string sql = 1;
+
+    // Physical table size estimates in bytes. Keys are UNAMBIGUOUSLY
+    // physical: "<physical_db>.<physical_table>" (or bare "<physical_table>"
+    // when the SQL references the table without a database qualifier). The
+    // caller is expected to derive these from ClickHouse's system.tables /
+    // system.parts AFTER Rewrite, using `response.original_accessed_tables`
+    // to discover which physical names appear in `sql`. Tables not present
+    // here fall back to `default_size`.
+    map<string, uint64> table_sizes = 2;
+
+    // Default size (bytes) for tables not present in `table_sizes`.
+    // Defaults to 0, meaning unknown tables are treated as smallest possible
+    // and will stay on the right (build/hash) side of any JOIN.
+    optional uint64 default_size = 3;
+
+    // Minimum ratio (right_size / left_size) required to trigger a swap.
+    // Default 1.0 — swap whenever the right table is strictly larger.
+    // Set higher (e.g. 1.5) to avoid swapping near-equal-size tables.
+    optional double swap_threshold = 4;
+}
+
+enum OptimizeCode {
+    // Optimization completed. `swap_applied` says whether any JOIN was
+    // actually rewritten; either way `sql_after_optimize` is the SQL to
+    // run.
+    OptimizeOK = 0;
+    // ClickHouse's ParserQuery rejected the input SQL. `sql_after_optimize`
+    // is the original SQL — callers should fall back to executing it as-is
+    // and surface the parse error elsewhere if needed.
+    OptimizeSyntaxError = 1;
+    // SQL parsed fine but doesn't contain anything we can optimize (single
+    // table, no JOINs, non-SELECT, JOIN whose semantics we don't swap such
+    // as ASOF/PASTE/USING/SEMI/ANTI, etc.). `sql_after_optimize` is the
+    // original SQL. Not an error — callers proceed with the input unchanged.
+    OptimizeUnoptimizable = 2;
+}
+
+message OptimizeResponse {
+    OptimizeCode code = 1;
+    string message = 2;
+    // Always populated. On any non-OptimizeOK code, this is just
+    // `request.sql` echoed back, so callers can use this field
+    // unconditionally and not branch on `code` for fallback.
+    string sql_after_optimize = 3;
+    // True iff a JOIN swap was applied. Useful for observability /
+    // metrics; callers should NOT rely on this for fallback (use the
+    // sql_after_optimize field instead).
+    bool swap_applied = 4;
 }
 
 message RewriteErrorMessageRequest {

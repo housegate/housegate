@@ -228,6 +228,9 @@ func TestPermission_ReadBitGatesSelect(t *testing.T) {
 		{"insert_denied", sqlmeta.StatementTypeInsert, false},
 		{"create_table_denied", sqlmeta.StatementTypeCreateTable, false},
 		{"truncate_denied", sqlmeta.StatementTypeTruncateTable, false},
+		{"create_view_denied", sqlmeta.StatementTypeCreateView, false},
+		{"create_mat_view_denied", sqlmeta.StatementTypeCreateMaterializedView, false},
+		{"drop_view_denied", sqlmeta.StatementTypeDropView, false},
 
 		// Admin-bit-required → Bob (Read only) fails.
 		{"alter_denied", sqlmeta.StatementTypeAlterTable, false},
@@ -248,6 +251,35 @@ func TestPermission_ReadBitGatesSelect(t *testing.T) {
 			}
 			if !tc.permitted && err == nil {
 				t.Errorf("expected deny, got nil")
+			}
+		})
+	}
+}
+
+// TestPermission_ViewsRequireWrite verifies CREATE/DROP VIEW and
+// CREATE MATERIALIZED VIEW are gated on the Write bit — symmetric with
+// CREATE/DROP TABLE. An account holding exactly DbAuthWrite passes;
+// the same statement from a Read-only account is rejected.
+func TestPermission_ViewsRequireWrite(t *testing.T) {
+	for _, typ := range []sqlmeta.StatementType{
+		sqlmeta.StatementTypeCreateView,
+		sqlmeta.StatementTypeCreateMaterializedView,
+		sqlmeta.StatementTypeDropView,
+	} {
+		t.Run(typ.String()+"_write_allowed", func(t *testing.T) {
+			st := fixturePerm("foo", "alice", "bob", registry.DbAuthWrite)
+			o := newPermObserver(st)
+			ev := newEvent(typ, "bob", "foo", "v")
+			if err := o.BeforeStatement(context.Background(), ev); err != nil {
+				t.Errorf("Write bit should satisfy %s, got %v", typ, err)
+			}
+		})
+		t.Run(typ.String()+"_read_denied", func(t *testing.T) {
+			st := fixturePerm("foo", "alice", "bob", registry.DbAuthRead)
+			o := newPermObserver(st)
+			ev := newEvent(typ, "bob", "foo", "v")
+			if err := o.BeforeStatement(context.Background(), ev); err == nil {
+				t.Errorf("Read-only account must NOT satisfy %s", typ)
 			}
 		})
 	}

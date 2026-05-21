@@ -25,6 +25,10 @@ import (
 //     ownership and the per-database existence record.
 //   - StatementTypeCreateTable / StatementTypeDropTable: tracks the
 //     table list inside DatabaseInfos.
+//   - StatementTypeCreateView / StatementTypeCreateMaterializedView /
+//     StatementTypeDropView: tracks the view as a DatabaseInfo.Tables
+//     entry (TableType = "VIEW" / "MATERIALIZED_VIEW"), symmetric with
+//     the CREATE / DROP TABLE path.
 //   - StatementTypeGrant / StatementTypeRevoke: applies each
 //     PrivilegeDelta to DatabasePermissions. SCOPE_TABLE collapses to
 //     the per-DB bitmap (the in-memory model has no per-table
@@ -91,8 +95,9 @@ func (o *InMemoryCommitGateObserver) BeforeStatement(ctx context.Context, ev *co
 	defer o.mu.Unlock()
 
 	// All subscribed types (CREATE/DROP DATABASE, CREATE/DROP TABLE,
-	// GRANT, REVOKE) are single-target by ClickHouse parser semantics,
-	// so AccessedTables[0] is exhaustive. commitgate.buildEvent
+	// CREATE/DROP VIEW, CREATE MATERIALIZED VIEW, GRANT, REVOKE) are
+	// single-target by ClickHouse parser semantics, so AccessedTables[0]
+	// is exhaustive. commitgate.buildEvent
 	// mirrors the GRANT/REVOKE first-delta target onto AccessedTables
 	// for symmetry, so this branch is uniform across DDL and DCL.
 	if len(ev.AccessedTables) == 0 {
@@ -262,6 +267,98 @@ func (o *InMemoryCommitGateObserver) BeforeStatement(ctx context.Context, ev *co
 			o.DatabaseInfos[db] = info
 		})
 		log.Infow("dropped table", "database", db, "table", tableID, "by", account)
+
+	case sqlmeta.StatementTypeCreateView, sqlmeta.StatementTypeCreateMaterializedView:
+		// A view is tracked as an entry in DatabaseInfo.Tables — it
+		// behaves like a table for SHOW TABLES visibility and
+		// name-resolution. TableType records the kind so consumers can
+		// tell views from real tables. Mirrors the CREATE TABLE path:
+		// the target DB must exist and the account needs Write.
+		if tableID == "" {
+			return fmt.Errorf("inmemory: %s missing view name", ev.Type)
+		}
+		info, ok := o.DatabaseInfos[db]
+		if !ok {
+			return fmt.Errorf("database %q does not exist", db)
+		}
+		if !accountCanWriteLocked(o.DatabasePermissions, account, db) {
+			return fmt.Errorf("account %s lacks write permission on database %q", account, db)
+		}
+		tableType := "VIEW"
+		if ev.Type == sqlmeta.StatementTypeCreateMaterializedView {
+			tableType = "MATERIALIZED_VIEW"
+		}
+		// Idempotent: an entry with this name already present → no-op
+		// (no rollback stashed, so OnStatementException does nothing).
+		for _, t := range info.Tables {
+			if t.TableId == tableID {
+				return nil
+			}
+		}
+		info.Tables = append(info.Tables, TableInfo{TableId: tableID, TableType: tableType})
+		o.DatabaseInfos[db] = info
+		o.stashRollback(ev, func() {
+			info, ok := o.DatabaseInfos[db]
+			if !ok {
+				return
+			}
+			for i, t := range info.Tables {
+				if t.TableId == tableID {
+					info.Tables = append(info.Tables[:i], info.Tables[i+1:]...)
+					o.DatabaseInfos[db] = info
+					return
+				}
+			}
+		})
+		log.Infow("created view", "database", db, "view", tableID, "kind", tableType, "by", account)
+
+	case sqlmeta.StatementTypeDropView:
+		// Symmetric with DROP TABLE: remove the entry by name. The
+		// in-memory model does not enforce that the entry is actually a
+		// view (ClickHouse does); removal is keyed on TableId alone.
+		if tableID == "" {
+			return fmt.Errorf("inmemory: DROP VIEW missing view name")
+		}
+		info, ok := o.DatabaseInfos[db]
+		if !ok {
+			// Database gone → DROP VIEW is implicitly idempotent.
+			return nil
+		}
+		if !accountCanWriteLocked(o.DatabasePermissions, account, db) {
+			return fmt.Errorf("account %s lacks write permission on database %q", account, db)
+		}
+		var droppedTable *TableInfo
+		var droppedIdx = -1
+		for i, t := range info.Tables {
+			if t.TableId == tableID {
+				copied := t
+				droppedTable = &copied
+				droppedIdx = i
+				break
+			}
+		}
+		if droppedTable == nil {
+			// Idempotent: view not present → no-op.
+			break
+		}
+		info.Tables = append(info.Tables[:droppedIdx], info.Tables[droppedIdx+1:]...)
+		o.DatabaseInfos[db] = info
+		restored := *droppedTable
+		restoreIdx := droppedIdx
+		o.stashRollback(ev, func() {
+			info, ok := o.DatabaseInfos[db]
+			if !ok {
+				return
+			}
+			if restoreIdx >= 0 && restoreIdx <= len(info.Tables) {
+				info.Tables = append(info.Tables[:restoreIdx],
+					append([]TableInfo{restored}, info.Tables[restoreIdx:]...)...)
+			} else {
+				info.Tables = append(info.Tables, restored)
+			}
+			o.DatabaseInfos[db] = info
+		})
+		log.Infow("dropped view", "database", db, "view", tableID, "by", account)
 
 	case sqlmeta.StatementTypeGrant, sqlmeta.StatementTypeRevoke:
 		// Validate target DB exists and the executing account may
