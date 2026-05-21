@@ -34,7 +34,8 @@ import (
 //   - Read-bit-required: SELECT, SHOW TABLES, SHOW CREATE TABLE,
 //     EXISTS TABLE, USE.
 //   - Write-bit-required: INSERT, UPDATE, DELETE, TRUNCATE TABLE,
-//     CREATE TABLE, DROP TABLE.
+//     CREATE TABLE, DROP TABLE, CREATE VIEW, CREATE MATERIALIZED VIEW,
+//     DROP VIEW.
 //   - Admin-bit-required: ALTER TABLE, RENAME TABLE, GRANT, REVOKE.
 //   - Owner-bit-required: DROP DATABASE.
 //
@@ -114,6 +115,15 @@ var permissionPolicy = map[sqlmeta.StatementType]registry.DbAuth{
 	sqlmeta.StatementTypeTruncateTable: registry.DbAuthWrite,
 	sqlmeta.StatementTypeCreateTable:   registry.DbAuthWrite,
 	sqlmeta.StatementTypeDropTable:     registry.DbAuthWrite,
+	// CREATE / DROP VIEW and CREATE MATERIALIZED VIEW are schema
+	// mutations symmetric with CREATE / DROP TABLE — same Write bit.
+	// The rewriter is expected to surface only the view's own
+	// (db, name) in AccessedTables; the AS-SELECT source tables are
+	// NOT included, otherwise this loop would require Write on every
+	// referenced table.
+	sqlmeta.StatementTypeCreateView:             registry.DbAuthWrite,
+	sqlmeta.StatementTypeCreateMaterializedView: registry.DbAuthWrite,
+	sqlmeta.StatementTypeDropView:               registry.DbAuthWrite,
 
 	sqlmeta.StatementTypeAlterTable:  registry.DbAuthAdmin,
 	sqlmeta.StatementTypeRenameTable: registry.DbAuthAdmin,
@@ -142,6 +152,9 @@ func (o *PermissionCommitGateObserver) SubscribedTypes() []sqlmeta.StatementType
 		sqlmeta.StatementTypeTruncateTable,
 		sqlmeta.StatementTypeCreateTable,
 		sqlmeta.StatementTypeDropTable,
+		sqlmeta.StatementTypeCreateView,
+		sqlmeta.StatementTypeCreateMaterializedView,
+		sqlmeta.StatementTypeDropView,
 		sqlmeta.StatementTypeAlterTable,
 		sqlmeta.StatementTypeRenameTable,
 		sqlmeta.StatementTypeGrant,

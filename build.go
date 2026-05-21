@@ -240,6 +240,8 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			ims, []sqlmeta.StatementType{
 				sqlmeta.StatementTypeCreateDatabase, sqlmeta.StatementTypeDropDatabase,
 				sqlmeta.StatementTypeCreateTable, sqlmeta.StatementTypeDropTable,
+				sqlmeta.StatementTypeCreateView, sqlmeta.StatementTypeCreateMaterializedView,
+				sqlmeta.StatementTypeDropView,
 				sqlmeta.StatementTypeGrant, sqlmeta.StatementTypeRevoke,
 			}, opts.GetIndexerId))
 	}

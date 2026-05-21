@@ -205,6 +205,88 @@ func TestInMemoryRollback_DropTable(t *testing.T) {
 	}
 }
 
+// TestInMemoryRollback_CreateView verifies CREATE VIEW appends a
+// TableInfo entry tagged TableType="VIEW" and that a rollback removes
+// it. CREATE MATERIALIZED VIEW is checked for the MATERIALIZED_VIEW
+// tag too.
+func TestInMemoryRollback_CreateView(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		typ      sqlmeta.StatementType
+		wantType string
+	}{
+		{"view", sqlmeta.StatementTypeCreateView, "VIEW"},
+		{"materialized_view", sqlmeta.StatementTypeCreateMaterializedView, "MATERIALIZED_VIEW"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o, st := newObserver()
+			st.DatabaseInfos["foo"] = DatabaseInfo{DatabaseId: "foo"}
+			st.DatabasePermissions["alice"] = DatabasePermissions{"foo": registry.DbAuthOwner}
+			beforeDBs, _ := snapshotState(st)
+
+			ev := newEvent(tc.typ, "alice", "foo", "v_events")
+			if err := o.BeforeStatement(context.Background(), ev); err != nil {
+				t.Fatalf("BeforeStatement: %v", err)
+			}
+			got := st.DatabaseInfos["foo"].Tables
+			if len(got) != 1 || got[0].TableId != "v_events" || got[0].TableType != tc.wantType {
+				t.Fatalf("expected v_events view (%s) appended; Tables=%v", tc.wantType, got)
+			}
+
+			o.OnStatementException(context.Background(), ev, &chproto.Exception{Code: 60})
+
+			gotDBs, _ := snapshotState(st)
+			if !reflect.DeepEqual(gotDBs, beforeDBs) {
+				t.Errorf("Tables not restored:\n got=%v\nwant=%v", gotDBs, beforeDBs)
+			}
+		})
+	}
+}
+
+// TestInMemoryRollback_DropView verifies DROP VIEW removes the entry
+// and that a rollback re-appends it at its original index.
+func TestInMemoryRollback_DropView(t *testing.T) {
+	o, st := newObserver()
+	st.DatabaseInfos["foo"] = DatabaseInfo{
+		DatabaseId: "foo",
+		Tables:     []TableInfo{{TableId: "v_events", TableType: "VIEW"}, {TableId: "users"}},
+	}
+	st.DatabasePermissions["alice"] = DatabasePermissions{"foo": registry.DbAuthOwner}
+	beforeDBs, _ := snapshotState(st)
+
+	ev := newEvent(sqlmeta.StatementTypeDropView, "alice", "foo", "v_events")
+	if err := o.BeforeStatement(context.Background(), ev); err != nil {
+		t.Fatalf("BeforeStatement: %v", err)
+	}
+	tables := st.DatabaseInfos["foo"].Tables
+	if len(tables) != 1 || tables[0].TableId != "users" {
+		t.Fatalf("expected only users left; Tables=%v", tables)
+	}
+
+	o.OnStatementException(context.Background(), ev, &chproto.Exception{Code: 60})
+
+	gotDBs, _ := snapshotState(st)
+	if !reflect.DeepEqual(gotDBs, beforeDBs) {
+		t.Errorf("Tables not restored:\n got=%v\nwant=%v", gotDBs, beforeDBs)
+	}
+}
+
+// TestInMemoryCreateView_RequiresWrite verifies CREATE VIEW is
+// rejected when the account lacks the Write bit.
+func TestInMemoryCreateView_RequiresWrite(t *testing.T) {
+	o, st := newObserver()
+	st.DatabaseInfos["foo"] = DatabaseInfo{DatabaseId: "foo"}
+	st.DatabasePermissions["bob"] = DatabasePermissions{"foo": registry.DbAuthRead}
+
+	ev := newEvent(sqlmeta.StatementTypeCreateView, "bob", "foo", "v")
+	if err := o.BeforeStatement(context.Background(), ev); err == nil {
+		t.Fatal("expected CREATE VIEW rejected for Read-only account")
+	}
+	if got := st.DatabaseInfos["foo"].Tables; len(got) != 0 {
+		t.Errorf("rejected CREATE VIEW must not mutate Tables; got=%v", got)
+	}
+}
+
 // TestInMemoryRollback_IdempotentNoOp verifies that when
 // BeforeStatement was a no-op (e.g. CREATE DATABASE replayed by the
 // same owner) no rollback runs and state stays unchanged.
