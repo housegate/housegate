@@ -95,6 +95,15 @@ type RewriteResult struct {
 	// (or `... AS rstmt`) — the deltas are the load-bearing output
 	// that downstream auth services consume.
 	PrivilegesDeltas []sqlmeta.PrivilegeDelta
+
+	// ExistenceClause records the statement's existence-check clause —
+	// proto field `existence_clause` (tag 14): IfNotExists for a CREATE
+	// that carried IF NOT EXISTS, IfExists for a DROP / TRUNCATE that
+	// carried IF EXISTS, Unspecified otherwise. The rewriter sets it as
+	// soon as the SQL parses, so it is accurate even on a non-Success
+	// (Unsupported) response; only a SyntaxError or the short-circuit
+	// path leaves it Unspecified.
+	ExistenceClause sqlmeta.ExistenceClause
 }
 
 // Rewriter rewrites Sentio-Network mode SQL into real SQL. It is bound

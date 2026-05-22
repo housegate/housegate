@@ -140,6 +140,7 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	qctx.TableRewrites = res.TableRewrites
 	qctx.DatabaseRewrites = res.DatabaseRewrites
 	qctx.PrivilegesDeltas = res.PrivilegesDeltas
+	qctx.ExistenceClause = res.ExistenceClause
 	if res.SQL != qctx.OriginalSQL {
 		qctx.RewrittenSQL = res.SQL
 		qctx.Query.Body = res.SQL

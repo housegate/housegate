@@ -496,6 +496,19 @@ enum StatementType {
     STATEMENT_TYPE_DROP_VIEW = 21;
 }
 
+// Whether the statement carried an existence-check clause. CREATE-family
+// statements use IF NOT EXISTS; DROP / TRUNCATE-family use IF EXISTS; the two
+// are mutually exclusive, so one enum expresses both. Statements with no such
+// clause (SELECT / USE / SHOW / ...) report UNSPECIFIED. The value is a pure
+// syntactic property of the parsed AST — it is reported regardless of whether
+// the statement is later accepted or rejected, and is UNSPECIFIED only on a
+// SyntaxError (no AST was produced).
+enum ExistenceClause {
+    EXISTENCE_CLAUSE_UNSPECIFIED   = 0;
+    EXISTENCE_CLAUSE_IF_NOT_EXISTS = 1;  // CREATE ... IF NOT EXISTS
+    EXISTENCE_CLAUSE_IF_EXISTS     = 2;  // DROP / TRUNCATE ... IF EXISTS
+}
+
 message RewriteSQLResponse {
     RewriteCode code = 1;
     string message = 2;
@@ -594,6 +607,13 @@ message RewriteSQLResponse {
     // list (entries up to the AccessRightsElement that triggered the
     // reject). Callers shouldn't act on it in that case.
     repeated PrivilegeDelta privileges_deltas = 13;
+
+    // Existence-check clause of the parsed statement: IF_NOT_EXISTS for a
+    // CREATE that carried IF NOT EXISTS, IF_EXISTS for a DROP / TRUNCATE that
+    // carried IF EXISTS, UNSPECIFIED otherwise. See the ExistenceClause enum.
+    // Set as soon as the SQL parses, so it is accurate even on a rejected
+    // (non-Success) response; only SyntaxError leaves it UNSPECIFIED.
+    ExistenceClause existence_clause = 14;
 }
 
 // One table or database the SQL referenced before rewrite, with the

@@ -4,6 +4,7 @@ go_library(
     name = "sqlmeta",
     srcs = [
         "accessed_table.go",
+        "existence_clause.go",
         "privilege_category.go",
         "privilege_delta.go",
         "statement_type.go",
