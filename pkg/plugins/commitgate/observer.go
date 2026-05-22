@@ -205,4 +205,18 @@ type Event struct {
 	// the statement type is not GRANT/REVOKE or when no delta privilege
 	// matched a known category.
 	PrivilegesCategory sqlmeta.PrivilegeCategory
+
+	// ExistenceClause records the existence-check clause the statement
+	// carried, populated from the rewriter's `existence_clause` (proto
+	// tag 14): ExistenceClauseIfNotExists for a CREATE-family statement
+	// with IF NOT EXISTS, ExistenceClauseIfExists for a DROP / TRUNCATE
+	// with IF EXISTS, ExistenceClauseUnspecified otherwise.
+	//
+	// Observers use it to decide conflict policy: a CREATE DATABASE
+	// IF NOT EXISTS that names an already-registered database should
+	// converge to soft-success (idempotent re-run) rather than reject,
+	// and a DROP ... IF EXISTS on an absent target likewise. It is a
+	// pure syntactic property of the parsed SQL — reported regardless
+	// of whether the statement is later accepted or rejected.
+	ExistenceClause sqlmeta.ExistenceClause
 }

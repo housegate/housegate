@@ -33,6 +33,13 @@ func statementTypeFromProto(t pb.StatementType) sqlmeta.StatementType {
 	return sqlmeta.StatementType(t)
 }
 
+// existenceClauseFromProto narrows the protobuf enum to the
+// sqlmeta-owned type. Unrecognised values pass through as-is so
+// future proto additions don't get silently dropped to UNSPECIFIED.
+func existenceClauseFromProto(c pb.ExistenceClause) sqlmeta.ExistenceClause {
+	return sqlmeta.ExistenceClause(c)
+}
+
 // accessedTablesFromProto converts the proto AccessedTable list into
 // the sqlmeta-owned struct form. Returns nil for empty input so
 // downstream "did the rewriter populate this?" checks via len() / nil
@@ -318,13 +325,15 @@ func (r *sentioRewriter) Rewrite(ctx context.Context, sql, effectiveAccount stri
 			TableRewrites:    resp.GetTableRewrites(),
 			DatabaseRewrites: resp.GetDatabaseRewrites(),
 			PrivilegesDeltas: privilegesDeltasFromProto(resp.GetPrivilegesDeltas()),
+			ExistenceClause:  existenceClauseFromProto(resp.GetExistenceClause()),
 		}, nil
 	case pb.RewriteCode_UnsupportedStatement:
 		log.Debugw("rewriter unsupported statement, forwarding original SQL", "message", resp.Message)
 		// Per the proto contract, statement_type / table_rewrites /
 		// database_rewrites are UNSPECIFIED-or-empty on non-Success;
 		// original_accessed_tables may still be populated when
-		// classification ran far enough to enumerate them. Propagate
+		// classification ran far enough to enumerate them, and
+		// existence_clause is accurate once the SQL parses. Propagate
 		// whatever the rewriter set.
 		return RewriteResult{
 			SQL:              sql,
@@ -333,6 +342,7 @@ func (r *sentioRewriter) Rewrite(ctx context.Context, sql, effectiveAccount stri
 			TableRewrites:    resp.GetTableRewrites(),
 			DatabaseRewrites: resp.GetDatabaseRewrites(),
 			PrivilegesDeltas: privilegesDeltasFromProto(resp.GetPrivilegesDeltas()),
+			ExistenceClause:  existenceClauseFromProto(resp.GetExistenceClause()),
 		}, nil
 	default:
 		return RewriteResult{}, fmt.Errorf("rewriter rejected SQL (code=%s): %s", resp.Code, resp.Message)

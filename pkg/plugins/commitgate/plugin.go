@@ -270,6 +270,7 @@ func buildEvent(qctx *plugin.QueryContext) *Event {
 		Settings:         settings,
 		AccessedTables:   qctx.AccessedTables,
 		PrivilegesDeltas: qctx.PrivilegesDeltas,
+		ExistenceClause:  qctx.ExistenceClause,
 	}
 
 	switch qctx.StatementType {

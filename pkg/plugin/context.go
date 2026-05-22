@@ -95,6 +95,16 @@ type QueryContext struct {
 	// permission change for external auth-state reconciliation.
 	PrivilegesDeltas []sqlmeta.PrivilegeDelta
 
+	// ExistenceClause is the rewriter's record of the existence-check
+	// clause OriginalSQL carried — proto field `existence_clause`
+	// (tag 14): IfNotExists for CREATE ... IF NOT EXISTS, IfExists for
+	// DROP / TRUNCATE ... IF EXISTS, Unspecified otherwise. Set by the
+	// rewrite plugin after the gRPC call; stays Unspecified when the
+	// rewrite plugin is disabled or the call short-circuits before
+	// classifying. Downstream observers (commitgate) read it to tell an
+	// idempotent CREATE / DROP from one that should fail on a conflict.
+	ExistenceClause sqlmeta.ExistenceClause
+
 	// AbortWithSuccess, when set by a plugin (currently only
 	// commitgate via ErrAbortWithSuccess), instructs the relay to
 	// reply EndOfStream to the client and skip forwarding to upstream.
