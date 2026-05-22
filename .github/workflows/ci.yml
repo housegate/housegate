@@ -38,3 +38,53 @@ jobs:
 
       # - name: Build & Test All
       #   run: bazel test --config=ci //...
+
+  integration:
+    name: Integration (ClickHouse)
+    # Same fork-safety gate as the build job: integration tests run real
+    # ClickHouse containers on the self-hosted runner, so fork code must
+    # not reach this job.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    needs: build
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v5
+      - uses: bazelbuild/setup-bazelisk@v3
+
+      # Pre-pull the ClickHouse image so the first test does not spend
+      # its testcontainers startup budget on a ~1GB pull. Idempotent —
+      # docker skips if the image is already local. The ryuk image used
+      # by testcontainers for cleanup is small (~10MB) and pulled
+      # automatically on first run.
+      - name: Pre-pull ClickHouse image
+        run: docker pull clickhouse/clickhouse-server:25.8
+
+      # Install the clickhouse fat binary for CLI integration tests.
+      # ClickHouseCLI(t) probes tests/bin/clickhouse and t.Skip's when
+      # missing, so this step is what makes the CLI cases actually run
+      # in CI. Idempotent: install.sh writes a new binary in cwd each
+      # time, but the test only cares that one exists at the path.
+      - name: Install clickhouse client binary
+        run: |
+          mkdir -p tests/bin
+          if [ ! -x tests/bin/clickhouse ]; then
+            curl -sSL https://clickhouse.com/install.sh | sh
+            mv clickhouse tests/bin/
+          fi
+          tests/bin/clickhouse --version
+
+      # Integration targets are tagged `manual` so plain `bazel test //...`
+      # leaves them alone (docker-less environments would fail). Listing
+      # them explicitly bypasses the manual filter; expand this list when
+      # adding new docker-bound integration targets.
+      - name: Integration Tests
+        run: |
+          bazel test \
+            //pkg/integration:integration_test \
+            //pkg/integration/testenv:testenv_test \
+            --test_output=errors

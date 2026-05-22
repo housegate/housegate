@@ -1,0 +1,40 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "testenv",
+    srcs = [
+        "agent.go",
+        "cli.go",
+        "clickhouse.go",
+        "proxy.go",
+        "redis_mock.go",
+        "rewriter_mock.go",
+    ],
+    importpath = "housegate/housegate/pkg/integration/testenv",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//:housegate",
+        "//pkg/cluster",
+        "//pkg/config",
+        "//pkg/network",
+        "//pkg/plugins/agent",
+        "//pkg/registry",
+        "//protos",
+        "@com_github_alicebob_miniredis_v2//:miniredis",
+        "@com_github_redis_go_redis_v9//:go-redis",
+        "@com_github_testcontainers_testcontainers_go_modules_clickhouse//:clickhouse",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_x_sync//errgroup",
+    ],
+)
+
+go_test(
+    name = "testenv_test",
+    srcs = ["clickhouse_test.go"],
+    embed = [":testenv"],
+    local = True,
+    tags = [
+        "manual",
+        "requires-docker",
+    ],
+)
