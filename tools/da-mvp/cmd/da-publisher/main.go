@@ -182,7 +182,7 @@ func runCycle(ctx context.Context, o runOpts) error {
 		partFailed := false
 		for i, ck := range chunks {
 			t0 := time.Now()
-			height, err := o.Celestia.Submit(ctx, o.Namespace, ck)
+			height, commitment, err := o.Celestia.Submit(ctx, o.Namespace, ck)
 			submitDur.Observe(time.Since(t0).Seconds())
 			if err != nil {
 				celestiaErrors.Inc()
@@ -199,9 +199,14 @@ func runCycle(ctx context.Context, o runOpts) error {
 				partFailed = true
 				break
 			}
+			if len(commitment) != 32 {
+				return fmt.Errorf("celestia commitment for %s chunk %d is %d bytes, expected 32", p.Name, i, len(commitment))
+			}
+			var daCommitment [32]byte
+			copy(daCommitment[:], commitment)
 			params := anchor.PublishParams{
 				DBID: o.DBID, TableID: o.TableID,
-				DAHeight: height, DACommitment: [32]byte{}, // commitment from Celestia not used in MVP
+				DAHeight: height, DACommitment: daCommitment,
 				BlobSize: uint32(len(ck)), BlobHash: blobHash, SchemaHash: o.SchemaHash,
 				ChunkCount: uint8(len(chunks)),
 			}

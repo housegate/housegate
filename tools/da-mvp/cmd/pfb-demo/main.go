@@ -34,17 +34,13 @@ func main() {
 
 	c := celestia.NewClient(*rpcURL, *token)
 	payload := []byte("hello da mvp")
-	height, err := c.Submit(ctx, ns, payload)
+	height, commitment, err := c.Submit(ctx, ns, payload)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "submit: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("submitted at height %d\n", height)
+	fmt.Printf("submitted at height %d commitment %x\n", height, commitment)
 
-	// commitment is implicit: in v0.x of celestia-node the client gets
-	// the commitment as part of the submit response in a follow-up
-	// schema; for the demo we don't read it back by commitment, we
-	// just confirm submit returned a non-zero height.
 	if height == 0 {
 		os.Exit(1)
 	}
