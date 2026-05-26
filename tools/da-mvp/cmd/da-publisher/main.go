@@ -74,6 +74,7 @@ func main() {
 	intervalStr := flag.String("interval", "60s", "poll interval")
 	checkpointPath := flag.String("checkpoint-file", "./pub.state", "")
 	metricsListen := flag.String("metrics-listen", ":9100", "Prometheus /metrics listen addr")
+	noMetrics := flag.Bool("no-metrics", false, "skip the Prometheus /metrics endpoint (dev mode)")
 	flag.Parse()
 
 	if *celestiaToken == "" {
@@ -92,14 +93,16 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	go func() {
-		mux := http.NewServeMux()
-		mux.Handle("/metrics", promhttp.Handler())
-		if err := http.ListenAndServe(*metricsListen, mux); err != nil {
-			log.Errorw("metrics server failed", "err", err, "addr", *metricsListen)
-			cancel()
-		}
-	}()
+	if !*noMetrics {
+		go func() {
+			mux := http.NewServeMux()
+			mux.Handle("/metrics", promhttp.Handler())
+			if err := http.ListenAndServe(*metricsListen, mux); err != nil {
+				log.Errorw("metrics server failed", "err", err, "addr", *metricsListen)
+				cancel()
+			}
+		}()
+	}
 
 	chCfg := chexport.Config{Host: *chHost, Port: *chPort, User: *chUser, Password: *chPass}
 
