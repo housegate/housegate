@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_test(
+    name = "celestia_test",
+    srcs = ["client_test.go"],
+    embed = [":celestia"],
+)
+
+go_library(
+    name = "celestia",
+    srcs = ["client.go"],
+    importpath = "housegate/housegate/tools/da-mvp/pkg/celestia",
+    visibility = ["//visibility:public"],
+)
