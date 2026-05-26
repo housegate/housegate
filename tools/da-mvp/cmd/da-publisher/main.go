@@ -7,7 +7,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -18,6 +17,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	log "housegate/housegate/pkg/log"
 	"housegate/housegate/tools/da-mvp/pkg/anchor"
 	"housegate/housegate/tools/da-mvp/pkg/celestia"
 	"housegate/housegate/tools/da-mvp/pkg/checkpoint"
@@ -93,8 +93,12 @@ func main() {
 	defer cancel()
 
 	go func() {
-		http.Handle("/metrics", promhttp.Handler())
-		_ = http.ListenAndServe(*metricsListen, nil)
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", promhttp.Handler())
+		if err := http.ListenAndServe(*metricsListen, mux); err != nil {
+			log.Errorw("metrics server failed", "err", err, "addr", *metricsListen)
+			cancel()
+		}
 	}()
 
 	chCfg := chexport.Config{Host: *chHost, Port: *chPort, User: *chUser, Password: *chPass}
@@ -135,7 +139,7 @@ func main() {
 			Celestia:   celestiaCli, Anchor: anchorCli,
 			Checkpoint: &cp, CheckpointPath: *checkpointPath,
 		}); err != nil {
-			slog.Error("cycle failed", "err", err)
+			log.Errorw("cycle failed", "err", err)
 		}
 		if !cp.LastModificationTime.IsZero() {
 			publishLag.Set(time.Since(cp.LastModificationTime).Seconds())
@@ -175,13 +179,25 @@ func runCycle(ctx context.Context, o runOpts) error {
 		blobHash := blake3Sum256(parquet)
 		chunks := chunk.Split(parquet)
 		var partSeq uint64
+		partFailed := false
 		for i, ck := range chunks {
 			t0 := time.Now()
 			height, err := o.Celestia.Submit(ctx, o.Namespace, ck)
 			submitDur.Observe(time.Since(t0).Seconds())
 			if err != nil {
 				celestiaErrors.Inc()
-				return fmt.Errorf("celestia submit chunk %d: %w", i, err)
+				if i == 0 {
+					// No anchor written yet — safe to retry next cycle.
+					return fmt.Errorf("celestia submit chunk 0 of %s: %w", p.Name, err)
+				}
+				// Chunks 0..i-1 are already on Celestia and anchored. Skipping the
+				// part advances the checkpoint past it so we don't duplicate; the
+				// rebuilder will see an incomplete part and abort. That's the
+				// honest signal — better than overlapping partSeq chains.
+				log.Errorw("partial chunk failure — part skipped to avoid duplicate partSeq",
+					"part", p.Name, "chunkIdx", i, "err", err)
+				partFailed = true
+				break
 			}
 			params := anchor.PublishParams{
 				DBID: o.DBID, TableID: o.TableID,
@@ -195,12 +211,20 @@ func runCycle(ctx context.Context, o runOpts) error {
 				err = o.Anchor.PublishChunk(ctx, params, partSeq, uint8(i))
 			}
 			if err != nil {
-				return fmt.Errorf("anchor chunk %d: %w", i, err)
+				if i == 0 {
+					return fmt.Errorf("anchor publish chunk 0 of %s: %w", p.Name, err)
+				}
+				log.Errorw("partial chunk failure — part skipped to avoid duplicate partSeq",
+					"part", p.Name, "chunkIdx", i, "err", err)
+				partFailed = true
+				break
 			}
 			blobsTotal.Inc()
 			bytesTotal.Add(float64(len(ck)))
 		}
-		partsTotal.Inc()
+		if !partFailed {
+			partsTotal.Inc()
+		}
 		o.Checkpoint.LastModificationTime = time.Unix(p.ModificationUnix, 0).UTC()
 		if err := checkpoint.Save(o.CheckpointPath, *o.Checkpoint); err != nil {
 			return fmt.Errorf("save checkpoint: %w", err)

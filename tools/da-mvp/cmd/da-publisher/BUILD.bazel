@@ -9,6 +9,7 @@ go_library(
     importpath = "housegate/housegate/tools/da-mvp/cmd/da-publisher",
     visibility = ["//visibility:private"],
     deps = [
+        "//pkg/log",
         "//tools/da-mvp/pkg/anchor",
         "//tools/da-mvp/pkg/celestia",
         "//tools/da-mvp/pkg/checkpoint",
