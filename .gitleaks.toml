@@ -48,6 +48,7 @@ description = "Anvil's documented deterministic account 0 key"
 paths = [
     '''^tools/da-mvp/scripts/deploy-anchor\.sh$''',
     '''^tools/da-mvp/pkg/anchor/integration_test\.go$''',
+    '''^tools/da-mvp/cmd/da-rebuilder/main\.go$''',
 ]
 regexes = [
     '''ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80''',
