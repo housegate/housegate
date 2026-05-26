@@ -91,8 +91,12 @@ func (c *Client) PublishChunk(ctx context.Context, p PublishParams, partSeq uint
 	if err != nil {
 		return fmt.Errorf("anchor: publishChunk tx: %w", err)
 	}
-	if _, err := bind.WaitMined(ctx, c.eth, tx); err != nil {
+	receipt, err := bind.WaitMined(ctx, c.eth, tx)
+	if err != nil {
 		return err
+	}
+	if receipt.Status != types.ReceiptStatusSuccessful {
+		return fmt.Errorf("anchor: publishChunk reverted (partSeq=%d chunkIdx=%d)", partSeq, chunkIdx)
 	}
 	return nil
 }
