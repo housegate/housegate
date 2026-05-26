@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 # Experiment B: end-to-end latency. Inject rows tagged with wall-clock
 # time on source; in target, measure now64() - inject_ts.
+#
+# CAVEAT: This measurement INFLATES latency. now64() runs at query
+# time, not at row-insert time on the target. Each row's apparent
+# latency = (true rebuild latency) + (time row sat on target before
+# the query) + (60s post-loadgen sleep). The P50/P95/P99 numbers are
+# an UPPER BOUND on real latency, not a faithful measurement.
+#
+# Refining this requires either a `rebuilt_at` column on the target
+# table (out of MVP scope, requires DDL evolution) or instrumenting
+# the rebuilder to emit a "first row rebuilt" timestamp per part. The
+# MVP report should note this caveat when interpreting the numbers.
 set -euo pipefail
 cd "$(dirname "$0")/../../.."
 ANCHOR_ADDR="${ANCHOR_ADDR:?set ANCHOR_ADDR}"
