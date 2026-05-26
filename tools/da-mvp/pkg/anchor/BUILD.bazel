@@ -1,0 +1,21 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_test(
+    name = "anchor_test",
+    srcs = ["client_test.go"],
+    embed = [":anchor"],
+)
+
+go_library(
+    name = "anchor",
+    srcs = ["client.go"],
+    importpath = "housegate/housegate/tools/da-mvp/pkg/anchor",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//tools/da-mvp/contracts/binding",
+        "@com_github_ethereum_go_ethereum//accounts/abi/bind",
+        "@com_github_ethereum_go_ethereum//common",
+        "@com_github_ethereum_go_ethereum//core/types",
+        "@com_github_ethereum_go_ethereum//ethclient",
+    ],
+)
