@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_test(
+    name = "chexport_test",
+    srcs = ["exporter_test.go"],
+    embed = [":chexport"],
+)
+
+go_library(
+    name = "chexport",
+    srcs = ["exporter.go"],
+    importpath = "housegate/housegate/tools/da-mvp/pkg/chexport",
+    visibility = ["//visibility:public"],
+)

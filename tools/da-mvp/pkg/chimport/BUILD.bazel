@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_test(
+    name = "chimport_test",
+    srcs = ["importer_test.go"],
+    embed = [":chimport"],
+)
+
+go_library(
+    name = "chimport",
+    srcs = ["importer.go"],
+    importpath = "housegate/housegate/tools/da-mvp/pkg/chimport",
+    visibility = ["//visibility:public"],
+)
