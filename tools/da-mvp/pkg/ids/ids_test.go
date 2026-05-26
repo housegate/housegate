@@ -42,3 +42,15 @@ func TestNamespace_StablePerTable(t *testing.T) {
 		t.Error("namespace should be deterministic")
 	}
 }
+
+func TestNamespace_DifferentTable(t *testing.T) {
+	if bytes.Equal(Namespace("db", "t1"), Namespace("db", "t2")) {
+		t.Error("different tables must produce different namespaces")
+	}
+}
+
+func TestNamespace_DifferentDB(t *testing.T) {
+	if bytes.Equal(Namespace("db1", "tbl"), Namespace("db2", "tbl")) {
+		t.Error("different databases must produce different namespaces")
+	}
+}
