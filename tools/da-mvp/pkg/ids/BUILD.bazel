@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_test(
+    name = "ids_test",
+    srcs = ["ids_test.go"],
+    embed = [":ids"],
+)
+
+go_library(
+    name = "ids",
+    srcs = ["ids.go"],
+    importpath = "housegate/housegate/tools/da-mvp/pkg/ids",
+    visibility = ["//visibility:public"],
+    deps = ["@com_github_zeebo_blake3//:blake3"],
+)
