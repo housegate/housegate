@@ -38,3 +38,17 @@ regexes = [
     # scrub of historical pre-rotation keys. 40-hex addr or 64-hex priv.
     '''0x0{40,64}''',
 ]
+
+[[allowlists]]
+description = "Anvil's documented deterministic account 0 key"
+# Foundry's anvil ships a fixed deterministic mnemonic; account 0's
+# private key is published in foundry's own docs and is used here
+# only to drive local-dev / integration tests against an anvil node.
+# Treating this as a leak is a false positive.
+paths = [
+    '''^tools/da-mvp/scripts/deploy-anchor\.sh$''',
+    '''^tools/da-mvp/pkg/anchor/integration_test\.go$''',
+]
+regexes = [
+    '''ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80''',
+]
