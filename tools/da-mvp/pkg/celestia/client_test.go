@@ -20,18 +20,30 @@ func TestSubmit_SendsBlobAndReturnsHeight(t *testing.T) {
 		if !strings.Contains(string(body), `"method":"blob.Submit"`) {
 			t.Errorf("expected blob.Submit, got %s", body)
 		}
+		// Submit now ships a non-empty commitment in the request body —
+		// verify it's present so a regression that drops the client-side
+		// commitment computation is caught here.
+		if !strings.Contains(string(body), `"commitment":"`) {
+			t.Errorf("expected non-empty commitment in request body, got %s", body)
+		}
 		w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":12345}`))
 	}))
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "testtoken")
+	// 10-byte v0 sub-ID; resolveNamespace expands it to a full 29-byte
+	// share.Namespace before submission, matching what pkg/ids.Namespace
+	// produces in production.
 	ns := []byte("hgmv\x00\x00\x00\x00\x00\x01")
-	height, err := c.Submit(context.Background(), ns, []byte("hello"))
+	height, commitment, err := c.Submit(context.Background(), ns, []byte("hello"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if height != 12345 {
 		t.Errorf("got height %d want 12345", height)
+	}
+	if len(commitment) != 32 {
+		t.Errorf("expected 32-byte commitment, got %d bytes", len(commitment))
 	}
 }
 
@@ -41,7 +53,7 @@ func TestSubmit_ErrorBubblesUp(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := NewClient(srv.URL, "")
-	_, err := c.Submit(context.Background(), []byte("0123456789"), []byte("x"))
+	_, _, err := c.Submit(context.Background(), []byte("0123456789"), []byte("x"))
 	if err == nil || !strings.Contains(err.Error(), "out of gas") {
 		t.Errorf("expected out-of-gas error, got %v", err)
 	}
@@ -79,7 +91,7 @@ func TestCall_Non2xxStatus_ReturnsHTTPError(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := NewClient(srv.URL, "bad")
-	_, err := c.Submit(context.Background(), []byte("0123456789"), []byte("x"))
+	_, _, err := c.Submit(context.Background(), []byte("0123456789"), []byte("x"))
 	if err == nil || !strings.Contains(err.Error(), "http 401") {
 		t.Errorf("expected 'http 401' error, got %v", err)
 	}
@@ -94,7 +106,7 @@ func TestCall_NoBearerWhenTokenEmpty(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := NewClient(srv.URL, "")
-	if _, err := c.Submit(context.Background(), []byte("0123456789"), []byte("x")); err != nil {
+	if _, _, err := c.Submit(context.Background(), []byte("0123456789"), []byte("x")); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -110,7 +122,7 @@ func TestCall_OversizeResponse_Capped(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := NewClient(srv.URL, "")
-	_, err := c.Submit(context.Background(), []byte("0123456789"), []byte("x"))
+	_, _, err := c.Submit(context.Background(), []byte("0123456789"), []byte("x"))
 	// We expect *some* error (decode failure on truncated JSON) — not a
 	// silent success and not an OOM.
 	if err == nil {
