@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_test(
+    name = "schema_test",
+    srcs = ["schema_test.go"],
+    embed = [":schema"],
+)
+
+go_library(
+    name = "schema",
+    srcs = ["schema.go"],
+    importpath = "housegate/housegate/tools/da-mvp/pkg/schema",
+    visibility = ["//visibility:public"],
+    deps = ["@com_github_zeebo_blake3//:blake3"],
+)
