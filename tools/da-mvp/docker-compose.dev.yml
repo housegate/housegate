@@ -1,15 +1,15 @@
 # Local dev stack: source CH, target CH, anvil. Not a production rig.
 services:
   source-ch:
-    image: clickhouse/clickhouse-server:24.8
+    image: clickhouse/clickhouse-server:25.8
     container_name: damvp-source-ch
-    ports: ["19000:9000", "18123:8123"]
+    ports: ["19100:9000", "18200:8123"]
     ulimits: { nofile: { soft: 262144, hard: 262144 } }
     volumes: [ "source-ch-data:/var/lib/clickhouse" ]
   target-ch:
-    image: clickhouse/clickhouse-server:24.8
+    image: clickhouse/clickhouse-server:25.8
     container_name: damvp-target-ch
-    ports: ["29000:9000", "28123:8123"]
+    ports: ["19200:9000", "18300:8123"]
     ulimits: { nofile: { soft: 262144, hard: 262144 } }
     volumes: [ "target-ch-data:/var/lib/clickhouse" ]
   anvil:
