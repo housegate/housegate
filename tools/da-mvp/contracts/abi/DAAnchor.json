@@ -1,0 +1,186 @@
+[
+  {
+    "type": "function",
+    "name": "publish",
+    "inputs": [
+      {
+        "name": "dbId",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "tableId",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "daHeight",
+        "type": "uint64",
+        "internalType": "uint64"
+      },
+      {
+        "name": "daCommitment",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "blobSize",
+        "type": "uint32",
+        "internalType": "uint32"
+      },
+      {
+        "name": "blobHash",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "schemaHash",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "chunkIdx",
+        "type": "uint8",
+        "internalType": "uint8"
+      },
+      {
+        "name": "chunkCount",
+        "type": "uint8",
+        "internalType": "uint8"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "seq",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "publishChunk",
+    "inputs": [
+      {
+        "name": "dbId",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "tableId",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "seq",
+        "type": "uint64",
+        "internalType": "uint64"
+      },
+      {
+        "name": "daHeight",
+        "type": "uint64",
+        "internalType": "uint64"
+      },
+      {
+        "name": "daCommitment",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "blobSize",
+        "type": "uint32",
+        "internalType": "uint32"
+      },
+      {
+        "name": "blobHash",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "schemaHash",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "chunkIdx",
+        "type": "uint8",
+        "internalType": "uint8"
+      },
+      {
+        "name": "chunkCount",
+        "type": "uint8",
+        "internalType": "uint8"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "event",
+    "name": "Published",
+    "inputs": [
+      {
+        "name": "dbId",
+        "type": "bytes32",
+        "indexed": true,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "tableId",
+        "type": "bytes32",
+        "indexed": true,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "partSeq",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      },
+      {
+        "name": "daHeight",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      },
+      {
+        "name": "daCommitment",
+        "type": "bytes32",
+        "indexed": false,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "blobSize",
+        "type": "uint32",
+        "indexed": false,
+        "internalType": "uint32"
+      },
+      {
+        "name": "blobHash",
+        "type": "bytes32",
+        "indexed": false,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "schemaHash",
+        "type": "bytes32",
+        "indexed": false,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "chunkIdx",
+        "type": "uint8",
+        "indexed": false,
+        "internalType": "uint8"
+      },
+      {
+        "name": "chunkCount",
+        "type": "uint8",
+        "indexed": false,
+        "internalType": "uint8"
+      }
+    ],
+    "anonymous": false
+  }
+]
