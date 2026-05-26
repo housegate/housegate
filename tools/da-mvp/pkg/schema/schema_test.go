@@ -47,3 +47,22 @@ func TestCanonicalize_NoOpenParen(t *testing.T) {
 		t.Error("expected error on malformed input")
 	}
 }
+
+func TestCanonicalize_NoCloseParen(t *testing.T) {
+	_, err := Canonicalize("CREATE TABLE t (`a` UInt64")
+	if err == nil {
+		t.Error("expected error for unclosed paren")
+	}
+}
+
+func TestCanonicalize_NestedParens(t *testing.T) {
+	in := "CREATE TABLE t (`a` Decimal128(18),`b` DateTime64(3,'UTC')) ENGINE=MergeTree ORDER BY a"
+	got, err := Canonicalize(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "`a` Decimal128(18),`b` DateTime64(3,'UTC')"
+	if got != want {
+		t.Errorf("got %q want %q", got, want)
+	}
+}
