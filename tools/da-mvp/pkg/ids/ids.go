@@ -19,11 +19,18 @@ func TableID(name string) [32]byte {
 }
 
 // Namespace returns the 10-byte Celestia namespace for (db, table):
-// "hgmv" + 6 bytes from blake3(db||"|"||table).
+// "hgmv" + 6 bytes from blake3(DBID(db) || TableID(table)).
+// Matches the spec's allocation scheme so anyone computing the namespace
+// from §6 of the design doc gets the same value.
 func Namespace(db, table string) []byte {
-	h := blake3.Sum256([]byte(db + "|" + table))
+	dbID := DBID(db)
+	tableID := TableID(table)
+	var preimage [64]byte
+	copy(preimage[:32], dbID[:])
+	copy(preimage[32:], tableID[:])
+	h := blake3.Sum256(preimage[:])
 	out := make([]byte, 10)
-	copy(out[:4], []byte(namespacePrefix))
+	copy(out[:4], namespacePrefix)
 	copy(out[4:], h[:6])
 	return out
 }
