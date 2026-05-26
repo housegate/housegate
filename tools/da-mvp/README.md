@@ -20,6 +20,25 @@ for the design.
 bazel build //tools/da-mvp/cmd/da-publisher //tools/da-mvp/cmd/da-rebuilder
 ```
 
+## Foundry setup (first checkout only)
+
+`forge-std` lives in `contracts/lib/forge-std/` and is gitignored (it's
+fetched fresh per machine). `forge install` in Foundry 1.7.1 doesn't
+play nicely with a parent repo that already has its own `.git/`, so on
+first checkout clone forge-std manually:
+
+```
+cd tools/da-mvp/contracts
+git clone https://github.com/foundry-rs/forge-std lib/forge-std --depth 1
+```
+
+After that, `forge test` and `forge build` work normally.
+
+If `forge` is not on your `$PATH`, it likely lives at `~/.foundry/bin/forge`
+— either `export PATH="$HOME/.foundry/bin:$PATH"` or invoke it as a full
+path. The integration scripts under `scripts/` assume `forge` and `anvil`
+are reachable.
+
 ## Quick smoke test (Day 1)
 
 ```

@@ -45,4 +45,10 @@ contract DAAnchorTest is Test {
         assertEq(logs[0].topics[1], dbId);
         assertEq(logs[0].topics[2], tableId);
     }
+
+    function test_PublishChunkWithChunkIdxEqualChunkCount_Reverts() public {
+        // chunkIdx == chunkCount is past-the-end; off-by-one guard must reject.
+        vm.expectRevert();
+        anchor.publishChunk(dbId, tableId, 0, 1, bytes32(0), 10, bytes32(0), bytes32(0), 2, 2);
+    }
 }
