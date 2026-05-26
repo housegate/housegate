@@ -60,7 +60,19 @@ func (c *Client) call(ctx context.Context, method string, params []interface{}, 
 		return err
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
+
+	// Surface HTTP-level errors (auth, server) as auth/server errors —
+	// not as confusing JSON-decode errors. 4 MiB ceiling is generous
+	// for any valid celestia-node response (a 1.5 MiB blob base64-encodes
+	// to ~2 MiB) while bounding OOM exposure from a misbehaving node.
+	const maxBody = 4 * 1024 * 1024
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+	if err != nil {
+		return fmt.Errorf("celestia: read response body: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("celestia: http %d: %s", resp.StatusCode, bytes.TrimSpace(respBody))
+	}
 	var parsed rpcResp
 	if err := json.Unmarshal(respBody, &parsed); err != nil {
 		return fmt.Errorf("celestia: decode response: %w (body=%s)", err, respBody)
