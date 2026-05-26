@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_test(
+    name = "chunk_test",
+    srcs = ["chunk_test.go"],
+    embed = [":chunk"],
+)
+
+go_library(
+    name = "chunk",
+    srcs = ["chunk.go"],
+    importpath = "housegate/housegate/tools/da-mvp/pkg/chunk",
+    visibility = ["//visibility:public"],
+)
