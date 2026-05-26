@@ -1,0 +1,30 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "da-publisher_lib",
+    srcs = [
+        "blake3.go",
+        "main.go",
+    ],
+    importpath = "housegate/housegate/tools/da-mvp/cmd/da-publisher",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//tools/da-mvp/pkg/anchor",
+        "//tools/da-mvp/pkg/celestia",
+        "//tools/da-mvp/pkg/checkpoint",
+        "//tools/da-mvp/pkg/chexport",
+        "//tools/da-mvp/pkg/chunk",
+        "//tools/da-mvp/pkg/ids",
+        "//tools/da-mvp/pkg/schema",
+        "@com_github_ethereum_go_ethereum//crypto",
+        "@com_github_prometheus_client_golang//prometheus",
+        "@com_github_prometheus_client_golang//prometheus/promhttp",
+        "@com_github_zeebo_blake3//:blake3",
+    ],
+)
+
+go_binary(
+    name = "da-publisher",
+    embed = [":da-publisher_lib"],
+    visibility = ["//visibility:public"],
+)
