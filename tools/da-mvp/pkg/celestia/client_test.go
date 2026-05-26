@@ -71,3 +71,49 @@ func TestGet_DecodesBase64Data(t *testing.T) {
 		t.Errorf("got %q want %q", got, want)
 	}
 }
+
+func TestCall_Non2xxStatus_ReturnsHTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte("invalid token"))
+	}))
+	defer srv.Close()
+	c := NewClient(srv.URL, "bad")
+	_, err := c.Submit(context.Background(), []byte("0123456789"), []byte("x"))
+	if err == nil || !strings.Contains(err.Error(), "http 401") {
+		t.Errorf("expected 'http 401' error, got %v", err)
+	}
+}
+
+func TestCall_NoBearerWhenTokenEmpty(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Errorf("Authorization header should be unset when token is empty, got %q", got)
+		}
+		w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":1}`))
+	}))
+	defer srv.Close()
+	c := NewClient(srv.URL, "")
+	if _, err := c.Submit(context.Background(), []byte("0123456789"), []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCall_OversizeResponse_Capped(t *testing.T) {
+	// Server streams more than 4 MiB; LimitReader should cap the read
+	// and json.Unmarshal will produce a decode error from the truncated
+	// JSON. The point of this test is to verify we don't OOM by reading
+	// the full unbounded stream.
+	huge := strings.Repeat("x", 6*1024*1024)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":"` + huge + `"}`))
+	}))
+	defer srv.Close()
+	c := NewClient(srv.URL, "")
+	_, err := c.Submit(context.Background(), []byte("0123456789"), []byte("x"))
+	// We expect *some* error (decode failure on truncated JSON) — not a
+	// silent success and not an OOM.
+	if err == nil {
+		t.Error("expected error on oversize response, got nil")
+	}
+}
