@@ -23,6 +23,7 @@ import (
 	"housegate/housegate/tools/da-mvp/pkg/chunk"
 	"housegate/housegate/tools/da-mvp/pkg/ids"
 	"housegate/housegate/tools/da-mvp/pkg/schema"
+	"housegate/housegate/tools/da-mvp/pkg/verify"
 )
 
 func main() {
@@ -40,6 +41,11 @@ func main() {
 	sinceSeq := flag.Uint64("since-seq", 0, "")
 	follow := flag.Bool("follow", false, "keep polling for new anchors")
 	pollEvery := flag.Duration("poll", 5*time.Second, "follow poll interval")
+	verifyAfter := flag.String("verify-after", "", "after each drain run verify mode {count|sample|full|''=off}")
+	srcHost := flag.String("source-ch-host", "", "required when --verify-after is set")
+	srcPort := flag.Int("source-ch-port", 9000, "")
+	srcUser := flag.String("source-ch-user", "default", "")
+	srcPass := flag.String("source-ch-password", "", "")
 	flag.Parse()
 
 	if *celestiaToken == "" {
@@ -86,6 +92,22 @@ func main() {
 			log.Errorw("drain failed", "err", err)
 		} else {
 			cur = next
+			if *verifyAfter != "" {
+				mode, perr := verify.ParseMode(*verifyAfter)
+				if perr != nil {
+					fatal("%v", perr)
+				}
+				srcCfg := chexport.Config{Host: *srcHost, Port: *srcPort, User: *srcUser, Password: *srcPass}
+				dstCfg := chexport.Config{Host: *chHost, Port: *chPort, User: *chUser, Password: *chPass}
+				diff, verr := verify.Run(ctx, mode, srcCfg, dstCfg, *database, *table)
+				if verr != nil {
+					log.Errorw("verify failed", "err", verr)
+				} else if diff != "" {
+					log.Warnw("verify diff detected", "detail", diff)
+				} else {
+					log.Infow("verify OK", "mode", *verifyAfter)
+				}
+			}
 		}
 		if !*follow {
 			return

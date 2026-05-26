@@ -17,6 +17,7 @@ go_library(
         "//tools/da-mvp/pkg/chunk",
         "//tools/da-mvp/pkg/ids",
         "//tools/da-mvp/pkg/schema",
+        "//tools/da-mvp/pkg/verify",
         "@com_github_ethereum_go_ethereum//crypto",
         "@com_github_zeebo_blake3//:blake3",
     ],

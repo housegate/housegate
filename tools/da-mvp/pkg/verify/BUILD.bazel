@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_test(
+    name = "verify_test",
+    srcs = ["verify_test.go"],
+    embed = [":verify"],
+)
+
+go_library(
+    name = "verify",
+    srcs = ["verify.go"],
+    importpath = "housegate/housegate/tools/da-mvp/pkg/verify",
+    visibility = ["//visibility:public"],
+    deps = ["//tools/da-mvp/pkg/chexport"],
+)
