@@ -1,0 +1,29 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "da-rebuilder_lib",
+    srcs = [
+        "blake3.go",
+        "main.go",
+    ],
+    importpath = "housegate/housegate/tools/da-mvp/cmd/da-rebuilder",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//pkg/log",
+        "//tools/da-mvp/pkg/anchor",
+        "//tools/da-mvp/pkg/celestia",
+        "//tools/da-mvp/pkg/chexport",
+        "//tools/da-mvp/pkg/chimport",
+        "//tools/da-mvp/pkg/chunk",
+        "//tools/da-mvp/pkg/ids",
+        "//tools/da-mvp/pkg/schema",
+        "@com_github_ethereum_go_ethereum//crypto",
+        "@com_github_zeebo_blake3//:blake3",
+    ],
+)
+
+go_binary(
+    name = "da-rebuilder",
+    embed = [":da-rebuilder_lib"],
+    visibility = ["//visibility:public"],
+)
