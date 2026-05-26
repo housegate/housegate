@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_test(
+    name = "checkpoint_test",
+    srcs = ["checkpoint_test.go"],
+    embed = [":checkpoint"],
+)
+
+go_library(
+    name = "checkpoint",
+    srcs = ["checkpoint.go"],
+    importpath = "housegate/housegate/tools/da-mvp/pkg/checkpoint",
+    visibility = ["//visibility:public"],
+)
