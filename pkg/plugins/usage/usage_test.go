@@ -258,6 +258,33 @@ func TestPlugin_MaintenanceBypassesClient(t *testing.T) {
 	}
 }
 
+// TestPlugin_DriverBypassesClient verifies that an indexer-driver
+// session (SessionState.IsDriver == true) bypasses both CheckBalance
+// and ReportUsage. Driver write workload is metered separately via
+// sentio-node's IndexingUsage path (AsyncSave gRPC), so per-query
+// billing here would double-count and reject against the indexer's
+// own balance.
+func TestPlugin_DriverBypassesClient(t *testing.T) {
+	sess := newTestSession(t, 7)
+	sess.State().Identity = chsession.IdentityClaims{UserID: "0xindexer"}
+	sess.State().SetIsDriver(true)
+
+	qctx := newTestQueryContext(sess, "INSERT INTO x2y2_0.events FORMAT Native", nil)
+
+	client := &fakeUsageClient{}
+	p := &Plugin{Client: client}
+
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery returned error for driver session: %v", err)
+	}
+	if client.checkBalanceCalls != 0 {
+		t.Errorf("CheckBalance must NOT be called for driver sessions, got %d calls", client.checkBalanceCalls)
+	}
+	if client.reportUsageCalls != 0 {
+		t.Errorf("ReportUsage must NOT be called for driver sessions, got %d calls", client.reportUsageCalls)
+	}
+}
+
 // TestPlugin_ForwardedFromPeerBypassesClient verifies that a session
 // arriving on the host proxy via forward pivot (IsPeerTrusted +
 // IsForwardedFromPeer) bypasses billing. The entry proxy already ran

@@ -540,6 +540,105 @@ func TestEthValidator_MaintenanceAndPlatformOperatorBothSet(t *testing.T) {
 	}
 }
 
+// TestEthValidator_DriverFlagSetByIndexerSigner verifies the happy path:
+// SQL_sentio_driver=1 from a signer matching IndexerAddress flips
+// IsDriver=true. The other two bypass flags stay false because the
+// driver bypass is narrower (usage + commitgate only, keeps rewrite).
+func TestEthValidator_DriverFlagSetByIndexerSigner(t *testing.T) {
+	privKeyHex := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	privKey, _ := crypto.HexToECDSA(privKeyHex)
+	addr := crypto.PubkeyToAddress(privKey.PublicKey).Hex()
+
+	validator := NewEthValidator([]string{addr}, 1*time.Minute, true, false, addr, nil)
+
+	sql := "SELECT 1"
+	sqlHash := keccak256Hex([]byte(sql))
+	token := generateTestToken(t, privKeyHex, time.Now(), sqlHash)
+
+	meta := QueryMeta{
+		SQL: sql,
+		Settings: map[string]string{
+			AuthTokenSettingKey: token,
+			DriverSettingKey:    "1",
+		},
+	}
+	res, err := validator.ValidateQuery(context.Background(), meta)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsDriver {
+		t.Errorf("expected IsDriver=true, got false")
+	}
+	if res.Maintenance {
+		t.Errorf("expected Maintenance=false, got true (driver flag must not imply maintenance)")
+	}
+	if res.PlatformOperator {
+		t.Errorf("expected PlatformOperator=false, got true (driver flag must not imply platform_operator)")
+	}
+}
+
+// TestEthValidator_DriverRejectedFromNonIndexerSigner verifies that
+// SQL_sentio_driver=1 from a signer that does NOT match IndexerAddress
+// is rejected outright — the bypass must not leak to non-indexer
+// callers. Mirrors TestEthValidator_MaintenanceRejected*.
+func TestEthValidator_DriverRejectedFromNonIndexerSigner(t *testing.T) {
+	signerKeyHex := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	signerPriv, _ := crypto.HexToECDSA(signerKeyHex)
+	signerAddr := crypto.PubkeyToAddress(signerPriv.PublicKey).Hex()
+
+	indexerKeyHex := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	indexerPriv, _ := crypto.HexToECDSA(indexerKeyHex)
+	indexerAddr := crypto.PubkeyToAddress(indexerPriv.PublicKey).Hex()
+
+	validator := NewEthValidator([]string{signerAddr}, 1*time.Minute, true, false, indexerAddr, nil)
+
+	sql := "SELECT 1"
+	sqlHash := keccak256Hex([]byte(sql))
+	token := generateTestToken(t, signerKeyHex, time.Now(), sqlHash)
+
+	meta := QueryMeta{
+		SQL: sql,
+		Settings: map[string]string{
+			AuthTokenSettingKey: token,
+			DriverSettingKey:    "1",
+		},
+	}
+	res, err := validator.ValidateQuery(context.Background(), meta)
+	if err == nil {
+		t.Fatal("expected error when SQL_sentio_driver signer != indexer, got nil")
+	}
+	if res.IsDriver {
+		t.Errorf("expected IsDriver=false on rejected request, got true")
+	}
+}
+
+// TestEthValidator_DriverFlagWithoutSetting confirms the success path
+// leaves IsDriver=false when the setting is absent — the flag must not
+// trigger from a successful auth alone.
+func TestEthValidator_DriverFlagWithoutSetting(t *testing.T) {
+	privKeyHex := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	privKey, _ := crypto.HexToECDSA(privKeyHex)
+	addr := crypto.PubkeyToAddress(privKey.PublicKey).Hex()
+
+	validator := NewEthValidator([]string{addr}, 1*time.Minute, true, false, addr, nil)
+
+	sql := "SELECT 1"
+	sqlHash := keccak256Hex([]byte(sql))
+	token := generateTestToken(t, privKeyHex, time.Now(), sqlHash)
+
+	meta := QueryMeta{
+		SQL:      sql,
+		Settings: map[string]string{AuthTokenSettingKey: token},
+	}
+	res, err := validator.ValidateQuery(context.Background(), meta)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsDriver {
+		t.Errorf("expected IsDriver=false when SQL_sentio_driver is unset")
+	}
+}
+
 func TestParseJWS(t *testing.T) {
 	privKeyHex := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	sql := "SELECT 1"

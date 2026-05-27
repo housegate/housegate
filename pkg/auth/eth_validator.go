@@ -151,6 +151,18 @@ func (v *EthValidator) ValidateQuery(ctx context.Context, meta QueryMeta) (Valid
 		}
 		res.PlatformOperator = true
 	}
+	// Driver bypass: gated identically to maintenance (signer must equal
+	// the co-located indexer's address) but narrower in effect — only the
+	// usage and commitgate plugins skip, rewrite still runs. The driver
+	// writes logical database/table names that the rewriter must
+	// translate to physical names; sharing maintenance's full skip would
+	// flow logical names verbatim to ClickHouse and miss the table.
+	if isDriver(meta.Settings) {
+		if v.IndexerAddress == "" || !strings.EqualFold(addr, v.IndexerAddress) {
+			return ValidationResult{}, fmt.Errorf("SQL_sentio_driver is reserved for the co-located indexer; signer %s is not authorized", addr)
+		}
+		res.IsDriver = true
+	}
 	return res, nil
 }
 
@@ -252,6 +264,19 @@ func isMaintenance(settings map[string]string) bool {
 // then enforces the address allowlist before honouring it.
 func isPlatformOperator(settings map[string]string) bool {
 	v, ok := settings[PlatformOperatorSettingKey]
+	if !ok {
+		return false
+	}
+	v = strings.Trim(strings.TrimSpace(v), "\"'")
+	return v == "1" || strings.EqualFold(v, "true")
+}
+
+// isDriver mirrors isMaintenance / isPlatformOperator: same truthy
+// parsing. Presence of a truthy SQL_sentio_driver triggers the narrower
+// driver bypass — the validator then enforces signer == IndexerAddress
+// before honouring it.
+func isDriver(settings map[string]string) bool {
+	v, ok := settings[DriverSettingKey]
 	if !ok {
 		return false
 	}

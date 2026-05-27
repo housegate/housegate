@@ -46,10 +46,17 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 		// pointless and metric-noisy. Platform-operator sessions get
 		// the same bypass — they run privileged platform workflows
 		// that should not be billed against the operator wallet.
-		if snap.Maintenance || snap.PlatformOperator {
+		// Driver sessions (indexer-signed indexer-driver traffic) also
+		// bypass: the driver's write workload is metered separately via
+		// sentio-node's IndexingUsage path (AsyncSave gRPC →
+		// UsageTracker.ReportIndexingUsage on chain), so per-query
+		// CheckBalance/ReportUsage here would double-count and reject
+		// against the indexer's own balance.
+		if snap.Maintenance || snap.PlatformOperator || snap.IsDriver {
 			logger.Debugw("usage check: privileged session bypass",
 				"maintenance", snap.Maintenance,
 				"platform_operator", snap.PlatformOperator,
+				"is_driver", snap.IsDriver,
 				"signer", snap.Identity.UserID,
 			)
 			return nil
