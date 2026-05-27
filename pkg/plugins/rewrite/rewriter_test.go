@@ -102,6 +102,43 @@ func TestOnQuery_MaintenanceSkipsRewrite(t *testing.T) {
 	}
 }
 
+// TestOnQuery_IsDriverStillRunsRewriter verifies that an indexer-driver
+// session (SessionState.IsDriver == true) does NOT bypass rewrite. This
+// is the defining behavioural difference between the IsDriver bypass
+// and the Maintenance bypass: driver traffic still needs the rewriter
+// because the driver writes logical names (CREATE DATABASE x2y2_0 /
+// INSERT INTO x2y2_0.events) and depends on logical→physical
+// translation to land on the right table. A regression that adds
+// IsDriver to this plugin's bypass condition would break driver
+// writes; this test locks the behaviour down.
+func TestOnQuery_IsDriverStillRunsRewriter(t *testing.T) {
+	rw := &fakeRewriter{out: "REWRITTEN-SQL"}
+	p := &Plugin{Factory: &fakeFactory{rw: rw}}
+
+	sess := newSessionForTest(t, 3)
+	sess.State().SetIsDriver(true)
+
+	const original = "INSERT INTO x2y2_0.events FORMAT Native"
+	qctx := &plugin.QueryContext{
+		Session:     sess,
+		OriginalSQL: original,
+		Query:       &chproto.Query{Body: original},
+	}
+
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+
+	if rw.rewriteCalls != 1 {
+		t.Errorf("rewriter.Rewrite calls=%d, want 1 (IsDriver MUST still invoke rewriter)",
+			rw.rewriteCalls)
+	}
+	if qctx.RewrittenSQL != "REWRITTEN-SQL" {
+		t.Errorf("RewrittenSQL=%q, want %q (IsDriver must NOT forward verbatim)",
+			qctx.RewrittenSQL, "REWRITTEN-SQL")
+	}
+}
+
 // TestOnQuery_NonMaintenanceRunsRewriter is the negative control: with
 // Maintenance=false the rewriter must still run. Without this, a bug
 // that always-skips rewriting would also satisfy the maintenance test.
