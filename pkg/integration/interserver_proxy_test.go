@@ -83,20 +83,20 @@ func TestInterserverProxy(t *testing.T) {
 	})
 }
 
-// TestInterserverReplication exercises the full ReplicatedMergeTree
-// part-replication path through two housegate interserver gateways
-// (link B of the keeper-pool design):
+// TestInterserverReplication exercises a full ReplicatedMergeTree workload
+// with BOTH CH↔keeper (9181, link A) and CH↔CH interserver (9009, link B)
+// flowing through housegate:
 //
 //	3-node Keeper quorum         (keeper-1/2/3)
-//	2-node ReplicatedMergeTree   (ch-1, ch-2)
-//	2 interserver gateways        (gw-1, gw-2 — containers on the keeper net)
+//	2 keeper proxies              (kpx-1, kpx-2 — pkg/keeper, front the quorum)
+//	2-node ReplicatedMergeTree   (ch-1, ch-2; <zookeeper> -> their kpx)
+//	2 interserver gateways        (gw-1, gw-2 — pkg/interserver)
 //
-// Each CH advertises its co-located gateway alias (gw-1 / gw-2) as its
-// interserver host, so a peer fetching a part connects to that gateway,
-// which forwards to the source CH's real interserver (9009). Everything is
-// container-to-container on the keeper network — the gateway runs in a
-// container (not the test process) because a CH container cannot reliably
-// dial back to a host process on a user-defined network.
+// Each CH talks ONLY to its co-located housegate proxies: keeper via kpx-N,
+// and part fetches via the peer's gw-N (advertised as interserver_http_host).
+// Everything is container-to-container on the keeper network — the proxies
+// run in containers (not the test process) because a CH container cannot
+// reliably dial back to a host process on a user-defined network.
 //
 // A part only ever flows IN through the SOURCE node's gateway, so we insert
 // in BOTH directions to exercise gw-1 (ch-2 fetches from ch-1) and gw-2
@@ -106,10 +106,18 @@ func TestInterserverProxy(t *testing.T) {
 func TestInterserverReplication(t *testing.T) {
 	cluster := testenv.StartKeeperCluster(t, 3)
 
-	// CH nodes advertise their co-located gateway alias as the interserver
-	// host; their real interserver (9009) stays in-network.
-	ch1 := testenv.StartClickHouseReplicatedNode(t, cluster, "ch-1", "gw-1")
-	ch2 := testenv.StartClickHouseReplicatedNode(t, cluster, "ch-2", "gw-2")
+	// Per-CH keeper proxies (pkg/keeper) front the quorum; each CH points
+	// its <zookeeper> at its own proxy, so ALL keeper-client (9181) traffic
+	// flows through housegate too. Start before CH — CH connects to keeper
+	// at startup to register its replica.
+	testenv.StartKeeperProxy(t, cluster, "kpx-1")
+	testenv.StartKeeperProxy(t, cluster, "kpx-2")
+
+	// CH nodes: <zookeeper> -> their keeper proxy; interserver advertised
+	// via their gateway alias. So BOTH links (9181 keeper, 9009 interserver)
+	// flow through housegate during real replication.
+	ch1 := testenv.StartClickHouseReplicatedNode(t, cluster, "ch-1", "kpx-1:9181", "gw-1")
+	ch2 := testenv.StartClickHouseReplicatedNode(t, cluster, "ch-2", "kpx-2:9181", "gw-2")
 
 	// Gateways forward to each co-located CH's in-network interserver.
 	testenv.StartInterserverGateway(t, cluster, "gw-1", "ch-1:9009")

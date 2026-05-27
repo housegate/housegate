@@ -29,9 +29,12 @@ go_test(
         "upstream_dies_test.go",
         "usage_test.go",
     ],
-    # The interserver-replication test runs this gateway binary in a
-    # container on the keeper Docker network (resolved from runfiles).
-    data = ["//pkg/integration/testenv/cmd/igw"],
+    # The interserver-replication test runs these proxy/gateway binaries in
+    # containers on the keeper Docker network (resolved from runfiles).
+    data = [
+        "//pkg/integration/testenv/cmd/igw",
+        "//pkg/integration/testenv/cmd/kpx",
+    ],
     local = True,
     tags = [
         "manual",

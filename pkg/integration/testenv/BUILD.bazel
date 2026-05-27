@@ -10,6 +10,7 @@ go_library(
         "clickhouse_replicated.go",
         "interserver_gateway.go",
         "keeper.go",
+        "keeper_proxy_container.go",
         "proxy.go",
         "redis_mock.go",
         "rewriter_mock.go",

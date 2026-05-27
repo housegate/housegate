@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "kpx_lib",
+    srcs = ["main.go"],
+    importpath = "housegate/housegate/pkg/integration/testenv/cmd/kpx",
+    visibility = ["//visibility:private"],
+    deps = ["//pkg/keeper"],
+)
+
+go_binary(
+    name = "kpx",
+    embed = [":kpx_lib"],
+    # Static, CGO-free (netgo) so it runs in the alpine proxy container and
+    # resolves Docker network aliases via the Go resolver.
+    pure = "on",
+    static = "on",
+    visibility = ["//visibility:public"],
+)

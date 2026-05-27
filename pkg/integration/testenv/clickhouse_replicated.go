@@ -25,30 +25,32 @@ type ClickHouseReplicatedNode struct {
 // ReplicatedMergeTree replication alongside an existing KeeperCluster.
 //
 // The container joins the Keeper cluster's private Docker network so it
-// discovers keepers (keeper-1/2/3) and peers by name. Its interserver is
-// advertised as interserverGatewayAlias:9009 — i.e. peers fetch this node's
-// parts through the co-located interserver gateway (a container with that
-// alias, see StartInterserverGateway), not from this node directly. The
-// node's real interserver still listens on 9009 in-network for the gateway
-// to forward to; it is deliberately NOT exposed to the host.
+// discovers peers by name. Its <zookeeper> points at keeperEndpoint (a
+// single host:port — typically a keeper-proxy alias like "kpx-1:9181"), so
+// ALL keeper-client (9181) traffic flows through housegate rather than
+// directly to the keepers. Its interserver is advertised as
+// interserverGatewayAlias:9009 — peers fetch this node's parts through the
+// co-located interserver gateway, not from this node directly; the real
+// interserver still listens on 9009 in-network and is NOT exposed to host.
 //
 // interserver_http_port is BOTH the listen port and the advertised port in
 // ClickHouse, so it is fixed at 9009 and the advertised host carries the
 // indirection via the gateway alias.
-func StartClickHouseReplicatedNode(t *testing.T, cluster *KeeperCluster, nodeName, interserverGatewayAlias string) *ClickHouseReplicatedNode {
+func StartClickHouseReplicatedNode(t *testing.T, cluster *KeeperCluster, nodeName, keeperEndpoint, interserverGatewayAlias string) *ClickHouseReplicatedNode {
 	t.Helper()
 	ctx := context.Background()
 
-	keeperCount := len(cluster.containers)
+	kHost, kPort, err := net.SplitHostPort(keeperEndpoint)
+	if err != nil {
+		t.Fatalf("invalid keeperEndpoint %q: %v", keeperEndpoint, err)
+	}
 
 	listenXML := `<clickhouse><listen_host replace="replace">0.0.0.0</listen_host></clickhouse>`
 	macrosXML := fmt.Sprintf(`<clickhouse><macros><shard>01</shard><replica>%s</replica></macros></clickhouse>`, nodeName)
 
-	var keeperSB strings.Builder
-	for i := 1; i <= keeperCount; i++ {
-		fmt.Fprintf(&keeperSB, "<node><host>keeper-%d</host><port>9181</port></node>\n", i)
-	}
-	keeperXML := fmt.Sprintf("<clickhouse>\n\t<zookeeper>\n%s\t<session_timeout_ms>30000</session_timeout_ms>\n\t</zookeeper>\n\t<distributed_ddl><path>/clickhouse/task_queue/ddl</path></distributed_ddl>\n</clickhouse>", keeperSB.String())
+	// Single <zookeeper> node = the keeper-proxy endpoint; CH never sees the
+	// real quorum addresses.
+	keeperXML := fmt.Sprintf("<clickhouse>\n\t<zookeeper>\n\t\t<node><host>%s</host><port>%s</port></node>\n\t\t<session_timeout_ms>30000</session_timeout_ms>\n\t</zookeeper>\n\t<distributed_ddl><path>/clickhouse/task_queue/ddl</path></distributed_ddl>\n</clickhouse>", kHost, kPort)
 
 	// Advertise the co-located gateway alias as the interserver host; CH
 	// still listens on 9009 in-network for the gateway to forward to.

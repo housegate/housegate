@@ -54,16 +54,22 @@ func StartInterserverGateway(t *testing.T, cluster *KeeperCluster, alias, target
 // runfiles. The binary is wired in as a data dependency of the
 // integration_test target (see pkg/integration/BUILD.bazel).
 func igwBinaryPath(t *testing.T) string {
+	return runfileBinary(t, "pkg/integration/testenv/cmd/igw/igw_/igw")
+}
+
+// runfileBinary resolves a bazel-built binary from the test's runfiles by
+// its rules_go output path (<pkg>/<name>_/<name>). Used to mount test-only
+// gateway/proxy binaries into containers. Skips when not run under bazel.
+func runfileBinary(t *testing.T, rel string) string {
 	t.Helper()
 	srcdir := os.Getenv("TEST_SRCDIR")
 	ws := os.Getenv("TEST_WORKSPACE")
 	if srcdir == "" || ws == "" {
-		t.Skip("igw binary requires bazel runfiles (TEST_SRCDIR/TEST_WORKSPACE); run via `bazel test`")
+		t.Skip("binary requires bazel runfiles (TEST_SRCDIR/TEST_WORKSPACE); run via `bazel test`")
 	}
-	// rules_go go_binary output layout: <pkg>/<name>_/<name>.
-	p := filepath.Join(srcdir, ws, "pkg/integration/testenv/cmd/igw/igw_/igw")
+	p := filepath.Join(srcdir, ws, rel)
 	if _, err := os.Stat(p); err != nil {
-		t.Fatalf("igw binary not found at %s: %v\n(add //pkg/integration/testenv/cmd/igw to the integration_test `data`)", p, err)
+		t.Fatalf("binary not found at %s: %v\n(add the go_binary to the integration_test `data`)", p, err)
 	}
 	return p
 }
