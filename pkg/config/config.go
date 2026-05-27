@@ -139,6 +139,10 @@ type Config struct {
 	// keeper-pool design). Disabled when KeeperProxy.Listen is empty.
 	KeeperProxy KeeperProxyConfig `json:"keeper_proxy" yaml:"keeper_proxy"`
 
+	// InterserverProxy is the CH-facing interserver (9009) ingress
+	// gateway (link B). Disabled when InterserverProxy.Listen is empty.
+	InterserverProxy InterserverProxyConfig `json:"interserver_proxy" yaml:"interserver_proxy"`
+
 	// --- Plumbing sections owned by pkg/config ---
 
 	Logging      LoggingConfig      `json:"logging"       yaml:"logging"`
@@ -180,6 +184,31 @@ type KeeperProxyConfig struct {
 
 // Enabled reports whether the keeper proxy is configured.
 func (k KeeperProxyConfig) Enabled() bool { return k.Listen != "" }
+
+// InterserverProxyConfig configures the CH-facing interserver (9009)
+// ingress gateway (link B of the keeper-pool design). Disabled when Listen
+// is empty.
+//
+// Each ClickHouse advertises Listen as its interserver_http_host; the
+// gateway forwards part-replication traffic to the co-located CH's real
+// interserver port (Target), which can therefore stay bound to loopback.
+// Implementation lives in pkg/interserver.
+type InterserverProxyConfig struct {
+	// Listen is the gateway bind address (e.g. ":9009"). Empty disables
+	// the interserver proxy.
+	Listen string `json:"listen" yaml:"listen"`
+	// Target is the co-located ClickHouse's real interserver address
+	// (host:port, e.g. "127.0.0.1:9010"). Required when Listen is set.
+	Target string `json:"target" yaml:"target"`
+	// AllowCIDRs optionally restricts which source IPs may use the
+	// gateway (typically peer subnets). Empty allows all.
+	AllowCIDRs []string `json:"allow_cidrs" yaml:"allow_cidrs"`
+	// DialTimeout bounds the dial to the local CH interserver (default 10s).
+	DialTimeout Duration `json:"dial_timeout" yaml:"dial_timeout"`
+}
+
+// Enabled reports whether the interserver proxy is configured.
+func (i InterserverProxyConfig) Enabled() bool { return i.Listen != "" }
 
 // NetworkStateConfig configures the NetworkState consumer (proxy
 // infrastructure, not a plugin).
@@ -344,6 +373,22 @@ func (c *Config) Validate() error {
 		case "", "any_voter", "leader_pref":
 		default:
 			errs = append(errs, fmt.Errorf("keeper_proxy.strategy: unknown %q (want any_voter or leader_pref)", c.KeeperProxy.Strategy))
+		}
+	}
+
+	if c.InterserverProxy.Enabled() {
+		if _, _, err := net.SplitHostPort(c.InterserverProxy.Listen); err != nil {
+			errs = append(errs, fmt.Errorf("interserver_proxy.listen: invalid host:port %q: %w", c.InterserverProxy.Listen, err))
+		}
+		if c.InterserverProxy.Target == "" {
+			errs = append(errs, errors.New("interserver_proxy.target: local CH interserver host:port is required when interserver_proxy.listen is set"))
+		} else if _, _, err := net.SplitHostPort(c.InterserverProxy.Target); err != nil {
+			errs = append(errs, fmt.Errorf("interserver_proxy.target: invalid host:port %q: %w", c.InterserverProxy.Target, err))
+		}
+		for i, c := range c.InterserverProxy.AllowCIDRs {
+			if _, _, err := net.ParseCIDR(c); err != nil {
+				errs = append(errs, fmt.Errorf("interserver_proxy.allow_cidrs[%d]: invalid CIDR %q: %w", i, c, err))
+			}
 		}
 	}
 

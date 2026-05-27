@@ -6,6 +6,7 @@ go_library(
         "agent.go",
         "cli.go",
         "clickhouse.go",
+        "clickhouse_interserver.go",
         "keeper.go",
         "proxy.go",
         "redis_mock.go",
