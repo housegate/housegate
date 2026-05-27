@@ -625,7 +625,7 @@ func buildAgent(opts Options, rf *redisFactory) (*builtServer, error) {
 		ConnLifecyclePlugins:     []plugin.ConnLifecyclePlugin{metrics},
 		HandshakeCompletePlugins: []plugin.HandshakeCompletePlugin{metrics},
 		QueryPlugins: []plugin.QueryPlugin{
-			&agent.Plugin{Signer: signer, Observer: obs, Owner: cfg.Agent.Owner},
+			&agent.Plugin{Signer: signer, Observer: obs, Owner: cfg.Agent.Owner, IsDriver: cfg.Agent.Driver},
 			metrics,
 		},
 		ExceptionPlugins: []plugin.ExceptionPlugin{metrics},

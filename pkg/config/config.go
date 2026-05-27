@@ -367,6 +367,7 @@ func Default() Config {
 			Upstream:      EnvOrDefault("HOUSEGATE_AGENT_UPSTREAM", ""),
 			PrivateKeyHex: EnvOrDefault("HOUSEGATE_AGENT_KEY", ""),
 			Owner:         EnvOrDefault("HOUSEGATE_AGENT_OWNER", ""),
+			Driver:        EnvOrDefault("HOUSEGATE_AGENT_DRIVER", "") == "true",
 		},
 		Usage: usage.Config{
 			Enabled: false,

@@ -63,6 +63,7 @@ func loadConfigWithOverrides() config.Config {
 	agentUpstream := flag.String("agent-upstream", "", "server-side proxy address, e.g. 10.0.0.8:9001 (required in agent mode)")
 	agentKey := flag.String("agent-key", "", "agent Ethereum private key hex for JWS signing (prefer env var HOUSEGATE_AGENT_KEY)")
 	agentOwner := flag.String("agent-owner", "", "billed Ethereum address (owner) when -agent-key is an operator key (overrides config/env HOUSEGATE_AGENT_OWNER)")
+	agentDriver := flag.Bool("agent-driver", false, "mark outgoing queries as indexer-driver traffic (injects SQL_sentio_driver=1; upstream still gates on signer == indexer)")
 
 	stateSource := flag.String("state", "", "NetworkState source: yaml path, redis addr, or RPC URL e.g. http://node:10003 (overrides config/env HOUSEGATE_NETWORK_STATE_SOURCE)")
 	listenAddr := flag.String("listen", "", "proxy listen address, e.g. :9001 (overrides config/env)")
@@ -117,6 +118,9 @@ func loadConfigWithOverrides() config.Config {
 	}
 	if explicitFlags["agent-owner"] {
 		cfg.Agent.Owner = *agentOwner
+	}
+	if explicitFlags["agent-driver"] {
+		cfg.Agent.Driver = *agentDriver
 	}
 	if explicitFlags["state"] {
 		cfg.NetworkState.Source = *stateSource
