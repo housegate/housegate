@@ -86,6 +86,20 @@ func TestParseServerState(t *testing.T) {
 	}
 }
 
+func TestParseStrategy(t *testing.T) {
+	cases := map[string]Strategy{
+		"leader_pref": LeaderPref,
+		"any_voter":   AnyVoter,
+		"":            AnyVoter, // default
+		"bogus":       AnyVoter, // unknown falls back to any_voter
+	}
+	for in, want := range cases {
+		if got := ParseStrategy(in); got != want {
+			t.Errorf("ParseStrategy(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
 func TestTrackerDiscoversQuorumAndLeader(t *testing.T) {
 	ctx := context.Background()
 	leader := newFakeKeeper(t, StateLeader)

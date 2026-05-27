@@ -54,6 +54,7 @@ go_test(
     name = "housegate_test",
     srcs = [
         "agent_auto_discover_integration_test.go",
+        "build_proxies_test.go",
         "build_test.go",
         "internal_port_integration_test.go",
         "pivot_integration_test.go",
@@ -66,6 +67,8 @@ go_test(
         "//pkg/chproto",
         "//pkg/chsession",
         "//pkg/config",
+        "//pkg/interserver",
+        "//pkg/keeper",
         "//pkg/network",
         "//pkg/peer",
         "//pkg/plugin",
