@@ -77,6 +77,7 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 			"address", res.Address,
 			"maintenance", res.Maintenance,
 			"platform_operator", res.PlatformOperator,
+			"is_driver", res.IsDriver,
 		)
 	}
 	// Maintenance bypass: the validator only signals true after a
@@ -93,13 +94,19 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	if res.PlatformOperator {
 		state.SetPlatformOperator(true)
 	}
+	// Driver bypass: narrower than maintenance — only usage and commitgate
+	// short-circuit, rewrite continues to run. Downstream plugins consult
+	// Snapshot().IsDriver.
+	if res.IsDriver {
+		state.SetIsDriver(true)
+	}
 
 	// Operator-on-behalf-of-owner resolution. Skip on the bypass paths —
-	// maintenance / platform-operator sessions short-circuit every gate
-	// downstream, so resolving an effective principal there is wasted
-	// work and would surface confusing log lines about non-existent
-	// operator relations.
-	if !res.Maintenance && !res.PlatformOperator {
+	// maintenance / platform-operator / driver sessions short-circuit
+	// usage downstream (driver also bypasses commitgate), so resolving an
+	// effective principal there is wasted work and would surface
+	// confusing log lines about non-existent operator relations.
+	if !res.Maintenance && !res.PlatformOperator && !res.IsDriver {
 		if err := p.resolveOwner(ctx, qctx, res.Address, settings); err != nil {
 			return err
 		}

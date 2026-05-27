@@ -26,6 +26,7 @@ const (
 	AuthTokenSettingKey        = "SQL_x_auth_token"
 	MaintenanceSettingKey      = "SQL_sentio_maintenance"
 	PlatformOperatorSettingKey = "SQL_sentio_platform_operator"
+	DriverSettingKey           = "SQL_sentio_driver"
 	PayerSettingKey            = "SQL_x_payer"
 )
 
@@ -82,6 +83,15 @@ type ValidationResult struct {
 	// commitgate skip — but gated on operator identity rather than
 	// indexer identity.
 	PlatformOperator bool
+
+	// IsDriver is true when the caller declared this query as
+	// indexer-driver traffic (via SQL_sentio_driver) AND the recovered
+	// signer matches the validator's IndexerAddress. Narrower than
+	// Maintenance: usage and commitgate plugins skip, but rewrite still
+	// runs because the driver writes logical names that require
+	// logical→physical translation. Gated identically to Maintenance —
+	// the setting alone is not sufficient.
+	IsDriver bool
 }
 
 // Validator authenticates a single query and, on success, reports the

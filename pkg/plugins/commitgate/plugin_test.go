@@ -614,6 +614,31 @@ func TestOnQuery_MaintenanceSkipsObservers(t *testing.T) {
 	}
 }
 
+// 18b. Driver sessions short-circuit observer dispatch — same shape as
+//      Maintenance but narrower elsewhere (rewrite still runs). The
+//      guard exists so the driver's CREATE DATABASE on a processor's
+//      logical DB does not get registered as a user database on chain.
+func TestOnQuery_DriverSkipsObservers(t *testing.T) {
+	obs := &fakeObserver{types: []sqlmeta.StatementType{sqlmeta.StatementTypeCreateDatabase}}
+	p := NewPlugin([]Observer{obs})
+	qctx := newQctx(sqlmeta.StatementTypeCreateDatabase,
+		[]sqlmeta.AccessedTable{tableEntry("x2y2_0", "", "x2y2_0")})
+	qctx.Session.State().SetIsDriver(true)
+
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	if len(obs.calls) != 0 {
+		t.Errorf("observer fired %d times under IsDriver, want 0", len(obs.calls))
+	}
+	if got := stashedEvent(qctx.Session); got != nil {
+		t.Errorf("CommitGateEvent stashed under IsDriver: %+v", got)
+	}
+	if qctx.AbortWithSuccess {
+		t.Errorf("qctx.AbortWithSuccess=true under IsDriver, want false")
+	}
+}
+
 // 19. Event.Settings carries the per-query Settings the client supplied
 //     (e.g. x_auth_token, SQL_sentio_routed) so observers can branch on
 //     trust-domain markers without reaching back to the Query packet.
