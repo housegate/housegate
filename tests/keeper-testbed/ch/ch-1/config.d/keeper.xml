@@ -1,0 +1,15 @@
+<clickhouse>
+    <!-- The whole transparent-endpoint premise: CH points <zookeeper> at ONE
+         stable address (its co-located kproxy), never at the real quorum.
+         Quorum membership churn is absorbed behind kproxy. -->
+    <zookeeper>
+        <node>
+            <host>kproxy-1</host>
+            <port>9181</port>
+        </node>
+        <session_timeout_ms>30000</session_timeout_ms>
+    </zookeeper>
+    <distributed_ddl>
+        <path>/clickhouse/task_queue/ddl</path>
+    </distributed_ddl>
+</clickhouse>

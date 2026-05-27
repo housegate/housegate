@@ -135,6 +135,10 @@ type Config struct {
 	ConcurrencyLimit concurrency.Config  `json:"concurrency_limit" yaml:"concurrency_limit"`
 	State            sessionstate.Config `json:"state"             yaml:"state"`
 
+	// KeeperProxy is the CH-facing keeper proxy (link A of the
+	// keeper-pool design). Disabled when KeeperProxy.Listen is empty.
+	KeeperProxy KeeperProxyConfig `json:"keeper_proxy" yaml:"keeper_proxy"`
+
 	// --- Plumbing sections owned by pkg/config ---
 
 	Logging      LoggingConfig      `json:"logging"       yaml:"logging"`
@@ -149,6 +153,33 @@ type LoggingConfig struct {
 	MaxQueryBytes int  `json:"max_query_bytes"  yaml:"max_query_bytes"`
 	MaxDataBytes  int  `json:"max_data_bytes"   yaml:"max_data_bytes"`
 }
+
+// KeeperProxyConfig configures the CH-facing keeper proxy (link A of the
+// keeper-pool design). Disabled when Listen is empty.
+//
+// A co-located ClickHouse points its <zookeeper> at Listen; the proxy
+// forwards the keeper-client byte stream to a live quorum member and
+// re-steers on membership change. The proxy is L4 (protocol-unaware) and
+// never participates in Raft. Implementation lives in pkg/keeper.
+type KeeperProxyConfig struct {
+	// Listen is the keeper-client bind address (e.g. ":9181"). Empty
+	// disables the keeper proxy.
+	Listen string `json:"listen" yaml:"listen"`
+	// Members is the static list of keeper-client endpoints (host:port)
+	// forming the quorum this proxy fronts. Required when Listen is set;
+	// NetworkState-sourced membership is a future enhancement.
+	Members []string `json:"members" yaml:"members"`
+	// Strategy selects the steering target: "any_voter" (default) or
+	// "leader_pref".
+	Strategy string `json:"strategy" yaml:"strategy"`
+	// ProbeInterval between 4LW health sweeps (default 1s).
+	ProbeInterval Duration `json:"probe_interval" yaml:"probe_interval"`
+	// ProbeTimeout per 4LW probe (default 2s).
+	ProbeTimeout Duration `json:"probe_timeout" yaml:"probe_timeout"`
+}
+
+// Enabled reports whether the keeper proxy is configured.
+func (k KeeperProxyConfig) Enabled() bool { return k.Listen != "" }
 
 // NetworkStateConfig configures the NetworkState consumer (proxy
 // infrastructure, not a plugin).
@@ -294,6 +325,25 @@ func (c *Config) Validate() error {
 	if c.InternalListen != "" {
 		if _, _, err := net.SplitHostPort(c.InternalListen); err != nil {
 			errs = append(errs, fmt.Errorf("internal_listen: invalid host:port %q: %w", c.InternalListen, err))
+		}
+	}
+
+	if c.KeeperProxy.Enabled() {
+		if _, _, err := net.SplitHostPort(c.KeeperProxy.Listen); err != nil {
+			errs = append(errs, fmt.Errorf("keeper_proxy.listen: invalid host:port %q: %w", c.KeeperProxy.Listen, err))
+		}
+		if len(c.KeeperProxy.Members) == 0 {
+			errs = append(errs, errors.New("keeper_proxy.members: at least one keeper endpoint is required when keeper_proxy.listen is set"))
+		}
+		for i, m := range c.KeeperProxy.Members {
+			if _, _, err := net.SplitHostPort(m); err != nil {
+				errs = append(errs, fmt.Errorf("keeper_proxy.members[%d]: invalid host:port %q: %w", i, m, err))
+			}
+		}
+		switch c.KeeperProxy.Strategy {
+		case "", "any_voter", "leader_pref":
+		default:
+			errs = append(errs, fmt.Errorf("keeper_proxy.strategy: unknown %q (want any_voter or leader_pref)", c.KeeperProxy.Strategy))
 		}
 	}
 

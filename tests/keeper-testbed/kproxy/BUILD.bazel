@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "kproxy_lib",
+    srcs = ["main.go"],
+    importpath = "housegate/housegate/tests/keeper-testbed/kproxy",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "kproxy",
+    embed = [":kproxy_lib"],
+    visibility = ["//visibility:public"],
+)

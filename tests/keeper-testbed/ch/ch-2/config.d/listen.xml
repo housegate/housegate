@@ -1,0 +1,5 @@
+<clickhouse>
+    <!-- See ch-1/config.d/listen.xml: open all interfaces so CH<->CH
+         interserver (9009) part fetch works on the docker network. -->
+    <listen_host replace="replace">0.0.0.0</listen_host>
+</clickhouse>

@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "keeper",
+    srcs = [
+        "fourlw.go",
+        "server.go",
+        "tracker.go",
+    ],
+    importpath = "housegate/housegate/pkg/keeper",
+    visibility = ["//visibility:public"],
+    deps = ["//pkg/log"],
+)
+
+go_test(
+    name = "keeper_test",
+    srcs = ["keeper_test.go"],
+    embed = [":keeper"],
+)

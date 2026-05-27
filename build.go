@@ -15,6 +15,7 @@ import (
 	"housegate/housegate/pkg/cluster"
 	"housegate/housegate/pkg/config"
 	"housegate/housegate/pkg/credentials"
+	"housegate/housegate/pkg/keeper"
 	"housegate/housegate/pkg/log"
 	"housegate/housegate/pkg/network"
 	"housegate/housegate/pkg/plugin"
@@ -133,12 +134,19 @@ func buildClusterManager(cfg *config.Config) (*cluster.Manager, error) {
 	return nil, nil
 }
 
-// serverListener pairs a *proxy.Server with the address it should bind
+// listenerServer is the minimal contract proxyImpl needs from anything it
+// binds and serves: the CH-native *proxy.Server and the L4 *keeper.Server
+// both satisfy it.
+type listenerServer interface {
+	Serve(ctx context.Context, ln net.Listener) error
+}
+
+// serverListener pairs a listenerServer with the address it should bind
 // and a human-readable label used in logs and error messages.
 type serverListener struct {
-	Server     *proxy.Server
+	Server     listenerServer
 	ListenAddr string
-	Label      string // "external" | "internal" | "agent" | "forwarding"
+	Label      string // "external" | "internal" | "agent" | "forwarding" | "keeper"
 }
 
 // builtServer is what each per-mode builder returns to the proxyImpl.
@@ -584,6 +592,22 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		})
 	}
 
+	// CH-facing keeper proxy (link A of the keeper-pool design). When
+	// configured it rides alongside the CH listeners as its own bound
+	// listener. It is a self-contained L4 relay (pkg/keeper) and shares
+	// nothing with the CH-native plugin chain.
+	if cfg.KeeperProxy.Enabled() {
+		ks, err := buildKeeperServer(cfg.KeeperProxy)
+		if err != nil {
+			return nil, fmt.Errorf("keeper proxy: %w", err)
+		}
+		listeners = append(listeners, serverListener{
+			Server:     ks,
+			ListenAddr: cfg.KeeperProxy.Listen,
+			Label:      "keeper",
+		})
+	}
+
 	return &builtServer{
 		listeners: listeners,
 		preServe: func(ctx context.Context) {
@@ -603,6 +627,22 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			}
 		},
 	}, nil
+}
+
+// buildKeeperServer translates the KeeperProxyConfig into a running-ready
+// keeper.Server (with its quorum Tracker). Members come straight from
+// config today; a NetworkState-sourced member feed is a future
+// enhancement (SetMembers on quorum-membership change).
+func buildKeeperServer(cfg config.KeeperProxyConfig) (*keeper.Server, error) {
+	tracker := keeper.NewTracker(keeper.TrackerConfig{
+		Members:       cfg.Members,
+		ProbeInterval: cfg.ProbeInterval.Duration,
+		ProbeTimeout:  cfg.ProbeTimeout.Duration,
+	})
+	return keeper.NewServer(keeper.ServerConfig{
+		Tracker:  tracker,
+		Strategy: keeper.ParseStrategy(cfg.Strategy),
+	})
 }
 
 func buildAgent(opts Options, rf *redisFactory) (*builtServer, error) {

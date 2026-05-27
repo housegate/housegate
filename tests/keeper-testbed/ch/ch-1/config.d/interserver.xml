@@ -1,0 +1,6 @@
+<clickhouse>
+    <!-- Phase 0 keeps the interserver (9009) part-fetch path DIRECT CH<->CH so
+         A4 can observe replication resuming after a keeper reconnect. Routing
+         9009 through housegate is link B / Phase 2. -->
+    <interserver_http_host>ch-1</interserver_http_host>
+</clickhouse>

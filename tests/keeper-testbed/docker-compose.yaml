@@ -1,0 +1,81 @@
+# Phase 0 testbed for the housegate keeper-pool work.
+#
+#   3 x clickhouse-keeper:25.8   -> a 3-node Raft quorum (keeper-1/2/3)
+#   2 x kproxy                   -> L4 stand-in for housegate's keeper_proxy,
+#                                   one co-located per CH, /drop + /retarget control
+#   2 x clickhouse-server:25.8   -> two replicas of one ReplicatedMergeTree;
+#                                   each <zookeeper> points at its local kproxy
+#
+# CH only ever talks to its co-located kproxy (9181). kproxy forwards to the
+# live quorum. Used to run A4: force-drop the proxy and watch CH self-heal.
+name: keeper-testbed
+
+x-keeper: &keeper-common
+  image: clickhouse/clickhouse-keeper:25.8
+  ulimits:
+    nofile: { soft: 262144, hard: 262144 }
+  restart: on-failure
+
+x-ch: &ch-common
+  image: clickhouse/clickhouse-server:25.8
+  ulimits:
+    nofile: { soft: 262144, hard: 262144 }
+  restart: on-failure
+
+services:
+  keeper-1:
+    <<: *keeper-common
+    hostname: keeper-1
+    container_name: kt-keeper-1
+    volumes:
+      - ./keeper/keeper-1.xml:/etc/clickhouse-keeper/keeper_config.xml:ro
+  keeper-2:
+    <<: *keeper-common
+    hostname: keeper-2
+    container_name: kt-keeper-2
+    volumes:
+      - ./keeper/keeper-2.xml:/etc/clickhouse-keeper/keeper_config.xml:ro
+  keeper-3:
+    <<: *keeper-common
+    hostname: keeper-3
+    container_name: kt-keeper-3
+    volumes:
+      - ./keeper/keeper-3.xml:/etc/clickhouse-keeper/keeper_config.xml:ro
+
+  kproxy-1:
+    build: ./kproxy
+    container_name: kt-kproxy-1
+    command: ["-listen", ":9181", "-control", ":8181", "-upstreams", "keeper-1:9181,keeper-2:9181,keeper-3:9181"]
+    ports:
+      - "8181:8181" # control endpoint on host:8181
+    depends_on: [keeper-1, keeper-2, keeper-3]
+    restart: on-failure
+  kproxy-2:
+    build: ./kproxy
+    container_name: kt-kproxy-2
+    command: ["-listen", ":9181", "-control", ":8181", "-upstreams", "keeper-1:9181,keeper-2:9181,keeper-3:9181"]
+    ports:
+      - "8182:8181" # control endpoint on host:8182
+    depends_on: [keeper-1, keeper-2, keeper-3]
+    restart: on-failure
+
+  ch-1:
+    <<: *ch-common
+    hostname: ch-1
+    container_name: kt-ch-1
+    volumes:
+      - ./ch/ch-1/config.d:/etc/clickhouse-server/config.d:ro
+    ports:
+      - "9001:9000"
+      - "8121:8123"
+    depends_on: [kproxy-1]
+  ch-2:
+    <<: *ch-common
+    hostname: ch-2
+    container_name: kt-ch-2
+    volumes:
+      - ./ch/ch-2/config.d:/etc/clickhouse-server/config.d:ro
+    ports:
+      - "9002:9000"
+      - "8122:8123"
+    depends_on: [kproxy-2]

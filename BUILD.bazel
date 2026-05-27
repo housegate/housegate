@@ -25,6 +25,7 @@ go_library(
         "//pkg/cluster",
         "//pkg/config",
         "//pkg/credentials",
+        "//pkg/keeper",
         "//pkg/log",
         "//pkg/network",
         "//pkg/plugin",
