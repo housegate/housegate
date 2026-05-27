@@ -50,6 +50,11 @@ func StartKeeperCluster(t *testing.T, n int) *KeeperCluster {
 	return kc
 }
 
+// DockerNetwork returns the private Docker network shared by all keeper
+// nodes. Callers (e.g. StartClickHouseReplicatedNode) join CH containers to
+// this network so they can discover keepers by their Raft hostnames.
+func (kc *KeeperCluster) DockerNetwork() *testcontainers.DockerNetwork { return kc.net }
+
 // Stop halts node idx without removing it (failover scenarios). Terminate
 // at cleanup is idempotent against an already-stopped container.
 func (kc *KeeperCluster) Stop(t *testing.T, idx int) {
