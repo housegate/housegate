@@ -153,6 +153,51 @@ func TestTrackerSetMembersDropsRemoved(t *testing.T) {
 	}
 }
 
+func TestTrackerMembersFuncRefreshes(t *testing.T) {
+	ctx := context.Background()
+	a := newFakeKeeper(t, StateLeader)
+	b := newFakeKeeper(t, StateFollower)
+	c := newFakeKeeper(t, StateFollower)
+
+	var mu sync.Mutex
+	current := []string{a.addr(), b.addr()}
+	tr := NewTracker(TrackerConfig{
+		MembersFunc:  func() []string { mu.Lock(); defer mu.Unlock(); return append([]string(nil), current...) },
+		ProbeTimeout: 500 * time.Millisecond,
+	})
+
+	tr.ProbeOnce(ctx)
+	if got := len(tr.Live()); got != 2 {
+		t.Fatalf("initial Live() = %d, want 2", got)
+	}
+
+	// Reconfig: drop b, add c — the next sweep must pick it up.
+	mu.Lock()
+	current = []string{a.addr(), c.addr()}
+	mu.Unlock()
+	tr.ProbeOnce(ctx)
+	live := tr.Live()
+	want := map[string]bool{a.addr(): true, c.addr(): true}
+	if len(live) != 2 {
+		t.Fatalf("after reconfig Live() = %v, want 2 members", live)
+	}
+	for _, l := range live {
+		if !want[l] {
+			t.Errorf("unexpected live member %s after reconfig (b should be dropped)", l)
+		}
+	}
+
+	// An empty result is ignored — the proxy keeps its current members
+	// rather than going dark on a transient empty read.
+	mu.Lock()
+	current = nil
+	mu.Unlock()
+	tr.ProbeOnce(ctx)
+	if got := len(tr.Live()); got != 2 {
+		t.Fatalf("empty MembersFunc must be ignored, Live() = %d, want 2", got)
+	}
+}
+
 // startProxy launches a keeper.Server in front of the tracker on an
 // ephemeral port and returns the server plus its bound address.
 func startProxy(t *testing.T, ctx context.Context, tr *Tracker, strat Strategy) (*Server, string) {

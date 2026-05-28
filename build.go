@@ -598,7 +598,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	// listener. It is a self-contained L4 relay (pkg/keeper) and shares
 	// nothing with the CH-native plugin chain.
 	if cfg.KeeperProxy.Enabled() {
-		ks, err := buildKeeperServer(cfg.KeeperProxy)
+		ks, err := buildKeeperServer(cfg.KeeperProxy, reg)
 		if err != nil {
 			return nil, fmt.Errorf("keeper proxy: %w", err)
 		}
@@ -646,12 +646,14 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 }
 
 // buildKeeperServer translates the KeeperProxyConfig into a running-ready
-// keeper.Server (with its quorum Tracker). Members come straight from
-// config today; a NetworkState-sourced member feed is a future
-// enhancement (SetMembers on quorum-membership change).
-func buildKeeperServer(cfg config.KeeperProxyConfig) (*keeper.Server, error) {
+// keeper.Server (with its quorum Tracker). cfg.Members is the bootstrap
+// set; when the NetworkState exposes the optional registry.KeeperPool
+// capability, the tracker additionally tracks live membership from it and
+// re-steers when the quorum is reconfigured (architecture.md §4).
+func buildKeeperServer(cfg config.KeeperProxyConfig, reg registry.Registry) (*keeper.Server, error) {
 	tracker := keeper.NewTracker(keeper.TrackerConfig{
 		Members:       cfg.Members,
+		MembersFunc:   keeperMembersFunc(reg),
 		ProbeInterval: cfg.ProbeInterval.Duration,
 		ProbeTimeout:  cfg.ProbeTimeout.Duration,
 	})
@@ -659,6 +661,17 @@ func buildKeeperServer(cfg config.KeeperProxyConfig) (*keeper.Server, error) {
 		Tracker:  tracker,
 		Strategy: keeper.ParseStrategy(cfg.Strategy),
 	})
+}
+
+// keeperMembersFunc returns a live keeper-quorum membership source when reg
+// implements the optional registry.KeeperPool capability (e.g. a
+// chain-backed Registry observing the keeper-pool-changed event); nil
+// otherwise, in which case the proxy runs on its static configured members.
+func keeperMembersFunc(reg registry.Registry) func() []string {
+	if kp, ok := reg.(registry.KeeperPool); ok {
+		return kp.KeeperPoolMembers
+	}
+	return nil
 }
 
 // buildInterserverServer translates the InterserverProxyConfig into a

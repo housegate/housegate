@@ -22,6 +22,12 @@ type InMemoryNetworkState struct {
 	DatabaseInfos        map[Database]DatabaseInfo
 	DatabasePermissions  map[AccountAddress]DatabasePermissions
 	Operators            map[AccountAddress]map[AccountAddress]bool
+
+	// KeeperPoolEndpoints is the current keeper quorum membership
+	// (keeper-client host:port). Satisfies the optional registry.KeeperPool
+	// capability so the keeper proxy can track live membership in tests and
+	// local/yaml deployments. Empty means "unknown" (no update).
+	KeeperPoolEndpoints []string
 }
 
 // NewInMemoryNetworkState returns an empty InMemoryNetworkState with
@@ -35,6 +41,28 @@ func NewInMemoryNetworkState() *InMemoryNetworkState {
 		DatabasePermissions:  make(map[AccountAddress]DatabasePermissions),
 		Operators:            make(map[AccountAddress]map[AccountAddress]bool),
 	}
+}
+
+// --- registry.KeeperPool (optional)
+
+// KeeperPoolMembers returns a copy of the current keeper quorum endpoints,
+// or nil when unknown. Satisfies registry.KeeperPool.
+func (s *InMemoryNetworkState) KeeperPoolMembers() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.KeeperPoolEndpoints) == 0 {
+		return nil
+	}
+	return append([]string(nil), s.KeeperPoolEndpoints...)
+}
+
+// SetKeeperPool replaces the keeper quorum membership. Test/local helper
+// that mirrors how a chain-backed Registry would update on the on-chain
+// keeper-pool-changed event.
+func (s *InMemoryNetworkState) SetKeeperPool(members ...string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.KeeperPoolEndpoints = append([]string(nil), members...)
 }
 
 // --- registry.Topology

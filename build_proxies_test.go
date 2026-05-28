@@ -84,6 +84,27 @@ func TestBuildServer_NoProxyListenersWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestKeeperMembersFunc_FromNetworkState(t *testing.T) {
+	ns := network.NewInMemoryNetworkState()
+	ns.SetKeeperPool("k1:9181", "k2:9181")
+
+	f := keeperMembersFunc(ns)
+	if f == nil {
+		t.Fatal("expected non-nil MembersFunc when NetworkState implements registry.KeeperPool")
+	}
+	got := f()
+	if len(got) != 2 || got[0] != "k1:9181" || got[1] != "k2:9181" {
+		t.Fatalf("members func returned %v, want [k1:9181 k2:9181]", got)
+	}
+
+	// The func must reflect live updates so a reconfig is picked up.
+	ns.SetKeeperPool("k1:9181", "k3:9181")
+	got = f()
+	if len(got) != 2 || got[1] != "k3:9181" {
+		t.Fatalf("members func did not reflect SetKeeperPool update: %v", got)
+	}
+}
+
 func TestBuildInterserverServer_CIDRParsing(t *testing.T) {
 	if _, err := buildInterserverServer(config.InterserverProxyConfig{
 		Listen: ":9009", Target: "127.0.0.1:9010", AllowCIDRs: []string{"not-a-cidr"},

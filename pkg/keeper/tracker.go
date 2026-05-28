@@ -29,9 +29,15 @@ type Member struct {
 // TrackerConfig configures quorum health tracking.
 type TrackerConfig struct {
 	// Members is the initial expected keeper-client endpoint set
-	// (host:port). May be updated at runtime via SetMembers (e.g. when a
-	// NetworkState quorum-membership change arrives).
+	// (host:port). May be updated at runtime via SetMembers.
 	Members []string
+	// MembersFunc, when non-nil, is the live source of quorum membership
+	// (e.g. backed by NetworkState observing the on-chain keeper-pool
+	// change). It is consulted before every probe sweep; a non-empty
+	// result replaces the member set so the proxy tracks reconfigurations
+	// (added/removed keepers). An empty/nil result is ignored — the
+	// current members are kept rather than going dark on a transient read.
+	MembersFunc func() []string
 	// ProbeInterval between health sweeps (default 1s).
 	ProbeInterval time.Duration
 	// ProbeTimeout per 4LW probe (default 2s).
@@ -43,6 +49,7 @@ type TrackerConfig struct {
 type Tracker struct {
 	probeInterval time.Duration
 	probeTimeout  time.Duration
+	membersFunc   func() []string
 
 	mu      sync.RWMutex
 	members []string
@@ -63,6 +70,7 @@ func NewTracker(cfg TrackerConfig) *Tracker {
 	t := &Tracker{
 		probeInterval: pi,
 		probeTimeout:  pt,
+		membersFunc:   cfg.MembersFunc,
 		state:         map[string]Member{},
 	}
 	t.SetMembers(cfg.Members)
@@ -104,7 +112,15 @@ func (t *Tracker) Run(ctx context.Context) {
 }
 
 // ProbeOnce runs one health sweep across all expected members in parallel.
+// If a live membership source (MembersFunc) is configured, the member set
+// is refreshed from it first, so a reconfigured quorum is picked up.
 func (t *Tracker) ProbeOnce(ctx context.Context) {
+	if t.membersFunc != nil {
+		if m := t.membersFunc(); len(m) > 0 {
+			t.SetMembers(m)
+		}
+	}
+
 	t.mu.RLock()
 	members := append([]string(nil), t.members...)
 	t.mu.RUnlock()
