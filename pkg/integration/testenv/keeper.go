@@ -79,6 +79,66 @@ func (kc *KeeperCluster) Stop(t *testing.T, idx int) {
 	}
 }
 
+// AddNode starts a fresh keeper container that joins the cluster as
+// server_id `id`. The caller is responsible for driving the keeper-side
+// reconfig add against the existing quorum (e.g. via the orchestrator);
+// this helper just brings the new process up with a raft_configuration
+// that covers the post-reconfig membership (architecture.md §4: the
+// joining node's config must include the union, else it steps down with
+// "this node has been removed").
+//
+// prefix MUST match the cluster's existing prefix; raftConfigPrefixes
+// gives the orchestrator-test the union it expects. Returns the new
+// node's alias ("<prefix>-<id>") and host-reachable client endpoint.
+func (kc *KeeperCluster) AddNode(t *testing.T, prefix string, id int, raftConfigPrefixes []int) (alias, endpoint string) {
+	t.Helper()
+	ctx := context.Background()
+	alias = fmt.Sprintf("%s-%d", prefix, id)
+
+	cfg := keeperConfigXMLForIDs(prefix, id, raftConfigPrefixes)
+	req := testcontainers.ContainerRequest{
+		Image:          keeperImage,
+		ExposedPorts:   []string{"9181/tcp"},
+		Networks:       []string{kc.net.Name},
+		NetworkAliases: map[string][]string{kc.net.Name: {alias}},
+		Files: []testcontainers.ContainerFile{{
+			Reader:            strings.NewReader(cfg),
+			ContainerFilePath: "/etc/clickhouse-keeper/keeper_config.xml",
+			FileMode:          0o644,
+		}},
+		// A keeper joining an existing cluster does NOT serve client port
+		// 9181 until reconfig add admits it (architecture.md §4). Wait
+		// for the very first stdout line ("Processing configuration
+		// file ...") as proof the process got off the ground; that's
+		// enough for the orchestrator to drive the reconfig that brings
+		// 9181 up. ForListeningPort would hang until admission.
+		WaitingFor: wait.ForLog("Processing configuration file").WithStartupTimeout(60 * time.Second),
+	}
+	ctr, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
+	if err != nil {
+		t.Fatalf("AddNode %s: %v", alias, err)
+	}
+	t.Cleanup(func() { _ = ctr.Terminate(context.Background()) })
+
+	host, err := ctr.Host(ctx)
+	if err != nil {
+		t.Fatalf("AddNode %s host: %v", alias, err)
+	}
+	mp, err := ctr.MappedPort(ctx, "9181/tcp")
+	if err != nil {
+		t.Fatalf("AddNode %s mapped port: %v", alias, err)
+	}
+	endpoint = net.JoinHostPort(hostStr(host), mp.Port())
+
+	kc.Endpoints = append(kc.Endpoints, endpoint)
+	kc.Aliases = append(kc.Aliases, alias)
+	kc.containers = append(kc.containers, ctr)
+	return alias, endpoint
+}
+
 // IndexOf returns the node index whose endpoint equals addr, or -1.
 func (kc *KeeperCluster) IndexOf(addr string) int {
 	for i, e := range kc.Endpoints {
@@ -207,8 +267,21 @@ func hostStr(h string) string {
 // docker network without alias collisions; the conventional single-cluster
 // prefix is "keeper".
 func keeperConfigXML(prefix string, id, n int) string {
-	var raft strings.Builder
+	ids := make([]int, 0, n)
 	for j := 1; j <= n; j++ {
+		ids = append(ids, j)
+	}
+	return keeperConfigXMLForIDs(prefix, id, ids)
+}
+
+// keeperConfigXMLForIDs is the explicit-id variant: renders a config for
+// node `id` whose raft_configuration covers exactly the listed ids. Used
+// by AddNode where the joining node's raft view must include the
+// post-reconfig union (architecture.md §4: include both the existing
+// quorum AND yourself, never the target post-remove view alone).
+func keeperConfigXMLForIDs(prefix string, id int, ids []int) string {
+	var raft strings.Builder
+	for _, j := range ids {
 		fmt.Fprintf(&raft,
 			"            <server><id>%d</id><hostname>%s-%d</hostname><port>9234</port></server>\n",
 			j, prefix, j)

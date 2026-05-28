@@ -2,6 +2,7 @@ package testenv
 
 import (
 	"context"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -20,7 +21,10 @@ import (
 // quorum endpoint": CH knows one stable address, quorum membership churn is
 // absorbed behind the proxy. Running it as a container keeps every hop
 // container-to-container (CH → kpx → keeper).
-func StartKeeperProxy(t *testing.T, cluster *KeeperCluster, alias string) {
+//
+// Returns a host-reachable "host:port" so host-side test code (e.g. the
+// orchestrator integration test dialing real ZK) can reach the proxy too.
+func StartKeeperProxy(t *testing.T, cluster *KeeperCluster, alias string) string {
 	t.Helper()
 	ctx := context.Background()
 	bin := runfileBinary(t, "pkg/integration/testenv/cmd/kpx/kpx_/kpx")
@@ -33,7 +37,7 @@ func StartKeeperProxy(t *testing.T, cluster *KeeperCluster, alias string) {
 
 	req := testcontainers.ContainerRequest{
 		Image:          "alpine:3.20",
-		ExposedPorts:   []string{"9181/tcp"}, // only so the wait strategy can probe; CH uses the alias
+		ExposedPorts:   []string{"9181/tcp"}, // so the wait strategy + host-side tests can reach the proxy
 		Networks:       []string{dnet.Name},
 		NetworkAliases: map[string][]string{dnet.Name: {alias}},
 		Files: []testcontainers.ContainerFile{{
@@ -52,4 +56,14 @@ func StartKeeperProxy(t *testing.T, cluster *KeeperCluster, alias string) {
 		t.Fatalf("start keeper proxy %s: %v", alias, err)
 	}
 	t.Cleanup(func() { _ = ctr.Terminate(context.Background()) })
+
+	host, err := ctr.Host(ctx)
+	if err != nil {
+		t.Fatalf("keeper proxy %s host: %v", alias, err)
+	}
+	mp, err := ctr.MappedPort(ctx, "9181/tcp")
+	if err != nil {
+		t.Fatalf("keeper proxy %s mapped port: %v", alias, err)
+	}
+	return net.JoinHostPort(hostStr(host), mp.Port())
 }
