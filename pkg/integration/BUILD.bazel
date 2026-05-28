@@ -13,7 +13,7 @@ go_test(
         "database_routing_test.go",
         "forward_test.go",
         "internal_port_envelope_test.go",
-        "interserver_proxy_test.go",
+        "interserver_mesh_test.go",
         "keeper_proxy_test.go",
         "metrics_test.go",
         "peer_envelope_test.go",
@@ -32,7 +32,6 @@ go_test(
     # The interserver-replication test runs these proxy/gateway binaries in
     # containers on the keeper Docker network (resolved from runfiles).
     data = [
-        "//pkg/integration/testenv/cmd/igw",
         "//pkg/integration/testenv/cmd/imesh",
         "//pkg/integration/testenv/cmd/kpx",
     ],
@@ -50,7 +49,6 @@ go_test(
         "//pkg/cluster",
         "//pkg/config",
         "//pkg/integration/testenv",
-        "//pkg/interserver",
         "//pkg/keeper",
         "//pkg/network",
         "//pkg/peer",

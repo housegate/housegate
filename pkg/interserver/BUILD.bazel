@@ -2,10 +2,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "interserver",
-    srcs = [
-        "mesh.go",
-        "server.go",
-    ],
+    srcs = ["mesh.go"],
     importpath = "housegate/housegate/pkg/interserver",
     visibility = ["//visibility:public"],
     deps = ["//pkg/log"],
@@ -13,9 +10,6 @@ go_library(
 
 go_test(
     name = "interserver_test",
-    srcs = [
-        "interserver_test.go",
-        "mesh_test.go",
-    ],
+    srcs = ["mesh_test.go"],
     embed = [":interserver"],
 )

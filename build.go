@@ -612,22 +612,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		})
 	}
 
-	// CH-facing interserver (9009) ingress gateway (link B). Same
-	// listener-alongside pattern; pkg/interserver is a self-contained L4
-	// relay to the co-located CH's real interserver port.
-	if cfg.InterserverProxy.Enabled() {
-		is, err := buildInterserverServer(cfg.InterserverProxy)
-		if err != nil {
-			return nil, fmt.Errorf("interserver proxy: %w", err)
-		}
-		listeners = append(listeners, serverListener{
-			Server:     is,
-			ListenAddr: cfg.InterserverProxy.Listen,
-			Label:      "interserver",
-		})
-	}
-
-	// Two-hop mTLS interserver mesh sidecar (richer link B). Each housegate
+	// Two-hop mTLS interserver mesh sidecar (link B). Each housegate
 	// runs both Egress (local CH dials it in its own netns) and Ingress
 	// (peer Egresses dial it over mTLS).
 	if cfg.InterserverMesh.Enabled() {
@@ -689,26 +674,6 @@ func keeperMembersFunc(reg registry.Registry) func() []string {
 		return kp.KeeperPoolMembers
 	}
 	return nil
-}
-
-// buildInterserverServer translates the InterserverProxyConfig into a
-// running-ready interserver gateway. Target is static (the local CH
-// interserver address from config); AllowCIDRs are parsed up front.
-func buildInterserverServer(cfg config.InterserverProxyConfig) (*interserver.Server, error) {
-	cidrs := make([]*net.IPNet, 0, len(cfg.AllowCIDRs))
-	for _, c := range cfg.AllowCIDRs {
-		_, n, err := net.ParseCIDR(c)
-		if err != nil {
-			return nil, fmt.Errorf("allow_cidrs %q: %w", c, err)
-		}
-		cidrs = append(cidrs, n)
-	}
-	target := cfg.Target
-	return interserver.NewServer(interserver.ServerConfig{
-		Target:      func() string { return target },
-		DialTimeout: cfg.DialTimeout.Duration,
-		AllowCIDRs:  cidrs,
-	})
 }
 
 // buildInterserverMesh loads the mTLS material and builds the egress +

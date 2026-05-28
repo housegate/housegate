@@ -1,10 +1,13 @@
 package config
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
-// These pin the validation of the keeper_proxy / interserver_proxy config
-// blocks — the seam the container-based integration tests (kpx/igw) bypass
-// by constructing the proxy ServerConfig directly.
+// These pin the validation of the keeper_proxy / interserver_mesh config
+// blocks — the seam the container-based integration tests (kpx/imesh)
+// bypass by constructing the proxy ServerConfig directly.
 
 func TestConfig_Validate_KeeperProxy(t *testing.T) {
 	base := minimalServerConfig(t)
@@ -40,35 +43,53 @@ func TestConfig_Validate_KeeperProxy(t *testing.T) {
 	}
 }
 
-func TestConfig_Validate_InterserverProxy(t *testing.T) {
+func TestConfig_Validate_InterserverMesh(t *testing.T) {
 	base := minimalServerConfig(t)
 
+	// Disabled (empty EgressListen) is valid.
 	cfg := base
 	if err := cfg.Validate(); err != nil {
-		t.Fatalf("interserver_proxy disabled must be valid: %v", err)
+		t.Fatalf("interserver_mesh disabled must be valid: %v", err)
 	}
 
-	valid := func(ip InterserverProxyConfig) error {
+	// Three placeholder cert paths; Validate only checks they're non-empty,
+	// it does not load them (loading happens in build.go).
+	dir := t.TempDir()
+	cert := filepath.Join(dir, "mesh.crt")
+	key := filepath.Join(dir, "mesh.key")
+	ca := filepath.Join(dir, "ca.crt")
+
+	valid := func(m InterserverMeshConfig) error {
 		c := base
-		c.InterserverProxy = ip
+		c.InterserverMesh = m
 		return c.Validate()
 	}
 
-	if err := valid(InterserverProxyConfig{Listen: ":9009", Target: "127.0.0.1:9010", AllowCIDRs: []string{"10.0.0.0/8", "127.0.0.0/8"}}); err != nil {
-		t.Fatalf("valid interserver_proxy rejected: %v", err)
+	full := InterserverMeshConfig{
+		EgressListen:       "127.0.0.1:9010",
+		IngressListen:      "0.0.0.0:19009",
+		LocalCHInterserver: "127.0.0.2:9010",
+		TLS:                InterserverMeshTLS{CertFile: cert, KeyFile: key, CAFile: ca},
 	}
-	if err := valid(InterserverProxyConfig{Listen: ":9009", Target: "127.0.0.1:9010"}); err != nil {
-		t.Fatalf("interserver_proxy without allow_cidrs must be valid: %v", err)
+	if err := valid(full); err != nil {
+		t.Fatalf("valid interserver_mesh rejected: %v", err)
 	}
 
-	for name, ip := range map[string]InterserverProxyConfig{
-		"no target":  {Listen: ":9009"},
-		"bad listen": {Listen: "nope", Target: "127.0.0.1:9010"},
-		"bad target": {Listen: ":9009", Target: "nope"},
-		"bad cidr":   {Listen: ":9009", Target: "127.0.0.1:9010", AllowCIDRs: []string{"not-a-cidr"}},
-	} {
-		if err := valid(ip); err == nil {
-			t.Errorf("interserver_proxy %q must error", name)
+	cases := map[string]func(*InterserverMeshConfig){
+		"bad egress_listen":        func(m *InterserverMeshConfig) { m.EgressListen = "nope" },
+		"no ingress_listen":        func(m *InterserverMeshConfig) { m.IngressListen = "" },
+		"bad ingress_listen":       func(m *InterserverMeshConfig) { m.IngressListen = "nope" },
+		"no local_ch_interserver":  func(m *InterserverMeshConfig) { m.LocalCHInterserver = "" },
+		"bad local_ch_interserver": func(m *InterserverMeshConfig) { m.LocalCHInterserver = "nope" },
+		"no cert":                  func(m *InterserverMeshConfig) { m.TLS.CertFile = "" },
+		"no key":                   func(m *InterserverMeshConfig) { m.TLS.KeyFile = "" },
+		"no ca":                    func(m *InterserverMeshConfig) { m.TLS.CAFile = "" },
+	}
+	for name, mutate := range cases {
+		m := full
+		mutate(&m)
+		if err := valid(m); err == nil {
+			t.Errorf("interserver_mesh %q must error", name)
 		}
 	}
 }

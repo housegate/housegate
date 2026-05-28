@@ -1,7 +1,16 @@
 package housegate
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"housegate/housegate/pkg/config"
 	"housegate/housegate/pkg/interserver"
@@ -10,10 +19,11 @@ import (
 )
 
 // These cover the config→build.go→listener seam for the keeper_proxy and
-// interserver_proxy blocks — what the kpx/igw container tests bypass by
+// interserver_mesh blocks — what the kpx/imesh container tests bypass by
 // constructing the proxy ServerConfig directly. They assert buildServer
-// appends the right listener (addr + concrete type) when the block is
-// configured, and that CIDR parsing in buildInterserverServer works.
+// appends the right listeners (addr + concrete type) when the block is
+// configured, and that the keeper-pool membership func is wired off the
+// optional registry.KeeperPool capability.
 
 func findListener(t *testing.T, bs *builtServer, label string) serverListener {
 	t.Helper()
@@ -48,12 +58,14 @@ func TestBuildServer_KeeperProxyListener(t *testing.T) {
 	}
 }
 
-func TestBuildServer_InterserverProxyListener(t *testing.T) {
+func TestBuildServer_InterserverMeshListeners(t *testing.T) {
+	cert, key, ca := writeMeshCerts(t)
 	cfg := minimalRouterOnlyCfg(t)
-	cfg.InterserverProxy = config.InterserverProxyConfig{
-		Listen:     "127.0.0.1:0",
-		Target:     "127.0.0.1:9010",
-		AllowCIDRs: []string{"10.0.0.0/8"},
+	cfg.InterserverMesh = config.InterserverMeshConfig{
+		EgressListen:       "127.0.0.1:0",
+		IngressListen:      "127.0.0.1:0",
+		LocalCHInterserver: "127.0.0.2:9010",
+		TLS:                config.InterserverMeshTLS{CertFile: cert, KeyFile: key, CAFile: ca},
 	}
 	bs, err := buildServer(Options{Config: cfg, NetworkState: network.NewInMemoryNetworkState()}, nil)
 	if err != nil {
@@ -61,12 +73,13 @@ func TestBuildServer_InterserverProxyListener(t *testing.T) {
 	}
 	defer bs.teardown()
 
-	l := findListener(t, bs, "interserver")
-	if l.ListenAddr != cfg.InterserverProxy.Listen {
-		t.Errorf("interserver listener addr = %q, want %q", l.ListenAddr, cfg.InterserverProxy.Listen)
+	eg := findListener(t, bs, "interserver_mesh_egress")
+	if _, ok := eg.Server.(*interserver.Egress); !ok {
+		t.Errorf("egress listener Server is %T, want *interserver.Egress", eg.Server)
 	}
-	if _, ok := l.Server.(*interserver.Server); !ok {
-		t.Errorf("interserver listener Server is %T, want *interserver.Server", l.Server)
+	in := findListener(t, bs, "interserver_mesh_ingress")
+	if _, ok := in.Server.(*interserver.Ingress); !ok {
+		t.Errorf("ingress listener Server is %T, want *interserver.Ingress", in.Server)
 	}
 }
 
@@ -78,8 +91,9 @@ func TestBuildServer_NoProxyListenersWhenDisabled(t *testing.T) {
 	}
 	defer bs.teardown()
 	for _, l := range bs.listeners {
-		if l.Label == "keeper" || l.Label == "interserver" {
-			t.Errorf("unexpected %q listener when proxy is disabled", l.Label)
+		switch l.Label {
+		case "keeper", "interserver_mesh_egress", "interserver_mesh_ingress":
+			t.Errorf("unexpected %q listener when proxy/mesh is disabled", l.Label)
 		}
 	}
 }
@@ -105,16 +119,65 @@ func TestKeeperMembersFunc_FromNetworkState(t *testing.T) {
 	}
 }
 
-func TestBuildInterserverServer_CIDRParsing(t *testing.T) {
-	if _, err := buildInterserverServer(config.InterserverProxyConfig{
-		Listen: ":9009", Target: "127.0.0.1:9010", AllowCIDRs: []string{"not-a-cidr"},
-	}); err == nil {
-		t.Fatal("bad CIDR must error")
+// writeMeshCerts emits a self-signed CA + a leaf cert into t.TempDir() and
+// returns their PEM paths. Used by TestBuildServer_InterserverMeshListeners
+// so the buildServer path actually loads real keypair files; the cert is
+// never used for an actual TLS handshake in these tests.
+func writeMeshCerts(t *testing.T) (cert, key, ca string) {
+	t.Helper()
+	dir := t.TempDir()
+
+	caPub, caPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("ed25519 ca: %v", err)
 	}
-	srv, err := buildInterserverServer(config.InterserverProxyConfig{
-		Listen: ":9009", Target: "127.0.0.1:9010", AllowCIDRs: []string{"10.0.0.0/8"},
-	})
-	if err != nil || srv == nil {
-		t.Fatalf("valid interserver build failed: srv=%v err=%v", srv, err)
+	caTmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "housegate-build-test-ca"},
+		NotBefore:             time.Now().Add(-time.Minute),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		BasicConstraintsValid: true,
 	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, caPub, caPriv)
+	if err != nil {
+		t.Fatalf("create ca: %v", err)
+	}
+	caCert, _ := x509.ParseCertificate(caDER)
+
+	leafPub, leafPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("ed25519 leaf: %v", err)
+	}
+	leafTmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "housegate-build-test"},
+		NotBefore:    time.Now().Add(-time.Minute),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+		DNSNames:     []string{"localhost"},
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, leafPub, caPriv)
+	if err != nil {
+		t.Fatalf("create leaf: %v", err)
+	}
+
+	keyDER, err := x509.MarshalPKCS8PrivateKey(leafPriv)
+	if err != nil {
+		t.Fatalf("marshal key: %v", err)
+	}
+
+	files := map[string][]byte{
+		filepath.Join(dir, "ca.crt"):   pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}),
+		filepath.Join(dir, "mesh.crt"): pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafDER}),
+		filepath.Join(dir, "mesh.key"): pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}),
+	}
+	for path, data := range files {
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	return filepath.Join(dir, "mesh.crt"), filepath.Join(dir, "mesh.key"), filepath.Join(dir, "ca.crt")
 }
