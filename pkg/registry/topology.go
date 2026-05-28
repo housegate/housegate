@@ -47,6 +47,19 @@ type KeeperPool interface {
 	KeeperPoolMembers() []string
 }
 
+// MeshTopology is an OPTIONAL Registry capability exposing the
+// interserver-mesh Ingress address for a peer replica (e.g. "ch-1" →
+// "ch-1.mesh.example.com:19009"). Used by pkg/interserver's Egress to
+// route a part fetch — the source replica is parsed from the HTTP
+// endpoint URL, then resolved to its peer Ingress via this lookup.
+// Implementations that don't run the interserver-mesh sidecar simply
+// omit it.
+type MeshTopology interface {
+	// MeshIngressFor returns the Ingress address (host:port) for the
+	// given replica name, or ("", false) if unknown.
+	MeshIngressFor(replica string) (string, bool)
+}
+
 // Topology resolves indexer ids to dialing targets.
 type Topology interface {
 	// ProxyByIndexerId returns the dialing target for indexerId. The

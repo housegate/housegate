@@ -2,9 +2,12 @@ package housegate
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"math/rand"
 	"net"
+	"os"
 	"strconv"
 	"time"
 
@@ -624,6 +627,20 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		})
 	}
 
+	// Two-hop mTLS interserver mesh sidecar (richer link B). Each housegate
+	// runs both Egress (local CH dials it in its own netns) and Ingress
+	// (peer Egresses dial it over mTLS).
+	if cfg.InterserverMesh.Enabled() {
+		eg, in, err := buildInterserverMesh(cfg.InterserverMesh, reg)
+		if err != nil {
+			return nil, fmt.Errorf("interserver mesh: %w", err)
+		}
+		listeners = append(listeners,
+			serverListener{Server: eg, ListenAddr: cfg.InterserverMesh.EgressListen, Label: "interserver_mesh_egress"},
+			serverListener{Server: in, ListenAddr: cfg.InterserverMesh.IngressListen, Label: "interserver_mesh_ingress"},
+		)
+	}
+
 	return &builtServer{
 		listeners: listeners,
 		preServe: func(ctx context.Context) {
@@ -692,6 +709,62 @@ func buildInterserverServer(cfg config.InterserverProxyConfig) (*interserver.Ser
 		DialTimeout: cfg.DialTimeout.Duration,
 		AllowCIDRs:  cidrs,
 	})
+}
+
+// buildInterserverMesh loads the mTLS material and builds the egress +
+// ingress pair. The egress peer-lookup is wired to the Registry's optional
+// MeshTopology capability; if absent, the egress will fail all fetches
+// (502 unknown peer) — every mesh deployment must wire peer addresses.
+func buildInterserverMesh(cfg config.InterserverMeshConfig, reg registry.Registry) (*interserver.Egress, *interserver.Ingress, error) {
+	cert, err := tls.LoadX509KeyPair(cfg.TLS.CertFile, cfg.TLS.KeyFile)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load cert/key: %w", err)
+	}
+	caPEM, err := os.ReadFile(cfg.TLS.CAFile)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read CA: %w", err)
+	}
+	caPool := x509.NewCertPool()
+	if !caPool.AppendCertsFromPEM(caPEM) {
+		return nil, nil, fmt.Errorf("CA file %s: no PEM certificates parsed", cfg.TLS.CAFile)
+	}
+
+	egress, err := interserver.NewEgress(interserver.EgressConfig{
+		PeerLookup: meshPeerLookup(reg),
+		TLSClient: &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			RootCAs:      caPool,
+			MinVersion:   tls.VersionTLS12,
+		},
+		DialTimeout: cfg.DialTimeout.Duration,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("egress: %w", err)
+	}
+
+	ingress, err := interserver.NewIngress(interserver.IngressConfig{
+		LocalCH: cfg.LocalCHInterserver,
+		TLSServer: &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			ClientCAs:    caPool,
+			ClientAuth:   tls.RequireAndVerifyClientCert,
+			MinVersion:   tls.VersionTLS12,
+		},
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("ingress: %w", err)
+	}
+	return egress, ingress, nil
+}
+
+// meshPeerLookup returns a PeerLookup func backed by reg when reg
+// implements the optional registry.MeshTopology capability; otherwise a
+// permanently-empty lookup (every fetch fails 502 "unknown peer").
+func meshPeerLookup(reg registry.Registry) interserver.PeerLookup {
+	if mt, ok := reg.(registry.MeshTopology); ok {
+		return mt.MeshIngressFor
+	}
+	return func(string) (string, bool) { return "", false }
 }
 
 func buildAgent(opts Options, rf *redisFactory) (*builtServer, error) {

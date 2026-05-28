@@ -8,6 +8,7 @@ require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.46.0
 	github.com/bytedance/sonic v1.15.1
 	github.com/celestiaorg/go-square/v2 v2.3.3
+	github.com/docker/docker v28.5.2+incompatible
 	github.com/ethereum/go-ethereum v1.17.2
 	github.com/prometheus/client_golang v1.23.2
 	github.com/redis/go-redis/v9 v9.18.0

@@ -216,6 +216,105 @@ func TestInterserverReplication(t *testing.T) {
 	// fetch (a CH only ever learns the peer's advertised gateway alias).
 }
 
+// TestInterserverMeshReplication is the two-hop mTLS variant of the
+// replication test. Each CH advertises 127.0.0.1:9010, so each peer
+// naturally dials its OWN co-located sidecar (an imesh container sharing
+// CH's netns). The sidecar's egress reads the source replica from the
+// HTTP endpoint URL, mTLS-dials the source's sidecar ingress (presenting
+// its housegate client cert), the ingress validates and forwards to the
+// source CH on 127.0.0.2:9010 (a secondary loopback IP so it doesn't
+// collide with the sidecar's egress on 127.0.0.1:9010).
+//
+// Replication succeeding proves that BOTH gateways were on the path AND
+// both successfully completed mTLS — no peer can reach CH's interserver
+// without a CA-signed client cert.
+func TestInterserverMeshReplication(t *testing.T) {
+	cluster := testenv.StartKeeperCluster(t, 3)
+	testenv.StartKeeperProxy(t, cluster, "kpx-1")
+	testenv.StartKeeperProxy(t, cluster, "kpx-2")
+
+	ch1 := testenv.StartClickHouseMeshReplica(t, cluster, "ch-1", "kpx-1:9181")
+	ch2 := testenv.StartClickHouseMeshReplica(t, cluster, "ch-2", "kpx-2:9181")
+
+	// Self-signed CA + a single leaf cert (used by both sidecars as both
+	// client cert and server cert). In production each housegate would
+	// have its own cert; sharing one here keeps the test self-contained.
+	ca := testenv.NewMeshCA(t, "ch-1", "ch-2")
+
+	// Each peer's ingress is reachable at <peer-alias>:19009 over the
+	// docker network (because the sidecar shares its CH's netns, joining
+	// the network under that alias).
+	testenv.StartInterserverMeshSidecar(t, ch1.ContainerName, ca, map[string]string{"ch-2": "ch-2:19009"})
+	testenv.StartInterserverMeshSidecar(t, ch2.ContainerName, ca, map[string]string{"ch-1": "ch-1:19009"})
+
+	bin := testenv.ClickHouseCLI(t)
+	runSQL := func(addr, database, query string) (string, error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return "", err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, bin, "client",
+			"--host", host,
+			"--port", port,
+			"--user", "default",
+			"--password", "housegate_test_pw",
+			"--database", database,
+			"--query", query,
+		)
+		out, err := cmd.CombinedOutput()
+		return strings.TrimRight(string(out), "\n"), err
+	}
+
+	t.Log("creating ReplicatedMergeTree on both replicas (through kpx + mesh sidecars)")
+	tblDDL := "CREATE TABLE testdb.events (ts DateTime, uid UInt64, data String) " +
+		"ENGINE=ReplicatedMergeTree('/clickhouse/tables/01/testdb/events', '{replica}') " +
+		"ORDER BY (ts, uid)"
+	for _, c := range []struct{ addr, name string }{{ch1.NativeAddr, "ch-1"}, {ch2.NativeAddr, "ch-2"}} {
+		var lastErr error
+		for attempt := 1; attempt <= 20; attempt++ {
+			if _, err := runSQL(c.addr, "default", "CREATE DATABASE IF NOT EXISTS testdb"); err != nil {
+				lastErr = err
+				time.Sleep(2 * time.Second)
+				continue
+			}
+			if _, err := runSQL(c.addr, "default", tblDDL); err != nil {
+				lastErr = err
+				time.Sleep(2 * time.Second)
+				continue
+			}
+			lastErr = nil
+			break
+		}
+		if lastErr != nil {
+			t.Fatalf("failed to create table on %s: %v", c.name, lastErr)
+		}
+	}
+
+	t.Log("ch-1 INSERT 1000 → ch-2 must fetch via gw-2 egress → mTLS → gw-1 ingress → ch-1")
+	if _, err := runSQL(ch1.NativeAddr, "default",
+		"INSERT INTO testdb.events SELECT now(), number, 'mesh' FROM numbers(1000)"); err != nil {
+		t.Fatalf("insert on ch-1: %v", err)
+	}
+	if !waitForCount(t, runSQL, ch2.NativeAddr, "1000", 60*time.Second) {
+		dumpReplica(t, runSQL, ch2.NativeAddr, "ch-2")
+		t.Fatalf("ch-2 did not replicate to 1000 rows (mTLS mesh path failed)")
+	}
+	t.Log("  ✓ forward direction: mesh egress→mTLS→ingress→ch-1 succeeded")
+
+	t.Log("ch-2 INSERT 500 → ch-1 must fetch via gw-1 egress → mTLS → gw-2 ingress → ch-2")
+	if _, err := runSQL(ch2.NativeAddr, "default",
+		"INSERT INTO testdb.events SELECT now(), number, 'mesh-rev' FROM numbers(500)"); err != nil {
+		t.Fatalf("insert on ch-2: %v", err)
+	}
+	if !waitForCount(t, runSQL, ch1.NativeAddr, "1500", 60*time.Second) {
+		dumpReplica(t, runSQL, ch1.NativeAddr, "ch-1")
+		t.Fatalf("ch-1 did not replicate to 1500 rows (reverse mTLS mesh path failed)")
+	}
+	t.Log("  ✓ reverse direction: both mesh sidecars are on the path, mTLS authenticated both legs")
+}
+
 // waitForCount polls SELECT count() on addr until it equals want or the
 // budget expires. ReplicatedMergeTree fetches parts asynchronously in a
 // background queue, so this is more robust than a one-shot SYNC REPLICA

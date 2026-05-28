@@ -33,6 +33,7 @@ go_test(
     # containers on the keeper Docker network (resolved from runfiles).
     data = [
         "//pkg/integration/testenv/cmd/igw",
+        "//pkg/integration/testenv/cmd/imesh",
         "//pkg/integration/testenv/cmd/kpx",
     ],
     local = True,

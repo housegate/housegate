@@ -28,6 +28,13 @@ type InMemoryNetworkState struct {
 	// capability so the keeper proxy can track live membership in tests and
 	// local/yaml deployments. Empty means "unknown" (no update).
 	KeeperPoolEndpoints []string
+
+	// MeshIngressByReplica maps a CH replica name (as it appears in
+	// /clickhouse/tables/.../replicas/<replica>/) to its peer Ingress
+	// address (host:port). Satisfies the optional registry.MeshTopology
+	// capability so the interserver-mesh Egress can route a part fetch to
+	// the right peer's mTLS Ingress.
+	MeshIngressByReplica map[string]string
 }
 
 // NewInMemoryNetworkState returns an empty InMemoryNetworkState with
@@ -63,6 +70,28 @@ func (s *InMemoryNetworkState) SetKeeperPool(members ...string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.KeeperPoolEndpoints = append([]string(nil), members...)
+}
+
+// --- registry.MeshTopology (optional)
+
+// MeshIngressFor returns the interserver-mesh Ingress address for a peer
+// replica, or ("", false) when unknown. Satisfies registry.MeshTopology.
+func (s *InMemoryNetworkState) MeshIngressFor(replica string) (string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	addr, ok := s.MeshIngressByReplica[replica]
+	return addr, ok
+}
+
+// SetMeshIngress registers (or updates) a peer replica's mesh Ingress
+// address. Test/local helper.
+func (s *InMemoryNetworkState) SetMeshIngress(replica, addr string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.MeshIngressByReplica == nil {
+		s.MeshIngressByReplica = map[string]string{}
+	}
+	s.MeshIngressByReplica[replica] = addr
 }
 
 // --- registry.Topology

@@ -143,6 +143,10 @@ type Config struct {
 	// gateway (link B). Disabled when InterserverProxy.Listen is empty.
 	InterserverProxy InterserverProxyConfig `json:"interserver_proxy" yaml:"interserver_proxy"`
 
+	// InterserverMesh is the two-hop mTLS interserver-mesh sidecar
+	// (richer link B). Disabled when InterserverMesh.EgressListen is empty.
+	InterserverMesh InterserverMeshConfig `json:"interserver_mesh" yaml:"interserver_mesh"`
+
 	// --- Plumbing sections owned by pkg/config ---
 
 	Logging      LoggingConfig      `json:"logging"       yaml:"logging"`
@@ -209,6 +213,52 @@ type InterserverProxyConfig struct {
 
 // Enabled reports whether the interserver proxy is configured.
 func (i InterserverProxyConfig) Enabled() bool { return i.Listen != "" }
+
+// InterserverMeshConfig configures the two-hop mTLS interserver-mesh
+// sidecar. Disabled when EgressListen is empty.
+//
+// Each housegate runs BOTH legs:
+//   - Egress (EgressListen, typically 127.0.0.1:9010): local CH dials it
+//     in its own netns, having advertised "localhost:9010" in keeper. The
+//     egress parses the source replica from the HTTP endpoint URL, looks
+//     up that peer's Ingress via the optional registry.MeshTopology, and
+//     mTLS-dials it (presenting this housegate's client cert).
+//   - Ingress (IngressListen, typically 0.0.0.0:19009): peer Egresses dial
+//     it over mTLS. ClientAuth is REQUIRED — only peers whose client cert
+//     is signed by the shared CA can pull parts. Plaintext-forwards to
+//     LocalCHInterserver (the co-located CH's real loopback-only
+//     interserver port).
+//
+// All three TLS files are required: this is mTLS, not opportunistic TLS.
+type InterserverMeshConfig struct {
+	// EgressListen is the local-CH-facing leg (typically 127.0.0.1:9010).
+	// Empty disables the entire mesh.
+	EgressListen string `json:"egress_listen" yaml:"egress_listen"`
+	// IngressListen is the peer-mTLS-facing leg (typically :19009).
+	IngressListen string `json:"ingress_listen" yaml:"ingress_listen"`
+	// LocalCHInterserver is the co-located CH's real interserver address
+	// (host:port, e.g. "127.0.0.1:9009"). The ingress forwards there.
+	LocalCHInterserver string `json:"local_ch_interserver" yaml:"local_ch_interserver"`
+	// TLS holds the mTLS material (own cert/key + shared CA).
+	TLS InterserverMeshTLS `json:"tls" yaml:"tls"`
+	// DialTimeout bounds the egress→ingress dial (default 10s).
+	DialTimeout Duration `json:"dial_timeout" yaml:"dial_timeout"`
+}
+
+// InterserverMeshTLS holds the mTLS files for the interserver mesh.
+type InterserverMeshTLS struct {
+	// CertFile is this housegate's own cert (used as both server cert on
+	// the ingress and client cert on the egress).
+	CertFile string `json:"cert_file" yaml:"cert_file"`
+	// KeyFile is the private key matching CertFile.
+	KeyFile string `json:"key_file" yaml:"key_file"`
+	// CAFile is the shared CA used to verify peer certs (as RootCAs on
+	// the egress and ClientCAs on the ingress).
+	CAFile string `json:"ca_file" yaml:"ca_file"`
+}
+
+// Enabled reports whether the interserver mesh sidecar is configured.
+func (i InterserverMeshConfig) Enabled() bool { return i.EgressListen != "" }
 
 // NetworkStateConfig configures the NetworkState consumer (proxy
 // infrastructure, not a plugin).
@@ -389,6 +439,25 @@ func (c *Config) Validate() error {
 			if _, _, err := net.ParseCIDR(c); err != nil {
 				errs = append(errs, fmt.Errorf("interserver_proxy.allow_cidrs[%d]: invalid CIDR %q: %w", i, c, err))
 			}
+		}
+	}
+
+	if c.InterserverMesh.Enabled() {
+		if _, _, err := net.SplitHostPort(c.InterserverMesh.EgressListen); err != nil {
+			errs = append(errs, fmt.Errorf("interserver_mesh.egress_listen: invalid host:port %q: %w", c.InterserverMesh.EgressListen, err))
+		}
+		if c.InterserverMesh.IngressListen == "" {
+			errs = append(errs, errors.New("interserver_mesh.ingress_listen is required when interserver_mesh.egress_listen is set"))
+		} else if _, _, err := net.SplitHostPort(c.InterserverMesh.IngressListen); err != nil {
+			errs = append(errs, fmt.Errorf("interserver_mesh.ingress_listen: invalid host:port %q: %w", c.InterserverMesh.IngressListen, err))
+		}
+		if c.InterserverMesh.LocalCHInterserver == "" {
+			errs = append(errs, errors.New("interserver_mesh.local_ch_interserver is required when interserver_mesh.egress_listen is set"))
+		} else if _, _, err := net.SplitHostPort(c.InterserverMesh.LocalCHInterserver); err != nil {
+			errs = append(errs, fmt.Errorf("interserver_mesh.local_ch_interserver: invalid host:port %q: %w", c.InterserverMesh.LocalCHInterserver, err))
+		}
+		if c.InterserverMesh.TLS.CertFile == "" || c.InterserverMesh.TLS.KeyFile == "" || c.InterserverMesh.TLS.CAFile == "" {
+			errs = append(errs, errors.New("interserver_mesh.tls.{cert_file,key_file,ca_file} are all required (this is mTLS, not opportunistic TLS)"))
 		}
 	}
 
