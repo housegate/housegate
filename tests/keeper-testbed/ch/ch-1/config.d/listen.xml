@@ -1,7 +1,0 @@
-<clickhouse>
-    <!-- The 25.8 default config binds only 127.0.0.1/::1, which is enough for
-         CH->keeper (outbound) and local clients but makes CH<->CH interserver
-         (9009) fail with "Connection refused". replace="replace" drops the
-         loopback-only defaults so we bind all interfaces on the docker net. -->
-    <listen_host replace="replace">0.0.0.0</listen_host>
-</clickhouse>

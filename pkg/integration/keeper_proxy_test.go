@@ -15,10 +15,10 @@ import (
 // TestKeeperProxy exercises pkg/keeper (link A of the keeper-pool design)
 // against a real 3-node clickhouse-keeper:25.8 quorum. One cluster + one
 // proxy are shared across ordered subtests (the failover case runs last,
-// since it degrades the quorum). The end-to-end "ClickHouse self-heals on
-// re-steer" assertion lives in the docker testbed (tests/keeper-testbed,
-// scenario A4); here we pin the proxy's own behaviour: it relays the real
-// keeper 4LW protocol, tracks the live quorum, and re-steers on failover.
+// since it degrades the quorum). Pins the proxy's own behaviour: it relays
+// the real keeper 4LW protocol, tracks the live quorum, and re-steers on
+// failover. The richer "real CH replicates through pkg/keeper" assertion
+// lives in TestInterserverMeshReplication (interserver_mesh_test.go).
 func TestKeeperProxy(t *testing.T) {
 	cluster := testenv.StartKeeperCluster(t, 3)
 

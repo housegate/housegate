@@ -8,8 +8,9 @@
 // quorum liveness via the read-only four-letter-word (4LW) channel and
 // steers connections. ClickHouse's keeper client tolerates reconnects and
 // re-establishes its session / ephemerals / watches itself, which is what
-// makes a re-steer transparent to CH — validated by the A4 testbed
-// (tests/keeper-testbed).
+// makes a re-steer transparent to CH (proved end-to-end by
+// TestInterserverMeshReplication: real ReplicatedMergeTree coordination
+// cannot succeed without keeper, and the test runs it through pkg/keeper).
 package keeper
 
 import (
