@@ -9,6 +9,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,12 +37,13 @@ func findListener(t *testing.T, bs *builtServer, label string) serverListener {
 	return serverListener{}
 }
 
-func TestBuildServer_KeeperProxyListener(t *testing.T) {
+func TestBuildServer_KeeperProxyListeners(t *testing.T) {
 	cfg := minimalRouterOnlyCfg(t)
 	cfg.KeeperProxy = config.KeeperProxyConfig{
-		Listen:   "127.0.0.1:0",
-		Members:  []string{"127.0.0.1:9181", "127.0.0.1:9182"},
-		Strategy: "leader_pref",
+		Shards: []config.KeeperShardConfig{
+			{Name: "default", Listen: "127.0.0.1:0", Members: []string{"127.0.0.1:9181", "127.0.0.1:9182"}, Strategy: "leader_pref"},
+			{Name: "shard_2", Listen: "127.0.0.1:0", Members: []string{"127.0.0.1:9183"}},
+		},
 	}
 	bs, err := buildServer(Options{Config: cfg, NetworkState: network.NewInMemoryNetworkState()}, nil)
 	if err != nil {
@@ -49,12 +51,14 @@ func TestBuildServer_KeeperProxyListener(t *testing.T) {
 	}
 	defer bs.teardown()
 
-	l := findListener(t, bs, "keeper")
-	if l.ListenAddr != cfg.KeeperProxy.Listen {
-		t.Errorf("keeper listener addr = %q, want %q", l.ListenAddr, cfg.KeeperProxy.Listen)
-	}
-	if _, ok := l.Server.(*keeper.Server); !ok {
-		t.Errorf("keeper listener Server is %T, want *keeper.Server", l.Server)
+	for _, sh := range cfg.KeeperProxy.Shards {
+		l := findListener(t, bs, "keeper:"+sh.Name)
+		if l.ListenAddr != sh.Listen {
+			t.Errorf("shard %q listener addr = %q, want %q", sh.Name, l.ListenAddr, sh.Listen)
+		}
+		if _, ok := l.Server.(*keeper.Server); !ok {
+			t.Errorf("shard %q listener Server is %T, want *keeper.Server", sh.Name, l.Server)
+		}
 	}
 }
 
@@ -91,31 +95,42 @@ func TestBuildServer_NoProxyListenersWhenDisabled(t *testing.T) {
 	}
 	defer bs.teardown()
 	for _, l := range bs.listeners {
+		if strings.HasPrefix(l.Label, "keeper:") {
+			t.Errorf("unexpected keeper shard listener %q when proxy is disabled", l.Label)
+		}
 		switch l.Label {
-		case "keeper", "interserver_mesh_egress", "interserver_mesh_ingress":
-			t.Errorf("unexpected %q listener when proxy/mesh is disabled", l.Label)
+		case "interserver_mesh_egress", "interserver_mesh_ingress":
+			t.Errorf("unexpected %q listener when mesh is disabled", l.Label)
 		}
 	}
 }
 
-func TestKeeperMembersFunc_FromNetworkState(t *testing.T) {
+func TestKeeperShardMembersFunc_FromNetworkState(t *testing.T) {
 	ns := network.NewInMemoryNetworkState()
-	ns.SetKeeperPool("k1:9181", "k2:9181")
+	ns.SetKeeperPool("default", "k1:9181", "k2:9181")
+	ns.SetKeeperPool("shard_2", "k4:9181")
 
-	f := keeperMembersFunc(ns)
+	f := keeperShardMembersFunc(ns, "default")
 	if f == nil {
 		t.Fatal("expected non-nil MembersFunc when NetworkState implements registry.KeeperPool")
 	}
 	got := f()
 	if len(got) != 2 || got[0] != "k1:9181" || got[1] != "k2:9181" {
-		t.Fatalf("members func returned %v, want [k1:9181 k2:9181]", got)
+		t.Fatalf("default shard members = %v, want [k1:9181 k2:9181]", got)
 	}
 
-	// The func must reflect live updates so a reconfig is picked up.
-	ns.SetKeeperPool("k1:9181", "k3:9181")
+	// The func reflects live updates so a reconfig is picked up.
+	ns.SetKeeperPool("default", "k1:9181", "k3:9181")
 	got = f()
 	if len(got) != 2 || got[1] != "k3:9181" {
-		t.Fatalf("members func did not reflect SetKeeperPool update: %v", got)
+		t.Fatalf("default shard members did not reflect SetKeeperPool update: %v", got)
+	}
+
+	// Shards are isolated: the second shard's members don't leak into the
+	// first shard's lookup.
+	g := keeperShardMembersFunc(ns, "shard_2")
+	if got := g(); len(got) != 1 || got[0] != "k4:9181" {
+		t.Fatalf("shard_2 members = %v, want [k4:9181]", got)
 	}
 }
 

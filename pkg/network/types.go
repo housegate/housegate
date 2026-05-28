@@ -113,6 +113,14 @@ type DatabaseInfo struct {
 	ProcessorId   string       `json:"processorId,omitempty" yaml:"processor_id,omitempty"`
 	PendingDelete bool         `json:"pendingDelete" yaml:"pending_delete"`
 	Tables        []TableInfo  `json:"tables,omitempty" yaml:"tables,omitempty"`
+
+	// KeeperShard is the name of the keeper-pool shard this database's
+	// ReplicatedMergeTree tables coordinate through (architecture.md §6).
+	// Empty means the deployment's default shard ("default"). Operators
+	// or chain-driven mapping rules decide which shard a new database
+	// lands on, paralleling how ProcessorId links a database to its
+	// processor — same mapping pattern, different axis.
+	KeeperShard string `json:"keeperShard,omitempty" yaml:"keeper_shard,omitempty"`
 }
 
 // ParseIndexerId parses a decimal-encoded indexer id. Handy when the

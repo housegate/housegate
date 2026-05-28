@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -28,9 +29,16 @@ type ClickHouseReplicatedNode struct {
 // StartClickHouseMeshReplica starts a CH replica configured for the
 // two-hop mTLS interserver-mesh:
 //
-//   - <zookeeper> points at keeperEndpoint (typically a keeper-proxy alias
-//     like "kpx-1:9181"), so ALL keeper-client (9181) traffic flows through
-//     housegate rather than directly to the keepers.
+//   - <zookeeper> points at primaryKeeper (typically a keeper-proxy alias
+//     like "kpx-1:9181"), so ALL keeper-client (9181) traffic flows
+//     through housegate rather than directly to the keepers.
+//   - auxKeepers, when non-empty, registers each entry as an
+//     <auxiliary_zookeepers> shard (architecture.md §6 multi-shard pools).
+//     The map key is the shard name as it appears in CH DDL
+//     (ReplicatedMergeTree('<shard>:/path/...', '{replica}')); the value
+//     is the keeper-proxy endpoint (host:port) for that shard. The primary
+//     keeper itself is NOT addressable by name in DDL (un-prefixed paths
+//     route to it); only the auxiliary shards are.
 //   - <interserver_http_host>127.0.0.1</interserver_http_host>  ← advertised to peers
 //   - <interserver_http_port>9010</interserver_http_port>        ← advertised + listen port
 //   - <interserver_listen_host>127.0.0.2</interserver_listen_host>
@@ -41,13 +49,13 @@ type ClickHouseReplicatedNode struct {
 //     housegate work for 9000).
 //   - No 9009 expose; interserver stays in-netns, the sidecar's mTLS
 //     ingress (0.0.0.0:19009) is the only externally-reachable surface.
-func StartClickHouseMeshReplica(t *testing.T, cluster *KeeperCluster, nodeName, keeperEndpoint string) *ClickHouseReplicatedNode {
+func StartClickHouseMeshReplica(t *testing.T, cluster *KeeperCluster, nodeName, primaryKeeper string, auxKeepers map[string]string) *ClickHouseReplicatedNode {
 	t.Helper()
 	ctx := context.Background()
 
-	kHost, kPort, err := net.SplitHostPort(keeperEndpoint)
+	kHost, kPort, err := net.SplitHostPort(primaryKeeper)
 	if err != nil {
-		t.Fatalf("invalid keeperEndpoint %q: %v", keeperEndpoint, err)
+		t.Fatalf("invalid primaryKeeper %q: %v", primaryKeeper, err)
 	}
 
 	listenXML := `<clickhouse>
@@ -57,7 +65,30 @@ func StartClickHouseMeshReplica(t *testing.T, cluster *KeeperCluster, nodeName, 
 	<interserver_http_port>9010</interserver_http_port>
 </clickhouse>`
 	macrosXML := fmt.Sprintf(`<clickhouse><macros><shard>01</shard><replica>%s</replica></macros></clickhouse>`, nodeName)
-	keeperXML := fmt.Sprintf("<clickhouse>\n\t<zookeeper>\n\t\t<node><host>%s</host><port>%s</port></node>\n\t\t<session_timeout_ms>30000</session_timeout_ms>\n\t</zookeeper>\n\t<distributed_ddl><path>/clickhouse/task_queue/ddl</path></distributed_ddl>\n</clickhouse>", kHost, kPort)
+
+	// <zookeeper> = primary; <auxiliary_zookeepers> = secondary shards
+	// (architecture.md §6). Each aux key appears verbatim as the XML
+	// element name and as the DDL shard name; restrict to valid XML
+	// identifiers when picking names.
+	var keeperXML strings.Builder
+	fmt.Fprintf(&keeperXML, "<clickhouse>\n\t<zookeeper>\n\t\t<node><host>%s</host><port>%s</port></node>\n\t\t<session_timeout_ms>30000</session_timeout_ms>\n\t</zookeeper>\n", kHost, kPort)
+	if len(auxKeepers) > 0 {
+		names := make([]string, 0, len(auxKeepers))
+		for name := range auxKeepers {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		keeperXML.WriteString("\t<auxiliary_zookeepers>\n")
+		for _, name := range names {
+			aHost, aPort, err := net.SplitHostPort(auxKeepers[name])
+			if err != nil {
+				t.Fatalf("invalid aux keeper %q=%q: %v", name, auxKeepers[name], err)
+			}
+			fmt.Fprintf(&keeperXML, "\t\t<%s>\n\t\t\t<node><host>%s</host><port>%s</port></node>\n\t\t\t<session_timeout_ms>30000</session_timeout_ms>\n\t\t</%s>\n", name, aHost, aPort, name)
+		}
+		keeperXML.WriteString("\t</auxiliary_zookeepers>\n")
+	}
+	keeperXML.WriteString("\t<distributed_ddl><path>/clickhouse/task_queue/ddl</path></distributed_ddl>\n</clickhouse>")
 
 	dnet := cluster.DockerNetwork()
 	req := testcontainers.ContainerRequest{
@@ -75,7 +106,7 @@ func StartClickHouseMeshReplica(t *testing.T, cluster *KeeperCluster, nodeName, 
 		Files: []testcontainers.ContainerFile{
 			{Reader: strings.NewReader(listenXML), ContainerFilePath: "/etc/clickhouse-server/config.d/zz-listen.xml", FileMode: 0o644},
 			{Reader: strings.NewReader(macrosXML), ContainerFilePath: "/etc/clickhouse-server/config.d/macros.xml", FileMode: 0o644},
-			{Reader: strings.NewReader(keeperXML), ContainerFilePath: "/etc/clickhouse-server/config.d/keeper.xml", FileMode: 0o644},
+			{Reader: strings.NewReader(keeperXML.String()), ContainerFilePath: "/etc/clickhouse-server/config.d/keeper.xml", FileMode: 0o644},
 		},
 		WaitingFor: wait.ForListeningPort("9000/tcp").WithStartupTimeout(120 * time.Second),
 	}

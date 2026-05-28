@@ -2,7 +2,6 @@ package testenv
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -27,9 +26,9 @@ func StartKeeperProxy(t *testing.T, cluster *KeeperCluster, alias string) {
 	bin := runfileBinary(t, "pkg/integration/testenv/cmd/kpx/kpx_/kpx")
 	dnet := cluster.DockerNetwork()
 
-	members := make([]string, 0, len(cluster.containers))
-	for i := 1; i <= len(cluster.containers); i++ {
-		members = append(members, fmt.Sprintf("keeper-%d:9181", i))
+	members := make([]string, 0, len(cluster.Aliases))
+	for _, a := range cluster.Aliases {
+		members = append(members, a+":9181")
 	}
 
 	req := testcontainers.ContainerRequest{

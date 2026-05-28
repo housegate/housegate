@@ -31,20 +31,25 @@ type Registry interface {
 }
 
 // KeeperPool is an OPTIONAL capability a Registry may implement to expose
-// the current keeper quorum membership to housegate's keeper proxy
-// (pkg/keeper). It is deliberately NOT part of Registry: deployments that
-// don't host a keeper pool simply omit it, and the keeper proxy then runs
-// on its statically configured members. Implementations that DO carry the
-// pool membership (e.g. a chain-backed Registry observing the on-chain
-// keeper-pool-changed event) let the proxy track live membership and
-// re-steer when the quorum is reconfigured. build.go probes for it via a
-// type assertion.
+// the keeper quorum membership of each named shard to housegate's keeper
+// proxy (pkg/keeper). A deployment with one global pool registers a single
+// shard (conventionally "default"); a deployment that runs §6 multi-shard
+// keeper pools registers one shard per pool (e.g. "default", "shard_2").
+// Build.go probes for this capability via a type assertion; deployments
+// that don't carry the membership simply omit it and the keeper proxies
+// run on their statically configured members.
 type KeeperPool interface {
 	// KeeperPoolMembers returns the keeper-client endpoints (host:port) of
-	// the current quorum, or nil if unknown. Implementations must return a
-	// fresh slice each call. An empty/nil result is treated as "no update"
-	// by the proxy (it keeps its current members rather than going dark).
-	KeeperPoolMembers() []string
+	// the given shard's current quorum, or nil if unknown. Implementations
+	// must return a fresh slice each call. An empty/nil result is treated
+	// as "no update" by the proxy (it keeps its current members rather
+	// than going dark).
+	KeeperPoolMembers(shard string) []string
+
+	// KeeperShardsList returns the names of every shard the Registry
+	// knows about. Used so build.go can enumerate which shards to feed
+	// live membership for without hard-coding shard names.
+	KeeperShardsList() []string
 }
 
 // MeshTopology is an OPTIONAL Registry capability exposing the

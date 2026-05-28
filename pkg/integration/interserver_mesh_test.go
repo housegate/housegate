@@ -39,8 +39,8 @@ func TestInterserverMeshReplication(t *testing.T) {
 	testenv.StartKeeperProxy(t, cluster, "kpx-1")
 	testenv.StartKeeperProxy(t, cluster, "kpx-2")
 
-	ch1 := testenv.StartClickHouseMeshReplica(t, cluster, "ch-1", "kpx-1:9181")
-	ch2 := testenv.StartClickHouseMeshReplica(t, cluster, "ch-2", "kpx-2:9181")
+	ch1 := testenv.StartClickHouseMeshReplica(t, cluster, "ch-1", "kpx-1:9181", nil)
+	ch2 := testenv.StartClickHouseMeshReplica(t, cluster, "ch-2", "kpx-2:9181", nil)
 
 	// Self-signed CA + a single leaf cert (used by both sidecars as both
 	// client cert and server cert). In production each housegate would

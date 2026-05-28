@@ -159,31 +159,46 @@ type LoggingConfig struct {
 }
 
 // KeeperProxyConfig configures the CH-facing keeper proxy (link A of the
-// keeper-pool design). Disabled when Listen is empty.
+// keeper-pool design). Disabled when Shards is empty.
 //
-// A co-located ClickHouse points its <zookeeper> at Listen; the proxy
-// forwards the keeper-client byte stream to a live quorum member and
-// re-steers on membership change. The proxy is L4 (protocol-unaware) and
-// never participates in Raft. Implementation lives in pkg/keeper.
+// Each shard is a co-located keeper-client listener fronting one quorum
+// (architecture.md §6 multi-shard pools). A co-located ClickHouse points
+// its <zookeeper> at one shard's Listen and may additionally name other
+// shards via <auxiliary_zookeepers>; a logical database is bound to its
+// shard via network.DatabaseInfo.KeeperShard. The proxy is L4
+// (protocol-unaware) and never participates in Raft. Implementation lives
+// in pkg/keeper.
 type KeeperProxyConfig struct {
-	// Listen is the keeper-client bind address (e.g. ":9181"). Empty
-	// disables the keeper proxy.
+	// Shards is the set of keeper-pool shards this housegate fronts.
+	// Empty disables the keeper proxy entirely.
+	Shards []KeeperShardConfig `json:"shards" yaml:"shards"`
+	// ProbeInterval between 4LW health sweeps (default 1s). Applied to
+	// every shard's tracker.
+	ProbeInterval Duration `json:"probe_interval" yaml:"probe_interval"`
+	// ProbeTimeout per 4LW probe (default 2s). Applied to every shard.
+	ProbeTimeout Duration `json:"probe_timeout" yaml:"probe_timeout"`
+}
+
+// KeeperShardConfig configures one keeper-pool shard.
+type KeeperShardConfig struct {
+	// Name uniquely identifies the shard. Matches the registry.KeeperPool
+	// shard key and DatabaseInfo.KeeperShard so the same name flows
+	// end-to-end from chain/state → keeper proxy → CH config. The
+	// conventional default is "default".
+	Name string `json:"name" yaml:"name"`
+	// Listen is the keeper-client bind address (e.g. ":9181"). Required.
 	Listen string `json:"listen" yaml:"listen"`
-	// Members is the static list of keeper-client endpoints (host:port)
-	// forming the quorum this proxy fronts. Required when Listen is set;
-	// NetworkState-sourced membership is a future enhancement.
+	// Members is the static bootstrap list of keeper-client endpoints
+	// (host:port) for this shard's quorum. Required; a chain-backed
+	// Registry may then refresh membership live via registry.KeeperPool.
 	Members []string `json:"members" yaml:"members"`
 	// Strategy selects the steering target: "any_voter" (default) or
 	// "leader_pref".
 	Strategy string `json:"strategy" yaml:"strategy"`
-	// ProbeInterval between 4LW health sweeps (default 1s).
-	ProbeInterval Duration `json:"probe_interval" yaml:"probe_interval"`
-	// ProbeTimeout per 4LW probe (default 2s).
-	ProbeTimeout Duration `json:"probe_timeout" yaml:"probe_timeout"`
 }
 
-// Enabled reports whether the keeper proxy is configured.
-func (k KeeperProxyConfig) Enabled() bool { return k.Listen != "" }
+// Enabled reports whether the keeper proxy is configured (any shard set).
+func (k KeeperProxyConfig) Enabled() bool { return len(k.Shards) > 0 }
 
 // InterserverMeshConfig configures the two-hop mTLS interserver-mesh
 // sidecar. Disabled when EgressListen is empty.
@@ -379,21 +394,32 @@ func (c *Config) Validate() error {
 	}
 
 	if c.KeeperProxy.Enabled() {
-		if _, _, err := net.SplitHostPort(c.KeeperProxy.Listen); err != nil {
-			errs = append(errs, fmt.Errorf("keeper_proxy.listen: invalid host:port %q: %w", c.KeeperProxy.Listen, err))
-		}
-		if len(c.KeeperProxy.Members) == 0 {
-			errs = append(errs, errors.New("keeper_proxy.members: at least one keeper endpoint is required when keeper_proxy.listen is set"))
-		}
-		for i, m := range c.KeeperProxy.Members {
-			if _, _, err := net.SplitHostPort(m); err != nil {
-				errs = append(errs, fmt.Errorf("keeper_proxy.members[%d]: invalid host:port %q: %w", i, m, err))
+		seen := map[string]bool{}
+		for i, sh := range c.KeeperProxy.Shards {
+			tag := fmt.Sprintf("keeper_proxy.shards[%d]", i)
+			if sh.Name == "" {
+				errs = append(errs, fmt.Errorf("%s.name: required", tag))
+			} else if seen[sh.Name] {
+				errs = append(errs, fmt.Errorf("%s.name: duplicate shard %q", tag, sh.Name))
+			} else {
+				seen[sh.Name] = true
 			}
-		}
-		switch c.KeeperProxy.Strategy {
-		case "", "any_voter", "leader_pref":
-		default:
-			errs = append(errs, fmt.Errorf("keeper_proxy.strategy: unknown %q (want any_voter or leader_pref)", c.KeeperProxy.Strategy))
+			if _, _, err := net.SplitHostPort(sh.Listen); err != nil {
+				errs = append(errs, fmt.Errorf("%s.listen: invalid host:port %q: %w", tag, sh.Listen, err))
+			}
+			if len(sh.Members) == 0 {
+				errs = append(errs, fmt.Errorf("%s.members: at least one keeper endpoint is required", tag))
+			}
+			for j, m := range sh.Members {
+				if _, _, err := net.SplitHostPort(m); err != nil {
+					errs = append(errs, fmt.Errorf("%s.members[%d]: invalid host:port %q: %w", tag, j, m, err))
+				}
+			}
+			switch sh.Strategy {
+			case "", "any_voter", "leader_pref":
+			default:
+				errs = append(errs, fmt.Errorf("%s.strategy: unknown %q (want any_voter or leader_pref)", tag, sh.Strategy))
+			}
 		}
 	}
 

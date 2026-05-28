@@ -28,22 +28,36 @@ const keeperImage = "clickhouse/clickhouse-keeper:25.8"
 // (9181); the keeper proxy under test (running in the test process on the
 // host) uses these as its member set. Raft (9234) stays container-to-
 // container over the private network and is never exposed to the host.
+//
+// Aliases[i] is the in-network DNS name peers and the keeper proxy use to
+// reach node i ("<prefix>-N"). Multi-shard tests use distinct prefixes
+// (e.g. "kA", "kB") so two clusters can share one Docker network without
+// alias collisions; single-cluster tests use the default prefix "keeper".
 type KeeperCluster struct {
 	Endpoints  []string
+	Aliases    []string
 	containers []testcontainers.Container
 	net        *testcontainers.DockerNetwork
 }
 
-// StartKeeperCluster starts an n-node keeper quorum and waits until a
-// leader is elected. Cleanup is registered via t.Cleanup.
+// StartKeeperCluster starts an n-node keeper quorum (alias prefix "keeper")
+// and waits until a leader is elected. Cleanup is registered via t.Cleanup.
 func StartKeeperCluster(t *testing.T, n int) *KeeperCluster {
+	return StartKeeperClusterOn(t, nil, "keeper", n)
+}
+
+// StartKeeperClusterOn is the multi-cluster variant: every cluster joins
+// the provided net (or creates a new one when net is nil) and uses prefix
+// for its in-network aliases. The returned KeeperCluster owns the network
+// when it created it, and shares it otherwise.
+func StartKeeperClusterOn(t *testing.T, dnet *testcontainers.DockerNetwork, prefix string, n int) *KeeperCluster {
 	t.Helper()
-	kc, cleanup, err := startKeeperCluster(context.Background(), n)
+	kc, cleanup, err := startKeeperCluster(context.Background(), dnet, prefix, n)
 	if err != nil {
 		if cleanup != nil {
 			cleanup()
 		}
-		t.Fatalf("start keeper cluster: %v", err)
+		t.Fatalf("start keeper cluster %q: %v", prefix, err)
 	}
 	t.Cleanup(cleanup)
 	kc.WaitForLeader(t, 90*time.Second)
@@ -90,12 +104,23 @@ func (kc *KeeperCluster) WaitForLeader(t *testing.T, budget time.Duration) {
 	t.Fatalf("keeper cluster did not elect a leader within %s", budget)
 }
 
-func startKeeperCluster(ctx context.Context, n int) (*KeeperCluster, func(), error) {
-	dnet, err := network.New(ctx)
-	if err != nil {
-		return nil, nil, fmt.Errorf("create network: %w", err)
+func startKeeperCluster(ctx context.Context, sharedNet *testcontainers.DockerNetwork, prefix string, n int) (*KeeperCluster, func(), error) {
+	var (
+		dnet    = sharedNet
+		ownsNet bool
+	)
+	if dnet == nil {
+		nn, err := network.New(ctx)
+		if err != nil {
+			return nil, nil, fmt.Errorf("create network: %w", err)
+		}
+		dnet = nn
+		ownsNet = true
 	}
-	cleanups := []func(){func() { _ = dnet.Remove(context.Background()) }}
+	cleanups := []func(){}
+	if ownsNet {
+		cleanups = append(cleanups, func() { _ = dnet.Remove(context.Background()) })
+	}
 	cleanup := func() {
 		for i := len(cleanups) - 1; i >= 0; i-- {
 			cleanups[i]()
@@ -104,11 +129,13 @@ func startKeeperCluster(ctx context.Context, n int) (*KeeperCluster, func(), err
 
 	containers := make([]testcontainers.Container, n)
 	endpoints := make([]string, n)
+	aliases := make([]string, n)
 
 	g, gctx := errgroup.WithContext(ctx)
 	for i := 0; i < n; i++ {
 		i := i
-		alias := fmt.Sprintf("keeper-%d", i+1)
+		alias := fmt.Sprintf("%s-%d", prefix, i+1)
+		aliases[i] = alias
 		g.Go(func() error {
 			req := testcontainers.ContainerRequest{
 				Image:          keeperImage,
@@ -116,7 +143,7 @@ func startKeeperCluster(ctx context.Context, n int) (*KeeperCluster, func(), err
 				Networks:       []string{dnet.Name},
 				NetworkAliases: map[string][]string{dnet.Name: {alias}},
 				Files: []testcontainers.ContainerFile{{
-					Reader:            strings.NewReader(keeperConfigXML(i+1, n)),
+					Reader:            strings.NewReader(keeperConfigXML(prefix, i+1, n)),
 					ContainerFilePath: "/etc/clickhouse-keeper/keeper_config.xml",
 					FileMode:          0o644,
 				}},
@@ -156,7 +183,12 @@ func startKeeperCluster(ctx context.Context, n int) (*KeeperCluster, func(), err
 		cleanups = append(cleanups, func() { _ = c.Terminate(context.Background()) })
 	}
 
-	return &KeeperCluster{Endpoints: endpoints, containers: containers, net: dnet}, cleanup, nil
+	return &KeeperCluster{
+		Endpoints:  endpoints,
+		Aliases:    aliases,
+		containers: containers,
+		net:        dnet,
+	}, cleanup, nil
 }
 
 // hostStr normalises testcontainers' host (sometimes "localhost") to a dial
@@ -170,13 +202,16 @@ func hostStr(h string) string {
 }
 
 // keeperConfigXML renders a keeper config for node id within an n-node
-// ensemble. Raft peers are addressed by their network aliases keeper-1..n.
-func keeperConfigXML(id, n int) string {
+// ensemble whose Raft peers are addressed by their network aliases
+// "<prefix>-1".."<prefix>-N". The prefix lets multi-cluster tests share a
+// docker network without alias collisions; the conventional single-cluster
+// prefix is "keeper".
+func keeperConfigXML(prefix string, id, n int) string {
 	var raft strings.Builder
 	for j := 1; j <= n; j++ {
 		fmt.Fprintf(&raft,
-			"            <server><id>%d</id><hostname>keeper-%d</hostname><port>9234</port></server>\n",
-			j, j)
+			"            <server><id>%d</id><hostname>%s-%d</hostname><port>9234</port></server>\n",
+			j, prefix, j)
 	}
 	return fmt.Sprintf(`<clickhouse>
     <logger><level>warning</level><console>true</console></logger>

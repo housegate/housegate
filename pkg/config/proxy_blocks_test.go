@@ -12,7 +12,7 @@ import (
 func TestConfig_Validate_KeeperProxy(t *testing.T) {
 	base := minimalServerConfig(t)
 
-	// Disabled (empty Listen) is valid.
+	// Disabled (no shards) is valid.
 	cfg := base
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("keeper_proxy disabled must be valid: %v", err)
@@ -24,22 +24,42 @@ func TestConfig_Validate_KeeperProxy(t *testing.T) {
 		return c.Validate()
 	}
 
-	if err := valid(KeeperProxyConfig{Listen: ":9181", Members: []string{"k1:9181", "k2:9181"}, Strategy: "leader_pref"}); err != nil {
-		t.Fatalf("valid keeper_proxy rejected: %v", err)
-	}
-	if err := valid(KeeperProxyConfig{Listen: ":9181", Members: []string{"k1:9181"}, Strategy: ""}); err != nil {
-		t.Fatalf("empty strategy must default, not error: %v", err)
+	one := func(sh KeeperShardConfig) KeeperProxyConfig {
+		return KeeperProxyConfig{Shards: []KeeperShardConfig{sh}}
 	}
 
-	for name, kp := range map[string]KeeperProxyConfig{
-		"no members":       {Listen: ":9181"},
-		"bad listen":       {Listen: "not-a-hostport", Members: []string{"k1:9181"}},
-		"bad member":       {Listen: ":9181", Members: []string{"bad-member"}},
-		"unknown strategy": {Listen: ":9181", Members: []string{"k1:9181"}, Strategy: "bogus"},
+	if err := valid(one(KeeperShardConfig{Name: "default", Listen: ":9181", Members: []string{"k1:9181", "k2:9181"}, Strategy: "leader_pref"})); err != nil {
+		t.Fatalf("valid keeper_proxy rejected: %v", err)
+	}
+	if err := valid(one(KeeperShardConfig{Name: "default", Listen: ":9181", Members: []string{"k1:9181"}, Strategy: ""})); err != nil {
+		t.Fatalf("empty strategy must default, not error: %v", err)
+	}
+	// Multiple shards on distinct listen addresses are valid (§6).
+	if err := valid(KeeperProxyConfig{Shards: []KeeperShardConfig{
+		{Name: "default", Listen: ":9181", Members: []string{"k1:9181"}},
+		{Name: "shard_2", Listen: ":9182", Members: []string{"k2:9181"}},
+	}}); err != nil {
+		t.Fatalf("two-shard keeper_proxy rejected: %v", err)
+	}
+
+	for name, sh := range map[string]KeeperShardConfig{
+		"no name":          {Listen: ":9181", Members: []string{"k1:9181"}},
+		"no members":       {Name: "default", Listen: ":9181"},
+		"bad listen":       {Name: "default", Listen: "not-a-hostport", Members: []string{"k1:9181"}},
+		"bad member":       {Name: "default", Listen: ":9181", Members: []string{"bad-member"}},
+		"unknown strategy": {Name: "default", Listen: ":9181", Members: []string{"k1:9181"}, Strategy: "bogus"},
 	} {
-		if err := valid(kp); err == nil {
-			t.Errorf("keeper_proxy %q must error", name)
+		if err := valid(one(sh)); err == nil {
+			t.Errorf("keeper_proxy shard %q must error", name)
 		}
+	}
+
+	// Duplicate shard name is rejected.
+	if err := valid(KeeperProxyConfig{Shards: []KeeperShardConfig{
+		{Name: "default", Listen: ":9181", Members: []string{"k1:9181"}},
+		{Name: "default", Listen: ":9182", Members: []string{"k2:9181"}},
+	}}); err == nil {
+		t.Error("duplicate shard name must error")
 	}
 }
 

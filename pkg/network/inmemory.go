@@ -2,6 +2,7 @@ package network
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 
 	"housegate/housegate/pkg/registry"
@@ -23,11 +24,12 @@ type InMemoryNetworkState struct {
 	DatabasePermissions  map[AccountAddress]DatabasePermissions
 	Operators            map[AccountAddress]map[AccountAddress]bool
 
-	// KeeperPoolEndpoints is the current keeper quorum membership
-	// (keeper-client host:port). Satisfies the optional registry.KeeperPool
-	// capability so the keeper proxy can track live membership in tests and
-	// local/yaml deployments. Empty means "unknown" (no update).
-	KeeperPoolEndpoints []string
+	// KeeperShards maps a shard name to the keeper-client endpoints
+	// (host:port) of that shard's current quorum (architecture.md §6).
+	// Satisfies the optional registry.KeeperPool capability so the
+	// keeper proxy can track live membership in tests and local/yaml
+	// deployments. Empty / missing shard means "unknown" (no update).
+	KeeperShards map[string][]string
 
 	// MeshIngressByReplica maps a CH replica name (as it appears in
 	// /clickhouse/tables/.../replicas/<replica>/) to its peer Ingress
@@ -47,29 +49,48 @@ func NewInMemoryNetworkState() *InMemoryNetworkState {
 		DatabaseInfos:        make(map[Database]DatabaseInfo),
 		DatabasePermissions:  make(map[AccountAddress]DatabasePermissions),
 		Operators:            make(map[AccountAddress]map[AccountAddress]bool),
+		KeeperShards:         make(map[string][]string),
 	}
 }
 
 // --- registry.KeeperPool (optional)
 
-// KeeperPoolMembers returns a copy of the current keeper quorum endpoints,
-// or nil when unknown. Satisfies registry.KeeperPool.
-func (s *InMemoryNetworkState) KeeperPoolMembers() []string {
+// KeeperPoolMembers returns a copy of the named shard's keeper quorum
+// endpoints, or nil when unknown. Satisfies registry.KeeperPool.
+func (s *InMemoryNetworkState) KeeperPoolMembers(shard string) []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if len(s.KeeperPoolEndpoints) == 0 {
+	m := s.KeeperShards[shard]
+	if len(m) == 0 {
 		return nil
 	}
-	return append([]string(nil), s.KeeperPoolEndpoints...)
+	return append([]string(nil), m...)
 }
 
-// SetKeeperPool replaces the keeper quorum membership. Test/local helper
-// that mirrors how a chain-backed Registry would update on the on-chain
-// keeper-pool-changed event.
-func (s *InMemoryNetworkState) SetKeeperPool(members ...string) {
+// KeeperShardsList returns the names of every registered shard. Satisfies
+// registry.KeeperPool.KeeperShards. (Named *List to avoid a clash with
+// the exported KeeperShards map field.)
+func (s *InMemoryNetworkState) KeeperShardsList() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]string, 0, len(s.KeeperShards))
+	for name := range s.KeeperShards {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// SetKeeperPool replaces the named shard's keeper quorum membership.
+// Test/local helper that mirrors how a chain-backed Registry would update
+// on the on-chain keeper-pool-changed event.
+func (s *InMemoryNetworkState) SetKeeperPool(shard string, members ...string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.KeeperPoolEndpoints = append([]string(nil), members...)
+	if s.KeeperShards == nil {
+		s.KeeperShards = make(map[string][]string)
+	}
+	s.KeeperShards[shard] = append([]string(nil), members...)
 }
 
 // --- registry.MeshTopology (optional)

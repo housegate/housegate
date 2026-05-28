@@ -16,6 +16,7 @@ go_test(
         "interserver_mesh_test.go",
         "keeper_proxy_test.go",
         "metrics_test.go",
+        "multi_shard_keeper_test.go",
         "peer_envelope_test.go",
         "permission_isolation_test.go",
         "replica_routing_test.go",
@@ -61,5 +62,6 @@ go_test(
         "//protos",
         "@com_github_clickhouse_clickhouse_go_v2//:clickhouse-go",
         "@com_github_prometheus_client_golang//prometheus",
+        "@com_github_testcontainers_testcontainers_go//network",
     ],
 )
