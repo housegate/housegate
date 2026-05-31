@@ -29,7 +29,9 @@ diff --color -ruN a/crypto/secp256k1/BUILD.bazel b/crypto/secp256k1/BUILD.bazel
 diff --color -ruN a/crypto/secp256k1/libsecp256k1/BUILD.bazel b/crypto/secp256k1/libsecp256k1/BUILD.bazel
 --- a/crypto/secp256k1/libsecp256k1/BUILD.bazel	1969-12-31 18:00:00.000000000 -0600
 +++ b/crypto/secp256k1/libsecp256k1/BUILD.bazel	2021-10-14 12:54:27.704265206 -0500
-@@ -0,0 +1,5 @@
+@@ -0,0 +1,7 @@
++load("@rules_cc//cc:defs.bzl", "cc_library")
++
 +cc_library(
 +    name = "hdrs",
 +    hdrs = glob(["include/**/*.h", "src/**/*.h", "src/**/*.c"]),

@@ -1,6 +1,6 @@
 module housegate/housegate
 
-go 1.25.9
+go 1.26.3
 
 require (
 	filippo.io/age v1.3.1
