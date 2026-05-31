@@ -3,17 +3,20 @@ module(
     version = "1.0",
 )
 
-bazel_dep(name = "platforms", version = "1.0.0")
+bazel_dep(name = "platforms", version = "1.1.0")
 bazel_dep(name = "rules_go", version = "0.60.0")
-bazel_dep(name = "gazelle", version = "0.47.0")
-bazel_dep(name = "protobuf", version = "33.5")
+bazel_dep(name = "gazelle", version = "0.51.0")
+bazel_dep(name = "protobuf", version = "35.0")
 bazel_dep(name = "rules_multirun", version = "0.13.0")
 bazel_dep(name = "aspect_bazel_lib", version = "2.22.5")
 bazel_dep(name = "bazel_skylib", version = "1.9.0")
-bazel_dep(name = "rules_oci", version = "2.2.7")
+bazel_dep(name = "rules_oci", version = "2.3.0")
+
+# Bazel 9 removed native sh_binary; //bazel:docker needs rules_shell in the graph.
+bazel_dep(name = "rules_shell", version = "0.8.0")
 
 go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
-go_sdk.download(version = "1.25.9")
+go_sdk.download(version = "1.26.3")
 
 go_deps = use_extension("@gazelle//:extensions.bzl", "go_deps")
 go_deps.from_file(go_mod = "//:go.mod")
@@ -65,6 +68,7 @@ oci.pull(
     tag = "debug",
 )
 use_repo(oci, "go_base_image")
+
 oci.pull(
     name = "python_base_image",
     image = "ghcr.io/sentioxyz/python",
@@ -72,6 +76,7 @@ oci.pull(
     tag = "3.10-1.4.0",
 )
 use_repo(oci, "python_base_image")
+
 oci.pull(
     name = "node_base_image",
     image = "ghcr.io/sentioxyz/node",
@@ -79,6 +84,7 @@ oci.pull(
     tag = "24-1.4.2",
 )
 use_repo(oci, "node_base_image")
+
 oci.pull(
     name = "clickhouse_client_image",
     image = "docker.io/clickhouse/clickhouse-server",
@@ -86,6 +92,7 @@ oci.pull(
     tag = "head-alpine",
 )
 use_repo(oci, "clickhouse_client_image", "clickhouse_client_image_linux_amd64", "go_base_image_linux_amd64", "move_base_image", "move_base_image_linux_amd64", "node_base_image_linux_amd64", "python_base_image_linux_amd64")
+
 oci.pull(
     name = "move_base_image",
     image = "docker.io/google/cloud-sdk",

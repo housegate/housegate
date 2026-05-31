@@ -12,7 +12,7 @@ go_library(
     importpath = "housegate/housegate/tools/da-mvp/pkg/celestia",
     visibility = ["//visibility:public"],
     deps = [
-        "@com_github_celestiaorg_go_square_v2//inclusion:go_default_library",
-        "@com_github_celestiaorg_go_square_v2//share:go_default_library",
+        "@com_github_celestiaorg_go_square_v2//inclusion",
+        "@com_github_celestiaorg_go_square_v2//share",
     ],
 )
