@@ -71,13 +71,14 @@ type Options struct {
 	// AND the source value itself are bypassed; the injected registry is
 	// used verbatim. The operator-visible source field is irrelevant in
 	// that path even if non-empty.
-	NetworkState registry.Registry
-	Validator    auth.Validator
-	Rewriter     rewriter.Factory
-	CredProvider credentials.CredentialProvider
-	Signer       auth.Signer
-	UsageClient  billing.UsageClient
-	Cluster      cluster.Cluster
+	NetworkState           registry.Registry
+	Validator              auth.Validator
+	Rewriter               rewriter.Factory
+	CredProvider           credentials.CredentialProvider
+	Signer                 auth.Signer
+	UsageClient            billing.UsageClient
+	IndexingUsageReporter  billing.IndexingUsageReporter
+	Cluster                cluster.Cluster
 
 	// CommitGateObservers gate DDL statements (CREATE / DROP TABLE,
 	// CREATE / DROP DATABASE) on host-supplied external commits.

@@ -32,6 +32,7 @@ import (
 	"housegate/housegate/pkg/plugins/agent"
 	authplugin "housegate/housegate/pkg/plugins/auth"
 	"housegate/housegate/pkg/plugins/concurrency"
+	indexingusage "housegate/housegate/pkg/plugins/indexing_usage"
 	"housegate/housegate/pkg/plugins/rewrite"
 	"housegate/housegate/pkg/plugins/sessionstate"
 	"housegate/housegate/pkg/plugins/usage"
@@ -128,12 +129,13 @@ type Config struct {
 
 	// --- Feature sections (each owned by its plugin package) ---
 
-	Auth             authplugin.Config   `json:"auth"              yaml:"auth"`
-	Rewriter         rewrite.Config      `json:"rewriter"          yaml:"rewriter"`
-	Agent            agent.Config        `json:"agent"             yaml:"agent"`
-	Usage            usage.Config        `json:"usage"             yaml:"usage"`
-	ConcurrencyLimit concurrency.Config  `json:"concurrency_limit" yaml:"concurrency_limit"`
-	State            sessionstate.Config `json:"state"             yaml:"state"`
+	Auth             authplugin.Config     `json:"auth"              yaml:"auth"`
+	Rewriter         rewrite.Config        `json:"rewriter"          yaml:"rewriter"`
+	Agent            agent.Config          `json:"agent"             yaml:"agent"`
+	Usage            usage.Config          `json:"usage"             yaml:"usage"`
+	IndexingUsage    indexingusage.Config  `json:"indexing_usage"    yaml:"indexing_usage"`
+	ConcurrencyLimit concurrency.Config    `json:"concurrency_limit" yaml:"concurrency_limit"`
+	State            sessionstate.Config   `json:"state"             yaml:"state"`
 
 	// --- Plumbing sections owned by pkg/config ---
 

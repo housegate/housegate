@@ -34,6 +34,7 @@ go_library(
         "//pkg/plugins/concurrency",
         "//pkg/plugins/credential",
         "//pkg/plugins/forward",
+        "//pkg/plugins/indexing_usage",
         "//pkg/plugins/metrics",
         "//pkg/plugins/rewrite",
         "//pkg/plugins/route",
