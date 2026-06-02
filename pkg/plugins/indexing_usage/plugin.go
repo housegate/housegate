@@ -95,17 +95,18 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	if p == nil || p.dbs == nil || p.sink == nil || qctx == nil || qctx.Session == nil {
 		return nil
 	}
-	// Anything that isn't a driver-signed session is metered elsewhere
-	// (query usage path) — bail before doing any work to keep the hot
-	// path cheap for non-billing-relevant traffic.
-	snap := qctx.Session.State().Snapshot()
-	if !snap.IsDriver {
+	// Cheap, allocation-free disqualifier first: the rewriter must have
+	// classified this as an INSERT (without it we can't tell SELECT from
+	// INSERT, and AccessedTables is unset). Running this before the
+	// SessionState snapshot below short-circuits the dominant non-INSERT
+	// traffic without paying the snapshot's per-session Settings-map copy.
+	if qctx.StatementType != sqlmeta.StatementTypeInsert {
 		return nil
 	}
-	// Rewriter must have classified the SQL; without it we can't tell
-	// SELECT from INSERT, and AccessedTables is unset. Treat as
-	// "don't know" → skip.
-	if qctx.StatementType != sqlmeta.StatementTypeInsert {
+	// Anything that isn't a driver-signed session is metered elsewhere
+	// (query usage path). Reading IsDriver requires a state snapshot.
+	snap := qctx.Session.State().Snapshot()
+	if !snap.IsDriver {
 		return nil
 	}
 	_, logger := log.FromContext(ctx)
@@ -160,7 +161,12 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 				continue
 			}
 			if lc, ok := ParseLogComment(s.Value); ok {
-				isBackfill = !lc.Watching
+				// Absent watching key (nil) leaves isBackfill=false
+				// (watching=true), matching the missing-setting default;
+				// only an explicit watching:false marks backfill.
+				if lc.Watching != nil {
+					isBackfill = !*lc.Watching
+				}
 				// Cross-check against db.ProcessorId. A mismatch is a
 				// driver bug or a malicious session; log loudly but do
 				// not reject the query — the database binding is

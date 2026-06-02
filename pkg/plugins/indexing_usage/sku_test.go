@@ -12,6 +12,13 @@ func TestMapTableTypeToSKU(t *testing.T) {
 		{"gauge", "metric", true},
 		{"event", "event", true},
 		{"entity", "entity", true},
+		// Case / whitespace normalization: table_type comes verbatim from
+		// the on-chain TableCreated event and is not enum-validated, so a
+		// casing/whitespace variant must still map (not silently drop).
+		{"Counter", "metric", true},
+		{"GAUGE", "metric", true},
+		{" event ", "event", true},
+		{"Entity", "entity", true},
 		{"user", "", false},
 		{"VIEW", "", false},
 		{"MATERIALIZED_VIEW", "", false},

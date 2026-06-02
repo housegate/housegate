@@ -209,6 +209,23 @@ func TestPlugin_OnQuery_NoLogCommentDefaultsToWatching(t *testing.T) {
 	}
 }
 
+func TestPlugin_OnQuery_MissingWatchingKeyNotBackfill(t *testing.T) {
+	sess := newTestSession(t)
+	sink := &fakeSink{}
+	p := New(processorDB(), sink)
+	// log_comment is present and valid JSON but omits the "watching" key.
+	// It must NOT be billed as backfill — same default as a fully-absent
+	// setting (regression guard: a plain bool zero-valued to false here).
+	qctx := driverINSERT(sess, "x2y2_0", "counter_token", `{"processor_id":"x2y2"}`)
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	got := wantOneEntry(t, sink)
+	if got.IsBackfilling {
+		t.Errorf("log_comment without watching key must default to live (IsBackfilling=false): got %+v", got)
+	}
+}
+
 func TestPlugin_OnQuery_SkipsNonDriverSession(t *testing.T) {
 	sess := newTestSession(t)
 	// driverINSERT flips IsDriver; build manually instead.
