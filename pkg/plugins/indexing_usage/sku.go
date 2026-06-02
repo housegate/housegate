@@ -1,5 +1,7 @@
 package indexingusage
 
+import "strings"
+
 // MapTableTypeToSKU translates a registry.Table.Type value (the
 // driver-set classification stored when CREATE TABLE was registered
 // on-chain) into the on-chain SKU name sentio-node expects.
@@ -15,7 +17,11 @@ package indexingusage
 // views, and any tableType the driver might add later that we have not
 // yet been taught about. Forward-compat over silent over-billing.
 func MapTableTypeToSKU(tableType string) (string, bool) {
-	switch tableType {
+	// Normalize before matching: the table_type arrives verbatim from the
+	// on-chain TableCreated event (driver-set via createTable, not enum-
+	// validated end-to-end), so guard against case / whitespace drift
+	// rather than silently dropping a billable INSERT.
+	switch strings.ToLower(strings.TrimSpace(tableType)) {
 	case "counter", "gauge":
 		return "metric", true
 	case "event":

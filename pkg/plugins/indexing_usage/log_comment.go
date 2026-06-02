@@ -16,9 +16,15 @@ const LogCommentSettingKey = "log_comment"
 // ProcessorId) and watching (the only signal that distinguishes
 // backfill from live processing). Extra fields are tolerated and
 // ignored to keep us forward-compatible with future driver additions.
+//
+// Watching is a pointer so an absent "watching" key (nil) is
+// distinguishable from an explicit "watching":false. Callers treat nil
+// as watching=true (NOT backfill) — matching the missing-setting default
+// — so a well-formed log_comment that simply omits the key does not flip
+// live writes to the backfill SKU; only an explicit false marks backfill.
 type driverLogComment struct {
 	ProcessorID string `json:"processor_id"`
-	Watching    bool   `json:"watching"`
+	Watching    *bool  `json:"watching"`
 }
 
 // ParseLogComment decodes a log_comment setting value into the fields
