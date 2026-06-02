@@ -24,6 +24,7 @@ import (
 	"housegate/housegate/pkg/plugins/concurrency"
 	"housegate/housegate/pkg/plugins/credential"
 	"housegate/housegate/pkg/plugins/forward"
+	indexingusage "housegate/housegate/pkg/plugins/indexing_usage"
 	metricsplugin "housegate/housegate/pkg/plugins/metrics"
 	"housegate/housegate/pkg/plugins/rewrite"
 	routeplugin "housegate/housegate/pkg/plugins/route"
@@ -386,6 +387,20 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	queryCompletePlugins := []plugin.QueryCompletePlugin{}
 	closePlugins := []plugin.ClosePlugin{}
 
+	// indexing_usage is appended *after* the rewriter below so its
+	// OnQuery sees qctx.StatementType / AccessedTables populated. The
+	// plugin reports each INSERT directly to the injected sink — no
+	// local accumulator/ticker — so sentio-node's usage.Server is the
+	// single point of per-key folding. queryPlugins / chain insertion
+	// happens further down right after rewritePlug.
+	var iuPlugin *indexingusage.Plugin
+	if cfg.IndexingUsage.Enabled {
+		iuPlugin = indexingusage.New(reg, opts.IndexingUsageReporter)
+		log.Infow("indexing_usage enabled",
+			"reporter_injected", opts.IndexingUsageReporter != nil,
+		)
+	}
+
 	if cfg.ConcurrencyLimit.Enabled && concurrencyRedis != nil {
 		lim := concurrency.NewRedisLimiter(concurrencyRedis, cfg.ConcurrencyLimit.Timeout.Duration)
 		concPlugin := &concurrency.Plugin{
@@ -464,6 +479,12 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 
 	if rewritePlug != nil {
 		queryPlugins = append(queryPlugins, rewritePlug)
+	}
+
+	// indexing_usage runs *after* the rewriter so it can read the
+	// classified StatementType + AccessedTables it populates.
+	if iuPlugin != nil {
+		queryPlugins = append(queryPlugins, iuPlugin)
 	}
 
 	var cgPlug *commitgate.Plugin
