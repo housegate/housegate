@@ -17,15 +17,18 @@ type Database struct {
 	// DbType mirrors the on-chain database classification:
 	//   0 = USER       (user-owned database)
 	//   1 = PROCESSOR  (processor replica DB managed by the indexer)
-	// Consumed by indexing_usage so writes into a USER DB are skipped
-	// (those are billed via the query-usage path, not indexing usage).
-	// Any future enum value should reuse the producer's encoding.
+	// Part of the NetworkState schema; no housegate proxy-chain code
+	// reads it today — it is consumed by the host (sentio-node) through
+	// the registry interface, e.g. to attribute indexing usage to a
+	// processor. Any future enum value should reuse the producer's
+	// encoding.
 	DbType uint8
 
 	// ProcessorId is the id of the processor that owns this DB. Set
-	// only when DbType == PROCESSOR. Consumed by indexing_usage to
-	// attribute INSERT row counts to a processor on chain. Empty for
-	// user DBs.
+	// only when DbType == PROCESSOR; empty for user DBs. Part of the
+	// NetworkState schema; not read by housegate itself — the host
+	// (sentio-node) reads it through the registry interface to attribute
+	// indexing-usage INSERTs to a processor on chain.
 	ProcessorId string
 
 	// Tables is the current table set. The commitgate observer reads
@@ -40,9 +43,10 @@ type Table struct {
 	// for user-created tables that arrived via raw CREATE TABLE; one
 	// of "counter" / "gauge" / "event" / "entity" for driver-created
 	// processor tables registered via the DatabaseRegistryService
-	// gRPC. indexing_usage maps the driver-set values to on-chain
-	// SKUs (counter/gauge → metric, event → event, entity → entity);
-	// everything else is treated as not-billable.
+	// gRPC. Not read by housegate itself; the host (sentio-node)
+	// maps it to an on-chain SKU (counter/gauge → metric, event →
+	// event, entity → entity) and treats everything else as
+	// not-billable.
 	Type string
 }
 
