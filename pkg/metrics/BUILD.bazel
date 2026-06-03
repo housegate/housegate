@@ -12,7 +12,18 @@ go_test(
 
 go_library(
     name = "metrics",
-    srcs = ["snapshot.go"],
+    srcs = [
+        "hostpoller.go",
+        "runtime.go",
+        "snapshot.go",
+    ],
     importpath = "housegate/housegate/pkg/metrics",
     visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/log",
+        "@com_github_shirou_gopsutil_v4//cpu",
+        "@com_github_shirou_gopsutil_v4//disk",
+        "@com_github_shirou_gopsutil_v4//mem",
+        "@com_github_shirou_gopsutil_v4//net",
+    ],
 )
