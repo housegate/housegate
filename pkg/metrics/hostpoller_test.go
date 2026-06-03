@@ -2,7 +2,13 @@ package metrics
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
+
+	"github.com/shirou/gopsutil/v4/disk"
+	"github.com/shirou/gopsutil/v4/mem"
+	"github.com/shirou/gopsutil/v4/net"
 )
 
 // PollHost must succeed on the test host and populate memory totals. Memory is
@@ -112,5 +118,152 @@ func TestPollHostCancelledContext(t *testing.T) {
 	}
 	if m.DiskReadBytes == nil || m.DiskWriteBytes == nil {
 		t.Fatalf("disk maps must be non-nil even on cancelled context")
+	}
+}
+
+// errBoom is the canned failure injected through the gopsutil seam. A real
+// host cannot be coerced into failing exactly one subsystem on demand, so the
+// degradation and total-failure contracts are only reachable via the package
+// vars cpuPercentFn / memVirtualFn / diskIOFn / netIOFn.
+var errBoom = errors.New("boom")
+
+// Known-good fakes for each subsystem. The per-subsystem error tests install
+// these for the three subsystems that should keep working, so the assertion is
+// deterministic instead of depending on the host actually satisfying cpu/mem/
+// disk/net while one injected fake fails.
+func okCPU(context.Context, time.Duration, bool) ([]float64, error) {
+	return []float64{12.5}, nil
+}
+func okMem(context.Context) (*mem.VirtualMemoryStat, error) {
+	return &mem.VirtualMemoryStat{Total: 2048, Available: 1024}, nil
+}
+func okDisk(context.Context, ...string) (map[string]disk.IOCountersStat, error) {
+	return map[string]disk.IOCountersStat{"sda": {ReadBytes: 100, WriteBytes: 200}}, nil
+}
+func okNet(context.Context, bool) ([]net.IOCountersStat, error) {
+	return []net.IOCountersStat{{BytesRecv: 7, BytesSent: 9}}, nil
+}
+
+// installAllOKFns points all four seams at the known-good fakes and returns a
+// restore closure. Each error-branch test starts from this fully-working
+// baseline, then overrides exactly one seam with a failing fake, so the test
+// isolates a single degradation branch and proves PollHost still returns nil
+// because the other three subsystems succeeded.
+func installAllOKFns() func() {
+	origCPU, origMem, origDisk, origNet := cpuPercentFn, memVirtualFn, diskIOFn, netIOFn
+	cpuPercentFn, memVirtualFn, diskIOFn, netIOFn = okCPU, okMem, okDisk, okNet
+	return func() {
+		cpuPercentFn, memVirtualFn, diskIOFn, netIOFn = origCPU, origMem, origDisk, origNet
+	}
+}
+
+// A failing CPU subsystem must degrade to CPUPercent == 0 while the other three
+// subsystems keep PollHost's error nil (anyOK stays true). This covers the
+// cpu log.Warnw branch in hostpoller.go.
+func TestPollHostCPUDegrades(t *testing.T) {
+	defer installAllOKFns()()
+	cpuPercentFn = func(context.Context, time.Duration, bool) ([]float64, error) {
+		return nil, errBoom
+	}
+
+	m, err := PollHost(context.Background())
+	if err != nil {
+		t.Fatalf("PollHost returned error on cpu-only failure: %v", err)
+	}
+	if m.CPUPercent != 0 {
+		t.Fatalf("CPUPercent = %v, want 0 when cpu subsystem fails", m.CPUPercent)
+	}
+	// The surviving subsystems must still have populated their fields.
+	if m.MemTotalBytes != 2048 {
+		t.Fatalf("MemTotalBytes = %d, want 2048 (mem subsystem should still work)", m.MemTotalBytes)
+	}
+}
+
+// A failing memory subsystem must leave MemTotalBytes / MemAvailableBytes at
+// zero while PollHost stays nil. Covers the mem log.Warnw branch.
+func TestPollHostMemDegrades(t *testing.T) {
+	defer installAllOKFns()()
+	memVirtualFn = func(context.Context) (*mem.VirtualMemoryStat, error) {
+		return nil, errBoom
+	}
+
+	m, err := PollHost(context.Background())
+	if err != nil {
+		t.Fatalf("PollHost returned error on mem-only failure: %v", err)
+	}
+	if m.MemTotalBytes != 0 || m.MemAvailableBytes != 0 {
+		t.Fatalf("mem fields = (%d, %d), want (0, 0) when mem subsystem fails",
+			m.MemTotalBytes, m.MemAvailableBytes)
+	}
+	if m.CPUPercent != 12.5 {
+		t.Fatalf("CPUPercent = %v, want 12.5 (cpu subsystem should still work)", m.CPUPercent)
+	}
+}
+
+// A failing disk subsystem must leave the disk maps non-nil but empty while
+// PollHost stays nil. Covers the disk log.Warnw branch and the empty-map
+// contract under degradation.
+func TestPollHostDiskDegrades(t *testing.T) {
+	defer installAllOKFns()()
+	diskIOFn = func(context.Context, ...string) (map[string]disk.IOCountersStat, error) {
+		return nil, errBoom
+	}
+
+	m, err := PollHost(context.Background())
+	if err != nil {
+		t.Fatalf("PollHost returned error on disk-only failure: %v", err)
+	}
+	if m.DiskReadBytes == nil || m.DiskWriteBytes == nil {
+		t.Fatalf("disk maps must stay non-nil when disk subsystem fails")
+	}
+	if len(m.DiskReadBytes) != 0 || len(m.DiskWriteBytes) != 0 {
+		t.Fatalf("disk maps = (%d, %d entries), want empty when disk subsystem fails",
+			len(m.DiskReadBytes), len(m.DiskWriteBytes))
+	}
+}
+
+// A failing network subsystem must leave NetRxBytes / NetTxBytes at zero while
+// PollHost stays nil. Covers the net log.Warnw branch.
+func TestPollHostNetDegrades(t *testing.T) {
+	defer installAllOKFns()()
+	netIOFn = func(context.Context, bool) ([]net.IOCountersStat, error) {
+		return nil, errBoom
+	}
+
+	m, err := PollHost(context.Background())
+	if err != nil {
+		t.Fatalf("PollHost returned error on net-only failure: %v", err)
+	}
+	if m.NetRxBytes != 0 || m.NetTxBytes != 0 {
+		t.Fatalf("net fields = (%d, %d), want (0, 0) when net subsystem fails",
+			m.NetRxBytes, m.NetTxBytes)
+	}
+}
+
+// When every subsystem fails, anyOK stays false: PollHost must return a non-nil
+// error, and — critically — the returned HostMetrics must still carry non-nil
+// (empty) disk maps so a caller that ignores the error never nil-panics ranging
+// over them. Covers the `if !anyOK { return ... }` total-failure branch.
+func TestPollHostTotalFailure(t *testing.T) {
+	defer installAllOKFns()()
+	cpuPercentFn = func(context.Context, time.Duration, bool) ([]float64, error) {
+		return nil, errBoom
+	}
+	memVirtualFn = func(context.Context) (*mem.VirtualMemoryStat, error) {
+		return nil, errBoom
+	}
+	diskIOFn = func(context.Context, ...string) (map[string]disk.IOCountersStat, error) {
+		return nil, errBoom
+	}
+	netIOFn = func(context.Context, bool) ([]net.IOCountersStat, error) {
+		return nil, errBoom
+	}
+
+	m, err := PollHost(context.Background())
+	if err == nil {
+		t.Fatalf("PollHost returned nil error when all subsystems failed, want non-nil")
+	}
+	if m.DiskReadBytes == nil || m.DiskWriteBytes == nil {
+		t.Fatalf("disk maps must be non-nil even on total failure (no nil-panic contract)")
 	}
 }
