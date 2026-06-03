@@ -2,7 +2,11 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_test(
     name = "metrics_test",
-    srcs = ["snapshot_test.go"],
+    srcs = [
+        "hostpoller_test.go",
+        "runtime_test.go",
+        "snapshot_test.go",
+    ],
     embed = [":metrics"],
 )
 
