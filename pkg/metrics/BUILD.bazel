@@ -3,6 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_test(
     name = "metrics_test",
     srcs = [
+        "chpoller_io_test.go",
         "chpoller_test.go",
         "hostpoller_test.go",
         "runtime_test.go",
@@ -19,6 +20,7 @@ go_test(
 go_library(
     name = "metrics",
     srcs = [
+        "chpoller.go",
         "hostpoller.go",
         "runtime.go",
         "snapshot.go",
@@ -27,6 +29,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/log",
+        "@com_github_clickhouse_clickhouse_go_v2//:clickhouse-go",
         "@com_github_shirou_gopsutil_v4//cpu",
         "@com_github_shirou_gopsutil_v4//disk",
         "@com_github_shirou_gopsutil_v4//mem",
