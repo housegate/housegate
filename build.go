@@ -395,7 +395,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	// happens further down right after rewritePlug.
 	var iuPlugin *indexingusage.Plugin
 	if cfg.IndexingUsage.Enabled {
-		iuPlugin = indexingusage.New(reg, opts.IndexingUsageReporter)
+		iuPlugin = indexingusage.New(opts.IndexingUsageReporter)
 		log.Infow("indexing_usage enabled",
 			"reporter_injected", opts.IndexingUsageReporter != nil,
 		)

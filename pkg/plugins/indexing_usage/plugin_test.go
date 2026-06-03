@@ -10,7 +10,6 @@ import (
 	"housegate/housegate/pkg/chproto"
 	"housegate/housegate/pkg/chsession"
 	"housegate/housegate/pkg/plugin"
-	"housegate/housegate/pkg/registry"
 	"housegate/housegate/pkg/sqlmeta"
 )
 
@@ -37,25 +36,6 @@ func (f *fakeSink) all() []billing.IndexingUsageEntry {
 
 var _ billing.IndexingUsageReporter = (*fakeSink)(nil)
 
-// fakeDBs implements registry.Databases for tests. Only Get is read
-// by the plugin; All exists to satisfy the interface.
-type fakeDBs struct {
-	m map[string]registry.Database
-}
-
-func (f *fakeDBs) Get(id string) (registry.Database, bool) {
-	db, ok := f.m[id]
-	return db, ok
-}
-
-func (f *fakeDBs) All() map[string]registry.Database {
-	out := make(map[string]registry.Database, len(f.m))
-	for k, v := range f.m {
-		out[k] = v
-	}
-	return out
-}
-
 // newTestSession returns a Session backed by one half of a net.Pipe.
 // Same pattern as pkg/plugins/usage/usage_test.go::newTestSession.
 func newTestSession(t *testing.T) chsession.Session {
@@ -68,31 +48,10 @@ func newTestSession(t *testing.T) chsession.Session {
 	return chsession.New(1, client)
 }
 
-// processorDB returns a fake processor-typed DatabaseInfo for x2y2_0
-// matching the real devnet sample (counter_token=counter,
-// gauge_reward_per_block=gauge).
-func processorDB() *fakeDBs {
-	return &fakeDBs{m: map[string]registry.Database{
-		"x2y2_0": {
-			DbType:      1, // PROCESSOR
-			ProcessorId: "x2y2",
-			Tables: []registry.Table{
-				{Id: "counter_token", Type: "counter"},
-				{Id: "gauge_reward_per_block", Type: "gauge"},
-				{Id: "swap_event", Type: "event"},
-				{Id: "pool", Type: "entity"},
-			},
-		},
-		"userdb": {
-			DbType: 0, // USER
-			Tables: []registry.Table{{Id: "things", Type: "user"}},
-		},
-	}}
-}
-
 // driverINSERT builds a QueryContext shaped like the rewriter would
 // produce for an INSERT into db.table on a driver-flagged session,
-// optionally carrying a log_comment setting.
+// optionally carrying a log_comment setting. The plugin reads nothing
+// from a registry, so no DB fixtures are needed.
 func driverINSERT(sess chsession.Session, db, table, logComment string) *plugin.QueryContext {
 	sess.State().SetIsDriver(true)
 	q := &chproto.Query{}
@@ -119,42 +78,73 @@ func wantOneEntry(t *testing.T, sink *fakeSink) billing.IndexingUsageEntry {
 	return got[0]
 }
 
-func TestPlugin_OnQuery_ReportsOneUnitForProcessorInsert(t *testing.T) {
+func TestPlugin_OnQuery_ReportsGenericCoordinates(t *testing.T) {
 	sess := newTestSession(t)
 	sink := &fakeSink{}
-	p := New(processorDB(), sink)
+	p := New(sink)
 
-	qctx := driverINSERT(sess, "x2y2_0", "counter_token",
-		`{"processor_id":"x2y2","watching":true}`)
+	const lc = `{"processor_id":"x2y2","watching":true}`
+	qctx := driverINSERT(sess, "x2y2_0", "counter_token", lc)
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
 		t.Fatalf("OnQuery: %v", err)
 	}
 	got := wantOneEntry(t, sink)
-	want := billing.IndexingUsageEntry{ProcessorID: "x2y2", SKU: "metric", IsBackfilling: false, Units: 1}
+	// Generic ClickHouse coordinates only: the destination logical db +
+	// table and the verbatim log_comment. No processor, table type, or
+	// SKU — the host resolves those from its registry.
+	want := billing.IndexingUsageEntry{LogicalDatabase: "x2y2_0", Table: "counter_token", LogComment: lc, Units: 1}
 	if got != want {
-		t.Errorf("reported %+v, want %+v (one unit per INSERT)", got, want)
+		t.Errorf("reported %+v, want %+v (generic coordinates, one unit per INSERT)", got, want)
+	}
+}
+
+func TestPlugin_OnQuery_PassesLogCommentThroughVerbatim(t *testing.T) {
+	sess := newTestSession(t)
+	sink := &fakeSink{}
+	p := New(sink)
+
+	// A backfill-marked log_comment must be forwarded byte-for-byte; the
+	// plugin does NOT interpret watching (that is the host's job).
+	const lc = `{"processor_id":"x2y2","watching":false}`
+	qctx := driverINSERT(sess, "x2y2_0", "counter_token", lc)
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	got := wantOneEntry(t, sink)
+	if got.LogComment != lc {
+		t.Errorf("LogComment = %q, want verbatim %q", got.LogComment, lc)
+	}
+}
+
+func TestPlugin_OnQuery_EmptyLogCommentWhenAbsent(t *testing.T) {
+	sess := newTestSession(t)
+	sink := &fakeSink{}
+	p := New(sink)
+	qctx := driverINSERT(sess, "x2y2_0", "counter_token", "")
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	got := wantOneEntry(t, sink)
+	if got.LogComment != "" {
+		t.Errorf("absent log_comment should yield empty LogComment, got %q", got.LogComment)
 	}
 }
 
 func TestPlugin_OnQuery_ReportsEachINSERTDirectly(t *testing.T) {
 	sess := newTestSession(t)
 	sink := &fakeSink{}
-	p := New(processorDB(), sink)
+	p := New(sink)
 
-	// Two INSERTs into the metric table + one into the event table.
-	// Housegate no longer batches locally: each INSERT is its own
-	// 1-unit report. sentio-node's usage accumulator folds them back
-	// into per-key totals (2 metric, 1 event), so on-chain settlement
-	// is identical to the old pre-aggregated path.
+	// Two INSERTs into one table + one into another. Housegate no longer
+	// batches locally: each INSERT is its own 1-unit report. The host's
+	// accumulator folds them back into per-key totals.
 	for i := 0; i < 2; i++ {
-		qctx := driverINSERT(sess, "x2y2_0", "counter_token",
-			`{"processor_id":"x2y2","watching":true}`)
+		qctx := driverINSERT(sess, "x2y2_0", "counter_token", "")
 		if err := p.OnQuery(context.Background(), qctx); err != nil {
 			t.Fatalf("OnQuery #%d: %v", i, err)
 		}
 	}
-	qctx := driverINSERT(sess, "x2y2_0", "swap_event",
-		`{"processor_id":"x2y2","watching":true}`)
+	qctx := driverINSERT(sess, "x2y2_0", "swap_event", "")
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
 		t.Fatalf("OnQuery event: %v", err)
 	}
@@ -168,61 +158,31 @@ func TestPlugin_OnQuery_ReportsEachINSERTDirectly(t *testing.T) {
 		if e.Units != 1 {
 			t.Errorf("entry %+v: Units = %d, want 1 per INSERT", e, e.Units)
 		}
-		folded[e.SKU] += e.Units
+		folded[e.Table] += e.Units
 	}
-	if folded["metric"] != 2 {
-		t.Errorf("metric total = %d, want 2", folded["metric"])
+	if folded["counter_token"] != 2 {
+		t.Errorf("counter_token total = %d, want 2", folded["counter_token"])
 	}
-	if folded["event"] != 1 {
-		t.Errorf("event total = %d, want 1", folded["event"])
+	if folded["swap_event"] != 1 {
+		t.Errorf("swap_event total = %d, want 1", folded["swap_event"])
 	}
 }
 
-func TestPlugin_OnQuery_BackfillFromLogComment(t *testing.T) {
+func TestPlugin_OnQuery_EmitsRegardlessOfDatabaseKind(t *testing.T) {
+	// housegate does NOT read the registry, so it cannot (and must not)
+	// decide whether a database is a processor DB — it emits for every
+	// driver INSERT and lets the host drop non-processor / non-billable
+	// destinations. A user-looking DB name still produces an entry.
 	sess := newTestSession(t)
 	sink := &fakeSink{}
-	p := New(processorDB(), sink)
-
-	qctx := driverINSERT(sess, "x2y2_0", "counter_token",
-		`{"processor_id":"x2y2","watching":false}`)
+	p := New(sink)
+	qctx := driverINSERT(sess, "some_user_db", "things", "")
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
 		t.Fatalf("OnQuery: %v", err)
 	}
 	got := wantOneEntry(t, sink)
-	want := billing.IndexingUsageEntry{ProcessorID: "x2y2", SKU: "metric", IsBackfilling: true, Units: 1}
-	if got != want {
-		t.Errorf("reported %+v, want %+v (watching=false → backfill)", got, want)
-	}
-}
-
-func TestPlugin_OnQuery_NoLogCommentDefaultsToWatching(t *testing.T) {
-	sess := newTestSession(t)
-	sink := &fakeSink{}
-	p := New(processorDB(), sink)
-	qctx := driverINSERT(sess, "x2y2_0", "counter_token", "")
-	if err := p.OnQuery(context.Background(), qctx); err != nil {
-		t.Fatalf("OnQuery: %v", err)
-	}
-	got := wantOneEntry(t, sink)
-	if got.IsBackfilling {
-		t.Errorf("missing log_comment should default to watching=true (IsBackfilling=false): got %+v", got)
-	}
-}
-
-func TestPlugin_OnQuery_MissingWatchingKeyNotBackfill(t *testing.T) {
-	sess := newTestSession(t)
-	sink := &fakeSink{}
-	p := New(processorDB(), sink)
-	// log_comment is present and valid JSON but omits the "watching" key.
-	// It must NOT be billed as backfill — same default as a fully-absent
-	// setting (regression guard: a plain bool zero-valued to false here).
-	qctx := driverINSERT(sess, "x2y2_0", "counter_token", `{"processor_id":"x2y2"}`)
-	if err := p.OnQuery(context.Background(), qctx); err != nil {
-		t.Fatalf("OnQuery: %v", err)
-	}
-	got := wantOneEntry(t, sink)
-	if got.IsBackfilling {
-		t.Errorf("log_comment without watching key must default to live (IsBackfilling=false): got %+v", got)
+	if got.LogicalDatabase != "some_user_db" || got.Table != "things" {
+		t.Errorf("expected generic passthrough of db/table, got %+v", got)
 	}
 }
 
@@ -230,7 +190,7 @@ func TestPlugin_OnQuery_SkipsNonDriverSession(t *testing.T) {
 	sess := newTestSession(t)
 	// driverINSERT flips IsDriver; build manually instead.
 	sink := &fakeSink{}
-	p := New(processorDB(), sink)
+	p := New(sink)
 	qctx := &plugin.QueryContext{
 		Session:       sess,
 		Query:         &chproto.Query{},
@@ -251,7 +211,7 @@ func TestPlugin_OnQuery_SkipsSelect(t *testing.T) {
 	sess := newTestSession(t)
 	sess.State().SetIsDriver(true)
 	sink := &fakeSink{}
-	p := New(processorDB(), sink)
+	p := New(sink)
 	qctx := &plugin.QueryContext{
 		Session:       sess,
 		Query:         &chproto.Query{},
@@ -268,35 +228,49 @@ func TestPlugin_OnQuery_SkipsSelect(t *testing.T) {
 	}
 }
 
-func TestPlugin_OnQuery_SkipsUserDatabase(t *testing.T) {
+func TestPlugin_OnQuery_SkipsEmptyAccessedTables(t *testing.T) {
 	sess := newTestSession(t)
+	sess.State().SetIsDriver(true)
 	sink := &fakeSink{}
-	p := New(processorDB(), sink)
-	qctx := driverINSERT(sess, "userdb", "things", "")
+	p := New(sink)
+	qctx := &plugin.QueryContext{
+		Session:        sess,
+		Query:          &chproto.Query{},
+		StatementType:  sqlmeta.StatementTypeInsert,
+		AccessedTables: nil,
+	}
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
 		t.Fatalf("OnQuery: %v", err)
 	}
 	if got := sink.all(); len(got) != 0 {
-		t.Errorf("user DB INSERT should not report, got %+v", got)
+		t.Errorf("INSERT with no accessed tables should not report, got %+v", got)
 	}
 }
 
-func TestPlugin_OnQuery_SkipsUnknownTable(t *testing.T) {
+func TestPlugin_OnQuery_SkipsEmptyLogicalDatabase(t *testing.T) {
 	sess := newTestSession(t)
+	sess.State().SetIsDriver(true)
 	sink := &fakeSink{}
-	p := New(processorDB(), sink)
-	qctx := driverINSERT(sess, "x2y2_0", "newly_created_unseen_table", "")
+	p := New(sink)
+	qctx := &plugin.QueryContext{
+		Session:       sess,
+		Query:         &chproto.Query{},
+		StatementType: sqlmeta.StatementTypeInsert,
+		AccessedTables: []sqlmeta.AccessedTable{
+			{OriginalDatabase: "x", OriginalTable: "t", LogicalDatabase: ""},
+		},
+	}
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
 		t.Fatalf("OnQuery: %v", err)
 	}
 	if got := sink.all(); len(got) != 0 {
-		t.Errorf("unseen table should not report, got %+v", got)
+		t.Errorf("INSERT with empty LogicalDatabase should not report, got %+v", got)
 	}
 }
 
 func TestPlugin_OnQuery_NilSinkIsNoOp(t *testing.T) {
 	sess := newTestSession(t)
-	p := New(processorDB(), nil)
+	p := New(nil)
 	qctx := driverINSERT(sess, "x2y2_0", "counter_token", "")
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
 		t.Fatalf("OnQuery with nil sink should be a no-op, got err: %v", err)
@@ -304,7 +278,7 @@ func TestPlugin_OnQuery_NilSinkIsNoOp(t *testing.T) {
 }
 
 func TestPlugin_PeerTrustAndForward_OptOut(t *testing.T) {
-	p := New(processorDB(), &fakeSink{})
+	p := New(&fakeSink{})
 	if p.RunOnPeerTrust() {
 		t.Error("RunOnPeerTrust must be false to avoid double-counting peer-forwarded inserts")
 	}

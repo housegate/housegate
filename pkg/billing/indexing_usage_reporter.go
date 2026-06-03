@@ -4,37 +4,48 @@ import "context"
 
 // IndexingUsageEntry is one unit of metered driver-side write traffic
 // that housegate hands off to the embedding host (sentio-node) for
-// on-chain reporting via the existing UsageTracker.ReportIndexingUsage
-// path.
+// usage reporting.
 //
-// Semantics mirror sentio-node's IndexingUsageKey:
-//   - SKU is the driver-style on-chain SKU name. When IsBackfilling is
-//     true, callers append the "_backfill" suffix sentio-node's
-//     usage.MapDriverSKU strips on receipt, so this struct stays a thin
-//     value type without a separate flag column. Plugins that prefer a
-//     boolean field over the suffix convention can flip IsBackfilling
-//     and leave SKU bare — sentio-node's adapter normalises either way.
-//   - Units is the row count metered on the wire for this aggregate.
+// It carries only *generic ClickHouse-proxy coordinates* — which
+// logical database and table received the INSERT, plus the raw value of
+// the driver's `log_comment` session setting. It contains NO Sentio
+// billing concepts: housegate does not resolve which processor owns the
+// database, which on-chain SKU the table maps to, or whether the write
+// is backfill. All of that interpretation belongs to the host's
+// IndexingUsageReporter implementation, which has the same NetworkState
+// registry housegate does and looks up processor / table-type / SKU
+// itself. This keeps housegate free of billing-domain attribution.
 //
-// The struct is intentionally producer-shaped (matches what driver's
-// AsyncSaveRequest previously carried), so the in-process adapter on
-// sentio-node can forward it verbatim to its UsageService.AsyncSave.
+// Fields:
+//   - LogicalDatabase: the destination logical database of the INSERT
+//     (AccessedTables[0].LogicalDatabase). The host resolves this to a
+//     processor (and drops non-processor / unknown databases).
+//   - Table: the destination table name (AccessedTables[0].OriginalTable).
+//     The host resolves this to a table type → on-chain SKU (and drops
+//     non-billable tables).
+//   - LogComment: the raw, unparsed value of the driver's `log_comment`
+//     session setting (a JSON object string, possibly quote-wrapped, or
+//     empty when absent). The host parses out whatever it needs (e.g.
+//     the `watching` flag that distinguishes backfill from live).
+//   - Units: row count metered for this aggregate (currently 1 per
+//     INSERT; see the plugin's row-count TODO).
 type IndexingUsageEntry struct {
-	ProcessorID   string
-	SKU           string
-	IsBackfilling bool
-	Units         uint64
+	LogicalDatabase string
+	Table           string
+	LogComment      string
+	Units           uint64
 }
 
 // IndexingUsageReporter is the consumer-facing surface of an
-// indexing-usage sink. Housegate accumulates per-INSERT row counts
-// keyed by (processor, SKU, isBackfilling) and periodically flushes
-// the batch via Report.
+// indexing-usage sink. housegate's in-wire plugin detects driver
+// INSERTs and calls Report with the generic coordinates above; the host
+// implementation resolves processor / SKU / backfill and folds the
+// result into its usage accumulator.
 //
-// Housegate does not ship a production implementation; the standalone
-// sentio-node host injects an adapter that forwards to the local
-// UsageService.AsyncSave (the same path the driver used to call
-// directly). Tests supply record-and-replay stubs.
+// housegate does not ship a production implementation; the standalone
+// sentio-node host injects one that maps LogicalDatabase → processor,
+// Table → SKU, interprets LogComment, and forwards to its local
+// UsageService.AsyncSave. Tests supply record-and-replay stubs.
 //
 // Concurrency: Report must be safe to call concurrently with itself;
 // implementations are expected to either dispatch fire-and-forget or

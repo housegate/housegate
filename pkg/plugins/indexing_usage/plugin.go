@@ -1,6 +1,7 @@
 // Package indexingusage meters driver-side INSERT volume on the
-// housegate wire and reports it to sentio-node via
-// billing.IndexingUsageReporter.
+// housegate wire and reports generic coordinates (which logical
+// database + table received the INSERT, plus the raw log_comment) to
+// the embedding host (sentio-node) via billing.IndexingUsageReporter.
 //
 // Before this plugin existed, the driver itself counted rows in its
 // meter.Flush() loop and called sentio-node's UsageService.AsyncSave
@@ -8,40 +9,33 @@
 // the driver now ships INSERTs through a housegate sidecar; the
 // housegate / clickhouse hop is the natural choke point for metering.
 //
-// Per-INSERT attribution:
-//   - processor_id: resolved from the destination logical DB via
-//     registry.Databases.Get (which carries ProcessorId for processor-
-//     owned DBs). log_comment's processor_id is used only as a cross-
-//     check; the database-level binding is the on-chain truth.
-//   - sku: rewriter-resolved AccessedTable[0] looked up against the
-//     database's TableInfo.Type, then mapped via MapTableTypeToSKU.
-//   - isBackfilling: !log_comment.watching (driver sets log_comment per
-//     commit in sentioxyz/sentio PR #18293).
-//   - units: hard-coded to 1 per INSERT (see TODO below).
+// Division of labour: this plugin does only the wire-level *detection*
+// that requires housegate-internal session state (is this a driver-
+// signed INSERT, and into which logical db/table?). It carries NO
+// Sentio billing-domain attribution — it does not resolve the owning
+// processor, the on-chain SKU, or backfill. Those all live in the
+// host's IndexingUsageReporter, which has the same NetworkState
+// registry and looks them up itself. The plugin does not even read the
+// registry; it just forwards the rewriter-resolved logical db/table and
+// the raw log_comment. That keeps housegate free of billing semantics.
+//
+// Per-INSERT data emitted:
+//   - LogicalDatabase + Table: the rewriter-resolved destination
+//     (AccessedTables[0]). The host maps the database to a processor and
+//     the table to a SKU, and drops non-processor / non-billable ones.
+//   - LogComment: the raw, unparsed `log_comment` setting value (the
+//     driver sets it per commit in sentioxyz/sentio PR #18293); empty
+//     when absent. The host parses out the `watching` flag.
+//   - Units: hard-coded to 1 per INSERT (see TODO below).
 //
 // TODO(row-count): swap the 1-unit-per-INSERT placeholder for actual
 // row count metered off the wire. ClickHouse native INSERT puts rows
 // in subsequent ClientCodeData packets (not in the Query packet's SQL
 // body), so OnQuery alone cannot see them. The full row-count path
-// needs:
-//
-//   - chproto.Codec to surface num_rows on Packet.Rows (decode first
-//     compressed frame's BlockInfo + num_columns + num_rows uvarint
-//     prefix; uncompressed path gets it free from proto.Block.Rows).
-//   - A new ClientDataBlockPlugin hook fanned out by relay's
-//     clientToUpstream when pkt.Rows > 0.
-//   - This plugin: stash the resolved (processor, sku, backfill)
-//     attribution on SessionState.IndexingUsageContext in OnQuery, sum
-//     rows in OnClientDataBlock, and Report once with Units=rows in
-//     OnQueryComplete.
-//
-// All four pieces were prototyped and verified on devnet (txs
-// 0x5bb12d32 / 0xf1c7b52f / 0xe3d90803 / 0xa9121f07 / 0x88608c68);
-// reverted to the 1-unit placeholder while the row-counting work
-// finds a longer-term home (concerns: cost of LZ4-decompressing every
-// client Data block on the hot relay path even when this plugin is
-// the only consumer; need a generic "row count observer" abstraction
-// so the codec work is reusable by other future plugins).
+// needs chproto.Codec to surface num_rows, a new ClientDataBlockPlugin
+// hook fanned out by relay, and this plugin stashing attribution in
+// OnQuery + summing rows in OnClientDataBlock + reporting once in
+// OnQueryComplete (which would also fix bill-before-execute).
 //
 // Sessions skipped:
 //   - non-driver (IsDriver=false): metered via the existing query
@@ -59,40 +53,42 @@ import (
 	"housegate/housegate/pkg/billing"
 	"housegate/housegate/pkg/log"
 	"housegate/housegate/pkg/plugin"
-	"housegate/housegate/pkg/registry"
 	"housegate/housegate/pkg/sqlmeta"
 )
 
-// Plugin is the QueryPlugin that meters billable driver INSERTs.
-// Construct via New; never set fields directly — Databases and the
-// reporter sink are not optional.
+// LogCommentSettingKey is the ClickHouse session setting the driver
+// uses to ship per-commit context (a JSON object string). See
+// sentioxyz/sentio PR #18293 (driver/controller/startup/startup.go::
+// buildCommitCtx). The plugin forwards this value to the host unparsed;
+// the host extracts the `watching` flag from it.
+const LogCommentSettingKey = "log_comment"
+
+// Plugin is the QueryPlugin that meters driver INSERTs. Construct via
+// New; never set the sink directly — it is not optional.
 type Plugin struct {
-	dbs  registry.Databases
 	sink billing.IndexingUsageReporter
 }
 
-// New returns a Plugin that resolves processor/SKU via dbs and reports
-// 1 unit per INSERT directly to sink. A nil dbs or nil sink disables
-// the plugin (acts as a no-op QueryPlugin) — this matches the rest of
-// pkg/plugins which fail open rather than rejecting queries when wiring
-// is incomplete.
+// New returns a Plugin that reports 1 unit of generic coordinates per
+// driver INSERT to sink. A nil sink disables the plugin (acts as a
+// no-op QueryPlugin) — this matches the rest of pkg/plugins which fail
+// open rather than rejecting queries when wiring is incomplete.
 //
-// Housegate keeps no batching state: sentio-node's usage.Server already
-// folds per-(processor,sku,backfill) units into its own Redis-backed
-// accumulator, so a second accumulator here would be redundant. The
-// sink (sentio-node's in-process adapter) is responsible for dispatching
-// the report without blocking this call — see billing.IndexingUsageReporter
+// housegate keeps no batching state and does not read the registry: the
+// host's reporter resolves processor / SKU / backfill and folds units
+// into its own accumulator. The sink is responsible for dispatching the
+// report without blocking this call — see billing.IndexingUsageReporter
 // ("the caller does not wait on results").
-func New(dbs registry.Databases, sink billing.IndexingUsageReporter) *Plugin {
-	return &Plugin{dbs: dbs, sink: sink}
+func New(sink billing.IndexingUsageReporter) *Plugin {
+	return &Plugin{sink: sink}
 }
 
-// OnQuery classifies the query and, if it is a billable driver INSERT,
-// reports 1 unit to the sink under the resolved
-// (processor, sku, isBackfilling) attribution. See package TODO for the
-// row-count upgrade path.
+// OnQuery reports 1 unit of generic coordinates for every driver INSERT
+// that has a resolved destination table. Processor attribution, SKU
+// mapping, and backfill interpretation are the host's job — see the
+// package doc and billing.IndexingUsageEntry.
 func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
-	if p == nil || p.dbs == nil || p.sink == nil || qctx == nil || qctx.Session == nil {
+	if p == nil || p.sink == nil || qctx == nil || qctx.Session == nil {
 		return nil
 	}
 	// Cheap, allocation-free disqualifier first: the rewriter must have
@@ -117,85 +113,38 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	// INSERT targets exactly one table at the AST level. The rewriter
 	// preserves it as AccessedTables[0].
 	target := qctx.AccessedTables[0]
-	logical := target.LogicalDatabase
-	if logical == "" {
+	if target.LogicalDatabase == "" {
 		logger.Debugw("indexing_usage: INSERT with empty LogicalDatabase, skip",
 			"original_db", target.OriginalDatabase,
 			"original_table", target.OriginalTable)
 		return nil
 	}
-	db, ok := p.dbs.Get(logical)
-	if !ok {
-		logger.Debugw("indexing_usage: DB not in NetworkState, skip", "database", logical)
-		return nil
-	}
-	if db.DbType != uint8(1) /* PROCESSOR */ {
-		logger.Debugw("indexing_usage: non-processor DB, skip", "database", logical, "db_type", db.DbType)
-		return nil
-	}
-	if db.ProcessorId == "" {
-		logger.Debugw("indexing_usage: processor DB has no ProcessorId, skip", "database", logical)
-		return nil
-	}
-	tableType, ok := tableTypeFor(db, target.OriginalTable)
-	if !ok {
-		logger.Debugw("indexing_usage: table not in NetworkState, skip",
-			"database", logical, "table", target.OriginalTable)
-		return nil
-	}
-	sku, ok := MapTableTypeToSKU(tableType)
-	if !ok {
-		logger.Debugw("indexing_usage: tableType not in SKU map, skip",
-			"database", logical, "table", target.OriginalTable, "table_type", tableType)
-		return nil
-	}
-	// log_comment carries the watching flag the driver sets in
-	// buildCommitCtx (sentio PR #18293). Missing setting → default to
-	// watching=true (i.e. NOT backfill) — conservative for the user:
-	// undercount the backfill rate if the driver ever forgets to set
-	// the marker.
-	isBackfill := false
+	// Raw log_comment setting value (the driver sets it per commit in
+	// sentio PR #18293). Passed through unparsed — the host extracts the
+	// `watching` flag. Empty when the setting is absent.
+	logComment := ""
 	if qctx.Query != nil {
 		for _, s := range qctx.Query.Settings {
-			if s.Key != LogCommentSettingKey {
-				continue
+			if s.Key == LogCommentSettingKey {
+				logComment = s.Value
+				break
 			}
-			if lc, ok := ParseLogComment(s.Value); ok {
-				// Absent watching key (nil) leaves isBackfill=false
-				// (watching=true), matching the missing-setting default;
-				// only an explicit watching:false marks backfill.
-				if lc.Watching != nil {
-					isBackfill = !*lc.Watching
-				}
-				// Cross-check against db.ProcessorId. A mismatch is a
-				// driver bug or a malicious session; log loudly but do
-				// not reject the query — the database binding is
-				// authoritative and we've already picked the right key.
-				if lc.ProcessorID != "" && lc.ProcessorID != db.ProcessorId {
-					logger.Warnw("indexing_usage: log_comment.processor_id mismatch",
-						"log_comment_processor", lc.ProcessorID,
-						"db_processor", db.ProcessorId,
-						"database", logical,
-					)
-				}
-			}
-			break
 		}
 	}
 	// 1 unit per INSERT regardless of row count — see package TODO.
-	// Reported directly; sentio-node's usage accumulator does the
-	// per-key folding and on-chain settling.
+	// Generic coordinates only; the host maps LogicalDatabase→processor
+	// and Table→SKU (dropping non-processor / non-billable), interprets
+	// LogComment, and folds into its accumulator.
 	entry := billing.IndexingUsageEntry{
-		ProcessorID:   db.ProcessorId,
-		SKU:           sku,
-		IsBackfilling: isBackfill,
-		Units:         1,
+		LogicalDatabase: target.LogicalDatabase,
+		Table:           target.OriginalTable,
+		LogComment:      logComment,
+		Units:           1,
 	}
 	p.sink.Report(ctx, []billing.IndexingUsageEntry{entry})
 	logger.Infow("indexing_usage: reported INSERT",
-		"processor", entry.ProcessorID,
-		"sku", entry.SKU,
-		"is_backfilling", entry.IsBackfilling)
+		"database", entry.LogicalDatabase,
+		"table", entry.Table)
 	return nil
 }
 
@@ -210,18 +159,6 @@ func (p *Plugin) RunOnPeerTrust() bool { return false }
 // per-session, not per-proxy), so this only filters the entry proxy's
 // own opt-out on forwarded sessions — same shape as rewrite/commitgate.
 func (p *Plugin) RunOnForward() bool { return false }
-
-// tableTypeFor finds the Type of `table` inside db.Tables. Returns
-// ok=false when the table isn't in the snapshot (newly-created table
-// race or pre-TableType-aware deployment).
-func tableTypeFor(db registry.Database, table string) (string, bool) {
-	for _, t := range db.Tables {
-		if t.Id == table {
-			return t.Type, true
-		}
-	}
-	return "", false
-}
 
 // Compile-time interface assertions.
 var (

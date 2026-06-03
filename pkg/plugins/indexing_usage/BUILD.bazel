@@ -4,9 +4,7 @@ go_library(
     name = "indexing_usage",
     srcs = [
         "config.go",
-        "log_comment.go",
         "plugin.go",
-        "sku.go",
     ],
     importpath = "housegate/housegate/pkg/plugins/indexing_usage",
     visibility = ["//visibility:public"],
@@ -14,25 +12,19 @@ go_library(
         "//pkg/billing",
         "//pkg/log",
         "//pkg/plugin",
-        "//pkg/registry",
         "//pkg/sqlmeta",
     ],
 )
 
 go_test(
     name = "indexing_usage_test",
-    srcs = [
-        "log_comment_test.go",
-        "plugin_test.go",
-        "sku_test.go",
-    ],
+    srcs = ["plugin_test.go"],
     embed = [":indexing_usage"],
     deps = [
         "//pkg/billing",
         "//pkg/chproto",
         "//pkg/chsession",
         "//pkg/plugin",
-        "//pkg/registry",
         "//pkg/sqlmeta",
     ],
 )
