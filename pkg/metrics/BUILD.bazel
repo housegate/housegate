@@ -8,6 +8,11 @@ go_test(
         "snapshot_test.go",
     ],
     embed = [":metrics"],
+    deps = [
+        "@com_github_shirou_gopsutil_v4//disk",
+        "@com_github_shirou_gopsutil_v4//mem",
+        "@com_github_shirou_gopsutil_v4//net",
+    ],
 )
 
 go_library(
