@@ -5,6 +5,7 @@ go_test(
     srcs = [
         "chpoller_io_test.go",
         "chpoller_test.go",
+        "collector_test.go",
         "hostpoller_test.go",
         "runtime_test.go",
         "snapshot_test.go",
