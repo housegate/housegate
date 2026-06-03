@@ -10,8 +10,21 @@ import (
 	"housegate/housegate/pkg/plugin"
 	"housegate/housegate/pkg/plugins/forward"
 	"housegate/housegate/pkg/plugins/rewrite"
+	"housegate/housegate/pkg/proxy"
 	"housegate/housegate/pkg/rewriter"
 )
+
+// asProxyServer asserts a listenerServer to the concrete *proxy.Server so
+// the white-box wiring tests can inspect PreflagSession / Hooks. The CH
+// listeners are always *proxy.Server (only the keeper listener is not).
+func asProxyServer(t *testing.T, s listenerServer) *proxy.Server {
+	t.Helper()
+	ps, ok := s.(*proxy.Server)
+	if !ok {
+		t.Fatalf("listener server is %T, want *proxy.Server", s)
+	}
+	return ps
+}
 
 // stubRewriterFactory is a no-op rewriter.Factory that never dials any
 // external service. Injected via Options.Rewriter to force rewritePlug
@@ -85,14 +98,15 @@ func TestBuildServer_TwoListenersWhenInternalListenSet(t *testing.T) {
 		t.Fatalf("missing labelled listener: ext=%v int=%v", external, internal)
 	}
 
-	if external.Server.PreflagSession != nil {
+	if asProxyServer(t, external.Server).PreflagSession != nil {
 		t.Errorf("external listener must not preflag")
 	}
-	if internal.Server.PreflagSession == nil {
+	intlSrv := asProxyServer(t, internal.Server)
+	if intlSrv.PreflagSession == nil {
 		t.Fatalf("internal listener must preflag IsPeerTrusted+IsInternalPort")
 	}
 	var st chsession.SessionState
-	internal.Server.PreflagSession(&st)
+	intlSrv.PreflagSession(&st)
 	if !st.IsPeerTrusted || !st.IsInternalPort {
 		t.Errorf("internal preflag missed flags: peer=%v internal=%v",
 			st.IsPeerTrusted, st.IsInternalPort)
@@ -148,9 +162,10 @@ func TestBuildServer_RouterOnly_NoShardNoUpstream(t *testing.T) {
 
 	// The chain must NOT contain a rewrite plugin — router-only sessions
 	// never see SQL the proxy rewrites locally.
-	chain, ok := bs.listeners[0].Server.Hooks.(*plugin.PluginChain)
+	rtrSrv := asProxyServer(t, bs.listeners[0].Server)
+	chain, ok := rtrSrv.Hooks.(*plugin.PluginChain)
 	if !ok {
-		t.Fatalf("Server.Hooks: %T", bs.listeners[0].Server.Hooks)
+		t.Fatalf("Server.Hooks: %T", rtrSrv.Hooks)
 	}
 	for _, p := range chain.HelloPlugins {
 		if _, ok := p.(*rewrite.Plugin); ok {
@@ -184,9 +199,10 @@ func TestBuildServer_ForwardPluginInsertedBeforeRewrite(t *testing.T) {
 		t.Fatal("external listener missing")
 	}
 
-	chain, ok := external.Server.Hooks.(*plugin.PluginChain)
+	extSrv := asProxyServer(t, external.Server)
+	chain, ok := extSrv.Hooks.(*plugin.PluginChain)
 	if !ok {
-		t.Fatalf("Server.Hooks is not *plugin.PluginChain: %T", external.Server.Hooks)
+		t.Fatalf("Server.Hooks is not *plugin.PluginChain: %T", extSrv.Hooks)
 	}
 
 	var fwdIdx, rwIdx int = -1, -1

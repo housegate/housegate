@@ -13,7 +13,11 @@ go_test(
         "database_routing_test.go",
         "forward_test.go",
         "internal_port_envelope_test.go",
+        "interserver_mesh_test.go",
+        "keeper_orchestrator_test.go",
+        "keeper_proxy_test.go",
         "metrics_test.go",
+        "multi_shard_keeper_test.go",
         "peer_envelope_test.go",
         "permission_isolation_test.go",
         "replica_routing_test.go",
@@ -26,6 +30,12 @@ go_test(
         "smoke_test.go",
         "upstream_dies_test.go",
         "usage_test.go",
+    ],
+    # The interserver-replication test runs these proxy/gateway binaries in
+    # containers on the keeper Docker network (resolved from runfiles).
+    data = [
+        "//pkg/integration/testenv/cmd/imesh",
+        "//pkg/integration/testenv/cmd/kpx",
     ],
     local = True,
     tags = [
@@ -41,6 +51,7 @@ go_test(
         "//pkg/cluster",
         "//pkg/config",
         "//pkg/integration/testenv",
+        "//pkg/keeper",
         "//pkg/network",
         "//pkg/peer",
         "//pkg/plugins/auth",
@@ -51,6 +62,8 @@ go_test(
         "//pkg/sqlmeta",
         "//protos",
         "@com_github_clickhouse_clickhouse_go_v2//:clickhouse-go",
+        "@com_github_go_zookeeper_zk//:zk",
         "@com_github_prometheus_client_golang//prometheus",
+        "@com_github_testcontainers_testcontainers_go//network",
     ],
 )

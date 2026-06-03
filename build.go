@@ -2,9 +2,12 @@ package housegate
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"math/rand"
 	"net"
+	"os"
 	"strconv"
 	"time"
 
@@ -15,6 +18,8 @@ import (
 	"housegate/housegate/pkg/cluster"
 	"housegate/housegate/pkg/config"
 	"housegate/housegate/pkg/credentials"
+	"housegate/housegate/pkg/interserver"
+	"housegate/housegate/pkg/keeper"
 	"housegate/housegate/pkg/log"
 	"housegate/housegate/pkg/network"
 	"housegate/housegate/pkg/plugin"
@@ -134,12 +139,19 @@ func buildClusterManager(cfg *config.Config) (*cluster.Manager, error) {
 	return nil, nil
 }
 
-// serverListener pairs a *proxy.Server with the address it should bind
+// listenerServer is the minimal contract proxyImpl needs from anything it
+// binds and serves: the CH-native *proxy.Server and the L4 *keeper.Server
+// both satisfy it.
+type listenerServer interface {
+	Serve(ctx context.Context, ln net.Listener) error
+}
+
+// serverListener pairs a listenerServer with the address it should bind
 // and a human-readable label used in logs and error messages.
 type serverListener struct {
-	Server     *proxy.Server
+	Server     listenerServer
 	ListenAddr string
-	Label      string // "external" | "internal" | "agent" | "forwarding"
+	Label      string // "external" | "internal" | "agent" | "forwarding" | "keeper"
 }
 
 // builtServer is what each per-mode builder returns to the proxyImpl.
@@ -605,6 +617,38 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		})
 	}
 
+	// CH-facing keeper proxy (link A of the keeper-pool design). When
+	// configured it rides alongside the CH listeners as its own bound
+	// listener. It is a self-contained L4 relay (pkg/keeper) and shares
+	// nothing with the CH-native plugin chain.
+	if cfg.KeeperProxy.Enabled() {
+		for _, sh := range cfg.KeeperProxy.Shards {
+			ks, err := buildKeeperShard(sh, cfg.KeeperProxy.ProbeInterval.Duration, cfg.KeeperProxy.ProbeTimeout.Duration, reg)
+			if err != nil {
+				return nil, fmt.Errorf("keeper proxy shard %q: %w", sh.Name, err)
+			}
+			listeners = append(listeners, serverListener{
+				Server:     ks,
+				ListenAddr: sh.Listen,
+				Label:      "keeper:" + sh.Name,
+			})
+		}
+	}
+
+	// Two-hop mTLS interserver mesh sidecar (link B). Each housegate
+	// runs both Egress (local CH dials it in its own netns) and Ingress
+	// (peer Egresses dial it over mTLS).
+	if cfg.InterserverMesh.Enabled() {
+		eg, in, err := buildInterserverMesh(cfg.InterserverMesh, reg)
+		if err != nil {
+			return nil, fmt.Errorf("interserver mesh: %w", err)
+		}
+		listeners = append(listeners,
+			serverListener{Server: eg, ListenAddr: cfg.InterserverMesh.EgressListen, Label: "interserver_mesh_egress"},
+			serverListener{Server: in, ListenAddr: cfg.InterserverMesh.IngressListen, Label: "interserver_mesh_ingress"},
+		)
+	}
+
 	return &builtServer{
 		listeners: listeners,
 		preServe: func(ctx context.Context) {
@@ -624,6 +668,92 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			}
 		},
 	}, nil
+}
+
+// buildKeeperShard translates one KeeperShardConfig into a running-ready
+// keeper.Server (with its quorum Tracker). sh.Members is the bootstrap
+// set; when the NetworkState exposes the optional registry.KeeperPool
+// capability, the tracker additionally tracks live membership for this
+// shard and re-steers when the quorum is reconfigured (architecture.md §4).
+func buildKeeperShard(sh config.KeeperShardConfig, probeInterval, probeTimeout time.Duration, reg registry.Registry) (*keeper.Server, error) {
+	tracker := keeper.NewTracker(keeper.TrackerConfig{
+		Members:       sh.Members,
+		MembersFunc:   keeperShardMembersFunc(reg, sh.Name),
+		ProbeInterval: probeInterval,
+		ProbeTimeout:  probeTimeout,
+	})
+	return keeper.NewServer(keeper.ServerConfig{
+		Tracker:  tracker,
+		Strategy: keeper.ParseStrategy(sh.Strategy),
+	})
+}
+
+// keeperShardMembersFunc returns a live keeper-quorum membership source
+// for the named shard when reg implements the optional registry.KeeperPool
+// capability (e.g. a chain-backed Registry observing keeper-pool-changed
+// events); nil otherwise, in which case the proxy runs on its static
+// configured members.
+func keeperShardMembersFunc(reg registry.Registry, shard string) func() []string {
+	if kp, ok := reg.(registry.KeeperPool); ok {
+		return func() []string { return kp.KeeperPoolMembers(shard) }
+	}
+	return nil
+}
+
+// buildInterserverMesh loads the mTLS material and builds the egress +
+// ingress pair. The egress peer-lookup is wired to the Registry's optional
+// MeshTopology capability; if absent, the egress will fail all fetches
+// (502 unknown peer) — every mesh deployment must wire peer addresses.
+func buildInterserverMesh(cfg config.InterserverMeshConfig, reg registry.Registry) (*interserver.Egress, *interserver.Ingress, error) {
+	cert, err := tls.LoadX509KeyPair(cfg.TLS.CertFile, cfg.TLS.KeyFile)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load cert/key: %w", err)
+	}
+	caPEM, err := os.ReadFile(cfg.TLS.CAFile)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read CA: %w", err)
+	}
+	caPool := x509.NewCertPool()
+	if !caPool.AppendCertsFromPEM(caPEM) {
+		return nil, nil, fmt.Errorf("CA file %s: no PEM certificates parsed", cfg.TLS.CAFile)
+	}
+
+	egress, err := interserver.NewEgress(interserver.EgressConfig{
+		PeerLookup: meshPeerLookup(reg),
+		TLSClient: &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			RootCAs:      caPool,
+			MinVersion:   tls.VersionTLS12,
+		},
+		DialTimeout: cfg.DialTimeout.Duration,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("egress: %w", err)
+	}
+
+	ingress, err := interserver.NewIngress(interserver.IngressConfig{
+		LocalCH: cfg.LocalCHInterserver,
+		TLSServer: &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			ClientCAs:    caPool,
+			ClientAuth:   tls.RequireAndVerifyClientCert,
+			MinVersion:   tls.VersionTLS12,
+		},
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("ingress: %w", err)
+	}
+	return egress, ingress, nil
+}
+
+// meshPeerLookup returns a PeerLookup func backed by reg when reg
+// implements the optional registry.MeshTopology capability; otherwise a
+// permanently-empty lookup (every fetch fails 502 "unknown peer").
+func meshPeerLookup(reg registry.Registry) interserver.PeerLookup {
+	if mt, ok := reg.(registry.MeshTopology); ok {
+		return mt.MeshIngressFor
+	}
+	return func(string) (string, bool) { return "", false }
 }
 
 func buildAgent(opts Options, rf *redisFactory) (*builtServer, error) {

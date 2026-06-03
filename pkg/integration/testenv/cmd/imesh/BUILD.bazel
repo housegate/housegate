@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "imesh_lib",
+    srcs = ["main.go"],
+    importpath = "housegate/housegate/pkg/integration/testenv/cmd/imesh",
+    visibility = ["//visibility:private"],
+    deps = ["//pkg/interserver"],
+)
+
+go_binary(
+    name = "imesh",
+    embed = [":imesh_lib"],
+    # Static, CGO-free (netgo) so it runs in the alpine sidecar container
+    # and resolves Docker network aliases via the Go resolver.
+    pure = "on",
+    static = "on",
+    visibility = ["//visibility:public"],
+)

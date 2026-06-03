@@ -30,6 +30,41 @@ type Registry interface {
 	Access
 }
 
+// KeeperPool is an OPTIONAL capability a Registry may implement to expose
+// the keeper quorum membership of each named shard to housegate's keeper
+// proxy (pkg/keeper). A deployment with one global pool registers a single
+// shard (conventionally "default"); a deployment that runs §6 multi-shard
+// keeper pools registers one shard per pool (e.g. "default", "shard_2").
+// Build.go probes for this capability via a type assertion; deployments
+// that don't carry the membership simply omit it and the keeper proxies
+// run on their statically configured members.
+type KeeperPool interface {
+	// KeeperPoolMembers returns the keeper-client endpoints (host:port) of
+	// the given shard's current quorum, or nil if unknown. Implementations
+	// must return a fresh slice each call. An empty/nil result is treated
+	// as "no update" by the proxy (it keeps its current members rather
+	// than going dark).
+	KeeperPoolMembers(shard string) []string
+
+	// KeeperShardsList returns the names of every shard the Registry
+	// knows about. Used so build.go can enumerate which shards to feed
+	// live membership for without hard-coding shard names.
+	KeeperShardsList() []string
+}
+
+// MeshTopology is an OPTIONAL Registry capability exposing the
+// interserver-mesh Ingress address for a peer replica (e.g. "ch-1" →
+// "ch-1.mesh.example.com:19009"). Used by pkg/interserver's Egress to
+// route a part fetch — the source replica is parsed from the HTTP
+// endpoint URL, then resolved to its peer Ingress via this lookup.
+// Implementations that don't run the interserver-mesh sidecar simply
+// omit it.
+type MeshTopology interface {
+	// MeshIngressFor returns the Ingress address (host:port) for the
+	// given replica name, or ("", false) if unknown.
+	MeshIngressFor(replica string) (string, bool)
+}
+
 // Topology resolves indexer ids to dialing targets.
 type Topology interface {
 	// ProxyByIndexerId returns the dialing target for indexerId. The

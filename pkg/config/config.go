@@ -137,6 +137,14 @@ type Config struct {
 	ConcurrencyLimit concurrency.Config    `json:"concurrency_limit" yaml:"concurrency_limit"`
 	State            sessionstate.Config   `json:"state"             yaml:"state"`
 
+	// KeeperProxy is the CH-facing keeper proxy (link A of the
+	// keeper-pool design). Disabled when KeeperProxy.Listen is empty.
+	KeeperProxy KeeperProxyConfig `json:"keeper_proxy" yaml:"keeper_proxy"`
+
+	// InterserverMesh is the two-hop mTLS interserver-mesh sidecar
+	// (link B). Disabled when InterserverMesh.EgressListen is empty.
+	InterserverMesh InterserverMeshConfig `json:"interserver_mesh" yaml:"interserver_mesh"`
+
 	// --- Plumbing sections owned by pkg/config ---
 
 	Logging      LoggingConfig      `json:"logging"       yaml:"logging"`
@@ -151,6 +159,94 @@ type LoggingConfig struct {
 	MaxQueryBytes int  `json:"max_query_bytes"  yaml:"max_query_bytes"`
 	MaxDataBytes  int  `json:"max_data_bytes"   yaml:"max_data_bytes"`
 }
+
+// KeeperProxyConfig configures the CH-facing keeper proxy (link A of the
+// keeper-pool design). Disabled when Shards is empty.
+//
+// Each shard is a co-located keeper-client listener fronting one quorum
+// (architecture.md §6 multi-shard pools). A co-located ClickHouse points
+// its <zookeeper> at one shard's Listen and may additionally name other
+// shards via <auxiliary_zookeepers>; a logical database is bound to its
+// shard via network.DatabaseInfo.KeeperShard. The proxy is L4
+// (protocol-unaware) and never participates in Raft. Implementation lives
+// in pkg/keeper.
+type KeeperProxyConfig struct {
+	// Shards is the set of keeper-pool shards this housegate fronts.
+	// Empty disables the keeper proxy entirely.
+	Shards []KeeperShardConfig `json:"shards" yaml:"shards"`
+	// ProbeInterval between 4LW health sweeps (default 1s). Applied to
+	// every shard's tracker.
+	ProbeInterval Duration `json:"probe_interval" yaml:"probe_interval"`
+	// ProbeTimeout per 4LW probe (default 2s). Applied to every shard.
+	ProbeTimeout Duration `json:"probe_timeout" yaml:"probe_timeout"`
+}
+
+// KeeperShardConfig configures one keeper-pool shard.
+type KeeperShardConfig struct {
+	// Name uniquely identifies the shard. Matches the registry.KeeperPool
+	// shard key and DatabaseInfo.KeeperShard so the same name flows
+	// end-to-end from chain/state → keeper proxy → CH config. The
+	// conventional default is "default".
+	Name string `json:"name" yaml:"name"`
+	// Listen is the keeper-client bind address (e.g. ":9181"). Required.
+	Listen string `json:"listen" yaml:"listen"`
+	// Members is the static bootstrap list of keeper-client endpoints
+	// (host:port) for this shard's quorum. Required; a chain-backed
+	// Registry may then refresh membership live via registry.KeeperPool.
+	Members []string `json:"members" yaml:"members"`
+	// Strategy selects the steering target: "any_voter" (default) or
+	// "leader_pref".
+	Strategy string `json:"strategy" yaml:"strategy"`
+}
+
+// Enabled reports whether the keeper proxy is configured (any shard set).
+func (k KeeperProxyConfig) Enabled() bool { return len(k.Shards) > 0 }
+
+// InterserverMeshConfig configures the two-hop mTLS interserver-mesh
+// sidecar. Disabled when EgressListen is empty.
+//
+// Each housegate runs BOTH legs:
+//   - Egress (EgressListen, typically 127.0.0.1:9010): local CH dials it
+//     in its own netns, having advertised "localhost:9010" in keeper. The
+//     egress parses the source replica from the HTTP endpoint URL, looks
+//     up that peer's Ingress via the optional registry.MeshTopology, and
+//     mTLS-dials it (presenting this housegate's client cert).
+//   - Ingress (IngressListen, typically 0.0.0.0:19009): peer Egresses dial
+//     it over mTLS. ClientAuth is REQUIRED — only peers whose client cert
+//     is signed by the shared CA can pull parts. Plaintext-forwards to
+//     LocalCHInterserver (the co-located CH's real loopback-only
+//     interserver port).
+//
+// All three TLS files are required: this is mTLS, not opportunistic TLS.
+type InterserverMeshConfig struct {
+	// EgressListen is the local-CH-facing leg (typically 127.0.0.1:9010).
+	// Empty disables the entire mesh.
+	EgressListen string `json:"egress_listen" yaml:"egress_listen"`
+	// IngressListen is the peer-mTLS-facing leg (typically :19009).
+	IngressListen string `json:"ingress_listen" yaml:"ingress_listen"`
+	// LocalCHInterserver is the co-located CH's real interserver address
+	// (host:port, e.g. "127.0.0.1:9009"). The ingress forwards there.
+	LocalCHInterserver string `json:"local_ch_interserver" yaml:"local_ch_interserver"`
+	// TLS holds the mTLS material (own cert/key + shared CA).
+	TLS InterserverMeshTLS `json:"tls" yaml:"tls"`
+	// DialTimeout bounds the egress→ingress dial (default 10s).
+	DialTimeout Duration `json:"dial_timeout" yaml:"dial_timeout"`
+}
+
+// InterserverMeshTLS holds the mTLS files for the interserver mesh.
+type InterserverMeshTLS struct {
+	// CertFile is this housegate's own cert (used as both server cert on
+	// the ingress and client cert on the egress).
+	CertFile string `json:"cert_file" yaml:"cert_file"`
+	// KeyFile is the private key matching CertFile.
+	KeyFile string `json:"key_file" yaml:"key_file"`
+	// CAFile is the shared CA used to verify peer certs (as RootCAs on
+	// the egress and ClientCAs on the ingress).
+	CAFile string `json:"ca_file" yaml:"ca_file"`
+}
+
+// Enabled reports whether the interserver mesh sidecar is configured.
+func (i InterserverMeshConfig) Enabled() bool { return i.EgressListen != "" }
 
 // NetworkStateConfig configures the NetworkState consumer (proxy
 // infrastructure, not a plugin).
@@ -296,6 +392,55 @@ func (c *Config) Validate() error {
 	if c.InternalListen != "" {
 		if _, _, err := net.SplitHostPort(c.InternalListen); err != nil {
 			errs = append(errs, fmt.Errorf("internal_listen: invalid host:port %q: %w", c.InternalListen, err))
+		}
+	}
+
+	if c.KeeperProxy.Enabled() {
+		seen := map[string]bool{}
+		for i, sh := range c.KeeperProxy.Shards {
+			tag := fmt.Sprintf("keeper_proxy.shards[%d]", i)
+			if sh.Name == "" {
+				errs = append(errs, fmt.Errorf("%s.name: required", tag))
+			} else if seen[sh.Name] {
+				errs = append(errs, fmt.Errorf("%s.name: duplicate shard %q", tag, sh.Name))
+			} else {
+				seen[sh.Name] = true
+			}
+			if _, _, err := net.SplitHostPort(sh.Listen); err != nil {
+				errs = append(errs, fmt.Errorf("%s.listen: invalid host:port %q: %w", tag, sh.Listen, err))
+			}
+			if len(sh.Members) == 0 {
+				errs = append(errs, fmt.Errorf("%s.members: at least one keeper endpoint is required", tag))
+			}
+			for j, m := range sh.Members {
+				if _, _, err := net.SplitHostPort(m); err != nil {
+					errs = append(errs, fmt.Errorf("%s.members[%d]: invalid host:port %q: %w", tag, j, m, err))
+				}
+			}
+			switch sh.Strategy {
+			case "", "any_voter", "leader_pref":
+			default:
+				errs = append(errs, fmt.Errorf("%s.strategy: unknown %q (want any_voter or leader_pref)", tag, sh.Strategy))
+			}
+		}
+	}
+
+	if c.InterserverMesh.Enabled() {
+		if _, _, err := net.SplitHostPort(c.InterserverMesh.EgressListen); err != nil {
+			errs = append(errs, fmt.Errorf("interserver_mesh.egress_listen: invalid host:port %q: %w", c.InterserverMesh.EgressListen, err))
+		}
+		if c.InterserverMesh.IngressListen == "" {
+			errs = append(errs, errors.New("interserver_mesh.ingress_listen is required when interserver_mesh.egress_listen is set"))
+		} else if _, _, err := net.SplitHostPort(c.InterserverMesh.IngressListen); err != nil {
+			errs = append(errs, fmt.Errorf("interserver_mesh.ingress_listen: invalid host:port %q: %w", c.InterserverMesh.IngressListen, err))
+		}
+		if c.InterserverMesh.LocalCHInterserver == "" {
+			errs = append(errs, errors.New("interserver_mesh.local_ch_interserver is required when interserver_mesh.egress_listen is set"))
+		} else if _, _, err := net.SplitHostPort(c.InterserverMesh.LocalCHInterserver); err != nil {
+			errs = append(errs, fmt.Errorf("interserver_mesh.local_ch_interserver: invalid host:port %q: %w", c.InterserverMesh.LocalCHInterserver, err))
+		}
+		if c.InterserverMesh.TLS.CertFile == "" || c.InterserverMesh.TLS.KeyFile == "" || c.InterserverMesh.TLS.CAFile == "" {
+			errs = append(errs, errors.New("interserver_mesh.tls.{cert_file,key_file,ca_file} are all required (this is mTLS, not opportunistic TLS)"))
 		}
 	}
 
