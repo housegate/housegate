@@ -59,3 +59,7 @@ integration_test_client-linux
 
 # personal, untracked pre-commit extension (CLAUDE.md review)
 scripts/git-hooks/pre-commit.local
+.harness/*/
+!.harness/retro/
+!.harness/retro/**
+!.harness/config.json
