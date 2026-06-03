@@ -22,6 +22,7 @@ go_library(
     name = "metrics",
     srcs = [
         "chpoller.go",
+        "collector.go",
         "hostpoller.go",
         "runtime.go",
         "snapshot.go",

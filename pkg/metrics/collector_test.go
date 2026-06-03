@@ -141,7 +141,7 @@ func TestCollectOnceLastSuccessCarryForward(t *testing.T) {
 func TestCollectOncePanicRecovered(t *testing.T) {
 	store := &Store{}
 	now := time.Unix(5000, 0)
-	ch := []chReplicaPoller{{}, &fakeCHPoller{replica: "x:9000", panics: true}}[1:]
+	ch := []chReplicaPoller{&fakeCHPoller{replica: "x:9000", panics: true}}
 	c := newTestCollector(store, ch, okHost(HostMetrics{MemTotalBytes: 1}), func() RuntimeMetrics { return RuntimeMetrics{Goroutines: 1} }, now)
 
 	// Must not crash the test process.
