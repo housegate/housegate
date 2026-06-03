@@ -1,6 +1,14 @@
-load("@rules_go//go:def.bzl", "go_test")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_test(
     name = "metrics_test",
     srcs = ["snapshot_test.go"],
+    embed = [":metrics"],
+)
+
+go_library(
+    name = "metrics",
+    srcs = ["snapshot.go"],
+    importpath = "housegate/housegate/pkg/metrics",
+    visibility = ["//visibility:public"],
 )
