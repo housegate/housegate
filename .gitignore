@@ -63,3 +63,4 @@ scripts/git-hooks/pre-commit.local
 !.harness/retro/
 !.harness/retro/**
 !.harness/config.json
+.review-loop/
