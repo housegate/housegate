@@ -129,18 +129,22 @@ type Config struct {
 
 	// --- Feature sections (each owned by its plugin package) ---
 
-	Auth             authplugin.Config     `json:"auth"              yaml:"auth"`
-	Rewriter         rewrite.Config        `json:"rewriter"          yaml:"rewriter"`
-	Agent            agent.Config          `json:"agent"             yaml:"agent"`
-	Usage            usage.Config          `json:"usage"             yaml:"usage"`
-	IndexingUsage    indexingusage.Config  `json:"indexing_usage"    yaml:"indexing_usage"`
-	ConcurrencyLimit concurrency.Config    `json:"concurrency_limit" yaml:"concurrency_limit"`
-	State            sessionstate.Config   `json:"state"             yaml:"state"`
+	Auth             authplugin.Config    `json:"auth"              yaml:"auth"`
+	Rewriter         rewrite.Config       `json:"rewriter"          yaml:"rewriter"`
+	Agent            agent.Config         `json:"agent"             yaml:"agent"`
+	Usage            usage.Config         `json:"usage"             yaml:"usage"`
+	IndexingUsage    indexingusage.Config `json:"indexing_usage"    yaml:"indexing_usage"`
+	ConcurrencyLimit concurrency.Config   `json:"concurrency_limit" yaml:"concurrency_limit"`
+	State            sessionstate.Config  `json:"state"             yaml:"state"`
 
 	// --- Plumbing sections owned by pkg/config ---
 
 	Logging      LoggingConfig      `json:"logging"       yaml:"logging"`
 	NetworkState NetworkStateConfig `json:"network_state" yaml:"network_state"`
+
+	// Observability owns the metrics Collector + pprof config. Read by
+	// buildServer to construct the pkg/metrics Collector; no plugin owns it.
+	Observability ObservabilityConfig `json:"observability" yaml:"observability"`
 }
 
 // LoggingConfig controls what the proxy writes to operator logs. Owned
@@ -150,6 +154,36 @@ type LoggingConfig struct {
 	Data          bool `json:"data"             yaml:"data"`
 	MaxQueryBytes int  `json:"max_query_bytes"  yaml:"max_query_bytes"`
 	MaxDataBytes  int  `json:"max_data_bytes"   yaml:"max_data_bytes"`
+}
+
+// ObservabilityConfig configures downstream metrics collection and the
+// authenticated pprof endpoint. Owned by pkg/config (plumbing) and read by
+// buildServer; the pkg/metrics Collector takes plain values, so there is no
+// config -> metrics import.
+type ObservabilityConfig struct {
+	Collector CollectorConfig `json:"collector" yaml:"collector"`
+	Pprof     PprofConfig     `json:"pprof"     yaml:"pprof"`
+}
+
+// CollectorConfig controls the background metrics Collector. CHAddr/CHUser/
+// CHPassword are an explicit credential fallback: cluster.ReplicaConfig carries
+// no credentials and the credProvider may be nil, so buildServer resolves the
+// CH poll target by precedence (credProvider first, else these).
+type CollectorConfig struct {
+	Enabled     bool     `json:"enabled"      yaml:"enabled"`
+	Interval    Duration `json:"interval"     yaml:"interval"`
+	PollTimeout Duration `json:"poll_timeout" yaml:"poll_timeout"`
+	CHAddr      string   `json:"ch_addr"      yaml:"ch_addr"`
+	CHUser      string   `json:"ch_user"      yaml:"ch_user"`
+	CHPassword  string   `json:"ch_password"  yaml:"ch_password"`
+}
+
+// PprofConfig gates the /debug/pprof endpoint. Disabled by default; when
+// enabled, Token is required (bearer auth) — operators are encouraged to keep
+// it in an age-encrypted config rather than plaintext.
+type PprofConfig struct {
+	Enabled bool   `json:"enabled" yaml:"enabled"`
+	Token   string `json:"token"   yaml:"token"`
 }
 
 // NetworkStateConfig configures the NetworkState consumer (proxy
@@ -299,6 +333,19 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// Observability.
+	if c.Observability.Pprof.Enabled && c.Observability.Pprof.Token == "" {
+		errs = append(errs, errors.New("observability.pprof.token is required when observability.pprof.enabled is true"))
+	}
+	if c.Observability.Collector.Enabled {
+		if c.Observability.Collector.Interval.Duration <= 0 {
+			errs = append(errs, errors.New("observability.collector.interval must be > 0 when the collector is enabled"))
+		}
+		if c.Observability.Collector.PollTimeout.Duration <= 0 {
+			errs = append(errs, errors.New("observability.collector.poll_timeout must be > 0 when the collector is enabled"))
+		}
+	}
+
 	if joined := errors.Join(errs...); joined != nil {
 		return fmt.Errorf("invalid config (mode=%s):\n%w", c.Mode(), joined)
 	}
@@ -395,6 +442,20 @@ func Default() Config {
 			// HOUSEGATE_NETWORK_STATE_SOURCE is the modern spelling
 			// and additionally accepts a YAML path.
 			Source: EnvOrDefault("HOUSEGATE_NETWORK_STATE_SOURCE", EnvOrDefault("HOUSEGATE_NETWORK_STATE_REDIS", "")),
+		},
+		Observability: ObservabilityConfig{
+			Collector: CollectorConfig{
+				Enabled:     EnvOrDefault("HOUSEGATE_COLLECTOR_ENABLED", "true") != "false",
+				Interval:    Duration{15 * time.Second},
+				PollTimeout: Duration{5 * time.Second},
+				CHAddr:      EnvOrDefault("HOUSEGATE_COLLECTOR_CH_ADDR", ""),
+				CHUser:      EnvOrDefault("HOUSEGATE_COLLECTOR_CH_USER", ""),
+				CHPassword:  EnvOrDefault("HOUSEGATE_COLLECTOR_CH_PASSWORD", ""),
+			},
+			Pprof: PprofConfig{
+				Enabled: EnvOrDefault("HOUSEGATE_PPROF_ENABLED", "") == "true",
+				Token:   EnvOrDefault("HOUSEGATE_PPROF_TOKEN", ""),
+			},
 		},
 	}
 }
