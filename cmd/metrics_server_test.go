@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -106,5 +109,49 @@ func TestBuildMetricsHandlerPprofGating(t *testing.T) {
 	hOn.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Errorf("pprof enabled with token: status = %d, want 200", rec.Code)
+	}
+}
+
+func TestStartMetricsServerServesAndShutsDown(t *testing.T) {
+	// Grab a free loopback port, then release it for the server to bind.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	startMetricsServer(ctx, addr, nil, config.PprofConfig{})
+
+	// Poll until the background server is accepting.
+	var resp *http.Response
+	for i := 0; i < 100; i++ {
+		resp, err = http.Get("http://" + addr + "/metrics")
+		if err == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("metrics server never came up at %s: %v", addr, err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("/metrics status = %d, want 200", resp.StatusCode)
+	}
+
+	// Cancel → graceful shutdown; poll until it stops accepting.
+	cancel()
+	stopped := false
+	for i := 0; i < 150; i++ {
+		if _, err := http.Get("http://" + addr + "/metrics"); err != nil {
+			stopped = true
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !stopped {
+		t.Error("metrics server did not shut down after ctx cancel")
 	}
 }

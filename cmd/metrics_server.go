@@ -1,0 +1,95 @@
+package main
+
+import (
+	"context"
+	"crypto/subtle"
+	"errors"
+	"net/http"
+	"net/http/pprof"
+	"strings"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"housegate/housegate/pkg/config"
+	"housegate/housegate/pkg/log"
+)
+
+// startMetricsServer starts the HTTP server exposing /metrics (the existing
+// init()-registered globals merged with the proxy's dedicated collector
+// registry) and, when enabled, an authenticated /debug/pprof. It runs in the
+// background and shuts down gracefully when ctx is cancelled.
+func startMetricsServer(ctx context.Context, addr string, reg *prometheus.Registry, pprofCfg config.PprofConfig) {
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: buildMetricsHandler(reg, pprofCfg),
+	}
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Errorw("metrics server panic recovered", "panic", r)
+			}
+		}()
+		log.Infow("metrics listening", "addr", addr, "pprof", pprofCfg.Enabled)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Infoe(err, "metrics server error")
+		}
+	}()
+	go func() {
+		<-ctx.Done()
+		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutCtx)
+	}()
+}
+
+// buildMetricsHandler builds the metrics/pprof HTTP handler. /metrics gathers
+// the default registry (existing init() globals) merged with the proxy's
+// dedicated collector registry via prometheus.Gatherers, so both old and new
+// series appear in one scrape without a double-registration panic. pprof is
+// mounted only when enabled, behind bearer-token auth.
+func buildMetricsHandler(reg *prometheus.Registry, pprofCfg config.PprofConfig) http.Handler {
+	mux := http.NewServeMux()
+
+	gatherers := prometheus.Gatherers{prometheus.DefaultGatherer}
+	if reg != nil {
+		gatherers = append(gatherers, reg)
+	}
+	mux.Handle("/metrics", promhttp.HandlerFor(gatherers, promhttp.HandlerOpts{}))
+
+	if pprofCfg.Enabled {
+		pp := http.NewServeMux()
+		pp.HandleFunc("/debug/pprof/", pprof.Index)
+		pp.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		pp.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		pp.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		pp.HandleFunc("/debug/pprof/trace", pprof.Trace)
+		mux.Handle("/debug/pprof/", pprofAuthMiddleware(pprofCfg.Token, pp))
+	}
+	return mux
+}
+
+// pprofAuthMiddleware gates next behind a bearer token compared in constant
+// time. A missing/empty configured token, or any mismatch, returns 401.
+func pprofAuthMiddleware(token string, next http.Handler) http.Handler {
+	want := []byte(token)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got := []byte(bearerToken(r))
+		if len(want) == 0 || subtle.ConstantTimeCompare(got, want) != 1 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// bearerToken extracts the token from an "Authorization: Bearer <token>" header.
+func bearerToken(r *http.Request) string {
+	const prefix = "Bearer "
+	h := r.Header.Get("Authorization")
+	if strings.HasPrefix(h, prefix) {
+		return strings.TrimPrefix(h, prefix)
+	}
+	return ""
+}
