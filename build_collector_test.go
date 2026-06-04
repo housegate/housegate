@@ -7,8 +7,22 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
+	"housegate/housegate/pkg/cluster"
 	"housegate/housegate/pkg/config"
 )
+
+type fakeCredProvider struct {
+	user, pass string
+	err        error
+}
+
+func (f fakeCredProvider) GetDefaultCredential() (string, string, error) {
+	return f.user, f.pass, f.err
+}
+
+func (f fakeCredProvider) GetCredentialForIndexer(uint64) (string, string, error) {
+	return f.user, f.pass, f.err
+}
 
 func obsTestConfig(enabled bool, chAddr string) config.Config {
 	cfg := config.Default()
@@ -65,3 +79,45 @@ func TestProxyImplMetricsRegistryAccessor(t *testing.T) {
 		t.Error("MetricsRegistry() with nil built should return nil")
 	}
 }
+
+func TestBuildCollectorCredProviderAndShardTargets(t *testing.T) {
+	// No CHAddr → fall through to shard replicas; credProvider supplies creds.
+	cfg := obsTestConfig(true, "")
+	cfg.Shard = &cluster.ShardConfig{Replicas: []cluster.ReplicaConfig{
+		{Host: "10.0.0.1", Port: 9000},
+		{Host: "10.0.0.2", Port: 9000},
+	}}
+	c, reg, cleanup := buildCollector(cfg, fakeCredProvider{user: "u", pass: "p"}, 7)
+	if c == nil || reg == nil {
+		t.Fatal("expected collector + registry from shard replicas")
+	}
+	defer cleanup()
+}
+
+func TestBuildCollectorUpstreamTarget(t *testing.T) {
+	// No CHAddr, no shard → fall through to single upstream.
+	cfg := obsTestConfig(true, "")
+	cfg.Upstream = "ch.local:9000"
+	c, _, cleanup := buildCollector(cfg, nil, 7)
+	if c == nil {
+		t.Fatal("expected collector for upstream target")
+	}
+	defer cleanup()
+}
+
+func TestBuildCollectorCredProviderErrorFallsBackToConfig(t *testing.T) {
+	// credProvider returns an error → fall back to config CHUser/CHPassword.
+	cfg := obsTestConfig(true, "127.0.0.1:9000")
+	cfg.Observability.Collector.CHUser = "cfguser"
+	c, _, cleanup := buildCollector(cfg, fakeCredProvider{err: errCredUnavailable}, 7)
+	if c == nil {
+		t.Fatal("expected collector even when credProvider errors")
+	}
+	defer cleanup()
+}
+
+var errCredUnavailable = errorString("cred unavailable")
+
+type errorString string
+
+func (e errorString) Error() string { return string(e) }

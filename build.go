@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"housegate/housegate/pkg/auth"
 	"housegate/housegate/pkg/billing"
 	"housegate/housegate/pkg/chproto"
@@ -150,6 +152,10 @@ type builtServer struct {
 	listeners []serverListener
 	preServe  func(ctx context.Context)
 	teardown  func()
+	// metricsRegistry is the dedicated Prometheus registry for the downstream
+	// metrics Collector (nil when collection is disabled or in agent mode).
+	// Exposed to hosts via Proxy.MetricsRegistry().
+	metricsRegistry *prometheus.Registry
 }
 
 // buildServer assembles the full server-mode plugin chain and a
@@ -605,8 +611,17 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		})
 	}
 
+	// Downstream-metrics Collector (host + runtime + per-replica ClickHouse).
+	// Started in preServe (mirroring libCluster.Start), stopped via the run ctx;
+	// its poller connections are closed on teardown.
+	metricsCollector, metricsRegistry, metricsCleanup := buildCollector(*cfg, credProvider, selfIndexerID)
+	if metricsCleanup != nil {
+		pushTeardown(metricsCleanup)
+	}
+
 	return &builtServer{
-		listeners: listeners,
+		listeners:       listeners,
+		metricsRegistry: metricsRegistry,
 		preServe: func(ctx context.Context) {
 			if libCluster != nil {
 				libCluster.Start(ctx)
@@ -615,6 +630,10 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 				} else {
 					log.Infow("cluster manager started in single-replica mode", "upstream", cfg.Upstream)
 				}
+			}
+			if metricsCollector != nil {
+				go metricsCollector.Start(ctx)
+				log.Infow("metrics collector started", "interval", cfg.Observability.Collector.Interval.Duration)
 			}
 		},
 		teardown: func() {
