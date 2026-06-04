@@ -26,6 +26,10 @@ type TestProxy struct {
 	// Addr is the bound listener address ("127.0.0.1:<port>").
 	Addr string
 
+	// Proxy is the underlying started proxy, exposed so tests can reach
+	// accessors such as MetricsRegistry().
+	Proxy housegate.Proxy
+
 	cancel    context.CancelFunc
 	done      <-chan error
 	closeOnce sync.Once
@@ -212,6 +216,7 @@ func startProxy(t *testing.T, cfg *config.Config, proxyOpts ...ProxyOption) *Tes
 
 	tp := &TestProxy{
 		Addr:   proxy.Addr().String(),
+		Proxy:  proxy,
 		cancel: cancel,
 		done:   doneCh,
 	}
