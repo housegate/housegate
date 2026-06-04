@@ -79,8 +79,11 @@ type CHReplicaMetrics struct {
 	// (from the ReplicasMaxQueueSize / asynchronous_metrics).
 	ReplicationQueue uint64
 
-	// OSCPUSeconds is the cumulative OS CPU time the ClickHouse server has used,
-	// in seconds (from the OSUserTime+OSSystemTime asynchronous_metrics).
+	// OSCPUSeconds is the ClickHouse server's OS CPU metric from
+	// asynchronous_metrics: the OSUserTimeNormalized per-second ratio when
+	// present, else cumulative seconds from OSCPUVirtualTimeMicroseconds. The
+	// exporter publishes it as a gauge (the normalized source is a non-monotonic
+	// rate, not a counter).
 	OSCPUSeconds float64
 }
 
