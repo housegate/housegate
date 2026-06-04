@@ -33,7 +33,7 @@ func startMetricsServer(ctx context.Context, addr string, reg *prometheus.Regist
 		}()
 		log.Infow("metrics listening", "addr", addr, "pprof", pprofCfg.Enabled)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Infoe(err, "metrics server error")
+			log.Errorw("metrics server error", "err", err)
 		}
 	}()
 	go func() {
@@ -76,6 +76,10 @@ func pprofAuthMiddleware(token string, next http.Handler) http.Handler {
 	want := []byte(token)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got := []byte(bearerToken(r))
+		// len(want)==0 cannot occur via the normal startup path — Config.Validate
+		// rejects pprof.enabled with an empty token — but the guard is kept as
+		// defense-in-depth so a directly-constructed middleware always rejects
+		// rather than accidentally serving pprof unauthenticated.
 		if len(want) == 0 || subtle.ConstantTimeCompare(got, want) != 1 {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return

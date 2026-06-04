@@ -63,7 +63,11 @@ func NewCollector(store *Store, ch []*CHPoller, interval time.Duration) *Collect
 func (c *Collector) Start(ctx context.Context) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Errorw("metrics collector Start panic recovered", "panic", r)
+			log.Errorw("metrics collector Start panic recovered, marking collector down", "panic", r)
+			// Surface the dead collector to scrapers: publishing a nil snapshot
+			// makes the exporter emit collector_up=0 rather than leaving the last
+			// snapshot in place (which would falsely keep reading collector_up=1).
+			c.store.Store(nil)
 		}
 	}()
 
@@ -107,6 +111,11 @@ func (c *Collector) collectOnce(ctx context.Context) {
 		}(i, p)
 	}
 
+	// host/hostOK (and runtime below) are closed over by their goroutines and
+	// read by the parent only after wg.Wait() — that barrier is the
+	// happens-before edge that makes these single-writer closures race-free. Do
+	// not remove the barrier (e.g. for per-source timeouts) without moving each
+	// result into its own goroutine-local storage first.
 	var (
 		host   HostMetrics
 		hostOK bool

@@ -57,7 +57,7 @@ func NewExporter(store *Store, indexerID string) *Exporter {
 		chMemoryTracking:   prometheus.NewDesc(fqn("ch_memory_tracking_bytes"), "Bytes currently tracked by the ClickHouse memory tracker.", []string{"replica"}, cl),
 		chPartsActive:      prometheus.NewDesc(fqn("ch_parts_active"), "Number of active data parts on the ClickHouse replica.", []string{"replica"}, cl),
 		chReplicationQueue: prometheus.NewDesc(fqn("ch_replication_queue"), "Tasks waiting in the ClickHouse replication queue.", []string{"replica"}, cl),
-		chOSCPUSeconds:     prometheus.NewDesc(fqn("ch_os_cpu_seconds"), "Cumulative OS CPU seconds used by the ClickHouse server (lags CH's async-metrics update period).", []string{"replica"}, cl),
+		chOSCPUSeconds:     prometheus.NewDesc(fqn("ch_os_cpu_seconds"), "OS CPU metric from ClickHouse system.asynchronous_metrics, exposed as a gauge: the OSUserTimeNormalized per-second ratio when present, else cumulative seconds from OSCPUVirtualTimeMicroseconds. A gauge (not a counter) because the normalized source is a non-monotonic rate that would corrupt counter rate()/reset math.", []string{"replica"}, cl),
 
 		hostCPUPercent:   prometheus.NewDesc(fqn("host_cpu_percent"), "Host CPU utilization percent (0..100, summed across cores).", nil, cl),
 		hostMemAvailable: prometheus.NewDesc(fqn("host_mem_available_bytes"), "Host memory available to userspace, in bytes.", nil, cl),
@@ -126,7 +126,7 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 		gauge(e.chMemoryTracking, float64(r.MemoryTrackingBytes), r.Replica)
 		gauge(e.chPartsActive, float64(r.PartsActive), r.Replica)
 		gauge(e.chReplicationQueue, float64(r.ReplicationQueue), r.Replica)
-		counter(e.chOSCPUSeconds, r.OSCPUSeconds, r.Replica)
+		gauge(e.chOSCPUSeconds, r.OSCPUSeconds, r.Replica)
 	}
 
 	h := snap.Host
