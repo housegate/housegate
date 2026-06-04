@@ -53,6 +53,7 @@ go_test(
     name = "housegate_test",
     srcs = [
         "agent_auto_discover_integration_test.go",
+        "build_collector_test.go",
         "build_test.go",
         "internal_port_integration_test.go",
         "pivot_integration_test.go",
@@ -76,6 +77,8 @@ go_test(
         "//pkg/registry",
         "//pkg/rewriter",
         "@com_github_clickhouse_ch_go//proto",
+        "@com_github_prometheus_client_golang//prometheus",
+        "@com_github_prometheus_client_golang//prometheus/testutil",
     ],
 )
 
