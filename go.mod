@@ -10,7 +10,6 @@ require (
 	github.com/celestiaorg/go-square/v2 v2.3.3
 	github.com/ethereum/go-ethereum v1.17.2
 	github.com/prometheus/client_golang v1.23.2
-	github.com/prometheus/procfs v0.16.1
 	github.com/redis/go-redis/v9 v9.18.0
 	github.com/segmentio/asm v1.2.1
 	github.com/shirou/gopsutil/v4 v4.26.3
@@ -58,6 +57,7 @@ require (
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/gorilla/websocket v1.4.2 // indirect
+	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20250317134145-8bc96cf8fc35 // indirect
 	github.com/magiconair/properties v1.8.10 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
@@ -74,6 +74,7 @@ require (
 	github.com/paulmach/orb v0.12.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
+	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/shirou/gopsutil v3.21.11+incompatible // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect

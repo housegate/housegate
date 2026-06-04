@@ -25,6 +25,7 @@ go_library(
     srcs = [
         "chpoller.go",
         "collector.go",
+        "exporter.go",
         "hostpoller.go",
         "runtime.go",
         "snapshot.go",
@@ -34,6 +35,7 @@ go_library(
     deps = [
         "//pkg/log",
         "@com_github_clickhouse_clickhouse_go_v2//:clickhouse-go",
+        "@com_github_prometheus_client_golang//prometheus",
         "@com_github_shirou_gopsutil_v4//cpu",
         "@com_github_shirou_gopsutil_v4//disk",
         "@com_github_shirou_gopsutil_v4//mem",
