@@ -71,10 +71,9 @@ observability:
     enabled: true
     interval: "15s"
     poll_timeout: "5s"
-    # Optional CH poll-target override. When empty, the target is derived from
-    # the shard replicas / upstream. Credentials always come from the ckh_manager
-    # config (ckh_manager_config_path above) — there are no collector cred fields.
-    ch_addr: ""
+    # The collector polls the proxy's downstream ClickHouse (shard replicas /
+    # upstream) using credentials from the ckh_manager config above. (An advanced
+    # ch_addr override exists in code but is not needed for normal deployments.)
   pprof:
     # Disabled by default. When enabled, token is REQUIRED — it is the bearer
     # token for /debug/pprof. Keep it in an age-encrypted config, not plaintext.
