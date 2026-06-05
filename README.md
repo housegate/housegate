@@ -100,7 +100,7 @@ HOUSEGATE_AGE_IDENTITY_FILE=~/.housegate.age \
 | `listen` | string | Yes | `:9001` | TCP listen address for the native ClickHouse protocol (the **external port** — agents and local CH `remote()` loopbacks land here) |
 | `internal_listen` | string | No | `` (empty) | Optional second TCP listener restricted to peer housegates. Sessions accepted here are pre-flagged `IsPeerTrusted=true` + `IsInternalPort=true`; auth and rewrite are skipped, `__route__` envelopes are rejected. Bind to a peer-only subnet via firewall/SG. See [Part 3](#part-3--how-multi-proxy-routing-works). |
 | `upstream` | string | No | `` (empty) | Single-upstream address. Ignored when `shard` is set. Empty + no `shard` + not agent ⇒ router-only server (every session is forwarded to a peer via NetworkState — see [§1.3](#13-router-only-server)). |
-| `metrics_listen` | string | No | `:9091` | Prometheus metrics HTTP address |
+| `metrics_listen` | string | No | `:9091` | Prometheus metrics HTTP address. Serves `/metrics` (the proxy's own counters merged with the [`observability`](#observability) collector series) and, when enabled, an authenticated `/debug/pprof`. |
 | `dial_timeout` | duration | No | `5s` | Upstream dial timeout |
 | `idle_timeout` | duration | No | `5m` | Idle client connection timeout |
 | `max_connection_lifetime` | duration | No | `24h` | Hard cap on a client connection's lifetime |
@@ -184,6 +184,44 @@ After the rewriter migration the state plugin's only job is OnHello: copy `Clien
 | `logging.data` | bool | No | `false` | Log Data packet content (debug only) |
 | `logging.max_query_bytes` | int | No | `300` | Truncation length for logged queries (bytes) |
 | `logging.max_data_bytes` | int | No | `200` | Truncation length for logged Data packets (bytes) |
+
+### `observability`
+
+Server-mode only. Adds a background **metrics Collector** that periodically polls the downstream ClickHouse, the host, and the Go runtime, plus an optional authenticated **pprof** endpoint. Both are served on `metrics_listen`: `/metrics` merges the proxy's own counters with the collected series in a single scrape, and `/debug/pprof` is mounted only when enabled. Agent mode does not run the collector.
+
+Collector ClickHouse credentials come from the `ckh_manager_config_path` provider — there are no separate collector credential fields. The collector is **fail-open**: a failed poll logs a warning and keeps the previous snapshot; it never blocks queries or crashes the proxy.
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `observability.collector.enabled` | bool | No | `true` | Run the background metrics collector. Env: `HOUSEGATE_COLLECTOR_ENABLED` (set `false` to disable). |
+| `observability.collector.interval` | duration | No | `15s` | Poll period for the ClickHouse / host / runtime sources. Must be `> 0` when the collector is enabled. |
+| `observability.collector.poll_timeout` | duration | No | `5s` | Per-poll timeout for the ClickHouse query. Must be `> 0` when the collector is enabled. |
+| `observability.collector.ch_addr` | string | No | `` (shard replicas / upstream) | Advanced override for the ClickHouse poll target; normally derived automatically — leave empty. Env: `HOUSEGATE_COLLECTOR_CH_ADDR`. |
+| `observability.pprof.enabled` | bool | No | `false` | Mount `/debug/pprof` on `metrics_listen`. Env: `HOUSEGATE_PPROF_ENABLED` (set `true` to enable). |
+| `observability.pprof.token` | string | When pprof enabled | `` | Bearer token guarding `/debug/pprof` (constant-time compare). **Required** whenever pprof is enabled — keep it in an age-encrypted config, never plaintext. Env: `HOUSEGATE_PPROF_TOKEN`. |
+
+```yaml
+observability:
+  collector: { enabled: true,  interval: "15s", poll_timeout: "5s" }
+  pprof:     { enabled: false, token: "" }   # token REQUIRED when enabled
+```
+
+**Exposed series** (all prefixed `clickhouse_proxy_`, scraped from `metrics_listen`):
+
+- **ClickHouse** (label `replica`): `ch_up`, `ch_query_total`, `ch_insert_total`, `ch_memory_tracking_bytes`, `ch_parts_active`, `ch_replication_queue`, `ch_os_cpu_seconds`.
+- **Host**: `host_cpu_percent`, `host_mem_available_bytes`, `host_mem_total_bytes`, `host_disk_read_bytes_total{device}`, `host_disk_write_bytes_total{device}`, `host_net_rx_bytes_total`, `host_net_tx_bytes_total`.
+- **Go runtime**: `runtime_goroutines`, `runtime_heap_alloc_bytes`, `runtime_gc_pause_seconds`.
+- **Collector health**: `collector_up`, `collector_last_success_timestamp_seconds{source}`.
+
+`/debug/pprof` (when enabled) requires an `Authorization: Bearer <token>` header:
+
+```bash
+curl -s -H "Authorization: Bearer $HOUSEGATE_PPROF_TOKEN" \
+  http://<host>:9091/debug/pprof/heap -o heap.pprof
+go tool pprof heap.pprof
+```
+
+A full example block lives in [configs/local.server.yaml](configs/local.server.yaml).
 
 ### `network_state`
 
