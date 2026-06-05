@@ -165,17 +165,15 @@ type ObservabilityConfig struct {
 	Pprof     PprofConfig     `json:"pprof"     yaml:"pprof"`
 }
 
-// CollectorConfig controls the background metrics Collector. CHAddr/CHUser/
-// CHPassword are an explicit credential fallback: cluster.ReplicaConfig carries
-// no credentials and the credProvider may be nil, so buildServer resolves the
-// CH poll target by precedence (credProvider first, else these).
+// CollectorConfig controls the background metrics Collector. CHAddr optionally
+// overrides the ClickHouse poll target (default: the shard replicas / upstream).
+// The collector's ClickHouse credentials always come from the ckh_manager config
+// (ckh_manager_config_path) — there are no separate collector credential fields.
 type CollectorConfig struct {
 	Enabled     bool     `json:"enabled"      yaml:"enabled"`
 	Interval    Duration `json:"interval"     yaml:"interval"`
 	PollTimeout Duration `json:"poll_timeout" yaml:"poll_timeout"`
 	CHAddr      string   `json:"ch_addr"      yaml:"ch_addr"`
-	CHUser      string   `json:"ch_user"      yaml:"ch_user"`
-	CHPassword  string   `json:"ch_password"  yaml:"ch_password"`
 }
 
 // PprofConfig gates the /debug/pprof endpoint. Disabled by default; when
@@ -449,8 +447,6 @@ func Default() Config {
 				Interval:    Duration{15 * time.Second},
 				PollTimeout: Duration{5 * time.Second},
 				CHAddr:      EnvOrDefault("HOUSEGATE_COLLECTOR_CH_ADDR", ""),
-				CHUser:      EnvOrDefault("HOUSEGATE_COLLECTOR_CH_USER", ""),
-				CHPassword:  EnvOrDefault("HOUSEGATE_COLLECTOR_CH_PASSWORD", ""),
 			},
 			Pprof: PprofConfig{
 				Enabled: EnvOrDefault("HOUSEGATE_PPROF_ENABLED", "") == "true",

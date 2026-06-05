@@ -105,13 +105,27 @@ func TestBuildCollectorUpstreamTarget(t *testing.T) {
 	defer cleanup()
 }
 
-func TestBuildCollectorCredProviderErrorFallsBackToConfig(t *testing.T) {
-	// credProvider returns an error → fall back to config CHUser/CHPassword.
+func TestBuildCollectorCredProviderErrorStillBuilds(t *testing.T) {
+	// credProvider's GetDefaultCredential errors → no creds resolved, but the
+	// collector is still constructed (it fails open at poll time).
 	cfg := obsTestConfig(true, "127.0.0.1:9000")
-	cfg.Observability.Collector.CHUser = "cfguser"
 	c, _, cleanup := buildCollector(cfg, fakeCredProvider{err: errCredUnavailable}, 7)
 	if c == nil {
 		t.Fatal("expected collector even when credProvider errors")
+	}
+	defer cleanup()
+}
+
+func TestBuildCollectorLoadsCkhManagerWhenNoProvider(t *testing.T) {
+	// credProvider nil + a ckh_manager path that fails to load → warn, no creds,
+	// collector still built (fail-open). Exercises the decoupled ckh_manager load
+	// (the collector resolves local-CH creds from ckh_manager regardless of
+	// credential_replace_enabled).
+	cfg := obsTestConfig(true, "127.0.0.1:9000")
+	cfg.CkhManagerConfigPath = "/nonexistent/ckh_manager.yaml"
+	c, _, cleanup := buildCollector(cfg, nil, 7)
+	if c == nil {
+		t.Fatal("expected collector even when ckh_manager load fails")
 	}
 	defer cleanup()
 }

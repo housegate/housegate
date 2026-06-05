@@ -19,9 +19,10 @@ import (
 //
 // CH poll targets resolve by precedence: observability.collector.ch_addr if set,
 // else the configured shard replicas, else the single upstream. CH credentials
-// resolve credProvider-first (the same creds the proxy uses to reach CH), else
-// the explicit observability.collector.ch_user/ch_password. A node with no CH
-// target still gets a Collector that publishes host + runtime metrics only.
+// come from the ckh_manager credential provider (the proxy's when built, else
+// loaded directly from ckh_manager_config_path) — there are no separate
+// collector credential fields. A node with no CH target still gets a Collector
+// that publishes host + runtime metrics only.
 func buildCollector(cfg config.Config, credProvider credentials.CredentialProvider, selfIndexerID uint64) (*metrics.Collector, *prometheus.Registry, func()) {
 	cc := cfg.Observability.Collector
 	if !cc.Enabled {
@@ -31,13 +32,23 @@ func buildCollector(cfg config.Config, credProvider credentials.CredentialProvid
 	store := &metrics.Store{}
 	reg := metrics.NewRegistry(store, strconv.FormatUint(selfIndexerID, 10))
 
-	// Credentials: the credProvider's local-upstream credential first (the same
-	// creds the proxy uses to reach its own ClickHouse — GetDefaultCredential,
-	// not the per-peer GetCredentialForIndexer), else the explicit
-	// collector-config fallback (cluster.ReplicaConfig carries none).
-	user, password := cc.CHUser, cc.CHPassword
+	// Credentials for the local ClickHouse come from the ckh_manager credential
+	// provider's default credential (GetDefaultCredential, not the per-peer
+	// GetCredentialForIndexer). Prefer the proxy's already-built provider; if it
+	// is nil (credential_replace_enabled=false) load ckh_manager directly, since
+	// the collector needs local-CH creds regardless of that data-path flag. With
+	// no provider at all the collector connects without credentials and fails
+	// open (ch_up=0).
+	if credProvider == nil && cfg.CkhManagerConfigPath != "" {
+		if cp, err := credentials.LoadCkhManagerYAMLProvider(cfg.CkhManagerConfigPath); err == nil {
+			credProvider = cp
+		} else {
+			log.Warnw("metrics collector: failed to load ckh_manager credentials", "path", cfg.CkhManagerConfigPath, "err", err)
+		}
+	}
+	var user, password string
 	if credProvider != nil {
-		if u, p, err := credProvider.GetDefaultCredential(); err == nil && u != "" {
+		if u, p, err := credProvider.GetDefaultCredential(); err == nil {
 			user, password = u, p
 		}
 	}
