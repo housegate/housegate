@@ -61,3 +61,25 @@ logging:
   data: false
   max_query_bytes: 300
   max_data_bytes: 200
+
+# Observability: the downstream-metrics Collector (ClickHouse system tables +
+# host CPU/mem/IO + Go runtime) and an authenticated pprof endpoint. The new
+# series are exposed on metrics_listen above — /metrics merges them with the
+# proxy's own counters; /debug/pprof is gated by the pprof block below.
+observability:
+  collector:
+    enabled: true
+    interval: "15s"
+    poll_timeout: "5s"
+    # CH poll target + credentials. All optional: when empty, the target is
+    # derived from the shard replicas / upstream and credentials from the
+    # ckh_manager credential provider. Set these only when the provider can't
+    # supply local-ClickHouse credentials for the collector.
+    ch_addr: ""
+    ch_user: ""
+    ch_password: ""
+  pprof:
+    # Disabled by default. When enabled, token is REQUIRED — it is the bearer
+    # token for /debug/pprof. Keep it in an age-encrypted config, not plaintext.
+    enabled: false
+    token: ""
