@@ -100,7 +100,7 @@ HOUSEGATE_AGE_IDENTITY_FILE=~/.housegate.age \
 | `listen` | string | 是 | `:9001` | native ClickHouse 协议的 TCP 监听地址（**external 端口** — agent 和本地 CH 的 `remote()` 回环都打在这里） |
 | `internal_listen` | string | 否 | `` (空) | 可选的第二个 TCP 监听端口，仅供其他 housegate 节点拨入。打在这里的 session 启动前就被预设为 `IsPeerTrusted=true` + `IsInternalPort=true`；auth 和 rewrite 自动跳过，`__route__` 信封直接拒绝。请通过防火墙 / SG 把它绑定到 peer-only 子网。详见 [Part 3](#part-3--多-proxy-路由原理)。|
 | `upstream` | string | 否 | `` (空) | 单 upstream 地址。设置 `shard` 时被忽略。空 + 没有 `shard` + 不是 agent ⇒ router-only server（每个 session 都通过 NetworkState 转发到 peer — 见 [§1.3](#13-router-only-server路由型-server)）。 |
-| `metrics_listen` | string | 否 | `:9091` | Prometheus metrics HTTP 地址 |
+| `metrics_listen` | string | 否 | `:9091` | Prometheus metrics HTTP 地址。提供 `/metrics`（代理自身的计数器与 [`observability`](#observability) collector 采集的指标合并在同一次 scrape 中），并在启用时挂载带鉴权的 `/debug/pprof`。 |
 | `dial_timeout` | duration | 否 | `5s` | 连 upstream 的 dial 超时 |
 | `idle_timeout` | duration | 否 | `5m` | 客户端连接空闲超时 |
 | `max_connection_lifetime` | duration | 否 | `24h` | 单个客户端连接的硬性生命周期上限 |
@@ -184,6 +184,44 @@ rewriter 化迁移之后，state plugin 仅剩 OnHello 一件事：把 `ClientHe
 | `logging.data` | bool | 否 | `false` | 记录 Data 包内容（仅调试） |
 | `logging.max_query_bytes` | int | 否 | `300` | 日志中 query 的截断长度（字节） |
 | `logging.max_data_bytes` | int | 否 | `200` | 日志中 Data 包的截断长度（字节） |
+
+### `observability`
+
+仅 Server 模式。新增一个后台 **metrics Collector**，周期性轮询下游 ClickHouse、主机以及 Go runtime，并可选地暴露一个带鉴权的 **pprof** 端点。两者都挂在 `metrics_listen` 上：`/metrics` 把代理自身的计数器与采集到的指标合并到同一次 scrape 中，`/debug/pprof` 仅在启用时挂载。Agent 模式不运行 collector。
+
+Collector 访问 ClickHouse 的凭证来自 `ckh_manager_config_path`，没有独立的 collector 凭证字段。Collector 是 **fail-open** 的：单次轮询失败只打 warn 日志并保留上一份快照，绝不会阻塞 query 或让代理崩溃。
+
+| Key | 类型 | 必填 | 默认值 | 说明 |
+|-----|------|------|--------|------|
+| `observability.collector.enabled` | bool | 否 | `true` | 是否运行后台 metrics collector。环境变量：`HOUSEGATE_COLLECTOR_ENABLED`（设为 `false` 关闭）。 |
+| `observability.collector.interval` | duration | 否 | `15s` | ClickHouse / 主机 / runtime 各数据源的轮询周期。collector 启用时必须 `> 0`。 |
+| `observability.collector.poll_timeout` | duration | 否 | `5s` | 单次 ClickHouse 轮询的超时。collector 启用时必须 `> 0`。 |
+| `observability.collector.ch_addr` | string | 否 | ``（分片副本 / upstream） | ClickHouse 轮询目标的高级覆盖项；通常自动推导，留空即可。环境变量：`HOUSEGATE_COLLECTOR_CH_ADDR`。 |
+| `observability.pprof.enabled` | bool | 否 | `false` | 是否在 `metrics_listen` 上挂载 `/debug/pprof`。环境变量：`HOUSEGATE_PPROF_ENABLED`（设为 `true` 开启）。 |
+| `observability.pprof.token` | string | pprof 启用时必填 | `` | 守护 `/debug/pprof` 的 bearer token（常量时间比较）。只要启用 pprof 就 **必填**——请放在 age 加密配置里，切勿明文。环境变量：`HOUSEGATE_PPROF_TOKEN`。 |
+
+```yaml
+observability:
+  collector: { enabled: true,  interval: "15s", poll_timeout: "5s" }
+  pprof:     { enabled: false, token: "" }   # 启用时 token 必填
+```
+
+**暴露的指标**（统一前缀 `clickhouse_proxy_`，从 `metrics_listen` 抓取）：
+
+- **ClickHouse**（label `replica`）：`ch_up`、`ch_query_total`、`ch_insert_total`、`ch_memory_tracking_bytes`、`ch_parts_active`、`ch_replication_queue`、`ch_os_cpu_seconds`。
+- **主机**：`host_cpu_percent`、`host_mem_available_bytes`、`host_mem_total_bytes`、`host_disk_read_bytes_total{device}`、`host_disk_write_bytes_total{device}`、`host_net_rx_bytes_total`、`host_net_tx_bytes_total`。
+- **Go runtime**：`runtime_goroutines`、`runtime_heap_alloc_bytes`、`runtime_gc_pause_seconds`。
+- **Collector 健康度**：`collector_up`、`collector_last_success_timestamp_seconds{source}`。
+
+`/debug/pprof`（启用后）需要 `Authorization: Bearer <token>` 头：
+
+```bash
+curl -s -H "Authorization: Bearer $HOUSEGATE_PPROF_TOKEN" \
+  http://<host>:9091/debug/pprof/heap -o heap.pprof
+go tool pprof heap.pprof
+```
+
+完整示例见 [configs/local.server.yaml](configs/local.server.yaml)。
 
 ### `network_state`
 
