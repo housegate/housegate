@@ -66,7 +66,6 @@ func TestObservabilityJSONRoundTrip(t *testing.T) {
 	cfg := Default()
 	cfg.Observability.Collector.Interval = Duration{30 * time.Second}
 	cfg.Observability.Collector.CHAddr = "127.0.0.1:9000"
-	cfg.Observability.Collector.CHUser = "collector"
 	cfg.Observability.Pprof.Enabled = true
 	cfg.Observability.Pprof.Token = "tok"
 
@@ -83,9 +82,6 @@ func TestObservabilityJSONRoundTrip(t *testing.T) {
 	}
 	if got.Observability.Collector.CHAddr != "127.0.0.1:9000" {
 		t.Errorf("ch_addr round-trip = %q", got.Observability.Collector.CHAddr)
-	}
-	if got.Observability.Collector.CHUser != "collector" {
-		t.Errorf("ch_user round-trip = %q", got.Observability.Collector.CHUser)
 	}
 	if !got.Observability.Pprof.Enabled || got.Observability.Pprof.Token != "tok" {
 		t.Errorf("pprof round-trip = %+v", got.Observability.Pprof)

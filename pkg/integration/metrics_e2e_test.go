@@ -53,8 +53,8 @@ func TestMetricsCollectorEndToEnd(t *testing.T) {
 		cfg.Observability.Collector.Interval = config.Duration{Duration: 500 * time.Millisecond}
 		cfg.Observability.Collector.PollTimeout = config.Duration{Duration: 3 * time.Second}
 		cfg.Observability.Collector.CHAddr = chEnv.Addr
-		cfg.Observability.Collector.CHUser = chEnv.User
-		cfg.Observability.Collector.CHPassword = chEnv.Password
+		// Credentials come from the testenv ckh_manager credential provider
+		// (GetDefaultCredential) — the collector has no separate cred fields.
 	}))
 
 	reg := tp.Proxy.MetricsRegistry()
