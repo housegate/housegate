@@ -156,7 +156,7 @@ A new plugin is a 4-file change under `pkg/plugins/<name>/` plus a one-line wiri
 - **Library Logger injection**: `housegate.Options.Logger` is `*slog.Logger` (stdlib). Library hosts inject any slog logger; nil falls back to `pkg/log.Default()` which writes a zap-development-format text to stderr via `cmd/console_handler.go`. There is no proprietary interface to implement.
 - **Errors**: wrap with `fmt.Errorf("context: %w", err)`. Aggregate startup config errors via `errors.Join` (see `Config.Validate`).
 - **Duration fields in config**: custom `Duration` type accepts `"5s"`-style strings and nanosecond integers; values `< 1s` trigger a warning because operators often confuse seconds vs. nanoseconds.
-- **English first for code and comments.** Identifiers, docstrings, and inline comments should be English by default. Some legacy comments are in Chinese (e.g. `// 超过此时间后连接将被关闭`); leave those as-is when you touch nearby code, but do not add new non-English comments. User-facing operator messages (log output, error strings returned to CLI operators) are also English. The exceptions are CI-parsed emoji/Chinese markers in `tools/run_full_test.sh` output, which the GitHub summary depends on.
+- **English first for code and comments.** Identifiers, docstrings, and inline comments should be English by default. Some legacy comments are in Chinese (e.g. `// 超过此时间后连接将被关闭`); leave those as-is when you touch nearby code, but do not add new non-English comments. User-facing operator messages (log output, error strings returned to CLI operators) are also English.
 - **Don't merge to `main` if Bazel tests regress vs. baseline.** Integration failures that exist on `main` are not regressions but must not grow.
 - **Codec read invariants**:
   - **One `Codec` per `net.Conn`; one `proto.Reader` per `Codec`.** Never replace `Codec.r` or construct a new `proto.Reader(c.br)` mid-connection — the 1-byte capture discipline is what prevents prefetched bytes from being orphaned across packet reads. If you need the exact bytes of a packet for zero-copy forwarding, use `Packet.Raw` (populated when decoded types request it) or `Codec.Splice`.
@@ -165,4 +165,12 @@ A new plugin is a 4-file change under `pkg/plugins/<name>/` plus a one-line wiri
 
 ## CI
 
-[.github/workflows/ci.yml](.github/workflows/ci.yml) builds static linux/amd64 binaries, SCPs them to a remote host (`proxy1-proxy4` instances), and runs a distributed shell-based test (`run_full_test.sh`). The CI output parses Chinese emoji markers (`✅ 通过`, `❌ 失败`, `⚠️ 跳过`) from the test script — if you change those markers, the GitHub summary breaks.
+[.github/workflows/ci.yml](.github/workflows/ci.yml) runs on a self-hosted `linux/x64` runner (with a fork-safety gate) via Bazelisk, in two jobs:
+
+- **Build** — `bazel build //...`.
+- **Integration (ClickHouse)** — pre-pulls `clickhouse/clickhouse-server:25.8`, installs a `clickhouse` client binary into `tests/bin/`, then runs the docker-bound integration suite explicitly:
+  ```bash
+  bazel test //pkg/integration:integration_test //pkg/integration/testenv:testenv_test --test_output=errors
+  ```
+
+Integration targets are tagged `manual`, so a plain `bazel test //...` skips them (docker-less environments would otherwise fail); CI lists them explicitly. **When you add a new docker-bound integration target, add it to that list in `ci.yml`** — otherwise it never runs in CI.
