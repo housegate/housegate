@@ -79,6 +79,19 @@ type CHReplicaMetrics struct {
 	// (from the ReplicasMaxQueueSize / asynchronous_metrics).
 	ReplicationQueue uint64
 
+	// MutationsPending is the number of unfinished mutations across all tables
+	// on the replica: the count of rows in system.mutations with is_done = 0.
+	MutationsPending uint64
+
+	// MutationsRunning is the number of mutations currently in progress on the
+	// replica (from the PartMutation system.metrics gauge). It is the
+	// instantaneous executing count, vs. MutationsPending's queued backlog.
+	MutationsRunning uint64
+
+	// TablesTotal is the total number of tables across all databases on the
+	// replica (from the NumberOfTables asynchronous metric).
+	TablesTotal uint64
+
 	// OSCPUSeconds is the ClickHouse server's OS CPU metric from
 	// asynchronous_metrics: the OSUserTimeNormalized per-second ratio when
 	// present, else cumulative seconds from OSCPUVirtualTimeMicroseconds. The

@@ -12,7 +12,7 @@ func sampleSnapshot() *Snapshot {
 	return &Snapshot{
 		CapturedAt: time.Unix(1000, 0),
 		CH: []CHReplicaMetrics{
-			{Replica: "ch-a:9000", Reachable: true, QueryTotal: 100, InsertTotal: 20, MemoryTrackingBytes: 2048, PartsActive: 7, ReplicationQueue: 3, OSCPUSeconds: 12.5},
+			{Replica: "ch-a:9000", Reachable: true, QueryTotal: 100, InsertTotal: 20, MemoryTrackingBytes: 2048, PartsActive: 7, ReplicationQueue: 3, MutationsPending: 12, MutationsRunning: 4, TablesTotal: 256, OSCPUSeconds: 12.5},
 			{Replica: "ch-b:9000", Reachable: false},
 		},
 		Host: HostMetrics{
@@ -88,6 +88,27 @@ clickhouse_proxy_runtime_goroutines{indexer_id="idx-1"} 25
 	}
 }
 
+func TestExporterMutationsAndTables(t *testing.T) {
+	store := &Store{}
+	store.Store(sampleSnapshot())
+	exp := NewExporter(store, "idx-1")
+	const expected = `
+# HELP clickhouse_proxy_ch_mutations_pending Unfinished mutations (system.mutations is_done = 0) across all tables on the replica.
+# TYPE clickhouse_proxy_ch_mutations_pending gauge
+clickhouse_proxy_ch_mutations_pending{indexer_id="idx-1",replica="ch-a:9000"} 12
+# HELP clickhouse_proxy_ch_mutations_running Mutations currently in progress on the replica (from the PartMutation system.metrics gauge).
+# TYPE clickhouse_proxy_ch_mutations_running gauge
+clickhouse_proxy_ch_mutations_running{indexer_id="idx-1",replica="ch-a:9000"} 4
+# HELP clickhouse_proxy_ch_tables Total number of tables across all databases on the replica (from system.asynchronous_metrics NumberOfTables).
+# TYPE clickhouse_proxy_ch_tables gauge
+clickhouse_proxy_ch_tables{indexer_id="idx-1",replica="ch-a:9000"} 256
+`
+	if err := testutil.CollectAndCompare(exp, strings.NewReader(expected),
+		"clickhouse_proxy_ch_mutations_pending", "clickhouse_proxy_ch_mutations_running", "clickhouse_proxy_ch_tables"); err != nil {
+		t.Error(err)
+	}
+}
+
 func TestExporterNoCHReplicasEmitsNoCHSeries(t *testing.T) {
 	store := &Store{}
 	snap := sampleSnapshot()
@@ -126,6 +147,8 @@ func TestExporterMetricNamesPrefixedAndPresent(t *testing.T) {
 		"clickhouse_proxy_ch_up", "clickhouse_proxy_ch_query_total", "clickhouse_proxy_ch_insert_total",
 		"clickhouse_proxy_ch_memory_tracking_bytes", "clickhouse_proxy_ch_parts_active",
 		"clickhouse_proxy_ch_replication_queue", "clickhouse_proxy_ch_os_cpu_seconds",
+		"clickhouse_proxy_ch_mutations_pending", "clickhouse_proxy_ch_mutations_running",
+		"clickhouse_proxy_ch_tables",
 		"clickhouse_proxy_host_cpu_percent", "clickhouse_proxy_host_mem_available_bytes",
 		"clickhouse_proxy_host_mem_total_bytes", "clickhouse_proxy_host_disk_read_bytes_total",
 		"clickhouse_proxy_host_disk_write_bytes_total", "clickhouse_proxy_host_net_rx_bytes_total",

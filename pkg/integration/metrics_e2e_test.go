@@ -80,6 +80,9 @@ func TestMetricsCollectorEndToEnd(t *testing.T) {
 	// CH value family + host + runtime families all present.
 	for _, name := range []string{
 		"clickhouse_proxy_ch_memory_tracking_bytes",
+		"clickhouse_proxy_ch_mutations_pending",
+		"clickhouse_proxy_ch_mutations_running",
+		"clickhouse_proxy_ch_tables",
 		"clickhouse_proxy_host_cpu_percent",
 		"clickhouse_proxy_runtime_goroutines",
 		"clickhouse_proxy_collector_up",

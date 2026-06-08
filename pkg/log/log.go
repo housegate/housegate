@@ -87,9 +87,9 @@ func (l *Logger) With(kv ...any) *Logger {
 type fmtMode uint8
 
 const (
-	fmtRaw      fmtMode = iota // msg = msgArg (Infow / Infoe family)
-	fmtSprint                  // msg = fmt.Sprint(args...) (Info family)
-	fmtSprintf                 // msg = fmt.Sprintf(msgArg, args...) (Infof / Infofe family)
+	fmtRaw     fmtMode = iota // msg = msgArg (Infow / Infoe family)
+	fmtSprint                 // msg = fmt.Sprint(args...) (Info family)
+	fmtSprintf                // msg = fmt.Sprintf(msgArg, args...) (Infof / Infofe family)
 )
 
 // emit is the single funnel that constructs and dispatches a slog.Record.

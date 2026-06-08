@@ -113,8 +113,8 @@ func tableEntry(origDB, origTbl, logDB string) sqlmeta.AccessedTable {
 	}
 }
 
-// 1. Dispatch by StatementType. Observer subscribed only to CREATE_TABLE
-//    fires once for CREATE_TABLE and never for the other types.
+//  1. Dispatch by StatementType. Observer subscribed only to CREATE_TABLE
+//     fires once for CREATE_TABLE and never for the other types.
 func TestOnQuery_DispatchByStatementType(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -142,8 +142,8 @@ func TestOnQuery_DispatchByStatementType(t *testing.T) {
 	}
 }
 
-// 2. Multiple observers subscribed to the same type fire in
-//    registration order; first error short-circuits.
+//  2. Multiple observers subscribed to the same type fire in
+//     registration order; first error short-circuits.
 func TestOnQuery_MultipleObservers_OrderAndShortCircuit(t *testing.T) {
 	first := &fakeObserver{
 		types:     []sqlmeta.StatementType{sqlmeta.StatementTypeCreateTable},
@@ -176,9 +176,9 @@ func TestOnQuery_MultipleObservers_OrderAndShortCircuit(t *testing.T) {
 	}
 }
 
-// 3. Veto: observer returns an error → plugin wraps it with the
-//    statement-type label and leaves the original error reachable
-//    via errors.Is.
+//  3. Veto: observer returns an error → plugin wraps it with the
+//     statement-type label and leaves the original error reachable
+//     via errors.Is.
 func TestOnQuery_VetoErrorWrapped(t *testing.T) {
 	sentinel := errors.New("on-chain failed")
 	obs := &fakeObserver{
@@ -360,9 +360,9 @@ func TestOnQuery_EmptyAccessedTables_DispatchesToObserver(t *testing.T) {
 	}
 }
 
-// 7. StatementTypeUnspecified is a no-op even when an observer would
-//    otherwise be subscribed — buildEvent is never called, so an
-//    invalid AccessedTables shape doesn't surface as an error.
+//  7. StatementTypeUnspecified is a no-op even when an observer would
+//     otherwise be subscribed — buildEvent is never called, so an
+//     invalid AccessedTables shape doesn't surface as an error.
 func TestOnQuery_StatementTypeUnspecified_NoOp(t *testing.T) {
 	obs := &fakeObserver{types: []sqlmeta.StatementType{sqlmeta.StatementTypeCreateTable}}
 	p := NewPlugin([]Observer{obs})
@@ -588,7 +588,7 @@ func TestOnQuery_AbortWithSuccessSentinel_Wrapped(t *testing.T) {
 	}
 }
 
-// 18. Maintenance sessions short-circuit the dispatch: even when a
+//  18. Maintenance sessions short-circuit the dispatch: even when a
 //     subscribed observer is registered, OnQuery must NOT fire it. The
 //     guard exists so the GC path (which executes its DDL under a
 //     SQL_sentio_maintenance flag) cannot retrigger host observers
@@ -615,9 +615,10 @@ func TestOnQuery_MaintenanceSkipsObservers(t *testing.T) {
 }
 
 // 18b. Driver sessions short-circuit observer dispatch — same shape as
-//      Maintenance but narrower elsewhere (rewrite still runs). The
-//      guard exists so the driver's CREATE DATABASE on a processor's
-//      logical DB does not get registered as a user database on chain.
+//
+//	Maintenance but narrower elsewhere (rewrite still runs). The
+//	guard exists so the driver's CREATE DATABASE on a processor's
+//	logical DB does not get registered as a user database on chain.
 func TestOnQuery_DriverSkipsObservers(t *testing.T) {
 	obs := &fakeObserver{types: []sqlmeta.StatementType{sqlmeta.StatementTypeCreateDatabase}}
 	p := NewPlugin([]Observer{obs})
@@ -639,7 +640,7 @@ func TestOnQuery_DriverSkipsObservers(t *testing.T) {
 	}
 }
 
-// 19. Event.Settings carries the per-query Settings the client supplied
+//  19. Event.Settings carries the per-query Settings the client supplied
 //     (e.g. x_auth_token, SQL_sentio_routed) so observers can branch on
 //     trust-domain markers without reaching back to the Query packet.
 func TestOnQuery_PopulatesEventSettings(t *testing.T) {

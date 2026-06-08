@@ -49,13 +49,15 @@ func curatedQueryFn(ctx context.Context, query string) (chRows, error) {
 	switch {
 	case strings.Contains(query, "system.metrics"):
 		return &fakeRows{
-			names:  []string{"MemoryTracking", "ReplicasMaxQueueSize", "PartsActive"},
-			values: []float64{2048, 4, 9},
+			names:  []string{"MemoryTracking", "ReplicasMaxQueueSize", "PartsActive", "PartMutation"},
+			values: []float64{2048, 4, 9, 2},
 		}, nil
 	case strings.Contains(query, "system.events"):
 		return &fakeRows{names: []string{"Query", "InsertQuery"}, values: []float64{200, 50}}, nil
 	case strings.Contains(query, "system.asynchronous_metrics"):
-		return &fakeRows{names: []string{"OSUserTimeNormalized"}, values: []float64{3.0}}, nil
+		return &fakeRows{names: []string{"OSUserTimeNormalized", "NumberOfTables"}, values: []float64{3.0, 128}}, nil
+	case strings.Contains(query, "system.mutations"):
+		return &fakeRows{names: []string{"pending"}, values: []float64{5}}, nil
 	default:
 		return &fakeRows{}, nil
 	}
@@ -79,6 +81,15 @@ func TestPollSuccess(t *testing.T) {
 	if got.OSCPUSeconds != 3.0 {
 		t.Errorf("OSCPUSeconds = %v, want 3.0", got.OSCPUSeconds)
 	}
+	if got.MutationsPending != 5 {
+		t.Errorf("MutationsPending = %d, want 5", got.MutationsPending)
+	}
+	if got.MutationsRunning != 2 {
+		t.Errorf("MutationsRunning = %d, want 2", got.MutationsRunning)
+	}
+	if got.TablesTotal != 128 {
+		t.Errorf("TablesTotal = %d, want 128", got.TablesTotal)
+	}
 }
 
 // errOnTable returns a queryFn that errors when the queried table contains
@@ -94,7 +105,7 @@ func errOnTable(table string) func(ctx context.Context, query string) (chRows, e
 }
 
 func TestPollUnreachableOnEachTable(t *testing.T) {
-	for _, table := range []string{"system.metrics", "system.events", "system.asynchronous_metrics"} {
+	for _, table := range []string{"system.metrics", "system.events", "system.asynchronous_metrics", "system.mutations"} {
 		t.Run(table, func(t *testing.T) {
 			p := newTestPoller("ch-down:9000", errOnTable(table))
 			got, err := p.Poll(context.Background())

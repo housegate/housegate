@@ -75,7 +75,7 @@ func (p *CHPoller) Close() error {
 	return p.conn.Close()
 }
 
-// Poll scrapes the three system tables and returns the mapped CHReplicaMetrics.
+// Poll scrapes the curated system tables and returns the mapped CHReplicaMetrics.
 //
 // Fail-open contract: any query error returns a CHReplicaMetrics with
 // Reachable=false (and the replica label set) plus a wrapped error, so the
@@ -94,7 +94,13 @@ func (p *CHPoller) Poll(ctx context.Context) (CHReplicaMetrics, error) {
 	if err != nil {
 		return p.unreachable(), fmt.Errorf("ch poller %s: system.asynchronous_metrics: %w", p.addr, err)
 	}
-	return mapCHMetrics(p.addr, metrics, events, async), nil
+	// system.mutations has no name/value shape; phrase the unfinished-mutation
+	// count as a single 'pending' row so the two-column scrape helper applies.
+	mutations, err := p.scrape(ctx, "SELECT 'pending' AS name, toFloat64(count()) AS value FROM system.mutations WHERE is_done = 0")
+	if err != nil {
+		return p.unreachable(), fmt.Errorf("ch poller %s: system.mutations: %w", p.addr, err)
+	}
+	return mapCHMetrics(p.addr, metrics, events, async, mutations), nil
 }
 
 // unreachable is the CHReplicaMetrics returned when a scrape fails: only the
@@ -143,12 +149,15 @@ func (p *CHPoller) scrape(ctx context.Context, query string) (map[string]float64
 //   - ReplicationQueue ← system.metrics["ReplicasMaxQueueSize"]
 //   - PartsActive ← system.metrics["PartsActive"], else async["NumberOfActiveParts"]
 //   - OSCPUSeconds ← async["OSUserTimeNormalized"], else async["OSCPUVirtualTimeMicroseconds"]/1e6
+//   - MutationsPending ← mutations["pending"] (count of system.mutations rows with is_done = 0)
+//   - MutationsRunning ← system.metrics["PartMutation"] (mutations currently in progress)
+//   - TablesTotal ← async["NumberOfTables"]
 //
 // Missing keys yield zero and nil source maps are tolerated (a nil-map read is a
 // zero-value read in Go). Negative readings (asynchronous_metrics values are
 // float64 and a transient negative is possible) are clamped to 0 for the
 // unsigned counter fields rather than wrapping to a huge uint64.
-func mapCHMetrics(replica string, metrics, events, async map[string]float64) CHReplicaMetrics {
+func mapCHMetrics(replica string, metrics, events, async, mutations map[string]float64) CHReplicaMetrics {
 	m := CHReplicaMetrics{
 		Replica:   replica,
 		Reachable: true,
@@ -158,6 +167,15 @@ func mapCHMetrics(replica string, metrics, events, async map[string]float64) CHR
 	m.QueryTotal = clampUint64(events["Query"])
 	m.InsertTotal = clampUint64(events["InsertQuery"])
 	m.ReplicationQueue = clampUint64(metrics["ReplicasMaxQueueSize"])
+
+	// MutationsPending comes from the dedicated system.mutations count scrape,
+	// surfaced under the synthetic 'pending' key. MutationsRunning is the
+	// instantaneous PartMutation system.metrics gauge (mutations executing right
+	// now). TablesTotal is the NumberOfTables asynchronous metric (total tables
+	// across all databases).
+	m.MutationsPending = clampUint64(mutations["pending"])
+	m.MutationsRunning = clampUint64(metrics["PartMutation"])
+	m.TablesTotal = clampUint64(async["NumberOfTables"])
 
 	// PartsActive: prefer the system.metrics key; fall back to the
 	// asynchronous_metrics name used on some versions. The primary key wins

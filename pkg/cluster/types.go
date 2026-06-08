@@ -9,8 +9,8 @@ import (
 // ShardConfig describes a single shard that this proxy instance manages.
 // Each proxy instance is bound to exactly one shard containing multiple replicas.
 type ShardConfig struct {
-	Name     string          `json:"name" yaml:"name"`
-	Replicas []ReplicaConfig `json:"replicas" yaml:"replicas"`
+	Name     string            `json:"name" yaml:"name"`
+	Replicas []ReplicaConfig   `json:"replicas" yaml:"replicas"`
 	Settings map[string]string `json:"settings,omitempty" yaml:"settings,omitempty"`
 }
 
@@ -18,8 +18,8 @@ type ShardConfig struct {
 type ReplicaConfig struct {
 	Host     string `json:"host" yaml:"host"`
 	Port     int    `json:"port" yaml:"port"`
-	Weight   int    `json:"weight" yaml:"weight"`         // for weighted routing among replicas
-	IsBackup bool   `json:"is_backup" yaml:"is_backup"`   // standby replica, only used when all primary replicas are down
+	Weight   int    `json:"weight" yaml:"weight"`       // for weighted routing among replicas
+	IsBackup bool   `json:"is_backup" yaml:"is_backup"` // standby replica, only used when all primary replicas are down
 }
 
 // Addr returns the "host:port" address string.
@@ -29,10 +29,10 @@ func (r ReplicaConfig) Addr() string {
 
 // HealthCheckConfig controls replica health checking behavior.
 type HealthCheckConfig struct {
-	Interval          Duration `json:"interval" yaml:"interval"`                       // probe interval, default 5s
-	Timeout           Duration `json:"timeout" yaml:"timeout"`                         // probe timeout, default 3s
-	FailureThreshold  int      `json:"failure_threshold" yaml:"failure_threshold"`     // consecutive failures to mark unhealthy, default 3
-	RecoveryThreshold int      `json:"recovery_threshold" yaml:"recovery_threshold"`   // consecutive successes to mark healthy, default 2
+	Interval          Duration `json:"interval" yaml:"interval"`                     // probe interval, default 5s
+	Timeout           Duration `json:"timeout" yaml:"timeout"`                       // probe timeout, default 3s
+	FailureThreshold  int      `json:"failure_threshold" yaml:"failure_threshold"`   // consecutive failures to mark unhealthy, default 3
+	RecoveryThreshold int      `json:"recovery_threshold" yaml:"recovery_threshold"` // consecutive successes to mark healthy, default 2
 }
 
 // DefaultHealthCheckConfig returns a HealthCheckConfig with sane defaults.

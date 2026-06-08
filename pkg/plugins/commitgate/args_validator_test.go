@@ -38,12 +38,12 @@ func granteeEvent(action sqlmeta.PrivilegeAction, names ...string) *Event {
 			{LogicalDatabase: "foo", OriginalTable: "t"},
 		},
 		PrivilegesDeltas: []sqlmeta.PrivilegeDelta{{
-			Action:           action,
-			Scope:            sqlmeta.PrivilegeScopeTable,
-			LogicalDatabase:  "foo",
-			OriginalTable:    "t",
-			Privileges:       []string{"SELECT"},
-			Grantees:         grantees,
+			Action:          action,
+			Scope:           sqlmeta.PrivilegeScopeTable,
+			LogicalDatabase: "foo",
+			OriginalTable:   "t",
+			Privileges:      []string{"SELECT"},
+			Grantees:        grantees,
 		}},
 	}
 }
@@ -69,13 +69,13 @@ func TestArgsValidator_Subscription(t *testing.T) {
 func TestArgsValidator_AcceptsValidDatabaseNames(t *testing.T) {
 	o := NewArgsValidatorObserver()
 	for _, name := range []string{
-		"a",                                                       // single letter
-		"foo",                                                     // simple
-		"Foo",                                                     // capital
-		"foo123",                                                  // letters + digits
-		"foo_bar",                                                 // single underscore
-		"foo_bar_baz",                                             // multiple segments
-		"a1_b2_c3",                                                // alphanumeric segments
+		"a",           // single letter
+		"foo",         // simple
+		"Foo",         // capital
+		"foo123",      // letters + digits
+		"foo_bar",     // single underscore
+		"foo_bar_baz", // multiple segments
+		"a1_b2_c3",    // alphanumeric segments
 		"abcdefghijklmnopqrstuvwxyz0123456789_ABCDEFGHIJKLMNOPQR", // 55 chars
 		strings.Repeat("a", 63),                                   // exactly 63 chars
 	} {
@@ -242,7 +242,7 @@ func TestNormalizeEthereumAddress(t *testing.T) {
 		{"0x" + zero, "0x" + zero},
 		{"0X" + mixed, "0x" + mixedLower},
 		{"0x" + mixed, "0x" + mixedLower},
-		{mixed, "0x" + mixedLower},                                      // no-prefix accepted
+		{mixed, "0x" + mixedLower}, // no-prefix accepted
 		{"0x" + strings.Repeat("F", 40), "0x" + strings.Repeat("f", 40)},
 	}
 	for _, tc := range cases {
@@ -262,13 +262,13 @@ func TestNormalizeEthereumAddress_Errors(t *testing.T) {
 	cases := []string{
 		"",
 		"0x",
-		"0x123",                          // short
-		"123",                            // short without prefix
+		"0x123", // short
+		"123",   // short without prefix
 		"alice",
-		"0x" + strings.Repeat("z", 40),   // non-hex body
-		"0x" + strings.Repeat("a", 41),   // too long
-		strings.Repeat("a", 41),          // too long without prefix
-		" 0x" + strings.Repeat("a", 40),  // leading whitespace
+		"0x" + strings.Repeat("z", 40),  // non-hex body
+		"0x" + strings.Repeat("a", 41),  // too long
+		strings.Repeat("a", 41),         // too long without prefix
+		" 0x" + strings.Repeat("a", 40), // leading whitespace
 	}
 	for _, in := range cases {
 		t.Run(in, func(t *testing.T) {

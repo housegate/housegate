@@ -21,6 +21,7 @@ func TestMapCHMetricsCuratedKeys(t *testing.T) {
 		"MemoryTracking":       1024,
 		"PartsActive":          7,
 		"ReplicasMaxQueueSize": 3,
+		"PartMutation":         2,
 	}
 	events := map[string]float64{
 		"Query":       100,
@@ -28,9 +29,13 @@ func TestMapCHMetricsCuratedKeys(t *testing.T) {
 	}
 	async := map[string]float64{
 		"OSUserTimeNormalized": 12.5,
+		"NumberOfTables":       256,
+	}
+	mutations := map[string]float64{
+		"pending": 6,
 	}
 
-	got := mapCHMetrics("ch-1:9000", metrics, events, async)
+	got := mapCHMetrics("ch-1:9000", metrics, events, async, mutations)
 
 	if got.Replica != "ch-1:9000" {
 		t.Errorf("Replica = %q, want %q", got.Replica, "ch-1:9000")
@@ -56,6 +61,15 @@ func TestMapCHMetricsCuratedKeys(t *testing.T) {
 	if !floatEq(got.OSCPUSeconds, 12.5) {
 		t.Errorf("OSCPUSeconds = %v, want 12.5", got.OSCPUSeconds)
 	}
+	if got.MutationsPending != 6 {
+		t.Errorf("MutationsPending = %d, want 6", got.MutationsPending)
+	}
+	if got.MutationsRunning != 2 {
+		t.Errorf("MutationsRunning = %d, want 2", got.MutationsRunning)
+	}
+	if got.TablesTotal != 256 {
+		t.Errorf("TablesTotal = %d, want 256", got.TablesTotal)
+	}
 }
 
 // TestMapCHMetricsMissingKeysZero asserts that when none of the curated keys
@@ -63,7 +77,7 @@ func TestMapCHMetricsCuratedKeys(t *testing.T) {
 // still set. A missing key must never panic and must never carry over a stale
 // value.
 func TestMapCHMetricsMissingKeysZero(t *testing.T) {
-	got := mapCHMetrics("ch-2:9000", map[string]float64{}, map[string]float64{}, map[string]float64{})
+	got := mapCHMetrics("ch-2:9000", map[string]float64{}, map[string]float64{}, map[string]float64{}, map[string]float64{})
 
 	if got.Replica != "ch-2:9000" {
 		t.Errorf("Replica = %q, want %q", got.Replica, "ch-2:9000")
@@ -89,6 +103,15 @@ func TestMapCHMetricsMissingKeysZero(t *testing.T) {
 	if got.OSCPUSeconds != 0 {
 		t.Errorf("OSCPUSeconds = %v, want 0", got.OSCPUSeconds)
 	}
+	if got.MutationsPending != 0 {
+		t.Errorf("MutationsPending = %d, want 0", got.MutationsPending)
+	}
+	if got.MutationsRunning != 0 {
+		t.Errorf("MutationsRunning = %d, want 0", got.MutationsRunning)
+	}
+	if got.TablesTotal != 0 {
+		t.Errorf("TablesTotal = %d, want 0", got.TablesTotal)
+	}
 }
 
 // TestMapCHMetricsNilMaps asserts the mapper tolerates nil source maps (a
@@ -96,7 +119,7 @@ func TestMapCHMetricsMissingKeysZero(t *testing.T) {
 // Reading from a nil map in Go is a zero-value read, not a panic; this locks
 // that contract in.
 func TestMapCHMetricsNilMaps(t *testing.T) {
-	got := mapCHMetrics("ch-3:9000", nil, nil, nil)
+	got := mapCHMetrics("ch-3:9000", nil, nil, nil, nil)
 
 	if got.Replica != "ch-3:9000" {
 		t.Errorf("Replica = %q, want %q", got.Replica, "ch-3:9000")
@@ -104,7 +127,8 @@ func TestMapCHMetricsNilMaps(t *testing.T) {
 	if !got.Reachable {
 		t.Error("Reachable = false, want true")
 	}
-	if got.QueryTotal != 0 || got.MemoryTrackingBytes != 0 || got.OSCPUSeconds != 0 {
+	if got.QueryTotal != 0 || got.MemoryTrackingBytes != 0 || got.OSCPUSeconds != 0 ||
+		got.MutationsPending != 0 || got.MutationsRunning != 0 || got.TablesTotal != 0 {
 		t.Errorf("nil maps should yield zero fields, got %+v", got)
 	}
 }
@@ -120,6 +144,7 @@ func TestMapCHMetricsPartsActiveFallback(t *testing.T) {
 		map[string]float64{}, // no PartsActive in system.metrics
 		map[string]float64{},
 		map[string]float64{"NumberOfActiveParts": 42},
+		nil,
 	)
 	if got.PartsActive != 42 {
 		t.Errorf("PartsActive (fallback) = %d, want 42", got.PartsActive)
@@ -136,6 +161,7 @@ func TestMapCHMetricsOSCPUFallback(t *testing.T) {
 		map[string]float64{},
 		// 2_500_000 µs = 2.5 s
 		map[string]float64{"OSCPUVirtualTimeMicroseconds": 2_500_000},
+		nil,
 	)
 	if !floatEq(got.OSCPUSeconds, 2.5) {
 		t.Errorf("OSCPUSeconds (µs fallback) = %v, want 2.5", got.OSCPUSeconds)
@@ -156,6 +182,7 @@ func TestMapCHMetricsPrimaryKeyWins(t *testing.T) {
 			// virtual-time key would yield 1000s if (wrongly) preferred
 			"OSCPUVirtualTimeMicroseconds": 1_000_000_000,
 		},
+		nil,
 	)
 	if got.PartsActive != 5 {
 		t.Errorf("PartsActive = %d, want 5 (primary system.metrics key must win)", got.PartsActive)
@@ -172,14 +199,48 @@ func TestMapCHMetricsPrimaryKeyWins(t *testing.T) {
 func TestMapCHMetricsNegativeClampedToZero(t *testing.T) {
 	got := mapCHMetrics(
 		"ch-7:9000",
-		map[string]float64{"MemoryTracking": -1},
+		map[string]float64{"MemoryTracking": -1, "PartMutation": -4},
 		map[string]float64{"Query": -5},
-		map[string]float64{},
+		map[string]float64{"NumberOfTables": -2},
+		map[string]float64{"pending": -3},
 	)
 	if got.MemoryTrackingBytes != 0 {
 		t.Errorf("MemoryTrackingBytes = %d, want 0 (negative clamped)", got.MemoryTrackingBytes)
 	}
 	if got.QueryTotal != 0 {
 		t.Errorf("QueryTotal = %d, want 0 (negative clamped)", got.QueryTotal)
+	}
+	if got.MutationsPending != 0 {
+		t.Errorf("MutationsPending = %d, want 0 (negative clamped)", got.MutationsPending)
+	}
+	if got.MutationsRunning != 0 {
+		t.Errorf("MutationsRunning = %d, want 0 (negative clamped)", got.MutationsRunning)
+	}
+	if got.TablesTotal != 0 {
+		t.Errorf("TablesTotal = %d, want 0 (negative clamped)", got.TablesTotal)
+	}
+}
+
+// TestMapCHMetricsMutationsAndTables asserts the mutation and table fields are
+// resolved from their respective sources: MutationsPending from the synthetic
+// 'pending' row of the system.mutations count scrape, MutationsRunning from the
+// PartMutation system.metrics gauge, and TablesTotal from the NumberOfTables
+// asynchronous metric.
+func TestMapCHMetricsMutationsAndTables(t *testing.T) {
+	got := mapCHMetrics(
+		"ch-8:9000",
+		map[string]float64{"PartMutation": 9},
+		map[string]float64{},
+		map[string]float64{"NumberOfTables": 1024},
+		map[string]float64{"pending": 17},
+	)
+	if got.MutationsPending != 17 {
+		t.Errorf("MutationsPending = %d, want 17", got.MutationsPending)
+	}
+	if got.MutationsRunning != 9 {
+		t.Errorf("MutationsRunning = %d, want 9", got.MutationsRunning)
+	}
+	if got.TablesTotal != 1024 {
+		t.Errorf("TablesTotal = %d, want 1024", got.TablesTotal)
 	}
 }

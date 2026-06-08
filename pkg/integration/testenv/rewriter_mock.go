@@ -47,9 +47,9 @@ type RewriterMock struct {
 	lis    net.Listener
 
 	mu       sync.Mutex
-	seen     []string                       // every SQL received, in order
-	seenArgs []*pb.RewriteTableDynamicArgs  // dynamic_args sent by proxy, parallel to seen
-	failNext int                            // number of subsequent Rewrite calls to fail (decremented per call)
+	seen     []string                      // every SQL received, in order
+	seenArgs []*pb.RewriteTableDynamicArgs // dynamic_args sent by proxy, parallel to seen
+	failNext int                           // number of subsequent Rewrite calls to fail (decremented per call)
 
 	// accessed maps an UPPER-cased SQL prefix to the AccessedTable list
 	// the mock should attach to the response. Used by commitgate DDL
@@ -185,10 +185,10 @@ func (m *RewriterMock) Rewrite(ctx context.Context, req *pb.RewriteSQLRequest) (
 	}
 
 	return &pb.RewriteSQLResponse{
-		Code:                    pb.RewriteCode_Success,
-		SqlAfterRewrite:         sql,
-		StatementType:           classify(sql),
-		OriginalAccessedTables:  tables,
+		Code:                   pb.RewriteCode_Success,
+		SqlAfterRewrite:        sql,
+		StatementType:          classify(sql),
+		OriginalAccessedTables: tables,
 	}, nil
 }
 
@@ -198,8 +198,8 @@ func (m *RewriterMock) RewriteErrorMessage(ctx context.Context, req *pb.RewriteE
 	// original forms; the mock did no rewriting, so there's nothing
 	// to reverse.
 	return &pb.RewriteErrorMessageResponse{
-		Code:               pb.RewriteCode_Success,
-		ErrorAfterRewrite:  req.GetErrorMessage(),
+		Code:              pb.RewriteCode_Success,
+		ErrorAfterRewrite: req.GetErrorMessage(),
 	}, nil
 }
 
