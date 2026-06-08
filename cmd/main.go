@@ -16,6 +16,7 @@ import (
 	"housegate/housegate"
 	"housegate/housegate/pkg/config"
 	"housegate/housegate/pkg/log"
+	"housegate/housegate/pkg/metricshttp"
 	"housegate/housegate/pkg/secretsload"
 	"housegate/housegate/pkg/version"
 )
@@ -44,7 +45,7 @@ func main() {
 	}
 	// Construct the proxy first so the metrics server can gather its dedicated
 	// collector registry alongside the default registry's init() globals.
-	startMetricsServer(ctx, cfg.MetricsListen, p.MetricsRegistry(), cfg.Observability.Pprof)
+	metricshttp.Start(ctx, cfg.MetricsListen, p.MetricsRegistry(), cfg.Observability.Pprof)
 	if err := p.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		log.Fatale(err, "housegate stopped")
 	}
