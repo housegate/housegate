@@ -57,9 +57,9 @@ func TestAuth_PermissionIsolationAcrossDatabases(t *testing.T) {
 	}
 
 	const (
-		dbA  = "perm_iso_a"
-		dbB  = "perm_iso_b"
-		tbl  = "data"
+		dbA = "perm_iso_a"
+		dbB = "perm_iso_b"
+		tbl = "data"
 	)
 
 	rewriterOpt, mock := testenv.WithRewriterMock(t)

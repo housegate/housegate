@@ -292,4 +292,3 @@ func Keygen(w io.Writer) error {
 	fmt.Fprintf(os.Stderr, "Public key: %s\n", recipient.String())
 	return nil
 }
-

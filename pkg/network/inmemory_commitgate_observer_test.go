@@ -183,7 +183,7 @@ func TestInMemoryRollback_DropTable(t *testing.T) {
 	o, st := newObserver()
 	st.DatabaseInfos["foo"] = DatabaseInfo{
 		DatabaseId: "foo",
-		Tables: []TableInfo{{TableId: "events"}, {TableId: "users"}},
+		Tables:     []TableInfo{{TableId: "events"}, {TableId: "users"}},
 	}
 	st.DatabasePermissions["alice"] = DatabasePermissions{"foo": registry.DbAuthOwner}
 	beforeDBs, _ := snapshotState(st)

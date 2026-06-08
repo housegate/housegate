@@ -389,8 +389,8 @@ func TestEthValidator_PlatformOperatorFromQuotedCustomSetting(t *testing.T) {
 	token := generateTestToken(t, privKeyHex, time.Now(), sqlHash)
 
 	for _, tc := range []struct {
-		name     string
-		opValue  string
+		name    string
+		opValue string
 	}{
 		{"raw", "1"},
 		{"single-quoted", "'1'"},

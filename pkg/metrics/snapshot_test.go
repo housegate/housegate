@@ -17,14 +17,14 @@ func makeSnapshot(seed int64) *Snapshot {
 		CapturedAt: time.Unix(seed, 0),
 		CH: []CHReplicaMetrics{
 			{
-				Replica:              "replica-0",
-				Reachable:            true,
-				QueryTotal:           u,
-				InsertTotal:          u,
-				MemoryTrackingBytes:  u,
-				PartsActive:          u,
-				ReplicationQueue:     u,
-				OSCPUSeconds:         float64(seed),
+				Replica:             "replica-0",
+				Reachable:           true,
+				QueryTotal:          u,
+				InsertTotal:         u,
+				MemoryTrackingBytes: u,
+				PartsActive:         u,
+				ReplicationQueue:    u,
+				OSCPUSeconds:        float64(seed),
 			},
 		},
 		Host: HostMetrics{
@@ -37,7 +37,7 @@ func makeSnapshot(seed int64) *Snapshot {
 			NetTxBytes:        u,
 		},
 		Runtime: RuntimeMetrics{
-			Goroutines:    int(seed),
+			Goroutines:     int(seed),
 			HeapAllocBytes: u,
 			GCPauseSeconds: float64(seed),
 		},
@@ -123,10 +123,10 @@ func TestStoreConcurrentLoadStore(t *testing.T) {
 	s.Store(makeSnapshot(0))
 
 	const (
-		writers       = 8
-		readers       = 8
-		writesEach    = 2000
-		readsEach     = 2000
+		writers    = 8
+		readers    = 8
+		writesEach = 2000
+		readsEach  = 2000
 	)
 
 	var wg sync.WaitGroup

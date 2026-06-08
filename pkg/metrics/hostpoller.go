@@ -18,10 +18,10 @@ import (
 // demand). Production code never reassigns these; they default to the real
 // gopsutil functions and the public PollHost behaviour is unchanged.
 var (
-	cpuPercentFn  = cpu.PercentWithContext
-	memVirtualFn  = mem.VirtualMemoryWithContext
-	diskIOFn      = disk.IOCountersWithContext
-	netIOFn       = net.IOCountersWithContext
+	cpuPercentFn = cpu.PercentWithContext
+	memVirtualFn = mem.VirtualMemoryWithContext
+	diskIOFn     = disk.IOCountersWithContext
+	netIOFn      = net.IOCountersWithContext
 )
 
 // PollHost collects the host machine's CPU, memory, disk, and network metrics

@@ -120,9 +120,9 @@ func TestSplice_DataBlock_Compressed_SingleFrame(t *testing.T) {
 	// [16-byte checksum = all zeros][method=0x82][compressedSize=9 LE][decompSize=1 LE]
 	frame := make([]byte, frameHeaderSize) // 25 bytes
 	// checksum: bytes 0-15, all zero
-	frame[16] = 0x82 // method = LZ4
-	binary.LittleEndian.PutUint32(frame[17:21], 9)  // compressed_size = 9 (no payload)
-	binary.LittleEndian.PutUint32(frame[21:25], 1)  // decompressed_size = 1
+	frame[16] = 0x82                               // method = LZ4
+	binary.LittleEndian.PutUint32(frame[17:21], 9) // compressed_size = 9 (no payload)
+	binary.LittleEndian.PutUint32(frame[21:25], 1) // decompressed_size = 1
 	buf.Buf = append(buf.Buf, frame...)
 
 	original := append([]byte(nil), buf.Buf...)

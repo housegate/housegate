@@ -362,4 +362,3 @@ func TestCommitGate_ObserverError(t *testing.T) {
 		t.Errorf("rejected CREATE TABLE still created the table on CH (count=%d, want 0)", count)
 	}
 }
-

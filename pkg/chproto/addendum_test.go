@@ -12,9 +12,9 @@ func TestNegotiateAddendum_BothChunkedOptional_ResolvesToChunked(t *testing.T) {
 	// Wire layout: quota_key, proto_send_chunked, proto_recv_chunked.
 	// We omit parallel_replicas_version by setting a revision below FeatureVersionedParallelReplicas (54471).
 	var buf proto.Buffer
-	buf.PutString("myquota")           // quota_key (non-empty to verify round-trip)
-	buf.PutString("chunked_optional")  // client proto_send_chunked (what client will send to us → our recv)
-	buf.PutString("chunked_optional")  // client proto_recv_chunked (what client expects to receive → our send)
+	buf.PutString("myquota")          // quota_key (non-empty to verify round-trip)
+	buf.PutString("chunked_optional") // client proto_send_chunked (what client will send to us → our recv)
+	buf.PutString("chunked_optional") // client proto_recv_chunked (what client expects to receive → our send)
 
 	rw := &readerWriter{r: bytes.NewBuffer(append([]byte(nil), buf.Buf...)), w: &bytes.Buffer{}}
 	c := NewCodec(rw, DirFromClient)
@@ -139,10 +139,10 @@ func TestSendAddendum_WritesAllFields_AboveParallelReplicas(t *testing.T) {
 
 	// Hand-compute expected bytes using the same proto.Buffer approach.
 	var expected proto.Buffer
-	expected.PutString("tenant-42")   // quota_key
-	expected.PutString("chunked")     // proto_send_chunked  (NegotiatedSend)
-	expected.PutString("notchunked")  // proto_recv_chunked  (NegotiatedRecv)
-	expected.PutUVarInt(7)            // parallel_replicas_version
+	expected.PutString("tenant-42")  // quota_key
+	expected.PutString("chunked")    // proto_send_chunked  (NegotiatedSend)
+	expected.PutString("notchunked") // proto_recv_chunked  (NegotiatedRecv)
+	expected.PutUVarInt(7)           // parallel_replicas_version
 
 	got := out.Bytes()
 	want := expected.Buf
@@ -176,10 +176,10 @@ func TestSendAddendum_WritesAllFields_AboveParallelReplicas(t *testing.T) {
 // reads and preserves the parallel_replicas_version field when revision >= 54471.
 func TestNegotiateAddendum_StoresParallelReplicasVersion(t *testing.T) {
 	var buf proto.Buffer
-	buf.PutString("qk")            // quota_key
-	buf.PutString("chunked")       // client proto_send_chunked
-	buf.PutString("chunked")       // client proto_recv_chunked
-	buf.PutUVarInt(42)             // parallel_replicas_version
+	buf.PutString("qk")      // quota_key
+	buf.PutString("chunked") // client proto_send_chunked
+	buf.PutString("chunked") // client proto_recv_chunked
+	buf.PutUVarInt(42)       // parallel_replicas_version
 
 	rw := &readerWriter{r: bytes.NewBuffer(append([]byte(nil), buf.Buf...)), w: &bytes.Buffer{}}
 	c := NewCodec(rw, DirFromClient)
@@ -213,4 +213,3 @@ func TestNegotiateAddendum_StoresParallelReplicasVersion(t *testing.T) {
 		t.Fatalf("NegotiateAddendum wrote %d bytes to client; expected 0", n)
 	}
 }
-

@@ -77,4 +77,3 @@ func TestMetrics_QueriesForwardedCounter(t *testing.T) {
 		t.Errorf("%s delta = %v, want ≥ 1 (before=%v after=%v)", metric, delta, before, after)
 	}
 }
-

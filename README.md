@@ -208,7 +208,7 @@ observability:
 
 **Exposed series** (all prefixed `clickhouse_proxy_`, scraped from `metrics_listen`):
 
-- **ClickHouse** (label `replica`): `ch_up`, `ch_query_total`, `ch_insert_total`, `ch_memory_tracking_bytes`, `ch_parts_active`, `ch_replication_queue`, `ch_os_cpu_seconds`.
+- **ClickHouse** (label `replica`): `ch_up`, `ch_query_total`, `ch_insert_total`, `ch_memory_tracking_bytes`, `ch_parts_active`, `ch_replication_queue`, `ch_mutations_pending`, `ch_mutations_running`, `ch_tables`, `ch_os_cpu_seconds`.
 - **Host**: `host_cpu_percent`, `host_mem_available_bytes`, `host_mem_total_bytes`, `host_disk_read_bytes_total{device}`, `host_disk_write_bytes_total{device}`, `host_net_rx_bytes_total`, `host_net_tx_bytes_total`.
 - **Go runtime**: `runtime_goroutines`, `runtime_heap_alloc_bytes`, `runtime_gc_pause_seconds`.
 - **Collector health**: `collector_up`, `collector_last_success_timestamp_seconds{source}`.

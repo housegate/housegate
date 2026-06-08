@@ -74,9 +74,9 @@ type Plugin struct {
 	// dialPeer / rebindFn / localRebindFn are injectable for tests;
 	// production callers leave them nil and the plugin uses
 	// defaultDial / defaultRebind / defaultLocalRebind.
-	dialPeer       func(ctx context.Context, addr string) (*chproto.Codec, error)
-	rebindFn       func(ctx context.Context, sess chsession.Session, up *chproto.Codec, hello *chproto.ClientHello) error
-	localRebindFn  func(ctx context.Context, sess chsession.Session, up *chproto.Codec, hello *chproto.ClientHello) error
+	dialPeer      func(ctx context.Context, addr string) (*chproto.Codec, error)
+	rebindFn      func(ctx context.Context, sess chsession.Session, up *chproto.Codec, hello *chproto.ClientHello) error
+	localRebindFn func(ctx context.Context, sess chsession.Session, up *chproto.Codec, hello *chproto.ClientHello) error
 }
 
 func (p *Plugin) Name() string { return "forward" }

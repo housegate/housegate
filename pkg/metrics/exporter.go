@@ -25,6 +25,9 @@ type Exporter struct {
 	chMemoryTracking   *prometheus.Desc
 	chPartsActive      *prometheus.Desc
 	chReplicationQueue *prometheus.Desc
+	chMutationsPending *prometheus.Desc
+	chMutationsRunning *prometheus.Desc
+	chTablesTotal      *prometheus.Desc
 	chOSCPUSeconds     *prometheus.Desc
 
 	hostCPUPercent   *prometheus.Desc
@@ -57,6 +60,9 @@ func NewExporter(store *Store, indexerID string) *Exporter {
 		chMemoryTracking:   prometheus.NewDesc(fqn("ch_memory_tracking_bytes"), "Bytes currently tracked by the ClickHouse memory tracker.", []string{"replica"}, cl),
 		chPartsActive:      prometheus.NewDesc(fqn("ch_parts_active"), "Number of active data parts on the ClickHouse replica.", []string{"replica"}, cl),
 		chReplicationQueue: prometheus.NewDesc(fqn("ch_replication_queue"), "Tasks waiting in the ClickHouse replication queue.", []string{"replica"}, cl),
+		chMutationsPending: prometheus.NewDesc(fqn("ch_mutations_pending"), "Unfinished mutations (system.mutations is_done = 0) across all tables on the replica.", []string{"replica"}, cl),
+		chMutationsRunning: prometheus.NewDesc(fqn("ch_mutations_running"), "Mutations currently in progress on the replica (from the PartMutation system.metrics gauge).", []string{"replica"}, cl),
+		chTablesTotal:      prometheus.NewDesc(fqn("ch_tables"), "Total number of tables across all databases on the replica (from system.asynchronous_metrics NumberOfTables).", []string{"replica"}, cl),
 		chOSCPUSeconds:     prometheus.NewDesc(fqn("ch_os_cpu_seconds"), "OS CPU metric from ClickHouse system.asynchronous_metrics, exposed as a gauge: the OSUserTimeNormalized per-second ratio when present, else cumulative seconds from OSCPUVirtualTimeMicroseconds. A gauge (not a counter) because the normalized source is a non-monotonic rate that would corrupt counter rate()/reset math.", []string{"replica"}, cl),
 
 		hostCPUPercent:   prometheus.NewDesc(fqn("host_cpu_percent"), "Host CPU utilization percent (0..100, summed across cores).", nil, cl),
@@ -78,7 +84,7 @@ func NewExporter(store *Store, indexerID string) *Exporter {
 
 func (e *Exporter) descs() []*prometheus.Desc {
 	return []*prometheus.Desc{
-		e.chUp, e.chQueryTotal, e.chInsertTotal, e.chMemoryTracking, e.chPartsActive, e.chReplicationQueue, e.chOSCPUSeconds,
+		e.chUp, e.chQueryTotal, e.chInsertTotal, e.chMemoryTracking, e.chPartsActive, e.chReplicationQueue, e.chMutationsPending, e.chMutationsRunning, e.chTablesTotal, e.chOSCPUSeconds,
 		e.hostCPUPercent, e.hostMemAvailable, e.hostMemTotal, e.hostDiskRead, e.hostDiskWrite, e.hostNetRx, e.hostNetTx,
 		e.runtimeGoroutines, e.runtimeHeapAlloc, e.runtimeGCPause,
 		e.lastSuccess, e.collectorUp,
@@ -126,6 +132,9 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 		gauge(e.chMemoryTracking, float64(r.MemoryTrackingBytes), r.Replica)
 		gauge(e.chPartsActive, float64(r.PartsActive), r.Replica)
 		gauge(e.chReplicationQueue, float64(r.ReplicationQueue), r.Replica)
+		gauge(e.chMutationsPending, float64(r.MutationsPending), r.Replica)
+		gauge(e.chMutationsRunning, float64(r.MutationsRunning), r.Replica)
+		gauge(e.chTablesTotal, float64(r.TablesTotal), r.Replica)
 		gauge(e.chOSCPUSeconds, r.OSCPUSeconds, r.Replica)
 	}
 

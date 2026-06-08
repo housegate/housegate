@@ -23,12 +23,12 @@ func newFakeSession() *fakeSession {
 	return &fakeSession{state: chsession.NewSessionState()}
 }
 
-func (f *fakeSession) ID() int64                          { return f.id }
-func (f *fakeSession) State() *chsession.SessionState     { return f.state }
-func (f *fakeSession) Client() *chproto.Codec             { return nil }
-func (f *fakeSession) Upstream() *chproto.Codec           { return nil }
-func (f *fakeSession) RemoteAddr() net.Addr               { return nil }
-func (f *fakeSession) Close() error                       { return nil }
+func (f *fakeSession) ID() int64                      { return f.id }
+func (f *fakeSession) State() *chsession.SessionState { return f.state }
+func (f *fakeSession) Client() *chproto.Codec         { return nil }
+func (f *fakeSession) Upstream() *chproto.Codec       { return nil }
+func (f *fakeSession) RemoteAddr() net.Addr           { return nil }
+func (f *fakeSession) Close() error                   { return nil }
 func (f *fakeSession) BindUpstream(context.Context, *chproto.Codec) error {
 	return nil
 }
@@ -437,9 +437,9 @@ func TestPluginChain_OnQuery_PeerTrustAndRouteCombine(t *testing.T) {
 	var called []string
 	chain := &PluginChain{
 		QueryPlugins: []QueryPlugin{
-			&fakeQueryPlugin{name: "default", called: &called},                      // skipped (not RouteAware)
-			&fakeRoutedQueryPlugin{name: "signer-routed", called: &called},          // runs
-			&fakeRoutedPeerOptOutQueryPlugin{                                         // route-aware but opts out of peer
+			&fakeQueryPlugin{name: "default", called: &called},             // skipped (not RouteAware)
+			&fakeRoutedQueryPlugin{name: "signer-routed", called: &called}, // runs
+			&fakeRoutedPeerOptOutQueryPlugin{ // route-aware but opts out of peer
 				fakeRoutedQueryPlugin: fakeRoutedQueryPlugin{name: "auth-routed-peeropt", called: &called},
 			},
 		},
