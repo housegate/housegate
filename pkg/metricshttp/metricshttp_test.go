@@ -1,4 +1,4 @@
-package main
+package metricshttp
 
 import (
 	"context"
@@ -12,6 +12,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"housegate/housegate/pkg/config"
+	// Imported for its init(), which registers the clickhouse_proxy_* series on
+	// the default registry — the same path the standalone binary exercises — so
+	// the merge assertions below observe real default-registry series.
+	_ "housegate/housegate/pkg/proxy"
 )
 
 func TestPprofAuthMiddleware(t *testing.T) {
@@ -57,7 +61,7 @@ func TestBuildMetricsHandlerMergesRegistries(t *testing.T) {
 	reg.MustRegister(dedicated)
 	dedicated.Set(2)
 
-	h := buildMetricsHandler(reg, config.PprofConfig{})
+	h := Handler(reg, config.PprofConfig{})
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if rec.Code != http.StatusOK {
@@ -75,7 +79,7 @@ func TestBuildMetricsHandlerMergesRegistries(t *testing.T) {
 }
 
 func TestBuildMetricsHandlerNilRegistryStillServesDefault(t *testing.T) {
-	h := buildMetricsHandler(nil, config.PprofConfig{})
+	h := Handler(nil, config.PprofConfig{})
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if rec.Code != http.StatusOK {
@@ -88,14 +92,14 @@ func TestBuildMetricsHandlerNilRegistryStillServesDefault(t *testing.T) {
 
 func TestBuildMetricsHandlerPprofGating(t *testing.T) {
 	// Disabled → /debug/pprof not mounted.
-	hOff := buildMetricsHandler(nil, config.PprofConfig{Enabled: false})
+	hOff := Handler(nil, config.PprofConfig{Enabled: false})
 	rec := httptest.NewRecorder()
 	hOff.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/debug/pprof/", nil))
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("pprof disabled: status = %d, want 404", rec.Code)
 	}
 
-	hOn := buildMetricsHandler(nil, config.PprofConfig{Enabled: true, Token: "tok"})
+	hOn := Handler(nil, config.PprofConfig{Enabled: true, Token: "tok"})
 	// Enabled, no token → 401.
 	rec = httptest.NewRecorder()
 	hOn.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/debug/pprof/", nil))
@@ -122,7 +126,7 @@ func TestStartMetricsServerServesAndShutsDown(t *testing.T) {
 	_ = ln.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	startMetricsServer(ctx, addr, nil, config.PprofConfig{})
+	Start(ctx, addr, nil, config.PprofConfig{})
 
 	// Poll until the background server is accepting.
 	var resp *http.Response

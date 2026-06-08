@@ -1,4 +1,16 @@
-package main
+// Package metricshttp serves housegate's Prometheus metrics — the global
+// default registry's init()-registered series merged with the proxy's
+// dedicated downstream-collector registry — over HTTP, plus an optional
+// authenticated /debug/pprof. It is the single shared implementation used by
+// both the standalone cmd/housegate binary and library hosts (e.g. sentio-node)
+// that embed the proxy via housegate.New.
+//
+// Importing this package pulls in net/http/pprof, whose init() registers
+// handlers on http.DefaultServeMux as a side effect. Handler never serves
+// DefaultServeMux, so pprof endpoints are reachable only through the mux Handler
+// builds (behind bearer-token auth when enabled) — provided the host process
+// does not itself serve http.DefaultServeMux.
+package metricshttp
 
 import (
 	"context"
@@ -16,14 +28,14 @@ import (
 	"housegate/housegate/pkg/log"
 )
 
-// startMetricsServer starts the HTTP server exposing /metrics (the existing
+// Start starts the HTTP server exposing /metrics (the existing
 // init()-registered globals merged with the proxy's dedicated collector
 // registry) and, when enabled, an authenticated /debug/pprof. It runs in the
 // background and shuts down gracefully when ctx is cancelled.
-func startMetricsServer(ctx context.Context, addr string, reg *prometheus.Registry, pprofCfg config.PprofConfig) {
+func Start(ctx context.Context, addr string, reg *prometheus.Registry, pprofCfg config.PprofConfig) {
 	srv := &http.Server{
 		Addr:    addr,
-		Handler: buildMetricsHandler(reg, pprofCfg),
+		Handler: Handler(reg, pprofCfg),
 	}
 	go func() {
 		defer func() {
@@ -44,12 +56,12 @@ func startMetricsServer(ctx context.Context, addr string, reg *prometheus.Regist
 	}()
 }
 
-// buildMetricsHandler builds the metrics/pprof HTTP handler. /metrics gathers
-// the default registry (existing init() globals) merged with the proxy's
-// dedicated collector registry via prometheus.Gatherers, so both old and new
-// series appear in one scrape without a double-registration panic. pprof is
-// mounted only when enabled, behind bearer-token auth.
-func buildMetricsHandler(reg *prometheus.Registry, pprofCfg config.PprofConfig) http.Handler {
+// Handler builds the metrics/pprof HTTP handler. /metrics gathers the default
+// registry (existing init() globals) merged with the proxy's dedicated
+// collector registry via prometheus.Gatherers, so both old and new series
+// appear in one scrape without a double-registration panic. pprof is mounted
+// only when enabled, behind bearer-token auth.
+func Handler(reg *prometheus.Registry, pprofCfg config.PprofConfig) http.Handler {
 	mux := http.NewServeMux()
 
 	gatherers := prometheus.Gatherers{prometheus.DefaultGatherer}

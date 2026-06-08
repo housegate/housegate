@@ -1,0 +1,25 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "metricshttp",
+    srcs = ["metricshttp.go"],
+    importpath = "housegate/housegate/pkg/metricshttp",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/config",
+        "//pkg/log",
+        "@com_github_prometheus_client_golang//prometheus",
+        "@com_github_prometheus_client_golang//prometheus/promhttp",
+    ],
+)
+
+go_test(
+    name = "metricshttp_test",
+    srcs = ["metricshttp_test.go"],
+    embed = [":metricshttp"],
+    deps = [
+        "//pkg/config",
+        "//pkg/proxy",
+        "@com_github_prometheus_client_golang//prometheus",
+    ],
+)
