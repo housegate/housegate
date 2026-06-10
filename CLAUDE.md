@@ -147,6 +147,7 @@ A new plugin is a 4-file change under `pkg/plugins/<name>/` plus a one-line wiri
 
 ## Conventions
 
+- **Markdown docs: no hard line-wrapping.** One paragraph per line, English and Chinese alike — renderers soft-wrap, and hard breaks inside CJK paragraphs render spurious spaces. Some older specs are 72-column wrapped; do not imitate them when writing or editing docs.
 - **Logging**: use `housegate/housegate/pkg/log` (aliased as `log`). It is a thin convenience wrapper over `log/slog`; never use `fmt.Println` or stdlib `log` directly. Prefer the structured and context-aware forms below. The legacy printf-style `log.Infof` / `log.Warnf` / `log.Fatalf` calls still compile but new code should migrate to:
   - **Structured key-value logging** via the `*w` family (`log.Infow`, `log.Debugw`, `log.Warnw`, `log.Errorw`). Example: `log.Infow("handshake complete", "conn", connID, "user", user, "upstream", addr)`. Preferred over `Infof` because fields are machine-parseable.
   - **Context-carried loggers** via `log.FromContext`: `ctx, logger := log.FromContext(ctx, "conn", connID)` then `logger.Infow("query done", "rows", n)`. Subsequent calls that receive `ctx` recover the same enriched logger — you don't need to re-pass `conn` through every helper. This is the preferred way to thread per-connection/per-query context through the packet loop, rewriter, validator, etc.
