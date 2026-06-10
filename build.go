@@ -27,6 +27,7 @@ import (
 	"housegate/housegate/pkg/plugins/credential"
 	"housegate/housegate/pkg/plugins/forward"
 	indexingusage "housegate/housegate/pkg/plugins/indexing_usage"
+	lthashplugin "housegate/housegate/pkg/plugins/lthash"
 	metricsplugin "housegate/housegate/pkg/plugins/metrics"
 	"housegate/housegate/pkg/plugins/rewrite"
 	routeplugin "housegate/housegate/pkg/plugins/route"
@@ -427,6 +428,16 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		)
 	}
 
+	var dataPlugins []plugin.DataPlugin
+	if cfg.LtHash.Enabled {
+		ltPlug := lthashplugin.New(lthashplugin.DefaultRegistry)
+		queryPlugins = append(queryPlugins, ltPlug)
+		queryCompletePlugins = append(queryCompletePlugins, ltPlug)
+		closePlugins = append(closePlugins, ltPlug)
+		dataPlugins = append(dataPlugins, ltPlug)
+		log.Infow("lthash commitment plugin enabled (MVP)")
+	}
+
 	sessstatePlug := &sessionstate.Plugin{Config: cfg.State}
 
 	var selfIndexerID uint64
@@ -540,6 +551,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		HandshakeCompletePlugins: []plugin.HandshakeCompletePlugin{metrics},
 		HelloPlugins:             helloPlugins,
 		QueryPlugins:             queryPlugins,
+		DataPlugins:              dataPlugins,
 		QueryCompletePlugins:     queryCompletePlugins,
 		ClosePlugins:             closePlugins,
 		ExceptionPlugins:         exceptionPlugins,
