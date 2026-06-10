@@ -45,6 +45,7 @@ type PluginChain struct {
 	HelloPlugins             []HelloPlugin
 	HandshakeCompletePlugins []HandshakeCompletePlugin
 	QueryPlugins             []QueryPlugin
+	DataPlugins              []DataPlugin
 	ExceptionPlugins         []ExceptionPlugin
 	QueryCompletePlugins     []QueryCompletePlugin
 	ClosePlugins             []ClosePlugin
@@ -167,6 +168,30 @@ func (c *PluginChain) OnQuery(ctx context.Context, qctx *QueryContext) error {
 			continue
 		}
 		if err := p.OnQuery(ctx, qctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *PluginChain) OnClientData(ctx context.Context, qctx *QueryContext, raw []byte) error {
+	if len(c.DataPlugins) == 0 || qctx == nil || qctx.Session == nil {
+		return nil
+	}
+	// Same per-iteration filter discipline as OnQuery — see that comment.
+	state := qctx.Session.State()
+	for _, p := range c.DataPlugins {
+		if state.IsRouted() && !runsOnRouted(p) {
+			continue
+		}
+		// See OnHandshakeComplete for the IsForwardedFromPeer override.
+		if state.PeerTrusted() && !state.IsForwardedFromPeer && !runsOnPeerTrust(p) {
+			continue
+		}
+		if state.IsForwarding && !runsOnForward(p) {
+			continue
+		}
+		if err := p.OnClientData(ctx, qctx, raw); err != nil {
 			return err
 		}
 	}
