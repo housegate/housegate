@@ -265,6 +265,16 @@ delta = sum(lthash(new row instances)) - sum(lthash(old row instances))
 
 Non-deterministic mutations 仍然禁止，除非 sequencer 在执行前把非确定性值 materialize 成常量。Mutation-class statements 中的 `any()`、unordered `first_value`、unordered `LIMIT` 都被拒绝。
 
+**算例。** 表 `balances(_hg_row_id, user_id, balance)` 有两行，`r1 = (rid_1, '0x123', 100)` 和 `r2 = (rid_2, '0xabc', 250)`，所以 partition 承诺 `C_old = h(r1) + h(r2)`，其中 `h(r) = LtHash(canonical(r))`，而 `canonical` 包含 row id：`(domain, table_id, rid_1, [(user_id, '0x123'), (balance, 100)])`。用户签名提交 `ALTER TABLE balances UPDATE balance = 10 WHERE user_id = '0x123'`。ClickHouse 把含 `r1` 的 part 重写成 `r1' = (rid_1, '0x123', 10)`——只有 `balance` 变了；`_hg_row_id` 仍是 `rid_1`，因为 SET 子句从不碰它(这是承重的事实)。源侧通过 `_part` 读出新旧 part 的行做差，无需识别 WHERE *选中了哪些行*：
+
+```
+ΔC    = sum(lthash(新 part 的行)) - sum(lthash(旧 part 的行))
+      = h(r1') - h(r1)
+C_new = C_old + ΔC = h(r1) + h(r2) + h(r1') - h(r1) = h(r1') + h(r2)   ✓
+```
+
+在 LtHash 视角下，UPDATE 恰好就是“减掉旧行实例、加上新行实例”——与 DELETE+INSERT 算术完全相同，这正是不需要语义 diff 的原因。重写时保留 `rid_1` 是让副本重放保持确定性的关键：row id 在 INSERT 时由签名 statement envelope 一次性派生、之后原样携带，所以独立重新执行 mutation 不可能产生不同的 id(若重新生成 id，会在各副本间分歧并引发假阳性)。验证分两级：**算术**级(所有副本，免费)确认 `C_new = C_old + ΔC` 自洽、未触碰 parts 未变——但作恶写者可以落 `balance=0` 并为它锚定一个自洽的 `ΔC`，所以这一级只证明 anchor↔parts 自洽。**重放**级(quorum)抓住作恶：每个副本握有字节一致的 pre-state(旧 part，由 native ReplicatedMergeTree 传输而来)，把受影响 part 克隆进 scratch 表，执行同一条签名语句，把结果行哈希与写者的 `parts_added` 比对。落了 `balance=0` 的写者发布的 `parts_added` 哈希对应 `balance=0`；诚实副本算出 `balance=10`；不符则扣留作证，该 mutation 永远到不了 `safe`，而矛盾(签名语句说 10、锚定 part 说 0)公开可验。这就是验证阶梯里的 Replay check——也是 mutation 单独成行、不与 INSERT 合并的原因：INSERT 的期望值在签名 payload 里(纯哈希即可),而 UPDATE 的新值是 `f(pre-state, statement)`,只能靠重新执行得到。
+
 ### 9.3 DDL
 
 | Class | Route |

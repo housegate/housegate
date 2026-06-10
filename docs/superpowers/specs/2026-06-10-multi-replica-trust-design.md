@@ -265,6 +265,16 @@ delta = sum(lthash(new row instances)) - sum(lthash(old row instances))
 
 Non-deterministic mutations remain disallowed unless the sequencer materializes the non-deterministic value into a constant before execution. `any()`, unordered `first_value`, and un-ordered `LIMIT` in mutation-class statements are rejected.
 
+**Worked example.** Table `balances(_hg_row_id, user_id, balance)` holds two rows, `r1 = (rid_1, '0x123', 100)` and `r2 = (rid_2, '0xabc', 250)`, so the partition commitment is `C_old = h(r1) + h(r2)`, where `h(r) = LtHash(canonical(r))` and `canonical` includes the row id: `(domain, table_id, rid_1, [(user_id, '0x123'), (balance, 100)])`. The user signs `ALTER TABLE balances UPDATE balance = 10 WHERE user_id = '0x123'`. ClickHouse rewrites the part holding `r1` into `r1' = (rid_1, '0x123', 10)` — only `balance` changes; `_hg_row_id` stays `rid_1` because the SET clause never touches it (this is the load-bearing fact). The source reads old- and new-part rows back via `_part` and takes the difference, with no need to identify *which* rows the WHERE selected:
+
+```
+ΔC    = sum(lthash(new-part rows)) - sum(lthash(old-part rows))
+      = h(r1') - h(r1)
+C_new = C_old + ΔC = h(r1) + h(r2) + h(r1') - h(r1) = h(r1') + h(r2)   ✓
+```
+
+In the LtHash view an UPDATE is exactly "remove the old row instance, add the new one" — identical arithmetic to a DELETE+INSERT, which is why no semantic diff is required. Preserving `rid_1` across the rewrite is what keeps replica replay deterministic: the id is derived from the signed statement envelope once at INSERT time and carried through unchanged, so independently re-executing the mutation cannot produce a different id (a regenerated id would diverge per replica and raise a false mismatch). Verification has two levels: the **arithmetic** check (all replicas, free) confirms `C_new = C_old + ΔC` is self-consistent and untouched parts are unchanged — but a malicious writer can land `balance=0` and anchor a self-consistent `ΔC` for it, so this proves anchor↔parts consistency only. The **replay** check (quorum) catches the fraud: each replica holds a byte-identical pre-state (the old part, shipped by native ReplicatedMergeTree), clones the affected part into a scratch table, executes the same signed statement, and compares the resulting row hashes against the writer's `parts_added`. A writer that landed `balance=0` produces `parts_added` hashing to `balance=0`; honest replicas compute `balance=10`; the mismatch withholds attestation, the mutation never reaches `safe`, and the contradiction (signed statement says 10, anchored part says 0) is publicly checkable. This is the verification ladder's Replay check — and the reason mutations are a separate row from INSERT: an INSERT's expected value is in the signed payload (pure hashing suffices), whereas an UPDATE's new value is `f(pre-state, statement)` and can only be obtained by re-execution.
+
 ### 9.3 DDL
 
 | Class | Route |
