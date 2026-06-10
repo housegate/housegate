@@ -219,6 +219,22 @@ Merge eligibility 必须以 `safe` 为硬谓词，不能用 part age 近似。Ag
 
 升级路径内建：极度怀疑的一方可以从 genesis replay 整条 L3 stream。完整 state-machine replication 是 anchored log 免费支持的退化模式。
 
+### 执行成本模型——哪些路径跑 SQL
+
+阶梯有一个值得说破的性质，因为它就是整个设计的成本论证：**只有 mutation 路径重新执行 SQL。** INSERT 校验解码签名 payload 并哈希——不执行，因为插入的行已经物化在 payload 里。Merge 校验对副本反正要拉的 part 扫行哈希——不执行，只验多重集保持等式。只有 UPDATE/DELETE 迫使副本跑那条语句，因为它的新值是 `f(pre-state, statement)`，在算出来之前哪里都不存在。
+
+三点让这条路径有界。**(1) 它不是额外的活。** native ReplicatedMergeTree 本来就在每个副本重新执行每条 mutation（mutation 靠重新执行复制，不靠拉 part）——校验层复用这个结果，只在它之上多加一次哈希扫描；增量是哈希，不是第二次执行。**(2) 它是局部化的 replay，不是方案 A。** 方案 A 要 replay *全量历史的每一条语句*；这里 replay 收窄到罕见的 mutation 切片、且只在它触碰的 parts 上，从不碰 append-only 的 INSERT 流——而它需要的确定性 ClickHouse 已经强制（`allow_nondeterministic_mutations=0`）。**(3) LtHash 是比较工具，不是执行的替代。** 是它让 INSERT 路径完全跳过执行（期望值直接从 payload 哈希出来），也是它把 mutation 后的比较从逐行 SELECT diff 压成一次 O(1) 的承诺比对。即便执行无法避免，*校验*其结果仍然便宜。
+
+一条划界以免混淆：这里的“跑 SQL”指写路径的 mutation 重新执行——native 复制本来就在做的活。它与读路径的 SELECT 查询无关；本层完全不验证用户查询结果（query attestation 是显式 non-goal）。
+
+### 如何判定作恶的副本
+
+两种对手不能混为一谈。作恶的**写者**靠多数决、对照一个可独立重算的真值来判定：它锚定 `balance=0`，quorum 个诚实副本重算出 `balance=10`，它孤身对抗多数。作恶的**副本**是更微妙的情形——它可能提交一个签名作证，声称一个诚实副本都不认同的承诺。它的判定方式相同，而这个机制值得显式写出来，因为它是整个设计拜占庭安全性的来源。
+
+**正确的承诺不是投票投出来的——它是可重算的。** 对任一 INSERT 锚定，任何一方都能把签名 payload（在 DA 上）哈希成唯一的期望承诺；对任一 mutation 锚定，任何一方都能把签名语句对照字节一致的 pre-state 重放出唯一的期望承诺。签名语句日志加公开的承诺函数，确定*唯一*答案。作证是签名的、上链的，所以“谁声称了什么”不可抵赖；判定一个副本就是把它的签名作证与那个可重算的答案比对。签名作证与可重算真值不符的副本，等于签名背书了一个任何人都能证伪的值——公开、链上的证据——于是被标记、踢出 `read_replica` 集合、（经济阶段）罚没。
+
+这个推论比 BFT 投票更强：**真值不依赖诚实副本占多数。** quorum 提供的是*活性*——凑够诚实作证把数据推进到 `safe`。安全性来自*可重算性*：一个握有签名日志的诚实验证者，就能证伪任意多个串谋副本，因为答案是数学，不是人数。（经典 BFT 在超过 1/3 作恶时失去安全性；只要签名日志可得、承诺函数公开，本设计不会。）
+
 ## 8. INSERT 与 Data-Block Verification
 
 用户可见流程不变：signed INSERT -> HouseGate -> Keeper packs into L3 -> source SNode executes -> part registers through Ring 1 -> replicas fetch and verify through Ring 2。
@@ -274,6 +290,8 @@ C_new = C_old + ΔC = h(r1) + h(r2) + h(r1') - h(r1) = h(r1') + h(r2)   ✓
 ```
 
 在 LtHash 视角下，UPDATE 恰好就是“减掉旧行实例、加上新行实例”——与 DELETE+INSERT 算术完全相同，这正是不需要语义 diff 的原因。重写时保留 `rid_1` 是让副本重放保持确定性的关键：row id 在 INSERT 时由签名 statement envelope 一次性派生、之后原样携带，所以独立重新执行 mutation 不可能产生不同的 id(若重新生成 id，会在各副本间分歧并引发假阳性)。验证分两级：**算术**级(所有副本，免费)确认 `C_new = C_old + ΔC` 自洽、未触碰 parts 未变——但作恶写者可以落 `balance=0` 并为它锚定一个自洽的 `ΔC`，所以这一级只证明 anchor↔parts 自洽。**重放**级(quorum)抓住作恶：每个副本握有字节一致的 pre-state(旧 part，由 native ReplicatedMergeTree 传输而来)，把受影响 part 克隆进 scratch 表，执行同一条签名语句，把结果行哈希与写者的 `parts_added` 比对。落了 `balance=0` 的写者发布的 `parts_added` 哈希对应 `balance=0`；诚实副本算出 `balance=10`；不符则扣留作证，该 mutation 永远到不了 `safe`，而矛盾(签名语句说 10、锚定 part 说 0)公开可验。这就是验证阶梯里的 Replay check——也是 mutation 单独成行、不与 INSERT 合并的原因：INSERT 的期望值在签名 payload 里(纯哈希即可),而 UPDATE 的新值是 `f(pre-state, statement)`,只能靠重新执行得到。
+
+这一重放有真实但有界的成本。重新执行正比于 mutation 触碰的数据量——ClickHouse 重写的是整个受影响的 part，不是单行——所以 `WHERE` 命中一个小 partition 是秒级，而全表 mutation 是一次全表重写。三点让它可接受：重放复用 ReplicatedMergeTree 自己的逐副本 mutation 重新执行而非新增一遍（增量只是哈希扫描），scratch 克隆是硬链接级（`FREEZE` / `ATTACH FROM`，不复制数据），而 mutation 在 append-only 负载里罕见。真正的风险是一个大 mutation 在 scratch 重放加哈希扫描期间短暂加倍读 I/O，以及——在 v1 同步 quorum 选项下——把这段重放延迟加到客户端的 `ALTER` 上；两者都由对单条语句的 admission 规模上限兜底，大 mutation 以异步校验（在 unsafe 窗口内完成）作为退路（open question 8）。
 
 ### 9.3 DDL
 
