@@ -3,8 +3,9 @@
 //
 // Two-tier shape:
 //
-//   - Factory is the long-lived process-wide object. It holds the gRPC
-//     connection to the sql-rewriter service, a NetworkState reference,
+//   - Factory is the long-lived process-wide object. It holds the rewrite
+//     backend (gRPC client to the sql-rewriter service, or the in-process
+//     rewriter-go engine), a NetworkState reference,
 //     an Options snapshot, and any optional cluster manager / credential
 //     provider used to render remote() table references.
 //
@@ -154,10 +155,10 @@ type Factory interface {
 	// callers do not have to recreate it as the session evolves.
 	NewRewriter(sess Session) Rewriter
 
-	// Close tears down the underlying gRPC connection. Per-connection
-	// Rewriters share that connection, so Close on the factory ends
-	// rewriting for all of them; callers must order shutdown
-	// accordingly.
+	// Close tears down the underlying rewrite backend (gRPC connection or
+	// native engine). Per-connection Rewriters share that backend, so
+	// Close on the factory ends rewriting for all of them; callers must
+	// order shutdown accordingly.
 	Close() error
 }
 
