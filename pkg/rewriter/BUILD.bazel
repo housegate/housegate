@@ -19,7 +19,7 @@ go_library(
         "//pkg/registry",
         "//pkg/route",
         "//pkg/sqlmeta",
-        "//protos",
+        "@com_github_housegate_rewriter_go//gen/pb",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//credentials/insecure",
         "@org_golang_google_grpc//keepalive",

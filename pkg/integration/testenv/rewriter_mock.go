@@ -10,7 +10,7 @@ import (
 	"google.golang.org/grpc"
 
 	"housegate/housegate/pkg/config"
-	pb "housegate/housegate/protos"
+	pb "github.com/housegate/rewriter-go/gen/pb"
 )
 
 // RewriterMock implements protos.RewriterServiceServer with the

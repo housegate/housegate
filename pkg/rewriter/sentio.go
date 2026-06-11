@@ -23,7 +23,7 @@ import (
 	"housegate/housegate/pkg/registry"
 	"housegate/housegate/pkg/route"
 	"housegate/housegate/pkg/sqlmeta"
-	pb "housegate/housegate/protos"
+	pb "github.com/housegate/rewriter-go/gen/pb"
 )
 
 // statementTypeFromProto narrows the protobuf enum to the
