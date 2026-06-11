@@ -17,6 +17,7 @@ import (
 	"housegate/housegate/pkg/cluster"
 	"housegate/housegate/pkg/config"
 	"housegate/housegate/pkg/credentials"
+	"housegate/housegate/pkg/ffifetch"
 	"housegate/housegate/pkg/log"
 	"housegate/housegate/pkg/network"
 	"housegate/housegate/pkg/plugin"
@@ -87,11 +88,30 @@ func buildRewriterFactory(cfg *config.Config, reg registry.Registry) rewriter.Fa
 		return nil
 	}
 
+	// native_library_release: resolve the FFI library from a rewriter-go
+	// release before constructing the factory. Explicit NativeLibraryPath
+	// wins; fetch failure keeps the warn-and-disable fail-open posture.
+	nativeLibPath := cfg.Rewriter.NativeLibraryPath
+	if cfg.Rewriter.Engine == rewriter.EngineNative && nativeLibPath == "" && cfg.Rewriter.NativeLibraryRelease != "" {
+		p, err := ffifetch.Fetch(context.Background(), ffifetch.Options{
+			Tag:     cfg.Rewriter.NativeLibraryRelease,
+			SHA256:  cfg.Rewriter.NativeLibrarySHA256,
+			BaseURL: cfg.Rewriter.NativeLibraryReleaseBaseURL,
+		})
+		if err != nil {
+			log.Warne(err, "failed to fetch native rewriter library, rewriting disabled")
+			return nil
+		}
+		log.Infow("native rewriter library resolved from release",
+			"tag", cfg.Rewriter.NativeLibraryRelease, "path", p)
+		nativeLibPath = p
+	}
+
 	rwConfig := rewriter.Options{
 		Enabled:           true,
 		ServiceAddr:       cfg.Rewriter.ServiceAddr,
 		Engine:            cfg.Rewriter.Engine,
-		NativeLibraryPath: cfg.Rewriter.NativeLibraryPath,
+		NativeLibraryPath: nativeLibPath,
 		Upstream:          cfg.Upstream,
 		Listen:            cfg.Listen,
 		CallbackAddr:      cfg.CallbackUrl,

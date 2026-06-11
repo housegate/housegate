@@ -75,7 +75,10 @@ download) → `POLYGLOT_SQL_FFI_PATH` / system paths (existing behavior, unchang
 set while `engine: grpc` is silently ignored (same convention as `service_addr` under
 native). Wiring lives in `buildRewriterFactory`: resolve release → path before
 constructing the factory; on fetch error, warn + nil factory (rewriting disabled), same
-as every other backend-unavailable case. `rewriter.Options` mirrors the three fields.
+as every other backend-unavailable case. `rewriter.Options` is untouched — resolution
+completes in `buildRewriterFactory` before Options is constructed; library embedders
+building their own `rewriter.Options` call `ffifetch.Fetch` themselves if they want
+release resolution.
 
 ## 4. rewriter-go side (small, separate PR)
 

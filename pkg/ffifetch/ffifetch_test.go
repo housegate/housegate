@@ -208,4 +208,10 @@ func TestFetch_InvalidInputs(t *testing.T) {
 	if _, err := Fetch(context.Background(), Options{Tag: "v1", SHA256: "zz"}); err == nil {
 		t.Error("malformed sha256 pin must error")
 	}
+	for _, bad := range []string{"../escape", "a/b", "a\\b", ".."} {
+		_, err := Fetch(context.Background(), Options{Tag: bad})
+		if err == nil || !strings.Contains(err.Error(), "release tag") {
+			t.Errorf("tag %q: err = %v, want tag-shape rejection", bad, err)
+		}
+	}
 }

@@ -25,6 +25,9 @@ func main() {
 	if handled, exit := secretSubcommand(); handled {
 		os.Exit(exit)
 	}
+	if handled, exit := fetchSubcommand(); handled {
+		os.Exit(exit)
+	}
 
 	// Install the console handler before anything logs so our slog-based
 	// pkg/log records share the zap-development format with any

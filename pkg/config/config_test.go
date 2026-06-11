@@ -413,6 +413,19 @@ func TestConfigValidate(t *testing.T) {
 			mutate:  func(c *Config) { c.Rewriter.Engine = "native" },
 			wantErr: false,
 		},
+		{
+			name:        "rewriter_native_sha256_invalid",
+			cfg:         baseServer,
+			mutate:      func(c *Config) { c.Rewriter.NativeLibrarySHA256 = "not-hex" },
+			wantErr:     true,
+			wantContain: []string{"native_library_sha256"},
+		},
+		{
+			name:    "rewriter_native_sha256_ok",
+			cfg:     baseServer,
+			mutate:  func(c *Config) { c.Rewriter.NativeLibrarySHA256 = strings.Repeat("ab", 32) },
+			wantErr: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

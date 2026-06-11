@@ -13,6 +13,7 @@
 package config
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -355,6 +356,12 @@ func (c *Config) Validate() error {
 	default:
 		errs = append(errs, fmt.Errorf("rewriter.engine %q is invalid (want %q or %q)",
 			c.Rewriter.Engine, rewriter.EngineGRPC, rewriter.EngineNative))
+	}
+
+	if s := c.Rewriter.NativeLibrarySHA256; s != "" {
+		if raw, err := hex.DecodeString(s); err != nil || len(raw) != 32 {
+			errs = append(errs, fmt.Errorf("rewriter.native_library_sha256 must be 64 hex chars, got %q", s))
+		}
 	}
 
 	if joined := errors.Join(errs...); joined != nil {

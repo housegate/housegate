@@ -70,6 +70,9 @@ func Fetch(ctx context.Context, opts Options) (string, error) {
 	if opts.Tag == "" {
 		return "", fmt.Errorf("ffifetch: release tag is required")
 	}
+	if strings.ContainsAny(opts.Tag, `/\`) || opts.Tag == ".." || strings.Contains(opts.Tag, "..") {
+		return "", fmt.Errorf("ffifetch: release tag %q must be a bare tag name (no path separators)", opts.Tag)
+	}
 	if opts.SHA256 != "" {
 		if raw, err := hex.DecodeString(opts.SHA256); err != nil || len(raw) != sha256.Size {
 			return "", fmt.Errorf("ffifetch: sha256 pin must be 64 hex chars")

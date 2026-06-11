@@ -32,4 +32,22 @@ type Config struct {
 	// for the native engine. Empty falls back to the
 	// POLYGLOT_SQL_FFI_PATH env var, then standard install locations.
 	NativeLibraryPath string `json:"native_library_path" yaml:"native_library_path"`
+
+	// NativeLibraryRelease names a rewriter-go release tag (e.g. "v0.2.0")
+	// to fetch the FFI library from when the native engine is selected and
+	// NativeLibraryPath is empty. The library is cached under the user
+	// cache dir and downloaded only on miss; fetch failure disables
+	// rewriting (fail-open), like any other backend-unavailable case.
+	NativeLibraryRelease string `json:"native_library_release" yaml:"native_library_release"`
+
+	// NativeLibrarySHA256 optionally pins the library's sha256 (64 hex
+	// chars). Verified against cached copies too; mismatch re-downloads
+	// once, then fails. Without a pin, the release's SHA256SUMS asset is
+	// used when present (TLS-only warning otherwise).
+	NativeLibrarySHA256 string `json:"native_library_sha256" yaml:"native_library_sha256"`
+
+	// NativeLibraryReleaseBaseURL overrides the download root (default:
+	// rewriter-go's GitHub releases) for mirrors / internal artifact
+	// servers. URL shape: <base>/<tag>/<asset>.
+	NativeLibraryReleaseBaseURL string `json:"native_library_release_base_url" yaml:"native_library_release_base_url"`
 }
