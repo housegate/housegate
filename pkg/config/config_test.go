@@ -375,6 +375,44 @@ func TestConfigValidate(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name:        "rewriter_engine_invalid",
+			cfg:         baseServer,
+			mutate:      func(c *Config) { c.Rewriter.Engine = "carrier-pigeon" },
+			wantErr:     true,
+			wantContain: []string{"rewriter.engine"},
+		},
+		{
+			name:    "rewriter_engine_grpc_explicit_ok",
+			cfg:     baseServer,
+			mutate:  func(c *Config) { c.Rewriter.Engine = "grpc" },
+			wantErr: false,
+		},
+		{
+			name:    "rewriter_engine_native_ok",
+			cfg:     baseServer,
+			mutate:  func(c *Config) { c.Rewriter.Engine = "native" },
+			wantErr: false,
+		},
+		{
+			name:    "rewriter_engine_empty_ok",
+			cfg:     baseServer,
+			mutate:  func(c *Config) { c.Rewriter.Engine = "" },
+			wantErr: false,
+		},
+		{
+			name:        "rewriter_engine_invalid_agent_mode",
+			cfg:         baseAgent,
+			mutate:      func(c *Config) { c.Rewriter.Engine = "carrier-pigeon" },
+			wantErr:     true,
+			wantContain: []string{"rewriter.engine"},
+		},
+		{
+			name:    "rewriter_engine_native_ok_agent_mode",
+			cfg:     baseAgent,
+			mutate:  func(c *Config) { c.Rewriter.Engine = "native" },
+			wantErr: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

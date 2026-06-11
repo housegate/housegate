@@ -21,4 +21,15 @@ type Config struct {
 	// Delimiter is the character used to separate logical database names
 	// in the rewriter's output. Defaults to ".".
 	Delimiter string `json:"delimiter" yaml:"delimiter"`
+
+	// Engine selects the rewriter implementation: "grpc" (default, also
+	// the empty value) calls the external sql-rewriter service at
+	// ServiceAddr; "native" runs the in-process rewriter-go engine and
+	// ignores ServiceAddr.
+	Engine string `json:"engine" yaml:"engine"`
+
+	// NativeLibraryPath is the path to libpolyglot_sql_ffi.{so,dylib}
+	// for the native engine. Empty falls back to the
+	// POLYGLOT_SQL_FFI_PATH env var, then standard install locations.
+	NativeLibraryPath string `json:"native_library_path" yaml:"native_library_path"`
 }

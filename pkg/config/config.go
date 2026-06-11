@@ -36,6 +36,7 @@ import (
 	"housegate/housegate/pkg/plugins/rewrite"
 	"housegate/housegate/pkg/plugins/sessionstate"
 	"housegate/housegate/pkg/plugins/usage"
+	"housegate/housegate/pkg/rewriter"
 )
 
 // Duration is re-exported from cfgtypes so existing callers that
@@ -344,6 +345,16 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// Engine validity is mode-independent — both server and agent can
+	// configure a non-default engine for test or migration purposes.
+	switch c.Rewriter.Engine {
+	case "", rewriter.EngineGRPC, rewriter.EngineNative:
+		// ok
+	default:
+		errs = append(errs, fmt.Errorf("rewriter.engine %q is invalid (want %q or %q)",
+			c.Rewriter.Engine, rewriter.EngineGRPC, rewriter.EngineNative))
+	}
+
 	if joined := errors.Join(errs...); joined != nil {
 		return fmt.Errorf("invalid config (mode=%s):\n%w", c.Mode(), joined)
 	}
@@ -408,6 +419,7 @@ func Default() Config {
 		Rewriter: rewrite.Config{
 			ServiceAddr: EnvOrDefault("HOUSEGATE_REWRITER_ADDR", "localhost:50051"),
 			Timeout:     Duration{5 * time.Second},
+			Engine:      EnvOrDefault("HOUSEGATE_REWRITER_ENGINE", ""),
 		},
 		Agent: agent.Config{
 			Mode:          EnvOrDefault("HOUSEGATE_AGENT", "") == "true",

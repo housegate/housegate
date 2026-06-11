@@ -53,7 +53,7 @@ type Plugin struct {
 	PhysicalDatabase string
 
 	// Observer is optional — when nil, timing is not emitted. The
-	// gRPC call is timed regardless of success/failure so operators
+	// rewrite call is timed regardless of success/failure so operators
 	// can see fail-open latency on the same histogram.
 	Observer Observer
 

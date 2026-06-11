@@ -38,6 +38,7 @@ go_test(
     deps = [
         "//pkg/network",
         "//pkg/registry",
+        "//pkg/sqlmeta",
         "@com_github_housegate_rewriter_go//gen/pb",
     ],
 )
