@@ -26,7 +26,9 @@
   },
 
   "rewriter": {
+    "engine": "grpc",
     "service_addr": "",
+    "native_library_path": "",
     "timeout": "5s",
     "physical_database": "testnet"
   },

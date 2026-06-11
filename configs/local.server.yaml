@@ -37,9 +37,14 @@ auth:
 # physical_database is the single real ClickHouse DB that hosts every
 # logical DB; the rewrite plugin uses it both as the database_map
 # target value and as the wire-level hello.Database substitution.
+# engine selects the backend: grpc (external sql-rewriter at
+# service_addr, default) or native (in-process rewriter-go via the
+# polyglot FFI lib; ignores service_addr).
 rewriter:
   enabled: true
+  engine: grpc
   service_addr: "localhost:50051"
+  # native_library_path: /path/to/libpolyglot_sql_ffi.dylib  # native only; empty → POLYGLOT_SQL_FFI_PATH env, then system paths
   timeout: "5s"
   physical_database: testnet
   delimiter: "."
