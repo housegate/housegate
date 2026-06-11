@@ -13,17 +13,13 @@ import (
 
 	"housegate/housegate/pkg/log"
 
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/keepalive"
-
+	pb "github.com/housegate/rewriter-go/gen/pb"
 	"housegate/housegate/pkg/cluster"
 	"housegate/housegate/pkg/credentials"
 	"housegate/housegate/pkg/peer"
 	"housegate/housegate/pkg/registry"
 	"housegate/housegate/pkg/route"
 	"housegate/housegate/pkg/sqlmeta"
-	pb "github.com/housegate/rewriter-go/gen/pb"
 )
 
 // statementTypeFromProto narrows the protobuf enum to the
@@ -99,19 +95,20 @@ func privilegesDeltasFromProto(in []*pb.PrivilegeDelta) []sqlmeta.PrivilegeDelta
 }
 
 // SentioNetworkFactory is the production Factory implementation. It
-// owns the gRPC connection to the sql-rewriter service and the
-// long-lived references the per-connection Rewriters need
+// owns the shared rewrite backend (gRPC client to the sql-rewriter
+// service or the in-process rewriter-go engine, per Options.Engine) and
+// the long-lived references the per-connection Rewriters need
 // (NetworkState, callback addr, and optional cluster manager /
 // credential provider).
 //
-// Construction dials the rewriter service synchronously and fails
-// fast if it cannot connect — the proxy treats a missing rewriter as
-// "rewriting disabled" rather than continuing to retry forever.
+// Construction builds the configured backend synchronously — dialing
+// the gRPC service or loading the native FFI library — and fails fast
+// either way; the proxy treats a missing rewriter as "rewriting
+// disabled" rather than continuing to retry forever.
 type SentioNetworkFactory struct {
 	options      Options
 	registry     registry.Registry
-	grpcConn     *grpc.ClientConn
-	grpcClient   pb.RewriterServiceClient
+	backend      backend                        // transport: grpc service or in-process rewriter-go
 	callbackAddr string                         // resolved address for remote() callback
 	clusterMgr   cluster.Cluster                // optional, for multi-replica isLocal detection
 	credProvider credentials.CredentialProvider // optional, for remote() credential replacement
@@ -136,43 +133,22 @@ type SentioNetworkFactory struct {
 // generous (high-leak risk) or not enough (very long pipeline waits).
 const peerLoginTokenTTL = 1 * time.Minute
 
-// NewSentioNetworkFactory dials the sql-rewriter gRPC service and
-// returns a Factory that produces per-connection Rewriters.
+// NewSentioNetworkFactory constructs the configured rewrite backend
+// (gRPC dial or native FFI load, per Options.Engine) and returns a
+// Factory that produces per-connection Rewriters.
 func NewSentioNetworkFactory(opts Options, reg registry.Registry) (*SentioNetworkFactory, error) {
-	if opts.ServiceAddr == "" {
-		return nil, fmt.Errorf("rewriter service_addr is required when rewriter is enabled")
-	}
-
 	callbackAddr := resolveCallbackAddr(opts.CallbackAddr, opts.Upstream, opts.Listen)
 	log.Infow("resolved remote() callback address", "addr", callbackAddr)
 
-	kaParams := keepalive.ClientParameters{
-		Time:                30 * time.Second,
-		Timeout:             5 * time.Second,
-		PermitWithoutStream: true,
-	}
-	connectTimeout := opts.Timeout
-	if connectTimeout == 0 {
-		connectTimeout = 10 * time.Second
-	}
-	connectCtx, connectCancel := context.WithTimeout(context.Background(), connectTimeout)
-	defer connectCancel()
-
-	conn, err := grpc.DialContext(connectCtx, opts.ServiceAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithKeepaliveParams(kaParams),
-		grpc.WithBlock(),
-	)
+	be, err := newBackend(opts)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to rewriter service at %s: %w", opts.ServiceAddr, err)
+		return nil, err
 	}
-	log.Infow("connected to rewriter service", "service_addr", opts.ServiceAddr)
 
 	return &SentioNetworkFactory{
 		options:      opts,
 		registry:     reg,
-		grpcConn:     conn,
-		grpcClient:   pb.NewRewriterServiceClient(conn),
+		backend:      be,
 		callbackAddr: callbackAddr,
 	}, nil
 }
@@ -239,13 +215,14 @@ func (f *SentioNetworkFactory) NewRewriter(sess Session) Rewriter {
 	return &sentioRewriter{factory: f, sess: sess}
 }
 
-// Close tears down the underlying gRPC connection. Safe to call
-// multiple times.
+// Close tears down the shared rewrite backend. Per-connection
+// Rewriters share that backend, so Close on the factory ends rewriting
+// for all of them. Safe to call multiple times.
 func (f *SentioNetworkFactory) Close() error {
-	if f.grpcConn == nil {
+	if f.backend == nil {
 		return nil
 	}
-	return f.grpcConn.Close()
+	return f.backend.Close()
 }
 
 // sentioRewriter is the per-connection Rewriter. It is intentionally
@@ -438,7 +415,7 @@ func (r *sentioRewriter) RewriteErrorMessage(ctx context.Context, message string
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	resp, err := r.factory.grpcClient.RewriteErrorMessage(ctxWithTimeout, req)
+	resp, err := r.factory.backend.RewriteErrorMessage(ctxWithTimeout, req)
 	if err != nil {
 		return message, fmt.Errorf("RewriteErrorMessage: %w", err)
 	}
@@ -449,7 +426,7 @@ func (r *sentioRewriter) RewriteErrorMessage(ctx context.Context, message string
 	return resp.ErrorAfterRewrite, nil
 }
 
-// callWithTimeout wraps the gRPC Rewrite call with the configured
+// callWithTimeout wraps the backend Rewrite call with the configured
 // per-call timeout.
 func (r *sentioRewriter) callWithTimeout(ctx context.Context, req *pb.RewriteSQLRequest) (*pb.RewriteSQLResponse, error) {
 	timeout := r.factory.options.Timeout
@@ -458,7 +435,7 @@ func (r *sentioRewriter) callWithTimeout(ctx context.Context, req *pb.RewriteSQL
 	}
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	return r.factory.grpcClient.Rewrite(ctxWithTimeout, req)
+	return r.factory.backend.Rewrite(ctxWithTimeout, req)
 }
 
 // resolveRemoteCredentials returns the (user, password) pair the

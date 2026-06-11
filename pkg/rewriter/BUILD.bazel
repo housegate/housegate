@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "aliases.go",
         "args.go",
+        "backend.go",
         "sentio.go",
         "types.go",
     ],
@@ -19,6 +20,7 @@ go_library(
         "//pkg/registry",
         "//pkg/route",
         "//pkg/sqlmeta",
+        "@com_github_housegate_rewriter_go//:rewriter-go",
         "@com_github_housegate_rewriter_go//gen/pb",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//credentials/insecure",
@@ -28,10 +30,14 @@ go_library(
 
 go_test(
     name = "rewriter_test",
-    srcs = ["sentio_test.go"],
+    srcs = [
+        "backend_test.go",
+        "sentio_test.go",
+    ],
     embed = [":rewriter"],
     deps = [
         "//pkg/network",
         "//pkg/registry",
+        "@com_github_housegate_rewriter_go//gen/pb",
     ],
 )

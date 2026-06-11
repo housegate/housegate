@@ -203,8 +203,19 @@ type Session interface {
 // proxy bits (Listen, Upstream) needed for callback-address
 // resolution.
 type Options struct {
-	Enabled      bool          // whether to enable rewriting at all
-	ServiceAddr  string        // sql-rewriter gRPC address
+	Enabled     bool   // whether to enable rewriting at all
+	ServiceAddr string // sql-rewriter gRPC address
+
+	// Engine selects the rewrite backend: EngineGRPC ("" included) calls
+	// the external sql-rewriter service at ServiceAddr; EngineNative runs
+	// the in-process rewriter-go engine and ignores ServiceAddr.
+	Engine string
+
+	// NativeLibraryPath locates libpolyglot_sql_ffi.{so,dylib} for the
+	// native engine. Empty falls back to the POLYGLOT_SQL_FFI_PATH env
+	// var, then polyglot's standard install locations. Unused by grpc.
+	NativeLibraryPath string
+
 	Upstream     string        // upstream ClickHouse address (drives local/remote detection)
 	CallbackAddr string        // address to render in remote() calls (defaults to Listen when empty)
 	Listen       string        // proxy listen address (used for remote() callback)
