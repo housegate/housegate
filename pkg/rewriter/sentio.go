@@ -218,6 +218,9 @@ func (f *SentioNetworkFactory) NewRewriter(sess Session) Rewriter {
 // Close tears down the shared rewrite backend. Per-connection
 // Rewriters share that backend, so Close on the factory ends rewriting
 // for all of them. Safe to call multiple times.
+// In-flight calls racing Close surface as Rewrite errors that the
+// rewrite plugin's fail-open path absorbs (under native they appear as
+// Code=SyntaxError rejections — see rewriter-go's Service.Close).
 func (f *SentioNetworkFactory) Close() error {
 	if f.backend == nil {
 		return nil

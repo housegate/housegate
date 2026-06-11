@@ -26,6 +26,10 @@ const (
 // contract; sentioRewriter cannot tell them apart. All per-session logic
 // (dynamic args, USE mirroring, the fail-open code trichotomy) lives
 // above this seam and is shared by both implementations.
+// The ctx deadline is fully honored by the grpc implementation; under
+// the native engine it is advisory — an FFI call cannot be interrupted
+// mid-flight, but calls are local and fast, so deadlines effectively
+// never fire there.
 type backend interface {
 	Rewrite(ctx context.Context, req *pb.RewriteSQLRequest) (*pb.RewriteSQLResponse, error)
 	RewriteErrorMessage(ctx context.Context, req *pb.RewriteErrorMessageRequest) (*pb.RewriteErrorMessageResponse, error)
