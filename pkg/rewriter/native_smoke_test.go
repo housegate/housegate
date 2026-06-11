@@ -48,8 +48,8 @@ func TestNativeEngineSmoke(t *testing.T) {
 		t.Errorf("StatementType = %v, want SELECT (%v)", res.StatementType, sqlmeta.StatementTypeSelect)
 	}
 	// The native engine resolves db1.t into the physical database; the
-	// physical table half is the dotted, backtick-quoted logical name
-	// (phys.`db1.t`), NOT an underscore join.
+	// physical table half is the dotted, double-quoted logical name
+	// (phys."db1.t"), NOT an underscore join.
 	if !strings.Contains(res.SQL, "phys.") {
 		t.Errorf("SQL = %q, want it moved into the physical database", res.SQL)
 	}
