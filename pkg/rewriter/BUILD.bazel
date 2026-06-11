@@ -32,6 +32,7 @@ go_test(
     name = "rewriter_test",
     srcs = [
         "backend_test.go",
+        "native_smoke_test.go",
         "sentio_test.go",
     ],
     embed = [":rewriter"],
