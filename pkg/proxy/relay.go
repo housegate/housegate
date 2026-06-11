@@ -295,6 +295,11 @@ func (r *Relay) Run(ctx context.Context) error {
 // plugin chain; everything else is spliced through unchanged.
 func (r *Relay) clientToUpstream(ctx context.Context) error {
 	client := r.sess.Client()
+	// curQctx is the QueryContext of the most recent successfully
+	// forwarded Query — Data packets that follow belong to it. It is the
+	// context handed to OnClientData; nil means "no query owns the data"
+	// (rejected query, or data before any query) and the hook is skipped.
+	var curQctx *plugin.QueryContext
 	for {
 		up := r.sess.Upstream() // atomic: picks up rebinds (future C3)
 		if up == nil {
@@ -341,6 +346,7 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 				"sql_len", len(q.Body),
 				"settings", len(q.Settings),
 			)
+			curQctx = nil
 			if err := r.hooks.OnQuery(ctx, qctx); err != nil {
 				r.writeExceptionToClient(ctx, err)
 				// Chain rejected the query — its lifecycle ends here.
@@ -399,7 +405,20 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 				"query_id", q.ID,
 				"upstream", upstreamAddr(up),
 			)
+			curQctx = qctx
 			continue
+		}
+
+		// Data packets belong to the most recent forwarded query; hand
+		// the raw bytes to DataPlugins before splicing. Fail-open: a
+		// hook error must never take down the connection.
+		if pkt.Type == uint64(chproto.ClientDataCode) {
+			if err := r.hooks.OnClientData(ctx, curQctx, pkt.Raw); err != nil {
+				logger.Warnw("client data hook failed (fail-open)",
+					"raw_len", pkt.RawLen,
+					"err", err,
+				)
+			}
 		}
 
 		// Splice any non-decoded / decode-failed packet.

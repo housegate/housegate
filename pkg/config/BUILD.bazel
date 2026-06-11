@@ -13,6 +13,7 @@ go_library(
         "//pkg/plugins/auth",
         "//pkg/plugins/concurrency",
         "//pkg/plugins/indexing_usage",
+        "//pkg/plugins/lthash",
         "//pkg/plugins/rewrite",
         "//pkg/plugins/sessionstate",
         "//pkg/plugins/usage",

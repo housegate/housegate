@@ -34,6 +34,7 @@ import (
 	"housegate/housegate/pkg/plugins/concurrency"
 	indexingusage "housegate/housegate/pkg/plugins/indexing_usage"
 	"housegate/housegate/pkg/plugins/rewrite"
+	lthashplugin "housegate/housegate/pkg/plugins/lthash"
 	"housegate/housegate/pkg/plugins/sessionstate"
 	"housegate/housegate/pkg/plugins/usage"
 	"housegate/housegate/pkg/rewriter"
@@ -137,6 +138,7 @@ type Config struct {
 	IndexingUsage    indexingusage.Config `json:"indexing_usage"    yaml:"indexing_usage"`
 	ConcurrencyLimit concurrency.Config   `json:"concurrency_limit" yaml:"concurrency_limit"`
 	State            sessionstate.Config  `json:"state"             yaml:"state"`
+	LtHash           lthashplugin.Config  `json:"lthash"            yaml:"lthash"`
 
 	// --- Plumbing sections owned by pkg/config ---
 

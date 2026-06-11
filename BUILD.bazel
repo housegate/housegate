@@ -37,6 +37,7 @@ go_library(
         "//pkg/plugins/credential",
         "//pkg/plugins/forward",
         "//pkg/plugins/indexing_usage",
+        "//pkg/plugins/lthash",
         "//pkg/plugins/metrics",
         "//pkg/plugins/rewrite",
         "//pkg/plugins/route",
