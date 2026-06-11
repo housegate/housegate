@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_test(
+    name = "ffifetch_test",
+    srcs = ["ffifetch_test.go"],
+    embed = [":ffifetch"],
+)
+
+go_library(
+    name = "ffifetch",
+    srcs = ["ffifetch.go"],
+    importpath = "housegate/housegate/pkg/ffifetch",
+    visibility = ["//visibility:public"],
+    deps = ["//pkg/log"],
+)
