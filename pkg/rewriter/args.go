@@ -1,7 +1,7 @@
 package rewriter
 
 import (
-	pb "housegate/housegate/protos"
+	pb "github.com/housegate/rewriter-go/gen/pb"
 )
 
 // buildDynamicArgs builds RewriteTableDynamicArgs.

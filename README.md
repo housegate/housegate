@@ -129,19 +129,23 @@ HOUSEGATE_AGE_IDENTITY_FILE=~/.housegate.age \
 | `auth.max_token_age` | duration | No | `1m` | Maximum age of the JWS `iat` claim |
 | `auth.allow_no_auth` | bool | No | `false` | Let unsigned queries through (for soft rollouts) |
 
-### `rewriter` — External SQL Rewriter gRPC Service
+### `rewriter` — SQL Rewriter (gRPC service or in-process engine)
 
-The rewriter is the canonical owner of physical/logical database mapping. Every SQL statement on a connection passes through it. Highlights:
+The rewriter is the canonical owner of physical/logical database mapping. Every SQL statement on a connection passes through it. The backend is selected by `rewriter.engine`: `grpc` (default) calls the external `sql-rewriter` service; `native` runs the in-process rewriter-go engine via FFI. Highlights:
 
-- **Two-phase Rewrite.** Phase 1 calls the gRPC service with empty options to get back the AST-parsed accessed table names. Phase 2 builds `RewriteTableForSelectStmtArgs` (sentio-network table-name resolution via `SentioNetworkTableMapper`) and `RewriteTableForDynamicArgs` (auth-filtered `database_map`, plus `remote_upstreams` for logicals bound to other indexers) and re-calls the rewriter.
+- **Two-phase Rewrite.** Phase 1 calls the rewriter backend with empty options to get back the AST-parsed accessed table names. Phase 2 builds `RewriteTableForSelectStmtArgs` (sentio-network table-name resolution via `SentioNetworkTableMapper`) and `RewriteTableForDynamicArgs` (auth-filtered `database_map`, plus `remote_upstreams` for logicals bound to other indexers) and re-calls the rewriter.
 - **Permission-aware `database_map`.** Only databases the connection's account has read/write/admin permission on appear; tables in inaccessible databases are not addressable.
-- **Fail-open.** A gRPC error or `UnsupportedStatement` falls back to the original SQL with a debug log; rewriter flakiness never blocks queries.
+- **Fail-open.** A backend error or `UnsupportedStatement` falls back to the original SQL with a debug log; rewriter flakiness never blocks queries.
 - **Error reverse-mapping.** When upstream returns an `Exception` referring to rewritten table/database names, the same per-connection Rewriter re-maps the message back via `RewriteErrorMessage`.
 - **wire-level `hello.Database` rewrite.** `OnHello` substitutes `hello.Database` with `rewriter.physical_database`; the user-typed value is preserved in `SessionState.LogicalDatabase`.
 
 | Key | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
 | `rewriter.service_addr` | string | No | `localhost:50051` | `sql-rewriter` gRPC address |
+| `rewriter.engine` | string | No | `grpc` | `grpc` — external sql-rewriter service (default); `native` — in-process rewriter-go engine (ignores `service_addr`) |
+| `rewriter.native_library_path` | string | No | `` | Path to `libpolyglot_sql_ffi.{so,dylib}` (native engine only; empty → `POLYGLOT_SQL_FFI_PATH` env, then system paths) |
+| `rewriter.native_library_release` | string | No | `` | rewriter-go release tag to auto-fetch the FFI lib from (native only; cached under the user cache dir; `native_library_path` wins; also overridable via `rewriter.native_library_release_base_url` for mirrors) |
+| `rewriter.native_library_sha256` | string | No | `` | Optional sha256 pin for the fetched library (64 hex); without it the release's `SHA256SUMS` asset is checked when present |
 | `rewriter.timeout` | duration | No | `5s` | Per-call gRPC timeout |
 | `rewriter.physical_database` | string | No | `` | The single physical ClickHouse database that hosts every logical database in this deployment. Empty disables both `database_map` and the `hello.Database` substitution |
 | `rewriter.delimiter` | string | No | `_` | Separator inserted between `<logical>` and `<original_table>` |
@@ -291,7 +295,7 @@ metrics listening    addr=:9091
 
 ### 1.1 Relay Mode
 
-Server-mode proxy. Terminates client TCP, validates JWS auth, rewrites SQL via the `sql-rewriter` gRPC service, and forwards to local ClickHouse replicas. **Requires** `network_state.source` and `ckh_manager_config_path`.
+Server-mode proxy. Terminates client TCP, validates JWS auth, rewrites SQL via the configured rewriter backend (`sql-rewriter` gRPC service or in-process native engine), and forwards to local ClickHouse replicas. **Requires** `network_state.source` and `ckh_manager_config_path`.
 
 Minimal config (no auth, single upstream):
 

@@ -17,6 +17,7 @@ import (
 	"housegate/housegate/pkg/cluster"
 	"housegate/housegate/pkg/config"
 	"housegate/housegate/pkg/credentials"
+	"housegate/housegate/pkg/ffifetch"
 	"housegate/housegate/pkg/log"
 	"housegate/housegate/pkg/network"
 	"housegate/housegate/pkg/plugin"
@@ -74,10 +75,11 @@ func loadNetworkState(cfg *config.Config, rf *redisFactory) (registry.Registry, 
 	return nil, fmt.Errorf("network_state.source %q is not a YAML or RPC source; in-process Redis is no longer supported — embedders must inject NetworkState via Options.NetworkState (e.g. sentio-node)", cfg.NetworkState.Source)
 }
 
-// buildRewriterFactory constructs the SQL rewriter factory that dials
-// the external sql-rewriter gRPC service. Returns nil (and logs a
-// warning) when the rewriter service is unavailable at startup — the
-// relay path tolerates a nil factory by skipping rewriting entirely.
+// buildRewriterFactory constructs the SQL rewriter factory for the
+// configured engine — dialing the external sql-rewriter gRPC service or
+// loading the in-process rewriter-go engine. Returns nil (and logs a
+// warning) when the backend is unavailable at startup — the relay path
+// tolerates a nil factory by skipping rewriting entirely.
 func buildRewriterFactory(cfg *config.Config, reg registry.Registry) rewriter.Factory {
 	// Router-only deployments (no shard, no upstream) never invoke the
 	// rewriter — every session gets forwarded to a peer instead.
@@ -86,16 +88,37 @@ func buildRewriterFactory(cfg *config.Config, reg registry.Registry) rewriter.Fa
 		return nil
 	}
 
+	// native_library_release: resolve the FFI library from a rewriter-go
+	// release before constructing the factory. Explicit NativeLibraryPath
+	// wins; fetch failure keeps the warn-and-disable fail-open posture.
+	nativeLibPath := cfg.Rewriter.NativeLibraryPath
+	if cfg.Rewriter.Engine == rewriter.EngineNative && nativeLibPath == "" && cfg.Rewriter.NativeLibraryRelease != "" {
+		p, err := ffifetch.Fetch(context.Background(), ffifetch.Options{
+			Tag:     cfg.Rewriter.NativeLibraryRelease,
+			SHA256:  cfg.Rewriter.NativeLibrarySHA256,
+			BaseURL: cfg.Rewriter.NativeLibraryReleaseBaseURL,
+		})
+		if err != nil {
+			log.Warne(err, "failed to fetch native rewriter library, rewriting disabled")
+			return nil
+		}
+		log.Infow("native rewriter library resolved from release",
+			"tag", cfg.Rewriter.NativeLibraryRelease, "path", p)
+		nativeLibPath = p
+	}
+
 	rwConfig := rewriter.Options{
-		Enabled:          true,
-		ServiceAddr:      cfg.Rewriter.ServiceAddr,
-		Upstream:         cfg.Upstream,
-		Listen:           cfg.Listen,
-		CallbackAddr:     cfg.CallbackUrl,
-		Timeout:          cfg.Rewriter.Timeout.Duration,
-		PhysicalDatabase: cfg.Rewriter.PhysicalDatabase,
-		AuthEnabled:      cfg.Auth.Enabled,
-		Delim:            cfg.Rewriter.Delimiter,
+		Enabled:           true,
+		ServiceAddr:       cfg.Rewriter.ServiceAddr,
+		Engine:            cfg.Rewriter.Engine,
+		NativeLibraryPath: nativeLibPath,
+		Upstream:          cfg.Upstream,
+		Listen:            cfg.Listen,
+		CallbackAddr:      cfg.CallbackUrl,
+		Timeout:           cfg.Rewriter.Timeout.Duration,
+		PhysicalDatabase:  cfg.Rewriter.PhysicalDatabase,
+		AuthEnabled:       cfg.Auth.Enabled,
+		Delim:             cfg.Rewriter.Delimiter,
 	}
 	rwf, err := rewriter.NewSentioNetworkFactory(rwConfig, reg)
 	if err != nil {
@@ -103,6 +126,7 @@ func buildRewriterFactory(cfg *config.Config, reg registry.Registry) rewriter.Fa
 		return nil
 	}
 	log.Infow("SQL rewriter enabled",
+		"engine", cfg.Rewriter.Engine,
 		"service_addr", cfg.Rewriter.ServiceAddr,
 		"upstream", cfg.Upstream,
 		"physical_database", cfg.Rewriter.PhysicalDatabase,

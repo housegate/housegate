@@ -26,6 +26,7 @@ go_library(
         "//pkg/cluster",
         "//pkg/config",
         "//pkg/credentials",
+        "//pkg/ffifetch",
         "//pkg/log",
         "//pkg/metrics",
         "//pkg/network",
