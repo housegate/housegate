@@ -10,7 +10,7 @@ bazel_dep(name = "protobuf", version = "35.0")
 bazel_dep(name = "rules_multirun", version = "0.13.0")
 bazel_dep(name = "aspect_bazel_lib", version = "2.22.5")
 bazel_dep(name = "bazel_skylib", version = "1.9.0")
-bazel_dep(name = "rules_oci", version = "2.3.0")
+bazel_dep(name = "rules_img", version = "0.3.11")
 
 # Bazel 9 removed native sh_binary; //bazel:docker needs rules_shell in the graph.
 bazel_dep(name = "rules_shell", version = "0.8.0")
@@ -56,46 +56,44 @@ register_toolchains(
     # with the auto-detected Apple clang via cc_toolchain_resolution.
 )
 
-PLATFORMS = [
-    "linux/amd64",
-]
+pull = use_repo_rule("@rules_img//img:pull.bzl", "pull")
 
-oci = use_extension("@rules_oci//oci:extensions.bzl", "oci")
-oci.pull(
+pull(
     name = "go_base_image",
-    image = "gcr.io/distroless/base",
-    platforms = PLATFORMS,
+    digest = "sha256:4e148a2af43caee0cbc72bc7705244d62be0d222749327e07f9d26edccd672db",
+    registry = "gcr.io",
+    repository = "distroless/base",
     tag = "debug",
 )
-use_repo(oci, "go_base_image")
 
-oci.pull(
+pull(
     name = "python_base_image",
-    image = "ghcr.io/sentioxyz/python",
-    platforms = PLATFORMS,
+    digest = "sha256:9a206c6b9777feaaab0d9a0b6dbce42d486b1cb5547d8332e0858055e49a4107",
+    registry = "ghcr.io",
+    repository = "sentioxyz/python",
     tag = "3.10-1.4.0",
 )
-use_repo(oci, "python_base_image")
 
-oci.pull(
+pull(
     name = "node_base_image",
-    image = "ghcr.io/sentioxyz/node",
-    platforms = PLATFORMS,
+    digest = "sha256:bffb0517adcc1085795845bf67bfd9322eb4e582cffa1473258b26ab8c3e81ef",
+    registry = "ghcr.io",
+    repository = "sentioxyz/node",
     tag = "24-1.4.2",
 )
-use_repo(oci, "node_base_image")
 
-oci.pull(
+pull(
     name = "clickhouse_client_image",
-    image = "docker.io/clickhouse/clickhouse-server",
-    platforms = PLATFORMS,
+    digest = "sha256:2b7ea7d7c4aab60536233658c601d72c322d480818e9b9a902efe57594bdc4ce",
+    registry = "index.docker.io",
+    repository = "clickhouse/clickhouse-server",
     tag = "head-alpine",
 )
-use_repo(oci, "clickhouse_client_image", "clickhouse_client_image_linux_amd64", "go_base_image_linux_amd64", "move_base_image", "move_base_image_linux_amd64", "node_base_image_linux_amd64", "python_base_image_linux_amd64")
 
-oci.pull(
+pull(
     name = "move_base_image",
-    image = "docker.io/google/cloud-sdk",
-    platforms = PLATFORMS,
+    digest = "sha256:3f4d691f17e3ce856ef23d7a9a1a9f2c4576344dc49f83f4f1377713f984b720",
+    registry = "index.docker.io",
+    repository = "google/cloud-sdk",
     tag = "slim",
 )
