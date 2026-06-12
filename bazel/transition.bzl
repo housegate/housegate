@@ -1,4 +1,4 @@
-"a rule transitioning an oci_image to multiple platforms"
+"a rule transitioning an image target to multiple platforms"
 
 def _multiarch_transition(settings, attr):
     return [
