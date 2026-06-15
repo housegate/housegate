@@ -2,6 +2,7 @@ services:
   clickhouse-1:
     image: clickhouse/clickhouse-server:25.9
     ports:
+      - "9000:9000/tcp"
       - "9011:9000/tcp"
       - "8123:8123/tcp"
     volumes:
