@@ -197,7 +197,7 @@ L3Block {
 
 签名必须在同一条 statement envelope 中覆盖 INSERT payload。v1 中把 payload hash 链到下一条 statement 的想法降级为 detection-only fallback，因为它无法清晰处理最后一条 statement、disconnects 和 delayed commitments。P1 中，agent 侧可以 buffer 或 spool INSERT Data blocks，直到 `payload_hash` 已知，再携带 signed envelope 转发 Query + Data。后续 streaming optimization 可以使用 out-of-band final `StatementCommit` message，但 Keeper 在同语句 payload signature 存在且有效之前，不得接受 part registration。
 
-`part_phys_hash` 证明 fetched bytes 的 identity。`part_row_lthash` 证明 logical content。两者都需要：fraudulent part 也可以对自己的坏字节拥有有效 physical hash。
+`part_phys_hash` 证明 fetched bytes 的 identity。`part_row_lthash` 是关于 logical content 的 compact claim，也有助于定位争议，但 JSON-heavy v1 不能在 claimed root 被 quorum replay 或 challenge replay 独立复现前，把它当作忠实 INSERT execution 的证明。Fraudulent part 可以对自己的坏字节拥有有效 physical hash，fraudulent source 也可以为错误物化值注册一个自洽的 logical hash。
 
 ## 7. 两道遏制环
 
@@ -209,21 +209,21 @@ Keeper raft group 前面的 validation module 只在满足以下条件时准许 
 
 - **Statement linkage：** part 映射到已知 L3 blocks 中的已知 statement envelopes。首选候选仍然是注入 `insert_deduplication_token = <statement_seq>`，但 v2 也记录了嵌入 `statement_seq` 的 row IDs，为审计者提供另一层 linkage surface。
 - **Signature validity：** 每个 statement envelope 都有有效的 `user_jws_v2`，覆盖 client-side fields(SQL hash、settings hash、payload hash、payload length、target table、`statement_id`)，且 anchored `statement_id -> statement_seq` binding 一致。
-- **Payload-derived delta：** 对 INSERT payloads，validation front 独立解码 L3 Data blocks，分配 / 校验 row IDs，求值准入的 partition key expression，canonicalize rows，并计算期望的 per-partition LtHash deltas。
-- **Registration arithmetic：** 每个 `(statement_seq, partition_id)` 的 registered part lthashes 之和等于 payload-derived delta；partition commitments 严格按这些 deltas 演进。
+- **Payload availability and claim shape：** 对 INSERT payloads，validation front 校验 L3 block 携带 signed payload reference，以及 replay 所需的 schema/settings snapshot、payload hash/length、target table 和 previous safe root。对 scalar whitelisted profiles，它也可以直接计算 payload-derived deltas；但在 JSON-heavy v1 中，这个 delta 是等待 replay 复现的 claim，不是 safety proof。
+- **Registration arithmetic：** 每个 `(statement_seq, partition_id)` 的 registered part lthashes 必须与 source claimed root 和 partition ledger 内部一致。这能提前拒绝 malformed 或 unlinked registrations，但本身不足以让 part 变成 safe。
 - **Merge/mutation rules：** §8 与 §9。
 
 直接写 ClickHouse 会产生没有 signed statement envelope、也没有 valid statement linkage 的 part，因此 registration 在进入 `/log` 前被拒绝。Native replication 永远不会传播它。
 
-### Ring 2 - Replica byte-side verification 与 safe 边界
+### Ring 2 - Replica replay、byte-side localization 与 safe 边界
 
-Ring 1 检查的是 claims；如果 compromised source 为不同 bytes 注册了看似真实的 lthash，bytes 仍可能说谎。因此每个 replica 在 natively fetching 一个 part 后，都要从该 part 的实际 rows 重算 row lthash，并与 L3-anchored `part_row_lthash` 比对。
+Ring 1 检查的是 claims；如果 compromised source 为错误物化值忠实注册了一个 root，execution 仍可能说谎。因此 JSON-heavy v1 把 source 的 part/root registration 视为 unsafe，直到 quorum 在 pinned executor 上独立重新执行 signed L3 payload，并对同一个 root 作证。Fetched parts 的 byte-side scans 仍然重要：它们证明 replica 下载的 bytes 支撑其 attested root，把争议定位到 part，并抓住传输或存储损坏。但它们不是唯一的 INSERT correctness proof。
 
 ```
-safe = L1-finalized AND Ring-1-valid AND enough Ring-2 verification / attestations
+safe = L1-finalized AND Ring-1-valid AND (quorum-reproduced-root OR challenge-won-root)
 ```
 
-v1 中，“enough” 可以是 operationally centralized：validation front 同步检查，replicas 上报 mismatches。后续 decentralized path 中，replicas 提交 signed attestations，`safe` 需要 quorum。两种模式下，坏 part 可能作为 bytes 物理复制出去，但它不能跨过 `safe`、不能 merge、对 `safe` reads 不可见，并由处理 L2 reorgs 的同一条 unsafe-part cleanup path 丢弃。
+v1 中，Keeper 仍然可以 operationally centralized，但 execution result 不能因为 source 注册了就被信任。中心化组件负责编排 attestation collection 和 challenge replay；它不替代 root 的独立复现。后续 decentralized path 中，同一组 attestations 会变成 on-chain / economic evidence。两种模式下，坏 part 可能作为 bytes 物理复制出去，但它不能跨过 `safe`、不能 merge、对 `safe` reads 不可见，并由处理 L2 reorgs 的同一条 unsafe-part cleanup path 丢弃。
 
 Merge eligibility 必须以 `safe` 为硬谓词，不能用 part age 近似。Age 可以是 scheduler hint，但不能成为 safety rule。
 
@@ -232,31 +232,32 @@ Merge eligibility 必须以 `safe` 为硬谓词，不能用 part age 近似。Ag
 | 检查 | 内容 | 成本 | 抓什么 | 执行处 |
 |---|---|---|---|---|
 | Identity check | fetched part bytes match `part_phys_hash` | download hash | 传输中替换 / 损坏 | 原生 ReplicatedMergeTree(已有) |
-| Content check | payload-derived row-instance lthash == registered `part_row_lthash` == actual part rows 的 lthash | decode + hash，无 SQL execution | 伪造 / 篡改 / 删除 / 重复的 rows；说谎的 registrations | validation front(claim side)+ 每个 replica(byte side) |
+| Claim check | statement linkage、signature、payload reference、candidate root shape，以及 part/partition ledger arithmetic | metadata + optional decode/hash | direct writes、malformed registrations、impossible arithmetic | validation front，在 `/log` admission 前 |
+| Replay check | 对 anchored pre-state 重新执行 signed L3 payload 或 mutation，并比对 roots | 正比 block 或 touched data | 不忠实的 INSERT materialization、JSON/default/type drift、UPDATE/DELETE/DDL fraud | replica quorum；争议时由 challenge reference executor 执行 |
+| Byte/localization check | fetched part rows hash to the root a replica attests to | 对 fetched parts 做 row scan | corrupted/substituted bytes；争议定位 | 每个 attesting replica 与 challenge tooling |
 | Merge check | ledger equation: sum(lthash(outputs)) == sum(lthash(inputs)) | ledger arithmetic + 一次 row scan | merge 中编辑、删除、复制或注入 rows | validation front + re-merging replicas |
-| Replay check | mutation re-execution against the anchored delta | 正比 touched data(罕见) | 不忠实的 UPDATE/DELETE/DDL execution | 原生即所有 replicas(ReplicatedMergeTree 本来就 re-executes mutations)；commitment 仲裁 |
 
 升级路径内建：极度怀疑的一方可以从 genesis replay 整条 L3 stream。完整 state-machine replication 是 anchored log 免费支持的退化模式。
 
 ### 执行成本模型——哪些路径跑 SQL
 
-阶梯有一个值得说破的性质，因为它就是整个设计的成本论证：**只有 mutation 路径重新执行 SQL。** INSERT 校验解码签名 payload 并哈希——不执行，因为插入的行已经物化在 payload 里。Merge 校验对副本反正要拉的 part 扫行哈希——不执行，只验多重集保持等式。只有 UPDATE/DELETE 迫使副本跑那条语句，因为它的新值是 `f(pre-state, statement)`，在算出来之前哪里都不存在。
+此前的成本论证说 **只有 mutation 路径重新执行 SQL**。这对 JSON-heavy v1 已不成立。对 native JSON、Map/Tuple、DEFAULT/MATERIALIZED columns、text formats 和 server-side expression evaluation 来说，signed wire payload 与 stored logical value 之间的关系本身就是需要验证的对象。因此 v1 的权威检查是 executor equivalence：quorum 在 pinned ClickHouse build/settings/schema snapshot 上重新执行 signed L3 payload，并复现同一个 root。
 
-三点让这条路径有界。**(1) 它不是额外的活。** native ReplicatedMergeTree 本来就在每个副本重新执行每条 mutation（mutation 靠重新执行复制，不靠拉 part）——校验层复用这个结果，只在它之上多加一次哈希扫描；增量是哈希，不是第二次执行。**(2) 它是局部化的 replay，不是方案 A。** 方案 A 要 replay *全量历史的每一条语句*；这里 replay 收窄到罕见的 mutation 切片、且只在它触碰的 parts 上，从不碰 append-only 的 INSERT 流——而它需要的确定性 ClickHouse 已经强制（`allow_nondeterministic_mutations=0`）。**(3) LtHash 是比较工具，不是执行的替代。** 是它让 INSERT 路径完全跳过执行（期望值直接从 payload 哈希出来），也是它把 mutation 后的比较从逐行 SELECT diff 压成一次 O(1) 的承诺比对。即便执行无法避免，*校验*其结果仍然便宜。
+三点让这条路径有界。**(1) Replay 是 block-local，不是 full-history。** Replicas replay 的是一条 sequenced payload block 对 previous safe root/snapshot 的影响，不是整个数据库历史。**(2) Mutations 仍然复用 native ClickHouse behavior。** ReplicatedMergeTree 本来就在 replicas 上重新执行 mutations；验证层新增的是 root computation 和 attestation，不是第二套 logical mutation path。**(3) LtHash/Merkle roots 仍是 comparison tools。** 它们把结果比较压缩成 root，并帮助定位争议；但当争议点是 ClickHouse materialization 本身时，它们不是 execution 的替代。
 
-一条划界以免混淆：这里的“跑 SQL”指写路径的 mutation 重新执行——native 复制本来就在做的活。它与读路径的 SELECT 查询无关；本层完全不验证用户查询结果（query attestation 是显式 non-goal）。
+一条划界以免混淆：write-path replay 与读路径 SELECT 查询无关。本层验证 writes 是否物化成 anchored state root；它不验证任意用户查询结果（query attestation 是显式 non-goal）。
 
 ### 如何判定作恶的副本
 
 两种对手不能混为一谈。作恶的**写者**靠多数决、对照一个可独立重算的真值来判定：它锚定 `balance=0`，quorum 个诚实副本重算出 `balance=10`，它孤身对抗多数。作恶的**副本**是更微妙的情形——它可能提交一个签名作证，声称一个诚实副本都不认同的承诺。它的判定方式相同，而这个机制值得显式写出来，因为它是整个设计拜占庭安全性的来源。
 
-**正确的承诺不是投票投出来的——它是可重算的。** 对任一 INSERT 锚定，任何一方都能把签名 payload（在 DA 上）哈希成唯一的期望承诺；对任一 mutation 锚定，任何一方都能把签名语句对照字节一致的 pre-state 重放出唯一的期望承诺。签名语句日志加公开的承诺函数，确定*唯一*答案。作证是签名的、上链的，所以“谁声称了什么”不可抵赖；判定一个副本就是把它的签名作证与那个可重算的答案比对。签名作证与可重算真值不符的副本，等于签名背书了一个任何人都能证伪的值——公开、链上的证据——于是被标记、踢出 `read_replica` 集合、（经济阶段）罚没。
+**正确的承诺不是投票投出来的——它是可重算的。** 对 scalar whitelisted INSERT profiles，任何一方都可以把 signed payload 哈希成 expected commitment；对 JSON-heavy INSERTs 和所有 mutation-class statements，任何一方都可以在 pinned executor 上，对 anchored pre-state 重放 signed L3 input，得到唯一的 expected commitment。签名语句日志加公开的承诺函数，确定*唯一*答案。作证是签名的、上链的，所以“谁声称了什么”不可抵赖；判定一个副本就是把它的签名作证与那个可重算的答案比对。签名作证与可重算真值不符的副本，等于签名背书了一个任何人都能证伪的值——公开、链上的证据——于是被标记、踢出 `read_replica` 集合、（经济阶段）罚没。
 
 这个推论比 BFT 投票更强：**真值不依赖诚实副本占多数。** quorum 提供的是*活性*——凑够诚实作证把数据推进到 `safe`。安全性来自*可重算性*：一个握有签名日志的诚实验证者，就能证伪任意多个串谋副本，因为答案是数学，不是人数。（经典 BFT 在超过 1/3 作恶时失去安全性；只要签名日志可得、承诺函数公开，本设计不会。）
 
 ## 8. INSERT 与 Data-Block Verification
 
-用户可见流程不变：signed INSERT -> HouseGate -> Keeper packs into L3 -> source SNode executes -> part registers through Ring 1 -> replicas fetch and verify through Ring 2。
+更新后的 v1 流程：signed INSERT -> HouseGate -> Keeper packs into L3 -> source SNode executes and registers unsafe parts/root -> replicas 在 pinned executor 上重新执行 signed L3 payload -> quorum attestation 或 challenge replay 把 root 提升到 `safe`。Part registration 仍然是 attribution 和 localization surface；它本身不再足以证明 INSERT materialization 忠实。
 
 v1 低估了一个实现细节：当前 housegate 解码 Query packets，但 splice Data packets。P1 必须增加：
 
@@ -267,11 +268,11 @@ v1 低估了一个实现细节：当前 housegate 解码 Query packets，但 spl
 - backpressure 与 bounded buffering，避免 hashing 不可预测地跑在 relay 前面或卡住 relay；
 - 覆盖 compressed / uncompressed Data blocks、empty Data terminators、`ClientScalar` 和 large multi-frame INSERTs 的测试。
 
-对于 INSERT VALUES / native block inserts，verification 是 payload-local：不需要 WHERE evaluation，也不需要 pre-state，但它不只是 byte hashing。Verifier 必须 decode rows，materialize admitted schema 中的 deterministic defaults，inject 或 verify `_hg_row_id`，并 evaluate admitted `PARTITION BY` expression subset。
+对于 INSERT VALUES / native block inserts，verification 仍可说是 payload-local：它不读取 mutable pre-state，但 JSON-heavy v1 通过 executor equivalence 验证。Pinned executor 会 decode rows、materialize deterministic defaults、evaluate schema 准入的 server-side expressions、inject 或 verify `_hg_row_id`，并产出 replicas 作证的 root。Pure decoder/canonicalizer 可以作为 narrow scalar profiles 的优化保留，但不是通用 safety baseline。
 
-**Schema knowledge 的来源因角色而异：** HouseGate 可以务实地读取 co-located ClickHouse(`system.tables.partition_key`、`system.columns`)，并通过事件驱动失效缓存，因为每条 DDL 都经过 proxy；本地 cache 错了也无害，因为 HouseGate 只产生 claims。Verifiers 必须从 **anchored DDL log** 推导 schema、stable IDs 和 defaults，绝不能读取被验证 operator 的 ClickHouse。由于 verifiers 不依赖 ClickHouse 来 evaluate partition key，verified tables 的 `PARTITION BY` 被 admission 限制在 verifier 已实现的 deterministic subset 中：`toYYYYMM`、`toYYYYMMDD`、`toDate`、`toStartOf*`、identity columns、`intDiv`、`modulo`。
+**Schema knowledge 的来源因角色而异：** HouseGate 可以务实地读取 co-located ClickHouse(`system.tables.partition_key`、`system.columns`)，并通过事件驱动失效缓存，因为每条 DDL 都经过 proxy；本地 cache 错了也无害，因为 HouseGate 只产生 claims。Verifiers 必须从 **anchored DDL/settings log** 推导 schema、stable IDs、defaults 和相关 settings，绝不能读取被验证 operator 的 ClickHouse。对通用 JSON-heavy path，partitioning 和 materialization 由 pinned executor 检查。Verifier-implemented `PARTITION BY` subset(`toYYYYMM`、`toYYYYMMDD`、`toDate`、`toStartOf*`、identity columns、`intDiv`、`modulo`) 仍可用于 scalar fast prechecks 和 independent ledger tooling，但它不是准入 verified tables 的唯一机制。
 
-Part attribution 发生在 registration time，不发生在 wire 上。Part name 编码 partition 和 block numbers；block-number allocation 经过 proxy；`insert_deduplication_token = <statement_seq>` 仍然是首选的精确 linkage，因为它把 statement identity 放进 ClickHouse 自己的 atomic Keeper transaction。如果一条 statement 在一个 partition 中产生多个 parts，这些 parts 的 `part_row_lthash` 之和必须等于该 statement 在该 partition 上的 payload delta。Row-to-part placement 不是 verification input。
+Part attribution 发生在 registration time，不发生在 wire 上。Part name 编码 partition 和 block numbers；block-number allocation 经过 proxy；`insert_deduplication_token = <statement_seq>` 仍然是首选的精确 linkage，因为它把 statement identity 放进 ClickHouse 自己的 atomic Keeper transaction。如果一条 statement 在一个 partition 中产生多个 parts，这些 parts 的 `part_row_lthash` 之和必须等于 source 在该 partition 上的 claimed delta，而且 quorum-replayed root 必须复现同一个 partition commitment 后，parts 才能变为 safe。Row-to-part placement 是 localization metadata，不是 source of truth。
 
 v1 中 verified tables 禁用 `async_insert`，因为它会把多条 statements 混入一个 part，削弱 part<->statement attribution。后续可以用 batch-level signed envelopes 重新评估。
 
@@ -308,9 +309,9 @@ Non-deterministic mutations 仍然禁止，除非 sequencer 在执行前把非�
 C_new = C_old + ΔC = h(r1) + h(r2) + h(r1') - h(r1) = h(r1') + h(r2)   ✓
 ```
 
-在 LtHash 视角下，UPDATE 恰好就是“减掉旧行实例、加上新行实例”——与 DELETE+INSERT 算术完全相同，这正是不需要语义 diff 的原因。重写时保留 `rid_1` 是让副本重放保持确定性的关键：row id 在 INSERT 时由签名 statement envelope 一次性派生、之后原样携带，所以独立重新执行 mutation 不可能产生不同的 id(若重新生成 id，会在各副本间分歧并引发假阳性)。验证分两级：**算术**级(所有副本，免费)确认 `C_new = C_old + ΔC` 自洽、未触碰 parts 未变——但作恶写者可以落 `balance=0` 并为它锚定一个自洽的 `ΔC`，所以这一级只证明 anchor↔parts 自洽。**重放**级(quorum)抓住作恶：每个副本握有字节一致的 pre-state(旧 part，由 native ReplicatedMergeTree 传输而来)，把受影响 part 克隆进 scratch 表，执行同一条签名语句，把结果行哈希与写者的 `parts_added` 比对。落了 `balance=0` 的写者发布的 `parts_added` 哈希对应 `balance=0`；诚实副本算出 `balance=10`；不符则扣留作证，该 mutation 永远到不了 `safe`，而矛盾(签名语句说 10、锚定 part 说 0)公开可验。这就是验证阶梯里的 Replay check——也是 mutation 单独成行、不与 INSERT 合并的原因：INSERT 的期望值在签名 payload 里(纯哈希即可),而 UPDATE 的新值是 `f(pre-state, statement)`,只能靠重新执行得到。
+在 LtHash 视角下，UPDATE 恰好就是“减掉旧行实例、加上新行实例”——与 DELETE+INSERT 算术完全相同，这正是不需要语义 diff 的原因。重写时保留 `rid_1` 是让副本重放保持确定性的关键：row id 在 INSERT 时由签名 statement envelope 一次性派生、之后原样携带，所以独立重新执行 mutation 不可能产生不同的 id(若重新生成 id，会在各副本间分歧并引发假阳性)。验证分两级：**算术**级(所有副本，免费)确认 `C_new = C_old + ΔC` 自洽、未触碰 parts 未变——但作恶写者可以落 `balance=0` 并为它锚定一个自洽的 `ΔC`，所以这一级只证明 anchor↔parts 自洽。**重放**级(quorum)抓住作恶：每个副本握有字节一致的 pre-state(旧 part，由 native ReplicatedMergeTree 传输而来)，把受影响 part 克隆进 scratch 表，执行同一条签名语句，把结果行哈希与写者的 `parts_added` 比对。落了 `balance=0` 的写者发布的 `parts_added` 哈希对应 `balance=0`；诚实副本算出 `balance=10`；不符则扣留作证，该 mutation 永远到不了 `safe`，而矛盾(签名语句说 10、锚定 part 说 0)公开可验。这就是验证阶梯里的 Replay check。它与 INSERT 的剩余区别是 pre-state：普通 INSERT 是 payload-local，可以从 signed L3 payload 加 schema/settings replay；而 UPDATE 的新值是 `f(pre-state, statement)`，必须依赖受影响的 pre-state snapshot。
 
-这一重放有真实但有界的成本。重新执行正比于 mutation 触碰的数据量——ClickHouse 重写的是整个受影响的 part，不是单行——所以 `WHERE` 命中一个小 partition 是秒级，而全表 mutation 是一次全表重写。三点让它可接受：重放复用 ReplicatedMergeTree 自己的逐副本 mutation 重新执行而非新增一遍（增量只是哈希扫描），scratch 克隆是硬链接级（`FREEZE` / `ATTACH FROM`，不复制数据），而 mutation 在 append-only 负载里罕见。真正的风险是一个大 mutation 在 scratch 重放加哈希扫描期间短暂加倍读 I/O，以及——在 v1 同步 quorum 选项下——把这段重放延迟加到客户端的 `ALTER` 上；两者都由对单条语句的 admission 规模上限兜底，大 mutation 以异步校验（在 unsafe 窗口内完成）作为退路（open question 8）。
+这一重放有真实但有界的成本。重新执行正比于 mutation 触碰的数据量——ClickHouse 重写的是整个受影响的 part，不是单行——所以 `WHERE` 命中一个小 partition 是秒级，而全表 mutation 是一次全表重写。三点让它可接受：重放复用 ReplicatedMergeTree 自己的逐副本 mutation 重新执行而非新增一遍（增量只是哈希扫描），scratch 克隆是硬链接级（`FREEZE` / `ATTACH FROM`，不复制数据），而 mutation 在 append-only 负载里罕见。更广义的 v1 风险是 large INSERT blocks 与 large mutations 都会带来 quorum replay I/O；两者都需要 admission caps、unsafe window 内的 async verification，以及明确的 ACK semantics(open question 8)。
 
 ### 9.3 DDL
 
@@ -338,37 +339,38 @@ v1 只准入 deterministic 且 block-local 的 materialized views：view SELECT 
 - 没有 `ORDER BY` 的 `INSERT ... SELECT ... LIMIT n`：任意 rows，已确认。Admission 要求显式 `ORDER BY`，否则拒绝。
 - 没有 ordering 的 `any()` / `first_value`：任意 values，已确认。在 mutation-class statements 中拒绝。
 - 非确定性 DEFAULT / MATERIALIZED columns(`created_at DateTime DEFAULT now()` 在 indexer schemas 中很常见)：该值从不经过 wire，所以 payload-derived expectations 无法预测它。v1 在 CREATE/ALTER admission 中拒绝；如果这个限制伤到真实 schemas，兼容升级是在 sequencing time 做 HouseGate-side default pinning(open question 4)。
-- Float aggregation order、ReplacingMergeTree merge timing、TTL：真实存在，但在 v1 whitelist + part-shipping path 上无关。
+- Float aggregation order、ReplacingMergeTree merge timing、TTL：真实存在，但在 v1 whitelist 加 pinned replay / merge-invariant path 上无关。
 - Background merges：字节级非确定性存在(事实 2)，但在 whitelist 上 content-preserving，由 merge check invariant 处理，不需要额外 determinism demands。
 
-结构性回答是：INSERT path 从不 re-execute，因此不需要穷举函数目录；mutation path 上，ClickHouse 自身纪律加这张短 admission list 就足够。
+结构性回答是：当 pinned executor 是 verifier 时，INSERT path 不需要靠手写 canonicalizer 穷举所有函数目录，因为 ClickHouse materialization 本身会被 replay。对 scalar fast paths 和 mutation-class statements，ClickHouse 自身纪律加这张短 admission list 仍然定义了哪些内容可以在不引入非确定性争议的情况下准入。
 
 ## 10. Safe State Machine 与 Reads
 
 ```
-Pending --pack--> Unsafe(on L2) --L1 finality AND verification--> Safe
+Pending --pack--> Unsafe(on L2) --quorum replay + finality--> Safe
                          |
-                         | L2 reorg / failed verification
+                         | L2 reorg / replay conflict / timeout
                          v
-                      Dropped
+                   Challenge / Dropped
 ```
 
-系统只有一个 state machine 和一条 drop path：reorged blocks 与 verification-failed blocks 都会 drop unsafe parts。对诚实流量，Ring 1 可以在 registration 时同步运行；Ring 2 可以在进入 `safe` 前完成，因为正常 safe timeline 中 L1 finality 占主导。
+系统只有一个 state machine 和一条 drop path：reorged blocks、replay conflicts 和 verification timeouts 都会让 parts 保持 unsafe，直到 challenge replay 复现 claimed root 或拒绝它。对诚实流量，Ring 1 可以在 registration 时同步运行，quorum replay 通常能在进入 `safe` 前完成，因为 normal safe timeline 中 finality 往往占主导。如果 replay 慢于 finality，root 就继续保持 unsafe；default reads 可以选择 L2-latest 语义，但 safe reads 与 merges 必须等待。
 
 Reads 保留两档：default reads 包含 unsafe data，语义是文档化的 L2-latest；`SETTINGS read_consistency='safe'` 过滤到 safe parts。本层给 routing 增加 per-replica safe watermarks，因此 safe reads 只路由到达到请求 watermark 的 replicas。仍在同步中的 replica 不能服务 partial safe reads。
 
 ## 11. Decentralization Path
 
-Commitment 和 evidence format 的设计使得后续只移动 verification authority：
+Commitment 和 evidence format 的设计目标是：v1 的 safety rule 不变，后续只去中心化 authority 与 economic consequences：
 
-| | v1(centralized Keeper front) | Later decentralized Keeper |
+| | JSON-heavy v1 | Later decentralized Keeper |
 |---|---|---|
-| Ring 1 authority | Sentio-run Keeper validation front | 每个 keeper replica 都验证；一致性锚定到 L2 |
-| Ring 2 authority | replicas 向 ops 上报 mismatches | replicas 提交 signed attestations；safe 需要 quorum |
-| Dispute evidence | operational bundle | signed statement envelope + payload bytes/hash + part bytes/hash + row-lthash recomputation transcript |
+| Sequencing / admission authority | Sentio-run Keeper validation front 检查 signatures、payload references、linkage 和 claim shape | 每个 keeper replica 都验证；一致性锚定到 L2 |
+| Execution verification | 配置的 replica quorum 重新执行 signed L3 payload 或 mutation，并提交 attestations | independent replicas/keepers 提交 signed attestations；safe 仍需要 quorum |
+| Safe rule | finalized + quorum-reproduced root，或 challenge-won root | 相同规则，但带 on-chain/economic enforcement |
+| Dispute evidence | operational bundle，包含 signed statement envelope、payload bytes/hash、schema/settings snapshot、pre-state root、pinned executor identity、claimed/attested roots 和 replay transcript | 同一 evidence 变成 slashable challenge material |
 | Economic teeth | 无，trusted operator phase | staking/slashing 参数在本文档之外 |
 
-LtHash 不提供 inclusion proofs。因此 challenge 不是一个很小的 Merkle branch，而是围绕一个 block payload 和一个或多个 parts 的 localized data challenge。这仍然是分钟级工作量，而不是 full-history replay，并且是 v2 economics 所需的正确 evidence shape。
+LtHash 不提供 inclusion proofs，而且已经被否决的 part-side design 不应该继续塑造 challenge interface。因此 challenge 不是一个很小的 Merkle branch，也不只是 “part bytes versus part hash”；它是针对一个 sequenced block 或 mutation、基于 pinned pre-state 的 deterministic replay package。Part bytes 和 row-lthash transcripts 仍可用于定位 source 或 attester 在哪里分歧，但裁决点是 claimed root 是否可复现。
 
 Self-rescue path 从第一天就存在：任何一方可以从 genesis replay L3 stream，重建 row IDs 和 commitments，并与任意 peer 的 safe parts 比对。
 
@@ -377,10 +379,10 @@ Self-rescue path 从第一天就存在：任何一方可以从 genesis replay L3
 | # | Scenario | Outcome |
 |---|---|---|
 | 1 | Operator 直接写自己的 ClickHouse | Part 没有 valid signed statement envelope / statement linkage，所以 Ring 1 拒绝 registration；它永远不会进入 `/log`。 |
-| 2 | Source 把签名的 `balance=10` 执行成 `balance=0` | Payload-derived row-instance lthash 与 part 的 actual row lthash 不同；Ring 2 拒绝 safe，对 mutation-class statements 来说 mutation replay 也会不一致。 |
-| 3 | Source 为 tampered bytes 注册看似真实的 lthash | Ring 1 可能通过 claim arithmetic；replica byte-side scan 失败。 |
+| 2 | Source 把签名的 `balance=10` 执行成 `balance=0` | Quorum replay signed L3 input 会复现 `balance=10` root，因此 source claimed root 不能进入 `safe`；需要时 challenge replay 产出公开证据。 |
+| 3 | Source 为 tampered bytes 注册看似真实的 lthash | Ring 1 可能通过 claim arithmetic；quorum replay 与 source root 不一致，或 byte/localization scans 显示 fetched parts 不支撑 attested root。 |
 | 4 | Duplicate-row collision attempt | 重复的 user rows 拥有不同 `_hg_row_id`，所以多次加入同一 visible row 不会多次加入同一个 LtHash element。`2^16` lane cancellation 和 equal-size duplicate-swap variant 都失效。 |
-| 5 | Malicious merge 编辑 / 删除 / 复制 / 注入 rows | Ledger equation 或 output byte-side scan 失败。 |
+| 5 | Malicious merge 编辑 / 删除 / 复制 / 注入 rows | Ledger equation、replayed root 或 output byte/localization scan 失败。 |
 | 6 | Statement censorship | Statement 从未出现在 L3；agent read-back 发现 missing receipt 并重试。这是 liveness，不是 safety。 |
 | 7 | Keeper front 在 v1 中作恶 | 超出 v1 threat model；L2 anchoring 让输出可审计，后续路径把 authority 移交给 quorum。 |
 | 8 | Replica 服务 unsafe/bad data | Safe reads 按 watermark 路由并排除它；default reads 携带 L2-latest 语义。 |
@@ -397,11 +399,11 @@ Self-rescue path 从第一天就存在：任何一方可以从 genesis replay L3
 ## 14. 交付阶段与 Spikes
 
 - **P0 - Commitment safety spec freeze。** 定稿 row ID format、reserved column name、column/table ID allocation、canonical type encodings、default/DDL neutrality rules、`statement_id` uniqueness scoping 和 `JWSPayloadV2`。任何 production rollout 前先添加 test vectors。
-- **P1 - HouseGate / agent signature and Data-block pipeline。** Agent same-statement payload signing；Query/Data buffering 或 commit protocol；relay `ClientDataBlockPlugin`；native block decompression/decoding；`_hg_row_id` injection；row canonicalization；partition expression evaluator；throughput benchmark。先 fail-open rollout 并测量 mismatch rate。
-- **P2 - Keeper validation front。** L3 schema extension、statement/part linkage、payload-derived delta checks、partition ledger、direct-write rejection 和 registration error surfaces。
-- **P3 - Replica byte-side verification and safe gating。** Post-fetch row scan、signed 或 operational attestations、safe = finalized + verified、per-replica safe watermarks、safe read routing。
+- **P1 - HouseGate / agent signature and payload capture pipeline。** Agent same-statement payload signing；Query/Data buffering 或 commit protocol；relay `ClientDataBlockPlugin`；用于 payload availability 与 optional fast checks 的 native block decompression/decoding；`_hg_row_id` injection；pinned executor harness；throughput benchmark。先 fail-open rollout 并测量 mismatch rate。
+- **P2 - Keeper validation front and unsafe registration。** L3 schema extension、statement/part linkage、payload reference checks、candidate-root/partition ledger claim checks、direct-write rejection、replay job creation 和 registration error surfaces。
+- **P3 - Quorum re-execution and safe gating。** Replicas 在 pinned executor 上 replay signed L3 payloads/mutations，提交 signed 或 operational attestations；mismatch/timeout 时打开 challenge；safe = finalized + reproduced；per-replica safe watermarks；safe read routing。
 - **P4 - Mutation / DDL / materialized view completeness。** Sequencing barriers、mutation arbitration、exact DDL admission、materialized-view survey 和 allowed subset。
-- **P5 - Decentralized attestations and challenge game。** Quorum-based safe、challenge evidence packaging、staking hooks，按 Keeper-decentralization schedule 推进。
+- **P5 - Economic decentralization and slashing。** 把已经定义的 quorum attestations 与 challenge replay 移入 decentralized Keeper governance，定稿 staking/slashing parameters，以及 challenge adjudication windows 和 penalties。
 
 ## 15. Open Questions
 
@@ -412,8 +414,8 @@ Self-rescue path 从第一天就存在：任何一方可以从 genesis replay L3
 5. **Partition expression evaluator：** 精确 admitted function subset，以及与 ClickHouse 对齐的 test vectors。
 6. **Part<->statement linkage：** 对照 ClickHouse source 验证 `insert_deduplication_token` Keeper node shape，并决定 fallback side channel。
 7. **Partition cardinality：** per-partition 2KB accumulators 的存储和 block-size 成本；如果每表数千 partitions 变常见，则考虑 commitment-of-commitments。
-8. **Mutation I/O ceiling：** heavy mutations 的 admission size caps 和 synchronous quorum settings。
-9. **Challenge size：** 由于 LtHash 没有 inclusion proofs，需要明确 part-byte evidence 的 on-chain/off-chain split。
+8. **Quorum replay I/O and latency ceiling：** large INSERT blocks、JSON-heavy payloads 和 heavy mutations 的 admission size caps、async verification policy，以及 synchronous ACK settings。
+9. **Challenge replay evidence size：** signed payloads、schema/settings snapshots、pre-state references、pinned executor identity、claimed/attested roots、replay transcripts，以及 optional part-byte localization evidence 的 on-chain/off-chain split。
 10. **Cross-region latency：** central Keeper RTT 可能在 INSERT 中可见；litepaper 的 cross-region replica 目标可能需要 region-local keeper shards。
 11. **Row-id storage overhead：** 每行 32 个不可压缩字节；P0/P1 在代表性 indexer tables 上测量 compressed-size impact，并以结构化整数替代方案(§16)作为实测需要时的记录退路。
 12. **`statement_id` uniqueness scope(现在是安全攸关)：** 按 user、按 table 还是 global。**`statement_id` 绝不能回收**——因为 row_id = `H(… || statement_id || global_row_ordinal)`(§5.2)，复用的 `statement_id` 会让 row_id 相撞、复活重复行 LtHash 抵消攻击，所以有限 dedup 窗口不安全。据此确定唯一性范围与(永久)retention / 幂等语义。

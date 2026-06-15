@@ -197,7 +197,7 @@ L3Block {
 
 The signature must cover the INSERT payload in the same statement envelope. The v1 idea of chaining a payload hash into the next statement is demoted to a detection-only fallback because it leaves the final statement, disconnects, and delayed commitments ambiguous. For P1, the agent side may buffer or spool INSERT Data blocks until `payload_hash` is known, then forward the Query + Data with the signed envelope. A streaming optimization may later use an out-of-band final `StatementCommit` message, but Keeper must not accept part registration until the same-statement payload signature is present and valid.
 
-`part_phys_hash` proves identity of fetched bytes. `part_row_lthash` proves logical content. Both are required: a fraudulent part can have a valid physical hash for its own bytes.
+`part_phys_hash` proves identity of fetched bytes. `part_row_lthash` is a compact claim about logical content and a useful localization handle, but JSON-heavy v1 must not treat it as proof of faithful INSERT execution until the claimed root is independently reproduced by quorum replay or challenge replay. A fraudulent part can have a valid physical hash for its own bytes, and a fraudulent source can register a self-consistent logical hash for the wrong materialized value.
 
 ## 7. Two Containment Rings
 
@@ -209,21 +209,21 @@ A validation module in front of the Keeper raft group admits a part registration
 
 - **Statement linkage:** the part maps to known statement envelopes in known L3 blocks. The leading candidate remains `insert_deduplication_token = <statement_seq>` injection, but v2 also records row IDs that embed `statement_seq`, giving auditors another linkage surface.
 - **Signature validity:** each statement envelope has a valid `user_jws_v2` over the client-side fields (SQL hash, settings hash, payload hash, payload length, target table, `statement_id`), and the anchored `statement_id -> statement_seq` binding is consistent.
-- **Payload-derived delta:** for INSERT payloads, the validation front independently decodes the L3 Data blocks, assigns / verifies row IDs, evaluates the admitted partition key expression, canonicalizes rows, and computes expected per-partition LtHash deltas.
-- **Registration arithmetic:** the sum of registered part lthashes for each `(statement_seq, partition_id)` equals the payload-derived delta; partition commitments advance exactly by those deltas.
+- **Payload availability and claim shape:** for INSERT payloads, the validation front verifies that the L3 block carries the signed payload reference and enough metadata to replay it: schema/settings snapshot, payload hash/length, target table, and previous safe root. For scalar whitelisted profiles it may also compute payload-derived deltas directly; for JSON-heavy v1, that delta is a claim to be reproduced by replay, not the safety proof.
+- **Registration arithmetic:** registered part lthashes for each `(statement_seq, partition_id)` must be internally consistent with the source's claimed root and partition ledger. This rejects malformed or unlinked registrations early, but it does not by itself make the part safe.
 - **Merge/mutation rules:** §8 and §9.
 
 A direct write into ClickHouse produces a part with no signed statement envelope and no valid statement linkage, so registration is rejected before it enters `/log`. Native replication never propagates it.
 
-### Ring 2 - Replica byte-side verification and safe boundary
+### Ring 2 - Replica replay, byte-side localization, and safe boundary
 
-Ring 1 checks claims; bytes can still lie if a compromised source registers a truthful-looking lthash for different bytes. Therefore every replica, after natively fetching a part, recomputes row lthash from the actual rows in that part and compares it with the L3-anchored `part_row_lthash`.
+Ring 1 checks claims; execution can still lie if a compromised source faithfully registers a root for the wrong materialized value. Therefore JSON-heavy v1 treats the source's part/root registration as unsafe until a quorum independently re-executes the signed L3 payload on a pinned executor and attests to the same root. Byte-side scans of fetched parts still matter: they prove that the bytes a replica downloaded match the root it is attesting to, localize disputes to parts, and catch transport or storage corruption. They are not the sole INSERT correctness proof.
 
 ```
-safe = L1-finalized AND Ring-1-valid AND enough Ring-2 verification / attestations
+safe = L1-finalized AND Ring-1-valid AND (quorum-reproduced-root OR challenge-won-root)
 ```
 
-In v1, "enough" can be operationally centralized: the validation front checks synchronously and replicas report mismatches. In the later decentralized path, replicas submit signed attestations and `safe` requires quorum. In both modes, a bad part may physically replicate, but it cannot cross `safe`, cannot merge, is invisible to `safe` reads, and is dropped by the same unsafe-part cleanup path used for L2 reorgs.
+In v1, Keeper can still be operationally centralized, but the execution result is not trusted merely because the source registered it. The centralized component orchestrates attestation collection and challenge replay; it does not replace independent reproduction of the root. In the later decentralized path, the same attestations become on-chain/economic evidence. In both modes, a bad part may physically replicate, but it cannot cross `safe`, cannot merge, is invisible to `safe` reads, and is dropped by the same unsafe-part cleanup path used for L2 reorgs.
 
 Merge eligibility must be gated by `safe` as a hard predicate, not by part age. Age can be a scheduler hint, but it cannot be the safety rule.
 
@@ -232,31 +232,32 @@ Merge eligibility must be gated by `safe` as a hard predicate, not by part age. 
 | Check | What | Cost | Catches | Runs at |
 |---|---|---|---|---|
 | Identity check | fetched part bytes match `part_phys_hash` | hash of download | substitution/corruption in transit | native ReplicatedMergeTree (already exists) |
-| Content check | payload-derived row-instance lthash == registered `part_row_lthash` == lthash of actual part rows | decode + hash, no SQL execution | fabricated / altered / dropped / duplicated rows; lying registrations | validation front (claim side) + every replica (byte side) |
+| Claim check | statement linkage, signature, payload reference, candidate root shape, and part/partition ledger arithmetic | metadata + optional decode/hash | direct writes, malformed registrations, impossible arithmetic | validation front before `/log` admission |
+| Replay check | re-execute the signed L3 payload or mutation against the anchored pre-state and compare roots | proportional to block or touched data | unfaithful INSERT materialization, JSON/default/type drift, UPDATE/DELETE/DDL fraud | replica quorum; challenge reference executor on dispute |
+| Byte/localization check | fetched part rows hash to the root a replica attests to | row scan over fetched parts | corrupted/substituted bytes; dispute localization | every attesting replica and challenge tooling |
 | Merge check | ledger equation: sum(lthash(outputs)) == sum(lthash(inputs)) | ledger arithmetic + one row scan | rows edited, dropped, duplicated, or injected during merge | validation front + re-merging replicas |
-| Replay check | mutation re-execution against the anchored delta | proportional to data touched (rare) | unfaithful UPDATE/DELETE/DDL execution | natively all replicas (ReplicatedMergeTree re-executes mutations); the commitment arbitrates |
 
 The escalation path is built in: a maximally suspicious party can replay the full L3 stream from genesis - full state-machine replication is the degenerate mode the anchored log supports for free.
 
 ### Execution cost model — which paths run SQL
 
-The ladder has one property worth stating outright, because it is the design's entire cost argument: **only the mutation path re-executes SQL.** INSERT verification decodes the signed payload and hashes it — no execution, because the inserted rows are already materialized in the payload. Merge verification hashes the rows of a part the replica fetched anyway — no execution, just the multiset-preservation equation. Only an UPDATE/DELETE forces a replica to run the statement, because its new value is `f(pre-state, statement)` and exists nowhere until computed.
+The earlier cost argument said **only the mutation path re-executes SQL**. That is no longer true for the JSON-heavy v1 path. For native JSON, Map/Tuple, DEFAULT/MATERIALIZED columns, text formats, and server-side expression evaluation, the relationship between signed wire payload and stored logical value is part of what must be verified. The authoritative v1 check is therefore executor equivalence: a quorum re-executes the signed L3 payload on a pinned ClickHouse build/settings/schema snapshot and reproduces the same root.
 
-Three things keep that bounded. **(1) It is not added work.** Native ReplicatedMergeTree already re-executes every mutation on every replica (mutations replicate by re-execution, not by part fetch) — the verification layer reuses that result and only adds a hash scan over it; the increment is hashing, not a second execution. **(2) It is localized replay, not Plan A.** Plan A replayed *every statement over full history*; here replay is confined to the rare mutation slice and only over the parts it touches, never the append-only INSERT stream — and the determinism it needs is already enforced by ClickHouse (`allow_nondeterministic_mutations=0`). **(3) LtHash is a comparison tool, not an execution substitute.** It is what lets the INSERT path skip execution entirely (the expected value hashes straight from the payload) and what collapses the post-mutation comparison from a row-by-row SELECT diff into one O(1) commitment check. Even where execution is unavoidable, *verifying* its result stays cheap.
+Three things keep that bounded. **(1) Replay is block-local, not full-history.** Replicas replay one sequenced payload block against the previous safe root/snapshot, not the entire database history. **(2) Mutations still reuse native ClickHouse behavior.** ReplicatedMergeTree already re-executes mutations on replicas; the verification layer adds root computation and attestation, not a second logical mutation path. **(3) LtHash/Merkle roots remain comparison tools.** They collapse result comparison to a root and localize disputes, but they are not substitutes for execution when ClickHouse materialization itself is the disputed function.
 
-One scope line to avoid confusion: "runs SQL" here means write-path mutation re-execution — the work native replication already does. It is unrelated to read-path SELECT queries; this layer does not verify user query results at all (query attestation is an explicit non-goal).
+One scope line to avoid confusion: write-path replay is unrelated to read-path SELECT queries. This layer verifies that writes materialize the anchored state root; it does not verify arbitrary user query results (query attestation is an explicit non-goal).
 
 ### Judging a dishonest replica
 
 Two adversaries must not be conflated. A dishonest **writer** is judged by majority against an independently recomputable truth: it anchors `balance=0`, a quorum of honest replicas recompute `balance=10`, and it stands alone against them. A dishonest **replica** is the subtler case — it could submit a signed attestation claiming a commitment that honest replicas disagree with. It is judged the same way, and the mechanism is worth making explicit because it is the source of the whole design's Byzantine safety.
 
-**The correct commitment is not voted on — it is recomputable.** For any INSERT anchor, any party hashes the signed payload (on DA) to the unique expected commitment; for any mutation anchor, any party replays the signed statement against the byte-identical pre-state to the unique expected commitment. The signed statement log plus the public commitment function determine *one* answer. Attestations are signed and on-chain, so "who claimed what" is non-repudiable; judging a replica is comparing its signed attestation against that recomputable answer. A replica whose signed attestation disagrees with the recomputable truth has signed an endorsement of a value anyone can refute — public, on-chain evidence — and is flagged, dropped from the `read_replica` set, and (in the economic phase) slashed.
+**The correct commitment is not voted on — it is recomputable.** For scalar whitelisted INSERT profiles, any party may hash the signed payload to the expected commitment; for JSON-heavy INSERTs and all mutation-class statements, any party replays the signed L3 input against the anchored pre-state on the pinned executor to obtain the unique expected commitment. The signed statement log plus the public commitment function determine *one* answer. Attestations are signed and on-chain, so "who claimed what" is non-repudiable; judging a replica is comparing its signed attestation against that recomputable answer. A replica whose signed attestation disagrees with the recomputable truth has signed an endorsement of a value anyone can refute — public, on-chain evidence — and is flagged, dropped from the `read_replica` set, and (in the economic phase) slashed.
 
 The consequence is stronger than BFT voting: **the truth does not depend on honest replicas being a majority.** Quorum provides *liveness* — enough honest attestations to advance data to `safe`. Safety comes from *recomputability*: a single honest verifier with the signed log can refute arbitrarily many colluding replicas, because the answer is math, not headcount. (Classic BFT loses safety past a one-third fault threshold; this does not, as long as the signed log is available and the commitment function is public.)
 
 ## 8. INSERT and Data-Block Verification
 
-Unchanged user-visible flow: signed INSERT -> HouseGate -> Keeper packs into L3 -> source SNode executes -> part registers through Ring 1 -> replicas fetch and verify through Ring 2.
+Updated v1 flow: signed INSERT -> HouseGate -> Keeper packs into L3 -> source SNode executes and registers unsafe parts/root -> replicas re-execute the signed L3 payload on the pinned executor -> quorum attestation or challenge replay promotes the root to `safe`. Part registration remains the attribution and localization surface; it is no longer sufficient evidence of faithful INSERT materialization by itself.
 
 Implementation detail that v1 understated: current housegate decodes Query packets but splices Data packets. P1 must add:
 
@@ -267,11 +268,11 @@ Implementation detail that v1 understated: current housegate decodes Query packe
 - backpressure and bounded buffering so hashing cannot outrun or stall the relay unpredictably;
 - tests for compressed and uncompressed Data blocks, empty Data terminators, `ClientScalar`, and large multi-frame INSERTs.
 
-For INSERT VALUES / native block inserts, verification is "payload-local": no WHERE evaluation and no pre-state are needed, but it is not only byte hashing. The verifier must decode rows, materialize deterministic defaults that are part of the admitted schema, inject or verify `_hg_row_id`, and evaluate the admitted `PARTITION BY` expression subset.
+For INSERT VALUES / native block inserts, verification is "payload-local" in the sense that no mutable pre-state is read, but JSON-heavy v1 still verifies by executor equivalence. The pinned executor decodes rows, materializes deterministic defaults, evaluates server-side expressions admitted by the schema, injects or verifies `_hg_row_id`, and produces the root that replicas attest. A pure decoder/canonicalizer may be retained as an optimization for narrow scalar profiles, not as the general safety baseline.
 
-**Where schema knowledge comes from differs by role:** HouseGate may pragmatically read its co-located ClickHouse (`system.tables.partition_key`, `system.columns`), with event-driven invalidation since every DDL transits the proxy - and a wrong local cache is harmless because HouseGate only produces claims. Verifiers derive schema, stable IDs, and defaults from the **anchored DDL log**, never from the ClickHouse of the operator under verification. Because verifiers evaluate the partition key without a ClickHouse, admission restricts `PARTITION BY` on verified tables to a verifier-implemented deterministic subset (`toYYYYMM`, `toYYYYMMDD`, `toDate`, `toStartOf*`, identity columns, `intDiv`, `modulo`).
+**Where schema knowledge comes from differs by role:** HouseGate may pragmatically read its co-located ClickHouse (`system.tables.partition_key`, `system.columns`), with event-driven invalidation since every DDL transits the proxy - and a wrong local cache is harmless because HouseGate only produces claims. Verifiers derive schema, stable IDs, defaults, and relevant settings from the **anchored DDL/settings log**, never from the ClickHouse of the operator under verification. For the general JSON-heavy path, partitioning and materialization are checked by the pinned executor. A verifier-implemented `PARTITION BY` subset (`toYYYYMM`, `toYYYYMMDD`, `toDate`, `toStartOf*`, identity columns, `intDiv`, `modulo`) is still useful for fast scalar prechecks and independent ledger tooling, but it is not the only mechanism capable of admitting verified tables.
 
-Part attribution happens at registration time, not on the wire. A part name encodes partition and block numbers; block-number allocation transits the proxy; `insert_deduplication_token = <statement_seq>` is still the preferred exact linkage because it puts statement identity into ClickHouse's own atomic Keeper transaction. If one statement produces several parts in a partition, the sum of their `part_row_lthash` values must equal that statement's payload delta for that partition. Row-to-part placement is not a verification input.
+Part attribution happens at registration time, not on the wire. A part name encodes partition and block numbers; block-number allocation transits the proxy; `insert_deduplication_token = <statement_seq>` is still the preferred exact linkage because it puts statement identity into ClickHouse's own atomic Keeper transaction. If one statement produces several parts in a partition, the sum of their `part_row_lthash` values must equal the source's claimed delta for that partition, and the quorum-replayed root must reproduce the same partition commitment before the parts become safe. Row-to-part placement is localization metadata, not the source of truth.
 
 `async_insert` is disabled on verified tables in v1 because it mixes multiple statements into one part and weakens part<->statement attribution. It can be revisited later with batch-level signed envelopes.
 
@@ -308,9 +309,9 @@ Non-deterministic mutations remain disallowed unless the sequencer materializes 
 C_new = C_old + ΔC = h(r1) + h(r2) + h(r1') - h(r1) = h(r1') + h(r2)   ✓
 ```
 
-In the LtHash view an UPDATE is exactly "remove the old row instance, add the new one" — identical arithmetic to a DELETE+INSERT, which is why no semantic diff is required. Preserving `rid_1` across the rewrite is what keeps replica replay deterministic: the id is derived from the signed statement envelope once at INSERT time and carried through unchanged, so independently re-executing the mutation cannot produce a different id (a regenerated id would diverge per replica and raise a false mismatch). Verification has two levels: the **arithmetic** check (all replicas, free) confirms `C_new = C_old + ΔC` is self-consistent and untouched parts are unchanged — but a malicious writer can land `balance=0` and anchor a self-consistent `ΔC` for it, so this proves anchor↔parts consistency only. The **replay** check (quorum) catches the fraud: each replica holds a byte-identical pre-state (the old part, shipped by native ReplicatedMergeTree), clones the affected part into a scratch table, executes the same signed statement, and compares the resulting row hashes against the writer's `parts_added`. A writer that landed `balance=0` produces `parts_added` hashing to `balance=0`; honest replicas compute `balance=10`; the mismatch withholds attestation, the mutation never reaches `safe`, and the contradiction (signed statement says 10, anchored part says 0) is publicly checkable. This is the verification ladder's Replay check — and the reason mutations are a separate row from INSERT: an INSERT's expected value is in the signed payload (pure hashing suffices), whereas an UPDATE's new value is `f(pre-state, statement)` and can only be obtained by re-execution.
+In the LtHash view an UPDATE is exactly "remove the old row instance, add the new one" — identical arithmetic to a DELETE+INSERT, which is why no semantic diff is required. Preserving `rid_1` across the rewrite is what keeps replica replay deterministic: the id is derived from the signed statement envelope once at INSERT time and carried through unchanged, so independently re-executing the mutation cannot produce a different id (a regenerated id would diverge per replica and raise a false mismatch). Verification has two levels: the **arithmetic** check (all replicas, free) confirms `C_new = C_old + ΔC` is self-consistent and untouched parts are unchanged — but a malicious writer can land `balance=0` and anchor a self-consistent `ΔC` for it, so this proves anchor↔parts consistency only. The **replay** check (quorum) catches the fraud: each replica holds a byte-identical pre-state (the old part, shipped by native ReplicatedMergeTree), clones the affected part into a scratch table, executes the same signed statement, and compares the resulting row hashes against the writer's `parts_added`. A writer that landed `balance=0` produces `parts_added` hashing to `balance=0`; honest replicas compute `balance=10`; the mismatch withholds attestation, the mutation never reaches `safe`, and the contradiction (signed statement says 10, anchored part says 0) is publicly checkable. This is the verification ladder's Replay check. The remaining distinction from INSERT is pre-state: a normal INSERT is payload-local and can be replayed from the signed L3 payload plus schema/settings, whereas an UPDATE's new value is `f(pre-state, statement)` and requires the affected pre-state snapshot.
 
-The replay this requires has a real but bounded cost. Re-execution is proportional to the data the mutation touches — ClickHouse rewrites whole affected parts, not single rows — so a `WHERE` hitting one small partition is seconds while a full-table mutation is a full-table rewrite. Three things keep it acceptable: the replay reuses ReplicatedMergeTree's own per-replica mutation re-execution rather than adding one (the increment is just the hash scan), the scratch clone is hardlink-level (`FREEZE` / `ATTACH FROM`, no data copy), and mutations are rare in the append-only workload. The real risk is a large mutation briefly doubling read I/O during scratch replay plus hash scan, and — under the v1 synchronous-quorum option — adding that replay latency to the client's `ALTER`; both are bounded by an admission size cap per statement, with asynchronous verification (completed inside the unsafe window) as the escape hatch for large mutations (open question 8).
+The replay this requires has a real but bounded cost. Re-execution is proportional to the data the mutation touches — ClickHouse rewrites whole affected parts, not single rows — so a `WHERE` hitting one small partition is seconds while a full-table mutation is a full-table rewrite. Three things keep it acceptable: the replay reuses ReplicatedMergeTree's own per-replica mutation re-execution rather than adding one (the increment is just the hash scan), the scratch clone is hardlink-level (`FREEZE` / `ATTACH FROM`, no data copy), and mutations are rare in the append-only workload. The broader v1 risk is quorum replay I/O across both large INSERT blocks and large mutations; both need admission caps, async verification inside the unsafe window, and explicit ACK semantics (open question 8).
 
 ### 9.3 DDL
 
@@ -338,37 +339,38 @@ Materialized views are admitted in v1 only if deterministic and block-local: the
 - `INSERT ... SELECT ... LIMIT n` without `ORDER BY`: arbitrary rows - confirmed. Admission requires an explicit `ORDER BY` or rejects.
 - `any()` / `first_value` without ordering: arbitrary values - confirmed. Rejected in mutation-class statements.
 - Non-deterministic DEFAULT / MATERIALIZED columns (`created_at DateTime DEFAULT now()` is common in indexer schemas): the value never crosses the wire, so payload-derived expectations cannot predict it. v1 rejects at CREATE/ALTER admission; HouseGate-side default pinning at sequencing time is the compatibility upgrade if the restriction bites real schemas (open question 4).
-- Float aggregation order, ReplacingMergeTree merge timing, TTL: real, but irrelevant on the v1 whitelist + part-shipping path.
+- Float aggregation order, ReplacingMergeTree merge timing, TTL: real, but irrelevant on the v1 whitelist plus pinned replay / merge-invariant path.
 - Background merges: byte-level non-determinism exists (fact 2) but is content-preserving on the whitelist - handled by the merge check's invariant, not by determinism demands.
 
-The structural answer: the catalog does not need to be exhaustively enumerated for the INSERT path (never re-executed); for the mutation path, ClickHouse's own discipline plus this short admission list suffices.
+The structural answer: the catalog does not need to be exhaustively enumerated for the INSERT path when the pinned executor is the verifier, because ClickHouse materialization is replayed instead of approximated by a hand-written canonicalizer. For scalar fast paths and mutation-class statements, ClickHouse's own discipline plus this short admission list still defines what can be admitted without opening non-deterministic disputes.
 
 ## 10. Safe State Machine and Reads
 
 ```
-Pending --pack--> Unsafe(on L2) --L1 finality AND verification--> Safe
+Pending --pack--> Unsafe(on L2) --quorum replay + finality--> Safe
                          |
-                         | L2 reorg / failed verification
+                         | L2 reorg / replay conflict / timeout
                          v
-                      Dropped
+                   Challenge / Dropped
 ```
 
-There is one state machine and one drop path: reorged blocks and verification-failed blocks both drop unsafe parts. For honest traffic, Ring 1 can run synchronously at registration; Ring 2 can complete before `safe` because L1 finality dominates the normal safe timeline.
+There is one state machine and one drop path: reorged blocks, replay conflicts, and verification timeouts all keep parts unsafe until challenge replay either reproduces the claimed root or rejects it. For honest traffic, Ring 1 can run synchronously at registration, and quorum replay should complete before `safe` because finality usually dominates the normal safe timeline. If replay is slower than finality, the root simply remains unsafe; default reads may still opt into L2-latest semantics, but safe reads and merges must wait.
 
 Reads keep two levels: default reads include unsafe data with documented L2-latest semantics; `SETTINGS read_consistency='safe'` filters to safe parts. This layer adds per-replica safe watermarks to routing, so safe reads route only to replicas at or above the requested watermark. A still-syncing replica cannot serve partial safe reads.
 
 ## 11. Decentralization Path
 
-The commitment and evidence format are designed so only the verification authority moves later:
+The commitment and evidence format are designed so the v1 safety rule stays the same while the authority and economic consequences decentralize later:
 
-| | v1 (centralized Keeper front) | Later decentralized Keeper |
+| | JSON-heavy v1 | Later decentralized Keeper |
 |---|---|---|
-| Ring 1 authority | Sentio-run Keeper validation front | each keeper replica validates; consistency anchored to L2 |
-| Ring 2 authority | replicas report mismatches to ops | replicas submit signed attestations; safe requires quorum |
-| Dispute evidence | operational bundle | signed statement envelope + payload bytes/hash + part bytes/hash + row-lthash recomputation transcript |
+| Sequencing / admission authority | Sentio-run Keeper validation front checks signatures, payload references, linkage, and claim shape | each keeper replica validates; consistency anchored to L2 |
+| Execution verification | configured replica quorum re-executes the signed L3 payload or mutation and submits attestations | independent replicas/keepers submit signed attestations; safe still requires quorum |
+| Safe rule | finalized + quorum-reproduced root, or challenge-won root | same rule, with on-chain/economic enforcement |
+| Dispute evidence | operational bundle with signed statement envelope, payload bytes/hash, schema/settings snapshot, pre-state root, pinned executor identity, claimed/attested roots, and replay transcript | the same evidence becomes slashable challenge material |
 | Economic teeth | none, trusted operator phase | staking/slashing parameters outside this doc |
 
-LtHash does not provide inclusion proofs. A challenge is therefore not a tiny Merkle branch; it is a localized data challenge around one block payload and one or more parts. That is still minutes of work, not full-history replay, and it is the right evidence shape for v2 economics.
+LtHash does not provide inclusion proofs, and the rejected part-side design should not shape the challenge interface. A challenge is therefore not a tiny Merkle branch and not merely "part bytes versus part hash"; it is a deterministic replay package for one sequenced block or mutation against a pinned pre-state. Part bytes and row-lthash transcripts are still useful to localize where the source or an attester diverged, but the judgment is whether the claimed root is reproducible.
 
 The self-rescue path exists from day one: any party can replay the L3 stream from genesis, reconstruct row IDs and commitments, and compare against safe parts from any peer.
 
@@ -377,10 +379,10 @@ The self-rescue path exists from day one: any party can replay the L3 stream fro
 | # | Scenario | Outcome |
 |---|---|---|
 | 1 | Operator writes directly into its ClickHouse | Part has no valid signed statement envelope / statement linkage, so Ring 1 rejects registration; it never enters `/log`. |
-| 2 | Source executes signed `balance=10` as `balance=0` | Payload-derived row-instance lthash differs from the part's actual row lthash; Ring 2 rejects safe, and mutation replay disagrees for mutation-class statements. |
-| 3 | Source registers truthful-looking lthash for tampered bytes | Ring 1 may pass claim arithmetic; replica byte-side scan fails. |
+| 2 | Source executes signed `balance=10` as `balance=0` | Quorum replay of the signed L3 input reproduces the `balance=10` root, so the source's claimed root cannot reach `safe`; challenge replay produces public evidence if needed. |
+| 3 | Source registers truthful-looking lthash for tampered bytes | Ring 1 may pass claim arithmetic; quorum replay disagrees with the source root, or byte/localization scans show the fetched parts do not support the attested root. |
 | 4 | Duplicate-row collision attempt | Duplicate user rows have distinct `_hg_row_id` values, so adding the same visible row many times does not add the same LtHash element many times. The 2^16-lane cancellation and the equal-size duplicate-swap variant are both dead. |
-| 5 | Malicious merge edits/drops/duplicates/injects rows | Ledger equation or output byte-side scan fails. |
+| 5 | Malicious merge edits/drops/duplicates/injects rows | Ledger equation, replayed root, or output byte/localization scan fails. |
 | 6 | Statement censorship | Statement never appears in L3; agent read-back detects missing receipt and resubmits. This is liveness, not safety. |
 | 7 | Keeper front misbehaves in v1 | Out of v1 threat model; L2 anchoring makes outputs auditable and the later path moves authority to quorum. |
 | 8 | Replica serves unsafe/bad data | Safe reads route by watermark and exclude it; default reads carry L2-latest semantics. |
@@ -397,11 +399,11 @@ The self-rescue path exists from day one: any party can replay the L3 stream fro
 ## 14. Delivery Phases and Spikes
 
 - **P0 - Commitment safety spec freeze.** Finalize row ID format, reserved column name, column/table ID allocation, canonical type encodings, default/DDL neutrality rules, `statement_id` uniqueness scoping, and `JWSPayloadV2`. Add test vectors before any production rollout.
-- **P1 - HouseGate / agent signature and Data-block pipeline.** Agent same-statement payload signing; Query/Data buffering or commit protocol; relay `ClientDataBlockPlugin`; native block decompression/decoding; `_hg_row_id` injection; row canonicalization; partition expression evaluator; throughput benchmark. Roll out fail-open first and measure mismatch rate.
-- **P2 - Keeper validation front.** L3 schema extension, statement/part linkage, payload-derived delta checks, partition ledger, direct-write rejection, and registration error surfaces.
-- **P3 - Replica byte-side verification and safe gating.** Post-fetch row scan, signed or operational attestations, safe = finalized + verified, per-replica safe watermarks, safe read routing.
+- **P1 - HouseGate / agent signature and payload capture pipeline.** Agent same-statement payload signing; Query/Data buffering or commit protocol; relay `ClientDataBlockPlugin`; native block decompression/decoding for payload availability and optional fast checks; `_hg_row_id` injection; pinned executor harness; throughput benchmark. Roll out fail-open first and measure mismatch rate.
+- **P2 - Keeper validation front and unsafe registration.** L3 schema extension, statement/part linkage, payload reference checks, candidate-root/partition ledger claim checks, direct-write rejection, replay job creation, and registration error surfaces.
+- **P3 - Quorum re-execution and safe gating.** Replica replay of signed L3 payloads/mutations on the pinned executor, signed or operational attestations, challenge opening on mismatch/timeout, safe = finalized + reproduced, per-replica safe watermarks, safe read routing.
 - **P4 - Mutation / DDL / materialized view completeness.** Sequencing barriers, mutation arbitration, exact DDL admission, materialized-view survey and allowed subset.
-- **P5 - Decentralized attestations and challenge game.** Quorum-based safe, challenge evidence packaging, staking hooks on the Keeper-decentralization schedule.
+- **P5 - Economic decentralization and slashing.** Move the already-defined quorum attestations and challenge replay into decentralized Keeper governance, finalize staking/slashing parameters, and define challenge adjudication windows and penalties.
 
 ## 15. Open Questions
 
@@ -412,8 +414,8 @@ The self-rescue path exists from day one: any party can replay the L3 stream fro
 5. **Partition expression evaluator:** exact admitted function subset and test vectors against ClickHouse.
 6. **Part<->statement linkage:** verify `insert_deduplication_token` Keeper node shape against ClickHouse source and decide fallback side channel.
 7. **Partition cardinality:** storage and block-size cost of per-partition 2KB accumulators; commitment-of-commitments if thousands of partitions per table become common.
-8. **Mutation I/O ceiling:** admission size caps and synchronous quorum settings for heavy mutations.
-9. **Challenge size:** on-chain/off-chain split for part-byte evidence, since LtHash has no inclusion proofs.
+8. **Quorum replay I/O and latency ceiling:** admission size caps, async verification policy, and synchronous ACK settings for large INSERT blocks, JSON-heavy payloads, and heavy mutations.
+9. **Challenge replay evidence size:** on-chain/off-chain split for signed payloads, schema/settings snapshots, pre-state references, pinned executor identity, claimed/attested roots, replay transcripts, and optional part-byte localization evidence.
 10. **Cross-region latency:** central Keeper RTT may be visible on INSERT; region-local keeper shards may be needed for the litepaper's cross-region replica goal.
 11. **Row-id storage overhead:** 32 incompressible bytes per row; measure compressed-size impact on representative indexer tables at P0/P1, with the structured-integer alternative (§16) as the documented fallback if measurements demand.
 12. **`statement_id` uniqueness scope (now safety-critical):** per user, per table, or global. **`statement_id` must never be recycled** — since row IDs are `H(… || statement_id || global_row_ordinal)` (§5.2), a reused `statement_id` collides row IDs and resurrects the duplicate-row LtHash cancellation attack, so a finite dedup window is unsafe. Decide the uniqueness scope and the (permanent) retention / idempotency story accordingly.
