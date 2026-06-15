@@ -76,18 +76,20 @@ _hg_row_id FixedString(32)
 
 The column is part of the physical ClickHouse table and therefore part of every part and merge. Logical users do not provide it manually; HouseGate / the rewriter injects it into INSERTs and hides it from logical query surfaces where compatibility requires that. User attempts to write, update, rename, or drop `_hg_row_id` are rejected by admission.
 
-For an INSERT payload, the agent or sequencing HouseGate assigns row IDs before the source ClickHouse executes:
+For an INSERT payload, the agent computes row IDs at signing time, from values it already holds — no sequencer round-trip:
 
 ```
-row_id = BLAKE3("housegate-row-id-v1" || network_id || table_id || statement_seq || payload_chunk_index || row_ordinal_in_chunk || payload_hash)
+row_id = BLAKE3("housegate-row-id-v1" || network_id || table_id || statement_id || global_row_ordinal)
 ```
 
-The exact formula is a wire-format detail, but it must satisfy four properties: deterministic from the anchored statement record, unique within the table except with cryptographic collision probability, present in the Data block that reaches ClickHouse, and stable for the row's lifetime. Mutations preserve `_hg_row_id`; deletes remove it; merges carry it through unchanged.
+`statement_id` is the client-generated, client-signed nonce (§6); `global_row_ordinal` is the row's 0-based index in the **canonical original payload**, independent of how that payload is later split into Data-block chunks. The formula must satisfy four properties: deterministic from the anchored statement record, unique within the table except with cryptographic collision probability, present in the Data block that reaches ClickHouse, and stable for the row's lifetime. Mutations preserve `_hg_row_id`; deletes remove it; merges carry it through unchanged.
 
-Two consolidation pins on this definition:
+Pins on this definition:
 
-- **No circularity:** `payload_hash` is the hash of the **original user payload, before row-id injection**. Row IDs are derived from it and then injected; the augmented block that reaches ClickHouse is original columns + `_hg_row_id`. Any verifier reconstructs the same augmented rows from the signed original payload plus the anchored statement record.
-- **Storage cost is real and accepted:** 32 random bytes per row do not compress. A structured-integer alternative was considered and recorded in §16; the hash form is kept for design conservatism. P0/P1 must measure the actual compressed-size impact on representative tables (open question 11).
+- **No sequencer dependency (and therefore no reorg churn):** the row ID is derived only from client-signed (`statement_id`) and intra-payload (`global_row_ordinal`) data, so the agent can inject it *before* the statement is sequenced — the write path does not need a Keeper round-trip before ClickHouse executes (see the write-path ordering in §8). Because `statement_seq` is *not* an input, a re-sequencing under L2 reorg does not change any row ID. (An earlier draft fed `statement_seq || payload_chunk_index || row_ordinal_in_chunk || payload_hash` into the hash; that coupled row IDs to the sequencer and to non-canonical Data-block chunk boundaries — both couplings are removed.)
+- **`statement_id` uniqueness is load-bearing and must be permanent.** Row-instance uniqueness — the property that defeats the duplicate-row LtHash cancellation attack (§16, walkthrough #4) — now rests entirely on `statement_id` being unique within the table. It MUST therefore be globally (or per-table) unique and **never recycled**: a sliding dedup window that lets `statement_id` be reused would let two statements collide on the same row IDs and resurrect the cancellation attack. This promotes open question 12 from a tuning detail to a safety requirement.
+- **No circularity:** row IDs are derived from `statement_id` + ordinal (not from `payload_hash`), then injected; the augmented block that reaches ClickHouse is original columns + `_hg_row_id`. Any verifier reconstructs the same augmented rows from the signed original payload plus the anchored statement record.
+- **Storage cost is real and accepted:** 32 bytes per row do not compress. A structured-integer alternative is recorded in §16; the hash form is kept for design conservatism. P0/P1 must measure the actual compressed-size impact on representative tables (open question 11).
 
 This converts the commitment domain from "multiset of row values" to "set of uniquely named row instances." Duplicate user-visible rows are now distinct elements because their `_hg_row_id` values differ.
 
@@ -107,14 +109,31 @@ row_lthash = LtHash(element)
 
 `table_id` and `column_id` are stable IDs allocated in the anchored DDL log. Column names are metadata and are not part of the row hash; `RENAME COLUMN` is commitment-neutral only because `column_id` is stable. A table-wide `schema_version` is not hashed into every row, because that would make metadata-only `ADD COLUMN` change every existing row's commitment.
 
-The canonical value encoding is versioned by the `domain` string and `type_id`: integers are little-endian two's-complement at declared width; strings are raw bytes with length framing; Decimal and Date/DateTime values are encoded as their integer payloads; floats canonicalize NaN to one pattern and `-0.0` to `+0.0`; Nullable values encode an explicit null tag; LowCardinality and Enum values are expanded to logical values, not storage dictionary IDs. AggregateFunction states are excluded by the engine/type whitelist.
+The canonical value encoding is versioned by the `domain` string and `type_id`. The cardinal rule is **one logical value, three decoders**: the same logical value is canonicalized by three independent code paths — the agent/HouseGate from the signed wire payload, the Keeper validation front from the DA copy, and every replica re-scanning its stored part via `SELECT` — and all three MUST produce identical element bytes. The encoding is therefore defined over the *logical* value, never the physical/storage representation, and every type below has a single logical form all three paths map to. A type with no defined encoder is rejected at CREATE admission (default-deny), so unsupported data can never hash ambiguously.
 
-Default elision is defined over stable column IDs, not over a global schema version:
+**Scalar types.** Integers are little-endian two's-complement at declared width (8…256-bit; wide ints just widen the field). Decimal(P,S) hashes its underlying integer payload; (P,S) come from the schema, not the value. String / FixedString(N) are raw bytes with length framing (FixedString keeps all N bytes, including zero padding). Floats canonicalize NaN to one pattern and `-0.0` to `+0.0` (±Inf kept). Bool is a single tagged byte. UUID hashes the logical 16 bytes in RFC order (not ClickHouse's internal two-UInt64 byte order). IPv4 / IPv6 hash their fixed-width integer / 16-byte form. Date / Date32 / DateTime hash the absolute instant; **DateTime64 hashes the raw integer tick count, with the scale carried in `type_id`** (no lossy normalization to nanoseconds). **Enum8 / Enum16 hash the stored integer**, not the element name — the name↔int map is schema metadata, so renaming an element is commitment-neutral while remapping its integer is a (mutation-class) change.
 
-- If a column is absent from a part because it was added later and the logical value equals the anchored default for that column, the pair is omitted.
-- If an INSERT omits a column and the default is deterministic and known to the verifier, the computed default may be omitted if it equals the default value.
-- `ADD COLUMN` with a deterministic immutable default is commitment-neutral.
-- `MODIFY DEFAULT`, non-deterministic DEFAULT/MATERIALIZED expressions, `DROP COLUMN`, and `MODIFY COLUMN` type changes are not silently neutral. They are either banned in v1 or treated as commitment-affecting mutation-class operations with explicit deltas.
+**Composite types.** Nullable(T) is an explicit null tag followed, if non-null, by the inner canonical value. LowCardinality(T) hashes the logical value of T, never the storage dictionary id. Array(T) is length-framed and order-preserving, recursing into T. Tuple / Nested are encoded element-by-element in declared position (Nested decomposes into its parallel arrays); field names are metadata addressed by position / `column_id`. **Map(K,V) MUST be canonicalized by sorting entries by canonical key bytes** — ClickHouse Maps are unordered and do not dedup keys, so without a sort the same logical map hashes differently and a malicious key reorder evades detection; duplicate keys are preserved (sorted stably by key then value). Geo types reduce to their Tuple / Array(Float64) definitions.
+
+**JSON (`housegate-json-v1`).** The native ClickHouse `JSON` type is the authoritative, verified store (not a derived String). Because CH shreds JSON into typed sub-columns and does not preserve the wire bytes, the commitment is over a canonical *logical* JSON value, recomputed identically by all three decoders (the agent canonicalizes the user's JSON before signing; Ring-2 reconstructs it via `SELECT <jsoncol>` and re-canonicalizes). The canonical form:
+
+- **Objects:** members sorted by key (UTF-8 byte order), recursing into values; **duplicate keys are rejected** at canonicalization / admission; **`null`-valued members are preserved** as distinct from absent members (spike-gated — see §14).
+- **Arrays:** order-preserving, recursing.
+- **Numbers:** native JSON numbers are restricted to **integer-syntax values within signed/unsigned 64-bit range**; the canonical form is the integer. Fractional numbers, exponents, and values outside 64-bit are **rejected at admission** — the indexer MUST carry them (e.g. EVM `uint256` amounts, decimals) as JSON **strings**, which canonicalize as ordinary strings and round-trip losslessly. This removes the Float64 round-trip hazard entirely.
+- **Strings:** UTF-8 only (invalid UTF-8 rejected), minimal JSON escaping, byte-preserving; no Unicode (NFC/NFD) normalization.
+- **bool / null:** literals.
+
+The `max_dynamic_paths` / `max_dynamic_types` settings are pinned in the anchored DDL and a minimum ClickHouse version is required, so the shredding / read-back behavior the round-trip relies on is fixed (§8, §14).
+
+**Excluded types (default-deny).** AggregateFunction / SimpleAggregateFunction (opaque, version-dependent intermediate state — not a logical value; excluded by *type*, independent of engine) and Dynamic / Variant (per-row typing) are rejected at CREATE in v1. Any type without a defined encoder is likewise rejected.
+
+**Stored-vs-wire column reconciliation.** The wire payload may carry fewer columns than the materialized part, so the element is computed over the part's *stored, materialized* columns, reconciled as follows:
+
+- `ALIAS` columns are not stored and are **never hashed**.
+- `DEFAULT` / `MATERIALIZED` columns are materialized by the verifier from the anchored DDL and **included**; their defining expressions MUST be in the verifier's deterministic-evaluation whitelist (non-deterministic ones such as `DEFAULT now()` are rejected at CREATE — §9.6).
+- A partial-column INSERT has its omitted columns filled with the anchored deterministic default before hashing.
+- Default elision (over stable `column_id`, never a global schema version): a column absent from a part because it was added later, or omitted by an INSERT, whose logical value equals the anchored default, has its pair omitted — so `ADD COLUMN` with a deterministic immutable default is commitment-neutral.
+- `column_id` is stable, so `RENAME COLUMN` is commitment-neutral. `MODIFY COLUMN` type changes allocate a **new `type_id`**, and the anchored DDL log records which `type_id` is in force for which part-version, so old-type and new-type rows hash under their respective encoders. `MODIFY DEFAULT`, non-deterministic DEFAULT/MATERIALIZED, and `DROP COLUMN` are not silently neutral — banned in v1 or treated as commitment-affecting mutation-class operations with explicit deltas.
 
 ### 5.4 Part and partition commitments
 
@@ -397,12 +416,12 @@ The self-rescue path exists from day one: any party can replay the L3 stream fro
 9. **Challenge size:** on-chain/off-chain split for part-byte evidence, since LtHash has no inclusion proofs.
 10. **Cross-region latency:** central Keeper RTT may be visible on INSERT; region-local keeper shards may be needed for the litepaper's cross-region replica goal.
 11. **Row-id storage overhead:** 32 incompressible bytes per row; measure compressed-size impact on representative indexer tables at P0/P1, with the structured-integer alternative (§16) as the documented fallback if measurements demand.
-12. **`statement_id` uniqueness scope:** per user, per table, or global; dedup-window retention; interaction with retries and the idempotency semantics it provides.
+12. **`statement_id` uniqueness scope (now safety-critical):** per user, per table, or global. **`statement_id` must never be recycled** — since row IDs are `H(… || statement_id || global_row_ordinal)` (§5.2), a reused `statement_id` collides row IDs and resurrects the duplicate-row LtHash cancellation attack, so a finite dedup window is unsafe. Decide the uniqueness scope and the (permanent) retention / idempotency story accordingly.
 
 ## 16. Alternatives Considered
 
 - **Raw row-value LtHash (v1).** Rejected because duplicate ClickHouse rows can repeat the same LtHash element; 2^16 copies cancel per lane, and a count check alone is defeated by swapping equal-sized duplicate sets. Row-instance IDs are required.
-- **Structured-integer row IDs (`(statement_seq, chunk_index, row_ordinal)` packed into UInt128).** Satisfies the same four properties, is human-debuggable, and compresses to near zero under delta codecs versus 32 incompressible bytes per row. Set aside in favor of the hash form for design conservatism: the hash is self-contained (carries its own binding to the payload digest) and independent of integer-packing evolution. Revisit at P0 freeze if the open-question-11 measurements demand.
+- **Structured-integer row IDs (e.g. `(statement reference, global_row_ordinal)` packed into a fixed-width integer).** Satisfies the same uniqueness/determinism properties as the v2 hash form — which is now itself `H(… || statement_id || global_row_ordinal)` (§5.2) — is human-debuggable, and compresses to near zero under delta codecs versus 32 incompressible bytes per row. Set aside for design conservatism (the hash form is fixed-width and collision-resistant without reasoning about integer-packing ranges), but it is the leading fallback if the open-question-11 storage measurements demand. Revisit at P0 freeze.
 - **Global `schema_version` inside every row hash (v1).** Rejected because metadata-only `ADD COLUMN` would churn all existing row commitments; stable `table_id` / `column_id` plus explicit DDL rules are used instead.
 - **Payload hash chained into next statement (v1 option).** Rejected as a safety primitive because final statements and disconnects remain ambiguous. It may be useful for detection-only telemetry, not for Keeper admission.
 - **Full replay verification (rolling checksum + snapshots + 2/3 comparison).** Sound but heavyweight; the commitment scheme is its localized refinement.
@@ -417,3 +436,99 @@ The self-rescue path exists from day one: any party can replay the L3 stream fro
 - Meta Engineering, "Homomorphic hashing for secure update propagation": https://engineering.fb.com/2019/03/01/security/homomorphic-hashing/
 - ClickHouse docs, table parts and `_part`: https://clickhouse.com/docs/parts
 - ClickHouse docs, virtual columns: https://clickhouse.com/docs/engines/table-engines
+
+## Appendix A - Quorum Re-execution and Challenge Replay Addendum
+
+This appendix records the follow-up design direction for a JSON-heavy v1 where complex ClickHouse types make payload-byte hashing insufficient. The normal path uses quorum re-execution over the signed L3 payload; the safety fallback is challenge replay on a pinned reference executor. LtHash, Merkle roots, or another state-root scheme can still summarize state, but the root is treated as a claim until independently reproduced.
+
+### A.1 INSERT end-to-end flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as "User / Agent"
+    participant HG as "Ingress HouseGate"
+    participant K as "Keeper / Sequencer"
+    participant S as "Source SNode + ClickHouse"
+    participant R1 as "Replica SNode A"
+    participant R2 as "Replica SNode B"
+    participant L2 as "L2 / L1 Anchor"
+
+    U->>HG: "INSERT sql + payload"
+    HG->>HG: "auth, permission, payload_hash"
+    HG->>K: "submit StatementEnvelope(statement_id, sql_hash, payload_hash, settings)"
+    K->>K: "assign statement_seq, build L3 block"
+    K-->>HG: "sequenced block / statement_seq"
+
+    HG->>S: "execute sequenced INSERT"
+    S->>S: "materialize JSON / defaults / row ids"
+    S->>S: "write unsafe ClickHouse parts"
+    S->>K: "register candidate parts + claimed state_root"
+
+    K->>R1: "send L3 block + pre_state_root"
+    K->>R2: "send L3 block + pre_state_root"
+    R1->>R1: "re-execute INSERT on pinned ClickHouse"
+    R2->>R2: "re-execute INSERT on pinned ClickHouse"
+    R1->>K: "attest root_A"
+    R2->>K: "attest root_B"
+
+    alt "quorum roots match source claim"
+        K->>L2: "anchor L3 block hash / state_root"
+        L2-->>K: "finality reached"
+        K->>S: "mark parts safe"
+        K->>R1: "mark parts safe"
+        K->>R2: "mark parts safe"
+    else "roots mismatch or timeout"
+        K->>K: "open challenge"
+        K->>S: "keep parts unsafe / non-mergeable"
+        K->>R1: "keep parts unsafe / non-mergeable"
+        K->>R2: "keep parts unsafe / non-mergeable"
+    end
+```
+
+The execution input for replicas is the L3 block payload plus the anchored schema/settings snapshot and the previous safe root, not the source's part bytes. This is the key shift for native JSON and other complex types: ClickHouse materialization is verified by independent re-execution on a pinned executor rather than by assuming wire bytes equal stored logical values.
+
+### A.2 Unsafe-to-safe state machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> "Submitted"
+    "Submitted" --> "Sequenced": "Keeper assigns statement_seq"
+    "Sequenced" --> "SourceExecuting": "source executes block"
+    "SourceExecuting" --> "UnsafeRegistered": "parts + claimed root registered"
+
+    "UnsafeRegistered" --> "ReplicaReExecuting": "replicas receive L3 block"
+    "ReplicaReExecuting" --> "QuorumVerified": "quorum attests same root"
+    "ReplicaReExecuting" --> "RootConflict": "different roots"
+    "ReplicaReExecuting" --> "Timeout": "attestation deadline missed"
+
+    "QuorumVerified" --> "FinalityWait": "root anchored to L2/L1"
+    "FinalityWait" --> "Safe": "finality reached"
+
+    "RootConflict" --> "ChallengeReplay"
+    "Timeout" --> "ChallengeReplay"
+    "ChallengeReplay" --> "Safe": "source claim wins"
+    "ChallengeReplay" --> "Rejected": "source claim loses"
+
+    "Rejected" --> "Dropped": "drop unsafe parts"
+    "Dropped" --> [*]
+    "Safe" --> [*]
+```
+
+`UnsafeRegistered` data may serve default unsafe reads if the product wants L2-latest semantics, but it must not be eligible for safe reads or merges. `Safe` requires sequencing, matching quorum attestations, and finality. If roots conflict or attestations time out, the block remains unsafe until challenge replay decides whether the source claim is reproducible.
+
+### A.3 State semantics
+
+| State | Meaning | Safety rule |
+|---|---|---|
+| `Submitted` | The user or agent submits signed SQL and payload bytes. | Signature proves non-repudiation of input, not correct execution. |
+| `Sequenced` | Keeper assigns `statement_seq` and includes the statement in an L3 block. | The block anchors statement order, schema/settings reference, payload hash, and previous safe root. |
+| `SourceExecuting` | The selected source SNode executes the sequenced INSERT. | Produced parts are unsafe claims only. |
+| `UnsafeRegistered` | Source registers candidate parts and a claimed root. | The root is not trusted until reproduced by quorum or challenge replay. |
+| `ReplicaReExecuting` | Replicas independently execute the same L3 block on pinned ClickHouse. | Inputs are the L3 payload and anchored pre-state, not source part bytes. |
+| `QuorumVerified` | Enough replicas attest to the same root as the source claim. | This advances liveness but still waits for finality and remains challengeable until the unsafe window closes. |
+| `ChallengeReplay` | A reference executor replays the disputed block. | The reproducible root decides the dispute. |
+| `Safe` | The root is finalized and verified. | Parts can serve safe reads and become merge-eligible. |
+| `Rejected` / `Dropped` | The source claim is not reproducible or verification cannot complete. | Unsafe parts are removed; bad source/attester signatures become slashable evidence in the economic phase. |
+
+For JSON-heavy v1, this addendum implies that native JSON support should be validated by executor equivalence rather than by a bespoke JSON canonicalizer alone. The minimum pinned inputs are ClickHouse version/build, relevant settings, schema snapshot, previous safe root, and the signed L3 payload.
