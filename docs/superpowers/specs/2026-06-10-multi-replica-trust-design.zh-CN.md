@@ -560,3 +560,67 @@ stateDiagram-v2
 §5.2 的 row-id 变更(`statement_id + global_row_ordinal`，而不是 `statement_seq`)使 optimistic unsafe execution 成为可能，因为 `_hg_row_id` 不再需要在 ClickHouse 执行前等待 sequencer round-trip。这个优化不是安全模型必需的，应被同一条用于 reorg 和 verification failure 的 unsafe-part cleanup path 保护。
 
 对 JSON-heavy v1，这个补充意味着 native JSON support 应通过 executor equivalence 校验，而不是只依赖自定义 JSON canonicalizer。最小 pinned inputs 包括 ClickHouse version/build、相关 settings、schema snapshot、previous safe root 和 signed L3 payload。
+
+## Appendix B - 交叉评审的风险、未决问题，以及 `statement_id` 优化方案
+
+本附录记录把 §1–§17 + Appendix A 放到去中心化网络 + 防作恶视角下评审时浮出的承重风险，并针对其中最安全攸关的一条（`statement_id` 唯一性）给出具体优化方案。它是补充：不改 §1–§17 的架构，只把此前隐含的前提显式化，并为每条指定解决 gate。这些风险都不会击穿 two-ring 设计，但其中有几条若不被点破，会削弱文档当前对 `safe` 的 framing，因此与其埋进 §15，不如在这里集中跟踪。
+
+### B.1 风险登记表
+
+每条风险按其威胁 **safety**（坏 part 跨过 `safe`）、**liveness**（`safe` 推不上去，或客户端被审查）、还是 **裁决正确性**（争议判错）分类，并标注由哪个阶段解决。
+
+| # | 风险 | 类别 | 为什么承重 | 解决 / gate |
+|---|---|---|---|---|
+| R1 | `statement_id` 永久全局唯一性没有执行机制。§5.2/§6 依赖中心化 Keeper 在 sequencing 时拒绝重复，但这 (a) 强制 Keeper 永久持有无界的 spent-id 集合，(b) 跨 Keeper shard 无法分片，(c) 留给恶意 / 被攻陷的客户端强行制造碰撞的机会。 | **Safety** | 一个被复用的 `statement_id` 就会复活重复行 LtHash 抵消攻击(§16、走查 #4)。 | **由 §B.2 解决**(本附录)。P0 定格式，P2 落地执行。 |
+| R2 | 「可重算性 > BFT 投票」(§7) 默认所有诚实验证者跑的是*同一个 pinned binary*。pinned-ClickHouse build/settings 本身就是一个需要共识、需要演进的治理对象。 | **裁决** | source 的 build 与 challenge reference executor 版本漂移会算出一个*不同但可能更对*的 root → source 被错误判罚，*或者*一个有 bug 的 build 的物化结果被永久固化成 de-facto spec。§5.3 钉了 JSON settings，但没定义既有 `safe` parts 的版本迁移。 | 增补一个显式的「reference-executor 版本治理」小节：哪个 L3 区间对应哪个 pinned build、版本升级如何 grandfather 既有 `safe` parts、challenge 用*当时 anchored 的 build* 还是*最新 build*。属于 open question，但必须在把 §7 claim 当作无条件陈述读之前先承认。 |
+| R3 | 「可重算」预设 (a) signed L3 payload 可用(DA)，(b) 对 mutation 而言，受影响的 pre-state part 可用。两者都是被当成背景音处理的拜占庭前提。 | **Liveness / Safety** | 合谋 source 可以在自己发起的 mutation 前故意扣留某个 pre-state part，然后在 challenge 时声称「无法 replay」；SNode 可以扣留 payload。§12 走查 #10 把 replica/source 消失框定为可恢复，而不是 DA/pre-state 攻击。 | 把「DA 可用 + pre-state 可用」提升为显式的、由证据机制保证的前提(payload 走 proof-of-custody；pre-state part 由把 part 传给副本的同一条 ReplicatedMergeTree 路径保证可用，并带 challenge window)，并给 §12 增加一条 suppressed-pre-state 走查。 |
+| R4 | JSON `null`-member 保留(§5.3)是 **spike-gated** 的，但它是安全攸关的：如果 ClickHouse 的 JSON shredding 不能往返 null-vs-absent，它就直接违反 §5.3 的首要规则(「一个逻辑值，三个解码器」)。 | **裁决**(对诚实数据产生误报) | 如果 agent 在签名时保留了 null 成员，但 `SELECT <jsoncol>` 读回时丢掉了它们，诚实的 JSON 数据就会被当成作恶——而 JSON 恰恰是 v1 主导负载。 | 从 spike-gated 升级为 **P0 必须冻结的决定**，并把 canonical 形态定义为跟随 ClickHouse 实际能读回的形态(canonical 跟随存储)，而不是反过来——否则首要规则不可满足。 |
+| R5 | `MODIFY COLUMN`(§5.3/§9.3)按 part-version 分配新 `type_id`，但 §5.4/§9.1 的 partition ledger equation 是按整个 part 定义的。一次吃掉一个旧 type part 和一个新 type part 的 background merge 会产出一个*混合* part，而这个 part 内部逐行 `type_id` 寻址只是被暗示，没有被显式定义。 | **正确性** | reviewer 会在这条边界上反复来回；把它留作暗示，会招致 agent 与 replica encoder 之间的实现分歧。 | 补一个 `MODIFY COLUMN` 之后接 background merge 的算例(镜像 §9.2 的 balances 算例)，演示混合 part 的 ledger equation 通过逐行 `type_id` 成立。P4(mutation/DDL 完整性)。 |
+| R6 | v1 把中心化 Keeper 框定为「权威中心化、不是安全中心化」，但 §7 措辞(「不是 safety」)与 §12 走查 #7(「超出 v1 threat model」)模糊了这个区分。Keeper 既是 sequencing 权威，*又是*审查 / 活性单点：它可以拒绝分配 `statement_seq`、为每条 statement 挑选合谋 source、或拖延 challenge。 | **Liveness** | 走查 #6 把 statement 审查称为「liveness，不是 safety」，但对依赖 `safe` 读的应用来说，无限期 liveness 失效就是可用性攻击。 | 显式陈述：v1 的中心化是**权威**中心化(谁定序)，**不是** liveness / 抗审查已经去中心化的 claim；后者要到 P5 才到。把 §A.4 的 `safe` 推进时延保证重述为「仅 v1 / 仅中心化编排者」语义。 |
+| R7 | §11 声称去中心化「只改 authority 与 economic consequences，safety rule 不变」。这对 **safety** 成立，对 **liveness** 不成立：没有 staking/reward(推迟到 P5)，验证者没有动力跑昂贵的 replay，于是 quorum 可能永远凑不齐，`safe` 永远推不上去。 | **Liveness** | 文档的 §A.4 时延 / ACK 保证默认编排者总能凑齐 quorum；这个假设在去中心化阶段没有机制兜底。 | 在 §11 承认：去中心化阶段的 liveness 依赖尚未定义的经济层，§A.4 的 `safe` 时序保证在 P5 之前的纯去中心化部署中不成立。 |
+| R8 | Quorum replay 是 O(touched data)(§9.2、§A.4)。admission caps(open question 8) 是 DoS 面：攻击者提交大量 / 超大 JSON-heavy statement 耗尽 replay 容量，而 caps 一旦触发也会限流诚实流量，且没有「绿通道」。 | **Liveness** | v1 中 Keeper(凭权威)可以给攻击者降优先级；去中心化阶段 admission 是机械的、同样可被博弈。 | 把 admission policy 的 authority(谁定 caps、如何演进)定为被跟踪的决策而不是 impl detail；配合 per-account 公平调度，使攻击者无法饿死诚实流量。P3/quorum。 |
+| R9 | 「一个逻辑值，三个解码器」等价性(§5.3)只靠「rollout 前加 test vectors」来保证。三套独立维护的 canonicalizer(agent / Keeper / replica)跨 ClickHouse 版本保持逐字节等价，是一项沉重的持续 CI 负担，且没有描述任何 harness。 | **正确性** | 任两个 decoder 之间的静默分歧，表现要么是误报作恶，要么是漏掉作恶——两者都糟。 | 给 P0 增补一个显式的「canonical-equivalence fuzzer / 跨实现差分 harness」交付物：在同一 corpus 上跑三个 encoder，任何字节差异即 fail，按 ClickHouse 版本 pin。 |
+| R10 | 乐观 unsafe 执行(§A.4)允许 parts 在 sequencing *之前*就通过 native ReplicatedMergeTree 流到副本；若 statement 之后被 reorg 出去，清理是异步、best-effort 的，而 part 在该窗口内仍可服务 default(unsafe) 读。§12 走查 #8 的措辞可能被误读成「unsafe 数据基本 ok」。 | **Framing / 安全边界** | 目标 1 说污染无法进入 `safe`——准确——但乐观窗口正是污染最暴露给读的地方。 | 重述走查 #8，明确：default reads = **零**验证的数据，任何值、任何时刻；`safe` 是唯一经过验证的表面。把乐观模式挂在带文档化 max-staleness 上界的清理 path 后面。 |
+
+**优先级总结。** R1 是唯一在此给出具体机制的(§B.2)，必须在 P0/P2 落地。R2、R3、R4 必须在 P0 之前被*承认并界定范围*(它们是 §7 safety claim 的隐藏前提)，哪怕机制后发。R5–R10 各自归到对应交付阶段，但不应被读成「impl detail」。
+
+### B.2 `statement_id` 唯一性执行——优化提案(解决 R1)
+
+**问题复述。** §5.2 把 `statement_id` 唯一性变成承重项：`_hg_row_id = H(… || statement_id || global_row_ordinal)`，因此一旦 `statement_id` 被复用，两条不同 statement 就会在表内撞上同一批 row ID，复活重复行 LtHash 抵消攻击(§16、走查 #4)。所以 `statement_id` 必须唯一且**绝不回收**。当前设计(§6)依赖中心化 Keeper 在 sequencing 时拒绝重复，这带来三个未解决的后果：(1) Keeper 必须无限期持有已见 `statement_id` 全集——一笔 post-consensus、无界的状态；(2) 该集合跨 Keeper shard 无法分片，与 §11「只改谁检查」的去中心化框架冲突；(3) 恶意或被攻陷的客户端可以重放老 `statement_id` 尝试制造碰撞，唯一的缓解是「中心化 Keeper 永远正确」——这在去中心化阶段无法保证。
+
+**提案机制——L3 派生的 anchored accumulator + per-account 高水位。** 目标是把 spent-id 集合变成 anchored log 的*确定性、可 replay* 衍生物，而非独立的 consensus state，并让唯一性对任意诚实验证者都可证。
+
+1. **结构化 `statement_id`(P0 freeze)。** 客户端必须在签名的 nonce 里嵌入一个单调计数器：
+   ```
+   statement_id = client_account || client_seq || client_nonce
+   ```
+   其中 `client_seq` 是客户端维护的、逐账户严格递增的计数器，`client_nonce` 是随机量。这保留了客户端生成、客户端签名的身份(从而 §5.2 的「不依赖 sequencer / 无 reorg 扰动」性质原封不动)，同时让偏序自描述。不符合该形态的 `statement_id` 在 admission 拒。
+
+2. **执行点是 L3 派生的 accumulator，不是 Keeper 内存。** 网络维护一个 append-only Merkle accumulator(mountain range 或 sparse tree；具体构造在 P0 定)覆盖至今被接受的每个 `statement_id`，并在每个 L3 block 里把其 root `spent_ids_root` 与 `partition_commitments_after` 一起提交。**关键是，这个 accumulator 是已定序 `statement_id` 的纯函数，因此任何 replay L3 stream 的诚实节点都能逐位重建出同样的它**——它不是独立的 consensus state，而是 anchored log 上的一个索引。这满足 §11 原则：dedup 事实是确定性的、非主观的，所以把 Keeper 权威去中心化并不改变它。(LtHash 本身不能胜任此处，因为它给不出非成员证明，而且 §11 已经否决让 challenge interface 围绕 part-side hash 来塑形。)
+
+3. **靠非成员证明做接受检查(P2)。** 要接受一个新 `statement_id`，提交者产出一张**非成员证明**，证明该 `statement_id` 不在上一轮 `spent_ids_root` 之下。Keeper 验证证明；只有通过后才 anchor `statement_id → statement_seq` 绑定。对 mountain range / sparse Merkle，证明大小为 O(log n)；若 P0 选 RSA / pairing accumulator，则为 O(1)。验证节点 replay 该证明。
+
+4. **Per-account 高水位，把守规矩流量摊销到 O(1)(P2)。** 在结构化 `statement_id` 之上叠加：网络按 `client_account` 跟踪一个高水位 `hi_seq[account]` = 该账户已定序的最大 `client_seq`。对守规矩流量(严格递增、无 gap 或只在窗口内 gap)，提交者*不需要*非成员证明——只需声明一个新的 `client_seq > hi_seq[account]`，Keeper 推进 `hi_seq`。只有当 `client_seq ≤ hi_seq`(乱序提交但仍是真新)时，才回退到 accumulator 非成员证明。这把 storage-hygienic 账户的证明代价降到有界，并把 dedup 状态限制在**每个活跃账户一个整数 + 一个 gap 集**——从而**按 `client_account` 干净分片**，回应了扩展性反对意见。
+
+5. **永久保留；无回收窗口。** Accumulator 是 append-only 且历史上可压缩(leaf 一旦追加即不可变)；它与 L3 stream 共享可用性 / anchoring。一旦进入 `spent_ids_root`，`statement_id` 永不移除。任何 replay / 复用尝试要么落入 (a) 账户高水位之下 → 廉价拒，要么 (b) accumulator 下的可证既有成员 → 拒。两条路径都无法产生碰撞的 row ID。
+
+6. **对攻击者的影响。** 恶意客户端无法强行制造碰撞：结构化 `statement_id` 强迫它声明自己在 `(account, client_seq)` 空间里的位置，accumulator(可 replay) 裁决该位置是否已被占用，而 Keeper 只是证明验证者、不是真值来源。合谋的 Keeper *可以*在没有有效非成员证明时接受一个重复项，但该决策是公开可审计的——验证节点 replay 该证明、客观地检出违规，不靠人头数。这正是 §7 用于 execution 的可重算性，现在延伸到了 admission。
+
+**Tradeoffs / P0 open items。**
+- Accumulator 构造(mountain range vs. sparse Merkle vs. RSA accumulator)：P0 定。Mountain range 最简单、无 trusted setup；RSA accumulator 给 O(1) 证明但需要 trusted-setup / 类 RSA modulus 参数。
+- `client_seq` 宽度(uint32 vs. uint64) vs. per-account 高水位存储：P0。
+- 被弃用账户的大 gap 集合的 GC：用有限 gap-tolerance 策略设上界(P0)。
+- 这吸收了 §15 open question 12(唯一性范围)：范围是**per-account-global**，执行机制是 **L3-derived**。
+
+**交付映射。** P0：`statement_id` 格式 + accumulator 构造 freeze + test vectors。P1：agent 侧 `client_seq` 单调计数器 + nonce 生成。P2：Keeper accumulator、非成员证明验证、per-account 高水位、重复拒绝。这些与现有 P0–P2 计划并行，且与 §6/§7 陈述一致。
+
+### B.3 对 §15 Open Questions 的更新
+
+上述风险提升或锐化了几条 §15 条目。意图不是原地重排 §15，而是记录这次交叉评审如何重新框定它们；编辑可在后续把以下条目折回 §15。
+
+- **Open question 12(`statement_id` 唯一性范围)：** 由 §B.2 解决——范围是 per-account-global，保留是永久的，执行机制是经由 anchored accumulator 的 L3-derived，而非中心化 Keeper 内存。从「open」降级为「已设计，待 P0 构造 freeze」。
+- **新增(R2)：reference-executor 版本治理。** 哪个 pinned build 对应哪个 L3 区间；ClickHouse 版本升级如何 grandfather 既有 `safe` parts；challenge 用当时 anchored 的 build 还是最新。在 §7 可重算性 claim 无条件成立前必须有答案。
+- **新增(R3)：suppressed-payload / suppressed-pre-state 攻击。** DA 可用与 pre-state 可用两个前提需要证据机制(payload 走 proof-of-custody；mutation 走带 challenge window 的 pre-state part 可用性保证)和一条 §12 走查。
+- **Open question 4(default 语义调研)：** 重新框定——这不是唯一的 JSON 邻近 admission 风险；R4(JSON null-member 往返)至少同等紧迫，必须 P0 freeze，不能 spike-gated。
+- **Open question 8(quorum replay I/O 上限)：** 扩展到包含 admission-policy authority 与 per-account 公平调度(R8)，因为机械 caps 在去中心化阶段是可博弈的。
+- **新增(R9)：canonical-equivalence 差分 harness。** 一个 P0 交付物，在共享 corpus 上逐字节比对 agent / Keeper / replica 三个 canonicalizer，按 ClickHouse 版本 pin。
