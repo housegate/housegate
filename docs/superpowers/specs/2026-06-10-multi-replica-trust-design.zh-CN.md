@@ -531,4 +531,29 @@ stateDiagram-v2
 | `Safe` | Root 已 finalized 且 verified。 | Parts 可以服务 safe reads，并具备 merge eligibility。 |
 | `Rejected` / `Dropped` | Source claim 不可复现，或 verification 无法完成。 | Unsafe parts 被移除；作恶 source / attester 的 signatures 在经济阶段成为 slashable evidence。 |
 
+### A.4 Latency 与 ACK 语义
+
+如果客户端等到 `Safe` 才算 INSERT 成功，latency 按设计就会很高：它包含 L3 block formation、source ClickHouse execution、quorum re-execution，以及 L2/L1 finality window。因此 `Safe` 应被视为 read-consistency / merge-eligibility watermark，而不是普通同步 INSERT acknowledgment。
+
+写路径应暴露分层 ACK：
+
+| Ack level | Returned when | Dominant latency driver | Semantics |
+|---|---|---|---|
+| `Accepted` | HouseGate / Keeper 已持久接受 signed envelope 和 payload。 | Proxy RTT 加 durable queue write。 | 不可抵赖输入已经存在；不承诺 ClickHouse 中已有数据。 |
+| `Sequenced` | Keeper 分配 `statement_seq`，并把 statement 放入 L3 block。 | L3 block / batching interval。 | Statement order 已固定；execution 仍可能 pending。 |
+| `Unsafe` | Source ClickHouse 已执行 block，并注册 candidate unsafe parts/root。 | L3 interval 加 source INSERT execution。 | Default/L2-latest reads 可以包含该数据；safe reads 和 merges 必须排除它。 |
+| `Verified` | quorum replicas 重新执行同一 L3 payload，并对同一 root 作证。 | 最慢 quorum 成员的 replay 与 hash/root computation。 | 执行已被复现，但 finality 可能仍 pending。 |
+| `Safe` | `Verified` root 已 finalized，并越过 unsafe window。 | L2/L1 finality。 | 数据可以服务 safe reads，并具备 merge eligibility。 |
+
+默认面向客户端的 INSERT success point 应是 `Unsafe`(或 async write API 的 `Sequenced`)，而不是 `Safe`。需要 finalized 语义的应用可以显式等待 `Safe` receipt，或在返回的 watermark 之后发起 safe reads。
+
+执行排序有两种可行模式：
+
+| Mode | Flow | INSERT ACK latency | Tradeoff |
+|---|---|---|---|
+| Strict sequenced execution | `sign -> sequence -> execute source -> register unsafe -> quorum -> safe` | Source execution 前至少包含一次 L3 batching wait。 | 状态机和归因更简单；适合作为先证明正确性的 v1 默认。 |
+| Optimistic unsafe execution | `sign -> execute pending unsafe -> sequence later -> register/verify -> safe` | 接近当前 proxy + ClickHouse write latency。 | 需要 pending-part namespace、durable unsequenced payload queue，以及对未被定序或被 reorg 出去的 statement 所产 parts 做确定性 drop。 |
+
+§5.2 的 row-id 变更(`statement_id + global_row_ordinal`，而不是 `statement_seq`)使 optimistic unsafe execution 成为可能，因为 `_hg_row_id` 不再需要在 ClickHouse 执行前等待 sequencer round-trip。这个优化不是安全模型必需的，应被同一条用于 reorg 和 verification failure 的 unsafe-part cleanup path 保护。
+
 对 JSON-heavy v1，这个补充意味着 native JSON support 应通过 executor equivalence 校验，而不是只依赖自定义 JSON canonicalizer。最小 pinned inputs 包括 ClickHouse version/build、相关 settings、schema snapshot、previous safe root 和 signed L3 payload。

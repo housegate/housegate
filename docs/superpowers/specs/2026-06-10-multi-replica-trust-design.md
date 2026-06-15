@@ -531,4 +531,29 @@ stateDiagram-v2
 | `Safe` | The root is finalized and verified. | Parts can serve safe reads and become merge-eligible. |
 | `Rejected` / `Dropped` | The source claim is not reproducible or verification cannot complete. | Unsafe parts are removed; bad source/attester signatures become slashable evidence in the economic phase. |
 
+### A.4 Latency and acknowledgment semantics
+
+If a client waits for `Safe`, INSERT latency is high by construction: it includes L3 block formation, source ClickHouse execution, quorum re-execution, and the L2/L1 finality window. `Safe` should therefore be treated as the read-consistency / merge-eligibility watermark, not the normal synchronous INSERT acknowledgment.
+
+The write path should expose layered acknowledgments:
+
+| Ack level | Returned when | Dominant latency driver | Semantics |
+|---|---|---|---|
+| `Accepted` | HouseGate / Keeper has durably accepted the signed envelope and payload. | Proxy RTT plus durable queue write. | Non-repudiable input exists; no ClickHouse data is promised. |
+| `Sequenced` | Keeper assigns `statement_seq` and includes the statement in an L3 block. | L3 block / batching interval. | Statement order is fixed; execution may still be pending. |
+| `Unsafe` | Source ClickHouse has executed the block and registered candidate unsafe parts/root. | L3 interval plus source INSERT execution. | Default/L2-latest reads may include the data; safe reads and merges must exclude it. |
+| `Verified` | A quorum of replicas re-executes the same L3 payload and attests to the same root. | Slowest quorum member's replay and hash/root computation. | Execution is reproduced, but finality may still be pending. |
+| `Safe` | `Verified` root is finalized and past the unsafe window. | L2/L1 finality. | Data can serve safe reads and become merge-eligible. |
+
+The default client-facing INSERT success point should be `Unsafe` (or `Sequenced` for an async write API), not `Safe`. Applications that need finalized semantics can explicitly wait for the `Safe` receipt or issue safe reads at/after the returned watermark.
+
+There are two viable execution-ordering modes:
+
+| Mode | Flow | INSERT ACK latency | Tradeoff |
+|---|---|---|---|
+| Strict sequenced execution | `sign -> sequence -> execute source -> register unsafe -> quorum -> safe` | Includes at least one L3 batching wait before source execution. | Simpler state machine and attribution; good v1 default while correctness is being proven. |
+| Optimistic unsafe execution | `sign -> execute pending unsafe -> sequence later -> register/verify -> safe` | Close to today's proxy + ClickHouse write latency. | Requires a pending-part namespace, durable unsequenced payload queue, and deterministic drop of parts whose statement is not sequenced or is reorged out. |
+
+The row-id change in §5.2 (`statement_id + global_row_ordinal`, not `statement_seq`) makes optimistic unsafe execution possible because `_hg_row_id` no longer needs a sequencer round-trip before ClickHouse executes. That optimization is not required for the safety model and should be gated behind the same unsafe-part cleanup path used for reorgs and failed verification.
+
 For JSON-heavy v1, this addendum implies that native JSON support should be validated by executor equivalence rather than by a bespoke JSON canonicalizer alone. The minimum pinned inputs are ClickHouse version/build, relevant settings, schema snapshot, previous safe root, and the signed L3 payload.
