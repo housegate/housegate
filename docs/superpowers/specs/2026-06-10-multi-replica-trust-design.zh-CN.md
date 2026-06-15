@@ -421,6 +421,7 @@ Self-rescue path 从第一天就存在：任何一方可以从 genesis replay L3
 ## 16. 被否决的备选
 
 - **Raw row-value LtHash(v1)。** 拒绝，因为重复 ClickHouse rows 会重复同一个 LtHash element；`2^16` copies 会在每个 lane 上抵消，单独加 count check 也会被 equal-sized duplicate sets 置换击穿。Row-instance IDs 是必需的。
+- **Part-side LtHash-only INSERT verification。** 对 JSON-heavy v1 路线拒绝。这个想法是：source 注册 `part_row_lthash`，replicas 重扫拉到的 parts，只要 part commitments 一致就接受为 INSERT 执行正确的证明。它最多证明 registered claim 与某批已存 rows 一致；当原生 `JSON`、Map/Tuple、DEFAULT/MATERIALIZED columns、文本格式或服务端表达式求值会改变 wire bytes、逻辑值和 part storage 的关系时，它不能证明 ClickHouse 忠实物化了 signed payload。恶意 source 仍可为错误物化值锚定一个自洽 root，过度自信的 canonicalizer 也会让诚实 JSON 数据出现假阳性或假阴性。LtHash / Merkle roots 仍可作为 compact state summaries 和 dispute-localization aids，但 JSON-heavy v1 的安全性需要 quorum re-execution 加 challenge replay(§Appendix A)，不能只靠 part-hash equality。
 - **Structured-integer row IDs(例如把 `(statement reference, global_row_ordinal)` packed 进定宽整数)。** 它满足与 v2 hash 形态(现在本身就是 `H(… || statement_id || global_row_ordinal)`，§5.2)相同的唯一性/确定性性质，方便人工调试，并且在 delta codecs 下几乎可压缩到零，相比每行 32 个不可压缩字节有明显优势。出于设计保守暂时放弃(hash 形态定宽、抗碰撞，无需推理整数打包范围)，但它是 open-question-11 存储实测需要时的首选退路。P0 freeze 时重新评估。
 - **Global `schema_version` inside every row hash(v1)。** 拒绝，因为 metadata-only `ADD COLUMN` 会扰动所有既有 row commitments；改用 stable `table_id` / `column_id` 加显式 DDL rules。
 - **Payload hash chained into next statement(v1 option)。** 作为 safety primitive 拒绝，因为 final statements 和 disconnects 仍然有歧义。它可以用于 detection-only telemetry，不能用于 Keeper admission。
