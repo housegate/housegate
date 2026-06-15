@@ -492,27 +492,27 @@ The execution input for replicas is the L3 block payload plus the anchored schem
 
 ```mermaid
 stateDiagram-v2
-    [*] --> "Submitted"
-    "Submitted" --> "Sequenced": "Keeper assigns statement_seq"
-    "Sequenced" --> "SourceExecuting": "source executes block"
-    "SourceExecuting" --> "UnsafeRegistered": "parts + claimed root registered"
+    [*] --> Submitted
+    Submitted --> Sequenced: Keeper assigns statement_seq
+    Sequenced --> SourceExecuting: source executes block
+    SourceExecuting --> UnsafeRegistered: parts + claimed root registered
 
-    "UnsafeRegistered" --> "ReplicaReExecuting": "replicas receive L3 block"
-    "ReplicaReExecuting" --> "QuorumVerified": "quorum attests same root"
-    "ReplicaReExecuting" --> "RootConflict": "different roots"
-    "ReplicaReExecuting" --> "Timeout": "attestation deadline missed"
+    UnsafeRegistered --> ReplicaReExecuting: replicas receive L3 block
+    ReplicaReExecuting --> QuorumVerified: quorum attests same root
+    ReplicaReExecuting --> RootConflict: different roots
+    ReplicaReExecuting --> Timeout: attestation deadline missed
 
-    "QuorumVerified" --> "FinalityWait": "root anchored to L2/L1"
-    "FinalityWait" --> "Safe": "finality reached"
+    QuorumVerified --> FinalityWait: root anchored to L2/L1
+    FinalityWait --> Safe: finality reached
 
-    "RootConflict" --> "ChallengeReplay"
-    "Timeout" --> "ChallengeReplay"
-    "ChallengeReplay" --> "Safe": "source claim wins"
-    "ChallengeReplay" --> "Rejected": "source claim loses"
+    RootConflict --> ChallengeReplay
+    Timeout --> ChallengeReplay
+    ChallengeReplay --> Safe: source claim wins
+    ChallengeReplay --> Rejected: source claim loses
 
-    "Rejected" --> "Dropped": "drop unsafe parts"
-    "Dropped" --> [*]
-    "Safe" --> [*]
+    Rejected --> Dropped: drop unsafe parts
+    Dropped --> [*]
+    Safe --> [*]
 ```
 
 `UnsafeRegistered` data may serve default unsafe reads if the product wants L2-latest semantics, but it must not be eligible for safe reads or merges. `Safe` requires sequencing, matching quorum attestations, and finality. If roots conflict or attestations time out, the block remains unsafe until challenge replay decides whether the source claim is reproducible.

@@ -492,27 +492,27 @@ Replica 的执行输入是 L3 block payload、anchored schema/settings snapshot 
 
 ```mermaid
 stateDiagram-v2
-    [*] --> "Submitted"
-    "Submitted" --> "Sequenced": "Keeper assigns statement_seq"
-    "Sequenced" --> "SourceExecuting": "source executes block"
-    "SourceExecuting" --> "UnsafeRegistered": "parts + claimed root registered"
+    [*] --> Submitted
+    Submitted --> Sequenced: Keeper assigns statement_seq
+    Sequenced --> SourceExecuting: source executes block
+    SourceExecuting --> UnsafeRegistered: parts + claimed root registered
 
-    "UnsafeRegistered" --> "ReplicaReExecuting": "replicas receive L3 block"
-    "ReplicaReExecuting" --> "QuorumVerified": "quorum attests same root"
-    "ReplicaReExecuting" --> "RootConflict": "different roots"
-    "ReplicaReExecuting" --> "Timeout": "attestation deadline missed"
+    UnsafeRegistered --> ReplicaReExecuting: replicas receive L3 block
+    ReplicaReExecuting --> QuorumVerified: quorum attests same root
+    ReplicaReExecuting --> RootConflict: different roots
+    ReplicaReExecuting --> Timeout: attestation deadline missed
 
-    "QuorumVerified" --> "FinalityWait": "root anchored to L2/L1"
-    "FinalityWait" --> "Safe": "finality reached"
+    QuorumVerified --> FinalityWait: root anchored to L2/L1
+    FinalityWait --> Safe: finality reached
 
-    "RootConflict" --> "ChallengeReplay"
-    "Timeout" --> "ChallengeReplay"
-    "ChallengeReplay" --> "Safe": "source claim wins"
-    "ChallengeReplay" --> "Rejected": "source claim loses"
+    RootConflict --> ChallengeReplay
+    Timeout --> ChallengeReplay
+    ChallengeReplay --> Safe: source claim wins
+    ChallengeReplay --> Rejected: source claim loses
 
-    "Rejected" --> "Dropped": "drop unsafe parts"
-    "Dropped" --> [*]
-    "Safe" --> [*]
+    Rejected --> Dropped: drop unsafe parts
+    Dropped --> [*]
+    Safe --> [*]
 ```
 
 如果产品需要 L2-latest 语义，`UnsafeRegistered` 数据可以服务 default unsafe reads，但不能服务 safe reads，也不能参与 safe merge。`Safe` 必须同时满足 sequencing、quorum attestations 一致和 finality。如果 roots 分歧或 attestation timeout，block 保持 unsafe，直到 challenge replay 裁决 source claim 是否可复现。
