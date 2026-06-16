@@ -1,0 +1,18 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "replay",
+    srcs = [
+        "hash.go",
+        "types.go",
+        "verifier.go",
+    ],
+    importpath = "housegate/housegate/pkg/replay",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "replay_test",
+    srcs = ["verifier_test.go"],
+    embed = [":replay"],
+)

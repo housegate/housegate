@@ -624,3 +624,55 @@ The risks above promote or sharpen several §15 items. The intent is not to renu
 - **Open question 4 (default semantics survey):** reframe — this is not the only JSON-adjacent admission risk; R4 (JSON null-member round-trip) is at least as urgent and must be P0-frozen, not spike-gated.
 - **Open question 8 (quorum replay I/O ceiling):** broaden to include admission-policy authority and per-account fair scheduling (R8), since mechanical caps are gameable in the decentralized phase.
 - **New (R9): canonical-equivalence differential harness.** A P0 deliverable that byte-compares agent / Keeper / replica canonicalizers over a shared corpus, pinned per ClickHouse version.
+
+## Appendix C - Replay Verifier MVP
+
+This appendix records the first implementation boundary for a replay verifier. It intentionally stops short of a production ClickHouse runner: the MVP stabilizes the replay job contract, snapshot manifest checks, payload checks, executor boundary, receipt hash, and attestation semantics. The heavy storage mechanics — hardlink/reflink scratch clones, `ATTACH PART`, cold restore from object storage, and version-governed pinned ClickHouse deployment — live behind the executor interface and remain a P1/P3 integration task.
+
+### C.1 MVP package boundary
+
+The MVP lives in `pkg/replay`. It is a verifier core, not a proxy plugin and not a ClickHouse orchestration daemon. Its trust boundary is narrow: it accepts a `ReplayJob`, loads the previous `SafeSnapshotManifest`, validates that the job is anchored to that safe state, validates statement order and payload hashes, calls a pinned `Executor` interface, and signs an `ExecutionReceipt`. A source-root mismatch is not returned as an error; it produces a signed mismatch attestation so Keeper can open challenge replay with non-repudiable evidence.
+
+```text
+ReplayJob + SafeSnapshotManifest + payload bytes
+  -> Verifier input checks
+  -> Executor.Replay(ExecutionRequest)
+  -> ExecutionReceipt(computed_root, source_claim_root, match=false/true)
+  -> ReplayAttestation(signature over receipt_hash)
+```
+
+The MVP explicitly rejects three unsafe shortcuts: replay cannot start from an unsafe snapshot, payload bytes cannot be accepted without matching `payload_hash` / `payload_length`, and executor output cannot silently change `prev_safe_snapshot_id`, `prev_state_root`, `schema_snapshot_id`, or `executor_profile_id`.
+
+### C.2 Data model
+
+`SafeSnapshotManifest` is a content-addressed manifest, not a ClickHouse filesystem backup. It carries `snapshot_id`, `safe_block_seq`, `schema_snapshot_id`, `schema_root`, `executor_profile_id`, `data_root`, `state_root`, `manifest_root`, and per-table manifests. The MVP computes `data_root` from table partition roots and active part entries, computes `state_root = H(schema_snapshot_id, schema_root, executor_profile_id, data_root)`, and computes `manifest_root` over the normalized manifest. Table, partition, and part order are canonicalized before hashing, so two verifiers can store the same manifest in different orders and still derive the same roots.
+
+`ReplayJob` carries `block_seq`, `prev_safe_snapshot_id`, `prev_state_root`, `schema_snapshot_id`, `executor_profile_id`, `source_claim_root`, and ordered `Statement` entries. Each statement carries the replay-relevant projection of the signed envelope: `statement_id`, `statement_seq`, `sql`, `sql_hash`, `settings_hash`, optional `payload_ref` / `payload_hash` / `payload_length`, and `target_table_id`. The MVP validates `sql_hash` and payload hash/length locally before any executor is called.
+
+`ExecutionReceipt` is the signed object. It includes the previous safe identity, the executor/schema profile, `statement_root`, `payload_root`, source claimed root, computed root, match bit, replay log hash, partition commitments, and affected parts. Signing mismatches is intentional: a verifier that disagrees with the source is producing challenge evidence, not failing the protocol.
+
+### C.3 Executor interface and storage strategy
+
+The MVP executor interface is:
+
+```text
+Executor.Replay(ctx, ExecutionRequest) -> ExecutionResult
+```
+
+For the first implementation, tests use a fake executor. The production executor should implement the strategies discussed in the main design without changing the verifier core. For admitted payload-local INSERTs, it can materialize only the new block in an empty scratch table and combine the computed delta with the previous root. For pre-state-dependent statements, it must materialize the affected safe parts from the previous snapshot into scratch using part-level zero-copy where possible. Cold restore is outside the hot path and should rebuild a snapshot from the manifest by downloading parts, checking `part_phys_hash`, attaching verified parts, and recomputing `state_root`.
+
+This boundary keeps the risky part honest: `pkg/replay` cannot accidentally trust source part bytes because it never receives them as executor input except as optional affected/localization metadata in the result. The only trusted executor input is the previous safe manifest plus L3 statement/payload data that passed hash validation.
+
+### C.4 Keeper integration contract
+
+Keeper treats verifier output as an attestation row:
+
+```text
+Attestation(block_seq, replica_id, receipt_hash, computed_state_root, match_source_root, signature)
+```
+
+If a quorum signs receipts whose `computed_state_root` equals `source_claim_root`, Keeper can advance the block to `QuorumVerified` and later `Safe` after finality. If receipts disagree or timeout, Keeper opens challenge replay with the signed receipts, the `ReplayJob`, the previous safe snapshot manifest, and the referenced payloads. A verifier error before receipt generation is a local refusal to attest; a root mismatch after executor replay is signed evidence.
+
+### C.5 MVP limitations
+
+The MVP does not verify `user_jws_v2`; it assumes the sequencing/admission layer has already validated the signature and preserves the envelope projection for replay. The MVP does not implement ClickHouse hardlink/reflink clone, `ATTACH PART`, mutation scratch tables, executor profile governance, or cold restore. The MVP uses a package-local canonical hash profile for manifests and receipts; the production on-chain hash profile still needs P0 test vectors. These are deliberate seams rather than missing hidden behavior.
