@@ -624,3 +624,55 @@ stateDiagram-v2
 - **Open question 4(default 语义调研)：** 重新框定——这不是唯一的 JSON 邻近 admission 风险；R4(JSON null-member 往返)至少同等紧迫，必须 P0 freeze，不能 spike-gated。
 - **Open question 8(quorum replay I/O 上限)：** 扩展到包含 admission-policy authority 与 per-account 公平调度(R8)，因为机械 caps 在去中心化阶段是可博弈的。
 - **新增(R9)：canonical-equivalence 差分 harness。** 一个 P0 交付物，在共享 corpus 上逐字节比对 agent / Keeper / replica 三个 canonicalizer，按 ClickHouse 版本 pin。
+
+## Appendix C - Replay Verifier MVP
+
+本附录记录 replay verifier 的第一版实现边界。它有意不直接实现 production ClickHouse runner：MVP 先稳定 replay job contract、snapshot manifest checks、payload checks、executor boundary、receipt hash 和 attestation semantics。重的 storage mechanics——hardlink/reflink scratch clones、`ATTACH PART`、从 object storage cold restore、以及带版本治理的 pinned ClickHouse 部署——都放在 executor interface 后面，作为 P1/P3 integration task。
+
+### C.1 MVP package boundary
+
+MVP 位于 `pkg/replay`。它是 verifier core，不是 proxy plugin，也不是 ClickHouse orchestration daemon。它的 trust boundary 很窄：接收 `ReplayJob`，加载 previous `SafeSnapshotManifest`，校验 job 确实锚在该 safe state 上，校验 statement order 与 payload hashes，调用 pinned `Executor` interface，并签出 `ExecutionReceipt`。Source-root mismatch 不作为 error 返回；它会产出 signed mismatch attestation，使 Keeper 可以用不可抵赖的 evidence 打开 challenge replay。
+
+```text
+ReplayJob + SafeSnapshotManifest + payload bytes
+  -> Verifier input checks
+  -> Executor.Replay(ExecutionRequest)
+  -> ExecutionReceipt(computed_root, source_claim_root, match=false/true)
+  -> ReplayAttestation(signature over receipt_hash)
+```
+
+MVP 显式拒绝三类不安全捷径：replay 不能从 unsafe snapshot 开始，payload bytes 不能在不匹配 `payload_hash` / `payload_length` 的情况下被接受，executor output 不能悄悄改写 `prev_safe_snapshot_id`、`prev_state_root`、`schema_snapshot_id` 或 `executor_profile_id`。
+
+### C.2 Data model
+
+`SafeSnapshotManifest` 是 content-addressed manifest，不是 ClickHouse filesystem backup。它携带 `snapshot_id`、`safe_block_seq`、`schema_snapshot_id`、`schema_root`、`executor_profile_id`、`data_root`、`state_root`、`manifest_root` 和 per-table manifests。MVP 从 table partition roots 与 active part entries 计算 `data_root`，计算 `state_root = H(schema_snapshot_id, schema_root, executor_profile_id, data_root)`，并对 normalized manifest 计算 `manifest_root`。Table、partition、part order 在 hash 前 canonicalize，因此两个 verifier 即使以不同顺序存储同一份 manifest，也会推出同一组 roots。
+
+`ReplayJob` 携带 `block_seq`、`prev_safe_snapshot_id`、`prev_state_root`、`schema_snapshot_id`、`executor_profile_id`、`source_claim_root` 和按顺序排列的 `Statement` entries。每条 statement 携带 signed envelope 中与 replay 相关的投影：`statement_id`、`statement_seq`、`sql`、`sql_hash`、`settings_hash`、可选 `payload_ref` / `payload_hash` / `payload_length`，以及 `target_table_id`。MVP 会在调用任何 executor 前本地校验 `sql_hash` 与 payload hash/length。
+
+`ExecutionReceipt` 是被签名的对象。它包含 previous safe identity、executor/schema profile、`statement_root`、`payload_root`、source claimed root、computed root、match bit、replay log hash、partition commitments 和 affected parts。对 mismatch 签名是有意的：verifier 与 source 不一致时，它是在产出 challenge evidence，而不是协议失败。
+
+### C.3 Executor interface and storage strategy
+
+MVP executor interface 是：
+
+```text
+Executor.Replay(ctx, ExecutionRequest) -> ExecutionResult
+```
+
+第一版实现中，测试使用 fake executor。Production executor 应在不修改 verifier core 的前提下实现主设计中讨论的策略。对 admitted payload-local INSERT，它可以只在 empty scratch table 中 materialize 新 block，并把 computed delta 与 previous root 合并。对 pre-state-dependent statements，它必须从 previous snapshot 中把 affected safe parts materialize 到 scratch，尽可能使用 part-level zero-copy。Cold restore 不在 hot path 中，应根据 manifest 下载 parts、检查 `part_phys_hash`、attach verified parts，并重新计算 `state_root`。
+
+这个边界能让风险点保持清晰：`pkg/replay` 不会意外信任 source part bytes，因为除了 executor result 中可选的 affected/localization metadata，它根本不接收 source part bytes 作为 executor input。唯一受信的 executor input 是 previous safe manifest 加上通过 hash 校验的 L3 statement/payload data。
+
+### C.4 Keeper integration contract
+
+Keeper 把 verifier output 视为一行 attestation：
+
+```text
+Attestation(block_seq, replica_id, receipt_hash, computed_state_root, match_source_root, signature)
+```
+
+如果 quorum 签出的 receipts 中 `computed_state_root` 等于 `source_claim_root`，Keeper 可把 block 推进到 `QuorumVerified`，并在 finality 后推进到 `Safe`。如果 receipts 分歧或 timeout，Keeper 用 signed receipts、`ReplayJob`、previous safe snapshot manifest 和 referenced payloads 打开 challenge replay。Receipt 生成前的 verifier error 是本地拒绝作证；executor replay 之后的 root mismatch 是 signed evidence。
+
+### C.5 MVP limitations
+
+MVP 不验证 `user_jws_v2`；它假设 sequencing/admission layer 已经验证过 signature，并为 replay 保留 envelope projection。MVP 不实现 ClickHouse hardlink/reflink clone、`ATTACH PART`、mutation scratch tables、executor profile governance 或 cold restore。MVP 对 manifests 和 receipts 使用 package-local canonical hash profile；production on-chain hash profile 仍需要 P0 test vectors。这些是刻意留下的 seams，不是隐藏行为的缺失。

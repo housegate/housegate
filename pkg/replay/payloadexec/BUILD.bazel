@@ -1,0 +1,32 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "payloadexec",
+    srcs = [
+        "executor.go",
+        "signer.go",
+        "stores.go",
+    ],
+    importpath = "housegate/housegate/pkg/replay/payloadexec",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/lthash",
+        "//pkg/replay",
+        "@com_github_zeebo_blake3//:blake3",
+    ],
+)
+
+go_test(
+    name = "payloadexec_test",
+    srcs = [
+        "executor_test.go",
+        "integration_test.go",
+        "signer_test.go",
+        "stores_test.go",
+    ],
+    embed = [":payloadexec"],
+    deps = [
+        "//pkg/lthash",
+        "//pkg/replay",
+    ],
+)
