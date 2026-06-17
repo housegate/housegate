@@ -3,8 +3,9 @@
 //
 // Two-tier shape:
 //
-//   - Factory is the long-lived process-wide object. It holds the gRPC
-//     connection to the sql-rewriter service, a NetworkState reference,
+//   - Factory is the long-lived process-wide object. It holds the rewrite
+//     backend (gRPC client to the sql-rewriter service, or the in-process
+//     rewriter-go engine), a NetworkState reference,
 //     an Options snapshot, and any optional cluster manager / credential
 //     provider used to render remote() table references.
 //
@@ -154,10 +155,10 @@ type Factory interface {
 	// callers do not have to recreate it as the session evolves.
 	NewRewriter(sess Session) Rewriter
 
-	// Close tears down the underlying gRPC connection. Per-connection
-	// Rewriters share that connection, so Close on the factory ends
-	// rewriting for all of them; callers must order shutdown
-	// accordingly.
+	// Close tears down the underlying rewrite backend (gRPC connection or
+	// native engine). Per-connection Rewriters share that backend, so
+	// Close on the factory ends rewriting for all of them; callers must
+	// order shutdown accordingly.
 	Close() error
 }
 
@@ -203,8 +204,19 @@ type Session interface {
 // proxy bits (Listen, Upstream) needed for callback-address
 // resolution.
 type Options struct {
-	Enabled      bool          // whether to enable rewriting at all
-	ServiceAddr  string        // sql-rewriter gRPC address
+	Enabled     bool   // whether to enable rewriting at all
+	ServiceAddr string // sql-rewriter gRPC address
+
+	// Engine selects the rewrite backend: EngineGRPC ("" included) calls
+	// the external sql-rewriter service at ServiceAddr; EngineNative runs
+	// the in-process rewriter-go engine and ignores ServiceAddr.
+	Engine string
+
+	// NativeLibraryPath locates libpolyglot_sql_ffi.{so,dylib} for the
+	// native engine. Empty falls back to the POLYGLOT_SQL_FFI_PATH env
+	// var, then polyglot's standard install locations. Unused by grpc.
+	NativeLibraryPath string
+
 	Upstream     string        // upstream ClickHouse address (drives local/remote detection)
 	CallbackAddr string        // address to render in remote() calls (defaults to Listen when empty)
 	Listen       string        // proxy listen address (used for remote() callback)

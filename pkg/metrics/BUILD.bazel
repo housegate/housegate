@@ -1,0 +1,44 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_test(
+    name = "metrics_test",
+    srcs = [
+        "chpoller_io_test.go",
+        "chpoller_test.go",
+        "collector_test.go",
+        "exporter_test.go",
+        "hostpoller_test.go",
+        "runtime_test.go",
+        "snapshot_test.go",
+    ],
+    embed = [":metrics"],
+    deps = [
+        "@com_github_prometheus_client_golang//prometheus/testutil",
+        "@com_github_shirou_gopsutil_v4//disk",
+        "@com_github_shirou_gopsutil_v4//mem",
+        "@com_github_shirou_gopsutil_v4//net",
+    ],
+)
+
+go_library(
+    name = "metrics",
+    srcs = [
+        "chpoller.go",
+        "collector.go",
+        "exporter.go",
+        "hostpoller.go",
+        "runtime.go",
+        "snapshot.go",
+    ],
+    importpath = "housegate/housegate/pkg/metrics",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/log",
+        "@com_github_clickhouse_clickhouse_go_v2//:clickhouse-go",
+        "@com_github_prometheus_client_golang//prometheus",
+        "@com_github_shirou_gopsutil_v4//cpu",
+        "@com_github_shirou_gopsutil_v4//disk",
+        "@com_github_shirou_gopsutil_v4//mem",
+        "@com_github_shirou_gopsutil_v4//net",
+    ],
+)

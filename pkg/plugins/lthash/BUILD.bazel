@@ -1,0 +1,33 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "lthash",
+    srcs = [
+        "decode.go",
+        "plugin.go",
+        "registry.go",
+    ],
+    importpath = "housegate/housegate/pkg/plugins/lthash",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/chproto",
+        "//pkg/chsession",
+        "//pkg/log",
+        "//pkg/lthash",
+        "//pkg/plugin",
+        "@com_github_clickhouse_ch_go//proto",
+    ],
+)
+
+go_test(
+    name = "lthash_test",
+    srcs = [
+        "decode_test.go",
+        "plugin_test.go",
+    ],
+    embed = [":lthash"],
+    deps = [
+        "//pkg/lthash",
+        "@com_github_clickhouse_ch_go//proto",
+    ],
+)

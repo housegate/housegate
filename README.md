@@ -100,7 +100,7 @@ HOUSEGATE_AGE_IDENTITY_FILE=~/.housegate.age \
 | `listen` | string | Yes | `:9001` | TCP listen address for the native ClickHouse protocol (the **external port** — agents and local CH `remote()` loopbacks land here) |
 | `internal_listen` | string | No | `` (empty) | Optional second TCP listener restricted to peer housegates. Sessions accepted here are pre-flagged `IsPeerTrusted=true` + `IsInternalPort=true`; auth and rewrite are skipped, `__route__` envelopes are rejected. Bind to a peer-only subnet via firewall/SG. See [Part 3](#part-3--how-multi-proxy-routing-works). |
 | `upstream` | string | No | `` (empty) | Single-upstream address. Ignored when `shard` is set. Empty + no `shard` + not agent ⇒ router-only server (every session is forwarded to a peer via NetworkState — see [§1.3](#13-router-only-server)). |
-| `metrics_listen` | string | No | `:9091` | Prometheus metrics HTTP address |
+| `metrics_listen` | string | No | `:9091` | Prometheus metrics HTTP address. Serves `/metrics` (the proxy's own counters merged with the [`observability`](#observability) collector series) and, when enabled, an authenticated `/debug/pprof`. |
 | `dial_timeout` | duration | No | `5s` | Upstream dial timeout |
 | `idle_timeout` | duration | No | `5m` | Idle client connection timeout |
 | `max_connection_lifetime` | duration | No | `24h` | Hard cap on a client connection's lifetime |
@@ -129,19 +129,23 @@ HOUSEGATE_AGE_IDENTITY_FILE=~/.housegate.age \
 | `auth.max_token_age` | duration | No | `1m` | Maximum age of the JWS `iat` claim |
 | `auth.allow_no_auth` | bool | No | `false` | Let unsigned queries through (for soft rollouts) |
 
-### `rewriter` — External SQL Rewriter gRPC Service
+### `rewriter` — SQL Rewriter (gRPC service or in-process engine)
 
-The rewriter is the canonical owner of physical/logical database mapping. Every SQL statement on a connection passes through it. Highlights:
+The rewriter is the canonical owner of physical/logical database mapping. Every SQL statement on a connection passes through it. The backend is selected by `rewriter.engine`: `grpc` (default) calls the external `sql-rewriter` service; `native` runs the in-process rewriter-go engine via FFI. Highlights:
 
-- **Two-phase Rewrite.** Phase 1 calls the gRPC service with empty options to get back the AST-parsed accessed table names. Phase 2 builds `RewriteTableForSelectStmtArgs` (sentio-network table-name resolution via `SentioNetworkTableMapper`) and `RewriteTableForDynamicArgs` (auth-filtered `database_map`, plus `remote_upstreams` for logicals bound to other indexers) and re-calls the rewriter.
+- **Two-phase Rewrite.** Phase 1 calls the rewriter backend with empty options to get back the AST-parsed accessed table names. Phase 2 builds `RewriteTableForSelectStmtArgs` (sentio-network table-name resolution via `SentioNetworkTableMapper`) and `RewriteTableForDynamicArgs` (auth-filtered `database_map`, plus `remote_upstreams` for logicals bound to other indexers) and re-calls the rewriter.
 - **Permission-aware `database_map`.** Only databases the connection's account has read/write/admin permission on appear; tables in inaccessible databases are not addressable.
-- **Fail-open.** A gRPC error or `UnsupportedStatement` falls back to the original SQL with a debug log; rewriter flakiness never blocks queries.
+- **Fail-open.** A backend error or `UnsupportedStatement` falls back to the original SQL with a debug log; rewriter flakiness never blocks queries.
 - **Error reverse-mapping.** When upstream returns an `Exception` referring to rewritten table/database names, the same per-connection Rewriter re-maps the message back via `RewriteErrorMessage`.
 - **wire-level `hello.Database` rewrite.** `OnHello` substitutes `hello.Database` with `rewriter.physical_database`; the user-typed value is preserved in `SessionState.LogicalDatabase`.
 
 | Key | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
 | `rewriter.service_addr` | string | No | `localhost:50051` | `sql-rewriter` gRPC address |
+| `rewriter.engine` | string | No | `grpc` | `grpc` — external sql-rewriter service (default); `native` — in-process rewriter-go engine (ignores `service_addr`) |
+| `rewriter.native_library_path` | string | No | `` | Path to `libpolyglot_sql_ffi.{so,dylib}` (native engine only; empty → `POLYGLOT_SQL_FFI_PATH` env, then system paths) |
+| `rewriter.native_library_release` | string | No | `` | rewriter-go release tag to auto-fetch the FFI lib from (native only; cached under the user cache dir; `native_library_path` wins; also overridable via `rewriter.native_library_release_base_url` for mirrors) |
+| `rewriter.native_library_sha256` | string | No | `` | Optional sha256 pin for the fetched library (64 hex); without it the release's `SHA256SUMS` asset is checked when present |
 | `rewriter.timeout` | duration | No | `5s` | Per-call gRPC timeout |
 | `rewriter.physical_database` | string | No | `` | The single physical ClickHouse database that hosts every logical database in this deployment. Empty disables both `database_map` and the `hello.Database` substitution |
 | `rewriter.delimiter` | string | No | `_` | Separator inserted between `<logical>` and `<original_table>` |
@@ -184,6 +188,44 @@ After the rewriter migration the state plugin's only job is OnHello: copy `Clien
 | `logging.data` | bool | No | `false` | Log Data packet content (debug only) |
 | `logging.max_query_bytes` | int | No | `300` | Truncation length for logged queries (bytes) |
 | `logging.max_data_bytes` | int | No | `200` | Truncation length for logged Data packets (bytes) |
+
+### `observability`
+
+Server-mode only. Adds a background **metrics Collector** that periodically polls the downstream ClickHouse, the host, and the Go runtime, plus an optional authenticated **pprof** endpoint. Both are served on `metrics_listen`: `/metrics` merges the proxy's own counters with the collected series in a single scrape, and `/debug/pprof` is mounted only when enabled. Agent mode does not run the collector.
+
+Collector ClickHouse credentials come from the `ckh_manager_config_path` provider — there are no separate collector credential fields. The collector is **fail-open**: a failed poll logs a warning and keeps the previous snapshot; it never blocks queries or crashes the proxy.
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `observability.collector.enabled` | bool | No | `true` | Run the background metrics collector. Env: `HOUSEGATE_COLLECTOR_ENABLED` (set `false` to disable). |
+| `observability.collector.interval` | duration | No | `15s` | Poll period for the ClickHouse / host / runtime sources. Must be `> 0` when the collector is enabled. |
+| `observability.collector.poll_timeout` | duration | No | `5s` | Per-poll timeout for the ClickHouse query. Must be `> 0` when the collector is enabled. |
+| `observability.collector.ch_addr` | string | No | `` (shard replicas / upstream) | Advanced override for the ClickHouse poll target; normally derived automatically — leave empty. Env: `HOUSEGATE_COLLECTOR_CH_ADDR`. |
+| `observability.pprof.enabled` | bool | No | `false` | Mount `/debug/pprof` on `metrics_listen`. Env: `HOUSEGATE_PPROF_ENABLED` (set `true` to enable). |
+| `observability.pprof.token` | string | When pprof enabled | `` | Bearer token guarding `/debug/pprof` (constant-time compare). **Required** whenever pprof is enabled — keep it in an age-encrypted config, never plaintext. Env: `HOUSEGATE_PPROF_TOKEN`. |
+
+```yaml
+observability:
+  collector: { enabled: true,  interval: "15s", poll_timeout: "5s" }
+  pprof:     { enabled: false, token: "" }   # token REQUIRED when enabled
+```
+
+**Exposed series** (all prefixed `clickhouse_proxy_`, scraped from `metrics_listen`):
+
+- **ClickHouse** (label `replica`): `ch_up`, `ch_query_total`, `ch_insert_total`, `ch_memory_tracking_bytes`, `ch_parts_active`, `ch_replication_queue`, `ch_mutations_pending`, `ch_mutations_running`, `ch_tables`, `ch_os_cpu_seconds`.
+- **Host**: `host_cpu_percent`, `host_mem_available_bytes`, `host_mem_total_bytes`, `host_disk_read_bytes_total{device}`, `host_disk_write_bytes_total{device}`, `host_net_rx_bytes_total`, `host_net_tx_bytes_total`.
+- **Go runtime**: `runtime_goroutines`, `runtime_heap_alloc_bytes`, `runtime_gc_pause_seconds`.
+- **Collector health**: `collector_up`, `collector_last_success_timestamp_seconds{source}`.
+
+`/debug/pprof` (when enabled) requires an `Authorization: Bearer <token>` header:
+
+```bash
+curl -s -H "Authorization: Bearer $HOUSEGATE_PPROF_TOKEN" \
+  http://<host>:9091/debug/pprof/heap -o heap.pprof
+go tool pprof heap.pprof
+```
+
+A full example block lives in [configs/local.server.yaml](configs/local.server.yaml).
 
 ### `network_state`
 
@@ -253,7 +295,7 @@ metrics listening    addr=:9091
 
 ### 1.1 Relay Mode
 
-Server-mode proxy. Terminates client TCP, validates JWS auth, rewrites SQL via the `sql-rewriter` gRPC service, and forwards to local ClickHouse replicas. **Requires** `network_state.source` and `ckh_manager_config_path`.
+Server-mode proxy. Terminates client TCP, validates JWS auth, rewrites SQL via the configured rewriter backend (`sql-rewriter` gRPC service or in-process native engine), and forwards to local ClickHouse replicas. **Requires** `network_state.source` and `ckh_manager_config_path`.
 
 Minimal config (no auth, single upstream):
 

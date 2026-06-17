@@ -1,0 +1,21 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "lthash",
+    srcs = [
+        "canonical.go",
+        "lthash.go",
+    ],
+    importpath = "housegate/housegate/pkg/lthash",
+    visibility = ["//visibility:public"],
+    deps = ["@com_github_zeebo_blake3//:blake3"],
+)
+
+go_test(
+    name = "lthash_test",
+    srcs = [
+        "canonical_test.go",
+        "lthash_test.go",
+    ],
+    embed = [":lthash"],
+)

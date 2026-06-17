@@ -1,19 +1,5 @@
-load("@aspect_bazel_lib//lib:write_source_files.bzl", "write_source_files")
-
 package(default_visibility = ["//visibility:public"])
 
 exports_files(
     glob(["*.bzl"]),
-)
-
-# Run this target to update all the generated .pb.go files in the repo:
-# bazel run //:update_go_pb
-#
-# Note that each target also has a corresponding test asserting that the
-# generated files stay up-to-date.
-write_source_files(
-    name = "update_go_pb",
-    additional_update_targets = [
-        "//protos:protos.update_go_pb",
-    ],
 )

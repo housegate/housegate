@@ -53,7 +53,7 @@ type Plugin struct {
 	PhysicalDatabase string
 
 	// Observer is optional — when nil, timing is not emitted. The
-	// gRPC call is timed regardless of success/failure so operators
+	// rewrite call is timed regardless of success/failure so operators
 	// can see fail-open latency on the same histogram.
 	Observer Observer
 
@@ -106,6 +106,13 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 		// the relay. RewrittenSQL mirrors OriginalSQL so downstream
 		// plugins / observers (commitgate Event, audit logs) that read
 		// it see a coherent value rather than empty.
+		//
+		// Driver sessions (snap.IsDriver) deliberately do NOT bypass
+		// rewrite — that's the whole reason IsDriver exists as a
+		// separate flag from Maintenance. Drivers write logical names
+		// (e.g. CREATE DATABASE x2y2_0 / INSERT INTO x2y2_0.events) and
+		// rely on this plugin to translate them to physical names. Treat
+		// driver traffic like normal user traffic for the rewrite step.
 		if snap.Maintenance || snap.PlatformOperator {
 			qctx.RewrittenSQL = qctx.OriginalSQL
 			return nil

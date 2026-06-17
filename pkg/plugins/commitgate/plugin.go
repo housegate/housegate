@@ -72,12 +72,17 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	// consequence of an already-committed pendingDelete and must
 	// not re-fire host observers. Platform-operator sessions get the
 	// same skip — observer dispatch is reserved for end-user traffic;
-	// operator workflows go around the gate. Placed AFTER the cheap
+	// operator workflows go around the gate. Driver sessions
+	// (indexer-signed indexer-driver traffic) also skip — CREATE
+	// DATABASE on a processor's logical DB must not be registered as a
+	// user database on chain, and CREATE TABLE for processor tables is
+	// owned by sentio-node's DatabaseRegistryService gRPC path rather
+	// than the housegate commitgate. Placed AFTER the cheap
 	// observer-lookup early-return so the skip only fires when there
 	// would otherwise have been a dispatch.
 	if qctx.Session != nil {
 		snap := qctx.Session.State().Snapshot()
-		if snap.Maintenance || snap.PlatformOperator {
+		if snap.Maintenance || snap.PlatformOperator || snap.IsDriver {
 			return nil
 		}
 	}

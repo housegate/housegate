@@ -122,7 +122,10 @@ func (c *Client) Submit(ctx context.Context, namespace, data []byte) (uint64, []
 		Commitment:   base64.StdEncoding.EncodeToString(commitment),
 	}
 	var height uint64
-	if err := c.call(ctx, "blob.Submit", []interface{}{[]blobJSON{b}, nil}, &height); err != nil {
+	// celestia-node panics if the TxConfig param is null (TxConfig.GasPrice
+	// dereferences nil); send an empty object so the node fills in defaults
+	// (gas price / gas / signer all auto-estimated from the default key).
+	if err := c.call(ctx, "blob.Submit", []interface{}{[]blobJSON{b}, struct{}{}}, &height); err != nil {
 		return 0, nil, err
 	}
 	return height, commitment, nil

@@ -62,6 +62,19 @@ type ClosePlugin interface {
 	OnClose(sess chsession.Session)
 }
 
+// DataPlugin observes raw client Data packets — the streamed body of an
+// INSERT — between OnQuery and OnQueryComplete. raw is the full on-wire
+// packet (type varint + block name + block body) and MUST NOT be retained
+// or mutated: the relay splices the very same bytes to the upstream after
+// the hook returns. qctx is the QueryContext of the most recent Query on
+// the session, or nil when data arrives without one (the chain skips
+// dispatch in that case). Hook errors are logged by the relay and never
+// abort the connection (fail-open) — implementations should also degrade
+// internally rather than error per packet.
+type DataPlugin interface {
+	OnClientData(ctx context.Context, qctx *QueryContext, raw []byte) error
+}
+
 // HandshakeCompletePlugin participates in OnHandshakeComplete, fired
 // by Relay once the ClientHello / ServerHello / Addendum round-trip
 // has finished successfully and the session is ready to serve Query

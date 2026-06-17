@@ -11,7 +11,7 @@ import (
 	"housegate/housegate/pkg/auth"
 	"housegate/housegate/pkg/integration/testenv"
 	"housegate/housegate/pkg/registry"
-	pb "housegate/housegate/protos"
+	pb "github.com/housegate/rewriter-go/gen/pb"
 )
 
 // openDirectConn opens a clickhouse-go connection directly to the shared
@@ -57,9 +57,9 @@ func TestAuth_PermissionIsolationAcrossDatabases(t *testing.T) {
 	}
 
 	const (
-		dbA  = "perm_iso_a"
-		dbB  = "perm_iso_b"
-		tbl  = "data"
+		dbA = "perm_iso_a"
+		dbB = "perm_iso_b"
+		tbl = "data"
 	)
 
 	rewriterOpt, mock := testenv.WithRewriterMock(t)

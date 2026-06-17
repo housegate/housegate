@@ -17,6 +17,8 @@ import (
 //   - OnHello — after ClientHello is decoded, before it is forwarded.
 //   - OnHandshakeComplete — after ServerHello + addendum exchange.
 //   - OnQuery — for every decoded client Query packet.
+//   - OnClientData — for every raw client Data packet (INSERT body),
+//     dispatched only when DataPlugins are registered; fail-open.
 //   - OnException — when the upstream returns an Exception packet.
 //   - OnQueryComplete — once per Query when its lifecycle ends
 //     (rejected, forward failed, or upstream produced EndOfStream /
@@ -31,6 +33,7 @@ type Hooks interface {
 	OnHello(ctx context.Context, sess chsession.Session, hello *chproto.ClientHello) error
 	OnHandshakeComplete(ctx context.Context, sess chsession.Session, duration time.Duration)
 	OnQuery(ctx context.Context, qctx *QueryContext) error
+	OnClientData(ctx context.Context, qctx *QueryContext, raw []byte) error
 	OnException(ctx context.Context, sess chsession.Session, exc *chproto.Exception) error
 	OnQueryComplete(ctx context.Context, sess chsession.Session)
 	OnClose(sess chsession.Session)
@@ -49,6 +52,8 @@ func (NoopHooks) OnHello(context.Context, chsession.Session, *chproto.ClientHell
 func (NoopHooks) OnHandshakeComplete(context.Context, chsession.Session, time.Duration) {}
 
 func (NoopHooks) OnQuery(context.Context, *QueryContext) error { return nil }
+
+func (NoopHooks) OnClientData(context.Context, *QueryContext, []byte) error { return nil }
 
 func (NoopHooks) OnException(context.Context, chsession.Session, *chproto.Exception) error {
 	return nil

@@ -39,6 +39,22 @@ type Config struct {
 	// plugin already consumes; the operator-vs-owner naming lives
 	// at the deployment-config layer.
 	Owner string `json:"owner" yaml:"owner"`
+
+	// Driver toggles indexer-driver setting injection. When true the
+	// agent plugin appends SQL_sentio_driver=1 to every outgoing query,
+	// telling the upstream server-mode housegate that this connection
+	// carries indexer-driver traffic (skip usage + commitgate, keep
+	// rewrite — see pkg/auth EthValidator.IsDriver gate which still
+	// requires the recovered signer to equal the server's
+	// IndexerAddress, so a misconfigured non-indexer sidecar fails
+	// loudly rather than silently leaking the bypass).
+	//
+	// Deployment-time flag rather than a per-connection client
+	// declaration: the sidecar knows it is colocated with an indexer
+	// driver because its operator says so via this config; clients
+	// (the driver itself) stay ignorant of the housegate-side bypass
+	// semantics.
+	Driver bool `json:"driver" yaml:"driver"`
 }
 
 // Validate checks fields that are always required regardless of how the

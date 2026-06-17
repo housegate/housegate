@@ -9,22 +9,23 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-
 	"housegate/housegate"
 	"housegate/housegate/pkg/config"
 	"housegate/housegate/pkg/log"
+	"housegate/housegate/pkg/metricshttp"
 	"housegate/housegate/pkg/secretsload"
 	"housegate/housegate/pkg/version"
 )
 
 func main() {
 	if handled, exit := secretSubcommand(); handled {
+		os.Exit(exit)
+	}
+	if handled, exit := fetchSubcommand(); handled {
 		os.Exit(exit)
 	}
 
@@ -41,12 +42,13 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	startMetricsServer(cfg.MetricsListen)
-
 	p, err := housegate.New(housegate.Options{Config: &cfg})
 	if err != nil {
 		log.Fatale(err, "init housegate")
 	}
+	// Construct the proxy first so the metrics server can gather its dedicated
+	// collector registry alongside the default registry's init() globals.
+	metricshttp.Start(ctx, cfg.MetricsListen, p.MetricsRegistry(), cfg.Observability.Pprof)
 	if err := p.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		log.Fatale(err, "housegate stopped")
 	}
@@ -63,6 +65,7 @@ func loadConfigWithOverrides() config.Config {
 	agentUpstream := flag.String("agent-upstream", "", "server-side proxy address, e.g. 10.0.0.8:9001 (required in agent mode)")
 	agentKey := flag.String("agent-key", "", "agent Ethereum private key hex for JWS signing (prefer env var HOUSEGATE_AGENT_KEY)")
 	agentOwner := flag.String("agent-owner", "", "billed Ethereum address (owner) when -agent-key is an operator key (overrides config/env HOUSEGATE_AGENT_OWNER)")
+	agentDriver := flag.Bool("agent-driver", false, "mark outgoing queries as indexer-driver traffic (injects SQL_sentio_driver=1; upstream still gates on signer == indexer)")
 
 	stateSource := flag.String("state", "", "NetworkState source: yaml path, redis addr, or RPC URL e.g. http://node:10003 (overrides config/env HOUSEGATE_NETWORK_STATE_SOURCE)")
 	listenAddr := flag.String("listen", "", "proxy listen address, e.g. :9001 (overrides config/env)")
@@ -117,6 +120,9 @@ func loadConfigWithOverrides() config.Config {
 	}
 	if explicitFlags["agent-owner"] {
 		cfg.Agent.Owner = *agentOwner
+	}
+	if explicitFlags["agent-driver"] {
+		cfg.Agent.Driver = *agentDriver
 	}
 	if explicitFlags["state"] {
 		cfg.NetworkState.Source = *stateSource
@@ -216,18 +222,4 @@ func logStartupBanner(cfg *config.Config) {
 	if cfg.Shard != nil && cfg.Upstream != "" {
 		log.Warn("both 'shard' and 'upstream' configured; 'shard' takes priority, 'upstream' will be ignored for routing")
 	}
-}
-
-func startMetricsServer(addr string) {
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorw("metrics server panic recovered", "panic", r)
-			}
-		}()
-		log.Infow("metrics listening", "addr", addr)
-		if err := http.ListenAndServe(addr, promhttp.Handler()); err != nil {
-			log.Infoe(err, "metrics server error")
-		}
-	}()
 }

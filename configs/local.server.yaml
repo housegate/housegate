@@ -37,9 +37,16 @@ auth:
 # physical_database is the single real ClickHouse DB that hosts every
 # logical DB; the rewrite plugin uses it both as the database_map
 # target value and as the wire-level hello.Database substitution.
+# engine selects the backend: grpc (external sql-rewriter at
+# service_addr, default) or native (in-process rewriter-go via the
+# polyglot FFI lib; ignores service_addr).
 rewriter:
   enabled: true
-  service_addr: "localhost:50051"
+  engine: native
+#  service_addr: "localhost:50051"
+#  native_library_path: /path/to/libpolyglot_sql_ffi.dylib  # native only; empty → POLYGLOT_SQL_FFI_PATH env, then system paths
+  native_library_release: v0.2.1   # native only: auto-fetch the FFI lib from rewriter-go releases (cached; native_library_path wins)
+  native_library_sha256: ""        # optional hard pin for the fetched lib
   timeout: "5s"
   physical_database: testnet
   delimiter: "."
@@ -61,3 +68,21 @@ logging:
   data: false
   max_query_bytes: 300
   max_data_bytes: 200
+
+# Observability: the downstream-metrics Collector (ClickHouse system tables +
+# host CPU/mem/IO + Go runtime) and an authenticated pprof endpoint. The new
+# series are exposed on metrics_listen above — /metrics merges them with the
+# proxy's own counters; /debug/pprof is gated by the pprof block below.
+observability:
+  collector:
+    enabled: true
+    interval: "15s"
+    poll_timeout: "5s"
+    # The collector polls the proxy's downstream ClickHouse (shard replicas /
+    # upstream) using credentials from the ckh_manager config above. (An advanced
+    # ch_addr override exists in code but is not needed for normal deployments.)
+  pprof:
+    # Disabled by default. When enabled, token is REQUIRED — it is the bearer
+    # token for /debug/pprof. Keep it in an age-encrypted config, not plaintext.
+    enabled: false
+    token: ""

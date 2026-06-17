@@ -26,7 +26,10 @@
   },
 
   "rewriter": {
+    "engine": "grpc",
     "service_addr": "",
+    "native_library_path": "",
+    "native_library_release": "",
     "timeout": "5s",
     "physical_database": "testnet"
   },
@@ -51,5 +54,17 @@
     "data": false,
     "max_query_bytes": 300,
     "max_data_bytes": 200
+  },
+
+  "observability": {
+    "collector": {
+      "enabled": true,
+      "interval": "15s",
+      "poll_timeout": "5s"
+    },
+    "pprof": {
+      "enabled": false,
+      "token": ""
+    }
   }
 }

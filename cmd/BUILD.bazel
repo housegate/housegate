@@ -4,6 +4,7 @@ go_library(
     name = "housegate_lib",
     srcs = [
         "console_handler.go",
+        "fetch.go",
         "main.go",
         "secret.go",
     ],
@@ -15,10 +16,11 @@ go_library(
     deps = [
         "//:housegate",
         "//pkg/config",
+        "//pkg/ffifetch",
         "//pkg/log",
+        "//pkg/metricshttp",
         "//pkg/secretsload",
         "//pkg/version",
-        "@com_github_prometheus_client_golang//prometheus/promhttp",
     ],
 )
 

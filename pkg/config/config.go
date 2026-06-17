@@ -13,6 +13,7 @@
 package config
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,9 +33,12 @@ import (
 	"housegate/housegate/pkg/plugins/agent"
 	authplugin "housegate/housegate/pkg/plugins/auth"
 	"housegate/housegate/pkg/plugins/concurrency"
+	indexingusage "housegate/housegate/pkg/plugins/indexing_usage"
+	lthashplugin "housegate/housegate/pkg/plugins/lthash"
 	"housegate/housegate/pkg/plugins/rewrite"
 	"housegate/housegate/pkg/plugins/sessionstate"
 	"housegate/housegate/pkg/plugins/usage"
+	"housegate/housegate/pkg/rewriter"
 )
 
 // Duration is re-exported from cfgtypes so existing callers that
@@ -128,12 +132,14 @@ type Config struct {
 
 	// --- Feature sections (each owned by its plugin package) ---
 
-	Auth             authplugin.Config   `json:"auth"              yaml:"auth"`
-	Rewriter         rewrite.Config      `json:"rewriter"          yaml:"rewriter"`
-	Agent            agent.Config        `json:"agent"             yaml:"agent"`
-	Usage            usage.Config        `json:"usage"             yaml:"usage"`
-	ConcurrencyLimit concurrency.Config  `json:"concurrency_limit" yaml:"concurrency_limit"`
-	State            sessionstate.Config `json:"state"             yaml:"state"`
+	Auth             authplugin.Config    `json:"auth"              yaml:"auth"`
+	Rewriter         rewrite.Config       `json:"rewriter"          yaml:"rewriter"`
+	Agent            agent.Config         `json:"agent"             yaml:"agent"`
+	Usage            usage.Config         `json:"usage"             yaml:"usage"`
+	IndexingUsage    indexingusage.Config `json:"indexing_usage"    yaml:"indexing_usage"`
+	ConcurrencyLimit concurrency.Config   `json:"concurrency_limit" yaml:"concurrency_limit"`
+	State            sessionstate.Config  `json:"state"             yaml:"state"`
+	LtHash           lthashplugin.Config  `json:"lthash"            yaml:"lthash"`
 
 	// KeeperProxy is the CH-facing keeper proxy (link A of the
 	// keeper-pool design). Disabled when KeeperProxy.Listen is empty.
@@ -147,6 +153,10 @@ type Config struct {
 
 	Logging      LoggingConfig      `json:"logging"       yaml:"logging"`
 	NetworkState NetworkStateConfig `json:"network_state" yaml:"network_state"`
+
+	// Observability owns the metrics Collector + pprof config. Read by
+	// buildServer to construct the pkg/metrics Collector; no plugin owns it.
+	Observability ObservabilityConfig `json:"observability" yaml:"observability"`
 }
 
 // LoggingConfig controls what the proxy writes to operator logs. Owned
@@ -245,6 +255,34 @@ type InterserverMeshTLS struct {
 
 // Enabled reports whether the interserver mesh sidecar is configured.
 func (i InterserverMeshConfig) Enabled() bool { return i.EgressListen != "" }
+
+// ObservabilityConfig configures downstream metrics collection and the
+// authenticated pprof endpoint. Owned by pkg/config (plumbing) and read by
+// buildServer; the pkg/metrics Collector takes plain values, so there is no
+// config -> metrics import.
+type ObservabilityConfig struct {
+	Collector CollectorConfig `json:"collector" yaml:"collector"`
+	Pprof     PprofConfig     `json:"pprof"     yaml:"pprof"`
+}
+
+// CollectorConfig controls the background metrics Collector. CHAddr optionally
+// overrides the ClickHouse poll target (default: the shard replicas / upstream).
+// The collector's ClickHouse credentials always come from the ckh_manager config
+// (ckh_manager_config_path) — there are no separate collector credential fields.
+type CollectorConfig struct {
+	Enabled     bool     `json:"enabled"      yaml:"enabled"`
+	Interval    Duration `json:"interval"     yaml:"interval"`
+	PollTimeout Duration `json:"poll_timeout" yaml:"poll_timeout"`
+	CHAddr      string   `json:"ch_addr"      yaml:"ch_addr"`
+}
+
+// PprofConfig gates the /debug/pprof endpoint. Disabled by default; when
+// enabled, Token is required (bearer auth) — operators are encouraged to keep
+// it in an age-encrypted config rather than plaintext.
+type PprofConfig struct {
+	Enabled bool   `json:"enabled" yaml:"enabled"`
+	Token   string `json:"token"   yaml:"token"`
+}
 
 // NetworkStateConfig configures the NetworkState consumer (proxy
 // infrastructure, not a plugin).
@@ -442,6 +480,35 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// Observability.
+	if c.Observability.Pprof.Enabled && c.Observability.Pprof.Token == "" {
+		errs = append(errs, errors.New("observability.pprof.token is required when observability.pprof.enabled is true"))
+	}
+	if c.Observability.Collector.Enabled {
+		if c.Observability.Collector.Interval.Duration <= 0 {
+			errs = append(errs, errors.New("observability.collector.interval must be > 0 when the collector is enabled"))
+		}
+		if c.Observability.Collector.PollTimeout.Duration <= 0 {
+			errs = append(errs, errors.New("observability.collector.poll_timeout must be > 0 when the collector is enabled"))
+		}
+	}
+
+	// Engine validity is mode-independent — both server and agent can
+	// configure a non-default engine for test or migration purposes.
+	switch c.Rewriter.Engine {
+	case "", rewriter.EngineGRPC, rewriter.EngineNative:
+		// ok
+	default:
+		errs = append(errs, fmt.Errorf("rewriter.engine %q is invalid (want %q or %q)",
+			c.Rewriter.Engine, rewriter.EngineGRPC, rewriter.EngineNative))
+	}
+
+	if s := c.Rewriter.NativeLibrarySHA256; s != "" {
+		if raw, err := hex.DecodeString(s); err != nil || len(raw) != 32 {
+			errs = append(errs, fmt.Errorf("rewriter.native_library_sha256 must be 64 hex chars, got %q", s))
+		}
+	}
+
 	if joined := errors.Join(errs...); joined != nil {
 		return fmt.Errorf("invalid config (mode=%s):\n%w", c.Mode(), joined)
 	}
@@ -506,12 +573,14 @@ func Default() Config {
 		Rewriter: rewrite.Config{
 			ServiceAddr: EnvOrDefault("HOUSEGATE_REWRITER_ADDR", "localhost:50051"),
 			Timeout:     Duration{5 * time.Second},
+			Engine:      EnvOrDefault("HOUSEGATE_REWRITER_ENGINE", ""),
 		},
 		Agent: agent.Config{
 			Mode:          EnvOrDefault("HOUSEGATE_AGENT", "") == "true",
 			Upstream:      EnvOrDefault("HOUSEGATE_AGENT_UPSTREAM", ""),
 			PrivateKeyHex: EnvOrDefault("HOUSEGATE_AGENT_KEY", ""),
 			Owner:         EnvOrDefault("HOUSEGATE_AGENT_OWNER", ""),
+			Driver:        EnvOrDefault("HOUSEGATE_AGENT_DRIVER", "") == "true",
 		},
 		Usage: usage.Config{
 			Enabled: false,
@@ -537,6 +606,18 @@ func Default() Config {
 			// HOUSEGATE_NETWORK_STATE_SOURCE is the modern spelling
 			// and additionally accepts a YAML path.
 			Source: EnvOrDefault("HOUSEGATE_NETWORK_STATE_SOURCE", EnvOrDefault("HOUSEGATE_NETWORK_STATE_REDIS", "")),
+		},
+		Observability: ObservabilityConfig{
+			Collector: CollectorConfig{
+				Enabled:     EnvOrDefault("HOUSEGATE_COLLECTOR_ENABLED", "true") != "false",
+				Interval:    Duration{15 * time.Second},
+				PollTimeout: Duration{5 * time.Second},
+				CHAddr:      EnvOrDefault("HOUSEGATE_COLLECTOR_CH_ADDR", ""),
+			},
+			Pprof: PprofConfig{
+				Enabled: EnvOrDefault("HOUSEGATE_PPROF_ENABLED", "") == "true",
+				Token:   EnvOrDefault("HOUSEGATE_PPROF_TOKEN", ""),
+			},
 		},
 	}
 }

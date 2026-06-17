@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"housegate/housegate/pkg/auth"
 	"housegate/housegate/pkg/billing"
 	"housegate/housegate/pkg/chproto"
@@ -18,6 +20,7 @@ import (
 	"housegate/housegate/pkg/cluster"
 	"housegate/housegate/pkg/config"
 	"housegate/housegate/pkg/credentials"
+	"housegate/housegate/pkg/ffifetch"
 	"housegate/housegate/pkg/interserver"
 	"housegate/housegate/pkg/keeper"
 	"housegate/housegate/pkg/log"
@@ -29,6 +32,8 @@ import (
 	"housegate/housegate/pkg/plugins/concurrency"
 	"housegate/housegate/pkg/plugins/credential"
 	"housegate/housegate/pkg/plugins/forward"
+	indexingusage "housegate/housegate/pkg/plugins/indexing_usage"
+	lthashplugin "housegate/housegate/pkg/plugins/lthash"
 	metricsplugin "housegate/housegate/pkg/plugins/metrics"
 	"housegate/housegate/pkg/plugins/rewrite"
 	routeplugin "housegate/housegate/pkg/plugins/route"
@@ -75,10 +80,11 @@ func loadNetworkState(cfg *config.Config, rf *redisFactory) (registry.Registry, 
 	return nil, fmt.Errorf("network_state.source %q is not a YAML or RPC source; in-process Redis is no longer supported — embedders must inject NetworkState via Options.NetworkState (e.g. sentio-node)", cfg.NetworkState.Source)
 }
 
-// buildRewriterFactory constructs the SQL rewriter factory that dials
-// the external sql-rewriter gRPC service. Returns nil (and logs a
-// warning) when the rewriter service is unavailable at startup — the
-// relay path tolerates a nil factory by skipping rewriting entirely.
+// buildRewriterFactory constructs the SQL rewriter factory for the
+// configured engine — dialing the external sql-rewriter gRPC service or
+// loading the in-process rewriter-go engine. Returns nil (and logs a
+// warning) when the backend is unavailable at startup — the relay path
+// tolerates a nil factory by skipping rewriting entirely.
 func buildRewriterFactory(cfg *config.Config, reg registry.Registry) rewriter.Factory {
 	// Router-only deployments (no shard, no upstream) never invoke the
 	// rewriter — every session gets forwarded to a peer instead.
@@ -87,16 +93,37 @@ func buildRewriterFactory(cfg *config.Config, reg registry.Registry) rewriter.Fa
 		return nil
 	}
 
+	// native_library_release: resolve the FFI library from a rewriter-go
+	// release before constructing the factory. Explicit NativeLibraryPath
+	// wins; fetch failure keeps the warn-and-disable fail-open posture.
+	nativeLibPath := cfg.Rewriter.NativeLibraryPath
+	if cfg.Rewriter.Engine == rewriter.EngineNative && nativeLibPath == "" && cfg.Rewriter.NativeLibraryRelease != "" {
+		p, err := ffifetch.Fetch(context.Background(), ffifetch.Options{
+			Tag:     cfg.Rewriter.NativeLibraryRelease,
+			SHA256:  cfg.Rewriter.NativeLibrarySHA256,
+			BaseURL: cfg.Rewriter.NativeLibraryReleaseBaseURL,
+		})
+		if err != nil {
+			log.Warne(err, "failed to fetch native rewriter library, rewriting disabled")
+			return nil
+		}
+		log.Infow("native rewriter library resolved from release",
+			"tag", cfg.Rewriter.NativeLibraryRelease, "path", p)
+		nativeLibPath = p
+	}
+
 	rwConfig := rewriter.Options{
-		Enabled:          true,
-		ServiceAddr:      cfg.Rewriter.ServiceAddr,
-		Upstream:         cfg.Upstream,
-		Listen:           cfg.Listen,
-		CallbackAddr:     cfg.CallbackUrl,
-		Timeout:          cfg.Rewriter.Timeout.Duration,
-		PhysicalDatabase: cfg.Rewriter.PhysicalDatabase,
-		AuthEnabled:      cfg.Auth.Enabled,
-		Delim:            cfg.Rewriter.Delimiter,
+		Enabled:           true,
+		ServiceAddr:       cfg.Rewriter.ServiceAddr,
+		Engine:            cfg.Rewriter.Engine,
+		NativeLibraryPath: nativeLibPath,
+		Upstream:          cfg.Upstream,
+		Listen:            cfg.Listen,
+		CallbackAddr:      cfg.CallbackUrl,
+		Timeout:           cfg.Rewriter.Timeout.Duration,
+		PhysicalDatabase:  cfg.Rewriter.PhysicalDatabase,
+		AuthEnabled:       cfg.Auth.Enabled,
+		Delim:             cfg.Rewriter.Delimiter,
 	}
 	rwf, err := rewriter.NewSentioNetworkFactory(rwConfig, reg)
 	if err != nil {
@@ -104,6 +131,7 @@ func buildRewriterFactory(cfg *config.Config, reg registry.Registry) rewriter.Fa
 		return nil
 	}
 	log.Infow("SQL rewriter enabled",
+		"engine", cfg.Rewriter.Engine,
 		"service_addr", cfg.Rewriter.ServiceAddr,
 		"upstream", cfg.Upstream,
 		"physical_database", cfg.Rewriter.PhysicalDatabase,
@@ -161,6 +189,10 @@ type builtServer struct {
 	listeners []serverListener
 	preServe  func(ctx context.Context)
 	teardown  func()
+	// metricsRegistry is the dedicated Prometheus registry for the downstream
+	// metrics Collector (nil when collection is disabled or in agent mode).
+	// Exposed to hosts via Proxy.MetricsRegistry().
+	metricsRegistry *prometheus.Registry
 }
 
 // buildServer assembles the full server-mode plugin chain and a
@@ -398,6 +430,20 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	queryCompletePlugins := []plugin.QueryCompletePlugin{}
 	closePlugins := []plugin.ClosePlugin{}
 
+	// indexing_usage is appended *after* the rewriter below so its
+	// OnQuery sees qctx.StatementType / AccessedTables populated. The
+	// plugin reports each INSERT directly to the injected sink — no
+	// local accumulator/ticker — so sentio-node's usage.Server is the
+	// single point of per-key folding. queryPlugins / chain insertion
+	// happens further down right after rewritePlug.
+	var iuPlugin *indexingusage.Plugin
+	if cfg.IndexingUsage.Enabled {
+		iuPlugin = indexingusage.New(opts.IndexingUsageReporter)
+		log.Infow("indexing_usage enabled",
+			"reporter_injected", opts.IndexingUsageReporter != nil,
+		)
+	}
+
 	if cfg.ConcurrencyLimit.Enabled && concurrencyRedis != nil {
 		lim := concurrency.NewRedisLimiter(concurrencyRedis, cfg.ConcurrencyLimit.Timeout.Duration)
 		concPlugin := &concurrency.Plugin{
@@ -416,6 +462,16 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			"timeout", cfg.ConcurrencyLimit.Timeout,
 			"fail_open", cfg.ConcurrencyLimit.FailOpen,
 		)
+	}
+
+	var dataPlugins []plugin.DataPlugin
+	if cfg.LtHash.Enabled {
+		ltPlug := lthashplugin.New(lthashplugin.DefaultRegistry)
+		queryPlugins = append(queryPlugins, ltPlug)
+		queryCompletePlugins = append(queryCompletePlugins, ltPlug)
+		closePlugins = append(closePlugins, ltPlug)
+		dataPlugins = append(dataPlugins, ltPlug)
+		log.Infow("lthash commitment plugin enabled (MVP)")
 	}
 
 	sessstatePlug := &sessionstate.Plugin{Config: cfg.State}
@@ -478,6 +534,12 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		queryPlugins = append(queryPlugins, rewritePlug)
 	}
 
+	// indexing_usage runs *after* the rewriter so it can read the
+	// classified StatementType + AccessedTables it populates.
+	if iuPlugin != nil {
+		queryPlugins = append(queryPlugins, iuPlugin)
+	}
+
 	var cgPlug *commitgate.Plugin
 	if len(opts.CommitGateObservers) > 0 {
 		cgPlug = commitgate.NewPlugin(opts.CommitGateObservers)
@@ -525,6 +587,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		HandshakeCompletePlugins: []plugin.HandshakeCompletePlugin{metrics},
 		HelloPlugins:             helloPlugins,
 		QueryPlugins:             queryPlugins,
+		DataPlugins:              dataPlugins,
 		QueryCompletePlugins:     queryCompletePlugins,
 		ClosePlugins:             closePlugins,
 		ExceptionPlugins:         exceptionPlugins,
@@ -628,8 +691,17 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		)
 	}
 
+	// Downstream-metrics Collector (host + runtime + per-replica ClickHouse).
+	// Started in preServe (mirroring libCluster.Start), stopped via the run ctx;
+	// its poller connections are closed on teardown.
+	metricsCollector, metricsRegistry, metricsCleanup := buildCollector(*cfg, credProvider, selfIndexerID)
+	if metricsCleanup != nil {
+		pushTeardown(metricsCleanup)
+	}
+
 	return &builtServer{
-		listeners: listeners,
+		listeners:       listeners,
+		metricsRegistry: metricsRegistry,
 		preServe: func(ctx context.Context) {
 			if libCluster != nil {
 				libCluster.Start(ctx)
@@ -638,6 +710,10 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 				} else {
 					log.Infow("cluster manager started in single-replica mode", "upstream", cfg.Upstream)
 				}
+			}
+			if metricsCollector != nil {
+				go metricsCollector.Start(ctx)
+				log.Infow("metrics collector started", "interval", cfg.Observability.Collector.Interval.Duration)
 			}
 		},
 		teardown: func() {
@@ -755,7 +831,7 @@ func buildAgent(opts Options, rf *redisFactory) (*builtServer, error) {
 		ConnLifecyclePlugins:     []plugin.ConnLifecyclePlugin{metrics},
 		HandshakeCompletePlugins: []plugin.HandshakeCompletePlugin{metrics},
 		QueryPlugins: []plugin.QueryPlugin{
-			&agent.Plugin{Signer: signer, Observer: obs, Owner: cfg.Agent.Owner},
+			&agent.Plugin{Signer: signer, Observer: obs, Owner: cfg.Agent.Owner, IsDriver: cfg.Agent.Driver},
 			metrics,
 		},
 		ExceptionPlugins: []plugin.ExceptionPlugin{metrics},

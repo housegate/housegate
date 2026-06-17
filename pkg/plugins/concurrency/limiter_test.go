@@ -329,7 +329,7 @@ func TestPlugin_DoubleComplete_IsNoop(t *testing.T) {
 	}
 	p.OnQueryComplete(context.Background(), sess)
 	p.OnQueryComplete(context.Background(), sess) // second call must be no-op
-	p.OnClose(sess)                                // OnClose after release: no-op
+	p.OnClose(sess)                               // OnClose after release: no-op
 	if len(fl.releaseCalls) != 1 {
 		t.Errorf("expected exactly one Release, got %d: %+v", len(fl.releaseCalls), fl.releaseCalls)
 	}
@@ -344,5 +344,5 @@ func TestPlugin_NilLimiter_NoPanic(t *testing.T) {
 		t.Fatalf("nil Limiter must be a no-op, got: %v", err)
 	}
 	p.OnQueryComplete(context.Background(), sess) // must not panic
-	p.OnClose(sess)                                // must not panic
+	p.OnClose(sess)                               // must not panic
 }

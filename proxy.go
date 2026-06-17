@@ -18,6 +18,8 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"housegate/housegate/pkg/auth"
 	"housegate/housegate/pkg/billing"
 	"housegate/housegate/pkg/cluster"
@@ -53,6 +55,13 @@ type Proxy interface {
 	// the id post-startup gets the fresh value without rebuilding
 	// the proxy. Returns 0 when no getter was provided.
 	IndexerId() uint64
+
+	// MetricsRegistry returns the dedicated Prometheus registry holding the
+	// downstream-metrics Collector's series (ClickHouse + host + Go runtime),
+	// or nil when collection is disabled or in agent mode. Hosts gather it
+	// merged with the default registry to expose /metrics; the standalone
+	// binary does this in startMetricsServer.
+	MetricsRegistry() *prometheus.Registry
 }
 
 // Options configures a Proxy. Only Config is required. Optional
@@ -71,13 +80,14 @@ type Options struct {
 	// AND the source value itself are bypassed; the injected registry is
 	// used verbatim. The operator-visible source field is irrelevant in
 	// that path even if non-empty.
-	NetworkState registry.Registry
-	Validator    auth.Validator
-	Rewriter     rewriter.Factory
-	CredProvider credentials.CredentialProvider
-	Signer       auth.Signer
-	UsageClient  billing.UsageClient
-	Cluster      cluster.Cluster
+	NetworkState          registry.Registry
+	Validator             auth.Validator
+	Rewriter              rewriter.Factory
+	CredProvider          credentials.CredentialProvider
+	Signer                auth.Signer
+	UsageClient           billing.UsageClient
+	IndexingUsageReporter billing.IndexingUsageReporter
+	Cluster               cluster.Cluster
 
 	// CommitGateObservers gate DDL statements (CREATE / DROP TABLE,
 	// CREATE / DROP DATABASE) on host-supplied external commits.
@@ -297,6 +307,13 @@ func (p *proxyImpl) IndexerId() uint64 {
 		return 0
 	}
 	return p.getIndexerId()
+}
+
+func (p *proxyImpl) MetricsRegistry() *prometheus.Registry {
+	if p.built == nil {
+		return nil
+	}
+	return p.built.metricsRegistry
 }
 
 func (p *proxyImpl) teardown() {

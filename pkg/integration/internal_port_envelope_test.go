@@ -61,15 +61,15 @@ shards:
 
 	cfgVal := config.Default()
 	cfg := &cfgVal
-	cfg.Listen = "127.0.0.1:0"     // ephemeral — captured via proxy.Addr()
-	cfg.InternalListen = intAddr    // specific — returned to caller
+	cfg.Listen = "127.0.0.1:0"   // ephemeral — captured via proxy.Addr()
+	cfg.InternalListen = intAddr // specific — returned to caller
 	cfg.MetricsListen = ""
 	cfg.Upstream = chAddr
 	cfg.CkhManagerConfigPath = ckhManagerPath
 	cfg.Auth = authplugin.Config{
-		Enabled:          true,
-		AllowNoAuth:      false,
-		MaxTokenAge:      cfgtypes.Duration{Duration: 5 * time.Minute},
+		Enabled:     true,
+		AllowNoAuth: false,
+		MaxTokenAge: cfgtypes.Duration{Duration: 5 * time.Minute},
 	}
 	cfg.Rewriter.ServiceAddr = ""
 	cfg.Rewriter.PhysicalDatabase = ""

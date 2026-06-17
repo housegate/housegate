@@ -19,7 +19,7 @@ import (
 	"housegate/housegate/pkg/plugins/commitgate"
 	"housegate/housegate/pkg/registry"
 	"housegate/housegate/pkg/sqlmeta"
-	pb "housegate/housegate/protos"
+	pb "github.com/housegate/rewriter-go/gen/pb"
 )
 
 // capturingObserver records every BeforeStatement event delivered to
@@ -362,4 +362,3 @@ func TestCommitGate_ObserverError(t *testing.T) {
 		t.Errorf("rejected CREATE TABLE still created the table on CH (count=%d, want 0)", count)
 	}
 }
-

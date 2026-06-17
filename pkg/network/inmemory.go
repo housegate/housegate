@@ -257,12 +257,14 @@ func convertDatabase(info DatabaseInfo) registry.Database {
 	if len(info.Tables) > 0 {
 		tables = make([]registry.Table, len(info.Tables))
 		for i, t := range info.Tables {
-			tables[i] = registry.Table{Id: t.TableId}
+			tables[i] = registry.Table{Id: t.TableId, Type: t.TableType}
 		}
 	}
 	return registry.Database{
 		IndexerId:     info.IndexerId,
 		PendingDelete: info.PendingDelete,
+		DbType:        uint8(info.DbType),
+		ProcessorId:   info.ProcessorId,
 		Tables:        tables,
 	}
 }

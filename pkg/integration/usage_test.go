@@ -6,9 +6,9 @@ import (
 	"sync"
 	"testing"
 
+	housegate "housegate/housegate"
 	"housegate/housegate/pkg/auth"
 	"housegate/housegate/pkg/billing"
-	housegate "housegate/housegate"
 	"housegate/housegate/pkg/config"
 	"housegate/housegate/pkg/integration/testenv"
 )

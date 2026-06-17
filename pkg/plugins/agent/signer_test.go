@@ -12,10 +12,10 @@ import (
 
 	"golang.org/x/crypto/sha3"
 
+	"housegate/housegate/pkg/auth"
 	"housegate/housegate/pkg/chproto"
 	"housegate/housegate/pkg/chsession"
 	"housegate/housegate/pkg/plugin"
-	"housegate/housegate/pkg/auth"
 )
 
 func newTestSession(t *testing.T, id int64) chsession.Session {
@@ -118,6 +118,45 @@ func TestPlugin_OmitsPayerSettingWhenOwnerUnset(t *testing.T) {
 
 	if v := findSetting(qctx.Query.Settings, auth.PayerSettingKey); v != "" {
 		t.Errorf("expected no %q setting, got %q", auth.PayerSettingKey, v)
+	}
+}
+
+func TestPlugin_InjectsDriverSettingWhenIsDriverTrue(t *testing.T) {
+	signer, err := auth.NewRelaySigner("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
+	if err != nil {
+		t.Fatalf("create signer: %v", err)
+	}
+
+	sess := newTestSession(t, 9)
+	qctx := newTestQueryContext(sess, "SELECT 1")
+
+	p := &Plugin{Signer: signer, IsDriver: true}
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := findSetting(qctx.Query.Settings, auth.DriverSettingKey)
+	if got != "'1'" {
+		t.Errorf("driver setting: got %q, want %q", got, "'1'")
+	}
+}
+
+func TestPlugin_OmitsDriverSettingWhenIsDriverFalse(t *testing.T) {
+	signer, err := auth.NewRelaySigner("1111111111111111111111111111111111111111111111111111111111111111")
+	if err != nil {
+		t.Fatalf("create signer: %v", err)
+	}
+
+	sess := newTestSession(t, 10)
+	qctx := newTestQueryContext(sess, "SELECT 1")
+
+	p := &Plugin{Signer: signer} // IsDriver defaults to false
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if v := findSetting(qctx.Query.Settings, auth.DriverSettingKey); v != "" {
+		t.Errorf("expected no %q setting when IsDriver=false, got %q", auth.DriverSettingKey, v)
 	}
 }
 

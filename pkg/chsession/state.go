@@ -158,6 +158,14 @@ type SessionState struct {
 	// SetPlatformOperator.
 	platformOperator bool
 
+	// isDriver is set by the auth validator when it recognizes
+	// SQL_sentio_driver on an indexer-signed query. Narrower than
+	// maintenance: only the usage and commitgate plugins short-circuit;
+	// rewrite continues to run so driver-written logical names get
+	// translated to physical names. Guarded by mu; read via
+	// Snapshot().IsDriver, written via SetIsDriver.
+	isDriver bool
+
 	mu sync.RWMutex
 }
 
@@ -201,6 +209,7 @@ type SessionStateSnapshot struct {
 	CommitGateEvent  any
 	Maintenance      bool
 	PlatformOperator bool
+	IsDriver         bool
 }
 
 // Snapshot returns a copy of the state under a read lock. Settings map is
@@ -235,6 +244,7 @@ func (s *SessionState) Snapshot() SessionStateSnapshot {
 		CommitGateEvent:     s.CommitGateEvent,
 		Maintenance:         s.maintenance,
 		PlatformOperator:    s.platformOperator,
+		IsDriver:            s.isDriver,
 	}
 	if len(s.Settings) > 0 {
 		snap.Settings = make(map[string]chproto.Setting, len(s.Settings))
@@ -461,6 +471,17 @@ func (s *SessionState) SetMaintenance(v bool) {
 func (s *SessionState) SetPlatformOperator(v bool) {
 	s.mu.Lock()
 	s.platformOperator = v
+	s.mu.Unlock()
+}
+
+// SetIsDriver flags this session as indexer-driver traffic. When true,
+// the usage and commitgate plugins short-circuit; rewrite still runs so
+// driver-written logical names get translated to physical. Set by the
+// auth validator after recognizing SQL_sentio_driver on an indexer-signed
+// query.
+func (s *SessionState) SetIsDriver(v bool) {
+	s.mu.Lock()
+	s.isDriver = v
 	s.mu.Unlock()
 }
 

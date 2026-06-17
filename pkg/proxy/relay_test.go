@@ -266,9 +266,9 @@ func containsString(xs []string, want string) bool {
 // and dispatched it through the chain before firing OnQueryComplete.
 type exceptionRecordingHooks struct {
 	plugin.NoopHooks
-	mu              sync.Mutex
-	exceptions      []*chproto.Exception
-	queryCompletes  int
+	mu             sync.Mutex
+	exceptions     []*chproto.Exception
+	queryCompletes int
 }
 
 func (h *exceptionRecordingHooks) OnException(_ context.Context, _ chsession.Session, exc *chproto.Exception) error {

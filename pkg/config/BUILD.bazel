@@ -12,9 +12,12 @@ go_library(
         "//pkg/plugins/agent",
         "//pkg/plugins/auth",
         "//pkg/plugins/concurrency",
+        "//pkg/plugins/indexing_usage",
+        "//pkg/plugins/lthash",
         "//pkg/plugins/rewrite",
         "//pkg/plugins/sessionstate",
         "//pkg/plugins/usage",
+        "//pkg/rewriter",
         "@in_yaml_go_yaml_v3//:yaml",
     ],
 )
@@ -23,6 +26,7 @@ go_test(
     name = "config_test",
     srcs = [
         "config_test.go",
+        "observability_config_test.go",
         "proxy_blocks_test.go",
     ],
     embed = [":config"],
