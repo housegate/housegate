@@ -1,0 +1,740 @@
+# Storage Network Data Integrity Verification Layer - Integrated Design
+
+**Date:** 2026-06-22 **Status:** Proposed(v3, integrated after the 2026-06-17 storage integrity sync) **Base:** [2026-06-10 multi-replica trust design](https://github.com/housegate/housegate/blob/main/docs/superpowers/specs/2026-06-10-multi-replica-trust-design.md) + [sentio-network PROGRESS](https://github.com/sentioxyz/designs/blob/main/sento-network/PROGRESS.md) as of 2026-06-17 + [2026-06-17 storage integrity sync summary](https://github.com/sentioxyz/designs/blob/main/sento-network/meetings/2026-06-17-storage-integrity-sync-summary.md) **Source of truth:** English version; regenerate the Chinese version from this file when changing protocol semantics.
+
+This document folds the June 17 discussion back into the June 10 trust design. It keeps the Plan B / Keeper direction, but narrows the v1 integrity layer around three decisions: verified user tables are exposed as one virtual table backed by physical `unsafe` and `safe` tables; JSON/Map and mutation-class statements are verified by replay rather than HouseGate-side streaming LtHash; and `safe` is a published state transition controlled by Keeper after quorum replay, not a local label assigned by a ClickHouse operator.
+
+## 1. Positioning and Decision Summary
+
+The scope is the data integrity and anti-fraud layer for Sentio Storage Network. It answers one question: when a user submits a signed write, how do other parties know that the ClickHouse parts later served as `safe` are the faithful result of that signed input?
+
+The base topology remains fixed where it matters for the integrity layer: one HouseGate fronts one ClickHouse service; all client traffic passes through HouseGate; ClickHouse is not exposed directly to users; `hg_unsafe` replication reuses native ReplicatedMergeTree and ClickHouse Keeper mechanics; Sentio Keeper owns sequencing, attestation, and safe-state publication; v1 Sentio Keeper is centralized and Sentio-operated; decentralization changes who checks and who bears economic consequences, not the evidence format.
+
+The v1 verification baseline is **optimistic source execution plus quorum replay promotion**. One selected source node executes first and produces `unsafe` parts for freshness. Keeper records the signed input and the source's result claim. Verifier replicas replay the same L3 input against the previous safe snapshot on a pinned executor. Only a quorum matching the source claim, or a successful challenge replay, can promote parts into the `safe` table.
+
+The full-node parallel replay route remains a fallback alternative: every replay node executes the sequenced input and produces its own candidate unsafe part, then Keeper chooses the majority/recomputable root. It is simpler and avoids part movement, but it lengthens the unsafe window and does not give the same fast source-write path.
+
+## 2. Goals and Non-Goals
+
+Goals:
+
+1. Prevent polluted data from crossing into `safe`.
+2. Preserve low-latency writes by allowing an `unsafe` acknowledgement before replay finality.
+3. Make the relationship between signed SQL/payload and safe parts independently replayable.
+4. Separate byte transport correctness from semantic execution correctness.
+5. Define concrete responsibilities for HouseGate, Keeper, ClickHouse/SNode, and replay executors.
+6. Keep v1 implementable without forking ClickHouse. The §12.1 engine split (`hg_unsafe` ReplicatedMergeTree ungated, `hg_safe` MergeTree) achieves this: no reverse-proxy gate and no ClickHouse patch are required.
+
+Non-goals:
+
+1. Query-result attestation for arbitrary `SELECT` responses.
+2. A complete economic challenge/slashing game.
+3. Support for `INSERT ... SELECT`, materialized views that read mutable state, or large unbounded mutations in v1.
+4. A claim that local `safe` table bytes cannot be maliciously served incorrectly after promotion. That is a separate serving-integrity problem with probabilistic/engineering mitigations.
+5. Support for engines that change row identity during background processing, such as Replacing/Summing/Aggregating/Collapsing MergeTree, TTL deletes, lightweight deletes, or `OPTIMIZE ... DEDUPLICATE`.
+
+## 3. Established Facts From the June 17 Sync
+
+The June 17 meeting changed the shape of the design in four material ways.
+
+First, the physical table model is now explicit: each verified virtual table is backed by an `unsafe` table and a `safe` table. HouseGate exposes one virtual table name. Normal reads hit only the safe table. If a product explicitly asks for intermediate state, HouseGate can rewrite to a union of safe and unsafe surfaces.
+
+Second, HouseGate-side streaming LtHash is no longer the general INSERT verifier. It can work for narrow scalar profiles, but JSON and Map are materialized by ClickHouse through version-dependent logic: key ordering, null handling, precision loss, dynamic path limits, and deep nesting behavior can change the stored logical value. Reimplementing ClickHouse's materializer in HouseGate is too heavy and too brittle. General v1 INSERT verification therefore uses replay/executor equivalence.
+
+Third, UPDATE and DELETE are replay-only. A mutation changes stored rows relative to pre-state; a wire-side row hash does not know which old rows are removed or rewritten. The verifier must replay the mutation against the previous safe snapshot or against cloned affected safe parts.
+
+Fourth, safe-table serving integrity is a separate and larger topic. The integrity layer can prove that a safe manifest/root was derived correctly. It cannot, by itself, prove that a malicious serving node returned that safe data for every user query. Mitigations include row/chunk hashes, Merkle roots, periodic scans, sampled real query input/output, and cross-node comparison, but shadow-data attacks remain possible without query attestation or trusted serving.
+
+## 4. Threat Model and Trust Boundary
+
+Trusted in v1:
+
+- The Sentio-operated Keeper authority and its Raft group for ordering, admission, and safe-state publication.
+- The input normalizer at the agent/SDK before the user signature. Non-deterministic functions such as `now()` and `random()` are materialized to constants and `_hg_row_id` is injected at the agent/SDK before signing (§7, §9). The ingress HouseGate does not normalize.
+- The pinned executor profile selected by the protocol for a given L3 range.
+
+Not trusted:
+
+- Operator-side ClickHouse.
+- Operator-side HouseGate once it is merely forwarding already signed input.
+- Source SNode result claims.
+- Local serving behavior after data has been promoted to a local safe table.
+- Native ReplicatedMergeTree part checksums as semantic proof.
+
+Native replication gives byte convergence. It does not prove that a first committer faithfully executed the signed SQL. The integrity layer adds an external content arbiter: signed statement log, previous safe snapshot, replay executor, state roots, and signed attestations.
+
+## 5. System Roles and Responsibilities
+
+### 5.1 HouseGate
+
+HouseGate is the protocol and visibility boundary, not the SQL executor.
+
+HouseGate responsibilities:
+
+- Expose one virtual table for every verified user table.
+- Apply physical table rewrites according to runtime mode: in forward mode HouseGate forwards the signed source SQL verbatim; in managed/proxy modes HouseGate deterministically rewrites virtual writes to the physical `unsafe` table and virtual safe reads to the physical `safe` table.
+- Optionally rewrite an explicit intermediate-state read to `safe UNION unsafe`, with documented weaker semantics.
+- **Validate** the incoming signed envelope (signature, `sql_hash`, `payload_hash`) and **spool** the payload into the DA/payload store. HouseGate does NOT materialize non-determinism or inject reserved columns — those happen at the agent/SDK before signing (§7, §9). In forward mode it forwards the signed SQL verbatim. In managed/proxy modes it applies the deterministic physical rewrite to the source-path SQL; the pinned executor recomputes the same rewrite during replay, so a malicious HouseGate rewrite is caught as a source/byte mismatch rather than trusted as protocol truth.
+- Build or forward `StatementEnvelopeV2`.
+- Hide reserved columns from the logical surface unless an operator/debug view explicitly asks for them.
+- Reject user attempts to write, update, rename, or drop reserved columns.
+- Report candidate parts, ClickHouse system state, and metrics needed by Keeper and replay workers.
+
+HouseGate must not be the final judge of correctness. It may compute expected claims for fast profiles, but `safe` depends on Keeper validation and replay attestations.
+
+### 5.2 Keeper
+
+Keeper is the sequencer, validator, registry, attestation collector, and safe-state publisher.
+
+Keeper responsibilities:
+
+- Assign `statement_seq` and build LC blocks over signed statement envelopes.
+- Enforce `statement_id` uniqueness via the L3-derived mountain-range accumulator + per-account high-water mark (§7); reject duplicates with non-membership proofs. This state is replayable from the L3 stream, so decentralizing Keeper does not change the dedup fact.
+- Record payload references and ensure payload availability.
+- Select the source node for optimistic execution.
+- Accept source result claims only through the validation front.
+- Store RC records for candidate parts, partition deltas, and source claimed roots.
+- Build `ReplayJob` objects from LC block input, previous safe snapshot identity, schema snapshot, executor profile, and payload refs.
+- Collect `ReplayAttestation` objects and run the three-way promotion check (replay + partition-delta + byte-side lthash, §9). In v1 the centralized Keeper is the trust root that *orchestrates* the 2-of-3 replay quorum and arbitrates promote/challenge immediately; recomputability is an after-the-fact audit capability in v1. The decentralized-phase safety model (challenge window) is specified in §11.
+- Open challenge replay on root mismatch or timeout.
+- Publish `SafeSnapshotManifest` and safe watermarks.
+- Issue Keeper-signed promotion commands (`REPLACE PARTITION` from a promotion shadow table, §12) into safe tables.
+- Gate safe-table merges via the ledger equation (§12.4).
+- Coordinate reorg/drop cleanup for unsafe parts.
+- Track node membership and the Active status of replicas after snapshot sync.
+
+Keeper does not execute user SQL in the normal path. A challenge reference executor may be orchestrated by Keeper, but the signed replay receipt is still evidence produced by an executor profile.
+
+### 5.3 ClickHouse and SNode
+
+ClickHouse stores and materializes data; SNode runs local orchestration around it.
+
+ClickHouse/SNode responsibilities:
+
+- Store physical `unsafe` (ReplicatedMergeTree) and `safe` (MergeTree) tables per §12.1.
+- Execute the source write into `unsafe`.
+- Produce candidate part metadata: part name, partition id, physical checksum/hash, row count, bytes, and optional row/content commitment.
+- Run pinned replay execution in scratch or replay-local tables.
+- Scan local parts and compute byte/content commitments required by the receipt.
+- Promote verified local partitions into `safe` only under Keeper-signed `REPLACE PARTITION` (§12.2).
+- Detach/drop rejected unsafe parts.
+- Run safe-table audit jobs and respond to cross-node sampling checks.
+
+ClickHouse runs unmodified: the §12.1 engine split means no reverse-proxy gate and no ClickHouse patch are required.
+
+### 5.4 Replay Executor
+
+The replay executor is the deterministic execution witness.
+
+Replay executor responsibilities:
+
+- Start from a previous `SafeSnapshotManifest`, never from unsafe state.
+- Load payload bytes only after `payload_hash` and `payload_length` match.
+- Pin ClickHouse build, settings, schema snapshot, and executor profile.
+- For payload-local INSERTs, apply the deterministic Phase-2 physical rewrite when the runtime mode requires it (§7), materialize the signed payload, and produce new part/root commitments.
+- For mutations, clone or attach affected safe parts into scratch, execute the mutation, and compute old/new part deltas.
+- Emit `ExecutionReceipt` and `ReplayAttestation`.
+- Sign mismatches as challenge evidence rather than treating them as local protocol failure.
+
+## 6. Physical Table Model
+
+Each verified virtual table `Transfer` maps to two physical tables:
+
+```text
+hg_unsafe.Transfer_<table_id>
+hg_safe.Transfer_<table_id>
+```
+
+Both tables use the same logical user columns plus reserved protocol columns. They should have the same partition key, order key, primary key, storage policy, and type profile so that `detach`/`attach`, `ATTACH PARTITION FROM`, or equivalent promotion can stay close to O(1).
+
+Reserved columns:
+
+```sql
+-- mandatory on every verified table
+_hg_row_id FixedString(32)
+
+-- optional, per-table opt-in (default off); forensic/debug only
+_hg_payload_ordinal UInt64
+```
+
+`_hg_row_id` is the only load-bearing reserved column. It distinguishes duplicate user-visible rows and is the LtHash row-instance identity (§8); merge, mutation, and the byte-side promotion check all rely on it. The agent injects it at signing time from `BLAKE3("housegate-row-id-v1" || network_id || table_id || statement_id || global_row_ordinal)` (§5.2 of the 2026-06-10 design), so it is fixed before sequencing and is stable for the row's lifetime. Storage cost is real and accepted: 32 bytes/row, incompressible. A structured-integer alternative (`(client_account_hash, client_seq, global_row_ordinal)` packed into a fixed-width integer, compressible to near zero) remains the documented fallback if P0/P1 measurements demand it (open question 11).
+
+`_hg_payload_ordinal` is the `global_row_ordinal` that fed `_hg_row_id`; since `_hg_row_id` is a hash it cannot be reversed, so storing the ordinal separately is purely forensic ("which row of the payload was this"). Off by default.
+
+**Reserved columns that are deliberately not stored per row, and why:**
+
+- `_hg_lc_block_seq` / `_hg_statement_seq` (sequencer-assigned): NOT stored. Their only consumer is the `UNION(safe, unsafe)` read path and `as_of_safe(block)` time-travel, neither of which needs per-row values:
+  - **Dedup across the UNION** uses `_hg_row_id` plus the Keeper unsafe-part registry. `REPLACE PARTITION` copies data into `hg_safe` rather than removing it from `hg_unsafe`, so promotion includes a cleanup/exclusion step: `unsafe_latest` must exclude parts already covered by the safe watermark until asynchronous unsafe cleanup drops them.
+  - **Ordering across the UNION** uses the table's `ORDER BY`, not protocol sequence numbers.
+  - **`as_of_safe(block=N)` time-travel** is served by the `SafeSnapshotManifest`, which is already indexed by `safe_lc_block_seq` (§8). The read picks the manifest for block N and reads the safe snapshot; it does not filter rows by a per-row block number.
+  - **Part↔statement attribution** is carried by ClickHouse part metadata plus the Keeper `RCRecord`: `insert_deduplication_token = statement_seq` in sequencing-before-write mode, or `statement_id` in the optimistic-forward path (§12.2), not by a per-row column.
+  Storing these per row would force source execution to wait for sequencing before writing `hg_unsafe` (or require a "pending namespace" rewrite after sequencing), which reinstates the sequencer dependency that §5.2 of the 2026-06-10 design removed and kills optimistic execution. See the tradeoff note below.
+- `_hg_source_node`: NOT stored. Part-level provenance already lives in `RCRecord.source_node`. A row-level copy serves no safety role (safety comes from root/lthash, not provenance) and is misleading once the part replicates, since the serving node ≠ the source node.
+- `_hg_row_hash`: NOT stored. `row_lthash` is already the canonical row commitment; an additional BLAKE3 row hash is pure redundancy, and the audit path recomputes `row_lthash` from stored rows anyway.
+
+**Tradeoff: optimistic execution vs. per-row sequencing columns.** The decision to omit `_hg_lc_block_seq` / `_hg_statement_seq` is a deliberate trade. Considered and rejected:
+
+- **B. Keep the columns, write `hg_unsafe` only after sequencing.** Preserves per-row time-travel and block-filtered unsafe reads. Cost: source INSERT latency gains an L3 batching round-trip before any ClickHouse write, and the row-id decoupling work in §5.2 (which exists precisely to remove this sequencer dependency) is undone. Unsafe writes also become sequencer-censored — if Keeper refuses to sequence, the row never lands even provisionally.
+- **C. Keep the columns as mutable columns, fill them after sequencing via UPDATE.** Preserves optimistic execution. Cost: introduces a mutation into `hg_unsafe`, violating the §12.2 invariant that `hg_unsafe` is append-only under `STOP MERGES`; that mutation is itself unverified, so the provisional rows a client sees via `unsafe_latest` would carry a `0`/`NULL` block seq until the UPDATE runs, making the time-travel semantics the columns were meant to provide incorrect during the window anyway.
+
+Scheme A (omit the columns, route time-travel through the manifest) is chosen because unsafe reads are provisional by definition (`unsafe_latest` "may change or be dropped, not integrity-final", §11), so per-block time-travel over provisional data has low semantic value, and the manifest already provides the block index for the surface where time-travel matters (safe snapshots).
+
+Example physical schema:
+
+```sql
+CREATE TABLE hg_unsafe.Transfer_0xT (
+  _hg_row_id FixedString(32),
+  from_address String,
+  to_address String,
+  token_address String,
+  amount String,
+  block_number UInt64,
+  tx_hash FixedString(32),
+  log_index UInt32,
+  block_time DateTime
+)
+ENGINE = ReplicatedMergeTree('/sentio/{keeper_shard}/unsafe/{table_id}', '{replica}')
+PARTITION BY toYYYYMM(block_time)
+ORDER BY (block_number, tx_hash, log_index, _hg_row_id);
+```
+
+The `safe` table uses a plain `MergeTree` (the engine split and its rationale are specified in §12.1):
+
+```sql
+CREATE TABLE hg_safe.Transfer_0xT ... ENGINE = MergeTree() ...
+```
+
+`hg_safe` is not on any ReplicatedMergeTree Keeper path; it receives parts only through the per-part promotion operation in §12.2. Using ReplicatedMergeTree for `hg_safe` was considered and rejected because it would re-introduce the need to gate ClickHouse's replication log from a reverse proxy; see §12.1.
+
+## 7. StatementEnvelopeV2 and L3 Data Model
+
+The signed envelope covers what the user or trusted ingress can know before sequencing. It must not sign sequencer-assigned values.
+
+```text
+StatementEnvelopeV2 {
+  envelope_version,
+  network_id,
+  keeper_shard_id,
+  client_account,
+  statement_id,
+  statement_kind,
+  virtual_table_id,
+  rewritten_sql,          // materialized SQL (non-deterministic fns resolved to constants); see below
+  sql_hash,               // H(rewritten_sql) — the materialized, pre-physical-rewrite SQL
+  settings_hash,
+  schema_snapshot_id,
+  payload_ref,
+  payload_hash,
+  payload_length,
+  payload_format,
+  row_id_profile_id,
+  user_jws_v2,
+}
+```
+
+**What `rewritten_sql` / `sql_hash` cover, and the rewrite split.** SQL rewriting has two phases with distinct trust boundaries and two runtime placements:
+
+- **Phase 1 — non-determinism materialization (agent/SDK, trusted, before signing).** The agent/SDK rewrites non-deterministic functions in the SQL *text* to literal constants before signing: `now()` → `'2026-06-22 10:00:00'`, `rand()` → `0.732`, `generateUUIDv4()` → `'...'`. This is purely local (current time, local RNG, local UUID) and needs no external state. The result is the `rewritten_sql` the user signs; `sql_hash = H(rewritten_sql)`. Every executor that replays this envelope runs the same constants, so determinism holds by construction.
+- **Phase 2 — deterministic physical rewrite (runtime mode dependent).** Table-name / schema rewriting (`db1.t` → physical, `SHOW TABLES` → metadata SELECT) is a pure function of `(rewritten_sql, anchored schema_snapshot, anchored settings, target_surface)`. In forward mode, no HouseGate rewrite is applied and `rewritten_sql` is already the source SQL sent to ClickHouse. In managed/proxy modes, HouseGate applies this deterministic rewrite on the source path to target `hg_unsafe`, and the pinned executor recomputes the same rewrite during replay. The physical rewrite is NOT user-signed and NOT trusted from the source/HouseGate; replay recomputation is the authority.
+
+The envelope therefore signs the Phase-1 output only. The source may not re-materialize non-determinism. A compromised HouseGate in managed/proxy mode can send the wrong physical SQL to ClickHouse, but that only creates a source claim/byte-side mismatch: verifiers replay the deterministic physical rewrite from the signed Phase-1 SQL and reject the source bytes if they do not match.
+
+**`user_jws_v2` signing payload** (P0 freeze):
+
+```text
+{
+  "purpose": "housegate-statement-v2",
+  "network_id": ...,
+  "keeper_shard_id": ...,
+  "iat": <unix seconds>,
+  "statement_id": "...",
+  "sql_hash": "0x...",          // H(rewritten_sql), post-materialization
+  "settings_hash": "0x...",
+  "schema_snapshot_id": "...",
+  "payload_hash": "0x...",
+  "payload_length": ...,
+  "payload_format": "...",
+  "target_table_id": "...",
+  "row_id_profile_id": "..."
+}
+```
+
+Explicitly NOT signed (assigned later or non-user-controlled): `statement_seq` (Keeper assigns after submission), `source_node`, `executor_profile_id` (block-level, in `LCBlock`), and the Phase-2 physical rewrite.
+
+`statement_id` should be structured (per-account monotonic, supports L3-derived uniqueness enforcement):
+
+```text
+statement_id = client_account || client_seq || client_nonce
+```
+
+**`statement_id` uniqueness — resolved (adopts 2026-06-10 Appendix B.2).** `statement_id` uniqueness is load-bearing: `_hg_row_id = BLAKE3(... || statement_id || global_row_ordinal)`, so a reused `statement_id` resurrects the duplicate-row LtHash cancellation attack. Enforcement is an **L3-derived accumulator**, not Keeper memory, so that decentralizing Keeper authority does not change the dedup fact:
+
+- A **mountain-range Merkle accumulator** (recommended construction for P0; no trusted setup, append-only, O(log n) non-membership proofs) commits `spent_ids_root` in each LC block alongside `partition_commitments_after`. It is a pure function of the sequenced `statement_id`s — any honest node that replays the L3 stream reconstructs it identically. (RSA/pairing accumulators give O(1) proofs but require trusted-setup / modulus governance and are rejected for v1; sparse Merkle is acceptable but larger constants.)
+- Acceptance requires a **non-membership proof** that the `statement_id` is not under the previous `spent_ids_root`; only then is the `statement_id → statement_seq` binding anchored.
+- A **per-account high-water mark** `hi_seq[account]` (the largest `client_seq` sequenced for that account) gives well-behaved traffic O(1) acceptance — a new `client_seq > hi_seq` needs no non-membership proof; only out-of-order `client_seq ≤ hi_seq` falls back to the accumulator proof. This bounds dedup state to one integer per active account plus a gap set, and **shards cleanly by `client_account`**, addressing the scaling objection.
+- The accumulator is append-only and permanent; a `statement_id` once in `spent_ids_root` is never removed. Scope is **per-account-global**.
+
+`schema_snapshot_id` scoping (phased):
+
+- **v1: block-level.** `schema_snapshot_id` is the same for every statement in an LC block; a block may not contain schema changes (DDL statements that change the schema must occupy their own block or take effect at a block boundary). The executor replays the whole block under one schema. Simple and unambiguous.
+- **P4 (mutation/DDL completeness): statement-level.** When more DDL is admitted, a DDL statement mints a new schema snapshot and subsequent statements in the same or later block carry the new `schema_snapshot_id`.
+
+Keeper assigns and anchors:
+
+```text
+LCBlock {
+  lc_block_seq,
+  prev_lc_hash,
+  l2_anchor_ref,
+  statement_seq_start,
+  statements: [StatementEnvelopeV2],
+  schema_snapshot_id,
+  executor_profile_id,
+  prev_safe_snapshot_id,
+  prev_state_root,
+  spent_ids_root_after,
+}
+```
+
+The source registers a result claim:
+
+```text
+RCRecord {
+  lc_block_seq,
+  statement_seq,
+  source_node,
+  unsafe_table,
+  candidate_parts: [{
+    part_name,
+    partition_id,
+    part_phys_hash,
+    part_row_lthash,
+    row_count,
+    bytes,
+  }],
+  partition_deltas,
+  source_claim_state_root,
+}
+```
+
+Keeper builds replay jobs from LC + RC + previous safe state:
+
+```text
+ReplayJob {
+  lc_block_seq,
+  prev_safe_snapshot_id,
+  prev_state_root,
+  schema_snapshot_id,
+  executor_profile_id,
+  source_claim_state_root,
+  statements,
+}
+```
+
+Verifier output is an attestation row:
+
+```text
+ReplayAttestation {
+  replica_id,
+  receipt_hash,
+  computed_state_root,
+  match_source_root,
+  signature,
+}
+```
+
+## 8. Content Commitments and Safe Snapshot Manifests
+
+The row commitment input is a unique row instance, not just user-visible row values. Commitments are maintained at four levels, each with a distinct role; conflating them is the easiest way to introduce a safety gap.
+
+```text
+row_id = BLAKE3("housegate-row-id-v1" || network_id || table_id || statement_id || global_row_ordinal)
+row_element = ("housegate-row-v1", table_id, row_id, sorted [(column_id, type_id, canonical_value)])
+row_lthash = LtHash(row_element)                          // per row; computed, not stored
+part_row_lthash = sum(row_lthash)                         // per part; stored in RCRecord and manifest
+partition_commitment = sum(active part_row_lthash)        // per partition; the promotion gate (LtHash accumulator, 2048 bytes)
+data_root = H(canonicalized [(table_id, schema_hash, partition_roots, active_parts)])
+state_root = H(schema_snapshot_id, schema_root, executor_profile_id, data_root)
+```
+
+Two layers, two purposes: LtHash is the arithmetic object **up to the partition level only** (additive, supports mutation deltas). Above the partition, `data_root` and `state_root` are ordinary hash folds — they bind the replay to the anchored snapshot but are not arithmetic and cannot be add/subtracted. Mutation deltas use LtHash at partition level; snapshot comparison uses `state_root`. Do not conflate the two.
+
+**LtHash is not computed on the HouseGate wire path.** Three places compute it, all executor/verifier-side: (a) the pinned executor during replay, from materialized values; (b) the byte-side scan in §9 check 3, from fetched bytes; (c) the §13 audit, from safe parts. HouseGate only injects `_hg_row_id` (at the agent, per §9) and computes `payload_hash`.
+
+**Partition-level cancellation resistance.** `partition_commitment`'s collision resistance is inherited from the row level: distinct parts have disjoint row-ID sets (`statement_id` is globally unique, `global_row_ordinal` is per-statement), so the partition's element set is the disjoint union of the parts' element sets. The 2^16-lane cancellation attack, blocked at row level by `_hg_row_id`, is therefore also blocked at partition level — no separate argument is needed.
+
+The four levels and what each is responsible for:
+
+| Level | Computed from | Role | Stored separately? |
+|---|---|---|---|
+| `row_lthash` | the canonical row element, including `_hg_row_id` | the atomic unit; no security role on its own | No — `_hg_row_id` is in the row, so any holder of the bytes can recompute it |
+| `part_row_lthash` | `sum(row_lthash)` over the part | **dispute localization** — which part diverged | Yes — carried in `RCRecord.candidate_parts` and `SafeSnapshotManifest.active_parts` |
+| `partition_commitment` | `sum(part_row_lthash)` over active parts in the partition | **the promotion gate** — see §9; LtHash collision resistance holds at this level because distinct row IDs make element sets disjoint across parts | Yes — `partition_deltas` in `RCRecord`, `partition_roots` in the manifest |
+| `state_root` | fold over schema + executor profile + all partition commitments | necessary (binds the replay to the anchored snapshot) but **not sufficient** for promotion | Yes — `SafeSnapshotManifest.state_root` |
+
+**Why `state_root` equality alone is insufficient for promotion.** A replay root is computed from the signed L3 payload and the previous safe snapshot, not from the source's part bytes (§9). Source can register `source_claim_state_root = R` while writing fraudulent part bytes `bytes_evil` into `hg_unsafe`; replicas independently replay to the same `R`; `R == R` proves nothing about the bytes on the source's disk. A fraudulent source can also register a self-consistent logical hash for the wrong materialized value (LtHash gives no non-membership proof against an attacker who controls both the claim and the underlying rows). Promotion therefore requires an additional byte-side check that ties the root to the bytes a replica actually fetched; see §9.
+
+LtHash remains useful as an additive state accumulator, root comparison input, and dispute-localization handle. It is not the general proof that ClickHouse faithfully materialized JSON/Map/defaults/mutations. Replay is the proof for those paths; the byte-side partition-delta check is the proof that the replayed root actually corresponds to the bytes that entered the safe table.
+
+`SafeSnapshotManifest` is the published safe state object. It contains:
+
+```text
+snapshot_id,
+parent_snapshot_id,
+safe_lc_block_seq,
+schema_snapshot_id,
+schema_root,
+executor_profile_id,
+data_root,
+state_root,
+manifest_root,
+tables: [{
+  table_id,
+  schema_hash,
+  partition_roots,
+  active_parts: [{
+    part_name,
+    partition_id,
+    part_phys_hash,
+    part_row_lthash,
+    row_count,
+    bytes,
+    storage_refs,
+  }],
+}]
+```
+
+The manifest is content-addressed and canonicalized. Table order, partition order, and part order must be normalized before hashing so independent verifiers derive the same roots.
+
+## 9. INSERT Verification Flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as "User / Story Daemon (agent/SDK)"
+    participant HG as "Ingress HouseGate"
+    participant K as "Keeper"
+    participant S as "Source SNode + ClickHouse"
+    participant R1 as "Replay Replica A"
+    participant R2 as "Replay Replica B"
+    participant L2 as "L2 / L1 Anchor"
+
+    U->>U: materialize now()/rand()/UUID to constants; inject _hg_row_id into payload
+    U->>HG: INSERT(rewritten_sql + _hg_row_id-augmented payload) + signed StatementEnvelopeV2
+    HG->>HG: validate signature, compute payload_hash, spool payload
+    HG->>K: submit StatementEnvelopeV2
+    K->>K: validate signature, statement_id non-membership, schema/settings, payload ref
+    K->>K: assign statement_seq and build LC block
+    K-->>HG: Sequenced ack + source assignment (managed path)
+    HG->>S: execute source SQL against unsafe table (managed: after sequencing; optimistic-forward: may run before sequencing)
+    S->>S: materialize unsafe parts
+    S->>K: RCRecord(candidate parts + source_claim_state_root)
+    K->>K: validate linkage, part claims, and registration arithmetic
+    K->>R1: ReplayJob(prev safe snapshot + signed payload)
+    K->>R2: ReplayJob(prev safe snapshot + signed payload)
+    R1->>R1: execute on pinned executor (deterministic physical rewrite), compute root
+    R2->>R2: execute on pinned executor (deterministic physical rewrite), compute root
+    R1->>K: ReplayAttestation(root_A, partition_deltas_A, per-part lthash_A)
+    R2->>K: ReplayAttestation(root_B, partition_deltas_B, per-part lthash_B)
+    K->>R1: byte-side scan request over fetched candidate parts
+    K->>R2: byte-side scan request over fetched candidate parts
+    R1->>R1: SELECT rows from fetched parts, recompute part_row_lthash
+    R2->>R2: SELECT rows from fetched parts, recompute part_row_lthash
+    R1->>K: byte_side part_row_lthash_A
+    R2->>K: byte-side part_row_lthash_B
+    alt quorum AND per-partition delta matches AND byte-side lthash matches source claim
+        K->>L2: publish/anchor LC block hash and state root
+        L2-->>K: finality / last_mergeable reached
+        K->>S: Keeper-signed PromoteSafePartition (REPLACE PARTITION, see §12)
+        K->>R1: Keeper-signed PromoteSafePartition (REPLACE PARTITION, see §12)
+        K->>R2: Keeper-signed PromoteSafePartition (REPLACE PARTITION, see §12)
+    else mismatch or timeout
+        K->>K: open challenge replay (signed mismatch attestation becomes evidence)
+        K->>S: keep/drop unsafe parts
+        K->>R1: keep/drop replay outputs
+        K->>R2: keep/drop replay outputs
+    end
+```
+
+Important properties:
+
+- **Rewrite split (see §7):** the agent/SDK materializes non-deterministic functions and injects `_hg_row_id` *before* signing; HouseGate validates the signature, computes `payload_hash`, and spools the payload. In forward mode HouseGate forwards the signed SQL verbatim. In managed/proxy modes HouseGate applies the deterministic physical rewrite for the source write, while replay executors independently recompute the same rewrite before execution. HouseGate never re-materializes non-determinism or modifies the signed payload.
+- **Execution timing split:** the diagram shows the managed/sequencing-before-write path, where `statement_seq` is available before the source write. The optimistic-forward path may write `hg_unsafe` before sequencing and uses `statement_id` for dedup/part attribution until Keeper later binds `statement_id -> statement_seq`; promotion still waits for sequencing, replay, finality, and the §9 three-way check.
+- The source's unsafe part may serve explicit unsafe/fresh reads before it is safe, if the product exposes that mode.
+- Normal `SELECT` reads only the safe table.
+- Replayed roots are computed from signed input and previous safe state, not from source part bytes.
+- Promotion is a three-way check, not root equality alone. A source part with valid ClickHouse checksums and a self-consistent `source_claim_state_root` can still be fraudulent. Promotion requires all three:
+  1. **Replay check:** a quorum of replicas independently replays the signed L3 payload and produces the same `computed_state_root` as `source_claim_state_root`. Proves the payload's correct execution yields this root.
+  2. **Partition-delta check:** for each partition touched by the statement, `Σ(part_row_lthash of new parts)` reported by the source equals the partition delta the replicas computed during replay. Proves the source's per-part claims are internally consistent with the root, and localizes a disagreement to a partition. Because LtHash at the partition level is collision-resistant over disjoint row-ID sets, this is the level that gates the bytes.
+  3. **Byte-side part-lthash check:** each attesting replica reads the part bytes it actually fetched (`SELECT ... WHERE _part IN (...)`), recomputes `part_row_lthash`, and confirms it equals the value in `RCRecord.candidate_parts`. Proves the bytes on disk correspond to the claimed root, and is the only one of the three that touches the source's actual part bytes.
+- A root match without checks 2 and 3 is **not** promotion. This is the gap that a colluding source exploits: it lands `bytes_evil`, registers a truthful-looking root for the correct payload, and lets replicas replay to the same root; without the byte-side scan the evil bytes would enter `hg_safe` unopposed.
+- **v1 quorum parameter (P0 freeze):** promote requires ≥2 of 3 independent replay replicas to attest the same `computed_state_root`, and the source's own self-attestation does not count. In v1 the centralized Keeper is the trust root for *orchestrating* this quorum (it picks replicas, collects attestations, decides promote, opens challenges); recomputability is an *after-the-fact audit* capability in v1, not the runtime promote mechanism. The decentralized-phase safety model (challenge window) is specified in §11.
+- The physical promotion operation (how verified bytes actually move from `hg_unsafe` to `hg_safe`) is specified in §12.
+
+## 10. Mutation Verification Flow
+
+Mutation-class statements include `ALTER ... UPDATE`, `ALTER ... DELETE`, large rewrites, and any write whose result depends on pre-state. v1 admits only bounded UPDATE/DELETE profiles; `INSERT ... SELECT` and large/unbounded mutations are deferred to v2.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as "User / Story Daemon (agent/SDK)"
+    participant HG as "HouseGate"
+    participant K as "Keeper"
+    participant S as "Source SNode"
+    participant R as "Replay Replica Quorum"
+    participant Safe as "Safe Table"
+
+    U->>U: materialize nondeterminism, build signed envelope
+    U->>HG: UPDATE/DELETE (rewritten_sql) + signed StatementEnvelopeV2
+    HG->>HG: validate signature, forward
+    HG->>K: submit mutation StatementEnvelopeV2
+    K->>K: sequence mutation and install table/partition barrier
+    K->>K: bind mutation to prev SafeSnapshotManifest
+    K->>S: execute mutation in unsafe scratch cloned from safe parts
+    S->>S: hardlink/reflink or ATTACH affected safe parts into scratch
+    S->>S: run ClickHouse mutation, wait for materialization
+    S->>K: claim removed parts, added parts, and source_claim_state_root
+    K->>R: ReplayJob(prev safe snapshot + mutation SQL)
+    R->>R: clone same affected safe parts, execute pinned mutation
+    R->>R: compute delta = sum(new rows) - sum(old rows)
+    R->>K: signed attestation over computed post-root
+    alt quorum matches source claim AND partition-delta AND byte-side checks
+        K->>Safe: Keeper-signed replace old safe parts with new safe parts
+        K->>K: publish new SafeSnapshotManifest
+    else mismatch or timeout
+        K->>K: challenge replay or reject
+        K->>S: drop unsafe mutation output
+    end
+```
+
+Mutation constraints:
+
+- Mutations read from a previous safe snapshot, not from arbitrary unsafe state.
+- Keeper must serialize mutations against earlier writes to the same affected table/partition cut.
+- The source must never mutate the safe table in place before verification.
+- Replay cost is proportional to touched parts. Admission must cap touched bytes/parts for v1.
+- Attempts to modify `_hg_row_id` or protocol columns are rejected.
+- **Pre-state data availability (resolved).** Mutation replay requires the affected safe parts as pre-state. These are available because promotion publishes the verified post-state partition into every attesting replica's `hg_safe` through Keeper-signed `REPLACE PARTITION` (§12.2), and the `SafeSnapshotManifest` indexes them. A single honest replica holding the pre-state part suffices for challenge replay; a source that withholds its own copy cannot block verification. All-replica withholding is a liveness attack (no safety fix), but the §13 audit detects missing parts and drops withholding replicas from the read set. This resolves the v2 R3 concern without a separate proof-of-custody for pre-state.
+
+## 11. Safe, Unsafe, and Read Semantics
+
+State transitions:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Accepted
+    Accepted --> Sequenced: Keeper assigns statement_seq
+    Sequenced --> UnsafeExecuting: source writes unsafe table
+    UnsafeExecuting --> UnsafeRegistered: RCRecord accepted
+    UnsafeRegistered --> Replaying: replay jobs issued
+    Replaying --> QuorumVerified: matching attestations
+    Replaying --> ChallengeReplay: mismatch or timeout
+    QuorumVerified --> FinalityWait: root ready, not final
+    FinalityWait --> Safe: L2/L1 finality and last_mergeable reached
+    ChallengeReplay --> Safe: source claim wins
+    ChallengeReplay --> Rejected: source claim loses
+    Rejected --> Dropped: unsafe parts dropped
+    Safe --> [*]
+    Dropped --> [*]
+```
+
+Read modes:
+
+| Mode | Rewrite | Semantics |
+|---|---|---|
+| `safe` default | virtual table -> `hg_safe.<table>` | Verified and finalized through Keeper safe watermark. Freshness may lag. |
+| `unsafe_latest` explicit | virtual table -> `hg_safe.<table> UNION hg_unsafe.<table>` | Lower latency, may change or be dropped. Not integrity-final. |
+| `as_of_safe(block)` future | safe snapshot for block N (selected from `SafeSnapshotManifest`, §8) | Time-travel over safe snapshots. Implemented by manifest-indexed reads; does NOT require a per-row `_hg_lc_block_seq` column (see §6). |
+
+The default should be safe reads. If product freshness requires unsafe reads, the API must surface that the result is provisional.
+
+**`safe` definition is phased** (this sharpens the §5.2 "recomputability > voting" claim, which is unconditional only in the decentralized phase):
+
+| Phase | `safe` = | Runtime promote mechanism | Safe-read latency |
+|---|---|---|---|
+| v1 centralized | `Keeper-quorum-reproduced-root AND finalized` | Centralized Keeper orchestrates the 2-of-3 replay quorum (§9) and arbitrates immediately; no challenge window. Keeper is the v1 trust root for orchestration. | = L2 finality |
+| Decentralized (P5+) | `quorum-reproduced-root AND finalized AND past-challenge-window` | Quorum can still be captured, so a bad part may briefly enter safe reads until an honest verifier opens a challenge. Recomputability guarantees fraud is *eventually* detected and reverted, not that it never appears. | = finality + challenge window |
+
+The challenge window length (safety vs latency) is a P5 parameter; a value on the order of the L2 finality window (e.g. ~1 hour) is the working assumption. This makes §5.2's recomputability slogan accurate per phase rather than blanket: in v1 it is an audit capability; in the decentralized phase it is the safety mechanism, gated by the challenge window.
+
+## 12. Merge and Promotion Control
+
+Only safe parts may merge. Unsafe parts may be stored, retried, replayed, or dropped, but not merged into a part that could later be mistaken for safe.
+
+### 12.1 Engine split and why no ClickHouse/Keeper gate is required
+
+The v1 physical layout is **`hg_unsafe` = ReplicatedMergeTree, `hg_safe` = MergeTree.** This split removes the need for HouseGate to gate ClickHouse's replication machinery at all:
+
+- `hg_unsafe` is an unverified buffer. Its native ReplicatedMergeTree replication distributes parts to every replica for free via interserver HTTP; background merges inside `hg_unsafe` do not affect safety because promotion validates actual fetched bytes anyway (§9). Nothing here needs gating.
+- `hg_safe` is a plain MergeTree. It is not on any ReplicatedMergeTree Keeper path, has no `MERGE_PARTS`/`ATTACH_PART` log entries to gate, and accepts writes only through the promotion operation described below.
+
+Because neither engine requires HouseGate to intercept or interpret ClickHouse's ZooKeeper protocol, the earlier "HouseGate as ClickHouse-to-Keeper reverse proxy" framing is dropped. ClickHouse connects to its own Keeper directly for `hg_unsafe` replication; HouseGate only drives the promotion operation and the Sentio attestation layer. An earlier draft proposed gate-enforcing the ReplicatedMergeTree Keeper path and the interserver HTTP port from a reverse proxy; that is both unnecessary under this split and infeasible without deep parsing of ClickHouse-internal `ReplicationLogEntry` serialization, so it is not pursued.
+
+The two "Keeper" roles must still be named explicitly to avoid ambiguity:
+
+- **ClickHouse Keeper** (ZooKeeper-compatible): owned by ClickHouse for `hg_unsafe` ReplicatedMergeTree state only. HouseGate never reads or writes it.
+- **Sentio Keeper** (the LC-block sequencer and attestation collector of §5.2): owned by the integrity layer. Drives sequencing, replay job dispatch, and promotion.
+
+### 12.2 Promotion = `REPLACE PARTITION`, with `hg_unsafe` merges stopped
+
+Promotion runs locally on every replica that has fetched the candidate parts. Because `hg_unsafe` is ReplicatedMergeTree, every healthy replica eventually holds the same candidate parts; no cross-node distribution is needed at promote time.
+
+**`hg_unsafe` runs with `SYSTEM STOP MERGES` for the lifetime of the table.** This is the key simplification. It eliminates the merge-vs-promotion race structurally rather than coordinating it with locks:
+
+- A background merge that combined an about-to-be-promoted part with a still-unverified one would produce a mixed part (some rows verified, some not), and partition-level publication would drag unverified rows into `hg_safe`. Stopping merges removes this case entirely.
+- With merges stopped, the part boundary in `hg_unsafe` always equals the statement boundary (anchored by `insert_deduplication_token = statement_seq` when sequencing-before-write is used, or by `statement_id` in the optimistic-forward path), so the verified candidate-part set is unambiguous.
+- `hg_unsafe` is a thin buffer, not a query target; the read-amplification cost of never merging it is negligible because reads route to `hg_safe` and treat `hg_unsafe` only as the latest unverified sliver (§11).
+
+ClickHouse's cross-table publication primitive is partition-level, so promotion uses a **Keeper-signed `REPLACE PARTITION` from a promotion shadow table**, not a direct move from `hg_unsafe`:
+
+```sql
+-- per touched partition, on every replica that attested
+ALTER TABLE hg_safe.Transfer_<table_id>
+  REPLACE PARTITION <partition_expr>
+  FROM hg_promote.Transfer_<table_id>_<snapshot_id>;
+```
+
+`hg_promote` is a local temporary or protocol-owned MergeTree table with the same structure, partition key, primary key, order key, storage policy, indices, and projections as `hg_safe`. For each touched partition, SNode builds the promotion table to contain **exactly** the post-promotion partition: the previous safe partition plus the candidate parts whose `part_row_lthash` the replica recomputed from fetched bytes and matched against the `RCRecord`. It must not copy the whole `hg_unsafe` partition, because that partition may contain unrelated unverified parts.
+
+`REPLACE PARTITION` is local and atomic for the destination partition. It replaces the safe partition with the verified post-state partition. It copies from the promotion table rather than deleting from `hg_unsafe`, so promotion also records the candidate parts as safe in Sentio Keeper and schedules `hg_unsafe` cleanup. Until cleanup completes, `unsafe_latest` must exclude promoted unsafe parts by the Keeper part registry / `_part` filter.
+
+### 12.3 The parts-per-partition ceiling makes promotion latency a capacity valve
+
+With merges stopped, parts accumulate in `hg_unsafe`. ClickHouse enforces a hard `parts_per_partition` limit (default 300); exceeding it rejects new INSERTs with `Too many parts`. This turns promotion latency into a **capacity safety valve, not just a performance concern**: if promotion falls behind, writes to that table are refused.
+
+Three consequences:
+
+1. **Promotion must stay ahead of ingest.** The unsafe window's size is bounded by `ingest_rate × promote_latency ≤ remaining_parts_budget`. This is the real SLA for the integrity layer, not just the L2 finality window.
+2. **Admission throttling is mandatory, not optional.** When a partition's `hg_unsafe` part count approaches the ceiling, admission must back-pressure new INSERTs to that partition. This is the concrete form of the admission-cap requirement (open question 8).
+3. **Partition cardinality is a tuning knob.** A table whose `hg_unsafe` runs hot can split its partition key to spread parts across more partitions, raising the aggregate budget. This is a schema-time decision, recorded in the anchored DDL.
+
+### 12.4 `hg_safe` merges: gated by the ledger equation
+
+`hg_safe` is a MergeTree, so merges are local to each node and are not coordinated by ReplicatedMergeTree. They still must obey the row-instance-preserving ledger equation (from the 2026-06-10 design §9.1):
+
+```text
+sum(part_row_lthash of merge inputs) == sum(part_row_lthash of merge outputs)
+```
+
+A safe-table merge is admitted only when inputs are all safe, the table is on the row-instance-preserving feature whitelist, and the equation holds after the merge. Because each node owns its `hg_safe` locally, this check runs locally; a node that violates it is detectable by the §13 safe-serving audit and dropped from the read set. Replacing/Summing/Aggregating/Collapsing engines, TTL, lightweight DELETE, and `OPTIMIZE ... DEDUPLICATE` remain banned in v1 because they break row-instance preservation.
+
+### 12.5 Replication lag and cold bootstrap
+
+Two operational cases the flow above does not handle for free:
+
+- **Lagging replica at promote time.** ReplicatedMergeTree replication is asynchronous. Keeper issues a promotion decision after a quorum attests; a replica that has not yet fetched the candidate parts via interserver HTTP cannot build the promotion table yet. This is a liveness issue, not safety (a lagging replica did not attest, so it is not in the quorum). The replica catches up when its ReplicatedMergeTree fetches the parts, then builds the same `hg_promote` partition and runs the same Keeper-signed `REPLACE PARTITION`. The promotion-shadow-table construction and delayed local replace behavior remain a P1 spike.
+
+- **Cold bootstrap of a new or long-offline replica.** A fresh node starts with an empty `hg_unsafe`. Parts already cleaned from other replicas' `hg_unsafe` after promotion will never arrive via ReplicatedMergeTree, so ReplicatedMergeTree alone cannot populate the new node's `hg_safe`. Two recovery paths, both outside the hot path:
+  1. **Replay from the L3 stream.** Reconstruct `hg_safe` by replaying signed payloads from genesis (or from the oldest retained safe snapshot) through the pinned executor. This is the self-rescue path that the recomputability argument (§7) guarantees.
+  2. **Copy from a peer's `hg_safe`.** Fetch safe parts from another replica's `hg_safe` (file-level or via an attach), verify each part's `part_phys_hash` and `part_row_lthash` against the published `SafeSnapshotManifest`, and attach. This is the fast path; it depends on at least one honest peer being available, which the §13 audit enforces.
+
+  A new node may not enter the Active/read set until it can produce a `SafeSnapshotManifest` matching the network's current safe watermark (open question 14).
+
+## 13. Safe Table Serving Integrity
+
+Promotion proves that a safe root was derived from the signed log. It does not prove that a malicious node always serves those bytes honestly.
+
+The theoretical integrity object is:
+
+```text
+row hash -> chunk hash -> part root -> partition root -> table root -> SafeSnapshotManifest.state_root
+```
+
+Practical mitigations:
+
+- Store or compute row/chunk hashes for safe table audit.
+- Periodically scan safe parts and compare against the manifest.
+- Sample real production query inputs and outputs, then replay the same query on other safe replicas.
+- Cross-check read replicas before keeping them in the read set.
+- Treat audit failures as grounds to remove a replica from serving and require re-sync from a known safe manifest.
+
+Residual risk: a node can maintain correct bytes for audit but serve shadow data for selected user queries. Without query attestation or a trusted serving layer, this is probabilistic detection, not a perfect cryptographic guarantee.
+
+## 14. Delivery Phases
+
+P0: freeze protocol surfaces.
+
+- `StatementEnvelopeV2` fields and signing payload (§7), including `sql_hash = H(rewritten_sql)` over post-materialization SQL.
+- LC/RC record schemas, including `spent_ids_root_after` in LC blocks.
+- Reserved columns and physical table naming.
+- Safe/unsafe read rewrite semantics.
+- Executor profile governance for pinned ClickHouse.
+- Admission bans for unsupported engines, types, and non-deterministic constructs (including schema-level `DEFAULT now()`, which cannot be agent-materialized).
+- Mountain-range accumulator construction + test vectors for `statement_id` non-membership proofs.
+
+P1: implement source execution and replay for payload-local INSERT.
+
+- Agent/SDK materializer (non-deterministic function → constant) and `_hg_row_id` injection, before signing.
+- Per-account `client_seq` monotonic counter + nonce generation.
+- Keeper-side accumulator, non-membership proof validation, per-account high-water mark, duplicate rejection.
+- Payload spooling and hash validation (HouseGate-side, post-signature).
+- Unsafe table write path.
+- Replay job construction from previous safe snapshot.
+- Pinned executor materializer for scalar + JSON/Map through ClickHouse read-back, including deterministic Phase-2 physical rewrite.
+- Quorum attestation collection (2-of-3 independent replicas).
+- Byte-side partition-delta and part-lthash checks at promotion.
+- Safe promotion by Keeper-signed `REPLACE PARTITION` from a promotion shadow table (§12).
+
+P2: implement bounded UPDATE/DELETE.
+
+- Mutation barriers.
+- Affected safe part discovery.
+- Scratch clone by hardlink/reflink/ATTACH.
+- Old/new part delta computation.
+- Admission caps for touched data.
+
+P3: harden safe serving.
+
+- Safe manifest audit jobs.
+- Row/chunk/part root tooling.
+- Real-query sampling and cross-node comparison.
+- Read replica health scoring.
+
+P4: expand language surface.
+
+- `INSERT ... SELECT` strategy.
+- Materialized views.
+- Large mutation policy.
+- `AS OF` safe snapshots and safe+unsafe ordered reads.
+
+## 15. Open Questions
+
+1. **Final v1 route:** confirm optimistic source execution plus quorum replay as the default, or switch to full-node parallel replay for simpler correctness at the cost of a longer unsafe window.
+2. **Safe table engine:** ~~use ReplicatedMergeTree with a strict Keeper-signed safe path, or local MergeTree safe caches promoted independently on every node.~~ Resolved: `hg_safe` is a local MergeTree on every node, promoted by Keeper-signed `REPLACE PARTITION` from a promotion shadow table (§12). Demoted from open.
+3. **Merge control:** ~~can the HouseGate-to-Keeper reverse proxy fully gate unsafe/safe merges without a ClickHouse fork, or is a restricted engine variant required?~~ Resolved: no reverse-proxy gate is needed under the §12.1 engine split (`hg_unsafe` ReplicatedMergeTree ungated, `hg_safe` MergeTree). The `REPLACE PARTITION` promotion-shadow-table construction on lagging replicas (§12.5) remains a P1 spike. Demoted from open.
+4. **LC/RC naming and schema:** freeze whether the design calls these LC blocks and RC records, and define exact protobuf/JSON fields.
+5. **Chain commitment:** decide whether L2 calldata stores the full LC block payload, a data availability reference, or only a block/root commitment.
+6. **Payload DA:** define proof-of-custody and retention for signed payload bytes. ~~Mutation pre-state parts~~ resolved: pre-state availability comes from multi-replica `hg_safe` + manifest indexing + §13 audit (§10), not a separate proof-of-custody. Demoted from open.
+7. **Statement uniqueness:** ~~choose the accumulator construction for permanent `statement_id` uniqueness.~~ Resolved: mountain-range Merkle accumulator + per-account high-water mark, per-account-global scope, L3-derived (§7, adopting 2026-06-10 Appendix B.2). Demoted from open.
+8. **Non-determinism normalization:** ~~decide whether Story Daemon, ingress HouseGate, or both are allowed to materialize `now()`/`random()` before signature.~~ Resolved: materialization is at the agent/SDK before signing; HouseGate does not normalize (§7, §9). Remaining open item: the exact whitelist function set and SDK language coverage (TS/Go). Narrowed.
+9. **JSON/Map profile:** pin exact ClickHouse versions/settings and define executor-profile upgrade governance.
+10. **Mutation limits:** choose v1 caps for touched parts/bytes and decide which mutations are rejected.
+11. **`INSERT ... SELECT`:** choose between reject, split into SELECT-then-INSERT, or ordered safe+unsafe composition (composition uses manifest-indexed reads per §6/§11, not a per-row `_hg_lc_block_seq` column).
+12. **Safe serving integrity:** decide how much row/chunk/Merkle metadata to store in v1 versus computing it during audit.
+13. **Shadow-data detection:** define production query sampling rate and cross-node comparison policy.
+14. **Dynamic node join:** define how a new node proves it has synced to the safe manifest before becoming Active.
+15. **Keeper HA and sharding:** define multi-Raft group layout, shard routing by table/database, and cross-Keeper L2 height clock.
+16. **Read API semantics:** decide whether unsafe reads are exposed, hidden, or limited to operator/debug APIs.
+
+## 16. Alternatives Considered
+
+**HouseGate streaming LtHash only.** Best performance for scalar INSERTs, but invalid as the general v1 proof because JSON/Map and server-side materialization do not preserve wire bytes.
+
+**HouseGate as a ClickHouse-to-Keeper reverse proxy to gate merges.** Considered and rejected. A pure TCP proxy cannot see ZooKeeper request boundaries or `ReplicationLogEntry` payloads, so gating requires deep parsing of ClickHouse-internal serialization that is not a stable API across versions; and even with that, part *bytes* flow over the interserver HTTP port, not over Keeper, so a Keeper-only gate cannot control them. The §12.1 engine split (`hg_unsafe` ReplicatedMergeTree ungated, `hg_safe` MergeTree) makes the gate unnecessary: nothing in ClickHouse's replication machinery touches `hg_safe`, so there is nothing to intercept.
+
+**Append-only WAL table only.** Easier to reason about history and height, but read cost is high and the June 17 discussion converged on physical unsafe/safe tables instead.
+
+**Full-node parallel replay.** Simpler and likely safer for the first correctness prototype, because each node produces its own local candidate part. It remains a fallback, but the chosen baseline preserves the faster optimistic unsafe path.
+
+**Safe table needs no further audit.** False as a serving claim. Promotion proves the state root; it does not prove every future SELECT response from a malicious node.
+
+## 17. References
+
+- [2026-06-10 multi-replica trust design](https://github.com/housegate/housegate/blob/main/docs/superpowers/specs/2026-06-10-multi-replica-trust-design.md)
+- [sentio-network PROGRESS](https://github.com/sentioxyz/designs/blob/main/sento-network/PROGRESS.md)
+- [2026-06-17 storage integrity sync summary](https://github.com/sentioxyz/designs/blob/main/sento-network/meetings/2026-06-17-storage-integrity-sync-summary.md)
+- [2026-06-17 storage integrity sync transcript](https://github.com/sentioxyz/designs/blob/main/sento-network/meetings/2026-06-17-storage-integrity-sync.txt)
+- [pkg/replay](https://github.com/housegate/housegate/tree/main/pkg/replay)
+- [pkg/replay/payloadexec](https://github.com/housegate/housegate/tree/main/pkg/replay/payloadexec)
+- [pkg/replay/chexec](https://github.com/housegate/housegate/tree/main/pkg/replay/chexec)
