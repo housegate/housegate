@@ -157,7 +157,7 @@ _hg_row_id FixedString(32)
 _hg_payload_ordinal UInt64
 ```
 
-`_hg_row_id` 是唯一承重的 reserved column。它区分重复的用户可见行，是 LtHash row-instance identity（§8）；merge、mutation 和 byte-side promotion check 全都依赖它。agent 在签名时按 `BLAKE3("housegate-row-id-v1" || network_id || table_id || statement_id || global_row_ordinal)`（2026-06-10 设计 §5.2）注入，所以它在 sequencing 前就已固定，且行生命周期内稳定。存储代价是实打实的：32 bytes/row，不可压缩。Structured-integer 替代（`(client_account_hash, client_seq, global_row_ordinal)` 打包成定宽整数，可压缩到接近零）保留为备案，待 P0/P1 实测后再决定是否切换（open question 11）。
+`_hg_row_id` 是唯一承重的 reserved column。它区分重复的用户可见行，是 LtHash row-instance identity（§8）；merge、mutation 和 byte-side promotion check 全都依赖它。agent 在签名时按 `BLAKE3("housegate-row-id-v1" || network_id || table_id || statement_id || global_row_ordinal)`（2026-06-10 设计 §5.2）注入，所以它在 sequencing 前就已固定，且行生命周期内稳定。`global_row_ordinal` 是该行在**整条语句的 canonical payload** 上的 0-based 索引，覆盖该语句写入的每一个 part 和 partition，与 payload 之后如何切成 Data-block chunk、如何分散到各 destination partition 无关。这个 payload-global 的 scope 是承重的：它正是让 `_hg_row_id` 在一条语句的所有行间唯一的原因（§8 的 partition 级抗 cancellation 论证依赖它），所以绝不能 per chunk 或 per partition 重置。存储代价是实打实的：32 bytes/row，不可压缩。Structured-integer 替代（`(client_account_hash, client_seq, global_row_ordinal)` 打包成定宽整数，可压缩到接近零）保留为备案，待 P0/P1 实测后再决定是否切换（open question 11）。
 
 `_hg_payload_ordinal` 就是喂给 `_hg_row_id` 的 `global_row_ordinal`；因为 `_hg_row_id` 是 hash 无法反推，单独存 ordinal 纯粹是 forensic 用途（"这是 payload 的第几行"）。默认关。
 
@@ -361,7 +361,7 @@ state_root = H(schema_snapshot_id, schema_root, executor_profile_id, data_root)
 
 **LtHash 不在 HouseGate wire path 上计算。** 三处计算它，全在 executor/verifier 侧：(a) pinned executor 在 replay 时从 materialized 值算；(b) §9 第 3 路 byte-side scan，从 fetch 到的字节算；(c) §13 audit，从 safe parts 算。HouseGate 只注入 `_hg_row_id`（在 agent，见 §9）并计算 `payload_hash`。
 
-**Partition 级抗 cancellation。** `partition_commitment` 的抗碰撞性继承自 row 级：不同 part 的 row-ID 集合互不相交（`statement_id` 全局唯一、`global_row_ordinal` per-statement），所以 partition 的元素集合是各 part 元素集合的不相交并。2^16-lane cancellation 攻击在 row 级被 `_hg_row_id` 挡死后，在 partition 级同样不成立——不需要单独论证。
+**Partition 级抗 cancellation。** `partition_commitment` 的抗碰撞性继承自 row 级，而真正承重的事实是 per-row `_hg_row_id` 唯一性——不是 part 结构（LtHash 在单个 2048-byte accumulator 上可加，所以 per-part 折叠和把所有行直接折叠结果相同；"disjoint parts" 本身不起独立作用）。partition 里每个 `_hg_row_id` 都互不相同，因为 `statement_id` 全局唯一、且 `global_row_ordinal` 在一条语句的所有 part 和 partition 间唯一（§6）；不同 part 的 row-ID 集合互不相交只是其结果。2^16-lane cancellation 攻击在 row 级被 `_hg_row_id` 挡死后，在 partition 级同样不成立——不需要单独论证。这只对 §9 promotion check 从 replay 重算的、sequenced 且 dedup 后的元素集合成立；它**不**适用于 optimistic-forward 窗口里 `hg_unsafe` 的 raw parts——那里在 Keeper 的 non-membership check 跑之前，复用的 `statement_id` 可能短暂产生碰撞的 `_hg_row_id`，这也是 `unsafe_latest` 不带 integrity 声明的原因之一（§11）。
 
 四个层级各自负责什么：
 
@@ -529,16 +529,20 @@ stateDiagram-v2
     Sequenced --> UnsafeExecuting: source writes unsafe table
     UnsafeExecuting --> UnsafeRegistered: RCRecord accepted
     UnsafeRegistered --> Replaying: replay jobs issued
-    Replaying --> QuorumVerified: matching attestations
+    Replaying --> QuorumVerified: three-way promotion check passes
     Replaying --> ChallengeReplay: mismatch or timeout
     QuorumVerified --> FinalityWait: root ready, not final
     FinalityWait --> Safe: L2/L1 finality and last_mergeable reached
-    ChallengeReplay --> Safe: source claim wins
-    ChallengeReplay --> Rejected: source claim loses
+    ChallengeReplay --> Safe: claim passes three-way check
+    ChallengeReplay --> Rejected: claim fails three-way check
     Rejected --> Dropped: unsafe parts dropped
     Safe --> [*]
     Dropped --> [*]
 ```
+
+`QuorumVerified` 这条边就是 §9 的 three-way check（quorum 复现的 root **AND** per-partition delta **AND** byte-side `part_row_lthash`），不是只看 root 相等；"matching attestations" 会低估它，因为对 `bytes_evil` 自洽的 root 在没有 byte-side scan 时也能匹配上。
+
+**Challenge 裁决用与 promotion 相同的 three-way 谓词。** Challenge replay 不只凭 root 复现相等来裁定——那正是 §9 要拒绝的 `bytes_evil`-配-真实-root 的情形，也是去中心化阶段保护 safe reads 的机制（见下方 §11 表）。"claim passes three-way check" 指 challenger 独立 replay 复现出 `source_claim_state_root`，**且** per-partition delta 匹配，**且**从 challenger 自己 fetch 到的 bytes 重算的 byte-side `part_row_lthash` 与 `RCRecord.candidate_parts` 匹配（§9 checks 1–3）。三者任一不过即拒绝该 claim。这是协议语义规则，属于 v1 范围；它区别于 §2 non-goal 2、P5 延后的 economic challenge/slashing 参数。
 
 读模式：
 
@@ -600,14 +604,16 @@ ALTER TABLE hg_safe.Transfer_<table_id>
 
 `REPLACE PARTITION` 对目标 partition 是本地原子操作。它用 verified post-state partition 替换 safe partition。它从 promotion table 复制，而不是从 `hg_unsafe` 删除，所以 promotion 还必须在 Sentio Keeper 里把 candidate parts 标记为 safe，并调度 `hg_unsafe` cleanup。Cleanup 完成前，`unsafe_latest` 必须通过 Keeper part registry / `_part` filter 排除已 promote 的 unsafe parts。
 
+**并发 INSERT promotion 到同一 partition 时，按 `(table, partition_id)` 串行化。** 因为 `REPLACE PARTITION` 是对目标 partition 整体原子替换，两条都命中 partition `P`、且差不多同时变得可 promote 的语句 `S1` 和 `S2`，不能各自基于"对方 replace 落地之前"的 `P` 快照来构造 `hg_promote`——否则后一个 replace 会覆盖整个 partition，把前一个刚 promote 的行静默丢掉（是 lost update，不是 append）。因此 Keeper 在 `(table, partition_id)` 粒度上串行化 promotion：每次 promotion 都基于 promote time 当下 `P` 的 safe watermark 来构造 `hg_promote`，这样 `S2` 会把 `S1` 已 promote 的 partition 当作 base；等价地，一轮里所有可 promote 进 `P` 的语句可以合并成一次 `REPLACE PARTITION`。所以上文构造里说的 "the previous safe partition" 指的是 promote time 的 safe snapshot，而不是语句执行时刻——这两个时刻之间的间隙正是这条规则要堵的碰撞窗口。这是 §10 mutation barrier 在 INSERT 路径上的对应物（§10 已经对同一 partition cut 的 mutation 做了串行化）。
+
 ### 12.3 Parts-per-partition 上限把 promotion 延迟变成容量阀门
 
-停 merge 之后，parts 在 `hg_unsafe` 里堆积。ClickHouse 有硬性 `parts_per_partition` 上限（默认 300）；超过会以 `Too many parts` 拒绝新 INSERT。这把 promotion 延迟从一个性能问题升级为**容量安全阀**：如果 promotion 跟不上，对该表的写入会被直接拒绝。
+停 merge 之后，parts 在 `hg_unsafe` 里堆积。ClickHouse 通过 `parts_to_throw_insert`（默认 3000）强制 per-partition 的硬性 parts 上限；超过会以 `Too many parts` 拒绝新 INSERT。更软的 `parts_to_delay_insert`（默认 1000）会在硬性 throw 之前先 throttle 写入，`max_parts_in_total`（默认 100000）则限制所有 partition 的 parts 总数。这些都是 per-table MergeTree 设置，所以 integrity 层会把它们**pin 进 anchored DDL**，而不是依赖默认值。这把 promotion 延迟从一个性能问题升级为**容量安全阀**：如果 promotion 跟不上，对该表的写入会被直接拒绝。
 
 三条推论：
 
 1. **Promotion 必须跑在 ingest 前面。** Unsafe 窗口大小受 `ingest_rate × promote_latency ≤ remaining_parts_budget` 约束。这才是 integrity 层真正的 SLA，而不只是 L2 finality 窗口。
-2. **Admission throttle 是必须的，不是可选的。** 当某个 partition 的 `hg_unsafe` part 数接近上限时，admission 必须对该 partition 的新 INSERT 做背压。这是 admission-cap 需求（open question 8）的具体形态。
+2. **Admission throttle 是必须的，不是可选的。** Throttle 的执行者是每个 ClickHouse 实例前面的 ingress HouseGate：它监测自己 co-located ClickHouse 的实时 per-partition part 数（例如轮询 `system.parts` + 事件驱动失效），当某个 partition 的 `hg_unsafe` part 数接近上限时，对该 partition 的新 INSERT 做可重试的背压拒绝，而不是让 ClickHouse 以 `Too many parts` 硬失败。因为 `parts_to_throw_insert` 是 per-replica 强制的，promote 最慢的那个 replica 决定了全网的写入余量。Per-account fair scheduling（base 设计 R8）防止单个账户把某个 partition 顶到上限、饿死其他诚实流量。这是推论 1 里 admission-cap 需求的具体形态；§15 没有为它单列 open item（原先引的 "open question 8" 是过期的——那一条是 non-determinism normalization）。
 3. **Partition cardinality 是一个调参旋钮。** `hg_unsafe` 跑得热的表可以把 partition key 拆细，让 parts 分散到更多 partition，抬高总预算。这是 schema 时刻的决定，记进 anchored DDL。
 
 ### 12.4 `hg_safe` merges：受 ledger equation 约束
