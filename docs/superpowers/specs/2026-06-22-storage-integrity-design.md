@@ -449,7 +449,7 @@ sequenceDiagram
         K->>R1: Keeper-signed PromoteSafeParts (per-part MOVE, see §12)
         K->>R2: Keeper-signed PromoteSafeParts (per-part MOVE, see §12)
     else mismatch or timeout
-        K->>K: open challenge replay; signed mismatch attestation becomes evidence
+        K->>K: open challenge replay (signed mismatch attestation becomes evidence)
         K->>S: keep/drop unsafe parts
         K->>R1: keep/drop replay outputs
         K->>R2: keep/drop replay outputs
