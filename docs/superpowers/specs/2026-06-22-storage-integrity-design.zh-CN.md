@@ -1,6 +1,6 @@
 # Storage Network 数据完整性校验层 - 综合设计文档
 
-**日期：** 2026-06-22 **状态：** Proposed(v3, integrated after the 2026-06-17 storage integrity sync) **基座：** `2026-06-10-multi-replica-trust-design.md` + 截至 2026-06-17 的 `/Users/uranuswch/dev/sentio_xyz/designs/sento-network/PROGRESS.md` + `/Users/uranuswch/dev/sentio_xyz/designs/sento-network/meetings/2026-06-17-storage-integrity-sync-summary.md` **事实源：** 英文版；协议语义变更时从英文版重新生成中文版。
+**日期：** 2026-06-22 **状态：** Proposed(v3, integrated after the 2026-06-17 storage integrity sync) **基座：** [2026-06-10 multi-replica trust design](https://github.com/housegate/housegate/blob/main/docs/superpowers/specs/2026-06-10-multi-replica-trust-design.md) + 截至 2026-06-17 的 [sentio-network PROGRESS](https://github.com/sentioxyz/designs/blob/main/sento-network/PROGRESS.md) + [2026-06-17 storage integrity sync summary](https://github.com/sentioxyz/designs/blob/main/sento-network/meetings/2026-06-17-storage-integrity-sync-summary.md) **事实源：** 英文版；协议语义变更时从英文版重新生成中文版。
 
 本文把 6 月 17 日讨论合并回 6 月 10 日 trust design。它保留 Plan B / Keeper 路线，但把 v1 integrity layer 收窄到三个决策：verified user table 对外暴露为一张 virtual table，底层由物理 `unsafe` 表和 `safe` 表承载；JSON/Map 和 mutation-class statements 走 replay 校验，而不是 HouseGate 侧流式 LtHash；`safe` 是 Keeper 在 quorum replay 后发布的状态转换，不是 ClickHouse operator 本地打的标签。
 
@@ -8,7 +8,7 @@
 
 本文档只设计 Sentio Storage Network 的数据完整性 / 防作恶层。它回答一个问题：当用户提交一条签名 write 后，其他人如何知道后续作为 `safe` 服务的 ClickHouse parts 是这条签名输入的忠实执行结果？
 
-基础拓扑保持不变：一个 HouseGate 前置一个 ClickHouse service；所有 client traffic 和 ClickHouse-to-Keeper traffic 都经过 HouseGate；ClickHouse 不直接对外暴露；复制复用原生 ReplicatedMergeTree 和 ClickHouse Keeper 机制；v1 Keeper 中心化并由 Sentio 运行；后续去中心化改变谁来检查以及谁承担经济后果，不改变证据格式。
+基础拓扑在 integrity layer 相关边界上保持不变：一个 HouseGate 前置一个 ClickHouse service；所有 client traffic 都经过 HouseGate；ClickHouse 不直接对用户暴露；`hg_unsafe` 复制复用原生 ReplicatedMergeTree 和 ClickHouse Keeper 机制；Sentio Keeper 拥有 sequencing、attestation 和 safe-state publication；v1 Sentio Keeper 中心化并由 Sentio 运行；后续去中心化改变谁来检查以及谁承担经济后果，不改变证据格式。
 
 v1 verification baseline 是 **optimistic source execution plus quorum replay promotion**。一个被选中的 source node 先执行，产出用于 freshness 的 `unsafe` parts。Keeper 记录 signed input 和 source 的 result claim。Verifier replicas 在 pinned executor 上，从 previous safe snapshot 开始 replay 同一份 L3 input。只有 quorum 复现 source claim，或 challenge replay 成功后，parts 才能进入 `safe` 表。
 
@@ -72,9 +72,9 @@ HouseGate 是协议与可见性边界，不是 SQL executor。
 HouseGate 职责：
 
 - 为每张 verified user table 暴露一个 virtual table。
-- 把 virtual writes rewrite 到物理 `unsafe` 表，把 virtual safe reads rewrite 到物理 `safe` 表。
+- 按 runtime mode 应用 physical table rewrite：forward mode 下 HouseGate 原样转发已签名 source SQL；managed/proxy modes 下 HouseGate 确定性地把 virtual writes rewrite 到物理 `unsafe` 表，把 virtual safe reads rewrite 到物理 `safe` 表。
 - 可选地把显式 intermediate-state read rewrite 成 `safe UNION unsafe`，并文档化更弱语义。
-- **校验**进来的 signed envelope（signature、`sql_hash`、`payload_hash`），把 payload **spool** 到 DA/payload store，并把 `rewritten_sql` **原样转发**给 source。HouseGate **不** rewrite SQL、**不**注入 reserved columns——非确定性 materialize 和 `_hg_row_id` 注入都在 agent/SDK 签名前完成（§7、§9）。HouseGate 对 signed SQL 没有任何自由度：改了 signature 就失败；不改就是 no-op。
+- **校验**进来的 signed envelope（signature、`sql_hash`、`payload_hash`），并把 payload **spool** 到 DA/payload store。HouseGate **不** materialize 非确定性、**不**注入 reserved columns——这些都在 agent/SDK 签名前完成（§7、§9）。Forward mode 下它原样转发已签名 SQL。Managed/proxy modes 下它对 source-path SQL 应用确定性的 physical rewrite；pinned executor 在 replay 时重算同一个 rewrite，所以恶意 HouseGate 的错误 rewrite 会表现为 source/byte mismatch，而不是被协议当成真。
 - 构造或转发 `StatementEnvelopeV2`。
 - 从逻辑表面隐藏 reserved columns，除非 operator/debug view 显式请求。
 - 拒绝用户写入、更新、重命名或删除 reserved columns。
@@ -98,7 +98,7 @@ Keeper 职责：
 - 收集 `ReplayAttestation` 并执行三路 promotion check（replay + partition-delta + byte-side lthash，§9）。v1 中心化 Keeper 是 *编排* 2-of-3 replay quorum 并即时仲裁 promote/challenge 的信任根；recomputability 在 v1 是事后审计能力。去中心化阶段的安全模型（challenge window）见 §11。
 - 在 root mismatch 或 timeout 时打开 challenge replay。
 - 发布 `SafeSnapshotManifest` 和 safe watermarks。
-- 发出从 unsafe parts 到 safe tables 的 Keeper-signed promotion commands（per-part MOVE，§12）。
+- 发出进入 safe tables 的 Keeper-signed promotion commands（从 promotion shadow table `REPLACE PARTITION`，§12）。
 - 通过 ledger equation gate safe-table merges（§12.4）。
 - 协调 reorg/drop cleanup for unsafe parts。
 - 跟踪 node membership，以及 replicas 完成 snapshot sync 后的 Active 状态。
@@ -116,7 +116,7 @@ ClickHouse/SNode 职责：
 - 产出 candidate part metadata：part name、partition id、physical checksum/hash、row count、bytes 以及可选 row/content commitment。
 - 在 scratch 或 replay-local tables 中运行 pinned replay execution。
 - 扫描本地 parts 并计算 receipt 需要的 byte/content commitments。
-- 只有在 Keeper-signed per-part MOVE（§12.2）下才能把 verified local parts promote 到 `safe`。
+- 只有在 Keeper-signed `REPLACE PARTITION`（§12.2）下才能把 verified local partitions promote 到 `safe`。
 - detach/drop 被 reject 的 unsafe parts。
 - 运行 safe-table audit jobs，并响应 cross-node sampling checks。
 
@@ -131,7 +131,7 @@ Replay executor 职责：
 - 从 previous `SafeSnapshotManifest` 开始，绝不从 unsafe state 开始。
 - 只有 `payload_hash` 和 `payload_length` 匹配后才加载 payload bytes。
 - Pin ClickHouse build、settings、schema snapshot 和 executor profile。
-- 对 payload-local INSERT，对 `rewritten_sql` 应用确定性的 Phase-2 physical rewrite（§7），materialize signed payload，并产出 new part/root commitments。
+- 对 payload-local INSERT，在 runtime mode 需要时应用确定性的 Phase-2 physical rewrite（§7），materialize signed payload，并产出 new part/root commitments。
 - 对 mutations，把 affected safe parts clone 或 attach 到 scratch，执行 mutation，并计算 old/new part deltas。
 - 产出 `ExecutionReceipt` 和 `ReplayAttestation`。
 - 对 mismatch 签名作为 challenge evidence，而不是把 mismatch 当成本地协议失败。
@@ -164,10 +164,10 @@ _hg_payload_ordinal UInt64
 **刻意不存进每行的 reserved columns 及其理由：**
 
 - `_hg_lc_block_seq` / `_hg_statement_seq`（sequencer 分配）：**不存**。它们唯一的消费方是 `UNION(safe, unsafe)` 读路径和 `as_of_safe(block)` time-travel，两者都不需要 per-row 值：
-  - **UNION 去重**用 `_hg_row_id`——promotion 是 per-part MOVE（§12.2），所以某一行同一时刻要么在 `hg_safe` 要么在 `hg_unsafe`，不会同时在两边。
+  - **UNION 去重**用 `_hg_row_id` 加 Keeper unsafe-part registry。`REPLACE PARTITION` 会把数据复制进 `hg_safe`，不会自动从 `hg_unsafe` 删除，所以 promotion 包含 cleanup/exclusion 步骤：异步 unsafe cleanup 删除这些 parts 前，`unsafe_latest` 必须用 Keeper part registry / `_part` filter 排除已被 safe watermark 覆盖的 parts。
   - **UNION 排序**用表的 `ORDER BY`，不依赖协议 sequence 号。
   - **`as_of_safe(block=N)` time-travel** 由 `SafeSnapshotManifest` 提供，该 manifest 本身已按 `safe_lc_block_seq` 索引（§8）。读操作选第 N 个 block 的 manifest 读对应 safe snapshot，并不按 per-row block 号过滤行。
-  - **Part↔statement 归属**由 ClickHouse part 元数据里的 `insert_deduplication_token = statement_seq` 承载（§12.2），不进每行。
+  - **Part↔statement 归属**由 ClickHouse part metadata 加 Keeper `RCRecord` 承载：sequencing-before-write mode 用 `insert_deduplication_token = statement_seq`，optimistic-forward path 用 `statement_id`（§12.2），不进每行。
   把它们逐行存会迫使 source 执行在写 `hg_unsafe` 前等 sequencing（或在 sequencing 后做一次"pending namespace"重写），这重新引入了 2026-06-10 设计 §5.2 刻意去掉的 sequencer 依赖，杀死 optimistic execution。见下面的 tradeoff。
 - `_hg_source_node`：**不存**。Part 级 provenance 已在 `RCRecord.source_node`。逐行副本没有任何安全职责（safety 来自 root/lthash，不是 provenance），且 part 一旦复制就具有误导性——serving 节点 ≠ source 节点。
 - `_hg_row_hash`：**不存**。`row_lthash` 已是 canonical row commitment；再加一个 BLAKE3 row hash 纯属冗余，audit 路径反正从存储行重算 `row_lthash`。
@@ -232,12 +232,12 @@ StatementEnvelopeV2 {
 }
 ```
 
-**`rewritten_sql` / `sql_hash` 覆盖什么，以及 rewrite 拆分。** SQL rewriting 分两个阶段，信任边界不同：
+**`rewritten_sql` / `sql_hash` 覆盖什么，以及 rewrite 拆分。** SQL rewriting 分两个阶段，信任边界和 runtime placement 不同：
 
 - **Phase 1——非确定性 materialization（agent/SDK，被信任，签名前）。** agent/SDK 在签名前把 SQL *文本* 里的非确定性函数改写成字面常量：`now()` → `'2026-06-22 10:00:00'`、`rand()` → `0.732`、`generateUUIDv4()` → `'...'`。这纯粹是本地的（当前时间、本地 RNG、本地 UUID），不需要外部状态。结果就是用户签的 `rewritten_sql`；`sql_hash = H(rewritten_sql)`。每个 executor 重放这个 envelope 时执行同样的常量，determinism 天然成立。
-- **Phase 2——确定性 physical rewrite（executor，重放时）。** Table-name / schema rewriting（`db1.t` → physical、`SHOW TABLES` → metadata SELECT）是 `(rewritten_sql, anchored schema_snapshot, anchored settings)` 的纯函数，由 pinned executor 在重放时执行。它**不**被签名，**不**从 source/HouseGate 信任；executor 自己重算。
+- **Phase 2——确定性 physical rewrite（取决于 runtime mode）。** Table-name / schema rewriting（`db1.t` → physical、`SHOW TABLES` → metadata SELECT）是 `(rewritten_sql, anchored schema_snapshot, anchored settings, target_surface)` 的纯函数。Forward mode 下 HouseGate 不 rewrite，`rewritten_sql` 已经是发给 ClickHouse 的 source SQL。Managed/proxy modes 下，HouseGate 在 source path 上应用这个确定性 rewrite，目标是 `hg_unsafe`；pinned executor 在 replay 时重算同一个 rewrite。Physical rewrite **不**被 user 签名，也**不**信任 source/HouseGate；replay recomputation 才是 authority。
 
-因此 envelope 只签 Phase-1 的输出。source 和 HouseGate 把 `rewritten_sql` 原样转发给 ClickHouse（source 不得重新 materialize）。一个被攻陷的 HouseGate 在转发时 rewrite，要么改了 `sql_hash`（签名失败），要么 SQL 不动（无攻击）——它没有任何自由度，因为非确定性已经被用户签名钉死。
+因此 envelope 只签 Phase-1 的输出。source 不得重新 materialize 非确定性。Managed/proxy mode 下被攻陷的 HouseGate 可以向 ClickHouse 发送错误 physical SQL，但这只会制造 source claim / byte-side mismatch：verifier 会从已签名的 Phase-1 SQL 重算确定性 physical rewrite，并在 source bytes 不匹配时拒绝。
 
 **`user_jws_v2` 签名 payload**（P0 freeze）：
 
@@ -421,12 +421,12 @@ sequenceDiagram
 
     U->>U: materialize now()/rand()/UUID 成常量；把 _hg_row_id 注入 payload
     U->>HG: INSERT(rewritten_sql + 已注入 _hg_row_id 的 payload) + signed StatementEnvelopeV2
-    HG->>HG: 校验 signature，计算 payload_hash，spool payload，转发
+    HG->>HG: 校验 signature，计算 payload_hash，spool payload
     HG->>K: submit StatementEnvelopeV2
     K->>K: 校验 signature、statement_id non-membership、schema/settings、payload ref
     K->>K: 分配 statement_seq 并构造 LC block
-    K-->>HG: Sequenced ack + source assignment
-    HG->>S: 对 unsafe 表执行 sequenced INSERT（rewritten_sql 原样）
+    K-->>HG: Sequenced ack + source assignment（managed path）
+    HG->>S: 对 unsafe 表执行 source SQL（managed: sequencing 后；optimistic-forward: 可先于 sequencing）
     S->>S: materialize unsafe parts
     S->>K: RCRecord(candidate parts + source_claim_state_root)
     K->>K: 校验 linkage、part claims 和 registration arithmetic
@@ -445,9 +445,9 @@ sequenceDiagram
     alt quorum AND per-partition delta matches AND byte-side lthash matches source claim
         K->>L2: publish/anchor LC block hash and state root
         L2-->>K: finality / last_mergeable reached
-        K->>S: Keeper-signed PromoteSafeParts (per-part MOVE, see §12)
-        K->>R1: Keeper-signed PromoteSafeParts (per-part MOVE, see §12)
-        K->>R2: Keeper-signed PromoteSafeParts (per-part MOVE, see §12)
+        K->>S: Keeper-signed PromoteSafePartition (REPLACE PARTITION, see §12)
+        K->>R1: Keeper-signed PromoteSafePartition (REPLACE PARTITION, see §12)
+        K->>R2: Keeper-signed PromoteSafePartition (REPLACE PARTITION, see §12)
     else mismatch or timeout
         K->>K: open challenge replay (signed mismatch attestation becomes evidence)
         K->>S: keep/drop unsafe parts
@@ -458,7 +458,8 @@ sequenceDiagram
 
 关键性质：
 
-- **Rewrite 拆分（见 §7）：** agent/SDK 在签名前 materialize 非确定性函数并注入 `_hg_row_id`；HouseGate 只校验 signature、计算 `payload_hash`、spool payload 并转发——它不 rewrite SQL，也不改 payload。source 把 `rewritten_sql` 原样发给 ClickHouse（不重新 materialize）。executor 在重放时做确定性的 physical rewrite。
+- **Rewrite 拆分（见 §7）：** agent/SDK 在签名前 materialize 非确定性函数并注入 `_hg_row_id`；HouseGate 校验 signature、计算 `payload_hash`、spool payload。Forward mode 下 HouseGate 原样转发已签名 SQL。Managed/proxy modes 下 HouseGate 为 source write 应用确定性的 physical rewrite，而 replay executors 在执行前独立重算同一个 rewrite。HouseGate 永不重新 materialize 非确定性，也不修改 signed payload。
+- **Execution timing split：** 图中展示 managed/sequencing-before-write path，此时 source write 前已有 `statement_seq`。Optimistic-forward path 可以在 sequencing 前写入 `hg_unsafe`，并用 `statement_id` 做 dedup/part attribution，直到 Keeper 后续绑定 `statement_id -> statement_seq`；promotion 仍必须等待 sequencing、replay、finality 和 §9 的三路校验。
 - Source 的 unsafe part 可以在成为 safe 前服务显式 unsafe/fresh reads，如果产品暴露这种模式。
 - 普通 `SELECT` 只读 safe 表。
 - Replayed roots 从 signed input 和 previous safe state 计算，而不是从 source part bytes 计算。
@@ -514,7 +515,7 @@ Mutation 约束：
 - Source 在 verification 前绝不能 in place mutate safe table。
 - Replay cost 与 touched parts 成正比。v1 admission 必须限制 touched bytes/parts。
 - 拒绝修改 `_hg_row_id` 或协议 columns 的尝试。
-- **Pre-state data availability（已解决）。** Mutation replay 需要 affected safe parts 作为 pre-state。这些 parts 可用，因为 promotion 把一份副本 MOVE 进了每个 replica 的 `hg_safe`（§12.2 per-part MOVE 在每个 attesting replica 上执行），且 `SafeSnapshotManifest` 索引它们。只要有一个 honest replica 持有 pre-state part，challenge replay 就能进行；source 单方面隐藏自己的副本挡不住验证。全员 replica 隐瞒是 liveness 攻击（无 safety 修复），但 §13 audit 会发现 missing parts 并把隐瞒的 replica 移出 read set。这在不为 pre-state 单设 proof-of-custody 的前提下解决了 v2 R3 的关切。
+- **Pre-state data availability（已解决）。** Mutation replay 需要 affected safe parts 作为 pre-state。这些 parts 可用，因为 promotion 通过 Keeper-signed `REPLACE PARTITION`（§12.2）把 verified post-state partition 发布到每个 attesting replica 的 `hg_safe`，且 `SafeSnapshotManifest` 索引它们。只要有一个 honest replica 持有 pre-state part，challenge replay 就能进行；source 单方面隐藏自己的副本挡不住验证。全员 replica 隐瞒是 liveness 攻击（无 safety 修复），但 §13 audit 会发现 missing parts 并把隐瞒的 replica 移出 read set。这在不为 pre-state 单设 proof-of-custody 的前提下解决了 v2 R3 的关切。
 - 任何修改 `_hg_row_id` 或 protocol columns 的尝试都被拒绝。
 
 ## 11. Safe、Unsafe 与读语义
@@ -576,24 +577,28 @@ v1 的物理布局是 **`hg_unsafe` = ReplicatedMergeTree，`hg_safe` = MergeTre
 - **ClickHouse Keeper**（ZooKeeper 兼容）：ClickHouse 自己拥有，仅用于 `hg_unsafe` 的 ReplicatedMergeTree 状态。HouseGate 从不读写它。
 - **Sentio Keeper**（§5.2 的 LC-block sequencer 和 attestation collector）：integrity 层拥有。驱动 sequencing、replay job 下发和 promotion。
 
-### 12.2 Promotion = per-part MOVE，`hg_unsafe` 停 merge
+### 12.2 Promotion = `REPLACE PARTITION`，`hg_unsafe` 停 merge
 
-Promotion 在每个已经 fetch 到 part 的 replica 上本地执行。因为 `hg_unsafe` 是 ReplicatedMergeTree，每个 replica 已经持有同样的 candidate parts；promote 时不需要跨节点分发。
+Promotion 在每个已经 fetch 到 candidate parts 的 replica 上本地执行。因为 `hg_unsafe` 是 ReplicatedMergeTree，每个健康 replica 最终都会持有同样的 candidate parts；promote 时不需要跨节点分发。
 
 **`hg_unsafe` 在表的整个生命周期里运行在 `SYSTEM STOP MERGES` 下。** 这是关键简化。它用结构方式消除 merge/promotion 竞争，而不是用锁去协调：
 
-- 一个 background merge 若把"即将 promote 的 part"和"尚未验证的 part"合在一起，会产生混合 part（部分行已验证、部分未验证），而 partition 粒度的 `MOVE PARTITION` 会把未验证的行拖进 `hg_safe`。停掉 merge 直接消除了这种情况。
-- 停 merge 后，`hg_unsafe` 里的 part 边界始终等于 statement 边界（由 `insert_deduplication_token = statement_seq` 锚定），所以 promotion 单元毫无歧义：一条 statement 对应的那组 parts，逐个 MOVE。
+- 一个 background merge 若把"即将 promote 的 part"和"尚未验证的 part"合在一起，会产生混合 part（部分行已验证、部分未验证），而 partition-level publication 会把未验证的行拖进 `hg_safe`。停掉 merge 直接消除了这种情况。
+- 停 merge 后，`hg_unsafe` 里的 part 边界始终等于 statement 边界（sequencing-before-write mode 用 `insert_deduplication_token = statement_seq` 锚定，optimistic-forward path 用 `statement_id` 锚定），所以 verified candidate-part set 毫无歧义。
 - `hg_unsafe` 是薄 buffer，不是查询目标；永远不 merge 它带来的读放大代价可以忽略，因为读走 `hg_safe`，`hg_unsafe` 只充当最新的未验证薄层（§11）。
 
-因此 promotion 是在每个 replica 上的一次 **per-part `MOVE PART`**，从 `hg_unsafe` 到 `hg_safe`：
+ClickHouse 的 cross-table publication primitive 是 partition-level，所以 promotion 使用 **Keeper-signed `REPLACE PARTITION` from promotion shadow table**，不是从 `hg_unsafe` 直接 move：
 
 ```sql
--- 对每个 candidate part，在每个 attested 过的 replica 上
-ALTER TABLE hg_safe.Transfer_<table_id> MOVE PART '<part_name>' FROM hg_unsafe.Transfer_<table_id>;
+-- 对每个 touched partition，在每个 attested 过的 replica 上
+ALTER TABLE hg_safe.Transfer_<table_id>
+  REPLACE PARTITION <partition_expr>
+  FROM hg_promote.Transfer_<table_id>_<snapshot_id>;
 ```
 
-这是本地、O(1)（文件 rename / hardlink move，不复制行）的操作，且只在 §9 的三路校验（replay + partition-delta + byte-side lthash）通过后才执行。被 move 的 part 恰好是 replica 从 fetch 字节重算 `part_row_lthash` 并与 `RCRecord` 匹配上的那些。
+`hg_promote` 是本地临时或协议管理的 MergeTree 表，与 `hg_safe` 具有相同 structure、partition key、primary key、order key、storage policy、indices 和 projections。对每个 touched partition，SNode 构造 promotion table，使它**恰好**包含 promotion 后的 partition：previous safe partition 加上那些 replica 从 fetch 字节重算 `part_row_lthash` 并与 `RCRecord` 匹配的 candidate parts。它绝不能直接复制整个 `hg_unsafe` partition，因为那个 partition 可能包含无关的未验证 parts。
+
+`REPLACE PARTITION` 对目标 partition 是本地原子操作。它用 verified post-state partition 替换 safe partition。它从 promotion table 复制，而不是从 `hg_unsafe` 删除，所以 promotion 还必须在 Sentio Keeper 里把 candidate parts 标记为 safe，并调度 `hg_unsafe` cleanup。Cleanup 完成前，`unsafe_latest` 必须通过 Keeper part registry / `_part` filter 排除已 promote 的 unsafe parts。
 
 ### 12.3 Parts-per-partition 上限把 promotion 延迟变成容量阀门
 
@@ -619,9 +624,9 @@ sum(part_row_lthash of merge inputs) == sum(part_row_lthash of merge outputs)
 
 上述流程没法免费处理两种运维场景：
 
-- **Promote 时刻的 lagging replica。** ReplicatedMergeTree 复制是异步的。Keeper 在 quorum attest 之后下发 promotion 决定；一个还没通过 interserver HTTP fetch 到 candidate part 的 replica 没东西可 MOVE。这是 liveness 问题不是 safety 问题（lagging replica 没 attest，不在 quorum 内）。该 replica 在自己的 ReplicatedMergeTree 把 part fetch 到之后再补做同样的本地 MOVE。`MOVE PART` 在 lagging replica 上对"尚未到达的 part"的确切行为需要在 P1 spike 中确认；fallback 是等 part 到达后再做本地 MOVE。
+- **Promote 时刻的 lagging replica。** ReplicatedMergeTree 复制是异步的。Keeper 在 quorum attest 之后下发 promotion 决定；一个还没通过 interserver HTTP fetch 到 candidate parts 的 replica 还无法构造 promotion table。这是 liveness 问题不是 safety 问题（lagging replica 没 attest，不在 quorum 内）。该 replica 在自己的 ReplicatedMergeTree 把 parts fetch 到之后，再构造同一个 `hg_promote` partition，并运行同一个 Keeper-signed `REPLACE PARTITION`。Promotion-shadow-table 构造和 delayed local replace 行为仍是 P1 spike。
 
-- **新节点或长期离线 replica 的冷启动 bootstrap。** 一个全新节点启动时 `hg_unsafe` 是空的。已经被其他 replica 从 `hg_unsafe` promote 走的 parts 永远不会通过 ReplicatedMergeTree 到达（它们已经被 MOVE 走了），所以光靠 ReplicatedMergeTree 没法给新节点的 `hg_safe` 填数据。两条恢复路径，都不在热路径上：
+- **新节点或长期离线 replica 的冷启动 bootstrap。** 一个全新节点启动时 `hg_unsafe` 是空的。已经在 promotion 后从其他 replicas 的 `hg_unsafe` cleanup 掉的 parts 永远不会通过 ReplicatedMergeTree 到达，所以光靠 ReplicatedMergeTree 没法给新节点的 `hg_safe` 填数据。两条恢复路径，都不在热路径上：
   1. **从 L3 stream replay。** 从 genesis（或从最老的保留 safe snapshot）开始 replay 签名 payload，通过 pinned executor 重建 `hg_safe`。这是 recomputability 论证（§7）所保证的自救路径。
   2. **从 peer 的 `hg_safe` 拷贝。** 从另一个 replica 的 `hg_safe` 拉取 safe parts（文件层或通过 attach），对每个 part 校验 `part_phys_hash` 和 `part_row_lthash` 是否匹配已发布的 `SafeSnapshotManifest`，然后 attach。这是快速路径；它依赖至少一个 honest peer 可用，而这是 §13 audit 强制的。
 
@@ -670,7 +675,7 @@ P1：实现 payload-local INSERT 的 source execution 和 replay。
 - 通过 ClickHouse read-back 支持 scalar + JSON/Map 的 pinned executor materializer，包括确定性 Phase-2 physical rewrite。
 - Quorum attestation collection（2-of-3 独立 replicas）。
 - promotion 时的 byte-side partition-delta 和 part-lthash 校验。
-- Keeper-signed per-part MOVE safe promotion（§12）。
+- Keeper-signed `REPLACE PARTITION` from promotion shadow table 的 safe promotion（§12）。
 
 P2：实现 bounded UPDATE/DELETE。
 
@@ -697,8 +702,8 @@ P4：扩展语言表面。
 ## 15. Open Questions
 
 1. **最终 v1 路线：** 确认 optimistic source execution plus quorum replay 是默认路线，还是切到 full-node parallel replay，用更长 unsafe window 换更简单 correctness。
-2. **Safe table engine：** ~~使用带严格 Keeper-signed safe path 的 ReplicatedMergeTree，还是每个节点独立 promotion 的 local MergeTree safe cache。~~ 已解决：`hg_safe` 在每个节点上是 local MergeTree，per-part promotion（§12）。降级，不再是 open question。
-3. **Merge control：** ~~HouseGate-to-Keeper reverse proxy 能否完全 gate unsafe/safe merges，还是需要 ClickHouse fork 或 restricted engine variant。~~ 已解决：在 §12.1 的 engine 拆分下（`hg_unsafe` ReplicatedMergeTree 不 gate，`hg_safe` MergeTree）不需要 reverse-proxy gate。Lagging replica 上的 `MOVE PART` 语义（§12.5）仍是 P1 spike。降级，不再是 open question。
+2. **Safe table engine：** ~~使用带严格 Keeper-signed safe path 的 ReplicatedMergeTree，还是每个节点独立 promotion 的 local MergeTree safe cache。~~ 已解决：`hg_safe` 在每个节点上是 local MergeTree，通过 Keeper-signed `REPLACE PARTITION` from promotion shadow table promote（§12）。降级，不再是 open question。
+3. **Merge control：** ~~HouseGate-to-Keeper reverse proxy 能否完全 gate unsafe/safe merges，还是需要 ClickHouse fork 或 restricted engine variant。~~ 已解决：在 §12.1 的 engine 拆分下（`hg_unsafe` ReplicatedMergeTree 不 gate，`hg_safe` MergeTree）不需要 reverse-proxy gate。Lagging replica 上的 `REPLACE PARTITION` promotion-shadow-table 构造（§12.5）仍是 P1 spike。降级，不再是 open question。
 4. **LC/RC naming and schema：** 是否正式使用 LC blocks 和 RC records 命名，并冻结精确 protobuf/JSON fields。
 5. **Chain commitment：** L2 calldata 存完整 LC block payload、DA reference，还是只存 block/root commitment。
 6. **Payload DA：** 定义 signed payload bytes 的 proof-of-custody 与 retention。~~Mutation pre-state parts~~ 已解决：pre-state availability 来自 multi-replica `hg_safe` + manifest 索引 + §13 audit（§10），不是单独的 proof-of-custody。降级，不再是 open question。
@@ -727,10 +732,10 @@ P4：扩展语言表面。
 
 ## 17. References
 
-- `docs/superpowers/specs/2026-06-10-multi-replica-trust-design.md`
-- `/Users/uranuswch/dev/sentio_xyz/designs/sento-network/PROGRESS.md`
-- `/Users/uranuswch/dev/sentio_xyz/designs/sento-network/meetings/2026-06-17-storage-integrity-sync-summary.md`
-- `/Users/uranuswch/dev/sentio_xyz/designs/sento-network/meetings/2026-06-17-storage-integrity-sync.txt`
-- `pkg/replay`
-- `pkg/replay/payloadexec`
-- `pkg/replay/chexec`
+- [2026-06-10 multi-replica trust design](https://github.com/housegate/housegate/blob/main/docs/superpowers/specs/2026-06-10-multi-replica-trust-design.md)
+- [sentio-network PROGRESS](https://github.com/sentioxyz/designs/blob/main/sento-network/PROGRESS.md)
+- [2026-06-17 storage integrity sync summary](https://github.com/sentioxyz/designs/blob/main/sento-network/meetings/2026-06-17-storage-integrity-sync-summary.md)
+- [2026-06-17 storage integrity sync transcript](https://github.com/sentioxyz/designs/blob/main/sento-network/meetings/2026-06-17-storage-integrity-sync.txt)
+- [pkg/replay](https://github.com/housegate/housegate/tree/main/pkg/replay)
+- [pkg/replay/payloadexec](https://github.com/housegate/housegate/tree/main/pkg/replay/payloadexec)
+- [pkg/replay/chexec](https://github.com/housegate/housegate/tree/main/pkg/replay/chexec)
