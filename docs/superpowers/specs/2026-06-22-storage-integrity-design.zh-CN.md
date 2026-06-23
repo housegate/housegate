@@ -478,9 +478,9 @@ sequenceDiagram
 - Replayed roots 从 signed input 和 previous safe state 计算，而不是从 source part bytes 计算。
 - Promotion 是三路校验，不是仅看 root 相等。一个拥有合法 ClickHouse checksums、且 `source_claim_state_root` 自洽的 source part 仍可能是 fraud。Promotion 必须三件事同时成立：
   1. **Replay check：** 一组 quorum replicas 各自独立 replay 签名的 L3 payload，得到与 `source_claim_state_root` 相同的 `computed_state_root`。证明 payload 的正确执行结果就是这个 root。
-  2. **Partition-delta check：** 对语句触及的每个 partition，source 上报的 `Σ(part_row_lthash of new parts)` 等于 replicas replay 时算出的 partition delta。证明 source 的 per-part claim 与 root 内部自洽，并把分歧定位到 partition。由于这一级的 LtHash 对不相交的 row-ID 集合抗碰撞，这是真正 gate 字节的层级。
-  3. **Byte-side part-lthash check：** 每个 attesting replica 读出它实际 fetch 到的 part 字节（`SELECT ... WHERE _part IN (...)`），重算 `part_row_lthash`，确认与 `RCRecord.candidate_parts` 里的值一致。证明磁盘上的字节对应所 claim 的 root；这三路里只有这一路真正碰 source 的 part 字节。
-- 缺少第 2、3 路的 root 匹配**不是** promotion。这正是合谋 source 会钻的缺口：它写 `bytes_evil`，为一个正确的 payload 注册一个看起来合法的 root，让 replicas replay 到同一个 root；没有 byte-side scan，evil 字节会毫无阻碍地进 `hg_safe`。
+  2. **Partition-delta check：** 对语句触及的每个 partition，source 上报的 `Σ(part_row_lthash of new parts)` 等于 replicas replay 时算出的 partition delta。这条把 source 的 per-part claim 绑到 replay root，是挡住合谋 source 的承重链路：恶意 source 同时控制自己的磁盘字节和自己的 `RCRecord.candidate_parts` 声明，所以要让 evil 行被 promote，它必须上报一组能 sum 到正确 replay delta 的 per-part hash——而（LtHash 对不相交 row-ID 集合抗碰撞，§8）除非 evil 行恰好碰撞、否则不可行，而 per-row `_hg_row_id` 排除了这种碰撞。source 怎么对 evil 行集做 hash，都无法让它与 root 对账。它也把分歧定位到 partition。
+  3. **Byte-side part-lthash check：** 每个 attesting replica 读出它实际 fetch 到的 part 字节（`SELECT ... WHERE _part IN (...)`），重算 `part_row_lthash`，确认与 `RCRecord.candidate_parts` 里的值一致。这是**互补**链路，把 source 上报的 per-part hash 绑到磁盘上的实际字节。它是三路里唯一真正碰 source 字节的一路，抓的是 check 2 单独会漏掉的情形：source 对 `bytes_evil` 上报一个看起来正确的 `part_row_lthash`、但磁盘上放的是另外的字节。
+- 缺少第 2、3 路的 root 匹配**不是** promotion，且二者**互补、不冗余**——都是承重的。它们各堵 `bytes_evil` 攻击的一半：check 2 把 root 绑到 source 上报的 per-part claim（evil 行若不碰撞就无法 sum 到正确 delta）；check 3 把这些声明绑到磁盘实际字节（抓 source 对 `bytes_evil` 上报 hash、却存了发散字节的情形）。早期表述（"没有 byte-side scan，evil 字节会毫无阻碍地进 `hg_safe`"）低估了 check 2：单靠 byte-side scan 挡不住如实上报 `LtHash(bytes_evil)` 的 source——那种情况下 check 3 也会通过，只有 check 2 挡得住这个变种。Promotion 是一条链 `root —check 2→ Σ source per-part claim —check 3→ 实际磁盘字节`，每一环都不能省。
 - **v1 quorum 参数（P0 freeze）：** promote 需要 ≥2/3 个独立 replay replicas attest 相同的 `computed_state_root`，且 source 自己的自证不算数。v1 中心化 Keeper 是*编排*这个 quorum（选 replicas、收 attestations、决定 promote、开 challenge）的信任根；recomputability 在 v1 是*事后审计*能力，不是运行时 promote 机制。去中心化阶段的安全模型（challenge window）见 §11。
 - 物理 promotion 操作（verified 字节究竟如何从 `hg_unsafe` 进 `hg_safe`）在 §12 规定。
 
@@ -631,6 +631,8 @@ ALTER TABLE hg_safe.Transfer_<table_id>
 2. **Admission throttle 是必须的，不是可选的。** Throttle 的执行者是每个 ClickHouse 实例前面的 ingress HouseGate：它监测自己 co-located ClickHouse 的实时 per-partition part 数（例如轮询 `system.parts` + 事件驱动失效），当某个 partition 的 `hg_unsafe` part 数接近上限时，对该 partition 的新 INSERT 做可重试的背压拒绝，而不是让 ClickHouse 以 `Too many parts` 硬失败。因为 `parts_to_throw_insert` 是 per-replica 强制的，promote 最慢的那个 replica 决定了全网的写入余量。Per-account fair scheduling（base 设计 R8）防止单个账户把某个 partition 顶到上限、饿死其他诚实流量。这是推论 1 里 admission-cap 需求的具体形态；§15 没有为它单列 open item（原先引的 "open question 8" 是过期的——那一条是 non-determinism normalization）。
 3. **Partition cardinality 是一个调参旋钮。** `hg_unsafe` 跑得热的表可以把 partition key 拆细，让 parts 分散到更多 partition，抬高总预算。这是 schema 时刻的决定，记进 anchored DDL。
 
+4. **`hg_unsafe` STOP MERGES 使 Keeper liveness 成为写入可用性单点（v1 风险，非安全洞）。** 停 merge 且 `parts_to_throw_insert` 被 pin 住后，唯一能排空 `hg_unsafe` parts 的就是 promotion，而 promotion 必须靠 Keeper 来 sequence + 编排 quorum + 下发签名的 `REPLACE PARTITION`。Keeper 一旦宕机、变慢或在维护，promotion 就停，parts 堆积，撞到上限的 partition 全网拒绝写入——且在那个状态下节点没有任何本地逃生阀：它不能 merge `hg_unsafe`（STOP MERGES 是让 candidate-part 边界无歧义的不变式，§12.2），也不能 promote（promotion 命令归 Keeper）。推论 2 的 admission throttle 把硬 `Too many parts` 改成可重试拒绝，但它不改变这个耦合——只是把它推迟。换言之，**v1 全网写可用性 = `Keeper_liveness × promotion_throughput ≥ ingest_rate`**，一个 partition 能撑多久 = `remaining_parts_budget / ingest_rate`。"被信任"不等于"高可用"：信任 Keeper（§4）保安全，并不保证它对写的 liveness。这是中心化 Keeper baseline 和 engine 拆分带来的 v1 既定后果，也是为什么 §15 question 15（Keeper HA and sharding）在关键路径上而非可选项。文档列的逃生路径——从 L3 stream replay / 从 peer 的 `hg_safe` 拷贝（§12.5）——能恢复 `hg_safe`，但它们都不能在 Keeper 还没恢复时排空 `hg_unsafe`。
+
 ### 12.4 `hg_safe` merges：受 ledger equation 约束
 
 `hg_safe` 是 MergeTree，所以 merges 在每个节点本地进行，不被 ReplicatedMergeTree 协调。它们仍然必须遵守 row-instance-preserving 的 ledger equation（来自 2026-06-10 设计 §9.1）：
@@ -736,7 +738,7 @@ P4：扩展语言表面。
 12. **Safe serving integrity：** 决定 v1 存多少 row/chunk/Merkle metadata，多少在 audit 时计算。
 13. **Shadow-data detection：** 定义 production query sampling rate 和 cross-node comparison policy。
 14. **Dynamic node join：** 定义新节点如何证明它已 sync 到 safe manifest，才能变为 Active。
-15. **Keeper HA and sharding：** 定义 multi-Raft group layout、按 table/database 的 shard routing，以及跨 Keeper 的 L2 height clock。
+15. **Keeper HA and sharding：** 定义 multi-Raft group layout、按 table/database 的 shard routing，以及跨 Keeper 的 L2 height clock。**关键路径，非延后项。** §12.3 推论 4 表明 v1 写可用性是 `Keeper_liveness × promotion_throughput ≥ ingest_rate`，且没有本地逃生阀（不能 merge `hg_unsafe`、不能本地 promote）。P1 之后第一个要硬化的是 Keeper HA 本身——即便先不谈去中心化——因为中心化 Keeper 同时是安全根（§4）和写可用性单点。Keeper 宕机会停 promotion，parts 堆向被 pin 的 `parts_to_throw_insert` 上限，全网写入被拒。HA（multi-Raft、failover）是 v1 缓解；sharding/去中心化是 P5+ 的安全模型。
 16. **Read API semantics：** 决定 unsafe reads 暴露给用户、隐藏，还是限制在 operator/debug APIs。
 
 ## 16. 备选方案
