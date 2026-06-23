@@ -722,7 +722,7 @@ P4：扩展语言表面。
 
 ## 15. Open Questions
 
-1. **最终 v1 路线：** 确认 optimistic source execution plus quorum replay 是默认路线，还是切到 full-node parallel replay，用更长 unsafe window 换更简单 correctness。
+1. **最终 v1 路线：** 倾向**路线 A**——optimistic source execution plus quorum replay——为 v1 默认；full-node parallel replay（路线 B）保留为文档化 fallback、也是天然的第一个 correctness prototype。A/B 的 pros-cons 对比，以及两个决定性因素——unsafe-ack 延迟与跨节点字节一致性——详见 §16。最终 confirm 待定。
 2. **Safe table engine：** ~~使用带严格 Keeper-signed safe path 的 ReplicatedMergeTree，还是每个节点独立 promotion 的 local MergeTree safe cache。~~ 已解决：`hg_safe` 在每个节点上是 local MergeTree，通过 Keeper-signed `REPLACE PARTITION` from promotion shadow table promote（§12）。降级，不再是 open question。
 3. **Merge control：** ~~HouseGate-to-Keeper reverse proxy 能否完全 gate unsafe/safe merges，还是需要 ClickHouse fork 或 restricted engine variant。~~ 已解决：在 §12.1 的 engine 拆分下（`hg_unsafe` ReplicatedMergeTree 不 gate，`hg_safe` MergeTree）不需要 reverse-proxy gate。Lagging replica 上的 `REPLACE PARTITION` promotion-shadow-table 构造（§12.5）仍是 P1 spike。降级，不再是 open question。
 4. **L3/RC schema：** ~~是否正式使用 L3 blocks 和 RC records 命名~~——命名已定为 `L3Block` / `RCRecord`（§5.2、§7）。仍未决：定义并冻结精确 protobuf/JSON fields 与 wire schema。
@@ -747,7 +747,19 @@ P4：扩展语言表面。
 
 **只用 append-only WAL table。** 历史和高度更容易推理，但读成本很高，且 6 月 17 日讨论已收敛到物理 unsafe/safe 表。
 
-**Full-node parallel replay。** 对第一个 correctness prototype 更简单也可能更安全，因为每个节点都产出本地 candidate part。它保留为 fallback，但当前 baseline 保留更快的 optimistic unsafe path。
+**Full-node parallel replay（路线 B）vs. optimistic source execution + quorum replay（路线 A）。** 路线 B 没有指定 source：每个节点都执行 sequenced input、各自产出 candidate part，Keeper 取 majority/recomputable root。路线 A 指定一个 source 先执行、立即作为 `unsafe` 提供，只有过了 §9 三路检查后才把它的字节 promote。两条路都在多节点重复执行（路线 A 的 verifier 也 replay），所以路线 A 在算力上并不更省——对比点在于**写延迟、字节模型、实现面**：
+
+| | A——optimistic + quorum replay（已选） | B——full-node parallel replay（fallback） |
+|---|---|---|
+| Unsafe-ack 延迟 | 快——source 立即产出 `unsafe` parts（optimistic-forward 可在 sequencing 前就写），客户端的写以**写速度**确认、异步验证 | 慢——没有快写者；unsafe window 要到 sequencing + 节点执行之后才打开 |
+| 实现面 | 大——整个 promotion 数据面：`hg_promote` 影子表、`REPLACE PARTITION`、byte-side scan（§9 check 3）、per-`(table, partition_id)` 提升串行化、跨引擎 `ATTACH`、`STOP MERGES` + parts ceiling | 小——每节点本地计算；不搬 part、无 promotion 影子表、无 byte-side scan |
+| 跨节点字节一致性 | safe replicas 收敛到同一份被 promote 的 source 字节 → 字节级一致的 safe 面，§13 serving audit 可**直接按字节比对** | 各节点保留自己本地算出的字节（逻辑相等、物理发散）→ 跨节点比对只能在 LtHash/逻辑层 |
+| 信任面 | 恶意 source 可在真 root 下落 `bytes_evil`——这正是 byte-side check（§9 check 3）存在的原因 | 坏节点只污染自己那份，被 majority/recomputability 抓 |
+| 原型期简单度 | 要对的更多 | 更简单，对第一个 correctness prototype 也可能更安全 |
+
+两条路共享同一个安全根——recomputability over voting（§5.2）：一个诚实 verifier 拿签名日志就能驳倒任意多合谋 replica。路线 A 只是在这之上**多加**一层 byte-side check，因为它要把某一个节点的字节 promote 到全网。
+
+**设计倾向路线 A**，由两个对存储/索引产品要紧的因素决定。其一，**unsafe-ack 延迟**：`unsafe` 表的存在就是为了服务新鲜读，而目标 2（§2）是低延迟写——路线 A 以写速度确认、后台验证，而路线 B 更长的 unsafe window（在 sequencing + 执行完成前什么都读不到）放弃了这个性质。其二，**跨节点字节一致性**：路线 A promote 同一份权威字节，所以每个 safe replica 字节一致、serving integrity（§13）可按字节直接审计；路线 B 固有的逐节点字节发散把所有跨节点比对推到 LtHash/逻辑层，使 serving-integrity 故事更复杂。路线 B 仍是文档化 fallback——也是天然的第一个 correctness prototype，因为它绕开了整个 §12 promotion 数据面——但路线 A 是 v1 baseline，因为它保住了快速新鲜写和字节收敛的 safe 面。路线 A 为此付出的 promotion 路径复杂度在 §12 规定。
 
 **Safe table 不需要后续 audit。** 作为 serving claim 是错的。Promotion 证明 state root；它不证明恶意节点未来每次 SELECT response 都诚实。
 

@@ -723,7 +723,7 @@ P4: expand language surface.
 
 ## 15. Open Questions
 
-1. **Final v1 route:** confirm optimistic source execution plus quorum replay as the default, or switch to full-node parallel replay for simpler correctness at the cost of a longer unsafe window.
+1. **Final v1 route:** leaning toward route A — optimistic source execution plus quorum replay — as the v1 default, with full-node parallel replay (route B) retained as the documented fallback and the natural first correctness prototype. The A/B pros-cons comparison and the two decisive factors — unsafe-ack latency and cross-node byte consistency — are detailed in §16. Final confirmation pending.
 2. **Safe table engine:** ~~use ReplicatedMergeTree with a strict Keeper-signed safe path, or local MergeTree safe caches promoted independently on every node.~~ Resolved: `hg_safe` is a local MergeTree on every node, promoted by Keeper-signed `REPLACE PARTITION` from a promotion shadow table (§12). Demoted from open.
 3. **Merge control:** ~~can the HouseGate-to-Keeper reverse proxy fully gate unsafe/safe merges without a ClickHouse fork, or is a restricted engine variant required?~~ Resolved: no reverse-proxy gate is needed under the §12.1 engine split (`hg_unsafe` ReplicatedMergeTree ungated, `hg_safe` MergeTree). The `REPLACE PARTITION` promotion-shadow-table construction on lagging replicas (§12.5) remains a P1 spike. Demoted from open.
 4. **L3/RC schema:** ~~freeze whether the design calls these L3 blocks and RC records~~ — naming resolved to `L3Block` / `RCRecord` (§5.2, §7). Still open: define their exact protobuf/JSON fields and freeze the wire schema.
@@ -748,7 +748,19 @@ P4: expand language surface.
 
 **Append-only WAL table only.** Easier to reason about history and height, but read cost is high and the June 17 discussion converged on physical unsafe/safe tables instead.
 
-**Full-node parallel replay.** Simpler and likely safer for the first correctness prototype, because each node produces its own local candidate part. It remains a fallback, but the chosen baseline preserves the faster optimistic unsafe path.
+**Full-node parallel replay (route B) vs. optimistic source execution + quorum replay (route A).** Route B has no designated source: every node executes the sequenced input, produces its own candidate part, and Keeper takes the majority/recomputable root. Route A designates one source to execute first, serves it as `unsafe` immediately, and promotes its bytes only after the §9 three-way check. Both re-execute on multiple nodes (route A's verifier replicas also replay), so route A is not cheaper on compute — the comparison is about write latency, the byte model, and implementation surface:
+
+| | A — optimistic + quorum replay (chosen) | B — full-node parallel replay (fallback) |
+|---|---|---|
+| Unsafe-ack latency | fast — the source produces `unsafe` parts immediately (the optimistic-forward path can write before sequencing), so the client's write is acknowledged at write speed and verified asynchronously | slower — no fast writer; the unsafe window only opens after sequencing plus node execution |
+| Implementation surface | larger — the whole promotion data plane: `hg_promote` shadow table, `REPLACE PARTITION`, the byte-side scan (§9 check 3), per-`(table, partition_id)` promotion serialization, cross-engine `ATTACH`, `STOP MERGES` + the parts ceiling | smaller — each node computes locally; no part movement, no promotion shadow table, no byte-side scan |
+| Cross-node byte consistency | safe replicas converge on one promoted set of source bytes → a byte-identical safe surface, so the §13 serving audit can compare bytes directly | each node keeps its own locally-computed bytes (logically equal, physically divergent) → cross-node comparison only at the LtHash/logical level |
+| Trust surface | a malicious source can land `bytes_evil` under a truthful root — exactly why the byte-side check (§9 check 3) exists | a bad node corrupts only its own copy, caught by majority/recomputability |
+| First-prototype simplicity | more to get right | simpler, and likely safer for a first correctness prototype |
+
+Both routes share the same safety root — recomputability over voting (§5.2): a single honest verifier with the signed log refutes any number of colluding replicas. Route A only adds the byte-side check on top because it promotes one node's bytes network-wide.
+
+**The design leans toward route A**, decided by two factors that matter to a storage/indexing product. First, **unsafe-ack latency**: the `unsafe` table exists to serve fresh reads and goal 2 (§2) is low-latency writes — route A acknowledges the write at write speed and verifies in the background, whereas route B's longer unsafe window (nothing is queryable until sequencing + execution complete) gives that property up. Second, **cross-node byte consistency**: route A promotes one canonical byte set, so every safe replica is byte-identical and serving integrity (§13) can be audited by direct byte comparison; route B's inherent per-node byte divergence pushes all cross-node comparison onto the LtHash/logical layer and complicates the serving-integrity story. Route B stays the documented fallback — and the natural first correctness prototype, since it sidesteps the entire §12 promotion data plane — but route A is the v1 baseline because it preserves fast fresh writes and a byte-convergent safe surface. The promotion-path complexity route A pays for is specified in §12.
 
 **Safe table needs no further audit.** False as a serving claim. Promotion proves the state root; it does not prove every future SELECT response from a malicious node.
 
