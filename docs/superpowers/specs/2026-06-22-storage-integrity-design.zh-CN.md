@@ -88,13 +88,13 @@ Keeper 是 sequencer、validator、registry、attestation collector 和 safe-sta
 
 Keeper 职责：
 
-- 分配 `statement_seq`，围绕 signed statement envelopes 构造 LC blocks。
+- 分配 `statement_seq`，围绕 signed statement envelopes 构造 L3 blocks。
 - 通过 L3-derived mountain-range accumulator + per-account high-water mark 强制 `statement_id` 唯一性（§7）；用 non-membership proof 拒绝重复。这个 state 可从 L3 stream 重放重建，所以去中心化 Keeper 不改变 dedup 事实。
 - 记录 payload references 并确保 payload availability。
 - 为 optimistic execution 选择 source node。
 - 只通过 validation front 接收 source result claims。
 - 存储候选 parts、partition deltas 和 source claimed roots 的 RC records。
-- 基于 LC block input、previous safe snapshot identity、schema snapshot、executor profile 和 payload refs 构造 `ReplayJob`。
+- 基于 L3 block input、previous safe snapshot identity、schema snapshot、executor profile 和 payload refs 构造 `ReplayJob`。
 - 收集 `ReplayAttestation` 并执行三路 promotion check（replay + partition-delta + byte-side lthash，§9）。v1 中心化 Keeper 是 *编排* 2-of-3 replay quorum 并即时仲裁 promote/challenge 的信任根；recomputability 在 v1 是事后审计能力。去中心化阶段的安全模型（challenge window）见 §11。
 - 在 root mismatch 或 timeout 时打开 challenge replay。
 - 发布 `SafeSnapshotManifest` 和 safe watermarks。
@@ -163,16 +163,16 @@ _hg_payload_ordinal UInt64
 
 **刻意不存进每行的 reserved columns 及其理由：**
 
-- `_hg_lc_block_seq` / `_hg_statement_seq`（sequencer 分配）：**不存**。它们唯一的消费方是 `UNION(safe, unsafe)` 读路径和 `as_of_safe(block)` time-travel，两者都不需要 per-row 值：
+- `_hg_l3_block_seq` / `_hg_statement_seq`（sequencer 分配）：**不存**。它们唯一的消费方是 `UNION(safe, unsafe)` 读路径和 `as_of_safe(block)` time-travel，两者都不需要 per-row 值：
   - **UNION 去重**用 `_hg_row_id` 加 Keeper unsafe-part registry。`REPLACE PARTITION` 会把数据复制进 `hg_safe`，不会自动从 `hg_unsafe` 删除，所以 promotion 包含 cleanup/exclusion 步骤：异步 unsafe cleanup 删除这些 parts 前，`unsafe_latest` 必须用 Keeper part registry / `_part` filter 排除已被 safe watermark 覆盖的 parts。
   - **UNION 排序**用表的 `ORDER BY`，不依赖协议 sequence 号。
-  - **`as_of_safe(block=N)` time-travel** 由 `SafeSnapshotManifest` 提供，该 manifest 本身已按 `safe_lc_block_seq` 索引（§8）。读操作选第 N 个 block 的 manifest 读对应 safe snapshot，并不按 per-row block 号过滤行。
+  - **`as_of_safe(block=N)` time-travel** 由 `SafeSnapshotManifest` 提供，该 manifest 本身已按 `safe_l3_block_seq` 索引（§8）。读操作选第 N 个 block 的 manifest 读对应 safe snapshot，并不按 per-row block 号过滤行。
   - **Part↔statement 归属**由 ClickHouse part metadata 加 Keeper `RCRecord` 承载：sequencing-before-write mode 用 `insert_deduplication_token = statement_seq`，optimistic-forward path 用 `statement_id`（§12.2），不进每行。
   把它们逐行存会迫使 source 执行在写 `hg_unsafe` 前等 sequencing（或在 sequencing 后做一次"pending namespace"重写），这重新引入了 2026-06-10 设计 §5.2 刻意去掉的 sequencer 依赖，杀死 optimistic execution。见下面的 tradeoff。
 - `_hg_source_node`：**不存**。Part 级 provenance 已在 `RCRecord.source_node`。逐行副本没有任何安全职责（safety 来自 root/lthash，不是 provenance），且 part 一旦复制就具有误导性——serving 节点 ≠ source 节点。
 - `_hg_row_hash`：**不存**。`row_lthash` 已是 canonical row commitment；再加一个 BLAKE3 row hash 纯属冗余，audit 路径反正从存储行重算 `row_lthash`。
 
-**Tradeoff：optimistic execution vs. per-row sequencing columns。** 省略 `_hg_lc_block_seq` / `_hg_statement_seq` 是一次刻意权衡。考虑过、被否决的方案：
+**Tradeoff：optimistic execution vs. per-row sequencing columns。** 省略 `_hg_l3_block_seq` / `_hg_statement_seq` 是一次刻意权衡。考虑过、被否决的方案：
 
 - **B. 保留这些列，sequencing 之后才写 `hg_unsafe`。** 保住 per-row time-travel 和按 block 过滤的 unsafe 读。代价：source INSERT 延迟在任何 ClickHouse 写入之前多出一个 L3 batching round-trip，且 §5.2 为去掉 sequencer 依赖而做的 row-id 解耦工作被一笔勾销。Unsafe 写入也变成可被 sequencer 审查的——Keeper 拒绝 sequence，行就永远连 provisional 都落不了地。
 - **C. 把这些列作为 mutable column，sequencing 后用 UPDATE 回填。** 保住 optimistic execution。代价：给 `hg_unsafe` 引入 mutation，违反 §12.2 下"`hg_unsafe` 是 `STOP MERGES` 下的 append-only buffer"这一不变式；该 mutation 本身未经验证，所以客户端在 UPDATE 跑完之前通过 `unsafe_latest` 看到的 provisional 行会带着 `0`/`NULL` 的 block seq——使这些列本想提供的 time-travel 语义在那个窗口里根本就不对。
@@ -259,7 +259,18 @@ StatementEnvelopeV2 {
 }
 ```
 
-明确**不签**的字段（后分配或非用户控制）：`statement_seq`（Keeper 在提交后分配）、`source_node`、`executor_profile_id`（block 级，在 `LCBlock` 里）、Phase-2 physical rewrite。
+明确**不签**的字段（后分配或非用户控制）：`statement_seq`（Keeper 在提交后分配）、`source_node`、`executor_profile_id`（block 级，在 `L3Block` 里）、Phase-2 physical rewrite。
+
+**`statement_seq` 与 `statement_id` 的分工。** `statement_seq` 是 sequencer（Keeper）给每条 statement 分配的全局单调序号，确立一个**全序（total order）**（§5.2 sequencing 职责的前半："assign `statement_seq` and build L3 blocks"）。它和客户端的 `statement_id` 刻意分开：
+
+| | `statement_id` | `statement_seq` |
+|---|---|---|
+| 谁生成 | 客户端 / agent | Keeper（提交之后） |
+| 是否被签名 | **是**（在 `user_jws_v2` 里） | **否** |
+| 结构 | `client_account \|\| client_seq \|\| client_nonce` | 单调整数 |
+| 作用 | 身份 / 去重 / 喂进 `_hg_row_id` | 定序 / part 归属 |
+
+为什么 `statement_seq` 不能被签名？因为**签名发生在提交之前，而序号是提交之后才分配的——签名者在签的那一刻根本不知道自己会排到第几号**（base 设计 §6）。所以客户端只签自己生成的 `statement_id`，Keeper 事后建立 `statement_id → statement_seq` 的绑定并记进 L3 block，使映射可审计。下游用途（§6、§12.2）：sequencing-before-write 模式下用 `insert_deduplication_token = statement_seq` 做 part↔statement 归属；optimistic-forward 模式下还没有 seq，就先用 `statement_id` 顶着，等 Keeper 后面再补绑定。
 
 `statement_id` 应该结构化（per-account 单调，支持 L3-derived uniqueness 强制）：
 
@@ -269,22 +280,22 @@ statement_id = client_account || client_seq || client_nonce
 
 **`statement_id` 唯一性——已解决（采纳 2026-06-10 Appendix B.2）。** `statement_id` 唯一性是承重的：`_hg_row_id = BLAKE3(... || statement_id || global_row_ordinal)`，所以 `statement_id` 复用会复活 duplicate-row LtHash cancellation 攻击。强制方式是 **L3-derived accumulator**，不是 Keeper 内存，这样去中心化 Keeper 权威不改变 dedup 事实：
 
-- 一个 **mountain-range Merkle accumulator**（P0 推荐构造；无 trusted setup、append-only、O(log n) non-membership proof）在每个 LC block 里随 `partition_commitments_after` 一起提交 `spent_ids_root`。它是 sequenced `statement_id` 的纯函数——任何 honest 节点重放 L3 stream 都能一致重建。（RSA/pairing accumulator 证明 O(1) 但需要 trusted-setup / modulus governance，v1 否决；sparse Merkle 可接受但常数更大。）
+- 一个 **mountain-range Merkle accumulator**（P0 推荐构造；无 trusted setup、append-only、O(log n) non-membership proof）在每个 L3 block 里随 `partition_commitments_after` 一起提交 `spent_ids_root`。它是 sequenced `statement_id` 的纯函数——任何 honest 节点重放 L3 stream 都能一致重建。（RSA/pairing accumulator 证明 O(1) 但需要 trusted-setup / modulus governance，v1 否决；sparse Merkle 可接受但常数更大。）
 - 接受新 `statement_id` 需要 **non-membership proof**，证明它不在上一个 `spent_ids_root` 下；只有如此 `statement_id → statement_seq` 绑定才被锚定。
 - **per-account high-water mark** `hi_seq[account]`（该 account 已 sequenced 的最大 `client_seq`）让 well-behaved traffic 的接受代价是 O(1)——新的 `client_seq > hi_seq` 不需要 non-membership proof；只有乱序的 `client_seq ≤ hi_seq` 才回退到 accumulator proof。这把 dedup state 限制在每 active account 一个整数加一个 gap set，而且**按 `client_account` shard**，解决扩展性异议。
 - accumulator 是 append-only 且永久的；`statement_id` 一旦进了 `spent_ids_root` 就永不移除。范围是 **per-account-global**。
 
 `schema_snapshot_id` 范围（分阶段）：
 
-- **v1：block 级。** `schema_snapshot_id` 对一个 LC block 内所有 statement 相同；block 不允许 schema 变化（改变 schema 的 DDL statement 必须独占一个 block，或在 block 边界生效）。executor 在同一个 schema 下重放整个 block。简单且无歧义。
+- **v1：block 级。** `schema_snapshot_id` 对一个 L3 block 内所有 statement 相同；block 不允许 schema 变化（改变 schema 的 DDL statement 必须独占一个 block，或在 block 边界生效）。executor 在同一个 schema 下重放整个 block。简单且无歧义。
 - **P4（mutation/DDL completeness）：statement 级。** 放开更多 DDL 后，DDL statement 会铸造新 schema snapshot，后续 statement 带新 `schema_snapshot_id`。
 
 Keeper 分配并锚定：
 
 ```text
-LCBlock {
-  lc_block_seq,
-  prev_lc_hash,
+L3Block {
+  l3_block_seq,
+  prev_l3_hash,
   l2_anchor_ref,
   statement_seq_start,
   statements: [StatementEnvelopeV2],
@@ -300,7 +311,7 @@ Source 注册 result claim：
 
 ```text
 RCRecord {
-  lc_block_seq,
+  l3_block_seq,
   statement_seq,
   source_node,
   unsafe_table,
@@ -317,11 +328,11 @@ RCRecord {
 }
 ```
 
-Keeper 从 LC + RC + previous safe state 构造 replay jobs：
+Keeper 从 L3 + RC + previous safe state 构造 replay jobs：
 
 ```text
 ReplayJob {
-  lc_block_seq,
+  l3_block_seq,
   prev_safe_snapshot_id,
   prev_state_root,
   schema_snapshot_id,
@@ -381,7 +392,7 @@ LtHash 仍然适合作为 additive state accumulator、root comparison input 和
 ```text
 snapshot_id,
 parent_snapshot_id,
-safe_lc_block_seq,
+safe_l3_block_seq,
 schema_snapshot_id,
 schema_root,
 executor_profile_id,
@@ -424,7 +435,7 @@ sequenceDiagram
     HG->>HG: 校验 signature，计算 payload_hash，spool payload
     HG->>K: submit StatementEnvelopeV2
     K->>K: 校验 signature、statement_id non-membership、schema/settings、payload ref
-    K->>K: 分配 statement_seq 并构造 LC block
+    K->>K: 分配 statement_seq 并构造 L3 block
     K-->>HG: Sequenced ack + source assignment（managed path）
     HG->>S: 对 unsafe 表执行 source SQL（managed: sequencing 后；optimistic-forward: 可先于 sequencing）
     S->>S: materialize unsafe parts
@@ -443,7 +454,7 @@ sequenceDiagram
     R1->>K: byte_side part_row_lthash_A
     R2->>K: byte-side part_row_lthash_B
     alt quorum AND per-partition delta matches AND byte-side lthash matches source claim
-        K->>L2: publish/anchor LC block hash and state root
+        K->>L2: publish/anchor L3 block hash and state root
         L2-->>K: finality / last_mergeable reached
         K->>S: Keeper-signed PromoteSafePartition (REPLACE PARTITION, see §12)
         K->>R1: Keeper-signed PromoteSafePartition (REPLACE PARTITION, see §12)
@@ -546,7 +557,7 @@ stateDiagram-v2
 |---|---|---|
 | `safe` default | virtual table -> `hg_safe.<table>` | 经过 Keeper safe watermark 验证并 finalized。Freshness 可能滞后。 |
 | `unsafe_latest` explicit | virtual table -> `hg_safe.<table> UNION hg_unsafe.<table>` | 延迟更低，可能变化或被 drop。不是 integrity-final。 |
-| `as_of_safe(block)` future | 第 N 个 block 的 safe snapshot（从 `SafeSnapshotManifest` 选，§8） | 基于 safe snapshots 的 time-travel。通过 manifest-indexed reads 实现；**不**需要 per-row `_hg_lc_block_seq` 列（见 §6）。 |
+| `as_of_safe(block)` future | 第 N 个 block 的 safe snapshot（从 `SafeSnapshotManifest` 选，§8） | 基于 safe snapshots 的 time-travel。通过 manifest-indexed reads 实现；**不**需要 per-row `_hg_l3_block_seq` 列（见 §6）。 |
 
 默认应该是 safe reads。如果产品 freshness 需要 unsafe reads，API 必须暴露结果是 provisional。
 
@@ -575,7 +586,7 @@ v1 的物理布局是 **`hg_unsafe` = ReplicatedMergeTree，`hg_safe` = MergeTre
 两个"Keeper"角色仍要明确命名以避免歧义：
 
 - **ClickHouse Keeper**（ZooKeeper 兼容）：ClickHouse 自己拥有，仅用于 `hg_unsafe` 的 ReplicatedMergeTree 状态。HouseGate 从不读写它。
-- **Sentio Keeper**（§5.2 的 LC-block sequencer 和 attestation collector）：integrity 层拥有。驱动 sequencing、replay job 下发和 promotion。
+- **Sentio Keeper**（§5.2 的 L3-block sequencer 和 attestation collector）：integrity 层拥有。驱动 sequencing、replay job 下发和 promotion。
 
 ### 12.2 Promotion = `REPLACE PARTITION`，`hg_unsafe` 停 merge
 
@@ -657,7 +668,7 @@ row hash -> chunk hash -> part root -> partition root -> table root -> SafeSnaps
 P0：冻结协议表面。
 
 - `StatementEnvelopeV2` fields 和 signing payload（§7），包括 `sql_hash = H(rewritten_sql)` 覆盖 materialize 之后的 SQL。
-- LC/RC record schemas，包括 LC block 里的 `spent_ids_root_after`。
+- L3/RC record schemas，包括 L3 block 里的 `spent_ids_root_after`。
 - Reserved columns 和物理表命名。
 - Safe/unsafe read rewrite semantics。
 - Pinned ClickHouse 的 executor profile governance。
@@ -704,14 +715,14 @@ P4：扩展语言表面。
 1. **最终 v1 路线：** 确认 optimistic source execution plus quorum replay 是默认路线，还是切到 full-node parallel replay，用更长 unsafe window 换更简单 correctness。
 2. **Safe table engine：** ~~使用带严格 Keeper-signed safe path 的 ReplicatedMergeTree，还是每个节点独立 promotion 的 local MergeTree safe cache。~~ 已解决：`hg_safe` 在每个节点上是 local MergeTree，通过 Keeper-signed `REPLACE PARTITION` from promotion shadow table promote（§12）。降级，不再是 open question。
 3. **Merge control：** ~~HouseGate-to-Keeper reverse proxy 能否完全 gate unsafe/safe merges，还是需要 ClickHouse fork 或 restricted engine variant。~~ 已解决：在 §12.1 的 engine 拆分下（`hg_unsafe` ReplicatedMergeTree 不 gate，`hg_safe` MergeTree）不需要 reverse-proxy gate。Lagging replica 上的 `REPLACE PARTITION` promotion-shadow-table 构造（§12.5）仍是 P1 spike。降级，不再是 open question。
-4. **LC/RC naming and schema：** 是否正式使用 LC blocks 和 RC records 命名，并冻结精确 protobuf/JSON fields。
-5. **Chain commitment：** L2 calldata 存完整 LC block payload、DA reference，还是只存 block/root commitment。
+4. **L3/RC schema：** ~~是否正式使用 L3 blocks 和 RC records 命名~~——命名已定为 `L3Block` / `RCRecord`（§5.2、§7）。仍未决：定义并冻结精确 protobuf/JSON fields 与 wire schema。
+5. **Chain commitment：** L2 calldata 存完整 L3 block payload、DA reference，还是只存 block/root commitment。
 6. **Payload DA：** 定义 signed payload bytes 的 proof-of-custody 与 retention。~~Mutation pre-state parts~~ 已解决：pre-state availability 来自 multi-replica `hg_safe` + manifest 索引 + §13 audit（§10），不是单独的 proof-of-custody。降级，不再是 open question。
 7. **Statement uniqueness：** ~~为永久 `statement_id` uniqueness 选择 accumulator construction。~~ 已解决：mountain-range Merkle accumulator + per-account high-water mark，per-account-global 范围，L3-derived（§7，采纳 2026-06-10 Appendix B.2）。降级，不再是 open question。
 8. **Non-determinism normalization：** ~~决定 Story Daemon、ingress HouseGate 或两者是否允许在 signature 前 materialize `now()`/`random()`。~~ 已解决：materialization 在 agent/SDK 签名前完成；HouseGate 不做 normalize（§7、§9）。剩余 open item：精确的白名单函数集和 SDK 语言覆盖度（TS/Go）。已收窄。
 9. **JSON/Map profile：** pin 精确 ClickHouse versions/settings，并定义 executor-profile upgrade governance。
 10. **Mutation limits：** 选择 v1 的 touched parts/bytes caps，并决定哪些 mutations 被 reject。
-11. **`INSERT ... SELECT`：** 在 reject、拆成 SELECT-then-INSERT、或 ordered safe+unsafe 组合三者之间选择（组合用 manifest-indexed reads，见 §6/§11，不依赖 per-row `_hg_lc_block_seq` 列）。
+11. **`INSERT ... SELECT`：** 在 reject、拆成 SELECT-then-INSERT、或 ordered safe+unsafe 组合三者之间选择（组合用 manifest-indexed reads，见 §6/§11，不依赖 per-row `_hg_l3_block_seq` 列）。
 12. **Safe serving integrity：** 决定 v1 存多少 row/chunk/Merkle metadata，多少在 audit 时计算。
 13. **Shadow-data detection：** 定义 production query sampling rate 和 cross-node comparison policy。
 14. **Dynamic node join：** 定义新节点如何证明它已 sync 到 safe manifest，才能变为 Active。
