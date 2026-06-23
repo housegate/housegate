@@ -157,7 +157,7 @@ _hg_row_id FixedString(32)
 _hg_payload_ordinal UInt64
 ```
 
-`_hg_row_id` is the only load-bearing reserved column. It distinguishes duplicate user-visible rows and is the LtHash row-instance identity (§8); merge, mutation, and the byte-side promotion check all rely on it. The agent injects it at signing time from `BLAKE3("housegate-row-id-v1" || network_id || table_id || statement_id || global_row_ordinal)` (§5.2 of the 2026-06-10 design), so it is fixed before sequencing and is stable for the row's lifetime. Storage cost is real and accepted: 32 bytes/row, incompressible. A structured-integer alternative (`(client_account_hash, client_seq, global_row_ordinal)` packed into a fixed-width integer, compressible to near zero) remains the documented fallback if P0/P1 measurements demand it (open question 11).
+`_hg_row_id` is the only load-bearing reserved column. It distinguishes duplicate user-visible rows and is the LtHash row-instance identity (§8); merge, mutation, and the byte-side promotion check all rely on it. The agent injects it at signing time from `BLAKE3("housegate-row-id-v1" || network_id || table_id || statement_id || global_row_ordinal)` (§5.2 of the 2026-06-10 design), so it is fixed before sequencing and is stable for the row's lifetime. `global_row_ordinal` is the row's 0-based index over the **entire canonical payload of the statement**, spanning every part and partition the statement writes, and independent of how the payload is later split into Data-block chunks or distributed across destination partitions. This payload-global scope is load-bearing: it is what makes `_hg_row_id` unique across all of a statement's rows (the partition-level cancellation argument in §8 depends on it), so it must never be reset per chunk or per partition. Storage cost is real and accepted: 32 bytes/row, incompressible. A structured-integer alternative (`(client_account_hash, client_seq, global_row_ordinal)` packed into a fixed-width integer, compressible to near zero) remains the documented fallback if P0/P1 measurements demand it (open question 11).
 
 `_hg_payload_ordinal` is the `global_row_ordinal` that fed `_hg_row_id`; since `_hg_row_id` is a hash it cannot be reversed, so storing the ordinal separately is purely forensic ("which row of the payload was this"). Off by default.
 
@@ -361,7 +361,7 @@ Two layers, two purposes: LtHash is the arithmetic object **up to the partition 
 
 **LtHash is not computed on the HouseGate wire path.** Three places compute it, all executor/verifier-side: (a) the pinned executor during replay, from materialized values; (b) the byte-side scan in §9 check 3, from fetched bytes; (c) the §13 audit, from safe parts. HouseGate only injects `_hg_row_id` (at the agent, per §9) and computes `payload_hash`.
 
-**Partition-level cancellation resistance.** `partition_commitment`'s collision resistance is inherited from the row level: distinct parts have disjoint row-ID sets (`statement_id` is globally unique, `global_row_ordinal` is per-statement), so the partition's element set is the disjoint union of the parts' element sets. The 2^16-lane cancellation attack, blocked at row level by `_hg_row_id`, is therefore also blocked at partition level — no separate argument is needed.
+**Partition-level cancellation resistance.** `partition_commitment`'s collision resistance is inherited from the row level, and the load-bearing fact is per-row `_hg_row_id` uniqueness — not part structure (LtHash is additive over one 2048-byte accumulator, so folding per-part and folding all rows directly give the same result; "disjoint parts" does no independent work). Every `_hg_row_id` in a partition is distinct because `statement_id` is globally unique and `global_row_ordinal` is unique within a statement across all of its parts and partitions (§6); distinct parts then have disjoint row-ID sets as a consequence. The 2^16-lane cancellation attack, blocked at row level by `_hg_row_id`, is therefore also blocked at partition level — no separate argument is needed. This holds for the sequenced, dedup-enforced element set that the §9 promotion check recomputes from replay; it does **not** hold over raw `hg_unsafe` parts in the optimistic-forward window, where a reused `statement_id` could transiently produce colliding `_hg_row_id`s before the Keeper non-membership check runs — one reason `unsafe_latest` carries no integrity claim (§11).
 
 The four levels and what each is responsible for:
 
@@ -528,16 +528,20 @@ stateDiagram-v2
     Sequenced --> UnsafeExecuting: source writes unsafe table
     UnsafeExecuting --> UnsafeRegistered: RCRecord accepted
     UnsafeRegistered --> Replaying: replay jobs issued
-    Replaying --> QuorumVerified: matching attestations
+    Replaying --> QuorumVerified: three-way promotion check passes
     Replaying --> ChallengeReplay: mismatch or timeout
     QuorumVerified --> FinalityWait: root ready, not final
     FinalityWait --> Safe: L2/L1 finality and last_mergeable reached
-    ChallengeReplay --> Safe: source claim wins
-    ChallengeReplay --> Rejected: source claim loses
+    ChallengeReplay --> Safe: claim passes three-way check
+    ChallengeReplay --> Rejected: claim fails three-way check
     Rejected --> Dropped: unsafe parts dropped
     Safe --> [*]
     Dropped --> [*]
 ```
+
+The `QuorumVerified` edge is the §9 three-way check (quorum-reproduced root **AND** per-partition delta **AND** byte-side `part_row_lthash`), not root equality alone; "matching attestations" would understate it, since a self-consistent root over `bytes_evil` can match without the byte-side scan.
+
+**Challenge adjudication uses the same three-way predicate as promotion.** A challenge replay does not resolve on reproduced-root equality alone — that is exactly the `bytes_evil`-with-truthful-root case §9 exists to reject, and it is the mechanism that protects safe reads in the decentralized phase (§11 table below). "Claim passes three-way check" means the challenger's independent replay reproduces `source_claim_state_root`, **and** the per-partition delta matches, **and** the byte-side `part_row_lthash` recomputed from the challenger's own fetched bytes matches `RCRecord.candidate_parts` (§9 checks 1–3). Any one of the three failing rejects the claim. This is a protocol-semantics rule and is in scope for v1; it is distinct from the economic challenge/slashing parameters (§2 non-goal 2, P5) that remain deferred.
 
 Read modes:
 
@@ -599,14 +603,16 @@ ALTER TABLE hg_safe.Transfer_<table_id>
 
 `REPLACE PARTITION` is local and atomic for the destination partition. It replaces the safe partition with the verified post-state partition. It copies from the promotion table rather than deleting from `hg_unsafe`, so promotion also records the candidate parts as safe in Sentio Keeper and schedules `hg_unsafe` cleanup. Until cleanup completes, `unsafe_latest` must exclude promoted unsafe parts by the Keeper part registry / `_part` filter.
 
+**Concurrent INSERT promotions into the same partition are serialized per `(table, partition_id)`.** Because `REPLACE PARTITION` replaces the destination partition atomically and as a whole, two statements `S1` and `S2` that both touch partition `P` and become promotable around the same time must not each build `hg_promote` from a base snapshot of `P` taken before the other's replace lands — the second replace would otherwise overwrite the partition and silently drop the first's just-promoted rows (a lost update, not an append). Keeper therefore serializes promotions at `(table, partition_id)` granularity: each promotion builds its `hg_promote` from the *current* safe watermark for `P` at promote time, so `S2` reads `S1`'s already-promoted partition as its base; equivalently, all statements promotable into `P` in one round may be batched into a single `REPLACE PARTITION`. "The previous safe partition" in the construction above therefore means the safe snapshot at **promote time**, not at statement-execution time — the gap between those two is exactly the collision window this rule closes. This is the INSERT-path analogue of the §10 mutation barrier (which already serializes mutations against the same partition cut).
+
 ### 12.3 The parts-per-partition ceiling makes promotion latency a capacity valve
 
-With merges stopped, parts accumulate in `hg_unsafe`. ClickHouse enforces a hard `parts_per_partition` limit (default 300); exceeding it rejects new INSERTs with `Too many parts`. This turns promotion latency into a **capacity safety valve, not just a performance concern**: if promotion falls behind, writes to that table are refused.
+With merges stopped, parts accumulate in `hg_unsafe`. ClickHouse enforces a hard per-partition parts limit via `parts_to_throw_insert` (default 3000); exceeding it rejects new INSERTs with `Too many parts`. A softer `parts_to_delay_insert` (default 1000) throttles inserts before the hard throw, and `max_parts_in_total` (default 100000) caps parts across all partitions. These are per-table MergeTree settings, so the integrity layer **pins them in the anchored DDL** rather than relying on the defaults. This turns promotion latency into a **capacity safety valve, not just a performance concern**: if promotion falls behind, writes to that table are refused.
 
 Three consequences:
 
 1. **Promotion must stay ahead of ingest.** The unsafe window's size is bounded by `ingest_rate × promote_latency ≤ remaining_parts_budget`. This is the real SLA for the integrity layer, not just the L2 finality window.
-2. **Admission throttling is mandatory, not optional.** When a partition's `hg_unsafe` part count approaches the ceiling, admission must back-pressure new INSERTs to that partition. This is the concrete form of the admission-cap requirement (open question 8).
+2. **Admission throttling is mandatory, not optional.** The throttling actor is the ingress HouseGate fronting each ClickHouse instance: it monitors the live per-partition part count of its own co-located ClickHouse (e.g. polling `system.parts` with event-driven invalidation) and, when a partition's `hg_unsafe` part count approaches the ceiling, back-pressures new INSERTs to that partition with a retryable rejection rather than letting ClickHouse hard-fail them with `Too many parts`. Because `parts_to_throw_insert` is enforced per replica, the slowest-promoting replica sets the network-wide write headroom. Per-account fair scheduling (base-design R8) keeps one account from driving a partition to the ceiling and starving honest traffic. This is the concrete form of consequence 1's admission-cap requirement; §15 has no dedicated open item for it (the citation to "open question 8" was stale — that item is non-determinism normalization).
 3. **Partition cardinality is a tuning knob.** A table whose `hg_unsafe` runs hot can split its partition key to spread parts across more partitions, raising the aggregate budget. This is a schema-time decision, recorded in the anchored DDL.
 
 ### 12.4 `hg_safe` merges: gated by the ledger equation
