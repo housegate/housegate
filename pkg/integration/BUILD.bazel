@@ -28,6 +28,7 @@ go_test(
         "sessionstate_test.go",
         "single_upstream_test.go",
         "smoke_test.go",
+        "storage_promotion_mvp_test.go",
         "upstream_dies_test.go",
         "usage_test.go",
     ],
@@ -63,5 +64,6 @@ go_test(
         "@com_github_housegate_rewriter_go//gen/pb",
         "@com_github_prometheus_client_golang//prometheus",
         "@com_github_prometheus_client_golang//prometheus/promhttp",
+        "@com_github_testcontainers_testcontainers_go_modules_clickhouse//:clickhouse",
     ],
 )
