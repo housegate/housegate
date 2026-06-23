@@ -157,7 +157,7 @@ _hg_row_id FixedString(32)
 _hg_payload_ordinal UInt64
 ```
 
-`_hg_row_id` 是唯一承重的 reserved column。它区分重复的用户可见行，是 LtHash row-instance identity（§8）；merge、mutation 和 byte-side promotion check 全都依赖它。agent 在签名时按 `BLAKE3("housegate-row-id-v1" || network_id || table_id || statement_id || global_row_ordinal)`（2026-06-10 设计 §5.2）注入，所以它在 sequencing 前就已固定，且行生命周期内稳定。`global_row_ordinal` 是该行在**整条语句的 canonical payload** 上的 0-based 索引，覆盖该语句写入的每一个 part 和 partition，与 payload 之后如何切成 Data-block chunk、如何分散到各 destination partition 无关。这个 payload-global 的 scope 是承重的：它正是让 `_hg_row_id` 在一条语句的所有行间唯一的原因（§8 的 partition 级抗 cancellation 论证依赖它），所以绝不能 per chunk 或 per partition 重置。存储代价是实打实的：32 bytes/row，不可压缩。Structured-integer 替代（`(client_account_hash, client_seq, global_row_ordinal)` 打包成定宽整数，可压缩到接近零）保留为备案，待 P0/P1 实测后再决定是否切换（open question 11）。
+`_hg_row_id` 是唯一承重的 reserved column。它区分重复的用户可见行，是 LtHash row-instance identity（§8）；merge、mutation 和 byte-side promotion check 全都依赖它。agent 在签名时按 `BLAKE3("housegate-row-id-v1" || network_id || table_id || statement_id || global_row_ordinal)`（2026-06-10 设计 §5.2）注入，所以它在 sequencing 前就已固定，且行生命周期内稳定。`global_row_ordinal` 是该行在**整条语句的 canonical payload** 上的 0-based 索引，覆盖该语句写入的每一个 part 和 partition，与 payload 之后如何切成 Data-block chunk、如何分散到各 destination partition 无关。这个 payload-global 的 scope 是承重的：它正是让 `_hg_row_id` 在一条语句的所有行间唯一的原因（§8 的 partition 级抗 cancellation 论证依赖它），所以绝不能 per chunk 或 per partition 重置。存储代价是实打实的：32 bytes/row，不可压缩。Structured-integer 替代（`(client_account_hash, client_seq, global_row_ordinal)` 打包成定宽整数，可压缩到接近零）保留为备案，待 P0/P1 实测后再决定是否切换（2026-06-10 设计的 open question 11——row-id 存储开销）。
 
 `_hg_payload_ordinal` 就是喂给 `_hg_row_id` 的 `global_row_ordinal`；因为 `_hg_row_id` 是 hash 无法反推，单独存 ordinal 纯粹是 forensic 用途（"这是 payload 的第几行"）。默认关。
 
@@ -368,9 +368,11 @@ data_root = H(canonicalized [(table_id, schema_hash, partition_roots, active_par
 state_root = H(schema_snapshot_id, schema_root, executor_profile_id, data_root)
 ```
 
+上面折叠用到的两个 schema 指纹定义如下：`schema_hash` 是每张表的 canonical schema 承诺，`schema_hash = H("housegate-schema-v1" || table_id || sorted [(column_id, type_id)] || partition_key || order_key || primary_key || engine_id || pinned_settings)`，基于 anchored DDL（用的是 `row_element` 里同样的 `(column_id, type_id)` 编码，外加结构性的 keys、engine、以及按 §12.3 pin 的 MergeTree 设置——如 `parts_to_throw_insert`、no-merge 设置）；`schema_root` 是 snapshot 级、对每张表 `schema_hash` 的折叠，`schema_root = H(canonicalized [(table_id, schema_hash)])`，按 `schema_snapshot_id` 索引。两者在 hash 前都规范化排序（表按 `table_id`、列按 `column_id`），使独立 verifier 导出相同 root。
+
 两个层级，两种用途：LtHash 是**止于 partition 级**的算术对象（可加，支持 mutation delta）。partition 之上，`data_root` 和 `state_root` 是普通 hash 折叠——它们把 replay 绑定到 anchored snapshot，但不是算术的，不能加减。Mutation delta 在 partition 级用 LtHash；snapshot 比对用 `state_root`。不要混为一谈。
 
-**LtHash 不在 HouseGate wire path 上计算。** 三处计算它，全在 executor/verifier 侧：(a) pinned executor 在 replay 时从 materialized 值算；(b) §9 第 3 路 byte-side scan，从 fetch 到的字节算；(c) §13 audit，从 safe parts 算。HouseGate 只注入 `_hg_row_id`（在 agent，见 §9）并计算 `payload_hash`。
+**LtHash 不在 HouseGate wire path 上计算。** 三处计算它，全在 executor/verifier 侧：(a) pinned executor 在 replay 时从 materialized 值算；(b) §9 第 3 路 byte-side scan，INSERT 路径下从 fetch 到的 candidate-part 字节算（mutation 路径没有共享的 fetched-byte 对象，改为从每个 replica 本地重新生成的 scratch 重算 post-mutation `partition_commitment`，§10）；(c) §13 audit，从 safe parts 算。HouseGate 只注入 `_hg_row_id`（在 agent，见 §9）并计算 `payload_hash`。
 
 **Partition 级抗 cancellation。** `partition_commitment` 的抗碰撞性继承自 row 级，而真正承重的事实是 per-row `_hg_row_id` 唯一性——不是 part 结构（LtHash 在单个 2048-byte accumulator 上可加，所以 per-part 折叠和把所有行直接折叠结果相同；"disjoint parts" 本身不起独立作用）。partition 里每个 `_hg_row_id` 都互不相同，因为 `statement_id` 全局唯一、且 `global_row_ordinal` 在一条语句的所有 part 和 partition 间唯一（§6）；不同 part 的 row-ID 集合互不相交只是其结果。2^16-lane cancellation 攻击在 row 级被 `_hg_row_id` 挡死后，在 partition 级同样不成立——不需要单独论证。这只对 §9 promotion check 从 replay 重算的、sequenced 且 dedup 后的元素集合成立；它**不**适用于 optimistic-forward 窗口里 `hg_unsafe` 的 raw parts——那里在 Keeper 的 non-membership check 跑之前，复用的 `statement_id` 可能短暂产生碰撞的 `_hg_row_id`，这也是 `unsafe_latest` 不带 integrity 声明的原因之一（§11）。
 
@@ -510,7 +512,7 @@ sequenceDiagram
     R->>R: clone 同样的 affected safe parts，执行 pinned mutation
     R->>R: compute delta = sum(new rows) - sum(old rows)
     R->>K: 对 computed post-root 签名 attestation
-    alt quorum 匹配 source claim AND partition-delta AND byte-side checks
+    alt quorum 匹配 source claim AND partition-delta AND post-state commitment match
         K->>Safe: Keeper-signed 用新 safe parts 替换旧 safe parts
         K->>K: publish new SafeSnapshotManifest
     else mismatch or timeout
@@ -526,6 +528,7 @@ Mutation 约束：
 - Source 在 verification 前绝不能 in place mutate safe table。
 - Replay cost 与 touched parts 成正比。v1 admission 必须限制 touched bytes/parts。
 - 拒绝修改 `_hg_row_id` 或协议 columns 的尝试。
+- **Mutation 的第三路检查是 recomputed-commitment match，不是 fetched-byte scan。** §9 的 three-way check 是为 INSERT 路径定义的：每个 replica fetch 到**同一份**被复制的 `hg_unsafe` candidate parts，其 byte-side check（§9 check 3）从这些共享字节重算 `part_row_lthash` 比对 `RCRecord.candidate_parts`。Mutation 没有共享的 fetched-byte 对象：每个 attesting replica 在自己的 scratch 里**独立重新生成** mutated parts（clone affected safe parts → 跑 pinned mutation），所以即便都诚实，各 replica 的 part 字节也会合法地不同。因此 mutation 的第三路检查是一次 materialization-grounded 的 commitment 比对：每个 replica 从自己本地物化的 post-state parts 重算 per-partition `partition_commitment`（`Σ part_row_lthash`），确认它等于 **safe pre-state partition 的 `partition_commitment` 加上** mutation `RCRecord` 里 source 声明的 `partition_deltas`。这是绝对值对绝对值的比较——`partition_commitment` 是绝对累加器（§8），`partition_deltas` 是 `Σ new − Σ old` 增量，LtHash 的可加性让 `post = pre + delta` 精确成立——所以它把 source 的 claim 绑定到每个 verifier 实际物化出的字节，是 §9 check 3 在 mutation 路径上的对应物（也就是上面流程里 `post-state commitment match` 守卫所指），无需 fetched 共享字节扫描。
 - **Pre-state data availability（已解决）。** Mutation replay 需要 affected safe parts 作为 pre-state。这些 parts 可用，因为 promotion 通过 Keeper-signed `REPLACE PARTITION`（§12.2）把 verified post-state partition 发布到每个 attesting replica 的 `hg_safe`，且 `SafeSnapshotManifest` 索引它们。只要有一个 honest replica 持有 pre-state part，challenge replay 就能进行；source 单方面隐藏自己的副本挡不住验证。全员 replica 隐瞒是 liveness 攻击（无 safety 修复），但 §13 audit 会发现 missing parts 并把隐瞒的 replica 移出 read set。这在不为 pre-state 单设 proof-of-custody 的前提下解决了 v2 R3 的关切。
 - 任何修改 `_hg_row_id` 或 protocol columns 的尝试都被拒绝。
 
@@ -553,7 +556,7 @@ stateDiagram-v2
 
 `QuorumVerified` 这条边就是 §9 的 three-way check（quorum 复现的 root **AND** per-partition delta **AND** byte-side `part_row_lthash`），不是只看 root 相等；"matching attestations" 会低估它，因为对 `bytes_evil` 自洽的 root 在没有 byte-side scan 时也能匹配上。
 
-**Challenge 裁决用与 promotion 相同的 three-way 谓词。** Challenge replay 不只凭 root 复现相等来裁定——那正是 §9 要拒绝的 `bytes_evil`-配-真实-root 的情形，也是去中心化阶段保护 safe reads 的机制（见下方 §11 表）。"claim passes three-way check" 指 challenger 独立 replay 复现出 `source_claim_state_root`，**且** per-partition delta 匹配，**且**从 challenger 自己 fetch 到的 bytes 重算的 byte-side `part_row_lthash` 与 `RCRecord.candidate_parts` 匹配（§9 checks 1–3）。三者任一不过即拒绝该 claim。这是协议语义规则，属于 v1 范围；它区别于 §2 non-goal 2、P5 延后的 economic challenge/slashing 参数。
+**Challenge 裁决用与 promotion 相同的 three-way 谓词。** Challenge replay 不只凭 root 复现相等来裁定——那正是 §9 要拒绝的 `bytes_evil`-配-真实-root 的情形，也是去中心化阶段保护 safe reads 的机制（见下方 §11 表）。"claim passes three-way check" 指 challenger 独立 replay 复现出 `source_claim_state_root`，**且** per-partition delta 匹配，**且**第三路检查成立——INSERT 路径下，从 challenger 自己 fetch 到的 candidate-part 字节重算的 `part_row_lthash` 与 `RCRecord.candidate_parts` 匹配；mutation 路径下，challenger 从本地重新生成的 scratch 重算的 post-mutation `partition_commitment` 等于 safe pre-state commitment 加上 mutation `RCRecord` 里声明的 `partition_deltas`（§9 check 3、§10）。三者任一不过即拒绝该 claim。这是协议语义规则，属于 v1 范围；它区别于 §2 non-goal 2、P5 延后的 economic challenge/slashing 参数。
 
 读模式：
 
@@ -601,6 +604,7 @@ Promotion 在每个已经 fetch 到 candidate parts 的 replica 上本地执行�
 - 一个 background merge 若把"即将 promote 的 part"和"尚未验证的 part"合在一起，会产生混合 part（部分行已验证、部分未验证），而 partition-level publication 会把未验证的行拖进 `hg_safe`。停掉 merge 直接消除了这种情况。
 - 停 merge 后，`hg_unsafe` 里的 part 边界始终等于 statement 边界（sequencing-before-write mode 用 `insert_deduplication_token = statement_seq` 锚定，optimistic-forward path 用 `statement_id` 锚定），所以 verified candidate-part set 毫无歧义。
 - `hg_unsafe` 是薄 buffer，不是查询目标；永远不 merge 它带来的读放大代价可以忽略，因为读走 `hg_safe`，`hg_unsafe` 只充当最新的未验证薄层（§11）。
+- **不 merge 的性质是 pin 住的，不只是命令。** `SYSTEM STOP MERGES` 是节点本地、非持久的运行时 flag，ClickHouse 重启会复位，所以这个不变量**也**在 anchored DDL 里声明式 pin 住（`max_bytes_to_merge_at_max_space_in_pool = 0`，与 §12.3 pin `parts_to_throw_insert` 同一机制），并由 HouseGate 在启动时重新下发 `SYSTEM STOP MERGES hg_unsafe.*`。即便有一次瞬时 merge 漏过去（例如手动 `OPTIMIZE`）也不是安全洞：merge 出来的 part 的 `part_row_lthash` 与任何 `RCRecord.candidate_parts` 条目都不匹配，所以下面的 per-part 重算会失败、promotion 拒绝对这个混合 part 出 attestation——它永远进不了 `hg_safe`。
 
 ClickHouse 的 cross-table publication primitive 是 partition-level，所以 promotion 使用 **Keeper-signed `REPLACE PARTITION` from promotion shadow table**，不是从 `hg_unsafe` 直接 move：
 
@@ -611,7 +615,7 @@ ALTER TABLE hg_safe.Transfer_<table_id>
   FROM hg_promote.Transfer_<table_id>_<snapshot_id>;
 ```
 
-`hg_promote` 是本地临时或协议管理的 MergeTree 表，与 `hg_safe` 具有相同 structure、partition key、primary key、order key、storage policy、indices 和 projections。对每个 touched partition，SNode 构造 promotion table，使它**恰好**包含 promotion 后的 partition：previous safe partition 加上那些 replica 从 fetch 字节重算 `part_row_lthash` 并与 `RCRecord` 匹配的 candidate parts。它绝不能直接复制整个 `hg_unsafe` partition，因为那个 partition 可能包含无关的未验证 parts。
+`hg_promote` 是本地临时或协议管理的 MergeTree 表，与 `hg_safe` 具有相同 structure、partition key、primary key、order key、storage policy、indices 和 projections。对每个 touched partition，SNode 构造 promotion table，使它**恰好**包含 promotion 后的 partition：previous safe partition 加上那些 replica 从 fetch 字节重算 `part_row_lthash` 并与 `RCRecord` 匹配的 candidate parts。它绝不能直接复制整个 `hg_unsafe` partition，因为那个 partition 可能包含无关的未验证 parts。SNode 用元数据级 hardlink 操作构造 `hg_promote`，**绝不**用 `INSERT ... SELECT`（那是 O(partition-size) 的整字节拷贝，会冲垮 §12.3 的 promote-latency SLA）。未改动的 previous safe partition 用 `ALTER TABLE hg_promote ATTACH PARTITION <id> FROM hg_safe` 整体搬进来——这是 ClickHouse 支持的跨表 hardlink，可跨 plain-MergeTree ↔ ReplicatedMergeTree 边界，前提是两表结构完全一致（partition/order/primary key——order key 含 `_hg_row_id` 后缀——storage policy、indices、projections）。每个**单独的**已验证 candidate part 再从 `hg_unsafe` hardlink 进 `hg_promote` 的 `detached/` 目录、用 `ALTER TABLE hg_promote ATTACH PART '<part_name>'`（从本表自己的 `detached/` attach）挂上。Candidates 走这条 per-part 路而不是 `ATTACH PARTITION FROM hg_unsafe`，正因为 `hg_unsafe` 的 partition 里还可能有无关的未验证 parts、绝不能一起拖进来——ClickHouse 没有跨表按 part 的 `ATTACH ... FROM` 语句，所以已验证 parts 经 `detached/` 暂存。两条路都是元数据级，把构造成本保持在 O(candidate + prior parts)——正是 §6"尽量 O(1)"目标所假设的成本类。只有当 `hg_unsafe`、`hg_promote`、`hg_safe` 共用同一 storage policy **且在同一磁盘/卷上**时，这些 attach 才是 hardlink-cheap 的；多卷 policy 或结构不一致时 ClickHouse 会退回整字节拷贝，所以"尽量 O(1)"只在单盘、结构一致的情形成立。
 
 `REPLACE PARTITION` 对目标 partition 是本地原子操作。它用 verified post-state partition 替换 safe partition。它从 promotion table 复制，而不是从 `hg_unsafe` 删除，所以 promotion 还必须在 Sentio Keeper 里把 candidate parts 标记为 safe，并调度 `hg_unsafe` cleanup。Cleanup 完成前，`unsafe_latest` 必须通过 Keeper part registry / `_part` filter 排除已 promote 的 unsafe parts。
 
@@ -641,7 +645,7 @@ sum(part_row_lthash of merge inputs) == sum(part_row_lthash of merge outputs)
 
 上述流程没法免费处理两种运维场景：
 
-- **Promote 时刻的 lagging replica。** ReplicatedMergeTree 复制是异步的。Keeper 在 quorum attest 之后下发 promotion 决定；一个还没通过 interserver HTTP fetch 到 candidate parts 的 replica 还无法构造 promotion table。这是 liveness 问题不是 safety 问题（lagging replica 没 attest，不在 quorum 内）。该 replica 在自己的 ReplicatedMergeTree 把 parts fetch 到之后，再构造同一个 `hg_promote` partition，并运行同一个 Keeper-signed `REPLACE PARTITION`。Promotion-shadow-table 构造和 delayed local replace 行为仍是 P1 spike。
+- **Promote 时刻的 lagging replica。** ReplicatedMergeTree 复制是异步的。Keeper 在 quorum attest 之后下发 promotion 决定；一个还没通过 interserver HTTP fetch 到 candidate parts 的 replica 还无法构造 promotion table。这是 liveness 问题不是 safety 问题（lagging replica 没 attest，不在 quorum 内）。该 replica 在自己的 ReplicatedMergeTree 把 parts fetch 到之后，**按记录的 per-`(table, partition_id)` promotion 序列有序回放**：对每个 promotion 重建 quorum 当时用的同一个 `hg_promote` partition——"the previous safe partition"（§12.2）按该 promotion 记录的 base 解析，而不是按该 replica 当前的本地 watermark——并运行同一个 Keeper-signed `REPLACE PARTITION`。有序回放（而不是 rebase 到当前 watermark）正是让一个在后续语句已经 promote 进同一 partition 之后才到达的 replica 仍能复现每一步的原因：§12.2 的 promote-time-base 规则是逐条记录的 promotion 来评估的，不是对着 wall-clock 当前的 safe state。Promotion-shadow-table 构造和 delayed local replace 行为仍是 P1 spike。
 
 - **新节点或长期离线 replica 的冷启动 bootstrap。** 一个全新节点启动时 `hg_unsafe` 是空的。已经在 promotion 后从其他 replicas 的 `hg_unsafe` cleanup 掉的 parts 永远不会通过 ReplicatedMergeTree 到达，所以光靠 ReplicatedMergeTree 没法给新节点的 `hg_safe` 填数据。两条恢复路径，都不在热路径上：
   1. **从 L3 stream replay。** 从 genesis（或从最老的保留 safe snapshot）开始 replay 签名 payload，通过 pinned executor 重建 `hg_safe`。这是 recomputability 论证（§7）所保证的自救路径。
@@ -728,7 +732,7 @@ P4：扩展语言表面。
 8. **Non-determinism normalization：** ~~决定 Story Daemon、ingress HouseGate 或两者是否允许在 signature 前 materialize `now()`/`random()`。~~ 已解决：materialization 在 agent/SDK 签名前完成；HouseGate 不做 normalize（§7、§9）。剩余 open item：精确的白名单函数集和 SDK 语言覆盖度（TS/Go）。已收窄。
 9. **JSON/Map profile：** pin 精确 ClickHouse versions/settings，并定义 executor-profile upgrade governance。
 10. **Mutation limits：** 选择 v1 的 touched parts/bytes caps，并决定哪些 mutations 被 reject。
-11. **`INSERT ... SELECT`：** 在 reject、拆成 SELECT-then-INSERT、或 ordered safe+unsafe 组合三者之间选择（组合用 manifest-indexed reads，见 §6/§11，不依赖 per-row `_hg_l3_block_seq` 列）。
+11. **`INSERT ... SELECT`：** ~~在 reject、拆成 SELECT-then-INSERT、或 ordered safe+unsafe 组合三者之间选择~~ v1 已定：**在 admission 处 reject**——`INSERT ... SELECT` 读 pre-state 且可能用非确定性 plan，属于 mutation-class，在 v1 payload-local-INSERT 范围之外（§2 non-goal 3）。拆成 SELECT-then-INSERT 与 ordered safe+unsafe 组合（manifest-indexed reads，见 §6/§11，不依赖 per-row `_hg_l3_block_seq` 列）保留为 v2 选项。v1 降级，不再是 open question。
 12. **Safe serving integrity：** 决定 v1 存多少 row/chunk/Merkle metadata，多少在 audit 时计算。
 13. **Shadow-data detection：** 定义 production query sampling rate 和 cross-node comparison policy。
 14. **Dynamic node join：** 定义新节点如何证明它已 sync 到 safe manifest，才能变为 Active。
