@@ -88,13 +88,13 @@ Keeper is the sequencer, validator, registry, attestation collector, and safe-st
 
 Keeper responsibilities:
 
-- Assign `statement_seq` and build LC blocks over signed statement envelopes.
+- Assign `statement_seq` and build L3 blocks over signed statement envelopes.
 - Enforce `statement_id` uniqueness via the L3-derived mountain-range accumulator + per-account high-water mark (§7); reject duplicates with non-membership proofs. This state is replayable from the L3 stream, so decentralizing Keeper does not change the dedup fact.
 - Record payload references and ensure payload availability.
 - Select the source node for optimistic execution.
 - Accept source result claims only through the validation front.
 - Store RC records for candidate parts, partition deltas, and source claimed roots.
-- Build `ReplayJob` objects from LC block input, previous safe snapshot identity, schema snapshot, executor profile, and payload refs.
+- Build `ReplayJob` objects from L3 block input, previous safe snapshot identity, schema snapshot, executor profile, and payload refs.
 - Collect `ReplayAttestation` objects and run the three-way promotion check (replay + partition-delta + byte-side lthash, §9). In v1 the centralized Keeper is the trust root that *orchestrates* the 2-of-3 replay quorum and arbitrates promote/challenge immediately; recomputability is an after-the-fact audit capability in v1. The decentralized-phase safety model (challenge window) is specified in §11.
 - Open challenge replay on root mismatch or timeout.
 - Publish `SafeSnapshotManifest` and safe watermarks.
@@ -163,16 +163,16 @@ _hg_payload_ordinal UInt64
 
 **Reserved columns that are deliberately not stored per row, and why:**
 
-- `_hg_lc_block_seq` / `_hg_statement_seq` (sequencer-assigned): NOT stored. Their only consumer is the `UNION(safe, unsafe)` read path and `as_of_safe(block)` time-travel, neither of which needs per-row values:
+- `_hg_l3_block_seq` / `_hg_statement_seq` (sequencer-assigned): NOT stored. Their only consumer is the `UNION(safe, unsafe)` read path and `as_of_safe(block)` time-travel, neither of which needs per-row values:
   - **Dedup across the UNION** uses `_hg_row_id` plus the Keeper unsafe-part registry. `REPLACE PARTITION` copies data into `hg_safe` rather than removing it from `hg_unsafe`, so promotion includes a cleanup/exclusion step: `unsafe_latest` must exclude parts already covered by the safe watermark until asynchronous unsafe cleanup drops them.
   - **Ordering across the UNION** uses the table's `ORDER BY`, not protocol sequence numbers.
-  - **`as_of_safe(block=N)` time-travel** is served by the `SafeSnapshotManifest`, which is already indexed by `safe_lc_block_seq` (§8). The read picks the manifest for block N and reads the safe snapshot; it does not filter rows by a per-row block number.
+  - **`as_of_safe(block=N)` time-travel** is served by the `SafeSnapshotManifest`, which is already indexed by `safe_l3_block_seq` (§8). The read picks the manifest for block N and reads the safe snapshot; it does not filter rows by a per-row block number.
   - **Part↔statement attribution** is carried by ClickHouse part metadata plus the Keeper `RCRecord`: `insert_deduplication_token = statement_seq` in sequencing-before-write mode, or `statement_id` in the optimistic-forward path (§12.2), not by a per-row column.
   Storing these per row would force source execution to wait for sequencing before writing `hg_unsafe` (or require a "pending namespace" rewrite after sequencing), which reinstates the sequencer dependency that §5.2 of the 2026-06-10 design removed and kills optimistic execution. See the tradeoff note below.
 - `_hg_source_node`: NOT stored. Part-level provenance already lives in `RCRecord.source_node`. A row-level copy serves no safety role (safety comes from root/lthash, not provenance) and is misleading once the part replicates, since the serving node ≠ the source node.
 - `_hg_row_hash`: NOT stored. `row_lthash` is already the canonical row commitment; an additional BLAKE3 row hash is pure redundancy, and the audit path recomputes `row_lthash` from stored rows anyway.
 
-**Tradeoff: optimistic execution vs. per-row sequencing columns.** The decision to omit `_hg_lc_block_seq` / `_hg_statement_seq` is a deliberate trade. Considered and rejected:
+**Tradeoff: optimistic execution vs. per-row sequencing columns.** The decision to omit `_hg_l3_block_seq` / `_hg_statement_seq` is a deliberate trade. Considered and rejected:
 
 - **B. Keep the columns, write `hg_unsafe` only after sequencing.** Preserves per-row time-travel and block-filtered unsafe reads. Cost: source INSERT latency gains an L3 batching round-trip before any ClickHouse write, and the row-id decoupling work in §5.2 (which exists precisely to remove this sequencer dependency) is undone. Unsafe writes also become sequencer-censored — if Keeper refuses to sequence, the row never lands even provisionally.
 - **C. Keep the columns as mutable columns, fill them after sequencing via UPDATE.** Preserves optimistic execution. Cost: introduces a mutation into `hg_unsafe`, violating the §12.2 invariant that `hg_unsafe` is append-only under `STOP MERGES`; that mutation is itself unverified, so the provisional rows a client sees via `unsafe_latest` would carry a `0`/`NULL` block seq until the UPDATE runs, making the time-travel semantics the columns were meant to provide incorrect during the window anyway.
@@ -259,7 +259,18 @@ The envelope therefore signs the Phase-1 output only. The source may not re-mate
 }
 ```
 
-Explicitly NOT signed (assigned later or non-user-controlled): `statement_seq` (Keeper assigns after submission), `source_node`, `executor_profile_id` (block-level, in `LCBlock`), and the Phase-2 physical rewrite.
+Explicitly NOT signed (assigned later or non-user-controlled): `statement_seq` (Keeper assigns after submission), `source_node`, `executor_profile_id` (block-level, in `L3Block`), and the Phase-2 physical rewrite.
+
+**`statement_seq` vs `statement_id` — who assigns what, and why.** `statement_seq` is the Keeper-assigned, globally monotonic sequence number that establishes a **total order** over statements (the first half of the §5.2 sequencing responsibility, "assign `statement_seq` and build L3 blocks"). It is deliberately separated from the client-side `statement_id`:
+
+| | `statement_id` | `statement_seq` |
+|---|---|---|
+| Assigned by | client / agent | Keeper (after submission) |
+| Signed? | **yes** (in `user_jws_v2`) | **no** |
+| Shape | `client_account \|\| client_seq \|\| client_nonce` | monotonic integer |
+| Role | identity / dedup / feeds `_hg_row_id` | ordering / part attribution |
+
+`statement_seq` cannot be signed because **signing happens before submission, but the number is assigned after it — the signer cannot know its position at signing time** (base design §6). The client therefore signs only its own `statement_id`; the Keeper later anchors the `statement_id → statement_seq` binding in the L3 block, keeping the mapping auditable. Downstream (§6, §12.2), part↔statement attribution rides on `insert_deduplication_token = statement_seq` in the sequencing-before-write mode; in the optimistic-forward mode the seq does not exist yet, so `statement_id` carries attribution until the Keeper binds it.
 
 `statement_id` should be structured (per-account monotonic, supports L3-derived uniqueness enforcement):
 
@@ -269,22 +280,22 @@ statement_id = client_account || client_seq || client_nonce
 
 **`statement_id` uniqueness — resolved (adopts 2026-06-10 Appendix B.2).** `statement_id` uniqueness is load-bearing: `_hg_row_id = BLAKE3(... || statement_id || global_row_ordinal)`, so a reused `statement_id` resurrects the duplicate-row LtHash cancellation attack. Enforcement is an **L3-derived accumulator**, not Keeper memory, so that decentralizing Keeper authority does not change the dedup fact:
 
-- A **mountain-range Merkle accumulator** (recommended construction for P0; no trusted setup, append-only, O(log n) non-membership proofs) commits `spent_ids_root` in each LC block alongside `partition_commitments_after`. It is a pure function of the sequenced `statement_id`s — any honest node that replays the L3 stream reconstructs it identically. (RSA/pairing accumulators give O(1) proofs but require trusted-setup / modulus governance and are rejected for v1; sparse Merkle is acceptable but larger constants.)
+- A **mountain-range Merkle accumulator** (recommended construction for P0; no trusted setup, append-only, O(log n) non-membership proofs) commits `spent_ids_root` in each L3 block alongside `partition_commitments_after`. It is a pure function of the sequenced `statement_id`s — any honest node that replays the L3 stream reconstructs it identically. (RSA/pairing accumulators give O(1) proofs but require trusted-setup / modulus governance and are rejected for v1; sparse Merkle is acceptable but larger constants.)
 - Acceptance requires a **non-membership proof** that the `statement_id` is not under the previous `spent_ids_root`; only then is the `statement_id → statement_seq` binding anchored.
 - A **per-account high-water mark** `hi_seq[account]` (the largest `client_seq` sequenced for that account) gives well-behaved traffic O(1) acceptance — a new `client_seq > hi_seq` needs no non-membership proof; only out-of-order `client_seq ≤ hi_seq` falls back to the accumulator proof. This bounds dedup state to one integer per active account plus a gap set, and **shards cleanly by `client_account`**, addressing the scaling objection.
 - The accumulator is append-only and permanent; a `statement_id` once in `spent_ids_root` is never removed. Scope is **per-account-global**.
 
 `schema_snapshot_id` scoping (phased):
 
-- **v1: block-level.** `schema_snapshot_id` is the same for every statement in an LC block; a block may not contain schema changes (DDL statements that change the schema must occupy their own block or take effect at a block boundary). The executor replays the whole block under one schema. Simple and unambiguous.
+- **v1: block-level.** `schema_snapshot_id` is the same for every statement in an L3 block; a block may not contain schema changes (DDL statements that change the schema must occupy their own block or take effect at a block boundary). The executor replays the whole block under one schema. Simple and unambiguous.
 - **P4 (mutation/DDL completeness): statement-level.** When more DDL is admitted, a DDL statement mints a new schema snapshot and subsequent statements in the same or later block carry the new `schema_snapshot_id`.
 
 Keeper assigns and anchors:
 
 ```text
-LCBlock {
-  lc_block_seq,
-  prev_lc_hash,
+L3Block {
+  l3_block_seq,
+  prev_l3_hash,
   l2_anchor_ref,
   statement_seq_start,
   statements: [StatementEnvelopeV2],
@@ -300,7 +311,7 @@ The source registers a result claim:
 
 ```text
 RCRecord {
-  lc_block_seq,
+  l3_block_seq,
   statement_seq,
   source_node,
   unsafe_table,
@@ -317,11 +328,11 @@ RCRecord {
 }
 ```
 
-Keeper builds replay jobs from LC + RC + previous safe state:
+Keeper builds replay jobs from L3 + RC + previous safe state:
 
 ```text
 ReplayJob {
-  lc_block_seq,
+  l3_block_seq,
   prev_safe_snapshot_id,
   prev_state_root,
   schema_snapshot_id,
@@ -381,7 +392,7 @@ LtHash remains useful as an additive state accumulator, root comparison input, a
 ```text
 snapshot_id,
 parent_snapshot_id,
-safe_lc_block_seq,
+safe_l3_block_seq,
 schema_snapshot_id,
 schema_root,
 executor_profile_id,
@@ -424,7 +435,7 @@ sequenceDiagram
     HG->>HG: validate signature, compute payload_hash, spool payload
     HG->>K: submit StatementEnvelopeV2
     K->>K: validate signature, statement_id non-membership, schema/settings, payload ref
-    K->>K: assign statement_seq and build LC block
+    K->>K: assign statement_seq and build L3 block
     K-->>HG: Sequenced ack + source assignment (managed path)
     HG->>S: execute source SQL against unsafe table (managed: after sequencing; optimistic-forward: may run before sequencing)
     S->>S: materialize unsafe parts
@@ -443,7 +454,7 @@ sequenceDiagram
     R1->>K: byte_side part_row_lthash_A
     R2->>K: byte-side part_row_lthash_B
     alt quorum AND per-partition delta matches AND byte-side lthash matches source claim
-        K->>L2: publish/anchor LC block hash and state root
+        K->>L2: publish/anchor L3 block hash and state root
         L2-->>K: finality / last_mergeable reached
         K->>S: Keeper-signed PromoteSafePartition (REPLACE PARTITION, see §12)
         K->>R1: Keeper-signed PromoteSafePartition (REPLACE PARTITION, see §12)
@@ -549,7 +560,7 @@ Read modes:
 |---|---|---|
 | `safe` default | virtual table -> `hg_safe.<table>` | Verified and finalized through Keeper safe watermark. Freshness may lag. |
 | `unsafe_latest` explicit | virtual table -> `hg_safe.<table> UNION hg_unsafe.<table>` | Lower latency, may change or be dropped. Not integrity-final. |
-| `as_of_safe(block)` future | safe snapshot for block N (selected from `SafeSnapshotManifest`, §8) | Time-travel over safe snapshots. Implemented by manifest-indexed reads; does NOT require a per-row `_hg_lc_block_seq` column (see §6). |
+| `as_of_safe(block)` future | safe snapshot for block N (selected from `SafeSnapshotManifest`, §8) | Time-travel over safe snapshots. Implemented by manifest-indexed reads; does NOT require a per-row `_hg_l3_block_seq` column (see §6). |
 
 The default should be safe reads. If product freshness requires unsafe reads, the API must surface that the result is provisional.
 
@@ -578,7 +589,7 @@ Because neither engine requires HouseGate to intercept or interpret ClickHouse's
 The two "Keeper" roles must still be named explicitly to avoid ambiguity:
 
 - **ClickHouse Keeper** (ZooKeeper-compatible): owned by ClickHouse for `hg_unsafe` ReplicatedMergeTree state only. HouseGate never reads or writes it.
-- **Sentio Keeper** (the LC-block sequencer and attestation collector of §5.2): owned by the integrity layer. Drives sequencing, replay job dispatch, and promotion.
+- **Sentio Keeper** (the L3-block sequencer and attestation collector of §5.2): owned by the integrity layer. Drives sequencing, replay job dispatch, and promotion.
 
 ### 12.2 Promotion = `REPLACE PARTITION`, with `hg_unsafe` merges stopped
 
@@ -662,7 +673,7 @@ Residual risk: a node can maintain correct bytes for audit but serve shadow data
 P0: freeze protocol surfaces.
 
 - `StatementEnvelopeV2` fields and signing payload (§7), including `sql_hash = H(rewritten_sql)` over post-materialization SQL.
-- LC/RC record schemas, including `spent_ids_root_after` in LC blocks.
+- L3/RC record schemas, including `spent_ids_root_after` in L3 blocks.
 - Reserved columns and physical table naming.
 - Safe/unsafe read rewrite semantics.
 - Executor profile governance for pinned ClickHouse.
@@ -709,14 +720,14 @@ P4: expand language surface.
 1. **Final v1 route:** confirm optimistic source execution plus quorum replay as the default, or switch to full-node parallel replay for simpler correctness at the cost of a longer unsafe window.
 2. **Safe table engine:** ~~use ReplicatedMergeTree with a strict Keeper-signed safe path, or local MergeTree safe caches promoted independently on every node.~~ Resolved: `hg_safe` is a local MergeTree on every node, promoted by Keeper-signed `REPLACE PARTITION` from a promotion shadow table (§12). Demoted from open.
 3. **Merge control:** ~~can the HouseGate-to-Keeper reverse proxy fully gate unsafe/safe merges without a ClickHouse fork, or is a restricted engine variant required?~~ Resolved: no reverse-proxy gate is needed under the §12.1 engine split (`hg_unsafe` ReplicatedMergeTree ungated, `hg_safe` MergeTree). The `REPLACE PARTITION` promotion-shadow-table construction on lagging replicas (§12.5) remains a P1 spike. Demoted from open.
-4. **LC/RC naming and schema:** freeze whether the design calls these LC blocks and RC records, and define exact protobuf/JSON fields.
-5. **Chain commitment:** decide whether L2 calldata stores the full LC block payload, a data availability reference, or only a block/root commitment.
+4. **L3/RC schema:** ~~freeze whether the design calls these L3 blocks and RC records~~ — naming resolved to `L3Block` / `RCRecord` (§5.2, §7). Still open: define their exact protobuf/JSON fields and freeze the wire schema.
+5. **Chain commitment:** decide whether L2 calldata stores the full L3 block payload, a data availability reference, or only a block/root commitment.
 6. **Payload DA:** define proof-of-custody and retention for signed payload bytes. ~~Mutation pre-state parts~~ resolved: pre-state availability comes from multi-replica `hg_safe` + manifest indexing + §13 audit (§10), not a separate proof-of-custody. Demoted from open.
 7. **Statement uniqueness:** ~~choose the accumulator construction for permanent `statement_id` uniqueness.~~ Resolved: mountain-range Merkle accumulator + per-account high-water mark, per-account-global scope, L3-derived (§7, adopting 2026-06-10 Appendix B.2). Demoted from open.
 8. **Non-determinism normalization:** ~~decide whether Story Daemon, ingress HouseGate, or both are allowed to materialize `now()`/`random()` before signature.~~ Resolved: materialization is at the agent/SDK before signing; HouseGate does not normalize (§7, §9). Remaining open item: the exact whitelist function set and SDK language coverage (TS/Go). Narrowed.
 9. **JSON/Map profile:** pin exact ClickHouse versions/settings and define executor-profile upgrade governance.
 10. **Mutation limits:** choose v1 caps for touched parts/bytes and decide which mutations are rejected.
-11. **`INSERT ... SELECT`:** choose between reject, split into SELECT-then-INSERT, or ordered safe+unsafe composition (composition uses manifest-indexed reads per §6/§11, not a per-row `_hg_lc_block_seq` column).
+11. **`INSERT ... SELECT`:** choose between reject, split into SELECT-then-INSERT, or ordered safe+unsafe composition (composition uses manifest-indexed reads per §6/§11, not a per-row `_hg_l3_block_seq` column).
 12. **Safe serving integrity:** decide how much row/chunk/Merkle metadata to store in v1 versus computing it during audit.
 13. **Shadow-data detection:** define production query sampling rate and cross-node comparison policy.
 14. **Dynamic node join:** define how a new node proves it has synced to the safe manifest before becoming Active.
