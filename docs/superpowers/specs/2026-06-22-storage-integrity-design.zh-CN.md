@@ -439,8 +439,10 @@ sequenceDiagram
     K->>K: 校验 signature、statement_id non-membership、schema/settings、payload ref
     K->>K: 分配 statement_seq 并构造 L3 block
     K-->>HG: Sequenced ack + source assignment（managed path）
+    Note over U,K: ACK 1 = Sequenced (ordered + durable, not yet executed/queryable)
     HG->>S: 对 unsafe 表执行 source SQL（managed: sequencing 后；optimistic-forward: 可先于 sequencing）
     S->>S: materialize unsafe parts
+    Note over U,S: ACK 2 = Unsafe (route A default client ack at write speed, optimistic-forward can precede sequencing)
     S->>K: RCRecord(candidate parts + source_claim_state_root)
     K->>K: 校验 linkage、part claims 和 registration arithmetic
     K->>R1: ReplayJob(prev safe snapshot + signed payload)
@@ -461,6 +463,7 @@ sequenceDiagram
         K->>S: Keeper-signed PromoteSafePartition (REPLACE PARTITION, see §12)
         K->>R1: Keeper-signed PromoteSafePartition (REPLACE PARTITION, see §12)
         K->>R2: Keeper-signed PromoteSafePartition (REPLACE PARTITION, see §12)
+        Note over S,R2: ACK 3 = Safe (integrity-final)
     else mismatch or timeout
         K->>K: open challenge replay (signed mismatch attestation becomes evidence)
         K->>S: keep/drop unsafe parts
@@ -549,9 +552,11 @@ sequenceDiagram
     HG->>K: submit mutation StatementEnvelopeV2
     K->>K: sequence mutation 并安装 table/partition barrier
     K->>K: 把 mutation 绑到 prev SafeSnapshotManifest
+    Note over U,K: ACK 1 = Sequenced (ordered + durable, barrier installed, not yet executed)
     K->>S: 在从 safe parts clone 出的 unsafe scratch 里执行 mutation
     S->>S: hardlink/reflink 或 ATTACH affected safe parts 进 scratch
     S->>S: 运行 ClickHouse mutation，等待 materialization
+    Note over U,S: ACK 2 = Unsafe (source mutation materialized in scratch, route A default client ack)
     S->>K: claim removed parts、added parts 和 source_claim_state_root
     K->>R: ReplayJob(prev safe snapshot + mutation SQL)
     R->>R: clone 同样的 affected safe parts，执行 pinned mutation
@@ -560,6 +565,7 @@ sequenceDiagram
     alt quorum 匹配 source claim AND partition-delta AND post-state commitment match
         K->>Safe: Keeper-signed 用新 safe parts 替换旧 safe parts
         K->>K: publish new SafeSnapshotManifest
+        Note over S,Safe: ACK 3 = Safe (integrity-final)
     else mismatch or timeout
         K->>K: challenge replay 或 reject
         K->>S: drop unsafe mutation output

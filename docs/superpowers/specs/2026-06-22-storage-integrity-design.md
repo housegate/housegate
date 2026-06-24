@@ -439,8 +439,10 @@ sequenceDiagram
     K->>K: validate signature, statement_id non-membership, schema/settings, payload ref
     K->>K: assign statement_seq and build L3 block
     K-->>HG: Sequenced ack + source assignment (managed path)
+    Note over U,K: ACK 1 = Sequenced (ordered + durable, not yet executed/queryable)
     HG->>S: execute source SQL against unsafe table (managed: after sequencing; optimistic-forward: may run before sequencing)
     S->>S: materialize unsafe parts
+    Note over U,S: ACK 2 = Unsafe (route A default client ack at write speed, optimistic-forward can precede sequencing)
     S->>K: RCRecord(candidate parts + source_claim_state_root)
     K->>K: validate linkage, part claims, and registration arithmetic
     K->>R1: ReplayJob(prev safe snapshot + signed payload)
@@ -461,6 +463,7 @@ sequenceDiagram
         K->>S: Keeper-signed PromoteSafePartition (REPLACE PARTITION, see §12)
         K->>R1: Keeper-signed PromoteSafePartition (REPLACE PARTITION, see §12)
         K->>R2: Keeper-signed PromoteSafePartition (REPLACE PARTITION, see §12)
+        Note over S,R2: ACK 3 = Safe (integrity-final)
     else mismatch or timeout
         K->>K: open challenge replay (signed mismatch attestation becomes evidence)
         K->>S: keep/drop unsafe parts
@@ -549,9 +552,11 @@ sequenceDiagram
     HG->>K: submit mutation StatementEnvelopeV2
     K->>K: sequence mutation and install table/partition barrier
     K->>K: bind mutation to prev SafeSnapshotManifest
+    Note over U,K: ACK 1 = Sequenced (ordered + durable, barrier installed, not yet executed)
     K->>S: execute mutation in unsafe scratch cloned from safe parts
     S->>S: hardlink/reflink or ATTACH affected safe parts into scratch
     S->>S: run ClickHouse mutation, wait for materialization
+    Note over U,S: ACK 2 = Unsafe (source mutation materialized in scratch, route A default client ack)
     S->>K: claim removed parts, added parts, and source_claim_state_root
     K->>R: ReplayJob(prev safe snapshot + mutation SQL)
     R->>R: clone same affected safe parts, execute pinned mutation
@@ -560,6 +565,7 @@ sequenceDiagram
     alt quorum matches source claim AND partition-delta AND post-state commitment match
         K->>Safe: Keeper-signed replace old safe parts with new safe parts
         K->>K: publish new SafeSnapshotManifest
+        Note over S,Safe: ACK 3 = Safe (integrity-final)
     else mismatch or timeout
         K->>K: challenge replay or reject
         K->>S: drop unsafe mutation output
