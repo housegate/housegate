@@ -1,0 +1,34 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "replicationproxy",
+    srcs = [
+        "interserver.go",
+        "interserver_lifecycle.go",
+        "interserver_peer_auth.go",
+        "keeper.go",
+        "upstream.go",
+    ],
+    importpath = "housegate/housegate/pkg/replicationproxy",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/auth",
+        "//pkg/log",
+    ],
+)
+
+go_test(
+    name = "replicationproxy_test",
+    srcs = [
+        "interserver_egress_test.go",
+        "interserver_headerless_test.go",
+        "interserver_inbound_test.go",
+        "interserver_lifecycle_test.go",
+        "interserver_test.go",
+        "interserver_peer_auth_test.go",
+        "keeper_test.go",
+        "keeper_test_helpers_test.go",
+    ],
+    embed = [":replicationproxy"],
+    deps = ["//pkg/auth"],
+)

@@ -163,7 +163,8 @@ func TestInternalPort_AcceptsPeerTrustedHandshake(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	bs.preServe(ctx)
-	go func() { _ = internalSL.Server.Serve(ctx, ln) }()
+	internalServer := requireProxyServer(t, *internalSL)
+	go func() { _ = internalServer.Serve(ctx, ln) }()
 
 	// Build the peer-relay JWS. We use the same key that buildServer
 	// wired as the relay signer — the validator accepts its own key.
