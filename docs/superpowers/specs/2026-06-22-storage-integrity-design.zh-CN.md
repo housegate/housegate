@@ -439,8 +439,10 @@ sequenceDiagram
     K->>K: 校验 signature、statement_id non-membership、schema/settings、payload ref
     K->>K: 分配 statement_seq 并构造 L3 block
     K-->>HG: Sequenced ack + source assignment（managed path）
+    Note over U,K: ACK 1 = Sequenced (ordered + durable, not yet executed/queryable)
     HG->>S: 对 unsafe 表执行 source SQL（managed: sequencing 后；optimistic-forward: 可先于 sequencing）
     S->>S: materialize unsafe parts
+    Note over U,S: ACK 2 = Unsafe (route A default client ack at write speed, optimistic-forward can precede sequencing)
     S->>K: RCRecord(candidate parts + source_claim_state_root)
     K->>K: 校验 linkage、part claims 和 registration arithmetic
     K->>R1: ReplayJob(prev safe snapshot + signed payload)
@@ -461,6 +463,7 @@ sequenceDiagram
         K->>S: Keeper-signed PromoteSafePartition (REPLACE PARTITION, see §12)
         K->>R1: Keeper-signed PromoteSafePartition (REPLACE PARTITION, see §12)
         K->>R2: Keeper-signed PromoteSafePartition (REPLACE PARTITION, see §12)
+        Note over S,R2: ACK 3 = Safe (integrity-final)
     else mismatch or timeout
         K->>K: open challenge replay (signed mismatch attestation becomes evidence)
         K->>S: keep/drop unsafe parts
@@ -484,6 +487,51 @@ sequenceDiagram
 - **v1 quorum 参数（P0 freeze）：** promote 需要 ≥2/3 个独立 replay replicas attest 相同的 `computed_state_root`，且 source 自己的自证不算数。v1 中心化 Keeper 是*编排*这个 quorum（选 replicas、收 attestations、决定 promote、开 challenge）的信任根；recomputability 在 v1 是*事后审计*能力，不是运行时 promote 机制。去中心化阶段的安全模型（challenge window）见 §11。
 - 物理 promotion 操作（verified 字节究竟如何从 `hg_unsafe` 进 `hg_safe`）在 §12 规定。
 
+**路线 B 对照——full-node parallel replay（§16 的 fallback；此处仅作对照，上面的路线 A 才是 v1 baseline）。** 路线 B 没有指定 source：每个节点自己执行 sequenced input、各自产出自己的 candidate part，Keeper 取 majority/recomputable root——所以没有 source claim、没有 byte-side scan（每个节点自己的物化就是它的真相）、也不搬 part。代价是更长的 unsafe window 和更晚的 ack（见下）。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as "User / SDK (agent)"
+    participant HG as "Ingress HouseGate"
+    participant K as "Keeper"
+    participant N1 as "Replay Node A"
+    participant N2 as "Replay Node B"
+    participant N3 as "Replay Node C"
+    participant L2 as "L2 / L1 Anchor"
+
+    U->>U: materialize now()/rand()/UUID, inject _hg_row_id, sign envelope
+    U->>HG: INSERT(rewritten_sql + payload) + signed StatementEnvelopeV2
+    HG->>HG: validate signature, compute payload_hash, spool payload
+    HG->>K: submit StatementEnvelopeV2
+    K->>K: validate sig, statement_id non-membership, schema/settings, payload ref
+    K->>K: assign statement_seq, build L3 block
+    Note over U,K: ACK 1 = Sequenced (ordered + durable, not yet executed/queryable)
+    K->>N1: sequenced input (L3 block + prev safe snapshot)
+    K->>N2: sequenced input (L3 block + prev safe snapshot)
+    K->>N3: sequenced input (L3 block + prev safe snapshot)
+    N1->>N1: execute on pinned executor, produce own candidate part + root
+    N2->>N2: execute on pinned executor, produce own candidate part + root
+    N3->>N3: execute on pinned executor, produce own candidate part + root
+    Note over N1,N3: ACK 2 = Unsafe (per-node provisional, each node serves its own candidate)
+    N1->>K: ReplayAttestation(root_A, partition_deltas_A)
+    N2->>K: ReplayAttestation(root_B, partition_deltas_B)
+    N3->>K: ReplayAttestation(root_C, partition_deltas_C)
+    K->>K: take majority / recomputable root (no byte-side scan, no part movement)
+    alt quorum agrees on root
+        K->>L2: publish/anchor L3 block hash + state root
+        L2-->>K: finality reached
+        K->>N1: MarkSafe (promote own candidate in place)
+        K->>N2: MarkSafe (promote own candidate in place)
+        K->>N3: MarkSafe (promote own candidate in place)
+        Note over N1,N3: ACK 3 = Safe (integrity-final)
+    else minority / mismatch
+        K->>K: drop minority candidate, node re-syncs (replay or copy from a majority peer), challenge if persistent
+    end
+```
+
+**ack 点的区别。** 两条路在 *Unsafe* ack 处分叉。路线 A 以写速度返回客户端的写——source 立即落 `unsafe` parts（optimistic-forward 甚至可以在 sequencing 前就写），数据立刻能通过 `unsafe_latest` 读到（这是路线 A 的默认客户端 ack）。路线 B 最快能拿到的 ack 是 *Sequenced*（已定序 + 持久，但还没执行、因此还读不到）；可读的 `unsafe` 结果要到 sequencing **加上**节点执行之后才有，而且是每节点各自的、不是单一权威面。两条路都要到 finality 之后才 *Safe*，但路线 B 的 safe 门只是 majority-root 一致——它没有 byte-side check（§9 check 3），因为没有节点会去 promote 别的节点的字节。
+
 ## 10. Mutation 校验流程
 
 Mutation-class statements 包括 `ALTER ... UPDATE`、`ALTER ... DELETE`、large rewrites，以及任何结果依赖 pre-state 的 write。v1 只准入 bounded UPDATE/DELETE profiles；`INSERT ... SELECT` 与大规模 / 无界 mutations 推迟到 v2。
@@ -504,9 +552,11 @@ sequenceDiagram
     HG->>K: submit mutation StatementEnvelopeV2
     K->>K: sequence mutation 并安装 table/partition barrier
     K->>K: 把 mutation 绑到 prev SafeSnapshotManifest
+    Note over U,K: ACK 1 = Sequenced (ordered + durable, barrier installed, not yet executed)
     K->>S: 在从 safe parts clone 出的 unsafe scratch 里执行 mutation
     S->>S: hardlink/reflink 或 ATTACH affected safe parts 进 scratch
     S->>S: 运行 ClickHouse mutation，等待 materialization
+    Note over U,S: ACK 2 = Unsafe (source mutation materialized in scratch, route A default client ack)
     S->>K: claim removed parts、added parts 和 source_claim_state_root
     K->>R: ReplayJob(prev safe snapshot + mutation SQL)
     R->>R: clone 同样的 affected safe parts，执行 pinned mutation
@@ -515,6 +565,7 @@ sequenceDiagram
     alt quorum 匹配 source claim AND partition-delta AND post-state commitment match
         K->>Safe: Keeper-signed 用新 safe parts 替换旧 safe parts
         K->>K: publish new SafeSnapshotManifest
+        Note over S,Safe: ACK 3 = Safe (integrity-final)
     else mismatch or timeout
         K->>K: challenge replay 或 reject
         K->>S: drop unsafe mutation output
@@ -531,6 +582,37 @@ Mutation 约束：
 - **Mutation 的第三路检查是 recomputed-commitment match，不是 fetched-byte scan。** §9 的 three-way check 是为 INSERT 路径定义的：每个 replica fetch 到**同一份**被复制的 `hg_unsafe` candidate parts，其 byte-side check（§9 check 3）从这些共享字节重算 `part_row_lthash` 比对 `RCRecord.candidate_parts`。Mutation 没有共享的 fetched-byte 对象：每个 attesting replica 在自己的 scratch 里**独立重新生成** mutated parts（clone affected safe parts → 跑 pinned mutation），所以即便都诚实，各 replica 的 part 字节也会合法地不同。因此 mutation 的第三路检查是一次 materialization-grounded 的 commitment 比对：每个 replica 从自己本地物化的 post-state parts 重算 per-partition `partition_commitment`（`Σ part_row_lthash`），确认它等于 **safe pre-state partition 的 `partition_commitment` 加上** mutation `RCRecord` 里 source 声明的 `partition_deltas`。这是绝对值对绝对值的比较——`partition_commitment` 是绝对累加器（§8），`partition_deltas` 是 `Σ new − Σ old` 增量，LtHash 的可加性让 `post = pre + delta` 精确成立——所以它把 source 的 claim 绑定到每个 verifier 实际物化出的字节，是 §9 check 3 在 mutation 路径上的对应物（也就是上面流程里 `post-state commitment match` 守卫所指），无需 fetched 共享字节扫描。
 - **Pre-state data availability（已解决）。** Mutation replay 需要 affected safe parts 作为 pre-state。这些 parts 可用，因为 promotion 通过 Keeper-signed `REPLACE PARTITION`（§12.2）把 verified post-state partition 发布到每个 attesting replica 的 `hg_safe`，且 `SafeSnapshotManifest` 索引它们。只要有一个 honest replica 持有 pre-state part，challenge replay 就能进行；source 单方面隐藏自己的副本挡不住验证。全员 replica 隐瞒是 liveness 攻击（无 safety 修复），但 §13 audit 会发现 missing parts 并把隐瞒的 replica 移出 read set。这在不为 pre-state 单设 proof-of-custody 的前提下解决了 v2 R3 的关切。
 - 任何修改 `_hg_row_id` 或 protocol columns 的尝试都被拒绝。
+
+**路线 B 对照——full-node parallel replay（§16 的 fallback；上面的路线 A 是 v1 baseline）。** 路线 B 的 mutation flow 和它的 INSERT flow *同构*（§9）：每个节点本地 clone 受影响的 safe parts、跑 pinned mutation、attest 自己的 post-state root；Keeper 取 majority/recomputable root，每个节点就地 promote 自己的 post-state。没有 source claim、没有 byte-side scan、不搬 part。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as "User / SDK"
+    participant HG as "HouseGate"
+    participant K as "Keeper"
+    participant N as "All Replay Nodes (N1..Nk)"
+    participant L2 as "L2 Anchor"
+
+    U->>HG: UPDATE/DELETE (rewritten_sql) + signed envelope
+    HG->>K: validate signature, submit
+    K->>K: sequence + install (table, partition) barrier, bind to prev SafeSnapshotManifest
+    Note over U,K: ACK 1 = Sequenced
+    K->>N: sequenced mutation (L3 block + prev safe snapshot)
+    N->>N: clone affected safe parts into local scratch, run pinned mutation, compute old/new delta + post-state root
+    Note over N: ACK 2 = Unsafe (per-node provisional)
+    N->>K: ReplayAttestation(post-state root, partition_deltas)
+    K->>K: take majority / recomputable post-state root
+    alt quorum agrees
+        K->>L2: anchor, finality
+        K->>N: MarkSafe, each node replaces its own affected safe parts in place
+        Note over N: ACK 3 = Safe
+    else mismatch
+        K->>K: challenge replay or reject, minority node re-syncs
+    end
+```
+
+**为什么路线 B 下这更干净。** 路线 A 的 mutation 第三路检查不得不被重定义为 recomputed-commitment match（而不是 fetched-byte scan），正因为每个 replica 都本地重新生成 mutated parts——没有共享的 source 字节对象可扫。而这*恰恰*就是路线 B 对所有语句的模型。所以在路线 B 下，INSERT 和 mutation 用同一套“本地执行、对 root 投票”的路径，没有 INSERT/mutation 的不对称——这正是 §16 说路线 B 对第一个 correctness prototype 更简单、也可能更安全的一个具体原因。ack 点的区别和 INSERT（§9）相同：路线 A 在 *Unsafe* 确认（写速度）；路线 B 的快 ack 是 *Sequenced*，*Unsafe* 要等节点执行之后。
 
 ## 11. Safe、Unsafe 与读语义
 

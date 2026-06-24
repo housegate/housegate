@@ -439,8 +439,10 @@ sequenceDiagram
     K->>K: validate signature, statement_id non-membership, schema/settings, payload ref
     K->>K: assign statement_seq and build L3 block
     K-->>HG: Sequenced ack + source assignment (managed path)
+    Note over U,K: ACK 1 = Sequenced (ordered + durable, not yet executed/queryable)
     HG->>S: execute source SQL against unsafe table (managed: after sequencing; optimistic-forward: may run before sequencing)
     S->>S: materialize unsafe parts
+    Note over U,S: ACK 2 = Unsafe (route A default client ack at write speed, optimistic-forward can precede sequencing)
     S->>K: RCRecord(candidate parts + source_claim_state_root)
     K->>K: validate linkage, part claims, and registration arithmetic
     K->>R1: ReplayJob(prev safe snapshot + signed payload)
@@ -461,6 +463,7 @@ sequenceDiagram
         K->>S: Keeper-signed PromoteSafePartition (REPLACE PARTITION, see §12)
         K->>R1: Keeper-signed PromoteSafePartition (REPLACE PARTITION, see §12)
         K->>R2: Keeper-signed PromoteSafePartition (REPLACE PARTITION, see §12)
+        Note over S,R2: ACK 3 = Safe (integrity-final)
     else mismatch or timeout
         K->>K: open challenge replay (signed mismatch attestation becomes evidence)
         K->>S: keep/drop unsafe parts
@@ -484,6 +487,51 @@ Important properties:
 - **v1 quorum parameter (P0 freeze):** promote requires ≥2 of 3 independent replay replicas to attest the same `computed_state_root`, and the source's own self-attestation does not count. In v1 the centralized Keeper is the trust root for *orchestrating* this quorum (it picks replicas, collects attestations, decides promote, opens challenges); recomputability is an *after-the-fact audit* capability in v1, not the runtime promote mechanism. The decentralized-phase safety model (challenge window) is specified in §11.
 - The physical promotion operation (how verified bytes actually move from `hg_unsafe` to `hg_safe`) is specified in §12.
 
+**Route B contrast — full-node parallel replay (the §16 fallback; shown for comparison, route A above is the v1 baseline).** Under route B there is no designated source: every node executes the sequenced input itself and produces its own candidate part, and Keeper takes the majority/recomputable root — so there is no source claim, no byte-side scan (each node's own materialization is its truth), and no part movement. The cost is a longer unsafe window and a later ack (see below).
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as "User / SDK (agent)"
+    participant HG as "Ingress HouseGate"
+    participant K as "Keeper"
+    participant N1 as "Replay Node A"
+    participant N2 as "Replay Node B"
+    participant N3 as "Replay Node C"
+    participant L2 as "L2 / L1 Anchor"
+
+    U->>U: materialize now()/rand()/UUID, inject _hg_row_id, sign envelope
+    U->>HG: INSERT(rewritten_sql + payload) + signed StatementEnvelopeV2
+    HG->>HG: validate signature, compute payload_hash, spool payload
+    HG->>K: submit StatementEnvelopeV2
+    K->>K: validate sig, statement_id non-membership, schema/settings, payload ref
+    K->>K: assign statement_seq, build L3 block
+    Note over U,K: ACK 1 = Sequenced (ordered + durable, not yet executed/queryable)
+    K->>N1: sequenced input (L3 block + prev safe snapshot)
+    K->>N2: sequenced input (L3 block + prev safe snapshot)
+    K->>N3: sequenced input (L3 block + prev safe snapshot)
+    N1->>N1: execute on pinned executor, produce own candidate part + root
+    N2->>N2: execute on pinned executor, produce own candidate part + root
+    N3->>N3: execute on pinned executor, produce own candidate part + root
+    Note over N1,N3: ACK 2 = Unsafe (per-node provisional, each node serves its own candidate)
+    N1->>K: ReplayAttestation(root_A, partition_deltas_A)
+    N2->>K: ReplayAttestation(root_B, partition_deltas_B)
+    N3->>K: ReplayAttestation(root_C, partition_deltas_C)
+    K->>K: take majority / recomputable root (no byte-side scan, no part movement)
+    alt quorum agrees on root
+        K->>L2: publish/anchor L3 block hash + state root
+        L2-->>K: finality reached
+        K->>N1: MarkSafe (promote own candidate in place)
+        K->>N2: MarkSafe (promote own candidate in place)
+        K->>N3: MarkSafe (promote own candidate in place)
+        Note over N1,N3: ACK 3 = Safe (integrity-final)
+    else minority / mismatch
+        K->>K: drop minority candidate, node re-syncs (replay or copy from a majority peer), challenge if persistent
+    end
+```
+
+**Ack-point difference.** The two routes diverge at the *Unsafe* ack. Route A returns the client's write at write speed — the source lands `unsafe` parts immediately (the optimistic-forward path can even write before sequencing), so the data is queryable via `unsafe_latest` right away (this is route A's default client ack). Route B's earliest cheap ack is *Sequenced* (ordered + durable, but not yet executed, hence not yet queryable); a queryable `unsafe` result only exists after sequencing **plus** node execution, and is per-node rather than one canonical surface. Both routes reach *Safe* only after finality, but route B's safe gate is just majority-root agreement — it has no byte-side check (§9 check 3), because no node promotes another node's bytes.
+
 ## 10. Mutation Verification Flow
 
 Mutation-class statements include `ALTER ... UPDATE`, `ALTER ... DELETE`, large rewrites, and any write whose result depends on pre-state. v1 admits only bounded UPDATE/DELETE profiles; `INSERT ... SELECT` and large/unbounded mutations are deferred to v2.
@@ -504,9 +552,11 @@ sequenceDiagram
     HG->>K: submit mutation StatementEnvelopeV2
     K->>K: sequence mutation and install table/partition barrier
     K->>K: bind mutation to prev SafeSnapshotManifest
+    Note over U,K: ACK 1 = Sequenced (ordered + durable, barrier installed, not yet executed)
     K->>S: execute mutation in unsafe scratch cloned from safe parts
     S->>S: hardlink/reflink or ATTACH affected safe parts into scratch
     S->>S: run ClickHouse mutation, wait for materialization
+    Note over U,S: ACK 2 = Unsafe (source mutation materialized in scratch, route A default client ack)
     S->>K: claim removed parts, added parts, and source_claim_state_root
     K->>R: ReplayJob(prev safe snapshot + mutation SQL)
     R->>R: clone same affected safe parts, execute pinned mutation
@@ -515,6 +565,7 @@ sequenceDiagram
     alt quorum matches source claim AND partition-delta AND post-state commitment match
         K->>Safe: Keeper-signed replace old safe parts with new safe parts
         K->>K: publish new SafeSnapshotManifest
+        Note over S,Safe: ACK 3 = Safe (integrity-final)
     else mismatch or timeout
         K->>K: challenge replay or reject
         K->>S: drop unsafe mutation output
@@ -530,6 +581,37 @@ Mutation constraints:
 - Attempts to modify `_hg_row_id` or protocol columns are rejected.
 - **The mutation third check is a recomputed-commitment match, not a fetched-byte scan.** §9's three-way check is defined for the INSERT path, where every replica fetches the *same* replicated `hg_unsafe` candidate parts and its byte-side check (§9 check 3) recomputes `part_row_lthash` from those shared bytes against `RCRecord.candidate_parts`. A mutation has no shared fetched-byte object: each attesting replica independently regenerates the mutated parts in its own scratch (clone affected safe parts → run the pinned mutation), so part bytes legitimately differ across replicas even when honest. The mutation third check is therefore a materialization-grounded commitment match: each replica recomputes the post-mutation per-partition `partition_commitment` (`Σ part_row_lthash` over its own locally materialized post-state parts) and confirms it equals the safe pre-state partition's `partition_commitment` plus the source's claimed `partition_deltas` in the mutation `RCRecord`. The comparison is absolute-against-absolute — `partition_commitment` is an absolute accumulator (§8) while `partition_deltas` is the `Σ new − Σ old` delta, and LtHash additivity makes `post = pre + delta` exact — so it ties the source's claim to the bytes each verifier actually materialized, the mutation analogue of §9 check 3 (and what the `post-state commitment match` guard in the flow above denotes), without a fetched common-byte scan.
 - **Pre-state data availability (resolved).** Mutation replay requires the affected safe parts as pre-state. These are available because promotion publishes the verified post-state partition into every attesting replica's `hg_safe` through Keeper-signed `REPLACE PARTITION` (§12.2), and the `SafeSnapshotManifest` indexes them. A single honest replica holding the pre-state part suffices for challenge replay; a source that withholds its own copy cannot block verification. All-replica withholding is a liveness attack (no safety fix), but the §13 audit detects missing parts and drops withholding replicas from the read set. This resolves the v2 R3 concern without a separate proof-of-custody for pre-state.
+
+**Route B contrast — full-node parallel replay (the §16 fallback; route A above is the v1 baseline).** Route B's mutation flow is the *same shape* as its INSERT flow (§9): every node clones the affected safe parts locally, runs the pinned mutation, and attests its post-state root; Keeper takes the majority/recomputable root and each node promotes its own post-state in place. No source claim, no byte-side scan, no part movement.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as "User / SDK"
+    participant HG as "HouseGate"
+    participant K as "Keeper"
+    participant N as "All Replay Nodes (N1..Nk)"
+    participant L2 as "L2 Anchor"
+
+    U->>HG: UPDATE/DELETE (rewritten_sql) + signed envelope
+    HG->>K: validate signature, submit
+    K->>K: sequence + install (table, partition) barrier, bind to prev SafeSnapshotManifest
+    Note over U,K: ACK 1 = Sequenced
+    K->>N: sequenced mutation (L3 block + prev safe snapshot)
+    N->>N: clone affected safe parts into local scratch, run pinned mutation, compute old/new delta + post-state root
+    Note over N: ACK 2 = Unsafe (per-node provisional)
+    N->>K: ReplayAttestation(post-state root, partition_deltas)
+    K->>K: take majority / recomputable post-state root
+    alt quorum agrees
+        K->>L2: anchor, finality
+        K->>N: MarkSafe, each node replaces its own affected safe parts in place
+        Note over N: ACK 3 = Safe
+    else mismatch
+        K->>K: challenge replay or reject, minority node re-syncs
+    end
+```
+
+**Why this is cleaner under route B.** Route A's mutation third check had to be redefined as a recomputed-commitment match (not a fetched-byte scan) precisely because each replica regenerates the mutated parts locally — there is no shared source byte object to scan. That is *already* route B's model for everything. So under route B, INSERT and mutation use one uniform "execute locally, vote on the root" path with no INSERT/mutation asymmetry — one concrete reason §16 calls route B simpler and likely safer for a first correctness prototype. The ack-point difference is the same as for INSERT (§9): route A acks at *Unsafe* (write speed); route B's fast ack is *Sequenced*, with *Unsafe* only after node execution.
 
 ## 11. Safe, Unsafe, and Read Semantics
 
