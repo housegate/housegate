@@ -8,7 +8,7 @@
 
 本文档只设计 Sentio Storage Network 的数据完整性 / 防作恶层。它回答一个问题：当用户提交一条签名 write 后，其他人如何知道后续作为 `safe` 服务的 ClickHouse parts 是这条签名输入的忠实执行结果？
 
-基础拓扑在 integrity layer 相关边界上保持不变：一个 HouseGate 前置一个 ClickHouse service；所有 client traffic 都经过 HouseGate；ClickHouse 不直接对用户暴露；`hg_unsafe` 复制复用原生 ReplicatedMergeTree 和 ClickHouse Keeper 机制；Sentio Keeper 拥有 sequencing、attestation 和 safe-state publication；v1 Sentio Keeper 中心化并由 Sentio 运行；后续去中心化改变谁来检查以及谁承担经济后果，不改变证据格式。
+基础拓扑在 integrity layer 相关边界上保持不变：一个 HouseGate 前置一个 ClickHouse service；所有 client traffic 都经过 HouseGate；ClickHouse 不直接对用户暴露，而且底线不变量是一个 ClickHouse 实例只对其 co-located HouseGate 开 TCP——查询面如此，按 §12.1 复制面（Keeper + interserver，基于 ReplicatedMergeTree）也如此；`hg_unsafe` 复制复用原生 ReplicatedMergeTree 和 ClickHouse Keeper 机制；Sentio Keeper 拥有 sequencing、attestation 和 safe-state publication；v1 Sentio Keeper 中心化并由 Sentio 运行；后续去中心化改变谁来检查以及谁承担经济后果，不改变证据格式。
 
 v1 verification baseline 是 **optimistic source execution plus quorum replay promotion**。一个被选中的 source node 先执行，产出用于 freshness 的 `unsafe` parts。Keeper 记录 signed input 和 source 的 result claim。Verifier replicas 在 pinned executor 上，从 previous safe snapshot 开始 replay 同一份 L3 input。只有 quorum 复现 source claim，或 challenge replay 成功后，parts 才能进入 `safe` 表。
 
@@ -79,6 +79,7 @@ HouseGate 职责：
 - 从逻辑表面隐藏 reserved columns，除非 operator/debug view 显式请求。
 - 拒绝用户写入、更新、重命名或删除 reserved columns。
 - 上报 Keeper 和 replay workers 所需的 candidate parts、ClickHouse system state 和 metrics。
+- 可选地**转发 ClickHouse 的复制面**，使一个 ClickHouse 实例只对其 co-located HouseGate 开 TCP（§1）：ClickHouse Keeper / ZooKeeper 客户端连接（L4 TCP 透传到 Keeper ensemble）和 interserver-HTTP 取 part 的端口（HTTP 反代到对端的 HouseGate，复用跨-HouseGate 的 `__peer__` 路由）。这是*为网络隔离做的转发*，不是 gating——HouseGate 只搬字节，不解析 `ReplicationLogEntry`、不控制 merge（gating 既不可行也无必要，§16）——所以它加的是网络中介、不是 integrity（§9），代价是 HouseGate 背上复制数据面（§12.1）。当复制面改由网络策略隔离时，这层转发就不需要。
 
 HouseGate 不能成为 correctness 的最终裁判。它可以为 fast profiles 计算 expected claims，但 `safe` 依赖 Keeper validation 和 replay attestations。
 
@@ -585,14 +586,16 @@ challenge window 长度（safety vs latency）是 P5 参数；工作假设是与
 
 v1 的物理布局是 **`hg_unsafe` = ReplicatedMergeTree，`hg_safe` = MergeTree。** 这个拆分让 HouseGate 完全不需要去 gate ClickHouse 的复制机制：
 
-- `hg_unsafe` 是未验证的 buffer。它的原生 ReplicatedMergeTree 复制通过 interserver HTTP 免费把 part 分发到每个 replica；`hg_unsafe` 内部的 background merge 也不影响安全，因为 promotion 反正会校验实际 fetch 到的字节（§9）。这里没有任何东西需要 gate。
+- `hg_unsafe` 是未验证的 buffer。它的原生 ReplicatedMergeTree 复制通过 interserver HTTP 把 part 分发到每个 replica、不花 integrity 层任何功夫（原生 RMT 做分发；§12.1 那个可选的复制面转发只是多一个网络跳，不增加新的分发逻辑）；`hg_unsafe` 内部的 background merge 也不影响安全，因为 promotion 反正会校验实际 fetch 到的字节（§9）。这里没有任何东西需要 gate。
 - `hg_safe` 是普通 MergeTree。它不在任何 ReplicatedMergeTree Keeper path 上，没有 `MERGE_PARTS`/`ATTACH_PART` log entry 需要 gate，只通过下面描述的 promotion 操作接收写入。
 
-因为两个 engine 都不需要 HouseGate 拦截或解析 ClickHouse 的 ZooKeeper 协议，早期草案里"HouseGate 作为 ClickHouse-to-Keeper reverse proxy"的框架被放弃。ClickHouse 直连自己的 Keeper 做 `hg_unsafe` 复制；HouseGate 只驱动 promotion 操作和 Sentio 的 attestation 层。早期草案曾提出从 reverse proxy 去 gate-enforce ReplicatedMergeTree Keeper path 和 interserver HTTP 端口；这在本拆分下既无必要，又必须深度解析 ClickHouse 内部的 `ReplicationLogEntry` 序列化（跨版本不是稳定 API）才能实现，因此不采用。
+因为两个 engine 都不需要 HouseGate 去 *gate* ClickHouse 的复制，早期草案里“HouseGate 作为 ClickHouse-to-Keeper reverse proxy **来 gate merges**”的框架被放弃——但被放弃的只是 gating 这层。**Gating**（检查 ReplicatedMergeTree 的 Keeper path / interserver HTTP 来控制哪些 merge 或 part 被准入）既无必要——promotion 反正校验实际 fetch 到的字节（§9）——又不可行，因为它要深度解析 ClickHouse 内部的 `ReplicationLogEntry` 序列化（跨版本不是稳定 API），而且 part 字节走 interserver HTTP、不走 Keeper。就*正确性*而言，ClickHouse 因此自己跑复制：连自己的 Keeper、走 interserver HTTP 取 part，HouseGate 只驱动 promotion 操作和 Sentio 的 attestation 层。
+
+**转发复制面（为网络隔离，可选）。** gating 出局了，但*转发*没有——而且转发正是让 route A 保住“一个 ClickHouse 实例只对其 co-located HouseGate 开 TCP”这条底线不变量（§1）的办法。HouseGate 可以作为纯 proxy 前置复制面、不解析协议：把 ClickHouse 的 `<zookeeper>` 配置指向本地 HouseGate，由它**L4 TCP 透传**到真正的 Keeper ensemble（对 ensemble 成员做健康检查 failover）；把 ClickHouse 的 `interserver_http_host` 设成本地 HouseGate，由它**HTTP 反代**把取 part 的请求转发到目标副本的 HouseGate（复用跨-HouseGate 的 `__peer__` 路由）。这样 ClickHouse 在两个面上都只对其 co-located HouseGate 开 TCP。代价是真实的：HouseGate 背上整个复制数据面（part 传输的带宽 + CPU），每次 ZK 操作多一个本地跳，interserver 取 part 多两跳（本地 HouseGate → 对端 HouseGate → 对端 ClickHouse）延迟，而且 ZK ensemble 的 session/failover 处理要写对。这层转发加的是**网络隔离，不是 integrity**——integrity 不随 part 怎么搬而变（§9）。当复制面改由网络策略隔离（防火墙到 cluster 子网）时，这层转发就不需要；route B 则从根上避开这个问题（no part movement → 不依赖 Keeper/interserver）。
 
 两个"Keeper"角色仍要明确命名以避免歧义：
 
-- **ClickHouse Keeper**（ZooKeeper 兼容）：ClickHouse 自己拥有，仅用于 `hg_unsafe` 的 ReplicatedMergeTree 状态。HouseGate 从不读写它。
+- **ClickHouse Keeper**（ZooKeeper 兼容）：ClickHouse 自己拥有，仅用于 `hg_unsafe` 的 ReplicatedMergeTree 状态。HouseGate 从不*读取或解析*它——至多为网络隔离做 L4 转发 ZK 字节（见上），绝不解析。
 - **Sentio Keeper**（§5.2 的 L3-block sequencer 和 attestation collector）：integrity 层拥有。驱动 sequencing、replay job 下发和 promotion。
 
 ### 12.2 Promotion = `REPLACE PARTITION`，`hg_unsafe` 停 merge
@@ -745,7 +748,7 @@ P4：扩展语言表面。
 
 **只用 HouseGate streaming LtHash。** 对 scalar INSERTs 性能最好，但不能作为通用 v1 proof，因为 JSON/Map 和 server-side materialization 不保留 wire bytes。
 
-**HouseGate 作为 ClickHouse-to-Keeper reverse proxy 来 gate merges。** 考虑过，被否决。纯 TCP proxy 看不见 ZooKeeper 请求边界和 `ReplicationLogEntry` payload，所以 gate 必须深度解析 ClickHouse 内部序列化——这不是跨版本的稳定 API；即便做到了，part *字节*走的是 interserver HTTP 端口而不是 Keeper，所以只 gate Keeper 控制不了字节流。§12.1 的 engine 拆分（`hg_unsafe` ReplicatedMergeTree 不 gate，`hg_safe` MergeTree）让 gate 变得没必要：ClickHouse 复制机制根本不碰 `hg_safe`，所以没什么需要拦截的。
+**HouseGate 作为 ClickHouse-to-Keeper reverse proxy 来 gate merges。** **gating** 这层用途——检查/控制复制日志来决定哪些 merge 或 part 被准入——考虑过、被否决。纯 TCP proxy 看不见 ZooKeeper 请求边界和 `ReplicationLogEntry` payload，所以 gate 必须深度解析 ClickHouse 内部序列化——这不是跨版本的稳定 API；即便做到了，part *字节*走的是 interserver HTTP 端口而不是 Keeper，所以只 gate Keeper 控制不了字节流。§12.1 的 engine 拆分（`hg_unsafe` ReplicatedMergeTree 不 gate，`hg_safe` MergeTree）本来就让 gate 没必要：ClickHouse 复制机制根本不碰 `hg_safe`，所以没什么需要拦截的。这里否决的只是 *gating*——**转发**复制面（L4 ZooKeeper 透传 + interserver-HTTP 反代，不解析）是另一回事、且可行：它是 route A 保住“ClickHouse 唯一 TCP 出口是其 co-located HouseGate”的办法（§12.1），加的是网络隔离、不是 integrity。
 
 **只用 append-only WAL table。** 历史和高度更容易推理，但读成本很高，且 6 月 17 日讨论已收敛到物理 unsafe/safe 表。
 
@@ -756,6 +759,7 @@ P4：扩展语言表面。
 | Unsafe-ack 延迟 | 快——source 立即产出 `unsafe` parts（optimistic-forward 可在 sequencing 前就写），客户端的写以**写速度**确认、异步验证 | 慢——没有快写者；unsafe window 要到 sequencing + 节点执行之后才打开 |
 | 实现面 | 大——整个 promotion 数据面：`hg_promote` 影子表、`REPLACE PARTITION`、byte-side scan（§9 check 3）、per-`(table, partition_id)` 提升串行化、跨引擎 `ATTACH`、`STOP MERGES` + parts ceiling | 小——每节点本地计算；不搬 part、无 promotion 影子表、无 byte-side scan |
 | 跨节点字节一致性 | safe replicas 收敛到同一份被 promote 的 source 字节 → 字节级一致的 safe 面，§13 serving audit 可**直接按字节比对** | 各节点保留自己本地算出的字节（逻辑相等、物理发散）→ 跨节点比对只能在 LtHash/逻辑层 |
+| 网络隔离（ClickHouse egress） | RMT 会开跨节点 TCP（ClickHouse ↔ Keeper、ClickHouse ↔ ClickHouse interserver）；要保住“ClickHouse 只对其 co-located HouseGate 开 TCP”的底线不变量（§1），HouseGate 必须转发复制面（§12.1）——代价：HouseGate 背复制带宽 | 无 part movement → 不依赖 Keeper/interserver；ClickHouse 原生就只对其 co-located HouseGate 开 TCP |
 | 信任面 | 恶意 source 可在真 root 下落 `bytes_evil`——这正是 byte-side check（§9 check 3）存在的原因 | 坏节点只污染自己那份，被 majority/recomputability 抓 |
 | 原型期简单度 | 要对的更多 | 更简单，对第一个 correctness prototype 也可能更安全 |
 
