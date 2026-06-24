@@ -291,6 +291,21 @@ statement_id = client_account || client_seq || client_nonce
 - **v1: block-level.** `schema_snapshot_id` is the same for every statement in an L3 block; a block may not contain schema changes (DDL statements that change the schema must occupy their own block or take effect at a block boundary). The executor replays the whole block under one schema. Simple and unambiguous.
 - **P4 (mutation/DDL completeness): statement-level.** When more DDL is admitted, a DDL statement mints a new schema snapshot and subsequent statements in the same or later block carry the new `schema_snapshot_id`.
 
+Schema-changing DDL uses a separate **schema-transition lane**, not the unsafe-part promotion path. In v1 every admitted schema change is sequenced as a singleton block or a block-boundary transition. Keeper installs a table/database-level schema barrier, stops admitting new writes under the old schema, and drains or rejects outstanding old-schema unsafe writes before the new schema becomes active. The DDL mints a new `schema_snapshot_id` and `schema_root`; SNode applies the Keeper-signed DDL to all protocol-owned physical surfaces (`hg_safe`, `hg_unsafe`, `hg_promote` templates, mutation scratch templates, and replay scratch templates) and reports the observed `schema_hash`. Normal writes resume only after the local schema matches the anchored root. Verifiers derive the schema exclusively from the anchored DDL/settings log; source-side `system.columns` is an observation, not authority.
+
+DDL admission classes for v1:
+
+| Statement class | v1 route |
+|---|---|
+| `CREATE TABLE` | Admit only if engine, partition key, order key, primary key, storage policy, defaults/materialized expressions, and types are on the verified whitelist. Keeper allocates stable `table_id` and `column_id` values and injects reserved protocol columns such as `_hg_row_id`. |
+| `ADD COLUMN` | Metadata-only only for non-key, non-reserved columns with deterministic immutable `DEFAULT`/`NULL` semantics and a stable `column_id`. This is commitment-neutral only if the profile explicitly defines how old sealed parts canonicalize a missing column; otherwise the statement is rejected or upgraded to mutation-class rehash. Adding a column that changes partition/order/primary keys, projections, indexes, or materializes values into existing rows is not metadata-only. |
+| `RENAME COLUMN` | Metadata-only: row commitments bind `column_id`, not display names. Reserved protocol columns may not be renamed. |
+| `MODIFY DEFAULT` | Rejected in v1 unless the profile proves it affects only future inserts and does not change read-time values for old sealed parts. Defaults that are evaluated at read time are not silently neutral. |
+| `DROP COLUMN` / `MODIFY COLUMN` type | Rejected in v1 by default. A later admitted form must be mutation-class rehash: clone affected safe parts into scratch, apply the DDL, recompute old/new partition commitments under the new schema, collect quorum attestations, and publish the rewritten partitions under a new `schema_snapshot_id`. |
+| `TRUNCATE` / `DROP PARTITION` | Mutation-class but cheap: the delta is `-partition_commitment` for the dropped safe partition, with the same barrier and attestation rules as bounded mutations. |
+| Partition key, order key, primary key, engine, storage policy, TTL, projection/index changes | Rejected in v1. These change storage/promotion/merge invariants rather than just catalog metadata; the safe path is create-new-table plus replay/reindex. |
+| `_hg_row_id` and other protocol columns | Never user-modifiable: reject write, update, rename, drop, type/default changes, and key changes touching them. |
+
 Keeper assigns and anchors:
 
 ```text

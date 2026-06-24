@@ -291,6 +291,21 @@ statement_id = client_account || client_seq || client_nonce
 - **v1：block 级。** `schema_snapshot_id` 对一个 L3 block 内所有 statement 相同；block 不允许 schema 变化（改变 schema 的 DDL statement 必须独占一个 block，或在 block 边界生效）。executor 在同一个 schema 下重放整个 block。简单且无歧义。
 - **P4（mutation/DDL completeness）：statement 级。** 放开更多 DDL 后，DDL statement 会铸造新 schema snapshot，后续 statement 带新 `schema_snapshot_id`。
 
+Schema-changing DDL 走单独的 **schema-transition lane**，不走 unsafe-part promotion 路径。v1 每个被准入的 schema 变更都作为 singleton block 或 block-boundary transition 被 sequence。Keeper 安装 table/database 级 schema barrier，停止准入旧 schema 下的新写入，并在新 schema 生效前 drain 或 reject 仍未完成的旧 schema unsafe writes。DDL 铸造新的 `schema_snapshot_id` 和 `schema_root`；SNode 把 Keeper-signed DDL 应用到所有协议管理的物理 surface（`hg_safe`、`hg_unsafe`、`hg_promote` templates、mutation scratch templates、replay scratch templates），并上报观测到的 `schema_hash`。只有当本地 schema 匹配 anchored root 后，普通写入才恢复。Verifier 只从 anchored DDL/settings log 推导 schema；source 侧 `system.columns` 只是观测值，不是权威。
+
+v1 DDL admission 分类：
+
+| Statement class | v1 route |
+|---|---|
+| `CREATE TABLE` | 只有 engine、partition key、order key、primary key、storage policy、defaults/materialized expressions 和 types 都在 verified whitelist 内才准入。Keeper 分配稳定的 `table_id` 和 `column_id`，并注入 `_hg_row_id` 等 reserved protocol columns。 |
+| `ADD COLUMN` | 只有非 key、非 reserved column，且具备 deterministic immutable `DEFAULT`/`NULL` 语义和稳定 `column_id` 时，才可以 metadata-only。这只有在 profile 明确定义旧 sealed parts 如何 canonicalize missing column 时才是 commitment-neutral；否则该 statement 被拒绝，或升级成 mutation-class rehash。新增会改变 partition/order/primary keys、projections、indexes，或需要把值物化进已有 rows 的 column，都不是 metadata-only。 |
+| `RENAME COLUMN` | Metadata-only：row commitment 绑定 `column_id`，不是 display name。Reserved protocol columns 不能 rename。 |
+| `MODIFY DEFAULT` | v1 拒绝，除非 profile 能证明它只影响未来 inserts，且不会改变旧 sealed parts 的 read-time values。Read-time 计算的 defaults 不能被静默视为 neutral。 |
+| `DROP COLUMN` / `MODIFY COLUMN` type | v1 默认拒绝。后续若要准入，必须走 mutation-class rehash：把 affected safe parts clone 进 scratch，应用 DDL，在新 schema 下重算 old/new partition commitments，收集 quorum attestations，再在新的 `schema_snapshot_id` 下发布 rewritten partitions。 |
+| `TRUNCATE` / `DROP PARTITION` | Mutation-class 但便宜：delta 是被 drop 的 safe partition 的 `-partition_commitment`，使用和 bounded mutations 相同的 barrier 与 attestation 规则。 |
+| Partition key、order key、primary key、engine、storage policy、TTL、projection/index changes | v1 拒绝。这些改变的是 storage/promotion/merge invariants，不只是 catalog metadata；安全路径是 create-new-table 加 replay/reindex。 |
+| `_hg_row_id` 和其他 protocol columns | 用户永远不可修改：凡是 write、update、rename、drop、type/default change、key change 触及它们，一律拒绝。 |
+
 Keeper 分配并锚定：
 
 ```text
