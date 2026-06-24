@@ -225,7 +225,8 @@ func TestPhase3UsePivot_USEMidSession_PivotsToFakePeer(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	bs.preServe(ctx)
-	go func() { _ = externalSL.Server.Serve(ctx, ln) }()
+	externalServer := requireProxyServer(t, *externalSL)
+	go func() { _ = externalServer.Serve(ctx, ln) }()
 
 	// Step 6: connect test client.
 	clientConn, err := net.DialTimeout("tcp", ln.Addr().String(), 2*time.Second)

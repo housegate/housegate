@@ -111,6 +111,38 @@ HOUSEGATE_AGE_IDENTITY_FILE=~/.housegate.age \
 | `log_level` | string | No | `info` | Default level for housegate's own log output. Accepts `debug`/`info`/`warn`/`error`/`fatal` (case-insensitive) and slog's offset syntax (`DEBUG+1`). CLI override: `-log-level`; env: `HOUSEGATE_LOG_LEVEL`. |
 | `log_file` | string | No | `` (stderr) | Redirect housegate's own log output to this file (`O_APPEND \| O_CREATE`, ANSI off). Rotation is external (`logrotate`). CLI override: `-log-file`; env: `HOUSEGATE_LOG_FILE`. |
 
+### `replication_proxy` — Optional Replication-Plane Forwarding
+
+`replication_proxy` is server-mode only and disabled by default. It adds a Keeper/ZooKeeper L4 TCP passthrough listener plus an interserver HTTP reverse proxy listener so local ClickHouse can keep replication-plane egress pointed at its co-located HouseGate. This is forwarding for network isolation, not integrity: HouseGate does not parse ZooKeeper requests, does not inspect `ReplicationLogEntry`, does not gate merges, and does not validate part bytes on this path.
+
+ClickHouse should point `<zookeeper>` at the local HouseGate Keeper listener, for example `<host>127.0.0.1</host><port>9181</port>`, while HouseGate `replication_proxy.keeper.upstreams` points at the real ClickHouse Keeper ensemble. This listener is a raw L4 TCP passthrough; one client connection maps to one selected Keeper upstream.
+
+ClickHouse should set `interserver_http_host` and `interserver_http_port` to the local HouseGate interserver listener, for example `127.0.0.1:9010`, while HouseGate `replication_proxy.interserver.local_upstream` points at the local ClickHouse interserver HTTP port and `routes[].upstream` points at peer HouseGate interserver listeners. For ordinary ClickHouse interserver requests, configure exactly one `routes[]` entry on that listener: ClickHouse sends no HouseGate route header, so HouseGate selects the sole route automatically. Multiple routes without a selector fail with HTTP 400 instead of being treated as inbound peer traffic; the internal `X-Housegate-Interserver-Peer` selector exists for tests/future non-ClickHouse callers, not as a ClickHouse operator mechanism. The local ClickHouse interserver upstream must bind a different local-only port, such as `127.0.0.1:9009`, because HouseGate owns the advertised interserver address; do not let ClickHouse and HouseGate bind the same host:port. Unauthenticated local egress is source-bound to loopback callers in code, including no-header single-route egress and explicit route-header egress; peer-reachable remote traffic must use HouseGate peer-auth headers and is forwarded only to the local ClickHouse upstream after validation.
+
+```yaml
+indexer_id: 1000
+relay_private_key_hex: "0x..."
+peer_token_ttl: "1h"
+auth:
+  enabled: true
+  allowed_addresses:
+    - "0x..." # address derived from the trusted peer relay key
+replication_proxy:
+  keeper:
+    enabled: true
+    listen: "127.0.0.1:9181"
+    upstreams:
+      - "keeper-1.internal:9181"
+      - "keeper-2.internal:9181"
+  interserver:
+    enabled: true
+    listen: "127.0.0.1:9010"
+    local_upstream: "127.0.0.1:9009"
+    routes:
+      - peer: "1001" # decimal target indexer id, used as the peer-login JWS audience
+        upstream: "peer-1001-housegate.internal:9010"
+```
+
 ### Top-Level — Cross-Cutting Credentials
 
 | Key | Type | Required | Default | Description |

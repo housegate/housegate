@@ -51,6 +51,44 @@ rewriter:
   physical_database: testnet
   delimiter: "."
 
+# Optional replication-plane forwarding. Disabled here by default; uncomment in
+# deployments where ClickHouse should open replication-plane TCP only to its
+# co-located HouseGate. This is forwarding for network isolation, not integrity:
+# Keeper traffic is L4 TCP passthrough and part fetches use the interserver HTTP
+# reverse proxy; HouseGate does not parse replication logs or gate merges here.
+#
+# ClickHouse config shape:
+#   <zookeeper><node><host>127.0.0.1</host><port>9181</port></node></zookeeper>
+#   <interserver_http_host>127.0.0.1</interserver_http_host>
+#   <interserver_http_port>9010</interserver_http_port>
+#
+# Bind caveat: HouseGate owns 127.0.0.1:9010 in this example, so the local
+# ClickHouse interserver upstream must bind a different local-only port such as
+# 127.0.0.1:9009. HouseGate accepts unauthenticated local egress only from a
+# loopback source; peer-reachable remote traffic must use peer-auth headers and
+# forwards only to the local ClickHouse upstream after validation.
+#
+# Route caveat: ordinary ClickHouse interserver requests carry no HouseGate
+# route selector, so this listener must have exactly one route for the
+# ClickHouse-shaped path. Multiple routes without a selector fail with HTTP 400;
+# the internal X-Housegate-Interserver-Peer selector is for tests/future
+# non-ClickHouse callers, not normal ClickHouse config.
+#
+# replication_proxy:
+#   keeper:
+#     enabled: true
+#     listen: "127.0.0.1:9181"
+#     upstreams:
+#       - "keeper-1.internal:9181"
+#       - "keeper-2.internal:9181"
+#   interserver:
+#     enabled: true
+#     listen: "127.0.0.1:9010"
+#     local_upstream: "127.0.0.1:9009"
+#     routes:
+#       - peer: "1001"  # decimal target indexer id used as peer-login audience
+#         upstream: "peer-1001-housegate.internal:9010"
+
 agent:
   mode: false
 

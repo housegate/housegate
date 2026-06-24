@@ -264,7 +264,7 @@ func (p *proxyImpl) Run(ctx context.Context) error {
 			"mode", p.cfg.Mode(),
 			"indexer_id", p.IndexerId(),
 		)
-		g.Go(func() error { return sl.Server.Serve(gctx, ln) })
+		g.Go(func() error { return sl.Runner.Serve(gctx, ln) })
 	}
 	return g.Wait()
 }
@@ -293,7 +293,7 @@ func (p *proxyImpl) RunWith(ctx context.Context, ln net.Listener) error {
 		"mode", p.cfg.Mode(),
 		"indexer_id", p.IndexerId(),
 	)
-	return p.built.listeners[0].Server.Serve(ctx, ln)
+	return p.built.listeners[0].Runner.Serve(ctx, ln)
 }
 
 func (p *proxyImpl) Addr() net.Addr {
