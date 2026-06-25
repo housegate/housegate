@@ -44,6 +44,7 @@ import (
 	"housegate/housegate/pkg/replicationproxy"
 	"housegate/housegate/pkg/rewriter"
 	"housegate/housegate/pkg/sqlmeta"
+	"housegate/housegate/pkg/storageintegrity"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -167,6 +168,86 @@ func buildClusterManager(cfg *config.Config) (*cluster.Manager, error) {
 	return nil, nil
 }
 
+func buildStorageIntegrityRuntime(cfg config.StorageIntegrityConfig, opts Options) (*storageintegrity.Runtime, error) {
+	if !cfg.Enabled {
+		return nil, nil
+	}
+	payloads, err := storageintegrity.NewMockPayloadStore(cfg.MockPayloadStore.Path)
+	if err != nil {
+		return nil, fmt.Errorf("build storage_integrity mock payload store: %w", err)
+	}
+	rt := &storageintegrity.Runtime{
+		Payloads:     payloads,
+		PollInterval: cfg.Workers.PollInterval.Duration,
+	}
+	if cfg.Workers.Finality {
+		if opts.StorageIntegrityFinalitySource == nil {
+			return nil, fmt.Errorf("storage_integrity finality source is required when finality worker is enabled")
+		}
+		if opts.StorageIntegrityFinalitySink == nil {
+			return nil, fmt.Errorf("storage_integrity finality sink is required when finality worker is enabled")
+		}
+		rt.FinalityRequests = opts.StorageIntegrityFinalitySource
+		rt.Finality = &storageintegrity.MockFinalityWatcher{
+			Delay: cfg.MockFinality.Delay.Duration,
+			Sink:  opts.StorageIntegrityFinalitySink,
+		}
+	}
+	if cfg.Workers.Replay {
+		if opts.StorageIntegrityReplayJobs == nil {
+			return nil, fmt.Errorf("storage_integrity replay job source is required when replay worker is enabled")
+		}
+		if opts.StorageIntegrityReplayVerifier == nil {
+			return nil, fmt.Errorf("storage_integrity replay verifier is required when replay worker is enabled")
+		}
+		if opts.StorageIntegrityReplaySink == nil {
+			return nil, fmt.Errorf("storage_integrity replay sink is required when replay worker is enabled")
+		}
+		rt.Replay = &storageintegrity.ReplayWorker{
+			Verifier: opts.StorageIntegrityReplayVerifier,
+			Sink:     opts.StorageIntegrityReplaySink,
+		}
+		rt.ReplayJobs = opts.StorageIntegrityReplayJobs
+	}
+	if cfg.Workers.Promotion {
+		if opts.StorageIntegrityPromotionSrc == nil {
+			return nil, fmt.Errorf("storage_integrity promotion source is required when promotion worker is enabled")
+		}
+		if opts.StorageIntegrityPromotionExec == nil {
+			return nil, fmt.Errorf("storage_integrity promotion executor is required when promotion worker is enabled")
+		}
+		if opts.StorageIntegrityPromotionSink == nil {
+			return nil, fmt.Errorf("storage_integrity promotion sink is required when promotion worker is enabled")
+		}
+		rt.Promotion = &storageintegrity.PromotionWorker{
+			Executor: opts.StorageIntegrityPromotionExec,
+			Sink:     opts.StorageIntegrityPromotionSink,
+		}
+		rt.Promotions = opts.StorageIntegrityPromotionSrc
+	}
+	if cfg.Workers.SafeAudit {
+		if opts.StorageIntegrityAuditSource == nil {
+			return nil, fmt.Errorf("storage_integrity safe audit source is required when safe audit worker is enabled")
+		}
+		if opts.StorageIntegrityAuditReader == nil {
+			return nil, fmt.Errorf("storage_integrity safe audit reader is required when safe audit worker is enabled")
+		}
+		if opts.StorageIntegrityAuditSigner == nil {
+			return nil, fmt.Errorf("storage_integrity safe audit signer is required when safe audit worker is enabled")
+		}
+		if opts.StorageIntegrityAuditSink == nil {
+			return nil, fmt.Errorf("storage_integrity safe audit sink is required when safe audit worker is enabled")
+		}
+		rt.SafeAudit = &storageintegrity.SafeAuditWorker{
+			Reader: opts.StorageIntegrityAuditReader,
+			Signer: opts.StorageIntegrityAuditSigner,
+			Sink:   opts.StorageIntegrityAuditSink,
+		}
+		rt.SafeAudits = opts.StorageIntegrityAuditSource
+	}
+	return rt, nil
+}
+
 // listenerRunner is the narrow lifecycle surface shared by native ClickHouse
 // proxy listeners and replication-plane listeners.
 type listenerRunner interface {
@@ -199,14 +280,20 @@ type serverListener struct {
 	Label      string // e.g. "external", "internal", "agent", "replication-keeper", "replication-interserver"
 }
 
+type backgroundService struct {
+	Label string
+	Run   func(ctx context.Context) error
+}
+
 // builtServer is what each per-mode builder returns to the proxyImpl.
 // preServe is run once just before any Serve call (e.g. cluster.Start).
 // teardown runs after all Serve calls return; it is the reverse-order
 // cleanup of every lib-built dep.
 type builtServer struct {
-	listeners []serverListener
-	preServe  func(ctx context.Context)
-	teardown  func()
+	listeners  []serverListener
+	background []backgroundService
+	preServe   func(ctx context.Context)
+	teardown   func()
 	// metricsRegistry is the dedicated Prometheus registry for the downstream
 	// metrics Collector (nil when collection is disabled or in agent mode).
 	// Exposed to hosts via Proxy.MetricsRegistry().
@@ -752,6 +839,18 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		})
 	}
 
+	storageRuntime, err := buildStorageIntegrityRuntime(cfg.StorageIntegrity, opts)
+	if err != nil {
+		return nil, err
+	}
+	var background []backgroundService
+	if storageRuntime != nil {
+		background = append(background, backgroundService{
+			Label: "storage_integrity",
+			Run:   storageRuntime.Run,
+		})
+	}
+
 	// Downstream-metrics Collector (host + runtime + per-replica ClickHouse).
 	// Started in preServe (mirroring libCluster.Start), stopped via the run ctx;
 	// its poller connections are closed on teardown.
@@ -762,6 +861,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 
 	return &builtServer{
 		listeners:       listeners,
+		background:      background,
 		metricsRegistry: metricsRegistry,
 		preServe: func(ctx context.Context) {
 			if libCluster != nil {

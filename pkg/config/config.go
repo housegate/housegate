@@ -154,6 +154,7 @@ type Config struct {
 	Logging          LoggingConfig          `json:"logging"          yaml:"logging"`
 	NetworkState     NetworkStateConfig     `json:"network_state"    yaml:"network_state"`
 	ReplicationProxy ReplicationProxyConfig `json:"replication_proxy" yaml:"replication_proxy"`
+	StorageIntegrity StorageIntegrityConfig `json:"storage_integrity" yaml:"storage_integrity"`
 
 	// Observability owns the metrics Collector + pprof config. Read by
 	// buildServer to construct the pkg/metrics Collector; no plugin owns it.
@@ -434,6 +435,9 @@ func (c *Config) Validate() error {
 	if err := c.ReplicationProxy.validate(*c, c.Mode()); err != nil {
 		errs = append(errs, err)
 	}
+	if err := c.StorageIntegrity.validate(c.Mode()); err != nil {
+		errs = append(errs, err)
+	}
 
 	if c.KeeperProxy.Enabled() {
 		seen := map[string]bool{}
@@ -612,6 +616,7 @@ func Default() Config {
 			Source: EnvOrDefault("HOUSEGATE_NETWORK_STATE_SOURCE", EnvOrDefault("HOUSEGATE_NETWORK_STATE_REDIS", "")),
 		},
 		ReplicationProxy: defaultReplicationProxyConfig(),
+		StorageIntegrity: defaultStorageIntegrityConfig(),
 		Observability: ObservabilityConfig{
 			Collector: CollectorConfig{
 				Enabled:     EnvOrDefault("HOUSEGATE_COLLECTOR_ENABLED", "true") != "false",

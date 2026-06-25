@@ -1,0 +1,34 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "storageintegrity",
+    srcs = [
+        "mock_finality.go",
+        "mock_payload_store.go",
+        "promotion_worker.go",
+        "replay_worker.go",
+        "runtime.go",
+        "safe_audit_worker.go",
+        "types.go",
+    ],
+    importpath = "housegate/housegate/pkg/storageintegrity",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/replay",
+        "@org_golang_x_sync//errgroup",
+    ],
+)
+
+go_test(
+    name = "storageintegrity_test",
+    srcs = [
+        "mock_finality_test.go",
+        "mock_payload_store_test.go",
+        "promotion_worker_test.go",
+        "replay_worker_test.go",
+        "safe_audit_worker_test.go",
+        "test_helpers_test.go",
+    ],
+    embed = [":storageintegrity"],
+    deps = ["//pkg/replay"],
+)

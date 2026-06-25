@@ -29,6 +29,7 @@ import (
 	"housegate/housegate/pkg/plugins/commitgate"
 	"housegate/housegate/pkg/registry"
 	"housegate/housegate/pkg/rewriter"
+	"housegate/housegate/pkg/storageintegrity"
 )
 
 // Proxy is a started, ready-to-Serve proxy. Run/RunWith blocks until
@@ -88,6 +89,23 @@ type Options struct {
 	UsageClient           billing.UsageClient
 	IndexingUsageReporter billing.IndexingUsageReporter
 	Cluster               cluster.Cluster
+
+	// StorageIntegrity* dependencies are the HouseGate-side seams for the
+	// HouseKeeper storage-integrity protocol. Config owns enablement; these
+	// injected interfaces are replaced by a real HouseKeeper control-plane
+	// client in production and by fakes in tests/local demos.
+	StorageIntegrityReplayVerifier storageintegrity.ReplayVerifier
+	StorageIntegrityReplayJobs     storageintegrity.ReplayJobSource
+	StorageIntegrityReplaySink     storageintegrity.ReplaySink
+	StorageIntegrityFinalitySource storageintegrity.FinalitySource
+	StorageIntegrityFinalitySink   storageintegrity.FinalitySink
+	StorageIntegrityPromotionSrc   storageintegrity.PromotionSource
+	StorageIntegrityPromotionExec  storageintegrity.PromotionExecutor
+	StorageIntegrityPromotionSink  storageintegrity.PromotionSink
+	StorageIntegrityAuditSource    storageintegrity.SafeAuditSource
+	StorageIntegrityAuditReader    storageintegrity.SafeAuditReader
+	StorageIntegrityAuditSigner    storageintegrity.SafeAuditSigner
+	StorageIntegrityAuditSink      storageintegrity.SafeAuditSink
 
 	// CommitGateObservers gate DDL statements (CREATE / DROP TABLE,
 	// CREATE / DROP DATABASE) on host-supplied external commits.
@@ -256,6 +274,15 @@ func (p *proxyImpl) Run(ctx context.Context) error {
 	defer p.teardown()
 
 	g, gctx := errgroup.WithContext(ctx)
+	for _, bg := range p.built.background {
+		bg := bg
+		p.logger.Infow("housegate background service starting",
+			"label", bg.Label,
+			"mode", p.cfg.Mode(),
+			"indexer_id", p.IndexerId(),
+		)
+		g.Go(func() error { return bg.Run(gctx) })
+	}
 	for i, sl := range p.built.listeners {
 		sl, ln := sl, lns[i]
 		p.logger.Infow("housegate listening",
@@ -293,7 +320,18 @@ func (p *proxyImpl) RunWith(ctx context.Context, ln net.Listener) error {
 		"mode", p.cfg.Mode(),
 		"indexer_id", p.IndexerId(),
 	)
-	return p.built.listeners[0].Runner.Serve(ctx, ln)
+	g, gctx := errgroup.WithContext(ctx)
+	for _, bg := range p.built.background {
+		bg := bg
+		p.logger.Infow("housegate background service starting",
+			"label", bg.Label,
+			"mode", p.cfg.Mode(),
+			"indexer_id", p.IndexerId(),
+		)
+		g.Go(func() error { return bg.Run(gctx) })
+	}
+	g.Go(func() error { return p.built.listeners[0].Runner.Serve(gctx, ln) })
+	return g.Wait()
 }
 
 func (p *proxyImpl) Addr() net.Addr {
