@@ -151,8 +151,9 @@ type Config struct {
 
 	// --- Plumbing sections owned by pkg/config ---
 
-	Logging      LoggingConfig      `json:"logging"       yaml:"logging"`
-	NetworkState NetworkStateConfig `json:"network_state" yaml:"network_state"`
+	Logging          LoggingConfig          `json:"logging"          yaml:"logging"`
+	NetworkState     NetworkStateConfig     `json:"network_state"    yaml:"network_state"`
+	ReplicationProxy ReplicationProxyConfig `json:"replication_proxy" yaml:"replication_proxy"`
 
 	// Observability owns the metrics Collector + pprof config. Read by
 	// buildServer to construct the pkg/metrics Collector; no plugin owns it.
@@ -430,6 +431,9 @@ func (c *Config) Validate() error {
 			errs = append(errs, fmt.Errorf("internal_listen: invalid host:port %q: %w", c.InternalListen, err))
 		}
 	}
+	if err := c.ReplicationProxy.validate(*c, c.Mode()); err != nil {
+		errs = append(errs, err)
+	}
 
 	if c.KeeperProxy.Enabled() {
 		seen := map[string]bool{}
@@ -607,6 +611,7 @@ func Default() Config {
 			// and additionally accepts a YAML path.
 			Source: EnvOrDefault("HOUSEGATE_NETWORK_STATE_SOURCE", EnvOrDefault("HOUSEGATE_NETWORK_STATE_REDIS", "")),
 		},
+		ReplicationProxy: defaultReplicationProxyConfig(),
 		Observability: ObservabilityConfig{
 			Collector: CollectorConfig{
 				Enabled:     EnvOrDefault("HOUSEGATE_COLLECTOR_ENABLED", "true") != "false",

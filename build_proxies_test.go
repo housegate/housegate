@@ -56,8 +56,8 @@ func TestBuildServer_KeeperProxyListeners(t *testing.T) {
 		if l.ListenAddr != sh.Listen {
 			t.Errorf("shard %q listener addr = %q, want %q", sh.Name, l.ListenAddr, sh.Listen)
 		}
-		if _, ok := l.Server.(*keeper.Server); !ok {
-			t.Errorf("shard %q listener Server is %T, want *keeper.Server", sh.Name, l.Server)
+		if _, ok := l.Runner.(*keeper.Server); !ok {
+			t.Errorf("shard %q listener Runner is %T, want *keeper.Server", sh.Name, l.Runner)
 		}
 	}
 }
@@ -78,12 +78,12 @@ func TestBuildServer_InterserverMeshListeners(t *testing.T) {
 	defer bs.teardown()
 
 	eg := findListener(t, bs, "interserver_mesh_egress")
-	if _, ok := eg.Server.(*interserver.Egress); !ok {
-		t.Errorf("egress listener Server is %T, want *interserver.Egress", eg.Server)
+	if _, ok := eg.Runner.(*interserver.Egress); !ok {
+		t.Errorf("egress listener Runner is %T, want *interserver.Egress", eg.Runner)
 	}
 	in := findListener(t, bs, "interserver_mesh_ingress")
-	if _, ok := in.Server.(*interserver.Ingress); !ok {
-		t.Errorf("ingress listener Server is %T, want *interserver.Ingress", in.Server)
+	if _, ok := in.Runner.(*interserver.Ingress); !ok {
+		t.Errorf("ingress listener Runner is %T, want *interserver.Ingress", in.Runner)
 	}
 }
 

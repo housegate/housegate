@@ -41,6 +41,7 @@ import (
 	"housegate/housegate/pkg/plugins/usage"
 	"housegate/housegate/pkg/proxy"
 	"housegate/housegate/pkg/registry"
+	"housegate/housegate/pkg/replicationproxy"
 	"housegate/housegate/pkg/rewriter"
 	"housegate/housegate/pkg/sqlmeta"
 
@@ -166,19 +167,36 @@ func buildClusterManager(cfg *config.Config) (*cluster.Manager, error) {
 	return nil, nil
 }
 
-// listenerServer is the minimal contract proxyImpl needs from anything it
-// binds and serves: the CH-native *proxy.Server and the L4 *keeper.Server
-// both satisfy it.
-type listenerServer interface {
+// listenerRunner is the narrow lifecycle surface shared by native ClickHouse
+// proxy listeners and replication-plane listeners.
+type listenerRunner interface {
 	Serve(ctx context.Context, ln net.Listener) error
 }
 
-// serverListener pairs a listenerServer with the address it should bind
+type proxyServerRunner struct {
+	server *proxy.Server
+}
+
+func (r *proxyServerRunner) Serve(ctx context.Context, ln net.Listener) error {
+	return r.server.Serve(ctx, ln)
+}
+
+type serveFuncRunner struct {
+	serve func(context.Context, net.Listener) error
+}
+
+func (r serveFuncRunner) Serve(ctx context.Context, ln net.Listener) error {
+	return r.serve(ctx, ln)
+}
+
+const defaultReplicationInterserverPeerTokenTTL = time.Hour
+
+// serverListener pairs a runner with the address it should bind
 // and a human-readable label used in logs and error messages.
 type serverListener struct {
-	Server     listenerServer
+	Runner     listenerRunner
 	ListenAddr string
-	Label      string // "external" | "internal" | "agent" | "forwarding" | "keeper"
+	Label      string // e.g. "external", "internal", "agent", "replication-keeper", "replication-interserver"
 }
 
 // builtServer is what each per-mode builder returns to the proxyImpl.
@@ -642,7 +660,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	srv.ShutdownTimeout = cfg.ShutdownTimeout.Duration
 
 	listeners := []serverListener{
-		{Server: srv, ListenAddr: cfg.Listen, Label: "external"},
+		{Runner: &proxyServerRunner{server: srv}, ListenAddr: cfg.Listen, Label: "external"},
 	}
 
 	if cfg.InternalListen != "" {
@@ -653,7 +671,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			st.IsInternalPort = true
 		}
 		listeners = append(listeners, serverListener{
-			Server:     internalSrv,
+			Runner:     &proxyServerRunner{server: internalSrv},
 			ListenAddr: cfg.InternalListen,
 			Label:      "internal",
 		})
@@ -670,7 +688,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 				return nil, fmt.Errorf("keeper proxy shard %q: %w", sh.Name, err)
 			}
 			listeners = append(listeners, serverListener{
-				Server:     ks,
+				Runner:     ks,
 				ListenAddr: sh.Listen,
 				Label:      "keeper:" + sh.Name,
 			})
@@ -686,9 +704,52 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			return nil, fmt.Errorf("interserver mesh: %w", err)
 		}
 		listeners = append(listeners,
-			serverListener{Server: eg, ListenAddr: cfg.InterserverMesh.EgressListen, Label: "interserver_mesh_egress"},
-			serverListener{Server: in, ListenAddr: cfg.InterserverMesh.IngressListen, Label: "interserver_mesh_ingress"},
+			serverListener{Runner: eg, ListenAddr: cfg.InterserverMesh.EgressListen, Label: "interserver_mesh_egress"},
+			serverListener{Runner: in, ListenAddr: cfg.InterserverMesh.IngressListen, Label: "interserver_mesh_ingress"},
 		)
+	}
+
+	if cfg.ReplicationProxy.Keeper.Enabled {
+		keeperSrv, err := replicationproxy.NewKeeperServer(replicationproxy.KeeperOptions{
+			Upstreams:   cfg.ReplicationProxy.Keeper.Upstreams,
+			DialTimeout: cfg.ReplicationProxy.Keeper.DialTimeout.Duration,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("build replication keeper listener: %w", err)
+		}
+		listeners = append(listeners, serverListener{
+			Runner:     keeperSrv,
+			ListenAddr: cfg.ReplicationProxy.Keeper.Listen,
+			Label:      "replication-keeper",
+		})
+	}
+
+	if cfg.ReplicationProxy.Interserver.Enabled {
+		interserverPeerAuth, err := buildReplicationInterserverPeerAuth(cfg, peerSigner, peerValidator)
+		if err != nil {
+			return nil, err
+		}
+		interserverRoutes, err := buildReplicationInterserverRoutes(cfg.ReplicationProxy.Interserver.Routes)
+		if err != nil {
+			return nil, err
+		}
+		interserverSrv, err := replicationproxy.NewInterserverServer(replicationproxy.InterserverOptions{
+			SelfIndexerID: selfIndexerID,
+			LocalUpstream: cfg.ReplicationProxy.Interserver.LocalUpstream,
+			Routes:        interserverRoutes,
+			PeerAuth:      interserverPeerAuth,
+			DialTimeout:   cfg.ReplicationProxy.Interserver.DialTimeout.Duration,
+			ReadTimeout:   cfg.ReplicationProxy.Interserver.ReadTimeout.Duration,
+			WriteTimeout:  cfg.ReplicationProxy.Interserver.WriteTimeout.Duration,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("build replication interserver listener: %w", err)
+		}
+		listeners = append(listeners, serverListener{
+			Runner:     interserverSrv,
+			ListenAddr: cfg.ReplicationProxy.Interserver.Listen,
+			Label:      "replication-interserver",
+		})
 	}
 
 	// Downstream-metrics Collector (host + runtime + per-replica ClickHouse).
@@ -811,6 +872,40 @@ func meshPeerLookup(reg registry.Registry) interserver.PeerLookup {
 	return func(string) (string, bool) { return "", false }
 }
 
+func buildReplicationInterserverPeerAuth(cfg *config.Config, peerSigner auth.PeerSigner, peerValidator auth.PeerValidator) (*replicationproxy.InterserverPeerAuth, error) {
+	ttl := cfg.PeerTokenTTL.Duration
+	if ttl <= 0 {
+		ttl = defaultReplicationInterserverPeerTokenTTL
+	}
+	peerAuth, err := replicationproxy.NewInterserverPeerAuth(replicationproxy.InterserverPeerAuthOptions{
+		Signer:      peerSigner,
+		Validator:   peerValidator,
+		TokenTTL:    ttl,
+		UserHeader:  cfg.ReplicationProxy.Interserver.PeerUserHeader,
+		TokenHeader: cfg.ReplicationProxy.Interserver.PeerTokenHeader,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("build replication interserver peer auth: %w", err)
+	}
+	return peerAuth, nil
+}
+
+func buildReplicationInterserverRoutes(routes []config.ReplicationProxyInterserverRoute) ([]replicationproxy.InterserverRoute, error) {
+	out := make([]replicationproxy.InterserverRoute, 0, len(routes))
+	for _, route := range routes {
+		targetIndexerID, err := strconv.ParseUint(route.Peer, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("replication interserver route peer %q must be a decimal target indexer id: %w", route.Peer, err)
+		}
+		out = append(out, replicationproxy.InterserverRoute{
+			Peer:            route.Peer,
+			TargetIndexerID: targetIndexerID,
+			Upstream:        route.Upstream,
+		})
+	}
+	return out, nil
+}
+
 func buildAgent(opts Options, rf *redisFactory) (*builtServer, error) {
 	cfg := opts.Config
 
@@ -853,7 +948,7 @@ func buildAgent(opts Options, rf *redisFactory) (*builtServer, error) {
 
 	return &builtServer{
 		listeners: []serverListener{
-			{Server: srv, ListenAddr: cfg.Listen, Label: "agent"},
+			{Runner: &proxyServerRunner{server: srv}, ListenAddr: cfg.Listen, Label: "agent"},
 		},
 		preServe: func(context.Context) {},
 		teardown: func() {},
