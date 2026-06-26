@@ -110,7 +110,8 @@
 
 ```mermaid
 flowchart LR
-  C["Client / SDK"] --> HG["HouseGate feat/interserver-proxy"]
+  C["clickhouse-client / 应用<br/>不修改"] --> HG1["Client-side HouseGate<br/>agent mode"]
+  HG1 -->|"INSERT + SQL_x_auth_token<br/>purpose=housegate-query"| HG["Server-side HouseGate<br/>feat/interserver-proxy"]
   HG --> DA["Mock Payload / DA Store<br/>HouseGate local adapter"]
   HG --> CH["ClickHouse Server 26.3"]
   CH --> KP["HouseGate Keeper Proxy"]
@@ -132,9 +133,10 @@ flowchart LR
 
 | 组件 | 部署归属 | 职责 |
 |---|---|---|
-| SDK / agent | client side | 签名前 materialize 非确定性函数，注入 `_hg_row_id`，构造 signed envelope |
-| HouseGate ingress | HouseGate process | 校验签名和 payload hash，执行 virtual/physical rewrite，作为 ClickHouse SQL 入口、Keeper proxy、interserver mesh |
-| Mock Payload / DA Store | HouseGate process 内置 mock adapter | 本轮不接真实 DA。HouseGate 把 signed payload 写入本地 durable mock store，生成 `mockda://...` 风格 `payload_ref`；Keeper 只保存 digest/ref，不保存大 payload |
+| clickhouse-client / 应用 | client side | 不做任何修改，不签名，只按原生 ClickHouse 协议发送 SQL 和 INSERT Data blocks |
+| Client-side HouseGate | HouseGate binary，agent mode | 作为可信入口 sidecar，接收原始 client SQL，用 `agent.private_key_hex` 生成 `SQL_x_auth_token`，payload 为 `purpose=housegate-query`、`iss=<ingress address>`、`qhash=Keccak256(Query.Body)`，然后转发到 server-side HouseGate |
+| Server-side HouseGate ingress | HouseGate process | 验证 client-side HouseGate 的 JWS、allowlist 和 qhash；执行 virtual/physical rewrite；计算/记录 INSERT payload hash/ref；作为 ClickHouse SQL 入口、Keeper proxy、interserver mesh |
+| Mock Payload / DA Store | HouseGate process 内置 mock adapter | 本轮不接真实 DA。HouseGate 把 INSERT payload bytes 写入本地 durable mock store，生成 `mockda://...` 风格 `payload_ref`；Keeper 只保存 digest/ref，不保存大 payload |
 | Replay verifier | HouseGate process 内置 worker | 在 pinned executor 上 replay payload，读取 actual candidate part bytes，计算 replay root / partition delta / byte-side lthash，提交 signed attestation |
 | Promotion Worker / SNode | HouseGate process 内置 worker | 持有 HouseKeeper promotion lease，执行 `ATTACH` / `REPLACE PARTITION`，做 safe readback count/hash，提交 promotion finish |
 | Mock Finality / L2 Anchor Watcher | HouseGate process 内置 mock worker | 本轮不接真实 L2 anchor。按配置立即 finality 或延迟 N 秒 finality，把 mock finalized marker 写回 HouseKeeper |
@@ -146,9 +148,17 @@ flowchart LR
 部署边界：
 
 - P0/P1 不新增独立服务：Replay Verifier、Promotion Worker / SNode、SafeAuditWorker、Mock Payload / DA Store、Mock Finality / L2 Anchor Watcher 都作为 HouseGate 后台 worker / local adapter。
+- Client-side HouseGate 不要求新 binary，也不要求改 `clickhouse-client`；它复用现有 HouseGate agent mode。server-side HouseGate 的 `auth.allowed_addresses` 必须包含这些入口 HouseGate signer address。
 - Keeper / HouseKeeper 只承载强一致控制面：statement sequencing、part registry、replay quorum decision、promotion lease/ledger、safe snapshot、audit coordinator/vote state。
 - Keeper / HouseKeeper 不做重计算和外部 IO：不 replay SQL、不扫 ClickHouse safe 表、不计算大范围 row hash、不直接访问 DA/L2 网络、不执行 promotion SQL。
 - 后续如果 replay、promotion 或 finality watcher 的负载独立扩展需求明显，可以把 HouseGate worker 拆成独立服务；接口仍然保持 `HouseGate worker <-> HouseKeeper control plane`，不改变 HouseKeeper 的状态所有权。
+
+签名边界：
+
+- 终端 `clickhouse-client` 和普通业务 driver 不签名、不改协议。
+- P0 已落地的签名是 **client-side HouseGate query token**：它证明某个可信入口 HouseGate 收到了这条 `Query.Body` 并转发给 server-side HouseGate。
+- INSERT Data block 的 payload hash 由 server-side HouseGate / storage-integrity worker 按实际收到的 bytes 计算，并在 replay 时重新校验；它不要求终端 client 参与签名。
+- 如果后续要让 ingress 签名同时覆盖 `payload_hash`，需要 client-side HouseGate 先 buffer/spool 完整 INSERT payload，生成 `StatementEnvelopeV2` 后再转发。这仍然不需要改 `clickhouse-client`，但会把流式转发改成两阶段提交，作为 P1/P2 严格模式处理。
 
 本轮外部依赖模拟策略：
 
@@ -372,7 +382,7 @@ sequenceDiagram
   participant SN as SNode / Promotion Worker<br/>HouseGate worker
   participant CH as ClickHouse
 
-  HK->>V: ReplayJob(prev safe snapshot + signed payload)
+  HK->>V: ReplayJob(prev safe snapshot + payload_ref/hash)
   V->>HK: ReplayAttestation + partition delta + byte-side lthash
   HK->>HK: quorum / delta / byte-side 三路校验
   HK->>SN: PromotionLease(snapshot_id, touched partitions)
@@ -447,16 +457,21 @@ INSERT INTO Transfer (from_address, to_address, amount, block_time) VALUES
   ('carol', 'dave', 20, '2026-06-25 10:00:01');
 ```
 
-SDK / agent 在签名前做两件事：
+本轮不改 `clickhouse-client`，所以入口签名由 client-side HouseGate 完成：
 
 ```text
-1. materialize 非确定性函数；本例没有 now()/rand()，所以 SQL 不变。
-2. 为两行分别注入稳定 _hg_row_id：
+1. clickhouse-client 发送原始 INSERT SQL 和后续 Data blocks。
+2. client-side HouseGate 在 Query 阶段签名：
+   JWS purpose = housegate-query
+   JWS iss     = client-side HouseGate signer address
+   JWS qhash   = Keccak256(Query.Body)
+3. server-side HouseGate 验证 JWS、allowlist、qhash，再按实际收到的 INSERT payload bytes 计算 payload_hash。
+4. `_hg_row_id` 在 P0 demo 可由 server-side HouseGate/ingress adapter 代注入；严格模式下应由 client-side HouseGate 在 spool 后、签完整 StatementEnvelope 前注入：
    row 0 -> BLAKE3("housegate-row-id-v1" || table_id || statement_id || 0)
    row 1 -> BLAKE3("housegate-row-id-v1" || table_id || statement_id || 1)
 ```
 
-HouseGate 校验 signed envelope 后，把 virtual table rewrite 到当前 unsafe buffer：
+server-side HouseGate 验证入口 HouseGate query token，并把 virtual table rewrite 到当前 unsafe buffer：
 
 ```sql
 INSERT INTO hg_unsafe.Transfer_0xT_a
@@ -487,40 +502,45 @@ BatchRecord(batch_id=batch_42, candidate_part_ids=[202606_1_1_0])
 
 | 步骤 | 组件 | 输入 | 生成 / 写入 | 说明 |
 |---:|---|---|---|---|
-| 1 | HouseGate | client SQL + payload + signed envelope | `IngressRequest` | 识别这是 verified table `Transfer` 的 `INSERT`。如果是 `UPDATE/DELETE/INSERT SELECT`，P0 直接拒绝。 |
-| 2 | HouseGate | `IngressRequest` | `payload_hash` / `payload_length` / `payload_ref` | 重新计算 payload hash，与 envelope 中的签名字段比对；本轮写入 HouseGate 本地 `MockPayloadStore`，生成 `mockda://...` ref，HouseKeeper 只保存 digest/ref。 |
-| 3 | HouseGate | envelope | `StatementSubmit` | 提交给 HouseKeeper，包含 `statement_id`、`sql_hash`、`payload_hash`、`payload_ref`、table id、schema/settings hash。 |
-| 4 | HouseKeeper | `StatementSubmit` | `StatementRecord` | 校验签名、table/schema、`statement_id` 未重复。 |
-| 5 | HouseKeeper | `StatementRecord` | `statement_seq` / `LCBlock` | 给这条 statement 排序；P0 可以先用单条 statement batch，后续再聚合成 block。 |
-| 6 | HouseGate | sequenced ack + route state | rewritten SQL | 把 virtual table `Transfer` 改写成当前 unsafe buffer：`hg_unsafe.Transfer_0xT_a`。 |
-| 7 | HouseGate | rewritten SQL + payload | ClickHouse native INSERT | 发送给本机 ClickHouse；payload 中必须已有 `_hg_row_id`。P0 demo 可由 ingress adapter 代注入，但最终协议以签名前注入为准。 |
-| 8 | ClickHouse | native INSERT | unsafe data part | 生成 active part，例如 `202606_1_1_0`。 |
-| 9 | ClickHouse | RMT metadata write | Keeper create / multi request | 通过 `feat/interserver-proxy` 的 Keeper proxy 写入 HouseKeeper。 |
-| 10 | HouseKeeper policy | Keeper request + RMT log entry | `PartRecord(state=Unsafe)` | 解析 part name、partition、source replica、block id；确认能反查到 `StatementRecord`，否则拒绝进入 RMT log。 |
-| 11 | HouseKeeper | `StatementRecord` + `PartRecord` | `BatchRecord` / `ReplayJob` | 把 candidate part 纳入待验证 batch，并生成 replay job。 |
-| 12 | Replay verifier（HouseGate worker） | `ReplayJob` + payload store + candidate part bytes | `ReplayReceipt` | 从 HouseGate worker 拉 payload 并在 pinned executor 上 replay signed payload，读取 actual part bytes 计算 byte-side lthash。 |
-| 13 | HouseKeeper | quorum receipts | `BatchRecord(status=Verified)` | 三路校验通过：replay root、partition delta、byte-side part lthash。失败则 part quarantine。 |
-| 14 | HouseKeeper | verified batch + mock finality marker | `PromotionRecord` / promotion lease | Mock Finality Watcher 作为 HouseGate worker 写入 finalized marker；HouseKeeper 只根据 marker 和 verified batch 发放 lease。 |
-| 15 | Promotion worker（HouseGate worker） | promotion lease | `ATTACH PARTITION FROM sealed unsafe` 或 `REPLACE PARTITION FROM hg_promote` | P0 INSERT-only 可走 sealed attach；更通用路径走 promote shadow + replace。 |
-| 16 | Promotion worker（HouseGate worker） | safe table readback | `verified_rows_count` / `verified_rows_hash` | 校验 safe 中本次 rows 与 sealed manifest 一致，并把结果写回 HouseKeeper；Keeper 不直接扫表算 hash。 |
-| 17 | HouseKeeper | promotion finish | `SafeSnapshotManifest` | 发布新的 safe snapshot / safe watermark。 |
-| 18 | HouseGate | latest safe snapshot | read rewrite rule | 默认 `SELECT Transfer` 改写到 `hg_safe.Transfer_0xT`；`unsafe_latest` 才 union unsafe。 |
+| 1 | clickhouse-client / 应用 | 原始 INSERT SQL + payload | ClickHouse native session | 不改 client，不生成签名。 |
+| 2 | Client-side HouseGate | `Query.Body` | `SQL_x_auth_token` | 用 agent key 签 `purpose=housegate-query`、`iss=<ingress address>`、`qhash=Keccak256(Query.Body)`，然后转发到 server-side HouseGate。 |
+| 3 | Server-side HouseGate | INSERT + `SQL_x_auth_token` | authenticated `IngressRequest` | 验证入口 HouseGate 签名、allowlist、qhash；识别这是 verified table `Transfer` 的 `INSERT`。如果是 `UPDATE/DELETE/INSERT SELECT`，P0 直接拒绝。 |
+| 4 | Server-side HouseGate | 实际收到的 INSERT Data bytes | `payload_hash` / `payload_length` / `payload_ref` | 按 bytes 计算 payload hash；本轮写入 HouseGate 本地 `MockPayloadStore`，生成 `mockda://...` ref，HouseKeeper 只保存 digest/ref。 |
+| 5 | Server-side HouseGate | `IngressRequest` + payload commitment | `StatementSubmit` | 提交给 HouseKeeper，包含 `statement_id`、`ingress_jws`、`sql_hash`、`payload_hash`、`payload_ref`、table id、schema/settings hash。 |
+| 6 | HouseKeeper | `StatementSubmit` | `StatementRecord` | 校验入口 signer、table/schema、`statement_id` 未重复。 |
+| 7 | HouseKeeper | `StatementRecord` | `statement_seq` / `LCBlock` | 给这条 statement 排序；P0 可以先用单条 statement batch，后续再聚合成 block。 |
+| 8 | Server-side HouseGate | sequenced ack + route state | rewritten SQL | 把 virtual table `Transfer` 改写成当前 unsafe buffer：`hg_unsafe.Transfer_0xT_a`。 |
+| 9 | Server-side HouseGate | rewritten SQL + payload | ClickHouse native INSERT | 发送给本机 ClickHouse；P0 demo 可由 ingress adapter 代注入 `_hg_row_id`，严格 payload-bound 签名模式后移。 |
+| 10 | ClickHouse | native INSERT | unsafe data part | 生成 active part，例如 `202606_1_1_0`。 |
+| 11 | ClickHouse | RMT metadata write | Keeper create / multi request | 通过 `feat/interserver-proxy` 的 Keeper proxy 写入 HouseKeeper。 |
+| 12 | HouseKeeper policy | Keeper request + RMT log entry | `PartRecord(state=Unsafe)` | 解析 part name、partition、source replica、block id；确认能反查到 `StatementRecord`，否则拒绝进入 RMT log。 |
+| 13 | HouseKeeper | `StatementRecord` + `PartRecord` | `BatchRecord` / `ReplayJob` | 把 candidate part 纳入待验证 batch，并生成 replay job。 |
+| 14 | Replay verifier（HouseGate worker） | `ReplayJob` + payload store + candidate part bytes | `ReplayReceipt` | 从 HouseGate worker 拉 payload 并在 pinned executor 上 replay，读取 actual part bytes 计算 byte-side lthash。 |
+| 15 | HouseKeeper | quorum receipts | `BatchRecord(status=Verified)` | 三路校验通过：replay root、partition delta、byte-side part lthash。失败则 part quarantine。 |
+| 16 | HouseKeeper | verified batch + mock finality marker | `PromotionRecord` / promotion lease | Mock Finality Watcher 作为 HouseGate worker 写入 finalized marker；HouseKeeper 只根据 marker 和 verified batch 发放 lease。 |
+| 17 | Promotion worker（HouseGate worker） | promotion lease | `ATTACH PARTITION FROM sealed unsafe` 或 `REPLACE PARTITION FROM hg_promote` | P0 INSERT-only 可走 sealed attach；更通用路径走 promote shadow + replace。 |
+| 18 | Promotion worker（HouseGate worker） | safe table readback | `verified_rows_count` / `verified_rows_hash` | 校验 safe 中本次 rows 与 sealed manifest 一致，并把结果写回 HouseKeeper；Keeper 不直接扫表算 hash。 |
+| 19 | HouseKeeper | promotion finish | `SafeSnapshotManifest` | 发布新的 safe snapshot / safe watermark。 |
+| 20 | Server-side HouseGate | latest safe snapshot | read rewrite rule | 默认 `SELECT Transfer` 改写到 `hg_safe.Transfer_0xT`；`unsafe_latest` 才 union unsafe。 |
 
 简化序列图：
 
 ```mermaid
 sequenceDiagram
   autonumber
-  participant C as Client / SDK
-  participant HG as HouseGate
+  participant C as clickhouse-client / app
+  participant HG1 as Client-side HouseGate
+  participant HG as Server-side HouseGate
   participant HK as HouseKeeper
   participant CH as ClickHouse
   participant V as Replay Verifier<br/>HouseGate worker
   participant P as Promotion Worker<br/>HouseGate worker
 
-  C->>HG: INSERT Transfer + payload + signed envelope
-  HG->>HG: validate signature / payload_hash / statement kind
-  HG->>HK: SubmitStatement(statement_id, sql_hash, payload_hash)
+  C->>HG1: raw INSERT Transfer + payload
+  HG1->>HG: INSERT + SQL_x_auth_token<br/>purpose=housegate-query, qhash
+  HG->>HG: validate ingress JWS / qhash / statement kind
+  HG->>HG: compute payload_hash and mock payload_ref
+  HG->>HK: SubmitStatement(statement_id, ingress_jws, sql_hash, payload_hash)
   HK->>HK: assign statement_seq and persist StatementRecord
   HK-->>HG: sequenced ack + current unsafe buffer
   HG->>CH: INSERT INTO hg_unsafe.Transfer_0xT_a(...)
@@ -543,15 +563,16 @@ INSERT-only 流程图：
 
 ```mermaid
 flowchart TD
-  A["用户 INSERT 到 virtual table Transfer"] --> B["SDK / agent 签名前注入 _hg_row_id<br/>生成 signed StatementEnvelopeV2"]
-  B --> C["HouseGate 校验签名和 payload_hash"]
-  C --> D["HouseGate rewrite 到当前 unsafe buffer<br/>hg_unsafe.Transfer_0xT_a"]
+  A["用户用原生 clickhouse-client<br/>INSERT virtual table Transfer"] --> B["Client-side HouseGate agent mode<br/>签 SQL_x_auth_token"]
+  B --> C["Server-side HouseGate<br/>验 ingress JWS / qhash"]
+  C --> C2["按实际 Data bytes<br/>计算 payload_hash / payload_ref"]
+  C2 --> D["HouseGate rewrite 到当前 unsafe buffer<br/>hg_unsafe.Transfer_0xT_a"]
   D --> E["ClickHouse 原生 INSERT<br/>生成 candidate part"]
   E --> F["ClickHouse 通过 Keeper path 注册 RMT metadata"]
   F --> G{"HouseKeeper admission"}
   G -- "statement linkage 有效" --> H["PartRecord = Unsafe<br/>BatchRecord = Pending"]
-  G -- "无签名 / 无 linkage" --> X["拒绝进入 RMT log<br/>写入失败"]
-  H --> I["Replay verifier 从 signed payload replay<br/>并读取 candidate part bytes"]
+  G -- "无 ingress 签名 / 无 linkage" --> X["拒绝进入 RMT log<br/>写入失败"]
+  H --> I["Replay verifier 从 payload_ref replay<br/>并读取 candidate part bytes"]
   I --> J{"三路校验"}
   J -- "replay root + partition delta + byte-side lthash 匹配" --> K["BatchRecord = Verified"]
   J -- "不匹配 / 超时" --> Y["PartRecord = Quarantined<br/>不进入 safe"]

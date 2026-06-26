@@ -55,6 +55,8 @@ func (s *RelaySigner) SignToken(sql string) (string, error) {
 	payload := JWSPayload{
 		Iat:       time.Now().Unix(),
 		QueryHash: keccak256Hex([]byte(sql)),
+		Purpose:   QueryTokenPurpose,
+		Issuer:    s.address,
 	}
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {

@@ -179,6 +179,9 @@ func (v *EthValidator) validateJWSCompact(token, sql string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("signature verification failed: %w", err)
 	}
+	if err := verifyIssuerClaim(payload, recoveredAddr); err != nil {
+		return "", err
+	}
 	if len(v.AllowedAddresses) > 0 && !v.AllowedAddresses[strings.ToLower(recoveredAddr)] {
 		return "", fmt.Errorf("address %s not in allowlist", recoveredAddr)
 	}
@@ -225,6 +228,9 @@ func (v *EthValidator) validateJWSJSON(token, sql string) (string, error) {
 		recoveredAddr, err := v.recoverAddressFromInput(signingInput, signatureBytes)
 		if err != nil {
 			return "", fmt.Errorf("sig[%d]: signature verification failed: %w", i, err)
+		}
+		if err := verifyIssuerClaim(payload, recoveredAddr); err != nil {
+			return "", fmt.Errorf("sig[%d]: %w", i, err)
 		}
 		if len(v.AllowedAddresses) > 0 && !v.AllowedAddresses[strings.ToLower(recoveredAddr)] {
 			return "", fmt.Errorf("sig[%d]: address %s not in allowlist", i, recoveredAddr)
@@ -302,9 +308,22 @@ func (v *EthValidator) verifyPayloadAndHeader(header JWSHeader, payload JWSPaylo
 		return fmt.Errorf("token expired: age %ds exceeds max %s", tokenAge, v.MaxTokenAge)
 	}
 
+	if payload.Purpose != "" && payload.Purpose != QueryTokenPurpose {
+		return fmt.Errorf("unexpected query token purpose %q (want %q)", payload.Purpose, QueryTokenPurpose)
+	}
 	expectedHash := keccak256Hex([]byte(sql))
 	if !strings.EqualFold(payload.QueryHash, expectedHash) {
 		return fmt.Errorf("query hash mismatch: expected %s, got %s", expectedHash, payload.QueryHash)
+	}
+	return nil
+}
+
+func verifyIssuerClaim(payload JWSPayload, recoveredAddr string) error {
+	if payload.Issuer == "" {
+		return nil
+	}
+	if !strings.EqualFold(payload.Issuer, recoveredAddr) {
+		return fmt.Errorf("issuer mismatch: token iss %s recovered %s", payload.Issuer, recoveredAddr)
 	}
 	return nil
 }

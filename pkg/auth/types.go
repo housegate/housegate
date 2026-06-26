@@ -123,12 +123,23 @@ type JWSHeader struct {
 	Typ string `json:"typ"`
 }
 
+// QueryTokenPurpose is the domain separator for SQL-binding tokens
+// minted by an ingress HouseGate / relay signer. Legacy tokens omitted
+// purpose and remain accepted by EthValidator for rolling upgrades.
+const QueryTokenPurpose = "housegate-query"
+
 // JWSPayload is the minimal JWS payload housegate signs and verifies.
-// Iat is the issued-at unix timestamp (seconds); QueryHash is the
-// Keccak256 hash of the SQL body hex-encoded with 0x prefix.
+// Purpose domain-separates SQL-binding tokens from any future
+// statement or client-origin tokens. Issuer is informational for logs
+// and audit, but when present EthValidator requires it to match the
+// recovered signer address. Iat is the issued-at unix timestamp
+// (seconds); QueryHash is the Keccak256 hash of the SQL body
+// hex-encoded with 0x prefix.
 type JWSPayload struct {
 	Iat       int64  `json:"iat"`
 	QueryHash string `json:"qhash"`
+	Purpose   string `json:"purpose,omitempty"`
+	Issuer    string `json:"iss,omitempty"`
 }
 
 // PeerLoginPurpose is the JWSPeerPayload.Purpose value for a

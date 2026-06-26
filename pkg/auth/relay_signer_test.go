@@ -56,6 +56,30 @@ func TestRelaySigner_QHashMatches(t *testing.T) {
 	}
 }
 
+func TestRelaySigner_QueryTokenCarriesHouseGatePurposeAndIssuer(t *testing.T) {
+	privKeyHex := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	signer, err := NewRelaySigner(privKeyHex)
+	if err != nil {
+		t.Fatalf("failed to create relay signer: %v", err)
+	}
+
+	token, err := signer.SignToken("INSERT INTO t VALUES (1)")
+	if err != nil {
+		t.Fatalf("failed to sign token: %v", err)
+	}
+
+	_, payload, _, err := parseJWSCompact(token)
+	if err != nil {
+		t.Fatalf("failed to parse token: %v", err)
+	}
+	if payload.Purpose != QueryTokenPurpose {
+		t.Errorf("purpose = %q, want %q", payload.Purpose, QueryTokenPurpose)
+	}
+	if !strings.EqualFold(payload.Issuer, signer.Address()) {
+		t.Errorf("issuer = %q, want %q", payload.Issuer, signer.Address())
+	}
+}
+
 func TestRelaySigner_AddressInAllowlist(t *testing.T) {
 	privKeyHex := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	signer, err := NewRelaySigner(privKeyHex)

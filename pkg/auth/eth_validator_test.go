@@ -14,6 +14,11 @@ import (
 // generateTestToken creates a JWS token for testing using Ethereum-style signing.
 func generateTestToken(t *testing.T, privKeyHex string, iat time.Time, qhash string) string {
 	t.Helper()
+	return generateTestTokenWithPayload(t, privKeyHex, JWSPayload{Iat: iat.Unix(), QueryHash: qhash})
+}
+
+func generateTestTokenWithPayload(t *testing.T, privKeyHex string, payload JWSPayload) string {
+	t.Helper()
 
 	privateKey, err := crypto.HexToECDSA(privKeyHex)
 	if err != nil {
@@ -24,7 +29,6 @@ func generateTestToken(t *testing.T, privKeyHex string, iat time.Time, qhash str
 	headerJSON, _ := json.Marshal(header)
 	headerB64 := base64.RawURLEncoding.EncodeToString(headerJSON)
 
-	payload := JWSPayload{Iat: iat.Unix(), QueryHash: qhash}
 	payloadJSON, _ := json.Marshal(payload)
 	payloadB64 := base64.RawURLEncoding.EncodeToString(payloadJSON)
 
@@ -58,6 +62,53 @@ func TestEthValidator_ValidToken(t *testing.T) {
 	}
 	if _, err := validator.ValidateQuery(context.Background(), meta); err != nil {
 		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestEthValidator_RejectsUnknownQueryTokenPurpose(t *testing.T) {
+	privKeyHex := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	privKey, _ := crypto.HexToECDSA(privKeyHex)
+	addr := crypto.PubkeyToAddress(privKey.PublicKey).Hex()
+
+	validator := NewEthValidator([]string{addr}, 1*time.Minute, true, false, "", nil)
+
+	sql := "SELECT 1"
+	token := generateTestTokenWithPayload(t, privKeyHex, JWSPayload{
+		Iat:       time.Now().Unix(),
+		QueryHash: keccak256Hex([]byte(sql)),
+		Purpose:   "end-client-statement",
+	})
+
+	meta := QueryMeta{
+		SQL:      sql,
+		Settings: map[string]string{AuthTokenSettingKey: token},
+	}
+	if _, err := validator.ValidateQuery(context.Background(), meta); err == nil || !strings.Contains(err.Error(), "unexpected query token purpose") {
+		t.Fatalf("ValidateQuery error = %v, want unexpected query token purpose", err)
+	}
+}
+
+func TestEthValidator_RejectsIssuerMismatch(t *testing.T) {
+	privKeyHex := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	privKey, _ := crypto.HexToECDSA(privKeyHex)
+	addr := crypto.PubkeyToAddress(privKey.PublicKey).Hex()
+
+	validator := NewEthValidator([]string{addr}, 1*time.Minute, true, false, "", nil)
+
+	sql := "SELECT 1"
+	token := generateTestTokenWithPayload(t, privKeyHex, JWSPayload{
+		Iat:       time.Now().Unix(),
+		QueryHash: keccak256Hex([]byte(sql)),
+		Purpose:   QueryTokenPurpose,
+		Issuer:    "0x0000000000000000000000000000000000000001",
+	})
+
+	meta := QueryMeta{
+		SQL:      sql,
+		Settings: map[string]string{AuthTokenSettingKey: token},
+	}
+	if _, err := validator.ValidateQuery(context.Background(), meta); err == nil || !strings.Contains(err.Error(), "issuer mismatch") {
+		t.Fatalf("ValidateQuery error = %v, want issuer mismatch", err)
 	}
 }
 
