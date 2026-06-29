@@ -862,6 +862,7 @@ func (c *KeeperCoordinator) ensureRoots(ctx context.Context) error {
 		c.path("promotion_failures"),
 		c.path("safe_audit_tasks"),
 		c.path("safe_audit_votes"),
+		c.path("decisions"),
 	} {
 		if err := c.store.EnsurePath(ctx, p); err != nil {
 			return err

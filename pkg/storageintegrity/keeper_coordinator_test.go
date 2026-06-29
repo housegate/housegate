@@ -34,6 +34,15 @@ func TestWaitForZKSessionReturnsAuthFailure(t *testing.T) {
 	}
 }
 
+func TestKeeperCoordinatorEnsuresDecisionRootForKeeperSideEffects(t *testing.T) {
+	store := newMemoryKeeperStore()
+	c := newTestKeeperCoordinator(t, store, "hg-1")
+
+	if exists := testKeeperNodeExists(t, store, c.path("decisions")); !exists {
+		t.Fatalf("decisions root was not created")
+	}
+}
+
 func TestKeeperCoordinatorRequiresReplayQuorumAndUnsafeAllReplicasBeforePromotion(t *testing.T) {
 	ctx := context.Background()
 	store := newMemoryKeeperStore()

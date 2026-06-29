@@ -171,6 +171,7 @@ func (p *Plugin) finalizeCapture(ctx context.Context, cap *insertCapture) {
 			"table_id", cap.tableID,
 			"err", err,
 		)
+		return
 	}
 	log.Infow("storage_integrity: insert submitted",
 		"statement_id", cap.statementID,

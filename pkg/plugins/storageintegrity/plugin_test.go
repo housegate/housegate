@@ -1,7 +1,10 @@
 package storageintegrity
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"log/slog"
 	"net"
 	"strings"
 	"testing"
@@ -10,6 +13,7 @@ import (
 
 	"housegate/housegate/pkg/chproto"
 	"housegate/housegate/pkg/chsession"
+	hlog "housegate/housegate/pkg/log"
 	"housegate/housegate/pkg/plugin"
 	"housegate/housegate/pkg/sqlmeta"
 	core "housegate/housegate/pkg/storageintegrity"
@@ -242,6 +246,43 @@ func TestPluginDropsCaptureOnException(t *testing.T) {
 	}
 }
 
+func TestPluginDoesNotLogSubmittedWhenSinkRejects(t *testing.T) {
+	ctx := context.Background()
+	payloads, err := core.NewMockPayloadStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewMockPayloadStore: %v", err)
+	}
+
+	var buf bytes.Buffer
+	prev := hlog.Default()
+	hlog.SetDefault(hlog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	defer hlog.SetDefault(prev)
+
+	p := New(Config{
+		UnsafeDatabase:    "hg_unsafe",
+		SafeDatabase:      "hg_safe",
+		UnsafeTableSuffix: "_a",
+	}, payloads, failingIngressSink{err: errors.New("keeper rejected")})
+
+	p.finalizeCapture(ctx, &insertCapture{
+		tableID:     "dual_hg_auth.t",
+		statementID: "insert-qid-rejected",
+		originalSQL: "INSERT INTO dual_hg_auth.t VALUES (1)",
+		unsafeSQL:   "INSERT INTO `hg_unsafe`.`dual_hg_auth.t_a` VALUES (1)",
+		unsafeTable: "`hg_unsafe`.`dual_hg_auth.t_a`",
+		safeTable:   "`hg_safe`.`dual_hg_auth.t`",
+		dataPackets: [][]byte{[]byte("native-block")},
+	})
+
+	out := buf.String()
+	if !strings.Contains(out, "storage_integrity: submit insert failed") {
+		t.Fatalf("log output missing submit failure: %s", out)
+	}
+	if strings.Contains(out, "storage_integrity: insert submitted") {
+		t.Fatalf("log output contains success after submit failure: %s", out)
+	}
+}
+
 type recordingIngressSink struct {
 	records []core.InsertRecord
 }
@@ -249,6 +290,14 @@ type recordingIngressSink struct {
 func (s *recordingIngressSink) SubmitInsert(_ context.Context, rec core.InsertRecord) error {
 	s.records = append(s.records, rec)
 	return nil
+}
+
+type failingIngressSink struct {
+	err error
+}
+
+func (s failingIngressSink) SubmitInsert(context.Context, core.InsertRecord) error {
+	return s.err
 }
 
 func emptyClientDataPacket() []byte {
