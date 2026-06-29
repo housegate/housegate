@@ -222,6 +222,49 @@ func TestPluginSubmitsInsertAfterClientDataTerminatorDelay(t *testing.T) {
 	}
 }
 
+func TestPluginSubmitsInsertOnCloseAfterClientDataTerminator(t *testing.T) {
+	ctx := context.Background()
+	payloads, err := core.NewMockPayloadStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewMockPayloadStore: %v", err)
+	}
+	sink := &channelIngressSink{records: make(chan core.InsertRecord, 1)}
+	p := New(Config{
+		UnsafeDatabase:    "hg_unsafe",
+		SafeDatabase:      "hg_safe",
+		UnsafeTableSuffix: "_a",
+	}, payloads, sink)
+	p.terminatorDelay = time.Hour
+	sess := newFakeSession(48)
+	sess.state.ClientRevision = 54453
+	qctx := &plugin.QueryContext{
+		Session:     sess,
+		OriginalSQL: "INSERT INTO realbin.t VALUES (1, 'a')",
+		Query: &chproto.Query{
+			ID:   "insert-qid-terminator-close",
+			Body: "INSERT INTO realbin.t VALUES (1, 'a')",
+		},
+		StatementType: sqlmeta.StatementTypeUnspecified,
+	}
+
+	if err := p.OnQuery(ctx, qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	if err := p.OnClientData(ctx, qctx, emptyClientDataPacket()); err != nil {
+		t.Fatalf("OnClientData terminator: %v", err)
+	}
+	p.OnClose(sess)
+
+	select {
+	case rec := <-sink.records:
+		if rec.StatementID != "insert-qid-terminator-close" {
+			t.Fatalf("StatementID = %q", rec.StatementID)
+		}
+	default:
+		t.Fatalf("OnClose after terminator did not submit insert")
+	}
+}
+
 func TestPluginRewritesSelectToSafe(t *testing.T) {
 	p := New(Config{
 		UnsafeDatabase:    "hg_unsafe",

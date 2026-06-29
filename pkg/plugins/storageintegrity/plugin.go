@@ -40,15 +40,16 @@ type Plugin struct {
 }
 
 type insertCapture struct {
-	tableID     string
-	statementID string
-	originalSQL string
-	unsafeSQL   string
-	unsafeTable string
-	safeTable   string
-	dataPackets [][]byte
-	startedAt   time.Time
-	timer       *time.Timer
+	tableID        string
+	statementID    string
+	originalSQL    string
+	unsafeSQL      string
+	unsafeTable    string
+	safeTable      string
+	dataPackets    [][]byte
+	startedAt      time.Time
+	timer          *time.Timer
+	terminatorSeen bool
 }
 
 func New(cfg Config, payloads *core.MockPayloadStore, sink core.IngressSink) *Plugin {
@@ -118,6 +119,7 @@ func (p *Plugin) OnClientData(ctx context.Context, qctx *plugin.QueryContext, ra
 		"terminator", complete,
 	)
 	if complete && cap.timer == nil {
+		cap.terminatorSeen = true
 		sessionID := qctx.Session.ID()
 		delay := p.terminatorDelay
 		if delay <= 0 {
@@ -224,7 +226,7 @@ func (p *Plugin) OnClose(sess chsession.Session) {
 	if p == nil || sess == nil {
 		return
 	}
-	p.dropCapture(sess.ID())
+	p.finalizeTerminatedOrDrop(sess.ID())
 }
 
 func (p *Plugin) dropCapture(sessionID int64) {
@@ -236,6 +238,22 @@ func (p *Plugin) dropCapture(sessionID int64) {
 		cap.timer = nil
 	}
 	p.mu.Unlock()
+}
+
+func (p *Plugin) finalizeTerminatedOrDrop(sessionID int64) {
+	p.mu.Lock()
+	cap := p.active[sessionID]
+	delete(p.active, sessionID)
+	if cap != nil && cap.timer != nil {
+		cap.timer.Stop()
+		cap.timer = nil
+	}
+	if cap == nil || !cap.terminatorSeen {
+		p.mu.Unlock()
+		return
+	}
+	p.mu.Unlock()
+	p.finalizeCapture(context.Background(), cap)
 }
 
 func (p *Plugin) onInsert(qctx *plugin.QueryContext) error {
