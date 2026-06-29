@@ -7,6 +7,7 @@ import (
 	"time"
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"housegate/housegate/pkg/replay"
 )
@@ -96,6 +97,10 @@ func (r ClickHouseUnsafeDigestReader) ReadUnsafeDigest(ctx context.Context, repl
 	if strings.TrimSpace(replica.Addr) == "" {
 		return UnsafeReplicaDigest{}, fmt.Errorf("replica addr is required")
 	}
+	databaseName, tableName, err := splitClickHouseQualifiedTableName(unsafeTable)
+	if err != nil {
+		return UnsafeReplicaDigest{}, err
+	}
 	username := r.Username
 	if username == "" {
 		username = "default"
@@ -118,17 +123,87 @@ func (r ClickHouseUnsafeDigestReader) ReadUnsafeDigest(ctx context.Context, repl
 	}
 	defer conn.Close()
 
-	query := "SELECT count(), lower(hex(sipHash128(groupArray(toString(tuple(*)))))) FROM (SELECT * FROM " + unsafeTable + " ORDER BY tuple(*))"
 	var rowCount uint64
 	var rowsHash string
-	if err := conn.QueryRow(ctx, query).Scan(&rowCount, &rowsHash); err != nil {
-		return UnsafeReplicaDigest{}, fmt.Errorf("query unsafe digest: %w", err)
+	if err := queryUnsafePartsDigest(ctx, conn, databaseName, tableName, &rowCount, &rowsHash); err != nil {
+		return UnsafeReplicaDigest{}, err
 	}
 	return UnsafeReplicaDigest{
 		ReplicaID: replica.ReplicaID,
 		RowCount:  rowCount,
 		RowsHash:  "0x" + strings.TrimPrefix(rowsHash, "0x"),
 	}, nil
+}
+
+type unsafeDigestConn interface {
+	QueryRow(ctx context.Context, query string, args ...any) driver.Row
+}
+
+func queryUnsafePartsDigest(ctx context.Context, conn unsafeDigestConn, databaseName, tableName string, rowCount *uint64, rowsHash *string) error {
+	queries := []string{
+		"SELECT ifNull(sum(rows), 0), lower(hex(sipHash128(groupArray(toString(tuple(name, rows, hash_of_all_files, hash_of_uncompressed_files)))))) FROM (SELECT name, rows, hash_of_all_files, hash_of_uncompressed_files FROM system.parts WHERE active AND database = ? AND table = ? ORDER BY name)",
+		"SELECT ifNull(sum(rows), 0), lower(hex(sipHash128(groupArray(toString(tuple(name, rows, bytes_on_disk)))))) FROM (SELECT name, rows, bytes_on_disk FROM system.parts WHERE active AND database = ? AND table = ? ORDER BY name)",
+	}
+	var lastErr error
+	for _, query := range queries {
+		if err := conn.QueryRow(ctx, query, databaseName, tableName).Scan(rowCount, rowsHash); err != nil {
+			lastErr = err
+			if ctx.Err() != nil {
+				break
+			}
+			continue
+		}
+		return nil
+	}
+	return fmt.Errorf("query unsafe parts digest: %w", lastErr)
+}
+
+func splitClickHouseQualifiedTableName(name string) (string, string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", "", fmt.Errorf("unsafe_table is required")
+	}
+	parts := make([]string, 0, 2)
+	var current strings.Builder
+	inBacktick := false
+	for _, r := range name {
+		switch r {
+		case '`':
+			inBacktick = !inBacktick
+			current.WriteRune(r)
+		case '.':
+			if inBacktick {
+				current.WriteRune(r)
+				continue
+			}
+			parts = append(parts, current.String())
+			current.Reset()
+		default:
+			current.WriteRune(r)
+		}
+	}
+	if inBacktick {
+		return "", "", fmt.Errorf("unsafe_table %q has unterminated quoted identifier", name)
+	}
+	parts = append(parts, current.String())
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("unsafe_table %q must be qualified as database.table", name)
+	}
+	databaseName := cleanClickHouseIdentifier(parts[0])
+	tableName := cleanClickHouseIdentifier(parts[1])
+	if databaseName == "" || tableName == "" {
+		return "", "", fmt.Errorf("unsafe_table %q must include non-empty database and table", name)
+	}
+	return databaseName, tableName, nil
+}
+
+func cleanClickHouseIdentifier(s string) string {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "`") && strings.HasSuffix(s, "`") && len(s) >= 2 {
+		s = strings.TrimPrefix(strings.TrimSuffix(s, "`"), "`")
+		s = strings.ReplaceAll(s, "``", "`")
+	}
+	return s
 }
 
 type MockUnsafeValidationVerifier struct {

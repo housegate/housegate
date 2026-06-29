@@ -90,6 +90,36 @@ func TestUnsafeReplicaHashVerifierTimesOutReplicaRead(t *testing.T) {
 	}
 }
 
+func TestSplitClickHouseQualifiedTableName(t *testing.T) {
+	tests := []struct {
+		name      string
+		database  string
+		table     string
+		wantError bool
+	}{
+		{name: "`hg_unsafe`.`realbin.t_a`", database: "hg_unsafe", table: "realbin.t_a"},
+		{name: "hg_unsafe.realbin_t_a", database: "hg_unsafe", table: "realbin_t_a"},
+		{name: "`hg``unsafe`.`realbin.t_a`", database: "hg`unsafe", table: "realbin.t_a"},
+		{name: "realbin_t_a", wantError: true},
+		{name: "`hg_unsafe`.`realbin.t_a", wantError: true},
+	}
+	for _, tt := range tests {
+		database, table, err := splitClickHouseQualifiedTableName(tt.name)
+		if tt.wantError {
+			if err == nil {
+				t.Fatalf("splitClickHouseQualifiedTableName(%q) succeeded, want error", tt.name)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("splitClickHouseQualifiedTableName(%q): %v", tt.name, err)
+		}
+		if database != tt.database || table != tt.table {
+			t.Fatalf("splitClickHouseQualifiedTableName(%q) = %q/%q, want %q/%q", tt.name, database, table, tt.database, tt.table)
+		}
+	}
+}
+
 type unsafeDigestReaderFunc func(context.Context, UnsafeReplica, string) (UnsafeReplicaDigest, error)
 
 func (f unsafeDigestReaderFunc) ReadUnsafeDigest(ctx context.Context, replica UnsafeReplica, table string) (UnsafeReplicaDigest, error) {
