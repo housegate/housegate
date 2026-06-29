@@ -128,6 +128,9 @@ func TestKeeperCoordinatorRequiresReplayQuorumAndUnsafeAllReplicasBeforePromotio
 	if got, want := task.Statements[1], "TRUNCATE TABLE `hg_unsafe`.`dual_hg_auth.t_a`"; got != want {
 		t.Fatalf("promotion TRUNCATE = %q, want %q", got, want)
 	}
+	if task.Readback.ExpectedRows != 1 || task.Readback.ExpectedHash != "0xrows" {
+		t.Fatalf("promotion readback expectation = %+v", task.Readback)
+	}
 }
 
 func TestKeeperCoordinatorRequiresUnsafeValidationFromEveryConfiguredReplica(t *testing.T) {

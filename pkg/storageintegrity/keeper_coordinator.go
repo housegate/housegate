@@ -755,10 +755,40 @@ func (c *KeeperCoordinator) getPromotionTask(ctx context.Context, stmtID string)
 		},
 		Readback: PromotionReadbackSpec{Table: safeTable},
 	}
+	if unsafeResult, ok, err := c.readUnsafeResult(ctx, stmtID); err != nil {
+		return PromotionTask{}, false, err
+	} else if ok {
+		task.Readback.ExpectedRows = unsafeResult.RowCount
+		task.Readback.ExpectedHash = unsafeResult.RowsHash
+	}
 	if task.PromotionID == "" || task.LeaseID == "" || unsafeTable == "" || safeTable == "" {
 		return PromotionTask{}, false, fmt.Errorf("promotion task %q is incomplete", stmtID)
 	}
 	return task, true, nil
+}
+
+func (c *KeeperCoordinator) readUnsafeResult(ctx context.Context, stmtID string) (UnsafeValidationResult, bool, error) {
+	data, ok, err := c.store.Get(ctx, c.unsafeResultPath(stmtID))
+	if err != nil || !ok {
+		return UnsafeValidationResult{}, ok, err
+	}
+	fields, err := parseKeeperKV(data)
+	if err != nil {
+		return UnsafeValidationResult{}, false, err
+	}
+	rowCount, err := strconv.ParseUint(fields["row_count"], 10, 64)
+	if err != nil {
+		return UnsafeValidationResult{}, false, fmt.Errorf("unsafe result %q row_count: %w", stmtID, err)
+	}
+	result := UnsafeValidationResult{
+		ValidationID: fields["validation_id"],
+		StatementID:  firstNonEmpty(fields["statement_id"], stmtID),
+		TableID:      fields["table_id"],
+		UnsafeTable:  fields["unsafe_table"],
+		RowCount:     rowCount,
+		RowsHash:     fields["rows_hash"],
+	}
+	return result, true, nil
 }
 
 func (c *KeeperCoordinator) getRollbackTask(ctx context.Context, stmtID string) (RollbackTask, bool, error) {

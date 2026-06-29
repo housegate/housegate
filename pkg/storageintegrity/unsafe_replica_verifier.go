@@ -125,7 +125,7 @@ func (r ClickHouseUnsafeDigestReader) ReadUnsafeDigest(ctx context.Context, repl
 
 	var rowCount uint64
 	var rowsHash string
-	if err := queryUnsafePartsDigest(ctx, conn, databaseName, tableName, &rowCount, &rowsHash); err != nil {
+	if err := queryActivePartsDigest(ctx, conn, databaseName, tableName, &rowCount, &rowsHash); err != nil {
 		return UnsafeReplicaDigest{}, err
 	}
 	return UnsafeReplicaDigest{
@@ -139,7 +139,7 @@ type unsafeDigestConn interface {
 	Query(ctx context.Context, query string, args ...any) (driver.Rows, error)
 }
 
-func queryUnsafePartsDigest(ctx context.Context, conn unsafeDigestConn, databaseName, tableName string, rowCount *uint64, rowsHash *string) error {
+func queryActivePartsDigest(ctx context.Context, conn unsafeDigestConn, databaseName, tableName string, rowCount *uint64, rowsHash *string) error {
 	queries := []string{
 		"SELECT ifNull(sum(rows), 0), lower(hex(sipHash128(groupArray(toString(tuple(name, rows, hash_of_all_files, hash_of_uncompressed_files)))))) FROM (SELECT name, rows, hash_of_all_files, hash_of_uncompressed_files FROM system.parts WHERE active AND database = ? AND table = ? ORDER BY name)",
 		"SELECT ifNull(sum(rows), 0), lower(hex(sipHash128(groupArray(toString(tuple(name, rows, bytes_on_disk)))))) FROM (SELECT name, rows, bytes_on_disk FROM system.parts WHERE active AND database = ? AND table = ? ORDER BY name)",
@@ -174,7 +174,7 @@ func queryUnsafePartsDigest(ctx context.Context, conn unsafeDigestConn, database
 		}
 		return nil
 	}
-	return fmt.Errorf("query unsafe parts digest: %w", lastErr)
+	return fmt.Errorf("query active parts digest: %w", lastErr)
 }
 
 func splitClickHouseQualifiedTableName(name string) (string, string, error) {

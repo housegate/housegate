@@ -2,14 +2,18 @@ package storageintegrity
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 )
 
 type ClickHousePromotionExecutor struct {
-	conn clickhouse.Conn
+	conn             clickhouse.Conn
+	StatementTimeout time.Duration
+	ReadbackTimeout  time.Duration
 }
 
 func NewClickHousePromotionExecutor(addr string) (*ClickHousePromotionExecutor, error) {
@@ -34,7 +38,13 @@ func (e *ClickHousePromotionExecutor) ExecPromotionSQL(ctx context.Context, sql 
 	if e == nil || e.conn == nil {
 		return fmt.Errorf("clickhouse promotion executor is nil")
 	}
-	return e.conn.Exec(ctx, sql)
+	execCtx, cancel := context.WithTimeout(ctx, durationOrDefault(e.StatementTimeout, defaultPromotionStatementTimeout))
+	defer cancel()
+	err := e.conn.Exec(execCtx, sql)
+	if err != nil && promotionStatementMayHaveApplied(sql) && (errors.Is(err, context.DeadlineExceeded) || execCtx.Err() != nil) {
+		return nil
+	}
+	return err
 }
 
 func (e *ClickHousePromotionExecutor) ExecRollbackSQL(ctx context.Context, sql string) error {
@@ -51,13 +61,36 @@ func (e *ClickHousePromotionExecutor) ReadPromotionRows(ctx context.Context, spe
 	if strings.TrimSpace(spec.Table) == "" {
 		return PromotionReadbackResult{}, nil
 	}
-	sql := "SELECT count() FROM " + spec.Table
 	if strings.TrimSpace(spec.PromotionExpr) != "" {
-		sql += " WHERE " + spec.PromotionExpr
+		return PromotionReadbackResult{}, fmt.Errorf("promotion readback expression is not supported by parts digest reader")
 	}
-	var rows uint64
-	if err := e.conn.QueryRow(ctx, sql).Scan(&rows); err != nil {
+	databaseName, tableName, err := splitClickHouseQualifiedTableName(spec.Table)
+	if err != nil {
 		return PromotionReadbackResult{}, err
 	}
-	return PromotionReadbackResult{RowCount: rows}, nil
+	readCtx, cancel := context.WithTimeout(ctx, durationOrDefault(e.ReadbackTimeout, defaultPromotionReadbackTimeout))
+	defer cancel()
+	var rows uint64
+	var rowsHash string
+	if err := queryActivePartsDigest(readCtx, e.conn, databaseName, tableName, &rows, &rowsHash); err != nil {
+		return PromotionReadbackResult{}, err
+	}
+	return PromotionReadbackResult{RowCount: rows, RowsHash: "0x" + strings.TrimPrefix(rowsHash, "0x")}, nil
+}
+
+const (
+	defaultPromotionStatementTimeout = 10 * time.Second
+	defaultPromotionReadbackTimeout  = 10 * time.Second
+)
+
+func durationOrDefault(d, fallback time.Duration) time.Duration {
+	if d > 0 {
+		return d
+	}
+	return fallback
+}
+
+func promotionStatementMayHaveApplied(sql string) bool {
+	sql = strings.ToLower(strings.TrimSpace(sql))
+	return strings.HasPrefix(sql, "insert ") || strings.HasPrefix(sql, "truncate ")
 }
