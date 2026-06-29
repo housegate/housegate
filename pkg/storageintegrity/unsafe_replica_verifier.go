@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 
@@ -15,7 +16,8 @@ type UnsafeReplicaDigestReader interface {
 }
 
 type UnsafeReplicaHashVerifier struct {
-	Reader UnsafeReplicaDigestReader
+	Reader         UnsafeReplicaDigestReader
+	ReplicaTimeout time.Duration
 }
 
 func (v UnsafeReplicaHashVerifier) VerifyUnsafe(ctx context.Context, task UnsafeValidationTask) (UnsafeValidationResult, error) {
@@ -40,11 +42,17 @@ func (v UnsafeReplicaHashVerifier) VerifyUnsafe(ctx context.Context, task Unsafe
 
 	var expected UnsafeReplicaDigest
 	results := make([]UnsafeReplicaDigest, 0, len(task.Replicas))
+	replicaTimeout := v.ReplicaTimeout
+	if replicaTimeout <= 0 {
+		replicaTimeout = defaultUnsafeReplicaTimeout
+	}
 	for i, replica := range task.Replicas {
 		if replica.ReplicaID == "" {
 			return UnsafeValidationResult{}, fmt.Errorf("replica %d: replica_id is required", i)
 		}
-		digest, err := v.Reader.ReadUnsafeDigest(ctx, replica, task.UnsafeTable)
+		readCtx, cancel := context.WithTimeout(ctx, replicaTimeout)
+		digest, err := v.Reader.ReadUnsafeDigest(readCtx, replica, task.UnsafeTable)
+		cancel()
 		if err != nil {
 			return UnsafeValidationResult{}, fmt.Errorf("read unsafe digest from replica %q: %w", replica.ReplicaID, err)
 		}
@@ -75,6 +83,8 @@ func (v UnsafeReplicaHashVerifier) VerifyUnsafe(ctx context.Context, task Unsafe
 		Replicas:     results,
 	}, nil
 }
+
+const defaultUnsafeReplicaTimeout = 30 * time.Second
 
 type ClickHouseUnsafeDigestReader struct {
 	Username string

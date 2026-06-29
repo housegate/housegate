@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestUnsafeReplicaHashVerifierRejectsDigestMismatch(t *testing.T) {
@@ -59,6 +60,33 @@ func TestUnsafeReplicaHashVerifierAcceptsMatchingReplicas(t *testing.T) {
 	}
 	if len(result.Replicas) != 2 {
 		t.Fatalf("replica results = %+v", result.Replicas)
+	}
+}
+
+func TestUnsafeReplicaHashVerifierTimesOutReplicaRead(t *testing.T) {
+	verifier := UnsafeReplicaHashVerifier{
+		ReplicaTimeout: 10 * time.Millisecond,
+		Reader: unsafeDigestReaderFunc(func(ctx context.Context, _ UnsafeReplica, _ string) (UnsafeReplicaDigest, error) {
+			<-ctx.Done()
+			return UnsafeReplicaDigest{}, ctx.Err()
+		}),
+	}
+	started := time.Now()
+	_, err := verifier.VerifyUnsafe(context.Background(), UnsafeValidationTask{
+		ValidationID: "uv-timeout",
+		StatementID:  "stmt-timeout",
+		TableID:      "dual_hg_auth.t",
+		UnsafeTable:  "`hg_unsafe`.`dual_hg_auth.t_a`",
+		Replicas: []UnsafeReplica{
+			{ReplicaID: "r1", Addr: "127.0.0.1:9000"},
+			{ReplicaID: "r2", Addr: "127.0.0.1:9001"},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("VerifyUnsafe error = %v, want replica timeout", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("VerifyUnsafe took %s, want timeout to cut off blocked replica read", elapsed)
 	}
 }
 

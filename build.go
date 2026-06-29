@@ -266,7 +266,8 @@ func buildStorageIntegrityRuntime(cfg config.StorageIntegrityConfig, opts Option
 		if unsafeVerifier == nil {
 			if len(unsafeReplicas) >= 2 {
 				unsafeVerifier = storageintegrity.UnsafeReplicaHashVerifier{
-					Reader: storageintegrity.ClickHouseUnsafeDigestReader{},
+					Reader:         storageintegrity.ClickHouseUnsafeDigestReader{},
+					ReplicaTimeout: cfg.UnsafeValidation.QueryTimeout.Duration,
 				}
 			} else {
 				unsafeVerifier = storageintegrity.MockUnsafeValidationVerifier{ReplicaID: "housegate-local"}

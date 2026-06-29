@@ -39,7 +39,8 @@ type StorageIntegrityHouseKeeper struct {
 }
 
 type StorageIntegrityUnsafeValidation struct {
-	Replicas []StorageIntegrityUnsafeReplica `json:"replicas" yaml:"replicas"`
+	Replicas     []StorageIntegrityUnsafeReplica `json:"replicas"      yaml:"replicas"`
+	QueryTimeout Duration                        `json:"query_timeout" yaml:"query_timeout"`
 }
 
 type StorageIntegrityUnsafeReplica struct {
@@ -125,6 +126,9 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 		if len(c.UnsafeValidation.Replicas) == 0 {
 			errs = append(errs, errors.New("storage_integrity.unsafe_validation.replicas are required when storage_integrity.housekeeper.endpoints is set"))
 		}
+	}
+	if c.UnsafeValidation.QueryTimeout.Duration < 0 {
+		errs = append(errs, fmt.Errorf("storage_integrity.unsafe_validation.query_timeout must be >= 0 (got %s)", c.UnsafeValidation.QueryTimeout.Duration))
 	}
 	if c.Workers.UnsafeValidation && len(c.UnsafeValidation.Replicas) == 1 {
 		errs = append(errs, errors.New("storage_integrity.unsafe_validation.replicas must be empty for mock mode or contain at least two replicas"))
