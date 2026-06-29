@@ -233,6 +233,14 @@ func targetFromContext(qctx *plugin.QueryContext) (sqlTarget, bool) {
 		}
 		return sqlTarget{tableID: tableID}, true
 	}
+	defaultDB := ""
+	if qctx.Session != nil {
+		st := qctx.Session.State()
+		defaultDB = firstNonEmpty(st.LogicalDatabase, st.Database)
+	}
+	if tableID, ok := insertTargetFromSQL(firstNonEmpty(qctx.OriginalSQL, qctx.Query.Body), defaultDB); ok {
+		return sqlTarget{tableID: tableID}, true
+	}
 	return sqlTarget{}, false
 }
 
@@ -256,6 +264,92 @@ func replaceTargetAfterKeyword(sql, keyword, target string) (string, error) {
 		return "", fmt.Errorf("target identifier not found after %q", keyword)
 	}
 	return sql[:targetStart] + target + sql[targetEnd:], nil
+}
+
+func insertTargetFromSQL(sql, defaultDB string) (string, bool) {
+	start, ok := findKeywordEnd(sql, "insert into")
+	if !ok {
+		return "", false
+	}
+	i := skipSpaces(sql, start)
+	if end, ok := matchKeyword(sql, i, "table"); ok {
+		i = skipSpaces(sql, end)
+	}
+	parts := make([]string, 0, 2)
+	for {
+		token, end, ok := readIdentifierToken(sql, i)
+		if !ok {
+			return "", false
+		}
+		parts = append(parts, token)
+		i = skipSpaces(sql, end)
+		if i >= len(sql) || sql[i] != '.' {
+			break
+		}
+		i = skipSpaces(sql, i+1)
+	}
+	if len(parts) == 0 {
+		return "", false
+	}
+	if len(parts) == 1 && strings.TrimSpace(defaultDB) != "" {
+		return strings.TrimSpace(defaultDB) + "." + parts[0], true
+	}
+	return strings.Join(parts, "."), true
+}
+
+func matchKeyword(sql string, i int, keyword string) (int, bool) {
+	end := i + len(keyword)
+	if i < 0 || end > len(sql) || !strings.EqualFold(sql[i:end], keyword) {
+		return 0, false
+	}
+	if !isBoundary(sql, i-1) || !isBoundary(sql, end) {
+		return 0, false
+	}
+	return end, true
+}
+
+func readIdentifierToken(sql string, i int) (string, int, bool) {
+	if i >= len(sql) {
+		return "", 0, false
+	}
+	switch sql[i] {
+	case '`':
+		return readQuotedIdentifier(sql, i, '`')
+	case '"':
+		return readQuotedIdentifier(sql, i, '"')
+	default:
+		start := i
+		for i < len(sql) {
+			r := rune(sql[i])
+			if unicode.IsSpace(r) || r == '(' || r == ')' || r == ',' || r == ';' || r == '.' {
+				break
+			}
+			i++
+		}
+		if i == start {
+			return "", 0, false
+		}
+		return sql[start:i], i, true
+	}
+}
+
+func readQuotedIdentifier(sql string, i int, quote byte) (string, int, bool) {
+	var b strings.Builder
+	i++
+	for i < len(sql) {
+		if sql[i] != quote {
+			b.WriteByte(sql[i])
+			i++
+			continue
+		}
+		if i+1 < len(sql) && sql[i+1] == quote {
+			b.WriteByte(quote)
+			i += 2
+			continue
+		}
+		return b.String(), i + 1, true
+	}
+	return "", 0, false
 }
 
 func findKeywordEnd(sql, keyword string) (int, bool) {
