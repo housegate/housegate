@@ -1,0 +1,30 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "storageintegrity",
+    srcs = ["plugin.go"],
+    importpath = "housegate/housegate/pkg/plugins/storageintegrity",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/chproto",
+        "//pkg/chsession",
+        "//pkg/log",
+        "//pkg/plugin",
+        "//pkg/replay",
+        "//pkg/sqlmeta",
+        "//pkg/storageintegrity",
+    ],
+)
+
+go_test(
+    name = "storageintegrity_test",
+    srcs = ["plugin_test.go"],
+    embed = [":storageintegrity"],
+    deps = [
+        "//pkg/chproto",
+        "//pkg/chsession",
+        "//pkg/plugin",
+        "//pkg/sqlmeta",
+        "//pkg/storageintegrity",
+    ],
+)

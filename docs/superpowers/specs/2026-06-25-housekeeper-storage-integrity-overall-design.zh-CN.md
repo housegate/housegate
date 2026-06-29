@@ -1,7 +1,7 @@
 # HouseKeeper Storage Integrity 整体方案
 
 **日期：** 2026-06-25
-**状态：** Proposed
+**状态：** P0 HouseGate implemented / HouseGate KeeperCoordinator znode input plane implemented / ClickHouse Keeper C++ HouseKeeper storage-integrity state machine implemented / HouseKeeper SafeAudit znode RPC + ledger implemented
 **HouseGate 基线：** `feat/interserver-proxy`，核心能力是 Keeper proxy、interserver mTLS mesh、keeper shard/orchestrator。
 **ClickHouse 基线：** `git@github.com:sentioxyz/ClickHouse.git` / `26.3-lts-decimal512`。本轮只允许修改 Keeper / HouseKeeper 相关代码，不改 `StorageReplicatedMergeTree`、`MergeTree`、SQL parser / interpreter、part format。
 **输入方案：**
@@ -14,7 +14,63 @@
 
 ## 1. 总结结论
 
-推荐路线是 **HouseGate sidecar 网络边界 + ClickHouse Keeper fork 内的 HouseKeeper policy/state + dual-table physical model + replay quorum promotion + safe serving audit**。
+推荐路线是 **HouseGate sidecar 网络边界 + ClickHouse Keeper fork 内的 HouseKeeper policy/state + dual-table physical model + replay quorum + external finality/rollback event gate + safe serving audit**。
+
+### 1.1 2026-06-26 HouseGate P0 实现口径
+
+当前 `feat/interserver-proxy-main-sync` 已在 HouseGate 侧实现一条 INSERT 的 P0 闭环：
+
+```text
+clickhouse-client
+  -> client-side HouseGate 签名转发
+  -> server-side HouseGate 验签
+  -> native/sql-rewriter 做原有 logical -> physical rewrite
+  -> storage-integrity plugin 覆盖 INSERT target 到 hg_unsafe
+  -> ClickHouse 接收 unsafe INSERT
+  -> QueryComplete 后 HouseGate 写 MockPayloadStore
+  -> 配置 HouseKeeper endpoints 时，KeeperCoordinator 只向 ClickHouse Keeper 写 statement / attestation / unsafe result / finality / rollback input znodes；未配置时才使用 LocalCoordinator mock
+  -> ClickHouse Keeper C++ HouseKeeper 状态机持久化 decision ledger，并生成 replay / unsafe validation / promotion / rollback task
+  -> MockReplayVerifier 生成 attestation
+  -> UnsafeValidationWorker 验证 hg_unsafe 多副本 row count / rows hash 一致
+  -> 外部 MockFinalityService 向 HouseKeeper 提交 FinalityEvent(kind=mock)
+  -> HouseKeeper 在 replay + unsafe validation + finality 成立后下发 PromotionTask
+  -> PromotionWorker 执行 INSERT INTO hg_safe SELECT * FROM hg_unsafe + TRUNCATE hg_unsafe
+  -> KeeperCoordinator 或 LocalCoordinator 生成 SafeAuditTask，SafeAuditWorker 提交 vote
+  -> SELECT 默认被 storage-integrity plugin 改写到 hg_safe
+```
+
+这次实现的边界：
+
+- `Replay Verifier` 和 `Promotion Worker / SNode` 放在 HouseGate 后台 worker 内。
+- `KeeperCoordinator` 是 HouseGate 到真实 ClickHouse Keeper/HouseKeeper 的 P0 输入面接入：HouseGate 写 statement、attestation、unsafe validation result、finality/rollback event；replay job、unsafe task、decision、promotion/rollback task 是 ClickHouse Keeper C++ HouseKeeper 状态机生成的 managed ledger。
+- 3 CH / 3 HG / 3 HouseKeeper 拓扑下，每个 server-side HouseGate 使用独立 `storage_integrity.housekeeper.worker_id`。Replay job 是多领取任务，3 个 HG 分别提交 attestation，`replay_quorum=2` 表示同一 replay result root/hash 至少 2/3 一致才允许继续。
+- unsafe validation 先于 finality/promotion。`UnsafeValidationWorker` 对配置的 3 个 ClickHouse replica 读取同一 unsafe 表并比较 row count / rows hash，必须 3/3 replica 全部一致才写 validation success。
+- promotion / rollback 是单执行任务，由 HouseKeeper 状态机在 replay quorum + unsafe validation + finality 或 rollback event 后生成 task；HouseGate worker 只领取并执行，worker 侧仍需通过 Keeper znode lease 防止重复执行。
+- `SafeAuditCoordinator` 的仲裁语义已经分两层落地：HouseGate `LocalCoordinator`/`KeeperCoordinator` 保留 P0 task/vote 接口；ClickHouse Keeper fork 新增 Keeper 侧 `SafeAuditCoordinator` 状态机，并通过 HouseKeeper znode RPC 接入 audit task、vote、decision ledger、minority quarantine marker。
+- `Payload / DA Store` 使用 HouseGate 内置 `MockPayloadStore`，本地 content-addressed 文件存储，返回 `mockda://...` ref。
+- `Finality / L2 Anchor Watcher` 和 `Rollback / Dispute Watcher` 是 HouseGate 外部服务：它们把 finality / rollback event 写给 HouseKeeper；HouseKeeper 持久化事件并再下发 promotion / rollback task 给 HouseGate worker。
+- 当前 P0 代码中的 `MockExternalFinalityService` 只负责模拟外部服务提交 finality event；它不在 HouseGate runtime 内轮询，也不直接触发 promotion。
+- native rewriter 本身没有实现 storage-integrity 语义；它仍只做原有 logical/physical 改写。storage-integrity plugin 插在 rewriter 之后，把 INSERT 改到 unsafe、把 SELECT 改到 safe。
+- unsafe validation 是 finality 和 promotion 的前置条件。配置 `storage_integrity.unsafe_validation.replicas` 后，HouseGate 会连接多个 ClickHouse replica，对同一 `hg_unsafe` 表计算 row count 和 rows hash；任一 replica 不一致则提交 validation failure，不发 finality / promotion task。
+- 未配置 unsafe replicas 时使用 `MockUnsafeValidationVerifier`，仅用于本地 P0 链路验证，不代表多节点安全承诺。
+- P0 promotion 是 SQL copy：`INSERT INTO safe SELECT * FROM unsafe` 后 `TRUNCATE unsafe`。它用于跑通链路，不等价于最终的 part-level ATTACH/REPLACE promotion。
+
+已下沉到 ClickHouse Keeper C++ HouseKeeper：
+
+- `/housekeeper/v1/storage_integrity/statements/<statement_id>` statement admission。
+- replay quorum tally / decision ledger：`/attestations/<statement_id>/<worker_id>` 输入触发 `/decisions/<statement_id>` 更新，`replay_quorum=2` 表示同一 replay result hash 至少 2 票。
+- unsafe validation gate：`/unsafe_results/<statement_id>` 必须包含 configured replica set 的一致 row count / rows hash。
+- finality/rollback event gate：`/finality/<statement_id>` 和 `/rollbacks/<statement_id>` 是外部服务输入，rollback 优先阻断 promotion。
+- managed ledger fail-closed：拒绝直接写 replay job、unsafe task、decision、promotion task、rollback task 等 managed path。
+
+尚未实现 / 仍需继续：
+
+- `SourceClaim`、part registry、safe snapshot manifest 的生产级 C++ 状态机；当前 C++ 状态机已覆盖 statement/replay/unsafe/finality/rollback/promotion task source，但还没有落到最终 part-level manifest。
+- SafeAuditCoordinator 的生产级权限/签名验真策略；当前 ClickHouse fork 已接入 znode RPC、持久 decision ledger 和 minority quarantine marker，但 worker 身份签名仍按字段完整性 fail-closed 校验，未做真实 cryptographic verify。
+- Data block 在线 `_hg_row_id` 注入和可 replay 的 row-level canonical payload。
+- part-level byte-side lthash / partition delta 校验；当前 unsafe validation 的 rows hash 是 ClickHouse 查询侧 digest，不是最终 PartRowLtHash。
+- `INSERT SELECT`、UPDATE/DELETE、materialized view sink。
+- 真实 DA/L2 finality adapter 和真实 rollback/dispute adapter。
 
 三份方案分别落在不同层：
 
@@ -26,7 +82,7 @@
 
 ```text
 写入正确性层：StatementEnvelope + HouseKeeper sequencing + replay quorum + byte-side part check
-发布层：HouseKeeper-signed promotion lease + promotion ledger + REPLACE/ATTACH partition
+发布层：external finality/rollback event -> HouseKeeper-signed promotion/rollback lease + ledger + REPLACE/ATTACH/quarantine
 运行时服务审计层：HouseKeeper 内的 SafeAuditCoordinator 协调任务，HouseGate SafeAuditWorker 做多副本现场 hash / batch hash 比较
 ```
 
@@ -118,11 +174,20 @@ flowchart LR
   KP --> HK["HouseKeeper<br/>ClickHouse Keeper fork"]
   CH <-->|"part fetch via mTLS mesh"| HG
   HK --> RJ["Replay Jobs"]
-  RJ --> VR["Replay Verifiers<br/>HouseGate worker"]
+  RJ --> VR["Replay Verifier Set<br/>>=3 HouseGate workers"]
   VR --> HK
+  HK --> UV["UnsafeValidationWorker<br/>HouseGate worker"]
+  UV --> CH
+  UV --> HK
+  EF["External Finality / L2 Anchor Watcher<br/>mock service in P0"] -->|"FinalityEvent"| HK
+  ER["External Rollback / Dispute Watcher<br/>mock service in P0"] -->|"RollbackEvent"| HK
   HK --> PL["Promotion Lease / Ledger"]
   PL --> SN["SNode / Promotion Worker<br/>HouseGate worker"]
   SN --> CH
+  HK --> RL["Rollback Lease / Tasks"]
+  RL --> RW["Rollback Worker<br/>HouseGate worker"]
+  RW --> CH
+  RW --> HK
   HK --> SA["SafeAuditCoordinator<br/>HouseKeeper state machine"]
   SA --> AW["SafeAuditWorker<br/>HouseGate worker"]
   AW --> CH
@@ -137,21 +202,25 @@ flowchart LR
 | Client-side HouseGate | HouseGate binary，agent mode | 作为可信入口 sidecar，接收原始 client SQL，用 `agent.private_key_hex` 生成 `SQL_x_auth_token`，payload 为 `purpose=housegate-query`、`iss=<ingress address>`、`qhash=Keccak256(Query.Body)`，然后转发到 server-side HouseGate |
 | Server-side HouseGate ingress | HouseGate process | 验证 client-side HouseGate 的 JWS、allowlist 和 qhash；执行 virtual/physical rewrite；计算/记录 INSERT payload hash/ref；作为 ClickHouse SQL 入口、Keeper proxy、interserver mesh |
 | Mock Payload / DA Store | HouseGate process 内置 mock adapter | 本轮不接真实 DA。HouseGate 把 INSERT payload bytes 写入本地 durable mock store，生成 `mockda://...` 风格 `payload_ref`；Keeper 只保存 digest/ref，不保存大 payload |
-| Replay verifier | HouseGate process 内置 worker | 在 pinned executor 上 replay payload，读取 actual candidate part bytes，计算 replay root / partition delta / byte-side lthash，提交 signed attestation |
-| Promotion Worker / SNode | HouseGate process 内置 worker | 持有 HouseKeeper promotion lease，执行 `ATTACH` / `REPLACE PARTITION`，做 safe readback count/hash，提交 promotion finish |
-| Mock Finality / L2 Anchor Watcher | HouseGate process 内置 mock worker | 本轮不接真实 L2 anchor。按配置立即 finality 或延迟 N 秒 finality，把 mock finalized marker 写回 HouseKeeper |
-| SafeAuditCoordinator | HouseKeeper / ClickHouse Keeper fork | 维护 audit task、replica set、vote、majority decision、quarantine action；不直接访问 ClickHouse 行数据，不计算大范围 hash |
+| Replay verifier set | 多个 HouseGate process 内置 worker，建议 P1 最少 3 个 | HouseKeeper C++ 状态机给多个 verifier 下发同一 `ReplayJob`；各 worker 在 pinned executor 上 replay payload，读取 actual candidate part bytes，计算 replay root / partition delta / byte-side lthash，提交 signed attestation；HouseKeeper 对相同 result root/hash 做 majority/quorum 判定 |
+| UnsafeValidationWorker | HouseGate process 内置 worker | 在 finality 前连接多个 `hg_unsafe` replica，比较 row count / rows hash；任一 replica 不一致则提交 validation failure，不进入 finality / promotion |
+| External Finality / L2 Anchor Watcher | HouseGate 外部服务，P0 可用 mock service | 观察真实 L2/DA 或 mock timer，把 signed `FinalityEvent` 提交给 HouseKeeper；不直接调用 HouseGate，不执行 promotion |
+| External Rollback / Dispute Watcher | HouseGate 外部服务，P0 可用 mock service | 观察 dispute/rollback 信号，把 signed `RollbackEvent` 提交给 HouseKeeper；不直接操作 ClickHouse |
+| Promotion Worker / SNode | HouseGate process 内置 worker | 领取 HouseKeeper 生成的 promotion task，持有 promotion lease，执行 P0 SQL copy 或 P1 `ATTACH` / `REPLACE PARTITION`，做 safe readback count/hash，提交 promotion finish |
+| Rollback Worker | HouseGate process 内置 worker | 领取 HouseKeeper 生成的 rollback task，持有 rollback lease，执行 unsafe quarantine、sealed buffer cleanup、promotion abort 或 safe snapshot 回滚动作，提交 rollback finish |
+| SafeAuditCoordinator | HouseKeeper / ClickHouse Keeper fork | 维护 audit task、replica set、vote、majority/minority/dispute decision；不直接访问 ClickHouse 行数据，不计算大范围 hash。当前 ClickHouse fork 通过 `/housekeeper/v1/safe_audits/...` znode RPC 持久化 task/vote/decision，并为 minority replica 写 quarantine marker |
 | SafeAuditWorker | HouseGate process 内置 worker | 按 audit task 读取多个 safe replica，canonical encode rows，计算 row/batch hash，提交 signed audit vote |
-| HouseKeeper | ClickHouse Keeper fork | sequencing、statement uniqueness、RMT metadata admission、ReplayJob、attestation quorum、promotion ledger、safe manifest、SafeAuditCoordinator 状态 |
+| HouseKeeper | ClickHouse Keeper fork | sequencing、statement uniqueness、RMT metadata admission、storage-integrity statement admission、ReplayJob/unsafe task side effect、attestation quorum、unsafe validation gate、external finality/rollback event admission、promotion/rollback task ledger、SafeAuditCoordinator 状态；P1 继续补 safe manifest / part registry |
 | ClickHouse | ClickHouse server 26.3 | 原生执行 SQL、生成 unsafe parts、通过 interserver fetch 复制 parts、执行 promotion SQL |
 
 部署边界：
 
-- P0/P1 不新增独立服务：Replay Verifier、Promotion Worker / SNode、SafeAuditWorker、Mock Payload / DA Store、Mock Finality / L2 Anchor Watcher 都作为 HouseGate 后台 worker / local adapter。
+- P0/P1 中 Replay Verifier、UnsafeValidationWorker、Promotion Worker / SNode、Rollback Worker、SafeAuditWorker、Mock Payload / DA Store 作为 HouseGate 后台 worker / local adapter。Replay quorum 需要多个 HouseGate verifier worker；单进程 mock verifier 只用于本地 P0 单元/烟测，不代表多数验证。
+- Finality / L2 Anchor Watcher 和 Rollback / Dispute Watcher 不放在 HouseGate 内；它们是外部服务。P0 可用 mock service / test harness 直接调用 HouseKeeper event API。
 - Client-side HouseGate 不要求新 binary，也不要求改 `clickhouse-client`；它复用现有 HouseGate agent mode。server-side HouseGate 的 `auth.allowed_addresses` 必须包含这些入口 HouseGate signer address。
-- Keeper / HouseKeeper 只承载强一致控制面：statement sequencing、part registry、replay quorum decision、promotion lease/ledger、safe snapshot、audit coordinator/vote state。
-- Keeper / HouseKeeper 不做重计算和外部 IO：不 replay SQL、不扫 ClickHouse safe 表、不计算大范围 row hash、不直接访问 DA/L2 网络、不执行 promotion SQL。
-- 后续如果 replay、promotion 或 finality watcher 的负载独立扩展需求明显，可以把 HouseGate worker 拆成独立服务；接口仍然保持 `HouseGate worker <-> HouseKeeper control plane`，不改变 HouseKeeper 的状态所有权。
+- Keeper / HouseKeeper 只承载强一致控制面：statement sequencing、replay quorum decision、unsafe validation gate、external finality/rollback event admission、promotion/rollback task ledger、audit coordinator/vote state；part registry 和 safe snapshot manifest 是下一步 C++ 状态机扩展。
+- Keeper / HouseKeeper 不做重计算和外部 IO：不 replay SQL、不扫 ClickHouse safe 表、不计算大范围 row hash、不主动访问 DA/L2 网络、不执行 promotion / rollback SQL。它只接收外部服务提交的 signed event。
+- 后续如果 replay、promotion、rollback 或 safe audit 的负载独立扩展需求明显，可以把 HouseGate worker 拆成独立服务；接口仍然保持 `worker <-> HouseKeeper control plane`，不改变 HouseKeeper 的状态所有权。
 
 签名边界：
 
@@ -163,9 +232,11 @@ flowchart LR
 本轮外部依赖模拟策略：
 
 - `MockPayloadStore`：content-addressed 本地存储，key 至少包含 `payload_hash`、`statement_id`、`table_id`。Replay Verifier 只能通过 `payload_ref` 读 payload，并重新校验 bytes hash 等于 HouseKeeper 中的 `payload_hash`。
-- `MockFinalityWatcher`：不访问真实 DA/L2。P0 默认 `immediate_finality=true`；需要测试延迟/重试时可配置 `finality_delay_ms`，由 HouseGate worker 到期后写入 `FinalityRecord(kind=mock, finalized=true)`。
-- HouseKeeper 把 mock finality 当作普通 finalized marker 处理，但 manifest 和 audit record 必须标注 `finality_kind=mock`，避免和真实 DA/L2 安全承诺混淆。
-- 真实 Payload / DA Store、真实 L2 Anchor Watcher 后移到 P2+；替换时只替换 HouseGate adapter，不改变 HouseKeeper state machine 的输入字段。
+- `UnsafeValidationWorker`：配置 `storage_integrity.unsafe_validation.replicas` 后连接至少两个 ClickHouse replica，查询同一 `hg_unsafe` 表并比较 row count / rows hash；配置为空时走 `MockUnsafeValidationVerifier`，只用于本地 P0 链路。
+- `MockExternalFinalityService`：不访问真实 DA/L2。P0 默认 immediate event；需要测试延迟/重试时可配置 `finality_delay_ms`。它向 HouseKeeper 提交 `FinalityEvent(kind=mock, finalized=true)`，不向 HouseGate 发请求。
+- `MockExternalRollbackService`：不访问真实 dispute/L2。P0 用于提交 `RollbackEvent(kind=mock, reason=...)`，验证 HouseKeeper 不再发 promotion lease，而是下发 rollback task 给 HouseGate。
+- HouseKeeper 把 mock finality / rollback event 当作普通控制面 event 处理，但 manifest、promotion record、rollback record 和 audit record 必须标注 `event_kind=mock`，避免和真实 DA/L2 安全承诺混淆。
+- 真实 Payload / DA Store 后移到 P2+；真实 Finality / L2 Anchor Watcher、Rollback / Dispute Watcher 替换外部 mock service，不改变 HouseKeeper state machine 的输入字段。
 
 ## 5. 物理表模型
 
@@ -378,18 +449,35 @@ GET  /v1/state
 ```mermaid
 sequenceDiagram
   participant HK as HouseKeeper
-  participant V as Replay Verifier Quorum<br/>HouseGate worker
+  participant V as Replay Verifier Set<br/>>=3 HouseGate workers
+  participant UV as UnsafeValidationWorker<br/>HouseGate worker
+  participant F as External Finality Service<br/>mock / L2 watcher
+  participant R as External Rollback Service<br/>mock / dispute watcher
   participant SN as SNode / Promotion Worker<br/>HouseGate worker
+  participant RW as Rollback Worker<br/>HouseGate worker
   participant CH as ClickHouse
 
-  HK->>V: ReplayJob(prev safe snapshot + payload_ref/hash)
-  V->>HK: ReplayAttestation + partition delta + byte-side lthash
-  HK->>HK: quorum / delta / byte-side 三路校验
-  HK->>SN: PromotionLease(snapshot_id, touched partitions)
-  SN->>CH: build hg_promote table with exact post-state partition
-  SN->>CH: ALTER hg_safe REPLACE PARTITION FROM hg_promote
-  SN->>HK: finish promotion(new safe parts / manifest)
-  HK->>HK: publish SafeSnapshotManifest
+  HK->>V: ReplayJobs(prev safe snapshot + payload_ref/hash)
+  V->>HK: ReplayAttestations + partition delta + byte-side lthash
+  HK->>HK: majority/quorum + delta + byte-side 三路校验
+  HK->>UV: UnsafeValidationTask(touched unsafe replicas)
+  UV->>CH: read hg_unsafe row count / rows hash
+  UV->>HK: UnsafeValidationResult
+  alt external finality
+    F->>HK: FinalityEvent(batch_id, kind=mock/real)
+    HK->>HK: persist event and check replay + unsafe validation
+    HK->>SN: PromotionLease(snapshot_id, touched partitions)
+    SN->>CH: build hg_promote table with exact post-state partition
+    SN->>CH: ALTER hg_safe REPLACE PARTITION FROM hg_promote
+    SN->>HK: finish promotion(new safe parts / manifest)
+    HK->>HK: publish SafeSnapshotManifest
+  else external rollback
+    R->>HK: RollbackEvent(batch_id, reason, kind=mock/real)
+    HK->>HK: persist event and block promotion
+    HK->>RW: RollbackLease / RollbackTask
+    RW->>CH: quarantine/drop unsafe or abort in-flight promotion
+    RW->>HK: rollback finish
+  end
 ```
 
 优点：
@@ -413,9 +501,13 @@ dual unsafe buffer
 -> seal old buffer
 -> source manifest / rows hash
 -> HouseKeeper replay quorum verified
--> ATTACH PARTITION FROM sealed unsafe
--> safe 本次 rows hash 校验
--> ledger Applied
+-> unsafe 多副本 row count / rows hash 验证通过
+-> 等待外部 finality 或 rollback event 写入 HouseKeeper
+-> finality: ATTACH PARTITION FROM sealed unsafe
+-> finality: safe 本次 rows hash 校验
+-> finality: ledger Applied
+-> rollback: quarantine / drop sealed unsafe
+-> rollback: ledger RolledBack
 -> truncate sealed unsafe
 ```
 
@@ -514,14 +606,17 @@ BatchRecord(batch_id=batch_42, candidate_part_ids=[202606_1_1_0])
 | 10 | ClickHouse | native INSERT | unsafe data part | 生成 active part，例如 `202606_1_1_0`。 |
 | 11 | ClickHouse | RMT metadata write | Keeper create / multi request | 通过 `feat/interserver-proxy` 的 Keeper proxy 写入 HouseKeeper。 |
 | 12 | HouseKeeper policy | Keeper request + RMT log entry | `PartRecord(state=Unsafe)` | 解析 part name、partition、source replica、block id；确认能反查到 `StatementRecord`，否则拒绝进入 RMT log。 |
-| 13 | HouseKeeper | `StatementRecord` + `PartRecord` | `BatchRecord` / `ReplayJob` | 把 candidate part 纳入待验证 batch，并生成 replay job。 |
-| 14 | Replay verifier（HouseGate worker） | `ReplayJob` + payload store + candidate part bytes | `ReplayReceipt` | 从 HouseGate worker 拉 payload 并在 pinned executor 上 replay，读取 actual part bytes 计算 byte-side lthash。 |
-| 15 | HouseKeeper | quorum receipts | `BatchRecord(status=Verified)` | 三路校验通过：replay root、partition delta、byte-side part lthash。失败则 part quarantine。 |
-| 16 | HouseKeeper | verified batch + mock finality marker | `PromotionRecord` / promotion lease | Mock Finality Watcher 作为 HouseGate worker 写入 finalized marker；HouseKeeper 只根据 marker 和 verified batch 发放 lease。 |
-| 17 | Promotion worker（HouseGate worker） | promotion lease | `ATTACH PARTITION FROM sealed unsafe` 或 `REPLACE PARTITION FROM hg_promote` | P0 INSERT-only 可走 sealed attach；更通用路径走 promote shadow + replace。 |
-| 18 | Promotion worker（HouseGate worker） | safe table readback | `verified_rows_count` / `verified_rows_hash` | 校验 safe 中本次 rows 与 sealed manifest 一致，并把结果写回 HouseKeeper；Keeper 不直接扫表算 hash。 |
-| 19 | HouseKeeper | promotion finish | `SafeSnapshotManifest` | 发布新的 safe snapshot / safe watermark。 |
-| 20 | Server-side HouseGate | latest safe snapshot | read rewrite rule | 默认 `SELECT Transfer` 改写到 `hg_safe.Transfer_0xT`；`unsafe_latest` 才 union unsafe。 |
+| 13 | HouseKeeper | `StatementRecord` + `PartRecord` | `BatchRecord` / `ReplayJob` set | 把 candidate part 纳入待验证 batch，并给多个 HouseGate verifier 生成/分发 replay job。 |
+| 14 | Replay verifier set（>=3 HouseGate workers） | `ReplayJob` + payload store + candidate part bytes | `ReplayReceipt` / signed attestation | 每个 verifier 拉 payload 并在 pinned executor 上 replay，读取 actual part bytes 计算 byte-side lthash。 |
+| 15 | HouseKeeper | quorum attestations | `BatchRecord(status=Verified)` | 超过半数 verifier 对同一 replay root / partition delta / byte-side part lthash 一致后通过；失败则 part quarantine。 |
+| 16 | UnsafeValidationWorker（HouseGate worker） | verified batch + unsafe replica list | `UnsafeValidationResult` / `UnsafeValidationFailure` | 在 finality / promotion 前读取多个 `hg_unsafe` replica，比较 row count / rows hash；不一致则 fail closed，不允许 promotion。 |
+| 17 | External Finality / Rollback Service | DA/L2 或 mock decision | `FinalityEvent` / `RollbackEvent` | 外部服务把 finality 或 rollback 事件提交给 HouseKeeper；不直接调用 HouseGate。 |
+| 18 | HouseKeeper | verified batch + unsafe validation + external event | `PromotionRecord` / `RollbackRecord` | finality 成立则发 promotion lease；rollback 成立则发 rollback lease；二者由 HouseKeeper ledger 保证互斥。 |
+| 19 | Promotion worker（HouseGate worker） | promotion lease | `ATTACH PARTITION FROM sealed unsafe` 或 `REPLACE PARTITION FROM hg_promote` | P0 INSERT-only 可走 sealed attach；更通用路径走 promote shadow + replace。 |
+| 20 | Rollback worker（HouseGate worker） | rollback lease | unsafe quarantine/drop、sealed buffer cleanup、promotion abort | rollback 路径不发布 safe snapshot；已 promotion 的严格回滚需要按 previous manifest 生成 compensating transition，P0 先 fail closed / quarantine。 |
+| 21 | Promotion worker（HouseGate worker） | safe table readback | `verified_rows_count` / `verified_rows_hash` | 校验 safe 中本次 rows 与 sealed manifest 一致，并把结果写回 HouseKeeper；Keeper 不直接扫表算 hash。 |
+| 22 | HouseKeeper | promotion finish | `SafeSnapshotManifest` | 发布新的 safe snapshot / safe watermark。 |
+| 23 | Server-side HouseGate | latest safe snapshot | read rewrite rule | 默认 `SELECT Transfer` 改写到 `hg_safe.Transfer_0xT`；`unsafe_latest` 才 union unsafe。 |
 
 简化序列图：
 
@@ -533,8 +628,12 @@ sequenceDiagram
   participant HG as Server-side HouseGate
   participant HK as HouseKeeper
   participant CH as ClickHouse
-  participant V as Replay Verifier<br/>HouseGate worker
+  participant V as Replay Verifier Set<br/>>=3 HouseGate workers
+  participant UV as UnsafeValidationWorker<br/>HouseGate worker
+  participant F as External Finality Service<br/>mock / L2 watcher
+  participant R as External Rollback Service<br/>mock / dispute watcher
   participant P as Promotion Worker<br/>HouseGate worker
+  participant RW as Rollback Worker<br/>HouseGate worker
 
   C->>HG1: raw INSERT Transfer + payload
   HG1->>HG: INSERT + SQL_x_auth_token<br/>purpose=housegate-query, qhash
@@ -548,15 +647,25 @@ sequenceDiagram
   CH->>HK: RMT metadata via Keeper proxy
   HK->>HK: admission validates statement linkage
   HK->>HK: persist PartRecord and BatchRecord
-  HK->>V: ReplayJob(payload + prev safe snapshot + candidate part)
-  V->>HK: ReplayReceipt(root + partition_delta + byte_side_lthash)
-  HK->>HK: quorum verifies batch
-  V->>HK: mock finalized marker if required
-  HK->>P: PromotionLease
-  P->>CH: seal buffer and ATTACH / REPLACE partition into hg_safe
-  P->>HK: promotion finish with safe rows/hash
-  HK->>HK: publish SafeSnapshotManifest
-  HG->>CH: default SELECT rewrites to hg_safe.Transfer_0xT
+  HK->>V: ReplayJobs(payload + prev safe snapshot + candidate part)
+  V->>HK: ReplayReceipts(root + partition_delta + byte_side_lthash)
+  HK->>HK: majority/quorum verifies batch
+  HK->>UV: UnsafeValidationTask(batch_id, hg_unsafe replicas)
+  UV->>CH: read replica row count / rows hash
+  UV->>HK: UnsafeValidationResult
+  alt external finality
+    F->>HK: FinalityEvent(batch_id, kind=mock/real)
+    HK->>P: PromotionLease
+    P->>CH: seal buffer and ATTACH / REPLACE partition into hg_safe
+    P->>HK: promotion finish with safe rows/hash
+    HK->>HK: publish SafeSnapshotManifest
+    HG->>CH: default SELECT rewrites to hg_safe.Transfer_0xT
+  else external rollback
+    R->>HK: RollbackEvent(batch_id, reason)
+    HK->>RW: RollbackLease / RollbackTask
+    RW->>CH: quarantine/drop unsafe or abort promotion
+    RW->>HK: rollback finish
+  end
 ```
 
 INSERT-only 流程图：
@@ -572,11 +681,16 @@ flowchart TD
   F --> G{"HouseKeeper admission"}
   G -- "statement linkage 有效" --> H["PartRecord = Unsafe<br/>BatchRecord = Pending"]
   G -- "无 ingress 签名 / 无 linkage" --> X["拒绝进入 RMT log<br/>写入失败"]
-  H --> I["Replay verifier 从 payload_ref replay<br/>并读取 candidate part bytes"]
-  I --> J{"三路校验"}
-  J -- "replay root + partition delta + byte-side lthash 匹配" --> K["BatchRecord = Verified"]
+  H --> I["多个 Replay verifier 从 payload_ref replay<br/>并读取 candidate part bytes"]
+  I --> J{"多数三路校验"}
+  J -- "超过半数 replay root + partition delta + byte-side lthash 一致" --> K["BatchRecord = Verified"]
   J -- "不匹配 / 超时" --> Y["PartRecord = Quarantined<br/>不进入 safe"]
-  K --> L["promotion 开始：route lock 切到 buffer b<br/>buffer a seal"]
+  K --> K1["UnsafeValidationWorker 读取多个 hg_unsafe replica<br/>计算 row count / rows hash"]
+  K1 --> K2{"unsafe replicas 一致?"}
+  K2 -- "不一致 / 超时" --> Y2["UnsafeValidationFailure<br/>不进入 finality / safe"]
+  K2 -- "一致" --> K3["等待外部 finality / rollback event<br/>写入 HouseKeeper"]
+  K3 -- "FinalityEvent" --> L["promotion 开始：route lock 切到 buffer b<br/>buffer a seal"]
+  K3 -- "RollbackEvent" --> RB["RollbackWorker 执行 unsafe quarantine / cleanup<br/>不发布 safe snapshot"]
   L --> M["记录 sealed source manifest<br/>count / rows hash / part list"]
   M --> N["ATTACH PARTITION 202606<br/>FROM hg_unsafe.Transfer_0xT_a<br/>TO hg_safe.Transfer_0xT"]
   N --> O["safe 侧按本次 manifest 校验 count / rows hash"]
@@ -693,22 +807,27 @@ HouseGate 不应维护第二套 PartState 真相。它只缓存 HouseKeeper 响�
 
 - HouseKeeper state/control plane 持久化到 Keeper Raft state。
 - HouseGate 内置 `MockPayloadStore`：本地 content-addressed payload 存储，产出 `mockda://...` ref。
-- HouseGate 内置 `MockFinalityWatcher`：支持 immediate finality 和可配置延迟 finality，写入 mock `FinalityRecord`。
+- HouseGate 内置 `UnsafeValidationWorker`：在 finality 前读取多个 `hg_unsafe` replica，比较 row count / rows hash。
+- 外部 `MockExternalFinalityService`：支持 immediate finality 和可配置延迟 finality，把 mock `FinalityEvent` 写入 HouseKeeper。
+- 外部 `MockExternalRollbackService`：把 mock `RollbackEvent` 写入 HouseKeeper，验证 HouseKeeper 下发 rollback task 而不是 promotion lease。
+- HouseGate `KeeperCoordinator`：连接 3 节点 ClickHouse Keeper/HouseKeeper quorum，把 statement/attestation/unsafe result/finality/rollback 作为输入 znode 写入；replay/unsafe/promotion/rollback task source/sink 由 Keeper C++ HouseKeeper 状态机生成；未配置 endpoints 时才使用 `LocalCoordinator` 作为本地 mock。
 - RMT log 最小 parser golden tests。
 - verified table policy：无 statement linkage 的 unsafe RMT metadata fail closed。
 - unsafe `MERGE_PARTS` 拒绝。
-- sealed attach fast path + promotion ledger。
-- Replay Verifier / Promotion Worker / SafeAuditWorker 以 HouseGate worker 形态运行。
-- HouseKeeper 内置 SafeAuditCoordinator，SafeAuditWorker 现场 hash PoC。
+- sealed attach fast path + promotion / rollback ledger。
+- Replay Verifier / UnsafeValidationWorker / Promotion Worker / Rollback Worker / SafeAuditWorker 以 HouseGate worker 形态运行。
+- HouseGate `LocalCoordinator`/`KeeperCoordinator` P0 实现 SafeAuditCoordinator task/vote 接口：promotion 后生成 audit task、收集 vote；ClickHouse Keeper fork 已新增 Keeper 侧状态机，并接入 znode RPC、持久 decision ledger、minority quarantine marker。
+- `storage_integrity.safe_audit.replicas` 配置 safe audit replica set；未配置时本地 P0 不自动生成 audit task。
 
 ### P1：主干 replay promotion
 
 - `StatementEnvelopeV2`、LCBlock、RCRecord。
-- replay job / attestation quorum。
+- ClickHouse Keeper fork 内建 HouseKeeper 状态机已负责 replay job、attestation quorum、unsafe validation gate、finality/rollback gate、promotion/rollback task ledger；P1 继续把 SourceClaim、part registry、SafeSnapshotManifest 和 byte-side part lthash check 纳入同一状态机。
 - byte-side part lthash check。
 - `hg_promote` + `REPLACE PARTITION FROM` promotion。
 - `SafeSnapshotManifest` 发布与 latest snapshot API。
 - HouseGate safe/unsafe read rewrite 对接 latest manifest。
+- external finality / rollback event API 的鉴权、幂等、互斥和重放保护。
 
 ### P2：mutation rebuild 与 safe serving 加固
 
@@ -718,7 +837,7 @@ HouseGate 不应维护第二套 PartState 真相。它只缓存 HouseKeeper 响�
 - lagging replica safe bootstrap。
 - optional safe RMT / Keeper-gated safe merge 评估。
 - 真实 Payload / DA Store adapter 替换 `MockPayloadStore`。
-- 真实 Finality / L2 Anchor Watcher 替换 `MockFinalityWatcher`。
+- 真实 Finality / L2 Anchor Watcher、Rollback / Dispute Watcher 替换外部 mock service。
 
 ## 12. 验证计划
 
@@ -734,6 +853,7 @@ Keeper 集成测试：
 - verified `hg_unsafe` insert metadata 有 linkage 才允许。
 - unsafe merge entry 被拒绝且 ClickHouse replica 可恢复。
 - promotion lease 允许 `REPLACE_RANGE` / cleanup 操作。
+- rollback event 只能生成 rollback lease/task，不能和同一 batch 的 promotion lease 同时成立。
 
 HouseGate 集成测试：
 
@@ -742,15 +862,20 @@ HouseGate 集成测试：
 - ClickHouse interserver fetch 经过 mTLS mesh。
 - keeper shard routing 可把 verified database 指向 HouseKeeper shard。
 - `MockPayloadStore` 可在 HouseGate 重启后按 `payload_ref` 找回 payload，并校验 hash。
-- `MockFinalityWatcher` immediate / delayed 两种模式都能驱动 promotion lease。
+- `UnsafeValidationWorker` 在多 replica `hg_unsafe` count/hash 一致后才允许 HouseKeeper 接受 batch promotion。
+- 外部 `MockExternalFinalityService` immediate / delayed 两种模式都能通过 HouseKeeper 驱动 promotion lease。
+- 外部 `MockExternalRollbackService` 能通过 HouseKeeper 驱动 rollback task，并阻止 promotion lease。
 
 端到端：
 
-- 3 HouseKeeper + 2 ClickHouse replica + 2 HouseGate sidecar。
+- 3 HouseKeeper + 2 ClickHouse replica + 2 server-side HouseGate sidecar + 3 Replay Verifier HouseGate workers。
 - INSERT 写入 unsafe，HouseKeeper 记录 source claim。
-- replay quorum 通过。
+- replay quorum 通过：至少 3 个 HouseGate verifier 中超过半数对同一 replay root / rows hash / byte-side lthash 一致。
+- unsafe 多副本 row count / rows hash 验证通过。
+- 外部 mock finality event 写入 HouseKeeper。
 - promotion 到 safe。
 - safe read 可见，unsafe_latest 排除已 promote parts。
+- 外部 mock rollback event 写入 HouseKeeper 时，不 promotion 到 safe，unsafe candidate 被 quarantine/cleanup。
 - 篡改一个 replica safe row，SafeAuditCoordinator 标记 minority。
 
 ## 13. 主要风险
@@ -771,10 +896,10 @@ P1 不走“只靠 attach”或“只靠多数 hash”。推荐按以下组合�
 ```text
 HouseGate feat/interserver-proxy 负责网络收口
 + ClickHouse Keeper fork 内新增 HouseKeeper state/policy
-+ Replay Verifier / Promotion Worker / SafeAuditWorker 内置在 HouseGate
-+ MockPayloadStore / MockFinalityWatcher 内置在 HouseGate，真实 DA/L2 后移
++ Replay Verifier / UnsafeValidationWorker / Promotion Worker / Rollback Worker / SafeAuditWorker 内置在 HouseGate
++ MockPayloadStore 内置在 HouseGate，Finality / Rollback 外部 mock service 写 HouseKeeper
 + hg_unsafe ReplicatedMergeTree 作为 candidate buffer
-+ replay quorum + byte-side check 证明写入正确性
++ replay quorum + byte-side check + unsafe 多副本 count/hash 验证证明写入正确性
 + hg_promote shadow table + REPLACE PARTITION 发布 safe
 + INSERT-only sealed attach 作为受限 fast path
 + SafeAuditCoordinator 在 HouseKeeper 内做 promotion 后 serving 检测协调

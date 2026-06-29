@@ -12,34 +12,24 @@ import (
 // adapters and lifetime only.
 type Runtime struct {
 	Payloads     *MockPayloadStore
-	Finality     *MockFinalityWatcher
+	Ingress      IngressSink
 	Replay       *ReplayWorker
+	Unsafe       *UnsafeValidationWorker
 	Promotion    *PromotionWorker
+	Rollback     *RollbackWorker
 	SafeAudit    *SafeAuditWorker
 	PollInterval time.Duration
 
-	FinalityRequests FinalitySource
-	ReplayJobs       ReplayJobSource
-	Promotions       PromotionSource
-	SafeAudits       SafeAuditSource
+	ReplayJobs  ReplayJobSource
+	UnsafeTasks UnsafeValidationSource
+	Promotions  PromotionSource
+	Rollbacks   RollbackSource
+	SafeAudits  SafeAuditSource
 }
 
 func (r *Runtime) Run(ctx context.Context) error {
 	g, gctx := errgroup.WithContext(ctx)
 	loops := 0
-	if r.Finality != nil && r.FinalityRequests != nil {
-		loops++
-		g.Go(func() error {
-			return r.poll(gctx, func(ctx context.Context) (bool, error) {
-				req, ok, err := r.FinalityRequests.ClaimFinality(ctx)
-				if err != nil || !ok {
-					return ok, err
-				}
-				_, err = r.Finality.Finalize(ctx, req)
-				return true, err
-			})
-		})
-	}
 	if r.Replay != nil && r.ReplayJobs != nil {
 		loops++
 		g.Go(func() error {
@@ -52,6 +42,18 @@ func (r *Runtime) Run(ctx context.Context) error {
 			})
 		})
 	}
+	if r.Unsafe != nil && r.UnsafeTasks != nil {
+		loops++
+		g.Go(func() error {
+			return r.poll(gctx, func(ctx context.Context) (bool, error) {
+				task, ok, err := r.UnsafeTasks.ClaimUnsafeValidation(ctx)
+				if err != nil || !ok {
+					return ok, err
+				}
+				return true, r.Unsafe.VerifyAndSubmit(ctx, task)
+			})
+		})
+	}
 	if r.Promotion != nil && r.Promotions != nil {
 		loops++
 		g.Go(func() error {
@@ -61,6 +63,18 @@ func (r *Runtime) Run(ctx context.Context) error {
 					return ok, err
 				}
 				return true, r.Promotion.Apply(ctx, task)
+			})
+		})
+	}
+	if r.Rollback != nil && r.Rollbacks != nil {
+		loops++
+		g.Go(func() error {
+			return r.poll(gctx, func(ctx context.Context) (bool, error) {
+				task, ok, err := r.Rollbacks.ClaimRollback(ctx)
+				if err != nil || !ok {
+					return ok, err
+				}
+				return true, r.Rollback.Apply(ctx, task)
 			})
 		})
 	}

@@ -38,6 +38,7 @@ import (
 	"housegate/housegate/pkg/plugins/rewrite"
 	routeplugin "housegate/housegate/pkg/plugins/route"
 	"housegate/housegate/pkg/plugins/sessionstate"
+	storageintegrityplugin "housegate/housegate/pkg/plugins/storageintegrity"
 	"housegate/housegate/pkg/plugins/usage"
 	"housegate/housegate/pkg/proxy"
 	"housegate/housegate/pkg/registry"
@@ -180,70 +181,180 @@ func buildStorageIntegrityRuntime(cfg config.StorageIntegrityConfig, opts Option
 		Payloads:     payloads,
 		PollInterval: cfg.Workers.PollInterval.Duration,
 	}
-	if cfg.Workers.Finality {
-		if opts.StorageIntegrityFinalitySource == nil {
-			return nil, fmt.Errorf("storage_integrity finality source is required when finality worker is enabled")
-		}
-		if opts.StorageIntegrityFinalitySink == nil {
-			return nil, fmt.Errorf("storage_integrity finality sink is required when finality worker is enabled")
-		}
-		rt.FinalityRequests = opts.StorageIntegrityFinalitySource
-		rt.Finality = &storageintegrity.MockFinalityWatcher{
-			Delay: cfg.MockFinality.Delay.Duration,
-			Sink:  opts.StorageIntegrityFinalitySink,
-		}
+	storageWorkerID := cfg.HouseKeeper.WorkerID
+	if storageWorkerID == "" {
+		storageWorkerID = "housegate-local"
 	}
+	unsafeReplicas := make([]storageintegrity.UnsafeReplica, 0, len(cfg.UnsafeValidation.Replicas))
+	for _, replica := range cfg.UnsafeValidation.Replicas {
+		unsafeReplicas = append(unsafeReplicas, storageintegrity.UnsafeReplica{
+			ReplicaID: replica.ReplicaID,
+			Addr:      replica.Addr,
+		})
+	}
+	safeAuditReplicas := make([]storageintegrity.SafeAuditReplica, 0, len(cfg.SafeAudit.Replicas))
+	for _, replica := range cfg.SafeAudit.Replicas {
+		safeAuditReplicas = append(safeAuditReplicas, storageintegrity.SafeAuditReplica{
+			ReplicaID: replica.ReplicaID,
+		})
+	}
+	var controlPlane storageintegrity.ControlPlane
+	if opts.StorageIntegrityControlPlane != nil {
+		controlPlane = opts.StorageIntegrityControlPlane
+	} else if len(cfg.HouseKeeper.Endpoints) > 0 {
+		keeperCoordinator, err := storageintegrity.NewKeeperCoordinator(context.Background(), storageintegrity.KeeperCoordinatorConfig{
+			Endpoints:               cfg.HouseKeeper.Endpoints,
+			SessionTimeout:          cfg.HouseKeeper.SessionTimeout.Duration,
+			Root:                    cfg.HouseKeeper.Root,
+			WorkerID:                cfg.HouseKeeper.WorkerID,
+			ReplayQuorum:            cfg.HouseKeeper.ReplayQuorum,
+			RequireFinality:         cfg.Workers.Finality,
+			RequireReplay:           cfg.Workers.Replay,
+			RequireUnsafeValidation: cfg.Workers.UnsafeValidation,
+			UnsafeReplicas:          unsafeReplicas,
+			SafeAuditReplicas:       safeAuditReplicas,
+			SafeAuditNetworkID:      cfg.SafeAudit.NetworkID,
+			SafeAuditSchemaHash:     cfg.SafeAudit.SchemaHash,
+			UnsafeDatabase:          cfg.UnsafeDatabase,
+			SafeDatabase:            cfg.SafeDatabase,
+			UnsafeTableSuffix:       cfg.UnsafeTableSuffix,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("build storage_integrity housekeeper coordinator: %w", err)
+		}
+		controlPlane = keeperCoordinator
+	} else {
+		controlPlane = storageintegrity.NewLocalCoordinator(storageintegrity.LocalCoordinatorConfig{
+			RequireFinality:         cfg.Workers.Finality,
+			RequireReplay:           cfg.Workers.Replay,
+			RequireUnsafeValidation: cfg.Workers.UnsafeValidation,
+			UnsafeReplicas:          unsafeReplicas,
+			SafeAuditReplicas:       safeAuditReplicas,
+			SafeAuditNetworkID:      cfg.SafeAudit.NetworkID,
+			SafeAuditSchemaHash:     cfg.SafeAudit.SchemaHash,
+			UnsafeDatabase:          cfg.UnsafeDatabase,
+			SafeDatabase:            cfg.SafeDatabase,
+			UnsafeTableSuffix:       cfg.UnsafeTableSuffix,
+		})
+	}
+	rt.Ingress = controlPlane
 	if cfg.Workers.Replay {
-		if opts.StorageIntegrityReplayJobs == nil {
-			return nil, fmt.Errorf("storage_integrity replay job source is required when replay worker is enabled")
+		replayJobs := opts.StorageIntegrityReplayJobs
+		if replayJobs == nil {
+			replayJobs = controlPlane
 		}
-		if opts.StorageIntegrityReplayVerifier == nil {
-			return nil, fmt.Errorf("storage_integrity replay verifier is required when replay worker is enabled")
+		replayVerifier := opts.StorageIntegrityReplayVerifier
+		if replayVerifier == nil {
+			replayVerifier = storageintegrity.MockReplayVerifier{ReplicaID: storageWorkerID}
 		}
-		if opts.StorageIntegrityReplaySink == nil {
-			return nil, fmt.Errorf("storage_integrity replay sink is required when replay worker is enabled")
+		replaySink := opts.StorageIntegrityReplaySink
+		if replaySink == nil {
+			replaySink = controlPlane
 		}
 		rt.Replay = &storageintegrity.ReplayWorker{
-			Verifier: opts.StorageIntegrityReplayVerifier,
-			Sink:     opts.StorageIntegrityReplaySink,
+			Verifier: replayVerifier,
+			Sink:     replaySink,
 		}
-		rt.ReplayJobs = opts.StorageIntegrityReplayJobs
+		rt.ReplayJobs = replayJobs
+	}
+	if cfg.Workers.UnsafeValidation {
+		unsafeSource := opts.StorageIntegrityUnsafeSource
+		if unsafeSource == nil {
+			unsafeSource = controlPlane
+		}
+		unsafeVerifier := opts.StorageIntegrityUnsafeVerifier
+		if unsafeVerifier == nil {
+			if len(unsafeReplicas) >= 2 {
+				unsafeVerifier = storageintegrity.UnsafeReplicaHashVerifier{
+					Reader: storageintegrity.ClickHouseUnsafeDigestReader{},
+				}
+			} else {
+				unsafeVerifier = storageintegrity.MockUnsafeValidationVerifier{ReplicaID: "housegate-local"}
+			}
+		}
+		unsafeSink := opts.StorageIntegrityUnsafeSink
+		if unsafeSink == nil {
+			unsafeSink = controlPlane
+		}
+		rt.Unsafe = &storageintegrity.UnsafeValidationWorker{
+			Verifier: unsafeVerifier,
+			Sink:     unsafeSink,
+		}
+		rt.UnsafeTasks = unsafeSource
 	}
 	if cfg.Workers.Promotion {
-		if opts.StorageIntegrityPromotionSrc == nil {
-			return nil, fmt.Errorf("storage_integrity promotion source is required when promotion worker is enabled")
+		promotionSrc := opts.StorageIntegrityPromotionSrc
+		if promotionSrc == nil {
+			promotionSrc = controlPlane
 		}
-		if opts.StorageIntegrityPromotionExec == nil {
-			return nil, fmt.Errorf("storage_integrity promotion executor is required when promotion worker is enabled")
+		promotionExec := opts.StorageIntegrityPromotionExec
+		if promotionExec == nil {
+			if opts.Config == nil || opts.Config.Upstream == "" {
+				return nil, fmt.Errorf("storage_integrity promotion executor requires config.upstream when no executor is injected")
+			}
+			promotionExec, err = storageintegrity.NewClickHousePromotionExecutor(opts.Config.Upstream)
+			if err != nil {
+				return nil, fmt.Errorf("storage_integrity promotion executor: %w", err)
+			}
 		}
-		if opts.StorageIntegrityPromotionSink == nil {
-			return nil, fmt.Errorf("storage_integrity promotion sink is required when promotion worker is enabled")
+		promotionSink := opts.StorageIntegrityPromotionSink
+		if promotionSink == nil {
+			promotionSink = controlPlane
 		}
 		rt.Promotion = &storageintegrity.PromotionWorker{
-			Executor: opts.StorageIntegrityPromotionExec,
-			Sink:     opts.StorageIntegrityPromotionSink,
+			Executor: promotionExec,
+			Sink:     promotionSink,
 		}
-		rt.Promotions = opts.StorageIntegrityPromotionSrc
+		rt.Promotions = promotionSrc
+	}
+	if cfg.Workers.Rollback {
+		rollbackSrc := opts.StorageIntegrityRollbackSrc
+		if rollbackSrc == nil {
+			rollbackSrc = controlPlane
+		}
+		rollbackExec := opts.StorageIntegrityRollbackExec
+		if rollbackExec == nil {
+			if opts.Config == nil || opts.Config.Upstream == "" {
+				return nil, fmt.Errorf("storage_integrity rollback executor requires config.upstream when no executor is injected")
+			}
+			rollbackExec, err = storageintegrity.NewClickHousePromotionExecutor(opts.Config.Upstream)
+			if err != nil {
+				return nil, fmt.Errorf("storage_integrity rollback executor: %w", err)
+			}
+		}
+		rollbackSink := opts.StorageIntegrityRollbackSink
+		if rollbackSink == nil {
+			rollbackSink = controlPlane
+		}
+		rt.Rollback = &storageintegrity.RollbackWorker{
+			Executor: rollbackExec,
+			Sink:     rollbackSink,
+		}
+		rt.Rollbacks = rollbackSrc
 	}
 	if cfg.Workers.SafeAudit {
-		if opts.StorageIntegrityAuditSource == nil {
-			return nil, fmt.Errorf("storage_integrity safe audit source is required when safe audit worker is enabled")
+		auditSource := opts.StorageIntegrityAuditSource
+		if auditSource == nil {
+			auditSource = controlPlane
 		}
-		if opts.StorageIntegrityAuditReader == nil {
-			return nil, fmt.Errorf("storage_integrity safe audit reader is required when safe audit worker is enabled")
+		auditReader := opts.StorageIntegrityAuditReader
+		if auditReader == nil {
+			auditReader = storageintegrity.MockSafeAuditReader{}
 		}
-		if opts.StorageIntegrityAuditSigner == nil {
-			return nil, fmt.Errorf("storage_integrity safe audit signer is required when safe audit worker is enabled")
+		auditSigner := opts.StorageIntegrityAuditSigner
+		if auditSigner == nil {
+			auditSigner = storageintegrity.MockSafeAuditSigner{WorkerID: storageWorkerID}
 		}
-		if opts.StorageIntegrityAuditSink == nil {
-			return nil, fmt.Errorf("storage_integrity safe audit sink is required when safe audit worker is enabled")
+		auditSink := opts.StorageIntegrityAuditSink
+		if auditSink == nil {
+			auditSink = controlPlane
 		}
 		rt.SafeAudit = &storageintegrity.SafeAuditWorker{
-			Reader: opts.StorageIntegrityAuditReader,
-			Signer: opts.StorageIntegrityAuditSigner,
-			Sink:   opts.StorageIntegrityAuditSink,
+			Reader: auditReader,
+			Signer: auditSigner,
+			Sink:   auditSink,
 		}
-		rt.SafeAudits = opts.StorageIntegrityAuditSource
+		rt.SafeAudits = auditSource
 	}
 	return rt, nil
 }
@@ -524,6 +635,11 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		}
 	}
 
+	storageRuntime, err := buildStorageIntegrityRuntime(cfg.StorageIntegrity, opts)
+	if err != nil {
+		return nil, err
+	}
+
 	// ---- plugin chain (verbatim from cmd/serve.go serveServer) ----
 	obs := proxy.NewMetricsObserver()
 	metrics := metricsplugin.New(obs)
@@ -656,6 +772,24 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		)
 	}
 
+	var siPlug *storageintegrityplugin.Plugin
+	if storageRuntime != nil {
+		siPlug = storageintegrityplugin.New(storageintegrityplugin.Config{
+			UnsafeDatabase:    cfg.StorageIntegrity.UnsafeDatabase,
+			SafeDatabase:      cfg.StorageIntegrity.SafeDatabase,
+			UnsafeTableSuffix: cfg.StorageIntegrity.UnsafeTableSuffix,
+		}, storageRuntime.Payloads, storageRuntime.Ingress)
+		queryPlugins = append(queryPlugins, siPlug)
+		dataPlugins = append(dataPlugins, siPlug)
+		queryCompletePlugins = append(queryCompletePlugins, siPlug)
+		closePlugins = append(closePlugins, siPlug)
+		log.Infow("storage_integrity ingress plugin enabled",
+			"unsafe_database", cfg.StorageIntegrity.UnsafeDatabase,
+			"safe_database", cfg.StorageIntegrity.SafeDatabase,
+			"unsafe_table_suffix", cfg.StorageIntegrity.UnsafeTableSuffix,
+		)
+	}
+
 	queryPlugins = append(queryPlugins,
 		&routeplugin.Signer{Signer: relaySigner, Observer: obs},
 		metrics,
@@ -670,6 +804,9 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	}
 	if cgPlug != nil {
 		exceptionPlugins = append(exceptionPlugins, cgPlug)
+	}
+	if siPlug != nil {
+		exceptionPlugins = append(exceptionPlugins, siPlug)
 	}
 	exceptionPlugins = append(exceptionPlugins, metrics)
 
@@ -839,10 +976,6 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		})
 	}
 
-	storageRuntime, err := buildStorageIntegrityRuntime(cfg.StorageIntegrity, opts)
-	if err != nil {
-		return nil, err
-	}
 	var background []backgroundService
 	if storageRuntime != nil {
 		background = append(background, backgroundService{

@@ -94,14 +94,20 @@ type Options struct {
 	// HouseKeeper storage-integrity protocol. Config owns enablement; these
 	// injected interfaces are replaced by a real HouseKeeper control-plane
 	// client in production and by fakes in tests/local demos.
+	StorageIntegrityControlPlane   storageintegrity.ControlPlane
 	StorageIntegrityReplayVerifier storageintegrity.ReplayVerifier
 	StorageIntegrityReplayJobs     storageintegrity.ReplayJobSource
 	StorageIntegrityReplaySink     storageintegrity.ReplaySink
-	StorageIntegrityFinalitySource storageintegrity.FinalitySource
+	StorageIntegrityUnsafeSource   storageintegrity.UnsafeValidationSource
+	StorageIntegrityUnsafeVerifier storageintegrity.UnsafeTableVerifier
+	StorageIntegrityUnsafeSink     storageintegrity.UnsafeValidationSink
 	StorageIntegrityFinalitySink   storageintegrity.FinalitySink
 	StorageIntegrityPromotionSrc   storageintegrity.PromotionSource
 	StorageIntegrityPromotionExec  storageintegrity.PromotionExecutor
 	StorageIntegrityPromotionSink  storageintegrity.PromotionSink
+	StorageIntegrityRollbackSrc    storageintegrity.RollbackSource
+	StorageIntegrityRollbackExec   storageintegrity.RollbackExecutor
+	StorageIntegrityRollbackSink   storageintegrity.RollbackSink
 	StorageIntegrityAuditSource    storageintegrity.SafeAuditSource
 	StorageIntegrityAuditReader    storageintegrity.SafeAuditReader
 	StorageIntegrityAuditSigner    storageintegrity.SafeAuditSigner

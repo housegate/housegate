@@ -24,11 +24,37 @@ type PutPayloadRequest struct {
 	Payload     []byte
 }
 
-type FinalityRequest struct {
-	BatchID     string
+// InsertRecord is the ingress claim produced after ClickHouse accepts an
+// INSERT into the unsafe table. HouseKeeper owns the authoritative version of
+// this state; the local coordinator uses the same shape for P0 demos/tests.
+type InsertRecord struct {
+	TableID     string
 	StatementID string
-	PayloadRef  string
-	PayloadHash string
+	OriginalSQL string
+	UnsafeSQL   string
+	UnsafeTable string
+	SafeTable   string
+	Payload     PayloadCommitment
+	ReceivedAt  time.Time
+}
+
+type IngressSink interface {
+	SubmitInsert(ctx context.Context, rec InsertRecord) error
+}
+
+type ControlPlane interface {
+	IngressSink
+	FinalitySink
+	ReplayJobSource
+	ReplaySink
+	UnsafeValidationSource
+	UnsafeValidationSink
+	PromotionSource
+	PromotionSink
+	RollbackSource
+	RollbackSink
+	SafeAuditSource
+	SafeAuditSink
 }
 
 type FinalityRecord struct {
@@ -41,12 +67,10 @@ type FinalityRecord struct {
 	FinalizedAt time.Time `json:"finalized_at"`
 }
 
+type FinalityEvent = FinalityRecord
+
 type FinalitySink interface {
 	SubmitFinality(ctx context.Context, rec FinalityRecord) error
-}
-
-type FinalitySource interface {
-	ClaimFinality(ctx context.Context) (FinalityRequest, bool, error)
 }
 
 // ReplayVerifier is satisfied by replay.Verifier and by tests.
@@ -66,6 +90,54 @@ type ReplaySink interface {
 type ReplayFailure struct {
 	BlockSeq uint64 `json:"block_seq"`
 	Error    string `json:"error"`
+}
+
+type UnsafeReplica struct {
+	ReplicaID string `json:"replica_id"`
+	Addr      string `json:"addr"`
+}
+
+type UnsafeValidationTask struct {
+	ValidationID string          `json:"validation_id"`
+	StatementID  string          `json:"statement_id"`
+	TableID      string          `json:"table_id"`
+	UnsafeTable  string          `json:"unsafe_table"`
+	Replicas     []UnsafeReplica `json:"replicas"`
+}
+
+type UnsafeReplicaDigest struct {
+	ReplicaID string `json:"replica_id"`
+	RowCount  uint64 `json:"row_count"`
+	RowsHash  string `json:"rows_hash"`
+}
+
+type UnsafeValidationResult struct {
+	ValidationID string                `json:"validation_id"`
+	StatementID  string                `json:"statement_id"`
+	TableID      string                `json:"table_id"`
+	UnsafeTable  string                `json:"unsafe_table"`
+	RowCount     uint64                `json:"row_count"`
+	RowsHash     string                `json:"rows_hash"`
+	Replicas     []UnsafeReplicaDigest `json:"replicas"`
+}
+
+type UnsafeValidationFailure struct {
+	ValidationID string `json:"validation_id"`
+	StatementID  string `json:"statement_id"`
+	Error        string `json:"error"`
+}
+
+type UnsafeValidationSource interface {
+	ClaimUnsafeValidation(ctx context.Context) (UnsafeValidationTask, bool, error)
+}
+
+type UnsafeValidationSink interface {
+	SubmitUnsafeValidation(ctx context.Context, result UnsafeValidationResult) error
+	SubmitUnsafeValidationFailure(ctx context.Context, failure UnsafeValidationFailure) error
+}
+
+type UnsafeTableVerifier interface {
+	VerifyUnsafe(ctx context.Context, task UnsafeValidationTask) (UnsafeValidationResult, error)
 }
 
 type PromotionTask struct {
@@ -113,6 +185,48 @@ type PromotionSource interface {
 	ClaimPromotion(ctx context.Context) (PromotionTask, bool, error)
 }
 
+type RollbackEvent struct {
+	Kind        string    `json:"kind"`
+	BatchID     string    `json:"batch_id"`
+	StatementID string    `json:"statement_id,omitempty"`
+	Reason      string    `json:"reason"`
+	ReceivedAt  time.Time `json:"received_at"`
+}
+
+type RollbackTask struct {
+	RollbackID  string
+	LeaseID     string
+	BatchID     string
+	StatementID string
+	Reason      string
+	Statements  []string
+}
+
+type RollbackResult struct {
+	RollbackID string
+	LeaseID    string
+}
+
+type RollbackFailure struct {
+	RollbackID string
+	LeaseID    string
+	Error      string
+}
+
+type RollbackExecutor interface {
+	ExecRollbackSQL(ctx context.Context, sql string) error
+}
+
+type RollbackSink interface {
+	SubmitRollback(ctx context.Context, event RollbackEvent) error
+	FinishRollback(ctx context.Context, result RollbackResult) error
+	FailRollback(ctx context.Context, failure RollbackFailure) error
+}
+
+type RollbackSource interface {
+	ClaimRollback(ctx context.Context) (RollbackTask, bool, error)
+}
+
 type SafeAuditTask struct {
 	AuditID    string
 	ReplicaID  string
@@ -121,6 +235,10 @@ type SafeAuditTask struct {
 	SchemaHash string
 	SnapshotID string
 	Range      string
+}
+
+type SafeAuditReplica struct {
+	ReplicaID string `json:"replica_id" yaml:"replica_id"`
 }
 
 type SafeRow struct {
@@ -138,6 +256,24 @@ type SafeAuditVote struct {
 	RowCount   uint64 `json:"row_count"`
 	VoteHash   string `json:"vote_hash"`
 	Signature  string `json:"signature"`
+}
+
+type SafeAuditDecisionStatus string
+
+const (
+	SafeAuditStatusPending  SafeAuditDecisionStatus = "pending"
+	SafeAuditStatusMajority SafeAuditDecisionStatus = "majority"
+	SafeAuditStatusDispute  SafeAuditDecisionStatus = "dispute"
+)
+
+type SafeAuditDecision struct {
+	AuditID          string                  `json:"audit_id"`
+	Status           SafeAuditDecisionStatus `json:"status"`
+	MajorityHash     string                  `json:"majority_hash,omitempty"`
+	MajorityCount    int                     `json:"majority_count"`
+	TotalVotes       int                     `json:"total_votes"`
+	ExpectedVotes    int                     `json:"expected_votes"`
+	MinorityReplicas []string                `json:"minority_replicas,omitempty"`
 }
 
 type SafeAuditReader interface {

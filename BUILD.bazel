@@ -45,6 +45,7 @@ go_library(
         "//pkg/plugins/rewrite",
         "//pkg/plugins/route",
         "//pkg/plugins/sessionstate",
+        "//pkg/plugins/storageintegrity",
         "//pkg/plugins/usage",
         "//pkg/proxy",
         "//pkg/replay",
