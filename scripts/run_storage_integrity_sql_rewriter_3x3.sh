@@ -145,9 +145,7 @@ wait_for_keeper_children() {
 
 keeper_path_exists() {
     local path="$1"
-    local out
-    out="$(keeper_get "$path" 2>&1 || true)"
-    [[ "$out" != *"No node"* && "$out" != *"node doesn't exist"* && "$out" != *"Can't get data for node"* && "$out" != *"Coordination error"* ]]
+    keeper_get "$path" >/dev/null 2>&1
 }
 
 wait_for_keeper_path() {
