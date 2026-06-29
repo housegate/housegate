@@ -339,7 +339,7 @@ func (p *Plugin) onSelect(ctx context.Context, qctx *plugin.QueryContext) error 
 	if !ok {
 		return nil
 	}
-	safeSQL, err := p.rewriteTable(ctx, qctx, target, p.safeRewriteTarget(target.tableID), p.layout.SafeTable(target.tableID))
+	safeSQL, err := p.rewriteSelectTable(ctx, qctx, target, p.safeRewriteTarget(target.tableID), p.layout.SafeTable(target.tableID))
 	if err != nil {
 		return fmt.Errorf("storage_integrity rewrite SELECT to safe: %w", err)
 	}
@@ -377,6 +377,22 @@ func (p *Plugin) rewriteInsertTable(ctx context.Context, qctx *plugin.QueryConte
 		source = originalInsertSQL(qctx)
 	}
 	rewritten, err := replaceInsertTarget(source, fallbackTo)
+	if err != nil {
+		return "", err
+	}
+	return rewritten, nil
+}
+
+func (p *Plugin) rewriteSelectTable(ctx context.Context, qctx *plugin.QueryContext, target sqlTarget, rewriteTo, fallbackTo string) (string, error) {
+	sql, err := p.rewriteTable(ctx, qctx, target, rewriteTo, fallbackTo)
+	if err != nil {
+		return "", err
+	}
+	if targetID, ok := selectTargetFromSQL(sql, ""); ok && strings.EqualFold(targetID, rewriteTo) {
+		return sql, nil
+	}
+	source := firstNonEmpty(sql, qctx.Query.Body)
+	rewritten, err := replaceTargetAfterKeyword(source, "from", fallbackTo)
 	if err != nil {
 		return "", err
 	}

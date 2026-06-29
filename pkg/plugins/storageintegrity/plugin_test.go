@@ -245,6 +245,28 @@ func TestPluginRewritesSelectFromRawSQLWhenMetadataMissing(t *testing.T) {
 	}
 }
 
+func TestPluginFallsBackWhenTableRewriterDoesNotRewriteRawSelect(t *testing.T) {
+	sql := "SELECT concat(toString(count()), ':', groupArray(v)[1]) FROM realbin.t"
+	cfg := testStorageConfig()
+	cfg.TableRewriter = fixedTableRewriter{sql: sql}
+	p := New(cfg, nil, nil)
+	qctx := &plugin.QueryContext{
+		Session:     newFakeSession(418),
+		OriginalSQL: sql,
+		Query: &chproto.Query{
+			Body: sql,
+		},
+		StatementType: sqlmeta.StatementTypeSelect,
+	}
+
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	if got, want := qctx.Query.Body, "SELECT concat(toString(count()), ':', groupArray(v)[1]) FROM `hg_safe`.`realbin.t`"; got != want {
+		t.Fatalf("rewritten SQL = %q, want fallback %q", got, want)
+	}
+}
+
 func TestPluginRewritesUnclassifiedRawSelectWhenMetadataMissing(t *testing.T) {
 	p := New(testStorageConfig(), nil, nil)
 	qctx := &plugin.QueryContext{
