@@ -104,7 +104,16 @@ func (p *Plugin) OnClientData(ctx context.Context, qctx *plugin.QueryContext, ra
 	}
 	cp := append([]byte(nil), raw...)
 	cap.dataPackets = append(cap.dataPackets, cp)
-	complete := isClientDataTerminator(raw, qctx.Session.State().ClientRevision)
+	revision := qctx.Session.State().ClientRevision
+	complete := isClientDataTerminator(raw, revision)
+	log.Debugw("storage_integrity: client data captured",
+		"session", qctx.Session.ID(),
+		"statement_id", cap.statementID,
+		"table_id", cap.tableID,
+		"raw_len", len(raw),
+		"revision", revision,
+		"terminator", complete,
+	)
 	if complete {
 		delete(p.active, qctx.Session.ID())
 	}
@@ -130,6 +139,11 @@ func (p *Plugin) finalizeCapture(ctx context.Context, cap *insertCapture) {
 	if cap == nil || p.payloads == nil || p.sink == nil {
 		return
 	}
+	log.Debugw("storage_integrity: finalizing insert",
+		"statement_id", cap.statementID,
+		"table_id", cap.tableID,
+		"data_packets", len(cap.dataPackets),
+	)
 	payload := cap.payloadBytes()
 	commit, err := p.payloads.PutPayload(ctx, core.PutPayloadRequest{
 		TableID:     cap.tableID,
@@ -160,6 +174,14 @@ func (p *Plugin) finalizeCapture(ctx context.Context, cap *insertCapture) {
 			"err", err,
 		)
 	}
+	log.Infow("storage_integrity: insert submitted",
+		"statement_id", cap.statementID,
+		"table_id", cap.tableID,
+		"unsafe_table", cap.unsafeTable,
+		"safe_table", cap.safeTable,
+		"payload_ref", commit.Ref,
+		"payload_hash", commit.Hash,
+	)
 }
 
 func isClientDataTerminator(raw []byte, revision int) bool {
@@ -234,6 +256,13 @@ func (p *Plugin) onInsert(qctx *plugin.QueryContext) error {
 		startedAt:   p.now().UTC(),
 	}
 	p.mu.Unlock()
+	log.Debugw("storage_integrity: insert capture armed",
+		"session", qctx.Session.ID(),
+		"statement_id", statementID,
+		"table_id", target.tableID,
+		"unsafe_table", unsafeTable,
+		"safe_table", safeTable,
+	)
 	return nil
 }
 
