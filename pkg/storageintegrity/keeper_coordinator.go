@@ -73,20 +73,39 @@ func NewKeeperCoordinator(ctx context.Context, cfg KeeperCoordinatorConfig) (*Ke
 	if err != nil {
 		return nil, fmt.Errorf("connect housekeeper: %w", err)
 	}
-	select {
-	case ev := <-events:
-		if ev.State != zk.StateConnected && ev.State != zk.StateHasSession {
-			conn.Close()
-			return nil, fmt.Errorf("connect housekeeper: unexpected state %s", ev.State)
-		}
-	case <-ctx.Done():
+	if err := waitForZKSession(ctx, events, timeout); err != nil {
 		conn.Close()
-		return nil, ctx.Err()
-	case <-time.After(timeout):
-		conn.Close()
-		return nil, fmt.Errorf("connect housekeeper: timed out after %s", timeout)
+		return nil, err
 	}
 	return NewKeeperCoordinatorWithStore(cfg, &zkKeeperStore{conn: conn})
+}
+
+func waitForZKSession(ctx context.Context, events <-chan zk.Event, timeout time.Duration) error {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		select {
+		case ev, ok := <-events:
+			if !ok {
+				return fmt.Errorf("connect housekeeper: event channel closed before session")
+			}
+			switch ev.State {
+			case zk.StateConnected, zk.StateHasSession:
+				return nil
+			case zk.StateAuthFailed:
+				if ev.Err != nil {
+					return fmt.Errorf("connect housekeeper: auth failed: %w", ev.Err)
+				}
+				return fmt.Errorf("connect housekeeper: auth failed")
+			default:
+				continue
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+			return fmt.Errorf("connect housekeeper: timed out after %s", timeout)
+		}
+	}
 }
 
 func NewKeeperCoordinatorWithStore(cfg KeeperCoordinatorConfig, store keeperStore) (*KeeperCoordinator, error) {

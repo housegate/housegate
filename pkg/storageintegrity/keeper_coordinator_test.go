@@ -7,9 +7,32 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/go-zookeeper/zk"
 
 	"housegate/housegate/pkg/replay"
 )
+
+func TestWaitForZKSessionIgnoresTransientStates(t *testing.T) {
+	events := make(chan zk.Event, 2)
+	events <- zk.Event{State: zk.StateConnecting}
+	events <- zk.Event{State: zk.StateHasSession}
+
+	if err := waitForZKSession(context.Background(), events, time.Second); err != nil {
+		t.Fatalf("waitForZKSession: %v", err)
+	}
+}
+
+func TestWaitForZKSessionReturnsAuthFailure(t *testing.T) {
+	events := make(chan zk.Event, 1)
+	events <- zk.Event{State: zk.StateAuthFailed}
+
+	err := waitForZKSession(context.Background(), events, time.Second)
+	if err == nil || !strings.Contains(err.Error(), "auth failed") {
+		t.Fatalf("waitForZKSession err = %v, want auth failed", err)
+	}
+}
 
 func TestKeeperCoordinatorRequiresReplayQuorumAndUnsafeAllReplicasBeforePromotion(t *testing.T) {
 	ctx := context.Background()
