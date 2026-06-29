@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ClickHouse/ch-go/proto"
+
 	"housegate/housegate/pkg/chproto"
 	"housegate/housegate/pkg/chsession"
 	"housegate/housegate/pkg/plugin"
@@ -134,6 +136,45 @@ func TestPluginRewritesUnclassifiedRawInsertWhenRewriterUnavailable(t *testing.T
 	}
 }
 
+func TestPluginSubmitsInsertOnClientDataTerminator(t *testing.T) {
+	ctx := context.Background()
+	payloads, err := core.NewMockPayloadStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewMockPayloadStore: %v", err)
+	}
+	sink := &recordingIngressSink{}
+	p := New(Config{
+		UnsafeDatabase:    "hg_unsafe",
+		SafeDatabase:      "hg_safe",
+		UnsafeTableSuffix: "_a",
+	}, payloads, sink)
+	sess := newFakeSession(46)
+	sess.state.ClientRevision = 54453
+	qctx := &plugin.QueryContext{
+		Session:     sess,
+		OriginalSQL: "INSERT INTO realbin.t VALUES (1, 'a')",
+		Query: &chproto.Query{
+			ID:   "insert-qid-terminator",
+			Body: "INSERT INTO realbin.t VALUES (1, 'a')",
+		},
+		StatementType: sqlmeta.StatementTypeUnspecified,
+	}
+
+	if err := p.OnQuery(ctx, qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	if err := p.OnClientData(ctx, qctx, emptyClientDataPacket()); err != nil {
+		t.Fatalf("OnClientData terminator: %v", err)
+	}
+	if len(sink.records) != 1 {
+		t.Fatalf("ingress records after terminator = %d, want 1", len(sink.records))
+	}
+	p.OnQueryComplete(ctx, sess)
+	if len(sink.records) != 1 {
+		t.Fatalf("ingress records after OnQueryComplete = %d, want still 1", len(sink.records))
+	}
+}
+
 func TestPluginRewritesSelectToSafe(t *testing.T) {
 	p := New(Config{
 		UnsafeDatabase:    "hg_unsafe",
@@ -208,6 +249,16 @@ type recordingIngressSink struct {
 func (s *recordingIngressSink) SubmitInsert(_ context.Context, rec core.InsertRecord) error {
 	s.records = append(s.records, rec)
 	return nil
+}
+
+func emptyClientDataPacket() []byte {
+	var buf proto.Buffer
+	buf.PutUVarInt(uint64(proto.ClientCodeData))
+	buf.PutString("")
+	(&proto.BlockInfo{BucketNum: -1}).Encode(&buf)
+	buf.PutUVarInt(0)
+	buf.PutUVarInt(0)
+	return append([]byte(nil), buf.Buf...)
 }
 
 type fakeSession struct {

@@ -10,6 +10,8 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/ClickHouse/ch-go/proto"
+
 	"housegate/housegate/pkg/chproto"
 	"housegate/housegate/pkg/chsession"
 	"housegate/housegate/pkg/log"
@@ -95,13 +97,21 @@ func (p *Plugin) OnClientData(ctx context.Context, qctx *plugin.QueryContext, ra
 		return nil
 	}
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	cap := p.active[qctx.Session.ID()]
 	if cap == nil {
+		p.mu.Unlock()
 		return nil
 	}
 	cp := append([]byte(nil), raw...)
 	cap.dataPackets = append(cap.dataPackets, cp)
+	complete := isClientDataTerminator(raw, qctx.Session.State().ClientRevision)
+	if complete {
+		delete(p.active, qctx.Session.ID())
+	}
+	p.mu.Unlock()
+	if complete {
+		p.finalizeCapture(ctx, cap)
+	}
 	return nil
 }
 
@@ -113,6 +123,10 @@ func (p *Plugin) OnQueryComplete(ctx context.Context, sess chsession.Session) {
 	cap := p.active[sess.ID()]
 	delete(p.active, sess.ID())
 	p.mu.Unlock()
+	p.finalizeCapture(ctx, cap)
+}
+
+func (p *Plugin) finalizeCapture(ctx context.Context, cap *insertCapture) {
 	if cap == nil || p.payloads == nil || p.sink == nil {
 		return
 	}
@@ -146,6 +160,25 @@ func (p *Plugin) OnQueryComplete(ctx context.Context, sess chsession.Session) {
 			"err", err,
 		)
 	}
+}
+
+func isClientDataTerminator(raw []byte, revision int) bool {
+	r := proto.NewReader(bytes.NewReader(raw))
+	code, err := r.UVarInt()
+	if err != nil || code != uint64(chproto.ClientDataCode) {
+		return false
+	}
+	if _, err := r.Str(); err != nil {
+		return false
+	}
+	var (
+		results proto.Results
+		block   proto.Block
+	)
+	if err := block.DecodeBlock(r, revision, results.Auto()); err != nil {
+		return false
+	}
+	return block.Columns == 0 && block.Rows == 0
 }
 
 func (p *Plugin) OnException(ctx context.Context, sess chsession.Session, _ *chproto.Exception) error {
