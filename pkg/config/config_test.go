@@ -271,6 +271,21 @@ func TestConfigValidate(t *testing.T) {
 			wantErr: true, wantContain: []string{"agent.owner"},
 		},
 		{
+			name: "agent storage integrity row id requires network id", cfg: baseAgent,
+			mutate: func(c *Config) {
+				c.Agent.StorageIntegrity.Enabled = true
+			},
+			wantErr: true, wantContain: []string{"agent.storage_integrity.network_id"},
+		},
+		{
+			name: "agent storage integrity row id enabled", cfg: baseAgent,
+			mutate: func(c *Config) {
+				c.Agent.StorageIntegrity.Enabled = true
+				c.Agent.StorageIntegrity.NetworkID = "sentio-testnet"
+			},
+			wantErr: false,
+		},
+		{
 			name: "agent missing upstream and network_state",
 			cfg:  baseAgent, mutate: func(c *Config) {
 				c.Agent.Upstream = ""

@@ -37,8 +37,8 @@ func (v UnsafeReplicaHashVerifier) VerifyUnsafe(ctx context.Context, task Unsafe
 	if task.UnsafeTable == "" {
 		return UnsafeValidationResult{}, fmt.Errorf("unsafe_table is required")
 	}
-	if len(task.Replicas) < 2 {
-		return UnsafeValidationResult{}, fmt.Errorf("at least two unsafe replicas are required")
+	if len(task.Replicas) == 0 {
+		return UnsafeValidationResult{}, fmt.Errorf("at least one unsafe replica is required")
 	}
 
 	var expected UnsafeReplicaDigest
@@ -139,14 +139,17 @@ type unsafeDigestConn interface {
 	Query(ctx context.Context, query string, args ...any) (driver.Rows, error)
 }
 
+type activeDigestQuery struct {
+	SQL       string
+	Args      []any
+	CountOnly bool
+}
+
 func queryActivePartsDigest(ctx context.Context, conn unsafeDigestConn, databaseName, tableName string, rowCount *uint64, rowsHash *string) error {
-	queries := []string{
-		"SELECT ifNull(sum(rows), 0), lower(hex(sipHash128(groupArray(toString(tuple(name, rows, hash_of_all_files, hash_of_uncompressed_files)))))) FROM (SELECT name, rows, hash_of_all_files, hash_of_uncompressed_files FROM system.parts WHERE active AND database = ? AND table = ? ORDER BY name)",
-		"SELECT ifNull(sum(rows), 0), lower(hex(sipHash128(groupArray(toString(tuple(name, rows, bytes_on_disk)))))) FROM (SELECT name, rows, bytes_on_disk FROM system.parts WHERE active AND database = ? AND table = ? ORDER BY name)",
-	}
+	queries := activePartsDigestQueries(databaseName, tableName)
 	var lastErr error
 	for _, query := range queries {
-		rows, err := conn.Query(ctx, query, databaseName, tableName)
+		rows, err := conn.Query(ctx, query.SQL, query.Args...)
 		if err != nil {
 			lastErr = err
 			if ctx.Err() != nil {
@@ -165,6 +168,17 @@ func queryActivePartsDigest(ctx context.Context, conn unsafeDigestConn, database
 			}
 			continue
 		}
+		if query.CountOnly {
+			if err := rows.Scan(rowCount); err != nil {
+				lastErr = err
+				if ctx.Err() != nil {
+					break
+				}
+				continue
+			}
+			*rowsHash = countDigest(*rowCount)
+			return nil
+		}
 		if err := rows.Scan(rowCount, rowsHash); err != nil {
 			lastErr = err
 			if ctx.Err() != nil {
@@ -175,6 +189,50 @@ func queryActivePartsDigest(ctx context.Context, conn unsafeDigestConn, database
 		return nil
 	}
 	return fmt.Errorf("query active parts digest: %w", lastErr)
+}
+
+func activePartsDigestQueries(databaseName, tableName string) []activeDigestQuery {
+	table := QuoteTable(databaseName, tableName)
+	systemTableNames := systemPartsTableNameCandidates(tableName)
+	return []activeDigestQuery{
+		{
+			SQL:       "SELECT count() FROM " + table,
+			CountOnly: true,
+		},
+		{
+			SQL:  "SELECT ifNull(sum(rows), 0), lower(hex(sipHash128(groupArray(toString(tuple(name, rows, bytes_on_disk)))))) FROM (SELECT name, rows, bytes_on_disk FROM system.parts WHERE active AND database = ? AND table IN (?, ?) ORDER BY name)",
+			Args: []any{databaseName, systemTableNames[0], systemTableNames[1]},
+		},
+		{
+			SQL:  "SELECT ifNull(sum(rows), 0), lower(hex(sipHash128(groupArray(toString(tuple(name, rows, hash_of_all_files, hash_of_uncompressed_files)))))) FROM (SELECT name, rows, hash_of_all_files, hash_of_uncompressed_files FROM system.parts WHERE active AND database = ? AND table IN (?, ?) ORDER BY name)",
+			Args: []any{databaseName, systemTableNames[0], systemTableNames[1]},
+		},
+	}
+}
+
+func countDigest(rowCount uint64) string {
+	return replay.DigestBytes([]byte(fmt.Sprintf("count:%d", rowCount)))
+}
+
+func systemPartsTableNameCandidates(tableName string) []string {
+	escaped := clickHouseEscapedIdentifierForSystemParts(tableName)
+	return []string{tableName, escaped}
+}
+
+func clickHouseEscapedIdentifierForSystemParts(name string) string {
+	var out strings.Builder
+	for i := 0; i < len(name); i++ {
+		b := name[i]
+		if (b >= 'A' && b <= 'Z') ||
+			(b >= 'a' && b <= 'z') ||
+			(b >= '0' && b <= '9') ||
+			b == '_' {
+			out.WriteByte(b)
+			continue
+		}
+		out.WriteString(fmt.Sprintf("%%%02X", b))
+	}
+	return out.String()
 }
 
 func splitClickHouseQualifiedTableName(name string) (string, string, error) {

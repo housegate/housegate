@@ -184,3 +184,48 @@ func TestOnQuery_MaintenanceSkipsOwner(t *testing.T) {
 		t.Errorf("Owner=%q, want empty on maintenance bypass", qctx.Owner)
 	}
 }
+
+func TestInternalSettingsScrubberRemovesHouseGateSettings(t *testing.T) {
+	qctx, _ := newQctx(t,
+		chproto.Setting{Key: "max_threads", Value: "2"},
+		chproto.Setting{Key: auth.AuthTokenSettingKey, Value: "'token'", Custom: true},
+		chproto.Setting{Key: auth.PayerSettingKey, Value: "'0xabc'", Custom: true},
+		chproto.Setting{Key: auth.MaintenanceSettingKey, Value: "'1'", Custom: true},
+		chproto.Setting{Key: auth.PlatformOperatorSettingKey, Value: "'1'", Custom: true},
+		chproto.Setting{Key: auth.DriverSettingKey, Value: "'1'", Custom: true},
+		chproto.Setting{Key: "custom_business_setting", Value: "keep", Custom: true},
+	)
+
+	if err := (InternalSettingsScrubber{}).OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+
+	got := map[string]string{}
+	for _, setting := range qctx.Query.Settings {
+		got[setting.Key] = setting.Value
+	}
+	if len(got) != 2 {
+		t.Fatalf("kept settings = %+v, want only non-HouseGate settings", got)
+	}
+	if got["max_threads"] != "2" || got["custom_business_setting"] != "keep" {
+		t.Fatalf("kept settings = %+v", got)
+	}
+	for _, key := range []string{
+		auth.AuthTokenSettingKey,
+		auth.PayerSettingKey,
+		auth.MaintenanceSettingKey,
+		auth.PlatformOperatorSettingKey,
+		auth.DriverSettingKey,
+	} {
+		if _, ok := got[key]; ok {
+			t.Fatalf("internal setting %s was not scrubbed: %+v", key, got)
+		}
+	}
+}
+
+func TestInternalSettingsScrubberRunsOnRoutedSessions(t *testing.T) {
+	var _ plugin.RouteAware = InternalSettingsScrubber{}
+	if !((InternalSettingsScrubber{}).RunOnRouted()) {
+		t.Fatal("InternalSettingsScrubber must run on routed sessions")
+	}
+}

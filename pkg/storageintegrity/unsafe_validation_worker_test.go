@@ -63,6 +63,29 @@ func TestUnsafeReplicaHashVerifierAcceptsMatchingReplicas(t *testing.T) {
 	}
 }
 
+func TestUnsafeReplicaHashVerifierAcceptsSingleLocalReplica(t *testing.T) {
+	verifier := UnsafeReplicaHashVerifier{
+		Reader: unsafeDigestReaderFunc(func(_ context.Context, replica UnsafeReplica, _ string) (UnsafeReplicaDigest, error) {
+			return UnsafeReplicaDigest{ReplicaID: replica.ReplicaID, RowCount: 2, RowsHash: "0xaaa"}, nil
+		}),
+	}
+	result, err := verifier.VerifyUnsafe(context.Background(), UnsafeValidationTask{
+		ValidationID: "uv-local",
+		StatementID:  "stmt-1",
+		TableID:      "dual_hg_auth.t",
+		UnsafeTable:  "`hg_unsafe`.`dual_hg_auth.t_a`",
+		Replicas: []UnsafeReplica{
+			{ReplicaID: "hg-1", Addr: "127.0.0.1:9000"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("VerifyUnsafe: %v", err)
+	}
+	if result.RowCount != 2 || result.RowsHash != "0xaaa" || len(result.Replicas) != 1 || result.Replicas[0].ReplicaID != "hg-1" {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
 func TestUnsafeReplicaHashVerifierTimesOutReplicaRead(t *testing.T) {
 	verifier := UnsafeReplicaHashVerifier{
 		ReplicaTimeout: 10 * time.Millisecond,
@@ -87,6 +110,36 @@ func TestUnsafeReplicaHashVerifierTimesOutReplicaRead(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed > time.Second {
 		t.Fatalf("VerifyUnsafe took %s, want timeout to cut off blocked replica read", elapsed)
+	}
+}
+
+func TestActivePartsDigestQueriesUseCountDigestBeforePartsMetadata(t *testing.T) {
+	queries := activePartsDigestQueries("hg_unsafe", "realbin.t_a")
+	if len(queries) < 3 {
+		t.Fatalf("activePartsDigestQueries len = %d, want at least 3", len(queries))
+	}
+	if got, want := queries[0].SQL, "SELECT count() FROM `hg_unsafe`.`realbin.t_a`"; got != want {
+		t.Fatalf("first digest query = %q, want %q", got, want)
+	}
+	if len(queries[0].Args) != 0 {
+		t.Fatalf("first digest args = %#v, want table query without system table args", queries[0].Args)
+	}
+	if !strings.Contains(queries[1].SQL, "bytes_on_disk") ||
+		!strings.Contains(queries[1].SQL, "system.parts") {
+		t.Fatalf("second digest query = %q, want lightweight system.parts bytes_on_disk fallback", queries[1].SQL)
+	}
+	if len(queries[1].Args) != 3 || queries[1].Args[1] != "realbin.t_a" || queries[1].Args[2] != "realbin%2Et_a" {
+		t.Fatalf("second digest args = %#v, want logical and escaped table names", queries[1].Args)
+	}
+	if !strings.Contains(queries[2].SQL, "hash_of_all_files") {
+		t.Fatalf("third digest query = %q, want file hash fallback", queries[2].SQL)
+	}
+}
+
+func TestSystemPartsTableNameCandidatesIncludeEscapedDottedName(t *testing.T) {
+	candidates := systemPartsTableNameCandidates("realbin.t_a")
+	if len(candidates) != 2 || candidates[0] != "realbin.t_a" || candidates[1] != "realbin%2Et_a" {
+		t.Fatalf("systemPartsTableNameCandidates = %#v, want logical and escaped names", candidates)
 	}
 }
 

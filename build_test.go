@@ -23,6 +23,9 @@ func (stubRewriterFactory) NewRewriter(_ rewriter.Session) rewriter.Rewriter {
 	return stubRewriter{}
 }
 func (stubRewriterFactory) Close() error { return nil }
+func (stubRewriterFactory) RewriteTables(_ context.Context, sql string, _ map[string]string) (string, error) {
+	return sql, nil
+}
 
 type stubRewriter struct{}
 

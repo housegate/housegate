@@ -111,6 +111,33 @@ func TestSentioRewriter_BackendErrorPropagates(t *testing.T) {
 	}
 }
 
+func TestSentioNetworkFactoryRewriteTablesUsesTableWithDatabaseMapForCrossDBTargets(t *testing.T) {
+	be := &fakeBackend{resp: &pb.RewriteSQLResponse{
+		Code:            pb.RewriteCode_Success,
+		SqlAfterRewrite: "INSERT INTO `hg_unsafe`.`dual_hg_auth.t_a` FORMAT Native",
+	}}
+	f := newFakeFactory(be)
+
+	out, err := f.RewriteTables(context.Background(),
+		"INSERT INTO dual_hg_phys.`dual_hg_auth.t` FORMAT Native",
+		map[string]string{"dual_hg_phys.dual_hg_auth.t": "hg_unsafe.dual_hg_auth.t_a"},
+	)
+	if err != nil {
+		t.Fatalf("RewriteTables: %v", err)
+	}
+	if out != "INSERT INTO `hg_unsafe`.`dual_hg_auth.t_a` FORMAT Native" {
+		t.Fatalf("out = %q", out)
+	}
+	staticArgs := be.lastReq.GetOptions()[0].GetTableNameArgs().GetStaticArgs()
+	if len(staticArgs.GetTableMap()) != 0 {
+		t.Fatalf("same-db table_map = %v, want empty for cross-db target", staticArgs.GetTableMap())
+	}
+	target := staticArgs.GetTableWithDatabaseMap()["dual_hg_phys.dual_hg_auth.t"]
+	if target == nil || target.GetDatabase() != "hg_unsafe" || target.GetTable() != "dual_hg_auth.t_a" {
+		t.Fatalf("table_with_database_map target = %+v", target)
+	}
+}
+
 func TestSentioRewriter_UseMirrorsLogicalDatabase(t *testing.T) {
 	be := &fakeBackend{resp: &pb.RewriteSQLResponse{
 		Code:             pb.RewriteCode_Success,

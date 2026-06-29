@@ -92,5 +92,7 @@ func durationOrDefault(d, fallback time.Duration) time.Duration {
 
 func promotionStatementMayHaveApplied(sql string) bool {
 	sql = strings.ToLower(strings.TrimSpace(sql))
-	return strings.HasPrefix(sql, "insert ") || strings.HasPrefix(sql, "truncate ")
+	return strings.HasPrefix(sql, "insert ") ||
+		strings.HasPrefix(sql, "truncate ") ||
+		(strings.HasPrefix(sql, "alter table ") && strings.Contains(sql, " attach partition "))
 }

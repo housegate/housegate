@@ -38,6 +38,7 @@ type KeeperCoordinatorConfig struct {
 	SessionTimeout time.Duration
 	Root           string
 	WorkerID       string
+	LocalAddr      string
 	ReplayQuorum   int
 
 	RequireFinality         bool
@@ -114,7 +115,7 @@ func NewKeeperCoordinatorWithStore(cfg KeeperCoordinatorConfig, store keeperStor
 		return nil, fmt.Errorf("keeper store is required")
 	}
 	if cfg.WorkerID == "" {
-		return nil, fmt.Errorf("worker_id is required")
+		cfg.WorkerID = "housegate-local"
 	}
 	if cfg.Root == "" {
 		cfg.Root = "/housekeeper/v1/storage_integrity"
@@ -165,7 +166,11 @@ func (c *KeeperCoordinator) SubmitInsert(ctx context.Context, rec InsertRecord) 
 		rec.SafeTable = c.layout.SafeTable(rec.TableID)
 	}
 	stmtPath := c.statementPath(rec.StatementID)
-	if err := c.createKV(ctx, stmtPath, c.encodeStatement(rec)); err != nil {
+	participants := c.configuredParticipants()
+	if len(participants) == 0 {
+		return fmt.Errorf("housekeeper participants are required")
+	}
+	if err := c.createKV(ctx, stmtPath, c.encodeStatement(rec, participants)); err != nil {
 		if errors.Is(err, errKeeperNodeExists) {
 			return fmt.Errorf("statement %q already exists", rec.StatementID)
 		}
@@ -211,6 +216,9 @@ func (c *KeeperCoordinator) SubmitFinality(ctx context.Context, rec FinalityReco
 
 func (c *KeeperCoordinator) ClaimReplayJob(ctx context.Context) (replay.ReplayJob, bool, error) {
 	if err := ctx.Err(); err != nil {
+		return replay.ReplayJob{}, false, err
+	}
+	if quarantined, err := c.workerReplayQuarantined(ctx); err != nil || quarantined {
 		return replay.ReplayJob{}, false, err
 	}
 	children, err := c.children(ctx, c.path("replay_jobs"))
@@ -286,15 +294,23 @@ func (c *KeeperCoordinator) ClaimUnsafeValidation(ctx context.Context) (UnsafeVa
 	if err := ctx.Err(); err != nil {
 		return UnsafeValidationTask{}, false, err
 	}
+	if quarantined, err := c.workerReplayQuarantined(ctx); err != nil || quarantined {
+		return UnsafeValidationTask{}, false, err
+	}
 	children, err := c.children(ctx, c.path("unsafe_tasks"))
 	if err != nil {
 		return UnsafeValidationTask{}, false, err
 	}
 	for _, child := range children {
 		stmtID := unescapeSegment(child)
-		if exists, err := c.exists(ctx, c.unsafeResultPath(stmtID)); err != nil {
+		if exists, err := c.exists(ctx, c.unsafeParticipantResultPath(stmtID, c.cfg.WorkerID)); err != nil {
 			return UnsafeValidationTask{}, false, err
 		} else if exists {
+			continue
+		}
+		if data, ok, err := c.store.Get(ctx, c.unsafeResultPath(stmtID)); err != nil {
+			return UnsafeValidationTask{}, false, err
+		} else if ok && len(data) > 0 {
 			continue
 		}
 		if exists, err := c.exists(ctx, c.unsafeFailurePath(stmtID)); err != nil {
@@ -319,7 +335,13 @@ func (c *KeeperCoordinator) SubmitUnsafeValidation(ctx context.Context, result U
 		return err
 	}
 	resultPath := c.unsafeResultPath(result.StatementID)
+	if len(result.Replicas) == 1 && result.Replicas[0].ReplicaID == c.cfg.WorkerID {
+		resultPath = c.unsafeParticipantResultPath(result.StatementID, c.cfg.WorkerID)
+	}
 	resultData := encodeUnsafeResultKV(result)
+	if err := c.store.EnsurePath(ctx, parentPath(resultPath)); err != nil {
+		return err
+	}
 	if err := c.createKV(ctx, resultPath, resultData); err != nil {
 		if errors.Is(err, errKeeperNodeExists) {
 			existing, ok, getErr := c.store.Get(ctx, resultPath)
@@ -356,13 +378,21 @@ func (c *KeeperCoordinator) ClaimPromotion(ctx context.Context) (PromotionTask, 
 	if err := ctx.Err(); err != nil {
 		return PromotionTask{}, false, err
 	}
+	if quarantined, err := c.workerReplayQuarantined(ctx); err != nil || quarantined {
+		return PromotionTask{}, false, err
+	}
 	children, err := c.children(ctx, c.path("promotions"))
 	if err != nil {
 		return PromotionTask{}, false, err
 	}
 	for _, child := range children {
 		stmtID := unescapeSegment(child)
-		if exists, err := c.exists(ctx, c.promotionResultPath(stmtID)); err != nil {
+		if exists, err := c.exists(ctx, c.promotionParticipantResultPath(stmtID, c.cfg.WorkerID)); err != nil {
+			return PromotionTask{}, false, err
+		} else if exists {
+			continue
+		}
+		if exists, err := c.exists(ctx, c.promotionParticipantFailurePath(stmtID, c.cfg.WorkerID)); err != nil {
 			return PromotionTask{}, false, err
 		} else if exists {
 			continue
@@ -376,7 +406,7 @@ func (c *KeeperCoordinator) ClaimPromotion(ctx context.Context) (PromotionTask, 
 		if err != nil || !ok {
 			return PromotionTask{}, false, err
 		}
-		if ok, err := c.tryClaim(ctx, c.promotionLeasePath(stmtID), task.LeaseID); err != nil || !ok {
+		if ok, err := c.tryClaim(ctx, c.promotionParticipantLeasePath(stmtID, c.cfg.WorkerID), task.LeaseID); err != nil || !ok {
 			return PromotionTask{}, false, err
 		}
 		return task, true, nil
@@ -392,7 +422,11 @@ func (c *KeeperCoordinator) FinishPromotion(ctx context.Context, result Promotio
 	if stmtID == result.PromotionID || stmtID == "" {
 		return fmt.Errorf("promotion_id %q does not encode statement id", result.PromotionID)
 	}
-	if err := c.createJSON(ctx, c.promotionResultPath(stmtID), result); err != nil && !errors.Is(err, errKeeperNodeExists) {
+	if err := c.createJSON(ctx, c.promotionParticipantResultPath(stmtID, c.cfg.WorkerID), result); err != nil && !errors.Is(err, errKeeperNodeExists) {
+		return err
+	}
+	complete, err := c.promotionResultsComplete(ctx, stmtID)
+	if err != nil || !complete {
 		return err
 	}
 	return c.queueSafeAudit(ctx, stmtID)
@@ -406,7 +440,10 @@ func (c *KeeperCoordinator) FailPromotion(ctx context.Context, failure Promotion
 	if stmtID == failure.PromotionID || stmtID == "" {
 		return fmt.Errorf("promotion_id %q does not encode statement id", failure.PromotionID)
 	}
-	return c.createJSON(ctx, c.promotionFailurePath(stmtID), failure)
+	if err := c.createJSON(ctx, c.promotionParticipantFailurePath(stmtID, c.cfg.WorkerID), failure); err != nil && !errors.Is(err, errKeeperNodeExists) {
+		return err
+	}
+	return nil
 }
 
 func (c *KeeperCoordinator) SubmitRollback(ctx context.Context, event RollbackEvent) error {
@@ -439,6 +476,9 @@ func (c *KeeperCoordinator) SubmitRollback(ctx context.Context, event RollbackEv
 
 func (c *KeeperCoordinator) ClaimRollback(ctx context.Context) (RollbackTask, bool, error) {
 	if err := ctx.Err(); err != nil {
+		return RollbackTask{}, false, err
+	}
+	if quarantined, err := c.workerReplayQuarantined(ctx); err != nil || quarantined {
 		return RollbackTask{}, false, err
 	}
 	children, err := c.children(ctx, c.path("rollback_tasks"))
@@ -488,6 +528,9 @@ func (c *KeeperCoordinator) FailRollback(ctx context.Context, failure RollbackFa
 
 func (c *KeeperCoordinator) ClaimSafeAudit(ctx context.Context) (SafeAuditTask, bool, error) {
 	if err := ctx.Err(); err != nil {
+		return SafeAuditTask{}, false, err
+	}
+	if quarantined, err := c.workerReplayQuarantined(ctx); err != nil || quarantined {
 		return SafeAuditTask{}, false, err
 	}
 	children, err := c.children(ctx, c.path("safe_audit_tasks"))
@@ -566,12 +609,16 @@ func (c *KeeperCoordinator) validateUnsafeResult(ctx context.Context, result Uns
 }
 
 func (c *KeeperCoordinator) queueSafeAudit(ctx context.Context, stmtID string) error {
-	if len(c.cfg.SafeAuditReplicas) == 0 {
-		return nil
-	}
 	ledger, ok, err := c.readStatement(ctx, stmtID)
 	if err != nil || !ok {
 		return err
+	}
+	participants := append([]string(nil), ledger.Participants...)
+	if len(participants) == 0 {
+		participants = c.configuredParticipants()
+	}
+	if len(participants) == 0 {
+		return nil
 	}
 	networkID := c.cfg.SafeAuditNetworkID
 	if networkID == "" {
@@ -581,13 +628,18 @@ func (c *KeeperCoordinator) queueSafeAudit(ctx context.Context, stmtID string) e
 	if schemaHash == "" {
 		schemaHash = "mock-schema"
 	}
-	for _, replica := range c.cfg.SafeAuditReplicas {
-		if replica.ReplicaID == "" {
+	seen := map[string]struct{}{}
+	for _, participant := range participants {
+		if participant == "" {
 			continue
 		}
+		if _, ok := seen[participant]; ok {
+			continue
+		}
+		seen[participant] = struct{}{}
 		task := SafeAuditTask{
 			AuditID:    "audit-" + stmtID,
-			ReplicaID:  replica.ReplicaID,
+			ReplicaID:  participant,
 			NetworkID:  networkID,
 			TableID:    ledger.InsertRecord.TableID,
 			SchemaHash: schemaHash,
@@ -600,6 +652,51 @@ func (c *KeeperCoordinator) queueSafeAudit(ctx context.Context, stmtID string) e
 		}
 	}
 	return nil
+}
+
+func (c *KeeperCoordinator) configuredParticipants() []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(c.cfg.UnsafeReplicas))
+	add := func(id string) {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return
+		}
+		if _, ok := seen[id]; ok {
+			return
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	for _, replica := range c.cfg.UnsafeReplicas {
+		add(replica.ReplicaID)
+	}
+	if len(out) == 0 {
+		for _, replica := range c.cfg.SafeAuditReplicas {
+			add(replica.ReplicaID)
+		}
+	}
+	if len(out) == 0 {
+		add(c.cfg.WorkerID)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (c *KeeperCoordinator) workerReplayQuarantined(ctx context.Context) (bool, error) {
+	if c.cfg.WorkerID == "" {
+		return false, nil
+	}
+	data, ok, err := c.store.Get(ctx, c.replayQuarantinePath(c.cfg.WorkerID))
+	if err != nil || !ok {
+		return ok, err
+	}
+	fields, err := parseKeeperKV(data)
+	if err != nil {
+		return false, err
+	}
+	status := strings.TrimSpace(fields["status"])
+	return status == "" || status == "active", nil
 }
 
 func (c *KeeperCoordinator) buildReplayJob(blockSeq uint64, rec InsertRecord) replay.ReplayJob {
@@ -638,7 +735,7 @@ func (c *KeeperCoordinator) readStatement(ctx context.Context, stmtID string) (k
 	if err != nil {
 		return keeperStatementRecord{}, false, err
 	}
-	return keeperStatementRecord{InsertRecord: rec, BlockSeq: replayBlockSeq(stmtID)}, true, nil
+	return keeperStatementRecord{InsertRecord: rec, BlockSeq: replayBlockSeq(stmtID), Participants: splitKeeperCSV(fields["participants"])}, true, nil
 }
 
 func (c *KeeperCoordinator) statementIDByBlockSeq(ctx context.Context, blockSeq uint64) (string, bool, error) {
@@ -655,8 +752,8 @@ func (c *KeeperCoordinator) statementIDByBlockSeq(ctx context.Context, blockSeq 
 	return "", false, nil
 }
 
-func (c *KeeperCoordinator) encodeStatement(rec InsertRecord) []byte {
-	return encodeKeeperKV(
+func (c *KeeperCoordinator) encodeStatement(rec InsertRecord, participants []string) []byte {
+	fields := []keeperKVPair{
 		keeperKVPair{Key: "table_id", Value: rec.TableID},
 		keeperKVPair{Key: "unsafe_table", Value: rec.UnsafeTable},
 		keeperKVPair{Key: "safe_table", Value: rec.SafeTable},
@@ -664,10 +761,17 @@ func (c *KeeperCoordinator) encodeStatement(rec InsertRecord) []byte {
 		keeperKVPair{Key: "payload_hash", Value: rec.Payload.Hash},
 		keeperKVPair{Key: "payload_length", Value: strconv.FormatUint(rec.Payload.Length, 10)},
 		keeperKVPair{Key: "replay_quorum", Value: strconv.Itoa(c.cfg.ReplayQuorum)},
-		keeperKVPair{Key: "unsafe_replicas", Value: c.unsafeReplicaIDsCSV()},
+		keeperKVPair{Key: "participants", Value: strings.Join(participants, ",")},
 		keeperKVPair{Key: "original_sql_b64", Value: base64.StdEncoding.EncodeToString([]byte(rec.OriginalSQL))},
 		keeperKVPair{Key: "unsafe_sql_b64", Value: base64.StdEncoding.EncodeToString([]byte(rec.UnsafeSQL))},
-	)
+	}
+	if len(rec.PartitionIDs) > 0 {
+		fields = append(fields, keeperKVPair{Key: "partition_ids", Value: strings.Join(normalizeKeeperCSVValues(rec.PartitionIDs), ",")})
+	}
+	if len(c.cfg.UnsafeReplicas) > 0 {
+		fields = append(fields, keeperKVPair{Key: "unsafe_replicas", Value: c.unsafeReplicaIDsCSV()})
+	}
+	return encodeKeeperKV(fields...)
 }
 
 func (c *KeeperCoordinator) decodeStatement(stmtID string, fields map[string]string) (InsertRecord, error) {
@@ -684,12 +788,13 @@ func (c *KeeperCoordinator) decodeStatement(stmtID string, fields map[string]str
 		return InsertRecord{}, fmt.Errorf("unsafe_sql_b64 for %q: %w", stmtID, err)
 	}
 	rec := InsertRecord{
-		TableID:     fields["table_id"],
-		StatementID: stmtID,
-		OriginalSQL: originalSQL,
-		UnsafeSQL:   unsafeSQL,
-		UnsafeTable: fields["unsafe_table"],
-		SafeTable:   fields["safe_table"],
+		TableID:      fields["table_id"],
+		StatementID:  stmtID,
+		OriginalSQL:  originalSQL,
+		UnsafeSQL:    unsafeSQL,
+		UnsafeTable:  fields["unsafe_table"],
+		SafeTable:    fields["safe_table"],
+		PartitionIDs: splitKeeperCSV(fields["partition_ids"]),
 		Payload: PayloadCommitment{
 			Ref:    fields["payload_ref"],
 			Hash:   fields["payload_hash"],
@@ -716,9 +821,18 @@ func (c *KeeperCoordinator) getUnsafeTask(ctx context.Context, stmtID string) (U
 		StatementID:  firstNonEmpty(fields["statement_id"], stmtID),
 		TableID:      fields["table_id"],
 		UnsafeTable:  fields["unsafe_table"],
-		Replicas:     c.unsafeReplicasByID(splitKeeperCSV(fields["replicas"])),
 	}
-	if len(task.Replicas) == 0 {
+	if participants := splitKeeperCSV(fields["participants"]); len(participants) > 0 {
+		for _, participant := range participants {
+			if participant == c.cfg.WorkerID {
+				task.Replicas = []UnsafeReplica{{ReplicaID: c.cfg.WorkerID, Addr: c.cfg.LocalAddr}}
+				break
+			}
+		}
+	} else {
+		task.Replicas = c.unsafeReplicasByID(splitKeeperCSV(fields["replicas"]))
+	}
+	if len(task.Replicas) == 0 && len(c.cfg.UnsafeReplicas) > 0 {
 		task.Replicas = append([]UnsafeReplica(nil), c.cfg.UnsafeReplicas...)
 	}
 	if task.StatementID == "" || task.TableID == "" || task.UnsafeTable == "" || len(task.Replicas) == 0 {
@@ -738,22 +852,31 @@ func (c *KeeperCoordinator) getPromotionTask(ctx context.Context, stmtID string)
 	}
 	unsafeTable := fields["unsafe_table"]
 	safeTable := fields["safe_table"]
+	partitionIDs := splitKeeperCSV(fields["partition_ids"])
 	if unsafeTable == "" || safeTable == "" {
 		if statement, ok, err := c.readStatement(ctx, stmtID); err != nil {
 			return PromotionTask{}, false, err
 		} else if ok {
 			unsafeTable = firstNonEmpty(unsafeTable, statement.UnsafeTable)
 			safeTable = firstNonEmpty(safeTable, statement.SafeTable)
+			if len(partitionIDs) == 0 {
+				partitionIDs = append([]string(nil), statement.PartitionIDs...)
+			}
+		}
+	} else if len(partitionIDs) == 0 {
+		if statement, ok, err := c.readStatement(ctx, stmtID); err != nil {
+			return PromotionTask{}, false, err
+		} else if ok {
+			partitionIDs = append([]string(nil), statement.PartitionIDs...)
 		}
 	}
 	task := PromotionTask{
-		PromotionID: firstNonEmpty(fields["promotion_id"], "promotion-"+stmtID),
-		LeaseID:     firstNonEmpty(fields["lease_id"], "lease-"+stmtID),
-		Statements: []string{
-			"INSERT INTO " + safeTable + " SELECT * FROM " + unsafeTable,
-			"TRUNCATE TABLE " + unsafeTable,
-		},
-		Readback: PromotionReadbackSpec{Table: safeTable},
+		PromotionID:  firstNonEmpty(fields["promotion_id"], "promotion-"+stmtID),
+		LeaseID:      participantPromotionLeaseID(firstNonEmpty(fields["lease_id"], "lease-"+stmtID), c.cfg.WorkerID),
+		UnsafeTable:  unsafeTable,
+		SafeTable:    safeTable,
+		PartitionIDs: partitionIDs,
+		Readback:     PromotionReadbackSpec{Table: safeTable},
 	}
 	if unsafeResult, ok, err := c.readUnsafeResult(ctx, stmtID); err != nil {
 		return PromotionTask{}, false, err
@@ -767,18 +890,93 @@ func (c *KeeperCoordinator) getPromotionTask(ctx context.Context, stmtID string)
 	return task, true, nil
 }
 
+func participantPromotionLeaseID(baseLeaseID, workerID string) string {
+	workerID = strings.TrimSpace(workerID)
+	if workerID == "" {
+		return baseLeaseID
+	}
+	suffix := "-" + workerID
+	if strings.HasSuffix(baseLeaseID, suffix) {
+		return baseLeaseID
+	}
+	return baseLeaseID + suffix
+}
+
+func (c *KeeperCoordinator) promotionResultsComplete(ctx context.Context, stmtID string) (bool, error) {
+	ledger, ok, err := c.readStatement(ctx, stmtID)
+	if err != nil || !ok {
+		return false, err
+	}
+	participants := append([]string(nil), ledger.Participants...)
+	if len(participants) == 0 {
+		participants = c.configuredParticipants()
+	}
+	if len(participants) == 0 {
+		return true, nil
+	}
+	for _, participant := range participants {
+		participant = strings.TrimSpace(participant)
+		if participant == "" {
+			continue
+		}
+		exists, err := c.exists(ctx, c.promotionParticipantResultPath(stmtID, participant))
+		if err != nil || !exists {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
 func (c *KeeperCoordinator) readUnsafeResult(ctx context.Context, stmtID string) (UnsafeValidationResult, bool, error) {
-	data, ok, err := c.store.Get(ctx, c.unsafeResultPath(stmtID))
+	resultPath := c.unsafeResultPath(stmtID)
+	data, ok, err := c.store.Get(ctx, resultPath)
 	if err != nil || !ok {
 		return UnsafeValidationResult{}, ok, err
 	}
-	fields, err := parseKeeperKV(data)
-	if err != nil {
+	if strings.TrimSpace(string(data)) != "" {
+		fields, err := parseKeeperKV(data)
+		if err != nil {
+			return UnsafeValidationResult{}, false, err
+		}
+		result, err := decodeUnsafeResultKV(stmtID, fields)
+		return result, err == nil, err
+	}
+
+	children, err := c.children(ctx, resultPath)
+	if err != nil || len(children) == 0 {
 		return UnsafeValidationResult{}, false, err
 	}
+	var aggregate UnsafeValidationResult
+	for _, child := range children {
+		participantID := unescapeSegment(child)
+		childData, childOK, childErr := c.store.Get(ctx, c.unsafeParticipantResultPath(stmtID, participantID))
+		if childErr != nil || !childOK {
+			return UnsafeValidationResult{}, false, childErr
+		}
+		fields, err := parseKeeperKV(childData)
+		if err != nil {
+			return UnsafeValidationResult{}, false, err
+		}
+		result, err := decodeUnsafeResultKV(stmtID, fields)
+		if err != nil {
+			return UnsafeValidationResult{}, false, err
+		}
+		if aggregate.StatementID == "" {
+			aggregate = result
+			continue
+		}
+		if aggregate.RowCount != result.RowCount || aggregate.RowsHash != result.RowsHash {
+			return UnsafeValidationResult{}, false, fmt.Errorf("unsafe result %q has inconsistent participant digest from %q", stmtID, participantID)
+		}
+		aggregate.Replicas = append(aggregate.Replicas, result.Replicas...)
+	}
+	return aggregate, true, nil
+}
+
+func decodeUnsafeResultKV(stmtID string, fields map[string]string) (UnsafeValidationResult, error) {
 	rowCount, err := strconv.ParseUint(fields["row_count"], 10, 64)
 	if err != nil {
-		return UnsafeValidationResult{}, false, fmt.Errorf("unsafe result %q row_count: %w", stmtID, err)
+		return UnsafeValidationResult{}, fmt.Errorf("unsafe result %q row_count: %w", stmtID, err)
 	}
 	result := UnsafeValidationResult{
 		ValidationID: fields["validation_id"],
@@ -788,7 +986,21 @@ func (c *KeeperCoordinator) readUnsafeResult(ctx context.Context, stmtID string)
 		RowCount:     rowCount,
 		RowsHash:     fields["rows_hash"],
 	}
-	return result, true, nil
+	for _, digest := range splitKeeperCSV(fields["replica_digests"]) {
+		parts := strings.SplitN(digest, ":", 3)
+		if len(parts) != 3 {
+			return UnsafeValidationResult{}, fmt.Errorf("unsafe result %q invalid replica digest %q", stmtID, digest)
+		}
+		replicaRows, err := strconv.ParseUint(parts[1], 10, 64)
+		if err != nil {
+			return UnsafeValidationResult{}, fmt.Errorf("unsafe result %q replica %q row_count: %w", stmtID, parts[0], err)
+		}
+		result.Replicas = append(result.Replicas, UnsafeReplicaDigest{ReplicaID: parts[0], RowCount: replicaRows, RowsHash: parts[2]})
+	}
+	if result.RowsHash == "" || len(result.Replicas) == 0 {
+		return UnsafeValidationResult{}, fmt.Errorf("unsafe result %q is incomplete", stmtID)
+	}
+	return result, nil
 }
 
 func (c *KeeperCoordinator) getRollbackTask(ctx context.Context, stmtID string) (RollbackTask, bool, error) {
@@ -911,7 +1123,7 @@ func (c *KeeperCoordinator) ensureRoots(ctx context.Context) error {
 		c.path("decisions"),
 	} {
 		if err := c.store.EnsurePath(ctx, p); err != nil {
-			return err
+			return fmt.Errorf("ensure housekeeper path %s: %w", p, err)
 		}
 	}
 	return nil
@@ -998,6 +1210,9 @@ func (c *KeeperCoordinator) unsafeTaskPath(stmtID string) string {
 func (c *KeeperCoordinator) unsafeResultPath(stmtID string) string {
 	return c.path("unsafe_results", escapeSegment(stmtID))
 }
+func (c *KeeperCoordinator) unsafeParticipantResultPath(stmtID, participantID string) string {
+	return c.path("unsafe_results", escapeSegment(stmtID), escapeSegment(participantID))
+}
 func (c *KeeperCoordinator) unsafeFailurePath(stmtID string) string {
 	return c.path("unsafe_failures", escapeSegment(stmtID))
 }
@@ -1009,6 +1224,9 @@ func (c *KeeperCoordinator) rollbackEventPath(stmtID string) string {
 }
 func (c *KeeperCoordinator) rollbackTaskPath(stmtID string) string {
 	return c.path("rollback_tasks", escapeSegment(stmtID))
+}
+func (c *KeeperCoordinator) replayQuarantinePath(workerID string) string {
+	return c.path("replay_quarantine", escapeSegment(workerID))
 }
 func (c *KeeperCoordinator) rollbackLeasePath(stmtID string) string {
 	return c.path("rollback_leases", escapeSegment(stmtID))
@@ -1025,11 +1243,20 @@ func (c *KeeperCoordinator) promotionPath(stmtID string) string {
 func (c *KeeperCoordinator) promotionLeasePath(stmtID string) string {
 	return c.path("promotion_leases", escapeSegment(stmtID))
 }
+func (c *KeeperCoordinator) promotionParticipantLeasePath(stmtID, workerID string) string {
+	return c.path("promotion_leases", escapeSegment(stmtID), escapeSegment(workerID))
+}
 func (c *KeeperCoordinator) promotionResultPath(stmtID string) string {
 	return c.path("promotion_results", escapeSegment(stmtID))
 }
+func (c *KeeperCoordinator) promotionParticipantResultPath(stmtID, workerID string) string {
+	return c.path("promotion_results", escapeSegment(stmtID), escapeSegment(workerID))
+}
 func (c *KeeperCoordinator) promotionFailurePath(stmtID string) string {
 	return c.path("promotion_failures", escapeSegment(stmtID))
+}
+func (c *KeeperCoordinator) promotionParticipantFailurePath(stmtID, workerID string) string {
+	return c.path("promotion_failures", escapeSegment(stmtID), escapeSegment(workerID))
 }
 func (c *KeeperCoordinator) safeAuditTaskPath(key string) string {
 	return c.path("safe_audit_tasks", escapeSegment(key))
@@ -1040,7 +1267,8 @@ func (c *KeeperCoordinator) safeAuditVotePath(key string) string {
 
 type keeperStatementRecord struct {
 	InsertRecord
-	BlockSeq uint64 `json:"block_seq"`
+	BlockSeq     uint64   `json:"block_seq"`
+	Participants []string `json:"participants,omitempty"`
 }
 
 type keeperKVPair struct {
@@ -1094,6 +1322,24 @@ func splitKeeperCSV(value string) []string {
 			out = append(out, item)
 		}
 	}
+	return out
+}
+
+func normalizeKeeperCSVValues(values []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	sort.Strings(out)
 	return out
 }
 
@@ -1198,14 +1444,15 @@ func (s *zkKeeperStore) EnsurePath(ctx context.Context, p string) error {
 		cur += "/" + part
 		exists, _, err := s.conn.Exists(cur)
 		if err != nil {
-			return mapZKErr(err)
+			return fmt.Errorf("exists %s: %w", cur, mapZKErr(err))
 		}
 		if exists {
 			continue
 		}
 		_, err = s.conn.Create(cur, nil, 0, zk.WorldACL(zk.PermAll))
-		if err != nil && !errors.Is(mapZKErr(err), errKeeperNodeExists) {
-			return mapZKErr(err)
+		mapped := mapZKErr(err)
+		if mapped != nil && !errors.Is(mapped, errKeeperNodeExists) {
+			return fmt.Errorf("create %s: %w", cur, mapped)
 		}
 	}
 	return nil
@@ -1215,35 +1462,52 @@ func (s *zkKeeperStore) Create(ctx context.Context, p string, data []byte) error
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	_, err := s.conn.Create(cleanKeeperPath(p), data, 0, zk.WorldACL(zk.PermAll))
-	return mapZKErr(err)
+	clean := cleanKeeperPath(p)
+	_, err := s.conn.Create(clean, data, 0, zk.WorldACL(zk.PermAll))
+	if mapped := mapZKErr(err); mapped != nil {
+		return fmt.Errorf("create %s: %w", clean, mapped)
+	}
+	return nil
 }
 
 func (s *zkKeeperStore) Set(ctx context.Context, p string, data []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	_, err := s.conn.Set(cleanKeeperPath(p), data, -1)
-	return mapZKErr(err)
+	clean := cleanKeeperPath(p)
+	_, err := s.conn.Set(clean, data, -1)
+	if mapped := mapZKErr(err); mapped != nil {
+		return fmt.Errorf("set %s: %w", clean, mapped)
+	}
+	return nil
 }
 
 func (s *zkKeeperStore) Get(ctx context.Context, p string) ([]byte, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
-	data, _, err := s.conn.Get(cleanKeeperPath(p))
-	if errors.Is(mapZKErr(err), errKeeperNoNode) {
+	clean := cleanKeeperPath(p)
+	data, _, err := s.conn.Get(clean)
+	mapped := mapZKErr(err)
+	if errors.Is(mapped, errKeeperNoNode) {
 		return nil, false, nil
 	}
-	return data, err == nil, mapZKErr(err)
+	if mapped != nil {
+		return nil, false, fmt.Errorf("get %s: %w", clean, mapped)
+	}
+	return data, true, nil
 }
 
 func (s *zkKeeperStore) Children(ctx context.Context, p string) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	children, _, err := s.conn.Children(cleanKeeperPath(p))
-	return children, mapZKErr(err)
+	clean := cleanKeeperPath(p)
+	children, _, err := s.conn.Children(clean)
+	if mapped := mapZKErr(err); mapped != nil {
+		return nil, fmt.Errorf("children %s: %w", clean, mapped)
+	}
+	return children, nil
 }
 
 func (s *zkKeeperStore) Close() {

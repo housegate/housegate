@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -13,6 +14,7 @@ type StorageIntegrityConfig struct {
 	Enabled           bool                             `json:"enabled"            yaml:"enabled"`
 	MockPayloadStore  StorageIntegrityMockPayloadStore `json:"mock_payload_store" yaml:"mock_payload_store"`
 	MockFinality      StorageIntegrityMockFinality     `json:"mock_finality"      yaml:"mock_finality"`
+	MockPartRegistry  StorageIntegrityMockPartRegistry `json:"mock_part_registry" yaml:"mock_part_registry"`
 	HouseKeeper       StorageIntegrityHouseKeeper      `json:"housekeeper"       yaml:"housekeeper"`
 	UnsafeValidation  StorageIntegrityUnsafeValidation `json:"unsafe_validation"  yaml:"unsafe_validation"`
 	SafeAudit         StorageIntegritySafeAudit        `json:"safe_audit"         yaml:"safe_audit"`
@@ -28,6 +30,10 @@ type StorageIntegrityMockPayloadStore struct {
 
 type StorageIntegrityMockFinality struct {
 	Delay Duration `json:"delay" yaml:"delay"`
+}
+
+type StorageIntegrityMockPartRegistry struct {
+	PartitionIDs []string `json:"partition_ids" yaml:"partition_ids"`
 }
 
 type StorageIntegrityHouseKeeper struct {
@@ -108,10 +114,12 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 	if c.MockFinality.Delay.Duration < 0 {
 		errs = append(errs, fmt.Errorf("storage_integrity.mock_finality.delay must be >= 0 (got %s)", c.MockFinality.Delay.Duration))
 	}
-	if len(c.HouseKeeper.Endpoints) > 0 {
-		if c.HouseKeeper.WorkerID == "" {
-			errs = append(errs, errors.New("storage_integrity.housekeeper.worker_id is required when storage_integrity.housekeeper.endpoints is set"))
+	for i, partitionID := range c.MockPartRegistry.PartitionIDs {
+		if strings.TrimSpace(partitionID) == "" {
+			errs = append(errs, fmt.Errorf("storage_integrity.mock_part_registry.partition_ids[%d] is required", i))
 		}
+	}
+	if len(c.HouseKeeper.Endpoints) > 0 {
 		if c.HouseKeeper.ReplayQuorum <= 0 {
 			errs = append(errs, fmt.Errorf("storage_integrity.housekeeper.replay_quorum must be > 0 (got %d)", c.HouseKeeper.ReplayQuorum))
 		}
@@ -123,15 +131,9 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 				errs = append(errs, fmt.Errorf("storage_integrity.housekeeper.endpoints[%d] is required", i))
 			}
 		}
-		if len(c.UnsafeValidation.Replicas) == 0 {
-			errs = append(errs, errors.New("storage_integrity.unsafe_validation.replicas are required when storage_integrity.housekeeper.endpoints is set"))
-		}
 	}
 	if c.UnsafeValidation.QueryTimeout.Duration < 0 {
 		errs = append(errs, fmt.Errorf("storage_integrity.unsafe_validation.query_timeout must be >= 0 (got %s)", c.UnsafeValidation.QueryTimeout.Duration))
-	}
-	if c.Workers.UnsafeValidation && len(c.UnsafeValidation.Replicas) == 1 {
-		errs = append(errs, errors.New("storage_integrity.unsafe_validation.replicas must be empty for mock mode or contain at least two replicas"))
 	}
 	seenReplicas := map[string]struct{}{}
 	for i, replica := range c.UnsafeValidation.Replicas {

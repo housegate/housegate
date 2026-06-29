@@ -329,6 +329,33 @@ func (r *sentioRewriter) Rewrite(ctx context.Context, sql, effectiveAccount stri
 	}
 }
 
+func (f *SentioNetworkFactory) RewriteTables(ctx context.Context, sql string, tableMap map[string]string) (string, error) {
+	if f == nil || f.backend == nil {
+		return "", fmt.Errorf("rewriter factory is not initialized")
+	}
+	if len(tableMap) == 0 {
+		return sql, nil
+	}
+	req := &pb.RewriteSQLRequest{
+		Sql:     sql,
+		Options: []*pb.RewriteOption{staticRewriteOption(tableMap)},
+	}
+	timeout := f.options.Timeout
+	if timeout == 0 {
+		timeout = 5 * time.Second
+	}
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	resp, err := f.backend.Rewrite(ctxWithTimeout, req)
+	if err != nil {
+		return "", fmt.Errorf("static table rewrite: %w", err)
+	}
+	if resp.Code != pb.RewriteCode_Success {
+		return "", fmt.Errorf("static table rewrite rejected SQL (code=%s): %s", resp.Code, resp.Message)
+	}
+	return resp.GetSqlAfterRewrite(), nil
+}
+
 // maybeUpdateLogicalDatabase mirrors a `USE` observation back into
 // the session when the rewriter classified the SQL as
 // STATEMENT_TYPE_USE. Two cases:

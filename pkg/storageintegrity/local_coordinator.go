@@ -439,13 +439,12 @@ func (c *LocalCoordinator) queuePromotionIfReadyLocked(stmtID string) {
 	}
 	c.promotionQueued[stmtID] = true
 	c.promotionQueue = append(c.promotionQueue, PromotionTask{
-		PromotionID: "promotion-" + rec.StatementID,
-		LeaseID:     "lease-" + rec.StatementID,
-		Statements: []string{
-			"INSERT INTO " + rec.SafeTable + " SELECT * FROM " + rec.UnsafeTable,
-			"TRUNCATE TABLE " + rec.UnsafeTable,
-		},
-		Readback: PromotionReadbackSpec{Table: rec.SafeTable},
+		PromotionID:  "promotion-" + rec.StatementID,
+		LeaseID:      "lease-" + rec.StatementID,
+		UnsafeTable:  rec.UnsafeTable,
+		SafeTable:    rec.SafeTable,
+		PartitionIDs: append([]string(nil), rec.PartitionIDs...),
+		Readback:     PromotionReadbackSpec{Table: rec.SafeTable},
 	})
 }
 

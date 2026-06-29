@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"golang.org/x/sync/errgroup"
+
+	"housegate/housegate/pkg/log"
 )
 
 // Runtime groups HouseGate-side storage-integrity workers. The P0 control
@@ -109,7 +111,11 @@ func (r *Runtime) poll(ctx context.Context, claim func(context.Context) (bool, e
 		}
 		claimed, err := claim(ctx)
 		if err != nil {
-			return err
+			if ctx.Err() != nil {
+				return nil
+			}
+			log.Warnw("storage_integrity worker iteration failed", "err", err)
+			claimed = false
 		}
 		if claimed {
 			continue

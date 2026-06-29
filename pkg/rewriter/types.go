@@ -142,6 +142,13 @@ type Rewriter interface {
 	Close() error
 }
 
+// TableRewriter runs a narrow static TableNameRewrite over one SQL statement.
+// It is used by storage-integrity after the normal logical/physical rewrite to
+// route verified tables to their unsafe/safe physical companions.
+type TableRewriter interface {
+	RewriteTables(ctx context.Context, sql string, tableMap map[string]string) (string, error)
+}
+
 // Factory builds per-connection Rewriters using the shared resources
 // it owns (gRPC client, NetworkState, options).
 //

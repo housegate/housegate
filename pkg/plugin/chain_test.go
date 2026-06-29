@@ -73,6 +73,29 @@ func (f *fakeQueryPlugin) OnQuery(_ context.Context, qctx *QueryContext) error {
 	return f.returnErr
 }
 
+type recordingDataRewriter struct {
+	seenRaw   []byte
+	returnRaw []byte
+	err       error
+}
+
+func (r *recordingDataRewriter) RewriteClientData(_ context.Context, _ *QueryContext, raw []byte) ([]byte, error) {
+	r.seenRaw = append([]byte(nil), raw...)
+	if r.err != nil {
+		return nil, r.err
+	}
+	return append([]byte(nil), r.returnRaw...), nil
+}
+
+type recordingDataPlugin struct {
+	seenRaw []byte
+}
+
+func (r *recordingDataPlugin) OnClientData(_ context.Context, _ *QueryContext, raw []byte) error {
+	r.seenRaw = append([]byte(nil), raw...)
+	return nil
+}
+
 func TestPluginChain_OnQuery_RunsInOrder(t *testing.T) {
 	var called []string
 	chain := &PluginChain{
@@ -93,6 +116,48 @@ func TestPluginChain_OnQuery_RunsInOrder(t *testing.T) {
 	}
 	if qctx.Query.Body != "mutated" {
 		t.Fatalf("Body=%q, want mutated", qctx.Query.Body)
+	}
+}
+
+func TestPluginChain_RewritesClientDataBeforeObservers(t *testing.T) {
+	qctx := &QueryContext{Session: newFakeSession()}
+	rewriter := &recordingDataRewriter{returnRaw: []byte("rewritten")}
+	observer := &recordingDataPlugin{}
+	chain := &PluginChain{
+		DataRewritePlugins: []DataRewritePlugin{rewriter},
+		DataPlugins:        []DataPlugin{observer},
+	}
+
+	got, err := chain.OnClientData(context.Background(), qctx, []byte("original"))
+	if err != nil {
+		t.Fatalf("OnClientData: %v", err)
+	}
+	if string(got) != "rewritten" {
+		t.Fatalf("rewritten raw = %q, want rewritten", got)
+	}
+	if string(rewriter.seenRaw) != "original" {
+		t.Fatalf("rewriter saw %q, want original", rewriter.seenRaw)
+	}
+	if string(observer.seenRaw) != "rewritten" {
+		t.Fatalf("observer saw %q, want rewritten", observer.seenRaw)
+	}
+}
+
+func TestPluginChain_WrapsDataRewriteErrors(t *testing.T) {
+	qctx := &QueryContext{Session: newFakeSession()}
+	chain := &PluginChain{
+		DataRewritePlugins: []DataRewritePlugin{
+			&recordingDataRewriter{err: errors.New("rewrite failed")},
+		},
+	}
+
+	_, err := chain.OnClientData(context.Background(), qctx, []byte("original"))
+	if err == nil {
+		t.Fatal("OnClientData succeeded, want rewrite error")
+	}
+	var rewriteErr DataRewriteError
+	if !errors.As(err, &rewriteErr) {
+		t.Fatalf("error = %T %v, want DataRewriteError", err, err)
 	}
 }
 

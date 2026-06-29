@@ -2,6 +2,7 @@ package storageintegrity
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -48,12 +49,13 @@ func TestRuntimeRunsLocalInsertThroughPromotion(t *testing.T) {
 		UnsafeTableSuffix:       "_a",
 	})
 	if err := coordinator.SubmitInsert(ctx, InsertRecord{
-		TableID:     "dual_hg_auth.t",
-		StatementID: "stmt-runtime-1",
-		OriginalSQL: "INSERT INTO dual_hg_auth.t VALUES (1)",
-		UnsafeSQL:   "INSERT INTO `hg_unsafe`.`dual_hg_auth.t_a` VALUES (1)",
-		UnsafeTable: "`hg_unsafe`.`dual_hg_auth.t_a`",
-		SafeTable:   "`hg_safe`.`dual_hg_auth.t`",
+		TableID:      "dual_hg_auth.t",
+		StatementID:  "stmt-runtime-1",
+		OriginalSQL:  "INSERT INTO dual_hg_auth.t VALUES (1)",
+		UnsafeSQL:    "INSERT INTO `hg_unsafe`.`dual_hg_auth.t_a` VALUES (1)",
+		UnsafeTable:  "`hg_unsafe`.`dual_hg_auth.t_a`",
+		SafeTable:    "`hg_safe`.`dual_hg_auth.t`",
+		PartitionIDs: []string{"all"},
 		Payload: PayloadCommitment{
 			Ref:    "mockda://dual_hg_auth.t/stmt-runtime-1/hash",
 			Hash:   "0xpayload",
@@ -94,14 +96,11 @@ func TestRuntimeRunsLocalInsertThroughPromotion(t *testing.T) {
 	if err := runtime.Run(ctx); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if len(exec.statements) != 2 {
-		t.Fatalf("promotion statements = %d, want 2: %+v", len(exec.statements), exec.statements)
+	if len(exec.statements) != 1 {
+		t.Fatalf("promotion statements = %d, want 1: %+v", len(exec.statements), exec.statements)
 	}
-	if got, want := exec.statements[0], "INSERT INTO `hg_safe`.`dual_hg_auth.t` SELECT * FROM `hg_unsafe`.`dual_hg_auth.t_a`"; got != want {
-		t.Fatalf("promotion INSERT = %q, want %q", got, want)
-	}
-	if got, want := exec.statements[1], "TRUNCATE TABLE `hg_unsafe`.`dual_hg_auth.t_a`"; got != want {
-		t.Fatalf("promotion TRUNCATE = %q, want %q", got, want)
+	if got, want := exec.statements[0], "ALTER TABLE `hg_safe`.`dual_hg_auth.t` ATTACH PARTITION ID 'all' FROM `hg_unsafe`.`dual_hg_auth.t_a`"; got != want {
+		t.Fatalf("promotion ATTACH PARTITION = %q, want %q", got, want)
 	}
 }
 
@@ -125,12 +124,13 @@ func TestRuntimeRunsPromotionThroughSafeAuditMajority(t *testing.T) {
 		SafeAuditSchemaHash: "0xschema",
 	})
 	if err := coordinator.SubmitInsert(ctx, InsertRecord{
-		TableID:     "dual_hg_auth.t",
-		StatementID: "stmt-runtime-audit",
-		OriginalSQL: "INSERT INTO dual_hg_auth.t VALUES (1)",
-		UnsafeSQL:   "INSERT INTO `hg_unsafe`.`dual_hg_auth.t_a` VALUES (1)",
-		UnsafeTable: "`hg_unsafe`.`dual_hg_auth.t_a`",
-		SafeTable:   "`hg_safe`.`dual_hg_auth.t`",
+		TableID:      "dual_hg_auth.t",
+		StatementID:  "stmt-runtime-audit",
+		OriginalSQL:  "INSERT INTO dual_hg_auth.t VALUES (1)",
+		UnsafeSQL:    "INSERT INTO `hg_unsafe`.`dual_hg_auth.t_a` VALUES (1)",
+		UnsafeTable:  "`hg_unsafe`.`dual_hg_auth.t_a`",
+		SafeTable:    "`hg_safe`.`dual_hg_auth.t`",
+		PartitionIDs: []string{"all"},
 		Payload: PayloadCommitment{
 			Ref:    "mockda://dual_hg_auth.t/stmt-runtime-audit/hash",
 			Hash:   "0xpayload",
@@ -186,6 +186,35 @@ func TestRuntimeRunsPromotionThroughSafeAuditMajority(t *testing.T) {
 	}
 }
 
+func TestRuntimeDoesNotExitAfterReportedWorkerFailure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	source := &singlePromotionSource{task: PromotionTask{
+		PromotionID: "promotion-runtime-failed",
+		LeaseID:     "lease-runtime-failed",
+		Statements:  []string{"ALTER TABLE safe ATTACH PARTITION ID 'all' FROM unsafe"},
+	}}
+	sink := &cancelingPromotionFailureSink{cancel: cancel}
+	runtime := Runtime{
+		PollInterval: time.Millisecond,
+		Promotions:   source,
+		Promotion: &PromotionWorker{
+			Executor: failingPromotionExecutor{err: errors.New("clickhouse timeout")},
+			Sink:     sink,
+		},
+	}
+
+	if err := runtime.Run(ctx); err != nil {
+		t.Fatalf("Run returned reported worker failure: %v", err)
+	}
+	if len(sink.failures) != 1 {
+		t.Fatalf("promotion failures = %#v, want one recorded failure", sink.failures)
+	}
+	if source.claims != 1 {
+		t.Fatalf("claims = %d, want 1", source.claims)
+	}
+}
+
 type singleReplayJobSource struct {
 	job    replay.ReplayJob
 	claims int
@@ -228,6 +257,46 @@ func (e *runtimePromotionExecutor) ExecPromotionSQL(_ context.Context, sql strin
 
 func (e *runtimePromotionExecutor) ReadPromotionRows(context.Context, PromotionReadbackSpec) (PromotionReadbackResult, error) {
 	return PromotionReadbackResult{}, nil
+}
+
+type singlePromotionSource struct {
+	task   PromotionTask
+	claims int
+}
+
+func (s *singlePromotionSource) ClaimPromotion(context.Context) (PromotionTask, bool, error) {
+	if s.claims > 0 {
+		return PromotionTask{}, false, nil
+	}
+	s.claims++
+	return s.task, true, nil
+}
+
+type failingPromotionExecutor struct {
+	err error
+}
+
+func (e failingPromotionExecutor) ExecPromotionSQL(context.Context, string) error {
+	return e.err
+}
+
+func (e failingPromotionExecutor) ReadPromotionRows(context.Context, PromotionReadbackSpec) (PromotionReadbackResult, error) {
+	return PromotionReadbackResult{}, e.err
+}
+
+type cancelingPromotionFailureSink struct {
+	cancel   context.CancelFunc
+	failures []PromotionFailure
+}
+
+func (s *cancelingPromotionFailureSink) FinishPromotion(context.Context, PromotionResult) error {
+	return nil
+}
+
+func (s *cancelingPromotionFailureSink) FailPromotion(_ context.Context, failure PromotionFailure) error {
+	s.failures = append(s.failures, failure)
+	s.cancel()
+	return nil
 }
 
 type cancelingPromotionSink struct {

@@ -23,6 +23,7 @@ go_library(
     importpath = "housegate/housegate/pkg/storageintegrity",
     visibility = ["//visibility:public"],
     deps = [
+        "//pkg/log",
         "//pkg/replay",
         "@com_github_clickhouse_clickhouse_go_v2//:clickhouse-go",
         "@com_github_clickhouse_clickhouse_go_v2//lib/driver",
@@ -46,5 +47,7 @@ go_test(
         "unsafe_validation_worker_test.go",
     ],
     embed = [":storageintegrity"],
-    deps = ["//pkg/replay"],
+    deps = [
+        "//pkg/replay",
+    ],
 )

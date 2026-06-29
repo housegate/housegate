@@ -17,12 +17,13 @@ func TestLocalCoordinatorWaitsForExternalFinalityBeforePromotion(t *testing.T) {
 		UnsafeTableSuffix: "_a",
 	})
 	rec := InsertRecord{
-		TableID:     "dual_hg_auth.t",
-		StatementID: "stmt-1",
-		OriginalSQL: "INSERT INTO dual_hg_auth.t VALUES (1)",
-		UnsafeSQL:   "INSERT INTO `hg_unsafe`.`dual_hg_auth.t_a` VALUES (1)",
-		UnsafeTable: "`hg_unsafe`.`dual_hg_auth.t_a`",
-		SafeTable:   "`hg_safe`.`dual_hg_auth.t`",
+		TableID:      "dual_hg_auth.t",
+		StatementID:  "stmt-1",
+		OriginalSQL:  "INSERT INTO dual_hg_auth.t VALUES (1)",
+		UnsafeSQL:    "INSERT INTO `hg_unsafe`.`dual_hg_auth.t_a` VALUES (1)",
+		UnsafeTable:  "`hg_unsafe`.`dual_hg_auth.t_a`",
+		SafeTable:    "`hg_safe`.`dual_hg_auth.t`",
+		PartitionIDs: []string{"202606"},
 		Payload: PayloadCommitment{
 			Ref:    "mockda://dual_hg_auth.t/stmt-1/hash",
 			Hash:   "0xpayload",
@@ -75,14 +76,14 @@ func TestLocalCoordinatorWaitsForExternalFinalityBeforePromotion(t *testing.T) {
 	if task.PromotionID == "" || task.LeaseID == "" {
 		t.Fatalf("promotion task missing ids: %+v", task)
 	}
-	if len(task.Statements) != 2 {
-		t.Fatalf("promotion statements = %d, want 2: %+v", len(task.Statements), task.Statements)
+	if task.SafeTable != "`hg_safe`.`dual_hg_auth.t`" || task.UnsafeTable != "`hg_unsafe`.`dual_hg_auth.t_a`" {
+		t.Fatalf("promotion tables = safe %q unsafe %q", task.SafeTable, task.UnsafeTable)
 	}
-	if got, want := task.Statements[0], "INSERT INTO `hg_safe`.`dual_hg_auth.t` SELECT * FROM `hg_unsafe`.`dual_hg_auth.t_a`"; got != want {
-		t.Fatalf("promotion INSERT = %q, want %q", got, want)
+	if len(task.PartitionIDs) != 1 || task.PartitionIDs[0] != "202606" {
+		t.Fatalf("promotion partition ids = %+v, want [202606]", task.PartitionIDs)
 	}
-	if got, want := task.Statements[1], "TRUNCATE TABLE `hg_unsafe`.`dual_hg_auth.t_a`"; got != want {
-		t.Fatalf("promotion TRUNCATE = %q, want %q", got, want)
+	if len(task.Statements) != 0 {
+		t.Fatalf("promotion statements = %+v, want attach-partition worker expansion", task.Statements)
 	}
 }
 

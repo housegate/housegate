@@ -91,16 +91,32 @@ func TestServer_HandshakeRoundTrip(t *testing.T) {
 // can assert the Server fires them regardless of dial outcome.
 type recordingHooks struct {
 	plugin.NoopHooks
-	connects    int
-	disconnects int
+	connects     int
+	disconnects  int
+	connected    chan struct{}
+	disconnected chan struct{}
 }
 
 func (r *recordingHooks) OnConnect(_ context.Context, _ chsession.Session) error {
 	r.connects++
+	if r.connected != nil {
+		select {
+		case r.connected <- struct{}{}:
+		default:
+		}
+	}
 	return nil
 }
 
-func (r *recordingHooks) OnDisconnect(_ chsession.Session) { r.disconnects++ }
+func (r *recordingHooks) OnDisconnect(_ chsession.Session) {
+	r.disconnects++
+	if r.disconnected != nil {
+		select {
+		case r.disconnected <- struct{}{}:
+		default:
+		}
+	}
+}
 
 // TestServer_ConnLifecycleHooks_FireOnDialFailure proves that
 // OnConnect / OnDisconnect are invoked for every accepted connection
@@ -112,7 +128,10 @@ func (r *recordingHooks) OnDisconnect(_ chsession.Session) { r.disconnects++ }
 // the failing dialer is called. OnConnect still fires at accept; the
 // deferred OnDisconnect still fires after Relay returns.
 func TestServer_ConnLifecycleHooks_FireOnDialFailure(t *testing.T) {
-	hooks := &recordingHooks{}
+	hooks := &recordingHooks{
+		connected:    make(chan struct{}, 1),
+		disconnected: make(chan struct{}, 1),
+	}
 	dial := func(ctx context.Context, sess chsession.Session) (*chproto.Codec, error) {
 		return nil, errors.New("dial-failure")
 	}
@@ -134,6 +153,11 @@ func TestServer_ConnLifecycleHooks_FireOnDialFailure(t *testing.T) {
 		t.Fatalf("dial client: %v", err)
 	}
 	defer clientConn.Close()
+	select {
+	case <-hooks.connected:
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnConnect did not fire")
+	}
 
 	// Send a valid ClientHello so the relay reaches the dialer.
 	// Without this, the relay would block in ReadPacket and the test
@@ -147,6 +171,12 @@ func TestServer_ConnLifecycleHooks_FireOnDialFailure(t *testing.T) {
 	}).Encode(&hb)
 	if _, err := clientConn.Write(hb.Buf); err != nil {
 		t.Fatalf("client write hello: %v", err)
+	}
+
+	select {
+	case <-hooks.disconnected:
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnDisconnect did not fire")
 	}
 
 	// Wait until handle() finishes. Cancel ctx and rely on the drain path.
@@ -190,7 +220,9 @@ func (h testHooks) OnHello(ctx context.Context, sess chsession.Session, hello *c
 
 func (testHooks) OnHandshakeComplete(context.Context, chsession.Session, time.Duration) {}
 func (testHooks) OnQuery(context.Context, *plugin.QueryContext) error                   { return nil }
-func (testHooks) OnClientData(context.Context, *plugin.QueryContext, []byte) error      { return nil }
+func (testHooks) OnClientData(_ context.Context, _ *plugin.QueryContext, raw []byte) ([]byte, error) {
+	return raw, nil
+}
 func (testHooks) OnException(context.Context, chsession.Session, *chproto.Exception) error {
 	return nil
 }

@@ -37,9 +37,9 @@ func newPermObserver(st *InMemoryNetworkState) *PermissionCommitGateObserver {
 	return NewPermissionCommitGateObserver(st)
 }
 
-// TestPermission_RejectsUnspecified: principle #1 — an unclassified
-// statement must never be forwarded. Subscribing to Unspecified is
-// what gives the observer the opportunity to reject; this test guards
+// TestPermission_RejectsUnspecified: an unclassified statement that
+// mentions a target must never be forwarded. Subscribing to Unspecified
+// is what gives the observer the opportunity to reject; this test guards
 // the explicit reject path inside BeforeStatement.
 func TestPermission_RejectsUnspecified(t *testing.T) {
 	st := fixturePerm("foo", "alice", "", 0)
@@ -52,6 +52,37 @@ func TestPermission_RejectsUnspecified(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "Unspecified") {
 		t.Errorf("error should mention Unspecified, got %v", err)
+	}
+}
+
+func TestPermission_AllowsUnspecifiedFromlessSelect(t *testing.T) {
+	o := newPermObserver(NewInMemoryNetworkState())
+
+	for _, sql := range []string{"SELECT 1", " select version() ", "SELECT now();"} {
+		ev := &commitgate.Event{
+			Type:        sqlmeta.StatementTypeUnspecified,
+			User:        "alice",
+			OriginalSQL: sql,
+		}
+		if err := o.BeforeStatement(context.Background(), ev); err != nil {
+			t.Fatalf("%q should be allowed as unclassified FROM-less SELECT: %v", sql, err)
+		}
+	}
+}
+
+func TestPermission_RejectsUnspecifiedSelectWithTableAccessKeyword(t *testing.T) {
+	o := newPermObserver(NewInMemoryNetworkState())
+
+	for _, sql := range []string{"SELECT * FROM foo.t", "SELECT * FROM foo.t JOIN bar.u USING id"} {
+		ev := &commitgate.Event{
+			Type:        sqlmeta.StatementTypeUnspecified,
+			User:        "alice",
+			OriginalSQL: sql,
+		}
+		err := o.BeforeStatement(context.Background(), ev)
+		if err == nil || !strings.Contains(err.Error(), "Unspecified") {
+			t.Fatalf("%q should remain fail-closed, got %v", sql, err)
+		}
 	}
 }
 

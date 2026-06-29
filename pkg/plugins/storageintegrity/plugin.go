@@ -23,14 +23,22 @@ type Config struct {
 	UnsafeDatabase    string
 	SafeDatabase      string
 	UnsafeTableSuffix string
+	TableRewriter     TableRewriter
+	PartitionIDs      []string
 }
 
 const defaultTerminatorDelay = time.Second
 
+type TableRewriter interface {
+	RewriteTables(ctx context.Context, sql string, tableMap map[string]string) (string, error)
+}
+
 type Plugin struct {
-	layout   core.TableLayout
-	payloads *core.MockPayloadStore
-	sink     core.IngressSink
+	layout       core.TableLayout
+	payloads     *core.MockPayloadStore
+	sink         core.IngressSink
+	rewriter     TableRewriter
+	partitionIDs []string
 
 	mu              sync.Mutex
 	active          map[int64]*insertCapture
@@ -46,6 +54,7 @@ type insertCapture struct {
 	unsafeSQL      string
 	unsafeTable    string
 	safeTable      string
+	partitionIDs   []string
 	dataPackets    [][]byte
 	startedAt      time.Time
 	timer          *time.Timer
@@ -61,6 +70,8 @@ func New(cfg Config, payloads *core.MockPayloadStore, sink core.IngressSink) *Pl
 		}),
 		payloads:        payloads,
 		sink:            sink,
+		rewriter:        cfg.TableRewriter,
+		partitionIDs:    normalizePartitionIDs(cfg.PartitionIDs),
 		active:          map[int64]*insertCapture{},
 		now:             time.Now,
 		newStmt:         defaultStatementID,
@@ -77,15 +88,18 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	}
 	switch qctx.StatementType {
 	case sqlmeta.StatementTypeInsert:
-		return p.onInsert(qctx)
+		return p.onInsert(ctx, qctx)
 	case sqlmeta.StatementTypeSelect:
-		return p.onSelect(qctx)
+		return p.onSelect(ctx, qctx)
 	case sqlmeta.StatementTypeUnspecified:
-		switch inferStatementTypeFromSQL(firstNonEmpty(qctx.OriginalSQL, qctx.Query.Body)) {
+		inferred := inferStatementTypeFromSQL(firstNonEmpty(qctx.OriginalSQL, qctx.Query.Body))
+		switch inferred {
 		case sqlmeta.StatementTypeInsert:
-			return p.onInsert(qctx)
+			qctx.StatementType = inferred
+			return p.onInsert(ctx, qctx)
 		case sqlmeta.StatementTypeSelect:
-			return p.onSelect(qctx)
+			qctx.StatementType = inferred
+			return p.onSelect(ctx, qctx)
 		}
 		return nil
 	default:
@@ -180,14 +194,15 @@ func (p *Plugin) finalizeCapture(ctx context.Context, cap *insertCapture) {
 		return
 	}
 	if err := p.sink.SubmitInsert(ctx, core.InsertRecord{
-		TableID:     cap.tableID,
-		StatementID: cap.statementID,
-		OriginalSQL: cap.originalSQL,
-		UnsafeSQL:   cap.unsafeSQL,
-		UnsafeTable: cap.unsafeTable,
-		SafeTable:   cap.safeTable,
-		Payload:     commit,
-		ReceivedAt:  p.now().UTC(),
+		TableID:      cap.tableID,
+		StatementID:  cap.statementID,
+		OriginalSQL:  cap.originalSQL,
+		UnsafeSQL:    cap.unsafeSQL,
+		UnsafeTable:  cap.unsafeTable,
+		SafeTable:    cap.safeTable,
+		PartitionIDs: append([]string(nil), cap.partitionIDs...),
+		Payload:      commit,
+		ReceivedAt:   p.now().UTC(),
 	}); err != nil {
 		log.Warnw("storage_integrity: submit insert failed",
 			"statement_id", cap.statementID,
@@ -209,6 +224,23 @@ func (p *Plugin) finalizeCapture(ctx context.Context, cap *insertCapture) {
 func isClientDataTerminator(raw []byte, revision int) bool {
 	empty, err := chproto.IsEmptyClientDataBlock(raw, revision)
 	return err == nil && empty
+}
+
+func normalizePartitionIDs(ids []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }
 
 func (p *Plugin) OnException(ctx context.Context, sess chsession.Session, _ *chproto.Exception) error {
@@ -256,14 +288,18 @@ func (p *Plugin) finalizeTerminatedOrDrop(sessionID int64) {
 	p.finalizeCapture(context.Background(), cap)
 }
 
-func (p *Plugin) onInsert(qctx *plugin.QueryContext) error {
+func (p *Plugin) onInsert(ctx context.Context, qctx *plugin.QueryContext) error {
+	if containsUnmaterializedNondeterminism(qctx.Query.Body) || containsUnmaterializedNondeterminism(qctx.OriginalSQL) {
+		return fmt.Errorf("storage_integrity: non-deterministic INSERT must be materialized before signing")
+	}
 	target, ok := targetFromContext(qctx)
 	if !ok {
 		return fmt.Errorf("storage_integrity: INSERT target is required")
 	}
+	ensureAccessedTable(qctx, target.tableID)
 	unsafeTable := p.layout.UnsafeTable(target.tableID)
 	safeTable := p.layout.SafeTable(target.tableID)
-	unsafeSQL, err := replaceTargetAfterKeyword(qctx.Query.Body, "insert into", unsafeTable)
+	unsafeSQL, err := p.rewriteInsertTable(ctx, qctx, target, p.unsafeRewriteTarget(target.tableID), unsafeTable)
 	if err != nil {
 		return fmt.Errorf("storage_integrity rewrite INSERT to unsafe: %w", err)
 	}
@@ -278,13 +314,14 @@ func (p *Plugin) onInsert(qctx *plugin.QueryContext) error {
 	}
 	p.mu.Lock()
 	p.active[qctx.Session.ID()] = &insertCapture{
-		tableID:     target.tableID,
-		statementID: statementID,
-		originalSQL: qctx.OriginalSQL,
-		unsafeSQL:   unsafeSQL,
-		unsafeTable: unsafeTable,
-		safeTable:   safeTable,
-		startedAt:   p.now().UTC(),
+		tableID:      target.tableID,
+		statementID:  statementID,
+		originalSQL:  qctx.OriginalSQL,
+		unsafeSQL:    unsafeSQL,
+		unsafeTable:  unsafeTable,
+		safeTable:    safeTable,
+		partitionIDs: append([]string(nil), p.partitionIDs...),
+		startedAt:    p.now().UTC(),
 	}
 	p.mu.Unlock()
 	log.Debugw("storage_integrity: insert capture armed",
@@ -297,14 +334,14 @@ func (p *Plugin) onInsert(qctx *plugin.QueryContext) error {
 	return nil
 }
 
-func (p *Plugin) onSelect(qctx *plugin.QueryContext) error {
+func (p *Plugin) onSelect(ctx context.Context, qctx *plugin.QueryContext) error {
 	target, ok := targetFromContext(qctx)
 	if !ok {
 		return nil
 	}
-	safeSQL, err := replaceTargetAfterKeyword(qctx.Query.Body, "from", p.layout.SafeTable(target.tableID))
+	safeSQL, err := p.rewriteTable(ctx, qctx, target, p.safeRewriteTarget(target.tableID), p.layout.SafeTable(target.tableID))
 	if err != nil {
-		return nil
+		return fmt.Errorf("storage_integrity rewrite SELECT to safe: %w", err)
 	}
 	qctx.Query.Body = safeSQL
 	qctx.RewrittenSQL = safeSQL
@@ -312,7 +349,79 @@ func (p *Plugin) onSelect(qctx *plugin.QueryContext) error {
 }
 
 type sqlTarget struct {
-	tableID string
+	tableID       string
+	rewriteTarget string
+}
+
+func (p *Plugin) rewriteTable(ctx context.Context, qctx *plugin.QueryContext, target sqlTarget, rewriteTo, fallbackTo string) (string, error) {
+	from := target.rewriteTarget
+	if strings.TrimSpace(from) == "" {
+		from = target.tableID
+	}
+	if p.rewriter != nil {
+		return p.rewriter.RewriteTables(ctx, qctx.Query.Body, map[string]string{from: rewriteTo})
+	}
+	return "", fmt.Errorf("sql rewriter is required for storage-integrity table routing")
+}
+
+func (p *Plugin) rewriteInsertTable(ctx context.Context, qctx *plugin.QueryContext, target sqlTarget, rewriteTo, fallbackTo string) (string, error) {
+	sql, err := p.rewriteTable(ctx, qctx, target, rewriteTo, fallbackTo)
+	if err != nil {
+		return "", err
+	}
+	if targetID, ok := insertTargetFromSQL(sql, ""); ok && strings.EqualFold(targetID, rewriteTo) && !insertRewriteLostInlineValues(qctx, sql) {
+		return sql, nil
+	}
+	source := sql
+	if insertRewriteLostInlineValues(qctx, sql) {
+		source = originalInsertSQL(qctx)
+	}
+	rewritten, err := replaceInsertTarget(source, fallbackTo)
+	if err != nil {
+		return "", err
+	}
+	return rewritten, nil
+}
+
+func insertRewriteLostInlineValues(qctx *plugin.QueryContext, rewritten string) bool {
+	return hasInlineValuesClause(originalInsertSQL(qctx)) && hasFormatValuesClause(rewritten)
+}
+
+func originalInsertSQL(qctx *plugin.QueryContext) string {
+	if qctx == nil {
+		return ""
+	}
+	body := ""
+	if qctx.Query != nil {
+		body = qctx.Query.Body
+	}
+	return firstNonEmpty(qctx.OriginalSQL, body)
+}
+
+func hasInlineValuesClause(sql string) bool {
+	valuesEnd, ok := findKeywordEnd(sql, "values")
+	if !ok {
+		return false
+	}
+	formatEnd, ok := findKeywordEnd(sql, "format")
+	return !ok || formatEnd > valuesEnd
+}
+
+func hasFormatValuesClause(sql string) bool {
+	formatEnd, ok := findKeywordEnd(sql, "format")
+	if !ok {
+		return false
+	}
+	_, ok = matchKeyword(sql, skipSpaces(sql, formatEnd), "values")
+	return ok
+}
+
+func (p *Plugin) unsafeRewriteTarget(tableID string) string {
+	return p.layout.UnsafeDatabase + "." + tableID + p.layout.UnsafeTableSuffix
+}
+
+func (p *Plugin) safeRewriteTarget(tableID string) string {
+	return p.layout.SafeDatabase + "." + tableID
 }
 
 func targetFromContext(qctx *plugin.QueryContext) (sqlTarget, bool) {
@@ -332,17 +441,120 @@ func targetFromContext(qctx *plugin.QueryContext) (sqlTarget, bool) {
 		if db != "" {
 			tableID = db + "." + t.OriginalTable
 		}
-		return sqlTarget{tableID: tableID}, true
+		return sqlTarget{tableID: tableID, rewriteTarget: rewrittenTargetFor(qctx, tableID, t)}, true
 	}
 	defaultDB := ""
 	if qctx.Session != nil {
 		st := qctx.Session.State()
 		defaultDB = firstNonEmpty(st.LogicalDatabase, st.Database)
 	}
-	if tableID, ok := insertTargetFromSQL(firstNonEmpty(qctx.OriginalSQL, qctx.Query.Body), defaultDB); ok {
-		return sqlTarget{tableID: tableID}, true
+	sql := firstNonEmpty(qctx.OriginalSQL, qctx.Query.Body)
+	switch qctx.StatementType {
+	case sqlmeta.StatementTypeInsert:
+		if tableID, ok := insertTargetFromSQL(sql, defaultDB); ok {
+			return sqlTarget{tableID: tableID, rewriteTarget: rewrittenTargetFor(qctx, tableID, sqlmeta.AccessedTable{})}, true
+		}
+	case sqlmeta.StatementTypeSelect:
+		if tableID, ok := selectTargetFromSQL(sql, defaultDB); ok {
+			return sqlTarget{tableID: tableID, rewriteTarget: rewrittenTargetFor(qctx, tableID, sqlmeta.AccessedTable{})}, true
+		}
+	default:
+		if tableID, ok := insertTargetFromSQL(sql, defaultDB); ok {
+			return sqlTarget{tableID: tableID, rewriteTarget: rewrittenTargetFor(qctx, tableID, sqlmeta.AccessedTable{})}, true
+		}
+		if tableID, ok := selectTargetFromSQL(sql, defaultDB); ok {
+			return sqlTarget{tableID: tableID, rewriteTarget: rewrittenTargetFor(qctx, tableID, sqlmeta.AccessedTable{})}, true
+		}
 	}
 	return sqlTarget{}, false
+}
+
+func targetFromSQLAfterKeyword(sql, keyword, defaultDB string) (string, bool) {
+	start, ok := findKeywordEnd(sql, keyword)
+	if !ok {
+		return "", false
+	}
+	i := skipSpaces(sql, start)
+	if strings.EqualFold(keyword, "insert into") {
+		if end, ok := matchKeyword(sql, i, "table"); ok {
+			i = skipSpaces(sql, end)
+		}
+	}
+	parts := make([]string, 0, 2)
+	for {
+		token, end, ok := readIdentifierToken(sql, i)
+		if !ok {
+			return "", false
+		}
+		parts = append(parts, token)
+		i = skipSpaces(sql, end)
+		if i >= len(sql) || sql[i] != '.' {
+			break
+		}
+		i = skipSpaces(sql, i+1)
+	}
+	if len(parts) == 0 {
+		return "", false
+	}
+	if len(parts) == 1 && strings.TrimSpace(defaultDB) != "" {
+		return strings.TrimSpace(defaultDB) + "." + parts[0], true
+	}
+	return strings.Join(parts, "."), true
+}
+
+func selectTargetFromSQL(sql, defaultDB string) (string, bool) {
+	return targetFromSQLAfterKeyword(sql, "from", defaultDB)
+}
+
+func insertTargetFromSQL(sql, defaultDB string) (string, bool) {
+	return targetFromSQLAfterKeyword(sql, "insert into", defaultDB)
+}
+
+func ensureAccessedTable(qctx *plugin.QueryContext, tableID string) {
+	if qctx == nil || len(qctx.AccessedTables) != 0 {
+		return
+	}
+	db, table := splitTableID(tableID)
+	if strings.TrimSpace(table) == "" {
+		return
+	}
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{
+		OriginalDatabase: db,
+		OriginalTable:    table,
+		LogicalDatabase:  db,
+	}}
+}
+
+func splitTableID(tableID string) (string, string) {
+	parts := strings.Split(tableID, ".")
+	if len(parts) < 2 {
+		return "", tableID
+	}
+	return strings.Join(parts[:len(parts)-1], "."), parts[len(parts)-1]
+}
+
+func rewrittenTargetFor(qctx *plugin.QueryContext, tableID string, accessed sqlmeta.AccessedTable) string {
+	if qctx == nil {
+		return tableID
+	}
+	if accessed.PhysicalDatabase != "" && accessed.OriginalTable != "" {
+		table := accessed.OriginalTable
+		if logical := firstNonEmpty(accessed.LogicalDatabase, accessed.OriginalDatabase); logical != "" {
+			table = logical + "." + accessed.OriginalTable
+		}
+		return accessed.PhysicalDatabase + "." + table
+	}
+	if qctx.TableRewrites != nil {
+		if rewritten := qctx.TableRewrites[tableID]; strings.TrimSpace(rewritten) != "" {
+			return rewritten
+		}
+		if accessed.OriginalTable != "" {
+			if rewritten := qctx.TableRewrites[accessed.OriginalTable]; strings.TrimSpace(rewritten) != "" {
+				return rewritten
+			}
+		}
+	}
+	return tableID
 }
 
 func firstNonEmpty(values ...string) string {
@@ -385,35 +597,21 @@ func replaceTargetAfterKeyword(sql, keyword, target string) (string, error) {
 	return sql[:targetStart] + target + sql[targetEnd:], nil
 }
 
-func insertTargetFromSQL(sql, defaultDB string) (string, bool) {
+func replaceInsertTarget(sql, target string) (string, error) {
 	start, ok := findKeywordEnd(sql, "insert into")
 	if !ok {
-		return "", false
+		return "", fmt.Errorf("keyword %q not found", "insert into")
 	}
 	i := skipSpaces(sql, start)
 	if end, ok := matchKeyword(sql, i, "table"); ok {
 		i = skipSpaces(sql, end)
 	}
-	parts := make([]string, 0, 2)
-	for {
-		token, end, ok := readIdentifierToken(sql, i)
-		if !ok {
-			return "", false
-		}
-		parts = append(parts, token)
-		i = skipSpaces(sql, end)
-		if i >= len(sql) || sql[i] != '.' {
-			break
-		}
-		i = skipSpaces(sql, i+1)
+	targetStart := i
+	targetEnd, ok := scanQualifiedIdentifier(sql, targetStart)
+	if !ok {
+		return "", fmt.Errorf("target identifier not found after %q", "insert into")
 	}
-	if len(parts) == 0 {
-		return "", false
-	}
-	if len(parts) == 1 && strings.TrimSpace(defaultDB) != "" {
-		return strings.TrimSpace(defaultDB) + "." + parts[0], true
-	}
-	return strings.Join(parts, "."), true
+	return sql[:targetStart] + target + sql[targetEnd:], nil
 }
 
 func matchKeyword(sql string, i int, keyword string) (int, bool) {
@@ -559,6 +757,121 @@ func scanQuoted(sql string, i int, quote byte) (int, bool) {
 		return i + 1, true
 	}
 	return 0, false
+}
+
+func containsUnmaterializedNondeterminism(sql string) bool {
+	for i := 0; i < len(sql); {
+		switch sql[i] {
+		case '\'':
+			i = skipQuotedSQL(sql, i, '\'')
+			continue
+		case '`':
+			i = skipQuotedSQL(sql, i, '`')
+			continue
+		case '"':
+			i = skipQuotedSQL(sql, i, '"')
+			continue
+		case '-':
+			if i+1 < len(sql) && sql[i+1] == '-' {
+				i = skipLineComment(sql, i)
+				continue
+			}
+		case '/':
+			if i+1 < len(sql) && sql[i+1] == '*' {
+				i = skipBlockComment(sql, i)
+				continue
+			}
+		}
+		if isSQLIdentStart(rune(sql[i])) {
+			name, end := readSQLIdent(sql, i)
+			if isNondeterministicZeroArgFunction(name) {
+				if _, ok := zeroArgFunctionCallEnd(sql, end); ok {
+					return true
+				}
+			}
+			i = end
+			continue
+		}
+		i++
+	}
+	return false
+}
+
+func skipQuotedSQL(sql string, i int, quote byte) int {
+	i++
+	for i < len(sql) {
+		if sql[i] == '\\' && quote == '\'' && i+1 < len(sql) {
+			i += 2
+			continue
+		}
+		if sql[i] == quote {
+			if i+1 < len(sql) && sql[i+1] == quote {
+				i += 2
+				continue
+			}
+			return i + 1
+		}
+		i++
+	}
+	return i
+}
+
+func skipLineComment(sql string, i int) int {
+	for i < len(sql) {
+		i++
+		if sql[i-1] == '\n' {
+			return i
+		}
+	}
+	return i
+}
+
+func skipBlockComment(sql string, i int) int {
+	i += 2
+	for i < len(sql) {
+		if i+1 < len(sql) && sql[i] == '*' && sql[i+1] == '/' {
+			return i + 2
+		}
+		i++
+	}
+	return i
+}
+
+func readSQLIdent(sql string, i int) (string, int) {
+	start := i
+	for i < len(sql) && isSQLIdentPart(rune(sql[i])) {
+		i++
+	}
+	return sql[start:i], i
+}
+
+func zeroArgFunctionCallEnd(sql string, i int) (int, bool) {
+	i = skipSpaces(sql, i)
+	if i >= len(sql) || sql[i] != '(' {
+		return 0, false
+	}
+	i = skipSpaces(sql, i+1)
+	if i >= len(sql) || sql[i] != ')' {
+		return 0, false
+	}
+	return i + 1, true
+}
+
+func isNondeterministicZeroArgFunction(name string) bool {
+	switch strings.ToLower(name) {
+	case "now", "rand", "rand64", "random", "generateuuidv4":
+		return true
+	default:
+		return false
+	}
+}
+
+func isSQLIdentStart(r rune) bool {
+	return unicode.IsLetter(r) || r == '_'
+}
+
+func isSQLIdentPart(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_'
 }
 
 func (c *insertCapture) payloadBytes() []byte {

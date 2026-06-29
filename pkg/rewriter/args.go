@@ -52,3 +52,60 @@ func rewriteOption(dyn *pb.RewriteTableDynamicArgs) *pb.RewriteOption {
 		},
 	}
 }
+
+func staticRewriteOption(tableMap map[string]string) *pb.RewriteOption {
+	return &pb.RewriteOption{
+		Op: pb.RewriteOp_TableNameRewrite,
+		Value: &pb.RewriteOption_TableNameArgs{
+			TableNameArgs: &pb.RewriteTableNameArgs{
+				StaticArgs: &pb.RewriteTableStaticArgs{
+					TableMap:             sameDatabaseTableMap(tableMap),
+					TableWithDatabaseMap: tableWithDatabaseMap(tableMap),
+				},
+			},
+		},
+	}
+}
+
+func sameDatabaseTableMap(tableMap map[string]string) map[string]string {
+	out := map[string]string{}
+	for from, to := range tableMap {
+		db, table := splitRewriteTableTarget(to)
+		fromDB, _ := splitRewriteTableTarget(from)
+		if db == "" || db == fromDB {
+			out[from] = table
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func tableWithDatabaseMap(tableMap map[string]string) map[string]*pb.RewriteTableStaticArgs_TableWithDatabase {
+	out := map[string]*pb.RewriteTableStaticArgs_TableWithDatabase{}
+	for from, to := range tableMap {
+		db, table := splitRewriteTableTarget(to)
+		fromDB, _ := splitRewriteTableTarget(from)
+		if db == "" || db == fromDB {
+			continue
+		}
+		out[from] = &pb.RewriteTableStaticArgs_TableWithDatabase{
+			Database: db,
+			Table:    table,
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func splitRewriteTableTarget(target string) (database, table string) {
+	for i, r := range target {
+		if r == '.' {
+			return target[:i], target[i+1:]
+		}
+	}
+	return "", target
+}

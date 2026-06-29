@@ -5,12 +5,14 @@ go_library(
     srcs = [
         "config.go",
         "jws.go",
+        "scrubber.go",
     ],
     importpath = "housegate/housegate/pkg/plugins/auth",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/auth",
         "//pkg/cfgtypes",
+        "//pkg/chproto",
         "//pkg/chsession",
         "//pkg/log",
         "//pkg/plugin",

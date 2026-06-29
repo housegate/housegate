@@ -413,11 +413,19 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 		// the raw bytes to DataPlugins before splicing. Fail-open: a
 		// hook error must never take down the connection.
 		if pkt.Type == uint64(chproto.ClientDataCode) {
-			if err := r.hooks.OnClientData(ctx, curQctx, pkt.Raw); err != nil {
+			rewritten, err := r.hooks.OnClientData(ctx, curQctx, pkt.Raw)
+			if err != nil {
+				var rewriteErr plugin.DataRewriteError
+				if errors.As(err, &rewriteErr) {
+					return fmt.Errorf("client data rewrite failed: %w", err)
+				}
 				logger.Warnw("client data hook failed (fail-open)",
 					"raw_len", pkt.RawLen,
 					"err", err,
 				)
+			} else if rewritten != nil && !bytes.Equal(rewritten, pkt.Raw) {
+				pkt.Raw = rewritten
+				pkt.RawLen = len(rewritten)
 			}
 		}
 

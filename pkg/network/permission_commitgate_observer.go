@@ -3,6 +3,8 @@ package network
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"strings"
 
 	"housegate/housegate/pkg/chproto"
 	"housegate/housegate/pkg/plugins/commitgate"
@@ -168,6 +170,9 @@ func (o *PermissionCommitGateObserver) SubscribedTypes() []sqlmeta.StatementType
 // not contacted).
 func (o *PermissionCommitGateObserver) BeforeStatement(ctx context.Context, ev *commitgate.Event) error {
 	if ev.Type == sqlmeta.StatementTypeUnspecified {
+		if allowsUnclassifiedNoAccess(ev) {
+			return nil
+		}
 		return fmt.Errorf("permission: rewriter did not classify statement (Unspecified); refusing to forward")
 	}
 
@@ -239,6 +244,22 @@ func allowsEmptyAccess(t sqlmeta.StatementType) bool {
 		return true
 	}
 	return false
+}
+
+var (
+	selectPrefixRE       = regexp.MustCompile(`(?is)^\s*select\b`)
+	tableAccessKeywordRE = regexp.MustCompile(`(?is)\b(from|join)\b`)
+)
+
+func allowsUnclassifiedNoAccess(ev *commitgate.Event) bool {
+	if ev == nil || len(ev.AccessedTables) != 0 {
+		return false
+	}
+	sql := strings.TrimSpace(ev.OriginalSQL)
+	if sql == "" {
+		return false
+	}
+	return selectPrefixRE.MatchString(sql) && !tableAccessKeywordRE.MatchString(sql)
 }
 
 // systemDatabase is ClickHouse's built-in metadata schema. It is

@@ -55,6 +55,17 @@ type Config struct {
 	// (the driver itself) stay ignorant of the housegate-side bypass
 	// semantics.
 	Driver bool `json:"driver" yaml:"driver"`
+
+	// StorageIntegrity enables trusted client-side INSERT materialization for
+	// the HouseKeeper storage-integrity path. It is separate from the top-level
+	// server-mode storage_integrity section because agent mode is the side that
+	// must materialize before signing.
+	StorageIntegrity StorageIntegrityConfig `json:"storage_integrity" yaml:"storage_integrity"`
+}
+
+type StorageIntegrityConfig struct {
+	Enabled   bool   `json:"enabled"    yaml:"enabled"`
+	NetworkID string `json:"network_id" yaml:"network_id"`
 }
 
 // Validate checks fields that are always required regardless of how the
@@ -70,6 +81,9 @@ func (c Config) Validate() error {
 	}
 	if c.Owner != "" && !common.IsHexAddress(c.Owner) {
 		return fmt.Errorf("agent.owner is not a valid Ethereum address: %q", c.Owner)
+	}
+	if c.StorageIntegrity.Enabled && c.StorageIntegrity.NetworkID == "" {
+		return errors.New("agent.storage_integrity.network_id is required when agent.storage_integrity.enabled")
 	}
 	return nil
 }

@@ -2,6 +2,7 @@ package housegate
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
@@ -183,7 +184,11 @@ func buildStorageIntegrityRuntime(cfg config.StorageIntegrityConfig, opts Option
 	}
 	storageWorkerID := cfg.HouseKeeper.WorkerID
 	if storageWorkerID == "" {
-		storageWorkerID = "housegate-local"
+		storageWorkerID = storageIntegrityParticipantID(opts.Config)
+	}
+	localClickHouseAddr := ""
+	if opts.Config != nil {
+		localClickHouseAddr = opts.Config.Upstream
 	}
 	unsafeReplicas := make([]storageintegrity.UnsafeReplica, 0, len(cfg.UnsafeValidation.Replicas))
 	for _, replica := range cfg.UnsafeValidation.Replicas {
@@ -206,7 +211,8 @@ func buildStorageIntegrityRuntime(cfg config.StorageIntegrityConfig, opts Option
 			Endpoints:               cfg.HouseKeeper.Endpoints,
 			SessionTimeout:          cfg.HouseKeeper.SessionTimeout.Duration,
 			Root:                    cfg.HouseKeeper.Root,
-			WorkerID:                cfg.HouseKeeper.WorkerID,
+			WorkerID:                storageWorkerID,
+			LocalAddr:               localClickHouseAddr,
 			ReplayQuorum:            cfg.HouseKeeper.ReplayQuorum,
 			RequireFinality:         cfg.Workers.Finality,
 			RequireReplay:           cfg.Workers.Replay,
@@ -264,7 +270,7 @@ func buildStorageIntegrityRuntime(cfg config.StorageIntegrityConfig, opts Option
 		}
 		unsafeVerifier := opts.StorageIntegrityUnsafeVerifier
 		if unsafeVerifier == nil {
-			if len(unsafeReplicas) >= 2 {
+			if localClickHouseAddr != "" {
 				unsafeVerifier = storageintegrity.UnsafeReplicaHashVerifier{
 					Reader:         storageintegrity.ClickHouseUnsafeDigestReader{},
 					ReplicaTimeout: cfg.UnsafeValidation.QueryTimeout.Duration,
@@ -297,6 +303,10 @@ func buildStorageIntegrityRuntime(cfg config.StorageIntegrityConfig, opts Option
 			if err != nil {
 				return nil, fmt.Errorf("storage_integrity promotion executor: %w", err)
 			}
+			if exec, ok := promotionExec.(*storageintegrity.ClickHousePromotionExecutor); ok {
+				exec.StatementTimeout = cfg.UnsafeValidation.QueryTimeout.Duration
+				exec.ReadbackTimeout = cfg.UnsafeValidation.QueryTimeout.Duration
+			}
 		}
 		promotionSink := opts.StorageIntegrityPromotionSink
 		if promotionSink == nil {
@@ -321,6 +331,10 @@ func buildStorageIntegrityRuntime(cfg config.StorageIntegrityConfig, opts Option
 			rollbackExec, err = storageintegrity.NewClickHousePromotionExecutor(opts.Config.Upstream)
 			if err != nil {
 				return nil, fmt.Errorf("storage_integrity rollback executor: %w", err)
+			}
+			if exec, ok := rollbackExec.(*storageintegrity.ClickHousePromotionExecutor); ok {
+				exec.StatementTimeout = cfg.UnsafeValidation.QueryTimeout.Duration
+				exec.ReadbackTimeout = cfg.UnsafeValidation.QueryTimeout.Duration
 			}
 		}
 		rollbackSink := opts.StorageIntegrityRollbackSink
@@ -358,6 +372,21 @@ func buildStorageIntegrityRuntime(cfg config.StorageIntegrityConfig, opts Option
 		rt.SafeAudits = auditSource
 	}
 	return rt, nil
+}
+
+func storageIntegrityParticipantID(cfg *config.Config) string {
+	if cfg == nil {
+		return "housegate-local"
+	}
+	if cfg.IndexerID != 0 {
+		return fmt.Sprintf("housegate-%d", cfg.IndexerID)
+	}
+	seed := cfg.Listen + "|" + cfg.InternalListen + "|" + cfg.Upstream
+	if seed == "||" {
+		return "housegate-local"
+	}
+	sum := sha256.Sum256([]byte(seed))
+	return fmt.Sprintf("housegate-%x", sum[:8])
 }
 
 // listenerRunner is the narrow lifecycle surface shared by native ClickHouse
@@ -762,23 +791,18 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		queryPlugins = append(queryPlugins, iuPlugin)
 	}
 
-	var cgPlug *commitgate.Plugin
-	if len(opts.CommitGateObservers) > 0 {
-		cgPlug = commitgate.NewPlugin(opts.CommitGateObservers)
-		queryPlugins = append(queryPlugins, cgPlug)
-		queryCompletePlugins = append(queryCompletePlugins, cgPlug)
-		log.Infow("commitgate enabled",
-			"observers", len(opts.CommitGateObservers),
-			"subscribed_types", cgPlug.SubscribedTypes(),
-		)
-	}
-
 	var siPlug *storageintegrityplugin.Plugin
 	if storageRuntime != nil {
+		tableRewriter, ok := rwFactory.(rewriter.TableRewriter)
+		if !ok || tableRewriter == nil {
+			return nil, fmt.Errorf("storage_integrity requires sql rewriter table rewrite support")
+		}
 		siPlug = storageintegrityplugin.New(storageintegrityplugin.Config{
 			UnsafeDatabase:    cfg.StorageIntegrity.UnsafeDatabase,
 			SafeDatabase:      cfg.StorageIntegrity.SafeDatabase,
 			UnsafeTableSuffix: cfg.StorageIntegrity.UnsafeTableSuffix,
+			TableRewriter:     tableRewriter,
+			PartitionIDs:      cfg.StorageIntegrity.MockPartRegistry.PartitionIDs,
 		}, storageRuntime.Payloads, storageRuntime.Ingress)
 		queryPlugins = append(queryPlugins, siPlug)
 		dataPlugins = append(dataPlugins, siPlug)
@@ -791,6 +815,18 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		)
 	}
 
+	var cgPlug *commitgate.Plugin
+	if len(opts.CommitGateObservers) > 0 {
+		cgPlug = commitgate.NewPlugin(opts.CommitGateObservers)
+		queryPlugins = append(queryPlugins, cgPlug)
+		queryCompletePlugins = append(queryCompletePlugins, cgPlug)
+		log.Infow("commitgate enabled",
+			"observers", len(opts.CommitGateObservers),
+			"subscribed_types", cgPlug.SubscribedTypes(),
+		)
+	}
+
+	queryPlugins = append(queryPlugins, authplugin.InternalSettingsScrubber{})
 	queryPlugins = append(queryPlugins,
 		&routeplugin.Signer{Signer: relaySigner, Observer: obs},
 		metrics,
@@ -1156,14 +1192,22 @@ func buildAgent(opts Options, rf *redisFactory) (*builtServer, error) {
 
 	obs := proxy.NewMetricsObserver()
 	metrics := metricsplugin.New(obs)
+	materializer := agent.NewMaterializer(agent.MaterializerOptions{
+		RowID: agent.RowIDOptions{
+			Enabled:   cfg.Agent.StorageIntegrity.Enabled,
+			NetworkID: cfg.Agent.StorageIntegrity.NetworkID,
+		},
+	})
 	chain := &plugin.PluginChain{
 		ConnLifecyclePlugins:     []plugin.ConnLifecyclePlugin{metrics},
 		HandshakeCompletePlugins: []plugin.HandshakeCompletePlugin{metrics},
 		QueryPlugins: []plugin.QueryPlugin{
+			materializer,
 			&agent.Plugin{Signer: signer, Observer: obs, Owner: cfg.Agent.Owner, IsDriver: cfg.Agent.Driver},
 			metrics,
 		},
-		ExceptionPlugins: []plugin.ExceptionPlugin{metrics},
+		DataRewritePlugins: []plugin.DataRewritePlugin{materializer},
+		ExceptionPlugins:   []plugin.ExceptionPlugin{metrics},
 	}
 
 	// Two ways to choose an upstream:

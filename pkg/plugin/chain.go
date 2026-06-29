@@ -45,6 +45,7 @@ type PluginChain struct {
 	HelloPlugins             []HelloPlugin
 	HandshakeCompletePlugins []HandshakeCompletePlugin
 	QueryPlugins             []QueryPlugin
+	DataRewritePlugins       []DataRewritePlugin
 	DataPlugins              []DataPlugin
 	ExceptionPlugins         []ExceptionPlugin
 	QueryCompletePlugins     []QueryCompletePlugin
@@ -174,12 +175,32 @@ func (c *PluginChain) OnQuery(ctx context.Context, qctx *QueryContext) error {
 	return nil
 }
 
-func (c *PluginChain) OnClientData(ctx context.Context, qctx *QueryContext, raw []byte) error {
-	if len(c.DataPlugins) == 0 || qctx == nil || qctx.Session == nil {
-		return nil
+func (c *PluginChain) OnClientData(ctx context.Context, qctx *QueryContext, raw []byte) ([]byte, error) {
+	if qctx == nil || qctx.Session == nil {
+		return raw, nil
 	}
 	// Same per-iteration filter discipline as OnQuery — see that comment.
 	state := qctx.Session.State()
+	current := raw
+	for _, p := range c.DataRewritePlugins {
+		if state.IsRouted() && !runsOnRouted(p) {
+			continue
+		}
+		// See OnHandshakeComplete for the IsForwardedFromPeer override.
+		if state.PeerTrusted() && !state.IsForwardedFromPeer && !runsOnPeerTrust(p) {
+			continue
+		}
+		if state.IsForwarding && !runsOnForward(p) {
+			continue
+		}
+		rewritten, err := p.RewriteClientData(ctx, qctx, current)
+		if err != nil {
+			return current, DataRewriteError{Err: err}
+		}
+		if rewritten != nil {
+			current = rewritten
+		}
+	}
 	for _, p := range c.DataPlugins {
 		if state.IsRouted() && !runsOnRouted(p) {
 			continue
@@ -191,11 +212,11 @@ func (c *PluginChain) OnClientData(ctx context.Context, qctx *QueryContext, raw 
 		if state.IsForwarding && !runsOnForward(p) {
 			continue
 		}
-		if err := p.OnClientData(ctx, qctx, raw); err != nil {
-			return err
+		if err := p.OnClientData(ctx, qctx, current); err != nil {
+			return current, err
 		}
 	}
-	return nil
+	return current, nil
 }
 
 func (c *PluginChain) OnException(ctx context.Context, sess chsession.Session, exc *chproto.Exception) error {

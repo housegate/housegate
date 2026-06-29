@@ -28,14 +28,15 @@ type PutPayloadRequest struct {
 // INSERT into the unsafe table. HouseKeeper owns the authoritative version of
 // this state; the local coordinator uses the same shape for P0 demos/tests.
 type InsertRecord struct {
-	TableID     string
-	StatementID string
-	OriginalSQL string
-	UnsafeSQL   string
-	UnsafeTable string
-	SafeTable   string
-	Payload     PayloadCommitment
-	ReceivedAt  time.Time
+	TableID      string
+	StatementID  string
+	OriginalSQL  string
+	UnsafeSQL    string
+	UnsafeTable  string
+	SafeTable    string
+	PartitionIDs []string
+	Payload      PayloadCommitment
+	ReceivedAt   time.Time
 }
 
 type IngressSink interface {
@@ -141,10 +142,13 @@ type UnsafeTableVerifier interface {
 }
 
 type PromotionTask struct {
-	PromotionID string
-	LeaseID     string
-	Statements  []string
-	Readback    PromotionReadbackSpec
+	PromotionID  string
+	LeaseID      string
+	UnsafeTable  string
+	SafeTable    string
+	PartitionIDs []string
+	Statements   []string
+	Readback     PromotionReadbackSpec
 }
 
 type PromotionReadbackSpec struct {

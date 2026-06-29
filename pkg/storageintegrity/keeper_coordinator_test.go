@@ -43,6 +43,163 @@ func TestKeeperCoordinatorEnsuresDecisionRootForKeeperSideEffects(t *testing.T) 
 	}
 }
 
+func TestKeeperCoordinatorUsesConfiguredParticipantsForStatementAndLocalUnsafeValidation(t *testing.T) {
+	ctx := context.Background()
+	store := newMemoryKeeperStore()
+	hg1 := newTestKeeperCoordinator(t, store, "r1")
+	hg2 := newTestKeeperCoordinator(t, store, "r2")
+	hg3 := newTestKeeperCoordinator(t, store, "r3")
+
+	rec := testKeeperInsertRecord("stmt-configured-participants")
+	if err := hg1.SubmitInsert(ctx, rec); err != nil {
+		t.Fatalf("SubmitInsert: %v", err)
+	}
+	statementData := testKeeperNodeData(t, store, hg1.statementPath(rec.StatementID))
+	if !strings.Contains(statementData, "participants=r1,r2,r3\n") {
+		t.Fatalf("statement znode = %q, want configured participants", statementData)
+	}
+	if !strings.Contains(statementData, "partition_ids=202606\n") {
+		t.Fatalf("statement znode = %q, want partition_ids from part registry", statementData)
+	}
+
+	testKeeperMaterializeStatementTasksForParticipants(t, store, hg1, rec, "r1", "r2", "r3")
+	task, ok, err := hg1.ClaimUnsafeValidation(ctx)
+	if err != nil || !ok {
+		t.Fatalf("ClaimUnsafeValidation ok=%v err=%v", ok, err)
+	}
+	if len(task.Replicas) != 1 || task.Replicas[0].ReplicaID != "r1" {
+		t.Fatalf("unsafe task replicas = %+v, want only local participant", task.Replicas)
+	}
+	if err := hg1.SubmitUnsafeValidation(ctx, testUnsafeResult(task, "0xrows", "r1")); err != nil {
+		t.Fatalf("SubmitUnsafeValidation: %v", err)
+	}
+	if !testKeeperNodeExists(t, store, hg1.unsafeParticipantResultPath(rec.StatementID, "r1")) {
+		t.Fatalf("missing participant unsafe result")
+	}
+
+	testKeeperMaterializePromotion(t, store, hg1, rec)
+	for _, hg := range []*KeeperCoordinator{hg1, hg2, hg3} {
+		promotion, ok, err := hg.ClaimPromotion(ctx)
+		if err != nil || !ok {
+			t.Fatalf("%s ClaimPromotion ok=%v err=%v", hg.cfg.WorkerID, ok, err)
+		}
+		if err := hg.FinishPromotion(ctx, PromotionResult{PromotionID: promotion.PromotionID, LeaseID: promotion.LeaseID}); err != nil {
+			t.Fatalf("%s FinishPromotion: %v", hg.cfg.WorkerID, err)
+		}
+	}
+	for _, participant := range []string{"r1", "r2", "r3"} {
+		key := "audit-" + rec.StatementID + "/" + participant
+		if !testKeeperNodeExists(t, store, hg1.safeAuditTaskPath(key)) {
+			t.Fatalf("missing safe audit task for participant %s", participant)
+		}
+	}
+	auditTask, ok, err := hg2.ClaimSafeAudit(ctx)
+	if err != nil || !ok {
+		t.Fatalf("hg2 ClaimSafeAudit ok=%v err=%v", ok, err)
+	}
+	if auditTask.ReplicaID != "r2" || auditTask.AuditID != "audit-"+rec.StatementID {
+		t.Fatalf("hg2 safe audit task = %+v, want local configured participant", auditTask)
+	}
+	if auditTask, ok, err := hg3.ClaimSafeAudit(ctx); err != nil || !ok || auditTask.ReplicaID != "r3" {
+		t.Fatalf("hg3 ClaimSafeAudit task=%+v ok=%v err=%v, want local configured participant", auditTask, ok, err)
+	}
+}
+
+func TestKeeperCoordinatorPromotionReadbackAggregatesParticipantUnsafeResults(t *testing.T) {
+	ctx := context.Background()
+	store := newMemoryKeeperStore()
+	hg1 := newTestKeeperCoordinator(t, store, "r1")
+	hg2 := newTestKeeperCoordinator(t, store, "r2")
+	hg3 := newTestKeeperCoordinator(t, store, "r3")
+
+	rec := testKeeperInsertRecord("stmt-participant-readback")
+	if err := hg1.SubmitInsert(ctx, rec); err != nil {
+		t.Fatalf("SubmitInsert: %v", err)
+	}
+	testKeeperMaterializeStatementTasksForParticipants(t, store, hg1, rec, "r1", "r2", "r3")
+	for _, hg := range []*KeeperCoordinator{hg1, hg2, hg3} {
+		task, ok, err := hg.ClaimUnsafeValidation(ctx)
+		if err != nil || !ok {
+			t.Fatalf("%s ClaimUnsafeValidation ok=%v err=%v", hg.cfg.WorkerID, ok, err)
+		}
+		if err := hg.SubmitUnsafeValidation(ctx, testUnsafeResult(task, "0xrows", hg.cfg.WorkerID)); err != nil {
+			t.Fatalf("%s SubmitUnsafeValidation: %v", hg.cfg.WorkerID, err)
+		}
+	}
+	testKeeperMaterializePromotion(t, store, hg1, rec)
+
+	task, ok, err := hg1.ClaimPromotion(ctx)
+	if err != nil || !ok {
+		t.Fatalf("ClaimPromotion ok=%v err=%v", ok, err)
+	}
+	if task.Readback.ExpectedRows != 1 || task.Readback.ExpectedHash != "0xrows" {
+		t.Fatalf("promotion readback = %+v, want participant unsafe aggregate", task.Readback)
+	}
+	if got, want := strings.Join(task.PartitionIDs, ","), "202606"; got != want {
+		t.Fatalf("promotion partition ids = %q, want %q", got, want)
+	}
+}
+
+func TestKeeperCoordinatorPromotionRunsOncePerParticipantBeforeSafeAudit(t *testing.T) {
+	ctx := context.Background()
+	store := newMemoryKeeperStore()
+	hg1 := newTestKeeperCoordinator(t, store, "r1")
+	hg2 := newTestKeeperCoordinator(t, store, "r2")
+	hg3 := newTestKeeperCoordinator(t, store, "r3")
+
+	rec := testKeeperInsertRecord("stmt-participant-promotion")
+	if err := hg1.SubmitInsert(ctx, rec); err != nil {
+		t.Fatalf("SubmitInsert: %v", err)
+	}
+	testKeeperMaterializePromotion(t, store, hg1, rec)
+
+	task1, ok, err := hg1.ClaimPromotion(ctx)
+	if err != nil || !ok {
+		t.Fatalf("r1 ClaimPromotion ok=%v err=%v", ok, err)
+	}
+	task2, ok, err := hg2.ClaimPromotion(ctx)
+	if err != nil || !ok {
+		t.Fatalf("r2 ClaimPromotion ok=%v err=%v", ok, err)
+	}
+	task3, ok, err := hg3.ClaimPromotion(ctx)
+	if err != nil || !ok {
+		t.Fatalf("r3 ClaimPromotion ok=%v err=%v", ok, err)
+	}
+	if task1.LeaseID == task2.LeaseID || task2.LeaseID == task3.LeaseID {
+		t.Fatalf("promotion lease IDs should be participant scoped: %q %q %q", task1.LeaseID, task2.LeaseID, task3.LeaseID)
+	}
+	reclaimed, ok, err := hg1.ClaimPromotion(ctx)
+	if err != nil || !ok || reclaimed.LeaseID != task1.LeaseID {
+		t.Fatalf("r1 duplicate ClaimPromotion task=%+v ok=%v err=%v, want idempotent lease reclaim", reclaimed, ok, err)
+	}
+
+	if err := hg1.FinishPromotion(ctx, PromotionResult{PromotionID: task1.PromotionID, LeaseID: task1.LeaseID}); err != nil {
+		t.Fatalf("r1 FinishPromotion: %v", err)
+	}
+	if testKeeperNodeExists(t, store, hg1.safeAuditTaskPath("audit-"+rec.StatementID+"/r1")) {
+		t.Fatalf("safe audit queued before all participants finished promotion")
+	}
+	if err := hg2.FinishPromotion(ctx, PromotionResult{PromotionID: task2.PromotionID, LeaseID: task2.LeaseID}); err != nil {
+		t.Fatalf("r2 FinishPromotion: %v", err)
+	}
+	if testKeeperNodeExists(t, store, hg1.safeAuditTaskPath("audit-"+rec.StatementID+"/r1")) {
+		t.Fatalf("safe audit queued before final participant finished promotion")
+	}
+	if err := hg3.FinishPromotion(ctx, PromotionResult{PromotionID: task3.PromotionID, LeaseID: task3.LeaseID}); err != nil {
+		t.Fatalf("r3 FinishPromotion: %v", err)
+	}
+	for _, participant := range []string{"r1", "r2", "r3"} {
+		resultPath := hg1.promotionParticipantResultPath(rec.StatementID, participant)
+		if !testKeeperNodeExists(t, store, resultPath) {
+			t.Fatalf("missing participant promotion result %s", resultPath)
+		}
+		key := "audit-" + rec.StatementID + "/" + participant
+		if !testKeeperNodeExists(t, store, hg1.safeAuditTaskPath(key)) {
+			t.Fatalf("missing safe audit task for participant %s", participant)
+		}
+	}
+}
+
 func TestKeeperCoordinatorRequiresReplayQuorumAndUnsafeAllReplicasBeforePromotion(t *testing.T) {
 	ctx := context.Background()
 	store := newMemoryKeeperStore()
@@ -122,14 +279,53 @@ func TestKeeperCoordinatorRequiresReplayQuorumAndUnsafeAllReplicasBeforePromotio
 	if task.PromotionID != "promotion-"+rec.StatementID || task.LeaseID == "" {
 		t.Fatalf("promotion task ids = %+v", task)
 	}
-	if got, want := task.Statements[0], "INSERT INTO `hg_safe`.`dual_hg_auth.t` SELECT * FROM `hg_unsafe`.`dual_hg_auth.t_a`"; got != want {
-		t.Fatalf("promotion INSERT = %q, want %q", got, want)
+	if task.SafeTable != "`hg_safe`.`dual_hg_auth.t`" || task.UnsafeTable != "`hg_unsafe`.`dual_hg_auth.t_a`" {
+		t.Fatalf("promotion tables = safe %q unsafe %q", task.SafeTable, task.UnsafeTable)
 	}
-	if got, want := task.Statements[1], "TRUNCATE TABLE `hg_unsafe`.`dual_hg_auth.t_a`"; got != want {
-		t.Fatalf("promotion TRUNCATE = %q, want %q", got, want)
+	if len(task.Statements) != 0 {
+		t.Fatalf("promotion statements = %+v, want attach-partition worker expansion", task.Statements)
 	}
 	if task.Readback.ExpectedRows != 1 || task.Readback.ExpectedHash != "0xrows" {
 		t.Fatalf("promotion readback expectation = %+v", task.Readback)
+	}
+}
+
+func TestKeeperCoordinatorSkipsWorkWhenWorkerIsReplayQuarantined(t *testing.T) {
+	ctx := context.Background()
+	store := newMemoryKeeperStore()
+	hg1 := newTestKeeperCoordinator(t, store, "hg-1")
+	hg2 := newTestKeeperCoordinator(t, store, "hg-2")
+
+	rec := testKeeperInsertRecord("stmt-keeper-quarantine")
+	if err := hg1.SubmitInsert(ctx, rec); err != nil {
+		t.Fatalf("SubmitInsert: %v", err)
+	}
+	testKeeperMaterializeStatementTasks(t, store, hg1, rec)
+	testKeeperMaterializePromotion(t, store, hg1, rec)
+	testKeeperMaterializeRollback(t, store, hg1, rec, "dispute")
+	testKeeperCreateNode(t, store, hg1.path("replay_quarantine", escapeSegment("hg-2")),
+		"worker_id=hg-2\n"+
+			"reason=replay_minority_mismatch\n"+
+			"statement_id="+rec.StatementID+"\n"+
+			"status=active\n")
+
+	if _, ok, err := hg1.ClaimReplayJob(ctx); err != nil || !ok {
+		t.Fatalf("hg1 ClaimReplayJob ok=%v err=%v, want task", ok, err)
+	}
+	if _, ok, err := hg2.ClaimReplayJob(ctx); err != nil || ok {
+		t.Fatalf("hg2 ClaimReplayJob ok=%v err=%v, want quarantined worker skipped", ok, err)
+	}
+	if _, ok, err := hg2.ClaimPromotion(ctx); err != nil || ok {
+		t.Fatalf("hg2 ClaimPromotion ok=%v err=%v, want quarantined worker skipped", ok, err)
+	}
+	if _, ok, err := hg2.ClaimRollback(ctx); err != nil || ok {
+		t.Fatalf("hg2 ClaimRollback ok=%v err=%v, want quarantined worker skipped", ok, err)
+	}
+
+	testKeeperCreateNode(t, store, hg1.safeAuditTaskPath("audit-"+rec.StatementID+"/hg-2"),
+		`{"audit_id":"audit-`+rec.StatementID+`","replica_id":"hg-2","network_id":"net","table_id":"dual_hg_auth.t","schema_hash":"schema","snapshot_id":"snap","range":"all"}`)
+	if _, ok, err := hg2.ClaimSafeAudit(ctx); err != nil || ok {
+		t.Fatalf("hg2 ClaimSafeAudit ok=%v err=%v, want quarantined worker skipped", ok, err)
 	}
 }
 
@@ -272,14 +468,34 @@ func newTestKeeperCoordinator(t *testing.T, store keeperStore, workerID string) 
 	return c
 }
 
+func newTestKeeperCoordinatorWithoutReplicaConfig(t *testing.T, store keeperStore, participantID string) *KeeperCoordinator {
+	t.Helper()
+	c, err := NewKeeperCoordinatorWithStore(KeeperCoordinatorConfig{
+		Root:                    "/housekeeper/v1/storage_integrity_test",
+		WorkerID:                participantID,
+		ReplayQuorum:            2,
+		RequireFinality:         true,
+		RequireReplay:           true,
+		RequireUnsafeValidation: true,
+		UnsafeDatabase:          "hg_unsafe",
+		SafeDatabase:            "hg_safe",
+		UnsafeTableSuffix:       "_a",
+	}, store)
+	if err != nil {
+		t.Fatalf("NewKeeperCoordinatorWithStore: %v", err)
+	}
+	return c
+}
+
 func testKeeperInsertRecord(statementID string) InsertRecord {
 	return InsertRecord{
-		TableID:     "dual_hg_auth.t",
-		StatementID: statementID,
-		OriginalSQL: "INSERT INTO dual_hg_auth.t VALUES (1)",
-		UnsafeSQL:   "INSERT INTO `hg_unsafe`.`dual_hg_auth.t_a` VALUES (1)",
-		UnsafeTable: "`hg_unsafe`.`dual_hg_auth.t_a`",
-		SafeTable:   "`hg_safe`.`dual_hg_auth.t`",
+		TableID:      "dual_hg_auth.t",
+		StatementID:  statementID,
+		OriginalSQL:  "INSERT INTO dual_hg_auth.t VALUES (1)",
+		UnsafeSQL:    "INSERT INTO `hg_unsafe`.`dual_hg_auth.t_a` VALUES (1)",
+		UnsafeTable:  "`hg_unsafe`.`dual_hg_auth.t_a`",
+		SafeTable:    "`hg_safe`.`dual_hg_auth.t`",
+		PartitionIDs: []string{"202606"},
 		Payload: PayloadCommitment{
 			Ref:    "mockda://dual_hg_auth.t/" + statementID + "/hash",
 			Hash:   "0xpayload",
@@ -344,13 +560,40 @@ func testKeeperMaterializeStatementTasks(t *testing.T, store keeperStore, c *Kee
 			"replay_tally=\n")
 }
 
+func testKeeperMaterializeStatementTasksForParticipants(t *testing.T, store keeperStore, c *KeeperCoordinator, rec InsertRecord, participants ...string) {
+	t.Helper()
+	testKeeperEnsurePath(t, store, c.attestationsPath(rec.StatementID))
+	testKeeperEnsurePath(t, store, c.unsafeResultPath(rec.StatementID))
+	testKeeperCreateNode(t, store, c.replayJobPath(rec.StatementID),
+		"statement_id="+rec.StatementID+"\n"+
+			"table_id="+rec.TableID+"\n"+
+			"payload_ref="+rec.Payload.Ref+"\n"+
+			"payload_hash="+rec.Payload.Hash+"\n")
+	testKeeperCreateNode(t, store, c.unsafeTaskPath(rec.StatementID),
+		"statement_id="+rec.StatementID+"\n"+
+			"table_id="+rec.TableID+"\n"+
+			"unsafe_table="+rec.UnsafeTable+"\n"+
+			"participants="+strings.Join(participants, ",")+"\n")
+	testKeeperCreateNode(t, store, c.path("decisions", escapeSegment(rec.StatementID)),
+		"statement_id="+rec.StatementID+"\n"+
+			"replay_quorum_met=false\n"+
+			"unsafe_validated=false\n"+
+			"finalized=false\n"+
+			"rollback_requested=false\n"+
+			"promotion_ready=false\n"+
+			"rollback_ready=false\n"+
+			"replay_result_hash=\n"+
+			"replay_tally=\n")
+}
+
 func testKeeperMaterializePromotion(t *testing.T, store keeperStore, c *KeeperCoordinator, rec InsertRecord) {
 	t.Helper()
 	testKeeperCreateNode(t, store, c.promotionPath(rec.StatementID),
 		"promotion_id=promotion-"+rec.StatementID+"\n"+
 			"lease_id=lease-"+rec.StatementID+"\n"+
 			"unsafe_table="+rec.UnsafeTable+"\n"+
-			"safe_table="+rec.SafeTable+"\n")
+			"safe_table="+rec.SafeTable+"\n"+
+			"partition_ids="+strings.Join(rec.PartitionIDs, ",")+"\n")
 }
 
 func testKeeperMaterializeRollback(t *testing.T, store keeperStore, c *KeeperCoordinator, rec InsertRecord, reason string) {

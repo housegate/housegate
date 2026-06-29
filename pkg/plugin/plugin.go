@@ -75,6 +75,22 @@ type DataPlugin interface {
 	OnClientData(ctx context.Context, qctx *QueryContext, raw []byte) error
 }
 
+// DataRewritePlugin can replace raw client Data packets before the relay
+// splices them upstream. It is used only for protocol-level payload
+// materialization that must happen on the trusted client-side HouseGate before
+// the server-side HouseGate observes the payload. Implementations must return
+// a full on-wire packet (type varint + block name + block body).
+type DataRewritePlugin interface {
+	RewriteClientData(ctx context.Context, qctx *QueryContext, raw []byte) ([]byte, error)
+}
+
+type DataRewriteError struct {
+	Err error
+}
+
+func (e DataRewriteError) Error() string { return e.Err.Error() }
+func (e DataRewriteError) Unwrap() error { return e.Err }
+
 // HandshakeCompletePlugin participates in OnHandshakeComplete, fired
 // by Relay once the ClientHello / ServerHello / Addendum round-trip
 // has finished successfully and the session is ready to serve Query
