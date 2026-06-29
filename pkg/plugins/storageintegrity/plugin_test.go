@@ -140,7 +140,7 @@ func TestPluginRewritesUnclassifiedRawInsertWhenRewriterUnavailable(t *testing.T
 	}
 }
 
-func TestPluginSubmitsInsertOnClientDataTerminator(t *testing.T) {
+func TestPluginSubmitsInsertAfterQueryCompleteWhenClientDataTerminatorSeen(t *testing.T) {
 	ctx := context.Background()
 	payloads, err := core.NewMockPayloadStore(t.TempDir())
 	if err != nil {
@@ -170,12 +170,12 @@ func TestPluginSubmitsInsertOnClientDataTerminator(t *testing.T) {
 	if err := p.OnClientData(ctx, qctx, emptyClientDataPacket()); err != nil {
 		t.Fatalf("OnClientData terminator: %v", err)
 	}
-	if len(sink.records) != 1 {
-		t.Fatalf("ingress records after terminator = %d, want 1", len(sink.records))
+	if len(sink.records) != 0 {
+		t.Fatalf("ingress records after terminator = %d, want 0 before query complete", len(sink.records))
 	}
 	p.OnQueryComplete(ctx, sess)
 	if len(sink.records) != 1 {
-		t.Fatalf("ingress records after OnQueryComplete = %d, want still 1", len(sink.records))
+		t.Fatalf("ingress records after OnQueryComplete = %d, want 1", len(sink.records))
 	}
 }
 

@@ -164,6 +164,42 @@ func TestKeeperCoordinatorRequiresUnsafeValidationFromEveryConfiguredReplica(t *
 	}
 }
 
+func TestKeeperCoordinatorTreatsDuplicateUnsafeValidationWritesAsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	store := newMemoryKeeperStore()
+	hg1 := newTestKeeperCoordinator(t, store, "hg-1")
+
+	rec := testKeeperInsertRecord("stmt-keeper-unsafe-idempotent")
+	if err := hg1.SubmitInsert(ctx, rec); err != nil {
+		t.Fatalf("SubmitInsert: %v", err)
+	}
+	testKeeperMaterializeStatementTasks(t, store, hg1, rec)
+	task, ok, err := hg1.ClaimUnsafeValidation(ctx)
+	if err != nil || !ok {
+		t.Fatalf("ClaimUnsafeValidation ok=%v err=%v", ok, err)
+	}
+
+	result := testUnsafeResult(task, "0xrows", "r1", "r2", "r3")
+	if err := hg1.SubmitUnsafeValidation(ctx, result); err != nil {
+		t.Fatalf("SubmitUnsafeValidation #1: %v", err)
+	}
+	if err := hg1.SubmitUnsafeValidation(ctx, result); err != nil {
+		t.Fatalf("SubmitUnsafeValidation #2: %v", err)
+	}
+
+	failure := UnsafeValidationFailure{
+		ValidationID: task.ValidationID,
+		StatementID:  "stmt-keeper-unsafe-failure-idempotent",
+		Error:        "timeout",
+	}
+	if err := hg1.SubmitUnsafeValidationFailure(ctx, failure); err != nil {
+		t.Fatalf("SubmitUnsafeValidationFailure #1: %v", err)
+	}
+	if err := hg1.SubmitUnsafeValidationFailure(ctx, failure); err != nil {
+		t.Fatalf("SubmitUnsafeValidationFailure #2: %v", err)
+	}
+}
+
 func TestKeeperCoordinatorRollbackBlocksPromotionAndQueuesRollbackTask(t *testing.T) {
 	ctx := context.Background()
 	store := newMemoryKeeperStore()

@@ -112,13 +112,7 @@ func (p *Plugin) OnClientData(ctx context.Context, qctx *plugin.QueryContext, ra
 		"revision", revision,
 		"terminator", complete,
 	)
-	if complete {
-		delete(p.active, qctx.Session.ID())
-	}
 	p.mu.Unlock()
-	if complete {
-		p.finalizeCapture(ctx, cap)
-	}
 	return nil
 }
 

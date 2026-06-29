@@ -1,6 +1,7 @@
 package storageintegrity
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -317,8 +318,17 @@ func (c *KeeperCoordinator) SubmitUnsafeValidation(ctx context.Context, result U
 	if err := c.validateUnsafeResult(ctx, result); err != nil {
 		return err
 	}
-	if err := c.createKV(ctx, c.unsafeResultPath(result.StatementID), encodeUnsafeResultKV(result)); err != nil {
+	resultPath := c.unsafeResultPath(result.StatementID)
+	resultData := encodeUnsafeResultKV(result)
+	if err := c.createKV(ctx, resultPath, resultData); err != nil {
 		if errors.Is(err, errKeeperNodeExists) {
+			existing, ok, getErr := c.store.Get(ctx, resultPath)
+			if getErr != nil {
+				return getErr
+			}
+			if ok && bytes.Equal(existing, resultData) {
+				return nil
+			}
 			return fmt.Errorf("unsafe validation for %q already exists", result.StatementID)
 		}
 		return err
@@ -333,7 +343,13 @@ func (c *KeeperCoordinator) SubmitUnsafeValidationFailure(ctx context.Context, f
 	if failure.StatementID == "" {
 		return fmt.Errorf("statement_id is required")
 	}
-	return c.createJSON(ctx, c.unsafeFailurePath(failure.StatementID), failure)
+	if err := c.createJSON(ctx, c.unsafeFailurePath(failure.StatementID), failure); err != nil {
+		if errors.Is(err, errKeeperNodeExists) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func (c *KeeperCoordinator) ClaimPromotion(ctx context.Context) (PromotionTask, bool, error) {
