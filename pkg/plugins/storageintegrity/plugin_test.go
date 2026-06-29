@@ -94,6 +94,44 @@ func TestPluginRewritesInsertToUnsafeAndSubmitsPayload(t *testing.T) {
 	}
 }
 
+func TestPluginComputesSourceClaimBeforeSubmittingInsert(t *testing.T) {
+	ctx := context.Background()
+	payloads, err := core.NewMockPayloadStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewMockPayloadStore: %v", err)
+	}
+	replay := &recordingReplayComputer{root: "0xsource-claim"}
+	sink := &recordingIngressSink{}
+	cfg := testStorageConfig()
+	cfg.ReplayComputer = replay
+	p := New(cfg, payloads, sink)
+	sess := newFakeSession(4101)
+	qctx := &plugin.QueryContext{
+		Session:     sess,
+		OriginalSQL: "INSERT INTO realbin.t VALUES (1, 'a')",
+		Query: &chproto.Query{
+			ID:   "insert-qid-source-claim",
+			Body: "INSERT INTO realbin.t VALUES (1, 'a')",
+		},
+		StatementType: sqlmeta.StatementTypeInsert,
+	}
+
+	if err := p.OnQuery(ctx, qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	p.OnQueryComplete(ctx, sess)
+
+	if len(sink.records) != 1 {
+		t.Fatalf("ingress records = %d, want 1", len(sink.records))
+	}
+	if sink.records[0].SourceClaimRoot != "0xsource-claim" {
+		t.Fatalf("source claim = %q", sink.records[0].SourceClaimRoot)
+	}
+	if replay.req.SQL != sink.records[0].UnsafeSQL {
+		t.Fatalf("replay SQL = %q, want unsafe SQL %q", replay.req.SQL, sink.records[0].UnsafeSQL)
+	}
+}
+
 func TestPluginUsesStaticRewriterForInsertUnsafeRewrite(t *testing.T) {
 	rw := &recordingTableRewriter{
 		outputSQL: "INSERT INTO `hg_unsafe`.`dual_hg_auth.t_a` FORMAT Native",
@@ -583,6 +621,16 @@ func TestPluginDoesNotLogSubmittedWhenSinkRejects(t *testing.T) {
 
 type recordingIngressSink struct {
 	records []core.InsertRecord
+}
+
+type recordingReplayComputer struct {
+	req  core.InsertReplayRequest
+	root string
+}
+
+func (r *recordingReplayComputer) ComputeInsertReplay(_ context.Context, req core.InsertReplayRequest) (core.InsertReplayResult, error) {
+	r.req = req
+	return core.InsertReplayResult{StateRoot: r.root}, nil
 }
 
 func testStorageConfig() Config {

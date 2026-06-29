@@ -87,11 +87,8 @@ func TestKeeperCoordinatorUsesConfiguredParticipantsForStatementAndLocalUnsafeVa
 			t.Fatalf("%s FinishPromotion: %v", hg.cfg.WorkerID, err)
 		}
 	}
-	for _, participant := range []string{"r1", "r2", "r3"} {
-		key := "audit-" + rec.StatementID + "/" + participant
-		if !testKeeperNodeExists(t, store, hg1.safeAuditTaskPath(key)) {
-			t.Fatalf("missing safe audit task for participant %s", participant)
-		}
+	if !testKeeperNodeExists(t, store, globalSafeAuditTaskPath("audit-"+rec.StatementID)) {
+		t.Fatalf("missing global safe audit task")
 	}
 	auditTask, ok, err := hg2.ClaimSafeAudit(ctx)
 	if err != nil || !ok {
@@ -176,13 +173,13 @@ func TestKeeperCoordinatorPromotionRunsOncePerParticipantBeforeSafeAudit(t *test
 	if err := hg1.FinishPromotion(ctx, PromotionResult{PromotionID: task1.PromotionID, LeaseID: task1.LeaseID}); err != nil {
 		t.Fatalf("r1 FinishPromotion: %v", err)
 	}
-	if testKeeperNodeExists(t, store, hg1.safeAuditTaskPath("audit-"+rec.StatementID+"/r1")) {
+	if testKeeperNodeExists(t, store, globalSafeAuditTaskPath("audit-"+rec.StatementID)) {
 		t.Fatalf("safe audit queued before all participants finished promotion")
 	}
 	if err := hg2.FinishPromotion(ctx, PromotionResult{PromotionID: task2.PromotionID, LeaseID: task2.LeaseID}); err != nil {
 		t.Fatalf("r2 FinishPromotion: %v", err)
 	}
-	if testKeeperNodeExists(t, store, hg1.safeAuditTaskPath("audit-"+rec.StatementID+"/r1")) {
+	if testKeeperNodeExists(t, store, globalSafeAuditTaskPath("audit-"+rec.StatementID)) {
 		t.Fatalf("safe audit queued before final participant finished promotion")
 	}
 	if err := hg3.FinishPromotion(ctx, PromotionResult{PromotionID: task3.PromotionID, LeaseID: task3.LeaseID}); err != nil {
@@ -193,10 +190,9 @@ func TestKeeperCoordinatorPromotionRunsOncePerParticipantBeforeSafeAudit(t *test
 		if !testKeeperNodeExists(t, store, resultPath) {
 			t.Fatalf("missing participant promotion result %s", resultPath)
 		}
-		key := "audit-" + rec.StatementID + "/" + participant
-		if !testKeeperNodeExists(t, store, hg1.safeAuditTaskPath(key)) {
-			t.Fatalf("missing safe audit task for participant %s", participant)
-		}
+	}
+	if !testKeeperNodeExists(t, store, globalSafeAuditTaskPath("audit-"+rec.StatementID)) {
+		t.Fatalf("missing global safe audit task")
 	}
 }
 
@@ -322,8 +318,15 @@ func TestKeeperCoordinatorSkipsWorkWhenWorkerIsReplayQuarantined(t *testing.T) {
 		t.Fatalf("hg2 ClaimRollback ok=%v err=%v, want quarantined worker skipped", ok, err)
 	}
 
-	testKeeperCreateNode(t, store, hg1.safeAuditTaskPath("audit-"+rec.StatementID+"/hg-2"),
-		`{"audit_id":"audit-`+rec.StatementID+`","replica_id":"hg-2","network_id":"net","table_id":"dual_hg_auth.t","schema_hash":"schema","snapshot_id":"snap","range":"all"}`)
+	testKeeperCreateNode(t, store, globalSafeAuditTaskPath("audit-"+rec.StatementID),
+		string(encodeSafeAuditTaskKV(SafeAuditTask{
+			AuditID:    "audit-" + rec.StatementID,
+			NetworkID:  "net",
+			TableID:    "dual_hg_auth.t",
+			SchemaHash: "schema",
+			SnapshotID: "snap",
+			Range:      "safe=`hg_safe`.`dual_hg_auth.t`",
+		}, []string{"hg-2"})))
 	if _, ok, err := hg2.ClaimSafeAudit(ctx); err != nil || ok {
 		t.Fatalf("hg2 ClaimSafeAudit ok=%v err=%v, want quarantined worker skipped", ok, err)
 	}

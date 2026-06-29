@@ -28,15 +28,16 @@ type PutPayloadRequest struct {
 // INSERT into the unsafe table. HouseKeeper owns the authoritative version of
 // this state; the local coordinator uses the same shape for P0 demos/tests.
 type InsertRecord struct {
-	TableID      string
-	StatementID  string
-	OriginalSQL  string
-	UnsafeSQL    string
-	UnsafeTable  string
-	SafeTable    string
-	PartitionIDs []string
-	Payload      PayloadCommitment
-	ReceivedAt   time.Time
+	TableID         string
+	StatementID     string
+	OriginalSQL     string
+	UnsafeSQL       string
+	UnsafeTable     string
+	SafeTable       string
+	PartitionIDs    []string
+	Payload         PayloadCommitment
+	SourceClaimRoot string
+	ReceivedAt      time.Time
 }
 
 type IngressSink interface {
@@ -91,6 +92,22 @@ type ReplaySink interface {
 type ReplayFailure struct {
 	BlockSeq uint64 `json:"block_seq"`
 	Error    string `json:"error"`
+}
+
+type InsertReplayRequest struct {
+	TableID     string
+	StatementID string
+	SQL         string
+}
+
+type InsertReplayResult struct {
+	StateRoot string
+	RowsHash  string
+	RowCount  uint64
+}
+
+type InsertReplayComputer interface {
+	ComputeInsertReplay(ctx context.Context, req InsertReplayRequest) (InsertReplayResult, error)
 }
 
 type UnsafeReplica struct {
@@ -239,6 +256,7 @@ type SafeAuditTask struct {
 	SchemaHash string
 	SnapshotID string
 	Range      string
+	Replicas   []string
 }
 
 type SafeAuditReplica struct {

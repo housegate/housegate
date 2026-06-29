@@ -17,13 +17,14 @@ func TestLocalCoordinatorWaitsForExternalFinalityBeforePromotion(t *testing.T) {
 		UnsafeTableSuffix: "_a",
 	})
 	rec := InsertRecord{
-		TableID:      "dual_hg_auth.t",
-		StatementID:  "stmt-1",
-		OriginalSQL:  "INSERT INTO dual_hg_auth.t VALUES (1)",
-		UnsafeSQL:    "INSERT INTO `hg_unsafe`.`dual_hg_auth.t_a` VALUES (1)",
-		UnsafeTable:  "`hg_unsafe`.`dual_hg_auth.t_a`",
-		SafeTable:    "`hg_safe`.`dual_hg_auth.t`",
-		PartitionIDs: []string{"202606"},
+		TableID:         "dual_hg_auth.t",
+		StatementID:     "stmt-1",
+		OriginalSQL:     "INSERT INTO dual_hg_auth.t VALUES (1)",
+		UnsafeSQL:       "INSERT INTO `hg_unsafe`.`dual_hg_auth.t_a` VALUES (1)",
+		UnsafeTable:     "`hg_unsafe`.`dual_hg_auth.t_a`",
+		SafeTable:       "`hg_safe`.`dual_hg_auth.t`",
+		PartitionIDs:    []string{"202606"},
+		SourceClaimRoot: "0xsource-claim",
 		Payload: PayloadCommitment{
 			Ref:    "mockda://dual_hg_auth.t/stmt-1/hash",
 			Hash:   "0xpayload",
@@ -39,6 +40,12 @@ func TestLocalCoordinatorWaitsForExternalFinalityBeforePromotion(t *testing.T) {
 	}
 	if len(job.Statements) != 1 || job.Statements[0].StatementID != "stmt-1" {
 		t.Fatalf("replay job = %+v", job)
+	}
+	if job.Statements[0].SQL != rec.UnsafeSQL {
+		t.Fatalf("replay SQL = %q, want unsafe SQL %q", job.Statements[0].SQL, rec.UnsafeSQL)
+	}
+	if job.SourceClaimRoot != rec.SourceClaimRoot {
+		t.Fatalf("source claim = %q, want %q", job.SourceClaimRoot, rec.SourceClaimRoot)
 	}
 	if _, ok, err := c.ClaimPromotion(ctx); err != nil || ok {
 		t.Fatalf("ClaimPromotion before attest/finality ok=%v err=%v, want no task", ok, err)

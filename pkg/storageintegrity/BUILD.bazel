@@ -3,7 +3,9 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "storageintegrity",
     srcs = [
+        "clickhouse_insert_replay_verifier.go",
         "clickhouse_promotion_executor.go",
+        "clickhouse_safe_audit_reader.go",
         "keeper_coordinator.go",
         "layout.go",
         "local_coordinator.go",
@@ -19,6 +21,7 @@ go_library(
         "types.go",
         "unsafe_replica_verifier.go",
         "unsafe_validation_worker.go",
+        "worker_signer.go",
     ],
     importpath = "housegate/housegate/pkg/storageintegrity",
     visibility = ["//visibility:public"],

@@ -24,6 +24,7 @@ type Config struct {
 	SafeDatabase      string
 	UnsafeTableSuffix string
 	TableRewriter     TableRewriter
+	ReplayComputer    core.InsertReplayComputer
 	PartitionIDs      []string
 }
 
@@ -38,6 +39,7 @@ type Plugin struct {
 	payloads     *core.MockPayloadStore
 	sink         core.IngressSink
 	rewriter     TableRewriter
+	replay       core.InsertReplayComputer
 	partitionIDs []string
 
 	mu              sync.Mutex
@@ -71,6 +73,7 @@ func New(cfg Config, payloads *core.MockPayloadStore, sink core.IngressSink) *Pl
 		payloads:        payloads,
 		sink:            sink,
 		rewriter:        cfg.TableRewriter,
+		replay:          cfg.ReplayComputer,
 		partitionIDs:    normalizePartitionIDs(cfg.PartitionIDs),
 		active:          map[int64]*insertCapture{},
 		now:             time.Now,
@@ -193,7 +196,7 @@ func (p *Plugin) finalizeCapture(ctx context.Context, cap *insertCapture) {
 		)
 		return
 	}
-	if err := p.sink.SubmitInsert(ctx, core.InsertRecord{
+	rec := core.InsertRecord{
 		TableID:      cap.tableID,
 		StatementID:  cap.statementID,
 		OriginalSQL:  cap.originalSQL,
@@ -203,7 +206,24 @@ func (p *Plugin) finalizeCapture(ctx context.Context, cap *insertCapture) {
 		PartitionIDs: append([]string(nil), cap.partitionIDs...),
 		Payload:      commit,
 		ReceivedAt:   p.now().UTC(),
-	}); err != nil {
+	}
+	if p.replay != nil {
+		result, err := p.replay.ComputeInsertReplay(ctx, core.InsertReplayRequest{
+			TableID:     cap.tableID,
+			StatementID: cap.statementID,
+			SQL:         cap.unsafeSQL,
+		})
+		if err != nil {
+			log.Warnw("storage_integrity: compute source claim failed",
+				"statement_id", cap.statementID,
+				"table_id", cap.tableID,
+				"err", err,
+			)
+			return
+		}
+		rec.SourceClaimRoot = result.StateRoot
+	}
+	if err := p.sink.SubmitInsert(ctx, rec); err != nil {
 		log.Warnw("storage_integrity: submit insert failed",
 			"statement_id", cap.statementID,
 			"table_id", cap.tableID,

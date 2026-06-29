@@ -410,8 +410,8 @@ func (c *LocalCoordinator) buildReplayJobLocked(blockSeq uint64, rec InsertRecor
 	stmt := replay.Statement{
 		StatementID:   rec.StatementID,
 		StatementSeq:  1,
-		SQL:           rec.OriginalSQL,
-		SQLHash:       replay.DigestBytes([]byte(rec.OriginalSQL)),
+		SQL:           firstNonEmpty(rec.UnsafeSQL, rec.OriginalSQL),
+		SQLHash:       replay.DigestString(firstNonEmpty(rec.UnsafeSQL, rec.OriginalSQL)),
 		SettingsHash:  replay.DigestBytes([]byte("{}")),
 		PayloadRef:    rec.Payload.Ref,
 		PayloadHash:   rec.Payload.Hash,
@@ -424,7 +424,7 @@ func (c *LocalCoordinator) buildReplayJobLocked(blockSeq uint64, rec InsertRecor
 		PrevStateRoot:      replay.DigestBytes([]byte("mock-genesis-state")),
 		SchemaSnapshotID:   "mock-schema",
 		ExecutorProfileID:  "mock-replay",
-		SourceClaimRoot:    sourceClaimRoot(rec),
+		SourceClaimRoot:    firstNonEmpty(rec.SourceClaimRoot, sourceClaimRoot(rec)),
 		Statements:         []replay.Statement{stmt},
 	}
 }
@@ -565,11 +565,13 @@ func sourceClaimRoot(rec InsertRecord) string {
 		TableID     string            `json:"table_id"`
 		StatementID string            `json:"statement_id"`
 		OriginalSQL string            `json:"original_sql"`
+		UnsafeSQL   string            `json:"unsafe_sql"`
 		Payload     PayloadCommitment `json:"payload"`
 	}{
 		TableID:     rec.TableID,
 		StatementID: rec.StatementID,
 		OriginalSQL: rec.OriginalSQL,
+		UnsafeSQL:   rec.UnsafeSQL,
 		Payload:     rec.Payload,
 	})
 	return replay.DigestBytes(body)

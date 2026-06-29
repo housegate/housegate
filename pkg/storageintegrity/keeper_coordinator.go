@@ -533,25 +533,25 @@ func (c *KeeperCoordinator) ClaimSafeAudit(ctx context.Context) (SafeAuditTask, 
 	if quarantined, err := c.workerReplayQuarantined(ctx); err != nil || quarantined {
 		return SafeAuditTask{}, false, err
 	}
-	children, err := c.children(ctx, c.path("safe_audit_tasks"))
+	children, err := c.children(ctx, globalSafeAuditTasksPath())
 	if err != nil {
 		return SafeAuditTask{}, false, err
 	}
 	for _, child := range children {
-		key := unescapeSegment(child)
-		if exists, err := c.exists(ctx, c.safeAuditVotePath(key)); err != nil {
+		auditID := unescapeSegment(child)
+		if exists, err := c.exists(ctx, globalSafeAuditVotePath(auditID, c.cfg.WorkerID)); err != nil {
 			return SafeAuditTask{}, false, err
 		} else if exists {
 			continue
 		}
-		var task SafeAuditTask
-		ok, err := c.getJSON(ctx, c.safeAuditTaskPath(key), &task)
+		task, ok, err := c.getGlobalSafeAuditTask(ctx, auditID)
 		if err != nil || !ok {
 			return SafeAuditTask{}, false, err
 		}
-		if task.ReplicaID != "" && task.ReplicaID != c.cfg.WorkerID {
+		if !safeAuditTaskHasReplica(task, c.cfg.WorkerID) {
 			continue
 		}
+		task.ReplicaID = c.cfg.WorkerID
 		return task, true, nil
 	}
 	return SafeAuditTask{}, false, nil
@@ -564,8 +564,7 @@ func (c *KeeperCoordinator) SubmitSafeAuditVote(ctx context.Context, vote SafeAu
 	if vote.AuditID == "" || vote.ReplicaID == "" || vote.BatchHash == "" || vote.VoteHash == "" || vote.Signature == "" {
 		return fmt.Errorf("safe audit vote is incomplete")
 	}
-	key := vote.AuditID + "/" + vote.ReplicaID
-	return c.createJSON(ctx, c.safeAuditVotePath(key), vote)
+	return c.createKV(ctx, globalSafeAuditVotePath(vote.AuditID, vote.ReplicaID), encodeSafeAuditVoteKV(vote))
 }
 
 func (c *KeeperCoordinator) validateUnsafeResult(ctx context.Context, result UnsafeValidationResult) error {
@@ -629,6 +628,7 @@ func (c *KeeperCoordinator) queueSafeAudit(ctx context.Context, stmtID string) e
 		schemaHash = "mock-schema"
 	}
 	seen := map[string]struct{}{}
+	replicas := make([]string, 0, len(participants))
 	for _, participant := range participants {
 		if participant == "" {
 			continue
@@ -637,19 +637,22 @@ func (c *KeeperCoordinator) queueSafeAudit(ctx context.Context, stmtID string) e
 			continue
 		}
 		seen[participant] = struct{}{}
-		task := SafeAuditTask{
-			AuditID:    "audit-" + stmtID,
-			ReplicaID:  participant,
-			NetworkID:  networkID,
-			TableID:    ledger.InsertRecord.TableID,
-			SchemaHash: schemaHash,
-			SnapshotID: "snapshot-" + stmtID,
-			Range:      "safe=" + ledger.InsertRecord.SafeTable,
-		}
-		key := task.AuditID + "/" + task.ReplicaID
-		if err := c.createJSON(ctx, c.safeAuditTaskPath(key), task); err != nil && !errors.Is(err, errKeeperNodeExists) {
-			return err
-		}
+		replicas = append(replicas, participant)
+	}
+	if len(replicas) == 0 {
+		return nil
+	}
+	sort.Strings(replicas)
+	task := SafeAuditTask{
+		AuditID:    "audit-" + stmtID,
+		NetworkID:  networkID,
+		TableID:    ledger.InsertRecord.TableID,
+		SchemaHash: schemaHash,
+		SnapshotID: "snapshot-" + stmtID,
+		Range:      "safe=" + ledger.InsertRecord.SafeTable,
+	}
+	if err := c.createKV(ctx, globalSafeAuditTaskPath(task.AuditID), encodeSafeAuditTaskKV(task, replicas)); err != nil && !errors.Is(err, errKeeperNodeExists) {
+		return err
 	}
 	return nil
 }
@@ -700,11 +703,12 @@ func (c *KeeperCoordinator) workerReplayQuarantined(ctx context.Context) (bool, 
 }
 
 func (c *KeeperCoordinator) buildReplayJob(blockSeq uint64, rec InsertRecord) replay.ReplayJob {
+	sql := firstNonEmpty(rec.UnsafeSQL, rec.OriginalSQL)
 	stmt := replay.Statement{
 		StatementID:   rec.StatementID,
 		StatementSeq:  1,
-		SQL:           rec.OriginalSQL,
-		SQLHash:       replay.DigestBytes([]byte(rec.OriginalSQL)),
+		SQL:           sql,
+		SQLHash:       replay.DigestString(sql),
 		SettingsHash:  replay.DigestBytes([]byte("{}")),
 		PayloadRef:    rec.Payload.Ref,
 		PayloadHash:   rec.Payload.Hash,
@@ -717,7 +721,7 @@ func (c *KeeperCoordinator) buildReplayJob(blockSeq uint64, rec InsertRecord) re
 		PrevStateRoot:      replay.DigestBytes([]byte("housekeeper-genesis-state")),
 		SchemaSnapshotID:   "housekeeper-schema",
 		ExecutorProfileID:  "housekeeper-replay",
-		SourceClaimRoot:    sourceClaimRoot(rec),
+		SourceClaimRoot:    firstNonEmpty(rec.SourceClaimRoot, sourceClaimRoot(rec)),
 		Statements:         []replay.Statement{stmt},
 	}
 }
@@ -760,6 +764,7 @@ func (c *KeeperCoordinator) encodeStatement(rec InsertRecord, participants []str
 		keeperKVPair{Key: "payload_ref", Value: rec.Payload.Ref},
 		keeperKVPair{Key: "payload_hash", Value: rec.Payload.Hash},
 		keeperKVPair{Key: "payload_length", Value: strconv.FormatUint(rec.Payload.Length, 10)},
+		keeperKVPair{Key: "source_claim_root", Value: rec.SourceClaimRoot},
 		keeperKVPair{Key: "replay_quorum", Value: strconv.Itoa(c.cfg.ReplayQuorum)},
 		keeperKVPair{Key: "participants", Value: strings.Join(participants, ",")},
 		keeperKVPair{Key: "original_sql_b64", Value: base64.StdEncoding.EncodeToString([]byte(rec.OriginalSQL))},
@@ -788,13 +793,14 @@ func (c *KeeperCoordinator) decodeStatement(stmtID string, fields map[string]str
 		return InsertRecord{}, fmt.Errorf("unsafe_sql_b64 for %q: %w", stmtID, err)
 	}
 	rec := InsertRecord{
-		TableID:      fields["table_id"],
-		StatementID:  stmtID,
-		OriginalSQL:  originalSQL,
-		UnsafeSQL:    unsafeSQL,
-		UnsafeTable:  fields["unsafe_table"],
-		SafeTable:    fields["safe_table"],
-		PartitionIDs: splitKeeperCSV(fields["partition_ids"]),
+		TableID:         fields["table_id"],
+		StatementID:     stmtID,
+		OriginalSQL:     originalSQL,
+		UnsafeSQL:       unsafeSQL,
+		UnsafeTable:     fields["unsafe_table"],
+		SafeTable:       fields["safe_table"],
+		PartitionIDs:    splitKeeperCSV(fields["partition_ids"]),
+		SourceClaimRoot: fields["source_claim_root"],
 		Payload: PayloadCommitment{
 			Ref:    fields["payload_ref"],
 			Hash:   fields["payload_hash"],
@@ -839,6 +845,43 @@ func (c *KeeperCoordinator) getUnsafeTask(ctx context.Context, stmtID string) (U
 		return UnsafeValidationTask{}, false, fmt.Errorf("unsafe task %q is incomplete", stmtID)
 	}
 	return task, true, nil
+}
+
+func (c *KeeperCoordinator) getGlobalSafeAuditTask(ctx context.Context, auditID string) (SafeAuditTask, bool, error) {
+	data, ok, err := c.store.Get(ctx, globalSafeAuditTaskPath(auditID))
+	if err != nil || !ok {
+		return SafeAuditTask{}, ok, err
+	}
+	fields, err := parseKeeperKV(data)
+	if err != nil {
+		return SafeAuditTask{}, false, err
+	}
+	task := SafeAuditTask{
+		AuditID:    auditID,
+		NetworkID:  fields["network_id"],
+		TableID:    fields["table_id"],
+		SchemaHash: fields["schema_hash"],
+		SnapshotID: fields["snapshot_id"],
+		Range:      fields["range"],
+		Replicas:   splitKeeperCSV(fields["replicas"]),
+	}
+	if task.AuditID == "" || task.TableID == "" || task.SnapshotID == "" || task.Range == "" || len(task.Replicas) == 0 {
+		return SafeAuditTask{}, false, fmt.Errorf("safe audit task %q is incomplete", auditID)
+	}
+	return task, true, nil
+}
+
+func safeAuditTaskHasReplica(task SafeAuditTask, replicaID string) bool {
+	replicaID = strings.TrimSpace(replicaID)
+	if replicaID == "" {
+		return false
+	}
+	for _, replica := range task.Replicas {
+		if replica == replicaID {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *KeeperCoordinator) getPromotionTask(ctx context.Context, stmtID string) (PromotionTask, bool, error) {
@@ -1081,6 +1124,29 @@ func encodeUnsafeResultKV(result UnsafeValidationResult) []byte {
 	)
 }
 
+func encodeSafeAuditTaskKV(task SafeAuditTask, replicas []string) []byte {
+	return encodeKeeperKV(
+		keeperKVPair{Key: "network_id", Value: task.NetworkID},
+		keeperKVPair{Key: "table_id", Value: task.TableID},
+		keeperKVPair{Key: "schema_hash", Value: task.SchemaHash},
+		keeperKVPair{Key: "snapshot_id", Value: task.SnapshotID},
+		keeperKVPair{Key: "range", Value: task.Range},
+		keeperKVPair{Key: "replicas", Value: strings.Join(normalizeKeeperCSVValues(replicas), ",")},
+	)
+}
+
+func encodeSafeAuditVoteKV(vote SafeAuditVote) []byte {
+	return encodeKeeperKV(
+		keeperKVPair{Key: "worker_id", Value: vote.WorkerID},
+		keeperKVPair{Key: "snapshot_id", Value: vote.SnapshotID},
+		keeperKVPair{Key: "range", Value: vote.Range},
+		keeperKVPair{Key: "batch_hash", Value: vote.BatchHash},
+		keeperKVPair{Key: "row_count", Value: strconv.FormatUint(vote.RowCount, 10)},
+		keeperKVPair{Key: "vote_hash", Value: vote.VoteHash},
+		keeperKVPair{Key: "signature", Value: vote.Signature},
+	)
+}
+
 func (c *KeeperCoordinator) tryClaim(ctx context.Context, p string, leaseID string) (bool, error) {
 	claim := keeperLease{WorkerID: c.cfg.WorkerID, LeaseID: leaseID, ClaimedAt: time.Now().UTC()}
 	if err := c.createJSON(ctx, p, claim); err != nil {
@@ -1121,6 +1187,13 @@ func (c *KeeperCoordinator) ensureRoots(ctx context.Context) error {
 		c.path("safe_audit_tasks"),
 		c.path("safe_audit_votes"),
 		c.path("decisions"),
+		"/housekeeper",
+		"/housekeeper/v1",
+		globalSafeAuditRootPath(),
+		globalSafeAuditRootPath("tasks"),
+		globalSafeAuditRootPath("votes"),
+		globalSafeAuditRootPath("decisions"),
+		globalSafeAuditRootPath("quarantine"),
 	} {
 		if err := c.store.EnsurePath(ctx, p); err != nil {
 			return fmt.Errorf("ensure housekeeper path %s: %w", p, err)
@@ -1258,6 +1331,32 @@ func (c *KeeperCoordinator) promotionFailurePath(stmtID string) string {
 func (c *KeeperCoordinator) promotionParticipantFailurePath(stmtID, workerID string) string {
 	return c.path("promotion_failures", escapeSegment(stmtID), escapeSegment(workerID))
 }
+
+func globalSafeAuditRootPath(parts ...string) string {
+	all := append([]string{"/housekeeper/v1/safe_audits"}, parts...)
+	return cleanKeeperPath(path.Join(all...))
+}
+
+func globalSafeAuditTasksPath() string {
+	return globalSafeAuditRootPath("tasks")
+}
+
+func globalSafeAuditVotesPath(auditID string) string {
+	return globalSafeAuditRootPath("votes", escapeSegment(auditID))
+}
+
+func globalSafeAuditTaskPath(auditID string) string {
+	return globalSafeAuditRootPath("tasks", escapeSegment(auditID))
+}
+
+func globalSafeAuditVotePath(auditID, replicaID string) string {
+	return globalSafeAuditRootPath("votes", escapeSegment(auditID), escapeSegment(replicaID))
+}
+
+func globalSafeAuditDecisionPath(auditID string) string {
+	return globalSafeAuditRootPath("decisions", escapeSegment(auditID))
+}
+
 func (c *KeeperCoordinator) safeAuditTaskPath(key string) string {
 	return c.path("safe_audit_tasks", escapeSegment(key))
 }

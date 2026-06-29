@@ -190,6 +190,25 @@ func buildStorageIntegrityRuntime(cfg config.StorageIntegrityConfig, opts Option
 	if opts.Config != nil {
 		localClickHouseAddr = opts.Config.Upstream
 	}
+	var workerSigner *storageintegrity.Ed25519WorkerSigner
+	if cfg.Workers.Replay || cfg.Workers.SafeAudit {
+		workerSigner, err = storageintegrity.NewEd25519WorkerSigner(storageWorkerID, []byte(localClickHouseAddr))
+		if err != nil {
+			return nil, fmt.Errorf("build storage_integrity worker signer: %w", err)
+		}
+	}
+	var clickhouseReplay *storageintegrity.ClickHouseInsertReplayVerifier
+	if cfg.Workers.Replay && opts.StorageIntegrityReplayVerifier == nil {
+		if localClickHouseAddr == "" {
+			return nil, fmt.Errorf("storage_integrity replay verifier requires config.upstream when no verifier is injected")
+		}
+		clickhouseReplay, err = storageintegrity.NewClickHouseInsertReplayVerifier(localClickHouseAddr, workerSigner)
+		if err != nil {
+			return nil, fmt.Errorf("storage_integrity replay verifier: %w", err)
+		}
+		clickhouseReplay.Timeout = cfg.UnsafeValidation.QueryTimeout.Duration
+		rt.ReplayComputer = clickhouseReplay
+	}
 	unsafeReplicas := make([]storageintegrity.UnsafeReplica, 0, len(cfg.UnsafeValidation.Replicas))
 	for _, replica := range cfg.UnsafeValidation.Replicas {
 		unsafeReplicas = append(unsafeReplicas, storageintegrity.UnsafeReplica{
@@ -251,7 +270,7 @@ func buildStorageIntegrityRuntime(cfg config.StorageIntegrityConfig, opts Option
 		}
 		replayVerifier := opts.StorageIntegrityReplayVerifier
 		if replayVerifier == nil {
-			replayVerifier = storageintegrity.MockReplayVerifier{ReplicaID: storageWorkerID}
+			replayVerifier = clickhouseReplay
 		}
 		replaySink := opts.StorageIntegrityReplaySink
 		if replaySink == nil {
@@ -354,11 +373,24 @@ func buildStorageIntegrityRuntime(cfg config.StorageIntegrityConfig, opts Option
 		}
 		auditReader := opts.StorageIntegrityAuditReader
 		if auditReader == nil {
-			auditReader = storageintegrity.MockSafeAuditReader{}
+			if localClickHouseAddr == "" {
+				return nil, fmt.Errorf("storage_integrity safe audit reader requires config.upstream when no reader is injected")
+			}
+			auditReader, err = storageintegrity.NewClickHouseSafeAuditReader(localClickHouseAddr, storageintegrity.NewTableLayout(storageintegrity.TableLayoutConfig{
+				UnsafeDatabase:    cfg.UnsafeDatabase,
+				SafeDatabase:      cfg.SafeDatabase,
+				UnsafeTableSuffix: cfg.UnsafeTableSuffix,
+			}))
+			if err != nil {
+				return nil, fmt.Errorf("storage_integrity safe audit reader: %w", err)
+			}
+			if reader, ok := auditReader.(*storageintegrity.ClickHouseSafeAuditReader); ok {
+				reader.Timeout = cfg.UnsafeValidation.QueryTimeout.Duration
+			}
 		}
 		auditSigner := opts.StorageIntegrityAuditSigner
 		if auditSigner == nil {
-			auditSigner = storageintegrity.MockSafeAuditSigner{WorkerID: storageWorkerID}
+			auditSigner = workerSigner
 		}
 		auditSink := opts.StorageIntegrityAuditSink
 		if auditSink == nil {
@@ -802,6 +834,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			SafeDatabase:      cfg.StorageIntegrity.SafeDatabase,
 			UnsafeTableSuffix: cfg.StorageIntegrity.UnsafeTableSuffix,
 			TableRewriter:     tableRewriter,
+			ReplayComputer:    storageRuntime.ReplayComputer,
 			PartitionIDs:      cfg.StorageIntegrity.MockPartRegistry.PartitionIDs,
 		}, storageRuntime.Payloads, storageRuntime.Ingress)
 		queryPlugins = append(queryPlugins, siPlug)

@@ -13,14 +13,15 @@ import (
 // plane is injected through the worker sinks/readers; this runtime owns local
 // adapters and lifetime only.
 type Runtime struct {
-	Payloads     *MockPayloadStore
-	Ingress      IngressSink
-	Replay       *ReplayWorker
-	Unsafe       *UnsafeValidationWorker
-	Promotion    *PromotionWorker
-	Rollback     *RollbackWorker
-	SafeAudit    *SafeAuditWorker
-	PollInterval time.Duration
+	Payloads       *MockPayloadStore
+	ReplayComputer InsertReplayComputer
+	Ingress        IngressSink
+	Replay         *ReplayWorker
+	Unsafe         *UnsafeValidationWorker
+	Promotion      *PromotionWorker
+	Rollback       *RollbackWorker
+	SafeAudit      *SafeAuditWorker
+	PollInterval   time.Duration
 
 	ReplayJobs  ReplayJobSource
 	UnsafeTasks UnsafeValidationSource

@@ -43,35 +43,32 @@ func TestBuildServerStorageIntegrityAddsBackgroundRuntime(t *testing.T) {
 	}
 }
 
-func TestBuildServerStorageIntegrityUsesDefaultMockReplayDeps(t *testing.T) {
+func TestBuildStorageIntegrityRuntimeUsesRealReplayAndSafeAuditDeps(t *testing.T) {
 	cfg := minimalRouterOnlyCfg(t)
+	cfg.Upstream = "127.0.0.1:56301"
 	cfg.StorageIntegrity.Enabled = true
 	cfg.StorageIntegrity.MockPayloadStore.Path = t.TempDir()
 	cfg.StorageIntegrity.Workers = config.StorageIntegrityWorkersConfig{
 		PollInterval: config.Duration{Duration: cfg.DialTimeout.Duration},
-		Replay:       false,
+		Replay:       true,
 		Promotion:    false,
 		Rollback:     false,
-		SafeAudit:    false,
+		SafeAudit:    true,
 		Finality:     false,
 	}
-	cfg.StorageIntegrity.Workers.Replay = true
-	cfg.StorageIntegrity.Workers.Promotion = false
-	cfg.StorageIntegrity.Workers.Rollback = false
-	cfg.StorageIntegrity.Workers.SafeAudit = false
-	cfg.StorageIntegrity.Workers.Finality = false
 
-	bs, err := buildServer(Options{
-		Config:       cfg,
-		NetworkState: network.NewInMemoryNetworkState(),
-		Rewriter:     stubRewriterFactory{},
-	}, nil)
+	rt, err := buildStorageIntegrityRuntime(cfg.StorageIntegrity, Options{Config: cfg})
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("buildStorageIntegrityRuntime: %v", err)
 	}
-	defer bs.teardown()
-	if len(bs.background) != 1 {
-		t.Fatalf("background runners = %d, want 1", len(bs.background))
+	if _, ok := rt.Replay.Verifier.(*storageintegrity.ClickHouseInsertReplayVerifier); !ok {
+		t.Fatalf("replay verifier = %T, want *ClickHouseInsertReplayVerifier", rt.Replay.Verifier)
+	}
+	if _, ok := rt.SafeAudit.Reader.(*storageintegrity.ClickHouseSafeAuditReader); !ok {
+		t.Fatalf("safe audit reader = %T, want *ClickHouseSafeAuditReader", rt.SafeAudit.Reader)
+	}
+	if _, ok := rt.SafeAudit.Signer.(*storageintegrity.Ed25519WorkerSigner); !ok {
+		t.Fatalf("safe audit signer = %T, want *Ed25519WorkerSigner", rt.SafeAudit.Signer)
 	}
 }
 
@@ -118,6 +115,7 @@ func TestBuildServerStorageIntegrityRunsBeforeCommitGate(t *testing.T) {
 
 func TestBuildStorageIntegrityRuntimeUsesInjectedHouseKeeperControlPlane(t *testing.T) {
 	cfg := minimalRouterOnlyCfg(t)
+	cfg.Upstream = "127.0.0.1:56301"
 	cfg.StorageIntegrity.Enabled = true
 	cfg.StorageIntegrity.MockPayloadStore.Path = t.TempDir()
 	cfg.StorageIntegrity.HouseKeeper.Endpoints = []string{"127.0.0.1:9181"}

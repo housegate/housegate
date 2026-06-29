@@ -9,7 +9,8 @@ IMAGE="${E2E_IMAGE:-clickhouse/binary-builder:latest}"
 SQL_REWRITER_IMAGE="${SQL_REWRITER_IMAGE:-us-west1-docker.pkg.dev/sentio-352722/sentio/sql-rewriter:0.1.27}"
 SQL_REWRITER_BIN="${SQL_REWRITER_BIN:-/clickhouse_sentio_rewriter}"
 RUN_ID="${RUN_ID:-$(date -u +%Y%m%d%H%M%S)}"
-BASE="$WORK/e2e-sql-rewriter-3x3-$RUN_ID"
+BASE_PREFIX="${BASE_PREFIX:-e2e-sql-rewriter-3x3}"
+BASE="${BASE:-$WORK/$BASE_PREFIX-$RUN_ID}"
 DOCKER_USER="$(id -u):$(id -g)"
 
 AGENT_KEY="0x03bef7ad0f263e542a6bc04ba07ca41a958e5ed6e44a504deaec98aebf04d8b2"
@@ -28,6 +29,14 @@ SQL_REWRITER_PORT=56801
 
 CONTAINERS=()
 SQL_REWRITER_CONTAINER=""
+
+HG_WORKER_REPLAY="${HG_WORKER_REPLAY:-true}"
+HG_WORKER_UNSAFE_VALIDATION="${HG_WORKER_UNSAFE_VALIDATION:-true}"
+HG_WORKER_PROMOTION="${HG_WORKER_PROMOTION:-true}"
+HG_WORKER_ROLLBACK="${HG_WORKER_ROLLBACK:-true}"
+HG_WORKER_SAFE_AUDIT="${HG_WORKER_SAFE_AUDIT:-true}"
+HG_WORKER_FINALITY="${HG_WORKER_FINALITY:-true}"
+E2E_INSERT_QUERY="${E2E_INSERT_QUERY:-INSERT INTO realbin.t VALUES (1,'a',now(),random()),(2,'b',now(),random())}"
 
 log() {
     printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"
@@ -93,6 +102,26 @@ keeper_query() {
         "$IMAGE" /bin/bash -lc "exec '$CLICKHOUSE_BIN' keeper-client --host 127.0.0.1 --port '$port' --query \"\$KEEPER_QUERY\""
 }
 
+keeper_quote_path() {
+    printf '"%s"' "$1"
+}
+
+keeper_ls() {
+    local path="$1"
+    keeper_query "${KEEPER_CLIENT_PORTS[0]}" "ls $(keeper_quote_path "$path")"
+}
+
+keeper_get() {
+    local path="$1"
+    keeper_query "${KEEPER_CLIENT_PORTS[0]}" "get $(keeper_quote_path "$path")"
+}
+
+keeper_create_path() {
+    local path="$1"
+    local data="$2"
+    keeper_query "${KEEPER_CLIENT_PORTS[0]}" "create $(keeper_quote_path "$path") '$data'"
+}
+
 wait_for_keeper_children() {
     local label="$1"
     local path="$2"
@@ -100,7 +129,7 @@ wait_for_keeper_children() {
     local start children
     start="$(date +%s)"
     while true; do
-        children="$(keeper_query "${KEEPER_CLIENT_PORTS[0]}" "ls $path" | tr -d '\r' | tail -n 1 || true)"
+        children="$(keeper_ls "$path" | tr -d '\r' | tail -n 1 || true)"
         if [[ -n "$children" && "$children" != "[]" ]]; then
             log "$label found $children" >&2
             printf '%s\n' "$children"
@@ -114,11 +143,82 @@ wait_for_keeper_children() {
     done
 }
 
+keeper_path_exists() {
+    local path="$1"
+    keeper_get "$path" >/dev/null 2>&1
+}
+
+wait_for_keeper_path() {
+    local label="$1"
+    local path="$2"
+    local timeout="$3"
+    local start
+    start="$(date +%s)"
+    while true; do
+        if keeper_path_exists "$path"; then
+            log "$label exists at $path"
+            return 0
+        fi
+        if (( "$(date +%s)" - start >= timeout )); then
+            die "$label did not appear at $path after ${timeout}s"
+        fi
+        sleep 1
+    done
+}
+
+wait_for_keeper_data_contains() {
+    local label="$1"
+    local path="$2"
+    local needle="$3"
+    local timeout="$4"
+    local start data
+    start="$(date +%s)"
+    while true; do
+        data="$(keeper_get "$path" 2>/dev/null | tr -d '\r' || true)"
+        if [[ "$data" == *"$needle"* ]]; then
+            log "$label contains $needle"
+            return 0
+        fi
+        if (( "$(date +%s)" - start >= timeout )); then
+            die "$label at $path did not contain '$needle' after ${timeout}s; data=$data"
+        fi
+        sleep 1
+    done
+}
+
+wait_for_keeper_children_contains() {
+    local label="$1"
+    local path="$2"
+    local timeout="$3"
+    shift 3
+    local expected=("$@")
+    local start children missing child
+    start="$(date +%s)"
+    while true; do
+        children="$(keeper_ls "$path" 2>/dev/null | tr -d '\r' | tail -n 1 || true)"
+        missing=0
+        for child in "${expected[@]}"; do
+            if [[ "$children" != *"$child"* ]]; then
+                missing=1
+                break
+            fi
+        done
+        if [[ "$missing" == "0" ]]; then
+            log "$label contains ${expected[*]}: $children"
+            return 0
+        fi
+        if (( "$(date +%s)" - start >= timeout )); then
+            die "$label at $path missing ${expected[*]} after ${timeout}s; children=$children"
+        fi
+        sleep 1
+    done
+}
+
 submit_mock_finality() {
     local statement_id="$1"
     local path="/housekeeper/v1/storage_integrity/finality/$statement_id"
     local data="kind=mock\\nfinalized=true\\n"
-    keeper_query "${KEEPER_CLIENT_PORTS[0]}" "create $path '$data'" >/dev/null
+    keeper_create_path "$path" "$data" >/dev/null
 }
 
 start_container() {
@@ -440,12 +540,12 @@ storage_integrity:
     schema_hash: "mock-schema"
   workers:
     poll_interval: "1s"
-    replay: true
-    unsafe_validation: true
-    promotion: true
-    rollback: true
-    safe_audit: true
-    finality: true
+    replay: $HG_WORKER_REPLAY
+    unsafe_validation: $HG_WORKER_UNSAFE_VALIDATION
+    promotion: $HG_WORKER_PROMOTION
+    rollback: $HG_WORKER_ROLLBACK
+    safe_audit: $HG_WORKER_SAFE_AUDIT
+    finality: $HG_WORKER_FINALITY
 YAML
 }
 
@@ -480,47 +580,23 @@ concurrency_limit:
 YAML
 }
 
-require_file "$CLICKHOUSE_BIN"
-require_file "$HOUSEGATE_BAZEL_BIN"
-mkdir -p "$WORK/e2e-bin"
-cp -f "$(readlink -f "$HOUSEGATE_BAZEL_BIN")" "$HOUSEGATE_BIN"
-chmod +x "$HOUSEGATE_BIN"
-check_ports_free "${KEEPER_CLIENT_PORTS[@]}" "${KEEPER_RAFT_PORTS[@]}" "${CH_TCP_PORTS[@]}" "${CH_HTTP_PORTS[@]}" "${CH_INTERSERVER_PORTS[@]}" "${SERVER_HG_PORTS[@]}" "${SERVER_HG_METRICS_PORTS[@]}" "$CLIENT_HG_PORT" "$CLIENT_HG_METRICS_PORT" "$SQL_REWRITER_PORT"
-mkdir -p "$BASE/logs" "$BASE/payloads"
+prepare_storage_integrity_e2e() {
+    require_file "$CLICKHOUSE_BIN"
+    require_file "$HOUSEGATE_BAZEL_BIN"
+    mkdir -p "$WORK/e2e-bin"
+    cp -f "$(readlink -f "$HOUSEGATE_BAZEL_BIN")" "$HOUSEGATE_BIN"
+    chmod +x "$HOUSEGATE_BIN"
+    check_ports_free "${KEEPER_CLIENT_PORTS[@]}" "${KEEPER_RAFT_PORTS[@]}" "${CH_TCP_PORTS[@]}" "${CH_HTTP_PORTS[@]}" "${CH_INTERSERVER_PORTS[@]}" "${SERVER_HG_PORTS[@]}" "${SERVER_HG_METRICS_PORTS[@]}" "$CLIENT_HG_PORT" "$CLIENT_HG_METRICS_PORT" "$SQL_REWRITER_PORT"
+    mkdir -p "$BASE/logs" "$BASE/payloads"
 
-log "base=$BASE"
-log "docker_image=$IMAGE"
-log "sql_rewriter_image=$SQL_REWRITER_IMAGE"
-log "agent_addr=$AGENT_ADDR"
+    log "base=$BASE"
+    log "docker_image=$IMAGE"
+    log "sql_rewriter_image=$SQL_REWRITER_IMAGE"
+    log "agent_addr=$AGENT_ADDR"
+}
 
-start_sql_rewriter_container "si3x3rw-$RUN_ID-rewriter"
-wait_for_tcp "sql-rewriter:$SQL_REWRITER_PORT" "$SQL_REWRITER_PORT"
-
-for i in 1 2 3; do
-    write_keeper_config "$i"
-    start_container "si3x3rw-$RUN_ID-keeper$i" "$BASE/logs/keeper$i.stdout" "$CLICKHOUSE_BIN keeper --config-file=$BASE/keeper$i/keeper.xml"
-done
-
-for port in "${KEEPER_CLIENT_PORTS[@]}"; do
-    wait_for_cmd "keeper:$port" 90 keeper_query "$port" "ls /" || {
-        for i in 1 2 3; do tail -120 "$BASE/logs/keeper$i.stdout" || true; done
-        die "keeper quorum did not become ready"
-    }
-done
-
-for i in 1 2 3; do
-    write_clickhouse_config "$i"
-    start_container "si3x3rw-$RUN_ID-ch$i" "$BASE/logs/ch$i.stdout" "$CLICKHOUSE_BIN server --config-file=$BASE/ch$i/config.xml"
-done
-
-for port in "${CH_TCP_PORTS[@]}"; do
-    wait_for_cmd "clickhouse:$port" 120 ch_query "$port" "SELECT 1" || {
-        for i in 1 2 3; do tail -160 "$BASE/logs/ch$i.stdout" || true; done
-        die "clickhouse servers did not become ready"
-    }
-done
-
-schema_sql='
+create_storage_integrity_schema() {
+    local schema_sql='
 CREATE DATABASE IF NOT EXISTS realbin;
 CREATE DATABASE IF NOT EXISTS hg_unsafe;
 CREATE DATABASE IF NOT EXISTS hg_safe;
@@ -528,73 +604,143 @@ DROP TABLE IF EXISTS realbin.t;
 CREATE TABLE IF NOT EXISTS hg_unsafe.`realbin.t_a` (_hg_row_id FixedString(32), id UInt64, v String, created_at DateTime, r UInt64) ENGINE = ReplicatedMergeTree('\''/clickhouse/tables/si3x3rw/hg_unsafe/realbin_t_a'\'', '\''{replica}'\'') PARTITION BY toYYYYMM(created_at) ORDER BY (_hg_row_id, id);
 CREATE TABLE IF NOT EXISTS hg_safe.`realbin.t` (_hg_row_id FixedString(32), id UInt64, v String, created_at DateTime, r UInt64) ENGINE = MergeTree PARTITION BY toYYYYMM(created_at) ORDER BY (_hg_row_id, id);
 '
-for port in "${CH_TCP_PORTS[@]}"; do
-    ch_multiquery "$port" "$schema_sql"
-    wait_for_query_value "realbin.t absent on ch:$port" "$port" "EXISTS TABLE realbin.t" "0" 30
-done
-
-for i in 1 2 3; do
-    write_server_housegate_config "$i"
-    start_container "si3x3rw-$RUN_ID-hg$i" "$BASE/logs/hg$i.stdout" "$HOUSEGATE_BIN -config $BASE/hg$i/housegate.yaml -log-level debug"
-done
-
-for port in "${SERVER_HG_PORTS[@]}"; do
-    wait_for_tcp "server-housegate:$port" "$port" || {
-        for i in 1 2 3; do tail -180 "$BASE/logs/hg$i.stdout" || true; done
-        die "server housegate ports did not open"
-    }
-done
-
-write_client_housegate_config
-start_container "si3x3rw-$RUN_ID-hg-client" "$BASE/logs/hg-client.stdout" "$HOUSEGATE_BIN -config $BASE/hg-client/housegate.yaml -log-level debug"
-wait_for_cmd "client-housegate:$CLIENT_HG_PORT signed path" 90 ch_query "$CLIENT_HG_PORT" "SELECT 1" || {
-    log "client signed path diagnostic output follows"
-    ch_query "$CLIENT_HG_PORT" "SELECT 1" 2>&1 || true
-    tail -180 "$BASE/logs/hg-client.stdout" || true
-    for i in 1 2 3; do tail -180 "$BASE/logs/hg$i.stdout" || true; done
-    docker logs "$SQL_REWRITER_CONTAINER" 2>&1 | tail -180 || true
-    die "client housegate signed path did not become ready"
+    for port in "${CH_TCP_PORTS[@]}"; do
+        ch_multiquery "$port" "$schema_sql"
+        wait_for_query_value "realbin.t absent on ch:$port" "$port" "EXISTS TABLE realbin.t" "0" 30
+    done
 }
 
-log "sending raw client insert through client-side housegate"
-ch_query "$CLIENT_HG_PORT" "INSERT INTO realbin.t VALUES (1,'a',now(),random()),(2,'b',now(),random())"
+start_storage_integrity_topology() {
+    prepare_storage_integrity_e2e
 
-for port in "${CH_TCP_PORTS[@]}"; do
-    wait_for_query_value "unsafe count on ch:$port" "$port" "SELECT count() FROM hg_unsafe.\`realbin.t_a\`" "2" 120
-done
+    start_sql_rewriter_container "si3x3rw-$RUN_ID-rewriter"
+    wait_for_tcp "sql-rewriter:$SQL_REWRITER_PORT" "$SQL_REWRITER_PORT"
 
-statements="$(wait_for_keeper_children "keeper statements" "/housekeeper/v1/storage_integrity/statements" 120)" || die "no statement ledger found"
-statement_id="${statements%% *}"
-wait_for_keeper_children "keeper unsafe_results" "/housekeeper/v1/storage_integrity/unsafe_results" 180 >/dev/null || die "no unsafe result ledger found"
+    for i in 1 2 3; do
+        write_keeper_config "$i"
+        start_container "si3x3rw-$RUN_ID-keeper$i" "$BASE/logs/keeper$i.stdout" "$CLICKHOUSE_BIN keeper --config-file=$BASE/keeper$i/keeper.xml"
+    done
 
-log "submitting mock finality for statement=$statement_id after unsafe validation"
-submit_mock_finality "$statement_id" || die "mock finality submit failed"
+    for port in "${KEEPER_CLIENT_PORTS[@]}"; do
+        wait_for_cmd "keeper:$port" 90 keeper_query "$port" "ls /" || {
+            for i in 1 2 3; do tail -120 "$BASE/logs/keeper$i.stdout" || true; done
+            die "keeper quorum did not become ready"
+        }
+    done
 
-for port in "${CH_TCP_PORTS[@]}"; do
-    wait_for_query_value "safe count on ch:$port" "$port" "SELECT count() FROM hg_safe.\`realbin.t\`" "2" 180
-done
+    for i in 1 2 3; do
+        write_clickhouse_config "$i"
+        start_container "si3x3rw-$RUN_ID-ch$i" "$BASE/logs/ch$i.stdout" "$CLICKHOUSE_BIN server --config-file=$BASE/ch$i/config.xml"
+    done
 
-promotion_participants="$(wait_for_keeper_children "keeper participant promotion_results" "/housekeeper/v1/storage_integrity/promotion_results/$statement_id" 180)" || die "no participant promotion result ledger found"
-for participant in r1 r2 r3; do
-    [[ "$promotion_participants" == *"$participant"* ]] || die "promotion results missing participant $participant: $promotion_participants"
-done
+    for port in "${CH_TCP_PORTS[@]}"; do
+        wait_for_cmd "clickhouse:$port" 120 ch_query "$port" "SELECT 1" || {
+            for i in 1 2 3; do tail -160 "$BASE/logs/ch$i.stdout" || true; done
+            die "clickhouse servers did not become ready"
+        }
+    done
 
-wait_for_query_value "client SELECT routes to safe" "$CLIENT_HG_PORT" "SELECT concat(toString(count()), ':', groupArray(v)[1]) FROM realbin.t" "2:a" 60
+    create_storage_integrity_schema
 
-statements="$(keeper_query "${KEEPER_CLIENT_PORTS[0]}" "ls /housekeeper/v1/storage_integrity/statements" | tr -d '\r' | tail -n 1 || true)"
-finality="$(keeper_query "${KEEPER_CLIENT_PORTS[0]}" "ls /housekeeper/v1/storage_integrity/finality" | tr -d '\r' | tail -n 1 || true)"
-promotions="$(keeper_query "${KEEPER_CLIENT_PORTS[0]}" "ls /housekeeper/v1/storage_integrity/promotions" | tr -d '\r' | tail -n 1 || true)"
-promotion_results="$(keeper_query "${KEEPER_CLIENT_PORTS[0]}" "ls /housekeeper/v1/storage_integrity/promotion_results" | tr -d '\r' | tail -n 1 || true)"
-unsafe_results="$(keeper_query "${KEEPER_CLIENT_PORTS[0]}" "ls /housekeeper/v1/storage_integrity/unsafe_results" | tr -d '\r' | tail -n 1 || true)"
+    for i in 1 2 3; do
+        write_server_housegate_config "$i"
+        start_container "si3x3rw-$RUN_ID-hg$i" "$BASE/logs/hg$i.stdout" "$HOUSEGATE_BIN -config $BASE/hg$i/housegate.yaml -log-level debug"
+    done
 
-log "keeper statements=$statements"
-log "keeper unsafe_results=$unsafe_results"
-log "keeper finality=$finality"
-log "keeper promotions=$promotions"
-log "keeper promotion_results=$promotion_results"
-[[ -n "$statements" && "$statements" != "[]" ]] || die "no statement ledger found"
-[[ -n "$unsafe_results" && "$unsafe_results" != "[]" ]] || die "no unsafe result ledger found"
-[[ -n "$finality" && "$finality" != "[]" ]] || die "no finality ledger found"
-[[ -n "$promotion_results" && "$promotion_results" != "[]" ]] || die "no promotion result ledger found"
+    for port in "${SERVER_HG_PORTS[@]}"; do
+        wait_for_tcp "server-housegate:$port" "$port" || {
+            for i in 1 2 3; do tail -180 "$BASE/logs/hg$i.stdout" || true; done
+            die "server housegate ports did not open"
+        }
+    done
 
-log "E2E PASS: client HG signed/materialized INSERT -> server HG sql-rewriter -> unsafe quorum -> finality -> attach-partition promotion -> safe SELECT"
+    write_client_housegate_config
+    start_container "si3x3rw-$RUN_ID-hg-client" "$BASE/logs/hg-client.stdout" "$HOUSEGATE_BIN -config $BASE/hg-client/housegate.yaml -log-level debug"
+    wait_for_cmd "client-housegate:$CLIENT_HG_PORT signed path" 90 ch_query "$CLIENT_HG_PORT" "SELECT 1" || {
+        log "client signed path diagnostic output follows"
+        ch_query "$CLIENT_HG_PORT" "SELECT 1" 2>&1 || true
+        tail -180 "$BASE/logs/hg-client.stdout" || true
+        for i in 1 2 3; do tail -180 "$BASE/logs/hg$i.stdout" || true; done
+        docker logs "$SQL_REWRITER_CONTAINER" 2>&1 | tail -180 || true
+        die "client housegate signed path did not become ready"
+    }
+}
+
+send_storage_integrity_insert() {
+    log "sending raw client insert through client-side housegate"
+    ch_query "$CLIENT_HG_PORT" "$E2E_INSERT_QUERY"
+
+    for port in "${CH_TCP_PORTS[@]}"; do
+        wait_for_query_value "unsafe count on ch:$port" "$port" "SELECT count() FROM hg_unsafe.\`realbin.t_a\`" "2" 120
+    done
+}
+
+first_storage_integrity_statement() {
+    local statements
+    statements="$(wait_for_keeper_children "keeper statements" "/housekeeper/v1/storage_integrity/statements" 120)" || return 1
+    printf '%s\n' "${statements%% *}"
+}
+
+run_storage_integrity_happy_path() {
+    start_storage_integrity_topology
+    send_storage_integrity_insert
+
+    local statement_id
+    statement_id="$(first_storage_integrity_statement)" || die "no statement ledger found"
+    wait_for_keeper_children_contains "keeper replay attestations" "/housekeeper/v1/storage_integrity/attestations/$statement_id" 180 r1 r2 r3
+    wait_for_keeper_data_contains "keeper replay decision" "/housekeeper/v1/storage_integrity/decisions/$statement_id" "replay_quorum_met=true" 180
+    wait_for_keeper_children "keeper unsafe_results" "/housekeeper/v1/storage_integrity/unsafe_results" 180 >/dev/null || die "no unsafe result ledger found"
+
+    log "submitting mock finality for statement=$statement_id after unsafe validation"
+    submit_mock_finality "$statement_id" || die "mock finality submit failed"
+
+    for port in "${CH_TCP_PORTS[@]}"; do
+        wait_for_query_value "safe count on ch:$port" "$port" "SELECT count() FROM hg_safe.\`realbin.t\`" "2" 180
+    done
+
+    local promotion_participants
+    promotion_participants="$(wait_for_keeper_children "keeper participant promotion_results" "/housekeeper/v1/storage_integrity/promotion_results/$statement_id" 180)" || die "no participant promotion result ledger found"
+    for participant in r1 r2 r3; do
+        [[ "$promotion_participants" == *"$participant"* ]] || die "promotion results missing participant $participant: $promotion_participants"
+    done
+
+    local audit_id="audit-$statement_id"
+    wait_for_keeper_path "keeper safeAudit task" "/housekeeper/v1/safe_audits/tasks/$audit_id" 180
+    wait_for_keeper_children_contains "keeper safeAudit votes" "/housekeeper/v1/safe_audits/votes/$audit_id" 180 r1 r2 r3
+    wait_for_keeper_data_contains "keeper safeAudit decision" "/housekeeper/v1/safe_audits/decisions/$audit_id" "status=majority" 180
+
+    wait_for_query_value "client SELECT routes to safe" "$CLIENT_HG_PORT" "SELECT concat(toString(count()), ':', groupArray(v)[1]) FROM realbin.t" "2:a" 60
+
+    local statements finality promotions promotion_results unsafe_results attestations replay_decision safe_audit_votes safe_audit_decision
+    statements="$(keeper_ls "/housekeeper/v1/storage_integrity/statements" | tr -d '\r' | tail -n 1 || true)"
+    finality="$(keeper_ls "/housekeeper/v1/storage_integrity/finality" | tr -d '\r' | tail -n 1 || true)"
+    promotions="$(keeper_ls "/housekeeper/v1/storage_integrity/promotions" | tr -d '\r' | tail -n 1 || true)"
+    promotion_results="$(keeper_ls "/housekeeper/v1/storage_integrity/promotion_results" | tr -d '\r' | tail -n 1 || true)"
+    unsafe_results="$(keeper_ls "/housekeeper/v1/storage_integrity/unsafe_results" | tr -d '\r' | tail -n 1 || true)"
+    attestations="$(keeper_ls "/housekeeper/v1/storage_integrity/attestations/$statement_id" | tr -d '\r' | tail -n 1 || true)"
+    replay_decision="$(keeper_get "/housekeeper/v1/storage_integrity/decisions/$statement_id" | tr -d '\r' || true)"
+    safe_audit_votes="$(keeper_ls "/housekeeper/v1/safe_audits/votes/$audit_id" | tr -d '\r' | tail -n 1 || true)"
+    safe_audit_decision="$(keeper_get "/housekeeper/v1/safe_audits/decisions/$audit_id" | tr -d '\r' || true)"
+
+    log "keeper statements=$statements"
+    log "keeper attestations/$statement_id=$attestations"
+    log "keeper replay_decision=$replay_decision"
+    log "keeper unsafe_results=$unsafe_results"
+    log "keeper finality=$finality"
+    log "keeper promotions=$promotions"
+    log "keeper promotion_results=$promotion_results"
+    log "keeper safe_audit_votes/$audit_id=$safe_audit_votes"
+    log "keeper safe_audit_decision=$safe_audit_decision"
+    [[ -n "$statements" && "$statements" != "[]" ]] || die "no statement ledger found"
+    [[ -n "$attestations" && "$attestations" != "[]" ]] || die "no replay attestation ledger found"
+    [[ -n "$unsafe_results" && "$unsafe_results" != "[]" ]] || die "no unsafe result ledger found"
+    [[ -n "$finality" && "$finality" != "[]" ]] || die "no finality ledger found"
+    [[ -n "$promotion_results" && "$promotion_results" != "[]" ]] || die "no promotion result ledger found"
+    [[ -n "$safe_audit_votes" && "$safe_audit_votes" != "[]" ]] || die "no safeAudit vote ledger found"
+
+    log "E2E PASS: client HG signed/materialized INSERT -> server HG sql-rewriter -> real replay quorum -> unsafe quorum -> finality -> attach-partition promotion -> real safeAudit -> safe SELECT"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    run_storage_integrity_happy_path
+fi
