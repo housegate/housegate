@@ -8,6 +8,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ClickHouse/ch-go/proto"
 
@@ -179,6 +180,48 @@ func TestPluginSubmitsInsertAfterQueryCompleteWhenClientDataTerminatorSeen(t *te
 	}
 }
 
+func TestPluginSubmitsInsertAfterClientDataTerminatorDelay(t *testing.T) {
+	ctx := context.Background()
+	payloads, err := core.NewMockPayloadStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewMockPayloadStore: %v", err)
+	}
+	sink := &channelIngressSink{records: make(chan core.InsertRecord, 1)}
+	p := New(Config{
+		UnsafeDatabase:    "hg_unsafe",
+		SafeDatabase:      "hg_safe",
+		UnsafeTableSuffix: "_a",
+	}, payloads, sink)
+	p.terminatorDelay = time.Millisecond
+	sess := newFakeSession(47)
+	sess.state.ClientRevision = 54453
+	qctx := &plugin.QueryContext{
+		Session:     sess,
+		OriginalSQL: "INSERT INTO realbin.t VALUES (1, 'a')",
+		Query: &chproto.Query{
+			ID:   "insert-qid-terminator-delay",
+			Body: "INSERT INTO realbin.t VALUES (1, 'a')",
+		},
+		StatementType: sqlmeta.StatementTypeUnspecified,
+	}
+
+	if err := p.OnQuery(ctx, qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	if err := p.OnClientData(ctx, qctx, emptyClientDataPacket()); err != nil {
+		t.Fatalf("OnClientData terminator: %v", err)
+	}
+
+	select {
+	case rec := <-sink.records:
+		if rec.StatementID != "insert-qid-terminator-delay" {
+			t.Fatalf("StatementID = %q", rec.StatementID)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for delayed terminator submission")
+	}
+}
+
 func TestPluginRewritesSelectToSafe(t *testing.T) {
 	p := New(Config{
 		UnsafeDatabase:    "hg_unsafe",
@@ -298,6 +341,15 @@ type failingIngressSink struct {
 
 func (s failingIngressSink) SubmitInsert(context.Context, core.InsertRecord) error {
 	return s.err
+}
+
+type channelIngressSink struct {
+	records chan core.InsertRecord
+}
+
+func (s *channelIngressSink) SubmitInsert(_ context.Context, rec core.InsertRecord) error {
+	s.records <- rec
+	return nil
 }
 
 func emptyClientDataPacket() []byte {

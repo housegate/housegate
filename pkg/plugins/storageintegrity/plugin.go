@@ -25,15 +25,18 @@ type Config struct {
 	UnsafeTableSuffix string
 }
 
+const defaultTerminatorDelay = time.Second
+
 type Plugin struct {
 	layout   core.TableLayout
 	payloads *core.MockPayloadStore
 	sink     core.IngressSink
 
-	mu      sync.Mutex
-	active  map[int64]*insertCapture
-	now     func() time.Time
-	newStmt func(*plugin.QueryContext) string
+	mu              sync.Mutex
+	active          map[int64]*insertCapture
+	now             func() time.Time
+	newStmt         func(*plugin.QueryContext) string
+	terminatorDelay time.Duration
 }
 
 type insertCapture struct {
@@ -45,6 +48,7 @@ type insertCapture struct {
 	safeTable   string
 	dataPackets [][]byte
 	startedAt   time.Time
+	timer       *time.Timer
 }
 
 func New(cfg Config, payloads *core.MockPayloadStore, sink core.IngressSink) *Plugin {
@@ -54,11 +58,12 @@ func New(cfg Config, payloads *core.MockPayloadStore, sink core.IngressSink) *Pl
 			SafeDatabase:      cfg.SafeDatabase,
 			UnsafeTableSuffix: cfg.UnsafeTableSuffix,
 		}),
-		payloads: payloads,
-		sink:     sink,
-		active:   map[int64]*insertCapture{},
-		now:      time.Now,
-		newStmt:  defaultStatementID,
+		payloads:        payloads,
+		sink:            sink,
+		active:          map[int64]*insertCapture{},
+		now:             time.Now,
+		newStmt:         defaultStatementID,
+		terminatorDelay: defaultTerminatorDelay,
 	}
 }
 
@@ -112,6 +117,16 @@ func (p *Plugin) OnClientData(ctx context.Context, qctx *plugin.QueryContext, ra
 		"revision", revision,
 		"terminator", complete,
 	)
+	if complete && cap.timer == nil {
+		sessionID := qctx.Session.ID()
+		delay := p.terminatorDelay
+		if delay <= 0 {
+			delay = defaultTerminatorDelay
+		}
+		cap.timer = time.AfterFunc(delay, func() {
+			p.finalizeSession(context.Background(), sessionID, cap)
+		})
+	}
 	p.mu.Unlock()
 	return nil
 }
@@ -120,9 +135,21 @@ func (p *Plugin) OnQueryComplete(ctx context.Context, sess chsession.Session) {
 	if p == nil || sess == nil {
 		return
 	}
+	p.finalizeSession(ctx, sess.ID(), nil)
+}
+
+func (p *Plugin) finalizeSession(ctx context.Context, sessionID int64, expected *insertCapture) {
 	p.mu.Lock()
-	cap := p.active[sess.ID()]
-	delete(p.active, sess.ID())
+	cap := p.active[sessionID]
+	if expected != nil && cap != expected {
+		p.mu.Unlock()
+		return
+	}
+	delete(p.active, sessionID)
+	if cap != nil && cap.timer != nil {
+		cap.timer.Stop()
+		cap.timer = nil
+	}
 	p.mu.Unlock()
 	p.finalizeCapture(ctx, cap)
 }
@@ -189,9 +216,7 @@ func (p *Plugin) OnException(ctx context.Context, sess chsession.Session, _ *chp
 	if p == nil || sess == nil {
 		return nil
 	}
-	p.mu.Lock()
-	delete(p.active, sess.ID())
-	p.mu.Unlock()
+	p.dropCapture(sess.ID())
 	return nil
 }
 
@@ -199,8 +224,17 @@ func (p *Plugin) OnClose(sess chsession.Session) {
 	if p == nil || sess == nil {
 		return
 	}
+	p.dropCapture(sess.ID())
+}
+
+func (p *Plugin) dropCapture(sessionID int64) {
 	p.mu.Lock()
-	delete(p.active, sess.ID())
+	cap := p.active[sessionID]
+	delete(p.active, sessionID)
+	if cap != nil && cap.timer != nil {
+		cap.timer.Stop()
+		cap.timer = nil
+	}
 	p.mu.Unlock()
 }
 
