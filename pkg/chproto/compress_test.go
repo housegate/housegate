@@ -36,6 +36,33 @@ func buildEmptyUncompressedDataPacket(t *testing.T) []byte {
 	return append([]byte(nil), buf.Buf...)
 }
 
+func buildEmptyUncompressedDataPacketWithField3(t *testing.T) []byte {
+	t.Helper()
+	var buf proto.Buffer
+	buf.PutUVarInt(uint64(proto.ClientCodeData))
+	buf.PutString("")
+	buf.PutUVarInt(1)
+	buf.PutBool(false)
+	buf.PutUVarInt(2)
+	buf.PutInt32(-1)
+	buf.PutUVarInt(3)
+	buf.PutUVarInt(0)
+	buf.PutUVarInt(0)
+	buf.PutUVarInt(0)
+	buf.PutUVarInt(0)
+	return append([]byte(nil), buf.Buf...)
+}
+
+func TestIsEmptyClientDataBlockAcceptsClickHouse26BlockInfo(t *testing.T) {
+	empty, err := IsEmptyClientDataBlock(buildEmptyUncompressedDataPacketWithField3(t), 54484)
+	if err != nil {
+		t.Fatalf("IsEmptyClientDataBlock: %v", err)
+	}
+	if !empty {
+		t.Fatal("IsEmptyClientDataBlock = false, want true")
+	}
+}
+
 // TestSplice_DataBlock_Empty_Uncompressed proves walkDataBlock consumes an
 // empty Data block (columns=0, rows=0) via the fast path, and Splice forwards
 // the full packet bytes unchanged.

@@ -1,6 +1,7 @@
 package chproto
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 
@@ -85,6 +86,36 @@ func decodeBlockInfoCompat(r *proto.Reader) (*blockInfoCompat, int, error) {
 			return nil, consumed, fmt.Errorf("BlockInfo unknown field %d (cannot skip safely)", f)
 		}
 	}
+}
+
+// IsEmptyClientDataBlock reports whether raw is a client Data packet carrying
+// the empty block that terminates a ClickHouse native INSERT data stream.
+func IsEmptyClientDataBlock(raw []byte, revision int) (bool, error) {
+	r := proto.NewReader(bytes.NewReader(raw))
+	code, err := r.UVarInt()
+	if err != nil {
+		return false, fmt.Errorf("packet code: %w", err)
+	}
+	if code != uint64(ClientDataCode) {
+		return false, nil
+	}
+	if _, err := r.Str(); err != nil {
+		return false, fmt.Errorf("data block name: %w", err)
+	}
+	if proto.FeatureBlockInfo.In(revision) {
+		if _, _, err := decodeBlockInfoCompat(r); err != nil {
+			return false, fmt.Errorf("BlockInfo decode: %w", err)
+		}
+	}
+	columns, err := r.UVarInt()
+	if err != nil {
+		return false, fmt.Errorf("num_columns: %w", err)
+	}
+	rows, err := r.UVarInt()
+	if err != nil {
+		return false, fmt.Errorf("num_rows: %w", err)
+	}
+	return columns == 0 && rows == 0, nil
 }
 
 // walkDataBlock consumes one Data-block body. The block_name (short string)

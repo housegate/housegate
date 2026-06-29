@@ -10,8 +10,6 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/ClickHouse/ch-go/proto"
-
 	"housegate/housegate/pkg/chproto"
 	"housegate/housegate/pkg/chsession"
 	"housegate/housegate/pkg/log"
@@ -185,22 +183,8 @@ func (p *Plugin) finalizeCapture(ctx context.Context, cap *insertCapture) {
 }
 
 func isClientDataTerminator(raw []byte, revision int) bool {
-	r := proto.NewReader(bytes.NewReader(raw))
-	code, err := r.UVarInt()
-	if err != nil || code != uint64(chproto.ClientDataCode) {
-		return false
-	}
-	if _, err := r.Str(); err != nil {
-		return false
-	}
-	var (
-		results proto.Results
-		block   proto.Block
-	)
-	if err := block.DecodeBlock(r, revision, results.Auto()); err != nil {
-		return false
-	}
-	return block.Columns == 0 && block.Rows == 0
+	empty, err := chproto.IsEmptyClientDataBlock(raw, revision)
+	return err == nil && empty
 }
 
 func (p *Plugin) OnException(ctx context.Context, sess chsession.Session, _ *chproto.Exception) error {
