@@ -136,7 +136,7 @@ func (r ClickHouseUnsafeDigestReader) ReadUnsafeDigest(ctx context.Context, repl
 }
 
 type unsafeDigestConn interface {
-	QueryRow(ctx context.Context, query string, args ...any) driver.Row
+	Query(ctx context.Context, query string, args ...any) (driver.Rows, error)
 }
 
 func queryUnsafePartsDigest(ctx context.Context, conn unsafeDigestConn, databaseName, tableName string, rowCount *uint64, rowsHash *string) error {
@@ -146,7 +146,26 @@ func queryUnsafePartsDigest(ctx context.Context, conn unsafeDigestConn, database
 	}
 	var lastErr error
 	for _, query := range queries {
-		if err := conn.QueryRow(ctx, query, databaseName, tableName).Scan(rowCount, rowsHash); err != nil {
+		rows, err := conn.Query(ctx, query, databaseName, tableName)
+		if err != nil {
+			lastErr = err
+			if ctx.Err() != nil {
+				break
+			}
+			continue
+		}
+		if !rows.Next() {
+			if err := rows.Err(); err != nil {
+				lastErr = err
+			} else {
+				lastErr = fmt.Errorf("query returned no rows")
+			}
+			if ctx.Err() != nil {
+				break
+			}
+			continue
+		}
+		if err := rows.Scan(rowCount, rowsHash); err != nil {
 			lastErr = err
 			if ctx.Err() != nil {
 				break
