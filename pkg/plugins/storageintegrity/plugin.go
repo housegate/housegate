@@ -74,6 +74,14 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 		return p.onInsert(qctx)
 	case sqlmeta.StatementTypeSelect:
 		return p.onSelect(qctx)
+	case sqlmeta.StatementTypeUnspecified:
+		switch inferStatementTypeFromSQL(firstNonEmpty(qctx.OriginalSQL, qctx.Query.Body)) {
+		case sqlmeta.StatementTypeInsert:
+			return p.onInsert(qctx)
+		case sqlmeta.StatementTypeSelect:
+			return p.onSelect(qctx)
+		}
+		return nil
 	default:
 		return nil
 	}
@@ -251,6 +259,24 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func inferStatementTypeFromSQL(sql string) sqlmeta.StatementType {
+	sql = strings.TrimLeftFunc(sql, unicode.IsSpace)
+	if keywordPrefix(sql, "insert") {
+		return sqlmeta.StatementTypeInsert
+	}
+	if keywordPrefix(sql, "select") {
+		return sqlmeta.StatementTypeSelect
+	}
+	return sqlmeta.StatementTypeUnspecified
+}
+
+func keywordPrefix(sql, keyword string) bool {
+	if len(sql) < len(keyword) || !strings.EqualFold(sql[:len(keyword)], keyword) {
+		return false
+	}
+	return isBoundary(sql, len(keyword))
 }
 
 func replaceTargetAfterKeyword(sql, keyword, target string) (string, error) {

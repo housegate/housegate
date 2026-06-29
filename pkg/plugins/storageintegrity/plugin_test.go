@@ -111,6 +111,29 @@ func TestPluginRewritesInsertFromRawSQLWhenMetadataMissing(t *testing.T) {
 	}
 }
 
+func TestPluginRewritesUnclassifiedRawInsertWhenRewriterUnavailable(t *testing.T) {
+	p := New(Config{
+		UnsafeDatabase:    "hg_unsafe",
+		SafeDatabase:      "hg_safe",
+		UnsafeTableSuffix: "_a",
+	}, nil, nil)
+	qctx := &plugin.QueryContext{
+		Session:     newFakeSession(45),
+		OriginalSQL: "INSERT INTO realbin.t VALUES (1, 'a')",
+		Query: &chproto.Query{
+			Body: "INSERT INTO realbin.t VALUES (1, 'a')",
+		},
+		StatementType: sqlmeta.StatementTypeUnspecified,
+	}
+
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	if got, want := qctx.Query.Body, "INSERT INTO `hg_unsafe`.`realbin.t_a` VALUES (1, 'a')"; got != want {
+		t.Fatalf("rewritten SQL = %q, want %q", got, want)
+	}
+}
+
 func TestPluginRewritesSelectToSafe(t *testing.T) {
 	p := New(Config{
 		UnsafeDatabase:    "hg_unsafe",
