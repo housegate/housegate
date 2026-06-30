@@ -45,6 +45,8 @@ base spec §9 图里的 replay 副本(R1/R2)在本文中称为 **Verifier**。�
 
 Sequencer **只做控制平面**——定序、裁决、签名。它不存用户 part、热路径上不执行用户 SQL、也绝不和 ClickHouse Keeper 通信。所有字节都在数据平面。
 
+**SNode 是一个角色,不是独立守护进程。** 本文中的 "SNode" 指存储编排职责——执行 source 写、建 `hg_promote`、跑 Sequencer 签名的 `REPLACE PARTITION`、drop 被拒 part、跑 `hg_unsafe` 清理与 safe 表审计,以及承载面向 Sequencer 的客户端(`RegisterRC`、订阅提升、ack)。部署上,这些由与 ClickHouse 同机、**已内嵌 HouseGate 代理库**的那个 Go 进程(今天的 `sentio-node`)实现;**没有独立的 SNode 守护进程**。把 SNode 与 HouseGate 保留为两个**角色**,是因为它们是两种不同性质的活——HouseGate 是在 client↔ClickHouse 原生协议**路径上**的 dataplane 代理,而 SNode 角色是**带外**、针对 ClickHouse 存储的控制面编排——工程上最好组织成同进程内的独立模块,而不是又往转发链上加 plugin。两者都在**不受信的 operator 侧**(base-spec §4),所以同机不改变信任模型:完整性始终来自 Sequencer + Verifier 法定多数。唯一不能合并的边界是 operator 侧(HouseGate/SNode/Verifier) vs **受信、独立的 Sequencer 控制面**——把 Sequencer 折进 operator 进程会抹掉 §1 依赖的外部仲裁者。
+
 ```text
                          ┌─────────────────────────────────────────────┐
                          │   SENTIO SEQUENCER  (control plane, new, Go)  │
@@ -111,7 +113,7 @@ external (to be created): github.com/housegate/sequencer-go/gen/pb   # wire cont
 
 复用边界很重要、而且容易写过头:`pkg/replay` 今天有 `ReplayJob`、`ReplayAttestation`、`ExecutionReceipt`、`SafeSnapshotManifest`、`PartitionCommitment`、`PartManifestEntry`,以及 `Statement` 这个 *replay 投影* ——但**没有** `StatementEnvelopeV2`(签名 envelope)、**没有** `RCRecord`(结果声明)、**没有**任何 delta 类型。这些都是本设计在 `sequencer-go` proto 与 `pkg/sequencer` 中**新引入**的类型。`sequencer-go` 模块尚不存在,在 P0 创建(§12)。
 
-**Verifier** 是数据平面上一个独立的小进程(和每个 ClickHouse 副本同机),内嵌 `pkg/replay.Verifier` + `chexec` + `payloadexec.Ed25519Signer`,以及一个**新的字节侧扫描器**(全新代码,用 `pkg/lthash` 原语——`chexec` 只物化 scratch 表,不会按 `_part` 扫已有的磁盘 part)。它是 Sequencer 的**客户端**,不属于 Sequencer 进程。Sequencer 也可以内嵌 `pkg/replay`,但只用于 base-spec §5.2 那个可选的 challenge 参考执行器。
+**Verifier** 是数据平面上与每个 ClickHouse 副本同机的组件,内嵌 `pkg/replay.Verifier` + `chexec` + `payloadexec.Ed25519Signer`,以及一个**新的字节侧扫描器**(全新代码,用 `pkg/lthash` 原语——`chexec` 只物化 scratch 表,不会按 `_part` 扫已有的磁盘 part)。它是 Sequencer 的**客户端**、独立于 Sequencer 进程;它可以独立运行,也可以和 HouseGate/SNode 角色同进程——因为 quorum 独立性要求的是**跨节点** ≥2 个非 source verifier,而非进程内。Sequencer 也可以内嵌 `pkg/replay`,但只用于 base-spec §5.2 那个可选的 challenge 参考执行器。
 
 `cmd/sequencer` 二进制遵循仓库其余部分的生命周期约定:加载 `pkg/config`、串一个 signal 取消的 context、通过 `pkg/replicationproxy` 那套 `listenerRunner`/`serverListener` 模式暴露 gRPC listener(`Serve(ctx, ln) error`,context 取消时优雅关闭),用 `pkg/log` 的 `FromContext`/`Infow` 打日志。
 
