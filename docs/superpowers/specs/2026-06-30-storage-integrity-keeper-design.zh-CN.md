@@ -17,7 +17,7 @@
 Sentio Sequencer 与 ClickHouse Keeper **既无代码关系，也无协议关系**：
 
 - 我们**不** fork、patch、embed 或重新实现它。ClickHouse Keeper 仍是外部 C++ 依赖，原样部署。
-- 我们**不**从 Go 端说 ZooKeeper wire protocol。ClickHouse Keeper 被当作 ClickHouse 与之通信的不透明协调服务；integrity layer 绝不把它的 znodes 当作 safe-state 语义的事实源。
+- 我们**不**从 Go 端说 ZooKeeper wire protocol。ClickHouse Keeper 被当作 ClickHouse 与之通信的不透明协调服务；integrity layer 绝不把它的 znodes 当作 integrity state 的事实源。
 - 本仓库的 [`pkg/replicationproxy`](../../../pkg/replicationproxy) `KeeperServer` 是一个 **L4 TCP 透传**，可选地转发 ClickHouse↔Keeper 连接用于网络隔离（让一个 ClickHouse 实例只对其 co-located HouseGate 开 TCP）。它只搬字节，不解释字节，而且明确**不是 integrity gate**（[storage design §16](2026-06-22-storage-integrity-design.md)）。那个组件是关于 ClickHouse Keeper 的，不是关于 Sequencer 的。
 
 因此这里**不存在 "用 Go 重写 clickhouse-keeper" 的项目**。C++ 代码留在它该留的地方。选择 "Sentio Sequencer" 这个名字，部分原因就是为了让这个边界显而易见：sequencer 负责 sequencing L3 blocks，ClickHouse Keeper 负责 ReplicatedMergeTree 的协调，两者绝不混为一谈。
@@ -42,7 +42,7 @@ Sentio Sequencer 与 ClickHouse Keeper **既无代码关系，也无协议关系
 
 1. 给 §5.2 的职责清单一个具体架构：组件、接口、durable state、共识边界和签名方案。
 2. 冻结 Go 包映射和关键 interface 签名，让 P0/P1 工作对着固定目标推进。
-3. **保持 storage design 的安全谓词不变**——尤其是 [§9](2026-06-22-storage-integrity-design.md) 的三方 promotion 谓词（replay quorum **AND** partition-delta **AND** byte-side `part_row_lthash`），它绝不能退化为 root equality。
+3. **保持 storage design 的安全谓词不变**——尤其是 [§9](2026-06-22-storage-integrity-design.md) 的三方 promotion 谓词（replay quorum **AND** partition-delta **AND** byte-side `part_row_lthash`），它绝不能退化为 root-only promotion。
 4. 把 Sequencer HA 当作 v1 关键关注点对待，因为 storage design 已证明（[§12.3 后果 4](2026-06-22-storage-integrity-design.md)）v1 写可用性是 `Sequencer_liveness × promotion_throughput ≥ ingest_rate`。
 5. 按名复用 [`pkg/replay`](../../../pkg/replay) 对象，而不是另起炉灶。
 
@@ -319,7 +319,7 @@ verifier replicas *独立于* Sequencer 进程（它们持有 pinned ClickHouse 
 
 ### 6.2 三方 promotion 谓词（子系统 5）
 
-Promotion **不是** root equality。它是三个检查的合取，每一个都承重，完全如同 [storage design §9](2026-06-22-storage-integrity-design.md)：
+Promotion **不是** root-only equality。它是三个检查的合取，每一个都承重，完全如同 [storage design §9](2026-06-22-storage-integrity-design.md)：
 
 1. **Replay 检查** —— 一个 quorum（≥2 of 3）的 replicas 独立 replay 已签名 L3 payload 并产出与 `RCRecord.source_claim_state_root` 相同的 `computed_state_root`。*证明 payload 的正确执行产出此 root。*
 2. **Partition-delta 检查** —— 对每个 touched partition，source 上报的 `Σ(candidate_parts.part_row_lthash)` 等于 replicas 在 replay 时算出的 partition delta。*把 source 的 per-part claim 绑定到 replay root；击败共谋 source——否则它会为 evil rows 上报求和等于正确 delta 的 per-part hash，没有碰撞则不可行，而 per-row `_hg_row_id` 排除了碰撞。*
@@ -327,7 +327,7 @@ Promotion **不是** root equality。它是三个检查的合取，每一个都�
 
 **三项中任一失败，promotion 拒绝。** 没有 checks 2 和 3 的 root match 显式 *不是* promotion，且 2 和 3 互补，不冗余：check 2 关闭 "为 `bytes_evil` 上报看起来正确的 `part_row_lthash`" 这一半；check 3 关闭 "为 `bytes_evil` 上报 hash 但存了不同字节" 这一半。Promotion 链是 `root —check 2→ Σ source per-part claim —check 3→ 实际磁盘字节`；每个环节都需要。
 
-> **Spec 守卫。** 任何让 part 仅凭 root equality 进入 `hg_safe` 的代码改动都是正确性回归，不是优化。该谓词的 P0 freeze 正是 [acceptance grep](#验证) 要检查的。
+> **Spec 守卫。** 任何让 part 仅凭 root-only check 进入 `hg_safe` 的代码改动都是正确性回归，不是优化。该谓词的 P0 freeze 正是 [acceptance grep](#验证) 要检查的。
 
 ### 6.3 INSERT vs mutation 路径
 
@@ -340,7 +340,7 @@ Promotion **不是** root equality。它是三个检查的合取，每一个都�
 
 ### 6.4 Challenge replay
 
-mismatch 或超时会开 challenge replay。**Challenge 裁决用与 promotion 相同的三方谓词**（[storage design §11](2026-06-22-storage-integrity-design.md)）——它 *不* 仅凭 reproduced-root equality 解决，因为那正是该谓词要拒绝的 `bytes_evil`-with-truthful-root 情况。一个签名 mismatch attestation（`MatchSourceRoot=false`，仍由 `replay.Verifier` 签）是不可抵赖的 challenge 证据。v1 中心化 Sequencer 立即裁决（无 challenge window）；challenge-window 安全模型是去中心化阶段（[§9](#9-共识与-ha)）的事。
+mismatch 或超时会开 challenge replay。**Challenge 裁决用与 promotion 相同的三方谓词**（[storage design §11](2026-06-22-storage-integrity-design.md)）——它 *不* 仅凭 reproduced-root equality 本身解决，因为那正是该谓词要拒绝的 `bytes_evil`-with-truthful-root 情况。一个签名 mismatch attestation（`MatchSourceRoot=false`，仍由 `replay.Verifier` 签）是不可抵赖的 challenge 证据。v1 中心化 Sequencer 立即裁决（无 challenge window）；challenge-window 安全模型是去中心化阶段（[§9](#9-共识与-ha)）的事。
 
 ### 6.5 Promotion 命令签发与 CAS
 
@@ -676,8 +676,11 @@ type Sharder interface { /* 同 §9.2 */ }
 
 本文档对已批准计划中的要求自检。接受 grep：
 
-- **必须包含** —— `Sentio Sequencer`、`ClickHouse Keeper`、`Ed25519`、`secp256k1`、`REPLACE PARTITION`、`three-way`、`multi-Raft`、`pkg/sequencer`、`statement_seq`、`statement_id`、`SafeSnapshotManifest`、`PromotionCommand`（以上均已呈现）。
-- **必须不包含** —— `fork ClickHouse`、`root equality alone`，或任何把 `ClickHouse Keeper` 坍缩成 `PromotionCommand` 权威的措辞（均无；两个 Keeper 角色在 [§1](#1-定位与术语) 分离，且从未再被混用）。
+- **必须包含** —— 以下三组（以上均已呈现）：
+  - component-boundary terms：`Sentio Sequencer`、`ClickHouse Keeper`、`Go`、`C++`、`ZooKeeper-compatible`
+  - sequencing terms：`pkg/sequencer`、`statement_seq`、`statement_id`、`multi-Raft`
+  - promotion/replay terms：`Ed25519`、`secp256k1`、`REPLACE PARTITION`、`three-way`、`SafeSnapshotManifest`、`ReplayAttestation`、`PromotionCommand`
+- **必须不包含** —— ClickHouse fork/rewrite plan、root-only promotion predicate，或任何把 C++ coordination service 说成 promotion authority 的措辞（均无；两个 Keeper 角色在 [§1](#1-定位与术语) 分离，且从未再被混用）。
 
 ## 13. 参考文献
 

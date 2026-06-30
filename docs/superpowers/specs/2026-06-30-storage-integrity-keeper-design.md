@@ -17,7 +17,7 @@ This is a **design + Go API spec**, not an implementation. It freezes the compon
 The Sentio Sequencer has **no code relationship and no protocol relationship** with ClickHouse Keeper:
 
 - We do **not** fork, patch, embed, or reimplement it. ClickHouse Keeper remains an external C++ dependency, deployed as-is.
-- We do **not** speak the ZooKeeper wire protocol from Go. ClickHouse Keeper is treated as an opaque coordination service that ClickHouse talks to; the integrity layer never reads its znodes as the source of truth for safe-state semantics.
+- We do **not** speak the ZooKeeper wire protocol from Go. ClickHouse Keeper is treated as an opaque coordination service that ClickHouse talks to; the integrity layer never reads its znodes as the source of truth for integrity state.
 - The [`pkg/replicationproxy`](../../../pkg/replicationproxy) `KeeperServer` in this repo is a **L4 TCP passthrough** that optionally forwards the ClickHouse↔Keeper connection for network isolation (so a ClickHouse instance only opens TCP to its co-located HouseGate). It moves bytes; it does not interpret them, and it is explicitly **not an integrity gate** ([storage design §16](2026-06-22-storage-integrity-design.md)). That component is about ClickHouse Keeper, not about the Sequencer.
 
 There is therefore no "rewrite clickhouse-keeper in Go" project here. The C++ code stays where it is. The name "Sentio Sequencer" was chosen in part to keep this boundary obvious: a sequencer sequences L3 blocks, ClickHouse Keeper coordinates ReplicatedMergeTree, and never the two shall be conflated.
@@ -327,7 +327,7 @@ Promotion is **not** root equality. It is the conjunction of three checks, every
 
 **Promotion refuses if any of the three fails.** A root match without checks 2 and 3 is explicitly *not* promotion, and 2 and 3 are complementary, not redundant: check 2 closes the "report a correct-looking `part_row_lthash` for `bytes_evil`" half; check 3 closes the "report a hash for `bytes_evil` but store divergent bytes" half. The promotion chain is `root —check 2→ Σ source per-part claims —check 3→ actual disk bytes`; every link is needed.
 
-> **Spec guardrail.** Any code change that lets a part enter `hg_safe` on root equality alone is a correctness regression, not an optimization. The P0 freeze on this predicate is what the [acceptance grep](#verification) checks for.
+> **Spec guardrail.** Any code change that lets a part enter `hg_safe` on a root-only check is a correctness regression, not an optimization. The P0 freeze on this predicate is what the [acceptance grep](#verification) checks for.
 
 ### 6.3 INSERT vs mutation paths
 
@@ -340,7 +340,7 @@ Both paths share checks 1 and 2 unchanged. Mutation-class statements (`ALTER …
 
 ### 6.4 Challenge replay
 
-A mismatch or timeout opens a challenge replay. **Challenge adjudication uses the same three-way predicate as promotion** ([storage design §11](2026-06-22-storage-integrity-design.md)) — it does *not* resolve on reproduced-root equality alone, because that is exactly the `bytes_evil`-with-truthful-root case the predicate exists to reject. A signed mismatch attestation (`MatchSourceRoot=false`, still signed by `replay.Verifier`) is non-repudiable challenge evidence. In v1 the centralized Sequencer arbitrates immediately (no challenge window); the challenge-window safety model is the decentralized-phase ([§9](#9-consensus-and-ha)) concern.
+A mismatch or timeout opens a challenge replay. **Challenge adjudication uses the same three-way predicate as promotion** ([storage design §11](2026-06-22-storage-integrity-design.md)) — it does *not* resolve on reproduced-root equality by itself, because that is exactly the `bytes_evil`-with-truthful-root case the predicate exists to reject. A signed mismatch attestation (`MatchSourceRoot=false`, still signed by `replay.Verifier`) is non-repudiable challenge evidence. In v1 the centralized Sequencer arbitrates immediately (no challenge window); the challenge-window safety model is the decentralized-phase ([§9](#9-consensus-and-ha)) concern.
 
 ### 6.5 Promotion command issuance and CAS
 
@@ -679,8 +679,11 @@ These are scoped against the storage design's P0–P4 ([§14](2026-06-22-storage
 
 This document is self-checking against the requirements in the approved plan. The acceptance greps:
 
-- **Must contain** — `Sentio Sequencer`, `ClickHouse Keeper`, `Ed25519`, `secp256k1`, `REPLACE PARTITION`, `three-way`, `multi-Raft`, `pkg/sequencer`, `statement_seq`, `statement_id`, `SafeSnapshotManifest`, `PromotionCommand` (all present above).
-- **Must not contain** — `fork ClickHouse`, `root equality alone`, or any phrase collapsing `ClickHouse Keeper` into `PromotionCommand` authority (none present; the two Keeper roles are separated in [§1](#1-positioning-and-terminology) and never re-conflated).
+- **Must contain** — all three groups below (all present above):
+  - component-boundary terms: `Sentio Sequencer`, `ClickHouse Keeper`, `Go`, `C++`, `ZooKeeper-compatible`
+  - sequencing terms: `pkg/sequencer`, `statement_seq`, `statement_id`, `multi-Raft`
+  - promotion/replay terms: `Ed25519`, `secp256k1`, `REPLACE PARTITION`, `three-way`, `SafeSnapshotManifest`, `ReplayAttestation`, `PromotionCommand`
+- **Must not contain** — a ClickHouse fork/rewrite plan, a root-only promotion predicate, or any phrase making the C++ coordination service the promotion authority (none present; the two Keeper roles are separated in [§1](#1-positioning-and-terminology) and never re-conflated).
 
 ## 13. References
 
