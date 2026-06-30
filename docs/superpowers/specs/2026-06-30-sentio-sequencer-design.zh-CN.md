@@ -34,7 +34,7 @@ base spec §9 图里的 replay 副本(R1/R2)在本文中称为 **Verifier**。�
 非目标 (v1):
 
 1. 在热路径上执行用户 SQL(Sequencer 派发 replay;Verifier 执行)。
-2. 按 `keeper_shard` 的多 Raft 分片(前瞻见 §12;v1 是单 Raft 组)。
+2. 按 `keeper_shard` 的多 Raft 分片(前瞻见 §10.6;v1 是单 Raft 组)。
 3. 阈值/多签 authority 签名、challenge 窗口、链上 DA(P5+;结构上给三者都留了口)。
 4. v1 INSERT 路径之外的 mutation(`UPDATE`/`DELETE`)定序细节(P2;§9 仅作为可扩展性说明点名)。
 5. 兼容 ZooKeeper 协议,或与 ClickHouse Keeper 有任何交互。
@@ -116,6 +116,56 @@ external (to be created): github.com/housegate/sequencer-go/gen/pb   # wire cont
 **Verifier** 是数据平面上与每个 ClickHouse 副本同机的组件,内嵌 `pkg/replay.Verifier` + `chexec` + `payloadexec.Ed25519Signer`,以及一个**新的字节侧扫描器**(全新代码,用 `pkg/lthash` 原语——`chexec` 只物化 scratch 表,不会按 `_part` 扫已有的磁盘 part)。它是 Sequencer 的**客户端**、独立于 Sequencer 进程;它可以独立运行,也可以和 HouseGate/SNode 角色同进程——因为 quorum 独立性要求的是**跨节点** ≥2 个非 source verifier,而非进程内。Sequencer 也可以内嵌 `pkg/replay`,但只用于 base-spec §5.2 那个可选的 challenge 参考执行器。
 
 `cmd/sequencer` 二进制遵循仓库其余部分的生命周期约定:加载 `pkg/config`、串一个 signal 取消的 context、通过 `pkg/replicationproxy` 那套 `listenerRunner`/`serverListener` 模式暴露 gRPC listener(`Serve(ctx, ln) error`,context 取消时优雅关闭),用 `pkg/log` 的 `FromContext`/`Infow` 打日志。
+
+### 3.4 内部接口缝(为 P0/P1 冻结)
+
+base spec(§5.2)要求本子设计冻结"关键接口签名,使 P0/P1 对着一个固定目标推进"。下面就是这些冻结的 Go 边界——只给签名,不给实现。它们刻意把三方判定式**留在 FSM 内**(对已提交 `State` 的纯函数),而非做成 `Orchestrator` 的方法:Orchestrator 只做 I/O,永远不是提升权威(§3.2)。
+
+```go
+// pkg/sequencer/accumulator — statement_id uniqueness (§6)
+type Accumulator interface {
+    Root() []byte                                        // spent_ids_root
+    Insert(c StatementCoord)                             // (account, client_seq); advances the root
+    ProveNonMembership(c StatementCoord) (Proof, error)  // leader/prover side, OUTSIDE Apply
+    VerifyNonMembership(c StatementCoord, p Proof) bool  // deterministic; the only form used IN Apply
+}
+
+// pkg/sequencer/fsm — the deterministic replicated state machine (a raft.FSM)
+type FSM interface {
+    Apply(l *raft.Log) any                               // deterministic; mutates State and evaluates the
+    Snapshot() (raft.FSMSnapshot, error)                 // three-way predicate over committed evidence
+    Restore(rc io.ReadCloser) error
+}
+// the three-way verdict is FSM-internal — func (s *State) threeWay(seq uint64) Verdict — NOT exported and
+// NOT an Orchestrator call; every node recomputes the same verdict from logged signed evidence (§7.3).
+
+// pkg/sequencer/orchestrator — leader-only, side-effectful; proposes commands, never mutates State
+type Orchestrator interface {
+    Run(ctx context.Context) error                       // drain the transition channel; per event do the I/O
+}                                                        // (dispatch ReplayJob, collect attestations, poll
+                                                         // parts, anchor, sign+send PromoteSafePartition) and
+                                                         // propose the resulting Record* command
+
+// signing — reuses pkg/auth (secp256k1) + payloadexec (ed25519); see the §8.1 table
+type PromotionSigner    interface { Sign(cmd PromoteSafePartition) (sig []byte, err error) }            // secp256k1, leader-only use
+type PromotionValidator interface { Authorize(cmd PromoteSafePartition, sig []byte) (addr string, ok bool) } // SNode side, EthValidator
+
+// pkg/sequencer/raftnode — the consensus seam, so the raft library is swappable/testable
+type ConsensusNode interface {
+    Apply(cmd []byte, timeout time.Duration) raft.ApplyFuture
+    VerifyLeader() error
+    LeaderCh() <-chan bool
+    Barrier(timeout time.Duration) error                 // read-index for linearizable SafeState reads
+}
+
+// sharding seam (§10.6) — the v1 implementation returns group 0 for everything
+type Sharder interface {
+    GroupForStatement(StatementEnvelopeV2) GroupID
+    GroupForPartition(TablePartition) GroupID
+    GroupForSchema(schemaSnapshotID string) GroupID
+    Groups() []GroupID
+}
+```
 
 ## 4. 复制状态机
 
@@ -206,6 +256,8 @@ FSM 实现 `hashicorp/raft` 的 `raft.FSM`:
 2. 所有 root/manifest 折叠用整型(`pkg/lthash` 是整型 lane,无浮点歧义)。`Apply` 对收到的 receipt **逐字**重算 `receipt_hash`(hash 前不重排 slice),并据此验签。
 3. 所有时序决定("何时 seal 块 / anchor / 签提升")都在 orchestrator,以显式命令在固定 index 进入日志。
 4. `Apply` 只**验证**证明(如 `SubmitStatement` 携带的 `statement_id` 非成员证明),从不**生成**证明。生成证明需要完整元素集,发生在 leader/prover 侧、`Apply` 之外(§6.4)。
+
+**全层一个 canonical 化 profile。** Sequencer 算的每个 root/commitment 都必须走 `pkg/replay` 的 canonical 化(`canonicalDigest`),每类 commitment 用一个新 domain tag——绝不另起第二套 hash profile——因为整个安全论证都建立在"独立节点从同一证据算出**相同**的根"之上。`canonicalDigest` 目前未导出(`pkg/replay/hash.go`);**P0 把它导出为 `replay.CanonicalDigest`**(或加一个带类型的 helper),使 Sequencer FSM、Verifier、§13/base-spec §13 审计天然共用一个 profile,而非靠约定。
 
 ### 4.4 命令 → 生命周期映射
 
@@ -384,6 +436,13 @@ type PromoteSafePartition struct {
 
 签名是 leader 唯一的特权动作;签发以 `RecordPromotionIssued` 记录供审计。authority secp256k1 key **在所有 Raft 节点上共享**(同样下发),使 failover 后任何被选中的 leader 都能签;leader-only *使用*由 `VerifyLeader()` 强制(§10.2)。SNode 通过恢复 secp256k1 地址并核对 authority allowlist(`pkg/auth` 的 `EthValidator` 模式)来验签——这正是 authority key 用可恢复地址的 secp256k1 而非 ed25519 的原因。提升签名 payload + purpose claim 是新工作(§12 P0);`pkg/auth` 现有的 `SignToken`/`SignPeerLogin` 绑定 SQL/peer-login,不原样复用,但 secp256k1 key + `EthValidator` 恢复复用。
 
+双签名体系一览(对应 §3.4 的 `PromotionSigner` / `PromotionValidator` 缝):
+
+| 被签对象 | 算法 | 身份 | 复用类型 | 为何这么选 |
+|---|---|---|---|---|
+| `ExecutionReceipt` → `ReplayAttestation` | ed25519 | 每个 Verifier 一把(各不相同) | `payloadexec.Ed25519Signer`(满足 `replay.Signer`) | 威胁是合谋的 verifier quorum,所以 verifier 之间不能共享 key |
+| `PromoteSafePartition` / `UnsafeCleanup` | secp256k1 | 单一 Sequencer authority,key 全节点共享、仅 leader 使用 | `pkg/auth.RelaySigner` 签 + `EthValidator` 恢复 | 单一命令签发信任根;SNode 本就用地址 allowlist 验身份 |
+
 ### 8.2 SNode 执行(机械,base-spec §12.2)
 
 每个 attesting 副本本地、原子地完成:
@@ -474,6 +533,14 @@ promotable but PromoteSafePartition unacked -> re-sign + re-send
 
 base-spec §12.5 的恢复路径(从 L3 流重放、从 peer 的 `hg_safe` 拷贝)在 Sequencer 恢复*之后*重建 `hg_safe`;它们不能在 Sequencer 仍宕机时排空 `hg_unsafe`。它们是事后恢复 `hg_safe`,不是停机期间的写逃生阀。
 
+### 10.6 分片延后——`Sharder` 缝,以及为何 multi-Raft 不进 v1
+
+v1 是**单 Raft 组**。按 `keeper_shard` 的多 Raft 分片是自然的横向扩展(base-spec §15 Q15),但它是个多季度子系统,不是 P1 之后顺手就能硬化的事,v1 只承诺一个缝。
+
+诚实地讲库的现状:**`hashicorp/raft` 每个实例只托管一个组**——和 `go.etcd.io/raft` 一样是单组。两个库都不原生支持 multi-Raft;需要它的系统(TiKV、CockroachDB)各自自建了路由层,而那层自带真实的正确性风险——跨组排序(一条 statement 触及不同组里的分区)、组 split/merge、跨大量组的心跳合并。所以"以后再分片"意味着要么在路由器后面每 shard 跑一个 `hashicorp/raft` 实例,要么自建多组管理器;两者都继承这份跨组税,这正是把它塞进 v1 会成为"最长杆装错"的原因。
+
+v1 唯一承诺的是 `Sharder` 缝(§3.4):每个分片路由决定都走它,v1 实现对一切返回 group 0。这把 P5+ 的工作从重写变成单接口替换。两个该缝先延后、尚未解决的跨片问题——一条 statement 跨两个 shard 的分区、以及为锚点排序的跨片 L2-height 时钟——在此点名,以便将来刻意去设计,而非晚发现。
+
 ## 11. gRPC 服务面
 
 ### 11.1 两个方向,统一让数据平面来 dial
@@ -528,7 +595,7 @@ v1 = P0(冻结协议表面) + P1(INSERT 端到端)。P2(mutation)与 P3(serving 
 
 | 阶段 | Sequencer 交付物 | 复用 / 新建 |
 |---|---|---|
-| **P0 冻结** | `sequencer-go` proto 模块(`StatementEnvelopeV2`/`RCRecord`/`PromoteSafePartition`/`ByteSideScanMsg` 新消息 + 复用 replay 类型的线形式)、Raft 命令字母表、累加器构造 + test vectors、authority 签名 payload + purpose claim | proto 模块 + 累加器 + 签名 payload = **新**;ed25519 attestation + secp256k1 原语 = **复用**(`pkg/replay`、`pkg/auth`) |
+| **P0 冻结** | `sequencer-go` proto 模块(`StatementEnvelopeV2`/`RCRecord`/`PromoteSafePartition`/`ByteSideScanMsg` 新消息 + 复用 replay 类型的线形式)、Raft 命令字母表、累加器构造 + test vectors、authority 签名 payload + purpose claim、导出 `replay.CanonicalDigest`(单一 canonical 化 profile,§4.3)、§3.4 接口缝 | proto 模块 + 累加器 + 签名 payload + `CanonicalDigest` 导出 = **新**;ed25519 attestation + secp256k1 原语 = **复用**(`pkg/replay`、`pkg/auth`) |
 | **P1 INSERT 端到端(v1 主体)** | raft 节点 + FSM(Apply/Snapshot/Restore);准入(验签 + 验非成员证明 + high-water);`statement_seq` + L3 封块;RC + 晚绑定;ReplayJob 派发 + attestation 收集;FSM 内三方校验 + 闭包检查;字节侧扫描器(数据平面);`PromoteSafePartition` 签发 + unsafe 清理;`PublishSafeSnapshot`;leader-only orchestrator + 跃迁通知 + failover 重入 + 幂等;各 gRPC 服务;`cmd/sequencer` + config + build 接线 | FSM/orchestrator/raftnode/server/accumulator、cmd、SNode 侧提升执行、字节侧扫描器 = **新**;`pkg/replay` Verifier/`chexec`、manifest `Seal`/`Validate`、`pkg/lthash`、`pkg/auth` 恢复、config/log/listener 约定 = **复用** |
 | **P2 有界 UPDATE/DELETE** | mutation 屏障 + 同分区 cut 串行化;重算承诺第三检查(base-spec §10);触及量准入上限 | FSM 变体逻辑 = **新**;scratch clone/delta 在数据平面 |
 | **P3 加固 safe serving(base-spec §13)** | 维护 Active 读集、审计失败 `EvictNode`、编排跨节点抽样 | Sequencer 侧 = **新**(成员/读集);扫描在数据平面 |
@@ -536,9 +603,25 @@ v1 = P0(冻结协议表面) + P1(INSERT 端到端)。P2(mutation)与 P3(serving 
 
 复用 vs 新建小结。**从 `pkg/replay` 原样复用:** `ReplayJob`、`ReplayAttestation`、`ExecutionReceipt`、`SafeSnapshotManifest`、`PartitionCommitment`、`PartManifestEntry`、`Verifier`、`Seal`/`Validate`。**其余复用:** `pkg/replay/chexec` + `payloadexec`(执行器 + ed25519 + `RowID`)、`pkg/lthash`(累加器)、`pkg/auth`(secp256k1 key + `EthValidator` 地址恢复)、`pkg/config`/`pkg/log`/`listenerRunner` 约定。**新建:** `StatementEnvelopeV2`/`RCRecord`/`PromoteSafePartition`/`ByteSideScanMsg` 类型与整个 `sequencer-go` proto 模块;`pkg/sequencer/{fsm, accumulator, orchestrator, server, raftnode}`;authority 提升签名 payload;`cmd/sequencer`;SNode 侧提升执行器 + 字节侧扫描器(数据平面);以及 `hashicorp/raft` 接线。
 
-两条跨阶段的未来线,v1 不做但结构上留口:base-spec §15 Q15 的按 `keeper_shard` 多 Raft 分片(P1 之后第一件要硬化的事——每 shard 一个 `hashicorp/raft` 实例),以及 P5+ 去中心化(allowlist 变阈值公钥的阈值 authority 签名、challenge 窗口、经预留 `AnchorRef` 字段的链上 DA 引用)。
+两条跨阶段的未来线,v1 不做但结构上留口:base-spec §15 Q15 的按 `keeper_shard` 多 Raft 分片——一个多季度子系统(§10.6),藏在 `Sharder` 缝后(v1 全返回 group 0),不是 P1 之后顺手的硬化——以及 P5+ 去中心化(allowlist 变阈值公钥的阈值 authority 签名、challenge 窗口、经预留 `AnchorRef` 字段的链上 DA 引用)。
 
-## 13. 开放问题
+## 13. 验收 / 自检
+
+设计只有在代码落地时仍忠于自身不变量才有用。下面是给 review 的可机检 tripwire——必要而非充分(防粗暴回归,不证明判定式定义正确)。
+
+必须成立:
+- 提升裁决在 **FSM 内**对已落日志的签名证据算出(`QuorumVerified` 在 `Apply` 内置位),绝不由 leader 侧某个返回 decision 的方法决定;
+- 三方判定式是 `(1) replay-root 且 (2) 分区 commitment 且 (3) 字节侧`——绝不退化成仅 root 相等(任何"仅 root"就让 part 进 `hg_safe` 的路径都是正确性回归);
+- check 1 在 FSM 内重算(`ComputedStateRoot == SourceClaimRoot`),不读 verifier 的参考性 `MatchSourceRoot` flag;
+- 提升由对 authority allowlist 恢复出的 secp256k1 签名授权;SNode 绝不自行提升;
+- `hg_unsafe` 带 `STOP MERGES` + `max_bytes_to_merge_at_max_space_in_pool = 0`,且提升强制闭包等式 `post == base + Σ 已验证`(§7.3、§8.4)。
+
+不得出现:
+- 任何让原版 ClickHouse Keeper 成为提升权威、或让 Sequencer 讲 ZooKeeper 的路径;
+- 第二套 canonical 化 profile——任何不走已导出的 `replay.CanonicalDigest` 去 hash 根的做法(§4.3);
+- 每行的 `_hg_l3_block_seq` / `_hg_statement_seq` 列(时光旅行按 manifest 索引,base-spec §6)。
+
+## 14. 开放问题
 
 1. **累加器字节编码与 test vectors**(base-spec §14 P0):冻结 mountain-range 构造的叶/前驱编码,产出跨实现 test vectors。
 2. **Raft 调参**:在写可用性耦合(§10.4)下,使 failover 时间最短而不误选举的选举/心跳超时与 snapshot 阈值。
@@ -549,7 +632,7 @@ v1 = P0(冻结协议表面) + P1(INSERT 端到端)。P2(mutation)与 P3(serving 
 7. **backpressure 信号**:Sequencer 的提升滞后驱动 HouseGate 准入限流(§10.4 缓解 3)的精确接口。
 8. **config schema**:枚举 `pkg/config` 的 `Sequencer` 段字段(`node_id`、`raft.peers`、`raft.data_dir`、`raft.election_timeout`/`heartbeat`、`grpc_listen`、verifier 池 / quorum 大小、authority key 来源、payload-store 端点、`metrics_listen`)及哪些必填,照 `replicationproxy_config.go` 的 per-mode 校验。
 
-## 14. 参考
+## 15. 参考
 
 - [2026-06-22 存储完整性设计](2026-06-22-storage-integrity-design.md) —— 其中的 "Sentio Keeper" 即本 Sequencer
 - [2026-06-10 多副本信任设计](2026-06-10-multi-replica-trust-design.md)

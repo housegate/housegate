@@ -34,7 +34,7 @@ Goals:
 Non-Goals (v1):
 
 1. Executing user SQL on the hot path (the Sequencer dispatches replay; Verifiers execute).
-2. Multi-Raft sharding by `keeper_shard` (forward-looking §12; v1 is a single Raft group).
+2. Multi-Raft sharding by `keeper_shard` (forward-looking §10.6; v1 is a single Raft group).
 3. Threshold/multisig authority signing, the challenge window, and on-chain DA (P5+; the structure leaves room for all three).
 4. Mutation (`UPDATE`/`DELETE`) sequencing detail beyond the v1 INSERT path (P2; named only as an extensibility note in §9).
 5. ZooKeeper-protocol compatibility or any interaction with ClickHouse Keeper.
@@ -116,6 +116,56 @@ The reuse boundary matters and was easy to overstate: `pkg/replay` today has `Re
 The **Verifier** is a co-located data-plane component (with each ClickHouse replica) that embeds `pkg/replay.Verifier` + `chexec` + `payloadexec.Ed25519Signer` and a **new byte-side scanner** (net-new code using `pkg/lthash` primitives — `chexec` only materializes scratch tables, it does not scan existing on-disk parts by `_part`). It is a Sequencer client, distinct from the Sequencer process; it may run standalone or in the same node process as the HouseGate/SNode role, since quorum independence is required across nodes (>= 2 non-source verifiers), not within a process. The Sequencer may embed `pkg/replay` too, but only for the optional challenge reference executor of base-spec §5.2.
 
 The `cmd/sequencer` binary follows the same lifecycle conventions as the rest of the repo: it loads `pkg/config`, threads a signal-cancelled context, exposes its gRPC listener through the `listenerRunner`/`serverListener` pattern used by `pkg/replicationproxy` (`Serve(ctx, ln) error`, graceful shutdown on context cancel), and logs via `pkg/log` `FromContext`/`Infow`.
+
+### 3.4 Internal interface seams (frozen for P0/P1)
+
+The base spec (§5.2) asks this sub-design to freeze "the key interface signatures so P0/P1 work proceeds against a fixed target." The seams below are those frozen Go boundaries — signatures only, no implementations. They deliberately keep the three-way predicate **inside the FSM** (a pure function over committed `State`), not as an `Orchestrator` method: the Orchestrator is I/O-only and is never the promotion authority (§3.2).
+
+```go
+// pkg/sequencer/accumulator — statement_id uniqueness (§6)
+type Accumulator interface {
+    Root() []byte                                        // spent_ids_root
+    Insert(c StatementCoord)                             // (account, client_seq); advances the root
+    ProveNonMembership(c StatementCoord) (Proof, error)  // leader/prover side, OUTSIDE Apply
+    VerifyNonMembership(c StatementCoord, p Proof) bool  // deterministic; the only form used IN Apply
+}
+
+// pkg/sequencer/fsm — the deterministic replicated state machine (a raft.FSM)
+type FSM interface {
+    Apply(l *raft.Log) any                               // deterministic; mutates State and evaluates the
+    Snapshot() (raft.FSMSnapshot, error)                 // three-way predicate over committed evidence
+    Restore(rc io.ReadCloser) error
+}
+// the three-way verdict is FSM-internal — func (s *State) threeWay(seq uint64) Verdict — NOT exported and
+// NOT an Orchestrator call; every node recomputes the same verdict from logged signed evidence (§7.3).
+
+// pkg/sequencer/orchestrator — leader-only, side-effectful; proposes commands, never mutates State
+type Orchestrator interface {
+    Run(ctx context.Context) error                       // drain the transition channel; per event do the I/O
+}                                                        // (dispatch ReplayJob, collect attestations, poll
+                                                         // parts, anchor, sign+send PromoteSafePartition) and
+                                                         // propose the resulting Record* command
+
+// signing — reuses pkg/auth (secp256k1) + payloadexec (ed25519); see the §8.1 table
+type PromotionSigner    interface { Sign(cmd PromoteSafePartition) (sig []byte, err error) }            // secp256k1, leader-only use
+type PromotionValidator interface { Authorize(cmd PromoteSafePartition, sig []byte) (addr string, ok bool) } // SNode side, EthValidator
+
+// pkg/sequencer/raftnode — the consensus seam, so the raft library is swappable/testable
+type ConsensusNode interface {
+    Apply(cmd []byte, timeout time.Duration) raft.ApplyFuture
+    VerifyLeader() error
+    LeaderCh() <-chan bool
+    Barrier(timeout time.Duration) error                 // read-index for linearizable SafeState reads
+}
+
+// sharding seam (§10.6) — the v1 implementation returns group 0 for everything
+type Sharder interface {
+    GroupForStatement(StatementEnvelopeV2) GroupID
+    GroupForPartition(TablePartition) GroupID
+    GroupForSchema(schemaSnapshotID string) GroupID
+    Groups() []GroupID
+}
+```
 
 ## 4. The Replicated State Machine
 
@@ -206,6 +256,8 @@ Determinism red lines (violating any one forks the replicas):
 2. All root/manifest folds use integers (`pkg/lthash` uses integer lanes, no floating-point ambiguity). `Apply` recomputes `receipt_hash` over the received receipt **verbatim** (no slice reordering before hashing) and verifies the signature against that.
 3. Every timing decision ("when to seal a block / anchor / sign a promotion") lives in the orchestrator and enters the log as an explicit command at a fixed index.
 4. `Apply` only **verifies** proofs (e.g. the `statement_id` non-membership proof carried in `SubmitStatement`); it never **generates** them. Proof generation needs the full element set and happens on the leader/prover side outside `Apply` (§6.4).
+
+**One canonicalization profile across the integrity layer.** Every root/commitment the Sequencer computes must go through `pkg/replay`'s canonicalization (`canonicalDigest`) with a new domain tag per commitment kind — never a second, parallel hash profile — because the entire safety argument rests on independent nodes deriving *identical* roots from the same evidence. `canonicalDigest` is currently unexported (`pkg/replay/hash.go`); **P0 exports it as `replay.CanonicalDigest`** (or adds a typed helper) so the Sequencer FSM, the Verifiers, and the §13/base-spec §13 audit all share one profile by construction rather than by convention.
 
 ### 4.4 Command → lifecycle mapping
 
@@ -384,6 +436,13 @@ type PromoteSafePartition struct {
 
 The signature is the leader's only privileged act; the issuance is recorded via `RecordPromotionIssued` for audit. The authority secp256k1 key is **shared across all Raft nodes** (provisioned identically) so any elected leader can sign after failover; leader-only *use* is enforced by `VerifyLeader()` (§10.2). The SNode verifies the signature by recovering the secp256k1 address and checking it against the authority allowlist (the `pkg/auth` `EthValidator` pattern), which is why the authority key is secp256k1 (address-recoverable) rather than ed25519. The promotion-signing payload + purpose claim is new work (§12 P0); `pkg/auth`'s existing `SignToken`/`SignPeerLogin` are SQL-/peer-login-bound and not reused verbatim, but the secp256k1 key + `EthValidator` recovery are.
 
+The two-signature scheme at a glance (the `PromotionSigner` / `PromotionValidator` seams of §3.4):
+
+| Signed object | Scheme | Identity | Reused type | Why this scheme |
+|---|---|---|---|---|
+| `ExecutionReceipt` → `ReplayAttestation` | ed25519 | per-Verifier (a distinct key each) | `payloadexec.Ed25519Signer` (satisfies `replay.Signer`) | a colluding verifier quorum is the threat, so verifiers must not share a key |
+| `PromoteSafePartition` / `UnsafeCleanup` | secp256k1 | single Sequencer authority, key shared across Raft nodes, leader-only use | `pkg/auth.RelaySigner` to sign + `EthValidator` to recover | one command-issuing trust root; SNodes already verify identities with an address allowlist |
+
 ### 8.2 SNode execution (mechanical, base-spec §12.2)
 
 Each attesting replica locally and atomically performs:
@@ -474,6 +533,14 @@ Honest boundary: HA addresses single-node/leader failure; a full-group outage (m
 
 The base-spec §12.5 recovery paths (replay from the L3 stream, copy from a peer's `hg_safe`) rebuild `hg_safe` *after* the Sequencer recovers; they do not drain `hg_unsafe` while the Sequencer is still down. They are after-the-fact `hg_safe` recovery, not a during-outage write escape valve.
 
+### 10.6 Sharding is deferred — the Sharder seam, and why multi-Raft is not v1
+
+v1 is a **single Raft group**. Multi-Raft sharding by `keeper_shard` is the natural scale-out (base-spec §15 Q15), but it is a multi-quarter subsystem, not a quick post-P1 hardening, and v1 only commits to a seam.
+
+The honest library picture: **`hashicorp/raft` hosts one group per instance** — it is single-group, exactly like `go.etcd.io/raft`. Neither library makes multi-Raft native; the systems that need it (TiKV, CockroachDB) each built their own routing layer, and that layer owns real correctness hazards — cross-group ordering of statements that touch partitions in different groups, group split/merge, and heartbeat coalescing across many groups. So "shard later" means either running one `hashicorp/raft` instance per shard behind a router or building a multi-group manager; both inherit that cross-group tax, which is why bundling it into v1 would be the wrong longest pole.
+
+The one thing v1 commits to is the `Sharder` seam (§3.4): every shard-routing decision flows through it, and the v1 implementation returns group 0 for everything. This turns the P5+ work from a rewrite into a single-interface replacement. Two cross-shard concerns the seam defers but does not yet solve — a statement spanning partitions in two shards, and a cross-shard L2-height clock for ordering anchors — are named here so they are designed deliberately, not discovered late.
+
 ## 11. gRPC Service Surface
 
 ### 11.1 Two directions, with the data plane always dialing in
@@ -528,7 +595,7 @@ v1 = P0 (freeze protocol surfaces) + P1 (INSERT end-to-end). P2 (mutation) and P
 
 | Phase | Sequencer deliverable | Reuse / new |
 |---|---|---|
-| **P0 freeze** | `sequencer-go` proto module (`StatementEnvelopeV2`/`RCRecord`/`PromoteSafePartition`/`ByteSideScanMsg` new messages + wire form of reused replay types), Raft command alphabet, accumulator construction + test vectors, authority signing payload + purpose claims | proto module + accumulator + signing payload = **new**; ed25519 attestation + secp256k1 primitives = **reuse** (`pkg/replay`, `pkg/auth`) |
+| **P0 freeze** | `sequencer-go` proto module (`StatementEnvelopeV2`/`RCRecord`/`PromoteSafePartition`/`ByteSideScanMsg` new messages + wire form of reused replay types), Raft command alphabet, accumulator construction + test vectors, authority signing payload + purpose claims, export `replay.CanonicalDigest` (single canonicalization profile, §4.3), the §3.4 interface seams | proto module + accumulator + signing payload + `CanonicalDigest` export = **new**; ed25519 attestation + secp256k1 primitives = **reuse** (`pkg/replay`, `pkg/auth`) |
 | **P1 INSERT end-to-end (v1 body)** | raft node + FSM (Apply/Snapshot/Restore); admission (verify sig + verify non-membership proof + high-water); `statement_seq` + L3 sealing; RC + late binding; ReplayJob dispatch + attestation collection; in-FSM three-way check + closure check; byte-side scanner (data plane); `PromoteSafePartition` issuance + unsafe cleanup; `PublishSafeSnapshot`; leader-only orchestrator + transition-notification + failover re-entry + idempotency; the gRPC services; `cmd/sequencer` + config + build wiring | FSM/orchestrator/raftnode/server/accumulator, cmd, SNode-side promotion execution, byte-side scanner = **new**; `pkg/replay` Verifier/`chexec`, manifest `Seal`/`Validate`, `pkg/lthash`, `pkg/auth` recovery, config/log/listener conventions = **reuse** |
 | **P2 bounded UPDATE/DELETE** | mutation barrier + same-partition-cut serialization; the recomputed-commitment third check (base-spec §10); touched-volume admission caps | FSM variant logic = **new**; scratch clone/delta on the data plane |
 | **P3 harden safe serving (base-spec §13)** | maintain the Active read set, `EvictNode` on audit failure, orchestrate cross-node sampling | Sequencer side = **new** (membership / read set); scans on the data plane |
@@ -536,9 +603,25 @@ v1 = P0 (freeze protocol surfaces) + P1 (INSERT end-to-end). P2 (mutation) and P
 
 Reuse vs new summary. **Reused as-is from `pkg/replay`:** `ReplayJob`, `ReplayAttestation`, `ExecutionReceipt`, `SafeSnapshotManifest`, `PartitionCommitment`, `PartManifestEntry`, the `Verifier`, and `Seal`/`Validate`. **Reused elsewhere:** `pkg/replay/chexec` + `payloadexec` (executor + ed25519 + `RowID`), `pkg/lthash` (accumulator), `pkg/auth` (secp256k1 key + `EthValidator` address recovery), and the `pkg/config`/`pkg/log`/`listenerRunner` conventions. **New:** the `StatementEnvelopeV2`/`RCRecord`/`PromoteSafePartition`/`ByteSideScanMsg` types and the whole `sequencer-go` proto module; `pkg/sequencer/{fsm, accumulator, orchestrator, server, raftnode}`; the authority promotion-signing payload; `cmd/sequencer`; the SNode-side promotion executor + byte-side scanner (data plane); and the `hashicorp/raft` wiring.
 
-Two cross-phase future lines, kept out of v1 but with structure reserved: base-spec §15 Q15 multi-Raft sharding by `keeper_shard` (the first thing to harden after P1 — one `hashicorp/raft` instance per shard), and P5+ decentralization (threshold authority signing via an allowlist that becomes a threshold pubkey, the challenge window, and an on-chain DA reference via the reserved `AnchorRef` field).
+Two cross-phase future lines, kept out of v1 but with structure reserved: base-spec §15 Q15 multi-Raft sharding by `keeper_shard` — a multi-quarter subsystem (§10.6) reserved behind the `Sharder` seam (v1 returns group 0), not a quick post-P1 hardening — and P5+ decentralization (threshold authority signing via an allowlist that becomes a threshold pubkey, the challenge window, and an on-chain DA reference via the reserved `AnchorRef` field).
 
-## 13. Open Questions
+## 13. Acceptance / Self-Verification
+
+A spec is only useful if it stays true to its own invariants as code lands. These are machine-checkable tripwires for review — necessary, not sufficient (they guard against gross regression, they do not prove the predicate is correctly specified).
+
+Must hold:
+- the promotion verdict is computed **in the FSM** over logged signed evidence (`QuorumVerified` set inside `Apply`), never by a leader-side method that returns a decision;
+- the three-way predicate is `(1) replay-root AND (2) partition-commitment AND (3) byte-side` — it must never degenerate to root equality alone (a root-only path admitting a part into `hg_safe` is a correctness regression);
+- check 1 is recomputed in the FSM (`ComputedStateRoot == SourceClaimRoot`), not read from the verifier's advisory `MatchSourceRoot` flag;
+- promotion is authorized by a secp256k1 signature recovered against the authority allowlist; SNode never promotes on its own;
+- `hg_unsafe` carries `STOP MERGES` + `max_bytes_to_merge_at_max_space_in_pool = 0`, and promotion enforces the closure equality `post == base + Σ verified` (§7.3, §8.4).
+
+Must NOT appear:
+- any path that makes the stock ClickHouse Keeper the promotion authority, or speaks ZooKeeper from the Sequencer;
+- a second canonicalization profile — anything hashing roots through something other than the exported `replay.CanonicalDigest` (§4.3);
+- a per-row `_hg_l3_block_seq` / `_hg_statement_seq` column (time-travel is manifest-indexed, base-spec §6).
+
+## 14. Open Questions
 
 1. **Accumulator byte encoding and test vectors** (base-spec §14 P0): freeze the mountain-range construction's exact leaf/predecessor encoding and produce cross-implementation test vectors.
 2. **Raft tuning**: election/heartbeat timeouts and snapshot thresholds that minimize failover time without false elections, given the write-availability coupling (§10.4).
@@ -549,7 +632,7 @@ Two cross-phase future lines, kept out of v1 but with structure reserved: base-s
 7. **Backpressure signal**: the precise interface by which the Sequencer's promotion lag drives HouseGate admission throttling (§10.4 mitigation 3).
 8. **Config schema**: enumerate the `pkg/config` `Sequencer` section fields (`node_id`, `raft.peers`, `raft.data_dir`, `raft.election_timeout`/`heartbeat`, `grpc_listen`, verifier pool / quorum sizing, authority key source, payload-store endpoint, `metrics_listen`) and which are required, mirroring how `replicationproxy_config.go` validates per-mode.
 
-## 14. References
+## 15. References
 
 - [2026-06-22 storage integrity design](2026-06-22-storage-integrity-design.md) — the "Sentio Keeper" there is this Sequencer
 - [2026-06-10 multi-replica trust design](2026-06-10-multi-replica-trust-design.md)
