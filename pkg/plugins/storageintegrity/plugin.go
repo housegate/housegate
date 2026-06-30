@@ -58,6 +58,7 @@ type insertCapture struct {
 	safeTable      string
 	partitionIDs   []string
 	dataPackets    [][]byte
+	clientRevision int
 	startedAt      time.Time
 	timer          *time.Timer
 	terminatorSeen bool
@@ -126,6 +127,9 @@ func (p *Plugin) OnClientData(ctx context.Context, qctx *plugin.QueryContext, ra
 	cp := append([]byte(nil), raw...)
 	cap.dataPackets = append(cap.dataPackets, cp)
 	revision := qctx.Session.State().ClientRevision
+	if revision > 0 && cap.clientRevision == 0 {
+		cap.clientRevision = revision
+	}
 	complete := isClientDataTerminator(raw, revision)
 	log.Debugw("storage_integrity: client data captured",
 		"session", qctx.Session.ID(),
@@ -212,6 +216,7 @@ func (p *Plugin) finalizeCapture(ctx context.Context, cap *insertCapture) {
 			TableID:     cap.tableID,
 			StatementID: cap.statementID,
 			SQL:         cap.unsafeSQL,
+			Payload:     payload,
 		})
 		if err != nil {
 			log.Warnw("storage_integrity: compute source claim failed",
@@ -919,6 +924,11 @@ func (c *insertCapture) payloadBytes() []byte {
 	buf.WriteString("table_id: ")
 	buf.WriteString(c.tableID)
 	buf.WriteByte('\n')
+	if c.clientRevision > 0 {
+		buf.WriteString("client_revision: ")
+		buf.WriteString(strconv.Itoa(c.clientRevision))
+		buf.WriteByte('\n')
+	}
 	buf.WriteString("original_sql_length: ")
 	buf.WriteString(strconv.Itoa(len(c.originalSQL)))
 	buf.WriteByte('\n')

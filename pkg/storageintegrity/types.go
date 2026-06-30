@@ -98,6 +98,7 @@ type InsertReplayRequest struct {
 	TableID     string
 	StatementID string
 	SQL         string
+	Payload     []byte
 }
 
 type InsertReplayResult struct {

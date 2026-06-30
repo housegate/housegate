@@ -1,13 +1,16 @@
 package storageintegrity
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
 	"unicode"
 
+	"github.com/ClickHouse/ch-go/proto"
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
@@ -15,15 +18,17 @@ import (
 )
 
 type ClickHouseInsertReplayVerifier struct {
-	conn    clickhouseReplayConn
-	Signer  replay.Signer
-	Timeout time.Duration
-	counter atomic.Uint64
+	conn     clickhouseReplayConn
+	Signer   replay.Signer
+	Payloads replay.PayloadStore
+	Timeout  time.Duration
+	counter  atomic.Uint64
 }
 
 type clickhouseReplayConn interface {
 	Exec(ctx context.Context, query string, args ...any) error
 	Query(ctx context.Context, query string, args ...any) (driver.Rows, error)
+	PrepareBatch(ctx context.Context, query string, opts ...driver.PrepareBatchOption) (driver.Batch, error)
 }
 
 func NewClickHouseInsertReplayVerifier(addr string, signer replay.Signer) (*ClickHouseInsertReplayVerifier, error) {
@@ -58,10 +63,15 @@ func (v *ClickHouseInsertReplayVerifier) Verify(ctx context.Context, job replay.
 		return replay.ReplayAttestation{}, fmt.Errorf("insert replay supports exactly one statement, got %d", len(job.Statements))
 	}
 	st := job.Statements[0]
+	payload, err := v.loadStatementPayload(ctx, 0, st)
+	if err != nil {
+		return replay.ReplayAttestation{}, err
+	}
 	result, err := v.ComputeInsertReplay(ctx, InsertReplayRequest{
 		TableID:     st.TargetTableID,
 		StatementID: st.StatementID,
 		SQL:         st.SQL,
+		Payload:     payload,
 	})
 	if err != nil {
 		return replay.ReplayAttestation{}, err
@@ -134,9 +144,6 @@ func (v *ClickHouseInsertReplayVerifier) ComputeInsertReplay(ctx context.Context
 	if err != nil {
 		return InsertReplayResult{}, err
 	}
-	if containsFormatNative(req.SQL) {
-		return InsertReplayResult{}, fmt.Errorf("insert replay for FORMAT Native payloads is not implemented")
-	}
 	timeout := durationOrDefault(v.Timeout, 30*time.Second)
 	replayCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -147,15 +154,369 @@ func (v *ClickHouseInsertReplayVerifier) ComputeInsertReplay(ctx context.Context
 	if err := v.conn.Exec(replayCtx, "CREATE TABLE "+scratchTable+" AS "+target+" ENGINE = MergeTree ORDER BY tuple()"); err != nil {
 		return InsertReplayResult{}, fmt.Errorf("create replay scratch table: %w", err)
 	}
-	replaySQL := req.SQL[:start] + scratchTable + req.SQL[end:]
-	if err := v.conn.Exec(replayCtx, replaySQL); err != nil {
-		return InsertReplayResult{}, fmt.Errorf("execute replay insert: %w", err)
+	if containsFormatNative(req.SQL) {
+		if err := v.replayNativePayload(replayCtx, req, scratchTable); err != nil {
+			return InsertReplayResult{}, err
+		}
+	} else {
+		replaySQL := req.SQL[:start] + scratchTable + req.SQL[end:]
+		if err := v.conn.Exec(replayCtx, replaySQL); err != nil {
+			return InsertReplayResult{}, fmt.Errorf("execute replay insert: %w", err)
+		}
 	}
 	rows, err := readTableRowsForHash(replayCtx, v.conn, "default", scratch)
 	if err != nil {
 		return InsertReplayResult{}, err
 	}
 	return hashReplayRows(req.TableID, req.StatementID, req.SQL, rows)
+}
+
+func (v *ClickHouseInsertReplayVerifier) loadStatementPayload(ctx context.Context, idx int, st replay.Statement) ([]byte, error) {
+	if st.PayloadRef == "" {
+		if st.PayloadHash != "" || st.PayloadLength != 0 {
+			return nil, fmt.Errorf("statement %d: payload hash/length set without payload_ref", idx)
+		}
+		return nil, nil
+	}
+	if v.Payloads == nil {
+		return nil, fmt.Errorf("statement %d: payload store is required", idx)
+	}
+	payload, err := v.Payloads.GetPayload(ctx, st.PayloadRef)
+	if err != nil {
+		return nil, fmt.Errorf("statement %d: load payload %q: %w", idx, st.PayloadRef, err)
+	}
+	if uint64(len(payload)) != st.PayloadLength {
+		return nil, fmt.Errorf("statement %d: payload length mismatch: got %d want %d", idx, len(payload), st.PayloadLength)
+	}
+	if got := replay.DigestBytes(payload); got != st.PayloadHash {
+		return nil, fmt.Errorf("statement %d: payload digest mismatch: got %s want %s", idx, got, st.PayloadHash)
+	}
+	return payload, nil
+}
+
+const defaultNativeReplayRevision = 54453
+
+type insertPayloadEnvelope struct {
+	StatementID    string
+	TableID        string
+	OriginalSQL    string
+	UnsafeSQL      string
+	ClientRevision int
+	DataPackets    [][]byte
+}
+
+func (v *ClickHouseInsertReplayVerifier) replayNativePayload(ctx context.Context, req InsertReplayRequest, scratchTable string) error {
+	if len(req.Payload) == 0 {
+		return fmt.Errorf("native replay payload is required")
+	}
+	env, err := parseInsertPayloadEnvelope(req.Payload)
+	if err != nil {
+		return fmt.Errorf("parse native replay payload: %w", err)
+	}
+	if env.StatementID != req.StatementID {
+		return fmt.Errorf("native replay payload statement_id mismatch: got %q want %q", env.StatementID, req.StatementID)
+	}
+	if env.TableID != req.TableID {
+		return fmt.Errorf("native replay payload table_id mismatch: got %q want %q", env.TableID, req.TableID)
+	}
+	if strings.TrimSpace(env.UnsafeSQL) != strings.TrimSpace(req.SQL) {
+		return fmt.Errorf("native replay payload unsafe_sql mismatch")
+	}
+	revision := env.ClientRevision
+	if revision == 0 {
+		revision = defaultNativeReplayRevision
+	}
+	inserted := 0
+	for i, raw := range env.DataPackets {
+		block, err := decodeNativeReplayBlock(raw, revision)
+		if err != nil {
+			return fmt.Errorf("decode native data packet %d: %w", i, err)
+		}
+		if block.Rows == 0 {
+			continue
+		}
+		if err := ensureNativeReplayRowIDColumn(block.Columns); err != nil {
+			return fmt.Errorf("native data packet %d: %w", i, err)
+		}
+		if err := v.insertNativeReplayBlock(ctx, scratchTable, block); err != nil {
+			return fmt.Errorf("insert native data packet %d into replay scratch: %w", i, err)
+		}
+		inserted += block.Rows
+	}
+	if inserted == 0 {
+		return fmt.Errorf("native replay payload contained no rows")
+	}
+	return nil
+}
+
+type nativeReplayBlock struct {
+	Columns []string
+	Rows    int
+	Values  [][]any
+}
+
+func (v *ClickHouseInsertReplayVerifier) insertNativeReplayBlock(ctx context.Context, scratchTable string, block nativeReplayBlock) error {
+	query := "INSERT INTO " + scratchTable + " (" + quoteIdentifierList(block.Columns) + ")"
+	batch, err := v.conn.PrepareBatch(ctx, query)
+	if err != nil {
+		return fmt.Errorf("prepare batch: %w", err)
+	}
+	for _, row := range block.Values {
+		if err := batch.Append(row...); err != nil {
+			_ = batch.Abort()
+			return fmt.Errorf("append row: %w", err)
+		}
+	}
+	if err := batch.Send(); err != nil {
+		_ = batch.Abort()
+		return fmt.Errorf("send batch: %w", err)
+	}
+	return nil
+}
+
+func decodeNativeReplayBlock(raw []byte, revision int) (nativeReplayBlock, error) {
+	r := proto.NewReader(bytes.NewReader(raw))
+	code, err := r.UVarInt()
+	if err != nil {
+		return nativeReplayBlock{}, fmt.Errorf("packet code: %w", err)
+	}
+	if code != uint64(proto.ClientCodeData) {
+		return nativeReplayBlock{}, fmt.Errorf("packet type %d is not ClientData", code)
+	}
+	if _, err := r.Str(); err != nil {
+		return nativeReplayBlock{}, fmt.Errorf("block name: %w", err)
+	}
+
+	var (
+		results proto.Results
+		block   proto.Block
+	)
+	if err := block.DecodeBlock(r, revision, results.Auto()); err != nil {
+		return nativeReplayBlock{}, fmt.Errorf("decode block: %w", err)
+	}
+	out := nativeReplayBlock{
+		Rows:    block.Rows,
+		Columns: make([]string, 0, len(results)),
+		Values:  make([][]any, 0, block.Rows),
+	}
+	cols := make([]proto.ColResult, 0, len(results))
+	for _, rc := range results {
+		out.Columns = append(out.Columns, rc.Name)
+		col := rc.Data
+		if auto, ok := col.(*proto.ColAuto); ok {
+			col = auto.Data
+		}
+		cols = append(cols, col)
+	}
+	for row := 0; row < block.Rows; row++ {
+		values := make([]any, len(cols))
+		for colIdx, col := range cols {
+			value, err := nativeReplayColumnValue(col, row)
+			if err != nil {
+				return nativeReplayBlock{}, fmt.Errorf("column %q: %w", out.Columns[colIdx], err)
+			}
+			values[colIdx] = value
+		}
+		out.Values = append(out.Values, values)
+	}
+	return out, nil
+}
+
+func nativeReplayColumnValue(col proto.ColResult, row int) (any, error) {
+	switch c := col.(type) {
+	case *proto.ColFixedStr:
+		return append([]byte(nil), c.Row(row)...), nil
+	case *proto.ColFixedStr32:
+		v := c.Row(row)
+		return append([]byte(nil), v[:]...), nil
+	case *proto.ColUInt8:
+		return (*c)[row], nil
+	case *proto.ColUInt16:
+		return (*c)[row], nil
+	case *proto.ColUInt32:
+		return (*c)[row], nil
+	case *proto.ColUInt64:
+		return (*c)[row], nil
+	case *proto.ColInt8:
+		return (*c)[row], nil
+	case *proto.ColInt16:
+		return (*c)[row], nil
+	case *proto.ColInt32:
+		return (*c)[row], nil
+	case *proto.ColInt64:
+		return (*c)[row], nil
+	case *proto.ColFloat32:
+		return (*c)[row], nil
+	case *proto.ColFloat64:
+		return (*c)[row], nil
+	case *proto.ColStr:
+		return c.Row(row), nil
+	case *proto.ColBool:
+		return (*c)[row], nil
+	case *proto.ColDate:
+		return c.Row(row), nil
+	case *proto.ColDateTime:
+		return c.Row(row), nil
+	case *proto.ColDateTime64:
+		return c.Row(row), nil
+	default:
+		return nil, fmt.Errorf("unsupported Native replay column type %T", col)
+	}
+}
+
+func ensureNativeReplayRowIDColumn(columns []string) error {
+	if len(columns) == 0 {
+		return fmt.Errorf("block has no columns")
+	}
+	for _, col := range columns {
+		if strings.EqualFold(col, "_hg_row_id") {
+			return nil
+		}
+	}
+	return fmt.Errorf("block is missing _hg_row_id")
+}
+
+func quoteIdentifierList(columns []string) string {
+	var b strings.Builder
+	for i, col := range columns {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(QuoteIdentifier(col))
+	}
+	return b.String()
+}
+
+func parseInsertPayloadEnvelope(payload []byte) (insertPayloadEnvelope, error) {
+	p := payloadEnvelopeParser{rest: payload}
+	line, err := p.readLine()
+	if err != nil {
+		return insertPayloadEnvelope{}, err
+	}
+	if line != "# housegate.storage_integrity.insert.v1" {
+		return insertPayloadEnvelope{}, fmt.Errorf("unsupported payload envelope %q", line)
+	}
+	var out insertPayloadEnvelope
+	if out.StatementID, err = p.readHeader("statement_id"); err != nil {
+		return insertPayloadEnvelope{}, err
+	}
+	if out.TableID, err = p.readHeader("table_id"); err != nil {
+		return insertPayloadEnvelope{}, err
+	}
+	next, err := p.peekHeaderName()
+	if err != nil {
+		return insertPayloadEnvelope{}, err
+	}
+	if next == "client_revision" {
+		value, err := p.readHeader("client_revision")
+		if err != nil {
+			return insertPayloadEnvelope{}, err
+		}
+		rev, err := strconv.Atoi(value)
+		if err != nil || rev < 0 {
+			return insertPayloadEnvelope{}, fmt.Errorf("invalid client_revision %q", value)
+		}
+		out.ClientRevision = rev
+	}
+	out.OriginalSQL, err = p.readSizedText("original_sql_length")
+	if err != nil {
+		return insertPayloadEnvelope{}, err
+	}
+	out.UnsafeSQL, err = p.readSizedText("unsafe_sql_length")
+	if err != nil {
+		return insertPayloadEnvelope{}, err
+	}
+	countText, err := p.readHeader("data_packet_count")
+	if err != nil {
+		return insertPayloadEnvelope{}, err
+	}
+	count, err := strconv.Atoi(countText)
+	if err != nil || count < 0 {
+		return insertPayloadEnvelope{}, fmt.Errorf("invalid data_packet_count %q", countText)
+	}
+	out.DataPackets = make([][]byte, 0, count)
+	for i := 0; i < count; i++ {
+		packet, err := p.readSizedBytes(fmt.Sprintf("data_packet_%d_length", i))
+		if err != nil {
+			return insertPayloadEnvelope{}, err
+		}
+		out.DataPackets = append(out.DataPackets, packet)
+	}
+	if len(bytes.TrimSpace(p.rest)) != 0 {
+		return insertPayloadEnvelope{}, fmt.Errorf("unexpected trailing payload bytes")
+	}
+	return out, nil
+}
+
+type payloadEnvelopeParser struct {
+	rest []byte
+}
+
+func (p *payloadEnvelopeParser) readLine() (string, error) {
+	idx := bytes.IndexByte(p.rest, '\n')
+	if idx < 0 {
+		return "", fmt.Errorf("missing newline")
+	}
+	line := string(bytes.TrimSuffix(p.rest[:idx], []byte{'\r'}))
+	p.rest = p.rest[idx+1:]
+	return line, nil
+}
+
+func (p *payloadEnvelopeParser) peekHeaderName() (string, error) {
+	idx := bytes.IndexByte(p.rest, '\n')
+	if idx < 0 {
+		return "", fmt.Errorf("missing header line")
+	}
+	line := string(p.rest[:idx])
+	name, _, ok := strings.Cut(line, ":")
+	if !ok {
+		return "", fmt.Errorf("malformed header line %q", line)
+	}
+	return strings.TrimSpace(name), nil
+}
+
+func (p *payloadEnvelopeParser) readHeader(name string) (string, error) {
+	line, err := p.readLine()
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", name, err)
+	}
+	got, value, ok := strings.Cut(line, ":")
+	if !ok {
+		return "", fmt.Errorf("malformed header line %q", line)
+	}
+	if strings.TrimSpace(got) != name {
+		return "", fmt.Errorf("unexpected header %q, want %q", strings.TrimSpace(got), name)
+	}
+	return strings.TrimSpace(value), nil
+}
+
+func (p *payloadEnvelopeParser) readSizedText(header string) (string, error) {
+	b, err := p.readSizedBytes(header)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+func (p *payloadEnvelopeParser) readSizedBytes(header string) ([]byte, error) {
+	lengthText, err := p.readHeader(header)
+	if err != nil {
+		return nil, err
+	}
+	length, err := strconv.Atoi(lengthText)
+	if err != nil || length < 0 {
+		return nil, fmt.Errorf("invalid %s %q", header, lengthText)
+	}
+	if len(p.rest) < length {
+		return nil, fmt.Errorf("%s wants %d bytes, only %d remain", header, length, len(p.rest))
+	}
+	out := append([]byte(nil), p.rest[:length]...)
+	p.rest = p.rest[length:]
+	if len(p.rest) == 0 || p.rest[0] != '\n' {
+		return nil, fmt.Errorf("%s body missing trailing newline", header)
+	}
+	p.rest = p.rest[1:]
+	return out, nil
 }
 
 type replayHashRow struct {

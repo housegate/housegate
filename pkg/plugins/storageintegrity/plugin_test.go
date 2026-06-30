@@ -130,6 +130,16 @@ func TestPluginComputesSourceClaimBeforeSubmittingInsert(t *testing.T) {
 	if replay.req.SQL != sink.records[0].UnsafeSQL {
 		t.Fatalf("replay SQL = %q, want unsafe SQL %q", replay.req.SQL, sink.records[0].UnsafeSQL)
 	}
+	if len(replay.req.Payload) == 0 {
+		t.Fatal("replay request payload is empty")
+	}
+	body, err := payloads.GetPayload(ctx, sink.records[0].Payload.Ref)
+	if err != nil {
+		t.Fatalf("GetPayload: %v", err)
+	}
+	if !bytes.Equal(replay.req.Payload, body) {
+		t.Fatal("replay request payload differs from committed payload")
+	}
 }
 
 func TestPluginUsesStaticRewriterForInsertUnsafeRewrite(t *testing.T) {

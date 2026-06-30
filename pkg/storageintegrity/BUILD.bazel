@@ -28,6 +28,7 @@ go_library(
     deps = [
         "//pkg/log",
         "//pkg/replay",
+        "@com_github_clickhouse_ch_go//proto",
         "@com_github_clickhouse_clickhouse_go_v2//:clickhouse-go",
         "@com_github_clickhouse_clickhouse_go_v2//lib/driver",
         "@com_github_go_zookeeper_zk//:zk",
@@ -38,6 +39,7 @@ go_library(
 go_test(
     name = "storageintegrity_test",
     srcs = [
+        "clickhouse_insert_replay_verifier_test.go",
         "mock_finality_test.go",
         "mock_payload_store_test.go",
         "keeper_coordinator_test.go",
@@ -51,6 +53,10 @@ go_test(
     ],
     embed = [":storageintegrity"],
     deps = [
+        "//pkg/chproto",
         "//pkg/replay",
+        "@com_github_clickhouse_ch_go//proto",
+        "@com_github_clickhouse_clickhouse_go_v2//lib/column",
+        "@com_github_clickhouse_clickhouse_go_v2//lib/driver",
     ],
 )

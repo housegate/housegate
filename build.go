@@ -207,6 +207,7 @@ func buildStorageIntegrityRuntime(cfg config.StorageIntegrityConfig, opts Option
 			return nil, fmt.Errorf("storage_integrity replay verifier: %w", err)
 		}
 		clickhouseReplay.Timeout = cfg.UnsafeValidation.QueryTimeout.Duration
+		clickhouseReplay.Payloads = payloads
 		rt.ReplayComputer = clickhouseReplay
 	}
 	unsafeReplicas := make([]storageintegrity.UnsafeReplica, 0, len(cfg.UnsafeValidation.Replicas))
