@@ -46,14 +46,13 @@ func TestRuntimeRunsLocalInsertThroughPromotion(t *testing.T) {
 		RequireUnsafeValidation: true,
 		UnsafeDatabase:          "hg_unsafe",
 		SafeDatabase:            "hg_safe",
-		UnsafeTableSuffix:       "_a",
 	})
 	if err := coordinator.SubmitInsert(ctx, InsertRecord{
 		TableID:      "dual_hg_auth.t",
 		StatementID:  "stmt-runtime-1",
 		OriginalSQL:  "INSERT INTO dual_hg_auth.t VALUES (1)",
-		UnsafeSQL:    "INSERT INTO `hg_unsafe`.`dual_hg_auth.t_a` VALUES (1)",
-		UnsafeTable:  "`hg_unsafe`.`dual_hg_auth.t_a`",
+		UnsafeSQL:    "INSERT INTO `hg_unsafe`.`dual_hg_auth.t` VALUES (1)",
+		UnsafeTable:  "`hg_unsafe`.`dual_hg_auth.t`",
 		SafeTable:    "`hg_safe`.`dual_hg_auth.t`",
 		PartitionIDs: []string{"all"},
 		Payload: PayloadCommitment{
@@ -99,7 +98,7 @@ func TestRuntimeRunsLocalInsertThroughPromotion(t *testing.T) {
 	if len(exec.statements) != 1 {
 		t.Fatalf("promotion statements = %d, want 1: %+v", len(exec.statements), exec.statements)
 	}
-	if got, want := exec.statements[0], "ALTER TABLE `hg_safe`.`dual_hg_auth.t` ATTACH PARTITION ID 'all' FROM `hg_unsafe`.`dual_hg_auth.t_a`"; got != want {
+	if got, want := exec.statements[0], "ALTER TABLE `hg_safe`.`dual_hg_auth.t` ATTACH PARTITION ID 'all' FROM `hg_unsafe`.`dual_hg_auth.t`"; got != want {
 		t.Fatalf("promotion ATTACH PARTITION = %q, want %q", got, want)
 	}
 }
@@ -114,7 +113,6 @@ func TestRuntimeRunsPromotionThroughSafeAuditMajority(t *testing.T) {
 		RequireUnsafeValidation: true,
 		UnsafeDatabase:          "hg_unsafe",
 		SafeDatabase:            "hg_safe",
-		UnsafeTableSuffix:       "_a",
 		SafeAuditReplicas: []SafeAuditReplica{
 			{ReplicaID: "safe-r1"},
 			{ReplicaID: "safe-r2"},
@@ -127,8 +125,8 @@ func TestRuntimeRunsPromotionThroughSafeAuditMajority(t *testing.T) {
 		TableID:      "dual_hg_auth.t",
 		StatementID:  "stmt-runtime-audit",
 		OriginalSQL:  "INSERT INTO dual_hg_auth.t VALUES (1)",
-		UnsafeSQL:    "INSERT INTO `hg_unsafe`.`dual_hg_auth.t_a` VALUES (1)",
-		UnsafeTable:  "`hg_unsafe`.`dual_hg_auth.t_a`",
+		UnsafeSQL:    "INSERT INTO `hg_unsafe`.`dual_hg_auth.t` VALUES (1)",
+		UnsafeTable:  "`hg_unsafe`.`dual_hg_auth.t`",
 		SafeTable:    "`hg_safe`.`dual_hg_auth.t`",
 		PartitionIDs: []string{"all"},
 		Payload: PayloadCommitment{

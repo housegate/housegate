@@ -601,7 +601,7 @@ CREATE DATABASE IF NOT EXISTS realbin;
 CREATE DATABASE IF NOT EXISTS hg_unsafe;
 CREATE DATABASE IF NOT EXISTS hg_safe;
 DROP TABLE IF EXISTS realbin.t;
-CREATE TABLE IF NOT EXISTS hg_unsafe.`realbin.t_a` (_hg_row_id FixedString(32), id UInt64, v String, created_at DateTime, r UInt64) ENGINE = ReplicatedMergeTree('\''/clickhouse/tables/si3x3rw/hg_unsafe/realbin_t_a'\'', '\''{replica}'\'') PARTITION BY toYYYYMM(created_at) ORDER BY (_hg_row_id, id);
+CREATE TABLE IF NOT EXISTS hg_unsafe.`realbin.t` (_hg_row_id FixedString(32), id UInt64, v String, created_at DateTime, r UInt64) ENGINE = ReplicatedMergeTree('\''/clickhouse/tables/si3x3rw/hg_unsafe/realbin_t'\'', '\''{replica}'\'') PARTITION BY toYYYYMM(created_at) ORDER BY (_hg_row_id, id);
 CREATE TABLE IF NOT EXISTS hg_safe.`realbin.t` (_hg_row_id FixedString(32), id UInt64, v String, created_at DateTime, r UInt64) ENGINE = MergeTree PARTITION BY toYYYYMM(created_at) ORDER BY (_hg_row_id, id);
 '
     for port in "${CH_TCP_PORTS[@]}"; do
@@ -671,7 +671,7 @@ send_storage_integrity_insert() {
     ch_query "$CLIENT_HG_PORT" "$E2E_INSERT_QUERY"
 
     for port in "${CH_TCP_PORTS[@]}"; do
-        wait_for_query_value "unsafe count on ch:$port" "$port" "SELECT count() FROM hg_unsafe.\`realbin.t_a\`" "2" 120
+        wait_for_query_value "unsafe count on ch:$port" "$port" "SELECT count() FROM hg_unsafe.\`realbin.t\`" "2" 120
     done
 }
 

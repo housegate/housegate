@@ -43,6 +43,7 @@ go_test(
         "mock_finality_test.go",
         "mock_payload_store_test.go",
         "keeper_coordinator_test.go",
+        "layout_test.go",
         "local_coordinator_test.go",
         "promotion_worker_test.go",
         "replay_worker_test.go",

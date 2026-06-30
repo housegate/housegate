@@ -5,7 +5,7 @@ import "strings"
 const (
 	DefaultUnsafeDatabase    = "hg_unsafe"
 	DefaultSafeDatabase      = "hg_safe"
-	DefaultUnsafeTableSuffix = "_a"
+	DefaultUnsafeTableSuffix = ""
 )
 
 type TableLayoutConfig struct {

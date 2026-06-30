@@ -275,7 +275,7 @@ func TestKeeperCoordinatorRequiresReplayQuorumAndUnsafeAllReplicasBeforePromotio
 	if task.PromotionID != "promotion-"+rec.StatementID || task.LeaseID == "" {
 		t.Fatalf("promotion task ids = %+v", task)
 	}
-	if task.SafeTable != "`hg_safe`.`dual_hg_auth.t`" || task.UnsafeTable != "`hg_unsafe`.`dual_hg_auth.t_a`" {
+	if task.SafeTable != "`hg_safe`.`dual_hg_auth.t`" || task.UnsafeTable != "`hg_unsafe`.`dual_hg_auth.t`" {
 		t.Fatalf("promotion tables = safe %q unsafe %q", task.SafeTable, task.UnsafeTable)
 	}
 	if len(task.Statements) != 0 {
@@ -463,7 +463,6 @@ func newTestKeeperCoordinator(t *testing.T, store keeperStore, workerID string) 
 		},
 		UnsafeDatabase:    "hg_unsafe",
 		SafeDatabase:      "hg_safe",
-		UnsafeTableSuffix: "_a",
 	}, store)
 	if err != nil {
 		t.Fatalf("NewKeeperCoordinatorWithStore: %v", err)
@@ -482,7 +481,6 @@ func newTestKeeperCoordinatorWithoutReplicaConfig(t *testing.T, store keeperStor
 		RequireUnsafeValidation: true,
 		UnsafeDatabase:          "hg_unsafe",
 		SafeDatabase:            "hg_safe",
-		UnsafeTableSuffix:       "_a",
 	}, store)
 	if err != nil {
 		t.Fatalf("NewKeeperCoordinatorWithStore: %v", err)
@@ -495,8 +493,8 @@ func testKeeperInsertRecord(statementID string) InsertRecord {
 		TableID:      "dual_hg_auth.t",
 		StatementID:  statementID,
 		OriginalSQL:  "INSERT INTO dual_hg_auth.t VALUES (1)",
-		UnsafeSQL:    "INSERT INTO `hg_unsafe`.`dual_hg_auth.t_a` VALUES (1)",
-		UnsafeTable:  "`hg_unsafe`.`dual_hg_auth.t_a`",
+		UnsafeSQL:    "INSERT INTO `hg_unsafe`.`dual_hg_auth.t` VALUES (1)",
+		UnsafeTable:  "`hg_unsafe`.`dual_hg_auth.t`",
 		SafeTable:    "`hg_safe`.`dual_hg_auth.t`",
 		PartitionIDs: []string{"202606"},
 		Payload: PayloadCommitment{

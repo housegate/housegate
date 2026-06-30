@@ -30,7 +30,7 @@ func TestComputeInsertReplayReplaysNativePayloadBlocks(t *testing.T) {
 		statementID: "stmt-native-1",
 		tableID:     "app.balances",
 		originalSQL: "INSERT INTO app.balances FORMAT Native",
-		unsafeSQL:   "INSERT INTO `hg_unsafe`.`app.balances_a` FORMAT Native",
+		unsafeSQL:   "INSERT INTO `hg_unsafe`.`app.balances` FORMAT Native",
 		dataPackets: [][]byte{raw, emptyReplayNativeDataPacket(t)},
 	})
 	conn := newFakeReplayConn([]string{"_hg_row_id", "id", "v"})
@@ -39,7 +39,7 @@ func TestComputeInsertReplayReplaysNativePayloadBlocks(t *testing.T) {
 	result, err := verifier.ComputeInsertReplay(context.Background(), InsertReplayRequest{
 		TableID:     "app.balances",
 		StatementID: "stmt-native-1",
-		SQL:         "INSERT INTO `hg_unsafe`.`app.balances_a` FORMAT Native",
+		SQL:         "INSERT INTO `hg_unsafe`.`app.balances` FORMAT Native",
 		Payload:     payload,
 	})
 	if err != nil {
@@ -338,7 +338,7 @@ func replayJobForNativePayload(ref, hash string, length uint64) replay.ReplayJob
 		Statements: []replay.Statement{{
 			StatementID:   "stmt-native-1",
 			TargetTableID: "app.balances",
-			SQL:           "INSERT INTO `hg_unsafe`.`app.balances_a` FORMAT Native",
+			SQL:           "INSERT INTO `hg_unsafe`.`app.balances` FORMAT Native",
 			PayloadRef:    ref,
 			PayloadHash:   hash,
 			PayloadLength: length,

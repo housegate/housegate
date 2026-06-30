@@ -76,10 +76,9 @@ type StorageIntegrityWorkersConfig struct {
 
 func defaultStorageIntegrityConfig() StorageIntegrityConfig {
 	return StorageIntegrityConfig{
-		Enabled:           false,
-		UnsafeDatabase:    "hg_unsafe",
-		SafeDatabase:      "hg_safe",
-		UnsafeTableSuffix: "_a",
+		Enabled:        false,
+		UnsafeDatabase: "hg_unsafe",
+		SafeDatabase:   "hg_safe",
 		HouseKeeper: StorageIntegrityHouseKeeper{
 			Root:           "/housekeeper/v1/storage_integrity",
 			ReplayQuorum:   2,

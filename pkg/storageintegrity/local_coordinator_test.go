@@ -14,14 +14,13 @@ func TestLocalCoordinatorWaitsForExternalFinalityBeforePromotion(t *testing.T) {
 		RequireReplay:     true,
 		UnsafeDatabase:    "hg_unsafe",
 		SafeDatabase:      "hg_safe",
-		UnsafeTableSuffix: "_a",
 	})
 	rec := InsertRecord{
 		TableID:         "dual_hg_auth.t",
 		StatementID:     "stmt-1",
 		OriginalSQL:     "INSERT INTO dual_hg_auth.t VALUES (1)",
-		UnsafeSQL:       "INSERT INTO `hg_unsafe`.`dual_hg_auth.t_a` VALUES (1)",
-		UnsafeTable:     "`hg_unsafe`.`dual_hg_auth.t_a`",
+		UnsafeSQL:       "INSERT INTO `hg_unsafe`.`dual_hg_auth.t` VALUES (1)",
+		UnsafeTable:     "`hg_unsafe`.`dual_hg_auth.t`",
 		SafeTable:       "`hg_safe`.`dual_hg_auth.t`",
 		PartitionIDs:    []string{"202606"},
 		SourceClaimRoot: "0xsource-claim",
@@ -83,7 +82,7 @@ func TestLocalCoordinatorWaitsForExternalFinalityBeforePromotion(t *testing.T) {
 	if task.PromotionID == "" || task.LeaseID == "" {
 		t.Fatalf("promotion task missing ids: %+v", task)
 	}
-	if task.SafeTable != "`hg_safe`.`dual_hg_auth.t`" || task.UnsafeTable != "`hg_unsafe`.`dual_hg_auth.t_a`" {
+	if task.SafeTable != "`hg_safe`.`dual_hg_auth.t`" || task.UnsafeTable != "`hg_unsafe`.`dual_hg_auth.t`" {
 		t.Fatalf("promotion tables = safe %q unsafe %q", task.SafeTable, task.UnsafeTable)
 	}
 	if len(task.PartitionIDs) != 1 || task.PartitionIDs[0] != "202606" {
@@ -106,14 +105,13 @@ func TestLocalCoordinatorBlocksPromotionUntilUnsafeValidation(t *testing.T) {
 		},
 		UnsafeDatabase:    "hg_unsafe",
 		SafeDatabase:      "hg_safe",
-		UnsafeTableSuffix: "_a",
 	})
 	rec := InsertRecord{
 		TableID:     "dual_hg_auth.t",
 		StatementID: "stmt-unsafe-1",
 		OriginalSQL: "INSERT INTO dual_hg_auth.t VALUES (1)",
-		UnsafeSQL:   "INSERT INTO `hg_unsafe`.`dual_hg_auth.t_a` VALUES (1)",
-		UnsafeTable: "`hg_unsafe`.`dual_hg_auth.t_a`",
+		UnsafeSQL:   "INSERT INTO `hg_unsafe`.`dual_hg_auth.t` VALUES (1)",
+		UnsafeTable: "`hg_unsafe`.`dual_hg_auth.t`",
 		SafeTable:   "`hg_safe`.`dual_hg_auth.t`",
 		Payload: PayloadCommitment{
 			Ref:    "mockda://dual_hg_auth.t/stmt-unsafe-1/hash",
@@ -190,14 +188,13 @@ func TestLocalCoordinatorExternalRollbackBlocksPromotion(t *testing.T) {
 		RequireUnsafeValidation: true,
 		UnsafeDatabase:          "hg_unsafe",
 		SafeDatabase:            "hg_safe",
-		UnsafeTableSuffix:       "_a",
 	})
 	rec := InsertRecord{
 		TableID:     "dual_hg_auth.t",
 		StatementID: "stmt-rollback-1",
 		OriginalSQL: "INSERT INTO dual_hg_auth.t VALUES (1)",
-		UnsafeSQL:   "INSERT INTO `hg_unsafe`.`dual_hg_auth.t_a` VALUES (1)",
-		UnsafeTable: "`hg_unsafe`.`dual_hg_auth.t_a`",
+		UnsafeSQL:   "INSERT INTO `hg_unsafe`.`dual_hg_auth.t` VALUES (1)",
+		UnsafeTable: "`hg_unsafe`.`dual_hg_auth.t`",
 		SafeTable:   "`hg_safe`.`dual_hg_auth.t`",
 		Payload: PayloadCommitment{
 			Ref:    "mockda://dual_hg_auth.t/stmt-rollback-1/hash",
@@ -266,7 +263,7 @@ func TestLocalCoordinatorExternalRollbackBlocksPromotion(t *testing.T) {
 	if rollbackTask.StatementID != rec.StatementID || rollbackTask.RollbackID == "" || rollbackTask.LeaseID == "" {
 		t.Fatalf("rollback task = %+v", rollbackTask)
 	}
-	if len(rollbackTask.Statements) != 1 || rollbackTask.Statements[0] != "TRUNCATE TABLE `hg_unsafe`.`dual_hg_auth.t_a`" {
+	if len(rollbackTask.Statements) != 1 || rollbackTask.Statements[0] != "TRUNCATE TABLE `hg_unsafe`.`dual_hg_auth.t`" {
 		t.Fatalf("rollback statements = %+v", rollbackTask.Statements)
 	}
 }
@@ -276,7 +273,6 @@ func TestLocalCoordinatorQueuesSafeAuditAndDecidesMajority(t *testing.T) {
 	c := NewLocalCoordinator(LocalCoordinatorConfig{
 		UnsafeDatabase:    "hg_unsafe",
 		SafeDatabase:      "hg_safe",
-		UnsafeTableSuffix: "_a",
 		SafeAuditReplicas: []SafeAuditReplica{
 			{ReplicaID: "safe-r1"},
 			{ReplicaID: "safe-r2"},
@@ -289,7 +285,7 @@ func TestLocalCoordinatorQueuesSafeAuditAndDecidesMajority(t *testing.T) {
 		TableID:     "dual_hg_auth.t",
 		StatementID: "stmt-audit-1",
 		OriginalSQL: "INSERT INTO dual_hg_auth.t VALUES (1)",
-		UnsafeTable: "`hg_unsafe`.`dual_hg_auth.t_a`",
+		UnsafeTable: "`hg_unsafe`.`dual_hg_auth.t`",
 		SafeTable:   "`hg_safe`.`dual_hg_auth.t`",
 		Payload: PayloadCommitment{
 			Ref:    "mockda://dual_hg_auth.t/stmt-audit-1/hash",
@@ -340,7 +336,6 @@ func TestLocalCoordinatorMarksSafeAuditDisputeWithoutMajority(t *testing.T) {
 	c := NewLocalCoordinator(LocalCoordinatorConfig{
 		UnsafeDatabase:    "hg_unsafe",
 		SafeDatabase:      "hg_safe",
-		UnsafeTableSuffix: "_a",
 		SafeAuditReplicas: []SafeAuditReplica{
 			{ReplicaID: "safe-r1"},
 			{ReplicaID: "safe-r2"},
@@ -351,7 +346,7 @@ func TestLocalCoordinatorMarksSafeAuditDisputeWithoutMajority(t *testing.T) {
 		TableID:     "dual_hg_auth.t",
 		StatementID: "stmt-audit-dispute",
 		OriginalSQL: "INSERT INTO dual_hg_auth.t VALUES (1)",
-		UnsafeTable: "`hg_unsafe`.`dual_hg_auth.t_a`",
+		UnsafeTable: "`hg_unsafe`.`dual_hg_auth.t`",
 		SafeTable:   "`hg_safe`.`dual_hg_auth.t`",
 		Payload: PayloadCommitment{
 			Ref:    "mockda://dual_hg_auth.t/stmt-audit-dispute/hash",

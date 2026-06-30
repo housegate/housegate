@@ -18,7 +18,7 @@ func TestPromotionWorkerExecutesStatementsAndFinishesOnMatchingReadback(t *testi
 	err := worker.Apply(ctx, PromotionTask{
 		PromotionID:  "promo-1",
 		LeaseID:      "lease-1",
-		UnsafeTable:  "hg_unsafe.Transfer_a",
+		UnsafeTable:  "hg_unsafe.Transfer",
 		SafeTable:    "hg_safe.Transfer",
 		PartitionIDs: []string{"202606"},
 		Readback: PromotionReadbackSpec{
@@ -33,7 +33,7 @@ func TestPromotionWorkerExecutesStatementsAndFinishesOnMatchingReadback(t *testi
 	if len(exec.statements) != 1 {
 		t.Fatalf("executed statements = %#v", exec.statements)
 	}
-	if got, want := exec.statements[0], "ALTER TABLE hg_safe.Transfer ATTACH PARTITION ID '202606' FROM hg_unsafe.Transfer_a"; got != want {
+	if got, want := exec.statements[0], "ALTER TABLE hg_safe.Transfer ATTACH PARTITION ID '202606' FROM hg_unsafe.Transfer"; got != want {
 		t.Fatalf("executed statement = %q, want %q", got, want)
 	}
 	if len(sink.finished) != 1 || sink.finished[0].PromotionID != "promo-1" {
@@ -81,7 +81,7 @@ func TestPromotionWorkerRequiresPartitionIDsForAttachPromotion(t *testing.T) {
 	err := worker.Apply(ctx, PromotionTask{
 		PromotionID: "promo-1",
 		LeaseID:     "lease-1",
-		UnsafeTable: "hg_unsafe.Transfer_a",
+		UnsafeTable: "hg_unsafe.Transfer",
 		SafeTable:   "hg_safe.Transfer",
 		Readback: PromotionReadbackSpec{
 			Table:        "hg_safe.Transfer",

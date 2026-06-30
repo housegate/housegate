@@ -13,6 +13,13 @@ func TestStorageIntegrityDefaultDisabled(t *testing.T) {
 	}
 }
 
+func TestStorageIntegrityDefaultUnsafeTableSuffixIsEmpty(t *testing.T) {
+	cfg := Default()
+	if cfg.StorageIntegrity.UnsafeTableSuffix != "" {
+		t.Fatalf("UnsafeTableSuffix = %q, want empty", cfg.StorageIntegrity.UnsafeTableSuffix)
+	}
+}
+
 func TestStorageIntegrityValidateRequiresMockPayloadPathWhenEnabled(t *testing.T) {
 	cfg := Default()
 	cfg.Listen = "127.0.0.1:0"

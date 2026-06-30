@@ -25,7 +25,7 @@ func TestUnsafeReplicaHashVerifierRejectsDigestMismatch(t *testing.T) {
 		ValidationID: "uv-1",
 		StatementID:  "stmt-1",
 		TableID:      "dual_hg_auth.t",
-		UnsafeTable:  "`hg_unsafe`.`dual_hg_auth.t_a`",
+		UnsafeTable:  "`hg_unsafe`.`dual_hg_auth.t`",
 		Replicas: []UnsafeReplica{
 			{ReplicaID: "r1", Addr: "127.0.0.1:9000"},
 			{ReplicaID: "r2", Addr: "127.0.0.1:9001"},
@@ -46,7 +46,7 @@ func TestUnsafeReplicaHashVerifierAcceptsMatchingReplicas(t *testing.T) {
 		ValidationID: "uv-1",
 		StatementID:  "stmt-1",
 		TableID:      "dual_hg_auth.t",
-		UnsafeTable:  "`hg_unsafe`.`dual_hg_auth.t_a`",
+		UnsafeTable:  "`hg_unsafe`.`dual_hg_auth.t`",
 		Replicas: []UnsafeReplica{
 			{ReplicaID: "r1", Addr: "127.0.0.1:9000"},
 			{ReplicaID: "r2", Addr: "127.0.0.1:9001"},
@@ -73,7 +73,7 @@ func TestUnsafeReplicaHashVerifierAcceptsSingleLocalReplica(t *testing.T) {
 		ValidationID: "uv-local",
 		StatementID:  "stmt-1",
 		TableID:      "dual_hg_auth.t",
-		UnsafeTable:  "`hg_unsafe`.`dual_hg_auth.t_a`",
+		UnsafeTable:  "`hg_unsafe`.`dual_hg_auth.t`",
 		Replicas: []UnsafeReplica{
 			{ReplicaID: "hg-1", Addr: "127.0.0.1:9000"},
 		},
@@ -99,7 +99,7 @@ func TestUnsafeReplicaHashVerifierTimesOutReplicaRead(t *testing.T) {
 		ValidationID: "uv-timeout",
 		StatementID:  "stmt-timeout",
 		TableID:      "dual_hg_auth.t",
-		UnsafeTable:  "`hg_unsafe`.`dual_hg_auth.t_a`",
+		UnsafeTable:  "`hg_unsafe`.`dual_hg_auth.t`",
 		Replicas: []UnsafeReplica{
 			{ReplicaID: "r1", Addr: "127.0.0.1:9000"},
 			{ReplicaID: "r2", Addr: "127.0.0.1:9001"},
@@ -114,11 +114,11 @@ func TestUnsafeReplicaHashVerifierTimesOutReplicaRead(t *testing.T) {
 }
 
 func TestActivePartsDigestQueriesUseCountDigestBeforePartsMetadata(t *testing.T) {
-	queries := activePartsDigestQueries("hg_unsafe", "realbin.t_a")
+	queries := activePartsDigestQueries("hg_unsafe", "realbin.t")
 	if len(queries) < 3 {
 		t.Fatalf("activePartsDigestQueries len = %d, want at least 3", len(queries))
 	}
-	if got, want := queries[0].SQL, "SELECT count() FROM `hg_unsafe`.`realbin.t_a`"; got != want {
+	if got, want := queries[0].SQL, "SELECT count() FROM `hg_unsafe`.`realbin.t`"; got != want {
 		t.Fatalf("first digest query = %q, want %q", got, want)
 	}
 	if len(queries[0].Args) != 0 {
@@ -128,7 +128,7 @@ func TestActivePartsDigestQueriesUseCountDigestBeforePartsMetadata(t *testing.T)
 		!strings.Contains(queries[1].SQL, "system.parts") {
 		t.Fatalf("second digest query = %q, want lightweight system.parts bytes_on_disk fallback", queries[1].SQL)
 	}
-	if len(queries[1].Args) != 3 || queries[1].Args[1] != "realbin.t_a" || queries[1].Args[2] != "realbin%2Et_a" {
+	if len(queries[1].Args) != 3 || queries[1].Args[1] != "realbin.t" || queries[1].Args[2] != "realbin%2Et" {
 		t.Fatalf("second digest args = %#v, want logical and escaped table names", queries[1].Args)
 	}
 	if !strings.Contains(queries[2].SQL, "hash_of_all_files") {
@@ -137,8 +137,8 @@ func TestActivePartsDigestQueriesUseCountDigestBeforePartsMetadata(t *testing.T)
 }
 
 func TestSystemPartsTableNameCandidatesIncludeEscapedDottedName(t *testing.T) {
-	candidates := systemPartsTableNameCandidates("realbin.t_a")
-	if len(candidates) != 2 || candidates[0] != "realbin.t_a" || candidates[1] != "realbin%2Et_a" {
+	candidates := systemPartsTableNameCandidates("realbin.t")
+	if len(candidates) != 2 || candidates[0] != "realbin.t" || candidates[1] != "realbin%2Et" {
 		t.Fatalf("systemPartsTableNameCandidates = %#v, want logical and escaped names", candidates)
 	}
 }
@@ -150,11 +150,11 @@ func TestSplitClickHouseQualifiedTableName(t *testing.T) {
 		table     string
 		wantError bool
 	}{
-		{name: "`hg_unsafe`.`realbin.t_a`", database: "hg_unsafe", table: "realbin.t_a"},
-		{name: "hg_unsafe.realbin_t_a", database: "hg_unsafe", table: "realbin_t_a"},
-		{name: "`hg``unsafe`.`realbin.t_a`", database: "hg`unsafe", table: "realbin.t_a"},
-		{name: "realbin_t_a", wantError: true},
-		{name: "`hg_unsafe`.`realbin.t_a", wantError: true},
+		{name: "`hg_unsafe`.`realbin.t`", database: "hg_unsafe", table: "realbin.t"},
+		{name: "hg_unsafe.realbin_t", database: "hg_unsafe", table: "realbin_t"},
+		{name: "`hg``unsafe`.`realbin.t`", database: "hg`unsafe", table: "realbin.t"},
+		{name: "realbin_t", wantError: true},
+		{name: "`hg_unsafe`.`realbin.t", wantError: true},
 	}
 	for _, tt := range tests {
 		database, table, err := splitClickHouseQualifiedTableName(tt.name)

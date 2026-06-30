@@ -51,7 +51,7 @@ func TestPluginRewritesInsertToUnsafeAndSubmitsPayload(t *testing.T) {
 	if err := p.OnQuery(ctx, qctx); err != nil {
 		t.Fatalf("OnQuery: %v", err)
 	}
-	if got, want := qctx.Query.Body, "INSERT INTO `hg_unsafe`.`dual_hg_auth.t_a` FORMAT Native"; got != want {
+	if got, want := qctx.Query.Body, "INSERT INTO `hg_unsafe`.`dual_hg_auth.t` FORMAT Native"; got != want {
 		t.Fatalf("rewritten SQL = %q, want %q", got, want)
 	}
 
@@ -73,7 +73,7 @@ func TestPluginRewritesInsertToUnsafeAndSubmitsPayload(t *testing.T) {
 	if rec.StatementID != "insert-qid-1" {
 		t.Fatalf("StatementID = %q, want insert-qid-1", rec.StatementID)
 	}
-	if rec.UnsafeTable != "`hg_unsafe`.`dual_hg_auth.t_a`" {
+	if rec.UnsafeTable != "`hg_unsafe`.`dual_hg_auth.t`" {
 		t.Fatalf("UnsafeTable = %q", rec.UnsafeTable)
 	}
 	if rec.SafeTable != "`hg_safe`.`dual_hg_auth.t`" {
@@ -144,12 +144,11 @@ func TestPluginComputesSourceClaimBeforeSubmittingInsert(t *testing.T) {
 
 func TestPluginUsesStaticRewriterForInsertUnsafeRewrite(t *testing.T) {
 	rw := &recordingTableRewriter{
-		outputSQL: "INSERT INTO `hg_unsafe`.`dual_hg_auth.t_a` FORMAT Native",
+		outputSQL: "INSERT INTO `hg_unsafe`.`dual_hg_auth.t` FORMAT Native",
 	}
 	p := New(Config{
 		UnsafeDatabase:    "hg_unsafe",
 		SafeDatabase:      "hg_safe",
-		UnsafeTableSuffix: "_a",
 		TableRewriter:     rw,
 	}, nil, nil)
 	sess := newFakeSession(410)
@@ -178,7 +177,7 @@ func TestPluginUsesStaticRewriterForInsertUnsafeRewrite(t *testing.T) {
 	if got := rw.inputSQL; got != "INSERT INTO dual_hg_phys.`dual_hg_auth.t` FORMAT Native" {
 		t.Fatalf("rewriter input SQL = %q", got)
 	}
-	if got, want := rw.tableMap["dual_hg_phys.dual_hg_auth.t"], "hg_unsafe.dual_hg_auth.t_a"; got != want {
+	if got, want := rw.tableMap["dual_hg_phys.dual_hg_auth.t"], "hg_unsafe.dual_hg_auth.t"; got != want {
 		t.Fatalf("rewriter table map = %v, want physical target -> %s", rw.tableMap, want)
 	}
 	if got, want := qctx.Query.Body, rw.outputSQL; got != want {
@@ -193,7 +192,6 @@ func TestPluginUsesStaticRewriterForSelectSafeRewrite(t *testing.T) {
 	p := New(Config{
 		UnsafeDatabase:    "hg_unsafe",
 		SafeDatabase:      "hg_safe",
-		UnsafeTableSuffix: "_a",
 		TableRewriter:     rw,
 	}, nil, nil)
 	qctx := &plugin.QueryContext{
@@ -226,7 +224,6 @@ func TestPluginRequiresTableRewriterForStorageIntegrityRewrite(t *testing.T) {
 	p := New(Config{
 		UnsafeDatabase:    "hg_unsafe",
 		SafeDatabase:      "hg_safe",
-		UnsafeTableSuffix: "_a",
 	}, nil, nil)
 	qctx := &plugin.QueryContext{
 		Session:     newFakeSession(412),
@@ -250,7 +247,6 @@ func TestPluginRequiresTableRewriterForSelectRewrite(t *testing.T) {
 	p := New(Config{
 		UnsafeDatabase:    "hg_unsafe",
 		SafeDatabase:      "hg_safe",
-		UnsafeTableSuffix: "_a",
 	}, nil, nil)
 	qctx := &plugin.QueryContext{
 		Session:     newFakeSession(414),
@@ -371,7 +367,7 @@ func TestPluginRewritesInsertFromRawSQLWhenMetadataMissing(t *testing.T) {
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
 		t.Fatalf("OnQuery: %v", err)
 	}
-	if got, want := qctx.Query.Body, "INSERT INTO `hg_unsafe`.`realbin.t_a` VALUES (1, 'a')"; got != want {
+	if got, want := qctx.Query.Body, "INSERT INTO `hg_unsafe`.`realbin.t` VALUES (1, 'a')"; got != want {
 		t.Fatalf("rewritten SQL = %q, want %q", got, want)
 	}
 }
@@ -390,7 +386,7 @@ func TestPluginRewritesUnclassifiedRawInsertWithTableRewriter(t *testing.T) {
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
 		t.Fatalf("OnQuery: %v", err)
 	}
-	if got, want := qctx.Query.Body, "INSERT INTO `hg_unsafe`.`realbin.t_a` VALUES (1, 'a')"; got != want {
+	if got, want := qctx.Query.Body, "INSERT INTO `hg_unsafe`.`realbin.t` VALUES (1, 'a')"; got != want {
 		t.Fatalf("rewritten SQL = %q, want %q", got, want)
 	}
 	if qctx.StatementType != sqlmeta.StatementTypeInsert {
@@ -420,7 +416,7 @@ func TestPluginFallsBackWhenSqlRewriterDoesNotRewriteInsertTarget(t *testing.T) 
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
 		t.Fatalf("OnQuery: %v", err)
 	}
-	if got, want := qctx.Query.Body, "INSERT INTO `hg_unsafe`.`realbin.t_a` VALUES (1, 'a')"; got != want {
+	if got, want := qctx.Query.Body, "INSERT INTO `hg_unsafe`.`realbin.t` VALUES (1, 'a')"; got != want {
 		t.Fatalf("rewritten SQL = %q, want %q", got, want)
 	}
 }
@@ -614,8 +610,8 @@ func TestPluginDoesNotLogSubmittedWhenSinkRejects(t *testing.T) {
 		tableID:     "dual_hg_auth.t",
 		statementID: "insert-qid-rejected",
 		originalSQL: "INSERT INTO dual_hg_auth.t VALUES (1)",
-		unsafeSQL:   "INSERT INTO `hg_unsafe`.`dual_hg_auth.t_a` VALUES (1)",
-		unsafeTable: "`hg_unsafe`.`dual_hg_auth.t_a`",
+		unsafeSQL:   "INSERT INTO `hg_unsafe`.`dual_hg_auth.t` VALUES (1)",
+		unsafeTable: "`hg_unsafe`.`dual_hg_auth.t`",
 		safeTable:   "`hg_safe`.`dual_hg_auth.t`",
 		dataPackets: [][]byte{[]byte("native-block")},
 	})
@@ -647,7 +643,6 @@ func testStorageConfig() Config {
 	return Config{
 		UnsafeDatabase:    "hg_unsafe",
 		SafeDatabase:      "hg_safe",
-		UnsafeTableSuffix: "_a",
 		TableRewriter:     simpleTableRewriter{},
 		PartitionIDs:      []string{"202606"},
 	}
