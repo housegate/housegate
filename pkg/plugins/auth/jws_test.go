@@ -229,3 +229,29 @@ func TestInternalSettingsScrubberRunsOnRoutedSessions(t *testing.T) {
 		t.Fatal("InternalSettingsScrubber must run on routed sessions")
 	}
 }
+
+func TestInternalSettingsScrubberSkipsForwardingSourceSessions(t *testing.T) {
+	qctx, sess := newQctx(t,
+		chproto.Setting{Key: "max_threads", Value: "2"},
+		chproto.Setting{Key: auth.AuthTokenSettingKey, Value: "'token'", Custom: true},
+	)
+	sess.State().SetForwarding(true)
+
+	chain := &plugin.PluginChain{
+		QueryPlugins: []plugin.QueryPlugin{InternalSettingsScrubber{}},
+	}
+	if err := chain.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+
+	got := map[string]string{}
+	for _, setting := range qctx.Query.Settings {
+		got[setting.Key] = setting.Value
+	}
+	if got[auth.AuthTokenSettingKey] != "'token'" {
+		t.Fatalf("auth token was scrubbed on forwarding source session: %+v", got)
+	}
+	if got["max_threads"] != "2" {
+		t.Fatalf("non-HouseGate setting was not preserved: %+v", got)
+	}
+}

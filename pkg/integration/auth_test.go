@@ -130,16 +130,14 @@ func TestAuth_WrongKey(t *testing.T) {
 	}
 }
 
-// TestAuth_RejectsWithoutRewriter pins the auth-on-rewriter-off contract:
-// even a properly signed token is rejected, because commitgate's
-// PermissionObserver gates on StatementType and refuses Unspecified.
+// TestAuth_RejectsWithoutRewriter pins the auth-on-rewriter-off contract for
+// statements that may touch table data: even a properly signed token is
+// rejected, because commitgate's PermissionObserver gates on StatementType and
+// refuses unclassified table access.
 //
-// If this test ever STARTS failing, the contract has changed — likely
-// because PermissionObserver was taught to default-allow SELECT-shaped
-// queries lacking a rewriter classification, or because the build
-// stopped auto-wiring the observer with auth.Enabled. Either way the
-// auth happy-path tests (which need a rewriter today) should be
-// revisited.
+// FROM-less SELECTs such as SELECT 1 are allowed without a rewriter because
+// they have no database/table scope to permission-check. Queries with FROM or
+// JOIN remain fail-closed when the rewriter is unavailable.
 func TestAuth_RejectsWithoutRewriter(t *testing.T) {
 	signer, err := auth.NewRelaySigner(authTestKey1)
 	if err != nil {
@@ -151,9 +149,9 @@ func TestAuth_RejectsWithoutRewriter(t *testing.T) {
 	)
 	conn := openSignedConn(t, proxy.Addr, signer)
 
-	err = conn.QueryRow(context.Background(), "SELECT 1").Scan(new(uint8))
+	err = conn.QueryRow(context.Background(), "SELECT * FROM system.one").Scan(new(uint8))
 	if err == nil {
-		t.Fatal("expected commitgate rejection (Unspecified statement type)")
+		t.Fatal("expected commitgate rejection for unclassified table access")
 	}
 	if !strings.Contains(err.Error(), "commitgate") &&
 		!strings.Contains(err.Error(), "Unspecified") {

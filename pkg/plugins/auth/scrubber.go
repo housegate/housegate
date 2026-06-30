@@ -42,6 +42,11 @@ func (InternalSettingsScrubber) OnQuery(ctx context.Context, qctx *plugin.QueryC
 // routeplugin.Signer appends the relay token for the target HouseGate.
 func (InternalSettingsScrubber) RunOnRouted() bool { return true }
 
+// RunOnForward preserves caller credentials while the source proxy forwards a
+// session to a peer. The destination peer consumes and scrubs them before
+// forwarding the query to ClickHouse.
+func (InternalSettingsScrubber) RunOnForward() bool { return false }
+
 func isInternalHouseGateSetting(key string) bool {
 	switch key {
 	case auth.AuthTokenSettingKey,
@@ -62,6 +67,7 @@ func clearSettings(settings []chproto.Setting) {
 }
 
 var (
-	_ plugin.QueryPlugin = InternalSettingsScrubber{}
-	_ plugin.RouteAware  = InternalSettingsScrubber{}
+	_ plugin.QueryPlugin  = InternalSettingsScrubber{}
+	_ plugin.RouteAware   = InternalSettingsScrubber{}
+	_ plugin.ForwardAware = InternalSettingsScrubber{}
 )
