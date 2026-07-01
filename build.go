@@ -29,6 +29,7 @@ import (
 	"housegate/housegate/pkg/plugins/forward"
 	indexingusage "housegate/housegate/pkg/plugins/indexing_usage"
 	lthashplugin "housegate/housegate/pkg/plugins/lthash"
+	"housegate/housegate/pkg/plugins/materialize"
 	metricsplugin "housegate/housegate/pkg/plugins/metrics"
 	"housegate/housegate/pkg/plugins/rewrite"
 	routeplugin "housegate/housegate/pkg/plugins/route"
@@ -42,6 +43,10 @@ import (
 
 	"github.com/redis/go-redis/v9"
 )
+
+// Compile-time lock: *proxy.MetricsObserver must keep satisfying
+// materialize.Observer so the wiring in buildAgent below stays valid.
+var _ materialize.Observer = (*proxy.MetricsObserver)(nil)
 
 // loadNetworkState reads cfg.NetworkState.Source and constructs the
 // appropriate backend. The source field is polymorphic: a `.yaml` /
@@ -76,6 +81,27 @@ func loadNetworkState(cfg *config.Config, rf *redisFactory) (registry.Registry, 
 	return nil, fmt.Errorf("network_state.source %q is not a YAML or RPC source; in-process Redis is no longer supported — embedders must inject NetworkState via Options.NetworkState (e.g. sentio-node)", cfg.NetworkState.Source)
 }
 
+// resolveNativeLibraryPath returns the FFI library path for the native
+// engine: an explicit path wins; otherwise, when a release tag is set, it
+// is fetched (and cached) via ffifetch. Non-native engines or an explicit
+// path short-circuit to (explicitPath, nil). Callers decide whether a
+// fetch error is fatal (materializer) or fail-open (rewriter factory).
+func resolveNativeLibraryPath(engine, explicitPath, release, sha256, baseURL string) (string, error) {
+	if engine != rewriter.EngineNative || explicitPath != "" || release == "" {
+		return explicitPath, nil
+	}
+	p, err := ffifetch.Fetch(context.Background(), ffifetch.Options{
+		Tag:     release,
+		SHA256:  sha256,
+		BaseURL: baseURL,
+	})
+	if err != nil {
+		return "", err
+	}
+	log.Infow("native library resolved from release", "tag", release, "path", p)
+	return p, nil
+}
+
 // buildRewriterFactory constructs the SQL rewriter factory for the
 // configured engine — dialing the external sql-rewriter gRPC service or
 // loading the in-process rewriter-go engine. Returns nil (and logs a
@@ -92,20 +118,14 @@ func buildRewriterFactory(cfg *config.Config, reg registry.Registry) rewriter.Fa
 	// native_library_release: resolve the FFI library from a rewriter-go
 	// release before constructing the factory. Explicit NativeLibraryPath
 	// wins; fetch failure keeps the warn-and-disable fail-open posture.
-	nativeLibPath := cfg.Rewriter.NativeLibraryPath
-	if cfg.Rewriter.Engine == rewriter.EngineNative && nativeLibPath == "" && cfg.Rewriter.NativeLibraryRelease != "" {
-		p, err := ffifetch.Fetch(context.Background(), ffifetch.Options{
-			Tag:     cfg.Rewriter.NativeLibraryRelease,
-			SHA256:  cfg.Rewriter.NativeLibrarySHA256,
-			BaseURL: cfg.Rewriter.NativeLibraryReleaseBaseURL,
-		})
-		if err != nil {
-			log.Warne(err, "failed to fetch native rewriter library, rewriting disabled")
-			return nil
-		}
-		log.Infow("native rewriter library resolved from release",
-			"tag", cfg.Rewriter.NativeLibraryRelease, "path", p)
-		nativeLibPath = p
+	nativeLibPath, err := resolveNativeLibraryPath(
+		cfg.Rewriter.Engine, cfg.Rewriter.NativeLibraryPath,
+		cfg.Rewriter.NativeLibraryRelease, cfg.Rewriter.NativeLibrarySHA256,
+		cfg.Rewriter.NativeLibraryReleaseBaseURL,
+	)
+	if err != nil {
+		log.Warne(err, "failed to fetch native rewriter library, rewriting disabled")
+		return nil
 	}
 
 	rwConfig := rewriter.Options{
@@ -133,6 +153,30 @@ func buildRewriterFactory(cfg *config.Config, reg registry.Registry) rewriter.Fa
 		"physical_database", cfg.Rewriter.PhysicalDatabase,
 	)
 	return rwf
+}
+
+// buildMaterializer constructs the agent-mode Phase-1 materializer from the
+// materialize config. Startup fail-fast: a returned error stops buildAgent.
+func buildMaterializer(cfg *config.Config) (rewriter.Materializer, error) {
+	mc := cfg.Materialize
+	libPath, err := resolveNativeLibraryPath(
+		mc.Engine, mc.NativeLibraryPath,
+		mc.NativeLibraryRelease, mc.NativeLibrarySHA256, mc.NativeLibraryReleaseBaseURL,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("resolve native library: %w", err)
+	}
+	poolSize := mc.RandomPoolSize
+	if poolSize <= 0 {
+		poolSize = 16
+	}
+	return rewriter.NewMaterializer(rewriter.Options{
+		Enabled:           true,
+		Engine:            mc.Engine,
+		ServiceAddr:       mc.ServiceAddr,
+		NativeLibraryPath: libPath,
+		Timeout:           mc.Timeout.Duration,
+	}, poolSize, mc.ProfileID)
 }
 
 // buildClusterManager constructs the multi-replica cluster manager
@@ -799,14 +843,38 @@ func buildAgent(opts Options, rf *redisFactory) (*builtServer, error) {
 
 	obs := proxy.NewMetricsObserver()
 	metrics := metricsplugin.New(obs)
+
+	// materialize runs first in the query chain (before the agent signer)
+	// so that, when enabled, the signed and forwarded SQL are identical —
+	// non-deterministic functions are already resolved to constants by
+	// the time Signer's JWS binds the query body.
+	queryPlugins := []plugin.QueryPlugin{}
+	var materializerClose func()
+	if cfg.Materialize.Enabled {
+		m, err := buildMaterializer(cfg)
+		if err != nil {
+			return nil, fmt.Errorf("materialize: %w", err) // startup fail-fast
+		}
+		materializerClose = func() { _ = m.Close() }
+		// Random-pool size (cfg.Materialize.RandomPoolSize) is applied
+		// materializer-side in buildMaterializer, not on the plugin —
+		// don't re-add a PoolSize field here.
+		queryPlugins = append(queryPlugins, &materialize.Plugin{
+			Materializer: m,
+			Observer:     obs,
+		})
+		log.Infow("agent materialize enabled", "engine", cfg.Materialize.Engine)
+	}
+	queryPlugins = append(queryPlugins,
+		&agent.Plugin{Signer: signer, Observer: obs, Owner: cfg.Agent.Owner, IsDriver: cfg.Agent.Driver},
+		metrics,
+	)
+
 	chain := &plugin.PluginChain{
 		ConnLifecyclePlugins:     []plugin.ConnLifecyclePlugin{metrics},
 		HandshakeCompletePlugins: []plugin.HandshakeCompletePlugin{metrics},
-		QueryPlugins: []plugin.QueryPlugin{
-			&agent.Plugin{Signer: signer, Observer: obs, Owner: cfg.Agent.Owner, IsDriver: cfg.Agent.Driver},
-			metrics,
-		},
-		ExceptionPlugins: []plugin.ExceptionPlugin{metrics},
+		QueryPlugins:             queryPlugins,
+		ExceptionPlugins:         []plugin.ExceptionPlugin{metrics},
 	}
 
 	// Two ways to choose an upstream:
@@ -828,7 +896,11 @@ func buildAgent(opts Options, rf *redisFactory) (*builtServer, error) {
 			{Runner: &proxyServerRunner{server: srv}, ListenAddr: cfg.Listen, Label: "agent"},
 		},
 		preServe: func(context.Context) {},
-		teardown: func() {},
+		teardown: func() {
+			if materializerClose != nil {
+				materializerClose()
+			}
+		},
 	}, nil
 }
 

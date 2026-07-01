@@ -61,6 +61,10 @@ var (
 		Name: "clickhouse_proxy_agent_bootstrap_fallback_total",
 		Help: "Total agent upstream picks that fell back to the bootstrap tier (account had no permissioned indexer)",
 	})
+	agentMaterializeTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "clickhouse_proxy_agent_materialize_total",
+		Help: "Agent-mode Phase-1 materialization outcomes",
+	}, []string{"result", "code"})
 )
 
 func init() {
@@ -76,6 +80,7 @@ func init() {
 	prometheus.MustRegister(agentTokensInjected)
 	prometheus.MustRegister(agentTokenErrors)
 	prometheus.MustRegister(agentBootstrapFallbackTotal)
+	prometheus.MustRegister(agentMaterializeTotal)
 }
 
 type MetricsObserver struct{}
@@ -139,3 +144,14 @@ func (m *MetricsObserver) HandshakeCompleted(duration float64) {
 func (m *MetricsObserver) AgentTokenInjected()     { agentTokensInjected.Inc() }
 func (m *MetricsObserver) AgentTokenError()        { agentTokenErrors.Inc() }
 func (m *MetricsObserver) AgentBootstrapFallback() { agentBootstrapFallbackTotal.Inc() }
+
+func (m *MetricsObserver) MaterializeApplied() {
+	agentMaterializeTotal.WithLabelValues("applied", "").Inc()
+}
+func (m *MetricsObserver) MaterializeNoop() { agentMaterializeTotal.WithLabelValues("noop", "").Inc() }
+func (m *MetricsObserver) MaterializeNonSuccess(code string) {
+	agentMaterializeTotal.WithLabelValues("non_success", code).Inc()
+}
+func (m *MetricsObserver) MaterializeCallError() {
+	agentMaterializeTotal.WithLabelValues("call_error", "").Inc()
+}

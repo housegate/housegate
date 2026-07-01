@@ -1,0 +1,30 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "materialize",
+    srcs = [
+        "config.go",
+        "materialize.go",
+    ],
+    importpath = "housegate/housegate/pkg/plugins/materialize",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/cfgtypes",
+        "//pkg/log",
+        "//pkg/plugin",
+        "//pkg/rewriter",
+        "@com_github_housegate_rewriter_go//gen/pb",
+    ],
+)
+
+go_test(
+    name = "materialize_test",
+    srcs = ["materialize_test.go"],
+    embed = [":materialize"],
+    deps = [
+        "//pkg/chproto",
+        "//pkg/plugin",
+        "//pkg/rewriter",
+        "@com_github_housegate_rewriter_go//gen/pb",
+    ],
+)

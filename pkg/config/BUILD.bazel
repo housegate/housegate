@@ -17,6 +17,7 @@ go_library(
         "//pkg/plugins/concurrency",
         "//pkg/plugins/indexing_usage",
         "//pkg/plugins/lthash",
+        "//pkg/plugins/materialize",
         "//pkg/plugins/rewrite",
         "//pkg/plugins/sessionstate",
         "//pkg/plugins/usage",
@@ -37,5 +38,6 @@ go_test(
     deps = [
         "//pkg/cluster",
         "//pkg/plugins/agent",
+        "//pkg/plugins/materialize",
     ],
 )

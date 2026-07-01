@@ -33,6 +33,7 @@ const (
 type backend interface {
 	Rewrite(ctx context.Context, req *pb.RewriteSQLRequest) (*pb.RewriteSQLResponse, error)
 	RewriteErrorMessage(ctx context.Context, req *pb.RewriteErrorMessageRequest) (*pb.RewriteErrorMessageResponse, error)
+	MaterializeSQL(ctx context.Context, req *pb.MaterializeSQLRequest) (*pb.MaterializeSQLResponse, error)
 	Close() error
 }
 
@@ -80,6 +81,10 @@ func (b *grpcBackend) Rewrite(ctx context.Context, req *pb.RewriteSQLRequest) (*
 
 func (b *grpcBackend) RewriteErrorMessage(ctx context.Context, req *pb.RewriteErrorMessageRequest) (*pb.RewriteErrorMessageResponse, error) {
 	return b.client.RewriteErrorMessage(ctx, req)
+}
+
+func (b *grpcBackend) MaterializeSQL(ctx context.Context, req *pb.MaterializeSQLRequest) (*pb.MaterializeSQLResponse, error) {
+	return b.client.MaterializeSQL(ctx, req)
 }
 
 func (b *grpcBackend) Close() error { return b.conn.Close() }
