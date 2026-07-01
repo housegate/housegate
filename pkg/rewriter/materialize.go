@@ -18,6 +18,7 @@ import (
 type MaterializeOutcome struct {
 	SQL     string
 	Changed bool
+	// Code is meaningful only when the accompanying error is nil.
 	Code    pb.MaterializeCode
 	Message string
 }

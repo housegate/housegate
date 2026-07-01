@@ -102,7 +102,7 @@ require (
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/go-faster/city v1.0.1 // indirect
 	github.com/go-faster/errors v0.7.1 // indirect
-	github.com/google/uuid v1.6.0 // indirect
+	github.com/google/uuid v1.6.0
 	github.com/holiman/uint256 v1.3.2 // indirect
 	github.com/housegate/rewriter-go v0.3.0
 	github.com/klauspost/compress v1.18.5 // indirect
