@@ -167,6 +167,60 @@ type Sharder interface {
 }
 ```
 
+### 3.5 端到端流程与 L1/L2/L3 分层
+
+三层构成一个**承诺层级(commitment hierarchy)**,Sequencer 是那个**亲手产出 L3、并把它锚进外部 L2/L1** 的角色——它**使用**这些链,而不运营它们。**L3** 是 Sentio 自己的签名写语句块的哈希链(由 Sequencer 产出,§5.1);每个 L3 块的承诺被发到外部 **L2**(更快更便宜的 finality),L2 再 settle 到 **L1**(Ethereum)。承诺**往下**流(L3 → L2 → L1);finality **往上**继承(L1 → L2 → 被锚的 L3 块),而这个 finality 正是放行 `safe` 的闸。
+
+```mermaid
+flowchart TB
+  U["User / Agent — 签名写 · 读"]
+  subgraph DP["数据平面 · 每个 indexer 节点(不受信 operator 侧)"]
+    HG["HouseGate<br/>ingress · proxy"]
+    VF["Verifier<br/>replay + 字节侧扫描"]
+    SN["SNode<br/>storage orchestration"]
+    CH["ClickHouse<br/>hg_unsafe / hg_safe / hg_promote"]
+    DA["DA / payload store<br/>ingest 时写入"]
+    CK["ClickHouse Keeper<br/>stock · 不触碰"]
+  end
+  subgraph SEQ["Sentio Sequencer · hashicorp/raft 3–5 节点(受信 v1)"]
+    OR["Leader Orchestrator<br/>派发 · 锚定 · 签名"]
+    FSM["Replicated FSM<br/>seq · L3 log · accumulator<br/>三方校验 → QuorumVerified"]
+  end
+  subgraph SET["结算(外部链)"]
+    L2["L2<br/>anchor + finality"]
+    L1["L1 (Ethereum)<br/>最终结算"]
+  end
+
+  U -->|"① 签名写"| HG
+  HG -->|"spool payload(ingest)"| DA
+  HG -->|"② SubmitStatement(envelope)"| OR
+  SN -->|"RegisterRC"| OR
+  OR -->|"③ ReplayJob"| VF
+  DA -->|"fetch payload"| VF
+  VF -->|"③ attestation + 字节侧"| FSM
+  CH -.->|"native RMT (ZK)"| CK
+  OR -->|"⑤ anchor: l3_block_hash, state_root, da_ref"| L2
+  L2 -->|"settle"| L1
+  L2 -.->|"finality(闸住提升)"| OR
+  OR -->|"⑥ PromoteSafePartition(签名)"| SN
+  SN -->|"REPLACE PARTITION → hg_safe"| CH
+  CH -.->|"⑦ 读:SELECT → hg_safe"| HG
+```
+
+一条写的端到端流程:
+
+1. **① 进入 L3** —— User/Agent 签名写 → HouseGate。HouseGate 验签,并在 **ingest 时把 payload spool 进 DA / payload store**(base-spec §5.1)。
+2. **② 定序** —— HouseGate 把 `StatementEnvelopeV2` 提给 Sequencer;FSM 分配 `statement_seq`、封进 L3 块。source SNode 乐观写 `hg_unsafe` 并登记 `RCRecord`。
+3. **③ 验证** —— Orchestrator 派 `ReplayJob` 给 Verifier;每个 Verifier **从 DA 取回 payload**,经 ClickHouse(`chexec`)重放并对候选 part 做字节侧扫描,回传签名 attestation。
+4. **④ 裁决** —— FSM 在已落日志的签名证据上算三方校验 `(replay-root ∧ 分区 commitment ∧ 字节侧)` → `QuorumVerified`。
+5. **⑤ 锚定 + finality** —— Orchestrator 把承诺 `(l3_block_hash, state_root, da_ref)` 发到 L2;L2 settle 到 L1;finality 回流并**闸住提升**。
+6. **⑥ 放行 safe** —— finality 之后 leader 签 `PromoteSafePartition`(secp256k1);SNode 跑 `REPLACE PARTITION` 进 `hg_safe`。
+7. **⑦ 读** —— `SELECT` 直接经 HouseGate 打 `hg_safe`,**完全不经过 Sequencer**。
+
+**DA 何时"写"、何时只是"被引用"(一个值得钉死的时序点)。** payload 在 **ingest(第 1 步)** 就写进 DA,在**验证(第 3 步)** 被读回;第 5 步的 anchor 只是把**承诺 + `da_ref` 指针**发到 L2——**不是**把数据写进 DA 的时刻。数据必须在"引用它的承诺"之前就在 DA 上,跟着链上锚点走的验证者/挑战者才总能取到。(v1 用受信 payload store,且 envelope 经 `ReplayJob` 从受信 Sequencer 给 Verifier,所以这条排序到 **P5+ 无需信任挑战**时才变成硬约束。)
+
+**定位。** 用 rollup 的话说,Sequencer 是**排序权威**;v1 里它还兼了 **verifier 编排**(replay 法定多数 + 三方校验)和**结算**(安全态发布)两顶帽子,P5+ 分解会把它拆成 Sequencer 与 Verifier 网络(§1)。它是 **optimistic-rollup 风味**(乐观 source 执行 + 法定多数 replay + P5+ challenge 窗口),不是有效性证明式。
+
 ## 4. 复制状态机
 
 Sequencer 的真相来源就是一条 Raft 日志和它喂出来的派生状态。本节定义命令字母表、FSM 状态、`Apply`/`Snapshot`/`Restore` 映射、确定性规则、生命周期映射。

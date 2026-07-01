@@ -167,6 +167,60 @@ type Sharder interface {
 }
 ```
 
+### 3.5 End-to-end flow and the L1/L2/L3 layering
+
+The three layers form a **commitment hierarchy**, and the Sequencer is the component that *authors* L3 and *anchors* it down to an external L2/L1 — it uses those chains, it does not run them. **L3** is Sentio's own hash-linked chain of signed write-statement blocks (authored by the Sequencer, §5.1); each L3 block's commitment is posted to an external **L2** (cheaper/faster finality), which settles to **L1** (Ethereum). Commitments flow *down* (L3 → L2 → L1); finality is inherited *up* (L1 → L2 → the anchored L3 block), and that finality gates promotion to `safe`.
+
+```mermaid
+flowchart TB
+  U["User / Agent — signs · reads"]
+  subgraph DP["Data plane · per indexer node (untrusted operator side)"]
+    HG["HouseGate<br/>ingress · proxy"]
+    VF["Verifier<br/>replay + byte-scan"]
+    SN["SNode<br/>storage orchestration"]
+    CH["ClickHouse<br/>hg_unsafe / hg_safe / hg_promote"]
+    DA["DA / payload store<br/>written at ingest"]
+    CK["ClickHouse Keeper<br/>stock · untouched"]
+  end
+  subgraph SEQ["Sentio Sequencer · hashicorp/raft 3–5 nodes (trusted v1)"]
+    OR["Leader Orchestrator<br/>dispatch · anchor · sign"]
+    FSM["Replicated FSM<br/>seq · L3 log · accumulator<br/>3-way check → QuorumVerified"]
+  end
+  subgraph SET["Settlement (external chains)"]
+    L2["L2<br/>anchor + finality"]
+    L1["L1 (Ethereum)<br/>final settlement"]
+  end
+
+  U -->|"① signed write"| HG
+  HG -->|"spool payload (ingest)"| DA
+  HG -->|"② SubmitStatement (envelope)"| OR
+  SN -->|"RegisterRC"| OR
+  OR -->|"③ ReplayJob"| VF
+  DA -->|"fetch payload"| VF
+  VF -->|"③ attestation + byte-scan"| FSM
+  CH -.->|"native RMT (ZK)"| CK
+  OR -->|"⑤ anchor: l3_block_hash, state_root, da_ref"| L2
+  L2 -->|"settle"| L1
+  L2 -.->|"finality (gates promote)"| OR
+  OR -->|"⑥ PromoteSafePartition (signed)"| SN
+  SN -->|"REPLACE PARTITION → hg_safe"| CH
+  CH -.->|"⑦ read: SELECT → hg_safe"| HG
+```
+
+End-to-end flow of one write:
+
+1. **① enter L3** — User/Agent signs a write → HouseGate. HouseGate validates the signature and **spools the payload to the DA / payload store at ingest** (base-spec §5.1).
+2. **② sequence** — HouseGate submits `StatementEnvelopeV2` to the Sequencer; the FSM assigns `statement_seq` and seals it into an L3 block. The source SNode optimistically writes `hg_unsafe` and registers its `RCRecord`.
+3. **③ verify** — the Orchestrator dispatches `ReplayJob` to Verifiers; each Verifier **fetches the payload from DA**, replays via ClickHouse (`chexec`) and byte-side-scans the candidate parts, then returns a signed attestation.
+4. **④ adjudicate** — the FSM evaluates the three-way check `(replay-root ∧ partition-commitment ∧ byte-side)` over the logged signed evidence → `QuorumVerified`.
+5. **⑤ anchor + finality** — the Orchestrator posts the commitment `(l3_block_hash, state_root, da_ref)` to L2; L2 settles to L1; finality flows back and **gates promotion**.
+6. **⑥ promote to safe** — after finality the leader signs `PromoteSafePartition` (secp256k1); SNode runs `REPLACE PARTITION` into `hg_safe`.
+7. **⑦ read** — `SELECT` hits `hg_safe` directly via HouseGate and **never enters the Sequencer**.
+
+**Where DA is written vs referenced (a timing point worth pinning).** The payload is written to DA at **ingest** (step 1) and read back at **verify** (step 3); the anchor at step 5 only posts a **commitment + `da_ref` pointer** to L2 — it is *not* the moment data is written to DA. Data must be available on DA before the commitment that references it, so a verifier/challenger following the on-chain anchor can always fetch it. (v1 uses a trusted payload store and delivers envelopes to Verifiers via `ReplayJob`, so this ordering only becomes load-bearing once decentralized challenge arrives in P5+.)
+
+**Positioning.** In rollup terms the Sequencer is the *ordering authority*; in v1 it additionally wears the *verifier-orchestration* (replay quorum + three-way check) and *settlement* (safe-state publication) hats, which the P5+ decomposition splits into the Sequencer vs the Verifier network (§1). It is optimistic-rollup-flavored (optimistic source execution + quorum replay + a P5+ challenge window), not validity-proof-based.
+
 ## 4. The Replicated State Machine
 
 The Sequencer's source of truth is one Raft log and the derived state it feeds. This section defines the command alphabet, the FSM state, the `Apply`/`Snapshot`/`Restore` mapping, the determinism rules, and the lifecycle mapping.
