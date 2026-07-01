@@ -490,8 +490,24 @@ func TestValidate_Materialize(t *testing.T) {
 		}
 	})
 	t.Run("default pool size is 16", func(t *testing.T) {
-		if got := Default().Materialize.RandomPoolSize; got != 16 {
+		d := Default()
+		if got := d.Materialize.RandomPoolSize; got != 16 {
 			t.Fatalf("default RandomPoolSize = %d, want 16", got)
+		}
+		if got := d.Materialize.Enabled; got != false {
+			t.Fatalf("default Materialize.Enabled = %v, want false", got)
+		}
+		if got := d.Materialize.Timeout.Duration; got != 5*time.Second {
+			t.Fatalf("default Materialize.Timeout = %v, want 5s", got)
+		}
+	})
+	t.Run("negative pool size is rejected", func(t *testing.T) {
+		c := base()
+		c.Materialize.Enabled = true
+		c.Materialize.Engine = "native"
+		c.Materialize.RandomPoolSize = -1
+		if err := c.Validate(); err == nil {
+			t.Fatal("want error: random_pool_size must be >= 0")
 		}
 	})
 }

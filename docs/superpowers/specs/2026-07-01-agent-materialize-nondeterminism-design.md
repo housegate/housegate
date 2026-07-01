@@ -169,7 +169,6 @@ type Observer interface {                            // narrow metrics surface; 
 
 type Plugin struct {
     Materializer Materializer                        // nil → plugin is a no-op
-    PoolSize     int
     Observer     Observer                            // optional
 }
 
@@ -178,7 +177,7 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 var _ plugin.QueryPlugin = (*Plugin)(nil)
 ```
 
-The plugin implements no marker interfaces: agent-mode outgoing sessions are neither routed nor peer-trusted, so default firing is correct. `OnQuery` never returns a rejecting error — all failure paths fall open.
+The plugin implements no marker interfaces: agent-mode outgoing sessions are neither routed nor peer-trusted, so default firing is correct. `OnQuery` never returns a rejecting error — all failure paths fall open. Random-pool sizing is not a plugin field: it is applied materializer-side (`NewMaterializer` / `buildMaterializer`, §5.4), so the plugin has no `PoolSize` knob to keep in sync.
 
 ### 5.3 Config — top-level `materialize` block
 
@@ -212,11 +211,13 @@ if err != nil {
     return nil, fmt.Errorf("materialize: %w", err)   // startup fail-fast (see §6)
 }
 queryPlugins = []plugin.QueryPlugin{
-    &materialize.Plugin{Materializer: m, PoolSize: cfg.Materialize.RandomPoolSize, Observer: obs},
+    &materialize.Plugin{Materializer: m, Observer: obs},
     &agent.Plugin{...}, metrics,
 }
 teardown = append(teardown, m.Close)                 // close backend on shutdown
 ```
+
+`cfg.Materialize.RandomPoolSize` is consumed inside `buildMaterializer` (`poolSize := mc.RandomPoolSize; if poolSize <= 0 { poolSize = 16 }`, passed to `rewriter.NewMaterializer`) — pool sizing lives materializer-side, not on the plugin struct.
 
 `buildMaterializer` reuses the native-library resolution already present in `buildRewriterFactory` (path → release-fetch via `pkg/ffifetch`). That block is extracted into a small shared helper `resolveNativeLibraryPath(engine, path, release, sha256, baseURL) (string, error)` called by both the rewriter factory and the materializer, so the FFI download/caching/pinning path is not duplicated.
 

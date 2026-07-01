@@ -34,7 +34,6 @@ type Observer interface {
 // A nil Materializer makes it a no-op.
 type Plugin struct {
 	Materializer Materializer
-	PoolSize     int
 	Observer     Observer
 }
 

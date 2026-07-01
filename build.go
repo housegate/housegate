@@ -856,9 +856,11 @@ func buildAgent(opts Options, rf *redisFactory) (*builtServer, error) {
 			return nil, fmt.Errorf("materialize: %w", err) // startup fail-fast
 		}
 		materializerClose = func() { _ = m.Close() }
+		// Random-pool size (cfg.Materialize.RandomPoolSize) is applied
+		// materializer-side in buildMaterializer, not on the plugin —
+		// don't re-add a PoolSize field here.
 		queryPlugins = append(queryPlugins, &materialize.Plugin{
 			Materializer: m,
-			PoolSize:     cfg.Materialize.RandomPoolSize,
 			Observer:     obs,
 		})
 		log.Infow("agent materialize enabled", "engine", cfg.Materialize.Engine)
