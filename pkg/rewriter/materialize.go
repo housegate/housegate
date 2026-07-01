@@ -43,16 +43,25 @@ func NewMaterializer(opts Options, poolSize int, profileID string) (Materializer
 	if err != nil {
 		return nil, err
 	}
-	return &sentioMaterializer{be: be, poolSize: poolSize, profileID: profileID}, nil
+	return &sentioMaterializer{be: be, poolSize: poolSize, profileID: profileID, timeout: opts.Timeout}, nil
 }
 
 type sentioMaterializer struct {
 	be        backend
 	poolSize  int
 	profileID string
+	// timeout, when > 0, bounds each Materialize call with a per-call
+	// deadline (independent of any gRPC dial timeout). This makes a
+	// hung rewriter fail open promptly instead of blocking the query.
+	timeout time.Duration
 }
 
 func (m *sentioMaterializer) Materialize(ctx context.Context, sql string) (MaterializeOutcome, error) {
+	if m.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, m.timeout)
+		defer cancel()
+	}
 	now := time.Now().UnixNano()
 	req := &pb.MaterializeSQLRequest{
 		Sql: sql,

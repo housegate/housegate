@@ -24,6 +24,11 @@ type fakeBackend struct {
 	matResp    *pb.MaterializeSQLResponse
 	matErr     error
 	lastMatReq *pb.MaterializeSQLRequest
+
+	// lastMatCtxHadDeadline records whether the ctx passed to the most
+	// recent MaterializeSQL call carried a deadline — used to assert
+	// that sentioMaterializer applies its per-call timeout.
+	lastMatCtxHadDeadline bool
 }
 
 func (f *fakeBackend) Rewrite(_ context.Context, req *pb.RewriteSQLRequest) (*pb.RewriteSQLResponse, error) {
@@ -36,8 +41,10 @@ func (f *fakeBackend) RewriteErrorMessage(_ context.Context, req *pb.RewriteErro
 	return &pb.RewriteErrorMessageResponse{Code: pb.RewriteCode_Success, ErrorAfterRewrite: "inverted"}, nil
 }
 
-func (f *fakeBackend) MaterializeSQL(_ context.Context, req *pb.MaterializeSQLRequest) (*pb.MaterializeSQLResponse, error) {
+func (f *fakeBackend) MaterializeSQL(ctx context.Context, req *pb.MaterializeSQLRequest) (*pb.MaterializeSQLResponse, error) {
 	f.lastMatReq = req
+	_, ok := ctx.Deadline()
+	f.lastMatCtxHadDeadline = ok
 	return f.matResp, f.matErr
 }
 
