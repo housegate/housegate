@@ -10,6 +10,7 @@ import (
 
 	"housegate/housegate/pkg/cluster"
 	"housegate/housegate/pkg/plugins/agent"
+	materializeplugin "housegate/housegate/pkg/plugins/materialize"
 )
 
 func TestDurationUnmarshal(t *testing.T) {
@@ -447,4 +448,50 @@ func TestConfigValidate(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestValidate_Materialize(t *testing.T) {
+	base := func() *Config {
+		c := Default()
+		c.Agent.Mode = true
+		c.Agent.PrivateKeyHex = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+		c.Agent.Upstream = "127.0.0.1:9000"
+		return &c
+	}
+	t.Run("enabled without engine is rejected", func(t *testing.T) {
+		c := base()
+		c.Materialize.Enabled = true
+		if err := c.Validate(); err == nil {
+			t.Fatal("want error: engine required when enabled")
+		}
+	})
+	t.Run("grpc without service_addr is rejected", func(t *testing.T) {
+		c := base()
+		c.Materialize.Enabled = true
+		c.Materialize.Engine = "grpc"
+		c.Materialize.ServiceAddr = ""
+		if err := c.Validate(); err == nil {
+			t.Fatal("want error: service_addr required for grpc")
+		}
+	})
+	t.Run("native enabled validates", func(t *testing.T) {
+		c := base()
+		c.Materialize.Enabled = true
+		c.Materialize.Engine = "native"
+		if err := c.Validate(); err != nil {
+			t.Fatalf("native enabled should validate: %v", err)
+		}
+	})
+	t.Run("disabled block ignored", func(t *testing.T) {
+		c := base()
+		c.Materialize = materializeplugin.Config{} // all zero, Enabled=false
+		if err := c.Validate(); err != nil {
+			t.Fatalf("disabled materialize must not affect validation: %v", err)
+		}
+	})
+	t.Run("default pool size is 16", func(t *testing.T) {
+		if got := Default().Materialize.RandomPoolSize; got != 16 {
+			t.Fatalf("default RandomPoolSize = %d, want 16", got)
+		}
+	})
 }

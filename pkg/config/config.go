@@ -35,6 +35,7 @@ import (
 	"housegate/housegate/pkg/plugins/concurrency"
 	indexingusage "housegate/housegate/pkg/plugins/indexing_usage"
 	lthashplugin "housegate/housegate/pkg/plugins/lthash"
+	materializeplugin "housegate/housegate/pkg/plugins/materialize"
 	"housegate/housegate/pkg/plugins/rewrite"
 	"housegate/housegate/pkg/plugins/sessionstate"
 	"housegate/housegate/pkg/plugins/usage"
@@ -132,14 +133,15 @@ type Config struct {
 
 	// --- Feature sections (each owned by its plugin package) ---
 
-	Auth             authplugin.Config    `json:"auth"              yaml:"auth"`
-	Rewriter         rewrite.Config       `json:"rewriter"          yaml:"rewriter"`
-	Agent            agent.Config         `json:"agent"             yaml:"agent"`
-	Usage            usage.Config         `json:"usage"             yaml:"usage"`
-	IndexingUsage    indexingusage.Config `json:"indexing_usage"    yaml:"indexing_usage"`
-	ConcurrencyLimit concurrency.Config   `json:"concurrency_limit" yaml:"concurrency_limit"`
-	State            sessionstate.Config  `json:"state"             yaml:"state"`
-	LtHash           lthashplugin.Config  `json:"lthash"            yaml:"lthash"`
+	Auth             authplugin.Config        `json:"auth"              yaml:"auth"`
+	Rewriter         rewrite.Config           `json:"rewriter"          yaml:"rewriter"`
+	Materialize      materializeplugin.Config `json:"materialize"       yaml:"materialize"`
+	Agent            agent.Config             `json:"agent"             yaml:"agent"`
+	Usage            usage.Config             `json:"usage"             yaml:"usage"`
+	IndexingUsage    indexingusage.Config     `json:"indexing_usage"    yaml:"indexing_usage"`
+	ConcurrencyLimit concurrency.Config       `json:"concurrency_limit" yaml:"concurrency_limit"`
+	State            sessionstate.Config      `json:"state"             yaml:"state"`
+	LtHash           lthashplugin.Config      `json:"lthash"            yaml:"lthash"`
 
 	// --- Plumbing sections owned by pkg/config ---
 
@@ -296,6 +298,13 @@ func (c *Config) Validate() error {
 			c.ResolveRedisAddr(c.NetworkState.Source) == "" {
 			errs = append(errs, errors.New("agent.upstream is required, or set network_state.source to a YAML path (.yaml/.yml), an RPC URL (http(s)://), or a Redis address (or top-level redis_default_addr) for upstream auto-discovery"))
 		}
+		// Materialize is an agent-mode-only feature (Phase-1 non-determinism
+		// materialization). Gating validation here means a stray
+		// materialize block in a server-mode config is silently ignored
+		// rather than rejected.
+		if err := c.Materialize.Validate(); err != nil {
+			errs = append(errs, err)
+		}
 	case ModeServer:
 		// NetworkState is needed both for cross-shard rewriter routing
 		// (when shard/upstream is set) and for router-only fallback
@@ -433,6 +442,10 @@ func Default() Config {
 			ServiceAddr: EnvOrDefault("HOUSEGATE_REWRITER_ADDR", "localhost:50051"),
 			Timeout:     Duration{5 * time.Second},
 			Engine:      EnvOrDefault("HOUSEGATE_REWRITER_ENGINE", ""),
+		},
+		Materialize: materializeplugin.Config{
+			Timeout:        Duration{5 * time.Second},
+			RandomPoolSize: 16,
 		},
 		Agent: agent.Config{
 			Mode:          EnvOrDefault("HOUSEGATE_AGENT", "") == "true",
