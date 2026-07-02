@@ -2,14 +2,6 @@
 
 日期：2026-07-01
 
-来源文档：
-
-- `housegate/docs/superpowers/specs/2026-06-25-housekeeper-storage-integrity-overall-design.zh-CN.md`
-- `housegate/docs/superpowers/specs/2026-06-30-storage-integrity-bounded-mutation-design.zh-CN.md`
-- `housegate@main/docs/superpowers/specs/2026-06-30-sentio-sequencer-design.zh-CN.md`
-
-本文把当前 INSERT-only storage integrity 实现、bounded UPDATE/DELETE 方案和 main 分支 Sentio Sequencer Go 服务设计合并成一份统一设计。它不是简单拼接：当前实现文档描述的是已跑通的 3 ClickHouse / 3 HouseGate / 3 ClickHouse Keeper fork 基线；Sequencer 设计把完整性控制面重命名并迁移为独立的 Go/Raft/gRPC **Sentio Sequencer**；bounded mutation 文档在该控制面之上扩展 UPDATE/DELETE 的 post-state 校验、`base_partition_root` CAS、`SafeSnapshotManifest` 和 read set gating。
-
 ## 1. 设计定位
 
 统一后的 storage integrity 分成三条 lane：
