@@ -171,8 +171,7 @@ sequenceDiagram
   participant CH as Local ClickHouse
   participant DA as Payload Store
   participant HK as Sentio Sequencer
-  participant RV as Replay Workers
-  participant UV as Unsafe Validation
+  participant VW as VerifierWorker
   participant F as Finality
   participant PW as Promotion Workers
   participant SA as SafeAudit
@@ -188,11 +187,11 @@ sequenceDiagram
   HG->>DA: PutPayload(payload)
   DA-->>HG: payload_ref/hash/length
   HG->>HK: create statement ledger
-  HK->>RV: expose replay job
-  RV->>DA: GetPayload + verify hash/length
-  RV->>HK: replay attestation
-  UV->>CH: local unsafe digest
-  UV->>HK: unsafe result
+  HK->>VW: ReplayJob + byte-side scan task
+  VW->>DA: GetPayload + verify hash/length
+  VW->>HK: RecordAttestation
+  VW->>CH: scan fetched hg_unsafe candidate parts
+  VW->>HK: RecordByteSideScan(part_row_lthash)
   F->>HK: finality event
   HK->>HK: three-way promotion check + finality
   HK->>PW: promotion task
@@ -766,12 +765,12 @@ storage_integrity:
       - "sequencer1:12000"
       - "sequencer2:12000"
       - "sequencer3:12000"
-  unsafe_validation:
+  byte_side_scan:
     query_timeout: "10s"
   workers:
     poll_interval: "1s"
     replay: true
-    unsafe_validation: true
+    byte_side_scan: true
     promotion: true
     rollback: true
     safe_audit: true
@@ -811,7 +810,7 @@ storage_integrity:
 
 - 建立 `cmd/sequencer` / `pkg/sequencer/{fsm,orchestrator,server,raftnode,accumulator}` 的 Go/Raft/gRPC 控制面骨架。
 - 冻结 `sequencer-go` proto：`StatementEnvelopeV2`、`RCRecord`、`PromoteSafePartition`、`ByteSideScanMsg`，以及复用 replay 类型的 wire form。
-- 保留当前 INSERT replay / Verifier byte-side scan（当前代码可先由 `UnsafeValidationWorker` 兼容承载）/ finality / rollback 基线，短期可继续用 `ATTACH PARTITION FROM unsafe` 作为兼容 publication。
+- 保留 INSERT replay / Verifier byte-side scan / finality / rollback 基线，短期可继续用 `ATTACH PARTITION FROM unsafe` 作为兼容 publication。
 - 引入 `SafeSnapshotManifest` 发布和 latest safe watermark。
 - 对 `hg_safe` / `hg_unsafe` 强制 STOP MERGES，并在启动和巡检时校验。
 
