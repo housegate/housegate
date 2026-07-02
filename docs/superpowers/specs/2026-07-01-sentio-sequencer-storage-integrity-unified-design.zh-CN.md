@@ -30,7 +30,7 @@ INSERT 的 `three-way promotion check` 来自 main 分支 Sequencer 设计，含
 
 ```mermaid
 flowchart LR
-  C["clickhouse-client / app"] --> CHG["client-side HouseGate<br/>materialize + row id + sign"]
+  C["clickhouse-client / app"] --> CHG["client-side HouseGate<br/>Phase 1 materialize + row id + sign"]
   CHG --> HG1["server-side HouseGate A"]
   CHG --> HG2["server-side HouseGate B"]
   CHG --> HG3["server-side HouseGate C"]
@@ -115,16 +115,28 @@ Mutation 在 main 分支 Sequencer 设计中标为 P2，不属于 v1 INSERT 主�
 
 ### 4.1 Client-side HouseGate
 
-client-side HouseGate 是签名前 normalizer：
+client-side HouseGate 是签名前 normalizer。它把用户 SQL 变成后续 source write 和 replay 都能复现的 signed input；server-side HouseGate 和 Verifier 都不能重新物化非确定函数。
 
-1. 物化白名单非确定性零参数函数：`now()`、`rand()`、`random()`、`rand64()`、`generateUUIDv4()`。
-2. INSERT 时注入 `_hg_row_id`：
+Phase 1 是 agent-mode non-determinism materialization：在 signer 之前调用 materializer，把白名单非确定性函数替换成 SQL literal constants，例如 `now()`、`rand()`、`random()`、`rand64()`、`generateUUIDv4()`。签名对象和实际转发给 server-side HouseGate 的 `Query.Body` 必须是同一份 materialized SQL。
+
+```text
+raw SQL:
+  INSERT INTO t(ts, id, v) VALUES (now(), generateUUIDv4(), rand())
+
+after Phase 1:
+  INSERT INTO t(ts, id, v)
+  VALUES ('2026-07-02 14:00:00.000000000', '550e8400-e29b-41d4-a716-446655440000', 123456789)
+```
+
+Phase 1 只负责让 signed SQL text deterministic。它不注入 `_hg_row_id`，不构造 `StatementEnvelopeV2`，不做 payload spooling，也不和 Sequencer / replay 交互；这些属于后续 storage-integrity pipeline。
+
+INSERT 进入 storage-integrity lane 时，还必须注入 `_hg_row_id`：
 
 ```text
 BLAKE3("housegate-row-id-v1" || network_id || table_id || statement_id || global_row_ordinal)
 ```
 
-3. 对最终 `Query.Body` 生成 `SQL_x_auth_token`：
+然后对最终 `Query.Body` 生成 `SQL_x_auth_token`：
 
 ```text
 purpose = housegate-query
@@ -132,7 +144,7 @@ iss     = <client-side HouseGate signer address>
 qhash   = Keccak256(Query.Body)
 ```
 
-server-side HouseGate 不重新物化非确定函数。签名后仍包含未物化非确定函数的 storage-integrity 写入必须 fail closed。
+运行策略分两层：普通 agent materialize 能力可以按配置 fail open，使无法物化的普通流量继续签名和转发；但进入 storage-integrity lane 的写入必须满足更强约束。签名后仍包含未物化非确定函数、或者签名 body 与转发 body 不一致的 INSERT / UPDATE / DELETE，server-side HouseGate 必须 fail closed，不能进入 Sequencer ledger。
 
 ### 4.2 Server-side HouseGate
 
@@ -177,7 +189,9 @@ sequenceDiagram
   participant SA as SafeAudit
 
   C->>CHG: raw INSERT SQL + Data blocks
-  CHG->>CHG: materialize nondeterminism + inject _hg_row_id + sign
+  CHG->>CHG: Phase 1 materialize nondeterminism
+  CHG->>CHG: inject _hg_row_id
+  CHG->>CHG: sign final Query.Body
   CHG->>HG: INSERT + SQL_x_auth_token
   HG->>HG: verify token + sql-rewriter + static rewrite
   HG->>CH: INSERT INTO active hg_unsafe_N
@@ -255,6 +269,51 @@ R_source =
 设计要求：`source_claim_root` 必须来自 replay 后的 `state_root_after`。仅由 statement metadata、SQL hash 或 payload commitment 派生的 digest 不能作为 promotion 判据。
 
 INSERT 的 byte-side 路径由 **VerifierWorker** 执行：读取实际 fetched `hg_unsafe` candidate parts，按 canonical row + `_hg_row_id` 重算 per-part `part_row_lthash`，并通过 `RecordByteSideScan` 写入 FSM。它不是 SafeAudit；它发生在 promotion 前，是 three-way promotion check 的第三路，用来把 `RCRecord.candidate_parts` 精确绑定到即将进入 safe 的磁盘字节。
+
+#### INSERT 示例
+
+假设 latest safe snapshot 是 `S10`，表 `balance` 的 partition `P=2026-07-02` 为空：
+
+```sql
+INSERT INTO balance(day, account, amount)
+VALUES ('2026-07-02', 'alice', 100),
+       ('2026-07-02', 'bob', 50);
+```
+
+client-side HouseGate 在签名前 materialize 非确定性函数，并为 payload 中每行注入稳定 `_hg_row_id`：
+
+```text
+row_a = (_hg_row_id=a, day='2026-07-02', account='alice', amount=100)
+row_b = (_hg_row_id=b, day='2026-07-02', account='bob',   amount=50)
+
+L_a = LtHash(row_a)
+L_b = LtHash(row_b)
+part_row_lthash(part_1) = L_a + L_b
+base_partition_root(P) = 0
+post_partition_root(P) = L_a + L_b
+```
+
+每一步的结果：
+
+| 步骤 | 产生的结果 |
+| --- | --- |
+| Payload / statement | signed payload、`payload_hash`、`payload_ref`、`statement_id`、`schema_snapshot_id` 和 `executor_profile_id` 固定。 |
+| Source write | server-side HG 把 rows 写入 active `hg_unsafe_N`，ClickHouse 生成 candidate part `part_1`；客户端最多拿到 ACK 2 = Unsafe。 |
+| `RegisterRC` | source 上报 `candidate_parts=[part_1: L_a + L_b]`、`partition_delta(P)=L_a+L_b`、`source_claim_root=R_source`。 |
+| Replay evidence | VerifierWorker 从 DA 取 payload，校验 hash/length，从 `S10` replay INSERT，得到 `ComputedStateRoot`、`replay_delta(P)=L_a+L_b`、`replay_post_partition_root(P)=L_a+L_b`，提交 `RecordAttestation`。 |
+| Replay check | Sequencer 要求 ≥2 个独立 Verifier 的 `ComputedStateRoot == R_source`，证明 signed payload 的执行结果就是 source claim 的 root。 |
+| Partition commitment check | Sequencer 检查 `base_partition_root(P) + RCRecord.partition_delta(P) == replay_post_partition_root(P)`，即 `0 + (L_a+L_b) == (L_a+L_b)`。 |
+| Byte-side check | VerifierWorker 读取实际 fetched `hg_unsafe` candidate part `part_1` 的 bytes，重算 `part_row_lthash(bytes(part_1))`，提交 `RecordByteSideScan`；Sequencer 要求它等于 `RCRecord.candidate_parts[part_1]`。 |
+| Finality / promotion | L2/L1 finality 到达，且三路 check 全部通过后，Sequencer 下发 promotion；promotion 完成后发布 `SafeSnapshotManifest S11`。 |
+| Safe read | 默认 safe SELECT 从 `S11` 开始读到 alice=100、bob=50；ACK 3 = Safe。 |
+
+三路 check 分别挡不同问题：
+
+| 问题 | 被哪一路挡住 |
+| --- | --- |
+| source 上报的 `R_source` 不是 signed payload replay 的结果 | Replay check 失败。 |
+| source 把 evil rows 写进 `hg_unsafe`，并如实上报 evil rows 的 `part_row_lthash` | Partition commitment check 失败，因为 evil rows 的 delta 对不上 replay delta。 |
+| source 上报正确的 `part_row_lthash`，但磁盘上的 candidate part bytes 是另一批 rows | Byte-side part-lthash check 失败。 |
 
 ### 6.3 INSERT promotion
 
