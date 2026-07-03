@@ -1,4 +1,4 @@
-# Sentio Sequencer Storage Integrity 统一设计：INSERT + Bounded UPDATE/DELETE
+# Sentio Sequencer Storage Integrity：INSERT + Bounded UPDATE/DELETE
 
 日期：2026-07-01
 
