@@ -13,6 +13,9 @@ go_library(
 
 go_test(
     name = "replay_test",
-    srcs = ["verifier_test.go"],
+    srcs = [
+        "hash_test.go",
+        "verifier_test.go",
+    ],
     embed = [":replay"],
 )

@@ -22,6 +22,17 @@ func DigestString(s string) string {
 	return DigestBytes([]byte(s))
 }
 
+// CanonicalDigest returns the digest of v under the integrity layer's single
+// canonical hashing profile ("housegate-replay-mvp-v0"): SHA-256 over the
+// domain-separated canonical JSON encoding of v, hex-encoded with a 0x
+// prefix. Every root/commitment in the replay/arbiter integrity layer must
+// go through this profile with a distinct domain tag per commitment kind —
+// never a second, parallel hash profile — so independent nodes derive
+// identical roots from the same evidence (arbiter design §4.3).
+func CanonicalDigest(domain string, v any) (string, error) {
+	return canonicalDigest(domain, v)
+}
+
 func canonicalDigest(domain string, v any) (string, error) {
 	b, err := json.Marshal(v)
 	if err != nil {
