@@ -568,7 +568,7 @@ func candidatePartNames(candidates []ByteSidePart, partitionID string) []string 
 	seen := map[string]struct{}{}
 	var out []string
 	for _, part := range candidates {
-		if part.PartName == "" {
+		if part.PartName == "" || isLogicalHashScanPart(part.PartName) {
 			continue
 		}
 		if part.PartitionID != "" && part.PartitionID != partitionID {
@@ -581,6 +581,23 @@ func candidatePartNames(candidates []ByteSidePart, partitionID string) []string 
 		out = append(out, part.PartName)
 	}
 	sort.Strings(out)
+	return out
+}
+
+func isLogicalHashScanPart(partName string) bool {
+	return strings.HasPrefix(partName, "hash-scan-")
+}
+
+func activePartEntriesToByteSideParts(entries []replay.PartManifestEntry) []ByteSidePart {
+	out := make([]ByteSidePart, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, ByteSidePart{
+			PartitionID:   entry.PartitionID,
+			PartName:      entry.PartName,
+			RowCount:      entry.RowCount,
+			PartRowLtHash: entry.PartRowLtHash,
+		})
+	}
 	return out
 }
 
@@ -610,6 +627,7 @@ func partitionRootFromActiveParts(parts []replay.PartManifestEntry, partitionID 
 type ClickHouseMutationExecutor struct {
 	Conn            SQLConn
 	Hasher          TableHasher
+	ActiveParts     ActivePartReader
 	ClaimSigner     MutationClaimSigner
 	WorkerID        string
 	ScratchDatabase string
@@ -738,6 +756,13 @@ func (e ClickHouseMutationExecutor) execute(ctx context.Context, task MutationTa
 	hash, err := e.Hasher.HashTable(ctx, scratch, task.PartitionIDs)
 	if err != nil {
 		return TableHash{}, TableHash{}, "", fmt.Errorf("hash mutation scratch %s: %w", scratch, err)
+	}
+	if e.ActiveParts != nil {
+		activeParts, err := e.ActiveParts.ReadActiveParts(ctx, scratch, task.PartitionIDs)
+		if err != nil {
+			return TableHash{}, TableHash{}, "", fmt.Errorf("read mutation scratch active parts %s: %w", scratch, err)
+		}
+		hash.Parts = activePartEntriesToByteSideParts(activeParts)
 	}
 	if hash.StateRoot == "" {
 		hash.StateRoot = digestParts("mutation-post-state", hash.Parts)

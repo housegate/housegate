@@ -114,6 +114,7 @@ func TestClickHousePromoterTreatsMutationShadowSourceAsFullPostState(t *testing.
 		SourceTable:      "`hg_mutation`.`events_stmt_worker`",
 		ReplacePartition: true,
 		PartitionIDs:     []string{"202607"},
+		CandidateParts:   []ByteSidePart{{PartitionID: "202607", PartName: "hash-scan-202607", RowCount: 1, PartRowLtHash: "post-root"}},
 	})
 	if err != nil {
 		t.Fatalf("Promote: %v", err)
@@ -122,6 +123,12 @@ func TestClickHousePromoterTreatsMutationShadowSourceAsFullPostState(t *testing.
 	joined := strings.Join(conn.execs, "\n")
 	if strings.Contains(joined, "ATTACH PARTITION ID '202607' FROM `hg_safe`.`events`") {
 		t.Fatalf("mutation full post-state promotion attached base partition:\n%s", joined)
+	}
+	if strings.Contains(joined, "_part IN ('hash-scan-202607')") {
+		t.Fatalf("mutation shadow promotion used logical hash-scan part as physical part:\n%s", joined)
+	}
+	if !strings.Contains(joined, "ALTER TABLE `hg_promote`.`events_promotion_mut` ATTACH PARTITION ID '202607' FROM `hg_mutation`.`events_stmt_worker`") {
+		t.Fatalf("mutation shadow promotion did not attach candidate partition from source:\n%s", joined)
 	}
 	if !strings.Contains(joined, "ALTER TABLE `hg_safe`.`events` REPLACE PARTITION ID '202607' FROM `hg_promote`.`events_promotion_mut`") {
 		t.Fatalf("mutation shadow promotion did not replace safe partition:\n%s", joined)
@@ -261,9 +268,16 @@ func TestClickHouseMutationExecutorCreatesScratchRunsMutationAndHashesPostState(
 		RowCount:      2,
 		PartRowLtHash: "0xpart",
 	}}}
+	active := &fakeActivePartReader{parts: []replay.PartManifestEntry{{
+		PartitionID:   "202607",
+		PartName:      "real_part_1",
+		PartRowLtHash: "0xactive",
+		RowCount:      2,
+	}}}
 	executor := ClickHouseMutationExecutor{
 		Conn:            conn,
 		Hasher:          hasher,
+		ActiveParts:     active,
 		ClaimSigner:     &fakeMutationClaimSigner{},
 		WorkerID:        "worker-a",
 		ScratchDatabase: "hg_mutation",
@@ -284,6 +298,9 @@ func TestClickHouseMutationExecutorCreatesScratchRunsMutationAndHashesPostState(
 	}
 	if hasher.table != claim.ScratchTable {
 		t.Fatalf("hasher table = %q, want scratch table %q", hasher.table, claim.ScratchTable)
+	}
+	if len(claim.Parts) != 1 || claim.Parts[0].PartName != "real_part_1" || claim.Parts[0].PartRowLtHash != "0xactive" {
+		t.Fatalf("claim parts = %+v, want physical active part evidence", claim.Parts)
 	}
 	joined := strings.Join(conn.execs, "\n")
 	for _, want := range []string{
