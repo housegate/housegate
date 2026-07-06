@@ -60,6 +60,7 @@ go_test(
         "//pkg/replay/payloadexec",
         "//pkg/route",
         "//pkg/sqlmeta",
+        "//pkg/storageintegrity",
         "@com_github_clickhouse_clickhouse_go_v2//:clickhouse-go",
         "@com_github_housegate_rewriter_go//gen/pb",
         "@com_github_prometheus_client_golang//prometheus",
