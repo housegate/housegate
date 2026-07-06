@@ -155,6 +155,9 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 		return nil
 	}
 	originalSQL := firstNonEmpty(qctx.OriginalSQL, qctx.Query.Body)
+	if isProtocolColumnDDL(originalSQL) {
+		return fmt.Errorf("storage_integrity rejects DDL changes to protocol columns")
+	}
 	if isForbiddenStorageIntegrityWrite(originalSQL) {
 		return fmt.Errorf("storage_integrity rejects direct safe-state publication or destructive table operation")
 	}
@@ -471,6 +474,8 @@ var (
 	deleteMutationPattern = regexp.MustCompile(`(?is)^\s*DELETE\s+FROM\s+(` + identifierPathPattern + `)\s+WHERE\s+(.+?)\s*$`)
 	truncatePattern       = regexp.MustCompile(`(?is)^\s*TRUNCATE\s+TABLE\b`)
 	dropPartitionPattern  = regexp.MustCompile(`(?is)^\s*ALTER\s+TABLE\s+` + identifierPathPattern + `\s+DROP\s+PARTITION\b`)
+	alterTablePattern     = regexp.MustCompile(`(?is)^\s*ALTER\s+TABLE\s+` + identifierPathPattern + `\s+(.+)$`)
+	protocolDDLPattern    = regexp.MustCompile(`(?is)\b(DROP|RENAME|MODIFY|ALTER|CLEAR|ORDER\s+BY|PRIMARY\s+KEY|SAMPLE\s+BY|TTL)\b`)
 	wherePattern          = regexp.MustCompile(`(?is)\s+WHERE\s+`)
 )
 
@@ -662,6 +667,48 @@ func containsProtocolColumn(value string) bool {
 
 func isForbiddenStorageIntegrityWrite(sql string) bool {
 	return truncatePattern.MatchString(sql) || dropPartitionPattern.MatchString(sql)
+}
+
+func isProtocolColumnDDL(sql string) bool {
+	stripped := stripSQLValuesAndComments(sql)
+	match := alterTablePattern.FindStringSubmatch(stripped)
+	if len(match) != 2 {
+		return false
+	}
+	body := match[1]
+	return containsProtocolColumn(body) && protocolDDLPattern.MatchString(body) && !isMutationSQL(stripped)
+}
+
+func stripSQLValuesAndComments(sql string) string {
+	out := []byte(sql)
+	for i := 0; i < len(out); {
+		switch {
+		case out[i] == '\'':
+			i = blankSQLSingleQuoted(out, i)
+		case out[i] == '-' && i+1 < len(out) && out[i+1] == '-':
+			for i < len(out) && out[i] != '\n' {
+				out[i] = ' '
+				i++
+			}
+		case out[i] == '/' && i+1 < len(out) && out[i+1] == '*':
+			out[i] = ' '
+			out[i+1] = ' '
+			i += 2
+			for i+1 < len(out) {
+				if out[i] == '*' && out[i+1] == '/' {
+					out[i] = ' '
+					out[i+1] = ' '
+					i += 2
+					break
+				}
+				out[i] = ' '
+				i++
+			}
+		default:
+			i++
+		}
+	}
+	return string(out)
 }
 
 func (p *Plugin) validateMutationAdmission(op, assignments, whereClause string, lightweightDelete bool) error {

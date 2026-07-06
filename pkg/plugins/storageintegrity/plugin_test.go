@@ -675,6 +675,38 @@ func TestPluginRejectsUnsafeMutationAdmissionShapes(t *testing.T) {
 	}
 }
 
+func TestPluginRejectsProtocolColumnDDL(t *testing.T) {
+	tests := []string{
+		"ALTER TABLE events DROP COLUMN _hg_row_id",
+		"ALTER TABLE events RENAME COLUMN _hg_row_id TO row_id",
+		"ALTER TABLE events MODIFY COLUMN _hg_row_id String",
+		"ALTER TABLE events ALTER COLUMN _hg_row_id DEFAULT 'x'",
+		"ALTER TABLE events CLEAR COLUMN _hg_row_id IN PARTITION '202607'",
+		"ALTER TABLE events MODIFY ORDER BY (id, _hg_row_id)",
+		"ALTER TABLE events DROP COLUMN `_hg_row_id`",
+		"ALTER TABLE events MODIFY ORDER BY (id, `_hg_row_id`)",
+	}
+	for _, sql := range tests {
+		t.Run(sql, func(t *testing.T) {
+			p := New(Config{
+				SafeDatabase: "hg_safe",
+				Sequencer:    &fakeSequencer{},
+			})
+			sess := &fakeSession{id: 141, state: chsession.NewSessionState()}
+			qctx := &plugin.QueryContext{
+				Session:     sess,
+				OriginalSQL: sql,
+				Query:       &chproto.Query{Body: sql},
+			}
+
+			err := p.OnQuery(context.Background(), qctx)
+			if err == nil || !strings.Contains(err.Error(), "protocol columns") {
+				t.Fatalf("OnQuery err = %v, want protocol column DDL rejection", err)
+			}
+		})
+	}
+}
+
 func TestPluginRequiresConfiguredPartitionPredicate(t *testing.T) {
 	seq := &fakeSequencer{}
 	p := New(Config{
