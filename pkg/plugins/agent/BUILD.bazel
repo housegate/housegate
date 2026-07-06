@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "config.go",
         "signer.go",
+        "storage_integrity.go",
         "upstream_select.go",
     ],
     importpath = "housegate/housegate/pkg/plugins/agent",
@@ -12,10 +13,15 @@ go_library(
     deps = [
         "//pkg/auth",
         "//pkg/chproto",
+        "//pkg/chsession",
         "//pkg/log",
         "//pkg/plugin",
         "//pkg/registry",
+        "//pkg/sqlident",
+        "//pkg/storageintegrity",
+        "@com_github_clickhouse_ch_go//proto",
         "@com_github_ethereum_go_ethereum//common",
+        "@com_github_google_uuid//:uuid",
     ],
 )
 
@@ -23,6 +29,7 @@ go_test(
     name = "agent_test",
     srcs = [
         "signer_test.go",
+        "storage_integrity_test.go",
         "upstream_select_test.go",
     ],
     embed = [":agent"],
@@ -33,6 +40,8 @@ go_test(
         "//pkg/network",
         "//pkg/plugin",
         "//pkg/registry",
+        "//pkg/storageintegrity",
+        "@com_github_clickhouse_ch_go//proto",
         "@org_golang_x_crypto//sha3",
     ],
 )

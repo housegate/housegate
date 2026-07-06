@@ -55,6 +55,12 @@ type Config struct {
 	// (the driver itself) stay ignorant of the housegate-side bypass
 	// semantics.
 	Driver bool `json:"driver" yaml:"driver"`
+
+	// StorageIntegrity enables client-side row-id materialization for the
+	// storage-integrity insert path. Ordinary ClickHouse clients still send
+	// their original SQL/Data; the agent hides `_hg_row_id` in server samples
+	// and injects it into outgoing Native Data blocks before signing/forwarding.
+	StorageIntegrity StorageIntegrityConfig `json:"storage_integrity" yaml:"storage_integrity"`
 }
 
 // Validate checks fields that are always required regardless of how the
@@ -70,6 +76,9 @@ func (c Config) Validate() error {
 	}
 	if c.Owner != "" && !common.IsHexAddress(c.Owner) {
 		return fmt.Errorf("agent.owner is not a valid Ethereum address: %q", c.Owner)
+	}
+	if c.StorageIntegrity.Enabled && c.StorageIntegrity.NetworkID == "" {
+		return errors.New("agent.storage_integrity.network_id is required when agent.storage_integrity.enabled")
 	}
 	return nil
 }
