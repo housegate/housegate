@@ -1,0 +1,123 @@
+# Sentio Arbiter P1c — Data-Plane Roles (Verifier + SNode) Design
+
+**Phase:** P1c. **Base:** arbiter main `c40023f` (P1b complete: orchestrator + gRPC server + cmd + config, manifest-debt gate), arbiter-proto `v0.2.0`, housegate main `d408db6`+ (pkg/replay, pkg/lthash, payloadexec, chexec). **Parent designs:** [2026-06-30 Sentio Arbiter design](2026-06-30-sentio-arbiter-design.md) §3.5/§7.2/§7.3/§8, [P1b design](2026-07-05-arbiter-p1b-orchestrator-server-design.md) + errata (manifest-debt gate, exact-Parts ack contract), replay core Appendix C semantics.
+
+P1c makes the trust layer real: the Verifier data plane (replay + byte-side scan against real ClickHouse) and the SNode promotion executor (source write, RC assembly, `REPLACE PARTITION`, cleanup) replace the P1b integration fakes, closing the first genuine end-to-end loop — real INSERT → real replay quorum → real promotion into `hg_safe` — including machine-proved fraud rejection.
+
+## 1. Decisions (frozen for P1c)
+
+| # | Decision | Rationale |
+|---|---|---|
+| 1 | **Scope = Verifier data plane + SNode executor + async anchor seam.** Real L2 anchor backend → P1d. HouseGate ingress client → P1e. | The two roles are the same pattern (arbiter data-plane client + real ClickHouse) and only together close a real end-to-end; the L2 backend needs chain selection; the ingress client crosses into the housegate proxy plugin chain. |
+| 2 | **Code lands in the arbiter repo** as library packages `dataplane/`, `verifier/`, `snode/` plus reference binaries `cmd/arbiter-verifier`, `cmd/arbiter-snode`. | arbiter already depends on housegate pkg/replay + arbiter-proto, is pure go-modules, direct-to-main. sentio-node later imports the libraries (mother design: SNode is a role inside sentio-node, not a daemon); a standalone Verifier deployment uses the reference binary. |
+| 3 | **Statement intake is an in-process seam** (`snode.SubmitLocalStatement`), not a new RPC. | Route A (mother design §5.5): the source executes at ingest, co-located with HouseGate. P1e's HouseGate ingress calls the seam in-process; P1c tests call it directly. No arbiter-proto change in P1c (v0.2.0 suffices). |
+| 4 | **Acceptance = happy path + two fraud classes** in a docker ClickHouse integration suite: (a) tampered `SourceClaimRoot` → check 1 fails → challenge REJECTED; (b) tampered candidate `part_row_lthash` claim → real scanner disagrees → check 3 fails. | The trust layer's value is the rejection path; both fraud classes exercise real verifier computation. Physical byte swaps that keep the claim honest self-detect via ClickHouse part checksums (scan read error → refusal to attest), so the adversary model for check 3 is the lying claim. |
+| 5 | **Same-by-construction rule:** row-id derivation, row canonicalization, per-part row-LtHash computation, and state-root assembly used by SNode and Verifier MUST be the exported payloadexec/chexec/lthash helpers — no local reimplementation. | An honest source must match honest verifiers bit-for-bit or check 1/2/3 false-negative. Shared code is the only defensible equivalence argument (same argument that made payloadexec↔chexec "equivalent by construction" in P0). |
+| 6 | **Cross-repo precondition:** small additive exports land in housegate first (PR-gated): a chexec part-scan helper reusing its read-back value normalization, a payloadexec state-root assembly helper. arbiter bumps its housegate module pin. | Mirrors the P1a arbiter-proto v0.2.0 precondition task pattern. |
+| 7 | **v1 simplifications:** plaintext gRPC (P1b decision carries over); SNode processes statements sequentially (single-flight); one shared CH instance in tests; filesystem payload store; local state as one atomic-rename JSON file. | YAGNI; each has a recorded roll-forward. |
+
+## 2. Non-goals (explicitly out)
+
+Real L2 anchor backend (P1d); HouseGate ingress client + `SubmitStatement` wiring and multi-writer source-routing alignment (P1e); sentio-node integration; lagging-replica promotion replay (mother §8.6); serving audits (base-spec §13); schema/DDL pipeline (tests pre-create tables; SNode only asserts invariants); DA-network payload store; TLS/mTLS (P3); RMT multi-replica fetch in tests (stock ClickHouse behavior, not our code).
+
+## 3. Package layout and the `dataplane/` foundation
+
+```
+dataplane/            # shared arbiter-client foundation (role-agnostic)
+  client.go           # peer conns, leader tracking, WithLeaderRetry
+  subscribe.go        # RunVerifierSubscription / RunPromotionSubscription
+  manifests.go        # ManifestStore: replay.SnapshotStore over SafeState RPC + cache
+  fspayload/          # filesystem replay.PayloadStore
+verifier/             # Verifier role library
+snode/                # SNode role library
+cmd/arbiter-verifier/ # reference binary (thin main)
+cmd/arbiter-snode/    # reference binary (thin main)
+```
+
+**`dataplane.Config`:** `Peers []Peer{ID, GRPCAddr}` — IDs align with arbiter raft ServerIDs, because `pb.NotLeader.leader_addr` carries the raft ServerID (P1b v1 semantics) and this table is how clients resolve it; plus dial options (insecure, v1) and backoff bounds.
+
+**`dataplane.Client`:** one lazily-dialed `ClientConn` per peer. `WithLeaderRetry(ctx, fn func(ctx, conn) error) error` promotes the leader-retry loop proven by the P1b flagship tests into production code: try last-known leader first, on `FAILED_PRECONDITION` + `pb.NotLeader` detail re-home to the hinted ServerID, on `Unavailable`/`DeadlineExceeded` rotate to the next peer, exponential backoff with a cap, give up only on ctx cancel or a non-retryable status. Production discovery needs no probe RPC — real calls follow hints.
+
+**Subscriptions:** `RunVerifierSubscription(ctx, replicaID, onDispatch func(*pb.VerifierDispatch) error)` and `RunPromotionSubscription(ctx, nodeID, onCommand func(*pb.PromotionCommand) error)`. Each maintains one stream against the current leader; on stream end, NotLeader, or transport error it re-homes and re-subscribes with backoff (the P1b server closes streams on leadership loss and replaces duplicates, so "reconnect on any end" is the whole client obligation). Callbacks run sequentially on the subscription goroutine; a callback error is logged and does NOT kill the subscription (the arbiter retry ticker re-dispatches).
+
+**`dataplane.ManifestStore`:** implements `replay.SnapshotStore.GetSafeSnapshot(ctx, id)` by calling `SafeState.GetManifest` through `WithLeaderRetry` (v1 reads are leader-served for simplicity; follower reads are a recorded roll-forward with the P1b linearizable-reads item), converting via `wire.ManifestFromPB`, and caching append-only in memory — manifests are content-addressed, so cache entries never invalidate. The empty id (genesis `PrevSafeSnapshotID=""`) is handled by the replay core, not the store.
+
+**`dataplane/fspayload.Store`:** implements `replay.PayloadStore.GetPayload(ctx, ref)` plus a `Put(ref, bytes)` used by SNode. Content-addressed layout `<dir>/<ref>` where ref is the envelope's `payload_hash`; writes go temp-file → fsync → rename (atomic); `Get` of a missing ref is an error (verifier refuses to attest). v1 deployment assumption: SNode and co-located Verifiers share the directory (one volume); the DA-network store is a later backend behind the same interface.
+
+## 4. Verifier role (`verifier/`)
+
+One subscription loop, two dispatch paths, maximal reuse of pkg/replay.
+
+**Registration.** At startup: `Membership.RegisterNode{node_id, roles: [VERIFIER], ed25519_pubkey}` then `MarkActive` (v1 trusted self-activation; snapshot-sync proof is a later phase). Re-registration is safe (FSM resets to Syncing → MarkActive again). The ed25519 key pair is the verifier's identity: private key from config (file path or env), public key registered; the FSM validates every attestation/scan signature against it.
+
+**ReplayJob path.** `pb.ReplayJob` → `wire.ReplayJobFromPB` (new additive export, symmetric to P1b's `ReplayJobToPB`) → `replay.Verifier.Verify(ctx, job)` with `{Snapshots: dataplane.ManifestStore, Payloads: fspayload.Store, Executor: payloadexec.NewWithMaterializer(networkID, chexec.NewMaterializer(networkID, conn), tables...), Signer: payloadexec.Ed25519Signer}` — all existing pieces. The library returns a fully signed `ReplayAttestation`; the role converts via `wire.AttestationToPB` and calls `SubmitAttestation` through `WithLeaderRetry`. **Semantics carried over from the replay core:** a source-root mismatch is NOT an error — the receipt is signed with `MatchSourceRoot=false` and submitted (non-repudiable challenge evidence, Appendix C.4); only pre-receipt failures (CH down, payload missing, unsafe-base refusal) are a local refusal to attest — log and skip, the orchestrator's retry ticker re-dispatches. Duplicate deliveries are recomputed and resubmitted; FSM-side duplicate evidence is a no-op.
+
+**Byte-side scan path (net-new scanner).** On `ByteSideScanRequest{block_seq, parts[]}`: for each `PartRef`, scan this replica's disk — `SELECT <schema columns + _hg_row_id> FROM hg_unsafe.<table> WHERE _part = '<part_name>'` — normalize values and hash rows with the SAME helpers the executor read-back uses (decision 5: the chexec exported scan helper), sum per part, and report `PartScan{TableID, PartitionID, ClaimedPartRowLtHash (from the request's PartRef), ScannedPartRowLtHash (computed), LivePartName}`. Build `arbiter.ByteSideScan` and sign it per the frozen P0 convention — `scan_hash = replay.CanonicalDigest(DomainByteSideScan, msg.Body())`, ed25519 signature over the scan-hash string bytes — then submit via `SubmitByteSideScan`. A missing part or scan error → the whole scan is not submitted (refusal to attest; retry-driven). The FSM compares scanned vs RC-claimed values (check 3) — the scanner reports honestly and never fails locally on mismatch.
+
+**Configuration:** replica_id, ed25519 private key, ClickHouse DSN + scratch database prefix (chexec), table schemas (`payloadexec.TableSchema` list — v1 static config, matching the pre-created tables), payload directory, dataplane peers, network_id (genesis param, must match arbiter `genesis.schema/network` scoping used in row-id derivation).
+
+## 5. SNode role (`snode/`)
+
+**a) Statement intake (route A seam).** `SubmitLocalStatement(ctx, env arbiter.StatementEnvelope, payload []byte) error`:
+
+1. Validate `payload_hash`/`payload_length` against the bytes (reject mismatch — the envelope is the signed truth).
+2. `fspayload.Put(env.PayloadRef, payload)` (spool before write: a verifier must be able to fetch whatever the source executed).
+3. Source write: `payloadexec.DecodeCSV(payload, schema)` → per row ordinal inject `_hg_row_id = payloadexec.RowID(networkID, tableID, flatStatementID, ordinal)` → single INSERT into `hg_unsafe.<table>` via clickhouse-go.
+4. Identify the statement's parts: diff `system.parts` (active, per table) before/after the INSERT. STOP MERGES makes the part boundary the statement boundary; sequential statement processing (decision 7) makes the diff unambiguous.
+5. Per new part: read rows back (`WHERE _part = ?`) with the shared scan helper → `part_row_lthash`; `part_phys_hash` and `rows/bytes` from `system.parts` (`hash_of_all_files`, `rows`, `bytes_on_disk`).
+6. Assemble `arbiter.RCRecord{StatementID, SourceNode: cfg.NodeID, CandidateParts, SourceClaimRoot, PartitionNewPartSums}`. `PartitionNewPartSums` are this statement's per-partition new-part LtHash sums. `SourceClaimRoot` is computed with the exported payloadexec state-root assembly helper over the source's **absolute per-partition view**: for every partition the source knows (safe manifest table set overlaid with local activity), `(locally persisted safe base root) ⊕ Σ(all locally executed, not-yet-promoted new-part sums, including this statement's)`. This absolute form is **manifest-cut-invariant by LtHash associativity** — the source executes at ingest, before it can know which manifest the eventual block header will pin as `PrevSafeSnapshotID`, but `base(M0) ⊕ unpromoted-since-M0 == base(M1) ⊕ unpromoted-since-M1` because both sides cover the same total part content. That invariance is what makes check 1 well-defined under route A's late binding, and it is why the assembly must be the same exported helper the verifier's executor uses: an honest source then matches check 1 by construction.
+7. `SourceClaims.RegisterResultClaim` via `WithLeaderRetry`. v1 single-writer: this SNode is the only SNODE-role node, so the FSM's deterministic source selection always picks it; multi-writer routing alignment is the recorded P1e obligation.
+
+**b) Promotion execution** (`PromotionCommand::Promote`):
+
+1. **Authority check:** validate the command JWS with P1a `authority.Validator` (`PromoteCommandHash`, allowed addresses from config). A data-plane node must never act on an unsigned/forged promote.
+2. **Watermark:** durable per-`(table, partition)` `promotion_seq` watermark; a command `<=` watermark re-sends the persisted previous ack verbatim (exactly-once across restarts and idle partitions, mother §8.3) and stops.
+3. **Publish lock + base-CAS:** per-partition mutex; compare the locally persisted base root against `cmd.BasePartitionRoot`. Mismatch → ack `{Applied: false, Detail}` — and note **rebase is emergent**: the FSM consumes the promotion, the statements stay non-Safe, the next WorkSet re-advertises the partition with the current base, and the orchestrator re-issues under a fresh seq. No dedicated rebase code.
+4. **Build `hg_promote`:** `CREATE TABLE IF NOT EXISTS hg_promote.<tbl> AS hg_safe.<tbl>` (same structure; deployment provides same storage policy); `DROP PARTITION` any leftover shadow first (crash safety); `ATTACH PARTITION <id> FROM hg_safe.<tbl>` (the base, metadata-only); per candidate part, hardlink the live `hg_unsafe` part directory into `hg_promote`'s `detached/` (file-by-file `os.Link`; paths resolved from `system.parts.path` / `system.tables.data_paths`, never guessed; MergeTree parts are immutable on disk and STOP MERGES holds, so linking live parts is safe) then `ALTER TABLE hg_promote.<tbl> ATTACH PART '<name>'`. The shadow holds exactly base + candidates — the physical form of the §7.3 closure set.
+5. **Replace + exact-Parts mapping:** `ALTER TABLE hg_safe.<tbl> REPLACE PARTITION <id> FROM hg_promote.<tbl>`; re-read `system.parts` on `hg_safe`, identify the new (renamed) parts, and re-scan each with the shared helper to match candidates **by row-LtHash content** — this content-matched mapping is the physical source of the P1b errata exact-Parts ack contract. Report `Parts: [{PartRowLtHash: candidate hash, SafePartName: new name, PartPhysHash: from system.parts}]` covering every candidate exactly once.
+6. **Ack:** persist `{watermark, ack}` atomically first, then `AckPromotion{..., PostPartitionCommitment: base ⊕ Σ(candidate lthash), Applied: true, Parts}`; update the persisted base root to the post value. A crash between apply and ack is recovered by the persisted state + the arbiter's IssuedUnacked resend (step 2 re-sends the stored ack).
+7. **Drop the shadow partition** in `hg_promote` (post-publish hygiene; also covered by step 4's crash-safety drop).
+
+**c) Cleanup execution** (`PromotionCommand::Cleanup`): validate JWS (`CleanupCommandHash`) → per part `ALTER TABLE hg_unsafe.<tbl> DROP PART '<name>'`, treating a missing part as already dropped (idempotent) → `AckCleanup`.
+
+**d) Invariants and local state.** At startup SNode asserts `SYSTEM STOP MERGES hg_unsafe.<tbl>` for every configured table (the DDL-pinned `max_bytes_to_merge_at_max_space_in_pool=0` is the test harness's / future schema pipeline's job; re-assertion is SNode's). Local durable state — per-partition promotion watermarks, last acks, safe base roots, and the per-partition unpromoted new-part sums that feed the a6 absolute view (appended on source write, drained on applied promotion ack) — is one JSON document per SNode data dir, written temp+fsync+rename under a mutex, loaded at start. A crash cannot desync it from ClickHouse reality in a way that survives: the unpromoted inventory is re-derivable from `hg_unsafe` `system.parts` re-scan, recorded as the recovery procedure rather than automated in v1. Registration: `RegisterNode{roles: [SNODE]}` + `MarkActive` at startup (no ed25519 needed for SNODE in v1; the field is required only for VERIFIER).
+
+## 6. Anchor seam: blocking wait → non-blocking poll
+
+`anchor.Client` changes from `WaitFinality(ctx, ref) (bool, bool, error)` (blocking) to `Finality(ctx, ref) (finality, lastMergeable bool, err error)` (point-in-time check). `orchestrator.anchorBlock` anchors + persists the ref (P1b behavior unchanged), then polls `Finality` once per pass; not final → return, the retry ticker re-surfaces the `UnanchoredVerified` row next round. Two refinements: (a) when the poll reports no progress AND the ref is already recorded, propose nothing (no raft-log spam per retry tick); (b) `Local.Finality` returns `(true, true, nil)` — today's behavior is bit-identical. Consumers are orchestrator + P1d's real L2 backend only; the rename is an intentional arbiter-internal breaking change to land the seam P1d needs. The single-threaded loop keeps zero blocking points.
+
+## 7. Same-by-construction shared helpers (cross-repo precondition)
+
+Additive housegate exports (one PR, lands before arbiter consumes; arbiter bumps its housegate pin — the P1a proto-tag pattern):
+
+- **`pkg/replay/chexec`: exported part-scan helper** — `SELECT ... WHERE _part = ?` + the read-back value normalization chexec already applies internally, returning per-part row-LtHash (and row count). Used by: verifier scanner, SNode RC assembly (step a5), SNode exact-Parts matching (step b5). This is the single implementation of "row bytes on disk → LtHash".
+- **`pkg/replay/payloadexec`: exported state-root assembly helper** — (prev `SafeSnapshotManifest`, per-partition absolute post commitments) → state root, extracted from the executor's existing assembly so `RCRecord.SourceClaimRoot` (source side) and `ExecutionReceipt.ComputedStateRoot` (verifier side) come from one code path.
+- Already exported and reused as-is: `payloadexec.RowID`, `payloadexec.DecodeCSV`, `payloadexec.TableSchema`/`Row`, `payloadexec.Ed25519Signer`, `chexec.NewMaterializer`, `replay.Verifier`/`PayloadStore`/`SnapshotStore`, `pkg/lthash` primitives.
+
+Arbiter-side additive wire exports: `ReplayJobFromPB`, `ByteSideScanRequestFromPB` (PartRefs), `PromoteFromPB`, `CleanupFromPB` — the receive-side complements of the P1b send-side builders. No proto changes.
+
+## 8. Config and reference binaries
+
+Both binaries follow the P1b `config/` conventions (yaml + `Duration` + env override for keys + `Validate` with `errors.Join`, slog, signal ctx). `cmd/arbiter-verifier`: node_id, ed25519 key (env `ARBITER_VERIFIER_ED25519_SEED_HEX` overrides file), CH DSN, scratch prefix, tables (id + schema columns), payload_dir, network_id, dataplane peers, authority allowed addresses are NOT needed (verifier trusts FSM-validated dispatches). `cmd/arbiter-snode`: node_id, CH DSN, tables, payload_dir, state_dir, network_id, dataplane peers, authority allowed_addresses (for command JWS validation). Both: reconnect/backoff knobs with defaults, no consensus constants.
+
+## 9. Testing
+
+- **Unit:** dataplane leader-retry/re-home/re-subscribe against in-process fake gRPC servers (promote the P1b test-harness patterns); fspayload atomicity + missing-ref; ManifestStore caching; snode local-state persistence round-trip + watermark/re-ack logic (fake CH via interface? No — snode CH calls are thin; unit-test the pure logic, docker-test the CH paths); verifier dispatch handling with a fake replay core.
+- **Docker integration (the P1c flagship), env-gated `ARBITER_CH_INTEGRATION=1`** so plain `go test ./...` skips without docker: one shared `clickhouse-server:25.8` container (matching housegate CI) hosting `hg_unsafe`/`hg_safe`/`hg_promote` databases + chexec scratch; the P1b in-process 3-node arbiter cluster; real Verifier ×3 and real SNode wired as libraries (reference binaries get a separate config-load + startup smoke). Happy path: two INSERT statements → `SubmitLocalStatement` + ingress `SubmitStatement` → seal → RC → real replay quorum (3 signed attestations with `MatchSourceRoot=true`) → real byte-scans → anchor → promote → **real `REPLACE PARTITION`** → rows queryable in `hg_safe` with correct `_hg_row_id`s → manifest published whose `ActiveParts` match `system.parts` reality → cleanup → original `hg_unsafe` parts gone → all nodes serve the watermark. Fraud (a): a tampering SNode wrapper lies about `SourceClaimRoot` → three real verifiers sign `MatchSourceRoot=false` receipts → no quorum → challenge REJECTED → assert `hg_safe` untouched and statement Rejected. Fraud (b): wrapper lies about one candidate `part_row_lthash` → real scanner reports the true disk value → check 3 mismatch → same rejection path. Both fraud tests assert the specific check that tripped (via block verification state).
+- **CI:** new docker job in arbiter `ci.yml` (GitHub ubuntu runner has docker): pre-pull the CH image, run the gated suite explicitly. Existing jobs unchanged; fsm red-line tripwires stay as-is.
+
+## 10. Acceptance tripwires (P1c-specific)
+
+Must hold: no local reimplementation of row-id/row-encode/part-hash/state-root logic under `verifier/` or `snode/` (grep for the payloadexec/chexec helper usage; any `blake3`/`lthash.New` call outside the shared helpers in those packages is a violation); SNode's only write path into `hg_safe` is `REPLACE PARTITION ... FROM hg_promote` (grep: no INSERT/ALTER-ADD targeting hg_safe); every `Applied=true` ack satisfies the exact-Parts bijection; SNode validates authority JWS before acting on promote/cleanup; the orchestrator loop gains no blocking calls (anchor poll is non-blocking); fsm is untouched this phase except nothing (any fsm diff in P1c is a red flag); P1a/P1b CI tripwires stay green.
+
+## 11. Recorded follow-ups (not P1c)
+
+P1d: real L2 anchor backend on the `Finality` seam. P1e: HouseGate ingress client (calls `SubmitLocalStatement` + `SubmitStatement`; re-asserts STOP MERGES on startup; multi-writer source-routing alignment). sentio-node integration of the role libraries. Concurrent SNode statement processing (per-table pipelining) once single-flight becomes the bottleneck. Follower-served manifest reads. DA-network payload store backend. Lagging-replica promotion replay (mother §8.6). Serving audits (base-spec §13). Schema pipeline owning DDL + `max_bytes_to_merge_at_max_space_in_pool=0` pinning.
+
+## 12. References
+
+- [2026-06-30 Sentio Arbiter design](2026-06-30-sentio-arbiter-design.md) — §3.5 flow, §5.5 route A, §7.2 verifier, §7.3 three-way checks, §7.4 quorum, §8.2–8.6 SNode execution/serialization/cleanup
+- [2026-07-05 P1b design](2026-07-05-arbiter-p1b-orchestrator-server-design.md) + errata — server/gateway semantics, NotLeader ServerID, manifest-debt gate, exact-Parts ack contract
+- [2026-07-05 P1a design](2026-07-05-arbiter-p1a-fsm-raftnode-design.md) — FSM command semantics, authority JWS conventions, RC linkage
+- housegate `pkg/replay` (Verifier, stores, Seal/Validate), `pkg/replay/payloadexec` (RowID, DecodeCSV, Ed25519Signer, executor), `pkg/replay/chexec` (Materializer), `pkg/lthash` — reused surfaces
+- `.superpowers/sdd/progress.md` — P1b completion record, P1c roll-forward inventory
