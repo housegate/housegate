@@ -4,8 +4,12 @@ go_library(
     name = "storageintegrity",
     srcs = [
         "claim_signer.go",
+        "clickhouse_adapter.go",
+        "clickhouse_ops.go",
+        "clickhouse_state.go",
         "http_client.go",
         "native_payload.go",
+        "snapshot_resolver.go",
         "types.go",
     ],
     importpath = "housegate/housegate/pkg/storageintegrity",
@@ -16,6 +20,7 @@ go_library(
         "//pkg/replay",
         "//pkg/replay/payloadexec",
         "@com_github_clickhouse_ch_go//proto",
+        "@com_github_clickhouse_clickhouse_go_v2//lib/driver",
         "@com_github_ethereum_go_ethereum//crypto",
     ],
 )
@@ -24,8 +29,10 @@ go_test(
     name = "storageintegrity_test",
     srcs = [
         "claim_signer_test.go",
+        "clickhouse_ops_test.go",
         "client_test.go",
         "native_payload_test.go",
+        "snapshot_resolver_test.go",
     ],
     embed = [":storageintegrity"],
     deps = [
