@@ -79,6 +79,39 @@ type MutationClaimSigner interface {
 	SignClaim(claimHash string) (string, error)
 }
 
+type ReplayVerifier interface {
+	Verify(ctx context.Context, job replay.ReplayJob) (replay.ReplayAttestation, error)
+}
+
+type ByteSideScanner interface {
+	ScanByteSide(ctx context.Context, task ByteSideScanTask) (ByteSideScanResult, error)
+}
+
+type Promoter interface {
+	Promote(ctx context.Context, task PromotionTask) (PromotionResult, error)
+}
+
+type MutationExecutor interface {
+	ExecuteMutation(ctx context.Context, task MutationTask) (MutationClaim, error)
+	ReplayMutation(ctx context.Context, task MutationTask) (MutationReplayResult, error)
+}
+
+type SafeAuditor interface {
+	AuditSafe(ctx context.Context, task SafeAuditTask) (SafeAuditVote, error)
+}
+
+type RollbackExecutor interface {
+	Rollback(ctx context.Context, task RollbackTask) (RollbackResult, error)
+}
+
+type RepairSyncExecutor interface {
+	RepairSync(ctx context.Context, task RepairSyncTask) (RepairSyncResult, error)
+}
+
+type CompactionExecutor interface {
+	Compact(ctx context.Context, task CompactionTask) (CompactionResult, error)
+}
+
 type ByteSidePart struct {
 	PartitionID   string `json:"partition_id"`
 	PartName      string `json:"part_name"`
