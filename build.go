@@ -606,12 +606,12 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	}
 
 	if cfg.StorageIntegrity.Enabled {
-		siSequencer := storageintegrity.NewHTTPSequencerClient(cfg.StorageIntegrity.SequencerEndpoint)
+		siArbiter := storageintegrity.NewHTTPArbiterClient(cfg.StorageIntegrity.ControlPlaneEndpoint())
 		siPlug := storageintegrityplugin.New(storageintegrityplugin.Config{
 			UnsafeDatabase:            cfg.StorageIntegrity.UnsafeDatabase,
 			SafeDatabase:              cfg.StorageIntegrity.SafeDatabase,
 			DA:                        storageintegrity.NewHTTPDAClient(cfg.StorageIntegrity.DAEndpoint),
-			Sequencer:                 siSequencer,
+			Arbiter:                   siArbiter,
 			RequirePartitionPredicate: cfg.StorageIntegrity.Mutations.RequirePartitionPredicate,
 			PartitionColumns:          cfg.StorageIntegrity.Mutations.PartitionColumns,
 			ProtectedColumns:          cfg.StorageIntegrity.Mutations.ProtectedColumns,
@@ -623,8 +623,8 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			InjectRowID:               cfg.StorageIntegrity.InjectRowID,
 			RequireAuthToken:          cfg.StorageIntegrity.RequireAuthToken,
 			AuthValidator:             validator,
-			SnapshotReader:            siSequencer,
-			ReadGate:                  siSequencer,
+			SnapshotReader:            siArbiter,
+			ReadGate:                  siArbiter,
 			NodeID:                    strconv.FormatUint(selfIndexerID, 10),
 		})
 		queryPlugins = append(queryPlugins, siPlug)
@@ -632,7 +632,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		queryCompletePlugins = append(queryCompletePlugins, siPlug)
 		log.Infow("storage_integrity insert flow enabled",
 			"da_endpoint", cfg.StorageIntegrity.DAEndpoint,
-			"sequencer_endpoint", cfg.StorageIntegrity.SequencerEndpoint,
+			"arbiter_endpoint", cfg.StorageIntegrity.ControlPlaneEndpoint(),
 			"unsafe_database", cfg.StorageIntegrity.UnsafeDatabase,
 			"safe_database", cfg.StorageIntegrity.SafeDatabase,
 		)

@@ -23,9 +23,11 @@ import (
 )
 
 type Config struct {
-	UnsafeDatabase            string
-	SafeDatabase              string
-	DA                        core.PayloadStore
+	UnsafeDatabase string
+	SafeDatabase   string
+	DA             core.PayloadStore
+	Arbiter        core.ArbiterIngress
+	// Sequencer is the legacy control-plane field kept for compatibility.
 	Sequencer                 core.SequencerIngress
 	RequirePartitionPredicate bool
 	PartitionColumns          []string
@@ -48,7 +50,7 @@ type Plugin struct {
 	unsafeDB                  string
 	safeDB                    string
 	da                        core.PayloadStore
-	sequencer                 core.SequencerIngress
+	snodePublisher            core.SNodePublisher
 	requirePartitionPredicate bool
 	partitionColumns          []string
 	protectedColumns          []string
@@ -115,11 +117,15 @@ func New(cfg Config) *Plugin {
 	if networkID == "" {
 		networkID = "sentio"
 	}
+	arbiter := cfg.Arbiter
+	if arbiter == nil {
+		arbiter = cfg.Sequencer
+	}
 	return &Plugin{
 		unsafeDB:                  unsafeDB,
 		safeDB:                    safeDB,
 		da:                        cfg.DA,
-		sequencer:                 cfg.Sequencer,
+		snodePublisher:            core.ArbiterSNodePublisher{Arbiter: arbiter},
 		requirePartitionPredicate: cfg.RequirePartitionPredicate,
 		partitionColumns:          normalizeColumns(cfg.PartitionColumns),
 		protectedColumns:          normalizeColumns(cfg.ProtectedColumns),
@@ -273,8 +279,8 @@ func (p *Plugin) statementIDForQuery(qctx *plugin.QueryContext) string {
 }
 
 func (p *Plugin) handleMutation(ctx context.Context, qctx *plugin.QueryContext, originalSQL string) error {
-	if p.sequencer == nil {
-		return fmt.Errorf("sequencer client is required")
+	if p.snodePublisher == nil {
+		return fmt.Errorf("arbiter client is required")
 	}
 	userJWS, signer, err := p.authenticateQuery(ctx, qctx, originalSQL)
 	if err != nil {
@@ -300,8 +306,8 @@ func (p *Plugin) handleMutation(ctx context.Context, qctx *plugin.QueryContext, 
 		ExecutionMode:       "parallel_local_replay",
 		ReceivedAt:          p.now().UTC(),
 	}
-	if err := p.sequencer.SubmitMutation(ctx, rec); err != nil {
-		return fmt.Errorf("submit sequencer mutation: %w", err)
+	if err := p.snodePublisher.PublishMutation(ctx, rec); err != nil {
+		return fmt.Errorf("submit arbiter mutation: %w", err)
 	}
 	qctx.AbortWithSuccess = true
 	qctx.Query.Body = "SELECT 1"
@@ -410,8 +416,8 @@ func (p *Plugin) submit(ctx context.Context, cap *insertCapture) error {
 	if p.da == nil {
 		return fmt.Errorf("DA client is required")
 	}
-	if p.sequencer == nil {
-		return fmt.Errorf("sequencer client is required")
+	if p.snodePublisher == nil {
+		return fmt.Errorf("arbiter client is required")
 	}
 	payload := append([]byte(nil), cap.payload.Bytes()...)
 	commit, err := p.da.PutPayload(ctx, core.PutPayloadRequest{
@@ -447,8 +453,8 @@ func (p *Plugin) submit(ctx context.Context, cap *insertCapture) error {
 			rec.ExecutorProfileID = snap.ExecutorProfileID
 		}
 	}
-	if err := p.sequencer.SubmitInsert(ctx, rec); err != nil {
-		return fmt.Errorf("submit sequencer insert: %w", err)
+	if err := p.snodePublisher.PublishInsert(ctx, rec); err != nil {
+		return fmt.Errorf("submit arbiter insert: %w", err)
 	}
 	return nil
 }

@@ -10,8 +10,17 @@ import (
 
 const defaultWorkerPollInterval = 500 * time.Millisecond
 
+func resolveArbiterWorkerClient(arbiter, legacy ArbiterWorkerClient) ArbiterWorkerClient {
+	if arbiter != nil {
+		return arbiter
+	}
+	return legacy
+}
+
 type VerifierWorker struct {
-	WorkerID        string
+	WorkerID string
+	Arbiter  ArbiterWorkerClient
+	// Sequencer is the legacy control-plane field kept for compatibility.
 	Sequencer       SequencerWorkerClient
 	ReplayVerifier  ReplayVerifier
 	ByteSideScanner ByteSideScanner
@@ -22,15 +31,16 @@ func (w VerifierWorker) RunOnce(ctx context.Context) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	if w.Sequencer == nil {
-		return false, fmt.Errorf("sequencer worker client is required")
+	arbiter := resolveArbiterWorkerClient(w.Arbiter, w.Sequencer)
+	if arbiter == nil {
+		return false, fmt.Errorf("arbiter worker client is required")
 	}
 	if w.WorkerID == "" {
 		return false, fmt.Errorf("worker_id is required")
 	}
 	didWork := false
 	if w.ReplayVerifier != nil {
-		job, ok, err := w.Sequencer.ClaimReplayJob(ctx)
+		job, ok, err := arbiter.ClaimReplayJob(ctx)
 		if err != nil {
 			return didWork, fmt.Errorf("claim replay job: %w", err)
 		}
@@ -42,14 +52,14 @@ func (w VerifierWorker) RunOnce(ctx context.Context) (bool, error) {
 			if att.ReplicaID == "" {
 				att.ReplicaID = w.WorkerID
 			}
-			if err := w.Sequencer.SubmitReplayAttestation(ctx, att); err != nil {
+			if err := arbiter.SubmitReplayAttestation(ctx, att); err != nil {
 				return didWork, fmt.Errorf("submit replay attestation: %w", err)
 			}
 			didWork = true
 		}
 	}
 	if w.ByteSideScanner != nil {
-		task, ok, err := w.Sequencer.ClaimByteSideScan(ctx)
+		task, ok, err := arbiter.ClaimByteSideScan(ctx)
 		if err != nil {
 			return didWork, fmt.Errorf("claim byte-side scan: %w", err)
 		}
@@ -61,7 +71,7 @@ func (w VerifierWorker) RunOnce(ctx context.Context) (bool, error) {
 			if result.WorkerID == "" {
 				result.WorkerID = w.WorkerID
 			}
-			if err := w.Sequencer.SubmitByteSideScan(ctx, result); err != nil {
+			if err := arbiter.SubmitByteSideScan(ctx, result); err != nil {
 				return didWork, fmt.Errorf("submit byte-side scan: %w", err)
 			}
 			didWork = true
@@ -75,7 +85,9 @@ func (w VerifierWorker) Run(ctx context.Context) error {
 }
 
 type PromotionWorker struct {
-	WorkerID     string
+	WorkerID string
+	Arbiter  ArbiterWorkerClient
+	// Sequencer is the legacy control-plane field kept for compatibility.
 	Sequencer    SequencerWorkerClient
 	Promoter     Promoter
 	PollInterval time.Duration
@@ -85,13 +97,14 @@ func (w PromotionWorker) RunOnce(ctx context.Context) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	if w.Sequencer == nil {
-		return false, fmt.Errorf("sequencer worker client is required")
+	arbiter := resolveArbiterWorkerClient(w.Arbiter, w.Sequencer)
+	if arbiter == nil {
+		return false, fmt.Errorf("arbiter worker client is required")
 	}
 	if w.Promoter == nil {
 		return false, fmt.Errorf("promoter is required")
 	}
-	task, ok, err := w.Sequencer.ClaimPromotion(ctx)
+	task, ok, err := arbiter.ClaimPromotion(ctx)
 	if err != nil {
 		return false, fmt.Errorf("claim promotion: %w", err)
 	}
@@ -138,7 +151,7 @@ func (w PromotionWorker) RunOnce(ctx context.Context) (bool, error) {
 	if len(result.CleanupUnsafeParts) == 0 {
 		result.CleanupUnsafeParts = append([]ByteSidePart(nil), task.CleanupUnsafeParts...)
 	}
-	if _, err := w.Sequencer.SubmitPromotionResult(ctx, result); err != nil {
+	if _, err := arbiter.SubmitPromotionResult(ctx, result); err != nil {
 		return false, fmt.Errorf("submit promotion result: %w", err)
 	}
 	return true, nil
@@ -149,7 +162,9 @@ func (w PromotionWorker) Run(ctx context.Context) error {
 }
 
 type MutationWorker struct {
-	WorkerID          string
+	WorkerID string
+	Arbiter  ArbiterWorkerClient
+	// Sequencer is the legacy control-plane field kept for compatibility.
 	Sequencer         SequencerWorkerClient
 	Executor          MutationExecutor
 	SnapshotReader    SnapshotReader
@@ -161,8 +176,9 @@ func (w MutationWorker) RunOnce(ctx context.Context) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	if w.Sequencer == nil {
-		return false, fmt.Errorf("sequencer worker client is required")
+	arbiter := resolveArbiterWorkerClient(w.Arbiter, w.Sequencer)
+	if arbiter == nil {
+		return false, fmt.Errorf("arbiter worker client is required")
 	}
 	if w.WorkerID == "" {
 		return false, fmt.Errorf("worker_id is required")
@@ -171,21 +187,21 @@ func (w MutationWorker) RunOnce(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("mutation executor is required")
 	}
 	didWork := false
-	task, ok, err := w.Sequencer.ClaimMutationTask(ctx)
+	task, ok, err := arbiter.ClaimMutationTask(ctx)
 	if err != nil {
 		return didWork, fmt.Errorf("claim mutation task: %w", err)
 	}
 	if ok {
 		if task.PendingInsertBarrier {
 			claim := w.pendingInsertBarrierClaim(task)
-			if err := w.Sequencer.SubmitMutationClaim(ctx, claim); err != nil {
+			if err := arbiter.SubmitMutationClaim(ctx, claim); err != nil {
 				return didWork, fmt.Errorf("submit mutation barrier claim: %w", err)
 			}
 			didWork = true
 		} else if claim, stale, err := w.staleRebindClaim(ctx, task); err != nil {
 			return didWork, err
 		} else if stale {
-			if err := w.Sequencer.SubmitMutationClaim(ctx, claim); err != nil {
+			if err := arbiter.SubmitMutationClaim(ctx, claim); err != nil {
 				return didWork, fmt.Errorf("submit mutation stale-rebind claim: %w", err)
 			}
 			didWork = true
@@ -198,28 +214,28 @@ func (w MutationWorker) RunOnce(ctx context.Context) (bool, error) {
 				claim.WorkerID = w.WorkerID
 			}
 			fillMutationClaimDefaults(&claim, task)
-			if err := w.Sequencer.SubmitMutationClaim(ctx, claim); err != nil {
+			if err := arbiter.SubmitMutationClaim(ctx, claim); err != nil {
 				return didWork, fmt.Errorf("submit mutation claim: %w", err)
 			}
 			didWork = true
 		}
 	}
 
-	replayTask, ok, err := w.Sequencer.ClaimMutationReplayTask(ctx)
+	replayTask, ok, err := arbiter.ClaimMutationReplayTask(ctx)
 	if err != nil {
 		return didWork, fmt.Errorf("claim mutation replay task: %w", err)
 	}
 	if ok {
 		if replayTask.PendingInsertBarrier {
 			result := w.pendingInsertBarrierReplayResult(replayTask)
-			if err := w.Sequencer.SubmitMutationReplay(ctx, result); err != nil {
+			if err := arbiter.SubmitMutationReplay(ctx, result); err != nil {
 				return didWork, fmt.Errorf("submit mutation replay barrier result: %w", err)
 			}
 			didWork = true
 		} else if result, stale, err := w.staleRebindReplayResult(ctx, replayTask); err != nil {
 			return didWork, err
 		} else if stale {
-			if err := w.Sequencer.SubmitMutationReplay(ctx, result); err != nil {
+			if err := arbiter.SubmitMutationReplay(ctx, result); err != nil {
 				return didWork, fmt.Errorf("submit mutation replay stale-rebind result: %w", err)
 			}
 			didWork = true
@@ -232,7 +248,7 @@ func (w MutationWorker) RunOnce(ctx context.Context) (bool, error) {
 				result.WorkerID = w.WorkerID
 			}
 			fillMutationReplayDefaults(&result, replayTask)
-			if err := w.Sequencer.SubmitMutationReplay(ctx, result); err != nil {
+			if err := arbiter.SubmitMutationReplay(ctx, result); err != nil {
 				return didWork, fmt.Errorf("submit mutation replay: %w", err)
 			}
 			didWork = true
@@ -335,7 +351,9 @@ func (w MutationWorker) staleRebind(ctx context.Context, task MutationTask) (sta
 }
 
 type SafeAuditWorker struct {
-	WorkerID     string
+	WorkerID string
+	Arbiter  ArbiterWorkerClient
+	// Sequencer is the legacy control-plane field kept for compatibility.
 	Sequencer    SequencerWorkerClient
 	Auditor      SafeAuditor
 	PollInterval time.Duration
@@ -345,8 +363,9 @@ func (w SafeAuditWorker) RunOnce(ctx context.Context) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	if w.Sequencer == nil {
-		return false, fmt.Errorf("sequencer worker client is required")
+	arbiter := resolveArbiterWorkerClient(w.Arbiter, w.Sequencer)
+	if arbiter == nil {
+		return false, fmt.Errorf("arbiter worker client is required")
 	}
 	if w.WorkerID == "" {
 		return false, fmt.Errorf("worker_id is required")
@@ -354,7 +373,7 @@ func (w SafeAuditWorker) RunOnce(ctx context.Context) (bool, error) {
 	if w.Auditor == nil {
 		return false, fmt.Errorf("safe auditor is required")
 	}
-	task, ok, err := w.Sequencer.ClaimSafeAudit(ctx)
+	task, ok, err := arbiter.ClaimSafeAudit(ctx)
 	if err != nil {
 		return false, fmt.Errorf("claim safe audit: %w", err)
 	}
@@ -368,7 +387,7 @@ func (w SafeAuditWorker) RunOnce(ctx context.Context) (bool, error) {
 	if vote.WorkerID == "" {
 		vote.WorkerID = w.WorkerID
 	}
-	if err := w.Sequencer.SubmitSafeAudit(ctx, vote); err != nil {
+	if err := arbiter.SubmitSafeAudit(ctx, vote); err != nil {
 		return false, fmt.Errorf("submit safe audit: %w", err)
 	}
 	return true, nil
@@ -379,7 +398,9 @@ func (w SafeAuditWorker) Run(ctx context.Context) error {
 }
 
 type RollbackWorker struct {
-	WorkerID     string
+	WorkerID string
+	Arbiter  ArbiterWorkerClient
+	// Sequencer is the legacy control-plane field kept for compatibility.
 	Sequencer    SequencerWorkerClient
 	Executor     RollbackExecutor
 	PollInterval time.Duration
@@ -389,8 +410,9 @@ func (w RollbackWorker) RunOnce(ctx context.Context) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	if w.Sequencer == nil {
-		return false, fmt.Errorf("sequencer worker client is required")
+	arbiter := resolveArbiterWorkerClient(w.Arbiter, w.Sequencer)
+	if arbiter == nil {
+		return false, fmt.Errorf("arbiter worker client is required")
 	}
 	if w.WorkerID == "" {
 		return false, fmt.Errorf("worker_id is required")
@@ -398,7 +420,7 @@ func (w RollbackWorker) RunOnce(ctx context.Context) (bool, error) {
 	if w.Executor == nil {
 		return false, fmt.Errorf("rollback executor is required")
 	}
-	task, ok, err := w.Sequencer.ClaimRollback(ctx)
+	task, ok, err := arbiter.ClaimRollback(ctx)
 	if err != nil {
 		return false, fmt.Errorf("claim rollback: %w", err)
 	}
@@ -410,7 +432,7 @@ func (w RollbackWorker) RunOnce(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("rollback %s: %w", task.RollbackID, err)
 	}
 	fillRollbackResultDefaults(&result, task, w.WorkerID)
-	if err := w.Sequencer.SubmitRollback(ctx, result); err != nil {
+	if err := arbiter.SubmitRollback(ctx, result); err != nil {
 		return false, fmt.Errorf("submit rollback result: %w", err)
 	}
 	return true, nil
@@ -421,7 +443,9 @@ func (w RollbackWorker) Run(ctx context.Context) error {
 }
 
 type RepairSyncWorker struct {
-	WorkerID     string
+	WorkerID string
+	Arbiter  ArbiterWorkerClient
+	// Sequencer is the legacy control-plane field kept for compatibility.
 	Sequencer    SequencerWorkerClient
 	Executor     RepairSyncExecutor
 	PollInterval time.Duration
@@ -431,8 +455,9 @@ func (w RepairSyncWorker) RunOnce(ctx context.Context) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	if w.Sequencer == nil {
-		return false, fmt.Errorf("sequencer worker client is required")
+	arbiter := resolveArbiterWorkerClient(w.Arbiter, w.Sequencer)
+	if arbiter == nil {
+		return false, fmt.Errorf("arbiter worker client is required")
 	}
 	if w.WorkerID == "" {
 		return false, fmt.Errorf("worker_id is required")
@@ -440,7 +465,7 @@ func (w RepairSyncWorker) RunOnce(ctx context.Context) (bool, error) {
 	if w.Executor == nil {
 		return false, fmt.Errorf("repair/sync executor is required")
 	}
-	task, ok, err := w.Sequencer.ClaimRepairSync(ctx)
+	task, ok, err := arbiter.ClaimRepairSync(ctx)
 	if err != nil {
 		return false, fmt.Errorf("claim repair/sync: %w", err)
 	}
@@ -452,7 +477,7 @@ func (w RepairSyncWorker) RunOnce(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("repair/sync %s: %w", task.RepairID, err)
 	}
 	fillRepairSyncResultDefaults(&result, task, w.WorkerID)
-	if err := w.Sequencer.SubmitRepairSync(ctx, result); err != nil {
+	if err := arbiter.SubmitRepairSync(ctx, result); err != nil {
 		return false, fmt.Errorf("submit repair/sync result: %w", err)
 	}
 	return true, nil
@@ -463,7 +488,9 @@ func (w RepairSyncWorker) Run(ctx context.Context) error {
 }
 
 type CompactionWorker struct {
-	WorkerID     string
+	WorkerID string
+	Arbiter  ArbiterWorkerClient
+	// Sequencer is the legacy control-plane field kept for compatibility.
 	Sequencer    SequencerWorkerClient
 	Executor     CompactionExecutor
 	PollInterval time.Duration
@@ -473,8 +500,9 @@ func (w CompactionWorker) RunOnce(ctx context.Context) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	if w.Sequencer == nil {
-		return false, fmt.Errorf("sequencer worker client is required")
+	arbiter := resolveArbiterWorkerClient(w.Arbiter, w.Sequencer)
+	if arbiter == nil {
+		return false, fmt.Errorf("arbiter worker client is required")
 	}
 	if w.WorkerID == "" {
 		return false, fmt.Errorf("worker_id is required")
@@ -482,7 +510,7 @@ func (w CompactionWorker) RunOnce(ctx context.Context) (bool, error) {
 	if w.Executor == nil {
 		return false, fmt.Errorf("compaction executor is required")
 	}
-	task, ok, err := w.Sequencer.ClaimCompaction(ctx)
+	task, ok, err := arbiter.ClaimCompaction(ctx)
 	if err != nil {
 		return false, fmt.Errorf("claim compaction: %w", err)
 	}
@@ -494,7 +522,7 @@ func (w CompactionWorker) RunOnce(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("compact %s: %w", task.CompactionID, err)
 	}
 	fillCompactionResultDefaults(&result, task, w.WorkerID)
-	if err := w.Sequencer.SubmitCompaction(ctx, result); err != nil {
+	if err := arbiter.SubmitCompaction(ctx, result); err != nil {
 		return false, fmt.Errorf("submit compaction result: %w", err)
 	}
 	return true, nil

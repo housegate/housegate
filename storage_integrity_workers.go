@@ -29,7 +29,7 @@ func buildStorageIntegrityBackgroundTasks(cfg *config.Config, creds credentials.
 		return nil, nil, nil
 	}
 	workerID := storageIntegrityWorkerID(workers.WorkerID, selfIndexerID)
-	sequencer := si.NewHTTPSequencerClient(cfg.StorageIntegrity.SequencerEndpoint)
+	arbiter := si.NewHTTPArbiterClient(cfg.StorageIntegrity.ControlPlaneEndpoint())
 	da := si.NewHTTPDAClient(cfg.StorageIntegrity.DAEndpoint)
 	pollInterval := workers.PollInterval.Duration
 	errorBackoff := workers.ErrorBackoff.Duration
@@ -59,7 +59,7 @@ func buildStorageIntegrityBackgroundTasks(cfg *config.Config, creds credentials.
 		}
 	}
 
-	resolver := si.SnapshotResolver{Reader: sequencer, ActiveParts: active}
+	resolver := si.SnapshotResolver{Reader: arbiter, ActiveParts: active}
 	guard := si.ClickHouseTableController{
 		Conn:                   conn,
 		Query:                  si.NewClickHouseHashConn(conn),
@@ -110,7 +110,7 @@ func buildStorageIntegrityBackgroundTasks(cfg *config.Config, creds credentials.
 		}
 		worker := si.VerifierWorker{
 			WorkerID:        workerID,
-			Sequencer:       sequencer,
+			Arbiter:         arbiter,
 			ReplayVerifier:  replayVerifier,
 			ByteSideScanner: scanner,
 			PollInterval:    pollInterval,
@@ -131,8 +131,8 @@ func buildStorageIntegrityBackgroundTasks(cfg *config.Config, creds credentials.
 			DropPromoteTable: true,
 		}
 		worker := si.PromotionWorker{
-			WorkerID:  workerID,
-			Sequencer: sequencer,
+			WorkerID: workerID,
+			Arbiter:  arbiter,
 			Promoter: si.GuardingPromoter{
 				Guard:        guard,
 				Resolver:     resolver,
@@ -157,15 +157,16 @@ func buildStorageIntegrityBackgroundTasks(cfg *config.Config, creds credentials.
 		executor := si.ClickHouseMutationExecutor{
 			Conn:            conn,
 			Hasher:          hasher,
+			ActiveParts:     active,
 			ClaimSigner:     claimSigner,
 			WorkerID:        workerID,
 			ScratchDatabase: cfg.StorageIntegrity.Mutations.ScratchDatabase,
 		}
 		worker := si.MutationWorker{
 			WorkerID:          workerID,
-			Sequencer:         sequencer,
+			Arbiter:           arbiter,
 			Executor:          si.GuardingMutationExecutor{Guard: guard, Resolver: resolver, VerifyActive: cfg.StorageIntegrity.SafeTables.VerifyPhysicalActiveMatchesManifest, Executor: executor},
-			SnapshotReader:    sequencer,
+			SnapshotReader:    arbiter,
 			MaxRebindAttempts: cfg.StorageIntegrity.Mutations.MaxRebindAttempts,
 			PollInterval:      pollInterval,
 		}
@@ -177,7 +178,7 @@ func buildStorageIntegrityBackgroundTasks(cfg *config.Config, creds credentials.
 	if workers.Rollback {
 		worker := si.RollbackWorker{
 			WorkerID:     workerID,
-			Sequencer:    sequencer,
+			Arbiter:      arbiter,
 			Executor:     si.ClickHouseRollbackExecutor{Conn: conn},
 			PollInterval: pollInterval,
 		}
@@ -190,7 +191,7 @@ func buildStorageIntegrityBackgroundTasks(cfg *config.Config, creds credentials.
 		executor := si.ClickHouseRepairSyncExecutor{Conn: conn, Hasher: hasher, ActiveParts: active}
 		worker := si.RepairSyncWorker{
 			WorkerID:     workerID,
-			Sequencer:    sequencer,
+			Arbiter:      arbiter,
 			Executor:     si.GuardingRepairSyncExecutor{Guard: guard, Executor: executor},
 			PollInterval: pollInterval,
 		}
@@ -203,7 +204,7 @@ func buildStorageIntegrityBackgroundTasks(cfg *config.Config, creds credentials.
 		auditor := si.ClickHouseSafeAuditor{Hasher: hasher, ActiveParts: active, WorkerID: workerID}
 		worker := si.SafeAuditWorker{
 			WorkerID:     workerID,
-			Sequencer:    sequencer,
+			Arbiter:      arbiter,
 			Auditor:      si.GuardingSafeAuditor{Guard: guard, Auditor: auditor},
 			PollInterval: pollInterval,
 		}
@@ -222,7 +223,7 @@ func buildStorageIntegrityBackgroundTasks(cfg *config.Config, creds credentials.
 		}
 		worker := si.CompactionWorker{
 			WorkerID:     workerID,
-			Sequencer:    sequencer,
+			Arbiter:      arbiter,
 			Executor:     si.GuardingCompactor{Guard: guard, Compactor: compactor},
 			PollInterval: pollInterval,
 		}
