@@ -1,0 +1,952 @@
+package storageintegrity
+
+import (
+	"bytes"
+	"context"
+	"net"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/ClickHouse/ch-go/proto"
+
+	"housegate/housegate/pkg/auth"
+	"housegate/housegate/pkg/chproto"
+	"housegate/housegate/pkg/chsession"
+	"housegate/housegate/pkg/lthash"
+	"housegate/housegate/pkg/plugin"
+	"housegate/housegate/pkg/replay"
+	"housegate/housegate/pkg/replay/payloadexec"
+	"housegate/housegate/pkg/sqlmeta"
+	core "housegate/housegate/pkg/storageintegrity"
+)
+
+func TestPluginCapturesInsertPayloadAndSubmitsExternalDAAndSequencer(t *testing.T) {
+	da := &fakeDA{}
+	seq := &fakeSequencer{}
+	p := New(Config{
+		UnsafeDatabase: "hg_unsafe",
+		SafeDatabase:   "hg_safe",
+		DA:             da,
+		Sequencer:      seq,
+	})
+	sess := &fakeSession{id: 7, state: chsession.NewSessionState()}
+	qctx := &plugin.QueryContext{
+		Session:       sess,
+		OriginalSQL:   "INSERT INTO accounts.events VALUES",
+		Query:         &chproto.Query{Body: "INSERT INTO accounts.events VALUES"},
+		StatementType: sqlmeta.StatementTypeInsert,
+	}
+
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	if qctx.Query.Body != "INSERT INTO `hg_unsafe`.`events` VALUES" {
+		t.Fatalf("rewritten query = %q", qctx.Query.Body)
+	}
+	if err := p.OnClientData(context.Background(), qctx, []byte("block-1")); err != nil {
+		t.Fatalf("OnClientData block-1: %v", err)
+	}
+	if err := p.OnClientData(context.Background(), qctx, []byte("block-2")); err != nil {
+		t.Fatalf("OnClientData block-2: %v", err)
+	}
+
+	p.OnQueryComplete(context.Background(), sess)
+
+	if string(da.payload) != "block-1block-2" {
+		t.Fatalf("payload = %q", da.payload)
+	}
+	if seq.rec.StatementID == "" || seq.rec.TableID != "accounts.events" {
+		t.Fatalf("sequencer record = %+v", seq.rec)
+	}
+	if seq.rec.UnsafeTable != "`hg_unsafe`.`events`" || seq.rec.SafeTable != "`hg_safe`.`events`" {
+		t.Fatalf("sequencer tables = unsafe %q safe %q", seq.rec.UnsafeTable, seq.rec.SafeTable)
+	}
+	if seq.rec.Payload.Ref == "" {
+		t.Fatalf("payload commitment = %+v", seq.rec.Payload)
+	}
+	if seq.rec.SourceClaimRoot == "" {
+		t.Fatalf("source claim root should be populated")
+	}
+}
+
+func TestPluginUsesQueryIDAsInsertStatementID(t *testing.T) {
+	da := &fakeDA{}
+	seq := &fakeSequencer{}
+	p := New(Config{
+		UnsafeDatabase: "hg_unsafe",
+		SafeDatabase:   "hg_safe",
+		DA:             da,
+		Sequencer:      seq,
+	})
+	sess := &fakeSession{id: 77, state: chsession.NewSessionState()}
+	qctx := &plugin.QueryContext{
+		Session:       sess,
+		OriginalSQL:   "INSERT INTO tenant_a.events",
+		Query:         &chproto.Query{ID: "query-statement-id", Body: "INSERT INTO tenant_a.events"},
+		StatementType: sqlmeta.StatementTypeInsert,
+	}
+
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	if err := p.OnClientData(context.Background(), qctx, []byte("block")); err != nil {
+		t.Fatalf("OnClientData: %v", err)
+	}
+	p.OnQueryComplete(context.Background(), sess)
+
+	if seq.rec.StatementID != "query-statement-id" {
+		t.Fatalf("statement_id = %q, want query-statement-id", seq.rec.StatementID)
+	}
+}
+
+func TestPluginCapturesInsertWhenRewriterLeavesStatementTypeUnset(t *testing.T) {
+	da := &fakeDA{}
+	seq := &fakeSequencer{}
+	p := New(Config{
+		UnsafeDatabase: "hg_unsafe",
+		SafeDatabase:   "hg_safe",
+		DA:             da,
+		Sequencer:      seq,
+	})
+	state := chsession.NewSessionState()
+	state.SetLogicalDatabase("tenant_a")
+	sess := &fakeSession{id: 10, state: state}
+	qctx := &plugin.QueryContext{
+		Session:     sess,
+		OriginalSQL: "INSERT INTO events FORMAT Native",
+		Query:       &chproto.Query{Body: "INSERT INTO events FORMAT Native"},
+	}
+
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	if qctx.Query.Body != "INSERT INTO `hg_unsafe`.`events` FORMAT Native" {
+		t.Fatalf("rewritten query = %q", qctx.Query.Body)
+	}
+	if err := p.OnClientData(context.Background(), qctx, []byte("native-block")); err != nil {
+		t.Fatalf("OnClientData: %v", err)
+	}
+	p.OnQueryComplete(context.Background(), sess)
+
+	if seq.rec.TableID != "tenant_a.events" {
+		t.Fatalf("table id = %q, want tenant_a.events", seq.rec.TableID)
+	}
+	if seq.rec.UnsafeTable != "`hg_unsafe`.`events`" || seq.rec.SafeTable != "`hg_safe`.`events`" {
+		t.Fatalf("sequencer tables = unsafe %q safe %q", seq.rec.UnsafeTable, seq.rec.SafeTable)
+	}
+	if string(da.payload) != "native-block" {
+		t.Fatalf("payload = %q", da.payload)
+	}
+}
+
+func TestPluginUsesRewriterOutputWithoutSecondRewrite(t *testing.T) {
+	da := &fakeDA{}
+	seq := &fakeSequencer{}
+	p := New(Config{
+		UnsafeDatabase: "hg_unsafe",
+		SafeDatabase:   "hg_safe",
+		DA:             da,
+		Sequencer:      seq,
+	})
+	sess := &fakeSession{id: 8, state: chsession.NewSessionState()}
+	qctx := &plugin.QueryContext{
+		Session:       sess,
+		OriginalSQL:   "INSERT INTO tenant_a.events FORMAT Native",
+		RewrittenSQL:  "INSERT INTO hg_unsafe.events FORMAT Native",
+		Query:         &chproto.Query{Body: "INSERT INTO hg_unsafe.events FORMAT Native"},
+		StatementType: sqlmeta.StatementTypeInsert,
+		AccessedTables: []sqlmeta.AccessedTable{{
+			OriginalDatabase: "tenant_a",
+			OriginalTable:    "events",
+			LogicalDatabase:  "tenant_a",
+			PhysicalDatabase: "hg_unsafe",
+		}},
+		TableRewrites: map[string]string{
+			"tenant_a.events": "hg_unsafe.events",
+		},
+	}
+
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	if qctx.Query.Body != "INSERT INTO hg_unsafe.events FORMAT Native" {
+		t.Fatalf("storage_integrity rewrote over rewriter output: %q", qctx.Query.Body)
+	}
+	if err := p.OnClientData(context.Background(), qctx, []byte("native-block")); err != nil {
+		t.Fatalf("OnClientData: %v", err)
+	}
+
+	p.OnQueryComplete(context.Background(), sess)
+
+	if seq.rec.TableID != "tenant_a.events" {
+		t.Fatalf("table id = %q, want tenant_a.events", seq.rec.TableID)
+	}
+	if seq.rec.UnsafeSQL != "INSERT INTO hg_unsafe.events FORMAT Native" {
+		t.Fatalf("unsafe sql = %q", seq.rec.UnsafeSQL)
+	}
+	if seq.rec.UnsafeTable != "`hg_unsafe`.`events`" {
+		t.Fatalf("unsafe table = %q", seq.rec.UnsafeTable)
+	}
+	if seq.rec.SafeTable != "`hg_safe`.`events`" {
+		t.Fatalf("safe table = %q", seq.rec.SafeTable)
+	}
+	if string(da.payload) != "native-block" {
+		t.Fatalf("payload = %q", da.payload)
+	}
+}
+
+func TestPluginSubmitsNativePayloadReplayMetadata(t *testing.T) {
+	const revision = 54453
+	da := &fakeDA{}
+	seq := &fakeSequencer{}
+	p := New(Config{
+		UnsafeDatabase: "hg_unsafe",
+		SafeDatabase:   "hg_safe",
+		DA:             da,
+		Sequencer:      seq,
+	})
+	state := chsession.NewSessionState()
+	state.ClientRevision = revision
+	sess := &fakeSession{id: 9, state: state}
+	qctx := &plugin.QueryContext{
+		Session:       sess,
+		OriginalSQL:   "INSERT INTO tenant_a.events",
+		RewrittenSQL:  "INSERT INTO hg_unsafe.events",
+		Query:         &chproto.Query{Body: "INSERT INTO hg_unsafe.events"},
+		StatementType: sqlmeta.StatementTypeInsert,
+		AccessedTables: []sqlmeta.AccessedTable{{
+			OriginalDatabase: "tenant_a",
+			OriginalTable:    "events",
+			LogicalDatabase:  "tenant_a",
+			PhysicalDatabase: "hg_unsafe",
+		}},
+		TableRewrites: map[string]string{
+			"tenant_a.events": "hg_unsafe.events",
+		},
+	}
+	raw := encodeStorageNativePayload(t, revision, proto.Input{
+		{Name: "id", Data: &proto.ColUInt64{1}},
+		{Name: "label", Data: storageColStr("alpha")},
+	})
+	wantClaim, err := core.ComputeNativePayloadClaim("tenant_a.events", revision, raw)
+	if err != nil {
+		t.Fatalf("ComputeNativePayloadClaim: %v", err)
+	}
+
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	if err := p.OnClientData(context.Background(), qctx, raw); err != nil {
+		t.Fatalf("OnClientData: %v", err)
+	}
+	p.OnQueryComplete(context.Background(), sess)
+
+	if seq.rec.SourceClaimRoot != wantClaim.SourceClaimRoot {
+		t.Fatalf("source claim root = %s, want %s", seq.rec.SourceClaimRoot, wantClaim.SourceClaimRoot)
+	}
+	if seq.rec.PayloadEncoding != core.PayloadEncodingClickHouseNativeData {
+		t.Fatalf("payload encoding = %q", seq.rec.PayloadEncoding)
+	}
+	if seq.rec.PayloadRevision != revision {
+		t.Fatalf("payload revision = %d, want %d", seq.rec.PayloadRevision, revision)
+	}
+	if seq.rec.PrevSafeSnapshotID == "" || seq.rec.PrevStateRoot == "" ||
+		seq.rec.SchemaSnapshotID == "" || seq.rec.ExecutorProfileID == "" {
+		t.Fatalf("replay metadata missing from insert record: %+v", seq.rec)
+	}
+	if seq.rec.SettingsHash != core.DefaultReplaySettingsHash {
+		t.Fatalf("settings hash = %q, want %q", seq.rec.SettingsHash, core.DefaultReplaySettingsHash)
+	}
+}
+
+func TestPluginRewriteClientDataInjectsRowIDAndCapturesMaterializedPayload(t *testing.T) {
+	const revision = 54453
+	da := &fakeDA{}
+	seq := &fakeSequencer{}
+	p := New(Config{
+		UnsafeDatabase: "hg_unsafe",
+		SafeDatabase:   "hg_safe",
+		DA:             da,
+		Sequencer:      seq,
+		NetworkID:      "sentio-testnet",
+		InjectRowID:    true,
+	})
+	state := chsession.NewSessionState()
+	state.ClientRevision = revision
+	sess := &fakeSession{id: 17, state: state}
+	qctx := &plugin.QueryContext{
+		Session:       sess,
+		OriginalSQL:   "INSERT INTO tenant_a.events",
+		RewrittenSQL:  "INSERT INTO hg_unsafe.events",
+		Query:         &chproto.Query{Body: "INSERT INTO hg_unsafe.events"},
+		StatementType: sqlmeta.StatementTypeInsert,
+		AccessedTables: []sqlmeta.AccessedTable{{
+			OriginalDatabase: "tenant_a",
+			OriginalTable:    "events",
+			LogicalDatabase:  "tenant_a",
+			PhysicalDatabase: "hg_unsafe",
+		}},
+		TableRewrites: map[string]string{
+			"tenant_a.events": "hg_unsafe.events",
+		},
+	}
+	raw := encodeStorageNativePayload(t, revision, proto.Input{
+		{Name: "id", Data: &proto.ColUInt64{1, 2}},
+		{Name: "label", Data: storageColStr("alpha", "beta")},
+	})
+
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	rewritten, err := p.RewriteClientData(context.Background(), qctx, raw)
+	if err != nil {
+		t.Fatalf("RewriteClientData: %v", err)
+	}
+	if bytes.Equal(rewritten, raw) {
+		t.Fatal("RewriteClientData returned the original packet; want _hg_row_id injection")
+	}
+	p.OnQueryComplete(context.Background(), sess)
+
+	if !bytes.Equal(da.payload, rewritten) {
+		t.Fatalf("DA payload was not the materialized payload")
+	}
+	rows := decodeStorageNativeRows(t, revision, da.payload)
+	if len(rows.columns) != 3 || rows.columns[0].Name != "_hg_row_id" || rows.columns[0].Type != "FixedString(32)" {
+		t.Fatalf("columns = %+v, want _hg_row_id FixedString(32) prepended", rows.columns)
+	}
+	for i := 0; i < rows.rowCount; i++ {
+		want := payloadexec.RowID("sentio-testnet", "tenant_a.events", seq.rec.StatementID, uint64(i))
+		if got := rows.rowIDs[i]; !bytes.Equal(got, want) {
+			t.Fatalf("row %d _hg_row_id = %x, want %x", i, got, want)
+		}
+	}
+	if seq.rec.PayloadEncoding != core.PayloadEncodingClickHouseNativeData {
+		t.Fatalf("payload encoding = %q", seq.rec.PayloadEncoding)
+	}
+	if seq.rec.SourceClaimRoot == "" {
+		t.Fatal("source claim root missing")
+	}
+}
+
+func TestPluginRequiresAndRecordsJWSForStorageIntegrityInsert(t *testing.T) {
+	const privateKey = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	signer, err := auth.NewRelaySigner(privateKey)
+	if err != nil {
+		t.Fatalf("NewRelaySigner: %v", err)
+	}
+	sql := "INSERT INTO events FORMAT Native"
+	token, err := signer.SignToken(sql)
+	if err != nil {
+		t.Fatalf("SignToken: %v", err)
+	}
+	validator := auth.NewEthValidator([]string{signer.Address()}, time.Hour, true, false, "", nil)
+	da := &fakeDA{}
+	seq := &fakeSequencer{}
+	p := New(Config{
+		UnsafeDatabase:    "hg_unsafe",
+		SafeDatabase:      "hg_safe",
+		DA:                da,
+		Sequencer:         seq,
+		RequireAuthToken:  true,
+		AuthValidator:     validator,
+		RequireRowIDInput: false,
+	})
+	state := chsession.NewSessionState()
+	state.ClientRevision = 54453
+	sess := &fakeSession{id: 18, state: state}
+	qctx := &plugin.QueryContext{
+		Session:     sess,
+		OriginalSQL: sql,
+		Query: &chproto.Query{
+			Body: sql,
+			Settings: []chproto.Setting{{
+				Key:    auth.AuthTokenSettingKey,
+				Value:  "'" + token + "'",
+				Custom: true,
+			}},
+		},
+		StatementType: sqlmeta.StatementTypeInsert,
+	}
+
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	if err := p.OnClientData(context.Background(), qctx, []byte("block")); err != nil {
+		t.Fatalf("OnClientData: %v", err)
+	}
+	p.OnQueryComplete(context.Background(), sess)
+
+	if seq.rec.UserJWS == "" {
+		t.Fatalf("insert record did not preserve user JWS: %+v", seq.rec)
+	}
+	if seq.rec.AuthenticatedSigner != signer.Address() {
+		t.Fatalf("authenticated signer = %q, want %q", seq.rec.AuthenticatedSigner, signer.Address())
+	}
+
+	badToken, err := signer.SignToken("SELECT 1")
+	if err != nil {
+		t.Fatalf("SignToken bad: %v", err)
+	}
+	qctx = &plugin.QueryContext{
+		Session:     sess,
+		OriginalSQL: sql,
+		Query: &chproto.Query{
+			Body: sql,
+			Settings: []chproto.Setting{{
+				Key:    auth.AuthTokenSettingKey,
+				Value:  "'" + badToken + "'",
+				Custom: true,
+			}},
+		},
+		StatementType: sqlmeta.StatementTypeInsert,
+	}
+	if err := p.OnQuery(context.Background(), qctx); err == nil {
+		t.Fatal("OnQuery accepted a JWS signed for different SQL, want rejection")
+	}
+}
+
+func TestPluginRejectsUnmaterializedNondeterminismForStorageIntegrityWrites(t *testing.T) {
+	p := New(Config{
+		UnsafeDatabase: "hg_unsafe",
+		SafeDatabase:   "hg_safe",
+		DA:             &fakeDA{},
+		Sequencer:      &fakeSequencer{},
+	})
+	sess := &fakeSession{id: 19, state: chsession.NewSessionState()}
+
+	insert := &plugin.QueryContext{
+		Session:       sess,
+		OriginalSQL:   "INSERT INTO events VALUES (now())",
+		Query:         &chproto.Query{Body: "INSERT INTO events VALUES (now())"},
+		StatementType: sqlmeta.StatementTypeInsert,
+	}
+	err := p.OnQuery(context.Background(), insert)
+	if err == nil || !strings.Contains(err.Error(), "unmaterialized nondeterministic function") {
+		t.Fatalf("insert OnQuery err = %v, want nondeterminism rejection", err)
+	}
+
+	mutation := &plugin.QueryContext{
+		Session:     sess,
+		OriginalSQL: "ALTER TABLE events UPDATE ts = now() WHERE day = '2026-07-03'",
+		Query:       &chproto.Query{Body: "ALTER TABLE events UPDATE ts = now() WHERE day = '2026-07-03'"},
+	}
+	err = p.OnQuery(context.Background(), mutation)
+	if err == nil || !strings.Contains(err.Error(), "unmaterialized nondeterministic function") {
+		t.Fatalf("mutation OnQuery err = %v, want nondeterminism rejection", err)
+	}
+
+	literalOnly := &plugin.QueryContext{
+		Session:     sess,
+		OriginalSQL: "ALTER TABLE events UPDATE label = 'now() text' WHERE day = '2026-07-03'",
+		Query:       &chproto.Query{Body: "ALTER TABLE events UPDATE label = 'now() text' WHERE day = '2026-07-03'"},
+	}
+	if err := p.OnQuery(context.Background(), literalOnly); err != nil {
+		t.Fatalf("literal-only mutation rejected: %v", err)
+	}
+}
+
+func TestPluginSubmitsBoundedUpdateMutationAndAbortsWithSuccess(t *testing.T) {
+	seq := &fakeSequencer{}
+	p := New(Config{
+		UnsafeDatabase: "hg_unsafe",
+		SafeDatabase:   "hg_safe",
+		Sequencer:      seq,
+	})
+	state := chsession.NewSessionState()
+	state.SetLogicalDatabase("tenant_a")
+	sess := &fakeSession{id: 11, state: state}
+	qctx := &plugin.QueryContext{
+		Session:     sess,
+		OriginalSQL: "ALTER TABLE events UPDATE label = concat(label, '-mut') WHERE id = 1",
+		Query:       &chproto.Query{Body: "ALTER TABLE events UPDATE label = concat(label, '-mut') WHERE id = 1"},
+	}
+
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	if !qctx.AbortWithSuccess {
+		t.Fatal("bounded mutation should abort upstream forwarding with synthetic success")
+	}
+	if seq.mut.StatementID == "" || seq.mut.TableID != "tenant_a.events" {
+		t.Fatalf("mutation record = %+v", seq.mut)
+	}
+	if seq.mut.MutationType != core.MutationTypeUpdate {
+		t.Fatalf("mutation type = %q, want %q", seq.mut.MutationType, core.MutationTypeUpdate)
+	}
+	if seq.mut.SafeTable != "`hg_safe`.`events`" {
+		t.Fatalf("safe table = %q", seq.mut.SafeTable)
+	}
+	if seq.mut.MutationSQL != "ALTER TABLE `hg_safe`.`events` UPDATE label = concat(label, '-mut') WHERE id = 1" {
+		t.Fatalf("mutation sql = %q", seq.mut.MutationSQL)
+	}
+}
+
+func TestPluginRejectsLightweightDeleteWhenConfigured(t *testing.T) {
+	p := New(Config{
+		UnsafeDatabase:          "hg_unsafe",
+		SafeDatabase:            "hg_safe",
+		Sequencer:               &fakeSequencer{},
+		RejectLightweightDelete: true,
+		PartitionColumns:        []string{"day"},
+	})
+	state := chsession.NewSessionState()
+	state.SetLogicalDatabase("tenant_a")
+	sess := &fakeSession{id: 21, state: state}
+	qctx := &plugin.QueryContext{
+		Session:     sess,
+		OriginalSQL: "DELETE FROM events WHERE day = '2026-07-03'",
+		Query:       &chproto.Query{Body: "DELETE FROM events WHERE day = '2026-07-03'"},
+	}
+
+	err := p.OnQuery(context.Background(), qctx)
+	if err == nil || !strings.Contains(err.Error(), "lightweight DELETE") {
+		t.Fatalf("OnQuery err = %v, want lightweight DELETE rejection", err)
+	}
+}
+
+func TestPluginRejectsMutationTouchedPartitionAndManifestCostLimits(t *testing.T) {
+	seq := &fakeSequencer{}
+	p := New(Config{
+		UnsafeDatabase:       "hg_unsafe",
+		SafeDatabase:         "hg_safe",
+		Sequencer:            seq,
+		SnapshotReader:       seq,
+		PartitionColumns:     []string{"day"},
+		MaxTouchedPartitions: 1,
+	})
+	state := chsession.NewSessionState()
+	state.SetLogicalDatabase("tenant_a")
+	sess := &fakeSession{id: 22, state: state}
+	qctx := &plugin.QueryContext{
+		Session:     sess,
+		OriginalSQL: "ALTER TABLE events UPDATE label = 'x' WHERE day IN ('2026-07-03', '2026-08-03')",
+		Query:       &chproto.Query{Body: "ALTER TABLE events UPDATE label = 'x' WHERE day IN ('2026-07-03', '2026-08-03')"},
+	}
+	err := p.OnQuery(context.Background(), qctx)
+	if err == nil || !strings.Contains(err.Error(), "touched partitions") {
+		t.Fatalf("partition limit err = %v, want touched partitions rejection", err)
+	}
+
+	manifest := sealedPluginTestManifest(t, []replay.PartManifestEntry{
+		{TableID: "tenant_a.events", PartitionID: "202607", PartName: "p1", PartRowLtHash: "root-1", RowCount: 10, Bytes: 600},
+		{TableID: "tenant_a.events", PartitionID: "202607", PartName: "p2", PartRowLtHash: "root-2", RowCount: 5, Bytes: 500},
+	})
+	seq.watermark = core.SafeWatermark{SnapshotID: manifest.SnapshotID, SafeBlockSeq: manifest.SafeBlockSeq, StateRoot: manifest.StateRoot, ManifestRoot: manifest.ManifestRoot}
+	seq.manifests = map[string]replay.SafeSnapshotManifest{manifest.SnapshotID: manifest}
+	p = New(Config{
+		UnsafeDatabase:   "hg_unsafe",
+		SafeDatabase:     "hg_safe",
+		Sequencer:        seq,
+		SnapshotReader:   seq,
+		PartitionColumns: []string{"day"},
+		MaxTouchedParts:  1,
+		MaxTouchedBytes:  1000,
+	})
+	qctx = &plugin.QueryContext{
+		Session:     sess,
+		OriginalSQL: "ALTER TABLE events UPDATE label = 'x' WHERE day = '2026-07-03'",
+		Query:       &chproto.Query{Body: "ALTER TABLE events UPDATE label = 'x' WHERE day = '2026-07-03'"},
+	}
+	err = p.OnQuery(context.Background(), qctx)
+	if err == nil || !strings.Contains(err.Error(), "touched parts") {
+		t.Fatalf("parts limit err = %v, want touched parts rejection", err)
+	}
+
+	p = New(Config{
+		UnsafeDatabase:   "hg_unsafe",
+		SafeDatabase:     "hg_safe",
+		Sequencer:        seq,
+		SnapshotReader:   seq,
+		PartitionColumns: []string{"day"},
+		MaxTouchedParts:  3,
+		MaxTouchedBytes:  1000,
+	})
+	err = p.OnQuery(context.Background(), qctx)
+	if err == nil || !strings.Contains(err.Error(), "touched bytes") {
+		t.Fatalf("bytes limit err = %v, want touched bytes rejection", err)
+	}
+}
+
+func TestPluginRejectsUnboundedMutation(t *testing.T) {
+	seq := &fakeSequencer{}
+	p := New(Config{
+		SafeDatabase: "hg_safe",
+		Sequencer:    seq,
+	})
+	sess := &fakeSession{id: 12, state: chsession.NewSessionState()}
+	qctx := &plugin.QueryContext{
+		Session:     sess,
+		OriginalSQL: "ALTER TABLE events DELETE",
+		Query:       &chproto.Query{Body: "ALTER TABLE events DELETE"},
+	}
+
+	err := p.OnQuery(context.Background(), qctx)
+	if err == nil {
+		t.Fatal("OnQuery succeeded for unbounded mutation, want rejection")
+	}
+	if seq.mut.StatementID != "" {
+		t.Fatalf("unexpected mutation record after rejection: %+v", seq.mut)
+	}
+}
+
+func TestPluginNormalizesUpdateAndDeleteMutationSyntax(t *testing.T) {
+	tests := []struct {
+		name     string
+		sql      string
+		wantType string
+		wantSQL  string
+	}{
+		{
+			name:     "update set",
+			sql:      "UPDATE events SET label = 'b' WHERE day = '2026-07-03'",
+			wantType: core.MutationTypeUpdate,
+			wantSQL:  "ALTER TABLE `hg_safe`.`events` UPDATE label = 'b' WHERE day = '2026-07-03'",
+		},
+		{
+			name:     "delete from",
+			sql:      "DELETE FROM events WHERE day = '2026-07-03'",
+			wantType: core.MutationTypeDelete,
+			wantSQL:  "ALTER TABLE `hg_safe`.`events` DELETE WHERE day = '2026-07-03'",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			seq := &fakeSequencer{}
+			p := New(Config{
+				SafeDatabase: "hg_safe",
+				Sequencer:    seq,
+			})
+			state := chsession.NewSessionState()
+			state.SetLogicalDatabase("tenant_a")
+			sess := &fakeSession{id: 13, state: state}
+			qctx := &plugin.QueryContext{
+				Session:     sess,
+				OriginalSQL: tt.sql,
+				Query:       &chproto.Query{Body: tt.sql},
+			}
+
+			if err := p.OnQuery(context.Background(), qctx); err != nil {
+				t.Fatalf("OnQuery: %v", err)
+			}
+			if seq.mut.MutationType != tt.wantType {
+				t.Fatalf("mutation type = %q, want %q", seq.mut.MutationType, tt.wantType)
+			}
+			if seq.mut.MutationSQL != tt.wantSQL {
+				t.Fatalf("mutation sql = %q, want %q", seq.mut.MutationSQL, tt.wantSQL)
+			}
+			if seq.mut.TableID != "tenant_a.events" {
+				t.Fatalf("table id = %q, want tenant_a.events", seq.mut.TableID)
+			}
+		})
+	}
+}
+
+func TestPluginRejectsUnsafeMutationAdmissionShapes(t *testing.T) {
+	tests := []string{
+		"TRUNCATE TABLE events",
+		"ALTER TABLE events DROP PARTITION '202607'",
+		"ALTER TABLE events UPDATE label = (SELECT max(label) FROM other) WHERE day = '2026-07-03'",
+		"ALTER TABLE events UPDATE label = dictGet('d', 'v', id) WHERE day = '2026-07-03'",
+		"ALTER TABLE events UPDATE label = remote('host', db, table) WHERE day = '2026-07-03'",
+		"UPDATE events SET label = 'b' FROM other WHERE events.id = other.id AND day = '2026-07-03'",
+	}
+	for _, sql := range tests {
+		t.Run(sql, func(t *testing.T) {
+			seq := &fakeSequencer{}
+			p := New(Config{
+				SafeDatabase: "hg_safe",
+				Sequencer:    seq,
+			})
+			sess := &fakeSession{id: 14, state: chsession.NewSessionState()}
+			qctx := &plugin.QueryContext{
+				Session:     sess,
+				OriginalSQL: sql,
+				Query:       &chproto.Query{Body: sql},
+			}
+
+			if err := p.OnQuery(context.Background(), qctx); err == nil {
+				t.Fatalf("OnQuery succeeded for unsafe mutation %q, want rejection", sql)
+			}
+			if seq.mut.StatementID != "" {
+				t.Fatalf("unexpected mutation record after rejection: %+v", seq.mut)
+			}
+		})
+	}
+}
+
+func TestPluginRequiresConfiguredPartitionPredicate(t *testing.T) {
+	seq := &fakeSequencer{}
+	p := New(Config{
+		SafeDatabase:              "hg_safe",
+		Sequencer:                 seq,
+		RequirePartitionPredicate: true,
+		PartitionColumns:          []string{"day"},
+	})
+	sess := &fakeSession{id: 15, state: chsession.NewSessionState()}
+	qctx := &plugin.QueryContext{
+		Session:     sess,
+		OriginalSQL: "ALTER TABLE events UPDATE label = 'b' WHERE id = 1",
+		Query:       &chproto.Query{Body: "ALTER TABLE events UPDATE label = 'b' WHERE id = 1"},
+	}
+
+	if err := p.OnQuery(context.Background(), qctx); err == nil {
+		t.Fatal("OnQuery succeeded without configured partition predicate, want rejection")
+	}
+	if seq.mut.StatementID != "" {
+		t.Fatalf("unexpected mutation record after rejection: %+v", seq.mut)
+	}
+
+	qctx = &plugin.QueryContext{
+		Session:     sess,
+		OriginalSQL: "ALTER TABLE events UPDATE label = 'b' WHERE day = '2026-07-03'",
+		Query:       &chproto.Query{Body: "ALTER TABLE events UPDATE label = 'b' WHERE day = '2026-07-03'"},
+	}
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery with partition predicate: %v", err)
+	}
+	if seq.mut.StatementID == "" {
+		t.Fatal("mutation with partition predicate did not submit")
+	}
+	if len(seq.mut.PartitionIDs) != 1 || seq.mut.PartitionIDs[0] != "202607" {
+		t.Fatalf("partition ids = %v, want [202607]", seq.mut.PartitionIDs)
+	}
+}
+
+func TestPluginRejectsMutationOfProtectedColumns(t *testing.T) {
+	seq := &fakeSequencer{}
+	p := New(Config{
+		SafeDatabase:     "hg_safe",
+		Sequencer:        seq,
+		ProtectedColumns: []string{"day", "id"},
+	})
+	sess := &fakeSession{id: 16, state: chsession.NewSessionState()}
+	qctx := &plugin.QueryContext{
+		Session:     sess,
+		OriginalSQL: "ALTER TABLE events UPDATE day = '2026-07-04' WHERE day = '2026-07-03'",
+		Query:       &chproto.Query{Body: "ALTER TABLE events UPDATE day = '2026-07-04' WHERE day = '2026-07-03'"},
+	}
+
+	if err := p.OnQuery(context.Background(), qctx); err == nil {
+		t.Fatal("OnQuery succeeded while modifying protected column, want rejection")
+	}
+	if seq.mut.StatementID != "" {
+		t.Fatalf("unexpected mutation record after rejection: %+v", seq.mut)
+	}
+}
+
+func TestPluginStatementIDsAreUniqueAcrossInstances(t *testing.T) {
+	a := New(Config{})
+	b := New(Config{})
+
+	aID := a.newStatementID()
+	bID := b.newStatementID()
+	if aID == bID {
+		t.Fatalf("two plugin instances generated the same statement id %q", aID)
+	}
+}
+
+func TestPluginRejectsSafeReadWhenNodeIsNotInActiveReadSet(t *testing.T) {
+	gate := &fakeReadGate{decision: core.SafeReadDecision{
+		Active:       false,
+		Reason:       "node quarantined",
+		SnapshotID:   "snap-2",
+		SafeBlockSeq: 10,
+	}}
+	p := New(Config{
+		SafeDatabase: "hg_safe",
+		ReadGate:     gate,
+		NodeID:       "node-a",
+	})
+	sess := &fakeSession{id: 88, state: chsession.NewSessionState()}
+	qctx := &plugin.QueryContext{
+		Session:       sess,
+		OriginalSQL:   "SELECT * FROM `hg_safe`.`events`",
+		Query:         &chproto.Query{Body: "SELECT * FROM `hg_safe`.`events`"},
+		StatementType: sqlmeta.StatementTypeSelect,
+		AccessedTables: []sqlmeta.AccessedTable{{
+			OriginalDatabase: "tenant_a",
+			OriginalTable:    "events",
+			PhysicalDatabase: "hg_safe",
+		}},
+	}
+
+	err := p.OnQuery(context.Background(), qctx)
+	if err == nil || !strings.Contains(err.Error(), "safe read gated") {
+		t.Fatalf("OnQuery err = %v, want safe read gated", err)
+	}
+	if gate.req.NodeID != "node-a" || len(gate.req.TableIDs) != 1 || gate.req.TableIDs[0] != "tenant_a.events" {
+		t.Fatalf("read gate request = %+v", gate.req)
+	}
+}
+
+type fakeDA struct {
+	payload []byte
+}
+
+func (f *fakeDA) PutPayload(_ context.Context, req core.PutPayloadRequest) (core.PayloadCommitment, error) {
+	f.payload = append([]byte(nil), req.Payload...)
+	return core.PayloadCommitment{Ref: "mockda://" + req.TableID + "/" + req.StatementID + "/hash", Hash: "0xhash", Length: uint64(len(req.Payload))}, nil
+}
+
+type fakeSequencer struct {
+	rec       core.InsertRecord
+	mut       core.MutationRecord
+	watermark core.SafeWatermark
+	manifests map[string]replay.SafeSnapshotManifest
+}
+
+func (f *fakeSequencer) SubmitInsert(_ context.Context, rec core.InsertRecord) error {
+	f.rec = rec
+	return nil
+}
+
+func (f *fakeSequencer) SubmitMutation(_ context.Context, rec core.MutationRecord) error {
+	f.mut = rec
+	return nil
+}
+
+func (f *fakeSequencer) GetSafeWatermark(context.Context) (core.SafeWatermark, error) {
+	return f.watermark, nil
+}
+
+func (f *fakeSequencer) GetSafeSnapshot(_ context.Context, snapshotID string) (replay.SafeSnapshotManifest, bool, error) {
+	manifest, ok := f.manifests[snapshotID]
+	return manifest, ok, nil
+}
+
+func sealedPluginTestManifest(t *testing.T, parts []replay.PartManifestEntry) replay.SafeSnapshotManifest {
+	t.Helper()
+	roots := make([]replay.PartitionCommitment, 0, len(parts))
+	for _, part := range parts {
+		roots = append(roots, replay.PartitionCommitment{
+			TableID:     part.TableID,
+			PartitionID: part.PartitionID,
+			Root:        part.PartRowLtHash,
+		})
+	}
+	manifest, err := (replay.SafeSnapshotManifest{
+		SafeBlockSeq:      11,
+		SchemaSnapshotID:  "schema",
+		SchemaRoot:        "schema-root",
+		ExecutorProfileID: "exec",
+		Tables: []replay.TableManifest{{
+			TableID:        "tenant_a.events",
+			SchemaHash:     "schema-hash",
+			PartitionRoots: roots,
+			ActiveParts:    parts,
+		}},
+	}).Seal()
+	if err != nil {
+		t.Fatalf("seal manifest: %v", err)
+	}
+	return manifest
+}
+
+type fakeReadGate struct {
+	req      core.SafeReadRequest
+	decision core.SafeReadDecision
+}
+
+func (f *fakeReadGate) CheckSafeRead(_ context.Context, req core.SafeReadRequest) (core.SafeReadDecision, error) {
+	f.req = req
+	return f.decision, nil
+}
+
+type fakeSession struct {
+	id    int64
+	state *chsession.SessionState
+}
+
+func (s *fakeSession) ID() int64                                          { return s.id }
+func (s *fakeSession) State() *chsession.SessionState                     { return s.state }
+func (s *fakeSession) Client() *chproto.Codec                             { return nil }
+func (s *fakeSession) Upstream() *chproto.Codec                           { return nil }
+func (s *fakeSession) RemoteAddr() net.Addr                               { return nil }
+func (s *fakeSession) Close() error                                       { return nil }
+func (s *fakeSession) BindUpstream(context.Context, *chproto.Codec) error { return nil }
+func (s *fakeSession) RebindUpstream(context.Context, *chproto.Codec, bool) error {
+	return nil
+}
+func (s *fakeSession) RebindToPeer(context.Context, *chproto.Codec, *chproto.ClientHello) error {
+	return nil
+}
+func (s *fakeSession) RebindToLocal(context.Context, *chproto.Codec, *chproto.ClientHello) error {
+	return nil
+}
+
+func encodeStorageNativePayload(t *testing.T, revision int, input proto.Input) []byte {
+	t.Helper()
+	var buf proto.Buffer
+	buf.PutUVarInt(uint64(proto.ClientCodeData))
+	buf.PutString("")
+	block := proto.Block{Rows: input[0].Data.Rows(), Columns: len(input)}
+	if err := block.EncodeBlock(&buf, revision, input); err != nil {
+		t.Fatalf("encode block: %v", err)
+	}
+	return buf.Buf
+}
+
+func storageColStr(values ...string) *proto.ColStr {
+	col := new(proto.ColStr)
+	for _, value := range values {
+		col.Append(value)
+	}
+	return col
+}
+
+type decodedStorageRows struct {
+	columns  []lthash.Column
+	rowIDs   [][]byte
+	rowCount int
+}
+
+func decodeStorageNativeRows(t *testing.T, revision int, payload []byte) decodedStorageRows {
+	t.Helper()
+	r := proto.NewReader(bytes.NewReader(payload))
+	code, err := r.UVarInt()
+	if err != nil {
+		t.Fatalf("packet code: %v", err)
+	}
+	if code != uint64(chproto.ClientDataCode) {
+		t.Fatalf("packet code = %d, want ClientData", code)
+	}
+	if _, err := r.Str(); err != nil {
+		t.Fatalf("block name: %v", err)
+	}
+	var (
+		results proto.Results
+		block   proto.Block
+	)
+	if err := block.DecodeBlock(r, revision, results.Auto()); err != nil {
+		t.Fatalf("DecodeBlock: %v", err)
+	}
+	out := decodedStorageRows{rowCount: block.Rows}
+	for _, rc := range results {
+		col := rc.Data
+		typeName := ""
+		if auto, ok := col.(*proto.ColAuto); ok {
+			typeName = string(auto.DataType)
+			col = auto.Data
+		} else if col != nil {
+			typeName = string(col.Type())
+		}
+		out.columns = append(out.columns, lthash.Column{Name: rc.Name, Type: typeName})
+		if rc.Name == "_hg_row_id" {
+			switch fixed := col.(type) {
+			case *proto.ColFixedStr:
+				for i := 0; i < block.Rows; i++ {
+					out.rowIDs = append(out.rowIDs, append([]byte(nil), fixed.Row(i)...))
+				}
+			case *proto.ColFixedStr32:
+				for i := 0; i < block.Rows; i++ {
+					row := fixed.Row(i)
+					out.rowIDs = append(out.rowIDs, append([]byte(nil), row[:]...))
+				}
+			default:
+				t.Fatalf("_hg_row_id column type = %T, want FixedString(32)", col)
+			}
+		}
+	}
+	return out
+}
