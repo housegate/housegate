@@ -12,7 +12,7 @@ func TestBuildServerStorageIntegrityWiresInsertPlugin(t *testing.T) {
 	cfg := minimalRouterOnlyCfg(t)
 	cfg.StorageIntegrity.Enabled = true
 	cfg.StorageIntegrity.DAEndpoint = "http://127.0.0.1:18080"
-	cfg.StorageIntegrity.SequencerEndpoint = "http://127.0.0.1:18080"
+	cfg.StorageIntegrity.ArbiterEndpoint = "http://127.0.0.1:18080"
 
 	bs, err := buildServer(Options{
 		Config:       cfg,

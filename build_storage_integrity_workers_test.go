@@ -12,7 +12,7 @@ func TestBuildServerStorageIntegrityWiresWorkerRuntime(t *testing.T) {
 	cfg := minimalRouterOnlyCfg(t)
 	cfg.StorageIntegrity.Enabled = true
 	cfg.StorageIntegrity.DAEndpoint = "http://127.0.0.1:18080"
-	cfg.StorageIntegrity.SequencerEndpoint = "http://127.0.0.1:18081"
+	cfg.StorageIntegrity.ArbiterEndpoint = "http://127.0.0.1:18081"
 	cfg.StorageIntegrity.Workers.Enabled = true
 	cfg.StorageIntegrity.Workers.WorkerID = "hg-a"
 	cfg.StorageIntegrity.Workers.ClickHouseAddr = "127.0.0.1:9000"

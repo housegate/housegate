@@ -4,6 +4,7 @@ package storageintegrity
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"housegate/housegate/pkg/replay"
@@ -70,9 +71,35 @@ type MutationRecord struct {
 	ReceivedAt          time.Time `json:"received_at"`
 }
 
-type SequencerIngress interface {
+type ArbiterIngress interface {
 	SubmitInsert(ctx context.Context, rec InsertRecord) error
 	SubmitMutation(ctx context.Context, rec MutationRecord) error
+}
+
+// SequencerIngress is the legacy control-plane name kept for compatibility.
+type SequencerIngress = ArbiterIngress
+
+type SNodePublisher interface {
+	PublishInsert(ctx context.Context, rec InsertRecord) error
+	PublishMutation(ctx context.Context, rec MutationRecord) error
+}
+
+type ArbiterSNodePublisher struct {
+	Arbiter ArbiterIngress
+}
+
+func (p ArbiterSNodePublisher) PublishInsert(ctx context.Context, rec InsertRecord) error {
+	if p.Arbiter == nil {
+		return fmt.Errorf("arbiter client is required")
+	}
+	return p.Arbiter.SubmitInsert(ctx, rec)
+}
+
+func (p ArbiterSNodePublisher) PublishMutation(ctx context.Context, rec MutationRecord) error {
+	if p.Arbiter == nil {
+		return fmt.Errorf("arbiter client is required")
+	}
+	return p.Arbiter.SubmitMutation(ctx, rec)
 }
 
 type MutationClaimSigner interface {
@@ -415,7 +442,7 @@ type SafeReadDecision struct {
 	SafeBlockSeq uint64 `json:"safe_block_seq,omitempty"`
 }
 
-type SequencerWorkerClient interface {
+type ArbiterWorkerClient interface {
 	ClaimReplayJob(ctx context.Context) (replay.ReplayJob, bool, error)
 	SubmitReplayAttestation(ctx context.Context, att replay.ReplayAttestation) error
 	ClaimByteSideScan(ctx context.Context) (ByteSideScanTask, bool, error)
@@ -435,6 +462,9 @@ type SequencerWorkerClient interface {
 	ClaimCompaction(ctx context.Context) (CompactionTask, bool, error)
 	SubmitCompaction(ctx context.Context, result CompactionResult) error
 }
+
+// SequencerWorkerClient is the legacy control-plane name kept for compatibility.
+type SequencerWorkerClient = ArbiterWorkerClient
 
 type SnapshotReader interface {
 	GetSafeWatermark(ctx context.Context) (SafeWatermark, error)

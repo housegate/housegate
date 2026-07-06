@@ -7,8 +7,10 @@ import (
 )
 
 type StorageIntegrityConfig struct {
-	Enabled           bool                             `json:"enabled"             yaml:"enabled"`
-	DAEndpoint        string                           `json:"da_endpoint"         yaml:"da_endpoint"`
+	Enabled         bool   `json:"enabled"             yaml:"enabled"`
+	DAEndpoint      string `json:"da_endpoint"         yaml:"da_endpoint"`
+	ArbiterEndpoint string `json:"arbiter_endpoint"    yaml:"arbiter_endpoint"`
+	// SequencerEndpoint is the legacy name kept for config compatibility.
 	SequencerEndpoint string                           `json:"sequencer_endpoint"  yaml:"sequencer_endpoint"`
 	UnsafeDatabase    string                           `json:"unsafe_database"     yaml:"unsafe_database"`
 	SafeDatabase      string                           `json:"safe_database"       yaml:"safe_database"`
@@ -105,6 +107,13 @@ func defaultStorageIntegrityConfig() StorageIntegrityConfig {
 	}
 }
 
+func (c StorageIntegrityConfig) ControlPlaneEndpoint() string {
+	if c.ArbiterEndpoint != "" {
+		return c.ArbiterEndpoint
+	}
+	return c.SequencerEndpoint
+}
+
 func (c StorageIntegrityConfig) validate(mode Mode) error {
 	if !c.Enabled {
 		return nil
@@ -116,8 +125,8 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 	if c.DAEndpoint == "" {
 		errs = append(errs, errors.New("storage_integrity.da_endpoint is required when storage_integrity.enabled"))
 	}
-	if c.SequencerEndpoint == "" {
-		errs = append(errs, errors.New("storage_integrity.sequencer_endpoint is required when storage_integrity.enabled"))
+	if c.ControlPlaneEndpoint() == "" {
+		errs = append(errs, errors.New("storage_integrity.arbiter_endpoint is required when storage_integrity.enabled"))
 	}
 	if c.UnsafeDatabase == "" {
 		errs = append(errs, errors.New("storage_integrity.unsafe_database is required when storage_integrity.enabled"))

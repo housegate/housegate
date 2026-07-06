@@ -212,14 +212,27 @@ func TestConfigValidateStorageIntegrityRequiresExternalEndpoints(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "storage_integrity.da_endpoint is required") {
 		t.Fatalf("Validate missing DA endpoint err = %v", err)
 	}
-	if err == nil || !strings.Contains(err.Error(), "storage_integrity.sequencer_endpoint is required") {
-		t.Fatalf("Validate missing Sequencer endpoint err = %v", err)
+	if err == nil || !strings.Contains(err.Error(), "storage_integrity.arbiter_endpoint is required") {
+		t.Fatalf("Validate missing Arbiter endpoint err = %v", err)
 	}
 
 	cfg.StorageIntegrity.DAEndpoint = "http://127.0.0.1:18080"
-	cfg.StorageIntegrity.SequencerEndpoint = "http://127.0.0.1:18080"
+	cfg.StorageIntegrity.ArbiterEndpoint = "http://127.0.0.1:18080"
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate with storage_integrity endpoints: %v", err)
+	}
+}
+
+func TestConfigValidateStorageIntegrityAcceptsLegacySequencerEndpoint(t *testing.T) {
+	cfg := minimalServerConfig(t)
+	cfg.StorageIntegrity.Enabled = true
+	cfg.StorageIntegrity.DAEndpoint = "http://127.0.0.1:18080"
+	cfg.StorageIntegrity.SequencerEndpoint = "http://127.0.0.1:18080"
+	cfg.StorageIntegrity.UnsafeDatabase = "hg_unsafe"
+	cfg.StorageIntegrity.SafeDatabase = "hg_safe"
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate with legacy sequencer_endpoint: %v", err)
 	}
 }
 
@@ -227,7 +240,7 @@ func TestConfigValidateStorageIntegrityMutationAdmission(t *testing.T) {
 	cfg := minimalServerConfig(t)
 	cfg.StorageIntegrity.Enabled = true
 	cfg.StorageIntegrity.DAEndpoint = "http://127.0.0.1:18080"
-	cfg.StorageIntegrity.SequencerEndpoint = "http://127.0.0.1:18080"
+	cfg.StorageIntegrity.ArbiterEndpoint = "http://127.0.0.1:18080"
 	cfg.StorageIntegrity.UnsafeDatabase = "hg_unsafe"
 	cfg.StorageIntegrity.SafeDatabase = "hg_safe"
 	cfg.StorageIntegrity.Mutations.Enabled = true

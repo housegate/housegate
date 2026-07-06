@@ -76,6 +76,61 @@ func TestHTTPSequencerClientSubmitsInsert(t *testing.T) {
 	}
 }
 
+func TestHTTPArbiterClientSubmitsInsertToArbiterEndpoint(t *testing.T) {
+	var got InsertRecord
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/arbiter/inserts" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(Ack{OK: true})
+	}))
+	defer srv.Close()
+
+	client := NewHTTPArbiterClient(srv.URL)
+	err := client.SubmitInsert(context.Background(), InsertRecord{
+		TableID:     "accounts.events",
+		StatementID: "stmt-1",
+		Payload: PayloadCommitment{
+			Ref:    "mockda://accounts.events/stmt-1/hash",
+			Hash:   "0xhash",
+			Length: 3,
+		},
+	})
+	if err != nil {
+		t.Fatalf("SubmitInsert: %v", err)
+	}
+	if got.StatementID != "stmt-1" || got.Payload.Ref == "" {
+		t.Fatalf("insert record = %+v", got)
+	}
+}
+
+func TestHTTPArbiterClientFallsBackToLegacySequencerEndpoint(t *testing.T) {
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		switch r.URL.Path {
+		case "/v1/arbiter/inserts":
+			http.NotFound(w, r)
+		case "/v1/sequencer/inserts":
+			_ = json.NewEncoder(w).Encode(Ack{OK: true})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewHTTPArbiterClient(srv.URL)
+	if err := client.SubmitInsert(context.Background(), InsertRecord{TableID: "accounts.events", StatementID: "stmt-1"}); err != nil {
+		t.Fatalf("SubmitInsert: %v", err)
+	}
+	if len(paths) != 2 || paths[0] != "/v1/arbiter/inserts" || paths[1] != "/v1/sequencer/inserts" {
+		t.Fatalf("paths = %v, want arbiter then legacy sequencer fallback", paths)
+	}
+}
+
 func TestHTTPClientsSupportWorkerEndpoints(t *testing.T) {
 	var replaySubmitted replay.ReplayAttestation
 	var byteSubmitted ByteSideScanResult
