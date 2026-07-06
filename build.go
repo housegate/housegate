@@ -34,12 +34,14 @@ import (
 	"housegate/housegate/pkg/plugins/rewrite"
 	routeplugin "housegate/housegate/pkg/plugins/route"
 	"housegate/housegate/pkg/plugins/sessionstate"
+	storageintegrityplugin "housegate/housegate/pkg/plugins/storageintegrity"
 	"housegate/housegate/pkg/plugins/usage"
 	"housegate/housegate/pkg/proxy"
 	"housegate/housegate/pkg/registry"
 	"housegate/housegate/pkg/replicationproxy"
 	"housegate/housegate/pkg/rewriter"
 	"housegate/housegate/pkg/sqlmeta"
+	"housegate/housegate/pkg/storageintegrity"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -238,14 +240,20 @@ type serverListener struct {
 	Label      string // e.g. "external", "internal", "agent", "replication-keeper", "replication-interserver"
 }
 
+type backgroundTask struct {
+	Label string
+	Run   func(context.Context) error
+}
+
 // builtServer is what each per-mode builder returns to the proxyImpl.
 // preServe is run once just before any Serve call (e.g. cluster.Start).
 // teardown runs after all Serve calls return; it is the reverse-order
 // cleanup of every lib-built dep.
 type builtServer struct {
-	listeners []serverListener
-	preServe  func(ctx context.Context)
-	teardown  func()
+	listeners       []serverListener
+	backgroundTasks []backgroundTask
+	preServe        func(ctx context.Context)
+	teardown        func()
 	// metricsRegistry is the dedicated Prometheus registry for the downstream
 	// metrics Collector (nil when collection is disabled or in agent mode).
 	// Exposed to hosts via Proxy.MetricsRegistry().
@@ -597,6 +605,39 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		queryPlugins = append(queryPlugins, iuPlugin)
 	}
 
+	if cfg.StorageIntegrity.Enabled {
+		siSequencer := storageintegrity.NewHTTPSequencerClient(cfg.StorageIntegrity.SequencerEndpoint)
+		siPlug := storageintegrityplugin.New(storageintegrityplugin.Config{
+			UnsafeDatabase:            cfg.StorageIntegrity.UnsafeDatabase,
+			SafeDatabase:              cfg.StorageIntegrity.SafeDatabase,
+			DA:                        storageintegrity.NewHTTPDAClient(cfg.StorageIntegrity.DAEndpoint),
+			Sequencer:                 siSequencer,
+			RequirePartitionPredicate: cfg.StorageIntegrity.Mutations.RequirePartitionPredicate,
+			PartitionColumns:          cfg.StorageIntegrity.Mutations.PartitionColumns,
+			ProtectedColumns:          cfg.StorageIntegrity.Mutations.ProtectedColumns,
+			RejectLightweightDelete:   cfg.StorageIntegrity.Mutations.RejectLightweightDelete,
+			MaxTouchedPartitions:      cfg.StorageIntegrity.Mutations.MaxTouchedPartitions,
+			MaxTouchedParts:           cfg.StorageIntegrity.Mutations.MaxTouchedParts,
+			MaxTouchedBytes:           cfg.StorageIntegrity.Mutations.MaxTouchedBytes,
+			NetworkID:                 cfg.StorageIntegrity.NetworkID,
+			InjectRowID:               cfg.StorageIntegrity.InjectRowID,
+			RequireAuthToken:          cfg.StorageIntegrity.RequireAuthToken,
+			AuthValidator:             validator,
+			SnapshotReader:            siSequencer,
+			ReadGate:                  siSequencer,
+			NodeID:                    strconv.FormatUint(selfIndexerID, 10),
+		})
+		queryPlugins = append(queryPlugins, siPlug)
+		dataPlugins = append(dataPlugins, siPlug)
+		queryCompletePlugins = append(queryCompletePlugins, siPlug)
+		log.Infow("storage_integrity insert flow enabled",
+			"da_endpoint", cfg.StorageIntegrity.DAEndpoint,
+			"sequencer_endpoint", cfg.StorageIntegrity.SequencerEndpoint,
+			"unsafe_database", cfg.StorageIntegrity.UnsafeDatabase,
+			"safe_database", cfg.StorageIntegrity.SafeDatabase,
+		)
+	}
+
 	var cgPlug *commitgate.Plugin
 	if len(opts.CommitGateObservers) > 0 {
 		cgPlug = commitgate.NewPlugin(opts.CommitGateObservers)
@@ -766,9 +807,17 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	if metricsCleanup != nil {
 		pushTeardown(metricsCleanup)
 	}
+	backgroundTasks, workerCleanup, err := buildStorageIntegrityBackgroundTasks(cfg, credProvider, selfIndexerID)
+	if err != nil {
+		return nil, err
+	}
+	if workerCleanup != nil {
+		pushTeardown(workerCleanup)
+	}
 
 	return &builtServer{
 		listeners:       listeners,
+		backgroundTasks: backgroundTasks,
 		metricsRegistry: metricsRegistry,
 		preServe: func(ctx context.Context) {
 			if libCluster != nil {
@@ -783,6 +832,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 				go metricsCollector.Start(ctx)
 				log.Infow("metrics collector started", "interval", cfg.Observability.Collector.Interval.Duration)
 			}
+			startBackgroundTasks(ctx, backgroundTasks)
 		},
 		teardown: func() {
 			// Reverse order, mirroring runServer's defer stack.
@@ -849,6 +899,10 @@ func buildAgent(opts Options, rf *redisFactory) (*builtServer, error) {
 	// non-deterministic functions are already resolved to constants by
 	// the time Signer's JWS binds the query body.
 	queryPlugins := []plugin.QueryPlugin{}
+	var dataPlugins []plugin.DataPlugin
+	var serverDataRewritePlugins []plugin.ServerDataRewritePlugin
+	var queryCompletePlugins []plugin.QueryCompletePlugin
+	var closePlugins []plugin.ClosePlugin
 	var materializerClose func()
 	if cfg.Materialize.Enabled {
 		m, err := buildMaterializer(cfg)
@@ -865,6 +919,17 @@ func buildAgent(opts Options, rf *redisFactory) (*builtServer, error) {
 		})
 		log.Infow("agent materialize enabled", "engine", cfg.Materialize.Engine)
 	}
+	if cfg.Agent.StorageIntegrity.Enabled {
+		siPlug := agent.NewStorageIntegrityPlugin(cfg.Agent.StorageIntegrity)
+		queryPlugins = append(queryPlugins, siPlug)
+		dataPlugins = append(dataPlugins, siPlug)
+		serverDataRewritePlugins = append(serverDataRewritePlugins, siPlug)
+		queryCompletePlugins = append(queryCompletePlugins, siPlug)
+		closePlugins = append(closePlugins, siPlug)
+		log.Infow("agent storage_integrity row-id injection enabled",
+			"network_id", siPlug.NetworkID,
+		)
+	}
 	queryPlugins = append(queryPlugins,
 		&agent.Plugin{Signer: signer, Observer: obs, Owner: cfg.Agent.Owner, IsDriver: cfg.Agent.Driver},
 		metrics,
@@ -874,7 +939,11 @@ func buildAgent(opts Options, rf *redisFactory) (*builtServer, error) {
 		ConnLifecyclePlugins:     []plugin.ConnLifecyclePlugin{metrics},
 		HandshakeCompletePlugins: []plugin.HandshakeCompletePlugin{metrics},
 		QueryPlugins:             queryPlugins,
+		DataPlugins:              dataPlugins,
+		ServerDataRewritePlugins: serverDataRewritePlugins,
 		ExceptionPlugins:         []plugin.ExceptionPlugin{metrics},
+		QueryCompletePlugins:     queryCompletePlugins,
+		ClosePlugins:             closePlugins,
 	}
 
 	// Two ways to choose an upstream:
