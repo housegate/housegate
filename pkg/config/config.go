@@ -136,6 +136,7 @@ type Config struct {
 	Auth             authplugin.Config        `json:"auth"              yaml:"auth"`
 	Rewriter         rewrite.Config           `json:"rewriter"          yaml:"rewriter"`
 	Materialize      materializeplugin.Config `json:"materialize"       yaml:"materialize"`
+	StorageIntegrity StorageIntegrityConfig   `json:"storage_integrity" yaml:"storage_integrity"`
 	Agent            agent.Config             `json:"agent"             yaml:"agent"`
 	Usage            usage.Config             `json:"usage"             yaml:"usage"`
 	IndexingUsage    indexingusage.Config     `json:"indexing_usage"    yaml:"indexing_usage"`
@@ -329,6 +330,9 @@ func (c *Config) Validate() error {
 		if (c.Shard != nil || c.Upstream != "") && c.CkhManagerConfigPath == "" {
 			errs = append(errs, errors.New("ckh_manager_config_path is required when upstream or shard is configured (needed for SQL rewriter table mapping)"))
 		}
+		if err := c.StorageIntegrity.validate(c.Mode()); err != nil {
+			errs = append(errs, err)
+		}
 	}
 
 	// Cross-section Redis requirements.
@@ -447,6 +451,7 @@ func Default() Config {
 			Timeout:        Duration{5 * time.Second},
 			RandomPoolSize: 16,
 		},
+		StorageIntegrity: defaultStorageIntegrityConfig(),
 		Agent: agent.Config{
 			Mode:          EnvOrDefault("HOUSEGATE_AGENT", "") == "true",
 			Upstream:      EnvOrDefault("HOUSEGATE_AGENT_UPSTREAM", ""),

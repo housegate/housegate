@@ -203,6 +203,48 @@ func TestConfig_Validate_ServerMode_InternalListenOptional(t *testing.T) {
 	}
 }
 
+func TestConfigValidateStorageIntegrityRequiresExternalEndpoints(t *testing.T) {
+	cfg := minimalServerConfig(t)
+	cfg.StorageIntegrity.Enabled = true
+	cfg.StorageIntegrity.UnsafeDatabase = "hg_unsafe"
+	cfg.StorageIntegrity.SafeDatabase = "hg_safe"
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "storage_integrity.da_endpoint is required") {
+		t.Fatalf("Validate missing DA endpoint err = %v", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "storage_integrity.sequencer_endpoint is required") {
+		t.Fatalf("Validate missing Sequencer endpoint err = %v", err)
+	}
+
+	cfg.StorageIntegrity.DAEndpoint = "http://127.0.0.1:18080"
+	cfg.StorageIntegrity.SequencerEndpoint = "http://127.0.0.1:18080"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate with storage_integrity endpoints: %v", err)
+	}
+}
+
+func TestConfigValidateStorageIntegrityMutationAdmission(t *testing.T) {
+	cfg := minimalServerConfig(t)
+	cfg.StorageIntegrity.Enabled = true
+	cfg.StorageIntegrity.DAEndpoint = "http://127.0.0.1:18080"
+	cfg.StorageIntegrity.SequencerEndpoint = "http://127.0.0.1:18080"
+	cfg.StorageIntegrity.UnsafeDatabase = "hg_unsafe"
+	cfg.StorageIntegrity.SafeDatabase = "hg_safe"
+	cfg.StorageIntegrity.Mutations.Enabled = true
+	cfg.StorageIntegrity.Mutations.ScratchDatabase = "hg_mutation"
+	cfg.StorageIntegrity.Mutations.RequirePartitionPredicate = true
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "storage_integrity.mutations.partition_columns is required") {
+		t.Fatalf("Validate missing mutation partition columns err = %v", err)
+	}
+
+	cfg.StorageIntegrity.Mutations.PartitionColumns = []string{"day"}
+	cfg.StorageIntegrity.Mutations.ProtectedColumns = []string{"day", "id"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate with mutation admission config: %v", err)
+	}
+}
+
 func TestConfigValidate(t *testing.T) {
 	baseServer := minimalServerConfig(t)
 	baseAgent := Config{
