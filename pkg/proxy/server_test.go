@@ -191,6 +191,9 @@ func (h testHooks) OnHello(ctx context.Context, sess chsession.Session, hello *c
 func (testHooks) OnHandshakeComplete(context.Context, chsession.Session, time.Duration) {}
 func (testHooks) OnQuery(context.Context, *plugin.QueryContext) error                   { return nil }
 func (testHooks) OnClientData(context.Context, *plugin.QueryContext, []byte) error      { return nil }
+func (testHooks) RewriteClientData(_ context.Context, _ *plugin.QueryContext, raw []byte) ([]byte, error) {
+	return raw, nil
+}
 func (testHooks) OnException(context.Context, chsession.Session, *chproto.Exception) error {
 	return nil
 }

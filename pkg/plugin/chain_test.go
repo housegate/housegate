@@ -73,6 +73,44 @@ func (f *fakeQueryPlugin) OnQuery(_ context.Context, qctx *QueryContext) error {
 	return f.returnErr
 }
 
+type fakeDataRewritePlugin struct {
+	seen    [][]byte
+	rewrite []byte
+}
+
+func (f *fakeDataRewritePlugin) OnClientData(_ context.Context, _ *QueryContext, raw []byte) error {
+	f.seen = append(f.seen, append([]byte(nil), raw...))
+	return nil
+}
+
+func (f *fakeDataRewritePlugin) RewriteClientData(_ context.Context, _ *QueryContext, raw []byte) ([]byte, error) {
+	if f.rewrite == nil {
+		return raw, nil
+	}
+	return append([]byte(nil), f.rewrite...), nil
+}
+
+func TestPluginChain_RewriteClientDataFeedsNextPluginAndReturnsRewrittenPacket(t *testing.T) {
+	first := &fakeDataRewritePlugin{rewrite: []byte("rewritten")}
+	second := &fakeDataRewritePlugin{}
+	chain := &PluginChain{DataPlugins: []DataPlugin{first, second}}
+	qctx := &QueryContext{Session: newFakeSession(), Query: &chproto.Query{Body: "INSERT INTO t"}}
+
+	got, err := chain.RewriteClientData(context.Background(), qctx, []byte("original"))
+	if err != nil {
+		t.Fatalf("RewriteClientData: %v", err)
+	}
+	if string(got) != "rewritten" {
+		t.Fatalf("rewritten packet = %q, want rewritten", got)
+	}
+	if len(first.seen) != 1 || string(first.seen[0]) != "original" {
+		t.Fatalf("first plugin saw %q, want original", first.seen)
+	}
+	if len(second.seen) != 1 || string(second.seen[0]) != "rewritten" {
+		t.Fatalf("second plugin saw %q, want rewritten", second.seen)
+	}
+}
+
 func TestPluginChain_OnQuery_RunsInOrder(t *testing.T) {
 	var called []string
 	chain := &PluginChain{

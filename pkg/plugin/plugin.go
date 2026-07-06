@@ -75,6 +75,22 @@ type DataPlugin interface {
 	OnClientData(ctx context.Context, qctx *QueryContext, raw []byte) error
 }
 
+// DataRewritePlugin is an optional extension for DataPlugin implementations
+// that must replace the client Data packet before Relay splices it upstream.
+// Returning raw unchanged is a no-op. The returned slice must be a complete
+// on-wire packet, including the leading client packet code.
+type DataRewritePlugin interface {
+	RewriteClientData(ctx context.Context, qctx *QueryContext, raw []byte) ([]byte, error)
+}
+
+// ServerDataRewritePlugin is an optional extension for plugins that must
+// replace complete server→client packets before Relay writes them downstream.
+// raw is one full on-wire server packet, including the leading server packet
+// code. Returning raw unchanged is a no-op.
+type ServerDataRewritePlugin interface {
+	RewriteServerData(ctx context.Context, sess chsession.Session, raw []byte) ([]byte, error)
+}
+
 // HandshakeCompletePlugin participates in OnHandshakeComplete, fired
 // by Relay once the ClientHello / ServerHello / Addendum round-trip
 // has finished successfully and the session is ready to serve Query

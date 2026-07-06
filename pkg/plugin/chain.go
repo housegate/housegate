@@ -46,6 +46,7 @@ type PluginChain struct {
 	HandshakeCompletePlugins []HandshakeCompletePlugin
 	QueryPlugins             []QueryPlugin
 	DataPlugins              []DataPlugin
+	ServerDataRewritePlugins []ServerDataRewritePlugin
 	ExceptionPlugins         []ExceptionPlugin
 	QueryCompletePlugins     []QueryCompletePlugin
 	ClosePlugins             []ClosePlugin
@@ -196,6 +197,72 @@ func (c *PluginChain) OnClientData(ctx context.Context, qctx *QueryContext, raw 
 		}
 	}
 	return nil
+}
+
+func (c *PluginChain) RewriteClientData(ctx context.Context, qctx *QueryContext, raw []byte) ([]byte, error) {
+	if len(c.DataPlugins) == 0 || qctx == nil || qctx.Session == nil {
+		return raw, nil
+	}
+	current := raw
+	state := qctx.Session.State()
+	for _, p := range c.DataPlugins {
+		if state.IsRouted() && !runsOnRouted(p) {
+			continue
+		}
+		// See OnHandshakeComplete for the IsForwardedFromPeer override.
+		if state.PeerTrusted() && !state.IsForwardedFromPeer && !runsOnPeerTrust(p) {
+			continue
+		}
+		if state.IsForwarding && !runsOnForward(p) {
+			continue
+		}
+		if err := p.OnClientData(ctx, qctx, current); err != nil {
+			return current, err
+		}
+		rw, ok := p.(DataRewritePlugin)
+		if !ok {
+			continue
+		}
+		next, err := rw.RewriteClientData(ctx, qctx, current)
+		if err != nil {
+			return current, err
+		}
+		if next != nil {
+			current = next
+		}
+	}
+	return current, nil
+}
+
+func (c *PluginChain) HasServerDataRewriters() bool {
+	return len(c.ServerDataRewritePlugins) > 0
+}
+
+func (c *PluginChain) RewriteServerData(ctx context.Context, sess chsession.Session, raw []byte) ([]byte, error) {
+	if len(c.ServerDataRewritePlugins) == 0 || sess == nil {
+		return raw, nil
+	}
+	current := raw
+	state := sess.State()
+	for _, p := range c.ServerDataRewritePlugins {
+		if state.IsRouted() && !runsOnRouted(p) {
+			continue
+		}
+		if state.PeerTrusted() && !state.IsForwardedFromPeer && !runsOnPeerTrust(p) {
+			continue
+		}
+		if state.IsForwarding && !runsOnForward(p) {
+			continue
+		}
+		next, err := p.RewriteServerData(ctx, sess, current)
+		if err != nil {
+			return current, err
+		}
+		if next != nil {
+			current = next
+		}
+	}
+	return current, nil
 }
 
 func (c *PluginChain) OnException(ctx context.Context, sess chsession.Session, exc *chproto.Exception) error {
