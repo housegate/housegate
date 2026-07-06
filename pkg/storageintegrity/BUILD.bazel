@@ -11,6 +11,7 @@ go_library(
         "native_payload.go",
         "snapshot_resolver.go",
         "types.go",
+        "workers.go",
     ],
     importpath = "housegate/housegate/pkg/storageintegrity",
     visibility = ["//visibility:public"],
@@ -33,6 +34,7 @@ go_test(
         "client_test.go",
         "native_payload_test.go",
         "snapshot_resolver_test.go",
+        "workers_test.go",
     ],
     embed = [":storageintegrity"],
     deps = [
