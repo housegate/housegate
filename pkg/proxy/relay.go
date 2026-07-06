@@ -410,14 +410,20 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 		}
 
 		// Data packets belong to the most recent forwarded query; hand
-		// the raw bytes to DataPlugins before splicing. Fail-open: a
-		// hook error must never take down the connection.
+		// the raw bytes to DataPlugins before splicing. Data rewrite
+		// errors are fail-closed: storage-integrity materialization cannot
+		// allow an unmaterialized body to reach ClickHouse.
 		if pkt.Type == uint64(chproto.ClientDataCode) {
-			if err := r.hooks.OnClientData(ctx, curQctx, pkt.Raw); err != nil {
-				logger.Warnw("client data hook failed (fail-open)",
+			rewritten, err := r.hooks.RewriteClientData(ctx, curQctx, pkt.Raw)
+			if err != nil {
+				logger.Warnw("client data rewrite hook failed",
 					"raw_len", pkt.RawLen,
 					"err", err,
 				)
+				return fmt.Errorf("client data rewrite: %w", err)
+			}
+			if rewritten != nil && len(rewritten) > 0 && !bytes.Equal(rewritten, pkt.Raw) {
+				pkt = &chproto.Packet{Type: pkt.Type, RawLen: len(rewritten), Raw: rewritten}
 			}
 		}
 
@@ -463,6 +469,9 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 // state rollback (e.g. commitgate) must accept best-effort delivery and
 // pair their state mutations with idempotent re-application logic.
 func (r *Relay) upstreamToClient(ctx context.Context) error {
+	if needsServerDataRewrite(r.hooks) {
+		return r.upstreamToClientPacketized(ctx)
+	}
 	client := r.sess.Client()
 	buf := make([]byte, 64*1024)
 	for {
@@ -545,6 +554,99 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 			if newUp := r.sess.Upstream(); newUp != nil && newUp != up {
 				_, logger := log.FromContext(ctx)
 				logger.Debugw("upstreamToClient: upstream replaced mid-read (USE rebind), continuing with new upstream",
+					"old_up_addr", upstreamAddr(up),
+					"new_up_addr", upstreamAddr(newUp),
+				)
+				continue
+			}
+			return fmt.Errorf("upstream read: %w", err)
+		}
+	}
+}
+
+type serverDataRewriteDetector interface {
+	HasServerDataRewriters() bool
+}
+
+type serverDataRewriter interface {
+	RewriteServerData(ctx context.Context, sess chsession.Session, raw []byte) ([]byte, error)
+}
+
+func needsServerDataRewrite(h plugin.Hooks) bool {
+	d, ok := h.(serverDataRewriteDetector)
+	return ok && d.HasServerDataRewriters()
+}
+
+func (r *Relay) upstreamToClientPacketized(ctx context.Context) error {
+	client := r.sess.Client()
+	rewriter, _ := r.hooks.(serverDataRewriter)
+	for {
+		up := r.sess.Upstream()
+		if up == nil {
+			return chsession.ErrNoUpstream
+		}
+
+		pkt, err := up.ReadPacket()
+		if pkt != nil && len(pkt.Raw) > 0 {
+			raw := pkt.Raw
+			if rewriter != nil {
+				rewritten, rwErr := rewriter.RewriteServerData(ctx, r.sess, raw)
+				if rwErr != nil {
+					return fmt.Errorf("server data rewrite: %w", rwErr)
+				}
+				if rewritten != nil {
+					raw = rewritten
+				}
+			}
+
+			isBoundary := pkt.Type == uint64(chproto.ServerEndOfStreamCode) ||
+				pkt.Type == uint64(chproto.ServerExceptionCode)
+
+			_, logger := log.FromContext(ctx)
+			logger.Debugw("upstream packet relayed to client",
+				"bytes", len(raw),
+				"packet_type", pkt.Type,
+				"name", detectServerPacketType(raw),
+				"boundary", isBoundary,
+			)
+
+			if r.obs != nil {
+				r.obs.BytesTransferred("upstream_to_client", float64(len(raw)))
+				if name := detectServerPacketType(raw); name != "unknown" {
+					r.obs.ServerPacket(name)
+				}
+			}
+
+			handled := false
+			if pkt.Type == uint64(chproto.ServerExceptionCode) {
+				if exc := tryDecodeException(raw, up.Revision()); exc != nil {
+					if err := r.hooks.OnException(ctx, r.sess, exc); err != nil {
+						logger.Warne(err, "OnException hook returned error")
+					}
+					if werr := client.WriteException(exc); werr != nil {
+						return fmt.Errorf("write rewritten exception to client: %w", werr)
+					}
+					handled = true
+				}
+			}
+			if !handled {
+				if _, werr := client.Conn().Write(raw); werr != nil {
+					return fmt.Errorf("splice upstream→client: %w", werr)
+				}
+			}
+
+			if isBoundary {
+				r.sess.State().ClearActiveRewrite()
+				r.hooks.OnQueryComplete(ctx, r.sess)
+			}
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return io.EOF
+			}
+			if newUp := r.sess.Upstream(); newUp != nil && newUp != up {
+				_, logger := log.FromContext(ctx)
+				logger.Debugw("upstreamToClient packetized: upstream replaced mid-read (USE rebind), continuing with new upstream",
 					"old_up_addr", upstreamAddr(up),
 					"new_up_addr", upstreamAddr(newUp),
 				)
