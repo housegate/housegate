@@ -3,14 +3,15 @@ package testenv
 import (
 	"context"
 	"net"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
 
 	"google.golang.org/grpc"
 
-	"housegate/housegate/pkg/config"
 	pb "github.com/housegate/rewriter-go/gen/pb"
+	"housegate/housegate/pkg/config"
 )
 
 // RewriterMock implements protos.RewriterServiceServer with the
@@ -157,10 +158,11 @@ func (m *RewriterMock) SeenDynamicArgs() []*pb.RewriteTableDynamicArgs {
 func (m *RewriterMock) Rewrite(ctx context.Context, req *pb.RewriteSQLRequest) (*pb.RewriteSQLResponse, error) {
 	sql := req.GetSql()
 	upper := strings.ToUpper(stripLeadingWhitespace(sql))
+	dynArgs := extractDynamicArgs(req)
 
 	m.mu.Lock()
 	m.seen = append(m.seen, sql)
-	m.seenArgs = append(m.seenArgs, extractDynamicArgs(req))
+	m.seenArgs = append(m.seenArgs, dynArgs)
 	shouldFail := m.failNext > 0
 	if shouldFail {
 		m.failNext--
@@ -184,11 +186,16 @@ func (m *RewriterMock) Rewrite(ctx context.Context, req *pb.RewriteSQLRequest) (
 		}, nil
 	}
 
+	rewrittenSQL, discoveredTables, tableRewrites := rewriteMockSQL(sql, dynArgs)
+	if len(tables) == 0 {
+		tables = discoveredTables
+	}
 	return &pb.RewriteSQLResponse{
 		Code:                   pb.RewriteCode_Success,
-		SqlAfterRewrite:        sql,
+		SqlAfterRewrite:        rewrittenSQL,
 		StatementType:          classify(sql),
 		OriginalAccessedTables: tables,
+		TableRewrites:          tableRewrites,
 	}, nil
 }
 
@@ -288,6 +295,65 @@ func extractDynamicArgs(req *pb.RewriteSQLRequest) *pb.RewriteTableDynamicArgs {
 		}
 	}
 	return nil
+}
+
+var mockInsertTargetRE = regexp.MustCompile(`(?is)^(\s*INSERT\s+INTO\s+)((?:` + "`[^`]+`" + `|[A-Za-z_][A-Za-z0-9_]*)(?:\.(?:` + "`[^`]+`" + `|[A-Za-z_][A-Za-z0-9_]*))?)(.*)$`)
+
+func rewriteMockSQL(sql string, dyn *pb.RewriteTableDynamicArgs) (string, []*pb.AccessedTable, map[string]string) {
+	if dyn == nil {
+		return sql, nil, nil
+	}
+	m := mockInsertTargetRE.FindStringSubmatch(sql)
+	if len(m) != 4 {
+		return sql, nil, nil
+	}
+	originalTarget := normalizeMockIdentifierPath(m[2])
+	if originalTarget == "" {
+		return sql, nil, nil
+	}
+	logicalDB, table := splitMockTarget(originalTarget)
+	if logicalDB == "" {
+		logicalDB = dyn.GetUpstreamLogicalDatabaseInContext()
+	}
+	if logicalDB == "" || table == "" {
+		return sql, nil, nil
+	}
+	physicalDB := dyn.GetDatabaseMap()[logicalDB]
+	if physicalDB == "" {
+		return sql, nil, nil
+	}
+	rewrittenTarget := physicalDB + "." + table
+	rewrittenSQL := m[1] + rewrittenTarget + m[3]
+	originalKey := logicalDB + "." + table
+	return rewrittenSQL, []*pb.AccessedTable{{
+			OriginalDatabase: logicalDB,
+			OriginalTable:    table,
+			LogicalDatabase:  logicalDB,
+			PhysicalDatabase: physicalDB,
+		}}, map[string]string{
+			originalKey: rewrittenTarget,
+		}
+}
+
+func splitMockTarget(target string) (db, table string) {
+	parts := strings.Split(target, ".")
+	if len(parts) == 1 {
+		return "", parts[0]
+	}
+	return parts[0], strings.Join(parts[1:], ".")
+}
+
+func normalizeMockIdentifierPath(value string) string {
+	parts := strings.Split(value, ".")
+	for i, part := range parts {
+		part = strings.TrimSpace(part)
+		part = strings.Trim(part, "`")
+		if part == "" {
+			return ""
+		}
+		parts[i] = part
+	}
+	return strings.Join(parts, ".")
 }
 
 // WithRewriterMock starts a rewriter mock and returns a ProxyOption that

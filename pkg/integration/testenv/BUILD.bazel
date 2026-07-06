@@ -30,11 +30,15 @@ go_library(
 
 go_test(
     name = "testenv_test",
-    srcs = ["clickhouse_test.go"],
+    srcs = [
+        "clickhouse_test.go",
+        "rewriter_mock_test.go",
+    ],
     embed = [":testenv"],
     local = True,
     tags = [
         "manual",
         "requires-docker",
     ],
+    deps = ["@com_github_housegate_rewriter_go//gen/pb"],
 )

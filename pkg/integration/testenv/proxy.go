@@ -61,6 +61,22 @@ func WithExtraDatabases(names ...string) ProxyOption {
 	}
 }
 
+// WithDatabaseIndexer registers logical databases as owned by indexerID.
+// Use this when a test starts several housegate instances with distinct
+// cfg.IndexerID values and wants each logical database to resolve locally on
+// exactly one of them.
+func WithDatabaseIndexer(indexerID uint64, names ...string) ProxyOption {
+	return func(_ *config.Config, opts *housegate.Options) {
+		ns, ok := opts.NetworkState.(*network.InMemoryNetworkState)
+		if !ok {
+			panic("WithDatabaseIndexer requires the default in-memory NetworkState")
+		}
+		for _, name := range names {
+			ns.DatabaseInfos[network.Database(name)] = network.DatabaseInfo{IndexerId: indexerID}
+		}
+	}
+}
+
 // WithDatabasePermission grants `auth` on `database` to `account` in the
 // in-memory NetworkState. Account is normalised to lower-case to match
 // the canonical form PermissionsFor / IsOperator use (the auth plugin
