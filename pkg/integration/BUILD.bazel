@@ -6,6 +6,7 @@ go_test(
         "agent_test.go",
         "auth_test.go",
         "cancel_test.go",
+        "chscan_test.go",
         "chreplay_test.go",
         "cli_test.go",
         "combined_envelope_test.go",

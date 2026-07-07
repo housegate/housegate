@@ -4,6 +4,7 @@ go_library(
     name = "payloadexec",
     srcs = [
         "executor.go",
+        "exports.go",
         "signer.go",
         "stores.go",
     ],
@@ -20,6 +21,7 @@ go_test(
     name = "payloadexec_test",
     srcs = [
         "executor_test.go",
+        "exports_test.go",
         "integration_test.go",
         "signer_test.go",
         "stores_test.go",
