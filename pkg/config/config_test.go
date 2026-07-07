@@ -258,6 +258,33 @@ func TestConfigValidateStorageIntegrityMutationAdmission(t *testing.T) {
 	}
 }
 
+func TestConfigValidateStorageIntegritySafeMerges(t *testing.T) {
+	cfg := minimalServerConfig(t)
+	cfg.StorageIntegrity.Enabled = true
+	cfg.StorageIntegrity.DAEndpoint = "http://127.0.0.1:18080"
+	cfg.StorageIntegrity.ArbiterEndpoint = "http://127.0.0.1:18080"
+	cfg.StorageIntegrity.UnsafeDatabase = "hg_unsafe"
+	cfg.StorageIntegrity.SafeDatabase = "hg_safe"
+
+	// v1 forbids native background merges on safe tables.
+	cfg.StorageIntegrity.SafeMerges.AllowNativeBackgroundMerges = true
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "allow_native_background_merges must be false") {
+		t.Fatalf("Validate allow_native_background_merges err = %v, want rejection", err)
+	}
+	cfg.StorageIntegrity.SafeMerges.AllowNativeBackgroundMerges = false
+
+	// An unknown controlled-compaction mode is rejected when enabled.
+	cfg.StorageIntegrity.SafeMerges.Enabled = true
+	cfg.StorageIntegrity.SafeMerges.Mode = "background"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "mode must be controlled_compaction") {
+		t.Fatalf("Validate safe_merges.mode err = %v, want rejection", err)
+	}
+	cfg.StorageIntegrity.SafeMerges.Mode = "controlled_compaction"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate with controlled_compaction safe_merges: %v", err)
+	}
+}
+
 func TestConfigValidate(t *testing.T) {
 	baseServer := minimalServerConfig(t)
 	baseAgent := Config{

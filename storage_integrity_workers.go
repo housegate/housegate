@@ -29,7 +29,7 @@ func buildStorageIntegrityBackgroundTasks(cfg *config.Config, creds credentials.
 		return nil, nil, nil
 	}
 	workerID := storageIntegrityWorkerID(workers.WorkerID, selfIndexerID)
-	arbiter := si.NewHTTPArbiterClient(cfg.StorageIntegrity.ControlPlaneEndpoint())
+	arbiter := si.NewHTTPArbiterClient(cfg.StorageIntegrity.ControlPlaneEndpoint()).WithWorkerID(workerID)
 	da := si.NewHTTPDAClient(cfg.StorageIntegrity.DAEndpoint)
 	pollInterval := workers.PollInterval.Duration
 	errorBackoff := workers.ErrorBackoff.Duration
@@ -68,7 +68,7 @@ func buildStorageIntegrityBackgroundTasks(cfg *config.Config, creds credentials.
 	}
 	var tasks []backgroundTask
 	if needClickHouse && storageIntegrityTableGuardEnabled(cfg) {
-		databases := uniqueStorageIntegrityDatabases([]string{cfg.StorageIntegrity.SafeDatabase, cfg.StorageIntegrity.UnsafeDatabase})
+		databases := uniqueStorageIntegrityDatabases(append([]string{cfg.StorageIntegrity.SafeDatabase}, cfg.StorageIntegrity.EffectiveUnsafeDatabases()...))
 		tasks = append(tasks, backgroundTask{
 			Label: "storage-integrity-table-guard",
 			Run: superviseStorageIntegrityWorker("storage-integrity-table-guard", errorBackoff, func(ctx context.Context) error {
@@ -161,6 +161,8 @@ func buildStorageIntegrityBackgroundTasks(cfg *config.Config, creds credentials.
 			ClaimSigner:     claimSigner,
 			WorkerID:        workerID,
 			ScratchDatabase: cfg.StorageIntegrity.Mutations.ScratchDatabase,
+			MutationsSync:   cfg.StorageIntegrity.Mutations.WaitMutationsSync,
+			QueryTimeout:    cfg.StorageIntegrity.Mutations.QueryTimeout.Duration,
 		}
 		worker := si.MutationWorker{
 			WorkerID:          workerID,

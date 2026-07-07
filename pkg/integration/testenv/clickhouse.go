@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	chImage    = "clickhouse/clickhouse-server:25.8"
+	chImage    = "clickhouse/clickhouse-server:26.3"
 	chUser     = "housegate_test"
 	chPassword = "housegate_test_pw"
 	chDatabase = "housegate_test"

@@ -226,13 +226,16 @@ func computeNativePayloadClaim(tableID string, revision int, payload []byte) (Na
 			rows++
 		}
 	}
-	root := nativeStateRoot(acc)
+	dataRoot := nativeDataRootAfter(acc)
 	return NativePayloadClaim{
 		PayloadEncoding: PayloadEncodingClickHouseNativeData,
 		PayloadRevision: revision,
 		Columns:         columns,
-		SourceClaimRoot: root,
-		PartRowLtHash:   root,
+		// SourceClaimRoot here is the data-side commitment only; callers that
+		// know the schema/executor identity (submit, the replay executor) wrap
+		// it via compositeStateRoot to produce the spec's R_source.
+		SourceClaimRoot: dataRoot,
+		PartRowLtHash:   dataRoot,
 		RowCount:        rows,
 		Bytes:           uint64(len(payload)),
 	}, acc, nil
@@ -293,18 +296,19 @@ func (e NativePayloadExecutor) Replay(ctx context.Context, req replay.ExecutionR
 			Bytes:         claim.Bytes,
 		})
 	}
-	root := nativeStateRoot(total)
+	dataRoot := nativeDataRootAfter(total)
+	stateRoot := compositeStateRoot(req.Job.SchemaSnapshotID, req.Job.ExecutorProfileID, dataRoot)
 	return replay.ExecutionResult{
 		BlockSeq:           req.Job.BlockSeq,
 		PrevSafeSnapshotID: req.Job.PrevSafeSnapshotID,
 		PrevStateRoot:      req.Job.PrevStateRoot,
 		SchemaSnapshotID:   req.Job.SchemaSnapshotID,
 		ExecutorProfileID:  req.Job.ExecutorProfileID,
-		ComputedStateRoot:  root,
+		ComputedStateRoot:  stateRoot,
 		PartitionCommitmentsAfter: []replay.PartitionCommitment{{
 			TableID:     req.Job.Statements[0].TargetTableID,
 			PartitionID: "all",
-			Root:        root,
+			Root:        dataRoot,
 		}},
 		AffectedParts: sortedNativeParts(affected),
 		ReplayLogHash: replay.DigestString(fmt.Sprintf("native-replay-log\x00%d\x00%d", req.Job.BlockSeq, len(affected))),
@@ -428,8 +432,35 @@ func nativeSchemaHash(tableID string, columns []lthash.Column) string {
 	return replay.DigestString("native-table-schema\x00" + b.String())
 }
 
-func nativeStateRoot(acc *lthash.Hash) string {
+// nativeDataRootAfter is the data-side commitment: the raw LtHash accumulator
+// over all replayed rows. It stays additive across blocks and is the value the
+// partition commitment carries.
+func nativeDataRootAfter(acc *lthash.Hash) string {
 	return "0x" + acc.Hex()
+}
+
+// compositeStateRoot binds the data-side root to the schema/executor identity,
+// matching the spec's R_source = H(schema_snapshot_id ‖ executor_profile_id ‖
+// data_root_after). schema_snapshot_id already commits to schema_root in the
+// native profile (NativePayloadGenesisSnapshot derives it from schema_root), so
+// including it transitively binds schema_root without threading a separate
+// field through the ReplayJob wire type. Source (submit) and verifier
+// (NativePayloadExecutor.Replay) MUST call this identically, or the replay
+// source-root check fails.
+func compositeStateRoot(schemaSnapshotID, executorProfileID, dataRootAfter string) string {
+	return replay.DigestString(
+		"native-state-root-v1\x00" +
+			schemaSnapshotID + "\x00" +
+			executorProfileID + "\x00" +
+			dataRootAfter,
+	)
+}
+
+// NativePayloadCompositeStateRoot exposes compositeStateRoot to callers (the
+// plugin's submit path) that compute the source claim root from a claim's
+// PartRowLtHash (the data_root_after) plus the genesis schema/executor identity.
+func NativePayloadCompositeStateRoot(schemaSnapshotID, executorProfileID, dataRootAfter string) string {
+	return compositeStateRoot(schemaSnapshotID, executorProfileID, dataRootAfter)
 }
 
 func sortedNativeParts(in []replay.PartManifestEntry) []replay.PartManifestEntry {

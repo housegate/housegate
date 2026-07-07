@@ -51,13 +51,17 @@ func TestNativePayloadClaimDrivesReplayVerifier(t *testing.T) {
 		Signer:    signer,
 	}
 
+	// The source claim root is the composite state root the submit path
+	// computes: H(schema_snapshot_id ‖ executor_profile_id ‖ data_root_after),
+	// where data_root_after is the claim's PartRowLtHash.
+	wantSourceRoot := NativePayloadCompositeStateRoot(snap.SchemaSnapshotID, snap.ExecutorProfileID, claim.PartRowLtHash)
 	job := replay.ReplayJob{
 		BlockSeq:           1,
 		PrevSafeSnapshotID: snap.SnapshotID,
 		PrevStateRoot:      snap.StateRoot,
 		SchemaSnapshotID:   snap.SchemaSnapshotID,
 		ExecutorProfileID:  snap.ExecutorProfileID,
-		SourceClaimRoot:    claim.SourceClaimRoot,
+		SourceClaimRoot:    wantSourceRoot,
 		Statements: []replay.Statement{{
 			StatementID:   "stmt-1",
 			StatementSeq:  1,
@@ -78,8 +82,8 @@ func TestNativePayloadClaimDrivesReplayVerifier(t *testing.T) {
 	if !att.MatchSourceRoot {
 		t.Fatalf("attestation did not match source root: %+v", att.Receipt)
 	}
-	if att.Receipt.ComputedStateRoot != claim.SourceClaimRoot {
-		t.Fatalf("computed root = %s, want %s", att.Receipt.ComputedStateRoot, claim.SourceClaimRoot)
+	if att.Receipt.ComputedStateRoot != wantSourceRoot {
+		t.Fatalf("computed root = %s, want %s", att.Receipt.ComputedStateRoot, wantSourceRoot)
 	}
 	if len(att.Receipt.AffectedParts) != 1 {
 		t.Fatalf("affected parts = %+v", att.Receipt.AffectedParts)
