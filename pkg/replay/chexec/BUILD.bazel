@@ -2,10 +2,14 @@ load("@rules_go//go:def.bzl", "go_library")
 
 go_library(
     name = "chexec",
-    srcs = ["materializer.go"],
+    srcs = [
+        "materializer.go",
+        "scan.go",
+    ],
     importpath = "housegate/housegate/pkg/replay/chexec",
     visibility = ["//visibility:public"],
     deps = [
+        "//pkg/lthash",
         "//pkg/replay",
         "//pkg/replay/payloadexec",
         "@com_github_clickhouse_clickhouse_go_v2//:clickhouse-go",
