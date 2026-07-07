@@ -116,6 +116,45 @@ func TestPromotionWorkerRunOnceExecutesClaimedPromotion(t *testing.T) {
 	}
 }
 
+func TestPromotionWorkerRejectsStaleUnsafeBufferEpoch(t *testing.T) {
+	seq := &fakeWorkerSequencer{
+		promotionTask: PromotionTask{
+			PromotionID:          "promotion-stmt-1",
+			TableID:              "tenant.events",
+			UnsafeTable:          "`hg_unsafe_0`.`events`",
+			SafeTable:            "`hg_safe`.`events`",
+			UnsafeBufferID:       0,
+			UnsafeBufferEpoch:    17,
+			UnsafeBufferDatabase: "hg_unsafe_0",
+			PartitionIDs:         []string{"202607"},
+		},
+		promotionOK: true,
+		unsafeBufferDecision: UnsafeBufferEpochDecision{
+			OK:     false,
+			Reason: "epoch 17 is frozen/stale",
+		},
+	}
+	promoter := &fakePromoter{}
+	worker := PromotionWorker{WorkerID: "promoter-a", Sequencer: seq, Promoter: promoter}
+
+	didWork, err := worker.RunOnce(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "unsafe buffer epoch") {
+		t.Fatalf("RunOnce error = %v, want unsafe buffer epoch rejection", err)
+	}
+	if didWork {
+		t.Fatal("RunOnce didWork=true after stale epoch rejection")
+	}
+	if promoter.task.PromotionID != "" {
+		t.Fatalf("promotion executed despite stale unsafe buffer epoch: %+v", promoter.task)
+	}
+	if seq.unsafeBufferCheck.TableID != "tenant.events" ||
+		seq.unsafeBufferCheck.UnsafeBufferID != 0 ||
+		seq.unsafeBufferCheck.UnsafeBufferEpoch != 17 ||
+		seq.unsafeBufferCheck.UnsafeBufferDatabase != "hg_unsafe_0" {
+		t.Fatalf("unsafe buffer epoch check = %+v", seq.unsafeBufferCheck)
+	}
+}
+
 func TestMutationWorkerRunOnceSubmitsClaimAndReplayResult(t *testing.T) {
 	seq := &fakeWorkerSequencer{
 		mutationTask: MutationTask{
@@ -346,6 +385,60 @@ func TestRollbackWorkerRunOnceSubmitsRollbackResult(t *testing.T) {
 	}
 }
 
+func TestRollbackWorkerRejectsStaleUnsafeBufferEpoch(t *testing.T) {
+	seq := &fakeWorkerSequencer{
+		rollbackTask: RollbackTask{
+			RollbackID:           "rollback-stale",
+			StatementID:          "stmt-1",
+			TableID:              "tenant.events",
+			UnsafeTable:          "`hg_unsafe_0`.`events`",
+			UnsafeBufferID:       0,
+			UnsafeBufferEpoch:    17,
+			UnsafeBufferDatabase: "hg_unsafe_0",
+			PartitionIDs:         []string{"202607"},
+		},
+		rollbackOK:          true,
+		unsafeBufferDecision: UnsafeBufferEpochDecision{OK: false, Reason: "buffer rotated"},
+	}
+	executor := &fakeRollbackExecutor{}
+	worker := RollbackWorker{WorkerID: "rollback-a", Sequencer: seq, Executor: executor}
+
+	_, err := worker.RunOnce(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "unsafe buffer epoch") {
+		t.Fatalf("RunOnce err = %v, want unsafe buffer epoch rejection", err)
+	}
+	if executor.task.RollbackID != "" {
+		t.Fatalf("executor ran despite stale epoch: %+v", executor.task)
+	}
+	if seq.unsafeBufferCheck.UnsafeBufferEpoch != 17 || seq.unsafeBufferCheck.UnsafeBufferDatabase != "hg_unsafe_0" {
+		t.Fatalf("epoch check request = %+v", seq.unsafeBufferCheck)
+	}
+}
+
+func TestRollbackWorkerAllowsMatchingUnsafeBufferEpoch(t *testing.T) {
+	seq := &fakeWorkerSequencer{
+		rollbackTask: RollbackTask{
+			RollbackID:           "rollback-live",
+			TableID:              "tenant.events",
+			UnsafeTable:          "`hg_unsafe_0`.`events`",
+			UnsafeBufferEpoch:    18,
+			UnsafeBufferDatabase: "hg_unsafe_0",
+		},
+		rollbackOK:          true,
+		unsafeBufferDecision: UnsafeBufferEpochDecision{OK: true},
+	}
+	executor := &fakeRollbackExecutor{result: RollbackResult{RollbackID: "rollback-live"}}
+	worker := RollbackWorker{WorkerID: "rollback-a", Sequencer: seq, Executor: executor}
+
+	didWork, err := worker.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if !didWork || executor.task.RollbackID != "rollback-live" {
+		t.Fatalf("expected rollback to run, executor task = %+v", executor.task)
+	}
+}
+
 func TestRepairSyncWorkerRunOnceSubmitsRepairResult(t *testing.T) {
 	manifest := sealedOpsTestManifest(t, []replay.PartManifestEntry{{
 		TableID:       "tenant.events",
@@ -567,6 +660,9 @@ type fakeWorkerSequencer struct {
 	watermark      SafeWatermark
 	manifests      map[string]replay.SafeSnapshotManifest
 
+	unsafeBufferDecision UnsafeBufferEpochDecision
+	unsafeBufferCheck    UnsafeBufferEpochCheckRequest
+
 	submittedReplay         replay.ReplayAttestation
 	submittedByte           ByteSideScanResult
 	submittedMutationClaim  MutationClaim
@@ -603,6 +699,11 @@ func (f *fakeWorkerSequencer) ClaimPromotion(context.Context) (PromotionTask, bo
 func (f *fakeWorkerSequencer) SubmitPromotionResult(_ context.Context, result PromotionResult) (PromotionReceipt, error) {
 	f.submittedPromotion = result
 	return PromotionReceipt{OK: true}, nil
+}
+
+func (f *fakeWorkerSequencer) CheckUnsafeBufferEpoch(_ context.Context, req UnsafeBufferEpochCheckRequest) (UnsafeBufferEpochDecision, error) {
+	f.unsafeBufferCheck = req
+	return f.unsafeBufferDecision, nil
 }
 
 func (f *fakeWorkerSequencer) ClaimMutationTask(context.Context) (MutationTask, bool, error) {

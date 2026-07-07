@@ -23,12 +23,14 @@ import (
 )
 
 type Config struct {
-	UnsafeDatabase string
-	SafeDatabase   string
-	DA             core.PayloadStore
-	Arbiter        core.ArbiterIngress
+	UnsafeDatabase        string
+	UnsafeBufferDatabases []string
+	SafeDatabase          string
+	DA                    core.PayloadStore
+	Arbiter               core.ArbiterIngress
 	// Sequencer is the legacy control-plane field kept for compatibility.
 	Sequencer                 core.SequencerIngress
+	UnsafeBufferResolver      core.UnsafeBufferResolver
 	RequirePartitionPredicate bool
 	PartitionColumns          []string
 	ProtectedColumns          []string
@@ -48,9 +50,11 @@ type Config struct {
 
 type Plugin struct {
 	unsafeDB                  string
+	unsafeBufferDBs           []string
 	safeDB                    string
 	da                        core.PayloadStore
 	snodePublisher            core.SNodePublisher
+	unsafeBufferResolver      core.UnsafeBufferResolver
 	requirePartitionPredicate bool
 	partitionColumns          []string
 	protectedColumns          []string
@@ -76,24 +80,31 @@ type Plugin struct {
 }
 
 type insertCapture struct {
-	tableID     string
-	statementID string
-	originalSQL string
-	unsafeSQL   string
-	unsafeTable string
-	safeTable   string
-	revision    int
-	payload     bytes.Buffer
-	userJWS     string
-	authSigner  string
-	nextOrdinal uint64
+	tableID      string
+	statementID  string
+	originalSQL  string
+	unsafeSQL    string
+	unsafeTable  string
+	unsafeBuffer core.UnsafeBufferInfo
+	safeTable    string
+	revision     int
+	payload      bytes.Buffer
+	userJWS      string
+	authSigner   string
+	nextOrdinal  uint64
+	// submitting guards against a concurrent OnQueryComplete/OnClose both
+	// submitting the same capture (the completion signal can fire more than
+	// once across the two relay goroutines).
+	submitting bool
 }
 
 type insertTarget struct {
-	tableID     string
-	unsafeSQL   string
-	unsafeTable string
-	safeTable   string
+	tableID      string
+	tableName    string
+	unsafeSQL    string
+	unsafeTable  string
+	unsafeBuffer core.UnsafeBufferInfo
+	safeTable    string
 }
 
 type mutationTarget struct {
@@ -121,11 +132,19 @@ func New(cfg Config) *Plugin {
 	if arbiter == nil {
 		arbiter = cfg.Sequencer
 	}
+	unsafeBufferResolver := cfg.UnsafeBufferResolver
+	if unsafeBufferResolver == nil {
+		if resolver, ok := arbiter.(core.UnsafeBufferResolver); ok {
+			unsafeBufferResolver = resolver
+		}
+	}
 	return &Plugin{
 		unsafeDB:                  unsafeDB,
+		unsafeBufferDBs:           normalizeUnsafeBufferDatabases(cfg.UnsafeBufferDatabases),
 		safeDB:                    safeDB,
 		da:                        cfg.DA,
 		snodePublisher:            core.ArbiterSNodePublisher{Arbiter: arbiter},
+		unsafeBufferResolver:      unsafeBufferResolver,
 		requirePartitionPredicate: cfg.RequirePartitionPredicate,
 		partitionColumns:          normalizeColumns(cfg.PartitionColumns),
 		protectedColumns:          normalizeColumns(cfg.ProtectedColumns),
@@ -175,7 +194,7 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	if qctx.StatementType != sqlmeta.StatementTypeInsert && !isInsertSQL(originalSQL) {
 		return nil
 	}
-	target, err := p.resolveInsertTarget(qctx)
+	target, err := p.resolveInsertTarget(ctx, qctx)
 	if err != nil {
 		return err
 	}
@@ -185,15 +204,16 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	}
 	stmtID := p.statementIDForQuery(qctx)
 	cap := &insertCapture{
-		tableID:     target.tableID,
-		statementID: stmtID,
-		originalSQL: originalSQL,
-		unsafeSQL:   target.unsafeSQL,
-		unsafeTable: target.unsafeTable,
-		safeTable:   target.safeTable,
-		revision:    qctx.Session.State().ClientRevision,
-		userJWS:     userJWS,
-		authSigner:  signer,
+		tableID:      target.tableID,
+		statementID:  stmtID,
+		originalSQL:  originalSQL,
+		unsafeSQL:    target.unsafeSQL,
+		unsafeTable:  target.unsafeTable,
+		unsafeBuffer: target.unsafeBuffer,
+		safeTable:    target.safeTable,
+		revision:     qctx.Session.State().ClientRevision,
+		userJWS:      userJWS,
+		authSigner:   signer,
 	}
 	qctx.Query.Body = target.unsafeSQL
 	qctx.RewrittenSQL = target.unsafeSQL
@@ -352,6 +372,33 @@ func querySettings(qctx *plugin.QueryContext) map[string]string {
 	return out
 }
 
+// requestsLightweightDelete reports whether the client explicitly requested the
+// ClickHouse lightweight-delete mask (a `_row_exists`-based delete) via a query
+// setting. The `DELETE FROM ... WHERE` SQL text alone is normalized into a
+// heavyweight bounded mutation, so only these explicit settings mark a request
+// the storage-integrity lane cannot honor.
+func requestsLightweightDelete(qctx *plugin.QueryContext) bool {
+	settings := querySettings(qctx)
+	if v, ok := settings["allow_experimental_lightweight_delete"]; ok && isTruthySetting(v) {
+		return true
+	}
+	// lightweight_deletes_sync selects the LWD execution path; any explicit
+	// value means the client asked for the mask rather than a mutation.
+	if _, ok := settings["lightweight_deletes_sync"]; ok {
+		return true
+	}
+	return false
+}
+
+func isTruthySetting(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "0", "false", "off", "no":
+		return false
+	default:
+		return true
+	}
+}
+
 func (p *Plugin) OnClientData(ctx context.Context, qctx *plugin.QueryContext, raw []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -403,16 +450,41 @@ func (p *Plugin) OnQueryComplete(ctx context.Context, sess chsession.Session) {
 	if p == nil || sess == nil {
 		return
 	}
+	// Snapshot the capture WITHOUT removing it yet. OnQueryComplete fires from
+	// the upstream→client relay goroutine off a best-effort EndOfStream
+	// heuristic, which can race ahead of the client→upstream goroutine still
+	// writing the final Data block into cap.payload. If we submitted-and-removed
+	// unconditionally here, a payload captured a moment too early could decode
+	// to zero rows and be dropped permanently (submit is fail-closed). Instead:
+	// only consume the capture when submit SUCCEEDS; on failure leave it in
+	// place so the in-order OnClose fallback (which fires after the connection
+	// fully drains, i.e. after all Data blocks are captured) can retry with the
+	// complete payload.
 	p.mu.Lock()
 	cap := p.active[sess.ID()]
-	delete(p.active, sess.ID())
-	p.mu.Unlock()
-	if cap == nil {
+	if cap == nil || cap.submitting {
+		// Already gone or another goroutine is submitting it right now.
+		p.mu.Unlock()
 		return
 	}
-	if err := p.submit(ctx, cap); err != nil {
-		log.Warnw("storage_integrity insert submit failed", "statement_id", cap.statementID, "table_id", cap.tableID, "err", err)
+	cap.submitting = true
+	p.mu.Unlock()
+	err := p.submit(ctx, cap)
+	p.mu.Lock()
+	if err != nil {
+		// Leave the capture in place so the in-order OnClose fallback can retry
+		// with the fully-drained payload; clear the guard so the retry can run.
+		cap.submitting = false
+		p.mu.Unlock()
+		log.Warnw("storage_integrity insert submit deferred; will retry on close", "statement_id", cap.statementID, "table_id", cap.tableID, "err", err)
+		return
 	}
+	delete(p.active, sess.ID())
+	p.mu.Unlock()
+}
+
+func (p *Plugin) OnClose(sess chsession.Session) {
+	p.OnQueryComplete(context.Background(), sess)
 }
 
 func (p *Plugin) submit(ctx context.Context, cap *insertCapture) error {
@@ -423,6 +495,14 @@ func (p *Plugin) submit(ctx context.Context, cap *insertCapture) error {
 		return fmt.Errorf("arbiter client is required")
 	}
 	payload := append([]byte(nil), cap.payload.Bytes()...)
+	if p.requireRowIDInput {
+		// The server is not injecting _hg_row_id (inject_row_id is off), so the
+		// client-side/agent HouseGate must have injected it. Fail closed if the
+		// captured payload does not carry the reserved protocol column.
+		if err := requireNativeRowIDColumn(cap.tableID, cap.revision, payload); err != nil {
+			return err
+		}
+	}
 	commit, err := p.da.PutPayload(ctx, core.PutPayloadRequest{
 		TableID:     cap.tableID,
 		StatementID: cap.statementID,
@@ -431,35 +511,65 @@ func (p *Plugin) submit(ctx context.Context, cap *insertCapture) error {
 	if err != nil {
 		return fmt.Errorf("put DA payload: %w", err)
 	}
-	rec := core.InsertRecord{
-		TableID:             cap.tableID,
-		StatementID:         cap.statementID,
-		OriginalSQL:         cap.originalSQL,
-		UnsafeSQL:           cap.unsafeSQL,
-		UnsafeTable:         cap.unsafeTable,
-		SafeTable:           cap.safeTable,
-		UserJWS:             cap.userJWS,
-		AuthenticatedSigner: cap.authSigner,
-		Payload:             commit,
-		SourceClaimRoot:     replay.DigestBytes(payload),
-		ReceivedAt:          p.now().UTC(),
+	// The source claim MUST be the replay-derived composite state root, not a
+	// digest of the raw payload bytes (spec §6.2). Fail closed if the native
+	// payload claim cannot be computed rather than publishing a payload-digest
+	// fallback that no verifier can reproduce from a replay.
+	claim, err := core.ComputeNativePayloadClaim(cap.tableID, cap.revision, payload)
+	if err != nil {
+		return fmt.Errorf("compute native payload claim: %w", err)
 	}
-	if claim, err := core.ComputeNativePayloadClaim(cap.tableID, cap.revision, payload); err == nil && claim.RowCount > 0 {
-		rec.SourceClaimRoot = claim.SourceClaimRoot
-		rec.PayloadEncoding = claim.PayloadEncoding
-		rec.PayloadRevision = claim.PayloadRevision
-		rec.SettingsHash = core.DefaultReplaySettingsHash
-		if snap, err := core.NativePayloadGenesisSnapshot(cap.tableID, claim.Columns); err == nil {
-			rec.PrevSafeSnapshotID = snap.SnapshotID
-			rec.PrevStateRoot = snap.StateRoot
-			rec.SchemaSnapshotID = snap.SchemaSnapshotID
-			rec.ExecutorProfileID = snap.ExecutorProfileID
-		}
+	if claim.RowCount == 0 {
+		return fmt.Errorf("native payload claim has zero rows; refusing to publish payload-digest source claim")
+	}
+	snap, err := core.NativePayloadGenesisSnapshot(cap.tableID, claim.Columns)
+	if err != nil {
+		return fmt.Errorf("compute native payload genesis snapshot: %w", err)
+	}
+	sourceClaimRoot := core.NativePayloadCompositeStateRoot(snap.SchemaSnapshotID, snap.ExecutorProfileID, claim.PartRowLtHash)
+	rec := core.InsertRecord{
+		TableID:              cap.tableID,
+		StatementID:          cap.statementID,
+		OriginalSQL:          cap.originalSQL,
+		UnsafeSQL:            cap.unsafeSQL,
+		UnsafeTable:          cap.unsafeTable,
+		UnsafeBufferID:       cap.unsafeBuffer.UnsafeBufferID,
+		UnsafeBufferEpoch:    cap.unsafeBuffer.Epoch,
+		UnsafeBufferDatabase: cap.unsafeBuffer.Database,
+		SafeTable:            cap.safeTable,
+		UserJWS:              cap.userJWS,
+		AuthenticatedSigner:  cap.authSigner,
+		Payload:              commit,
+		SourceClaimRoot:      sourceClaimRoot,
+		PayloadEncoding:      claim.PayloadEncoding,
+		PayloadRevision:      claim.PayloadRevision,
+		SettingsHash:         core.DefaultReplaySettingsHash,
+		PrevSafeSnapshotID:   snap.SnapshotID,
+		PrevStateRoot:        snap.StateRoot,
+		SchemaSnapshotID:     snap.SchemaSnapshotID,
+		ExecutorProfileID:    snap.ExecutorProfileID,
+		ReceivedAt:           p.now().UTC(),
 	}
 	if err := p.snodePublisher.PublishInsert(ctx, rec); err != nil {
 		return fmt.Errorf("submit arbiter insert: %w", err)
 	}
 	return nil
+}
+
+// requireNativeRowIDColumn verifies the captured Native payload declares the
+// reserved `_hg_row_id` column. Used when the server does not inject row ids
+// and therefore requires the client-side HouseGate to have injected them.
+func requireNativeRowIDColumn(tableID string, revision int, payload []byte) error {
+	claim, err := core.ComputeNativePayloadClaim(tableID, revision, payload)
+	if err != nil {
+		return fmt.Errorf("require _hg_row_id input: decode native payload: %w", err)
+	}
+	for _, col := range claim.Columns {
+		if strings.EqualFold(col.Name, "_hg_row_id") {
+			return nil
+		}
+	}
+	return fmt.Errorf("require _hg_row_id input: payload for table %s is missing the reserved _hg_row_id column", tableID)
 }
 
 const identifierPathPattern = `(?:` + "`[^`]+`" + `|[A-Za-z_][A-Za-z0-9_]*)(?:\.(?:` + "`[^`]+`" + `|[A-Za-z_][A-Za-z0-9_]*))?`
@@ -479,11 +589,17 @@ var (
 	wherePattern          = regexp.MustCompile(`(?is)\s+WHERE\s+`)
 )
 
-func (p *Plugin) resolveInsertTarget(qctx *plugin.QueryContext) (insertTarget, error) {
+func (p *Plugin) resolveInsertTarget(ctx context.Context, qctx *plugin.QueryContext) (insertTarget, error) {
+	var target insertTarget
 	if target, ok := p.targetFromRewriter(qctx); ok {
-		return target, nil
+		return p.applyUnsafeBuffer(ctx, target)
 	}
-	return p.rewriteInsert(qctx, qctx.Query.Body)
+	var err error
+	target, err = p.rewriteInsert(qctx, qctx.Query.Body)
+	if err != nil {
+		return insertTarget{}, err
+	}
+	return p.applyUnsafeBuffer(ctx, target)
 }
 
 func (p *Plugin) targetFromRewriter(qctx *plugin.QueryContext) (insertTarget, bool) {
@@ -510,6 +626,7 @@ func (p *Plugin) targetFromRewriter(qctx *plugin.QueryContext) (insertTarget, bo
 		unsafeTable := quoteIdentifierPath(rewritten)
 		return insertTarget{
 			tableID:     tableID,
+			tableName:   originalTable,
 			unsafeSQL:   qctx.Query.Body,
 			unsafeTable: unsafeTable,
 			safeTable:   qualifiedTable(p.safeDB, originalTable),
@@ -532,16 +649,91 @@ func (p *Plugin) rewriteInsert(qctx *plugin.QueryContext, sql string) (insertTar
 		logicalDB = sessionLogicalDatabase(qctx)
 	}
 	tableID := tableName
-	if logicalDB != "" && logicalDB != p.unsafeDB && logicalDB != p.safeDB {
+	if logicalDB != "" && !p.isPhysicalStorageDB(logicalDB) {
 		tableID = logicalDB + "." + tableName
 	}
 	unsafeTable := qualifiedTable(p.unsafeDB, tableName)
 	return insertTarget{
 		tableID:     tableID,
+		tableName:   tableName,
 		unsafeSQL:   "INSERT INTO " + unsafeTable + match[2],
 		unsafeTable: unsafeTable,
 		safeTable:   qualifiedTable(p.safeDB, tableName),
 	}, nil
+}
+
+func (p *Plugin) applyUnsafeBuffer(ctx context.Context, target insertTarget) (insertTarget, error) {
+	if len(p.unsafeBufferDBs) == 0 {
+		return target, nil
+	}
+	if p.unsafeBufferResolver == nil {
+		return insertTarget{}, fmt.Errorf("storage_integrity unsafe buffer resolver is required")
+	}
+	buffer, err := p.unsafeBufferResolver.GetActiveUnsafeBuffer(ctx, core.ActiveUnsafeBufferRequest{
+		TableID:   target.tableID,
+		TableName: target.tableName,
+	})
+	if err != nil {
+		return insertTarget{}, fmt.Errorf("get active unsafe buffer: %w", err)
+	}
+	if buffer.TableID == "" {
+		buffer.TableID = target.tableID
+	}
+	db := normalizeIdentifierPath(buffer.Database)
+	if db == "" {
+		if buffer.UnsafeBufferID < 0 || buffer.UnsafeBufferID >= len(p.unsafeBufferDBs) {
+			return insertTarget{}, fmt.Errorf("active unsafe buffer id %d is outside configured databases", buffer.UnsafeBufferID)
+		}
+		db = p.unsafeBufferDBs[buffer.UnsafeBufferID]
+	}
+	if !p.isConfiguredUnsafeBufferDB(db) {
+		return insertTarget{}, fmt.Errorf("active unsafe buffer database %q is not configured", db)
+	}
+	buffer.Database = db
+	unsafeTable := ""
+	if buffer.UnsafeTable != "" {
+		unsafeTable = quoteIdentifierPath(buffer.UnsafeTable)
+	} else {
+		unsafeTable = qualifiedTable(db, target.tableName)
+	}
+	buffer.UnsafeTable = unsafeTable
+	unsafeSQL, err := rewriteInsertSQLTarget(target.unsafeSQL, unsafeTable)
+	if err != nil {
+		return insertTarget{}, err
+	}
+	target.unsafeSQL = unsafeSQL
+	target.unsafeTable = unsafeTable
+	target.unsafeBuffer = buffer
+	return target, nil
+}
+
+func (p *Plugin) isConfiguredUnsafeBufferDB(db string) bool {
+	db = normalizeIdentifierPath(db)
+	for _, candidate := range p.unsafeBufferDBs {
+		if db == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *Plugin) isPhysicalStorageDB(db string) bool {
+	db = normalizeIdentifierPath(db)
+	if db == "" {
+		return false
+	}
+	if db == p.unsafeDB || db == p.safeDB {
+		return true
+	}
+	return p.isConfiguredUnsafeBufferDB(db)
+}
+
+func rewriteInsertSQLTarget(sql, unsafeTable string) (string, error) {
+	loc := insertIntoPattern.FindStringSubmatchIndex(sql)
+	if len(loc) != 6 {
+		return "", fmt.Errorf("storage_integrity only supports INSERT INTO <table> in phase 1")
+	}
+	return sql[:loc[2]] + unsafeTable + sql[loc[3]:], nil
 }
 
 func (p *Plugin) resolveMutationTarget(qctx *plugin.QueryContext, sql string) (mutationTarget, error) {
@@ -568,7 +760,12 @@ func (p *Plugin) resolveMutationTarget(qctx *plugin.QueryContext, sql string) (m
 		targetPath = normalizeIdentifierPath(match[1])
 		op = "DELETE"
 		whereClause = strings.TrimSpace(match[2])
-		lightweightDelete = true
+		// `DELETE FROM <t> WHERE ...` is a normalizable bounded mutation
+		// (spec §7.1): it is rewritten into `ALTER TABLE ... DELETE WHERE ...`
+		// on the scratch table, i.e. a heavyweight mutation. Only an explicit
+		// ClickHouse lightweight-delete mask request (via query setting) is
+		// the "lightweight DELETE mask" the spec rejects.
+		lightweightDelete = requestsLightweightDelete(qctx)
 	default:
 		return mutationTarget{}, fmt.Errorf("storage_integrity only supports bounded UPDATE/DELETE mutations")
 	}
@@ -580,7 +777,7 @@ func (p *Plugin) resolveMutationTarget(qctx *plugin.QueryContext, sql string) (m
 		logicalDB = sessionLogicalDatabase(qctx)
 	}
 	tableID := tableName
-	if logicalDB != "" && logicalDB != p.unsafeDB && logicalDB != p.safeDB {
+	if logicalDB != "" && !p.isPhysicalStorageDB(logicalDB) {
 		tableID = logicalDB + "." + tableName
 	}
 	if whereClause == "" {
@@ -1031,6 +1228,23 @@ func normalizeColumns(values []string) []string {
 	return out
 }
 
+func normalizeUnsafeBufferDatabases(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		value = normalizeIdentifierPath(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
 func splitInsertTargetPath(path string) (db, table string) {
 	return sqlident.SplitLastPath(path)
 }
@@ -1081,3 +1295,4 @@ func firstNonEmpty(values ...string) string {
 var _ plugin.QueryPlugin = (*Plugin)(nil)
 var _ plugin.DataPlugin = (*Plugin)(nil)
 var _ plugin.QueryCompletePlugin = (*Plugin)(nil)
+var _ plugin.ClosePlugin = (*Plugin)(nil)

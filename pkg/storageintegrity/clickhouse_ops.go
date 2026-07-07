@@ -260,6 +260,13 @@ func (p ClickHousePromoter) Promote(ctx context.Context, task PromotionTask) (Pr
 	if task.SafeTable == "" {
 		return PromotionResult{}, fmt.Errorf("promotion safe_table is required")
 	}
+	// A mutation post-state can only be published via REPLACE PARTITION (from
+	// scratch) or an internal signed DROP PARTITION. ATTACH PARTITION cannot
+	// remove or rewrite the pre-existing rows, so it must never express a
+	// mutation post-state (spec §10).
+	if task.Kind == "mutation" && !task.ReplacePartition && !task.InternalDropPartition {
+		return PromotionResult{}, fmt.Errorf("mutation promotion must use replace_partition or internal_drop_partition, not attach")
+	}
 	if task.InternalDropPartition && len(task.PartitionIDs) == 0 {
 		task.PartitionIDs = append([]string(nil), task.DropPartitionIDs...)
 	}
@@ -287,20 +294,20 @@ func (p ClickHousePromoter) Promote(ctx context.Context, task PromotionTask) (Pr
 		}
 		return p.promotionResult(ctx, task)
 	}
-	if task.UnsafeTable != "" && len(task.PartitionIDs) > 0 {
-		for _, partitionID := range task.PartitionIDs {
-			sql := fmt.Sprintf("ALTER TABLE %s ATTACH PARTITION ID %s FROM %s", task.SafeTable, sqlStringLiteral(partitionID), task.UnsafeTable)
-			if err := p.Conn.Exec(ctx, sql); err != nil {
-				return PromotionResult{}, fmt.Errorf("attach partition %s: %w", partitionID, err)
-			}
-		}
-		return p.promotionResult(ctx, task)
-	}
 	if task.UnsafeTable == "" {
 		return PromotionResult{}, fmt.Errorf("insert promotion unsafe_table is required")
 	}
-	if err := p.Conn.Exec(ctx, fmt.Sprintf("INSERT INTO %s SELECT * FROM %s", task.SafeTable, task.UnsafeTable)); err != nil {
-		return PromotionResult{}, fmt.Errorf("insert promotion copy: %w", err)
+	if len(task.PartitionIDs) == 0 {
+		// Fail closed: never reconstruct the promotion set by scanning the
+		// whole unsafe table. partition_ids must come from statement / part
+		// registry metadata (spec §6.3).
+		return PromotionResult{}, fmt.Errorf("insert promotion requires partition_ids")
+	}
+	for _, partitionID := range task.PartitionIDs {
+		sql := fmt.Sprintf("ALTER TABLE %s ATTACH PARTITION ID %s FROM %s", task.SafeTable, sqlStringLiteral(partitionID), task.UnsafeTable)
+		if err := p.Conn.Exec(ctx, sql); err != nil {
+			return PromotionResult{}, fmt.Errorf("attach partition %s: %w", partitionID, err)
+		}
 	}
 	return p.promotionResult(ctx, task)
 }
@@ -409,8 +416,12 @@ func (p ClickHousePromoter) promoteViaShadow(ctx context.Context, task Promotion
 		}
 		for _, partitionID := range task.PartitionIDs {
 			got := partitionRootFromActiveParts(shadowParts, partitionID)
-			if got != task.ExpectedPostRoot {
-				return PromotionResult{}, fmt.Errorf("post partition root mismatch for partition %s: got %s want %s", partitionID, got, task.ExpectedPostRoot)
+			want, ok := expectedPostRootForPartition(task, partitionID)
+			if !ok {
+				return PromotionResult{}, fmt.Errorf("post partition root CAS is required but no expected root for partition %s", partitionID)
+			}
+			if got != want {
+				return PromotionResult{}, fmt.Errorf("post partition root mismatch for partition %s: got %s want %s", partitionID, got, want)
 			}
 		}
 	}
@@ -460,6 +471,28 @@ func (p ClickHousePromoter) attachCandidateParts(ctx context.Context, shadow, so
 		return fmt.Errorf("attach candidate parts for partition %s: %w", partitionID, err)
 	}
 	return nil
+}
+
+// expectedPostRootForPartition resolves the expected post-promotion root for a
+// partition. Per-partition ExpectedPostRoots take precedence; otherwise the
+// scalar ExpectedPostRoot is used only when the promotion covers a single
+// partition (so a multi-partition promotion can never CAS every partition
+// against one partition's root — spec §6.3 / gap-20).
+func expectedPostRootForPartition(task PromotionTask, partitionID string) (string, bool) {
+	for _, pc := range task.ExpectedPostRoots {
+		if pc.PartitionID == partitionID {
+			return pc.Root, true
+		}
+	}
+	if len(task.ExpectedPostRoots) > 0 {
+		// A per-partition set was provided but this partition is missing from
+		// it — treat as unresolved rather than silently falling back.
+		return "", false
+	}
+	if len(task.PartitionIDs) == 1 && task.ExpectedPostRoot != "" {
+		return task.ExpectedPostRoot, true
+	}
+	return "", false
 }
 
 func shouldAttachBasePartition(task PromotionTask) bool {
@@ -631,6 +664,13 @@ type ClickHouseMutationExecutor struct {
 	ClaimSigner     MutationClaimSigner
 	WorkerID        string
 	ScratchDatabase string
+	// MutationsSync is the mutations_sync value forced onto scratch mutations
+	// so the read-back commitment reflects a materialized post-state. 0 means
+	// the default (2); values are clamped to non-negative by ensureMutationSync.
+	MutationsSync int
+	// QueryTimeout, when > 0, bounds every scratch DDL/DML statement. 0 leaves
+	// the caller-provided context deadline untouched.
+	QueryTimeout time.Duration
 }
 
 func (e ClickHouseMutationExecutor) ExecuteMutation(ctx context.Context, task MutationTask) (MutationClaim, error) {
@@ -702,6 +742,37 @@ func (e ClickHouseMutationExecutor) ReplayMutation(ctx context.Context, task Mut
 	return result, nil
 }
 
+// verifyMutationBaseRoots checks that the local safe base commitment for each
+// affected partition matches the arbiter-pinned base partition root the
+// mutation was bound to (spec §7.3 step 6). It is a no-op when the task carries
+// no base roots (no published safe snapshot yet / legacy single-root path).
+func verifyMutationBaseRoots(task MutationTask, baseParts []ByteSidePart) error {
+	if len(task.BasePartitionRoots) == 0 {
+		return nil
+	}
+	entries := byteSidePartsToActivePartEntries(baseParts)
+	for _, want := range task.BasePartitionRoots {
+		got := partitionRootFromActiveParts(entries, want.PartitionID)
+		if got != want.Root {
+			return fmt.Errorf("mutation base partition root mismatch for partition %s: local %s want %s", want.PartitionID, got, want.Root)
+		}
+	}
+	return nil
+}
+
+func byteSidePartsToActivePartEntries(parts []ByteSidePart) []replay.PartManifestEntry {
+	out := make([]replay.PartManifestEntry, 0, len(parts))
+	for _, p := range parts {
+		out = append(out, replay.PartManifestEntry{
+			PartitionID:   p.PartitionID,
+			PartName:      p.PartName,
+			PartRowLtHash: p.PartRowLtHash,
+			RowCount:      p.RowCount,
+		})
+	}
+	return out
+}
+
 func (e ClickHouseMutationExecutor) execute(ctx context.Context, task MutationTask, purpose string) (TableHash, TableHash, string, error) {
 	if e.Conn == nil {
 		return TableHash{}, TableHash{}, "", fmt.Errorf("clickhouse connection is required")
@@ -725,12 +796,28 @@ func (e ClickHouseMutationExecutor) execute(ctx context.Context, task MutationTa
 	if before.StateRoot == "" {
 		before.StateRoot = digestParts("mutation-base-state", before.Parts)
 	}
+	// Fail closed if the local safe base does not match the arbiter-pinned base
+	// partition roots: the mutation must replay from exactly the snapshot it was
+	// bound to (spec §7.3 step 6). Skipped only when the task carries no base
+	// roots (pre-safe-state / legacy path).
+	if err := verifyMutationBaseRoots(task, before.Parts); err != nil {
+		return TableHash{}, TableHash{}, "", err
+	}
 	scratch := qualifiedTable(e.ScratchDatabase, scratchTableName(task.SafeTable, task.StatementID, e.WorkerID, purpose))
 	mutationSQL, err := rewriteAlterTableTarget(task.MutationSQL, task.SafeTable, scratch)
 	if err != nil {
 		return TableHash{}, TableHash{}, "", err
 	}
-	mutationSQL = ensureMutationSync(mutationSQL)
+	syncValue := e.MutationsSync
+	if syncValue == 0 {
+		syncValue = 2
+	}
+	mutationSQL = ensureMutationSync(mutationSQL, syncValue)
+	if e.QueryTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, e.QueryTimeout)
+		defer cancel()
+	}
 	sqls := []string{
 		"CREATE DATABASE IF NOT EXISTS " + quoteIdent(e.ScratchDatabase),
 		"DROP TABLE IF EXISTS " + scratch,
@@ -1504,11 +1591,38 @@ func rewriteAlterTableTarget(sql, safeTable, scratch string) (string, error) {
 	return match[1] + scratch + match[2] + match[3], nil
 }
 
-func ensureMutationSync(sql string) string {
-	if strings.Contains(strings.ToUpper(sql), " SETTINGS ") {
-		return sql
+// ensureMutationSync makes the ALTER ... UPDATE/DELETE wait for the mutation
+// to materialize by forcing mutations_sync. It merges into an existing SETTINGS
+// clause instead of skipping it, so a user-supplied SETTINGS clause can never
+// leave the mutation running asynchronously (which would break the read-back
+// commitment). syncValue < 0 is treated as the default of 2.
+func ensureMutationSync(sql string, syncValue int) string {
+	if syncValue < 0 {
+		syncValue = 2
 	}
-	return sql + " SETTINGS mutations_sync = 2"
+	setting := fmt.Sprintf("mutations_sync = %d", syncValue)
+	idx := lastSettingsIndex(sql)
+	if idx < 0 {
+		return sql + " SETTINGS " + setting
+	}
+	head := sql[:idx]
+	tail := sql[idx+len(" SETTINGS "):]
+	// If the caller already set mutations_sync, override it; otherwise prepend
+	// ours so it takes effect regardless of the other settings.
+	if mutationsSyncPattern.MatchString(tail) {
+		tail = mutationsSyncPattern.ReplaceAllString(tail, setting)
+		return head + " SETTINGS " + tail
+	}
+	return head + " SETTINGS " + setting + ", " + tail
+}
+
+var mutationsSyncPattern = regexp.MustCompile(`(?i)mutations_sync\s*=\s*\d+`)
+
+// lastSettingsIndex returns the byte offset of the last " SETTINGS " token in
+// sql (case-insensitive), or -1 if none is present.
+func lastSettingsIndex(sql string) int {
+	upper := strings.ToUpper(sql)
+	return strings.LastIndex(upper, " SETTINGS ")
 }
 
 func scanHashRowValues(rows HashRows, types []HashColumnType) ([]any, error) {

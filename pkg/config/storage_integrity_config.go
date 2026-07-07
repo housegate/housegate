@@ -11,15 +11,18 @@ type StorageIntegrityConfig struct {
 	DAEndpoint      string `json:"da_endpoint"         yaml:"da_endpoint"`
 	ArbiterEndpoint string `json:"arbiter_endpoint"    yaml:"arbiter_endpoint"`
 	// SequencerEndpoint is the legacy name kept for config compatibility.
-	SequencerEndpoint string                           `json:"sequencer_endpoint"  yaml:"sequencer_endpoint"`
-	UnsafeDatabase    string                           `json:"unsafe_database"     yaml:"unsafe_database"`
-	SafeDatabase      string                           `json:"safe_database"       yaml:"safe_database"`
-	NetworkID         string                           `json:"network_id"          yaml:"network_id"`
-	InjectRowID       bool                             `json:"inject_row_id"       yaml:"inject_row_id"`
-	RequireAuthToken  bool                             `json:"require_auth_token"  yaml:"require_auth_token"`
-	Workers           StorageIntegrityWorkersConfig    `json:"workers"             yaml:"workers"`
-	Mutations         StorageIntegrityMutationsConfig  `json:"mutations" yaml:"mutations"`
-	SafeTables        StorageIntegritySafeTablesConfig `json:"safe_tables" yaml:"safe_tables"`
+	SequencerEndpoint     string                           `json:"sequencer_endpoint"  yaml:"sequencer_endpoint"`
+	UnsafeDatabase        string                           `json:"unsafe_database"     yaml:"unsafe_database"`
+	UnsafeBufferDatabases []string                         `json:"unsafe_buffer_databases" yaml:"unsafe_buffer_databases"`
+	SafeDatabase          string                           `json:"safe_database"       yaml:"safe_database"`
+	NetworkID             string                           `json:"network_id"          yaml:"network_id"`
+	InjectRowID           bool                             `json:"inject_row_id"       yaml:"inject_row_id"`
+	RequireRowIDInput     bool                             `json:"require_row_id_input" yaml:"require_row_id_input"`
+	RequireAuthToken      bool                             `json:"require_auth_token"  yaml:"require_auth_token"`
+	Workers               StorageIntegrityWorkersConfig    `json:"workers"             yaml:"workers"`
+	Mutations             StorageIntegrityMutationsConfig  `json:"mutations" yaml:"mutations"`
+	SafeTables            StorageIntegritySafeTablesConfig `json:"safe_tables" yaml:"safe_tables"`
+	SafeMerges            StorageIntegritySafeMergesConfig `json:"safe_merges" yaml:"safe_merges"`
 }
 
 type StorageIntegrityWorkersConfig struct {
@@ -71,6 +74,16 @@ type StorageIntegritySafeTablesConfig struct {
 	VerifyPhysicalActiveMatchesManifest bool `json:"verify_physical_active_matches_manifest" yaml:"verify_physical_active_matches_manifest"`
 }
 
+// StorageIntegritySafeMergesConfig controls the controlled-compaction lane
+// (spec §8.1, §14). v1 keeps safe tables STOP MERGES; controlled compaction is
+// the only sanctioned way to merge safe parts, and native background merges
+// must stay disabled.
+type StorageIntegritySafeMergesConfig struct {
+	Enabled                    bool   `json:"enabled"                       yaml:"enabled"`
+	Mode                       string `json:"mode"                          yaml:"mode"`
+	AllowNativeBackgroundMerges bool  `json:"allow_native_background_merges" yaml:"allow_native_background_merges"`
+}
+
 func defaultStorageIntegrityConfig() StorageIntegrityConfig {
 	return StorageIntegrityConfig{
 		Enabled:          false,
@@ -104,6 +117,11 @@ func defaultStorageIntegrityConfig() StorageIntegrityConfig {
 			EnforceNoMergeSettings:              true,
 			VerifyPhysicalActiveMatchesManifest: true,
 		},
+		SafeMerges: StorageIntegritySafeMergesConfig{
+			Enabled:                     false,
+			Mode:                        "controlled_compaction",
+			AllowNativeBackgroundMerges: false,
+		},
 	}
 }
 
@@ -112,6 +130,16 @@ func (c StorageIntegrityConfig) ControlPlaneEndpoint() string {
 		return c.ArbiterEndpoint
 	}
 	return c.SequencerEndpoint
+}
+
+func (c StorageIntegrityConfig) EffectiveUnsafeDatabases() []string {
+	if len(c.UnsafeBufferDatabases) > 0 {
+		return append([]string(nil), c.UnsafeBufferDatabases...)
+	}
+	if c.UnsafeDatabase == "" {
+		return nil
+	}
+	return []string{c.UnsafeDatabase}
 }
 
 func (c StorageIntegrityConfig) validate(mode Mode) error {
@@ -131,6 +159,22 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 	if c.UnsafeDatabase == "" {
 		errs = append(errs, errors.New("storage_integrity.unsafe_database is required when storage_integrity.enabled"))
 	}
+	if len(c.UnsafeBufferDatabases) > 0 {
+		if len(c.UnsafeBufferDatabases) != 2 {
+			errs = append(errs, errors.New("storage_integrity.unsafe_buffer_databases must contain exactly two databases when configured"))
+		}
+		seen := map[string]struct{}{}
+		for _, db := range c.UnsafeBufferDatabases {
+			if db == "" {
+				errs = append(errs, errors.New("storage_integrity.unsafe_buffer_databases cannot contain empty database names"))
+				continue
+			}
+			if _, ok := seen[db]; ok {
+				errs = append(errs, errors.New("storage_integrity.unsafe_buffer_databases cannot contain duplicates"))
+			}
+			seen[db] = struct{}{}
+		}
+	}
 	if c.SafeDatabase == "" {
 		errs = append(errs, errors.New("storage_integrity.safe_database is required when storage_integrity.enabled"))
 	}
@@ -147,6 +191,15 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 		if c.Mutations.MaxTouchedPartitions < 0 || c.Mutations.MaxTouchedParts < 0 || c.Mutations.MaxTouchedBytes < 0 {
 			errs = append(errs, errors.New("storage_integrity.mutations touched limits must be non-negative"))
 		}
+	}
+	// v1 forbids native background merges on safe tables: they would break the
+	// manifest-authoritative active set. Merges are only sanctioned via the
+	// controlled-compaction lane (spec §8.1).
+	if c.SafeMerges.AllowNativeBackgroundMerges {
+		errs = append(errs, errors.New("storage_integrity.safe_merges.allow_native_background_merges must be false in v1"))
+	}
+	if c.SafeMerges.Enabled && c.SafeMerges.Mode != "" && c.SafeMerges.Mode != "controlled_compaction" {
+		errs = append(errs, errors.New("storage_integrity.safe_merges.mode must be controlled_compaction"))
 	}
 	if joined := errors.Join(errs...); joined != nil {
 		return fmt.Errorf("storage_integrity: %w", joined)

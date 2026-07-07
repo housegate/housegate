@@ -609,9 +609,11 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		siArbiter := storageintegrity.NewHTTPArbiterClient(cfg.StorageIntegrity.ControlPlaneEndpoint())
 		siPlug := storageintegrityplugin.New(storageintegrityplugin.Config{
 			UnsafeDatabase:            cfg.StorageIntegrity.UnsafeDatabase,
+			UnsafeBufferDatabases:     cfg.StorageIntegrity.UnsafeBufferDatabases,
 			SafeDatabase:              cfg.StorageIntegrity.SafeDatabase,
 			DA:                        storageintegrity.NewHTTPDAClient(cfg.StorageIntegrity.DAEndpoint),
 			Arbiter:                   siArbiter,
+			UnsafeBufferResolver:      siArbiter,
 			RequirePartitionPredicate: cfg.StorageIntegrity.Mutations.RequirePartitionPredicate,
 			PartitionColumns:          cfg.StorageIntegrity.Mutations.PartitionColumns,
 			ProtectedColumns:          cfg.StorageIntegrity.Mutations.ProtectedColumns,
@@ -621,6 +623,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			MaxTouchedBytes:           cfg.StorageIntegrity.Mutations.MaxTouchedBytes,
 			NetworkID:                 cfg.StorageIntegrity.NetworkID,
 			InjectRowID:               cfg.StorageIntegrity.InjectRowID,
+			RequireRowIDInput:         cfg.StorageIntegrity.RequireRowIDInput,
 			RequireAuthToken:          cfg.StorageIntegrity.RequireAuthToken,
 			AuthValidator:             validator,
 			SnapshotReader:            siArbiter,
@@ -634,6 +637,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			"da_endpoint", cfg.StorageIntegrity.DAEndpoint,
 			"arbiter_endpoint", cfg.StorageIntegrity.ControlPlaneEndpoint(),
 			"unsafe_database", cfg.StorageIntegrity.UnsafeDatabase,
+			"unsafe_buffer_databases", cfg.StorageIntegrity.UnsafeBufferDatabases,
 			"safe_database", cfg.StorageIntegrity.SafeDatabase,
 		)
 	}

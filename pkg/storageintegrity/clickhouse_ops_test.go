@@ -780,6 +780,121 @@ func TestClickHouseTableHasherHashesRowsByPartition(t *testing.T) {
 	}
 }
 
+func TestExpectedPostRootForPartition(t *testing.T) {
+	perPartition := PromotionTask{
+		PartitionIDs: []string{"202606", "202607"},
+		ExpectedPostRoots: []replay.PartitionCommitment{
+			{PartitionID: "202606", Root: "root-a"},
+			{PartitionID: "202607", Root: "root-b"},
+		},
+	}
+	if root, ok := expectedPostRootForPartition(perPartition, "202607"); !ok || root != "root-b" {
+		t.Fatalf("per-partition lookup = %q ok=%v, want root-b true", root, ok)
+	}
+	if _, ok := expectedPostRootForPartition(perPartition, "202608"); ok {
+		t.Fatal("missing partition in per-partition set should be unresolved")
+	}
+
+	// Multi-partition promotion carrying only the scalar must NOT resolve any
+	// partition (this is the gap-20 bug: one root applied to all partitions).
+	scalarMulti := PromotionTask{
+		PartitionIDs:     []string{"202606", "202607"},
+		ExpectedPostRoot: "root-single",
+	}
+	if _, ok := expectedPostRootForPartition(scalarMulti, "202606"); ok {
+		t.Fatal("scalar expected root must not resolve for a multi-partition promotion")
+	}
+
+	// Single-partition scalar path stays backward compatible.
+	single := PromotionTask{PartitionIDs: []string{"202607"}, ExpectedPostRoot: "root-single"}
+	if root, ok := expectedPostRootForPartition(single, "202607"); !ok || root != "root-single" {
+		t.Fatalf("single-partition scalar lookup = %q ok=%v, want root-single true", root, ok)
+	}
+}
+
+func TestClickHousePromoterFailsClosedWithoutPartitionIDs(t *testing.T) {
+	conn := &fakeSQLConn{}
+	promoter := ClickHousePromoter{Conn: conn}
+
+	_, err := promoter.Promote(context.Background(), PromotionTask{
+		PromotionID: "promotion-nopart",
+		SafeTable:   "`hg_safe`.`events`",
+		UnsafeTable: "`hg_unsafe_0`.`events`",
+	})
+	if err == nil || !strings.Contains(err.Error(), "partition_ids") {
+		t.Fatalf("Promote err = %v, want partition_ids fail-closed", err)
+	}
+	if len(conn.execs) != 0 {
+		t.Fatalf("expected no SQL executed, got %v", conn.execs)
+	}
+}
+
+func TestClickHousePromoterRejectsMutationAttach(t *testing.T) {
+	conn := &fakeSQLConn{}
+	promoter := ClickHousePromoter{Conn: conn}
+
+	_, err := promoter.Promote(context.Background(), PromotionTask{
+		PromotionID:  "promotion-mut-attach",
+		Kind:         "mutation",
+		SafeTable:    "`hg_safe`.`events`",
+		UnsafeTable:  "`hg_unsafe_0`.`events`",
+		PartitionIDs: []string{"202607"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "replace_partition or internal_drop_partition") {
+		t.Fatalf("Promote err = %v, want mutation-attach rejection", err)
+	}
+	if len(conn.execs) != 0 {
+		t.Fatalf("expected no SQL executed, got %v", conn.execs)
+	}
+}
+
+func TestEnsureMutationSyncMergesAndOverrides(t *testing.T) {
+	tests := []struct {
+		name  string
+		sql   string
+		value int
+		want  string
+	}{
+		{
+			name:  "no settings appends",
+			sql:   "ALTER TABLE x DELETE WHERE a = 1",
+			value: 2,
+			want:  "ALTER TABLE x DELETE WHERE a = 1 SETTINGS mutations_sync = 2",
+		},
+		{
+			name:  "existing settings without mutations_sync prepends",
+			sql:   "ALTER TABLE x DELETE WHERE a = 1 SETTINGS max_threads = 4",
+			value: 2,
+			want:  "ALTER TABLE x DELETE WHERE a = 1 SETTINGS mutations_sync = 2, max_threads = 4",
+		},
+		{
+			name:  "existing mutations_sync is overridden",
+			sql:   "ALTER TABLE x DELETE WHERE a = 1 SETTINGS mutations_sync = 0",
+			value: 2,
+			want:  "ALTER TABLE x DELETE WHERE a = 1 SETTINGS mutations_sync = 2",
+		},
+		{
+			name:  "configured value honored",
+			sql:   "ALTER TABLE x UPDATE b = 1 WHERE a = 1",
+			value: 1,
+			want:  "ALTER TABLE x UPDATE b = 1 WHERE a = 1 SETTINGS mutations_sync = 1",
+		},
+		{
+			name:  "negative falls back to default",
+			sql:   "ALTER TABLE x DELETE WHERE a = 1",
+			value: -1,
+			want:  "ALTER TABLE x DELETE WHERE a = 1 SETTINGS mutations_sync = 2",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ensureMutationSync(tt.sql, tt.value); got != tt.want {
+				t.Fatalf("ensureMutationSync = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 type fakeSQLConn struct {
 	execs []string
 }

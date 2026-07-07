@@ -71,6 +71,15 @@ func (w VerifierWorker) RunOnce(ctx context.Context) (bool, error) {
 			if result.WorkerID == "" {
 				result.WorkerID = w.WorkerID
 			}
+			if result.UnsafeBufferID == 0 {
+				result.UnsafeBufferID = task.UnsafeBufferID
+			}
+			if result.UnsafeBufferEpoch == 0 {
+				result.UnsafeBufferEpoch = task.UnsafeBufferEpoch
+			}
+			if result.UnsafeBufferDatabase == "" {
+				result.UnsafeBufferDatabase = task.UnsafeBufferDatabase
+			}
 			if err := arbiter.SubmitByteSideScan(ctx, result); err != nil {
 				return didWork, fmt.Errorf("submit byte-side scan: %w", err)
 			}
@@ -111,6 +120,9 @@ func (w PromotionWorker) RunOnce(ctx context.Context) (bool, error) {
 	if !ok {
 		return false, nil
 	}
+	if err := validatePromotionUnsafeBufferEpoch(ctx, arbiter, task); err != nil {
+		return false, err
+	}
 	result, err := w.Promoter.Promote(ctx, task)
 	if err != nil {
 		return false, fmt.Errorf("promote %s: %w", task.PromotionID, err)
@@ -142,6 +154,15 @@ func (w PromotionWorker) RunOnce(ctx context.Context) (bool, error) {
 	if result.SourceTable == "" {
 		result.SourceTable = firstNonEmptyString(task.SourceTable, task.UnsafeTable)
 	}
+	if result.UnsafeBufferID == 0 {
+		result.UnsafeBufferID = task.UnsafeBufferID
+	}
+	if result.UnsafeBufferEpoch == 0 {
+		result.UnsafeBufferEpoch = task.UnsafeBufferEpoch
+	}
+	if result.UnsafeBufferDatabase == "" {
+		result.UnsafeBufferDatabase = task.UnsafeBufferDatabase
+	}
 	if len(result.PartitionIDs) == 0 {
 		result.PartitionIDs = append([]string(nil), task.PartitionIDs...)
 	}
@@ -159,6 +180,53 @@ func (w PromotionWorker) RunOnce(ctx context.Context) (bool, error) {
 
 func (w PromotionWorker) Run(ctx context.Context) error {
 	return runWorkerLoop(ctx, w.PollInterval, w.RunOnce)
+}
+
+func validatePromotionUnsafeBufferEpoch(ctx context.Context, arbiter ArbiterWorkerClient, task PromotionTask) error {
+	return validateUnsafeBufferEpoch(ctx, arbiter, "promotion", task.PromotionID, UnsafeBufferEpochCheckRequest{
+		TableID:              task.TableID,
+		UnsafeTable:          task.UnsafeTable,
+		UnsafeBufferID:       task.UnsafeBufferID,
+		UnsafeBufferEpoch:    task.UnsafeBufferEpoch,
+		UnsafeBufferDatabase: task.UnsafeBufferDatabase,
+	})
+}
+
+func validateRollbackUnsafeBufferEpoch(ctx context.Context, arbiter ArbiterWorkerClient, task RollbackTask) error {
+	return validateUnsafeBufferEpoch(ctx, arbiter, "rollback", task.RollbackID, UnsafeBufferEpochCheckRequest{
+		TableID:              task.TableID,
+		UnsafeTable:          task.UnsafeTable,
+		UnsafeBufferID:       task.UnsafeBufferID,
+		UnsafeBufferEpoch:    task.UnsafeBufferEpoch,
+		UnsafeBufferDatabase: task.UnsafeBufferDatabase,
+	})
+}
+
+// validateUnsafeBufferEpoch confirms with the arbiter that the task still
+// targets a live unsafe buffer epoch before mutating physical state. It is a
+// no-op only when the task carries no unsafe-buffer semantics at all (legacy
+// single-buffer configs): if either the epoch or the buffer database is set,
+// the check is mandatory and fails closed when the arbiter cannot perform it.
+func validateUnsafeBufferEpoch(ctx context.Context, arbiter ArbiterWorkerClient, kind, id string, req UnsafeBufferEpochCheckRequest) error {
+	if req.UnsafeBufferEpoch == 0 && req.UnsafeBufferDatabase == "" {
+		return nil
+	}
+	checker, ok := arbiter.(UnsafeBufferEpochChecker)
+	if !ok {
+		return fmt.Errorf("unsafe buffer epoch check is required for %s %s", kind, id)
+	}
+	decision, err := checker.CheckUnsafeBufferEpoch(ctx, req)
+	if err != nil {
+		return fmt.Errorf("unsafe buffer epoch check for %s %s: %w", kind, id, err)
+	}
+	if !decision.OK {
+		reason := decision.Reason
+		if reason == "" {
+			reason = "arbiter rejected unsafe buffer epoch"
+		}
+		return fmt.Errorf("unsafe buffer epoch check for %s %s rejected: %s", kind, id, reason)
+	}
+	return nil
 }
 
 type MutationWorker struct {
@@ -426,6 +494,9 @@ func (w RollbackWorker) RunOnce(ctx context.Context) (bool, error) {
 	}
 	if !ok {
 		return false, nil
+	}
+	if err := validateRollbackUnsafeBufferEpoch(ctx, arbiter, task); err != nil {
+		return false, err
 	}
 	result, err := w.Executor.Rollback(ctx, task)
 	if err != nil {

@@ -31,25 +31,28 @@ type PayloadStore interface {
 }
 
 type InsertRecord struct {
-	TableID             string            `json:"table_id"`
-	StatementID         string            `json:"statement_id"`
-	OriginalSQL         string            `json:"original_sql"`
-	UnsafeSQL           string            `json:"unsafe_sql"`
-	UnsafeTable         string            `json:"unsafe_table"`
-	SafeTable           string            `json:"safe_table"`
-	PartitionIDs        []string          `json:"partition_ids,omitempty"`
-	UserJWS             string            `json:"user_jws,omitempty"`
-	AuthenticatedSigner string            `json:"authenticated_signer,omitempty"`
-	Payload             PayloadCommitment `json:"payload"`
-	SourceClaimRoot     string            `json:"source_claim_root"`
-	PayloadEncoding     string            `json:"payload_encoding,omitempty"`
-	PayloadRevision     int               `json:"payload_revision,omitempty"`
-	PrevSafeSnapshotID  string            `json:"prev_safe_snapshot_id,omitempty"`
-	PrevStateRoot       string            `json:"prev_state_root,omitempty"`
-	SchemaSnapshotID    string            `json:"schema_snapshot_id,omitempty"`
-	ExecutorProfileID   string            `json:"executor_profile_id,omitempty"`
-	SettingsHash        string            `json:"settings_hash,omitempty"`
-	ReceivedAt          time.Time         `json:"received_at"`
+	TableID              string            `json:"table_id"`
+	StatementID          string            `json:"statement_id"`
+	OriginalSQL          string            `json:"original_sql"`
+	UnsafeSQL            string            `json:"unsafe_sql"`
+	UnsafeTable          string            `json:"unsafe_table"`
+	UnsafeBufferID       int               `json:"unsafe_buffer_id"`
+	UnsafeBufferEpoch    uint64            `json:"unsafe_buffer_epoch"`
+	UnsafeBufferDatabase string            `json:"unsafe_buffer_database,omitempty"`
+	SafeTable            string            `json:"safe_table"`
+	PartitionIDs         []string          `json:"partition_ids,omitempty"`
+	UserJWS              string            `json:"user_jws,omitempty"`
+	AuthenticatedSigner  string            `json:"authenticated_signer,omitempty"`
+	Payload              PayloadCommitment `json:"payload"`
+	SourceClaimRoot      string            `json:"source_claim_root"`
+	PayloadEncoding      string            `json:"payload_encoding,omitempty"`
+	PayloadRevision      int               `json:"payload_revision,omitempty"`
+	PrevSafeSnapshotID   string            `json:"prev_safe_snapshot_id,omitempty"`
+	PrevStateRoot        string            `json:"prev_state_root,omitempty"`
+	SchemaSnapshotID     string            `json:"schema_snapshot_id,omitempty"`
+	ExecutorProfileID    string            `json:"executor_profile_id,omitempty"`
+	SettingsHash         string            `json:"settings_hash,omitempty"`
+	ReceivedAt           time.Time         `json:"received_at"`
 }
 
 const (
@@ -82,6 +85,40 @@ type SequencerIngress = ArbiterIngress
 type SNodePublisher interface {
 	PublishInsert(ctx context.Context, rec InsertRecord) error
 	PublishMutation(ctx context.Context, rec MutationRecord) error
+}
+
+type ActiveUnsafeBufferRequest struct {
+	TableID   string `json:"table_id"`
+	TableName string `json:"table_name,omitempty"`
+}
+
+type UnsafeBufferInfo struct {
+	TableID        string `json:"table_id,omitempty"`
+	UnsafeBufferID int    `json:"unsafe_buffer_id"`
+	Epoch          uint64 `json:"unsafe_buffer_epoch"`
+	Database       string `json:"unsafe_database,omitempty"`
+	UnsafeTable    string `json:"unsafe_table,omitempty"`
+}
+
+type UnsafeBufferResolver interface {
+	GetActiveUnsafeBuffer(ctx context.Context, req ActiveUnsafeBufferRequest) (UnsafeBufferInfo, error)
+}
+
+type UnsafeBufferEpochCheckRequest struct {
+	TableID              string `json:"table_id"`
+	UnsafeTable          string `json:"unsafe_table,omitempty"`
+	UnsafeBufferID       int    `json:"unsafe_buffer_id"`
+	UnsafeBufferEpoch    uint64 `json:"unsafe_buffer_epoch"`
+	UnsafeBufferDatabase string `json:"unsafe_buffer_database,omitempty"`
+}
+
+type UnsafeBufferEpochDecision struct {
+	OK     bool   `json:"ok"`
+	Reason string `json:"reason,omitempty"`
+}
+
+type UnsafeBufferEpochChecker interface {
+	CheckUnsafeBufferEpoch(ctx context.Context, req UnsafeBufferEpochCheckRequest) (UnsafeBufferEpochDecision, error)
 }
 
 type ArbiterSNodePublisher struct {
@@ -147,22 +184,28 @@ type ByteSidePart struct {
 }
 
 type ByteSideScanTask struct {
-	ScanID         string         `json:"scan_id"`
-	StatementID    string         `json:"statement_id"`
-	TableID        string         `json:"table_id"`
-	UnsafeTable    string         `json:"unsafe_table"`
-	PartitionIDs   []string       `json:"partition_ids,omitempty"`
-	CandidateParts []ByteSidePart `json:"candidate_parts,omitempty"`
+	ScanID               string         `json:"scan_id"`
+	StatementID          string         `json:"statement_id"`
+	TableID              string         `json:"table_id"`
+	UnsafeTable          string         `json:"unsafe_table"`
+	UnsafeBufferID       int            `json:"unsafe_buffer_id"`
+	UnsafeBufferEpoch    uint64         `json:"unsafe_buffer_epoch"`
+	UnsafeBufferDatabase string         `json:"unsafe_buffer_database,omitempty"`
+	PartitionIDs         []string       `json:"partition_ids,omitempty"`
+	CandidateParts       []ByteSidePart `json:"candidate_parts,omitempty"`
 }
 
 type ByteSideScanResult struct {
-	ScanID      string         `json:"scan_id"`
-	StatementID string         `json:"statement_id"`
-	TableID     string         `json:"table_id"`
-	UnsafeTable string         `json:"unsafe_table"`
-	WorkerID    string         `json:"worker_id"`
-	Parts       []ByteSidePart `json:"parts,omitempty"`
-	PartSetHash string         `json:"part_set_hash,omitempty"`
+	ScanID               string         `json:"scan_id"`
+	StatementID          string         `json:"statement_id"`
+	TableID              string         `json:"table_id"`
+	UnsafeTable          string         `json:"unsafe_table"`
+	UnsafeBufferID       int            `json:"unsafe_buffer_id"`
+	UnsafeBufferEpoch    uint64         `json:"unsafe_buffer_epoch"`
+	UnsafeBufferDatabase string         `json:"unsafe_buffer_database,omitempty"`
+	WorkerID             string         `json:"worker_id"`
+	Parts                []ByteSidePart `json:"parts,omitempty"`
+	PartSetHash          string         `json:"part_set_hash,omitempty"`
 }
 
 type MutationTask struct {
@@ -259,7 +302,15 @@ type PromotionTask struct {
 	BaseSafeSnapshotID      string         `json:"base_safe_snapshot_id,omitempty"`
 	BasePartitionRoot       string         `json:"base_partition_root,omitempty"`
 	ExpectedPostRoot        string         `json:"expected_post_root,omitempty"`
+	// ExpectedPostRoots carries a per-partition expected post-promotion root so
+	// multi-partition promotions verify each partition against its own value.
+	// When set, it takes precedence over the scalar ExpectedPostRoot in the
+	// post-root CAS. Single-partition promotions may still use the scalar.
+	ExpectedPostRoots       []replay.PartitionCommitment `json:"expected_post_roots,omitempty"`
 	UnsafeTable             string         `json:"unsafe_table,omitempty"`
+	UnsafeBufferID          int            `json:"unsafe_buffer_id"`
+	UnsafeBufferEpoch       uint64         `json:"unsafe_buffer_epoch"`
+	UnsafeBufferDatabase    string         `json:"unsafe_buffer_database,omitempty"`
 	SafeTable               string         `json:"safe_table"`
 	SourceTable             string         `json:"source_table,omitempty"`
 	PromoteDatabase         string         `json:"promote_database,omitempty"`
@@ -279,20 +330,23 @@ type PromotionTask struct {
 }
 
 type PromotionResult struct {
-	PromotionID        string                     `json:"promotion_id"`
-	PromotionSeq       uint64                     `json:"promotion_seq,omitempty"`
-	LeaseID            string                     `json:"lease_id,omitempty"`
-	WorkerID           string                     `json:"worker_id"`
-	TableID            string                     `json:"table_id,omitempty"`
-	BaseSafeSnapshotID string                     `json:"base_safe_snapshot_id,omitempty"`
-	BasePartitionRoot  string                     `json:"base_partition_root,omitempty"`
-	SafeTable          string                     `json:"safe_table,omitempty"`
-	SourceTable        string                     `json:"source_table,omitempty"`
-	PartitionIDs       []string                   `json:"partition_ids,omitempty"`
-	StatementIDs       []string                   `json:"statement_ids,omitempty"`
-	ActiveParts        []replay.PartManifestEntry `json:"active_parts,omitempty"`
-	CleanupUnsafeParts []ByteSidePart             `json:"cleanup_unsafe_parts,omitempty"`
-	Error              string                     `json:"error,omitempty"`
+	PromotionID          string                     `json:"promotion_id"`
+	PromotionSeq         uint64                     `json:"promotion_seq,omitempty"`
+	LeaseID              string                     `json:"lease_id,omitempty"`
+	WorkerID             string                     `json:"worker_id"`
+	TableID              string                     `json:"table_id,omitempty"`
+	BaseSafeSnapshotID   string                     `json:"base_safe_snapshot_id,omitempty"`
+	BasePartitionRoot    string                     `json:"base_partition_root,omitempty"`
+	SafeTable            string                     `json:"safe_table,omitempty"`
+	SourceTable          string                     `json:"source_table,omitempty"`
+	UnsafeBufferID       int                        `json:"unsafe_buffer_id"`
+	UnsafeBufferEpoch    uint64                     `json:"unsafe_buffer_epoch"`
+	UnsafeBufferDatabase string                     `json:"unsafe_buffer_database,omitempty"`
+	PartitionIDs         []string                   `json:"partition_ids,omitempty"`
+	StatementIDs         []string                   `json:"statement_ids,omitempty"`
+	ActiveParts          []replay.PartManifestEntry `json:"active_parts,omitempty"`
+	CleanupUnsafeParts   []ByteSidePart             `json:"cleanup_unsafe_parts,omitempty"`
+	Error                string                     `json:"error,omitempty"`
 }
 
 type SafeWatermark struct {
@@ -331,19 +385,22 @@ type SafeAuditVote struct {
 }
 
 type RollbackTask struct {
-	RollbackID    string         `json:"rollback_id"`
-	StatementID   string         `json:"statement_id,omitempty"`
-	PromotionID   string         `json:"promotion_id,omitempty"`
-	TableID       string         `json:"table_id,omitempty"`
-	Reason        string         `json:"reason,omitempty"`
-	SafeTable     string         `json:"safe_table,omitempty"`
-	UnsafeTable   string         `json:"unsafe_table,omitempty"`
-	ScratchTable  string         `json:"scratch_table,omitempty"`
-	PromoteTable  string         `json:"promote_table,omitempty"`
-	ScratchTables []string       `json:"scratch_tables,omitempty"`
-	PromoteTables []string       `json:"promote_tables,omitempty"`
-	PartitionIDs  []string       `json:"partition_ids,omitempty"`
-	UnsafeParts   []ByteSidePart `json:"unsafe_parts,omitempty"`
+	RollbackID           string         `json:"rollback_id"`
+	StatementID          string         `json:"statement_id,omitempty"`
+	PromotionID          string         `json:"promotion_id,omitempty"`
+	TableID              string         `json:"table_id,omitempty"`
+	Reason               string         `json:"reason,omitempty"`
+	SafeTable            string         `json:"safe_table,omitempty"`
+	UnsafeTable          string         `json:"unsafe_table,omitempty"`
+	UnsafeBufferID       int            `json:"unsafe_buffer_id"`
+	UnsafeBufferEpoch    uint64         `json:"unsafe_buffer_epoch"`
+	UnsafeBufferDatabase string         `json:"unsafe_buffer_database,omitempty"`
+	ScratchTable         string         `json:"scratch_table,omitempty"`
+	PromoteTable         string         `json:"promote_table,omitempty"`
+	ScratchTables        []string       `json:"scratch_tables,omitempty"`
+	PromoteTables        []string       `json:"promote_tables,omitempty"`
+	PartitionIDs         []string       `json:"partition_ids,omitempty"`
+	UnsafeParts          []ByteSidePart `json:"unsafe_parts,omitempty"`
 }
 
 type RollbackResult struct {
@@ -354,6 +411,9 @@ type RollbackResult struct {
 	TableID                 string         `json:"table_id,omitempty"`
 	Reason                  string         `json:"reason,omitempty"`
 	UnsafeTable             string         `json:"unsafe_table,omitempty"`
+	UnsafeBufferID          int            `json:"unsafe_buffer_id"`
+	UnsafeBufferEpoch       uint64         `json:"unsafe_buffer_epoch"`
+	UnsafeBufferDatabase    string         `json:"unsafe_buffer_database,omitempty"`
 	ScratchTable            string         `json:"scratch_table,omitempty"`
 	PromoteTable            string         `json:"promote_table,omitempty"`
 	PartitionIDs            []string       `json:"partition_ids,omitempty"`

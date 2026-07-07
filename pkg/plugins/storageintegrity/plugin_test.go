@@ -30,7 +30,10 @@ func TestPluginCapturesInsertPayloadAndSubmitsExternalDAAndSequencer(t *testing.
 		DA:             da,
 		Sequencer:      seq,
 	})
-	sess := &fakeSession{id: 7, state: chsession.NewSessionState()}
+	const revision = 54453
+	state := chsession.NewSessionState()
+	state.ClientRevision = revision
+	sess := &fakeSession{id: 7, state: state}
 	qctx := &plugin.QueryContext{
 		Session:       sess,
 		OriginalSQL:   "INSERT INTO accounts.events VALUES",
@@ -44,17 +47,18 @@ func TestPluginCapturesInsertPayloadAndSubmitsExternalDAAndSequencer(t *testing.
 	if qctx.Query.Body != "INSERT INTO `hg_unsafe`.`events` VALUES" {
 		t.Fatalf("rewritten query = %q", qctx.Query.Body)
 	}
-	if err := p.OnClientData(context.Background(), qctx, []byte("block-1")); err != nil {
-		t.Fatalf("OnClientData block-1: %v", err)
-	}
-	if err := p.OnClientData(context.Background(), qctx, []byte("block-2")); err != nil {
-		t.Fatalf("OnClientData block-2: %v", err)
+	raw := encodeStorageNativePayload(t, revision, proto.Input{
+		{Name: "id", Data: &proto.ColUInt64{1}},
+		{Name: "label", Data: storageColStr("alpha")},
+	})
+	if err := p.OnClientData(context.Background(), qctx, raw); err != nil {
+		t.Fatalf("OnClientData: %v", err)
 	}
 
 	p.OnQueryComplete(context.Background(), sess)
 
-	if string(da.payload) != "block-1block-2" {
-		t.Fatalf("payload = %q", da.payload)
+	if !bytes.Equal(da.payload, raw) {
+		t.Fatalf("payload = %q, want captured native payload", da.payload)
 	}
 	if seq.rec.StatementID == "" || seq.rec.TableID != "accounts.events" {
 		t.Fatalf("sequencer record = %+v", seq.rec)
@@ -79,7 +83,10 @@ func TestPluginUsesQueryIDAsInsertStatementID(t *testing.T) {
 		DA:             da,
 		Sequencer:      seq,
 	})
-	sess := &fakeSession{id: 77, state: chsession.NewSessionState()}
+	const revision = 54453
+	state := chsession.NewSessionState()
+	state.ClientRevision = revision
+	sess := &fakeSession{id: 77, state: state}
 	qctx := &plugin.QueryContext{
 		Session:       sess,
 		OriginalSQL:   "INSERT INTO tenant_a.events",
@@ -90,7 +97,11 @@ func TestPluginUsesQueryIDAsInsertStatementID(t *testing.T) {
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
 		t.Fatalf("OnQuery: %v", err)
 	}
-	if err := p.OnClientData(context.Background(), qctx, []byte("block")); err != nil {
+	raw := encodeStorageNativePayload(t, revision, proto.Input{
+		{Name: "id", Data: &proto.ColUInt64{1}},
+		{Name: "label", Data: storageColStr("alpha")},
+	})
+	if err := p.OnClientData(context.Background(), qctx, raw); err != nil {
 		t.Fatalf("OnClientData: %v", err)
 	}
 	p.OnQueryComplete(context.Background(), sess)
@@ -109,8 +120,10 @@ func TestPluginCapturesInsertWhenRewriterLeavesStatementTypeUnset(t *testing.T) 
 		DA:             da,
 		Sequencer:      seq,
 	})
+	const revision = 54453
 	state := chsession.NewSessionState()
 	state.SetLogicalDatabase("tenant_a")
+	state.ClientRevision = revision
 	sess := &fakeSession{id: 10, state: state}
 	qctx := &plugin.QueryContext{
 		Session:     sess,
@@ -124,7 +137,11 @@ func TestPluginCapturesInsertWhenRewriterLeavesStatementTypeUnset(t *testing.T) 
 	if qctx.Query.Body != "INSERT INTO `hg_unsafe`.`events` FORMAT Native" {
 		t.Fatalf("rewritten query = %q", qctx.Query.Body)
 	}
-	if err := p.OnClientData(context.Background(), qctx, []byte("native-block")); err != nil {
+	raw := encodeStorageNativePayload(t, revision, proto.Input{
+		{Name: "id", Data: &proto.ColUInt64{1}},
+		{Name: "label", Data: storageColStr("alpha")},
+	})
+	if err := p.OnClientData(context.Background(), qctx, raw); err != nil {
 		t.Fatalf("OnClientData: %v", err)
 	}
 	p.OnQueryComplete(context.Background(), sess)
@@ -135,8 +152,8 @@ func TestPluginCapturesInsertWhenRewriterLeavesStatementTypeUnset(t *testing.T) 
 	if seq.rec.UnsafeTable != "`hg_unsafe`.`events`" || seq.rec.SafeTable != "`hg_safe`.`events`" {
 		t.Fatalf("sequencer tables = unsafe %q safe %q", seq.rec.UnsafeTable, seq.rec.SafeTable)
 	}
-	if string(da.payload) != "native-block" {
-		t.Fatalf("payload = %q", da.payload)
+	if !bytes.Equal(da.payload, raw) {
+		t.Fatalf("payload = %q, want captured native payload", da.payload)
 	}
 }
 
@@ -149,7 +166,10 @@ func TestPluginUsesRewriterOutputWithoutSecondRewrite(t *testing.T) {
 		DA:             da,
 		Sequencer:      seq,
 	})
-	sess := &fakeSession{id: 8, state: chsession.NewSessionState()}
+	const revision = 54453
+	state := chsession.NewSessionState()
+	state.ClientRevision = revision
+	sess := &fakeSession{id: 8, state: state}
 	qctx := &plugin.QueryContext{
 		Session:       sess,
 		OriginalSQL:   "INSERT INTO tenant_a.events FORMAT Native",
@@ -173,7 +193,11 @@ func TestPluginUsesRewriterOutputWithoutSecondRewrite(t *testing.T) {
 	if qctx.Query.Body != "INSERT INTO hg_unsafe.events FORMAT Native" {
 		t.Fatalf("storage_integrity rewrote over rewriter output: %q", qctx.Query.Body)
 	}
-	if err := p.OnClientData(context.Background(), qctx, []byte("native-block")); err != nil {
+	raw := encodeStorageNativePayload(t, revision, proto.Input{
+		{Name: "id", Data: &proto.ColUInt64{1}},
+		{Name: "label", Data: storageColStr("alpha")},
+	})
+	if err := p.OnClientData(context.Background(), qctx, raw); err != nil {
 		t.Fatalf("OnClientData: %v", err)
 	}
 
@@ -191,8 +215,113 @@ func TestPluginUsesRewriterOutputWithoutSecondRewrite(t *testing.T) {
 	if seq.rec.SafeTable != "`hg_safe`.`events`" {
 		t.Fatalf("safe table = %q", seq.rec.SafeTable)
 	}
-	if string(da.payload) != "native-block" {
-		t.Fatalf("payload = %q", da.payload)
+	if !bytes.Equal(da.payload, raw) {
+		t.Fatalf("payload = %q, want captured native payload", da.payload)
+	}
+}
+
+func TestPluginRewritesInsertToActiveUnsafeBuffer(t *testing.T) {
+	da := &fakeDA{}
+	seq := &fakeSequencer{activeBuffer: core.UnsafeBufferInfo{
+		TableID:        "tenant_a.events",
+		UnsafeBufferID: 1,
+		Epoch:          42,
+		Database:       "hg_unsafe_1",
+	}}
+	p := New(Config{
+		UnsafeDatabase:        "hg_unsafe",
+		UnsafeBufferDatabases: []string{"hg_unsafe_0", "hg_unsafe_1"},
+		SafeDatabase:          "hg_safe",
+		DA:                    da,
+		Sequencer:             seq,
+		UnsafeBufferResolver:  seq,
+	})
+	const revision = 54453
+	state := chsession.NewSessionState()
+	state.ClientRevision = revision
+	sess := &fakeSession{id: 88, state: state}
+	qctx := &plugin.QueryContext{
+		Session:       sess,
+		OriginalSQL:   "INSERT INTO tenant_a.events FORMAT Native",
+		RewrittenSQL:  "INSERT INTO hg_unsafe.events FORMAT Native",
+		Query:         &chproto.Query{Body: "INSERT INTO hg_unsafe.events FORMAT Native"},
+		StatementType: sqlmeta.StatementTypeInsert,
+		AccessedTables: []sqlmeta.AccessedTable{{
+			OriginalDatabase: "tenant_a",
+			OriginalTable:    "events",
+			LogicalDatabase:  "tenant_a",
+			PhysicalDatabase: "hg_unsafe",
+		}},
+		TableRewrites: map[string]string{
+			"tenant_a.events": "hg_unsafe.events",
+		},
+	}
+
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	if qctx.Query.Body != "INSERT INTO `hg_unsafe_1`.`events` FORMAT Native" {
+		t.Fatalf("rewritten query = %q", qctx.Query.Body)
+	}
+	raw := encodeStorageNativePayload(t, revision, proto.Input{
+		{Name: "id", Data: &proto.ColUInt64{1}},
+		{Name: "label", Data: storageColStr("alpha")},
+	})
+	if err := p.OnClientData(context.Background(), qctx, raw); err != nil {
+		t.Fatalf("OnClientData: %v", err)
+	}
+	p.OnQueryComplete(context.Background(), sess)
+
+	if seq.activeReq.TableID != "tenant_a.events" || seq.activeReq.TableName != "events" {
+		t.Fatalf("active buffer request = %+v", seq.activeReq)
+	}
+	if seq.rec.UnsafeTable != "`hg_unsafe_1`.`events`" || seq.rec.UnsafeSQL != "INSERT INTO `hg_unsafe_1`.`events` FORMAT Native" {
+		t.Fatalf("insert unsafe target sql/table = %q / %q", seq.rec.UnsafeSQL, seq.rec.UnsafeTable)
+	}
+	if seq.rec.UnsafeBufferID != 1 || seq.rec.UnsafeBufferEpoch != 42 || seq.rec.UnsafeBufferDatabase != "hg_unsafe_1" {
+		t.Fatalf("insert unsafe buffer metadata = id %d epoch %d db %q", seq.rec.UnsafeBufferID, seq.rec.UnsafeBufferEpoch, seq.rec.UnsafeBufferDatabase)
+	}
+}
+
+func TestPluginSubmitsInsertOnCloseFallback(t *testing.T) {
+	da := &fakeDA{}
+	seq := &fakeSequencer{}
+	p := New(Config{
+		UnsafeDatabase: "hg_unsafe",
+		SafeDatabase:   "hg_safe",
+		DA:             da,
+		Sequencer:      seq,
+		InjectRowID:    false,
+	})
+	const revision = 54453
+	state := chsession.NewSessionState()
+	state.ClientRevision = revision
+	sess := &fakeSession{id: 91, state: state}
+	qctx := &plugin.QueryContext{
+		Session:       sess,
+		OriginalSQL:   "INSERT INTO tenant_a.events FORMAT Native",
+		Query:         &chproto.Query{ID: "stmt-close-fallback", Body: "INSERT INTO tenant_a.events FORMAT Native"},
+		StatementType: sqlmeta.StatementTypeInsert,
+	}
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	raw := encodeStorageNativePayload(t, revision, proto.Input{
+		{Name: "id", Data: &proto.ColUInt64{1}},
+		{Name: "label", Data: storageColStr("alpha")},
+	})
+	if err := p.OnClientData(context.Background(), qctx, raw); err != nil {
+		t.Fatalf("OnClientData: %v", err)
+	}
+
+	p.OnClose(sess)
+
+	if seq.rec.StatementID != "stmt-close-fallback" || seq.rec.Payload.Hash == "" {
+		t.Fatalf("insert record after OnClose = %+v", seq.rec)
+	}
+	p.OnQueryComplete(context.Background(), sess)
+	if seq.rec.StatementID != "stmt-close-fallback" {
+		t.Fatalf("OnQueryComplete after OnClose submitted unexpected record: %+v", seq.rec)
 	}
 }
 
@@ -233,6 +362,11 @@ func TestPluginSubmitsNativePayloadReplayMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ComputeNativePayloadClaim: %v", err)
 	}
+	wantSnap, err := core.NativePayloadGenesisSnapshot("tenant_a.events", wantClaim.Columns)
+	if err != nil {
+		t.Fatalf("NativePayloadGenesisSnapshot: %v", err)
+	}
+	wantSourceClaimRoot := core.NativePayloadCompositeStateRoot(wantSnap.SchemaSnapshotID, wantSnap.ExecutorProfileID, wantClaim.PartRowLtHash)
 
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
 		t.Fatalf("OnQuery: %v", err)
@@ -242,8 +376,8 @@ func TestPluginSubmitsNativePayloadReplayMetadata(t *testing.T) {
 	}
 	p.OnQueryComplete(context.Background(), sess)
 
-	if seq.rec.SourceClaimRoot != wantClaim.SourceClaimRoot {
-		t.Fatalf("source claim root = %s, want %s", seq.rec.SourceClaimRoot, wantClaim.SourceClaimRoot)
+	if seq.rec.SourceClaimRoot != wantSourceClaimRoot {
+		t.Fatalf("source claim root = %s, want %s", seq.rec.SourceClaimRoot, wantSourceClaimRoot)
 	}
 	if seq.rec.PayloadEncoding != core.PayloadEncodingClickHouseNativeData {
 		t.Fatalf("payload encoding = %q", seq.rec.PayloadEncoding)
@@ -372,7 +506,11 @@ func TestPluginRequiresAndRecordsJWSForStorageIntegrityInsert(t *testing.T) {
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
 		t.Fatalf("OnQuery: %v", err)
 	}
-	if err := p.OnClientData(context.Background(), qctx, []byte("block")); err != nil {
+	raw := encodeStorageNativePayload(t, 54453, proto.Input{
+		{Name: "id", Data: &proto.ColUInt64{1}},
+		{Name: "label", Data: storageColStr("alpha")},
+	})
+	if err := p.OnClientData(context.Background(), qctx, raw); err != nil {
 		t.Fatalf("OnClientData: %v", err)
 	}
 	p.OnQueryComplete(context.Background(), sess)
@@ -482,11 +620,15 @@ func TestPluginSubmitsBoundedUpdateMutationAndAbortsWithSuccess(t *testing.T) {
 	}
 }
 
-func TestPluginRejectsLightweightDeleteWhenConfigured(t *testing.T) {
+// A plain `DELETE FROM ... WHERE` is a normalizable bounded mutation (spec
+// §7.1) and must be accepted even when reject_lightweight_delete is set: it is
+// rewritten into a heavyweight `ALTER TABLE ... DELETE`, not a lightweight mask.
+func TestPluginAcceptsNormalizableDeleteFromWhenLightweightRejected(t *testing.T) {
+	seq := &fakeSequencer{}
 	p := New(Config{
 		UnsafeDatabase:          "hg_unsafe",
 		SafeDatabase:            "hg_safe",
-		Sequencer:               &fakeSequencer{},
+		Sequencer:               seq,
 		RejectLightweightDelete: true,
 		PartitionColumns:        []string{"day"},
 	})
@@ -497,6 +639,39 @@ func TestPluginRejectsLightweightDeleteWhenConfigured(t *testing.T) {
 		Session:     sess,
 		OriginalSQL: "DELETE FROM events WHERE day = '2026-07-03'",
 		Query:       &chproto.Query{Body: "DELETE FROM events WHERE day = '2026-07-03'"},
+	}
+
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery err = %v, want normalizable DELETE FROM to be accepted", err)
+	}
+	if seq.mut.StatementID == "" {
+		t.Fatal("expected a mutation record for normalizable DELETE FROM")
+	}
+	if seq.mut.MutationType != core.MutationTypeDelete {
+		t.Fatalf("mutation type = %q, want delete", seq.mut.MutationType)
+	}
+}
+
+// An explicit ClickHouse lightweight-delete mask request (via query setting) is
+// the "lightweight DELETE mask" the spec rejects when configured.
+func TestPluginRejectsLightweightDeleteMaskSettingWhenConfigured(t *testing.T) {
+	p := New(Config{
+		UnsafeDatabase:          "hg_unsafe",
+		SafeDatabase:            "hg_safe",
+		Sequencer:               &fakeSequencer{},
+		RejectLightweightDelete: true,
+		PartitionColumns:        []string{"day"},
+	})
+	state := chsession.NewSessionState()
+	state.SetLogicalDatabase("tenant_a")
+	sess := &fakeSession{id: 22, state: state}
+	qctx := &plugin.QueryContext{
+		Session:     sess,
+		OriginalSQL: "DELETE FROM events WHERE day = '2026-07-03'",
+		Query: &chproto.Query{
+			Body:     "DELETE FROM events WHERE day = '2026-07-03'",
+			Settings: []chproto.Setting{{Key: "lightweight_deletes_sync", Value: "2"}},
+		},
 	}
 
 	err := p.OnQuery(context.Background(), qctx)
@@ -822,10 +997,12 @@ func (f *fakeDA) PutPayload(_ context.Context, req core.PutPayloadRequest) (core
 }
 
 type fakeSequencer struct {
-	rec       core.InsertRecord
-	mut       core.MutationRecord
-	watermark core.SafeWatermark
-	manifests map[string]replay.SafeSnapshotManifest
+	rec          core.InsertRecord
+	mut          core.MutationRecord
+	watermark    core.SafeWatermark
+	manifests    map[string]replay.SafeSnapshotManifest
+	activeBuffer core.UnsafeBufferInfo
+	activeReq    core.ActiveUnsafeBufferRequest
 }
 
 func (f *fakeSequencer) SubmitInsert(_ context.Context, rec core.InsertRecord) error {
@@ -836,6 +1013,14 @@ func (f *fakeSequencer) SubmitInsert(_ context.Context, rec core.InsertRecord) e
 func (f *fakeSequencer) SubmitMutation(_ context.Context, rec core.MutationRecord) error {
 	f.mut = rec
 	return nil
+}
+
+func (f *fakeSequencer) GetActiveUnsafeBuffer(_ context.Context, req core.ActiveUnsafeBufferRequest) (core.UnsafeBufferInfo, error) {
+	f.activeReq = req
+	if f.activeBuffer.TableID == "" {
+		f.activeBuffer.TableID = req.TableID
+	}
+	return f.activeBuffer, nil
 }
 
 func (f *fakeSequencer) GetSafeWatermark(context.Context) (core.SafeWatermark, error) {

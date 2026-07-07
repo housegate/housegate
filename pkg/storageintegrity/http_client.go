@@ -68,6 +68,29 @@ type HTTPArbiterClient struct {
 	primaryPrefix  string
 	fallbackPrefix string
 	client         *http.Client
+	// workerID identifies this HouseGate instance's worker to the arbiter on
+	// every claim, so the control plane can enforce per-worker quarantine.
+	workerID string
+}
+
+// WithWorkerID sets the worker identity carried on claim requests and returns
+// the client for chaining. Empty worker ids are treated as anonymous by the
+// arbiter (never quarantined) for backward compatibility.
+func (c *HTTPArbiterClient) WithWorkerID(workerID string) *HTTPArbiterClient {
+	if c != nil {
+		c.workerID = workerID
+	}
+	return c
+}
+
+// claimBody is the request body for every Claim* RPC: it carries the worker id
+// so the arbiter can refuse tasks to quarantined workers.
+func (c *HTTPArbiterClient) claimBody() claimRequest {
+	return claimRequest{WorkerID: c.workerID}
+}
+
+type claimRequest struct {
+	WorkerID string `json:"worker_id,omitempty"`
 }
 
 // HTTPSequencerClient is the legacy control-plane client name kept for
@@ -119,12 +142,40 @@ func (c *HTTPArbiterClient) SubmitMutation(ctx context.Context, rec MutationReco
 	return nil
 }
 
+func (c *HTTPArbiterClient) GetActiveUnsafeBuffer(ctx context.Context, req ActiveUnsafeBufferRequest) (UnsafeBufferInfo, error) {
+	var out struct {
+		OK     bool             `json:"ok"`
+		Buffer UnsafeBufferInfo `json:"buffer,omitempty"`
+	}
+	if err := c.post(ctx, "/unsafe-buffers/active", req, &out); err != nil {
+		return UnsafeBufferInfo{}, err
+	}
+	if !out.OK {
+		return UnsafeBufferInfo{}, fmt.Errorf("arbiter active unsafe buffer was not acknowledged")
+	}
+	return out.Buffer, nil
+}
+
+func (c *HTTPArbiterClient) CheckUnsafeBufferEpoch(ctx context.Context, req UnsafeBufferEpochCheckRequest) (UnsafeBufferEpochDecision, error) {
+	var out struct {
+		OK       bool                      `json:"ok"`
+		Decision UnsafeBufferEpochDecision `json:"decision,omitempty"`
+	}
+	if err := c.post(ctx, "/unsafe-buffers/check-epoch", req, &out); err != nil {
+		return UnsafeBufferEpochDecision{}, err
+	}
+	if !out.OK {
+		return UnsafeBufferEpochDecision{}, fmt.Errorf("arbiter unsafe buffer epoch check was not acknowledged")
+	}
+	return out.Decision, nil
+}
+
 func (c *HTTPArbiterClient) ClaimReplayJob(ctx context.Context) (replay.ReplayJob, bool, error) {
 	var out struct {
 		OK  bool             `json:"ok"`
 		Job replay.ReplayJob `json:"job,omitempty"`
 	}
-	if err := c.post(ctx, "/replay-jobs/claim", struct{}{}, &out); err != nil {
+	if err := c.post(ctx, "/replay-jobs/claim", c.claimBody(), &out); err != nil {
 		return replay.ReplayJob{}, false, err
 	}
 	return out.Job, out.OK, nil
@@ -139,7 +190,7 @@ func (c *HTTPArbiterClient) ClaimByteSideScan(ctx context.Context) (ByteSideScan
 		OK   bool             `json:"ok"`
 		Task ByteSideScanTask `json:"task,omitempty"`
 	}
-	if err := c.post(ctx, "/byte-side-scans/claim", struct{}{}, &out); err != nil {
+	if err := c.post(ctx, "/byte-side-scans/claim", c.claimBody(), &out); err != nil {
 		return ByteSideScanTask{}, false, err
 	}
 	return out.Task, out.OK, nil
@@ -154,7 +205,7 @@ func (c *HTTPArbiterClient) ClaimPromotion(ctx context.Context) (PromotionTask, 
 		OK   bool          `json:"ok"`
 		Task PromotionTask `json:"task,omitempty"`
 	}
-	if err := c.post(ctx, "/promotions/claim", struct{}{}, &out); err != nil {
+	if err := c.post(ctx, "/promotions/claim", c.claimBody(), &out); err != nil {
 		return PromotionTask{}, false, err
 	}
 	return out.Task, out.OK, nil
@@ -228,7 +279,7 @@ func (c *HTTPArbiterClient) ClaimMutationTask(ctx context.Context) (MutationTask
 		OK   bool         `json:"ok"`
 		Task MutationTask `json:"task,omitempty"`
 	}
-	if err := c.post(ctx, "/mutation-tasks/claim", struct{}{}, &out); err != nil {
+	if err := c.post(ctx, "/mutation-tasks/claim", c.claimBody(), &out); err != nil {
 		return MutationTask{}, false, err
 	}
 	return out.Task, out.OK, nil
@@ -243,7 +294,7 @@ func (c *HTTPArbiterClient) ClaimMutationReplayTask(ctx context.Context) (Mutati
 		OK   bool         `json:"ok"`
 		Task MutationTask `json:"task,omitempty"`
 	}
-	if err := c.post(ctx, "/mutation-replays/claim", struct{}{}, &out); err != nil {
+	if err := c.post(ctx, "/mutation-replays/claim", c.claimBody(), &out); err != nil {
 		return MutationTask{}, false, err
 	}
 	return out.Task, out.OK, nil
@@ -258,7 +309,7 @@ func (c *HTTPArbiterClient) ClaimSafeAudit(ctx context.Context) (SafeAuditTask, 
 		OK   bool          `json:"ok"`
 		Task SafeAuditTask `json:"task,omitempty"`
 	}
-	if err := c.post(ctx, "/safe-audits/claim", struct{}{}, &out); err != nil {
+	if err := c.post(ctx, "/safe-audits/claim", c.claimBody(), &out); err != nil {
 		return SafeAuditTask{}, false, err
 	}
 	return out.Task, out.OK, nil
@@ -273,7 +324,7 @@ func (c *HTTPArbiterClient) ClaimRollback(ctx context.Context) (RollbackTask, bo
 		OK   bool         `json:"ok"`
 		Task RollbackTask `json:"task,omitempty"`
 	}
-	if err := c.post(ctx, "/rollbacks/claim", struct{}{}, &out); err != nil {
+	if err := c.post(ctx, "/rollbacks/claim", c.claimBody(), &out); err != nil {
 		return RollbackTask{}, false, err
 	}
 	return out.Task, out.OK, nil
@@ -288,7 +339,7 @@ func (c *HTTPArbiterClient) ClaimRepairSync(ctx context.Context) (RepairSyncTask
 		OK   bool           `json:"ok"`
 		Task RepairSyncTask `json:"task,omitempty"`
 	}
-	if err := c.post(ctx, "/repair-sync/claim", struct{}{}, &out); err != nil {
+	if err := c.post(ctx, "/repair-sync/claim", c.claimBody(), &out); err != nil {
 		return RepairSyncTask{}, false, err
 	}
 	return out.Task, out.OK, nil
@@ -303,7 +354,7 @@ func (c *HTTPArbiterClient) ClaimCompaction(ctx context.Context) (CompactionTask
 		OK   bool           `json:"ok"`
 		Task CompactionTask `json:"task,omitempty"`
 	}
-	if err := c.post(ctx, "/compactions/claim", struct{}{}, &out); err != nil {
+	if err := c.post(ctx, "/compactions/claim", c.claimBody(), &out); err != nil {
 		return CompactionTask{}, false, err
 	}
 	return out.Task, out.OK, nil
