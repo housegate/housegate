@@ -29,6 +29,10 @@ func buildStorageIntegrityBackgroundTasks(cfg *config.Config, creds credentials.
 		return nil, nil, nil
 	}
 	workerID := storageIntegrityWorkerID(workers.WorkerID, selfIndexerID)
+	leaderVerifier, err := si.NewLeaderSignatureVerifier(cfg.StorageIntegrity.LeaderPublicKeyHex)
+	if err != nil {
+		return nil, nil, fmt.Errorf("storage integrity leader verifier: %w", err)
+	}
 	arbiter := si.NewHTTPArbiterClient(cfg.StorageIntegrity.ControlPlaneEndpoint()).WithWorkerID(workerID)
 	da := si.NewHTTPDAClient(cfg.StorageIntegrity.DAEndpoint)
 	pollInterval := workers.PollInterval.Duration
@@ -139,7 +143,8 @@ func buildStorageIntegrityBackgroundTasks(cfg *config.Config, creds credentials.
 				VerifyActive: cfg.StorageIntegrity.SafeTables.VerifyPhysicalActiveMatchesManifest,
 				Promoter:     promoter,
 			},
-			PollInterval: pollInterval,
+			PollInterval:   pollInterval,
+			LeaderVerifier: leaderVerifier,
 		}
 		tasks = append(tasks, backgroundTask{
 			Label: "storage-integrity-promotion",
@@ -224,10 +229,11 @@ func buildStorageIntegrityBackgroundTasks(cfg *config.Config, creds credentials.
 			DropCompactTable: true,
 		}
 		worker := si.CompactionWorker{
-			WorkerID:     workerID,
-			Arbiter:      arbiter,
-			Executor:     si.GuardingCompactor{Guard: guard, Compactor: compactor},
-			PollInterval: pollInterval,
+			WorkerID:       workerID,
+			Arbiter:        arbiter,
+			Executor:       si.GuardingCompactor{Guard: guard, Compactor: compactor},
+			PollInterval:   pollInterval,
+			LeaderVerifier: leaderVerifier,
 		}
 		tasks = append(tasks, backgroundTask{
 			Label: "storage-integrity-compaction",

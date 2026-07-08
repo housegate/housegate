@@ -158,7 +158,7 @@ func TestVerifierRejectsExecutorTamperingWithResultIdentity(t *testing.T) {
 func TestSnapshotManifestSealAndValidateAreOrderIndependent(t *testing.T) {
 	a := SafeSnapshotManifest{
 		ParentSnapshotID:  "parent",
-		SafeBlockSeq:      7,
+		SafeL3BlockSeq:      7,
 		SchemaSnapshotID:  "schema-1",
 		SchemaRoot:        DigestString("schema"),
 		ExecutorProfileID: "executor-1",
@@ -203,7 +203,7 @@ func testSnapshot(t *testing.T) SafeSnapshotManifest {
 	t.Helper()
 	snap, err := (SafeSnapshotManifest{
 		ParentSnapshotID:  "snapshot-0",
-		SafeBlockSeq:      10,
+		SafeL3BlockSeq:      10,
 		SchemaSnapshotID:  "schema-1",
 		SchemaRoot:        DigestString("schema-root"),
 		ExecutorProfileID: "executor-1",
@@ -223,7 +223,7 @@ func testSnapshot(t *testing.T) SafeSnapshotManifest {
 func testJob(snap SafeSnapshotManifest, payload []byte, sourceRoot string) ReplayJob {
 	sql := "INSERT INTO balances FORMAT CSV"
 	return ReplayJob{
-		BlockSeq:           snap.SafeBlockSeq + 1,
+		BlockSeq:           snap.SafeL3BlockSeq + 1,
 		PrevSafeSnapshotID: snap.SnapshotID,
 		PrevStateRoot:      snap.StateRoot,
 		SchemaSnapshotID:   snap.SchemaSnapshotID,
@@ -232,7 +232,7 @@ func testJob(snap SafeSnapshotManifest, payload []byte, sourceRoot string) Repla
 		Statements: []Statement{
 			{
 				StatementID:   "stmt-1",
-				StatementSeq:  snap.SafeBlockSeq + 1,
+				StatementSeq:  snap.SafeL3BlockSeq + 1,
 				SQL:           sql,
 				SQLHash:       DigestString(sql),
 				SettingsHash:  DigestString("settings"),

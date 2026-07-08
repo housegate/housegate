@@ -1,8 +1,11 @@
 package config
 
 import (
+	"crypto/ed25519"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -16,6 +19,12 @@ type StorageIntegrityConfig struct {
 	UnsafeBufferDatabases []string                         `json:"unsafe_buffer_databases" yaml:"unsafe_buffer_databases"`
 	SafeDatabase          string                           `json:"safe_database"       yaml:"safe_database"`
 	NetworkID             string                           `json:"network_id"          yaml:"network_id"`
+	// LeaderPublicKeyHex is the arbiter leader's ed25519 public key (hex). When
+	// set, promotion / compaction workers verify the leader signature on every
+	// publication task before executing and fail closed on mismatch (spec §9.1
+	// PromotionIssued, §10, gap-25). Empty disables the check (single-node / e2e
+	// flows without a leader key still run).
+	LeaderPublicKeyHex    string                           `json:"leader_public_key_hex" yaml:"leader_public_key_hex"`
 	InjectRowID           bool                             `json:"inject_row_id"       yaml:"inject_row_id"`
 	RequireRowIDInput     bool                             `json:"require_row_id_input" yaml:"require_row_id_input"`
 	RequireAuthToken      bool                             `json:"require_auth_token"  yaml:"require_auth_token"`
@@ -200,6 +209,15 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 	}
 	if c.SafeMerges.Enabled && c.SafeMerges.Mode != "" && c.SafeMerges.Mode != "controlled_compaction" {
 		errs = append(errs, errors.New("storage_integrity.safe_merges.mode must be controlled_compaction"))
+	}
+	// gap-25: a configured leader public key must be a valid 32-byte ed25519 key.
+	if key := strings.TrimPrefix(strings.TrimSpace(c.LeaderPublicKeyHex), "0x"); key != "" {
+		raw, err := hex.DecodeString(key)
+		if err != nil {
+			errs = append(errs, errors.New("storage_integrity.leader_public_key_hex is not valid hex"))
+		} else if len(raw) != ed25519.PublicKeySize {
+			errs = append(errs, fmt.Errorf("storage_integrity.leader_public_key_hex must be %d bytes", ed25519.PublicKeySize))
+		}
 	}
 	if joined := errors.Join(errs...); joined != nil {
 		return fmt.Errorf("storage_integrity: %w", joined)

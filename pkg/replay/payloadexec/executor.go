@@ -108,7 +108,7 @@ func (e *Executor) Replay(ctx context.Context, req replay.ExecutionRequest) (rep
 
 // GenesisSnapshot builds and seals an empty safe snapshot for the executor's
 // tables, suitable as the prev-state of block 1.
-func (e *Executor) GenesisSnapshot(safeBlockSeq uint64, schemaSnapshotID, executorProfileID string) (replay.SafeSnapshotManifest, error) {
+func (e *Executor) GenesisSnapshot(safeL3BlockSeq uint64, schemaSnapshotID, executorProfileID string) (replay.SafeSnapshotManifest, error) {
 	ids := e.sortedTableIDs()
 	tables := make([]replay.TableManifest, 0, len(ids))
 	schemas := make([]TableSchema, 0, len(ids))
@@ -121,7 +121,7 @@ func (e *Executor) GenesisSnapshot(safeBlockSeq uint64, schemaSnapshotID, execut
 		})
 	}
 	m := replay.SafeSnapshotManifest{
-		SafeBlockSeq:      safeBlockSeq,
+		SafeL3BlockSeq:      safeL3BlockSeq,
 		SchemaSnapshotID:  schemaSnapshotID,
 		SchemaRoot:        schemaRoot(e.NetworkID, schemas),
 		ExecutorProfileID: executorProfileID,
@@ -225,7 +225,7 @@ func (e *Executor) ApplyContext(ctx context.Context, prev replay.SafeSnapshotMan
 
 	next, err := (replay.SafeSnapshotManifest{
 		ParentSnapshotID:  prev.SnapshotID,
-		SafeBlockSeq:      job.BlockSeq,
+		SafeL3BlockSeq:      job.BlockSeq,
 		SchemaSnapshotID:  prev.SchemaSnapshotID,
 		SchemaRoot:        prev.SchemaRoot,
 		ExecutorProfileID: prev.ExecutorProfileID,

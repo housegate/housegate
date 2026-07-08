@@ -75,7 +75,7 @@ func TestClickHousePromoterUsesPromoteShadowCASSeqAndUnsafeCleanup(t *testing.T)
 		t.Fatalf("Promote: %v", err)
 	}
 
-	shadow := "`hg_promote`.`events_promotion_stmt_1_42`"
+	shadow := "`hg_promote`.`promotion_stmt_1__202607`"
 	want := []string{
 		"CREATE DATABASE IF NOT EXISTS `hg_promote`",
 		"DROP TABLE IF EXISTS " + shadow,
@@ -127,10 +127,10 @@ func TestClickHousePromoterTreatsMutationShadowSourceAsFullPostState(t *testing.
 	if strings.Contains(joined, "_part IN ('hash-scan-202607')") {
 		t.Fatalf("mutation shadow promotion used logical hash-scan part as physical part:\n%s", joined)
 	}
-	if !strings.Contains(joined, "ALTER TABLE `hg_promote`.`events_promotion_mut` ATTACH PARTITION ID '202607' FROM `hg_mutation`.`events_stmt_worker`") {
+	if !strings.Contains(joined, "ALTER TABLE `hg_promote`.`promotion_mut__202607` ATTACH PARTITION ID '202607' FROM `hg_mutation`.`events_stmt_worker`") {
 		t.Fatalf("mutation shadow promotion did not attach candidate partition from source:\n%s", joined)
 	}
-	if !strings.Contains(joined, "ALTER TABLE `hg_safe`.`events` REPLACE PARTITION ID '202607' FROM `hg_promote`.`events_promotion_mut`") {
+	if !strings.Contains(joined, "ALTER TABLE `hg_safe`.`events` REPLACE PARTITION ID '202607' FROM `hg_promote`.`promotion_mut__202607`") {
 		t.Fatalf("mutation shadow promotion did not replace safe partition:\n%s", joined)
 	}
 }
@@ -216,7 +216,7 @@ func TestClickHousePromoterRejectsBaseRootMismatch(t *testing.T) {
 
 func TestClickHousePromoterRejectsPostRootMismatchBeforeReplace(t *testing.T) {
 	conn := &fakeSQLConn{}
-	shadow := "`hg_promote`.`events_promotion_stmt_1_7`"
+	shadow := "`hg_promote`.`promotion_stmt_1__202607`"
 	promoter := ClickHousePromoter{
 		Conn: conn,
 		ActiveParts: &fakeActivePartReader{partsByTable: map[string][]replay.PartManifestEntry{
@@ -997,7 +997,7 @@ func sealedOpsTestManifest(t *testing.T, parts []replay.PartManifestEntry) repla
 		})
 	}
 	manifest, err := (replay.SafeSnapshotManifest{
-		SafeBlockSeq:      11,
+		SafeL3BlockSeq:      11,
 		SchemaSnapshotID:  "schema",
 		SchemaRoot:        "schema-root",
 		ExecutorProfileID: "exec",

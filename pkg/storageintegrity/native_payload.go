@@ -250,7 +250,7 @@ func NativePayloadGenesisSnapshot(tableID string, columns []lthash.Column) (repl
 	schemaHash := nativeSchemaHash(tableID, columns)
 	schemaRoot := replay.DigestString("native-schema-root\x00" + tableID + "\x00" + schemaHash)
 	return (replay.SafeSnapshotManifest{
-		SafeBlockSeq:      0,
+		SafeL3BlockSeq:      0,
 		SchemaSnapshotID:  replay.DigestString("native-schema-snapshot\x00" + schemaRoot),
 		SchemaRoot:        schemaRoot,
 		ExecutorProfileID: NativePayloadExecutorProfileID,
@@ -436,7 +436,7 @@ func nativeSchemaHash(tableID string, columns []lthash.Column) string {
 // over all replayed rows. It stays additive across blocks and is the value the
 // partition commitment carries.
 func nativeDataRootAfter(acc *lthash.Hash) string {
-	return "0x" + acc.Hex()
+	return lthashAccumulatorHex(acc)
 }
 
 // compositeStateRoot binds the data-side root to the schema/executor identity,

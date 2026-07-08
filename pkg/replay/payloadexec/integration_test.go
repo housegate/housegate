@@ -79,7 +79,7 @@ func newHarness(t *testing.T) *harness {
 func buildJob(snap replay.SafeSnapshotManifest, statementID, payloadRef string, payload []byte, sourceClaimRoot string) replay.ReplayJob {
 	sql := "INSERT INTO balances FORMAT CSVWithNames"
 	return replay.ReplayJob{
-		BlockSeq:           snap.SafeBlockSeq + 1,
+		BlockSeq:           snap.SafeL3BlockSeq + 1,
 		PrevSafeSnapshotID: snap.SnapshotID,
 		PrevStateRoot:      snap.StateRoot,
 		SchemaSnapshotID:   snap.SchemaSnapshotID,
@@ -87,7 +87,7 @@ func buildJob(snap replay.SafeSnapshotManifest, statementID, payloadRef string, 
 		SourceClaimRoot:    sourceClaimRoot,
 		Statements: []replay.Statement{{
 			StatementID:   statementID,
-			StatementSeq:  snap.SafeBlockSeq + 1,
+			StatementSeq:  snap.SafeL3BlockSeq + 1,
 			SQL:           sql,
 			SQLHash:       replay.DigestString(sql),
 			SettingsHash:  replay.DigestString("settings"),

@@ -100,6 +100,10 @@ type PromotionWorker struct {
 	Sequencer    SequencerWorkerClient
 	Promoter     Promoter
 	PollInterval time.Duration
+	// LeaderVerifier, when configured (Enabled), verifies the arbiter leader's
+	// signature on every promotion task before executing (spec §9.1/§10,
+	// gap-25). nil / disabled skips the check (v1 keeps it optional).
+	LeaderVerifier *LeaderSignatureVerifier
 }
 
 func (w PromotionWorker) RunOnce(ctx context.Context) (bool, error) {
@@ -119,6 +123,12 @@ func (w PromotionWorker) RunOnce(ctx context.Context) (bool, error) {
 	}
 	if !ok {
 		return false, nil
+	}
+	// Fail closed on an unauthorized publication before any physical mutation
+	// (gap-25): if a leader key is configured, the task must carry a valid
+	// leader signature over its canonical command.
+	if err := ValidatePromotionLeaderSignature(w.LeaderVerifier, task); err != nil {
+		return false, err
 	}
 	if err := validatePromotionUnsafeBufferEpoch(ctx, arbiter, task); err != nil {
 		return false, err
@@ -565,6 +575,9 @@ type CompactionWorker struct {
 	Sequencer    SequencerWorkerClient
 	Executor     CompactionExecutor
 	PollInterval time.Duration
+	// LeaderVerifier, when configured, verifies the arbiter leader's signature
+	// on every compaction task before publishing (spec §8.1/§9.1, gap-25).
+	LeaderVerifier *LeaderSignatureVerifier
 }
 
 func (w CompactionWorker) RunOnce(ctx context.Context) (bool, error) {
@@ -587,6 +600,9 @@ func (w CompactionWorker) RunOnce(ctx context.Context) (bool, error) {
 	}
 	if !ok {
 		return false, nil
+	}
+	if err := ValidateCompactionLeaderSignature(w.LeaderVerifier, task); err != nil {
+		return false, err
 	}
 	result, err := w.Executor.Compact(ctx, task)
 	if err != nil {

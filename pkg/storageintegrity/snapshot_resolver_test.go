@@ -17,7 +17,7 @@ func TestSnapshotResolverLoadsLatestWatermarkManifest(t *testing.T) {
 		RowCount:      2,
 	}})
 	reader := &fakeSnapshotReader{
-		watermark: SafeWatermark{SnapshotID: manifest.SnapshotID, SafeBlockSeq: manifest.SafeBlockSeq, StateRoot: manifest.StateRoot, ManifestRoot: manifest.ManifestRoot},
+		watermark: SafeWatermark{SnapshotID: manifest.SnapshotID, SafeL3BlockSeq: manifest.SafeL3BlockSeq, StateRoot: manifest.StateRoot, ManifestRoot: manifest.ManifestRoot},
 		manifests: map[string]replay.SafeSnapshotManifest{
 			manifest.SnapshotID: manifest,
 		},
@@ -42,7 +42,7 @@ func TestSnapshotResolverRejectsLocalActivePartMismatch(t *testing.T) {
 	}})
 	resolver := SnapshotResolver{
 		Reader: &fakeSnapshotReader{
-			watermark: SafeWatermark{SnapshotID: manifest.SnapshotID, SafeBlockSeq: manifest.SafeBlockSeq, StateRoot: manifest.StateRoot, ManifestRoot: manifest.ManifestRoot},
+			watermark: SafeWatermark{SnapshotID: manifest.SnapshotID, SafeL3BlockSeq: manifest.SafeL3BlockSeq, StateRoot: manifest.StateRoot, ManifestRoot: manifest.ManifestRoot},
 			manifests: map[string]replay.SafeSnapshotManifest{
 				manifest.SnapshotID: manifest,
 			},
@@ -79,7 +79,7 @@ func sealedResolverTestManifest(t *testing.T, parts []replay.PartManifestEntry) 
 		})
 	}
 	manifest, err := (replay.SafeSnapshotManifest{
-		SafeBlockSeq:      7,
+		SafeL3BlockSeq:      7,
 		SchemaSnapshotID:  "schema-1",
 		SchemaRoot:        "schema-root",
 		ExecutorProfileID: "exec-1",

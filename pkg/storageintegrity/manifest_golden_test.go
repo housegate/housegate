@@ -16,12 +16,12 @@ func TestGoldenManifestVectorMatchesMock(t *testing.T) {
 	const (
 		wantDataRoot     = "0x95bf867d6246aaf6033e9811792564b502d2ec70c12f2e0640d90ac3c8aca763"
 		wantStateRoot    = "0xcb7123390af5c79de0966cc45a6ad14a627802fdd125886ec41d9cdb2b3c1b2f"
-		wantManifestRoot = "0xde91d08168962245430191873b1c09ca299577749167e1d27727fcd551d40f27"
+		wantManifestRoot = "0x5b10e055fb8f300c78173a093e62c3d27a509920fea7c46b69e60f679cc91797"
 	)
 
 	m := replay.SafeSnapshotManifest{
 		ParentSnapshotID:  "parent-1",
-		SafeBlockSeq:      7,
+		SafeL3BlockSeq:      7,
 		SchemaSnapshotID:  "schema-snap-1",
 		SchemaRoot:        "schema-root-1",
 		ExecutorProfileID: "exec-profile-1",

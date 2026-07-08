@@ -44,7 +44,7 @@ func insertJob(snap replay.SafeSnapshotManifest, statementID, payloadRef string,
 	sql := "INSERT INTO balances FORMAT CSVWithNames"
 	st := replay.Statement{
 		StatementID:   statementID,
-		StatementSeq:  snap.SafeBlockSeq + 1,
+		StatementSeq:  snap.SafeL3BlockSeq + 1,
 		SQL:           sql,
 		SQLHash:       replay.DigestString(sql),
 		SettingsHash:  replay.DigestString("settings"),
@@ -54,7 +54,7 @@ func insertJob(snap replay.SafeSnapshotManifest, statementID, payloadRef string,
 		TargetTableID: testTable,
 	}
 	job := replay.ReplayJob{
-		BlockSeq:           snap.SafeBlockSeq + 1,
+		BlockSeq:           snap.SafeL3BlockSeq + 1,
 		PrevSafeSnapshotID: snap.SnapshotID,
 		PrevStateRoot:      snap.StateRoot,
 		SchemaSnapshotID:   snap.SchemaSnapshotID,
@@ -122,8 +122,8 @@ func TestExecutorComputesRootForPayloadLocalInsert(t *testing.T) {
 	if next.ParentSnapshotID != snap.SnapshotID {
 		t.Fatalf("parent snapshot = %s, want %s", next.ParentSnapshotID, snap.SnapshotID)
 	}
-	if next.SafeBlockSeq != job.BlockSeq {
-		t.Fatalf("safe block seq = %d, want %d", next.SafeBlockSeq, job.BlockSeq)
+	if next.SafeL3BlockSeq != job.BlockSeq {
+		t.Fatalf("safe block seq = %d, want %d", next.SafeL3BlockSeq, job.BlockSeq)
 	}
 	if len(res.AffectedParts) != 1 {
 		t.Fatalf("affected parts = %d, want 1", len(res.AffectedParts))
@@ -236,14 +236,14 @@ func TestExecutorRejectsStatementWithoutPayload(t *testing.T) {
 	sql := "ALTER TABLE balances DELETE WHERE balance = 0"
 	st := replay.Statement{
 		StatementID:   "stmt-1",
-		StatementSeq:  snap.SafeBlockSeq + 1,
+		StatementSeq:  snap.SafeL3BlockSeq + 1,
 		SQL:           sql,
 		SQLHash:       replay.DigestString(sql),
 		SettingsHash:  replay.DigestString("settings"),
 		TargetTableID: testTable,
 	}
 	job := replay.ReplayJob{
-		BlockSeq:           snap.SafeBlockSeq + 1,
+		BlockSeq:           snap.SafeL3BlockSeq + 1,
 		PrevSafeSnapshotID: snap.SnapshotID,
 		PrevStateRoot:      snap.StateRoot,
 		SchemaSnapshotID:   snap.SchemaSnapshotID,
@@ -310,7 +310,7 @@ func blockJob(snap replay.SafeSnapshotManifest, prepared ...replay.PreparedState
 		stmts[i] = p.Statement
 	}
 	return replay.ReplayJob{
-		BlockSeq:           snap.SafeBlockSeq + 1,
+		BlockSeq:           snap.SafeL3BlockSeq + 1,
 		PrevSafeSnapshotID: snap.SnapshotID,
 		PrevStateRoot:      snap.StateRoot,
 		SchemaSnapshotID:   snap.SchemaSnapshotID,
@@ -416,7 +416,7 @@ func TestExecutorHeaderOnlyPayloadIsNoOp(t *testing.T) {
 	if res.ComputedStateRoot != snap.StateRoot {
 		t.Fatalf("no-op insert changed state root: %s != %s", res.ComputedStateRoot, snap.StateRoot)
 	}
-	if next.SafeBlockSeq != snap.SafeBlockSeq+1 {
+	if next.SafeL3BlockSeq != snap.SafeL3BlockSeq+1 {
 		t.Fatal("block did not advance on a no-op insert")
 	}
 	if err := next.Validate(); err != nil {
