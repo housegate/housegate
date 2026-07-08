@@ -34,7 +34,12 @@ type Config struct {
 	RequirePartitionPredicate bool
 	PartitionColumns          []string
 	ProtectedColumns          []string
-	RejectLightweightDelete   bool
+	// KeyColumnProvider, when set, auto-derives partition/order/primary key
+	// columns from the table schema so UPDATE cannot modify them even if they are
+	// not listed in ProtectedColumns (spec §7.1, gap-34). Nil falls back to the
+	// manual ProtectedColumns list only (backward compatible).
+	KeyColumnProvider       core.KeyColumnProvider
+	RejectLightweightDelete bool
 	MaxTouchedPartitions      int
 	MaxTouchedParts           int
 	MaxTouchedBytes           int64
@@ -58,6 +63,7 @@ type Plugin struct {
 	requirePartitionPredicate bool
 	partitionColumns          []string
 	protectedColumns          []string
+	keyColumnProvider         core.KeyColumnProvider
 	rejectLightweightDelete   bool
 	maxTouchedPartitions      int
 	maxTouchedParts           int
@@ -148,6 +154,7 @@ func New(cfg Config) *Plugin {
 		requirePartitionPredicate: cfg.RequirePartitionPredicate,
 		partitionColumns:          normalizeColumns(cfg.PartitionColumns),
 		protectedColumns:          normalizeColumns(cfg.ProtectedColumns),
+		keyColumnProvider:         cfg.KeyColumnProvider,
 		rejectLightweightDelete:   cfg.RejectLightweightDelete,
 		maxTouchedPartitions:      cfg.MaxTouchedPartitions,
 		maxTouchedParts:           cfg.MaxTouchedParts,
@@ -309,7 +316,7 @@ func (p *Plugin) handleMutation(ctx context.Context, qctx *plugin.QueryContext, 
 	if err != nil {
 		return err
 	}
-	target, err := p.resolveMutationTarget(qctx, originalSQL)
+	target, err := p.resolveMutationTarget(ctx, qctx, originalSQL)
 	if err != nil {
 		return err
 	}
@@ -736,7 +743,7 @@ func rewriteInsertSQLTarget(sql, unsafeTable string) (string, error) {
 	return sql[:loc[2]] + unsafeTable + sql[loc[3]:], nil
 }
 
-func (p *Plugin) resolveMutationTarget(qctx *plugin.QueryContext, sql string) (mutationTarget, error) {
+func (p *Plugin) resolveMutationTarget(ctx context.Context, qctx *plugin.QueryContext, sql string) (mutationTarget, error) {
 	match := alterMutationPattern.FindStringSubmatch(sql)
 	var targetPath, op, beforeWhere, whereClause string
 	lightweightDelete := false
@@ -783,7 +790,7 @@ func (p *Plugin) resolveMutationTarget(qctx *plugin.QueryContext, sql string) (m
 	if whereClause == "" {
 		return mutationTarget{}, fmt.Errorf("bounded mutation requires WHERE")
 	}
-	if err := p.validateMutationAdmission(op, beforeWhere, whereClause, lightweightDelete); err != nil {
+	if err := p.validateMutationAdmission(ctx, tableID, op, beforeWhere, whereClause, lightweightDelete); err != nil {
 		return mutationTarget{}, err
 	}
 	partitionIDs, err := p.extractMutationPartitionIDs(whereClause)
@@ -908,7 +915,37 @@ func stripSQLValuesAndComments(sql string) string {
 	return string(out)
 }
 
-func (p *Plugin) validateMutationAdmission(op, assignments, whereClause string, lightweightDelete bool) error {
+// protectedColumnsFor returns the set of columns an UPDATE may not modify: the
+// manually configured ProtectedColumns unioned with the partition/order/primary
+// key columns auto-derived from the table schema when a KeyColumnProvider is
+// configured (spec §7.1, gap-34). A provider error fails closed — a mutation is
+// not admitted when key-column protection cannot be established.
+func (p *Plugin) protectedColumnsFor(ctx context.Context, tableID string) ([]string, error) {
+	if p.keyColumnProvider == nil {
+		return p.protectedColumns, nil
+	}
+	keyCols, err := p.keyColumnProvider.KeyColumns(ctx, tableID)
+	if err != nil {
+		return nil, fmt.Errorf("resolve key columns for %q: %w", tableID, err)
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(p.protectedColumns)+len(keyCols))
+	for _, col := range p.protectedColumns {
+		if _, ok := seen[col]; !ok {
+			seen[col] = struct{}{}
+			out = append(out, col)
+		}
+	}
+	for _, col := range normalizeColumns(keyCols) {
+		if _, ok := seen[col]; !ok {
+			seen[col] = struct{}{}
+			out = append(out, col)
+		}
+	}
+	return out, nil
+}
+
+func (p *Plugin) validateMutationAdmission(ctx context.Context, tableID, op, assignments, whereClause string, lightweightDelete bool) error {
 	if lightweightDelete && p.rejectLightweightDelete {
 		return fmt.Errorf("storage_integrity rejects lightweight DELETE")
 	}
@@ -917,7 +954,11 @@ func (p *Plugin) validateMutationAdmission(op, assignments, whereClause string, 
 		return fmt.Errorf("UPDATE mutation cannot modify protocol columns")
 	}
 	if strings.EqualFold(op, "UPDATE") {
-		for _, col := range p.protectedColumns {
+		protected, err := p.protectedColumnsFor(ctx, tableID)
+		if err != nil {
+			return err
+		}
+		for _, col := range protected {
 			if assignmentModifiesColumn(assignments, col) {
 				return fmt.Errorf("UPDATE mutation cannot modify protected column %q", col)
 			}

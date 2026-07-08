@@ -3,6 +3,7 @@ package storageintegrity
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net"
 	"strings"
 	"testing"
@@ -879,6 +880,74 @@ func TestPluginRejectsProtocolColumnDDL(t *testing.T) {
 				t.Fatalf("OnQuery err = %v, want protocol column DDL rejection", err)
 			}
 		})
+	}
+}
+
+// fakeKeyColumnProvider returns a fixed key-column set for gap-34 tests.
+type fakeKeyColumnProvider struct {
+	cols map[string][]string
+	err  error
+}
+
+func (f fakeKeyColumnProvider) KeyColumns(_ context.Context, tableID string) ([]string, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.cols[tableID], nil
+}
+
+func TestPluginAutoDerivesKeyColumnProtection(t *testing.T) {
+	// "id" is the sorting key (auto-derived), not in the manual ProtectedColumns.
+	provider := fakeKeyColumnProvider{cols: map[string][]string{"events": {"id"}}}
+
+	// An UPDATE that modifies the auto-derived key column "id" is rejected even
+	// though it was never listed in ProtectedColumns.
+	seq := &fakeSequencer{}
+	p := New(Config{
+		SafeDatabase:      "hg_safe",
+		Sequencer:         seq,
+		KeyColumnProvider: provider,
+	})
+	sess := &fakeSession{id: 210, state: chsession.NewSessionState()}
+	sql := "ALTER TABLE events UPDATE id = 2 WHERE day = '2026-07-03'"
+	qctx := &plugin.QueryContext{Session: sess, OriginalSQL: sql, Query: &chproto.Query{Body: sql}}
+	err := p.OnQuery(context.Background(), qctx)
+	if err == nil || !strings.Contains(err.Error(), "protected column") {
+		t.Fatalf("OnQuery err = %v, want auto-derived key-column rejection", err)
+	}
+	if seq.mut.StatementID != "" {
+		t.Fatalf("unexpected mutation record after rejection: %+v", seq.mut)
+	}
+
+	// An UPDATE on a non-key column is still admitted.
+	seq2 := &fakeSequencer{}
+	p2 := New(Config{SafeDatabase: "hg_safe", Sequencer: seq2, KeyColumnProvider: provider})
+	sess2 := &fakeSession{id: 211, state: chsession.NewSessionState()}
+	okSQL := "ALTER TABLE events UPDATE label = 'b' WHERE day = '2026-07-03'"
+	qctx2 := &plugin.QueryContext{Session: sess2, OriginalSQL: okSQL, Query: &chproto.Query{Body: okSQL}}
+	if err := p2.OnQuery(context.Background(), qctx2); err != nil {
+		t.Fatalf("OnQuery err = %v, want non-key-column UPDATE admitted", err)
+	}
+	if seq2.mut.StatementID == "" {
+		t.Fatal("non-key-column UPDATE was not admitted")
+	}
+}
+
+func TestPluginKeyColumnProviderErrorFailsClosed(t *testing.T) {
+	seq := &fakeSequencer{}
+	p := New(Config{
+		SafeDatabase:      "hg_safe",
+		Sequencer:         seq,
+		KeyColumnProvider: fakeKeyColumnProvider{err: errors.New("schema unavailable")},
+	})
+	sess := &fakeSession{id: 212, state: chsession.NewSessionState()}
+	sql := "ALTER TABLE events UPDATE label = 'b' WHERE day = '2026-07-03'"
+	qctx := &plugin.QueryContext{Session: sess, OriginalSQL: sql, Query: &chproto.Query{Body: sql}}
+	if err := p.OnQuery(context.Background(), qctx); err == nil {
+		t.Fatal("OnQuery succeeded despite key-column provider error, want fail-closed")
+	}
+	if seq.mut.StatementID != "" {
+		t.Fatalf("unexpected mutation record after provider error: %+v", seq.mut)
 	}
 }
 
