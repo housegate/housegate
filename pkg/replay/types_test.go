@@ -4,7 +4,7 @@ import "testing"
 
 func manifestFixture() SafeSnapshotManifest {
 	return SafeSnapshotManifest{
-		SafeBlockSeq:      3,
+		SafeL3BlockSeq:    3,
 		SchemaSnapshotID:  "schema-genesis",
 		SchemaRoot:        "0xschr",
 		ExecutorProfileID: "housegate-replay-mvp-v0",

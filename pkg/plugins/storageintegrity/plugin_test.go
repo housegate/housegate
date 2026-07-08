@@ -707,7 +707,7 @@ func TestPluginRejectsMutationTouchedPartitionAndManifestCostLimits(t *testing.T
 		{TableID: "tenant_a.events", PartitionID: "202607", PartName: "p1", PartRowLtHash: "root-1", RowCount: 10, Bytes: 600},
 		{TableID: "tenant_a.events", PartitionID: "202607", PartName: "p2", PartRowLtHash: "root-2", RowCount: 5, Bytes: 500},
 	})
-	seq.watermark = core.SafeWatermark{SnapshotID: manifest.SnapshotID, SafeBlockSeq: manifest.SafeBlockSeq, StateRoot: manifest.StateRoot, ManifestRoot: manifest.ManifestRoot}
+	seq.watermark = core.SafeWatermark{SnapshotID: manifest.SnapshotID, SafeL3BlockSeq: manifest.SafeL3BlockSeq, StateRoot: manifest.StateRoot, ManifestRoot: manifest.ManifestRoot}
 	seq.manifests = map[string]replay.SafeSnapshotManifest{manifest.SnapshotID: manifest}
 	p = New(Config{
 		UnsafeDatabase:   "hg_unsafe",
@@ -958,7 +958,7 @@ func TestPluginRejectsSafeReadWhenNodeIsNotInActiveReadSet(t *testing.T) {
 		Active:       false,
 		Reason:       "node quarantined",
 		SnapshotID:   "snap-2",
-		SafeBlockSeq: 10,
+		SafeL3BlockSeq: 10,
 	}}
 	p := New(Config{
 		SafeDatabase: "hg_safe",
@@ -1043,7 +1043,7 @@ func sealedPluginTestManifest(t *testing.T, parts []replay.PartManifestEntry) re
 		})
 	}
 	manifest, err := (replay.SafeSnapshotManifest{
-		SafeBlockSeq:      11,
+		SafeL3BlockSeq:      11,
 		SchemaSnapshotID:  "schema",
 		SchemaRoot:        "schema-root",
 		ExecutorProfileID: "exec",

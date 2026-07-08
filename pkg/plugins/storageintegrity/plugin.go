@@ -255,8 +255,8 @@ func (p *Plugin) gateSafeRead(ctx context.Context, qctx *plugin.QueryContext) er
 		if reason == "" {
 			reason = "node is not in active read set"
 		}
-		return fmt.Errorf("storage_integrity safe read gated: node_id=%s snapshot_id=%s safe_block_seq=%d reason=%s",
-			req.NodeID, decision.SnapshotID, decision.SafeBlockSeq, reason)
+		return fmt.Errorf("storage_integrity safe read gated: node_id=%s snapshot_id=%s safe_l3_block_seq=%d reason=%s",
+			req.NodeID, decision.SnapshotID, decision.SafeL3BlockSeq, reason)
 	}
 	return nil
 }

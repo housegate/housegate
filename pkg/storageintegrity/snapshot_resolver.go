@@ -48,8 +48,8 @@ func (r SnapshotResolver) Latest(ctx context.Context) (ResolvedSnapshot, error) 
 	if watermark.ManifestRoot != "" && resolved.Manifest.ManifestRoot != watermark.ManifestRoot {
 		return ResolvedSnapshot{}, fmt.Errorf("safe watermark manifest_root mismatch: manifest %s watermark %s", resolved.Manifest.ManifestRoot, watermark.ManifestRoot)
 	}
-	if watermark.SafeBlockSeq != 0 && resolved.Manifest.SafeBlockSeq != watermark.SafeBlockSeq {
-		return ResolvedSnapshot{}, fmt.Errorf("safe watermark block mismatch: manifest %d watermark %d", resolved.Manifest.SafeBlockSeq, watermark.SafeBlockSeq)
+	if watermark.SafeL3BlockSeq != 0 && resolved.Manifest.SafeL3BlockSeq != watermark.SafeL3BlockSeq {
+		return ResolvedSnapshot{}, fmt.Errorf("safe watermark block mismatch: manifest %d watermark %d", resolved.Manifest.SafeL3BlockSeq, watermark.SafeL3BlockSeq)
 	}
 	return resolved, nil
 }

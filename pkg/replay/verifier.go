@@ -74,8 +74,8 @@ func (v *Verifier) Verify(ctx context.Context, job ReplayJob) (ReplayAttestation
 	if snap.ExecutorProfileID != job.ExecutorProfileID {
 		return ReplayAttestation{}, fmt.Errorf("executor_profile_id mismatch: job %s snapshot %s", job.ExecutorProfileID, snap.ExecutorProfileID)
 	}
-	if job.BlockSeq <= snap.SafeBlockSeq {
-		return ReplayAttestation{}, fmt.Errorf("block_seq %d must be greater than safe snapshot block %d", job.BlockSeq, snap.SafeBlockSeq)
+	if job.BlockSeq <= snap.SafeL3BlockSeq {
+		return ReplayAttestation{}, fmt.Errorf("block_seq %d must be greater than safe snapshot block %d", job.BlockSeq, snap.SafeL3BlockSeq)
 	}
 
 	prepared, err := v.prepareStatements(ctx, job.Statements)

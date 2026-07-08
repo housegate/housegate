@@ -11,7 +11,7 @@ import (
 type SafeSnapshotManifest struct {
 	SnapshotID        string          `json:"snapshot_id"`
 	ParentSnapshotID  string          `json:"parent_snapshot_id,omitempty"`
-	SafeBlockSeq      uint64          `json:"safe_block_seq"`
+	SafeL3BlockSeq      uint64          `json:"safe_l3_block_seq"`
 	StateRoot         string          `json:"state_root"`
 	SchemaSnapshotID  string          `json:"schema_snapshot_id"`
 	SchemaRoot        string          `json:"schema_root"`

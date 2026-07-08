@@ -58,7 +58,7 @@ func chReplaySchema(tableID string) payloadexec.TableSchema {
 func chReplayJob(snap replay.SafeSnapshotManifest, tableID, statementID, payloadRef string, payload []byte, sourceClaim string) replay.ReplayJob {
 	sql := "INSERT INTO " + tableID + " FORMAT CSVWithNames"
 	return replay.ReplayJob{
-		BlockSeq:           snap.SafeBlockSeq + 1,
+		BlockSeq:           snap.SafeL3BlockSeq + 1,
 		PrevSafeSnapshotID: snap.SnapshotID,
 		PrevStateRoot:      snap.StateRoot,
 		SchemaSnapshotID:   snap.SchemaSnapshotID,
@@ -66,7 +66,7 @@ func chReplayJob(snap replay.SafeSnapshotManifest, tableID, statementID, payload
 		SourceClaimRoot:    sourceClaim,
 		Statements: []replay.Statement{{
 			StatementID:   statementID,
-			StatementSeq:  snap.SafeBlockSeq + 1,
+			StatementSeq:  snap.SafeL3BlockSeq + 1,
 			SQL:           sql,
 			SQLHash:       replay.DigestString(sql),
 			SettingsHash:  replay.DigestString("settings"),

@@ -2,6 +2,7 @@ package storageintegrity
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"regexp"
 	"sort"
@@ -132,7 +133,9 @@ func (h ClickHouseTableHasher) HashTable(ctx context.Context, table string, part
 	parts := make([]ByteSidePart, 0, len(ids))
 	for _, id := range ids {
 		ph := byPartition[id]
-		partHash := ph.acc.Hex()
+		// Raw additive accumulator (gap-14), not the BLAKE3 digest: part roots
+		// must be summable for the compaction/mutation ledger equation.
+		partHash := lthashAccumulatorHex(ph.acc)
 		parts = append(parts, ByteSidePart{
 			PartitionID:   id,
 			PartName:      "hash-scan-" + unsafeIdentChars.ReplaceAllString(id, "_"),
@@ -140,6 +143,8 @@ func (h ClickHouseTableHasher) HashTable(ctx context.Context, table string, part
 			PartRowLtHash: partHash,
 		})
 	}
+	// StateRoot stays a digest: it is a whole-table commitment that is never
+	// summed with another root, so a compact 32-byte digest is correct here.
 	return TableHash{StateRoot: total.Hex(), Parts: parts}, nil
 }
 
@@ -229,7 +234,8 @@ func (r ClickHouseActivePartReader) ReadActiveParts(ctx context.Context, table s
 			TableID:       tableID,
 			PartitionID:   ph.partitionID,
 			PartName:      ph.partName,
-			PartRowLtHash: ph.acc.Hex(),
+			// Raw additive accumulator (gap-14) so part roots are summable.
+			PartRowLtHash: lthashAccumulatorHex(ph.acc),
 			RowCount:      ph.rows,
 		})
 	}
@@ -386,17 +392,22 @@ func (p ClickHousePromoter) promoteViaShadow(ctx context.Context, task Promotion
 		return PromotionResult{}, fmt.Errorf("promotion requires partition_ids")
 	}
 	promoteDB := firstNonEmptyString(task.PromoteDatabase, p.PromoteDatabase)
-	shadow := qualifiedTable(promoteDB, promoteShadowTableName(task.SafeTable, task.PromotionID, task.PromotionSeq))
 	if err := p.Conn.Exec(ctx, "CREATE DATABASE IF NOT EXISTS "+quoteIdent(promoteDB)); err != nil {
 		return PromotionResult{}, fmt.Errorf("create promote database: %w", err)
 	}
-	if err := p.Conn.Exec(ctx, "DROP TABLE IF EXISTS "+shadow); err != nil {
-		return PromotionResult{}, fmt.Errorf("drop stale promote table: %w", err)
-	}
-	if err := p.Conn.Exec(ctx, "CREATE TABLE "+shadow+" AS "+task.SafeTable); err != nil {
-		return PromotionResult{}, fmt.Errorf("create promote table: %w", err)
-	}
+	// gap-26a: one copy-on-write shadow table per partition,
+	// `hg_promote.<promotion_id>__<partition_id>`, so same-table/different-
+	// partition promotions never contend on a shared shadow table.
+	shadowByPartition := make(map[string]string, len(task.PartitionIDs))
 	for _, partitionID := range task.PartitionIDs {
+		shadow := qualifiedTable(promoteDB, promoteShadowTableName(task.PromotionID, partitionID))
+		shadowByPartition[partitionID] = shadow
+		if err := p.Conn.Exec(ctx, "DROP TABLE IF EXISTS "+shadow); err != nil {
+			return PromotionResult{}, fmt.Errorf("drop stale promote table: %w", err)
+		}
+		if err := p.Conn.Exec(ctx, "CREATE TABLE "+shadow+" AS "+task.SafeTable); err != nil {
+			return PromotionResult{}, fmt.Errorf("create promote table: %w", err)
+		}
 		if shouldAttachBasePartition(task) {
 			if err := p.Conn.Exec(ctx, fmt.Sprintf("ALTER TABLE %s ATTACH PARTITION ID %s FROM %s", shadow, sqlStringLiteral(partitionID), task.SafeTable)); err != nil {
 				return PromotionResult{}, fmt.Errorf("attach base partition %s: %w", partitionID, err)
@@ -410,11 +421,12 @@ func (p ClickHousePromoter) promoteViaShadow(ctx context.Context, task Promotion
 		if p.ActiveParts == nil {
 			return PromotionResult{}, fmt.Errorf("active part reader is required for post-root CAS")
 		}
-		shadowParts, err := p.ActiveParts.ReadActiveParts(ctx, shadow, task.PartitionIDs)
-		if err != nil {
-			return PromotionResult{}, fmt.Errorf("read promote active parts: %w", err)
-		}
 		for _, partitionID := range task.PartitionIDs {
+			shadow := shadowByPartition[partitionID]
+			shadowParts, err := p.ActiveParts.ReadActiveParts(ctx, shadow, []string{partitionID})
+			if err != nil {
+				return PromotionResult{}, fmt.Errorf("read promote active parts: %w", err)
+			}
 			got := partitionRootFromActiveParts(shadowParts, partitionID)
 			want, ok := expectedPostRootForPartition(task, partitionID)
 			if !ok {
@@ -426,6 +438,7 @@ func (p ClickHousePromoter) promoteViaShadow(ctx context.Context, task Promotion
 		}
 	}
 	for _, partitionID := range task.PartitionIDs {
+		shadow := shadowByPartition[partitionID]
 		if err := p.Conn.Exec(ctx, fmt.Sprintf("ALTER TABLE %s REPLACE PARTITION ID %s FROM %s", task.SafeTable, sqlStringLiteral(partitionID), shadow)); err != nil {
 			return PromotionResult{}, fmt.Errorf("replace safe partition %s: %w", partitionID, err)
 		}
@@ -450,13 +463,33 @@ func (p ClickHousePromoter) promoteViaShadow(ctx context.Context, task Promotion
 		result.CleanupUnsafeParts = append([]ByteSidePart(nil), cleanupParts...)
 	}
 	if task.PromoteDatabase != "" || p.DropPromoteTable {
-		if err := p.Conn.Exec(ctx, "DROP TABLE IF EXISTS "+shadow); err != nil {
-			return PromotionResult{}, fmt.Errorf("drop promote table: %w", err)
+		for _, partitionID := range task.PartitionIDs {
+			if err := p.Conn.Exec(ctx, "DROP TABLE IF EXISTS "+shadowByPartition[partitionID]); err != nil {
+				return PromotionResult{}, fmt.Errorf("drop promote table: %w", err)
+			}
 		}
 	}
 	return result, nil
 }
 
+// attachCandidateParts installs the verified candidate parts into the
+// per-partition shadow table.
+//
+// gap-26b target semantics (spec §6.3): each candidate part should be
+// hard-linked from the source table's data dir into this shadow table's
+// detached/ dir and made active with `ALTER TABLE shadow ATTACH PART
+// '<part_name>'` — a metadata/hardlink operation that preserves the part's
+// physical bytes (and thus its part_row_lthash) exactly. That path requires
+// real, stable physical part names from the part registry; the current
+// INSERT-flow candidate parts are byte-side-scan-derived synthetic names
+// (`hash-scan-<partition>`), not physical parts, so a literal ATTACH PART would
+// fail against real ClickHouse. Until the part registry threads real physical
+// part names through, we keep the functionally-equivalent copy-on-write via
+// `INSERT ... SELECT ... WHERE _part IN (...)`, which materializes exactly the
+// verified parts into the shadow table (the post-root CAS then still gates the
+// result). This is the same dependency documented as deferred for gap-28. When
+// the task carries no explicit candidate part names we attach the whole
+// partition.
 func (p ClickHousePromoter) attachCandidateParts(ctx context.Context, shadow, sourceTable, partitionID string, candidates []ByteSidePart) error {
 	partNames := candidatePartNames(candidates, partitionID)
 	if len(partNames) == 0 {
@@ -634,14 +667,77 @@ func activePartEntriesToByteSideParts(entries []replay.PartManifestEntry) []Byte
 	return out
 }
 
-func promoteShadowTableName(safeTable, promotionID string, promotionSeq uint64) string {
-	base := lastIdentifier(safeTable)
+// promoteShadowTableName builds the per-partition promote shadow table name in
+// the spec §6.3 form `<promotion_id>__<partition_id>` (gap-26a). Each promoted
+// partition gets its own copy-on-write commit buffer, so concurrent
+// same-table/different-partition promotions never share a shadow table. The
+// promotion_id already encodes the promotion_seq on the arbiter side, so the
+// name needs no separate seq suffix; identifier-unsafe characters are folded to
+// '_'.
+func promoteShadowTableName(promotionID, partitionID string) string {
 	id := unsafeIdentChars.ReplaceAllString(promotionID, "_")
-	name := base + "_" + id
-	if promotionSeq != 0 {
-		name = fmt.Sprintf("%s_%d", name, promotionSeq)
+	pid := unsafeIdentChars.ReplaceAllString(partitionID, "_")
+	return unsafeIdentChars.ReplaceAllString(id+"__"+pid, "_")
+}
+
+// lthashAccumulatorHex serializes an lthash accumulator as the raw 2048-byte
+// little-endian form ("0x"+hex(Bytes())). Unlike (*lthash.Hash).Hex() (which is
+// the 32-byte BLAKE3 digest, a display value that is NOT additive), this raw
+// form is the arithmetic object: two accumulators serialized this way can be
+// re-decoded and summed lane-wise. Every part_row_lthash / partition_root in the
+// storage-integrity lane uses this form so the ledger equation
+// sum(input parts) == sum(output parts) holds across compaction/mutation
+// (spec §8.1, §7.3, gap-14). Kept byte-compatible with pkg/replay/payloadexec's
+// lthashHex.
+func lthashAccumulatorHex(acc *lthash.Hash) string {
+	return "0x" + hex.EncodeToString(acc.Bytes())
+}
+
+// lthashAccumulatorFromHex is the inverse of lthashAccumulatorHex.
+func lthashAccumulatorFromHex(s string) (*lthash.Hash, error) {
+	raw, err := hex.DecodeString(strings.TrimPrefix(s, "0x"))
+	if err != nil {
+		return nil, fmt.Errorf("decode lthash accumulator hex: %w", err)
 	}
-	return unsafeIdentChars.ReplaceAllString(name, "_")
+	return lthash.FromBytes(raw)
+}
+
+// sumPartRowLtHashes returns the additive lattice sum of the given parts'
+// raw accumulators as an lthashAccumulatorHex string. It is the additive
+// partition root: the sum is invariant under how rows are grouped into parts,
+// so a controlled compaction that re-packs the same rows into differently named
+// parts produces an identical root (spec §8.1 ledger equation).
+func sumPartRowLtHashes(hashes []string) (string, error) {
+	acc := lthash.New()
+	for _, h := range hashes {
+		if h == "" {
+			continue
+		}
+		part, err := lthashAccumulatorFromHex(h)
+		if err != nil {
+			return "", err
+		}
+		acc.AddHash(part)
+	}
+	return lthashAccumulatorHex(acc), nil
+}
+
+// subLtHashAccumulators returns the additive lattice difference post − base as
+// an lthashAccumulatorHex string (gap-31): the partition_delta is the exact
+// set of rows that changed, so base + delta == post holds lane-wise. Returns
+// ("", false) if either operand is not a raw accumulator hex (e.g. a digest
+// fallback), so the caller can keep the legacy digest delta.
+func subLtHashAccumulators(post, base string) (string, bool) {
+	postAcc, err := lthashAccumulatorFromHex(post)
+	if err != nil {
+		return "", false
+	}
+	baseAcc, err := lthashAccumulatorFromHex(base)
+	if err != nil {
+		return "", false
+	}
+	postAcc.SubHash(baseAcc)
+	return lthashAccumulatorHex(postAcc), true
 }
 
 func partitionRootFromActiveParts(parts []replay.PartManifestEntry, partitionID string) string {
@@ -654,7 +750,19 @@ func partitionRootFromActiveParts(parts []replay.PartManifestEntry, partitionID 
 	if len(filtered) == 1 {
 		return filtered[0].PartRowLtHash
 	}
-	return digestManifestParts(filtered)
+	hashes := make([]string, 0, len(filtered))
+	for _, p := range filtered {
+		hashes = append(hashes, p.PartRowLtHash)
+	}
+	// Additive lattice sum of the raw part accumulators (gap-14). A malformed
+	// part hash (not raw accumulator hex) falls back to the legacy digest so the
+	// CAS still fails closed with a comparable-but-distinct value rather than
+	// panicking.
+	root, err := sumPartRowLtHashes(hashes)
+	if err != nil {
+		return digestManifestParts(filtered)
+	}
+	return root
 }
 
 type ClickHouseMutationExecutor struct {
@@ -1067,6 +1175,28 @@ func (c ClickHouseCompactor) Compact(ctx context.Context, task CompactionTask) (
 			}
 		}
 	}
+	// gap-14: controlled-compaction ledger equation. With additive partition
+	// roots, re-packing the same rows into different output parts must leave the
+	// per-partition Σ(part_row_lthash) unchanged. When the task pins the input
+	// safe parts, verify sum(input parts) == sum(output parts) per partition so a
+	// compaction that silently added/dropped/mutated rows fails closed here
+	// (spec §8.1), independent of any part-name-bearing digest.
+	if len(task.InputParts) > 0 {
+		if c.ActiveParts == nil {
+			return CompactionResult{}, fmt.Errorf("active part reader is required to verify the compaction ledger equation")
+		}
+		outputParts, err := c.ActiveParts.ReadActiveParts(ctx, compactTable, task.PartitionIDs)
+		if err != nil {
+			return CompactionResult{}, fmt.Errorf("read compact active parts for ledger equation: %w", err)
+		}
+		for _, partitionID := range task.PartitionIDs {
+			inputSum := partitionRootFromActiveParts(task.InputParts, partitionID)
+			outputSum := partitionRootFromActiveParts(outputParts, partitionID)
+			if inputSum != outputSum {
+				return CompactionResult{}, fmt.Errorf("compaction ledger equation violated for partition %s: sum(input parts)=%s != sum(output parts)=%s", partitionID, inputSum, outputSum)
+			}
+		}
+	}
 	for _, partitionID := range task.PartitionIDs {
 		if err := c.Conn.Exec(ctx, fmt.Sprintf("ALTER TABLE %s REPLACE PARTITION ID %s FROM %s", task.SafeTable, sqlStringLiteral(partitionID), compactTable)); err != nil {
 			return CompactionResult{}, fmt.Errorf("replace compacted partition %s: %w", partitionID, err)
@@ -1242,6 +1372,13 @@ func buildMutationEvidence(task MutationTask, before, post TableHash) mutationEv
 		}
 		switch task.MutationType {
 		case MutationTypeUpdate:
+			// APPROXIMATION (gap-31): ClickHouse ALTER UPDATE does not expose the
+			// exact number of rows the predicate matched; system.mutations reports
+			// completion, not a matched-row count. We record rows_after (the
+			// partition's post-state row count) as an upper-bound proxy for
+			// rows_updated. The authoritative change evidence is DeltaRoot (the
+			// additive post − base commitment), which is exact; rows_updated is
+			// advisory only and must not be used as a correctness gate.
 			delta.RowsUpdated = rowsAfter
 		case MutationTypeDelete:
 			if task.InternalDropPartition {
@@ -1250,7 +1387,21 @@ func buildMutationEvidence(task MutationTask, before, post TableHash) mutationEv
 				delta.RowsDeleted = rowsBefore - rowsAfter
 			}
 		}
-		delta.DeltaRoot = digestMutationDelta(delta)
+		// gap-31: the partition delta root is the additive LtHash difference
+		// post − base, so base + delta == post is verifiable by lane-wise sum.
+		// An empty base means no prior rows in the partition, so delta == post
+		// (post − 0). Falls back to the legacy digest when a root is not a raw
+		// accumulator (e.g. a single-partition post that used a state-root
+		// digest), keeping the field populated and comparable.
+		base := baseRoot
+		if base == "" {
+			base = lthashAccumulatorHex(lthash.New())
+		}
+		if deltaRoot, ok := subLtHashAccumulators(postRoot, base); ok {
+			delta.DeltaRoot = deltaRoot
+		} else {
+			delta.DeltaRoot = digestMutationDelta(delta)
+		}
 		out.deltas = append(out.deltas, delta)
 		out.rowsBefore += rowsBefore
 		out.rowsAfter += rowsAfter
@@ -1324,7 +1475,17 @@ func byteSidePartitionRoot(parts []ByteSidePart, partitionID string) string {
 	if len(filtered) == 1 {
 		return filtered[0].PartRowLtHash
 	}
-	return digestParts("byte-side-partition-root", sortedByteSideParts(filtered))
+	hashes := make([]string, 0, len(filtered))
+	for _, p := range filtered {
+		hashes = append(hashes, p.PartRowLtHash)
+	}
+	// Additive lattice sum (gap-14): the byte-side partition root must equal the
+	// active-part partition root for the same rows, so both use Σ accumulators.
+	root, err := sumPartRowLtHashes(hashes)
+	if err != nil {
+		return digestParts("byte-side-partition-root", sortedByteSideParts(filtered))
+	}
+	return root
 }
 
 func sortedByteSideParts(parts []ByteSidePart) []ByteSidePart {

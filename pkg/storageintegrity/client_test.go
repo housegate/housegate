@@ -191,7 +191,7 @@ func TestHTTPClientsSupportWorkerEndpoints(t *testing.T) {
 				OK: true,
 				Watermark: SafeWatermark{
 					SnapshotID:   "snap-2",
-					SafeBlockSeq: 10,
+					SafeL3BlockSeq: 10,
 					StateRoot:    "state-root-2",
 					ManifestRoot: "manifest-root-2",
 				},
@@ -200,7 +200,7 @@ func TestHTTPClientsSupportWorkerEndpoints(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(struct {
 				OK        bool          `json:"ok"`
 				Watermark SafeWatermark `json:"watermark"`
-			}{OK: true, Watermark: SafeWatermark{SnapshotID: "snap-2", SafeBlockSeq: 10}})
+			}{OK: true, Watermark: SafeWatermark{SnapshotID: "snap-2", SafeL3BlockSeq: 10}})
 		case "/v1/sequencer/safe-snapshots/get":
 			var req struct {
 				SnapshotID string `json:"snapshot_id"`
@@ -223,7 +223,7 @@ func TestHTTPClientsSupportWorkerEndpoints(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(struct {
 				OK       bool             `json:"ok"`
 				Decision SafeReadDecision `json:"decision"`
-			}{OK: true, Decision: SafeReadDecision{Active: false, Reason: "node quarantined", SnapshotID: "snap-2", SafeBlockSeq: 10}})
+			}{OK: true, Decision: SafeReadDecision{Active: false, Reason: "node quarantined", SnapshotID: "snap-2", SafeL3BlockSeq: 10}})
 		case "/v1/sequencer/mutation-tasks/claim":
 			_ = json.NewEncoder(w).Encode(struct {
 				OK   bool         `json:"ok"`
@@ -339,7 +339,7 @@ func TestHTTPClientsSupportWorkerEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSafeWatermark: %v", err)
 	}
-	if watermark.SnapshotID != "snap-2" || watermark.SafeBlockSeq != 10 {
+	if watermark.SnapshotID != "snap-2" || watermark.SafeL3BlockSeq != 10 {
 		t.Fatalf("watermark = %+v", watermark)
 	}
 	manifest, ok, err := seq.GetSafeSnapshot(context.Background(), "snap-2")
@@ -418,7 +418,7 @@ func TestHTTPClientsSupportWorkerEndpoints(t *testing.T) {
 func sealedClientTestManifest(t *testing.T) replay.SafeSnapshotManifest {
 	t.Helper()
 	manifest, err := (replay.SafeSnapshotManifest{
-		SafeBlockSeq:      10,
+		SafeL3BlockSeq:      10,
 		SchemaSnapshotID:  "schema",
 		SchemaRoot:        "schema-root",
 		ExecutorProfileID: "exec",

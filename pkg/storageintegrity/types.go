@@ -327,6 +327,11 @@ type PromotionTask struct {
 	Statements              []string       `json:"statements,omitempty"`
 	CandidateParts          []ByteSidePart `json:"candidate_parts,omitempty"`
 	CleanupUnsafeParts      []ByteSidePart `json:"cleanup_unsafe_parts,omitempty"`
+	// LeaderSignature is the arbiter leader's ed25519 signature over the
+	// canonical publication command (spec §9.1 PromotionIssued, §10, gap-25). A
+	// worker with a configured leader public key verifies it before executing
+	// and fails closed on mismatch.
+	LeaderSignature string `json:"leader_signature,omitempty"`
 }
 
 type PromotionResult struct {
@@ -351,7 +356,7 @@ type PromotionResult struct {
 
 type SafeWatermark struct {
 	SnapshotID   string `json:"snapshot_id"`
-	SafeBlockSeq uint64 `json:"safe_block_seq"`
+	SafeL3BlockSeq uint64 `json:"safe_l3_block_seq"`
 	StateRoot    string `json:"state_root"`
 	ManifestRoot string `json:"manifest_root"`
 }
@@ -472,6 +477,9 @@ type CompactionTask struct {
 	RequireBaseRootCAS bool                       `json:"require_base_root_cas,omitempty"`
 	RequirePostRootCAS bool                       `json:"require_post_root_cas,omitempty"`
 	DropCompactTable   bool                       `json:"drop_compact_table,omitempty"`
+	// LeaderSignature is the arbiter leader's ed25519 signature over the
+	// canonical compaction publication command (spec §8.1, §9.1, gap-25).
+	LeaderSignature string `json:"leader_signature,omitempty"`
 }
 
 type CompactionResult struct {
@@ -499,7 +507,7 @@ type SafeReadDecision struct {
 	Active       bool   `json:"active"`
 	Reason       string `json:"reason,omitempty"`
 	SnapshotID   string `json:"snapshot_id,omitempty"`
-	SafeBlockSeq uint64 `json:"safe_block_seq,omitempty"`
+	SafeL3BlockSeq uint64 `json:"safe_l3_block_seq,omitempty"`
 }
 
 type ArbiterWorkerClient interface {

@@ -250,7 +250,7 @@ func TestMutationWorkerReportsStaleRebindInsteadOfExecuting(t *testing.T) {
 			RebindCount:        1,
 		},
 		mutationOK: true,
-		watermark:  SafeWatermark{SnapshotID: "snap-new", SafeBlockSeq: 12, StateRoot: "root-new"},
+		watermark:  SafeWatermark{SnapshotID: "snap-new", SafeL3BlockSeq: 12, StateRoot: "root-new"},
 	}
 	executor := &fakeMutationExecutor{}
 	worker := MutationWorker{
