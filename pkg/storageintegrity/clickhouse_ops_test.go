@@ -76,12 +76,15 @@ func TestClickHousePromoterUsesPromoteShadowCASSeqAndUnsafeCleanup(t *testing.T)
 	}
 
 	shadow := "`hg_promote`.`promotion_stmt_1__202607`"
+	// gap-26b: the verified candidate partition is hardlinked from unsafe into the
+	// shadow via ATTACH PARTITION ID ... FROM (byte-preserving), not re-
+	// materialized with INSERT ... SELECT.
 	want := []string{
 		"CREATE DATABASE IF NOT EXISTS `hg_promote`",
 		"DROP TABLE IF EXISTS " + shadow,
 		"CREATE TABLE " + shadow + " AS `hg_safe`.`events`",
 		"ALTER TABLE " + shadow + " ATTACH PARTITION ID '202607' FROM `hg_safe`.`events`",
-		"INSERT INTO " + shadow + " SELECT * FROM `hg_unsafe`.`events` WHERE _partition_id = '202607' AND _part IN ('p_1_1_0','p_1_2_0')",
+		"ALTER TABLE " + shadow + " ATTACH PARTITION ID '202607' FROM `hg_unsafe`.`events`",
 		"ALTER TABLE `hg_safe`.`events` REPLACE PARTITION ID '202607' FROM " + shadow,
 		"ALTER TABLE `hg_unsafe`.`events` DROP PART 'p_1_1_0'",
 		"ALTER TABLE `hg_unsafe`.`events` DROP PART 'p_1_2_0'",
@@ -249,11 +252,14 @@ func TestClickHousePromoterRejectsPostRootMismatchBeforeReplace(t *testing.T) {
 	if strings.Contains(joined, "REPLACE PARTITION") || strings.Contains(joined, "DROP PART ") {
 		t.Fatalf("post-root mismatch modified safe or unsafe tables:\n%s", joined)
 	}
+	// ATTACH PARTITION FROM unsafe into the shadow leaves the unsafe source
+	// intact until REPLACE, so a CAS mismatch aborts cleanly with no unsafe-table
+	// mutation (SkipBasePartitionAttach is set, so only the candidate attach runs).
 	wantBeforeFailure := []string{
 		"CREATE DATABASE IF NOT EXISTS `hg_promote`",
 		"DROP TABLE IF EXISTS " + shadow,
 		"CREATE TABLE " + shadow + " AS `hg_safe`.`events`",
-		"INSERT INTO " + shadow + " SELECT * FROM `hg_unsafe`.`events` WHERE _partition_id = '202607' AND _part IN ('p_1_1_0')",
+		"ALTER TABLE " + shadow + " ATTACH PARTITION ID '202607' FROM `hg_unsafe`.`events`",
 	}
 	if joined != strings.Join(wantBeforeFailure, "\n") {
 		t.Fatalf("execs before mismatch:\n%s\nwant:\n%s", joined, strings.Join(wantBeforeFailure, "\n"))
@@ -307,13 +313,51 @@ func TestClickHouseMutationExecutorCreatesScratchRunsMutationAndHashesPostState(
 		"CREATE DATABASE IF NOT EXISTS `hg_mutation`",
 		"DROP TABLE IF EXISTS " + claim.ScratchTable,
 		"CREATE TABLE " + claim.ScratchTable + " AS `hg_safe`.`events`",
-		"INSERT INTO " + claim.ScratchTable + " SELECT * FROM `hg_safe`.`events`",
+		// gap-28: affected partitions are cloned via per-partition ATTACH, not a
+		// whole-table INSERT ... SELECT *.
+		"ALTER TABLE " + claim.ScratchTable + " ATTACH PARTITION ID '202607' FROM `hg_safe`.`events`",
 		"ALTER TABLE " + claim.ScratchTable + " UPDATE label = 'b' WHERE day = '2026-07-03' SETTINGS mutations_sync = 2",
 		"OPTIMIZE TABLE " + claim.ScratchTable + " FINAL",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("execs missing %q in:\n%s", want, joined)
 		}
+	}
+	if strings.Contains(joined, "SELECT * FROM `hg_safe`.`events`") {
+		t.Fatalf("scratch clone still uses whole-table INSERT ... SELECT * (gap-28 not applied):\n%s", joined)
+	}
+}
+
+// TestClickHouseMutationExecutorFallsBackToWholeTableCloneForUnknownPartitions
+// verifies the gap-28 fallback: when the affected partition set is unknown (the
+// native MVP "all" sentinel), the scratch clone copies the whole table rather
+// than attempting ATTACH PARTITION ID 'all'.
+func TestClickHouseMutationExecutorFallsBackToWholeTableCloneForUnknownPartitions(t *testing.T) {
+	conn := &fakeSQLConn{}
+	hasher := &fakeTableHasher{root: "post-root", parts: []ByteSidePart{{PartitionID: "all", PartName: "p1", RowCount: 1, PartRowLtHash: "0xpart"}}}
+	executor := ClickHouseMutationExecutor{
+		Conn:            conn,
+		Hasher:          hasher,
+		ClaimSigner:     &fakeMutationClaimSigner{},
+		WorkerID:        "worker-a",
+		ScratchDatabase: "hg_mutation",
+	}
+	claim, err := executor.ExecuteMutation(context.Background(), MutationTask{
+		StatementID:  "stmt-all",
+		MutationType: MutationTypeUpdate,
+		MutationSQL:  "ALTER TABLE `hg_safe`.`events` UPDATE label = 'b' WHERE day = '2026-07-03'",
+		SafeTable:    "`hg_safe`.`events`",
+		PartitionIDs: []string{"all"},
+	})
+	if err != nil {
+		t.Fatalf("ExecuteMutation: %v", err)
+	}
+	joined := strings.Join(conn.execs, "\n")
+	if !strings.Contains(joined, "INSERT INTO "+claim.ScratchTable+" SELECT * FROM `hg_safe`.`events`") {
+		t.Fatalf("unknown-partition clone did not fall back to whole-table copy:\n%s", joined)
+	}
+	if strings.Contains(joined, "ATTACH PARTITION ID 'all'") {
+		t.Fatalf("clone attempted ATTACH PARTITION ID 'all':\n%s", joined)
 	}
 }
 
@@ -911,6 +955,53 @@ func containsExec(execs []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// TestHashingByteSideScannerReportsRealPhysicalParts verifies gap-26b: with an
+// ActivePartReader the byte-side scan reports real physical part names (from
+// _part), not the synthetic per-partition hash-scan aggregate, so RCRecord
+// candidate parts can drive hardlink MOVE PART promotion.
+func TestHashingByteSideScannerReportsRealPhysicalParts(t *testing.T) {
+	active := &fakeActivePartReader{parts: []replay.PartManifestEntry{
+		{PartitionID: "202607", PartName: "202607_1_1_0", PartRowLtHash: "0xa", RowCount: 1},
+		{PartitionID: "202607", PartName: "202607_2_2_0", PartRowLtHash: "0xb", RowCount: 1},
+	}}
+	scanner := HashingByteSideScanner{ActiveParts: active, WorkerID: "verifier-1"}
+	res, err := scanner.ScanByteSide(context.Background(), ByteSideScanTask{
+		ScanID: "scan-1", StatementID: "stmt-1", TableID: "tenant.events", UnsafeTable: "`hg_unsafe`.`events`",
+		PartitionIDs: []string{"202607"},
+	})
+	if err != nil {
+		t.Fatalf("ScanByteSide: %v", err)
+	}
+	if len(res.Parts) != 2 {
+		t.Fatalf("parts = %+v, want 2 physical parts", res.Parts)
+	}
+	for _, p := range res.Parts {
+		if isLogicalHashScanPart(p.PartName) {
+			t.Fatalf("byte-side scan reported synthetic part name %q, want real physical part", p.PartName)
+		}
+	}
+	if res.Parts[0].PartName != "202607_1_1_0" || res.Parts[1].PartName != "202607_2_2_0" {
+		t.Fatalf("part names = %q,%q, want physical names", res.Parts[0].PartName, res.Parts[1].PartName)
+	}
+}
+
+// TestHashingByteSideScannerFallsBackToHasher verifies the legacy fallback when
+// no ActivePartReader is configured.
+func TestHashingByteSideScannerFallsBackToHasher(t *testing.T) {
+	hasher := &fakeTableHasher{parts: []ByteSidePart{{PartitionID: "202607", PartName: "hash-scan-202607", PartRowLtHash: "0xagg", RowCount: 2}}}
+	scanner := HashingByteSideScanner{Hasher: hasher, WorkerID: "verifier-1"}
+	res, err := scanner.ScanByteSide(context.Background(), ByteSideScanTask{
+		ScanID: "scan-1", StatementID: "stmt-1", TableID: "tenant.events", UnsafeTable: "`hg_unsafe`.`events`",
+		PartitionIDs: []string{"202607"},
+	})
+	if err != nil {
+		t.Fatalf("ScanByteSide: %v", err)
+	}
+	if len(res.Parts) != 1 || res.Parts[0].PartName != "hash-scan-202607" {
+		t.Fatalf("fallback parts = %+v, want single hash-scan aggregate", res.Parts)
+	}
 }
 
 type fakeTableHasher struct {

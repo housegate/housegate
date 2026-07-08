@@ -72,6 +72,13 @@ type StorageIntegrityMutationsConfig struct {
 	ProtectedColumns          []string `json:"protected_columns"           yaml:"protected_columns"`
 	WaitMutationsSync         int      `json:"wait_mutations_sync"         yaml:"wait_mutations_sync"`
 	RejectLightweightDelete   bool     `json:"reject_lightweight_delete"   yaml:"reject_lightweight_delete"`
+	// QuarantineMinority is advisory arbiter policy, not enforced by HouseGate.
+	// Per spec §9.3 the quarantine decision is derived solely by the arbiter FSM
+	// from recorded evidence; HouseGate only stamps its worker_id on every claim
+	// (see HTTPArbiterClient.WithWorkerID) so the arbiter can refuse quarantined
+	// workers. This field records the deployment's intended policy for the
+	// arbiter to honor (the mock exposes /v1/mock/quarantine-minority for the
+	// e2e to mirror it); HouseGate never quarantines a peer on its own.
 	QuarantineMinority        bool     `json:"quarantine_minority"         yaml:"quarantine_minority"`
 	MaxRebindAttempts         int      `json:"max_rebind_attempts"         yaml:"max_rebind_attempts"`
 	MaxRebindDuration         Duration `json:"max_rebind_duration"         yaml:"max_rebind_duration"`

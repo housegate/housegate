@@ -44,6 +44,58 @@ type HashQueryConn interface {
 	Query(ctx context.Context, query string, args ...any) (HashRows, error)
 }
 
+// KeyColumnProvider resolves the partition/order/primary key columns of a
+// protected table so bounded mutations can reject any UPDATE that touches them
+// without relying on hand-maintained config (spec §7.1, gap-34). tableID is the
+// logical table identifier (e.g. "db.table"); an empty result means the table
+// is unknown or has no key columns.
+type KeyColumnProvider interface {
+	KeyColumns(ctx context.Context, tableID string) ([]string, error)
+}
+
+// ClickHouseKeyColumnProvider derives key columns from system.columns of the
+// physical safe table. Database/Table are resolved from the logical tableID via
+// Resolve (typically qualifiedTable against the safe database).
+type ClickHouseKeyColumnProvider struct {
+	Conn HashQueryConn
+	// Resolve maps a logical tableID to the physical (database, table) whose
+	// schema carries the key columns. Required.
+	Resolve func(tableID string) (database, table string)
+}
+
+func (p ClickHouseKeyColumnProvider) KeyColumns(ctx context.Context, tableID string) ([]string, error) {
+	if p.Conn == nil || p.Resolve == nil {
+		return nil, fmt.Errorf("clickhouse key-column provider is not fully configured")
+	}
+	database, table := p.Resolve(tableID)
+	if database == "" || table == "" {
+		return nil, nil
+	}
+	rows, err := p.Conn.Query(ctx, fmt.Sprintf(
+		"SELECT name FROM system.columns WHERE database = %s AND table = %s "+
+			"AND (is_in_partition_key OR is_in_sorting_key OR is_in_primary_key) ORDER BY name",
+		sqlStringLiteral(database), sqlStringLiteral(table),
+	))
+	if err != nil {
+		return nil, fmt.Errorf("query key columns for %s.%s: %w", database, table, err)
+	}
+	defer rows.Close()
+	var cols []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("scan key column for %s.%s: %w", database, table, err)
+		}
+		if name != "" {
+			cols = append(cols, name)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("key column rows for %s.%s: %w", database, table, err)
+	}
+	return cols, nil
+}
+
 type HashRows interface {
 	Next() bool
 	Scan(dest ...any) error
@@ -472,36 +524,24 @@ func (p ClickHousePromoter) promoteViaShadow(ctx context.Context, task Promotion
 	return result, nil
 }
 
-// attachCandidateParts installs the verified candidate parts into the
-// per-partition shadow table.
-//
-// gap-26b target semantics (spec §6.3): each candidate part should be
-// hard-linked from the source table's data dir into this shadow table's
-// detached/ dir and made active with `ALTER TABLE shadow ATTACH PART
-// '<part_name>'` — a metadata/hardlink operation that preserves the part's
-// physical bytes (and thus its part_row_lthash) exactly. That path requires
-// real, stable physical part names from the part registry; the current
-// INSERT-flow candidate parts are byte-side-scan-derived synthetic names
-// (`hash-scan-<partition>`), not physical parts, so a literal ATTACH PART would
-// fail against real ClickHouse. Until the part registry threads real physical
-// part names through, we keep the functionally-equivalent copy-on-write via
-// `INSERT ... SELECT ... WHERE _part IN (...)`, which materializes exactly the
-// verified parts into the shadow table (the post-root CAS then still gates the
-// result). This is the same dependency documented as deferred for gap-28. When
-// the task carries no explicit candidate part names we attach the whole
-// partition.
-func (p ClickHousePromoter) attachCandidateParts(ctx context.Context, shadow, sourceTable, partitionID string, candidates []ByteSidePart) error {
-	partNames := candidatePartNames(candidates, partitionID)
-	if len(partNames) == 0 {
-		if err := p.Conn.Exec(ctx, fmt.Sprintf("ALTER TABLE %s ATTACH PARTITION ID %s FROM %s", shadow, sqlStringLiteral(partitionID), sourceTable)); err != nil {
-			return fmt.Errorf("attach candidate partition %s: %w", partitionID, err)
-		}
-		return nil
-	}
-	sql := fmt.Sprintf("INSERT INTO %s SELECT * FROM %s WHERE _partition_id = %s AND _part IN (%s)",
-		shadow, sourceTable, sqlStringLiteral(partitionID), sqlStringList(partNames))
-	if err := p.Conn.Exec(ctx, sql); err != nil {
-		return fmt.Errorf("attach candidate parts for partition %s: %w", partitionID, err)
+// attachCandidateParts installs the verified candidate partition into the
+// per-partition shadow table via a byte-preserving ATTACH PARTITION ... FROM
+// hardlink (spec §6.3, gap-26b). See the inline comment for why this is byte-
+// exact and partition-granular rather than a per-part operation.
+func (p ClickHousePromoter) attachCandidateParts(ctx context.Context, shadow, sourceTable, partitionID string, _ []ByteSidePart) error {
+	// Hardlink the verified candidate partition from the unsafe source into the
+	// shadow with ATTACH PARTITION ID ... FROM (spec §6.3, gap-26b): ClickHouse
+	// implements this as a metadata/hardlink move that preserves the parts'
+	// physical bytes — and thus the part_row_lthash the byte-side check verified —
+	// exactly, unlike an INSERT ... SELECT re-materialization. It operates at
+	// partition granularity (stock ClickHouse has no per-part cross-table hardlink
+	// statement — MOVE PART has only TO DISK/VOLUME, not TO TABLE); this is byte-
+	// exact because the frozen unsafe buffer holds exactly this partition's
+	// verified candidate parts, and the post-root CAS still gates the result. The
+	// source stays intact until REPLACE, so a CAS abort needs no rollback.
+	if err := p.Conn.Exec(ctx, fmt.Sprintf("ALTER TABLE %s ATTACH PARTITION ID %s FROM %s",
+		shadow, sqlStringLiteral(partitionID), sourceTable)); err != nil {
+		return fmt.Errorf("attach candidate partition %s: %w", partitionID, err)
 	}
 	return nil
 }
@@ -628,26 +668,6 @@ func (s *MemoryPromotionSeqStore) RecordPromotionSeq(_ context.Context, table, p
 	}
 	s.last[key] = seq
 	return nil
-}
-
-func candidatePartNames(candidates []ByteSidePart, partitionID string) []string {
-	seen := map[string]struct{}{}
-	var out []string
-	for _, part := range candidates {
-		if part.PartName == "" || isLogicalHashScanPart(part.PartName) {
-			continue
-		}
-		if part.PartitionID != "" && part.PartitionID != partitionID {
-			continue
-		}
-		if _, ok := seen[part.PartName]; ok {
-			continue
-		}
-		seen[part.PartName] = struct{}{}
-		out = append(out, part.PartName)
-	}
-	sort.Strings(out)
-	return out
 }
 
 func isLogicalHashScanPart(partName string) bool {
@@ -926,11 +946,23 @@ func (e ClickHouseMutationExecutor) execute(ctx context.Context, task MutationTa
 		ctx, cancel = context.WithTimeout(ctx, e.QueryTimeout)
 		defer cancel()
 	}
+	// Clone the affected partitions from safe into the scratch table (spec §7.3
+	// step 5). Prefer per-partition ATTACH PARTITION — snapshot-consistent, moves
+	// whole parts, and only touches affected partitions (gap-28) — over a
+	// whole-table INSERT ... SELECT *. When the affected partition set is unknown
+	// (native MVP "all" sentinel or empty), fall back to the whole-table copy.
 	sqls := []string{
 		"CREATE DATABASE IF NOT EXISTS " + quoteIdent(e.ScratchDatabase),
 		"DROP TABLE IF EXISTS " + scratch,
 		"CREATE TABLE " + scratch + " AS " + task.SafeTable,
-		"INSERT INTO " + scratch + " SELECT * FROM " + task.SafeTable,
+	}
+	if clonePartitions := attachablePartitionIDs(task.PartitionIDs); len(clonePartitions) > 0 {
+		for _, partitionID := range clonePartitions {
+			sqls = append(sqls, fmt.Sprintf("ALTER TABLE %s ATTACH PARTITION ID %s FROM %s",
+				scratch, sqlStringLiteral(partitionID), task.SafeTable))
+		}
+	} else {
+		sqls = append(sqls, "INSERT INTO "+scratch+" SELECT * FROM "+task.SafeTable)
 	}
 	if task.InternalDropPartition {
 		if len(task.DropPartitionIDs) == 0 {
@@ -1229,17 +1261,35 @@ func (c ClickHouseCompactor) Compact(ctx context.Context, task CompactionTask) (
 }
 
 type HashingByteSideScanner struct {
+	// ActiveParts, when set, recomputes part_row_lthash per real physical part
+	// (from system.parts via _part) so RCRecord candidate parts carry the actual
+	// disk part names — required for hardlink ATTACH PART promotion (spec §6.2
+	// byte-side check, gap-26b). Preferred over Hasher.
+	ActiveParts ActivePartReader
+	// Hasher is the legacy per-partition byte-side scanner. It aggregates rows by
+	// _partition_id and emits synthetic `hash-scan-<partition>` part names. Kept
+	// as a fallback when no ActivePartReader is wired (e.g. minimal test setups).
 	Hasher   TableHasher
 	WorkerID string
 }
 
 func (s HashingByteSideScanner) ScanByteSide(ctx context.Context, task ByteSideScanTask) (ByteSideScanResult, error) {
-	if s.Hasher == nil {
-		return ByteSideScanResult{}, fmt.Errorf("table hasher is required")
-	}
-	hash, err := s.Hasher.HashTable(ctx, task.UnsafeTable, task.PartitionIDs)
-	if err != nil {
-		return ByteSideScanResult{}, err
+	var parts []ByteSidePart
+	switch {
+	case s.ActiveParts != nil:
+		entries, err := s.ActiveParts.ReadActiveParts(ctx, task.UnsafeTable, task.PartitionIDs)
+		if err != nil {
+			return ByteSideScanResult{}, err
+		}
+		parts = activePartEntriesToByteSideParts(entries)
+	case s.Hasher != nil:
+		hash, err := s.Hasher.HashTable(ctx, task.UnsafeTable, task.PartitionIDs)
+		if err != nil {
+			return ByteSideScanResult{}, err
+		}
+		parts = hash.Parts
+	default:
+		return ByteSideScanResult{}, fmt.Errorf("byte-side scanner requires an active-part reader or table hasher")
 	}
 	return ByteSideScanResult{
 		ScanID:      task.ScanID,
@@ -1247,8 +1297,8 @@ func (s HashingByteSideScanner) ScanByteSide(ctx context.Context, task ByteSideS
 		TableID:     task.TableID,
 		UnsafeTable: task.UnsafeTable,
 		WorkerID:    s.WorkerID,
-		Parts:       hash.Parts,
-		PartSetHash: digestParts("byte-side-part-set", hash.Parts),
+		Parts:       parts,
+		PartSetHash: digestParts("byte-side-part-set", parts),
 	}, nil
 }
 
@@ -1610,6 +1660,21 @@ func lastIdentifier(path string) string {
 	parts := strings.Split(path, ".")
 	last := parts[len(parts)-1]
 	return strings.Trim(last, "`")
+}
+
+// attachablePartitionIDs returns the concrete partition ids that can be moved
+// with ATTACH PARTITION ID. The "all" sentinel (native MVP where the physical
+// partition set is unknown) and empty entries are dropped; an empty result tells
+// the caller to fall back to a whole-table copy.
+func attachablePartitionIDs(partitionIDs []string) []string {
+	out := make([]string, 0, len(partitionIDs))
+	for _, p := range partitionIDs {
+		if p == "" || p == "all" {
+			return nil
+		}
+		out = append(out, p)
+	}
+	return out
 }
 
 func normalizeTableID(path string) string {

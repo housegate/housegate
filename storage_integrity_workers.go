@@ -110,7 +110,11 @@ func buildStorageIntegrityBackgroundTasks(cfg *config.Config, creds credentials.
 		}
 		var scanner si.ByteSideScanner
 		if workers.UnsafeValidation {
-			scanner = si.HashingByteSideScanner{Hasher: hasher, WorkerID: workerID}
+			// gap-26b: scan real physical parts (ActivePartReader reads _part) so
+			// RCRecord candidate parts carry actual part names for the byte-side
+			// check; falls back to the per-partition hasher if no active reader is
+			// available.
+			scanner = si.HashingByteSideScanner{ActiveParts: active, Hasher: hasher, WorkerID: workerID}
 		}
 		worker := si.VerifierWorker{
 			WorkerID:        workerID,

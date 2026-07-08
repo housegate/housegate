@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"net"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -607,6 +608,28 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 
 	if cfg.StorageIntegrity.Enabled {
 		siArbiter := storageintegrity.NewHTTPArbiterClient(cfg.StorageIntegrity.ControlPlaneEndpoint())
+		// gap-34: when a local ClickHouse is reachable, auto-derive protected key
+		// columns from the safe-table schema so bounded-mutation admission rejects
+		// UPDATEs on partition/order/primary key columns without hand-maintained
+		// config. Best-effort: if no CH is reachable the plugin falls back to the
+		// manual ProtectedColumns list.
+		var keyColumnProvider storageintegrity.KeyColumnProvider
+		if kcConn, kcCleanup, kcErr := openStorageIntegrityClickHouse(cfg, normalizedStorageIntegrityWorkers(cfg.StorageIntegrity.Workers), credProvider); kcErr == nil {
+			pushTeardown(kcCleanup)
+			safeDB := cfg.StorageIntegrity.SafeDatabase
+			keyColumnProvider = storageintegrity.ClickHouseKeyColumnProvider{
+				Conn: storageintegrity.NewClickHouseHashConn(kcConn),
+				Resolve: func(tableID string) (string, string) {
+					name := tableID
+					if i := strings.LastIndex(tableID, "."); i >= 0 {
+						name = tableID[i+1:]
+					}
+					return safeDB, name
+				},
+			}
+		} else {
+			log.Warnw("storage_integrity key-column auto-derivation disabled; using manual protected_columns only", "err", kcErr)
+		}
 		siPlug := storageintegrityplugin.New(storageintegrityplugin.Config{
 			UnsafeDatabase:            cfg.StorageIntegrity.UnsafeDatabase,
 			UnsafeBufferDatabases:     cfg.StorageIntegrity.UnsafeBufferDatabases,
@@ -617,6 +640,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			RequirePartitionPredicate: cfg.StorageIntegrity.Mutations.RequirePartitionPredicate,
 			PartitionColumns:          cfg.StorageIntegrity.Mutations.PartitionColumns,
 			ProtectedColumns:          cfg.StorageIntegrity.Mutations.ProtectedColumns,
+			KeyColumnProvider:         keyColumnProvider,
 			RejectLightweightDelete:   cfg.StorageIntegrity.Mutations.RejectLightweightDelete,
 			MaxTouchedPartitions:      cfg.StorageIntegrity.Mutations.MaxTouchedPartitions,
 			MaxTouchedParts:           cfg.StorageIntegrity.Mutations.MaxTouchedParts,
