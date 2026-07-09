@@ -427,6 +427,9 @@ func (p ClickHousePromoter) dropSafePartitions(ctx context.Context, task Promoti
 }
 
 func (p ClickHousePromoter) checkPromotionPreconditions(ctx context.Context, task PromotionTask) error {
+	if err := validateBatchPromotion(task); err != nil {
+		return err
+	}
 	if task.RequirePromotionSeq {
 		if task.PromotionSeq == 0 {
 			return fmt.Errorf("promotion_seq is required")
@@ -675,6 +678,50 @@ func sumCandidatePartsForPartition(task PromotionTask, partitionID string) (stri
 		}
 	}
 	return sumPartRowLtHashes(hashes)
+}
+
+// validateBatchPromotion enforces the restricted-batch invariant (spec §13): a
+// promotion carrying more than one statement id (a batch) may only cover a
+// single table + single partition, and every candidate part must belong to that
+// partition. Batching is a physical optimization that coalesces several
+// verified statements landing in the same partition into one REPLACE PARTITION;
+// a batch that spanned partitions or tables would break the per-partition CAS
+// and the statement_ids -> snapshot mapping, so it fails closed here rather than
+// promoting a malformed set. Single-statement promotions are unaffected.
+func validateBatchPromotion(task PromotionTask) error {
+	if len(task.StatementIDs) <= 1 {
+		return nil
+	}
+	// The batch's partition set must be exactly one partition.
+	partitions := map[string]struct{}{}
+	for _, pid := range task.PartitionIDs {
+		if pid != "" {
+			partitions[pid] = struct{}{}
+		}
+	}
+	for _, part := range task.CandidateParts {
+		if part.PartitionID != "" {
+			partitions[part.PartitionID] = struct{}{}
+		}
+	}
+	if len(partitions) > 1 {
+		ids := make([]string, 0, len(partitions))
+		for pid := range partitions {
+			ids = append(ids, pid)
+		}
+		sort.Strings(ids)
+		return fmt.Errorf("batched promotion (%d statements) must cover a single partition, spans %v", len(task.StatementIDs), ids)
+	}
+	// Every candidate part must belong to the single batched partition.
+	if len(task.PartitionIDs) == 1 {
+		want := task.PartitionIDs[0]
+		for _, part := range task.CandidateParts {
+			if part.PartitionID != "" && part.PartitionID != want {
+				return fmt.Errorf("batched promotion candidate part %q is in partition %q, not the batched partition %q", part.PartName, part.PartitionID, want)
+			}
+		}
+	}
+	return nil
 }
 
 func shouldAttachBasePartition(task PromotionTask) bool {
