@@ -74,7 +74,9 @@ func buildStorageIntegrityBackgroundTasks(cfg *config.Config, creds credentials.
 				Cache:     si.NewInMemoryPartLtHashCache(cfg.StorageIntegrity.PartLtHashCache.MaxEntries),
 				Scanner:   activeReader,
 				Schema:    si.ClickHouseSchemaHashReader{Conn: hashConn},
-				Source:    "byte_side_scan",
+				// Shared across the byte-side scanner (hg_unsafe) and the mutation
+				// base commitment (hg_safe); the label is observability only.
+				Source: "storage_integrity_part_cache",
 			}
 		}
 	}
@@ -184,6 +186,11 @@ func buildStorageIntegrityBackgroundTasks(cfg *config.Config, creds credentials.
 			Conn:            conn,
 			Hasher:          hasher,
 			ActiveParts:     active,
+			// BaseScan (opt-in) serves the safe base commitment from the part cache
+			// instead of a full-table scan; nil when the cache is disabled. Shared
+			// with the byte-side scanner — the cache is content-addressed and
+			// table-scoped, so reuse across hg_unsafe/hg_safe is safe.
+			BaseScan:        partScanner,
 			ClaimSigner:     claimSigner,
 			WorkerID:        workerID,
 			ScratchDatabase: cfg.StorageIntegrity.Mutations.ScratchDatabase,

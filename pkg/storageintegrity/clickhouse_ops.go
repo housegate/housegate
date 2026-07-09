@@ -818,6 +818,13 @@ type ClickHouseMutationExecutor struct {
 	ClaimSigner     MutationClaimSigner
 	WorkerID        string
 	ScratchDatabase string
+	// BaseScan, when set, computes the safe base commitment via the part-LtHash
+	// cache fast path instead of a full-table HashTable scan. It only affects the
+	// base read; the per-partition base roots it yields are byte-identical
+	// additive sums (a miss recomputes by scanning), so the mutation evidence and
+	// base-root CAS are unchanged. Requires the safe table to be a qualified
+	// `db`.`table`; falls back to Hasher otherwise.
+	BaseScan *CachingPartScanner
 	// MutationsSync is the mutations_sync value forced onto scratch mutations
 	// so the read-back commitment reflects a materialized post-state. 0 means
 	// the default (2); values are clamped to non-negative by ensureMutationSync.
@@ -943,7 +950,7 @@ func (e ClickHouseMutationExecutor) execute(ctx context.Context, task MutationTa
 	if task.StatementID == "" || task.SafeTable == "" || task.MutationSQL == "" {
 		return TableHash{}, TableHash{}, "", fmt.Errorf("mutation task requires statement_id, safe_table, and mutation_sql")
 	}
-	before, err := e.Hasher.HashTable(ctx, task.SafeTable, task.PartitionIDs)
+	before, err := e.baseTableHash(ctx, task)
 	if err != nil {
 		return TableHash{}, TableHash{}, "", fmt.Errorf("hash mutation base %s: %w", task.SafeTable, err)
 	}
@@ -1021,6 +1028,30 @@ func (e ClickHouseMutationExecutor) execute(ctx context.Context, task MutationTa
 		hash.StateRoot = digestParts("mutation-post-state", hash.Parts)
 	}
 	return before, hash, scratch, nil
+}
+
+// baseTableHash computes the safe base commitment for a mutation. It prefers the
+// part-LtHash cache fast path (BaseScan) when wired and the safe table is a
+// qualified `db`.`table`, falling back to the full-table Hasher otherwise. The
+// fast path yields the same per-partition additive base roots as the full scan
+// (only the base_partition_roots — summed — feed the CAS and evidence; the
+// per-part granularity and StateRoot of the base are not submitted), so the
+// mutation evidence is unchanged. StateRoot is left empty here and filled by the
+// caller's digest fallback (it is not part of the submitted evidence).
+func (e ClickHouseMutationExecutor) baseTableHash(ctx context.Context, task MutationTask) (TableHash, error) {
+	if e.BaseScan != nil {
+		if db, table, ok := splitQualifiedTable(task.SafeTable); ok {
+			entries, err := e.BaseScan.ScanParts(ctx, db, table, task.PartitionIDs)
+			if err != nil {
+				return TableHash{}, err
+			}
+			return TableHash{Parts: activePartEntriesToByteSideParts(entries)}, nil
+		}
+	}
+	if e.Hasher == nil {
+		return TableHash{}, fmt.Errorf("table hasher is required")
+	}
+	return e.Hasher.HashTable(ctx, task.SafeTable, task.PartitionIDs)
 }
 
 type ClickHouseRollbackExecutor struct {

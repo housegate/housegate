@@ -41,6 +41,7 @@ go_test(
         "leader_signer_test.go",
         "lthash_additive_test.go",
         "manifest_golden_test.go",
+        "mutation_base_cache_test.go",
         "native_payload_test.go",
         "part_cache_scanner_test.go",
         "part_lthash_cache_test.go",
