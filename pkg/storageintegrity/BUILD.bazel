@@ -37,6 +37,7 @@ go_test(
         "claim_signer_test.go",
         "clickhouse_ops_test.go",
         "clickhouse_part_inspector_test.go",
+        "client_longpoll_test.go",
         "client_test.go",
         "leader_signer_test.go",
         "lthash_additive_test.go",

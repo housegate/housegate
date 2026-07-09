@@ -34,6 +34,11 @@ func buildStorageIntegrityBackgroundTasks(cfg *config.Config, creds credentials.
 		return nil, nil, fmt.Errorf("storage integrity leader verifier: %w", err)
 	}
 	arbiter := si.NewHTTPArbiterClient(cfg.StorageIntegrity.ControlPlaneEndpoint()).WithWorkerID(workerID)
+	if wait := workers.ClaimWait.Duration; wait > 0 {
+		// Server-side long-poll on claims (opt-in): idle workers pick up work
+		// promptly without tight polling. FSM/task content unchanged.
+		arbiter = arbiter.WithClaimWait(wait)
+	}
 	da := si.NewHTTPDAClient(cfg.StorageIntegrity.DAEndpoint)
 	pollInterval := workers.PollInterval.Duration
 	errorBackoff := workers.ErrorBackoff.Duration

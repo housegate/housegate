@@ -74,6 +74,13 @@ type StorageIntegrityWorkersConfig struct {
 	ReplaySignerSeedHex   string   `json:"replay_signer_seed_hex" yaml:"replay_signer_seed_hex"`
 	NativePayloadRevision int      `json:"native_payload_revision" yaml:"native_payload_revision"`
 	PollInterval          Duration `json:"poll_interval"          yaml:"poll_interval"`
+	// ClaimWait, when > 0, enables server-side long-poll on task claims: a claim
+	// blocks on the arbiter up to this long instead of returning immediately, so
+	// an idle worker picks up its next task promptly with far fewer poll round
+	// trips. 0 (default) preserves the PollInterval-driven immediate-return
+	// polling. The FSM/task content is unchanged — this only affects claim
+	// latency.
+	ClaimWait             Duration `json:"claim_wait"             yaml:"claim_wait"`
 	ErrorBackoff          Duration `json:"error_backoff"          yaml:"error_backoff"`
 	Replay                bool     `json:"replay"                 yaml:"replay"`
 	UnsafeValidation      bool     `json:"unsafe_validation"      yaml:"unsafe_validation"`

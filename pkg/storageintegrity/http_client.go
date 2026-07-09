@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -71,6 +72,12 @@ type HTTPArbiterClient struct {
 	// workerID identifies this HouseGate instance's worker to the arbiter on
 	// every claim, so the control plane can enforce per-worker quarantine.
 	workerID string
+	// claimWait, when > 0, is the server-side long-poll window sent as a `wait`
+	// query param on every Claim* RPC: the arbiter holds an empty-queue claim
+	// open up to this long instead of returning immediately, so an idle worker
+	// gets its next task promptly. 0 (default) preserves the historical
+	// immediate-return polling behavior.
+	claimWait time.Duration
 }
 
 // WithWorkerID sets the worker identity carried on claim requests and returns
@@ -79,6 +86,26 @@ type HTTPArbiterClient struct {
 func (c *HTTPArbiterClient) WithWorkerID(workerID string) *HTTPArbiterClient {
 	if c != nil {
 		c.workerID = workerID
+	}
+	return c
+}
+
+// WithClaimWait enables server-side long-poll on Claim* RPCs with the given
+// window and returns the client for chaining. The HTTP client timeout is raised
+// above the window so a legitimately blocked claim is not aborted mid-poll. A
+// non-positive duration disables long-poll (immediate return).
+func (c *HTTPArbiterClient) WithClaimWait(wait time.Duration) *HTTPArbiterClient {
+	if c == nil {
+		return c
+	}
+	if wait <= 0 {
+		c.claimWait = 0
+		return c
+	}
+	c.claimWait = wait
+	if c.client != nil {
+		// Leave generous margin for the round trip beyond the server-side wait.
+		c.client.Timeout = wait + 10*time.Second
 	}
 	return c
 }
@@ -175,7 +202,7 @@ func (c *HTTPArbiterClient) ClaimReplayJob(ctx context.Context) (replay.ReplayJo
 		OK  bool             `json:"ok"`
 		Job replay.ReplayJob `json:"job,omitempty"`
 	}
-	if err := c.post(ctx, "/replay-jobs/claim", c.claimBody(), &out); err != nil {
+	if err := c.claimPost(ctx, "/replay-jobs/claim", c.claimBody(), &out); err != nil {
 		return replay.ReplayJob{}, false, err
 	}
 	return out.Job, out.OK, nil
@@ -190,7 +217,7 @@ func (c *HTTPArbiterClient) ClaimByteSideScan(ctx context.Context) (ByteSideScan
 		OK   bool             `json:"ok"`
 		Task ByteSideScanTask `json:"task,omitempty"`
 	}
-	if err := c.post(ctx, "/byte-side-scans/claim", c.claimBody(), &out); err != nil {
+	if err := c.claimPost(ctx, "/byte-side-scans/claim", c.claimBody(), &out); err != nil {
 		return ByteSideScanTask{}, false, err
 	}
 	return out.Task, out.OK, nil
@@ -205,7 +232,7 @@ func (c *HTTPArbiterClient) ClaimPromotion(ctx context.Context) (PromotionTask, 
 		OK   bool          `json:"ok"`
 		Task PromotionTask `json:"task,omitempty"`
 	}
-	if err := c.post(ctx, "/promotions/claim", c.claimBody(), &out); err != nil {
+	if err := c.claimPost(ctx, "/promotions/claim", c.claimBody(), &out); err != nil {
 		return PromotionTask{}, false, err
 	}
 	return out.Task, out.OK, nil
@@ -309,7 +336,7 @@ func (c *HTTPArbiterClient) ClaimSafeAudit(ctx context.Context) (SafeAuditTask, 
 		OK   bool          `json:"ok"`
 		Task SafeAuditTask `json:"task,omitempty"`
 	}
-	if err := c.post(ctx, "/safe-audits/claim", c.claimBody(), &out); err != nil {
+	if err := c.claimPost(ctx, "/safe-audits/claim", c.claimBody(), &out); err != nil {
 		return SafeAuditTask{}, false, err
 	}
 	return out.Task, out.OK, nil
@@ -373,6 +400,21 @@ func (c *HTTPArbiterClient) post(ctx context.Context, path string, in, out any) 
 		return primaryErr
 	}
 	return postJSON(ctx, c.client, c.baseURL+c.fallbackPrefix+path, in, out)
+}
+
+// claimPost is post for Claim* RPCs: it appends the optional long-poll `wait`
+// query param so the arbiter can hold an empty-queue claim open. With no wait
+// configured it is exactly post (immediate return).
+func (c *HTTPArbiterClient) claimPost(ctx context.Context, path string, in, out any) error {
+	if c != nil && c.claimWait > 0 {
+		q := "wait=" + strconv.FormatInt(c.claimWait.Milliseconds(), 10)
+		if strings.Contains(path, "?") {
+			path += "&" + q
+		} else {
+			path += "?" + q
+		}
+	}
+	return c.post(ctx, path, in, out)
 }
 
 func (c *HTTPArbiterClient) postAck(ctx context.Context, path string, in any, notOK string) error {
