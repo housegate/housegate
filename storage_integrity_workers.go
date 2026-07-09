@@ -468,6 +468,18 @@ func (v manifestCheckingReplayVerifier) Verify(ctx context.Context, job replay.R
 	return v.Verifier.Verify(ctx, job)
 }
 
+// storageIntegrityReadGate wraps the arbiter read-set gate in a local TTL cache
+// when storage_integrity.read_set_cache is enabled, so a normal safe SELECT
+// reuses the arbiter's recent verdict instead of a control-plane round trip on
+// every query. Disabled (the default) returns the gate unchanged. The cache
+// never relaxes the gate — a miss/expiry re-checks and fails closed identically.
+func storageIntegrityReadGate(cfg *config.Config, gate si.ReadSetGate) si.ReadSetGate {
+	if cfg == nil || !cfg.StorageIntegrity.ReadSetCache.Enabled {
+		return gate
+	}
+	return si.NewCachingReadSetGate(gate, cfg.StorageIntegrity.ReadSetCache.TTL.Duration)
+}
+
 func storageIntegrityTableGuardEnabled(cfg *config.Config) bool {
 	if cfg == nil {
 		return false

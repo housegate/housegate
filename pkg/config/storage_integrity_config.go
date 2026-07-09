@@ -34,6 +34,17 @@ type StorageIntegrityConfig struct {
 	SafeMerges            StorageIntegritySafeMergesConfig `json:"safe_merges" yaml:"safe_merges"`
 	PartLtHashCache       StorageIntegrityPartLtHashCacheConfig `json:"part_lthash_cache" yaml:"part_lthash_cache"`
 	Promotion             StorageIntegrityPromotionConfig  `json:"promotion" yaml:"promotion"`
+	ReadSetCache          StorageIntegrityReadSetCacheConfig `json:"read_set_cache" yaml:"read_set_cache"`
+}
+
+// StorageIntegrityReadSetCacheConfig controls a local TTL cache in front of the
+// safe-read gate (CheckSafeRead). It caches the arbiter's read-set verdict for
+// a short window so a normal safe SELECT does not make a control-plane round
+// trip on every query; it never relaxes the gate (a miss / expiry re-checks,
+// and it fails closed exactly as the underlying gate does). Disabled by default.
+type StorageIntegrityReadSetCacheConfig struct {
+	Enabled bool     `json:"enabled" yaml:"enabled"`
+	TTL     Duration `json:"ttl"     yaml:"ttl"`
 }
 
 // StorageIntegrityPromotionConfig tunes the local promotion executor. It does
@@ -256,6 +267,9 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 	}
 	if c.PartLtHashCache.Enabled && c.PartLtHashCache.MaxEntries < 0 {
 		errs = append(errs, errors.New("storage_integrity.part_lthash_cache.max_entries must be non-negative"))
+	}
+	if c.ReadSetCache.Enabled && c.ReadSetCache.TTL.Duration <= 0 {
+		errs = append(errs, errors.New("storage_integrity.read_set_cache.ttl must be positive when read_set_cache is enabled"))
 	}
 	// gap-25: a configured leader public key must be a valid 32-byte ed25519 key.
 	if key := strings.TrimPrefix(strings.TrimSpace(c.LeaderPublicKeyHex), "0x"); key != "" {

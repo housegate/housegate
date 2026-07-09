@@ -253,6 +253,15 @@ func (p *Plugin) gateSafeRead(ctx context.Context, qctx *plugin.QueryContext) er
 	if req.NodeID == "" {
 		req.NodeID = p.instanceID
 	}
+	// HG-P2-02: bind the read to the current safe watermark snapshot so the
+	// read-set cache (keyed on snapshot/node/tables) can actually hit. Best
+	// effort: if the watermark is unavailable the request keeps an empty
+	// SnapshotID and the gate behaves exactly as before (no cache, live check).
+	if p.snapshotReader != nil {
+		if watermark, werr := p.snapshotReader.GetSafeWatermark(ctx); werr == nil {
+			req.SnapshotID = watermark.SnapshotID
+		}
+	}
 	decision, err := p.readGate.CheckSafeRead(ctx, req)
 	if err != nil {
 		return fmt.Errorf("storage_integrity safe read gate: %w", err)

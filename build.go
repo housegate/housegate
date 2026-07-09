@@ -651,7 +651,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			RequireAuthToken:          cfg.StorageIntegrity.RequireAuthToken,
 			AuthValidator:             validator,
 			SnapshotReader:            siArbiter,
-			ReadGate:                  siArbiter,
+			ReadGate:                  storageIntegrityReadGate(cfg, siArbiter),
 			NodeID:                    strconv.FormatUint(selfIndexerID, 10),
 		})
 		queryPlugins = append(queryPlugins, siPlug)

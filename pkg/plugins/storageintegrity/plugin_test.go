@@ -1056,6 +1056,38 @@ func TestPluginRejectsSafeReadWhenNodeIsNotInActiveReadSet(t *testing.T) {
 	}
 }
 
+// TestPluginSafeReadBindsCurrentSnapshot proves HG-P2-02: gateSafeRead binds
+// the request to the current safe watermark snapshot, so the read-set cache
+// (keyed on snapshot/node/tables) can hit instead of always bypassing on an
+// empty SnapshotID.
+func TestPluginSafeReadBindsCurrentSnapshot(t *testing.T) {
+	gate := &fakeReadGate{decision: core.SafeReadDecision{Active: true}}
+	seq := &fakeSequencer{}
+	seq.watermark = core.SafeWatermark{SnapshotID: "snap-current"}
+	p := New(Config{
+		SafeDatabase:   "hg_safe",
+		ReadGate:       gate,
+		SnapshotReader: seq,
+		NodeID:         "node-a",
+	})
+	sess := &fakeSession{id: 89, state: chsession.NewSessionState()}
+	qctx := &plugin.QueryContext{
+		Session:       sess,
+		OriginalSQL:   "SELECT * FROM `hg_safe`.`events`",
+		Query:         &chproto.Query{Body: "SELECT * FROM `hg_safe`.`events`"},
+		StatementType: sqlmeta.StatementTypeSelect,
+		AccessedTables: []sqlmeta.AccessedTable{{
+			OriginalDatabase: "tenant_a", OriginalTable: "events", PhysicalDatabase: "hg_safe",
+		}},
+	}
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	if gate.req.SnapshotID != "snap-current" {
+		t.Fatalf("read gate request SnapshotID = %q, want the current watermark snapshot", gate.req.SnapshotID)
+	}
+}
+
 type fakeDA struct {
 	payload []byte
 }

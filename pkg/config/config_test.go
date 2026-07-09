@@ -322,6 +322,29 @@ func TestConfigStorageIntegrityPromotionStrictVerificationDefault(t *testing.T) 
 	}
 }
 
+func TestConfigStorageIntegrityReadSetCache(t *testing.T) {
+	// Disabled by default.
+	if Default().StorageIntegrity.ReadSetCache.Enabled {
+		t.Fatalf("read_set_cache must default to disabled")
+	}
+	cfg := minimalServerConfig(t)
+	cfg.StorageIntegrity.Enabled = true
+	cfg.StorageIntegrity.DAEndpoint = "http://127.0.0.1:18080"
+	cfg.StorageIntegrity.ArbiterEndpoint = "http://127.0.0.1:18080"
+	cfg.StorageIntegrity.UnsafeDatabase = "hg_unsafe"
+	cfg.StorageIntegrity.SafeDatabase = "hg_safe"
+
+	// Enabled with a non-positive TTL is rejected.
+	cfg.StorageIntegrity.ReadSetCache.Enabled = true
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "read_set_cache.ttl must be positive") {
+		t.Fatalf("Validate read_set_cache without ttl err = %v, want rejection", err)
+	}
+	cfg.StorageIntegrity.ReadSetCache.TTL = Duration{Duration: time.Second}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate enabled read_set_cache with ttl: %v", err)
+	}
+}
+
 func TestConfigValidate(t *testing.T) {
 	baseServer := minimalServerConfig(t)
 	baseAgent := Config{
