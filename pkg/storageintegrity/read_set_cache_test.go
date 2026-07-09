@@ -88,6 +88,24 @@ func TestCachingReadSetGateDistinctKeys(t *testing.T) {
 	}
 }
 
+func TestCachingReadSetGateBypassesWhenSnapshotIDEmpty(t *testing.T) {
+	ctx := context.Background()
+	withFrozenClock(t)
+	inner := &fakeReadSetGate{decision: SafeReadDecision{Active: true, SnapshotID: "snap-1"}}
+	gate := NewCachingReadSetGate(inner, time.Minute)
+	req := SafeReadRequest{NodeID: "n1", TableIDs: []string{"t.a"}}
+
+	if _, err := gate.CheckSafeRead(ctx, req); err != nil {
+		t.Fatalf("first CheckSafeRead: %v", err)
+	}
+	if _, err := gate.CheckSafeRead(ctx, req); err != nil {
+		t.Fatalf("second CheckSafeRead: %v", err)
+	}
+	if inner.count() != 2 {
+		t.Fatalf("empty snapshot id must not be cached, got %d calls", inner.count())
+	}
+}
+
 func TestCachingReadSetGateInvalidateForcesRecheck(t *testing.T) {
 	ctx := context.Background()
 	withFrozenClock(t)

@@ -27,12 +27,24 @@ type TableHasher interface {
 	HashTable(ctx context.Context, table string, partitions []string) (TableHash, error)
 }
 
+type tableIDAwareTableHasher interface {
+	HashTableWithTableID(ctx context.Context, table string, partitions []string, tableID string) (TableHash, error)
+}
+
 type ActivePartReader interface {
 	ReadActiveParts(ctx context.Context, table string, partitions []string) ([]replay.PartManifestEntry, error)
 }
 
+type tableIDAwareActivePartReader interface {
+	ReadActivePartsWithTableID(ctx context.Context, table string, partitions []string, tableID string) ([]replay.PartManifestEntry, error)
+}
+
 type PartitionRootReader interface {
 	CurrentPartitionRoot(ctx context.Context, table, partitionID string) (string, error)
+}
+
+type tableIDAwarePartitionRootReader interface {
+	CurrentPartitionRootWithTableID(ctx context.Context, table, partitionID, tableID string) (string, error)
 }
 
 type PromotionSeqStore interface {
@@ -112,6 +124,13 @@ type HashColumnType interface {
 type ClickHouseTableHasher struct {
 	Conn    HashQueryConn
 	TableID string
+}
+
+func (h ClickHouseTableHasher) HashTableWithTableID(ctx context.Context, table string, partitions []string, tableID string) (TableHash, error) {
+	if tableID != "" {
+		h.TableID = tableID
+	}
+	return h.HashTable(ctx, table, partitions)
 }
 
 func (h ClickHouseTableHasher) HashTable(ctx context.Context, table string, partitions []string) (TableHash, error) {
@@ -210,6 +229,13 @@ type ClickHouseActivePartReader struct {
 	TableID string
 }
 
+func (r ClickHouseActivePartReader) ReadActivePartsWithTableID(ctx context.Context, table string, partitions []string, tableID string) ([]replay.PartManifestEntry, error) {
+	if tableID != "" {
+		r.TableID = tableID
+	}
+	return r.ReadActiveParts(ctx, table, partitions)
+}
+
 func (r ClickHouseActivePartReader) ReadActiveParts(ctx context.Context, table string, partitions []string) ([]replay.PartManifestEntry, error) {
 	where := ""
 	if len(partitions) > 0 {
@@ -231,6 +257,13 @@ func (r ClickHouseActivePartReader) ReadNamedParts(ctx context.Context, table st
 	}
 	where := " WHERE _part IN (" + sqlStringList(partNames) + ")"
 	return r.foldParts(ctx, table, where)
+}
+
+func (r ClickHouseActivePartReader) ReadNamedPartsWithTableID(ctx context.Context, table string, partNames []string, tableID string) ([]replay.PartManifestEntry, error) {
+	if tableID != "" {
+		r.TableID = tableID
+	}
+	return r.ReadNamedParts(ctx, table, partNames)
 }
 
 // foldParts is the shared scan+fold used by ReadActiveParts and ReadNamedParts.
@@ -328,12 +361,12 @@ type activePartHash struct {
 }
 
 type ClickHousePromoter struct {
-	Conn           SQLConn
-	ActiveParts    ActivePartReader
-	PartitionRoots PartitionRootReader
-	PromotionSeqs  PromotionSeqStore
-	PromoteDatabase string
-	CleanupUnsafe   bool
+	Conn             SQLConn
+	ActiveParts      ActivePartReader
+	PartitionRoots   PartitionRootReader
+	PromotionSeqs    PromotionSeqStore
+	PromoteDatabase  string
+	CleanupUnsafe    bool
 	DropPromoteTable bool
 	// StrictVerification forces a full readback of the shadow's active parts for
 	// the post-root CAS. When false (default) the CAS uses the arithmetic
@@ -454,7 +487,7 @@ func (p ClickHousePromoter) checkPromotionPreconditions(ctx context.Context, tas
 			return fmt.Errorf("partition root reader is required for base-root CAS")
 		}
 		for _, partitionID := range task.PartitionIDs {
-			current, err := p.PartitionRoots.CurrentPartitionRoot(ctx, task.SafeTable, partitionID)
+			current, err := currentPartitionRootWithTableID(ctx, p.PartitionRoots, task.SafeTable, partitionID, task.TableID)
 			if err != nil {
 				return fmt.Errorf("read current partition root %s: %w", partitionID, err)
 			}
@@ -499,6 +532,9 @@ func (p ClickHousePromoter) promoteViaShadow(ctx context.Context, task Promotion
 			if err := p.Conn.Exec(ctx, fmt.Sprintf("ALTER TABLE %s ATTACH PARTITION ID %s FROM %s", shadow, sqlStringLiteral(partitionID), task.SafeTable)); err != nil {
 				return PromotionResult{}, fmt.Errorf("attach base partition %s: %w", partitionID, err)
 			}
+		}
+		if err := p.verifySourceCandidateParts(ctx, sourceTable, partitionID, task); err != nil {
+			return PromotionResult{}, err
 		}
 		if err := p.attachCandidateParts(ctx, shadow, sourceTable, partitionID, task.CandidateParts); err != nil {
 			return PromotionResult{}, err
@@ -555,6 +591,31 @@ func (p ClickHousePromoter) promoteViaShadow(ctx context.Context, task Promotion
 		}
 	}
 	return result, nil
+}
+
+func (p ClickHousePromoter) verifySourceCandidateParts(ctx context.Context, sourceTable, partitionID string, task PromotionTask) error {
+	if !isInsertPromotionKind(task.Kind) {
+		return nil
+	}
+	if p.ActiveParts == nil || len(task.CandidateParts) == 0 {
+		return nil
+	}
+	candidates := candidatePartsForPartition(task, partitionID)
+	if len(candidates) == 0 {
+		return nil
+	}
+	entries, err := readActivePartsWithTableID(ctx, p.ActiveParts, sourceTable, []string{partitionID}, task.TableID)
+	if err != nil {
+		return fmt.Errorf("read source candidate parts for partition %s: %w", partitionID, err)
+	}
+	if err := enforceCandidatePartSet(activePartEntriesToByteSideParts(entries), candidates); err != nil {
+		return fmt.Errorf("verify source candidate parts for partition %s: %w", partitionID, err)
+	}
+	return nil
+}
+
+func isInsertPromotionKind(kind string) bool {
+	return kind == "" || strings.EqualFold(kind, "insert")
 }
 
 // attachCandidateParts installs the verified candidate partition into the
@@ -631,7 +692,7 @@ func (p ClickHousePromoter) postRootForCAS(ctx context.Context, task PromotionTa
 	if p.ActiveParts == nil {
 		return "", fmt.Errorf("active part reader is required for post-root CAS readback")
 	}
-	shadowParts, err := p.ActiveParts.ReadActiveParts(ctx, shadow, []string{partitionID})
+	shadowParts, err := readActivePartsWithTableID(ctx, p.ActiveParts, shadow, []string{partitionID}, task.TableID)
 	if err != nil {
 		return "", fmt.Errorf("read promote active parts: %w", err)
 	}
@@ -670,14 +731,22 @@ func promotionBasePartitionRoot(task PromotionTask, partitionID string) string {
 // PartitionID are attributed to a single-partition promotion's sole partition
 // (the arbiter may omit the partition id when it is unambiguous).
 func sumCandidatePartsForPartition(task PromotionTask, partitionID string) (string, error) {
-	singlePartition := len(task.PartitionIDs) == 1
 	hashes := make([]string, 0, len(task.CandidateParts))
-	for _, part := range task.CandidateParts {
-		if part.PartitionID == partitionID || (part.PartitionID == "" && singlePartition) {
-			hashes = append(hashes, part.PartRowLtHash)
-		}
+	for _, part := range candidatePartsForPartition(task, partitionID) {
+		hashes = append(hashes, part.PartRowLtHash)
 	}
 	return sumPartRowLtHashes(hashes)
+}
+
+func candidatePartsForPartition(task PromotionTask, partitionID string) []ByteSidePart {
+	singlePartition := len(task.PartitionIDs) == 1
+	out := make([]ByteSidePart, 0, len(task.CandidateParts))
+	for _, part := range task.CandidateParts {
+		if part.PartitionID == partitionID || (part.PartitionID == "" && singlePartition) {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 // validateBatchPromotion enforces the restricted-batch invariant (spec §13): a
@@ -768,7 +837,7 @@ func (p ClickHousePromoter) promotionResult(ctx context.Context, task PromotionT
 	if p.ActiveParts == nil {
 		return result, nil
 	}
-	parts, err := p.ActiveParts.ReadActiveParts(ctx, task.SafeTable, task.PartitionIDs)
+	parts, err := readActivePartsWithTableID(ctx, p.ActiveParts, task.SafeTable, task.PartitionIDs, task.TableID)
 	if err != nil {
 		return PromotionResult{}, fmt.Errorf("read promoted active parts: %w", err)
 	}
@@ -789,6 +858,53 @@ func (r ActivePartPartitionRootReader) CurrentPartitionRoot(ctx context.Context,
 		return "", err
 	}
 	return partitionRootFromActiveParts(parts, partitionID), nil
+}
+
+func (r ActivePartPartitionRootReader) CurrentPartitionRootWithTableID(ctx context.Context, table, partitionID, tableID string) (string, error) {
+	if r.ActiveParts == nil {
+		return "", fmt.Errorf("active part reader is required")
+	}
+	parts, err := readActivePartsWithTableID(ctx, r.ActiveParts, table, []string{partitionID}, tableID)
+	if err != nil {
+		return "", err
+	}
+	return partitionRootFromActiveParts(parts, partitionID), nil
+}
+
+func hashTableWithTableID(ctx context.Context, hasher TableHasher, table string, partitions []string, tableID string) (TableHash, error) {
+	if hasher == nil {
+		return TableHash{}, fmt.Errorf("table hasher is required")
+	}
+	if tableID != "" {
+		if aware, ok := hasher.(tableIDAwareTableHasher); ok {
+			return aware.HashTableWithTableID(ctx, table, partitions, tableID)
+		}
+	}
+	return hasher.HashTable(ctx, table, partitions)
+}
+
+func readActivePartsWithTableID(ctx context.Context, reader ActivePartReader, table string, partitions []string, tableID string) ([]replay.PartManifestEntry, error) {
+	if reader == nil {
+		return nil, fmt.Errorf("active part reader is required")
+	}
+	if tableID != "" {
+		if aware, ok := reader.(tableIDAwareActivePartReader); ok {
+			return aware.ReadActivePartsWithTableID(ctx, table, partitions, tableID)
+		}
+	}
+	return reader.ReadActiveParts(ctx, table, partitions)
+}
+
+func currentPartitionRootWithTableID(ctx context.Context, reader PartitionRootReader, table, partitionID, tableID string) (string, error) {
+	if reader == nil {
+		return "", fmt.Errorf("partition root reader is required")
+	}
+	if tableID != "" {
+		if aware, ok := reader.(tableIDAwarePartitionRootReader); ok {
+			return aware.CurrentPartitionRootWithTableID(ctx, table, partitionID, tableID)
+		}
+	}
+	return reader.CurrentPartitionRoot(ctx, table, partitionID)
 }
 
 type MemoryPromotionSeqStore struct {
@@ -1143,12 +1259,12 @@ func (e ClickHouseMutationExecutor) execute(ctx context.Context, task MutationTa
 			return TableHash{}, TableHash{}, "", fmt.Errorf("exec %q: %w", sql, err)
 		}
 	}
-	hash, err := e.Hasher.HashTable(ctx, scratch, task.PartitionIDs)
+	hash, err := hashTableWithTableID(ctx, e.Hasher, scratch, task.PartitionIDs, task.TableID)
 	if err != nil {
 		return TableHash{}, TableHash{}, "", fmt.Errorf("hash mutation scratch %s: %w", scratch, err)
 	}
 	if e.ActiveParts != nil {
-		activeParts, err := e.ActiveParts.ReadActiveParts(ctx, scratch, task.PartitionIDs)
+		activeParts, err := readActivePartsWithTableID(ctx, e.ActiveParts, scratch, task.PartitionIDs, task.TableID)
 		if err != nil {
 			return TableHash{}, TableHash{}, "", fmt.Errorf("read mutation scratch active parts %s: %w", scratch, err)
 		}
@@ -1171,17 +1287,14 @@ func (e ClickHouseMutationExecutor) execute(ctx context.Context, task MutationTa
 func (e ClickHouseMutationExecutor) baseTableHash(ctx context.Context, task MutationTask) (TableHash, error) {
 	if e.BaseScan != nil {
 		if db, table, ok := splitQualifiedTable(task.SafeTable); ok {
-			entries, err := e.BaseScan.ScanParts(ctx, db, table, task.PartitionIDs)
+			entries, err := e.BaseScan.ScanPartsWithTableID(ctx, db, table, task.TableID, task.PartitionIDs)
 			if err != nil {
 				return TableHash{}, err
 			}
 			return TableHash{Parts: activePartEntriesToByteSideParts(entries)}, nil
 		}
 	}
-	if e.Hasher == nil {
-		return TableHash{}, fmt.Errorf("table hasher is required")
-	}
-	return e.Hasher.HashTable(ctx, task.SafeTable, task.PartitionIDs)
+	return hashTableWithTableID(ctx, e.Hasher, task.SafeTable, task.PartitionIDs, task.TableID)
 }
 
 type ClickHouseRollbackExecutor struct {
@@ -1286,7 +1399,7 @@ func (e ClickHouseRepairSyncExecutor) RepairSync(ctx context.Context, task Repai
 	if e.Hasher == nil {
 		return RepairSyncResult{}, fmt.Errorf("table hasher is required")
 	}
-	hash, err := e.Hasher.HashTable(ctx, task.SafeTable, task.PartitionIDs)
+	hash, err := hashTableWithTableID(ctx, e.Hasher, task.SafeTable, task.PartitionIDs, result.TableID)
 	if err != nil {
 		return RepairSyncResult{}, fmt.Errorf("hash repaired safe table: %w", err)
 	}
@@ -1305,7 +1418,7 @@ func (e ClickHouseRepairSyncExecutor) RepairSync(ctx context.Context, task Repai
 		result.Error = "active part reader is required for manifest repair/sync"
 		return result, nil
 	}
-	parts, err := e.ActiveParts.ReadActiveParts(ctx, task.SafeTable, task.PartitionIDs)
+	parts, err := readActivePartsWithTableID(ctx, e.ActiveParts, task.SafeTable, task.PartitionIDs, result.TableID)
 	if err != nil {
 		return RepairSyncResult{}, fmt.Errorf("read repaired active parts: %w", err)
 	}
@@ -1342,7 +1455,7 @@ func (c ClickHouseCompactor) Compact(ctx context.Context, task CompactionTask) (
 			return CompactionResult{}, fmt.Errorf("partition root reader is required for compaction base-root CAS")
 		}
 		for _, partitionID := range task.PartitionIDs {
-			current, err := c.PartitionRoots.CurrentPartitionRoot(ctx, task.SafeTable, partitionID)
+			current, err := currentPartitionRootWithTableID(ctx, c.PartitionRoots, task.SafeTable, partitionID, task.TableID)
 			if err != nil {
 				return CompactionResult{}, fmt.Errorf("read current partition root %s: %w", partitionID, err)
 			}
@@ -1383,7 +1496,7 @@ func (c ClickHouseCompactor) Compact(ctx context.Context, task CompactionTask) (
 		if c.ActiveParts == nil {
 			return CompactionResult{}, fmt.Errorf("active part reader is required for compaction post-root CAS")
 		}
-		compactParts, err := c.ActiveParts.ReadActiveParts(ctx, compactTable, task.PartitionIDs)
+		compactParts, err := readActivePartsWithTableID(ctx, c.ActiveParts, compactTable, task.PartitionIDs, task.TableID)
 		if err != nil {
 			return CompactionResult{}, fmt.Errorf("read compact active parts: %w", err)
 		}
@@ -1404,7 +1517,7 @@ func (c ClickHouseCompactor) Compact(ctx context.Context, task CompactionTask) (
 		if c.ActiveParts == nil {
 			return CompactionResult{}, fmt.Errorf("active part reader is required to verify the compaction ledger equation")
 		}
-		outputParts, err := c.ActiveParts.ReadActiveParts(ctx, compactTable, task.PartitionIDs)
+		outputParts, err := readActivePartsWithTableID(ctx, c.ActiveParts, compactTable, task.PartitionIDs, task.TableID)
 		if err != nil {
 			return CompactionResult{}, fmt.Errorf("read compact active parts for ledger equation: %w", err)
 		}
@@ -1433,7 +1546,7 @@ func (c ClickHouseCompactor) Compact(ctx context.Context, task CompactionTask) (
 		PartitionIDs:       append([]string(nil), task.PartitionIDs...),
 	}
 	if c.ActiveParts != nil {
-		parts, err := c.ActiveParts.ReadActiveParts(ctx, task.SafeTable, task.PartitionIDs)
+		parts, err := readActivePartsWithTableID(ctx, c.ActiveParts, task.SafeTable, task.PartitionIDs, task.TableID)
 		if err != nil {
 			return CompactionResult{}, fmt.Errorf("read compacted active parts: %w", err)
 		}
@@ -1473,6 +1586,9 @@ func (s HashingByteSideScanner) ScanByteSide(ctx context.Context, task ByteSideS
 	if err != nil {
 		return ByteSideScanResult{}, err
 	}
+	if err := enforceCandidatePartSet(parts, task.CandidateParts); err != nil {
+		return ByteSideScanResult{}, err
+	}
 	return ByteSideScanResult{
 		ScanID:      task.ScanID,
 		StatementID: task.StatementID,
@@ -1490,7 +1606,7 @@ func (s HashingByteSideScanner) ScanByteSide(ctx context.Context, task ByteSideS
 func (s HashingByteSideScanner) scanParts(ctx context.Context, task ByteSideScanTask) ([]ByteSidePart, error) {
 	if s.FastScan != nil {
 		if db, table, ok := splitQualifiedTable(task.UnsafeTable); ok {
-			entries, err := s.FastScan.ScanParts(ctx, db, table, task.PartitionIDs)
+			entries, err := s.FastScan.ScanPartsWithTableID(ctx, db, table, task.TableID, task.PartitionIDs)
 			if err != nil {
 				return nil, err
 			}
@@ -1499,20 +1615,58 @@ func (s HashingByteSideScanner) scanParts(ctx context.Context, task ByteSideScan
 		// Not a qualified table: fall through to the full readers.
 	}
 	if s.ActiveParts != nil {
-		entries, err := s.ActiveParts.ReadActiveParts(ctx, task.UnsafeTable, task.PartitionIDs)
+		entries, err := readActivePartsWithTableID(ctx, s.ActiveParts, task.UnsafeTable, task.PartitionIDs, task.TableID)
 		if err != nil {
 			return nil, err
 		}
 		return activePartEntriesToByteSideParts(entries), nil
 	}
 	if s.Hasher != nil {
-		hash, err := s.Hasher.HashTable(ctx, task.UnsafeTable, task.PartitionIDs)
+		hash, err := hashTableWithTableID(ctx, s.Hasher, task.UnsafeTable, task.PartitionIDs, task.TableID)
 		if err != nil {
 			return nil, err
 		}
 		return hash.Parts, nil
 	}
 	return nil, fmt.Errorf("byte-side scanner requires a fast-scan, active-part reader, or table hasher")
+}
+
+func enforceCandidatePartSet(actual, candidates []ByteSidePart) error {
+	if len(candidates) == 0 {
+		return nil
+	}
+	if len(actual) != len(candidates) {
+		return fmt.Errorf("candidate part set mismatch: scanned %d active parts, task declared %d candidates", len(actual), len(candidates))
+	}
+	byName := make(map[string]ByteSidePart, len(actual))
+	for _, part := range actual {
+		if part.PartName == "" {
+			return fmt.Errorf("candidate part set mismatch: scanned active part with empty name")
+		}
+		if _, exists := byName[part.PartName]; exists {
+			return fmt.Errorf("candidate part set mismatch: duplicate scanned part %q", part.PartName)
+		}
+		byName[part.PartName] = part
+	}
+	for _, want := range candidates {
+		if want.PartName == "" {
+			return fmt.Errorf("candidate part set mismatch: candidate has empty part name")
+		}
+		got, ok := byName[want.PartName]
+		if !ok {
+			return fmt.Errorf("candidate part set mismatch: candidate part %q is not active", want.PartName)
+		}
+		if want.PartitionID != "" && got.PartitionID != want.PartitionID {
+			return fmt.Errorf("candidate part set mismatch: part %q partition got %q want %q", want.PartName, got.PartitionID, want.PartitionID)
+		}
+		if want.RowCount != 0 && got.RowCount != want.RowCount {
+			return fmt.Errorf("candidate part set mismatch: part %q row count got %d want %d", want.PartName, got.RowCount, want.RowCount)
+		}
+		if want.PartRowLtHash != "" && got.PartRowLtHash != want.PartRowLtHash {
+			return fmt.Errorf("candidate part set mismatch: part %q lthash differs", want.PartName)
+		}
+	}
+	return nil
 }
 
 type ClickHouseSafeAuditor struct {
@@ -1532,11 +1686,12 @@ func (a ClickHouseSafeAuditor) AuditSafe(ctx context.Context, task SafeAuditTask
 	if a.Hasher == nil {
 		return SafeAuditVote{}, fmt.Errorf("table hasher is required")
 	}
+	tableID := firstNonEmptyString(task.TableID, tableIDFromManifest(task.Manifest), normalizeTableID(task.SafeTable))
 	expectedStateRoot := task.StateRoot
 	if expectedStateRoot == "" {
 		expectedStateRoot = task.Manifest.StateRoot
 	}
-	hash, err := a.Hasher.HashTable(ctx, task.SafeTable, task.PartitionIDs)
+	hash, err := hashTableWithTableID(ctx, a.Hasher, task.SafeTable, task.PartitionIDs, tableID)
 	if err != nil {
 		return SafeAuditVote{}, err
 	}
@@ -1564,7 +1719,6 @@ func (a ClickHouseSafeAuditor) AuditSafe(ctx context.Context, task SafeAuditTask
 	if err != nil {
 		return SafeAuditVote{}, err
 	}
-	tableID := firstNonEmptyString(task.TableID, tableIDFromManifest(task.Manifest), normalizeTableID(task.SafeTable))
 	expectedParts := manifestActiveParts(task.Manifest, tableID, task.PartitionIDs)
 	vote.ActiveParts = parts
 	vote.ActivePartsMatch = activePartsEqual(parts, expectedParts)
@@ -1583,7 +1737,8 @@ func (a ClickHouseSafeAuditor) AuditSafe(ctx context.Context, task SafeAuditTask
 func (a ClickHouseSafeAuditor) auditActiveParts(ctx context.Context, task SafeAuditTask) ([]replay.PartManifestEntry, error) {
 	if a.FastScan != nil {
 		if db, table, ok := splitQualifiedTable(task.SafeTable); ok {
-			parts, err := a.FastScan.ScanParts(ctx, db, table, task.PartitionIDs)
+			tableID := firstNonEmptyString(task.TableID, tableIDFromManifest(task.Manifest), normalizeTableID(task.SafeTable))
+			parts, err := a.FastScan.ScanPartsWithTableID(ctx, db, table, tableID, task.PartitionIDs)
 			if err != nil {
 				return nil, fmt.Errorf("read safe active parts (fast): %w", err)
 			}
@@ -1593,7 +1748,8 @@ func (a ClickHouseSafeAuditor) auditActiveParts(ctx context.Context, task SafeAu
 	if a.ActiveParts == nil {
 		return nil, fmt.Errorf("active part reader is required for manifest audit")
 	}
-	parts, err := a.ActiveParts.ReadActiveParts(ctx, task.SafeTable, task.PartitionIDs)
+	tableID := firstNonEmptyString(task.TableID, tableIDFromManifest(task.Manifest), normalizeTableID(task.SafeTable))
+	parts, err := readActivePartsWithTableID(ctx, a.ActiveParts, task.SafeTable, task.PartitionIDs, tableID)
 	if err != nil {
 		return nil, fmt.Errorf("read safe active parts: %w", err)
 	}

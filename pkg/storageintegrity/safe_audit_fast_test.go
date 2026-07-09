@@ -19,12 +19,17 @@ func TestClickHouseSafeAuditorFastScanActiveSetMatch(t *testing.T) {
 		TableID:       "tenant.events",
 		PartitionID:   "202607",
 		PartName:      "safe_p1",
+		PartPhysHash:  "phys-1",
 		PartRowLtHash: root,
 		RowCount:      2,
+		Bytes:         128,
 	}})
 	// Fast scan returns the live part matching the manifest.
 	insp := &fakePartInspector{parts: map[string][]PartDescriptor{
-		"hg_safe.events": {{Database: "hg_safe", Table: "events", TableID: "tenant.events", PartitionID: "202607", PartName: "safe_p1", PartPhysHash: "phys-1", Rows: 2}},
+		// Runtime ClickHousePartInspector defaults this to the physical table id
+		// (hg_safe.events). Audit must override it with task.TableID before
+		// comparing against the logical manifest table id (tenant.events).
+		"hg_safe.events": {{Database: "hg_safe", Table: "events", TableID: "hg_safe.events", PartitionID: "202607", PartName: "safe_p1", PartPhysHash: "phys-1", Rows: 2, Bytes: 128}},
 	}}
 	fold := map[string]replay.PartManifestEntry{
 		"safe_p1": {TableID: "tenant.events", PartitionID: "202607", PartName: "safe_p1", RowCount: 2, PartRowLtHash: root},

@@ -20,13 +20,20 @@ func TestClickHousePromoterBatchSinglePartitionOneReplace(t *testing.T) {
 	conn := &fakeSQLConn{}
 	promoter := ClickHousePromoter{
 		Conn: conn,
-		ActiveParts: &fakeActivePartReader{parts: []replay.PartManifestEntry{
-			{PartitionID: "202607", PartName: "safe_p1", PartRowLtHash: expected, RowCount: 4},
+		ActiveParts: &fakeActivePartReader{partsByTable: map[string][]replay.PartManifestEntry{
+			"`hg_unsafe`.`events`": {
+				{TableID: "tenant.events", PartitionID: "202607", PartName: "p_1_1_0", PartRowLtHash: c1, RowCount: 2},
+				{TableID: "tenant.events", PartitionID: "202607", PartName: "p_2_2_0", PartRowLtHash: c2, RowCount: 2},
+			},
+			"`hg_safe`.`events`": {
+				{TableID: "tenant.events", PartitionID: "202607", PartName: "safe_p1", PartRowLtHash: expected, RowCount: 4},
+			},
 		}},
 		PromoteDatabase: "hg_promote",
 	}
 	_, err = promoter.Promote(context.Background(), PromotionTask{
 		PromotionID:  "promotion-batch",
+		TableID:      "tenant.events",
 		UnsafeTable:  "`hg_unsafe`.`events`",
 		SafeTable:    "`hg_safe`.`events`",
 		PartitionIDs: []string{"202607"},

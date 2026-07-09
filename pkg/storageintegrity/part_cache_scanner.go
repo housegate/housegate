@@ -14,6 +14,10 @@ type NamedPartReader interface {
 	ReadNamedParts(ctx context.Context, table string, partNames []string) ([]replay.PartManifestEntry, error)
 }
 
+type tableIDAwareNamedPartReader interface {
+	ReadNamedPartsWithTableID(ctx context.Context, table string, partNames []string, tableID string) ([]replay.PartManifestEntry, error)
+}
+
 // SchemaColumnReader resolves the live schema hash of a physical table, so a
 // cache key binds the exact column (name,type) set the fold used. It is
 // separate from KeyColumnProvider (which resolves protected key columns).
@@ -55,6 +59,10 @@ type CachingPartScanner struct {
 // byte-identical to a full ClickHouseActivePartReader.ReadActiveParts of the
 // same parts.
 func (s CachingPartScanner) ScanParts(ctx context.Context, database, table string, partitionIDs []string) ([]replay.PartManifestEntry, error) {
+	return s.ScanPartsWithTableID(ctx, database, table, "", partitionIDs)
+}
+
+func (s CachingPartScanner) ScanPartsWithTableID(ctx context.Context, database, table, tableIDOverride string, partitionIDs []string) ([]replay.PartManifestEntry, error) {
 	if s.Inspector == nil {
 		return nil, fmt.Errorf("caching part scanner requires an inspector")
 	}
@@ -70,6 +78,9 @@ func (s CachingPartScanner) ScanParts(ctx context.Context, database, table strin
 	}
 	qualified := qualifiedTable(database, table)
 	tableID := descriptors[0].TableID
+	if tableIDOverride != "" {
+		tableID = tableIDOverride
+	}
 
 	// Resolve schema hash once (cache key input). A failure or empty result
 	// disables caching for this call — never fails the scan.
@@ -85,6 +96,7 @@ func (s CachingPartScanner) ScanParts(ctx context.Context, database, table strin
 	var missParts []string
 	for i := range descriptors {
 		d := descriptors[i]
+		d.TableID = tableID
 		d.SchemaHash = schemaHash
 		descriptors[i] = d
 		key, ok := d.CacheKey()
@@ -113,7 +125,15 @@ func (s CachingPartScanner) ScanParts(ctx context.Context, database, table strin
 	// Scan exactly the miss parts (if any) with the shared fold.
 	scanned := make(map[string]replay.PartManifestEntry, len(missParts))
 	if len(missParts) > 0 {
-		entries, serr := s.Scanner.ReadNamedParts(ctx, qualified, missParts)
+		var (
+			entries []replay.PartManifestEntry
+			serr    error
+		)
+		if aware, ok := s.Scanner.(tableIDAwareNamedPartReader); ok && tableID != "" {
+			entries, serr = aware.ReadNamedPartsWithTableID(ctx, qualified, missParts, tableID)
+		} else {
+			entries, serr = s.Scanner.ReadNamedParts(ctx, qualified, missParts)
+		}
 		if serr != nil {
 			return nil, serr
 		}
@@ -125,10 +145,12 @@ func (s CachingPartScanner) ScanParts(ctx context.Context, database, table strin
 	out := make([]replay.PartManifestEntry, 0, len(descriptors))
 	for _, d := range descriptors {
 		entry := replay.PartManifestEntry{
-			TableID:     tableID,
-			PartitionID: d.PartitionID, // LIVE
-			PartName:    d.PartName,    // LIVE — never a cached name
-			RowCount:    d.Rows,        // LIVE (system.parts.rows)
+			TableID:      tableID,
+			PartitionID:  d.PartitionID, // LIVE
+			PartName:     d.PartName,    // LIVE — never a cached name
+			PartPhysHash: d.PartPhysHash,
+			RowCount:     d.Rows, // LIVE (system.parts.rows)
+			Bytes:        d.Bytes,
 		}
 		if h, ok := cachedLtHash[d.PartName]; ok {
 			entry.PartRowLtHash = h

@@ -39,6 +39,10 @@ func TestClickHousePromoterArithmeticPostRootMatchesReadback(t *testing.T) {
 	// The shadow readback, if it were consulted, would return the same two parts
 	// (so the test can't pass by luck — we assert it is NOT consulted).
 	reader := &shadowReadbackCountingReader{partsByTable: map[string][]replay.PartManifestEntry{
+		"`hg_unsafe`.`events`": {
+			{TableID: "tenant.events", PartitionID: "202607", PartName: "p_1_1_0", PartRowLtHash: c1, RowCount: 2},
+			{TableID: "tenant.events", PartitionID: "202607", PartName: "p_1_2_0", PartRowLtHash: c2, RowCount: 3},
+		},
 		shadow: {
 			{PartitionID: "202607", PartName: "s1", PartRowLtHash: c1, RowCount: 2},
 			{PartitionID: "202607", PartName: "s2", PartRowLtHash: c2, RowCount: 3},
@@ -53,6 +57,7 @@ func TestClickHousePromoterArithmeticPostRootMatchesReadback(t *testing.T) {
 	}
 	result, err := promoter.Promote(context.Background(), PromotionTask{
 		PromotionID:             "promotion-p",
+		TableID:                 "tenant.events",
 		UnsafeTable:             "`hg_unsafe`.`events`",
 		SafeTable:               "`hg_safe`.`events`",
 		PartitionIDs:            []string{"202607"},
@@ -87,8 +92,9 @@ func TestClickHousePromoterStrictModeReadsBackShadow(t *testing.T) {
 	shadow := "`hg_promote`.`promotion_p__202607`"
 	conn := &fakeSQLConn{}
 	reader := &shadowReadbackCountingReader{partsByTable: map[string][]replay.PartManifestEntry{
-		shadow:               {{PartitionID: "202607", PartName: "s1", PartRowLtHash: root, RowCount: 4}},
-		"`hg_safe`.`events`": {{PartitionID: "202607", PartName: "safe_p1", PartRowLtHash: root, RowCount: 4}},
+		"`hg_unsafe`.`events`": {{TableID: "tenant.events", PartitionID: "202607", PartName: "p_1_1_0", PartRowLtHash: root, RowCount: 4}},
+		shadow:                 {{PartitionID: "202607", PartName: "s1", PartRowLtHash: root, RowCount: 4}},
+		"`hg_safe`.`events`":   {{PartitionID: "202607", PartName: "safe_p1", PartRowLtHash: root, RowCount: 4}},
 	}}
 	promoter := ClickHousePromoter{
 		Conn:               conn,
@@ -98,6 +104,7 @@ func TestClickHousePromoterStrictModeReadsBackShadow(t *testing.T) {
 	}
 	_, err := promoter.Promote(context.Background(), PromotionTask{
 		PromotionID:             "promotion-p",
+		TableID:                 "tenant.events",
 		UnsafeTable:             "`hg_unsafe`.`events`",
 		SafeTable:               "`hg_safe`.`events`",
 		PartitionIDs:            []string{"202607"},
@@ -117,5 +124,44 @@ func TestClickHousePromoterStrictModeReadsBackShadow(t *testing.T) {
 	}
 	if !sawShadowRead {
 		t.Fatalf("strict mode must read back the shadow %q; readTables=%v", shadow, reader.readTables)
+	}
+}
+
+func TestClickHousePromoterRejectsSourcePartitionWithExtraCandidatePart(t *testing.T) {
+	c1 := rawAccumHex("cand-1")
+	extra := rawAccumHex("extra")
+	expected, err := sumPartRowLtHashes([]string{c1})
+	if err != nil {
+		t.Fatalf("sum: %v", err)
+	}
+	conn := &fakeSQLConn{}
+	reader := &shadowReadbackCountingReader{partsByTable: map[string][]replay.PartManifestEntry{
+		"`hg_unsafe`.`events`": {
+			{TableID: "tenant.events", PartitionID: "202607", PartName: "p_1_1_0", PartRowLtHash: c1, RowCount: 2},
+			{TableID: "tenant.events", PartitionID: "202607", PartName: "p_extra", PartRowLtHash: extra, RowCount: 1},
+		},
+		"`hg_safe`.`events`": {{TableID: "tenant.events", PartitionID: "202607", PartName: "safe_p1", PartRowLtHash: expected, RowCount: 2}},
+	}}
+	promoter := ClickHousePromoter{
+		Conn:            conn,
+		ActiveParts:     reader,
+		PromoteDatabase: "hg_promote",
+	}
+	_, err = promoter.Promote(context.Background(), PromotionTask{
+		PromotionID:             "promotion-p",
+		TableID:                 "tenant.events",
+		UnsafeTable:             "`hg_unsafe`.`events`",
+		SafeTable:               "`hg_safe`.`events`",
+		PartitionIDs:            []string{"202607"},
+		CandidateParts:          []ByteSidePart{{PartitionID: "202607", PartName: "p_1_1_0", PartRowLtHash: c1, RowCount: 2}},
+		ExpectedPostRoot:        expected,
+		RequirePostRootCAS:      true,
+		SkipBasePartitionAttach: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "candidate part set mismatch") {
+		t.Fatalf("Promote error = %v, want candidate part set mismatch", err)
+	}
+	if strings.Contains(strings.Join(conn.execs, "\n"), "REPLACE PARTITION") {
+		t.Fatalf("must fail before REPLACE when source partition has extra parts:\n%s", strings.Join(conn.execs, "\n"))
 	}
 }

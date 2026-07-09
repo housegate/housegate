@@ -59,6 +59,9 @@ func (g *CachingReadSetGate) CheckSafeRead(ctx context.Context, req SafeReadRequ
 	if g.ttl <= 0 {
 		return g.inner.CheckSafeRead(ctx, req)
 	}
+	if req.SnapshotID == "" {
+		return g.inner.CheckSafeRead(ctx, req)
+	}
 	key := readSetCacheKey(req)
 	now := nowFunc()
 

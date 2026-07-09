@@ -36,13 +36,27 @@ func TestClickHousePromoterUsesPromoteShadowCASSeqAndUnsafeCleanup(t *testing.T)
 	conn := &fakeSQLConn{}
 	seqStore := newFakePromotionSeqStore()
 	rootReader := &fakePartitionRootReader{roots: map[string]string{"`hg_safe`.`events`\x00202607": "base-root"}}
-	active := &fakeActivePartReader{parts: []replay.PartManifestEntry{{
-		TableID:       "tenant.events",
-		PartitionID:   "202607",
-		PartName:      "safe_p1",
-		PartRowLtHash: "post-root",
-		RowCount:      2,
-	}}}
+	shadow := "`hg_promote`.`promotion_stmt_1__202607`"
+	active := &fakeActivePartReader{partsByTable: map[string][]replay.PartManifestEntry{
+		"`hg_unsafe`.`events`": {
+			{TableID: "tenant.events", PartitionID: "202607", PartName: "p_1_1_0", RowCount: 1},
+			{TableID: "tenant.events", PartitionID: "202607", PartName: "p_1_2_0", RowCount: 1},
+		},
+		shadow: {{
+			TableID:       "tenant.events",
+			PartitionID:   "202607",
+			PartName:      "shadow_p1",
+			PartRowLtHash: "post-root",
+			RowCount:      2,
+		}},
+		"`hg_safe`.`events`": {{
+			TableID:       "tenant.events",
+			PartitionID:   "202607",
+			PartName:      "safe_p1",
+			PartRowLtHash: "post-root",
+			RowCount:      2,
+		}},
+	}}
 	promoter := ClickHousePromoter{
 		Conn:             conn,
 		ActiveParts:      active,
@@ -78,7 +92,6 @@ func TestClickHousePromoterUsesPromoteShadowCASSeqAndUnsafeCleanup(t *testing.T)
 		t.Fatalf("Promote: %v", err)
 	}
 
-	shadow := "`hg_promote`.`promotion_stmt_1__202607`"
 	// gap-26b: the verified candidate partition is hardlinked from unsafe into the
 	// shadow via ATTACH PARTITION ID ... FROM (byte-preserving), not re-
 	// materialized with INSERT ... SELECT.
@@ -109,7 +122,16 @@ func TestClickHousePromoterUsesPromoteShadowCASSeqAndUnsafeCleanup(t *testing.T)
 func TestClickHousePromoterTreatsMutationShadowSourceAsFullPostState(t *testing.T) {
 	conn := &fakeSQLConn{}
 	promoter := ClickHousePromoter{
-		Conn:            conn,
+		Conn: conn,
+		ActiveParts: &fakeActivePartReader{partsByTable: map[string][]replay.PartManifestEntry{
+			"`hg_mutation`.`events_stmt_worker`": {{
+				TableID:       "tenant.events",
+				PartitionID:   "202607",
+				PartName:      "real_mutation_part",
+				PartRowLtHash: "post-root",
+				RowCount:      1,
+			}},
+		}},
 		PromoteDatabase: "hg_promote",
 	}
 
@@ -226,6 +248,12 @@ func TestClickHousePromoterRejectsPostRootMismatchBeforeReplace(t *testing.T) {
 	promoter := ClickHousePromoter{
 		Conn: conn,
 		ActiveParts: &fakeActivePartReader{partsByTable: map[string][]replay.PartManifestEntry{
+			"`hg_unsafe`.`events`": {{
+				TableID:     "tenant.events",
+				PartitionID: "202607",
+				PartName:    "p_1_1_0",
+				RowCount:    1,
+			}},
 			shadow: {{
 				TableID:       "tenant.events",
 				PartitionID:   "202607",
@@ -1007,6 +1035,30 @@ func TestHashingByteSideScannerFallsBackToHasher(t *testing.T) {
 	}
 }
 
+func TestHashingByteSideScannerRejectsExtraActivePartWhenCandidatesProvided(t *testing.T) {
+	active := &fakeActivePartReader{parts: []replay.PartManifestEntry{
+		{TableID: "tenant.events", PartitionID: "202607", PartName: "202607_1_1_0", PartRowLtHash: rawAccumHex("p1"), RowCount: 1},
+		{TableID: "tenant.events", PartitionID: "202607", PartName: "202607_2_2_0", PartRowLtHash: rawAccumHex("extra"), RowCount: 1},
+	}}
+	scanner := HashingByteSideScanner{ActiveParts: active, WorkerID: "verifier-1"}
+	_, err := scanner.ScanByteSide(context.Background(), ByteSideScanTask{
+		ScanID:       "scan-1",
+		StatementID:  "stmt-1",
+		TableID:      "tenant.events",
+		UnsafeTable:  "`hg_unsafe`.`events`",
+		PartitionIDs: []string{"202607"},
+		CandidateParts: []ByteSidePart{{
+			PartitionID:   "202607",
+			PartName:      "202607_1_1_0",
+			PartRowLtHash: rawAccumHex("p1"),
+			RowCount:      1,
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "candidate part set mismatch") {
+		t.Fatalf("ScanByteSide error = %v, want candidate part set mismatch", err)
+	}
+}
+
 type fakeTableHasher struct {
 	table      string
 	tables     []string
@@ -1091,7 +1143,7 @@ func sealedOpsTestManifest(t *testing.T, parts []replay.PartManifestEntry) repla
 		})
 	}
 	manifest, err := (replay.SafeSnapshotManifest{
-		SafeL3BlockSeq:      11,
+		SafeL3BlockSeq:    11,
 		SchemaSnapshotID:  "schema",
 		SchemaRoot:        "schema-root",
 		ExecutorProfileID: "exec",

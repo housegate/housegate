@@ -91,7 +91,7 @@ func (r SnapshotResolver) ResolveLocal(ctx context.Context, req SnapshotResolveR
 	if tableID == "" {
 		tableID = normalizeTableID(req.SafeTable)
 	}
-	active, err := r.ActiveParts.ReadActiveParts(ctx, req.SafeTable, req.PartitionIDs)
+	active, err := readActivePartsWithTableID(ctx, r.ActiveParts, req.SafeTable, req.PartitionIDs, tableID)
 	if err != nil {
 		return ResolvedSnapshot{}, fmt.Errorf("read local active parts: %w", err)
 	}
