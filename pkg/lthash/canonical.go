@@ -15,6 +15,12 @@ import (
 // columns by name and hashes raw row values.
 const canonicalDomain = "housegate-row-mvp-v0"
 
+// CanonicalRowProfile is the versioned row-encoding domain used by EncodeRow.
+// It is exported so callers that cache the result of RowHash (e.g. the
+// storage-integrity part-LtHash cache) can bind their cache key to the exact
+// encoding profile and invalidate automatically if the profile is bumped.
+func CanonicalRowProfile() string { return canonicalDomain }
+
 // Column describes one column of a row to be encoded: the column name and
 // the declared ClickHouse type name (e.g. "UInt64", "String", "DateTime").
 type Column struct {

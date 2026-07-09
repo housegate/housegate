@@ -28,6 +28,18 @@ const (
 	xofDomain = "housegate-lthash-v1"
 )
 
+// AccumulatorProfile is the versioned XOF domain used by ElementHash to expand
+// an element into lanes. Exported alongside CanonicalRowProfile so callers that
+// cache RowHash results bind their key to both the row-encoding and the
+// accumulator profile (a change to either would change the hash bytes).
+func AccumulatorProfile() string { return xofDomain }
+
+// RowHashVersion binds both the row-encoding profile (CanonicalRowProfile) and
+// the accumulator profile (AccumulatorProfile) into a single version token.
+// It is the value a part-LtHash cache must include in its key so that a bump to
+// either profile transparently invalidates every cached entry.
+func RowHashVersion() string { return canonicalDomain + "\x00" + xofDomain }
+
 // Hash is an LtHash accumulator: 1024 little-endian u16 lanes.
 type Hash struct {
 	lane [lanes]uint16
