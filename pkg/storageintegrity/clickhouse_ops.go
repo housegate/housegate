@@ -211,6 +211,35 @@ type ClickHouseActivePartReader struct {
 }
 
 func (r ClickHouseActivePartReader) ReadActiveParts(ctx context.Context, table string, partitions []string) ([]replay.PartManifestEntry, error) {
+	where := ""
+	if len(partitions) > 0 {
+		where = " WHERE _partition_id IN (" + sqlStringList(partitions) + ")"
+	}
+	return r.foldParts(ctx, table, where)
+}
+
+// ReadNamedParts recomputes the per-part row LtHash for exactly the named
+// physical parts, using the SAME row fold as ReadActiveParts (`_part IN (…)`
+// scoped) so the emitted PartRowLtHash is byte-identical to a full-partition
+// read of the same parts. It is the cache-miss scanner for the part-LtHash
+// fast path: only the parts that missed the cache are scanned. An empty
+// partNames set is an error (callers must not scan the whole table by
+// accident).
+func (r ClickHouseActivePartReader) ReadNamedParts(ctx context.Context, table string, partNames []string) ([]replay.PartManifestEntry, error) {
+	if len(partNames) == 0 {
+		return nil, fmt.Errorf("ReadNamedParts requires at least one part name")
+	}
+	where := " WHERE _part IN (" + sqlStringList(partNames) + ")"
+	return r.foldParts(ctx, table, where)
+}
+
+// foldParts is the shared scan+fold used by ReadActiveParts and ReadNamedParts.
+// The fold (row values → lthash.RowHash(tableID, cols, values), summed per
+// physical _part into a raw additive accumulator) is intentionally identical
+// across both entry points so a subset scan and a full scan produce the same
+// PartRowLtHash for a given part — the invariant the part-LtHash cache relies
+// on. whereClause is appended verbatim after the base SELECT.
+func (r ClickHouseActivePartReader) foldParts(ctx context.Context, table, whereClause string) ([]replay.PartManifestEntry, error) {
 	if r.Conn == nil {
 		return nil, fmt.Errorf("clickhouse query connection is required")
 	}
@@ -218,10 +247,7 @@ func (r ClickHouseActivePartReader) ReadActiveParts(ctx context.Context, table s
 	if tableID == "" {
 		tableID = normalizeTableID(table)
 	}
-	query := "SELECT _partition_id, _part, * FROM " + table
-	if len(partitions) > 0 {
-		query += " WHERE _partition_id IN (" + sqlStringList(partitions) + ")"
-	}
+	query := "SELECT _partition_id, _part, * FROM " + table + whereClause
 	rows, err := r.Conn.Query(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("query active part rows: %w", err)
@@ -283,9 +309,9 @@ func (r ClickHouseActivePartReader) ReadActiveParts(ctx context.Context, table s
 	for _, key := range keys {
 		ph := byPart[key]
 		parts = append(parts, replay.PartManifestEntry{
-			TableID:       tableID,
-			PartitionID:   ph.partitionID,
-			PartName:      ph.partName,
+			TableID:     tableID,
+			PartitionID: ph.partitionID,
+			PartName:    ph.partName,
 			// Raw additive accumulator (gap-14) so part roots are summable.
 			PartRowLtHash: lthashAccumulatorHex(ph.acc),
 			RowCount:      ph.rows,
@@ -1261,6 +1287,14 @@ func (c ClickHouseCompactor) Compact(ctx context.Context, task CompactionTask) (
 }
 
 type HashingByteSideScanner struct {
+	// FastScan, when set, is preferred: it reads live part metadata from
+	// system.parts and reuses cached part_row_lthash for parts whose physical
+	// bytes are unchanged, folding rows only for the parts that miss the cache.
+	// Its output is byte-identical to ActiveParts.ReadActiveParts for the same
+	// parts (live names, same additive fold), so the submitted ByteSideScanResult
+	// / PartSetHash are unchanged. Requires the unsafe table to be a qualified
+	// `db`.`table`; falls back to ActiveParts/Hasher otherwise.
+	FastScan *CachingPartScanner
 	// ActiveParts, when set, recomputes part_row_lthash per real physical part
 	// (from system.parts via _part) so RCRecord candidate parts carry the actual
 	// disk part names — required for hardlink ATTACH PART promotion (spec §6.2
@@ -1274,22 +1308,9 @@ type HashingByteSideScanner struct {
 }
 
 func (s HashingByteSideScanner) ScanByteSide(ctx context.Context, task ByteSideScanTask) (ByteSideScanResult, error) {
-	var parts []ByteSidePart
-	switch {
-	case s.ActiveParts != nil:
-		entries, err := s.ActiveParts.ReadActiveParts(ctx, task.UnsafeTable, task.PartitionIDs)
-		if err != nil {
-			return ByteSideScanResult{}, err
-		}
-		parts = activePartEntriesToByteSideParts(entries)
-	case s.Hasher != nil:
-		hash, err := s.Hasher.HashTable(ctx, task.UnsafeTable, task.PartitionIDs)
-		if err != nil {
-			return ByteSideScanResult{}, err
-		}
-		parts = hash.Parts
-	default:
-		return ByteSideScanResult{}, fmt.Errorf("byte-side scanner requires an active-part reader or table hasher")
+	parts, err := s.scanParts(ctx, task)
+	if err != nil {
+		return ByteSideScanResult{}, err
 	}
 	return ByteSideScanResult{
 		ScanID:      task.ScanID,
@@ -1300,6 +1321,37 @@ func (s HashingByteSideScanner) ScanByteSide(ctx context.Context, task ByteSideS
 		Parts:       parts,
 		PartSetHash: digestParts("byte-side-part-set", parts),
 	}, nil
+}
+
+// scanParts resolves the unsafe table's active parts, preferring the cached
+// fast path when it is wired and the table is a qualified `db`.`table`, then
+// the physical active-part reader, then the legacy per-partition hasher.
+func (s HashingByteSideScanner) scanParts(ctx context.Context, task ByteSideScanTask) ([]ByteSidePart, error) {
+	if s.FastScan != nil {
+		if db, table, ok := splitQualifiedTable(task.UnsafeTable); ok {
+			entries, err := s.FastScan.ScanParts(ctx, db, table, task.PartitionIDs)
+			if err != nil {
+				return nil, err
+			}
+			return activePartEntriesToByteSideParts(entries), nil
+		}
+		// Not a qualified table: fall through to the full readers.
+	}
+	if s.ActiveParts != nil {
+		entries, err := s.ActiveParts.ReadActiveParts(ctx, task.UnsafeTable, task.PartitionIDs)
+		if err != nil {
+			return nil, err
+		}
+		return activePartEntriesToByteSideParts(entries), nil
+	}
+	if s.Hasher != nil {
+		hash, err := s.Hasher.HashTable(ctx, task.UnsafeTable, task.PartitionIDs)
+		if err != nil {
+			return nil, err
+		}
+		return hash.Parts, nil
+	}
+	return nil, fmt.Errorf("byte-side scanner requires a fast-scan, active-part reader, or table hasher")
 }
 
 type ClickHouseSafeAuditor struct {
@@ -1660,6 +1712,24 @@ func lastIdentifier(path string) string {
 	parts := strings.Split(path, ".")
 	last := parts[len(parts)-1]
 	return strings.Trim(last, "`")
+}
+
+// splitQualifiedTable splits a `db`.`table` (or db.table) identifier into its
+// unquoted database and table parts. ok is false when the input is not a
+// two-part qualified name, so callers that need a database (e.g. system.parts
+// lookups) can fall back rather than guess.
+func splitQualifiedTable(qualified string) (database, table string, ok bool) {
+	qualified = strings.TrimSpace(qualified)
+	parts := strings.Split(qualified, ".")
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	db := strings.Trim(strings.TrimSpace(parts[0]), "`")
+	tbl := strings.Trim(strings.TrimSpace(parts[1]), "`")
+	if db == "" || tbl == "" {
+		return "", "", false
+	}
+	return db, tbl, true
 }
 
 // attachablePartitionIDs returns the concrete partition ids that can be moved
