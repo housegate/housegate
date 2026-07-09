@@ -328,13 +328,19 @@ type activePartHash struct {
 }
 
 type ClickHousePromoter struct {
-	Conn             SQLConn
-	ActiveParts      ActivePartReader
-	PartitionRoots   PartitionRootReader
-	PromotionSeqs    PromotionSeqStore
-	PromoteDatabase  string
-	CleanupUnsafe    bool
+	Conn           SQLConn
+	ActiveParts    ActivePartReader
+	PartitionRoots PartitionRootReader
+	PromotionSeqs  PromotionSeqStore
+	PromoteDatabase string
+	CleanupUnsafe   bool
 	DropPromoteTable bool
+	// StrictVerification forces a full readback of the shadow's active parts for
+	// the post-root CAS. When false (default) the CAS uses the arithmetic
+	// expected post root (base + sum of verified candidate part LtHashes),
+	// avoiding the readback scan. Both compare against the arbiter-pinned
+	// ExpectedPostRoots and fail closed before REPLACE.
+	StrictVerification bool
 }
 
 func (p ClickHousePromoter) Promote(ctx context.Context, task PromotionTask) (PromotionResult, error) {
@@ -496,19 +502,17 @@ func (p ClickHousePromoter) promoteViaShadow(ctx context.Context, task Promotion
 		}
 	}
 	if task.RequirePostRootCAS {
-		if p.ActiveParts == nil {
-			return PromotionResult{}, fmt.Errorf("active part reader is required for post-root CAS")
+		if p.StrictVerification && p.ActiveParts == nil {
+			return PromotionResult{}, fmt.Errorf("active part reader is required for strict post-root CAS")
 		}
 		for _, partitionID := range task.PartitionIDs {
-			shadow := shadowByPartition[partitionID]
-			shadowParts, err := p.ActiveParts.ReadActiveParts(ctx, shadow, []string{partitionID})
-			if err != nil {
-				return PromotionResult{}, fmt.Errorf("read promote active parts: %w", err)
-			}
-			got := partitionRootFromActiveParts(shadowParts, partitionID)
 			want, ok := expectedPostRootForPartition(task, partitionID)
 			if !ok {
 				return PromotionResult{}, fmt.Errorf("post partition root CAS is required but no expected root for partition %s", partitionID)
+			}
+			got, err := p.postRootForCAS(ctx, task, shadowByPartition[partitionID], partitionID)
+			if err != nil {
+				return PromotionResult{}, err
 			}
 			if got != want {
 				return PromotionResult{}, fmt.Errorf("post partition root mismatch for partition %s: got %s want %s", partitionID, got, want)
@@ -592,6 +596,85 @@ func expectedPostRootForPartition(task PromotionTask, partitionID string) (strin
 		return task.ExpectedPostRoot, true
 	}
 	return "", false
+}
+
+// postRootForCAS returns the observed post-promotion partition root for the CAS.
+// In strict mode it reads back the shadow's active parts (a full row scan). In
+// the default fast mode it computes the arithmetic post root
+// base_partition_root + sum(verified candidate part LtHashes for the partition):
+// ATTACH PARTITION ... FROM is byte-preserving so the candidate parts keep their
+// exact accumulators, and the additive sum is merge-invariant, so this equals
+// the readback root of partitionRootFromActiveParts. Either result is CAS'd
+// against the arbiter-pinned ExpectedPostRoots by the caller.
+func (p ClickHousePromoter) postRootForCAS(ctx context.Context, task PromotionTask, shadow, partitionID string) (string, error) {
+	if !p.StrictVerification && canArithmeticPostRoot(task, partitionID) {
+		base := promotionBasePartitionRoot(task, partitionID)
+		candidateSum, err := sumCandidatePartsForPartition(task, partitionID)
+		if err != nil {
+			return "", fmt.Errorf("sum candidate parts for partition %s: %w", partitionID, err)
+		}
+		// post = base + Σ candidate. An empty base (genesis-empty partition) is the
+		// zero accumulator, so post == candidateSum.
+		root, err := sumPartRowLtHashes([]string{base, candidateSum})
+		if err != nil {
+			return "", fmt.Errorf("compute arithmetic post root for partition %s: %w", partitionID, err)
+		}
+		return root, nil
+	}
+	// Strict mode, or a case the arithmetic path cannot resolve exactly (a
+	// multi-partition promotion carrying a non-empty scalar base that cannot be
+	// attributed per partition): fall back to a full readback so the CAS stays
+	// correct rather than failing a legitimate promotion.
+	if p.ActiveParts == nil {
+		return "", fmt.Errorf("active part reader is required for post-root CAS readback")
+	}
+	shadowParts, err := p.ActiveParts.ReadActiveParts(ctx, shadow, []string{partitionID})
+	if err != nil {
+		return "", fmt.Errorf("read promote active parts: %w", err)
+	}
+	return partitionRootFromActiveParts(shadowParts, partitionID), nil
+}
+
+// canArithmeticPostRoot reports whether the arithmetic post root can be computed
+// exactly for this partition: the base must be resolvable (single-partition
+// promotion, or a genesis-empty multi-partition promotion with no scalar base to
+// misattribute). Otherwise the caller falls back to a readback.
+func canArithmeticPostRoot(task PromotionTask, partitionID string) bool {
+	if len(task.PartitionIDs) == 1 {
+		return true
+	}
+	// Multi-partition: only safe when there is no scalar base to misattribute
+	// (each partition's base is the zero accumulator / genesis-empty).
+	return task.BasePartitionRoot == ""
+}
+
+// promotionBasePartitionRoot resolves the base partition root the arithmetic
+// post-root builds on. The PromotionTask carries a single scalar
+// BasePartitionRoot, used only for a single-partition promotion (a
+// multi-partition promotion cannot attribute one base root to every partition,
+// mirroring the ExpectedPostRoot rule). An unresolved base is the zero
+// accumulator (a genesis-empty partition), the additive identity so
+// base + Σcandidate == Σcandidate.
+func promotionBasePartitionRoot(task PromotionTask, partitionID string) string {
+	if len(task.PartitionIDs) == 1 && task.PartitionIDs[0] == partitionID && task.BasePartitionRoot != "" {
+		return task.BasePartitionRoot
+	}
+	return lthashAccumulatorHex(lthash.New())
+}
+
+// sumCandidatePartsForPartition returns the additive sum of the verified
+// candidate part LtHashes for the given partition. CandidateParts with an empty
+// PartitionID are attributed to a single-partition promotion's sole partition
+// (the arbiter may omit the partition id when it is unambiguous).
+func sumCandidatePartsForPartition(task PromotionTask, partitionID string) (string, error) {
+	singlePartition := len(task.PartitionIDs) == 1
+	hashes := make([]string, 0, len(task.CandidateParts))
+	for _, part := range task.CandidateParts {
+		if part.PartitionID == partitionID || (part.PartitionID == "" && singlePartition) {
+			hashes = append(hashes, part.PartRowLtHash)
+		}
+	}
+	return sumPartRowLtHashes(hashes)
 }
 
 func shouldAttachBasePartition(task PromotionTask) bool {

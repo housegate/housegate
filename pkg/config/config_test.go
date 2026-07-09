@@ -315,6 +315,13 @@ func TestConfigStorageIntegrityPartLtHashCache(t *testing.T) {
 	}
 }
 
+func TestConfigStorageIntegrityPromotionStrictVerificationDefault(t *testing.T) {
+	// Fast (arithmetic) verification is the default: strict_verification is off.
+	if Default().StorageIntegrity.Promotion.StrictVerification {
+		t.Fatalf("promotion.strict_verification must default to false (fast arithmetic CAS)")
+	}
+}
+
 func TestConfigValidate(t *testing.T) {
 	baseServer := minimalServerConfig(t)
 	baseAgent := Config{

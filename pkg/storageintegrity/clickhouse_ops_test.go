@@ -51,6 +51,9 @@ func TestClickHousePromoterUsesPromoteShadowCASSeqAndUnsafeCleanup(t *testing.T)
 		PromoteDatabase:  "hg_promote",
 		CleanupUnsafe:    true,
 		DropPromoteTable: true,
+		// This test drives the readback CAS with placeholder roots; the arithmetic
+		// fast path is covered separately (it requires real accumulator hex).
+		StrictVerification: true,
 	}
 
 	result, err := promoter.Promote(context.Background(), PromotionTask{

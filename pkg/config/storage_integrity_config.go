@@ -33,6 +33,21 @@ type StorageIntegrityConfig struct {
 	SafeTables            StorageIntegritySafeTablesConfig `json:"safe_tables" yaml:"safe_tables"`
 	SafeMerges            StorageIntegritySafeMergesConfig `json:"safe_merges" yaml:"safe_merges"`
 	PartLtHashCache       StorageIntegrityPartLtHashCacheConfig `json:"part_lthash_cache" yaml:"part_lthash_cache"`
+	Promotion             StorageIntegrityPromotionConfig  `json:"promotion" yaml:"promotion"`
+}
+
+// StorageIntegrityPromotionConfig tunes the local promotion executor. It does
+// not change the arbiter command or the published manifest — only how the SNode
+// verifies its own REPLACE PARTITION locally.
+type StorageIntegrityPromotionConfig struct {
+	// StrictVerification forces a full post-promotion readback of the shadow's
+	// active parts for the post-root CAS. When false (default) the CAS uses the
+	// arithmetic expected post root (base + sum of verified candidate part
+	// LtHashes) — provably equal to the readback root because ATTACH PARTITION is
+	// byte-preserving and the additive sum is merge-invariant — avoiding a full
+	// row scan. Either way the CAS is still against the arbiter-pinned
+	// ExpectedPostRoots, so a mismatch fails closed before REPLACE.
+	StrictVerification bool `json:"strict_verification" yaml:"strict_verification"`
 }
 
 // StorageIntegrityPartLtHashCacheConfig controls the local, discardable
