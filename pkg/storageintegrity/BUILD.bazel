@@ -46,6 +46,7 @@ go_test(
         "part_cache_scanner_test.go",
         "part_lthash_cache_test.go",
         "promotion_fast_root_test.go",
+        "safe_audit_fast_test.go",
         "snapshot_resolver_test.go",
         "workers_test.go",
     ],

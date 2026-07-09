@@ -1471,7 +1471,14 @@ func (s HashingByteSideScanner) scanParts(ctx context.Context, task ByteSideScan
 type ClickHouseSafeAuditor struct {
 	Hasher      TableHasher
 	ActiveParts ActivePartReader
-	WorkerID    string
+	// FastScan, when set, serves the active-set comparison (the manifest
+	// active-parts check) from the part cache instead of a full row scan. It does
+	// NOT affect the audit vote's StateRoot, which stays a full Hasher.HashTable
+	// scan — the vote semantics are unchanged; the cache only accelerates the
+	// pre-check. Requires the safe table to be a qualified `db`.`table`; falls
+	// back to ActiveParts otherwise.
+	FastScan *CachingPartScanner
+	WorkerID string
 }
 
 func (a ClickHouseSafeAuditor) AuditSafe(ctx context.Context, task SafeAuditTask) (SafeAuditVote, error) {
@@ -1500,15 +1507,15 @@ func (a ClickHouseSafeAuditor) AuditSafe(ctx context.Context, task SafeAuditTask
 		return SafeAuditVote{}, fmt.Errorf("safe audit manifest: %w", err)
 	}
 	vote.ManifestRoot = task.Manifest.ManifestRoot
-	if a.ActiveParts == nil {
+	if a.FastScan == nil && a.ActiveParts == nil {
 		vote.Match = false
 		vote.ActivePartsMatch = false
 		vote.Error = "active part reader is required for manifest audit"
 		return vote, nil
 	}
-	parts, err := a.ActiveParts.ReadActiveParts(ctx, task.SafeTable, task.PartitionIDs)
+	parts, err := a.auditActiveParts(ctx, task)
 	if err != nil {
-		return SafeAuditVote{}, fmt.Errorf("read safe active parts: %w", err)
+		return SafeAuditVote{}, err
 	}
 	tableID := firstNonEmptyString(task.TableID, tableIDFromManifest(task.Manifest), normalizeTableID(task.SafeTable))
 	expectedParts := manifestActiveParts(task.Manifest, tableID, task.PartitionIDs)
@@ -1519,6 +1526,31 @@ func (a ClickHouseSafeAuditor) AuditSafe(ctx context.Context, task SafeAuditTask
 		vote.Error = "active parts do not match manifest"
 	}
 	return vote, nil
+}
+
+// auditActiveParts reads the safe table's active parts for the manifest
+// active-set comparison. It prefers the part cache fast path when wired and the
+// safe table is a qualified `db`.`table`, folding rows only for parts that miss
+// the cache; it does NOT touch the vote StateRoot. Falls back to the full
+// active-part reader otherwise.
+func (a ClickHouseSafeAuditor) auditActiveParts(ctx context.Context, task SafeAuditTask) ([]replay.PartManifestEntry, error) {
+	if a.FastScan != nil {
+		if db, table, ok := splitQualifiedTable(task.SafeTable); ok {
+			parts, err := a.FastScan.ScanParts(ctx, db, table, task.PartitionIDs)
+			if err != nil {
+				return nil, fmt.Errorf("read safe active parts (fast): %w", err)
+			}
+			return parts, nil
+		}
+	}
+	if a.ActiveParts == nil {
+		return nil, fmt.Errorf("active part reader is required for manifest audit")
+	}
+	parts, err := a.ActiveParts.ReadActiveParts(ctx, task.SafeTable, task.PartitionIDs)
+	if err != nil {
+		return nil, fmt.Errorf("read safe active parts: %w", err)
+	}
+	return parts, nil
 }
 
 var unsafeIdentChars = regexp.MustCompile(`[^A-Za-z0-9_]`)

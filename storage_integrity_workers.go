@@ -237,7 +237,9 @@ func buildStorageIntegrityBackgroundTasks(cfg *config.Config, creds credentials.
 		})
 	}
 	if workers.SafeAudit {
-		auditor := si.ClickHouseSafeAuditor{Hasher: hasher, ActiveParts: active, WorkerID: workerID}
+		// FastScan (opt-in) accelerates only the manifest active-set pre-check; the
+		// audit vote StateRoot stays a full Hasher.HashTable scan.
+		auditor := si.ClickHouseSafeAuditor{Hasher: hasher, ActiveParts: active, FastScan: partScanner, WorkerID: workerID}
 		worker := si.SafeAuditWorker{
 			WorkerID:     workerID,
 			Arbiter:      arbiter,
