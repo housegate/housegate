@@ -39,12 +39,13 @@ func buildStorageIntegrityBackgroundTasks(cfg *config.Config, creds credentials.
 	errorBackoff := workers.ErrorBackoff.Duration
 
 	var (
-		conn       clickhouse.Conn
-		hasher     si.TableHasher
-		active     si.ActivePartReader
-		rootReader si.PartitionRootReader
-		seqStore   si.PromotionSeqStore
-		cleanup    func()
+		conn        clickhouse.Conn
+		hasher      si.TableHasher
+		active      si.ActivePartReader
+		rootReader  si.PartitionRootReader
+		seqStore    si.PromotionSeqStore
+		partScanner *si.CachingPartScanner
+		cleanup     func()
 	)
 	needClickHouse := storageIntegrityWorkersNeedClickHouse(workers) || storageIntegrityReplayNeedsActiveVerification(cfg, workers)
 	if needClickHouse {
@@ -54,12 +55,27 @@ func buildStorageIntegrityBackgroundTasks(cfg *config.Config, creds credentials.
 			return nil, nil, err
 		}
 		hasher = si.NewClickHouseTableHasher(conn, "")
-		active = si.NewClickHouseActivePartReader(conn, "")
+		activeReader := si.NewClickHouseActivePartReader(conn, "")
+		active = activeReader
 		rootReader = si.ActivePartPartitionRootReader{ActiveParts: active}
 		seqStore = si.ClickHousePromotionSeqStore{
 			Exec:             conn,
 			Query:            si.NewClickHouseHashConn(conn),
 			MetadataDatabase: workers.MetadataDatabase,
+		}
+		// Local, discardable part-LtHash cache fast path (opt-in). Keyed by
+		// physical part content, it only elides row scans; a miss recomputes via
+		// the same fold, so submitted evidence is unchanged. The concrete
+		// activeReader provides the cache-miss ReadNamedParts scanner.
+		if cfg.StorageIntegrity.PartLtHashCache.Enabled {
+			hashConn := si.NewClickHouseHashConn(conn)
+			partScanner = &si.CachingPartScanner{
+				Inspector: si.ClickHousePartInspector{Conn: hashConn},
+				Cache:     si.NewInMemoryPartLtHashCache(cfg.StorageIntegrity.PartLtHashCache.MaxEntries),
+				Scanner:   activeReader,
+				Schema:    si.ClickHouseSchemaHashReader{Conn: hashConn},
+				Source:    "byte_side_scan",
+			}
 		}
 	}
 
@@ -113,8 +129,9 @@ func buildStorageIntegrityBackgroundTasks(cfg *config.Config, creds credentials.
 			// gap-26b: scan real physical parts (ActivePartReader reads _part) so
 			// RCRecord candidate parts carry actual part names for the byte-side
 			// check; falls back to the per-partition hasher if no active reader is
-			// available.
-			scanner = si.HashingByteSideScanner{ActiveParts: active, Hasher: hasher, WorkerID: workerID}
+			// available. FastScan (opt-in) fronts the fold with the part-LtHash
+			// cache and is preferred when wired.
+			scanner = si.HashingByteSideScanner{FastScan: partScanner, ActiveParts: active, Hasher: hasher, WorkerID: workerID}
 		}
 		worker := si.VerifierWorker{
 			WorkerID:        workerID,

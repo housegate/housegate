@@ -285,6 +285,36 @@ func TestConfigValidateStorageIntegritySafeMerges(t *testing.T) {
 	}
 }
 
+func TestConfigStorageIntegrityPartLtHashCache(t *testing.T) {
+	// Default: present but disabled, with a sane bound.
+	def := Default().StorageIntegrity.PartLtHashCache
+	if def.Enabled {
+		t.Fatalf("part_lthash_cache must default to disabled")
+	}
+	if def.MaxEntries <= 0 {
+		t.Fatalf("part_lthash_cache default max_entries must be positive, got %d", def.MaxEntries)
+	}
+
+	cfg := minimalServerConfig(t)
+	cfg.StorageIntegrity.Enabled = true
+	cfg.StorageIntegrity.DAEndpoint = "http://127.0.0.1:18080"
+	cfg.StorageIntegrity.ArbiterEndpoint = "http://127.0.0.1:18080"
+	cfg.StorageIntegrity.UnsafeDatabase = "hg_unsafe"
+	cfg.StorageIntegrity.SafeDatabase = "hg_safe"
+
+	// A negative max_entries is rejected only when the cache is enabled.
+	cfg.StorageIntegrity.PartLtHashCache.Enabled = true
+	cfg.StorageIntegrity.PartLtHashCache.MaxEntries = -1
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "part_lthash_cache.max_entries must be non-negative") {
+		t.Fatalf("Validate negative max_entries err = %v, want rejection", err)
+	}
+	// 0 is allowed (means "default bound" at construction time).
+	cfg.StorageIntegrity.PartLtHashCache.MaxEntries = 0
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate enabled cache with max_entries=0: %v", err)
+	}
+}
+
 func TestConfigValidate(t *testing.T) {
 	baseServer := minimalServerConfig(t)
 	baseAgent := Config{

@@ -46,6 +46,45 @@ func (d PartDescriptor) CacheKey() (PartLtHashKey, bool) {
 	return key, key.valid()
 }
 
+// ClickHouseSchemaHashReader resolves the live schema hash of a physical table
+// from system.columns, folded through the shared nativeSchemaHash. It satisfies
+// SchemaColumnReader for the caching part scanner. The value is a cache-key
+// namespacing device only (it never leaves the cache); it just has to be stable
+// across calls for a given table and to change when a column's name/type
+// changes — both hold because the query orders columns by name and
+// nativeSchemaHash folds name+type. A schema change (out of MVP scope) yields a
+// different key, so stale-schema hits cannot occur.
+type ClickHouseSchemaHashReader struct {
+	Conn HashQueryConn
+}
+
+func (r ClickHouseSchemaHashReader) SchemaHash(ctx context.Context, database, table, tableID string) (string, error) {
+	if r.Conn == nil {
+		return "", fmt.Errorf("clickhouse query connection is required")
+	}
+	rows, err := r.Conn.Query(ctx, "SELECT name, type FROM system.columns WHERE database = "+
+		sqlStringLiteral(database)+" AND table = "+sqlStringLiteral(table)+" ORDER BY name")
+	if err != nil {
+		return "", fmt.Errorf("query system.columns for %s.%s: %w", database, table, err)
+	}
+	defer rows.Close()
+	var cols []lthash.Column
+	for rows.Next() {
+		var name, typ string
+		if err := rows.Scan(&name, &typ); err != nil {
+			return "", fmt.Errorf("scan system.columns for %s.%s: %w", database, table, err)
+		}
+		cols = append(cols, lthash.Column{Name: name, Type: typ})
+	}
+	if err := rows.Err(); err != nil {
+		return "", fmt.Errorf("system.columns rows for %s.%s: %w", database, table, err)
+	}
+	if len(cols) == 0 {
+		return "", fmt.Errorf("no columns found for %s.%s", database, table)
+	}
+	return nativeSchemaHash(tableID, cols), nil
+}
+
 // PartInspector reads live active-part metadata from ClickHouse. It is the
 // system.parts front door for the fast paths: cheap metadata (no row scan) that
 // yields the content address (hash_of_all_files) and the authoritative row

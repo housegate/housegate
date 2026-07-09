@@ -103,3 +103,32 @@ func TestClickHousePartInspectorRequiresConn(t *testing.T) {
 		t.Fatalf("expected error when Conn is nil")
 	}
 }
+
+func TestClickHouseSchemaHashReaderFoldsNativeSchemaHash(t *testing.T) {
+	conn := &fakeHashQueryConn{rows: &fakeHashRows{
+		columns: []string{"name", "type"},
+		types:   []string{"String", "String"},
+		values:  [][]any{{"id", "UInt64"}, {"v", "String"}},
+	}}
+	reader := ClickHouseSchemaHashReader{Conn: conn}
+	got, err := reader.SchemaHash(context.Background(), "hg_safe", "events", "hg_safe.events")
+	if err != nil {
+		t.Fatalf("SchemaHash: %v", err)
+	}
+	// Must equal the shared nativeSchemaHash over the same (name,type) set.
+	want := nativeSchemaHash("hg_safe.events", []lthash.Column{{Name: "id", Type: "UInt64"}, {Name: "v", Type: "String"}})
+	if got != want {
+		t.Fatalf("SchemaHash = %q, want %q", got, want)
+	}
+	if !strings.Contains(conn.query, "FROM system.columns") || !strings.Contains(conn.query, "ORDER BY name") {
+		t.Fatalf("unexpected system.columns query: %s", conn.query)
+	}
+}
+
+func TestClickHouseSchemaHashReaderEmptyTableErrors(t *testing.T) {
+	conn := &fakeHashQueryConn{rows: &fakeHashRows{columns: []string{"name", "type"}, types: []string{"String", "String"}}}
+	reader := ClickHouseSchemaHashReader{Conn: conn}
+	if _, err := reader.SchemaHash(context.Background(), "hg_safe", "missing", "hg_safe.missing"); err == nil {
+		t.Fatalf("expected error for a table with no columns")
+	}
+}

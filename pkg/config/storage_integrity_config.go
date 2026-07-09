@@ -32,6 +32,17 @@ type StorageIntegrityConfig struct {
 	Mutations             StorageIntegrityMutationsConfig  `json:"mutations" yaml:"mutations"`
 	SafeTables            StorageIntegritySafeTablesConfig `json:"safe_tables" yaml:"safe_tables"`
 	SafeMerges            StorageIntegritySafeMergesConfig `json:"safe_merges" yaml:"safe_merges"`
+	PartLtHashCache       StorageIntegrityPartLtHashCacheConfig `json:"part_lthash_cache" yaml:"part_lthash_cache"`
+}
+
+// StorageIntegrityPartLtHashCacheConfig controls the local, discardable
+// per-part row-LtHash cache that fronts the byte-side / base-commitment /
+// promotion row folds. It is a pure data-plane acceleration: a miss recomputes
+// by scanning, and entries are keyed by physical part content, so the cache can
+// never change the evidence submitted to the arbiter. Disabled by default.
+type StorageIntegrityPartLtHashCacheConfig struct {
+	Enabled    bool `json:"enabled"     yaml:"enabled"`
+	MaxEntries int  `json:"max_entries" yaml:"max_entries"`
 }
 
 type StorageIntegrityWorkersConfig struct {
@@ -138,6 +149,10 @@ func defaultStorageIntegrityConfig() StorageIntegrityConfig {
 			Mode:                        "controlled_compaction",
 			AllowNativeBackgroundMerges: false,
 		},
+		PartLtHashCache: StorageIntegrityPartLtHashCacheConfig{
+			Enabled:    false,
+			MaxEntries: 1_000_000,
+		},
 	}
 }
 
@@ -216,6 +231,9 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 	}
 	if c.SafeMerges.Enabled && c.SafeMerges.Mode != "" && c.SafeMerges.Mode != "controlled_compaction" {
 		errs = append(errs, errors.New("storage_integrity.safe_merges.mode must be controlled_compaction"))
+	}
+	if c.PartLtHashCache.Enabled && c.PartLtHashCache.MaxEntries < 0 {
+		errs = append(errs, errors.New("storage_integrity.part_lthash_cache.max_entries must be non-negative"))
 	}
 	// gap-25: a configured leader public key must be a valid 32-byte ed25519 key.
 	if key := strings.TrimPrefix(strings.TrimSpace(c.LeaderPublicKeyHex), "0x"); key != "" {
