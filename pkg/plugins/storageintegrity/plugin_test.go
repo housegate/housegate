@@ -781,6 +781,38 @@ func TestPluginRejectsUnboundedMutation(t *testing.T) {
 	}
 }
 
+// TestPluginRejectsUnparseablePartitionPredicateWhenColumnsConfigured proves
+// HG-P1-01: once partition_columns are declared, a mutation whose WHERE does
+// not map to an extractable partition id is rejected rather than silently
+// widened to a whole-table ("all") mutation — even without
+// require_partition_predicate set.
+func TestPluginRejectsUnparseablePartitionPredicateWhenColumnsConfigured(t *testing.T) {
+	seq := &fakeSequencer{}
+	p := New(Config{
+		SafeDatabase:     "hg_safe",
+		Sequencer:        seq,
+		PartitionColumns: []string{"day"},
+		// RequirePartitionPredicate intentionally left false: declaring the
+		// columns alone must be enough to fail closed.
+	})
+	sess := &fakeSession{id: 21, state: chsession.NewSessionState()}
+	// WHERE on a non-partition column with no date predicate: no partition id
+	// can be extracted.
+	sql := "ALTER TABLE events UPDATE label = 'x' WHERE id = 1"
+	qctx := &plugin.QueryContext{
+		Session:     sess,
+		OriginalSQL: sql,
+		Query:       &chproto.Query{Body: sql},
+	}
+	err := p.OnQuery(context.Background(), qctx)
+	if err == nil || !strings.Contains(err.Error(), "extractable partition predicate") {
+		t.Fatalf("expected extractable-partition-predicate rejection, got %v", err)
+	}
+	if seq.mut.StatementID != "" {
+		t.Fatalf("unexpected mutation record after rejection: %+v", seq.mut)
+	}
+}
+
 func TestPluginNormalizesUpdateAndDeleteMutationSyntax(t *testing.T) {
 	tests := []struct {
 		name     string

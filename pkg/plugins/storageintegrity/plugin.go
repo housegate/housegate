@@ -930,8 +930,19 @@ func (p *Plugin) resolveMutationTarget(ctx context.Context, qctx *plugin.QueryCo
 		return mutationTarget{}, err
 	}
 	if len(partitionIDs) == 0 {
-		if p.requirePartitionPredicate && len(p.partitionColumns) > 0 {
-			return mutationTarget{}, fmt.Errorf("bounded mutation requires extractable partition predicate on one of %v", p.partitionColumns)
+		// HG-P1-01: fail closed when a partition predicate is required, OR when
+		// the operator has declared partition columns at all — declaring
+		// partition_columns is a statement of intent that mutations must be
+		// partition-bounded, so a WHERE that does not map to an extractable
+		// partition id must be rejected rather than silently widened to a
+		// whole-table ("all") mutation. The unbounded "all" fallback is only
+		// taken when no partition columns are configured (and the touched-set
+		// byte/part limits still bound it).
+		if p.requirePartitionPredicate && len(p.partitionColumns) == 0 {
+			return mutationTarget{}, fmt.Errorf("require_partition_predicate is set but no partition_columns are configured")
+		}
+		if p.requirePartitionPredicate || len(p.partitionColumns) > 0 {
+			return mutationTarget{}, fmt.Errorf("bounded mutation requires an extractable partition predicate on one of %v", p.partitionColumns)
 		}
 		partitionIDs = []string{"all"}
 	}
@@ -1120,6 +1131,11 @@ func (p *Plugin) validateMutationTouchedLimits(ctx context.Context, tableID stri
 	}
 	watermark, err := p.snapshotReader.GetSafeWatermark(ctx)
 	if err != nil {
+		if errors.Is(err, core.ErrNoSafeWatermark) {
+			// No safe snapshot published yet: there is no safe state to touch, so
+			// the touched-set limits cannot be exceeded. Nothing to bound.
+			return nil
+		}
 		return fmt.Errorf("get safe watermark for mutation touched-set limits: %w", err)
 	}
 	if watermark.SnapshotID == "" {

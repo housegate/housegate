@@ -303,14 +303,29 @@ func (w MutationWorker) RunOnce(ctx context.Context) (bool, error) {
 			if err != nil {
 				return didWork, fmt.Errorf("execute mutation %s: %w", task.StatementID, err)
 			}
-			if claim.WorkerID == "" {
-				claim.WorkerID = w.WorkerID
+			// HG-P1-02: re-check the pinned snapshot AFTER the (potentially long)
+			// scratch build and BEFORE submitting the claim. If a newer safe
+			// snapshot was published during execution, the just-built claim is
+			// against a superseded base — submit a stale-rebind claim instead so
+			// the arbiter re-dispatches against the current watermark rather than
+			// accepting an already-stale post-state.
+			if rebind, stale, rerr := w.staleRebindClaim(ctx, task); rerr != nil {
+				return didWork, rerr
+			} else if stale {
+				if err := arbiter.SubmitMutationClaim(ctx, rebind); err != nil {
+					return didWork, fmt.Errorf("submit post-execution mutation stale-rebind claim: %w", err)
+				}
+				didWork = true
+			} else {
+				if claim.WorkerID == "" {
+					claim.WorkerID = w.WorkerID
+				}
+				fillMutationClaimDefaults(&claim, task)
+				if err := arbiter.SubmitMutationClaim(ctx, claim); err != nil {
+					return didWork, fmt.Errorf("submit mutation claim: %w", err)
+				}
+				didWork = true
 			}
-			fillMutationClaimDefaults(&claim, task)
-			if err := arbiter.SubmitMutationClaim(ctx, claim); err != nil {
-				return didWork, fmt.Errorf("submit mutation claim: %w", err)
-			}
-			didWork = true
 		}
 	}
 
@@ -339,14 +354,24 @@ func (w MutationWorker) RunOnce(ctx context.Context) (bool, error) {
 			if err != nil {
 				return didWork, fmt.Errorf("replay mutation %s: %w", replayTask.StatementID, err)
 			}
-			if result.WorkerID == "" {
-				result.WorkerID = w.WorkerID
+			// HG-P1-02: post-execution stale re-check (see the claim path above).
+			if rebind, stale, rerr := w.staleRebindReplayResult(ctx, replayTask); rerr != nil {
+				return didWork, rerr
+			} else if stale {
+				if err := arbiter.SubmitMutationReplay(ctx, rebind); err != nil {
+					return didWork, fmt.Errorf("submit post-execution mutation replay stale-rebind result: %w", err)
+				}
+				didWork = true
+			} else {
+				if result.WorkerID == "" {
+					result.WorkerID = w.WorkerID
+				}
+				fillMutationReplayDefaults(&result, replayTask)
+				if err := arbiter.SubmitMutationReplay(ctx, result); err != nil {
+					return didWork, fmt.Errorf("submit mutation replay: %w", err)
+				}
+				didWork = true
 			}
-			fillMutationReplayDefaults(&result, replayTask)
-			if err := arbiter.SubmitMutationReplay(ctx, result); err != nil {
-				return didWork, fmt.Errorf("submit mutation replay: %w", err)
-			}
-			didWork = true
 		}
 	}
 	return didWork, nil

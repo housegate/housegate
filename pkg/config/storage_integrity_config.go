@@ -126,6 +126,13 @@ type StorageIntegrityMutationsConfig struct {
 	RequirePartitionPredicate bool     `json:"require_partition_predicate" yaml:"require_partition_predicate"`
 	PartitionColumns          []string `json:"partition_columns"           yaml:"partition_columns"`
 	ProtectedColumns          []string `json:"protected_columns"           yaml:"protected_columns"`
+	// RequireKeyColumnProvider makes key-column auto-derivation mandatory
+	// (protected mode, HG-P1-01): startup fails if the ClickHouse connection used
+	// to read partition/order/primary key columns is unreachable, instead of
+	// silently degrading to the manual protected_columns list. A protected
+	// deployment cannot run UPDATE admission with weaker key protection than it
+	// declared.
+	RequireKeyColumnProvider  bool     `json:"require_key_column_provider" yaml:"require_key_column_provider"`
 	WaitMutationsSync         int      `json:"wait_mutations_sync"         yaml:"wait_mutations_sync"`
 	RejectLightweightDelete   bool     `json:"reject_lightweight_delete"   yaml:"reject_lightweight_delete"`
 	// QuarantineMinority is advisory arbiter policy, not enforced by HouseGate.

@@ -810,3 +810,59 @@ func TestMutationWorkerAppliesMutationTimeoutDeadline(t *testing.T) {
 		t.Fatalf("expected no deadline when neither MutationTimeout nor MaxRebindDuration is set")
 	}
 }
+
+// advancingWatermarkExecutor advances the sequencer's watermark as a side
+// effect of executing, simulating a newer safe snapshot published concurrently
+// during the (long) scratch build — so the pre-execution stale check passes but
+// the post-execution re-check must catch the staleness (HG-P1-02).
+type advancingWatermarkExecutor struct {
+	seq       *fakeWorkerSequencer
+	newMark   SafeWatermark
+	executed  bool
+}
+
+func (e *advancingWatermarkExecutor) ExecuteMutation(_ context.Context, task MutationTask) (MutationClaim, error) {
+	e.executed = true
+	e.seq.watermark = e.newMark // a newer snapshot lands mid-execution
+	return MutationClaim{StatementID: task.StatementID, PostStateRoot: "root"}, nil
+}
+
+func (e *advancingWatermarkExecutor) ReplayMutation(_ context.Context, task MutationTask) (MutationReplayResult, error) {
+	e.executed = true
+	e.seq.watermark = e.newMark
+	return MutationReplayResult{StatementID: task.StatementID, PostStateRoot: "root"}, nil
+}
+
+func TestMutationWorkerPostExecutionStaleRecheckRebinds(t *testing.T) {
+	seq := &fakeWorkerSequencer{
+		mutationTask: MutationTask{
+			StatementID:        "stmt-mut",
+			TableID:            "tenant.events",
+			MutationType:       MutationTypeUpdate,
+			MutationSQL:        "ALTER TABLE `hg_safe`.`events` UPDATE label = 'b' WHERE day = '2026-07-03'",
+			SafeTable:          "`hg_safe`.`events`",
+			BaseSafeSnapshotID: "snap-base",
+			PartitionIDs:       []string{"202607"},
+		},
+		mutationOK: true,
+		// Pre-execution watermark equals the task base → NOT stale before exec.
+		watermark: SafeWatermark{SnapshotID: "snap-base"},
+	}
+	exec := &advancingWatermarkExecutor{seq: seq, newMark: SafeWatermark{SnapshotID: "snap-newer", StateRoot: "root-newer"}}
+	worker := MutationWorker{WorkerID: "worker-a", Sequencer: seq, Executor: exec, SnapshotReader: seq, MaxRebindAttempts: 3}
+
+	didWork, err := worker.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if !didWork || !exec.executed {
+		t.Fatalf("expected execution then a post-exec rebind, didWork=%v executed=%v", didWork, exec.executed)
+	}
+	// The submitted claim must be the stale-rebind, NOT the freshly-built mutation
+	// claim, because the watermark advanced during execution.
+	if !seq.submittedMutationClaim.StaleRebind ||
+		seq.submittedMutationClaim.LatestSafeSnapshotID != "snap-newer" ||
+		!strings.Contains(seq.submittedMutationClaim.Error, "stale rebind") {
+		t.Fatalf("expected post-execution stale-rebind claim, got %+v", seq.submittedMutationClaim)
+	}
+}

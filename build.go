@@ -627,6 +627,10 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 					return safeDB, name
 				},
 			}
+		} else if cfg.StorageIntegrity.Mutations.RequireKeyColumnProvider {
+			// HG-P1-01 protected mode: fail fast rather than run UPDATE admission
+			// with only the manual protected_columns list.
+			return nil, fmt.Errorf("storage_integrity.mutations.require_key_column_provider is set but the key-column ClickHouse connection is unavailable: %w", kcErr)
 		} else {
 			log.Warnw("storage_integrity key-column auto-derivation disabled; using manual protected_columns only", "err", kcErr)
 		}
