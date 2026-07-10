@@ -220,6 +220,8 @@ func buildStorageIntegrityBackgroundTasks(cfg *config.Config, creds credentials.
 			Executor:          si.GuardingMutationExecutor{Guard: guard, Resolver: resolver, VerifyActive: cfg.StorageIntegrity.SafeTables.VerifyPhysicalActiveMatchesManifest, Executor: executor},
 			SnapshotReader:    arbiter,
 			MaxRebindAttempts: cfg.StorageIntegrity.Mutations.MaxRebindAttempts,
+			MutationTimeout:   cfg.StorageIntegrity.Mutations.MutationTimeout.Duration,
+			MaxRebindDuration: cfg.StorageIntegrity.Mutations.MaxRebindDuration.Duration,
 			PollInterval:      pollInterval,
 		}
 		tasks = append(tasks, backgroundTask{

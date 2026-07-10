@@ -1156,6 +1156,10 @@ func (e ClickHouseMutationExecutor) ExecuteMutation(ctx context.Context, task Mu
 		return MutationClaim{}, err
 	}
 	evidence := buildMutationEvidence(task, before, hash)
+	postStateRoot, err := mutationPostStateRoot(task, before, hash, evidence, hash.StateRoot)
+	if err != nil {
+		return MutationClaim{}, err
+	}
 	claim := MutationClaim{
 		StatementID:              task.StatementID,
 		WorkerID:                 e.WorkerID,
@@ -1165,7 +1169,7 @@ func (e ClickHouseMutationExecutor) ExecuteMutation(ctx context.Context, task Mu
 		BasePartitionRoots:       evidence.baseRoots,
 		SchemaSnapshotID:         task.SchemaSnapshotID,
 		PromotionSeq:             task.PromotionSeq,
-		PostStateRoot:            hash.StateRoot,
+		PostStateRoot:            postStateRoot,
 		PostPartitionCommitments: evidence.postCommitments,
 		PartitionDeltas:          evidence.deltas,
 		RowsBefore:               evidence.rowsBefore,
@@ -1191,6 +1195,10 @@ func (e ClickHouseMutationExecutor) ReplayMutation(ctx context.Context, task Mut
 		return MutationReplayResult{}, err
 	}
 	evidence := buildMutationEvidence(task, before, hash)
+	postStateRoot, err := mutationPostStateRoot(task, before, hash, evidence, hash.StateRoot)
+	if err != nil {
+		return MutationReplayResult{}, err
+	}
 	result := MutationReplayResult{
 		StatementID:              task.StatementID,
 		WorkerID:                 e.WorkerID,
@@ -1199,7 +1207,7 @@ func (e ClickHouseMutationExecutor) ReplayMutation(ctx context.Context, task Mut
 		BasePartitionRoots:       evidence.baseRoots,
 		SchemaSnapshotID:         task.SchemaSnapshotID,
 		PromotionSeq:             task.PromotionSeq,
-		PostStateRoot:            hash.StateRoot,
+		PostStateRoot:            postStateRoot,
 		PostPartitionCommitments: evidence.postCommitments,
 		PartitionDeltas:          evidence.deltas,
 		RowsBefore:               evidence.rowsBefore,
@@ -2044,6 +2052,59 @@ type mutationEvidence struct {
 	rowsAfter       uint64
 	rowsUpdated     uint64
 	rowsDeleted     uint64
+}
+
+// mutationPostStateRoot binds the mutation post-state to the manifest's
+// state-root formula (HG-P1-02): H(schema_snapshot_id, schema_root,
+// executor_profile_id, data_root_after) via replay.AssembleStateRoot, rather
+// than a bare unbound LtHash digest. data_root_after is the whole-table
+// partition-root set after the mutation: the base per-partition roots with each
+// touched partition replaced by its post-commitment (spec §6.3 — the manifest
+// state covers unchanged partitions too, so a schema/profile swap or an
+// untouched-partition divergence changes the committed root).
+//
+// Source (ExecuteMutation) and verifier (ReplayMutation) call this identically,
+// so the claim's PostStateRoot equals the replay's by construction. When the
+// task carries no schema_root/executor_profile_id (legacy tasks), it returns
+// the bare post digest so behaviour is unchanged until the control plane
+// supplies the schema identity.
+func mutationPostStateRoot(task MutationTask, before, post TableHash, evidence mutationEvidence, bareFallback string) (string, error) {
+	if task.SchemaRoot == "" || task.ExecutorProfileID == "" {
+		return bareFallback, nil
+	}
+	tableID := firstNonEmptyString(task.TableID, normalizeTableID(task.SafeTable))
+	// Start from the base whole-table partition roots (prefer the task-pinned
+	// BasePartitionRoots; fall back to the roots derived from the base scan), then
+	// overlay the touched partitions' post commitments.
+	roots := map[string]replay.PartitionCommitment{}
+	order := []string{}
+	upsert := func(pc replay.PartitionCommitment) {
+		key := pc.PartitionID
+		if _, ok := roots[key]; !ok {
+			order = append(order, key)
+		}
+		roots[key] = replay.PartitionCommitment{TableID: tableID, PartitionID: pc.PartitionID, Root: pc.Root}
+	}
+	base := task.BasePartitionRoots
+	if len(base) == 0 {
+		base = evidence.baseRoots
+	}
+	for _, pc := range base {
+		upsert(pc)
+	}
+	for _, pc := range evidence.postCommitments {
+		upsert(pc)
+	}
+	partitionRoots := make([]replay.PartitionCommitment, 0, len(order))
+	for _, key := range order {
+		partitionRoots = append(partitionRoots, roots[key])
+	}
+	tables := []replay.TableManifest{{TableID: tableID, PartitionRoots: partitionRoots}}
+	_, stateRoot, err := replay.AssembleStateRoot(task.SchemaSnapshotID, task.SchemaRoot, task.ExecutorProfileID, tables)
+	if err != nil {
+		return "", fmt.Errorf("assemble mutation post state root: %w", err)
+	}
+	return stateRoot, nil
 }
 
 func buildMutationEvidence(task MutationTask, before, post TableHash) mutationEvidence {

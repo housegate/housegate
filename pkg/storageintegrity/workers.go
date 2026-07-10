@@ -2,6 +2,7 @@ package storageintegrity
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -250,6 +251,15 @@ type MutationWorker struct {
 	Executor          MutationExecutor
 	SnapshotReader    SnapshotReader
 	MaxRebindAttempts int
+	// MutationTimeout, when > 0, bounds the whole scratch-mutation-to-claim cycle
+	// with a context deadline (HG-P1-02); on expiry the task returns a retryable
+	// error rather than blocking a worker slot indefinitely. Distinct from the
+	// executor's per-statement QueryTimeout.
+	MutationTimeout time.Duration
+	// MaxRebindDuration, when > 0, caps how long a task may keep rebinding to
+	// newer safe snapshots before it is abandoned as retryable — a time-based
+	// companion to MaxRebindAttempts.
+	MaxRebindDuration time.Duration
 	PollInterval      time.Duration
 }
 
@@ -287,7 +297,9 @@ func (w MutationWorker) RunOnce(ctx context.Context) (bool, error) {
 			}
 			didWork = true
 		} else {
-			claim, err := w.Executor.ExecuteMutation(ctx, task)
+			execCtx, cancel := w.mutationExecContext(ctx)
+			claim, err := w.Executor.ExecuteMutation(execCtx, task)
+			cancel()
 			if err != nil {
 				return didWork, fmt.Errorf("execute mutation %s: %w", task.StatementID, err)
 			}
@@ -321,7 +333,9 @@ func (w MutationWorker) RunOnce(ctx context.Context) (bool, error) {
 			}
 			didWork = true
 		} else {
-			result, err := w.Executor.ReplayMutation(ctx, replayTask)
+			execCtx, cancel := w.mutationExecContext(ctx)
+			result, err := w.Executor.ReplayMutation(execCtx, replayTask)
+			cancel()
 			if err != nil {
 				return didWork, fmt.Errorf("replay mutation %s: %w", replayTask.StatementID, err)
 			}
@@ -408,12 +422,31 @@ type staleMutationRebind struct {
 	latestStateRoot  string
 }
 
+// mutationExecContext applies the whole-mutation wall-clock budget (HG-P1-02)
+// as a context deadline around the scratch-mutation-to-claim cycle, using the
+// tighter of MutationTimeout and MaxRebindDuration. The returned cancel must
+// always be called. When neither is set the caller context is untouched.
+func (w MutationWorker) mutationExecContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	budget := w.MutationTimeout
+	if w.MaxRebindDuration > 0 && (budget == 0 || w.MaxRebindDuration < budget) {
+		budget = w.MaxRebindDuration
+	}
+	if budget > 0 {
+		return context.WithTimeout(ctx, budget)
+	}
+	return ctx, func() {}
+}
+
 func (w MutationWorker) staleRebind(ctx context.Context, task MutationTask) (staleMutationRebind, bool, error) {
 	if w.SnapshotReader == nil || task.BaseSafeSnapshotID == "" {
 		return staleMutationRebind{}, false, nil
 	}
 	watermark, err := w.SnapshotReader.GetSafeWatermark(ctx)
 	if err != nil {
+		if errors.Is(err, ErrNoSafeWatermark) {
+			// No safe snapshot published yet: nothing to be stale against.
+			return staleMutationRebind{}, false, nil
+		}
 		return staleMutationRebind{}, false, fmt.Errorf("get safe watermark for mutation rebind: %w", err)
 	}
 	if watermark.SnapshotID == "" || watermark.SnapshotID == task.BaseSafeSnapshotID {

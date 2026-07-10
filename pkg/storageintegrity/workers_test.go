@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"housegate/housegate/pkg/replay"
 )
@@ -767,4 +768,45 @@ func (f *fakeWorkerSequencer) GetSafeWatermark(context.Context) (SafeWatermark, 
 func (f *fakeWorkerSequencer) GetSafeSnapshot(_ context.Context, snapshotID string) (replay.SafeSnapshotManifest, bool, error) {
 	manifest, ok := f.manifests[snapshotID]
 	return manifest, ok, nil
+}
+
+// deadlineCapturingExecutor records whether the context passed to ExecuteMutation
+// carried a deadline, so a test can assert the MutationWorker applied its
+// wall-clock budget (HG-P1-02).
+type deadlineCapturingExecutor struct {
+	sawDeadline bool
+}
+
+func (e *deadlineCapturingExecutor) ExecuteMutation(ctx context.Context, task MutationTask) (MutationClaim, error) {
+	_, e.sawDeadline = ctx.Deadline()
+	return MutationClaim{StatementID: task.StatementID, PostStateRoot: "r"}, nil
+}
+
+func (e *deadlineCapturingExecutor) ReplayMutation(ctx context.Context, task MutationTask) (MutationReplayResult, error) {
+	_, e.sawDeadline = ctx.Deadline()
+	return MutationReplayResult{StatementID: task.StatementID, PostStateRoot: "r"}, nil
+}
+
+func TestMutationWorkerAppliesMutationTimeoutDeadline(t *testing.T) {
+	task := MutationTask{StatementID: "stmt-mut", TableID: "tenant.events", MutationType: MutationTypeUpdate, SafeTable: "`hg_safe`.`events`", PartitionIDs: []string{"202607"}}
+
+	// With a MutationTimeout set, the executor sees a context with a deadline.
+	execWithTimeout := &deadlineCapturingExecutor{}
+	w := MutationWorker{WorkerID: "w", Sequencer: &fakeWorkerSequencer{mutationTask: task, mutationOK: true}, Executor: execWithTimeout, MutationTimeout: time.Minute}
+	if _, err := w.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if !execWithTimeout.sawDeadline {
+		t.Fatalf("expected the executor context to carry a deadline when MutationTimeout is set")
+	}
+
+	// Without a budget, the caller's (deadline-free) context is passed through.
+	execNoTimeout := &deadlineCapturingExecutor{}
+	w2 := MutationWorker{WorkerID: "w", Sequencer: &fakeWorkerSequencer{mutationTask: task, mutationOK: true}, Executor: execNoTimeout}
+	if _, err := w2.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if execNoTimeout.sawDeadline {
+		t.Fatalf("expected no deadline when neither MutationTimeout nor MaxRebindDuration is set")
+	}
 }

@@ -238,6 +238,13 @@ type MutationTask struct {
 	BasePartitionRoot     string                       `json:"base_partition_root,omitempty"`
 	BasePartitionRoots    []replay.PartitionCommitment `json:"base_partition_roots,omitempty"`
 	SchemaSnapshotID      string                       `json:"schema_snapshot_id,omitempty"`
+	// SchemaRoot and ExecutorProfileID bind the mutation post-state root to the
+	// same schema/executor identity the safe snapshot manifest uses (HG-P1-02),
+	// so PostStateRoot = H(schema_snapshot_id, schema_root, executor_profile_id,
+	// data_root_after) matches the manifest's state-root formula rather than a
+	// bare unbound LtHash digest.
+	SchemaRoot            string                       `json:"schema_root,omitempty"`
+	ExecutorProfileID     string                       `json:"executor_profile_id,omitempty"`
 	PromotionSeq          uint64                       `json:"promotion_seq,omitempty"`
 	PendingInsertBarrier  bool                         `json:"pending_insert_barrier,omitempty"`
 	RebindCount           int                          `json:"rebind_count,omitempty"`

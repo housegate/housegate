@@ -564,6 +564,65 @@ func TestClickHouseMutationExecutorIncludesClaimEvidence(t *testing.T) {
 	}
 }
 
+// TestClickHouseMutationExecutorSchemaBoundPostStateRoot proves HG-P1-02: when
+// the task carries the schema identity, the claim's PostStateRoot is the
+// schema-bound manifest state root (replay.AssembleStateRoot over the
+// whole-table post partition roots), not the bare LtHash digest — and the
+// replay path derives the identical root, so claim and replay reconcile.
+func TestClickHouseMutationExecutorSchemaBoundPostStateRoot(t *testing.T) {
+	fixtures := func() []TableHash {
+		return []TableHash{
+			{StateRoot: "base-digest", Parts: []ByteSidePart{{PartitionID: "202607", PartName: "safe_p1", RowCount: 5, PartRowLtHash: "base-root"}}},
+			{StateRoot: "post-digest", Parts: []ByteSidePart{{PartitionID: "202607", PartName: "scratch_p1", RowCount: 3, PartRowLtHash: "post-root"}}},
+		}
+	}
+	task := MutationTask{
+		StatementID:        "stmt-mut",
+		TableID:            "tenant.events",
+		MutationType:       MutationTypeDelete,
+		MutationSQL:        "ALTER TABLE `hg_safe`.`events` DELETE WHERE day = '2026-07-03'",
+		SafeTable:          "`hg_safe`.`events`",
+		PartitionIDs:       []string{"202607"},
+		BaseSafeSnapshotID: "snap-1",
+		BasePartitionRoots: []replay.PartitionCommitment{{TableID: "tenant.events", PartitionID: "202607", Root: "base-root"}},
+		SchemaSnapshotID:   "schema-snap-1",
+		SchemaRoot:         "0xschemaroot",
+		ExecutorProfileID:  "housegate-mutation-mvp-v1",
+		PromotionSeq:       12,
+	}
+
+	// Independently derive the expected schema-bound root: whole-table post
+	// partition roots = base with the touched partition replaced by post-root.
+	_, wantRoot, err := replay.AssembleStateRoot("schema-snap-1", "0xschemaroot", "housegate-mutation-mvp-v1",
+		[]replay.TableManifest{{TableID: "tenant.events", PartitionRoots: []replay.PartitionCommitment{
+			{TableID: "tenant.events", PartitionID: "202607", Root: "post-root"},
+		}}})
+	if err != nil {
+		t.Fatalf("AssembleStateRoot: %v", err)
+	}
+
+	claimExec := ClickHouseMutationExecutor{Conn: &fakeSQLConn{}, Hasher: &fakeTableHasher{hashes: fixtures()}, WorkerID: "w", ScratchDatabase: "hg_mutation"}
+	claim, err := claimExec.ExecuteMutation(context.Background(), task)
+	if err != nil {
+		t.Fatalf("ExecuteMutation: %v", err)
+	}
+	if claim.PostStateRoot != wantRoot {
+		t.Fatalf("claim PostStateRoot = %s, want schema-bound %s (not bare digest)", claim.PostStateRoot, wantRoot)
+	}
+	if claim.PostStateRoot == "post-digest" {
+		t.Fatalf("PostStateRoot must not be the bare LtHash digest")
+	}
+
+	replayExec := ClickHouseMutationExecutor{Conn: &fakeSQLConn{}, Hasher: &fakeTableHasher{hashes: fixtures()}, WorkerID: "verifier", ScratchDatabase: "hg_mutation"}
+	result, err := replayExec.ReplayMutation(context.Background(), task)
+	if err != nil {
+		t.Fatalf("ReplayMutation: %v", err)
+	}
+	if result.PostStateRoot != claim.PostStateRoot {
+		t.Fatalf("replay PostStateRoot %s != claim %s (must reconcile)", result.PostStateRoot, claim.PostStateRoot)
+	}
+}
+
 func TestClickHouseRollbackExecutorCleansUnsafeScratchAndPromoteState(t *testing.T) {
 	conn := &fakeSQLConn{}
 	executor := ClickHouseRollbackExecutor{Conn: conn}
