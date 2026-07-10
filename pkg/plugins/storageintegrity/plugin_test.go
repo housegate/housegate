@@ -1283,3 +1283,94 @@ func decodeStorageNativeRows(t *testing.T, revision int, payload []byte) decoded
 	}
 	return out
 }
+
+// TestPluginSealsSafeDatabaseDDL proves HG-P0-05: every user write/DDL that
+// targets hg_safe is rejected at ingress, while a SELECT on hg_safe and an
+// INSERT into the unsafe database are not.
+func TestPluginSealsSafeDatabaseDDL(t *testing.T) {
+	newPlugin := func() *Plugin {
+		return New(Config{
+			UnsafeDatabase: "hg_unsafe",
+			SafeDatabase:   "hg_safe",
+			DA:             &fakeDA{},
+			Sequencer:      &fakeSequencer{},
+			ReadGate:       &fakeReadGate{decision: core.SafeReadDecision{Active: true}},
+		})
+	}
+	safeTable := sqlmeta.AccessedTable{
+		OriginalDatabase: "hg_safe", OriginalTable: "events",
+		LogicalDatabase: "hg_safe", PhysicalDatabase: "hg_safe",
+	}
+	rejected := []string{
+		"DROP TABLE hg_safe.events",
+		"RENAME TABLE hg_safe.events TO hg_safe.events_old",
+		"ALTER TABLE hg_safe.events DETACH PARTITION '202607'",
+		"ALTER TABLE hg_safe.events ATTACH PARTITION '202607'",
+		"ALTER TABLE hg_safe.events MOVE PARTITION '202607' TO TABLE hg_safe.other",
+		"ALTER TABLE hg_safe.events REPLACE PARTITION '202607' FROM hg_safe.other",
+		"ALTER TABLE hg_safe.events ADD COLUMN extra String",
+		"ALTER TABLE hg_safe.events MODIFY COLUMN label String",
+		"ALTER TABLE hg_safe.events DROP COLUMN label",
+		"INSERT INTO hg_safe.events VALUES (1)",
+	}
+	for _, sql := range rejected {
+		t.Run("reject/"+sql, func(t *testing.T) {
+			p := newPlugin()
+			state := chsession.NewSessionState()
+			sess := &fakeSession{id: 1, state: state}
+			qctx := &plugin.QueryContext{
+				Session:        sess,
+				OriginalSQL:    sql,
+				Query:          &chproto.Query{Body: sql},
+				AccessedTables: []sqlmeta.AccessedTable{safeTable},
+			}
+			err := p.OnQuery(context.Background(), qctx)
+			if err == nil || !strings.Contains(err.Error(), "safe database") {
+				// TRUNCATE / DROP PARTITION are caught by the older forbidden-write
+				// rule with a different message; those are covered elsewhere. Here we
+				// assert the seal rejects the broader DDL set.
+				t.Fatalf("expected safe-database ingress rejection for %q, got %v", sql, err)
+			}
+		})
+	}
+
+	t.Run("allow/select-on-safe", func(t *testing.T) {
+		p := newPlugin()
+		state := chsession.NewSessionState()
+		sess := &fakeSession{id: 2, state: state}
+		sql := "SELECT * FROM hg_safe.events"
+		qctx := &plugin.QueryContext{
+			Session:        sess,
+			OriginalSQL:    sql,
+			Query:          &chproto.Query{Body: sql},
+			StatementType:  sqlmeta.StatementTypeSelect,
+			AccessedTables: []sqlmeta.AccessedTable{safeTable},
+		}
+		if err := p.OnQuery(context.Background(), qctx); err != nil {
+			t.Fatalf("SELECT on safe database must be allowed (read-gated), got %v", err)
+		}
+	})
+
+	t.Run("allow/insert-into-unsafe", func(t *testing.T) {
+		p := newPlugin()
+		state := chsession.NewSessionState()
+		state.ClientRevision = 54453
+		sess := &fakeSession{id: 3, state: state}
+		sql := "INSERT INTO tenant_a.events FORMAT Native"
+		qctx := &plugin.QueryContext{
+			Session:       sess,
+			OriginalSQL:   sql,
+			RewrittenSQL:  "INSERT INTO hg_unsafe.events FORMAT Native",
+			Query:         &chproto.Query{Body: "INSERT INTO hg_unsafe.events FORMAT Native"},
+			StatementType: sqlmeta.StatementTypeInsert,
+			AccessedTables: []sqlmeta.AccessedTable{{
+				OriginalDatabase: "tenant_a", OriginalTable: "events",
+				LogicalDatabase: "tenant_a", PhysicalDatabase: "hg_unsafe",
+			}},
+			TableRewrites: map[string]string{"tenant_a.events": "hg_unsafe.events"},
+		}
+		if err := p.OnQuery(context.Background(), qctx); err != nil {
+			t.Fatalf("INSERT into unsafe database must not be sealed, got %v", err)
+		}
+	})
+}

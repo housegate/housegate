@@ -192,6 +192,16 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	if p.isSafeRead(qctx, originalSQL) {
 		return p.gateSafeRead(ctx, qctx)
 	}
+	// HG-P0-05: seal the safe-state ingress. All state changes to hg_safe must
+	// go through the Arbiter-managed publication lane, which HouseGate workers
+	// execute on a separate internal ClickHouse connection — never through this
+	// user plugin. So any user statement that targets hg_safe and is not a
+	// read-only SELECT (already gated above) is rejected: DROP/RENAME TABLE,
+	// DETACH/ATTACH/MOVE/REPLACE PARTITION, ALTER ADD/MODIFY/DROP business
+	// columns, and any other DDL/DML that could mutate a safe part or schema.
+	if p.targetsSafeDatabase(qctx, originalSQL) {
+		return fmt.Errorf("storage_integrity rejects user write/DDL against the safe database %q; only SELECT is permitted and all safe-state changes go through the arbiter publication lane", p.safeDB)
+	}
 	if isStorageIntegrityWriteSQL(qctx, originalSQL) {
 		if fn, ok := containsUnmaterializedNondeterminism(originalSQL); ok {
 			return fmt.Errorf("storage_integrity rejects unmaterialized nondeterministic function %s", fn)
@@ -236,9 +246,34 @@ func (p *Plugin) isSafeRead(qctx *plugin.QueryContext, sql string) bool {
 	if p == nil || !isSelectSQL(sql) {
 		return false
 	}
-	for _, table := range qctx.AccessedTables {
-		if table.PhysicalDatabase == p.safeDB || table.LogicalDatabase == p.safeDB || table.OriginalDatabase == p.safeDB {
-			return true
+	return p.referencesSafeDatabase(qctx, sql)
+}
+
+// targetsSafeDatabase reports whether a non-read statement touches the safe
+// database and must be rejected by the ingress seal (HG-P0-05). A SELECT is
+// handled by the read gate and returns false here.
+func (p *Plugin) targetsSafeDatabase(qctx *plugin.QueryContext, sql string) bool {
+	if p == nil || p.safeDB == "" {
+		return false
+	}
+	if isSelectSQL(sql) {
+		return false
+	}
+	return p.referencesSafeDatabase(qctx, sql)
+}
+
+// referencesSafeDatabase detects whether the statement references the safe
+// database, via the rewriter's AccessedTables metadata (authoritative) with a
+// raw-SQL substring fallback for statements the rewriter did not classify.
+func (p *Plugin) referencesSafeDatabase(qctx *plugin.QueryContext, sql string) bool {
+	if p == nil || p.safeDB == "" {
+		return false
+	}
+	if qctx != nil {
+		for _, table := range qctx.AccessedTables {
+			if table.PhysicalDatabase == p.safeDB || table.LogicalDatabase == p.safeDB || table.OriginalDatabase == p.safeDB {
+				return true
+			}
 		}
 	}
 	return strings.Contains(sql, "`"+p.safeDB+"`") || strings.Contains(sql, p.safeDB+".")
