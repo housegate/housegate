@@ -374,6 +374,13 @@ type ClickHousePromoter struct {
 	// avoiding the readback scan. Both compare against the arbiter-pinned
 	// ExpectedPostRoots and fail closed before REPLACE.
 	StrictVerification bool
+	// RequireBaseRootCAS and RequirePromotionSeq are protected-mode switches
+	// (HG-P0-04): when set, every promotion must carry a promotion sequence and a
+	// verifiable per-partition base root, regardless of the per-task Require*
+	// flags. A protected deployment cannot be handed a task that silently skips
+	// the CAS or sequence store.
+	RequireBaseRootCAS  bool
+	RequirePromotionSeq bool
 }
 
 func (p ClickHousePromoter) Promote(ctx context.Context, task PromotionTask) (PromotionResult, error) {
@@ -463,7 +470,12 @@ func (p ClickHousePromoter) checkPromotionPreconditions(ctx context.Context, tas
 	if err := validateBatchPromotion(task); err != nil {
 		return err
 	}
-	if task.RequirePromotionSeq {
+	// HG-P0-04: protected mode forces the sequence + base-root CAS regardless of
+	// the per-task Require* flags, so a mock/arbiter cannot hand a protected
+	// worker a task that silently skips them.
+	requirePromotionSeq := task.RequirePromotionSeq || p.RequirePromotionSeq
+	requireBaseRootCAS := task.RequireBaseRootCAS || p.RequireBaseRootCAS
+	if requirePromotionSeq {
 		if task.PromotionSeq == 0 {
 			return fmt.Errorf("promotion_seq is required")
 		}
@@ -482,17 +494,28 @@ func (p ClickHousePromoter) checkPromotionPreconditions(ctx context.Context, tas
 			}
 		}
 	}
-	if task.RequireBaseRootCAS || task.BasePartitionRoot != "" {
+	if requireBaseRootCAS || task.BasePartitionRoot != "" || len(task.BasePartitionRoots) > 0 {
 		if p.PartitionRoots == nil {
 			return fmt.Errorf("partition root reader is required for base-root CAS")
 		}
 		for _, partitionID := range task.PartitionIDs {
+			// HG-P0-04: CAS each partition against ITS OWN base root, never one
+			// scalar base attributed to every partition.
+			base, ok := promotionBasePartitionRoot(task, partitionID)
+			if !ok {
+				// A zero base is only acceptable for an explicit genesis-empty
+				// INSERT partition; when the CAS is required we must have a real
+				// base to compare, so fail closed on an unresolved partition.
+				if requireBaseRootCAS && !isInsertPromotionKind(task.Kind) {
+					return fmt.Errorf("no base partition root declared for partition %s under required base-root CAS", partitionID)
+				}
+			}
 			current, err := currentPartitionRootWithTableID(ctx, p.PartitionRoots, task.SafeTable, partitionID, task.TableID)
 			if err != nil {
 				return fmt.Errorf("read current partition root %s: %w", partitionID, err)
 			}
-			if current != task.BasePartitionRoot {
-				return fmt.Errorf("base partition root mismatch for partition %s: got %s want %s", partitionID, current, task.BasePartitionRoot)
+			if current != base {
+				return fmt.Errorf("base partition root mismatch for partition %s: got %s want %s", partitionID, current, base)
 			}
 		}
 	}
@@ -608,12 +631,23 @@ func (p ClickHousePromoter) verifySourceCandidateParts(ctx context.Context, sour
 	if p.ActiveParts == nil {
 		return fmt.Errorf("insert promotion %s requires an active-part reader to verify source candidate parts", task.PromotionID)
 	}
-	candidates := candidatePartsForPartition(task, partitionID)
-	if len(candidates) == 0 {
-		// The task declares candidates but none fall in this partition: the
-		// partition is not part of the source claim, so there is nothing to
-		// publish from it. Fail closed rather than attaching unverified parts.
-		return fmt.Errorf("insert promotion %s declares no candidate parts for partition %s", task.PromotionID, partitionID)
+	// HG-P0-02: when the source declared partition-agnostic candidates (the "all"
+	// sentinel, because the proxy cannot see ClickHouse's physical partition
+	// ids), scope the scan to the source partition being promoted but match by
+	// whole-set content — the candidate's total additive root binds the scanned
+	// bytes regardless of which physical partition they landed in. Otherwise the
+	// source named a real partition and we match that partition's candidates.
+	var candidates []ByteSidePart
+	if candidatePartsArePartitionAgnostic(task.CandidateParts) {
+		candidates = task.CandidateParts
+	} else {
+		candidates = candidatePartsForPartition(task, partitionID)
+		if len(candidates) == 0 {
+			// The task declares real per-partition candidates but none fall in this
+			// partition: it is not part of the source claim, so fail closed rather
+			// than attaching unverified parts.
+			return fmt.Errorf("insert promotion %s declares no candidate parts for partition %s", task.PromotionID, partitionID)
+		}
 	}
 	entries, err := readActivePartsWithTableID(ctx, p.ActiveParts, sourceTable, []string{partitionID}, task.TableID)
 	if err != nil {
@@ -683,7 +717,7 @@ func expectedPostRootForPartition(task PromotionTask, partitionID string) (strin
 // against the arbiter-pinned ExpectedPostRoots by the caller.
 func (p ClickHousePromoter) postRootForCAS(ctx context.Context, task PromotionTask, shadow, partitionID string) (string, error) {
 	if !p.StrictVerification && canArithmeticPostRoot(task, partitionID) {
-		base := promotionBasePartitionRoot(task, partitionID)
+		base := promotionBasePartitionRootOrZero(task, partitionID)
 		candidateSum, err := sumCandidatePartsForPartition(task, partitionID)
 		if err != nil {
 			return "", fmt.Errorf("sum candidate parts for partition %s: %w", partitionID, err)
@@ -723,18 +757,36 @@ func canArithmeticPostRoot(task PromotionTask, partitionID string) bool {
 	return task.BasePartitionRoot == ""
 }
 
-// promotionBasePartitionRoot resolves the base partition root the arithmetic
-// post-root builds on. The PromotionTask carries a single scalar
-// BasePartitionRoot, used only for a single-partition promotion (a
-// multi-partition promotion cannot attribute one base root to every partition,
-// mirroring the ExpectedPostRoot rule). An unresolved base is the zero
-// accumulator (a genesis-empty partition), the additive identity so
-// base + Σcandidate == Σcandidate.
-func promotionBasePartitionRoot(task PromotionTask, partitionID string) string {
-	if len(task.PartitionIDs) == 1 && task.PartitionIDs[0] == partitionID && task.BasePartitionRoot != "" {
-		return task.BasePartitionRoot
+// promotionBasePartitionRoot resolves the base partition root for the CAS. A
+// per-partition BasePartitionRoots entry wins; otherwise the scalar
+// BasePartitionRoot is used only for a single-partition promotion (HG-P0-04:
+// never attribute one scalar base to every partition of a multi-partition
+// task). The bool reports whether an explicit base was found; a false result
+// means the caller must decide whether a zero base is permitted (only an
+// explicit zero-base INSERT into an empty partition) or fail closed.
+func promotionBasePartitionRoot(task PromotionTask, partitionID string) (string, bool) {
+	for _, pc := range task.BasePartitionRoots {
+		if pc.PartitionID == partitionID {
+			return pc.Root, true
+		}
 	}
-	return lthashAccumulatorHex(lthash.New())
+	if len(task.BasePartitionRoots) > 0 {
+		// A per-partition set was provided but this partition is missing from it:
+		// unresolved, not silently zero.
+		return "", false
+	}
+	if len(task.PartitionIDs) == 1 && task.PartitionIDs[0] == partitionID && task.BasePartitionRoot != "" {
+		return task.BasePartitionRoot, true
+	}
+	return lthashAccumulatorHex(lthash.New()), false
+}
+
+// promotionBasePartitionRootOrZero is the arithmetic-path helper: it returns the
+// resolved base root, or the zero accumulator when no explicit base was found
+// (a genesis-empty partition), so post = base + Σ candidate stays correct.
+func promotionBasePartitionRootOrZero(task PromotionTask, partitionID string) string {
+	root, _ := promotionBasePartitionRoot(task, partitionID)
+	return root
 }
 
 // sumCandidatePartsForPartition returns the additive sum of the verified
@@ -750,6 +802,13 @@ func sumCandidatePartsForPartition(task PromotionTask, partitionID string) (stri
 }
 
 func candidatePartsForPartition(task PromotionTask, partitionID string) []ByteSidePart {
+	// A partition-agnostic candidate set (all "all"/empty sentinels, declared by
+	// a proxy source that cannot see physical partition ids, HG-P0-02) maps to
+	// whichever single real partition is being promoted — the Native MVP writes
+	// one partition per statement, so the whole set is that partition's content.
+	if candidatePartsArePartitionAgnostic(task.CandidateParts) {
+		return append([]ByteSidePart(nil), task.CandidateParts...)
+	}
 	singlePartition := len(task.PartitionIDs) == 1
 	out := make([]ByteSidePart, 0, len(task.CandidateParts))
 	for _, part := range task.CandidateParts {
@@ -1774,6 +1833,15 @@ func aggregateCandidatePartsByPartition(parts []ByteSidePart) (map[string]*candi
 }
 
 func enforceCandidatePartSetByContent(actual, candidates []ByteSidePart) error {
+	// A source that cannot determine ClickHouse's physical partition ids (the
+	// Native MVP source declares the single "all" sentinel) commits to the TOTAL
+	// content of its statement, not a per-partition breakdown. In that case bind
+	// by the whole-set additive sum + row count across all scanned parts, since
+	// the additive root is partition-decomposition-independent (spec §8.1). Only
+	// when the source declares real per-partition ids do we match per partition.
+	if candidatePartsArePartitionAgnostic(candidates) {
+		return enforceCandidatePartSetTotals(actual, candidates)
+	}
 	wantByPartition, err := aggregateCandidatePartsByPartition(candidates)
 	if err != nil {
 		return err
@@ -1806,6 +1874,60 @@ func enforceCandidatePartSetByContent(actual, candidates []ByteSidePart) error {
 		if want.rowCount != 0 && got.rowCount != want.rowCount {
 			return fmt.Errorf("candidate part set mismatch: partition %q row count got %d want %d", partitionID, got.rowCount, want.rowCount)
 		}
+	}
+	return nil
+}
+
+// candidatePartsArePartitionAgnostic reports whether the source declared its
+// candidates without real ClickHouse partition ids — every candidate carries
+// the "all" sentinel or an empty partition id. Such a claim commits to the
+// total statement content, matched by whole-set sum.
+func candidatePartsArePartitionAgnostic(candidates []ByteSidePart) bool {
+	for _, c := range candidates {
+		if c.PartitionID != "" && c.PartitionID != NativeAllPartitionID {
+			return false
+		}
+	}
+	return true
+}
+
+// enforceCandidatePartSetTotals binds the whole scanned part set to the source
+// claim by the total additive part_row_lthash sum and total row count.
+func enforceCandidatePartSetTotals(actual, candidates []ByteSidePart) error {
+	wantHashes := make([]string, 0, len(candidates))
+	var wantRows uint64
+	for _, c := range candidates {
+		if c.PartRowLtHash == "" {
+			return fmt.Errorf("candidate part set mismatch: source candidate has empty part_row_lthash")
+		}
+		wantHashes = append(wantHashes, c.PartRowLtHash)
+		wantRows += c.RowCount
+	}
+	gotHashes := make([]string, 0, len(actual))
+	var gotRows uint64
+	for _, a := range actual {
+		if a.PartRowLtHash == "" {
+			return fmt.Errorf("candidate part set mismatch: scanned part %q has empty part_row_lthash", a.PartName)
+		}
+		gotHashes = append(gotHashes, a.PartRowLtHash)
+		gotRows += a.RowCount
+	}
+	if len(actual) == 0 {
+		return fmt.Errorf("candidate part set mismatch: source declared candidate parts but the scan found none")
+	}
+	wantRoot, err := sumPartRowLtHashes(wantHashes)
+	if err != nil {
+		return fmt.Errorf("candidate part set mismatch: sum declared parts: %w", err)
+	}
+	gotRoot, err := sumPartRowLtHashes(gotHashes)
+	if err != nil {
+		return fmt.Errorf("candidate part set mismatch: sum scanned parts: %w", err)
+	}
+	if wantRoot != gotRoot {
+		return fmt.Errorf("candidate part set mismatch: total additive root differs (scanned parts do not equal source candidate set)")
+	}
+	if wantRows != 0 && gotRows != wantRows {
+		return fmt.Errorf("candidate part set mismatch: total row count got %d want %d", gotRows, wantRows)
 	}
 	return nil
 }

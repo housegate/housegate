@@ -242,6 +242,65 @@ func TestClickHousePromoterRejectsBaseRootMismatch(t *testing.T) {
 	}
 }
 
+// TestClickHousePromoterPerPartitionBaseRootCAS proves HG-P0-04: a
+// multi-partition promotion CASes each partition against ITS OWN base root from
+// BasePartitionRoots, not one scalar attributed to all. A mismatch on any single
+// partition fails closed before any DDL.
+func TestClickHousePromoterPerPartitionBaseRootCAS(t *testing.T) {
+	conn := &fakeSQLConn{}
+	promoter := ClickHousePromoter{
+		Conn: conn,
+		PartitionRoots: &fakePartitionRootReader{roots: map[string]string{
+			"`hg_safe`.`events`\x00202606": "base-a",
+			"`hg_safe`.`events`\x00202607": "WRONG", // diverged from declared base-b
+		}},
+	}
+	_, err := promoter.Promote(context.Background(), PromotionTask{
+		PromotionID:  "promotion-per-partition",
+		SafeTable:    "`hg_safe`.`events`",
+		UnsafeTable:  "`hg_unsafe`.`events`",
+		PartitionIDs: []string{"202606", "202607"},
+		BasePartitionRoots: []replay.PartitionCommitment{
+			{PartitionID: "202606", Root: "base-a"},
+			{PartitionID: "202607", Root: "base-b"},
+		},
+		RequireBaseRootCAS: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "base partition root mismatch for partition 202607") {
+		t.Fatalf("err = %v, want per-partition base root mismatch on 202607", err)
+	}
+	if len(conn.execs) != 0 {
+		t.Fatalf("execs = %v, want none before base CAS rejection", conn.execs)
+	}
+}
+
+// TestClickHousePromoterProtectedModeForcesBaseCAS proves the protected-mode
+// switch: even when the task leaves RequireBaseRootCAS unset, a promoter
+// configured RequireBaseRootCAS enforces the CAS and fails closed on mismatch.
+func TestClickHousePromoterProtectedModeForcesBaseCAS(t *testing.T) {
+	conn := &fakeSQLConn{}
+	promoter := ClickHousePromoter{
+		Conn:               conn,
+		PartitionRoots:     &fakePartitionRootReader{roots: map[string]string{"`hg_safe`.`events`\x00202607": "current-root"}},
+		RequireBaseRootCAS: true, // protected mode
+	}
+	_, err := promoter.Promote(context.Background(), PromotionTask{
+		PromotionID:  "promotion-protected",
+		Kind:         "mutation", // non-insert so an unresolved base fails closed
+		SafeTable:    "`hg_safe`.`events`",
+		UnsafeTable:  "`hg_unsafe`.`events`",
+		PartitionIDs: []string{"202607"},
+		// Task does NOT set RequireBaseRootCAS or any base root: protected mode
+		// must still demand one and reject.
+	})
+	if err == nil {
+		t.Fatalf("protected mode must fail closed when no base root is declared")
+	}
+	if len(conn.execs) != 0 {
+		t.Fatalf("execs = %v, want none before protected CAS rejection", conn.execs)
+	}
+}
+
 func TestClickHousePromoterRejectsPostRootMismatchBeforeReplace(t *testing.T) {
 	conn := &fakeSQLConn{}
 	shadow := "`hg_promote`.`promotion_stmt_1__202607`"

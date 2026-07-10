@@ -64,6 +64,13 @@ type StorageIntegrityPromotionConfig struct {
 	// row scan. Either way the CAS is still against the arbiter-pinned
 	// ExpectedPostRoots, so a mismatch fails closed before REPLACE.
 	StrictVerification bool `json:"strict_verification" yaml:"strict_verification"`
+	// RequireBaseRootCAS and RequirePromotionSeq are protected-mode switches
+	// (HG-P0-04): when set, the promoter enforces a per-partition base-root CAS
+	// and a promotion-sequence check on every promotion, even if the arbiter task
+	// left the per-task Require* flags unset. A protected SNode cannot be handed a
+	// task that silently skips them.
+	RequireBaseRootCAS  bool `json:"require_base_root_cas" yaml:"require_base_root_cas"`
+	RequirePromotionSeq bool `json:"require_promotion_seq" yaml:"require_promotion_seq"`
 }
 
 // StorageIntegrityPartLtHashCacheConfig controls the local, discardable

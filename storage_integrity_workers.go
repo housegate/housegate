@@ -154,14 +154,16 @@ func buildStorageIntegrityBackgroundTasks(cfg *config.Config, creds credentials.
 	}
 	if workers.Promotion {
 		promoter := si.ClickHousePromoter{
-			Conn:               conn,
-			ActiveParts:        active,
-			PartitionRoots:     rootReader,
-			PromotionSeqs:      seqStore,
-			PromoteDatabase:    workers.PromoteDatabase,
-			CleanupUnsafe:      true,
-			DropPromoteTable:   true,
-			StrictVerification: cfg.StorageIntegrity.Promotion.StrictVerification,
+			Conn:                conn,
+			ActiveParts:         active,
+			PartitionRoots:      rootReader,
+			PromotionSeqs:       seqStore,
+			PromoteDatabase:     workers.PromoteDatabase,
+			CleanupUnsafe:       true,
+			DropPromoteTable:    true,
+			StrictVerification:  cfg.StorageIntegrity.Promotion.StrictVerification,
+			RequireBaseRootCAS:  cfg.StorageIntegrity.Promotion.RequireBaseRootCAS,
+			RequirePromotionSeq: cfg.StorageIntegrity.Promotion.RequirePromotionSeq,
 		}
 		worker := si.PromotionWorker{
 			WorkerID: workerID,

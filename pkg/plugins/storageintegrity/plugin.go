@@ -578,7 +578,10 @@ func (p *Plugin) submit(ctx context.Context, cap *insertCapture) error {
 		UnsafeBufferEpoch:    cap.unsafeBuffer.Epoch,
 		UnsafeBufferDatabase: cap.unsafeBuffer.Database,
 		SafeTable:            cap.safeTable,
-		PartitionIDs:         []string{core.NativeAllPartitionID},
+		// PartitionIDs is intentionally left empty: the proxy cannot see
+		// ClickHouse's physical partition ids, so the control plane discovers
+		// them from the byte-side scan. The candidate part carries the "all"
+		// sentinel only as a content commitment, matched partition-agnostically.
 		CandidateParts:       candidateParts,
 		UserJWS:              cap.userJWS,
 		AuthenticatedSigner:  cap.authSigner,
