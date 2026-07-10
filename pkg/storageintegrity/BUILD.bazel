@@ -35,6 +35,7 @@ go_test(
     name = "storageintegrity_test",
     srcs = [
         "arbiter_types_test.go",
+        "candidate_part_set_test.go",
         "claim_signer_test.go",
         "clickhouse_ops_test.go",
         "clickhouse_part_inspector_test.go",

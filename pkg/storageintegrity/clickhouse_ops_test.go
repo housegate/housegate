@@ -1001,6 +1001,13 @@ func TestHashingByteSideScannerReportsRealPhysicalParts(t *testing.T) {
 	res, err := scanner.ScanByteSide(context.Background(), ByteSideScanTask{
 		ScanID: "scan-1", StatementID: "stmt-1", TableID: "tenant.events", UnsafeTable: "`hg_unsafe`.`events`",
 		PartitionIDs: []string{"202607"},
+		// HG-P0-02: an INSERT byte-side scan must carry the declared candidate
+		// set; here the declaring party knows the physical names (name-keyed
+		// binding) so the scan is checked against exactly these parts.
+		CandidateParts: []ByteSidePart{
+			{PartitionID: "202607", PartName: "202607_1_1_0", PartRowLtHash: "0xa", RowCount: 1},
+			{PartitionID: "202607", PartName: "202607_2_2_0", PartRowLtHash: "0xb", RowCount: 1},
+		},
 	})
 	if err != nil {
 		t.Fatalf("ScanByteSide: %v", err)
@@ -1026,6 +1033,9 @@ func TestHashingByteSideScannerFallsBackToHasher(t *testing.T) {
 	res, err := scanner.ScanByteSide(context.Background(), ByteSideScanTask{
 		ScanID: "scan-1", StatementID: "stmt-1", TableID: "tenant.events", UnsafeTable: "`hg_unsafe`.`events`",
 		PartitionIDs: []string{"202607"},
+		CandidateParts: []ByteSidePart{
+			{PartitionID: "202607", PartName: "hash-scan-202607", PartRowLtHash: "0xagg", RowCount: 2},
+		},
 	})
 	if err != nil {
 		t.Fatalf("ScanByteSide: %v", err)

@@ -399,6 +399,15 @@ func TestPluginSubmitsNativePayloadReplayMetadata(t *testing.T) {
 	if seq.rec.SettingsHash != core.DefaultReplaySettingsHash {
 		t.Fatalf("settings hash = %q, want %q", seq.rec.SettingsHash, core.DefaultReplaySettingsHash)
 	}
+	// HG-P0-02: the source result-claim must declare the candidate part(s) with
+	// the content-addressed part_row_lthash and row count from the payload.
+	if len(seq.rec.CandidateParts) != 1 {
+		t.Fatalf("candidate parts = %+v, want exactly 1 declared", seq.rec.CandidateParts)
+	}
+	cp := seq.rec.CandidateParts[0]
+	if cp.PartRowLtHash != wantClaim.PartRowLtHash || cp.RowCount != wantClaim.RowCount || cp.PartitionID != core.NativeAllPartitionID {
+		t.Fatalf("candidate part = %+v, want {partition %q, lthash %s, rows %d}", cp, core.NativeAllPartitionID, wantClaim.PartRowLtHash, wantClaim.RowCount)
+	}
 }
 
 func TestPluginRewriteClientDataInjectsRowIDAndCapturesMaterializedPayload(t *testing.T) {

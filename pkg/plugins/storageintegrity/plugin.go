@@ -554,6 +554,20 @@ func (p *Plugin) submit(ctx context.Context, cap *insertCapture) error {
 		return fmt.Errorf("compute source claim root: %w", err)
 	}
 	snap := prevSnap
+	// HG-P0-02: declare the source result-claim candidate parts. The proxy
+	// plugin has no ClickHouse connection, so it cannot learn CH's physical part
+	// names; instead it declares the content-addressed commitment computed from
+	// the payload it holds — one logical candidate part per partition carrying
+	// the additive part_row_lthash and row count. The Verifier byte-side scan
+	// (which does read hg_unsafe) binds these to the on-disk bytes by recomputing
+	// part_row_lthash, and the promotion exact-set guard compares the additive
+	// per-partition sums (name-independent, spec §6.2 / §8.1). The Native MVP
+	// writes one partition ("all") per statement.
+	candidateParts := []core.ByteSidePart{{
+		PartitionID:   core.NativeAllPartitionID,
+		PartRowLtHash: claim.PartRowLtHash,
+		RowCount:      claim.RowCount,
+	}}
 	rec := core.InsertRecord{
 		TableID:              cap.tableID,
 		StatementID:          cap.statementID,
@@ -564,6 +578,8 @@ func (p *Plugin) submit(ctx context.Context, cap *insertCapture) error {
 		UnsafeBufferEpoch:    cap.unsafeBuffer.Epoch,
 		UnsafeBufferDatabase: cap.unsafeBuffer.Database,
 		SafeTable:            cap.safeTable,
+		PartitionIDs:         []string{core.NativeAllPartitionID},
+		CandidateParts:       candidateParts,
 		UserJWS:              cap.userJWS,
 		AuthenticatedSigner:  cap.authSigner,
 		Payload:              commit,

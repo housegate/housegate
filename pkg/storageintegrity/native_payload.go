@@ -296,10 +296,10 @@ func (e NativePayloadExecutor) Replay(ctx context.Context, req replay.ExecutionR
 		if err != nil {
 			return replay.ExecutionResult{}, fmt.Errorf("statement %s: %w", st.StatementID, err)
 		}
-		base.add(st.TargetTableID, nativeAllPartitionID, acc)
+		base.add(st.TargetTableID, NativeAllPartitionID, acc)
 		affected = append(affected, replay.PartManifestEntry{
 			TableID:       st.TargetTableID,
-			PartitionID:   nativeAllPartitionID,
+			PartitionID:   NativeAllPartitionID,
 			PartName:      fmt.Sprintf("all-b%d-s%d", req.Job.BlockSeq, st.StatementSeq),
 			PartPhysHash:  replay.DigestString("native-part-phys\x00" + st.StatementID + "\x00" + claim.PartRowLtHash),
 			PartRowLtHash: claim.PartRowLtHash,
@@ -338,9 +338,10 @@ func (e NativePayloadExecutor) Replay(ctx context.Context, req replay.ExecutionR
 	}, nil
 }
 
-// nativeAllPartitionID is the single-partition sentinel used by the Native MVP
-// executor, which does not yet split rows across ClickHouse partitions.
-const nativeAllPartitionID = "all"
+// NativeAllPartitionID is the single-partition sentinel used by the Native MVP
+// executor and source claim, which do not yet split rows across ClickHouse
+// partitions.
+const NativeAllPartitionID = "all"
 
 // nativePartitionAccumulators carries per-(table, partition) LtHash
 // accumulators seeded from a pinned snapshot's partition roots, so replay folds
@@ -623,7 +624,7 @@ func NativeSourceClaimRoot(prevSnapshot replay.SafeSnapshotManifest, tableID, pa
 		}
 		delta = parsed
 	}
-	base.add(tableID, nativeAllPartitionID, delta)
+	base.add(tableID, NativeAllPartitionID, delta)
 	tables, _ := base.tables(prevSnapshot.SchemaRoot, nil)
 	_, stateRoot, err := replay.AssembleStateRoot(
 		prevSnapshot.SchemaSnapshotID,

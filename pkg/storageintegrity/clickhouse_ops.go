@@ -597,12 +597,23 @@ func (p ClickHousePromoter) verifySourceCandidateParts(ctx context.Context, sour
 	if !isInsertPromotionKind(task.Kind) {
 		return nil
 	}
-	if p.ActiveParts == nil || len(task.CandidateParts) == 0 {
-		return nil
+	// HG-P0-02: an INSERT promotion MUST carry the source-declared candidate
+	// parts and be verifiable against the physical unsafe parts before any
+	// ATTACH/REPLACE. Empty candidates or a missing active-part reader mean the
+	// exact-set cannot be proved, so fail closed rather than attaching whatever
+	// active parts happen to be in the unsafe partition.
+	if len(task.CandidateParts) == 0 {
+		return fmt.Errorf("insert promotion %s has no source candidate parts; refusing to publish an unverified part set", task.PromotionID)
+	}
+	if p.ActiveParts == nil {
+		return fmt.Errorf("insert promotion %s requires an active-part reader to verify source candidate parts", task.PromotionID)
 	}
 	candidates := candidatePartsForPartition(task, partitionID)
 	if len(candidates) == 0 {
-		return nil
+		// The task declares candidates but none fall in this partition: the
+		// partition is not part of the source claim, so there is nothing to
+		// publish from it. Fail closed rather than attaching unverified parts.
+		return fmt.Errorf("insert promotion %s declares no candidate parts for partition %s", task.PromotionID, partitionID)
 	}
 	entries, err := readActivePartsWithTableID(ctx, p.ActiveParts, sourceTable, []string{partitionID}, task.TableID)
 	if err != nil {
@@ -1582,6 +1593,13 @@ type HashingByteSideScanner struct {
 }
 
 func (s HashingByteSideScanner) ScanByteSide(ctx context.Context, task ByteSideScanTask) (ByteSideScanResult, error) {
+	// HG-P0-02: an INSERT byte-side scan proves the fetched hg_unsafe parts equal
+	// the source's declared candidate set. A task with no candidate parts cannot
+	// be checked, so the Verifier must reject it rather than attest to whatever
+	// happens to be in the unsafe partition.
+	if isInsertPromotionKind(task.Kind) && len(task.CandidateParts) == 0 {
+		return ByteSideScanResult{}, fmt.Errorf("byte-side scan for statement %s has no candidate parts; refusing to attest an unverifiable insert", task.StatementID)
+	}
 	parts, err := s.scanParts(ctx, task)
 	if err != nil {
 		return ByteSideScanResult{}, err
@@ -1631,10 +1649,42 @@ func (s HashingByteSideScanner) scanParts(ctx context.Context, task ByteSideScan
 	return nil, fmt.Errorf("byte-side scanner requires a fast-scan, active-part reader, or table hasher")
 }
 
+// enforceCandidatePartSet asserts that the physically scanned active parts
+// (actual) are exactly the parts the source declared as candidates. It supports
+// two binding modes:
+//
+//   - Name-keyed (strict): when every candidate carries a PartName it matches
+//     the scanned parts one-to-one by name, comparing partition/row-count/lthash.
+//     This is used when the declaring party knows the physical part names.
+//   - Content-addressed: when candidates omit part names (the source SNode
+//     declares a logical result-claim from the payload without a ClickHouse
+//     connection, HG-P0-02), it binds per partition by the additive part_row
+//     lthash sum and the row-count sum. Because a partition's additive root is
+//     invariant to how rows are packed into named parts (spec §8.1), matching
+//     Σ part_row_lthash and Σ row_count proves the scanned bytes contain exactly
+//     the rows the source committed, without agreeing on CH-assigned names.
 func enforceCandidatePartSet(actual, candidates []ByteSidePart) error {
 	if len(candidates) == 0 {
 		return nil
 	}
+	if candidatePartsCarryNames(candidates) {
+		return enforceCandidatePartSetByName(actual, candidates)
+	}
+	return enforceCandidatePartSetByContent(actual, candidates)
+}
+
+// candidatePartsCarryNames reports whether every candidate declares a physical
+// part name (the strict name-keyed binding is only sound when all do).
+func candidatePartsCarryNames(candidates []ByteSidePart) bool {
+	for _, c := range candidates {
+		if c.PartName == "" {
+			return false
+		}
+	}
+	return true
+}
+
+func enforceCandidatePartSetByName(actual, candidates []ByteSidePart) error {
 	if len(actual) != len(candidates) {
 		return fmt.Errorf("candidate part set mismatch: scanned %d active parts, task declared %d candidates", len(actual), len(candidates))
 	}
@@ -1664,6 +1714,68 @@ func enforceCandidatePartSet(actual, candidates []ByteSidePart) error {
 		}
 		if want.PartRowLtHash != "" && got.PartRowLtHash != want.PartRowLtHash {
 			return fmt.Errorf("candidate part set mismatch: part %q lthash differs", want.PartName)
+		}
+	}
+	return nil
+}
+
+// candidatePartitionAgg is the per-partition additive aggregate used by the
+// content-addressed binding.
+type candidatePartitionAgg struct {
+	hashes   []string
+	rowCount uint64
+	seen     bool
+}
+
+func aggregateCandidatePartsByPartition(parts []ByteSidePart) (map[string]*candidatePartitionAgg, error) {
+	out := map[string]*candidatePartitionAgg{}
+	for _, p := range parts {
+		if p.PartRowLtHash == "" {
+			return nil, fmt.Errorf("candidate part set mismatch: part in partition %q has empty part_row_lthash", p.PartitionID)
+		}
+		agg, ok := out[p.PartitionID]
+		if !ok {
+			agg = &candidatePartitionAgg{seen: true}
+			out[p.PartitionID] = agg
+		}
+		agg.hashes = append(agg.hashes, p.PartRowLtHash)
+		agg.rowCount += p.RowCount
+	}
+	return out, nil
+}
+
+func enforceCandidatePartSetByContent(actual, candidates []ByteSidePart) error {
+	wantByPartition, err := aggregateCandidatePartsByPartition(candidates)
+	if err != nil {
+		return err
+	}
+	gotByPartition, err := aggregateCandidatePartsByPartition(actual)
+	if err != nil {
+		return err
+	}
+	if len(gotByPartition) != len(wantByPartition) {
+		return fmt.Errorf("candidate part set mismatch: scanned %d partitions, source declared %d", len(gotByPartition), len(wantByPartition))
+	}
+	for partitionID, want := range wantByPartition {
+		got, ok := gotByPartition[partitionID]
+		if !ok {
+			return fmt.Errorf("candidate part set mismatch: source declared partition %q not present in scanned parts", partitionID)
+		}
+		wantRoot, err := sumPartRowLtHashes(want.hashes)
+		if err != nil {
+			return fmt.Errorf("candidate part set mismatch: sum declared parts for partition %q: %w", partitionID, err)
+		}
+		gotRoot, err := sumPartRowLtHashes(got.hashes)
+		if err != nil {
+			return fmt.Errorf("candidate part set mismatch: sum scanned parts for partition %q: %w", partitionID, err)
+		}
+		if wantRoot != gotRoot {
+			return fmt.Errorf("candidate part set mismatch: partition %q additive root differs (scanned parts do not equal source candidate set)", partitionID)
+		}
+		// Anti-cancellation belt: 2^16 identical rows cancel per LtHash lane, so
+		// pair the additive-root check with an exact row-count sum (spec §5.4).
+		if want.rowCount != 0 && got.rowCount != want.rowCount {
+			return fmt.Errorf("candidate part set mismatch: partition %q row count got %d want %d", partitionID, got.rowCount, want.rowCount)
 		}
 	}
 	return nil

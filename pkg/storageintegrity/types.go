@@ -41,6 +41,14 @@ type InsertRecord struct {
 	UnsafeBufferDatabase string            `json:"unsafe_buffer_database,omitempty"`
 	SafeTable            string            `json:"safe_table"`
 	PartitionIDs         []string          `json:"partition_ids,omitempty"`
+	// CandidateParts is the exact set of physical parts this statement wrote to
+	// the unsafe buffer (HG-P0-02): the source result-claim. Each carries
+	// part_name, partition_id, part_phys_hash, part_row_lthash, row_count, and
+	// bytes so the Verifier byte-side check and the promotion exact-set guard can
+	// bind the promotion to precisely these parts rather than sweeping the whole
+	// unsafe partition. Empty only when part attribution was unavailable, which
+	// the protected INSERT path rejects downstream.
+	CandidateParts       []ByteSidePart    `json:"candidate_parts,omitempty"`
 	UserJWS              string            `json:"user_jws,omitempty"`
 	AuthenticatedSigner  string            `json:"authenticated_signer,omitempty"`
 	Payload              PayloadCommitment `json:"payload"`
@@ -181,6 +189,13 @@ type ByteSidePart struct {
 	PartName      string `json:"part_name"`
 	RowCount      uint64 `json:"row_count"`
 	PartRowLtHash string `json:"part_row_lthash"`
+	// PartPhysHash is the ClickHouse system.parts.hash_of_all_files content
+	// address of the physical part (HG-P0-02). It binds a declared candidate
+	// part to the exact on-disk bytes, so a byte-side scan can prove the fetched
+	// part is the one the source committed. Empty for legacy/row-only callers.
+	PartPhysHash string `json:"part_phys_hash,omitempty"`
+	// Bytes is the on-disk size (system.parts.bytes_on_disk) of the part.
+	Bytes uint64 `json:"bytes,omitempty"`
 }
 
 type ByteSideScanTask struct {
@@ -193,6 +208,11 @@ type ByteSideScanTask struct {
 	UnsafeBufferDatabase string         `json:"unsafe_buffer_database,omitempty"`
 	PartitionIDs         []string       `json:"partition_ids,omitempty"`
 	CandidateParts       []ByteSidePart `json:"candidate_parts,omitempty"`
+	// Kind distinguishes the promotion family the byte-side evidence feeds
+	// ("insert" default / "mutation"). An INSERT byte-side scan MUST carry the
+	// source-declared candidate parts, so the scanner fails closed when Kind is
+	// insert and CandidateParts is empty (HG-P0-02).
+	Kind string `json:"kind,omitempty"`
 }
 
 type ByteSideScanResult struct {

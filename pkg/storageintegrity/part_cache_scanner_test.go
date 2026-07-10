@@ -235,7 +235,8 @@ func TestByteSideScannerPrefersFastScanAndFallsBack(t *testing.T) {
 
 	// Qualified table → fast path used (inspector consulted).
 	scanner := HashingByteSideScanner{FastScan: fast, WorkerID: "w1"}
-	res, err := scanner.ScanByteSide(ctx, ByteSideScanTask{ScanID: "s1", UnsafeTable: "`hg_unsafe`.`events`", PartitionIDs: []string{"p1"}})
+	res, err := scanner.ScanByteSide(ctx, ByteSideScanTask{ScanID: "s1", UnsafeTable: "`hg_unsafe`.`events`", PartitionIDs: []string{"p1"},
+		CandidateParts: []ByteSidePart{{PartitionID: "p1", PartName: "all_1_1_0", PartRowLtHash: rawAccumHex("a"), RowCount: 3}}})
 	if err != nil {
 		t.Fatalf("fast ScanByteSide: %v", err)
 	}
@@ -249,7 +250,8 @@ func TestByteSideScannerPrefersFastScanAndFallsBack(t *testing.T) {
 	// Non-qualified table with a Hasher fallback → fast path skipped, hasher used.
 	insp.calls = 0
 	fallbackScanner := HashingByteSideScanner{FastScan: fast, Hasher: &fakeTableHasherForBSS{}, WorkerID: "w1"}
-	if _, err := fallbackScanner.ScanByteSide(ctx, ByteSideScanTask{ScanID: "s2", UnsafeTable: "singleword"}); err != nil {
+	if _, err := fallbackScanner.ScanByteSide(ctx, ByteSideScanTask{ScanID: "s2", UnsafeTable: "singleword",
+		CandidateParts: []ByteSidePart{{PartitionID: "p1", PartName: "hash-scan-p1", PartRowLtHash: rawAccumHex("h"), RowCount: 1}}}); err != nil {
 		t.Fatalf("fallback ScanByteSide: %v", err)
 	}
 	if insp.calls != 0 {
