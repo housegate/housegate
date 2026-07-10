@@ -172,8 +172,9 @@ func buildStorageIntegrityBackgroundTasks(cfg *config.Config, creds credentials.
 				VerifyActive: cfg.StorageIntegrity.SafeTables.VerifyPhysicalActiveMatchesManifest,
 				Promoter:     promoter,
 			},
-			PollInterval:   pollInterval,
-			LeaderVerifier: leaderVerifier,
+			PollInterval:           pollInterval,
+			LeaderVerifier:         leaderVerifier,
+			RequireLeaderSignature: cfg.StorageIntegrity.RequireLeaderSignature,
 		}
 		tasks = append(tasks, backgroundTask{
 			Label: "storage-integrity-promotion",
@@ -268,8 +269,9 @@ func buildStorageIntegrityBackgroundTasks(cfg *config.Config, creds credentials.
 			WorkerID:       workerID,
 			Arbiter:        arbiter,
 			Executor:       si.GuardingCompactor{Guard: guard, Compactor: compactor},
-			PollInterval:   pollInterval,
-			LeaderVerifier: leaderVerifier,
+			PollInterval:           pollInterval,
+			LeaderVerifier:         leaderVerifier,
+			RequireLeaderSignature: cfg.StorageIntegrity.RequireLeaderSignature,
 		}
 		tasks = append(tasks, backgroundTask{
 			Label: "storage-integrity-compaction",

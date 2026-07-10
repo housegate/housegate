@@ -23,6 +23,7 @@ go_library(
         "//pkg/plugins/sessionstate",
         "//pkg/plugins/usage",
         "//pkg/rewriter",
+        "@com_github_decred_dcrd_dcrec_secp256k1_v4//:secp256k1",
         "@in_yaml_go_yaml_v3//:yaml",
     ],
 )

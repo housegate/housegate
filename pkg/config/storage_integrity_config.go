@@ -1,12 +1,13 @@
 package config
 
 import (
-	"crypto/ed25519"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
 
 type StorageIntegrityConfig struct {
@@ -19,12 +20,16 @@ type StorageIntegrityConfig struct {
 	UnsafeBufferDatabases []string                         `json:"unsafe_buffer_databases" yaml:"unsafe_buffer_databases"`
 	SafeDatabase          string                           `json:"safe_database"       yaml:"safe_database"`
 	NetworkID             string                           `json:"network_id"          yaml:"network_id"`
-	// LeaderPublicKeyHex is the arbiter leader's ed25519 public key (hex). When
-	// set, promotion / compaction workers verify the leader signature on every
-	// publication task before executing and fail closed on mismatch (spec §9.1
-	// PromotionIssued, §10, gap-25). Empty disables the check (single-node / e2e
-	// flows without a leader key still run).
+	// LeaderPublicKeyHex is the arbiter leader's secp256k1 authority public key
+	// (compressed, hex). When set, promotion / compaction workers verify the
+	// leader signature on every publication task before executing and fail closed
+	// on mismatch (spec §9.1 PromotionIssued, §10, HG-P0-03). Empty disables the
+	// check unless RequireLeaderSignature is set.
 	LeaderPublicKeyHex    string                           `json:"leader_public_key_hex" yaml:"leader_public_key_hex"`
+	// RequireLeaderSignature makes leader-signature verification mandatory
+	// (protected mode, HG-P0-03): startup fails when LeaderPublicKeyHex is empty,
+	// so a protected deployment cannot silently run with signature checks off.
+	RequireLeaderSignature bool                            `json:"require_leader_signature" yaml:"require_leader_signature"`
 	InjectRowID           bool                             `json:"inject_row_id"       yaml:"inject_row_id"`
 	RequireRowIDInput     bool                             `json:"require_row_id_input" yaml:"require_row_id_input"`
 	RequireAuthToken      bool                             `json:"require_auth_token"  yaml:"require_auth_token"`
@@ -271,14 +276,19 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 	if c.ReadSetCache.Enabled && c.ReadSetCache.TTL.Duration <= 0 {
 		errs = append(errs, errors.New("storage_integrity.read_set_cache.ttl must be positive when read_set_cache is enabled"))
 	}
-	// gap-25: a configured leader public key must be a valid 32-byte ed25519 key.
-	if key := strings.TrimPrefix(strings.TrimSpace(c.LeaderPublicKeyHex), "0x"); key != "" {
-		raw, err := hex.DecodeString(key)
+	// HG-P0-03: a configured leader public key must be a valid secp256k1 key.
+	trimmedKey := strings.TrimPrefix(strings.TrimSpace(c.LeaderPublicKeyHex), "0x")
+	if trimmedKey != "" {
+		raw, err := hex.DecodeString(trimmedKey)
 		if err != nil {
 			errs = append(errs, errors.New("storage_integrity.leader_public_key_hex is not valid hex"))
-		} else if len(raw) != ed25519.PublicKeySize {
-			errs = append(errs, fmt.Errorf("storage_integrity.leader_public_key_hex must be %d bytes", ed25519.PublicKeySize))
+		} else if _, err := secp256k1.ParsePubKey(raw); err != nil {
+			errs = append(errs, fmt.Errorf("storage_integrity.leader_public_key_hex is not a valid secp256k1 public key: %w", err))
 		}
+	}
+	// Protected mode: a mandatory leader signature cannot run without a key.
+	if c.RequireLeaderSignature && trimmedKey == "" {
+		errs = append(errs, errors.New("storage_integrity.require_leader_signature is set but leader_public_key_hex is empty; a protected deployment must configure the authority key"))
 	}
 	if joined := errors.Join(errs...); joined != nil {
 		return fmt.Errorf("storage_integrity: %w", joined)

@@ -321,6 +321,11 @@ type PromotionTask struct {
 	TableID                 string         `json:"table_id,omitempty"`
 	BaseSafeSnapshotID      string         `json:"base_safe_snapshot_id,omitempty"`
 	BasePartitionRoot       string         `json:"base_partition_root,omitempty"`
+	// BasePartitionRoots carries a per-partition base root so a multi-partition
+	// promotion CASes each affected partition against its own base (HG-P0-04).
+	// When set it takes precedence over the scalar BasePartitionRoot; the scalar
+	// remains for single-partition promotions and legacy tasks.
+	BasePartitionRoots      []replay.PartitionCommitment `json:"base_partition_roots,omitempty"`
 	ExpectedPostRoot        string         `json:"expected_post_root,omitempty"`
 	// ExpectedPostRoots carries a per-partition expected post-promotion root so
 	// multi-partition promotions verify each partition against its own value.

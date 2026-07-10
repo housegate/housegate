@@ -102,8 +102,11 @@ type PromotionWorker struct {
 	PollInterval time.Duration
 	// LeaderVerifier, when configured (Enabled), verifies the arbiter leader's
 	// signature on every promotion task before executing (spec §9.1/§10,
-	// gap-25). nil / disabled skips the check (v1 keeps it optional).
+	// HG-P0-03). nil / disabled skips the check unless RequireLeaderSignature.
 	LeaderVerifier *LeaderSignatureVerifier
+	// RequireLeaderSignature makes verification mandatory (protected mode): a
+	// disabled verifier fails closed instead of skipping.
+	RequireLeaderSignature bool
 }
 
 func (w PromotionWorker) RunOnce(ctx context.Context) (bool, error) {
@@ -127,7 +130,7 @@ func (w PromotionWorker) RunOnce(ctx context.Context) (bool, error) {
 	// Fail closed on an unauthorized publication before any physical mutation
 	// (gap-25): if a leader key is configured, the task must carry a valid
 	// leader signature over its canonical command.
-	if err := ValidatePromotionLeaderSignature(w.LeaderVerifier, task); err != nil {
+	if err := ValidatePromotionLeaderSignature(w.LeaderVerifier, w.RequireLeaderSignature, task); err != nil {
 		return false, err
 	}
 	if err := validatePromotionUnsafeBufferEpoch(ctx, arbiter, task); err != nil {
@@ -576,8 +579,10 @@ type CompactionWorker struct {
 	Executor     CompactionExecutor
 	PollInterval time.Duration
 	// LeaderVerifier, when configured, verifies the arbiter leader's signature
-	// on every compaction task before publishing (spec §8.1/§9.1, gap-25).
+	// on every compaction task before publishing (spec §8.1/§9.1, HG-P0-03).
 	LeaderVerifier *LeaderSignatureVerifier
+	// RequireLeaderSignature makes verification mandatory (protected mode).
+	RequireLeaderSignature bool
 }
 
 func (w CompactionWorker) RunOnce(ctx context.Context) (bool, error) {
@@ -601,7 +606,7 @@ func (w CompactionWorker) RunOnce(ctx context.Context) (bool, error) {
 	if !ok {
 		return false, nil
 	}
-	if err := ValidateCompactionLeaderSignature(w.LeaderVerifier, task); err != nil {
+	if err := ValidateCompactionLeaderSignature(w.LeaderVerifier, w.RequireLeaderSignature, task); err != nil {
 		return false, err
 	}
 	result, err := w.Executor.Compact(ctx, task)
