@@ -52,7 +52,13 @@ func buildStorageIntegrityBackgroundTasks(cfg *config.Config, creds credentials.
 		partScanner *si.CachingPartScanner
 		cleanup     func()
 	)
-	needClickHouse := storageIntegrityWorkersNeedClickHouse(workers) || storageIntegrityReplayNeedsActiveVerification(cfg, workers)
+	// HG-P0-06: the safe/unsafe table guard is a mandatory base task whenever
+	// storage integrity enables it, independent of which worker roles are on — a
+	// node that only serves reads must still keep merges stopped. So the guard's
+	// need for a ClickHouse connection counts toward needClickHouse.
+	needClickHouse := storageIntegrityWorkersNeedClickHouse(workers) ||
+		storageIntegrityReplayNeedsActiveVerification(cfg, workers) ||
+		storageIntegrityTableGuardEnabled(cfg)
 	if needClickHouse {
 		var err error
 		conn, cleanup, err = openStorageIntegrityClickHouse(cfg, workers, creds)
@@ -94,7 +100,9 @@ func buildStorageIntegrityBackgroundTasks(cfg *config.Config, creds credentials.
 		EnforceNoMergeSettings: cfg.StorageIntegrity.SafeTables.EnforceNoMergeSettings,
 	}
 	var tasks []backgroundTask
-	if needClickHouse && storageIntegrityTableGuardEnabled(cfg) {
+	// The guard is mandatory whenever enabled; needClickHouse now subsumes it, so
+	// the connection is always available here.
+	if storageIntegrityTableGuardEnabled(cfg) {
 		databases := uniqueStorageIntegrityDatabases(append([]string{cfg.StorageIntegrity.SafeDatabase}, cfg.StorageIntegrity.EffectiveUnsafeDatabases()...))
 		tasks = append(tasks, backgroundTask{
 			Label: "storage-integrity-table-guard",

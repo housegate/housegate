@@ -894,6 +894,11 @@ func TestClickHouseTableControllerStopsMergesAndSettings(t *testing.T) {
 	if !containsExec(conn.execs, "ALTER TABLE hg_safe.events MODIFY SETTING") {
 		t.Fatalf("execs = %#v, want no-merge settings", conn.execs)
 	}
+	// HG-P0-06: the anchored setting that survives restart and actually disables
+	// background merges must be present, not just the TTL timeouts.
+	if !containsExec(conn.execs, "max_bytes_to_merge_at_max_space_in_pool = 0") {
+		t.Fatalf("execs = %#v, want anchored max_bytes_to_merge_at_max_space_in_pool = 0", conn.execs)
+	}
 }
 
 func TestClickHouseTableControllerPreparesDatabaseTables(t *testing.T) {

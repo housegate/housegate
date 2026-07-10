@@ -144,7 +144,14 @@ func (c ClickHouseTableController) PrepareTable(ctx context.Context, table strin
 		}
 	}
 	if c.EnforceNoMergeSettings {
-		if err := c.Conn.Exec(ctx, "ALTER TABLE "+table+" MODIFY SETTING merge_with_ttl_timeout = 0, merge_with_recompression_ttl_timeout = 0"); err != nil {
+		// HG-P0-06: SYSTEM STOP MERGES is a runtime flag that a server restart
+		// clears, and the TTL-merge timeouts alone do not disable ordinary
+		// background merges. Anchor the no-merge invariant in table DDL that
+		// survives restart: max_bytes_to_merge_at_max_space_in_pool = 0 makes the
+		// background merge selector never pick a merge, so no unauthorized merge
+		// can run in the window between a restart and the guard re-issuing STOP
+		// MERGES. The TTL timeouts are kept for defence in depth.
+		if err := c.Conn.Exec(ctx, "ALTER TABLE "+table+" MODIFY SETTING max_bytes_to_merge_at_max_space_in_pool = 0, merge_with_ttl_timeout = 0, merge_with_recompression_ttl_timeout = 0"); err != nil {
 			return fmt.Errorf("enforce no-merge settings for %s: %w", table, err)
 		}
 	}
