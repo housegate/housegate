@@ -2002,6 +2002,25 @@ type ClickHouseSafeAuditor struct {
 	WorkerID string
 }
 
+// auditRowsEvidence derives the canonical SafeAudit vote evidence over the
+// audited parts (HG-P1-05): the total row count and the additive rows hash
+// (Σ part_row_lthash, the batch hash over the manifest-covered safe parts). An
+// unparseable part hash falls back to a digest so a malformed audit still
+// diverges (fails the arbiter comparison) rather than panicking.
+func auditRowsEvidence(parts []ByteSidePart) (uint64, string) {
+	var rows uint64
+	hashes := make([]string, 0, len(parts))
+	for _, p := range parts {
+		rows += p.RowCount
+		hashes = append(hashes, p.PartRowLtHash)
+	}
+	rowsHash, err := sumPartRowLtHashes(hashes)
+	if err != nil {
+		rowsHash = replay.DigestString("safe-audit-rows\x00" + fmt.Sprint(hashes))
+	}
+	return rows, rowsHash
+}
+
 func (a ClickHouseSafeAuditor) AuditSafe(ctx context.Context, task SafeAuditTask) (SafeAuditVote, error) {
 	if a.Hasher == nil {
 		return SafeAuditVote{}, fmt.Errorf("table hasher is required")
@@ -2015,12 +2034,21 @@ func (a ClickHouseSafeAuditor) AuditSafe(ctx context.Context, task SafeAuditTask
 	if err != nil {
 		return SafeAuditVote{}, err
 	}
+	snapshotID := firstNonEmptyString(task.SnapshotID, task.Manifest.SnapshotID)
+	rowCount, rowsHash := auditRowsEvidence(hash.Parts)
 	vote := SafeAuditVote{
 		AuditID:    task.AuditID,
-		SnapshotID: firstNonEmptyString(task.SnapshotID, task.Manifest.SnapshotID),
+		SnapshotID: snapshotID,
 		WorkerID:   a.WorkerID,
 		StateRoot:  hash.StateRoot,
-		Match:      hash.StateRoot == expectedStateRoot,
+		Scope: AuditScope{
+			SnapshotID:   snapshotID,
+			TableID:      tableID,
+			PartitionIDs: append([]string(nil), task.PartitionIDs...),
+		},
+		RowCount: rowCount,
+		RowsHash: rowsHash,
+		Match:    hash.StateRoot == expectedStateRoot,
 	}
 	if task.Manifest.SnapshotID == "" {
 		return vote, nil

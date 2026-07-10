@@ -410,15 +410,35 @@ type SafeAuditTask struct {
 }
 
 type SafeAuditVote struct {
-	AuditID          string                     `json:"audit_id"`
-	SnapshotID       string                     `json:"snapshot_id"`
-	WorkerID         string                     `json:"worker_id"`
-	StateRoot        string                     `json:"state_root"`
-	ManifestRoot     string                     `json:"manifest_root,omitempty"`
-	Match            bool                       `json:"match"`
-	ActivePartsMatch bool                       `json:"active_parts_match,omitempty"`
+	AuditID    string `json:"audit_id"`
+	SnapshotID string `json:"snapshot_id"`
+	WorkerID   string `json:"worker_id"`
+	// StateRoot is the audit's SCOPED table hash over the manifest-covered
+	// partitions — a table/partition-scoped LtHash digest, NOT the global
+	// snapshot state_root. Kept for backward compatibility; new consumers should
+	// use RowsHash + RowCount + the AuditScope, which are the canonical vote
+	// contents the arbiter compares (spec §12, HG-P1-05).
+	StateRoot string `json:"state_root"`
+	// Scope pins exactly what this vote covers so the arbiter compares like with
+	// like (snapshot + table + partition set).
+	Scope AuditScope `json:"scope"`
+	// RowCount and RowsHash are the canonical audit evidence: the total row count
+	// and the additive rows hash (Σ part_row_lthash) over the audited safe parts.
+	RowCount     uint64                     `json:"row_count"`
+	RowsHash     string                     `json:"rows_hash,omitempty"`
+	ManifestRoot string                     `json:"manifest_root,omitempty"`
+	Match        bool                       `json:"match"`
+	ActivePartsMatch bool                   `json:"active_parts_match,omitempty"`
 	ActiveParts      []replay.PartManifestEntry `json:"active_parts,omitempty"`
-	Error            string                     `json:"error,omitempty"`
+	Error            string                 `json:"error,omitempty"`
+}
+
+// AuditScope identifies exactly what a SafeAudit vote covers, so a
+// partition-scoped audit is never confused with a whole-snapshot claim.
+type AuditScope struct {
+	SnapshotID   string   `json:"snapshot_id,omitempty"`
+	TableID      string   `json:"table_id,omitempty"`
+	PartitionIDs []string `json:"partition_ids,omitempty"`
 }
 
 type RollbackTask struct {

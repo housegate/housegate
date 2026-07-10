@@ -866,6 +866,41 @@ func TestClickHouseSafeAuditorHashesSafeTable(t *testing.T) {
 	}
 }
 
+// TestClickHouseSafeAuditorVoteCarriesScopeAndRowEvidence proves HG-P1-05: the
+// audit vote carries an explicit scope (snapshot/table/partition set) and the
+// canonical row_count + additive rows_hash over the audited parts, so the
+// arbiter compares like with like rather than a scoped digest named "state
+// root" against a global root.
+func TestClickHouseSafeAuditorVoteCarriesScopeAndRowEvidence(t *testing.T) {
+	hasher := &fakeTableHasher{root: "safe-root", parts: []ByteSidePart{
+		{PartitionID: "202607", PartName: "p1", RowCount: 3, PartRowLtHash: rawAccumHex("a")},
+		{PartitionID: "202607", PartName: "p2", RowCount: 4, PartRowLtHash: rawAccumHex("b")},
+	}}
+	auditor := ClickHouseSafeAuditor{Hasher: hasher, WorkerID: "auditor-a"}
+	vote, err := auditor.AuditSafe(context.Background(), SafeAuditTask{
+		AuditID:      "audit-1",
+		SnapshotID:   "snap",
+		TableID:      "tenant.events",
+		SafeTable:    "`hg_safe`.`events`",
+		StateRoot:    "safe-root",
+		PartitionIDs: []string{"202607"},
+	})
+	if err != nil {
+		t.Fatalf("AuditSafe: %v", err)
+	}
+	if vote.Scope.SnapshotID != "snap" || vote.Scope.TableID != "tenant.events" ||
+		len(vote.Scope.PartitionIDs) != 1 || vote.Scope.PartitionIDs[0] != "202607" {
+		t.Fatalf("vote scope not populated: %+v", vote.Scope)
+	}
+	if vote.RowCount != 7 {
+		t.Fatalf("row count = %d, want 7 (3+4)", vote.RowCount)
+	}
+	wantRowsHash, _ := sumPartRowLtHashes([]string{rawAccumHex("a"), rawAccumHex("b")})
+	if vote.RowsHash != wantRowsHash {
+		t.Fatalf("rows hash = %s, want additive sum %s", vote.RowsHash, wantRowsHash)
+	}
+}
+
 func TestClickHouseSafeAuditorRejectsManifestActivePartMismatch(t *testing.T) {
 	manifest := sealedOpsTestManifest(t, []replay.PartManifestEntry{{
 		TableID:       "tenant.events",
