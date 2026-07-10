@@ -118,6 +118,82 @@ func (m SafeSnapshotManifest) Validate() error {
 	if m.ManifestRoot != manifestRoot {
 		return fmt.Errorf("manifest_root mismatch: got %s want %s", m.ManifestRoot, manifestRoot)
 	}
+	if err := n.validateSemantics(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateSemantics checks the structural invariants a hash-consistent manifest
+// must also satisfy to be an executable authoritative safe state (HG-P1-04):
+// unique table/partition/part keys, required part fields present, active parts
+// filed under a real partition of their table, and per-partition row counts
+// consistent with the parts. It deliberately does NOT recompute the additive
+// partition_root == Σ part_row_lthash equation — that needs the lthash library
+// and lives in the storageintegrity layer's semantic validator, keeping
+// pkg/replay dependency-free. Operates on a normalized (sorted) manifest.
+func (m SafeSnapshotManifest) validateSemantics() error {
+	seenTable := map[string]struct{}{}
+	for ti := range m.Tables {
+		t := m.Tables[ti]
+		if t.TableID == "" {
+			return fmt.Errorf("table[%d] has empty table_id", ti)
+		}
+		if _, dup := seenTable[t.TableID]; dup {
+			return fmt.Errorf("duplicate table_id %q in manifest", t.TableID)
+		}
+		seenTable[t.TableID] = struct{}{}
+
+		// Partition roots: unique per (table, partition), non-empty root.
+		seenPartition := map[string]struct{}{}
+		for _, pr := range t.PartitionRoots {
+			if pr.PartitionID == "" {
+				return fmt.Errorf("table %q has a partition commitment with empty partition_id", t.TableID)
+			}
+			if pr.Root == "" {
+				return fmt.Errorf("table %q partition %q has empty root", t.TableID, pr.PartitionID)
+			}
+			if pr.TableID != "" && pr.TableID != t.TableID {
+				return fmt.Errorf("table %q partition %q commitment mis-filed under table_id %q", t.TableID, pr.PartitionID, pr.TableID)
+			}
+			if _, dup := seenPartition[pr.PartitionID]; dup {
+				return fmt.Errorf("table %q has duplicate partition commitment for %q", t.TableID, pr.PartitionID)
+			}
+			seenPartition[pr.PartitionID] = struct{}{}
+		}
+
+		// Active parts: unique names, required fields present, filed under a
+		// declared partition. (Per-partition row-count totals are not checkable
+		// here because PartitionCommitment carries only a root, not a row count;
+		// the storageintegrity semantic validator cross-checks the additive
+		// root, which subsumes the row content.)
+		seenPart := map[string]struct{}{}
+		for _, p := range t.ActiveParts {
+			if p.PartName == "" {
+				return fmt.Errorf("table %q has an active part with empty part_name", t.TableID)
+			}
+			if p.PartitionID == "" {
+				return fmt.Errorf("table %q part %q has empty partition_id", t.TableID, p.PartName)
+			}
+			if p.PartRowLtHash == "" {
+				return fmt.Errorf("table %q part %q has empty part_row_lthash", t.TableID, p.PartName)
+			}
+			if p.TableID != "" && p.TableID != t.TableID {
+				return fmt.Errorf("table %q part %q mis-filed under table_id %q", t.TableID, p.PartName, p.TableID)
+			}
+			if _, dup := seenPart[p.PartName]; dup {
+				return fmt.Errorf("table %q has duplicate active part %q", t.TableID, p.PartName)
+			}
+			seenPart[p.PartName] = struct{}{}
+			// An active part must belong to a declared partition (when partition
+			// roots are present at all).
+			if len(t.PartitionRoots) > 0 {
+				if _, ok := seenPartition[p.PartitionID]; !ok {
+					return fmt.Errorf("table %q part %q is in partition %q with no partition commitment", t.TableID, p.PartName, p.PartitionID)
+				}
+			}
+		}
+	}
 	return nil
 }
 

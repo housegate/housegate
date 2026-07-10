@@ -381,6 +381,12 @@ type ClickHousePromoter struct {
 	// the CAS or sequence store.
 	RequireBaseRootCAS  bool
 	RequirePromotionSeq bool
+	// PartInspector, when set, enriches the post-publication readback active
+	// parts with their physical metadata (part_phys_hash, bytes) from live
+	// system.parts (HG-P1-03). The row-LtHash still comes from the row fold; only
+	// the physical metadata is added, so the submitted post-publication active
+	// parts are complete manifest entries rather than name+lthash stubs.
+	PartInspector PartInspector
 }
 
 func (p ClickHousePromoter) Promote(ctx context.Context, task PromotionTask) (PromotionResult, error) {
@@ -911,8 +917,51 @@ func (p ClickHousePromoter) promotionResult(ctx context.Context, task PromotionT
 	if err != nil {
 		return PromotionResult{}, fmt.Errorf("read promoted active parts: %w", err)
 	}
+	// HG-P1-03: enrich the readback with physical part metadata from live
+	// system.parts so the published active parts are complete manifest entries
+	// (part_phys_hash + bytes), not name+lthash stubs. The row-LtHash is kept
+	// from the fold above; only physical metadata is overlaid.
+	parts, err = p.enrichPartMetadata(ctx, task.SafeTable, task.PartitionIDs, parts)
+	if err != nil {
+		return PromotionResult{}, err
+	}
 	result.ActiveParts = parts
 	return result, nil
+}
+
+// enrichPartMetadata overlays part_phys_hash and bytes from live system.parts
+// (via the PartInspector) onto readback active parts, matched by physical part
+// name. A no-op when no inspector is configured or the safe table is not a
+// qualified db.table. Row identity (part_row_lthash, row_count) is untouched.
+func (p ClickHousePromoter) enrichPartMetadata(ctx context.Context, safeTable string, partitionIDs []string, parts []replay.PartManifestEntry) ([]replay.PartManifestEntry, error) {
+	if p.PartInspector == nil || len(parts) == 0 {
+		return parts, nil
+	}
+	db, table, ok := splitQualifiedTable(safeTable)
+	if !ok {
+		return parts, nil
+	}
+	descriptors, err := p.PartInspector.ActiveParts(ctx, db, table, partitionIDs)
+	if err != nil {
+		return nil, fmt.Errorf("inspect promoted part metadata: %w", err)
+	}
+	byName := make(map[string]PartDescriptor, len(descriptors))
+	for _, d := range descriptors {
+		byName[d.PartName] = d
+	}
+	out := make([]replay.PartManifestEntry, len(parts))
+	for i, part := range parts {
+		out[i] = part
+		if d, ok := byName[part.PartName]; ok {
+			if part.PartPhysHash == "" {
+				out[i].PartPhysHash = d.PartPhysHash
+			}
+			if part.Bytes == 0 {
+				out[i].Bytes = d.Bytes
+			}
+		}
+	}
+	return out, nil
 }
 
 type ActivePartPartitionRootReader struct {

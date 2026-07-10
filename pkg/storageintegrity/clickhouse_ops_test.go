@@ -1417,3 +1417,45 @@ func (r *fakeHashRows) Err() error   { return nil }
 type fakeHashColumnType string
 
 func (t fakeHashColumnType) DatabaseTypeName() string { return string(t) }
+
+// TestClickHousePromoterEnrichesActivePartMetadata proves HG-P1-03: the
+// post-publication readback active parts are enriched with part_phys_hash and
+// bytes from live system.parts (the PartInspector), so the published parts are
+// complete manifest entries rather than name+lthash stubs. The row-LtHash from
+// the fold is preserved.
+func TestClickHousePromoterEnrichesActivePartMetadata(t *testing.T) {
+	active := &fakeActivePartReader{partsByTable: map[string][]replay.PartManifestEntry{
+		"`hg_safe`.`events`": {
+			{TableID: "tenant.events", PartitionID: "202607", PartName: "202607_1_1_0", PartRowLtHash: "row-a", RowCount: 3},
+		},
+	}}
+	inspector := &fakePartInspector{parts: map[string][]PartDescriptor{
+		"hg_safe.events": {
+			{Database: "hg_safe", Table: "events", PartitionID: "202607", PartName: "202607_1_1_0", PartPhysHash: "0xphys", Bytes: 4096},
+		},
+	}}
+	promoter := ClickHousePromoter{
+		Conn:          &fakeSQLConn{},
+		ActiveParts:   active,
+		PartInspector: inspector,
+	}
+	result, err := promoter.promotionResult(context.Background(), PromotionTask{
+		PromotionID:  "promotion-meta",
+		TableID:      "tenant.events",
+		SafeTable:    "`hg_safe`.`events`",
+		PartitionIDs: []string{"202607"},
+	})
+	if err != nil {
+		t.Fatalf("promotionResult: %v", err)
+	}
+	if len(result.ActiveParts) != 1 {
+		t.Fatalf("active parts = %+v", result.ActiveParts)
+	}
+	p := result.ActiveParts[0]
+	if p.PartPhysHash != "0xphys" || p.Bytes != 4096 {
+		t.Fatalf("part not enriched with physical metadata: %+v", p)
+	}
+	if p.PartRowLtHash != "row-a" || p.RowCount != 3 {
+		t.Fatalf("row identity must be preserved from the fold: %+v", p)
+	}
+}

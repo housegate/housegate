@@ -1182,8 +1182,17 @@ func (f *fakeSequencer) GetSafeSnapshot(_ context.Context, snapshotID string) (r
 
 func sealedPluginTestManifest(t *testing.T, parts []replay.PartManifestEntry) replay.SafeSnapshotManifest {
 	t.Helper()
+	// One partition commitment per partition (multiple parts in a partition
+	// collapse to a single commitment, as a real manifest sums them); using the
+	// last part's lthash as a stand-in root is fine for these cost/limit tests.
 	roots := make([]replay.PartitionCommitment, 0, len(parts))
+	seen := map[string]int{}
 	for _, part := range parts {
+		if idx, ok := seen[part.PartitionID]; ok {
+			roots[idx].Root = part.PartRowLtHash
+			continue
+		}
+		seen[part.PartitionID] = len(roots)
 		roots = append(roots, replay.PartitionCommitment{
 			TableID:     part.TableID,
 			PartitionID: part.PartitionID,

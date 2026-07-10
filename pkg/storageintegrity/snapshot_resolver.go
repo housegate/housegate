@@ -7,6 +7,32 @@ import (
 	"housegate/housegate/pkg/replay"
 )
 
+// validateManifestPartitionRoots checks that each partition commitment's root
+// equals the additive sum of its active parts' part_row_lthash (HG-P1-04). A
+// partition with no enumerated active parts is skipped (its parts are covered
+// only by the manifest root, per the content-addressed data-root design). This
+// is the lthash-aware semantic check that the dependency-free replay.Validate
+// leaves to the storageintegrity layer.
+func validateManifestPartitionRoots(m replay.SafeSnapshotManifest) error {
+	for _, t := range m.Tables {
+		// Which partitions actually have enumerated parts?
+		partsInPartition := map[string]bool{}
+		for _, p := range t.ActiveParts {
+			partsInPartition[p.PartitionID] = true
+		}
+		for _, pr := range t.PartitionRoots {
+			if !partsInPartition[pr.PartitionID] {
+				continue
+			}
+			got := partitionRootFromActiveParts(t.ActiveParts, pr.PartitionID)
+			if got != pr.Root {
+				return fmt.Errorf("table %q partition %q root %s does not equal the sum of its active parts %s", t.TableID, pr.PartitionID, pr.Root, got)
+			}
+		}
+	}
+	return nil
+}
+
 type SnapshotResolver struct {
 	Reader      SnapshotReader
 	ActiveParts ActivePartReader
@@ -70,6 +96,14 @@ func (r SnapshotResolver) ResolveLocal(ctx context.Context, req SnapshotResolveR
 	}
 	if err := manifest.Validate(); err != nil {
 		return ResolvedSnapshot{}, fmt.Errorf("validate safe snapshot %s: %w", req.SnapshotID, err)
+	}
+	// HG-P1-04: semantic (lthash) validation the dependency-free replay.Validate
+	// cannot do — each partition's declared root must equal the additive sum of
+	// its active parts' part_row_lthash. This binds the content-addressed
+	// partition commitments to the enumerated parts, so a manifest whose
+	// partition root does not match its parts is rejected before use.
+	if err := validateManifestPartitionRoots(manifest); err != nil {
+		return ResolvedSnapshot{}, fmt.Errorf("validate safe snapshot %s partition roots: %w", req.SnapshotID, err)
 	}
 	if manifest.SnapshotID != req.SnapshotID {
 		return ResolvedSnapshot{}, fmt.Errorf("snapshot id mismatch: got %s want %s", manifest.SnapshotID, req.SnapshotID)

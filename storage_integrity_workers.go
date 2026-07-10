@@ -172,6 +172,9 @@ func buildStorageIntegrityBackgroundTasks(cfg *config.Config, creds credentials.
 			StrictVerification:  cfg.StorageIntegrity.Promotion.StrictVerification,
 			RequireBaseRootCAS:  cfg.StorageIntegrity.Promotion.RequireBaseRootCAS,
 			RequirePromotionSeq: cfg.StorageIntegrity.Promotion.RequirePromotionSeq,
+			// HG-P1-03: metadata-complete readback — enrich published active parts
+			// with part_phys_hash/bytes from live system.parts.
+			PartInspector: si.ClickHousePartInspector{Conn: si.NewClickHouseHashConn(conn)},
 		}
 		worker := si.PromotionWorker{
 			WorkerID: workerID,
