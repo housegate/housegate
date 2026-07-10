@@ -3,6 +3,7 @@ package storageintegrity
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -15,6 +16,7 @@ import (
 	"housegate/housegate/pkg/auth"
 	"housegate/housegate/pkg/chsession"
 	"housegate/housegate/pkg/log"
+	"housegate/housegate/pkg/lthash"
 	"housegate/housegate/pkg/plugin"
 	"housegate/housegate/pkg/replay"
 	"housegate/housegate/pkg/sqlident"
@@ -538,11 +540,20 @@ func (p *Plugin) submit(ctx context.Context, cap *insertCapture) error {
 	if claim.RowCount == 0 {
 		return fmt.Errorf("native payload claim has zero rows; refusing to publish payload-digest source claim")
 	}
-	snap, err := core.NativePayloadGenesisSnapshot(cap.tableID, claim.Columns)
+	// HG-P0-01: pin the source claim to the real prev-safe snapshot the control
+	// plane has published, not a freshly-rebuilt genesis. A second INSERT into a
+	// non-empty partition must carry the existing safe rows as its base, so the
+	// source root equals base + candidate (spec §6.2). Only when no safe snapshot
+	// exists yet (a table's genuine first insert) do we fall back to genesis.
+	prevSnap, err := p.pinnedPrevSafeSnapshot(ctx, cap.tableID, claim.Columns)
 	if err != nil {
-		return fmt.Errorf("compute native payload genesis snapshot: %w", err)
+		return fmt.Errorf("pin prev-safe snapshot: %w", err)
 	}
-	sourceClaimRoot := core.NativePayloadCompositeStateRoot(snap.SchemaSnapshotID, snap.ExecutorProfileID, claim.PartRowLtHash)
+	sourceClaimRoot, err := core.NativeSourceClaimRoot(prevSnap, cap.tableID, claim.PartRowLtHash)
+	if err != nil {
+		return fmt.Errorf("compute source claim root: %w", err)
+	}
+	snap := prevSnap
 	rec := core.InsertRecord{
 		TableID:              cap.tableID,
 		StatementID:          cap.statementID,
@@ -570,6 +581,64 @@ func (p *Plugin) submit(ctx context.Context, cap *insertCapture) error {
 		return fmt.Errorf("submit arbiter insert: %w", err)
 	}
 	return nil
+}
+
+// pinnedPrevSafeSnapshot resolves the prev-safe snapshot the source claim binds
+// to (HG-P0-01). It reads the current safe watermark and loads that snapshot; if
+// a validated snapshot exists it is used as the base (carrying the table's
+// existing safe partition roots), otherwise it falls back to the genesis
+// snapshot for a table's first insert. Falling back to genesis when the reader
+// is unwired keeps single-insert behaviour identical to the previous code path.
+func (p *Plugin) pinnedPrevSafeSnapshot(ctx context.Context, tableID string, columns []lthash.Column) (replay.SafeSnapshotManifest, error) {
+	genesis, err := core.NativePayloadGenesisSnapshot(tableID, columns)
+	if err != nil {
+		return replay.SafeSnapshotManifest{}, fmt.Errorf("compute native payload genesis snapshot: %w", err)
+	}
+	if p.snapshotReader == nil {
+		return genesis, nil
+	}
+	watermark, err := p.snapshotReader.GetSafeWatermark(ctx)
+	if err != nil {
+		if errors.Is(err, core.ErrNoSafeWatermark) {
+			// No safe snapshot published yet (a table's genuine first insert):
+			// genesis is the correct base, not a fatal error.
+			return genesis, nil
+		}
+		return replay.SafeSnapshotManifest{}, fmt.Errorf("get safe watermark: %w", err)
+	}
+	if watermark.SnapshotID == "" {
+		// No safe snapshot published yet: genuine genesis base.
+		return genesis, nil
+	}
+	manifest, ok, err := p.snapshotReader.GetSafeSnapshot(ctx, watermark.SnapshotID)
+	if err != nil {
+		return replay.SafeSnapshotManifest{}, fmt.Errorf("get safe snapshot %s: %w", watermark.SnapshotID, err)
+	}
+	if !ok {
+		return replay.SafeSnapshotManifest{}, fmt.Errorf("safe watermark snapshot %s not found", watermark.SnapshotID)
+	}
+	if err := manifest.Validate(); err != nil {
+		return replay.SafeSnapshotManifest{}, fmt.Errorf("validate safe snapshot %s: %w", watermark.SnapshotID, err)
+	}
+	// The pinned snapshot must carry the same schema/executor identity the
+	// source uses to derive the state root; a schema mismatch would silently
+	// diverge the root, so keep the genesis-derived identity when the published
+	// snapshot predates this table's schema.
+	if !manifestCoversTable(manifest, tableID) {
+		return genesis, nil
+	}
+	return manifest, nil
+}
+
+// manifestCoversTable reports whether the manifest carries a table entry for the
+// given logical table id.
+func manifestCoversTable(m replay.SafeSnapshotManifest, tableID string) bool {
+	for _, t := range m.Tables {
+		if t.TableID == tableID {
+			return true
+		}
+	}
+	return false
 }
 
 // requireNativeRowIDColumn verifies the captured Native payload declares the

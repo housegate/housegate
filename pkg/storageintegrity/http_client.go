@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -13,6 +14,12 @@ import (
 
 	"housegate/housegate/pkg/replay"
 )
+
+// ErrNoSafeWatermark is returned by GetSafeWatermark when the control plane has
+// not published any safe snapshot yet. It is a "no safe state" signal, not a
+// transport failure: callers that only need a base snapshot fall back to
+// genesis, while callers that require a watermark still treat it as an error.
+var ErrNoSafeWatermark = errors.New("arbiter safe watermark not published")
 
 type HTTPDAClient struct {
 	baseURL string
@@ -263,7 +270,12 @@ func (c *HTTPArbiterClient) GetSafeWatermark(ctx context.Context) (SafeWatermark
 		return SafeWatermark{}, err
 	}
 	if !out.OK {
-		return SafeWatermark{}, fmt.Errorf("arbiter safe watermark was not acknowledged")
+		// A non-acknowledged watermark means the control plane has published no
+		// safe snapshot yet (a table's genuine genesis state), NOT a transport
+		// failure. Callers that only need a base snapshot (e.g. the INSERT source
+		// claim) treat this as "no safe state → genesis base" rather than failing
+		// the write; other callers still see a non-nil error.
+		return SafeWatermark{}, ErrNoSafeWatermark
 	}
 	return out.Watermark, nil
 }

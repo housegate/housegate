@@ -51,10 +51,15 @@ func TestNativePayloadClaimDrivesReplayVerifier(t *testing.T) {
 		Signer:    signer,
 	}
 
-	// The source claim root is the composite state root the submit path
-	// computes: H(schema_snapshot_id ‖ executor_profile_id ‖ data_root_after),
-	// where data_root_after is the claim's PartRowLtHash.
-	wantSourceRoot := NativePayloadCompositeStateRoot(snap.SchemaSnapshotID, snap.ExecutorProfileID, claim.PartRowLtHash)
+	// HG-P0-01: the source claim root is the unified state root the submit path
+	// computes via replay.AssembleStateRoot — base partition roots from the
+	// pinned snapshot plus this statement's candidate part_row_lthash. The
+	// verifier's NativePayloadExecutor.Replay derives ComputedStateRoot through
+	// the identical assembly, so the two must reconcile byte-for-byte.
+	wantSourceRoot, err := NativeSourceClaimRoot(snap, "tenant.events", claim.PartRowLtHash)
+	if err != nil {
+		t.Fatalf("NativeSourceClaimRoot: %v", err)
+	}
 	job := replay.ReplayJob{
 		BlockSeq:           1,
 		PrevSafeSnapshotID: snap.SnapshotID,

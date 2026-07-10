@@ -278,17 +278,28 @@ func (e NativePayloadExecutor) Replay(ctx context.Context, req replay.ExecutionR
 	if len(req.Job.Statements) == 0 {
 		return replay.ExecutionResult{}, fmt.Errorf("native payload executor requires at least one statement")
 	}
-	total := lthash.New()
+
+	// HG-P0-01: carry the pinned prev-safe base forward per (table, partition)
+	// instead of accumulating this batch from an empty accumulator. The base is
+	// the additive partition root recorded in the pinned snapshot; folding this
+	// block's rows on top yields partition_root_after = partition_root_before +
+	// Σ candidate part_row_lthash (spec §6.2). The Native MVP has no partition
+	// split yet, so every statement folds into the "all" partition of its table.
+	base, err := newNativePartitionAccumulators(req.Snapshot)
+	if err != nil {
+		return replay.ExecutionResult{}, err
+	}
+
 	var affected []replay.PartManifestEntry
 	for _, st := range req.Statements {
 		claim, acc, err := computeNativePayloadClaim(st.TargetTableID, e.Revision, st.Payload)
 		if err != nil {
 			return replay.ExecutionResult{}, fmt.Errorf("statement %s: %w", st.StatementID, err)
 		}
-		total.AddHash(acc)
+		base.add(st.TargetTableID, nativeAllPartitionID, acc)
 		affected = append(affected, replay.PartManifestEntry{
 			TableID:       st.TargetTableID,
-			PartitionID:   "all",
+			PartitionID:   nativeAllPartitionID,
 			PartName:      fmt.Sprintf("all-b%d-s%d", req.Job.BlockSeq, st.StatementSeq),
 			PartPhysHash:  replay.DigestString("native-part-phys\x00" + st.StatementID + "\x00" + claim.PartRowLtHash),
 			PartRowLtHash: claim.PartRowLtHash,
@@ -296,23 +307,142 @@ func (e NativePayloadExecutor) Replay(ctx context.Context, req replay.ExecutionR
 			Bytes:         claim.Bytes,
 		})
 	}
-	dataRoot := nativeDataRootAfter(total)
-	stateRoot := compositeStateRoot(req.Job.SchemaSnapshotID, req.Job.ExecutorProfileID, dataRoot)
+
+	// HG-P0-01: derive the data/state root through the single canonical
+	// assembly (replay.AssembleStateRoot → ComputeDataRoot/ComputeStateRoot,
+	// domain safe-snapshot-data-v2 / safe-snapshot-state) shared by source,
+	// verifier, and manifest. schema_root comes from the pinned snapshot so the
+	// state root binds schema_snapshot_id, schema_root, executor_profile_id, and
+	// data_root_after exactly as the spec's post_state_root formula requires.
+	tables, commitments := base.tables(req.Snapshot.SchemaRoot, affected)
+	dataRoot, stateRoot, err := replay.AssembleStateRoot(
+		req.Job.SchemaSnapshotID,
+		req.Snapshot.SchemaRoot,
+		req.Job.ExecutorProfileID,
+		tables,
+	)
+	if err != nil {
+		return replay.ExecutionResult{}, fmt.Errorf("assemble native state root: %w", err)
+	}
+	_ = dataRoot
 	return replay.ExecutionResult{
-		BlockSeq:           req.Job.BlockSeq,
-		PrevSafeSnapshotID: req.Job.PrevSafeSnapshotID,
-		PrevStateRoot:      req.Job.PrevStateRoot,
-		SchemaSnapshotID:   req.Job.SchemaSnapshotID,
-		ExecutorProfileID:  req.Job.ExecutorProfileID,
-		ComputedStateRoot:  stateRoot,
-		PartitionCommitmentsAfter: []replay.PartitionCommitment{{
-			TableID:     req.Job.Statements[0].TargetTableID,
-			PartitionID: "all",
-			Root:        dataRoot,
-		}},
-		AffectedParts: sortedNativeParts(affected),
-		ReplayLogHash: replay.DigestString(fmt.Sprintf("native-replay-log\x00%d\x00%d", req.Job.BlockSeq, len(affected))),
+		BlockSeq:                  req.Job.BlockSeq,
+		PrevSafeSnapshotID:        req.Job.PrevSafeSnapshotID,
+		PrevStateRoot:             req.Job.PrevStateRoot,
+		SchemaSnapshotID:          req.Job.SchemaSnapshotID,
+		ExecutorProfileID:         req.Job.ExecutorProfileID,
+		ComputedStateRoot:         stateRoot,
+		PartitionCommitmentsAfter: commitments,
+		AffectedParts:             sortedNativeParts(affected),
+		ReplayLogHash:             replay.DigestString(fmt.Sprintf("native-replay-log\x00%d\x00%d", req.Job.BlockSeq, len(affected))),
 	}, nil
+}
+
+// nativeAllPartitionID is the single-partition sentinel used by the Native MVP
+// executor, which does not yet split rows across ClickHouse partitions.
+const nativeAllPartitionID = "all"
+
+// nativePartitionAccumulators carries per-(table, partition) LtHash
+// accumulators seeded from a pinned snapshot's partition roots, so replay folds
+// this block's rows on top of the existing safe state (base-carry, spec §6.2).
+type nativePartitionAccumulators struct {
+	// order preserves first-seen (table, partition) order for deterministic
+	// TableManifest assembly independent of Go map iteration.
+	order []nativePartitionKey
+	accs  map[nativePartitionKey]*lthash.Hash
+}
+
+type nativePartitionKey struct {
+	tableID     string
+	partitionID string
+}
+
+// newNativePartitionAccumulators seeds accumulators from the pinned snapshot's
+// per-partition roots (raw additive accumulator hex). An empty/absent root is
+// treated as a zero accumulator (genesis base).
+func newNativePartitionAccumulators(snap replay.SafeSnapshotManifest) (*nativePartitionAccumulators, error) {
+	b := &nativePartitionAccumulators{accs: map[nativePartitionKey]*lthash.Hash{}}
+	for _, t := range snap.Tables {
+		for _, pr := range t.PartitionRoots {
+			tableID := pr.TableID
+			if tableID == "" {
+				tableID = t.TableID
+			}
+			acc := lthash.New()
+			if pr.Root != "" {
+				parsed, err := lthashAccumulatorFromHex(pr.Root)
+				if err != nil {
+					return nil, fmt.Errorf("seed base partition root %s/%s: %w", tableID, pr.PartitionID, err)
+				}
+				acc = parsed
+			}
+			b.set(tableID, pr.PartitionID, acc)
+		}
+	}
+	return b, nil
+}
+
+func (b *nativePartitionAccumulators) set(tableID, partitionID string, acc *lthash.Hash) {
+	key := nativePartitionKey{tableID: tableID, partitionID: partitionID}
+	if _, ok := b.accs[key]; !ok {
+		b.order = append(b.order, key)
+	}
+	b.accs[key] = acc
+}
+
+func (b *nativePartitionAccumulators) add(tableID, partitionID string, acc *lthash.Hash) {
+	key := nativePartitionKey{tableID: tableID, partitionID: partitionID}
+	cur, ok := b.accs[key]
+	if !ok {
+		cur = lthash.New()
+		b.order = append(b.order, key)
+		b.accs[key] = cur
+	}
+	cur.AddHash(acc)
+}
+
+// tables materializes the accumulators into per-table TableManifests (with
+// additive partition roots) plus the flat PartitionCommitment list the
+// execution result carries. schema_hash is taken from the affected parts (all
+// rows of a Native block share one schema) or left empty when unknown.
+func (b *nativePartitionAccumulators) tables(schemaRoot string, affected []replay.PartManifestEntry) ([]replay.TableManifest, []replay.PartitionCommitment) {
+	_ = schemaRoot
+	schemaByTable := map[string]string{}
+	partsByTable := map[string][]replay.PartManifestEntry{}
+	for _, p := range affected {
+		partsByTable[p.TableID] = append(partsByTable[p.TableID], p)
+	}
+	byTable := map[string]*replay.TableManifest{}
+	var tableOrder []string
+	var commitments []replay.PartitionCommitment
+	for _, key := range b.order {
+		root := lthashAccumulatorHex(b.accs[key])
+		commitments = append(commitments, replay.PartitionCommitment{
+			TableID:     key.tableID,
+			PartitionID: key.partitionID,
+			Root:        root,
+		})
+		tm, ok := byTable[key.tableID]
+		if !ok {
+			tableOrder = append(tableOrder, key.tableID)
+			tm = &replay.TableManifest{
+				TableID:     key.tableID,
+				SchemaHash:  schemaByTable[key.tableID],
+				ActiveParts: partsByTable[key.tableID],
+			}
+			byTable[key.tableID] = tm
+		}
+		tm.PartitionRoots = append(tm.PartitionRoots, replay.PartitionCommitment{
+			TableID:     key.tableID,
+			PartitionID: key.partitionID,
+			Root:        root,
+		})
+	}
+	tables := make([]replay.TableManifest, 0, len(tableOrder))
+	for _, id := range tableOrder {
+		tables = append(tables, *byTable[id])
+	}
+	return tables, commitments
 }
 
 type nativeDataBlock struct {
@@ -459,8 +589,52 @@ func compositeStateRoot(schemaSnapshotID, executorProfileID, dataRootAfter strin
 // NativePayloadCompositeStateRoot exposes compositeStateRoot to callers (the
 // plugin's submit path) that compute the source claim root from a claim's
 // PartRowLtHash (the data_root_after) plus the genesis schema/executor identity.
+//
+// Deprecated: use NativeSourceClaimRoot, which routes through the single
+// canonical replay.AssembleStateRoot profile shared with the verifier (spec
+// §6.2, HG-P0-01). This string-domain form ("native-state-root-v1") is retained
+// only for the legacy golden vectors and MUST NOT be used for new source claims.
 func NativePayloadCompositeStateRoot(schemaSnapshotID, executorProfileID, dataRootAfter string) string {
 	return compositeStateRoot(schemaSnapshotID, executorProfileID, dataRootAfter)
+}
+
+// NativeSourceClaimRoot computes the source claim root the way the verifier's
+// NativePayloadExecutor.Replay does: fold this statement's part_row_lthash onto
+// the pinned snapshot's base partition root for (tableID, "all"), then derive
+// the state root through replay.AssembleStateRoot. Because both sides call the
+// identical canonical assembly, the source claim root equals the verifier's
+// ComputedStateRoot by construction (spec §6.2 requirement that source and
+// verifier share one profile).
+//
+// prevSnapshot is the pinned prev-safe snapshot (its SchemaRoot and the base
+// partition root for this table flow into the derivation); pass the genesis
+// snapshot for a table's first insert. partRowLtHash is the raw additive
+// accumulator hex for the candidate part(s) of this statement.
+func NativeSourceClaimRoot(prevSnapshot replay.SafeSnapshotManifest, tableID, partRowLtHash string) (string, error) {
+	base, err := newNativePartitionAccumulators(prevSnapshot)
+	if err != nil {
+		return "", err
+	}
+	delta := lthash.New()
+	if partRowLtHash != "" {
+		parsed, err := lthashAccumulatorFromHex(partRowLtHash)
+		if err != nil {
+			return "", fmt.Errorf("parse candidate part_row_lthash: %w", err)
+		}
+		delta = parsed
+	}
+	base.add(tableID, nativeAllPartitionID, delta)
+	tables, _ := base.tables(prevSnapshot.SchemaRoot, nil)
+	_, stateRoot, err := replay.AssembleStateRoot(
+		prevSnapshot.SchemaSnapshotID,
+		prevSnapshot.SchemaRoot,
+		prevSnapshot.ExecutorProfileID,
+		tables,
+	)
+	if err != nil {
+		return "", fmt.Errorf("assemble native source claim root: %w", err)
+	}
+	return stateRoot, nil
 }
 
 func sortedNativeParts(in []replay.PartManifestEntry) []replay.PartManifestEntry {

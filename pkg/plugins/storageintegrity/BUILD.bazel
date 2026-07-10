@@ -9,6 +9,7 @@ go_library(
         "//pkg/auth",
         "//pkg/chsession",
         "//pkg/log",
+        "//pkg/lthash",
         "//pkg/plugin",
         "//pkg/replay",
         "//pkg/sqlident",
@@ -19,9 +20,7 @@ go_library(
 
 go_test(
     name = "storageintegrity_test",
-    srcs = [
-        "plugin_test.go",
-    ],
+    srcs = ["plugin_test.go"],
     embed = [":storageintegrity"],
     deps = [
         "//pkg/auth",

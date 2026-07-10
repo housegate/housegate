@@ -367,7 +367,13 @@ func TestPluginSubmitsNativePayloadReplayMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NativePayloadGenesisSnapshot: %v", err)
 	}
-	wantSourceClaimRoot := core.NativePayloadCompositeStateRoot(wantSnap.SchemaSnapshotID, wantSnap.ExecutorProfileID, wantClaim.PartRowLtHash)
+	// HG-P0-01: no SnapshotReader is wired here, so the submit path pins the
+	// genesis snapshot as base and derives the source root through the unified
+	// replay.AssembleStateRoot assembly (base + candidate part_row_lthash).
+	wantSourceClaimRoot, err := core.NativeSourceClaimRoot(wantSnap, "tenant_a.events", wantClaim.PartRowLtHash)
+	if err != nil {
+		t.Fatalf("NativeSourceClaimRoot: %v", err)
+	}
 
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
 		t.Fatalf("OnQuery: %v", err)
