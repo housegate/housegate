@@ -1151,6 +1151,15 @@ func subLtHashAccumulators(post, base string) (string, bool) {
 	return lthashAccumulatorHex(postAcc), true
 }
 
+// PartitionRootFromActiveParts exposes the canonical partition-root derivation
+// (additive Σ part_row_lthash over a partition's active parts, digest fallback
+// for non-accumulator hashes) so external callers — the manifest semantic
+// validator's counterpart in tests and harnesses — derive the exact same root
+// this package uses internally, rather than reinventing it and drifting.
+func PartitionRootFromActiveParts(parts []replay.PartManifestEntry, partitionID string) string {
+	return partitionRootFromActiveParts(parts, partitionID)
+}
+
 func partitionRootFromActiveParts(parts []replay.PartManifestEntry, partitionID string) string {
 	var filtered []replay.PartManifestEntry
 	for _, part := range parts {
