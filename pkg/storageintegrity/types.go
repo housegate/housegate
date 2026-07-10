@@ -426,6 +426,12 @@ type RollbackTask struct {
 	PromoteTables        []string       `json:"promote_tables,omitempty"`
 	PartitionIDs         []string       `json:"partition_ids,omitempty"`
 	UnsafeParts          []ByteSidePart `json:"unsafe_parts,omitempty"`
+	// AllowPartitionRollback authorizes a coarse partition-wide DROP PARTITION on
+	// the unsafe buffer when no exact parts are given (ROLLBACK). It is only safe
+	// for a statement-exclusive buffer, so the control plane must opt in per
+	// task; otherwise an INSERT rollback without exact parts fails closed to
+	// avoid deleting other pending statements' provisional bytes.
+	AllowPartitionRollback bool `json:"allow_partition_rollback,omitempty"`
 }
 
 type RollbackResult struct {

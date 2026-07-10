@@ -1312,6 +1312,21 @@ type ClickHouseRollbackExecutor struct {
 	Conn SQLConn
 }
 
+// partitionRollbackParts splits declared unsafe parts into those carrying a
+// physical part name (droppable via DROP PART) and those without. A rollback
+// that wants exact-part cleanup must supply named parts; nameless parts cannot
+// be dropped precisely and must not be widened to a partition drop.
+func partitionRollbackParts(parts []ByteSidePart) (named, unnamed []ByteSidePart) {
+	for _, p := range parts {
+		if p.PartName == "" {
+			unnamed = append(unnamed, p)
+			continue
+		}
+		named = append(named, p)
+	}
+	return named, unnamed
+}
+
 func (e ClickHouseRollbackExecutor) Rollback(ctx context.Context, task RollbackTask) (RollbackResult, error) {
 	if e.Conn == nil {
 		return RollbackResult{}, fmt.Errorf("clickhouse connection is required")
@@ -1328,23 +1343,37 @@ func (e ClickHouseRollbackExecutor) Rollback(ctx context.Context, task RollbackT
 		PartitionIDs: append([]string(nil), task.PartitionIDs...),
 	}
 	if task.UnsafeTable != "" {
-		if len(task.UnsafeParts) > 0 {
-			for _, part := range task.UnsafeParts {
-				if part.PartName == "" {
-					continue
-				}
+		// ROLLBACK (paired with HG-P0-02): the dual unsafe buffers are NOT
+		// statement-exclusive, so one partition may hold provisional parts from
+		// several pending statements. A partition-wide DROP PARTITION would
+		// delete co-tenant statements' bytes. An INSERT rollback must therefore
+		// name the exact unsafe parts to drop; if it cannot, fail closed and
+		// leave the bytes for repair/operator intervention rather than widening
+		// to a partition drop or silently no-op'ing over nameless parts.
+		named, unnamed := partitionRollbackParts(task.UnsafeParts)
+		switch {
+		case len(unnamed) > 0:
+			return RollbackResult{}, fmt.Errorf("insert rollback %s declares %d unsafe part(s) without a physical part name; refusing to widen to a partition-wide drop that could delete other pending statements' bytes", task.RollbackID, len(unnamed))
+		case len(named) > 0:
+			for _, part := range named {
 				if err := e.Conn.Exec(ctx, fmt.Sprintf("ALTER TABLE %s DROP PART %s", task.UnsafeTable, sqlStringLiteral(part.PartName))); err != nil {
 					return RollbackResult{}, fmt.Errorf("drop unsafe part %s: %w", part.PartName, err)
 				}
 				result.CleanedUnsafeParts = append(result.CleanedUnsafeParts, part)
 			}
-		} else {
+		case task.AllowPartitionRollback:
+			// Explicitly authorized coarse rollback: only for a statement-exclusive
+			// buffer where dropping the whole partition cannot affect other
+			// statements (e.g. a dedicated frozen buffer epoch). The control plane
+			// must opt in per task; it is never the implicit default.
 			for _, partitionID := range task.PartitionIDs {
 				if err := e.Conn.Exec(ctx, fmt.Sprintf("ALTER TABLE %s DROP PARTITION ID %s", task.UnsafeTable, sqlStringLiteral(partitionID))); err != nil {
 					return RollbackResult{}, fmt.Errorf("drop unsafe partition %s: %w", partitionID, err)
 				}
 				result.DroppedUnsafePartitions = append(result.DroppedUnsafePartitions, partitionID)
 			}
+		default:
+			return RollbackResult{}, fmt.Errorf("insert rollback %s has no exact unsafe parts and partition-wide rollback is not authorized; refusing to clean up unsafe bytes without an exact part set", task.RollbackID)
 		}
 	}
 	for _, table := range uniqueNonEmpty(append([]string{task.ScratchTable}, task.ScratchTables...)) {

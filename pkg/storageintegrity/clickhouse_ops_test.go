@@ -542,6 +542,68 @@ func TestClickHouseRollbackExecutorCleansUnsafeScratchAndPromoteState(t *testing
 	}
 }
 
+// TestClickHouseRollbackRejectsNamelessUnsafeParts proves the ROLLBACK
+// fail-closed: an INSERT rollback whose declared unsafe parts have no physical
+// name cannot be dropped precisely and must not be widened to a partition-wide
+// DROP PARTITION that could delete other pending statements' bytes.
+func TestClickHouseRollbackRejectsNamelessUnsafeParts(t *testing.T) {
+	conn := &fakeSQLConn{}
+	executor := ClickHouseRollbackExecutor{Conn: conn}
+	_, err := executor.Rollback(context.Background(), RollbackTask{
+		RollbackID:   "rollback-stmt-1",
+		StatementID:  "stmt-1",
+		UnsafeTable:  "`hg_unsafe`.`events`",
+		PartitionIDs: []string{"202607"},
+		UnsafeParts:  []ByteSidePart{{PartitionID: "202607", PartRowLtHash: "0xabc"}}, // no PartName
+	})
+	if err == nil || !strings.Contains(err.Error(), "without a physical part name") {
+		t.Fatalf("expected nameless-part rejection, got %v", err)
+	}
+	for _, exec := range conn.execs {
+		if strings.Contains(exec, "DROP PARTITION") {
+			t.Fatalf("must not issue partition-wide drop, got: %s", exec)
+		}
+	}
+}
+
+// TestClickHouseRollbackRejectsEmptyPartsWithoutAuthorization proves that an
+// INSERT rollback with no exact parts and no explicit partition-rollback
+// authorization fails closed rather than dropping the whole partition.
+func TestClickHouseRollbackRejectsEmptyPartsWithoutAuthorization(t *testing.T) {
+	conn := &fakeSQLConn{}
+	executor := ClickHouseRollbackExecutor{Conn: conn}
+	_, err := executor.Rollback(context.Background(), RollbackTask{
+		RollbackID:   "rollback-stmt-1",
+		UnsafeTable:  "`hg_unsafe`.`events`",
+		PartitionIDs: []string{"202607"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "partition-wide rollback is not authorized") {
+		t.Fatalf("expected unauthorized-partition-rollback rejection, got %v", err)
+	}
+}
+
+// TestClickHouseRollbackAllowsAuthorizedPartitionRollback proves the explicit
+// opt-in path still works for a statement-exclusive buffer.
+func TestClickHouseRollbackAllowsAuthorizedPartitionRollback(t *testing.T) {
+	conn := &fakeSQLConn{}
+	executor := ClickHouseRollbackExecutor{Conn: conn}
+	res, err := executor.Rollback(context.Background(), RollbackTask{
+		RollbackID:             "rollback-stmt-1",
+		UnsafeTable:            "`hg_unsafe`.`events`",
+		PartitionIDs:           []string{"202607"},
+		AllowPartitionRollback: true,
+	})
+	if err != nil {
+		t.Fatalf("authorized partition rollback: %v", err)
+	}
+	if len(res.DroppedUnsafePartitions) != 1 || res.DroppedUnsafePartitions[0] != "202607" {
+		t.Fatalf("dropped partitions = %+v, want [202607]", res.DroppedUnsafePartitions)
+	}
+	if !containsExec(conn.execs, "ALTER TABLE `hg_unsafe`.`events` DROP PARTITION ID '202607'") {
+		t.Fatalf("expected authorized partition drop, execs: %v", conn.execs)
+	}
+}
+
 func TestClickHouseRepairSyncExecutorReplacesPartitionsAndVerifiesManifest(t *testing.T) {
 	manifest := sealedOpsTestManifest(t, []replay.PartManifestEntry{{
 		TableID:       "tenant.events",
