@@ -548,6 +548,15 @@ func (p *Plugin) submit(ctx context.Context, cap *insertCapture) error {
 		return fmt.Errorf("arbiter client is required")
 	}
 	payload := append([]byte(nil), cap.payload.Bytes()...)
+	// HG-P2-01: fail closed with an explicit, classified error if the captured
+	// Native payload is compressed or uses a column type outside the supported
+	// whitelist, rather than surfacing an opaque decode error later. (Full
+	// rejection BEFORE the unsafe ClickHouse write would require buffering the
+	// whole payload ahead of forwarding; this at least makes the source claim
+	// path fail with a precise reason instead of a generic decode failure.)
+	if err := core.ValidateNativePayloadDecodable(cap.tableID, cap.revision, payload); err != nil {
+		return err
+	}
 	if p.requireRowIDInput {
 		// The server is not injecting _hg_row_id (inject_row_id is off), so the
 		// client-side/agent HouseGate must have injected it. Fail closed if the

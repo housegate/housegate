@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
+	"errors"
 	"testing"
 
 	"github.com/ClickHouse/ch-go/proto"
@@ -212,4 +213,28 @@ type fakeNativePayloadStore map[string][]byte
 
 func (s fakeNativePayloadStore) GetPayload(_ context.Context, ref string) ([]byte, error) {
 	return append([]byte(nil), s[ref]...), nil
+}
+
+// TestValidateNativePayloadDecodable proves HG-P2-01: a payload with only
+// supported scalar types validates, while a payload using an out-of-whitelist
+// column type is rejected explicitly with ErrNativePayloadUnsupported rather
+// than an opaque decode failure surfaced later at claim time.
+func TestValidateNativePayloadDecodable(t *testing.T) {
+	ok := encodeNativePayload(t, proto.Input{
+		{Name: "id", Data: &proto.ColUInt64{1}},
+		{Name: "label", Data: newColStr("alpha")},
+	})
+	if err := ValidateNativePayloadDecodable("tenant.events", nativePayloadTestRevision, ok); err != nil {
+		t.Fatalf("supported scalar payload must validate: %v", err)
+	}
+
+	// Int128 is not on the supported column whitelist.
+	bad := encodeNativePayload(t, proto.Input{
+		{Name: "id", Data: &proto.ColUInt64{1}},
+		{Name: "big", Data: &proto.ColInt128{proto.Int128{Low: 1}}},
+	})
+	err := ValidateNativePayloadDecodable("tenant.events", nativePayloadTestRevision, bad)
+	if err == nil || !errors.Is(err, ErrNativePayloadUnsupported) {
+		t.Fatalf("unsupported column type must be rejected with ErrNativePayloadUnsupported, got %v", err)
+	}
 }

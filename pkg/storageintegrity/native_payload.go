@@ -180,6 +180,26 @@ func ComputeNativePayloadClaim(tableID string, revision int, payload []byte) (Na
 	return claim, err
 }
 
+// ErrNativePayloadUnsupported classifies a payload the Native decoder cannot
+// commit to — a compressed block or an out-of-whitelist column type. It is a
+// distinct, explicit rejection so the source can fail closed BEFORE the unsafe
+// write / DA publish rather than discovering the problem opaquely at async
+// claim time (HG-P2-01).
+var ErrNativePayloadUnsupported = errors.New("unsupported native payload")
+
+// ValidateNativePayloadDecodable checks that the captured Native payload can be
+// canonically decoded and committed (every column type is on the supported
+// whitelist and no block is compressed). It returns a wrapped
+// ErrNativePayloadUnsupported with a precise reason on failure, so the source
+// admission path can reject an unsupported INSERT explicitly instead of
+// emitting an opaque decode error during the asynchronous claim.
+func ValidateNativePayloadDecodable(tableID string, revision int, payload []byte) error {
+	if _, _, err := computeNativePayloadClaim(tableID, revision, payload); err != nil {
+		return fmt.Errorf("%w: %v", ErrNativePayloadUnsupported, err)
+	}
+	return nil
+}
+
 func computeNativePayloadClaim(tableID string, revision int, payload []byte) (NativePayloadClaim, *lthash.Hash, error) {
 	if tableID == "" {
 		return NativePayloadClaim{}, nil, fmt.Errorf("table_id is required")
