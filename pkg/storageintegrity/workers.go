@@ -137,6 +137,9 @@ func (w PromotionWorker) RunOnce(ctx context.Context) (bool, error) {
 	if err := validatePromotionUnsafeBufferEpoch(ctx, arbiter, task); err != nil {
 		return false, err
 	}
+	if err := ValidatePromotionPreflight(task, w.RequireLeaderSignature); err != nil {
+		return false, err
+	}
 	result, err := w.Promoter.Promote(ctx, task)
 	if err != nil {
 		return false, fmt.Errorf("promote %s: %w", task.PromotionID, err)
@@ -665,6 +668,9 @@ func (w CompactionWorker) RunOnce(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 	if err := ValidateCompactionLeaderSignature(w.LeaderVerifier, w.RequireLeaderSignature, task); err != nil {
+		return false, err
+	}
+	if err := ValidateCompactionPreflight(task, w.RequireLeaderSignature); err != nil {
 		return false, err
 	}
 	result, err := w.Executor.Compact(ctx, task)

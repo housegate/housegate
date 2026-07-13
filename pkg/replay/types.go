@@ -11,7 +11,7 @@ import (
 type SafeSnapshotManifest struct {
 	SnapshotID        string          `json:"snapshot_id"`
 	ParentSnapshotID  string          `json:"parent_snapshot_id,omitempty"`
-	SafeL3BlockSeq      uint64          `json:"safe_l3_block_seq"`
+	SafeL3BlockSeq    uint64          `json:"safe_l3_block_seq"`
 	StateRoot         string          `json:"state_root"`
 	SchemaSnapshotID  string          `json:"schema_snapshot_id"`
 	SchemaRoot        string          `json:"schema_root"`
@@ -177,6 +177,12 @@ func (m SafeSnapshotManifest) validateSemantics() error {
 			}
 			if p.PartRowLtHash == "" {
 				return fmt.Errorf("table %q part %q has empty part_row_lthash", t.TableID, p.PartName)
+			}
+			if p.PartPhysHash == "" {
+				return fmt.Errorf("table %q part %q has empty part_phys_hash", t.TableID, p.PartName)
+			}
+			if p.Bytes == 0 {
+				return fmt.Errorf("table %q part %q has empty bytes", t.TableID, p.PartName)
 			}
 			if p.TableID != "" && p.TableID != t.TableID {
 				return fmt.Errorf("table %q part %q mis-filed under table_id %q", t.TableID, p.PartName, p.TableID)

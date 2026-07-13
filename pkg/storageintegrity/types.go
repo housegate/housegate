@@ -31,16 +31,16 @@ type PayloadStore interface {
 }
 
 type InsertRecord struct {
-	TableID              string            `json:"table_id"`
-	StatementID          string            `json:"statement_id"`
-	OriginalSQL          string            `json:"original_sql"`
-	UnsafeSQL            string            `json:"unsafe_sql"`
-	UnsafeTable          string            `json:"unsafe_table"`
-	UnsafeBufferID       int               `json:"unsafe_buffer_id"`
-	UnsafeBufferEpoch    uint64            `json:"unsafe_buffer_epoch"`
-	UnsafeBufferDatabase string            `json:"unsafe_buffer_database,omitempty"`
-	SafeTable            string            `json:"safe_table"`
-	PartitionIDs         []string          `json:"partition_ids,omitempty"`
+	TableID              string   `json:"table_id"`
+	StatementID          string   `json:"statement_id"`
+	OriginalSQL          string   `json:"original_sql"`
+	UnsafeSQL            string   `json:"unsafe_sql"`
+	UnsafeTable          string   `json:"unsafe_table"`
+	UnsafeBufferID       int      `json:"unsafe_buffer_id"`
+	UnsafeBufferEpoch    uint64   `json:"unsafe_buffer_epoch"`
+	UnsafeBufferDatabase string   `json:"unsafe_buffer_database,omitempty"`
+	SafeTable            string   `json:"safe_table"`
+	PartitionIDs         []string `json:"partition_ids,omitempty"`
 	// CandidateParts is the exact set of physical parts this statement wrote to
 	// the unsafe buffer (HG-P0-02): the source result-claim. Each carries
 	// part_name, partition_id, part_phys_hash, part_row_lthash, row_count, and
@@ -48,19 +48,19 @@ type InsertRecord struct {
 	// bind the promotion to precisely these parts rather than sweeping the whole
 	// unsafe partition. Empty only when part attribution was unavailable, which
 	// the protected INSERT path rejects downstream.
-	CandidateParts       []ByteSidePart    `json:"candidate_parts,omitempty"`
-	UserJWS              string            `json:"user_jws,omitempty"`
-	AuthenticatedSigner  string            `json:"authenticated_signer,omitempty"`
-	Payload              PayloadCommitment `json:"payload"`
-	SourceClaimRoot      string            `json:"source_claim_root"`
-	PayloadEncoding      string            `json:"payload_encoding,omitempty"`
-	PayloadRevision      int               `json:"payload_revision,omitempty"`
-	PrevSafeSnapshotID   string            `json:"prev_safe_snapshot_id,omitempty"`
-	PrevStateRoot        string            `json:"prev_state_root,omitempty"`
-	SchemaSnapshotID     string            `json:"schema_snapshot_id,omitempty"`
-	ExecutorProfileID    string            `json:"executor_profile_id,omitempty"`
-	SettingsHash         string            `json:"settings_hash,omitempty"`
-	ReceivedAt           time.Time         `json:"received_at"`
+	CandidateParts      []ByteSidePart    `json:"candidate_parts,omitempty"`
+	UserJWS             string            `json:"user_jws,omitempty"`
+	AuthenticatedSigner string            `json:"authenticated_signer,omitempty"`
+	Payload             PayloadCommitment `json:"payload"`
+	SourceClaimRoot     string            `json:"source_claim_root"`
+	PayloadEncoding     string            `json:"payload_encoding,omitempty"`
+	PayloadRevision     int               `json:"payload_revision,omitempty"`
+	PrevSafeSnapshotID  string            `json:"prev_safe_snapshot_id,omitempty"`
+	PrevStateRoot       string            `json:"prev_state_root,omitempty"`
+	SchemaSnapshotID    string            `json:"schema_snapshot_id,omitempty"`
+	ExecutorProfileID   string            `json:"executor_profile_id,omitempty"`
+	SettingsHash        string            `json:"settings_hash,omitempty"`
+	ReceivedAt          time.Time         `json:"received_at"`
 }
 
 const (
@@ -229,28 +229,28 @@ type ByteSideScanResult struct {
 }
 
 type MutationTask struct {
-	StatementID           string                       `json:"statement_id"`
-	TableID               string                       `json:"table_id"`
-	MutationType          string                       `json:"mutation_type"`
-	MutationSQL           string                       `json:"mutation_sql"`
-	SafeTable             string                       `json:"safe_table"`
-	BaseSafeSnapshotID    string                       `json:"base_safe_snapshot_id,omitempty"`
-	BasePartitionRoot     string                       `json:"base_partition_root,omitempty"`
-	BasePartitionRoots    []replay.PartitionCommitment `json:"base_partition_roots,omitempty"`
-	SchemaSnapshotID      string                       `json:"schema_snapshot_id,omitempty"`
+	StatementID        string                       `json:"statement_id"`
+	TableID            string                       `json:"table_id"`
+	MutationType       string                       `json:"mutation_type"`
+	MutationSQL        string                       `json:"mutation_sql"`
+	SafeTable          string                       `json:"safe_table"`
+	BaseSafeSnapshotID string                       `json:"base_safe_snapshot_id,omitempty"`
+	BasePartitionRoot  string                       `json:"base_partition_root,omitempty"`
+	BasePartitionRoots []replay.PartitionCommitment `json:"base_partition_roots,omitempty"`
+	SchemaSnapshotID   string                       `json:"schema_snapshot_id,omitempty"`
 	// SchemaRoot and ExecutorProfileID bind the mutation post-state root to the
 	// same schema/executor identity the safe snapshot manifest uses (HG-P1-02),
 	// so PostStateRoot = H(schema_snapshot_id, schema_root, executor_profile_id,
 	// data_root_after) matches the manifest's state-root formula rather than a
 	// bare unbound LtHash digest.
-	SchemaRoot            string                       `json:"schema_root,omitempty"`
-	ExecutorProfileID     string                       `json:"executor_profile_id,omitempty"`
-	PromotionSeq          uint64                       `json:"promotion_seq,omitempty"`
-	PendingInsertBarrier  bool                         `json:"pending_insert_barrier,omitempty"`
-	RebindCount           int                          `json:"rebind_count,omitempty"`
-	InternalDropPartition bool                         `json:"internal_drop_partition,omitempty"`
-	DropPartitionIDs      []string                     `json:"drop_partition_ids,omitempty"`
-	PartitionIDs          []string                     `json:"partition_ids,omitempty"`
+	SchemaRoot            string   `json:"schema_root,omitempty"`
+	ExecutorProfileID     string   `json:"executor_profile_id,omitempty"`
+	PromotionSeq          uint64   `json:"promotion_seq,omitempty"`
+	PendingInsertBarrier  bool     `json:"pending_insert_barrier,omitempty"`
+	RebindCount           int      `json:"rebind_count,omitempty"`
+	InternalDropPartition bool     `json:"internal_drop_partition,omitempty"`
+	DropPartitionIDs      []string `json:"drop_partition_ids,omitempty"`
+	PartitionIDs          []string `json:"partition_ids,omitempty"`
 }
 
 type PartitionDelta struct {
@@ -321,48 +321,48 @@ type MutationReplayResult struct {
 }
 
 type PromotionTask struct {
-	PromotionID             string         `json:"promotion_id"`
-	PromotionSeq            uint64         `json:"promotion_seq,omitempty"`
-	LeaseID                 string         `json:"lease_id,omitempty"`
-	Kind                    string         `json:"kind,omitempty"`
-	TableID                 string         `json:"table_id,omitempty"`
-	BaseSafeSnapshotID      string         `json:"base_safe_snapshot_id,omitempty"`
-	BasePartitionRoot       string         `json:"base_partition_root,omitempty"`
+	PromotionID        string `json:"promotion_id"`
+	PromotionSeq       uint64 `json:"promotion_seq,omitempty"`
+	LeaseID            string `json:"lease_id,omitempty"`
+	Kind               string `json:"kind,omitempty"`
+	TableID            string `json:"table_id,omitempty"`
+	BaseSafeSnapshotID string `json:"base_safe_snapshot_id,omitempty"`
+	BasePartitionRoot  string `json:"base_partition_root,omitempty"`
 	// BasePartitionRoots carries a per-partition base root so a multi-partition
 	// promotion CASes each affected partition against its own base (HG-P0-04).
 	// When set it takes precedence over the scalar BasePartitionRoot; the scalar
 	// remains for single-partition promotions and legacy tasks.
-	BasePartitionRoots      []replay.PartitionCommitment `json:"base_partition_roots,omitempty"`
-	ExpectedPostRoot        string         `json:"expected_post_root,omitempty"`
+	BasePartitionRoots []replay.PartitionCommitment `json:"base_partition_roots,omitempty"`
+	ExpectedPostRoot   string                       `json:"expected_post_root,omitempty"`
 	// ExpectedPostRoots carries a per-partition expected post-promotion root so
 	// multi-partition promotions verify each partition against its own value.
 	// When set, it takes precedence over the scalar ExpectedPostRoot in the
 	// post-root CAS. Single-partition promotions may still use the scalar.
 	ExpectedPostRoots       []replay.PartitionCommitment `json:"expected_post_roots,omitempty"`
-	UnsafeTable             string         `json:"unsafe_table,omitempty"`
-	UnsafeBufferID          int            `json:"unsafe_buffer_id"`
-	UnsafeBufferEpoch       uint64         `json:"unsafe_buffer_epoch"`
-	UnsafeBufferDatabase    string         `json:"unsafe_buffer_database,omitempty"`
-	SafeTable               string         `json:"safe_table"`
-	SourceTable             string         `json:"source_table,omitempty"`
-	PromoteDatabase         string         `json:"promote_database,omitempty"`
-	ReplacePartition        bool           `json:"replace_partition,omitempty"`
-	SkipBasePartitionAttach bool           `json:"skip_base_partition_attach,omitempty"`
-	CleanupUnsafe           bool           `json:"cleanup_unsafe,omitempty"`
-	InternalDropPartition   bool           `json:"internal_drop_partition,omitempty"`
-	RequireBaseRootCAS      bool           `json:"require_base_root_cas,omitempty"`
-	RequirePostRootCAS      bool           `json:"require_post_root_cas,omitempty"`
-	RequirePromotionSeq     bool           `json:"require_promotion_seq,omitempty"`
-	PartitionIDs            []string       `json:"partition_ids,omitempty"`
-	DropPartitionIDs        []string       `json:"drop_partition_ids,omitempty"`
-	StatementIDs            []string       `json:"statement_ids,omitempty"`
-	Statements              []string       `json:"statements,omitempty"`
-	CandidateParts          []ByteSidePart `json:"candidate_parts,omitempty"`
-	CleanupUnsafeParts      []ByteSidePart `json:"cleanup_unsafe_parts,omitempty"`
-	// LeaderSignature is the arbiter leader's ed25519 signature over the
+	UnsafeTable             string                       `json:"unsafe_table,omitempty"`
+	UnsafeBufferID          int                          `json:"unsafe_buffer_id"`
+	UnsafeBufferEpoch       uint64                       `json:"unsafe_buffer_epoch"`
+	UnsafeBufferDatabase    string                       `json:"unsafe_buffer_database,omitempty"`
+	SafeTable               string                       `json:"safe_table"`
+	SourceTable             string                       `json:"source_table,omitempty"`
+	PromoteDatabase         string                       `json:"promote_database,omitempty"`
+	ReplacePartition        bool                         `json:"replace_partition,omitempty"`
+	SkipBasePartitionAttach bool                         `json:"skip_base_partition_attach,omitempty"`
+	CleanupUnsafe           bool                         `json:"cleanup_unsafe,omitempty"`
+	InternalDropPartition   bool                         `json:"internal_drop_partition,omitempty"`
+	RequireBaseRootCAS      bool                         `json:"require_base_root_cas,omitempty"`
+	RequirePostRootCAS      bool                         `json:"require_post_root_cas,omitempty"`
+	RequirePromotionSeq     bool                         `json:"require_promotion_seq,omitempty"`
+	PartitionIDs            []string                     `json:"partition_ids,omitempty"`
+	DropPartitionIDs        []string                     `json:"drop_partition_ids,omitempty"`
+	StatementIDs            []string                     `json:"statement_ids,omitempty"`
+	Statements              []string                     `json:"statements,omitempty"`
+	CandidateParts          []ByteSidePart               `json:"candidate_parts,omitempty"`
+	CleanupUnsafeParts      []ByteSidePart               `json:"cleanup_unsafe_parts,omitempty"`
+	// LeaderSignature is the arbiter leader's recoverable secp256k1 JWS over the
 	// canonical publication command (spec §9.1 PromotionIssued, §10, gap-25). A
-	// worker with a configured leader public key verifies it before executing
-	// and fails closed on mismatch.
+	// worker recovers the signer address, checks it against the authority
+	// allowlist, and fails closed on mismatch.
 	LeaderSignature string `json:"leader_signature,omitempty"`
 }
 
@@ -387,10 +387,10 @@ type PromotionResult struct {
 }
 
 type SafeWatermark struct {
-	SnapshotID   string `json:"snapshot_id"`
+	SnapshotID     string `json:"snapshot_id"`
 	SafeL3BlockSeq uint64 `json:"safe_l3_block_seq"`
-	StateRoot    string `json:"state_root"`
-	ManifestRoot string `json:"manifest_root"`
+	StateRoot      string `json:"state_root"`
+	ManifestRoot   string `json:"manifest_root"`
 }
 
 type PromotionReceipt struct {
@@ -424,13 +424,13 @@ type SafeAuditVote struct {
 	Scope AuditScope `json:"scope"`
 	// RowCount and RowsHash are the canonical audit evidence: the total row count
 	// and the additive rows hash (Σ part_row_lthash) over the audited safe parts.
-	RowCount     uint64                     `json:"row_count"`
-	RowsHash     string                     `json:"rows_hash,omitempty"`
-	ManifestRoot string                     `json:"manifest_root,omitempty"`
-	Match        bool                       `json:"match"`
-	ActivePartsMatch bool                   `json:"active_parts_match,omitempty"`
+	RowCount         uint64                     `json:"row_count"`
+	RowsHash         string                     `json:"rows_hash,omitempty"`
+	ManifestRoot     string                     `json:"manifest_root,omitempty"`
+	Match            bool                       `json:"match"`
+	ActivePartsMatch bool                       `json:"active_parts_match,omitempty"`
 	ActiveParts      []replay.PartManifestEntry `json:"active_parts,omitempty"`
-	Error            string                 `json:"error,omitempty"`
+	Error            string                     `json:"error,omitempty"`
 }
 
 // AuditScope identifies exactly what a SafeAudit vote covers, so a
@@ -535,7 +535,7 @@ type CompactionTask struct {
 	RequireBaseRootCAS bool                       `json:"require_base_root_cas,omitempty"`
 	RequirePostRootCAS bool                       `json:"require_post_root_cas,omitempty"`
 	DropCompactTable   bool                       `json:"drop_compact_table,omitempty"`
-	// LeaderSignature is the arbiter leader's ed25519 signature over the
+	// LeaderSignature is the arbiter leader's recoverable secp256k1 JWS over the
 	// canonical compaction publication command (spec §8.1, §9.1, gap-25).
 	LeaderSignature string `json:"leader_signature,omitempty"`
 }
@@ -562,9 +562,9 @@ type SafeReadRequest struct {
 }
 
 type SafeReadDecision struct {
-	Active       bool   `json:"active"`
-	Reason       string `json:"reason,omitempty"`
-	SnapshotID   string `json:"snapshot_id,omitempty"`
+	Active         bool   `json:"active"`
+	Reason         string `json:"reason,omitempty"`
+	SnapshotID     string `json:"snapshot_id,omitempty"`
 	SafeL3BlockSeq uint64 `json:"safe_l3_block_seq,omitempty"`
 }
 

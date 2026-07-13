@@ -75,6 +75,114 @@ func TestPluginCapturesInsertPayloadAndSubmitsExternalDAAndSequencer(t *testing.
 	}
 }
 
+func TestPluginSubmitStoresOutboxBeforePublish(t *testing.T) {
+	da := &fakeDA{}
+	seq := &fakeSequencer{insertErr: errors.New("mock arbiter down")}
+	p := New(Config{
+		UnsafeDatabase:  "hg_unsafe",
+		SafeDatabase:    "hg_safe",
+		DA:              da,
+		Sequencer:       seq,
+		InsertOutboxDir: t.TempDir(),
+	})
+	const revision = 54453
+	state := chsession.NewSessionState()
+	state.ClientRevision = revision
+	sess := &fakeSession{id: 1701, state: state}
+	qctx := &plugin.QueryContext{
+		Session:       sess,
+		OriginalSQL:   "INSERT INTO accounts.events VALUES",
+		Query:         &chproto.Query{Body: "INSERT INTO accounts.events VALUES"},
+		StatementType: sqlmeta.StatementTypeInsert,
+	}
+	raw := encodeStorageNativePayload(t, revision, proto.Input{
+		{Name: "id", Data: &proto.ColUInt64{1}},
+		{Name: "label", Data: storageColStr("alpha")},
+	})
+
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	if err := p.OnClientData(context.Background(), qctx, raw); err != nil {
+		t.Fatalf("OnClientData: %v", err)
+	}
+	p.OnQueryComplete(context.Background(), sess)
+
+	pending, err := p.outbox.List(context.Background())
+	if err != nil {
+		t.Fatalf("outbox List: %v", err)
+	}
+	if len(pending) != 1 || pending[0].StatementID == "" || pending[0].Payload.Ref == "" {
+		t.Fatalf("pending outbox = %+v, want one publishable record", pending)
+	}
+}
+
+func TestPluginReplayOutboxPublishesAndAcks(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFileInsertOutbox(dir)
+	if err != nil {
+		t.Fatalf("NewFileInsertOutbox: %v", err)
+	}
+	rec := core.InsertRecord{
+		TableID:     "tenant.events",
+		StatementID: "stmt-replay",
+		UnsafeTable: "`hg_unsafe`.`events`",
+		SafeTable:   "`hg_safe`.`events`",
+		ReceivedAt:  time.Unix(10, 0).UTC(),
+	}
+	if err := store.Put(context.Background(), rec); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	seq := &fakeSequencer{}
+	p := New(Config{
+		UnsafeDatabase:  "hg_unsafe",
+		SafeDatabase:    "hg_safe",
+		DA:              &fakeDA{},
+		Sequencer:       seq,
+		InsertOutboxDir: dir,
+	})
+
+	if err := p.ReplayOutbox(context.Background()); err != nil {
+		t.Fatalf("ReplayOutbox: %v", err)
+	}
+	if seq.rec.StatementID != "stmt-replay" {
+		t.Fatalf("published record = %+v, want stmt-replay", seq.rec)
+	}
+	pending, err := p.outbox.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending after replay = %+v, want none", pending)
+	}
+}
+
+func TestPluginDoesNotOverwritePendingCapture(t *testing.T) {
+	p := New(Config{
+		UnsafeDatabase: "hg_unsafe",
+		SafeDatabase:   "hg_safe",
+		DA:             &fakeDA{},
+		Sequencer:      &fakeSequencer{},
+	})
+	state := chsession.NewSessionState()
+	sess := &fakeSession{id: 1801, state: state}
+	p.active[sess.ID()] = &insertCapture{statementID: "stmt-pending"}
+	qctx := &plugin.QueryContext{
+		Session:       sess,
+		OriginalSQL:   "INSERT INTO accounts.events VALUES",
+		Query:         &chproto.Query{Body: "INSERT INTO accounts.events VALUES"},
+		StatementType: sqlmeta.StatementTypeInsert,
+	}
+
+	err := p.OnQuery(context.Background(), qctx)
+	if err == nil || !strings.Contains(err.Error(), "pending insert") {
+		t.Fatalf("OnQuery err = %v, want pending insert rejection", err)
+	}
+	if got := p.active[sess.ID()].statementID; got != "stmt-pending" {
+		t.Fatalf("active capture overwritten with %q", got)
+	}
+}
+
 func TestPluginUsesQueryIDAsInsertStatementID(t *testing.T) {
 	da := &fakeDA{}
 	seq := &fakeSequencer{}
@@ -1071,9 +1179,9 @@ func TestPluginStatementIDsAreUniqueAcrossInstances(t *testing.T) {
 
 func TestPluginRejectsSafeReadWhenNodeIsNotInActiveReadSet(t *testing.T) {
 	gate := &fakeReadGate{decision: core.SafeReadDecision{
-		Active:       false,
-		Reason:       "node quarantined",
-		SnapshotID:   "snap-2",
+		Active:         false,
+		Reason:         "node quarantined",
+		SnapshotID:     "snap-2",
 		SafeL3BlockSeq: 10,
 	}}
 	p := New(Config{
@@ -1146,6 +1254,7 @@ func (f *fakeDA) PutPayload(_ context.Context, req core.PutPayloadRequest) (core
 
 type fakeSequencer struct {
 	rec          core.InsertRecord
+	insertErr    error
 	mut          core.MutationRecord
 	watermark    core.SafeWatermark
 	manifests    map[string]replay.SafeSnapshotManifest
@@ -1155,7 +1264,7 @@ type fakeSequencer struct {
 
 func (f *fakeSequencer) SubmitInsert(_ context.Context, rec core.InsertRecord) error {
 	f.rec = rec
-	return nil
+	return f.insertErr
 }
 
 func (f *fakeSequencer) SubmitMutation(_ context.Context, rec core.MutationRecord) error {
@@ -1182,6 +1291,14 @@ func (f *fakeSequencer) GetSafeSnapshot(_ context.Context, snapshotID string) (r
 
 func sealedPluginTestManifest(t *testing.T, parts []replay.PartManifestEntry) replay.SafeSnapshotManifest {
 	t.Helper()
+	for i := range parts {
+		if parts[i].PartPhysHash == "" {
+			parts[i].PartPhysHash = replay.DigestString("test-phys\x00" + parts[i].PartName)
+		}
+		if parts[i].Bytes == 0 {
+			parts[i].Bytes = 64
+		}
+	}
 	// One partition commitment per partition (multiple parts in a partition
 	// collapse to a single commitment, as a real manifest sums them); using the
 	// last part's lthash as a stand-in root is fine for these cost/limit tests.
@@ -1200,7 +1317,7 @@ func sealedPluginTestManifest(t *testing.T, parts []replay.PartManifestEntry) re
 		})
 	}
 	manifest, err := (replay.SafeSnapshotManifest{
-		SafeL3BlockSeq:      11,
+		SafeL3BlockSeq:    11,
 		SchemaSnapshotID:  "schema",
 		SchemaRoot:        "schema-root",
 		ExecutorProfileID: "exec",

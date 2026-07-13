@@ -406,6 +406,9 @@ func (p ClickHousePromoter) Promote(ctx context.Context, task PromotionTask) (Pr
 	if task.InternalDropPartition && len(task.PartitionIDs) == 0 {
 		task.PartitionIDs = append([]string(nil), task.DropPartitionIDs...)
 	}
+	if err := ValidatePromotionPreflight(task, false); err != nil {
+		return PromotionResult{}, err
+	}
 	if err := p.checkPromotionPreconditions(ctx, task); err != nil {
 		return PromotionResult{}, err
 	}
@@ -1608,6 +1611,9 @@ type ClickHouseCompactor struct {
 func (c ClickHouseCompactor) Compact(ctx context.Context, task CompactionTask) (CompactionResult, error) {
 	if c.Conn == nil {
 		return CompactionResult{}, fmt.Errorf("clickhouse connection is required")
+	}
+	if err := ValidateCompactionPreflight(task, false); err != nil {
+		return CompactionResult{}, err
 	}
 	if task.SafeTable == "" {
 		return CompactionResult{}, fmt.Errorf("compaction safe_table is required")

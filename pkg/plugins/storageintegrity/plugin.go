@@ -42,17 +42,18 @@ type Config struct {
 	// manual ProtectedColumns list only (backward compatible).
 	KeyColumnProvider       core.KeyColumnProvider
 	RejectLightweightDelete bool
-	MaxTouchedPartitions      int
-	MaxTouchedParts           int
-	MaxTouchedBytes           int64
-	NetworkID                 string
-	InjectRowID               bool
-	RequireRowIDInput         bool
-	RequireAuthToken          bool
-	AuthValidator             auth.Validator
-	SnapshotReader            core.SnapshotReader
-	ReadGate                  core.ReadSetGate
-	NodeID                    string
+	MaxTouchedPartitions    int
+	MaxTouchedParts         int
+	MaxTouchedBytes         int64
+	NetworkID               string
+	InjectRowID             bool
+	RequireRowIDInput       bool
+	RequireAuthToken        bool
+	AuthValidator           auth.Validator
+	SnapshotReader          core.SnapshotReader
+	ReadGate                core.ReadSetGate
+	NodeID                  string
+	InsertOutboxDir         string
 }
 
 type Plugin struct {
@@ -78,6 +79,7 @@ type Plugin struct {
 	snapshotReader            core.SnapshotReader
 	readGate                  core.ReadSetGate
 	nodeID                    string
+	outbox                    insertOutbox
 
 	instanceID string
 	nextStmt   atomic.Uint64
@@ -146,6 +148,15 @@ func New(cfg Config) *Plugin {
 			unsafeBufferResolver = resolver
 		}
 	}
+	var outbox insertOutbox
+	if strings.TrimSpace(cfg.InsertOutboxDir) != "" {
+		store, err := NewFileInsertOutbox(cfg.InsertOutboxDir)
+		if err != nil {
+			log.Warnw("storage_integrity insert outbox disabled; failed to initialize", "dir", cfg.InsertOutboxDir, "err", err)
+		} else {
+			outbox = store
+		}
+	}
 	return &Plugin{
 		unsafeDB:                  unsafeDB,
 		unsafeBufferDBs:           normalizeUnsafeBufferDatabases(cfg.UnsafeBufferDatabases),
@@ -169,6 +180,7 @@ func New(cfg Config) *Plugin {
 		snapshotReader:            cfg.SnapshotReader,
 		readGate:                  cfg.ReadGate,
 		nodeID:                    cfg.NodeID,
+		outbox:                    outbox,
 		instanceID:                newPluginInstanceID(),
 		active:                    map[int64]*insertCapture{},
 		now:                       time.Now,
@@ -237,6 +249,10 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	qctx.Query.Body = target.unsafeSQL
 	qctx.RewrittenSQL = target.unsafeSQL
 	p.mu.Lock()
+	if existing := p.active[qctx.Session.ID()]; existing != nil {
+		p.mu.Unlock()
+		return fmt.Errorf("storage_integrity pending insert %s for session %d has not been published; refusing to overwrite capture", existing.statementID, qctx.Session.ID())
+	}
 	p.active[qctx.Session.ID()] = cap
 	p.mu.Unlock()
 	return nil
@@ -626,22 +642,54 @@ func (p *Plugin) submit(ctx context.Context, cap *insertCapture) error {
 		// ClickHouse's physical partition ids, so the control plane discovers
 		// them from the byte-side scan. The candidate part carries the "all"
 		// sentinel only as a content commitment, matched partition-agnostically.
-		CandidateParts:       candidateParts,
-		UserJWS:              cap.userJWS,
-		AuthenticatedSigner:  cap.authSigner,
-		Payload:              commit,
-		SourceClaimRoot:      sourceClaimRoot,
-		PayloadEncoding:      claim.PayloadEncoding,
-		PayloadRevision:      claim.PayloadRevision,
-		SettingsHash:         core.DefaultReplaySettingsHash,
-		PrevSafeSnapshotID:   snap.SnapshotID,
-		PrevStateRoot:        snap.StateRoot,
-		SchemaSnapshotID:     snap.SchemaSnapshotID,
-		ExecutorProfileID:    snap.ExecutorProfileID,
-		ReceivedAt:           p.now().UTC(),
+		CandidateParts:      candidateParts,
+		UserJWS:             cap.userJWS,
+		AuthenticatedSigner: cap.authSigner,
+		Payload:             commit,
+		SourceClaimRoot:     sourceClaimRoot,
+		PayloadEncoding:     claim.PayloadEncoding,
+		PayloadRevision:     claim.PayloadRevision,
+		SettingsHash:        core.DefaultReplaySettingsHash,
+		PrevSafeSnapshotID:  snap.SnapshotID,
+		PrevStateRoot:       snap.StateRoot,
+		SchemaSnapshotID:    snap.SchemaSnapshotID,
+		ExecutorProfileID:   snap.ExecutorProfileID,
+		ReceivedAt:          p.now().UTC(),
+	}
+	if p.outbox != nil {
+		if err := p.outbox.Put(ctx, rec); err != nil {
+			return fmt.Errorf("persist insert outbox: %w", err)
+		}
 	}
 	if err := p.snodePublisher.PublishInsert(ctx, rec); err != nil {
 		return fmt.Errorf("submit arbiter insert: %w", err)
+	}
+	if p.outbox != nil {
+		if err := p.outbox.Ack(ctx, rec.StatementID); err != nil {
+			return fmt.Errorf("ack insert outbox: %w", err)
+		}
+	}
+	return nil
+}
+
+func (p *Plugin) ReplayOutbox(ctx context.Context) error {
+	if p == nil || p.outbox == nil {
+		return nil
+	}
+	if p.snodePublisher == nil {
+		return fmt.Errorf("arbiter client is required")
+	}
+	pending, err := p.outbox.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, rec := range pending {
+		if err := p.snodePublisher.PublishInsert(ctx, rec); err != nil {
+			return fmt.Errorf("replay insert outbox %s: %w", rec.StatementID, err)
+		}
+		if err := p.outbox.Ack(ctx, rec.StatementID); err != nil {
+			return fmt.Errorf("ack replayed insert outbox %s: %w", rec.StatementID, err)
+		}
 	}
 	return nil
 }

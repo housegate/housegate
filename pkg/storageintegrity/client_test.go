@@ -190,10 +190,10 @@ func TestHTTPClientsSupportWorkerEndpoints(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(PromotionReceipt{
 				OK: true,
 				Watermark: SafeWatermark{
-					SnapshotID:   "snap-2",
+					SnapshotID:     "snap-2",
 					SafeL3BlockSeq: 10,
-					StateRoot:    "state-root-2",
-					ManifestRoot: "manifest-root-2",
+					StateRoot:      "state-root-2",
+					ManifestRoot:   "manifest-root-2",
 				},
 			})
 		case "/v1/sequencer/safe-watermark":
@@ -418,7 +418,7 @@ func TestHTTPClientsSupportWorkerEndpoints(t *testing.T) {
 func sealedClientTestManifest(t *testing.T) replay.SafeSnapshotManifest {
 	t.Helper()
 	manifest, err := (replay.SafeSnapshotManifest{
-		SafeL3BlockSeq:      10,
+		SafeL3BlockSeq:    10,
 		SchemaSnapshotID:  "schema",
 		SchemaRoot:        "schema-root",
 		ExecutorProfileID: "exec",
@@ -434,8 +434,10 @@ func sealedClientTestManifest(t *testing.T) replay.SafeSnapshotManifest {
 				TableID:       "tenant.events",
 				PartitionID:   "all",
 				PartName:      "p1",
+				PartPhysHash:  "phys-p1",
 				PartRowLtHash: "part-root",
 				RowCount:      1,
+				Bytes:         64,
 			}},
 		}},
 	}).Seal()

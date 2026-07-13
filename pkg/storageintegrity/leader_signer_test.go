@@ -14,7 +14,7 @@ func newTestLeader(t *testing.T) (*Secp256k1LeaderSigner, *LeaderSignatureVerifi
 	if err != nil {
 		t.Fatalf("new signer: %v", err)
 	}
-	verifier, err := NewLeaderSignatureVerifier(signer.PublicKeyHex())
+	verifier, err := NewLeaderSignatureVerifier(signer.Address())
 	if err != nil {
 		t.Fatalf("new verifier: %v", err)
 	}
@@ -85,6 +85,61 @@ func TestCompactionLeaderSignatureRoundTrip(t *testing.T) {
 	tampered.PromotionSeq = 10
 	if err := ValidateCompactionLeaderSignature(verifier, false, tampered); err == nil {
 		t.Fatalf("expected tampered compaction task to fail leader verification")
+	}
+}
+
+func TestPublicationAuthorityRecoverableSignatureRoundTrip(t *testing.T) {
+	signer, verifier := newTestLeader(t)
+	task := PromotionTask{
+		PromotionID:      "promotion-authority",
+		PromotionSeq:     11,
+		Kind:             "insert",
+		TableID:          "tenant.events",
+		SafeTable:        "`hg_safe`.`events`",
+		SourceTable:      "`hg_unsafe`.`events`",
+		PartitionIDs:     []string{"202607"},
+		StatementIDs:     []string{"s1"},
+		CandidateParts:   []ByteSidePart{{PartitionID: "202607", PartName: "all_1_1_0", PartRowLtHash: "0xaa", RowCount: 1}},
+		ExpectedPostRoot: "0xaa",
+	}
+	digest, err := PromotionLeaderCommandDigest(task)
+	if err != nil {
+		t.Fatalf("digest: %v", err)
+	}
+	task.LeaderSignature = signer.SignCommandDigest(digest)
+
+	if task.LeaderSignature == "" || task.LeaderSignature[:2] == "0x" {
+		t.Fatalf("leader signature must be a recoverable JWS, got %q", task.LeaderSignature)
+	}
+	if got := signer.Address(); got == "" || got[:2] != "0x" {
+		t.Fatalf("signer address = %q, want 0x-prefixed address", got)
+	}
+	if err := ValidatePromotionLeaderSignature(verifier, true, task); err != nil {
+		t.Fatalf("recoverable authority signature rejected: %v", err)
+	}
+}
+
+func TestPublicationAuthorityRejectsAddressOutsideAllowlist(t *testing.T) {
+	signer, err := NewSecp256k1LeaderSignerFromSeed("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
+	if err != nil {
+		t.Fatalf("signer: %v", err)
+	}
+	other, err := NewSecp256k1LeaderSignerFromSeed("10112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
+	if err != nil {
+		t.Fatalf("other signer: %v", err)
+	}
+	verifier, err := NewLeaderSignatureVerifier(other.Address())
+	if err != nil {
+		t.Fatalf("verifier: %v", err)
+	}
+	task := PromotionTask{PromotionID: "promotion-authority", PromotionSeq: 1, TableID: "tenant.events", SafeTable: "`hg_safe`.`events`", PartitionIDs: []string{"p1"}}
+	digest, err := PromotionLeaderCommandDigest(task)
+	if err != nil {
+		t.Fatalf("digest: %v", err)
+	}
+	task.LeaderSignature = signer.SignCommandDigest(digest)
+	if err := ValidatePromotionLeaderSignature(verifier, true, task); err == nil {
+		t.Fatalf("signature from address outside allowlist must fail closed")
 	}
 }
 
@@ -167,21 +222,23 @@ func TestLeaderSignatureRequiredFailsClosedWithoutKey(t *testing.T) {
 func TestLeaderSignatureCoversResultAffectingFields(t *testing.T) {
 	signer, verifier := newTestLeader(t)
 	base := PromotionTask{
-		PromotionID:       "promotion-cover",
-		PromotionSeq:      3,
-		Kind:              "insert",
-		TableID:           "tenant.events",
-		SafeTable:         "`hg_safe`.`events`",
-		SourceTable:       "`hg_unsafe`.`events`",
-		UnsafeTable:       "`hg_unsafe`.`events`",
-		UnsafeBufferID:    1,
-		UnsafeBufferEpoch: 7,
-		PartitionIDs:      []string{"202607"},
-		StatementIDs:      []string{"s1"},
-		CandidateParts:    []ByteSidePart{{PartitionID: "202607", PartRowLtHash: "0xaa", RowCount: 1}},
-		ExpectedPostRoots: []replay.PartitionCommitment{{TableID: "tenant.events", PartitionID: "202607", Root: "0xbb"}},
-		ReplacePartition:  false,
+		PromotionID:        "promotion-cover",
+		PromotionSeq:       3,
+		Kind:               "insert",
+		TableID:            "tenant.events",
+		SafeTable:          "`hg_safe`.`events`",
+		SourceTable:        "`hg_unsafe`.`events`",
+		UnsafeTable:        "`hg_unsafe`.`events`",
+		UnsafeBufferID:     1,
+		UnsafeBufferEpoch:  7,
+		PartitionIDs:       []string{"202607"},
+		StatementIDs:       []string{"s1"},
+		CandidateParts:     []ByteSidePart{{PartitionID: "202607", PartRowLtHash: "0xaa", RowCount: 1}},
+		ExpectedPostRoots:  []replay.PartitionCommitment{{TableID: "tenant.events", PartitionID: "202607", Root: "0xbb"}},
+		ReplacePartition:   false,
 		RequireBaseRootCAS: true,
+		PromoteDatabase:    "hg_promote",
+		CleanupUnsafeParts: []ByteSidePart{{PartitionID: "202607", PartName: "all_1_1_0", PartRowLtHash: "0xaa", RowCount: 1}},
 	}
 	digest, err := PromotionLeaderCommandDigest(base)
 	if err != nil {
@@ -200,12 +257,15 @@ func TestLeaderSignatureCoversResultAffectingFields(t *testing.T) {
 		"replace partition":   func(p *PromotionTask) { p.ReplacePartition = true },
 		"internal drop":       func(p *PromotionTask) { p.InternalDropPartition = true },
 		"require base cas":    func(p *PromotionTask) { p.RequireBaseRootCAS = false },
+		"promote database":    func(p *PromotionTask) { p.PromoteDatabase = "other_promote" },
+		"cleanup parts":       func(p *PromotionTask) { p.CleanupUnsafeParts[0].PartName = "other_1_1_0" },
 	}
 	for name, mutate := range mutations {
 		tampered := base
 		// deep-copy the slices we mutate so cases don't leak into each other
 		tampered.CandidateParts = append([]ByteSidePart(nil), base.CandidateParts...)
 		tampered.ExpectedPostRoots = append([]replay.PartitionCommitment(nil), base.ExpectedPostRoots...)
+		tampered.CleanupUnsafeParts = append([]ByteSidePart(nil), base.CleanupUnsafeParts...)
 		mutate(&tampered)
 		if err := ValidatePromotionLeaderSignature(verifier, true, tampered); err == nil {
 			t.Fatalf("tampering with %q did not break the leader signature", name)
@@ -213,21 +273,63 @@ func TestLeaderSignatureCoversResultAffectingFields(t *testing.T) {
 	}
 }
 
-func TestLeaderVerifierRejectsMalformedKey(t *testing.T) {
-	// A malformed / non-secp256k1 public key must be rejected at construction.
+func TestCompactionLeaderSignatureCoversResultAffectingFields(t *testing.T) {
+	signer, verifier := newTestLeader(t)
+	base := CompactionTask{
+		CompactionID:       "compaction-cover",
+		PromotionSeq:       12,
+		TableID:            "tenant.events",
+		SafeTable:          "`hg_safe`.`events`",
+		CompactDatabase:    "hg_compact",
+		CompactTable:       "`hg_compact`.`events_p1`",
+		BaseSafeSnapshotID: "snap-1",
+		BasePartitionRoot:  "0xaa",
+		ExpectedPostRoot:   "0xbb",
+		PartitionIDs:       []string{"202607"},
+		InputParts:         []replay.PartManifestEntry{{TableID: "tenant.events", PartitionID: "202607", PartName: "p_1_1_0", PartRowLtHash: "0xaa", RowCount: 1, PartPhysHash: "0x11", Bytes: 8}},
+		RequireBaseRootCAS: true,
+		RequirePostRootCAS: true,
+		DropCompactTable:   true,
+	}
+	digest, err := CompactionLeaderCommandDigest(base)
+	if err != nil {
+		t.Fatalf("digest: %v", err)
+	}
+	base.LeaderSignature = signer.SignCommandDigest(digest)
+	if err := ValidateCompactionLeaderSignature(verifier, true, base); err != nil {
+		t.Fatalf("valid signed task rejected: %v", err)
+	}
+
+	mutations := map[string]func(*CompactionTask){
+		"compact database": func(c *CompactionTask) { c.CompactDatabase = "other_compact" },
+		"compact table":    func(c *CompactionTask) { c.CompactTable = "`hg_compact`.`other`" },
+		"input parts":      func(c *CompactionTask) { c.InputParts[0].PartPhysHash = "0x22" },
+		"drop compact":     func(c *CompactionTask) { c.DropCompactTable = false },
+		"post cas":         func(c *CompactionTask) { c.RequirePostRootCAS = false },
+	}
+	for name, mutate := range mutations {
+		tampered := base
+		tampered.InputParts = append([]replay.PartManifestEntry(nil), base.InputParts...)
+		mutate(&tampered)
+		if err := ValidateCompactionLeaderSignature(verifier, true, tampered); err == nil {
+			t.Fatalf("tampering with %q did not break the compaction leader signature", name)
+		}
+	}
+}
+
+func TestLeaderVerifierRejectsMalformedAuthorityAddress(t *testing.T) {
 	if _, err := NewLeaderSignatureVerifier("0x00"); err == nil {
-		t.Fatalf("expected error for malformed public key")
+		t.Fatalf("expected error for malformed authority address")
 	}
 	if _, err := NewLeaderSignatureVerifier("0xnothex"); err == nil {
-		t.Fatalf("expected error for non-hex public key")
+		t.Fatalf("expected error for non-hex authority address")
 	}
-	// A valid compressed secp256k1 key round-trips.
 	signer, err := NewSecp256k1LeaderSignerFromSeed("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
 	if err != nil {
 		t.Fatalf("signer: %v", err)
 	}
-	v, err := NewLeaderSignatureVerifier(signer.PublicKeyHex())
+	v, err := NewLeaderSignatureVerifier(signer.Address())
 	if err != nil || !v.Enabled() {
-		t.Fatalf("valid secp256k1 key must construct an enabled verifier: %v", err)
+		t.Fatalf("valid authority address must construct an enabled verifier: %v", err)
 	}
 }

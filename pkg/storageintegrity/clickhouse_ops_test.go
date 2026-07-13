@@ -15,6 +15,7 @@ func TestClickHousePromoterUsesReplacePartitionForMutationPromotion(t *testing.T
 
 	result, err := promoter.Promote(context.Background(), PromotionTask{
 		PromotionID:      "promotion-mut",
+		Kind:             "mutation",
 		SafeTable:        "`hg_safe`.`events`",
 		SourceTable:      "`hg_mutation`.`events_stmt_worker`",
 		ReplacePartition: true,
@@ -209,6 +210,7 @@ func TestClickHousePromoterRejectsStalePromotionSeq(t *testing.T) {
 		SafeTable:           "`hg_safe`.`events`",
 		UnsafeTable:         "`hg_unsafe`.`events`",
 		PartitionIDs:        []string{"202607"},
+		CandidateParts:      []ByteSidePart{{PartitionID: "202607", PartName: "p_1_1_0", PartRowLtHash: "candidate-root", RowCount: 1}},
 		RequirePromotionSeq: true,
 	})
 	if err == nil || !strings.Contains(err.Error(), "stale promotion_seq") {
@@ -232,6 +234,7 @@ func TestClickHousePromoterRejectsBaseRootMismatch(t *testing.T) {
 		SafeTable:          "`hg_safe`.`events`",
 		UnsafeTable:        "`hg_unsafe`.`events`",
 		PartitionIDs:       []string{"202607"},
+		CandidateParts:     []ByteSidePart{{PartitionID: "202607", PartName: "p_1_1_0", PartRowLtHash: "candidate-root", RowCount: 1}},
 		RequireBaseRootCAS: true,
 	})
 	if err == nil || !strings.Contains(err.Error(), "base partition root mismatch") {
@@ -260,6 +263,10 @@ func TestClickHousePromoterPerPartitionBaseRootCAS(t *testing.T) {
 		SafeTable:    "`hg_safe`.`events`",
 		UnsafeTable:  "`hg_unsafe`.`events`",
 		PartitionIDs: []string{"202606", "202607"},
+		CandidateParts: []ByteSidePart{
+			{PartitionID: "202606", PartName: "p_1_1_0", PartRowLtHash: "candidate-a", RowCount: 1},
+			{PartitionID: "202607", PartName: "p_1_2_0", PartRowLtHash: "candidate-b", RowCount: 1},
+		},
 		BasePartitionRoots: []replay.PartitionCommitment{
 			{PartitionID: "202606", Root: "base-a"},
 			{PartitionID: "202607", Root: "base-b"},
@@ -736,8 +743,10 @@ func TestClickHouseRepairSyncExecutorReplacesPartitionsAndVerifiesManifest(t *te
 		TableID:       "tenant.events",
 		PartitionID:   "202607",
 		PartName:      "safe_p1",
+		PartPhysHash:  manifest.Tables[0].ActiveParts[0].PartPhysHash,
 		PartRowLtHash: "safe-root",
 		RowCount:      3,
+		Bytes:         manifest.Tables[0].ActiveParts[0].Bytes,
 	}}}
 	executor := ClickHouseRepairSyncExecutor{Conn: conn, Hasher: hasher, ActiveParts: active}
 
@@ -1364,6 +1373,14 @@ func (f *fakePromotionSeqStore) RecordPromotionSeq(_ context.Context, table, par
 
 func sealedOpsTestManifest(t *testing.T, parts []replay.PartManifestEntry) replay.SafeSnapshotManifest {
 	t.Helper()
+	for i := range parts {
+		if parts[i].PartPhysHash == "" {
+			parts[i].PartPhysHash = replay.DigestString("test-phys\x00" + parts[i].PartName)
+		}
+		if parts[i].Bytes == 0 {
+			parts[i].Bytes = 64
+		}
+	}
 	roots := make([]replay.PartitionCommitment, 0, len(parts))
 	for _, part := range parts {
 		roots = append(roots, replay.PartitionCommitment{

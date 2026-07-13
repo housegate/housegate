@@ -158,7 +158,7 @@ func TestVerifierRejectsExecutorTamperingWithResultIdentity(t *testing.T) {
 func TestSnapshotManifestSealAndValidateAreOrderIndependent(t *testing.T) {
 	a := SafeSnapshotManifest{
 		ParentSnapshotID:  "parent",
-		SafeL3BlockSeq:      7,
+		SafeL3BlockSeq:    7,
 		SchemaSnapshotID:  "schema-1",
 		SchemaRoot:        DigestString("schema"),
 		ExecutorProfileID: "executor-1",
@@ -167,8 +167,8 @@ func TestSnapshotManifestSealAndValidateAreOrderIndependent(t *testing.T) {
 				TableID:    "table-b",
 				SchemaHash: DigestString("schema-b"),
 				ActiveParts: []PartManifestEntry{
-					{TableID: "table-b", PartitionID: "p2", PartName: "part-2", PartPhysHash: DigestString("phys-2"), PartRowLtHash: DigestString("row-2")},
-					{TableID: "table-b", PartitionID: "p1", PartName: "part-1", PartPhysHash: DigestString("phys-1"), PartRowLtHash: DigestString("row-1")},
+					{TableID: "table-b", PartitionID: "p2", PartName: "part-2", PartPhysHash: DigestString("phys-2"), PartRowLtHash: DigestString("row-2"), Bytes: 64},
+					{TableID: "table-b", PartitionID: "p1", PartName: "part-1", PartPhysHash: DigestString("phys-1"), PartRowLtHash: DigestString("row-1"), Bytes: 64},
 				},
 			},
 			{
@@ -203,7 +203,7 @@ func testSnapshot(t *testing.T) SafeSnapshotManifest {
 	t.Helper()
 	snap, err := (SafeSnapshotManifest{
 		ParentSnapshotID:  "snapshot-0",
-		SafeL3BlockSeq:      10,
+		SafeL3BlockSeq:    10,
 		SchemaSnapshotID:  "schema-1",
 		SchemaRoot:        DigestString("schema-root"),
 		ExecutorProfileID: "executor-1",

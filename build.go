@@ -650,6 +650,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			MaxTouchedParts:           cfg.StorageIntegrity.Mutations.MaxTouchedParts,
 			MaxTouchedBytes:           cfg.StorageIntegrity.Mutations.MaxTouchedBytes,
 			NetworkID:                 cfg.StorageIntegrity.NetworkID,
+			InsertOutboxDir:           cfg.StorageIntegrity.InsertOutboxDir,
 			InjectRowID:               cfg.StorageIntegrity.InjectRowID,
 			RequireRowIDInput:         cfg.StorageIntegrity.RequireRowIDInput,
 			RequireAuthToken:          cfg.StorageIntegrity.RequireAuthToken,
@@ -658,6 +659,11 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			ReadGate:                  storageIntegrityReadGate(cfg, siArbiter),
 			NodeID:                    strconv.FormatUint(selfIndexerID, 10),
 		})
+		if cfg.StorageIntegrity.InsertOutboxDir != "" {
+			if err := siPlug.ReplayOutbox(context.Background()); err != nil {
+				return nil, fmt.Errorf("storage_integrity replay insert outbox: %w", err)
+			}
+		}
 		queryPlugins = append(queryPlugins, siPlug)
 		dataPlugins = append(dataPlugins, siPlug)
 		queryCompletePlugins = append(queryCompletePlugins, siPlug)

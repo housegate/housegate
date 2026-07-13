@@ -258,6 +258,57 @@ func TestConfigValidateStorageIntegrityMutationAdmission(t *testing.T) {
 	}
 }
 
+func TestConfigValidateStorageIntegrityLeaderAuthorityAddresses(t *testing.T) {
+	cfg := minimalServerConfig(t)
+	cfg.StorageIntegrity.Enabled = true
+	cfg.StorageIntegrity.DAEndpoint = "http://127.0.0.1:18080"
+	cfg.StorageIntegrity.ArbiterEndpoint = "http://127.0.0.1:18080"
+	cfg.StorageIntegrity.UnsafeDatabase = "hg_unsafe"
+	cfg.StorageIntegrity.SafeDatabase = "hg_safe"
+	cfg.StorageIntegrity.RequireLeaderSignature = true
+	cfg.StorageIntegrity.Mutations.RequirePartitionPredicate = true
+	cfg.StorageIntegrity.Mutations.PartitionColumns = []string{"day"}
+
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "leader_authority_addresses") {
+		t.Fatalf("Validate missing authority allowlist err = %v, want leader_authority_addresses rejection", err)
+	}
+
+	cfg.StorageIntegrity.LeaderAuthorityAddresses = []string{"0x1111111111111111111111111111111111111111"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate with authority address: %v", err)
+	}
+
+	cfg.StorageIntegrity.LeaderAuthorityAddresses = []string{"0x00"}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "leader_authority_addresses") {
+		t.Fatalf("Validate malformed authority address err = %v, want rejection", err)
+	}
+}
+
+func TestConfigValidateStorageIntegrityProtectedModeRequiresBoundedMutationAdmission(t *testing.T) {
+	cfg := minimalServerConfig(t)
+	cfg.StorageIntegrity.Enabled = true
+	cfg.StorageIntegrity.DAEndpoint = "http://127.0.0.1:18080"
+	cfg.StorageIntegrity.ArbiterEndpoint = "http://127.0.0.1:18080"
+	cfg.StorageIntegrity.UnsafeDatabase = "hg_unsafe"
+	cfg.StorageIntegrity.SafeDatabase = "hg_safe"
+	cfg.StorageIntegrity.RequireLeaderSignature = true
+	cfg.StorageIntegrity.LeaderAuthorityAddresses = []string{"0x1111111111111111111111111111111111111111"}
+	cfg.StorageIntegrity.Mutations.Enabled = true
+	cfg.StorageIntegrity.Mutations.ScratchDatabase = "hg_mutation"
+	cfg.StorageIntegrity.Mutations.RequirePartitionPredicate = false
+
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "require_partition_predicate") {
+		t.Fatalf("Validate protected mutation admission err = %v, want require_partition_predicate rejection", err)
+	}
+
+	cfg.StorageIntegrity.Mutations.RequirePartitionPredicate = true
+	cfg.StorageIntegrity.Mutations.PartitionColumns = []string{"day"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate protected mutation admission: %v", err)
+	}
+}
+
 func TestConfigValidateStorageIntegritySafeMerges(t *testing.T) {
 	cfg := minimalServerConfig(t)
 	cfg.StorageIntegrity.Enabled = true

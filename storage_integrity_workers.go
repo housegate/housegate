@@ -29,7 +29,7 @@ func buildStorageIntegrityBackgroundTasks(cfg *config.Config, creds credentials.
 		return nil, nil, nil
 	}
 	workerID := storageIntegrityWorkerID(workers.WorkerID, selfIndexerID)
-	leaderVerifier, err := si.NewLeaderSignatureVerifier(cfg.StorageIntegrity.LeaderPublicKeyHex)
+	leaderVerifier, err := si.NewLeaderSignatureVerifier(cfg.StorageIntegrity.LeaderAuthorityInputs()...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("storage integrity leader verifier: %w", err)
 	}
@@ -203,9 +203,9 @@ func buildStorageIntegrityBackgroundTasks(cfg *config.Config, creds credentials.
 			return nil, nil, err
 		}
 		executor := si.ClickHouseMutationExecutor{
-			Conn:            conn,
-			Hasher:          hasher,
-			ActiveParts:     active,
+			Conn:        conn,
+			Hasher:      hasher,
+			ActiveParts: active,
 			// BaseScan (opt-in) serves the safe base commitment from the part cache
 			// instead of a full-table scan; nil when the cache is disabled. Shared
 			// with the byte-side scanner — the cache is content-addressed and
@@ -281,9 +281,9 @@ func buildStorageIntegrityBackgroundTasks(cfg *config.Config, creds credentials.
 			DropCompactTable: true,
 		}
 		worker := si.CompactionWorker{
-			WorkerID:       workerID,
-			Arbiter:        arbiter,
-			Executor:       si.GuardingCompactor{Guard: guard, Compactor: compactor},
+			WorkerID:               workerID,
+			Arbiter:                arbiter,
+			Executor:               si.GuardingCompactor{Guard: guard, Compactor: compactor},
 			PollInterval:           pollInterval,
 			LeaderVerifier:         leaderVerifier,
 			RequireLeaderSignature: cfg.StorageIntegrity.RequireLeaderSignature,

@@ -70,6 +70,14 @@ func TestSnapshotResolverRejectsLocalActivePartMismatch(t *testing.T) {
 
 func sealedResolverTestManifest(t *testing.T, parts []replay.PartManifestEntry) replay.SafeSnapshotManifest {
 	t.Helper()
+	for i := range parts {
+		if parts[i].PartPhysHash == "" {
+			parts[i].PartPhysHash = replay.DigestString("test-phys\x00" + parts[i].PartName)
+		}
+		if parts[i].Bytes == 0 {
+			parts[i].Bytes = 64
+		}
+	}
 	partitions := make([]replay.PartitionCommitment, 0, len(parts))
 	for _, part := range parts {
 		partitions = append(partitions, replay.PartitionCommitment{
@@ -79,7 +87,7 @@ func sealedResolverTestManifest(t *testing.T, parts []replay.PartManifestEntry) 
 		})
 	}
 	manifest, err := (replay.SafeSnapshotManifest{
-		SafeL3BlockSeq:      7,
+		SafeL3BlockSeq:    7,
 		SchemaSnapshotID:  "schema-1",
 		SchemaRoot:        "schema-root",
 		ExecutorProfileID: "exec-1",

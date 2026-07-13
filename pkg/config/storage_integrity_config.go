@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/decred/dcrd/dcrec/secp256k1/v4"
+	"github.com/ethereum/go-ethereum/crypto"
 )
 
 type StorageIntegrityConfig struct {
@@ -15,31 +15,46 @@ type StorageIntegrityConfig struct {
 	DAEndpoint      string `json:"da_endpoint"         yaml:"da_endpoint"`
 	ArbiterEndpoint string `json:"arbiter_endpoint"    yaml:"arbiter_endpoint"`
 	// SequencerEndpoint is the legacy name kept for config compatibility.
-	SequencerEndpoint     string                           `json:"sequencer_endpoint"  yaml:"sequencer_endpoint"`
-	UnsafeDatabase        string                           `json:"unsafe_database"     yaml:"unsafe_database"`
-	UnsafeBufferDatabases []string                         `json:"unsafe_buffer_databases" yaml:"unsafe_buffer_databases"`
-	SafeDatabase          string                           `json:"safe_database"       yaml:"safe_database"`
-	NetworkID             string                           `json:"network_id"          yaml:"network_id"`
-	// LeaderPublicKeyHex is the arbiter leader's secp256k1 authority public key
-	// (compressed, hex). When set, promotion / compaction workers verify the
-	// leader signature on every publication task before executing and fail closed
-	// on mismatch (spec §9.1 PromotionIssued, §10, HG-P0-03). Empty disables the
-	// check unless RequireLeaderSignature is set.
-	LeaderPublicKeyHex    string                           `json:"leader_public_key_hex" yaml:"leader_public_key_hex"`
+	SequencerEndpoint     string   `json:"sequencer_endpoint"  yaml:"sequencer_endpoint"`
+	UnsafeDatabase        string   `json:"unsafe_database"     yaml:"unsafe_database"`
+	UnsafeBufferDatabases []string `json:"unsafe_buffer_databases" yaml:"unsafe_buffer_databases"`
+	SafeDatabase          string   `json:"safe_database"       yaml:"safe_database"`
+	NetworkID             string   `json:"network_id"          yaml:"network_id"`
+	InsertOutboxDir       string   `json:"insert_outbox_dir" yaml:"insert_outbox_dir"`
+	// LeaderAuthorityAddresses is the allowlist of 0x-prefixed secp256k1
+	// authority addresses accepted for publication commands. Workers recover the
+	// address from each promotion / compaction JWS and fail closed unless it is in
+	// this list (spec §9.1 PromotionIssued, §10, HG-P0-03).
+	LeaderAuthorityAddresses []string `json:"leader_authority_addresses" yaml:"leader_authority_addresses"`
+	// LeaderPublicKeyHex is a deprecated compatibility alias. When set, it is
+	// normalized to the corresponding address and appended to
+	// LeaderAuthorityAddresses.
+	LeaderPublicKeyHex string `json:"leader_public_key_hex" yaml:"leader_public_key_hex"`
 	// RequireLeaderSignature makes leader-signature verification mandatory
 	// (protected mode, HG-P0-03): startup fails when LeaderPublicKeyHex is empty,
 	// so a protected deployment cannot silently run with signature checks off.
-	RequireLeaderSignature bool                            `json:"require_leader_signature" yaml:"require_leader_signature"`
-	InjectRowID           bool                             `json:"inject_row_id"       yaml:"inject_row_id"`
-	RequireRowIDInput     bool                             `json:"require_row_id_input" yaml:"require_row_id_input"`
-	RequireAuthToken      bool                             `json:"require_auth_token"  yaml:"require_auth_token"`
-	Workers               StorageIntegrityWorkersConfig    `json:"workers"             yaml:"workers"`
-	Mutations             StorageIntegrityMutationsConfig  `json:"mutations" yaml:"mutations"`
-	SafeTables            StorageIntegritySafeTablesConfig `json:"safe_tables" yaml:"safe_tables"`
-	SafeMerges            StorageIntegritySafeMergesConfig `json:"safe_merges" yaml:"safe_merges"`
-	PartLtHashCache       StorageIntegrityPartLtHashCacheConfig `json:"part_lthash_cache" yaml:"part_lthash_cache"`
-	Promotion             StorageIntegrityPromotionConfig  `json:"promotion" yaml:"promotion"`
-	ReadSetCache          StorageIntegrityReadSetCacheConfig `json:"read_set_cache" yaml:"read_set_cache"`
+	RequireLeaderSignature bool                                  `json:"require_leader_signature" yaml:"require_leader_signature"`
+	InjectRowID            bool                                  `json:"inject_row_id"       yaml:"inject_row_id"`
+	RequireRowIDInput      bool                                  `json:"require_row_id_input" yaml:"require_row_id_input"`
+	RequireAuthToken       bool                                  `json:"require_auth_token"  yaml:"require_auth_token"`
+	Workers                StorageIntegrityWorkersConfig         `json:"workers"             yaml:"workers"`
+	Mutations              StorageIntegrityMutationsConfig       `json:"mutations" yaml:"mutations"`
+	SafeTables             StorageIntegritySafeTablesConfig      `json:"safe_tables" yaml:"safe_tables"`
+	SafeMerges             StorageIntegritySafeMergesConfig      `json:"safe_merges" yaml:"safe_merges"`
+	PartLtHashCache        StorageIntegrityPartLtHashCacheConfig `json:"part_lthash_cache" yaml:"part_lthash_cache"`
+	Promotion              StorageIntegrityPromotionConfig       `json:"promotion" yaml:"promotion"`
+	ReadSetCache           StorageIntegrityReadSetCacheConfig    `json:"read_set_cache" yaml:"read_set_cache"`
+}
+
+// LeaderAuthorityInputs returns the configured publication-authority allowlist
+// plus the deprecated public-key alias. The storageintegrity verifier accepts
+// both addresses and public keys and normalizes them to recovered addresses.
+func (c StorageIntegrityConfig) LeaderAuthorityInputs() []string {
+	out := append([]string(nil), c.LeaderAuthorityAddresses...)
+	if strings.TrimSpace(c.LeaderPublicKeyHex) != "" {
+		out = append(out, c.LeaderPublicKeyHex)
+	}
+	return out
 }
 
 // StorageIntegrityReadSetCacheConfig controls a local TTL cache in front of the
@@ -103,16 +118,16 @@ type StorageIntegrityWorkersConfig struct {
 	// trips. 0 (default) preserves the PollInterval-driven immediate-return
 	// polling. The FSM/task content is unchanged — this only affects claim
 	// latency.
-	ClaimWait             Duration `json:"claim_wait"             yaml:"claim_wait"`
-	ErrorBackoff          Duration `json:"error_backoff"          yaml:"error_backoff"`
-	Replay                bool     `json:"replay"                 yaml:"replay"`
-	UnsafeValidation      bool     `json:"unsafe_validation"      yaml:"unsafe_validation"`
-	Promotion             bool     `json:"promotion"              yaml:"promotion"`
-	Mutation              bool     `json:"mutation"               yaml:"mutation"`
-	Rollback              bool     `json:"rollback"               yaml:"rollback"`
-	RepairSync            bool     `json:"repair_sync"            yaml:"repair_sync"`
-	SafeAudit             bool     `json:"safe_audit"             yaml:"safe_audit"`
-	Compaction            bool     `json:"compaction"             yaml:"compaction"`
+	ClaimWait        Duration `json:"claim_wait"             yaml:"claim_wait"`
+	ErrorBackoff     Duration `json:"error_backoff"          yaml:"error_backoff"`
+	Replay           bool     `json:"replay"                 yaml:"replay"`
+	UnsafeValidation bool     `json:"unsafe_validation"      yaml:"unsafe_validation"`
+	Promotion        bool     `json:"promotion"              yaml:"promotion"`
+	Mutation         bool     `json:"mutation"               yaml:"mutation"`
+	Rollback         bool     `json:"rollback"               yaml:"rollback"`
+	RepairSync       bool     `json:"repair_sync"            yaml:"repair_sync"`
+	SafeAudit        bool     `json:"safe_audit"             yaml:"safe_audit"`
+	Compaction       bool     `json:"compaction"             yaml:"compaction"`
 }
 
 type StorageIntegrityMutationsConfig struct {
@@ -132,9 +147,9 @@ type StorageIntegrityMutationsConfig struct {
 	// silently degrading to the manual protected_columns list. A protected
 	// deployment cannot run UPDATE admission with weaker key protection than it
 	// declared.
-	RequireKeyColumnProvider  bool     `json:"require_key_column_provider" yaml:"require_key_column_provider"`
-	WaitMutationsSync         int      `json:"wait_mutations_sync"         yaml:"wait_mutations_sync"`
-	RejectLightweightDelete   bool     `json:"reject_lightweight_delete"   yaml:"reject_lightweight_delete"`
+	RequireKeyColumnProvider bool `json:"require_key_column_provider" yaml:"require_key_column_provider"`
+	WaitMutationsSync        int  `json:"wait_mutations_sync"         yaml:"wait_mutations_sync"`
+	RejectLightweightDelete  bool `json:"reject_lightweight_delete"   yaml:"reject_lightweight_delete"`
 	// QuarantineMinority is advisory arbiter policy, not enforced by HouseGate.
 	// Per spec §9.3 the quarantine decision is derived solely by the arbiter FSM
 	// from recorded evidence; HouseGate only stamps its worker_id on every claim
@@ -142,9 +157,9 @@ type StorageIntegrityMutationsConfig struct {
 	// workers. This field records the deployment's intended policy for the
 	// arbiter to honor (the mock exposes /v1/mock/quarantine-minority for the
 	// e2e to mirror it); HouseGate never quarantines a peer on its own.
-	QuarantineMinority        bool     `json:"quarantine_minority"         yaml:"quarantine_minority"`
-	MaxRebindAttempts         int      `json:"max_rebind_attempts"         yaml:"max_rebind_attempts"`
-	MaxRebindDuration         Duration `json:"max_rebind_duration"         yaml:"max_rebind_duration"`
+	QuarantineMinority bool     `json:"quarantine_minority"         yaml:"quarantine_minority"`
+	MaxRebindAttempts  int      `json:"max_rebind_attempts"         yaml:"max_rebind_attempts"`
+	MaxRebindDuration  Duration `json:"max_rebind_duration"         yaml:"max_rebind_duration"`
 }
 
 type StorageIntegritySafeTablesConfig struct {
@@ -158,9 +173,9 @@ type StorageIntegritySafeTablesConfig struct {
 // the only sanctioned way to merge safe parts, and native background merges
 // must stay disabled.
 type StorageIntegritySafeMergesConfig struct {
-	Enabled                    bool   `json:"enabled"                       yaml:"enabled"`
-	Mode                       string `json:"mode"                          yaml:"mode"`
-	AllowNativeBackgroundMerges bool  `json:"allow_native_background_merges" yaml:"allow_native_background_merges"`
+	Enabled                     bool   `json:"enabled"                       yaml:"enabled"`
+	Mode                        string `json:"mode"                          yaml:"mode"`
+	AllowNativeBackgroundMerges bool   `json:"allow_native_background_merges" yaml:"allow_native_background_merges"`
 }
 
 func defaultStorageIntegrityConfig() StorageIntegrityConfig {
@@ -265,6 +280,9 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 		if c.Mutations.ScratchDatabase == "" {
 			errs = append(errs, errors.New("storage_integrity.mutations.scratch_database is required when mutations are enabled"))
 		}
+		if c.RequireLeaderSignature && !c.Mutations.RequirePartitionPredicate {
+			errs = append(errs, errors.New("storage_integrity.require_leader_signature requires storage_integrity.mutations.require_partition_predicate=true for protected bounded mutation admission"))
+		}
 		if c.Mutations.RequirePartitionPredicate && len(c.Mutations.PartitionColumns) == 0 {
 			errs = append(errs, errors.New("storage_integrity.mutations.partition_columns is required when require_partition_predicate is true"))
 		}
@@ -290,22 +308,54 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 	if c.ReadSetCache.Enabled && c.ReadSetCache.TTL.Duration <= 0 {
 		errs = append(errs, errors.New("storage_integrity.read_set_cache.ttl must be positive when read_set_cache is enabled"))
 	}
-	// HG-P0-03: a configured leader public key must be a valid secp256k1 key.
-	trimmedKey := strings.TrimPrefix(strings.TrimSpace(c.LeaderPublicKeyHex), "0x")
-	if trimmedKey != "" {
-		raw, err := hex.DecodeString(trimmedKey)
-		if err != nil {
-			errs = append(errs, errors.New("storage_integrity.leader_public_key_hex is not valid hex"))
-		} else if _, err := secp256k1.ParsePubKey(raw); err != nil {
-			errs = append(errs, fmt.Errorf("storage_integrity.leader_public_key_hex is not a valid secp256k1 public key: %w", err))
+	authorityInputs := c.LeaderAuthorityInputs()
+	for _, authority := range authorityInputs {
+		if err := validateLeaderAuthorityIdentifier(authority); err != nil {
+			errs = append(errs, err)
 		}
 	}
-	// Protected mode: a mandatory leader signature cannot run without a key.
-	if c.RequireLeaderSignature && trimmedKey == "" {
-		errs = append(errs, errors.New("storage_integrity.require_leader_signature is set but leader_public_key_hex is empty; a protected deployment must configure the authority key"))
+	if c.RequireLeaderSignature && len(nonEmptyStrings(authorityInputs)) == 0 {
+		errs = append(errs, errors.New("storage_integrity.require_leader_signature is set but leader_authority_addresses is empty; a protected deployment must configure the authority allowlist"))
 	}
 	if joined := errors.Join(errs...); joined != nil {
 		return fmt.Errorf("storage_integrity: %w", joined)
 	}
 	return nil
+}
+
+func nonEmptyStrings(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, value := range in {
+		if strings.TrimSpace(value) != "" {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func validateLeaderAuthorityIdentifier(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	raw, err := hex.DecodeString(strings.TrimPrefix(value, "0x"))
+	if err != nil {
+		return errors.New("storage_integrity.leader_authority_addresses contains non-hex authority")
+	}
+	switch len(raw) {
+	case 20:
+		return nil
+	case 33:
+		if _, err := crypto.DecompressPubkey(raw); err != nil {
+			return fmt.Errorf("storage_integrity.leader_authority_addresses contains invalid compressed secp256k1 public key: %w", err)
+		}
+		return nil
+	case 65:
+		if _, err := crypto.UnmarshalPubkey(raw); err != nil {
+			return fmt.Errorf("storage_integrity.leader_authority_addresses contains invalid secp256k1 public key: %w", err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("storage_integrity.leader_authority_addresses entries must be 20-byte addresses or secp256k1 public keys, got %d bytes", len(raw))
+	}
 }

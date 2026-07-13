@@ -120,6 +120,12 @@ func TestValidateRejectsSemanticViolations(t *testing.T) {
 		{"empty part_row_lthash", func(m *SafeSnapshotManifest) {
 			m.Tables[0].ActiveParts[0].PartRowLtHash = ""
 		}, "empty part_row_lthash"},
+		{"empty part_phys_hash", func(m *SafeSnapshotManifest) {
+			m.Tables[0].ActiveParts[0].PartPhysHash = ""
+		}, "empty part_phys_hash"},
+		{"empty part bytes", func(m *SafeSnapshotManifest) {
+			m.Tables[0].ActiveParts[0].Bytes = 0
+		}, "empty bytes"},
 		{"part in undeclared partition", func(m *SafeSnapshotManifest) {
 			m.Tables[0].ActiveParts[0].PartitionID = "p_ghost"
 		}, "no partition commitment"},
