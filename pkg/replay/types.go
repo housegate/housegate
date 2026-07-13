@@ -167,6 +167,26 @@ func (m SafeSnapshotManifest) validateSemantics() error {
 		// here because PartitionCommitment carries only a root, not a row count;
 		// the storageintegrity semantic validator cross-checks the additive
 		// root, which subsumes the row content.)
+		//
+		// Physical part metadata (part_phys_hash) is only present once a producer
+		// has enriched the manifest from live ClickHouse's system.parts checksums
+		// (the PartInspector promotion-readback path). Content-addressed manifests
+		// — the source-claim and mutation-touched-set reads — carry the additive
+		// content commitment (part_row_lthash) and often a byte size from the
+		// byte-side scan, but NOT the physical checksum, which the proxy cannot
+		// see. So the presence of part_phys_hash (NOT bytes, which the scan path
+		// populates independently) is the signal that a manifest opted into
+		// physical metadata: enforce the physical fields per-table ONLY when some
+		// active part carries a part_phys_hash; an enriched table must then carry
+		// it on EVERY part, while a purely content-addressed manifest is validated
+		// on content alone.
+		requirePhysical := false
+		for _, p := range t.ActiveParts {
+			if p.PartPhysHash != "" {
+				requirePhysical = true
+				break
+			}
+		}
 		seenPart := map[string]struct{}{}
 		for _, p := range t.ActiveParts {
 			if p.PartName == "" {
@@ -178,10 +198,10 @@ func (m SafeSnapshotManifest) validateSemantics() error {
 			if p.PartRowLtHash == "" {
 				return fmt.Errorf("table %q part %q has empty part_row_lthash", t.TableID, p.PartName)
 			}
-			if p.PartPhysHash == "" {
+			if requirePhysical && p.PartPhysHash == "" {
 				return fmt.Errorf("table %q part %q has empty part_phys_hash", t.TableID, p.PartName)
 			}
-			if p.Bytes == 0 {
+			if requirePhysical && p.Bytes == 0 {
 				return fmt.Errorf("table %q part %q has empty bytes", t.TableID, p.PartName)
 			}
 			if p.TableID != "" && p.TableID != t.TableID {

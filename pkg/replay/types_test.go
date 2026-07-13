@@ -120,11 +120,22 @@ func TestValidateRejectsSemanticViolations(t *testing.T) {
 		{"empty part_row_lthash", func(m *SafeSnapshotManifest) {
 			m.Tables[0].ActiveParts[0].PartRowLtHash = ""
 		}, "empty part_row_lthash"},
-		{"empty part_phys_hash", func(m *SafeSnapshotManifest) {
-			m.Tables[0].ActiveParts[0].PartPhysHash = ""
+		// Physical metadata is enforced per-table only when some part carries a
+		// part_phys_hash (the enriched-manifest signal). A MIXED manifest — one
+		// part enriched, another missing the physical checksum — is rejected; a
+		// wholly content-only manifest (no part_phys_hash anywhere) is not (see
+		// TestValidateAcceptsContentOnlyManifest).
+		{"mixed part_phys_hash (one enriched, one missing)", func(m *SafeSnapshotManifest) {
+			m.Tables[0].ActiveParts = append(m.Tables[0].ActiveParts, PartManifestEntry{
+				TableID: "db.t", PartitionID: "p0", PartName: "all_2_2_0",
+				PartRowLtHash: "0xrow2", RowCount: 3, Bytes: 99, // no PartPhysHash
+			})
 		}, "empty part_phys_hash"},
-		{"empty part bytes", func(m *SafeSnapshotManifest) {
-			m.Tables[0].ActiveParts[0].Bytes = 0
+		{"mixed bytes (one enriched, one missing bytes)", func(m *SafeSnapshotManifest) {
+			m.Tables[0].ActiveParts = append(m.Tables[0].ActiveParts, PartManifestEntry{
+				TableID: "db.t", PartitionID: "p0", PartName: "all_2_2_0",
+				PartPhysHash: "0xphys2", PartRowLtHash: "0xrow2", RowCount: 3, // no Bytes
+			})
 		}, "empty bytes"},
 		{"part in undeclared partition", func(m *SafeSnapshotManifest) {
 			m.Tables[0].ActiveParts[0].PartitionID = "p_ghost"
@@ -147,5 +158,29 @@ func TestValidateRejectsSemanticViolations(t *testing.T) {
 				t.Fatalf("Validate() = %v, want error containing %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// TestValidateAcceptsContentOnlyManifest proves the physical-metadata invariant
+// is conditional: a manifest whose active parts carry only the content
+// commitment (part_row_lthash) — no part_phys_hash on ANY part — is valid. Such
+// manifests arise on the source-claim and mutation-touched-set read paths, which
+// the proxy serves without the ClickHouse system.parts physical checksum. The
+// physical fields (part_phys_hash + bytes) are required only once a producer
+// enriches the manifest (any part carries a part_phys_hash); see the mixed
+// cases in TestValidateRejectsSemanticViolations.
+func TestValidateAcceptsContentOnlyManifest(t *testing.T) {
+	m := manifestFixture()
+	// Strip physical metadata from every part -> pure content-addressed manifest.
+	for i := range m.Tables[0].ActiveParts {
+		m.Tables[0].ActiveParts[i].PartPhysHash = ""
+		m.Tables[0].ActiveParts[i].Bytes = 0
+	}
+	sealed, err := m.Seal()
+	if err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+	if err := sealed.Validate(); err != nil {
+		t.Fatalf("content-only manifest must validate, got: %v", err)
 	}
 }
