@@ -37,7 +37,7 @@ func (m NativeMaterializer) Materialize(ctx context.Context, schema payloadexec.
 	if st.PayloadRef == "" {
 		return nil, fmt.Errorf("native materializer only replays payload-local INSERTs; statement has no payload")
 	}
-	if st.TargetTableID != "" && st.TargetTableID != schema.TableID {
+	if st.TargetTableID != schema.TableID {
 		return nil, fmt.Errorf("statement target table %q does not match pinned schema table %q", st.TargetTableID, schema.TableID)
 	}
 	if len(st.Payload) == 0 {
