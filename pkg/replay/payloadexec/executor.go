@@ -371,6 +371,11 @@ func DecodeCSV(payload []byte, sch TableSchema) ([]Row, error) {
 		}
 		colPos[i] = pos
 	}
+	if sch.PartitionBy != "" {
+		if _, ok := headerIndex[sch.PartitionBy]; !ok {
+			return nil, fmt.Errorf("partition column %q not present in payload", sch.PartitionBy)
+		}
+	}
 	out := make([]Row, 0, len(rows)-1)
 	for ln, rec := range rows[1:] {
 		if len(rec) != len(header) {
@@ -387,18 +392,18 @@ func DecodeCSV(payload []byte, sch TableSchema) ([]Row, error) {
 			}
 			values[i] = v
 		}
-		partitionID, err := PartitionIDForRow(sch, values)
-		if err != nil {
-			return nil, fmt.Errorf("data row %d: %w", ln, err)
+		partitionID := "all"
+		if sch.PartitionBy != "" {
+			partitionID = "p_" + rec[headerIndex[sch.PartitionBy]]
 		}
 		out = append(out, Row{Values: values, PartitionID: partitionID, RawBytes: raw})
 	}
 	return out, nil
 }
 
-// PartitionIDForRow derives the executor partition id for one schema-ordered
-// row. It is shared by all materializers so CSV, Native Data, and ClickHouse-
-// backed replay partition rows identically before part/state-root assembly.
+// PartitionIDForRow derives the typed executor partition id for one schema-
+// ordered row. Native and other typed materializers use it; the legacy CSV
+// profile intentionally preserves its original wire-text partition ids.
 func PartitionIDForRow(sch TableSchema, values []any) (string, error) {
 	if len(values) != len(sch.Columns) {
 		return "", fmt.Errorf("row has %d values, schema has %d columns", len(values), len(sch.Columns))
@@ -448,8 +453,14 @@ func partitionValueString(v any) (string, error) {
 	case int:
 		return strconv.FormatInt(int64(x), 10), nil
 	case float32:
+		if x == 0 {
+			return "0", nil
+		}
 		return strconv.FormatFloat(float64(x), 'g', -1, 32), nil
 	case float64:
+		if x == 0 {
+			return "0", nil
+		}
 		return strconv.FormatFloat(x, 'g', -1, 64), nil
 	default:
 		return "", fmt.Errorf("unsupported partition value type %T", v)

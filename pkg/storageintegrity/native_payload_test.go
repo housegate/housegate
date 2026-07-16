@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"reflect"
 	"testing"
+	"time"
 
 	"github.com/ClickHouse/ch-go/proto"
 
@@ -135,6 +137,20 @@ func TestValidateNativePayloadDecodable(t *testing.T) {
 	}
 }
 
+func TestNativePayloadRejectsUnsupportedPinnedScalarType(t *testing.T) {
+	schema := payloadexec.TableSchema{
+		TableID: "tenant.unsupported",
+		Columns: []lthash.Column{{Name: "value", Type: "Int128"}},
+	}
+	payload := encodeNativePayload(t, proto.Input{
+		{Name: "value", Data: &proto.ColInt128{proto.Int128{Low: 1}}},
+	})
+	err := ValidateNativePayloadDecodable(schema, nativePayloadTestRevision, payload)
+	if err == nil || !errors.Is(err, ErrNativePayloadUnsupported) {
+		t.Fatalf("matching but unsupported pinned scalar must fail closed, got %v", err)
+	}
+}
+
 func TestNativePayloadRejectsUndecodableBlock(t *testing.T) {
 	err := ValidateNativePayloadDecodable(nativeMaterializerSchema(), nativePayloadTestRevision, []byte{byte(proto.ClientCodeData)})
 	if err == nil || !errors.Is(err, ErrNativePayloadUnsupported) {
@@ -182,6 +198,29 @@ func TestNativeMaterializerRejectsTargetSchemaMismatch(t *testing.T) {
 	)
 	if err == nil {
 		t.Fatal("NativeMaterializer must reject statements whose target table does not match the pinned schema")
+	}
+}
+
+func TestNativeMaterializerRejectsEmptyTargetTable(t *testing.T) {
+	schema := nativeMaterializerSchema()
+	payload := encodeNativePayload(t, proto.Input{
+		{Name: "region", Data: newColStr("eu")},
+		{Name: "id", Data: &proto.ColUInt64{1}},
+	})
+	_, err := (NativeMaterializer{NetworkID: "network-1", Revision: nativePayloadTestRevision}).Materialize(
+		context.Background(),
+		schema,
+		replay.PreparedStatement{
+			Statement: replay.Statement{
+				StatementID:  "stmt-native-1",
+				StatementSeq: 1,
+				PayloadRef:   "payload-native-1",
+			},
+			Payload: payload,
+		},
+	)
+	if err == nil {
+		t.Fatal("NativeMaterializer must reject an empty target table")
 	}
 }
 
@@ -260,6 +299,93 @@ func TestNativeMaterializerPopulatesDeterministicPartBytes(t *testing.T) {
 		if part.Bytes != 10 {
 			t.Fatalf("part %s bytes = %d, want 10", part.PartitionID, part.Bytes)
 		}
+	}
+}
+
+func TestNativeMaterializerAdmittedScalarGoldenMatrix(t *testing.T) {
+	instant := time.Date(2026, time.July, 16, 12, 34, 56, 123000000, time.UTC)
+	date := new(proto.ColDate)
+	date.Append(instant)
+	dateTime := &proto.ColDateTime{Location: time.UTC}
+	dateTime.Append(instant)
+	dateTime64 := new(proto.ColDateTime64).WithPrecision(proto.PrecisionMilli).WithLocation(time.UTC)
+	dateTime64.Append(instant)
+
+	schema := payloadexec.TableSchema{
+		TableID: "tenant.scalar_matrix",
+		Columns: []lthash.Column{
+			{Name: "u8", Type: "UInt8"},
+			{Name: "u16", Type: "UInt16"},
+			{Name: "u32", Type: "UInt32"},
+			{Name: "u64", Type: "UInt64"},
+			{Name: "i8", Type: "Int8"},
+			{Name: "i16", Type: "Int16"},
+			{Name: "i32", Type: "Int32"},
+			{Name: "i64", Type: "Int64"},
+			{Name: "f32", Type: "Float32"},
+			{Name: "f64", Type: "Float64"},
+			{Name: "str", Type: "String"},
+			{Name: "fixed", Type: "FixedString(32)"},
+			{Name: "flag", Type: "Bool"},
+			{Name: "day", Type: "Date"},
+			{Name: "second", Type: "DateTime('UTC')"},
+			{Name: "millisecond", Type: "DateTime64(3, 'UTC')"},
+		},
+	}
+	payload := encodeNativePayload(t, proto.Input{
+		{Name: "u8", Data: &proto.ColUInt8{8}},
+		{Name: "u16", Data: &proto.ColUInt16{16}},
+		{Name: "u32", Data: &proto.ColUInt32{32}},
+		{Name: "u64", Data: &proto.ColUInt64{64}},
+		{Name: "i8", Data: &proto.ColInt8{-8}},
+		{Name: "i16", Data: &proto.ColInt16{-16}},
+		{Name: "i32", Data: &proto.ColInt32{-32}},
+		{Name: "i64", Data: &proto.ColInt64{-64}},
+		{Name: "f32", Data: &proto.ColFloat32{1.5}},
+		{Name: "f64", Data: &proto.ColFloat64{2.5}},
+		{Name: "str", Data: newColStr("abc")},
+		{Name: "fixed", Data: newColFixedStr32("fixed")},
+		{Name: "flag", Data: &proto.ColBool{true}},
+		{Name: "day", Data: date},
+		{Name: "second", Data: dateTime},
+		{Name: "millisecond", Data: dateTime64},
+	})
+
+	rows, err := DecodeNativePayload(schema, nativePayloadTestRevision, payload)
+	if err != nil {
+		t.Fatalf("DecodeNativePayload: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	if got, want := rows[0].RawBytes, uint64(92); got != want {
+		t.Fatalf("RawBytes = %d, want %d", got, want)
+	}
+	wantFixed := make([]byte, 32)
+	copy(wantFixed, "fixed")
+	wantValues := []any{
+		uint8(8), uint16(16), uint32(32), uint64(64),
+		int8(-8), int16(-16), int32(-32), int64(-64),
+		float32(1.5), float64(2.5), "abc", wantFixed, true,
+		proto.NewDate(2026, time.July, 16).Time(),
+		instant.Truncate(time.Second),
+		instant.Truncate(time.Millisecond),
+	}
+	if !reflect.DeepEqual(rows[0].Values, wantValues) {
+		t.Fatalf("values = %#v, want %#v", rows[0].Values, wantValues)
+	}
+	if _, err := lthash.RowHash(schema.TableID, schema.Columns, rows[0].Values); err != nil {
+		t.Fatalf("shared row hash rejected admitted Native scalars: %v", err)
+	}
+
+	_, _, parts := applySharedPayloadExecutor(t,
+		payloadexec.NewWithMaterializer("network-1", NativeMaterializer{NetworkID: "network-1", Revision: nativePayloadTestRevision}, schema),
+		schema.TableID,
+		"stmt-native-scalars",
+		payload,
+	)
+	if len(parts) != 1 || parts[0].Bytes != 92 {
+		t.Fatalf("affected parts = %+v, want one 92-byte part", parts)
 	}
 }
 
