@@ -139,6 +139,41 @@ func TestExecutorComputesRootForPayloadLocalInsert(t *testing.T) {
 	}
 }
 
+func TestPartitionIDForRow(t *testing.T) {
+	schema := TableSchema{
+		TableID: testTable,
+		Columns: []lthash.Column{
+			{Name: "id", Type: "UInt64"},
+			{Name: "region", Type: "String"},
+		},
+	}
+	got, err := PartitionIDForRow(schema, []any{uint64(1), "eu"})
+	if err != nil {
+		t.Fatalf("PartitionIDForRow without PartitionBy: %v", err)
+	}
+	if got != "all" {
+		t.Fatalf("partition = %q, want all", got)
+	}
+
+	schema.PartitionBy = "region"
+	got, err = PartitionIDForRow(schema, []any{uint64(1), "eu"})
+	if err != nil {
+		t.Fatalf("PartitionIDForRow with PartitionBy: %v", err)
+	}
+	if got != "p_eu" {
+		t.Fatalf("partition = %q, want p_eu", got)
+	}
+
+	if _, err := PartitionIDForRow(schema, []any{uint64(1)}); err == nil {
+		t.Fatal("PartitionIDForRow must reject values that do not match schema width")
+	}
+
+	schema.PartitionBy = "missing"
+	if _, err := PartitionIDForRow(schema, []any{uint64(1), "eu"}); err == nil {
+		t.Fatal("PartitionIDForRow must reject an unknown PartitionBy column")
+	}
+}
+
 func TestExecutorReplaySatisfiesInterface(t *testing.T) {
 	var _ replay.Executor = (*Executor)(nil)
 

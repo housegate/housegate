@@ -1,0 +1,26 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "storageintegrity",
+    srcs = ["native_payload.go"],
+    importpath = "housegate/housegate/pkg/storageintegrity",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/lthash",
+        "//pkg/replay",
+        "//pkg/replay/payloadexec",
+        "@com_github_clickhouse_ch_go//proto",
+    ],
+)
+
+go_test(
+    name = "storageintegrity_test",
+    srcs = ["native_payload_test.go"],
+    embed = [":storageintegrity"],
+    deps = [
+        "//pkg/lthash",
+        "//pkg/replay",
+        "//pkg/replay/payloadexec",
+        "@com_github_clickhouse_ch_go//proto",
+    ],
+)
