@@ -87,25 +87,49 @@ sequenceDiagram
   C->>HG: signed materialized INSERT + payload
   HG->>HG: verify JWS / qhash / statement kind
   HG->>HG: resolve deterministic source
-  par selected source execution
-    HG->>SN: SubmitLocalStatement(envelope, payload)
+  par selected source prepare
+    HG->>SN: PrepareLocalStatement(envelope, payload)
     SN->>PS: Put(payload_ref, bytes)
     PS-->>SN: durable
     SN->>SN: inject _hg_row_id with shared helper
+    SN->>SN: persist Preparing intent + pre-write inventory
     SN->>CH: INSERT INTO hg_unsafe
     CH-->>SN: source write success
-    SN->>SN: identify exact candidate parts + build RC
-    SN->>A: RegisterResultClaim
+    SN->>SN: identify exact candidates, persist UnsafeWritten + RC
+    SN-->>HG: PreparedLocalResult
   and route A sequencing
     HG->>A: SubmitStatement(envelope)
+    A-->>HG: accepted / retryable / terminal reject
   end
-  HG-->>C: ACK 2 = Unsafe
+  alt statement accepted or exact idempotent re-ack
+    HG->>SN: RegisterPreparedClaim(statement_id)
+    SN->>A: RegisterResultClaim(RC)
+    A-->>SN: bound / retryable / terminal reject
+    alt RC bound or exact idempotent acceptance
+      SN-->>HG: admitted + RC bound
+      HG-->>C: ACK 2 = Unsafe
+    else RC terminal reject
+      SN->>SN: persist AbortPending + exclude local sums
+      SN->>CH: DROP exact candidate parts
+      HG-->>C: terminal error, no ACK 2
+    end
+  else statement terminal reject
+    HG->>SN: AbortPreparedStatement(statement_id, reason)
+    SN->>SN: persist AbortPending + exclude local sums
+    SN->>CH: DROP exact candidate parts
+    HG-->>C: terminal error, no ACK 2
+  end
 ```
 
 必须满足：
 
 - payload hash/length 校验和 `PayloadStore.Put` 必须先于 unsafe write；Put 失败时不能产生 `hg_unsafe` part。
-- `SubmitStatement` 与 source execution 可以并行，`RegisterRC` 通过 `statement_id` 晚绑定，但 RC 的 `source_node` 必须等于 FSM 已记录的 deterministic source。
+- `PrepareLocalStatement` 与 `SubmitStatement` 可以并行，但 HouseGate 只有在 `SubmitStatement` 被接纳后才调用 `RegisterPreparedClaim`。这保留 route-A 的本地执行并行度，同时避免在当前 P1a command alphabet 中留下无法撤销的 orphan `PendingRC`。
+- `PrepareLocalStatement` 必须在返回前持久化 `{statement_id, payload_ref/hash/length, table_id, partition_id, exact_candidate_parts, PartitionNewPartSums, SourceClaimRoot, lifecycle}`。后续重试只能复用该 prepared record，不能再次执行 unsafe INSERT。
+- unsafe write 前必须先持久化 `Preparing` intent、预期 `_hg_row_id` 集合或其 commitment，以及 touched-partition pre-write inventory。若进程在 ClickHouse commit 与 `UnsafeWritten` 落盘之间崩溃，恢复流程先用这些信息扫描并归属 exact candidate parts，再决定完成 prepare 或清理；不能盲目重放 INSERT。
+- `RegisterPreparedClaim` 仍通过 `statement_id` 晚绑定；RC 的 `source_node` 必须等于 FSM 已记录的 deterministic source。P1c 当前一体化 `SubmitLocalStatement` 可以保留为兼容 wrapper，但 HouseGate ingress 的 P1e 接线使用上述 staged seam。
+- 若仍允许 RC 先于 `SubmitStatement` 到达，则必须版本化增加 `DiscardPendingRC` 或等价的 FSM retention/cleanup 语义；它不属于“不修改 Arbiter 核心协议”的 P1e 范围。
+- v1 保持 P1c 的 source statement 串行约束：同一 source absolute-claim frontier 上，前一条 intake record 未到达 `RCBound` 或 `Cleaned` 前，不执行后一条 source write。否则后一条 claim 可能包含随后被 terminal reject 清理的前序贡献。未来并行 intake 必须显式记录 claim dependencies，并在 abort 时级联重算或作废后继 claims。
 - P1c 当前 payload executor 使用 CSV；Native Data block 支持需要单独扩展 payload encoding/replay profile，不能只改 ingress 声明已支持。
 - HouseGate 不能重新实现 row canonicalization、row-id、part LtHash、schema root 或 state-root assembly；统一调用 `payloadexec`、`chexec`、`pkg/lthash` 共享 helper。
 
@@ -128,15 +152,55 @@ HouseGate/SNode 必须：
 
 P1e 还必须补一条 block-frontier 运行约束：若某个前序 block 的贡献既未进入当前 `PrevSafeSnapshotID`，也不在当前 `ReplayJob.Statements[]` 中，则当前 block 的 verifier view 不覆盖 source absolute view。v1 必须通过 serial frontier/barrier 阻止这种 dispatch；不满足时 fail closed。放开多个未 safe block 并行前，必须先给出等价的 frontier 证明或协议扩展。
 
-### 3.4 ACK 语义
+### 3.4 ACK2 gate、terminal reject 与恢复
+
+ACK 2 只能在以下条件全部成立时返回：
+
+```text
+payload_durable
+&& unsafe_write_complete
+&& SubmitStatement in {Accepted, ExactIdempotentReAck}
+&& RegisterResultClaim in {Bound, ExactIdempotentAcceptance}
+&& local_intake_journal.lifecycle == RCBound
+```
+
+`SubmitStatement` 和 `RegisterResultClaim` 的结果必须按以下类别处理：
+
+| 结果类别 | 示例 | ACK2 与本地处理 |
+| --- | --- | --- |
+| 成功或精确幂等 | accepted、相同 envelope 的 re-ack、逐字节相同 RC 的重复绑定 | 两个 gate 均完成后返回 ACK 2 |
+| 可重试 | `NotLeader`、临时不可用、明确的 retryable 错误 | 不返回 ACK 2，不清理 candidate parts；复用 journal 重试 |
+| 结果未知 | timeout、连接中断且无法判断服务端是否已接纳 | 不返回 ACK 2，也不能清理；先按同一 `statement_id` 查询或幂等重试以收敛结果 |
+| 终态拒绝 | conflicting duplicate、source mismatch、malformed、gap budget exceeded 等 | 不返回 ACK 2；进入 exact candidate cleanup |
+
+本地 intake journal 使用 crash-safe 生命周期：
+
+```text
+Preparing -> UnsafeWritten -> SubmitAccepted -> RCBound -> Ack2
+                  |                 |
+                  +---- terminal ---+-> AbortPending -> Cleaned
+```
+
+恢复与清理规则：
+
+1. unsafe write 前先 durable `Preparing` intent；write 完成后再原子持久化 exact candidate inventory、`PartitionNewPartSums`、RC 和 `UnsafeWritten` lifecycle，才能对外报告 prepare 成功。
+2. recovery 遇到 `Preparing` 时，必须按 persisted pre-write inventory 与预期 `_hg_row_id` 扫描 touched partitions：完整且唯一匹配则补齐 `UnsafeWritten`；完全未写入才允许重试 INSERT；部分或歧义匹配时 fail closed，并只对已证明属于该 statement 的 exact parts 执行清理后再恢复。不能用“当前 partition 新增的所有 parts”作猜测。
+3. 收到权威 terminal reject 后，原子地把 journal 标记为 `AbortPending`，并从 source absolute view 的 unpromoted sums 中逻辑排除这些 candidate；先完成该 durable step，再执行物理删除。
+4. 物理清理只允许对 journal 中的 exact part name 执行幂等 `ALTER TABLE hg_unsafe.<table> DROP PART '<part_name>'`，不能删除整个 partition；part 不存在视为已清理。
+5. 全部 exact candidate parts 删除后持久化 `Cleaned`。进程重启时扫描 `Preparing` 和 `AbortPending` 并继续未完成步骤，因此在任意一步崩溃都不会重复写入、重新纳入 claim view 或遗留永久 orphan part。
+6. retryable/unknown intake record 会占住 source claim frontier；只有结果收敛到 `RCBound` 或完成 `Cleaned`，后继 source write 才能开始。
+7. 相同 `statement_id` 的请求必须读取既有 journal：`RCBound/Ack2` 返回原结果，retryable/unknown 状态继续收敛，`AbortPending/Cleaned` 返回原 terminal outcome；任何状态都不能重复写入 unsafe。
+8. content-addressed payload 不随 candidate part 立即删除；按既有 retention/refcount GC 回收，避免与并发重试或审计读取竞态。
+
+### 3.5 ACK 语义
 
 | ACK | 条件 | 客户端和读路径语义 |
 | --- | --- | --- |
 | ACK 1 = Sequenced | Arbiter 已准入并持久化 statement | ordered + durable；不是当前 route-A 默认返回点 |
-| ACK 2 = Unsafe | payload 已持久化，selected source 已完成 `hg_unsafe` write | 当前同步成功语义；不代表 safe，普通 SELECT 仍读旧 manifest |
+| ACK 2 = Unsafe | payload durable、unsafe write 完成、`SubmitStatement` 已接纳且 RC 已确认绑定，local journal 为 `RCBound` | 当前同步成功语义；不代表 safe，普通 SELECT 仍读旧 manifest |
 | ACK 3 = Safe | three-way check、finality、`last_mergeable`、P1c promotion ack 和 manifest publication 全部完成 | integrity-final；不等待 SafeAudit task 完成 |
 
-### 3.5 HouseGate 本地优化边界
+### 3.6 HouseGate 本地优化边界
 
 可以新增 `PartInspector` / `PartLtHashCache`，但它们只是可丢弃、可重建的本地性能层：
 
@@ -202,7 +266,74 @@ bounded 的单位是 partition。admission 按 latest manifest 的 active parts/
 | ACK 2 = Provisional | 至少 2/3 MutationWorker 对 post-state claim 达成一致 | scratch provisional state；不进入普通 SELECT |
 | ACK 3 = Safe | post-state quorum、finality、`last_mergeable`、publication 和 manifest publication 完成 | 普通 safe SELECT 才能读取新状态；不等待 SafeAudit |
 
-### 4.4 状态机和 barrier
+### 4.4 端到端流程
+
+Mutation 与 INSERT 一样由 HouseGate ingress，但不写 `hg_unsafe`。Arbiter 先绑定 safe base 并安装 partition barriers，再把同一任务分发给 3 个 MutationWorker：
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant C as Client
+  participant HG as HouseGate ingress
+  participant A as Arbiter
+  participant MW as 3 MutationWorkers
+  participant CH as Local ClickHouse per worker
+  participant F as Finality
+  participant PW as PublicationWorkers
+  participant SA as SafeAudit
+
+  C->>HG: signed materialized UPDATE or DELETE
+  HG->>HG: verify JWS, classify and bounded admission
+  HG->>A: SubmitMutation(statement, affected partitions)
+  A->>A: persist ledger and bind safe base roots
+  A->>A: install partition barriers in canonical order
+  A-->>HG: ACK 1 = Sequenced
+  A->>MW: fan out 3 MutationTasks with the same frozen base
+
+  par worker 1 local replay
+    MW->>CH: clone safe base partitions to worker 1 scratch
+    MW->>CH: execute mutation and wait for completion
+    MW->>MW: compute and sign post-state claim 1
+    MW->>A: SubmitMutationClaim 1
+  and worker 2 local replay
+    MW->>CH: clone safe base partitions to worker 2 scratch
+    MW->>CH: execute mutation and wait for completion
+    MW->>MW: compute and sign post-state claim 2
+    MW->>A: SubmitMutationClaim 2
+  and worker 3 local replay
+    MW->>CH: clone safe base partitions to worker 3 scratch
+    MW->>CH: execute mutation and wait for completion
+    MW->>MW: compute and sign post-state claim 3
+    MW->>A: SubmitMutationClaim 3
+  end
+
+  A->>A: group claims by post-state, deltas, base and profile
+  alt at least 2 of 3 claims match
+    A-->>HG: ACK 2 = Provisional
+    F->>A: finality and last_mergeable reached
+    A->>PW: signed publication task with base CAS
+    PW->>CH: verify current safe root equals bound base root
+    alt non-empty post-state partition
+      PW->>CH: REPLACE PARTITION FROM majority scratch
+    else empty partition after DELETE
+      PW->>CH: execute signed DROP PARTITION
+    end
+    PW->>A: publication result and safe readback
+    A->>A: publish SafeSnapshotManifest and release barriers
+    A-->>HG: ACK 3 = Safe
+    A->>SA: enqueue asynchronous SafeAudit task
+  else safe base advanced
+    A->>A: supersede claims and rebind latest manifest
+    A->>MW: cleanup scratch and issue replacement tasks
+  else no majority or retry budget exhausted
+    A->>A: record dispute or rejection and release barriers
+    A->>MW: cleanup all provisional scratch partitions
+  end
+```
+
+图中的 `CH` 表示每个 MutationWorker 自己的本地 ClickHouse，不是三个 worker 共用一个 scratch。3 个 worker 必须从相同 `prev_safe_snapshot_id` 和 base roots 独立 clone、执行并签名；publication 只能选择 majority claim 对应的 scratch，且每个 affected partition 都必须再次通过 base-root CAS。
+
+### 4.5 状态机和 barrier
 
 ```mermaid
 stateDiagram-v2
@@ -235,7 +366,7 @@ stateDiagram-v2
 - snapshot 在 dispatch、execution、majority、finality wait 或 promotion 前推进时，旧 scratch 和 claims 全部 supersede；rebind 必须重新 clone、执行和 attestation。
 - 超过 `max_rebind_attempts` 或 `max_rebind_duration` 后返回 retryable rejection。
 
-### 4.5 MutationWorker
+### 4.6 MutationWorker
 
 每个 worker 只操作本地 ClickHouse：
 
@@ -249,7 +380,7 @@ stateDiagram-v2
 
 scratch 可以按 `(table_id, worker_id)` 池化，但每次任务前必须清空 affected partitions，schema hash 不一致时 drop/recreate，任务结束后不能残留 provisional rows。
 
-### 4.6 Post-state quorum
+### 4.7 Post-state quorum
 
 Arbiter 不能只按 `post_state_root` 分组。一个 claim group 的 equality key 至少包含：
 
@@ -266,7 +397,7 @@ affected_partitions
 
 固定 participants 中至少 2/3 相同才进入 `MajorityValidated`。minority evidence 保留供 P3 quarantine；无多数进入 dispute/reject，不能 promotion。
 
-### 4.7 Mutation publication
+### 4.8 Mutation publication
 
 非空 post-state：
 
@@ -394,7 +525,8 @@ storage_integrity:
 
 ### P1e：HouseGate ingress
 
-- 接入 `SubmitLocalStatement` + `SubmitStatement`，保持 payload-before-write 和 route-A late binding。
+- 将本地执行接线拆成 `PrepareLocalStatement` + `RegisterPreparedClaim`，与 `SubmitStatement` 并行 prepare、接纳后再 late-bind RC；不扩展 Arbiter command alphabet。
+- 增加 write-ahead durable intake journal、ACK2 gate、source claim frontier、terminal-reject exact candidate cleanup，以及 `Preparing`/`AbortPending` crash recovery。
 - single-writer 先落地；multi-writer 前实现与 FSM 相同的 source selection/membership view。
 - 接入共享 row-id/state-root/scan helpers，不在 HouseGate 重写算法。
 - 增加 block-frontier barrier 和 crash recovery。
@@ -420,8 +552,14 @@ storage_integrity:
 | 阶段 | 场景 | 预期 |
 | --- | --- | --- |
 | P1e | payload store 失败 | 不执行 unsafe INSERT，不返回 ACK 2 |
-| P1e | route-A late binding | RC 先到或 statement 先到都能按 `statement_id` 幂等绑定 |
-| P1e | source mismatch | FSM 拒绝 RC，statement 不进入 replay/promotion |
+| P1e | route-A staged late binding | prepare 与 sequencing 并行；statement accepted 后才注册 RC，两个 gate 均完成才返回 ACK 2 |
+| P1e | `SubmitStatement` terminal reject after unsafe write | 不返回 ACK 2；逻辑排除 sums 并只清理 journal 记录的 exact candidate parts |
+| P1e | `RegisterResultClaim` terminal reject | 不返回 ACK 2；statement 不进入 replay/promotion，exact candidate cleanup 可崩溃恢复 |
+| P1e | sequencing/RC 结果 retryable 或 unknown | 不清理、不重复 unsafe INSERT；复用同一 journal 幂等重试或查询直到结果确定 |
+| P1e | ClickHouse commit 后、`UnsafeWritten` journal 前崩溃 | 从 `Preparing` intent 以 pre-write inventory + 预期 row IDs 恢复 exact candidates，不盲目重放 INSERT |
+| P1e | cleanup 任一步崩溃 | recovery 从 `AbortPending` 恢复；part 不存在按成功处理，最终到达 `Cleaned` |
+| P1e | 相同 `statement_id` 重试 | 复用 prepared record 和原 outcome，不产生第二组 unsafe parts |
+| P1e | 前一条 intake 为 retryable/unknown | source claim frontier 阻止后继 source write，直到前序 `RCBound` 或 `Cleaned` |
 | P1e | block frontier 未闭合 | 不 dispatch 当前 block，直到 base/Statements 覆盖同一 absolute view |
 | P1e | byte-side claimed/scanned mismatch | 提交 mismatch evidence，FSM check 3 失败 |
 | P1e | cache hit/miss | wire evidence 与无 cache 路径一致 |
@@ -443,6 +581,11 @@ P1e 基线 E2E 使用 3-node Arbiter、3 Verifier、1 SNode 和真实 ClickHouse
 | 风险 | 处理 |
 | --- | --- |
 | HouseGate 重复实现 P1c 算法导致 root 漂移 | 强制使用共享 helpers；CI tripwire 禁止本地 hash/LtHash 实现 |
+| unsafe write 后 admission/RC 终态拒绝却返回 ACK 2 | ACK2 同时 gate statement acceptance、RC binding 和 durable local lifecycle |
+| terminal reject 遗留 orphan parts 或污染 unpromoted sums | 先 durable `AbortPending` 并逻辑排除，再按 exact candidate inventory 幂等 DROP；重启续做 |
+| RC 先到而 statement 永不被接纳，形成 orphan `PendingRC` | P1e 在 `SubmitStatement` accepted 后才调用 `RegisterPreparedClaim`；若保留 RC-first，必须版本化增加 FSM cleanup |
+| ClickHouse commit 与 candidate journal 落盘之间崩溃导致重复写入 | write-ahead `Preparing` intent + row-id/pre-write inventory reconciliation；歧义时 fail closed |
+| 后继 claim 吸收尚未收敛、随后被清理的前序贡献 | v1 source claim frontier 串行化；并行前必须增加 dependency-aware invalidation |
 | 多个未 safe block 使 source absolute view 超出 ReplayJob frame | P1e block-frontier barrier；并行前先扩展协议或给出闭合证明 |
 | legacy attach 混入未验证 parts | 默认关闭；migration 必须满足 exact active set 和完整等价不变量 |
 | mutation stale snapshot 覆盖新状态 | dispatch/execution/quorum/publication 四次 stale 检查 + base CAS |
@@ -456,8 +599,9 @@ P1e 基线 E2E 使用 3-node Arbiter、3 Verifier、1 SNode 和真实 ClickHouse
 增量方案完成需要同时满足：
 
 - P1e 没有复制或修改 P0/P1a/P1b/P1c 已冻结的协议逻辑。
-- HouseGate ingress 保证 materialized signed SQL、payload-before-write、deterministic source routing 和 absolute source claim 输入完整。
-- P1e E2E 覆盖 source mismatch、block frontier、byte-side mismatch、leader failover 和 promotion readback。
+- HouseGate ingress 保证 materialized signed SQL、payload-before-write、deterministic source routing、absolute source claim 输入完整，以及 statement accepted + RC bound 后才返回 ACK 2。
+- terminal reject 通过 durable intake journal 逻辑排除 local sums，并只清理 exact candidate parts；retryable/unknown result 不提前清理，source claim frontier 不跨越未收敛记录，相同 statement 重试不重复写入。
+- P1e E2E 覆盖 Submit/RC terminal reject、unknown result、commit-to-journal crash、cleanup crash recovery、claim-frontier blocking、幂等重试、source mismatch、block frontier、byte-side mismatch、leader failover 和 promotion readback。
 - P2 使用明确版本化的 proto/command/FSM 扩展，不把 mutation 伪装成本地无共识功能。
 - bounded mutation admission、barrier、rebind、post-state quorum 和 publication 均有 deterministic FSM tests 与真实 ClickHouse E2E。
 - P3 SafeAudit 不阻塞 ACK 3，read-set/quarantine/repair 状态有 failover 和 cache invalidation 测试。
