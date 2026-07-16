@@ -19,8 +19,8 @@
 本文只设计尚未由上述阶段完成的增量：
 
 1. **P1e HouseGate ingress 集成**：把签名写入口接到已实现的 SNode/Arbiter 接口，并保留本地性能优化边界。
-2. **P2 bounded UPDATE/DELETE**：扩展当前 INSERT-only proto、command alphabet 和 FSM，增加 mutation barrier、parallel local replay、post-state quorum 与 publication。
-3. **P3 serving integrity**：SafeAudit、read-set gating、unified quarantine 和 repair。
+2. **P2 bounded UPDATE/DELETE**：扩展当前 INSERT-only proto、command alphabet 和 FSM，增加 mutation barrier、parallel local replay、post-state quorum、per-worker publication ack 与 atomic manifest/read-set cut。
+3. **P3 serving integrity**：在 P2 最小 publication read-set gate 之上增加 SafeAudit、unified quarantine、repair 和 read-set re-entry hardening。
 4. **P4 controlled compaction**：在 `hg_safe STOP MERGES` 前提下，由 Arbiter 管理 safe part merge publication。
 
 以下内容不在本文重新设计：Accumulator 字节编码、P1a command handler、P1b orchestrator WorkSet、P1c three-way predicate、genesis bootstrap、INSERT promotion SQL、authority JWS、exact-parts mapping、manifest canonicalization。实现和测试应直接服从相应基线文档。
@@ -42,7 +42,7 @@ flowchart LR
 
   I -.->|"P2 mutation statement"| MW["3 MutationWorkers\nhg_mutation scratch"]
   MW -.-> ARB
-  ARB -.->|"P3 manifest + audit task"| SA["SafeAudit / read set"]
+  ARB -.->|"P2 safe cut / P3 audit task"| SA["SafeAudit / read set"]
 ```
 
 职责边界：
@@ -50,7 +50,7 @@ flowchart LR
 - P1c 的 `dataplane/`、`verifier/`、`snode/` 库和参考二进制已经存在；P1e 只负责 HouseGate ingress 接线，不复制这些实现。
 - P1c v1 是 single-writer SNode、statement single-flight。multi-writer 必须实现与 FSM 相同的 source selection 和 committed membership view，不能由 HouseGate 自行选择“健康节点”。
 - Verifier 固定由 FSM 从 Active 非 source 集合中确定性选择 3 个，quorum 固定 2-of-3；这不是配置项。
-- MutationWorker、SafeAuditWorker 和 read-set coordinator 是后续新增角色，不得伪装成当前 P1c 已实现能力。
+- MutationWorker 和 mutation publication read-set coordinator 属于 P2；SafeAuditWorker、audit-driven quarantine/repair/re-entry 属于 P3。它们都不得伪装成当前 P1c 已实现能力。
 - 每个数据面角色只操作自己的本地 ClickHouse；Arbiter FSM 不执行 SQL、不读取 `system.parts`、不扫描行数据。
 
 ## 3. P1e HouseGate INSERT ingress
@@ -222,7 +222,7 @@ Preparing -> UnsafeWritten -> SubmitAccepted -> RCBound -> Ack2
 
 - statement kind / envelope projection；
 - Raft command alphabet 和 wire converters；
-- mutation ledger、partition barrier、claim、decision、promotion result；
+- mutation ledger、partition barrier、claim、decision、per-worker publication ack 和 atomic safe cut；
 - WorkSet/read facade、orchestrator action 和 gRPC surface；
 - snapshot/restore 与 deterministic replay tests。
 
@@ -264,7 +264,7 @@ bounded 的单位是 partition。admission 按 latest manifest 的 active parts/
 | --- | --- | --- |
 | ACK 1 = Sequenced | mutation statement 已持久化，affected partitions 和 base roots 已绑定，barriers 已安装 | ordered + durable；safe 读仍是旧 snapshot |
 | ACK 2 = Provisional | 至少 2/3 MutationWorker 对 post-state claim 达成一致 | scratch provisional state；不进入普通 SELECT |
-| ACK 3 = Safe | post-state quorum、finality、`last_mergeable`、publication 和 manifest publication 完成 | 普通 safe SELECT 才能读取新状态；不等待 SafeAudit |
+| ACK 3 = Safe | post-state quorum、finality、`last_mergeable` 完成；每个 retained serving worker 均已 publication + readback ack，未完成者已在同一 publication cut 中移出 read set；manifest/watermark 已发布 | 普通 safe SELECT 才能读取新状态；不等待 SafeAudit |
 
 ### 4.4 端到端流程
 
@@ -311,17 +311,29 @@ sequenceDiagram
   alt at least 2 of 3 claims match
     A-->>HG: ACK 2 = Provisional
     F->>A: finality and last_mergeable reached
-    A->>PW: signed publication task with base CAS
-    PW->>CH: verify current safe root equals bound base root
-    alt non-empty post-state partition
-      PW->>CH: REPLACE PARTITION FROM majority scratch
-    else empty partition after DELETE
-      PW->>CH: execute signed DROP PARTITION
+    A->>A: freeze RequiredServingSet and canonical majority artifact
+    loop every worker in RequiredServingSet
+      A->>PW: signed worker publication task with base CAS
+      PW->>CH: verify current safe root equals bound base root
+      alt non-empty post-state partition
+        PW->>CH: install canonical post parts in local shadow
+        PW->>CH: REPLACE PARTITION FROM canonical shadow
+      else empty partition after DELETE
+        PW->>CH: execute signed DROP PARTITION
+      end
+      PW->>PW: durable local watermark and safe readback
+      PW->>A: signed PublicationAck for this worker
     end
-    PW->>A: publication result and safe readback
-    A->>A: publish SafeSnapshotManifest and release barriers
-    A-->>HG: ACK 3 = Safe
-    A->>SA: enqueue asynchronous SafeAudit task
+    A->>A: classify applied-equivalent and non-published workers
+    alt retained workers acked and all others excluded
+      A->>A: atomic manifest, watermark, read-set and cache-epoch cut
+      A->>A: release partition barriers
+      A-->>HG: ACK 3 = Safe
+      A->>SA: enqueue asynchronous SafeAudit for retained workers
+    else publication result unknown or serving floor unmet
+      A->>A: keep old global watermark and barriers, no ACK 3
+      A->>PW: query readback or idempotently retry publication
+    end
   else safe base advanced
     A->>A: supersede claims and rebind latest manifest
     A->>MW: cleanup scratch and issue replacement tasks
@@ -331,7 +343,20 @@ sequenceDiagram
   end
 ```
 
-图中的 `CH` 表示每个 MutationWorker 自己的本地 ClickHouse，不是三个 worker 共用一个 scratch。3 个 worker 必须从相同 `prev_safe_snapshot_id` 和 base roots 独立 clone、执行并签名；publication 只能选择 majority claim 对应的 scratch，且每个 affected partition 都必须再次通过 base-root CAS。
+图中的 `CH` 表示每个 worker 自己的本地 ClickHouse，不是三个 worker 共用一个 scratch。3 个 MutationWorker 必须从相同 `prev_safe_snapshot_id` 和 base roots 独立 clone、执行并签名；2/3 claim quorum 只证明逻辑 post-state，不代表任意一个本地 publication 可以推进全局 watermark。
+
+publication issue 时，Arbiter 从 committed read-set state 冻结：
+
+```text
+RequiredServingSet = workers currently eligible to serve the affected tables
+AppliedEquivalentSet = workers with durable Applied=true ack whose readback matches the majority post-state
+RetainedServingSet subset_of AppliedEquivalentSet
+RequiredServingSet = RetainedServingSet disjoint_union ExcludedBeforeCut
+```
+
+`SafeSnapshotManifest` 只能在 `RetainedServingSet` 满足 serving availability floor，且 `ExcludedBeforeCut` 已在同一 FSM publication cut 中移出 read set 后发布。manifest、global safe watermark、per-worker logical watermark、read-set membership 和 route-cache epoch 必须由一个原子状态转换提交；之后才能释放 barriers 和返回 ACK 3。仅有一条 publication ack、或某条 ack 结果未知时，都不能发布 manifest。
+
+独立 scratch 允许产生物理上不同但逻辑等价的 parts，然而冻结的全局 `ManifestRoot` 仍覆盖单一 `ActiveParts` inventory。P2 当前 profile 因此必须从 majority claim group 记录一个 canonical publication artifact，并让所有 retained workers 安装同一套 canonical post parts，或通过同一 ReplicatedMergeTree publication log 收敛到相同 active-part metadata。只做到 logical root 相同、但 retained workers 的 part names/phys metadata 不同的拓扑不受当前 profile 支持；支持它需要版本化 per-worker physical inventory，而不能复用现有全局 manifest。
 
 ### 4.5 状态机和 barrier
 
@@ -346,13 +371,16 @@ stateDiagram-v2
   MajorityValidated --> FinalityWaiting
   FinalityWaiting --> PromotionReady
   PromotionReady --> Promoting
-  Promoting --> Safe: manifest published
+  Promoting --> PublicationCutReady: retained acks complete
+  Promoting --> PublicationBlocked: partial apply or unknown ack
+  PublicationBlocked --> Promoting: query, retry or durable exclusion
+  PublicationCutReady --> Safe: atomic manifest and read-set cut
   Safe --> AuditPending: P3 async
   BarrierInstalled --> Rebinding: base advanced
   TasksIssued --> Rebinding: stale before execute
   Attesting --> Rebinding: base advanced
   FinalityWaiting --> Rebinding: base advanced
-  Promoting --> Rebinding: base CAS failed
+  Promoting --> Rebinding: all workers reject stale base before apply
   Rebinding --> TasksIssued: bind latest manifest
   Rebinding --> Rejected: retry budget exhausted
   Dispute --> Rejected
@@ -364,6 +392,8 @@ stateDiagram-v2
 - 多 partition mutation 按 canonical partition order 一次性获取所有 barriers，避免死锁和部分安装。
 - 同 partition 更早 INSERT 尚未 Safe/Rejected 时，mutation 必须留在 pending write queue，不能基于看不到该 INSERT 的旧 safe snapshot 执行。
 - snapshot 在 dispatch、execution、majority、finality wait 或 promotion 前推进时，旧 scratch 和 claims 全部 supersede；rebind 必须重新 clone、执行和 attestation。
+- 任一 worker 已本地 apply 后，不允许把整个 mutation 当作“未执行”直接 rebind；该 worker 必须保持不可服务，直到 publication cut 接纳其等价 readback，或 repair 回 current manifest。
+- `Promoting`、`PublicationBlocked` 和 `PublicationCutReady` 都持有 affected partition barriers；只有 atomic publication cut 或 terminal reject 后的完整 repair/cleanup 才能释放。
 - 超过 `max_rebind_attempts` 或 `max_rebind_duration` 后返回 retryable rejection。
 
 ### 4.6 MutationWorker
@@ -399,12 +429,14 @@ affected_partitions
 
 ### 4.8 Mutation publication
 
-非空 post-state：
+Mutation claim 是 per worker evidence，mutation publication 也是 per serving worker apply/ack；全局 manifest 仍然只有一个。Arbiter 在 `RecordMutationPublicationIssued` 中持久化 `publication_seq`、`RequiredServingSet`、majority equality key、canonical artifact commitment/source、base roots 和 expected post commitments。
+
+每个 retained worker 对非空 post-state 执行：
 
 ```sql
 ALTER TABLE hg_safe.`<table>`
 REPLACE PARTITION ID '<partition_id>'
-FROM hg_mutation.`<table_id>__<worker_id>`;
+FROM hg_mutation_publish.`<mutation_id>__<publication_seq>`;
 ```
 
 空 partition DELETE 没有可供 replace 的 post partition，使用 Arbiter-signed internal `DROP PARTITION` action，并要求：
@@ -414,6 +446,38 @@ FROM hg_mutation.`<table_id>__<worker_id>`;
 - 新 manifest 记录 `active_parts=[]` 和 zero LtHash partition root。
 
 Mutation 不能使用 `ATTACH PARTITION` 表达 post-state，因为 attach 无法删除或替换旧 row set。
+
+每条 `PublicationAck` 必须绑定并签名：
+
+```text
+mutation_id
+worker_id
+publication_seq
+base_safe_snapshot_id
+base_partition_roots
+post_partition_commitments
+post_state_root
+local_safe_snapshot_id_after
+exact_active_parts_readback
+Applied
+```
+
+worker 必须先 durable 保存 `{publication_seq, ack, local watermark}`，再发送 ack；重复任务按 `(mutation_id, worker_id, publication_seq)` 返回同一 ack。apply 成功但 ack 丢失时，Arbiter 查询或重发，worker 以本地 watermark/readback 恢复，不能再次执行 mutation 或猜测结果。
+
+Arbiter 只有在以下 publication equation 成立时才能提交 `PublishMutationSafeCut`：
+
+```text
+RetainedServingSet subset_of AppliedEquivalentSet
+RequiredServingSet = RetainedServingSet disjoint_union ExcludedBeforeCut
+size(RetainedServingSet) >= serving_availability_floor
+all retained readbacks == canonical manifest input
+```
+
+P2 v1 固定 3 个 serving workers，`serving_availability_floor = 2`，与 2-of-3 claim quorum 一样属于版本化 P2 profile/FSM parameter，不是可由单个 leader 修改的 runtime config。未来允许 1 个 serving worker 或扩展到 N 个 workers 必须升级 profile，并补相应的 deterministic snapshot/restore 与 failover tests。
+
+`PublishMutationSafeCut` 在一个 FSM command 中记录 manifest、推进 global/per-worker watermarks、安装新的 read set、推进 route-cache epoch 并释放 barriers。未 ack、CAS 失败、minority scratch、readback mismatch 或结果未知的 worker，必须先进入 `ExcludedBeforeCut`；若摘除后达不到 serving availability floor，则保持旧 manifest/watermark，不返回 ACK 3，并继续 retry/repair。
+
+这里的 canonical publication shadow 与三个验证 scratch 分离：验证 scratch 可以物理不同，publication shadow 必须来自 ledger 记录的 majority artifact，并在所有 retained workers 上产生与全局 manifest 相同的 exact `ActiveParts`。若 ClickHouse 拓扑只能保证逻辑 LtHash 相同而不能保证该物理 inventory 一致，P2 必须先版本化 manifest profile，不能把某一台 worker 的 `ActiveParts` 发布成全局事实。
 
 ## 5. P3 Serving Integrity
 
@@ -438,6 +502,8 @@ Arbiter FSM 只记录 signed votes 并确定性派生 decision/quarantine，不�
 - read decision cache 必须绑定 table、requested snapshot、worker、read mode，并在新 manifest、quarantine、watermark 落后、active-set mismatch 或 TTL 到期时失效。
 
 这里的 read set 与 P1a `MarkActive` 不同：`MarkActive` 控制 source/Verifier selection membership；read set 控制 safe SELECT serving eligibility。
+
+P2 mutation publication 所需的最小 read-set state、per-worker watermark、原子 exclusion 和 route-cache epoch 属于 P2 安全前置条件，不能推迟到 P3。P3 在此基础上增加 SafeAudit 驱动的 quarantine、repair 和重新加入；异步 SafeAudit 不替代 P2 的 pre-manifest publication cut。
 
 ### 5.3 Unified quarantine 和 rollback
 
@@ -519,7 +585,7 @@ storage_integrity:
     allow_native_background_merges: false
 ```
 
-固定 2-of-3 quorum、select-3、INSERT-only P1c admitted kind、hash/profile domains 不能出现在 runtime config。P2 扩展 mutation kind 时使用版本化协议/profile，不把它做成未协商的布尔开关。
+固定 2-of-3 claim quorum、select-3、P2 v1 的 3-worker/serving-floor-2、INSERT-only P1c admitted kind、hash/profile domains 不能出现在 runtime config。P2 扩展 mutation kind 时使用版本化协议/profile，不把它做成未协商的布尔开关。
 
 ## 8. 实施顺序
 
@@ -536,12 +602,13 @@ storage_integrity:
 
 - 版本化扩展 proto、command alphabet、FSM snapshot 和 WorkSet。
 - 实现 admission、partition barriers、pending INSERT queue 和 rebind。
-- 实现 MutationWorker、post-state quorum、mutation publication 和 manifest input。
+- 实现 MutationWorker、post-state quorum、canonical publication artifact 和 per-worker idempotent publication ack。
+- 实现 P2 最小 read-set state 与原子 `PublishMutationSafeCut`：未 publication 的 worker 先摘除，manifest/watermark/read-set/cache epoch 同时提交。
 
 ### P3：Serving integrity
 
 - 实现 SafeAudit task/vote/decision。
-- 实现 unified quarantine、read-set gating、repair/sync 和 cache invalidation。
+- 实现 audit-driven unified quarantine、repair/sync、read-set re-entry 和 cache invalidation。
 
 ### P4：Controlled compaction
 
@@ -569,12 +636,17 @@ storage_integrity:
 | P2 | unsupported mutation | admission reject，不创建 barrier/scratch |
 | P2 | earlier INSERT pending | mutation 不 dispatch，直到 INSERT Safe/Rejected |
 | P2 | stale base | claims supersede 并 rebind；promotion CAS 失败不覆盖新 safe state |
+| P2 | 仅一个 worker publication ack | 不能发布 manifest 或返回 ACK 3；继续收敛 ack 或原子摘除其余 worker |
+| P2 | retained worker publication 未完成 | 新 watermark 不对外可见；该 worker ack 等价 post-state，或在 publication cut 中被移出 read set |
+| P2 | local apply 后 ack 丢失/leader failover | 按 `(mutation_id, worker_id, publication_seq)` 查询或重试并返回持久化 ack，不重复执行 mutation |
+| P2 | minority/不同物理 scratch | 不能直接进入 safe；retained workers 安装 canonical artifact，exact active parts 与 manifest input 一致 |
+| P2 | 摘除后低于 serving availability floor | 保持旧 manifest/watermark 和 barriers，不返回 ACK 3，进入 retry/repair |
 | P3 | SafeAudit minority | minority quarantine，ACK 3 不被回溯撤销 |
 | P3 | read-set lag | 落后 worker 不服务 requested watermark |
 | P4 | controlled compaction | input/output LtHash 等式成立，新 manifest active parts 正确 |
 | P4 | native safe merge | active-set mismatch，worker fail closed 并退出 read set |
 
-P1e 基线 E2E 使用 3-node Arbiter、3 Verifier、1 SNode 和真实 ClickHouse。多 ClickHouse/replication-lag、3 mutation workers、SafeAudit/read set 分别在相应阶段增加，不再把尚未实现的拓扑写成 P1c 完成条件。
+P1e 基线 E2E 使用 3-node Arbiter、3 Verifier、1 SNode 和真实 ClickHouse。多 ClickHouse/replication-lag、3 mutation workers 与 P2 publication read-set cut、P3 SafeAudit/repair 分别在相应阶段增加，不再把尚未实现的拓扑写成 P1c 完成条件。
 
 ## 10. 风险与处理
 
@@ -590,6 +662,9 @@ P1e 基线 E2E 使用 3-node Arbiter、3 Verifier、1 SNode 和真实 ClickHouse
 | legacy attach 混入未验证 parts | 默认关闭；migration 必须满足 exact active set 和完整等价不变量 |
 | mutation stale snapshot 覆盖新状态 | dispatch/execution/quorum/publication 四次 stale 检查 + base CAS |
 | mutation touched set 判断错误 | 只接受 partition-bounded predicate 并设置 parts/bytes 上限 |
+| 单个 publication ack 推进全局 mutation manifest | `RequiredServingSet` 全覆盖：retained workers 全部 ack，其余在同一 FSM cut 原子摘除 |
+| 独立 scratch 产生不同 physical parts，却复用单一全局 `ActiveParts` | majority canonical artifact + retained-worker exact readback；否则版本化 manifest profile 并 fail closed |
+| partial local apply 后直接 rebind/释放 barrier | worker 先退出服务并完成 publication cut 或 repair；`PublicationBlocked` 期间保持 barriers |
 | SafeAudit 被误当成 promotion check | three-way check 仍由 P1c Verifier/FSM 完成；SafeAudit 只检查已发布 safe state |
 | safe background merge 改变 manifest active set | `STOP MERGES` + controlled compaction；发现漂移立即 fail closed |
 | cache 脏数据掩盖磁盘变化 | key 绑定 schema/phys metadata；不匹配时失效并降级真实扫描 |
@@ -603,7 +678,8 @@ P1e 基线 E2E 使用 3-node Arbiter、3 Verifier、1 SNode 和真实 ClickHouse
 - terminal reject 通过 durable intake journal 逻辑排除 local sums，并只清理 exact candidate parts；retryable/unknown result 不提前清理，source claim frontier 不跨越未收敛记录，相同 statement 重试不重复写入。
 - P1e E2E 覆盖 Submit/RC terminal reject、unknown result、commit-to-journal crash、cleanup crash recovery、claim-frontier blocking、幂等重试、source mismatch、block frontier、byte-side mismatch、leader failover 和 promotion readback。
 - P2 使用明确版本化的 proto/command/FSM 扩展，不把 mutation 伪装成本地无共识功能。
-- bounded mutation admission、barrier、rebind、post-state quorum 和 publication 均有 deterministic FSM tests 与真实 ClickHouse E2E。
+- bounded mutation admission、barrier、rebind、post-state quorum、canonical artifact、per-worker publication ack 和 atomic read-set/manifest cut 均有 deterministic FSM tests 与真实 ClickHouse E2E。
+- P2 E2E 证明单 worker ack、ack unknown、partial apply、minority scratch、atomic exclusion 和 serving-floor failure 都不会提前推进 global watermark 或返回 ACK 3。
 - P3 SafeAudit 不阻塞 ACK 3，read-set/quarantine/repair 状态有 failover 和 cache invalidation 测试。
 - P4 不依赖 stock background merge，ledger equation 和 signed partition publication 有真实 ClickHouse E2E。
 - 文档只描述相对 main 已实现基线的增量，不再复制 Arbiter 三阶段的类型、SQL 和状态机实现细节。
