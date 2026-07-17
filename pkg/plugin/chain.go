@@ -17,7 +17,7 @@ import (
 //     error.
 //   - OnException runs every plugin and returns the first non-nil error
 //     (best-effort enrichment).
-//   - OnQueryComplete, OnClose, and OnDisconnect run every plugin and
+//   - OnQueryAbort, OnQueryComplete, OnClose, and OnDisconnect run every plugin and
 //     ignore errors.
 //
 // Routed sessions: once routeplugin.Stripper sets SessionState.RouteTarget
@@ -41,14 +41,17 @@ import (
 // false. Default is run; plugins like rewrite / commitgate
 // opt out because their work belongs on the receiving (host) proxy.
 type PluginChain struct {
-	ConnLifecyclePlugins     []ConnLifecyclePlugin
-	HelloPlugins             []HelloPlugin
-	HandshakeCompletePlugins []HandshakeCompletePlugin
-	QueryPlugins             []QueryPlugin
-	DataPlugins              []DataPlugin
-	ExceptionPlugins         []ExceptionPlugin
-	QueryCompletePlugins     []QueryCompletePlugin
-	ClosePlugins             []ClosePlugin
+	ConnLifecyclePlugins      []ConnLifecyclePlugin
+	HelloPlugins              []HelloPlugin
+	HandshakeCompletePlugins  []HandshakeCompletePlugin
+	QueryPlugins              []QueryPlugin
+	StrictDataPlugins         []StrictDataPlugin
+	DataPlugins               []DataPlugin
+	ExceptionPlugins          []ExceptionPlugin
+	QueryInputCompletePlugins []QueryInputCompletePlugin
+	QueryAbortPlugins         []QueryAbortPlugin
+	QueryCompletePlugins      []QueryCompletePlugin
+	ClosePlugins              []ClosePlugin
 }
 
 // runsOnRouted reports whether p should fire on a routed session.
@@ -174,6 +177,88 @@ func (c *PluginChain) OnQuery(ctx context.Context, qctx *QueryContext) error {
 	return nil
 }
 
+func (c *PluginChain) RejectUndecodableQuery(sess chsession.Session) bool {
+	if sess == nil {
+		return false
+	}
+	state := sess.State()
+	for _, p := range c.QueryPlugins {
+		policy, ok := p.(StrictQueryDecodePlugin)
+		if !ok {
+			continue
+		}
+		if state.IsRouted() && !runsOnRouted(p) {
+			continue
+		}
+		if state.PeerTrusted() && !state.IsForwardedFromPeer && !runsOnPeerTrust(p) {
+			continue
+		}
+		if state.IsForwarding && !runsOnForward(p) {
+			continue
+		}
+		if policy.RejectUndecodableQuery() {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *PluginChain) OnClientDataStrict(ctx context.Context, qctx *QueryContext, raw []byte) error {
+	if len(c.StrictDataPlugins) == 0 || qctx == nil || qctx.Session == nil {
+		return nil
+	}
+	// Same per-iteration filter discipline as OnQuery — see that comment.
+	state := qctx.Session.State()
+	for _, p := range c.StrictDataPlugins {
+		if state.IsRouted() && !runsOnRouted(p) {
+			continue
+		}
+		// See OnHandshakeComplete for the IsForwardedFromPeer override.
+		if state.PeerTrusted() && !state.IsForwardedFromPeer && !runsOnPeerTrust(p) {
+			continue
+		}
+		if state.IsForwarding && !runsOnForward(p) {
+			continue
+		}
+		if err := p.OnClientDataStrict(ctx, qctx, raw); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *PluginChain) ClientDataReadLimit(qctx *QueryContext) (uint64, bool) {
+	if qctx == nil || qctx.Session == nil {
+		return 0, false
+	}
+	state := qctx.Session.State()
+	var (
+		limit   uint64
+		enforce bool
+	)
+	for _, p := range c.StrictDataPlugins {
+		provider, ok := p.(StrictDataLimitPlugin)
+		if !ok {
+			continue
+		}
+		if state.IsRouted() && !runsOnRouted(p) {
+			continue
+		}
+		if state.PeerTrusted() && !state.IsForwardedFromPeer && !runsOnPeerTrust(p) {
+			continue
+		}
+		if state.IsForwarding && !runsOnForward(p) {
+			continue
+		}
+		candidate, candidateEnforced := provider.ClientDataReadLimit(qctx)
+		if candidateEnforced && (!enforce || candidate < limit) {
+			limit = candidate
+			enforce = true
+		}
+	}
+	return limit, enforce
+}
+
 func (c *PluginChain) OnClientData(ctx context.Context, qctx *QueryContext, raw []byte) error {
 	if len(c.DataPlugins) == 0 || qctx == nil || qctx.Session == nil {
 		return nil
@@ -218,6 +303,44 @@ func (c *PluginChain) OnException(ctx context.Context, sess chsession.Session, e
 		}
 	}
 	return first
+}
+
+func (c *PluginChain) OnQueryInputComplete(ctx context.Context, qctx *QueryContext) {
+	if qctx == nil || qctx.Session == nil {
+		return
+	}
+	state := qctx.Session.State()
+	for _, p := range c.QueryInputCompletePlugins {
+		if state.IsRouted() && !runsOnRouted(p) {
+			continue
+		}
+		if state.PeerTrusted() && !state.IsForwardedFromPeer && !runsOnPeerTrust(p) {
+			continue
+		}
+		if state.IsForwarding && !runsOnForward(p) {
+			continue
+		}
+		p.OnQueryInputComplete(ctx, qctx)
+	}
+}
+
+func (c *PluginChain) OnQueryAbort(ctx context.Context, qctx *QueryContext) {
+	if qctx == nil || qctx.Session == nil {
+		return
+	}
+	state := qctx.Session.State()
+	for _, p := range c.QueryAbortPlugins {
+		if state.IsRouted() && !runsOnRouted(p) {
+			continue
+		}
+		if state.PeerTrusted() && !state.IsForwardedFromPeer && !runsOnPeerTrust(p) {
+			continue
+		}
+		if state.IsForwarding && !runsOnForward(p) {
+			continue
+		}
+		p.OnQueryAbort(ctx, qctx)
+	}
 }
 
 func (c *PluginChain) OnQueryComplete(ctx context.Context, sess chsession.Session) {
