@@ -103,7 +103,8 @@ type Packet struct {
 
 // Sentinel errors.
 var (
-	ErrMalformed     = errors.New("chproto: malformed packet")
-	ErrUnknownPacket = errors.New("chproto: unknown packet type")
-	ErrDecode        = errors.New("chproto: decode failed")
+	ErrMalformed      = errors.New("chproto: malformed packet")
+	ErrUnknownPacket  = errors.New("chproto: unknown packet type")
+	ErrDecode         = errors.New("chproto: decode failed")
+	ErrPacketTooLarge = errors.New("chproto: packet exceeds configured byte limit")
 )

@@ -125,11 +125,19 @@ type JWSHeader struct {
 
 // JWSPayload is the minimal JWS payload housegate signs and verifies.
 // Iat is the issued-at unix timestamp (seconds); QueryHash is the
-// Keccak256 hash of the SQL body hex-encoded with 0x prefix.
+// Keccak256 hash of the SQL body hex-encoded with 0x prefix. Purpose is
+// optional for legacy query auth and required only by domain-separated lanes
+// such as storage integrity.
 type JWSPayload struct {
 	Iat       int64  `json:"iat"`
 	QueryHash string `json:"qhash"`
+	Purpose   string `json:"purpose,omitempty"`
 }
+
+// QueryPurpose domain-separates ordinary SQL query tokens from peer-login and
+// other JWS payloads. Legacy query validation remains purpose-optional, while
+// correctness-sensitive lanes can require this exact value.
+const QueryPurpose = "housegate-query"
 
 // PeerLoginPurpose is the JWSPeerPayload.Purpose value for a
 // peer-relay login token. Domain-separated from the SQL-binding query

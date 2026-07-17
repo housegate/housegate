@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -499,6 +500,7 @@ type abortWithSuccessHooks struct {
 	plugin.NoopHooks
 	mu             sync.Mutex
 	onQueryCalls   int
+	queryAborts    int
 	queryCompletes int
 }
 
@@ -514,6 +516,12 @@ func (h *abortWithSuccessHooks) OnQueryComplete(_ context.Context, _ chsession.S
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.queryCompletes++
+}
+
+func (h *abortWithSuccessHooks) OnQueryAbort(_ context.Context, _ *plugin.QueryContext) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.queryAborts++
 }
 
 // TestRelay_ClientToUpstream_AbortWithSuccess plugs a fake plugin that
@@ -630,5 +638,332 @@ func TestRelay_ClientToUpstream_AbortWithSuccess(t *testing.T) {
 	}
 	if hooks.queryCompletes != 1 {
 		t.Errorf("OnQueryComplete fired %d times, want 1 (exactly once per query)", hooks.queryCompletes)
+	}
+	if hooks.queryAborts != 1 {
+		t.Errorf("OnQueryAbort fired %d times, want 1 for non-forwarded query", hooks.queryAborts)
+	}
+}
+
+type inputCompleteHooks struct {
+	plugin.NoopHooks
+	mu             sync.Mutex
+	inputCompletes int
+}
+
+type pipelineHooks struct {
+	plugin.NoopHooks
+	mu       sync.Mutex
+	queries  int
+	abortIDs []string
+}
+
+type rejectedPipelineHooks struct {
+	pipelineHooks
+}
+
+type strictQueryDecodeHooks struct {
+	plugin.NoopHooks
+}
+
+func (*strictQueryDecodeHooks) RejectUndecodableQuery(chsession.Session) bool { return true }
+
+func (h *rejectedPipelineHooks) OnQuery(_ context.Context, _ *plugin.QueryContext) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.queries++
+	return errors.New("reject first query")
+}
+
+func (h *pipelineHooks) OnQuery(_ context.Context, _ *plugin.QueryContext) error {
+	h.mu.Lock()
+	h.queries++
+	h.mu.Unlock()
+	return nil
+}
+
+func (h *pipelineHooks) OnQueryAbort(_ context.Context, qctx *plugin.QueryContext) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if qctx != nil && qctx.Query != nil {
+		h.abortIDs = append(h.abortIDs, qctx.Query.ID)
+	}
+}
+
+func TestRelay_ClientToUpstream_RejectsPipelinedQueryBeforeInputComplete(t *testing.T) {
+	clientProxy, proxyClient := net.Pipe()
+	upstreamProxy, proxyUpstream := net.Pipe()
+	defer clientProxy.Close()
+	defer upstreamProxy.Close()
+
+	const rev = 54453
+	upstreamPackets := make(chan []uint64, 1)
+	go func() {
+		codec := chproto.NewCodec(upstreamProxy, chproto.DirFromClient)
+		codec.SetRevision(rev)
+		var types []uint64
+		pkt, err := codec.ReadPacket(uint64(chproto.ClientQueryCode))
+		if err == nil && pkt != nil {
+			types = append(types, pkt.Type)
+		}
+		_ = upstreamProxy.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+		pkt, err = codec.ReadPacket(uint64(chproto.ClientQueryCode))
+		if err == nil && pkt != nil {
+			types = append(types, pkt.Type)
+		}
+		upstreamPackets <- types
+	}()
+	go func() {
+		for _, id := range []string{"query-a", "query-b"} {
+			var qb proto.Buffer
+			(&proto.Query{
+				ID: id, Body: "INSERT INTO t VALUES (1)",
+				Info: proto.ClientInfo{
+					ProtocolVersion: rev, Major: 24, Minor: 1,
+					Interface: proto.InterfaceTCP,
+					Query:     proto.ClientQueryInitial,
+				},
+			}).EncodeAware(&qb, rev)
+			_, _ = clientProxy.Write(qb.Buf)
+		}
+		buf := make([]byte, 1024)
+		_ = clientProxy.SetReadDeadline(time.Now().Add(time.Second))
+		_, _ = clientProxy.Read(buf)
+		_ = clientProxy.Close()
+	}()
+
+	sess := chsession.New(1, proxyClient)
+	sess.Client().SetRevision(rev)
+	up := chproto.NewCodec(proxyUpstream, chproto.DirToUpstream)
+	up.SetRevision(rev)
+	if err := sess.BindUpstream(context.Background(), up); err != nil {
+		t.Fatalf("BindUpstream: %v", err)
+	}
+	hooks := &pipelineHooks{}
+	r := &Relay{sess: sess, hooks: hooks}
+	err := r.clientToUpstream(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "before completing input") {
+		t.Fatalf("clientToUpstream err = %v, want pipelined query rejection", err)
+	}
+	_ = proxyUpstream.Close()
+	types := <-upstreamPackets
+	if len(types) != 1 || types[0] != uint64(chproto.ClientQueryCode) {
+		t.Fatalf("upstream packet types = %v, want only first Query", types)
+	}
+	hooks.mu.Lock()
+	defer hooks.mu.Unlock()
+	if hooks.queries != 1 {
+		t.Fatalf("OnQuery calls = %d, want only first query admitted", hooks.queries)
+	}
+	if len(hooks.abortIDs) != 1 || hooks.abortIDs[0] != "query-a" {
+		t.Fatalf("abort IDs = %v, want [query-a]", hooks.abortIDs)
+	}
+}
+
+func TestRelay_ClientToUpstream_RejectsNewQueryBeforeRejectedInputIsDrained(t *testing.T) {
+	clientProxy, proxyClient := net.Pipe()
+	upstreamProxy, proxyUpstream := net.Pipe()
+	defer clientProxy.Close()
+	defer upstreamProxy.Close()
+
+	const rev = 54453
+	upstreamBytes := make(chan int, 1)
+	go func() {
+		_ = upstreamProxy.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		buf := make([]byte, 1024)
+		n, _ := upstreamProxy.Read(buf)
+		upstreamBytes <- n
+	}()
+	go func() {
+		writeQuery := func(id string) {
+			var qb proto.Buffer
+			(&proto.Query{
+				ID: id, Body: "INSERT INTO t VALUES (1)",
+				Info: proto.ClientInfo{
+					ProtocolVersion: rev, Major: 24, Minor: 1,
+					Interface: proto.InterfaceTCP,
+					Query:     proto.ClientQueryInitial,
+				},
+			}).EncodeAware(&qb, rev)
+			_, _ = clientProxy.Write(qb.Buf)
+		}
+		writeQuery("query-a")
+		buf := make([]byte, 1024)
+		_ = clientProxy.SetReadDeadline(time.Now().Add(time.Second))
+		_, _ = clientProxy.Read(buf)
+		writeQuery("query-b")
+		_, _ = clientProxy.Read(buf)
+		_ = clientProxy.Close()
+	}()
+
+	sess := chsession.New(1, proxyClient)
+	sess.Client().SetRevision(rev)
+	up := chproto.NewCodec(proxyUpstream, chproto.DirToUpstream)
+	up.SetRevision(rev)
+	if err := sess.BindUpstream(context.Background(), up); err != nil {
+		t.Fatalf("BindUpstream: %v", err)
+	}
+	hooks := &rejectedPipelineHooks{}
+	r := &Relay{sess: sess, hooks: hooks}
+	err := r.clientToUpstream(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "before completing rejected input") {
+		t.Fatalf("clientToUpstream err = %v, want rejected-input pipeline rejection", err)
+	}
+	if n := <-upstreamBytes; n != 0 {
+		t.Fatalf("upstream received %d bytes, want none", n)
+	}
+	hooks.mu.Lock()
+	defer hooks.mu.Unlock()
+	if hooks.queries != 1 {
+		t.Fatalf("OnQuery calls = %d, want only rejected query-a", hooks.queries)
+	}
+	if len(hooks.abortIDs) != 1 || hooks.abortIDs[0] != "query-a" {
+		t.Fatalf("abort IDs = %v, want [query-a]", hooks.abortIDs)
+	}
+}
+
+func TestRelay_ClientToUpstream_DrainsCompressedDataAfterQueryRejection(t *testing.T) {
+	clientProxy, proxyClient := net.Pipe()
+	upstreamProxy, proxyUpstream := net.Pipe()
+	defer clientProxy.Close()
+	defer upstreamProxy.Close()
+
+	const rev = 54453
+	upstreamBytes := make(chan int, 1)
+	go func() {
+		_ = upstreamProxy.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		buf := make([]byte, 1024)
+		n, _ := upstreamProxy.Read(buf)
+		upstreamBytes <- n
+	}()
+	go func() {
+		var qb proto.Buffer
+		(&proto.Query{
+			ID: "query-a", Body: "INSERT INTO t VALUES (1)",
+			Compression: proto.CompressionEnabled,
+			Info: proto.ClientInfo{
+				ProtocolVersion: rev, Major: 24, Minor: 1,
+				Interface: proto.InterfaceTCP,
+				Query:     proto.ClientQueryInitial,
+			},
+		}).EncodeAware(&qb, rev)
+		_, _ = clientProxy.Write(qb.Buf)
+		buf := make([]byte, 1024)
+		_ = clientProxy.SetReadDeadline(time.Now().Add(time.Second))
+		_, _ = clientProxy.Read(buf)
+
+		writer := chproto.NewCodec(clientProxy, chproto.DirFromClient)
+		writer.SetCompression(proto.CompressionEnabled)
+		_ = writer.WriteEmptyDataBlock()
+		_ = clientProxy.Close()
+	}()
+
+	sess := chsession.New(1, proxyClient)
+	sess.Client().SetRevision(rev)
+	up := chproto.NewCodec(proxyUpstream, chproto.DirToUpstream)
+	up.SetRevision(rev)
+	if err := sess.BindUpstream(context.Background(), up); err != nil {
+		t.Fatalf("BindUpstream: %v", err)
+	}
+	hooks := &rejectedPipelineHooks{}
+	r := &Relay{sess: sess, hooks: hooks}
+	err := r.clientToUpstream(context.Background())
+	if err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("clientToUpstream: %v", err)
+	}
+	if n := <-upstreamBytes; n != 0 {
+		t.Fatalf("upstream received %d bytes, want none", n)
+	}
+}
+
+func TestRelay_ClientToUpstream_StrictPolicyRejectsUndecodableQuery(t *testing.T) {
+	clientProxy, proxyClient := net.Pipe()
+	upstreamProxy, proxyUpstream := net.Pipe()
+	defer clientProxy.Close()
+	defer upstreamProxy.Close()
+
+	upstreamBytes := make(chan int, 1)
+	go func() {
+		_ = upstreamProxy.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		buf := make([]byte, 1024)
+		n, _ := upstreamProxy.Read(buf)
+		upstreamBytes <- n
+	}()
+	go func() {
+		malformed := append([]byte{byte(chproto.ClientQueryCode)}, bytes.Repeat([]byte{0xff}, 10)...)
+		_, _ = clientProxy.Write(malformed)
+		buf := make([]byte, 1024)
+		_ = clientProxy.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		_, _ = clientProxy.Read(buf)
+		_ = clientProxy.Close()
+	}()
+
+	const rev = 54453
+	sess := chsession.New(1, proxyClient)
+	sess.Client().SetRevision(rev)
+	up := chproto.NewCodec(proxyUpstream, chproto.DirToUpstream)
+	up.SetRevision(rev)
+	if err := sess.BindUpstream(context.Background(), up); err != nil {
+		t.Fatalf("BindUpstream: %v", err)
+	}
+	r := &Relay{sess: sess, hooks: &strictQueryDecodeHooks{}}
+	err := r.clientToUpstream(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "strict query decode") {
+		t.Fatalf("clientToUpstream err = %v, want strict query decode rejection", err)
+	}
+	if n := <-upstreamBytes; n != 0 {
+		t.Fatalf("upstream received %d bytes, want none", n)
+	}
+}
+
+func (h *inputCompleteHooks) OnQueryInputComplete(_ context.Context, _ *plugin.QueryContext) {
+	h.mu.Lock()
+	h.inputCompletes++
+	h.mu.Unlock()
+}
+
+func TestRelay_ClientToUpstream_FiresInputCompleteAfterEmptyData(t *testing.T) {
+	clientProxy, proxyClient := net.Pipe()
+	upstreamProxy, proxyUpstream := net.Pipe()
+	defer clientProxy.Close()
+	defer upstreamProxy.Close()
+
+	const rev = 54453
+	go func() {
+		_, _ = io.Copy(io.Discard, upstreamProxy)
+	}()
+	go func() {
+		var qb proto.Buffer
+		(&proto.Query{
+			ID: "qid", Body: "INSERT INTO t VALUES (1)",
+			Info: proto.ClientInfo{
+				ProtocolVersion: rev, Major: 24, Minor: 1,
+				Interface: proto.InterfaceTCP,
+				Query:     proto.ClientQueryInitial,
+			},
+		}).EncodeAware(&qb, rev)
+		_, _ = clientProxy.Write(qb.Buf)
+		writer := chproto.NewCodec(clientProxy, chproto.DirFromClient)
+		writer.SetCompression(proto.CompressionDisabled)
+		_ = writer.WriteEmptyDataBlock()
+		_ = clientProxy.Close()
+	}()
+
+	sess := chsession.New(1, proxyClient)
+	sess.Client().SetRevision(rev)
+	up := chproto.NewCodec(proxyUpstream, chproto.DirToUpstream)
+	up.SetRevision(rev)
+	if err := sess.BindUpstream(context.Background(), up); err != nil {
+		t.Fatalf("BindUpstream: %v", err)
+	}
+	hooks := &inputCompleteHooks{}
+	r := &Relay{sess: sess, hooks: hooks}
+	err := r.clientToUpstream(context.Background())
+	if err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("clientToUpstream: %v", err)
+	}
+	hooks.mu.Lock()
+	defer hooks.mu.Unlock()
+	if hooks.inputCompletes != 1 {
+		t.Fatalf("OnQueryInputComplete fired %d times, want 1", hooks.inputCompletes)
 	}
 }

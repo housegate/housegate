@@ -3,6 +3,7 @@ package chproto
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -65,6 +66,69 @@ func TestSplice_DataBlock_Empty_Uncompressed(t *testing.T) {
 	}
 	if !bytes.Equal(dst.Bytes(), original) {
 		t.Fatalf("Splice dst=%x\nwant     %x", dst.Bytes(), original)
+	}
+}
+
+func TestClientDataPacketIsEmptyUncompressed(t *testing.T) {
+	empty, err := ClientDataPacketIsEmpty(buildEmptyUncompressedDataPacket(t), proto.CompressionDisabled)
+	if err != nil {
+		t.Fatalf("ClientDataPacketIsEmpty: %v", err)
+	}
+	if !empty {
+		t.Fatal("empty ClientData block was not recognized as input completion")
+	}
+}
+
+func TestClientDataPacketIsEmptyRejectsNonEmptyBlock(t *testing.T) {
+	var buf proto.Buffer
+	buf.PutUVarInt(uint64(proto.ClientCodeData))
+	buf.PutString("")
+	(proto.BlockInfo{BucketNum: -1}).Encode(&buf)
+	buf.PutUVarInt(0)
+	buf.PutUVarInt(1)
+
+	empty, err := ClientDataPacketIsEmpty(buf.Buf, proto.CompressionDisabled)
+	if err != nil {
+		t.Fatalf("ClientDataPacketIsEmpty: %v", err)
+	}
+	if empty {
+		t.Fatal("non-empty ClientData block was recognized as input completion")
+	}
+}
+
+func TestClientDataPacketIsEmptyCompressed(t *testing.T) {
+	var wire bytes.Buffer
+	c := NewCodec(&readerWriter{r: &bytes.Buffer{}, w: &wire}, DirFromClient)
+	c.SetCompression(proto.CompressionEnabled)
+	if err := c.WriteEmptyDataBlock(); err != nil {
+		t.Fatalf("WriteEmptyDataBlock: %v", err)
+	}
+
+	empty, err := ClientDataPacketIsEmpty(wire.Bytes(), proto.CompressionEnabled)
+	if err != nil {
+		t.Fatalf("ClientDataPacketIsEmpty: %v", err)
+	}
+	if !empty {
+		t.Fatal("compressed empty ClientData block was not recognized as input completion")
+	}
+}
+
+func TestReadPacketWithDataLimitStopsBeforeBufferingFullPacket(t *testing.T) {
+	original := buildEmptyUncompressedDataPacket(t)
+	source := bytes.NewBuffer(append([]byte(nil), original...))
+	c := NewCodec(&readerWriter{r: source, w: &bytes.Buffer{}}, DirFromClient)
+	c.SetCompression(proto.CompressionDisabled)
+
+	limit := uint64(len(original) - 1)
+	pkt, err := c.ReadPacketWithDataLimit(limit)
+	if !errors.Is(err, ErrPacketTooLarge) {
+		t.Fatalf("ReadPacketWithDataLimit err = %v, want ErrPacketTooLarge", err)
+	}
+	if pkt == nil || uint64(pkt.RawLen) > limit {
+		t.Fatalf("partial packet = %#v, want captured bytes <= %d", pkt, limit)
+	}
+	if uint64(len(c.cap.cap)) > limit || c.br.Buffered() == 0 {
+		t.Fatalf("capture len/buffered = %d/%d, want capture <= %d with unread buffered bytes", len(c.cap.cap), c.br.Buffered(), limit)
 	}
 }
 
