@@ -142,6 +142,7 @@ type Config struct {
 	ConcurrencyLimit concurrency.Config       `json:"concurrency_limit" yaml:"concurrency_limit"`
 	State            sessionstate.Config      `json:"state"             yaml:"state"`
 	LtHash           lthashplugin.Config      `json:"lthash"            yaml:"lthash"`
+	StorageIntegrity StorageIntegrityConfig   `json:"storage_integrity" yaml:"storage_integrity"`
 
 	// --- Plumbing sections owned by pkg/config ---
 
@@ -344,6 +345,9 @@ func (c *Config) Validate() error {
 			errs = append(errs, fmt.Errorf("internal_listen: invalid host:port %q: %w", c.InternalListen, err))
 		}
 	}
+	if err := c.StorageIntegrity.validate(c.Mode()); err != nil {
+		errs = append(errs, err)
+	}
 	if err := c.ReplicationProxy.validate(*c, c.Mode()); err != nil {
 		errs = append(errs, err)
 	}
@@ -463,6 +467,7 @@ func Default() Config {
 			Timeout:  Duration{60 * time.Second},
 			FailOpen: true,
 		},
+		StorageIntegrity: defaultStorageIntegrityConfig(),
 
 		// Plumbing sections
 		Logging: LoggingConfig{

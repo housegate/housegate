@@ -94,6 +94,16 @@ func NewEthValidator(addresses []string, maxAge time.Duration, enabled bool, all
 // address; platform-operator is gated on its own allowlist (configured
 // via authplugin.Config.PlatformOperatorAddresses).
 func (v *EthValidator) ValidateQuery(ctx context.Context, meta QueryMeta) (ValidationResult, error) {
+	return v.validateQuery(ctx, meta, "")
+}
+
+// ValidateQueryPurpose validates a normal query JWS and additionally requires
+// the payload purpose claim to match expectedPurpose.
+func (v *EthValidator) ValidateQueryPurpose(ctx context.Context, meta QueryMeta, expectedPurpose string) (ValidationResult, error) {
+	return v.validateQuery(ctx, meta, expectedPurpose)
+}
+
+func (v *EthValidator) validateQuery(ctx context.Context, meta QueryMeta, expectedPurpose string) (ValidationResult, error) {
 	if !v.Enabled {
 		return ValidationResult{}, nil
 	}
@@ -115,9 +125,9 @@ func (v *EthValidator) ValidateQuery(ctx context.Context, meta QueryMeta) (Valid
 		err  error
 	)
 	if strings.HasPrefix(strings.TrimSpace(token), "{") {
-		addr, err = v.validateJWSJSON(token, meta.SQL)
+		addr, err = v.validateJWSJSON(token, meta.SQL, expectedPurpose)
 	} else {
-		addr, err = v.validateJWSCompact(token, meta.SQL)
+		addr, err = v.validateJWSCompact(token, meta.SQL, expectedPurpose)
 	}
 	if err != nil {
 		return ValidationResult{}, err
@@ -166,12 +176,12 @@ func (v *EthValidator) ValidateQuery(ctx context.Context, meta QueryMeta) (Valid
 	return res, nil
 }
 
-func (v *EthValidator) validateJWSCompact(token, sql string) (string, error) {
+func (v *EthValidator) validateJWSCompact(token, sql, expectedPurpose string) (string, error) {
 	header, payload, signature, err := parseJWSCompact(token)
 	if err != nil {
 		return "", fmt.Errorf("invalid JWS token: %w", err)
 	}
-	if err := v.verifyPayloadAndHeader(header, payload, sql); err != nil {
+	if err := v.verifyPayloadAndHeader(header, payload, sql, expectedPurpose); err != nil {
 		return "", err
 	}
 	signingInput := token[:strings.LastIndex(token, ".")]
@@ -186,7 +196,7 @@ func (v *EthValidator) validateJWSCompact(token, sql string) (string, error) {
 	return recoveredAddr, nil
 }
 
-func (v *EthValidator) validateJWSJSON(token, sql string) (string, error) {
+func (v *EthValidator) validateJWSJSON(token, sql, expectedPurpose string) (string, error) {
 	var jws JWSJSON
 	if err := json.Unmarshal([]byte(token), &jws); err != nil {
 		return "", fmt.Errorf("invalid JWS JSON: %w", err)
@@ -214,7 +224,7 @@ func (v *EthValidator) validateJWSJSON(token, sql string) (string, error) {
 		if err := json.Unmarshal(headerBytes, &header); err != nil {
 			return "", fmt.Errorf("sig[%d]: invalid header JSON: %w", i, err)
 		}
-		if err := v.verifyPayloadAndHeader(header, payload, sql); err != nil {
+		if err := v.verifyPayloadAndHeader(header, payload, sql, expectedPurpose); err != nil {
 			return "", fmt.Errorf("sig[%d]: %w", i, err)
 		}
 		signatureBytes, err := base64.RawURLEncoding.DecodeString(sig.Signature)
@@ -284,7 +294,7 @@ func isDriver(settings map[string]string) bool {
 	return v == "1" || strings.EqualFold(v, "true")
 }
 
-func (v *EthValidator) verifyPayloadAndHeader(header JWSHeader, payload JWSPayload, sql string) error {
+func (v *EthValidator) verifyPayloadAndHeader(header JWSHeader, payload JWSPayload, sql, expectedPurpose string) error {
 	if header.Alg != "ES256K" && header.Alg != "secp256k1" {
 		return fmt.Errorf("unsupported algorithm: %s", header.Alg)
 	}
@@ -305,6 +315,9 @@ func (v *EthValidator) verifyPayloadAndHeader(header JWSHeader, payload JWSPaylo
 	expectedHash := keccak256Hex([]byte(sql))
 	if !strings.EqualFold(payload.QueryHash, expectedHash) {
 		return fmt.Errorf("query hash mismatch: expected %s, got %s", expectedHash, payload.QueryHash)
+	}
+	if expectedPurpose != "" && payload.Purpose != expectedPurpose {
+		return fmt.Errorf("purpose mismatch: expected %q, got %q", expectedPurpose, payload.Purpose)
 	}
 	return nil
 }

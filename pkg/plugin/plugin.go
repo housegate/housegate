@@ -26,6 +26,13 @@ type QueryPlugin interface {
 	OnQuery(ctx context.Context, qctx *QueryContext) error
 }
 
+// StrictQueryDecodePlugin opts a query plugin into fail-closed handling when
+// Relay cannot decode a client Query packet. Plugins that authenticate or
+// authorize SQL must enable this policy to avoid the legacy raw-splice fallback.
+type StrictQueryDecodePlugin interface {
+	RejectUndecodableQuery() bool
+}
+
 // QueryCompletePlugin participates in the OnQueryComplete chain.
 //
 // OnQueryComplete fires exactly once per client Query packet, when its
@@ -46,6 +53,24 @@ type QueryCompletePlugin interface {
 	OnQueryComplete(ctx context.Context, sess chsession.Session)
 }
 
+// QueryInputCompletePlugin observes the protocol-level end of one client query
+// input after its terminating empty Data block has been forwarded upstream.
+type QueryInputCompletePlugin interface {
+	OnQueryInputComplete(ctx context.Context, qctx *QueryContext)
+}
+
+// QueryAbortPlugin participates in the OnQueryAbort chain.
+//
+// OnQueryAbort fires when Relay rejects a query lifecycle. Earlier Query or Data
+// packets may already have reached ClickHouse, but the rejected packet itself is
+// not forwarded. It is intentionally separate from OnQueryComplete: existing
+// plugins still use complete as the release point for per-query resources, while
+// correctness-sensitive plugins discard state that must not survive a partial
+// or rejected query lifecycle.
+type QueryAbortPlugin interface {
+	OnQueryAbort(ctx context.Context, qctx *QueryContext)
+}
+
 // ExceptionPlugin participates in the OnException chain.
 //
 // Unlike OnQuery, every ExceptionPlugin runs even if an earlier plugin
@@ -63,16 +88,31 @@ type ClosePlugin interface {
 }
 
 // DataPlugin observes raw client Data packets — the streamed body of an
-// INSERT — between OnQuery and OnQueryComplete. raw is the full on-wire
-// packet (type varint + block name + block body) and MUST NOT be retained
-// or mutated: the relay splices the very same bytes to the upstream after
-// the hook returns. qctx is the QueryContext of the most recent Query on
-// the session, or nil when data arrives without one (the chain skips
-// dispatch in that case). Hook errors are logged by the relay and never
-// abort the connection (fail-open) — implementations should also degrade
-// internally rather than error per packet.
+// INSERT — during that query's client-input lifecycle. raw is the full on-wire
+// packet (type varint + block name + block body) and MUST NOT be retained or
+// mutated: the relay splices the very same bytes to the upstream after the hook
+// returns. qctx identifies the query that owns the packet. Hook errors are
+// logged by the relay and never abort the connection (fail-open) —
+// implementations should also degrade internally rather than error per packet.
 type DataPlugin interface {
 	OnClientData(ctx context.Context, qctx *QueryContext, raw []byte) error
+}
+
+// StrictDataPlugin observes raw client Data packets before the relay splices
+// them upstream. Unlike DataPlugin, an error is fail-closed: Relay rejects the
+// current query lifecycle and does not forward that Data packet.
+//
+// Use this only for protocol-critical lanes where forwarding bytes without a
+// successful capture would violate correctness. Observability should continue
+// using DataPlugin.
+type StrictDataPlugin interface {
+	OnClientDataStrict(ctx context.Context, qctx *QueryContext, raw []byte) error
+}
+
+// StrictDataLimitPlugin provides the remaining on-wire ClientData byte budget
+// so Relay can reject an oversized packet while the codec is still reading it.
+type StrictDataLimitPlugin interface {
+	ClientDataReadLimit(qctx *QueryContext) (maxBytes uint64, enforce bool)
 }
 
 // HandshakeCompletePlugin participates in OnHandshakeComplete, fired

@@ -73,6 +73,53 @@ func (f *fakeQueryPlugin) OnQuery(_ context.Context, qctx *QueryContext) error {
 	return f.returnErr
 }
 
+type fakeStrictDataPlugin struct {
+	name      string
+	called    *[]string
+	returnErr error
+}
+
+func (f *fakeStrictDataPlugin) OnClientDataStrict(_ context.Context, _ *QueryContext, _ []byte) error {
+	*f.called = append(*f.called, f.name)
+	return f.returnErr
+}
+
+type fakeDataPlugin struct {
+	name   string
+	called *[]string
+}
+
+func (f *fakeDataPlugin) OnClientData(_ context.Context, _ *QueryContext, _ []byte) error {
+	*f.called = append(*f.called, f.name)
+	return nil
+}
+
+type fakeStrictDataLimitPlugin struct {
+	fakeStrictDataPlugin
+	limit   uint64
+	enforce bool
+}
+
+type fakeStrictQueryDecodePlugin struct {
+	fakeQueryPlugin
+	reject bool
+}
+
+func (f *fakeStrictQueryDecodePlugin) RejectUndecodableQuery() bool { return f.reject }
+
+func (f *fakeStrictDataLimitPlugin) ClientDataReadLimit(*QueryContext) (uint64, bool) {
+	return f.limit, f.enforce
+}
+
+type fakeQueryInputCompletePlugin struct {
+	name   string
+	called *[]string
+}
+
+func (f *fakeQueryInputCompletePlugin) OnQueryInputComplete(_ context.Context, _ *QueryContext) {
+	*f.called = append(*f.called, f.name)
+}
+
 func TestPluginChain_OnQuery_RunsInOrder(t *testing.T) {
 	var called []string
 	chain := &PluginChain{
@@ -151,6 +198,82 @@ func TestPluginChain_OnQuery_ShortCircuitsOnError(t *testing.T) {
 	}
 }
 
+func TestPluginChain_RejectUndecodableQueryUsesEnabledStrictPolicy(t *testing.T) {
+	var called []string
+	chain := &PluginChain{QueryPlugins: []QueryPlugin{
+		&fakeStrictQueryDecodePlugin{
+			fakeQueryPlugin: fakeQueryPlugin{name: "disabled", called: &called},
+			reject:          false,
+		},
+		&fakeStrictQueryDecodePlugin{
+			fakeQueryPlugin: fakeQueryPlugin{name: "storage-integrity", called: &called},
+			reject:          true,
+		},
+	}}
+	if !chain.RejectUndecodableQuery(newFakeSession()) {
+		t.Fatal("RejectUndecodableQuery = false, want true")
+	}
+}
+
+func TestPluginChain_OnClientDataStrictShortCircuitsBeforeFailOpenData(t *testing.T) {
+	var called []string
+	chain := &PluginChain{
+		StrictDataPlugins: []StrictDataPlugin{
+			&fakeStrictDataPlugin{name: "capture", called: &called, returnErr: errors.New("reject data")},
+			&fakeStrictDataPlugin{name: "after", called: &called},
+		},
+		DataPlugins: []DataPlugin{
+			&fakeDataPlugin{name: "observer", called: &called},
+		},
+	}
+	qctx := &QueryContext{Session: newFakeSession(), Query: &chproto.Query{Body: "INSERT INTO t"}}
+	err := chain.OnClientDataStrict(context.Background(), qctx, []byte{1, 2, 3})
+	if err == nil || err.Error() != "reject data" {
+		t.Fatalf("OnClientDataStrict err = %v, want reject data", err)
+	}
+	if len(called) != 1 || called[0] != "capture" {
+		t.Fatalf("called = %v, want only strict capture before fail-open data", called)
+	}
+}
+
+func TestPluginChain_ClientDataReadLimitUsesSmallestEnforcedLimit(t *testing.T) {
+	var called []string
+	chain := &PluginChain{StrictDataPlugins: []StrictDataPlugin{
+		&fakeStrictDataLimitPlugin{
+			fakeStrictDataPlugin: fakeStrictDataPlugin{name: "large", called: &called},
+			limit:                128,
+			enforce:              true,
+		},
+		&fakeStrictDataLimitPlugin{
+			fakeStrictDataPlugin: fakeStrictDataPlugin{name: "disabled", called: &called},
+			limit:                1,
+			enforce:              false,
+		},
+		&fakeStrictDataLimitPlugin{
+			fakeStrictDataPlugin: fakeStrictDataPlugin{name: "small", called: &called},
+			limit:                64,
+			enforce:              true,
+		},
+	}}
+	qctx := &QueryContext{Session: newFakeSession(), Query: &chproto.Query{Body: "INSERT INTO t"}}
+	limit, enforce := chain.ClientDataReadLimit(qctx)
+	if !enforce || limit != 64 {
+		t.Fatalf("ClientDataReadLimit = (%d, %t), want (64, true)", limit, enforce)
+	}
+}
+
+func TestPluginChain_OnQueryInputCompleteRunsInOrder(t *testing.T) {
+	var called []string
+	chain := &PluginChain{QueryInputCompletePlugins: []QueryInputCompletePlugin{
+		&fakeQueryInputCompletePlugin{name: "capture", called: &called},
+		&fakeQueryInputCompletePlugin{name: "audit", called: &called},
+	}}
+	chain.OnQueryInputComplete(context.Background(), &QueryContext{Session: newFakeSession()})
+	if len(called) != 2 || called[0] != "capture" || called[1] != "audit" {
+		t.Fatalf("called=%v, want [capture audit]", called)
+	}
+}
+
 // --- Route-aware behaviour ---
 
 // fakeRoutedQueryPlugin is a QueryPlugin that opts into routed sessions
@@ -201,6 +324,21 @@ type fakeRoutedQueryCompletePlugin struct {
 }
 
 func (*fakeRoutedQueryCompletePlugin) RunOnRouted() bool { return true }
+
+type fakeQueryAbortPlugin struct {
+	name   string
+	called *[]string
+}
+
+func (f *fakeQueryAbortPlugin) OnQueryAbort(_ context.Context, _ *QueryContext) {
+	*f.called = append(*f.called, f.name)
+}
+
+type fakeRoutedQueryAbortPlugin struct {
+	fakeQueryAbortPlugin
+}
+
+func (*fakeRoutedQueryAbortPlugin) RunOnRouted() bool { return true }
 
 type fakeExceptionPlugin struct {
 	name   string
@@ -335,6 +473,36 @@ func TestPluginChain_OnException_SkipsNonRouteAwareOnRouted(t *testing.T) {
 	}
 	if len(called) != 0 {
 		t.Fatalf("called=%v, expected nothing on routed session", called)
+	}
+}
+
+func TestPluginChain_OnQueryAbort_RunsAbortPlugins(t *testing.T) {
+	var called []string
+	chain := &PluginChain{
+		QueryAbortPlugins: []QueryAbortPlugin{
+			&fakeQueryAbortPlugin{name: "capture", called: &called},
+			&fakeQueryAbortPlugin{name: "audit", called: &called},
+		},
+	}
+	chain.OnQueryAbort(context.Background(), &QueryContext{Session: newFakeSession()})
+	if len(called) != 2 || called[0] != "capture" || called[1] != "audit" {
+		t.Fatalf("called=%v, want [capture audit]", called)
+	}
+}
+
+func TestPluginChain_OnQueryAbort_SkipsNonRouteAwareOnRouted(t *testing.T) {
+	var called []string
+	chain := &PluginChain{
+		QueryAbortPlugins: []QueryAbortPlugin{
+			&fakeQueryAbortPlugin{name: "capture", called: &called},
+			&fakeRoutedQueryAbortPlugin{fakeQueryAbortPlugin{name: "metrics", called: &called}},
+		},
+	}
+	sess := newFakeSession()
+	sess.State().SetRouteTarget("peer:9000")
+	chain.OnQueryAbort(context.Background(), &QueryContext{Session: sess})
+	if len(called) != 1 || called[0] != "metrics" {
+		t.Fatalf("called=%v, want [metrics]", called)
 	}
 }
 

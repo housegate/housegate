@@ -299,14 +299,39 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 	// forwarded Query — Data packets that follow belong to it. It is the
 	// context handed to OnClientData; nil means "no query owns the data"
 	// (rejected query, or data before any query) and the hook is skipped.
-	var curQctx *plugin.QueryContext
+	var (
+		curQctx      *plugin.QueryContext
+		rejectedQctx *plugin.QueryContext
+	)
 	for {
 		up := r.sess.Upstream() // atomic: picks up rebinds (future C3)
 		if up == nil {
 			return chsession.ErrNoUpstream
 		}
 
-		pkt, decErr := client.ReadPacket(uint64(chproto.ClientQueryCode))
+		limitQctx := curQctx
+		if limitQctx == nil {
+			limitQctx = rejectedQctx
+		}
+		limit, enforceLimit := r.hooks.ClientDataReadLimit(limitQctx)
+		var (
+			pkt    *chproto.Packet
+			decErr error
+		)
+		if enforceLimit {
+			pkt, decErr = client.ReadPacketWithDataLimit(limit, uint64(chproto.ClientQueryCode))
+		} else {
+			pkt, decErr = client.ReadPacket(uint64(chproto.ClientQueryCode))
+		}
+		if errors.Is(decErr, chproto.ErrPacketTooLarge) {
+			err := fmt.Errorf("client Data packet exceeds remaining payload limit %d: %w", limit, decErr)
+			r.writeExceptionToClient(ctx, err)
+			if limitQctx != nil {
+				r.hooks.OnQueryAbort(ctx, limitQctx)
+				r.hooks.OnQueryComplete(ctx, r.sess)
+			}
+			return err
+		}
 		if errors.Is(decErr, io.EOF) {
 			return io.EOF
 		}
@@ -315,6 +340,11 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 		}
 		if decErr != nil && !errors.Is(decErr, chproto.ErrDecode) {
 			return decErr
+		}
+		if errors.Is(decErr, chproto.ErrDecode) && pkt.Type == uint64(chproto.ClientQueryCode) && r.hooks.RejectUndecodableQuery(r.sess) {
+			err := fmt.Errorf("strict query decode: %w", decErr)
+			r.writeExceptionToClient(ctx, err)
+			return err
 		}
 
 		// Wire-level counters. Emit for every successful ReadPacket
@@ -335,6 +365,10 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 
 		if decErr == nil && pkt.Decoded != nil && pkt.Type == uint64(chproto.ClientQueryCode) {
 			q := pkt.Decoded.(*chproto.Query)
+			clientCompression := q.Compression
+			// ClientData framing is declared by the Query packet even when the
+			// query is rejected and its remaining input must only be drained.
+			client.SetCompression(clientCompression)
 			qctx := &plugin.QueryContext{
 				Session:     r.sess,
 				OriginalSQL: q.Body,
@@ -346,11 +380,24 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 				"sql_len", len(q.Body),
 				"settings", len(q.Settings),
 			)
-			curQctx = nil
+			if curQctx != nil {
+				err := fmt.Errorf("client sent query %q before completing input for query %q", q.ID, curQctx.Query.ID)
+				r.writeExceptionToClient(ctx, err)
+				r.hooks.OnQueryAbort(ctx, curQctx)
+				r.hooks.OnQueryComplete(ctx, r.sess)
+				return err
+			}
+			if rejectedQctx != nil {
+				err := fmt.Errorf("client sent query %q before completing rejected input for query %q", q.ID, rejectedQctx.Query.ID)
+				r.writeExceptionToClient(ctx, err)
+				return err
+			}
 			if err := r.hooks.OnQuery(ctx, qctx); err != nil {
 				r.writeExceptionToClient(ctx, err)
 				// Chain rejected the query — its lifecycle ends here.
+				r.hooks.OnQueryAbort(ctx, qctx)
 				r.hooks.OnQueryComplete(ctx, r.sess)
+				rejectedQctx = qctx
 				continue
 			}
 			// AbortWithSuccess: a plugin (commitgate via ErrAbortWithSuccess)
@@ -359,6 +406,7 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 			// single-byte EndOfStream packet, fire OnQueryComplete to release
 			// per-query state, and skip forwarding.
 			if qctx.AbortWithSuccess {
+				r.hooks.OnQueryAbort(ctx, qctx)
 				if err := writeEndOfStreamToClient(client.Conn()); err != nil {
 					// Transport-level failure on the client socket; treat
 					// the same as any other unrecoverable client write —
@@ -368,6 +416,7 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 					return fmt.Errorf("write end-of-stream: %w", err)
 				}
 				r.hooks.OnQueryComplete(ctx, r.sess)
+				rejectedQctx = qctx
 				continue
 			}
 			// Re-fetch upstream after OnQuery: a USE-triggered pivot
@@ -377,16 +426,18 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 			// write to a closed connection — always refresh here.
 			up = r.sess.Upstream()
 			if up == nil {
+				r.hooks.OnQueryAbort(ctx, qctx)
 				r.hooks.OnQueryComplete(ctx, r.sess)
 				return chsession.ErrNoUpstream
 			}
-			// Wire compression mode into both codecs so subsequent Data blocks
-			// are framed correctly (Known Risk #1).
-			up.SetCompression(qctx.Query.Compression)
-			client.SetCompression(qctx.Query.Compression)
+			// Raw ClientData is not transcoded, so plugins cannot change the
+			// compression mode declared by the client Query.
+			qctx.Query.Compression = clientCompression
+			up.SetCompression(clientCompression)
 			if err := up.WriteQuery(qctx.Query); err != nil {
 				// Forwarding failed — fire OnQueryComplete so per-query
 				// resources held by plugins are released before we tear down.
+				r.hooks.OnQueryAbort(ctx, qctx)
 				r.hooks.OnQueryComplete(ctx, r.sess)
 				return fmt.Errorf("forward query to %s: %w", upstreamAddr(up), err)
 			}
@@ -409,10 +460,35 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 			continue
 		}
 
-		// Data packets belong to the most recent forwarded query; hand
-		// the raw bytes to DataPlugins before splicing. Fail-open: a
-		// hook error must never take down the connection.
+		// Data packets belong to the most recent forwarded query. Strict
+		// capture hooks run before splice and may fail closed; legacy
+		// DataPlugins remain fail-open observers.
+		inputComplete := false
 		if pkt.Type == uint64(chproto.ClientDataCode) {
+			var err error
+			inputComplete, err = chproto.ClientDataPacketIsEmpty(pkt.Raw, client.Compression())
+			if err != nil {
+				if curQctx != nil {
+					r.hooks.OnQueryAbort(ctx, curQctx)
+					r.hooks.OnQueryComplete(ctx, r.sess)
+				}
+				return fmt.Errorf("classify client data packet: %w", err)
+			}
+			if rejectedQctx != nil {
+				if inputComplete {
+					rejectedQctx = nil
+				}
+				continue
+			}
+			if curQctx == nil {
+				return fmt.Errorf("client Data packet has no active query")
+			}
+			if err := r.hooks.OnClientDataStrict(ctx, curQctx, pkt.Raw); err != nil {
+				r.writeExceptionToClient(ctx, err)
+				r.hooks.OnQueryAbort(ctx, curQctx)
+				r.hooks.OnQueryComplete(ctx, r.sess)
+				return fmt.Errorf("client data strict hook: %w", err)
+			}
 			if err := r.hooks.OnClientData(ctx, curQctx, pkt.Raw); err != nil {
 				logger.Warnw("client data hook failed (fail-open)",
 					"raw_len", pkt.RawLen,
@@ -429,6 +505,10 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 		)
 		if err := client.Splice(up.Conn(), pkt); err != nil {
 			return fmt.Errorf("splice client→upstream type=%d: %w", pkt.Type, err)
+		}
+		if inputComplete {
+			r.hooks.OnQueryInputComplete(ctx, curQctx)
+			curQctx = nil
 		}
 	}
 }

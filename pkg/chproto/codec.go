@@ -120,6 +120,17 @@ func (c *Codec) Compression() proto.Compression { return proto.Compression(c.com
 //	                   falls back to Splice(Raw) — this function populates
 //	                   both Raw and the Decode error.
 func (c *Codec) ReadPacket(decodeTypes ...uint64) (*Packet, error) {
+	return c.readPacket(0, false, decodeTypes...)
+}
+
+// ReadPacketWithDataLimit is ReadPacket with an on-wire byte limit applied to
+// ClientData packets while they are being captured. Other packet types are not
+// limited by this method.
+func (c *Codec) ReadPacketWithDataLimit(maxDataBytes uint64, decodeTypes ...uint64) (*Packet, error) {
+	return c.readPacket(maxDataBytes, true, decodeTypes...)
+}
+
+func (c *Codec) readPacket(maxDataBytes uint64, enforceDataLimit bool, decodeTypes ...uint64) (*Packet, error) {
 	// The 1-byte-at-a-time capture reader guarantees proto.Reader's inner
 	// bufio is empty at a packet boundary, so it's safe to drop the capture
 	// buffer from the previous packet here.
@@ -128,6 +139,12 @@ func (c *Codec) ReadPacket(decodeTypes ...uint64) (*Packet, error) {
 	typeVar, err := c.r.UVarInt()
 	if err != nil {
 		return nil, err // includes io.EOF
+	}
+	if c.dir == DirFromClient && typeVar == uint64(proto.ClientCodeData) && enforceDataLimit {
+		if err := c.cap.setLimit(maxDataBytes); err != nil {
+			raw := c.cap.snapshot()
+			return &Packet{Type: typeVar, RawLen: len(raw), Raw: raw}, err
+		}
 	}
 
 	wantDecode := false
@@ -419,6 +436,9 @@ func (c *Codec) WriteEmptyDataBlock() error {
 // byte-by-byte discipline would force millions of function calls per MB of
 // payload for no benefit.
 func (c *Codec) readFullRaw(n int) ([]byte, error) {
+	if c.cap.wouldExceed(n) {
+		return nil, ErrPacketTooLarge
+	}
 	buf := make([]byte, n)
 	if _, err := io.ReadFull(c.br, buf); err != nil {
 		return nil, err
@@ -454,8 +474,10 @@ func (c *Codec) ReadRaw(p []byte) (int, error) {
 //
 // See Codec's type doc for the full rationale.
 type captureByteReader struct {
-	br  *bufio.Reader
-	cap []byte
+	br      *bufio.Reader
+	cap     []byte
+	limit   int
+	limited bool
 }
 
 func newCaptureByteReader(br *bufio.Reader) *captureByteReader {
@@ -467,6 +489,9 @@ func newCaptureByteReader(br *bufio.Reader) *captureByteReader {
 func (c *captureByteReader) Read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
+	}
+	if c.wouldExceed(1) {
+		return 0, ErrPacketTooLarge
 	}
 	b, err := c.br.ReadByte()
 	if err != nil {
@@ -489,6 +514,26 @@ func (c *captureByteReader) appendRaw(b []byte) {
 // inner bufio holds no unconsumed bytes at that point.
 func (c *captureByteReader) reset() {
 	c.cap = c.cap[:0]
+	c.limit = 0
+	c.limited = false
+}
+
+func (c *captureByteReader) setLimit(max uint64) error {
+	c.limited = true
+	maxInt := int(^uint(0) >> 1)
+	if max > uint64(maxInt) {
+		c.limit = maxInt
+	} else {
+		c.limit = int(max)
+	}
+	if len(c.cap) > c.limit {
+		return ErrPacketTooLarge
+	}
+	return nil
+}
+
+func (c *captureByteReader) wouldExceed(additional int) bool {
+	return c.limited && additional > c.limit-len(c.cap)
 }
 
 // snapshot returns an independent copy of the capture — callers stash this
