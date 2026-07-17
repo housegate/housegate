@@ -325,4 +325,4 @@ jobs:
       darwin_sha: ${{ needs.release.outputs.darwin_sha }}
       linux_sha: ${{ needs.release.outputs.linux_sha }}
     secrets:
-      HOMEBREW_SYNC_APP_PRIVATE_KEY: ${{ secrets.HOMEBREW_SYNC_APP_PRIVATE_KEY }}
+      HOMEBREW_SYNC_TOKEN: ${{ secrets.HOMEBREW_SYNC_TOKEN }}

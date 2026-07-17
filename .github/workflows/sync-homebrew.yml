@@ -16,7 +16,7 @@ on:
         required: true
         type: string
     secrets:
-      HOMEBREW_SYNC_APP_PRIVATE_KEY:
+      HOMEBREW_SYNC_TOKEN:
         required: true
   workflow_dispatch:
     inputs:
@@ -134,23 +134,14 @@ jobs:
           brew test housegate/housegate/housegate
           echo "sha=$(git -C tap rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Mint tap-only token
-        id: app
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          client-id: ${{ vars.HOMEBREW_SYNC_APP_CLIENT_ID }}
-          private-key: ${{ secrets.HOMEBREW_SYNC_APP_PRIVATE_KEY }}
-          owner: housegate
-          repositories: homebrew-housegate
-          permission-contents: write
-
       - name: Checkout Homebrew tap for publishing
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           repository: housegate/homebrew-housegate
           ref: main
           path: publish-tap
-          token: ${{ steps.app.outputs.token }}
+          token: ${{ secrets.HOMEBREW_SYNC_TOKEN }}
+          persist-credentials: false
 
       - name: Verify validated tap revision
         env:
@@ -165,31 +156,34 @@ jobs:
           cp tap/Formula/housegate.rb publish-tap/Formula/housegate.rb
           git -C publish-tap diff --check
 
-      - name: Resolve App bot identity
-        id: app_bot
+      - name: Resolve token owner identity
+        id: token_owner
         env:
-          APP_SLUG: ${{ steps.app.outputs.app-slug }}
-          GH_TOKEN: ${{ steps.app.outputs.token }}
+          GH_TOKEN: ${{ secrets.HOMEBREW_SYNC_TOKEN }}
         run: |
           set -euo pipefail
-          bot="${APP_SLUG}[bot]"
-          bot_id=$(gh api "/users/${bot}" --jq .id)
-          [[ "$bot_id" =~ ^[0-9]+$ ]]
+          login=$(gh api user --jq .login)
+          user_id=$(gh api user --jq .id)
+          [[ -n "$login" ]]
+          [[ "$user_id" =~ ^[0-9]+$ ]]
           {
-            echo "name=$bot"
-            echo "email=${bot_id}+${bot}@users.noreply.github.com"
+            echo "name=$login"
+            echo "email=${user_id}+${login}@users.noreply.github.com"
           } >> "$GITHUB_OUTPUT"
 
       - name: Publish formula
         id: publish
         working-directory: publish-tap
         env:
-          BOT_NAME: ${{ steps.app_bot.outputs.name }}
-          BOT_EMAIL: ${{ steps.app_bot.outputs.email }}
+          BOT_NAME: ${{ steps.token_owner.outputs.name }}
+          BOT_EMAIL: ${{ steps.token_owner.outputs.email }}
+          GH_TOKEN: ${{ secrets.HOMEBREW_SYNC_TOKEN }}
         run: |
           set -euo pipefail
           git config user.name "$BOT_NAME"
           git config user.email "$BOT_EMAIL"
+          git config --local credential.helper '!gh auth git-credential'
+          trap 'git config --local --unset-all credential.helper || true' EXIT
           git add Formula/housegate.rb
           if git diff --cached --quiet; then
             echo "status=already current" >> "$GITHUB_OUTPUT"
