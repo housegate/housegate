@@ -178,8 +178,9 @@ A new plugin is a 4-file change under `pkg/plugins/<name>/` plus a one-line wiri
 
 ## CI
 
-[.github/workflows/ci.yml](.github/workflows/ci.yml) runs on a self-hosted `linux/x64` runner (with a fork-safety gate) via Bazelisk, in two jobs:
+[.github/workflows/ci.yml](.github/workflows/ci.yml) runs three jobs. Release tooling runs on GitHub-hosted Ubuntu; build and integration use a self-hosted `linux/x64` runner with a fork-safety gate:
 
+- **Release tooling** — Bazel target `//:homebrew_formula_updater_test`, which runs Ruby syntax and unit tests for the Homebrew Formula updater.
 - **Build** — `bazel build //...`.
 - **Integration (ClickHouse)** — pre-pulls `clickhouse/clickhouse-server:25.8`, installs a `clickhouse` client binary into `tests/bin/`, then runs the docker-bound integration suite explicitly:
   ```bash
@@ -187,3 +188,5 @@ A new plugin is a 4-file change under `pkg/plugins/<name>/` plus a one-line wiri
   ```
 
 Integration targets are tagged `manual`, so a plain `bazel test //...` skips them (docker-less environments would otherwise fail); CI lists them explicitly. **When you add a new docker-bound integration target, add it to that list in `ci.yml`** — otherwise it never runs in CI.
+
+[.github/workflows/release.yml](.github/workflows/release.yml) cuts the tag / builds binaries / publishes the GHCR image, then chains [sync-homebrew.yml](.github/workflows/sync-homebrew.yml) (also `workflow_dispatch`-able for backfill) to update `housegate/homebrew-housegate`'s Formula via [.github/scripts/update_homebrew_formula.rb](.github/scripts/update_homebrew_formula.rb) — the updater rejects non-`vX.Y.Z` tags, bad checksums, downgrades, and any Formula whose versioned references (URLs / `bin.install` / `test`) don't match the expected shape, so **Formula structure changes in the tap must stay in sync with those patterns**. If only the Homebrew job fails, re-run *that job* — re-running the whole release workflow cuts another tag.

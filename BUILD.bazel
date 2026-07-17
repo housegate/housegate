@@ -1,5 +1,6 @@
 #load("@com_github_sluongng_nogo_analyzer//staticcheck:def.bzl", "ANALYZERS", "staticcheck_analyzers")
 load("@aspect_bazel_lib//lib:expand_template.bzl", "expand_template")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 # Root BUILD.bazel - housegate library.
 # Use `bazel build //cmd:housegate` to build the standalone binary.
@@ -90,6 +91,15 @@ go_test(
         "@com_github_clickhouse_ch_go//proto",
         "@com_github_prometheus_client_golang//prometheus",
         "@com_github_prometheus_client_golang//prometheus/testutil",
+    ],
+)
+
+sh_test(
+    name = "homebrew_formula_updater_test",
+    srcs = ["scripts/test-homebrew-formula-updater.sh"],
+    data = [
+        ".github/scripts/update_homebrew_formula.rb",
+        ".github/scripts/update_homebrew_formula_test.rb",
     ],
 )
 
