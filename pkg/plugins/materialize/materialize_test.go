@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	pb "github.com/housegate/rewriter-go/gen/pb"
+	pb "github.com/housegate/rewriter-proto/gen/pb"
 
 	"housegate/housegate/pkg/chproto"
 	"housegate/housegate/pkg/plugin"

@@ -20,7 +20,7 @@ go_library(
         "//pkg/plugins/agent",
         "//pkg/registry",
         "@com_github_alicebob_miniredis_v2//:miniredis",
-        "@com_github_housegate_rewriter_go//gen/pb",
+        "@com_github_housegate_rewriter_proto//gen/pb",
         "@com_github_redis_go_redis_v9//:go-redis",
         "@com_github_testcontainers_testcontainers_go_modules_clickhouse//:clickhouse",
         "@org_golang_google_grpc//:grpc",

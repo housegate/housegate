@@ -167,8 +167,10 @@ github.com/holiman/bloomfilter/v2 v2.0.3 h1:73e0e/V0tCydx14a0SCYS/EWCxgwLZ18CZcZ
 github.com/holiman/bloomfilter/v2 v2.0.3/go.mod h1:zpoh+gs7qcpqrHr3dB55AMiJwo0iURXE7ZOP9L9hSkA=
 github.com/holiman/uint256 v1.3.2 h1:a9EgMPSC1AAaj1SZL5zIQD3WbwTuHrMGOerLjGmM/TA=
 github.com/holiman/uint256 v1.3.2/go.mod h1:EOMSn4q6Nyt9P6efbI3bueV4e1b3dGlUCXeiRV4ng7E=
-github.com/housegate/rewriter-go v0.3.0 h1:K50E7CpgCduXlpLU9L2C6/MmQMgAsFOp3IWOycF/Seg=
-github.com/housegate/rewriter-go v0.3.0/go.mod h1:wx+ylykJBNtacwMT7cbcOd3NWIH9JScSqHwcAD2ioSE=
+github.com/housegate/rewriter-go v0.4.1 h1:EbALsRGn2o++fBWQ9vu4sz9sDfPpc+KrgI24Oly+A38=
+github.com/housegate/rewriter-go v0.4.1/go.mod h1:dwoYlf+nON8IlygnV0Lp6lTZL3SuIQ2DPUicmt2LZlE=
+github.com/housegate/rewriter-proto v0.1.0 h1:Ga+qyReOUjA9P+Qyd6Cd+QwaaRpX07I1jKtLq8aAVIA=
+github.com/housegate/rewriter-proto v0.1.0/go.mod h1:37lVQ0Qz3nK5vDZ6jspyIAvCR0dOFLHKsGv6d03Ifxk=
 github.com/huin/goupnp v1.3.0 h1:UvLUlWDNpoUdYzb2TCn+MuTWtcjXKSza2n6CBdQ0xXc=
 github.com/huin/goupnp v1.3.0/go.mod h1:gnGPsThkYa7bFi/KWmEysQRf48l2dvR5bxr2OFckNX8=
 github.com/influxdata/influxdb-client-go/v2 v2.4.0 h1:HGBfZYStlx3Kqvsv1h2pJixbCl/jhnFtxpKFAv9Tu5k=
@@ -328,8 +330,8 @@ github.com/tklauser/go-sysconf v0.3.16 h1:frioLaCQSsF5Cy1jgRBrzr6t502KIIwQ0MArYI
 github.com/tklauser/go-sysconf v0.3.16/go.mod h1:/qNL9xxDhc7tx3HSRsLWNnuzbVfh3e7gh/BmM179nYI=
 github.com/tklauser/numcpus v0.11.0 h1:nSTwhKH5e1dMNsCdVBukSZrURJRoHbSEQjdEbY+9RXw=
 github.com/tklauser/numcpus v0.11.0/go.mod h1:z+LwcLq54uWZTX0u/bGobaV34u6V7KNlTZejzM6/3MQ=
-github.com/tobilg/polyglot/packages/go v0.5.9 h1:U9aw/+XXt1xYv0deH7yvD08+GtfeF01jOZ6IEFMM60c=
-github.com/tobilg/polyglot/packages/go v0.5.9/go.mod h1:S3rORX9g0cs3n5hLXR0ah6vqRMS4G71LXDzuNju2rH0=
+github.com/tobilg/polyglot/packages/go v0.6.1 h1:pQCk7zsUUe80l8hsTn5u6OoLCwFf/Bd8B7qFRx78ewI=
+github.com/tobilg/polyglot/packages/go v0.6.1/go.mod h1:S3rORX9g0cs3n5hLXR0ah6vqRMS4G71LXDzuNju2rH0=
 github.com/twitchyliquid64/golang-asm v0.15.1 h1:SU5vSMR7hnwNxj24w34ZyCi/FmDZTkS4MhqMhdFk5YI=
 github.com/twitchyliquid64/golang-asm v0.15.1/go.mod h1:a1lVb/DtPvCB8fslRZhAngC2+aY1QWCk3Cedj/Gdt08=
 github.com/urfave/cli/v2 v2.27.5 h1:WoHEJLdsXr6dDWoJgMq/CboDmyY/8HMMH1fTECbih+w=

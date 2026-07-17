@@ -6,7 +6,7 @@ import (
 	"time"
 
 	rewritergo "github.com/housegate/rewriter-go"
-	pb "github.com/housegate/rewriter-go/gen/pb"
+	pb "github.com/housegate/rewriter-proto/gen/pb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"

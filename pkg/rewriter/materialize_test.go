@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/housegate/rewriter-go/gen/pb"
+	pb "github.com/housegate/rewriter-proto/gen/pb"
 )
 
 // newTestMaterializer builds a sentioMaterializer for tests. timeout is
