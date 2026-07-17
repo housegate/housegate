@@ -1,0 +1,212 @@
+name: Sync Homebrew
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Exact Housegate release tag
+        required: true
+        type: string
+      darwin_sha:
+        description: SHA-256 for the darwin-arm64 release asset
+        required: true
+        type: string
+      linux_sha:
+        description: SHA-256 for the linux-amd64 release asset
+        required: true
+        type: string
+    secrets:
+      HOMEBREW_SYNC_APP_PRIVATE_KEY:
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing Housegate release tag to backfill, for example v0.6.0
+        required: true
+        type: string
+
+concurrency:
+  group: homebrew-tap-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  homebrew:
+    name: Validate and publish formula
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TAG: ${{ inputs.tag }}
+    steps:
+      - name: Validate trigger ref
+        run: |
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "::error::Homebrew sync must run against main, got $GITHUB_REF"
+            exit 1
+          fi
+
+      - name: Resolve exact release checksums
+        id: checksums
+        env:
+          PROVIDED_DARWIN_SHA: ${{ inputs.darwin_sha }}
+          PROVIDED_LINUX_SHA: ${{ inputs.linux_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          darwin="$PROVIDED_DARWIN_SHA"
+          linux="$PROVIDED_LINUX_SHA"
+          if [[ -z "$darwin" && -z "$linux" ]]; then
+            sums=$(curl -fL --retry 3 --retry-all-errors \
+              "https://github.com/housegate/housegate/releases/download/${TAG}/SHA256SUMS")
+            darwin_file="housegate-${TAG}-darwin-arm64"
+            linux_file="housegate-${TAG}-linux-amd64"
+            darwin=$(awk -v file="$darwin_file" '$2 == file { print $1 }' <<< "$sums")
+            linux=$(awk -v file="$linux_file" '$2 == file { print $1 }' <<< "$sums")
+          elif [[ -z "$darwin" || -z "$linux" ]]; then
+            echo "::error::darwin_sha and linux_sha must be provided together"
+            exit 1
+          fi
+          [[ "$darwin" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$linux" =~ ^[0-9a-f]{64}$ ]]
+          {
+            echo "darwin=$darwin"
+            echo "linux=$linux"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout release tooling
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          path: source
+          persist-credentials: false
+
+      - name: Checkout Homebrew tap for validation
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: housegate/homebrew-housegate
+          ref: main
+          path: tap
+          persist-credentials: false
+
+      - name: Verify release assets and update formula
+        env:
+          DARWIN_SHA: ${{ steps.checksums.outputs.darwin }}
+          LINUX_SHA: ${{ steps.checksums.outputs.linux }}
+        run: |
+          set -euo pipefail
+          asset_dir=$(mktemp -d)
+          for platform in darwin-arm64 linux-amd64; do
+            asset="housegate-${TAG}-${platform}"
+            curl -fL --retry 3 --retry-all-errors \
+              -o "${asset_dir}/${asset}" \
+              "https://github.com/housegate/housegate/releases/download/${TAG}/${asset}"
+          done
+          printf '%s  %s\n' "$DARWIN_SHA" "${asset_dir}/housegate-${TAG}-darwin-arm64" \
+            | sha256sum -c -
+          printf '%s  %s\n' "$LINUX_SHA" "${asset_dir}/housegate-${TAG}-linux-amd64" \
+            | sha256sum -c -
+
+          ruby source/.github/scripts/update_homebrew_formula.rb \
+            tap/Formula/housegate.rb \
+            "$TAG" \
+            "$DARWIN_SHA" \
+            "$LINUX_SHA"
+          ruby -c tap/Formula/housegate.rb
+          git -C tap diff --check
+
+      - name: Set up Homebrew
+        uses: Homebrew/actions/setup-homebrew@18fcb8e3e06b4247c676c506750dc95ea7226479 # 2026.07.13.1
+
+      - name: Validate formula with Homebrew
+        id: validated_tap
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+        run: |
+          set -euo pipefail
+          brew tap housegate/housegate
+          brew trust housegate/housegate
+          tap_repo=$(brew --repository housegate/housegate)
+          cp tap/Formula/housegate.rb "$tap_repo/Formula/housegate.rb"
+          brew style tap/Formula/housegate.rb
+          brew audit --strict --online --os=all --arch=all housegate/housegate/housegate
+          brew install --formula housegate/housegate/housegate
+          brew test housegate/housegate/housegate
+          echo "sha=$(git -C tap rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Mint tap-only token
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.HOMEBREW_SYNC_APP_CLIENT_ID }}
+          private-key: ${{ secrets.HOMEBREW_SYNC_APP_PRIVATE_KEY }}
+          owner: housegate
+          repositories: homebrew-housegate
+          permission-contents: write
+
+      - name: Checkout Homebrew tap for publishing
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: housegate/homebrew-housegate
+          ref: main
+          path: publish-tap
+          token: ${{ steps.app.outputs.token }}
+
+      - name: Verify validated tap revision
+        env:
+          VALIDATED_SHA: ${{ steps.validated_tap.outputs.sha }}
+        run: |
+          set -euo pipefail
+          publish_sha=$(git -C publish-tap rev-parse HEAD)
+          if [[ "$publish_sha" != "$VALIDATED_SHA" ]]; then
+            echo "::error::Homebrew tap changed during validation; rerun this job"
+            exit 1
+          fi
+          cp tap/Formula/housegate.rb publish-tap/Formula/housegate.rb
+          git -C publish-tap diff --check
+
+      - name: Resolve App bot identity
+        id: app_bot
+        env:
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          set -euo pipefail
+          bot="${APP_SLUG}[bot]"
+          bot_id=$(gh api "/users/${bot}" --jq .id)
+          [[ "$bot_id" =~ ^[0-9]+$ ]]
+          {
+            echo "name=$bot"
+            echo "email=${bot_id}+${bot}@users.noreply.github.com"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish formula
+        id: publish
+        working-directory: publish-tap
+        env:
+          BOT_NAME: ${{ steps.app_bot.outputs.name }}
+          BOT_EMAIL: ${{ steps.app_bot.outputs.email }}
+        run: |
+          set -euo pipefail
+          git config user.name "$BOT_NAME"
+          git config user.email "$BOT_EMAIL"
+          git add Formula/housegate.rb
+          if git diff --cached --quiet; then
+            echo "status=already current" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git commit -m "chore: update housegate formula to ${TAG}"
+          git push origin HEAD:main
+          echo "status=updated" >> "$GITHUB_OUTPUT"
+
+      - name: Summary
+        env:
+          TAP_STATUS: ${{ steps.publish.outputs.status }}
+        run: |
+          {
+            echo "## Homebrew \`$TAG\`"
+            echo
+            echo "**Tap:** \`housegate/homebrew-housegate\`"
+            echo
+            echo "**Status:** $TAP_STATUS"
+          } >> "$GITHUB_STEP_SUMMARY"

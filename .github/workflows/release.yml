@@ -5,7 +5,8 @@ name: Release
 # darwin/arm64 via Bazel (cross-compiled from linux using the zig
 # hermetic_cc_toolchain registered in MODULE.bazel), publish a GitHub
 # Release with both binaries + a combined SHA256SUMS attached, and
-# push a container image to ghcr.io tagged with the version + latest.
+# push a container image to ghcr.io tagged with the version + latest,
+# then update the matching formula in housegate/homebrew-housegate.
 #
 # Default bump=auto policy:
 #   - First cut on a UTC day → minor bump
@@ -34,6 +35,10 @@ on:
           - minor
           - patch
 
+concurrency:
+  group: housegate-release
+  cancel-in-progress: false
+
 permissions:
   contents: write
   packages: write
@@ -43,6 +48,10 @@ jobs:
     name: Cut, build, publish
     runs-on: [self-hosted, linux, x64]
     timeout-minutes: 45
+    outputs:
+      tag: ${{ steps.next.outputs.next }}
+      darwin_sha: ${{ steps.release_sha.outputs.darwin }}
+      linux_sha: ${{ steps.release_sha.outputs.linux }}
     steps:
       - name: Validate trigger ref is main
         run: |
@@ -86,10 +95,10 @@ jobs:
             bump="$BUMP"
             if [ "$bump" = "auto" ]; then
               if [ "$last_date" = "$today" ]; then
-                bump=patch
+                bump="patch"
                 reason="same UTC day as $last → patch bump"
               else
-                bump=minor
+                bump="minor"
                 reason="new UTC day (last cut $last_date) → minor bump"
               fi
             else
@@ -178,6 +187,24 @@ jobs:
           ( cd release && sha256sum "${REPO_NAME}"-* > SHA256SUMS )
           ls -l release
           cat release/SHA256SUMS
+
+      - name: Export release checksums
+        id: release_sha
+        env:
+          NEW_TAG: ${{ steps.next.outputs.next }}
+          REPO_NAME: ${{ github.event.repository.name }}
+        run: |
+          set -euo pipefail
+          darwin_file="${REPO_NAME}-${NEW_TAG}-darwin-arm64"
+          linux_file="${REPO_NAME}-${NEW_TAG}-linux-amd64"
+          darwin=$(awk -v file="$darwin_file" '$2 == file { print $1 }' release/SHA256SUMS)
+          linux=$(awk -v file="$linux_file" '$2 == file { print $1 }' release/SHA256SUMS)
+          [[ "$darwin" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$linux" =~ ^[0-9a-f]{64}$ ]]
+          {
+            echo "darwin=$darwin"
+            echo "linux=$linux"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Compute container image ref
         id: image
@@ -286,3 +313,16 @@ jobs:
             echo
             echo "[View release](https://github.com/${{ github.repository }}/releases/tag/$NEW_TAG)"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  homebrew:
+    name: Update Homebrew tap
+    needs: release
+    permissions:
+      contents: read
+    uses: ./.github/workflows/sync-homebrew.yml
+    with:
+      tag: ${{ needs.release.outputs.tag }}
+      darwin_sha: ${{ needs.release.outputs.darwin_sha }}
+      linux_sha: ${{ needs.release.outputs.linux_sha }}
+    secrets:
+      HOMEBREW_SYNC_APP_PRIVATE_KEY: ${{ secrets.HOMEBREW_SYNC_APP_PRIVATE_KEY }}

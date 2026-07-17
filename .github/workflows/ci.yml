@@ -11,6 +11,21 @@ concurrency:
 
 
 jobs:
+  release-tooling:
+    name: Release tooling
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - name: Set up Bazelisk
+        uses: bazelbuild/setup-bazelisk@6ecf4fd8b7d1f9721785f1dd656a689acf9add47 # v3
+      - name: Test Homebrew formula updater
+        run: bazel test //:homebrew_formula_updater_test --test_output=errors
+
   build:
     name: Build
     # Self-hosted runners must never execute code from forked PRs — a
