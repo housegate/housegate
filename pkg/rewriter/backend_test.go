@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	pb "github.com/housegate/rewriter-go/gen/pb"
+	pb "github.com/housegate/rewriter-proto/gen/pb"
 
 	"housegate/housegate/pkg/network"
 	"housegate/housegate/pkg/sqlmeta"

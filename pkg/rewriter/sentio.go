@@ -13,7 +13,7 @@ import (
 
 	"housegate/housegate/pkg/log"
 
-	pb "github.com/housegate/rewriter-go/gen/pb"
+	pb "github.com/housegate/rewriter-proto/gen/pb"
 	"housegate/housegate/pkg/cluster"
 	"housegate/housegate/pkg/credentials"
 	"housegate/housegate/pkg/peer"

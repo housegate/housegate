@@ -23,7 +23,7 @@ go_library(
         "//pkg/sqlmeta",
         "@com_github_google_uuid//:uuid",
         "@com_github_housegate_rewriter_go//:rewriter-go",
-        "@com_github_housegate_rewriter_go//gen/pb",
+        "@com_github_housegate_rewriter_proto//gen/pb",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//credentials/insecure",
         "@org_golang_google_grpc//keepalive",
@@ -44,6 +44,6 @@ go_test(
         "//pkg/network",
         "//pkg/registry",
         "//pkg/sqlmeta",
-        "@com_github_housegate_rewriter_go//gen/pb",
+        "@com_github_housegate_rewriter_proto//gen/pb",
     ],
 )

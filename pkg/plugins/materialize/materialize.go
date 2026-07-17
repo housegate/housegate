@@ -8,7 +8,7 @@ package materialize
 import (
 	"context"
 
-	pb "github.com/housegate/rewriter-go/gen/pb"
+	pb "github.com/housegate/rewriter-proto/gen/pb"
 
 	"housegate/housegate/pkg/log"
 	"housegate/housegate/pkg/plugin"

@@ -11,7 +11,7 @@ import (
 	"housegate/housegate/pkg/auth"
 	"housegate/housegate/pkg/integration/testenv"
 	"housegate/housegate/pkg/registry"
-	pb "github.com/housegate/rewriter-go/gen/pb"
+	pb "github.com/housegate/rewriter-proto/gen/pb"
 )
 
 // openDirectConn opens a clickhouse-go connection directly to the shared

@@ -19,7 +19,7 @@ import (
 	"housegate/housegate/pkg/plugins/commitgate"
 	"housegate/housegate/pkg/registry"
 	"housegate/housegate/pkg/sqlmeta"
-	pb "github.com/housegate/rewriter-go/gen/pb"
+	pb "github.com/housegate/rewriter-proto/gen/pb"
 )
 
 // capturingObserver records every BeforeStatement event delivered to
