@@ -312,6 +312,14 @@ type Orchestrator struct {
 	preparer  SourcePreparer
 	cfg       OrchestratorConfig
 
+	// querier is the optional status-query port (PR05). When non-nil, an
+	// indeterminate (Unknown) submit/RC outcome is converged by querying the
+	// server by statement_id before any idempotent re-send (design section 3.4's
+	// "先按同一 statement_id 查询" branch). When nil, an Unknown outcome falls
+	// back to the design's equally-permitted "或幂等重试" branch: an idempotent
+	// re-send that never repeats the unsafe write. See intake_retry.go.
+	querier IntakeStatusQuerier
+
 	mu        sync.Mutex
 	records   map[string]*intakeRecord   // statement_id -> cross-call intake state
 	frontiers map[string]*sourceFrontier // frontier key (source) -> serial gate
@@ -356,6 +364,17 @@ type intakeRecord struct {
 	// do not advance to SubmitAccepted).
 	submit    SubmitOutcome
 	hasSubmit bool
+
+	// submitUnknown / claimUnknown record that the last submit / RC outcome was
+	// indeterminate (OutcomeUnknown), as opposed to a plain retryable outcome
+	// (PR05). A resume consults these to decide whether to query the server by
+	// statement_id before re-sending (deterministic convergence, design section
+	// 3.4). They are distinct from the stage: an unknown submit leaves the stage
+	// below SubmitAccepted, an unknown RC leaves it at SubmitAccepted; the flag
+	// says "the reason it did not advance was indeterminate, not merely
+	// transient". Cleared once the outcome converges.
+	submitUnknown bool
+	claimUnknown  bool
 
 	// stage is the highest durable lifecycle point this intake has reached; a
 	// resuming attempt uses it to skip already-completed stages.
@@ -525,7 +544,13 @@ func (o *Orchestrator) run(ctx context.Context, env StatementEnvelope, adm Admis
 
 	case LifecycleSubmitAccepted:
 		// Prepare is cached and submit was already accepted; a prior RC call
-		// returned retryable/unknown. Resume straight at the RC gate.
+		// returned retryable/unknown. If it was indeterminate and a querier is
+		// wired, converge the RC deterministically by querying claim status
+		// before re-registering (PR05); the query result is finalized directly, so
+		// a queried-Bound claim never triggers a second RegisterPreparedClaim.
+		if res, err, done := o.convergeUnknownClaim(ctx, prepared, rec); done {
+			return res, err
+		}
 		return o.registerAndFinish(ctx, env, prepared, rec)
 
 	default:
@@ -533,12 +558,22 @@ func (o *Orchestrator) run(ctx context.Context, env StatementEnvelope, adm Admis
 		// it must run this attempt. Prepare runs only if not already cached.
 		var submit SubmitOutcome
 		if hasPrepared {
-			// Prepare cached from a prior attempt (submit was retryable/unknown or
-			// errored): re-run submit only, never the unsafe write.
-			var submitErr error
-			submit, submitErr = o.submitter.SubmitStatement(ctx, env)
-			if submitErr != nil {
-				return IntakeResult{StatementID: env.StatementID, Prepared: prepared}, fmt.Errorf("intake: submit failed for %s: %w", env.StatementID, submitErr)
+			// A prior submit was retryable/unknown or errored: converge only the
+			// submit; never re-run the unsafe write. If the prior outcome was
+			// indeterminate and a querier is wired, query submit status first so an
+			// already-sequenced statement is not blindly re-submitted (PR05).
+			resolved, queried, qerr := o.convergeUnknownSubmit(ctx, env, rec)
+			if qerr != nil {
+				return IntakeResult{StatementID: env.StatementID, Prepared: prepared}, qerr
+			}
+			if resolved {
+				submit = queried
+			} else {
+				var submitErr error
+				submit, submitErr = o.submitter.SubmitStatement(ctx, env)
+				if submitErr != nil {
+					return IntakeResult{StatementID: env.StatementID, Prepared: prepared}, fmt.Errorf("intake: submit failed for %s: %w", env.StatementID, submitErr)
+				}
 			}
 		} else {
 			p, s, prepareErr, submitErr := o.prepareAndSubmit(ctx, env, adm)
@@ -603,7 +638,10 @@ func (o *Orchestrator) afterSubmit(ctx context.Context, env StatementEnvelope, p
 		return true, r, err
 	}
 	// Retryable / unknown submit: hold the frontier, no claim, no abort, no ACK2.
+	// Record whether it was indeterminate so a resume knows to query submit
+	// status before re-sending (PR05); a plain retryable is safe to re-send.
 	if !submit.Category.PermitsAck2() {
+		o.setSubmitUnknown(rec, submit.Category == OutcomeUnknown)
 		return true, res, nil
 	}
 
@@ -644,6 +682,15 @@ func (o *Orchestrator) registerAndFinish(ctx context.Context, env StatementEnvel
 	if claimErr != nil {
 		return res, fmt.Errorf("intake: register claim failed for %s: %w", env.StatementID, claimErr)
 	}
+	return o.finalizeClaim(ctx, prepared, claim, rec)
+}
+
+// finalizeClaim classifies an RC outcome (freshly registered, or resolved by a
+// status query) and drives it to a terminal result or a non-terminal hold. It
+// is shared by registerAndFinish and the unknown-RC query-convergence path so a
+// queried-Bound claim finishes without a second RegisterPreparedClaim.
+func (o *Orchestrator) finalizeClaim(ctx context.Context, prepared PreparedLocalResult, claim ClaimOutcome, rec *intakeRecord) (IntakeResult, error) {
+	res := o.resultFor(rec)
 	res.Claim = claim
 
 	// Classify the RC by category BEFORE inspecting its bound source_node. A
@@ -659,8 +706,11 @@ func (o *Orchestrator) registerAndFinish(ctx context.Context, env StatementEnvel
 		return o.abort(ctx, res, rec, claim.Reason)
 	}
 	// Retryable / unknown RC: no ACK2, no abort; converge on retry from the
-	// SubmitAccepted stage (submit stays accepted; prepare stays cached).
+	// SubmitAccepted stage (submit stays accepted; prepare stays cached). Record
+	// whether it was indeterminate so a resume queries claim status before
+	// re-registering (PR05); a plain retryable is safe to re-register.
 	if !claim.Category.PermitsAck2() {
+		o.setClaimUnknown(rec, claim.Category == OutcomeUnknown)
 		return res, nil
 	}
 
