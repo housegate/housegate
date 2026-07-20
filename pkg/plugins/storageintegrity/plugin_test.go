@@ -379,6 +379,39 @@ func TestIngressRejectsPurposeMismatch(t *testing.T) {
 	}
 }
 
+func TestIngressAuthValidationUsesRequestTimeout(t *testing.T) {
+	p := New(Config{
+		Enabled:        true,
+		AuthValidator:  blockingPurposeValidator{},
+		Purpose:        auth.QueryPurpose,
+		RequestTimeout: time.Nanosecond,
+	})
+	signer, err := auth.NewRelaySigner(storageIntegrityTestKey)
+	if err != nil {
+		t.Fatalf("NewRelaySigner: %v", err)
+	}
+	sql := "INSERT INTO tenant.events VALUES (1)"
+	qctx := signedQueryContext(t, 24, signer, sql, sql, sqlmeta.StatementTypeInsert)
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+
+	err = p.OnQuery(context.Background(), qctx)
+	if err == nil || !strings.Contains(err.Error(), context.DeadlineExceeded.Error()) {
+		t.Fatalf("OnQuery err = %v, want validation deadline exceeded", err)
+	}
+}
+
+type blockingPurposeValidator struct{}
+
+func (blockingPurposeValidator) ValidateQuery(ctx context.Context, _ auth.QueryMeta) (auth.ValidationResult, error) {
+	<-ctx.Done()
+	return auth.ValidationResult{}, ctx.Err()
+}
+
+func (blockingPurposeValidator) ValidateQueryPurpose(ctx context.Context, _ auth.QueryMeta, _ string) (auth.ValidationResult, error) {
+	<-ctx.Done()
+	return auth.ValidationResult{}, ctx.Err()
+}
+
 func TestIngressRejectsValidatorThatDoesNotAuthenticateSigner(t *testing.T) {
 	signer, err := auth.NewRelaySigner(storageIntegrityTestKey)
 	if err != nil {

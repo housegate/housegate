@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"housegate/housegate/pkg/auth"
 	"housegate/housegate/pkg/chsession"
@@ -21,7 +22,10 @@ import (
 	"housegate/housegate/pkg/sqlmeta"
 )
 
-const DefaultMaxPayloadBytes uint64 = 64 << 20
+const (
+	DefaultMaxPayloadBytes uint64 = 64 << 20
+	DefaultRequestTimeout         = 5 * time.Second
+)
 
 type Kind string
 
@@ -35,14 +39,16 @@ type Config struct {
 	Enabled         bool
 	AuthValidator   auth.Validator
 	Purpose         string
+	RequestTimeout  time.Duration
 	MaxPayloadBytes uint64
 }
 
 type Plugin struct {
-	enabled       bool
-	authValidator auth.Validator
-	purpose       string
-	maxPayload    uint64
+	enabled        bool
+	authValidator  auth.Validator
+	purpose        string
+	requestTimeout time.Duration
+	maxPayload     uint64
 
 	mu      sync.Mutex
 	active  map[int64]*admissionState
@@ -86,13 +92,18 @@ func New(cfg Config) *Plugin {
 	if maxPayload == 0 {
 		maxPayload = DefaultMaxPayloadBytes
 	}
+	requestTimeout := cfg.RequestTimeout
+	if requestTimeout == 0 {
+		requestTimeout = DefaultRequestTimeout
+	}
 	return &Plugin{
-		enabled:       cfg.Enabled,
-		authValidator: cfg.AuthValidator,
-		purpose:       purpose,
-		maxPayload:    maxPayload,
-		active:        map[int64]*admissionState{},
-		pending:       map[int64]*admissionState{},
+		enabled:        cfg.Enabled,
+		authValidator:  cfg.AuthValidator,
+		purpose:        purpose,
+		requestTimeout: requestTimeout,
+		maxPayload:     maxPayload,
+		active:         map[int64]*admissionState{},
+		pending:        map[int64]*admissionState{},
 	}
 }
 
@@ -291,6 +302,11 @@ func (p *Plugin) ConsumeAdmission(sessionID int64) (Admission, error) {
 func (p *Plugin) authenticate(ctx context.Context, qctx *plugin.QueryContext, sql string) (string, error) {
 	if p.authValidator == nil {
 		return "", errors.New("storage_integrity auth validator is required")
+	}
+	if p.requestTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, p.requestTimeout)
+		defer cancel()
 	}
 	settings := querySettings(qctx)
 	if token := strings.Trim(strings.TrimSpace(settings[auth.AuthTokenSettingKey]), "\"'"); token == "" {
