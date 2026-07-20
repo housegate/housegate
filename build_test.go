@@ -3,6 +3,8 @@ package housegate
 import (
 	"context"
 	"net"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -88,7 +90,7 @@ func requireExternalChain(t *testing.T, bs *builtServer) *plugin.PluginChain {
 }
 
 func TestBuildServer_TwoListenersWhenInternalListenSet(t *testing.T) {
-	cfg := minimalRouterOnlyCfg(t)
+	cfg := minimalServerCfg(t)
 	cfg.Listen = "127.0.0.1:0"
 	cfg.InternalListen = "127.0.0.1:0"
 
@@ -271,16 +273,18 @@ func TestBuildServer_StorageIntegrityIngressEnabledWiresRuntimeHooks(t *testing.
 	if err != nil {
 		t.Fatalf("NewRelaySigner: %v", err)
 	}
-	cfg := minimalServerCfg(t)
+	cfg := minimalRouterOnlyCfg(t)
 	cfg.StorageIntegrity.Ingress.Enabled = true
 	cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{signer.Address()}
 	cfg.StorageIntegrity.Ingress.MaxTokenAge.Duration = time.Minute
 	cfg.StorageIntegrity.Ingress.RequestTimeout.Duration = 50 * time.Millisecond
 	cfg.StorageIntegrity.Ingress.MaxPayloadBytes = 7
+	consumer := &recordingAdmissionConsumer{}
 
 	bs, err := buildServer(Options{
-		Config:       cfg,
-		NetworkState: network.NewInMemoryNetworkState(),
+		Config:                            cfg,
+		NetworkState:                      network.NewInMemoryNetworkState(),
+		StorageIntegrityAdmissionConsumer: consumer,
 	}, nil)
 	if err != nil {
 		t.Fatalf("buildServer: %v", err)
@@ -309,12 +313,34 @@ func TestBuildServer_StorageIntegrityIngressEnabledWiresRuntimeHooks(t *testing.
 		t.Fatalf("OnClientDataStrict: %v", err)
 	}
 	chain.OnQueryInputComplete(context.Background(), qctx)
-	admission, err := ingress.ConsumeAdmission(qctx.Session.ID())
-	if err != nil {
-		t.Fatalf("ConsumeAdmission: %v", err)
-	}
+	admission := consumer.requireOne(t)
 	if admission.TableID != "tenant.events" || admission.Signer != signer.Address() {
 		t.Fatalf("admission table/signer = %s/%s, want tenant.events/%s", admission.TableID, admission.Signer, signer.Address())
+	}
+
+	next := signedStorageIntegrityQuery(t, signer)
+	next.Session = qctx.Session
+	next.Query.ID = "storage-integrity-build-test-2"
+	if err := chain.OnQuery(context.Background(), next); err != nil {
+		t.Fatalf("second storage write blocked after consumer consumed admission: %v", err)
+	}
+}
+
+func TestBuildServer_StorageIntegrityIngressRequiresAdmissionConsumer(t *testing.T) {
+	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatalf("NewRelaySigner: %v", err)
+	}
+	cfg := minimalRouterOnlyCfg(t)
+	cfg.StorageIntegrity.Ingress.Enabled = true
+	cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{signer.Address()}
+
+	_, err = buildServer(Options{
+		Config:       cfg,
+		NetworkState: network.NewInMemoryNetworkState(),
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "storage_integrity.ingress admission consumer is required") {
+		t.Fatalf("buildServer err = %v, want missing admission consumer rejection", err)
 	}
 }
 
@@ -430,4 +456,26 @@ func (s *buildTestSession) RebindToPeer(context.Context, *chproto.Codec, *chprot
 }
 func (s *buildTestSession) RebindToLocal(context.Context, *chproto.Codec, *chproto.ClientHello) error {
 	return nil
+}
+
+type recordingAdmissionConsumer struct {
+	mu        sync.Mutex
+	admission []storageintegrity.Admission
+}
+
+func (c *recordingAdmissionConsumer) ConsumeStorageIntegrityAdmission(_ context.Context, admission storageintegrity.Admission) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.admission = append(c.admission, admission)
+	return nil
+}
+
+func (c *recordingAdmissionConsumer) requireOne(t *testing.T) storageintegrity.Admission {
+	t.Helper()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.admission) != 1 {
+		t.Fatalf("consumed admissions = %d, want 1", len(c.admission))
+	}
+	return c.admission[0]
 }
