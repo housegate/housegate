@@ -34,6 +34,7 @@ import (
 	"housegate/housegate/pkg/plugins/rewrite"
 	routeplugin "housegate/housegate/pkg/plugins/route"
 	"housegate/housegate/pkg/plugins/sessionstate"
+	"housegate/housegate/pkg/plugins/storageintegrity"
 	"housegate/housegate/pkg/plugins/usage"
 	"housegate/housegate/pkg/proxy"
 	"housegate/housegate/pkg/registry"
@@ -522,6 +523,9 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	}
 
 	var dataPlugins []plugin.DataPlugin
+	var strictDataPlugins []plugin.StrictDataPlugin
+	var queryInputCompletePlugins []plugin.QueryInputCompletePlugin
+	var queryAbortPlugins []plugin.QueryAbortPlugin
 	if cfg.LtHash.Enabled {
 		ltPlug := lthashplugin.New(lthashplugin.DefaultRegistry)
 		queryPlugins = append(queryPlugins, ltPlug)
@@ -591,6 +595,37 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		queryPlugins = append(queryPlugins, rewritePlug)
 	}
 
+	var storageIntegrityIngress *storageintegrity.Plugin
+	if cfg.StorageIntegrity.Ingress.Enabled {
+		ingressCfg := cfg.StorageIntegrity.Ingress
+		ingressValidator := auth.NewEthValidator(
+			ingressCfg.AllowedAddresses,
+			ingressCfg.MaxTokenAge.Duration,
+			true,
+			false,
+			"",
+			nil,
+		)
+		storageIntegrityIngress = storageintegrity.New(storageintegrity.Config{
+			Enabled:         true,
+			AuthValidator:   ingressValidator,
+			Purpose:         auth.QueryPurpose,
+			RequestTimeout:  ingressCfg.RequestTimeout.Duration,
+			MaxPayloadBytes: ingressCfg.MaxPayloadBytes,
+		})
+		queryPlugins = append(queryPlugins, storageIntegrityIngress)
+		strictDataPlugins = append(strictDataPlugins, storageIntegrityIngress)
+		queryInputCompletePlugins = append(queryInputCompletePlugins, storageIntegrityIngress)
+		queryAbortPlugins = append(queryAbortPlugins, storageIntegrityIngress)
+		closePlugins = append(closePlugins, storageIntegrityIngress)
+		log.Infow("storage_integrity ingress enabled",
+			"allowed_addresses", len(ingressCfg.AllowedAddresses),
+			"max_token_age", ingressCfg.MaxTokenAge.Duration,
+			"request_timeout", ingressCfg.RequestTimeout.Duration,
+			"max_payload_bytes", ingressCfg.MaxPayloadBytes,
+		)
+	}
+
 	// indexing_usage runs *after* the rewriter so it can read the
 	// classified StatementType + AccessedTables it populates.
 	if iuPlugin != nil {
@@ -640,14 +675,17 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	}
 
 	chain := &plugin.PluginChain{
-		ConnLifecyclePlugins:     connLifecycle,
-		HandshakeCompletePlugins: []plugin.HandshakeCompletePlugin{metrics},
-		HelloPlugins:             helloPlugins,
-		QueryPlugins:             queryPlugins,
-		DataPlugins:              dataPlugins,
-		QueryCompletePlugins:     queryCompletePlugins,
-		ClosePlugins:             closePlugins,
-		ExceptionPlugins:         exceptionPlugins,
+		ConnLifecyclePlugins:      connLifecycle,
+		HandshakeCompletePlugins:  []plugin.HandshakeCompletePlugin{metrics},
+		HelloPlugins:              helloPlugins,
+		QueryPlugins:              queryPlugins,
+		StrictDataPlugins:         strictDataPlugins,
+		DataPlugins:               dataPlugins,
+		QueryCompletePlugins:      queryCompletePlugins,
+		QueryInputCompletePlugins: queryInputCompletePlugins,
+		QueryAbortPlugins:         queryAbortPlugins,
+		ClosePlugins:              closePlugins,
+		ExceptionPlugins:          exceptionPlugins,
 	}
 
 	selfPort := selfListenPort(cfg.Listen)

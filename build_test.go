@@ -2,16 +2,22 @@ package housegate
 
 import (
 	"context"
+	"net"
 	"testing"
+	"time"
 
+	"housegate/housegate/pkg/auth"
+	"housegate/housegate/pkg/chproto"
 	"housegate/housegate/pkg/chsession"
 	"housegate/housegate/pkg/config"
 	"housegate/housegate/pkg/network"
 	"housegate/housegate/pkg/plugin"
 	"housegate/housegate/pkg/plugins/forward"
 	"housegate/housegate/pkg/plugins/rewrite"
+	"housegate/housegate/pkg/plugins/storageintegrity"
 	"housegate/housegate/pkg/proxy"
 	"housegate/housegate/pkg/rewriter"
+	"housegate/housegate/pkg/sqlmeta"
 )
 
 // stubRewriterFactory is a no-op rewriter.Factory that never dials any
@@ -64,8 +70,25 @@ func requireProxyServer(t *testing.T, listener serverListener) *proxy.Server {
 	return runner.server
 }
 
+func requireExternalChain(t *testing.T, bs *builtServer) *plugin.PluginChain {
+	t.Helper()
+	for i := range bs.listeners {
+		if bs.listeners[i].Label != "external" {
+			continue
+		}
+		server := requireProxyServer(t, bs.listeners[i])
+		chain, ok := server.Hooks.(*plugin.PluginChain)
+		if !ok {
+			t.Fatalf("Server.Hooks is not *plugin.PluginChain: %T", server.Hooks)
+		}
+		return chain
+	}
+	t.Fatal("external listener missing")
+	return nil
+}
+
 func TestBuildServer_TwoListenersWhenInternalListenSet(t *testing.T) {
-	cfg := minimalServerCfg(t)
+	cfg := minimalRouterOnlyCfg(t)
 	cfg.Listen = "127.0.0.1:0"
 	cfg.InternalListen = "127.0.0.1:0"
 
@@ -241,4 +264,170 @@ func TestBuildServer_ForwardPluginInsertedBeforeRewrite(t *testing.T) {
 	if qFwdIdx >= qRwIdx {
 		t.Fatalf("forward (qIdx=%d) must run before rewrite (qIdx=%d) in QueryPlugins", qFwdIdx, qRwIdx)
 	}
+}
+
+func TestBuildServer_StorageIntegrityIngressEnabledWiresRuntimeHooks(t *testing.T) {
+	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatalf("NewRelaySigner: %v", err)
+	}
+	cfg := minimalServerCfg(t)
+	cfg.StorageIntegrity.Ingress.Enabled = true
+	cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{signer.Address()}
+	cfg.StorageIntegrity.Ingress.MaxTokenAge.Duration = time.Minute
+	cfg.StorageIntegrity.Ingress.RequestTimeout.Duration = 50 * time.Millisecond
+	cfg.StorageIntegrity.Ingress.MaxPayloadBytes = 7
+
+	bs, err := buildServer(Options{
+		Config:       cfg,
+		NetworkState: network.NewInMemoryNetworkState(),
+	}, nil)
+	if err != nil {
+		t.Fatalf("buildServer: %v", err)
+	}
+	defer bs.teardown()
+
+	chain := requireExternalChain(t, bs)
+	ingress := requireStorageIntegrityQueryPlugin(t, chain)
+	requireStorageIntegrityStrictDataPlugin(t, chain, ingress)
+	requireStorageIntegrityInputCompletePlugin(t, chain, ingress)
+	requireStorageIntegrityAbortPlugin(t, chain, ingress)
+	requireStorageIntegrityClosePlugin(t, chain, ingress)
+
+	qctx := signedStorageIntegrityQuery(t, signer)
+	if !chain.RejectUndecodableQuery(qctx.Session) {
+		t.Fatal("enabled storage-integrity ingress did not require strict query decoding")
+	}
+	if err := chain.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	limit, enforce := chain.ClientDataReadLimit(qctx)
+	if !enforce || limit != cfg.StorageIntegrity.Ingress.MaxPayloadBytes {
+		t.Fatalf("ClientDataReadLimit = %d/%v, want %d/true", limit, enforce, cfg.StorageIntegrity.Ingress.MaxPayloadBytes)
+	}
+	if err := chain.OnClientDataStrict(context.Background(), qctx, []byte{byte(chproto.ClientDataCode), 1}); err != nil {
+		t.Fatalf("OnClientDataStrict: %v", err)
+	}
+	chain.OnQueryInputComplete(context.Background(), qctx)
+	admission, err := ingress.ConsumeAdmission(qctx.Session.ID())
+	if err != nil {
+		t.Fatalf("ConsumeAdmission: %v", err)
+	}
+	if admission.TableID != "tenant.events" || admission.Signer != signer.Address() {
+		t.Fatalf("admission table/signer = %s/%s, want tenant.events/%s", admission.TableID, admission.Signer, signer.Address())
+	}
+}
+
+func requireStorageIntegrityQueryPlugin(t *testing.T, chain *plugin.PluginChain) *storageintegrity.Plugin {
+	t.Helper()
+	var found *storageintegrity.Plugin
+	for _, p := range chain.QueryPlugins {
+		ingress, ok := p.(*storageintegrity.Plugin)
+		if !ok {
+			continue
+		}
+		if found != nil {
+			t.Fatal("storage-integrity ingress wired multiple times in QueryPlugins")
+		}
+		found = ingress
+	}
+	if found == nil {
+		t.Fatal("storage-integrity ingress missing from QueryPlugins")
+	}
+	return found
+}
+
+func requireStorageIntegrityStrictDataPlugin(t *testing.T, chain *plugin.PluginChain, want *storageintegrity.Plugin) {
+	t.Helper()
+	for _, p := range chain.StrictDataPlugins {
+		if p == want {
+			return
+		}
+	}
+	t.Fatal("storage-integrity ingress missing from StrictDataPlugins")
+}
+
+func requireStorageIntegrityInputCompletePlugin(t *testing.T, chain *plugin.PluginChain, want *storageintegrity.Plugin) {
+	t.Helper()
+	for _, p := range chain.QueryInputCompletePlugins {
+		if p == want {
+			return
+		}
+	}
+	t.Fatal("storage-integrity ingress missing from QueryInputCompletePlugins")
+}
+
+func requireStorageIntegrityAbortPlugin(t *testing.T, chain *plugin.PluginChain, want *storageintegrity.Plugin) {
+	t.Helper()
+	for _, p := range chain.QueryAbortPlugins {
+		if p == want {
+			return
+		}
+	}
+	t.Fatal("storage-integrity ingress missing from QueryAbortPlugins")
+}
+
+func requireStorageIntegrityClosePlugin(t *testing.T, chain *plugin.PluginChain, want *storageintegrity.Plugin) {
+	t.Helper()
+	for _, p := range chain.ClosePlugins {
+		if p == want {
+			return
+		}
+	}
+	t.Fatal("storage-integrity ingress missing from ClosePlugins")
+}
+
+func signedStorageIntegrityQuery(t *testing.T, signer *auth.RelaySigner) *plugin.QueryContext {
+	t.Helper()
+	sql := "INSERT INTO tenant.events FORMAT Native"
+	token, err := signer.SignToken(sql)
+	if err != nil {
+		t.Fatalf("SignToken: %v", err)
+	}
+	state := chsession.NewSessionState()
+	state.ClientRevision = 54453
+	return &plugin.QueryContext{
+		Session: &buildTestSession{
+			id:    1001,
+			state: state,
+		},
+		OriginalSQL: sql,
+		Query: &chproto.Query{
+			ID:   "storage-integrity-build-test",
+			Body: sql,
+			Settings: []chproto.Setting{{
+				Key:    auth.AuthTokenSettingKey,
+				Value:  "'" + token + "'",
+				Custom: true,
+			}},
+		},
+		StatementType: sqlmeta.StatementTypeInsert,
+		AccessedTables: []sqlmeta.AccessedTable{{
+			OriginalDatabase: "tenant",
+			OriginalTable:    "events",
+			LogicalDatabase:  "tenant",
+		}},
+	}
+}
+
+type buildTestSession struct {
+	id    int64
+	state *chsession.SessionState
+}
+
+func (s *buildTestSession) ID() int64                                          { return s.id }
+func (s *buildTestSession) State() *chsession.SessionState                     { return s.state }
+func (s *buildTestSession) Client() *chproto.Codec                             { return nil }
+func (s *buildTestSession) Upstream() *chproto.Codec                           { return nil }
+func (s *buildTestSession) RemoteAddr() net.Addr                               { return nil }
+func (s *buildTestSession) Close() error                                       { return nil }
+func (s *buildTestSession) BindUpstream(context.Context, *chproto.Codec) error { return nil }
+func (s *buildTestSession) RebindUpstream(context.Context, *chproto.Codec, bool) error {
+	return nil
+}
+func (s *buildTestSession) RebindToPeer(context.Context, *chproto.Codec, *chproto.ClientHello) error {
+	return nil
+}
+func (s *buildTestSession) RebindToLocal(context.Context, *chproto.Codec, *chproto.ClientHello) error {
+	return nil
 }
