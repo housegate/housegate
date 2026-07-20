@@ -2,7 +2,10 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "storageintegrity",
-    srcs = ["plugin.go"],
+    srcs = [
+        "mutation_admission.go",
+        "plugin.go",
+    ],
     importpath = "housegate/housegate/pkg/plugins/storageintegrity",
     visibility = ["//visibility:public"],
     deps = [
@@ -12,13 +15,17 @@ go_library(
         "//pkg/plugin",
         "//pkg/sqlident",
         "//pkg/sqlmeta",
+        "//pkg/storageintegrity",
         "@com_github_clickhouse_ch_go//proto",
     ],
 )
 
 go_test(
     name = "storageintegrity_test",
-    srcs = ["plugin_test.go"],
+    srcs = [
+        "mutation_admission_test.go",
+        "plugin_test.go",
+    ],
     embed = [":storageintegrity"],
     deps = [
         "//pkg/auth",
