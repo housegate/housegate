@@ -1,7 +1,9 @@
 # Sentio Arbiter Storage Integrity：INSERT + Bounded UPDATE/DELETE 增量设计
 
 日期：2026-07-01
-更新基线：2026-07-15，已 rebase 到包含 Arbiter P0/P1a/P1b/P1c 的 main 分支。
+更新基线：2026-07-20，已 rebase 到 HouseGate `origin/main @ 7bdaa27`，并按 Arbiter `origin/main @ 03aa035`、arbiter-proto `main @ 2fa9263` 复核。
+
+代码核对点：当前 Arbiter runtime 仍消费 `github.com/sentioxyz/arbiter-proto v0.2.0`；arbiter-proto main 已新增 `da.proto`，但 Arbiter 尚未接入该 DA/PayloadStore gRPC contract。因此本文涉及 DA 服务化、staged intake、mutation/read-set/SafeAudit 的内容仍属于对应 companion work，而不是当前 P1c 已实现能力。
 
 ## 1. 文档定位
 
@@ -32,7 +34,7 @@ flowchart LR
   C["Client / SDK"] --> CHG["client-side HouseGate\nmaterialize + sign"]
   CHG --> I["server-side HouseGate ingress\nP1e"]
 
-  I -->|"SubmitLocalStatement"| SN["已实现 SNode library\nselected source"]
+  I -->|"P1e staged SNode seam"| SN["已实现 SNode library\nselected source"]
   I -->|"SubmitStatement"| ARB["已实现 Sentio Arbiter\nRaft/FSM + orchestrator"]
   SN --> U["local ClickHouse\nhg_unsafe"]
   ARB --> VF["已实现 3 selected Verifiers"]
@@ -48,6 +50,7 @@ flowchart LR
 职责边界：
 
 - P1c 的 `dataplane/`、`verifier/`、`snode/` 库和参考二进制已经存在；P1e 只负责 HouseGate ingress 接线，不复制这些实现。
+- 当前 Arbiter SNode 仍实现一体化 `SubmitLocalStatement`；`PrepareLocalStatement`、`RegisterPreparedClaim`、`AbortPreparedStatement` 和 intake journal 是 P1e staged seam 的 companion 增量。
 - P1c v1 是 single-writer SNode、statement single-flight。multi-writer 必须实现与 FSM 相同的 source selection 和 committed membership view，不能由 HouseGate 自行选择“健康节点”。
 - Verifier 固定由 FSM 从 Active 非 source 集合中确定性选择 3 个，quorum 固定 2-of-3；这不是配置项。
 - MutationWorker 和 mutation publication read-set coordinator 属于 P2；SafeAuditWorker、audit-driven quarantine/repair/re-entry 属于 P3。它们都不得伪装成当前 P1c 已实现能力。
@@ -130,7 +133,7 @@ sequenceDiagram
 - `RegisterPreparedClaim` 仍通过 `statement_id` 晚绑定；RC 的 `source_node` 必须等于 FSM 已记录的 deterministic source。P1c 当前一体化 `SubmitLocalStatement` 可以保留为兼容 wrapper，但 HouseGate ingress 的 P1e 接线使用上述 staged seam。
 - 若仍允许 RC 先于 `SubmitStatement` 到达，则必须版本化增加 `DiscardPendingRC` 或等价的 FSM retention/cleanup 语义；它不属于“不修改 Arbiter 核心协议”的 P1e 范围。
 - v1 保持 P1c 的 source statement 串行约束：同一 source absolute-claim frontier 上，前一条 intake record 未到达 `RCBound` 或 `Cleaned` 前，不执行后一条 source write。否则后一条 claim 可能包含随后被 terminal reject 清理的前序贡献。未来并行 intake 必须显式记录 claim dependencies，并在 abort 时级联重算或作废后继 claims。
-- P1c 当前 payload executor 使用 CSV；Native Data block 支持需要单独扩展 payload encoding/replay profile，不能只改 ingress 声明已支持。
+- 当前 Arbiter SNode intake 仍直接使用 CSV payload decoder；Verifier/replay executor 已有 materializer seam。Native Data block 支持需要把 payload encoding/profile 明确传入 staged SNode intake 和 replay profile，不能只改 ingress 声明已支持。
 - HouseGate 不能重新实现 row canonicalization、row-id、part LtHash、schema root 或 state-root assembly；统一调用 `payloadexec`、`chexec`、`pkg/lthash` 共享 helper。
 
 ### 3.3 Source claim 接线约束
