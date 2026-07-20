@@ -288,6 +288,11 @@ type IntakeResult struct {
 	Claim       ClaimOutcome
 	Prepared    PreparedLocalResult
 
+	// Reason, when non-empty on a non-ACK2 result, names why ACK2 was withheld
+	// at the dual gate. It is diagnostic only; the protocol outcome is carried by
+	// Submit/Claim and Ack2.
+	Reason string
+
 	// terminal marks an outcome that will not change on retry (ACK2, or a
 	// successfully cleaned abort). Only terminal outcomes are recorded for
 	// idempotent replay; retryable/unknown outcomes and failed aborts are not,
@@ -614,6 +619,15 @@ func (o *Orchestrator) afterSubmit(ctx context.Context, env StatementEnvelope, p
 // statement and finishes the intake on the claim outcome.
 func (o *Orchestrator) registerAndFinish(ctx context.Context, env StatementEnvelope, prepared PreparedLocalResult, rec *intakeRecord) (IntakeResult, error) {
 	res := o.resultFor(rec)
+	// registerAndFinish is only ever reached after the submit was accepted — on
+	// the fresh path afterSubmit set the SubmitAccepted stage before returning
+	// done == false, and on the resume path rec.stage is already SubmitAccepted.
+	// The durable stage is therefore the authoritative "submit accepted" fact;
+	// seed res.Submit from it so the ACK2 gate reads the same truthful value on
+	// both the fresh and resume paths (resultFor does not restore res.Submit).
+	if res.Submit.Category == OutcomeUnspecified {
+		res.Submit = SubmitOutcome{Category: OutcomeAccepted}
+	}
 
 	claim, claimErr := o.preparer.RegisterPreparedClaim(ctx, env.StatementID)
 	if claimErr != nil {
@@ -621,12 +635,15 @@ func (o *Orchestrator) registerAndFinish(ctx context.Context, env StatementEnvel
 	}
 	res.Claim = claim
 
-	// The RC's bound source_node must be present and equal to the source that
-	// prepared the write.
-	if claim.BoundSource == "" || claim.BoundSource != prepared.SourceNode {
-		return o.abort(ctx, res, rec, "RC source_node mismatch")
-	}
-	// Terminal RC reject: abort, no ACK2.
+	// Classify the RC by category BEFORE inspecting its bound source_node. A
+	// retryable/unknown claim (e.g. NotLeader) carries an empty BoundSource
+	// because the FSM has not bound a source yet; per design 3.4 it must never be
+	// cleaned. Testing the source first would misread that empty BoundSource as a
+	// terminal "source mismatch" and wrongly abort a retryable RC. The
+	// source-agreement check is only meaningful once a claim has actually BOUND
+	// (Accepted/ExactIdempotent), so it moves onto the accept path below.
+
+	// Terminal RC reject: abort the exact candidate, no ACK2, regardless of source.
 	if claim.Category.RequiresAbort() {
 		return o.abort(ctx, res, rec, claim.Reason)
 	}
@@ -636,11 +653,43 @@ func (o *Orchestrator) registerAndFinish(ctx context.Context, env StatementEnvel
 		return res, nil
 	}
 
-	// Both gates succeeded and the local write is complete: ACK2.
-	res.Ack2 = true
+	// Accept path (Accepted / ExactIdempotent): the RC has bound a source, so its
+	// bound source_node must be present and equal to the source that prepared the
+	// write. An accepted claim with a blank or wrong bound source is a genuine
+	// terminal inconsistency and must abort (exact-candidate cleanup), not merely
+	// withhold ACK2.
+	if prepared.SourceNode == "" || claim.BoundSource == "" || claim.BoundSource != prepared.SourceNode {
+		return o.abort(ctx, res, rec, "RC source_node mismatch")
+	}
+
+	// The RC is bound: advance the journal to RCBound, then consult the single
+	// ACK2 dual gate. The gate re-checks all five design-section-3.4 conditions
+	// together (payload durable, unsafe write complete, submit accepted, claim
+	// bound, lifecycle == RCBound) plus source agreement, so ACK2 is granted in
+	// exactly one place and can never be reported from a partially satisfied
+	// state. Reaching here means the local write is complete and durable (the
+	// prepared candidate was cached), so those inputs are set true.
 	res.Lifecycle = LifecycleRCBound
-	res.terminal = true
 	o.setStage(rec, LifecycleRCBound)
+	ack, reason := Ack2Ready(Ack2Inputs{
+		PayloadDurable:   true,
+		UnsafeWriteDone:  true,
+		Submit:           res.Submit,
+		Claim:            claim,
+		JournalLifecycle: LifecycleRCBound,
+		PreparedSource:   prepared.SourceNode,
+		ClaimBoundSource: claim.BoundSource,
+	})
+	if !ack {
+		// Defensive: the branch checks above already exclude every non-ack path,
+		// so this cannot fire today. Keep it fail-closed rather than acking on an
+		// unexpected input, and do not mark the outcome terminal so a retry can
+		// still converge.
+		res.Reason = reason
+		return res, nil
+	}
+	res.Ack2 = true
+	res.terminal = true
 	return res, nil
 }
 

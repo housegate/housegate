@@ -256,6 +256,70 @@ func TestOrchestrate_RegistersClaimOnlyAfterAcceptedSubmit(t *testing.T) {
 	}
 }
 
+// rcRetryThenAcceptPreparer prepares successfully and returns a retryable RC on
+// the first RegisterPreparedClaim and an accepted RC afterwards, so a test can
+// drive the SubmitAccepted resume path: first attempt accepts the submit but the
+// RC is retryable (no ACK2, submit stays accepted, prepare stays cached); the
+// retry resumes straight at the RC gate and must reach ACK2 through the dual
+// gate. It never simulates the companion protocol.
+type rcRetryThenAcceptPreparer struct {
+	prepared     PreparedLocalResult
+	registerCnt  int64
+	prepareCount int64
+}
+
+func (p *rcRetryThenAcceptPreparer) PrepareLocalStatement(_ context.Context, env StatementEnvelope, _ []byte) (PreparedLocalResult, error) {
+	atomic.AddInt64(&p.prepareCount, 1)
+	res := p.prepared
+	res.StatementID = env.StatementID
+	return res, nil
+}
+
+func (p *rcRetryThenAcceptPreparer) RegisterPreparedClaim(_ context.Context, _ string) (ClaimOutcome, error) {
+	if atomic.AddInt64(&p.registerCnt, 1) == 1 {
+		return ClaimOutcome{Category: OutcomeRetryable, Reason: "NotLeader"}, nil
+	}
+	return ClaimOutcome{Category: OutcomeAccepted, BoundSource: "snode-A"}, nil
+}
+
+func (p *rcRetryThenAcceptPreparer) AbortPreparedStatement(_ context.Context, _ string, _ string) error {
+	return nil
+}
+
+// TestOrchestrate_ResumeFromSubmitAcceptedReachesAck2 pins that a statement
+// whose submit was accepted but whose first RC was retryable resumes from the
+// SubmitAccepted stage on retry and reaches ACK2 through the dual gate — without
+// re-running the unsafe write. It guards the resume path where res.Submit is
+// not restored from the record: the gate must still see the submit as accepted
+// (from the durable SubmitAccepted stage) so a resume is not wrongly denied.
+func TestOrchestrate_ResumeFromSubmitAcceptedReachesAck2(t *testing.T) {
+	requireCompanionStagedIntake(t)
+
+	prep := &rcRetryThenAcceptPreparer{prepared: boundSource()}
+	sub := &recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeAccepted}}
+	orch := NewOrchestrator(sub, prep, OrchestratorConfig{ExpectedSource: "snode-A"})
+	adm := admissionFixture()
+
+	r1, err := orch.Orchestrate(context.Background(), adm)
+	if err != nil {
+		t.Fatalf("first Orchestrate: %v", err)
+	}
+	if r1.Ack2 {
+		t.Fatal("a retryable RC must not ACK2 on the first attempt")
+	}
+
+	r2, err := orch.Orchestrate(context.Background(), adm)
+	if err != nil {
+		t.Fatalf("resume Orchestrate: %v", err)
+	}
+	if !r2.Ack2 {
+		t.Fatal("a resume from SubmitAccepted with an accepted RC must reach ACK2")
+	}
+	if got := atomic.LoadInt64(&prep.prepareCount); got != 1 {
+		t.Fatalf("prepare ran %d times; the resume must reuse the cached prepare", got)
+	}
+}
+
 func TestOrchestrate_NoClaimWhenSubmitTerminalReject(t *testing.T) {
 	requireCompanionStagedIntake(t)
 
