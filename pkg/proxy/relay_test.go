@@ -985,6 +985,37 @@ func TestRelay_ClientToUpstream_FiresInputCompleteAfterEmptyData(t *testing.T) {
 }
 
 func TestRelay_ClientToUpstream_IgnoresInitialEmptyDataBeforeInsertPayload(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "bare native insert",
+			sql:  "INSERT INTO t",
+		},
+		{
+			name: "quoted identifier named select",
+			sql:  "INSERT INTO t (`select`) FORMAT Native",
+		},
+		{
+			name: "column list contains select token",
+			sql:  "INSERT INTO t (select) FORMAT Native",
+		},
+		{
+			name: "comment mentions select",
+			sql:  "INSERT INTO t /* SELECT is only a comment */ FORMAT Native",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runStreamingInsertDataLifecycle(t, tt.sql)
+		})
+	}
+}
+
+func runStreamingInsertDataLifecycle(t *testing.T, sql string) {
+	t.Helper()
+
 	clientProxy, proxyClient := net.Pipe()
 	upstreamProxy, proxyUpstream := net.Pipe()
 	defer clientProxy.Close()
@@ -1000,7 +1031,7 @@ func TestRelay_ClientToUpstream_IgnoresInitialEmptyDataBeforeInsertPayload(t *te
 	go func() {
 		var qb proto.Buffer
 		(&proto.Query{
-			ID: "qid", Body: "INSERT INTO t",
+			ID: "qid", Body: sql,
 			Info: proto.ClientInfo{
 				ProtocolVersion: rev, Major: 24, Minor: 1,
 				Interface: proto.InterfaceTCP,

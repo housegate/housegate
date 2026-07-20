@@ -536,25 +536,156 @@ func queryMayStreamClientData(qctx *plugin.QueryContext) bool {
 	if qctx == nil || qctx.Query == nil {
 		return false
 	}
-	words := sqlWords(qctx.Query.Body)
-	if len(words) == 0 || words[0] != "INSERT" {
+	source, ok := insertSourceKeyword(qctx.Query.Body)
+	if !ok {
 		return false
 	}
-	for _, word := range words {
-		switch word {
-		case "VALUES", "SELECT":
-			return false
-		}
+	switch source {
+	case "VALUES", "SELECT", "WITH":
+		return false
+	default:
+		return true
 	}
-	return true
 }
 
-func sqlWords(sql string) []string {
-	upper := strings.ToUpper(sql)
-	fields := strings.FieldsFunc(upper, func(r rune) bool {
-		return !(r == '_' || r >= '0' && r <= '9' || r >= 'A' && r <= 'Z')
-	})
-	return fields
+func insertSourceKeyword(sql string) (string, bool) {
+	tok, pos, ok := nextSQLToken(sql, 0)
+	if !ok || tok.kind != sqlTokenWord || tok.text != "INSERT" {
+		return "", false
+	}
+
+	depth := 0
+	for {
+		tok, next, ok := nextSQLToken(sql, pos)
+		if !ok {
+			return "", true
+		}
+		pos = next
+		switch tok.kind {
+		case sqlTokenLParen:
+			depth++
+		case sqlTokenRParen:
+			if depth > 0 {
+				depth--
+			}
+		case sqlTokenWord:
+			if depth != 0 {
+				continue
+			}
+			switch tok.text {
+			case "FORMAT", "VALUES", "SELECT", "WITH":
+				return tok.text, true
+			}
+		}
+	}
+}
+
+type sqlTokenKind int
+
+const (
+	sqlTokenOther sqlTokenKind = iota
+	sqlTokenWord
+	sqlTokenLParen
+	sqlTokenRParen
+)
+
+type sqlToken struct {
+	kind sqlTokenKind
+	text string
+}
+
+func nextSQLToken(sql string, pos int) (sqlToken, int, bool) {
+	for {
+		pos = skipSQLSpaceAndComments(sql, pos)
+		if pos >= len(sql) {
+			return sqlToken{}, pos, false
+		}
+		switch sql[pos] {
+		case '\'', '"', '`':
+			pos = skipSQLQuoted(sql, pos)
+			continue
+		}
+		break
+	}
+
+	switch sql[pos] {
+	case '(':
+		return sqlToken{kind: sqlTokenLParen}, pos + 1, true
+	case ')':
+		return sqlToken{kind: sqlTokenRParen}, pos + 1, true
+	}
+	if isSQLIdentStart(sql[pos]) {
+		start := pos
+		pos++
+		for pos < len(sql) && isSQLIdentPart(sql[pos]) {
+			pos++
+		}
+		return sqlToken{
+			kind: sqlTokenWord,
+			text: strings.ToUpper(sql[start:pos]),
+		}, pos, true
+	}
+	return sqlToken{kind: sqlTokenOther}, pos + 1, true
+}
+
+func skipSQLSpaceAndComments(sql string, pos int) int {
+	for pos < len(sql) {
+		switch {
+		case sql[pos] == ' ' || sql[pos] == '\t' || sql[pos] == '\n' || sql[pos] == '\r' || sql[pos] == '\f':
+			pos++
+		case sql[pos] == '#':
+			pos = skipSQLLineComment(sql, pos+1)
+		case pos+1 < len(sql) && sql[pos] == '-' && sql[pos+1] == '-':
+			pos = skipSQLLineComment(sql, pos+2)
+		case pos+1 < len(sql) && sql[pos] == '/' && sql[pos+1] == '*':
+			pos += 2
+			for pos+1 < len(sql) && !(sql[pos] == '*' && sql[pos+1] == '/') {
+				pos++
+			}
+			if pos+1 < len(sql) {
+				pos += 2
+			}
+		default:
+			return pos
+		}
+	}
+	return pos
+}
+
+func skipSQLLineComment(sql string, pos int) int {
+	for pos < len(sql) && sql[pos] != '\n' && sql[pos] != '\r' {
+		pos++
+	}
+	return pos
+}
+
+func skipSQLQuoted(sql string, pos int) int {
+	quote := sql[pos]
+	pos++
+	for pos < len(sql) {
+		if sql[pos] == '\\' {
+			pos += 2
+			continue
+		}
+		if sql[pos] == quote {
+			pos++
+			if pos < len(sql) && sql[pos] == quote {
+				pos++
+				continue
+			}
+			return pos
+		}
+		pos++
+	}
+	return pos
+}
+
+func isSQLIdentStart(c byte) bool {
+	return c == '_' || c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z'
+}
+
+func isSQLIdentPart(c byte) bool {
+	return isSQLIdentStart(c) || c >= '0' && c <= '9'
 }
 
 // upstreamToClient streams upstream bytes straight through to the client.
