@@ -12,6 +12,7 @@ go_library(
         "//pkg/plugin",
         "//pkg/sqlident",
         "//pkg/sqlmeta",
+        "@com_github_clickhouse_ch_go//proto",
     ],
 )
 
@@ -25,5 +26,6 @@ go_test(
         "//pkg/chsession",
         "//pkg/plugin",
         "//pkg/sqlmeta",
+        "@com_github_clickhouse_ch_go//proto",
     ],
 )
