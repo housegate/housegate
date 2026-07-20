@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/ClickHouse/ch-go/proto"
@@ -300,8 +301,10 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 	// context handed to OnClientData; nil means "no query owns the data"
 	// (rejected query, or data before any query) and the hook is skipped.
 	var (
-		curQctx      *plugin.QueryContext
-		rejectedQctx *plugin.QueryContext
+		curQctx                *plugin.QueryContext
+		curQctxSawInitialEmpty bool
+		curQctxSawPayload      bool
+		rejectedQctx           *plugin.QueryContext
 	)
 	for {
 		up := r.sess.Upstream() // atomic: picks up rebinds (future C3)
@@ -457,6 +460,8 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 				"upstream", upstreamAddr(up),
 			)
 			curQctx = qctx
+			curQctxSawInitialEmpty = false
+			curQctxSawPayload = false
 			continue
 		}
 
@@ -483,17 +488,29 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 			if curQctx == nil {
 				return fmt.Errorf("client Data packet has no active query")
 			}
-			if err := r.hooks.OnClientDataStrict(ctx, curQctx, pkt.Raw); err != nil {
-				r.writeExceptionToClient(ctx, err)
-				r.hooks.OnQueryAbort(ctx, curQctx)
-				r.hooks.OnQueryComplete(ctx, r.sess)
-				return fmt.Errorf("client data strict hook: %w", err)
-			}
-			if err := r.hooks.OnClientData(ctx, curQctx, pkt.Raw); err != nil {
-				logger.Warnw("client data hook failed (fail-open)",
-					"raw_len", pkt.RawLen,
-					"err", err,
-				)
+			deferInputComplete := inputComplete &&
+				queryMayStreamClientData(curQctx) &&
+				!curQctxSawPayload &&
+				!curQctxSawInitialEmpty
+			if deferInputComplete {
+				curQctxSawInitialEmpty = true
+				inputComplete = false
+			} else {
+				if !inputComplete {
+					curQctxSawPayload = true
+				}
+				if err := r.hooks.OnClientDataStrict(ctx, curQctx, pkt.Raw); err != nil {
+					r.writeExceptionToClient(ctx, err)
+					r.hooks.OnQueryAbort(ctx, curQctx)
+					r.hooks.OnQueryComplete(ctx, r.sess)
+					return fmt.Errorf("client data strict hook: %w", err)
+				}
+				if err := r.hooks.OnClientData(ctx, curQctx, pkt.Raw); err != nil {
+					logger.Warnw("client data hook failed (fail-open)",
+						"raw_len", pkt.RawLen,
+						"err", err,
+					)
+				}
 			}
 		}
 
@@ -509,8 +526,35 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 		if inputComplete {
 			r.hooks.OnQueryInputComplete(ctx, curQctx)
 			curQctx = nil
+			curQctxSawInitialEmpty = false
+			curQctxSawPayload = false
 		}
 	}
+}
+
+func queryMayStreamClientData(qctx *plugin.QueryContext) bool {
+	if qctx == nil || qctx.Query == nil {
+		return false
+	}
+	words := sqlWords(qctx.Query.Body)
+	if len(words) == 0 || words[0] != "INSERT" {
+		return false
+	}
+	for _, word := range words {
+		switch word {
+		case "VALUES", "SELECT":
+			return false
+		}
+	}
+	return true
+}
+
+func sqlWords(sql string) []string {
+	upper := strings.ToUpper(sql)
+	fields := strings.FieldsFunc(upper, func(r rune) bool {
+		return !(r == '_' || r >= '0' && r <= '9' || r >= 'A' && r <= 'Z')
+	})
+	return fields
 }
 
 // upstreamToClient streams upstream bytes straight through to the client.
