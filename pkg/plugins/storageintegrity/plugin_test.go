@@ -5,8 +5,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -618,6 +620,85 @@ func TestIngressFinalizesOnClientInputComplete(t *testing.T) {
 	if admission.Payload.Revision != qctx.Session.State().ClientRevision {
 		t.Fatalf("revision = %d, want %d", admission.Payload.Revision, qctx.Session.State().ClientRevision)
 	}
+}
+
+func TestIngressConsumerReceivesCompletedAdmissionAndClearsPending(t *testing.T) {
+	consumer := &recordingConsumer{}
+	p, signer := newSignedIngressWithConfig(t, Config{AdmissionConsumer: consumer})
+	sql := "INSERT INTO tenant.events FORMAT Native"
+	qctx := signedQueryContext(t, 58, signer, sql, sql, sqlmeta.StatementTypeInsert)
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	if err := p.OnClientDataStrict(context.Background(), qctx, []byte{byte(chproto.ClientDataCode), 1}); err != nil {
+		t.Fatalf("OnClientDataStrict: %v", err)
+	}
+	p.OnQueryInputComplete(context.Background(), qctx)
+
+	admission := consumer.requireOne(t)
+	if admission.StatementID != "query-id" || admission.TableID != "tenant.events" {
+		t.Fatalf("admission = %s/%s, want query-id/tenant.events", admission.StatementID, admission.TableID)
+	}
+	if _, err := p.ConsumeAdmission(qctx.Session.ID()); err == nil {
+		t.Fatal("consumer-success admission remained pending")
+	}
+
+	next := signedQueryContext(t, 58, signer, sql, sql, sqlmeta.StatementTypeInsert)
+	next.Query.ID = "query-id-2"
+	next.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+	if err := p.OnQuery(context.Background(), next); err != nil {
+		t.Fatalf("second OnQuery after consumer success: %v", err)
+	}
+}
+
+func TestIngressConsumerFailureRetainsPendingAdmission(t *testing.T) {
+	consumer := &recordingConsumer{err: errors.New("consumer unavailable")}
+	p, signer := newSignedIngressWithConfig(t, Config{AdmissionConsumer: consumer})
+	sql := "INSERT INTO tenant.events FORMAT Native"
+	qctx := signedQueryContext(t, 59, signer, sql, sql, sqlmeta.StatementTypeInsert)
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	if err := p.OnClientDataStrict(context.Background(), qctx, []byte{byte(chproto.ClientDataCode), 1}); err != nil {
+		t.Fatalf("OnClientDataStrict: %v", err)
+	}
+	p.OnQueryInputComplete(context.Background(), qctx)
+
+	next := signedQueryContext(t, 59, signer, sql, sql, sqlmeta.StatementTypeInsert)
+	next.Query.ID = "query-id-2"
+	next.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+	err := p.OnQuery(context.Background(), next)
+	if err == nil || !strings.Contains(err.Error(), "has not been consumed") {
+		t.Fatalf("next OnQuery err = %v, want pending admission rejection", err)
+	}
+}
+
+type recordingConsumer struct {
+	mu         sync.Mutex
+	err        error
+	admissions []Admission
+}
+
+func (c *recordingConsumer) ConsumeStorageIntegrityAdmission(_ context.Context, admission Admission) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.err != nil {
+		return c.err
+	}
+	c.admissions = append(c.admissions, admission)
+	return nil
+}
+
+func (c *recordingConsumer) requireOne(t *testing.T) Admission {
+	t.Helper()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.admissions) != 1 {
+		t.Fatalf("consumed admissions = %d, want 1", len(c.admissions))
+	}
+	return c.admissions[0]
 }
 
 func TestIngressRejectsOversizedNativePayload(t *testing.T) {

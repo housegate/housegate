@@ -36,19 +36,25 @@ const (
 )
 
 type Config struct {
-	Enabled         bool
-	AuthValidator   auth.Validator
-	Purpose         string
-	RequestTimeout  time.Duration
-	MaxPayloadBytes uint64
+	Enabled           bool
+	AuthValidator     auth.Validator
+	Purpose           string
+	RequestTimeout    time.Duration
+	MaxPayloadBytes   uint64
+	AdmissionConsumer AdmissionConsumer
+}
+
+type AdmissionConsumer interface {
+	ConsumeStorageIntegrityAdmission(ctx context.Context, admission Admission) error
 }
 
 type Plugin struct {
-	enabled        bool
-	authValidator  auth.Validator
-	purpose        string
-	requestTimeout time.Duration
-	maxPayload     uint64
+	enabled           bool
+	authValidator     auth.Validator
+	purpose           string
+	requestTimeout    time.Duration
+	maxPayload        uint64
+	admissionConsumer AdmissionConsumer
 
 	mu      sync.Mutex
 	active  map[int64]*admissionState
@@ -97,13 +103,14 @@ func New(cfg Config) *Plugin {
 		requestTimeout = DefaultRequestTimeout
 	}
 	return &Plugin{
-		enabled:        cfg.Enabled,
-		authValidator:  cfg.AuthValidator,
-		purpose:        purpose,
-		requestTimeout: requestTimeout,
-		maxPayload:     maxPayload,
-		active:         map[int64]*admissionState{},
-		pending:        map[int64]*admissionState{},
+		enabled:           cfg.Enabled,
+		authValidator:     cfg.AuthValidator,
+		purpose:           purpose,
+		requestTimeout:    requestTimeout,
+		maxPayload:        maxPayload,
+		admissionConsumer: cfg.AdmissionConsumer,
+		active:            map[int64]*admissionState{},
+		pending:           map[int64]*admissionState{},
 	}
 }
 
@@ -219,21 +226,29 @@ func (p *Plugin) OnQueryComplete(_ context.Context, sess chsession.Session) {
 	// completion hook is best-effort and must not publish correctness state.
 }
 
-func (p *Plugin) OnQueryInputComplete(_ context.Context, qctx *plugin.QueryContext) {
+func (p *Plugin) OnQueryInputComplete(ctx context.Context, qctx *plugin.QueryContext) {
 	if p == nil || !p.enabled || qctx == nil || qctx.Session == nil || qctx.Query == nil {
 		return
 	}
+	var state *admissionState
+	var shouldConsume bool
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	id := qctx.Session.ID()
-	state := p.active[id]
+	state = p.active[id]
 	if state == nil || state.admission.StatementID != strings.TrimSpace(qctx.Query.ID) {
+		p.mu.Unlock()
 		return
 	}
 	state.complete = true
 	delete(p.active, id)
-	if p.pending[id] == nil {
+	shouldConsume = p.admissionConsumer != nil
+	if !shouldConsume && p.pending[id] == nil {
 		p.pending[id] = state
+	}
+	p.mu.Unlock()
+
+	if shouldConsume {
+		p.consumeCompletedAdmission(ctx, id, state)
 	}
 }
 
@@ -267,6 +282,21 @@ func (p *Plugin) abortQuery(qctx *plugin.QueryContext) {
 	p.mu.Unlock()
 }
 
+func (p *Plugin) consumeCompletedAdmission(ctx context.Context, sessionID int64, state *admissionState) {
+	admission, err := admissionFromState(state)
+	if err == nil {
+		err = p.admissionConsumer.ConsumeStorageIntegrityAdmission(ctx, admission)
+	}
+	if err == nil {
+		return
+	}
+	p.mu.Lock()
+	if p.pending[sessionID] == nil {
+		p.pending[sessionID] = state
+	}
+	p.mu.Unlock()
+}
+
 func (p *Plugin) ConsumeAdmission(sessionID int64) (Admission, error) {
 	if p == nil {
 		return Admission{}, errors.New("storage_integrity admission plugin is nil")
@@ -280,6 +310,10 @@ func (p *Plugin) ConsumeAdmission(sessionID int64) (Admission, error) {
 	delete(p.pending, sessionID)
 	p.mu.Unlock()
 
+	return admissionFromState(state)
+}
+
+func admissionFromState(state *admissionState) (Admission, error) {
 	admission := state.admission
 	if admission.Kind == KindInsert && state.payload.Len() == 0 {
 		return Admission{}, fmt.Errorf("storage_integrity incomplete native payload capture for statement %s", admission.StatementID)

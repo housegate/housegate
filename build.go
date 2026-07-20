@@ -597,6 +597,9 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 
 	var storageIntegrityIngress *storageintegrity.Plugin
 	if cfg.StorageIntegrity.Ingress.Enabled {
+		if opts.StorageIntegrityAdmissionConsumer == nil {
+			return nil, fmt.Errorf("storage_integrity.ingress admission consumer is required when enabled")
+		}
 		ingressCfg := cfg.StorageIntegrity.Ingress
 		ingressValidator := auth.NewEthValidator(
 			ingressCfg.AllowedAddresses,
@@ -607,11 +610,12 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			nil,
 		)
 		storageIntegrityIngress = storageintegrity.New(storageintegrity.Config{
-			Enabled:         true,
-			AuthValidator:   ingressValidator,
-			Purpose:         auth.QueryPurpose,
-			RequestTimeout:  ingressCfg.RequestTimeout.Duration,
-			MaxPayloadBytes: ingressCfg.MaxPayloadBytes,
+			Enabled:           true,
+			AuthValidator:     ingressValidator,
+			Purpose:           auth.QueryPurpose,
+			RequestTimeout:    ingressCfg.RequestTimeout.Duration,
+			MaxPayloadBytes:   ingressCfg.MaxPayloadBytes,
+			AdmissionConsumer: opts.StorageIntegrityAdmissionConsumer,
 		})
 		queryPlugins = append(queryPlugins, storageIntegrityIngress)
 		strictDataPlugins = append(strictDataPlugins, storageIntegrityIngress)
