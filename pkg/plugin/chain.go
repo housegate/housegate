@@ -41,17 +41,18 @@ import (
 // false. Default is run; plugins like rewrite / commitgate
 // opt out because their work belongs on the receiving (host) proxy.
 type PluginChain struct {
-	ConnLifecyclePlugins      []ConnLifecyclePlugin
-	HelloPlugins              []HelloPlugin
-	HandshakeCompletePlugins  []HandshakeCompletePlugin
-	QueryPlugins              []QueryPlugin
-	StrictDataPlugins         []StrictDataPlugin
-	DataPlugins               []DataPlugin
-	ExceptionPlugins          []ExceptionPlugin
-	QueryInputCompletePlugins []QueryInputCompletePlugin
-	QueryAbortPlugins         []QueryAbortPlugin
-	QueryCompletePlugins      []QueryCompletePlugin
-	ClosePlugins              []ClosePlugin
+	ConnLifecyclePlugins            []ConnLifecyclePlugin
+	HelloPlugins                    []HelloPlugin
+	HandshakeCompletePlugins        []HandshakeCompletePlugin
+	QueryPlugins                    []QueryPlugin
+	StrictDataPlugins               []StrictDataPlugin
+	DataPlugins                     []DataPlugin
+	ExceptionPlugins                []ExceptionPlugin
+	QueryInputCompleteStrictPlugins []QueryInputCompleteStrictPlugin
+	QueryInputCompletePlugins       []QueryInputCompletePlugin
+	QueryAbortPlugins               []QueryAbortPlugin
+	QueryCompletePlugins            []QueryCompletePlugin
+	ClosePlugins                    []ClosePlugin
 }
 
 // runsOnRouted reports whether p should fire on a routed session.
@@ -303,6 +304,31 @@ func (c *PluginChain) OnException(ctx context.Context, sess chsession.Session, e
 		}
 	}
 	return first
+}
+
+// OnQueryInputCompleteStrict runs the error-bearing, pre-splice end-of-input
+// chain. The first plugin error is returned so Relay can reject the query
+// lifecycle before the terminating empty Data block is forwarded upstream.
+func (c *PluginChain) OnQueryInputCompleteStrict(ctx context.Context, qctx *QueryContext) error {
+	if len(c.QueryInputCompleteStrictPlugins) == 0 || qctx == nil || qctx.Session == nil {
+		return nil
+	}
+	state := qctx.Session.State()
+	for _, p := range c.QueryInputCompleteStrictPlugins {
+		if state.IsRouted() && !runsOnRouted(p) {
+			continue
+		}
+		if state.PeerTrusted() && !state.IsForwardedFromPeer && !runsOnPeerTrust(p) {
+			continue
+		}
+		if state.IsForwarding && !runsOnForward(p) {
+			continue
+		}
+		if err := p.OnQueryInputCompleteStrict(ctx, qctx); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *PluginChain) OnQueryInputComplete(ctx context.Context, qctx *QueryContext) {

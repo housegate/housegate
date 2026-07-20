@@ -88,6 +88,29 @@ func TestConfigValidateStorageIntegrityIngress(t *testing.T) {
 	})
 }
 
+func TestConfigStorageIntegritySafeMerges(t *testing.T) {
+	t.Run("defaults off", func(t *testing.T) {
+		cfg := Default()
+		if cfg.StorageIntegrity.SafeMerges.AllowNativeBackgroundMerges {
+			t.Fatal("safe_merges.allow_native_background_merges defaulted true, want false")
+		}
+	})
+
+	t.Run("enabling native merges rejected", func(t *testing.T) {
+		cfg := minimalServerConfig(t)
+		cfg.StorageIntegrity.Ingress.Enabled = true
+		cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{"0x1111111111111111111111111111111111111111"}
+		cfg.StorageIntegrity.Ingress.MaxTokenAge.Duration = time.Minute
+		cfg.StorageIntegrity.Ingress.RequestTimeout.Duration = 5 * time.Second
+		cfg.StorageIntegrity.Ingress.MaxPayloadBytes = defaultStorageIntegrityMaxPayloadBytes
+		cfg.StorageIntegrity.SafeMerges.AllowNativeBackgroundMerges = true
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "allow_native_background_merges") {
+			t.Fatalf("Validate err = %v, want native-merges rejection", err)
+		}
+	})
+}
+
 func agentConfigForStorageIntegrityTest() agent.Config {
 	return agent.Config{
 		Mode:          true,

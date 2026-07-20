@@ -514,6 +514,20 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 			}
 		}
 
+		// Before splicing the terminating empty Data block, run the strict
+		// end-of-input chain. An error here is fail-closed: reject the query and
+		// do NOT forward the terminating block, so the upstream never commits a
+		// statement whose correctness-critical end-of-input action failed (e.g. a
+		// storage-integrity admission the integrity consumer rejected).
+		if inputComplete && curQctx != nil {
+			if err := r.hooks.OnQueryInputCompleteStrict(ctx, curQctx); err != nil {
+				r.writeExceptionToClient(ctx, err)
+				r.hooks.OnQueryAbort(ctx, curQctx)
+				r.hooks.OnQueryComplete(ctx, r.sess)
+				return fmt.Errorf("query input complete strict hook: %w", err)
+			}
+		}
+
 		// Splice any non-decoded / decode-failed packet.
 		logger.Debugw("client packet spliced to upstream",
 			"type", pkt.Type,

@@ -44,6 +44,7 @@ type Hooks interface {
 	OnClientDataStrict(ctx context.Context, qctx *QueryContext, raw []byte) error
 	OnClientData(ctx context.Context, qctx *QueryContext, raw []byte) error
 	OnException(ctx context.Context, sess chsession.Session, exc *chproto.Exception) error
+	OnQueryInputCompleteStrict(ctx context.Context, qctx *QueryContext) error
 	OnQueryInputComplete(ctx context.Context, qctx *QueryContext)
 	OnQueryAbort(ctx context.Context, qctx *QueryContext)
 	OnQueryComplete(ctx context.Context, sess chsession.Session)
@@ -77,6 +78,8 @@ func (NoopHooks) OnClientData(context.Context, *QueryContext, []byte) error { re
 func (NoopHooks) OnException(context.Context, chsession.Session, *chproto.Exception) error {
 	return nil
 }
+
+func (NoopHooks) OnQueryInputCompleteStrict(context.Context, *QueryContext) error { return nil }
 
 func (NoopHooks) OnQueryInputComplete(context.Context, *QueryContext) {}
 
