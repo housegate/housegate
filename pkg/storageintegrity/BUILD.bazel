@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "ack2_gate.go",
         "intake.go",
+        "intake_abort.go",
         "intake_retry.go",
         "native_payload.go",
     ],
@@ -22,6 +23,7 @@ go_test(
     name = "storageintegrity_test",
     srcs = [
         "ack2_gate_test.go",
+        "intake_abort_test.go",
         "intake_retry_test.go",
         "intake_test.go",
         "native_payload_test.go",

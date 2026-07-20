@@ -269,8 +269,11 @@ type SourcePreparer interface {
 	// AbortPreparedStatement performs exact-candidate cleanup for a terminally
 	// rejected statement: it persists AbortPending, excludes the local sums, and
 	// idempotently drops the exact candidate part names. It never drops a whole
-	// partition.
-	AbortPreparedStatement(ctx context.Context, statementID string, reason string) error
+	// partition. HouseGate hands it the exact frozen candidate parts (from the
+	// journal's PreparedLocalResult), so the cleanup surface is bounded by
+	// HouseGate's record, not inferred source-side by statement_id — a part not
+	// present is treated as already cleaned, and an empty set is a no-op cleanup.
+	AbortPreparedStatement(ctx context.Context, statementID string, parts []CandidatePart, reason string) error
 }
 
 // OrchestratorConfig pins the deterministic source the FSM is expected to record
@@ -758,11 +761,19 @@ func (o *Orchestrator) finalizeClaim(ctx context.Context, prepared PreparedLocal
 // failed abort keeps the record at AbortPending (with the reason) and returns an
 // error, so a later attempt re-runs only the abort — never prepare — instead of
 // silently recording the cleanup as done.
+//
+// The cleanup surface is HouseGate's frozen candidate inventory: abort hands the
+// exact CandidateParts from the record's prepared result to the seam (PR06), so
+// the drop is bounded to those exact part names and can never widen to a whole
+// partition. Both the failed attempt and any retry hand the identical frozen
+// set. An empty candidate set is a legitimate no-op cleanup that still reaches
+// Cleaned (a part not present is already clean, design rule 4).
 func (o *Orchestrator) abort(ctx context.Context, res IntakeResult, rec *intakeRecord, reason string) (IntakeResult, error) {
 	res.Ack2 = false
 	res.Lifecycle = LifecycleAbortPending
 	o.setAbortPending(rec, reason)
-	if err := o.preparer.AbortPreparedStatement(ctx, res.StatementID, reason); err != nil {
+	parts := o.abortParts(rec)
+	if err := o.preparer.AbortPreparedStatement(ctx, res.StatementID, parts, reason); err != nil {
 		return res, fmt.Errorf("intake: abort failed for %s (%s): %w", res.StatementID, reason, err)
 	}
 	res.Lifecycle = LifecycleCleaned
