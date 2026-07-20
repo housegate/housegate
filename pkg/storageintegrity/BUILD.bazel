@@ -3,6 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "storageintegrity",
     srcs = [
+        "ack2_gate.go",
         "intake.go",
         "native_payload.go",
     ],
@@ -19,6 +20,7 @@ go_library(
 go_test(
     name = "storageintegrity_test",
     srcs = [
+        "ack2_gate_test.go",
         "intake_test.go",
         "native_payload_test.go",
     ],
