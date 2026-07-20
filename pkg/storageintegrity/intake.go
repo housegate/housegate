@@ -288,6 +288,11 @@ type IntakeResult struct {
 	Claim       ClaimOutcome
 	Prepared    PreparedLocalResult
 
+	// Reason, when non-empty on a non-ACK2 result, names why ACK2 was withheld
+	// at the dual gate. It is diagnostic only; the protocol outcome is carried by
+	// Submit/Claim and Ack2.
+	Reason string
+
 	// terminal marks an outcome that will not change on retry (ACK2, or a
 	// successfully cleaned abort). Only terminal outcomes are recorded for
 	// idempotent replay; retryable/unknown outcomes and failed aborts are not,
@@ -342,6 +347,15 @@ type intakeRecord struct {
 	// later attempt so the unsafe write is never repeated (design section 3.2).
 	prepared    PreparedLocalResult
 	hasPrepared bool
+
+	// Cached accepted submit outcome: set once SubmitStatement returns an
+	// ACK2-permitting outcome ({Accepted, ExactIdempotent}). Retained verbatim so
+	// a resume from SubmitAccepted reports the authoritative submit category — an
+	// exact re-ack must stay distinguishable from a fresh acceptance — instead of
+	// synthesizing one. Non-accepting submit outcomes are never cached here (they
+	// do not advance to SubmitAccepted).
+	submit    SubmitOutcome
+	hasSubmit bool
 
 	// stage is the highest durable lifecycle point this intake has reached; a
 	// resuming attempt uses it to skip already-completed stages.
@@ -606,6 +620,10 @@ func (o *Orchestrator) afterSubmit(ctx context.Context, env StatementEnvelope, p
 		return true, r, err
 	}
 
+	// Cache the accepted submit outcome verbatim before advancing the stage, so a
+	// resume from SubmitAccepted (which does not re-run SubmitStatement) still
+	// reports whether the submit was a fresh accept or an exact re-ack.
+	o.cacheSubmit(rec, submit)
 	o.setStage(rec, LifecycleSubmitAccepted)
 	return false, res, nil
 }
@@ -613,6 +631,13 @@ func (o *Orchestrator) afterSubmit(ctx context.Context, env StatementEnvelope, p
 // registerAndFinish runs the RC gate for an accepted, consistency-checked
 // statement and finishes the intake on the claim outcome.
 func (o *Orchestrator) registerAndFinish(ctx context.Context, env StatementEnvelope, prepared PreparedLocalResult, rec *intakeRecord) (IntakeResult, error) {
+	// resultFor restores res.Submit from the record's cached accepted submit
+	// outcome. registerAndFinish is only ever reached after the submit was
+	// accepted and cached — on the fresh path afterSubmit calls cacheSubmit before
+	// returning done == false, and on the resume path rec.stage is already
+	// SubmitAccepted with the outcome cached. So res.Submit carries the true
+	// category (Accepted vs ExactIdempotent), not a synthesized one, and the ACK2
+	// gate reads the same authoritative value on both paths.
 	res := o.resultFor(rec)
 
 	claim, claimErr := o.preparer.RegisterPreparedClaim(ctx, env.StatementID)
@@ -621,12 +646,15 @@ func (o *Orchestrator) registerAndFinish(ctx context.Context, env StatementEnvel
 	}
 	res.Claim = claim
 
-	// The RC's bound source_node must be present and equal to the source that
-	// prepared the write.
-	if claim.BoundSource == "" || claim.BoundSource != prepared.SourceNode {
-		return o.abort(ctx, res, rec, "RC source_node mismatch")
-	}
-	// Terminal RC reject: abort, no ACK2.
+	// Classify the RC by category BEFORE inspecting its bound source_node. A
+	// retryable/unknown claim (e.g. NotLeader) carries an empty BoundSource
+	// because the FSM has not bound a source yet; per design 3.4 it must never be
+	// cleaned. Testing the source first would misread that empty BoundSource as a
+	// terminal "source mismatch" and wrongly abort a retryable RC. The
+	// source-agreement check is only meaningful once a claim has actually BOUND
+	// (Accepted/ExactIdempotent), so it moves onto the accept path below.
+
+	// Terminal RC reject: abort the exact candidate, no ACK2, regardless of source.
 	if claim.Category.RequiresAbort() {
 		return o.abort(ctx, res, rec, claim.Reason)
 	}
@@ -636,11 +664,42 @@ func (o *Orchestrator) registerAndFinish(ctx context.Context, env StatementEnvel
 		return res, nil
 	}
 
-	// Both gates succeeded and the local write is complete: ACK2.
-	res.Ack2 = true
+	// Accept path (Accepted / ExactIdempotent): the RC has bound a source, so its
+	// bound source_node must be present and equal to the source that prepared the
+	// write. An accepted claim with a blank or wrong bound source is a genuine
+	// terminal inconsistency and must abort (exact-candidate cleanup), not merely
+	// withhold ACK2.
+	if prepared.SourceNode == "" || claim.BoundSource == "" || claim.BoundSource != prepared.SourceNode {
+		return o.abort(ctx, res, rec, "RC source_node mismatch")
+	}
+
+	// The RC is bound: advance the journal to RCBound, then consult the single
+	// ACK2 dual gate. The gate re-checks all five design-section-3.4 conditions
+	// together (payload durable, unsafe write complete, submit accepted, claim
+	// bound, lifecycle == RCBound) plus source agreement, so ACK2 is granted in
+	// exactly one place and can never be reported from a partially satisfied
+	// state. Reaching here means the local write is complete and durable (the
+	// prepared candidate was cached), so those inputs are set true.
 	res.Lifecycle = LifecycleRCBound
-	res.terminal = true
 	o.setStage(rec, LifecycleRCBound)
+	ack, reason := Ack2Ready(Ack2Inputs{
+		PayloadDurable:   true,
+		UnsafeWriteDone:  true,
+		Submit:           res.Submit,
+		Claim:            claim,
+		JournalLifecycle: LifecycleRCBound,
+		PreparedSource:   prepared.SourceNode,
+	})
+	if !ack {
+		// Defensive: the branch checks above already exclude every non-ack path,
+		// so this cannot fire today. Keep it fail-closed rather than acking on an
+		// unexpected input, and do not mark the outcome terminal so a retry can
+		// still converge.
+		res.Reason = reason
+		return res, nil
+	}
+	res.Ack2 = true
+	res.terminal = true
 	return res, nil
 }
 
@@ -661,8 +720,10 @@ func (o *Orchestrator) abort(ctx context.Context, res IntakeResult, rec *intakeR
 	return res, nil
 }
 
-// resultFor seeds an IntakeResult from the record's cached prepare so every exit
-// path reports the prepared candidate consistently.
+// resultFor seeds an IntakeResult from the record's cached prepare and accepted
+// submit outcome so every exit path reports the prepared candidate and the
+// authoritative submit category consistently — including a resume that did not
+// re-run SubmitStatement.
 func (o *Orchestrator) resultFor(rec *intakeRecord) IntakeResult {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -671,7 +732,20 @@ func (o *Orchestrator) resultFor(rec *intakeRecord) IntakeResult {
 		res.Prepared = rec.prepared
 		res.Lifecycle = rec.prepared.Lifecycle
 	}
+	if rec.hasSubmit {
+		res.Submit = rec.submit
+	}
 	return res
+}
+
+// cacheSubmit stores the accepted submit outcome verbatim so a later resume
+// reports the true submit category rather than synthesizing one. It is called
+// only for an ACK2-permitting outcome, as the record advances to SubmitAccepted.
+func (o *Orchestrator) cacheSubmit(rec *intakeRecord, submit SubmitOutcome) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	rec.submit = submit
+	rec.hasSubmit = true
 }
 
 func (o *Orchestrator) cachedPrepared(rec *intakeRecord) (PreparedLocalResult, bool) {

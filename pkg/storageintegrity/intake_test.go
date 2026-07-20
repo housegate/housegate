@@ -256,6 +256,122 @@ func TestOrchestrate_RegistersClaimOnlyAfterAcceptedSubmit(t *testing.T) {
 	}
 }
 
+// rcRetryThenAcceptPreparer prepares successfully and returns a retryable RC on
+// the first RegisterPreparedClaim and an accepted RC afterwards, so a test can
+// drive the SubmitAccepted resume path: first attempt accepts the submit but the
+// RC is retryable (no ACK2, submit stays accepted, prepare stays cached); the
+// retry resumes straight at the RC gate and must reach ACK2 through the dual
+// gate. It never simulates the companion protocol.
+type rcRetryThenAcceptPreparer struct {
+	prepared     PreparedLocalResult
+	registerCnt  int64
+	prepareCount int64
+}
+
+func (p *rcRetryThenAcceptPreparer) PrepareLocalStatement(_ context.Context, env StatementEnvelope, _ []byte) (PreparedLocalResult, error) {
+	atomic.AddInt64(&p.prepareCount, 1)
+	res := p.prepared
+	res.StatementID = env.StatementID
+	return res, nil
+}
+
+func (p *rcRetryThenAcceptPreparer) RegisterPreparedClaim(_ context.Context, _ string) (ClaimOutcome, error) {
+	if atomic.AddInt64(&p.registerCnt, 1) == 1 {
+		return ClaimOutcome{Category: OutcomeRetryable, Reason: "NotLeader"}, nil
+	}
+	return ClaimOutcome{Category: OutcomeAccepted, BoundSource: "snode-A"}, nil
+}
+
+func (p *rcRetryThenAcceptPreparer) AbortPreparedStatement(_ context.Context, _ string, _ string) error {
+	return nil
+}
+
+// TestOrchestrate_ResumeFromSubmitAcceptedReachesAck2 pins that a statement
+// whose submit was accepted but whose first RC was retryable resumes from the
+// SubmitAccepted stage on retry and reaches ACK2 through the dual gate — without
+// re-running the unsafe write. It guards the resume path where res.Submit is
+// restored from the record's cached accepted submit outcome: the gate must see
+// the submit as accepted so a resume is not wrongly denied, and the resumed
+// result must carry the true submit category rather than a synthesized one.
+func TestOrchestrate_ResumeFromSubmitAcceptedReachesAck2(t *testing.T) {
+	requireCompanionStagedIntake(t)
+
+	prep := &rcRetryThenAcceptPreparer{prepared: boundSource()}
+	sub := &recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeAccepted}}
+	orch := NewOrchestrator(sub, prep, OrchestratorConfig{ExpectedSource: "snode-A"})
+	adm := admissionFixture()
+
+	r1, err := orch.Orchestrate(context.Background(), adm)
+	if err != nil {
+		t.Fatalf("first Orchestrate: %v", err)
+	}
+	if r1.Ack2 {
+		t.Fatal("a retryable RC must not ACK2 on the first attempt")
+	}
+
+	r2, err := orch.Orchestrate(context.Background(), adm)
+	if err != nil {
+		t.Fatalf("resume Orchestrate: %v", err)
+	}
+	if !r2.Ack2 {
+		t.Fatal("a resume from SubmitAccepted with an accepted RC must reach ACK2")
+	}
+	if r2.Submit.Category != OutcomeAccepted {
+		t.Fatalf("resumed result must report the true submit category; got %v", r2.Submit.Category)
+	}
+	if got := atomic.LoadInt64(&prep.prepareCount); got != 1 {
+		t.Fatalf("prepare ran %d times; the resume must reuse the cached prepare", got)
+	}
+}
+
+// TestOrchestrate_ExactIdempotentSubmitOutcomePreserved pins that an
+// exact-idempotent submit acceptance is carried through to the intake result
+// verbatim, not flattened to a fresh OutcomeAccepted. IntakeResult.Submit is the
+// authoritative protocol outcome, so a caller must be able to tell an exact
+// re-ack from a first-time acceptance. It checks both the fresh accept→ACK2 path
+// and a resume from SubmitAccepted, since the resume reads the cached submit.
+func TestOrchestrate_ExactIdempotentSubmitOutcomePreserved(t *testing.T) {
+	requireCompanionStagedIntake(t)
+
+	// Fresh path: submit is exact-idempotent, RC accepted → ACK2 in one attempt.
+	freshPrep := &recordingPreparer{
+		prepared:     boundSource(),
+		claimOutcome: ClaimOutcome{Category: OutcomeAccepted, BoundSource: "snode-A"},
+	}
+	freshSub := &recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeExactIdempotent}}
+	fresh := NewOrchestrator(freshSub, freshPrep, OrchestratorConfig{ExpectedSource: "snode-A"})
+	rf, err := fresh.Orchestrate(context.Background(), admissionFixture())
+	if err != nil {
+		t.Fatalf("fresh Orchestrate: %v", err)
+	}
+	if !rf.Ack2 {
+		t.Fatal("exact-idempotent submit + accepted RC must reach ACK2")
+	}
+	if rf.Submit.Category != OutcomeExactIdempotent {
+		t.Fatalf("fresh path must preserve the exact-idempotent submit category; got %v", rf.Submit.Category)
+	}
+
+	// Resume path: submit is exact-idempotent, first RC retryable, retry → ACK2.
+	// The resume reads the cached submit, which must still be exact-idempotent.
+	resumePrep := &rcRetryThenAcceptPreparer{prepared: boundSource()}
+	resumeSub := &recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeExactIdempotent}}
+	resume := NewOrchestrator(resumeSub, resumePrep, OrchestratorConfig{ExpectedSource: "snode-A"})
+	adm := admissionFixture()
+	if _, err := resume.Orchestrate(context.Background(), adm); err != nil {
+		t.Fatalf("resume first attempt: %v", err)
+	}
+	rr, err := resume.Orchestrate(context.Background(), adm)
+	if err != nil {
+		t.Fatalf("resume retry: %v", err)
+	}
+	if !rr.Ack2 {
+		t.Fatal("resume from SubmitAccepted with accepted RC must reach ACK2")
+	}
+	if rr.Submit.Category != OutcomeExactIdempotent {
+		t.Fatalf("resume path must preserve the cached exact-idempotent submit category; got %v", rr.Submit.Category)
+	}
+}
+
 func TestOrchestrate_NoClaimWhenSubmitTerminalReject(t *testing.T) {
 	requireCompanionStagedIntake(t)
 
