@@ -191,6 +191,14 @@ Defaults are:
 - `request_timeout: 5s`;
 - `max_payload_bytes: 67108864`.
 
+When enabled, `buildServer` constructs a dedicated storage-integrity validator
+from this ingress allowlist and max-token-age rather than reusing the generic
+query-auth validator. The same ingress plugin instance is registered into the
+server `QueryPlugins`, `StrictDataPlugins`, `QueryInputCompletePlugins`,
+`QueryAbortPlugins` and `ClosePlugins` chains. The configured request timeout
+bounds storage-integrity JWS validation, and the configured payload limit is
+the strict read/capture limit exposed to Relay.
+
 ## Verification
 
 Focused gate:
@@ -224,4 +232,4 @@ Key coverage includes:
 This change does not implement physical rewrite to `hg_unsafe`, bounded
 predicate analysis, staged prepare, payload-store writes, unsafe ClickHouse
 writes, Arbiter/SNode calls, ACK2 convergence, replay roots, manifests,
-SafeAudit, repair, compaction, promotion or runtime plugin wiring.
+SafeAudit, repair, compaction or promotion.
