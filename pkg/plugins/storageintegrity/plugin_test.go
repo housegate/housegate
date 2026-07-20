@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/ch-go/proto"
+
 	"housegate/housegate/pkg/auth"
 	"housegate/housegate/pkg/chproto"
 	"housegate/housegate/pkg/chsession"
@@ -85,6 +87,26 @@ func TestIngressCapturesExactNativeDataWithoutRowRewrite(t *testing.T) {
 	}
 	if !bytes.Equal(admission.Payload.Bytes, raw) {
 		t.Fatalf("payload bytes = %v, want %v", admission.Payload.Bytes, raw)
+	}
+}
+
+func TestIngressRejectsCompressedInsertBeforeAdmission(t *testing.T) {
+	p, signer := newSignedIngress(t)
+	sql := "INSERT INTO tenant.events FORMAT Native"
+	qctx := signedQueryContext(t, 15, signer, sql, sql, sqlmeta.StatementTypeInsert)
+	qctx.Query.Compression = proto.CompressionEnabled
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+
+	err := p.OnQuery(context.Background(), qctx)
+	if err == nil || !strings.Contains(err.Error(), "compressed native payload") {
+		t.Fatalf("OnQuery err = %v, want compressed native payload rejection", err)
+	}
+	if limit, enforce := p.ClientDataReadLimit(qctx); enforce || limit != 0 {
+		t.Fatalf("ClientDataReadLimit after rejected compressed INSERT = %d/%v, want 0/false", limit, enforce)
+	}
+	p.OnQueryInputComplete(context.Background(), qctx)
+	if _, err := p.ConsumeAdmission(qctx.Session.ID()); err == nil {
+		t.Fatal("compressed INSERT must not publish an admission")
 	}
 }
 

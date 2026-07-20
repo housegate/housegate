@@ -106,9 +106,16 @@ The plugin rejects a disagreement between SQL statement kind,
 
 Relay invokes correctness-critical `StrictDataPlugin` hooks before forwarding
 each client `Data` packet. The storage-integrity hook copies the exact complete
-on-wire packet, including packet code, block name, compressed or uncompressed
+uncompressed on-wire packet, including packet code, block name, Native block
 body, and the terminating empty Data block. It does not mutate the packet and
 does not retain Relay-owned memory.
+
+Compressed storage-integrity INSERT payloads are rejected during `OnQuery`
+before an admission is created. This stage deliberately avoids accepting
+compressed wire bytes that the downstream Native materializer cannot decode
+under a pinned payload-compression contract. Ordinary rejected-query draining
+still honors the client-declared compression mode so the relay can consume the
+remaining input safely after writing the rejection.
 
 The existing `DataPlugin` hook remains a fail-open observation path. Strict
 capture is separate: a strict-hook error writes a synthetic ClickHouse
@@ -230,6 +237,8 @@ Key coverage includes:
 - qhash verification against signed SQL before server rewrite;
 - rejection of nondeterminism in signed and rewritten SQL;
 - logical target resolution across multiple and quoted metadata entries;
+- fail-closed rejection of compressed storage-integrity INSERT payloads before
+  admission state is created;
 - exact Native capture, ownership, hash, length and client revision;
 - compressed and uncompressed empty-Data completion detection;
 - query-scoped input completion and abort;
@@ -242,4 +251,5 @@ Key coverage includes:
 This change does not implement physical rewrite to `hg_unsafe`, bounded
 predicate analysis, staged prepare, payload-store writes, unsafe ClickHouse
 writes, Arbiter/SNode calls, ACK2 convergence, replay roots, manifests,
-SafeAudit, repair, compaction or promotion.
+SafeAudit, repair, compaction, promotion or compressed Native payload
+materialization.

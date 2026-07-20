@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ClickHouse/ch-go/proto"
+
 	"housegate/housegate/pkg/auth"
 	"housegate/housegate/pkg/chsession"
 	"housegate/housegate/pkg/plugin"
@@ -132,6 +134,9 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	}
 	if !storageWrite {
 		return nil
+	}
+	if kind == KindInsert && qctx.Query.Compression == proto.CompressionEnabled {
+		return fmt.Errorf("storage_integrity rejects compressed native payloads; retry INSERT with ClickHouse query compression disabled")
 	}
 	stmtID, err := statementID(qctx)
 	if err != nil {
