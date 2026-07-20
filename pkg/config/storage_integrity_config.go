@@ -10,7 +10,18 @@ const defaultStorageIntegrityMaxPayloadBytes uint64 = 64 << 20
 
 // StorageIntegrityConfig owns HouseGate-local storage-integrity toggles.
 type StorageIntegrityConfig struct {
-	Ingress StorageIntegrityIngressConfig `json:"ingress" yaml:"ingress"`
+	Ingress    StorageIntegrityIngressConfig    `json:"ingress"     yaml:"ingress"`
+	SafeMerges StorageIntegritySafeMergesConfig `json:"safe_merges" yaml:"safe_merges"`
+}
+
+// StorageIntegritySafeMergesConfig governs the P1e runtime's merge guard, which
+// re-asserts SYSTEM STOP MERGES on the guarded tables at startup so the
+// integrity layer owns the active part inventory. AllowNativeBackgroundMerges is
+// a fail-closed escape hatch: it defaults false, and enabling it is rejected in
+// v1 because native background merges would mutate the guarded inventory out
+// from under the integrity layer.
+type StorageIntegritySafeMergesConfig struct {
+	AllowNativeBackgroundMerges bool `json:"allow_native_background_merges" yaml:"allow_native_background_merges"`
 }
 
 // StorageIntegrityIngressConfig is the server-side signed admission surface.
@@ -40,6 +51,9 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 	var errs []error
 	if mode != ModeServer {
 		errs = append(errs, errors.New("storage_integrity.ingress is server mode only"))
+	}
+	if c.SafeMerges.AllowNativeBackgroundMerges {
+		errs = append(errs, errors.New("storage_integrity.safe_merges.allow_native_background_merges is not supported in v1: native background merges would mutate the guarded part inventory"))
 	}
 	if len(c.Ingress.AllowedAddresses) == 0 {
 		errs = append(errs, errors.New("storage_integrity.ingress.allowed_addresses is required when storage_integrity.ingress.enabled"))

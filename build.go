@@ -524,6 +524,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 
 	var dataPlugins []plugin.DataPlugin
 	var strictDataPlugins []plugin.StrictDataPlugin
+	var queryInputCompleteStrictPlugins []plugin.QueryInputCompleteStrictPlugin
 	var queryInputCompletePlugins []plugin.QueryInputCompletePlugin
 	var queryAbortPlugins []plugin.QueryAbortPlugin
 	if cfg.LtHash.Enabled {
@@ -619,6 +620,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		})
 		queryPlugins = append(queryPlugins, storageIntegrityIngress)
 		strictDataPlugins = append(strictDataPlugins, storageIntegrityIngress)
+		queryInputCompleteStrictPlugins = append(queryInputCompleteStrictPlugins, storageIntegrityIngress)
 		queryInputCompletePlugins = append(queryInputCompletePlugins, storageIntegrityIngress)
 		queryAbortPlugins = append(queryAbortPlugins, storageIntegrityIngress)
 		closePlugins = append(closePlugins, storageIntegrityIngress)
@@ -679,17 +681,18 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	}
 
 	chain := &plugin.PluginChain{
-		ConnLifecyclePlugins:      connLifecycle,
-		HandshakeCompletePlugins:  []plugin.HandshakeCompletePlugin{metrics},
-		HelloPlugins:              helloPlugins,
-		QueryPlugins:              queryPlugins,
-		StrictDataPlugins:         strictDataPlugins,
-		DataPlugins:               dataPlugins,
-		QueryCompletePlugins:      queryCompletePlugins,
-		QueryInputCompletePlugins: queryInputCompletePlugins,
-		QueryAbortPlugins:         queryAbortPlugins,
-		ClosePlugins:              closePlugins,
-		ExceptionPlugins:          exceptionPlugins,
+		ConnLifecyclePlugins:            connLifecycle,
+		HandshakeCompletePlugins:        []plugin.HandshakeCompletePlugin{metrics},
+		HelloPlugins:                    helloPlugins,
+		QueryPlugins:                    queryPlugins,
+		StrictDataPlugins:               strictDataPlugins,
+		QueryInputCompleteStrictPlugins: queryInputCompleteStrictPlugins,
+		DataPlugins:                     dataPlugins,
+		QueryCompletePlugins:            queryCompletePlugins,
+		QueryInputCompletePlugins:       queryInputCompletePlugins,
+		QueryAbortPlugins:               queryAbortPlugins,
+		ClosePlugins:                    closePlugins,
+		ExceptionPlugins:                exceptionPlugins,
 	}
 
 	selfPort := selfListenPort(cfg.Listen)

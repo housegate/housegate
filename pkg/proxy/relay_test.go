@@ -915,6 +915,87 @@ func TestRelay_ClientToUpstream_StrictPolicyRejectsUndecodableQuery(t *testing.T
 	}
 }
 
+// strictInputCompleteFailHooks fails the pre-splice strict end-of-input hook,
+// modelling a storage-integrity admission the consumer rejected.
+type strictInputCompleteFailHooks struct {
+	plugin.NoopHooks
+	mu             sync.Mutex
+	strictCalls    int
+	inputCompletes int
+}
+
+func (h *strictInputCompleteFailHooks) OnQueryInputCompleteStrict(_ context.Context, _ *plugin.QueryContext) error {
+	h.mu.Lock()
+	h.strictCalls++
+	h.mu.Unlock()
+	return errors.New("admission rejected")
+}
+
+func (h *strictInputCompleteFailHooks) OnQueryInputComplete(_ context.Context, _ *plugin.QueryContext) {
+	h.mu.Lock()
+	h.inputCompletes++
+	h.mu.Unlock()
+}
+
+// TestRelay_ClientToUpstream_StrictInputCompleteFailureBlocksTerminator pins the
+// fail-closed boundary: when the strict end-of-input hook errors, the relay
+// rejects the query, does NOT forward the terminating empty Data block upstream,
+// and never fires the post-splice OnQueryInputComplete observer.
+func TestRelay_ClientToUpstream_StrictInputCompleteFailureBlocksTerminator(t *testing.T) {
+	clientProxy, proxyClient := net.Pipe()
+	upstreamProxy, proxyUpstream := net.Pipe()
+	defer clientProxy.Close()
+	defer upstreamProxy.Close()
+
+	const rev = 54453
+	// Record every byte the relay forwards upstream so we can assert the
+	// terminating block never arrived. The Query packet is forwarded first; the
+	// terminating empty Data block must be withheld on strict failure.
+	upstreamBytes := make(chan int, 1)
+	go func() {
+		n, _ := io.Copy(io.Discard, upstreamProxy)
+		upstreamBytes <- int(n)
+	}()
+	go func() {
+		var qb proto.Buffer
+		(&proto.Query{
+			ID: "qid", Body: "INSERT INTO t VALUES (1)",
+			Info: proto.ClientInfo{
+				ProtocolVersion: rev, Major: 24, Minor: 1,
+				Interface: proto.InterfaceTCP,
+				Query:     proto.ClientQueryInitial,
+			},
+		}).EncodeAware(&qb, rev)
+		_, _ = clientProxy.Write(qb.Buf)
+		writer := chproto.NewCodec(clientProxy, chproto.DirFromClient)
+		writer.SetCompression(proto.CompressionDisabled)
+		_ = writer.WriteEmptyDataBlock()
+		_ = clientProxy.Close()
+	}()
+
+	sess := chsession.New(1, proxyClient)
+	sess.Client().SetRevision(rev)
+	up := chproto.NewCodec(proxyUpstream, chproto.DirToUpstream)
+	up.SetRevision(rev)
+	if err := sess.BindUpstream(context.Background(), up); err != nil {
+		t.Fatalf("BindUpstream: %v", err)
+	}
+	hooks := &strictInputCompleteFailHooks{}
+	r := &Relay{sess: sess, hooks: hooks}
+	err := r.clientToUpstream(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "query input complete strict hook") {
+		t.Fatalf("clientToUpstream err = %v, want strict-hook rejection", err)
+	}
+	hooks.mu.Lock()
+	defer hooks.mu.Unlock()
+	if hooks.strictCalls != 1 {
+		t.Fatalf("strict hook fired %d times, want 1", hooks.strictCalls)
+	}
+	if hooks.inputCompletes != 0 {
+		t.Fatalf("post-splice OnQueryInputComplete fired %d times, want 0 on strict failure", hooks.inputCompletes)
+	}
+}
+
 func (h *inputCompleteHooks) OnQueryInputComplete(_ context.Context, _ *plugin.QueryContext) {
 	h.mu.Lock()
 	h.inputCompletes++

@@ -199,6 +199,9 @@ func (testHooks) OnClientData(context.Context, *plugin.QueryContext, []byte) err
 func (testHooks) OnException(context.Context, chsession.Session, *chproto.Exception) error {
 	return nil
 }
+func (testHooks) OnQueryInputCompleteStrict(context.Context, *plugin.QueryContext) error {
+	return nil
+}
 func (testHooks) OnQueryInputComplete(context.Context, *plugin.QueryContext) {}
 func (testHooks) OnQueryAbort(context.Context, *plugin.QueryContext)         {}
 func (testHooks) OnQueryComplete(context.Context, chsession.Session)         {}
