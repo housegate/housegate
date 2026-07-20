@@ -294,6 +294,6 @@ func (p *rcUnknownThenProbe) RegisterPreparedClaim(_ context.Context, _ string) 
 	return ClaimOutcome{Category: OutcomeUnknown, Reason: "timeout"}, nil
 }
 
-func (p *rcUnknownThenProbe) AbortPreparedStatement(_ context.Context, _ string, _ string) error {
+func (p *rcUnknownThenProbe) AbortPreparedStatement(_ context.Context, _ string, _ []CandidatePart, _ string) error {
 	return nil
 }

@@ -200,7 +200,7 @@ func (p *recordingPreparer) RegisterPreparedClaim(_ context.Context, _ string) (
 	return p.claimOutcome, p.claimErr
 }
 
-func (p *recordingPreparer) AbortPreparedStatement(_ context.Context, _ string, _ string) error {
+func (p *recordingPreparer) AbortPreparedStatement(_ context.Context, _ string, _ []CandidatePart, _ string) error {
 	p.abortAt = atomic.AddInt64(&p.seq, 1)
 	return p.abortErr
 }
@@ -282,7 +282,7 @@ func (p *rcRetryThenAcceptPreparer) RegisterPreparedClaim(_ context.Context, _ s
 	return ClaimOutcome{Category: OutcomeAccepted, BoundSource: "snode-A"}, nil
 }
 
-func (p *rcRetryThenAcceptPreparer) AbortPreparedStatement(_ context.Context, _ string, _ string) error {
+func (p *rcRetryThenAcceptPreparer) AbortPreparedStatement(_ context.Context, _ string, _ []CandidatePart, _ string) error {
 	return nil
 }
 
@@ -579,7 +579,7 @@ func (p *blockingPreparer) RegisterPreparedClaim(_ context.Context, _ string) (C
 	return ClaimOutcome{Category: OutcomeRetryable}, nil
 }
 
-func (p *blockingPreparer) AbortPreparedStatement(_ context.Context, _ string, _ string) error {
+func (p *blockingPreparer) AbortPreparedStatement(_ context.Context, _ string, _ []CandidatePart, _ string) error {
 	return nil
 }
 
@@ -688,7 +688,7 @@ func (p *abortOncePreparer) RegisterPreparedClaim(_ context.Context, _ string) (
 	return ClaimOutcome{}, nil
 }
 
-func (p *abortOncePreparer) AbortPreparedStatement(_ context.Context, _ string, _ string) error {
+func (p *abortOncePreparer) AbortPreparedStatement(_ context.Context, _ string, _ []CandidatePart, _ string) error {
 	n := atomic.AddInt64(&p.abortCalls, 1)
 	if n <= p.failUntil {
 		return errors.New("DROP PART transient failure")
@@ -756,7 +756,7 @@ func (p *retryablePreparer) RegisterPreparedClaim(_ context.Context, _ string) (
 	return p.claimOutcome, nil
 }
 
-func (p *retryablePreparer) AbortPreparedStatement(_ context.Context, _ string, _ string) error {
+func (p *retryablePreparer) AbortPreparedStatement(_ context.Context, _ string, _ []CandidatePart, _ string) error {
 	atomic.AddInt64(&p.abortCnt, 1)
 	return nil
 }
@@ -915,7 +915,7 @@ func (p *frontierProbePreparer) RegisterPreparedClaim(_ context.Context, _ strin
 	return ClaimOutcome{Category: OutcomeAccepted, BoundSource: "snode-A"}, nil
 }
 
-func (p *frontierProbePreparer) AbortPreparedStatement(_ context.Context, _ string, _ string) error {
+func (p *frontierProbePreparer) AbortPreparedStatement(_ context.Context, _ string, _ []CandidatePart, _ string) error {
 	return nil
 }
 
@@ -1023,7 +1023,7 @@ func (p *mismatchingPreparer) RegisterPreparedClaim(_ context.Context, _ string)
 	return ClaimOutcome{Category: OutcomeAccepted, BoundSource: "snode-A"}, nil
 }
 
-func (p *mismatchingPreparer) AbortPreparedStatement(_ context.Context, _ string, _ string) error {
+func (p *mismatchingPreparer) AbortPreparedStatement(_ context.Context, _ string, _ []CandidatePart, _ string) error {
 	atomic.AddInt64(&p.abortCnt, 1)
 	return nil
 }
