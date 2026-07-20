@@ -93,6 +93,7 @@ type MutationTask struct {
 	ContractVersion    string
 	MutationID         string
 	StatementID        string
+	StatementKind      Kind
 	WorkerID           string
 	PrevSafeSnapshotID string
 	SchemaSnapshotID   string
