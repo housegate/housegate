@@ -656,6 +656,11 @@ func TestIngressConsumerReceivesCompletedAdmissionAndClearsPending(t *testing.T)
 	if err := p.OnClientDataStrict(context.Background(), qctx, []byte{byte(chproto.ClientDataCode), 1}); err != nil {
 		t.Fatalf("OnClientDataStrict: %v", err)
 	}
+	// The consumer runs at the pre-splice strict end-of-input boundary; success
+	// returns nil so the terminating block is allowed to reach the upstream.
+	if err := p.OnQueryInputCompleteStrict(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQueryInputCompleteStrict: %v", err)
+	}
 	p.OnQueryInputComplete(context.Background(), qctx)
 
 	admission := consumer.requireOne(t)
@@ -674,7 +679,12 @@ func TestIngressConsumerReceivesCompletedAdmissionAndClearsPending(t *testing.T)
 	}
 }
 
-func TestIngressConsumerFailureRetainsPendingAdmission(t *testing.T) {
+// TestIngressConsumerFailureIsFailClosed pins the fix for the fail-open hole: a
+// consumer rejection/unavailability now surfaces as an error from the pre-splice
+// strict end-of-input hook, so Relay rejects the query and the terminating empty
+// Data block is never forwarded — the upstream INSERT cannot commit and return
+// success behind a failed admission.
+func TestIngressConsumerFailureIsFailClosed(t *testing.T) {
 	consumer := &recordingConsumer{err: errors.New("consumer unavailable")}
 	p, signer := newSignedIngressWithConfig(t, Config{AdmissionConsumer: consumer})
 	sql := "INSERT INTO tenant.events FORMAT Native"
@@ -686,14 +696,11 @@ func TestIngressConsumerFailureRetainsPendingAdmission(t *testing.T) {
 	if err := p.OnClientDataStrict(context.Background(), qctx, []byte{byte(chproto.ClientDataCode), 1}); err != nil {
 		t.Fatalf("OnClientDataStrict: %v", err)
 	}
-	p.OnQueryInputComplete(context.Background(), qctx)
-
-	next := signedQueryContext(t, 59, signer, sql, sql, sqlmeta.StatementTypeInsert)
-	next.Query.ID = "query-id-2"
-	next.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
-	err := p.OnQuery(context.Background(), next)
-	if err == nil || !strings.Contains(err.Error(), "has not been consumed") {
-		t.Fatalf("next OnQuery err = %v, want pending admission rejection", err)
+	// The pre-splice strict hook must return the consumer error so Relay rejects
+	// the query before the terminating block reaches ClickHouse.
+	err := p.OnQueryInputCompleteStrict(context.Background(), qctx)
+	if err == nil || !strings.Contains(err.Error(), "rejected") {
+		t.Fatalf("OnQueryInputCompleteStrict err = %v, want fail-closed consumer rejection", err)
 	}
 }
 

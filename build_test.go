@@ -294,6 +294,7 @@ func TestBuildServer_StorageIntegrityIngressEnabledWiresRuntimeHooks(t *testing.
 	chain := requireExternalChain(t, bs)
 	ingress := requireStorageIntegrityQueryPlugin(t, chain)
 	requireStorageIntegrityStrictDataPlugin(t, chain, ingress)
+	requireStorageIntegrityInputCompleteStrictPlugin(t, chain, ingress)
 	requireStorageIntegrityInputCompletePlugin(t, chain, ingress)
 	requireStorageIntegrityAbortPlugin(t, chain, ingress)
 	requireStorageIntegrityClosePlugin(t, chain, ingress)
@@ -311,6 +312,11 @@ func TestBuildServer_StorageIntegrityIngressEnabledWiresRuntimeHooks(t *testing.
 	}
 	if err := chain.OnClientDataStrict(context.Background(), qctx, []byte{byte(chproto.ClientDataCode), 1}); err != nil {
 		t.Fatalf("OnClientDataStrict: %v", err)
+	}
+	// The consumer is driven at the pre-splice strict end-of-input boundary; a
+	// success returns nil so the terminating block may reach the upstream.
+	if err := chain.OnQueryInputCompleteStrict(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQueryInputCompleteStrict: %v", err)
 	}
 	chain.OnQueryInputComplete(context.Background(), qctx)
 	admission := consumer.requireOne(t)
@@ -381,6 +387,16 @@ func requireStorageIntegrityInputCompletePlugin(t *testing.T, chain *plugin.Plug
 		}
 	}
 	t.Fatal("storage-integrity ingress missing from QueryInputCompletePlugins")
+}
+
+func requireStorageIntegrityInputCompleteStrictPlugin(t *testing.T, chain *plugin.PluginChain, want *storageintegrity.Plugin) {
+	t.Helper()
+	for _, p := range chain.QueryInputCompleteStrictPlugins {
+		if p == want {
+			return
+		}
+	}
+	t.Fatal("storage-integrity ingress missing from QueryInputCompleteStrictPlugins")
 }
 
 func requireStorageIntegrityAbortPlugin(t *testing.T, chain *plugin.PluginChain, want *storageintegrity.Plugin) {

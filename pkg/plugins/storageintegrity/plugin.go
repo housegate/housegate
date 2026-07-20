@@ -231,29 +231,67 @@ func (p *Plugin) OnQueryComplete(_ context.Context, sess chsession.Session) {
 	// completion hook is best-effort and must not publish correctness state.
 }
 
+// OnQueryInputCompleteStrict is the correctness-critical, pre-splice end-of-input
+// boundary. When an admission consumer is configured, the completed admission is
+// driven through it HERE and a consumer rejection or unavailability returns an
+// error, so Relay refuses to forward the terminating empty Data block and the
+// upstream INSERT never commits. Without this, the admission was only consumed in
+// the post-splice OnQueryInputComplete observer, so a rejected/unavailable
+// consumer left the admission pending while the INSERT still executed and
+// returned success — a fail-open hole this closes.
+func (p *Plugin) OnQueryInputCompleteStrict(ctx context.Context, qctx *plugin.QueryContext) error {
+	if p == nil || !p.enabled || qctx == nil || qctx.Session == nil || qctx.Query == nil {
+		return nil
+	}
+	if p.admissionConsumer == nil {
+		// No consumer: nothing correctness-critical to enforce here; the
+		// post-splice OnQueryInputComplete records the admission as pending.
+		return nil
+	}
+	p.mu.Lock()
+	id := qctx.Session.ID()
+	state := p.active[id]
+	if state == nil || state.admission.StatementID != strings.TrimSpace(qctx.Query.ID) {
+		p.mu.Unlock()
+		return nil
+	}
+	state.complete = true
+	delete(p.active, id)
+	p.mu.Unlock()
+
+	admission, err := admissionFromState(state)
+	if err != nil {
+		return fmt.Errorf("storage_integrity admission incomplete for %s: %w", state.admission.StatementID, err)
+	}
+	if err := p.admissionConsumer.ConsumeStorageIntegrityAdmission(ctx, admission); err != nil {
+		return fmt.Errorf("storage_integrity admission rejected for %s: %w", state.admission.StatementID, err)
+	}
+	return nil
+}
+
 func (p *Plugin) OnQueryInputComplete(ctx context.Context, qctx *plugin.QueryContext) {
 	if p == nil || !p.enabled || qctx == nil || qctx.Session == nil || qctx.Query == nil {
 		return
 	}
-	var state *admissionState
-	var shouldConsume bool
+	// When a consumer is configured, OnQueryInputCompleteStrict already consumed
+	// (and cleared) the admission before the terminating block was spliced, so a
+	// consumed admission is no longer in p.active. This post-splice observer only
+	// handles the no-consumer case: record the completed admission as pending for
+	// a later ConsumeAdmission caller.
+	if p.admissionConsumer != nil {
+		return
+	}
 	p.mu.Lock()
+	defer p.mu.Unlock()
 	id := qctx.Session.ID()
-	state = p.active[id]
+	state := p.active[id]
 	if state == nil || state.admission.StatementID != strings.TrimSpace(qctx.Query.ID) {
-		p.mu.Unlock()
 		return
 	}
 	state.complete = true
 	delete(p.active, id)
-	shouldConsume = p.admissionConsumer != nil
-	if !shouldConsume && p.pending[id] == nil {
+	if p.pending[id] == nil {
 		p.pending[id] = state
-	}
-	p.mu.Unlock()
-
-	if shouldConsume {
-		p.consumeCompletedAdmission(ctx, id, state)
 	}
 }
 
@@ -283,21 +321,6 @@ func (p *Plugin) abortQuery(qctx *plugin.QueryContext) {
 	}
 	if state := p.pending[sessionID]; state != nil && state.admission.StatementID == statementID {
 		delete(p.pending, sessionID)
-	}
-	p.mu.Unlock()
-}
-
-func (p *Plugin) consumeCompletedAdmission(ctx context.Context, sessionID int64, state *admissionState) {
-	admission, err := admissionFromState(state)
-	if err == nil {
-		err = p.admissionConsumer.ConsumeStorageIntegrityAdmission(ctx, admission)
-	}
-	if err == nil {
-		return
-	}
-	p.mu.Lock()
-	if p.pending[sessionID] == nil {
-		p.pending[sessionID] = state
 	}
 	p.mu.Unlock()
 }

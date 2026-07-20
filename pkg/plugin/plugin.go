@@ -59,6 +59,19 @@ type QueryInputCompletePlugin interface {
 	OnQueryInputComplete(ctx context.Context, qctx *QueryContext)
 }
 
+// QueryInputCompleteStrictPlugin participates in the correctness-critical,
+// error-bearing end-of-input boundary that fires BEFORE the terminating empty
+// Data block is spliced upstream. Unlike QueryInputCompletePlugin (which is a
+// post-splice observer and cannot fail), an error here is fail-closed: Relay
+// rejects the query lifecycle and does NOT forward the terminating block, so the
+// upstream never executes the statement. Use this only for lanes where allowing
+// the statement to commit without a successful end-of-input action would violate
+// correctness (e.g. a signed storage-integrity INSERT whose admission must be
+// accepted by the integrity consumer before the write may commit).
+type QueryInputCompleteStrictPlugin interface {
+	OnQueryInputCompleteStrict(ctx context.Context, qctx *QueryContext) error
+}
+
 // QueryAbortPlugin participates in the OnQueryAbort chain.
 //
 // OnQueryAbort fires when Relay rejects a query lifecycle. Earlier Query or Data
