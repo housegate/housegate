@@ -27,6 +27,7 @@ import (
 	"housegate/housegate/pkg/credentials"
 	"housegate/housegate/pkg/log"
 	"housegate/housegate/pkg/plugins/commitgate"
+	"housegate/housegate/pkg/plugins/storageintegrity"
 	"housegate/housegate/pkg/registry"
 	"housegate/housegate/pkg/rewriter"
 )
@@ -88,6 +89,13 @@ type Options struct {
 	UsageClient           billing.UsageClient
 	IndexingUsageReporter billing.IndexingUsageReporter
 	Cluster               cluster.Cluster
+
+	// StorageIntegrityAdmissionConsumer receives completed, input-bound
+	// storage-integrity admissions when storage_integrity.ingress.enabled is
+	// true. Server-mode startup fails if ingress is enabled without this
+	// consumer, because otherwise completed admissions would remain pending
+	// and block subsequent storage writes on persistent client sessions.
+	StorageIntegrityAdmissionConsumer storageintegrity.AdmissionConsumer
 
 	// CommitGateObservers gate DDL statements (CREATE / DROP TABLE,
 	// CREATE / DROP DATABASE) on host-supplied external commits.
