@@ -921,6 +921,22 @@ func (h *inputCompleteHooks) OnQueryInputComplete(_ context.Context, _ *plugin.Q
 	h.mu.Unlock()
 }
 
+func encodeNonEmptyClientDataPacket(t *testing.T, rev int) []byte {
+	t.Helper()
+
+	values := proto.ColUInt64{1, 2, 3}
+	input := proto.Input{{Name: "v", Data: &values}}
+
+	var buf proto.Buffer
+	buf.PutUVarInt(uint64(proto.ClientCodeData))
+	buf.PutString("")
+	block := proto.Block{Rows: values.Rows(), Columns: len(input)}
+	if err := block.EncodeBlock(&buf, rev, input); err != nil {
+		t.Fatalf("encode non-empty client data block: %v", err)
+	}
+	return append([]byte(nil), buf.Buf...)
+}
+
 func TestRelay_ClientToUpstream_FiresInputCompleteAfterEmptyData(t *testing.T) {
 	clientProxy, proxyClient := net.Pipe()
 	upstreamProxy, proxyUpstream := net.Pipe()
@@ -965,5 +981,90 @@ func TestRelay_ClientToUpstream_FiresInputCompleteAfterEmptyData(t *testing.T) {
 	defer hooks.mu.Unlock()
 	if hooks.inputCompletes != 1 {
 		t.Fatalf("OnQueryInputComplete fired %d times, want 1", hooks.inputCompletes)
+	}
+}
+
+func TestRelay_ClientToUpstream_IgnoresInitialEmptyDataBeforeInsertPayload(t *testing.T) {
+	clientProxy, proxyClient := net.Pipe()
+	upstreamProxy, proxyUpstream := net.Pipe()
+	defer clientProxy.Close()
+	defer upstreamProxy.Close()
+
+	const rev = 54453
+	go func() {
+		_, _ = io.Copy(io.Discard, upstreamProxy)
+	}()
+
+	nonEmpty := encodeNonEmptyClientDataPacket(t, rev)
+	clientErr := make(chan error, 1)
+	go func() {
+		var qb proto.Buffer
+		(&proto.Query{
+			ID: "qid", Body: "INSERT INTO t",
+			Info: proto.ClientInfo{
+				ProtocolVersion: rev, Major: 24, Minor: 1,
+				Interface: proto.InterfaceTCP,
+				Query:     proto.ClientQueryInitial,
+			},
+		}).EncodeAware(&qb, rev)
+		if err := clientProxy.SetWriteDeadline(time.Now().Add(2 * time.Second)); err != nil {
+			clientErr <- err
+			return
+		}
+		if _, err := clientProxy.Write(qb.Buf); err != nil {
+			clientErr <- err
+			return
+		}
+
+		writer := chproto.NewCodec(clientProxy, chproto.DirFromClient)
+		writer.SetCompression(proto.CompressionDisabled)
+		if err := clientProxy.SetWriteDeadline(time.Now().Add(2 * time.Second)); err != nil {
+			clientErr <- err
+			return
+		}
+		if err := writer.WriteEmptyDataBlock(); err != nil {
+			clientErr <- err
+			return
+		}
+		if err := clientProxy.SetWriteDeadline(time.Now().Add(2 * time.Second)); err != nil {
+			clientErr <- err
+			return
+		}
+		if _, err := clientProxy.Write(nonEmpty); err != nil {
+			clientErr <- err
+			return
+		}
+		if err := clientProxy.SetWriteDeadline(time.Now().Add(2 * time.Second)); err != nil {
+			clientErr <- err
+			return
+		}
+		if err := writer.WriteEmptyDataBlock(); err != nil {
+			clientErr <- err
+			return
+		}
+		_ = clientProxy.Close()
+		clientErr <- nil
+	}()
+
+	sess := chsession.New(1, proxyClient)
+	sess.Client().SetRevision(rev)
+	up := chproto.NewCodec(proxyUpstream, chproto.DirToUpstream)
+	up.SetRevision(rev)
+	if err := sess.BindUpstream(context.Background(), up); err != nil {
+		t.Fatalf("BindUpstream: %v", err)
+	}
+	hooks := &inputCompleteHooks{}
+	r := &Relay{sess: sess, hooks: hooks}
+	err := r.clientToUpstream(context.Background())
+	if err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("clientToUpstream: %v", err)
+	}
+	if err := <-clientErr; err != nil {
+		t.Fatalf("client writer: %v", err)
+	}
+	hooks.mu.Lock()
+	defer hooks.mu.Unlock()
+	if hooks.inputCompletes != 1 {
+		t.Fatalf("OnQueryInputComplete fired %d times, want 1 after payload terminator", hooks.inputCompletes)
 	}
 }

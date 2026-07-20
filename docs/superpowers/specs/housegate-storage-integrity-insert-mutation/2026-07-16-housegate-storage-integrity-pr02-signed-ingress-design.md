@@ -199,6 +199,16 @@ server `QueryPlugins`, `StrictDataPlugins`, `QueryInputCompletePlugins`,
 bounds storage-integrity JWS validation, and the configured payload limit is
 the strict read/capture limit exposed to Relay.
 
+Enabled server-mode assembly also requires an injected
+`StorageIntegrityAdmissionConsumer`. A completed input-bound admission is
+delivered to that consumer from `OnQueryInputComplete`. Consumer success clears
+the completed admission so persistent client sessions can submit the next
+storage write. Consumer failure, missing payload evidence or an absent consumer
+leaves the admission pending and blocks the next storage write on that session,
+which is the fail-closed posture for this stage. `buildServer` rejects an
+enabled ingress configuration with no consumer so production deployments cannot
+silently create unconsumed pending admissions.
+
 ## Verification
 
 Focused gate:
