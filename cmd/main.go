@@ -37,6 +37,9 @@ func main() {
 	log.SetDefault(log.New(newConsoleHandler(os.Stderr, log.DefaultLevelVar(), true)))
 
 	cfg := loadConfigWithOverrides()
+	if err := validateStandaloneRuntimeConfig(&cfg); err != nil {
+		log.Fatale(err, "standalone config validation failed")
+	}
 	logStartupBanner(&cfg)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -170,6 +173,13 @@ func loadConfigWithOverrides() config.Config {
 	// flag, no env). If stage-1 already swapped, maybeSwapLogFile no-ops.
 	maybeSwapLogFile(cfg.LogFile)
 	return cfg
+}
+
+func validateStandaloneRuntimeConfig(cfg *config.Config) error {
+	if cfg.StorageIntegrity.Ingress.Enabled {
+		return fmt.Errorf("storage_integrity.ingress.enabled is library-host-only for standalone cmd/housegate: embedders must provide housegate.Options.StorageIntegrityAdmissionConsumer")
+	}
+	return nil
 }
 
 // logFileSwapped is set once maybeSwapLogFile has redirected pkg/log to a
