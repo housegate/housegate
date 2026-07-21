@@ -139,6 +139,24 @@ func TestConfigStorageIntegritySafeMerges(t *testing.T) {
 	})
 }
 
+func TestConfigStorageIntegrityPartLtHashCache(t *testing.T) {
+	t.Run("defaults off", func(t *testing.T) {
+		if Default().StorageIntegrity.PartLtHashCache.Enabled {
+			t.Fatal("storage_integrity.part_lthash_cache.enabled defaulted true, want false")
+		}
+	})
+
+	t.Run("enabling is accepted (discardable local layer, no companion seam)", func(t *testing.T) {
+		cfg := minimalServerConfig(t)
+		cfg.StorageIntegrity.PartLtHashCache.Enabled = true
+		cfg.StorageIntegrity.PartLtHashCache.Path = "/var/lib/housegate/part-lthash.db"
+		cfg.StorageIntegrity.PartLtHashCache.MaxEntries = 1000000
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("part_lthash_cache is a runnable local layer and must validate: %v", err)
+		}
+	})
+}
+
 func TestConfigStorageIntegrityMutation(t *testing.T) {
 	t.Run("defaults off", func(t *testing.T) {
 		if Default().StorageIntegrity.Mutation.Enabled {
