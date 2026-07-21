@@ -10,9 +10,21 @@ const defaultStorageIntegrityMaxPayloadBytes uint64 = 64 << 20
 
 // StorageIntegrityConfig owns HouseGate-local storage-integrity toggles.
 type StorageIntegrityConfig struct {
-	Ingress    StorageIntegrityIngressConfig    `json:"ingress"     yaml:"ingress"`
-	SafeMerges StorageIntegritySafeMergesConfig `json:"safe_merges" yaml:"safe_merges"`
-	Mutation   StorageIntegrityMutationConfig   `json:"mutation"    yaml:"mutation"`
+	Ingress         StorageIntegrityIngressConfig         `json:"ingress"          yaml:"ingress"`
+	SafeMerges      StorageIntegritySafeMergesConfig      `json:"safe_merges"      yaml:"safe_merges"`
+	Mutation        StorageIntegrityMutationConfig        `json:"mutation"         yaml:"mutation"`
+	PartLtHashCache StorageIntegrityPartLtHashCacheConfig `json:"part_lthash_cache" yaml:"part_lthash_cache"`
+}
+
+// StorageIntegrityPartLtHashCacheConfig gates the PartLtHash cache, a discardable
+// local performance layer (design §5.1 / §7): it speeds part inspection but never
+// changes a vote/scan result, so it is safe to enable independently and has no
+// companion-seam dependency. It defaults off; when enabled, Path is the on-disk
+// cache location and MaxEntries bounds the in-memory LRU.
+type StorageIntegrityPartLtHashCacheConfig struct {
+	Enabled    bool   `json:"enabled"     yaml:"enabled"`
+	Path       string `json:"path"        yaml:"path"`
+	MaxEntries uint64 `json:"max_entries" yaml:"max_entries"`
 }
 
 // StorageIntegrityMutationConfig gates the P2 mutation runtime. It defaults off,
