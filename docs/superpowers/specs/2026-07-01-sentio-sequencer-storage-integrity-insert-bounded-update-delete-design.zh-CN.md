@@ -136,6 +136,37 @@ sequenceDiagram
 - 当前 Arbiter SNode intake 仍直接使用 CSV payload decoder；Verifier/replay executor 已有 materializer seam。Native Data block 支持需要把 payload encoding/profile 明确传入 staged SNode intake 和 replay profile，不能只改 ingress 声明已支持。
 - HouseGate 不能重新实现 row canonicalization、row-id、part LtHash、schema root 或 state-root assembly；统一调用 `payloadexec`、`chexec`、`pkg/lthash` 共享 helper。
 
+#### ACK2 后 INSERT 完整生命周期
+
+上面的时序只覆盖 HouseGate server-side ingress 到 ACK2 gate。ACK2 表示 payload 已 durable、selected SNode 已完成 `hg_unsafe` write、`SubmitStatement` 已接纳且 RC 已绑定；它不是 safe 完成点。ACK2 之后的验证、promotion、manifest publication 仍由 P1a/P1b/P1c 冻结的 Arbiter 数据面驱动，P1e 不复制这些协议，只保证交给后续流程的输入完整。
+
+```mermaid
+flowchart LR
+  B["ACK2 boundary\nUnsafe accepted"] --> A["Arbiter\nseal L3 block"]
+  A --> V["3 selected Verifiers\nreplay + byte scan"]
+  V --> PS["PayloadStore\nfetch payload"]
+  V --> U["local ClickHouse\nhg_unsafe scan"]
+  V --> E["signed evidence\nattestation + byte scan"]
+  E --> F["Arbiter FSM\nthree-way + closure"]
+
+  F -->|"verified + finality"| P["Selected SNode\nsigned promotion command"]
+  P --> M["ClickHouse\nbuild hg_promote"]
+  M --> S["ClickHouse\nREPLACE PARTITION into hg_safe"]
+  S --> R["Selected SNode\nread back exact Parts"]
+  R --> W["Arbiter\npublish manifest + SafeWatermark"]
+  W --> C["Selected SNode\ncleanup promoted hg_unsafe parts"]
+  W --> ACK3["ACK3 boundary\nSafe observable"]
+
+  F -.->|"mismatch or reject"| X["terminal safe failure\ncleanup exact unsafe candidates"]
+```
+
+因此，文档里的 INSERT 流程分成两段读：
+
+- **HouseGate P1e 负责 ACK2 前的 ingress/intake**：签名与 materialization 检查、deterministic source routing、payload-before-write、staged SNode prepare、Arbiter admission、RC binding、terminal-reject exact cleanup。
+- **Arbiter P1a/P1b/P1c 负责 ACK2 后到 ACK3**：封块、Verifier replay、byte-side scan、FSM three-way/closure 判断、anchor/finality、`hg_promote + REPLACE PARTITION`、exact `Parts[]` promotion ack、manifest publication、unsafe cleanup。
+- Selected SNode 是 Arbiter deterministic source selection 的结果；HouseGate 只能按该 source 接线，不能自行把写入路由到任意“健康 ClickHouse 节点”。Verifier 的 byte-side scan 读取各自本地 `hg_unsafe` replica；promotion 由 Arbiter 签名命令授权后才进入 `hg_safe`。
+- ACK3 可以是等待 safe 的同步返回、轮询结果或上层回调语义；无论表现形式如何，都必须在 `SafeWatermark`/manifest publication 之后成立，不能在 ACK2、replay quorum 或 promotion ack 任一单点提前返回。
+
 ### 3.3 Source claim 接线约束
 
 `RCRecord.SourceClaimRoot` 的算法已经在 P1c 冻结，P1e 只负责保持输入完整：
