@@ -632,6 +632,16 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		)
 	}
 
+	// The P2 mutation runtime is not runnable in v1: the companion
+	// mutation-consensus (C2) seam is absent. Enabling it is a startup error, so
+	// with the toggle off (the only allowed state) no mutation runtime is
+	// constructed and the plugin chain is byte-identical to a non-storage-integrity
+	// build. Config.Validate already rejects this; the build-time guard is
+	// defense-in-depth for callers that construct a server directly.
+	if cfg.StorageIntegrity.Mutation.Enabled {
+		return nil, fmt.Errorf("storage_integrity.mutation is not runnable in v1: companion mutation-consensus (C2) seam absent")
+	}
+
 	// indexing_usage runs *after* the rewriter so it can read the
 	// classified StatementType + AccessedTables it populates.
 	if iuPlugin != nil {

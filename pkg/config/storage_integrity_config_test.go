@@ -111,6 +111,32 @@ func TestConfigStorageIntegritySafeMerges(t *testing.T) {
 	})
 }
 
+func TestConfigStorageIntegrityMutation(t *testing.T) {
+	t.Run("defaults off", func(t *testing.T) {
+		if Default().StorageIntegrity.Mutation.Enabled {
+			t.Fatal("storage_integrity.mutation.enabled defaulted true, want false")
+		}
+	})
+
+	t.Run("enabling mutation rejected in v1", func(t *testing.T) {
+		cfg := minimalServerConfig(t)
+		cfg.StorageIntegrity.Mutation.Enabled = true
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "mutation is not runnable in v1") {
+			t.Fatalf("Validate err = %v, want mutation v1 rejection", err)
+		}
+	})
+
+	t.Run("mutation server mode only", func(t *testing.T) {
+		cfg := Config{Listen: ":9001", Agent: agentConfigForStorageIntegrityTest()}
+		cfg.StorageIntegrity.Mutation.Enabled = true
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "mutation is server mode only") {
+			t.Fatalf("Validate err = %v, want mutation server-mode rejection", err)
+		}
+	})
+}
+
 func agentConfigForStorageIntegrityTest() agent.Config {
 	return agent.Config{
 		Mode:          true,
