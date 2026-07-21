@@ -19,6 +19,7 @@ go_library(
         "mutation_worker.go",
         "native_payload.go",
         "publication_ack_store.go",
+        "safe_read_gate.go",
     ],
     importpath = "housegate/housegate/pkg/storageintegrity",
     visibility = ["//visibility:public"],
@@ -49,6 +50,7 @@ go_test(
         "mutation_worker_test.go",
         "native_payload_test.go",
         "publication_ack_store_test.go",
+        "safe_read_gate_test.go",
     ],
     embed = [":storageintegrity"],
     deps = [
