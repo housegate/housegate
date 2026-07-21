@@ -157,6 +157,37 @@ func TestConfigStorageIntegrityPartLtHashCache(t *testing.T) {
 	})
 }
 
+func TestConfigStorageIntegrityReadSetCache(t *testing.T) {
+	t.Run("defaults off with a positive ttl", func(t *testing.T) {
+		d := Default().StorageIntegrity.ReadSetCache
+		if d.Enabled {
+			t.Fatal("storage_integrity.read_set_cache.enabled defaulted true, want false")
+		}
+		if d.TTL.Duration <= 0 {
+			t.Fatalf("read_set_cache.ttl default = %s, want positive", d.TTL)
+		}
+	})
+
+	t.Run("enabling with a positive ttl is accepted", func(t *testing.T) {
+		cfg := minimalServerConfig(t)
+		cfg.StorageIntegrity.ReadSetCache.Enabled = true
+		cfg.StorageIntegrity.ReadSetCache.TTL.Duration = 5 * time.Second
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("read_set_cache is a runnable local layer and must validate: %v", err)
+		}
+	})
+
+	t.Run("enabling with a non-positive ttl rejected", func(t *testing.T) {
+		cfg := minimalServerConfig(t)
+		cfg.StorageIntegrity.ReadSetCache.Enabled = true
+		cfg.StorageIntegrity.ReadSetCache.TTL.Duration = 0
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "read_set_cache.ttl must be > 0") {
+			t.Fatalf("Validate err = %v, want ttl rejection", err)
+		}
+	})
+}
+
 func TestConfigStorageIntegrityMutation(t *testing.T) {
 	t.Run("defaults off", func(t *testing.T) {
 		if Default().StorageIntegrity.Mutation.Enabled {
