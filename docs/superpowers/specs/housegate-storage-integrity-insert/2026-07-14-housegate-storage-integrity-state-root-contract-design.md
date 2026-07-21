@@ -27,7 +27,7 @@ This phase also preserves the existing CSV replay profile. It does not silently 
 - reimplement row canonicalization, part LtHash, or state-root assembly;
 - simplify source claims to "previous safe + current INSERT".
 
-The absolute source-claim frontier, unsafe write, RC lifecycle, promotion, and mutation replay remain later phases.
+The absolute source-claim frontier, unsafe write, RC lifecycle, promotion, and non-INSERT replay remain later phases.
 
 ## Interfaces
 
@@ -82,7 +82,7 @@ Native payloads must fail closed against the pinned `payloadexec.TableSchema`. R
 - column names, column types, or column sets that do not match the pinned schema;
 - reserved `_hg_row_id` in either payload or schema;
 - empty prepared statement `TargetTableID`, or one that does not exactly match the pinned schema `TableID`;
-- statements without `PayloadRef`, including mutation, DDL, or no-payload inputs.
+- statements without `PayloadRef`, including DDL or no-payload inputs.
 
 Native rows must populate deterministic logical Native value bytes before they
 enter the shared executor. Fixed-width scalar values use their Native physical
@@ -140,5 +140,5 @@ This phase does not implement:
 - RC lifecycle;
 - absolute source frontier;
 - promotion;
-- bounded UPDATE/DELETE mutation replay.
+- non-INSERT replay.
 - runtime payload-encoding/executor-profile selection and dispatch.

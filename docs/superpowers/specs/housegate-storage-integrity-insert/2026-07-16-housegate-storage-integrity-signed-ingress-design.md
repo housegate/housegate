@@ -5,11 +5,10 @@ Date: 2026-07-16
 ## Purpose
 
 This change defines the HouseGate-local contract that turns a signed,
-materialized INSERT or UPDATE/DELETE mutation into a complete storage-integrity
-admission record. It verifies the client-side signature before accepting the
-server-side rewritten statement, resolves the logical target table from
-rewriter metadata, and captures exact Native `ClientData` wire bytes for later
-staged SNode intake.
+materialized INSERT into a complete storage-integrity admission record. It
+verifies the client-side signature before accepting the server-side rewritten
+statement, resolves the logical target table from rewriter metadata, and
+captures exact Native `ClientData` wire bytes for later staged SNode intake.
 
 The implementation is intentionally fail-closed at every boundary that would
 otherwise make the signed SQL and the captured payload refer to different
@@ -29,9 +28,7 @@ storage-integrity design:
   logical/physical target mapping.
 - Section 6.1: INSERT Native bytes are retained as the payload used by later
   unsafe write, payload-store and replay stages.
-- Section 7.1: UPDATE/DELETE enter through the same signed admission boundary,
-  while bounded-predicate validation and mutation execution remain later
-  stages.
+- Section 7.1: non-INSERT writes remain outside this insert-only branch.
 
 This contract does not change the Sentio Arbiter design or require any Arbiter
 API/FSM change.
@@ -80,11 +77,9 @@ pass-through behavior for forward compatibility.
 ## Statement And Target Admission
 
 When `storage_integrity.ingress.enabled` is false, the plugin is a no-op. When
-enabled, it admits these storage-integrity write forms:
+enabled, it admits this storage-integrity write form:
 
 - `INSERT`;
-- normalized `UPDATE` and `DELETE`;
-- `ALTER TABLE ... UPDATE` and `ALTER TABLE ... DELETE`.
 
 Read-like statements pass through. DDL, DCL and destructive statement kinds
 such as `CREATE`, `DROP`, `TRUNCATE`, ordinary `ALTER`, `RENAME`, `GRANT`,
@@ -179,8 +174,8 @@ record. It removes the pending record and returns:
 - client protocol revision pinned when the query was admitted;
 - completion flag.
 
-An INSERT without any captured Data packet is rejected. UPDATE/DELETE do not
-require a Native payload in this stage.
+An INSERT without any captured Data packet is rejected. Non-INSERT statements
+are outside this insert-only admission lane.
 
 ## Configuration
 

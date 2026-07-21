@@ -4,15 +4,15 @@ Date: 2026-07-20
 
 ## Purpose
 
-This change adds the P1e runtime shell that connects the signed-ingress admission plugin (PR02) to the staged-intake orchestrator (PR03–PR06): a root-package `StorageIntegrityIngress` that implements the plugin's `AdmissionConsumer` by mapping a completed `Admission` into a core `AdmissionRecord` and driving `Orchestrate` toward ACK2. Alongside it, PR07 adds two runtime building blocks that are pure HouseGate-local logic: a `MergeGuard` that re-asserts and verifies `SYSTEM STOP MERGES` on the guarded tables, and a `SelectMaterializerKind` function that chooses the replay materializer (Native vs CSV) from the pinned payload encoding.
+This change adds the P1e runtime shell that connects the signed-ingress admission plugin to the staged-intake orchestrator: a root-package `StorageIntegrityIngress` that implements the plugin's `AdmissionConsumer` by mapping a completed `Admission` into a core `AdmissionRecord` and driving `Orchestrate` toward ACK2. Alongside it, this slice adds two runtime building blocks that are pure HouseGate-local logic: a `MergeGuard` that re-asserts and verifies `SYSTEM STOP MERGES` on the guarded tables, and a `SelectMaterializerKind` function that chooses the replay materializer (Native vs CSV) from the pinned payload encoding.
 
 The runtime never constructs a HouseGate-owned Verifier or Promoter: verifier selection, quorum, and manifest publication are Arbiter/SNode responsibilities the orchestrator only drives through ports (design sections 3.6 and 4.1). Storage integrity stays default-off; with the ingress disabled the plugin chain is byte-identical to a non-storage-integrity build.
 
 ## Companion Gate Status
 
-This PR is a blocked skeleton, on the same basis as PR03–PR06. It reuses the existing C1 gate — `CompanionStagedIntakeAvailable` (`pkg/storageintegrity/intake.go`) and `requireCompanionStagedIntake` — and introduces no new gate: PR07 is the INSERT P1e runtime, whose blocker is C1 (the staged-prepare seam), not C2. The companion repos expose no `PrepareLocalStatement` / `RegisterPreparedClaim` / `AbortPreparedStatement` seam (arbiter `03aa035`, arbiter-proto `2fa9263`, re-verified 2026-07-20), so no real `StatementSubmitter` / `SourcePreparer` / `IntakeStatusQuerier` adapters exist and the ingress consumer cannot actually close a statement to ACK2.
+This design slice is a blocked skeleton, on the same basis as the earlier INSERT intake slices. It reuses the existing C1 gate — `CompanionStagedIntakeAvailable` (`pkg/storageintegrity/intake.go`) and `requireCompanionStagedIntake` — and introduces no new gate: this is the INSERT P1e runtime, whose blocker is C1 (the staged-prepare seam), not C2. The companion repos expose no `PrepareLocalStatement` / `RegisterPreparedClaim` / `AbortPreparedStatement` seam (arbiter `03aa035`, arbiter-proto `2fa9263`, re-verified 2026-07-20), so no real `StatementSubmitter` / `SourcePreparer` / `IntakeStatusQuerier` adapters exist and the ingress consumer cannot actually close a statement to ACK2.
 
-Because HouseGate must not fabricate the companion protocol, this PR ships:
+Because HouseGate must not fabricate the companion protocol, this slice ships:
 
 1. this scoped spec;
 2. the pure HouseGate-local runtime pieces — the ingress adapter and its `Admission` → `AdmissionRecord` projection, the `MergeGuard`, the materializer-selection function, and the `safe_merges` config with default-off validation;
@@ -47,7 +47,7 @@ The `storage_integrity.safe_merges.allow_native_background_merges` toggle govern
 
 ## Non-Scope
 
-This change does not implement the real `StatementSubmitter` / `SourcePreparer` / `IntakeStatusQuerier` adapters (they need the companion staged-prepare seam), the durable intake journal, cross-restart crash recovery, leader failover, or a real ClickHouse connection behind the merge guard. It does not construct a Verifier/Promoter, does not touch the Arbiter proto / Raft commands, does not flip `CompanionStagedIntakeAvailable`, and adds no mutation (P2) surface. The crash/retry/frontier/leader-failover E2E behaviors named in the PR goal are C1-gated: they depend on the durable journal and real adapters that arrive with C1, and are not asserted against fakes here.
+This change does not implement the real `StatementSubmitter` / `SourcePreparer` / `IntakeStatusQuerier` adapters (they need the companion staged-prepare seam), the durable intake journal, cross-restart crash recovery, leader failover, or a real ClickHouse connection behind the merge guard. It does not construct a Verifier/Promoter, does not touch the Arbiter proto / Raft commands, does not flip `CompanionStagedIntakeAvailable`, and adds no non-INSERT surface. The crash/retry/frontier/leader-failover E2E behaviors named in the runtime goal are C1-gated: they depend on the durable journal and real adapters that arrive with C1, and are not asserted against fakes here.
 
 ## Verification
 
