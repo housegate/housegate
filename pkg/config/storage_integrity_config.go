@@ -30,9 +30,23 @@ type StorageIntegrityMutationConfig struct {
 // a fail-closed escape hatch: it defaults false, and enabling it is rejected in
 // v1 because native background merges would mutate the guarded inventory out
 // from under the integrity layer.
+//
+// Enabled turns on P4 controlled compaction (design section 6): safe part layout
+// may then change only through a manifest-selected input, the LtHash equation, a
+// signed base-CAS REPLACE, and a new content-addressed manifest. It defaults off
+// and enabling it is rejected in v1: the companion controlled-compaction (C4)
+// seam does not exist, so the compaction runtime cannot execute end to end. Mode
+// is the versioned strategy identifier (only "controlled_compaction" is defined);
+// the toggle exists so the shape is versioned and the runtime can be turned on
+// once C4 lands.
 type StorageIntegritySafeMergesConfig struct {
-	AllowNativeBackgroundMerges bool `json:"allow_native_background_merges" yaml:"allow_native_background_merges"`
+	Enabled                     bool   `json:"enabled"                        yaml:"enabled"`
+	Mode                        string `json:"mode"                           yaml:"mode"`
+	AllowNativeBackgroundMerges bool   `json:"allow_native_background_merges" yaml:"allow_native_background_merges"`
 }
+
+// safeMergesModeControlledCompaction is the only defined safe-merges mode.
+const safeMergesModeControlledCompaction = "controlled_compaction"
 
 // StorageIntegrityIngressConfig is the server-side signed admission surface.
 type StorageIntegrityIngressConfig struct {
@@ -62,6 +76,17 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 			return fmt.Errorf("storage_integrity: %w", errors.New("storage_integrity.mutation is server mode only"))
 		}
 		return fmt.Errorf("storage_integrity: %w", errors.New("storage_integrity.mutation is not runnable in v1: companion mutation-consensus (C2) seam absent"))
+	}
+	// P4 controlled compaction is validated independently of ingress: a
+	// safe_merges block enabled without ingress must still be rejected.
+	if c.SafeMerges.Enabled {
+		if mode != ModeServer {
+			return fmt.Errorf("storage_integrity: %w", errors.New("storage_integrity.safe_merges is server mode only"))
+		}
+		if c.SafeMerges.Mode != "" && c.SafeMerges.Mode != safeMergesModeControlledCompaction {
+			return fmt.Errorf("storage_integrity: %w", fmt.Errorf("storage_integrity.safe_merges.mode %q is not supported (only %q)", c.SafeMerges.Mode, safeMergesModeControlledCompaction))
+		}
+		return fmt.Errorf("storage_integrity: %w", errors.New("storage_integrity.safe_merges is not runnable in v1: companion controlled-compaction (C4) seam absent"))
 	}
 	if !c.Ingress.Enabled {
 		return nil

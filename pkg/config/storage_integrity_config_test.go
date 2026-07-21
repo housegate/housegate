@@ -109,6 +109,34 @@ func TestConfigStorageIntegritySafeMerges(t *testing.T) {
 			t.Fatalf("Validate err = %v, want native-merges rejection", err)
 		}
 	})
+
+	t.Run("enabling controlled compaction rejected in v1", func(t *testing.T) {
+		cfg := minimalServerConfig(t)
+		cfg.StorageIntegrity.SafeMerges.Enabled = true
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "safe_merges is not runnable in v1") {
+			t.Fatalf("Validate err = %v, want safe_merges v1 rejection", err)
+		}
+	})
+
+	t.Run("safe_merges server mode only", func(t *testing.T) {
+		cfg := Config{Listen: ":9001", Agent: agentConfigForStorageIntegrityTest()}
+		cfg.StorageIntegrity.SafeMerges.Enabled = true
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "safe_merges is server mode only") {
+			t.Fatalf("Validate err = %v, want safe_merges server-mode rejection", err)
+		}
+	})
+
+	t.Run("unsupported safe_merges mode rejected", func(t *testing.T) {
+		cfg := minimalServerConfig(t)
+		cfg.StorageIntegrity.SafeMerges.Enabled = true
+		cfg.StorageIntegrity.SafeMerges.Mode = "bogus"
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "is not supported") {
+			t.Fatalf("Validate err = %v, want unsupported-mode rejection", err)
+		}
+	})
 }
 
 func TestConfigStorageIntegrityMutation(t *testing.T) {
