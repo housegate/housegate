@@ -10,10 +10,22 @@ const defaultStorageIntegrityMaxPayloadBytes uint64 = 64 << 20
 
 // StorageIntegrityConfig owns HouseGate-local storage-integrity toggles.
 type StorageIntegrityConfig struct {
-	Ingress         StorageIntegrityIngressConfig         `json:"ingress"          yaml:"ingress"`
-	SafeMerges      StorageIntegritySafeMergesConfig      `json:"safe_merges"      yaml:"safe_merges"`
-	Mutation        StorageIntegrityMutationConfig        `json:"mutation"         yaml:"mutation"`
+	Ingress         StorageIntegrityIngressConfig         `json:"ingress"           yaml:"ingress"`
+	SafeMerges      StorageIntegritySafeMergesConfig      `json:"safe_merges"       yaml:"safe_merges"`
+	Mutation        StorageIntegrityMutationConfig        `json:"mutation"          yaml:"mutation"`
 	PartLtHashCache StorageIntegrityPartLtHashCacheConfig `json:"part_lthash_cache" yaml:"part_lthash_cache"`
+	ReadSetCache    StorageIntegrityReadSetCacheConfig    `json:"read_set_cache"    yaml:"read_set_cache"`
+}
+
+// StorageIntegrityReadSetCacheConfig gates the read-set decision TTL cache
+// (design §5.2 / §7 read_set_cache): a fail-safe cache in front of the safe-read
+// gate that is invalidated on every eligibility change. It is a discardable local
+// layer with no companion-seam dependency, so it is safe to enable independently.
+// It defaults off; TTL bounds how long a decision may be reused before a
+// recompute.
+type StorageIntegrityReadSetCacheConfig struct {
+	Enabled bool     `json:"enabled" yaml:"enabled"`
+	TTL     Duration `json:"ttl"     yaml:"ttl"`
 }
 
 // StorageIntegrityPartLtHashCacheConfig gates the PartLtHash cache, a discardable
@@ -77,6 +89,10 @@ func defaultStorageIntegrityConfig() StorageIntegrityConfig {
 			RequestTimeout:  Duration{Duration: 5 * time.Second},
 			MaxPayloadBytes: defaultStorageIntegrityMaxPayloadBytes,
 		},
+		ReadSetCache: StorageIntegrityReadSetCacheConfig{
+			Enabled: false,
+			TTL:     Duration{Duration: 5 * time.Second},
+		},
 	}
 }
 
@@ -99,6 +115,12 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 			return fmt.Errorf("storage_integrity: %w", fmt.Errorf("storage_integrity.safe_merges.mode %q is not supported (only %q)", c.SafeMerges.Mode, safeMergesModeControlledCompaction))
 		}
 		return fmt.Errorf("storage_integrity: %w", errors.New("storage_integrity.safe_merges is not runnable in v1: companion controlled-compaction (C4) seam absent"))
+	}
+	// The read-set decision cache is a discardable local layer with no companion
+	// dependency: it may be enabled independently, but a positive TTL is required
+	// when it is (a zero TTL would cache forever and never invalidate on time).
+	if c.ReadSetCache.Enabled && c.ReadSetCache.TTL.Duration <= 0 {
+		return fmt.Errorf("storage_integrity: %w", errors.New("storage_integrity.read_set_cache.ttl must be > 0 when storage_integrity.read_set_cache.enabled"))
 	}
 	if !c.Ingress.Enabled {
 		return nil
