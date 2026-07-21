@@ -12,6 +12,16 @@ const defaultStorageIntegrityMaxPayloadBytes uint64 = 64 << 20
 type StorageIntegrityConfig struct {
 	Ingress    StorageIntegrityIngressConfig    `json:"ingress"     yaml:"ingress"`
 	SafeMerges StorageIntegritySafeMergesConfig `json:"safe_merges" yaml:"safe_merges"`
+	Mutation   StorageIntegrityMutationConfig   `json:"mutation"    yaml:"mutation"`
+}
+
+// StorageIntegrityMutationConfig gates the P2 mutation runtime. It defaults off,
+// is server-mode only, and enabling it is rejected in v1: the companion
+// mutation-consensus (C2) seam does not exist, so the runtime cannot execute
+// end to end. The toggle exists so the shape is versioned and the runtime can be
+// turned on once C2 lands.
+type StorageIntegrityMutationConfig struct {
+	Enabled bool `json:"enabled" yaml:"enabled"`
 }
 
 // StorageIntegritySafeMergesConfig governs the P1e runtime's merge guard, which
@@ -45,6 +55,14 @@ func defaultStorageIntegrityConfig() StorageIntegrityConfig {
 }
 
 func (c StorageIntegrityConfig) validate(mode Mode) error {
+	// The mutation runtime is validated independently of ingress: a mutation
+	// block enabled without ingress must still be rejected.
+	if c.Mutation.Enabled {
+		if mode != ModeServer {
+			return fmt.Errorf("storage_integrity: %w", errors.New("storage_integrity.mutation is server mode only"))
+		}
+		return fmt.Errorf("storage_integrity: %w", errors.New("storage_integrity.mutation is not runnable in v1: companion mutation-consensus (C2) seam absent"))
+	}
 	if !c.Ingress.Enabled {
 		return nil
 	}

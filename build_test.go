@@ -350,6 +350,27 @@ func TestBuildServer_StorageIntegrityIngressRequiresAdmissionConsumer(t *testing
 	}
 }
 
+func TestBuildServer_StorageIntegrityMutationDisabledConstructsNoRuntime(t *testing.T) {
+	cfg := minimalRouterOnlyCfg(t)
+	// Mutation defaults off; the server builds and the chain has no mutation
+	// runtime (there is no mutation plugin to find; the build simply succeeds and
+	// is byte-identical to a build with no mutation config).
+	bs, err := buildServer(Options{Config: cfg, NetworkState: network.NewInMemoryNetworkState()}, nil)
+	if err != nil {
+		t.Fatalf("buildServer with mutation off: %v", err)
+	}
+	defer bs.teardown()
+}
+
+func TestBuildServer_StorageIntegrityMutationEnabledRejected(t *testing.T) {
+	cfg := minimalRouterOnlyCfg(t)
+	cfg.StorageIntegrity.Mutation.Enabled = true
+	_, err := buildServer(Options{Config: cfg, NetworkState: network.NewInMemoryNetworkState()}, nil)
+	if err == nil || !strings.Contains(err.Error(), "mutation is not runnable in v1") {
+		t.Fatalf("buildServer err = %v, want mutation v1 rejection", err)
+	}
+}
+
 func requireStorageIntegrityQueryPlugin(t *testing.T, chain *plugin.PluginChain) *storageintegrity.Plugin {
 	t.Helper()
 	var found *storageintegrity.Plugin
