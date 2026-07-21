@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	siplugin "housegate/housegate/pkg/plugins/storageintegrity"
+	"housegate/housegate/pkg/replay"
 	sicore "housegate/housegate/pkg/storageintegrity"
 )
 
@@ -12,11 +13,13 @@ import (
 // core field, byte-for-byte for the payload. Green-today (no companion seam).
 func TestAdmissionRecordFromPlugin_MapsAllFields(t *testing.T) {
 	adm := siplugin.Admission{
-		StatementID: "q-1",
+		StatementID: "0xabc:1:n1",
 		Kind:        siplugin.KindInsert,
 		TableID:     "net1.events",
-		SQL:         "INSERT INTO events VALUES",
+		SQL:         "INSERT INTO events FORMAT Native",
+		SQLHash:     replay.DigestString("INSERT INTO events FORMAT Native"),
 		Signer:      "0xabc",
+		UserJWS:     "jws",
 		Payload: siplugin.CapturedPayload{
 			Bytes:    []byte("native-block-bytes"),
 			Length:   uint64(len("native-block-bytes")),
@@ -38,8 +41,14 @@ func TestAdmissionRecordFromPlugin_MapsAllFields(t *testing.T) {
 	if rec.SQL != adm.SQL {
 		t.Fatalf("sql: got %q want %q", rec.SQL, adm.SQL)
 	}
+	if rec.SQLHash != adm.SQLHash {
+		t.Fatalf("sql hash: got %q want %q", rec.SQLHash, adm.SQLHash)
+	}
 	if rec.Signer != adm.Signer {
 		t.Fatalf("signer: got %q want %q", rec.Signer, adm.Signer)
+	}
+	if rec.UserJWS != adm.UserJWS {
+		t.Fatalf("user jws: got %q want %q", rec.UserJWS, adm.UserJWS)
 	}
 	if string(rec.Payload) != string(adm.Payload.Bytes) {
 		t.Fatalf("payload bytes mismatch")
@@ -55,25 +64,6 @@ func TestAdmissionRecordFromPlugin_MapsAllFields(t *testing.T) {
 	}
 	if rec.PayloadEncoding == "" {
 		t.Fatal("payload encoding must be set so the runtime can pick a materializer")
-	}
-}
-
-// TestAdmissionRecordFromPlugin_MapsKinds confirms UPDATE/DELETE kinds carry
-// through, so a later mutation runtime sees the right core kind.
-func TestAdmissionRecordFromPlugin_MapsKinds(t *testing.T) {
-	cases := []struct {
-		in   siplugin.Kind
-		want sicore.Kind
-	}{
-		{siplugin.KindInsert, sicore.KindInsert},
-		{siplugin.KindUpdate, sicore.KindUpdate},
-		{siplugin.KindDelete, sicore.KindDelete},
-	}
-	for _, tc := range cases {
-		rec := AdmissionRecordFromPlugin(siplugin.Admission{StatementID: "q", Kind: tc.in, TableID: "t"})
-		if rec.Kind != tc.want {
-			t.Fatalf("kind %q -> %q, want %q", tc.in, rec.Kind, tc.want)
-		}
 	}
 }
 

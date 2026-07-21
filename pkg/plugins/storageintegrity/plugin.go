@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,8 +21,10 @@ import (
 	"housegate/housegate/pkg/auth"
 	"housegate/housegate/pkg/chsession"
 	"housegate/housegate/pkg/plugin"
+	"housegate/housegate/pkg/replay"
 	"housegate/housegate/pkg/sqlident"
 	"housegate/housegate/pkg/sqlmeta"
+	sicore "housegate/housegate/pkg/storageintegrity"
 )
 
 const (
@@ -68,7 +71,9 @@ type Admission struct {
 	Kind        Kind
 	TableID     string
 	SQL         string
+	SQLHash     string
 	Signer      string
+	UserJWS     string
 	Payload     CapturedPayload
 }
 
@@ -135,6 +140,9 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	if !storageWrite {
 		return nil
 	}
+	if kind != KindInsert {
+		return fmt.Errorf("storage_integrity insert-only ingress rejects %s; mutation integrity protocol is not available", kind)
+	}
 	if kind == KindInsert && qctx.Query.Compression == proto.CompressionEnabled {
 		return fmt.Errorf("storage_integrity rejects compressed native payloads; retry INSERT with ClickHouse query compression disabled")
 	}
@@ -150,7 +158,19 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 			return fmt.Errorf("storage_integrity rejects rewritten nondeterministic function %s", fn)
 		}
 	}
+	if err := requireStreamingNativeInsert(signedSQL); err != nil {
+		return err
+	}
+	if forwardSQL != signedSQL {
+		if err := requireStreamingNativeInsert(forwardSQL); err != nil {
+			return err
+		}
+	}
 	tableID, err := targetTableID(qctx, signedSQL)
+	if err != nil {
+		return err
+	}
+	userJWS, err := queryAuthToken(qctx)
 	if err != nil {
 		return err
 	}
@@ -158,12 +178,17 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	if err != nil {
 		return err
 	}
+	if err := requireStatementIDSigner(stmtID, signer); err != nil {
+		return err
+	}
 	state := &admissionState{admission: Admission{
 		StatementID: stmtID,
 		Kind:        kind,
 		TableID:     tableID,
 		SQL:         signedSQL,
+		SQLHash:     replay.DigestString(signedSQL),
 		Signer:      signer,
+		UserJWS:     userJWS,
 	}}
 	if qctx.Session.State() != nil {
 		state.revision = qctx.Session.State().ClientRevision
@@ -371,8 +396,8 @@ func (p *Plugin) authenticate(ctx context.Context, qctx *plugin.QueryContext, sq
 		defer cancel()
 	}
 	settings := querySettings(qctx)
-	if token := strings.Trim(strings.TrimSpace(settings[auth.AuthTokenSettingKey]), "\"'"); token == "" {
-		return "", fmt.Errorf("storage_integrity requires %s", auth.AuthTokenSettingKey)
+	if _, err := authTokenFromSettings(settings); err != nil {
+		return "", err
 	}
 	meta := auth.QueryMeta{
 		ConnID:   qctx.Session.ID(),
@@ -401,6 +426,18 @@ func (p *Plugin) authenticate(ctx context.Context, qctx *plugin.QueryContext, sq
 	return "", errors.New("storage_integrity authenticated signer is required")
 }
 
+func queryAuthToken(qctx *plugin.QueryContext) (string, error) {
+	return authTokenFromSettings(querySettings(qctx))
+}
+
+func authTokenFromSettings(settings map[string]string) (string, error) {
+	token := strings.Trim(strings.TrimSpace(settings[auth.AuthTokenSettingKey]), "\"'")
+	if token == "" {
+		return "", fmt.Errorf("storage_integrity requires %s", auth.AuthTokenSettingKey)
+	}
+	return token, nil
+}
+
 func querySettings(qctx *plugin.QueryContext) map[string]string {
 	settings := map[string]string{}
 	if qctx == nil || qctx.Query == nil {
@@ -415,10 +452,82 @@ func querySettings(qctx *plugin.QueryContext) map[string]string {
 func statementID(qctx *plugin.QueryContext) (string, error) {
 	if qctx != nil && qctx.Query != nil {
 		if id := strings.TrimSpace(qctx.Query.ID); id != "" {
+			if _, err := parseFlatStatementID(id); err != nil {
+				return "", err
+			}
 			return id, nil
 		}
 	}
 	return "", errors.New("storage_integrity query id is required")
+}
+
+type flatStatementID struct {
+	ClientAccount string
+	ClientSeq     uint64
+	ClientNonce   string
+}
+
+func parseFlatStatementID(id string) (flatStatementID, error) {
+	parts := strings.Split(id, ":")
+	if len(parts) != 3 {
+		return flatStatementID{}, fmt.Errorf("storage_integrity requires structured statement id <client_account>:<client_seq>:<client_nonce>")
+	}
+	account, seqText, nonce := parts[0], parts[1], parts[2]
+	if account == "" || seqText == "" || nonce == "" {
+		return flatStatementID{}, fmt.Errorf("storage_integrity requires structured statement id <client_account>:<client_seq>:<client_nonce>")
+	}
+	if account != strings.ToLower(account) || !strings.HasPrefix(account, "0x") || !isLowerHex(account[2:]) {
+		return flatStatementID{}, fmt.Errorf("storage_integrity requires structured statement id with lowercase 0x client_account")
+	}
+	if len(seqText) > 1 && seqText[0] == '0' {
+		return flatStatementID{}, fmt.Errorf("storage_integrity requires canonical decimal client_seq")
+	}
+	if !isDecimalDigits(seqText) {
+		return flatStatementID{}, fmt.Errorf("storage_integrity requires canonical decimal client_seq")
+	}
+	seq, err := strconv.ParseUint(seqText, 10, 64)
+	if err != nil || seq == 0 {
+		return flatStatementID{}, fmt.Errorf("storage_integrity requires non-zero decimal client_seq")
+	}
+	if strings.TrimSpace(nonce) != nonce {
+		return flatStatementID{}, fmt.Errorf("storage_integrity requires structured statement id with non-empty client_nonce")
+	}
+	return flatStatementID{ClientAccount: account, ClientSeq: seq, ClientNonce: nonce}, nil
+}
+
+func requireStatementIDSigner(id, signer string) error {
+	stmt, err := parseFlatStatementID(id)
+	if err != nil {
+		return err
+	}
+	if stmt.ClientAccount != strings.ToLower(signer) {
+		return fmt.Errorf("storage_integrity statement id client_account %s does not match authenticated signer %s", stmt.ClientAccount, strings.ToLower(signer))
+	}
+	return nil
+}
+
+func isLowerHex(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if !((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
+func isDecimalDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func classifyStorageIntegrityKind(typ sqlmeta.StatementType, sql string) (Kind, bool, error) {
@@ -472,6 +581,13 @@ func storageIntegrityKindFromSQL(sql string) (Kind, bool, bool) {
 	default:
 		return "", false, false
 	}
+}
+
+func requireStreamingNativeInsert(sql string) error {
+	if err := sicore.RequireStreamingNativeInsert(sql); err != nil {
+		return fmt.Errorf("storage_integrity %w", err)
+	}
+	return nil
 }
 
 func targetTableID(qctx *plugin.QueryContext, sql string) (string, error) {

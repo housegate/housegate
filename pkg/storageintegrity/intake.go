@@ -4,7 +4,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
+
+	"housegate/housegate/pkg/replay"
 )
 
 // CompanionStagedIntakeAvailable reports whether the Sentio companion topology
@@ -32,8 +36,6 @@ type Kind string
 
 const (
 	KindInsert Kind = "INSERT"
-	KindUpdate Kind = "UPDATE"
-	KindDelete Kind = "DELETE"
 )
 
 // AdmissionRecord is the completed, input-bound admission the intake
@@ -96,10 +98,30 @@ func EnvelopeFromAdmission(adm AdmissionRecord) (StatementEnvelope, error) {
 	if adm.TableID == "" {
 		return StatementEnvelope{}, fmt.Errorf("intake: admission %s has no target table id", adm.StatementID)
 	}
-	switch adm.Kind {
-	case KindInsert, KindUpdate, KindDelete:
-	default:
+	if adm.Kind != KindInsert {
 		return StatementEnvelope{}, fmt.Errorf("intake: admission %s has unsupported kind %q", adm.StatementID, adm.Kind)
+	}
+	if err := RequireStreamingNativeInsert(adm.SQL); err != nil {
+		return StatementEnvelope{}, fmt.Errorf("intake: admission %s invalid INSERT source form: %w", adm.StatementID, err)
+	}
+	stmtID, err := parseFlatStatementID(adm.StatementID)
+	if err != nil {
+		return StatementEnvelope{}, fmt.Errorf("intake: admission %s invalid statement id: %w", adm.StatementID, err)
+	}
+	if adm.Signer == "" {
+		return StatementEnvelope{}, fmt.Errorf("intake: admission %s has no signer", adm.StatementID)
+	}
+	if stmtID.ClientAccount != strings.ToLower(adm.Signer) {
+		return StatementEnvelope{}, fmt.Errorf("intake: admission %s client_account does not match signer", adm.StatementID)
+	}
+	if adm.SQLHash == "" {
+		return StatementEnvelope{}, fmt.Errorf("intake: admission %s has no sql hash", adm.StatementID)
+	}
+	if adm.SQLHash != replay.DigestString(adm.SQL) {
+		return StatementEnvelope{}, fmt.Errorf("intake: admission %s sql hash mismatch", adm.StatementID)
+	}
+	if adm.UserJWS == "" {
+		return StatementEnvelope{}, fmt.Errorf("intake: admission %s has no user jws", adm.StatementID)
 	}
 	if adm.Kind == KindInsert {
 		if len(adm.Payload) == 0 || adm.PayloadLength == 0 {
@@ -130,6 +152,64 @@ func EnvelopeFromAdmission(adm AdmissionRecord) (StatementEnvelope, error) {
 		Signer:          adm.Signer,
 		UserJWS:         adm.UserJWS,
 	}, nil
+}
+
+type flatStatementID struct {
+	ClientAccount string
+	ClientSeq     uint64
+	ClientNonce   string
+}
+
+func parseFlatStatementID(id string) (flatStatementID, error) {
+	parts := strings.Split(id, ":")
+	if len(parts) != 3 {
+		return flatStatementID{}, fmt.Errorf("requires <client_account>:<client_seq>:<client_nonce>")
+	}
+	account, seqText, nonce := parts[0], parts[1], parts[2]
+	if account == "" || seqText == "" || nonce == "" {
+		return flatStatementID{}, fmt.Errorf("requires <client_account>:<client_seq>:<client_nonce>")
+	}
+	if account != strings.ToLower(account) || !strings.HasPrefix(account, "0x") || !isLowerHex(account[2:]) {
+		return flatStatementID{}, fmt.Errorf("requires lowercase 0x client_account")
+	}
+	if len(seqText) > 1 && seqText[0] == '0' {
+		return flatStatementID{}, fmt.Errorf("requires canonical decimal client_seq")
+	}
+	if !isDecimalDigits(seqText) {
+		return flatStatementID{}, fmt.Errorf("requires canonical decimal client_seq")
+	}
+	seq, err := strconv.ParseUint(seqText, 10, 64)
+	if err != nil || seq == 0 {
+		return flatStatementID{}, fmt.Errorf("requires non-zero decimal client_seq")
+	}
+	if strings.TrimSpace(nonce) != nonce {
+		return flatStatementID{}, fmt.Errorf("requires non-empty client_nonce")
+	}
+	return flatStatementID{ClientAccount: account, ClientSeq: seq, ClientNonce: nonce}, nil
+}
+
+func isLowerHex(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if !((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
+func isDecimalDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // sameStatement reports whether a later call for an already-open statement id
@@ -944,9 +1024,8 @@ func (o *Orchestrator) preparedConsistencyReject(env StatementEnvelope, prepared
 	if o.cfg.ExpectedSource != "" && prepared.SourceNode != o.cfg.ExpectedSource {
 		return "committed source mismatch"
 	}
-	// Statements that carry a payload (INSERT) must have the full payload
-	// identity tuple bound exactly. UPDATE/DELETE carry no payload in this stage,
-	// so an empty envelope payload identity is legitimate and skipped.
+	// Valid insert-only envelopes carry a payload and must have the full payload
+	// identity tuple bound exactly.
 	if env.PayloadHash != "" || env.PayloadRef != "" || env.PayloadLength != 0 {
 		if prepared.PayloadRef == "" || prepared.PayloadRef != env.PayloadRef {
 			return "payload ref mismatch"

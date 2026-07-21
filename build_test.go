@@ -3,6 +3,7 @@ package housegate
 import (
 	"context"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -326,7 +327,7 @@ func TestBuildServer_StorageIntegrityIngressEnabledWiresRuntimeHooks(t *testing.
 
 	next := signedStorageIntegrityQuery(t, signer)
 	next.Session = qctx.Session
-	next.Query.ID = "storage-integrity-build-test-2"
+	next.Query.ID = buildTestStatementID(signer, 2)
 	if err := chain.OnQuery(context.Background(), next); err != nil {
 		t.Fatalf("second storage write blocked after consumer consumed admission: %v", err)
 	}
@@ -435,7 +436,7 @@ func signedStorageIntegrityQuery(t *testing.T, signer *auth.RelaySigner) *plugin
 		},
 		OriginalSQL: sql,
 		Query: &chproto.Query{
-			ID:   "storage-integrity-build-test",
+			ID:   buildTestStatementID(signer, 1),
 			Body: sql,
 			Settings: []chproto.Setting{{
 				Key:    auth.AuthTokenSettingKey,
@@ -450,6 +451,10 @@ func signedStorageIntegrityQuery(t *testing.T, signer *auth.RelaySigner) *plugin
 			LogicalDatabase:  "tenant",
 		}},
 	}
+}
+
+func buildTestStatementID(signer *auth.RelaySigner, seq uint64) string {
+	return strings.ToLower(signer.Address()) + ":" + strconv.FormatUint(seq, 10) + ":n" + strconv.FormatUint(seq, 10)
 }
 
 type buildTestSession struct {

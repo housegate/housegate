@@ -10,6 +10,7 @@ go_library(
         "materializer_select.go",
         "merge_guard.go",
         "native_payload.go",
+        "sql.go",
     ],
     importpath = "housegate/housegate/pkg/storageintegrity",
     visibility = ["//visibility:public"],

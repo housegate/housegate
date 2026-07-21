@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -18,6 +19,7 @@ import (
 	"housegate/housegate/pkg/chproto"
 	"housegate/housegate/pkg/chsession"
 	"housegate/housegate/pkg/plugin"
+	"housegate/housegate/pkg/replay"
 	"housegate/housegate/pkg/sqlmeta"
 )
 
@@ -25,7 +27,7 @@ const storageIntegrityTestKey = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 
 func TestIngressAcceptsSignedMaterializedInsert(t *testing.T) {
 	p, signer := newSignedIngress(t)
-	sql := "INSERT INTO tenant.events VALUES (1, 'ok')"
+	sql := "INSERT INTO tenant.events FORMAT Native"
 	qctx := signedQueryContext(t, 10, signer, sql, sql, sqlmeta.StatementTypeInsert)
 	qctx.AccessedTables = []sqlmeta.AccessedTable{{
 		OriginalDatabase: "tenant",
@@ -53,8 +55,41 @@ func TestIngressAcceptsSignedMaterializedInsert(t *testing.T) {
 	if admission.SQL != sql || admission.Signer != signer.Address() {
 		t.Fatalf("admission sql/signer = %q/%q, want %q/%q", admission.SQL, admission.Signer, sql, signer.Address())
 	}
+	if admission.SQLHash != replay.DigestString(sql) {
+		t.Fatalf("admission SQLHash = %q, want replay digest", admission.SQLHash)
+	}
+	wantJWS := strings.Trim(qctx.Query.Settings[0].Value, "'")
+	if admission.UserJWS != wantJWS {
+		t.Fatalf("admission UserJWS = %q, want captured token", admission.UserJWS)
+	}
 	if !bytes.Equal(admission.Payload.Bytes, payload) {
 		t.Fatalf("payload bytes = %v, want exact client data bytes %v", admission.Payload.Bytes, payload)
+	}
+}
+
+func TestIngressRejectsMalformedStatementID(t *testing.T) {
+	p, signer := newSignedIngress(t)
+	sql := "INSERT INTO tenant.events FORMAT Native"
+	qctx := signedQueryContext(t, 12, signer, sql, sql, sqlmeta.StatementTypeInsert)
+	qctx.Query.ID = "query-id"
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+
+	err := p.OnQuery(context.Background(), qctx)
+	if err == nil || !strings.Contains(err.Error(), "structured statement id") {
+		t.Fatalf("OnQuery err = %v, want structured statement id rejection", err)
+	}
+}
+
+func TestIngressRejectsStatementIDSignerMismatch(t *testing.T) {
+	p, signer := newSignedIngress(t)
+	sql := "INSERT INTO tenant.events FORMAT Native"
+	qctx := signedQueryContext(t, 13, signer, sql, sql, sqlmeta.StatementTypeInsert)
+	qctx.Query.ID = "0x0000000000000000000000000000000000000000:1:n1"
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+
+	err := p.OnQuery(context.Background(), qctx)
+	if err == nil || !strings.Contains(err.Error(), "does not match authenticated signer") {
+		t.Fatalf("OnQuery err = %v, want signer mismatch rejection", err)
 	}
 }
 
@@ -155,7 +190,7 @@ func TestIngressRejectsIncompleteNativePayloadCapture(t *testing.T) {
 
 func TestIngressRejectsMissingStatementID(t *testing.T) {
 	p, signer := newSignedIngress(t)
-	sql := "INSERT INTO tenant.events VALUES (1)"
+	sql := "INSERT INTO tenant.events FORMAT Native"
 	qctx := signedQueryContext(t, 20, signer, sql, sql, sqlmeta.StatementTypeInsert)
 	qctx.Query.ID = ""
 	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
@@ -178,39 +213,42 @@ func TestIngressRejectsStatementTypeSQLMismatch(t *testing.T) {
 	}
 }
 
-func TestIngressAcceptsAlterUpdateDeleteMutations(t *testing.T) {
+func TestIngressRejectsNonInsertWrites(t *testing.T) {
 	tests := []struct {
 		name string
 		sql  string
-		want Kind
+		typ  sqlmeta.StatementType
 	}{
+		{
+			name: "update",
+			sql:  "UPDATE tenant.events SET value = 2 WHERE id = 1",
+			typ:  sqlmeta.StatementTypeUpdate,
+		},
+		{
+			name: "delete",
+			sql:  "DELETE FROM tenant.events WHERE id = 1",
+			typ:  sqlmeta.StatementTypeDelete,
+		},
 		{
 			name: "alter update",
 			sql:  "ALTER TABLE tenant.events UPDATE value = 2 WHERE id = 1",
-			want: KindUpdate,
+			typ:  sqlmeta.StatementTypeAlterTable,
 		},
 		{
 			name: "alter delete",
 			sql:  "ALTER TABLE tenant.events DELETE WHERE id = 1",
-			want: KindDelete,
+			typ:  sqlmeta.StatementTypeAlterTable,
 		},
 	}
 	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p, signer := newSignedIngress(t)
-			qctx := signedQueryContext(t, int64(30+i), signer, tt.sql, tt.sql, sqlmeta.StatementTypeAlterTable)
+			qctx := signedQueryContext(t, int64(30+i), signer, tt.sql, tt.sql, tt.typ)
 			qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
 
-			if err := p.OnQuery(context.Background(), qctx); err != nil {
-				t.Fatalf("OnQuery: %v", err)
-			}
-			p.OnQueryInputComplete(context.Background(), qctx)
-			admission, err := p.ConsumeAdmission(qctx.Session.ID())
-			if err != nil {
-				t.Fatalf("ConsumeAdmission: %v", err)
-			}
-			if admission.Kind != tt.want || admission.TableID != "tenant.events" {
-				t.Fatalf("admission = %s/%s, want %s/tenant.events", admission.Kind, admission.TableID, tt.want)
+			err := p.OnQuery(context.Background(), qctx)
+			if err == nil || !strings.Contains(err.Error(), "insert-only") {
+				t.Fatalf("OnQuery err = %v, want insert-only rejection", err)
 			}
 		})
 	}
@@ -218,7 +256,7 @@ func TestIngressAcceptsAlterUpdateDeleteMutations(t *testing.T) {
 
 func TestIngressRejectsTargetTableMismatch(t *testing.T) {
 	p, signer := newSignedIngress(t)
-	sql := "INSERT INTO tenant.other VALUES (1)"
+	sql := "INSERT INTO tenant.other FORMAT Native"
 	qctx := signedQueryContext(t, 22, signer, sql, sql, sqlmeta.StatementTypeInsert)
 	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
 
@@ -229,78 +267,52 @@ func TestIngressRejectsTargetTableMismatch(t *testing.T) {
 }
 
 func TestIngressAcceptsQuotedTargetIdentifiers(t *testing.T) {
-	tests := []struct {
-		name string
-		sql  string
-		typ  sqlmeta.StatementType
-		kind Kind
-	}{
-		{
-			name: "insert",
-			sql:  "INSERT INTO `tenant`.`event.table` FORMAT Native",
-			typ:  sqlmeta.StatementTypeInsert,
-			kind: KindInsert,
-		},
-		{
-			name: "delete",
-			sql:  "DELETE FROM `tenant`.`event.table` WHERE id = 1",
-			typ:  sqlmeta.StatementTypeDelete,
-			kind: KindDelete,
-		},
+	p, signer := newSignedIngress(t)
+	sql := "INSERT INTO `tenant`.`event.table` FORMAT Native"
+	qctx := signedQueryContext(t, 60, signer, sql, sql, sqlmeta.StatementTypeInsert)
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "event.table"}}
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
 	}
-	for i, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	if err := p.OnClientDataStrict(context.Background(), qctx, []byte{byte(chproto.ClientDataCode), 1}); err != nil {
+		t.Fatalf("OnClientDataStrict: %v", err)
+	}
+	p.OnQueryInputComplete(context.Background(), qctx)
+	admission, err := p.ConsumeAdmission(qctx.Session.ID())
+	if err != nil {
+		t.Fatalf("ConsumeAdmission: %v", err)
+	}
+	if admission.Kind != KindInsert || admission.TableID != "tenant.`event.table`" {
+		t.Fatalf("admission = %s/%s, want INSERT/tenant.`event.table`", admission.Kind, admission.TableID)
+	}
+}
+
+func TestIngressRejectsInlineInsertSources(t *testing.T) {
+	tests := []string{
+		"INSERT INTO tenant.events VALUES (1)",
+		"INSERT INTO tenant.events SELECT * FROM tenant.source",
+		"INSERT INTO tenant.events WITH 1 AS id SELECT id",
+		"INSERT INTO tenant.events FORMAT CSV",
+	}
+	for i, sql := range tests {
+		t.Run(sql, func(t *testing.T) {
 			p, signer := newSignedIngress(t)
-			qctx := signedQueryContext(t, int64(60+i), signer, tt.sql, tt.sql, tt.typ)
-			qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "event.table"}}
-			if err := p.OnQuery(context.Background(), qctx); err != nil {
-				t.Fatalf("OnQuery: %v", err)
-			}
-			if tt.kind == KindInsert {
-				if err := p.OnClientDataStrict(context.Background(), qctx, []byte{byte(chproto.ClientDataCode), 1}); err != nil {
-					t.Fatalf("OnClientDataStrict: %v", err)
-				}
-			}
-			p.OnQueryInputComplete(context.Background(), qctx)
-			admission, err := p.ConsumeAdmission(qctx.Session.ID())
-			if err != nil {
-				t.Fatalf("ConsumeAdmission: %v", err)
-			}
-			if admission.Kind != tt.kind || admission.TableID != "tenant.`event.table`" {
-				t.Fatalf("admission = %s/%s, want %s/tenant.`event.table`", admission.Kind, admission.TableID, tt.kind)
+			qctx := signedQueryContext(t, int64(62+i), signer, sql, sql, sqlmeta.StatementTypeInsert)
+			qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+			err := p.OnQuery(context.Background(), qctx)
+			if err == nil || !strings.Contains(err.Error(), "streaming Native INSERT") {
+				t.Fatalf("OnQuery err = %v, want streaming Native INSERT rejection", err)
 			}
 		})
 	}
 }
 
-func TestIngressFindsInsertTargetAmongMultipleAccessedTables(t *testing.T) {
-	p, signer := newSignedIngress(t)
-	sql := "INSERT INTO tenant.events SELECT * FROM tenant.source"
-	qctx := signedQueryContext(t, 62, signer, sql, sql, sqlmeta.StatementTypeInsert)
-	qctx.AccessedTables = []sqlmeta.AccessedTable{
-		{OriginalDatabase: "tenant", OriginalTable: "source"},
-		{OriginalDatabase: "tenant", OriginalTable: "events"},
-	}
-	if err := p.OnQuery(context.Background(), qctx); err != nil {
-		t.Fatalf("OnQuery: %v", err)
-	}
-	p.mu.Lock()
-	tableID := p.active[qctx.Session.ID()].admission.TableID
-	p.mu.Unlock()
-	if tableID != "tenant.events" {
-		t.Fatalf("target table = %q, want tenant.events", tableID)
-	}
-}
-
 func TestIngressResolvesUnqualifiedTargetAgainstSessionDatabase(t *testing.T) {
 	p, signer := newSignedIngress(t)
-	sql := "INSERT INTO events SELECT * FROM other.events"
+	sql := "INSERT INTO events FORMAT Native"
 	qctx := signedQueryContext(t, 63, signer, sql, sql, sqlmeta.StatementTypeInsert)
 	qctx.Session.State().SetLogicalDatabase("tenant")
-	qctx.AccessedTables = []sqlmeta.AccessedTable{
-		{OriginalDatabase: "other", OriginalTable: "events", LogicalDatabase: "other"},
-		{OriginalTable: "events", LogicalDatabase: "tenant"},
-	}
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalTable: "events", LogicalDatabase: "tenant"}}
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
 		t.Fatalf("OnQuery: %v", err)
 	}
@@ -314,7 +326,7 @@ func TestIngressResolvesUnqualifiedTargetAgainstSessionDatabase(t *testing.T) {
 
 func TestIngressRejectsAmbiguousUnqualifiedTargetMetadata(t *testing.T) {
 	p, signer := newSignedIngress(t)
-	sql := "INSERT INTO events SELECT * FROM other.events"
+	sql := "INSERT INTO events FORMAT Native"
 	qctx := signedQueryContext(t, 64, signer, sql, sql, sqlmeta.StatementTypeInsert)
 	qctx.AccessedTables = []sqlmeta.AccessedTable{
 		{OriginalDatabase: "other", OriginalTable: "events", LogicalDatabase: "other"},
@@ -328,8 +340,8 @@ func TestIngressRejectsAmbiguousUnqualifiedTargetMetadata(t *testing.T) {
 
 func TestIngressRejectsQHashMismatch(t *testing.T) {
 	p, signer := newSignedIngress(t)
-	finalSQL := "INSERT INTO tenant.events VALUES (1)"
-	signedSQL := "INSERT INTO tenant.events VALUES (2)"
+	finalSQL := "INSERT INTO tenant.events FORMAT Native"
+	signedSQL := "INSERT INTO tenant.other FORMAT Native"
 	qctx := signedQueryContext(t, 14, signer, signedSQL, finalSQL, sqlmeta.StatementTypeInsert)
 	qctx.OriginalSQL = finalSQL
 	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
@@ -342,8 +354,8 @@ func TestIngressRejectsQHashMismatch(t *testing.T) {
 
 func TestIngressValidatesSignedSQLBeforeServerRewrite(t *testing.T) {
 	p, signer := newSignedIngress(t)
-	signedSQL := "INSERT INTO tenant.events VALUES (1)"
-	forwardSQL := "INSERT INTO physical_tenant.events VALUES (1)"
+	signedSQL := "INSERT INTO tenant.events FORMAT Native"
+	forwardSQL := "INSERT INTO physical_tenant.events FORMAT Native"
 	qctx := signedQueryContext(t, 23, signer, signedSQL, forwardSQL, sqlmeta.StatementTypeInsert)
 	qctx.AccessedTables = []sqlmeta.AccessedTable{{
 		OriginalDatabase: "tenant",
@@ -374,9 +386,27 @@ func TestIngressValidatesSignedSQLBeforeServerRewrite(t *testing.T) {
 	}
 }
 
+func TestIngressRejectsInlineSignedSQLBeforeServerRewrite(t *testing.T) {
+	p, signer := newSignedIngress(t)
+	signedSQL := "INSERT INTO tenant.events VALUES (1)"
+	forwardSQL := "INSERT INTO tenant.events FORMAT Native"
+	qctx := signedQueryContext(t, 26, signer, signedSQL, forwardSQL, sqlmeta.StatementTypeInsert)
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{
+		OriginalDatabase: "tenant",
+		OriginalTable:    "events",
+		LogicalDatabase:  "tenant",
+		PhysicalDatabase: "tenant",
+	}}
+
+	err := p.OnQuery(context.Background(), qctx)
+	if err == nil || !strings.Contains(err.Error(), "streaming Native INSERT") {
+		t.Fatalf("OnQuery err = %v, want signed inline INSERT rejection", err)
+	}
+}
+
 func TestIngressRejectsPurposeMismatch(t *testing.T) {
 	p, signer := newSignedIngress(t)
-	sql := "INSERT INTO tenant.events VALUES (1)"
+	sql := "INSERT INTO tenant.events FORMAT Native"
 	token, err := signer.SignTokenWithPurpose(sql, "ordinary-query")
 	if err != nil {
 		t.Fatalf("SignTokenWithPurpose: %v", err)
@@ -385,7 +415,7 @@ func TestIngressRejectsPurposeMismatch(t *testing.T) {
 		Session:     &fakeSession{id: 19, state: chsession.NewSessionState()},
 		OriginalSQL: sql,
 		Query: &chproto.Query{
-			ID:   "query-id",
+			ID:   statementIDFor(signer, 1),
 			Body: sql,
 			Settings: []chproto.Setting{{
 				Key:    auth.AuthTokenSettingKey,
@@ -414,7 +444,7 @@ func TestIngressAuthValidationUsesRequestTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRelaySigner: %v", err)
 	}
-	sql := "INSERT INTO tenant.events VALUES (1)"
+	sql := "INSERT INTO tenant.events FORMAT Native"
 	qctx := signedQueryContext(t, 24, signer, sql, sql, sqlmeta.StatementTypeInsert)
 	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
 
@@ -446,7 +476,7 @@ func TestIngressRejectsValidatorThatDoesNotAuthenticateSigner(t *testing.T) {
 		AuthValidator: auth.NewEthValidator([]string{signer.Address()}, time.Minute, false, false, "", nil),
 		Purpose:       auth.QueryPurpose,
 	})
-	sql := "INSERT INTO tenant.events VALUES (1)"
+	sql := "INSERT INTO tenant.events FORMAT Native"
 	qctx := signedQueryContext(t, 18, signer, sql, sql, sqlmeta.StatementTypeInsert)
 	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
 
@@ -520,7 +550,7 @@ func TestIngressRejectsWriteWhilePriorAdmissionPending(t *testing.T) {
 	}
 	p.OnQueryInputComplete(context.Background(), qctx)
 
-	nextSQL := "INSERT INTO tenant.events VALUES (2)"
+	nextSQL := "INSERT INTO tenant.events FORMAT Native"
 	next := signedQueryContext(t, 50, signer, nextSQL, nextSQL, sqlmeta.StatementTypeInsert)
 	next.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
 	err := p.OnQuery(context.Background(), next)
@@ -597,19 +627,19 @@ func TestIngressAbortOnlyDropsMatchingStatement(t *testing.T) {
 	p, signer := newSignedIngress(t)
 	sql := "INSERT INTO tenant.events FORMAT Native"
 	active := signedQueryContext(t, 55, signer, sql, sql, sqlmeta.StatementTypeInsert)
-	active.Query.ID = "active-statement"
+	active.Query.ID = statementIDFor(signer, 1)
 	active.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
 	if err := p.OnQuery(context.Background(), active); err != nil {
 		t.Fatalf("OnQuery: %v", err)
 	}
 
 	other := signedQueryContext(t, 55, signer, sql, sql, sqlmeta.StatementTypeInsert)
-	other.Query.ID = "other-statement"
+	other.Query.ID = statementIDFor(signer, 2)
 	p.OnQueryAbort(context.Background(), other)
 	p.mu.Lock()
 	got := p.active[active.Session.ID()]
 	p.mu.Unlock()
-	if got == nil || got.admission.StatementID != "active-statement" {
+	if got == nil || got.admission.StatementID != active.Query.ID {
 		t.Fatalf("unrelated abort removed active admission: %#v", got)
 	}
 }
@@ -664,15 +694,16 @@ func TestIngressConsumerReceivesCompletedAdmissionAndClearsPending(t *testing.T)
 	p.OnQueryInputComplete(context.Background(), qctx)
 
 	admission := consumer.requireOne(t)
-	if admission.StatementID != "query-id" || admission.TableID != "tenant.events" {
-		t.Fatalf("admission = %s/%s, want query-id/tenant.events", admission.StatementID, admission.TableID)
+	wantStatementID := statementIDFor(signer, 1)
+	if admission.StatementID != wantStatementID || admission.TableID != "tenant.events" {
+		t.Fatalf("admission = %s/%s, want %s/tenant.events", admission.StatementID, admission.TableID, wantStatementID)
 	}
 	if _, err := p.ConsumeAdmission(qctx.Session.ID()); err == nil {
 		t.Fatal("consumer-success admission remained pending")
 	}
 
 	next := signedQueryContext(t, 58, signer, sql, sql, sqlmeta.StatementTypeInsert)
-	next.Query.ID = "query-id-2"
+	next.Query.ID = statementIDFor(signer, 2)
 	next.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
 	if err := p.OnQuery(context.Background(), next); err != nil {
 		t.Fatalf("second OnQuery after consumer success: %v", err)
@@ -828,7 +859,7 @@ func signedQueryContext(t *testing.T, sessionID int64, signer *auth.RelaySigner,
 		Session:     sess,
 		OriginalSQL: signedSQL,
 		Query: &chproto.Query{
-			ID:   "query-id",
+			ID:   statementIDFor(signer, 1),
 			Body: finalSQL,
 			Settings: []chproto.Setting{{
 				Key:    auth.AuthTokenSettingKey,
@@ -838,6 +869,10 @@ func signedQueryContext(t *testing.T, sessionID int64, signer *auth.RelaySigner,
 		},
 		StatementType: typ,
 	}
+}
+
+func statementIDFor(signer *auth.RelaySigner, seq uint64) string {
+	return strings.ToLower(signer.Address()) + ":" + strconv.FormatUint(seq, 10) + ":n" + strconv.FormatUint(seq, 10)
 }
 
 type fakeSession struct {

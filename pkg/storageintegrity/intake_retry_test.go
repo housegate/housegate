@@ -110,20 +110,20 @@ func TestOrchestrate_UnknownOutcomeHoldsFrontier(t *testing.T) {
 	prep := newFrontierProbePreparer()
 	prep.prepared = boundSource()
 
-	// q-1's submit is unknown, so its intake stays non-terminal and holds the
-	// frontier; q-2 on the same source must not start its prepare.
+	// adm1's submit is unknown, so its intake stays non-terminal and holds the
+	// frontier; adm2 on the same source must not start its prepare.
 	sub := &recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeUnknown, Reason: "timeout"}}
 	orch := NewOrchestrator(sub, prep, OrchestratorConfig{ExpectedSource: "snode-A"})
 
 	adm1 := admissionFixture()
 	adm2 := admissionFixture()
-	adm2.StatementID = "q-2"
+	adm2.StatementID = fixtureStatementID(2)
 
 	if _, err := orch.Orchestrate(context.Background(), adm1); err != nil {
-		t.Fatalf("q-1 Orchestrate: %v", err)
+		t.Fatalf("adm1 Orchestrate: %v", err)
 	}
-	// q-1 returned unknown and is holding the frontier. q-2 must block; run it in
-	// a goroutine and confirm it never prepares within a short window.
+	// adm1 returned unknown and is holding the frontier. adm2 must block; run it
+	// in a goroutine and confirm it never prepares within a short window.
 	q2done := make(chan struct{})
 	go func() {
 		defer close(q2done)
@@ -131,11 +131,11 @@ func TestOrchestrate_UnknownOutcomeHoldsFrontier(t *testing.T) {
 	}()
 	select {
 	case <-q2done:
-		t.Fatal("q-2 must block on the frontier held by the unknown q-1 intake")
+		t.Fatal("adm2 must block on the frontier held by the unknown adm1 intake")
 	case <-time.After(50 * time.Millisecond):
 	}
-	if got := prep.prepareCountFor("q-2"); got != 0 {
-		t.Fatalf("q-2 prepared %d times while unknown q-1 held the frontier", got)
+	if got := prep.prepareCountFor(adm2.StatementID); got != 0 {
+		t.Fatalf("adm2 prepared %d times while unknown adm1 held the frontier", got)
 	}
 }
 

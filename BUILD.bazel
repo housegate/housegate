@@ -91,6 +91,7 @@ go_test(
         "//pkg/plugins/storageintegrity",
         "//pkg/proxy",
         "//pkg/registry",
+        "//pkg/replay",
         "//pkg/replicationproxy",
         "//pkg/rewriter",
         "//pkg/storageintegrity",

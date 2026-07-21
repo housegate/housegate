@@ -3,10 +3,13 @@ package storageintegrity
 import (
 	"context"
 	"errors"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"housegate/housegate/pkg/replay"
 )
 
 // requireCompanionStagedIntake fails closed while the companion staged-prepare
@@ -32,22 +35,29 @@ func requireCompanionStagedIntake(t *testing.T) {
 // fixtureRevision is the pinned client protocol revision shared by
 // admissionFixture and boundSource so their envelopes agree.
 const fixtureRevision = 54465
+const fixtureSigner = "0xabc"
 
 // admissionFixture returns a complete, INSERT-shaped admission record that the
 // intake orchestrator can turn into a source envelope.
 func admissionFixture() AdmissionRecord {
 	return AdmissionRecord{
-		StatementID:     "q-1",
+		StatementID:     fixtureStatementID(1),
 		Kind:            KindInsert,
 		TableID:         "net1.events",
-		SQL:             "INSERT INTO events VALUES",
-		Signer:          "0xabc",
+		SQL:             "INSERT INTO events FORMAT Native",
+		SQLHash:         replay.DigestString("INSERT INTO events FORMAT Native"),
+		Signer:          fixtureSigner,
+		UserJWS:         "jws",
 		Payload:         []byte("native-block-bytes"),
 		PayloadLength:   uint64(len("native-block-bytes")),
 		PayloadHash:     "sha256:deadbeef",
 		PayloadEncoding: PayloadEncodingClickHouseNativeData,
 		Revision:        fixtureRevision,
 	}
+}
+
+func fixtureStatementID(seq uint64) string {
+	return fixtureSigner + ":" + strconv.FormatUint(seq, 10) + ":n" + strconv.FormatUint(seq, 10)
 }
 
 // --- Pure HouseGate-local invariants: green today, no companion seam needed ---
@@ -66,6 +76,12 @@ func TestEnvelopeFromAdmission_MirrorsPayloadIdentity(t *testing.T) {
 	}
 	if env.TargetTableID != adm.TableID {
 		t.Fatalf("target table: got %q want %q", env.TargetTableID, adm.TableID)
+	}
+	if env.SQLHash != adm.SQLHash {
+		t.Fatalf("sql hash: got %q want %q", env.SQLHash, adm.SQLHash)
+	}
+	if env.UserJWS != adm.UserJWS {
+		t.Fatalf("user jws: got %q want %q", env.UserJWS, adm.UserJWS)
 	}
 	if env.PayloadHash != adm.PayloadHash {
 		t.Fatalf("payload hash: got %q want %q", env.PayloadHash, adm.PayloadHash)
@@ -89,6 +105,54 @@ func TestEnvelopeFromAdmission_RejectsEmptyStatementID(t *testing.T) {
 	adm.StatementID = ""
 	if _, err := EnvelopeFromAdmission(adm); err == nil {
 		t.Fatal("expected rejection of empty statement id")
+	}
+}
+
+func TestEnvelopeFromAdmission_RejectsMissingWireFields(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*AdmissionRecord)
+	}{
+		{"missing sql hash", func(a *AdmissionRecord) { a.SQLHash = "" }},
+		{"wrong sql hash", func(a *AdmissionRecord) { a.SQLHash = replay.DigestString("different") }},
+		{"missing signer", func(a *AdmissionRecord) { a.Signer = "" }},
+		{"missing user jws", func(a *AdmissionRecord) { a.UserJWS = "" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			adm := admissionFixture()
+			tc.mutate(&adm)
+			if _, err := EnvelopeFromAdmission(adm); err == nil {
+				t.Fatal("EnvelopeFromAdmission accepted incomplete wire fields")
+			}
+		})
+	}
+}
+
+func TestEnvelopeFromAdmission_RejectsInvalidStructuredStatementID(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*AdmissionRecord)
+	}{
+		{"malformed", func(a *AdmissionRecord) { a.StatementID = "q-1" }},
+		{"zero seq", func(a *AdmissionRecord) { a.StatementID = fixtureSigner + ":0:n0" }},
+		{"signer mismatch", func(a *AdmissionRecord) { a.StatementID = "0xdef:1:n1" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			adm := admissionFixture()
+			tc.mutate(&adm)
+			if _, err := EnvelopeFromAdmission(adm); err == nil {
+				t.Fatal("EnvelopeFromAdmission accepted invalid structured statement id")
+			}
+		})
+	}
+}
+
+func TestEnvelopeFromAdmission_RejectsInlineInsertSQL(t *testing.T) {
+	adm := admissionFixture()
+	adm.SQL = "INSERT INTO events VALUES (1)"
+	adm.SQLHash = replay.DigestString(adm.SQL)
+	if _, err := EnvelopeFromAdmission(adm); err == nil {
+		t.Fatal("EnvelopeFromAdmission accepted inline INSERT SQL")
 	}
 }
 
@@ -541,20 +605,10 @@ func TestPreparedConsistencyReject_RequiresCompleteExactBinding(t *testing.T) {
 	}
 }
 
-// TestPreparedConsistencyReject_UpdateDeleteHaveNoPayload confirms the payload
-// tuple is required only for statements that carry a payload; a bounded
-// UPDATE/DELETE with no payload identity is not rejected for missing payload
-// fields.
-func TestPreparedConsistencyReject_UpdateDeleteHaveNoPayload(t *testing.T) {
-	adm := AdmissionRecord{StatementID: "m-1", Kind: KindDelete, TableID: "net1.events", SQL: "DELETE FROM events WHERE k=1"}
-	env, err := EnvelopeFromAdmission(adm)
-	if err != nil {
-		t.Fatalf("EnvelopeFromAdmission: %v", err)
-	}
-	orch := NewOrchestrator(&recordingSubmitter{}, &recordingPreparer{}, OrchestratorConfig{ExpectedSource: "snode-A"})
-	prepared := PreparedLocalResult{SourceNode: "snode-A"} // no payload, correct source
-	if reason := orch.preparedConsistencyReject(env, prepared); reason != "" {
-		t.Fatalf("payload-less mutation must not be rejected for missing payload fields, got %q", reason)
+func TestEnvelopeFromAdmissionRejectsNonInsertKind(t *testing.T) {
+	adm := AdmissionRecord{StatementID: fixtureStatementID(1), Kind: Kind("DELETE"), TableID: "net1.events", SQL: "DELETE FROM events WHERE k=1"}
+	if _, err := EnvelopeFromAdmission(adm); err == nil {
+		t.Fatal("EnvelopeFromAdmission accepted non-INSERT kind")
 	}
 }
 
@@ -835,9 +889,8 @@ func TestOrchestrate_StatementIdReuseWithDifferentEnvelopeRejected(t *testing.T)
 		name   string
 		mutate func(*AdmissionRecord)
 	}{
-		{"different SQL", func(a *AdmissionRecord) { a.SQL = "INSERT INTO events /* evil */ VALUES" }},
+		{"different SQL", func(a *AdmissionRecord) { a.SQL = "INSERT INTO events /* evil */ FORMAT Native" }},
 		{"different target", func(a *AdmissionRecord) { a.TableID = "net1.other" }},
-		{"different kind", func(a *AdmissionRecord) { a.Kind = KindDelete }},
 		{"different signer", func(a *AdmissionRecord) { a.Signer = "0xdifferent" }},
 		{"different JWS", func(a *AdmissionRecord) { a.UserJWS = "jws-2" }},
 		{"different payload bytes", func(a *AdmissionRecord) { a.Payload = []byte("different-bytes-x") }},
@@ -928,49 +981,49 @@ func TestOrchestrate_DifferentStatementBlockedOnFrontier(t *testing.T) {
 	prep := newFrontierProbePreparer()
 	prep.prepared = boundSource()
 	gate := make(chan struct{})
-	prep.block["q-1"] = gate // q-1's prepare blocks until we release it
 
 	sub := &recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeAccepted}}
 	orch := NewOrchestrator(sub, prep, OrchestratorConfig{ExpectedSource: "snode-A"})
 
-	adm1 := admissionFixture() // q-1
+	adm1 := admissionFixture()
 	adm2 := admissionFixture()
-	adm2.StatementID = "q-2"
+	adm2.StatementID = fixtureStatementID(2)
+	prep.block[adm1.StatementID] = gate
 
-	// q-1 acquires the frontier and blocks inside prepare.
+	// adm1 acquires the frontier and blocks inside prepare.
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		if _, err := orch.Orchestrate(context.Background(), adm1); err != nil {
-			t.Errorf("q-1 Orchestrate: %v", err)
+			t.Errorf("adm1 Orchestrate: %v", err)
 		}
 	}()
-	waitForMapCount(t, prep, "q-1", 1)
+	waitForMapCount(t, prep, adm1.StatementID, 1)
 
-	// q-2 tries to start while q-1 holds the frontier; it must block, i.e. never
-	// call prepare for q-2.
+	// adm2 tries to start while adm1 holds the frontier; it must block, i.e.
+	// never call prepare for adm2.
 	q2started := make(chan struct{})
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		close(q2started)
 		if _, err := orch.Orchestrate(context.Background(), adm2); err != nil {
-			t.Errorf("q-2 Orchestrate: %v", err)
+			t.Errorf("adm2 Orchestrate: %v", err)
 		}
 	}()
 	<-q2started
-	time.Sleep(30 * time.Millisecond) // give q-2 time to (not) start prepare
-	if got := prep.prepareCountFor("q-2"); got != 0 {
-		t.Fatalf("q-2 prepared %d times while q-1 held the frontier; the source write must be serialized", got)
+	time.Sleep(30 * time.Millisecond) // give adm2 time to (not) start prepare
+	if got := prep.prepareCountFor(adm2.StatementID); got != 0 {
+		t.Fatalf("adm2 prepared %d times while adm1 held the frontier; the source write must be serialized", got)
 	}
 
-	// Release q-1: it reaches ACK2 (terminal), frees the frontier, and q-2 may
+	// Release adm1: it reaches ACK2 (terminal), frees the frontier, and adm2 may
 	// now prepare.
 	close(gate)
 	wg.Wait()
-	if got := prep.prepareCountFor("q-2"); got != 1 {
-		t.Fatalf("after q-1 became terminal, q-2 must prepare exactly once, got %d", got)
+	if got := prep.prepareCountFor(adm2.StatementID); got != 1 {
+		t.Fatalf("after adm1 became terminal, adm2 must prepare exactly once, got %d", got)
 	}
 }
 
@@ -1075,24 +1128,24 @@ func TestOrchestrate_FrontierWaiterCancelDoesNotStrand(t *testing.T) {
 	prep := newFrontierProbePreparer()
 	prep.prepared = boundSource()
 	gate := make(chan struct{})
-	prep.block["q-1"] = gate
 
 	sub := &recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeAccepted}}
 	orch := NewOrchestrator(sub, prep, OrchestratorConfig{ExpectedSource: "snode-A"})
 
 	adm1 := admissionFixture()
 	adm2 := admissionFixture()
-	adm2.StatementID = "q-2"
+	adm2.StatementID = fixtureStatementID(2)
 	adm3 := admissionFixture()
-	adm3.StatementID = "q-3"
+	adm3.StatementID = fixtureStatementID(3)
+	prep.block[adm1.StatementID] = gate
 
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() { defer wg.Done(); orch.Orchestrate(context.Background(), adm1) }()
-	waitForMapCount(t, prep, "q-1", 1)
+	waitForMapCount(t, prep, adm1.StatementID, 1)
 
-	// q-2 blocks on the frontier, then cancels — it must return ctx.Err and not
-	// leave the frontier stranded.
+	// adm2 blocks on the frontier, then cancels — it must return ctx.Err and
+	// not leave the frontier stranded.
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	q2done := make(chan error, 1)
 	go func() { _, err := orch.Orchestrate(ctx2, adm2); q2done <- err }()
@@ -1101,21 +1154,21 @@ func TestOrchestrate_FrontierWaiterCancelDoesNotStrand(t *testing.T) {
 	select {
 	case err := <-q2done:
 		if err == nil {
-			t.Fatal("cancelled q-2 must return an error")
+			t.Fatal("cancelled adm2 must return an error")
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("cancelled q-2 did not return")
+		t.Fatal("cancelled adm2 did not return")
 	}
 
-	// Release q-1 (reaches terminal ACK2, frees the frontier). q-3 must then be
-	// able to prepare — proving the cancelled waiter did not strand the gate.
+	// Release adm1 (reaches terminal ACK2, frees the frontier). adm3 must then
+	// be able to prepare — proving the cancelled waiter did not strand the gate.
 	close(gate)
 	wg.Wait()
 	if _, err := orch.Orchestrate(context.Background(), adm3); err != nil {
-		t.Fatalf("q-3 after cancel + release: %v", err)
+		t.Fatalf("adm3 after cancel + release: %v", err)
 	}
-	if got := prep.prepareCountFor("q-3"); got != 1 {
-		t.Fatalf("q-3 must acquire the frontier and prepare once, got %d", got)
+	if got := prep.prepareCountFor(adm3.StatementID); got != 1 {
+		t.Fatalf("adm3 must acquire the frontier and prepare once, got %d", got)
 	}
 }
 

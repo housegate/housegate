@@ -65,7 +65,9 @@ func AdmissionRecordFromPlugin(adm siplugin.Admission) sicore.AdmissionRecord {
 		Kind:            coreKind(adm.Kind),
 		TableID:         adm.TableID,
 		SQL:             adm.SQL,
+		SQLHash:         adm.SQLHash,
 		Signer:          adm.Signer,
+		UserJWS:         adm.UserJWS,
 		Payload:         adm.Payload.Bytes,
 		PayloadLength:   adm.Payload.Length,
 		PayloadHash:     adm.Payload.SHA256,
@@ -81,10 +83,6 @@ func coreKind(k siplugin.Kind) sicore.Kind {
 	switch k {
 	case siplugin.KindInsert:
 		return sicore.KindInsert
-	case siplugin.KindUpdate:
-		return sicore.KindUpdate
-	case siplugin.KindDelete:
-		return sicore.KindDelete
 	default:
 		return sicore.Kind(string(k))
 	}
