@@ -18,14 +18,23 @@ import (
 // materializer kind. It deliberately constructs NO HouseGate-owned Verifier or
 // Promoter: verifier selection, quorum, and manifest publication are Arbiter /
 // SNode responsibilities the orchestrator only drives through ports (design
-// sections 3.6 and 4.1). Until the companion staged-prepare seam lands, the
-// orchestrator has no real StatementSubmitter/SourcePreparer/IntakeStatusQuerier
-// adapters, so this consumer can be constructed and validated but cannot yet
-// close a statement to ACK2 (see CompanionStagedIntakeAvailable).
+// sections 3.6 and 4.1).
 type StorageIntegrityIngress struct {
 	orch    *sicore.Orchestrator
 	guard   *sicore.MergeGuard
 	matKind sicore.MaterializerKind
+}
+
+// StorageIntegrityIngressConfig is the embeddable runtime wiring surface for
+// storage-integrity INSERT ingress. Submitter and Preparer are required; Querier
+// is optional until the companion topology exposes status-query RPCs.
+type StorageIntegrityIngressConfig struct {
+	Submitter        sicore.StatementSubmitter
+	Preparer         sicore.SourcePreparer
+	Querier          sicore.IntakeStatusQuerier
+	ExpectedSource   string
+	MergeGuard       *sicore.MergeGuard
+	MaterializerKind sicore.MaterializerKind
 }
 
 // NewStorageIntegrityIngress constructs the ingress runtime over an orchestrator
@@ -36,6 +45,30 @@ func NewStorageIntegrityIngress(orch *sicore.Orchestrator, guard *sicore.MergeGu
 		return nil, fmt.Errorf("storage_integrity ingress: orchestrator is required")
 	}
 	return &StorageIntegrityIngress{orch: orch, guard: guard, matKind: matKind}, nil
+}
+
+// NewStorageIntegrityIngressFromPorts constructs the ingress runtime from the
+// companion ports an embedder wires for Arbiter sequencing and selected-SNode
+// staged prepare/register/abort. This is the production constructor once those
+// ports are backed by real companion clients.
+func NewStorageIntegrityIngressFromPorts(cfg StorageIntegrityIngressConfig) (*StorageIntegrityIngress, error) {
+	if cfg.Submitter == nil {
+		return nil, fmt.Errorf("storage_integrity ingress: submitter is required")
+	}
+	if cfg.Preparer == nil {
+		return nil, fmt.Errorf("storage_integrity ingress: source preparer is required")
+	}
+	matKind := cfg.MaterializerKind
+	if matKind == sicore.MaterializerUnspecified {
+		matKind = sicore.MaterializerNative
+	}
+	orch := sicore.NewOrchestratorWithQuerier(
+		cfg.Submitter,
+		cfg.Preparer,
+		cfg.Querier,
+		sicore.OrchestratorConfig{ExpectedSource: cfg.ExpectedSource},
+	)
+	return NewStorageIntegrityIngress(orch, cfg.MergeGuard, matKind)
 }
 
 // ConsumeStorageIntegrityAdmission maps a completed plugin admission into a core

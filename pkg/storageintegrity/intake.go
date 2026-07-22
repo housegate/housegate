@@ -16,17 +16,12 @@ import (
 // PrepareLocalStatement / RegisterPreparedClaim / AbortPreparedStatement split
 // described in design section 3.2.
 //
-// It is false today. The companion repos expose only ArbiterIngress
-// .SubmitStatement and SourceClaims.RegisterResultClaim, and SNode local intake
-// is the single-shot in-process snode.Role.SubmitLocalStatement, which performs
-// the unsafe write and registers the result claim in one call and cannot be
-// split into prepare / register-later / abort. Until the companion seam lands,
-// no real StatementSubmitter/SourcePreparer implementation exists, and the
-// end-to-end intake path is not wired. This constant is the single, honest gate
-// that flips to true when a real adapter is implemented against the companion
-// seam; the orchestration contract tests read it so a red run is never mistaken
-// for green.
-const CompanionStagedIntakeAvailable = false
+// It is true for the paired Arbiter staged-intake branch: SNode local intake is
+// split into prepare/register/abort, and HouseGate has a real ArbiterIngress
+// SubmitStatement adapter. The SourcePreparer implementation is still supplied
+// by the embedding topology because the cross-process staged SNode RPC belongs
+// in arbiter-proto, not in HouseGate's core package.
+const CompanionStagedIntakeAvailable = true
 
 // Kind mirrors the storage-integrity statement kind admitted by the ingress
 // plugin. It intentionally uses the same string values as
@@ -323,18 +318,17 @@ type PartitionLtHashSum struct {
 	NewPartsLtHashSum string
 }
 
-// StatementSubmitter is the Arbiter route-A sequencing port. The real
-// implementation calls ArbiterIngress.SubmitStatement. No such implementation
-// exists in HouseGate today; see CompanionStagedIntakeAvailable.
+// StatementSubmitter is the Arbiter route-A sequencing port. The production
+// implementation calls ArbiterIngress.SubmitStatement.
 type StatementSubmitter interface {
 	SubmitStatement(ctx context.Context, env StatementEnvelope) (SubmitOutcome, error)
 }
 
 // SourcePreparer is the selected-SNode staged-prepare port (design section 3.2).
-// The real implementation drives the companion PrepareLocalStatement /
-// RegisterPreparedClaim / AbortPreparedStatement seam, which does not exist yet;
-// see CompanionStagedIntakeAvailable. HouseGate must never fabricate this seam
-// with a local mock shape.
+// The production implementation drives the companion PrepareLocalStatement /
+// RegisterPreparedClaim / AbortPreparedStatement seam. HouseGate deliberately
+// keeps this as a port so the selected SNode implementation can live in the
+// embedding Sentio topology or in arbiter-proto generated clients.
 type SourcePreparer interface {
 	// PrepareLocalStatement durably stages the local unsafe write on the
 	// selected source and returns the exact candidate inventory and RC inputs.

@@ -10,15 +10,13 @@ Most of the abort control flow already existed from the staged-intake slice (abo
 
 ## Companion Gate Status
 
-This design slice is a blocked skeleton, on the same basis as the staged-intake, ACK2-gate, and unknown-convergence slices. The abort seam it drives — `SourcePreparer.AbortPreparedStatement` — is part of the C1 staged-prepare split (`PrepareLocalStatement` / `RegisterPreparedClaim` / `AbortPreparedStatement`) that the Sentio companion repos do not expose (arbiter `03aa035`, arbiter-proto `2fa9263`, re-verified 2026-07-20; SNode intake is still the one-shot in-process `SubmitLocalStatement`, and the Arbiter command alphabet has no abort/cancel/revoke command).
+2026-07-22 implementation update: this branch is paired with Arbiter's staged-intake branch. Arbiter now exposes the in-process SNode `AbortPreparedStatement` split, and HouseGate's `SourcePreparer` port threads the exact candidate parts to that seam.
 
-Because HouseGate must not fabricate the companion protocol, this slice ships:
+Because HouseGate must not fabricate the companion protocol, cross-process abort remains a topology/proto concern until `arbiter-proto` exposes the staged SNode RPC. The HouseGate orchestration and exact-parts cleanup contract tests now run with `CompanionStagedIntakeAvailable` enabled.
 
 1. this scoped spec;
 2. the pure HouseGate-local change: the `AbortPreparedStatement` port signature now carries the exact `[]CandidatePart`, the `abortParts` helper that sources exactly the frozen inventory, and the `abort()` call threading it through;
-3. contract tests. The exact-parts cleanup bookkeeping is pure HouseGate logic — which parts get handed to the seam — and runs green today. The end-to-end accepted → ACK2 orchestration tests remain gated by `requireCompanionStagedIntake` and skip closed while the companion seam is absent, so a red (skipped) run is never mistaken for a green one.
-
-When the companion seam lands, a real `AbortPreparedStatement` is implemented against the abort RPC / `ALTER TABLE hg_unsafe.<table> DROP PART` execution, and it receives the exact parts to drop. No local mock shape is added in the meantime.
+3. contract tests. The exact-parts cleanup bookkeeping is pure HouseGate logic, and the accepted-submit -> ACK2 orchestration tests execute under the companion gate.
 
 ## Design Anchors
 
@@ -58,7 +56,7 @@ Design rule 5 ("进程重启时扫描 `Preparing` 和 `AbortPending` 并继续�
 
 ## Non-Scope
 
-This change does not implement a durable journal store or any persistence layer, real ClickHouse `ALTER TABLE … DROP PART` execution, a real gRPC abort client, cross-process-restart recovery scanning (rules 2 and 5), or the `Preparing`-stage `_hg_row_id` partition rescan of rule 2. It does not extend abort to retryable/unknown outcomes (abort stays terminal-only), does not carry or apply the source-side `PartitionNewPartSums` exclusion, does not flip `CompanionStagedIntakeAvailable`, and adds no companion proto RPC.
+This change does not implement a durable journal store or any persistence layer, a cross-process gRPC abort client, cross-process-restart recovery scanning (rules 2 and 5), or the `Preparing`-stage `_hg_row_id` partition rescan of rule 2. It does not extend abort to retryable/unknown outcomes (abort stays terminal-only), and it adds no companion proto RPC. The paired Arbiter branch implements real SNode-side exact `DROP PART` execution and source-side sum exclusion behind the staged abort seam.
 
 ## Verification
 

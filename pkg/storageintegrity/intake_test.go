@@ -12,16 +12,10 @@ import (
 	"housegate/housegate/pkg/replay"
 )
 
-// requireCompanionStagedIntake fails closed while the companion staged-prepare
-// seam is absent. The orchestration contract tests below assert the behavior
-// HouseGate must have once PrepareLocalStatement / RegisterPreparedClaim /
-// AbortPreparedStatement exist in the Sentio companion topology. Until then
-// there is no real StatementSubmitter/SourcePreparer implementation to exercise
-// end to end, and this guard skips those tests with an explicit message so a red
-// (skipped) run is never mistaken for a green (passed) one. When a real adapter
-// lands, CompanionStagedIntakeAvailable flips to true and these tests become the
-// executable spec for the orchestration. It must never be satisfied by a local
-// mock shape that impersonates the companion seam.
+// requireCompanionStagedIntake keeps orchestration contract tests tied to the
+// companion seam flag. The paired Arbiter staged-intake branch now exposes the
+// SNode prepare/register/abort split, so the flag is true and these tests run as
+// executable ACK2 orchestration specs instead of silently skipping.
 func requireCompanionStagedIntake(t *testing.T) {
 	t.Helper()
 	if !CompanionStagedIntakeAvailable {
@@ -223,18 +217,13 @@ func TestClassifyOutcome(t *testing.T) {
 }
 
 // --- Orchestration invariants: exercised through in-test fakes.
-// These pin the behavior HouseGate must have once the companion staged-prepare
-// seam exists. They call requireCompanionStagedIntake(t) first, which fails
-// closed while PrepareLocalStatement / RegisterPreparedClaim /
-// AbortPreparedStatement are absent from the companion topology, so a red run
-// is never mistaken for a green one. ---
+// These pin the behavior HouseGate must have over the companion staged-prepare
+// seam. They call requireCompanionStagedIntake(t) first so the suite fails
+// closed if a future branch disables the companion seam again. ---
 
 // recordingPreparer is an in-test SourcePreparer that records call order. It is
-// a test double for asserting orchestration ordering, NOT a substitute for the
-// missing companion seam: the tests that use it are gated by
-// requireCompanionStagedIntake(t) and are expected to be not-green until the
-// real seam lands. It deliberately does not perform any unsafe write, payload
-// store, or Arbiter call.
+// a test double for asserting orchestration ordering; it deliberately does not
+// perform any unsafe write, payload store, or Arbiter call.
 type recordingPreparer struct {
 	prepared     PreparedLocalResult
 	prepareErr   error

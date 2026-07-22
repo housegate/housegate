@@ -10,15 +10,15 @@ The change is purely additive and honors the two convergence paths design sectio
 
 ## Companion Gate Status
 
-This design slice is scoped as a blocked skeleton, on the same basis as the staged-intake and ACK2-gate slices. The status-query seam it depends on does not exist in the current Sentio companion repos: arbiter `03aa035` and arbiter-proto `2fa9263` (re-verified 2026-07-20) expose `SubmitStatement` and `RegisterResultClaim` but **no query-status RPC** — there is no way to ask the Arbiter or SNode "what is the current status of `statement_id` X". The staged-prepare seam (`PrepareLocalStatement` / `RegisterPreparedClaim` / `AbortPreparedStatement`) is likewise still absent.
+2026-07-22 implementation update: the paired Arbiter branch now provides the staged SNode prepare/register/abort split, and this HouseGate branch enables `CompanionStagedIntakeAvailable`. The status-query seam remains absent from `arbiter-proto`, so `IntakeStatusQuerier` stays optional and nil unless an embedding topology can answer status by `statement_id`.
 
 Because HouseGate must not fabricate the companion protocol, this slice ships:
 
 1. this scoped spec;
 2. the pure HouseGate-local convergence logic: the optional `IntakeStatusQuerier` port, the `NewOrchestratorWithQuerier` constructor, the `classifyQueryConvergence` mapping, the record's `submitUnknown` / `claimUnknown` state, and the two query-before-resend branches in the orchestrator;
-3. contract tests. The convergence *mapping* and the frontier / no-abort / no-ack behaviors are pure HouseGate logic and run green today. The end-to-end query-then-converge orchestration tests remain gated by `requireCompanionStagedIntake`, so they skip closed while the companion seam is absent and a red (skipped) run is never mistaken for a green one.
+3. contract tests. The convergence mapping, frontier/no-abort/no-ack behaviors, and query-then-converge orchestration tests now run under the companion gate using in-test status doubles.
 
-When the companion seam lands, a real `IntakeStatusQuerier` is implemented against the query RPC, `CompanionStagedIntakeAvailable` flips to true, and the gated tests become the executable spec for the real convergence. No local HTTP or fake gRPC shape is added to make the gated tests pass in the meantime.
+Remaining companion work is a real query-status RPC and adapter. No local HTTP shape is introduced.
 
 ## Design Anchors
 
@@ -83,7 +83,7 @@ The record gains `submitUnknown` / `claimUnknown`, set at the non-accepting subm
 
 ## Non-Scope
 
-This change does not implement the real query RPC or a real `IntakeStatusQuerier`, the durable intake journal, the ClickHouse unsafe write, crash-recovery journal scanning (design rules 2 and 5), terminal-reject abort/exact-cleanup extension (the abort path itself already exists for the reject case and is unchanged here), or runtime/plugin wiring and E2E. It does not flip `CompanionStagedIntakeAvailable`, add a companion proto RPC, or introduce a new `OutcomeCategory`.
+This change does not implement the real query RPC or a production `IntakeStatusQuerier`, the durable intake journal, crash-recovery journal scanning (design rules 2 and 5), or a companion proto RPC. It does not introduce a new `OutcomeCategory`. The paired Arbiter branch owns the ClickHouse unsafe write and staged abort execution; this HouseGate branch owns the query-convergence port and orchestration behavior.
 
 ## Verification
 
@@ -100,4 +100,4 @@ Bazel gate:
 bazel test //pkg/storageintegrity:storageintegrity_test //pkg/plugins/storageintegrity:storageintegrity_test
 ```
 
-The convergence mapping and local behaviors run green today: `TestClassifyQueryConvergence` (every category → resend decision, including not-found→resend-safe); `TestOrchestrate_UnknownSubmitDoesNotAbortOrAck` (unknown submit → no abort, no ACK2); `TestOrchestrate_UnknownOutcomeHoldsFrontier` (an unknown intake blocks a different statement on the same source). The deterministic query-then-converge orchestration tests stay gated by `requireCompanionStagedIntake` and skip closed while the companion query seam is absent: `TestOrchestrate_UnknownSubmitQueriesBeforeResend` (queries before any re-send), `TestOrchestrate_UnknownSubmitQueryFindsAcceptedConvergesForward` (queried-Accepted → ACK2, no re-submit, no re-prepare), `TestOrchestrate_UnknownSubmitQueryNotFoundAllowsResend` (queried-NotFound → one idempotent re-submit → ACK2), and `TestOrchestrate_UnknownRCQueriesBeforeReregister` (queried-Bound → ACK2, no re-register). Existing staged-intake and ACK2-gate tests are unchanged (they construct via `NewOrchestrator`, so the querier is nil and behavior is byte-identical). The suite is race-clean.
+The convergence mapping and local behaviors run green today: `TestClassifyQueryConvergence` (every category -> resend decision, including not-found -> resend-safe); `TestOrchestrate_UnknownSubmitDoesNotAbortOrAck` (unknown submit -> no abort, no ACK2); `TestOrchestrate_UnknownOutcomeHoldsFrontier` (an unknown intake blocks a different statement on the same source); and the deterministic query-then-converge orchestration tests under `requireCompanionStagedIntake`: `TestOrchestrate_UnknownSubmitQueriesBeforeResend`, `TestOrchestrate_UnknownSubmitQueryFindsAcceptedConvergesForward`, `TestOrchestrate_UnknownSubmitQueryNotFoundAllowsResend`, and `TestOrchestrate_UnknownRCQueriesBeforeReregister`. Existing staged-intake and ACK2-gate tests are unchanged when the querier is nil. The suite is race-clean.

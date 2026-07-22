@@ -140,7 +140,8 @@ func TestOrchestrate_UnknownOutcomeHoldsFrontier(t *testing.T) {
 }
 
 // --- Gated: deterministic query-first convergence. Needs the companion query
-// seam, so requireCompanionStagedIntake(t) skips these closed until it lands. ---
+// seam, so requireCompanionStagedIntake(t) keeps these tied to the companion
+// availability flag. ---
 
 // TestOrchestrate_UnknownSubmitQueriesBeforeResend proves that after an unknown
 // submit, the next attempt calls QuerySubmitStatus BEFORE any SubmitStatement

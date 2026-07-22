@@ -10,15 +10,15 @@ The runtime never constructs a HouseGate-owned Verifier or Promoter: verifier se
 
 ## Companion Gate Status
 
-This design slice is a blocked skeleton, on the same basis as the earlier INSERT intake slices. It reuses the existing C1 gate — `CompanionStagedIntakeAvailable` (`pkg/storageintegrity/intake.go`) and `requireCompanionStagedIntake` — and introduces no new gate: this is the INSERT P1e runtime, whose blocker is C1 (the staged-prepare seam), not C2. The companion repos expose no `PrepareLocalStatement` / `RegisterPreparedClaim` / `AbortPreparedStatement` seam (arbiter `03aa035`, arbiter-proto `2fa9263`, re-verified 2026-07-20), so no real `StatementSubmitter` / `SourcePreparer` / `IntakeStatusQuerier` adapters exist and the ingress consumer cannot actually close a statement to ACK2.
+2026-07-22 implementation update: this branch is paired with Arbiter's staged-intake branch. `CompanionStagedIntakeAvailable` is true, HouseGate includes `ArbiterIngressSubmitter` for route-A `SubmitStatement`, and the root `StorageIntegrityIngressConfig` constructor wires submitter/preparer/querier ports into the runtime.
 
 Because HouseGate must not fabricate the companion protocol, this slice ships:
 
 1. this scoped spec;
-2. the pure HouseGate-local runtime pieces — the ingress adapter and its `Admission` → `AdmissionRecord` projection, the `MergeGuard`, the materializer-selection function, and the `safe_merges` config with default-off validation;
-3. contract tests. The merge-guard SQL build/verify, the materializer selection, the admission projection, the config default-off, and the build-time default-off wiring are pure HouseGate logic and run green today. The single end-to-end ingress-to-ACK2 orchestration assertion is gated behind `requireCompanionStagedIntake` and skips closed while the companion seam is absent.
+2. the HouseGate runtime pieces: the ingress adapter and its `Admission` -> `AdmissionRecord` projection, the ports constructor, `ArbiterIngressSubmitter`, the `MergeGuard`, the materializer-selection function, and the `safe_merges` config with default-off validation;
+3. contract tests. The merge-guard SQL build/verify, materializer selection, admission projection, config default-off, build-time default-off wiring, route-A submitter mapping, and ingress-to-ACK2 orchestration assertion all run in this branch.
 
-When the companion seam lands, three adapters are implemented and wired into the ingress runtime, `CompanionStagedIntakeAvailable` flips to true, and the gated test becomes the executable spec for the real close-to-ACK2 path. No local mock shape is added in the meantime.
+Remaining cross-process work is outside HouseGate core: `arbiter-proto` still needs staged SNode prepare/register/abort RPCs and status-query RPCs for a pure gRPC topology. Until then, embedders provide the selected-SNode `SourcePreparer` port directly.
 
 ## Design Anchors
 
@@ -47,7 +47,7 @@ The `storage_integrity.safe_merges.allow_native_background_merges` toggle govern
 
 ## Non-Scope
 
-This change does not implement the real `StatementSubmitter` / `SourcePreparer` / `IntakeStatusQuerier` adapters (they need the companion staged-prepare seam), the durable intake journal, cross-restart crash recovery, leader failover, or a real ClickHouse connection behind the merge guard. It does not construct a Verifier/Promoter, does not touch the Arbiter proto / Raft commands, does not flip `CompanionStagedIntakeAvailable`, and adds no non-INSERT surface. The crash/retry/frontier/leader-failover E2E behaviors named in the runtime goal are C1-gated: they depend on the durable journal and real adapters that arrive with C1, and are not asserted against fakes here.
+This change implements the HouseGate route-A `StatementSubmitter` adapter and the runtime ports constructor, but it does not implement a cross-process staged SNode RPC client, a real `IntakeStatusQuerier`, the durable intake journal, cross-restart crash recovery, leader failover, or a real ClickHouse connection behind the merge guard. It does not construct a Verifier/Promoter and adds no non-INSERT surface. Pure gRPC HouseGate-to-SNode E2E still depends on `arbiter-proto` adding staged SNode and status-query RPCs.
 
 ## Verification
 
@@ -64,4 +64,4 @@ Bazel gate:
 bazel test //pkg/storageintegrity:storageintegrity_test //pkg/plugins/storageintegrity:storageintegrity_test
 ```
 
-Green today: `TestSelectMaterializerKind` (encoding → kind, fail-closed on unknown); the `TestMergeGuard_*` suite (build stop statements for both hg_safe and hg_unsafe, scoped verify probe, emit-then-verify ordering, fail-closed on active merge, idempotent re-assert, exec-error surfaces); `TestAdmissionRecordFromPlugin_MapsAllFields` and `_MapsKinds` (pure projection); `TestNewStorageIntegrityIngress_RequiresOrchestrator` (nil rejected, no Verifier/Promoter fields); the config default-off and safe-merges-rejection tests. Gated: `TestIngressDrivesOrchestratorToAck2` (an INSERT admission driven to ACK2/RCBound) skips closed under `requireCompanionStagedIntake` and passes only when `CompanionStagedIntakeAvailable` is temporarily flipped true for wiring verification. The suite is race-clean.
+Green today: `TestSelectMaterializerKind` (encoding -> kind, fail-closed on unknown); the `TestMergeGuard_*` suite (build stop statements for both hg_safe and hg_unsafe, scoped verify probe, emit-then-verify ordering, fail-closed on active merge, idempotent re-assert, exec-error surfaces); `TestAdmissionRecordFromPlugin_MapsAllFields` and `_MapsKinds` (pure projection); `TestNewStorageIntegrityIngress_RequiresOrchestrator` and `TestNewStorageIntegrityIngressFromPorts_DrivesAdmissionToAck2`; `TestArbiterIngressSubmitter*`; the config default-off and safe-merges-rejection tests; and `TestIngressDrivesOrchestratorToAck2` (an INSERT admission driven to ACK2/RCBound) under the enabled companion gate. The suite is race-clean.
