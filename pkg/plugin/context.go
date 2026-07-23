@@ -112,5 +112,16 @@ type QueryContext struct {
 	// host-managed DDL that has no ClickHouse counterpart.
 	AbortWithSuccess bool
 
+	// SuppressUpstreamExecution, when set by a plugin during OnQuery,
+	// instructs the relay to keep Native INSERT sample-block negotiation with
+	// ordinary upstream but withhold non-empty client Data payload packets from
+	// that upstream. Relay still drains the query's client input through
+	// StrictDataPlugin / QueryInputCompleteStrictPlugin; if that staged input
+	// lifecycle completes successfully, the terminating empty Data block is
+	// forwarded so the ordinary upstream finishes with zero rows. This is for
+	// payload-bearing statements whose actual write is owned by an out-of-band
+	// path after input capture, such as storage-integrity staged INSERT.
+	SuppressUpstreamExecution bool
+
 	Values map[string]any
 }

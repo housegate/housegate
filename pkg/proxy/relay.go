@@ -514,17 +514,35 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 			}
 		}
 
-		// Before splicing the terminating empty Data block, run the strict
-		// end-of-input chain. An error here is fail-closed: reject the query and
-		// do NOT forward the terminating block, so the upstream never commits a
-		// statement whose correctness-critical end-of-input action failed (e.g. a
-		// storage-integrity admission the integrity consumer rejected).
+		// At the terminating empty Data block, run the strict end-of-input chain
+		// before any commit boundary. An error here is fail-closed: the normal
+		// path does not forward the terminator, and the staged-input path never
+		// lets a captured payload reach ordinary upstream. On success, both paths
+		// continue to the ordinary splice below for the terminator; for staged
+		// input this closes the upstream's sample-block negotiation with zero
+		// ordinary rows, and the upstream EndOfStream remains the client-visible
+		// success.
 		if inputComplete && curQctx != nil {
 			if err := r.hooks.OnQueryInputCompleteStrict(ctx, curQctx); err != nil {
 				r.writeExceptionToClient(ctx, err)
 				r.hooks.OnQueryAbort(ctx, curQctx)
 				r.hooks.OnQueryComplete(ctx, r.sess)
 				return fmt.Errorf("query input complete strict hook: %w", err)
+			}
+		}
+
+		if pkt.Type == uint64(chproto.ClientDataCode) && curQctx != nil && curQctx.SuppressUpstreamExecution {
+			if inputComplete {
+				logger.Debugw("staged client data terminator forwarded to upstream",
+					"query_id", curQctx.Query.ID,
+					"raw_len", pkt.RawLen,
+				)
+			} else {
+				logger.Debugw("staged client data payload suppressed",
+					"query_id", curQctx.Query.ID,
+					"raw_len", pkt.RawLen,
+				)
+				continue
 			}
 		}
 

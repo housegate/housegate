@@ -50,6 +50,7 @@ go_library(
         "//pkg/plugins/usage",
         "//pkg/proxy",
         "//pkg/registry",
+        "//pkg/replay",
         "//pkg/replicationproxy",
         "//pkg/rewriter",
         "//pkg/sqlmeta",

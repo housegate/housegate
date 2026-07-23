@@ -55,6 +55,8 @@ type QueryCompletePlugin interface {
 
 // QueryInputCompletePlugin observes the protocol-level end of one client query
 // input after its terminating empty Data block has been forwarded upstream.
+// SuppressUpstreamExecution queries still forward the terminator after staged
+// input succeeds, but non-empty payload Data is withheld from ordinary upstream.
 type QueryInputCompletePlugin interface {
 	OnQueryInputComplete(ctx context.Context, qctx *QueryContext)
 }
@@ -62,12 +64,15 @@ type QueryInputCompletePlugin interface {
 // QueryInputCompleteStrictPlugin participates in the correctness-critical,
 // error-bearing end-of-input boundary that fires BEFORE the terminating empty
 // Data block is spliced upstream. Unlike QueryInputCompletePlugin (which is a
-// post-splice observer and cannot fail), an error here is fail-closed: Relay
-// rejects the query lifecycle and does NOT forward the terminating block, so the
-// upstream never executes the statement. Use this only for lanes where allowing
-// the statement to commit without a successful end-of-input action would violate
-// correctness (e.g. a signed storage-integrity INSERT whose admission must be
-// accepted by the integrity consumer before the write may commit).
+// completion observer and cannot fail), an error here is fail-closed: Relay
+// rejects the query lifecycle and does NOT forward the terminating block. If the
+// query also set QueryContext.SuppressUpstreamExecution, Relay has already
+// withheld every non-empty Data payload packet, so ordinary upstream can only
+// see the Query/sample negotiation and, on success, a zero-row terminator. Use
+// this only for lanes where allowing the statement to commit without a
+// successful end-of-input action would violate correctness (e.g. a signed
+// storage-integrity INSERT whose admission must be accepted by the integrity
+// consumer before the write may commit).
 type QueryInputCompleteStrictPlugin interface {
 	OnQueryInputCompleteStrict(ctx context.Context, qctx *QueryContext) error
 }

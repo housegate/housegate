@@ -214,6 +214,14 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 		return fmt.Errorf("storage_integrity pending admission %s for session %d has not been consumed", existing.admission.StatementID, id)
 	}
 	p.active[id] = state
+	if p.admissionConsumer != nil {
+		// A configured consumer means storage-integrity owns this INSERT's
+		// write through the staged path. Relay may still forward the Query so
+		// ClickHouse can return the Native sample block, but it must capture and
+		// withhold non-empty client Data packets; forwarding those rows to
+		// ordinary upstream would double-write beside the staged unsafe write.
+		qctx.SuppressUpstreamExecution = true
+	}
 	return nil
 }
 
@@ -267,14 +275,13 @@ func (p *Plugin) OnQueryComplete(_ context.Context, sess chsession.Session) {
 	// completion hook is best-effort and must not publish correctness state.
 }
 
-// OnQueryInputCompleteStrict is the correctness-critical, pre-splice end-of-input
-// boundary. When an admission consumer is configured, the completed admission is
-// driven through it HERE and a consumer rejection or unavailability returns an
-// error, so Relay refuses to forward the terminating empty Data block and the
-// upstream INSERT never commits. Without this, the admission was only consumed in
-// the post-splice OnQueryInputComplete observer, so a rejected/unavailable
-// consumer left the admission pending while the INSERT still executed and
-// returned success — a fail-open hole this closes.
+// OnQueryInputCompleteStrict is the correctness-critical end-of-input boundary.
+// When an admission consumer is configured, OnQuery marks the query with
+// SuppressUpstreamExecution, so Relay preserves Native sample-block negotiation
+// but withholds non-empty client Data from ordinary upstream. The completed
+// admission is driven through the consumer HERE; success lets Relay forward the
+// terminating empty Data block so upstream finishes with zero rows, while
+// rejection/unavailability returns an error before that commit boundary.
 func (p *Plugin) OnQueryInputCompleteStrict(ctx context.Context, qctx *plugin.QueryContext) error {
 	if p == nil || !p.enabled || qctx == nil || qctx.Session == nil || qctx.Query == nil {
 		return nil
@@ -310,10 +317,10 @@ func (p *Plugin) OnQueryInputComplete(ctx context.Context, qctx *plugin.QueryCon
 		return
 	}
 	// When a consumer is configured, OnQueryInputCompleteStrict already consumed
-	// (and cleared) the admission before the terminating block was spliced, so a
-	// consumed admission is no longer in p.active. This post-splice observer only
-	// handles the no-consumer case: record the completed admission as pending for
-	// a later ConsumeAdmission caller.
+	// (and cleared) the admission before Relay forwarded the terminating block,
+	// so a consumed admission is no longer in p.active. This completion observer
+	// only handles the no-consumer case: record the completed admission as
+	// pending for a later ConsumeAdmission caller.
 	if p.admissionConsumer != nil {
 		return
 	}

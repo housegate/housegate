@@ -703,8 +703,9 @@ func TestIngressConsumerReceivesCompletedAdmissionAndClearsPending(t *testing.T)
 	if err := p.OnClientDataStrict(context.Background(), qctx, []byte{byte(chproto.ClientDataCode), 1}); err != nil {
 		t.Fatalf("OnClientDataStrict: %v", err)
 	}
-	// The consumer runs at the pre-splice strict end-of-input boundary; success
-	// returns nil so the terminating block is allowed to reach the upstream.
+	// The consumer runs at the strict end-of-input boundary. With a configured
+	// consumer, Relay withholds non-empty payload Data from ordinary upstream;
+	// success returns nil so Relay can forward the zero-row terminator.
 	if err := p.OnQueryInputCompleteStrict(context.Background(), qctx); err != nil {
 		t.Fatalf("OnQueryInputCompleteStrict: %v", err)
 	}
@@ -727,11 +728,26 @@ func TestIngressConsumerReceivesCompletedAdmissionAndClearsPending(t *testing.T)
 	}
 }
 
-// TestIngressConsumerFailureIsFailClosed pins the fix for the fail-open hole: a
-// consumer rejection/unavailability now surfaces as an error from the pre-splice
-// strict end-of-input hook, so Relay rejects the query and the terminating empty
-// Data block is never forwarded — the upstream INSERT cannot commit and return
-// success behind a failed admission.
+func TestIngressWithConsumerSuppressesOrdinaryUpstreamPayloadRows(t *testing.T) {
+	consumer := &recordingConsumer{}
+	p, signer := newSignedIngressWithConfig(t, Config{AdmissionConsumer: consumer})
+	sql := "INSERT INTO tenant.events FORMAT Native"
+	qctx := signedQueryContext(t, 61, signer, sql, sql, sqlmeta.StatementTypeInsert)
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	if !qctx.SuppressUpstreamExecution {
+		t.Fatal("storage-integrity ingress with a consumer must suppress ordinary upstream payload rows")
+	}
+}
+
+// TestIngressConsumerFailureIsFailClosed pins the fail-closed boundary: a
+// consumer rejection/unavailability surfaces as an error from the strict
+// end-of-input hook. In the configured-consumer path, Relay has suppressed
+// non-empty payload Data, so no ClickHouse INSERT rows can commit behind a
+// failed admission.
 func TestIngressConsumerFailureIsFailClosed(t *testing.T) {
 	consumer := &recordingConsumer{err: errors.New("consumer unavailable")}
 	p, signer := newSignedIngressWithConfig(t, Config{AdmissionConsumer: consumer})
@@ -744,8 +760,8 @@ func TestIngressConsumerFailureIsFailClosed(t *testing.T) {
 	if err := p.OnClientDataStrict(context.Background(), qctx, []byte{byte(chproto.ClientDataCode), 1}); err != nil {
 		t.Fatalf("OnClientDataStrict: %v", err)
 	}
-	// The pre-splice strict hook must return the consumer error so Relay rejects
-	// the query before the terminating block reaches ClickHouse.
+	// The strict hook must return the consumer error so Relay rejects the query
+	// instead of synthesizing success.
 	err := p.OnQueryInputCompleteStrict(context.Background(), qctx)
 	if err == nil || !strings.Contains(err.Error(), "rejected") {
 		t.Fatalf("OnQueryInputCompleteStrict err = %v, want fail-closed consumer rejection", err)

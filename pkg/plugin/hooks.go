@@ -23,7 +23,9 @@ import (
 //     dispatched only when DataPlugins are registered; fail-open.
 //   - OnException — when the upstream returns an Exception packet.
 //   - OnQueryInputComplete — after the terminating empty client Data block is
-//     forwarded upstream.
+//     forwarded upstream. SuppressUpstreamExecution queries still forward the
+//     terminator after staged input succeeds, but non-empty payload Data is
+//     withheld from ordinary upstream.
 //   - OnQueryAbort — when Relay rejects a query lifecycle, including after a
 //     Query or earlier Data packets have already reached upstream.
 //   - OnQueryComplete — once per Query when its lifecycle ends

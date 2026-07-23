@@ -306,9 +306,11 @@ func (c *PluginChain) OnException(ctx context.Context, sess chsession.Session, e
 	return first
 }
 
-// OnQueryInputCompleteStrict runs the error-bearing, pre-splice end-of-input
-// chain. The first plugin error is returned so Relay can reject the query
-// lifecycle before the terminating empty Data block is forwarded upstream.
+// OnQueryInputCompleteStrict runs the error-bearing end-of-input chain before
+// Relay reaches the terminating-block splice. The first plugin error is
+// returned so Relay can reject the query lifecycle before the upstream sees the
+// normal commit boundary; SuppressUpstreamExecution queries have already had
+// their non-empty payload Data withheld.
 func (c *PluginChain) OnQueryInputCompleteStrict(ctx context.Context, qctx *QueryContext) error {
 	if len(c.QueryInputCompleteStrictPlugins) == 0 || qctx == nil || qctx.Session == nil {
 		return nil

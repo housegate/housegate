@@ -4,6 +4,7 @@ go_library(
     name = "storageintegrity",
     srcs = [
         "ack2_gate.go",
+        "arbiter_proto.go",
         "intake.go",
         "intake_abort.go",
         "intake_retry.go",
@@ -19,6 +20,9 @@ go_library(
         "//pkg/replay",
         "//pkg/replay/payloadexec",
         "@com_github_clickhouse_ch_go//proto",
+        "@com_github_sentioxyz_arbiter_proto//gen/pb",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
     ],
 )
 
@@ -26,6 +30,7 @@ go_test(
     name = "storageintegrity_test",
     srcs = [
         "ack2_gate_test.go",
+        "arbiter_proto_test.go",
         "ingress_drive_test.go",
         "intake_abort_test.go",
         "intake_retry_test.go",
@@ -41,5 +46,9 @@ go_test(
         "//pkg/replay",
         "//pkg/replay/payloadexec",
         "@com_github_clickhouse_ch_go//proto",
+        "@com_github_sentioxyz_arbiter_proto//gen/pb",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
     ],
 )

@@ -644,6 +644,220 @@ func TestRelay_ClientToUpstream_AbortWithSuccess(t *testing.T) {
 	}
 }
 
+type stagedInputHooks struct {
+	plugin.NoopHooks
+	mu             sync.Mutex
+	onQueryCalls   int
+	strictDataRaw  [][]byte
+	strictComplete int
+	inputCompletes int
+	queryCompletes int
+	queryAborts    int
+}
+
+func (h *stagedInputHooks) OnQuery(_ context.Context, qctx *plugin.QueryContext) error {
+	h.mu.Lock()
+	h.onQueryCalls++
+	h.mu.Unlock()
+	qctx.SuppressUpstreamExecution = true
+	return nil
+}
+
+func (h *stagedInputHooks) OnClientDataStrict(_ context.Context, _ *plugin.QueryContext, raw []byte) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.strictDataRaw = append(h.strictDataRaw, append([]byte(nil), raw...))
+	return nil
+}
+
+func (h *stagedInputHooks) OnQueryInputCompleteStrict(context.Context, *plugin.QueryContext) error {
+	h.mu.Lock()
+	h.strictComplete++
+	h.mu.Unlock()
+	return nil
+}
+
+func (h *stagedInputHooks) OnQueryInputComplete(context.Context, *plugin.QueryContext) {
+	h.mu.Lock()
+	h.inputCompletes++
+	h.mu.Unlock()
+}
+
+func (h *stagedInputHooks) OnQueryComplete(context.Context, chsession.Session) {
+	h.mu.Lock()
+	h.queryCompletes++
+	h.mu.Unlock()
+}
+
+func (h *stagedInputHooks) OnQueryAbort(context.Context, *plugin.QueryContext) {
+	h.mu.Lock()
+	h.queryAborts++
+	h.mu.Unlock()
+}
+
+func TestRelay_StagedNativeInsertPreservesSampleNegotiationAndSuppressesPayload(t *testing.T) {
+	clientProxy, proxyClient := net.Pipe()
+	upstreamProxy, proxyUpstream := net.Pipe()
+	defer clientProxy.Close()
+	defer upstreamProxy.Close()
+
+	const rev = 54453
+	sample := encodeServerSampleDataPacket(t, rev)
+	nonEmpty := encodeNonEmptyClientDataPacket(t, rev)
+
+	upstreamErrCh := make(chan error, 1)
+	upstreamQueryCh := make(chan *chproto.Query, 1)
+	upstreamDataCh := make(chan []byte, 1)
+	go func() {
+		codec := chproto.NewCodec(upstreamProxy, chproto.DirFromClient)
+		codec.SetRevision(rev)
+		codec.SetCompression(proto.CompressionDisabled)
+
+		pkt, err := codec.ReadPacket(uint64(chproto.ClientQueryCode))
+		if err != nil {
+			upstreamErrCh <- err
+			return
+		}
+		upstreamQueryCh <- pkt.Decoded.(*chproto.Query)
+		if _, err := upstreamProxy.Write(sample); err != nil {
+			upstreamErrCh <- err
+			return
+		}
+		pkt, err = codec.ReadPacket()
+		if err != nil {
+			upstreamErrCh <- err
+			return
+		}
+		upstreamDataCh <- append([]byte(nil), pkt.Raw...)
+		if bytes.Contains(pkt.Raw, nonEmpty) {
+			t.Errorf("ordinary upstream received staged payload bytes")
+		}
+		empty, err := chproto.ClientDataPacketIsEmpty(pkt.Raw, proto.CompressionDisabled)
+		if err != nil {
+			upstreamErrCh <- err
+			return
+		}
+		if !empty {
+			t.Errorf("ordinary upstream first Data packet after sample was not the zero-row terminator")
+		}
+		if _, err := upstreamProxy.Write([]byte{byte(chproto.ServerEndOfStreamCode)}); err != nil {
+			upstreamErrCh <- err
+			return
+		}
+		upstreamErrCh <- nil
+	}()
+
+	clientErrCh := make(chan error, 1)
+	go func() {
+		var qb proto.Buffer
+		(&proto.Query{
+			ID: "qid", Body: "INSERT INTO t FORMAT Native",
+			Info: proto.ClientInfo{
+				ProtocolVersion: rev, Major: 24, Minor: 1,
+				Interface: proto.InterfaceTCP,
+				Query:     proto.ClientQueryInitial,
+			},
+		}).EncodeAware(&qb, rev)
+		if _, err := clientProxy.Write(qb.Buf); err != nil {
+			clientErrCh <- err
+			return
+		}
+		_ = clientProxy.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		gotSample := make([]byte, len(sample))
+		if _, err := io.ReadFull(clientProxy, gotSample); err != nil {
+			clientErrCh <- err
+			return
+		}
+		if !bytes.Equal(gotSample, sample) {
+			t.Errorf("client sample block mismatch")
+		}
+		if _, err := clientProxy.Write(nonEmpty); err != nil {
+			clientErrCh <- err
+			return
+		}
+		writer := chproto.NewCodec(clientProxy, chproto.DirFromClient)
+		writer.SetCompression(proto.CompressionDisabled)
+		if err := writer.WriteEmptyDataBlock(); err != nil {
+			clientErrCh <- err
+			return
+		}
+		_ = clientProxy.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		buf := []byte{0}
+		if _, err := io.ReadFull(clientProxy, buf); err != nil {
+			clientErrCh <- err
+			return
+		}
+		if buf[0] != byte(chproto.ServerEndOfStreamCode) {
+			t.Errorf("client got server packet %d, want EndOfStream", buf[0])
+		}
+		clientErrCh <- nil
+	}()
+
+	sess := chsession.New(1, proxyClient)
+	sess.Client().SetRevision(rev)
+	up := chproto.NewCodec(proxyUpstream, chproto.DirToUpstream)
+	up.SetRevision(rev)
+	if err := sess.BindUpstream(context.Background(), up); err != nil {
+		t.Fatalf("BindUpstream: %v", err)
+	}
+
+	hooks := &stagedInputHooks{}
+	r := &Relay{sess: sess, hooks: hooks, obs: nil}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	loopErrCh := make(chan error, 2)
+	go func() { loopErrCh <- r.clientToUpstream(ctx) }()
+	go func() { loopErrCh <- r.upstreamToClient(ctx) }()
+
+	select {
+	case q := <-upstreamQueryCh:
+		if q.ID != "qid" {
+			t.Fatalf("upstream query id = %q, want qid", q.ID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ordinary upstream did not receive Query for sample-block negotiation")
+	}
+	select {
+	case raw := <-upstreamDataCh:
+		if bytes.Equal(raw, nonEmpty) {
+			t.Fatal("ordinary upstream received staged payload")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ordinary upstream did not receive zero-row terminator")
+	}
+	if err := <-clientErrCh; err != nil {
+		t.Fatalf("client flow: %v", err)
+	}
+	if err := <-upstreamErrCh; err != nil {
+		t.Fatalf("upstream flow: %v", err)
+	}
+
+	clientProxy.Close()
+	upstreamProxy.Close()
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-loopErrCh:
+			if err != nil && !errors.Is(err, io.EOF) {
+				t.Logf("relay loop returned: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("relay loop did not return after close")
+		}
+	}
+
+	hooks.mu.Lock()
+	defer hooks.mu.Unlock()
+	if len(hooks.strictDataRaw) == 0 || !bytes.Equal(hooks.strictDataRaw[0], nonEmpty) {
+		t.Fatalf("strict data captured %d packets, first must be the staged payload", len(hooks.strictDataRaw))
+	}
+	if hooks.strictComplete != 1 || hooks.inputCompletes != 1 || hooks.queryCompletes != 1 {
+		t.Fatalf("completion counts strict/input/query = %d/%d/%d, want 1/1/1", hooks.strictComplete, hooks.inputCompletes, hooks.queryCompletes)
+	}
+	if hooks.queryAborts != 0 {
+		t.Fatalf("OnQueryAbort calls = %d, want 0", hooks.queryAborts)
+	}
+}
+
 type inputCompleteHooks struct {
 	plugin.NoopHooks
 	mu             sync.Mutex
@@ -1014,6 +1228,22 @@ func encodeNonEmptyClientDataPacket(t *testing.T, rev int) []byte {
 	block := proto.Block{Rows: values.Rows(), Columns: len(input)}
 	if err := block.EncodeBlock(&buf, rev, input); err != nil {
 		t.Fatalf("encode non-empty client data block: %v", err)
+	}
+	return append([]byte(nil), buf.Buf...)
+}
+
+func encodeServerSampleDataPacket(t *testing.T, rev int) []byte {
+	t.Helper()
+
+	values := proto.ColUInt64{}
+	input := proto.Input{{Name: "v", Data: &values}}
+
+	var buf proto.Buffer
+	buf.PutUVarInt(uint64(proto.ServerCodeData))
+	buf.PutString("")
+	block := proto.Block{Rows: values.Rows(), Columns: len(input)}
+	if err := block.EncodeBlock(&buf, rev, input); err != nil {
+		t.Fatalf("encode server sample data block: %v", err)
 	}
 	return append([]byte(nil), buf.Buf...)
 }
