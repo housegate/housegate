@@ -33,6 +33,7 @@ go_test(
         "materializer_select_test.go",
         "merge_guard_test.go",
         "native_payload_test.go",
+        "sql_test.go",
     ],
     embed = [":storageintegrity"],
     deps = [
