@@ -16,16 +16,15 @@ import (
 // PrepareLocalStatement / RegisterPreparedClaim / AbortPreparedStatement split
 // described in design section 3.2.
 //
-// It is false today. The companion repos expose only ArbiterIngress
-// .SubmitStatement and SourceClaims.RegisterResultClaim, and SNode local intake
-// is the single-shot in-process snode.Role.SubmitLocalStatement, which performs
-// the unsafe write and registers the result claim in one call and cannot be
-// split into prepare / register-later / abort. Until the companion seam lands,
-// no real StatementSubmitter/SourcePreparer implementation exists, and the
-// end-to-end intake path is not wired. This constant is the single, honest gate
-// that flips to true when a real adapter is implemented against the companion
-// seam; the orchestration contract tests read it so a red run is never mistaken
-// for green.
+// It is false today. HouseGate has an ArbiterIngress.SubmitStatement adapter,
+// but the companion repos still expose SNode local intake as the single-shot
+// in-process snode.Role.SubmitLocalStatement, which performs the unsafe write
+// and registers the result claim in one call and cannot be split into prepare /
+// register-later / abort. Until that selected-SNode seam and status-query seam
+// land, no complete real adapter set exists and the end-to-end ACK2 intake path
+// is not wired. This constant is the single, honest gate that flips to true when
+// the missing companion seams are implemented; the orchestration contract tests
+// read it so a red run is never mistaken for green.
 const CompanionStagedIntakeAvailable = false
 
 // Kind mirrors the storage-integrity statement kind admitted by the ingress
@@ -41,10 +40,10 @@ const (
 // AdmissionRecord is the completed, input-bound admission the intake
 // orchestrator consumes. It is the HouseGate-core projection of the ingress
 // plugin's Admission: statement identity, admitted kind, logical target table,
-// signed SQL, signer, and the exact captured payload with its content-addressed
-// hash, length, pinned client revision, and encoding. The plugin maps its
-// Admission into this record in a later wiring PR; the core package stays free
-// of any plugin dependency.
+// signed SQL, signer, the exact captured payload with its content-addressed
+// hash, length, pinned client revision, encoding, and the opaque PayloadStore
+// ref returned by the DA put. The plugin maps its Admission into this record in
+// a later wiring PR; the core package stays free of any plugin dependency.
 type AdmissionRecord struct {
 	StatementID     string
 	Kind            Kind
@@ -55,9 +54,35 @@ type AdmissionRecord struct {
 	UserJWS         string
 	Payload         []byte
 	PayloadLength   uint64
+	PayloadRef      string
 	PayloadHash     string
 	PayloadEncoding string
 	Revision        int
+}
+
+// PayloadState is the subset of DA payload lifecycle states HouseGate accepts
+// immediately after a put. PENDING is valid for async DA backends because the
+// ref is already final; verifiers fetch at replay time.
+type PayloadState string
+
+const (
+	PayloadStatePending   PayloadState = "PENDING"
+	PayloadStateAvailable PayloadState = "AVAILABLE"
+)
+
+// PayloadPutResult is the HouseGate-facing result of a durable DA put.
+type PayloadPutResult struct {
+	PayloadRef         string
+	State              PayloadState
+	LeaseExpiresUnixMS uint64
+	Deduplicated       bool
+}
+
+// PayloadWriter is the HouseGate ingest-side DA/PayloadStore port. It stores
+// the exact captured payload bytes before staged intake starts and returns the
+// opaque payload_ref that both SubmitStatement and selected-SNode prepare bind.
+type PayloadWriter interface {
+	PutPayload(ctx context.Context, payload []byte, payloadHash string, payloadLength uint64) (PayloadPutResult, error)
 }
 
 // StatementEnvelope is the HouseGate-core mirror of the frozen source statement
@@ -135,11 +160,24 @@ func EnvelopeFromAdmission(adm AdmissionRecord) (StatementEnvelope, error) {
 		if adm.PayloadHash == "" {
 			return StatementEnvelope{}, fmt.Errorf("intake: INSERT admission %s has no payload hash", adm.StatementID)
 		}
+		if uint64(len(adm.Payload)) != adm.PayloadLength {
+			return StatementEnvelope{}, fmt.Errorf("intake: INSERT admission %s payload length mismatch", adm.StatementID)
+		}
+		if got := replay.DigestBytes(adm.Payload); got != adm.PayloadHash {
+			return StatementEnvelope{}, fmt.Errorf("intake: INSERT admission %s payload hash mismatch", adm.StatementID)
+		}
 		// Payload-bearing ingress admissions are Native ClientData captures and
 		// must pin the client protocol revision used to decode the block.
 		if adm.Revision == 0 {
 			return StatementEnvelope{}, fmt.Errorf("intake: INSERT admission %s has no client protocol revision", adm.StatementID)
 		}
+	}
+	payloadRef := adm.PayloadRef
+	if payloadRef == "" {
+		// Compatibility for local tests and deployments that have not yet wired
+		// the DA put: the payload hash is a content-addressed ref. Production P1
+		// wiring should set AdmissionRecord.PayloadRef from PayloadStore.
+		payloadRef = adm.PayloadHash
 	}
 	return StatementEnvelope{
 		StatementID:     adm.StatementID,
@@ -147,7 +185,7 @@ func EnvelopeFromAdmission(adm AdmissionRecord) (StatementEnvelope, error) {
 		SQL:             adm.SQL,
 		SQLHash:         adm.SQLHash,
 		TargetTableID:   adm.TableID,
-		PayloadRef:      adm.PayloadHash, // content-addressed: the ref is the payload hash
+		PayloadRef:      payloadRef,
 		PayloadHash:     adm.PayloadHash,
 		PayloadLength:   adm.PayloadLength,
 		PayloadEncoding: adm.PayloadEncoding,
@@ -327,8 +365,7 @@ type PartitionLtHashSum struct {
 }
 
 // StatementSubmitter is the Arbiter route-A sequencing port. The real
-// implementation calls ArbiterIngress.SubmitStatement. No such implementation
-// exists in HouseGate today; see CompanionStagedIntakeAvailable.
+// arbiter-proto implementation is ArbiterStatementSubmitter.
 type StatementSubmitter interface {
 	SubmitStatement(ctx context.Context, env StatementEnvelope) (SubmitOutcome, error)
 }
@@ -341,9 +378,10 @@ type StatementSubmitter interface {
 type SourcePreparer interface {
 	// PrepareLocalStatement durably stages the local unsafe write on the
 	// selected source and returns the exact candidate inventory and RC inputs.
-	// The source performs payload hash/length verification and the durable
-	// PayloadStore.Put before the unsafe INSERT, so a failed Put never produces
-	// an hg_unsafe part.
+	// HouseGate ingress performs the durable DA put before calling the
+	// orchestrator; the source still verifies the supplied bytes against the
+	// envelope's payload_ref/hash/length tuple before the unsafe INSERT, so a
+	// failed or missing put never produces an hg_unsafe part.
 	PrepareLocalStatement(ctx context.Context, env StatementEnvelope, payload []byte) (PreparedLocalResult, error)
 	// RegisterPreparedClaim late-binds the prepared result claim by statement
 	// id, triggering the source's RegisterResultClaim to the Arbiter. The

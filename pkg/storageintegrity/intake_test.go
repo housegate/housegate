@@ -18,10 +18,11 @@ import (
 // AbortPreparedStatement exist in the Sentio companion topology. Until then
 // there is no real StatementSubmitter/SourcePreparer implementation to exercise
 // end to end, and this guard skips those tests with an explicit message so a red
-// (skipped) run is never mistaken for a green (passed) one. When a real adapter
-// lands, CompanionStagedIntakeAvailable flips to true and these tests become the
-// executable spec for the orchestration. It must never be satisfied by a local
-// mock shape that impersonates the companion seam.
+// (skipped) run is never mistaken for a green (passed) one. The Arbiter
+// SubmitStatement adapter alone is not enough: when the selected-SNode staged
+// seam and status-query seam land, CompanionStagedIntakeAvailable flips to true
+// and these tests become the executable spec for the orchestration. It must
+// never be satisfied by a local mock shape that impersonates the companion seam.
 func requireCompanionStagedIntake(t *testing.T) {
 	t.Helper()
 	if !CompanionStagedIntakeAvailable {
@@ -36,6 +37,7 @@ func requireCompanionStagedIntake(t *testing.T) {
 // admissionFixture and boundSource so their envelopes agree.
 const fixtureRevision = 54465
 const fixtureSigner = "0xabc"
+const fixturePayload = "native-block-bytes"
 
 // admissionFixture returns a complete, INSERT-shaped admission record that the
 // intake orchestrator can turn into a source envelope.
@@ -48,9 +50,9 @@ func admissionFixture() AdmissionRecord {
 		SQLHash:         replay.DigestString("INSERT INTO events FORMAT Native"),
 		Signer:          fixtureSigner,
 		UserJWS:         "jws",
-		Payload:         []byte("native-block-bytes"),
-		PayloadLength:   uint64(len("native-block-bytes")),
-		PayloadHash:     "sha256:deadbeef",
+		Payload:         []byte(fixturePayload),
+		PayloadLength:   uint64(len(fixturePayload)),
+		PayloadHash:     replay.DigestBytes([]byte(fixturePayload)),
 		PayloadEncoding: PayloadEncodingClickHouseNativeData,
 		Revision:        fixtureRevision,
 	}
@@ -86,6 +88,9 @@ func TestEnvelopeFromAdmission_MirrorsPayloadIdentity(t *testing.T) {
 	if env.PayloadHash != adm.PayloadHash {
 		t.Fatalf("payload hash: got %q want %q", env.PayloadHash, adm.PayloadHash)
 	}
+	if env.PayloadRef != adm.PayloadHash {
+		t.Fatalf("payload ref fallback: got %q want %q", env.PayloadRef, adm.PayloadHash)
+	}
 	if env.PayloadLength != adm.PayloadLength {
 		t.Fatalf("payload length: got %d want %d", env.PayloadLength, adm.PayloadLength)
 	}
@@ -100,13 +105,29 @@ func TestEnvelopeFromAdmission_MirrorsPayloadIdentity(t *testing.T) {
 	}
 }
 
+func TestEnvelopeFromAdmission_UsesOpaquePayloadRefWhenPresent(t *testing.T) {
+	adm := admissionFixture()
+	adm.PayloadRef = "payload://store/ref-1"
+
+	env, err := EnvelopeFromAdmission(adm)
+	if err != nil {
+		t.Fatalf("EnvelopeFromAdmission: %v", err)
+	}
+	if env.PayloadRef != adm.PayloadRef {
+		t.Fatalf("payload ref: got %q want %q", env.PayloadRef, adm.PayloadRef)
+	}
+	if env.PayloadHash != adm.PayloadHash {
+		t.Fatalf("payload hash: got %q want %q", env.PayloadHash, adm.PayloadHash)
+	}
+}
+
 func TestEnvelopeFromAdmission_RejectsCSVWithNamesUntilRawCaptureExists(t *testing.T) {
 	adm := admissionFixture()
 	adm.SQL = "INSERT INTO events FORMAT CSVWithNames"
 	adm.SQLHash = replay.DigestString(adm.SQL)
 	adm.Payload = []byte("p,v\nwest,7\n")
 	adm.PayloadLength = uint64(len(adm.Payload))
-	adm.PayloadHash = "sha256:csv"
+	adm.PayloadHash = replay.DigestBytes(adm.Payload)
 	adm.PayloadEncoding = EncodingCSVWithNames
 	adm.Revision = 0
 
@@ -121,6 +142,15 @@ func TestEnvelopeFromAdmission_RejectsPayloadEncodingSQLMismatch(t *testing.T) {
 
 	if _, err := EnvelopeFromAdmission(adm); err == nil {
 		t.Fatal("EnvelopeFromAdmission accepted Native SQL with CSV payload encoding")
+	}
+}
+
+func TestEnvelopeFromAdmission_RejectsPayloadHashMismatch(t *testing.T) {
+	adm := admissionFixture()
+	adm.PayloadHash = replay.DigestString("different payload")
+
+	if _, err := EnvelopeFromAdmission(adm); err == nil {
+		t.Fatal("EnvelopeFromAdmission accepted payload hash that does not match captured bytes")
 	}
 }
 
@@ -310,9 +340,9 @@ func (s *recordingSubmitter) SubmitStatement(_ context.Context, _ StatementEnvel
 func boundSource() PreparedLocalResult {
 	return PreparedLocalResult{
 		SourceNode:      "snode-A",
-		PayloadRef:      "sha256:deadbeef",
-		PayloadHash:     "sha256:deadbeef",
-		PayloadLength:   uint64(len("native-block-bytes")),
+		PayloadRef:      replay.DigestBytes([]byte(fixturePayload)),
+		PayloadHash:     replay.DigestBytes([]byte(fixturePayload)),
+		PayloadLength:   uint64(len(fixturePayload)),
 		PayloadEncoding: PayloadEncodingClickHouseNativeData,
 		Revision:        fixtureRevision,
 		SourceClaimRoot: "root-1",
@@ -529,7 +559,7 @@ func TestOrchestrate_PayloadIdentityMismatchFailsClosed(t *testing.T) {
 	requireCompanionStagedIntake(t)
 
 	prepared := boundSource()
-	prepared.PayloadHash = "sha256:00000000" // disagrees with admission
+	prepared.PayloadHash = replay.DigestString("different payload") // disagrees with admission
 	prep := &recordingPreparer{
 		prepared:     prepared,
 		claimOutcome: ClaimOutcome{Category: OutcomeAccepted, BoundSource: "snode-A"},
@@ -608,9 +638,9 @@ func TestPreparedConsistencyReject_RequiresCompleteExactBinding(t *testing.T) {
 		{"empty source", func(p *PreparedLocalResult) { p.SourceNode = "" }},
 		{"wrong source", func(p *PreparedLocalResult) { p.SourceNode = "snode-B" }},
 		{"empty payload ref", func(p *PreparedLocalResult) { p.PayloadRef = "" }},
-		{"wrong payload ref", func(p *PreparedLocalResult) { p.PayloadRef = "sha256:0000" }},
+		{"wrong payload ref", func(p *PreparedLocalResult) { p.PayloadRef = replay.DigestString("different ref") }},
 		{"empty payload hash", func(p *PreparedLocalResult) { p.PayloadHash = "" }},
-		{"wrong payload hash", func(p *PreparedLocalResult) { p.PayloadHash = "sha256:0000" }},
+		{"wrong payload hash", func(p *PreparedLocalResult) { p.PayloadHash = replay.DigestString("different payload") }},
 		{"zero payload length", func(p *PreparedLocalResult) { p.PayloadLength = 0 }},
 		{"wrong payload length", func(p *PreparedLocalResult) { p.PayloadLength = 1 }},
 		{"empty payload encoding", func(p *PreparedLocalResult) { p.PayloadEncoding = "" }},

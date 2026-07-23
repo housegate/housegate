@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	siplugin "housegate/housegate/pkg/plugins/storageintegrity"
+	"housegate/housegate/pkg/replay"
 	sicore "housegate/housegate/pkg/storageintegrity"
 )
 
@@ -14,28 +15,40 @@ import (
 // core AdmissionRecord and driven through the orchestrator, which runs the
 // staged prepare / submit / RC-late-binding path to ACK2.
 //
-// It owns only the orchestrator, the merge guard, and the selected replay
-// materializer kind. It deliberately constructs NO HouseGate-owned Verifier or
-// Promoter: verifier selection, quorum, and manifest publication are Arbiter /
-// SNode responsibilities the orchestrator only drives through ports (design
-// sections 3.6 and 4.1). Until the companion staged-prepare seam lands, the
-// orchestrator has no real StatementSubmitter/SourcePreparer/IntakeStatusQuerier
-// adapters, so this consumer can be constructed and validated but cannot yet
-// close a statement to ACK2 (see CompanionStagedIntakeAvailable).
+// It owns only the orchestrator, the merge guard, the selected replay
+// materializer kind, and the optional DA/PayloadStore writer that produces the
+// opaque payload_ref before staged intake starts. It deliberately constructs NO
+// HouseGate-owned Verifier or Promoter: verifier selection, quorum, and
+// manifest publication are Arbiter / SNode responsibilities the orchestrator
+// only drives through ports (design sections 3.6 and 4.1). HouseGate now has
+// real arbiter-proto SubmitStatement and PayloadStore put adapters, but until
+// the companion staged-prepare and status-query seams land, the orchestrator
+// still has no complete real adapter set and cannot yet close a statement to
+// ACK2 (see CompanionStagedIntakeAvailable).
 type StorageIntegrityIngress struct {
-	orch    *sicore.Orchestrator
-	guard   *sicore.MergeGuard
-	matKind sicore.MaterializerKind
+	orch          *sicore.Orchestrator
+	guard         *sicore.MergeGuard
+	matKind       sicore.MaterializerKind
+	payloadWriter sicore.PayloadWriter
 }
 
 // NewStorageIntegrityIngress constructs the ingress runtime over an orchestrator
 // and the selected materializer kind. The merge guard is optional (nil when no
 // ClickHouse connection is wired). A nil orchestrator is a wiring error.
 func NewStorageIntegrityIngress(orch *sicore.Orchestrator, guard *sicore.MergeGuard, matKind sicore.MaterializerKind) (*StorageIntegrityIngress, error) {
+	return NewStorageIntegrityIngressWithPayloadWriter(orch, guard, matKind, nil)
+}
+
+// NewStorageIntegrityIngressWithPayloadWriter constructs the ingress runtime
+// with a DA/PayloadStore writer. When writer is nil, the runtime preserves the
+// previous local content-addressed payload_ref fallback; production P1 wiring
+// should pass a real PayloadWriter so SubmitStatement carries an opaque
+// PayloadStore ref.
+func NewStorageIntegrityIngressWithPayloadWriter(orch *sicore.Orchestrator, guard *sicore.MergeGuard, matKind sicore.MaterializerKind, writer sicore.PayloadWriter) (*StorageIntegrityIngress, error) {
 	if orch == nil {
 		return nil, fmt.Errorf("storage_integrity ingress: orchestrator is required")
 	}
-	return &StorageIntegrityIngress{orch: orch, guard: guard, matKind: matKind}, nil
+	return &StorageIntegrityIngress{orch: orch, guard: guard, matKind: matKind, payloadWriter: writer}, nil
 }
 
 // ConsumeStorageIntegrityAdmission maps a completed plugin admission into a core
@@ -44,6 +57,16 @@ func NewStorageIntegrityIngress(orch *sicore.Orchestrator, guard *sicore.MergeGu
 // success; only a bound ACK2 returns nil. This is the C1-gated end-to-end path.
 func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.Context, adm siplugin.Admission) error {
 	rec := AdmissionRecordFromPlugin(adm)
+	if i.payloadWriter != nil {
+		put, err := i.payloadWriter.PutPayload(ctx, rec.Payload, rec.PayloadHash, rec.PayloadLength)
+		if err != nil {
+			return fmt.Errorf("storage_integrity ingress: put payload for %s: %w", rec.StatementID, err)
+		}
+		if put.PayloadRef == "" {
+			return fmt.Errorf("storage_integrity ingress: payload store returned empty payload_ref for %s", rec.StatementID)
+		}
+		rec.PayloadRef = put.PayloadRef
+	}
 	res, err := i.orch.Orchestrate(ctx, rec)
 	if err != nil {
 		return fmt.Errorf("storage_integrity ingress: orchestrate %s: %w", rec.StatementID, err)
@@ -55,10 +78,11 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 }
 
 // AdmissionRecordFromPlugin is the pure projection of a plugin Admission into
-// the core AdmissionRecord the orchestrator consumes. It carries every
-// signed/captured field verbatim; the payload encoding is threaded so the
-// runtime can select the matching materializer. It is deterministic and needs
-// no companion seam.
+// the core AdmissionRecord the orchestrator consumes. Signed statement fields
+// and captured bytes are carried from the plugin; payload_hash is normalized to
+// the replay/arbiter digest profile so the sequenced envelope matches
+// arbiter-proto and verifier expectations. It is deterministic and needs no
+// companion seam.
 func AdmissionRecordFromPlugin(adm siplugin.Admission) sicore.AdmissionRecord {
 	encoding := adm.Payload.Encoding
 	if encoding == "" {
@@ -74,7 +98,7 @@ func AdmissionRecordFromPlugin(adm siplugin.Admission) sicore.AdmissionRecord {
 		UserJWS:         adm.UserJWS,
 		Payload:         adm.Payload.Bytes,
 		PayloadLength:   adm.Payload.Length,
-		PayloadHash:     adm.Payload.SHA256,
+		PayloadHash:     replay.DigestBytes(adm.Payload.Bytes),
 		PayloadEncoding: encoding,
 		Revision:        adm.Payload.Revision,
 	}
