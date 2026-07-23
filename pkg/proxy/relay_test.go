@@ -644,6 +644,185 @@ func TestRelay_ClientToUpstream_AbortWithSuccess(t *testing.T) {
 	}
 }
 
+type stagedInputHooks struct {
+	plugin.NoopHooks
+	mu             sync.Mutex
+	onQueryCalls   int
+	strictDataRaw  [][]byte
+	strictComplete int
+	inputCompletes int
+	queryCompletes int
+	queryAborts    int
+}
+
+func (h *stagedInputHooks) OnQuery(_ context.Context, qctx *plugin.QueryContext) error {
+	h.mu.Lock()
+	h.onQueryCalls++
+	h.mu.Unlock()
+	qctx.SuppressUpstreamExecution = true
+	return nil
+}
+
+func (h *stagedInputHooks) OnClientDataStrict(_ context.Context, _ *plugin.QueryContext, raw []byte) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.strictDataRaw = append(h.strictDataRaw, append([]byte(nil), raw...))
+	return nil
+}
+
+func (h *stagedInputHooks) OnQueryInputCompleteStrict(context.Context, *plugin.QueryContext) error {
+	h.mu.Lock()
+	h.strictComplete++
+	h.mu.Unlock()
+	return nil
+}
+
+func (h *stagedInputHooks) OnQueryInputComplete(context.Context, *plugin.QueryContext) {
+	h.mu.Lock()
+	h.inputCompletes++
+	h.mu.Unlock()
+}
+
+func (h *stagedInputHooks) OnQueryComplete(context.Context, chsession.Session) {
+	h.mu.Lock()
+	h.queryCompletes++
+	h.mu.Unlock()
+}
+
+func (h *stagedInputHooks) OnQueryAbort(context.Context, *plugin.QueryContext) {
+	h.mu.Lock()
+	h.queryAborts++
+	h.mu.Unlock()
+}
+
+func TestRelay_ClientToUpstream_SuppressedInputCompletesOutOfBandWithoutOrdinaryUpstreamWrite(t *testing.T) {
+	clientProxy, proxyClient := net.Pipe()
+	upstreamProxy, proxyUpstream := net.Pipe()
+	defer clientProxy.Close()
+	defer upstreamProxy.Close()
+
+	const rev = 54453
+	upstreamBytes := make(chan int, 1)
+	go func() {
+		_ = upstreamProxy.SetReadDeadline(time.Now().Add(2 * time.Second))
+		buf := make([]byte, 4096)
+		total := 0
+		for {
+			n, err := upstreamProxy.Read(buf)
+			total += n
+			if err != nil {
+				upstreamBytes <- total
+				return
+			}
+		}
+	}()
+
+	nonEmpty := encodeNonEmptyClientDataPacket(t, rev)
+	clientReadCh := make(chan []byte, 1)
+	clientErrCh := make(chan error, 1)
+	go func() {
+		var qb proto.Buffer
+		(&proto.Query{
+			ID: "qid", Body: "INSERT INTO t FORMAT Native",
+			Info: proto.ClientInfo{
+				ProtocolVersion: rev, Major: 24, Minor: 1,
+				Interface: proto.InterfaceTCP,
+				Query:     proto.ClientQueryInitial,
+			},
+		}).EncodeAware(&qb, rev)
+		if _, err := clientProxy.Write(qb.Buf); err != nil {
+			clientErrCh <- err
+			return
+		}
+		if _, err := clientProxy.Write(nonEmpty); err != nil {
+			clientErrCh <- err
+			return
+		}
+		writer := chproto.NewCodec(clientProxy, chproto.DirFromClient)
+		writer.SetCompression(proto.CompressionDisabled)
+		if err := writer.WriteEmptyDataBlock(); err != nil {
+			clientErrCh <- err
+			return
+		}
+		_ = clientProxy.SetReadDeadline(time.Now().Add(2 * time.Second))
+		buf := make([]byte, 64)
+		n, err := clientProxy.Read(buf)
+		if err != nil {
+			clientErrCh <- err
+			return
+		}
+		clientReadCh <- append([]byte(nil), buf[:n]...)
+		clientErrCh <- nil
+	}()
+
+	sess := chsession.New(1, proxyClient)
+	sess.Client().SetRevision(rev)
+	up := chproto.NewCodec(proxyUpstream, chproto.DirToUpstream)
+	up.SetRevision(rev)
+	if err := sess.BindUpstream(context.Background(), up); err != nil {
+		t.Fatalf("BindUpstream: %v", err)
+	}
+
+	hooks := &stagedInputHooks{}
+	r := &Relay{sess: sess, hooks: hooks, obs: nil}
+	loopErrCh := make(chan error, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go func() { loopErrCh <- r.clientToUpstream(ctx) }()
+
+	var got []byte
+	select {
+	case got = <-clientReadCh:
+	case err := <-clientErrCh:
+		t.Fatalf("client writer before response: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("client did not receive synthetic EndOfStream")
+	}
+	if len(got) != 1 || got[0] != byte(chproto.ServerEndOfStreamCode) {
+		t.Fatalf("client got %v, want single EndOfStream byte", got)
+	}
+	if err := <-clientErrCh; err != nil {
+		t.Fatalf("client writer: %v", err)
+	}
+
+	clientProxy.Close()
+	upstreamProxy.Close()
+	select {
+	case err := <-loopErrCh:
+		if err != nil && !errors.Is(err, io.EOF) {
+			t.Logf("clientToUpstream returned: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("clientToUpstream did not return after client close")
+	}
+
+	select {
+	case got := <-upstreamBytes:
+		if got != 0 {
+			t.Fatalf("ordinary upstream received %d bytes, want 0", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ordinary upstream read did not finish after close")
+	}
+	hooks.mu.Lock()
+	defer hooks.mu.Unlock()
+	if hooks.onQueryCalls != 1 {
+		t.Fatalf("OnQuery calls = %d, want 1", hooks.onQueryCalls)
+	}
+	if hooks.strictComplete != 1 || hooks.inputCompletes != 1 || hooks.queryCompletes != 1 {
+		t.Fatalf("completion counts strict/input/query = %d/%d/%d, want 1/1/1", hooks.strictComplete, hooks.inputCompletes, hooks.queryCompletes)
+	}
+	if hooks.queryAborts != 0 {
+		t.Fatalf("OnQueryAbort calls = %d, want 0 on successful staged input", hooks.queryAborts)
+	}
+	if len(hooks.strictDataRaw) == 0 {
+		t.Fatal("strict data hook did not observe captured payload")
+	}
+	if !bytes.Equal(hooks.strictDataRaw[0], nonEmpty) {
+		t.Fatalf("first strict data packet mismatch")
+	}
+}
+
 type inputCompleteHooks struct {
 	plugin.NoopHooks
 	mu             sync.Mutex

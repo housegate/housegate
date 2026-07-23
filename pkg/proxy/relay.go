@@ -422,6 +422,22 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 				rejectedQctx = qctx
 				continue
 			}
+			// SuppressUpstreamExecution: a plugin has taken ownership of this
+			// payload-bearing query's write, but still needs the relay to drain
+			// the client Data stream through strict capture/admission hooks. Do
+			// not forward the Query to ordinary upstream; the input-complete path
+			// will synthesize EndOfStream only after the staged owner accepts the
+			// completed input.
+			if qctx.SuppressUpstreamExecution {
+				qctx.Query.Compression = clientCompression
+				logger.Debugw("query upstream execution suppressed",
+					"query_id", q.ID,
+				)
+				curQctx = qctx
+				curQctxSawInitialEmpty = false
+				curQctxSawPayload = false
+				continue
+			}
 			// Re-fetch upstream after OnQuery: a USE-triggered pivot
 			// (forward plugin's OnQuery) calls RebindToPeer which atomically
 			// swaps the upstream codec to the peer and closes the old one.
@@ -514,11 +530,12 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 			}
 		}
 
-		// Before splicing the terminating empty Data block, run the strict
-		// end-of-input chain. An error here is fail-closed: reject the query and
-		// do NOT forward the terminating block, so the upstream never commits a
-		// statement whose correctness-critical end-of-input action failed (e.g. a
-		// storage-integrity admission the integrity consumer rejected).
+		// At the terminating empty Data block, run the strict end-of-input chain
+		// before any commit/success boundary. An error here is fail-closed: the
+		// normal path does not forward the terminator, and the suppressed path
+		// does not synthesize success. On success, normal queries continue to the
+		// ordinary splice below; SuppressUpstreamExecution queries remain fully
+		// withheld and complete out-of-band.
 		if inputComplete && curQctx != nil {
 			if err := r.hooks.OnQueryInputCompleteStrict(ctx, curQctx); err != nil {
 				r.writeExceptionToClient(ctx, err)
@@ -526,6 +543,26 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 				r.hooks.OnQueryComplete(ctx, r.sess)
 				return fmt.Errorf("query input complete strict hook: %w", err)
 			}
+		}
+
+		if pkt.Type == uint64(chproto.ClientDataCode) && curQctx != nil && curQctx.SuppressUpstreamExecution {
+			logger.Debugw("client data upstream splice suppressed",
+				"query_id", curQctx.Query.ID,
+				"input_complete", inputComplete,
+				"raw_len", pkt.RawLen,
+			)
+			if inputComplete {
+				if err := writeEndOfStreamToClient(client.Conn()); err != nil {
+					r.hooks.OnQueryComplete(ctx, r.sess)
+					return fmt.Errorf("write end-of-stream: %w", err)
+				}
+				r.hooks.OnQueryInputComplete(ctx, curQctx)
+				r.hooks.OnQueryComplete(ctx, r.sess)
+				curQctx = nil
+				curQctxSawInitialEmpty = false
+				curQctxSawPayload = false
+			}
+			continue
 		}
 
 		// Splice any non-decoded / decode-failed packet.

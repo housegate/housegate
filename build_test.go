@@ -307,6 +307,9 @@ func TestBuildServer_StorageIntegrityIngressEnabledWiresRuntimeHooks(t *testing.
 	if err := chain.OnQuery(context.Background(), qctx); err != nil {
 		t.Fatalf("OnQuery: %v", err)
 	}
+	if !qctx.SuppressUpstreamExecution {
+		t.Fatal("storage-integrity ingress must suppress ordinary upstream execution when admission consumer is wired")
+	}
 	limit, enforce := chain.ClientDataReadLimit(qctx)
 	if !enforce || limit != cfg.StorageIntegrity.Ingress.MaxPayloadBytes {
 		t.Fatalf("ClientDataReadLimit = %d/%v, want %d/true", limit, enforce, cfg.StorageIntegrity.Ingress.MaxPayloadBytes)
@@ -314,8 +317,9 @@ func TestBuildServer_StorageIntegrityIngressEnabledWiresRuntimeHooks(t *testing.
 	if err := chain.OnClientDataStrict(context.Background(), qctx, []byte{byte(chproto.ClientDataCode), 1}); err != nil {
 		t.Fatalf("OnClientDataStrict: %v", err)
 	}
-	// The consumer is driven at the pre-splice strict end-of-input boundary; a
-	// success returns nil so the terminating block may reach the upstream.
+	// The consumer is driven at the strict end-of-input boundary. Because
+	// OnQuery set SuppressUpstreamExecution, success lets Relay synthesize
+	// success rather than forwarding the ordinary Query/Data path.
 	if err := chain.OnQueryInputCompleteStrict(context.Background(), qctx); err != nil {
 		t.Fatalf("OnQueryInputCompleteStrict: %v", err)
 	}

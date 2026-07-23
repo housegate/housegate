@@ -135,6 +135,12 @@ func TestStorageIntegrityIngress_PutsPayloadBeforeOrchestrate(t *testing.T) {
 	if writer.calls != 1 {
 		t.Fatalf("payload writer calls = %d, want 1", writer.calls)
 	}
+	if submitter.calls != 1 {
+		t.Fatalf("submitter calls = %d, want 1", submitter.calls)
+	}
+	if preparer.prepareCalls != 1 {
+		t.Fatalf("preparer prepare calls = %d, want 1", preparer.prepareCalls)
+	}
 	if writer.hash != wantHash || writer.length != pluginAdmission.Payload.Length || string(writer.payload) != string(pluginAdmission.Payload.Bytes) {
 		t.Fatalf("payload writer saw %q/%d/%q", writer.hash, writer.length, writer.payload)
 	}
@@ -167,24 +173,28 @@ func (w *rootRecordingPayloadWriter) PutPayload(_ context.Context, payload []byt
 }
 
 type rootRecordingSubmitter struct {
+	calls   int
 	env     sicore.StatementEnvelope
 	outcome sicore.SubmitOutcome
 	err     error
 }
 
 func (s *rootRecordingSubmitter) SubmitStatement(_ context.Context, env sicore.StatementEnvelope) (sicore.SubmitOutcome, error) {
+	s.calls++
 	s.env = env
 	return s.outcome, s.err
 }
 
 type rootRecordingPreparer struct {
-	env    sicore.StatementEnvelope
-	source string
-	claim  sicore.ClaimOutcome
-	err    error
+	prepareCalls int
+	env          sicore.StatementEnvelope
+	source       string
+	claim        sicore.ClaimOutcome
+	err          error
 }
 
 func (p *rootRecordingPreparer) PrepareLocalStatement(_ context.Context, env sicore.StatementEnvelope, _ []byte) (sicore.PreparedLocalResult, error) {
+	p.prepareCalls++
 	p.env = env
 	if p.err != nil {
 		return sicore.PreparedLocalResult{}, p.err

@@ -54,7 +54,9 @@ type QueryCompletePlugin interface {
 }
 
 // QueryInputCompletePlugin observes the protocol-level end of one client query
-// input after its terminating empty Data block has been forwarded upstream.
+// input after its terminating empty Data block has been forwarded upstream, or
+// after a SuppressUpstreamExecution query completes out-of-band and the relay
+// synthesizes success.
 type QueryInputCompletePlugin interface {
 	OnQueryInputComplete(ctx context.Context, qctx *QueryContext)
 }
@@ -62,12 +64,14 @@ type QueryInputCompletePlugin interface {
 // QueryInputCompleteStrictPlugin participates in the correctness-critical,
 // error-bearing end-of-input boundary that fires BEFORE the terminating empty
 // Data block is spliced upstream. Unlike QueryInputCompletePlugin (which is a
-// post-splice observer and cannot fail), an error here is fail-closed: Relay
-// rejects the query lifecycle and does NOT forward the terminating block, so the
-// upstream never executes the statement. Use this only for lanes where allowing
-// the statement to commit without a successful end-of-input action would violate
-// correctness (e.g. a signed storage-integrity INSERT whose admission must be
-// accepted by the integrity consumer before the write may commit).
+// completion observer and cannot fail), an error here is fail-closed: Relay
+// rejects the query lifecycle and does NOT forward the terminating block. If the
+// query also set QueryContext.SuppressUpstreamExecution, Relay has withheld the
+// Query and every Data packet as well, so ordinary upstream never executes the
+// statement. Use this only for lanes where allowing the statement to commit
+// without a successful end-of-input action would violate correctness (e.g. a
+// signed storage-integrity INSERT whose admission must be accepted by the
+// integrity consumer before the write may commit).
 type QueryInputCompleteStrictPlugin interface {
 	OnQueryInputCompleteStrict(ctx context.Context, qctx *QueryContext) error
 }
