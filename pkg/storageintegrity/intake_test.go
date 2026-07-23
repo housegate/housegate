@@ -100,6 +100,30 @@ func TestEnvelopeFromAdmission_MirrorsPayloadIdentity(t *testing.T) {
 	}
 }
 
+func TestEnvelopeFromAdmission_RejectsCSVWithNamesUntilRawCaptureExists(t *testing.T) {
+	adm := admissionFixture()
+	adm.SQL = "INSERT INTO events FORMAT CSVWithNames"
+	adm.SQLHash = replay.DigestString(adm.SQL)
+	adm.Payload = []byte("p,v\nwest,7\n")
+	adm.PayloadLength = uint64(len(adm.Payload))
+	adm.PayloadHash = "sha256:csv"
+	adm.PayloadEncoding = EncodingCSVWithNames
+	adm.Revision = 0
+
+	if _, err := EnvelopeFromAdmission(adm); err == nil {
+		t.Fatal("EnvelopeFromAdmission accepted CSVWithNames before raw CSV capture exists")
+	}
+}
+
+func TestEnvelopeFromAdmission_RejectsPayloadEncodingSQLMismatch(t *testing.T) {
+	adm := admissionFixture()
+	adm.PayloadEncoding = EncodingCSVWithNames
+
+	if _, err := EnvelopeFromAdmission(adm); err == nil {
+		t.Fatal("EnvelopeFromAdmission accepted Native SQL with CSV payload encoding")
+	}
+}
+
 func TestEnvelopeFromAdmission_RejectsEmptyStatementID(t *testing.T) {
 	adm := admissionFixture()
 	adm.StatementID = ""

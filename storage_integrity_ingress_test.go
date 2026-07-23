@@ -24,6 +24,7 @@ func TestAdmissionRecordFromPlugin_MapsAllFields(t *testing.T) {
 			Bytes:    []byte("native-block-bytes"),
 			Length:   uint64(len("native-block-bytes")),
 			SHA256:   "sha256:deadbeef",
+			Encoding: sicore.PayloadEncodingClickHouseNativeData,
 			Revision: 54465,
 			Complete: true,
 		},
@@ -62,8 +63,8 @@ func TestAdmissionRecordFromPlugin_MapsAllFields(t *testing.T) {
 	if rec.Revision != adm.Payload.Revision {
 		t.Fatalf("revision: got %d want %d", rec.Revision, adm.Payload.Revision)
 	}
-	if rec.PayloadEncoding == "" {
-		t.Fatal("payload encoding must be set so the runtime can pick a materializer")
+	if rec.PayloadEncoding != adm.Payload.Encoding {
+		t.Fatalf("payload encoding: got %q want %q", rec.PayloadEncoding, adm.Payload.Encoding)
 	}
 }
 

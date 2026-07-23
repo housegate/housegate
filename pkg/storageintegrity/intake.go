@@ -75,12 +75,10 @@ type StatementEnvelope struct {
 	PayloadRef    string
 	PayloadHash   string
 	PayloadLength uint64
-	// PayloadEncoding and Revision together pin how the payload is decoded. The
-	// captured client protocol Revision is authenticated per statement and is
-	// required to decode the Native block (see DecodeNativePayload, which rejects
-	// revision 0); a source preparer decodes with exactly this revision rather
-	// than guessing or configuring one, so a client that negotiated a different
-	// revision cannot silently produce a different materialization.
+	// PayloadEncoding pins how the payload is decoded. In the current ingress
+	// surface this must be clickhouse-native-data-v1, and Revision carries the
+	// captured client protocol revision because DecodeNativePayload rejects
+	// revision 0.
 	PayloadEncoding string
 	Revision        int
 	Signer          string
@@ -101,8 +99,15 @@ func EnvelopeFromAdmission(adm AdmissionRecord) (StatementEnvelope, error) {
 	if adm.Kind != KindInsert {
 		return StatementEnvelope{}, fmt.Errorf("intake: admission %s has unsupported kind %q", adm.StatementID, adm.Kind)
 	}
-	if err := RequireStreamingNativeInsert(adm.SQL); err != nil {
+	sqlEncoding, err := InsertPayloadEncoding(adm.SQL)
+	if err != nil {
 		return StatementEnvelope{}, fmt.Errorf("intake: admission %s invalid INSERT source form: %w", adm.StatementID, err)
+	}
+	if adm.PayloadEncoding == "" {
+		return StatementEnvelope{}, fmt.Errorf("intake: admission %s has no payload encoding", adm.StatementID)
+	}
+	if adm.PayloadEncoding != sqlEncoding {
+		return StatementEnvelope{}, fmt.Errorf("intake: admission %s payload encoding %q does not match SQL encoding %q", adm.StatementID, adm.PayloadEncoding, sqlEncoding)
 	}
 	stmtID, err := parseFlatStatementID(adm.StatementID)
 	if err != nil {
@@ -130,10 +135,8 @@ func EnvelopeFromAdmission(adm AdmissionRecord) (StatementEnvelope, error) {
 		if adm.PayloadHash == "" {
 			return StatementEnvelope{}, fmt.Errorf("intake: INSERT admission %s has no payload hash", adm.StatementID)
 		}
-		// A payload-bearing admission must pin the client protocol revision used
-		// to decode it; without it a source preparer would have to guess a
-		// revision, breaking the exact-payload contract. This matches
-		// DecodeNativePayload, which rejects revision 0.
+		// Payload-bearing ingress admissions are Native ClientData captures and
+		// must pin the client protocol revision used to decode the block.
 		if adm.Revision == 0 {
 			return StatementEnvelope{}, fmt.Errorf("intake: INSERT admission %s has no client protocol revision", adm.StatementID)
 		}
@@ -1039,8 +1042,7 @@ func (o *Orchestrator) preparedConsistencyReject(env StatementEnvelope, prepared
 		if prepared.PayloadEncoding == "" || prepared.PayloadEncoding != env.PayloadEncoding {
 			return "payload encoding mismatch"
 		}
-		// The source must have decoded the payload with exactly the pinned client
-		// revision; a different revision can yield a different materialization.
+		// The source must decode with exactly the pinned client revision.
 		if prepared.Revision == 0 || prepared.Revision != env.Revision {
 			return "payload revision mismatch"
 		}
