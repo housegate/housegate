@@ -25,6 +25,7 @@ func TestAdmissionRecordFromPlugin_MapsAllFields(t *testing.T) {
 			Bytes:    []byte("native-block-bytes"),
 			Length:   uint64(len("native-block-bytes")),
 			SHA256:   "sha256:deadbeef",
+			Encoding: sicore.PayloadEncodingClickHouseNativeData,
 			Revision: 54465,
 			Complete: true,
 		},
@@ -63,8 +64,36 @@ func TestAdmissionRecordFromPlugin_MapsAllFields(t *testing.T) {
 	if rec.Revision != adm.Payload.Revision {
 		t.Fatalf("revision: got %d want %d", rec.Revision, adm.Payload.Revision)
 	}
-	if rec.PayloadEncoding == "" {
-		t.Fatal("payload encoding must be set so the runtime can pick a materializer")
+	if rec.PayloadEncoding != adm.Payload.Encoding {
+		t.Fatalf("payload encoding: got %q want %q", rec.PayloadEncoding, adm.Payload.Encoding)
+	}
+}
+
+func TestAdmissionRecordFromPlugin_MapsCSVEncoding(t *testing.T) {
+	sql := "INSERT INTO events FORMAT CSVWithNames"
+	adm := siplugin.Admission{
+		StatementID: "0xabc:1:n1",
+		Kind:        siplugin.KindInsert,
+		TableID:     "net1.events",
+		SQL:         sql,
+		SQLHash:     replay.DigestString(sql),
+		Signer:      "0xabc",
+		UserJWS:     "jws",
+		Payload: siplugin.CapturedPayload{
+			Bytes:    []byte("p,v\nwest,7\n"),
+			Length:   uint64(len("p,v\nwest,7\n")),
+			SHA256:   "sha256:csv",
+			Encoding: sicore.EncodingCSVWithNames,
+			Complete: true,
+		},
+	}
+
+	rec := AdmissionRecordFromPlugin(adm)
+	if rec.PayloadEncoding != sicore.EncodingCSVWithNames {
+		t.Fatalf("payload encoding: got %q want %q", rec.PayloadEncoding, sicore.EncodingCSVWithNames)
+	}
+	if rec.Revision != 0 {
+		t.Fatalf("CSV revision: got %d want 0", rec.Revision)
 	}
 }
 

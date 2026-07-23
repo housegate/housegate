@@ -94,6 +94,39 @@ func TestEnvelopeFromAdmission_MirrorsPayloadIdentity(t *testing.T) {
 	}
 }
 
+func TestEnvelopeFromAdmission_AllowsCSVWithNamesWithoutNativeRevision(t *testing.T) {
+	adm := admissionFixture()
+	adm.SQL = "INSERT INTO events FORMAT CSVWithNames"
+	adm.SQLHash = replay.DigestString(adm.SQL)
+	adm.Payload = []byte("p,v\nwest,7\n")
+	adm.PayloadLength = uint64(len(adm.Payload))
+	adm.PayloadHash = "sha256:csv"
+	adm.PayloadEncoding = EncodingCSVWithNames
+	adm.Revision = 0
+
+	env, err := EnvelopeFromAdmission(adm)
+	if err != nil {
+		t.Fatalf("EnvelopeFromAdmission: %v", err)
+	}
+	if env.PayloadEncoding != EncodingCSVWithNames {
+		t.Fatalf("payload encoding = %q, want %q", env.PayloadEncoding, EncodingCSVWithNames)
+	}
+	if env.Revision != 0 {
+		t.Fatalf("CSV envelope revision = %d, want 0", env.Revision)
+	}
+}
+
+func TestEnvelopeFromAdmission_RejectsPayloadEncodingSQLMismatch(t *testing.T) {
+	adm := admissionFixture()
+	adm.SQL = "INSERT INTO events FORMAT CSVWithNames"
+	adm.SQLHash = replay.DigestString(adm.SQL)
+	adm.PayloadEncoding = PayloadEncodingClickHouseNativeData
+
+	if _, err := EnvelopeFromAdmission(adm); err == nil {
+		t.Fatal("EnvelopeFromAdmission accepted CSV SQL with Native payload encoding")
+	}
+}
+
 func TestEnvelopeFromAdmission_RejectsEmptyStatementID(t *testing.T) {
 	adm := admissionFixture()
 	adm.StatementID = ""
@@ -166,6 +199,32 @@ func TestEnvelopeFromAdmission_RejectsInsertWithoutRevision(t *testing.T) {
 	adm.Revision = 0
 	if _, err := EnvelopeFromAdmission(adm); err == nil {
 		t.Fatal("expected rejection of INSERT admission with revision 0")
+	}
+}
+
+func TestPreparedConsistency_AllowsCSVWithNamesWithoutNativeRevision(t *testing.T) {
+	adm := admissionFixture()
+	adm.SQL = "INSERT INTO events FORMAT CSVWithNames"
+	adm.SQLHash = replay.DigestString(adm.SQL)
+	adm.Payload = []byte("p,v\nwest,7\n")
+	adm.PayloadLength = uint64(len(adm.Payload))
+	adm.PayloadHash = "sha256:csv"
+	adm.PayloadEncoding = EncodingCSVWithNames
+	adm.Revision = 0
+	env, err := EnvelopeFromAdmission(adm)
+	if err != nil {
+		t.Fatalf("EnvelopeFromAdmission: %v", err)
+	}
+	prepared := boundSource()
+	prepared.PayloadRef = adm.PayloadHash
+	prepared.PayloadHash = adm.PayloadHash
+	prepared.PayloadLength = adm.PayloadLength
+	prepared.PayloadEncoding = EncodingCSVWithNames
+	prepared.Revision = 0
+	orch := NewOrchestrator(&recordingSubmitter{}, &recordingPreparer{}, OrchestratorConfig{ExpectedSource: "snode-A"})
+
+	if reason := orch.preparedConsistencyReject(env, prepared); reason != "" {
+		t.Fatalf("CSV prepared binding must not require Native revision, got reject %q", reason)
 	}
 }
 

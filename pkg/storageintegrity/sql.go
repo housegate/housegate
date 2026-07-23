@@ -5,31 +5,50 @@ import (
 	"strings"
 )
 
-// RequireStreamingNativeInsert accepts only INSERT forms whose row effects are
-// represented by subsequent Native protocol Data packets. Inline VALUES,
-// INSERT ... SELECT / WITH, and non-Native FORMAT inputs are outside P1 because
-// their effects cannot be reconstructed from the captured Native payload.
-func RequireStreamingNativeInsert(sql string) error {
+// InsertPayloadEncoding returns the replay payload encoding selected by a
+// payload-local INSERT. v1 admits streaming Native payloads and explicit
+// CSVWithNames payloads only; inline VALUES and INSERT ... SELECT / WITH remain
+// outside the integrity protocol because their row effects are not represented by
+// a captured payload byte stream.
+func InsertPayloadEncoding(sql string) (string, error) {
 	source, format, ok := insertDataSource(sql)
 	if !ok {
-		return fmt.Errorf("requires streaming Native INSERT input")
+		return "", fmt.Errorf("requires streaming Native or CSVWithNames INSERT input")
 	}
 	switch source {
 	case "":
-		return nil
+		return PayloadEncodingClickHouseNativeData, nil
 	case "FORMAT":
-		if format == "NATIVE" {
-			return nil
+		switch format {
+		case "NATIVE":
+			return PayloadEncodingClickHouseNativeData, nil
+		case "CSVWITHNAMES":
+			return EncodingCSVWithNames, nil
 		}
 		if format == "" {
-			return fmt.Errorf("requires streaming Native INSERT input; FORMAT without Native is not supported")
+			return "", fmt.Errorf("requires streaming Native or CSVWithNames INSERT input; FORMAT without Native or CSVWithNames is not supported")
 		}
-		return fmt.Errorf("requires streaming Native INSERT input; FORMAT %s is not supported", format)
+		return "", fmt.Errorf("requires streaming Native or CSVWithNames INSERT input; FORMAT %s is not supported", format)
 	case "VALUES", "SELECT", "WITH":
-		return fmt.Errorf("requires streaming Native INSERT input; INSERT ... %s is not supported", source)
+		return "", fmt.Errorf("requires streaming Native or CSVWithNames INSERT input; INSERT ... %s is not supported", source)
 	default:
-		return fmt.Errorf("requires streaming Native INSERT input")
+		return "", fmt.Errorf("requires streaming Native or CSVWithNames INSERT input")
 	}
+}
+
+// RequireStreamingNativeInsert accepts only INSERT forms whose row effects are
+// represented by subsequent Native protocol Data packets. It remains available
+// for Native-only callers; storage-integrity ingress uses InsertPayloadEncoding
+// so it can also admit explicit CSVWithNames payloads.
+func RequireStreamingNativeInsert(sql string) error {
+	encoding, err := InsertPayloadEncoding(sql)
+	if err != nil {
+		return err
+	}
+	if encoding != PayloadEncodingClickHouseNativeData {
+		return fmt.Errorf("requires streaming Native INSERT input; FORMAT CSVWITHNAMES is not supported")
+	}
+	return nil
 }
 
 func insertDataSource(sql string) (source, format string, ok bool) {

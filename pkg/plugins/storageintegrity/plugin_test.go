@@ -21,6 +21,7 @@ import (
 	"housegate/housegate/pkg/plugin"
 	"housegate/housegate/pkg/replay"
 	"housegate/housegate/pkg/sqlmeta"
+	sicore "housegate/housegate/pkg/storageintegrity"
 )
 
 const storageIntegrityTestKey = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -64,6 +65,38 @@ func TestIngressAcceptsSignedMaterializedInsert(t *testing.T) {
 	}
 	if !bytes.Equal(admission.Payload.Bytes, payload) {
 		t.Fatalf("payload bytes = %v, want exact client data bytes %v", admission.Payload.Bytes, payload)
+	}
+}
+
+func TestIngressAcceptsCSVWithNamesPayload(t *testing.T) {
+	p, signer := newSignedIngress(t)
+	sql := "INSERT INTO tenant.events FORMAT CSVWithNames"
+	qctx := signedQueryContext(t, 16, signer, sql, sql, sqlmeta.StatementTypeInsert)
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{
+		OriginalDatabase: "tenant",
+		OriginalTable:    "events",
+		LogicalDatabase:  "tenant",
+		PhysicalDatabase: "tenant",
+	}}
+
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	payload := []byte("p,v\nwest,7\n")
+	if err := p.OnClientDataStrict(context.Background(), qctx, payload); err != nil {
+		t.Fatalf("OnClientDataStrict: %v", err)
+	}
+	p.OnQueryInputComplete(context.Background(), qctx)
+
+	admission, err := p.ConsumeAdmission(qctx.Session.ID())
+	if err != nil {
+		t.Fatalf("ConsumeAdmission: %v", err)
+	}
+	if admission.Payload.Encoding != sicore.EncodingCSVWithNames {
+		t.Fatalf("payload encoding = %q, want %q", admission.Payload.Encoding, sicore.EncodingCSVWithNames)
+	}
+	if !bytes.Equal(admission.Payload.Bytes, payload) {
+		t.Fatalf("payload bytes = %q, want exact CSV bytes %q", admission.Payload.Bytes, payload)
 	}
 }
 
@@ -133,8 +166,8 @@ func TestIngressRejectsCompressedInsertBeforeAdmission(t *testing.T) {
 	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
 
 	err := p.OnQuery(context.Background(), qctx)
-	if err == nil || !strings.Contains(err.Error(), "compressed native payload") {
-		t.Fatalf("OnQuery err = %v, want compressed native payload rejection", err)
+	if err == nil || !strings.Contains(err.Error(), "compressed payload") {
+		t.Fatalf("OnQuery err = %v, want compressed payload rejection", err)
 	}
 	if limit, enforce := p.ClientDataReadLimit(qctx); enforce || limit != 0 {
 		t.Fatalf("ClientDataReadLimit after rejected compressed INSERT = %d/%v, want 0/false", limit, enforce)
@@ -183,7 +216,7 @@ func TestIngressRejectsIncompleteNativePayloadCapture(t *testing.T) {
 	p.OnQueryInputComplete(context.Background(), qctx)
 
 	_, err := p.ConsumeAdmission(qctx.Session.ID())
-	if err == nil || !strings.Contains(err.Error(), "incomplete native payload capture") {
+	if err == nil || !strings.Contains(err.Error(), "incomplete payload capture") {
 		t.Fatalf("ConsumeAdmission err = %v, want incomplete capture rejection", err)
 	}
 }
@@ -300,8 +333,8 @@ func TestIngressRejectsInlineInsertSources(t *testing.T) {
 			qctx := signedQueryContext(t, int64(62+i), signer, sql, sql, sqlmeta.StatementTypeInsert)
 			qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
 			err := p.OnQuery(context.Background(), qctx)
-			if err == nil || !strings.Contains(err.Error(), "streaming Native INSERT") {
-				t.Fatalf("OnQuery err = %v, want streaming Native INSERT rejection", err)
+			if err == nil || !strings.Contains(err.Error(), "CSVWithNames INSERT") {
+				t.Fatalf("OnQuery err = %v, want payload-local INSERT rejection", err)
 			}
 		})
 	}
@@ -399,7 +432,7 @@ func TestIngressRejectsInlineSignedSQLBeforeServerRewrite(t *testing.T) {
 	}}
 
 	err := p.OnQuery(context.Background(), qctx)
-	if err == nil || !strings.Contains(err.Error(), "streaming Native INSERT") {
+	if err == nil || !strings.Contains(err.Error(), "CSVWithNames INSERT") {
 		t.Fatalf("OnQuery err = %v, want signed inline INSERT rejection", err)
 	}
 }
@@ -770,7 +803,7 @@ func TestIngressRejectsOversizedNativePayload(t *testing.T) {
 		t.Fatalf("OnQuery: %v", err)
 	}
 	err := p.OnClientDataStrict(context.Background(), qctx, []byte{byte(chproto.ClientDataCode), 1, 2, 3})
-	if err == nil || !strings.Contains(err.Error(), "native payload exceeds") {
+	if err == nil || !strings.Contains(err.Error(), "payload exceeds") {
 		t.Fatalf("OnClientDataStrict err = %v, want payload size rejection", err)
 	}
 	p.OnQueryComplete(context.Background(), qctx.Session)

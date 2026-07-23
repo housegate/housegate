@@ -93,6 +93,10 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 // runtime can select the matching materializer. It is deterministic and needs
 // no companion seam.
 func AdmissionRecordFromPlugin(adm siplugin.Admission) sicore.AdmissionRecord {
+	encoding := adm.Payload.Encoding
+	if encoding == "" {
+		encoding = sicore.PayloadEncodingClickHouseNativeData
+	}
 	return sicore.AdmissionRecord{
 		StatementID:     adm.StatementID,
 		Kind:            coreKind(adm.Kind),
@@ -104,7 +108,7 @@ func AdmissionRecordFromPlugin(adm siplugin.Admission) sicore.AdmissionRecord {
 		Payload:         adm.Payload.Bytes,
 		PayloadLength:   adm.Payload.Length,
 		PayloadHash:     adm.Payload.SHA256,
-		PayloadEncoding: sicore.PayloadEncodingClickHouseNativeData,
+		PayloadEncoding: encoding,
 		Revision:        adm.Payload.Revision,
 	}
 }

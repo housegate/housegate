@@ -1,6 +1,7 @@
 // Package storageintegrity implements the server-side storage-integrity ingress
-// admission gate. It owns signature/kind/target validation and exact Native
-// Data capture; unsafe writes and Arbiter/SNode calls belong to later stages.
+// admission gate. It owns signature/kind/target validation and exact
+// payload-byte capture; unsafe writes and Arbiter/SNode calls belong to later
+// stages.
 package storageintegrity
 
 import (
@@ -81,15 +82,17 @@ type CapturedPayload struct {
 	Bytes    []byte
 	Length   uint64
 	SHA256   string
+	Encoding string
 	Revision int
 	Complete bool
 }
 
 type admissionState struct {
-	admission Admission
-	payload   bytes.Buffer
-	revision  int
-	complete  bool
+	admission       Admission
+	payload         bytes.Buffer
+	payloadEncoding string
+	revision        int
+	complete        bool
 }
 
 type purposeValidator interface {
@@ -144,7 +147,7 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 		return fmt.Errorf("storage_integrity insert-only ingress rejects %s; mutation integrity protocol is not available", kind)
 	}
 	if kind == KindInsert && qctx.Query.Compression == proto.CompressionEnabled {
-		return fmt.Errorf("storage_integrity rejects compressed native payloads; retry INSERT with ClickHouse query compression disabled")
+		return fmt.Errorf("storage_integrity rejects compressed payloads; retry INSERT with ClickHouse query compression disabled")
 	}
 	stmtID, err := statementID(qctx)
 	if err != nil {
@@ -158,12 +161,17 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 			return fmt.Errorf("storage_integrity rejects rewritten nondeterministic function %s", fn)
 		}
 	}
-	if err := requireStreamingNativeInsert(signedSQL); err != nil {
+	payloadEncoding, err := requirePayloadLocalInsert(signedSQL)
+	if err != nil {
 		return err
 	}
 	if forwardSQL != signedSQL {
-		if err := requireStreamingNativeInsert(forwardSQL); err != nil {
+		forwardEncoding, err := requirePayloadLocalInsert(forwardSQL)
+		if err != nil {
 			return err
+		}
+		if forwardEncoding != payloadEncoding {
+			return fmt.Errorf("storage_integrity rewritten INSERT payload encoding mismatch: signed %s forwarded %s", payloadEncoding, forwardEncoding)
 		}
 	}
 	tableID, err := targetTableID(qctx, signedSQL)
@@ -181,15 +189,18 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	if err := requireStatementIDSigner(stmtID, signer); err != nil {
 		return err
 	}
-	state := &admissionState{admission: Admission{
-		StatementID: stmtID,
-		Kind:        kind,
-		TableID:     tableID,
-		SQL:         signedSQL,
-		SQLHash:     replay.DigestString(signedSQL),
-		Signer:      signer,
-		UserJWS:     userJWS,
-	}}
+	state := &admissionState{
+		admission: Admission{
+			StatementID: stmtID,
+			Kind:        kind,
+			TableID:     tableID,
+			SQL:         signedSQL,
+			SQLHash:     replay.DigestString(signedSQL),
+			Signer:      signer,
+			UserJWS:     userJWS,
+		},
+		payloadEncoding: payloadEncoding,
+	}
 	if qctx.Session.State() != nil {
 		state.revision = qctx.Session.State().ClientRevision
 	}
@@ -224,7 +235,7 @@ func (p *Plugin) OnClientDataStrict(ctx context.Context, qctx *plugin.QueryConte
 	nextLen := uint64(state.payload.Len()) + uint64(len(raw))
 	if p.maxPayload > 0 && nextLen > p.maxPayload {
 		delete(p.active, id)
-		return fmt.Errorf("storage_integrity native payload exceeds max_payload_bytes (%d > %d)", nextLen, p.maxPayload)
+		return fmt.Errorf("storage_integrity payload exceeds max_payload_bytes (%d > %d)", nextLen, p.maxPayload)
 	}
 	_, _ = state.payload.Write(raw)
 	return nil
@@ -369,15 +380,20 @@ func (p *Plugin) ConsumeAdmission(sessionID int64) (Admission, error) {
 func admissionFromState(state *admissionState) (Admission, error) {
 	admission := state.admission
 	if admission.Kind == KindInsert && state.payload.Len() == 0 {
-		return Admission{}, fmt.Errorf("storage_integrity incomplete native payload capture for statement %s", admission.StatementID)
+		return Admission{}, fmt.Errorf("storage_integrity incomplete payload capture for statement %s", admission.StatementID)
 	}
 	payload := append([]byte(nil), state.payload.Bytes()...)
 	sum := sha256.Sum256(payload)
+	revision := state.revision
+	if state.payloadEncoding == sicore.EncodingCSVWithNames {
+		revision = 0
+	}
 	admission.Payload = CapturedPayload{
 		Bytes:    payload,
 		Length:   uint64(len(payload)),
 		SHA256:   "sha256:" + hex.EncodeToString(sum[:]),
-		Revision: state.revision,
+		Encoding: state.payloadEncoding,
+		Revision: revision,
 		Complete: state.complete,
 	}
 	if !admission.Payload.Complete {
@@ -583,11 +599,12 @@ func storageIntegrityKindFromSQL(sql string) (Kind, bool, bool) {
 	}
 }
 
-func requireStreamingNativeInsert(sql string) error {
-	if err := sicore.RequireStreamingNativeInsert(sql); err != nil {
-		return fmt.Errorf("storage_integrity %w", err)
+func requirePayloadLocalInsert(sql string) (string, error) {
+	encoding, err := sicore.InsertPayloadEncoding(sql)
+	if err != nil {
+		return "", fmt.Errorf("storage_integrity %w", err)
 	}
-	return nil
+	return encoding, nil
 }
 
 func targetTableID(qctx *plugin.QueryContext, sql string) (string, error) {
