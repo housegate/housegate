@@ -121,7 +121,7 @@ func TestEnvelopeFromAdmission_UsesOpaquePayloadRefWhenPresent(t *testing.T) {
 	}
 }
 
-func TestEnvelopeFromAdmission_RejectsCSVWithNamesUntilRawCaptureExists(t *testing.T) {
+func TestEnvelopeFromAdmission_AcceptsMaterializedCSVWithNames(t *testing.T) {
 	adm := admissionFixture()
 	adm.SQL = "INSERT INTO events FORMAT CSVWithNames"
 	adm.SQLHash = replay.DigestString(adm.SQL)
@@ -131,8 +131,12 @@ func TestEnvelopeFromAdmission_RejectsCSVWithNamesUntilRawCaptureExists(t *testi
 	adm.PayloadEncoding = EncodingCSVWithNames
 	adm.Revision = 0
 
-	if _, err := EnvelopeFromAdmission(adm); err == nil {
-		t.Fatal("EnvelopeFromAdmission accepted CSVWithNames before raw CSV capture exists")
+	env, err := EnvelopeFromAdmission(adm)
+	if err != nil {
+		t.Fatalf("EnvelopeFromAdmission: %v", err)
+	}
+	if env.PayloadEncoding != EncodingCSVWithNames || env.Revision != 0 {
+		t.Fatalf("encoding/revision = %q/%d, want CSVWithNames/0", env.PayloadEncoding, env.Revision)
 	}
 }
 

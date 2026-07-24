@@ -8,7 +8,9 @@ This change defines the HouseGate-local contract that turns a signed,
 materialized INSERT into a complete storage-integrity admission record. It
 verifies the client-side signature before accepting the server-side rewritten
 statement, resolves the logical target table from rewriter metadata, and
-captures exact Native `ClientData` wire bytes for later staged SNode intake.
+captures exact Native `ClientData` wire bytes before publishing the final replay
+payload for later staged SNode intake. For `FORMAT CSVWithNames`, that final
+payload is materialized CSVWithNames bytes, not the Native packet framing.
 
 The implementation is intentionally fail-closed at every boundary that would
 otherwise make the signed SQL and the captured payload refer to different
@@ -26,8 +28,10 @@ storage-integrity design:
 - Section 4.2: server-side HouseGate verifies JWS, signer allowlist, purpose and
   qhash before using sql-rewriter output for statement classification and
   logical/physical target mapping.
-- Section 6.1: INSERT Native bytes are retained as the payload used by later
-  unsafe write, payload-store and replay stages.
+- Section 6.1: INSERT payload evidence is retained before unsafe write,
+  payload-store and replay stages. Native INSERTs keep the captured Native
+  payload; `FORMAT CSVWithNames` uses an explicit materializer bridge to publish
+  `csv-with-names-v1`.
 - Section 7.1: non-INSERT writes remain outside this insert-only branch.
 
 This contract does not change the Sentio Arbiter design or require any Arbiter
@@ -97,13 +101,27 @@ logical target, admission rejects the ambiguity instead of choosing by order.
 The plugin rejects a disagreement between SQL statement kind,
 `QueryContext.StatementType` and rewriter target metadata.
 
-## Native Payload Capture
+## Payload Capture And Materialization
 
 Relay invokes correctness-critical `StrictDataPlugin` hooks before forwarding
 each client `Data` packet. The storage-integrity hook copies the exact complete
 uncompressed on-wire packet, including packet code, block name, Native block
 body, and the terminating empty Data block. It does not mutate the packet and
 does not retain Relay-owned memory.
+
+The captured bytes are always ClickHouse Native `ClientData` bytes. They are the
+final replay payload for implicit streaming Native INSERTs and
+`INSERT ... FORMAT Native`. For `INSERT ... FORMAT CSVWithNames`, the plugin
+requires a configured `StorageIntegrityPayloadMaterializer`; at input completion
+it passes the captured Native bytes, table ID, signed SQL, selected encoding and
+client revision into that bridge. The built-in `NativeCSVPayloadMaterializer`
+decodes the Native capture under the pinned table schema and emits
+schema-ordered CSVWithNames bytes. Admission hash and length are computed over
+the materialized CSV payload.
+
+If `FORMAT CSVWithNames` is admitted without a materializer, the query is
+rejected fail-closed. The relay still does not accept arbitrary bare text CSV
+through this strict data path.
 
 Compressed storage-integrity INSERT payloads are rejected during `OnQuery`
 before an admission is created. This stage deliberately avoids accepting
@@ -168,10 +186,14 @@ record. It removes the pending record and returns:
 - normalized logical table ID;
 - signed/materialized SQL;
 - normalized signer address;
-- exact captured Native bytes;
+- final replay payload bytes: exact Native bytes for Native INSERTs, or
+  materialized CSVWithNames bytes for `FORMAT CSVWithNames`;
+- payload encoding (`clickhouse-native-data-v1` or `csv-with-names-v1`);
 - payload byte length;
 - deterministic `sha256:<hex>` payload hash;
-- client protocol revision pinned when the query was admitted;
+- client protocol revision pinned when the query was admitted. Native replay
+  requires it; materialized CSVWithNames records may carry it as provenance but
+  replay does not depend on it;
 - completion flag.
 
 An INSERT without any captured Data packet is rejected. Non-INSERT statements
@@ -210,6 +232,12 @@ leaves the admission pending and blocks the next storage write on that session,
 which is the fail-closed posture for this stage. `buildServer` rejects an
 enabled ingress configuration with no consumer so production deployments cannot
 silently create unconsumed pending admissions.
+
+Server-mode assembly may also receive
+`Options.StorageIntegrityPayloadMaterializer`. This option is required to admit
+`FORMAT CSVWithNames`; without it, CSVWithNames remains rejected even when
+storage-integrity ingress is enabled. The YAML ingress config does not construct
+this bridge because the embedding host owns the pinned schema resolver.
 
 ## Verification
 

@@ -133,7 +133,7 @@ sequenceDiagram
 - `RegisterPreparedClaim` 仍通过 `statement_id` 晚绑定；RC 的 `source_node` 必须等于 FSM 已记录的 deterministic source。P1c 当前一体化 `SubmitLocalStatement` 可以保留为兼容 wrapper，但 HouseGate ingress 的 P1e 接线使用上述 staged seam。
 - 若仍允许 RC 先于 `SubmitStatement` 到达，则必须版本化增加 `DiscardPendingRC` 或等价的 FSM retention/cleanup 语义；它不属于“不修改 Arbiter 核心协议”的 P1e 范围。
 - v1 保持 P1c 的 source statement 串行约束：同一 source absolute-claim frontier 上，前一条 intake record 未到达 `RCBound` 或 `Cleaned` 前，不执行后一条 source write。否则后一条 claim 可能包含随后被 terminal reject 清理的前序贡献。未来并行 intake 必须显式记录 claim dependencies，并在 abort 时级联重算或作废后继 claims。
-- 当前 Arbiter SNode intake 仍直接使用 CSV payload decoder；Verifier/replay executor 已有 materializer seam。Native Data block 支持需要把 payload encoding/profile 明确传入 staged SNode intake 和 replay profile，不能只改 ingress 声明已支持。
+- 当前 Arbiter SNode intake 仍直接使用 CSV payload decoder；HouseGate ingress 在配置 `StorageIntegrityPayloadMaterializer` 时，可以先捕获 Native `ClientData`，再按 pinned schema materialize 成 `csv-with-names-v1` 后提交。若未来要让 Arbiter/SNode 直接消费 `clickhouse-native-data-v1`，仍需要把 payload encoding/profile 明确传入 staged SNode intake 和 replay profile，不能只改 ingress 声明已支持。
 - HouseGate 不能重新实现 row canonicalization、row-id、part LtHash、schema root 或 state-root assembly；统一调用 `payloadexec`、`chexec`、`pkg/lthash` 共享 helper。
 
 #### ACK2 后 INSERT 完整生命周期

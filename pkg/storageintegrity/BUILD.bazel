@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "ack2_gate.go",
         "arbiter_proto.go",
+        "csv_payload.go",
         "intake.go",
         "intake_abort.go",
         "intake_retry.go",
@@ -31,6 +32,7 @@ go_test(
     srcs = [
         "ack2_gate_test.go",
         "arbiter_proto_test.go",
+        "csv_payload_test.go",
         "ingress_drive_test.go",
         "intake_abort_test.go",
         "intake_retry_test.go",

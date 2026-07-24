@@ -100,10 +100,9 @@ type StatementEnvelope struct {
 	PayloadRef    string
 	PayloadHash   string
 	PayloadLength uint64
-	// PayloadEncoding pins how the payload is decoded. In the current ingress
-	// surface this must be clickhouse-native-data-v1, and Revision carries the
-	// captured client protocol revision because DecodeNativePayload rejects
-	// revision 0.
+	// PayloadEncoding pins how the payload is decoded. Native payloads must
+	// carry the captured client protocol revision; CSVWithNames payloads are
+	// already materialized replay bytes and do not require a revision.
 	PayloadEncoding string
 	Revision        int
 	Signer          string
@@ -166,9 +165,10 @@ func EnvelopeFromAdmission(adm AdmissionRecord) (StatementEnvelope, error) {
 		if got := replay.DigestBytes(adm.Payload); got != adm.PayloadHash {
 			return StatementEnvelope{}, fmt.Errorf("intake: INSERT admission %s payload hash mismatch", adm.StatementID)
 		}
-		// Payload-bearing ingress admissions are Native ClientData captures and
-		// must pin the client protocol revision used to decode the block.
-		if adm.Revision == 0 {
+		// Native ClientData captures must pin the client protocol revision used
+		// to decode the block. CSVWithNames payloads have already been
+		// materialized before admission.
+		if adm.PayloadEncoding == PayloadEncodingClickHouseNativeData && adm.Revision == 0 {
 			return StatementEnvelope{}, fmt.Errorf("intake: INSERT admission %s has no client protocol revision", adm.StatementID)
 		}
 	}

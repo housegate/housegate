@@ -41,9 +41,22 @@ This contract implements the P1e runtime responsibilities of section 3 of the un
 
 `SelectMaterializerKind(encoding)` is a pure, deterministic map from the pinned payload encoding to the replay materializer family: the Native encoding selects `MaterializerNative`, an empty or `csv-with-names-v1` encoding selects `MaterializerCSV`, and any other non-empty encoding fails closed. Failing closed on an unknown encoding is the safety property — a Native payload must never be silently mis-decoded as CSV.
 
+Ingress-side CSVWithNames compatibility is a separate bridge from replay
+selection. `StorageIntegrityPayloadMaterializer` converts the captured Native
+`ClientData` into final `csv-with-names-v1` bytes before `AdmissionRecord` is
+built. After that point the runtime sees an ordinary CSV payload and
+`SelectMaterializerKind` selects `MaterializerCSV`. Without the bridge,
+`FORMAT CSVWithNames` is rejected before the runtime shell is invoked.
+
 ## Config
 
-The `storage_integrity.safe_merges.allow_native_background_merges` toggle governs the merge guard. It defaults false, and enabling it is rejected in v1 (native background merges would mutate the guarded part inventory out from under the integrity layer). The existing ingress config (enabled/allowlist/timeouts/max-payload) is unchanged; with `ingress.enabled=false` the storage-integrity runtime is not constructed and the plugin chain equals the non-storage-integrity baseline.
+The `storage_integrity.safe_merges.allow_native_background_merges` toggle governs the merge guard. It defaults false, and enabling it is rejected in v1 (native background merges would mutate the guarded part inventory out from under the integrity layer). The YAML ingress config (enabled/allowlist/timeouts/max-payload) is unchanged; with `ingress.enabled=false` the storage-integrity runtime is not constructed and the plugin chain equals the non-storage-integrity baseline.
+
+The embeddable `housegate.Options` surface adds
+`StorageIntegrityPayloadMaterializer`. Hosts that want to accept
+`FORMAT CSVWithNames` must provide this bridge because they own pinned schema
+resolution. This option does not add a HouseGate-owned Verifier/Promoter and
+does not change the Arbiter FSM protocol.
 
 ## Non-Scope
 
@@ -64,4 +77,4 @@ Bazel gate:
 bazel test //pkg/storageintegrity:storageintegrity_test //pkg/plugins/storageintegrity:storageintegrity_test
 ```
 
-Green today: `TestSelectMaterializerKind` (encoding → kind, fail-closed on unknown); the `TestMergeGuard_*` suite (build stop statements for both hg_safe and hg_unsafe, scoped verify probe, emit-then-verify ordering, fail-closed on active merge, idempotent re-assert, exec-error surfaces); `TestAdmissionRecordFromPlugin_MapsAllFields` and `_MapsKinds` (pure projection); `TestNewStorageIntegrityIngress_RequiresOrchestrator` (nil rejected, no Verifier/Promoter fields); the config default-off and safe-merges-rejection tests. Gated: `TestIngressDrivesOrchestratorToAck2` (an INSERT admission driven to ACK2/RCBound) skips closed under `requireCompanionStagedIntake` and passes only when `CompanionStagedIntakeAvailable` is temporarily flipped true for wiring verification. The suite is race-clean.
+Green today: `TestSelectMaterializerKind` (encoding → kind, fail-closed on unknown); `TestNativeCSVPayloadMaterializerConvertsCapturedClientData` (captured Native `ClientData` → decodable CSVWithNames); `TestIngressMaterializesCSVWithNamesAdmissionFromCapturedNativeData` and `TestBuildServer_StorageIntegrityIngressWiresCSVPayloadMaterializer` (bridge wired into admission and server assembly); the `TestMergeGuard_*` suite (build stop statements for both hg_safe and hg_unsafe, scoped verify probe, emit-then-verify ordering, fail-closed on active merge, idempotent re-assert, exec-error surfaces); `TestAdmissionRecordFromPlugin_MapsAllFields` and `_MapsKinds` (pure projection); `TestNewStorageIntegrityIngress_RequiresOrchestrator` (nil rejected, no Verifier/Promoter fields); the config default-off and safe-merges-rejection tests. Gated: `TestIngressDrivesOrchestratorToAck2` (an INSERT admission driven to ACK2/RCBound) skips closed under `requireCompanionStagedIntake` and passes only when `CompanionStagedIntakeAvailable` is temporarily flipped true for wiring verification. The suite is race-clean.

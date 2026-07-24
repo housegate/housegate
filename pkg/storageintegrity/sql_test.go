@@ -2,7 +2,7 @@ package storageintegrity
 
 import "testing"
 
-func TestInsertPayloadEncodingAcceptsNativeOnly(t *testing.T) {
+func TestInsertPayloadEncodingAcceptsStreamingPayloadFormats(t *testing.T) {
 	tests := []struct {
 		name string
 		sql  string
@@ -17,6 +17,11 @@ func TestInsertPayloadEncodingAcceptsNativeOnly(t *testing.T) {
 			name: "explicit native",
 			sql:  "INSERT INTO events FORMAT Native",
 			want: PayloadEncodingClickHouseNativeData,
+		},
+		{
+			name: "explicit CSVWithNames replay payload",
+			sql:  "INSERT INTO events FORMAT CSVWithNames",
+			want: EncodingCSVWithNames,
 		},
 	}
 	for _, tc := range tests {
@@ -38,7 +43,6 @@ func TestInsertPayloadEncodingRejectsInlineAndUnsupportedFormats(t *testing.T) {
 		"INSERT INTO events SELECT * FROM source",
 		"INSERT INTO events WITH 1 AS id SELECT id",
 		"INSERT INTO events FORMAT CSV",
-		"INSERT INTO events FORMAT CSVWithNames",
 		"INSERT INTO events FORMAT JSONEachRow",
 	} {
 		t.Run(sql, func(t *testing.T) {
