@@ -30,6 +30,7 @@ import (
 	"housegate/housegate/pkg/plugins/storageintegrity"
 	"housegate/housegate/pkg/registry"
 	"housegate/housegate/pkg/rewriter"
+	sicore "housegate/housegate/pkg/storageintegrity"
 )
 
 // Proxy is a started, ready-to-Serve proxy. Run/RunWith blocks until
@@ -96,6 +97,11 @@ type Options struct {
 	// consumer, because otherwise completed admissions would remain pending
 	// and block subsequent storage writes on persistent client sessions.
 	StorageIntegrityAdmissionConsumer storageintegrity.AdmissionConsumer
+	// StorageIntegrityPayloadMaterializer converts captured Native ClientData
+	// into the replay payload encoding selected by the admitted INSERT. Hosts
+	// that want FORMAT CSVWithNames support must provide one; without it, the
+	// ingress plugin rejects CSVWithNames fail-closed.
+	StorageIntegrityPayloadMaterializer sicore.PayloadMaterializer
 
 	// CommitGateObservers gate DDL statements (CREATE / DROP TABLE,
 	// CREATE / DROP DATABASE) on host-supplied external commits.

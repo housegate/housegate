@@ -611,12 +611,13 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			nil,
 		)
 		storageIntegrityIngress = storageintegrity.New(storageintegrity.Config{
-			Enabled:           true,
-			AuthValidator:     ingressValidator,
-			Purpose:           auth.QueryPurpose,
-			RequestTimeout:    ingressCfg.RequestTimeout.Duration,
-			MaxPayloadBytes:   ingressCfg.MaxPayloadBytes,
-			AdmissionConsumer: opts.StorageIntegrityAdmissionConsumer,
+			Enabled:             true,
+			AuthValidator:       ingressValidator,
+			Purpose:             auth.QueryPurpose,
+			RequestTimeout:      ingressCfg.RequestTimeout.Duration,
+			MaxPayloadBytes:     ingressCfg.MaxPayloadBytes,
+			AdmissionConsumer:   opts.StorageIntegrityAdmissionConsumer,
+			PayloadMaterializer: opts.StorageIntegrityPayloadMaterializer,
 		})
 		queryPlugins = append(queryPlugins, storageIntegrityIngress)
 		strictDataPlugins = append(strictDataPlugins, storageIntegrityIngress)

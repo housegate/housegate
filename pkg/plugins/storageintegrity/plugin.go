@@ -42,12 +42,13 @@ const (
 )
 
 type Config struct {
-	Enabled           bool
-	AuthValidator     auth.Validator
-	Purpose           string
-	RequestTimeout    time.Duration
-	MaxPayloadBytes   uint64
-	AdmissionConsumer AdmissionConsumer
+	Enabled             bool
+	AuthValidator       auth.Validator
+	Purpose             string
+	RequestTimeout      time.Duration
+	MaxPayloadBytes     uint64
+	AdmissionConsumer   AdmissionConsumer
+	PayloadMaterializer sicore.PayloadMaterializer
 }
 
 type AdmissionConsumer interface {
@@ -55,12 +56,13 @@ type AdmissionConsumer interface {
 }
 
 type Plugin struct {
-	enabled           bool
-	authValidator     auth.Validator
-	purpose           string
-	requestTimeout    time.Duration
-	maxPayload        uint64
-	admissionConsumer AdmissionConsumer
+	enabled             bool
+	authValidator       auth.Validator
+	purpose             string
+	requestTimeout      time.Duration
+	maxPayload          uint64
+	admissionConsumer   AdmissionConsumer
+	payloadMaterializer sicore.PayloadMaterializer
 
 	mu      sync.Mutex
 	active  map[int64]*admissionState
@@ -113,14 +115,15 @@ func New(cfg Config) *Plugin {
 		requestTimeout = DefaultRequestTimeout
 	}
 	return &Plugin{
-		enabled:           cfg.Enabled,
-		authValidator:     cfg.AuthValidator,
-		purpose:           purpose,
-		requestTimeout:    requestTimeout,
-		maxPayload:        maxPayload,
-		admissionConsumer: cfg.AdmissionConsumer,
-		active:            map[int64]*admissionState{},
-		pending:           map[int64]*admissionState{},
+		enabled:             cfg.Enabled,
+		authValidator:       cfg.AuthValidator,
+		purpose:             purpose,
+		requestTimeout:      requestTimeout,
+		maxPayload:          maxPayload,
+		admissionConsumer:   cfg.AdmissionConsumer,
+		payloadMaterializer: cfg.PayloadMaterializer,
+		active:              map[int64]*admissionState{},
+		pending:             map[int64]*admissionState{},
 	}
 }
 
@@ -164,6 +167,9 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	payloadEncoding, err := requirePayloadLocalInsert(signedSQL)
 	if err != nil {
 		return err
+	}
+	if payloadEncoding == sicore.EncodingCSVWithNames && p.payloadMaterializer == nil {
+		return fmt.Errorf("storage_integrity FORMAT CSVWithNames requires a payload materializer")
 	}
 	if forwardSQL != signedSQL {
 		forwardEncoding, err := requirePayloadLocalInsert(forwardSQL)
@@ -302,7 +308,7 @@ func (p *Plugin) OnQueryInputCompleteStrict(ctx context.Context, qctx *plugin.Qu
 	delete(p.active, id)
 	p.mu.Unlock()
 
-	admission, err := admissionFromState(state)
+	admission, err := p.admissionFromState(ctx, state)
 	if err != nil {
 		return fmt.Errorf("storage_integrity admission incomplete for %s: %w", state.admission.StatementID, err)
 	}
@@ -381,21 +387,48 @@ func (p *Plugin) ConsumeAdmission(sessionID int64) (Admission, error) {
 	delete(p.pending, sessionID)
 	p.mu.Unlock()
 
-	return admissionFromState(state)
+	return p.admissionFromState(context.Background(), state)
 }
 
-func admissionFromState(state *admissionState) (Admission, error) {
+func (p *Plugin) admissionFromState(ctx context.Context, state *admissionState) (Admission, error) {
 	admission := state.admission
 	if admission.Kind == KindInsert && state.payload.Len() == 0 {
 		return Admission{}, fmt.Errorf("storage_integrity incomplete payload capture for statement %s", admission.StatementID)
 	}
 	payload := append([]byte(nil), state.payload.Bytes()...)
+	payloadEncoding := state.payloadEncoding
+	if payloadEncoding == sicore.EncodingCSVWithNames {
+		if p == nil || p.payloadMaterializer == nil {
+			return Admission{}, fmt.Errorf("storage_integrity payload materializer is required for %s", payloadEncoding)
+		}
+		out, err := p.payloadMaterializer.MaterializePayload(ctx, sicore.PayloadMaterializationInput{
+			StatementID:     admission.StatementID,
+			TableID:         admission.TableID,
+			SQL:             admission.SQL,
+			PayloadEncoding: payloadEncoding,
+			NativeWire:      payload,
+			Revision:        state.revision,
+		})
+		if err != nil {
+			return Admission{}, err
+		}
+		if out.Encoding != payloadEncoding {
+			return Admission{}, fmt.Errorf("storage_integrity payload materializer returned encoding %q, want %q", out.Encoding, payloadEncoding)
+		}
+		if len(out.Payload) == 0 {
+			return Admission{}, fmt.Errorf("storage_integrity payload materializer returned empty payload")
+		}
+		payload = append([]byte(nil), out.Payload...)
+	}
+	if p != nil && p.maxPayload > 0 && uint64(len(payload)) > p.maxPayload {
+		return Admission{}, fmt.Errorf("storage_integrity payload exceeds max_payload_bytes after materialization (%d > %d)", len(payload), p.maxPayload)
+	}
 	sum := sha256.Sum256(payload)
 	admission.Payload = CapturedPayload{
 		Bytes:    payload,
 		Length:   uint64(len(payload)),
 		SHA256:   "sha256:" + hex.EncodeToString(sum[:]),
-		Encoding: state.payloadEncoding,
+		Encoding: payloadEncoding,
 		Revision: state.revision,
 		Complete: state.complete,
 	}

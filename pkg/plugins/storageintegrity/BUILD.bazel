@@ -29,6 +29,7 @@ go_test(
         "//pkg/plugin",
         "//pkg/replay",
         "//pkg/sqlmeta",
+        "//pkg/storageintegrity",
         "@com_github_clickhouse_ch_go//proto",
     ],
 )

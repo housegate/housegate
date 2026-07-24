@@ -7,9 +7,8 @@ import (
 
 // InsertPayloadEncoding returns the replay payload encoding selected by an
 // admitted payload-local INSERT. Server-side ingress currently captures
-// ClickHouse native TCP ClientData packets, so only streaming Native INSERTs are
-// admitted here. CSVWithNames remains a replay profile, but ingress must reject
-// it until Relay has a dedicated raw-CSV capture/extraction path.
+// ClickHouse native TCP ClientData packets. CSVWithNames is supported by
+// materializing that Native capture into CSVWithNames before admission.
 func InsertPayloadEncoding(sql string) (string, error) {
 	source, format, ok := insertDataSource(sql)
 	if !ok {
@@ -23,7 +22,7 @@ func InsertPayloadEncoding(sql string) (string, error) {
 		case "NATIVE":
 			return PayloadEncodingClickHouseNativeData, nil
 		case "CSVWITHNAMES":
-			return "", fmt.Errorf("requires streaming Native INSERT input; FORMAT CSVWITHNAMES is not supported until raw CSV payload capture is available")
+			return EncodingCSVWithNames, nil
 		}
 		if format == "" {
 			return "", fmt.Errorf("requires streaming Native INSERT input; FORMAT without Native is not supported")
@@ -36,8 +35,8 @@ func InsertPayloadEncoding(sql string) (string, error) {
 	}
 }
 
-// RequireStreamingNativeInsert accepts only INSERT forms whose row effects are
-// represented by subsequent Native protocol Data packets.
+// RequireStreamingNativeInsert accepts only INSERT forms whose replay payload
+// remains the captured Native protocol Data packets.
 func RequireStreamingNativeInsert(sql string) error {
 	encoding, err := InsertPayloadEncoding(sql)
 	if err != nil {
