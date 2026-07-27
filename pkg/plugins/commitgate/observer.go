@@ -79,8 +79,8 @@ type Observer interface {
 	//
 	// ev is the same Event delivered to BeforeStatement. exc is the
 	// decoded Exception from upstream — Code, Name, Message are
-	// populated; Stack and Nested may or may not be (depends on CH
-	// version + revision).
+	// populated; Stack may or may not be (depends on CH version +
+	// revision).
 	OnStatementException(ctx context.Context, ev *Event, exc *chproto.Exception)
 }
 

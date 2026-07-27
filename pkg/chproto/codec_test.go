@@ -125,8 +125,9 @@ func TestReadPacket_Exception_DecodeAndReencode(t *testing.T) {
 		Stack:   "",
 	}
 	// Exception.EncodeAware does NOT write the leading type byte (verified from
-	// ch-go source: the method only encodes Code/Name/Message/Stack/Nested), so
-	// we must prepend the ServerCodeException VarUInt explicitly.
+	// ch-go source: the method only encodes Code/Name/Message/Stack plus the
+	// obsolete "has nested" flag), so we must prepend the ServerCodeException
+	// VarUInt explicitly.
 	var buf proto.Buffer
 	buf.PutUVarInt(uint64(proto.ServerCodeException))
 	exc.EncodeAware(&buf, 54453)
