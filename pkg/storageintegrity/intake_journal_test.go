@@ -3,10 +3,13 @@ package storageintegrity
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 type panicSubmitter struct {
@@ -88,6 +91,10 @@ type preparedSaveFailJournal struct {
 
 func (j *preparedSaveFailJournal) LoadIntakeRecord(ctx context.Context, statementID string) (IntakeJournalRecord, bool, error) {
 	return j.base.LoadIntakeRecord(ctx, statementID)
+}
+
+func (j *preparedSaveFailJournal) ListIntakeRecords(ctx context.Context) ([]IntakeJournalRecord, error) {
+	return j.base.ListIntakeRecords(ctx)
 }
 
 func (j *preparedSaveFailJournal) SaveIntakeRecord(ctx context.Context, rec IntakeJournalRecord) error {
@@ -191,5 +198,122 @@ func TestFileIntakeJournalPreparedSaveFailureRestartsViaSourceLookup(t *testing.
 	}
 	if got := atomic.LoadInt64(&prep.lookupCount); got != 1 {
 		t.Fatalf("restart lookup count = %d, want 1", got)
+	}
+}
+
+type restartFrontierSubmitter struct {
+	aID    string
+	aCalls int64
+}
+
+func (s *restartFrontierSubmitter) SubmitStatement(_ context.Context, env StatementEnvelope) (SubmitOutcome, error) {
+	if env.StatementID == s.aID && atomic.AddInt64(&s.aCalls, 1) == 1 {
+		return SubmitOutcome{Category: OutcomeRetryable, Reason: "NotLeader"}, nil
+	}
+	return SubmitOutcome{Category: OutcomeAccepted}, nil
+}
+
+func TestFileIntakeJournalRecoveryFencesNonTerminalSourceBeforeNextStatement(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	admA := admissionFixture()
+	admB := admissionFixture()
+	admB.StatementID = fixtureStatementID(2)
+
+	journal1, err := NewFileIntakeJournal(dir)
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	prep := newFrontierProbePreparer()
+	prep.prepared = boundSource()
+	sub := &restartFrontierSubmitter{aID: admA.StatementID}
+	orch1 := NewOrchestrator(sub, prep, OrchestratorConfig{
+		ExpectedSource: "snode-A",
+		Journal:        journal1,
+	})
+
+	resA1, err := orch1.Orchestrate(ctx, admA)
+	if err != nil {
+		t.Fatalf("A first Orchestrate: %v", err)
+	}
+	if resA1.Ack2 || resA1.Submit.Category != OutcomeRetryable {
+		t.Fatalf("A first result Ack2/submit = %v/%v, want non-terminal retryable", resA1.Ack2, resA1.Submit.Category)
+	}
+	if got := prep.prepareCountFor(admA.StatementID); got != 1 {
+		t.Fatalf("A first prepare count = %d, want 1", got)
+	}
+
+	journal2, err := NewFileIntakeJournal(dir)
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal after restart: %v", err)
+	}
+	orch2 := NewOrchestrator(sub, prep, OrchestratorConfig{
+		ExpectedSource: "snode-A",
+		Journal:        journal2,
+	})
+
+	bDone := make(chan error, 1)
+	go func() {
+		_, err := orch2.Orchestrate(ctx, admB)
+		bDone <- err
+	}()
+	time.Sleep(30 * time.Millisecond)
+	if got := prep.prepareCountFor(admB.StatementID); got != 0 {
+		t.Fatalf("B prepared %d times before non-terminal A resumed; restart recovery must fence snode-A", got)
+	}
+
+	resA2, err := orch2.Orchestrate(ctx, admA)
+	if err != nil {
+		t.Fatalf("A retry after restart: %v", err)
+	}
+	if !resA2.Ack2 || resA2.Lifecycle != LifecycleRCBound {
+		t.Fatalf("A retry result Ack2/lifecycle = %v/%q, want ACK2/RCBound", resA2.Ack2, resA2.Lifecycle)
+	}
+	select {
+	case err := <-bDone:
+		if err != nil {
+			t.Fatalf("B Orchestrate after A terminal: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("B did not resume after A reached terminal")
+	}
+	if got := prep.prepareCountFor(admB.StatementID); got != 1 {
+		t.Fatalf("B prepare count after A terminal = %d, want 1", got)
+	}
+}
+
+func TestFileIntakeJournalListIgnoresTempWriteFiles(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	journal, err := NewFileIntakeJournal(dir)
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	adm := admissionFixture()
+	env, err := EnvelopeFromAdmission(adm)
+	if err != nil {
+		t.Fatalf("EnvelopeFromAdmission: %v", err)
+	}
+	if err := journal.SaveIntakeRecord(ctx, IntakeJournalRecord{
+		StatementID: adm.StatementID,
+		Source:      "snode-A",
+		Env:         env,
+		Admission:   adm,
+		Stage:       LifecycleUnsafeWritten,
+		Prepared:    boundSource(),
+		HasPrepared: true,
+	}); err != nil {
+		t.Fatalf("SaveIntakeRecord: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".tmp-intake-orphan.json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatalf("write orphan temp: %v", err)
+	}
+
+	records, err := journal.ListIntakeRecords(ctx)
+	if err != nil {
+		t.Fatalf("ListIntakeRecords with orphan temp: %v", err)
+	}
+	if len(records) != 1 || records[0].StatementID != adm.StatementID {
+		t.Fatalf("listed records = %#v, want only %s", records, adm.StatementID)
 	}
 }

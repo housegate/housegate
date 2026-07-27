@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -18,6 +20,7 @@ import (
 // statement without re-running an unsafe write.
 type IntakeJournal interface {
 	LoadIntakeRecord(ctx context.Context, statementID string) (IntakeJournalRecord, bool, error)
+	ListIntakeRecords(ctx context.Context) ([]IntakeJournalRecord, error)
 	SaveIntakeRecord(ctx context.Context, record IntakeJournalRecord) error
 }
 
@@ -84,6 +87,45 @@ func (j *FileIntakeJournal) LoadIntakeRecord(ctx context.Context, statementID st
 		return IntakeJournalRecord{}, false, fmt.Errorf("storageintegrity: journal statement id mismatch: file for %s contained %s", statementID, rec.StatementID)
 	}
 	return rec, true, nil
+}
+
+func (j *FileIntakeJournal) ListIntakeRecords(ctx context.Context) ([]IntakeJournalRecord, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(j.dir)
+	if err != nil {
+		return nil, fmt.Errorf("storageintegrity: list intake journal dir: %w", err)
+	}
+	records := make([]IntakeJournalRecord, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" || strings.HasPrefix(entry.Name(), ".tmp-intake-") {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		path := filepath.Join(j.dir, entry.Name())
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("storageintegrity: read intake journal %s: %w", entry.Name(), err)
+		}
+		var rec IntakeJournalRecord
+		if err := json.Unmarshal(b, &rec); err != nil {
+			return nil, fmt.Errorf("storageintegrity: decode intake journal %s: %w", entry.Name(), err)
+		}
+		if rec.StatementID == "" {
+			return nil, fmt.Errorf("storageintegrity: journal file %s missing statement id", entry.Name())
+		}
+		records = append(records, rec)
+	}
+	sort.Slice(records, func(i, k int) bool {
+		if records[i].UpdatedAtUnixMS != records[k].UpdatedAtUnixMS {
+			return records[i].UpdatedAtUnixMS < records[k].UpdatedAtUnixMS
+		}
+		return records[i].StatementID < records[k].StatementID
+	})
+	return records, nil
 }
 
 func (j *FileIntakeJournal) SaveIntakeRecord(ctx context.Context, rec IntakeJournalRecord) error {

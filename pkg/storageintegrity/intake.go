@@ -459,6 +459,10 @@ type Orchestrator struct {
 	mu        sync.Mutex
 	records   map[string]*intakeRecord   // statement_id -> cross-call intake state
 	frontiers map[string]*sourceFrontier // frontier key (source) -> serial gate
+
+	journalRecovered    bool
+	journalRecovering   bool
+	journalRecoveryDone chan struct{}
 }
 
 // intakeRecord is the cross-call coordination state for one statement id. It
@@ -537,8 +541,9 @@ type intakeRecord struct {
 // frontier it already holds during its own retry without deadlocking, with a
 // FIFO waiter queue so distinct statements do not starve.
 type sourceFrontier struct {
-	holder  string // statement_id currently holding the frontier ("" = free)
-	waiters []*frontierWaiter
+	holder    string   // statement_id currently holding the frontier ("" = free)
+	recovered []string // non-terminal journal entries queued behind holder
+	waiters   []*frontierWaiter
 }
 
 type frontierWaiter struct {
@@ -593,6 +598,9 @@ func (o *Orchestrator) Orchestrate(ctx context.Context, adm AdmissionRecord) (In
 	env, err := EnvelopeFromAdmission(adm)
 	if err != nil {
 		return IntakeResult{}, err
+	}
+	if err := o.ensureJournalRecovered(ctx); err != nil {
+		return IntakeResult{StatementID: env.StatementID}, err
 	}
 
 	// Find or create the cross-call record, bind it to the first envelope, and
@@ -1061,6 +1069,85 @@ func (o *Orchestrator) persistRecord(ctx context.Context, rec *intakeRecord) err
 	return o.saveJournalSnapshot(ctx, snap)
 }
 
+func (o *Orchestrator) ensureJournalRecovered(ctx context.Context) error {
+	if o.journal == nil {
+		return nil
+	}
+	for {
+		o.mu.Lock()
+		if o.journalRecovered {
+			o.mu.Unlock()
+			return nil
+		}
+		if o.journalRecovering {
+			done := o.journalRecoveryDone
+			o.mu.Unlock()
+			select {
+			case <-done:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		o.journalRecovering = true
+		o.journalRecoveryDone = make(chan struct{})
+		done := o.journalRecoveryDone
+		o.mu.Unlock()
+
+		records, err := o.journal.ListIntakeRecords(ctx)
+
+		o.mu.Lock()
+		if err == nil {
+			o.recoverJournalRecordsLocked(records)
+			o.journalRecovered = true
+		}
+		o.journalRecovering = false
+		close(done)
+		o.mu.Unlock()
+		if err != nil {
+			return fmt.Errorf("intake: recover journal: %w", err)
+		}
+		return nil
+	}
+}
+
+func (o *Orchestrator) recoverJournalRecordsLocked(records []IntakeJournalRecord) {
+	for _, jrec := range records {
+		if jrec.StatementID == "" || jrec.IsTerminal {
+			continue
+		}
+		if _, exists := o.records[jrec.StatementID]; exists {
+			continue
+		}
+		rec := intakeRecordFromJournalRecord(jrec)
+		if rec.source == "" {
+			rec.source = o.frontierKey()
+		}
+		rec.requirePreparedLookup = needsPreparedLookupAfterRestart(rec)
+		o.records[rec.statementID] = rec
+		o.fenceRecoveredFrontierLocked(rec.source, rec.statementID)
+	}
+}
+
+func (o *Orchestrator) fenceRecoveredFrontierLocked(source, statementID string) {
+	if source == "" || statementID == "" {
+		return
+	}
+	f := o.frontiers[source]
+	if f == nil {
+		f = &sourceFrontier{}
+		o.frontiers[source] = f
+	}
+	if f.holder == "" {
+		f.holder = statementID
+		return
+	}
+	if f.holder == statementID || recoveredHolderQueued(f, statementID) {
+		return
+	}
+	f.recovered = append(f.recovered, statementID)
+}
+
 func (o *Orchestrator) lookupPreparedBeforePrepare(ctx context.Context, rec *intakeRecord) (PreparedLocalResult, bool, error) {
 	o.mu.Lock()
 	required := rec.requirePreparedLookup
@@ -1176,6 +1263,15 @@ func (o *Orchestrator) releaseFrontier(source, statementID string) {
 	if f == nil || f.holder != statementID {
 		return
 	}
+	if len(f.recovered) > 0 {
+		nextID := f.recovered[0]
+		f.recovered = f.recovered[1:]
+		f.holder = nextID
+		if next := removeWaiterByStatement(f, nextID); next != nil {
+			close(next.ready)
+		}
+		return
+	}
 	if len(f.waiters) > 0 {
 		next := f.waiters[0]
 		f.waiters = f.waiters[1:]
@@ -1184,6 +1280,25 @@ func (o *Orchestrator) releaseFrontier(source, statementID string) {
 		return
 	}
 	f.holder = ""
+}
+
+func recoveredHolderQueued(f *sourceFrontier, statementID string) bool {
+	for _, id := range f.recovered {
+		if id == statementID {
+			return true
+		}
+	}
+	return false
+}
+
+func removeWaiterByStatement(f *sourceFrontier, statementID string) *frontierWaiter {
+	for i, cur := range f.waiters {
+		if cur.statementID == statementID {
+			f.waiters = append(f.waiters[:i], f.waiters[i+1:]...)
+			return cur
+		}
+	}
+	return nil
 }
 
 func removeWaiter(f *sourceFrontier, w *frontierWaiter) bool {
