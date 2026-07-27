@@ -329,7 +329,6 @@ func TestRelay_UpstreamException_FiresOnException(t *testing.T) {
 			Name:    "DB::Exception",
 			Message: "Table not found",
 			Stack:   "",
-			Nested:  false,
 		}
 		exc.EncodeAware(&b, rev)
 		_, _ = upstreamProxy.Write(b.Buf)
@@ -427,7 +426,6 @@ func TestRelay_UpstreamException_RewrittenMessageReachesClient(t *testing.T) {
 			Name:    "DB::Exception",
 			Message: "Table physical_db_1.tenant1_events not found",
 			Stack:   "",
-			Nested:  false,
 		}
 		exc.EncodeAware(&b, rev)
 		_, _ = upstreamProxy.Write(b.Buf)
