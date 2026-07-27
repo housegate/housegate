@@ -39,8 +39,24 @@ type StorageIntegrityIngressConfig struct {
 // consumer. It still depends on host-injected ports for the real companion
 // topology; the YAML owns only the fail-fast protocol intent.
 type StorageIntegrityRuntimeConfig struct {
-	Enabled        bool   `json:"enabled"         yaml:"enabled"`
-	ExpectedSource string `json:"expected_source" yaml:"expected_source"`
+	Enabled         bool                                    `json:"enabled"           yaml:"enabled"`
+	ExpectedSource  string                                  `json:"expected_source"   yaml:"expected_source"`
+	JournalDir      string                                  `json:"journal_dir"       yaml:"journal_dir"`
+	PayloadSpoolDir string                                  `json:"payload_spool_dir" yaml:"payload_spool_dir"`
+	MergeGuard      StorageIntegrityRuntimeMergeGuardConfig `json:"merge_guard"       yaml:"merge_guard"`
+}
+
+// StorageIntegrityRuntimeMergeGuardConfig is the production table set that
+// HouseGate guards with table-scoped SYSTEM STOP MERGES at startup.
+type StorageIntegrityRuntimeMergeGuardConfig struct {
+	Tables []StorageIntegrityRuntimeMergeTableConfig `json:"tables" yaml:"tables"`
+}
+
+// StorageIntegrityRuntimeMergeTableConfig identifies one ClickHouse table whose
+// active-part inventory is owned by the storage-integrity runtime.
+type StorageIntegrityRuntimeMergeTableConfig struct {
+	Database string `json:"database" yaml:"database"`
+	Table    string `json:"table"    yaml:"table"`
 }
 
 func defaultStorageIntegrityConfig() StorageIntegrityConfig {
@@ -80,8 +96,27 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 	if c.Ingress.MaxPayloadBytes == 0 {
 		errs = append(errs, errors.New("storage_integrity.ingress.max_payload_bytes must be > 0 when storage_integrity.ingress.enabled"))
 	}
-	if c.Runtime.Enabled && strings.TrimSpace(c.Runtime.ExpectedSource) == "" {
-		errs = append(errs, errors.New("storage_integrity.runtime.expected_source is required when storage_integrity.runtime.enabled"))
+	if c.Runtime.Enabled {
+		if strings.TrimSpace(c.Runtime.ExpectedSource) == "" {
+			errs = append(errs, errors.New("storage_integrity.runtime.expected_source is required when storage_integrity.runtime.enabled"))
+		}
+		if strings.TrimSpace(c.Runtime.JournalDir) == "" {
+			errs = append(errs, errors.New("storage_integrity.runtime.journal_dir is required when storage_integrity.runtime.enabled"))
+		}
+		if strings.TrimSpace(c.Runtime.PayloadSpoolDir) == "" {
+			errs = append(errs, errors.New("storage_integrity.runtime.payload_spool_dir is required when storage_integrity.runtime.enabled"))
+		}
+		if len(c.Runtime.MergeGuard.Tables) == 0 {
+			errs = append(errs, errors.New("storage_integrity.runtime.merge_guard.tables is required when storage_integrity.runtime.enabled"))
+		}
+		for i, table := range c.Runtime.MergeGuard.Tables {
+			if strings.TrimSpace(table.Database) == "" {
+				errs = append(errs, fmt.Errorf("storage_integrity.runtime.merge_guard.tables[%d].database is required", i))
+			}
+			if strings.TrimSpace(table.Table) == "" {
+				errs = append(errs, fmt.Errorf("storage_integrity.runtime.merge_guard.tables[%d].table is required", i))
+			}
+		}
 	}
 	if joined := errors.Join(errs...); joined != nil {
 		return fmt.Errorf("storage_integrity: %w", joined)

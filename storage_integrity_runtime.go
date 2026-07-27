@@ -8,6 +8,7 @@ import (
 
 	pb "github.com/sentioxyz/arbiter-proto/gen/pb"
 
+	"housegate/housegate/pkg/config"
 	siplugin "housegate/housegate/pkg/plugins/storageintegrity"
 	sicore "housegate/housegate/pkg/storageintegrity"
 )
@@ -20,7 +21,8 @@ type StorageIntegrityMergeGuard interface {
 }
 
 // StorageIntegrityRuntimeOptions supplies the host-owned C1/P1e runtime ports.
-// HouseGate can adapt arbiter-proto clients into its core ports, but the
+// HouseGate can adapt arbiter-proto clients into its core ports and can build
+// its durable local journal/spool/merge-guard helpers from config, but the
 // selected-SNode SourcePreparer remains host/companion-owned until that seam
 // exists in arbiter/arbiter-proto.
 type StorageIntegrityRuntimeOptions struct {
@@ -31,11 +33,14 @@ type StorageIntegrityRuntimeOptions struct {
 	SourcePreparer     sicore.SourcePreparer
 	StatusQuerier      sicore.IntakeStatusQuerier
 	PayloadWriter      sicore.PayloadWriter
+	Journal            sicore.IntakeJournal
+	PayloadSpool       *sicore.FilePayloadSpool
+	MergeConn          sicore.MergeConn
 	MergeGuard         StorageIntegrityMergeGuard
 }
 
-func buildStorageIntegrityRuntimeConsumer(cfgExpectedSource string, opts StorageIntegrityRuntimeOptions) (siplugin.AdmissionConsumer, error) {
-	expectedSource := strings.TrimSpace(cfgExpectedSource)
+func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRuntimeConfig, opts StorageIntegrityRuntimeOptions) (siplugin.AdmissionConsumer, StorageIntegrityMergeGuard, error) {
+	expectedSource := strings.TrimSpace(runtimeCfg.ExpectedSource)
 
 	submitter := opts.StatementSubmitter
 	if submitter == nil && opts.ArbiterIngressClient != nil {
@@ -44,6 +49,32 @@ func buildStorageIntegrityRuntimeConsumer(cfgExpectedSource string, opts Storage
 	payloadWriter := opts.PayloadWriter
 	if payloadWriter == nil && opts.PayloadStoreClient != nil {
 		payloadWriter = sicore.NewArbiterPayloadStoreWriter(opts.PayloadStoreClient)
+	}
+
+	journal := opts.Journal
+	if journal == nil && strings.TrimSpace(runtimeCfg.JournalDir) != "" {
+		var err error
+		journal, err = sicore.NewFileIntakeJournal(strings.TrimSpace(runtimeCfg.JournalDir))
+		if err != nil {
+			return nil, nil, fmt.Errorf("storage_integrity.runtime.journal: %w", err)
+		}
+	}
+
+	spool := opts.PayloadSpool
+	if spool == nil && strings.TrimSpace(runtimeCfg.PayloadSpoolDir) != "" {
+		var err error
+		spool, err = sicore.NewFilePayloadSpool(strings.TrimSpace(runtimeCfg.PayloadSpoolDir))
+		if err != nil {
+			return nil, nil, fmt.Errorf("storage_integrity.runtime.payload_spool: %w", err)
+		}
+	}
+	if payloadWriter != nil && spool != nil {
+		payloadWriter = sicore.NewSpoolingPayloadWriter(spool, payloadWriter)
+	}
+
+	mergeGuard, err := buildStorageIntegrityMergeGuard(runtimeCfg.MergeGuard, opts)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	var errs []error
@@ -56,22 +87,62 @@ func buildStorageIntegrityRuntimeConsumer(cfgExpectedSource string, opts Storage
 	if payloadWriter == nil {
 		errs = append(errs, errors.New("storage_integrity.runtime.payload_writer is required"))
 	}
-	if opts.MergeGuard == nil {
-		errs = append(errs, errors.New("storage_integrity.runtime.merge_guard is required"))
+	if journal == nil {
+		errs = append(errs, errors.New("storage_integrity.runtime.journal or journal_dir is required"))
+	}
+	if spool == nil {
+		errs = append(errs, errors.New("storage_integrity.runtime.payload_spool or payload_spool_dir is required"))
+	}
+	if mergeGuard == nil {
+		errs = append(errs, errors.New("storage_integrity.runtime.merge_guard or merge_conn is required"))
 	}
 	if joined := errors.Join(errs...); joined != nil {
-		return nil, joined
+		return nil, nil, joined
 	}
 
 	var orch *sicore.Orchestrator
+	orchCfg := sicore.OrchestratorConfig{ExpectedSource: expectedSource, Journal: journal}
 	if opts.StatusQuerier != nil {
-		orch = sicore.NewOrchestratorWithQuerier(submitter, opts.SourcePreparer, opts.StatusQuerier, sicore.OrchestratorConfig{ExpectedSource: expectedSource})
+		orch = sicore.NewOrchestratorWithQuerier(submitter, opts.SourcePreparer, opts.StatusQuerier, orchCfg)
 	} else {
-		orch = sicore.NewOrchestrator(submitter, opts.SourcePreparer, sicore.OrchestratorConfig{ExpectedSource: expectedSource})
+		orch = sicore.NewOrchestrator(submitter, opts.SourcePreparer, orchCfg)
 	}
-	ingress, err := NewStorageIntegrityIngressWithPayloadWriter(orch, opts.MergeGuard, sicore.MaterializerNative, payloadWriter)
+	ingress, err := NewStorageIntegrityIngressWithPayloadWriter(orch, mergeGuard, sicore.MaterializerNative, payloadWriter)
 	if err != nil {
-		return nil, fmt.Errorf("storage_integrity.runtime: %w", err)
+		return nil, nil, fmt.Errorf("storage_integrity.runtime: %w", err)
 	}
-	return ingress, nil
+	return ingress, mergeGuard, nil
+}
+
+func buildStorageIntegrityMergeGuard(cfg config.StorageIntegrityRuntimeMergeGuardConfig, opts StorageIntegrityRuntimeOptions) (StorageIntegrityMergeGuard, error) {
+	if opts.MergeGuard != nil {
+		return opts.MergeGuard, nil
+	}
+	if opts.MergeConn == nil {
+		return nil, nil
+	}
+	tables, err := storageIntegrityMergeTables(cfg.Tables)
+	if err != nil {
+		return nil, err
+	}
+	return sicore.NewMergeGuard(opts.MergeConn, tables), nil
+}
+
+func storageIntegrityMergeTables(cfgTables []config.StorageIntegrityRuntimeMergeTableConfig) ([]sicore.MergeTable, error) {
+	if len(cfgTables) == 0 {
+		return nil, errors.New("storage_integrity.runtime.merge_guard.tables is required when using merge_conn")
+	}
+	tables := make([]sicore.MergeTable, 0, len(cfgTables))
+	for i, table := range cfgTables {
+		db := strings.TrimSpace(table.Database)
+		tbl := strings.TrimSpace(table.Table)
+		if db == "" {
+			return nil, fmt.Errorf("storage_integrity.runtime.merge_guard.tables[%d].database is required", i)
+		}
+		if tbl == "" {
+			return nil, fmt.Errorf("storage_integrity.runtime.merge_guard.tables[%d].table is required", i)
+		}
+		tables = append(tables, sicore.MergeTable{Database: db, Table: tbl})
+	}
+	return tables, nil
 }

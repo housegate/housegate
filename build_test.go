@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -416,7 +418,7 @@ func TestBuildServer_StorageIntegrityRuntimeRequiresPorts(t *testing.T) {
 		t.Fatalf("NewRelaySigner: %v", err)
 	}
 	cfg := minimalRouterOnlyCfg(t)
-	enableStorageIntegrityRuntimeTestConfig(cfg, signer)
+	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
 
 	_, err = buildServer(Options{
 		Config:       cfg,
@@ -429,7 +431,7 @@ func TestBuildServer_StorageIntegrityRuntimeRequiresPorts(t *testing.T) {
 		"storage_integrity.runtime.statement_submitter is required",
 		"storage_integrity.runtime.source_preparer is required",
 		"storage_integrity.runtime.payload_writer is required",
-		"storage_integrity.runtime.merge_guard is required",
+		"storage_integrity.runtime.merge_guard or merge_conn is required",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("buildServer err = %v, missing %q", err, want)
@@ -443,7 +445,7 @@ func TestBuildServer_StorageIntegrityRuntimeRejectsManualConsumer(t *testing.T) 
 		t.Fatalf("NewRelaySigner: %v", err)
 	}
 	cfg := minimalRouterOnlyCfg(t)
-	enableStorageIntegrityRuntimeTestConfig(cfg, signer)
+	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
 
 	_, err = buildServer(Options{
 		Config:                            cfg,
@@ -467,7 +469,7 @@ func TestBuildServer_StorageIntegrityRuntimeBuildsConsumerAndRunsMergeGuard(t *t
 		t.Fatalf("NewRelaySigner: %v", err)
 	}
 	cfg := minimalRouterOnlyCfg(t)
-	enableStorageIntegrityRuntimeTestConfig(cfg, signer)
+	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
 	cfg.StorageIntegrity.Runtime.ExpectedSource = "  snode-A  "
 
 	guard := &recordingBuildMergeGuard{}
@@ -531,6 +533,50 @@ func TestBuildServer_StorageIntegrityRuntimeBuildsConsumerAndRunsMergeGuard(t *t
 	if submitter.env.PayloadRef != writer.result.PayloadRef || preparer.env.PayloadRef != writer.result.PayloadRef {
 		t.Fatalf("payload_ref submit/prepare = %q/%q, want %q", submitter.env.PayloadRef, preparer.env.PayloadRef, writer.result.PayloadRef)
 	}
+	requireDirHasFiles(t, cfg.StorageIntegrity.Runtime.PayloadSpoolDir, "payload spool", 2)
+	requireDirHasFiles(t, cfg.StorageIntegrity.Runtime.JournalDir, "intake journal", 1)
+}
+
+func TestBuildServer_StorageIntegrityRuntimeBuildsMergeGuardFromConnAndConfig(t *testing.T) {
+	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatalf("NewRelaySigner: %v", err)
+	}
+	cfg := minimalRouterOnlyCfg(t)
+	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
+
+	mergeConn := &recordingBuildMergeConn{}
+	bs, err := buildServer(Options{
+		Config:       cfg,
+		NetworkState: network.NewInMemoryNetworkState(),
+		StorageIntegrityRuntime: StorageIntegrityRuntimeOptions{
+			StatementSubmitter: &rootRecordingSubmitter{outcome: sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}},
+			SourcePreparer:     &rootRecordingPreparer{source: "snode-A", claim: sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"}},
+			PayloadWriter:      &rootRecordingPayloadWriter{result: sicore.PayloadPutResult{PayloadRef: "payload://store/ref-1", State: sicore.PayloadStateAvailable}},
+			MergeConn:          mergeConn,
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("buildServer: %v", err)
+	}
+	defer bs.teardown()
+
+	if err := bs.preServe(context.Background()); err != nil {
+		t.Fatalf("preServe: %v", err)
+	}
+	wantExecs := []string{
+		"SYSTEM STOP MERGES `hg_safe`.`events`",
+		"SYSTEM STOP MERGES `hg_unsafe`.`events`",
+	}
+	if strings.Join(mergeConn.execs, "\n") != strings.Join(wantExecs, "\n") {
+		t.Fatalf("STOP MERGES execs = %v, want %v", mergeConn.execs, wantExecs)
+	}
+	if !mergeConn.queryRan {
+		t.Fatal("merge guard did not run verify query")
+	}
+	if mergeConn.queriedAt != len(wantExecs) {
+		t.Fatalf("verify query ran after %d execs, want %d", mergeConn.queriedAt, len(wantExecs))
+	}
 }
 
 func TestBuildServer_StorageIntegrityRuntimePreServeFailsClosedOnMergeGuardError(t *testing.T) {
@@ -539,7 +585,7 @@ func TestBuildServer_StorageIntegrityRuntimePreServeFailsClosedOnMergeGuardError
 		t.Fatalf("NewRelaySigner: %v", err)
 	}
 	cfg := minimalRouterOnlyCfg(t)
-	enableStorageIntegrityRuntimeTestConfig(cfg, signer)
+	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
 
 	guard := &recordingBuildMergeGuard{err: errors.New("native merge still active")}
 	bs, err := buildServer(Options{
@@ -580,6 +626,17 @@ func requireStorageIntegrityQueryPlugin(t *testing.T, chain *plugin.PluginChain)
 		t.Fatal("storage-integrity ingress missing from QueryPlugins")
 	}
 	return found
+}
+
+func requireDirHasFiles(t *testing.T, dir, label string, minFiles int) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read %s dir %s: %v", label, dir, err)
+	}
+	if len(entries) < minFiles {
+		t.Fatalf("%s dir %s has %d files, want at least %d", label, dir, len(entries), minFiles)
+	}
 }
 
 func requireStorageIntegrityStrictDataPlugin(t *testing.T, chain *plugin.PluginChain, want *storageintegrity.Plugin) {
@@ -726,7 +783,8 @@ func (m *recordingBuildPayloadMaterializer) MaterializePayload(_ context.Context
 	return m.out, nil
 }
 
-func enableStorageIntegrityRuntimeTestConfig(cfg *config.Config, signer *auth.RelaySigner) {
+func enableStorageIntegrityRuntimeTestConfig(t *testing.T, cfg *config.Config, signer *auth.RelaySigner) {
+	t.Helper()
 	cfg.StorageIntegrity.Ingress.Enabled = true
 	cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{signer.Address()}
 	cfg.StorageIntegrity.Ingress.MaxTokenAge.Duration = time.Minute
@@ -734,6 +792,13 @@ func enableStorageIntegrityRuntimeTestConfig(cfg *config.Config, signer *auth.Re
 	cfg.StorageIntegrity.Ingress.MaxPayloadBytes = 64
 	cfg.StorageIntegrity.Runtime.Enabled = true
 	cfg.StorageIntegrity.Runtime.ExpectedSource = "snode-A"
+	runtimeDir := t.TempDir()
+	cfg.StorageIntegrity.Runtime.JournalDir = filepath.Join(runtimeDir, "journal")
+	cfg.StorageIntegrity.Runtime.PayloadSpoolDir = filepath.Join(runtimeDir, "payload-spool")
+	cfg.StorageIntegrity.Runtime.MergeGuard.Tables = []config.StorageIntegrityRuntimeMergeTableConfig{
+		{Database: "hg_safe", Table: "events"},
+		{Database: "hg_unsafe", Table: "events"},
+	}
 }
 
 type recordingBuildMergeGuard struct {
@@ -745,3 +810,27 @@ func (g *recordingBuildMergeGuard) AssertStopMerges(context.Context) error {
 	g.calls++
 	return g.err
 }
+
+type recordingBuildMergeConn struct {
+	execs     []string
+	queryRan  bool
+	queriedAt int
+}
+
+func (c *recordingBuildMergeConn) Exec(_ context.Context, query string, _ ...any) error {
+	c.execs = append(c.execs, query)
+	return nil
+}
+
+func (c *recordingBuildMergeConn) Query(_ context.Context, _ string, _ ...any) (sicore.MergeRows, error) {
+	c.queryRan = true
+	c.queriedAt = len(c.execs)
+	return recordingBuildMergeRows{}, nil
+}
+
+type recordingBuildMergeRows struct{}
+
+func (recordingBuildMergeRows) Next() bool        { return false }
+func (recordingBuildMergeRows) Scan(...any) error { return nil }
+func (recordingBuildMergeRows) Err() error        { return nil }
+func (recordingBuildMergeRows) Close() error      { return nil }

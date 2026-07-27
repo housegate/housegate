@@ -604,12 +604,12 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			if admissionConsumer != nil {
 				return nil, fmt.Errorf("storage_integrity.runtime.enabled cannot be combined with StorageIntegrityAdmissionConsumer")
 			}
-			consumer, err := buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime.ExpectedSource, opts.StorageIntegrityRuntime)
+			consumer, guard, err := buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, opts.StorageIntegrityRuntime)
 			if err != nil {
 				return nil, err
 			}
 			admissionConsumer = consumer
-			storageIntegrityMergeGuard = opts.StorageIntegrityRuntime.MergeGuard
+			storageIntegrityMergeGuard = guard
 		}
 		if admissionConsumer == nil {
 			return nil, fmt.Errorf("storage_integrity.ingress admission consumer is required when enabled")

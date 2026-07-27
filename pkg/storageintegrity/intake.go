@@ -401,6 +401,7 @@ type SourcePreparer interface {
 // for this HouseGate's statements. A committed-source mismatch fails closed.
 type OrchestratorConfig struct {
 	ExpectedSource string
+	Journal        IntakeJournal
 }
 
 // IntakeResult is the orchestration outcome for one admission.
@@ -427,14 +428,14 @@ type IntakeResult struct {
 // Orchestrator runs the staged intake for one admission: it starts
 // PrepareLocalStatement and SubmitStatement in parallel, and registers the
 // result claim only after SubmitStatement is accepted (the RC gate). It is pure
-// HouseGate-local coordination over the two ports; it holds no ClickHouse,
-// payload-store, journal, or Arbiter state of its own. Persistent intake
-// journaling, ACK2 delivery wiring, retryable/unknown convergence, and crash
-// recovery arrive in later PRs.
+// HouseGate-local coordination over the staged-intake ports plus an optional
+// durable journal; it holds no ClickHouse, payload-store, or Arbiter state of
+// its own.
 type Orchestrator struct {
 	submitter StatementSubmitter
 	preparer  SourcePreparer
 	cfg       OrchestratorConfig
+	journal   IntakeJournal
 
 	// querier is the optional status-query port (PR05). When non-nil, an
 	// indeterminate (Unknown) submit/RC outcome is converged by querying the
@@ -538,6 +539,7 @@ func NewOrchestrator(submitter StatementSubmitter, preparer SourcePreparer, cfg 
 		submitter: submitter,
 		preparer:  preparer,
 		cfg:       cfg,
+		journal:   cfg.Journal,
 		records:   map[string]*intakeRecord{},
 		frontiers: map[string]*sourceFrontier{},
 	}
@@ -578,11 +580,28 @@ func (o *Orchestrator) Orchestrate(ctx context.Context, adm AdmissionRecord) (In
 	// Find or create the cross-call record, bind it to the first envelope, and
 	// become this statement's attempt owner (or wait for the in-flight attempt /
 	// return the terminal outcome).
+	var created bool
 	o.mu.Lock()
 	rec := o.records[env.StatementID]
+	if rec == nil && o.journal != nil {
+		o.mu.Unlock()
+		jrec, ok, err := o.journal.LoadIntakeRecord(ctx, env.StatementID)
+		if err != nil {
+			return IntakeResult{StatementID: env.StatementID}, err
+		}
+		o.mu.Lock()
+		if rec = o.records[env.StatementID]; rec == nil && ok {
+			rec = intakeRecordFromJournalRecord(jrec)
+			if rec.source == "" {
+				rec.source = o.frontierKey()
+			}
+			o.records[env.StatementID] = rec
+		}
+	}
 	if rec == nil {
-		rec = &intakeRecord{statementID: env.StatementID, source: o.frontierKey(), env: env, adm: adm}
+		rec = &intakeRecord{statementID: env.StatementID, source: o.frontierKey(), env: env, adm: adm, stage: LifecyclePreparing}
 		o.records[env.StatementID] = rec
+		created = true
 	} else if !sameStatement(rec.env, rec.adm, env, adm) {
 		// The statement id is already bound to a different envelope. A retry may
 		// not swap the SQL/target/kind/signer/JWS/payload under a reused id and
@@ -611,6 +630,12 @@ func (o *Orchestrator) Orchestrate(ctx context.Context, adm AdmissionRecord) (In
 	rec.active = true
 	rec.done = make(chan struct{})
 	o.mu.Unlock()
+	if created {
+		if err := o.persistRecord(ctx, rec); err != nil {
+			o.finishAttempt(rec, IntakeResult{StatementID: env.StatementID}, err, false)
+			return IntakeResult{StatementID: env.StatementID}, err
+		}
+	}
 
 	// Acquire the source frontier before any source write. This is re-entrant
 	// for the statement that already holds it (its own retry passes through) and
@@ -708,7 +733,9 @@ func (o *Orchestrator) run(ctx context.Context, env StatementEnvelope, adm Admis
 			}
 			// Prepare succeeded: cache it so any retry never re-runs the unsafe
 			// write, even if submit errored or is non-terminal below.
-			o.cachePrepared(rec, p)
+			if err := o.cachePrepared(ctx, rec, p); err != nil {
+				return IntakeResult{StatementID: env.StatementID, Prepared: p}, err
+			}
 			prepared = p
 			if submitErr != nil {
 				return IntakeResult{StatementID: env.StatementID, Prepared: p}, fmt.Errorf("intake: submit failed for %s: %w", env.StatementID, submitErr)
@@ -765,7 +792,9 @@ func (o *Orchestrator) afterSubmit(ctx context.Context, env StatementEnvelope, p
 	// Record whether it was indeterminate so a resume knows to query submit
 	// status before re-sending (PR05); a plain retryable is safe to re-send.
 	if !submit.Category.PermitsAck2() {
-		o.setSubmitUnknown(rec, submit.Category == OutcomeUnknown)
+		if err := o.setSubmitUnknown(ctx, rec, submit.Category == OutcomeUnknown); err != nil {
+			return true, res, err
+		}
 		return true, res, nil
 	}
 
@@ -785,8 +814,12 @@ func (o *Orchestrator) afterSubmit(ctx context.Context, env StatementEnvelope, p
 	// Cache the accepted submit outcome verbatim before advancing the stage, so a
 	// resume from SubmitAccepted (which does not re-run SubmitStatement) still
 	// reports whether the submit was a fresh accept or an exact re-ack.
-	o.cacheSubmit(rec, submit)
-	o.setStage(rec, LifecycleSubmitAccepted)
+	if err := o.cacheSubmit(ctx, rec, submit); err != nil {
+		return true, res, err
+	}
+	if err := o.setStage(ctx, rec, LifecycleSubmitAccepted); err != nil {
+		return true, res, err
+	}
 	return false, res, nil
 }
 
@@ -834,7 +867,9 @@ func (o *Orchestrator) finalizeClaim(ctx context.Context, prepared PreparedLocal
 	// whether it was indeterminate so a resume queries claim status before
 	// re-registering (PR05); a plain retryable is safe to re-register.
 	if !claim.Category.PermitsAck2() {
-		o.setClaimUnknown(rec, claim.Category == OutcomeUnknown)
+		if err := o.setClaimUnknown(ctx, rec, claim.Category == OutcomeUnknown); err != nil {
+			return res, err
+		}
 		return res, nil
 	}
 
@@ -855,7 +890,9 @@ func (o *Orchestrator) finalizeClaim(ctx context.Context, prepared PreparedLocal
 	// state. Reaching here means the local write is complete and durable (the
 	// prepared candidate was cached), so those inputs are set true.
 	res.Lifecycle = LifecycleRCBound
-	o.setStage(rec, LifecycleRCBound)
+	if err := o.setStage(ctx, rec, LifecycleRCBound); err != nil {
+		return res, err
+	}
 	ack, reason := Ack2Ready(Ack2Inputs{
 		PayloadDurable:   true,
 		UnsafeWriteDone:  true,
@@ -874,6 +911,9 @@ func (o *Orchestrator) finalizeClaim(ctx context.Context, prepared PreparedLocal
 	}
 	res.Ack2 = true
 	res.terminal = true
+	if err := o.setTerminal(ctx, rec, res); err != nil {
+		return res, err
+	}
 	return res, nil
 }
 
@@ -892,13 +932,18 @@ func (o *Orchestrator) finalizeClaim(ctx context.Context, prepared PreparedLocal
 func (o *Orchestrator) abort(ctx context.Context, res IntakeResult, rec *intakeRecord, reason string) (IntakeResult, error) {
 	res.Ack2 = false
 	res.Lifecycle = LifecycleAbortPending
-	o.setAbortPending(rec, reason)
+	if err := o.setAbortPending(ctx, rec, reason); err != nil {
+		return res, err
+	}
 	parts := o.abortParts(rec)
 	if err := o.preparer.AbortPreparedStatement(ctx, res.StatementID, parts, reason); err != nil {
 		return res, fmt.Errorf("intake: abort failed for %s (%s): %w", res.StatementID, reason, err)
 	}
 	res.Lifecycle = LifecycleCleaned
 	res.terminal = true
+	if err := o.setTerminal(ctx, rec, res); err != nil {
+		return res, err
+	}
 	return res, nil
 }
 
@@ -923,11 +968,13 @@ func (o *Orchestrator) resultFor(rec *intakeRecord) IntakeResult {
 // cacheSubmit stores the accepted submit outcome verbatim so a later resume
 // reports the true submit category rather than synthesizing one. It is called
 // only for an ACK2-permitting outcome, as the record advances to SubmitAccepted.
-func (o *Orchestrator) cacheSubmit(rec *intakeRecord, submit SubmitOutcome) {
+func (o *Orchestrator) cacheSubmit(ctx context.Context, rec *intakeRecord, submit SubmitOutcome) error {
 	o.mu.Lock()
-	defer o.mu.Unlock()
 	rec.submit = submit
 	rec.hasSubmit = true
+	snap := journalRecordFromIntakeRecord(rec)
+	o.mu.Unlock()
+	return o.saveJournalSnapshot(ctx, snap)
 }
 
 func (o *Orchestrator) cachedPrepared(rec *intakeRecord) (PreparedLocalResult, bool) {
@@ -936,29 +983,62 @@ func (o *Orchestrator) cachedPrepared(rec *intakeRecord) (PreparedLocalResult, b
 	return rec.prepared, rec.hasPrepared
 }
 
-func (o *Orchestrator) cachePrepared(rec *intakeRecord, prepared PreparedLocalResult) {
+func (o *Orchestrator) cachePrepared(ctx context.Context, rec *intakeRecord, prepared PreparedLocalResult) error {
 	o.mu.Lock()
-	defer o.mu.Unlock()
 	rec.prepared = prepared
 	rec.hasPrepared = true
 	if rankLifecycle(rec.stage) < rankLifecycle(LifecycleUnsafeWritten) {
 		rec.stage = LifecycleUnsafeWritten
 	}
+	snap := journalRecordFromIntakeRecord(rec)
+	o.mu.Unlock()
+	return o.saveJournalSnapshot(ctx, snap)
 }
 
-func (o *Orchestrator) setStage(rec *intakeRecord, stage Lifecycle) {
+func (o *Orchestrator) setStage(ctx context.Context, rec *intakeRecord, stage Lifecycle) error {
 	o.mu.Lock()
-	defer o.mu.Unlock()
 	if rankLifecycle(stage) > rankLifecycle(rec.stage) {
 		rec.stage = stage
 	}
+	snap := journalRecordFromIntakeRecord(rec)
+	o.mu.Unlock()
+	return o.saveJournalSnapshot(ctx, snap)
 }
 
-func (o *Orchestrator) setAbortPending(rec *intakeRecord, reason string) {
+func (o *Orchestrator) setAbortPending(ctx context.Context, rec *intakeRecord, reason string) error {
 	o.mu.Lock()
-	defer o.mu.Unlock()
 	rec.stage = LifecycleAbortPending
 	rec.abortReason = reason
+	snap := journalRecordFromIntakeRecord(rec)
+	o.mu.Unlock()
+	return o.saveJournalSnapshot(ctx, snap)
+}
+
+func (o *Orchestrator) setTerminal(ctx context.Context, rec *intakeRecord, res IntakeResult) error {
+	o.mu.Lock()
+	rec.stage = res.Lifecycle
+	rec.isTerminal = true
+	rec.terminalRes = res
+	snap := journalRecordFromIntakeRecord(rec)
+	o.mu.Unlock()
+	return o.saveJournalSnapshot(ctx, snap)
+}
+
+func (o *Orchestrator) persistRecord(ctx context.Context, rec *intakeRecord) error {
+	o.mu.Lock()
+	snap := journalRecordFromIntakeRecord(rec)
+	o.mu.Unlock()
+	return o.saveJournalSnapshot(ctx, snap)
+}
+
+func (o *Orchestrator) saveJournalSnapshot(ctx context.Context, snap IntakeJournalRecord) error {
+	if o.journal == nil {
+		return nil
+	}
+	if err := o.journal.SaveIntakeRecord(ctx, snap); err != nil {
+		return fmt.Errorf("intake: persist journal for %s: %w", snap.StatementID, err)
+	}
+	return nil
 }
 
 // rankLifecycle orders the linear success stages so setStage never regresses.
