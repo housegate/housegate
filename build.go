@@ -245,7 +245,7 @@ type serverListener struct {
 // cleanup of every lib-built dep.
 type builtServer struct {
 	listeners []serverListener
-	preServe  func(ctx context.Context)
+	preServe  func(ctx context.Context) error
 	teardown  func()
 	// metricsRegistry is the dedicated Prometheus registry for the downstream
 	// metrics Collector (nil when collection is disabled or in agent mode).
@@ -597,8 +597,21 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	}
 
 	var storageIntegrityIngress *storageintegrity.Plugin
+	var storageIntegrityMergeGuard StorageIntegrityMergeGuard
 	if cfg.StorageIntegrity.Ingress.Enabled {
-		if opts.StorageIntegrityAdmissionConsumer == nil {
+		admissionConsumer := opts.StorageIntegrityAdmissionConsumer
+		if cfg.StorageIntegrity.Runtime.Enabled {
+			if admissionConsumer != nil {
+				return nil, fmt.Errorf("storage_integrity.runtime.enabled cannot be combined with StorageIntegrityAdmissionConsumer")
+			}
+			consumer, err := buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime.ExpectedSource, opts.StorageIntegrityRuntime)
+			if err != nil {
+				return nil, err
+			}
+			admissionConsumer = consumer
+			storageIntegrityMergeGuard = opts.StorageIntegrityRuntime.MergeGuard
+		}
+		if admissionConsumer == nil {
 			return nil, fmt.Errorf("storage_integrity.ingress admission consumer is required when enabled")
 		}
 		ingressCfg := cfg.StorageIntegrity.Ingress
@@ -616,7 +629,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			Purpose:             auth.QueryPurpose,
 			RequestTimeout:      ingressCfg.RequestTimeout.Duration,
 			MaxPayloadBytes:     ingressCfg.MaxPayloadBytes,
-			AdmissionConsumer:   opts.StorageIntegrityAdmissionConsumer,
+			AdmissionConsumer:   admissionConsumer,
 			PayloadMaterializer: opts.StorageIntegrityPayloadMaterializer,
 		})
 		queryPlugins = append(queryPlugins, storageIntegrityIngress)
@@ -630,6 +643,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			"max_token_age", ingressCfg.MaxTokenAge.Duration,
 			"request_timeout", ingressCfg.RequestTimeout.Duration,
 			"max_payload_bytes", ingressCfg.MaxPayloadBytes,
+			"runtime_enabled", cfg.StorageIntegrity.Runtime.Enabled,
 		)
 	}
 
@@ -816,7 +830,13 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	return &builtServer{
 		listeners:       listeners,
 		metricsRegistry: metricsRegistry,
-		preServe: func(ctx context.Context) {
+		preServe: func(ctx context.Context) error {
+			if storageIntegrityMergeGuard != nil {
+				if err := storageIntegrityMergeGuard.AssertStopMerges(ctx); err != nil {
+					return fmt.Errorf("storage_integrity.merge_guard: %w", err)
+				}
+				log.Info("storage_integrity merge guard asserted")
+			}
 			if libCluster != nil {
 				libCluster.Start(ctx)
 				if cfg.Shard != nil {
@@ -829,6 +849,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 				go metricsCollector.Start(ctx)
 				log.Infow("metrics collector started", "interval", cfg.Observability.Collector.Interval.Duration)
 			}
+			return nil
 		},
 		teardown: func() {
 			// Reverse order, mirroring runServer's defer stack.
@@ -941,7 +962,7 @@ func buildAgent(opts Options, rf *redisFactory) (*builtServer, error) {
 		listeners: []serverListener{
 			{Runner: &proxyServerRunner{server: srv}, ListenAddr: cfg.Listen, Label: "agent"},
 		},
-		preServe: func(context.Context) {},
+		preServe: func(context.Context) error { return nil },
 		teardown: func() {
 			if materializerClose != nil {
 				materializerClose()

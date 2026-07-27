@@ -22,6 +22,9 @@ func TestStorageIntegrityDisabledIsNoOp(t *testing.T) {
 	if cfg.StorageIntegrity.Ingress.MaxPayloadBytes <= 0 {
 		t.Fatalf("storage_integrity.ingress.max_payload_bytes = %d, want positive default", cfg.StorageIntegrity.Ingress.MaxPayloadBytes)
 	}
+	if cfg.StorageIntegrity.Runtime.Enabled {
+		t.Fatal("storage_integrity.runtime.enabled defaulted true, want false")
+	}
 }
 
 func TestConfigValidateStorageIntegrityIngress(t *testing.T) {
@@ -84,6 +87,44 @@ func TestConfigValidateStorageIntegrityIngress(t *testing.T) {
 		err := cfg.Validate()
 		if err == nil || !strings.Contains(err.Error(), "max_payload_bytes") {
 			t.Fatalf("Validate err = %v, want max payload rejection", err)
+		}
+	})
+
+	t.Run("runtime enabled requires ingress", func(t *testing.T) {
+		cfg := minimalServerConfig(t)
+		cfg.StorageIntegrity.Runtime.Enabled = true
+		cfg.StorageIntegrity.Runtime.ExpectedSource = "snode-A"
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "storage_integrity.runtime.enabled requires storage_integrity.ingress.enabled") {
+			t.Fatalf("Validate err = %v, want runtime ingress dependency rejection", err)
+		}
+	})
+
+	t.Run("runtime enabled requires expected source", func(t *testing.T) {
+		cfg := minimalServerConfig(t)
+		cfg.StorageIntegrity.Ingress.Enabled = true
+		cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{"0x1111111111111111111111111111111111111111"}
+		cfg.StorageIntegrity.Ingress.MaxTokenAge.Duration = time.Minute
+		cfg.StorageIntegrity.Ingress.RequestTimeout.Duration = 5 * time.Second
+		cfg.StorageIntegrity.Ingress.MaxPayloadBytes = defaultStorageIntegrityMaxPayloadBytes
+		cfg.StorageIntegrity.Runtime.Enabled = true
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "storage_integrity.runtime.expected_source") {
+			t.Fatalf("Validate err = %v, want expected source rejection", err)
+		}
+	})
+
+	t.Run("runtime enabled accepts expected source", func(t *testing.T) {
+		cfg := minimalServerConfig(t)
+		cfg.StorageIntegrity.Ingress.Enabled = true
+		cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{"0x1111111111111111111111111111111111111111"}
+		cfg.StorageIntegrity.Ingress.MaxTokenAge.Duration = time.Minute
+		cfg.StorageIntegrity.Ingress.RequestTimeout.Duration = 5 * time.Second
+		cfg.StorageIntegrity.Ingress.MaxPayloadBytes = defaultStorageIntegrityMaxPayloadBytes
+		cfg.StorageIntegrity.Runtime.Enabled = true
+		cfg.StorageIntegrity.Runtime.ExpectedSource = "snode-A"
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("storage integrity runtime config should validate: %v", err)
 		}
 	})
 }

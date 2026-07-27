@@ -27,7 +27,7 @@ import (
 // ACK2 (see CompanionStagedIntakeAvailable).
 type StorageIntegrityIngress struct {
 	orch          *sicore.Orchestrator
-	guard         *sicore.MergeGuard
+	guard         StorageIntegrityMergeGuard
 	matKind       sicore.MaterializerKind
 	payloadWriter sicore.PayloadWriter
 }
@@ -35,7 +35,7 @@ type StorageIntegrityIngress struct {
 // NewStorageIntegrityIngress constructs the ingress runtime over an orchestrator
 // and the selected materializer kind. The merge guard is optional (nil when no
 // ClickHouse connection is wired). A nil orchestrator is a wiring error.
-func NewStorageIntegrityIngress(orch *sicore.Orchestrator, guard *sicore.MergeGuard, matKind sicore.MaterializerKind) (*StorageIntegrityIngress, error) {
+func NewStorageIntegrityIngress(orch *sicore.Orchestrator, guard StorageIntegrityMergeGuard, matKind sicore.MaterializerKind) (*StorageIntegrityIngress, error) {
 	return NewStorageIntegrityIngressWithPayloadWriter(orch, guard, matKind, nil)
 }
 
@@ -44,7 +44,7 @@ func NewStorageIntegrityIngress(orch *sicore.Orchestrator, guard *sicore.MergeGu
 // previous local content-addressed payload_ref fallback; production P1 wiring
 // should pass a real PayloadWriter so SubmitStatement carries an opaque
 // PayloadStore ref.
-func NewStorageIntegrityIngressWithPayloadWriter(orch *sicore.Orchestrator, guard *sicore.MergeGuard, matKind sicore.MaterializerKind, writer sicore.PayloadWriter) (*StorageIntegrityIngress, error) {
+func NewStorageIntegrityIngressWithPayloadWriter(orch *sicore.Orchestrator, guard StorageIntegrityMergeGuard, matKind sicore.MaterializerKind, writer sicore.PayloadWriter) (*StorageIntegrityIngress, error) {
 	if orch == nil {
 		return nil, fmt.Errorf("storage_integrity ingress: orchestrator is required")
 	}
