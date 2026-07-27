@@ -17,6 +17,7 @@ go_library(
         "proxy.go",
         "redis.go",
         "storage_integrity_ingress.go",
+        "storage_integrity_runtime.go",
     ],
     importpath = "housegate/housegate",
     visibility = ["//visibility:public"],
@@ -57,6 +58,7 @@ go_library(
         "//pkg/storageintegrity",
         "@com_github_prometheus_client_golang//prometheus",
         "@com_github_redis_go_redis_v9//:go-redis",
+        "@com_github_sentioxyz_arbiter_proto//gen/pb",
         "@org_golang_x_sync//errgroup",
     ],
 )

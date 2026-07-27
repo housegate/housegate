@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -11,6 +12,7 @@ const defaultStorageIntegrityMaxPayloadBytes uint64 = 64 << 20
 // StorageIntegrityConfig owns HouseGate-local storage-integrity toggles.
 type StorageIntegrityConfig struct {
 	Ingress    StorageIntegrityIngressConfig    `json:"ingress"     yaml:"ingress"`
+	Runtime    StorageIntegrityRuntimeConfig    `json:"runtime"     yaml:"runtime"`
 	SafeMerges StorageIntegritySafeMergesConfig `json:"safe_merges" yaml:"safe_merges"`
 }
 
@@ -33,6 +35,14 @@ type StorageIntegrityIngressConfig struct {
 	MaxPayloadBytes  uint64   `json:"max_payload_bytes" yaml:"max_payload_bytes"`
 }
 
+// StorageIntegrityRuntimeConfig turns on HouseGate's built-in P1e runtime
+// consumer. It still depends on host-injected ports for the real companion
+// topology; the YAML owns only the fail-fast protocol intent.
+type StorageIntegrityRuntimeConfig struct {
+	Enabled        bool   `json:"enabled"         yaml:"enabled"`
+	ExpectedSource string `json:"expected_source" yaml:"expected_source"`
+}
+
 func defaultStorageIntegrityConfig() StorageIntegrityConfig {
 	return StorageIntegrityConfig{
 		Ingress: StorageIntegrityIngressConfig{
@@ -46,6 +56,9 @@ func defaultStorageIntegrityConfig() StorageIntegrityConfig {
 
 func (c StorageIntegrityConfig) validate(mode Mode) error {
 	if !c.Ingress.Enabled {
+		if c.Runtime.Enabled {
+			return errors.New("storage_integrity: storage_integrity.runtime.enabled requires storage_integrity.ingress.enabled")
+		}
 		return nil
 	}
 	var errs []error
@@ -66,6 +79,9 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 	}
 	if c.Ingress.MaxPayloadBytes == 0 {
 		errs = append(errs, errors.New("storage_integrity.ingress.max_payload_bytes must be > 0 when storage_integrity.ingress.enabled"))
+	}
+	if c.Runtime.Enabled && strings.TrimSpace(c.Runtime.ExpectedSource) == "" {
+		errs = append(errs, errors.New("storage_integrity.runtime.expected_source is required when storage_integrity.runtime.enabled"))
 	}
 	if joined := errors.Join(errs...); joined != nil {
 		return fmt.Errorf("storage_integrity: %w", joined)

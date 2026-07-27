@@ -186,7 +186,9 @@ func TestPhase2Pivot_ExternalHello_PivotsToFakePeer(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	bs.preServe(ctx)
+	if err := bs.preServe(ctx); err != nil {
+		t.Fatalf("preServe: %v", err)
+	}
 	externalServer := requireProxyServer(t, *externalSL)
 	go func() { _ = externalServer.Serve(ctx, ln) }()
 
