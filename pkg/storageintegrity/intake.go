@@ -397,6 +397,17 @@ type SourcePreparer interface {
 	AbortPreparedStatement(ctx context.Context, statementID string, parts []CandidatePart, reason string) error
 }
 
+// PreparedStatementLookup is the optional source-side recovery read used after
+// a restart finds a journal record that proves the statement existed locally
+// but does not prove whether PrepareLocalStatement had already returned a
+// durable unsafe write. Implementations must be read-only: found=false means no
+// prepared unsafe write exists for that statement id, so a fresh prepare is
+// safe; found=true returns the exact durable PreparedLocalResult to cache before
+// resuming submit/RC.
+type PreparedStatementLookup interface {
+	LookupPreparedStatement(ctx context.Context, statementID string) (PreparedLocalResult, bool, error)
+}
+
 // OrchestratorConfig pins the deterministic source the FSM is expected to record
 // for this HouseGate's statements. A committed-source mismatch fails closed.
 type OrchestratorConfig struct {
@@ -506,6 +517,13 @@ type intakeRecord struct {
 	stage       Lifecycle
 	abortReason string // set when stage == AbortPending, so a retry re-aborts with the original reason
 
+	// requirePreparedLookup is set only for process-local records loaded from a
+	// durable journal state that predates HasPrepared. A restart cannot know
+	// whether the previous process crashed before prepare or after a durable
+	// source write but before the journal save, so it must perform source lookup
+	// before any new PrepareLocalStatement.
+	requirePreparedLookup bool
+
 	// Terminal cache: an Ack2 or a successfully Cleaned abort. A repeated call
 	// returns terminalRes without re-running anything.
 	terminalRes IntakeResult
@@ -595,6 +613,7 @@ func (o *Orchestrator) Orchestrate(ctx context.Context, adm AdmissionRecord) (In
 			if rec.source == "" {
 				rec.source = o.frontierKey()
 			}
+			rec.requirePreparedLookup = needsPreparedLookupAfterRestart(rec)
 			o.records[env.StatementID] = rec
 		}
 	}
@@ -706,6 +725,16 @@ func (o *Orchestrator) run(ctx context.Context, env StatementEnvelope, adm Admis
 		// Stages "" / Preparing / UnsafeWritten: submit is not yet accepted, so
 		// it must run this attempt. Prepare runs only if not already cached.
 		var submit SubmitOutcome
+		if !hasPrepared {
+			lookedUp, ok, err := o.lookupPreparedBeforePrepare(ctx, rec)
+			if err != nil {
+				return IntakeResult{StatementID: env.StatementID}, err
+			}
+			if ok {
+				prepared = lookedUp
+				hasPrepared = true
+			}
+		}
 		if hasPrepared {
 			// A prior submit was retryable/unknown or errored: converge only the
 			// submit; never re-run the unsafe write. If the prior outcome was
@@ -987,6 +1016,7 @@ func (o *Orchestrator) cachePrepared(ctx context.Context, rec *intakeRecord, pre
 	o.mu.Lock()
 	rec.prepared = prepared
 	rec.hasPrepared = true
+	rec.requirePreparedLookup = false
 	if rankLifecycle(rec.stage) < rankLifecycle(LifecycleUnsafeWritten) {
 		rec.stage = LifecycleUnsafeWritten
 	}
@@ -1029,6 +1059,42 @@ func (o *Orchestrator) persistRecord(ctx context.Context, rec *intakeRecord) err
 	snap := journalRecordFromIntakeRecord(rec)
 	o.mu.Unlock()
 	return o.saveJournalSnapshot(ctx, snap)
+}
+
+func (o *Orchestrator) lookupPreparedBeforePrepare(ctx context.Context, rec *intakeRecord) (PreparedLocalResult, bool, error) {
+	o.mu.Lock()
+	required := rec.requirePreparedLookup
+	statementID := rec.statementID
+	o.mu.Unlock()
+	if !required {
+		return PreparedLocalResult{}, false, nil
+	}
+
+	lookup, ok := o.preparer.(PreparedStatementLookup)
+	if !ok {
+		return PreparedLocalResult{}, false, fmt.Errorf("intake: prepared lookup required before re-running prepare for %s", statementID)
+	}
+	prepared, found, err := lookup.LookupPreparedStatement(ctx, statementID)
+	if err != nil {
+		return PreparedLocalResult{}, false, fmt.Errorf("intake: lookup prepared statement %s: %w", statementID, err)
+	}
+	if !found {
+		o.mu.Lock()
+		rec.requirePreparedLookup = false
+		o.mu.Unlock()
+		return PreparedLocalResult{}, false, nil
+	}
+	if err := o.cachePrepared(ctx, rec, prepared); err != nil {
+		return PreparedLocalResult{}, false, err
+	}
+	return prepared, true, nil
+}
+
+func needsPreparedLookupAfterRestart(rec *intakeRecord) bool {
+	if rec == nil || rec.hasPrepared || rec.isTerminal {
+		return false
+	}
+	return rec.stage == "" || rec.stage == LifecyclePreparing
 }
 
 func (o *Orchestrator) saveJournalSnapshot(ctx context.Context, snap IntakeJournalRecord) error {
