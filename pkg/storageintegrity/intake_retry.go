@@ -100,13 +100,17 @@ func (o *Orchestrator) convergeUnknownSubmit(ctx context.Context, env StatementE
 	switch classifyQueryConvergence(status.Category) {
 	case convergeForward, convergeReject:
 		// A definite answer: hand it to afterSubmit as the effective submit result.
-		o.setSubmitUnknown(rec, false)
+		if err := o.setSubmitUnknown(ctx, rec, false); err != nil {
+			return false, SubmitOutcome{}, err
+		}
 		return true, status, nil
 	default: // convergeResend
 		// Still no record / transient: fall through to an idempotent re-send. Clear
 		// the flag so the re-send path is a plain submit (it will re-set the flag if
 		// it, too, comes back unknown).
-		o.setSubmitUnknown(rec, false)
+		if err := o.setSubmitUnknown(ctx, rec, false); err != nil {
+			return false, SubmitOutcome{}, err
+		}
 		return false, SubmitOutcome{}, nil
 	}
 }
@@ -131,26 +135,34 @@ func (o *Orchestrator) convergeUnknownClaim(ctx context.Context, prepared Prepar
 	if classifyQueryConvergence(status.Category) == convergeResend {
 		// Still no record / transient: re-register on this attempt. Clear the flag
 		// so the re-register path is plain (it re-sets the flag if still unknown).
-		o.setClaimUnknown(rec, false)
+		if err := o.setClaimUnknown(ctx, rec, false); err != nil {
+			return IntakeResult{}, err, true
+		}
 		return IntakeResult{}, nil, false
 	}
 	// A definite answer (Bound or TerminalReject): finalize it directly without a
 	// second registration.
-	o.setClaimUnknown(rec, false)
+	if err := o.setClaimUnknown(ctx, rec, false); err != nil {
+		return o.resultFor(rec), err, true
+	}
 	res, ferr := o.finalizeClaim(ctx, prepared, status, rec)
 	return res, ferr, true
 }
 
-func (o *Orchestrator) setSubmitUnknown(rec *intakeRecord, v bool) {
+func (o *Orchestrator) setSubmitUnknown(ctx context.Context, rec *intakeRecord, v bool) error {
 	o.mu.Lock()
-	defer o.mu.Unlock()
 	rec.submitUnknown = v
+	snap := journalRecordFromIntakeRecord(rec)
+	o.mu.Unlock()
+	return o.saveJournalSnapshot(ctx, snap)
 }
 
-func (o *Orchestrator) setClaimUnknown(rec *intakeRecord, v bool) {
+func (o *Orchestrator) setClaimUnknown(ctx context.Context, rec *intakeRecord, v bool) error {
 	o.mu.Lock()
-	defer o.mu.Unlock()
 	rec.claimUnknown = v
+	snap := journalRecordFromIntakeRecord(rec)
+	o.mu.Unlock()
+	return o.saveJournalSnapshot(ctx, snap)
 }
 
 func (o *Orchestrator) submitUnknownFlag(rec *intakeRecord) bool {
