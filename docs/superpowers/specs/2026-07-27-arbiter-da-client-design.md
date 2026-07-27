@@ -104,7 +104,8 @@ Ordering inside one pass runs step 1 before step 2 for the same block, so a fres
 ```yaml
 # cmd/arbiter — optional; absent ⇒ Custody nil ⇒ no pins (today's behavior)
 payload_store:
-  control_addr: "127.0.0.1:9002"
+  data_addr: "127.0.0.1:9001"      # PayloadStore — needed for GetStoreLimits (pin batch sizing)
+  control_addr: "127.0.0.1:9002"   # PayloadLifecycle — pins/releases
 
 # cmd/arbiter-snode / cmd/arbiter-verifier — backend selection, default fs
 payload_store:
@@ -112,7 +113,7 @@ payload_store:
   data_addr: "127.0.0.1:9001"
 ```
 
-Validation: `backend` allowlisted to `[fs grpc]`; `grpc` requires `data_addr`; `fs` keeps requiring `payload_dir` (existing rule, now scoped to the fs backend); `cmd/arbiter` validates `control_addr` shape when the block is present. Sample configs gain commented-out grpc examples; the k8s smoke-test forward (`kubectl --context sentio-sea -n da-test port-forward svc/da-store 9001:9001 9002:9002`) is documented in the README.
+Validation: `backend` allowlisted to `[fs grpc]`; `grpc` requires `data_addr`; `fs` keeps requiring `payload_dir` (existing rule, now scoped to the fs backend); `cmd/arbiter` requires both `data_addr` and `control_addr` when the block is present — `GetStoreLimits` lives on the PayloadStore service (data plane), so pin batch sizing needs the data endpoint even though pins themselves go to the control endpoint (dev mode serves both on one address). Sample configs gain commented-out grpc examples; the k8s smoke-test forward (`kubectl --context sentio-sea -n da-test port-forward svc/da-store 9001:9001 9002:9002`) is documented in the README.
 
 ## 8. Error-handling summary
 
