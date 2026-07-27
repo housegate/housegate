@@ -156,6 +156,10 @@ Logical ↔ physical database multiplexing:
 
 A new plugin is a 4-file change under `pkg/plugins/<name>/` plus a one-line wiring addition in `build.go`'s `buildServer` (or `buildAgent` if it should fire in agent mode). Package naming rules (`authplugin`/`routeplugin` avoid leaf-package collisions), hook-interface choice, Redis factory usage, plugin-chain ordering, and copyable templates live in [.claude/skills/add-housegate-plugin/SKILL.md](.claude/skills/add-housegate-plugin/SKILL.md). Skim it before adding anything to the chain.
 
+## Upgrading a Dependency
+
+Bumping `rewriter-go`/`rewriter-proto`/the `sentioxyz` ch-go & clickhouse-go forks (or any module) touches three separate pin mechanisms — plain `go.mod require`, `go mod edit -replace` (a `go get` on the upstream `ClickHouse/*` module path silently does nothing, since the fork is the actual build target), and the out-of-band polyglot FFI binary release (`pkg/ffifetch`, versioned by the same rewriter-go tag but shipped separately) — plus the main-baseline rule for judging integration-test flakiness. Full recipe, verification ladder, and common-mistakes table: [.claude/skills/upgrade-dependency/SKILL.md](.claude/skills/upgrade-dependency/SKILL.md).
+
 ## Conventions
 
 - **Markdown docs: no hard line-wrapping.** One paragraph per line, English and Chinese alike — renderers soft-wrap, and hard breaks inside CJK paragraphs render spurious spaces. Some older specs are 72-column wrapped; do not imitate them when writing or editing docs.
