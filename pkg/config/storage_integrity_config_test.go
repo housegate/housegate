@@ -158,6 +158,15 @@ func TestConfigValidateStorageIntegrityIngress(t *testing.T) {
 		}
 	})
 
+	t.Run("runtime merge guard requires positive reassert interval", func(t *testing.T) {
+		cfg := storageIntegrityRuntimeConfigFixture(t)
+		cfg.StorageIntegrity.Runtime.MergeGuard.ReassertInterval.Duration = 0
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "storage_integrity.runtime.merge_guard.reassert_interval") {
+			t.Fatalf("Validate err = %v, want reassert interval rejection", err)
+		}
+	})
+
 	t.Run("runtime payload lease requires positive refresh policy", func(t *testing.T) {
 		cfg := storageIntegrityRuntimeConfigFixture(t)
 		cfg.StorageIntegrity.Runtime.PayloadLease.RefreshInterval.Duration = 0
@@ -198,6 +207,7 @@ func storageIntegrityRuntimeConfigFixture(t *testing.T) Config {
 	cfg.StorageIntegrity.Runtime.PayloadSpoolDir = "/var/lib/housegate/storage-integrity/payload-spool"
 	cfg.StorageIntegrity.Runtime.PayloadLease.RefreshInterval.Duration = time.Second
 	cfg.StorageIntegrity.Runtime.PayloadLease.RefreshBefore.Duration = 30 * time.Second
+	cfg.StorageIntegrity.Runtime.MergeGuard.ReassertInterval.Duration = 30 * time.Second
 	cfg.StorageIntegrity.Runtime.MergeGuard.Tables = []StorageIntegrityRuntimeMergeTableConfig{
 		{Database: "hg_safe", Table: "events"},
 		{Database: "hg_unsafe", Table: "events"},

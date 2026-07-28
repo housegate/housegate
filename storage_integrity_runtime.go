@@ -81,7 +81,7 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 		)
 	}
 
-	mergeGuard, err := buildStorageIntegrityMergeGuard(runtimeCfg.MergeGuard, opts)
+	rawMergeGuard, err := buildStorageIntegrityMergeGuard(runtimeCfg.MergeGuard, opts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -102,12 +102,16 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 	if spool == nil {
 		errs = append(errs, errors.New("storage_integrity.runtime.payload_spool or payload_spool_dir is required"))
 	}
-	if mergeGuard == nil {
+	if rawMergeGuard == nil {
 		errs = append(errs, errors.New("storage_integrity.runtime.merge_guard or merge_conn is required"))
 	}
 	if joined := errors.Join(errs...); joined != nil {
 		return nil, nil, joined
 	}
+	mergeGuard := NewStorageIntegrityMergeSupervisor(
+		rawMergeGuard,
+		runtimeCfg.MergeGuard.ReassertInterval.Duration,
+	)
 
 	var orch *sicore.Orchestrator
 	orchCfg := sicore.OrchestratorConfig{
@@ -125,6 +129,7 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 		return nil, nil, fmt.Errorf("storage_integrity.runtime: %w", err)
 	}
 	ingress.leaseManager = leaseManager
+	ingress.mergeRunner = mergeGuard
 	return ingress, mergeGuard, nil
 }
 

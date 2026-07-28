@@ -581,6 +581,43 @@ func TestBuildServer_StorageIntegrityRuntimeBuildsMergeGuardFromConnAndConfig(t 
 	}
 }
 
+func TestBuildStorageIntegrityRuntimeWrapsMergeSupervisor(t *testing.T) {
+	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatalf("NewRelaySigner: %v", err)
+	}
+	cfg := minimalRouterOnlyCfg(t)
+	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
+	rawGuard := &recordingBuildMergeGuard{}
+
+	ingress, guard, err := buildStorageIntegrityRuntimeConsumer(
+		cfg.StorageIntegrity.Runtime,
+		StorageIntegrityRuntimeOptions{
+			StatementSubmitter: &rootRecordingSubmitter{outcome: sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}},
+			SourcePreparer: &rootRecordingPreparer{
+				source: "snode-A",
+				claim:  sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"},
+			},
+			PayloadWriter: &rootRecordingPayloadWriter{result: sicore.PayloadPutResult{
+				PayloadRef:         "payload://store/ref-1",
+				State:              sicore.PayloadStateAvailable,
+				LeaseExpiresUnixMS: uint64(time.Now().Add(time.Hour).UnixMilli()),
+			}},
+			MergeGuard: rawGuard,
+		},
+	)
+	if err != nil {
+		t.Fatalf("buildStorageIntegrityRuntimeConsumer: %v", err)
+	}
+	supervisor, ok := guard.(*StorageIntegrityMergeSupervisor)
+	if !ok {
+		t.Fatalf("runtime merge guard type = %T, want *StorageIntegrityMergeSupervisor", guard)
+	}
+	if ingress.guard != supervisor {
+		t.Fatal("ingress and preServe must share the same merge supervisor")
+	}
+}
+
 func TestBuildServer_StorageIntegrityRuntimePreServeFailsClosedOnMergeGuardError(t *testing.T) {
 	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	if err != nil {

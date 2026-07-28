@@ -32,6 +32,7 @@ type StorageIntegrityIngress struct {
 	matKind       sicore.MaterializerKind
 	payloadWriter sicore.PayloadWriter
 	leaseManager  sicore.PayloadLeaseManager
+	mergeRunner   *StorageIntegrityMergeSupervisor
 
 	backgroundMu     sync.Mutex
 	backgroundCancel context.CancelFunc
@@ -66,7 +67,7 @@ func (i *StorageIntegrityIngress) RecoverPending(ctx context.Context) error {
 }
 
 func (i *StorageIntegrityIngress) StartBackground(ctx context.Context) {
-	if i == nil || i.leaseManager == nil {
+	if i == nil || (i.leaseManager == nil && i.mergeRunner == nil) {
 		return
 	}
 	i.backgroundMu.Lock()
@@ -77,7 +78,12 @@ func (i *StorageIntegrityIngress) StartBackground(ctx context.Context) {
 	runCtx, cancel := context.WithCancel(ctx)
 	i.backgroundCancel = cancel
 	i.backgroundMu.Unlock()
-	go i.leaseManager.Run(runCtx)
+	if i.leaseManager != nil {
+		go i.leaseManager.Run(runCtx)
+	}
+	if i.mergeRunner != nil {
+		go i.mergeRunner.Run(runCtx)
+	}
 }
 
 func (i *StorageIntegrityIngress) Close() {
@@ -98,6 +104,11 @@ func (i *StorageIntegrityIngress) Close() {
 // an error so the plugin reports failure to the client rather than a false
 // success; only a bound ACK2 returns nil. This is the C1-gated end-to-end path.
 func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.Context, adm siplugin.Admission) error {
+	if health, ok := i.guard.(StorageIntegrityMergeHealth); ok {
+		if err := health.CheckMergeHealth(); err != nil {
+			return fmt.Errorf("storage_integrity ingress: merge health: %w", err)
+		}
+	}
 	rec := AdmissionRecordFromPlugin(adm)
 	if i.payloadWriter != nil {
 		put, err := i.payloadWriter.PutPayload(ctx, rec.Payload, rec.PayloadHash, rec.PayloadLength)

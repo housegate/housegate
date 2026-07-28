@@ -2,6 +2,8 @@ package housegate
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	siplugin "housegate/housegate/pkg/plugins/storageintegrity"
@@ -152,6 +154,65 @@ func TestStorageIntegrityIngress_PutsPayloadBeforeOrchestrate(t *testing.T) {
 	}
 	if submitter.env.PayloadHash != wantHash || preparer.env.PayloadHash != wantHash {
 		t.Fatalf("payload hash did not stay bound to captured bytes")
+	}
+}
+
+type unhealthyMergeGuard struct {
+	err error
+}
+
+func (g *unhealthyMergeGuard) AssertStopMerges(context.Context) error {
+	return g.err
+}
+
+func (g *unhealthyMergeGuard) CheckMergeHealth() error {
+	return g.err
+}
+
+func TestStorageIntegrityIngressRejectsAdmissionWhenMergeHealthClosed(t *testing.T) {
+	pluginAdmission := siplugin.Admission{
+		StatementID: "0xabc:1:n1",
+		Kind:        siplugin.KindInsert,
+		TableID:     "net1.events",
+		SQL:         "INSERT INTO events FORMAT Native",
+		SQLHash:     replay.DigestString("INSERT INTO events FORMAT Native"),
+		Signer:      "0xabc",
+		UserJWS:     "jws",
+		Payload: siplugin.CapturedPayload{
+			Bytes:    []byte("native-block-bytes"),
+			Length:   uint64(len("native-block-bytes")),
+			Encoding: sicore.PayloadEncodingClickHouseNativeData,
+			Revision: 54465,
+			Complete: true,
+		},
+	}
+	writer := &rootRecordingPayloadWriter{result: sicore.PayloadPutResult{PayloadRef: "payload://store/ref-1"}}
+	submitter := &rootRecordingSubmitter{outcome: sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}}
+	preparer := &rootRecordingPreparer{
+		source: "snode-A",
+		claim:  sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"},
+	}
+	orch := sicore.NewOrchestrator(submitter, preparer, sicore.OrchestratorConfig{ExpectedSource: "snode-A"})
+	healthErr := errors.New("merge guard reconnect failed")
+	ing, err := NewStorageIntegrityIngressWithPayloadWriter(
+		orch,
+		&unhealthyMergeGuard{err: healthErr},
+		sicore.MaterializerNative,
+		writer,
+	)
+	if err != nil {
+		t.Fatalf("NewStorageIntegrityIngressWithPayloadWriter: %v", err)
+	}
+
+	err = ing.ConsumeStorageIntegrityAdmission(context.Background(), pluginAdmission)
+	if err == nil || !strings.Contains(err.Error(), healthErr.Error()) {
+		t.Fatalf("ConsumeStorageIntegrityAdmission err = %v, want merge health failure", err)
+	}
+	if writer.calls != 0 {
+		t.Fatalf("payload writer calls = %d, want 0", writer.calls)
+	}
+	if submitter.calls != 0 || preparer.prepareCalls != 0 {
+		t.Fatalf("submit/prepare calls = %d/%d, want 0/0", submitter.calls, preparer.prepareCalls)
 	}
 }
 

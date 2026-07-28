@@ -55,7 +55,8 @@ type StorageIntegrityRuntimePayloadLeaseConfig struct {
 // StorageIntegrityRuntimeMergeGuardConfig is the production table set that
 // HouseGate guards with table-scoped SYSTEM STOP MERGES at startup.
 type StorageIntegrityRuntimeMergeGuardConfig struct {
-	Tables []StorageIntegrityRuntimeMergeTableConfig `json:"tables" yaml:"tables"`
+	ReassertInterval Duration                                  `json:"reassert_interval" yaml:"reassert_interval"`
+	Tables           []StorageIntegrityRuntimeMergeTableConfig `json:"tables"            yaml:"tables"`
 }
 
 // StorageIntegrityRuntimeMergeTableConfig identifies one ClickHouse table whose
@@ -77,6 +78,9 @@ func defaultStorageIntegrityConfig() StorageIntegrityConfig {
 			PayloadLease: StorageIntegrityRuntimePayloadLeaseConfig{
 				RefreshInterval: Duration{Duration: time.Second},
 				RefreshBefore:   Duration{Duration: 30 * time.Second},
+			},
+			MergeGuard: StorageIntegrityRuntimeMergeGuardConfig{
+				ReassertInterval: Duration{Duration: 30 * time.Second},
 			},
 		},
 	}
@@ -123,6 +127,9 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 		}
 		if c.Runtime.PayloadLease.RefreshBefore.Duration <= 0 {
 			errs = append(errs, errors.New("storage_integrity.runtime.payload_lease.refresh_before must be > 0 when storage_integrity.runtime.enabled"))
+		}
+		if c.Runtime.MergeGuard.ReassertInterval.Duration <= 0 {
+			errs = append(errs, errors.New("storage_integrity.runtime.merge_guard.reassert_interval must be > 0 when storage_integrity.runtime.enabled"))
 		}
 		if len(c.Runtime.MergeGuard.Tables) == 0 {
 			errs = append(errs, errors.New("storage_integrity.runtime.merge_guard.tables is required when storage_integrity.runtime.enabled"))
