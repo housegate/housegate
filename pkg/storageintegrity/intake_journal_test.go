@@ -194,6 +194,66 @@ func TestOrchestrate_TerminalSaveFailureDoesNotPublishMemoryTerminal(t *testing.
 	}
 }
 
+func TestOrchestrate_TerminalSaveFailureRestartsFromDurableStage(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	baseJournal, err := NewFileIntakeJournal(dir)
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	saveErr := errors.New("terminal journal save failed")
+	journal := &failFirstTerminalSaveJournal{base: baseJournal, err: saveErr}
+	prep := newLookupRecordingPreparer(boundSource())
+	sub := &recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeAccepted}}
+	orch := NewOrchestrator(sub, prep, OrchestratorConfig{
+		ExpectedSource: "snode-A",
+		Journal:        journal,
+	})
+	adm := admissionFixture()
+
+	res, err := orch.Orchestrate(ctx, adm)
+	if err == nil || !strings.Contains(err.Error(), saveErr.Error()) {
+		t.Fatalf("first Orchestrate err = %v, want terminal save failure", err)
+	}
+	if !res.Ack2 || res.Lifecycle != LifecycleRCBound {
+		t.Fatalf("first result Ack2/lifecycle = %v/%q, want computed ACK2/RCBound", res.Ack2, res.Lifecycle)
+	}
+	persisted, ok, err := baseJournal.LoadIntakeRecord(ctx, adm.StatementID)
+	if err != nil {
+		t.Fatalf("LoadIntakeRecord after failed terminal save: %v", err)
+	}
+	if !ok || persisted.IsTerminal || persisted.Stage != LifecycleRCBound {
+		t.Fatalf("persisted after failed terminal save = ok:%v terminal:%v stage:%q, want non-terminal RCBound", ok, persisted.IsTerminal, persisted.Stage)
+	}
+
+	journal2, err := NewFileIntakeJournal(dir)
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal after restart: %v", err)
+	}
+	orch2 := NewOrchestrator(sub, prep, OrchestratorConfig{
+		ExpectedSource: "snode-A",
+		Journal:        journal2,
+	})
+
+	res2, err := orch2.Orchestrate(ctx, adm)
+	if err != nil {
+		t.Fatalf("restart Orchestrate: %v", err)
+	}
+	if !res2.Ack2 || res2.Lifecycle != LifecycleRCBound {
+		t.Fatalf("restart result Ack2/lifecycle = %v/%q, want ACK2/RCBound", res2.Ack2, res2.Lifecycle)
+	}
+	if got := atomic.LoadInt64(&prep.prepareCount); got != 1 {
+		t.Fatalf("restart must not re-run PrepareLocalStatement, got %d prepare calls", got)
+	}
+	persisted, ok, err = journal2.LoadIntakeRecord(ctx, adm.StatementID)
+	if err != nil {
+		t.Fatalf("LoadIntakeRecord after restart: %v", err)
+	}
+	if !ok || !persisted.IsTerminal || persisted.Stage != LifecycleRCBound {
+		t.Fatalf("persisted after restart = ok:%v terminal:%v stage:%q, want terminal RCBound", ok, persisted.IsTerminal, persisted.Stage)
+	}
+}
+
 type initialPersistRetryPreparer struct {
 	prepared     PreparedLocalResult
 	journalSaves func() int64
