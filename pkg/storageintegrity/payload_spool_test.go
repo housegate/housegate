@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"housegate/housegate/pkg/replay"
 )
@@ -72,7 +73,7 @@ func TestSpoolingPayloadWriterRecordsRemoteRefOnSuccess(t *testing.T) {
 	remote := &recordingPayloadWriter{res: PayloadPutResult{
 		PayloadRef:         "payload://store/ref-1",
 		State:              PayloadStateAvailable,
-		LeaseExpiresUnixMS: 12345,
+		LeaseExpiresUnixMS: uint64(time.Now().Add(time.Hour).UnixMilli()),
 	}}
 	writer := NewSpoolingPayloadWriter(spool, remote)
 
@@ -114,7 +115,7 @@ func TestSpoolingPayloadWriterReusesUploadedPayloadRef(t *testing.T) {
 	remote := &recordingPayloadWriter{res: PayloadPutResult{
 		PayloadRef:         "payload://store/ref-1",
 		State:              PayloadStateAvailable,
-		LeaseExpiresUnixMS: 12345,
+		LeaseExpiresUnixMS: uint64(time.Now().Add(time.Hour).UnixMilli()),
 	}}
 	writer := NewSpoolingPayloadWriter(spool, remote)
 
@@ -138,5 +139,32 @@ func TestSpoolingPayloadWriterReusesUploadedPayloadRef(t *testing.T) {
 	}
 	if rec.State != PayloadSpoolStateUploaded {
 		t.Fatalf("spool state after reuse = %q, want %q", rec.State, PayloadSpoolStateUploaded)
+	}
+}
+
+func TestSpoolingPayloadWriterRefreshesLeaseNearExpiry(t *testing.T) {
+	ctx := context.Background()
+	payload := []byte("native-block-bytes")
+	payloadHash := replay.DigestBytes(payload)
+
+	spool, err := NewFilePayloadSpool(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFilePayloadSpool: %v", err)
+	}
+	remote := &recordingPayloadWriter{res: PayloadPutResult{
+		PayloadRef:         "payload://store/ref-1",
+		State:              PayloadStateAvailable,
+		LeaseExpiresUnixMS: uint64(time.Now().Add(5 * time.Second).UnixMilli()),
+	}}
+	writer := NewSpoolingPayloadWriter(spool, remote)
+
+	if _, err := writer.PutPayload(ctx, payload, payloadHash, uint64(len(payload))); err != nil {
+		t.Fatalf("first PutPayload: %v", err)
+	}
+	if _, err := writer.PutPayload(ctx, payload, payloadHash, uint64(len(payload))); err != nil {
+		t.Fatalf("refresh PutPayload: %v", err)
+	}
+	if remote.calls != 2 {
+		t.Fatalf("remote calls = %d, want 2 for near-expiry lease", remote.calls)
 	}
 }

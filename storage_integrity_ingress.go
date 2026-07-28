@@ -3,6 +3,7 @@ package housegate
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	siplugin "housegate/housegate/pkg/plugins/storageintegrity"
 	"housegate/housegate/pkg/replay"
@@ -30,6 +31,10 @@ type StorageIntegrityIngress struct {
 	guard         StorageIntegrityMergeGuard
 	matKind       sicore.MaterializerKind
 	payloadWriter sicore.PayloadWriter
+	leaseManager  sicore.PayloadLeaseManager
+
+	backgroundMu     sync.Mutex
+	backgroundCancel context.CancelFunc
 }
 
 // NewStorageIntegrityIngress constructs the ingress runtime over an orchestrator
@@ -58,6 +63,34 @@ func (i *StorageIntegrityIngress) RecoverPending(ctx context.Context) error {
 		return fmt.Errorf("storage_integrity ingress: orchestrator is required")
 	}
 	return i.orch.RecoverPending(ctx)
+}
+
+func (i *StorageIntegrityIngress) StartBackground(ctx context.Context) {
+	if i == nil || i.leaseManager == nil {
+		return
+	}
+	i.backgroundMu.Lock()
+	if i.backgroundCancel != nil {
+		i.backgroundMu.Unlock()
+		return
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	i.backgroundCancel = cancel
+	i.backgroundMu.Unlock()
+	go i.leaseManager.Run(runCtx)
+}
+
+func (i *StorageIntegrityIngress) Close() {
+	if i == nil {
+		return
+	}
+	i.backgroundMu.Lock()
+	cancel := i.backgroundCancel
+	i.backgroundCancel = nil
+	i.backgroundMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 // ConsumeStorageIntegrityAdmission maps a completed plugin admission into a core

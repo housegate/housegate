@@ -158,6 +158,24 @@ func TestConfigValidateStorageIntegrityIngress(t *testing.T) {
 		}
 	})
 
+	t.Run("runtime payload lease requires positive refresh policy", func(t *testing.T) {
+		cfg := storageIntegrityRuntimeConfigFixture(t)
+		cfg.StorageIntegrity.Runtime.PayloadLease.RefreshInterval.Duration = 0
+		cfg.StorageIntegrity.Runtime.PayloadLease.RefreshBefore.Duration = 0
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("Validate succeeded with zero payload lease refresh policy")
+		}
+		for _, want := range []string{
+			"storage_integrity.runtime.payload_lease.refresh_interval",
+			"storage_integrity.runtime.payload_lease.refresh_before",
+		} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("Validate err = %v, missing %q", err, want)
+			}
+		}
+	})
+
 	t.Run("runtime enabled accepts complete durable config", func(t *testing.T) {
 		cfg := storageIntegrityRuntimeConfigFixture(t)
 		if err := cfg.Validate(); err != nil {
@@ -178,6 +196,8 @@ func storageIntegrityRuntimeConfigFixture(t *testing.T) Config {
 	cfg.StorageIntegrity.Runtime.ExpectedSource = "snode-A"
 	cfg.StorageIntegrity.Runtime.JournalDir = "/var/lib/housegate/storage-integrity/journal"
 	cfg.StorageIntegrity.Runtime.PayloadSpoolDir = "/var/lib/housegate/storage-integrity/payload-spool"
+	cfg.StorageIntegrity.Runtime.PayloadLease.RefreshInterval.Duration = time.Second
+	cfg.StorageIntegrity.Runtime.PayloadLease.RefreshBefore.Duration = 30 * time.Second
 	cfg.StorageIntegrity.Runtime.MergeGuard.Tables = []StorageIntegrityRuntimeMergeTableConfig{
 		{Database: "hg_safe", Table: "events"},
 		{Database: "hg_unsafe", Table: "events"},

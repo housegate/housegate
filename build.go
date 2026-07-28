@@ -612,6 +612,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			admissionConsumer = consumer
 			storageIntegrityMergeGuard = guard
 			storageIntegrityRuntime = consumer
+			pushTeardown(consumer.Close)
 		}
 		if admissionConsumer == nil {
 			return nil, fmt.Errorf("storage_integrity.ingress admission consumer is required when enabled")
@@ -840,6 +841,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 				log.Info("storage_integrity merge guard asserted")
 			}
 			if storageIntegrityRuntime != nil {
+				storageIntegrityRuntime.StartBackground(ctx)
 				if err := storageIntegrityRuntime.RecoverPending(ctx); err != nil {
 					return fmt.Errorf("storage_integrity.recovery: %w", err)
 				}

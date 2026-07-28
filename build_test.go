@@ -476,8 +476,9 @@ func TestBuildServer_StorageIntegrityRuntimeBuildsConsumerAndRunsMergeGuard(t *t
 	guard := &recordingBuildMergeGuard{}
 	writer := &rootRecordingPayloadWriter{
 		result: sicore.PayloadPutResult{
-			PayloadRef: "payload://store/ref-1",
-			State:      sicore.PayloadStateAvailable,
+			PayloadRef:         "payload://store/ref-1",
+			State:              sicore.PayloadStateAvailable,
+			LeaseExpiresUnixMS: uint64(time.Now().Add(time.Hour).UnixMilli()),
 		},
 	}
 	submitter := &rootRecordingSubmitter{
@@ -700,6 +701,13 @@ func TestBuildServer_StorageIntegrityRecoveryRunsBeforeOtherPreServeWork(t *test
 	}
 
 	order := &preServeOrderRecorder{}
+	payloadWriter := &rootRecordingPayloadWriter{
+		result: sicore.PayloadPutResult{
+			PayloadRef:         env.PayloadRef,
+			State:              sicore.PayloadStateAvailable,
+			LeaseExpiresUnixMS: uint64(time.Now().Add(time.Hour).UnixMilli()),
+		},
+	}
 	bs, err := buildServer(Options{
 		Config:       cfg,
 		NetworkState: network.NewInMemoryNetworkState(),
@@ -709,10 +717,8 @@ func TestBuildServer_StorageIntegrityRecoveryRunsBeforeOtherPreServeWork(t *test
 				source: "snode-A",
 				claim:  sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"},
 			},
-			PayloadWriter: &rootRecordingPayloadWriter{
-				result: sicore.PayloadPutResult{PayloadRef: env.PayloadRef, State: sicore.PayloadStateAvailable},
-			},
-			MergeGuard: &orderedBuildMergeGuard{order: order},
+			PayloadWriter: payloadWriter,
+			MergeGuard:    &orderedBuildMergeGuard{order: order},
 		},
 	}, nil)
 	if err != nil {
@@ -726,6 +732,9 @@ func TestBuildServer_StorageIntegrityRecoveryRunsBeforeOtherPreServeWork(t *test
 	events := order.snapshot()
 	if len(events) < 2 || events[0] != "merge" || events[1] != "recover" {
 		t.Fatalf("preServe events = %v, want [merge recover]", events)
+	}
+	if payloadWriter.calls != 1 {
+		t.Fatalf("recovery payload lease puts = %d, want 1", payloadWriter.calls)
 	}
 }
 

@@ -2,6 +2,7 @@ package storageintegrity
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -120,6 +121,81 @@ func (s *orderedRecoverySubmitter) callOrder() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]string(nil), s.order...)
+}
+
+type recordingPayloadLeaseManager struct {
+	ensured  atomic.Bool
+	ensures  int64
+	releases int64
+}
+
+func (m *recordingPayloadLeaseManager) EnsurePayloadLease(context.Context, AdmissionRecord, string) error {
+	m.ensured.Store(true)
+	atomic.AddInt64(&m.ensures, 1)
+	return nil
+}
+
+func (m *recordingPayloadLeaseManager) ReleasePayloadLease(string) {
+	atomic.AddInt64(&m.releases, 1)
+}
+
+func (m *recordingPayloadLeaseManager) Run(context.Context) {}
+
+type leaseCheckingSubmitter struct {
+	lease *recordingPayloadLeaseManager
+}
+
+func (s *leaseCheckingSubmitter) SubmitStatement(context.Context, StatementEnvelope) (SubmitOutcome, error) {
+	if !s.lease.ensured.Load() {
+		return SubmitOutcome{}, errors.New("submit ran before payload lease was ensured")
+	}
+	return SubmitOutcome{Category: OutcomeAccepted}, nil
+}
+
+func TestRecoverPendingRegistersLeaseBeforeSubmit(t *testing.T) {
+	ctx := context.Background()
+	journal, err := NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	adm := admissionFixture()
+	adm.PayloadRef = "payload://store/ref-1"
+	env, err := EnvelopeFromAdmission(adm)
+	if err != nil {
+		t.Fatalf("EnvelopeFromAdmission: %v", err)
+	}
+	prepared := boundSource()
+	prepared.StatementID = adm.StatementID
+	prepared.PayloadRef = adm.PayloadRef
+	if err := journal.SaveIntakeRecord(ctx, IntakeJournalRecord{
+		StatementID:     adm.StatementID,
+		Source:          "snode-A",
+		FrontierOrdinal: 1,
+		Env:             env,
+		Admission:       adm,
+		Stage:           LifecycleUnsafeWritten,
+		Prepared:        prepared,
+		HasPrepared:     true,
+	}); err != nil {
+		t.Fatalf("SaveIntakeRecord: %v", err)
+	}
+	lease := &recordingPayloadLeaseManager{}
+	orch := NewOrchestrator(&leaseCheckingSubmitter{lease: lease}, newLookupRecordingPreparer(boundSource()), OrchestratorConfig{
+		ExpectedSource:        "snode-A",
+		Journal:               journal,
+		RecoveryRetryInterval: time.Millisecond,
+		PayloadLeaseManager:   lease,
+	})
+
+	if err := orch.RecoverPending(ctx); err != nil {
+		t.Fatalf("RecoverPending: %v", err)
+	}
+	if got := atomic.LoadInt64(&lease.ensures); got != 1 {
+		t.Fatalf("lease ensures = %d, want 1", got)
+	}
+	if got := atomic.LoadInt64(&lease.releases); got != 1 {
+		t.Fatalf("lease releases = %d, want 1 after durable submit acceptance", got)
+	}
 }
 
 func TestRecoverPendingDrainsAThenBInOrdinalOrder(t *testing.T) {

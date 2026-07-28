@@ -67,8 +67,18 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 			return nil, nil, fmt.Errorf("storage_integrity.runtime.payload_spool: %w", err)
 		}
 	}
+	var leaseManager sicore.PayloadLeaseManager
 	if payloadWriter != nil && spool != nil {
-		payloadWriter = sicore.NewSpoolingPayloadWriter(spool, payloadWriter)
+		spoolingWriter := sicore.NewSpoolingPayloadWriterWithLeasePolicy(
+			spool,
+			payloadWriter,
+			runtimeCfg.PayloadLease.RefreshBefore.Duration,
+		)
+		payloadWriter = spoolingWriter
+		leaseManager = sicore.NewPayloadLeaseSupervisor(
+			spoolingWriter,
+			runtimeCfg.PayloadLease.RefreshInterval.Duration,
+		)
 	}
 
 	mergeGuard, err := buildStorageIntegrityMergeGuard(runtimeCfg.MergeGuard, opts)
@@ -100,7 +110,11 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 	}
 
 	var orch *sicore.Orchestrator
-	orchCfg := sicore.OrchestratorConfig{ExpectedSource: expectedSource, Journal: journal}
+	orchCfg := sicore.OrchestratorConfig{
+		ExpectedSource:      expectedSource,
+		Journal:             journal,
+		PayloadLeaseManager: leaseManager,
+	}
 	if opts.StatusQuerier != nil {
 		orch = sicore.NewOrchestratorWithQuerier(submitter, opts.SourcePreparer, opts.StatusQuerier, orchCfg)
 	} else {
@@ -110,6 +124,7 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 	if err != nil {
 		return nil, nil, fmt.Errorf("storage_integrity.runtime: %w", err)
 	}
+	ingress.leaseManager = leaseManager
 	return ingress, mergeGuard, nil
 }
 

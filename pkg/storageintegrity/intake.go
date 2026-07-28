@@ -416,6 +416,7 @@ type OrchestratorConfig struct {
 	ExpectedSource        string
 	Journal               IntakeJournal
 	RecoveryRetryInterval time.Duration
+	PayloadLeaseManager   PayloadLeaseManager
 }
 
 // IntakeResult is the orchestration outcome for one admission.
@@ -746,6 +747,11 @@ func (o *Orchestrator) finishAttemptAndDropRecord(rec *intakeRecord, res IntakeR
 // rec.prepared under the lock as each stage completes; Orchestrate owns the
 // active/done/terminal bookkeeping.
 func (o *Orchestrator) run(ctx context.Context, env StatementEnvelope, adm AdmissionRecord, rec *intakeRecord) (IntakeResult, error) {
+	if rankLifecycle(rec.stage) < rankLifecycle(LifecycleSubmitAccepted) && o.cfg.PayloadLeaseManager != nil {
+		if err := o.cfg.PayloadLeaseManager.EnsurePayloadLease(ctx, adm, env.PayloadRef); err != nil {
+			return IntakeResult{StatementID: env.StatementID}, fmt.Errorf("intake: ensure payload lease for %s: %w", env.StatementID, err)
+		}
+	}
 	prepared, hasPrepared := o.cachedPrepared(rec)
 
 	switch rec.stage {
@@ -897,6 +903,7 @@ func (o *Orchestrator) afterSubmit(ctx context.Context, env StatementEnvelope, p
 	if err := o.setStage(ctx, rec, LifecycleSubmitAccepted); err != nil {
 		return true, res, err
 	}
+	o.releasePayloadLease(rec)
 	return false, res, nil
 }
 
@@ -1021,7 +1028,18 @@ func (o *Orchestrator) abort(ctx context.Context, res IntakeResult, rec *intakeR
 	if err := o.setTerminal(ctx, rec, res); err != nil {
 		return res, err
 	}
+	o.releasePayloadLease(rec)
 	return res, nil
+}
+
+func (o *Orchestrator) releasePayloadLease(rec *intakeRecord) {
+	if o.cfg.PayloadLeaseManager == nil || rec == nil {
+		return
+	}
+	o.mu.Lock()
+	payloadHash := rec.adm.PayloadHash
+	o.mu.Unlock()
+	o.cfg.PayloadLeaseManager.ReleasePayloadLease(payloadHash)
 }
 
 // resultFor seeds an IntakeResult from the record's cached prepare and accepted
