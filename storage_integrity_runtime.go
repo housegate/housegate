@@ -9,7 +9,6 @@ import (
 	pb "github.com/sentioxyz/arbiter-proto/gen/pb"
 
 	"housegate/housegate/pkg/config"
-	siplugin "housegate/housegate/pkg/plugins/storageintegrity"
 	sicore "housegate/housegate/pkg/storageintegrity"
 )
 
@@ -39,7 +38,7 @@ type StorageIntegrityRuntimeOptions struct {
 	MergeGuard         StorageIntegrityMergeGuard
 }
 
-func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRuntimeConfig, opts StorageIntegrityRuntimeOptions) (siplugin.AdmissionConsumer, StorageIntegrityMergeGuard, error) {
+func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRuntimeConfig, opts StorageIntegrityRuntimeOptions) (*StorageIntegrityIngress, StorageIntegrityMergeGuard, error) {
 	expectedSource := strings.TrimSpace(runtimeCfg.ExpectedSource)
 
 	submitter := opts.StatementSubmitter

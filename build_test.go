@@ -22,6 +22,7 @@ import (
 	"housegate/housegate/pkg/plugins/rewrite"
 	"housegate/housegate/pkg/plugins/storageintegrity"
 	"housegate/housegate/pkg/proxy"
+	"housegate/housegate/pkg/replay"
 	"housegate/housegate/pkg/rewriter"
 	"housegate/housegate/pkg/sqlmeta"
 	sicore "housegate/housegate/pkg/storageintegrity"
@@ -606,6 +607,125 @@ func TestBuildServer_StorageIntegrityRuntimePreServeFailsClosedOnMergeGuardError
 	err = bs.preServe(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "storage_integrity.merge_guard") {
 		t.Fatalf("preServe err = %v, want merge guard failure", err)
+	}
+}
+
+type preServeOrderRecorder struct {
+	mu     sync.Mutex
+	events []string
+}
+
+func (r *preServeOrderRecorder) add(event string) {
+	r.mu.Lock()
+	r.events = append(r.events, event)
+	r.mu.Unlock()
+}
+
+func (r *preServeOrderRecorder) snapshot() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.events...)
+}
+
+type orderedBuildMergeGuard struct {
+	order *preServeOrderRecorder
+}
+
+func (g *orderedBuildMergeGuard) AssertStopMerges(context.Context) error {
+	g.order.add("merge")
+	return nil
+}
+
+type orderedBuildSubmitter struct {
+	order *preServeOrderRecorder
+}
+
+func (s *orderedBuildSubmitter) SubmitStatement(context.Context, sicore.StatementEnvelope) (sicore.SubmitOutcome, error) {
+	s.order.add("recover")
+	return sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}, nil
+}
+
+func TestBuildServer_StorageIntegrityRecoveryRunsBeforeOtherPreServeWork(t *testing.T) {
+	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatalf("NewRelaySigner: %v", err)
+	}
+	cfg := minimalRouterOnlyCfg(t)
+	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
+
+	journal, err := sicore.NewFileIntakeJournal(cfg.StorageIntegrity.Runtime.JournalDir)
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	payload := []byte("native-block-bytes")
+	adm := sicore.AdmissionRecord{
+		StatementID:     "0xabc:1:n1",
+		Kind:            sicore.KindInsert,
+		TableID:         "net1.events",
+		SQL:             "INSERT INTO events FORMAT Native",
+		SQLHash:         replay.DigestString("INSERT INTO events FORMAT Native"),
+		Signer:          "0xabc",
+		UserJWS:         "jws",
+		Payload:         payload,
+		PayloadLength:   uint64(len(payload)),
+		PayloadHash:     replay.DigestBytes(payload),
+		PayloadEncoding: sicore.PayloadEncodingClickHouseNativeData,
+		Revision:        54465,
+	}
+	env, err := sicore.EnvelopeFromAdmission(adm)
+	if err != nil {
+		t.Fatalf("EnvelopeFromAdmission: %v", err)
+	}
+	prepared := sicore.PreparedLocalResult{
+		StatementID:     adm.StatementID,
+		SourceNode:      "snode-A",
+		PayloadRef:      env.PayloadRef,
+		PayloadHash:     env.PayloadHash,
+		PayloadLength:   env.PayloadLength,
+		PayloadEncoding: env.PayloadEncoding,
+		Revision:        env.Revision,
+		Lifecycle:       sicore.LifecycleUnsafeWritten,
+	}
+	if err := journal.SaveIntakeRecord(context.Background(), sicore.IntakeJournalRecord{
+		StatementID:     adm.StatementID,
+		Source:          "snode-A",
+		FrontierOrdinal: 1,
+		Env:             env,
+		Admission:       adm,
+		Stage:           sicore.LifecycleUnsafeWritten,
+		Prepared:        prepared,
+		HasPrepared:     true,
+	}); err != nil {
+		t.Fatalf("SaveIntakeRecord: %v", err)
+	}
+
+	order := &preServeOrderRecorder{}
+	bs, err := buildServer(Options{
+		Config:       cfg,
+		NetworkState: network.NewInMemoryNetworkState(),
+		StorageIntegrityRuntime: StorageIntegrityRuntimeOptions{
+			StatementSubmitter: &orderedBuildSubmitter{order: order},
+			SourcePreparer: &rootRecordingPreparer{
+				source: "snode-A",
+				claim:  sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"},
+			},
+			PayloadWriter: &rootRecordingPayloadWriter{
+				result: sicore.PayloadPutResult{PayloadRef: env.PayloadRef, State: sicore.PayloadStateAvailable},
+			},
+			MergeGuard: &orderedBuildMergeGuard{order: order},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("buildServer: %v", err)
+	}
+	defer bs.teardown()
+
+	if err := bs.preServe(context.Background()); err != nil {
+		t.Fatalf("preServe: %v", err)
+	}
+	events := order.snapshot()
+	if len(events) < 2 || events[0] != "merge" || events[1] != "recover" {
+		t.Fatalf("preServe events = %v, want [merge recover]", events)
 	}
 }
 

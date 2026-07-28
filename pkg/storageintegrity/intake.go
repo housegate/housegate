@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"housegate/housegate/pkg/replay"
 )
@@ -412,8 +413,9 @@ type PreparedStatementLookup interface {
 // OrchestratorConfig pins the deterministic source the FSM is expected to record
 // for this HouseGate's statements. A committed-source mismatch fails closed.
 type OrchestratorConfig struct {
-	ExpectedSource string
-	Journal        IntakeJournal
+	ExpectedSource        string
+	Journal               IntakeJournal
+	RecoveryRetryInterval time.Duration
 }
 
 // IntakeResult is the orchestration outcome for one admission.

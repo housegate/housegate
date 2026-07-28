@@ -598,6 +598,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 
 	var storageIntegrityIngress *storageintegrity.Plugin
 	var storageIntegrityMergeGuard StorageIntegrityMergeGuard
+	var storageIntegrityRuntime *StorageIntegrityIngress
 	if cfg.StorageIntegrity.Ingress.Enabled {
 		admissionConsumer := opts.StorageIntegrityAdmissionConsumer
 		if cfg.StorageIntegrity.Runtime.Enabled {
@@ -610,6 +611,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			}
 			admissionConsumer = consumer
 			storageIntegrityMergeGuard = guard
+			storageIntegrityRuntime = consumer
 		}
 		if admissionConsumer == nil {
 			return nil, fmt.Errorf("storage_integrity.ingress admission consumer is required when enabled")
@@ -836,6 +838,12 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 					return fmt.Errorf("storage_integrity.merge_guard: %w", err)
 				}
 				log.Info("storage_integrity merge guard asserted")
+			}
+			if storageIntegrityRuntime != nil {
+				if err := storageIntegrityRuntime.RecoverPending(ctx); err != nil {
+					return fmt.Errorf("storage_integrity.recovery: %w", err)
+				}
+				log.Info("storage_integrity durable intake recovery completed")
 			}
 			if libCluster != nil {
 				libCluster.Start(ctx)

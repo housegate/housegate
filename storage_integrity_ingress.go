@@ -51,6 +51,15 @@ func NewStorageIntegrityIngressWithPayloadWriter(orch *sicore.Orchestrator, guar
 	return &StorageIntegrityIngress{orch: orch, guard: guard, matKind: matKind, payloadWriter: writer}, nil
 }
 
+// RecoverPending drains durable non-terminal intake records before listeners
+// admit new source writes.
+func (i *StorageIntegrityIngress) RecoverPending(ctx context.Context) error {
+	if i == nil || i.orch == nil {
+		return fmt.Errorf("storage_integrity ingress: orchestrator is required")
+	}
+	return i.orch.RecoverPending(ctx)
+}
+
 // ConsumeStorageIntegrityAdmission maps a completed plugin admission into a core
 // AdmissionRecord and drives the orchestrator. A non-ACK2 outcome is surfaced as
 // an error so the plugin reports failure to the client rather than a false
