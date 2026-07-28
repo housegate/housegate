@@ -4,13 +4,13 @@ module(
 )
 
 bazel_dep(name = "platforms", version = "1.1.0")
-bazel_dep(name = "rules_go", version = "0.60.0")
-bazel_dep(name = "gazelle", version = "0.51.0")
-bazel_dep(name = "protobuf", version = "35.0")
-bazel_dep(name = "rules_multirun", version = "0.13.0")
+bazel_dep(name = "rules_go", version = "0.62.0")
+bazel_dep(name = "gazelle", version = "0.52.2")
+bazel_dep(name = "protobuf", version = "35.1")
+bazel_dep(name = "rules_multirun", version = "0.14.0")
 bazel_dep(name = "aspect_bazel_lib", version = "2.22.5")
-bazel_dep(name = "bazel_skylib", version = "1.9.0")
-bazel_dep(name = "rules_img", version = "0.3.11")
+bazel_dep(name = "bazel_skylib", version = "1.9.2")
+bazel_dep(name = "rules_img", version = "0.3.17")
 
 # Bazel 9 removed native sh_binary; //bazel:docker needs rules_shell in the graph.
 bazel_dep(name = "rules_shell", version = "0.8.0")
@@ -41,7 +41,7 @@ go_deps_dev.gazelle_default_attributes(
     directives = ["gazelle:proto disable"],
 )
 
-bazel_dep(name = "hermetic_cc_toolchain", version = "4.1.0")
+bazel_dep(name = "hermetic_cc_toolchain", version = "4.2.0")
 
 toolchains = use_extension("@hermetic_cc_toolchain//toolchain:ext.bzl", "toolchains")
 use_repo(toolchains, "zig_sdk")

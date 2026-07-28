@@ -6,7 +6,7 @@ It describes the **current state** of the code (what exists today, build/test co
 
 ## Build & Test
 
-The canonical build system is **Bazel 8.5.1 + Bzlmod**. The Makefile, CI, and production image all go through Bazel — the `go build` / `go test` paths in README work for simple cases but are not the ground truth.
+The canonical build system is **Bazel 9.1.0 + Bzlmod**. The Makefile, CI, and production image all go through Bazel — the `go build` / `go test` paths in README work for simple cases but are not the ground truth.
 
 ```bash
 bazel build //cmd:housegate      # proxy binary (output: bazel-bin/cmd/housegate_/housegate)

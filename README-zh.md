@@ -31,7 +31,7 @@
 
 | 依赖 | 版本 | 备注 |
 |-----|------|------|
-| Bazel | 8.5.1 | 必须 — 基于 Bzlmod 的构建系统 |
+| Bazel | 9.1.0 | 必须 — 基于 Bzlmod 的构建系统 |
 | Docker | 20.10+ | 可选，用于容器化部署 |
 
 > **只走 Bazel。** 不要用 `go build` / `go test` / `go install`。vendored 的 protobuf 依赖一个由 Bazel 固定的运行时版本；普通 Go 工具链解析到的 `google.golang.org/protobuf` 不一致，进程一启动就会在 `init()` panic。

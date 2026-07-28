@@ -99,6 +99,7 @@ go_test(
         "//pkg/replay",
         "//pkg/replicationproxy",
         "//pkg/rewriter",
+        "//pkg/sqlmeta",
         "//pkg/storageintegrity",
         "@com_github_clickhouse_ch_go//proto",
         "@com_github_prometheus_client_golang//prometheus",
@@ -117,7 +118,6 @@ sh_test(
 
 nogo(
     name = "my_nogo",
-    config = ":nogo-config.json",
     #    vet = True,
     visibility = ["//visibility:public"],
     deps = TOOLS_NOGO,

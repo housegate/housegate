@@ -31,7 +31,7 @@ A lightweight ClickHouse native TCP protocol proxy. Sits transparently between c
 
 | Dependency | Version | Notes |
 |-----------|---------|-------|
-| Bazel | 8.5.1 | Required — Bzlmod-based build |
+| Bazel | 9.1.0 | Required — Bzlmod-based build |
 | Docker | 20.10+ | Optional, for containerized deploy |
 
 > **Bazel-only.** Don't use `go build` / `go test` / `go install`. The vendored protobuf depends on a runtime version pinned by Bazel; the stock toolchain resolves a different `google.golang.org/protobuf` and panics at `init()`.

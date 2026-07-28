@@ -38,8 +38,8 @@ go_binary(
 )
 
 go_test(
-    name = "housegate_lib_test",
+    name = "cmd_test",
     srcs = ["main_test.go"],
-    embed = [":housegate_lib"],
+    embed = [":housegate_lib"],  # keep
     deps = ["//pkg/config"],
 )
