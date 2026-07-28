@@ -88,11 +88,18 @@ This change does not implement the real `SourcePreparer` / `IntakeStatusQuerier`
 
 ## Verification
 
-Focused gate:
+HouseGate component gates:
 
 ```bash
 go test . ./pkg/config ./pkg/plugins/storageintegrity ./pkg/storageintegrity -count=1
 go test -race ./pkg/storageintegrity -count=1
+```
+
+Repository gate:
+
+```bash
+go test ./... -count=1
+git diff --check
 ```
 
 Bazel gate:
@@ -101,6 +108,30 @@ Bazel gate:
 bazel test //pkg/storageintegrity:storageintegrity_test //pkg/plugins/storageintegrity:storageintegrity_test
 ```
 
-The hardening regression gate adds: ambiguous prepare error followed by same-process lookup; terminal journal-save failure followed by retry and restart; immutable A-before-B recovery despite later A updates; startup recovery without an original client retry; payload lease refresh before expiry and restart registration from journal/spool; payload-ref mismatch rejection; periodic merge reassertion, unhealthy admission rejection, and recovery after a successful reassert; and production runtime rejection while the companion capability gate is false.
+The hardening regression set is implemented by these exact tests:
 
-Existing pure-component and gated C1 tests remain. The full production ingress-to-ACK2 assertion stays skipped closed until deployed companion revisions satisfy the contract; unit tests may construct the HouseGate components directly but may not flip the production builder gate.
+- `TestOrchestrate_AmbiguousPrepareErrorRequiresLookupBeforeRetry`
+- `TestFileIntakeJournalPreparedSaveFailureRestartsViaSourceLookup`
+- `TestOrchestrate_TerminalSaveFailureDoesNotPublishMemoryTerminal`
+- `TestOrchestrate_TerminalSaveFailureRestartsFromDurableStage`
+- `TestFileIntakeJournalInitialPersistFailureRetriesBeforePrepare`
+- `TestFileIntakeJournalRecoveryFencesNonTerminalSourceBeforeNextStatement`
+- `TestFileIntakeJournalOrdersNonTerminalRecordsByFrontierOrdinal`
+- `TestOrchestratorPersistsFrontierOrdinalBeforeSourceWrite`
+- `TestOrchestratorRecoveryRejectsMultipleLegacyRecordsWithoutOrdinal`
+- `TestRecoverPendingResumesHolderWithoutClientRetry`
+- `TestRecoverPendingRetriesRetryableOutcomeUntilTerminal`
+- `TestRecoverPendingRegistersLeaseBeforeSubmit`
+- `TestRecoverPendingDrainsAThenBInOrdinalOrder`
+- `TestSpoolingPayloadWriterRefreshesLeaseNearExpiry`
+- `TestPayloadLeaseSupervisorRefreshesTrackedPayload`
+- `TestPayloadLeaseSupervisorRejectsChangedPayloadRef`
+- `TestPayloadLeaseSupervisorReleaseStopsRefresh`
+- `TestMergeSupervisorStartsClosedUntilAssertSucceeds`
+- `TestMergeSupervisorClosesAndReopensHealthAcrossReasserts`
+- `TestMergeSupervisorRunPeriodicallyReasserts`
+- `TestStorageIntegrityIngressRejectsAdmissionWhenMergeHealthClosed`
+- `TestBuildServer_StorageIntegrityRuntimeRejectsUnavailableCompanionContract`
+- `TestStartStorageIntegrityRuntimeRecoversAfterInitialMergeAssert`
+
+Existing pure-component tests remain green under the component gates. The full production ingress-to-ACK2 assertion remains skipped closed behind `requireCompanionStagedIntake(t)` until deployed companion revisions satisfy the staged-source and status-query contract. Unit tests may construct the HouseGate components directly but may not flip or bypass the production builder gate.
