@@ -22,6 +22,7 @@ import (
 	"housegate/housegate/pkg/plugins/rewrite"
 	"housegate/housegate/pkg/plugins/storageintegrity"
 	"housegate/housegate/pkg/proxy"
+	"housegate/housegate/pkg/replay"
 	"housegate/housegate/pkg/rewriter"
 	"housegate/housegate/pkg/sqlmeta"
 	sicore "housegate/housegate/pkg/storageintegrity"
@@ -412,7 +413,7 @@ func TestBuildServer_StorageIntegrityIngressRequiresAdmissionConsumer(t *testing
 	}
 }
 
-func TestBuildServer_StorageIntegrityRuntimeRequiresPorts(t *testing.T) {
+func TestBuildStorageIntegrityRuntimeRequiresPorts(t *testing.T) {
 	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	if err != nil {
 		t.Fatalf("NewRelaySigner: %v", err)
@@ -420,12 +421,9 @@ func TestBuildServer_StorageIntegrityRuntimeRequiresPorts(t *testing.T) {
 	cfg := minimalRouterOnlyCfg(t)
 	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
 
-	_, err = buildServer(Options{
-		Config:       cfg,
-		NetworkState: network.NewInMemoryNetworkState(),
-	}, nil)
+	_, _, err = buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, StorageIntegrityRuntimeOptions{})
 	if err == nil {
-		t.Fatal("buildServer succeeded without storage-integrity runtime ports")
+		t.Fatal("runtime assembly succeeded without storage-integrity runtime ports")
 	}
 	for _, want := range []string{
 		"storage_integrity.runtime.statement_submitter is required",
@@ -434,7 +432,7 @@ func TestBuildServer_StorageIntegrityRuntimeRequiresPorts(t *testing.T) {
 		"storage_integrity.runtime.merge_guard or merge_conn is required",
 	} {
 		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("buildServer err = %v, missing %q", err, want)
+			t.Fatalf("runtime assembly err = %v, missing %q", err, want)
 		}
 	}
 }
@@ -463,7 +461,37 @@ func TestBuildServer_StorageIntegrityRuntimeRejectsManualConsumer(t *testing.T) 
 	}
 }
 
-func TestBuildServer_StorageIntegrityRuntimeBuildsConsumerAndRunsMergeGuard(t *testing.T) {
+func TestBuildServer_StorageIntegrityRuntimeRejectsUnavailableCompanionContract(t *testing.T) {
+	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatalf("NewRelaySigner: %v", err)
+	}
+	cfg := minimalRouterOnlyCfg(t)
+	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
+
+	_, err = buildServer(Options{
+		Config:       cfg,
+		NetworkState: network.NewInMemoryNetworkState(),
+		StorageIntegrityRuntime: StorageIntegrityRuntimeOptions{
+			StatementSubmitter: &rootRecordingSubmitter{outcome: sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}},
+			SourcePreparer: &rootRecordingPreparer{
+				source: "snode-A",
+				claim:  sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"},
+			},
+			PayloadWriter: &rootRecordingPayloadWriter{result: sicore.PayloadPutResult{
+				PayloadRef:         "payload://store/ref-1",
+				State:              sicore.PayloadStateAvailable,
+				LeaseExpiresUnixMS: uint64(time.Now().Add(time.Hour).UnixMilli()),
+			}},
+			MergeGuard: &recordingBuildMergeGuard{},
+		},
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "companion staged-intake contract unavailable") {
+		t.Fatalf("buildServer err = %v, want unavailable companion contract", err)
+	}
+}
+
+func TestBuildStorageIntegrityRuntimeBuildsConsumerAndRunsMergeGuard(t *testing.T) {
 	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	if err != nil {
 		t.Fatalf("NewRelaySigner: %v", err)
@@ -475,8 +503,9 @@ func TestBuildServer_StorageIntegrityRuntimeBuildsConsumerAndRunsMergeGuard(t *t
 	guard := &recordingBuildMergeGuard{}
 	writer := &rootRecordingPayloadWriter{
 		result: sicore.PayloadPutResult{
-			PayloadRef: "payload://store/ref-1",
-			State:      sicore.PayloadStateAvailable,
+			PayloadRef:         "payload://store/ref-1",
+			State:              sicore.PayloadStateAvailable,
+			LeaseExpiresUnixMS: uint64(time.Now().Add(time.Hour).UnixMilli()),
 		},
 	}
 	submitter := &rootRecordingSubmitter{
@@ -487,38 +516,45 @@ func TestBuildServer_StorageIntegrityRuntimeBuildsConsumerAndRunsMergeGuard(t *t
 		claim:  sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"},
 	}
 
-	bs, err := buildServer(Options{
-		Config:       cfg,
-		NetworkState: network.NewInMemoryNetworkState(),
-		StorageIntegrityRuntime: StorageIntegrityRuntimeOptions{
+	ingress, mergeGuard, err := buildStorageIntegrityRuntimeConsumer(
+		cfg.StorageIntegrity.Runtime,
+		StorageIntegrityRuntimeOptions{
 			StatementSubmitter: submitter,
 			SourcePreparer:     preparer,
 			PayloadWriter:      writer,
 			MergeGuard:         guard,
 		},
-	}, nil)
+	)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("buildStorageIntegrityRuntimeConsumer: %v", err)
 	}
-	defer bs.teardown()
-
-	if err := bs.preServe(context.Background()); err != nil {
-		t.Fatalf("preServe: %v", err)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer ingress.Close()
+	if err := startStorageIntegrityRuntime(ctx, ingress, mergeGuard); err != nil {
+		t.Fatalf("startStorageIntegrityRuntime: %v", err)
 	}
 	if guard.calls != 1 {
 		t.Fatalf("merge guard calls = %d, want 1", guard.calls)
 	}
-
-	chain := requireExternalChain(t, bs)
-	qctx := signedStorageIntegrityQuery(t, signer)
-	if err := chain.OnQuery(context.Background(), qctx); err != nil {
-		t.Fatalf("OnQuery: %v", err)
-	}
-	if err := chain.OnClientDataStrict(context.Background(), qctx, []byte{byte(chproto.ClientDataCode), 1}); err != nil {
-		t.Fatalf("OnClientDataStrict: %v", err)
-	}
-	if err := chain.OnQueryInputCompleteStrict(context.Background(), qctx); err != nil {
-		t.Fatalf("OnQueryInputCompleteStrict: %v", err)
+	payload := []byte("native-block-bytes")
+	if err := ingress.ConsumeStorageIntegrityAdmission(ctx, storageintegrity.Admission{
+		StatementID: strings.ToLower(signer.Address()) + ":1:n1",
+		Kind:        storageintegrity.KindInsert,
+		TableID:     "net1.events",
+		SQL:         "INSERT INTO events FORMAT Native",
+		SQLHash:     replay.DigestString("INSERT INTO events FORMAT Native"),
+		Signer:      strings.ToLower(signer.Address()),
+		UserJWS:     "jws",
+		Payload: storageintegrity.CapturedPayload{
+			Bytes:    payload,
+			Length:   uint64(len(payload)),
+			Encoding: sicore.PayloadEncodingClickHouseNativeData,
+			Revision: 54465,
+			Complete: true,
+		},
+	}); err != nil {
+		t.Fatalf("ConsumeStorageIntegrityAdmission: %v", err)
 	}
 
 	if writer.calls != 1 {
@@ -537,7 +573,7 @@ func TestBuildServer_StorageIntegrityRuntimeBuildsConsumerAndRunsMergeGuard(t *t
 	requireDirHasFiles(t, cfg.StorageIntegrity.Runtime.JournalDir, "intake journal", 1)
 }
 
-func TestBuildServer_StorageIntegrityRuntimeBuildsMergeGuardFromConnAndConfig(t *testing.T) {
+func TestBuildStorageIntegrityRuntimeBuildsMergeGuardFromConnAndConfig(t *testing.T) {
 	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	if err != nil {
 		t.Fatalf("NewRelaySigner: %v", err)
@@ -546,23 +582,23 @@ func TestBuildServer_StorageIntegrityRuntimeBuildsMergeGuardFromConnAndConfig(t 
 	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
 
 	mergeConn := &recordingBuildMergeConn{}
-	bs, err := buildServer(Options{
-		Config:       cfg,
-		NetworkState: network.NewInMemoryNetworkState(),
-		StorageIntegrityRuntime: StorageIntegrityRuntimeOptions{
+	ingress, guard, err := buildStorageIntegrityRuntimeConsumer(
+		cfg.StorageIntegrity.Runtime,
+		StorageIntegrityRuntimeOptions{
 			StatementSubmitter: &rootRecordingSubmitter{outcome: sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}},
 			SourcePreparer:     &rootRecordingPreparer{source: "snode-A", claim: sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"}},
 			PayloadWriter:      &rootRecordingPayloadWriter{result: sicore.PayloadPutResult{PayloadRef: "payload://store/ref-1", State: sicore.PayloadStateAvailable}},
 			MergeConn:          mergeConn,
 		},
-	}, nil)
+	)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("buildStorageIntegrityRuntimeConsumer: %v", err)
 	}
-	defer bs.teardown()
-
-	if err := bs.preServe(context.Background()); err != nil {
-		t.Fatalf("preServe: %v", err)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer ingress.Close()
+	if err := startStorageIntegrityRuntime(ctx, ingress, guard); err != nil {
+		t.Fatalf("startStorageIntegrityRuntime: %v", err)
 	}
 	wantExecs := []string{
 		"SYSTEM STOP MERGES `hg_safe`.`events`",
@@ -579,7 +615,44 @@ func TestBuildServer_StorageIntegrityRuntimeBuildsMergeGuardFromConnAndConfig(t 
 	}
 }
 
-func TestBuildServer_StorageIntegrityRuntimePreServeFailsClosedOnMergeGuardError(t *testing.T) {
+func TestBuildStorageIntegrityRuntimeWrapsMergeSupervisor(t *testing.T) {
+	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatalf("NewRelaySigner: %v", err)
+	}
+	cfg := minimalRouterOnlyCfg(t)
+	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
+	rawGuard := &recordingBuildMergeGuard{}
+
+	ingress, guard, err := buildStorageIntegrityRuntimeConsumer(
+		cfg.StorageIntegrity.Runtime,
+		StorageIntegrityRuntimeOptions{
+			StatementSubmitter: &rootRecordingSubmitter{outcome: sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}},
+			SourcePreparer: &rootRecordingPreparer{
+				source: "snode-A",
+				claim:  sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"},
+			},
+			PayloadWriter: &rootRecordingPayloadWriter{result: sicore.PayloadPutResult{
+				PayloadRef:         "payload://store/ref-1",
+				State:              sicore.PayloadStateAvailable,
+				LeaseExpiresUnixMS: uint64(time.Now().Add(time.Hour).UnixMilli()),
+			}},
+			MergeGuard: rawGuard,
+		},
+	)
+	if err != nil {
+		t.Fatalf("buildStorageIntegrityRuntimeConsumer: %v", err)
+	}
+	supervisor, ok := guard.(*StorageIntegrityMergeSupervisor)
+	if !ok {
+		t.Fatalf("runtime merge guard type = %T, want *StorageIntegrityMergeSupervisor", guard)
+	}
+	if ingress.guard != supervisor {
+		t.Fatal("ingress and preServe must share the same merge supervisor")
+	}
+}
+
+func TestStartStorageIntegrityRuntimeFailsClosedOnMergeGuardError(t *testing.T) {
 	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	if err != nil {
 		t.Fatalf("NewRelaySigner: %v", err)
@@ -588,24 +661,150 @@ func TestBuildServer_StorageIntegrityRuntimePreServeFailsClosedOnMergeGuardError
 	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
 
 	guard := &recordingBuildMergeGuard{err: errors.New("native merge still active")}
-	bs, err := buildServer(Options{
-		Config:       cfg,
-		NetworkState: network.NewInMemoryNetworkState(),
-		StorageIntegrityRuntime: StorageIntegrityRuntimeOptions{
+	ingress, mergeGuard, err := buildStorageIntegrityRuntimeConsumer(
+		cfg.StorageIntegrity.Runtime,
+		StorageIntegrityRuntimeOptions{
 			StatementSubmitter: &rootRecordingSubmitter{outcome: sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}},
 			SourcePreparer:     &rootRecordingPreparer{source: "snode-A", claim: sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"}},
 			PayloadWriter:      &rootRecordingPayloadWriter{result: sicore.PayloadPutResult{PayloadRef: "payload://store/ref-1", State: sicore.PayloadStateAvailable}},
 			MergeGuard:         guard,
 		},
-	}, nil)
+	)
 	if err != nil {
-		t.Fatalf("buildServer: %v", err)
+		t.Fatalf("buildStorageIntegrityRuntimeConsumer: %v", err)
 	}
-	defer bs.teardown()
+	defer ingress.Close()
 
-	err = bs.preServe(context.Background())
+	err = startStorageIntegrityRuntime(context.Background(), ingress, mergeGuard)
 	if err == nil || !strings.Contains(err.Error(), "storage_integrity.merge_guard") {
-		t.Fatalf("preServe err = %v, want merge guard failure", err)
+		t.Fatalf("startStorageIntegrityRuntime err = %v, want merge guard failure", err)
+	}
+}
+
+type preServeOrderRecorder struct {
+	mu     sync.Mutex
+	events []string
+}
+
+func (r *preServeOrderRecorder) add(event string) {
+	r.mu.Lock()
+	r.events = append(r.events, event)
+	r.mu.Unlock()
+}
+
+func (r *preServeOrderRecorder) snapshot() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.events...)
+}
+
+type orderedBuildMergeGuard struct {
+	order *preServeOrderRecorder
+}
+
+func (g *orderedBuildMergeGuard) AssertStopMerges(context.Context) error {
+	g.order.add("merge")
+	return nil
+}
+
+type orderedBuildSubmitter struct {
+	order *preServeOrderRecorder
+}
+
+func (s *orderedBuildSubmitter) SubmitStatement(context.Context, sicore.StatementEnvelope) (sicore.SubmitOutcome, error) {
+	s.order.add("recover")
+	return sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}, nil
+}
+
+func TestStartStorageIntegrityRuntimeRecoversAfterInitialMergeAssert(t *testing.T) {
+	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatalf("NewRelaySigner: %v", err)
+	}
+	cfg := minimalRouterOnlyCfg(t)
+	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
+
+	journal, err := sicore.NewFileIntakeJournal(cfg.StorageIntegrity.Runtime.JournalDir)
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	payload := []byte("native-block-bytes")
+	adm := sicore.AdmissionRecord{
+		StatementID:     "0xabc:1:n1",
+		Kind:            sicore.KindInsert,
+		TableID:         "net1.events",
+		SQL:             "INSERT INTO events FORMAT Native",
+		SQLHash:         replay.DigestString("INSERT INTO events FORMAT Native"),
+		Signer:          "0xabc",
+		UserJWS:         "jws",
+		Payload:         payload,
+		PayloadLength:   uint64(len(payload)),
+		PayloadHash:     replay.DigestBytes(payload),
+		PayloadEncoding: sicore.PayloadEncodingClickHouseNativeData,
+		Revision:        54465,
+	}
+	env, err := sicore.EnvelopeFromAdmission(adm)
+	if err != nil {
+		t.Fatalf("EnvelopeFromAdmission: %v", err)
+	}
+	prepared := sicore.PreparedLocalResult{
+		StatementID:     adm.StatementID,
+		SourceNode:      "snode-A",
+		PayloadRef:      env.PayloadRef,
+		PayloadHash:     env.PayloadHash,
+		PayloadLength:   env.PayloadLength,
+		PayloadEncoding: env.PayloadEncoding,
+		Revision:        env.Revision,
+		Lifecycle:       sicore.LifecycleUnsafeWritten,
+	}
+	if err := journal.SaveIntakeRecord(context.Background(), sicore.IntakeJournalRecord{
+		StatementID:     adm.StatementID,
+		Source:          "snode-A",
+		FrontierOrdinal: 1,
+		Env:             env,
+		Admission:       adm,
+		Stage:           sicore.LifecycleUnsafeWritten,
+		Prepared:        prepared,
+		HasPrepared:     true,
+	}); err != nil {
+		t.Fatalf("SaveIntakeRecord: %v", err)
+	}
+
+	order := &preServeOrderRecorder{}
+	payloadWriter := &rootRecordingPayloadWriter{
+		result: sicore.PayloadPutResult{
+			PayloadRef:         env.PayloadRef,
+			State:              sicore.PayloadStateAvailable,
+			LeaseExpiresUnixMS: uint64(time.Now().Add(time.Hour).UnixMilli()),
+		},
+	}
+	ingress, mergeGuard, err := buildStorageIntegrityRuntimeConsumer(
+		cfg.StorageIntegrity.Runtime,
+		StorageIntegrityRuntimeOptions{
+			StatementSubmitter: &orderedBuildSubmitter{order: order},
+			SourcePreparer: &rootRecordingPreparer{
+				source: "snode-A",
+				claim:  sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"},
+			},
+			PayloadWriter: payloadWriter,
+			MergeGuard:    &orderedBuildMergeGuard{order: order},
+		},
+	)
+	if err != nil {
+		t.Fatalf("buildStorageIntegrityRuntimeConsumer: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer ingress.Close()
+	if err := startStorageIntegrityRuntime(ctx, ingress, mergeGuard); err != nil {
+		t.Fatalf("startStorageIntegrityRuntime: %v", err)
+	}
+	events := order.snapshot()
+	if len(events) < 2 || events[0] != "merge" || events[1] != "recover" {
+		t.Fatalf("preServe events = %v, want [merge recover]", events)
+	}
+	if payloadWriter.calls != 1 {
+		t.Fatalf("recovery payload lease puts = %d, want 1", payloadWriter.calls)
 	}
 }
 

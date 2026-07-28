@@ -41,6 +41,7 @@ import (
 	"housegate/housegate/pkg/replicationproxy"
 	"housegate/housegate/pkg/rewriter"
 	"housegate/housegate/pkg/sqlmeta"
+	sicore "housegate/housegate/pkg/storageintegrity"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -598,11 +599,15 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 
 	var storageIntegrityIngress *storageintegrity.Plugin
 	var storageIntegrityMergeGuard StorageIntegrityMergeGuard
+	var storageIntegrityRuntime *StorageIntegrityIngress
 	if cfg.StorageIntegrity.Ingress.Enabled {
 		admissionConsumer := opts.StorageIntegrityAdmissionConsumer
 		if cfg.StorageIntegrity.Runtime.Enabled {
 			if admissionConsumer != nil {
 				return nil, fmt.Errorf("storage_integrity.runtime.enabled cannot be combined with StorageIntegrityAdmissionConsumer")
+			}
+			if !sicore.CompanionStagedIntakeAvailable {
+				return nil, fmt.Errorf("storage_integrity.runtime: companion staged-intake contract unavailable")
 			}
 			consumer, guard, err := buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, opts.StorageIntegrityRuntime)
 			if err != nil {
@@ -610,6 +615,8 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			}
 			admissionConsumer = consumer
 			storageIntegrityMergeGuard = guard
+			storageIntegrityRuntime = consumer
+			pushTeardown(consumer.Close)
 		}
 		if admissionConsumer == nil {
 			return nil, fmt.Errorf("storage_integrity.ingress admission consumer is required when enabled")
@@ -831,11 +838,14 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		listeners:       listeners,
 		metricsRegistry: metricsRegistry,
 		preServe: func(ctx context.Context) error {
+			if err := startStorageIntegrityRuntime(ctx, storageIntegrityRuntime, storageIntegrityMergeGuard); err != nil {
+				return err
+			}
 			if storageIntegrityMergeGuard != nil {
-				if err := storageIntegrityMergeGuard.AssertStopMerges(ctx); err != nil {
-					return fmt.Errorf("storage_integrity.merge_guard: %w", err)
-				}
 				log.Info("storage_integrity merge guard asserted")
+			}
+			if storageIntegrityRuntime != nil {
+				log.Info("storage_integrity durable intake recovery completed")
 			}
 			if libCluster != nil {
 				libCluster.Start(ctx)

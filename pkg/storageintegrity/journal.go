@@ -28,10 +28,13 @@ type IntakeJournal interface {
 // protocol and recovery facts; active/done waiters and source-frontier queues
 // are process-local and rebuilt by the orchestrator.
 type IntakeJournalRecord struct {
-	StatementID string            `json:"statement_id"`
-	Source      string            `json:"source"`
-	Env         StatementEnvelope `json:"env"`
-	Admission   AdmissionRecord   `json:"admission"`
+	StatementID string `json:"statement_id"`
+	Source      string `json:"source"`
+	// FrontierOrdinal is immutable for the lifetime of the statement. It
+	// reconstructs same-source admission order independently of later updates.
+	FrontierOrdinal uint64            `json:"frontier_ordinal"`
+	Env             StatementEnvelope `json:"env"`
+	Admission       AdmissionRecord   `json:"admission"`
 
 	Stage       Lifecycle `json:"stage"`
 	AbortReason string    `json:"abort_reason,omitempty"`
@@ -120,6 +123,12 @@ func (j *FileIntakeJournal) ListIntakeRecords(ctx context.Context) ([]IntakeJour
 		records = append(records, rec)
 	}
 	sort.Slice(records, func(i, k int) bool {
+		if records[i].Source != records[k].Source {
+			return records[i].Source < records[k].Source
+		}
+		if records[i].FrontierOrdinal != records[k].FrontierOrdinal {
+			return records[i].FrontierOrdinal < records[k].FrontierOrdinal
+		}
 		if records[i].UpdatedAtUnixMS != records[k].UpdatedAtUnixMS {
 			return records[i].UpdatedAtUnixMS < records[k].UpdatedAtUnixMS
 		}
@@ -191,6 +200,7 @@ func journalRecordFromIntakeRecord(rec *intakeRecord) IntakeJournalRecord {
 	return IntakeJournalRecord{
 		StatementID:     rec.statementID,
 		Source:          rec.source,
+		FrontierOrdinal: rec.frontierOrdinal,
 		Env:             rec.env,
 		Admission:       cloneAdmissionRecord(rec.adm),
 		Stage:           rec.stage,
@@ -209,20 +219,21 @@ func journalRecordFromIntakeRecord(rec *intakeRecord) IntakeJournalRecord {
 
 func intakeRecordFromJournalRecord(rec IntakeJournalRecord) *intakeRecord {
 	return &intakeRecord{
-		statementID:   rec.StatementID,
-		source:        rec.Source,
-		env:           rec.Env,
-		adm:           cloneAdmissionRecord(rec.Admission),
-		prepared:      clonePreparedLocalResult(rec.Prepared),
-		hasPrepared:   rec.HasPrepared,
-		submit:        rec.Submit,
-		hasSubmit:     rec.HasSubmit,
-		submitUnknown: rec.SubmitUnknown,
-		claimUnknown:  rec.ClaimUnknown,
-		stage:         rec.Stage,
-		abortReason:   rec.AbortReason,
-		terminalRes:   cloneIntakeResult(rec.TerminalResult),
-		isTerminal:    rec.IsTerminal,
+		statementID:     rec.StatementID,
+		source:          rec.Source,
+		frontierOrdinal: rec.FrontierOrdinal,
+		env:             rec.Env,
+		adm:             cloneAdmissionRecord(rec.Admission),
+		prepared:        clonePreparedLocalResult(rec.Prepared),
+		hasPrepared:     rec.HasPrepared,
+		submit:          rec.Submit,
+		hasSubmit:       rec.HasSubmit,
+		submitUnknown:   rec.SubmitUnknown,
+		claimUnknown:    rec.ClaimUnknown,
+		stage:           rec.Stage,
+		abortReason:     rec.AbortReason,
+		terminalRes:     cloneIntakeResult(rec.TerminalResult),
+		isTerminal:      rec.IsTerminal,
 	}
 }
 

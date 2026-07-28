@@ -3,6 +3,7 @@ package housegate
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	siplugin "housegate/housegate/pkg/plugins/storageintegrity"
 	"housegate/housegate/pkg/replay"
@@ -30,6 +31,11 @@ type StorageIntegrityIngress struct {
 	guard         StorageIntegrityMergeGuard
 	matKind       sicore.MaterializerKind
 	payloadWriter sicore.PayloadWriter
+	leaseManager  sicore.PayloadLeaseManager
+	mergeRunner   *StorageIntegrityMergeSupervisor
+
+	backgroundMu     sync.Mutex
+	backgroundCancel context.CancelFunc
 }
 
 // NewStorageIntegrityIngress constructs the ingress runtime over an orchestrator
@@ -51,11 +57,58 @@ func NewStorageIntegrityIngressWithPayloadWriter(orch *sicore.Orchestrator, guar
 	return &StorageIntegrityIngress{orch: orch, guard: guard, matKind: matKind, payloadWriter: writer}, nil
 }
 
+// RecoverPending drains durable non-terminal intake records before listeners
+// admit new source writes.
+func (i *StorageIntegrityIngress) RecoverPending(ctx context.Context) error {
+	if i == nil || i.orch == nil {
+		return fmt.Errorf("storage_integrity ingress: orchestrator is required")
+	}
+	return i.orch.RecoverPending(ctx)
+}
+
+func (i *StorageIntegrityIngress) StartBackground(ctx context.Context) {
+	if i == nil || (i.leaseManager == nil && i.mergeRunner == nil) {
+		return
+	}
+	i.backgroundMu.Lock()
+	if i.backgroundCancel != nil {
+		i.backgroundMu.Unlock()
+		return
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	i.backgroundCancel = cancel
+	i.backgroundMu.Unlock()
+	if i.leaseManager != nil {
+		go i.leaseManager.Run(runCtx)
+	}
+	if i.mergeRunner != nil {
+		go i.mergeRunner.Run(runCtx)
+	}
+}
+
+func (i *StorageIntegrityIngress) Close() {
+	if i == nil {
+		return
+	}
+	i.backgroundMu.Lock()
+	cancel := i.backgroundCancel
+	i.backgroundCancel = nil
+	i.backgroundMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
 // ConsumeStorageIntegrityAdmission maps a completed plugin admission into a core
 // AdmissionRecord and drives the orchestrator. A non-ACK2 outcome is surfaced as
 // an error so the plugin reports failure to the client rather than a false
 // success; only a bound ACK2 returns nil. This is the C1-gated end-to-end path.
 func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.Context, adm siplugin.Admission) error {
+	if health, ok := i.guard.(StorageIntegrityMergeHealth); ok {
+		if err := health.CheckMergeHealth(); err != nil {
+			return fmt.Errorf("storage_integrity ingress: merge health: %w", err)
+		}
+	}
 	rec := AdmissionRecordFromPlugin(adm)
 	if i.payloadWriter != nil {
 		put, err := i.payloadWriter.PutPayload(ctx, rec.Payload, rec.PayloadHash, rec.PayloadLength)

@@ -39,17 +39,24 @@ type StorageIntegrityIngressConfig struct {
 // consumer. It still depends on host-injected ports for the real companion
 // topology; the YAML owns only the fail-fast protocol intent.
 type StorageIntegrityRuntimeConfig struct {
-	Enabled         bool                                    `json:"enabled"           yaml:"enabled"`
-	ExpectedSource  string                                  `json:"expected_source"   yaml:"expected_source"`
-	JournalDir      string                                  `json:"journal_dir"       yaml:"journal_dir"`
-	PayloadSpoolDir string                                  `json:"payload_spool_dir" yaml:"payload_spool_dir"`
-	MergeGuard      StorageIntegrityRuntimeMergeGuardConfig `json:"merge_guard"       yaml:"merge_guard"`
+	Enabled         bool                                      `json:"enabled"           yaml:"enabled"`
+	ExpectedSource  string                                    `json:"expected_source"   yaml:"expected_source"`
+	JournalDir      string                                    `json:"journal_dir"       yaml:"journal_dir"`
+	PayloadSpoolDir string                                    `json:"payload_spool_dir" yaml:"payload_spool_dir"`
+	PayloadLease    StorageIntegrityRuntimePayloadLeaseConfig `json:"payload_lease"     yaml:"payload_lease"`
+	MergeGuard      StorageIntegrityRuntimeMergeGuardConfig   `json:"merge_guard"       yaml:"merge_guard"`
+}
+
+type StorageIntegrityRuntimePayloadLeaseConfig struct {
+	RefreshInterval Duration `json:"refresh_interval" yaml:"refresh_interval"`
+	RefreshBefore   Duration `json:"refresh_before"   yaml:"refresh_before"`
 }
 
 // StorageIntegrityRuntimeMergeGuardConfig is the production table set that
 // HouseGate guards with table-scoped SYSTEM STOP MERGES at startup.
 type StorageIntegrityRuntimeMergeGuardConfig struct {
-	Tables []StorageIntegrityRuntimeMergeTableConfig `json:"tables" yaml:"tables"`
+	ReassertInterval Duration                                  `json:"reassert_interval" yaml:"reassert_interval"`
+	Tables           []StorageIntegrityRuntimeMergeTableConfig `json:"tables"            yaml:"tables"`
 }
 
 // StorageIntegrityRuntimeMergeTableConfig identifies one ClickHouse table whose
@@ -66,6 +73,15 @@ func defaultStorageIntegrityConfig() StorageIntegrityConfig {
 			MaxTokenAge:     Duration{Duration: time.Minute},
 			RequestTimeout:  Duration{Duration: 5 * time.Second},
 			MaxPayloadBytes: defaultStorageIntegrityMaxPayloadBytes,
+		},
+		Runtime: StorageIntegrityRuntimeConfig{
+			PayloadLease: StorageIntegrityRuntimePayloadLeaseConfig{
+				RefreshInterval: Duration{Duration: time.Second},
+				RefreshBefore:   Duration{Duration: 30 * time.Second},
+			},
+			MergeGuard: StorageIntegrityRuntimeMergeGuardConfig{
+				ReassertInterval: Duration{Duration: 30 * time.Second},
+			},
 		},
 	}
 }
@@ -105,6 +121,15 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 		}
 		if strings.TrimSpace(c.Runtime.PayloadSpoolDir) == "" {
 			errs = append(errs, errors.New("storage_integrity.runtime.payload_spool_dir is required when storage_integrity.runtime.enabled"))
+		}
+		if c.Runtime.PayloadLease.RefreshInterval.Duration <= 0 {
+			errs = append(errs, errors.New("storage_integrity.runtime.payload_lease.refresh_interval must be > 0 when storage_integrity.runtime.enabled"))
+		}
+		if c.Runtime.PayloadLease.RefreshBefore.Duration <= 0 {
+			errs = append(errs, errors.New("storage_integrity.runtime.payload_lease.refresh_before must be > 0 when storage_integrity.runtime.enabled"))
+		}
+		if c.Runtime.MergeGuard.ReassertInterval.Duration <= 0 {
+			errs = append(errs, errors.New("storage_integrity.runtime.merge_guard.reassert_interval must be > 0 when storage_integrity.runtime.enabled"))
 		}
 		if len(c.Runtime.MergeGuard.Tables) == 0 {
 			errs = append(errs, errors.New("storage_integrity.runtime.merge_guard.tables is required when storage_integrity.runtime.enabled"))

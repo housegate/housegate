@@ -171,12 +171,23 @@ func safePayloadHash(payloadHash string) string {
 }
 
 type SpoolingPayloadWriter struct {
-	spool  *FilePayloadSpool
-	remote PayloadWriter
+	spool         *FilePayloadSpool
+	remote        PayloadWriter
+	now           func() time.Time
+	refreshBefore time.Duration
 }
 
 func NewSpoolingPayloadWriter(spool *FilePayloadSpool, remote PayloadWriter) *SpoolingPayloadWriter {
-	return &SpoolingPayloadWriter{spool: spool, remote: remote}
+	return NewSpoolingPayloadWriterWithLeasePolicy(spool, remote, 30*time.Second)
+}
+
+func NewSpoolingPayloadWriterWithLeasePolicy(spool *FilePayloadSpool, remote PayloadWriter, refreshBefore time.Duration) *SpoolingPayloadWriter {
+	return &SpoolingPayloadWriter{
+		spool:         spool,
+		remote:        remote,
+		now:           time.Now,
+		refreshBefore: refreshBefore,
+	}
 }
 
 func (w *SpoolingPayloadWriter) PutPayload(ctx context.Context, payload []byte, payloadHash string, payloadLength uint64) (PayloadPutResult, error) {
@@ -190,7 +201,7 @@ func (w *SpoolingPayloadWriter) PutPayload(ctx context.Context, payload []byte, 
 	if err != nil {
 		return PayloadPutResult{}, err
 	}
-	if rec.State == PayloadSpoolStateUploaded && rec.RemotePayloadRef != "" {
+	if rec.State == PayloadSpoolStateUploaded && rec.RemotePayloadRef != "" && w.leaseReusable(rec) {
 		return PayloadPutResult{
 			PayloadRef:         rec.RemotePayloadRef,
 			State:              rec.RemoteState,
@@ -201,10 +212,33 @@ func (w *SpoolingPayloadWriter) PutPayload(ctx context.Context, payload []byte, 
 	if err != nil {
 		return PayloadPutResult{}, err
 	}
+	if rec.RemotePayloadRef != "" && put.PayloadRef != rec.RemotePayloadRef {
+		return PayloadPutResult{}, fmt.Errorf(
+			"storageintegrity: payload_ref changed for %s: got %q, want %q",
+			payloadHash,
+			put.PayloadRef,
+			rec.RemotePayloadRef,
+		)
+	}
 	if err := w.spool.MarkUploaded(ctx, payloadHash, put); err != nil {
 		return PayloadPutResult{}, err
 	}
 	return put, nil
+}
+
+func (w *SpoolingPayloadWriter) leaseReusable(rec PayloadSpoolRecord) bool {
+	if rec.LeaseExpiresUnixMS == 0 {
+		return false
+	}
+	now := time.Now
+	if w.now != nil {
+		now = w.now
+	}
+	refreshBefore := w.refreshBefore
+	if refreshBefore < 0 {
+		refreshBefore = 0
+	}
+	return time.UnixMilli(int64(rec.LeaseExpiresUnixMS)).After(now().Add(refreshBefore))
 }
 
 func validatePayloadCommitment(payload []byte, payloadHash string, payloadLength uint64) error {

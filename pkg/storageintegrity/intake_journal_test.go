@@ -130,6 +130,130 @@ func (j *failFirstInitialSaveJournal) saveCount() int64 {
 	return atomic.LoadInt64(&j.saves)
 }
 
+type failFirstTerminalSaveJournal struct {
+	base          IntakeJournal
+	err           error
+	terminalSaves int64
+}
+
+func (j *failFirstTerminalSaveJournal) LoadIntakeRecord(ctx context.Context, statementID string) (IntakeJournalRecord, bool, error) {
+	return j.base.LoadIntakeRecord(ctx, statementID)
+}
+
+func (j *failFirstTerminalSaveJournal) ListIntakeRecords(ctx context.Context) ([]IntakeJournalRecord, error) {
+	return j.base.ListIntakeRecords(ctx)
+}
+
+func (j *failFirstTerminalSaveJournal) SaveIntakeRecord(ctx context.Context, rec IntakeJournalRecord) error {
+	if rec.IsTerminal && atomic.AddInt64(&j.terminalSaves, 1) == 1 {
+		return j.err
+	}
+	return j.base.SaveIntakeRecord(ctx, rec)
+}
+
+func TestOrchestrate_TerminalSaveFailureDoesNotPublishMemoryTerminal(t *testing.T) {
+	ctx := context.Background()
+	baseJournal, err := NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	saveErr := errors.New("terminal journal save failed")
+	journal := &failFirstTerminalSaveJournal{base: baseJournal, err: saveErr}
+	prep := newLookupRecordingPreparer(boundSource())
+	sub := &recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeAccepted}}
+	orch := NewOrchestrator(sub, prep, OrchestratorConfig{
+		ExpectedSource: "snode-A",
+		Journal:        journal,
+	})
+	adm := admissionFixture()
+
+	res, err := orch.Orchestrate(ctx, adm)
+	if err == nil || !strings.Contains(err.Error(), saveErr.Error()) {
+		t.Fatalf("first Orchestrate err = %v, want terminal save failure", err)
+	}
+	if !res.Ack2 {
+		t.Fatal("first result should describe the computed ACK2 even though it was not published")
+	}
+
+	res, err = orch.Orchestrate(ctx, adm)
+	if err != nil {
+		t.Fatalf("retry Orchestrate: %v", err)
+	}
+	if !res.Ack2 || res.Lifecycle != LifecycleRCBound {
+		t.Fatalf("retry result Ack2/lifecycle = %v/%q, want ACK2/RCBound", res.Ack2, res.Lifecycle)
+	}
+	if got := atomic.LoadInt64(&journal.terminalSaves); got != 2 {
+		t.Fatalf("terminal save attempts = %d, want 2", got)
+	}
+	persisted, ok, err := baseJournal.LoadIntakeRecord(ctx, adm.StatementID)
+	if err != nil {
+		t.Fatalf("LoadIntakeRecord: %v", err)
+	}
+	if !ok || !persisted.IsTerminal {
+		t.Fatalf("persisted terminal = %v/%v, want present terminal record", ok, persisted.IsTerminal)
+	}
+}
+
+func TestOrchestrate_TerminalSaveFailureRestartsFromDurableStage(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	baseJournal, err := NewFileIntakeJournal(dir)
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	saveErr := errors.New("terminal journal save failed")
+	journal := &failFirstTerminalSaveJournal{base: baseJournal, err: saveErr}
+	prep := newLookupRecordingPreparer(boundSource())
+	sub := &recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeAccepted}}
+	orch := NewOrchestrator(sub, prep, OrchestratorConfig{
+		ExpectedSource: "snode-A",
+		Journal:        journal,
+	})
+	adm := admissionFixture()
+
+	res, err := orch.Orchestrate(ctx, adm)
+	if err == nil || !strings.Contains(err.Error(), saveErr.Error()) {
+		t.Fatalf("first Orchestrate err = %v, want terminal save failure", err)
+	}
+	if !res.Ack2 || res.Lifecycle != LifecycleRCBound {
+		t.Fatalf("first result Ack2/lifecycle = %v/%q, want computed ACK2/RCBound", res.Ack2, res.Lifecycle)
+	}
+	persisted, ok, err := baseJournal.LoadIntakeRecord(ctx, adm.StatementID)
+	if err != nil {
+		t.Fatalf("LoadIntakeRecord after failed terminal save: %v", err)
+	}
+	if !ok || persisted.IsTerminal || persisted.Stage != LifecycleRCBound {
+		t.Fatalf("persisted after failed terminal save = ok:%v terminal:%v stage:%q, want non-terminal RCBound", ok, persisted.IsTerminal, persisted.Stage)
+	}
+
+	journal2, err := NewFileIntakeJournal(dir)
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal after restart: %v", err)
+	}
+	orch2 := NewOrchestrator(sub, prep, OrchestratorConfig{
+		ExpectedSource: "snode-A",
+		Journal:        journal2,
+	})
+
+	res2, err := orch2.Orchestrate(ctx, adm)
+	if err != nil {
+		t.Fatalf("restart Orchestrate: %v", err)
+	}
+	if !res2.Ack2 || res2.Lifecycle != LifecycleRCBound {
+		t.Fatalf("restart result Ack2/lifecycle = %v/%q, want ACK2/RCBound", res2.Ack2, res2.Lifecycle)
+	}
+	if got := atomic.LoadInt64(&prep.prepareCount); got != 1 {
+		t.Fatalf("restart must not re-run PrepareLocalStatement, got %d prepare calls", got)
+	}
+	persisted, ok, err = journal2.LoadIntakeRecord(ctx, adm.StatementID)
+	if err != nil {
+		t.Fatalf("LoadIntakeRecord after restart: %v", err)
+	}
+	if !ok || !persisted.IsTerminal || persisted.Stage != LifecycleRCBound {
+		t.Fatalf("persisted after restart = ok:%v terminal:%v stage:%q, want terminal RCBound", ok, persisted.IsTerminal, persisted.Stage)
+	}
+}
+
 type initialPersistRetryPreparer struct {
 	prepared     PreparedLocalResult
 	journalSaves func() int64
@@ -239,6 +363,55 @@ func (p *lookupRecordingPreparer) RegisterPreparedClaim(_ context.Context, _ str
 
 func (p *lookupRecordingPreparer) AbortPreparedStatement(context.Context, string, []CandidatePart, string) error {
 	return nil
+}
+
+type ambiguousPreparePreparer struct {
+	*lookupRecordingPreparer
+	failOnce int64
+}
+
+func (p *ambiguousPreparePreparer) PrepareLocalStatement(ctx context.Context, env StatementEnvelope, payload []byte) (PreparedLocalResult, error) {
+	res, err := p.lookupRecordingPreparer.PrepareLocalStatement(ctx, env, payload)
+	if err != nil {
+		return PreparedLocalResult{}, err
+	}
+	if atomic.CompareAndSwapInt64(&p.failOnce, 1, 0) {
+		return PreparedLocalResult{}, errors.New("prepare response lost after durable source write")
+	}
+	return res, nil
+}
+
+func TestOrchestrate_AmbiguousPrepareErrorRequiresLookupBeforeRetry(t *testing.T) {
+	ctx := context.Background()
+	base := newLookupRecordingPreparer(boundSource())
+	prep := &ambiguousPreparePreparer{lookupRecordingPreparer: base, failOnce: 1}
+	sub := &recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeAccepted}}
+	journal, err := NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	orch := NewOrchestrator(sub, prep, OrchestratorConfig{
+		ExpectedSource: "snode-A",
+		Journal:        journal,
+	})
+	adm := admissionFixture()
+
+	if _, err = orch.Orchestrate(ctx, adm); err == nil || !strings.Contains(err.Error(), "prepare response lost") {
+		t.Fatalf("first Orchestrate err = %v, want ambiguous prepare failure", err)
+	}
+	res, err := orch.Orchestrate(ctx, adm)
+	if err != nil {
+		t.Fatalf("retry Orchestrate: %v", err)
+	}
+	if !res.Ack2 || res.Lifecycle != LifecycleRCBound {
+		t.Fatalf("retry result Ack2/lifecycle = %v/%q, want ACK2/RCBound", res.Ack2, res.Lifecycle)
+	}
+	if got := atomic.LoadInt64(&base.prepareCount); got != 1 {
+		t.Fatalf("prepare count = %d, want 1", got)
+	}
+	if got := atomic.LoadInt64(&base.lookupCount); got != 1 {
+		t.Fatalf("lookup count = %d, want 1", got)
+	}
 }
 
 func TestFileIntakeJournalPreparedSaveFailureRestartsViaSourceLookup(t *testing.T) {
@@ -408,5 +581,114 @@ func TestFileIntakeJournalListIgnoresTempWriteFiles(t *testing.T) {
 	}
 	if len(records) != 1 || records[0].StatementID != adm.StatementID {
 		t.Fatalf("listed records = %#v, want only %s", records, adm.StatementID)
+	}
+}
+
+func TestFileIntakeJournalOrdersNonTerminalRecordsByFrontierOrdinal(t *testing.T) {
+	ctx := context.Background()
+	journal, err := NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	a := IntakeJournalRecord{
+		StatementID:     fixtureStatementID(1),
+		Source:          "snode-A",
+		Stage:           LifecyclePreparing,
+		FrontierOrdinal: 1,
+	}
+	b := IntakeJournalRecord{
+		StatementID:     fixtureStatementID(2),
+		Source:          "snode-A",
+		Stage:           LifecyclePreparing,
+		FrontierOrdinal: 2,
+	}
+	if err := journal.SaveIntakeRecord(ctx, a); err != nil {
+		t.Fatalf("save A: %v", err)
+	}
+	if err := journal.SaveIntakeRecord(ctx, b); err != nil {
+		t.Fatalf("save B: %v", err)
+	}
+	if err := journal.SaveIntakeRecord(ctx, a); err != nil {
+		t.Fatalf("update A: %v", err)
+	}
+
+	records, err := journal.ListIntakeRecords(ctx)
+	if err != nil {
+		t.Fatalf("ListIntakeRecords: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("record count = %d, want 2", len(records))
+	}
+	if records[0].StatementID != a.StatementID || records[1].StatementID != b.StatementID {
+		t.Fatalf("recovery order = [%s %s], want [%s %s]", records[0].StatementID, records[1].StatementID, a.StatementID, b.StatementID)
+	}
+}
+
+func TestOrchestratorPersistsFrontierOrdinalBeforeSourceWrite(t *testing.T) {
+	ctx := context.Background()
+	journal, err := NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	prep := newLookupRecordingPreparer(boundSource())
+	sub := &recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeAccepted}}
+	orch := NewOrchestrator(sub, prep, OrchestratorConfig{
+		ExpectedSource: "snode-A",
+		Journal:        journal,
+	})
+	a := admissionFixture()
+	b := admissionFixture()
+	b.StatementID = fixtureStatementID(2)
+
+	if _, err := orch.Orchestrate(ctx, a); err != nil {
+		t.Fatalf("Orchestrate A: %v", err)
+	}
+	if _, err := orch.Orchestrate(ctx, b); err != nil {
+		t.Fatalf("Orchestrate B: %v", err)
+	}
+	aRecord, ok, err := journal.LoadIntakeRecord(ctx, a.StatementID)
+	if err != nil || !ok {
+		t.Fatalf("load A record: ok=%v err=%v", ok, err)
+	}
+	bRecord, ok, err := journal.LoadIntakeRecord(ctx, b.StatementID)
+	if err != nil || !ok {
+		t.Fatalf("load B record: ok=%v err=%v", ok, err)
+	}
+	if aRecord.FrontierOrdinal != 1 || bRecord.FrontierOrdinal != 2 {
+		t.Fatalf("frontier ordinals = A:%d B:%d, want 1/2", aRecord.FrontierOrdinal, bRecord.FrontierOrdinal)
+	}
+}
+
+func TestOrchestratorRecoveryRejectsMultipleLegacyRecordsWithoutOrdinal(t *testing.T) {
+	ctx := context.Background()
+	journal, err := NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	for i := 1; i <= 2; i++ {
+		adm := admissionFixture()
+		adm.StatementID = fixtureStatementID(uint64(i))
+		env, err := EnvelopeFromAdmission(adm)
+		if err != nil {
+			t.Fatalf("EnvelopeFromAdmission %d: %v", i, err)
+		}
+		if err := journal.SaveIntakeRecord(ctx, IntakeJournalRecord{
+			StatementID: adm.StatementID,
+			Source:      "snode-A",
+			Env:         env,
+			Admission:   adm,
+			Stage:       LifecyclePreparing,
+		}); err != nil {
+			t.Fatalf("save legacy record %d: %v", i, err)
+		}
+	}
+	orch := NewOrchestrator(&recordingSubmitter{}, newLookupRecordingPreparer(boundSource()), OrchestratorConfig{
+		ExpectedSource: "snode-A",
+		Journal:        journal,
+	})
+
+	err = orch.ensureJournalRecovered(ctx)
+	if err == nil || !strings.Contains(err.Error(), "frontier ordinal") {
+		t.Fatalf("ensureJournalRecovered err = %v, want ambiguous legacy frontier error", err)
 	}
 }

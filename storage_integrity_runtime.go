@@ -9,7 +9,6 @@ import (
 	pb "github.com/sentioxyz/arbiter-proto/gen/pb"
 
 	"housegate/housegate/pkg/config"
-	siplugin "housegate/housegate/pkg/plugins/storageintegrity"
 	sicore "housegate/housegate/pkg/storageintegrity"
 )
 
@@ -39,7 +38,7 @@ type StorageIntegrityRuntimeOptions struct {
 	MergeGuard         StorageIntegrityMergeGuard
 }
 
-func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRuntimeConfig, opts StorageIntegrityRuntimeOptions) (siplugin.AdmissionConsumer, StorageIntegrityMergeGuard, error) {
+func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRuntimeConfig, opts StorageIntegrityRuntimeOptions) (*StorageIntegrityIngress, StorageIntegrityMergeGuard, error) {
 	expectedSource := strings.TrimSpace(runtimeCfg.ExpectedSource)
 
 	submitter := opts.StatementSubmitter
@@ -68,11 +67,21 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 			return nil, nil, fmt.Errorf("storage_integrity.runtime.payload_spool: %w", err)
 		}
 	}
+	var leaseManager sicore.PayloadLeaseManager
 	if payloadWriter != nil && spool != nil {
-		payloadWriter = sicore.NewSpoolingPayloadWriter(spool, payloadWriter)
+		spoolingWriter := sicore.NewSpoolingPayloadWriterWithLeasePolicy(
+			spool,
+			payloadWriter,
+			runtimeCfg.PayloadLease.RefreshBefore.Duration,
+		)
+		payloadWriter = spoolingWriter
+		leaseManager = sicore.NewPayloadLeaseSupervisor(
+			spoolingWriter,
+			runtimeCfg.PayloadLease.RefreshInterval.Duration,
+		)
 	}
 
-	mergeGuard, err := buildStorageIntegrityMergeGuard(runtimeCfg.MergeGuard, opts)
+	rawMergeGuard, err := buildStorageIntegrityMergeGuard(runtimeCfg.MergeGuard, opts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -93,15 +102,23 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 	if spool == nil {
 		errs = append(errs, errors.New("storage_integrity.runtime.payload_spool or payload_spool_dir is required"))
 	}
-	if mergeGuard == nil {
+	if rawMergeGuard == nil {
 		errs = append(errs, errors.New("storage_integrity.runtime.merge_guard or merge_conn is required"))
 	}
 	if joined := errors.Join(errs...); joined != nil {
 		return nil, nil, joined
 	}
+	mergeGuard := NewStorageIntegrityMergeSupervisor(
+		rawMergeGuard,
+		runtimeCfg.MergeGuard.ReassertInterval.Duration,
+	)
 
 	var orch *sicore.Orchestrator
-	orchCfg := sicore.OrchestratorConfig{ExpectedSource: expectedSource, Journal: journal}
+	orchCfg := sicore.OrchestratorConfig{
+		ExpectedSource:      expectedSource,
+		Journal:             journal,
+		PayloadLeaseManager: leaseManager,
+	}
 	if opts.StatusQuerier != nil {
 		orch = sicore.NewOrchestratorWithQuerier(submitter, opts.SourcePreparer, opts.StatusQuerier, orchCfg)
 	} else {
@@ -111,7 +128,25 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 	if err != nil {
 		return nil, nil, fmt.Errorf("storage_integrity.runtime: %w", err)
 	}
+	ingress.leaseManager = leaseManager
+	ingress.mergeRunner = mergeGuard
 	return ingress, mergeGuard, nil
+}
+
+func startStorageIntegrityRuntime(ctx context.Context, runtime *StorageIntegrityIngress, guard StorageIntegrityMergeGuard) error {
+	if guard != nil {
+		if err := guard.AssertStopMerges(ctx); err != nil {
+			return fmt.Errorf("storage_integrity.merge_guard: %w", err)
+		}
+	}
+	if runtime == nil {
+		return nil
+	}
+	runtime.StartBackground(ctx)
+	if err := runtime.RecoverPending(ctx); err != nil {
+		return fmt.Errorf("storage_integrity.recovery: %w", err)
+	}
+	return nil
 }
 
 func buildStorageIntegrityMergeGuard(cfg config.StorageIntegrityRuntimeMergeGuardConfig, opts StorageIntegrityRuntimeOptions) (StorageIntegrityMergeGuard, error) {
