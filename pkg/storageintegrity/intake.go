@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -459,6 +460,9 @@ type Orchestrator struct {
 	mu        sync.Mutex
 	records   map[string]*intakeRecord   // statement_id -> cross-call intake state
 	frontiers map[string]*sourceFrontier // frontier key (source) -> serial gate
+	// nextFrontierOrdinal stores the greatest assigned durable ordinal per
+	// source. New records increment it before their initial journal save.
+	nextFrontierOrdinal map[string]uint64
 
 	journalRecovered    bool
 	journalRecovering   bool
@@ -473,8 +477,9 @@ type Orchestrator struct {
 // guarded by Orchestrator.mu except res/err, which follow the usual
 // write-before-close(done) / read-after-<-done happens-before.
 type intakeRecord struct {
-	statementID string
-	source      string // frontier key this intake queues on
+	statementID     string
+	source          string // frontier key this intake queues on
+	frontierOrdinal uint64 // immutable same-source admission order
 
 	// env/adm are the ORIGINAL statement this id was first opened with. Every
 	// later call for the same statement id must present a byte-identical envelope;
@@ -559,12 +564,13 @@ const defaultFrontierKey = "__default_source__"
 // NewOrchestrator constructs an Orchestrator over the two staged-intake ports.
 func NewOrchestrator(submitter StatementSubmitter, preparer SourcePreparer, cfg OrchestratorConfig) *Orchestrator {
 	return &Orchestrator{
-		submitter: submitter,
-		preparer:  preparer,
-		cfg:       cfg,
-		journal:   cfg.Journal,
-		records:   map[string]*intakeRecord{},
-		frontiers: map[string]*sourceFrontier{},
+		submitter:           submitter,
+		preparer:            preparer,
+		cfg:                 cfg,
+		journal:             cfg.Journal,
+		records:             map[string]*intakeRecord{},
+		frontiers:           map[string]*sourceFrontier{},
+		nextFrontierOrdinal: map[string]uint64{},
 	}
 }
 
@@ -621,12 +627,25 @@ func (o *Orchestrator) Orchestrate(ctx context.Context, adm AdmissionRecord) (In
 			if rec.source == "" {
 				rec.source = o.frontierKey()
 			}
+			if rec.frontierOrdinal > o.nextFrontierOrdinal[rec.source] {
+				o.nextFrontierOrdinal[rec.source] = rec.frontierOrdinal
+			}
 			rec.requirePreparedLookup = needsPreparedLookupAfterRestart(rec)
 			o.records[env.StatementID] = rec
 		}
 	}
 	if rec == nil {
-		rec = &intakeRecord{statementID: env.StatementID, source: o.frontierKey(), env: env, adm: adm, stage: LifecyclePreparing}
+		source := o.frontierKey()
+		ordinal := o.nextFrontierOrdinal[source] + 1
+		o.nextFrontierOrdinal[source] = ordinal
+		rec = &intakeRecord{
+			statementID:     env.StatementID,
+			source:          source,
+			frontierOrdinal: ordinal,
+			env:             env,
+			adm:             adm,
+			stage:           LifecyclePreparing,
+		}
 		o.records[env.StatementID] = rec
 		created = true
 	} else if !sameStatement(rec.env, rec.adm, env, adm) {
@@ -779,8 +798,12 @@ func (o *Orchestrator) run(ctx context.Context, env StatementEnvelope, adm Admis
 		} else {
 			p, s, prepareErr, submitErr := o.prepareAndSubmit(ctx, env, adm)
 			if prepareErr != nil {
-				// A failed prepare produced no unsafe part, so it is safe to retry
-				// prepare later; nothing is cached.
+				// The source may have committed its durable unsafe write before a
+				// transport error or cancellation hid the response. Fence every
+				// later prepare behind an explicit source lookup.
+				o.mu.Lock()
+				rec.requirePreparedLookup = true
+				o.mu.Unlock()
 				return IntakeResult{StatementID: env.StatementID, Submit: s}, fmt.Errorf("intake: prepare failed for %s: %w", env.StatementID, prepareErr)
 			}
 			// Prepare succeeded: cache it so any retry never re-runs the unsafe
@@ -1069,12 +1092,20 @@ func (o *Orchestrator) setAbortPending(ctx context.Context, rec *intakeRecord, r
 
 func (o *Orchestrator) setTerminal(ctx context.Context, rec *intakeRecord, res IntakeResult) error {
 	o.mu.Lock()
+	snap := journalRecordFromIntakeRecord(rec)
+	snap.Stage = res.Lifecycle
+	snap.IsTerminal = true
+	snap.TerminalResult = cloneIntakeResult(res)
+	o.mu.Unlock()
+	if err := o.saveJournalSnapshot(ctx, snap); err != nil {
+		return err
+	}
+	o.mu.Lock()
 	rec.stage = res.Lifecycle
 	rec.isTerminal = true
 	rec.terminalRes = res
-	snap := journalRecordFromIntakeRecord(rec)
 	o.mu.Unlock()
-	return o.saveJournalSnapshot(ctx, snap)
+	return nil
 }
 
 func (o *Orchestrator) persistRecord(ctx context.Context, rec *intakeRecord) error {
@@ -1110,6 +1141,9 @@ func (o *Orchestrator) ensureJournalRecovered(ctx context.Context) error {
 		o.mu.Unlock()
 
 		records, err := o.journal.ListIntakeRecords(ctx)
+		if err == nil {
+			records, err = o.normalizeRecoveredFrontierOrdinals(ctx, records)
+		}
 
 		o.mu.Lock()
 		if err == nil {
@@ -1126,8 +1160,60 @@ func (o *Orchestrator) ensureJournalRecovered(ctx context.Context) error {
 	}
 }
 
+func (o *Orchestrator) normalizeRecoveredFrontierOrdinals(ctx context.Context, records []IntakeJournalRecord) ([]IntakeJournalRecord, error) {
+	zeroCount := map[string]int{}
+	maxOrdinal := map[string]uint64{}
+	for i := range records {
+		source := records[i].Source
+		if source == "" {
+			source = o.frontierKey()
+		}
+		if records[i].FrontierOrdinal > maxOrdinal[source] {
+			maxOrdinal[source] = records[i].FrontierOrdinal
+		}
+		if !records[i].IsTerminal && records[i].FrontierOrdinal == 0 {
+			zeroCount[source]++
+			if zeroCount[source] > 1 {
+				return nil, fmt.Errorf("intake: recover source %s has multiple non-terminal records without a frontier ordinal", source)
+			}
+		}
+	}
+	for i := range records {
+		if records[i].IsTerminal || records[i].FrontierOrdinal != 0 {
+			continue
+		}
+		source := records[i].Source
+		if source == "" {
+			source = o.frontierKey()
+			records[i].Source = source
+		}
+		maxOrdinal[source]++
+		records[i].FrontierOrdinal = maxOrdinal[source]
+		if err := o.journal.SaveIntakeRecord(ctx, records[i]); err != nil {
+			return nil, fmt.Errorf("intake: persist recovered frontier ordinal for %s: %w", records[i].StatementID, err)
+		}
+	}
+	sort.Slice(records, func(i, k int) bool {
+		if records[i].Source != records[k].Source {
+			return records[i].Source < records[k].Source
+		}
+		if records[i].FrontierOrdinal != records[k].FrontierOrdinal {
+			return records[i].FrontierOrdinal < records[k].FrontierOrdinal
+		}
+		return records[i].StatementID < records[k].StatementID
+	})
+	return records, nil
+}
+
 func (o *Orchestrator) recoverJournalRecordsLocked(records []IntakeJournalRecord) {
 	for _, jrec := range records {
+		source := jrec.Source
+		if source == "" {
+			source = o.frontierKey()
+		}
+		if jrec.FrontierOrdinal > o.nextFrontierOrdinal[source] {
+			o.nextFrontierOrdinal[source] = jrec.FrontierOrdinal
+		}
 		if jrec.StatementID == "" || jrec.IsTerminal {
 			continue
 		}
@@ -1136,7 +1222,7 @@ func (o *Orchestrator) recoverJournalRecordsLocked(records []IntakeJournalRecord
 		}
 		rec := intakeRecordFromJournalRecord(jrec)
 		if rec.source == "" {
-			rec.source = o.frontierKey()
+			rec.source = source
 		}
 		rec.requirePreparedLookup = needsPreparedLookupAfterRestart(rec)
 		o.records[rec.statementID] = rec
