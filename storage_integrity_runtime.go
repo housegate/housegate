@@ -133,6 +133,22 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 	return ingress, mergeGuard, nil
 }
 
+func startStorageIntegrityRuntime(ctx context.Context, runtime *StorageIntegrityIngress, guard StorageIntegrityMergeGuard) error {
+	if guard != nil {
+		if err := guard.AssertStopMerges(ctx); err != nil {
+			return fmt.Errorf("storage_integrity.merge_guard: %w", err)
+		}
+	}
+	if runtime == nil {
+		return nil
+	}
+	runtime.StartBackground(ctx)
+	if err := runtime.RecoverPending(ctx); err != nil {
+		return fmt.Errorf("storage_integrity.recovery: %w", err)
+	}
+	return nil
+}
+
 func buildStorageIntegrityMergeGuard(cfg config.StorageIntegrityRuntimeMergeGuardConfig, opts StorageIntegrityRuntimeOptions) (StorageIntegrityMergeGuard, error) {
 	if opts.MergeGuard != nil {
 		return opts.MergeGuard, nil
