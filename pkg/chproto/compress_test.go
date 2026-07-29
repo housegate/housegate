@@ -69,6 +69,20 @@ func buildTupleNativeBlockPayload(rev int) []byte {
 	return append([]byte(nil), payload.Buf...)
 }
 
+func buildAggregateStateNativeBlockPayload(rev int, typeName string, state []byte) []byte {
+	var payload proto.Buffer
+	(proto.BlockInfo{BucketNum: -1}).Encode(&payload)
+	payload.PutUVarInt(1) // columns
+	payload.PutUVarInt(1) // rows
+	payload.PutString("state")
+	payload.PutString(typeName)
+	if proto.FeatureCustomSerialization.In(rev) {
+		payload.PutBool(false)
+	}
+	payload.Buf = append(payload.Buf, state...)
+	return append([]byte(nil), payload.Buf...)
+}
+
 func buildCompressedFrame(t *testing.T, payload []byte, method chcompress.Method) []byte {
 	t.Helper()
 	writer := chcompress.NewWriter(0, method)
@@ -208,6 +222,32 @@ func TestSplice_DataBlock_Empty_Uncompressed_ServerSide(t *testing.T) {
 	}
 	if !bytes.Equal(dst.Bytes(), original) {
 		t.Fatalf("Splice dst=%x\nwant     %x", dst.Bytes(), original)
+	}
+}
+
+func TestReadPacket_UnknownAggregateStateFailsClosed(t *testing.T) {
+	const rev = MaxSupportedRevision
+	payload := buildAggregateStateNativeBlockPayload(
+		rev,
+		"AggregateFunction(uniq, UInt64)",
+		[]byte{1, 2, 3, 4},
+	)
+	var wire proto.Buffer
+	wire.PutUVarInt(uint64(proto.ServerCodeData))
+	wire.PutString("")
+	wire.Buf = append(wire.Buf, payload...)
+
+	rw := &readerWriter{r: bytes.NewBuffer(wire.Buf), w: &bytes.Buffer{}}
+	c := NewCodec(rw, DirToUpstream)
+	c.SetRevision(rev)
+	c.SetCompression(proto.CompressionDisabled)
+
+	pkt, err := c.ReadPacket()
+	if !errors.Is(err, ErrUnsupportedResultType) {
+		t.Fatalf("ReadPacket err=%v, want ErrUnsupportedResultType", err)
+	}
+	if pkt == nil || pkt.Type != uint64(proto.ServerCodeData) {
+		t.Fatalf("partial packet=%#v, want ServerCodeData metadata", pkt)
 	}
 }
 

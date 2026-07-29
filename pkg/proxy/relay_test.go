@@ -494,7 +494,7 @@ func TestRelay_FragmentedProgressPayloadByteCannotImpersonateEndOfStream(t *test
 	}
 }
 
-func TestRelay_UnsupportedResultFallsBackToOpaqueBytes(t *testing.T) {
+func TestRelay_KnownAggregateStateRemainsPacketFramed(t *testing.T) {
 	for _, compression := range []proto.Compression{
 		proto.CompressionDisabled,
 		proto.CompressionEnabled,
@@ -536,10 +536,10 @@ func TestRelay_UnsupportedResultFallsBackToOpaqueBytes(t *testing.T) {
 			got := make([]byte, len(wire))
 			_ = clientProxy.SetReadDeadline(time.Now().Add(time.Second))
 			if _, err := io.ReadFull(clientProxy, got); err != nil {
-				t.Fatalf("read opaque aggregate-state result: %v", err)
+				t.Fatalf("read packet-framed aggregate-state result: %v", err)
 			}
 			if !bytes.Equal(got, wire) {
-				t.Fatalf("opaque aggregate-state result changed:\ngot  %x\nwant %x", got, wire)
+				t.Fatalf("packet-framed aggregate-state result changed:\ngot  %x\nwant %x", got, wire)
 			}
 
 			select {
@@ -549,6 +549,15 @@ func TestRelay_UnsupportedResultFallsBackToOpaqueBytes(t *testing.T) {
 				}
 			case <-time.After(time.Second):
 				t.Fatal("upstreamToClient did not finish")
+			}
+
+			hooks.mu.Lock()
+			defer hooks.mu.Unlock()
+			if hooks.querySuccesses != 1 {
+				t.Errorf("aggregate-state EndOfStream fired OnQuerySuccess %d times, want 1", hooks.querySuccesses)
+			}
+			if hooks.queryCompletes != 1 {
+				t.Errorf("aggregate-state EndOfStream fired OnQueryComplete %d times, want 1", hooks.queryCompletes)
 			}
 		})
 	}
@@ -570,7 +579,7 @@ func (l *singlePermitLimiter) Acquire(
 		return concurrencyplugin.Permit{}, concurrencyplugin.ErrQuotaExceeded
 	}
 	l.held = true
-	return concurrencyplugin.Permit{ID: "opaque-permit"}, nil
+	return concurrencyplugin.Permit{ID: "aggregate-state-permit"}, nil
 }
 
 func (l *singlePermitLimiter) Release(context.Context, concurrencyplugin.Permit) {
@@ -583,25 +592,25 @@ func (l *singlePermitLimiter) Release(context.Context, concurrencyplugin.Permit)
 	}
 }
 
-type opaqueLifecyclePlugin struct {
+type aggregateLifecyclePlugin struct {
 	mu        sync.Mutex
 	completes int
 	successes int
 }
 
-func (p *opaqueLifecyclePlugin) OnQueryComplete(context.Context, chsession.Session) {
+func (p *aggregateLifecyclePlugin) OnQueryComplete(context.Context, chsession.Session) {
 	p.mu.Lock()
 	p.completes++
 	p.mu.Unlock()
 }
 
-func (p *opaqueLifecyclePlugin) OnQuerySuccess(context.Context, chsession.Session, string) {
+func (p *aggregateLifecyclePlugin) OnQuerySuccess(context.Context, chsession.Session, string) {
 	p.mu.Lock()
 	p.successes++
 	p.mu.Unlock()
 }
 
-func TestRelay_OpaqueEndOfStreamReleasesIdleConcurrencyPermit(t *testing.T) {
+func TestRelay_IncompleteAggregateStateDoesNotReleaseConcurrencyPermit(t *testing.T) {
 	clientProxy, proxyClient := net.Pipe()
 	upstreamProxy, proxyUpstream := net.Pipe()
 	defer clientProxy.Close()
@@ -611,7 +620,7 @@ func TestRelay_OpaqueEndOfStreamReleasesIdleConcurrencyPermit(t *testing.T) {
 	sess := chsession.New(1, proxyClient)
 	up := chproto.NewCodec(proxyUpstream, chproto.DirToUpstream)
 	up.SetRevision(rev)
-	up.SetCompression(proto.CompressionEnabled)
+	up.SetCompression(proto.CompressionDisabled)
 	if err := sess.BindUpstream(context.Background(), up); err != nil {
 		t.Fatalf("BindUpstream: %v", err)
 	}
@@ -625,7 +634,7 @@ func TestRelay_OpaqueEndOfStreamReleasesIdleConcurrencyPermit(t *testing.T) {
 			},
 		},
 	}
-	lifecycle := &opaqueLifecyclePlugin{}
+	lifecycle := &aggregateLifecyclePlugin{}
 	chain := &plugin.PluginChain{
 		QueryPlugins:         []plugin.QueryPlugin{concurrency},
 		QuerySuccessPlugins:  []plugin.QuerySuccessPlugin{lifecycle},
@@ -633,7 +642,7 @@ func TestRelay_OpaqueEndOfStreamReleasesIdleConcurrencyPermit(t *testing.T) {
 	}
 	qctx := &plugin.QueryContext{
 		Session: sess,
-		Query:   &chproto.Query{ID: "qid-opaque-idle", Body: "SELECT sumState(number) FROM numbers(10)"},
+		Query:   &chproto.Query{ID: "qid-incomplete-aggregate", Body: "SELECT sumState(number) FROM numbers(10)"},
 	}
 	if err := chain.OnQuery(context.Background(), qctx); err != nil {
 		t.Fatalf("first OnQuery: %v", err)
@@ -652,55 +661,65 @@ func TestRelay_OpaqueEndOfStreamReleasesIdleConcurrencyPermit(t *testing.T) {
 	}
 
 	r := &Relay{sess: sess, hooks: chain}
-	if !r.beginActiveQuery("qid-opaque-idle") {
+	if !r.beginActiveQuery("qid-incomplete-aggregate") {
 		t.Fatal("beginActiveQuery unexpectedly reported an active query")
 	}
 	relayDone := make(chan error, 1)
 	go func() {
 		relayDone <- r.upstreamToClient(context.Background())
 	}()
-
-	wire := aggregateStateDataPacket(t, rev, proto.CompressionEnabled)
-	wire = append(wire, byte(chproto.ServerEndOfStreamCode))
+	clientDrainDone := make(chan struct{})
 	go func() {
-		_, _ = upstreamProxy.Write(wire)
-		// Keep the upstream connection open and idle after EndOfStream.
+		_, _ = io.Copy(io.Discard, clientProxy)
+		close(clientDrainDone)
 	}()
 
-	got := make([]byte, len(wire))
-	_ = clientProxy.SetReadDeadline(time.Now().Add(time.Second))
-	if _, err := io.ReadFull(clientProxy, got); err != nil {
-		t.Fatalf("read opaque response: %v", err)
+	data := aggregateStateDataPacket(t, rev, proto.CompressionDisabled)
+	if len(data) < 8 {
+		t.Fatalf("aggregate-state packet is only %d bytes", len(data))
 	}
-	if !bytes.Equal(got, wire) {
-		t.Fatalf("opaque response changed:\ngot  %x\nwant %x", got, wire)
-	}
+	partial := append(append([]byte(nil), data[:len(data)-8]...), byte(chproto.ServerEndOfStreamCode))
+	go func() {
+		_, _ = upstreamProxy.Write(partial)
+		// Keep both connections open with the rest of the UInt64 state and the
+		// genuine EndOfStream withheld. The first state byte is deliberately
+		// 0x05: it must not be mistaken for a terminal packet.
+	}()
 
 	select {
 	case <-limiter.released:
-	case <-time.After(time.Second):
-		t.Fatal("opaque EndOfStream did not release concurrency permit while connection stayed idle")
+		t.Fatal("aggregate-state payload byte 0x05 released the concurrency permit early")
+	case <-time.After(100 * time.Millisecond):
 	}
-	if err := concurrency.OnQuery(context.Background(), otherQctx); err != nil {
-		t.Fatalf("second session after opaque completion: %v", err)
+	if err := concurrency.OnQuery(context.Background(), otherQctx); !errors.Is(err, concurrencyplugin.ErrQuotaExceeded) {
+		t.Fatalf("second session during incomplete aggregate state error=%v, want ErrQuotaExceeded", err)
 	}
-	concurrency.OnQueryComplete(context.Background(), otherSess)
 
 	lifecycle.mu.Lock()
-	defer lifecycle.mu.Unlock()
-	if lifecycle.completes != 1 {
-		t.Errorf("OnQueryComplete fired %d times, want 1", lifecycle.completes)
+	if lifecycle.completes != 0 {
+		t.Errorf("OnQueryComplete fired %d times before the aggregate state completed, want 0", lifecycle.completes)
 	}
 	if lifecycle.successes != 0 {
-		t.Errorf("OnQuerySuccess fired %d times for opaque result, want 0", lifecycle.successes)
+		t.Errorf("OnQuerySuccess fired %d times before the aggregate state completed, want 0", lifecycle.successes)
 	}
+	lifecycle.mu.Unlock()
 
 	_ = upstreamProxy.Close()
 	select {
-	case <-relayDone:
+	case err := <-relayDone:
+		if err == nil {
+			t.Fatal("incomplete aggregate state unexpectedly ended without an error")
+		}
 	case <-time.After(time.Second):
 		t.Fatal("upstreamToClient did not exit after cleanup")
 	}
+	select {
+	case <-limiter.released:
+	case <-time.After(time.Second):
+		t.Fatal("connection teardown did not release the concurrency permit")
+	}
+	_ = clientProxy.Close()
+	<-clientDrainDone
 }
 
 func aggregateStateDataPacket(
@@ -735,7 +754,7 @@ func aggregateStateDataPacket(
 	return append([]byte(nil), data.Buf...)
 }
 
-func TestRelay_OpaqueResultStopsAtNextQueryAndResumesPacketFraming(t *testing.T) {
+func TestRelay_AggregateStateThenNextQueryStaysPacketFramed(t *testing.T) {
 	clientProxy, proxyClient := net.Pipe()
 	upstreamProxy, proxyUpstream := net.Pipe()
 	defer clientProxy.Close()
@@ -752,7 +771,7 @@ func TestRelay_OpaqueResultStopsAtNextQueryAndResumesPacketFraming(t *testing.T)
 
 	hooks := &exceptionRecordingHooks{}
 	r := &Relay{sess: sess, hooks: hooks}
-	if !r.beginActiveQuery("qid-opaque") {
+	if !r.beginActiveQuery("qid-aggregate-state") {
 		t.Fatal("beginActiveQuery unexpectedly reported an active query")
 	}
 
@@ -770,27 +789,18 @@ func TestRelay_OpaqueResultStopsAtNextQueryAndResumesPacketFraming(t *testing.T)
 	gotFirst := make([]byte, len(first))
 	_ = clientProxy.SetReadDeadline(time.Now().Add(time.Second))
 	if _, err := io.ReadFull(clientProxy, gotFirst); err != nil {
-		t.Fatalf("read first opaque response: %v", err)
+		t.Fatalf("read aggregate-state response: %v", err)
 	}
 	if !bytes.Equal(gotFirst, first) {
-		t.Fatalf("first opaque response changed:\ngot  %x\nwant %x", gotFirst, first)
+		t.Fatalf("aggregate-state response changed:\ngot  %x\nwant %x", gotFirst, first)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	stopped, err := r.stopOpaqueResponse(ctx)
-	if err != nil {
-		t.Fatalf("stopOpaqueResponse: %v", err)
-	}
-	if !stopped {
-		t.Fatal("stopOpaqueResponse reported no opaque response")
-	}
-	if _, active := r.takeActiveQuery(); active {
-		t.Fatal("opaque terminal cleanup left the previous query active")
+	if _, active := r.currentActiveQuery(); active {
+		t.Fatal("aggregate-state EndOfStream left the previous query active")
 	}
 
-	if !r.beginActiveQuery("qid-framed-after-opaque") {
-		t.Fatal("beginActiveQuery after opaque response reported an active query")
+	if !r.beginActiveQuery("qid-framed-after-aggregate") {
+		t.Fatal("beginActiveQuery after aggregate-state response reported an active query")
 	}
 	go func() {
 		_, _ = upstreamProxy.Write([]byte{byte(chproto.ServerEndOfStreamCode)})
@@ -800,7 +810,7 @@ func TestRelay_OpaqueResultStopsAtNextQueryAndResumesPacketFraming(t *testing.T)
 	var terminal [1]byte
 	_ = clientProxy.SetReadDeadline(time.Now().Add(time.Second))
 	if _, err := io.ReadFull(clientProxy, terminal[:]); err != nil {
-		t.Fatalf("read framed EndOfStream after opaque response: %v", err)
+		t.Fatalf("read framed EndOfStream after aggregate-state response: %v", err)
 	}
 	if terminal[0] != byte(chproto.ServerEndOfStreamCode) {
 		t.Fatalf("terminal byte=%d, want EndOfStream(%d)", terminal[0], chproto.ServerEndOfStreamCode)
@@ -817,8 +827,8 @@ func TestRelay_OpaqueResultStopsAtNextQueryAndResumesPacketFraming(t *testing.T)
 
 	hooks.mu.Lock()
 	defer hooks.mu.Unlock()
-	if hooks.querySuccesses != 1 {
-		t.Errorf("framed response after opaque fallback fired OnQuerySuccess %d times, want 1", hooks.querySuccesses)
+	if hooks.querySuccesses != 2 {
+		t.Errorf("two framed query responses fired OnQuerySuccess %d times, want 2", hooks.querySuccesses)
 	}
 	if hooks.queryCompletes != 2 {
 		t.Errorf("two query lifecycles fired OnQueryComplete %d times, want 2", hooks.queryCompletes)

@@ -31,7 +31,7 @@ import (
 //   - OnQuerySuccess — after an isolated upstream EndOfStream packet.
 //   - OnQueryComplete — once per Query when its lifecycle ends
 //     (rejected, forward failed, or upstream produced EndOfStream /
-//     Exception, including cleanup-only opaque terminal detection).
+//     Exception).
 //   - OnClose — once per session that successfully bound an upstream
 //     and ran Relay (paired with OnHello, not OnConnect).
 //

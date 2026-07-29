@@ -116,7 +116,7 @@ var (
 	ErrPacketTooLarge = errors.New("chproto: packet exceeds configured byte limit")
 	// ErrUnsupportedResultType means a valid server Data packet named a
 	// Native column type that Housegate's boundary decoder cannot consume.
-	// Relay may preserve transparency by forwarding the already-captured
-	// compressed bytes and temporarily switching to opaque streaming.
+	// The relay fails the connection closed because forwarding a partial
+	// Native block would lose the authoritative packet boundary.
 	ErrUnsupportedResultType = errors.New("chproto: unsupported server result type")
 )

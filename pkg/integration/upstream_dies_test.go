@@ -46,7 +46,7 @@ func TestUpstream_DiesMidQuery(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	// Pull the plug. This is the moment of truth: with the upstream
-	// gone, the proxy's upstream-side ReadRaw should fail and the
+	// gone, the proxy's upstream-side ReadPacket should fail and the
 	// relay should tear the client side down with an error.
 	dedicatedCH.Stop(t)
 
