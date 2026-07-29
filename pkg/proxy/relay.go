@@ -68,12 +68,6 @@ func NewRelay(sess chsession.Session, hooks plugin.Hooks, obs PacketObserver, di
 	return &Relay{sess: sess, hooks: hooks, obs: obs, dialer: dialer}
 }
 
-func (r *Relay) currentActiveQuery() (string, bool) {
-	r.queryMu.Lock()
-	defer r.queryMu.Unlock()
-	return r.activeQueryID, r.activeQuery
-}
-
 func (r *Relay) beginActiveQuery(queryID string) bool {
 	r.queryMu.Lock()
 	defer r.queryMu.Unlock()
@@ -94,6 +88,21 @@ func (r *Relay) takeActiveQuery() (string, bool) {
 	queryID := r.activeQueryID
 	r.activeQuery = false
 	r.activeQueryID = ""
+	return queryID, true
+}
+
+// retireUndetectedActiveQuery closes a previous lifecycle when a client sends
+// its next Query after consuming a terminal response that the raw upstream
+// first-byte heuristic could not see (for example Progress+EndOfStream in one
+// read). This path is cleanup-only: an ambiguous response can never drive
+// durable success work.
+func (r *Relay) retireUndetectedActiveQuery(ctx context.Context) (string, bool) {
+	queryID, active := r.takeActiveQuery()
+	if !active {
+		return "", false
+	}
+	r.sess.State().ClearActiveRewrite()
+	r.hooks.OnQueryComplete(ctx, r.sess)
 	return queryID, true
 }
 
@@ -429,10 +438,11 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 				r.writeExceptionToClient(ctx, err)
 				return err
 			}
-			if activeQueryID, active := r.currentActiveQuery(); active {
-				err := fmt.Errorf("client sent query %q before receiving terminal response for query %q", q.ID, activeQueryID)
-				r.writeExceptionToClient(ctx, err)
-				return err
+			if previousQueryID, retired := r.retireUndetectedActiveQuery(ctx); retired {
+				logger.Debugw("retired query after client advanced past an undetected terminal response",
+					"previous_query_id", previousQueryID,
+					"next_query_id", q.ID,
+				)
 			}
 			if err := r.hooks.OnQuery(ctx, qctx); err != nil {
 				r.writeExceptionToClient(ctx, err)

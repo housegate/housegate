@@ -499,6 +499,34 @@ func TestIsIsolatedEndOfStream_RejectsAmbiguousChunks(t *testing.T) {
 	}
 }
 
+func TestRelay_RetireUndetectedActiveQueryIsCleanupOnly(t *testing.T) {
+	hooks := &exceptionRecordingHooks{}
+	r := &Relay{
+		sess:  chsession.New(1, nil),
+		hooks: hooks,
+	}
+	if !r.beginActiveQuery("qid-first") {
+		t.Fatal("beginActiveQuery unexpectedly reported an active query")
+	}
+
+	queryID, retired := r.retireUndetectedActiveQuery(context.Background())
+	if !retired || queryID != "qid-first" {
+		t.Fatalf("retireUndetectedActiveQuery = (%q, %v), want (qid-first, true)", queryID, retired)
+	}
+	if !r.beginActiveQuery("qid-second") {
+		t.Fatal("next query remained blocked after unverified cleanup")
+	}
+
+	hooks.mu.Lock()
+	defer hooks.mu.Unlock()
+	if hooks.queryCompletes != 1 {
+		t.Errorf("OnQueryComplete fired %d times, want 1", hooks.queryCompletes)
+	}
+	if hooks.querySuccesses != 0 {
+		t.Errorf("OnQuerySuccess fired %d times, want 0", hooks.querySuccesses)
+	}
+}
+
 func runRawUpstreamChunk(t *testing.T, raw []byte) *exceptionRecordingHooks {
 	t.Helper()
 	clientProxy, proxyClient := net.Pipe()
