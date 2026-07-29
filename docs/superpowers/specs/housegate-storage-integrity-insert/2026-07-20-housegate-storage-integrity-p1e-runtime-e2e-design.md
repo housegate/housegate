@@ -2,29 +2,34 @@
 
 Date: 2026-07-20
 
-Last hardened: 2026-07-28
+Last hardened: 2026-07-29
 
 ## Purpose
 
 This change adds the P1e runtime shell that connects the signed-ingress admission plugin to the staged-intake orchestrator: a root-package `StorageIntegrityIngress` that implements the plugin's `AdmissionConsumer` by mapping a completed `Admission` into a core `AdmissionRecord` and driving `Orchestrate` toward ACK2. Alongside it, this slice adds two runtime building blocks that are pure HouseGate-local logic: a `MergeGuard` that re-asserts and verifies `SYSTEM STOP MERGES` on the guarded tables, and a `SelectMaterializerKind` function that chooses the replay materializer (Native vs CSV) from the pinned payload encoding.
 
-A follow-up on the same branch adds the production wiring boundary for this runtime. `storage_integrity.runtime.enabled` asks HouseGate to build the `AdmissionConsumer` itself from host-injected runtime ports instead of requiring the host to provide a fully constructed consumer. The injected ports are the Arbiter submitter (or an `ArbiterIngressClient` that HouseGate adapts), the selected-SNode `SourcePreparer`, the PayloadStore writer (or a `PayloadStoreClient` that HouseGate adapts), an optional status querier, and a ClickHouse `MergeConn` or prebuilt startup merge guard. HouseGate now builds the local durable intake journal, payload spool wrapper, and config-driven merge guard from YAML by default. This keeps protocol ownership honest: HouseGate can wire real local runtime pieces and arbiter-proto clients, but it still does not invent a fake SNode API.
+A follow-up on the same branch adds the production wiring boundary for this runtime. `storage_integrity.runtime.enabled` asks HouseGate to build the `AdmissionConsumer` itself from host-injected runtime ports instead of requiring the host to provide a fully constructed consumer. The injected ports are the Arbiter submitter and status querier (or one `ArbiterIngressClient` that HouseGate adapts to both), the selected-SNode `SourcePreparer`, the PayloadStore writer (or a `PayloadStoreClient` that HouseGate adapts), and a ClickHouse `MergeConn` or prebuilt startup merge guard. HouseGate now builds the local durable intake journal, payload spool wrapper, and config-driven merge guard from YAML by default. This keeps protocol ownership honest: HouseGate can wire real local runtime pieces and arbiter-proto clients, but it still does not invent a fake SNode API.
 
 The runtime never constructs a HouseGate-owned Verifier or Promoter: verifier selection, quorum, and manifest publication are Arbiter/SNode responsibilities the orchestrator only drives through ports (design sections 3.6 and 4.1). Storage integrity stays default-off; with the ingress disabled the plugin chain is byte-identical to a non-storage-integrity build.
 
-## Companion Gate Status
+## Companion Capability Status
 
-This design slice remains C1-gated, on the same basis as the earlier INSERT intake slices. It reuses the existing C1 gate — `CompanionStagedIntakeAvailable` (`pkg/storageintegrity/intake.go`) and `requireCompanionStagedIntake` — and introduces no new protocol gate: this is the INSERT P1e runtime, whose blocker is C1 (the staged-prepare seam), not C2. The companion repos expose no `PrepareLocalStatement` / `RegisterPreparedClaim` / `AbortPreparedStatement` seam (arbiter `9e7c643`, arbiter-proto `3b1b2d3`, re-verified 2026-07-28), so no real `SourcePreparer` / `IntakeStatusQuerier` adapters exist and the ingress consumer cannot actually close a statement to ACK2 in production. HouseGate now has real arbiter-proto adapters for Arbiter `SubmitStatement` and PayloadStore `Put`, plus HouseGate-owned durable journal/spool primitives, but those are not sufficient without the selected-SNode staged seam.
+The companion contracts required by this runtime now exist. `arbiter-core`
+exposes `PrepareLocalStatement`, `RegisterPreparedClaim`,
+`AbortPreparedStatement`, and `LookupPreparedStatement` on its SNode role, and
+arbiter-proto `v0.4.0` exposes the read-only
+`ArbiterIngress.GetStatementStatus` probe. HouseGate still does not import
+`arbiter-core`: the embedding host owns the adapter that maps the selected SNode
+role into HouseGate's `SourcePreparer` and `PreparedStatementLookup` ports.
 
-The production runtime builder checks this capability gate directly. An injected interface with the same Go method shape is not proof that the companion protocol exists: while `CompanionStagedIntakeAvailable` is false, `storage_integrity.runtime.enabled=true` fails during build and no listener starts. Pure HouseGate components remain directly constructible for unit and contract tests, but production wiring cannot bypass the missing protocol with a local mock.
-
-Because HouseGate must not fabricate the companion protocol, this slice ships:
-
-1. this scoped spec;
-2. the pure HouseGate-local runtime pieces — the ingress adapter and its `Admission` → `AdmissionRecord` projection, durable intake journal, durable payload spool wrapper, config-driven `MergeGuard`, the materializer-selection function, runtime port assembly, and the `safe_merges` config with default-off validation;
-3. contract tests. The durable journal resume path, payload spool retention, merge-guard SQL build/verify, materializer selection, admission projection, and config default-off behavior are pure HouseGate logic and run green today. Runtime assembly is tested below the production capability gate; the production builder test proves that enabling the runtime remains rejected while the companion seam is absent. The end-to-end ingress-to-ACK2 orchestration assertion is gated behind `requireCompanionStagedIntake` and skips closed while the companion seam is absent.
-
-When the companion seam lands, the real selected-SNode adapter is injected through `StorageIntegrityRuntimeOptions.SourcePreparer`, the payload encoding/revision contract and selected-source semantics are verified across the same deployed revisions, `CompanionStagedIntakeAvailable` flips to true, and the gated test becomes the executable spec for the real close-to-ACK2 path. No local mock shape is added in the meantime.
+Production readiness is therefore checked from the injected capabilities, not a
+compile-time repository-version constant. Enabling the built-in runtime
+requires a non-nil status querier and a `SourcePreparer` that also implements
+`PreparedStatementLookup`. HouseGate auto-constructs both the statement
+submitter and status querier when an `ArbiterIngressClient` is supplied. Missing
+capabilities fail during build before listeners start. The stale
+`CompanionStagedIntakeAvailable` gate and its skipped contract tests are
+removed.
 
 ## Design Anchors
 
@@ -37,9 +42,9 @@ This contract implements the P1e runtime responsibilities of section 3 of the un
 
 ## The Runtime Shell
 
-`StorageIntegrityIngress` holds only `{orch, guard, matKind, payloadWriter}` — an orchestrator, an optional merge guard, the selected materializer kind, and the PayloadStore writer wrapper. Its `ConsumeStorageIntegrityAdmission` maps the plugin `Admission` into a core `AdmissionRecord` via the pure `AdmissionRecordFromPlugin` projection, spools and uploads payload bytes when a writer is configured, then drives `Orchestrate`; a non-ACK2 outcome is surfaced as an error so the plugin reports failure to the client rather than a false success, and only a bound ACK2 returns nil. Because the struct has no Verifier/Promoter field and no constructor for one, verifier selection / quorum / manifest publication cannot leak into the HouseGate runtime.
+`StorageIntegrityIngress` holds only `{orch, guard, matKind, payloadWriter}` — an orchestrator, an optional merge guard, the selected materializer kind, and the PayloadStore writer wrapper. The selected materializer kind is an enforced admission contract rather than passive metadata: an admission whose pinned payload encoding selects a different materializer is rejected before the PayloadStore write. Its `ConsumeStorageIntegrityAdmission` maps the plugin `Admission` into a core `AdmissionRecord` via the pure `AdmissionRecordFromPlugin` projection, spools and uploads payload bytes when a writer is configured, then drives `Orchestrate`; a non-ACK2 outcome is surfaced as an error so the plugin reports failure to the client rather than a false success, and only a bound ACK2 returns nil. Because the struct has no Verifier/Promoter field and no constructor for one, verifier selection / quorum / manifest publication cannot leak into the HouseGate runtime.
 
-When `storage_integrity.runtime.enabled=true`, server-mode `buildServer` constructs this consumer from `StorageIntegrityRuntimeOptions` and `storage_integrity.runtime`. Hosts may pass already-built core ports (`StatementSubmitter`, `PayloadWriter`) or arbiter-proto clients (`ArbiterIngressClient`, `PayloadStoreClient`) that HouseGate adapts via `NewArbiterStatementSubmitter` and `NewArbiterPayloadStoreWriter`. HouseGate builds a `FileIntakeJournal` from `journal_dir`, wraps the payload writer with a `FilePayloadSpool` from `payload_spool_dir`, and either uses an injected `MergeGuard` or builds one from an injected `MergeConn` plus `merge_guard.tables`. `SourcePreparer` is mandatory and remains a host/companion dependency because the SNode staged prepare seam is not in arbiter-proto today. `ExpectedSource` comes from YAML and is passed into `OrchestratorConfig`, so a committed-source mismatch still fails closed inside the ACK2 path.
+When `storage_integrity.runtime.enabled=true`, server-mode `buildServer` constructs this consumer from `StorageIntegrityRuntimeOptions` and `storage_integrity.runtime`. Hosts may pass already-built core ports (`StatementSubmitter`, `IntakeStatusQuerier`, `PayloadWriter`) or arbiter-proto clients (`ArbiterIngressClient`, `PayloadStoreClient`) that HouseGate adapts via `NewArbiterStatementSubmitter`, `NewArbiterIntakeStatusQuerier`, and `NewArbiterPayloadStoreWriter`. HouseGate builds a `FileIntakeJournal` from `journal_dir`, wraps the payload writer with a `FilePayloadSpool` from `payload_spool_dir`, and either uses an injected `MergeGuard` or builds one from an injected `MergeConn` plus `merge_guard.tables`. `SourcePreparer` remains a mandatory host dependency and must also implement `PreparedStatementLookup`, because HouseGate cannot safely repeat an ambiguous source write after restart without that read. `ExpectedSource` comes from YAML and is passed into `OrchestratorConfig`, so a committed-source mismatch still fails closed inside the ACK2 path.
 
 ## Durable Journal And Payload Spool
 
@@ -70,11 +75,21 @@ built. After that point the runtime sees an ordinary CSV payload and
 `SelectMaterializerKind` selects `MaterializerCSV`. Without the bridge,
 `FORMAT CSVWithNames` is rejected before the runtime shell is invoked.
 
+The built-in production runtime pins `MaterializerCSV`, matching the
+arbiter-core SNode P1 contract. It requires
+`StorageIntegrityPayloadMaterializer` at startup and rejects implicit Native or
+`FORMAT Native` admissions before spooling/upload. The captured ClickHouse
+client revision must remain non-zero because the bridge needs it to decode the
+incoming Native `ClientData`; the resulting stored bytes are deterministic
+CSVWithNames. Custom admission-consumer deployments may still construct a
+Native ingress explicitly, but that path is outside the built-in Arbiter P1
+profile.
+
 ## Config
 
 The `storage_integrity.safe_merges.allow_native_background_merges` toggle governs the merge guard. It defaults false, and enabling it is rejected in v1 (native background merges would mutate the guarded part inventory out from under the integrity layer). The YAML ingress config (enabled/allowlist/timeouts/max-payload) stays default-off; with `ingress.enabled=false` the storage-integrity runtime is not constructed and the plugin chain equals the non-storage-integrity baseline.
 
-`storage_integrity.runtime.enabled` is also default-off. Enabling it requires `storage_integrity.ingress.enabled=true`, non-empty `storage_integrity.runtime.expected_source`, `journal_dir`, `payload_spool_dir`, a positive payload-lease refresh interval/window, a positive merge-guard reassert interval, and at least one `merge_guard.tables[]` entry with non-empty `database` and `table`. `buildServer` then requires the runtime ports (`StatementSubmitter` or `ArbiterIngressClient`, `SourcePreparer`, `PayloadWriter` or `PayloadStoreClient`, and either `MergeGuard` or `MergeConn`) and rejects ambiguous wiring where the host also supplied `StorageIntegrityAdmissionConsumer`. Even complete local configuration remains rejected while `CompanionStagedIntakeAvailable` is false.
+`storage_integrity.runtime.enabled` is also default-off. Enabling it requires `storage_integrity.ingress.enabled=true`, non-empty `storage_integrity.runtime.expected_source`, `journal_dir`, `payload_spool_dir`, a positive payload-lease refresh interval/window, a positive merge-guard reassert interval, and at least one `merge_guard.tables[]` entry with non-empty `database` and `table`. `buildServer` then requires the runtime ports (`StatementSubmitter` or `ArbiterIngressClient`, `IntakeStatusQuerier` or `ArbiterIngressClient`, a `SourcePreparer` with `PreparedStatementLookup`, `PayloadWriter` or `PayloadStoreClient`, and either `MergeGuard` or `MergeConn`) plus `StorageIntegrityPayloadMaterializer`. It rejects ambiguous wiring where the host also supplied `StorageIntegrityAdmissionConsumer`.
 
 The embeddable `housegate.Options` surface adds
 `StorageIntegrityPayloadMaterializer`. Hosts that want to accept
@@ -84,7 +99,13 @@ does not change the Arbiter FSM protocol.
 
 ## Non-Scope
 
-This change does not implement the real `SourcePreparer` / `IntakeStatusQuerier` adapters, Arbiter's block-frontier barrier, payload encoding/revision fields in arbiter-proto, selected-source reservation, or duplicate resolution before JWS freshness validation. It does not construct a Verifier/Promoter, modify Arbiter proto/Raft commands, flip `CompanionStagedIntakeAvailable`, add YAML-driven gRPC dialing, open ClickHouse connections automatically, or add a non-INSERT surface. Those missing companion capabilities keep the production runtime build gate closed; HouseGate implements only its local durability, lease, recovery, and merge-health responsibilities.
+This change does not implement the host-owned `arbiter-core/snode.Role` to
+HouseGate `SourcePreparer` adapter, Arbiter's block-frontier barrier,
+payload-encoding/revision fields in the sequenced proto envelope,
+selected-source reservation, or duplicate resolution before JWS freshness
+validation. It does not construct a Verifier/Promoter, modify Arbiter
+proto/Raft commands, add YAML-driven gRPC dialing, open ClickHouse connections
+automatically, or add a non-INSERT surface.
 
 ## Verification
 
@@ -131,7 +152,12 @@ The hardening regression set is implemented by these exact tests:
 - `TestMergeSupervisorClosesAndReopensHealthAcrossReasserts`
 - `TestMergeSupervisorRunPeriodicallyReasserts`
 - `TestStorageIntegrityIngressRejectsAdmissionWhenMergeHealthClosed`
-- `TestBuildServer_StorageIntegrityRuntimeRejectsUnavailableCompanionContract`
+- `TestBuildStorageIntegrityRuntimeRequiresPreparedLookup`
+- `TestBuildServer_StorageIntegrityRuntimeAutoWiresArbiterStatusQuerier`
+- `TestStorageIntegrityIngressRejectsWrongMaterializerBeforePayloadPut`
+- `TestBuildServer_StorageIntegrityRuntimeRequiresCSVPayloadMaterializer`
 - `TestStartStorageIntegrityRuntimeRecoversAfterInitialMergeAssert`
 
-Existing pure-component tests remain green under the component gates. The full production ingress-to-ACK2 assertion remains skipped closed behind `requireCompanionStagedIntake(t)` until deployed companion revisions satisfy the staged-source and status-query contract. Unit tests may construct the HouseGate components directly but may not flip or bypass the production builder gate.
+The orchestration contract tests run normally rather than skipping behind a
+repository-version constant. Production construction still fails closed unless
+the host supplies the complete source-side capability set.

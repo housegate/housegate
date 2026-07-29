@@ -12,27 +12,6 @@ import (
 	"github.com/housegate/housegate/pkg/replay"
 )
 
-// requireCompanionStagedIntake fails closed while the companion staged-prepare
-// seam is absent. The orchestration contract tests below assert the behavior
-// HouseGate must have once PrepareLocalStatement / RegisterPreparedClaim /
-// AbortPreparedStatement exist in the Sentio companion topology. Until then
-// there is no real StatementSubmitter/SourcePreparer implementation to exercise
-// end to end, and this guard skips those tests with an explicit message so a red
-// (skipped) run is never mistaken for a green (passed) one. The Arbiter
-// SubmitStatement adapter alone is not enough: when the selected-SNode staged
-// seam and status-query seam land, CompanionStagedIntakeAvailable flips to true
-// and these tests become the executable spec for the orchestration. It must
-// never be satisfied by a local mock shape that impersonates the companion seam.
-func requireCompanionStagedIntake(t *testing.T) {
-	t.Helper()
-	if !CompanionStagedIntakeAvailable {
-		t.Skip("companion C1 staged-prepare seam absent: PrepareLocalStatement / " +
-			"RegisterPreparedClaim / AbortPreparedStatement are not exposed by the " +
-			"Sentio arbiter/arbiter-proto topology; end-to-end staged intake is blocked " +
-			"until the companion seam lands (see CompanionStagedIntakeAvailable)")
-	}
-}
-
 // fixtureRevision is the pinned client protocol revision shared by
 // admissionFixture and boundSource so their envelopes agree.
 const fixtureRevision = 54465
@@ -280,19 +259,11 @@ func TestClassifyOutcome(t *testing.T) {
 	}
 }
 
-// --- Orchestration invariants: exercised through in-test fakes.
-// These pin the behavior HouseGate must have once the companion staged-prepare
-// seam exists. They call requireCompanionStagedIntake(t) first, which fails
-// closed while PrepareLocalStatement / RegisterPreparedClaim /
-// AbortPreparedStatement are absent from the companion topology, so a red run
-// is never mistaken for a green one. ---
+// --- Orchestration invariants: exercised through in-test fakes. ---
 
 // recordingPreparer is an in-test SourcePreparer that records call order. It is
-// a test double for asserting orchestration ordering, NOT a substitute for the
-// missing companion seam: the tests that use it are gated by
-// requireCompanionStagedIntake(t) and are expected to be not-green until the
-// real seam lands. It deliberately does not perform any unsafe write, payload
-// store, or Arbiter call.
+// a test double for asserting orchestration ordering. It deliberately does not
+// perform any unsafe write, payload store, or Arbiter call.
 type recordingPreparer struct {
 	prepared     PreparedLocalResult
 	prepareErr   error
@@ -355,8 +326,6 @@ func boundSource() PreparedLocalResult {
 }
 
 func TestOrchestrate_RegistersClaimOnlyAfterAcceptedSubmit(t *testing.T) {
-	requireCompanionStagedIntake(t)
-
 	prep := &recordingPreparer{
 		prepared:     boundSource(),
 		claimOutcome: ClaimOutcome{Category: OutcomeAccepted, BoundSource: "snode-A"},
@@ -416,8 +385,6 @@ func (p *rcRetryThenAcceptPreparer) AbortPreparedStatement(_ context.Context, _ 
 // the submit as accepted so a resume is not wrongly denied, and the resumed
 // result must carry the true submit category rather than a synthesized one.
 func TestOrchestrate_ResumeFromSubmitAcceptedReachesAck2(t *testing.T) {
-	requireCompanionStagedIntake(t)
-
 	prep := &rcRetryThenAcceptPreparer{prepared: boundSource()}
 	sub := &recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeAccepted}}
 	orch := NewOrchestrator(sub, prep, OrchestratorConfig{ExpectedSource: "snode-A"})
@@ -453,8 +420,6 @@ func TestOrchestrate_ResumeFromSubmitAcceptedReachesAck2(t *testing.T) {
 // re-ack from a first-time acceptance. It checks both the fresh accept→ACK2 path
 // and a resume from SubmitAccepted, since the resume reads the cached submit.
 func TestOrchestrate_ExactIdempotentSubmitOutcomePreserved(t *testing.T) {
-	requireCompanionStagedIntake(t)
-
 	// Fresh path: submit is exact-idempotent, RC accepted → ACK2 in one attempt.
 	freshPrep := &recordingPreparer{
 		prepared:     boundSource(),
@@ -495,8 +460,6 @@ func TestOrchestrate_ExactIdempotentSubmitOutcomePreserved(t *testing.T) {
 }
 
 func TestOrchestrate_NoClaimWhenSubmitTerminalReject(t *testing.T) {
-	requireCompanionStagedIntake(t)
-
 	prep := &recordingPreparer{prepared: boundSource()}
 	sub := &recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeTerminalReject, Reason: "conflicting duplicate"}}
 	orch := NewOrchestrator(sub, prep, OrchestratorConfig{ExpectedSource: "snode-A"})
@@ -516,8 +479,6 @@ func TestOrchestrate_NoClaimWhenSubmitTerminalReject(t *testing.T) {
 }
 
 func TestOrchestrate_RetryableSubmitDoesNotAbortOrAck(t *testing.T) {
-	requireCompanionStagedIntake(t)
-
 	prep := &recordingPreparer{prepared: boundSource()}
 	sub := &recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeRetryable, Reason: "NotLeader"}}
 	orch := NewOrchestrator(sub, prep, OrchestratorConfig{ExpectedSource: "snode-A"})
@@ -537,8 +498,6 @@ func TestOrchestrate_RetryableSubmitDoesNotAbortOrAck(t *testing.T) {
 }
 
 func TestOrchestrate_CommittedSourceMismatchFailsClosed(t *testing.T) {
-	requireCompanionStagedIntake(t)
-
 	prepared := boundSource()
 	prepared.SourceNode = "snode-A"
 	prep := &recordingPreparer{
@@ -560,8 +519,6 @@ func TestOrchestrate_CommittedSourceMismatchFailsClosed(t *testing.T) {
 }
 
 func TestOrchestrate_PayloadIdentityMismatchFailsClosed(t *testing.T) {
-	requireCompanionStagedIntake(t)
-
 	prepared := boundSource()
 	prepared.PayloadHash = replay.DigestString("different payload") // disagrees with admission
 	prep := &recordingPreparer{
@@ -580,8 +537,6 @@ func TestOrchestrate_PayloadIdentityMismatchFailsClosed(t *testing.T) {
 }
 
 func TestOrchestrate_SameStatementIdDoesNotRePrepare(t *testing.T) {
-	requireCompanionStagedIntake(t)
-
 	prep := &recordingPreparer{
 		prepared:     boundSource(),
 		claimOutcome: ClaimOutcome{Category: OutcomeAccepted, BoundSource: "snode-A"},
@@ -601,8 +556,6 @@ func TestOrchestrate_SameStatementIdDoesNotRePrepare(t *testing.T) {
 }
 
 func TestOrchestrate_PrepareErrorSurfaces(t *testing.T) {
-	requireCompanionStagedIntake(t)
-
 	prep := &recordingPreparer{prepareErr: errors.New("payload store put failed")}
 	sub := &recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeAccepted}}
 	orch := NewOrchestrator(sub, prep, OrchestratorConfig{ExpectedSource: "snode-A"})

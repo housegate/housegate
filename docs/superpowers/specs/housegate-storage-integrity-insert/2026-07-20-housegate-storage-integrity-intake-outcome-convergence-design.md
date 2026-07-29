@@ -2,23 +2,36 @@
 
 Date: 2026-07-20
 
+Last updated: 2026-07-29
+
 ## Purpose
 
 This change adds deterministic convergence for an **indeterminate** intake outcome. When a `SubmitStatement` or `RegisterResultClaim` returns `Unknown` — a timeout or broken connection where HouseGate cannot tell whether the server accepted the operation — a resume must not blindly re-send. Building on the staged-intake and ACK2-gate orchestration, this slice introduces an optional status-query port so a resume can query the server by `statement_id` and collapse the unknown into a definite category (accepted → converge forward, rejected → route to the terminal path, not-found/transient → safe to idempotently re-send) before deciding whether to re-send at all.
 
 The change is purely additive and honors the two convergence paths design section 3.4 permits for an unknown outcome: "先按同一 `statement_id` 查询" (query first, the deterministic path this slice adds when a querier is wired) **or** "幂等重试" (idempotent retry, the existing path, which remains the behavior when no querier is present). Neither path ever repeats the unsafe write, ACKs a not-yet-converged statement, or cleans candidate parts.
 
-## Companion Gate Status
+## Companion Capability Status
 
-This design slice is scoped as a blocked skeleton, on the same basis as the staged-intake and ACK2-gate slices. The status-query seam it depends on does not exist in the current Sentio companion repos: arbiter `03aa035` and arbiter-proto `2fa9263` (re-verified 2026-07-20) expose `SubmitStatement` and `RegisterResultClaim` but **no query-status RPC** — there is no way to ask the Arbiter or SNode "what is the current status of `statement_id` X". The staged-prepare seam (`PrepareLocalStatement` / `RegisterPreparedClaim` / `AbortPreparedStatement`) is likewise still absent.
+Arbiter-proto `v0.4.0` now exposes
+`ArbiterIngress.GetStatementStatus(statement_id)`. HouseGate adapts this RPC
+through `NewArbiterIntakeStatusQuerier`; production runtime assembly
+auto-constructs the querier from `ArbiterIngressClient` and otherwise requires
+an explicitly injected `IntakeStatusQuerier`.
 
-Because HouseGate must not fabricate the companion protocol, this slice ships:
+The probe exposes a sequenced statement view and an `rc_bound` bit, not an
+independent durable rejection ledger for each RPC. HouseGate therefore maps it
+conservatively:
 
-1. this scoped spec;
-2. the pure HouseGate-local convergence logic: the optional `IntakeStatusQuerier` port, the `NewOrchestratorWithQuerier` constructor, the `classifyQueryConvergence` mapping, the record's `submitUnknown` / `claimUnknown` state, and the two query-before-resend branches in the orchestrator;
-3. contract tests. The convergence *mapping* and the frontier / no-abort / no-ack behaviors are pure HouseGate logic and run green today. The end-to-end query-then-converge orchestration tests remain gated by `requireCompanionStagedIntake`, so they skip closed while the companion seam is absent and a red (skipped) run is never mistaken for a green one.
+- submit query: `found=true` means the original submit landed, even if the
+  statement later reached FSM status `Rejected`;
+- claim query: only `rc_bound=true` with a non-empty `bound_source` proves that
+  claim registration landed;
+- `found=false`, or found-but-not-bound for a claim, means resend-safe
+  `Unspecified`, never terminal rejection;
+- malformed responses and RPC failures remain errors, retaining the frontier.
 
-When the companion seam lands, a real `IntakeStatusQuerier` is implemented against the query RPC, `CompanionStagedIntakeAvailable` flips to true, and the gated tests become the executable spec for the real convergence. No local HTTP or fake gRPC shape is added to make the gated tests pass in the meantime.
+The staged SNode capability also exists in arbiter-core. Its adapter remains
+host-owned because HouseGate does not import arbiter-core.
 
 ## Design Anchors
 
@@ -28,7 +41,8 @@ This contract implements the retryable/unknown handling of section 3.4 of the un
 - Rule 6: retryable/unknown intake records hold the source claim frontier until the outcome converges to `RCBound` or a completed `Cleaned`.
 - Rule 7: "任何状态都不能重复写入 unsafe" — no state ever repeats the unsafe write; a resume reuses the cached prepare.
 
-It changes no Arbiter design, requires no Arbiter API/FSM change, and adds no new Arbiter command or proto RPC.
+It changes no Arbiter FSM state or command. HouseGate consumes the read probe
+already published by arbiter-proto `v0.4.0`.
 
 ## What Already Existed Versus the Delta
 
@@ -48,7 +62,11 @@ type IntakeStatusQuerier interface {
 }
 ```
 
-It is a separate optional port (not new methods on the existing interfaces) for three reasons: the query capability is orthogonal to submit/prepare; it keeps the existing constructor `NewOrchestrator(submitter, preparer, cfg)` and every existing fake untouched (a nil querier reproduces today's behavior exactly); and it keeps the honesty story clean — only the gated convergence tests supply a querier, and no production fake claims a companion capability it lacks. It is stored as an explicit nil-able `Orchestrator.querier` field, never discovered by a runtime type-assertion on the submitter/preparer, so the nil-fallback branch is visible and testable.
+It remains an optional core port (not new methods on the existing interfaces)
+so embedders may use the design-permitted idempotent retry path. The built-in
+production runtime is stricter and requires the port. It is stored as an
+explicit nil-able `Orchestrator.querier`, never discovered by type assertion on
+the submitter/preparer.
 
 The querier only **reads** status; it never mutates protocol state, and it never returns a category the two operations could not themselves return (it reuses `SubmitOutcome` / `ClaimOutcome`, no new category). `NewOrchestratorWithQuerier(submitter, preparer, querier, cfg)` is the additive constructor.
 
@@ -83,7 +101,10 @@ The record gains `submitUnknown` / `claimUnknown`, set at the non-accepting subm
 
 ## Non-Scope
 
-This change does not implement the real query RPC or a real `IntakeStatusQuerier`, the durable intake journal, the ClickHouse unsafe write, crash-recovery journal scanning (design rules 2 and 5), terminal-reject abort/exact-cleanup extension (the abort path itself already exists for the reject case and is unchanged here), or runtime/plugin wiring and E2E. It does not flip `CompanionStagedIntakeAvailable`, add a companion proto RPC, or introduce a new `OutcomeCategory`.
+This change does not add a claim-specific status RPC or infer terminal claim
+rejection from the statement's later FSM status. It does not introduce a new
+`OutcomeCategory`, alter Arbiter state, or move the host-owned SNode adapter into
+HouseGate.
 
 ## Verification
 
@@ -100,4 +121,6 @@ Bazel gate:
 bazel test //pkg/storageintegrity:storageintegrity_test //pkg/plugins/storageintegrity:storageintegrity_test
 ```
 
-The convergence mapping and local behaviors run green today: `TestClassifyQueryConvergence` (every category → resend decision, including not-found→resend-safe); `TestOrchestrate_UnknownSubmitDoesNotAbortOrAck` (unknown submit → no abort, no ACK2); `TestOrchestrate_UnknownOutcomeHoldsFrontier` (an unknown intake blocks a different statement on the same source). The deterministic query-then-converge orchestration tests stay gated by `requireCompanionStagedIntake` and skip closed while the companion query seam is absent: `TestOrchestrate_UnknownSubmitQueriesBeforeResend` (queries before any re-send), `TestOrchestrate_UnknownSubmitQueryFindsAcceptedConvergesForward` (queried-Accepted → ACK2, no re-submit, no re-prepare), `TestOrchestrate_UnknownSubmitQueryNotFoundAllowsResend` (queried-NotFound → one idempotent re-submit → ACK2), and `TestOrchestrate_UnknownRCQueriesBeforeReregister` (queried-Bound → ACK2, no re-register). Existing staged-intake and ACK2-gate tests are unchanged (they construct via `NewOrchestrator`, so the querier is nil and behavior is byte-identical). The suite is race-clean.
+The convergence mapping and orchestration tests run without a static companion
+skip. Proto-adapter tests additionally pin found/not-found, bound/unbound,
+rejected-after-sequencing, malformed response, and RPC-error behavior.

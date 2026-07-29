@@ -92,6 +92,98 @@ func TestNewStorageIntegrityIngress_RequiresOrchestrator(t *testing.T) {
 	}
 }
 
+func TestNewStorageIntegrityIngressRejectsUnspecifiedMaterializer(t *testing.T) {
+	orch := sicore.NewOrchestrator(nil, nil, sicore.OrchestratorConfig{})
+	if _, err := NewStorageIntegrityIngress(orch, nil, sicore.MaterializerUnspecified); err == nil {
+		t.Fatal("unspecified materializer must be a wiring error")
+	}
+}
+
+func TestStorageIntegrityIngressRejectsWrongMaterializerBeforePayloadPut(t *testing.T) {
+	writer := &rootRecordingPayloadWriter{}
+	submitter := &rootRecordingSubmitter{}
+	preparer := &rootRecordingPreparer{}
+	orch := sicore.NewOrchestrator(submitter, preparer, sicore.OrchestratorConfig{})
+	ing, err := NewStorageIntegrityIngressWithPayloadWriter(orch, nil, sicore.MaterializerCSV, writer)
+	if err != nil {
+		t.Fatalf("NewStorageIntegrityIngressWithPayloadWriter: %v", err)
+	}
+
+	err = ing.ConsumeStorageIntegrityAdmission(context.Background(), storageIntegrityAdmissionForEncoding(
+		sicore.PayloadEncodingClickHouseNativeData,
+		54465,
+	))
+	if err == nil || !strings.Contains(err.Error(), "requires CSV materializer") {
+		t.Fatalf("ConsumeStorageIntegrityAdmission err = %v, want CSV materializer mismatch", err)
+	}
+	if writer.calls != 0 || submitter.calls != 0 || preparer.prepareCalls != 0 {
+		t.Fatalf("writer/submit/prepare calls = %d/%d/%d, want 0/0/0", writer.calls, submitter.calls, preparer.prepareCalls)
+	}
+}
+
+func TestStorageIntegrityIngressRejectsCSVWithoutRevisionBeforePayloadPut(t *testing.T) {
+	writer := &rootRecordingPayloadWriter{}
+	submitter := &rootRecordingSubmitter{}
+	preparer := &rootRecordingPreparer{}
+	orch := sicore.NewOrchestrator(submitter, preparer, sicore.OrchestratorConfig{})
+	ing, err := NewStorageIntegrityIngressWithPayloadWriter(orch, nil, sicore.MaterializerCSV, writer)
+	if err != nil {
+		t.Fatalf("NewStorageIntegrityIngressWithPayloadWriter: %v", err)
+	}
+
+	err = ing.ConsumeStorageIntegrityAdmission(context.Background(), storageIntegrityAdmissionForEncoding(
+		sicore.EncodingCSVWithNames,
+		0,
+	))
+	if err == nil || !strings.Contains(err.Error(), "client protocol revision") {
+		t.Fatalf("ConsumeStorageIntegrityAdmission err = %v, want missing revision", err)
+	}
+	if writer.calls != 0 || submitter.calls != 0 || preparer.prepareCalls != 0 {
+		t.Fatalf("writer/submit/prepare calls = %d/%d/%d, want 0/0/0", writer.calls, submitter.calls, preparer.prepareCalls)
+	}
+}
+
+func TestStorageIntegrityIngressRejectsUnknownEncodingBeforePayloadPut(t *testing.T) {
+	writer := &rootRecordingPayloadWriter{}
+	orch := sicore.NewOrchestrator(&rootRecordingSubmitter{}, &rootRecordingPreparer{}, sicore.OrchestratorConfig{})
+	ing, err := NewStorageIntegrityIngressWithPayloadWriter(orch, nil, sicore.MaterializerCSV, writer)
+	if err != nil {
+		t.Fatalf("NewStorageIntegrityIngressWithPayloadWriter: %v", err)
+	}
+
+	err = ing.ConsumeStorageIntegrityAdmission(context.Background(), storageIntegrityAdmissionForEncoding("future-encoding-v2", 54465))
+	if err == nil || !strings.Contains(err.Error(), "unrecognized payload encoding") {
+		t.Fatalf("ConsumeStorageIntegrityAdmission err = %v, want unknown encoding", err)
+	}
+	if writer.calls != 0 {
+		t.Fatalf("payload writer calls = %d, want 0", writer.calls)
+	}
+}
+
+func storageIntegrityAdmissionForEncoding(encoding string, revision int) siplugin.Admission {
+	sql := "INSERT INTO events FORMAT CSVWithNames"
+	if encoding == sicore.PayloadEncodingClickHouseNativeData {
+		sql = "INSERT INTO events FORMAT Native"
+	}
+	payload := []byte("id,region\n1,eu\n")
+	return siplugin.Admission{
+		StatementID: "0xabc:1:n1",
+		Kind:        siplugin.KindInsert,
+		TableID:     "net1.events",
+		SQL:         sql,
+		SQLHash:     replay.DigestString(sql),
+		Signer:      "0xabc",
+		UserJWS:     "jws",
+		Payload: siplugin.CapturedPayload{
+			Bytes:    payload,
+			Length:   uint64(len(payload)),
+			Encoding: encoding,
+			Revision: revision,
+			Complete: true,
+		},
+	}
+}
+
 func TestStorageIntegrityIngress_PutsPayloadBeforeOrchestrate(t *testing.T) {
 	pluginAdmission := siplugin.Admission{
 		StatementID: "0xabc:1:n1",
@@ -278,4 +370,40 @@ func (p *rootRecordingPreparer) RegisterPreparedClaim(context.Context, string) (
 
 func (p *rootRecordingPreparer) AbortPreparedStatement(context.Context, string, []sicore.CandidatePart, string) error {
 	return nil
+}
+
+func (p *rootRecordingPreparer) LookupPreparedStatement(context.Context, string) (sicore.PreparedLocalResult, bool, error) {
+	return sicore.PreparedLocalResult{}, false, nil
+}
+
+type rootPreparerWithoutLookup struct{}
+
+func (p *rootPreparerWithoutLookup) PrepareLocalStatement(_ context.Context, env sicore.StatementEnvelope, _ []byte) (sicore.PreparedLocalResult, error) {
+	return sicore.PreparedLocalResult{
+		StatementID:     env.StatementID,
+		PayloadRef:      env.PayloadRef,
+		PayloadHash:     env.PayloadHash,
+		PayloadLength:   env.PayloadLength,
+		PayloadEncoding: env.PayloadEncoding,
+		Revision:        env.Revision,
+		Lifecycle:       sicore.LifecycleUnsafeWritten,
+	}, nil
+}
+
+func (p *rootPreparerWithoutLookup) RegisterPreparedClaim(context.Context, string) (sicore.ClaimOutcome, error) {
+	return sicore.ClaimOutcome{}, nil
+}
+
+func (p *rootPreparerWithoutLookup) AbortPreparedStatement(context.Context, string, []sicore.CandidatePart, string) error {
+	return nil
+}
+
+type rootRecordingStatusQuerier struct{}
+
+func (rootRecordingStatusQuerier) QuerySubmitStatus(context.Context, string) (sicore.SubmitOutcome, error) {
+	return sicore.SubmitOutcome{Category: sicore.OutcomeUnspecified}, nil
+}
+
+func (rootRecordingStatusQuerier) QueryClaimStatus(context.Context, string) (sicore.ClaimOutcome, error) {
+	return sicore.ClaimOutcome{Category: sicore.OutcomeUnspecified}, nil
 }

@@ -26,6 +26,8 @@ import (
 	"github.com/housegate/housegate/pkg/rewriter"
 	"github.com/housegate/housegate/pkg/sqlmeta"
 	sicore "github.com/housegate/housegate/pkg/storageintegrity"
+	pb "github.com/sentioxyz/arbiter-proto/gen/pb"
+	"google.golang.org/grpc"
 )
 
 // stubRewriterFactory is a no-op rewriter.Factory that never dials any
@@ -428,12 +430,107 @@ func TestBuildStorageIntegrityRuntimeRequiresPorts(t *testing.T) {
 	for _, want := range []string{
 		"storage_integrity.runtime.statement_submitter is required",
 		"storage_integrity.runtime.source_preparer is required",
+		"storage_integrity.runtime.status_querier is required",
 		"storage_integrity.runtime.payload_writer is required",
 		"storage_integrity.runtime.merge_guard or merge_conn is required",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("runtime assembly err = %v, missing %q", err, want)
 		}
+	}
+}
+
+func TestBuildStorageIntegrityRuntimeRequiresPreparedLookup(t *testing.T) {
+	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatalf("NewRelaySigner: %v", err)
+	}
+	cfg := minimalRouterOnlyCfg(t)
+	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
+
+	_, _, err = buildStorageIntegrityRuntimeConsumer(
+		cfg.StorageIntegrity.Runtime,
+		StorageIntegrityRuntimeOptions{
+			StatementSubmitter: &rootRecordingSubmitter{},
+			SourcePreparer:     &rootPreparerWithoutLookup{},
+			StatusQuerier:      rootRecordingStatusQuerier{},
+			PayloadWriter:      &rootRecordingPayloadWriter{},
+			MergeGuard:         &recordingBuildMergeGuard{},
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "source_preparer must implement prepared statement lookup") {
+		t.Fatalf("runtime assembly err = %v, want missing prepared lookup rejection", err)
+	}
+}
+
+func TestBuildStorageIntegrityRuntimeRequiresStatusQuerier(t *testing.T) {
+	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatalf("NewRelaySigner: %v", err)
+	}
+	cfg := minimalRouterOnlyCfg(t)
+	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
+
+	_, _, err = buildStorageIntegrityRuntimeConsumer(
+		cfg.StorageIntegrity.Runtime,
+		StorageIntegrityRuntimeOptions{
+			StatementSubmitter: &rootRecordingSubmitter{},
+			SourcePreparer:     &rootRecordingPreparer{},
+			PayloadWriter:      &rootRecordingPayloadWriter{},
+			MergeGuard:         &recordingBuildMergeGuard{},
+		},
+	)
+	if err == nil || !strings.Contains(err.Error(), "storage_integrity.runtime.status_querier is required") {
+		t.Fatalf("runtime assembly err = %v, want missing status querier rejection", err)
+	}
+}
+
+func TestBuildServer_StorageIntegrityRuntimeAutoWiresArbiterStatusQuerier(t *testing.T) {
+	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatalf("NewRelaySigner: %v", err)
+	}
+	cfg := minimalRouterOnlyCfg(t)
+	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
+
+	bs, err := buildServer(Options{
+		Config:                              cfg,
+		NetworkState:                        network.NewInMemoryNetworkState(),
+		StorageIntegrityPayloadMaterializer: &recordingBuildPayloadMaterializer{},
+		StorageIntegrityRuntime: StorageIntegrityRuntimeOptions{
+			ArbiterIngressClient: &rootArbiterIngressClient{},
+			SourcePreparer:       &rootRecordingPreparer{},
+			PayloadWriter:        &rootRecordingPayloadWriter{},
+			MergeGuard:           &recordingBuildMergeGuard{},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("buildServer: %v", err)
+	}
+	defer bs.teardown()
+}
+
+func TestBuildServer_StorageIntegrityRuntimeRequiresCSVPayloadMaterializer(t *testing.T) {
+	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatalf("NewRelaySigner: %v", err)
+	}
+	cfg := minimalRouterOnlyCfg(t)
+	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
+
+	_, err = buildServer(Options{
+		Config:       cfg,
+		NetworkState: network.NewInMemoryNetworkState(),
+		StorageIntegrityRuntime: StorageIntegrityRuntimeOptions{
+			StatementSubmitter: &rootRecordingSubmitter{},
+			SourcePreparer:     &rootRecordingPreparer{},
+			StatusQuerier:      rootRecordingStatusQuerier{},
+			PayloadWriter:      &rootRecordingPayloadWriter{},
+			MergeGuard:         &recordingBuildMergeGuard{},
+		},
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "StorageIntegrityPayloadMaterializer is required") {
+		t.Fatalf("buildServer err = %v, want missing CSV payload materializer rejection", err)
 	}
 }
 
@@ -458,36 +555,6 @@ func TestBuildServer_StorageIntegrityRuntimeRejectsManualConsumer(t *testing.T) 
 	}, nil)
 	if err == nil || !strings.Contains(err.Error(), "storage_integrity.runtime.enabled cannot be combined with StorageIntegrityAdmissionConsumer") {
 		t.Fatalf("buildServer err = %v, want manual-consumer rejection", err)
-	}
-}
-
-func TestBuildServer_StorageIntegrityRuntimeRejectsUnavailableCompanionContract(t *testing.T) {
-	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	if err != nil {
-		t.Fatalf("NewRelaySigner: %v", err)
-	}
-	cfg := minimalRouterOnlyCfg(t)
-	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
-
-	_, err = buildServer(Options{
-		Config:       cfg,
-		NetworkState: network.NewInMemoryNetworkState(),
-		StorageIntegrityRuntime: StorageIntegrityRuntimeOptions{
-			StatementSubmitter: &rootRecordingSubmitter{outcome: sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}},
-			SourcePreparer: &rootRecordingPreparer{
-				source: "snode-A",
-				claim:  sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"},
-			},
-			PayloadWriter: &rootRecordingPayloadWriter{result: sicore.PayloadPutResult{
-				PayloadRef:         "payload://store/ref-1",
-				State:              sicore.PayloadStateAvailable,
-				LeaseExpiresUnixMS: uint64(time.Now().Add(time.Hour).UnixMilli()),
-			}},
-			MergeGuard: &recordingBuildMergeGuard{},
-		},
-	}, nil)
-	if err == nil || !strings.Contains(err.Error(), "companion staged-intake contract unavailable") {
-		t.Fatalf("buildServer err = %v, want unavailable companion contract", err)
 	}
 }
 
@@ -521,12 +588,16 @@ func TestBuildStorageIntegrityRuntimeBuildsConsumerAndRunsMergeGuard(t *testing.
 		StorageIntegrityRuntimeOptions{
 			StatementSubmitter: submitter,
 			SourcePreparer:     preparer,
+			StatusQuerier:      rootRecordingStatusQuerier{},
 			PayloadWriter:      writer,
 			MergeGuard:         guard,
 		},
 	)
 	if err != nil {
 		t.Fatalf("buildStorageIntegrityRuntimeConsumer: %v", err)
+	}
+	if ingress.matKind != sicore.MaterializerCSV {
+		t.Fatalf("runtime materializer = %v, want CSV", ingress.matKind)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -537,19 +608,20 @@ func TestBuildStorageIntegrityRuntimeBuildsConsumerAndRunsMergeGuard(t *testing.
 	if guard.calls != 1 {
 		t.Fatalf("merge guard calls = %d, want 1", guard.calls)
 	}
-	payload := []byte("native-block-bytes")
+	payload := []byte("id,region\n1,eu\n")
+	sql := "INSERT INTO events FORMAT CSVWithNames"
 	if err := ingress.ConsumeStorageIntegrityAdmission(ctx, storageintegrity.Admission{
 		StatementID: strings.ToLower(signer.Address()) + ":1:n1",
 		Kind:        storageintegrity.KindInsert,
 		TableID:     "net1.events",
-		SQL:         "INSERT INTO events FORMAT Native",
-		SQLHash:     replay.DigestString("INSERT INTO events FORMAT Native"),
+		SQL:         sql,
+		SQLHash:     replay.DigestString(sql),
 		Signer:      strings.ToLower(signer.Address()),
 		UserJWS:     "jws",
 		Payload: storageintegrity.CapturedPayload{
 			Bytes:    payload,
 			Length:   uint64(len(payload)),
-			Encoding: sicore.PayloadEncodingClickHouseNativeData,
+			Encoding: sicore.EncodingCSVWithNames,
 			Revision: 54465,
 			Complete: true,
 		},
@@ -587,6 +659,7 @@ func TestBuildStorageIntegrityRuntimeBuildsMergeGuardFromConnAndConfig(t *testin
 		StorageIntegrityRuntimeOptions{
 			StatementSubmitter: &rootRecordingSubmitter{outcome: sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}},
 			SourcePreparer:     &rootRecordingPreparer{source: "snode-A", claim: sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"}},
+			StatusQuerier:      rootRecordingStatusQuerier{},
 			PayloadWriter:      &rootRecordingPayloadWriter{result: sicore.PayloadPutResult{PayloadRef: "payload://store/ref-1", State: sicore.PayloadStateAvailable}},
 			MergeConn:          mergeConn,
 		},
@@ -632,6 +705,7 @@ func TestBuildStorageIntegrityRuntimeWrapsMergeSupervisor(t *testing.T) {
 				source: "snode-A",
 				claim:  sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"},
 			},
+			StatusQuerier: rootRecordingStatusQuerier{},
 			PayloadWriter: &rootRecordingPayloadWriter{result: sicore.PayloadPutResult{
 				PayloadRef:         "payload://store/ref-1",
 				State:              sicore.PayloadStateAvailable,
@@ -666,6 +740,7 @@ func TestStartStorageIntegrityRuntimeFailsClosedOnMergeGuardError(t *testing.T) 
 		StorageIntegrityRuntimeOptions{
 			StatementSubmitter: &rootRecordingSubmitter{outcome: sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}},
 			SourcePreparer:     &rootRecordingPreparer{source: "snode-A", claim: sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"}},
+			StatusQuerier:      rootRecordingStatusQuerier{},
 			PayloadWriter:      &rootRecordingPayloadWriter{result: sicore.PayloadPutResult{PayloadRef: "payload://store/ref-1", State: sicore.PayloadStateAvailable}},
 			MergeGuard:         guard,
 		},
@@ -728,19 +803,20 @@ func TestStartStorageIntegrityRuntimeRecoversAfterInitialMergeAssert(t *testing.
 	if err != nil {
 		t.Fatalf("NewFileIntakeJournal: %v", err)
 	}
-	payload := []byte("native-block-bytes")
+	payload := []byte("id,region\n1,eu\n")
+	sql := "INSERT INTO events FORMAT CSVWithNames"
 	adm := sicore.AdmissionRecord{
 		StatementID:     "0xabc:1:n1",
 		Kind:            sicore.KindInsert,
 		TableID:         "net1.events",
-		SQL:             "INSERT INTO events FORMAT Native",
-		SQLHash:         replay.DigestString("INSERT INTO events FORMAT Native"),
+		SQL:             sql,
+		SQLHash:         replay.DigestString(sql),
 		Signer:          "0xabc",
 		UserJWS:         "jws",
 		Payload:         payload,
 		PayloadLength:   uint64(len(payload)),
 		PayloadHash:     replay.DigestBytes(payload),
-		PayloadEncoding: sicore.PayloadEncodingClickHouseNativeData,
+		PayloadEncoding: sicore.EncodingCSVWithNames,
 		Revision:        54465,
 	}
 	env, err := sicore.EnvelopeFromAdmission(adm)
@@ -786,6 +862,7 @@ func TestStartStorageIntegrityRuntimeRecoversAfterInitialMergeAssert(t *testing.
 				source: "snode-A",
 				claim:  sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"},
 			},
+			StatusQuerier: rootRecordingStatusQuerier{},
 			PayloadWriter: payloadWriter,
 			MergeGuard:    &orderedBuildMergeGuard{order: order},
 		},
@@ -975,6 +1052,16 @@ func (c *recordingAdmissionConsumer) requireOne(t *testing.T) storageintegrity.A
 type recordingBuildPayloadMaterializer struct {
 	input sicore.PayloadMaterializationInput
 	out   sicore.PayloadMaterializationResult
+}
+
+type rootArbiterIngressClient struct{}
+
+func (c *rootArbiterIngressClient) SubmitStatement(context.Context, *pb.StatementEnvelopeV2, ...grpc.CallOption) (*pb.SequencedAck, error) {
+	return &pb.SequencedAck{Code: pb.AdmissionCode_ADMISSION_CODE_ACCEPTED, StatementSeq: 1}, nil
+}
+
+func (c *rootArbiterIngressClient) GetStatementStatus(context.Context, *pb.GetStatementStatusRequest, ...grpc.CallOption) (*pb.StatementStatus, error) {
+	return &pb.StatementStatus{Found: false}, nil
 }
 
 func (m *recordingBuildPayloadMaterializer) MaterializePayload(_ context.Context, input sicore.PayloadMaterializationInput) (sicore.PayloadMaterializationResult, error) {

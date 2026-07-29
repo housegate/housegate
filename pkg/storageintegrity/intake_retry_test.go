@@ -41,8 +41,7 @@ func TestClassifyQueryConvergence(t *testing.T) {
 }
 
 // countingQuerier records how many times each query method was called and
-// returns configured outcomes. It is an in-test IntakeStatusQuerier double, NOT
-// a substitute for the missing companion query seam.
+// returns configured outcomes. It is an in-test IntakeStatusQuerier double.
 type countingQuerier struct {
 	submitStatus  SubmitOutcome
 	submitErr     error
@@ -139,15 +138,12 @@ func TestOrchestrate_UnknownOutcomeHoldsFrontier(t *testing.T) {
 	}
 }
 
-// --- Gated: deterministic query-first convergence. Needs the companion query
-// seam, so requireCompanionStagedIntake(t) skips these closed until it lands. ---
+// --- Deterministic query-first convergence. ---
 
 // TestOrchestrate_UnknownSubmitQueriesBeforeResend proves that after an unknown
 // submit, the next attempt calls QuerySubmitStatus BEFORE any SubmitStatement
 // re-send when a querier is wired.
 func TestOrchestrate_UnknownSubmitQueriesBeforeResend(t *testing.T) {
-	requireCompanionStagedIntake(t)
-
 	prep := &recordingPreparer{
 		prepared:     boundSource(),
 		claimOutcome: ClaimOutcome{Category: OutcomeAccepted, BoundSource: "snode-A"},
@@ -180,8 +176,6 @@ func TestOrchestrate_UnknownSubmitQueriesBeforeResend(t *testing.T) {
 // unknown submit whose query finds Accepted proceeds to the RC gate and reaches
 // ACK2 without re-submitting or re-preparing.
 func TestOrchestrate_UnknownSubmitQueryFindsAcceptedConvergesForward(t *testing.T) {
-	requireCompanionStagedIntake(t)
-
 	prep := &recordingPreparer{
 		prepared:     boundSource(),
 		claimOutcome: ClaimOutcome{Category: OutcomeAccepted, BoundSource: "snode-A"},
@@ -210,8 +204,6 @@ func TestOrchestrate_UnknownSubmitQueryFindsAcceptedConvergesForward(t *testing.
 // submit whose query returns NotFound (mapped to resend-safe) proceeds to an
 // idempotent re-submit rather than being stuck.
 func TestOrchestrate_UnknownSubmitQueryNotFoundAllowsResend(t *testing.T) {
-	requireCompanionStagedIntake(t)
-
 	prep := &recordingPreparer{
 		prepared:     boundSource(),
 		claimOutcome: ClaimOutcome{Category: OutcomeAccepted, BoundSource: "snode-A"},
@@ -246,8 +238,6 @@ func TestOrchestrate_UnknownSubmitQueryNotFoundAllowsResend(t *testing.T) {
 // calls QueryClaimStatus before re-registering, and a Bound query result
 // converges to ACK2.
 func TestOrchestrate_UnknownRCQueriesBeforeReregister(t *testing.T) {
-	requireCompanionStagedIntake(t)
-
 	// Submit accepted; first RC unknown; querier reports the claim already bound.
 	prep := &rcUnknownThenProbe{prepared: boundSource()}
 	sub := &recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeAccepted}}

@@ -14,12 +14,10 @@ import (
 // re-send. This lets an already-sequenced statement converge forward instead of
 // being blindly re-submitted.
 //
-// Like StatementSubmitter and SourcePreparer, this is a HouseGate-defined port,
-// not a companion API: the Sentio arbiter/arbiter-proto topology exposes no
-// query-status RPC today (see CompanionStagedIntakeAvailable). No real
-// implementation exists, and HouseGate must not fabricate one with a local mock
-// shape. The querier only reads status; it never mutates protocol state, and it
-// never returns a category the two operations could not themselves return.
+// Like StatementSubmitter and SourcePreparer, this is a HouseGate-defined port.
+// ArbiterIntakeStatusQuerier adapts arbiter-proto's GetStatementStatus probe.
+// The querier only reads status; it never mutates protocol state, and it never
+// returns a category the two operations could not themselves return.
 type IntakeStatusQuerier interface {
 	// QuerySubmitStatus reports the Arbiter's current status for a previously
 	// submitted statement: Accepted / ExactIdempotent if it was sequenced,

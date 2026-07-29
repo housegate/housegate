@@ -100,11 +100,13 @@ type Options struct {
 	// StorageIntegrityPayloadMaterializer converts captured Native ClientData
 	// into the replay payload encoding selected by the admitted INSERT. Hosts
 	// that want FORMAT CSVWithNames support must provide one; without it, the
-	// ingress plugin rejects CSVWithNames fail-closed.
+	// ingress plugin rejects CSVWithNames fail-closed. It is mandatory when the
+	// built-in storage-integrity runtime is enabled because that production
+	// profile admits only csv-with-names-v1.
 	StorageIntegrityPayloadMaterializer sicore.PayloadMaterializer
 	// StorageIntegrityRuntime supplies the real P1e runtime ports used when
 	// config.storage_integrity.runtime.enabled is true. It lets HouseGate build
-	// the admission consumer itself without fabricating the missing companion seam.
+	// the admission consumer while the host supplies the source-side adapter.
 	StorageIntegrityRuntime StorageIntegrityRuntimeOptions
 
 	// CommitGateObservers gate DDL statements (CREATE / DROP TABLE,

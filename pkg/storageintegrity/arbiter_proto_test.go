@@ -107,6 +107,177 @@ func TestArbiterStatementSubmitterMapsNotLeaderAsRetryable(t *testing.T) {
 	}
 }
 
+func TestArbiterIntakeStatusQuerierMapsSubmitStatus(t *testing.T) {
+	tests := []struct {
+		name   string
+		status *pb.StatementStatus
+		want   OutcomeCategory
+	}{
+		{
+			name:   "not found is resend safe",
+			status: &pb.StatementStatus{Found: false},
+			want:   OutcomeUnspecified,
+		},
+		{
+			name: "found proves submit landed even after later rejection",
+			status: &pb.StatementStatus{
+				Found:        true,
+				StatementSeq: 42,
+				Status:       "Rejected",
+			},
+			want: OutcomeExactIdempotent,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &recordingArbiterIngressClient{statementStatus: tc.status}
+			querier := NewArbiterIntakeStatusQuerier(client)
+
+			got, err := querier.QuerySubmitStatus(context.Background(), "0xabc:7:nonce-7")
+			if err != nil {
+				t.Fatalf("QuerySubmitStatus: %v", err)
+			}
+			if got.Category != tc.want {
+				t.Fatalf("category = %v, want %v", got.Category, tc.want)
+			}
+			if client.statusCalls != 1 || client.statusReq.GetStatementId() != "0xabc:7:nonce-7" {
+				t.Fatalf("status calls/request = %d/%q", client.statusCalls, client.statusReq.GetStatementId())
+			}
+		})
+	}
+}
+
+func TestArbiterIntakeStatusQuerierMapsClaimStatus(t *testing.T) {
+	tests := []struct {
+		name        string
+		status      *pb.StatementStatus
+		want        OutcomeCategory
+		wantSource  string
+		wantErrText string
+	}{
+		{
+			name:   "not found is resend safe",
+			status: &pb.StatementStatus{Found: false},
+			want:   OutcomeUnspecified,
+		},
+		{
+			name: "found but unbound is resend safe",
+			status: &pb.StatementStatus{
+				Found:        true,
+				StatementSeq: 42,
+				Status:       "Sequenced",
+				RcBound:      false,
+			},
+			want: OutcomeUnspecified,
+		},
+		{
+			name: "bound claim converges forward",
+			status: &pb.StatementStatus{
+				Found:        true,
+				StatementSeq: 42,
+				Status:       "Sequenced",
+				RcBound:      true,
+				BoundSource:  "snode-A",
+			},
+			want:       OutcomeExactIdempotent,
+			wantSource: "snode-A",
+		},
+		{
+			name: "bound claim without source is malformed",
+			status: &pb.StatementStatus{
+				Found:        true,
+				StatementSeq: 42,
+				RcBound:      true,
+			},
+			wantErrText: "empty bound_source",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &recordingArbiterIngressClient{statementStatus: tc.status}
+			querier := NewArbiterIntakeStatusQuerier(client)
+
+			got, err := querier.QueryClaimStatus(context.Background(), "0xabc:7:nonce-7")
+			if tc.wantErrText != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErrText) {
+					t.Fatalf("QueryClaimStatus err = %v, want %q", err, tc.wantErrText)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("QueryClaimStatus: %v", err)
+			}
+			if got.Category != tc.want || got.BoundSource != tc.wantSource {
+				t.Fatalf("claim = %v/%q, want %v/%q", got.Category, got.BoundSource, tc.want, tc.wantSource)
+			}
+		})
+	}
+}
+
+func TestArbiterIntakeStatusQuerierRejectsIndeterminateProbe(t *testing.T) {
+	tests := []struct {
+		name   string
+		client *recordingArbiterIngressClient
+		want   string
+	}{
+		{
+			name:   "nil response",
+			client: &recordingArbiterIngressClient{},
+			want:   "nil StatementStatus",
+		},
+		{
+			name: "rpc error",
+			client: &recordingArbiterIngressClient{
+				statusErr: status.Error(codes.Unavailable, "probe unavailable"),
+			},
+			want: "probe unavailable",
+		},
+		{
+			name: "not found cannot be rc bound",
+			client: &recordingArbiterIngressClient{
+				statementStatus: &pb.StatementStatus{Found: false, RcBound: true, BoundSource: "snode-A"},
+			},
+			want: "not found with statement data",
+		},
+		{
+			name: "not found cannot have sequence",
+			client: &recordingArbiterIngressClient{
+				statementStatus: &pb.StatementStatus{Found: false, StatementSeq: 42},
+			},
+			want: "not found with statement data",
+		},
+		{
+			name: "found requires statement sequence",
+			client: &recordingArbiterIngressClient{
+				statementStatus: &pb.StatementStatus{Found: true, Status: "Sequenced"},
+			},
+			want: "zero statement_seq",
+		},
+		{
+			name: "unbound claim cannot have source",
+			client: &recordingArbiterIngressClient{
+				statementStatus: &pb.StatementStatus{Found: true, StatementSeq: 42, BoundSource: "snode-A"},
+			},
+			want: "rc_bound=false with non-empty bound_source",
+		},
+		{
+			name: "bound source is not normalized",
+			client: &recordingArbiterIngressClient{
+				statementStatus: &pb.StatementStatus{Found: true, StatementSeq: 42, RcBound: true, BoundSource: " snode-A "},
+			},
+			want: "bound_source has surrounding whitespace",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			querier := NewArbiterIntakeStatusQuerier(tc.client)
+			if _, err := querier.QuerySubmitStatus(context.Background(), "0xabc:7:nonce-7"); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("QuerySubmitStatus err = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestArbiterPayloadStoreWriterUsesInlinePutWithinLimit(t *testing.T) {
 	payload := []byte("native-block")
 	hash := replay.DigestBytes(payload)
@@ -265,16 +436,26 @@ func arbiterProtoEnvelopeFixture() StatementEnvelope {
 }
 
 type recordingArbiterIngressClient struct {
-	calls int
-	last  *pb.StatementEnvelopeV2
-	ack   *pb.SequencedAck
-	err   error
+	calls           int
+	last            *pb.StatementEnvelopeV2
+	ack             *pb.SequencedAck
+	err             error
+	statusCalls     int
+	statusReq       *pb.GetStatementStatusRequest
+	statementStatus *pb.StatementStatus
+	statusErr       error
 }
 
 func (c *recordingArbiterIngressClient) SubmitStatement(_ context.Context, in *pb.StatementEnvelopeV2, _ ...grpc.CallOption) (*pb.SequencedAck, error) {
 	c.calls++
 	c.last = in
 	return c.ack, c.err
+}
+
+func (c *recordingArbiterIngressClient) GetStatementStatus(_ context.Context, in *pb.GetStatementStatusRequest, _ ...grpc.CallOption) (*pb.StatementStatus, error) {
+	c.statusCalls++
+	c.statusReq = in
+	return c.statementStatus, c.statusErr
 }
 
 type recordingPayloadStoreClient struct {

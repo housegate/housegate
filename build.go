@@ -41,7 +41,6 @@ import (
 	"github.com/housegate/housegate/pkg/replicationproxy"
 	"github.com/housegate/housegate/pkg/rewriter"
 	"github.com/housegate/housegate/pkg/sqlmeta"
-	sicore "github.com/housegate/housegate/pkg/storageintegrity"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -606,8 +605,8 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			if admissionConsumer != nil {
 				return nil, fmt.Errorf("storage_integrity.runtime.enabled cannot be combined with StorageIntegrityAdmissionConsumer")
 			}
-			if !sicore.CompanionStagedIntakeAvailable {
-				return nil, fmt.Errorf("storage_integrity.runtime: companion staged-intake contract unavailable")
+			if opts.StorageIntegrityPayloadMaterializer == nil {
+				return nil, fmt.Errorf("storage_integrity.runtime: StorageIntegrityPayloadMaterializer is required for CSVWithNames")
 			}
 			consumer, guard, err := buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, opts.StorageIntegrityRuntime)
 			if err != nil {

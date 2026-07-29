@@ -1,5 +1,7 @@
 # HouseGate CSVWithNames Payload Compatibility Bridge
 
+Last updated: 2026-07-29
+
 This note extends the INSERT-only storage-integrity design set:
 
 - `2026-07-14-housegate-storage-integrity-state-root-contract-design.md`
@@ -21,7 +23,7 @@ arbitrary bare CSV through the strict data path. Feeding `pkt.Raw` directly to
 `payloadexec.DecodeCSV` remains invalid because those bytes include the packet
 code and Native block framing.
 
-The safety rule is: `FORMAT CSVWithNames` is admitted only when a payload
+The general ingress safety rule is: `FORMAT CSVWithNames` is admitted only when a payload
 materializer is configured. Without that bridge, ingress rejects the query
 fail-closed instead of declaring CSV support and storing Native framing bytes as
 CSV.
@@ -39,6 +41,19 @@ CSV.
 | `INSERT ... SELECT` / `WITH ... SELECT` | rejected | none |
 
 Compressed query payloads remain rejected before admission.
+
+The table above describes the reusable ingress plugin. The built-in Arbiter P1
+production runtime is intentionally narrower: it requires
+`StorageIntegrityPayloadMaterializer` at startup and accepts only the
+`csv-with-names-v1` result. Implicit Native and `FORMAT Native` remain available
+to custom admission consumers, but the built-in runtime rejects them before
+payload spooling/upload because the current arbiter-core staged SNode accepts
+CSVWithNames only.
+
+The production CSV bridge also requires a non-zero captured ClickHouse client
+revision. The stored CSV bytes no longer need revision-specific decoding, but
+HouseGate needs that revision to decode the incoming Native `ClientData` before
+emitting CSV.
 
 ## What Changed In This Slice
 
@@ -65,7 +80,10 @@ Tests pin both sides of the bridge:
   published admission contains the materialized CSV payload;
 - `NativeCSVPayloadMaterializer` output is accepted by `payloadexec.DecodeCSV`;
 - `buildServer` wires `StorageIntegrityPayloadMaterializer` into the ingress
-  plugin.
+  plugin;
+- built-in runtime startup rejects a missing CSV materializer;
+- a Native admission is rejected before PayloadStore access when the runtime is
+  pinned to `MaterializerCSV`.
 
 ## Remaining Non-Scope
 

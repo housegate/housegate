@@ -2,23 +2,22 @@
 
 Date: 2026-07-20
 
+Last updated: 2026-07-29
+
 ## Purpose
 
 This change makes terminal-reject cleanup exact and HouseGate-bounded. When a `SubmitStatement` or `RegisterResultClaim` is terminally rejected, the intake aborts the prepared candidate, and this slice ensures that abort drops **exactly** the frozen candidate part names the journal recorded, never a whole partition and never parts inferred source-side. It does so by threading the record's frozen `CandidateParts` through the abort seam, so the cleanup surface is dictated by HouseGate's own inventory rather than trusted to a companion-side lookup by `statement_id`.
 
 Most of the abort control flow already existed from the staged-intake slice (abort on terminal reject, retryable/unknown never abort, failed-abort retried not recorded, in-process resume from `AbortPending`). This slice's delta is narrow but load-bearing: it closes the gap where the exact-candidate contract was documented but not enforced.
 
-## Companion Gate Status
+## Companion Capability Status
 
-This design slice is a blocked skeleton, on the same basis as the staged-intake, ACK2-gate, and unknown-convergence slices. The abort seam it drives — `SourcePreparer.AbortPreparedStatement` — is part of the C1 staged-prepare split (`PrepareLocalStatement` / `RegisterPreparedClaim` / `AbortPreparedStatement`) that the Sentio companion repos do not expose (arbiter `03aa035`, arbiter-proto `2fa9263`, re-verified 2026-07-20; SNode intake is still the one-shot in-process `SubmitLocalStatement`, and the Arbiter command alphabet has no abort/cancel/revoke command).
-
-Because HouseGate must not fabricate the companion protocol, this slice ships:
-
-1. this scoped spec;
-2. the pure HouseGate-local change: the `AbortPreparedStatement` port signature now carries the exact `[]CandidatePart`, the `abortParts` helper that sources exactly the frozen inventory, and the `abort()` call threading it through;
-3. contract tests. The exact-parts cleanup bookkeeping is pure HouseGate logic — which parts get handed to the seam — and runs green today. The end-to-end accepted → ACK2 orchestration tests remain gated by `requireCompanionStagedIntake` and skip closed while the companion seam is absent, so a red (skipped) run is never mistaken for a green one.
-
-When the companion seam lands, a real `AbortPreparedStatement` is implemented against the abort RPC / `ALTER TABLE hg_unsafe.<table> DROP PART` execution, and it receives the exact parts to drop. No local mock shape is added in the meantime.
+arbiter-core's SNode role now exposes `AbortPreparedStatement` with exact part
+names and persists `AbortPending` before physical cleanup. HouseGate keeps its
+own `[]CandidatePart` port and the embedding host maps it to the core role's
+`[]string` part-name input. The production runtime validates the full source
+adapter dynamically; orchestration and exact-cleanup contract tests run without
+a repository-version skip.
 
 ## Design Anchors
 
@@ -54,11 +53,13 @@ The `PartitionNewPartSums` needed for the design's logical-exclusion step (rule 
 
 ## Crash Recovery Scope
 
-Design rule 5 ("进程重启时扫描 `Preparing` 和 `AbortPending` 并继续未完成步骤") requires a durable intake journal that survives process restart. The current `intakeRecord` is in-memory and is lost on restart, so true cross-restart recovery scanning depends on the durable-journal store that arrives with the P1e runtime wiring. This slice therefore models recovery as **in-process resume from the durable stage**: a mid-abort failure leaves a resumable `AbortPending` record, and a later `Orchestrate` call for the same statement completes the exact cleanup and reaches `Cleaned`, reusing the frozen parts and never re-preparing. Durable-journal persistence and cross-restart `Preparing` / `AbortPending` scanning (rules 2 and 5) are deferred to the runtime wiring.
+Design rule 5 ("进程重启时扫描 `Preparing` 和 `AbortPending` 并继续未完成步骤") is implemented by the P1e durable journal and `RecoverPending`. A mid-abort failure leaves a durable `AbortPending` record; startup recovery resumes the exact cleanup before listeners accept new source writes. It reuses the frozen parts and never re-prepares.
 
 ## Non-Scope
 
-This change does not implement a durable journal store or any persistence layer, real ClickHouse `ALTER TABLE … DROP PART` execution, a real gRPC abort client, cross-process-restart recovery scanning (rules 2 and 5), or the `Preparing`-stage `_hg_row_id` partition rescan of rule 2. It does not extend abort to retryable/unknown outcomes (abort stays terminal-only), does not carry or apply the source-side `PartitionNewPartSums` exclusion, does not flip `CompanionStagedIntakeAvailable`, and adds no companion proto RPC.
+HouseGate does not implement ClickHouse cleanup itself or import arbiter-core;
+the host-owned source adapter invokes the SNode role. Abort remains
+terminal-only. This change adds no Arbiter command or proto RPC.
 
 ## Verification
 

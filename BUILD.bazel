@@ -104,6 +104,8 @@ go_test(
         "@com_github_clickhouse_ch_go//proto",
         "@com_github_prometheus_client_golang//prometheus",
         "@com_github_prometheus_client_golang//prometheus/testutil",
+        "@com_github_sentioxyz_arbiter_proto//gen/pb",
+        "@org_golang_google_grpc//:grpc",
     ],
 )
 

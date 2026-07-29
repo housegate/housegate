@@ -21,11 +21,10 @@ import (
 // opaque payload_ref before staged intake starts. It deliberately constructs NO
 // HouseGate-owned Verifier or Promoter: verifier selection, quorum, and
 // manifest publication are Arbiter / SNode responsibilities the orchestrator
-// only drives through ports (design sections 3.6 and 4.1). HouseGate now has
-// real arbiter-proto SubmitStatement and PayloadStore put adapters, but until
-// the companion staged-prepare and status-query seams land, the orchestrator
-// still has no complete real adapter set and cannot yet close a statement to
-// ACK2 (see CompanionStagedIntakeAvailable).
+// only drives through ports (design sections 3.6 and 4.1). HouseGate provides
+// arbiter-proto SubmitStatement, GetStatementStatus, and PayloadStore put
+// adapters. The embedding host supplies the selected-SNode SourcePreparer plus
+// PreparedStatementLookup adapter.
 type StorageIntegrityIngress struct {
 	orch          *sicore.Orchestrator
 	guard         StorageIntegrityMergeGuard
@@ -53,6 +52,11 @@ func NewStorageIntegrityIngress(orch *sicore.Orchestrator, guard StorageIntegrit
 func NewStorageIntegrityIngressWithPayloadWriter(orch *sicore.Orchestrator, guard StorageIntegrityMergeGuard, matKind sicore.MaterializerKind, writer sicore.PayloadWriter) (*StorageIntegrityIngress, error) {
 	if orch == nil {
 		return nil, fmt.Errorf("storage_integrity ingress: orchestrator is required")
+	}
+	switch matKind {
+	case sicore.MaterializerNative, sicore.MaterializerCSV:
+	default:
+		return nil, fmt.Errorf("storage_integrity ingress: valid materializer kind is required")
 	}
 	return &StorageIntegrityIngress{orch: orch, guard: guard, matKind: matKind, payloadWriter: writer}, nil
 }
@@ -102,7 +106,8 @@ func (i *StorageIntegrityIngress) Close() {
 // ConsumeStorageIntegrityAdmission maps a completed plugin admission into a core
 // AdmissionRecord and drives the orchestrator. A non-ACK2 outcome is surfaced as
 // an error so the plugin reports failure to the client rather than a false
-// success; only a bound ACK2 returns nil. This is the C1-gated end-to-end path.
+// success; only a bound ACK2 returns nil. This is the production staged-intake
+// path.
 func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.Context, adm siplugin.Admission) error {
 	if health, ok := i.guard.(StorageIntegrityMergeHealth); ok {
 		if err := health.CheckMergeHealth(); err != nil {
@@ -110,6 +115,21 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 		}
 	}
 	rec := AdmissionRecordFromPlugin(adm)
+	actualMaterializer, err := sicore.SelectMaterializerKind(rec.PayloadEncoding)
+	if err != nil {
+		return fmt.Errorf("storage_integrity ingress: %w", err)
+	}
+	if actualMaterializer != i.matKind {
+		return fmt.Errorf(
+			"storage_integrity ingress: runtime requires %s materializer, payload encoding %q selects %s",
+			storageIntegrityMaterializerName(i.matKind),
+			rec.PayloadEncoding,
+			storageIntegrityMaterializerName(actualMaterializer),
+		)
+	}
+	if i.matKind == sicore.MaterializerCSV && rec.Revision == 0 {
+		return fmt.Errorf("storage_integrity ingress: CSV materialization requires a non-zero client protocol revision")
+	}
 	if i.payloadWriter != nil {
 		put, err := i.payloadWriter.PutPayload(ctx, rec.Payload, rec.PayloadHash, rec.PayloadLength)
 		if err != nil {
@@ -130,12 +150,23 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 	return nil
 }
 
+func storageIntegrityMaterializerName(kind sicore.MaterializerKind) string {
+	switch kind {
+	case sicore.MaterializerNative:
+		return "Native"
+	case sicore.MaterializerCSV:
+		return "CSV"
+	default:
+		return "unspecified"
+	}
+}
+
 // AdmissionRecordFromPlugin is the pure projection of a plugin Admission into
 // the core AdmissionRecord the orchestrator consumes. Signed statement fields
 // and captured bytes are carried from the plugin; payload_hash is normalized to
 // the replay/arbiter digest profile so the sequenced envelope matches
-// arbiter-proto and verifier expectations. It is deterministic and needs no
-// companion seam.
+// arbiter-proto and verifier expectations. It is deterministic and performs no
+// source-side I/O.
 func AdmissionRecordFromPlugin(adm siplugin.Admission) sicore.AdmissionRecord {
 	encoding := adm.Payload.Encoding
 	if encoding == "" {
