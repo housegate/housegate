@@ -114,8 +114,9 @@ func (c *Codec) Compression() proto.Compression { return proto.Compression(c.com
 //
 //	io.EOF           — peer closed cleanly
 //	ErrMalformed     — protocol error; caller must close
-//	ErrUnknownPacket — type not in known table; Packet still carries Raw bytes
-//	                   so caller can Splice through for forward-compat
+//	ErrUnknownPacket — type not in the known table. Packet carries the bytes
+//	                   consumed before the framing gap, but the caller must
+//	                   close rather than splice an incomplete packet.
 //	ErrDecode        — decode of a requested type failed; per spec D8, caller
 //	                   falls back to Splice(Raw) — this function populates
 //	                   both Raw and the Decode error.
@@ -316,7 +317,8 @@ func (c *Codec) skipServerPacketBody(typeVar uint64) error {
 	rev := c.Revision()
 	switch typeVar {
 	case uint64(proto.ServerCodePong),
-		uint64(proto.ServerCodeEndOfStream):
+		uint64(proto.ServerCodeEndOfStream),
+		uint64(ServerReadTaskRequestCode):
 		return nil
 
 	// Block-formatted packets: all use the same wire layout as a Data block
@@ -326,7 +328,7 @@ func (c *Codec) skipServerPacketBody(typeVar uint64) error {
 		uint64(proto.ServerCodeTotals),
 		uint64(proto.ServerCodeExtremes),
 		uint64(proto.ServerCodeLog),
-		uint64(proto.ServerProfileEvents): // 14
+		uint64(ServerProfileEventsCode):
 		return c.walkDataBlock()
 
 	case uint64(proto.ServerCodeException):
@@ -337,27 +339,149 @@ func (c *Codec) skipServerPacketBody(typeVar uint64) error {
 		return nil
 
 	case uint64(proto.ServerCodeProgress):
-		var p proto.Progress
-		if err := p.DecodeAware(c.r, rev); err != nil {
-			return fmt.Errorf("progress decode: %w", err)
-		}
-		return nil
+		return c.skipServerProgress(rev)
 
 	case uint64(proto.ServerCodeProfile):
-		var p proto.Profile
-		if err := p.DecodeAware(c.r, rev); err != nil {
-			return fmt.Errorf("profile decode: %w", err)
-		}
-		return nil
+		return c.skipServerProfile(rev)
+
+	case uint64(proto.ServerCodeTablesStatus):
+		return c.skipTablesStatusResponse(rev)
 
 	case uint64(proto.ServerCodeTableColumns):
+		// Since revision 54481, TableColumns travels through the same
+		// maybe-compressed stream as Data/Log/ProfileEvents. The packet body is
+		// tiny and ClickHouse flushes it as a complete compressed frame.
+		if rev >= revisionMinCompressedLogsProfileEventsColumns &&
+			c.Compression() == proto.CompressionEnabled {
+			return c.walkCompressedFrames()
+		}
 		var t proto.TableColumns
 		if err := t.DecodeAware(c.r, rev); err != nil {
 			return fmt.Errorf("table_columns decode: %w", err)
 		}
 		return nil
+
+	case uint64(ServerPartUUIDsCode):
+		return c.skipPartUUIDs()
+
+	case uint64(ServerTimezoneUpdateCode),
+		uint64(ServerSSHChallengeCode):
+		if _, err := c.r.Str(); err != nil {
+			return fmt.Errorf("server string packet type=%d: %w", typeVar, err)
+		}
+		return nil
 	}
 	return fmt.Errorf("%w: skip body for server type=%d not yet supported", ErrUnknownPacket, typeVar)
+}
+
+// Protocol revision gates used by current ClickHouse server packet layouts.
+// ch-go v0.73 does not yet model these trailing fields, so the framing path
+// consumes them directly instead of relying on its shorter decoders.
+const (
+	revisionMinClientWriteInfo                    = 54420
+	revisionMinTotalBytesInProgress               = 54463
+	revisionMinServerQueryTimeInProgress          = 54460
+	revisionMinTableReadOnlyCheck                 = 54467
+	revisionMinRowsBeforeAggregation              = 54469
+	revisionMinCompressedLogsProfileEventsColumns = 54481
+)
+
+func (c *Codec) skipServerProgress(rev int) error {
+	fields := 3 // read_rows, read_bytes, total_rows_to_read
+	if rev >= revisionMinTotalBytesInProgress {
+		fields++ // total_bytes_to_read
+	}
+	if rev >= revisionMinClientWriteInfo {
+		fields += 2 // written_rows, written_bytes
+	}
+	if rev >= revisionMinServerQueryTimeInProgress {
+		fields++ // elapsed_ns
+	}
+	for i := 0; i < fields; i++ {
+		if _, err := c.r.UVarInt(); err != nil {
+			return fmt.Errorf("progress field %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
+func (c *Codec) skipServerProfile(rev int) error {
+	for i := 0; i < 3; i++ { // rows, blocks, bytes
+		if _, err := c.r.UVarInt(); err != nil {
+			return fmt.Errorf("profile counter %d: %w", i, err)
+		}
+	}
+	if _, err := c.r.Bool(); err != nil { // applied_limit
+		return fmt.Errorf("profile applied_limit: %w", err)
+	}
+	if _, err := c.r.UVarInt(); err != nil { // rows_before_limit
+		return fmt.Errorf("profile rows_before_limit: %w", err)
+	}
+	if _, err := c.r.Bool(); err != nil { // obsolete calculated_rows_before_limit
+		return fmt.Errorf("profile obsolete flag: %w", err)
+	}
+	if rev >= revisionMinRowsBeforeAggregation {
+		if _, err := c.r.Bool(); err != nil {
+			return fmt.Errorf("profile applied_aggregation: %w", err)
+		}
+		if _, err := c.r.UVarInt(); err != nil {
+			return fmt.Errorf("profile rows_before_aggregation: %w", err)
+		}
+	}
+	return nil
+}
+
+// skipTablesStatusResponse consumes the response body:
+//
+//	varuint count
+//	for each:
+//	  string database, string table, bool replicated
+//	  if replicated: varuint absolute_delay
+//	  if replicated && revision >= 54467: varuint readonly
+func (c *Codec) skipTablesStatusResponse(rev int) error {
+	n, err := c.r.UVarInt()
+	if err != nil {
+		return fmt.Errorf("tables status response count: %w", err)
+	}
+	for i := uint64(0); i < n; i++ {
+		if _, err := c.r.Str(); err != nil {
+			return fmt.Errorf("tables status response[%d] database: %w", i, err)
+		}
+		if _, err := c.r.Str(); err != nil {
+			return fmt.Errorf("tables status response[%d] table: %w", i, err)
+		}
+		replicated, err := c.r.Bool()
+		if err != nil {
+			return fmt.Errorf("tables status response[%d] replicated: %w", i, err)
+		}
+		if !replicated {
+			continue
+		}
+		if _, err := c.r.UVarInt(); err != nil {
+			return fmt.Errorf("tables status response[%d] delay: %w", i, err)
+		}
+		if rev >= revisionMinTableReadOnlyCheck {
+			if _, err := c.r.UVarInt(); err != nil {
+				return fmt.Errorf("tables status response[%d] readonly: %w", i, err)
+			}
+		}
+	}
+	return nil
+}
+
+func (c *Codec) skipPartUUIDs() error {
+	n, err := c.r.UVarInt()
+	if err != nil {
+		return fmt.Errorf("part UUID count: %w", err)
+	}
+	maxInt := int(^uint(0) >> 1)
+	if n > uint64(maxInt/16) {
+		return fmt.Errorf("part UUID count %d overflows packet size", n)
+	}
+	if _, err := c.readFullRaw(int(n) * 16); err != nil {
+		return fmt.Errorf("part UUID payload: %w", err)
+	}
+	return nil
 }
 
 // Splice forwards a Packet read by ReadPacket to dst, byte-for-byte.
@@ -448,11 +572,9 @@ func (c *Codec) readFullRaw(n int) ([]byte, error) {
 }
 
 // ReadRaw reads bytes directly from the underlying buffered reader without
-// going through the capture layer or proto.Reader. Used by callers that
-// splice bytes straight through (the upstream→client path in the relay)
-// and deliberately do not want packet-level parsing — which lets us
-// transparently forward any packet type, present or future, without a
-// hand-rolled decoder per type.
+// going through the capture layer or proto.Reader. It is retained as an
+// escape hatch for callers that exclusively use raw streaming; Relay uses
+// packet-framed ReadPacket in both directions.
 //
 // The returned byte count can be zero even without an error (standard
 // bufio.Reader semantics on short reads); callers should treat that as
@@ -460,8 +582,7 @@ func (c *Codec) readFullRaw(n int) ([]byte, error) {
 //
 // Do not mix ReadRaw with ReadPacket on the same codec: the capture layer
 // and proto.Reader state would disagree with the underlying bufio. The
-// relay uses ReadPacket on the upstream codec only during handshake, and
-// ReadRaw exclusively after.
+// a caller must choose one mode for the codec's lifetime.
 func (c *Codec) ReadRaw(p []byte) (int, error) {
 	return c.br.Read(p)
 }

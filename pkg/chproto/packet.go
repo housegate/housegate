@@ -49,18 +49,25 @@ const (
 
 // Known ServerCode re-exports.
 const (
-	ServerHelloCode        = proto.ServerCodeHello
-	ServerDataCode         = proto.ServerCodeData
-	ServerExceptionCode    = proto.ServerCodeException
-	ServerProgressCode     = proto.ServerCodeProgress
-	ServerPongCode         = proto.ServerCodePong
-	ServerEndOfStreamCode  = proto.ServerCodeEndOfStream
-	ServerProfileCode      = proto.ServerCodeProfile
-	ServerTotalsCode       = proto.ServerCodeTotals
-	ServerExtremesCode     = proto.ServerCodeExtremes
-	ServerTablesStatusCode = proto.ServerCodeTablesStatus
-	ServerLogCode          = proto.ServerCodeLog
-	ServerTableColumnsCode = proto.ServerCodeTableColumns
+	ServerHelloCode                               = proto.ServerCodeHello
+	ServerDataCode                                = proto.ServerCodeData
+	ServerExceptionCode                           = proto.ServerCodeException
+	ServerProgressCode                            = proto.ServerCodeProgress
+	ServerPongCode                                = proto.ServerCodePong
+	ServerEndOfStreamCode                         = proto.ServerCodeEndOfStream
+	ServerProfileCode                             = proto.ServerCodeProfile
+	ServerTotalsCode                              = proto.ServerCodeTotals
+	ServerExtremesCode                            = proto.ServerCodeExtremes
+	ServerTablesStatusCode                        = proto.ServerCodeTablesStatus
+	ServerLogCode                                 = proto.ServerCodeLog
+	ServerTableColumnsCode                        = proto.ServerCodeTableColumns
+	ServerPartUUIDsCode                           = proto.ServerPartUUIDs
+	ServerReadTaskRequestCode                     = proto.ServerReadTaskRequest
+	ServerProfileEventsCode                       = proto.ServerProfileEvents
+	ServerAllRangesAnnouncementCode    ServerCode = 15
+	ServerMergeTreeReadTaskRequestCode ServerCode = 16
+	ServerTimezoneUpdateCode           ServerCode = 17
+	ServerSSHChallengeCode                        = proto.ServerCodeSSHChallenge
 )
 
 // Direction tells the Codec which code-set to expect on reads.

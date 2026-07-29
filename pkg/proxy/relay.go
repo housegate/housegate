@@ -1,7 +1,6 @@
 package proxy
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -91,19 +90,10 @@ func (r *Relay) takeActiveQuery() (string, bool) {
 	return queryID, true
 }
 
-// retireUndetectedActiveQuery closes a previous lifecycle when a client sends
-// its next Query after consuming a terminal response that the raw upstream
-// first-byte heuristic could not see (for example Progress+EndOfStream in one
-// read). This path is cleanup-only: an ambiguous response can never drive
-// durable success work.
-func (r *Relay) retireUndetectedActiveQuery(ctx context.Context) (string, bool) {
-	queryID, active := r.takeActiveQuery()
-	if !active {
-		return "", false
-	}
-	r.sess.State().ClearActiveRewrite()
-	r.hooks.OnQueryComplete(ctx, r.sess)
-	return queryID, true
+func (r *Relay) currentActiveQuery() (string, bool) {
+	r.queryMu.Lock()
+	defer r.queryMu.Unlock()
+	return r.activeQueryID, r.activeQuery
 }
 
 // handshake performs the three-phase ClickHouse handshake:
@@ -438,11 +428,10 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 				r.writeExceptionToClient(ctx, err)
 				return err
 			}
-			if previousQueryID, retired := r.retireUndetectedActiveQuery(ctx); retired {
-				logger.Debugw("retired query after client advanced past an undetected terminal response",
-					"previous_query_id", previousQueryID,
-					"next_query_id", q.ID,
-				)
+			if previousQueryID, active := r.currentActiveQuery(); active {
+				err := fmt.Errorf("client sent query %q before upstream completed query %q", q.ID, previousQueryID)
+				r.writeExceptionToClient(ctx, err)
+				return err
 			}
 			if err := r.hooks.OnQuery(ctx, qctx); err != nil {
 				r.writeExceptionToClient(ctx, err)
@@ -777,118 +766,20 @@ func isSQLIdentPart(c byte) bool {
 	return isSQLIdentStart(c) || c >= '0' && c <= '9'
 }
 
-// upstreamToClient streams upstream bytes straight through to the client.
-//
-// Design note: we deliberately do NOT parse packets on this path. The
-// previous packet-by-packet implementation kept hitting forward-compat
-// gaps — ch-go's decoders for Progress / Profile / TableColumns /
-// ProfileEvents / etc. lag the real ClickHouse wire format, and any single
-// decoder that under-reads its body leaves a stray byte that the next
-// ReadPacket interprets as a bogus packet type (e.g. "unknown server
-// type=0" after a short-decoded Progress). Legacy [pkg/proxy/proxy.go]'s
-// copyUpstreamToClientFromReader has the same "just copy bytes" structure
-// for the same reason — its own comment calls out that precise per-packet
-// detection is best-effort in this direction.
-//
-// Trade-off: we can only fire OnQueryComplete (and clear ActiveRewrite) via
-// a first-byte heuristic on each read chunk. ClickHouse's TCP handler
-// typically flushes EndOfStream / Exception as its own socket write, so in
-// practice the chunk starts with 0x05 / 0x02 and the heuristic fires
-// correctly. If a chunk starts mid-packet (e.g. a large Data block that
-// spilled across reads) we'll miss the boundary for that query; plugins
-// needing strict per-query cleanup should either live with that or move to
-// a chunked-protocol implementation that gives explicit frame boundaries.
-//
-// Exception decoding is best-effort: when the first byte of a chunk is
-// ServerExceptionCode (0x02) we decode the body from the buffered bytes
-// and fire OnException before OnQueryComplete. If the chunk starts
-// mid-packet the decode fails and the hook is silently skipped — see
-// tryDecodeException for the contract. Plugins that depend on this for
-// state rollback (e.g. commitgate) must accept best-effort delivery and
-// pair their state mutations with idempotent re-application logic.
+// upstreamToClient frames every server packet before relaying it. Query
+// lifecycle hooks are therefore driven by decoded packet types, not TCP read
+// boundaries: a payload byte equal to EndOfStream cannot be mistaken for
+// success, and coalesced Progress+EndOfStream packets remain two events.
 func (r *Relay) upstreamToClient(ctx context.Context) error {
 	client := r.sess.Client()
-	buf := make([]byte, 64*1024)
 	for {
 		up := r.sess.Upstream()
 		if up == nil {
 			return chsession.ErrNoUpstream
 		}
 
-		n, err := up.ReadRaw(buf)
-		if n > 0 {
-			// First-byte heuristic for query-boundary detection AND per-
-			// type server-packet counting. Only meaningful if this chunk
-			// starts at a packet boundary, which is the usual case because
-			// ClickHouse flushes these small trailers as their own socket
-			// write. Large Data blocks can span reads, in which case the
-			// first byte is mid-packet payload — detectServerPacketType
-			// returns "unknown" for those and we simply don't emit.
-			first := buf[0]
-			isEndOfStream := first == byte(chproto.ServerEndOfStreamCode)
-			isBoundary := isEndOfStream ||
-				first == byte(chproto.ServerExceptionCode)
-
-			_, logger := log.FromContext(ctx)
-			logger.Debugw("upstream chunk relayed to client",
-				"bytes", n,
-				"first_byte_type", detectServerPacketType(buf[:n]),
-				"boundary", isBoundary,
-			)
-
-			if r.obs != nil {
-				r.obs.BytesTransferred("upstream_to_client", float64(n))
-				if name := detectServerPacketType(buf[:n]); name != "unknown" {
-					r.obs.ServerPacket(name)
-				}
-			}
-
-			// Exception chunks take a special path: decode → run
-			// OnException (which lets the rewrite plugin reverse-map
-			// physical names back to logical ones via the rewriter
-			// service's RewriteErrorMessage RPC) → re-encode and write
-			// the rewritten exception to the client. If decoding fails
-			// (chunk started mid-packet, malformed body, revision=0)
-			// we fall through to the byte-splice path so the client
-			// still sees something — the OnException hook is then
-			// silently skipped, matching the existing best-effort
-			// contract documented above.
-			var rewrittenException *chproto.Exception
-			if first == byte(chproto.ServerExceptionCode) {
-				if exc := tryDecodeException(buf[:n], up.Revision()); exc != nil {
-					if err := r.hooks.OnException(ctx, r.sess, exc); err != nil {
-						logger.Warne(err, "OnException hook returned error")
-					}
-					rewrittenException = exc
-				}
-			}
-
-			if isBoundary {
-				r.sess.State().ClearActiveRewrite()
-				queryID, active := r.takeActiveQuery()
-				if active && isEndOfStream && isIsolatedEndOfStream(buf[:n]) {
-					r.hooks.OnQuerySuccess(ctx, r.sess, queryID)
-				}
-				r.hooks.OnQueryComplete(ctx, r.sess)
-			}
-
-			// Terminal hooks run before the terminal bytes are exposed to the
-			// client. A well-behaved client may issue its next query as soon as
-			// it reads EndOfStream/Exception; ordering the atomic event take and
-			// cleanup first prevents that query from replacing the completed
-			// query's session state.
-			if rewrittenException != nil {
-				if werr := client.WriteException(rewrittenException); werr != nil {
-					return fmt.Errorf("write rewritten exception to client: %w", werr)
-				}
-			} else if _, werr := client.Conn().Write(buf[:n]); werr != nil {
-				return fmt.Errorf("splice upstream→client: %w", werr)
-			}
-		}
+		pkt, err := up.ReadPacket(uint64(chproto.ServerExceptionCode))
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				return io.EOF
-			}
 			// A non-EOF read error on the current upstream codec may have been
 			// caused by a planned rebind: RebindToPeer closes the old upstream
 			// codec (asynchronously) while clientToUpstream's OnQuery is
@@ -904,18 +795,62 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 				)
 				continue
 			}
-			return fmt.Errorf("upstream read: %w", err)
+			if _, active := r.takeActiveQuery(); active {
+				r.sess.State().ClearActiveRewrite()
+				r.hooks.OnQueryComplete(ctx, r.sess)
+			}
+			if errors.Is(err, io.EOF) {
+				return io.EOF
+			}
+			return fmt.Errorf("upstream read packet: %w", err)
+		}
+
+		packetName := serverPacketName(pkt.Type)
+		_, logger := log.FromContext(ctx)
+		logger.Debugw("upstream packet relayed to client",
+			"bytes", pkt.RawLen,
+			"type", packetName,
+		)
+		if r.obs != nil {
+			r.obs.BytesTransferred("upstream_to_client", float64(pkt.RawLen))
+			r.obs.ServerPacket(packetName)
+		}
+
+		isEndOfStream := pkt.Type == uint64(chproto.ServerEndOfStreamCode)
+		isException := pkt.Type == uint64(chproto.ServerExceptionCode)
+		var rewrittenException *chproto.Exception
+		if isException {
+			exc, ok := pkt.Decoded.(*chproto.Exception)
+			if !ok {
+				return fmt.Errorf("upstream exception packet decoded as %T", pkt.Decoded)
+			}
+			if err := r.hooks.OnException(ctx, r.sess, exc); err != nil {
+				logger.Warne(err, "OnException hook returned error")
+			}
+			rewrittenException = exc
+		}
+
+		if isEndOfStream || isException {
+			r.sess.State().ClearActiveRewrite()
+			queryID, active := r.takeActiveQuery()
+			if active && isEndOfStream {
+				r.hooks.OnQuerySuccess(ctx, r.sess, queryID)
+			}
+			r.hooks.OnQueryComplete(ctx, r.sess)
+		}
+
+		// Terminal hooks run before terminal bytes are exposed to the client.
+		// A client may submit its next query immediately after reading them.
+		if rewrittenException != nil {
+			if err := client.WriteException(rewrittenException); err != nil {
+				return fmt.Errorf("write rewritten exception to client: %w", err)
+			}
+			continue
+		}
+		if err := up.Splice(client.Conn(), pkt); err != nil {
+			return fmt.Errorf("splice upstream packet to client: %w", err)
 		}
 	}
-}
-
-// isIsolatedEndOfStream recognizes the only upstream success boundary Relay
-// can establish without parsing the entire server packet stream: a read that
-// contains exactly the one-byte EndOfStream packet. A chunk merely starting
-// with 0x05 is still sufficient for best-effort cleanup, but it is not safe
-// enough for durable post-success work because a raw read may start mid-packet.
-func isIsolatedEndOfStream(raw []byte) bool {
-	return len(raw) == 1 && raw[0] == byte(chproto.ServerEndOfStreamCode)
 }
 
 // upstreamAddr returns the remote address of the codec's underlying
@@ -952,33 +887,6 @@ func compressionMode(c proto.Compression) string {
 		return "compressed"
 	}
 	return "uncompressed"
-}
-
-// tryDecodeException best-effort decodes a server-direction Exception
-// packet from the given raw bytes. raw[0] must be the type byte
-// (ServerExceptionCode == 0x02); the body follows.
-//
-// Returns nil if decoding fails (the exception spanned multiple read
-// chunks, the revision is zero / unknown, or the packet body is
-// malformed). Best-effort matches the OnQueryComplete first-byte
-// heuristic: callers must NOT rely on this firing for every
-// upstream-side exception.
-func tryDecodeException(raw []byte, rev int) *chproto.Exception {
-	if len(raw) < 2 || raw[0] != byte(chproto.ServerExceptionCode) {
-		return nil
-	}
-	r := proto.NewReader(bytes.NewReader(raw))
-	// Consume the leading type byte the same way Codec.ReadPacket does;
-	// it's a varint, but for low type codes (Exception=2) it is a
-	// single-byte varint, so UVarInt advances exactly one byte.
-	if _, err := r.UVarInt(); err != nil {
-		return nil
-	}
-	var exc chproto.Exception
-	if err := exc.DecodeAware(r, rev); err != nil {
-		return nil
-	}
-	return &exc
 }
 
 // writeEndOfStreamToClient writes a single-byte ServerEndOfStreamCode

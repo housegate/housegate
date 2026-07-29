@@ -117,6 +117,76 @@ func TestReadPacket_TablesStatusRequest_SkipsBodyAndPreservesRaw(t *testing.T) {
 	}
 }
 
+func TestReadPacket_ModernServerPackets_StopAtExactBoundaries(t *testing.T) {
+	const rev = 54483
+	var packets [][]byte
+	add := func(build func(*proto.Buffer)) {
+		var b proto.Buffer
+		build(&b)
+		packets = append(packets, append([]byte(nil), b.Buf...))
+	}
+
+	add(func(b *proto.Buffer) {
+		b.PutUVarInt(uint64(ServerProgressCode))
+		for i := uint64(1); i <= 7; i++ {
+			b.PutUVarInt(i)
+		}
+	})
+	add(func(b *proto.Buffer) {
+		b.PutUVarInt(uint64(ServerProfileCode))
+		b.PutUVarInt(1) // rows
+		b.PutUVarInt(2) // blocks
+		b.PutUVarInt(3) // bytes
+		b.PutBool(true)
+		b.PutUVarInt(4) // rows before limit
+		b.PutBool(false)
+		b.PutBool(true)
+		b.PutUVarInt(5) // rows before aggregation
+	})
+	add(func(b *proto.Buffer) {
+		b.PutUVarInt(uint64(ServerTablesStatusCode))
+		b.PutUVarInt(1)
+		b.PutString("db")
+		b.PutString("table")
+		b.PutBool(true)
+		b.PutUVarInt(6) // absolute delay
+		b.PutUVarInt(1) // readonly
+	})
+	add(func(b *proto.Buffer) {
+		b.PutUVarInt(uint64(ServerPartUUIDsCode))
+		b.PutUVarInt(1)
+		b.Buf = append(b.Buf, bytes.Repeat([]byte{0xab}, 16)...)
+	})
+	add(func(b *proto.Buffer) {
+		b.PutUVarInt(uint64(ServerReadTaskRequestCode))
+	})
+	add(func(b *proto.Buffer) {
+		b.PutUVarInt(uint64(ServerTimezoneUpdateCode))
+		b.PutString("Asia/Shanghai")
+	})
+	add(func(b *proto.Buffer) {
+		b.PutUVarInt(uint64(ServerEndOfStreamCode))
+	})
+
+	var wire bytes.Buffer
+	for _, packet := range packets {
+		wire.Write(packet)
+	}
+	rw := &readerWriter{r: bytes.NewBuffer(wire.Bytes()), w: &bytes.Buffer{}}
+	c := NewCodec(rw, DirToUpstream)
+	c.SetRevision(rev)
+
+	for i, want := range packets {
+		pkt, err := c.ReadPacket()
+		if err != nil {
+			t.Fatalf("ReadPacket[%d]: %v", i, err)
+		}
+		if !bytes.Equal(pkt.Raw, want) {
+			t.Fatalf("ReadPacket[%d] raw mismatch:\n got=%x\nwant=%x", i, pkt.Raw, want)
+		}
+	}
+}
+
 func TestReadPacket_Exception_DecodeAndReencode(t *testing.T) {
 	exc := &proto.Exception{
 		Code:    60, // UNKNOWN_TABLE

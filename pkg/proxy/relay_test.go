@@ -373,8 +373,11 @@ func TestRelay_UpstreamException_FiresOnException(t *testing.T) {
 	}
 }
 
-func TestRelay_UpstreamIsolatedEndOfStream_FiresQuerySuccess(t *testing.T) {
-	hooks := runRawUpstreamChunk(t, []byte{byte(chproto.ServerEndOfStreamCode)})
+func TestRelay_UpstreamEndOfStream_FiresQuerySuccess(t *testing.T) {
+	hooks, err := runFramedUpstreamBytes(t, []byte{byte(chproto.ServerEndOfStreamCode)})
+	if err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("upstreamToClient: %v", err)
+	}
 
 	hooks.mu.Lock()
 	defer hooks.mu.Unlock()
@@ -386,6 +389,106 @@ func TestRelay_UpstreamIsolatedEndOfStream_FiresQuerySuccess(t *testing.T) {
 	}
 	if len(hooks.exceptions) != 0 {
 		t.Errorf("OnException fired %d times for EndOfStream, want 0", len(hooks.exceptions))
+	}
+}
+
+func TestRelay_CoalescedProgressAndEndOfStream_FiresQuerySuccess(t *testing.T) {
+	const rev = 54453
+	var b proto.Buffer
+	b.PutUVarInt(uint64(chproto.ServerProgressCode))
+	(proto.Progress{Rows: 5, Bytes: 8, TotalRows: 13}).EncodeAware(&b, rev)
+	b.PutUVarInt(uint64(chproto.ServerEndOfStreamCode))
+
+	hooks, err := runFramedUpstreamBytes(t, b.Buf)
+	if err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("upstreamToClient: %v", err)
+	}
+
+	hooks.mu.Lock()
+	defer hooks.mu.Unlock()
+	if hooks.querySuccesses != 1 {
+		t.Errorf("OnQuerySuccess fired %d times, want 1", hooks.querySuccesses)
+	}
+	if hooks.queryCompletes != 1 {
+		t.Errorf("OnQueryComplete fired %d times, want 1", hooks.queryCompletes)
+	}
+}
+
+func TestRelay_FragmentedProgressPayloadByteCannotImpersonateEndOfStream(t *testing.T) {
+	clientProxy, proxyClient := net.Pipe()
+	upstreamProxy, proxyUpstream := net.Pipe()
+	defer clientProxy.Close()
+	defer upstreamProxy.Close()
+
+	go func() {
+		_, _ = io.Copy(io.Discard, clientProxy)
+	}()
+
+	const rev = 54453
+	sess := chsession.New(1, proxyClient)
+	up := chproto.NewCodec(proxyUpstream, chproto.DirToUpstream)
+	up.SetRevision(rev)
+	if err := sess.BindUpstream(context.Background(), up); err != nil {
+		t.Fatalf("BindUpstream: %v", err)
+	}
+	hooks := &exceptionRecordingHooks{}
+	r := &Relay{sess: sess, hooks: hooks}
+	if !r.beginActiveQuery("qid-fragmented") {
+		t.Fatal("beginActiveQuery unexpectedly reported an active query")
+	}
+
+	relayDone := make(chan error, 1)
+	go func() {
+		relayDone <- r.upstreamToClient(context.Background())
+	}()
+
+	var progress proto.Buffer
+	progress.PutUVarInt(uint64(chproto.ServerProgressCode))
+	(proto.Progress{Rows: uint64(chproto.ServerEndOfStreamCode)}).EncodeAware(&progress, rev)
+	if len(progress.Buf) < 3 || progress.Buf[1] != byte(chproto.ServerEndOfStreamCode) {
+		t.Fatalf("test fixture does not isolate payload 0x05: %x", progress.Buf)
+	}
+
+	// Send the Progress type and its rows value as separate TCP writes. The
+	// second write is exactly one 0x05 byte, but it is Progress payload, not a
+	// server packet. A raw-read heuristic would report false success here.
+	if _, err := upstreamProxy.Write(progress.Buf[:1]); err != nil {
+		t.Fatalf("write Progress type: %v", err)
+	}
+	if _, err := upstreamProxy.Write(progress.Buf[1:2]); err != nil {
+		t.Fatalf("write isolated payload byte: %v", err)
+	}
+	time.Sleep(25 * time.Millisecond)
+	hooks.mu.Lock()
+	if hooks.querySuccesses != 0 || hooks.queryCompletes != 0 {
+		gotSuccess, gotComplete := hooks.querySuccesses, hooks.queryCompletes
+		hooks.mu.Unlock()
+		t.Fatalf("isolated payload byte fired hooks: successes=%d completes=%d", gotSuccess, gotComplete)
+	}
+	hooks.mu.Unlock()
+
+	terminal := append(append([]byte(nil), progress.Buf[2:]...), byte(chproto.ServerEndOfStreamCode))
+	if _, err := upstreamProxy.Write(terminal); err != nil {
+		t.Fatalf("finish Progress and EndOfStream: %v", err)
+	}
+	_ = upstreamProxy.Close()
+
+	select {
+	case err := <-relayDone:
+		if err != nil && !errors.Is(err, io.EOF) {
+			t.Fatalf("upstreamToClient: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("upstreamToClient did not finish")
+	}
+
+	hooks.mu.Lock()
+	defer hooks.mu.Unlock()
+	if hooks.querySuccesses != 1 {
+		t.Errorf("genuine EndOfStream fired OnQuerySuccess %d times, want 1", hooks.querySuccesses)
+	}
+	if hooks.queryCompletes != 1 {
+		t.Errorf("genuine EndOfStream fired OnQueryComplete %d times, want 1", hooks.queryCompletes)
 	}
 }
 
@@ -468,11 +571,10 @@ func TestRelay_QuerySuccessRunsBeforeEndOfStreamIsExposed(t *testing.T) {
 }
 
 func TestRelay_UpstreamMalformedException_DoesNotFireQuerySuccess(t *testing.T) {
-	// The leading Exception type is enough for terminal cleanup, but the
-	// missing body makes decoding impossible. This is the regression where
-	// OnException used not to mark failure and generic completion was
-	// incorrectly interpreted as success by commitgate.
-	hooks := runRawUpstreamChunk(t, []byte{byte(chproto.ServerExceptionCode)})
+	hooks, err := runFramedUpstreamBytes(t, []byte{byte(chproto.ServerExceptionCode)})
+	if err == nil || errors.Is(err, io.EOF) {
+		t.Fatalf("malformed Exception error = %v, want framing error", err)
+	}
 
 	hooks.mu.Lock()
 	defer hooks.mu.Unlock()
@@ -487,47 +589,7 @@ func TestRelay_UpstreamMalformedException_DoesNotFireQuerySuccess(t *testing.T) 
 	}
 }
 
-func TestIsIsolatedEndOfStream_RejectsAmbiguousChunks(t *testing.T) {
-	if !isIsolatedEndOfStream([]byte{byte(chproto.ServerEndOfStreamCode)}) {
-		t.Fatal("single-byte EndOfStream was not recognized")
-	}
-	if isIsolatedEndOfStream([]byte{byte(chproto.ServerEndOfStreamCode), 0x01}) {
-		t.Fatal("coalesced chunk was treated as verified EndOfStream")
-	}
-	if isIsolatedEndOfStream([]byte{byte(chproto.ServerExceptionCode)}) {
-		t.Fatal("Exception was treated as EndOfStream")
-	}
-}
-
-func TestRelay_RetireUndetectedActiveQueryIsCleanupOnly(t *testing.T) {
-	hooks := &exceptionRecordingHooks{}
-	r := &Relay{
-		sess:  chsession.New(1, nil),
-		hooks: hooks,
-	}
-	if !r.beginActiveQuery("qid-first") {
-		t.Fatal("beginActiveQuery unexpectedly reported an active query")
-	}
-
-	queryID, retired := r.retireUndetectedActiveQuery(context.Background())
-	if !retired || queryID != "qid-first" {
-		t.Fatalf("retireUndetectedActiveQuery = (%q, %v), want (qid-first, true)", queryID, retired)
-	}
-	if !r.beginActiveQuery("qid-second") {
-		t.Fatal("next query remained blocked after unverified cleanup")
-	}
-
-	hooks.mu.Lock()
-	defer hooks.mu.Unlock()
-	if hooks.queryCompletes != 1 {
-		t.Errorf("OnQueryComplete fired %d times, want 1", hooks.queryCompletes)
-	}
-	if hooks.querySuccesses != 0 {
-		t.Errorf("OnQuerySuccess fired %d times, want 0", hooks.querySuccesses)
-	}
-}
-
-func runRawUpstreamChunk(t *testing.T, raw []byte) *exceptionRecordingHooks {
+func runFramedUpstreamBytes(t *testing.T, raw []byte) (*exceptionRecordingHooks, error) {
 	t.Helper()
 	clientProxy, proxyClient := net.Pipe()
 	upstreamProxy, proxyUpstream := net.Pipe()
@@ -562,10 +624,7 @@ func runRawUpstreamChunk(t *testing.T, raw []byte) *exceptionRecordingHooks {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := r.upstreamToClient(ctx); err != nil && !errors.Is(err, io.EOF) {
-		t.Fatalf("upstreamToClient: %v", err)
-	}
-	return hooks
+	return hooks, r.upstreamToClient(ctx)
 }
 
 // rewritingExceptionHooks mutates exc.Message in OnException to mimic
@@ -652,9 +711,16 @@ func TestRelay_UpstreamException_RewrittenMessageReachesClient(t *testing.T) {
 	if raw[0] != byte(chproto.ServerExceptionCode) {
 		t.Fatalf("client got first byte %d, want ServerExceptionCode (%d)", raw[0], chproto.ServerExceptionCode)
 	}
-	got := tryDecodeException(raw, rev)
-	if got == nil {
-		t.Fatalf("client bytes did not decode as Exception: %x", raw)
+	rawReader := bytes.NewBuffer(raw)
+	decoder := chproto.NewCodec(rawReader, chproto.DirToUpstream)
+	decoder.SetRevision(rev)
+	pkt, err := decoder.ReadPacket(uint64(chproto.ServerExceptionCode))
+	if err != nil {
+		t.Fatalf("decode client Exception: %v; raw=%x", err, raw)
+	}
+	got, ok := pkt.Decoded.(*chproto.Exception)
+	if !ok {
+		t.Fatalf("client bytes decoded as %T, want *Exception", pkt.Decoded)
 	}
 	if got.Message != hooks.rewriteTo {
 		t.Errorf("client Exception.Message=%q, want %q (the rewrite)", got.Message, hooks.rewriteTo)
