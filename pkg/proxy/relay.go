@@ -47,7 +47,19 @@ type Relay struct {
 	queryMu       sync.Mutex
 	activeQuery   bool
 	activeQueryID string
+
+	opaqueMu       sync.Mutex
+	opaqueResponse *opaqueResponse
 }
+
+type opaqueResponse struct {
+	upstream *chproto.Codec
+	stop     chan struct{}
+	stopped  chan struct{}
+	stopOnce sync.Once
+}
+
+var errOpaqueResponseStopped = errors.New("opaque upstream response stopped at next client query")
 
 // UpstreamDialer dials and returns the codec for this session's upstream.
 // Called inside Relay.handshake AFTER OnHello so plugins (notably
@@ -429,6 +441,21 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 				r.writeExceptionToClient(ctx, err)
 				return err
 			}
+			// A result type unknown to the boundary decoder is forwarded in
+			// opaque mode. A conforming ClickHouse client cannot submit this
+			// next Query until it has consumed the previous EndOfStream, so
+			// its arrival is the authoritative boundary at which the raw
+			// reader can be interrupted and packet framing resumed.
+			stoppedOpaque, err := r.stopOpaqueResponse(ctx)
+			if err != nil {
+				return fmt.Errorf("stop opaque upstream response: %w", err)
+			}
+			if stoppedOpaque {
+				r.sess.State().ClearActiveRewrite()
+				if _, active := r.takeActiveQuery(); active {
+					r.hooks.OnQueryComplete(ctx, r.sess)
+				}
+			}
 			if previousQueryID, active := r.currentActiveQuery(); active {
 				err := fmt.Errorf("client sent query %q before upstream completed query %q", q.ID, previousQueryID)
 				r.writeExceptionToClient(ctx, err)
@@ -780,6 +807,18 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 		}
 
 		pkt, err := up.ReadPacket(uint64(chproto.ServerExceptionCode))
+		// Opaque fallback is transparency-only and can never prove success.
+		// Keep a commitgate-observed statement fail-closed so durable
+		// AfterStatementSuccess work is dispatched only from a decoded EOS.
+		if errors.Is(err, chproto.ErrUnsupportedResultType) &&
+			pkt != nil &&
+			len(pkt.Raw) > 0 &&
+			r.sess.State().Snapshot().CommitGateEvent == nil {
+			err = r.relayOpaqueResponse(ctx, up, pkt, err)
+			if errors.Is(err, errOpaqueResponseStopped) {
+				continue
+			}
+		}
 		if err != nil {
 			// A non-EOF read error on the current upstream codec may have been
 			// caused by a planned rebind: RebindToPeer closes the old upstream
@@ -852,6 +891,149 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 			return fmt.Errorf("splice upstream packet to client: %w", err)
 		}
 	}
+}
+
+// relayOpaqueResponse preserves a valid result whose Native column type is not
+// understood by the local boundary decoder. ReadPacket has already captured
+// the packet prefix and, for compressed results, every frame it touched; those
+// bytes are forwarded first, then the remaining upstream byte stream is copied
+// unchanged. The next client Query interrupts the blocked raw read through a
+// read deadline and lets packet framing resume at a client-proven response
+// boundary.
+func (r *Relay) relayOpaqueResponse(
+	ctx context.Context,
+	up *chproto.Codec,
+	initial *chproto.Packet,
+	cause error,
+) error {
+	state := &opaqueResponse{
+		upstream: up,
+		stop:     make(chan struct{}),
+		stopped:  make(chan struct{}),
+	}
+	r.opaqueMu.Lock()
+	if r.opaqueResponse != nil {
+		r.opaqueMu.Unlock()
+		return fmt.Errorf("opaque response already active")
+	}
+	r.opaqueResponse = state
+	r.opaqueMu.Unlock()
+	defer func() {
+		clearReadDeadline(up.Conn())
+		r.opaqueMu.Lock()
+		if r.opaqueResponse == state {
+			r.opaqueResponse = nil
+		}
+		r.opaqueMu.Unlock()
+		close(state.stopped)
+	}()
+
+	_, logger := log.FromContext(ctx)
+	queryID, _ := r.currentActiveQuery()
+	logger.Warnw("falling back to opaque upstream result streaming",
+		"query_id", queryID,
+		"captured_bytes", initial.RawLen,
+		"err", cause,
+	)
+	if err := writeAll(r.sess.Client().Conn(), initial.Raw); err != nil {
+		return fmt.Errorf("splice unsupported result prefix: %w", err)
+	}
+	if r.obs != nil {
+		r.obs.BytesTransferred("upstream_to_client", float64(initial.RawLen))
+		r.obs.ServerPacket(serverPacketName(initial.Type))
+	}
+
+	buf := make([]byte, 64*1024)
+	for {
+		select {
+		case <-state.stop:
+			return errOpaqueResponseStopped
+		default:
+		}
+
+		n, err := up.ReadRaw(buf)
+		if n > 0 {
+			if writeErr := writeAll(r.sess.Client().Conn(), buf[:n]); writeErr != nil {
+				return fmt.Errorf("splice opaque upstream result: %w", writeErr)
+			}
+			if r.obs != nil {
+				r.obs.BytesTransferred("upstream_to_client", float64(n))
+			}
+		}
+		if err != nil {
+			select {
+			case <-state.stop:
+				return errOpaqueResponseStopped
+			default:
+			}
+			return err
+		}
+	}
+}
+
+// stopOpaqueResponse interrupts relayOpaqueResponse when the client submits
+// its next Query. Native protocol clients do not pipeline Queries, so that
+// arrival proves the previous response (including EndOfStream) was consumed.
+func (r *Relay) stopOpaqueResponse(ctx context.Context) (bool, error) {
+	r.opaqueMu.Lock()
+	state := r.opaqueResponse
+	r.opaqueMu.Unlock()
+	if state == nil {
+		return false, nil
+	}
+
+	state.stopOnce.Do(func() { close(state.stop) })
+	select {
+	case <-state.stopped:
+		return true, nil
+	default:
+	}
+
+	deadlineConn, ok := state.upstream.Conn().(interface {
+		SetReadDeadline(time.Time) error
+	})
+	if !ok {
+		return true, fmt.Errorf("upstream %T cannot interrupt opaque read", state.upstream.Conn())
+	}
+	if err := deadlineConn.SetReadDeadline(time.Now()); err != nil {
+		select {
+		case <-state.stopped:
+			return true, nil
+		default:
+		}
+		return true, fmt.Errorf("interrupt opaque read: %w", err)
+	}
+
+	select {
+	case <-state.stopped:
+		return true, nil
+	case <-ctx.Done():
+		return true, ctx.Err()
+	}
+}
+
+func clearReadDeadline(conn io.ReadWriter) {
+	if deadlineConn, ok := conn.(interface {
+		SetReadDeadline(time.Time) error
+	}); ok {
+		_ = deadlineConn.SetReadDeadline(time.Time{})
+	}
+}
+
+func writeAll(w io.Writer, p []byte) error {
+	for len(p) > 0 {
+		n, err := w.Write(p)
+		if n > 0 {
+			p = p[n:]
+		}
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.ErrNoProgress
+		}
+	}
+	return nil
 }
 
 // upstreamAddr returns the remote address of the codec's underlying

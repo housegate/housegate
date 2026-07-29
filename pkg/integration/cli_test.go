@@ -36,6 +36,24 @@ func TestCLI_SelectOne(t *testing.T) {
 	}
 }
 
+// TestCLI_AggregateStatePassthrough proves result framing does not depend on
+// the connected Go driver's scannable type set. AggregateFunction states have
+// implementation-specific Native encodings; the official client understands
+// them, while Housegate must remain a transparent byte relay.
+func TestCLI_AggregateStatePassthrough(t *testing.T) {
+	bin := testenv.ClickHouseCLI(t)
+	proxy := testenv.StartServerProxy(t, chEnv.Addr)
+
+	out, err := testenv.RunCLICompressedMultiquery(t, bin, proxy.Addr, chEnv.Database,
+		"SELECT sumState(number) FROM numbers(10); SELECT 42")
+	if err != nil {
+		t.Fatalf("sumState via CLI: %v\nout: %q", err, out)
+	}
+	if len(out) == 0 || !strings.HasSuffix(out, "42") {
+		t.Fatalf("sumState multiquery did not resume framed traffic: %q", out)
+	}
+}
+
 // TestCLI_InsertSelectRoundtrip drives CREATE / INSERT / SELECT / DROP
 // entirely through the CLI. Validates the protocol's Data block path
 // when the framing comes from the official client (which can encode

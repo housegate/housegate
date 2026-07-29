@@ -580,16 +580,18 @@ func (c *Codec) readFullRaw(n int) ([]byte, error) {
 
 // ReadRaw reads bytes directly from the underlying buffered reader without
 // going through the capture layer or proto.Reader. It is retained as an
-// escape hatch for callers that exclusively use raw streaming; Relay uses
-// packet-framed ReadPacket in both directions.
+// escape hatch for callers that exclusively use raw streaming and for Relay's
+// narrow ErrUnsupportedResultType fallback.
 //
 // The returned byte count can be zero even without an error (standard
 // bufio.Reader semantics on short reads); callers should treat that as
 // "try again".
 //
-// Do not mix ReadRaw with ReadPacket on the same codec: the capture layer
-// and proto.Reader state would disagree with the underlying bufio. The
-// a caller must choose one mode for the codec's lifetime.
+// General callers must not mix ReadRaw with ReadPacket on the same codec.
+// Relay may do so only after ReadPacket returns ErrUnsupportedResultType:
+// captureByteReader's one-byte discipline leaves proto.Reader empty, and Relay
+// resumes ReadPacket only when the next non-pipelined client Query proves that
+// the opaque response (including EndOfStream) was fully consumed.
 func (c *Codec) ReadRaw(p []byte) (int, error) {
 	return c.br.Read(p)
 }

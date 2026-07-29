@@ -157,7 +157,14 @@ func (c *Codec) walkCompressedDataBlock() error {
 	}
 
 	var block proto.Block
-	if err := block.DecodeRawBlock(r, c.Revision(), discardBlockResult{
+	if err := block.DecodeRawBlock(r, c.Revision(), c.discardBlockResult()); err != nil {
+		return fmt.Errorf("compressed block raw decode: %w", err)
+	}
+	return nil
+}
+
+func (c *Codec) discardBlockResult() discardBlockResult {
+	return discardBlockResult{
 		serverContext: &chcolumn.ServerContext{
 			Revision:     uint64(c.Revision()),
 			VersionMajor: uint64(c.serverMajor.Load()),
@@ -165,10 +172,7 @@ func (c *Codec) walkCompressedDataBlock() error {
 			VersionPatch: uint64(c.serverPatch.Load()),
 			Timezone:     time.UTC,
 		},
-	}); err != nil {
-		return fmt.Errorf("compressed block raw decode: %w", err)
 	}
-	return nil
 }
 
 // walkCompressedTableColumns consumes the two strings in a compressed
@@ -237,7 +241,8 @@ func (d discardBlockResult) DecodeResult(r *proto.Reader, version int, block pro
 			}
 			if custom {
 				return fmt.Errorf(
-					"column [%d] %q unexpectedly uses custom serialization at negotiated revision %d (max supported %d)",
+					"%w: column [%d] %q uses custom serialization at negotiated revision %d (max supported %d)",
+					ErrUnsupportedResultType,
 					i, name, version, MaxSupportedRevision,
 				)
 			}
@@ -245,7 +250,10 @@ func (d discardBlockResult) DecodeResult(r *proto.Reader, version int, block pro
 
 		column, err := chcolumn.Type(typeName).Column(name, d.serverContext)
 		if err != nil {
-			return fmt.Errorf("column [%d] %q type construction: %w", i, name, err)
+			return fmt.Errorf(
+				"%w: column [%d] %q type %q construction: %v",
+				ErrUnsupportedResultType, i, name, typeName, err,
+			)
 		}
 		if block.Rows == 0 {
 			continue
@@ -289,8 +297,7 @@ func (c *Codec) walkUncompressedBlock() error {
 	// tend to be small (system-table scans, handshake-time probes) and
 	// exercising this path with the capture reader keeps Raw bytes intact.
 	var block proto.Block
-	var results proto.Results
-	if err := block.DecodeRawBlock(c.r, c.Revision(), results.Auto()); err != nil {
+	if err := block.DecodeRawBlock(c.r, c.Revision(), c.discardBlockResult()); err != nil {
 		return fmt.Errorf("block raw decode: %w", err)
 	}
 	return nil
