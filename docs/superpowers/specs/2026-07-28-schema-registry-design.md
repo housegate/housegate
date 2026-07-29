@@ -24,7 +24,7 @@ A consumer never acts on network-state schema it has not re-hashed against a con
 |---|---|---|
 | 1 | **Hash domains are reused, not invented:** per-table commitment = `payloadexec.TableSchemaHash(networkID, schema)`, set commitment = `payloadexec.SchemaRoot(networkID, schemas)` ([exports.go](../../pkg/replay/payloadexec/exports.go) — exported precisely for arbiter genesis checks). | One canonical derivation across housegate, arbiter-core, and this registry; a second schema-hash domain would be a fork risk for zero benefit. |
 | 2 | **On-chain records are commitment-only:** the registry contract carries `(table_id, schema_version, schema_hash)` per table (extending the existing `Types.Table` struct or a companion `setTableSchema(dbId, tableId, version, schemaHash)` method + event — final shape belongs to the contracts repo). Column content never goes on-chain. | Chain storage is expensive and the chain's job here is ordering + commitment; content rides the same event→state pipeline the registry already has. Precedent: sentio-core already versions processor schemas (`EntitySchemaVersion`). |
-| 3 | **Content lives in network state:** `TableInfo` grows `SchemaVersion uint64`, `SchemaHash string`, `PartitionBy string`, `Columns []ColumnDef{Name, Type string}` through all four pipeline layers — contract bindings (`TypesTable`), sentio-core `network/state/types.go`, sentio-node `standalone/networkstate/convert.go`, housegate `pkg/registry.Table` + `pkg/network.TableInfo`. Content is written to state by the same observer that mirrors the chain event, keyed by `(table_id, schema_version)`. | The pipeline exists and is already the deliberate "thin slice of the fat producer schema"; this widens the slice once instead of inventing a parallel channel. |
+| 3 | **Content lives in network state as its own collection, commitment pointers ride `TableInfo`.** `TableInfo` (sentio-core → sentio-node convert → housegate `pkg/registry.Table`) grows only `SchemaVersion uint64` + `SchemaHash string`. Column content goes into a NEW statemirror collection — `statemirror:v1:TableSchemas`, hash field `<databaseId>/<tableId>@<version>`, value `{columns: [{name, type}], partition_by, schema_hash}` — written by the same syncer that mirrors the chain event, write-once per version key. Precedent: `ProcessorInfo.EntitySchema`/`EntitySchemaVersion` already carries full schema content through this pipeline. | Today `UpsertDatabaseTable` read-modify-writes the ENTIRE `DatabaseInfo` JSON (tables are embedded in one Redis hash field per database); inlining columns there would balloon that value and its write contention. A separate write-once-per-version collection keeps the Databases value thin, is naturally race-free, and gives P2's barrier switch the old/new version coexistence it needs for free. |
 | 4 | **Consumer loading sequence** (snode, verifier, and housegate's `SchemaResolver` — all three go through one shared loader): resolve the SI table set → fetch `{version, hash, columns, partition_by}` from network state → recompute `TableSchemaHash` per table and reject on mismatch → assemble the set → recompute `SchemaRoot` and compare to the genesis `schema_root` → any failure refuses startup. Static column YAML (`storage_integrity.snode.tables[].columns`) is deleted; config keeps only the table-set selector. | The anchor check is what makes network state safe to trust for delivery (principle §2). Roles with no local tables yet (a bootstrapping verifier) can now load schemas at all — the CH-derive alternative cannot serve them. |
 | 5 | **Local ClickHouse cross-check:** after loading, snode (and verifier where tables exist locally) diffs the registry schema against `system.columns`/`system.tables` for each SI table; declared-vs-actual mismatch refuses startup with a pointed error. | Catches "table was created wrong" at boot instead of surfacing as an unattributable replay hash mismatch — the failure users hit today has no good diagnosis path. |
 | 6 | **v1.5 table-set governance stays frozen-set + runbook:** the SI table set and its `schema_root` remain genesis parameters; newly created tables are NOT in the SI lane by default. Onboarding a batch = declare schemas on-chain → wait for state propagation → derive the new root with the upgraded `-print-schema-root` (now registry-fed) → governance-update genesis → rolling restart, every role re-anchoring against the new root. | Changing a consensus parameter must stay a deliberate, observable operation until P2 gives DDL a protocol-level ordering. The runbook makes it operable; the registry makes it mechanical instead of hand-edited YAML. |
@@ -35,16 +35,21 @@ A consumer never acts on network-state schema it has not re-hashed against a con
 ## 4. Data model (per layer)
 
 ```
-contract   Types.Table              + schemaVersion uint64, schemaHash string      (contracts repo)
-           event TableSchemaSet(dbId, tableId, version, schemaHash)               (contracts repo)
-sentio-core network/state/types.go  TableInfo + SchemaVersion, SchemaHash,
-                                    PartitionBy, Columns []ColumnDef{Name, Type}
-sentio-node standalone/networkstate/convert.go   registry.Table projection widened
-housegate  pkg/registry.Table       + same four fields (the consumer contract)
-           pkg/network.TableInfo    + same four fields (server-mode mirror)
+contract     Types.Table                 + schemaVersion uint64, schemaHash string   (contracts repo)
+             event TableSchemaSet(dbId, tableId, version, schemaHash)               (contracts repo)
+sentio-core  network/state/types.go      TableInfo + SchemaVersion, SchemaHash (pointers only)
+             NEW collection MappingTableSchemas ("TableSchemas"): field
+             <databaseId>/<tableId>@<version> → {columns, partition_by, schema_hash}
+             state.go: UpsertTableSchema/GetTableSchema; StateMirrored codec for it
+sentio-node  standalone/networkstate     redis reader for the new collection +
+             convert.go projection widened with the two pointer fields
+housegate    pkg/registry.Table          + SchemaVersion, SchemaHash; registry gains
+             TableSchema(databaseId, tableId, version) content lookup
+             pkg/network yaml source     + same fields/content block (local fixtures only —
+             the redis path lives in sentio-node since the sentio-core decoupling)
 ```
 
-Content propagation: the chain event carries only the commitment; the column payload is submitted alongside the registration call and mirrored into state by the existing observer path, stored under the `(table_id, schema_version)` key. A consumer that finds the commitment but not the content treats it as unavailable (retry/fail closed) — never trusts a bare hash, never serves without verification. `ColumnDef.Type` is the exact ClickHouse type string that feeds `TableSchemaHash` — no normalization layer in v1.5 (declare exactly what the DDL says; the cross-check enforces agreement).
+Content propagation: the chain event carries only the commitment; the column payload is submitted alongside the registration call and mirrored into the `TableSchemas` collection by the existing syncer path, write-once per `(table_id, version)` key. A consumer that finds the commitment but not the content treats it as unavailable (retry/fail closed) — never trusts a bare hash, never serves without verification. `ColumnDef.Type` is the exact ClickHouse type string that feeds `TableSchemaHash` — no normalization layer in v1.5 (declare exactly what the DDL says; the cross-check enforces agreement).
 
 ## 5. Consumption (one shared loader, three call sites)
 
