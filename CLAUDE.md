@@ -20,6 +20,8 @@ bazel test //pkg/proxy:proxy_test --test_arg=-test.v                   # verbose
 
 **Bazel is the ground truth for tests.** Plain `go test ./...` now mostly works (the old protobuf init panic died with `protos/`), but `pkg/proxy` has an occasionally flaky lifecycle test (`TestServer_ConnLifecycleHooks_FireOnDialFailure`) that can fail under plain go — don't chase it; it passes reliably under Bazel. If you add deps, run `bazel mod tidy && bazel run //:gazelle`. The Go module path is `github.com/housegate/housegate` (renamed from the non-resolvable bare `housegate/housegate`); every internal import, the root `BUILD.bazel` `importpath`, and the `# gazelle:prefix` must use the full `github.com/...` form. The proto types are no longer generated in-repo: the `protos/` dir was deleted and all code imports the gRPC contract from the external module `github.com/housegate/rewriter-proto/gen/pb` (Go package `pb`). There is no `.proto` to edit here, no `update_go_pb` Bazel target, and no protobuf init-time namespace collision since the monorepo no longer registers its own copy.
 
+**`MODULE.bazel`'s `module()` has no `version` field by design** — a pinned version would go stale for `git_override` consumers, who resolve by git tag/commit rather than registry version; don't re-add one.
+
 **Some tests need external services** (`rewriter_e2e_test.go` needs a gRPC rewriter on `localhost:50051`; `pkg/rewriter`'s `TestNativeEngineSmoke` skips unless `POLYGLOT_SQL_FFI_PATH` points at the polyglot FFI lib — pass it via `--test_env=POLYGLOT_SQL_FFI_PATH=...libpolyglot_sql_ffi.dylib`). Before claiming a regression, diff your failing-test set against a clean `main` build — matching set = no regression.
 
 ## Current Architecture (what exists today)
