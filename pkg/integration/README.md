@@ -56,10 +56,10 @@ framing/settings/addendum quirks that ch-go-on-both-sides would not see.
 
 - `TestCLI_SelectOne` — CLI smoke (`SELECT 1` round trip).
 - `TestCLI_AggregateStatePassthrough` — multiple opaque Native aggregate
-  states (`avgState`, `uniqState`, and floating-point `sumState`) followed by
-  a temporary-table read and `SELECT 42` on the same connection. Covers raw
-  legacy completion, same-codec packet-framing resumption, and preservation of
-  upstream session state without relying on a value-layout decoder.
+  states (`avgState`, `uniqState`, and floating-point `sumState`) each pass
+  through an official-client legacy connection without a value-layout decoder.
+  A separate framed multiquery covers temporary-table/session preservation;
+  opaque legacy connections are intentionally non-reusable.
 - `TestCLI_InsertSelectRoundtrip` — CREATE / INSERT / SELECT / DROP via
   the CLI. Validates Data-block path under the official client.
 - `TestCLI_LargeStream` — 100k-row stream via `SELECT count()` to avoid

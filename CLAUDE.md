@@ -81,7 +81,7 @@ Server.handle → Relay.Run
   └─ Relay.clientToUpstream  (goroutine, packet-by-packet)
        client.ReadPacket(ClientQueryCode) → OnQuery chain (auth, usage,
          concurrency, forward, rewrite, commitgate, route signer, metrics)
-         → up.WriteQuery / up.Splice for non-decoded packets
+         → up.WriteQuery / up.WriteRawPacket for non-decoded packets
          (Data/Ping/Cancel/...). HelloPlugins (route stripper, credential,
          forward, sessionstate, rewrite) fire on the ClientHello packet
          only — sessionstate has no OnQuery hook today. ClientData packets
@@ -92,24 +92,26 @@ Server.handle → Relay.Run
   └─ Relay.upstreamToClient (goroutine, packet-by-packet)
        up.ReadPacket(ServerExceptionCode) frames each complete server packet
        before forwarding it. Exception is decoded for reverse-mapping; other
-       packets retain their exact raw bytes for Splice. A genuine decoded
+       packets retain their exact raw bytes, forwarded via WriteRawPacket
+       so the destination codec's own chunked writer reframes them. A genuine decoded
        EndOfStream fires OnQuerySuccess (QuerySuccessPlugin), then
        OnQueryComplete, before the terminal packet reaches the client. TCP
        fragmentation/coalescing cannot create or hide a success boundary.
        With chunked transport, ClickHouse's finishChunk boundary frames opaque
        Native values without decoding them. On a legacy non-chunked leg, an
        unsupported Native layout for a normal query is streamed unchanged while
-       an exact query-id completion probe supplies cleanup only; the next client
-       Query safely interrupts the blocked raw reader and resumes packet framing
-       on the same upstream connection. Commit-gated queries never take this raw
-       fallback and remain fail-closed.
+       an exact query-id completion probe supplies cleanup only. Because that
+       side channel cannot prove EndOfStream crossed the original connection,
+       the session becomes non-reusable: a subsequent Query closes fail-closed
+       instead of restoring packet framing. Commit-gated queries never take this
+       raw fallback and remain fail-closed.
 ```
 
 Key non-obvious invariants driven by this design:
 - **One `Codec` per net.Conn; one `proto.Reader` per Codec.** The codec feeds proto.Reader through a 1-byte-at-a-time `captureByteReader` so its inner bufio never prefetches across a packet boundary. Creating a fresh proto.Reader per packet — an older design — stranded prefetched bytes the moment the client pipelined addendum+query in one TCP segment.
 - **The proxy caps protocol negotiation at revision `54470`.** `ClientHelloForUpstream` lowers newer client hellos before every initial/rebind upstream handshake, and the raw ServerHello revision is rewritten to the same negotiated value before reaching the client. Housegate models the 54461–54470 Progress/Profile/TableStatus and chunked-transport additions but deliberately does not opt into 54471's versioned-parallel-replicas fields.
 - **Chunked transport is terminated independently on both legs.** `ChunkedReader`/`ChunkedWriter` are enabled only after addendum negotiation. Each server `finishChunk()` is an authoritative packet boundary, including for implementation-specific AggregateFunction states.
-- **ReadPacket is Relay's normal upstream read mode.** The sole raw mode is a type-independent fallback for an ordinary non-chunked result after `ErrUnsupportedResultType`; it never dispatches success. The next client Query proves the terminal response was consumed, wakes the blocked raw reader with a read deadline, and resumes `ReadPacket` on the same codec so temporary tables, roles, and other connection state survive. A commit-gated statement cannot use that fallback.
+- **ReadPacket is Relay's normal upstream read mode.** The sole raw mode is a one-way, type-independent fallback for an ordinary non-chunked result after `ErrUnsupportedResultType`; it never dispatches success and the codec never returns to packet parsing. A subsequent Query closes the session fail-closed because neither the Query nor the auxiliary process probe proves that the old EndOfStream crossed the original connection. A commit-gated statement cannot use that fallback.
 - **Relay enforces one query in flight per connection.** It tracks an `activeQuery`/`activeQueryID` pair; a client `Query` packet arriving before the previous query's framed terminal EndOfStream/Exception was consumed is rejected with an Exception rather than forwarded.
 
 ### 4. SQL rewriter is a pluggable backend (gRPC service or in-process engine)
@@ -150,7 +152,7 @@ Cross-cutting:
 
 Works end-to-end against ClickHouse 26.x; these are the current blind spots:
 
-- **Some supported ClickHouse servers still advertise strict `notchunked`.** For ordinary queries whose Native result type clickhouse-go cannot frame, Relay starts an exact-query-id `system.processes` completion probe, raw-splices the untouched response, and dispatches cleanup but never success. Before forwarding the client's next Query, it wakes the blocked raw reader and resumes packet parsing on the same upstream connection. If that same-login probe is unavailable, the connection closes fail-closed. Commit-gated statements always require a decoded or chunk-framed terminal packet and never use this fallback.
+- **Some supported ClickHouse servers still advertise strict `notchunked`.** For ordinary queries whose Native result type clickhouse-go cannot frame, Relay starts an exact-query-id `system.processes` completion probe, raw-splices the untouched response, and dispatches cleanup but never success. This is a terminal mode for that TCP session: any subsequent Query closes fail-closed instead of reusing the upstream codec. The process probe proves execution cleanup, not receipt of EndOfStream on the original connection. If that same-login probe is unavailable, the connection also closes fail-closed. Commit-gated statements always require a decoded or chunk-framed terminal packet and never use this fallback.
 - **`upstream → client` is packet-framed except for the explicit legacy fallback above.** Relay decodes Exception and frames every known Server packet before forwarding. An unknown packet body still closes; only `ErrUnsupportedResultType` on an ordinary non-chunked Data result may enter raw mode, and the captured prefix is forwarded exactly once.
 - **`skipServerPacketBody` (Progress/Profile/TablesStatus/PartUUIDs/TableColumns) hand-decodes several trailing fields ch-go v0.73's `DecodeAware` doesn't model**, gated by `revisionMin*` constants in [codec.go](pkg/chproto/codec.go). Production negotiation is capped at revision 54470; later layouts (including compressed Log/ProfileEvents/TableColumns at 54481) are defensive code until the cap is deliberately raised. Compressed Data-family packets are decoded to their authoritative Native-block boundary, so a block split across delayed compression frames remains one packet; normal composite types such as `Tuple` use clickhouse-go's column factory. Raising the revision cap requires adding support and tests for every newly enabled packet field and Native custom serialization kind before changing `MaxSupportedRevision`.
 - **`ErrorReverseMap` remains a no-op stub** ([pkg/plugins/rewrite/error_map.go](pkg/plugins/rewrite/error_map.go)). The rewriter has not yet grown a `RewriteErrorMessage` RPC, so reverse-mapping inside `OnException` is not wired. The hook itself fires after a complete Exception packet is decoded.
@@ -193,8 +195,9 @@ Bumping `rewriter-go`/`rewriter-proto`/the `sentioxyz` ch-go & clickhouse-go for
 - **English first for code and comments.** Identifiers, docstrings, and inline comments should be English by default. Some legacy comments are in Chinese (e.g. `// 超过此时间后连接将被关闭`); leave those as-is when you touch nearby code, but do not add new non-English comments. User-facing operator messages (log output, error strings returned to CLI operators) are also English.
 - **Don't merge to `main` if Bazel tests regress vs. baseline.** Integration failures that exist on `main` are not regressions but must not grow.
 - **Codec read invariants**:
-  - **One `Codec` per `net.Conn`; one `proto.Reader` per `Codec`.** Never replace `Codec.r` or construct a new `proto.Reader(c.br)` mid-connection — the 1-byte capture discipline is what prevents prefetched bytes from being orphaned across packet reads. If you need the exact bytes of a packet for zero-copy forwarding, use `Packet.Raw` (populated when decoded types request it) or `Codec.Splice`.
-  - **Don't bypass `ReadPacket` on the upstream codec.** A Native block has no outer byte length, so raw TCP reads cannot establish packet or response boundaries. Add an exact body decoder (and fragmented/coalesced tests) for each new layout instead.
+  - **One `Codec` per `net.Conn`; one `proto.Reader` per `Codec`.** Never replace `Codec.r` or construct a new `proto.Reader(c.br)` mid-connection — the 1-byte capture discipline is what prevents prefetched bytes from being orphaned across packet reads. If you need the exact bytes of a packet for zero-copy forwarding, use `Packet.Raw` (populated when decoded types request it).
+  - **Forward `Packet.Raw` to a different codec via `WriteRawPacket`, never `Codec.Splice`.** `Splice` writes `Raw` straight to an arbitrary `io.Writer`, bypassing that writer's own `ChunkedWriter`; it's only safe for same-codec echo. Since client and upstream legs negotiate chunked transport independently, cross-leg forwarding (relay.go's client↔upstream packet loop) must go through the destination codec's `WriteRawPacket`, which re-frames through its own writer. `Splice` is unused in production code now — it survives only in tests.
+  - **Don't bypass `ReadPacket` on the upstream codec except for the one-way legacy opaque fallback.** A Native block has no outer byte length, so raw TCP reads cannot establish packet or response boundaries. Once that fallback starts, the codec must never return to packet parsing and a later Query must close the session fail-closed. Add an exact body decoder (and fragmented/coalesced tests) for each new reusable layout instead.
   - **`NegotiateAddendum` is read-only** and must not be taught otherwise: ClickHouse's addendum is strictly client → server (ch-go's client `encodeAddendum` + flush + return, no read). Forwarding the resolved addendum to upstream is the caller's explicit responsibility via `upstream.SendAddendum(res)`.
 
 ## CI

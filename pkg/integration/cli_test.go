@@ -39,24 +39,44 @@ func TestCLI_SelectOne(t *testing.T) {
 // TestCLI_AggregateStatePassthrough proves result framing does not depend on
 // the connected Go driver's scannable type set. AggregateFunction states have
 // implementation-specific Native encodings; the official client understands
-// them, while Housegate must remain a transparent byte relay.
+// them, while Housegate must remain a transparent byte relay without decoding
+// those values. The official CLI currently negotiates legacy notchunked
+// transport, so every opaque result uses its own fail-closed connection.
 func TestCLI_AggregateStatePassthrough(t *testing.T) {
 	bin := testenv.ClickHouseCLI(t)
 	proxy := testenv.StartServerProxy(t, chEnv.Addr)
 
+	for _, tc := range []struct {
+		name  string
+		query string
+	}{
+		{name: "avg_uint64", query: "SELECT avgState(number) FROM numbers(10)"},
+		{name: "uniq_uint64", query: "SELECT uniqState(number) FROM numbers(10)"},
+		{name: "sum_float64", query: "SELECT sumState(toFloat64(number)) FROM numbers(10)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := testenv.RunCLICompressed(t, bin, proxy.Addr, chEnv.Database, tc.query)
+			if err != nil {
+				t.Fatalf("aggregate state via CLI: %v\nout: %q", err, out)
+			}
+			if len(out) == 0 {
+				t.Fatal("aggregate-state result was empty")
+			}
+		})
+	}
+
+	// Ordinary framed queries remain reusable and preserve upstream session
+	// state; only the legacy opaque fallback is terminal for its connection.
 	out, err := testenv.RunCLICompressedMultiquery(t, bin, proxy.Addr, chEnv.Database,
-		"CREATE TEMPORARY TABLE hg_opaque_session_state (v UInt64);"+
-			" INSERT INTO hg_opaque_session_state VALUES (7);"+
-			" SELECT avgState(number) FROM numbers(10);"+
-			" SELECT uniqState(number) FROM numbers(10);"+
-			" SELECT sumState(toFloat64(number)) FROM numbers(10);"+
-			" SELECT sum(v) FROM hg_opaque_session_state;"+
+		"CREATE TEMPORARY TABLE hg_framed_session_state (v UInt64);"+
+			" INSERT INTO hg_framed_session_state VALUES (7);"+
+			" SELECT sum(v) FROM hg_framed_session_state;"+
 			" SELECT 42")
 	if err != nil {
-		t.Fatalf("aggregate states via CLI: %v\nout: %q", err, out)
+		t.Fatalf("framed session-state queries via CLI: %v\nout: %q", err, out)
 	}
 	if len(out) == 0 || !strings.HasSuffix(out, "7\n42") {
-		t.Fatalf("aggregate-state multiquery did not resume framed traffic: %q", out)
+		t.Fatalf("framed multiquery did not preserve session state: %q", out)
 	}
 }
 

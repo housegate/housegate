@@ -58,8 +58,6 @@ type Relay struct {
 	opaqueMode bool
 	opaqueDone chan struct{}
 	opaqueErr  error
-	opaqueStop chan struct{}
-	opaqueRead chan struct{}
 }
 
 // UpstreamDialer dials and returns the codec for this session's upstream.
@@ -69,7 +67,9 @@ type Relay struct {
 // sessions would silently fall through to cfg.Upstream.
 type UpstreamDialer func(ctx context.Context, sess chsession.Session) (*chproto.Codec, error)
 
-var errOpaqueReaderStopped = errors.New("opaque reader stopped at client query boundary")
+var errOpaqueConnectionNotReusable = errors.New(
+	"legacy non-chunked opaque result connection cannot be safely reused",
+)
 
 // NewRelay constructs a Relay.
 //
@@ -120,8 +120,6 @@ func (r *Relay) startOpaqueCompletionProbe(ctx context.Context, queryID string) 
 	r.opaqueMode = true
 	r.opaqueDone = make(chan struct{})
 	r.opaqueErr = nil
-	r.opaqueStop = make(chan struct{})
-	r.opaqueRead = make(chan struct{})
 	done := r.opaqueDone
 	r.opaqueMu.Unlock()
 
@@ -161,7 +159,7 @@ func (r *Relay) opaqueSnapshot() (active bool, done <-chan struct{}, err error) 
 	return r.opaqueMode, r.opaqueDone, r.opaqueErr
 }
 
-func (r *Relay) waitAndResetOpaque(ctx context.Context) error {
+func (r *Relay) waitAndRejectOpaqueReuse(ctx context.Context) error {
 	active, done, _ := r.opaqueSnapshot()
 	if !active {
 		return nil
@@ -175,51 +173,12 @@ func (r *Relay) waitAndResetOpaque(ctx context.Context) error {
 	if probeErr != nil {
 		return fmt.Errorf("opaque result completion probe: %w", probeErr)
 	}
-
-	up := r.sess.Upstream()
-	if up == nil {
-		return chsession.ErrNoUpstream
-	}
-	conn, ok := up.Conn().(net.Conn)
-	if !ok {
-		return fmt.Errorf("opaque result resume requires net.Conn upstream, got %T", up.Conn())
-	}
-
-	r.opaqueMu.Lock()
-	if !r.opaqueMode || r.opaqueStop == nil || r.opaqueRead == nil {
-		r.opaqueMu.Unlock()
-		return fmt.Errorf("opaque result resume state is incomplete")
-	}
-	stop := r.opaqueStop
-	readDone := r.opaqueRead
-	select {
-	case <-stop:
-	default:
-		close(stop)
-	}
-	r.opaqueMu.Unlock()
-
-	// The raw reader is blocked only after it forwarded every byte currently
-	// available from the completed response. A read deadline wakes it without
-	// closing the connection; relayOpaqueResult clears that deadline before it
-	// acknowledges, so the packet reader can safely resume on the same codec.
-	if err := conn.SetReadDeadline(time.Now()); err != nil {
-		return fmt.Errorf("interrupt opaque result reader: %w", err)
-	}
-	select {
-	case <-readDone:
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-
-	r.opaqueMu.Lock()
-	r.opaqueMode = false
-	r.opaqueDone = nil
-	r.opaqueErr = nil
-	r.opaqueStop = nil
-	r.opaqueRead = nil
-	r.opaqueMu.Unlock()
-	return nil
+	// The process probe proves only that ClickHouse stopped executing the
+	// query. It does not prove that this connection's terminal packet has
+	// reached Housegate: a pipelined client Query may arrive first. Since an
+	// opaque Native value prevents authoritative packet framing, never resume
+	// this upstream codec. Relay.Run closes the session on this error.
+	return errOpaqueConnectionNotReusable
 }
 
 func (r *Relay) handshakeFreshUpstream(
@@ -724,12 +683,15 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 				r.writeExceptionToClient(ctx, err)
 				return err
 			}
-			// A previous opaque result was relayed as an uninterpreted byte
-			// stream. Receiving this Query proves the client consumed its
-			// terminal packet; stop the raw reader so packet framing is
-			// restored on the same upstream before the query is forwarded.
-			if err := r.waitAndResetOpaque(ctx); err != nil {
-				r.writeExceptionToClient(ctx, err)
+			// A previous legacy non-chunked result entered opaque raw mode.
+			// Even after its process probe completes, a new client Query does
+			// not prove that the old EndOfStream crossed this connection.
+			// Fail the session closed instead of risking attribution of that
+			// terminal packet to the new query.
+			if err := r.waitAndRejectOpaqueReuse(ctx); err != nil {
+				if !errors.Is(err, errOpaqueConnectionNotReusable) {
+					r.writeExceptionToClient(ctx, err)
+				}
 				return err
 			}
 			if previousQueryID, active := r.currentActiveQuery(); active {
@@ -1086,9 +1048,6 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 		if err != nil {
 			if errors.Is(err, chproto.ErrUnsupportedResultType) && pkt != nil {
 				err = r.relayOpaqueResult(ctx, up, pkt)
-				if errors.Is(err, errOpaqueReaderStopped) {
-					continue
-				}
 			}
 			// A non-EOF read error on the current upstream codec may have been
 			// caused by a planned rebind: RebindToPeer closes the old upstream
@@ -1178,11 +1137,6 @@ func (r *Relay) relayOpaqueResult(ctx context.Context, up *chproto.Codec, first 
 	if err := r.startOpaqueCompletionProbe(ctx, queryID); err != nil {
 		return err
 	}
-	r.opaqueMu.Lock()
-	stop := r.opaqueStop
-	readDone := r.opaqueRead
-	r.opaqueMu.Unlock()
-	defer close(readDone)
 
 	if len(first.Raw) == 0 {
 		return fmt.Errorf("opaque result has no captured prefix")
@@ -1207,19 +1161,6 @@ func (r *Relay) relayOpaqueResult(ctx context.Context, up *chproto.Codec, first 
 			}
 		}
 		if readErr != nil {
-			select {
-			case <-stop:
-				if conn, ok := up.Conn().(net.Conn); ok {
-					if err := conn.SetReadDeadline(time.Time{}); err != nil {
-						return fmt.Errorf("clear opaque result read deadline: %w", err)
-					}
-				}
-				return errOpaqueReaderStopped
-			default:
-			}
-			if newUp := r.sess.Upstream(); newUp != nil && newUp != up {
-				return errOpaqueReaderStopped
-			}
 			return readErr
 		}
 	}

@@ -662,27 +662,61 @@ func TestRelay_OpaqueResultUsesCompletionProbeWithoutValueDecoding(t *testing.T)
 	}
 }
 
-func TestRelay_OpaqueResultResumesPacketFramingOnSameUpstream(t *testing.T) {
+type opaquePipelineHooks struct {
+	plugin.NoopHooks
+	mu        sync.Mutex
+	queries   int
+	completes int
+	successes int
+}
+
+func (h *opaquePipelineHooks) OnQuery(context.Context, *plugin.QueryContext) error {
+	h.mu.Lock()
+	h.queries++
+	h.mu.Unlock()
+	return nil
+}
+
+func (h *opaquePipelineHooks) OnQueryComplete(context.Context, chsession.Session) {
+	h.mu.Lock()
+	h.completes++
+	h.mu.Unlock()
+}
+
+func (h *opaquePipelineHooks) OnQuerySuccess(context.Context, chsession.Session, string) {
+	h.mu.Lock()
+	h.successes++
+	h.mu.Unlock()
+}
+
+func TestRelay_OpaqueResultRejectsPipelinedQueryBeforeWithheldTerminal(t *testing.T) {
 	clientProxy, proxyClient := net.Pipe()
 	upstreamProxy, proxyUpstream := net.Pipe()
 	defer clientProxy.Close()
 	defer upstreamProxy.Close()
 
+	const rev = chproto.MaxSupportedRevision
 	sess := chsession.New(1, proxyClient)
+	sess.Client().SetRevision(rev)
 	up := chproto.NewCodec(proxyUpstream, chproto.DirToUpstream)
-	up.SetRevision(chproto.MaxSupportedRevision)
+	up.SetRevision(rev)
 	if err := sess.BindUpstream(context.Background(), up); err != nil {
 		t.Fatalf("BindUpstream: %v", err)
 	}
 
+	probeStarted := make(chan struct{})
+	releaseProbe := make(chan struct{})
+	hooks := &opaquePipelineHooks{}
 	r := &Relay{
 		sess:  sess,
-		hooks: &plugin.PluginChain{},
+		hooks: hooks,
 		completionProbe: func(context.Context, string) error {
+			close(probeStarted)
+			<-releaseProbe
 			return nil
 		},
 	}
-	if !r.beginActiveQuery("qid-resume-same-upstream") {
+	if !r.beginActiveQuery("query-a") {
 		t.Fatal("beginActiveQuery unexpectedly reported an active query")
 	}
 
@@ -690,53 +724,142 @@ func TestRelay_OpaqueResultResumesPacketFramingOnSameUpstream(t *testing.T) {
 		Type: uint64(chproto.ServerDataCode),
 		Raw:  []byte{byte(chproto.ServerDataCode), 0xAA},
 	}
-	remainder := []byte{0xBB, byte(chproto.ServerEndOfStreamCode)}
-	relayDone := make(chan error, 1)
+	opaqueDone := make(chan error, 1)
 	go func() {
-		relayDone <- r.relayOpaqueResult(context.Background(), up, first)
+		opaqueDone <- r.relayOpaqueResult(context.Background(), up, first)
 	}()
-	go func() {
-		_, _ = upstreamProxy.Write(remainder)
-	}()
-
-	wantRaw := append(append([]byte(nil), first.Raw...), remainder...)
-	gotRaw := make([]byte, len(wantRaw))
+	select {
+	case <-probeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("completion probe did not start")
+	}
+	gotPrefix := make([]byte, len(first.Raw))
 	_ = clientProxy.SetReadDeadline(time.Now().Add(time.Second))
-	if _, err := io.ReadFull(clientProxy, gotRaw); err != nil {
-		t.Fatalf("read raw result: %v", err)
+	if _, err := io.ReadFull(clientProxy, gotPrefix); err != nil {
+		t.Fatalf("read opaque result prefix: %v", err)
 	}
-	if !bytes.Equal(gotRaw, wantRaw) {
-		t.Fatalf("raw result changed: got %x, want %x", gotRaw, wantRaw)
+	if !bytes.Equal(gotPrefix, first.Raw) {
+		t.Fatalf("opaque prefix changed: got %x, want %x", gotPrefix, first.Raw)
+	}
+	_ = clientProxy.SetReadDeadline(time.Time{})
+	clientDrainDone := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(io.Discard, clientProxy)
+		close(clientDrainDone)
+	}()
+
+	// Query B is fully pipelined before the auxiliary process probe reports
+	// Query A complete. Query A's EndOfStream remains withheld on the same
+	// upstream connection.
+	var queryB proto.Buffer
+	(&proto.Query{
+		ID:   "query-b",
+		Body: "CREATE TABLE should_not_run (x UInt64) ENGINE = Memory",
+		Info: proto.ClientInfo{
+			ProtocolVersion: rev,
+			Major:           24,
+			Minor:           1,
+			Interface:       proto.InterfaceTCP,
+			Query:           proto.ClientQueryInitial,
+		},
+	}).EncodeAware(&queryB, rev)
+	clientLoopDone := make(chan error, 1)
+	go func() {
+		clientLoopDone <- r.clientToUpstream(context.Background())
+	}()
+	queryBWritten := make(chan error, 1)
+	go func() {
+		_, err := clientProxy.Write(queryB.Buf)
+		queryBWritten <- err
+	}()
+	select {
+	case err := <-queryBWritten:
+		if err != nil {
+			t.Fatalf("write pipelined Query B: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("proxy did not read pipelined Query B")
 	}
 
-	if err := r.waitAndResetOpaque(context.Background()); err != nil {
-		t.Fatalf("waitAndResetOpaque: %v", err)
+	upstreamQuery := make(chan *chproto.Packet, 1)
+	go func() {
+		codec := chproto.NewCodec(upstreamProxy, chproto.DirFromClient)
+		codec.SetRevision(rev)
+		_ = upstreamProxy.SetReadDeadline(time.Now().Add(250 * time.Millisecond))
+		pkt, _ := codec.ReadPacket(uint64(chproto.ClientQueryCode))
+		upstreamQuery <- pkt
+	}()
+	close(releaseProbe)
+
+	var loopErr error
+	select {
+	case pkt := <-upstreamQuery:
+		if pkt != nil {
+			_ = sess.Close()
+			t.Fatalf("pipelined Query B reached the legacy opaque upstream")
+		}
+	case loopErr = <-clientLoopDone:
+	case <-time.After(time.Second):
+		_ = sess.Close()
+		t.Fatal("pipelined Query B was neither rejected nor forwarded")
 	}
-	if got := sess.Upstream(); got != up {
-		t.Fatalf("opaque resume replaced upstream codec: got %p, want %p", got, up)
+	if loopErr == nil {
+		select {
+		case loopErr = <-clientLoopDone:
+		case <-time.After(time.Second):
+			_ = sess.Close()
+			t.Fatal("client loop did not reject legacy opaque connection reuse")
+		}
+	}
+	if loopErr == nil || !strings.Contains(loopErr.Error(), "cannot be safely reused") {
+		_ = sess.Close()
+		t.Fatalf("client loop err=%v, want legacy opaque reuse rejection", loopErr)
 	}
 	select {
-	case err := <-relayDone:
-		if !errors.Is(err, errOpaqueReaderStopped) {
-			t.Fatalf("relayOpaqueResult err=%v, want %v", err, errOpaqueReaderStopped)
+	case pkt := <-upstreamQuery:
+		if pkt != nil {
+			_ = sess.Close()
+			t.Fatalf("pipelined Query B reached the upstream after rejection")
+		}
+	case <-time.After(time.Second):
+		_ = sess.Close()
+		t.Fatal("upstream read did not finish")
+	}
+
+	// Deliver Query A's real terminal packet only after its completion probe
+	// returned and Query B was rejected. The raw reader may forward it, but it
+	// must never attribute that success to Query B.
+	_ = upstreamProxy.SetReadDeadline(time.Time{})
+	if _, err := upstreamProxy.Write([]byte{byte(chproto.ServerEndOfStreamCode)}); err != nil {
+		_ = sess.Close()
+		t.Fatalf("write withheld Query A EndOfStream: %v", err)
+	}
+	hooks.mu.Lock()
+	queries, completes, successes := hooks.queries, hooks.completes, hooks.successes
+	hooks.mu.Unlock()
+	if queries != 0 {
+		t.Errorf("OnQuery calls=%d, want 0 for rejected Query B", queries)
+	}
+	if completes != 1 {
+		t.Errorf("OnQueryComplete calls=%d, want 1 for Query A cleanup", completes)
+	}
+	if successes != 0 {
+		t.Errorf("OnQuerySuccess calls=%d, want 0", successes)
+	}
+
+	_ = sess.Close()
+	select {
+	case err := <-opaqueDone:
+		if err != nil &&
+			!errors.Is(err, io.EOF) &&
+			!errors.Is(err, io.ErrClosedPipe) &&
+			!errors.Is(err, net.ErrClosed) {
+			t.Fatalf("relayOpaqueResult: %v", err)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("opaque reader did not stop")
 	}
-
-	// The next packet must be decoded by the same permanent proto.Reader. A
-	// stale read deadline or discarded codec would fail or block here.
-	go func() {
-		_, _ = upstreamProxy.Write([]byte{byte(chproto.ServerEndOfStreamCode)})
-	}()
-	_ = proxyUpstream.SetReadDeadline(time.Now().Add(time.Second))
-	pkt, err := up.ReadPacket()
-	if err != nil {
-		t.Fatalf("ReadPacket after opaque resume: %v", err)
-	}
-	if pkt.Type != uint64(chproto.ServerEndOfStreamCode) {
-		t.Fatalf("packet after opaque resume type=%d, want EndOfStream", pkt.Type)
-	}
+	<-clientDrainDone
 }
 
 type singlePermitLimiter struct {
