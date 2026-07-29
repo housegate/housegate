@@ -2,16 +2,18 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Revision note (2026-07-29):** re-baselined after a wave of merges: sentio-node PR #163 (snode hosting) is on main including its known review findings; housegate merged PR #98 (storageintegrity runtime), #108/#109 (**canonical module path `github.com/housegate/housegate`**, tagged **v0.7.1**), and #110 (P1 production wiring — `GetStatementStatus` client + outcome convergence; no config/tables surface touched); arbiter-core is already on `github.com/housegate/housegate v0.7.1` with **no replace directive** (the public-module replace debt is gone). Task 3 therefore lands on a fresh sentio-node branch off main and fixes the inherited #163 findings there.
+
 **Goal:** Kill hand-written column YAML now, per [schema-registry spec](../specs/2026-07-28-schema-registry-design.md) decision 8 Phase A: storage-integrity consumers keep only a `table_ids` selector and derive column-level `payloadexec.TableSchema` from the local ClickHouse (`system.columns`/`system.tables`), with the genesis `schema_root` anchor check unchanged.
 
-**Architecture:** One new housegate package `pkg/schemaregistry` defines the loader seam (`Loader.Load(ctx, refs)`) that Phase B will re-implement over network state, plus the Phase-A `ClickHouseLoader`. arbiter-core's reference binaries and sentio-node's assembly consume it; `schema_root` validation stays where it is (`snode.Config.validate`), so a wrong derivation still refuses startup. sentio-node's change lands on the open PR #163 branch and retires two of its review findings in the process.
+**Architecture:** One new housegate package `pkg/schemaregistry` defines the loader seam (`Loader.Load(ctx, refs)`) that Phase B will re-implement over network state, plus the Phase-A `ClickHouseLoader`. arbiter-core's reference binaries and sentio-node's assembly consume it; `schema_root` validation stays where it is (`snode.Config.validate`), so a wrong derivation still refuses startup. The sentio-node change also structurally retires two findings PR #163 carried into main.
 
-**Tech Stack:** Go 1.26; housegate is Bazel 8.5.1 + Bzlmod (gazelle-managed BUILD files, docker tests in `//pkg/integration:integration_test`); arbiter-core and sentio-node consume housegate as a module.
+**Tech Stack:** Go 1.26; housegate is Bazel 8.5.1 + Bzlmod (gazelle-managed BUILD files, docker tests in `//pkg/integration:integration_test`) with module path `github.com/housegate/housegate` (canonical since #108 — all import paths in this plan use it); arbiter-core and sentio-node consume housegate as a normal public module (no replace, no GOPRIVATE needed for it).
 
 **Repos & branches:**
-- housegate `/Users/uranuswch/Dev/housegate/housegate` — branch `feat/schemaregistry-ch-loader` off main
-- arbiter-core `/Users/uranuswch/Dev/sentio_xyz/arbiter-core` — branch `feat/ch-derived-schemas` off main
-- sentio-node `/Users/uranuswch/Dev/sentio_xyz/sentio-node` — continue on PR #163's branch (`git fetch origin 'pull/163/head:...'` — confirm the head branch name via `gh pr view 163 --repo sentioxyz/sentio-node --json headRefName` first)
+- housegate `/Users/uranuswch/Dev/housegate/housegate` — branch `feat/schemaregistry-ch-loader` off origin/main (≥ `81092ae`, includes #98/#108/#110)
+- arbiter-core `/Users/uranuswch/Dev/sentio_xyz/arbiter-core` — branch `feat/ch-derived-schemas` off origin/main (≥ `33f7cef`, already on housegate v0.7.1)
+- sentio-node `/Users/uranuswch/Dev/sentio_xyz/sentio-node` — branch `feat/schema-registry-phase-a` off origin/main (≥ `516f503`, PR #163 merged)
 
 ## Global Constraints
 
@@ -20,6 +22,8 @@
 - The loader excludes the `_hg_row_id` protocol column — `TableSchema.Columns` is user columns only (matches `chexec` scratch-table construction).
 - The loader does NOT validate partition-key shape; `validatePartitionBy` (arbiter-core `snode/config.go:82`, bare-String-column MVP freeze) stays the sole gate and now also catches expression partition keys arriving from CH introspection.
 - Physical table naming stays arbiter-core's single source of truth: export `snode.CHTableName` rather than copying `ReplaceAll(id, ".", "__")` into any consumer.
+- All housegate imports use the canonical path (`github.com/housegate/housegate/pkg/...`) — the pre-#108 `housegate/housegate` form must not reappear.
+- **Config break is declared, not shimmed:** `storage_integrity.snode.tables` (column YAML) is replaced by `table_ids` with no backward-compat alias — the entire storage_integrity stack is default-off and not yet in production, so the break lands while it is free. State the break in the sentio-node PR description.
 - housegate rules: Bazel is ground truth (`bazel mod tidy && bazel run //:gazelle` after dep/package changes); new docker-bound tests join the existing `//pkg/integration:integration_test` target (already in ci.yml — do NOT create a new manual target); no hard line-wrapping in docs; `pkg/log` for logging.
 - English comments/logs; `fmt.Errorf("context: %w", err)` wrapping.
 
@@ -36,7 +40,7 @@ arbiter-core snode/parts.go                      export CHTableName
              cmd/arbiter-verifier/{config,main}.go  same
 sentio-node  config/config.go                    StorageIntegritySNode.Tables → TableIDs
              standalone/standalone.go            derive before snode.New; resolver from derived set
-             (PR #163 branch)                    + the two review fixes this obsoletes/requires
+             (new branch off main)               + fixes for the inherited #163 findings this intersects
 ```
 
 ---
@@ -49,7 +53,7 @@ sentio-node  config/config.go                    StorageIntegritySNode.Tables �
 - Modify: BUILD files via gazelle (mechanical)
 
 **Interfaces:**
-- Consumes: `pkg/replay/payloadexec.TableSchema`/`lthash.Column` (existing), `clickhouse-go/v2` (existing dep).
+- Consumes: `github.com/housegate/housegate/pkg/replay/payloadexec` (`TableSchema`), `github.com/housegate/housegate/pkg/lthash` (`Column`), `clickhouse-go/v2` (existing dep).
 - Produces (Tasks 2–3 rely on these exact shapes):
 
 ```go
@@ -229,7 +233,7 @@ func TestClickHouseLoader_DerivesRealDDL(t *testing.T) {
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/housegate
-git checkout -b feat/schemaregistry-ch-loader origin/main
+git checkout main && git pull && git checkout -b feat/schemaregistry-ch-loader
 bazel mod tidy && bazel run //:gazelle
 bazel test //pkg/schemaregistry:schemaregistry_test
 docker pull clickhouse/clickhouse-server:25.8 >/dev/null
@@ -250,6 +254,8 @@ git push origin feat/schemaregistry-ch-loader
 gh pr create --repo housegate/housegate --base main --title "feat(schemaregistry): CH-derived storage-integrity schema loader (Phase A)" --body "Phase A of docs/superpowers/specs/2026-07-28-schema-registry-design.md (decision 8): the Loader seam Phase B re-implements over network state, plus the ClickHouse implementation. Consumers follow in arbiter-core and sentio-node."
 ```
 
+After merge, tag the next housegate patch release (the flow that minted v0.7.1) so Tasks 2–3 pin a real version; a pseudo-version of the merge commit works in the interim (the module path is canonical and public — plain `go get`, no replace).
+
 ---
 
 ### Task 2: arbiter-core — `CHTableName` export + `table_ids` mode in both reference binaries
@@ -258,7 +264,7 @@ gh pr create --repo housegate/housegate --base main --title "feat(schemaregistry
 - Modify: `snode/parts.go:79` (export), call sites of `chTableName` (mechanical rename)
 - Modify: `cmd/arbiter-snode/config.go`, `cmd/arbiter-snode/main.go`, `cmd/arbiter-verifier/config.go`, `cmd/arbiter-verifier/main.go`
 - Test: `cmd/arbiter-snode/main_test.go`, `cmd/arbiter-verifier/main_test.go`
-- Modify: `go.mod` (housegate bump to the commit containing Task 1; pseudo-version until the PR merges, re-bump after)
+- Modify: `go.mod` (`go get github.com/housegate/housegate@<Task-1 version>` — plain public module bump)
 
 **Interfaces:**
 - Consumes: Task 1's `schemaregistry.NewClickHouseLoader/TableRef/Loader`.
@@ -266,7 +272,7 @@ gh pr create --repo housegate/housegate --base main --title "feat(schemaregistry
 
 - [ ] **Step 1: Export the physical-name mapping**
 
-`snode/parts.go`: rename `chTableName` → `CHTableName` with a doc comment ("CHTableName maps a logical storage-integrity table id to its physical ClickHouse table name; consumers must use this instead of copying the rule"), keep an unexported alias if call-site churn is large (it is small — just rename the ~6 call sites in `snode/`). `go build ./... && go test ./snode/ -count=1` green, commit `refactor(snode): export CHTableName`.
+`snode/parts.go`: rename `chTableName` → `CHTableName` with a doc comment ("CHTableName maps a logical storage-integrity table id to its physical ClickHouse table name; consumers must use this instead of copying the rule"), rename the ~6 call sites in `snode/`. `go build ./... && go test ./snode/ -count=1` green, commit `refactor(snode): export CHTableName`.
 
 - [ ] **Step 2: Write the failing config tests**
 
@@ -334,7 +340,8 @@ if len(cfg.TableIDs) > 0 {
 
 ```bash
 cd /Users/uranuswch/Dev/sentio_xyz/arbiter-core
-GOPRIVATE=github.com/sentioxyz go get github.com/housegate/housegate@<task-1-commit> && go mod tidy
+git checkout main && git pull && git checkout -b feat/ch-derived-schemas
+go get github.com/housegate/housegate@<task-1-version> && go mod tidy
 go build ./... && go vet ./... && go test ./... -count=1
 docker run -d --rm --name ac-pa-ch -p 19000:9000 -e CLICKHOUSE_SKIP_USER_SETUP=1 clickhouse/clickhouse-server:25.8 && sleep 8
 ARBITER_CH_INTEGRATION=1 CH_ADDR=127.0.0.1:19000 go test ./snode -count=1 -timeout 900s
@@ -346,16 +353,18 @@ gh pr create --repo sentioxyz/arbiter-core --title "feat(cmd): CH-derived table 
 
 ---
 
-### Task 3: sentio-node — config switch on the PR #163 branch + review fixes
+### Task 3: sentio-node — config switch on a fresh branch + inherited-findings fixes
 
-**Files (on PR #163's head branch):**
-- Modify: `config/config.go` (`StorageIntegritySNode.Tables` → `TableIDs []string`; drop `StorageIntegrityTable`/`StorageIntegrityColumn`; `TableSchemas()` deleted), `config/config_test.go`
+PR #163 merged with its review findings intact; this task lands the Phase-A config switch AND retires the inherited findings it structurally intersects, as one coherent follow-up PR.
+
+**Files (branch `feat/schema-registry-phase-a` off main):**
+- Modify: `config/config.go` (`StorageIntegritySNode.Tables` → `TableIDs []string`; delete `StorageIntegrityTable`/`StorageIntegrityColumn` and `TableSchemas()`; the `partition_by`-required validation at `config/config.go:104` disappears with the field — that closes inherited finding #4 structurally), `config/config_test.go`
 - Modify: `standalone/standalone.go` (derive before `snode.New`; `NewSchemaResolver` fed from the derived set)
-- Modify: `storageintegrityadapter/adapter.go` only if `NewSchemaResolver`'s input type changes (it takes `[]payloadexec.TableSchema` — no change expected)
+- Modify: `go.mod` + `MODULE.bazel`/BUILD via gazelle (bump housegate to the Task-1 version and arbiter-core to the Task-2 version)
 
 **Interfaces:**
-- Consumes: Task 1 loader, Task 2's `snode.CHTableName` + the bumped module pins (`go.mod`: housegate ≥ Task-1 commit, arbiter-core ≥ Task-2 commit; `bazel mod tidy && bazel run //:gazelle` after).
-- Produces: final Phase-A config shape:
+- Consumes: Task 1 loader, Task 2's `snode.CHTableName`.
+- Produces: final Phase-A config shape (breaking, declared in the PR — the stack is default-off and pre-production):
 
 ```yaml
 storage_integrity:
@@ -365,7 +374,7 @@ storage_integrity:
 
 - [ ] **Step 1: Write the failing config tests**
 
-Rewrite the PR's `TestStorageIntegrityConfigValidation` table: `TableIDs` required non-empty when enabled, entries non-empty and unique; **the `partition_by`-required case is deleted with the field** (this closes PR #163 review finding #4 structurally). Add the two cross-checks from the review as cases: `enabled ⇒ cfg.Housegate.Listen != ""` (finding #14), and every `table_ids` entry resolving into `cfg.Housegate.StorageIntegrity.Runtime.MergeGuard.Tables` via `snode.CHTableName` + the unsafe database (the review's tables↔merge_guard gap):
+Rewrite `TestStorageIntegrityConfigValidation`: `TableIDs` required non-empty when enabled, entries non-empty and unique; the `partition_by` case is deleted with the field. Add the two cross-checks the #163 review flagged, now as main-line fixes: `enabled ⇒ cfg.Housegate.Listen != ""` (inherited finding #14 — today the SI block silently fails to assemble when housegate is disabled, because the assembly sits inside `if cfg.Housegate.Listen != ""`), and every `table_ids` entry resolving into `cfg.Housegate.StorageIntegrity.Runtime.MergeGuard.Tables` via `snode.CHTableName` + the unsafe database (the tables↔merge_guard drift gap):
 
 ```go
 "si without housegate listen": func(c *Config) { c.Housegate.Listen = "" },          // must fail
@@ -387,36 +396,39 @@ if err != nil {
 }
 ```
 
-(`unsafeDB` — the snode role's unsafe database; take it from wherever the PR currently sources `snode.Config`'s database fields, keeping one source of truth.) Feed `tables` to both `snode.Config.Tables` and `storageintegrityadapter.NewSchemaResolver(tables)`. The genesis anchor fires unchanged inside `snode.New` — a wrong derivation still refuses startup.
+(`unsafeDB` — the snode role's unsafe database; take it from wherever main currently sources `snode.Config`'s database fields, keeping one source of truth.) Feed `tables` to both `snode.Config.Tables` and `storageintegrityadapter.NewSchemaResolver(tables)`. The genesis anchor fires unchanged inside `snode.New` — a wrong derivation still refuses startup.
 
-- [ ] **Step 3: Verify + commit**
+- [ ] **Step 3: Verify + commit + PR**
 
 ```bash
 cd /Users/uranuswch/Dev/sentio_xyz/sentio-node
+git checkout main && git pull && git checkout -b feat/schema-registry-phase-a
+go get github.com/housegate/housegate@<task-1-version> github.com/sentioxyz/arbiter-core@<task-2-version>
 go mod tidy && bazel mod tidy && bazel run //:gazelle
 go build ./... && go test ./config/ ./storageintegrityadapter/ -count=1 && bazel build //...
 git add -A && git commit -m "feat(config): derive storage-integrity schemas from ClickHouse (Phase A)
 
-Replaces column YAML with table_ids; closes the partition_by and
-merge-guard/listen cross-check review findings.
+BREAKING (pre-production, default-off stack): storage_integrity.snode.tables
+column YAML is replaced by table_ids. Also fixes two findings inherited from
+PR #163: the partition_by-required bug goes with the field, and enabled-SI
+now cross-checks housegate.listen and merge_guard.tables coverage.
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
-git push
+git push origin feat/schema-registry-phase-a
+gh pr create --repo sentioxyz/sentio-node --title "feat(config): CH-derived storage-integrity schemas (schema-registry Phase A)" --body "Phase A of housegate docs/superpowers/specs/2026-07-28-schema-registry-design.md. Breaking config change (pre-production stack): snode.tables → table_ids, columns derived from the local ClickHouse, genesis schema_root anchor unchanged. Retires two inherited #163 review findings (partition_by-required; SI/housegate-listen + merge_guard cross-checks)."
 ```
-
-Update the PR #163 description: note the config-shape change and the two review findings it resolves.
 
 ---
 
 ### Task 4: Docs + smoke rehearsal
 
 **Files:**
-- Modify: sentio-node's storage-integrity doc section (wherever PR #163 documents the config; likely README or docs/) + the E2E smoke fixture config
-- Modify: housegate `docs/superpowers/specs/2026-07-28-schema-registry-design.md` — mark Phase A as Implemented with PR links (on the `docs/schema-registry` branch)
+- Modify: sentio-node's storage-integrity doc section (wherever main documents the config; likely README or docs/) + the E2E smoke fixture config
+- Modify: housegate `docs/superpowers/specs/2026-07-28-schema-registry-design.md` — mark Phase A as Implemented with the three PR links (on the `docs/schema-registry` branch)
 
 - [ ] **Step 1: Update the smoke fixture + run it**
 
-The gated E2E smoke (`SENTIO_SI_E2E=1`) config drops the `tables` block for `table_ids`; run the smoke against local arbiter + `da-store --dev` + ClickHouse per its runbook and confirm one INSERT reaches ACK2 with derived schemas (this is the end-to-end proof that derive → root → genesis anchor → staged intake all line up).
+The gated E2E smoke (`SENTIO_SI_E2E=1`) config drops the `tables` block for `table_ids`; run the smoke against local arbiter + `da-store --dev` + ClickHouse per its runbook and confirm one INSERT reaches ACK2 with derived schemas (this is the end-to-end proof that derive → root → genesis anchor → staged intake all line up). Note: housegate PR #110's production wiring touched the intake/status paths and may have changed the smoke's gates (`CompanionStagedIntakeAvailable` state) — read the smoke's current gates on main first and follow them.
 
 - [ ] **Step 2: Onboarding runbook seed**
 
@@ -433,4 +445,5 @@ All three repos: full build+test green (housegate via bazel, others via go+bazel
 - Spec decision 8 Phase A scope check: config→`table_ids` ✅ (Tasks 2–3), columns from `system.columns` ✅ (Task 1), root anchored to genesis unchanged ✅ (explicitly untouched; asserted in Task 1's root-equality test and exercised end-to-end in Task 4).
 - The loader seam signature matches spec §5's `Load(ctx, tableIDs)` in spirit but takes `[]TableRef` — the spec's signature elides the physical mapping the CH source needs; Phase B's network-state loader takes the same refs and ignores `Database`/`Table`. Recorded as a spec-precision note rather than a deviation (the seam is unchanged for consumers).
 - Verifier bootstrap limitation (spec decision 4's known CH-derive gap) is documented, not solved — Phase B's explicit purpose.
-- sentio-node work deliberately lands on the open PR #163 branch: Phase A deletes the `partition_by` field at the center of review finding #4 and adds the two missing cross-checks (findings #14 + tables↔merge_guard), so the review and Phase A converge instead of conflicting.
+- Re-baseline (2026-07-29): the canonical-module-path migration (housegate #108/#109, arbiter-core #4/#5, sentio-node #164) removed every replace/GOPRIVATE complication this plan previously carried — dependency bumps are now plain public `go get`s against tagged versions (housegate v0.7.1 era). sentio-node work moved from "converge with open PR #163" to "fix inherited findings on a fresh branch off main"; the `partition_by` fix is structural (field deleted), the two cross-checks are explicit test cases in Task 3.
+- The #163 findings NOT touched here (`parseStatementID` duplication, slog-adapter review, double `Validate` call, arbiter-core tag hygiene — the last already resolved by the v0.7.1-era release flow) stay on the review backlog — Phase A only claims the ones its config change structurally intersects.
