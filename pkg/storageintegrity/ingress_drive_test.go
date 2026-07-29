@@ -7,14 +7,9 @@ import (
 
 // TestIngressDrivesOrchestratorToAck2 is the one end-to-end P1e runtime assertion
 // PR07 adds: a complete INSERT admission driven through the orchestrator reaches
-// ACK2 with an RCBound lifecycle. It is gated by requireCompanionStagedIntake
-// because a real ingress-to-ACK2 close needs the companion staged-prepare seam;
-// the in-package fakes only let this wiring be verified by temporarily flipping
-// CompanionStagedIntakeAvailable to true (then reverting). It lives in-package so
-// it can reach the fake submitter/preparer used across the intake tests.
+// ACK2 with an RCBound lifecycle. It lives in-package so it can reach the fake
+// submitter/preparer used across the intake tests.
 func TestIngressDrivesOrchestratorToAck2(t *testing.T) {
-	requireCompanionStagedIntake(t)
-
 	prep := &recordingPreparer{
 		prepared:     boundSource(),
 		claimOutcome: ClaimOutcome{Category: OutcomeAccepted, BoundSource: "snode-A"},

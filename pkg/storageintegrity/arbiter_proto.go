@@ -42,6 +42,89 @@ func (s *ArbiterStatementSubmitter) SubmitStatement(ctx context.Context, env Sta
 	return SubmitOutcomeFromSequencedAck(ack), nil
 }
 
+// ArbiterIntakeStatusQuerier adapts ArbiterIngress.GetStatementStatus to the
+// HouseGate intake convergence port.
+type ArbiterIntakeStatusQuerier struct {
+	client pb.ArbiterIngressClient
+}
+
+// NewArbiterIntakeStatusQuerier constructs a read-only intake status querier.
+// The caller owns the underlying gRPC connection.
+func NewArbiterIntakeStatusQuerier(client pb.ArbiterIngressClient) *ArbiterIntakeStatusQuerier {
+	return &ArbiterIntakeStatusQuerier{client: client}
+}
+
+// QuerySubmitStatus reports whether the original SubmitStatement landed.
+// found=true is sufficient even when later FSM processing rejected the
+// statement; that later status does not undo the accepted submit.
+func (q *ArbiterIntakeStatusQuerier) QuerySubmitStatus(ctx context.Context, statementID string) (SubmitOutcome, error) {
+	status, err := q.statementStatus(ctx, statementID)
+	if err != nil {
+		return SubmitOutcome{}, err
+	}
+	if !status.GetFound() {
+		return SubmitOutcome{Category: OutcomeUnspecified, Reason: "arbiter has no statement record"}, nil
+	}
+	return SubmitOutcome{Category: OutcomeExactIdempotent, Reason: firstNonEmpty(status.GetStatus(), "arbiter statement found")}, nil
+}
+
+// QueryClaimStatus reports a landed claim only when Arbiter exposes both the
+// rc_bound bit and the selected source. A found-but-unbound statement remains
+// resend-safe; the statement's later FSM status is not a claim rejection log.
+func (q *ArbiterIntakeStatusQuerier) QueryClaimStatus(ctx context.Context, statementID string) (ClaimOutcome, error) {
+	status, err := q.statementStatus(ctx, statementID)
+	if err != nil {
+		return ClaimOutcome{}, err
+	}
+	if !status.GetFound() || !status.GetRcBound() {
+		return ClaimOutcome{Category: OutcomeUnspecified, Reason: "arbiter has no bound result claim"}, nil
+	}
+	source := strings.TrimSpace(status.GetBoundSource())
+	if source == "" {
+		return ClaimOutcome{}, fmt.Errorf("storageintegrity: arbiter status for %s is rc_bound with empty bound_source", statementID)
+	}
+	return ClaimOutcome{
+		Category:    OutcomeExactIdempotent,
+		BoundSource: source,
+		Reason:      firstNonEmpty(status.GetStatus(), "arbiter result claim bound"),
+	}, nil
+}
+
+func (q *ArbiterIntakeStatusQuerier) statementStatus(ctx context.Context, statementID string) (*pb.StatementStatus, error) {
+	if q == nil || q.client == nil {
+		return nil, fmt.Errorf("storageintegrity: arbiter ingress client is required")
+	}
+	statementID = strings.TrimSpace(statementID)
+	if statementID == "" {
+		return nil, fmt.Errorf("storageintegrity: statement id is required for arbiter status query")
+	}
+	res, err := q.client.GetStatementStatus(ctx, &pb.GetStatementStatusRequest{StatementId: statementID})
+	if err != nil {
+		return nil, err
+	}
+	if res == nil {
+		return nil, fmt.Errorf("storageintegrity: arbiter returned nil StatementStatus for %s", statementID)
+	}
+	rawBoundSource := res.GetBoundSource()
+	boundSource := strings.TrimSpace(rawBoundSource)
+	if rawBoundSource != boundSource {
+		return nil, fmt.Errorf("storageintegrity: arbiter status for %s bound_source has surrounding whitespace", statementID)
+	}
+	if !res.GetFound() {
+		if res.GetStatementSeq() != 0 || strings.TrimSpace(res.GetStatus()) != "" || res.GetRcBound() || boundSource != "" {
+			return nil, fmt.Errorf("storageintegrity: arbiter status for %s is not found with statement data set", statementID)
+		}
+		return res, nil
+	}
+	if res.GetStatementSeq() == 0 {
+		return nil, fmt.Errorf("storageintegrity: arbiter status for %s is found with zero statement_seq", statementID)
+	}
+	if !res.GetRcBound() && boundSource != "" {
+		return nil, fmt.Errorf("storageintegrity: arbiter status for %s has rc_bound=false with non-empty bound_source", statementID)
+	}
+	return res, nil
+}
+
 // ArbiterPayloadStoreWriter adapts the HouseGate ingest PayloadWriter port to
 // arbiter-proto's PayloadStore put RPCs. It validates HouseGate's local
 // payload commitment before any RPC, fetches deployment limits once, then uses

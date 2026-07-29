@@ -8,20 +8,18 @@ This change defines the HouseGate-local orchestration contract that turns a cons
 
 The orchestration is intentionally fail-closed at every boundary that would otherwise let HouseGate return ACK2 without a bound result claim, leave an unrevocable orphan claim, re-execute an unsafe write, or clean candidate parts on a non-terminal outcome.
 
-## Companion Gate Status
+## Production Wiring Status
 
-This design slice is scoped as a blocked skeleton. The companion staged-prepare seam that HouseGate ingress must drive does not exist in the current Sentio Arbiter companion repos:
+HouseGate owns the staged-intake orchestration and exposes source-side ports for
+`PrepareLocalStatement`, `RegisterPreparedClaim`, `AbortPreparedStatement`, and
+prepared-record lookup. The production host owns the selected-SNode adapter:
+HouseGate deliberately does not import `arbiter-core`.
 
-- The design (section 3.2) names three source-side seams — `PrepareLocalStatement`, `RegisterPreparedClaim`, and `AbortPreparedStatement` — that split the P1c one-shot local intake into a durable prepare, a late-bound claim registration, and an exact abort.
-- The companion repos expose only `ArbiterIngress.SubmitStatement` and `SourceClaims.RegisterResultClaim`. SNode local intake is the single-shot in-process `snode.Role.SubmitLocalStatement`, which performs the unsafe write and registers the result claim in one call and is not reachable as an RPC. There is no prepare/register-later/abort split, and no abort/cancel/revoke command exists in the Arbiter command alphabet.
-
-Because HouseGate must not fabricate the Arbiter/SNode protocol, this slice ships:
-
-1. this scoped spec;
-2. the HouseGate-side adapter interfaces (ports) that declare the staged seam HouseGate depends on, plus the pure orchestration types and the orchestrator constructor;
-3. contract tests that pin the orchestration invariants and are explicitly not green while the companion `PrepareLocalStatement` / `RegisterPreparedClaim` / `AbortPreparedStatement` seam is absent.
-
-When the companion seam lands, the adapter is implemented against it and the same contract tests become the executable spec for the real orchestration. No local HTTP or fake gRPC shape is added to make the contract tests pass in the meantime.
+Production construction validates this capability set dynamically. It requires
+a `SourcePreparer` that also implements `PreparedStatementLookup`, an Arbiter
+status-query path, durable journal and payload-spool storage, payload-store
+wiring, and the merge guard. Missing capabilities fail startup closed rather
+than hiding the path behind a repository-version constant.
 
 ## Design Anchors
 
@@ -85,7 +83,12 @@ v1 enforces the P1c serial source-statement constraint with a per-source frontie
 
 ## Non-Scope
 
-This change does not implement the durable intake journal storage, the ClickHouse unsafe write, the payload-store client, the real gRPC clients for the Arbiter and SNode, `_hg_row_id` injection, part LtHash / source-claim-root computation (owned by `payloadexec` / `chexec` / `pkg/lthash`), crash recovery scanning, ACK2 delivery wiring into the ingress plugin, merge-guard startup, or any Arbiter FSM / quorum / manifest / consensus behavior. Those arrive in the later ACK2 gate, unknown-convergence, terminal-abort, and P1e runtime slices, and each depends on the companion staged-prepare seam existing.
+This orchestration contract does not implement the ClickHouse unsafe write,
+`_hg_row_id` injection, part LtHash / source-claim-root computation (owned by
+`arbiter-core` source execution), or Arbiter FSM / quorum / manifest /
+consensus behavior. The production host supplies the source adapter and
+PayloadStore client. HouseGate supplies the durable journal, payload spool,
+recovery, merge-guard startup, Arbiter status adapter, and ACK2 ingress wiring.
 
 ## Verification
 
@@ -101,6 +104,9 @@ Bazel gate:
 bazel test //pkg/storageintegrity:storageintegrity_test //pkg/plugins/storageintegrity:storageintegrity_test
 ```
 
-While the companion C1 staged-prepare seam is absent, the end-to-end intake contract tests (the accepted-submit → ACK2 path) skip closed with a message naming the missing `PrepareLocalStatement` / `RegisterPreparedClaim` / `AbortPreparedStatement` seam, so a red run is never mistaken for a green one.
-
-The HouseGate-local invariants do not depend on the companion seam and are covered by tests that run and pass today: envelope construction and payload-identity equality between the prepare and submit envelopes; outcome classification; the complete-and-exact prepared-binding requirement including the prepared-statement-id check (`preparedConsistencyReject` plus the statement-id gate — a blank binding field or a blank/mismatched prepared statement id is a mismatch); single-prepare under concurrent same-statement calls; reuse of the cached prepared record on a retry after a retryable outcome (no second unsafe write); rejection of a statement-id reuse that presents a different envelope (SQL/target/kind/signer/JWS or payload bytes), with the resume submitting only the original bound envelope; the serial source frontier blocking a different statement until the holder is terminal, the holder's own retry re-entering without deadlock, and a blocked waiter cancelling cleanly without stranding the gate; and the retry-not-record semantics of a failed abort (which also does not re-prepare). None of these assert an accepted ACK2 — the one behavior that genuinely needs the companion seam — so they add real coverage of HouseGate's own coordination and fail-closed logic without claiming a working staged intake. The suite is race-clean (`go test -race`).
+The staged-intake contract tests run normally. They cover the accepted
+submit-to-ACK2 path, envelope and payload identity, status convergence,
+prepared-record recovery, immutable source ordering, single prepare across
+retry and restart, exact abort cleanup, payload leases, and fail-closed runtime
+construction. Production startup still requires the host-owned source adapter
+and the configured external services.

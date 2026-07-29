@@ -22,8 +22,9 @@ type StorageIntegrityMergeGuard interface {
 // StorageIntegrityRuntimeOptions supplies the host-owned C1/P1e runtime ports.
 // HouseGate can adapt arbiter-proto clients into its core ports and can build
 // its durable local journal/spool/merge-guard helpers from config, but the
-// selected-SNode SourcePreparer remains host/companion-owned until that seam
-// exists in arbiter/arbiter-proto.
+// selected-SNode SourcePreparer remains host-owned because HouseGate does not
+// import arbiter-core. Production construction requires that adapter to also
+// implement PreparedStatementLookup.
 type StorageIntegrityRuntimeOptions struct {
 	ArbiterIngressClient pb.ArbiterIngressClient
 	PayloadStoreClient   pb.PayloadStoreClient
@@ -44,6 +45,10 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 	submitter := opts.StatementSubmitter
 	if submitter == nil && opts.ArbiterIngressClient != nil {
 		submitter = sicore.NewArbiterStatementSubmitter(opts.ArbiterIngressClient)
+	}
+	statusQuerier := opts.StatusQuerier
+	if statusQuerier == nil && opts.ArbiterIngressClient != nil {
+		statusQuerier = sicore.NewArbiterIntakeStatusQuerier(opts.ArbiterIngressClient)
 	}
 	payloadWriter := opts.PayloadWriter
 	if payloadWriter == nil && opts.PayloadStoreClient != nil {
@@ -92,6 +97,11 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 	}
 	if opts.SourcePreparer == nil {
 		errs = append(errs, errors.New("storage_integrity.runtime.source_preparer is required"))
+	} else if _, ok := opts.SourcePreparer.(sicore.PreparedStatementLookup); !ok {
+		errs = append(errs, errors.New("storage_integrity.runtime.source_preparer must implement prepared statement lookup"))
+	}
+	if statusQuerier == nil {
+		errs = append(errs, errors.New("storage_integrity.runtime.status_querier is required"))
 	}
 	if payloadWriter == nil {
 		errs = append(errs, errors.New("storage_integrity.runtime.payload_writer is required"))
@@ -119,12 +129,8 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 		Journal:             journal,
 		PayloadLeaseManager: leaseManager,
 	}
-	if opts.StatusQuerier != nil {
-		orch = sicore.NewOrchestratorWithQuerier(submitter, opts.SourcePreparer, opts.StatusQuerier, orchCfg)
-	} else {
-		orch = sicore.NewOrchestrator(submitter, opts.SourcePreparer, orchCfg)
-	}
-	ingress, err := NewStorageIntegrityIngressWithPayloadWriter(orch, mergeGuard, sicore.MaterializerNative, payloadWriter)
+	orch = sicore.NewOrchestratorWithQuerier(submitter, opts.SourcePreparer, statusQuerier, orchCfg)
+	ingress, err := NewStorageIntegrityIngressWithPayloadWriter(orch, mergeGuard, sicore.MaterializerCSV, payloadWriter)
 	if err != nil {
 		return nil, nil, fmt.Errorf("storage_integrity.runtime: %w", err)
 	}

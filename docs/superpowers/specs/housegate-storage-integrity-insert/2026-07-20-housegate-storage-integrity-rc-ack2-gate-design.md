@@ -2,23 +2,22 @@
 
 Date: 2026-07-20
 
+Last updated: 2026-07-29
+
 ## Purpose
 
 This change formalizes the single ACK2 dual gate that decides whether a storage-integrity intake may report success to the client. Building on the staged-prepare orchestration, it factors the ACK2 decision out of the orchestrator's inline branch logic into one pure, exhaustively tested predicate — `Ack2Ready` — that requires all five design-section-3.4 conditions to hold together. The orchestrator's `registerAndFinish` now grants ACK2 in exactly one place, by consulting that gate, so a client can never be told a statement succeeded from a partially satisfied state (for example a completed unsafe write with no bound result claim).
 
 The gate is fail-closed by construction: every one of the five conditions is necessary, a blank sub-field is a mismatch rather than a tolerated wildcard, and the RC's bound source must be present and equal to the source that prepared the local write.
 
-## Companion Gate Status
+## Companion Capability Status
 
-This design slice is scoped as a blocked skeleton, on the same basis as the staged-intake slice. The companion staged-prepare seam that HouseGate ingress must drive — `PrepareLocalStatement` / `RegisterPreparedClaim` / `AbortPreparedStatement`, exposed as an Arbiter/SNode wire RPC — does not exist in the current Sentio Arbiter companion repos (arbiter `03aa035`, arbiter-proto `2fa9263`, re-verified 2026-07-20). SNode local intake is still the single-shot in-process `snode.Role.SubmitLocalStatement`; the proto exposes only `RegisterResultClaim`, with no prepare / register-later / abort split and no abort/cancel command in the Arbiter alphabet.
-
-Because HouseGate must not fabricate the Arbiter/SNode protocol, this slice ships:
-
-1. this scoped spec;
-2. the pure HouseGate-local ACK2 dual gate (`Ack2Inputs` + `Ack2Ready`) and its wiring into the orchestrator's RC-late-binding path;
-3. contract tests. The gate's own unit tests are pure HouseGate logic and run green today. The end-to-end accepted-submit → bound-claim → ACK2 orchestration tests remain gated by `requireCompanionStagedIntake`, so they skip closed while the companion seam is absent and a red (skipped) run is never mistaken for a green one.
-
-When the companion seam lands, the `CompanionStagedIntakeAvailable` constant flips to true, the two adapters are implemented, and the gated orchestration tests — which already exercise the accepted → ACK2 path through the gate — become the executable spec for the real intake. No local HTTP or fake gRPC shape is added to make the gated tests pass in the meantime.
+The staged SNode methods now exist in arbiter-core, and
+`ArbiterIngress.GetStatementStatus` exists in arbiter-proto `v0.4.0`.
+HouseGate's built-in runtime requires a host-owned source adapter with prepared
+lookup and wires the Arbiter submit/status adapters itself. ACK2 orchestration
+tests therefore run normally; production startup relies on dynamic capability
+validation rather than a compile-time companion gate.
 
 ## Design Anchors
 
@@ -78,7 +77,11 @@ The design explicitly forbids acking a statement on the strength of a completed 
 
 ## Non-Scope
 
-This change does not implement the durable intake journal storage, the ClickHouse unsafe write, the payload-store client, the real gRPC clients for the Arbiter and SNode, crash recovery scanning, or the ingress-plugin wiring that delivers ACK2 to the client connection. The full retryable/unknown convergence machinery — query-before-resend for unknown outcomes, frontier accounting across retries, and idempotent re-send bookkeeping — lands in the unknown-convergence slice; terminal-reject abort and exact cleanup lands in the terminal-abort slice; P1e runtime wiring and E2E lands in the runtime slice. Each of those depends on the companion staged-prepare seam existing. This slice is limited to the ACK2 dual-gate predicate, its integration into the existing orchestration path, and the narrow RC-outcome-classification ordering fix that path requires (a retryable/unknown RC must not be aborted); it does not add the broader query-convergence behavior that the staged-intake orchestrator already carries for the submit path.
+The ACK2 gate itself remains limited to the pure dual-gate predicate and its
+orchestration decision point. Durable journal recovery, payload-store clients,
+query-before-resend convergence, exact abort, and runtime wiring are implemented
+by their corresponding slices. ClickHouse unsafe execution remains behind the
+host-owned source adapter.
 
 ## Verification
 
@@ -95,4 +98,7 @@ Bazel gate:
 bazel test //pkg/storageintegrity:storageintegrity_test //pkg/plugins/storageintegrity:storageintegrity_test
 ```
 
-The `Ack2Ready` unit tests are pure HouseGate-local logic and run green today: the single all-conditions-present positive case; the necessity of each of the five conditions (each dropped or invalidated in turn withholds ACK2 with a reason); exact-idempotent equivalence on both gates; the non-empty-and-equal bound-source invariant; the contradictory-input regression (`TestAck2Gate_UsesAuthoritativeClaimBoundSource` — a claim actually bound to a different source than prepared withholds ACK2, since the gate reads `Claim.BoundSource` directly); and the unsafe-write-alone safety property. The end-to-end accepted → ACK2 orchestration tests stay gated by `requireCompanionStagedIntake` and skip closed while the companion `PrepareLocalStatement` / `RegisterPreparedClaim` / `AbortPreparedStatement` seam is absent, so a red run is never mistaken for a green one; among them, `TestOrchestrate_ResumeFromSubmitAcceptedReachesAck2` pins the resume path (accepted submit, first RC retryable, retry converges to ACK2 through the gate without re-running the unsafe write) and guards the RC-ordering fix, and `TestOrchestrate_ExactIdempotentSubmitOutcomePreserved` pins that an exact-idempotent submit acceptance is carried through the intake result verbatim — on both the fresh and resume paths — rather than flattened to a fresh `Accepted`. The existing `TestOrchestrate_CommittedSourceMismatchFailsClosed` still fails closed under the reordered checks. The suite is race-clean.
+The `Ack2Ready` unit tests and accepted-to-ACK2 orchestration tests run without
+skips. They include resume after retryable RC, exact-idempotent outcome
+preservation, committed-source mismatch, and unsafe-write-alone rejection. The
+suite remains race-clean.

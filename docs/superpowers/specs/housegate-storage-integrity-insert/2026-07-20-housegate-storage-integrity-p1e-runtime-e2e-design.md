@@ -153,9 +153,9 @@ The hardening regression set is implemented by these exact tests:
 - `TestMergeSupervisorRunPeriodicallyReasserts`
 - `TestStorageIntegrityIngressRejectsAdmissionWhenMergeHealthClosed`
 - `TestBuildStorageIntegrityRuntimeRequiresPreparedLookup`
-- `TestBuildStorageIntegrityRuntimeAutoWiresStatusQuerier`
+- `TestBuildServer_StorageIntegrityRuntimeAutoWiresArbiterStatusQuerier`
 - `TestStorageIntegrityIngressRejectsWrongMaterializerBeforePayloadPut`
-- `TestBuildServer_StorageIntegrityRuntimeRequiresCSVMaterializer`
+- `TestBuildServer_StorageIntegrityRuntimeRequiresCSVPayloadMaterializer`
 - `TestStartStorageIntegrityRuntimeRecoversAfterInitialMergeAssert`
 
 The orchestration contract tests run normally rather than skipping behind a

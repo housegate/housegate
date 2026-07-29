@@ -13,22 +13,6 @@ import (
 	"github.com/housegate/housegate/pkg/replay"
 )
 
-// CompanionStagedIntakeAvailable reports whether the Sentio companion topology
-// exposes the staged-prepare seam this orchestrator drives: the SNode-side
-// PrepareLocalStatement / RegisterPreparedClaim / AbortPreparedStatement split
-// described in design section 3.2.
-//
-// It is false today. HouseGate has an ArbiterIngress.SubmitStatement adapter,
-// but the companion repos still expose SNode local intake as the single-shot
-// in-process snode.Role.SubmitLocalStatement, which performs the unsafe write
-// and registers the result claim in one call and cannot be split into prepare /
-// register-later / abort. Until that selected-SNode seam and status-query seam
-// land, no complete real adapter set exists and the end-to-end ACK2 intake path
-// is not wired. This constant is the single, honest gate that flips to true when
-// the missing companion seams are implemented; the orchestration contract tests
-// read it so a red run is never mistaken for green.
-const CompanionStagedIntakeAvailable = false
-
 // Kind mirrors the storage-integrity statement kind admitted by the ingress
 // plugin. It intentionally uses the same string values as
 // pkg/plugins/storageintegrity so the two packages agree without the core
@@ -373,10 +357,8 @@ type StatementSubmitter interface {
 }
 
 // SourcePreparer is the selected-SNode staged-prepare port (design section 3.2).
-// The real implementation drives the companion PrepareLocalStatement /
-// RegisterPreparedClaim / AbortPreparedStatement seam, which does not exist yet;
-// see CompanionStagedIntakeAvailable. HouseGate must never fabricate this seam
-// with a local mock shape.
+// arbiter-core's SNode role exposes the corresponding methods; the embedding
+// host owns the type-mapping adapter so HouseGate does not import arbiter-core.
 type SourcePreparer interface {
 	// PrepareLocalStatement durably stages the local unsafe write on the
 	// selected source and returns the exact candidate inventory and RC inputs.
@@ -399,13 +381,14 @@ type SourcePreparer interface {
 	AbortPreparedStatement(ctx context.Context, statementID string, parts []CandidatePart, reason string) error
 }
 
-// PreparedStatementLookup is the optional source-side recovery read used after
-// a restart finds a journal record that proves the statement existed locally
-// but does not prove whether PrepareLocalStatement had already returned a
-// durable unsafe write. Implementations must be read-only: found=false means no
-// prepared unsafe write exists for that statement id, so a fresh prepare is
-// safe; found=true returns the exact durable PreparedLocalResult to cache before
-// resuming submit/RC.
+// PreparedStatementLookup is the source-side recovery read used after a restart
+// finds a journal record that proves the statement existed locally but does not
+// prove whether PrepareLocalStatement had already returned a durable unsafe
+// write. Implementations must be read-only: found=false means no prepared unsafe
+// write exists for that statement id, so a fresh prepare is safe; found=true
+// returns the exact durable PreparedLocalResult to cache before resuming
+// submit/RC. The core port is discovered by type assertion; production runtime
+// assembly requires SourcePreparer to implement it.
 type PreparedStatementLookup interface {
 	LookupPreparedStatement(ctx context.Context, statementID string) (PreparedLocalResult, bool, error)
 }

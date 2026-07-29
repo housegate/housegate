@@ -4,7 +4,10 @@
 
 **Goal:** Make HouseGate's local P1 runtime crash-safe and self-recovering while keeping production disabled until the deployed Arbiter/Proto companion contract exists.
 
-**Status:** Implemented on `fix/housegate-p1-runtime-recovery` on 2026-07-28. Production remains fail-closed while `CompanionStagedIntakeAvailable == false`.
+**Status:** Implemented on `fix/housegate-p1-runtime-recovery` on 2026-07-28.
+The static companion gate recorded below was superseded on 2026-07-29 by
+dynamic `SourcePreparer`/`PreparedStatementLookup`/status-query validation in
+the P1e runtime design.
 
 **Architecture:** Harden the existing orchestrator with durable, immutable source ordering and journal-first terminal transitions. Add two focused supervisors: a core payload-lease manager that redrives content-addressed puts from spool bytes, and a root runtime merge-health supervisor that continuously reasserts STOP MERGES and gates admission. Startup synchronously drains durable intake recovery before listeners start.
 
@@ -13,7 +16,9 @@
 ## Global Constraints
 
 - Do not modify `arbiter` or `arbiter-proto`.
-- Do not flip `CompanionStagedIntakeAvailable` while the real staged-source and payload-profile contracts are absent.
+- Historical note: the implementation originally retained
+  `CompanionStagedIntakeAvailable`; the 2026-07-29 production wiring removed it
+  in favor of dynamic capability validation.
 - Never repeat `PrepareLocalStatement` after an ambiguous result without a positive source-side `found=false` lookup.
 - Never release a source frontier before durable `RCBound` or `Cleaned`.
 - Payload lease refresh must preserve the original non-empty `payload_ref`.
@@ -332,15 +337,19 @@ git commit -m "feat(storageintegrity): continuously gate merge health"
 
 ### Task 5: Production Companion Capability Gate
 
+> Historical implementation record: this compile-time gate was removed after
+> arbiter-core and arbiter-proto published the required capabilities. Production
+> now fails closed by validating the injected interfaces.
+
 **Files:**
 - Modify: `build.go`
 - Modify: `storage_integrity_runtime.go`
 - Modify: `build_test.go`
 - Modify: `pkg/storageintegrity/intake.go`
 
-**Interfaces:**
-- Preserves: `CompanionStagedIntakeAvailable == false`
-- Produces: deterministic build error containing `companion staged-intake contract unavailable`
+**Historical interfaces (superseded):**
+- Preserved: `CompanionStagedIntakeAvailable == false`
+- Produced: deterministic build error containing `companion staged-intake contract unavailable`
 
 - [x] **Step 1: Add production-gate RED test**
 
@@ -376,7 +385,9 @@ git commit -m "fix(storageintegrity): enforce companion runtime gate"
 
 - [x] **Step 1: Update verification names and mark plan tasks complete**
 
-Replace planned test names with the exact implemented names and make the document distinguish green HouseGate component tests from C1-gated E2E tests.
+Replace planned test names with the exact implemented names and distinguish
+HouseGate component tests from production tests that require the host-supplied
+capability set.
 
 - [x] **Step 2: Run formatting and focused tests**
 
@@ -398,7 +409,10 @@ Record Docker-only failures separately; do not describe an unavailable integrati
 
 - [x] **Step 4: Review the final diff against the spec**
 
-Confirm no production code flips the companion gate, no terminal state is visible before journal durability, no zero ordinal can reorder multiple recovered records, lease refresh cannot replace payload ref, and merge-health failure blocks admission.
+Confirm production construction validates the full capability set, no terminal
+state is visible before journal durability, no zero ordinal can reorder
+multiple recovered records, lease refresh cannot replace payload ref, and
+merge-health failure blocks admission.
 
 - [x] **Step 5: Commit final docs or cleanup**
 
