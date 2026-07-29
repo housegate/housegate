@@ -526,7 +526,7 @@ func TestOnQueryComplete_ClearsStash(t *testing.T) {
 	}
 }
 
-func TestOnQueryComplete_DispatchesAfterStatementSuccess(t *testing.T) {
+func TestOnQuerySuccess_DispatchesAfterStatementSuccess(t *testing.T) {
 	obs := &successObserver{
 		fakeObserver: fakeObserver{types: []sqlmeta.StatementType{sqlmeta.StatementTypeCreateTable}},
 		success:      make(chan Event, 1),
@@ -537,7 +537,7 @@ func TestOnQueryComplete_DispatchesAfterStatementSuccess(t *testing.T) {
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
 		t.Fatalf("OnQuery: %v", err)
 	}
-	p.OnQueryComplete(context.Background(), qctx.Session)
+	p.OnQuerySuccess(context.Background(), qctx.Session, qctx.Query.ID)
 
 	select {
 	case got := <-obs.success:
@@ -552,7 +552,7 @@ func TestOnQueryComplete_DispatchesAfterStatementSuccess(t *testing.T) {
 	}
 }
 
-func TestOnQueryComplete_DoesNotDispatchSuccessAfterException(t *testing.T) {
+func TestOnQuerySuccess_MismatchedQueryIDDoesNotDispatch(t *testing.T) {
 	obs := &successObserver{
 		fakeObserver: fakeObserver{types: []sqlmeta.StatementType{sqlmeta.StatementTypeCreateTable}},
 		success:      make(chan Event, 1),
@@ -563,14 +563,35 @@ func TestOnQueryComplete_DoesNotDispatchSuccessAfterException(t *testing.T) {
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
 		t.Fatalf("OnQuery: %v", err)
 	}
-	if err := p.OnException(context.Background(), qctx.Session, &chproto.Exception{Code: 1}); err != nil {
-		t.Fatalf("OnException: %v", err)
+
+	p.OnQuerySuccess(context.Background(), qctx.Session, "different-query")
+
+	select {
+	case got := <-obs.success:
+		t.Fatalf("AfterStatementSuccess dispatched for mismatched query: %+v", got)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if got := stashedEvent(qctx.Session); got != nil {
+		t.Fatalf("mismatched success did not atomically consume stash: %+v", got)
+	}
+}
+
+func TestOnQueryComplete_DoesNotDispatchStatementSuccess(t *testing.T) {
+	obs := &successObserver{
+		fakeObserver: fakeObserver{types: []sqlmeta.StatementType{sqlmeta.StatementTypeCreateTable}},
+		success:      make(chan Event, 1),
+	}
+	p := NewPlugin([]Observer{obs})
+	qctx := newQctx(sqlmeta.StatementTypeCreateTable,
+		[]sqlmeta.AccessedTable{tableEntry("orders", "t", "orders")})
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
 	}
 	p.OnQueryComplete(context.Background(), qctx.Session)
 
 	select {
 	case got := <-obs.success:
-		t.Fatalf("AfterStatementSuccess dispatched after exception: %+v", got)
+		t.Fatalf("AfterStatementSuccess dispatched from generic cleanup: %+v", got)
 	case <-time.After(100 * time.Millisecond):
 	}
 }
@@ -583,6 +604,7 @@ func TestOnQueryComplete_PlainObserverDoesNotDispatchSuccess(t *testing.T) {
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
 		t.Fatalf("OnQuery: %v", err)
 	}
+	p.OnQuerySuccess(context.Background(), qctx.Session, qctx.Query.ID)
 	p.OnQueryComplete(context.Background(), qctx.Session)
 	if got := stashedEvent(qctx.Session); got != nil {
 		t.Fatalf("stash remained after completion: %+v", got)
@@ -599,6 +621,7 @@ func TestOnQueryComplete_NonGatedStatementDoesNotDispatchSuccess(t *testing.T) {
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
 		t.Fatalf("OnQuery: %v", err)
 	}
+	p.OnQuerySuccess(context.Background(), qctx.Session, qctx.Query.ID)
 	p.OnQueryComplete(context.Background(), qctx.Session)
 
 	select {

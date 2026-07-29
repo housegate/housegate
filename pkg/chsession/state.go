@@ -128,10 +128,6 @@ type SessionState struct {
 	// chsession → commitgate import dependency. Plugins that need to read
 	// it cast to *commitgate.Event.
 	CommitGateEvent any
-	// CommitGateEventFailed is set when upstream returned an Exception for
-	// CommitGateEvent. It prevents the completion hook from treating the
-	// subsequent OnQueryComplete as a successful EndOfStream.
-	CommitGateEventFailed bool
 
 	// PeerServerHelloRaw holds the raw on-wire bytes of the ServerHello
 	// received from the peer during RebindToPeer. Written once by
@@ -206,15 +202,14 @@ type SessionStateSnapshot struct {
 	IsInternalPort      bool
 	IsForwarding        bool
 
-	LastQueryID           string
-	LastClientInfo        *chproto.ClientInfo
-	LastRewriteArgs       any
-	HasActiveRewrite      bool
-	CommitGateEvent       any
-	CommitGateEventFailed bool
-	Maintenance           bool
-	PlatformOperator      bool
-	IsDriver              bool
+	LastQueryID      string
+	LastClientInfo   *chproto.ClientInfo
+	LastRewriteArgs  any
+	HasActiveRewrite bool
+	CommitGateEvent  any
+	Maintenance      bool
+	PlatformOperator bool
+	IsDriver         bool
 }
 
 // Snapshot returns a copy of the state under a read lock. Settings map is
@@ -223,34 +218,33 @@ func (s *SessionState) Snapshot() SessionStateSnapshot {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	snap := SessionStateSnapshot{
-		ClientHostname:        s.ClientHostname,
-		ClientVersion:         s.ClientVersion,
-		ClientRevision:        s.ClientRevision,
-		ServerDisplayName:     s.ServerDisplayName,
-		Timezone:              s.Timezone,
-		ChunkedRecv:           s.ChunkedRecv,
-		ChunkedSend:           s.ChunkedSend,
-		AuthenticatedUser:     s.AuthenticatedUser,
-		MappedUser:            s.MappedUser,
-		MappedPassword:        s.MappedPassword,
-		Identity:              s.Identity,
-		Database:              s.Database,
-		LogicalDatabase:       s.LogicalDatabase,
-		RouteTarget:           s.RouteTarget,
-		IsPeerTrusted:         s.IsPeerTrusted,
-		PeerAddress:           s.PeerAddress,
-		IsForwardedFromPeer:   s.IsForwardedFromPeer,
-		IsInternalPort:        s.IsInternalPort,
-		IsForwarding:          s.IsForwarding,
-		LastQueryID:           s.LastQueryID,
-		LastClientInfo:        s.LastClientInfo,
-		LastRewriteArgs:       s.LastRewriteArgs,
-		HasActiveRewrite:      s.HasActiveRewrite,
-		CommitGateEvent:       s.CommitGateEvent,
-		CommitGateEventFailed: s.CommitGateEventFailed,
-		Maintenance:           s.maintenance,
-		PlatformOperator:      s.platformOperator,
-		IsDriver:              s.isDriver,
+		ClientHostname:      s.ClientHostname,
+		ClientVersion:       s.ClientVersion,
+		ClientRevision:      s.ClientRevision,
+		ServerDisplayName:   s.ServerDisplayName,
+		Timezone:            s.Timezone,
+		ChunkedRecv:         s.ChunkedRecv,
+		ChunkedSend:         s.ChunkedSend,
+		AuthenticatedUser:   s.AuthenticatedUser,
+		MappedUser:          s.MappedUser,
+		MappedPassword:      s.MappedPassword,
+		Identity:            s.Identity,
+		Database:            s.Database,
+		LogicalDatabase:     s.LogicalDatabase,
+		RouteTarget:         s.RouteTarget,
+		IsPeerTrusted:       s.IsPeerTrusted,
+		PeerAddress:         s.PeerAddress,
+		IsForwardedFromPeer: s.IsForwardedFromPeer,
+		IsInternalPort:      s.IsInternalPort,
+		IsForwarding:        s.IsForwarding,
+		LastQueryID:         s.LastQueryID,
+		LastClientInfo:      s.LastClientInfo,
+		LastRewriteArgs:     s.LastRewriteArgs,
+		HasActiveRewrite:    s.HasActiveRewrite,
+		CommitGateEvent:     s.CommitGateEvent,
+		Maintenance:         s.maintenance,
+		PlatformOperator:    s.platformOperator,
+		IsDriver:            s.isDriver,
 	}
 	if len(s.Settings) > 0 {
 		snap.Settings = make(map[string]chproto.Setting, len(s.Settings))
@@ -446,18 +440,19 @@ func (s *SessionState) ClearActiveRewrite() {
 func (s *SessionState) SetCommitGateEvent(ev any) {
 	s.mu.Lock()
 	s.CommitGateEvent = ev
-	s.CommitGateEventFailed = false
 	s.mu.Unlock()
 }
 
-// MarkCommitGateEventFailed records that ClickHouse rejected the stashed
-// commitgate Event.
-func (s *SessionState) MarkCommitGateEventFailed() {
+// TakeCommitGateEvent atomically removes and returns the in-flight commitgate
+// Event. The success path uses this before exposing EndOfStream to the client,
+// preventing the next query from replacing the event between observation and
+// asynchronous dispatch.
+func (s *SessionState) TakeCommitGateEvent() any {
 	s.mu.Lock()
-	if s.CommitGateEvent != nil {
-		s.CommitGateEventFailed = true
-	}
+	ev := s.CommitGateEvent
+	s.CommitGateEvent = nil
 	s.mu.Unlock()
+	return ev
 }
 
 // ClearCommitGateEvent drops the stashed commitgate Event. Called by
@@ -466,7 +461,6 @@ func (s *SessionState) MarkCommitGateEventFailed() {
 func (s *SessionState) ClearCommitGateEvent() {
 	s.mu.Lock()
 	s.CommitGateEvent = nil
-	s.CommitGateEventFailed = false
 	s.mu.Unlock()
 }
 

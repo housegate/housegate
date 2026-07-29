@@ -26,6 +26,17 @@ type QueryPlugin interface {
 	OnQuery(ctx context.Context, qctx *QueryContext) error
 }
 
+// QuerySuccessPlugin participates in the OnQuerySuccess chain.
+//
+// OnQuerySuccess is intentionally narrower than OnQueryComplete: Relay invokes
+// it only after observing an isolated upstream EndOfStream packet. Rejections,
+// forwarding failures, synthetic success, and Exception cleanup never enter
+// this chain. The hook is best-effort because the transparent upstream relay
+// cannot prove a boundary when EndOfStream is coalesced with other bytes.
+type QuerySuccessPlugin interface {
+	OnQuerySuccess(ctx context.Context, sess chsession.Session, queryID string)
+}
+
 // StrictQueryDecodePlugin opts a query plugin into fail-closed handling when
 // Relay cannot decode a client Query packet. Plugins that authenticate or
 // authorize SQL must enable this policy to avoid the legacy raw-splice fallback.

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ClickHouse/ch-go/proto"
@@ -43,6 +44,10 @@ type Relay struct {
 	hooks  plugin.Hooks
 	obs    PacketObserver
 	dialer UpstreamDialer
+
+	queryMu       sync.Mutex
+	activeQuery   bool
+	activeQueryID string
 }
 
 // UpstreamDialer dials and returns the codec for this session's upstream.
@@ -61,6 +66,35 @@ type UpstreamDialer func(ctx context.Context, sess chsession.Session) (*chproto.
 // metrics are not emitted.
 func NewRelay(sess chsession.Session, hooks plugin.Hooks, obs PacketObserver, dialer UpstreamDialer) *Relay {
 	return &Relay{sess: sess, hooks: hooks, obs: obs, dialer: dialer}
+}
+
+func (r *Relay) currentActiveQuery() (string, bool) {
+	r.queryMu.Lock()
+	defer r.queryMu.Unlock()
+	return r.activeQueryID, r.activeQuery
+}
+
+func (r *Relay) beginActiveQuery(queryID string) bool {
+	r.queryMu.Lock()
+	defer r.queryMu.Unlock()
+	if r.activeQuery {
+		return false
+	}
+	r.activeQuery = true
+	r.activeQueryID = queryID
+	return true
+}
+
+func (r *Relay) takeActiveQuery() (string, bool) {
+	r.queryMu.Lock()
+	defer r.queryMu.Unlock()
+	if !r.activeQuery {
+		return "", false
+	}
+	queryID := r.activeQueryID
+	r.activeQuery = false
+	r.activeQueryID = ""
+	return queryID, true
 }
 
 // handshake performs the three-phase ClickHouse handshake:
@@ -395,6 +429,11 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 				r.writeExceptionToClient(ctx, err)
 				return err
 			}
+			if activeQueryID, active := r.currentActiveQuery(); active {
+				err := fmt.Errorf("client sent query %q before receiving terminal response for query %q", q.ID, activeQueryID)
+				r.writeExceptionToClient(ctx, err)
+				return err
+			}
 			if err := r.hooks.OnQuery(ctx, qctx); err != nil {
 				r.writeExceptionToClient(ctx, err)
 				// Chain rejected the query — its lifecycle ends here.
@@ -437,7 +476,15 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 			// compression mode declared by the client Query.
 			qctx.Query.Compression = clientCompression
 			up.SetCompression(clientCompression)
+			if !r.beginActiveQuery(q.ID) {
+				err := fmt.Errorf("query %q raced with another active upstream query", q.ID)
+				r.writeExceptionToClient(ctx, err)
+				r.hooks.OnQueryAbort(ctx, qctx)
+				r.hooks.OnQueryComplete(ctx, r.sess)
+				return err
+			}
 			if err := up.WriteQuery(qctx.Query); err != nil {
+				r.takeActiveQuery()
 				// Forwarding failed — fire OnQueryComplete so per-query
 				// resources held by plugins are released before we tear down.
 				r.hooks.OnQueryAbort(ctx, qctx)
@@ -768,7 +815,8 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 			// first byte is mid-packet payload — detectServerPacketType
 			// returns "unknown" for those and we simply don't emit.
 			first := buf[0]
-			isBoundary := first == byte(chproto.ServerEndOfStreamCode) ||
+			isEndOfStream := first == byte(chproto.ServerEndOfStreamCode)
+			isBoundary := isEndOfStream ||
 				first == byte(chproto.ServerExceptionCode)
 
 			_, logger := log.FromContext(ctx)
@@ -795,27 +843,36 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 			// still sees something — the OnException hook is then
 			// silently skipped, matching the existing best-effort
 			// contract documented above.
-			handled := false
+			var rewrittenException *chproto.Exception
 			if first == byte(chproto.ServerExceptionCode) {
 				if exc := tryDecodeException(buf[:n], up.Revision()); exc != nil {
 					if err := r.hooks.OnException(ctx, r.sess, exc); err != nil {
 						logger.Warne(err, "OnException hook returned error")
 					}
-					if werr := client.WriteException(exc); werr != nil {
-						return fmt.Errorf("write rewritten exception to client: %w", werr)
-					}
-					handled = true
-				}
-			}
-			if !handled {
-				if _, werr := client.Conn().Write(buf[:n]); werr != nil {
-					return fmt.Errorf("splice upstream→client: %w", werr)
+					rewrittenException = exc
 				}
 			}
 
 			if isBoundary {
 				r.sess.State().ClearActiveRewrite()
+				queryID, active := r.takeActiveQuery()
+				if active && isEndOfStream && isIsolatedEndOfStream(buf[:n]) {
+					r.hooks.OnQuerySuccess(ctx, r.sess, queryID)
+				}
 				r.hooks.OnQueryComplete(ctx, r.sess)
+			}
+
+			// Terminal hooks run before the terminal bytes are exposed to the
+			// client. A well-behaved client may issue its next query as soon as
+			// it reads EndOfStream/Exception; ordering the atomic event take and
+			// cleanup first prevents that query from replacing the completed
+			// query's session state.
+			if rewrittenException != nil {
+				if werr := client.WriteException(rewrittenException); werr != nil {
+					return fmt.Errorf("write rewritten exception to client: %w", werr)
+				}
+			} else if _, werr := client.Conn().Write(buf[:n]); werr != nil {
+				return fmt.Errorf("splice upstream→client: %w", werr)
 			}
 		}
 		if err != nil {
@@ -840,6 +897,15 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 			return fmt.Errorf("upstream read: %w", err)
 		}
 	}
+}
+
+// isIsolatedEndOfStream recognizes the only upstream success boundary Relay
+// can establish without parsing the entire server packet stream: a read that
+// contains exactly the one-byte EndOfStream packet. A chunk merely starting
+// with 0x05 is still sufficient for best-effort cleanup, but it is not safe
+// enough for durable post-success work because a raw read may start mid-packet.
+func isIsolatedEndOfStream(raw []byte) bool {
+	return len(raw) == 1 && raw[0] == byte(chproto.ServerEndOfStreamCode)
 }
 
 // upstreamAddr returns the remote address of the codec's underlying

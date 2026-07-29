@@ -28,6 +28,7 @@ import (
 //     withheld from ordinary upstream.
 //   - OnQueryAbort — when Relay rejects a query lifecycle, including after a
 //     Query or earlier Data packets have already reached upstream.
+//   - OnQuerySuccess — after an isolated upstream EndOfStream packet.
 //   - OnQueryComplete — once per Query when its lifecycle ends
 //     (rejected, forward failed, or upstream produced EndOfStream /
 //     Exception).
@@ -49,6 +50,7 @@ type Hooks interface {
 	OnQueryInputCompleteStrict(ctx context.Context, qctx *QueryContext) error
 	OnQueryInputComplete(ctx context.Context, qctx *QueryContext)
 	OnQueryAbort(ctx context.Context, qctx *QueryContext)
+	OnQuerySuccess(ctx context.Context, sess chsession.Session, queryID string)
 	OnQueryComplete(ctx context.Context, sess chsession.Session)
 	OnClose(sess chsession.Session)
 	OnDisconnect(sess chsession.Session)
@@ -86,6 +88,8 @@ func (NoopHooks) OnQueryInputCompleteStrict(context.Context, *QueryContext) erro
 func (NoopHooks) OnQueryInputComplete(context.Context, *QueryContext) {}
 
 func (NoopHooks) OnQueryAbort(context.Context, *QueryContext) {}
+
+func (NoopHooks) OnQuerySuccess(context.Context, chsession.Session, string) {}
 
 func (NoopHooks) OnQueryComplete(context.Context, chsession.Session) {}
 

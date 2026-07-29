@@ -269,6 +269,7 @@ type exceptionRecordingHooks struct {
 	plugin.NoopHooks
 	mu             sync.Mutex
 	exceptions     []*chproto.Exception
+	querySuccesses int
 	queryCompletes int
 }
 
@@ -277,6 +278,12 @@ func (h *exceptionRecordingHooks) OnException(_ context.Context, _ chsession.Ses
 	defer h.mu.Unlock()
 	h.exceptions = append(h.exceptions, exc)
 	return nil
+}
+
+func (h *exceptionRecordingHooks) OnQuerySuccess(_ context.Context, _ chsession.Session, _ string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.querySuccesses++
 }
 
 func (h *exceptionRecordingHooks) OnQueryComplete(_ context.Context, _ chsession.Session) {
@@ -361,6 +368,176 @@ func TestRelay_UpstreamException_FiresOnException(t *testing.T) {
 	if hooks.queryCompletes != 1 {
 		t.Errorf("OnQueryComplete fired %d times, want 1", hooks.queryCompletes)
 	}
+	if hooks.querySuccesses != 0 {
+		t.Errorf("OnQuerySuccess fired %d times for Exception, want 0", hooks.querySuccesses)
+	}
+}
+
+func TestRelay_UpstreamIsolatedEndOfStream_FiresQuerySuccess(t *testing.T) {
+	hooks := runRawUpstreamChunk(t, []byte{byte(chproto.ServerEndOfStreamCode)})
+
+	hooks.mu.Lock()
+	defer hooks.mu.Unlock()
+	if hooks.querySuccesses != 1 {
+		t.Errorf("OnQuerySuccess fired %d times, want 1", hooks.querySuccesses)
+	}
+	if hooks.queryCompletes != 1 {
+		t.Errorf("OnQueryComplete fired %d times, want 1", hooks.queryCompletes)
+	}
+	if len(hooks.exceptions) != 0 {
+		t.Errorf("OnException fired %d times for EndOfStream, want 0", len(hooks.exceptions))
+	}
+}
+
+type blockingQuerySuccessHooks struct {
+	plugin.NoopHooks
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (h *blockingQuerySuccessHooks) OnQuerySuccess(context.Context, chsession.Session, string) {
+	close(h.entered)
+	<-h.release
+}
+
+func TestRelay_QuerySuccessRunsBeforeEndOfStreamIsExposed(t *testing.T) {
+	clientProxy, proxyClient := net.Pipe()
+	upstreamProxy, proxyUpstream := net.Pipe()
+	defer clientProxy.Close()
+	defer upstreamProxy.Close()
+
+	sess := chsession.New(1, proxyClient)
+	up := chproto.NewCodec(proxyUpstream, chproto.DirToUpstream)
+	up.SetRevision(54453)
+	if err := sess.BindUpstream(context.Background(), up); err != nil {
+		t.Fatalf("BindUpstream: %v", err)
+	}
+
+	hooks := &blockingQuerySuccessHooks{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	r := &Relay{sess: sess, hooks: hooks}
+	if !r.beginActiveQuery("qid-order") {
+		t.Fatal("beginActiveQuery unexpectedly reported an active query")
+	}
+
+	upstreamDone := make(chan struct{})
+	go func() {
+		_, _ = upstreamProxy.Write([]byte{byte(chproto.ServerEndOfStreamCode)})
+		_ = upstreamProxy.Close()
+		close(upstreamDone)
+	}()
+	relayDone := make(chan error, 1)
+	go func() {
+		relayDone <- r.upstreamToClient(context.Background())
+	}()
+
+	select {
+	case <-hooks.entered:
+	case <-time.After(time.Second):
+		t.Fatal("OnQuerySuccess did not run")
+	}
+
+	_ = clientProxy.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+	var got [1]byte
+	if _, err := clientProxy.Read(got[:]); err == nil {
+		t.Fatal("EndOfStream reached client before OnQuerySuccess returned")
+	} else if netErr, ok := err.(net.Error); !ok || !netErr.Timeout() {
+		t.Fatalf("client read before success release = %v, want timeout", err)
+	}
+	_ = clientProxy.SetReadDeadline(time.Time{})
+
+	close(hooks.release)
+	if _, err := io.ReadFull(clientProxy, got[:]); err != nil {
+		t.Fatalf("read EndOfStream after success release: %v", err)
+	}
+	if got[0] != byte(chproto.ServerEndOfStreamCode) {
+		t.Fatalf("client byte = %d, want EndOfStream", got[0])
+	}
+
+	select {
+	case err := <-relayDone:
+		if err != nil && !errors.Is(err, io.EOF) {
+			t.Fatalf("upstreamToClient: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("upstreamToClient did not finish")
+	}
+	<-upstreamDone
+}
+
+func TestRelay_UpstreamMalformedException_DoesNotFireQuerySuccess(t *testing.T) {
+	// The leading Exception type is enough for terminal cleanup, but the
+	// missing body makes decoding impossible. This is the regression where
+	// OnException used not to mark failure and generic completion was
+	// incorrectly interpreted as success by commitgate.
+	hooks := runRawUpstreamChunk(t, []byte{byte(chproto.ServerExceptionCode)})
+
+	hooks.mu.Lock()
+	defer hooks.mu.Unlock()
+	if hooks.querySuccesses != 0 {
+		t.Errorf("OnQuerySuccess fired %d times for malformed Exception, want 0", hooks.querySuccesses)
+	}
+	if hooks.queryCompletes != 1 {
+		t.Errorf("OnQueryComplete fired %d times, want 1", hooks.queryCompletes)
+	}
+	if len(hooks.exceptions) != 0 {
+		t.Errorf("OnException fired %d times for undecodable Exception, want 0", len(hooks.exceptions))
+	}
+}
+
+func TestIsIsolatedEndOfStream_RejectsAmbiguousChunks(t *testing.T) {
+	if !isIsolatedEndOfStream([]byte{byte(chproto.ServerEndOfStreamCode)}) {
+		t.Fatal("single-byte EndOfStream was not recognized")
+	}
+	if isIsolatedEndOfStream([]byte{byte(chproto.ServerEndOfStreamCode), 0x01}) {
+		t.Fatal("coalesced chunk was treated as verified EndOfStream")
+	}
+	if isIsolatedEndOfStream([]byte{byte(chproto.ServerExceptionCode)}) {
+		t.Fatal("Exception was treated as EndOfStream")
+	}
+}
+
+func runRawUpstreamChunk(t *testing.T, raw []byte) *exceptionRecordingHooks {
+	t.Helper()
+	clientProxy, proxyClient := net.Pipe()
+	upstreamProxy, proxyUpstream := net.Pipe()
+	defer clientProxy.Close()
+	defer upstreamProxy.Close()
+
+	go func() {
+		sink := make([]byte, 64)
+		for {
+			if _, err := clientProxy.Read(sink); err != nil {
+				return
+			}
+		}
+	}()
+
+	sess := chsession.New(1, proxyClient)
+	up := chproto.NewCodec(proxyUpstream, chproto.DirToUpstream)
+	up.SetRevision(54453)
+	if err := sess.BindUpstream(context.Background(), up); err != nil {
+		t.Fatalf("BindUpstream: %v", err)
+	}
+
+	hooks := &exceptionRecordingHooks{}
+	r := &Relay{sess: sess, hooks: hooks}
+	if !r.beginActiveQuery("qid-outcome") {
+		t.Fatal("beginActiveQuery unexpectedly reported an active query")
+	}
+	go func() {
+		_, _ = upstreamProxy.Write(raw)
+		_ = upstreamProxy.Close()
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := r.upstreamToClient(ctx); err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("upstreamToClient: %v", err)
+	}
+	return hooks
 }
 
 // rewritingExceptionHooks mutates exc.Message in OnException to mimic

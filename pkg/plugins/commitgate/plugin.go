@@ -61,8 +61,9 @@ func (p *Plugin) SubscribedTypes() []sqlmeta.StatementType {
 //
 // On success (every observer's BeforeStatement returned nil) the
 // Event is stashed on SessionState so OnException can replay it to
-// observers that subscribe via OnStatementException. The stash is
-// cleared by OnQueryComplete on both success and failure paths.
+// observers that subscribe via OnStatementException. On verified
+// success, OnQuerySuccess atomically consumes the stash; every other
+// terminal path clears it through OnQueryComplete.
 func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	obs, ok := p.byType[qctx.StatementType]
 	if !ok || len(obs) == 0 {
@@ -136,7 +137,6 @@ func (p *Plugin) OnException(ctx context.Context, sess chsession.Session, exc *c
 	if !ok || ev == nil {
 		return nil
 	}
-	sess.State().MarkCommitGateEventFailed()
 	observers, ok := p.byType[ev.Type]
 	if !ok || len(observers) == 0 {
 		return nil
@@ -163,20 +163,28 @@ func dispatchOnException(ctx context.Context, o Observer, ev *Event, exc *chprot
 	o.OnStatementException(ctx, ev, exc)
 }
 
-// OnQueryComplete dispatches the optional success hook after EndOfStream and
-// clears the commitgate Event stash so the next query starts clean. The relay
-// also calls this after Exception, which is excluded via CommitGateEventFailed.
-func (p *Plugin) OnQueryComplete(ctx context.Context, sess chsession.Session) {
+// OnQuerySuccess dispatches the optional success hook from Relay's dedicated
+// success-only lifecycle signal. Generic query cleanup must never call this
+// method: OnQueryComplete also represents rejection, forwarding failure, and
+// Exception paths.
+func (p *Plugin) OnQuerySuccess(ctx context.Context, sess chsession.Session, queryID string) {
 	if sess == nil {
 		return
 	}
-	snapshot := sess.State().Snapshot()
-	sess.State().ClearCommitGateEvent()
-	if snapshot.CommitGateEventFailed || snapshot.CommitGateEvent == nil {
+	raw := sess.State().TakeCommitGateEvent()
+	if raw == nil {
 		return
 	}
-	ev, ok := snapshot.CommitGateEvent.(*Event)
+	ev, ok := raw.(*Event)
 	if !ok || ev == nil {
+		return
+	}
+	if ev.QueryID != queryID {
+		log.Warnw("commitgate ignored mismatched query success",
+			"event_query_id", ev.QueryID,
+			"success_query_id", queryID,
+			"type", ev.Type,
+		)
 		return
 	}
 	observers := p.byType[ev.Type]
@@ -190,6 +198,14 @@ func (p *Plugin) OnQueryComplete(ctx context.Context, sess chsession.Session) {
 			continue
 		}
 		go dispatchAfterSuccess(ctx, successObserver, event)
+	}
+}
+
+// OnQueryComplete clears the commitgate Event stash on every terminal path.
+// It is deliberately cleanup-only; success work belongs to OnQuerySuccess.
+func (p *Plugin) OnQueryComplete(_ context.Context, sess chsession.Session) {
+	if sess != nil {
+		sess.State().ClearCommitGateEvent()
 	}
 }
 
@@ -226,6 +242,7 @@ func (p *Plugin) RunOnPeerTrust() bool { return false }
 var (
 	_ plugin.QueryPlugin         = (*Plugin)(nil)
 	_ plugin.ExceptionPlugin     = (*Plugin)(nil)
+	_ plugin.QuerySuccessPlugin  = (*Plugin)(nil)
 	_ plugin.QueryCompletePlugin = (*Plugin)(nil)
 	_ plugin.ForwardAware        = (*Plugin)(nil)
 	_ plugin.PeerTrustAware      = (*Plugin)(nil)

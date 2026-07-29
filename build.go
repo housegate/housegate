@@ -485,6 +485,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		&authplugin.Plugin{Validator: validator, Access: reg},
 		&usage.Plugin{Client: usageClient},
 	}
+	querySuccessPlugins := []plugin.QuerySuccessPlugin{}
 	queryCompletePlugins := []plugin.QueryCompletePlugin{}
 	closePlugins := []plugin.ClosePlugin{}
 
@@ -663,6 +664,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	if len(opts.CommitGateObservers) > 0 {
 		cgPlug = commitgate.NewPlugin(opts.CommitGateObservers)
 		queryPlugins = append(queryPlugins, cgPlug)
+		querySuccessPlugins = append(querySuccessPlugins, cgPlug)
 		queryCompletePlugins = append(queryCompletePlugins, cgPlug)
 		log.Infow("commitgate enabled",
 			"observers", len(opts.CommitGateObservers),
@@ -712,6 +714,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		QueryCompletePlugins:            queryCompletePlugins,
 		QueryInputCompletePlugins:       queryInputCompletePlugins,
 		QueryAbortPlugins:               queryAbortPlugins,
+		QuerySuccessPlugins:             querySuccessPlugins,
 		ClosePlugins:                    closePlugins,
 		ExceptionPlugins:                exceptionPlugins,
 	}

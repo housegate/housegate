@@ -51,6 +51,7 @@ type PluginChain struct {
 	QueryInputCompleteStrictPlugins []QueryInputCompleteStrictPlugin
 	QueryInputCompletePlugins       []QueryInputCompletePlugin
 	QueryAbortPlugins               []QueryAbortPlugin
+	QuerySuccessPlugins             []QuerySuccessPlugin
 	QueryCompletePlugins            []QueryCompletePlugin
 	ClosePlugins                    []ClosePlugin
 }
@@ -386,6 +387,25 @@ func (c *PluginChain) OnQueryComplete(ctx context.Context, sess chsession.Sessio
 			continue
 		}
 		p.OnQueryComplete(ctx, sess)
+	}
+}
+
+func (c *PluginChain) OnQuerySuccess(ctx context.Context, sess chsession.Session, queryID string) {
+	// Use the same query-stage filters as OnQueryComplete. A forwarded or
+	// peer-trusted session must not wake an observer that was skipped when the
+	// query entered the chain.
+	state := sess.State()
+	for _, p := range c.QuerySuccessPlugins {
+		if state.IsRouted() && !runsOnRouted(p) {
+			continue
+		}
+		if state.PeerTrusted() && !state.IsForwardedFromPeer && !runsOnPeerTrust(p) {
+			continue
+		}
+		if state.IsForwarding && !runsOnForward(p) {
+			continue
+		}
+		p.OnQuerySuccess(ctx, sess, queryID)
 	}
 }
 
