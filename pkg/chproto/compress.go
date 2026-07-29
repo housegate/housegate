@@ -219,9 +219,9 @@ func (r *compressedCaptureReader) Read(p []byte) (int, error) {
 // type-dependent, so decoding is required to locate the end of a block. The
 // clickhouse-go factory is the same comprehensive type implementation used by
 // Housegate's ClickHouse clients (including Tuple/Map/Variant/Dynamic/JSON);
-// ch-go's narrower ColAuto inference is deliberately not used here. The exact
-// aggregate-state allowlist below covers fixed layouts absent from that
-// factory; every other unknown layout fails closed.
+// ch-go's narrower ColAuto inference is deliberately not used here. This is
+// the compatibility path for pre-chunked peers. Modern peers use the
+// authoritative transport boundary and never decode Native result values.
 type discardBlockResult struct {
 	serverContext *chcolumn.ServerContext
 }
@@ -255,12 +255,6 @@ func (d discardBlockResult) DecodeResult(r *proto.Reader, version int, block pro
 
 		column, err := chcolumn.Type(typeName).Column(name, d.serverContext)
 		if err != nil {
-			if handled, decodeErr := discardKnownAggregateState(r, typeName, block.Rows); handled {
-				if decodeErr != nil {
-					return fmt.Errorf("column [%d] %q aggregate state: %w", i, name, decodeErr)
-				}
-				continue
-			}
 			return fmt.Errorf(
 				"%w: column [%d] %q type %q construction: %v",
 				ErrUnsupportedResultType, i, name, typeName, err,
@@ -276,26 +270,6 @@ func (d discardBlockResult) DecodeResult(r *proto.Reader, version int, block pro
 		}
 	}
 	return nil
-}
-
-// discardKnownAggregateState consumes the fixed-width state encodings that
-// Housegate explicitly supports even though clickhouse-go does not expose an
-// AggregateFunction scan column. AggregateFunction encodings are
-// implementation-specific, so this allowlist must stay exact: an unknown
-// function or argument type returns handled=false and the caller fails closed
-// rather than guessing a Native block boundary.
-func discardKnownAggregateState(r *proto.Reader, typeName string, rows int) (handled bool, err error) {
-	switch typeName {
-	case "AggregateFunction(sum, UInt64)":
-		for row := 0; row < rows; row++ {
-			if _, err := r.UInt64(); err != nil {
-				return true, fmt.Errorf("row [%d] UInt64 accumulator: %w", row, err)
-			}
-		}
-		return true, nil
-	default:
-		return false, nil
-	}
 }
 
 // walkUncompressedBlock consumes an uncompressed Data-block body:

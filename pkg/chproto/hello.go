@@ -6,11 +6,19 @@ import (
 	"github.com/ClickHouse/ch-go/proto"
 )
 
+const (
+	revisionMinPasswordComplexityRules = 54461
+	revisionMinInterserverSecretV2     = 54462
+)
+
 // MaxSupportedRevision is the newest ClickHouse TCP protocol revision the
-// pinned ch-go codec fully models. Housegate terminates the protocol on both
-// sides, so it must negotiate this revision (or an older client revision)
-// rather than forwarding a newer client's revision transparently.
-const MaxSupportedRevision = proto.Version
+// terminating Housegate codec models. The pinned ch-go release advertises
+// 54460, but Housegate carries its own codecs for the 54461-54470 additions:
+// forward-compatible ServerHello tails, Progress/Profile fields, timezone and
+// table-status packets, sparse/custom Native flags, and chunked transport.
+// Staying exactly at 54470 enables authoritative packet boundaries without
+// opting into the later versioned-parallel-replicas fields.
+const MaxSupportedRevision = RevisionMinChunkedPackets
 
 // ClientHelloForUpstream returns a shallow copy of h with ProtocolVersion
 // capped to the codec's supported revision. The remaining credentials and
@@ -26,23 +34,13 @@ func ClientHelloForUpstream(h *ClientHello) *ClientHello {
 	return &upstream
 }
 
-// rewriteServerHelloChunkedToNotChunked parses a complete on-wire ServerHello
-// packet (including its leading type byte) and returns a new byte slice in
-// which the two chunked-protocol advertisements the server sends to the
-// client — proto_send_chunked_srv and proto_recv_chunked_srv — are replaced
-// by the literal string "notchunked". All other fields (including trailing
-// fields ch-go's ServerHello struct doesn't know about, such as
-// password_complexity_rules, nonce, server_settings, and
-// query_plan_serialization_version) are passed through unchanged.
-//
-// This is a short-term workaround for the Codec, which does not yet
-// wrap reads/writes with ChunkedReader / ChunkedWriter. Without the rewrite, a
-// modern ClickHouse server (rev >= 54470) advertises chunked_optional in the
-// ServerHello; a modern client then negotiates "chunked" framing for both
-// directions, and the proxy — which splices bytes byte-for-byte — reads the
-// client's chunked frame header as a malformed packet type and falls over.
-// By forcing "notchunked", we coerce the client to stay on the pre-54470
-// unframed protocol, matching what our splice path actually supports.
+// rewriteServerHelloForProxy parses a complete on-wire ServerHello packet,
+// records the upstream server's original chunked capabilities, and replaces
+// its downstream advertisements with Housegate's own "chunked_optional"
+// capability. Housegate terminates the protocol, so its client-side and
+// upstream-side addenda are negotiated independently. All other fields,
+// including the password-complexity rules and interserver nonce, pass through
+// unchanged.
 //
 // Wire layout understood here follows ClickHouse's TCPHandler::sendHello order.
 // The important detail is that ClickHouse gates these optional ServerHello
@@ -59,11 +57,10 @@ func ClientHelloForUpstream(h *ClientHello) *ClientHello {
 //	version_patch             UVarInt    (wire rev >= 54401)
 //	proto_send_chunked_srv    String     (wire rev >= 54470)  ← rewritten
 //	proto_recv_chunked_srv    String     (wire rev >= 54470)  ← rewritten
-//	[ trailing unknown bytes passed through unchanged ]
-//
-// TODO: drop this once the Codec learns to (un)frame chunked packets and the
-// proxy can honor the server's chunked_optional advertisement end-to-end.
-func rewriteServerHelloChunkedToNotChunked(raw []byte, clientRevision int) ([]byte, error) {
+//	password_rules_count      UVarInt    (wire rev >= 54461)
+//	  pattern, message        String × 2 per rule
+//	interserver_nonce         UInt64 LE  (wire rev >= 54462)
+func rewriteServerHelloForProxy(raw []byte, clientRevision int) (rewritten []byte, serverSend, serverRecv string, err error) {
 	pos := 0
 
 	readUVarInt := func(field string) (uint64, error) {
@@ -74,46 +71,46 @@ func rewriteServerHelloChunkedToNotChunked(raw []byte, clientRevision int) ([]by
 		pos += n
 		return v, nil
 	}
-	// readStrBounds returns the raw byte range [start, end) covering the length
-	// prefix + string payload — useful when we want to pass a field through
-	// unchanged by appending raw[start:end].
-	readStrBounds := func(field string) (start, end int, err error) {
+	// readStr returns the raw byte range [start, end) covering the length
+	// prefix + string payload plus its decoded value.
+	readStr := func(field string) (start, end int, value string, err error) {
 		start = pos
 		length, n, ok := decodeUVarInt(raw[pos:])
 		if !ok {
-			return 0, 0, fmt.Errorf("server hello: read %s (str len) at offset %d", field, pos)
+			return 0, 0, "", fmt.Errorf("server hello: read %s (str len) at offset %d", field, pos)
 		}
 		pos += n
 		if pos+int(length) > len(raw) {
-			return 0, 0, fmt.Errorf("server hello: %s truncated (len=%d, avail=%d)", field, length, len(raw)-pos)
+			return 0, 0, "", fmt.Errorf("server hello: %s truncated (len=%d, avail=%d)", field, length, len(raw)-pos)
 		}
+		value = string(raw[pos : pos+int(length)])
 		pos += int(length)
-		return start, pos, nil
+		return start, pos, value, nil
 	}
 
 	typ, err := readUVarInt("type")
 	if err != nil {
-		return nil, err
+		return nil, "", "", err
 	}
 	if typ != uint64(proto.ServerCodeHello) {
-		return nil, fmt.Errorf("server hello rewrite: unexpected type %d, want %d", typ, proto.ServerCodeHello)
+		return nil, "", "", fmt.Errorf("server hello rewrite: unexpected type %d, want %d", typ, proto.ServerCodeHello)
 	}
 
 	// name
-	if _, _, err := readStrBounds("name"); err != nil {
-		return nil, err
+	if _, _, _, err := readStr("name"); err != nil {
+		return nil, "", "", err
 	}
 	// major, minor, revision
 	if _, err := readUVarInt("major"); err != nil {
-		return nil, err
+		return nil, "", "", err
 	}
 	if _, err := readUVarInt("minor"); err != nil {
-		return nil, err
+		return nil, "", "", err
 	}
 	revisionStart := pos
 	rev, err := readUVarInt("revision")
 	if err != nil {
-		return nil, err
+		return nil, "", "", err
 	}
 	revisionEnd := pos
 	irev := int(rev)
@@ -131,22 +128,22 @@ func rewriteServerHelloChunkedToNotChunked(raw []byte, clientRevision int) ([]by
 	// newer ClickHouse server. That drift surfaces as "display_name truncated".
 	if proto.FeatureVersionedParallelReplicas.In(wireRev) {
 		if _, err := readUVarInt("parallel_replicas_version"); err != nil {
-			return nil, err
+			return nil, "", "", err
 		}
 	}
 	if proto.FeatureTimezone.In(wireRev) {
-		if _, _, err := readStrBounds("timezone"); err != nil {
-			return nil, err
+		if _, _, _, err := readStr("timezone"); err != nil {
+			return nil, "", "", err
 		}
 	}
 	if proto.FeatureDisplayName.In(wireRev) {
-		if _, _, err := readStrBounds("display_name"); err != nil {
-			return nil, err
+		if _, _, _, err := readStr("display_name"); err != nil {
+			return nil, "", "", err
 		}
 	}
 	if proto.FeatureVersionPatch.In(wireRev) {
 		if _, err := readUVarInt("version_patch"); err != nil {
-			return nil, err
+			return nil, "", "", err
 		}
 	}
 
@@ -166,30 +163,38 @@ func rewriteServerHelloChunkedToNotChunked(raw []byte, clientRevision int) ([]by
 	// decodes later packets with the same feature gates as the upstream server.
 	if !proto.FeatureChunkedPackets.In(wireRev) {
 		out := rewriteRevision(len(raw))
-		return out, nil
+		return out, "", "", nil
 	}
 
-	// This is the byte range covering the server-side chunked advertisement —
-	// everything before it is preserved byte-for-byte, and everything after is
-	// forwarded as-is (trailing unknown fields).
+	// Record the real upstream modes before substituting Housegate's own
+	// downstream capability.
 	chunkedStart := pos
-	if _, _, err := readStrBounds("proto_send_chunked_srv"); err != nil {
-		return nil, err
+	if _, _, serverSend, err = readStr("proto_send_chunked_srv"); err != nil {
+		return nil, "", "", err
 	}
-	if _, _, err := readStrBounds("proto_recv_chunked_srv"); err != nil {
-		return nil, err
+	if _, _, serverRecv, err = readStr("proto_recv_chunked_srv"); err != nil {
+		return nil, "", "", err
 	}
 	chunkedEnd := pos
 
-	// Rebuild: prefix + two "notchunked" strings + suffix.
+	// Housegate can always receive chunked client packets. It only advertises
+	// chunked responses when the upstream leg can provide authoritative
+	// packet chunks too; otherwise an opaque Native result may require raw
+	// streaming and cannot be safely reframed downstream.
+	proxySend := "notchunked"
+	if resolveChunkedMode("chunked_optional", serverSend) == "chunked" {
+		proxySend = "chunked_optional"
+	}
+
+	// Rebuild: prefix + Housegate's advertisements + suffix.
 	var replacement proto.Buffer
-	replacement.PutString("notchunked")
-	replacement.PutString("notchunked")
+	replacement.PutString(proxySend)
+	replacement.PutString("chunked_optional")
 
 	out := rewriteRevision(chunkedStart)
 	out = append(out, replacement.Buf...)
 	out = append(out, raw[chunkedEnd:]...)
-	return out, nil
+	return out, serverSend, serverRecv, nil
 }
 
 // decodeUVarInt reads a base-128 VarUInt from the head of b, returning the
@@ -220,14 +225,88 @@ func (c *Codec) decodeClientHello() (*ClientHello, error) {
 	return h, nil
 }
 
-// decodeServerHello mirrors decodeClientHello for ServerHello.
-// ServerHello uses DecodeAware because its layout varies with protocol revision
-// (timezone, display_name, patch fields were added in later revisions).
+// decodeServerHello consumes the complete ServerHello layout Housegate
+// advertises upstream (through revision 54470). It cannot use ch-go's
+// DecodeAware directly: the negotiated revision is not known until the
+// embedded server revision is read, and the pinned ch-go struct stops before
+// password rules, nonce, and chunked capabilities.
+//
+// Reading every revision-gated field through c.r is important. ServerHello has
+// no packet length, so draining only bytes currently buffered by bufio would
+// truncate a legal TCP-fragmented hello and misread its remainder as addendum
+// or query traffic.
 func (c *Codec) decodeServerHello() (*ServerHello, error) {
 	h := &proto.ServerHello{}
-	if err := h.DecodeAware(c.r, c.Revision()); err != nil {
-		return nil, fmt.Errorf("%w: server hello: %v", ErrDecode, err)
+	var err error
+	if h.Name, err = c.r.Str(); err != nil {
+		return nil, fmt.Errorf("%w: server hello name: %v", ErrDecode, err)
 	}
+	if h.Major, err = c.r.Int(); err != nil {
+		return nil, fmt.Errorf("%w: server hello major: %v", ErrDecode, err)
+	}
+	if h.Minor, err = c.r.Int(); err != nil {
+		return nil, fmt.Errorf("%w: server hello minor: %v", ErrDecode, err)
+	}
+	if h.Revision, err = c.r.Int(); err != nil {
+		return nil, fmt.Errorf("%w: server hello revision: %v", ErrDecode, err)
+	}
+
+	wireRev := h.Revision
+	if hint := c.serverHelloRevisionHint(); hint > 0 && hint < wireRev {
+		wireRev = hint
+	}
+	if wireRev > MaxSupportedRevision {
+		wireRev = MaxSupportedRevision
+	}
+
+	if proto.FeatureVersionedParallelReplicas.In(wireRev) {
+		if _, err := c.r.UVarInt(); err != nil {
+			return nil, fmt.Errorf("%w: server hello parallel replicas version: %v", ErrDecode, err)
+		}
+	}
+	if proto.FeatureTimezone.In(wireRev) {
+		if h.Timezone, err = c.r.Str(); err != nil {
+			return nil, fmt.Errorf("%w: server hello timezone: %v", ErrDecode, err)
+		}
+	}
+	if proto.FeatureDisplayName.In(wireRev) {
+		if h.DisplayName, err = c.r.Str(); err != nil {
+			return nil, fmt.Errorf("%w: server hello display name: %v", ErrDecode, err)
+		}
+	}
+	if proto.FeatureVersionPatch.In(wireRev) {
+		if h.Patch, err = c.r.Int(); err != nil {
+			return nil, fmt.Errorf("%w: server hello patch: %v", ErrDecode, err)
+		}
+	}
+	if SupportsChunkedPackets(wireRev) {
+		if _, err := c.r.Str(); err != nil {
+			return nil, fmt.Errorf("%w: server hello send chunk capability: %v", ErrDecode, err)
+		}
+		if _, err := c.r.Str(); err != nil {
+			return nil, fmt.Errorf("%w: server hello receive chunk capability: %v", ErrDecode, err)
+		}
+	}
+	if wireRev >= revisionMinPasswordComplexityRules {
+		count, err := c.r.UVarInt()
+		if err != nil {
+			return nil, fmt.Errorf("%w: server hello password rule count: %v", ErrDecode, err)
+		}
+		for i := uint64(0); i < count; i++ {
+			if _, err := c.r.Str(); err != nil {
+				return nil, fmt.Errorf("%w: server hello password rule %d pattern: %v", ErrDecode, i, err)
+			}
+			if _, err := c.r.Str(); err != nil {
+				return nil, fmt.Errorf("%w: server hello password rule %d message: %v", ErrDecode, i, err)
+			}
+		}
+	}
+	if wireRev >= revisionMinInterserverSecretV2 {
+		if _, err := c.r.UInt64(); err != nil {
+			return nil, fmt.Errorf("%w: server hello interserver nonce: %v", ErrDecode, err)
+		}
+	}
+
 	c.serverMajor.Store(int64(h.Major))
 	c.serverMinor.Store(int64(h.Minor))
 	c.serverPatch.Store(int64(h.Patch))

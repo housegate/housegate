@@ -2,10 +2,21 @@ package chproto
 
 import (
 	"bytes"
+	"net"
 	"testing"
+	"time"
 
 	"github.com/ClickHouse/ch-go/proto"
 )
+
+func putServerHelloTail54470(buf *proto.Buffer, sendChunked, recvChunked string) {
+	buf.PutString(sendChunked)
+	buf.PutString(recvChunked)
+	buf.PutUVarInt(1) // password complexity rule count
+	buf.PutString(".{12}")
+	buf.PutString("use at least 12 characters")
+	buf.PutUInt64(0x0102030405060708) // interserver nonce
+}
 
 // readerWriter bundles a read side and a write side into a single io.ReadWriter
 // so a Codec can drive a synthetic byte stream in tests.
@@ -328,38 +339,30 @@ func TestSplice_ServerPongPacket_PassThrough(t *testing.T) {
 	}
 }
 
-// TestReadPacket_ServerHello_RewritesChunkedToNotChunked verifies the
-// codec's workaround that forces "notchunked" on both chunked-protocol
-// advertisements in ServerHello. Without it, a modern client negotiates
-// chunked framing based on the server's chunked_optional advertisement and
-// the proxy — which does not yet implement chunked framing — breaks on the
-// first Query packet.
-func TestReadPacket_ServerHello_RewritesChunkedToNotChunked(t *testing.T) {
-	// Hand-build a ServerHello at revision 54480 (post-chunked) and append
-	// the two chunked fields advertising chunked_optional. Skip trailing
-	// fields ch-go doesn't know about — the rewriter should pass those
-	// through unchanged, but covering that is the job of a separate test.
+// TestReadPacket_ServerHello_AdvertisesProxyChunking verifies that the
+// terminating proxy advertises its own chunked transport support downstream
+// while retaining the upstream server's original capabilities for the
+// independent upstream addendum.
+func TestReadPacket_ServerHello_AdvertisesProxyChunking(t *testing.T) {
+	// Hand-build the complete newest ServerHello Housegate advertises.
 	var buf proto.Buffer
 	buf.PutUVarInt(uint64(proto.ServerCodeHello))
 	buf.PutString("ClickHouse")
-	buf.PutInt(26)                    // major
-	buf.PutInt(9)                     // minor
-	buf.PutInt(54480)                 // revision
-	buf.PutUVarInt(3)                 // parallel_replicas_version (rev >= 54471)
-	buf.PutString("Etc/UTC")          // timezone (rev >= 54058)
-	buf.PutString("ch-prod")          // display_name (rev >= 54372)
-	buf.PutInt(0)                     // version_patch (rev >= 54401)
-	buf.PutString("chunked_optional") // proto_send_chunked_srv (rev >= 54470)
-	buf.PutString("chunked_optional") // proto_recv_chunked_srv (rev >= 54470)
+	buf.PutInt(26)           // major
+	buf.PutInt(9)            // minor
+	buf.PutInt(54479)        // server revision (rewritten to negotiated 54470)
+	buf.PutString("Etc/UTC") // timezone (rev >= 54058)
+	buf.PutString("ch-prod") // display_name (rev >= 54372)
+	buf.PutInt(0)            // version_patch (rev >= 54401)
+	putServerHelloTail54470(&buf, "chunked_optional", "chunked_optional")
 	onWire := append([]byte(nil), buf.Buf...)
 
 	rw := &readerWriter{r: bytes.NewBuffer(onWire), w: &bytes.Buffer{}}
 	c := NewCodec(rw, DirToUpstream)
-	c.SetServerHelloRevisionHint(54480)
+	c.SetServerHelloRevisionHint(MaxSupportedRevision)
 	// Intentionally do NOT call SetRevision: ServerHello is decoded before the
-	// negotiated revision is known. The separate ServerHello revision hint tells
-	// the raw-byte rewriter which optional fields the upstream emitted without
-	// making ch-go's ServerHello decoder consume fields it does not model.
+	// negotiated revision is known. The separate ServerHello revision hint
+	// tells the decoder which optional fields the upstream emitted.
 
 	pkt, err := c.ReadPacket(uint64(proto.ServerCodeHello))
 	if err != nil {
@@ -372,14 +375,10 @@ func TestReadPacket_ServerHello_RewritesChunkedToNotChunked(t *testing.T) {
 		t.Fatal("Raw is nil; expected rewritten bytes for ServerHello")
 	}
 
-	// The rewritten Raw must no longer contain "chunked_optional".
-	if bytes.Contains(pkt.Raw, []byte("chunked_optional")) {
-		t.Fatalf("Raw still contains chunked_optional after rewrite:\n%x", pkt.Raw)
-	}
-	// And it must contain exactly two "notchunked" occurrences.
-	got := bytes.Count(pkt.Raw, []byte("notchunked"))
+	// Housegate implements both directions and advertises optional chunking.
+	got := bytes.Count(pkt.Raw, []byte("chunked_optional"))
 	if got != 2 {
-		t.Fatalf("Raw contains %d \"notchunked\" occurrences; want 2\n%x", got, pkt.Raw)
+		t.Fatalf("Raw contains %d \"chunked_optional\" occurrences; want 2\n%x", got, pkt.Raw)
 	}
 
 	// Non-chunked fields must round-trip byte-for-byte: decode the rewritten
@@ -397,11 +396,8 @@ func TestReadPacket_ServerHello_RewritesChunkedToNotChunked(t *testing.T) {
 	if n, err := rd.Int(); err != nil || n != 9 {
 		t.Fatalf("minor=%d err=%v", n, err)
 	}
-	if n, err := rd.Int(); err != nil || n != 54480 {
+	if n, err := rd.Int(); err != nil || n != MaxSupportedRevision {
 		t.Fatalf("revision=%d err=%v", n, err)
-	}
-	if v, err := rd.UVarInt(); err != nil || v != 3 {
-		t.Fatalf("parallel_replicas_version=%d err=%v", v, err)
 	}
 	if s, err := rd.Str(); err != nil || s != "Etc/UTC" {
 		t.Fatalf("timezone=%q err=%v", s, err)
@@ -412,11 +408,32 @@ func TestReadPacket_ServerHello_RewritesChunkedToNotChunked(t *testing.T) {
 	if n, err := rd.Int(); err != nil || n != 0 {
 		t.Fatalf("patch=%d err=%v", n, err)
 	}
-	if s, err := rd.Str(); err != nil || s != "notchunked" {
+	if s, err := rd.Str(); err != nil || s != "chunked_optional" {
 		t.Fatalf("proto_send_chunked_srv=%q err=%v", s, err)
 	}
-	if s, err := rd.Str(); err != nil || s != "notchunked" {
+	if s, err := rd.Str(); err != nil || s != "chunked_optional" {
 		t.Fatalf("proto_recv_chunked_srv=%q err=%v", s, err)
+	}
+	if count, err := rd.UVarInt(); err != nil || count != 1 {
+		t.Fatalf("password rule count=%d err=%v", count, err)
+	}
+	if pattern, err := rd.Str(); err != nil || pattern != ".{12}" {
+		t.Fatalf("password rule pattern=%q err=%v", pattern, err)
+	}
+	if message, err := rd.Str(); err != nil || message != "use at least 12 characters" {
+		t.Fatalf("password rule message=%q err=%v", message, err)
+	}
+	if nonce, err := rd.UInt64(); err != nil || nonce != 0x0102030405060708 {
+		t.Fatalf("nonce=%x err=%v", nonce, err)
+	}
+
+	upstream := c.ResolveUpstreamAddendum(AddendumResult{QuotaKey: "q"}, AddendumOpts{
+		ProposedRecv: "chunked_optional",
+		ProposedSend: "chunked_optional",
+	})
+	if upstream.NegotiatedRecv != "chunked" || upstream.NegotiatedSend != "chunked" {
+		t.Fatalf("upstream chunked modes recv/send=%q/%q, want chunked/chunked",
+			upstream.NegotiatedRecv, upstream.NegotiatedSend)
 	}
 }
 
@@ -457,8 +474,128 @@ func TestReadPacket_ServerHello_UsesClientRevisionForFieldLayout(t *testing.T) {
 	if !bytes.Equal(pkt.Raw, expected.Buf) {
 		t.Fatalf("ServerHello should advertise negotiated clientRev=%d\ngot  %x\nwant %x", clientRev, pkt.Raw, expected.Buf)
 	}
-	if bytes.Contains(pkt.Raw, []byte("notchunked")) {
+	if bytes.Contains(pkt.Raw, []byte("chunked_optional")) {
 		t.Fatalf("unexpected chunked rewrite for clientRev=%d: %x", clientRev, pkt.Raw)
+	}
+}
+
+func TestReadPacket_ServerHello_DoesNotAdvertiseChunkedResponsesForStrictLegacyUpstream(t *testing.T) {
+	const rev = RevisionMinChunkedPackets
+	var buf proto.Buffer
+	buf.PutUVarInt(uint64(proto.ServerCodeHello))
+	buf.PutString("ClickHouse")
+	buf.PutInt(25)
+	buf.PutInt(8)
+	buf.PutInt(rev)
+	buf.PutString("Etc/UTC")
+	buf.PutString("ch-legacy")
+	buf.PutInt(0)
+	putServerHelloTail54470(&buf, "notchunked", "notchunked")
+
+	rw := &readerWriter{r: bytes.NewBuffer(buf.Buf), w: &bytes.Buffer{}}
+	c := NewCodec(rw, DirToUpstream)
+	c.SetServerHelloRevisionHint(rev)
+	pkt, err := c.ReadPacket(uint64(proto.ServerCodeHello))
+	if err != nil {
+		t.Fatalf("ReadPacket: %v", err)
+	}
+
+	rd := proto.NewReader(bytes.NewReader(pkt.Raw))
+	_, _ = rd.UVarInt()
+	_, _ = rd.Str()
+	_, _ = rd.Int()
+	_, _ = rd.Int()
+	_, _ = rd.Int()
+	_, _ = rd.Str()
+	_, _ = rd.Str()
+	_, _ = rd.Int()
+	proxySend, err := rd.Str()
+	if err != nil {
+		t.Fatalf("proxy send capability: %v", err)
+	}
+	proxyRecv, err := rd.Str()
+	if err != nil {
+		t.Fatalf("proxy recv capability: %v", err)
+	}
+	if proxySend != "notchunked" || proxyRecv != "chunked_optional" {
+		t.Fatalf("proxy capabilities send/recv=%q/%q, want notchunked/chunked_optional", proxySend, proxyRecv)
+	}
+
+	upstream := c.ResolveUpstreamAddendum(AddendumResult{}, AddendumOpts{
+		ProposedRecv: "chunked_optional",
+		ProposedSend: "chunked_optional",
+	})
+	if upstream.NegotiatedRecv != "notchunked" || upstream.NegotiatedSend != "notchunked" {
+		t.Fatalf("upstream modes recv/send=%q/%q, want notchunked/notchunked",
+			upstream.NegotiatedRecv, upstream.NegotiatedSend)
+	}
+}
+
+func TestReadPacket_ChunkedServerDataUsesTransportBoundary(t *testing.T) {
+	// The payload deliberately is not a decodable Native block. In particular
+	// it contains bytes that look like EndOfStream and an AggregateFunction
+	// state. Chunk framing, not result-value decoding, is the authority.
+	data := []byte{
+		byte(proto.ServerCodeData),
+		0x00, // empty table name
+		0x01, 0x00, 0x02, 0x01,
+		0x03, 'a', 'g', 'g',
+		0x1e, 'A', 'g', 'g', 'r', 'e', 'g', 'a', 't', 'e', 'F', 'u', 'n', 'c', 't', 'i', 'o', 'n',
+		0x05, 0x04, 0x05, 0x04,
+	}
+	eos := []byte{byte(proto.ServerCodeEndOfStream)}
+
+	var wire bytes.Buffer
+	chunked := NewChunkedWriter(&wire, true)
+	if _, err := chunked.Write(data); err != nil {
+		t.Fatalf("write Data chunk: %v", err)
+	}
+	if _, err := chunked.Write(eos); err != nil {
+		t.Fatalf("write EndOfStream chunk: %v", err)
+	}
+
+	rw := &readerWriter{r: bytes.NewBuffer(wire.Bytes()), w: &bytes.Buffer{}}
+	c := NewCodec(rw, DirToUpstream)
+	c.EnableChunked(true, false)
+
+	pkt, err := c.ReadPacket(uint64(proto.ServerCodeException))
+	if err != nil {
+		t.Fatalf("ReadPacket Data: %v", err)
+	}
+	if pkt.Type != uint64(proto.ServerCodeData) {
+		t.Fatalf("Data type=%d, want %d", pkt.Type, proto.ServerCodeData)
+	}
+	if !bytes.Equal(pkt.Raw, data) {
+		t.Fatalf("Data raw=%x, want %x", pkt.Raw, data)
+	}
+
+	pkt, err = c.ReadPacket(uint64(proto.ServerCodeException))
+	if err != nil {
+		t.Fatalf("ReadPacket EndOfStream: %v", err)
+	}
+	if pkt.Type != uint64(proto.ServerCodeEndOfStream) || !bytes.Equal(pkt.Raw, eos) {
+		t.Fatalf("EndOfStream packet=%#v raw=%x", pkt, pkt.Raw)
+	}
+}
+
+func TestWriteRawPacket_ReframesForChunkedPeer(t *testing.T) {
+	var out bytes.Buffer
+	rw := &readerWriter{r: &bytes.Buffer{}, w: &out}
+	c := NewCodec(rw, DirFromClient)
+	c.EnableChunked(false, true)
+
+	payload := []byte{byte(proto.ServerCodeEndOfStream)}
+	if err := c.WriteRawPacket(payload); err != nil {
+		t.Fatalf("WriteRawPacket: %v", err)
+	}
+
+	reader := NewChunkedReader(bytes.NewReader(out.Bytes()), true)
+	got, err := reader.ReadChunk()
+	if err != nil {
+		t.Fatalf("ReadChunk: %v", err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("chunk payload=%x, want %x", got, payload)
 	}
 }
 
@@ -488,42 +625,51 @@ func TestClientHelloForUpstreamCapsRevisionWithoutMutatingInput(t *testing.T) {
 	}
 }
 
-// TestReadPacket_ServerHello_PreservesUnknownTrailingAfterRewrite confirms
-// that bytes past proto_recv_chunked_srv (e.g. the future fields
-// password_complexity_rules / nonce / server_settings) are passed through
-// unchanged even after the chunked rewrite.
-func TestReadPacket_ServerHello_PreservesUnknownTrailingAfterRewrite(t *testing.T) {
-	var buf proto.Buffer
-	buf.PutUVarInt(uint64(proto.ServerCodeHello))
-	buf.PutString("ClickHouse")
-	buf.PutInt(26)
-	buf.PutInt(9)
-	buf.PutInt(54480)
-	buf.PutUVarInt(3)
-	buf.PutString("Etc/UTC")
-	buf.PutString("ch-prod")
-	buf.PutInt(0)
-	buf.PutString("chunked_optional")
-	buf.PutString("chunked_optional")
+// TestReadPacket_ServerHello_ReadsFragmentedRevisionTail proves the packet
+// boundary comes from the revision-gated layout, not from whichever bytes
+// happened to arrive in bufio's first socket read.
+func TestReadPacket_ServerHello_ReadsFragmentedRevisionTail(t *testing.T) {
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
 
-	// Synthetic trailing bytes — ch-go doesn't know these fields exist. The
-	// rewriter must preserve them verbatim.
-	trailingMarker := []byte{0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE}
-	buf.Buf = append(buf.Buf, trailingMarker...)
-	onWire := append([]byte(nil), buf.Buf...)
+	var prefix proto.Buffer
+	prefix.PutUVarInt(uint64(proto.ServerCodeHello))
+	prefix.PutString("ClickHouse")
+	prefix.PutInt(25)
+	prefix.PutInt(8)
+	prefix.PutInt(54479)
+	prefix.PutString("Etc/UTC")
+	prefix.PutString("fragmented")
+	prefix.PutInt(1)
 
-	rw := &readerWriter{r: bytes.NewBuffer(onWire), w: &bytes.Buffer{}}
-	c := NewCodec(rw, DirToUpstream)
-	c.SetServerHelloRevisionHint(54480)
-	// Intentionally do NOT call SetRevision: see the previous ServerHello test
-	// for why the raw-byte rewriter uses a separate revision hint.
+	var tail proto.Buffer
+	putServerHelloTail54470(&tail, "chunked_optional", "chunked_optional")
+	go func() {
+		_, _ = server.Write(prefix.Buf)
+		time.Sleep(10 * time.Millisecond)
+		mid := len(tail.Buf) / 2
+		_, _ = server.Write(tail.Buf[:mid])
+		time.Sleep(10 * time.Millisecond)
+		_, _ = server.Write(tail.Buf[mid:])
+	}()
 
+	c := NewCodec(client, DirToUpstream)
+	c.SetServerHelloRevisionHint(MaxSupportedRevision)
 	pkt, err := c.ReadPacket(uint64(proto.ServerCodeHello))
 	if err != nil {
 		t.Fatalf("ReadPacket: %v", err)
 	}
-	if !bytes.HasSuffix(pkt.Raw, trailingMarker) {
-		t.Fatalf("trailing bytes not preserved; tail=%x", pkt.Raw[max(0, len(pkt.Raw)-len(trailingMarker)*2):])
+	if !bytes.HasSuffix(pkt.Raw, tail.Buf) {
+		t.Fatalf("revision tail not preserved; got tail=%x, want=%x",
+			pkt.Raw[max(0, len(pkt.Raw)-len(tail.Buf)):], tail.Buf)
+	}
+	h, ok := pkt.Decoded.(*ServerHello)
+	if !ok {
+		t.Fatalf("decoded hello type=%T", pkt.Decoded)
+	}
+	if h.Timezone != "Etc/UTC" || h.DisplayName != "fragmented" || h.Patch != 1 {
+		t.Fatalf("decoded hello tail=%q/%q/%d", h.Timezone, h.DisplayName, h.Patch)
 	}
 }
 

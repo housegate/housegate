@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -47,6 +48,18 @@ type Relay struct {
 	queryMu       sync.Mutex
 	activeQuery   bool
 	activeQueryID string
+
+	// completionProbe is replaceable in unit tests. Production uses
+	// probeQueryCompletion, which watches the exact upstream server's
+	// system.processes view on a short-lived auxiliary connection.
+	completionProbe func(context.Context, string) error
+
+	opaqueMu   sync.Mutex
+	opaqueMode bool
+	opaqueDone chan struct{}
+	opaqueErr  error
+	opaqueStop chan struct{}
+	opaqueRead chan struct{}
 }
 
 // UpstreamDialer dials and returns the codec for this session's upstream.
@@ -55,6 +68,8 @@ type Relay struct {
 // ordering the dialer would always see RouteTarget="" and routed
 // sessions would silently fall through to cfg.Upstream.
 type UpstreamDialer func(ctx context.Context, sess chsession.Session) (*chproto.Codec, error)
+
+var errOpaqueReaderStopped = errors.New("opaque reader stopped at client query boundary")
 
 // NewRelay constructs a Relay.
 //
@@ -94,6 +109,287 @@ func (r *Relay) currentActiveQuery() (string, bool) {
 	r.queryMu.Lock()
 	defer r.queryMu.Unlock()
 	return r.activeQueryID, r.activeQuery
+}
+
+func (r *Relay) startOpaqueCompletionProbe(ctx context.Context, queryID string) error {
+	r.opaqueMu.Lock()
+	if r.opaqueMode {
+		r.opaqueMu.Unlock()
+		return fmt.Errorf("opaque result mode already active")
+	}
+	r.opaqueMode = true
+	r.opaqueDone = make(chan struct{})
+	r.opaqueErr = nil
+	r.opaqueStop = make(chan struct{})
+	r.opaqueRead = make(chan struct{})
+	done := r.opaqueDone
+	r.opaqueMu.Unlock()
+
+	probe := r.completionProbe
+	if probe == nil {
+		probe = r.probeQueryCompletion
+	}
+	go func() {
+		err := probe(ctx, queryID)
+		if err == nil {
+			r.sess.State().ClearActiveRewrite()
+			if _, active := r.takeActiveQuery(); active {
+				r.hooks.OnQueryComplete(ctx, r.sess)
+			}
+		} else {
+			// Wake both relay directions. The normal read-error cleanup path
+			// consumes any still-active query and releases plugin resources.
+			_, logger := log.FromContext(ctx)
+			logger.Warnw("opaque result completion probe failed",
+				"query_id", queryID,
+				"err", err,
+			)
+			_ = r.sess.Close()
+		}
+
+		r.opaqueMu.Lock()
+		r.opaqueErr = err
+		close(done)
+		r.opaqueMu.Unlock()
+	}()
+	return nil
+}
+
+func (r *Relay) opaqueSnapshot() (active bool, done <-chan struct{}, err error) {
+	r.opaqueMu.Lock()
+	defer r.opaqueMu.Unlock()
+	return r.opaqueMode, r.opaqueDone, r.opaqueErr
+}
+
+func (r *Relay) waitAndResetOpaque(ctx context.Context) error {
+	active, done, _ := r.opaqueSnapshot()
+	if !active {
+		return nil
+	}
+	select {
+	case <-done:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	_, _, probeErr := r.opaqueSnapshot()
+	if probeErr != nil {
+		return fmt.Errorf("opaque result completion probe: %w", probeErr)
+	}
+
+	up := r.sess.Upstream()
+	if up == nil {
+		return chsession.ErrNoUpstream
+	}
+	conn, ok := up.Conn().(net.Conn)
+	if !ok {
+		return fmt.Errorf("opaque result resume requires net.Conn upstream, got %T", up.Conn())
+	}
+
+	r.opaqueMu.Lock()
+	if !r.opaqueMode || r.opaqueStop == nil || r.opaqueRead == nil {
+		r.opaqueMu.Unlock()
+		return fmt.Errorf("opaque result resume state is incomplete")
+	}
+	stop := r.opaqueStop
+	readDone := r.opaqueRead
+	select {
+	case <-stop:
+	default:
+		close(stop)
+	}
+	r.opaqueMu.Unlock()
+
+	// The raw reader is blocked only after it forwarded every byte currently
+	// available from the completed response. A read deadline wakes it without
+	// closing the connection; relayOpaqueResult clears that deadline before it
+	// acknowledges, so the packet reader can safely resume on the same codec.
+	if err := conn.SetReadDeadline(time.Now()); err != nil {
+		return fmt.Errorf("interrupt opaque result reader: %w", err)
+	}
+	select {
+	case <-readDone:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	r.opaqueMu.Lock()
+	r.opaqueMode = false
+	r.opaqueDone = nil
+	r.opaqueErr = nil
+	r.opaqueStop = nil
+	r.opaqueRead = nil
+	r.opaqueMu.Unlock()
+	return nil
+}
+
+func (r *Relay) handshakeFreshUpstream(
+	ctx context.Context,
+	up *chproto.Codec,
+	opts chproto.AddendumOpts,
+) (*chproto.ClientHello, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	hello := r.sess.State().UpstreamHello()
+	if hello == nil {
+		return nil, fmt.Errorf("missing stored upstream hello")
+	}
+	snap := r.sess.State().Snapshot()
+	if !snap.IsForwarding && snap.RouteTarget == "" && snap.Database != "" {
+		hello.Database = snap.Database
+	}
+	hello = chproto.ClientHelloForUpstream(hello)
+	if err := up.WriteClientHello(hello); err != nil {
+		return nil, fmt.Errorf("write hello: %w", err)
+	}
+	up.SetServerHelloRevisionHint(int(hello.ProtocolVersion))
+	pkt, err := up.ReadPacket(uint64(chproto.ServerHelloCode), uint64(chproto.ServerExceptionCode))
+	if err != nil {
+		return nil, fmt.Errorf("read server hello: %w", err)
+	}
+	if exc, ok := pkt.Decoded.(*chproto.Exception); ok {
+		return nil, fmt.Errorf("upstream rejected hello: code=%d %s: %s", exc.Code, exc.Name, exc.Message)
+	}
+	srv, ok := pkt.Decoded.(*chproto.ServerHello)
+	if !ok {
+		return nil, fmt.Errorf("unexpected hello packet type=%d", pkt.Type)
+	}
+	rev := int(hello.ProtocolVersion)
+	if int(srv.Revision) < rev {
+		rev = int(srv.Revision)
+	}
+	up.SetRevision(rev)
+	up.SetCompression(proto.CompressionDisabled)
+	if chproto.SupportsAddendum(rev) {
+		res := up.ResolveUpstreamAddendum(chproto.AddendumResult{}, opts)
+		if err := up.SendAddendum(res); err != nil {
+			return nil, fmt.Errorf("send addendum: %w", err)
+		}
+	}
+	return hello, nil
+}
+
+func (r *Relay) probeQueryCompletion(ctx context.Context, queryID string) error {
+	up, err := r.dialExactCurrentUpstream(ctx)
+	if err != nil {
+		return err
+	}
+	defer closeCodec(up)
+	conn, _ := up.Conn().(net.Conn)
+	if conn != nil {
+		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	}
+	if _, err := r.handshakeFreshUpstream(ctx, up, chproto.AddendumOpts{
+		ProposedRecv: "notchunked",
+		ProposedSend: "notchunked",
+	}); err != nil {
+		return err
+	}
+
+	for {
+		if conn != nil {
+			_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+		}
+		running, err := r.probeQueryRunning(up, queryID)
+		if err != nil {
+			return err
+		}
+		if !running {
+			return nil
+		}
+		timer := time.NewTimer(100 * time.Millisecond)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return ctx.Err()
+		}
+	}
+}
+
+func (r *Relay) probeQueryRunning(up *chproto.Codec, queryID string) (bool, error) {
+	const runningMarker = "__HOUSEGATE_TARGET_QUERY_RUNNING__"
+	targetHex := strings.ToUpper(hex.EncodeToString([]byte(queryID)))
+	q := &chproto.Query{
+		ID: fmt.Sprintf("__housegate_probe_%d", time.Now().UnixNano()),
+		Info: chproto.ClientInfo{
+			Query:           proto.ClientQueryInitial,
+			InitialUser:     "housegate",
+			InitialQueryID:  queryID,
+			InitialAddress:  "127.0.0.1:0",
+			Interface:       proto.InterfaceTCP,
+			OSUser:          "housegate",
+			ClientHostname:  "housegate",
+			ClientName:      "housegate-probe",
+			Major:           1,
+			Minor:           0,
+			ProtocolVersion: up.Revision(),
+		},
+		Stage:       proto.StageComplete,
+		Compression: proto.CompressionDisabled,
+		Body: fmt.Sprintf(
+			"SELECT throwIf(count() > 0, '%s') FROM system.processes WHERE query_id = unhex('%s')",
+			runningMarker,
+			targetHex,
+		),
+	}
+	if err := up.WriteQuery(q); err != nil {
+		return false, fmt.Errorf("write completion probe: %w", err)
+	}
+	if err := up.WriteEmptyDataBlock(); err != nil {
+		return false, fmt.Errorf("write completion probe terminator: %w", err)
+	}
+	for {
+		pkt, err := up.ReadPacket(uint64(chproto.ServerExceptionCode))
+		if err != nil {
+			return false, fmt.Errorf("read completion probe: %w", err)
+		}
+		switch pkt.Type {
+		case uint64(chproto.ServerEndOfStreamCode):
+			return false, nil
+		case uint64(chproto.ServerExceptionCode):
+			exc, _ := pkt.Decoded.(*chproto.Exception)
+			if exc != nil && strings.Contains(exc.Message, runningMarker) {
+				return true, nil
+			}
+			if exc == nil {
+				return false, fmt.Errorf("completion probe returned malformed exception")
+			}
+			return false, fmt.Errorf("completion probe rejected: code=%d %s: %s", exc.Code, exc.Name, exc.Message)
+		}
+	}
+}
+
+func (r *Relay) dialExactCurrentUpstream(ctx context.Context) (*chproto.Codec, error) {
+	current := r.sess.Upstream()
+	if current != nil {
+		if nc, ok := current.Conn().(net.Conn); ok && nc.RemoteAddr() != nil {
+			network := nc.RemoteAddr().Network()
+			if network == "" {
+				network = "tcp"
+			}
+			conn, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, network, nc.RemoteAddr().String())
+			if err != nil {
+				return nil, fmt.Errorf("dial exact upstream %s: %w", nc.RemoteAddr(), err)
+			}
+			return chproto.NewCodec(conn, chproto.DirToUpstream), nil
+		}
+	}
+	if r.dialer == nil {
+		return nil, fmt.Errorf("no probe dialer")
+	}
+	return r.dialer(ctx, r.sess)
+}
+
+func closeCodec(codec *chproto.Codec) {
+	if codec == nil {
+		return
+	}
+	if closer, ok := codec.Conn().(io.Closer); ok {
+		_ = closer.Close()
+	}
 }
 
 // handshake performs the three-phase ClickHouse handshake:
@@ -183,13 +479,13 @@ func (r *Relay) handshake(ctx context.Context) error {
 		logger.Debugw("forwarding: using peer server hello from RebindToPeer",
 			"upstream", upstreamAddr(upstream),
 			"rev", rev, "raw_len", len(raw))
-		if _, err := client.Conn().Write(raw); err != nil {
+		if err := client.WriteRawPacket(raw); err != nil {
 			return fmt.Errorf("forwarding: echo peer server hello: %w", err)
 		}
 		if chproto.SupportsAddendum(rev) {
 			res, err := client.NegotiateAddendum(chproto.AddendumOpts{
-				ProposedRecv: "notchunked",
-				ProposedSend: "notchunked",
+				ProposedRecv: "chunked_optional",
+				ProposedSend: "chunked_optional",
 			})
 			if err != nil {
 				return fmt.Errorf("forwarding: client addendum: %w", err)
@@ -253,37 +549,33 @@ func (r *Relay) handshake(ctx context.Context) error {
 		// receiveHello() and never sends the addendum, deadlocking NegotiateAddendum
 		// below. srvPkt.Raw carries the exact bytes upstream wrote to the wire,
 		// trailing fields included (see Codec.ReadPacket for the capture contract).
-		if _, err := client.Conn().Write(srvPkt.Raw); err != nil {
+		if err := client.WriteRawPacket(srvPkt.Raw); err != nil {
 			return fmt.Errorf("echo server hello: %w", err)
 		}
 		logger.Debugw("server hello echoed to client", "bytes", len(srvPkt.Raw))
 
 		if chproto.SupportsAddendum(rev) {
-			// Force the negotiated chunked mode to "notchunked" on both directions.
-			// The codec does not yet wrap reads/writes in ChunkedReader/Writer, so
-			// any chunked framing in the packet loop would be parsed as malformed
-			// packets. The server-side advertisement in ServerHello is already
-			// rewritten to "notchunked" on its way to the client (see
-			// rewriteServerHelloChunkedToNotChunked), and this matching proposal
-			// ensures the addendum we forward to upstream also lands on
-			// "notchunked" regardless of what the client itself proposed — because
-			// resolveChunkedMode with any "notchunked" operand returns "notchunked".
-			//
-			// TODO: switch back to "chunked_optional" once the codec supports
-			// chunked framing end-to-end.
+			// Housegate terminates chunked transport on each leg. The client
+			// result enables its codec; the upstream result is resolved
+			// independently against the original ServerHello capabilities.
 			res, err := client.NegotiateAddendum(chproto.AddendumOpts{
-				ProposedRecv: "notchunked",
-				ProposedSend: "notchunked",
+				ProposedRecv: "chunked_optional",
+				ProposedSend: "chunked_optional",
 			})
 			if err != nil {
 				return fmt.Errorf("client addendum: %w", err)
 			}
 			state.ChunkedRecv = res.NegotiatedRecv
 			state.ChunkedSend = res.NegotiatedSend
-			if err := upstream.SendAddendum(res); err != nil {
+			upstreamRes := upstream.ResolveUpstreamAddendum(res, chproto.AddendumOpts{
+				ProposedRecv: "chunked_optional",
+				ProposedSend: "chunked_optional",
+			})
+			if err := upstream.SendAddendum(upstreamRes); err != nil {
 				return fmt.Errorf("upstream addendum: %w", err)
 			}
 		}
+		state.SetUpstreamHello(upstreamHello)
 	}
 
 	elapsed := time.Since(start)
@@ -402,6 +694,9 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 
 		if decErr == nil && pkt.Decoded != nil && pkt.Type == uint64(chproto.ClientQueryCode) {
 			q := pkt.Decoded.(*chproto.Query)
+			if q.ID == "" {
+				q.ID = fmt.Sprintf("__housegate_query_%d_%d", r.sess.ID(), time.Now().UnixNano())
+			}
 			clientCompression := q.Compression
 			// ClientData framing is declared by the Query packet even when the
 			// query is rejected and its remaining input must only be drained.
@@ -429,6 +724,14 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 				r.writeExceptionToClient(ctx, err)
 				return err
 			}
+			// A previous opaque result was relayed as an uninterpreted byte
+			// stream. Receiving this Query proves the client consumed its
+			// terminal packet; stop the raw reader so packet framing is
+			// restored on the same upstream before the query is forwarded.
+			if err := r.waitAndResetOpaque(ctx); err != nil {
+				r.writeExceptionToClient(ctx, err)
+				return err
+			}
 			if previousQueryID, active := r.currentActiveQuery(); active {
 				err := fmt.Errorf("client sent query %q before upstream completed query %q", q.ID, previousQueryID)
 				r.writeExceptionToClient(ctx, err)
@@ -449,7 +752,7 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 			// per-query state, and skip forwarding.
 			if qctx.AbortWithSuccess {
 				r.hooks.OnQueryAbort(ctx, qctx)
-				if err := writeEndOfStreamToClient(client.Conn()); err != nil {
+				if err := client.WriteRawPacket([]byte{byte(chproto.ServerEndOfStreamCode)}); err != nil {
 					// Transport-level failure on the client socket; treat
 					// the same as any other unrecoverable client write —
 					// the connection is dead. Match the existing pattern
@@ -599,7 +902,7 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 			"name", clientPacketName(pkt.Type),
 			"raw_len", pkt.RawLen,
 		)
-		if err := client.Splice(up.Conn(), pkt); err != nil {
+		if err := up.WriteRawPacket(pkt.Raw); err != nil {
 			return fmt.Errorf("splice client→upstream type=%d: %w", pkt.Type, err)
 		}
 		if inputComplete {
@@ -781,6 +1084,12 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 
 		pkt, err := up.ReadPacket(uint64(chproto.ServerExceptionCode))
 		if err != nil {
+			if errors.Is(err, chproto.ErrUnsupportedResultType) && pkt != nil {
+				err = r.relayOpaqueResult(ctx, up, pkt)
+				if errors.Is(err, errOpaqueReaderStopped) {
+					continue
+				}
+			}
 			// A non-EOF read error on the current upstream codec may have been
 			// caused by a planned rebind: RebindToPeer closes the old upstream
 			// codec (asynchronously) while clientToUpstream's OnQuery is
@@ -848,10 +1157,86 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 			}
 			continue
 		}
-		if err := up.Splice(client.Conn(), pkt); err != nil {
+		if err := client.WriteRawPacket(pkt.Raw); err != nil {
 			return fmt.Errorf("splice upstream packet to client: %w", err)
 		}
 	}
+}
+
+func (r *Relay) relayOpaqueResult(ctx context.Context, up *chproto.Codec, first *chproto.Packet) error {
+	queryID, active := r.currentActiveQuery()
+	if !active {
+		return fmt.Errorf("opaque result without an active query")
+	}
+	if r.sess.State().Snapshot().CommitGateEvent != nil {
+		return fmt.Errorf("opaque result for commit-gated query %q: %w", queryID, chproto.ErrUnsupportedResultType)
+	}
+	client := r.sess.Client()
+	if client.ChunkedSendEnabled() {
+		return fmt.Errorf("opaque result cannot enter raw mode on a chunked downstream")
+	}
+	if err := r.startOpaqueCompletionProbe(ctx, queryID); err != nil {
+		return err
+	}
+	r.opaqueMu.Lock()
+	stop := r.opaqueStop
+	readDone := r.opaqueRead
+	r.opaqueMu.Unlock()
+	defer close(readDone)
+
+	if len(first.Raw) == 0 {
+		return fmt.Errorf("opaque result has no captured prefix")
+	}
+	if err := writeAll(client.Conn(), first.Raw); err != nil {
+		return fmt.Errorf("write opaque result prefix: %w", err)
+	}
+	if r.obs != nil {
+		r.obs.BytesTransferred("upstream_to_client", float64(len(first.Raw)))
+		r.obs.ServerPacket(serverPacketName(first.Type))
+	}
+
+	buf := make([]byte, 128*1024)
+	for {
+		n, readErr := up.ReadRaw(buf)
+		if n > 0 {
+			if err := writeAll(client.Conn(), buf[:n]); err != nil {
+				return fmt.Errorf("write opaque result stream: %w", err)
+			}
+			if r.obs != nil {
+				r.obs.BytesTransferred("upstream_to_client", float64(n))
+			}
+		}
+		if readErr != nil {
+			select {
+			case <-stop:
+				if conn, ok := up.Conn().(net.Conn); ok {
+					if err := conn.SetReadDeadline(time.Time{}); err != nil {
+						return fmt.Errorf("clear opaque result read deadline: %w", err)
+					}
+				}
+				return errOpaqueReaderStopped
+			default:
+			}
+			if newUp := r.sess.Upstream(); newUp != nil && newUp != up {
+				return errOpaqueReaderStopped
+			}
+			return readErr
+		}
+	}
+}
+
+func writeAll(w io.Writer, p []byte) error {
+	for len(p) > 0 {
+		n, err := w.Write(p)
+		if err != nil {
+			return err
+		}
+		if n <= 0 {
+			return io.ErrShortWrite
+		}
+		p = p[n:]
+	}
+	return nil
 }
 
 // upstreamAddr returns the remote address of the codec's underlying

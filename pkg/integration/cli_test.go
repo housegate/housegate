@@ -45,12 +45,18 @@ func TestCLI_AggregateStatePassthrough(t *testing.T) {
 	proxy := testenv.StartServerProxy(t, chEnv.Addr)
 
 	out, err := testenv.RunCLICompressedMultiquery(t, bin, proxy.Addr, chEnv.Database,
-		"SELECT sumState(number) FROM numbers(10); SELECT 42")
+		"CREATE TEMPORARY TABLE hg_opaque_session_state (v UInt64);"+
+			" INSERT INTO hg_opaque_session_state VALUES (7);"+
+			" SELECT avgState(number) FROM numbers(10);"+
+			" SELECT uniqState(number) FROM numbers(10);"+
+			" SELECT sumState(toFloat64(number)) FROM numbers(10);"+
+			" SELECT sum(v) FROM hg_opaque_session_state;"+
+			" SELECT 42")
 	if err != nil {
-		t.Fatalf("sumState via CLI: %v\nout: %q", err, out)
+		t.Fatalf("aggregate states via CLI: %v\nout: %q", err, out)
 	}
-	if len(out) == 0 || !strings.HasSuffix(out, "42") {
-		t.Fatalf("sumState multiquery did not resume framed traffic: %q", out)
+	if len(out) == 0 || !strings.HasSuffix(out, "7\n42") {
+		t.Fatalf("aggregate-state multiquery did not resume framed traffic: %q", out)
 	}
 }
 

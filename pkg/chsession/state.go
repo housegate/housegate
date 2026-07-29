@@ -141,6 +141,11 @@ type SessionState struct {
 	// without re-reading a second ServerHello.
 	PeerRevision int
 
+	// upstreamHello is the exact post-plugin ClientHello used for the current
+	// upstream leg. It stays private because it contains the mapped password.
+	// Relay uses a clone for short-lived completion probes.
+	upstreamHello *chproto.ClientHello
+
 	// maintenance is set by the host (sentio-node) auth validator when
 	// it recognizes SQL_sentio_maintenance=1 on an indexer-signed query.
 	// When true, the rewrite, usage, and commitgate plugins short-circuit
@@ -172,6 +177,32 @@ type SessionState struct {
 // NewSessionState returns an empty SessionState with a non-nil Settings map.
 func NewSessionState() *SessionState {
 	return &SessionState{Settings: make(map[string]chproto.Setting)}
+}
+
+// SetUpstreamHello stores a private clone of the hello used for the current
+// upstream connection. Callers must invoke it only after the handshake
+// succeeds.
+func (s *SessionState) SetUpstreamHello(hello *chproto.ClientHello) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if hello == nil {
+		s.upstreamHello = nil
+		return
+	}
+	cloned := *hello
+	s.upstreamHello = &cloned
+}
+
+// UpstreamHello returns a private clone suitable for a fresh connection.
+// The mapped password never enters SessionStateSnapshot or logs.
+func (s *SessionState) UpstreamHello() *chproto.ClientHello {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.upstreamHello == nil {
+		return nil
+	}
+	cloned := *s.upstreamHello
+	return &cloned
 }
 
 // SessionStateSnapshot is an immutable view for plugins and observers.

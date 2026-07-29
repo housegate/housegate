@@ -2,10 +2,64 @@ package chproto
 
 import (
 	"bytes"
+	"encoding/binary"
+	"errors"
+	"io"
 	"testing"
 
 	"github.com/ClickHouse/ch-go/proto"
 )
+
+func TestChunkedWriterMultipartHasOneLogicalEndMarker(t *testing.T) {
+	payload := bytes.Repeat([]byte{0xAB}, defaultChunkPayloadSize+17)
+	var wire bytes.Buffer
+
+	w := NewChunkedWriter(&wire, true)
+	n, err := w.Write(payload)
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if n != len(payload) {
+		t.Fatalf("Write n=%d, want %d", n, len(payload))
+	}
+
+	raw := wire.Bytes()
+	firstSize := int(binary.LittleEndian.Uint32(raw[:chunkedHeaderSize]))
+	if firstSize != defaultChunkPayloadSize {
+		t.Fatalf("first part size=%d, want %d", firstSize, defaultChunkPayloadSize)
+	}
+	pos := chunkedHeaderSize + firstSize
+	secondSize := int(binary.LittleEndian.Uint32(raw[pos : pos+chunkedHeaderSize]))
+	if secondSize != 17 {
+		t.Fatalf("second part size=%d, want 17", secondSize)
+	}
+	pos += chunkedHeaderSize + secondSize
+	if got := binary.LittleEndian.Uint32(raw[pos : pos+chunkedHeaderSize]); got != 0 {
+		t.Fatalf("logical end marker=%d, want 0", got)
+	}
+	if pos+chunkedHeaderSize != len(raw) {
+		t.Fatalf("wire has %d trailing bytes after end marker", len(raw)-(pos+chunkedHeaderSize))
+	}
+
+	r := NewChunkedReader(bytes.NewReader(raw), true)
+	got, err := r.ReadChunk()
+	if err != nil {
+		t.Fatalf("ReadChunk: %v", err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("round trip payload mismatch: got %d bytes, want %d", len(got), len(payload))
+	}
+	if _, err := r.ReadChunk(); !errors.Is(err, io.EOF) {
+		t.Fatalf("second ReadChunk err=%v, want io.EOF", err)
+	}
+}
+
+func TestChunkedReaderRejectsEmptyLogicalChunk(t *testing.T) {
+	r := NewChunkedReader(bytes.NewReader(make([]byte, chunkedHeaderSize)), true)
+	if _, err := r.ReadChunk(); err == nil {
+		t.Fatal("ReadChunk accepted an empty logical chunk")
+	}
+}
 
 func TestNegotiateAddendum_BothChunkedOptional_ResolvesToChunked(t *testing.T) {
 	// Client advertises chunked_optional on both sides, with a non-empty quota_key.

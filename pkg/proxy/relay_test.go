@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"io"
 	"net"
@@ -494,7 +495,7 @@ func TestRelay_FragmentedProgressPayloadByteCannotImpersonateEndOfStream(t *test
 	}
 }
 
-func TestRelay_KnownAggregateStateRemainsPacketFramed(t *testing.T) {
+func TestRelay_ChunkedAggregateStateRemainsPacketFramed(t *testing.T) {
 	for _, compression := range []proto.Compression{
 		proto.CompressionDisabled,
 		proto.CompressionEnabled,
@@ -510,6 +511,7 @@ func TestRelay_KnownAggregateStateRemainsPacketFramed(t *testing.T) {
 			up := chproto.NewCodec(proxyUpstream, chproto.DirToUpstream)
 			up.SetRevision(rev)
 			up.SetCompression(compression)
+			up.EnableChunked(true, false)
 			if err := sess.BindUpstream(context.Background(), up); err != nil {
 				t.Fatalf("BindUpstream: %v", err)
 			}
@@ -529,7 +531,9 @@ func TestRelay_KnownAggregateStateRemainsPacketFramed(t *testing.T) {
 			}()
 			go func() {
 				_ = upstreamProxy.SetWriteDeadline(time.Now().Add(time.Second))
-				_, _ = upstreamProxy.Write(wire)
+				chunked := chproto.NewChunkedWriter(upstreamProxy, true)
+				_, _ = chunked.Write(data)
+				_, _ = chunked.Write([]byte{byte(chproto.ServerEndOfStreamCode)})
 				_ = upstreamProxy.Close()
 			}()
 
@@ -560,6 +564,178 @@ func TestRelay_KnownAggregateStateRemainsPacketFramed(t *testing.T) {
 				t.Errorf("aggregate-state EndOfStream fired OnQueryComplete %d times, want 1", hooks.queryCompletes)
 			}
 		})
+	}
+}
+
+func TestRelay_OpaqueResultUsesCompletionProbeWithoutValueDecoding(t *testing.T) {
+	clientProxy, proxyClient := net.Pipe()
+	upstreamProxy, proxyUpstream := net.Pipe()
+	defer clientProxy.Close()
+	defer upstreamProxy.Close()
+
+	const rev = chproto.MaxSupportedRevision
+	sess := chsession.New(1, proxyClient)
+	up := chproto.NewCodec(proxyUpstream, chproto.DirToUpstream)
+	up.SetRevision(rev)
+	up.SetCompression(proto.CompressionDisabled)
+	if err := sess.BindUpstream(context.Background(), up); err != nil {
+		t.Fatalf("BindUpstream: %v", err)
+	}
+
+	lifecycle := &aggregateLifecyclePlugin{}
+	chain := &plugin.PluginChain{
+		QuerySuccessPlugins:  []plugin.QuerySuccessPlugin{lifecycle},
+		QueryCompletePlugins: []plugin.QueryCompletePlugin{lifecycle},
+	}
+	probeCalled := make(chan string, 1)
+	r := &Relay{
+		sess:  sess,
+		hooks: chain,
+		completionProbe: func(_ context.Context, queryID string) error {
+			probeCalled <- queryID
+			return nil
+		},
+	}
+	const queryID = "qid-opaque-result"
+	if !r.beginActiveQuery(queryID) {
+		t.Fatal("beginActiveQuery unexpectedly reported an active query")
+	}
+
+	data := aggregateStateDataPacket(t, rev, proto.CompressionDisabled)
+	wire := append(append([]byte(nil), data...), byte(chproto.ServerEndOfStreamCode))
+	relayDone := make(chan error, 1)
+	go func() {
+		relayDone <- r.upstreamToClient(context.Background())
+	}()
+	go func() {
+		_, _ = upstreamProxy.Write(wire)
+		// Keep the upstream open after EndOfStream. Cleanup must come from the
+		// authoritative process probe, not socket EOF or a payload-byte guess.
+	}()
+
+	got := make([]byte, len(wire))
+	_ = clientProxy.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := io.ReadFull(clientProxy, got); err != nil {
+		t.Fatalf("read opaque aggregate-state response: %v", err)
+	}
+	if !bytes.Equal(got, wire) {
+		t.Fatalf("opaque response changed:\ngot  %x\nwant %x", got, wire)
+	}
+
+	select {
+	case gotID := <-probeCalled:
+		if gotID != queryID {
+			t.Fatalf("probe query ID=%q, want %q", gotID, queryID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("completion probe was not called")
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		lifecycle.mu.Lock()
+		completes, successes := lifecycle.completes, lifecycle.successes
+		lifecycle.mu.Unlock()
+		if completes == 1 {
+			if successes != 0 {
+				t.Fatalf("opaque completion fired OnQuerySuccess %d times, want 0", successes)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("OnQueryComplete count=%d, want 1", completes)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if _, active := r.currentActiveQuery(); active {
+		t.Fatal("completion probe left opaque query active")
+	}
+
+	_ = upstreamProxy.Close()
+	select {
+	case err := <-relayDone:
+		if err != nil && !errors.Is(err, io.EOF) {
+			t.Fatalf("upstreamToClient: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("upstreamToClient did not finish")
+	}
+}
+
+func TestRelay_OpaqueResultResumesPacketFramingOnSameUpstream(t *testing.T) {
+	clientProxy, proxyClient := net.Pipe()
+	upstreamProxy, proxyUpstream := net.Pipe()
+	defer clientProxy.Close()
+	defer upstreamProxy.Close()
+
+	sess := chsession.New(1, proxyClient)
+	up := chproto.NewCodec(proxyUpstream, chproto.DirToUpstream)
+	up.SetRevision(chproto.MaxSupportedRevision)
+	if err := sess.BindUpstream(context.Background(), up); err != nil {
+		t.Fatalf("BindUpstream: %v", err)
+	}
+
+	r := &Relay{
+		sess:  sess,
+		hooks: &plugin.PluginChain{},
+		completionProbe: func(context.Context, string) error {
+			return nil
+		},
+	}
+	if !r.beginActiveQuery("qid-resume-same-upstream") {
+		t.Fatal("beginActiveQuery unexpectedly reported an active query")
+	}
+
+	first := &chproto.Packet{
+		Type: uint64(chproto.ServerDataCode),
+		Raw:  []byte{byte(chproto.ServerDataCode), 0xAA},
+	}
+	remainder := []byte{0xBB, byte(chproto.ServerEndOfStreamCode)}
+	relayDone := make(chan error, 1)
+	go func() {
+		relayDone <- r.relayOpaqueResult(context.Background(), up, first)
+	}()
+	go func() {
+		_, _ = upstreamProxy.Write(remainder)
+	}()
+
+	wantRaw := append(append([]byte(nil), first.Raw...), remainder...)
+	gotRaw := make([]byte, len(wantRaw))
+	_ = clientProxy.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := io.ReadFull(clientProxy, gotRaw); err != nil {
+		t.Fatalf("read raw result: %v", err)
+	}
+	if !bytes.Equal(gotRaw, wantRaw) {
+		t.Fatalf("raw result changed: got %x, want %x", gotRaw, wantRaw)
+	}
+
+	if err := r.waitAndResetOpaque(context.Background()); err != nil {
+		t.Fatalf("waitAndResetOpaque: %v", err)
+	}
+	if got := sess.Upstream(); got != up {
+		t.Fatalf("opaque resume replaced upstream codec: got %p, want %p", got, up)
+	}
+	select {
+	case err := <-relayDone:
+		if !errors.Is(err, errOpaqueReaderStopped) {
+			t.Fatalf("relayOpaqueResult err=%v, want %v", err, errOpaqueReaderStopped)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("opaque reader did not stop")
+	}
+
+	// The next packet must be decoded by the same permanent proto.Reader. A
+	// stale read deadline or discarded codec would fail or block here.
+	go func() {
+		_, _ = upstreamProxy.Write([]byte{byte(chproto.ServerEndOfStreamCode)})
+	}()
+	_ = proxyUpstream.SetReadDeadline(time.Now().Add(time.Second))
+	pkt, err := up.ReadPacket()
+	if err != nil {
+		t.Fatalf("ReadPacket after opaque resume: %v", err)
+	}
+	if pkt.Type != uint64(chproto.ServerEndOfStreamCode) {
+		t.Fatalf("packet after opaque resume type=%d, want EndOfStream", pkt.Type)
 	}
 }
 
@@ -621,6 +797,7 @@ func TestRelay_IncompleteAggregateStateDoesNotReleaseConcurrencyPermit(t *testin
 	up := chproto.NewCodec(proxyUpstream, chproto.DirToUpstream)
 	up.SetRevision(rev)
 	up.SetCompression(proto.CompressionDisabled)
+	up.EnableChunked(true, false)
 	if err := sess.BindUpstream(context.Background(), up); err != nil {
 		t.Fatalf("BindUpstream: %v", err)
 	}
@@ -678,12 +855,15 @@ func TestRelay_IncompleteAggregateStateDoesNotReleaseConcurrencyPermit(t *testin
 	if len(data) < 8 {
 		t.Fatalf("aggregate-state packet is only %d bytes", len(data))
 	}
-	partial := append(append([]byte(nil), data[:len(data)-8]...), byte(chproto.ServerEndOfStreamCode))
+	// Announce the full packet chunk, but provide only the first byte of the
+	// eight-byte aggregate state (0x05). The chunk end marker and remaining
+	// state bytes stay withheld.
+	partial := data[:len(data)-7]
 	go func() {
+		var header [4]byte
+		binary.LittleEndian.PutUint32(header[:], uint32(len(data)))
+		_, _ = upstreamProxy.Write(header[:])
 		_, _ = upstreamProxy.Write(partial)
-		// Keep both connections open with the rest of the UInt64 state and the
-		// genuine EndOfStream withheld. The first state byte is deliberately
-		// 0x05: it must not be mistaken for a terminal packet.
 	}()
 
 	select {
@@ -737,7 +917,7 @@ func aggregateStateDataPacket(
 	if proto.FeatureCustomSerialization.In(rev) {
 		body.PutBool(false)
 	}
-	body.PutUInt64(45)
+	body.PutUInt64(5)
 
 	var data proto.Buffer
 	data.PutUVarInt(uint64(proto.ServerCodeData))
@@ -765,6 +945,7 @@ func TestRelay_AggregateStateThenNextQueryStaysPacketFramed(t *testing.T) {
 	up := chproto.NewCodec(proxyUpstream, chproto.DirToUpstream)
 	up.SetRevision(rev)
 	up.SetCompression(proto.CompressionEnabled)
+	up.EnableChunked(true, false)
 	if err := sess.BindUpstream(context.Background(), up); err != nil {
 		t.Fatalf("BindUpstream: %v", err)
 	}
@@ -775,15 +956,17 @@ func TestRelay_AggregateStateThenNextQueryStaysPacketFramed(t *testing.T) {
 		t.Fatal("beginActiveQuery unexpectedly reported an active query")
 	}
 
-	first := aggregateStateDataPacket(t, rev, proto.CompressionEnabled)
-	first = append(first, byte(chproto.ServerEndOfStreamCode))
+	firstData := aggregateStateDataPacket(t, rev, proto.CompressionEnabled)
+	first := append(append([]byte(nil), firstData...), byte(chproto.ServerEndOfStreamCode))
 
 	relayDone := make(chan error, 1)
 	go func() {
 		relayDone <- r.upstreamToClient(context.Background())
 	}()
 	go func() {
-		_, _ = upstreamProxy.Write(first)
+		chunked := chproto.NewChunkedWriter(upstreamProxy, true)
+		_, _ = chunked.Write(firstData)
+		_, _ = chunked.Write([]byte{byte(chproto.ServerEndOfStreamCode)})
 	}()
 
 	gotFirst := make([]byte, len(first))
@@ -803,7 +986,8 @@ func TestRelay_AggregateStateThenNextQueryStaysPacketFramed(t *testing.T) {
 		t.Fatal("beginActiveQuery after aggregate-state response reported an active query")
 	}
 	go func() {
-		_, _ = upstreamProxy.Write([]byte{byte(chproto.ServerEndOfStreamCode)})
+		chunked := chproto.NewChunkedWriter(upstreamProxy, true)
+		_, _ = chunked.Write([]byte{byte(chproto.ServerEndOfStreamCode)})
 		_ = upstreamProxy.Close()
 	}()
 

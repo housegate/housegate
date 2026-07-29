@@ -202,13 +202,15 @@ func (s *sessionImpl) handshakeNewUpstream(newUp *chproto.Codec, hello *chproto.
 	}
 	newUp.SetRevision(rev)
 	if chproto.SupportsAddendum(rev) {
-		if err := newUp.SendAddendum(chproto.AddendumResult{
-			NegotiatedSend: "notchunked",
-			NegotiatedRecv: "notchunked",
-		}); err != nil {
+		res := newUp.ResolveUpstreamAddendum(chproto.AddendumResult{}, chproto.AddendumOpts{
+			ProposedRecv: "chunked_optional",
+			ProposedSend: "chunked_optional",
+		})
+		if err := newUp.SendAddendum(res); err != nil {
 			return 0, nil, fmt.Errorf("%s send addendum: %w", errPrefix, err)
 		}
 	}
+	s.state.SetUpstreamHello(upstreamHello)
 	return rev, srvPkt.Raw, nil
 }
 

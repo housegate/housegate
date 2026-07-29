@@ -41,7 +41,7 @@ signers, not per-test containers.
   Failure usually points at `Codec.Splice`, `proto.Reader` framing, or
   upstream Data-block forwarding.
 - `TestLargeStream` — million-row pull. Stresses the chunk-by-chunk
-  upstream→client copy path and the `notchunked` ServerHello rewrite.
+  upstream→client packet path across negotiated transport modes.
 - `TestException` — invalid SQL surfaces as a client-visible exception;
   the OnException first-byte heuristic fires best-effort.
 - `TestGracefulShutdown` — `proxy.Close` returns within a tight deadline
@@ -55,6 +55,11 @@ Drives the *real* `clickhouse-client` binary against the proxy. Catches
 framing/settings/addendum quirks that ch-go-on-both-sides would not see.
 
 - `TestCLI_SelectOne` — CLI smoke (`SELECT 1` round trip).
+- `TestCLI_AggregateStatePassthrough` — multiple opaque Native aggregate
+  states (`avgState`, `uniqState`, and floating-point `sumState`) followed by
+  a temporary-table read and `SELECT 42` on the same connection. Covers raw
+  legacy completion, same-codec packet-framing resumption, and preservation of
+  upstream session state without relying on a value-layout decoder.
 - `TestCLI_InsertSelectRoundtrip` — CREATE / INSERT / SELECT / DROP via
   the CLI. Validates Data-block path under the official client.
 - `TestCLI_LargeStream` — 100k-row stream via `SELECT count()` to avoid

@@ -72,12 +72,12 @@ Server.handle → Relay.Run
   └─ Relay.handshake (relay.go)
        1. client.ReadPacket(ClientHello)  → OnHello chain (credential, route, state)
        2. upstream.WriteClientHello + upstream.ReadPacket(ServerHello)
-            ServerHello is returned as both Decoded + Raw; the chunked caps
-            (proto_send/recv_chunked_srv) are rewritten to "notchunked"
-            before the raw bytes are echoed to the client — see hello.go.
-       3. client.NegotiateAddendum(ProposedRecv/Send="notchunked") + upstream.SendAddendum
-            The negotiate call is READ-ONLY (ch-go client never expects a
-            reply); forwarding to upstream is explicit.
+            ServerHello is returned as both Decoded + Raw. The original
+            upstream chunked caps are retained for that leg, while the raw
+            hello echoed downstream advertises Housegate's own capability.
+       3. client.NegotiateAddendum(chunked_optional) + upstream.SendAddendum
+            The client and upstream legs resolve independently. The client
+            negotiate call is READ-ONLY; forwarding upstream is explicit.
   └─ Relay.clientToUpstream  (goroutine, packet-by-packet)
        client.ReadPacket(ClientQueryCode) → OnQuery chain (auth, usage,
          concurrency, forward, rewrite, commitgate, route signer, metrics)
@@ -96,17 +96,20 @@ Server.handle → Relay.Run
        EndOfStream fires OnQuerySuccess (QuerySuccessPlugin), then
        OnQueryComplete, before the terminal packet reaches the client. TCP
        fragmentation/coalescing cannot create or hide a success boundary.
-       Native result layouts absent from clickhouse-go are supported only by an
-       exact fixed-layout allowlist (currently AggregateFunction(sum, UInt64));
-       every other unknown layout closes the connection before forwarding a
-       partial block.
+       With chunked transport, ClickHouse's finishChunk boundary frames opaque
+       Native values without decoding them. On a legacy non-chunked leg, an
+       unsupported Native layout for a normal query is streamed unchanged while
+       an exact query-id completion probe supplies cleanup only; the next client
+       Query safely interrupts the blocked raw reader and resumes packet framing
+       on the same upstream connection. Commit-gated queries never take this raw
+       fallback and remain fail-closed.
 ```
 
 Key non-obvious invariants driven by this design:
 - **One `Codec` per net.Conn; one `proto.Reader` per Codec.** The codec feeds proto.Reader through a 1-byte-at-a-time `captureByteReader` so its inner bufio never prefetches across a packet boundary. Creating a fresh proto.Reader per packet — an older design — stranded prefetched bytes the moment the client pipelined addendum+query in one TCP segment.
-- **The proxy caps protocol negotiation at ch-go's `proto.Version` (`54460`).** `ClientHelloForUpstream` lowers newer client hellos before every initial/rebind upstream handshake, and the raw ServerHello revision is rewritten to the same negotiated value before reaching the client. This keeps both sides on the exact feature set the packet decoder supports and prevents newer custom sparse/detached serialization layouts from entering the stream.
-- **Chunked protocol is force-disabled.** The codec does not yet implement `ChunkedReader` / `ChunkedWriter`; see Known Rough Edges.
-- **ReadPacket is Relay's only upstream read mode.** It never switches a partially decoded Native block to raw streaming: without a packet length, TCP read boundaries cannot prove where an implementation-specific column state or the enclosing response ends.
+- **The proxy caps protocol negotiation at revision `54470`.** `ClientHelloForUpstream` lowers newer client hellos before every initial/rebind upstream handshake, and the raw ServerHello revision is rewritten to the same negotiated value before reaching the client. Housegate models the 54461–54470 Progress/Profile/TableStatus and chunked-transport additions but deliberately does not opt into 54471's versioned-parallel-replicas fields.
+- **Chunked transport is terminated independently on both legs.** `ChunkedReader`/`ChunkedWriter` are enabled only after addendum negotiation. Each server `finishChunk()` is an authoritative packet boundary, including for implementation-specific AggregateFunction states.
+- **ReadPacket is Relay's normal upstream read mode.** The sole raw mode is a type-independent fallback for an ordinary non-chunked result after `ErrUnsupportedResultType`; it never dispatches success. The next client Query proves the terminal response was consumed, wakes the blocked raw reader with a read deadline, and resumes `ReadPacket` on the same codec so temporary tables, roles, and other connection state survive. A commit-gated statement cannot use that fallback.
 - **Relay enforces one query in flight per connection.** It tracks an `activeQuery`/`activeQueryID` pair; a client `Query` packet arriving before the previous query's framed terminal EndOfStream/Exception was consumed is rejected with an Exception rather than forwarded.
 
 ### 4. SQL rewriter is a pluggable backend (gRPC service or in-process engine)
@@ -117,7 +120,7 @@ When a remote table maps to another housegate (cross-indexer routing), the rewri
 
 ## Key Modules
 
-- **[pkg/chproto/](pkg/chproto/)** — `Codec` (one proto.Reader per codec fed through a 1-byte capturing reader), `ReadPacket` / `Splice` tagged-union reader, capped revision negotiation, addendum negotiation, `rewriteServerHelloChunkedToNotChunked` workaround, `walkDataBlock`/`walkCompressedTableColumns` for authoritative Native-block/TableColumns framing across one or more compression frames. Native blocks use clickhouse-go's broad column factory (including composite `Tuple`) to locate the decoded boundary while preserving exact splice bytes. `AggregateFunction(sum, UInt64)` has an explicit fixed-width state decoder because clickhouse-go does not expose an AggregateFunction scan column; all other types outside the driver's scan set return `ErrUnsupportedResultType` and close fail-closed. Log/ProfileEvents remain uncompressed below revision 54481 even when query Data is compressed.
+- **[pkg/chproto/](pkg/chproto/)** — `Codec` (one proto.Reader per codec fed through a 1-byte capturing reader), `ReadPacket` / `Splice` tagged-union reader, revision-54470 negotiation, independent addendum negotiation, and `ChunkedReader`/`ChunkedWriter` transport termination. `walkDataBlock`/`walkCompressedTableColumns` locate authoritative Native-block/TableColumns boundaries across one or more compression frames using clickhouse-go's broad column factory (including composite `Tuple`) while preserving exact splice bytes. Types outside that scan set return `ErrUnsupportedResultType`; Relay handles them by the chunk boundary when available, by ordinary-query raw fallback on legacy transport, or fail-closed for commit-gated statements. Log/ProfileEvents remain uncompressed below revision 54481 even when query Data is compressed.
 - **[pkg/chsession/](pkg/chsession/)** — `Session` interface + `SessionState` (`Database` / `LogicalDatabase` / `Settings` / `RouteTarget` / `IsPeerTrusted` / `PeerAddress` / `HasActiveRewrite`, replayable on upstream rebind). Atomic upstream-pointer swap.
 - **[pkg/route/](pkg/route/)** — `__route__|<target>|<realUser>` envelope encoder/parser (`Format` / `Parse` / `Delim`); shared `|` delimiter convention with `pkg/peer`. No external deps.
 - **[pkg/peer/](pkg/peer/)** — `__peer__|<address>` envelope encoder/parser; reuses `route.Delim`.
@@ -147,10 +150,9 @@ Cross-cutting:
 
 Works end-to-end against ClickHouse 26.x; these are the current blind spots:
 
-- **Chunked protocol is not implemented in the codec.** To avoid the client negotiating chunked framing, `rewriteServerHelloChunkedToNotChunked` in [hello.go](pkg/chproto/hello.go) rewrites the server's `proto_send_chunked_srv` / `proto_recv_chunked_srv` advertisements to `"notchunked"` before echoing ServerHello, and `NegotiateAddendum` is called with `ProposedRecv/Send="notchunked"` so upstream also agrees. This costs throughput for large Data blocks vs. what ClickHouse's chunked transport would deliver, but keeps the packet loop correct. Follow-up: wire `ChunkedReader`/`ChunkedWriter` into `Codec` and drop both workarounds.
-- **`decodeServerHello` runs before `SetRevision`**, so ch-go only reads `name/major/minor/revision` and stops. `SessionState.Timezone` / `ServerDisplayName` come out empty. Harmless — the raw ServerHello bytes flow to the client correctly via the Raw pass-through — but any plugin that reads those fields from state will see empties today.
-- **`upstream → client` is packet-framed and fail-closed on unknown packet layouts.** Relay decodes Exception and frames every known Server packet before forwarding. If a future packet body is absent from `skipServerPacketBody`, or a Data column layout is outside the exact decoder allowlist, the connection closes instead of raw-splicing an ambiguous partial stream.
-- **`skipServerPacketBody` (Progress/Profile/TablesStatus/PartUUIDs/TableColumns) hand-decodes several trailing fields ch-go v0.73's `DecodeAware` doesn't model**, gated by `revisionMin*` constants in [codec.go](pkg/chproto/codec.go). Production negotiation is capped at revision 54460, so later layouts (including compressed Log/ProfileEvents/TableColumns at 54481) are defensive code until the cap is deliberately raised. Compressed Data-family packets are decoded to their authoritative Native-block boundary, so a block split across delayed compression frames remains one packet; normal composite types such as `Tuple` use clickhouse-go's column factory, while each implementation-specific aggregate state needs an explicit decoder before it can enter the supported set. Raising the revision cap requires adding support and tests for every newly enabled packet field and Native custom serialization kind before changing `MaxSupportedRevision`.
+- **Some supported ClickHouse servers still advertise strict `notchunked`.** For ordinary queries whose Native result type clickhouse-go cannot frame, Relay starts an exact-query-id `system.processes` completion probe, raw-splices the untouched response, and dispatches cleanup but never success. Before forwarding the client's next Query, it wakes the blocked raw reader and resumes packet parsing on the same upstream connection. If that same-login probe is unavailable, the connection closes fail-closed. Commit-gated statements always require a decoded or chunk-framed terminal packet and never use this fallback.
+- **`upstream → client` is packet-framed except for the explicit legacy fallback above.** Relay decodes Exception and frames every known Server packet before forwarding. An unknown packet body still closes; only `ErrUnsupportedResultType` on an ordinary non-chunked Data result may enter raw mode, and the captured prefix is forwarded exactly once.
+- **`skipServerPacketBody` (Progress/Profile/TablesStatus/PartUUIDs/TableColumns) hand-decodes several trailing fields ch-go v0.73's `DecodeAware` doesn't model**, gated by `revisionMin*` constants in [codec.go](pkg/chproto/codec.go). Production negotiation is capped at revision 54470; later layouts (including compressed Log/ProfileEvents/TableColumns at 54481) are defensive code until the cap is deliberately raised. Compressed Data-family packets are decoded to their authoritative Native-block boundary, so a block split across delayed compression frames remains one packet; normal composite types such as `Tuple` use clickhouse-go's column factory. Raising the revision cap requires adding support and tests for every newly enabled packet field and Native custom serialization kind before changing `MaxSupportedRevision`.
 - **`ErrorReverseMap` remains a no-op stub** ([pkg/plugins/rewrite/error_map.go](pkg/plugins/rewrite/error_map.go)). The rewriter has not yet grown a `RewriteErrorMessage` RPC, so reverse-mapping inside `OnException` is not wired. The hook itself fires after a complete Exception packet is decoded.
 - **`chproto.Exception` is a direct type alias for ch-go's `proto.Exception`** ([pkg/chproto/packet.go](pkg/chproto/packet.go)). ch-go v0.73.0 dropped the struct's `Nested` field (it never wrote a body, just an obsolete "has nested" flag) — literals built against older ch-go (`Exception{..., Nested: false}`) no longer compile; drop the field.
 - **Prometheus metrics are `init()`-registered globals** in [pkg/proxy/observer.go](pkg/proxy/observer.go) via `prometheus.MustRegister`. Importing the proxy package twice panics on duplicate registration — work around with `//nolint` in tests until the registry is injected.

@@ -65,6 +65,56 @@ func (cr *ChunkedReader) Enabled() bool {
 	return cr.enabled
 }
 
+// Enable switches subsequent reads to ClickHouse's chunked transport.
+// Addendum negotiation is itself unchunked, so codecs enable this only after
+// the final addendum field has been consumed.
+func (cr *ChunkedReader) Enable() {
+	cr.enabled = true
+}
+
+// ReadChunk returns one complete logical ClickHouse chunk with transport
+// headers and the trailing zero marker removed. A logical chunk may contain
+// multiple non-zero parts when a packet exceeds the sender's socket buffer.
+//
+// Server TCPHandler calls finishChunk after every emitted packet. Reading the
+// logical chunk directly therefore gives the proxy an authoritative packet
+// boundary without decoding Native column values (whose layouts are
+// type-dependent and, for AggregateFunction states, not self-delimiting).
+func (cr *ChunkedReader) ReadChunk() ([]byte, error) {
+	if !cr.enabled {
+		return nil, fmt.Errorf("chunked: ReadChunk called while disabled")
+	}
+	if cr.remaining != 0 {
+		return nil, fmt.Errorf("chunked: ReadChunk called during streaming frame")
+	}
+
+	var chunk []byte
+	for {
+		size, err := cr.readChunkHeader()
+		if err != nil {
+			return nil, err
+		}
+		if size == chunkedEndMarker {
+			if len(chunk) == 0 {
+				return nil, fmt.Errorf("chunked: empty logical chunk")
+			}
+			return chunk, nil
+		}
+		// maxChunkSize limits each transport frame, not the whole logical
+		// packet: ClickHouse may split one large Native block across many
+		// frames before writing the zero terminator. Reject only an impossible
+		// aggregate length that cannot fit in a Go slice.
+		if uint64(len(chunk))+uint64(size) > uint64(^uint(0)>>1) {
+			return nil, fmt.Errorf("chunked: logical chunk length overflows int")
+		}
+		start := len(chunk)
+		chunk = append(chunk, make([]byte, int(size))...)
+		if _, err := io.ReadFull(cr.r, chunk[start:]); err != nil {
+			return nil, fmt.Errorf("chunked: read frame payload: %w", err)
+		}
+	}
+}
+
 // Read implements io.Reader.
 // When enabled=true, automatically strips chunk frame headers and end markers.
 // When enabled=false, directly passes through to underlying Reader.
@@ -148,11 +198,20 @@ func (cw *ChunkedWriter) Enabled() bool {
 	return cw.enabled
 }
 
+// Enable switches subsequent writes to ClickHouse's chunked transport.
+// Addendum negotiation is itself unchunked, so codecs call this only after
+// sending the final addendum field.
+func (cw *ChunkedWriter) Enable() {
+	cw.enabled = true
+}
+
 // Write implements io.Writer.
 // When enabled=true, wraps data in a chunk frame: [size: 4 bytes LE][data][end: 4 bytes 0x00]
 // When enabled=false, directly passes through to underlying Writer.
-// When data exceeds defaultChunkPayloadSize, split into multiple chunks aligned with
-// ClickHouse WriteBufferFromPocoSocketChunked multipart mode behavior.
+// When data exceeds defaultChunkPayloadSize, split it into multipart frames
+// followed by one zero end marker. Intermediate parts MUST NOT carry a zero
+// marker: that would turn the remainder of one packet into a new logical
+// chunk whose first payload byte is misread as a packet type.
 // Uses sync.Pool to cache frame buffers, reducing GC pressure for high-frequency small writes.
 func (cw *ChunkedWriter) Write(p []byte) (int, error) {
 	if !cw.enabled {
@@ -164,7 +223,7 @@ func (cw *ChunkedWriter) Write(p []byte) (int, error) {
 
 	totalWritten := 0
 	for len(p) > 0 {
-		// Fragmentation — each chunk has max size of defaultChunkPayloadSize.
+		// Fragmentation — each part has max size of defaultChunkPayloadSize.
 		chunkSize := len(p)
 		if chunkSize > defaultChunkPayloadSize {
 			chunkSize = defaultChunkPayloadSize
@@ -172,8 +231,12 @@ func (cw *ChunkedWriter) Write(p []byte) (int, error) {
 		chunk := p[:chunkSize]
 		p = p[chunkSize:]
 
-		// Merge into a single write: [header:4][data:N][endMarker:4]
-		frameSize := chunkedHeaderSize + chunkSize + chunkedHeaderSize
+		// Only the final part carries the logical chunk's zero end marker.
+		endSize := 0
+		if len(p) == 0 {
+			endSize = chunkedHeaderSize
+		}
+		frameSize := chunkedHeaderSize + chunkSize + endSize
 		frame := chunkedFramePool.Get().([]byte)
 		if cap(frame) < frameSize {
 			frame = make([]byte, frameSize)
@@ -182,9 +245,14 @@ func (cw *ChunkedWriter) Write(p []byte) (int, error) {
 		}
 		binary.LittleEndian.PutUint32(frame[:chunkedHeaderSize], uint32(chunkSize))
 		copy(frame[chunkedHeaderSize:], chunk)
-		binary.LittleEndian.PutUint32(frame[chunkedHeaderSize+chunkSize:], 0)
+		if endSize != 0 {
+			binary.LittleEndian.PutUint32(frame[chunkedHeaderSize+chunkSize:], chunkedEndMarker)
+		}
 
-		_, err := cw.w.Write(frame)
+		n, err := cw.w.Write(frame)
+		if err == nil && n != len(frame) {
+			err = io.ErrShortWrite
+		}
 
 		// Return to pool. Oversized frames are not returned to avoid accumulating large buffers.
 		// Return even on write failure — buffer is re-sliced on next use, so old data is overwritten.
@@ -218,6 +286,17 @@ func resolveChunkedMode(ours, theirs string) string {
 	}
 	// Both are "chunked" or "chunked_optional" — upgrade to "chunked".
 	return "chunked"
+}
+
+// ResolveUpstreamAddendum resolves Housegate's independent client role
+// against the capabilities captured from the upstream ServerHello. base
+// contributes the quota key and parallel-replicas version received from the
+// downstream client; its chunked fields are replaced because the two legs may
+// negotiate different transport modes.
+func (c *Codec) ResolveUpstreamAddendum(base AddendumResult, opts AddendumOpts) AddendumResult {
+	base.NegotiatedRecv = resolveChunkedMode(opts.ProposedRecv, c.serverSendChunked)
+	base.NegotiatedSend = resolveChunkedMode(opts.ProposedSend, c.serverRecvChunked)
+	return base
 }
 
 // AddendumOpts is the set of chunked-mode preferences the proxy proposes
@@ -310,12 +389,14 @@ func (c *Codec) NegotiateAddendum(opts AddendumOpts) (AddendumResult, error) {
 	// Resolve chunked modes.
 	// Client's send (clientSendChunked) pairs with our recv (ProposedRecv).
 	// Client's recv (clientRecvChunked) pairs with our send (ProposedSend).
-	return AddendumResult{
+	res := AddendumResult{
 		QuotaKey:                quotaKey,
 		NegotiatedRecv:          resolveChunkedMode(opts.ProposedRecv, clientSendChunked),
 		NegotiatedSend:          resolveChunkedMode(opts.ProposedSend, clientRecvChunked),
 		ParallelReplicasVersion: parallelReplicasVersion,
-	}, nil
+	}
+	c.EnableChunked(res.NegotiatedRecv == "chunked", res.NegotiatedSend == "chunked")
+	return res, nil
 }
 
 // SendAddendum writes the resolved addendum negotiation result to the peer.
@@ -355,5 +436,9 @@ func (c *Codec) SendAddendum(res AddendumResult) error {
 	}
 
 	_, err := c.w.Write(buf.Buf)
-	return err
+	if err != nil {
+		return err
+	}
+	c.EnableChunked(res.NegotiatedRecv == "chunked", res.NegotiatedSend == "chunked")
+	return nil
 }
