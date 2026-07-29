@@ -97,8 +97,10 @@ const (
 
 // TableInfo is a single table entry inside DatabaseInfo.Tables.
 type TableInfo struct {
-	TableId   string `json:"tableId" yaml:"table_id"`
-	TableType string `json:"tableType" yaml:"table_type"`
+	TableId       string `json:"tableId" yaml:"table_id"`
+	TableType     string `json:"tableType" yaml:"table_type"`
+	SchemaVersion uint32 `json:"schemaVersion,omitempty" yaml:"schema_version,omitempty"`
+	SchemaHash    string `json:"schemaHash,omitempty" yaml:"schema_hash,omitempty"`
 }
 
 // TableSchemaInfo is the producer-shaped schema record mirrored from

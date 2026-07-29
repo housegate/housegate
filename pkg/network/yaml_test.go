@@ -72,6 +72,20 @@ func TestInMemoryTableSchemas(t *testing.T) {
 			SchemaJson: `{}`,
 		}
 	}
+	s.TableSchemas["db_1/t@9"] = TableSchemaInfo{
+		DatabaseId: "db_1",
+		TableId:    "t",
+		Version:    4,
+		SchemaHash: "0xbad",
+		SchemaJson: `{}`,
+	}
+	s.TableSchemas["db_1/corrupt@4"] = TableSchemaInfo{
+		DatabaseId: "other",
+		TableId:    "corrupt",
+		Version:    4,
+		SchemaHash: "0xbad",
+		SchemaJson: `{}`,
+	}
 
 	got, ok := s.TableSchema("db_1", "t", 2)
 	if !ok || got.Version != 2 || got.DatabaseId != "db_1" || got.TableId != "t" {
@@ -80,8 +94,33 @@ func TestInMemoryTableSchemas(t *testing.T) {
 	if _, ok := s.TableSchema("db_1", "t", 4); ok {
 		t.Fatal("TableSchema miss returned ok")
 	}
+	if _, ok := s.TableSchema("db_1", "corrupt", 4); ok {
+		t.Fatal("TableSchema returned mismatched key/value")
+	}
 	latest, ok := s.LatestTableSchema("db_1", "t")
 	if !ok || latest.Version != 3 {
 		t.Fatalf("LatestTableSchema = %+v, %v; want version 3", latest, ok)
+	}
+}
+
+func TestInMemoryDatabasePreservesTableSchemaPointers(t *testing.T) {
+	s := NewInMemoryNetworkState()
+	s.DatabaseInfos["db_1"] = DatabaseInfo{
+		DatabaseId: "db_1",
+		Tables: []TableInfo{{
+			TableId:       "events",
+			TableType:     "event",
+			SchemaVersion: 7,
+			SchemaHash:    "0xabc",
+		}},
+	}
+
+	db, ok := s.Get("db_1")
+	if !ok || len(db.Tables) != 1 {
+		t.Fatalf("Get(db_1) = %+v, %v", db, ok)
+	}
+	got := db.Tables[0]
+	if got.SchemaVersion != 7 || got.SchemaHash != "0xabc" {
+		t.Fatalf("schema pointer = (%d, %q), want (7, 0xabc)", got.SchemaVersion, got.SchemaHash)
 	}
 }

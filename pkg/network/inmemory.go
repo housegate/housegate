@@ -2,6 +2,8 @@ package network
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/housegate/housegate/pkg/registry"
@@ -158,7 +160,7 @@ func (s *InMemoryNetworkState) TableSchema(databaseId, tableId string, version u
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	info, ok := s.TableSchemas[fmt.Sprintf("%s/%s@%d", databaseId, tableId, version)]
-	if !ok {
+	if !ok || !tableSchemaInfoMatches(info, databaseId, tableId, version) {
 		return registry.TableSchema{}, false
 	}
 	return convertTableSchema(info), true
@@ -167,14 +169,22 @@ func (s *InMemoryNetworkState) TableSchema(databaseId, tableId string, version u
 func (s *InMemoryNetworkState) LatestTableSchema(databaseId, tableId string) (registry.TableSchema, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	var latest TableSchemaInfo
-	found := false
-	for _, info := range s.TableSchemas {
-		if info.DatabaseId != databaseId || info.TableId != tableId {
+	var (
+		latest        TableSchemaInfo
+		latestVersion uint32
+		found         bool
+	)
+	for key, info := range s.TableSchemas {
+		db, table, version, ok := parseTableSchemaKey(key)
+		if !ok || db != databaseId || table != tableId {
 			continue
 		}
-		if !found || info.Version > latest.Version {
+		if !tableSchemaInfoMatches(info, db, table, version) {
+			continue
+		}
+		if !found || version > latestVersion {
 			latest = info
+			latestVersion = version
 			found = true
 		}
 	}
@@ -182,6 +192,32 @@ func (s *InMemoryNetworkState) LatestTableSchema(databaseId, tableId string) (re
 		return registry.TableSchema{}, false
 	}
 	return convertTableSchema(latest), true
+}
+
+func parseTableSchemaKey(key string) (databaseId, tableId string, version uint32, ok bool) {
+	versionSeparator := strings.LastIndexByte(key, '@')
+	if versionSeparator < 0 || versionSeparator == len(key)-1 {
+		return "", "", 0, false
+	}
+	identity := key[:versionSeparator]
+	tableSeparator := strings.IndexByte(identity, '/')
+	if tableSeparator <= 0 || tableSeparator == len(identity)-1 {
+		return "", "", 0, false
+	}
+	databaseId = identity[:tableSeparator]
+	tableId = identity[tableSeparator+1:]
+	if strings.ContainsAny(databaseId, "/@") || strings.ContainsAny(tableId, "/@") {
+		return "", "", 0, false
+	}
+	parsedVersion, err := strconv.ParseUint(key[versionSeparator+1:], 10, 32)
+	if err != nil {
+		return "", "", 0, false
+	}
+	return databaseId, tableId, uint32(parsedVersion), true
+}
+
+func tableSchemaInfoMatches(info TableSchemaInfo, databaseId, tableId string, version uint32) bool {
+	return info.DatabaseId == databaseId && info.TableId == tableId && info.Version == version
 }
 
 // SetOperator is a test/dev helper: mark signer as an authorised
@@ -213,7 +249,12 @@ func convertDatabase(info DatabaseInfo) registry.Database {
 	if len(info.Tables) > 0 {
 		tables = make([]registry.Table, len(info.Tables))
 		for i, t := range info.Tables {
-			tables[i] = registry.Table{Id: t.TableId, Type: t.TableType}
+			tables[i] = registry.Table{
+				Id:            t.TableId,
+				Type:          t.TableType,
+				SchemaVersion: t.SchemaVersion,
+				SchemaHash:    t.SchemaHash,
+			}
 		}
 	}
 	return registry.Database{

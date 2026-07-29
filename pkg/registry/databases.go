@@ -48,6 +48,12 @@ type Table struct {
 	// event, entity → entity) and treats everything else as
 	// not-billable.
 	Type string
+
+	// SchemaVersion and SchemaHash identify the latest declared schema
+	// for this table. They are pointers into the versioned TableSchemas
+	// collection, not a replacement for the full canonical schema.
+	SchemaVersion uint32
+	SchemaHash    string
 }
 
 // Databases looks up database metadata by logical id.
