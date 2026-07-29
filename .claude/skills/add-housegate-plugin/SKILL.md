@@ -68,8 +68,8 @@ package <name>  // OR <name>plugin if there's a leaf-package collision
 import (
     "context"
 
-    "housegate/housegate/pkg/chsession"
-    "housegate/housegate/pkg/plugin"
+    "github.com/housegate/housegate/pkg/chsession"
+    "github.com/housegate/housegate/pkg/plugin"
     // ... import your leaf-package backend
 )
 
@@ -94,7 +94,7 @@ Look at `pkg/plugins/concurrency/limiter.go` for a 3-hook example, `pkg/plugins/
 ```go
 package <name>
 
-import "housegate/housegate/pkg/cfgtypes"
+import "github.com/housegate/housegate/pkg/cfgtypes"
 
 // Config is the operator-tunable surface for the <name> plugin.
 type Config struct {
@@ -122,7 +122,7 @@ go_library(
         "<name>.go",
         "config.go",
     ],
-    importpath = "housegate/housegate/pkg/plugins/<name>",
+    importpath = "github.com/housegate/housegate/pkg/plugins/<name>",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/cfgtypes",      # if Config has Duration
@@ -153,7 +153,7 @@ Edit `pkg/config/config.go`:
 ```go
 import (
     // ...
-    yourplugin "housegate/housegate/pkg/plugins/<name>"
+    yourplugin "github.com/housegate/housegate/pkg/plugins/<name>"
 )
 
 type Config struct {
@@ -180,7 +180,7 @@ Edit `build.go` at the module root (`housegate` package). Build your plugin in `
 
 ```go
 import (
-    yourplugin "housegate/housegate/pkg/plugins/<name>"
+    yourplugin "github.com/housegate/housegate/pkg/plugins/<name>"
 )
 
 // inside buildServer, after auth/usage:

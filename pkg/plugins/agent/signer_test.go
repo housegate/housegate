@@ -12,10 +12,10 @@ import (
 
 	"golang.org/x/crypto/sha3"
 
-	"housegate/housegate/pkg/auth"
-	"housegate/housegate/pkg/chproto"
-	"housegate/housegate/pkg/chsession"
-	"housegate/housegate/pkg/plugin"
+	"github.com/housegate/housegate/pkg/auth"
+	"github.com/housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/chsession"
+	"github.com/housegate/housegate/pkg/plugin"
 )
 
 func newTestSession(t *testing.T, id int64) chsession.Session {

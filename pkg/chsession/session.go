@@ -7,7 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/chproto"
 )
 
 // Session carries per-connection state and the two codecs (client + upstream).

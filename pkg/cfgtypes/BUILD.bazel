@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "cfgtypes",
     srcs = ["duration.go"],
-    importpath = "housegate/housegate/pkg/cfgtypes",
+    importpath = "github.com/housegate/housegate/pkg/cfgtypes",
     visibility = ["//visibility:public"],
     deps = ["//pkg/log"],
 )

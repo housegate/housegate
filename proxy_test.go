@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"housegate/housegate/pkg/config"
-	"housegate/housegate/pkg/network"
+	"github.com/housegate/housegate/pkg/config"
+	"github.com/housegate/housegate/pkg/network"
 )
 
 // minimalAgentConfig returns a config that satisfies cfg.Validate

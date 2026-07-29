@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"housegate/housegate/pkg/sqlmeta"
+	"github.com/housegate/housegate/pkg/sqlmeta"
 )
 
 func nameEvent(name string) *Event {

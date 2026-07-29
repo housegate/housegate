@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"housegate/housegate/pkg/integration/testenv"
+	"github.com/housegate/housegate/pkg/integration/testenv"
 )
 
 // TestUpstream_DiesMidQuery pins the failure-propagation contract: when

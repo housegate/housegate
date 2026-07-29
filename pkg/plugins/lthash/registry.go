@@ -3,7 +3,7 @@ package lthashplugin
 import (
 	"sync"
 
-	"housegate/housegate/pkg/lthash"
+	"github.com/housegate/housegate/pkg/lthash"
 )
 
 // TableDigest is the registry's per-table view: the running LtHash

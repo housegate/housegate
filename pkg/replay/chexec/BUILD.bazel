@@ -6,7 +6,7 @@ go_library(
         "materializer.go",
         "scan.go",
     ],
-    importpath = "housegate/housegate/pkg/replay/chexec",
+    importpath = "github.com/housegate/housegate/pkg/replay/chexec",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/lthash",

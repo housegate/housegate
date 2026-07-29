@@ -6,6 +6,6 @@ go_library(
         "indexing_usage_reporter.go",
         "usage_client.go",
     ],
-    importpath = "housegate/housegate/pkg/billing",
+    importpath = "github.com/housegate/housegate/pkg/billing",
     visibility = ["//visibility:public"],
 )

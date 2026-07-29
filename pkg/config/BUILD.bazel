@@ -7,7 +7,7 @@ go_library(
         "replication_proxy_config.go",
         "storage_integrity_config.go",
     ],
-    importpath = "housegate/housegate/pkg/config",
+    importpath = "github.com/housegate/housegate/pkg/config",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/cfgtypes",

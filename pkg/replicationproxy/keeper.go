@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"housegate/housegate/pkg/log"
+	"github.com/housegate/housegate/pkg/log"
 )
 
 var ErrNoKeeperUpstreams = errors.New("replicationproxy: no keeper upstreams")

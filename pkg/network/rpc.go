@@ -25,8 +25,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"housegate/housegate/pkg/log"
-	"housegate/housegate/pkg/registry"
+	"github.com/housegate/housegate/pkg/log"
+	"github.com/housegate/housegate/pkg/registry"
 )
 
 // RpcNetworkState is a read-only registry.Registry backed by a sentio

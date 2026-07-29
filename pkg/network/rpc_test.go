@@ -1,7 +1,7 @@
 package network_test
 
 // External test package so we can also pull in
-// housegate/housegate/pkg/plugins/agent for the Selector integration
+// github.com/housegate/housegate/pkg/plugins/agent for the Selector integration
 // test (agent imports network — internal-package test would cycle).
 // We re-declare the JSON-RPC wire envelope locally so the test can
 // fake-serve it without touching unexported types in pkg/network.
@@ -14,9 +14,9 @@ import (
 	"strings"
 	"testing"
 
-	"housegate/housegate/pkg/network"
-	"housegate/housegate/pkg/plugins/agent"
-	"housegate/housegate/pkg/registry"
+	"github.com/housegate/housegate/pkg/network"
+	"github.com/housegate/housegate/pkg/plugins/agent"
+	"github.com/housegate/housegate/pkg/registry"
 )
 
 // JSON-RPC 2.0 wire envelope (local copy — tests the public boundary).

@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_binary", "go_library")
 go_library(
     name = "genkey_lib",
     srcs = ["main.go"],
-    importpath = "housegate/housegate/tools/genkey",
+    importpath = "github.com/housegate/housegate/tools/genkey",
     visibility = ["//visibility:private"],
     deps = [
         "@com_github_ethereum_go_ethereum//crypto",

@@ -11,13 +11,13 @@ import (
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 
-	"housegate/housegate"
-	"housegate/housegate/pkg/cfgtypes"
-	"housegate/housegate/pkg/config"
-	"housegate/housegate/pkg/integration/testenv"
-	"housegate/housegate/pkg/network"
-	authplugin "housegate/housegate/pkg/plugins/auth"
-	"housegate/housegate/pkg/route"
+	"github.com/housegate/housegate"
+	"github.com/housegate/housegate/pkg/cfgtypes"
+	"github.com/housegate/housegate/pkg/config"
+	"github.com/housegate/housegate/pkg/integration/testenv"
+	"github.com/housegate/housegate/pkg/network"
+	authplugin "github.com/housegate/housegate/pkg/plugins/auth"
+	"github.com/housegate/housegate/pkg/route"
 )
 
 // startServerWithInternal starts a server-mode proxy configured with

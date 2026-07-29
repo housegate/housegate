@@ -4,8 +4,8 @@ import (
 	"errors"
 	"fmt"
 
-	"housegate/housegate/pkg/cfgtypes"
-	"housegate/housegate/pkg/rewriter"
+	"github.com/housegate/housegate/pkg/cfgtypes"
+	"github.com/housegate/housegate/pkg/rewriter"
 )
 
 // Config is the operator-tunable surface for the agent-mode materialize

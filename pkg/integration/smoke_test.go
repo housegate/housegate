@@ -7,7 +7,7 @@ import (
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 
-	"housegate/housegate/pkg/integration/testenv"
+	"github.com/housegate/housegate/pkg/integration/testenv"
 )
 
 // chEnv is the shared ClickHouse container, started once in TestMain so

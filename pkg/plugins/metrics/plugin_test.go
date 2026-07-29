@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/chproto"
 )
 
 type fakeObserver struct {

@@ -7,7 +7,7 @@ go_library(
         "observer.go",
         "plugin.go",
     ],
-    importpath = "housegate/housegate/pkg/plugins/commitgate",
+    importpath = "github.com/housegate/housegate/pkg/plugins/commitgate",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/auth",

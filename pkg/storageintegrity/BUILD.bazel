@@ -18,7 +18,7 @@ go_library(
         "payload_spool.go",
         "sql.go",
     ],
-    importpath = "housegate/housegate/pkg/storageintegrity",
+    importpath = "github.com/housegate/housegate/pkg/storageintegrity",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/lthash",

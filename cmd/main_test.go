@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"housegate/housegate/pkg/config"
+	"github.com/housegate/housegate/pkg/config"
 )
 
 func TestValidateStandaloneRuntimeConfigRejectsStorageIntegrityIngress(t *testing.T) {

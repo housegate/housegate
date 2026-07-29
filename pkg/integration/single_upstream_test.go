@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"housegate/housegate/pkg/integration/testenv"
+	"github.com/housegate/housegate/pkg/integration/testenv"
 )
 
 // TestInsertSelectRoundtrip exercises the Data-block path in both

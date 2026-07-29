@@ -8,10 +8,10 @@ import (
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 
-	"housegate/housegate/pkg/auth"
-	"housegate/housegate/pkg/integration/testenv"
-	peerenv "housegate/housegate/pkg/peer"
-	"housegate/housegate/pkg/route"
+	"github.com/housegate/housegate/pkg/auth"
+	"github.com/housegate/housegate/pkg/integration/testenv"
+	peerenv "github.com/housegate/housegate/pkg/peer"
+	"github.com/housegate/housegate/pkg/route"
 )
 
 // TestCombinedRouteAndPeerEnvelope pins the nesting of __route__ and

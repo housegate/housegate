@@ -7,9 +7,9 @@ import (
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 
-	"housegate/housegate/pkg/auth"
-	"housegate/housegate/pkg/integration/testenv"
-	"housegate/housegate/pkg/registry"
+	"github.com/housegate/housegate/pkg/auth"
+	"github.com/housegate/housegate/pkg/integration/testenv"
+	"github.com/housegate/housegate/pkg/registry"
 )
 
 // openSignedConnPinned is the signed+pinned variant: every query is

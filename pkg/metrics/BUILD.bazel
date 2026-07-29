@@ -30,7 +30,7 @@ go_library(
         "runtime.go",
         "snapshot.go",
     ],
-    importpath = "housegate/housegate/pkg/metrics",
+    importpath = "github.com/housegate/housegate/pkg/metrics",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/log",

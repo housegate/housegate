@@ -8,10 +8,10 @@ import (
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 
-	"housegate/housegate/pkg/lthash"
-	"housegate/housegate/pkg/replay"
-	"housegate/housegate/pkg/replay/chexec"
-	"housegate/housegate/pkg/replay/payloadexec"
+	"github.com/housegate/housegate/pkg/lthash"
+	"github.com/housegate/housegate/pkg/replay"
+	"github.com/housegate/housegate/pkg/replay/chexec"
+	"github.com/housegate/housegate/pkg/replay/payloadexec"
 )
 
 // These tests exercise the ClickHouse-backed replay executor (pkg/replay/chexec)

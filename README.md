@@ -471,8 +471,8 @@ Embed House Gate inside another Go process. Same plugin chain as standalone — 
 import (
     "context"
 
-    "housegate/housegate"
-    "housegate/housegate/pkg/config"
+    "github.com/housegate/housegate"
+    "github.com/housegate/housegate/pkg/config"
 )
 
 cfg := /* your *config.Config — load from file or build programmatically */

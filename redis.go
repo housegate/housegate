@@ -5,11 +5,11 @@ import (
 	"errors"
 	"fmt"
 
-	"housegate/housegate/pkg/log"
+	"github.com/housegate/housegate/pkg/log"
 
 	"github.com/redis/go-redis/v9"
 
-	"housegate/housegate/pkg/config"
+	"github.com/housegate/housegate/pkg/config"
 )
 
 // redisFactory dedupes redis client construction by resolved address.

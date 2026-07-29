@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"strings"
 
-	"housegate/housegate/tools/da-mvp/pkg/chexport"
+	"github.com/housegate/housegate/tools/da-mvp/pkg/chexport"
 )
 
 type Mode int

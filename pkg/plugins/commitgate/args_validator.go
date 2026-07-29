@@ -6,8 +6,8 @@ import (
 	"regexp"
 	"strings"
 
-	"housegate/housegate/pkg/chproto"
-	"housegate/housegate/pkg/sqlmeta"
+	"github.com/housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/sqlmeta"
 )
 
 // databaseNamePattern is the canonical name regex for newly-created

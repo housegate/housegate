@@ -7,7 +7,7 @@ go_library(
         "plugin.go",
         "registry.go",
     ],
-    importpath = "housegate/housegate/pkg/plugins/lthash",
+    importpath = "github.com/housegate/housegate/pkg/plugins/lthash",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/chproto",

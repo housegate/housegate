@@ -7,8 +7,8 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 
-	housegate "housegate/housegate"
-	"housegate/housegate/pkg/config"
+	housegate "github.com/housegate/housegate"
+	"github.com/housegate/housegate/pkg/config"
 )
 
 // WithMiniredis starts an in-process Redis fake (miniredis) and returns

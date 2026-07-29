@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"housegate/housegate/pkg/log"
+	"github.com/housegate/housegate/pkg/log"
 )
 
 // consoleHandler is a slog.Handler whose output visually matches a

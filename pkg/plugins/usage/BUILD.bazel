@@ -6,7 +6,7 @@ go_library(
         "config.go",
         "usage.go",
     ],
-    importpath = "housegate/housegate/pkg/plugins/usage",
+    importpath = "github.com/housegate/housegate/pkg/plugins/usage",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/billing",

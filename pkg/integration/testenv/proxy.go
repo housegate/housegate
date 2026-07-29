@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	housegate "housegate/housegate"
-	"housegate/housegate/pkg/cluster"
-	"housegate/housegate/pkg/config"
-	"housegate/housegate/pkg/network"
-	"housegate/housegate/pkg/registry"
+	housegate "github.com/housegate/housegate"
+	"github.com/housegate/housegate/pkg/cluster"
+	"github.com/housegate/housegate/pkg/config"
+	"github.com/housegate/housegate/pkg/network"
+	"github.com/housegate/housegate/pkg/registry"
 )
 
 // TestProxy is a running in-process housegate proxy started via RunWith.

@@ -20,7 +20,7 @@ go_library(
         "storage_integrity_merge_supervisor.go",
         "storage_integrity_runtime.go",
     ],
-    importpath = "housegate/housegate",
+    importpath = "github.com/housegate/housegate",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/auth",
@@ -134,7 +134,8 @@ nogo(
     #    ],
 )
 
-# gazelle:prefix housegate/housegate
+# gazelle:prefix github.com/housegate/housegate
+# gazelle:exclude .omo
 gazelle(name = "gazelle")
 
 platform(

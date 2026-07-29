@@ -34,9 +34,9 @@ import (
 	"fmt"
 	"time"
 
-	"housegate/housegate/pkg/chproto"
-	"housegate/housegate/pkg/chsession"
-	"housegate/housegate/pkg/plugin"
+	"github.com/housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/chsession"
+	"github.com/housegate/housegate/pkg/plugin"
 )
 
 // Observer is the subset of *proxy.MetricsObserver this plugin depends

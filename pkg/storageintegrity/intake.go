@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"housegate/housegate/pkg/replay"
+	"github.com/housegate/housegate/pkg/replay"
 )
 
 // CompanionStagedIntakeAvailable reports whether the Sentio companion topology

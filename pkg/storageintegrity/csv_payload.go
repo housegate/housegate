@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"housegate/housegate/pkg/replay/payloadexec"
+	"github.com/housegate/housegate/pkg/replay/payloadexec"
 )
 
 // PayloadMaterializationInput is the ingress-side bridge from Relay's Native

@@ -6,7 +6,7 @@ go_library(
         "blake3.go",
         "main.go",
     ],
-    importpath = "housegate/housegate/tools/da-mvp/cmd/da-rebuilder",
+    importpath = "github.com/housegate/housegate/tools/da-mvp/cmd/da-rebuilder",
     visibility = ["//visibility:private"],
     deps = [
         "//pkg/log",

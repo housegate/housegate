@@ -17,14 +17,14 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	log "housegate/housegate/pkg/log"
-	"housegate/housegate/tools/da-mvp/pkg/anchor"
-	"housegate/housegate/tools/da-mvp/pkg/celestia"
-	"housegate/housegate/tools/da-mvp/pkg/checkpoint"
-	"housegate/housegate/tools/da-mvp/pkg/chexport"
-	"housegate/housegate/tools/da-mvp/pkg/chunk"
-	"housegate/housegate/tools/da-mvp/pkg/ids"
-	"housegate/housegate/tools/da-mvp/pkg/schema"
+	log "github.com/housegate/housegate/pkg/log"
+	"github.com/housegate/housegate/tools/da-mvp/pkg/anchor"
+	"github.com/housegate/housegate/tools/da-mvp/pkg/celestia"
+	"github.com/housegate/housegate/tools/da-mvp/pkg/checkpoint"
+	"github.com/housegate/housegate/tools/da-mvp/pkg/chexport"
+	"github.com/housegate/housegate/tools/da-mvp/pkg/chunk"
+	"github.com/housegate/housegate/tools/da-mvp/pkg/ids"
+	"github.com/housegate/housegate/tools/da-mvp/pkg/schema"
 )
 
 var (

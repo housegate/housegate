@@ -4,8 +4,8 @@ import (
 	"sort"
 	"testing"
 
-	"housegate/housegate/pkg/network"
-	"housegate/housegate/pkg/registry"
+	"github.com/housegate/housegate/pkg/network"
+	"github.com/housegate/housegate/pkg/registry"
 )
 
 // TestBuildDatabaseMap_FiltersPendingDelete: a logical database whose

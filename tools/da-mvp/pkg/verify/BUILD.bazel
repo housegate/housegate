@@ -9,7 +9,7 @@ go_test(
 go_library(
     name = "verify",
     srcs = ["verify.go"],
-    importpath = "housegate/housegate/tools/da-mvp/pkg/verify",
+    importpath = "github.com/housegate/housegate/tools/da-mvp/pkg/verify",
     visibility = ["//visibility:public"],
     deps = ["//tools/da-mvp/pkg/chexport"],
 )

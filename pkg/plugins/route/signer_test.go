@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"housegate/housegate/pkg/auth"
-	"housegate/housegate/pkg/chproto"
-	"housegate/housegate/pkg/plugin"
+	"github.com/housegate/housegate/pkg/auth"
+	"github.com/housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/plugin"
 )
 
 // stubSigner records every SignToken call for assertion. Returns the

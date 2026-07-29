@@ -11,15 +11,15 @@ import (
 	"sync/atomic"
 	"time"
 
-	"housegate/housegate/pkg/log"
+	"github.com/housegate/housegate/pkg/log"
 
 	pb "github.com/housegate/rewriter-proto/gen/pb"
-	"housegate/housegate/pkg/cluster"
-	"housegate/housegate/pkg/credentials"
-	"housegate/housegate/pkg/peer"
-	"housegate/housegate/pkg/registry"
-	"housegate/housegate/pkg/route"
-	"housegate/housegate/pkg/sqlmeta"
+	"github.com/housegate/housegate/pkg/cluster"
+	"github.com/housegate/housegate/pkg/credentials"
+	"github.com/housegate/housegate/pkg/peer"
+	"github.com/housegate/housegate/pkg/registry"
+	"github.com/housegate/housegate/pkg/route"
+	"github.com/housegate/housegate/pkg/sqlmeta"
 )
 
 // statementTypeFromProto narrows the protobuf enum to the

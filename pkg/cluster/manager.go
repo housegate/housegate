@@ -6,7 +6,7 @@ import (
 	"net"
 	"strings"
 
-	"housegate/housegate/pkg/log"
+	"github.com/housegate/housegate/pkg/log"
 )
 
 // Manager is the top-level cluster manager for a single shard.

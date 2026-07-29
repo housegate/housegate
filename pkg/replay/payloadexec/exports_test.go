@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"housegate/housegate/pkg/lthash"
+	"github.com/housegate/housegate/pkg/lthash"
 )
 
 func TestExportedHelpersDelegate(t *testing.T) {

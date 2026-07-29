@@ -10,7 +10,7 @@ go_library(
         "types.go",
         "yaml.go",
     ],
-    importpath = "housegate/housegate/pkg/network",
+    importpath = "github.com/housegate/housegate/pkg/network",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/chproto",

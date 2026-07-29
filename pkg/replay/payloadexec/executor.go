@@ -29,8 +29,8 @@ import (
 
 	"github.com/zeebo/blake3"
 
-	"housegate/housegate/pkg/lthash"
-	"housegate/housegate/pkg/replay"
+	"github.com/housegate/housegate/pkg/lthash"
+	"github.com/housegate/housegate/pkg/replay"
 )
 
 // rowIDColumn is the reserved physical row-instance identity column (§5.2).

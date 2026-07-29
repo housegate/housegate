@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync"
 
-	"housegate/housegate/pkg/registry"
+	"github.com/housegate/housegate/pkg/registry"
 )
 
 // InMemoryNetworkState is the in-memory implementation of

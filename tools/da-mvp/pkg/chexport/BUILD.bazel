@@ -9,6 +9,6 @@ go_test(
 go_library(
     name = "chexport",
     srcs = ["exporter.go"],
-    importpath = "housegate/housegate/tools/da-mvp/pkg/chexport",
+    importpath = "github.com/housegate/housegate/tools/da-mvp/pkg/chexport",
     visibility = ["//visibility:public"],
 )

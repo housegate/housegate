@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"housegate/housegate/pkg/network"
-	"housegate/housegate/pkg/sqlmeta"
+	"github.com/housegate/housegate/pkg/network"
+	"github.com/housegate/housegate/pkg/sqlmeta"
 )
 
 // TestNativeEngineSmoke drives the real in-process rewriter-go engine

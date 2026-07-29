@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"housegate/housegate/pkg/replay"
+	"github.com/housegate/housegate/pkg/replay"
 )
 
 // MemSnapshotStore is an in-memory replay.SnapshotStore for the MVP and tests.

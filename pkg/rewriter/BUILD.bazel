@@ -10,7 +10,7 @@ go_library(
         "sentio.go",
         "types.go",
     ],
-    importpath = "housegate/housegate/pkg/rewriter",
+    importpath = "github.com/housegate/housegate/pkg/rewriter",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/cluster",

@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"housegate/housegate/pkg/cluster"
-	"housegate/housegate/pkg/plugins/agent"
-	materializeplugin "housegate/housegate/pkg/plugins/materialize"
+	"github.com/housegate/housegate/pkg/cluster"
+	"github.com/housegate/housegate/pkg/plugins/agent"
+	materializeplugin "github.com/housegate/housegate/pkg/plugins/materialize"
 )
 
 func TestDurationUnmarshal(t *testing.T) {

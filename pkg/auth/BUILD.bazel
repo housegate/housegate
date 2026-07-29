@@ -9,7 +9,7 @@ go_library(
         "signer.go",
         "types.go",
     ],
-    importpath = "housegate/housegate/pkg/auth",
+    importpath = "github.com/housegate/housegate/pkg/auth",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/log",

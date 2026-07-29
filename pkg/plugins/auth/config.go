@@ -1,6 +1,6 @@
 package authplugin
 
-import "housegate/housegate/pkg/cfgtypes"
+import "github.com/housegate/housegate/pkg/cfgtypes"
 
 // Config is the operator-tunable surface for the JWS auth plugin. It
 // lives here (next to Plugin) so adding fields stays a single-package

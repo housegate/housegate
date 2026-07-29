@@ -9,7 +9,7 @@ go_test(
 go_library(
     name = "ffifetch",
     srcs = ["ffifetch.go"],
-    importpath = "housegate/housegate/pkg/ffifetch",
+    importpath = "github.com/housegate/housegate/pkg/ffifetch",
     visibility = ["//visibility:public"],
     deps = ["//pkg/log"],
 )

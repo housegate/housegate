@@ -10,9 +10,9 @@ import (
 
 	pb "github.com/housegate/rewriter-proto/gen/pb"
 
-	"housegate/housegate/pkg/log"
-	"housegate/housegate/pkg/plugin"
-	"housegate/housegate/pkg/rewriter"
+	"github.com/housegate/housegate/pkg/log"
+	"github.com/housegate/housegate/pkg/plugin"
+	"github.com/housegate/housegate/pkg/rewriter"
 )
 
 // Materializer is the SQL→SQL seam this plugin depends on. *rewriter's

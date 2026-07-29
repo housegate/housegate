@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "metrics",
     srcs = ["plugin.go"],
-    importpath = "housegate/housegate/pkg/plugins/metrics",
+    importpath = "github.com/housegate/housegate/pkg/plugins/metrics",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/chproto",

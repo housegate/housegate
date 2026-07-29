@@ -8,7 +8,7 @@ go_library(
         "types.go",
         "verifier.go",
     ],
-    importpath = "housegate/housegate/pkg/replay",
+    importpath = "github.com/housegate/housegate/pkg/replay",
     visibility = ["//visibility:public"],
 )
 

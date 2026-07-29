@@ -15,15 +15,15 @@ import (
 
 	"github.com/ethereum/go-ethereum/crypto"
 
-	log "housegate/housegate/pkg/log"
-	"housegate/housegate/tools/da-mvp/pkg/anchor"
-	"housegate/housegate/tools/da-mvp/pkg/celestia"
-	"housegate/housegate/tools/da-mvp/pkg/chexport"
-	"housegate/housegate/tools/da-mvp/pkg/chimport"
-	"housegate/housegate/tools/da-mvp/pkg/chunk"
-	"housegate/housegate/tools/da-mvp/pkg/ids"
-	"housegate/housegate/tools/da-mvp/pkg/schema"
-	"housegate/housegate/tools/da-mvp/pkg/verify"
+	log "github.com/housegate/housegate/pkg/log"
+	"github.com/housegate/housegate/tools/da-mvp/pkg/anchor"
+	"github.com/housegate/housegate/tools/da-mvp/pkg/celestia"
+	"github.com/housegate/housegate/tools/da-mvp/pkg/chexport"
+	"github.com/housegate/housegate/tools/da-mvp/pkg/chimport"
+	"github.com/housegate/housegate/tools/da-mvp/pkg/chunk"
+	"github.com/housegate/housegate/tools/da-mvp/pkg/ids"
+	"github.com/housegate/housegate/tools/da-mvp/pkg/schema"
+	"github.com/housegate/housegate/tools/da-mvp/pkg/verify"
 )
 
 func main() {

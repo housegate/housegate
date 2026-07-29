@@ -6,11 +6,11 @@ import (
 	"strings"
 	"testing"
 
-	"housegate/housegate/pkg/auth"
-	"housegate/housegate/pkg/chproto"
-	"housegate/housegate/pkg/chsession"
-	"housegate/housegate/pkg/network"
-	"housegate/housegate/pkg/plugin"
+	"github.com/housegate/housegate/pkg/auth"
+	"github.com/housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/chsession"
+	"github.com/housegate/housegate/pkg/network"
+	"github.com/housegate/housegate/pkg/plugin"
 )
 
 // fakeValidator returns a fixed ValidationResult, bypassing JWS crypto

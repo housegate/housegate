@@ -7,10 +7,10 @@ import (
 	"strconv"
 	"testing"
 
-	housegate "housegate/housegate"
-	"housegate/housegate/pkg/config"
-	"housegate/housegate/pkg/network"
-	"housegate/housegate/pkg/plugins/agent"
+	housegate "github.com/housegate/housegate"
+	"github.com/housegate/housegate/pkg/config"
+	"github.com/housegate/housegate/pkg/network"
+	"github.com/housegate/housegate/pkg/plugins/agent"
 )
 
 // StartAgentProxy starts an agent-mode housegate proxy pinned to a

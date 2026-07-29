@@ -50,10 +50,10 @@ package indexingusage
 import (
 	"context"
 
-	"housegate/housegate/pkg/billing"
-	"housegate/housegate/pkg/log"
-	"housegate/housegate/pkg/plugin"
-	"housegate/housegate/pkg/sqlmeta"
+	"github.com/housegate/housegate/pkg/billing"
+	"github.com/housegate/housegate/pkg/log"
+	"github.com/housegate/housegate/pkg/plugin"
+	"github.com/housegate/housegate/pkg/sqlmeta"
 )
 
 // LogCommentSettingKey is the ClickHouse session setting the driver

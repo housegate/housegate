@@ -8,7 +8,7 @@ go_library(
         "signer.go",
         "stores.go",
     ],
-    importpath = "housegate/housegate/pkg/replay/payloadexec",
+    importpath = "github.com/housegate/housegate/pkg/replay/payloadexec",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/lthash",

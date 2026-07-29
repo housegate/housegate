@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"housegate/housegate/pkg/integration/testenv"
+	"github.com/housegate/housegate/pkg/integration/testenv"
 )
 
 // TestRouterOnly_ForwardsToPeer verifies the router-only deployment

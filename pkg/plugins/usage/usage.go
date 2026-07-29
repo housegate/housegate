@@ -15,10 +15,10 @@ import (
 	"fmt"
 	"strings"
 
-	"housegate/housegate/pkg/log"
+	"github.com/housegate/housegate/pkg/log"
 
-	"housegate/housegate/pkg/billing"
-	"housegate/housegate/pkg/plugin"
+	"github.com/housegate/housegate/pkg/billing"
+	"github.com/housegate/housegate/pkg/plugin"
 )
 
 // payerSettingKey is the per-query Setting that overrides the payer.

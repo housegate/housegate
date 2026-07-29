@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"housegate/housegate/pkg/chproto"
-	"housegate/housegate/pkg/chsession"
+	"github.com/housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/chsession"
 )
 
 // HelloPlugin participates in the OnHello chain.

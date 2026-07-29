@@ -5,7 +5,7 @@ import (
 
 	"github.com/ClickHouse/ch-go/proto"
 
-	"housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/chproto"
 )
 
 func TestClientPacketName_KnownCodes(t *testing.T) {

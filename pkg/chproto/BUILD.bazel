@@ -12,7 +12,7 @@ go_library(
         "packet.go",
         "query.go",
     ],
-    importpath = "housegate/housegate/pkg/chproto",
+    importpath = "github.com/housegate/housegate/pkg/chproto",
     visibility = ["//visibility:public"],
     deps = [
         "@com_github_clickhouse_ch_go//compress",

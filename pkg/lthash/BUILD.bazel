@@ -6,7 +6,7 @@ go_library(
         "canonical.go",
         "lthash.go",
     ],
-    importpath = "housegate/housegate/pkg/lthash",
+    importpath = "github.com/housegate/housegate/pkg/lthash",
     visibility = ["//visibility:public"],
     deps = ["@com_github_zeebo_blake3//:blake3"],
 )

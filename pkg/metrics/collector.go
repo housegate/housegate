@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"housegate/housegate/pkg/log"
+	"github.com/housegate/housegate/pkg/log"
 )
 
 // defaultCollectInterval is used when NewCollector is given a non-positive

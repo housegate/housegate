@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"housegate/housegate/pkg/replay"
+	"github.com/housegate/housegate/pkg/replay"
 )
 
 type PayloadSpoolState string

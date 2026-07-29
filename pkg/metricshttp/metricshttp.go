@@ -24,8 +24,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"housegate/housegate/pkg/config"
-	"housegate/housegate/pkg/log"
+	"github.com/housegate/housegate/pkg/config"
+	"github.com/housegate/housegate/pkg/log"
 )
 
 // Start starts the HTTP server exposing /metrics (the existing

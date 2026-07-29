@@ -8,10 +8,10 @@ import (
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 
-	"housegate/housegate/pkg/config"
-	"housegate/housegate/pkg/integration/testenv"
-	"housegate/housegate/pkg/lthash"
-	lthashplugin "housegate/housegate/pkg/plugins/lthash"
+	"github.com/housegate/housegate/pkg/config"
+	"github.com/housegate/housegate/pkg/integration/testenv"
+	"github.com/housegate/housegate/pkg/lthash"
+	lthashplugin "github.com/housegate/housegate/pkg/plugins/lthash"
 )
 
 // openConnNoCompression opens a native connection with compression

@@ -35,8 +35,8 @@ import (
 
 	"github.com/ClickHouse/ch-go/proto"
 
-	"housegate/housegate/pkg/chproto"
-	"housegate/housegate/pkg/network"
+	"github.com/housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/network"
 )
 
 // startFakePeerListener starts a TCP listener that acts as a peer proxy's

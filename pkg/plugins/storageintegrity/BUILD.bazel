@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "storageintegrity",
     srcs = ["plugin.go"],
-    importpath = "housegate/housegate/pkg/plugins/storageintegrity",
+    importpath = "github.com/housegate/housegate/pkg/plugins/storageintegrity",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/auth",

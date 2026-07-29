@@ -27,15 +27,15 @@ import (
 	"net"
 	"time"
 
-	"housegate/housegate/pkg/log"
+	"github.com/housegate/housegate/pkg/log"
 
-	"housegate/housegate/pkg/auth"
-	"housegate/housegate/pkg/chproto"
-	"housegate/housegate/pkg/chsession"
-	"housegate/housegate/pkg/credentials"
-	"housegate/housegate/pkg/peer"
-	"housegate/housegate/pkg/plugin"
-	"housegate/housegate/pkg/registry"
+	"github.com/housegate/housegate/pkg/auth"
+	"github.com/housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/chsession"
+	"github.com/housegate/housegate/pkg/credentials"
+	"github.com/housegate/housegate/pkg/peer"
+	"github.com/housegate/housegate/pkg/plugin"
+	"github.com/housegate/housegate/pkg/registry"
 )
 
 // Plugin pivots a session to a peer's internal-port at handshake time when

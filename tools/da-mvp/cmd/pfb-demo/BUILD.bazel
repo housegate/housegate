@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_binary", "go_library")
 go_library(
     name = "pfb-demo_lib",
     srcs = ["main.go"],
-    importpath = "housegate/housegate/tools/da-mvp/cmd/pfb-demo",
+    importpath = "github.com/housegate/housegate/tools/da-mvp/cmd/pfb-demo",
     visibility = ["//visibility:private"],
     deps = ["//tools/da-mvp/pkg/celestia"],
 )

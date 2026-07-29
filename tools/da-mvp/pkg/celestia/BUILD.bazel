@@ -9,7 +9,7 @@ go_test(
 go_library(
     name = "celestia",
     srcs = ["client.go"],
-    importpath = "housegate/housegate/tools/da-mvp/pkg/celestia",
+    importpath = "github.com/housegate/housegate/tools/da-mvp/pkg/celestia",
     visibility = ["//visibility:public"],
     deps = [
         "@com_github_celestiaorg_go_square_v2//inclusion",

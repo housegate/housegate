@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"housegate/housegate/pkg/metrics"
+	"github.com/housegate/housegate/pkg/metrics"
 )
 
 // TestCHPollerAgainstClickHouse drives the metrics.CHPoller against the shared

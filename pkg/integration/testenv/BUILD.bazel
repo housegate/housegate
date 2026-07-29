@@ -10,7 +10,7 @@ go_library(
         "redis_mock.go",
         "rewriter_mock.go",
     ],
-    importpath = "housegate/housegate/pkg/integration/testenv",
+    importpath = "github.com/housegate/housegate/pkg/integration/testenv",
     visibility = ["//visibility:public"],
     deps = [
         "//:housegate",

@@ -10,8 +10,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"housegate/housegate/pkg/config"
-	"housegate/housegate/pkg/integration/testenv"
+	"github.com/housegate/housegate/pkg/config"
+	"github.com/housegate/housegate/pkg/integration/testenv"
 )
 
 // scrapeMerged renders the proxy's dedicated collector registry merged with the

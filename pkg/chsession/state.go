@@ -8,7 +8,7 @@ import (
 
 	"github.com/ClickHouse/ch-go/proto"
 
-	"housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/chproto"
 )
 
 // VersionTriple holds client-advertised version numbers.

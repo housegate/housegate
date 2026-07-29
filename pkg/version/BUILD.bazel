@@ -3,6 +3,6 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "version",
     srcs = ["version.go"],
-    importpath = "housegate/housegate/pkg/version",
+    importpath = "github.com/housegate/housegate/pkg/version",
     visibility = ["//visibility:public"],
 )

@@ -9,7 +9,7 @@ go_test(
 go_library(
     name = "anchor",
     srcs = ["client.go"],
-    importpath = "housegate/housegate/tools/da-mvp/pkg/anchor",
+    importpath = "github.com/housegate/housegate/tools/da-mvp/pkg/anchor",
     visibility = ["//visibility:public"],
     deps = [
         "//tools/da-mvp/contracts/binding",

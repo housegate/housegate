@@ -17,7 +17,7 @@ package network
 import (
 	"strconv"
 
-	"housegate/housegate/pkg/registry"
+	"github.com/housegate/housegate/pkg/registry"
 )
 
 // IndexId is the dense uint64 identifier for an indexer. Statemirror

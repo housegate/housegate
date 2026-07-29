@@ -8,8 +8,8 @@ package concurrency
 // data source is ready.
 
 import (
-	"housegate/housegate/pkg/chsession"
-	"housegate/housegate/pkg/plugin"
+	"github.com/housegate/housegate/pkg/chsession"
+	"github.com/housegate/housegate/pkg/plugin"
 )
 
 // Dimension names used by the built-in resolvers. Other resolvers should

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"housegate/housegate/pkg/plugins/agent"
+	"github.com/housegate/housegate/pkg/plugins/agent"
 )
 
 const trustedInterserverPeerAddress = "0x0000000000000000000000000000000000001001"

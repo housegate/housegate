@@ -15,7 +15,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
 
-	"housegate/housegate/tools/da-mvp/contracts/binding"
+	"github.com/housegate/housegate/tools/da-mvp/contracts/binding"
 )
 
 type Client struct {

@@ -4,9 +4,9 @@ import (
 	"testing"
 	"time"
 
-	"housegate/housegate/pkg/auth"
-	"housegate/housegate/pkg/config"
-	"housegate/housegate/pkg/network"
+	"github.com/housegate/housegate/pkg/auth"
+	"github.com/housegate/housegate/pkg/config"
+	"github.com/housegate/housegate/pkg/network"
 )
 
 func TestBuildServer_ReplicationProxyKeeperAddsListenerRunner(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 
 	"github.com/ClickHouse/ch-go/proto"
 
-	"housegate/housegate/pkg/replay/payloadexec"
+	"github.com/housegate/housegate/pkg/replay/payloadexec"
 )
 
 func TestNativeCSVPayloadMaterializerConvertsCapturedClientData(t *testing.T) {
