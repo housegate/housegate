@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 
-	"housegate/housegate/pkg/registry"
+	"github.com/housegate/housegate/pkg/registry"
 )
 
 // ErrNoNetworkState is returned by Selector.Pick when the selector has

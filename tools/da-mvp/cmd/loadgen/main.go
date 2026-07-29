@@ -16,7 +16,7 @@ import (
 	"syscall"
 	"time"
 
-	"housegate/housegate/tools/da-mvp/pkg/chimport"
+	"github.com/housegate/housegate/tools/da-mvp/pkg/chimport"
 )
 
 func main() {

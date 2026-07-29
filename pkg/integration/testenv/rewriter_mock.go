@@ -9,7 +9,7 @@ import (
 
 	"google.golang.org/grpc"
 
-	"housegate/housegate/pkg/config"
+	"github.com/housegate/housegate/pkg/config"
 	pb "github.com/housegate/rewriter-proto/gen/pb"
 )
 

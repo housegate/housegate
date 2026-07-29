@@ -6,7 +6,7 @@ go_library(
         "config.go",
         "plugin.go",
     ],
-    importpath = "housegate/housegate/pkg/plugins/indexing_usage",
+    importpath = "github.com/housegate/housegate/pkg/plugins/indexing_usage",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/billing",

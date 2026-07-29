@@ -17,8 +17,8 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
-	"housegate/housegate/pkg/log"
-	"housegate/housegate/pkg/secretsload"
+	"github.com/housegate/housegate/pkg/log"
+	"github.com/housegate/housegate/pkg/secretsload"
 )
 
 // ckhManagerYAML captures the only fields housegate consumes from a

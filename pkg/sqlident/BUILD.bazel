@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "sqlident",
     srcs = ["ident.go"],
-    importpath = "housegate/housegate/pkg/sqlident",
+    importpath = "github.com/housegate/housegate/pkg/sqlident",
     visibility = ["//visibility:public"],
 )
 

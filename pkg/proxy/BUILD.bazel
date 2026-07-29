@@ -8,7 +8,7 @@ go_library(
         "relay.go",
         "server.go",
     ],
-    importpath = "housegate/housegate/pkg/proxy",
+    importpath = "github.com/housegate/housegate/pkg/proxy",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/chproto",

@@ -6,9 +6,9 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"housegate/housegate/pkg/lthash"
-	"housegate/housegate/pkg/replay"
-	"housegate/housegate/pkg/replay/payloadexec"
+	"github.com/housegate/housegate/pkg/lthash"
+	"github.com/housegate/housegate/pkg/replay"
+	"github.com/housegate/housegate/pkg/replay/payloadexec"
 )
 
 // This file is the Appendix C integration test: it wires the real payload-local

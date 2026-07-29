@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"sync"
 
-	siplugin "housegate/housegate/pkg/plugins/storageintegrity"
-	"housegate/housegate/pkg/replay"
-	sicore "housegate/housegate/pkg/storageintegrity"
+	siplugin "github.com/housegate/housegate/pkg/plugins/storageintegrity"
+	"github.com/housegate/housegate/pkg/replay"
+	sicore "github.com/housegate/housegate/pkg/storageintegrity"
 )
 
 // StorageIntegrityIngress is the P1e runtime shell that connects the ingress

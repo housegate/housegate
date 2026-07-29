@@ -7,8 +7,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"housegate/housegate/pkg/cluster"
-	"housegate/housegate/pkg/config"
+	"github.com/housegate/housegate/pkg/cluster"
+	"github.com/housegate/housegate/pkg/config"
 )
 
 type fakeCredProvider struct {

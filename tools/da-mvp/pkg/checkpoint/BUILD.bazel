@@ -9,6 +9,6 @@ go_test(
 go_library(
     name = "checkpoint",
     srcs = ["checkpoint.go"],
-    importpath = "housegate/housegate/tools/da-mvp/pkg/checkpoint",
+    importpath = "github.com/housegate/housegate/tools/da-mvp/pkg/checkpoint",
     visibility = ["//visibility:public"],
 )

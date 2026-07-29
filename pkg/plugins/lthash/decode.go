@@ -6,8 +6,8 @@ import (
 
 	"github.com/ClickHouse/ch-go/proto"
 
-	"housegate/housegate/pkg/chproto"
-	"housegate/housegate/pkg/lthash"
+	"github.com/housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/lthash"
 )
 
 // DecodedBlock is the schema-agnostic decode of one client Data packet:

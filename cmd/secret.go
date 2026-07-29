@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"housegate/housegate/pkg/secretsload"
+	"github.com/housegate/housegate/pkg/secretsload"
 )
 
 // secretSubcommand dispatches the "secret-*" CLI verbs to pkg/secretsload.

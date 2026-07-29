@@ -7,7 +7,7 @@ go_library(
         "signer.go",
         "upstream_select.go",
     ],
-    importpath = "housegate/housegate/pkg/plugins/agent",
+    importpath = "github.com/housegate/housegate/pkg/plugins/agent",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/auth",

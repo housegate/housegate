@@ -11,11 +11,11 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"housegate/housegate/pkg/config"
+	"github.com/housegate/housegate/pkg/config"
 	// Imported for its init(), which registers the clickhouse_proxy_* series on
 	// the default registry — the same path the standalone binary exercises — so
 	// the merge assertions below observe real default-registry series.
-	_ "housegate/housegate/pkg/proxy"
+	_ "github.com/housegate/housegate/pkg/proxy"
 )
 
 func TestPprofAuthMiddleware(t *testing.T) {

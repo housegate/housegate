@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"time"
 
-	"housegate/housegate/pkg/auth"
-	"housegate/housegate/pkg/credentials"
+	"github.com/housegate/housegate/pkg/auth"
+	"github.com/housegate/housegate/pkg/credentials"
 )
 
 // SignPeerHello builds the (user, password) pair for a TCP handshake from one

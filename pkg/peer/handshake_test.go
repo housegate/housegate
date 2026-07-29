@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"housegate/housegate/pkg/auth"
-	"housegate/housegate/pkg/credentials"
+	"github.com/housegate/housegate/pkg/auth"
+	"github.com/housegate/housegate/pkg/credentials"
 )
 
 // testRelayKeyHex is a fixed secp256k1 private key for tests.

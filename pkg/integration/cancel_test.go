@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"housegate/housegate/pkg/auth"
-	"housegate/housegate/pkg/integration/testenv"
+	"github.com/housegate/housegate/pkg/auth"
+	"github.com/housegate/housegate/pkg/integration/testenv"
 )
 
 // TestCancel_KillsUpstream pins the cancel-propagation contract: when

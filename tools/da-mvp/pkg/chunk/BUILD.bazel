@@ -9,6 +9,6 @@ go_test(
 go_library(
     name = "chunk",
     srcs = ["chunk.go"],
-    importpath = "housegate/housegate/tools/da-mvp/pkg/chunk",
+    importpath = "github.com/housegate/housegate/tools/da-mvp/pkg/chunk",
     visibility = ["//visibility:public"],
 )

@@ -8,7 +8,7 @@ go_library(
         "session.go",
         "state.go",
     ],
-    importpath = "housegate/housegate/pkg/chsession",
+    importpath = "github.com/housegate/housegate/pkg/chsession",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/chproto",

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"housegate/housegate/pkg/network"
-	"housegate/housegate/pkg/registry"
+	"github.com/housegate/housegate/pkg/network"
+	"github.com/housegate/housegate/pkg/registry"
 )
 
 // buildNS assembles an InMemoryNetworkState and returns it wrapped as a

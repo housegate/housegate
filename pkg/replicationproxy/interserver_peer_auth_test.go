@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"housegate/housegate/pkg/auth"
+	"github.com/housegate/housegate/pkg/auth"
 )
 
 const interserverPeerAuthTestKey = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"

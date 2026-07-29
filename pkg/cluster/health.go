@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"housegate/housegate/pkg/log"
+	"github.com/housegate/housegate/pkg/log"
 )
 
 // ReplicaHealth tracks the health state of a single replica.

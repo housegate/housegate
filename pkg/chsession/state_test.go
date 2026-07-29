@@ -11,7 +11,7 @@ import (
 
 	"github.com/ClickHouse/ch-go/proto"
 
-	"housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/chproto"
 )
 
 func TestSessionState_MaintenanceFlag(t *testing.T) {

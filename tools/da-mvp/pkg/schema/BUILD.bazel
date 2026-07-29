@@ -9,7 +9,7 @@ go_test(
 go_library(
     name = "schema",
     srcs = ["schema.go"],
-    importpath = "housegate/housegate/tools/da-mvp/pkg/schema",
+    importpath = "github.com/housegate/housegate/tools/da-mvp/pkg/schema",
     visibility = ["//visibility:public"],
     deps = ["@com_github_zeebo_blake3//:blake3"],
 )

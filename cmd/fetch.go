@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"housegate/housegate/pkg/ffifetch"
+	"github.com/housegate/housegate/pkg/ffifetch"
 )
 
 // fetchSubcommand dispatches "fetch-rewriter-lib". Mirrors

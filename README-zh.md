@@ -435,8 +435,8 @@ dialer 在没有 plugin 设置 route target 时，会落到一个兜底分支：
 import (
     "context"
 
-    "housegate/housegate"
-    "housegate/housegate/pkg/config"
+    "github.com/housegate/housegate"
+    "github.com/housegate/housegate/pkg/config"
 )
 
 cfg := /* 你的 *config.Config — 从文件加载或代码构造 */

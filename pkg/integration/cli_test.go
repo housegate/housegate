@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"housegate/housegate/pkg/integration/testenv"
+	"github.com/housegate/housegate/pkg/integration/testenv"
 )
 
 // CLI tests exercise the proxy through the official `clickhouse client`

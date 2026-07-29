@@ -9,7 +9,7 @@ go_library(
         "hooks.go",
         "plugin.go",
     ],
-    importpath = "housegate/housegate/pkg/plugin",
+    importpath = "github.com/housegate/housegate/pkg/plugin",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/chproto",

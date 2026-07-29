@@ -8,8 +8,8 @@ import (
 
 	pb "github.com/sentioxyz/arbiter-proto/gen/pb"
 
-	"housegate/housegate/pkg/config"
-	sicore "housegate/housegate/pkg/storageintegrity"
+	"github.com/housegate/housegate/pkg/config"
+	sicore "github.com/housegate/housegate/pkg/storageintegrity"
 )
 
 // StorageIntegrityMergeGuard is the startup fail-closed guard for storage

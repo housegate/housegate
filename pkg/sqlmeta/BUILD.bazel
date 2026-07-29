@@ -9,7 +9,7 @@ go_library(
         "privilege_delta.go",
         "statement_type.go",
     ],
-    importpath = "housegate/housegate/pkg/sqlmeta",
+    importpath = "github.com/housegate/housegate/pkg/sqlmeta",
     visibility = ["//visibility:public"],
 )
 

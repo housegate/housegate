@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"housegate/housegate/pkg/plugins/agent"
+	"github.com/housegate/housegate/pkg/plugins/agent"
 )
 
 func TestStorageIntegrityDisabledIsNoOp(t *testing.T) {

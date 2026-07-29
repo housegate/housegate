@@ -11,12 +11,12 @@ import (
 	"fmt"
 	"strings"
 
-	"housegate/housegate/pkg/log"
+	"github.com/housegate/housegate/pkg/log"
 
-	"housegate/housegate/pkg/auth"
-	"housegate/housegate/pkg/chsession"
-	"housegate/housegate/pkg/plugin"
-	"housegate/housegate/pkg/registry"
+	"github.com/housegate/housegate/pkg/auth"
+	"github.com/housegate/housegate/pkg/chsession"
+	"github.com/housegate/housegate/pkg/plugin"
+	"github.com/housegate/housegate/pkg/registry"
 )
 
 // Plugin authenticates queries using the supplied Validator.

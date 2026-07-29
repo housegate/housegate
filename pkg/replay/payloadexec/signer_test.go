@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"housegate/housegate/pkg/replay"
+	"github.com/housegate/housegate/pkg/replay"
 )
 
 func TestEd25519SignerProducesVerifiableSignature(t *testing.T) {

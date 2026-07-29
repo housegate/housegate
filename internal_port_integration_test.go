@@ -25,12 +25,12 @@ import (
 
 	"github.com/ClickHouse/ch-go/proto"
 
-	"housegate/housegate/pkg/auth"
-	"housegate/housegate/pkg/chproto"
-	"housegate/housegate/pkg/config"
-	"housegate/housegate/pkg/network"
-	"housegate/housegate/pkg/peer"
-	authplugin "housegate/housegate/pkg/plugins/auth"
+	"github.com/housegate/housegate/pkg/auth"
+	"github.com/housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/config"
+	"github.com/housegate/housegate/pkg/network"
+	"github.com/housegate/housegate/pkg/peer"
+	authplugin "github.com/housegate/housegate/pkg/plugins/auth"
 )
 
 // testRelayKeyHex is a deterministic secp256k1 private key used only in

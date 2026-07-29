@@ -5,8 +5,8 @@ import (
 	"os"
 	"strings"
 
-	"housegate/housegate/pkg/log"
-	"housegate/housegate/pkg/registry"
+	"github.com/housegate/housegate/pkg/log"
+	"github.com/housegate/housegate/pkg/registry"
 
 	"go.yaml.in/yaml/v3"
 )

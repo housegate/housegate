@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_binary", "go_library")
 go_library(
     name = "loadgen_lib",
     srcs = ["main.go"],
-    importpath = "housegate/housegate/tools/da-mvp/cmd/loadgen",
+    importpath = "github.com/housegate/housegate/tools/da-mvp/cmd/loadgen",
     visibility = ["//visibility:private"],
     deps = ["//tools/da-mvp/pkg/chimport"],
 )

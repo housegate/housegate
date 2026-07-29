@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"housegate/housegate/pkg/chproto"
-	"housegate/housegate/pkg/chsession"
-	"housegate/housegate/pkg/peer"
-	"housegate/housegate/pkg/route"
+	"github.com/housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/chsession"
+	"github.com/housegate/housegate/pkg/peer"
+	"github.com/housegate/housegate/pkg/route"
 )
 
 // newTestSession creates a minimal Session backed by a throwaway net.Pipe

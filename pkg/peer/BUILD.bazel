@@ -6,7 +6,7 @@ go_library(
         "handshake.go",
         "parser.go",
     ],
-    importpath = "housegate/housegate/pkg/peer",
+    importpath = "github.com/housegate/housegate/pkg/peer",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/auth",

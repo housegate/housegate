@@ -20,17 +20,17 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"housegate/housegate/pkg/auth"
-	"housegate/housegate/pkg/billing"
-	"housegate/housegate/pkg/cluster"
-	"housegate/housegate/pkg/config"
-	"housegate/housegate/pkg/credentials"
-	"housegate/housegate/pkg/log"
-	"housegate/housegate/pkg/plugins/commitgate"
-	"housegate/housegate/pkg/plugins/storageintegrity"
-	"housegate/housegate/pkg/registry"
-	"housegate/housegate/pkg/rewriter"
-	sicore "housegate/housegate/pkg/storageintegrity"
+	"github.com/housegate/housegate/pkg/auth"
+	"github.com/housegate/housegate/pkg/billing"
+	"github.com/housegate/housegate/pkg/cluster"
+	"github.com/housegate/housegate/pkg/config"
+	"github.com/housegate/housegate/pkg/credentials"
+	"github.com/housegate/housegate/pkg/log"
+	"github.com/housegate/housegate/pkg/plugins/commitgate"
+	"github.com/housegate/housegate/pkg/plugins/storageintegrity"
+	"github.com/housegate/housegate/pkg/registry"
+	"github.com/housegate/housegate/pkg/rewriter"
+	sicore "github.com/housegate/housegate/pkg/storageintegrity"
 )
 
 // Proxy is a started, ready-to-Serve proxy. Run/RunWith blocks until

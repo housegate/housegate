@@ -6,11 +6,11 @@ import (
 	"sync"
 	"testing"
 
-	housegate "housegate/housegate"
-	"housegate/housegate/pkg/auth"
-	"housegate/housegate/pkg/billing"
-	"housegate/housegate/pkg/config"
-	"housegate/housegate/pkg/integration/testenv"
+	housegate "github.com/housegate/housegate"
+	"github.com/housegate/housegate/pkg/auth"
+	"github.com/housegate/housegate/pkg/billing"
+	"github.com/housegate/housegate/pkg/config"
+	"github.com/housegate/housegate/pkg/integration/testenv"
 )
 
 // recordingUsageClient implements billing.UsageClient and captures

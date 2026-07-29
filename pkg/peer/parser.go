@@ -33,7 +33,7 @@ package peer
 import (
 	"strings"
 
-	"housegate/housegate/pkg/route"
+	"github.com/housegate/housegate/pkg/route"
 )
 
 // Prefix is the marker the peer encoding puts in front of the signer

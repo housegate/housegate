@@ -6,7 +6,7 @@ go_library(
         "config.go",
         "rewriter.go",
     ],
-    importpath = "housegate/housegate/pkg/plugins/rewrite",
+    importpath = "github.com/housegate/housegate/pkg/plugins/rewrite",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/cfgtypes",

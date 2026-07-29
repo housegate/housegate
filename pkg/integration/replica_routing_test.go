@@ -8,9 +8,9 @@ import (
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 
-	"housegate/housegate/pkg/cluster"
-	"housegate/housegate/pkg/config"
-	"housegate/housegate/pkg/integration/testenv"
+	"github.com/housegate/housegate/pkg/cluster"
+	"github.com/housegate/housegate/pkg/config"
+	"github.com/housegate/housegate/pkg/integration/testenv"
 )
 
 // TestReplicaRouting_BothReachable starts a proxy with TWO upstream

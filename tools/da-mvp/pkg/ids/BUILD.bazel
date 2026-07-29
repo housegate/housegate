@@ -9,7 +9,7 @@ go_test(
 go_library(
     name = "ids",
     srcs = ["ids.go"],
-    importpath = "housegate/housegate/tools/da-mvp/pkg/ids",
+    importpath = "github.com/housegate/housegate/tools/da-mvp/pkg/ids",
     visibility = ["//visibility:public"],
     deps = ["@com_github_zeebo_blake3//:blake3"],
 )

@@ -7,7 +7,7 @@ go_library(
         "log.go",
         "sample.go",
     ],
-    importpath = "housegate/housegate/pkg/log",
+    importpath = "github.com/housegate/housegate/pkg/log",
     visibility = ["//visibility:public"],
 )
 

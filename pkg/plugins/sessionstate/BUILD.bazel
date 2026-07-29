@@ -6,7 +6,7 @@ go_library(
         "config.go",
         "tracker.go",
     ],
-    importpath = "housegate/housegate/pkg/plugins/sessionstate",
+    importpath = "github.com/housegate/housegate/pkg/plugins/sessionstate",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/chproto",

@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"time"
 
-	"housegate/housegate/pkg/log"
+	"github.com/housegate/housegate/pkg/log"
 )
 
 // Duration wraps time.Duration to allow human-friendly strings in JSON

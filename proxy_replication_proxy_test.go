@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"housegate/housegate/pkg/auth"
-	"housegate/housegate/pkg/config"
-	"housegate/housegate/pkg/network"
-	"housegate/housegate/pkg/replicationproxy"
+	"github.com/housegate/housegate/pkg/auth"
+	"github.com/housegate/housegate/pkg/config"
+	"github.com/housegate/housegate/pkg/network"
+	"github.com/housegate/housegate/pkg/replicationproxy"
 )
 
 func TestProxy_Run_ReplicationProxyForwardsLocalFakeUpstreams(t *testing.T) {

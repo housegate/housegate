@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "binding",
     srcs = ["binding.go"],
-    importpath = "housegate/housegate/tools/da-mvp/contracts/binding",
+    importpath = "github.com/housegate/housegate/tools/da-mvp/contracts/binding",
     visibility = ["//visibility:public"],
     deps = [
         "@com_github_ethereum_go_ethereum//:go-ethereum",

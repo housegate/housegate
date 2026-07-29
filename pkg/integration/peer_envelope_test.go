@@ -8,10 +8,10 @@ import (
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 
-	"housegate/housegate/pkg/auth"
-	"housegate/housegate/pkg/config"
-	"housegate/housegate/pkg/integration/testenv"
-	"housegate/housegate/pkg/peer"
+	"github.com/housegate/housegate/pkg/auth"
+	"github.com/housegate/housegate/pkg/config"
+	"github.com/housegate/housegate/pkg/integration/testenv"
+	"github.com/housegate/housegate/pkg/peer"
 )
 
 // TestPeerEnvelope_BypassesAuthAndCommitgate pins the inbound side of

@@ -1,6 +1,6 @@
 package rewrite
 
-import "housegate/housegate/pkg/cfgtypes"
+import "github.com/housegate/housegate/pkg/cfgtypes"
 
 // Config is the operator-tunable surface for the rewrite plugin. The
 // constructor in cmd combines these fields with cross-cutting

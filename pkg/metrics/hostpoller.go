@@ -9,7 +9,7 @@ import (
 	"github.com/shirou/gopsutil/v4/mem"
 	"github.com/shirou/gopsutil/v4/net"
 
-	"housegate/housegate/pkg/log"
+	"github.com/housegate/housegate/pkg/log"
 )
 
 // gopsutil entry points are indirected through package variables so tests can

@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"housegate/housegate/pkg/chproto"
-	"housegate/housegate/pkg/chsession"
-	"housegate/housegate/pkg/plugin"
-	"housegate/housegate/pkg/sqlmeta"
+	"github.com/housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/chsession"
+	"github.com/housegate/housegate/pkg/plugin"
+	"github.com/housegate/housegate/pkg/sqlmeta"
 )
 
 // fakeObserver records each BeforeStatement call so tests can

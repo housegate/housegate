@@ -25,13 +25,13 @@ import (
 
 	"github.com/ClickHouse/ch-go/proto"
 
-	"housegate/housegate/pkg/auth"
-	"housegate/housegate/pkg/chproto"
-	"housegate/housegate/pkg/config"
-	"housegate/housegate/pkg/network"
-	agentcfg "housegate/housegate/pkg/plugins/agent"
-	"housegate/housegate/pkg/proxy"
-	"housegate/housegate/pkg/registry"
+	"github.com/housegate/housegate/pkg/auth"
+	"github.com/housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/config"
+	"github.com/housegate/housegate/pkg/network"
+	agentcfg "github.com/housegate/housegate/pkg/plugins/agent"
+	"github.com/housegate/housegate/pkg/proxy"
+	"github.com/housegate/housegate/pkg/registry"
 )
 
 // startFakeIndexerProxy stands up a TCP listener that accepts a

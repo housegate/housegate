@@ -6,7 +6,7 @@ go_library(
         "config.go",
         "materialize.go",
     ],
-    importpath = "housegate/housegate/pkg/plugins/materialize",
+    importpath = "github.com/housegate/housegate/pkg/plugins/materialize",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/cfgtypes",

@@ -15,7 +15,7 @@ package auth
 import (
 	"context"
 
-	"housegate/housegate/pkg/log"
+	"github.com/housegate/housegate/pkg/log"
 )
 
 // AuthTokenSettingKey is the ClickHouse Query Setting key that carries a

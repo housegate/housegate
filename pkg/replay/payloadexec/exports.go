@@ -1,6 +1,6 @@
 package payloadexec
 
-import "housegate/housegate/pkg/lthash"
+import "github.com/housegate/housegate/pkg/lthash"
 
 // RowElementHash exposes the executor's canonical per-row LtHash element. Data
 // plane scanners call this instead of reimplementing row identity or row

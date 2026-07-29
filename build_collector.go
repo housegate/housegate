@@ -5,10 +5,10 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"housegate/housegate/pkg/config"
-	"housegate/housegate/pkg/credentials"
-	"housegate/housegate/pkg/log"
-	"housegate/housegate/pkg/metrics"
+	"github.com/housegate/housegate/pkg/config"
+	"github.com/housegate/housegate/pkg/credentials"
+	"github.com/housegate/housegate/pkg/log"
+	"github.com/housegate/housegate/pkg/metrics"
 )
 
 // buildCollector constructs the downstream-metrics Collector and its dedicated

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"housegate/housegate/pkg/replay"
+	"github.com/housegate/housegate/pkg/replay"
 )
 
 type recordingPayloadWriter struct {

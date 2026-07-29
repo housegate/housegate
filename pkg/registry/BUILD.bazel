@@ -8,6 +8,6 @@ go_library(
         "metadata.go",
         "topology.go",
     ],
-    importpath = "housegate/housegate/pkg/registry",
+    importpath = "github.com/housegate/housegate/pkg/registry",
     visibility = ["//visibility:public"],
 )

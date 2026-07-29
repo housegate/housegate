@@ -9,7 +9,7 @@ go_library(
         "keeper.go",
         "upstream.go",
     ],
-    importpath = "housegate/housegate/pkg/replicationproxy",
+    importpath = "github.com/housegate/housegate/pkg/replicationproxy",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/auth",

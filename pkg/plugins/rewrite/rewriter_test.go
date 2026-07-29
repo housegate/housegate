@@ -5,10 +5,10 @@ import (
 	"net"
 	"testing"
 
-	"housegate/housegate/pkg/chproto"
-	"housegate/housegate/pkg/chsession"
-	"housegate/housegate/pkg/plugin"
-	"housegate/housegate/pkg/rewriter"
+	"github.com/housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/chsession"
+	"github.com/housegate/housegate/pkg/plugin"
+	"github.com/housegate/housegate/pkg/rewriter"
 )
 
 func TestPlugin_RunOnForward_False(t *testing.T) {

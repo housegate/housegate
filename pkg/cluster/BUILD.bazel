@@ -10,7 +10,7 @@ go_library(
         "router.go",
         "types.go",
     ],
-    importpath = "housegate/housegate/pkg/cluster",
+    importpath = "github.com/housegate/housegate/pkg/cluster",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/log",

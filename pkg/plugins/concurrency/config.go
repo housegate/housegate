@@ -1,6 +1,6 @@
 package concurrency
 
-import "housegate/housegate/pkg/cfgtypes"
+import "github.com/housegate/housegate/pkg/cfgtypes"
 
 // Config is the operator-tunable surface for the concurrency-limit
 // plugin (per-user dimension; v1).

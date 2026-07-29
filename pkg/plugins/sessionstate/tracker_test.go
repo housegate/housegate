@@ -5,8 +5,8 @@ import (
 	"net"
 	"testing"
 
-	"housegate/housegate/pkg/chproto"
-	"housegate/housegate/pkg/chsession"
+	"github.com/housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/chsession"
 )
 
 // TestOnHello_RecordsLogicalDatabase: the only thing this plugin

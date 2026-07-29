@@ -8,8 +8,8 @@ import (
 
 	pb "github.com/housegate/rewriter-proto/gen/pb"
 
-	"housegate/housegate/pkg/network"
-	"housegate/housegate/pkg/sqlmeta"
+	"github.com/housegate/housegate/pkg/network"
+	"github.com/housegate/housegate/pkg/sqlmeta"
 )
 
 // fakeBackend lets tests script the transport without a gRPC server or

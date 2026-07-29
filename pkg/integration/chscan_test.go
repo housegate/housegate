@@ -8,9 +8,9 @@ import (
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 
-	"housegate/housegate/pkg/lthash"
-	"housegate/housegate/pkg/replay/chexec"
-	"housegate/housegate/pkg/replay/payloadexec"
+	"github.com/housegate/housegate/pkg/lthash"
+	"github.com/housegate/housegate/pkg/replay/chexec"
+	"github.com/housegate/housegate/pkg/replay/payloadexec"
 )
 
 func TestChexecScanParts_MatchesExecutorRowHashing(t *testing.T) {

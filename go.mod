@@ -1,4 +1,4 @@
-module housegate/housegate
+module github.com/housegate/housegate
 
 go 1.26.3
 

@@ -6,7 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"housegate/housegate/pkg/log"
+	"github.com/housegate/housegate/pkg/log"
 )
 
 // RoutingStrategy defines how to select a replica within a shard.

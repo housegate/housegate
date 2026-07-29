@@ -22,8 +22,8 @@ import (
 	"context"
 	"errors"
 
-	"housegate/housegate/pkg/chproto"
-	"housegate/housegate/pkg/sqlmeta"
+	"github.com/housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/sqlmeta"
 )
 
 // ErrAbortWithSuccess is a sentinel BeforeStatement may return to

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"housegate/housegate/pkg/log"
+	"github.com/housegate/housegate/pkg/log"
 )
 
 func (s *InterserverServer) Serve(ctx context.Context, ln net.Listener) error {

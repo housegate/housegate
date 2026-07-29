@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"housegate/housegate/pkg/log"
+	"github.com/housegate/housegate/pkg/log"
 )
 
 // DefaultBaseURL is the rewriter-go GitHub release download root. The only

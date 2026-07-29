@@ -21,7 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"housegate/housegate/pkg/log"
+	"github.com/housegate/housegate/pkg/log"
 
 	"github.com/redis/go-redis/v9"
 )

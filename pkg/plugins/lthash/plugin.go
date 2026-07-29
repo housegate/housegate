@@ -20,10 +20,10 @@ import (
 
 	"github.com/ClickHouse/ch-go/proto"
 
-	"housegate/housegate/pkg/chsession"
-	"housegate/housegate/pkg/log"
-	"housegate/housegate/pkg/lthash"
-	"housegate/housegate/pkg/plugin"
+	"github.com/housegate/housegate/pkg/chsession"
+	"github.com/housegate/housegate/pkg/log"
+	"github.com/housegate/housegate/pkg/lthash"
+	"github.com/housegate/housegate/pkg/plugin"
 )
 
 // Config enables the MVP commitment pipeline.

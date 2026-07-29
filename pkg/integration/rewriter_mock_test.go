@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"housegate/housegate/pkg/integration/testenv"
+	"github.com/housegate/housegate/pkg/integration/testenv"
 )
 
 // TestRewriterMock_RoundTrips is the first sanity test for the

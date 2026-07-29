@@ -15,13 +15,13 @@ import (
 
 	"github.com/ClickHouse/ch-go/proto"
 
-	"housegate/housegate/pkg/auth"
-	"housegate/housegate/pkg/chproto"
-	"housegate/housegate/pkg/chsession"
-	"housegate/housegate/pkg/plugin"
-	"housegate/housegate/pkg/replay"
-	"housegate/housegate/pkg/sqlmeta"
-	sicore "housegate/housegate/pkg/storageintegrity"
+	"github.com/housegate/housegate/pkg/auth"
+	"github.com/housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/chsession"
+	"github.com/housegate/housegate/pkg/plugin"
+	"github.com/housegate/housegate/pkg/replay"
+	"github.com/housegate/housegate/pkg/sqlmeta"
+	sicore "github.com/housegate/housegate/pkg/storageintegrity"
 )
 
 const storageIntegrityTestKey = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"

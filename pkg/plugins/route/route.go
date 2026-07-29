@@ -26,7 +26,7 @@
 package routeplugin
 
 import (
-	"housegate/housegate/pkg/chsession"
+	"github.com/housegate/housegate/pkg/chsession"
 )
 
 // RouteTarget returns the target proxy address stashed by Stripper, or

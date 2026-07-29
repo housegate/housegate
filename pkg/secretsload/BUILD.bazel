@@ -8,7 +8,7 @@ go_library(
         "edit.go",
         "secretsload.go",
     ],
-    importpath = "housegate/housegate/pkg/secretsload",
+    importpath = "github.com/housegate/housegate/pkg/secretsload",
     visibility = ["//visibility:public"],
     deps = [
         "@io_filippo_age//:age",

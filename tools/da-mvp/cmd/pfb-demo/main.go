@@ -11,7 +11,7 @@ import (
 	"os"
 	"time"
 
-	"housegate/housegate/tools/da-mvp/pkg/celestia"
+	"github.com/housegate/housegate/tools/da-mvp/pkg/celestia"
 )
 
 func main() {

@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"housegate/housegate/pkg/replay"
+	"github.com/housegate/housegate/pkg/replay"
 )
 
 func TestMemSnapshotStoreRoundTrips(t *testing.T) {

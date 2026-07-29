@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
-	"housegate/housegate/pkg/chproto"
-	"housegate/housegate/pkg/chsession"
-	"housegate/housegate/pkg/log"
+	"github.com/housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/chsession"
+	"github.com/housegate/housegate/pkg/log"
 )
 
 // PluginChain composes lists of typed plugins into a single Hooks value.

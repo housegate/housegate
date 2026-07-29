@@ -9,9 +9,9 @@ import (
 
 	"github.com/ClickHouse/ch-go/proto"
 
-	"housegate/housegate/pkg/lthash"
-	"housegate/housegate/pkg/replay"
-	"housegate/housegate/pkg/replay/payloadexec"
+	"github.com/housegate/housegate/pkg/lthash"
+	"github.com/housegate/housegate/pkg/replay"
+	"github.com/housegate/housegate/pkg/replay/payloadexec"
 )
 
 const PayloadEncodingClickHouseNativeData = "clickhouse-native-data-v1"

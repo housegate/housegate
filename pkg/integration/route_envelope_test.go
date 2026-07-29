@@ -6,8 +6,8 @@ import (
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 
-	"housegate/housegate/pkg/integration/testenv"
-	"housegate/housegate/pkg/route"
+	"github.com/housegate/housegate/pkg/integration/testenv"
+	"github.com/housegate/housegate/pkg/route"
 )
 
 // TestRouteEnvelope_StripsAndPivots pins the __route__ envelope path

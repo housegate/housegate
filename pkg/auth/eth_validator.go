@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"housegate/housegate/pkg/log"
+	"github.com/housegate/housegate/pkg/log"
 )
 
 // EthValidator validates queries using secp256k1 signatures produced by

@@ -6,8 +6,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"housegate/housegate/pkg/auth"
-	"housegate/housegate/pkg/integration/testenv"
+	"github.com/housegate/housegate/pkg/auth"
+	"github.com/housegate/housegate/pkg/integration/testenv"
 )
 
 // metricCounterValue returns the current value of the named counter

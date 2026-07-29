@@ -5,10 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	"housegate/housegate/pkg/chproto"
-	"housegate/housegate/pkg/plugins/commitgate"
-	"housegate/housegate/pkg/registry"
-	"housegate/housegate/pkg/sqlmeta"
+	"github.com/housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/plugins/commitgate"
+	"github.com/housegate/housegate/pkg/registry"
+	"github.com/housegate/housegate/pkg/sqlmeta"
 )
 
 // fixturePerm builds an InMemoryNetworkState with a single database

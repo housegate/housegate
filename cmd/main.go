@@ -1,6 +1,6 @@
 // Package main is the housegate ClickHouse-proxy standalone binary.
 //
-// Library callers should import "housegate/housegate" instead and
+// Library callers should import "github.com/housegate/housegate" instead and
 // call housegate.New(opts).Run(ctx) — see proxy.go.
 package main
 
@@ -13,12 +13,12 @@ import (
 	"os/signal"
 	"syscall"
 
-	"housegate/housegate"
-	"housegate/housegate/pkg/config"
-	"housegate/housegate/pkg/log"
-	"housegate/housegate/pkg/metricshttp"
-	"housegate/housegate/pkg/secretsload"
-	"housegate/housegate/pkg/version"
+	"github.com/housegate/housegate"
+	"github.com/housegate/housegate/pkg/config"
+	"github.com/housegate/housegate/pkg/log"
+	"github.com/housegate/housegate/pkg/metricshttp"
+	"github.com/housegate/housegate/pkg/secretsload"
+	"github.com/housegate/housegate/pkg/version"
 )
 
 func main() {

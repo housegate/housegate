@@ -8,11 +8,11 @@ import (
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 
-	"housegate/housegate/pkg/auth"
-	"housegate/housegate/pkg/cfgtypes"
-	"housegate/housegate/pkg/config"
-	"housegate/housegate/pkg/integration/testenv"
-	authplugin "housegate/housegate/pkg/plugins/auth"
+	"github.com/housegate/housegate/pkg/auth"
+	"github.com/housegate/housegate/pkg/cfgtypes"
+	"github.com/housegate/housegate/pkg/config"
+	"github.com/housegate/housegate/pkg/integration/testenv"
+	authplugin "github.com/housegate/housegate/pkg/plugins/auth"
 )
 
 // Auth integration tests.

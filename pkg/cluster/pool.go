@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"housegate/housegate/pkg/log"
+	"github.com/housegate/housegate/pkg/log"
 )
 
 // PooledConn wraps a net.Conn with pool metadata.

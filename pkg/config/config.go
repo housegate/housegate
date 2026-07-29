@@ -24,22 +24,22 @@ import (
 	"strings"
 	"time"
 
-	"housegate/housegate/pkg/log"
+	"github.com/housegate/housegate/pkg/log"
 
 	"go.yaml.in/yaml/v3"
 
-	"housegate/housegate/pkg/cfgtypes"
-	"housegate/housegate/pkg/cluster"
-	"housegate/housegate/pkg/plugins/agent"
-	authplugin "housegate/housegate/pkg/plugins/auth"
-	"housegate/housegate/pkg/plugins/concurrency"
-	indexingusage "housegate/housegate/pkg/plugins/indexing_usage"
-	lthashplugin "housegate/housegate/pkg/plugins/lthash"
-	materializeplugin "housegate/housegate/pkg/plugins/materialize"
-	"housegate/housegate/pkg/plugins/rewrite"
-	"housegate/housegate/pkg/plugins/sessionstate"
-	"housegate/housegate/pkg/plugins/usage"
-	"housegate/housegate/pkg/rewriter"
+	"github.com/housegate/housegate/pkg/cfgtypes"
+	"github.com/housegate/housegate/pkg/cluster"
+	"github.com/housegate/housegate/pkg/plugins/agent"
+	authplugin "github.com/housegate/housegate/pkg/plugins/auth"
+	"github.com/housegate/housegate/pkg/plugins/concurrency"
+	indexingusage "github.com/housegate/housegate/pkg/plugins/indexing_usage"
+	lthashplugin "github.com/housegate/housegate/pkg/plugins/lthash"
+	materializeplugin "github.com/housegate/housegate/pkg/plugins/materialize"
+	"github.com/housegate/housegate/pkg/plugins/rewrite"
+	"github.com/housegate/housegate/pkg/plugins/sessionstate"
+	"github.com/housegate/housegate/pkg/plugins/usage"
+	"github.com/housegate/housegate/pkg/rewriter"
 )
 
 // Duration is re-exported from cfgtypes so existing callers that

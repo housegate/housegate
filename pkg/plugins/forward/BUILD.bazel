@@ -6,7 +6,7 @@ go_library(
         "forward.go",
         "use_regex.go",
     ],
-    importpath = "housegate/housegate/pkg/plugins/forward",
+    importpath = "github.com/housegate/housegate/pkg/plugins/forward",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/auth",

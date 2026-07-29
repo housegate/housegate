@@ -5,7 +5,7 @@ import (
 
 	"github.com/ClickHouse/ch-go/proto"
 
-	"housegate/housegate/pkg/lthash"
+	"github.com/housegate/housegate/pkg/lthash"
 )
 
 // testRevision matches the revision used across housegate codec tests.

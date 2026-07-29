@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"housegate/housegate/pkg/billing"
-	"housegate/housegate/pkg/chproto"
-	"housegate/housegate/pkg/chsession"
-	"housegate/housegate/pkg/plugin"
+	"github.com/housegate/housegate/pkg/billing"
+	"github.com/housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/chsession"
+	"github.com/housegate/housegate/pkg/plugin"
 )
 
 // newTestSession returns a Session backed by one half of a net.Pipe.

@@ -7,9 +7,9 @@ import (
 
 	pb "github.com/housegate/rewriter-proto/gen/pb"
 
-	"housegate/housegate/pkg/chproto"
-	"housegate/housegate/pkg/plugin"
-	"housegate/housegate/pkg/rewriter"
+	"github.com/housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/plugin"
+	"github.com/housegate/housegate/pkg/rewriter"
 )
 
 type fakeMat struct {

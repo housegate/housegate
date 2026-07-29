@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	siplugin "housegate/housegate/pkg/plugins/storageintegrity"
-	"housegate/housegate/pkg/replay"
-	sicore "housegate/housegate/pkg/storageintegrity"
+	siplugin "github.com/housegate/housegate/pkg/plugins/storageintegrity"
+	"github.com/housegate/housegate/pkg/replay"
+	sicore "github.com/housegate/housegate/pkg/storageintegrity"
 )
 
 // TestAdmissionRecordFromPlugin_MapsAllFields pins the pure Admission ->

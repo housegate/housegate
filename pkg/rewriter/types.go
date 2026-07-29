@@ -36,7 +36,7 @@ import (
 	"context"
 	"time"
 
-	"housegate/housegate/pkg/sqlmeta"
+	"github.com/housegate/housegate/pkg/sqlmeta"
 )
 
 // RewriteResult bundles everything the rewriter learned about one SQL

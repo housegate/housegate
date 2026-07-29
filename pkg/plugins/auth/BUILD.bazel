@@ -6,7 +6,7 @@ go_library(
         "config.go",
         "jws.go",
     ],
-    importpath = "housegate/housegate/pkg/plugins/auth",
+    importpath = "github.com/housegate/housegate/pkg/plugins/auth",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/auth",
