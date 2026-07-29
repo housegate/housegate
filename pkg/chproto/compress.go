@@ -5,9 +5,11 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/ClickHouse/ch-go/compress"
 	"github.com/ClickHouse/ch-go/proto"
+	chcolumn "github.com/ClickHouse/clickhouse-go/v2/lib/column"
 )
 
 // ClientDataPacketIsEmpty reports whether raw is the protocol-level empty
@@ -125,12 +127,16 @@ func decodeBlockInfoCompat(r *proto.Reader) (*blockInfoCompat, int, error) {
 // Uses c.Compression() to pick between the compressed and uncompressed
 // (BlockInfo + empty-block fast path + DecodeRawBlock) branches.
 func (c *Codec) walkDataBlock() error {
+	return c.walkDataBlockWithCompression(c.Compression())
+}
+
+func (c *Codec) walkDataBlockWithCompression(compression proto.Compression) error {
 	// block_name is always a short uncompressed string in the plaintext stream.
 	if _, err := c.r.Str(); err != nil {
 		return fmt.Errorf("data block name: %w", err)
 	}
 
-	if c.Compression() == proto.CompressionEnabled {
+	if compression == proto.CompressionEnabled {
 		return c.walkCompressedDataBlock()
 	}
 	return c.walkUncompressedBlock()
@@ -151,7 +157,15 @@ func (c *Codec) walkCompressedDataBlock() error {
 	}
 
 	var block proto.Block
-	if err := block.DecodeRawBlock(r, c.Revision(), discardBlockResult{}); err != nil {
+	if err := block.DecodeRawBlock(r, c.Revision(), discardBlockResult{
+		serverContext: &chcolumn.ServerContext{
+			Revision:     uint64(c.Revision()),
+			VersionMajor: uint64(c.serverMajor.Load()),
+			VersionMinor: uint64(c.serverMinor.Load()),
+			VersionPatch: uint64(c.serverPatch.Load()),
+			Timezone:     time.UTC,
+		},
+	}); err != nil {
 		return fmt.Errorf("compressed block raw decode: %w", err)
 	}
 	return nil
@@ -196,13 +210,17 @@ func (r *compressedCaptureReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// discardBlockResult decodes one column at a time and immediately releases
-// it. Native column encodings are type-dependent, so decoding is required to
-// locate the end of a block; retaining every decoded column would needlessly
-// make proxy memory proportional to the entire result block.
-type discardBlockResult struct{}
+// discardBlockResult decodes one column at a time with clickhouse-go's Native
+// column factory and immediately releases it. Native column encodings are
+// type-dependent, so decoding is required to locate the end of a block. The
+// clickhouse-go factory is the same comprehensive type implementation used by
+// Housegate's ClickHouse clients (including Tuple/Map/Variant/Dynamic/JSON);
+// ch-go's narrower ColAuto inference is deliberately not used here.
+type discardBlockResult struct {
+	serverContext *chcolumn.ServerContext
+}
 
-func (discardBlockResult) DecodeResult(r *proto.Reader, version int, block proto.Block) error {
+func (d discardBlockResult) DecodeResult(r *proto.Reader, version int, block proto.Block) error {
 	for i := 0; i < block.Columns; i++ {
 		name, err := r.Str()
 		if err != nil {
@@ -218,23 +236,26 @@ func (discardBlockResult) DecodeResult(r *proto.Reader, version int, block proto
 				return fmt.Errorf("column [%d] custom serialization: %w", i, err)
 			}
 			if custom {
-				return fmt.Errorf("column [%d] has unsupported custom serialization", i)
+				return fmt.Errorf(
+					"column [%d] %q unexpectedly uses custom serialization at negotiated revision %d (max supported %d)",
+					i, name, version, MaxSupportedRevision,
+				)
 			}
 		}
 
-		column := &proto.ColAuto{}
-		if err := column.Infer(proto.ColumnType(typeName)); err != nil {
-			return fmt.Errorf("column [%d] %q type inference: %w", i, name, err)
+		column, err := chcolumn.Type(typeName).Column(name, d.serverContext)
+		if err != nil {
+			return fmt.Errorf("column [%d] %q type construction: %w", i, name, err)
 		}
 		if block.Rows == 0 {
 			continue
 		}
-		if stateful, ok := column.Data.(proto.StateDecoder); ok {
-			if err := stateful.DecodeState(r); err != nil {
+		if stateful, ok := column.(chcolumn.CustomSerialization); ok {
+			if err := stateful.ReadStatePrefix(r); err != nil {
 				return fmt.Errorf("column [%d] %q state: %w", i, name, err)
 			}
 		}
-		if err := column.Data.DecodeColumn(r, block.Rows); err != nil {
+		if err := column.Decode(r, block.Rows); err != nil {
 			return fmt.Errorf("column [%d] %q data: %w", i, name, err)
 		}
 	}

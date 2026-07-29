@@ -43,6 +43,9 @@ type Codec struct {
 	w           io.Writer
 	rev         atomic.Int64 // negotiated protocol revision; 0 until SetRevision
 	helloRev    atomic.Int64 // ClientHello revision used by server to shape ServerHello
+	serverMajor atomic.Int64 // upstream server version, captured from ServerHello
+	serverMinor atomic.Int64
+	serverPatch atomic.Int64
 	compression atomic.Int32 // proto.Compression value; 0=Disabled, 1=Enabled
 	dir         Direction
 }
@@ -321,14 +324,19 @@ func (c *Codec) skipServerPacketBody(typeVar uint64) error {
 		uint64(ServerReadTaskRequestCode):
 		return nil
 
-	// Block-formatted packets: all use the same wire layout as a Data block
-	// (block_name string + optional compressed frame(s) / BlockInfo+columns).
-	// Totals / Extremes / Log / ProfileEvents all follow this shape.
+	// Data / Totals / Extremes always follow the query's compression mode.
 	case uint64(proto.ServerCodeData),
 		uint64(proto.ServerCodeTotals),
-		uint64(proto.ServerCodeExtremes),
-		uint64(proto.ServerCodeLog),
+		uint64(proto.ServerCodeExtremes):
+		return c.walkDataBlock()
+
+	// Log / ProfileEvents use the same Native block body, but older revisions
+	// send it uncompressed even when the query's Data packets are compressed.
+	case uint64(proto.ServerCodeLog),
 		uint64(ServerProfileEventsCode):
+		if rev < revisionMinCompressedLogsProfileEventsColumns {
+			return c.walkDataBlockWithCompression(proto.CompressionDisabled)
+		}
 		return c.walkDataBlock()
 
 	case uint64(proto.ServerCodeException):

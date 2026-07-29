@@ -179,10 +179,11 @@ func (s *sessionImpl) handshakeNewUpstream(newUp *chproto.Codec, hello *chproto.
 	if newUp == nil {
 		return 0, nil, fmt.Errorf("%w: nil upstream", ErrRebindDenied)
 	}
-	if err := newUp.WriteClientHello(hello); err != nil {
+	upstreamHello := chproto.ClientHelloForUpstream(hello)
+	if err := newUp.WriteClientHello(upstreamHello); err != nil {
 		return 0, nil, fmt.Errorf("%s write hello: %w", errPrefix, err)
 	}
-	newUp.SetServerHelloRevisionHint(int(hello.ProtocolVersion))
+	newUp.SetServerHelloRevisionHint(int(upstreamHello.ProtocolVersion))
 	srvPkt, err := newUp.ReadPacket(uint64(chproto.ServerHelloCode), uint64(chproto.ServerExceptionCode))
 	if err != nil {
 		return 0, nil, fmt.Errorf("%s read server-hello: %w", errPrefix, err)
@@ -195,7 +196,7 @@ func (s *sessionImpl) handshakeNewUpstream(newUp *chproto.Codec, hello *chproto.
 		return 0, nil, fmt.Errorf("%s: unexpected packet type=%d (want ServerHello=%d): %w",
 			errPrefix, srvPkt.Type, chproto.ServerHelloCode, chproto.ErrDecode)
 	}
-	rev := int(hello.ProtocolVersion)
+	rev := int(upstreamHello.ProtocolVersion)
 	if int(srv.Revision) < rev {
 		rev = int(srv.Revision)
 	}

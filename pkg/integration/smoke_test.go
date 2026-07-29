@@ -66,3 +66,38 @@ func TestProxyForwardsSelectOne(t *testing.T) {
 		t.Errorf("SELECT 1 = %d, want 1", result)
 	}
 }
+
+// TestProxyForwardsCompressedTuple exercises a normal composite result through
+// the packet-framed upstream path. Tuple is intentionally outside ch-go's
+// ColAuto inference set; the proxy must use clickhouse-go's full Native column
+// factory to locate the compressed block boundary without closing the relay.
+func TestProxyForwardsCompressedTuple(t *testing.T) {
+	proxy := testenv.StartServerProxy(t, chEnv.Addr)
+	conn, err := clickhouse.Open(&clickhouse.Options{
+		Addr: []string{proxy.Addr},
+		Auth: clickhouse.Auth{
+			Database: chEnv.Database,
+			Username: chEnv.User,
+			Password: chEnv.Password,
+		},
+		Protocol: clickhouse.Native,
+		Compression: &clickhouse.Compression{
+			Method: clickhouse.CompressionLZ4,
+		},
+	})
+	if err != nil {
+		t.Fatalf("clickhouse.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	var result []any
+	if err := conn.QueryRow(
+		context.Background(),
+		"SELECT tuple(toUInt8(1), toUInt8(2))",
+	).Scan(&result); err != nil {
+		t.Fatalf("SELECT tuple: %v", err)
+	}
+	if len(result) != 2 || result[0] != uint8(1) || result[1] != uint8(2) {
+		t.Fatalf("SELECT tuple result = %#v, want []any{uint8(1), uint8(2)}", result)
+	}
+}

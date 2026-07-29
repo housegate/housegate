@@ -53,6 +53,22 @@ func buildNativeBlockPayload(t *testing.T, rev int, values proto.ColUInt8) []byt
 	return append([]byte(nil), payload.Buf...)
 }
 
+func buildTupleNativeBlockPayload(rev int) []byte {
+	var payload proto.Buffer
+	(proto.BlockInfo{BucketNum: -1}).Encode(&payload)
+	payload.PutUVarInt(1) // columns
+	payload.PutUVarInt(1) // rows
+	payload.PutString("value")
+	payload.PutString("Tuple(UInt8, UInt8)")
+	if proto.FeatureCustomSerialization.In(rev) {
+		payload.PutBool(false)
+	}
+	// Tuple is serialized column-wise: all values for element 1, then element 2.
+	payload.PutUInt8(1)
+	payload.PutUInt8(2)
+	return append([]byte(nil), payload.Buf...)
+}
+
 func buildCompressedFrame(t *testing.T, payload []byte, method chcompress.Method) []byte {
 	t.Helper()
 	writer := chcompress.NewWriter(0, method)
@@ -320,6 +336,44 @@ func TestReadPacket_CompressedDataStopsBeforeFollowingPacket(t *testing.T) {
 	}
 }
 
+func TestReadPacket_CompressedTupleStopsBeforeFollowingEndOfStream(t *testing.T) {
+	rev := 54480
+	payload := buildTupleNativeBlockPayload(rev)
+
+	var dataPrefix proto.Buffer
+	dataPrefix.PutUVarInt(uint64(proto.ServerCodeData))
+	dataPrefix.PutString("")
+	dataPacket := append(
+		append([]byte(nil), dataPrefix.Buf...),
+		buildCompressedFrame(t, payload, chcompress.LZ4)...,
+	)
+
+	var eos proto.Buffer
+	eos.PutUVarInt(uint64(proto.ServerCodeEndOfStream))
+	wire := append(append([]byte(nil), dataPacket...), eos.Buf...)
+
+	rw := &readerWriter{r: bytes.NewBuffer(wire), w: &bytes.Buffer{}}
+	c := NewCodec(rw, DirToUpstream)
+	c.SetRevision(rev)
+	c.SetCompression(proto.CompressionEnabled)
+
+	data, err := c.ReadPacket()
+	if err != nil {
+		t.Fatalf("ReadPacket(Tuple Data): %v", err)
+	}
+	if !bytes.Equal(data.Raw, dataPacket) {
+		t.Fatalf("Tuple Data Raw=%x\nwant %x", data.Raw, dataPacket)
+	}
+
+	terminal, err := c.ReadPacket()
+	if err != nil {
+		t.Fatalf("ReadPacket(EndOfStream): %v", err)
+	}
+	if terminal.Type != uint64(proto.ServerCodeEndOfStream) {
+		t.Fatalf("terminal Type=%d, want EndOfStream(%d)", terminal.Type, proto.ServerCodeEndOfStream)
+	}
+}
+
 // TestReadPacket_CompressedDataWaitsForDelayedSecondFrame proves that the
 // logical Native block, rather than the currently-buffered compression
 // frames, is the packet boundary.
@@ -462,6 +516,43 @@ func TestReadPacket_CompressedTableColumnsStopsBeforeFollowingPacket(t *testing.
 	}
 	if !bytes.Equal(tableColumns.Raw, tableColumnsPacket) {
 		t.Fatalf("TableColumns Raw=%x\nwant %x", tableColumns.Raw, tableColumnsPacket)
+	}
+
+	terminal, err := c.ReadPacket()
+	if err != nil {
+		t.Fatalf("ReadPacket(EndOfStream): %v", err)
+	}
+	if terminal.Type != uint64(proto.ServerCodeEndOfStream) {
+		t.Fatalf("terminal Type=%d, want EndOfStream(%d)", terminal.Type, proto.ServerCodeEndOfStream)
+	}
+}
+
+func TestReadPacket_ProfileEventsRemainUncompressedBeforeRevision54481(t *testing.T) {
+	rev := MaxSupportedRevision
+	values := proto.ColUInt8{1}
+	payload := buildNativeBlockPayload(t, rev, values)
+
+	var profileEvents proto.Buffer
+	profileEvents.PutUVarInt(uint64(ServerProfileEventsCode))
+	profileEvents.PutString("")
+	profileEvents.Buf = append(profileEvents.Buf, payload...)
+	packet := append([]byte(nil), profileEvents.Buf...)
+
+	var eos proto.Buffer
+	eos.PutUVarInt(uint64(proto.ServerCodeEndOfStream))
+	wire := append(append([]byte(nil), packet...), eos.Buf...)
+
+	rw := &readerWriter{r: bytes.NewBuffer(wire), w: &bytes.Buffer{}}
+	c := NewCodec(rw, DirToUpstream)
+	c.SetRevision(rev)
+	c.SetCompression(proto.CompressionEnabled)
+
+	profile, err := c.ReadPacket()
+	if err != nil {
+		t.Fatalf("ReadPacket(ProfileEvents): %v", err)
+	}
+	if !bytes.Equal(profile.Raw, packet) {
+		t.Fatalf("ProfileEvents Raw=%x\nwant %x", profile.Raw, packet)
 	}
 
 	terminal, err := c.ReadPacket()

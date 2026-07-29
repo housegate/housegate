@@ -445,11 +445,46 @@ func TestReadPacket_ServerHello_UsesClientRevisionForFieldLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadPacket: %v", err)
 	}
-	if !bytes.Equal(pkt.Raw, onWire) {
-		t.Fatalf("ServerHello should be forwarded unchanged for clientRev=%d\ngot  %x\nwant %x", clientRev, pkt.Raw, onWire)
+	var expected proto.Buffer
+	expected.PutUVarInt(uint64(proto.ServerCodeHello))
+	expected.PutString("ClickHouse")
+	expected.PutInt(26)
+	expected.PutInt(9)
+	expected.PutInt(clientRev)
+	expected.PutString("Etc/UTC")
+	expected.PutString("ch-go-client")
+	expected.PutInt(0)
+	if !bytes.Equal(pkt.Raw, expected.Buf) {
+		t.Fatalf("ServerHello should advertise negotiated clientRev=%d\ngot  %x\nwant %x", clientRev, pkt.Raw, expected.Buf)
 	}
 	if bytes.Contains(pkt.Raw, []byte("notchunked")) {
 		t.Fatalf("unexpected chunked rewrite for clientRev=%d: %x", clientRev, pkt.Raw)
+	}
+}
+
+func TestClientHelloForUpstreamCapsRevisionWithoutMutatingInput(t *testing.T) {
+	original := &ClientHello{
+		Name:            "new-client",
+		ProtocolVersion: MaxSupportedRevision + 100,
+		User:            "alice",
+	}
+	upstream := ClientHelloForUpstream(original)
+	if upstream == original {
+		t.Fatal("ClientHelloForUpstream returned the input pointer")
+	}
+	if upstream.ProtocolVersion != MaxSupportedRevision {
+		t.Fatalf("upstream ProtocolVersion=%d, want %d", upstream.ProtocolVersion, MaxSupportedRevision)
+	}
+	if original.ProtocolVersion != MaxSupportedRevision+100 {
+		t.Fatalf("input ProtocolVersion mutated to %d", original.ProtocolVersion)
+	}
+	if upstream.User != original.User {
+		t.Fatalf("upstream User=%q, want %q", upstream.User, original.User)
+	}
+
+	older := &ClientHello{ProtocolVersion: MaxSupportedRevision - 1}
+	if got := ClientHelloForUpstream(older).ProtocolVersion; got != older.ProtocolVersion {
+		t.Fatalf("older ProtocolVersion=%d, want %d", got, older.ProtocolVersion)
 	}
 }
 

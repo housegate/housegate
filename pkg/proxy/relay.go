@@ -199,10 +199,11 @@ func (r *Relay) handshake(ctx context.Context) error {
 			// Upstream addendum was already sent by RebindToPeer; do not repeat.
 		}
 	} else {
-		if err := upstream.WriteClientHello(hello); err != nil {
+		upstreamHello := chproto.ClientHelloForUpstream(hello)
+		if err := upstream.WriteClientHello(upstreamHello); err != nil {
 			return fmt.Errorf("forward client hello: %w", err)
 		}
-		upstream.SetServerHelloRevisionHint(int(hello.ProtocolVersion))
+		upstream.SetServerHelloRevisionHint(int(upstreamHello.ProtocolVersion))
 		logger.Debugw("client hello processed and forwarded to upstream",
 			"upstream", upstreamAddr(upstream),
 			"client_hostname", state.ClientHostname,
@@ -230,7 +231,7 @@ func (r *Relay) handshake(ctx context.Context) error {
 				srvPkt.Type, chproto.ServerHelloCode, chproto.ErrDecode)
 		}
 
-		rev := int(hello.ProtocolVersion)
+		rev := int(upstreamHello.ProtocolVersion)
 		if int(srv.Revision) < rev {
 			rev = int(srv.Revision)
 		}

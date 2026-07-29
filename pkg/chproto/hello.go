@@ -6,6 +6,26 @@ import (
 	"github.com/ClickHouse/ch-go/proto"
 )
 
+// MaxSupportedRevision is the newest ClickHouse TCP protocol revision the
+// pinned ch-go codec fully models. Housegate terminates the protocol on both
+// sides, so it must negotiate this revision (or an older client revision)
+// rather than forwarding a newer client's revision transparently.
+const MaxSupportedRevision = proto.Version
+
+// ClientHelloForUpstream returns a shallow copy of h with ProtocolVersion
+// capped to the codec's supported revision. The remaining credentials and
+// routing envelopes are preserved exactly.
+func ClientHelloForUpstream(h *ClientHello) *ClientHello {
+	if h == nil {
+		return nil
+	}
+	upstream := *h
+	if upstream.ProtocolVersion > MaxSupportedRevision {
+		upstream.ProtocolVersion = MaxSupportedRevision
+	}
+	return &upstream
+}
+
 // rewriteServerHelloChunkedToNotChunked parses a complete on-wire ServerHello
 // packet (including its leading type byte) and returns a new byte slice in
 // which the two chunked-protocol advertisements the server sends to the
@@ -90,10 +110,12 @@ func rewriteServerHelloChunkedToNotChunked(raw []byte, clientRevision int) ([]by
 	if _, err := readUVarInt("minor"); err != nil {
 		return nil, err
 	}
+	revisionStart := pos
 	rev, err := readUVarInt("revision")
 	if err != nil {
 		return nil, err
 	}
+	revisionEnd := pos
 	irev := int(rev)
 	wireRev := irev
 	if clientRevision > 0 && clientRevision < wireRev {
@@ -128,11 +150,22 @@ func rewriteServerHelloChunkedToNotChunked(raw []byte, clientRevision int) ([]by
 		}
 	}
 
-	// If the server is older than FeatureChunkedPackets the bytes we'd need to
-	// rewrite are not on the wire — just return the raw unchanged.
+	rewriteRevision := func(suffixStart int) []byte {
+		var negotiated proto.Buffer
+		negotiated.PutInt(wireRev)
+		out := make([]byte, 0, len(raw)+(len(negotiated.Buf)-(revisionEnd-revisionStart)))
+		out = append(out, raw[:revisionStart]...)
+		out = append(out, negotiated.Buf...)
+		out = append(out, raw[revisionEnd:suffixStart]...)
+		return out
+	}
+
+	// If the negotiated revision is older than FeatureChunkedPackets, those
+	// fields are not on the wire. Still rewrite the server's advertised
+	// revision to the negotiated client/proxy revision so the downstream client
+	// decodes later packets with the same feature gates as the upstream server.
 	if !proto.FeatureChunkedPackets.In(wireRev) {
-		out := make([]byte, len(raw))
-		copy(out, raw)
+		out := rewriteRevision(len(raw))
 		return out, nil
 	}
 
@@ -153,8 +186,7 @@ func rewriteServerHelloChunkedToNotChunked(raw []byte, clientRevision int) ([]by
 	replacement.PutString("notchunked")
 	replacement.PutString("notchunked")
 
-	out := make([]byte, 0, chunkedStart+len(replacement.Buf)+(len(raw)-chunkedEnd))
-	out = append(out, raw[:chunkedStart]...)
+	out := rewriteRevision(chunkedStart)
 	out = append(out, replacement.Buf...)
 	out = append(out, raw[chunkedEnd:]...)
 	return out, nil
@@ -196,6 +228,9 @@ func (c *Codec) decodeServerHello() (*ServerHello, error) {
 	if err := h.DecodeAware(c.r, c.Revision()); err != nil {
 		return nil, fmt.Errorf("%w: server hello: %v", ErrDecode, err)
 	}
+	c.serverMajor.Store(int64(h.Major))
+	c.serverMinor.Store(int64(h.Minor))
+	c.serverPatch.Store(int64(h.Patch))
 	return h, nil
 }
 
