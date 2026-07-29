@@ -27,8 +27,10 @@ import (
 	"housegate/housegate/pkg/credentials"
 	"housegate/housegate/pkg/log"
 	"housegate/housegate/pkg/plugins/commitgate"
+	"housegate/housegate/pkg/plugins/storageintegrity"
 	"housegate/housegate/pkg/registry"
 	"housegate/housegate/pkg/rewriter"
+	sicore "housegate/housegate/pkg/storageintegrity"
 )
 
 // Proxy is a started, ready-to-Serve proxy. Run/RunWith blocks until
@@ -88,6 +90,22 @@ type Options struct {
 	UsageClient           billing.UsageClient
 	IndexingUsageReporter billing.IndexingUsageReporter
 	Cluster               cluster.Cluster
+
+	// StorageIntegrityAdmissionConsumer receives completed, input-bound
+	// storage-integrity admissions when storage_integrity.ingress.enabled is
+	// true. Server-mode startup fails if ingress is enabled without this
+	// consumer, because otherwise completed admissions would remain pending
+	// and block subsequent storage writes on persistent client sessions.
+	StorageIntegrityAdmissionConsumer storageintegrity.AdmissionConsumer
+	// StorageIntegrityPayloadMaterializer converts captured Native ClientData
+	// into the replay payload encoding selected by the admitted INSERT. Hosts
+	// that want FORMAT CSVWithNames support must provide one; without it, the
+	// ingress plugin rejects CSVWithNames fail-closed.
+	StorageIntegrityPayloadMaterializer sicore.PayloadMaterializer
+	// StorageIntegrityRuntime supplies the real P1e runtime ports used when
+	// config.storage_integrity.runtime.enabled is true. It lets HouseGate build
+	// the admission consumer itself without fabricating the missing companion seam.
+	StorageIntegrityRuntime StorageIntegrityRuntimeOptions
 
 	// CommitGateObservers gate DDL statements (CREATE / DROP TABLE,
 	// CREATE / DROP DATABASE) on host-supplied external commits.
@@ -252,7 +270,13 @@ func (p *proxyImpl) Run(ctx context.Context) error {
 	p.addr = lns[0].Addr()
 	p.addrMu.Unlock()
 
-	p.built.preServe(ctx)
+	if err := p.built.preServe(ctx); err != nil {
+		for _, ln := range lns {
+			_ = ln.Close()
+		}
+		p.teardown()
+		return err
+	}
 	defer p.teardown()
 
 	g, gctx := errgroup.WithContext(ctx)
@@ -284,7 +308,10 @@ func (p *proxyImpl) RunWith(ctx context.Context, ln net.Listener) error {
 	p.addr = ln.Addr()
 	p.addrMu.Unlock()
 
-	p.built.preServe(ctx)
+	if err := p.built.preServe(ctx); err != nil {
+		p.teardown()
+		return err
+	}
 	defer p.teardown()
 
 	p.logger.Infow("housegate listening",

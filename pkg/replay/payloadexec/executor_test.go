@@ -2,8 +2,10 @@ package payloadexec
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
+	"time"
 
 	"housegate/housegate/pkg/lthash"
 	"housegate/housegate/pkg/replay"
@@ -136,6 +138,172 @@ func TestExecutorComputesRootForPayloadLocalInsert(t *testing.T) {
 	}
 	if res.PrevSafeSnapshotID != job.PrevSafeSnapshotID || res.PrevStateRoot != job.PrevStateRoot {
 		t.Fatalf("executor must echo prev identity: %#v", res)
+	}
+}
+
+func TestPartitionIDForRow(t *testing.T) {
+	schema := TableSchema{
+		TableID: testTable,
+		Columns: []lthash.Column{
+			{Name: "id", Type: "UInt64"},
+			{Name: "region", Type: "String"},
+		},
+	}
+	got, err := PartitionIDForRow(schema, []any{uint64(1), "eu"})
+	if err != nil {
+		t.Fatalf("PartitionIDForRow without PartitionBy: %v", err)
+	}
+	if got != "all" {
+		t.Fatalf("partition = %q, want all", got)
+	}
+
+	schema.PartitionBy = "region"
+	got, err = PartitionIDForRow(schema, []any{uint64(1), "eu"})
+	if err != nil {
+		t.Fatalf("PartitionIDForRow with PartitionBy: %v", err)
+	}
+	if got != "p_eu" {
+		t.Fatalf("partition = %q, want p_eu", got)
+	}
+
+	if _, err := PartitionIDForRow(schema, []any{uint64(1)}); err == nil {
+		t.Fatal("PartitionIDForRow must reject values that do not match schema width")
+	}
+
+	schema.PartitionBy = "missing"
+	if _, err := PartitionIDForRow(schema, []any{uint64(1), "eu"}); err == nil {
+		t.Fatal("PartitionIDForRow must reject an unknown PartitionBy column")
+	}
+}
+
+func TestPartitionIDForRowTypedValueGoldenMatrix(t *testing.T) {
+	tests := []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{name: "string", value: "eu", want: "p_eu"},
+		{name: "bytes", value: []byte("eu"), want: "p_eu"},
+		{name: "bool", value: true, want: "p_true"},
+		{name: "uint8", value: uint8(8), want: "p_8"},
+		{name: "uint16", value: uint16(16), want: "p_16"},
+		{name: "uint32", value: uint32(32), want: "p_32"},
+		{name: "uint64", value: uint64(64), want: "p_64"},
+		{name: "uint", value: uint(65), want: "p_65"},
+		{name: "int8", value: int8(-8), want: "p_-8"},
+		{name: "int16", value: int16(-16), want: "p_-16"},
+		{name: "int32", value: int32(-32), want: "p_-32"},
+		{name: "int64", value: int64(-64), want: "p_-64"},
+		{name: "int", value: int(-65), want: "p_-65"},
+		{name: "float32", value: float32(1.5), want: "p_1.5"},
+		{name: "float64", value: float64(2.5), want: "p_2.5"},
+		{name: "float32 negative zero", value: math.Float32frombits(1 << 31), want: "p_0"},
+		{name: "float64 negative zero", value: math.Float64frombits(1 << 63), want: "p_0"},
+		{name: "float64 signaling nan", value: math.Float64frombits(0x7ff0000000000001), want: "p_NaN"},
+		{name: "float64 quiet nan", value: math.Float64frombits(0x7ff8000000000002), want: "p_NaN"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			schema := TableSchema{
+				TableID:     testTable,
+				Columns:     []lthash.Column{{Name: "shard", Type: "fixture"}},
+				PartitionBy: "shard",
+			}
+			got, err := PartitionIDForRow(schema, []any{tt.value})
+			if err != nil {
+				t.Fatalf("PartitionIDForRow: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("partition id = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPartitionIDForRowRejectsUndefinedTypedPartitionValue(t *testing.T) {
+	schema := TableSchema{
+		TableID:     testTable,
+		Columns:     []lthash.Column{{Name: "day", Type: "Date"}},
+		PartitionBy: "day",
+	}
+	if _, err := PartitionIDForRow(schema, []any{time.Date(2026, time.July, 16, 0, 0, 0, 0, time.UTC)}); err == nil {
+		t.Fatal("PartitionIDForRow must fail closed for an undefined typed partition value")
+	}
+}
+
+func TestDecodeCSVPreservesLegacyPartitionWireText(t *testing.T) {
+	tests := []struct {
+		name       string
+		columnType string
+		wireValue  string
+		want       string
+	}{
+		{name: "uint with leading zeroes", columnType: "UInt64", wireValue: "001", want: "p_001"},
+		{name: "float with trailing fraction", columnType: "Float64", wireValue: "1.0", want: "p_1.0"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			schema := TableSchema{
+				TableID:     testTable,
+				Columns:     []lthash.Column{{Name: "shard", Type: tt.columnType}},
+				PartitionBy: "shard",
+			}
+			rows, err := DecodeCSV([]byte("shard\n"+tt.wireValue+"\n"), schema)
+			if err != nil {
+				t.Fatalf("DecodeCSV: %v", err)
+			}
+			if got := rows[0].PartitionID; got != tt.want {
+				t.Fatalf("partition id = %q, want legacy wire-derived %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLegacyCSVPartitionStateRootGolden(t *testing.T) {
+	const (
+		networkID = "net-legacy-partition-golden"
+		tableID   = "tenant.legacy_partition_golden"
+	)
+	schema := TableSchema{
+		TableID:     tableID,
+		Columns:     []lthash.Column{{Name: "shard", Type: "UInt64"}},
+		PartitionBy: "shard",
+	}
+	exec := New(networkID, schema)
+	snap, err := exec.GenesisSnapshot(0, "schema-legacy-partition-golden", "housegate-replay-mvp-v0")
+	if err != nil {
+		t.Fatalf("GenesisSnapshot: %v", err)
+	}
+	payload := []byte("shard\n001\n")
+	statement := replay.Statement{
+		StatementID:   "stmt-legacy-partition-golden",
+		StatementSeq:  1,
+		SQL:           "INSERT INTO tenant.legacy_partition_golden FORMAT CSVWithNames",
+		SQLHash:       replay.DigestString("INSERT INTO tenant.legacy_partition_golden FORMAT CSVWithNames"),
+		SettingsHash:  replay.DigestString("settings-legacy-partition-golden"),
+		PayloadRef:    "payload-legacy-partition-golden",
+		PayloadHash:   replay.DigestBytes(payload),
+		PayloadLength: uint64(len(payload)),
+		TargetTableID: tableID,
+	}
+	job := replay.ReplayJob{
+		BlockSeq:           1,
+		PrevSafeSnapshotID: snap.SnapshotID,
+		PrevStateRoot:      snap.StateRoot,
+		SchemaSnapshotID:   snap.SchemaSnapshotID,
+		ExecutorProfileID:  snap.ExecutorProfileID,
+		Statements:         []replay.Statement{statement},
+	}
+	_, result, err := exec.Apply(snap, job, []replay.PreparedStatement{{Statement: statement, Payload: payload}})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(result.AffectedParts) != 1 || result.AffectedParts[0].PartitionID != "p_001" {
+		t.Fatalf("affected parts = %+v, want one part in p_001", result.AffectedParts)
+	}
+	const wantStateRoot = "0xe769a7aab847f24f11b5cea94679ac46df6c673b99b11f82d9fdc19ad48d896d"
+	if result.ComputedStateRoot != wantStateRoot {
+		t.Fatalf("computed state root = %q, want golden %q", result.ComputedStateRoot, wantStateRoot)
 	}
 }
 

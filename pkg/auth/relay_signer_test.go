@@ -56,6 +56,24 @@ func TestRelaySigner_QHashMatches(t *testing.T) {
 	}
 }
 
+func TestRelaySigner_SignTokenIncludesQueryPurpose(t *testing.T) {
+	signer, err := NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatalf("failed to create relay signer: %v", err)
+	}
+	token, err := signer.SignToken("SELECT 1")
+	if err != nil {
+		t.Fatalf("failed to sign token: %v", err)
+	}
+	_, payload, _, err := parseJWSCompact(token)
+	if err != nil {
+		t.Fatalf("failed to parse token: %v", err)
+	}
+	if payload.Purpose != QueryPurpose {
+		t.Fatalf("purpose = %q, want %q", payload.Purpose, QueryPurpose)
+	}
+}
+
 func TestRelaySigner_AddressInAllowlist(t *testing.T) {
 	privKeyHex := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	signer, err := NewRelaySigner(privKeyHex)

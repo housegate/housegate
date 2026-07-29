@@ -162,7 +162,9 @@ func TestInternalPort_AcceptsPeerTrustedHandshake(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	bs.preServe(ctx)
+	if err := bs.preServe(ctx); err != nil {
+		t.Fatalf("preServe: %v", err)
+	}
 	internalServer := requireProxyServer(t, *internalSL)
 	go func() { _ = internalServer.Serve(ctx, ln) }()
 

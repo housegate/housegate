@@ -18,9 +18,14 @@ func TestNoopHooks_AllMethodsSafe(t *testing.T) {
 	if err := h.OnQuery(context.Background(), nil); err != nil {
 		t.Fatalf("OnQuery: %v", err)
 	}
+	if h.RejectUndecodableQuery(nil) {
+		t.Fatal("RejectUndecodableQuery = true, want false")
+	}
 	if err := h.OnException(context.Background(), nil, nil); err != nil {
 		t.Fatalf("OnException: %v", err)
 	}
+	h.OnQueryInputComplete(context.Background(), nil)
+	h.OnQueryAbort(context.Background(), nil)
 	h.OnQueryComplete(context.Background(), nil)
 	h.OnClose(nil)
 	h.OnDisconnect(nil)

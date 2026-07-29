@@ -45,6 +45,16 @@ func (s *RelaySigner) Address() string { return s.address }
 // binds the given SQL body (via QueryHash = Keccak256(sql)) and carries
 // the current time as iat.
 func (s *RelaySigner) SignToken(sql string) (string, error) {
+	return s.signToken(sql, QueryPurpose)
+}
+
+// SignTokenWithPurpose is SignToken plus an explicit domain-separation purpose
+// claim. Verifiers that require a purpose reject legacy purpose-less tokens.
+func (s *RelaySigner) SignTokenWithPurpose(sql, purpose string) (string, error) {
+	return s.signToken(sql, purpose)
+}
+
+func (s *RelaySigner) signToken(sql, purpose string) (string, error) {
 	header := JWSHeader{Alg: "ES256K", Typ: "JWT"}
 	headerJSON, err := json.Marshal(header)
 	if err != nil {
@@ -55,6 +65,7 @@ func (s *RelaySigner) SignToken(sql string) (string, error) {
 	payload := JWSPayload{
 		Iat:       time.Now().Unix(),
 		QueryHash: keccak256Hex([]byte(sql)),
+		Purpose:   purpose,
 	}
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {

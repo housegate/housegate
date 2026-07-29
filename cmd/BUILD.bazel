@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 
 go_library(
     name = "housegate_lib",
@@ -35,4 +35,11 @@ go_binary(
         "housegate/housegate/pkg/version.GitCommit": "{STABLE_GIT_COMMIT}",
         "housegate/housegate/pkg/version.BuildTime": "{BUILD_TIMESTAMP}",
     },
+)
+
+go_test(
+    name = "cmd_test",
+    srcs = ["main_test.go"],
+    embed = [":housegate_lib"],  # keep
+    deps = ["//pkg/config"],
 )

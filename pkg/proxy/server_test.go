@@ -91,16 +91,33 @@ func TestServer_HandshakeRoundTrip(t *testing.T) {
 // can assert the Server fires them regardless of dial outcome.
 type recordingHooks struct {
 	plugin.NoopHooks
-	connects    int
-	disconnects int
+	connects     int
+	disconnects  int
+	connectCh    chan struct{}
+	disconnectCh chan struct{}
 }
 
 func (r *recordingHooks) OnConnect(_ context.Context, _ chsession.Session) error {
 	r.connects++
+	closeOnce(r.connectCh)
 	return nil
 }
 
-func (r *recordingHooks) OnDisconnect(_ chsession.Session) { r.disconnects++ }
+func (r *recordingHooks) OnDisconnect(_ chsession.Session) {
+	r.disconnects++
+	closeOnce(r.disconnectCh)
+}
+
+func closeOnce(ch chan struct{}) {
+	if ch == nil {
+		return
+	}
+	select {
+	case <-ch:
+	default:
+		close(ch)
+	}
+}
 
 // TestServer_ConnLifecycleHooks_FireOnDialFailure proves that
 // OnConnect / OnDisconnect are invoked for every accepted connection
@@ -112,7 +129,10 @@ func (r *recordingHooks) OnDisconnect(_ chsession.Session) { r.disconnects++ }
 // the failing dialer is called. OnConnect still fires at accept; the
 // deferred OnDisconnect still fires after Relay returns.
 func TestServer_ConnLifecycleHooks_FireOnDialFailure(t *testing.T) {
-	hooks := &recordingHooks{}
+	hooks := &recordingHooks{
+		connectCh:    make(chan struct{}),
+		disconnectCh: make(chan struct{}),
+	}
 	dial := func(ctx context.Context, sess chsession.Session) (*chproto.Codec, error) {
 		return nil, errors.New("dial-failure")
 	}
@@ -149,7 +169,15 @@ func TestServer_ConnLifecycleHooks_FireOnDialFailure(t *testing.T) {
 		t.Fatalf("client write hello: %v", err)
 	}
 
-	// Wait until handle() finishes. Cancel ctx and rely on the drain path.
+	// Wait until the failing dial path has returned through the connection
+	// lifecycle frame. Cancelling before Accept/handle is scheduled makes the
+	// test assert server shutdown timing instead of lifecycle hooks.
+	select {
+	case <-hooks.disconnectCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnDisconnect did not fire after dial failure")
+	}
+
 	cancel()
 	select {
 	case <-serveDone:
@@ -190,13 +218,23 @@ func (h testHooks) OnHello(ctx context.Context, sess chsession.Session, hello *c
 
 func (testHooks) OnHandshakeComplete(context.Context, chsession.Session, time.Duration) {}
 func (testHooks) OnQuery(context.Context, *plugin.QueryContext) error                   { return nil }
-func (testHooks) OnClientData(context.Context, *plugin.QueryContext, []byte) error      { return nil }
+func (testHooks) RejectUndecodableQuery(chsession.Session) bool                         { return false }
+func (testHooks) ClientDataReadLimit(*plugin.QueryContext) (uint64, bool)               { return 0, false }
+func (testHooks) OnClientDataStrict(context.Context, *plugin.QueryContext, []byte) error {
+	return nil
+}
+func (testHooks) OnClientData(context.Context, *plugin.QueryContext, []byte) error { return nil }
 func (testHooks) OnException(context.Context, chsession.Session, *chproto.Exception) error {
 	return nil
 }
-func (testHooks) OnQueryComplete(context.Context, chsession.Session) {}
-func (testHooks) OnClose(chsession.Session)                          {}
-func (testHooks) OnDisconnect(chsession.Session)                     {}
+func (testHooks) OnQueryInputCompleteStrict(context.Context, *plugin.QueryContext) error {
+	return nil
+}
+func (testHooks) OnQueryInputComplete(context.Context, *plugin.QueryContext) {}
+func (testHooks) OnQueryAbort(context.Context, *plugin.QueryContext)         {}
+func (testHooks) OnQueryComplete(context.Context, chsession.Session)         {}
+func (testHooks) OnClose(chsession.Session)                                  {}
+func (testHooks) OnDisconnect(chsession.Session)                             {}
 
 // nopDialer returns a codec backed by one end of a net.Pipe; a goroutine on
 // the other end drains the ClientHello and writes a minimal ServerHello so

@@ -1,11 +1,55 @@
 package chproto
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
 
+	"github.com/ClickHouse/ch-go/compress"
 	"github.com/ClickHouse/ch-go/proto"
 )
+
+// ClientDataPacketIsEmpty reports whether raw is the protocol-level empty
+// ClientData block that terminates one query's client input stream.
+func ClientDataPacketIsEmpty(raw []byte, compression proto.Compression) (bool, error) {
+	r := bytes.NewReader(raw)
+	code, err := binary.ReadUvarint(r)
+	if err != nil {
+		return false, fmt.Errorf("client data packet code: %w", err)
+	}
+	if code != uint64(proto.ClientCodeData) {
+		return false, fmt.Errorf("packet type %d is not ClientData", code)
+	}
+	nameLen, err := binary.ReadUvarint(r)
+	if err != nil {
+		return false, fmt.Errorf("client data block name length: %w", err)
+	}
+	if nameLen > uint64(r.Len()) {
+		return false, fmt.Errorf("client data block name length %d exceeds remaining packet bytes %d", nameLen, r.Len())
+	}
+	if _, err := r.Seek(int64(nameLen), io.SeekCurrent); err != nil {
+		return false, fmt.Errorf("client data block name: %w", err)
+	}
+
+	var body io.Reader = r
+	if compression == proto.CompressionEnabled {
+		body = compress.NewReader(r)
+	}
+	pr := proto.NewReader(body)
+	if _, _, err := decodeBlockInfoCompat(pr); err != nil {
+		return false, fmt.Errorf("client data BlockInfo: %w", err)
+	}
+	columns, err := pr.UVarInt()
+	if err != nil {
+		return false, fmt.Errorf("client data columns: %w", err)
+	}
+	rows, err := pr.UVarInt()
+	if err != nil {
+		return false, fmt.Errorf("client data rows: %w", err)
+	}
+	return columns == 0 && rows == 0, nil
+}
 
 // Compressed frame layout constants (ClickHouse native protocol):
 //

@@ -17,9 +17,17 @@ import (
 //   - OnHello — after ClientHello is decoded, before it is forwarded.
 //   - OnHandshakeComplete — after ServerHello + addendum exchange.
 //   - OnQuery — for every decoded client Query packet.
+//   - OnClientDataStrict — for correctness-critical Data capture before
+//     upstream splice; errors are fail-closed.
 //   - OnClientData — for every raw client Data packet (INSERT body),
 //     dispatched only when DataPlugins are registered; fail-open.
 //   - OnException — when the upstream returns an Exception packet.
+//   - OnQueryInputComplete — after the terminating empty client Data block is
+//     forwarded upstream. SuppressUpstreamExecution queries still forward the
+//     terminator after staged input succeeds, but non-empty payload Data is
+//     withheld from ordinary upstream.
+//   - OnQueryAbort — when Relay rejects a query lifecycle, including after a
+//     Query or earlier Data packets have already reached upstream.
 //   - OnQueryComplete — once per Query when its lifecycle ends
 //     (rejected, forward failed, or upstream produced EndOfStream /
 //     Exception).
@@ -33,8 +41,14 @@ type Hooks interface {
 	OnHello(ctx context.Context, sess chsession.Session, hello *chproto.ClientHello) error
 	OnHandshakeComplete(ctx context.Context, sess chsession.Session, duration time.Duration)
 	OnQuery(ctx context.Context, qctx *QueryContext) error
+	RejectUndecodableQuery(sess chsession.Session) bool
+	ClientDataReadLimit(qctx *QueryContext) (maxBytes uint64, enforce bool)
+	OnClientDataStrict(ctx context.Context, qctx *QueryContext, raw []byte) error
 	OnClientData(ctx context.Context, qctx *QueryContext, raw []byte) error
 	OnException(ctx context.Context, sess chsession.Session, exc *chproto.Exception) error
+	OnQueryInputCompleteStrict(ctx context.Context, qctx *QueryContext) error
+	OnQueryInputComplete(ctx context.Context, qctx *QueryContext)
+	OnQueryAbort(ctx context.Context, qctx *QueryContext)
 	OnQueryComplete(ctx context.Context, sess chsession.Session)
 	OnClose(sess chsession.Session)
 	OnDisconnect(sess chsession.Session)
@@ -53,11 +67,25 @@ func (NoopHooks) OnHandshakeComplete(context.Context, chsession.Session, time.Du
 
 func (NoopHooks) OnQuery(context.Context, *QueryContext) error { return nil }
 
+func (NoopHooks) RejectUndecodableQuery(chsession.Session) bool { return false }
+
+func (NoopHooks) ClientDataReadLimit(*QueryContext) (uint64, bool) { return 0, false }
+
+func (NoopHooks) OnClientDataStrict(context.Context, *QueryContext, []byte) error {
+	return nil
+}
+
 func (NoopHooks) OnClientData(context.Context, *QueryContext, []byte) error { return nil }
 
 func (NoopHooks) OnException(context.Context, chsession.Session, *chproto.Exception) error {
 	return nil
 }
+
+func (NoopHooks) OnQueryInputCompleteStrict(context.Context, *QueryContext) error { return nil }
+
+func (NoopHooks) OnQueryInputComplete(context.Context, *QueryContext) {}
+
+func (NoopHooks) OnQueryAbort(context.Context, *QueryContext) {}
 
 func (NoopHooks) OnQueryComplete(context.Context, chsession.Session) {}
 

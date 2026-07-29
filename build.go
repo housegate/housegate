@@ -34,12 +34,14 @@ import (
 	"housegate/housegate/pkg/plugins/rewrite"
 	routeplugin "housegate/housegate/pkg/plugins/route"
 	"housegate/housegate/pkg/plugins/sessionstate"
+	"housegate/housegate/pkg/plugins/storageintegrity"
 	"housegate/housegate/pkg/plugins/usage"
 	"housegate/housegate/pkg/proxy"
 	"housegate/housegate/pkg/registry"
 	"housegate/housegate/pkg/replicationproxy"
 	"housegate/housegate/pkg/rewriter"
 	"housegate/housegate/pkg/sqlmeta"
+	sicore "housegate/housegate/pkg/storageintegrity"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -244,7 +246,7 @@ type serverListener struct {
 // cleanup of every lib-built dep.
 type builtServer struct {
 	listeners []serverListener
-	preServe  func(ctx context.Context)
+	preServe  func(ctx context.Context) error
 	teardown  func()
 	// metricsRegistry is the dedicated Prometheus registry for the downstream
 	// metrics Collector (nil when collection is disabled or in agent mode).
@@ -522,6 +524,10 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	}
 
 	var dataPlugins []plugin.DataPlugin
+	var strictDataPlugins []plugin.StrictDataPlugin
+	var queryInputCompleteStrictPlugins []plugin.QueryInputCompleteStrictPlugin
+	var queryInputCompletePlugins []plugin.QueryInputCompletePlugin
+	var queryAbortPlugins []plugin.QueryAbortPlugin
 	if cfg.LtHash.Enabled {
 		ltPlug := lthashplugin.New(lthashplugin.DefaultRegistry)
 		queryPlugins = append(queryPlugins, ltPlug)
@@ -591,6 +597,63 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		queryPlugins = append(queryPlugins, rewritePlug)
 	}
 
+	var storageIntegrityIngress *storageintegrity.Plugin
+	var storageIntegrityMergeGuard StorageIntegrityMergeGuard
+	var storageIntegrityRuntime *StorageIntegrityIngress
+	if cfg.StorageIntegrity.Ingress.Enabled {
+		admissionConsumer := opts.StorageIntegrityAdmissionConsumer
+		if cfg.StorageIntegrity.Runtime.Enabled {
+			if admissionConsumer != nil {
+				return nil, fmt.Errorf("storage_integrity.runtime.enabled cannot be combined with StorageIntegrityAdmissionConsumer")
+			}
+			if !sicore.CompanionStagedIntakeAvailable {
+				return nil, fmt.Errorf("storage_integrity.runtime: companion staged-intake contract unavailable")
+			}
+			consumer, guard, err := buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, opts.StorageIntegrityRuntime)
+			if err != nil {
+				return nil, err
+			}
+			admissionConsumer = consumer
+			storageIntegrityMergeGuard = guard
+			storageIntegrityRuntime = consumer
+			pushTeardown(consumer.Close)
+		}
+		if admissionConsumer == nil {
+			return nil, fmt.Errorf("storage_integrity.ingress admission consumer is required when enabled")
+		}
+		ingressCfg := cfg.StorageIntegrity.Ingress
+		ingressValidator := auth.NewEthValidator(
+			ingressCfg.AllowedAddresses,
+			ingressCfg.MaxTokenAge.Duration,
+			true,
+			false,
+			"",
+			nil,
+		)
+		storageIntegrityIngress = storageintegrity.New(storageintegrity.Config{
+			Enabled:             true,
+			AuthValidator:       ingressValidator,
+			Purpose:             auth.QueryPurpose,
+			RequestTimeout:      ingressCfg.RequestTimeout.Duration,
+			MaxPayloadBytes:     ingressCfg.MaxPayloadBytes,
+			AdmissionConsumer:   admissionConsumer,
+			PayloadMaterializer: opts.StorageIntegrityPayloadMaterializer,
+		})
+		queryPlugins = append(queryPlugins, storageIntegrityIngress)
+		strictDataPlugins = append(strictDataPlugins, storageIntegrityIngress)
+		queryInputCompleteStrictPlugins = append(queryInputCompleteStrictPlugins, storageIntegrityIngress)
+		queryInputCompletePlugins = append(queryInputCompletePlugins, storageIntegrityIngress)
+		queryAbortPlugins = append(queryAbortPlugins, storageIntegrityIngress)
+		closePlugins = append(closePlugins, storageIntegrityIngress)
+		log.Infow("storage_integrity ingress enabled",
+			"allowed_addresses", len(ingressCfg.AllowedAddresses),
+			"max_token_age", ingressCfg.MaxTokenAge.Duration,
+			"request_timeout", ingressCfg.RequestTimeout.Duration,
+			"max_payload_bytes", ingressCfg.MaxPayloadBytes,
+			"runtime_enabled", cfg.StorageIntegrity.Runtime.Enabled,
+		)
+	}
+
 	// indexing_usage runs *after* the rewriter so it can read the
 	// classified StatementType + AccessedTables it populates.
 	if iuPlugin != nil {
@@ -640,14 +703,18 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	}
 
 	chain := &plugin.PluginChain{
-		ConnLifecyclePlugins:     connLifecycle,
-		HandshakeCompletePlugins: []plugin.HandshakeCompletePlugin{metrics},
-		HelloPlugins:             helloPlugins,
-		QueryPlugins:             queryPlugins,
-		DataPlugins:              dataPlugins,
-		QueryCompletePlugins:     queryCompletePlugins,
-		ClosePlugins:             closePlugins,
-		ExceptionPlugins:         exceptionPlugins,
+		ConnLifecyclePlugins:            connLifecycle,
+		HandshakeCompletePlugins:        []plugin.HandshakeCompletePlugin{metrics},
+		HelloPlugins:                    helloPlugins,
+		QueryPlugins:                    queryPlugins,
+		StrictDataPlugins:               strictDataPlugins,
+		QueryInputCompleteStrictPlugins: queryInputCompleteStrictPlugins,
+		DataPlugins:                     dataPlugins,
+		QueryCompletePlugins:            queryCompletePlugins,
+		QueryInputCompletePlugins:       queryInputCompletePlugins,
+		QueryAbortPlugins:               queryAbortPlugins,
+		ClosePlugins:                    closePlugins,
+		ExceptionPlugins:                exceptionPlugins,
 	}
 
 	selfPort := selfListenPort(cfg.Listen)
@@ -770,7 +837,16 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	return &builtServer{
 		listeners:       listeners,
 		metricsRegistry: metricsRegistry,
-		preServe: func(ctx context.Context) {
+		preServe: func(ctx context.Context) error {
+			if err := startStorageIntegrityRuntime(ctx, storageIntegrityRuntime, storageIntegrityMergeGuard); err != nil {
+				return err
+			}
+			if storageIntegrityMergeGuard != nil {
+				log.Info("storage_integrity merge guard asserted")
+			}
+			if storageIntegrityRuntime != nil {
+				log.Info("storage_integrity durable intake recovery completed")
+			}
 			if libCluster != nil {
 				libCluster.Start(ctx)
 				if cfg.Shard != nil {
@@ -783,6 +859,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 				go metricsCollector.Start(ctx)
 				log.Infow("metrics collector started", "interval", cfg.Observability.Collector.Interval.Duration)
 			}
+			return nil
 		},
 		teardown: func() {
 			// Reverse order, mirroring runServer's defer stack.
@@ -895,7 +972,7 @@ func buildAgent(opts Options, rf *redisFactory) (*builtServer, error) {
 		listeners: []serverListener{
 			{Runner: &proxyServerRunner{server: srv}, ListenAddr: cfg.Listen, Label: "agent"},
 		},
-		preServe: func(context.Context) {},
+		preServe: func(context.Context) error { return nil },
 		teardown: func() {
 			if materializerClose != nil {
 				materializerClose()

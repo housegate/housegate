@@ -376,7 +376,6 @@ func DecodeCSV(payload []byte, sch TableSchema) ([]Row, error) {
 			return nil, fmt.Errorf("partition column %q not present in payload", sch.PartitionBy)
 		}
 	}
-
 	out := make([]Row, 0, len(rows)-1)
 	for ln, rec := range rows[1:] {
 		if len(rec) != len(header) {
@@ -400,6 +399,72 @@ func DecodeCSV(payload []byte, sch TableSchema) ([]Row, error) {
 		out = append(out, Row{Values: values, PartitionID: partitionID, RawBytes: raw})
 	}
 	return out, nil
+}
+
+// PartitionIDForRow derives the typed executor partition id for one schema-
+// ordered row. Native and other typed materializers use it; the legacy CSV
+// profile intentionally preserves its original wire-text partition ids.
+func PartitionIDForRow(sch TableSchema, values []any) (string, error) {
+	if len(values) != len(sch.Columns) {
+		return "", fmt.Errorf("row has %d values, schema has %d columns", len(values), len(sch.Columns))
+	}
+	if sch.PartitionBy == "" {
+		return "all", nil
+	}
+	for i, col := range sch.Columns {
+		if col.Name != sch.PartitionBy {
+			continue
+		}
+		raw, err := partitionValueString(values[i])
+		if err != nil {
+			return "", fmt.Errorf("partition column %q: %w", sch.PartitionBy, err)
+		}
+		return "p_" + raw, nil
+	}
+	return "", fmt.Errorf("partition column %q not present in schema", sch.PartitionBy)
+}
+
+func partitionValueString(v any) (string, error) {
+	switch x := v.(type) {
+	case string:
+		return x, nil
+	case []byte:
+		return string(x), nil
+	case bool:
+		return strconv.FormatBool(x), nil
+	case uint8:
+		return strconv.FormatUint(uint64(x), 10), nil
+	case uint16:
+		return strconv.FormatUint(uint64(x), 10), nil
+	case uint32:
+		return strconv.FormatUint(uint64(x), 10), nil
+	case uint64:
+		return strconv.FormatUint(x, 10), nil
+	case uint:
+		return strconv.FormatUint(uint64(x), 10), nil
+	case int8:
+		return strconv.FormatInt(int64(x), 10), nil
+	case int16:
+		return strconv.FormatInt(int64(x), 10), nil
+	case int32:
+		return strconv.FormatInt(int64(x), 10), nil
+	case int64:
+		return strconv.FormatInt(x, 10), nil
+	case int:
+		return strconv.FormatInt(int64(x), 10), nil
+	case float32:
+		if x == 0 {
+			return "0", nil
+		}
+		return strconv.FormatFloat(float64(x), 'g', -1, 32), nil
+	case float64:
+		if x == 0 {
+			return "0", nil
+		}
+		return strconv.FormatFloat(x, 'g', -1, 64), nil
+	default:
+		return "", fmt.Errorf("unsupported partition value type %T", v)
+	}
 }
 
 // parseValue converts a raw CSV field to the Go type matching the declared
