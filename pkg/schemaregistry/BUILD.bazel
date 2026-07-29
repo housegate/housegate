@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "schemaregistry",
+    srcs = ["loader.go"],
+    importpath = "github.com/housegate/housegate/pkg/schemaregistry",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/lthash",
+        "//pkg/replay/payloadexec",
+        "@com_github_clickhouse_clickhouse_go_v2//:clickhouse-go",
+    ],
+)
+
+go_test(
+    name = "schemaregistry_test",
+    srcs = ["loader_test.go"],
+    embed = [":schemaregistry"],
+)
