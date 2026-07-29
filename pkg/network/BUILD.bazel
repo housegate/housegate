@@ -38,6 +38,7 @@ go_test(
         "//pkg/plugins/agent",
         "//pkg/plugins/commitgate",
         "//pkg/registry",
+        "//pkg/replay/payloadexec",
         "//pkg/sqlmeta",
     ],
 )

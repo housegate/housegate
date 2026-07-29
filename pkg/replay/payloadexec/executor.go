@@ -45,14 +45,14 @@ type tablePartition struct{ table, partition string }
 // TableSchema describes one verified table for the MVP executor. In production
 // this is derived from the anchored DDL/schema snapshot; here it is configured.
 type TableSchema struct {
-	TableID string
+	TableID string `json:"table_id"`
+	// PartitionBy is an optional user column whose value selects the partition.
+	// Empty means a single partition named "all".
+	PartitionBy string `json:"partition_by"`
 	// Columns are the user (wire) columns in declared order; the CSV payload
 	// header must name exactly this set. _hg_row_id is injected by the executor
 	// and must not appear here.
-	Columns []lthash.Column
-	// PartitionBy is an optional user column whose value selects the partition.
-	// Empty means a single partition named "all".
-	PartitionBy string
+	Columns []lthash.Column `json:"columns"`
 }
 
 // Row is one materialized logical row: its row-instance id (_hg_row_id), the

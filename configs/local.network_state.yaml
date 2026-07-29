@@ -150,3 +150,16 @@ database_permissions:
 #    d1: ["read", "write", "admin"]
     d2: ["read", "write", "admin"]
     d3: ["read", "write", "admin"]
+
+# ---------------------------------------------------------------------
+# table_schemas — versioned canonical schema content mirrored from the
+# TableSchemaSet event stream. Keys follow <database>/<table>@<version>.
+# The sample hash below is computed for network_id "local-devnet".
+# ---------------------------------------------------------------------
+table_schemas:
+  "database1/events@1":
+    database_id: "database1"
+    table_id: "events"
+    version: 1
+    schema_hash: "0xb35c8376d1fd284bd288b639badac1feb64daf9aa9c9c94fbc72c97578d71557"
+    schema_json: '{"table_id":"database1.events","partition_by":"","columns":[{"name":"id","type":"String"},{"name":"block_number","type":"UInt64"}]}'

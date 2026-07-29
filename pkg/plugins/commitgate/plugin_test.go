@@ -7,6 +7,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/housegate/housegate/pkg/chproto"
 	"github.com/housegate/housegate/pkg/chsession"
@@ -49,6 +50,15 @@ func (f *fakeObserver) OnStatementException(_ context.Context, ev *Event, exc *c
 	if f.panicOnException {
 		panic("fakeObserver: simulated OnStatementException panic")
 	}
+}
+
+type successObserver struct {
+	fakeObserver
+	success chan Event
+}
+
+func (o *successObserver) AfterStatementSuccess(_ context.Context, ev Event) {
+	o.success <- ev
 }
 
 // stateOnlySession is a minimal Session backed by SessionState.
@@ -513,6 +523,88 @@ func TestOnQueryComplete_ClearsStash(t *testing.T) {
 	p.OnQueryComplete(context.Background(), qctx.Session)
 	if got := stashedEvent(qctx.Session); got != nil {
 		t.Errorf("OnQueryComplete did not clear stash: %+v", got)
+	}
+}
+
+func TestOnQueryComplete_DispatchesAfterStatementSuccess(t *testing.T) {
+	obs := &successObserver{
+		fakeObserver: fakeObserver{types: []sqlmeta.StatementType{sqlmeta.StatementTypeCreateTable}},
+		success:      make(chan Event, 1),
+	}
+	p := NewPlugin([]Observer{obs})
+	qctx := newQctx(sqlmeta.StatementTypeCreateTable,
+		[]sqlmeta.AccessedTable{tableEntry("orders", "t", "orders")})
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	p.OnQueryComplete(context.Background(), qctx.Session)
+
+	select {
+	case got := <-obs.success:
+		if got.Type != sqlmeta.StatementTypeCreateTable {
+			t.Fatalf("AfterStatementSuccess Type = %s, want CREATE_TABLE", got.Type)
+		}
+		if len(got.AccessedTables) != 1 || got.AccessedTables[0].OriginalTable != "t" {
+			t.Fatalf("AfterStatementSuccess AccessedTables = %+v", got.AccessedTables)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("AfterStatementSuccess was not dispatched")
+	}
+}
+
+func TestOnQueryComplete_DoesNotDispatchSuccessAfterException(t *testing.T) {
+	obs := &successObserver{
+		fakeObserver: fakeObserver{types: []sqlmeta.StatementType{sqlmeta.StatementTypeCreateTable}},
+		success:      make(chan Event, 1),
+	}
+	p := NewPlugin([]Observer{obs})
+	qctx := newQctx(sqlmeta.StatementTypeCreateTable,
+		[]sqlmeta.AccessedTable{tableEntry("orders", "t", "orders")})
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	if err := p.OnException(context.Background(), qctx.Session, &chproto.Exception{Code: 1}); err != nil {
+		t.Fatalf("OnException: %v", err)
+	}
+	p.OnQueryComplete(context.Background(), qctx.Session)
+
+	select {
+	case got := <-obs.success:
+		t.Fatalf("AfterStatementSuccess dispatched after exception: %+v", got)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestOnQueryComplete_PlainObserverDoesNotDispatchSuccess(t *testing.T) {
+	obs := &fakeObserver{types: []sqlmeta.StatementType{sqlmeta.StatementTypeCreateTable}}
+	p := NewPlugin([]Observer{obs})
+	qctx := newQctx(sqlmeta.StatementTypeCreateTable,
+		[]sqlmeta.AccessedTable{tableEntry("orders", "t", "orders")})
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	p.OnQueryComplete(context.Background(), qctx.Session)
+	if got := stashedEvent(qctx.Session); got != nil {
+		t.Fatalf("stash remained after completion: %+v", got)
+	}
+}
+
+func TestOnQueryComplete_NonGatedStatementDoesNotDispatchSuccess(t *testing.T) {
+	obs := &successObserver{
+		fakeObserver: fakeObserver{types: []sqlmeta.StatementType{sqlmeta.StatementTypeCreateTable}},
+		success:      make(chan Event, 1),
+	}
+	p := NewPlugin([]Observer{obs})
+	qctx := newQctx(sqlmeta.StatementTypeSelect, nil)
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	p.OnQueryComplete(context.Background(), qctx.Session)
+
+	select {
+	case got := <-obs.success:
+		t.Fatalf("AfterStatementSuccess dispatched for non-gated statement: %+v", got)
+	case <-time.After(100 * time.Millisecond):
 	}
 }
 

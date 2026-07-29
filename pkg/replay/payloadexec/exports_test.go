@@ -2,6 +2,7 @@ package payloadexec
 
 import (
 	"bytes"
+	"encoding/json"
 	"testing"
 
 	"github.com/housegate/housegate/pkg/lthash"
@@ -34,5 +35,21 @@ func TestExportedHelpersDelegate(t *testing.T) {
 	}
 	if TableSchemaHash("net-1", sch) != tableSchemaHash("net-1", sch) {
 		t.Fatal("TableSchemaHash must delegate")
+	}
+}
+
+func TestTableSchemaCanonicalJSON(t *testing.T) {
+	schema := TableSchema{
+		TableID:     "orders.t",
+		PartitionBy: "day",
+		Columns:     []lthash.Column{{Name: "id", Type: "UInt64"}},
+	}
+	got, err := json.Marshal(schema)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	const want = `{"table_id":"orders.t","partition_by":"day","columns":[{"name":"id","type":"UInt64"}]}`
+	if string(got) != want {
+		t.Fatalf("canonical schema JSON = %s, want %s", got, want)
 	}
 }

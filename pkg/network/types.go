@@ -101,6 +101,16 @@ type TableInfo struct {
 	TableType string `json:"tableType" yaml:"table_type"`
 }
 
+// TableSchemaInfo is the producer-shaped schema record mirrored from
+// sentio-core's TableSchemas collection.
+type TableSchemaInfo struct {
+	DatabaseId string `json:"databaseId" yaml:"database_id"`
+	TableId    string `json:"tableId" yaml:"table_id"`
+	Version    uint32 `json:"version" yaml:"version"`
+	SchemaHash string `json:"schemaHash" yaml:"schema_hash"`
+	SchemaJson string `json:"schemaJson" yaml:"schema_json"`
+}
+
 // DatabaseInfo describes a logical user-facing database: its type,
 // the indexer hosting its tables, owning processor (for PROCESSOR-type
 // databases), and pending-delete state. Ownership and access are

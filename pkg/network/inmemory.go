@@ -22,6 +22,7 @@ type InMemoryNetworkState struct {
 	DatabaseInfos        map[Database]DatabaseInfo
 	DatabasePermissions  map[AccountAddress]DatabasePermissions
 	Operators            map[AccountAddress]map[AccountAddress]bool
+	TableSchemas         map[string]TableSchemaInfo
 }
 
 // NewInMemoryNetworkState returns an empty InMemoryNetworkState with
@@ -34,6 +35,7 @@ func NewInMemoryNetworkState() *InMemoryNetworkState {
 		DatabaseInfos:        make(map[Database]DatabaseInfo),
 		DatabasePermissions:  make(map[AccountAddress]DatabasePermissions),
 		Operators:            make(map[AccountAddress]map[AccountAddress]bool),
+		TableSchemas:         make(map[string]TableSchemaInfo),
 	}
 }
 
@@ -150,6 +152,38 @@ func (s *InMemoryNetworkState) IsOperator(owner, signer string) bool {
 	return ops[AccountAddress(signer)]
 }
 
+// --- registry.TableSchemas
+
+func (s *InMemoryNetworkState) TableSchema(databaseId, tableId string, version uint32) (registry.TableSchema, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	info, ok := s.TableSchemas[fmt.Sprintf("%s/%s@%d", databaseId, tableId, version)]
+	if !ok {
+		return registry.TableSchema{}, false
+	}
+	return convertTableSchema(info), true
+}
+
+func (s *InMemoryNetworkState) LatestTableSchema(databaseId, tableId string) (registry.TableSchema, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var latest TableSchemaInfo
+	found := false
+	for _, info := range s.TableSchemas {
+		if info.DatabaseId != databaseId || info.TableId != tableId {
+			continue
+		}
+		if !found || info.Version > latest.Version {
+			latest = info
+			found = true
+		}
+	}
+	if !found {
+		return registry.TableSchema{}, false
+	}
+	return convertTableSchema(latest), true
+}
+
 // SetOperator is a test/dev helper: mark signer as an authorised
 // operator for owner (allowed=true) or revoke (allowed=false).
 func (s *InMemoryNetworkState) SetOperator(owner, signer AccountAddress, allowed bool) {
@@ -191,6 +225,17 @@ func convertDatabase(info DatabaseInfo) registry.Database {
 	}
 }
 
+func convertTableSchema(info TableSchemaInfo) registry.TableSchema {
+	return registry.TableSchema{
+		DatabaseId: info.DatabaseId,
+		TableId:    info.TableId,
+		Version:    info.Version,
+		SchemaHash: info.SchemaHash,
+		SchemaJson: info.SchemaJson,
+	}
+}
+
 // Compile-time check that InMemoryNetworkState satisfies the
 // consumer-side contract housegate's proxy chain depends on.
 var _ registry.Registry = (*InMemoryNetworkState)(nil)
+var _ registry.TableSchemas = (*InMemoryNetworkState)(nil)

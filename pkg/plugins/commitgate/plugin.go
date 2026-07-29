@@ -136,6 +136,7 @@ func (p *Plugin) OnException(ctx context.Context, sess chsession.Session, exc *c
 	if !ok || ev == nil {
 		return nil
 	}
+	sess.State().MarkCommitGateEventFailed()
 	observers, ok := p.byType[ev.Type]
 	if !ok || len(observers) == 0 {
 		return nil
@@ -162,14 +163,47 @@ func dispatchOnException(ctx context.Context, o Observer, ev *Event, exc *chprot
 	o.OnStatementException(ctx, ev, exc)
 }
 
-// OnQueryComplete clears the commitgate Event stash so the next
-// query starts clean. Fires on both success (EndOfStream) and
-// failure (Exception) paths from the relay.
-func (p *Plugin) OnQueryComplete(_ context.Context, sess chsession.Session) {
+// OnQueryComplete dispatches the optional success hook after EndOfStream and
+// clears the commitgate Event stash so the next query starts clean. The relay
+// also calls this after Exception, which is excluded via CommitGateEventFailed.
+func (p *Plugin) OnQueryComplete(ctx context.Context, sess chsession.Session) {
 	if sess == nil {
 		return
 	}
+	snapshot := sess.State().Snapshot()
 	sess.State().ClearCommitGateEvent()
+	if snapshot.CommitGateEventFailed || snapshot.CommitGateEvent == nil {
+		return
+	}
+	ev, ok := snapshot.CommitGateEvent.(*Event)
+	if !ok || ev == nil {
+		return
+	}
+	observers := p.byType[ev.Type]
+	if len(observers) == 0 {
+		return
+	}
+	event := *ev
+	for _, observer := range observers {
+		successObserver, ok := observer.(SuccessObserver)
+		if !ok {
+			continue
+		}
+		go dispatchAfterSuccess(ctx, successObserver, event)
+	}
+}
+
+func dispatchAfterSuccess(ctx context.Context, observer SuccessObserver, ev Event) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Errorw("commitgate observer panicked in AfterStatementSuccess",
+				"type", ev.Type,
+				"accessed_tables", ev.AccessedTables,
+				"recover", r,
+			)
+		}
+	}()
+	observer.AfterStatementSuccess(ctx, ev)
 }
 
 // RunOnForward implements plugin.ForwardAware. Returns false — when the
