@@ -34,6 +34,7 @@ go_test(
         "//pkg/chsession",
         "//pkg/plugin",
         "//pkg/plugins/commitgate",
+        "//pkg/plugins/concurrency",
         "//pkg/sqlmeta",
         "@com_github_clickhouse_ch_go//compress",
         "@com_github_clickhouse_ch_go//proto",

@@ -52,6 +52,8 @@ type StrictQueryDecodePlugin interface {
 //   - The OnQuery chain rejected the query (it never reached the upstream).
 //   - Forwarding to upstream failed.
 //   - The upstream answered with EndOfStream or Exception.
+//   - An opaque result stream exposed a separately flushed EndOfStream or
+//     Exception boundary (cleanup-only; it does not imply OnQuerySuccess).
 //
 // It is the natural pairing point for plugins that take per-query resources
 // in OnQuery (concurrency permits, in-flight counters, tracing spans) and

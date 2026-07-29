@@ -897,9 +897,11 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 // understood by the local boundary decoder. ReadPacket has already captured
 // the packet prefix and, for compressed results, every frame it touched; those
 // bytes are forwarded first, then the remaining upstream byte stream is copied
-// unchanged. The next client Query interrupts the blocked raw read through a
-// read deadline and lets packet framing resume at a client-proven response
-// boundary.
+// unchanged. A raw read that starts with EndOfStream or Exception retains the
+// legacy cleanup-only terminal signal, so per-query resources are released even
+// when a persistent client stays idle; it never proves success. The next client
+// Query interrupts the blocked raw read through a read deadline and lets packet
+// framing resume at a client-proven response boundary.
 func (r *Relay) relayOpaqueResponse(
 	ctx context.Context,
 	up *chproto.Codec,
@@ -953,6 +955,19 @@ func (r *Relay) relayOpaqueResponse(
 
 		n, err := up.ReadRaw(buf)
 		if n > 0 {
+			// Once ReadPacket has consumed the unsupported Data prefix, a
+			// separately flushed terminal packet normally starts the next raw
+			// read. Preserve that boundary for cleanup-only lifecycle hooks:
+			// unlike the packet-framed path, this can never dispatch success.
+			// takeActiveQuery makes the signal exactly-once if EOF, close, or
+			// the next client Query races with this read.
+			if buf[0] == byte(chproto.ServerEndOfStreamCode) ||
+				buf[0] == byte(chproto.ServerExceptionCode) {
+				if _, active := r.takeActiveQuery(); active {
+					r.sess.State().ClearActiveRewrite()
+					r.hooks.OnQueryComplete(ctx, r.sess)
+				}
+			}
 			if writeErr := writeAll(r.sess.Client().Conn(), buf[:n]); writeErr != nil {
 				return fmt.Errorf("splice opaque upstream result: %w", writeErr)
 			}

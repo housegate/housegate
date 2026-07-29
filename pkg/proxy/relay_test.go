@@ -17,6 +17,7 @@ import (
 	"github.com/housegate/housegate/pkg/chproto"
 	"github.com/housegate/housegate/pkg/chsession"
 	"github.com/housegate/housegate/pkg/plugin"
+	concurrencyplugin "github.com/housegate/housegate/pkg/plugins/concurrency"
 )
 
 func TestRelay_Handshake_PopulatesSessionState(t *testing.T) {
@@ -553,6 +554,155 @@ func TestRelay_UnsupportedResultFallsBackToOpaqueBytes(t *testing.T) {
 	}
 }
 
+type singlePermitLimiter struct {
+	mu       sync.Mutex
+	held     bool
+	released chan struct{}
+}
+
+func (l *singlePermitLimiter) Acquire(
+	context.Context,
+	[]concurrencyplugin.Dimension,
+) (concurrencyplugin.Permit, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.held {
+		return concurrencyplugin.Permit{}, concurrencyplugin.ErrQuotaExceeded
+	}
+	l.held = true
+	return concurrencyplugin.Permit{ID: "opaque-permit"}, nil
+}
+
+func (l *singlePermitLimiter) Release(context.Context, concurrencyplugin.Permit) {
+	l.mu.Lock()
+	l.held = false
+	l.mu.Unlock()
+	select {
+	case l.released <- struct{}{}:
+	default:
+	}
+}
+
+type opaqueLifecyclePlugin struct {
+	mu        sync.Mutex
+	completes int
+	successes int
+}
+
+func (p *opaqueLifecyclePlugin) OnQueryComplete(context.Context, chsession.Session) {
+	p.mu.Lock()
+	p.completes++
+	p.mu.Unlock()
+}
+
+func (p *opaqueLifecyclePlugin) OnQuerySuccess(context.Context, chsession.Session, string) {
+	p.mu.Lock()
+	p.successes++
+	p.mu.Unlock()
+}
+
+func TestRelay_OpaqueEndOfStreamReleasesIdleConcurrencyPermit(t *testing.T) {
+	clientProxy, proxyClient := net.Pipe()
+	upstreamProxy, proxyUpstream := net.Pipe()
+	defer clientProxy.Close()
+	defer upstreamProxy.Close()
+
+	const rev = chproto.MaxSupportedRevision
+	sess := chsession.New(1, proxyClient)
+	up := chproto.NewCodec(proxyUpstream, chproto.DirToUpstream)
+	up.SetRevision(rev)
+	up.SetCompression(proto.CompressionEnabled)
+	if err := sess.BindUpstream(context.Background(), up); err != nil {
+		t.Fatalf("BindUpstream: %v", err)
+	}
+
+	limiter := &singlePermitLimiter{released: make(chan struct{}, 1)}
+	concurrency := &concurrencyplugin.Plugin{
+		Limiter: limiter,
+		Resolvers: []concurrencyplugin.DimensionResolver{
+			func(chsession.Session, *plugin.QueryContext) concurrencyplugin.Dimension {
+				return concurrencyplugin.Dimension{Name: "user", Value: "alice", Quota: 1}
+			},
+		},
+	}
+	lifecycle := &opaqueLifecyclePlugin{}
+	chain := &plugin.PluginChain{
+		QueryPlugins:         []plugin.QueryPlugin{concurrency},
+		QuerySuccessPlugins:  []plugin.QuerySuccessPlugin{lifecycle},
+		QueryCompletePlugins: []plugin.QueryCompletePlugin{concurrency, lifecycle},
+	}
+	qctx := &plugin.QueryContext{
+		Session: sess,
+		Query:   &chproto.Query{ID: "qid-opaque-idle", Body: "SELECT sumState(number) FROM numbers(10)"},
+	}
+	if err := chain.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("first OnQuery: %v", err)
+	}
+
+	otherClient, otherProxy := net.Pipe()
+	defer otherClient.Close()
+	defer otherProxy.Close()
+	otherSess := chsession.New(2, otherProxy)
+	otherQctx := &plugin.QueryContext{
+		Session: otherSess,
+		Query:   &chproto.Query{ID: "qid-other", Body: "SELECT 1"},
+	}
+	if err := concurrency.OnQuery(context.Background(), otherQctx); !errors.Is(err, concurrencyplugin.ErrQuotaExceeded) {
+		t.Fatalf("second session before completion error=%v, want ErrQuotaExceeded", err)
+	}
+
+	r := &Relay{sess: sess, hooks: chain}
+	if !r.beginActiveQuery("qid-opaque-idle") {
+		t.Fatal("beginActiveQuery unexpectedly reported an active query")
+	}
+	relayDone := make(chan error, 1)
+	go func() {
+		relayDone <- r.upstreamToClient(context.Background())
+	}()
+
+	wire := aggregateStateDataPacket(t, rev, proto.CompressionEnabled)
+	wire = append(wire, byte(chproto.ServerEndOfStreamCode))
+	go func() {
+		_, _ = upstreamProxy.Write(wire)
+		// Keep the upstream connection open and idle after EndOfStream.
+	}()
+
+	got := make([]byte, len(wire))
+	_ = clientProxy.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := io.ReadFull(clientProxy, got); err != nil {
+		t.Fatalf("read opaque response: %v", err)
+	}
+	if !bytes.Equal(got, wire) {
+		t.Fatalf("opaque response changed:\ngot  %x\nwant %x", got, wire)
+	}
+
+	select {
+	case <-limiter.released:
+	case <-time.After(time.Second):
+		t.Fatal("opaque EndOfStream did not release concurrency permit while connection stayed idle")
+	}
+	if err := concurrency.OnQuery(context.Background(), otherQctx); err != nil {
+		t.Fatalf("second session after opaque completion: %v", err)
+	}
+	concurrency.OnQueryComplete(context.Background(), otherSess)
+
+	lifecycle.mu.Lock()
+	defer lifecycle.mu.Unlock()
+	if lifecycle.completes != 1 {
+		t.Errorf("OnQueryComplete fired %d times, want 1", lifecycle.completes)
+	}
+	if lifecycle.successes != 0 {
+		t.Errorf("OnQuerySuccess fired %d times for opaque result, want 0", lifecycle.successes)
+	}
+
+	_ = upstreamProxy.Close()
+	select {
+	case <-relayDone:
+	case <-time.After(time.Second):
+		t.Fatal("upstreamToClient did not exit after cleanup")
+	}
+}
+
 func aggregateStateDataPacket(
 	t *testing.T,
 	rev int,
@@ -635,10 +785,9 @@ func TestRelay_OpaqueResultStopsAtNextQueryAndResumesPacketFraming(t *testing.T)
 	if !stopped {
 		t.Fatal("stopOpaqueResponse reported no opaque response")
 	}
-	if _, active := r.takeActiveQuery(); !active {
-		t.Fatal("opaque query was not active at client-proven boundary")
+	if _, active := r.takeActiveQuery(); active {
+		t.Fatal("opaque terminal cleanup left the previous query active")
 	}
-	hooks.OnQueryComplete(context.Background(), sess)
 
 	if !r.beginActiveQuery("qid-framed-after-opaque") {
 		t.Fatal("beginActiveQuery after opaque response reported an active query")

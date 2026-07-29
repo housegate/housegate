@@ -98,16 +98,19 @@ Server.handle → Relay.Run
        fragmentation/coalescing cannot create or hide a success boundary. If
        a valid Data block names a Native type the local boundary decoder cannot
        consume (e.g. AggregateFunction state), Relay forwards the captured
-       prefix and remaining response opaquely; the next client Query proves the
-       prior response boundary, interrupts the raw reader, and restores packet
-       framing. Opaque responses never fire OnQuerySuccess.
+       prefix and remaining response opaquely. A separately flushed terminal
+       packet retains a cleanup-only boundary so concurrency and other
+       per-query resources are released while persistent clients remain idle;
+       it never proves success. The next client Query proves the prior response
+       boundary, interrupts the raw reader, and restores packet framing. Opaque
+       responses never fire OnQuerySuccess.
 ```
 
 Key non-obvious invariants driven by this design:
 - **One `Codec` per net.Conn; one `proto.Reader` per Codec.** The codec feeds proto.Reader through a 1-byte-at-a-time `captureByteReader` so its inner bufio never prefetches across a packet boundary. Creating a fresh proto.Reader per packet — an older design — stranded prefetched bytes the moment the client pipelined addendum+query in one TCP segment.
 - **The proxy caps protocol negotiation at ch-go's `proto.Version` (`54460`).** `ClientHelloForUpstream` lowers newer client hellos before every initial/rebind upstream handshake, and the raw ServerHello revision is rewritten to the same negotiated value before reaching the client. This keeps both sides on the exact feature set the packet decoder supports and prevents newer custom sparse/detached serialization layouts from entering the stream.
 - **Chunked protocol is force-disabled.** The codec does not yet implement `ChunkedReader` / `ChunkedWriter`; see Known Rough Edges.
-- **ReadPacket is Relay's normal read mode on both codecs.** The only mixed-mode exception is `ErrUnsupportedResultType`: after a decoder-known packet prefix has been captured, Relay copies the rest of that response through `ReadRaw`, then resumes `ReadPacket` only when the non-pipelining client submits its next Query. This is safe because the one-byte capture reader leaves no hidden bytes and the next Query proves the previous EndOfStream was already consumed.
+- **ReadPacket is Relay's normal read mode on both codecs.** The only mixed-mode exception is `ErrUnsupportedResultType`: after a decoder-known packet prefix has been captured, Relay copies the rest of that response through `ReadRaw`. A raw chunk beginning with EndOfStream/Exception is cleanup-only (never success) and releases per-query resources; `ReadPacket` resumes only when the non-pipelining client submits its next Query. This is safe because the one-byte capture reader leaves no hidden bytes and the next Query proves the previous response was already consumed.
 - **Relay enforces one query in flight per connection.** It tracks an `activeQuery`/`activeQueryID` pair; a client `Query` packet arriving before the previous query's framed terminal EndOfStream/Exception was consumed is rejected with an Exception rather than forwarded. The opaque-result exception retires the previous lifecycle when the next client Query arrives, before that Query is forwarded.
 
 ### 4. SQL rewriter is a pluggable backend (gRPC service or in-process engine)
