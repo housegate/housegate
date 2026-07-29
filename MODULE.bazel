@@ -1,6 +1,7 @@
+# Keep the source archive version unset so git_override users do not inherit
+# stale release metadata. Git tags (or registry metadata) identify releases.
 module(
     name = "housegate",
-    version = "1.0.0",
 )
 
 bazel_dep(name = "platforms", version = "1.1.0")
