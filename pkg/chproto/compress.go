@@ -51,21 +51,6 @@ func ClientDataPacketIsEmpty(raw []byte, compression proto.Compression) (bool, e
 	return columns == 0 && rows == 0, nil
 }
 
-// Compressed frame layout constants (ClickHouse native protocol):
-//
-//	[16 bytes: CityHash128 checksum]
-//	[1 byte:   compression method (0x82=LZ4, 0x90=ZSTD, 0x02=none)]
-//	[4 bytes LE: compressed_size (includes the 9-byte sub-header below)]
-//	[4 bytes LE: decompressed_size]
-//	[compressed_size - 9 bytes: compressed payload]
-//
-// Total frame = 16 (checksum) + compressed_size bytes.
-const (
-	frameHeaderSize     = 16 + 1 + 4 + 4 // 25 bytes
-	maxCompressedFrame  = 32 * 1024 * 1024
-	maxDecompressedSize = 256 * 1024 * 1024
-)
-
 // blockInfoCompat is a minimal representation of ClickHouse BlockInfo.
 // It matches the on-wire field layout for ClickHouse 26.x which added field 3
 // (out_of_order_buckets). We decode-and-discard (bytes are already captured by
@@ -133,13 +118,12 @@ func decodeBlockInfoCompat(r *proto.Reader) (*blockInfoCompat, int, error) {
 
 // walkDataBlock consumes one Data-block body. The block_name (short string)
 // is read through the codec's long-lived proto.Reader — bytes land in the
-// capture automatically. Subsequent compressed payload reads bypass that
-// one-byte-at-a-time layer via readFullRaw for throughput; uncompressed
-// blocks fall back to DecodeRawBlock on c.r.
+// capture automatically. Compressed payloads are decompressed through a
+// raw-capturing reader and decoded to the authoritative Native block boundary;
+// uncompressed blocks fall back to DecodeRawBlock on c.r.
 //
-// Uses c.Compression() to pick between the compressed (multi-frame LZ4/ZSTD
-// passthrough) and uncompressed (BlockInfo + empty-block fast path +
-// DecodeRawBlock) branches — matching legacy proxy.go:handleDataBlock.
+// Uses c.Compression() to pick between the compressed and uncompressed
+// (BlockInfo + empty-block fast path + DecodeRawBlock) branches.
 func (c *Codec) walkDataBlock() error {
 	// block_name is always a short uncompressed string in the plaintext stream.
 	if _, err := c.r.Str(); err != nil {
@@ -147,67 +131,112 @@ func (c *Codec) walkDataBlock() error {
 	}
 
 	if c.Compression() == proto.CompressionEnabled {
-		return c.walkCompressedFrames()
+		return c.walkCompressedDataBlock()
 	}
 	return c.walkUncompressedBlock()
 }
 
-// walkCompressedFrames consumes one or more consecutive compressed frames
-// that make up a single logical Data block. Reads go directly through c.br
-// via readFullRaw — the one-byte-at-a-time capture path that proto.Reader
-// uses would cost ~5 function calls per byte, unacceptable for MB-sized
-// payloads. Multi-frame detection uses c.br.Peek, which is correct because
-// no other reader layer prefetches under the new codec design.
+// walkCompressedDataBlock consumes one logical Native block from the
+// compressed stream. A block may span multiple compression frames, including
+// frames that have not reached the socket yet. The decompressed Native block
+// structure, rather than currently-buffered raw bytes, is the packet boundary.
 //
-// Port of pkg/proxy/proxy.go:handleDataBlock compressed branch.
-func (c *Codec) walkCompressedFrames() error {
-	for {
-		headerBuf, err := c.readFullRaw(frameHeaderSize)
+// ClickHouse flushes the compression stream at the end of each Native block.
+// Therefore proto.Reader may buffer the remainder of the block's final frame,
+// but cannot prefetch bytes from the following packet.
+func (c *Codec) walkCompressedDataBlock() error {
+	r := c.newCompressedCaptureReader()
+	if _, _, err := decodeBlockInfoCompat(r); err != nil {
+		return fmt.Errorf("compressed BlockInfo decode: %w", err)
+	}
+
+	var block proto.Block
+	if err := block.DecodeRawBlock(r, c.Revision(), discardBlockResult{}); err != nil {
+		return fmt.Errorf("compressed block raw decode: %w", err)
+	}
+	return nil
+}
+
+// walkCompressedTableColumns consumes the two strings in a compressed
+// TableColumns packet. It uses the decoded protocol body as the boundary for
+// the same reason walkCompressedDataBlock does.
+func (c *Codec) walkCompressedTableColumns() error {
+	r := c.newCompressedCaptureReader()
+	var columns proto.TableColumns
+	if err := columns.DecodeAware(r, c.Revision()); err != nil {
+		return fmt.Errorf("compressed table_columns decode: %w", err)
+	}
+	return nil
+}
+
+func (c *Codec) newCompressedCaptureReader() *proto.Reader {
+	raw := &compressedCaptureReader{codec: c}
+	return proto.NewReader(compress.NewReader(raw))
+}
+
+// compressedCaptureReader lets the compression decoder read raw frames in
+// normal-sized chunks while preserving the exact on-wire bytes in Packet.Raw.
+// compress.Reader uses io.ReadFull for frame headers and payloads, so this
+// reader never consumes beyond the current compressed frame.
+type compressedCaptureReader struct {
+	codec *Codec
+}
+
+func (r *compressedCaptureReader) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if r.codec.cap.wouldExceed(len(p)) {
+		return 0, ErrPacketTooLarge
+	}
+	n, err := r.codec.br.Read(p)
+	if n > 0 {
+		r.codec.cap.appendRaw(p[:n])
+	}
+	return n, err
+}
+
+// discardBlockResult decodes one column at a time and immediately releases
+// it. Native column encodings are type-dependent, so decoding is required to
+// locate the end of a block; retaining every decoded column would needlessly
+// make proxy memory proportional to the entire result block.
+type discardBlockResult struct{}
+
+func (discardBlockResult) DecodeResult(r *proto.Reader, version int, block proto.Block) error {
+	for i := 0; i < block.Columns; i++ {
+		name, err := r.Str()
 		if err != nil {
-			return fmt.Errorf("compressed frame header: %w", err)
+			return fmt.Errorf("column [%d] name: %w", i, err)
 		}
-
-		// Extract compressed_size from header[17:21] (little-endian uint32).
-		compressedSize := binary.LittleEndian.Uint32(headerBuf[17:21])
-		if compressedSize < 9 {
-			return fmt.Errorf("invalid compressed_size %d (< 9)", compressedSize)
+		typeName, err := r.Str()
+		if err != nil {
+			return fmt.Errorf("column [%d] type: %w", i, err)
 		}
-		if compressedSize > maxCompressedFrame {
-			return fmt.Errorf("compressed_size %d exceeds limit %d", compressedSize, maxCompressedFrame)
-		}
-
-		// The 9 bytes of sub-header are already inside the 25-byte header we
-		// just read; the remaining payload is (compressedSize - 9) bytes.
-		remainingDataSize := int(compressedSize) - 9
-		if remainingDataSize > 0 {
-			if _, err := c.readFullRaw(remainingDataSize); err != nil {
-				return fmt.Errorf("compressed frame data: %w", err)
+		if proto.FeatureCustomSerialization.In(version) {
+			custom, err := r.Bool()
+			if err != nil {
+				return fmt.Errorf("column [%d] custom serialization: %w", i, err)
+			}
+			if custom {
+				return fmt.Errorf("column [%d] has unsupported custom serialization", i)
 			}
 		}
 
-		// Peek at the next 25 bytes in c.br (without consuming) to detect a
-		// following frame, but only when those bytes are already buffered.
-		// bufio.Reader.Peek blocks until the requested size is available; at a
-		// packet boundary that would wait for the next client packet and stall
-		// the relay after a single-frame compressed Data block.
-		if c.br.Buffered() < frameHeaderSize {
-			break
+		column := &proto.ColAuto{}
+		if err := column.Infer(proto.ColumnType(typeName)); err != nil {
+			return fmt.Errorf("column [%d] %q type inference: %w", i, name, err)
 		}
-		nextBytes, err := c.br.Peek(frameHeaderSize)
-		if err != nil || len(nextBytes) < frameHeaderSize {
-			break
+		if block.Rows == 0 {
+			continue
 		}
-		methodByte := nextBytes[16]
-		if methodByte != 0x82 && methodByte != 0x90 && methodByte != 0x02 {
-			break
+		if stateful, ok := column.Data.(proto.StateDecoder); ok {
+			if err := stateful.DecodeState(r); err != nil {
+				return fmt.Errorf("column [%d] %q state: %w", i, name, err)
+			}
 		}
-		peekCompSize := binary.LittleEndian.Uint32(nextBytes[17:21])
-		peekDecompSize := binary.LittleEndian.Uint32(nextBytes[21:25])
-		if peekCompSize < 9 || peekCompSize > maxCompressedFrame ||
-			peekDecompSize == 0 || peekDecompSize > maxDecompressedSize {
-			break
+		if err := column.Data.DecodeColumn(r, block.Rows); err != nil {
+			return fmt.Errorf("column [%d] %q data: %w", i, name, err)
 		}
-		// Continue to next compressed frame.
 	}
 	return nil
 }

@@ -349,11 +349,10 @@ func (c *Codec) skipServerPacketBody(typeVar uint64) error {
 
 	case uint64(proto.ServerCodeTableColumns):
 		// Since revision 54481, TableColumns travels through the same
-		// maybe-compressed stream as Data/Log/ProfileEvents. The packet body is
-		// tiny and ClickHouse flushes it as a complete compressed frame.
+		// maybe-compressed stream as Data/Log/ProfileEvents.
 		if rev >= revisionMinCompressedLogsProfileEventsColumns &&
 			c.Compression() == proto.CompressionEnabled {
-			return c.walkCompressedFrames()
+			return c.walkCompressedTableColumns()
 		}
 		var t proto.TableColumns
 		if err := t.DecodeAware(c.r, rev); err != nil {
