@@ -152,15 +152,15 @@ func (c *Codec) walkDataBlockWithCompression(compression proto.Compression) erro
 // but cannot prefetch bytes from the following packet.
 func (c *Codec) walkCompressedDataBlock() error {
 	r := c.newCompressedCaptureReader()
-	if _, _, err := decodeBlockInfoCompat(r); err != nil {
+	if _, _, err := decodeBlockInfoCompat(r.reader); err != nil {
 		return fmt.Errorf("compressed BlockInfo decode: %w", err)
 	}
 
 	var block proto.Block
-	if err := block.DecodeRawBlock(r, c.Revision(), c.discardBlockResult()); err != nil {
+	if err := block.DecodeRawBlock(r.reader, c.Revision(), c.discardBlockResult()); err != nil {
 		return fmt.Errorf("compressed block raw decode: %w", err)
 	}
-	return nil
+	return r.assertFrameExhausted()
 }
 
 func (c *Codec) discardBlockResult() discardBlockResult {
@@ -181,15 +181,130 @@ func (c *Codec) discardBlockResult() discardBlockResult {
 func (c *Codec) walkCompressedTableColumns() error {
 	r := c.newCompressedCaptureReader()
 	var columns proto.TableColumns
-	if err := columns.DecodeAware(r, c.Revision()); err != nil {
+	if err := columns.DecodeAware(r.reader, c.Revision()); err != nil {
 		return fmt.Errorf("compressed table_columns decode: %w", err)
+	}
+	return r.assertFrameExhausted()
+}
+
+func (c *Codec) newCompressedCaptureReader() *compressedPacketReader {
+	raw := &compressedCaptureReader{codec: c}
+	frames := &compressedFrameBoundaryReader{
+		source:       compress.NewReader(raw),
+		raw:          raw,
+		captureStart: len(c.cap.cap),
+		frameIndex:   -1,
+	}
+	return &compressedPacketReader{
+		reader: proto.NewReader(frames),
+		frames: frames,
+	}
+}
+
+type compressedPacketReader struct {
+	reader *proto.Reader
+	frames *compressedFrameBoundaryReader
+}
+
+func (r *compressedPacketReader) assertFrameExhausted() error {
+	r.frames.frozen = true
+	trailing, err := io.Copy(io.Discard, r.reader)
+	if err != nil {
+		return fmt.Errorf("%w: drain compressed frame remainder: %v", ErrMalformed, err)
+	}
+	if trailing != 0 {
+		return fmt.Errorf(
+			"%w: compressed frame has %d trailing decompressed bytes after Native body",
+			ErrMalformed,
+			trailing,
+		)
 	}
 	return nil
 }
 
-func (c *Codec) newCompressedCaptureReader() *proto.Reader {
-	raw := &compressedCaptureReader{codec: c}
-	return proto.NewReader(compress.NewReader(raw))
+// compressedFrameBoundaryReader preserves frame boundaries around ch-go's
+// streaming decompressor. Once frozen, it lets proto.Reader drain only bytes
+// from the current frame and returns EOF before the next frame. That exposes
+// bytes prefetched inside proto.Reader without consuming the following packet.
+type compressedFrameBoundaryReader struct {
+	source       io.Reader
+	raw          *compressedCaptureReader
+	captureStart int
+	frameIndex   int
+	delivered    int
+	frozen       bool
+}
+
+func (r *compressedFrameBoundaryReader) Read(p []byte) (int, error) {
+	sizes, err := compressedFrameDataSizes(r.raw.codec.cap.cap[r.captureStart:])
+	if err != nil {
+		return 0, err
+	}
+	if r.frameIndex >= 0 && r.frameIndex < len(sizes) && r.delivered == sizes[r.frameIndex] {
+		if r.frozen {
+			return 0, io.EOF
+		}
+		r.frameIndex++
+		r.delivered = 0
+	}
+
+	n, readErr := r.source.Read(p)
+	if n == 0 {
+		return 0, readErr
+	}
+	sizes, err = compressedFrameDataSizes(r.raw.codec.cap.cap[r.captureStart:])
+	if err != nil {
+		return 0, err
+	}
+	if r.frameIndex < 0 {
+		r.frameIndex = 0
+	}
+	if r.frameIndex >= len(sizes) {
+		return 0, fmt.Errorf("%w: compressed reader crossed an unknown frame", ErrMalformed)
+	}
+	r.delivered += n
+	if r.delivered > sizes[r.frameIndex] {
+		return 0, fmt.Errorf(
+			"%w: decompressor returned %d bytes past frame size %d",
+			ErrMalformed,
+			r.delivered,
+			sizes[r.frameIndex],
+		)
+	}
+	return n, readErr
+}
+
+func compressedFrameDataSizes(raw []byte) ([]int, error) {
+	const (
+		checksumSize        = 16
+		compressHeaderSize  = 9
+		frameHeaderSize     = checksumSize + compressHeaderSize
+		compressedSizeStart = 17
+		dataSizeStart       = 21
+	)
+
+	sizes := make([]int, 0, 1)
+	for pos := 0; pos < len(raw); {
+		if len(raw)-pos < frameHeaderSize {
+			return nil, fmt.Errorf("%w: truncated compressed frame header", ErrMalformed)
+		}
+		compressedSize := uint64(binary.LittleEndian.Uint32(raw[pos+compressedSizeStart:]))
+		if compressedSize < compressHeaderSize {
+			return nil, fmt.Errorf("%w: compressed frame size %d is smaller than header", ErrMalformed, compressedSize)
+		}
+		frameSize := uint64(checksumSize) + compressedSize
+		if frameSize > uint64(len(raw)-pos) {
+			return nil, fmt.Errorf("%w: truncated compressed frame payload", ErrMalformed)
+		}
+		dataSize := uint64(binary.LittleEndian.Uint32(raw[pos+dataSizeStart:]))
+		maxInt := uint64(^uint(0) >> 1)
+		if dataSize > maxInt {
+			return nil, fmt.Errorf("%w: compressed frame data size %d overflows int", ErrMalformed, dataSize)
+		}
+		sizes = append(sizes, int(dataSize))
+		pos += int(frameSize)
+	}
+	return sizes, nil
 }
 
 // compressedCaptureReader lets the compression decoder read raw frames in

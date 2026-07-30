@@ -29,10 +29,12 @@ type QueryPlugin interface {
 // QuerySuccessPlugin participates in the OnQuerySuccess chain.
 //
 // OnQuerySuccess is intentionally narrower than OnQueryComplete: Relay invokes
-// it only after observing an isolated upstream EndOfStream packet. Rejections,
-// forwarding failures, synthetic success, and Exception cleanup never enter
-// this chain. The hook is best-effort because the transparent upstream relay
-// cannot prove a boundary when EndOfStream is coalesced with other bytes.
+// it only after decoding a framed upstream EndOfStream packet for a query that
+// was not canceled by the client. ClickHouse also uses EndOfStream for client
+// cancellation, so cancellation must remain a distinct terminal outcome.
+// Rejections, forwarding failures, synthetic success, and Exception cleanup
+// never enter this chain. Dispatch is best-effort only across process crash or
+// shutdown; TCP fragmentation and packet coalescing do not weaken the boundary.
 type QuerySuccessPlugin interface {
 	OnQuerySuccess(ctx context.Context, sess chsession.Session, queryID string)
 }

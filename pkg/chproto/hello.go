@@ -118,6 +118,9 @@ func rewriteServerHelloForProxy(raw []byte, clientRevision int) (rewritten []byt
 	if clientRevision > 0 && clientRevision < wireRev {
 		wireRev = clientRevision
 	}
+	if wireRev > MaxSupportedRevision {
+		wireRev = MaxSupportedRevision
+	}
 
 	// parallel_replicas_version (54471+) — ordered before timezone per
 	// ClickHouse's TCPHandler::sendHello (verified against 25.7.6 and

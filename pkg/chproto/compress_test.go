@@ -376,6 +376,33 @@ func TestReadPacket_CompressedDataStopsBeforeFollowingPacket(t *testing.T) {
 	}
 }
 
+func TestReadPacket_CompressedDataRejectsMultipleBlocksInOneFrame(t *testing.T) {
+	rev := MaxSupportedRevision
+	first := buildNativeBlockPayload(t, rev, proto.ColUInt8{1})
+	second := buildNativeBlockPayload(t, rev, proto.ColUInt8{2})
+	framePayload := append(append([]byte(nil), first...), second...)
+	var prefix proto.Buffer
+	prefix.PutUVarInt(uint64(proto.ServerCodeData))
+	prefix.PutString("")
+	packet := append(
+		append([]byte(nil), prefix.Buf...),
+		buildCompressedFrame(t, framePayload, chcompress.LZ4)...,
+	)
+
+	rw := &readerWriter{r: bytes.NewBuffer(packet), w: &bytes.Buffer{}}
+	c := NewCodec(rw, DirToUpstream)
+	c.SetRevision(rev)
+	c.SetCompression(proto.CompressionEnabled)
+
+	pkt, err := c.ReadPacket()
+	if !errors.Is(err, ErrMalformed) {
+		t.Fatalf("ReadPacket err=%v, want ErrMalformed", err)
+	}
+	if pkt == nil || pkt.Type != uint64(proto.ServerCodeData) {
+		t.Fatalf("partial packet=%#v, want ServerCodeData metadata", pkt)
+	}
+}
+
 func TestReadPacket_CompressedTupleStopsBeforeFollowingEndOfStream(t *testing.T) {
 	rev := 54480
 	payload := buildTupleNativeBlockPayload(rev)

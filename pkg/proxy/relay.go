@@ -48,6 +48,7 @@ type Relay struct {
 	queryMu       sync.Mutex
 	activeQuery   bool
 	activeQueryID string
+	queryCanceled bool
 
 	// completionProbe is replaceable in unit tests. Production uses
 	// probeQueryCompletion, which watches the exact upstream server's
@@ -90,25 +91,43 @@ func (r *Relay) beginActiveQuery(queryID string) bool {
 	}
 	r.activeQuery = true
 	r.activeQueryID = queryID
+	r.queryCanceled = false
 	return true
 }
 
 func (r *Relay) takeActiveQuery() (string, bool) {
+	queryID, _, active := r.takeActiveQueryState()
+	return queryID, active
+}
+
+func (r *Relay) takeActiveQueryState() (queryID string, canceled, active bool) {
 	r.queryMu.Lock()
 	defer r.queryMu.Unlock()
 	if !r.activeQuery {
-		return "", false
+		return "", false, false
 	}
-	queryID := r.activeQueryID
+	queryID = r.activeQueryID
+	canceled = r.queryCanceled
 	r.activeQuery = false
 	r.activeQueryID = ""
-	return queryID, true
+	r.queryCanceled = false
+	return queryID, canceled, true
 }
 
 func (r *Relay) currentActiveQuery() (string, bool) {
 	r.queryMu.Lock()
 	defer r.queryMu.Unlock()
 	return r.activeQueryID, r.activeQuery
+}
+
+func (r *Relay) cancelActiveQuery() (string, bool) {
+	r.queryMu.Lock()
+	defer r.queryMu.Unlock()
+	if !r.activeQuery {
+		return "", false
+	}
+	r.queryCanceled = true
+	return r.activeQueryID, true
 }
 
 func (r *Relay) startOpaqueCompletionProbe(ctx context.Context, queryID string) error {
@@ -559,6 +578,13 @@ func (r *Relay) Run(ctx context.Context) error {
 		r.hooks.OnClose(r.sess)
 		return err
 	}
+	return r.runPostHandshake(ctx)
+}
+
+// runPostHandshake owns the lifetime of an already-bound session. Keeping the
+// pump-and-close seam separate from handshake makes the fail-closed guarantee
+// directly testable with codecs prepared at an exact protocol state.
+func (r *Relay) runPostHandshake(ctx context.Context) error {
 	defer func() {
 		_ = r.sess.Close()
 		r.hooks.OnClose(r.sess)
@@ -858,6 +884,17 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 			}
 		}
 
+		// ClickHouse serializes QUERY_WAS_CANCELLED_BY_CLIENT as EndOfStream,
+		// not Exception. Mark the active query before forwarding Cancel so that
+		// terminal packet performs cleanup without being mistaken for success.
+		if pkt.Type == uint64(chproto.ClientCancelCode) {
+			if queryID, active := r.cancelActiveQuery(); active {
+				logger.Debugw("active query marked canceled",
+					"query_id", queryID,
+				)
+			}
+		}
+
 		// Splice any non-decoded / decode-failed packet.
 		logger.Debugw("client packet spliced to upstream",
 			"type", pkt.Type,
@@ -1091,6 +1128,12 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 		if isException {
 			exc, ok := pkt.Decoded.(*chproto.Exception)
 			if !ok {
+				// Keep this defensive branch resource-safe even though Codec
+				// currently guarantees decoded Exception packets have this type.
+				r.sess.State().ClearActiveRewrite()
+				if _, active := r.takeActiveQuery(); active {
+					r.hooks.OnQueryComplete(ctx, r.sess)
+				}
 				return fmt.Errorf("upstream exception packet decoded as %T", pkt.Decoded)
 			}
 			if err := r.hooks.OnException(ctx, r.sess, exc); err != nil {
@@ -1101,8 +1144,8 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 
 		if isEndOfStream || isException {
 			r.sess.State().ClearActiveRewrite()
-			queryID, active := r.takeActiveQuery()
-			if active && isEndOfStream {
+			queryID, canceled, active := r.takeActiveQueryState()
+			if active && isEndOfStream && !canceled {
 				r.hooks.OnQuerySuccess(ctx, r.sess, queryID)
 			}
 			r.hooks.OnQueryComplete(ctx, r.sess)
@@ -1128,11 +1171,19 @@ func (r *Relay) relayOpaqueResult(ctx context.Context, up *chproto.Codec, first 
 		return fmt.Errorf("opaque result without an active query")
 	}
 	if r.sess.State().Snapshot().CommitGateEvent != nil {
-		return fmt.Errorf("opaque result for commit-gated query %q: %w", queryID, chproto.ErrUnsupportedResultType)
+		// Do not wrap ErrUnsupportedResultType here: the caller uses that
+		// sentinel to enter this fallback, so exposing it again makes a future
+		// refactor vulnerable to recursively re-entering opaque mode.
+		return fmt.Errorf(
+			"%w: opaque result for commit-gated query %q (%v)",
+			chproto.ErrMalformed,
+			queryID,
+			chproto.ErrUnsupportedResultType,
+		)
 	}
 	client := r.sess.Client()
 	if client.ChunkedSendEnabled() {
-		return fmt.Errorf("opaque result cannot enter raw mode on a chunked downstream")
+		return fmt.Errorf("%w: opaque result cannot enter raw mode on a chunked downstream", chproto.ErrMalformed)
 	}
 	if err := r.startOpaqueCompletionProbe(ctx, queryID); err != nil {
 		return err
@@ -1214,20 +1265,6 @@ func compressionMode(c proto.Compression) string {
 		return "compressed"
 	}
 	return "uncompressed"
-}
-
-// writeEndOfStreamToClient writes a single-byte ServerEndOfStreamCode
-// packet to the client. Used by the AbortWithSuccess branch in the
-// per-query loop: a plugin (commitgate via ErrAbortWithSuccess) has
-// handled the statement out-of-band, and the relay must reply success
-// without contacting ClickHouse.
-//
-// Takes io.Writer rather than net.Conn so unit tests can drive it with
-// any byte sink; in production the caller passes Codec.Conn() which is
-// backed by a *net.TCPConn.
-func writeEndOfStreamToClient(w io.Writer) error {
-	_, err := w.Write([]byte{byte(chproto.ServerEndOfStreamCode)})
-	return err
 }
 
 // writeExceptionToClient converts a plugin error into a synthetic

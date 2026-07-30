@@ -18,7 +18,9 @@ import (
 	"github.com/housegate/housegate/pkg/chproto"
 	"github.com/housegate/housegate/pkg/chsession"
 	"github.com/housegate/housegate/pkg/plugin"
+	"github.com/housegate/housegate/pkg/plugins/commitgate"
 	concurrencyplugin "github.com/housegate/housegate/pkg/plugins/concurrency"
+	"github.com/housegate/housegate/pkg/sqlmeta"
 )
 
 func TestRelay_Handshake_PopulatesSessionState(t *testing.T) {
@@ -395,6 +397,86 @@ func TestRelay_UpstreamEndOfStream_FiresQuerySuccess(t *testing.T) {
 	}
 }
 
+func TestRelay_ClientCancelThenEndOfStreamDoesNotFireQuerySuccess(t *testing.T) {
+	clientProxy, proxyClient := net.Pipe()
+	upstreamProxy, proxyUpstream := net.Pipe()
+	t.Cleanup(func() {
+		_ = clientProxy.Close()
+		_ = upstreamProxy.Close()
+	})
+
+	const rev = 54453
+	sess := chsession.New(1, proxyClient)
+	sess.Client().SetRevision(rev)
+	up := chproto.NewCodec(proxyUpstream, chproto.DirToUpstream)
+	up.SetRevision(rev)
+	if err := sess.BindUpstream(context.Background(), up); err != nil {
+		t.Fatalf("BindUpstream: %v", err)
+	}
+
+	hooks := &exceptionRecordingHooks{}
+	r := &Relay{sess: sess, hooks: hooks}
+	if !r.beginActiveQuery("qid-cancel") {
+		t.Fatal("beginActiveQuery unexpectedly reported an active query")
+	}
+
+	clientLoopDone := make(chan error, 1)
+	go func() {
+		clientLoopDone <- r.clientToUpstream(context.Background())
+	}()
+	go func() {
+		_, _ = clientProxy.Write([]byte{byte(chproto.ClientCancelCode)})
+	}()
+
+	var forwardedCancel [1]byte
+	_ = upstreamProxy.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := io.ReadFull(upstreamProxy, forwardedCancel[:]); err != nil {
+		t.Fatalf("read forwarded Cancel: %v", err)
+	}
+	if forwardedCancel[0] != byte(chproto.ClientCancelCode) {
+		t.Fatalf("forwarded packet=%d, want Cancel(%d)", forwardedCancel[0], chproto.ClientCancelCode)
+	}
+
+	serverLoopDone := make(chan error, 1)
+	go func() {
+		serverLoopDone <- r.upstreamToClient(context.Background())
+	}()
+	go func() {
+		_, _ = upstreamProxy.Write([]byte{byte(chproto.ServerEndOfStreamCode)})
+	}()
+
+	var eos [1]byte
+	_ = clientProxy.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := io.ReadFull(clientProxy, eos[:]); err != nil {
+		t.Fatalf("read EndOfStream after Cancel: %v", err)
+	}
+	if eos[0] != byte(chproto.ServerEndOfStreamCode) {
+		t.Fatalf("server packet=%d, want EndOfStream(%d)", eos[0], chproto.ServerEndOfStreamCode)
+	}
+
+	hooks.mu.Lock()
+	successes, completes := hooks.querySuccesses, hooks.queryCompletes
+	hooks.mu.Unlock()
+	if successes != 0 {
+		t.Fatalf("OnQuerySuccess calls=%d, want 0 after client cancellation", successes)
+	}
+	if completes != 1 {
+		t.Fatalf("OnQueryComplete calls=%d, want 1", completes)
+	}
+
+	_ = sess.Close()
+	select {
+	case <-clientLoopDone:
+	case <-time.After(time.Second):
+		t.Fatal("clientToUpstream did not stop")
+	}
+	select {
+	case <-serverLoopDone:
+	case <-time.After(time.Second):
+		t.Fatal("upstreamToClient did not stop")
+	}
+}
+
 func TestRelay_CoalescedProgressAndEndOfStream_FiresQuerySuccess(t *testing.T) {
 	const rev = 54453
 	var b proto.Buffer
@@ -660,6 +742,122 @@ func TestRelay_OpaqueResultUsesCompletionProbeWithoutValueDecoding(t *testing.T)
 	case <-time.After(time.Second):
 		t.Fatal("upstreamToClient did not finish")
 	}
+}
+
+func TestRelay_CommitGatedOpaqueResultFailsClosed(t *testing.T) {
+	err, opaque, successes, completes, active := runOpaqueGuardResult(t, func(sess chsession.Session) {
+		observer := &recordingObserver{
+			types: []sqlmeta.StatementType{sqlmeta.StatementTypeCreateTable},
+		}
+		gate := commitgate.NewPlugin([]commitgate.Observer{observer})
+		qctx := &plugin.QueryContext{
+			Session:       sess,
+			Query:         &chproto.Query{ID: "qid-guarded-opaque"},
+			StatementType: sqlmeta.StatementTypeCreateTable,
+		}
+		if err := gate.OnQuery(context.Background(), qctx); err != nil {
+			t.Fatalf("commitgate OnQuery: %v", err)
+		}
+		if len(observer.calls) != 1 || sess.State().Snapshot().CommitGateEvent == nil {
+			t.Fatal("commitgate did not stash the gated DDL event")
+		}
+	})
+
+	if !errors.Is(err, chproto.ErrMalformed) {
+		t.Fatalf("upstreamToClient err=%v, want ErrMalformed guard", err)
+	}
+	if errors.Is(err, chproto.ErrUnsupportedResultType) {
+		t.Fatalf("guard error must not expose ErrUnsupportedResultType through errors.Is: %v", err)
+	}
+	if opaque {
+		t.Fatal("commit-gated result entered opaque fallback")
+	}
+	if successes != 0 {
+		t.Fatalf("OnQuerySuccess calls=%d, want 0", successes)
+	}
+	if completes != 1 {
+		t.Fatalf("OnQueryComplete calls=%d, want 1", completes)
+	}
+	if active {
+		t.Fatal("commit-gated guard left the query active")
+	}
+}
+
+func TestRelay_ChunkedDownstreamOpaqueResultFailsClosed(t *testing.T) {
+	err, opaque, successes, completes, active := runOpaqueGuardResult(t, func(sess chsession.Session) {
+		sess.Client().EnableChunked(false, true)
+	})
+
+	if !errors.Is(err, chproto.ErrMalformed) {
+		t.Fatalf("upstreamToClient err=%v, want ErrMalformed guard", err)
+	}
+	if opaque {
+		t.Fatal("chunked downstream entered raw opaque fallback")
+	}
+	if successes != 0 {
+		t.Fatalf("OnQuerySuccess calls=%d, want 0", successes)
+	}
+	if completes != 1 {
+		t.Fatalf("OnQueryComplete calls=%d, want 1", completes)
+	}
+	if active {
+		t.Fatal("chunked-downstream guard left the query active")
+	}
+}
+
+func runOpaqueGuardResult(
+	t *testing.T,
+	configure func(chsession.Session),
+) (err error, opaque bool, successes, completes int, active bool) {
+	t.Helper()
+
+	clientProxy, proxyClient := net.Pipe()
+	upstreamProxy, proxyUpstream := net.Pipe()
+	t.Cleanup(func() {
+		_ = clientProxy.Close()
+		_ = upstreamProxy.Close()
+	})
+
+	const rev = chproto.MaxSupportedRevision
+	sess := chsession.New(1, proxyClient)
+	up := chproto.NewCodec(proxyUpstream, chproto.DirToUpstream)
+	up.SetRevision(rev)
+	up.SetCompression(proto.CompressionDisabled)
+	if err := sess.BindUpstream(context.Background(), up); err != nil {
+		t.Fatalf("BindUpstream: %v", err)
+	}
+	configure(sess)
+
+	hooks := &exceptionRecordingHooks{}
+	r := &Relay{sess: sess, hooks: hooks}
+	if !r.beginActiveQuery("qid-guarded-opaque") {
+		t.Fatal("beginActiveQuery unexpectedly reported an active query")
+	}
+
+	wire := aggregateStateDataPacket(t, rev, proto.CompressionDisabled)
+	go func() {
+		_, _ = upstreamProxy.Write(wire)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err = r.runPostHandshake(ctx)
+	opaque, _, _ = r.opaqueSnapshot()
+	_, active = r.currentActiveQuery()
+
+	hooks.mu.Lock()
+	successes = hooks.querySuccesses
+	completes = hooks.queryCompletes
+	hooks.mu.Unlock()
+
+	_ = clientProxy.SetReadDeadline(time.Now().Add(time.Second))
+	var b [1]byte
+	if _, readErr := clientProxy.Read(b[:]); readErr == nil {
+		t.Fatalf("guard leaked opaque bytes to client: %x", b)
+	} else if !errors.Is(readErr, io.EOF) {
+		t.Fatalf("client read after guard=%v, want EOF from closed session", readErr)
+	}
+	return err, opaque, successes, completes, active
 }
 
 type opaquePipelineHooks struct {
@@ -1383,18 +1581,16 @@ func TestRelay_UpstreamException_RewrittenMessageReachesClient(t *testing.T) {
 	}
 }
 
-// TestWriteEndOfStreamToClient verifies the helper writes exactly one
-// ServerEndOfStreamCode byte to its writer. This is the primitive used
-// by the AbortWithSuccess branch in clientToUpstream.
-func TestWriteEndOfStreamToClient(t *testing.T) {
+func TestWriteRawPacket_EndOfStream(t *testing.T) {
 	c, peer := net.Pipe()
 	t.Cleanup(func() {
 		_ = c.Close()
 		_ = peer.Close()
 	})
 
+	codec := chproto.NewCodec(c, chproto.DirFromClient)
 	go func() {
-		_ = writeEndOfStreamToClient(c)
+		_ = codec.WriteRawPacket([]byte{byte(chproto.ServerEndOfStreamCode)})
 	}()
 
 	buf := make([]byte, 4)

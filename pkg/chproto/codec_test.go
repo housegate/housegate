@@ -2,6 +2,7 @@ package chproto
 
 import (
 	"bytes"
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -575,6 +576,62 @@ func TestReadPacket_ChunkedServerDataUsesTransportBoundary(t *testing.T) {
 	}
 	if pkt.Type != uint64(proto.ServerCodeEndOfStream) || !bytes.Equal(pkt.Raw, eos) {
 		t.Fatalf("EndOfStream packet=%#v raw=%x", pkt, pkt.Raw)
+	}
+}
+
+func TestReadPacket_ChunkedServerRejectsMultiplePacketsInOneChunk(t *testing.T) {
+	var wire bytes.Buffer
+	chunked := NewChunkedWriter(&wire, true)
+	if _, err := chunked.Write([]byte{
+		byte(proto.ServerCodeEndOfStream),
+		byte(proto.ServerCodePong),
+	}); err != nil {
+		t.Fatalf("write multi-packet chunk: %v", err)
+	}
+
+	rw := &readerWriter{r: bytes.NewBuffer(wire.Bytes()), w: &bytes.Buffer{}}
+	c := NewCodec(rw, DirToUpstream)
+	c.EnableChunked(true, false)
+
+	pkt, err := c.ReadPacket(uint64(proto.ServerCodeException))
+	if !errors.Is(err, ErrMalformed) {
+		t.Fatalf("ReadPacket err=%v, want ErrMalformed", err)
+	}
+	if pkt == nil || pkt.Type != uint64(proto.ServerCodeEndOfStream) {
+		t.Fatalf("partial packet=%#v, want first EndOfStream metadata", pkt)
+	}
+}
+
+func TestReadPacket_ServerHelloWithoutRevisionHintCapsAtProxyMaximum(t *testing.T) {
+	var buf proto.Buffer
+	buf.PutUVarInt(uint64(proto.ServerCodeHello))
+	buf.PutString("ClickHouse")
+	buf.PutInt(26)
+	buf.PutInt(9)
+	buf.PutInt(MaxSupportedRevision + 9)
+	buf.PutString("Etc/UTC")
+	buf.PutString("no-hint")
+	buf.PutInt(0)
+	putServerHelloTail54470(&buf, "chunked_optional", "chunked_optional")
+
+	rw := &readerWriter{r: bytes.NewBuffer(buf.Buf), w: &bytes.Buffer{}}
+	c := NewCodec(rw, DirToUpstream)
+	pkt, err := c.ReadPacket(uint64(proto.ServerCodeHello))
+	if err != nil {
+		t.Fatalf("ReadPacket: %v", err)
+	}
+
+	rd := proto.NewReader(bytes.NewReader(pkt.Raw))
+	_, _ = rd.UVarInt()
+	_, _ = rd.Str()
+	_, _ = rd.Int()
+	_, _ = rd.Int()
+	gotRevision, err := rd.Int()
+	if err != nil {
+		t.Fatalf("revision: %v", err)
+	}
+	if gotRevision != MaxSupportedRevision {
+		t.Fatalf("rewritten revision=%d, want %d", gotRevision, MaxSupportedRevision)
 	}
 }
 
