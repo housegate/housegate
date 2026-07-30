@@ -304,32 +304,54 @@ func (c *Codec) readChunkedServerPacket(decodeTypes ...uint64) (*Packet, error) 
 	if err != nil {
 		return nil, err
 	}
-	typeVar, n, ok := decodeUVarInt(raw)
+	typeVar, _, ok := decodeUVarInt(raw)
 	if !ok {
 		return &Packet{RawLen: len(raw), Raw: raw}, fmt.Errorf("%w: chunked packet type", ErrMalformed)
 	}
 	pkt := &Packet{Type: typeVar, RawLen: len(raw), Raw: raw}
 
-	wantDecode := false
-	for _, typ := range decodeTypes {
-		if typ == typeVar {
-			wantDecode = true
-			break
-		}
-	}
-	if !wantDecode {
+	// Re-run the ordinary packet body parser against the bounded chunk so we
+	// can prove it consumed exactly one packet. Opaque Native values are the
+	// one exception: ErrUnsupportedResultType is precisely why chunk framing
+	// exists, so for those values the transport boundary remains authoritative.
+	rw := codecReadWriter{Reader: bytes.NewReader(raw), Writer: io.Discard}
+	framed := NewCodec(rw, DirToUpstream)
+	framed.SetRevision(c.Revision())
+	framed.SetCompression(c.Compression())
+	framed.serverMajor.Store(c.serverMajor.Load())
+	framed.serverMinor.Store(c.serverMinor.Load())
+	framed.serverPatch.Store(c.serverPatch.Load())
+	decoded, parseErr := framed.ReadPacket(decodeTypes...)
+	if parseErr != nil && chunkedOpaqueNativePacket(typeVar) {
 		return pkt, nil
 	}
-	if typeVar != uint64(proto.ServerCodeException) {
-		return pkt, fmt.Errorf("%w: chunked decode type=%d", ErrUnknownPacket, typeVar)
+	if parseErr != nil {
+		return pkt, fmt.Errorf("chunked packet body: %w", parseErr)
 	}
-
-	exc := &proto.Exception{}
-	if err := exc.DecodeAware(proto.NewReader(bytes.NewReader(raw[n:])), c.Revision()); err != nil {
-		return pkt, fmt.Errorf("%w: chunked exception: %v", ErrDecode, err)
+	if consumed := len(framed.cap.cap); consumed != len(raw) {
+		return pkt, fmt.Errorf(
+			"%w: chunked packet type=%d consumed %d of %d bytes",
+			ErrMalformed,
+			typeVar,
+			consumed,
+			len(raw),
+		)
 	}
-	pkt.Decoded = exc
+	pkt.Decoded = decoded.Decoded
 	return pkt, nil
+}
+
+func chunkedOpaqueNativePacket(typeVar uint64) bool {
+	switch typeVar {
+	case uint64(proto.ServerCodeData),
+		uint64(proto.ServerCodeTotals),
+		uint64(proto.ServerCodeExtremes),
+		uint64(proto.ServerCodeLog),
+		uint64(ServerProfileEventsCode):
+		return true
+	default:
+		return false
+	}
 }
 
 // skipPacketBody consumes bytes belonging to a packet whose type is not in
@@ -663,6 +685,11 @@ type captureByteReader struct {
 	cap     []byte
 	limit   int
 	limited bool
+}
+
+type codecReadWriter struct {
+	io.Reader
+	io.Writer
 }
 
 func newCaptureByteReader(br *bufio.Reader) *captureByteReader {

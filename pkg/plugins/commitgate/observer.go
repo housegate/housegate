@@ -88,8 +88,9 @@ type Observer interface {
 // only after ClickHouse completes a gated statement successfully.
 //
 // Dispatch is asynchronous after EndOfStream and best-effort: it may be lost
-// on process crash. Implementations own idempotency and retries and must not
-// mutate Event's slice/map fields.
+// on process crash or graceful shutdown because server draining does not wait
+// for detached observer goroutines. Implementations own idempotency and retries
+// and must not mutate Event's slice/map fields.
 type SuccessObserver interface {
 	AfterStatementSuccess(ctx context.Context, ev Event)
 }

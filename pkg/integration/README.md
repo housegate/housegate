@@ -42,8 +42,8 @@ signers, not per-test containers.
   upstream Data-block forwarding.
 - `TestLargeStream` — million-row pull. Stresses the chunk-by-chunk
   upstream→client packet path across negotiated transport modes.
-- `TestException` — invalid SQL surfaces as a client-visible exception;
-  the OnException first-byte heuristic fires best-effort.
+- `TestException` — invalid SQL surfaces as a client-visible exception and
+  dispatches OnException from the fully decoded server packet.
 - `TestGracefulShutdown` — `proxy.Close` returns within a tight deadline
   after a successful query.
 - `TestCancelMidQuery` — client-side ctx cancel mid-`SELECT sleep`;
