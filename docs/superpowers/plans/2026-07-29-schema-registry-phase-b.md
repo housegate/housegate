@@ -72,7 +72,7 @@ housegate    pkg/registry/schemas.go            TableSchema + TableSchemas inter
 **Interfaces:**
 - Produces (Tasks 3/5 consume via bindings): event `TableSchemaSet(string databaseId, string tableId, uint32 version, bytes32 schemaHash, string schemaJson)`; `setTableSchema(string calldata databaseId, address caller, string calldata tableId, bytes32 schemaHash, string calldata schemaJson) external returns (uint32)`; views `getTableSchema(string calldata databaseId, string calldata tableId, uint32 version) external view returns (Types.TableSchema memory)` and `latestTableSchemaVersion(string calldata databaseId, string calldata tableId) external view returns (uint32)` (0 = never declared); errors `SchemaHashEmpty()`, `SchemaJsonEmpty()`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `test/DatabasesSchema.t.sol` on the `Databases.t.sol` skeleton — copy its `setUp` (`test/Databases.t.sol:39-71`), constants block, and `_registerIndexer`/prank conventions; then:
 
@@ -146,12 +146,12 @@ contract DatabasesSchemaTest is Test, NetworkEnv {
 
 (Adapt constant names — `INDEXER_ID`, `CALLER`, `TABLE_TYPE` — to what `Databases.t.sol:15-34` actually names them; the assertions are the contract.)
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `cd /Users/uranuswch/Dev/sentio_xyz/compute-network-contracts && git checkout -b feat/table-schema-registry && forge test --match-contract DatabasesSchemaTest -vv`
 Expected: compilation failure — `setTableSchema` undefined.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `Types.sol`, beside `Table` (`src/libraries/Types.sol:81-87`):
 
@@ -209,7 +209,7 @@ and beside `createTable` (`src/Databases.sol:230-249`), reusing its guard block 
     }
 ```
 
-- [ ] **Step 4: Run tests + regenerate bindings + commit + PR**
+- [x] **Step 4: Run tests + regenerate bindings + commit + PR**
 
 ```bash
 forge clean && forge build && forge test --match-contract DatabasesSchemaTest -vv && forge test
@@ -255,20 +255,20 @@ UpsertTableSchema(ctx context.Context, info TableSchemaInfo) error
 // TableInfo gains pointer fields: SchemaVersion uint32, SchemaHash string (json/yaml tagged)
 ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Extend `state_test.go` (follow its table style): key round-trip (`TableSchemaKey`/`ParseTableSchemaKey` for plain and version-10 keys; parse rejects missing `@`, missing `/`, non-numeric version); `PlainState.UpsertTableSchema` + `GetTableSchema` + `Clone` isolation (mutate clone, source unchanged). Extend `state_mirrored_test.go` with the decisive coverage the exploration flagged: build a `StateMirrored` over a fake mirror, `ReplaceInner` with a working copy that adds one `TableSchemaInfo` → assert the fake mirror received an Added diff under `MappingTableSchemas` with field `db_1/table_1@1`; then `SyncMirror` → assert full-push includes it; then single-key `UpsertTableSchema` → assert the syncDatabase-style targeted sync fired.
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `cd /Users/uranuswch/Dev/sentio_xyz/sentio-core && git checkout -b feat/table-schemas-collection && go test ./network/state/ -run 'TableSchema' -v`
 Expected: FAIL — types undefined.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Follow the exploration's per-collection recipe with `MappingDatabases` as the line-by-line template: constant (`on_chain_mapping_constants.go:11`); types + key functions (`types.go` — `ParseTableSchemaKey` splits on the LAST `@` then the FIRST `/`, rejecting leftovers); `PlainState` field + `Clone` (`maps.Clone`, flat map — one line) + the three methods (replace-or-set into the map, keyed by `TableSchemaKey(info.DatabaseId, info.TableId, info.Version)`); `StateMirrored`: codec field + `newCodec[TableSchemaInfo]()` (`state_mirrored.go:29`), a `diffApply` segment in `ReplaceInner` (template `state_mirrored.go:66-69`), a full-push segment in `SyncMirror` (template `:453-461`), and `UpsertTableSchema` delegating to inner + targeted sync (template `syncDatabase` `:403-416`); `store_file.go`: nil-map init on Load, field flows through the existing whole-state YAML marshal; `store_postgres.go`: `TableSchemaRow{Key string \`gorm:"primaryKey"\`; ...}` + `TableName() "sentio_node_table_schemas"` following `IndexerInfoRow` (`store_postgres.go:25-36`), added to AutoMigrate and the Save/Load loops. `TableInfo` gains the two pointer fields.
 
-- [ ] **Step 4: Run + commit + PR**
+- [x] **Step 4: Run + commit + PR**
 
 ```bash
 go build ./... && go test ./network/... ./common/statemirror/... -count=1
@@ -290,7 +290,7 @@ gh pr create --repo sentioxyz/sentio-core --title "feat(state): TableSchemas net
 - Consumes: Task 1's `IDatabasesFilterer.ParseTableSchemaSet`, Task 2's `State.UpsertTableSchema`/`TableSchemaInfo`.
 - Produces: schemas flow chain→state for any table on a synced node; full-replay rebuild included by construction.
 
-- [ ] **Step 1: Copy bindings + bump sentio-core, write the failing handler test**
+- [x] **Step 1: Copy bindings + bump sentio-core, write the failing handler test**
 
 ```bash
 cd /Users/uranuswch/Dev/sentio_xyz/sentio-node && git checkout -b feat/schema-registry-phase-b
@@ -300,7 +300,7 @@ go get sentioxyz/sentio-core@<task-2-version> && go mod tidy
 
 Test: fabricate a `TableSchemaSet` log (pack via the binding's ABI — read how existing handler tests fabricate `TableCreated` logs and mirror it), run `DatabaseEventHandler.Handle` against a state pre-seeded with the database, assert: `GetTableSchema("db_1/table_1@1")` returns the content AND the database's `TableInfo` now carries `SchemaVersion: 1` + the hash; a log for an unknown database is skipped with a warning (mirroring `onTableCreated`'s guard); a `TableSchemaSet` whose ids contain `/` is still stored faithfully (the guard against separator ids lives at declaration, not here — the syncer mirrors the chain verbatim).
 
-- [ ] **Step 2: Run to verify failure, then implement**
+- [x] **Step 2: Run to verify failure, then implement**
 
 `handlers/database_event.go`: add `ParseTableSchemaSet` to the sequential-try chain (`database_event.go:33-55`) and:
 
@@ -323,7 +323,7 @@ func (h *DatabaseEventHandler) onTableSchemaSet(ctx context.Context, decoded *bi
 
 (`SchemaHash` arrives as `[32]byte` from abigen — encode as `"0x" + hex`, matching what declarers store; confirm against the generated struct. `upsertTableSchemaPointer` reads the existing `TableInfo`, sets the two fields, and calls `UpsertDatabaseTable` — mirroring `onTableCreated` `:142-157`.) No `FilterQuery` change (address-filtered).
 
-- [ ] **Step 3: Run + commit**
+- [x] **Step 3: Run + commit**
 
 ```bash
 go build ./... && go test ./handlers/ -count=1 && bazel mod tidy && bazel run //:gazelle && bazel build //...
@@ -370,19 +370,19 @@ type SuccessObserver interface {
 }
 ```
 
-- [ ] **Step 1: Write the failing loader tests**
+- [x] **Step 1: Write the failing loader tests**
 
 `networkstate_loader_test.go`, pure Go, table-driven like the Phase-A `loader_test.go`. Fake `registry.TableSchemas` backed by a map. Cases: happy path (declared json for a 2-column table; loader returns the decoded `payloadexec.TableSchema` and — asserted — `payloadexec.TableSchemaHash(networkID, schema)` equals the declared hash); content missing → `errors.Is(err, ErrSchemaContentMissing)`; declared hash ≠ recomputed → `ErrSchemaHashMismatch` (build the fixture by declaring a tampered hash); malformed `SchemaJson` → error; cross-check mode with a fake CH-side result differing in one column type → `ErrClickHouseDrift` (inject via a tiny `chLoader Loader` seam on the struct rather than a real conn — the decorator takes the interface internally; `WithClickHouseCrossCheck(conn)` wraps the real one, `withCrossCheckLoader(l Loader)` is the test seam); loader uses the version from `LatestTableSchema` per ref.
 
-- [ ] **Step 2: Write the failing commitgate hook test**
+- [x] **Step 2: Write the failing commitgate hook test**
 
 In `plugin_test.go`, following the file's existing fixture style (find how it drives OnQuery/OnQueryComplete/OnException today): an observer implementing both `Observer` and `SuccessObserver` records calls. Cases: gated CREATE TABLE → OnQuery → OnQueryComplete ⇒ exactly one `AfterStatementSuccess` with the stashed Event (dispatch may be async — sync via a channel with timeout); OnQuery → OnException → OnQueryComplete ⇒ zero success calls; a plain observer without the marker ⇒ no calls, no panic; non-gated statement ⇒ no calls.
 
-- [ ] **Step 3: Run to verify failure, then implement**
+- [x] **Step 3: Run to verify failure, then implement**
 
 Loader: decode `SchemaJson` into `payloadexec.TableSchema` (canonical form IS its JSON encoding), verify `TableSchemaHash`, assemble; cross-check decorator loads the same refs through the inner CH loader and `reflect.DeepEqual`s per-table (any diff → `ErrClickHouseDrift` naming the table and the first differing field). Commitgate: `SuccessObserver` interface beside `Observer` (`observer.go`); in the plugin, `OnException` marks the stashed event failed (add a `failed bool` beside the stash — the stash mechanics already exist, `plugin.go:65-90,165-176`); `OnQueryComplete` — before clearing the stash — when a stash exists and is not failed, snapshot the Event value and dispatch `go func` to every subscribed observer that type-asserts to `SuccessObserver` (goroutine because declaration submits a chain tx; the relay byte path must never wait — document on the interface: "dispatched asynchronously after EndOfStream; best-effort, may be lost on crash; implementations own their retries"). Fixture mirror: `TableSchemaInfo` in `pkg/network/types.go` (tags byte-identical to sentio-core's), `InMemoryNetworkState.TableSchemas map[string]TableSchemaInfo` + the two interface methods (RLock; latest = linear scan for max version), `yaml.go` `table_schemas:` section + copy loop + count log, sample block appended to `configs/local.network_state.yaml`.
 
-- [ ] **Step 4: Bazel + run + commit + PR**
+- [x] **Step 4: Bazel + run + commit + PR**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/housegate && git checkout main && git pull && git checkout -b feat/schema-registry-network-loader
@@ -411,15 +411,15 @@ gh pr create --repo housegate/housegate --base main --title "feat(schemaregistry
 - Consumes: Task 1's contract method (via `env.SubmitAndWaitTx` + bindings), Task 4's `commitgate.SuccessObserver` + `schemaregistry.ClickHouseLoader` + `payloadexec.TableSchemaHash`, `snode.CHTableName`, `config.StorageIntegrityUnsafeDatabase`.
 - Produces: automatic declaration on CREATE TABLE; `sentio-node declare-table-schemas` for backfill/repair (rollout step 3).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Observer tests (fake contract records `setTableSchema` calls; settable `latestTableSchemaVersion`/`getTableSchema` answers; CH via `requireCH`-style gate where the real loader runs): declare-on-create (AfterStatementSuccess for a CreateTable event whose physical table exists in CH ⇒ one `setTableSchema` call whose hash equals `payloadexec.TableSchemaHash(networkID, derived)`); skip-if-identical (latest declared hash already matches ⇒ zero calls); separator rejection (table id containing `/` or `@` ⇒ zero calls, one loud error log); non-SI table (not under the unsafe database / not resolvable) ⇒ zero calls; CH read failure ⇒ zero calls, error logged, DDL unaffected (the hook returns nothing). Command test: fake contract + two CH tables, one already declared with matching hash ⇒ exactly one `setTableSchema` for the other.
 
-- [ ] **Step 2: Run to verify failure, then implement**
+- [x] **Step 2: Run to verify failure, then implement**
 
 `observer.go`: `observerContract` gains `setTableSchema(ctx, env, databaseId, caller string, tableId string, schemaHash [32]byte, schemaJson string) (uint32, error)` + `latestTableSchema(ctx, databaseId, tableId string) (version uint32, hash [32]byte, err error)`; `envContract` implements both (`SubmitAndWaitTx` / contract view call). The observer struct gains the CH conn + SI network id + unsafe database (injected at construction from the standalone assembly — same values the SI block already has); implement `AfterStatementSuccess(ctx, ev)`: filter `ev.Type == CreateTable`; resolve `(db, table)` from `ev.AccessedTables` exactly as `onCreateTable` does (`observer.go:240-250`); reject ids containing `/` or `@` (loud error — spec decision 2's declaration-time guard); derive via `schemaregistry.NewClickHouseLoader(conn).Load` on the single ref `{TableID: id, Database: unsafeDB, Table: snode.CHTableName(id)}`; marshal to canonical JSON (`json.Marshal(payloadexec.TableSchema)`); compute `TableSchemaHash(networkID, schema)`; skip if the latest on-chain hash matches; else submit. All failure paths: `log.Error` + return (best-effort; the command repairs). `commands/declare_table_schemas.go`: cobra command following the siblings (`commands/claim.go` shape) — loads config, dials CH + contract env, iterates `storage_integrity.snode.table_ids`, runs the same declare-one function per table, prints a summary (declared/skipped/failed).
 
-- [ ] **Step 3: Run + commit**
+- [x] **Step 3: Run + commit**
 
 ```bash
 go build ./... && go test ./database_registry/ ./commands/ -count=1
@@ -441,11 +441,11 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - Consumes: Task 2's collection + key fns, Task 4's `registry.TableSchemas` + `NewNetworkStateLoader` + `WithClickHouseCrossCheck`.
 - Produces: both `registry.Registry` implementations also satisfy `registry.TableSchemas`; config `storage_integrity.snode.schema_source: clickhouse | network_state` (default `clickhouse`).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Read leg (fake mirror / statecore fixtures, following `networkstate_test.go`'s style): `TableSchema("db_1","t",1)` hit and miss; `LatestTableSchema` picks the max version among `@1..@3`; `convert.go`'s `tableSchemaFromCore` field fidelity. Config: `schema_source` allowlist (`""`≡`clickhouse`, `network_state`, junk rejected); compile-time `var _ registry.TableSchemas = (*RedisNetworkState)(nil)` + same for `FromStatecore`.
 
-- [ ] **Step 2: Run to verify failure, then implement**
+- [x] **Step 2: Run to verify failure, then implement**
 
 `redis.go`: the two methods via `mirror.Get(ctx, statemirror.MappingTableSchemas, statecore.TableSchemaKey(...))` + JSON unmarshal + `tableSchemaFromCore`; latest via `mirror.Scan` glob `<db>/<table>@*` picking max `ParseTableSchemaKey` version. `networkstate.go`: same over the in-memory state. `convert.go`: the projection. `config.go`: `SchemaSource string \`yaml:"schema_source"\`` on `StorageIntegritySNode` + allowlist validation. `standalone.go`: in the SI assembly block, choose the loader —
 
@@ -459,7 +459,7 @@ tables, err := loader.Load(ctx, refs)
 
 (`netState` is the existing `RedisNetworkState` from the housegate wiring — it now satisfies `registry.TableSchemas`.) Everything downstream (snode.Config.Tables, SchemaResolver, genesis anchor) is untouched.
 
-- [ ] **Step 3: Run + commit + PR (closes the Task 3/5/6 branch)**
+- [x] **Step 3: Run + commit + PR (closes the Task 3/5/6 branch)**
 
 ```bash
 go build ./... && go test ./standalone/... ./config/ ./handlers/ ./database_registry/ -count=1
@@ -479,15 +479,15 @@ gh pr create --repo sentioxyz/sentio-node --title "feat: schema-registry Phase B
 **Files:**
 - Modify: the sentio-node SI smoke + its runbook doc; housegate `docs/superpowers/specs/2026-07-29-schema-registry-phase-b-design.md` (status) on the `docs/schema-registry` branch
 
-- [ ] **Step 1: Extend the gated E2E**
+- [x] **Step 1: Extend the gated E2E**
 
 New smoke phase (behind the existing `SENTIO_SI_E2E=1` gate, services per its runbook plus a local chain with the upgraded contract — anvil + the repo's deploy flow, or the devnet): CREATE TABLE through housegate → poll `latestTableSchemaVersion` until the declaration lands → wipe the consumer's derived state → boot with `schema_source: network_state` → assert startup passes the hash ladder + genesis anchor + CH cross-check → one INSERT to ACK2. Plus the backfill rehearsal: run `declare-table-schemas` against pre-existing tables, assert declared hashes equal Phase-A-derived hashes and a second run declares nothing.
 
-- [ ] **Step 2: Rollout runbook**
+- [x] **Step 2: Rollout runbook**
 
 Document the spec §10 sequence operationally: devnet contract upgrade (`forge clean && forge build` → `diff_deployed.sh` → `Upgrade.sol` broadcast → `upgrade-devnet.yml` for devnet), deploy sentio-node (syncer picks up events; old nodes unaffected), backfill command run, verify collection population (`redis-cli HLEN statemirror:v1:TableSchemas`), flip `schema_source` per node with rolling restarts, confirm every role re-anchors. Include the rollback: flip back to `clickhouse` — Phase A behavior is fully preserved.
 
-- [ ] **Step 3: Final verification + spec status**
+- [x] **Step 3: Final verification + spec status**
 
 All four repos green (contracts `forge test`; the three Go repos build+test per their tasks). Mark the Phase B spec Implemented with the four PR links; commit on `docs/schema-registry`.
 
