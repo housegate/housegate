@@ -84,6 +84,16 @@ type Observer interface {
 	OnStatementException(ctx context.Context, ev *Event, exc *chproto.Exception)
 }
 
+// SuccessObserver is an optional Observer extension for work that must happen
+// only after ClickHouse completes a gated statement successfully.
+//
+// Dispatch is asynchronous after EndOfStream and best-effort: it may be lost
+// on process crash. Implementations own idempotency and retries and must not
+// mutate Event's slice/map fields.
+type SuccessObserver interface {
+	AfterStatementSuccess(ctx context.Context, ev Event)
+}
+
 // Event is the read-only payload delivered to BeforeStatement.
 //
 // Fields are valid only for the duration of the call; observers

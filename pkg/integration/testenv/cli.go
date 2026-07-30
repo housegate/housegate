@@ -84,14 +84,46 @@ func RunCLI(t *testing.T, bin, proxyAddr, database, query string) (string, error
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	return RunCLIContext(ctx, t, bin, proxyAddr, database, query)
+	return runCLIContext(ctx, t, bin, proxyAddr, database, query)
+}
+
+// RunCLICompressed is RunCLI with Native protocol compression forced on.
+// clickhouse-client disables compression for localhost by default, while the
+// proxy's production clients normally use it.
+func RunCLICompressed(t *testing.T, bin, proxyAddr, database, query string) (string, error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return runCLIContext(ctx, t, bin, proxyAddr, database, query, "--compression", "true")
+}
+
+// RunCLICompressedMultiquery is RunCLICompressed with multiple semicolon-
+// separated queries executed on one client connection.
+func RunCLICompressedMultiquery(t *testing.T, bin, proxyAddr, database, query string) (string, error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return runCLIContext(
+		ctx, t, bin, proxyAddr, database, query,
+		"--compression", "true",
+		"--multiquery",
+	)
 }
 
 // RunCLIContext is RunCLI with a caller-supplied context for tests
 // (large streams, cancellation) that need to control the timeout.
 func RunCLIContext(ctx context.Context, t *testing.T, bin, proxyAddr, database, query string) (string, error) {
 	t.Helper()
+	return runCLIContext(ctx, t, bin, proxyAddr, database, query)
+}
 
+func runCLIContext(
+	ctx context.Context,
+	t *testing.T,
+	bin, proxyAddr, database, query string,
+	extraArgs ...string,
+) (string, error) {
+	t.Helper()
 	host, port, err := net.SplitHostPort(proxyAddr)
 	if err != nil {
 		return "", fmt.Errorf("parse proxy addr %q: %w", proxyAddr, err)
@@ -100,13 +132,15 @@ func RunCLIContext(ctx context.Context, t *testing.T, bin, proxyAddr, database, 
 	// The clickhouse fat binary dispatches to its `client` subcommand
 	// here. --host/--port override the localhost:9000 default — the
 	// proxy binds an ephemeral port per test.
-	cmd := exec.CommandContext(ctx, bin,
+	args := []string{
 		"client",
 		"--host", host,
 		"--port", port,
 		"--database", database,
-		"--query", query,
-	)
+	}
+	args = append(args, extraArgs...)
+	args = append(args, "--query", query)
+	cmd := exec.CommandContext(ctx, bin, args...)
 
 	out, err := cmd.CombinedOutput()
 	return strings.TrimRight(string(out), "\n"), err

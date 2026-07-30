@@ -18,8 +18,8 @@ const canonicalDomain = "housegate-row-mvp-v0"
 // Column describes one column of a row to be encoded: the column name and
 // the declared ClickHouse type name (e.g. "UInt64", "String", "DateTime").
 type Column struct {
-	Name string
-	Type string
+	Name string `json:"name"`
+	Type string `json:"type"`
 }
 
 // value kind tags keep differently-typed values from colliding byte-wise.

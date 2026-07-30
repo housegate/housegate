@@ -232,6 +232,7 @@ func (testHooks) OnQueryInputCompleteStrict(context.Context, *plugin.QueryContex
 }
 func (testHooks) OnQueryInputComplete(context.Context, *plugin.QueryContext) {}
 func (testHooks) OnQueryAbort(context.Context, *plugin.QueryContext)         {}
+func (testHooks) OnQuerySuccess(context.Context, chsession.Session, string)  {}
 func (testHooks) OnQueryComplete(context.Context, chsession.Session)         {}
 func (testHooks) OnClose(chsession.Session)                                  {}
 func (testHooks) OnDisconnect(chsession.Session)                             {}

@@ -18,6 +18,7 @@ type networkStateYAML struct {
 	ProcessorInfos       map[string]ProcessorInfo               `yaml:"processor_infos"`
 	DatabaseInfos        map[Database]DatabaseInfo              `yaml:"database_infos"`
 	DatabasePermissions  map[AccountAddress]databasePermYAMLMap `yaml:"database_permissions"`
+	TableSchemas         map[string]TableSchemaInfo             `yaml:"table_schemas"`
 }
 
 // databasePermYAMLMap is map[Database]dbAuthYAML — one indirection so
@@ -123,6 +124,9 @@ func LoadNetworkStateFromYAML(path string) (*InMemoryNetworkState, error) {
 		}
 		s.DatabasePermissions[account] = cp
 	}
+	for key, schema := range raw.TableSchemas {
+		s.TableSchemas[key] = schema
+	}
 
 	log.Infow("loaded network state",
 		"path", path,
@@ -130,7 +134,8 @@ func LoadNetworkStateFromYAML(path string) (*InMemoryNetworkState, error) {
 		"processor_allocations", len(s.ProcessorAllocations),
 		"processor_infos", len(s.ProcessorInfos),
 		"databases", len(s.DatabaseInfos),
-		"database_permissions", len(s.DatabasePermissions))
+		"database_permissions", len(s.DatabasePermissions),
+		"table_schemas", len(s.TableSchemas))
 
 	return s, nil
 }

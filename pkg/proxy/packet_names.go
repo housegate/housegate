@@ -1,7 +1,6 @@
 package proxy
 
 import (
-	"encoding/binary"
 	"fmt"
 )
 
@@ -24,9 +23,9 @@ var packetNames = map[uint64]string{
 	13: "ClusterFunctionReadTaskResponse",
 }
 
-// serverPacketNames maps server → client packet type IDs to the labels
-// used by server_packets_total{type=...}. Used by the upstream-to-client
-// path's first-byte heuristic in Relay.upstreamToClient.
+// serverPacketNames maps server → client packet type IDs to the labels used
+// by server_packets_total{type=...}. Relay classifies already-framed packets
+// by their decoded type, never by looking at arbitrary TCP chunks.
 var serverPacketNames = map[uint64]string{
 	0:  "Hello",
 	1:  "Data",
@@ -43,27 +42,13 @@ var serverPacketNames = map[uint64]string{
 	12: "PartUUIDs",
 	13: "ReadTaskRequest",
 	14: "ProfileEvents",
-	15: "MergeTreeReadTaskRequest",
-	16: "MergeTreeAllRangesAnnouncement",
+	15: "MergeTreeAllRangesAnnouncement",
+	16: "MergeTreeReadTaskRequest",
 	17: "TimezoneUpdate",
+	18: "SSHChallenge",
 }
 
-// detectServerPacketType peeks at the leading VarUInt of a buffer to
-// classify a server-side packet for metrics. Returns "unknown" when the
-// buffer doesn't start at a packet boundary (mid-payload reads from
-// upstreamToClient's chunked io.Copy) so the metrics emitter can skip
-// the increment cleanly.
-func detectServerPacketType(chunk []byte) string {
-	if len(chunk) == 0 {
-		return "unknown"
-	}
-	if chunk[0]&0x80 != 0 {
-		return "unknown"
-	}
-	typ, n := binary.Uvarint(chunk)
-	if n <= 0 {
-		return "unknown"
-	}
+func serverPacketName(typ uint64) string {
 	if name, ok := serverPacketNames[typ]; ok {
 		return name
 	}

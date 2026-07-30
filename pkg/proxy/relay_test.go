@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"io"
 	"net"
@@ -11,11 +12,13 @@ import (
 	"testing"
 	"time"
 
+	chcompress "github.com/ClickHouse/ch-go/compress"
 	"github.com/ClickHouse/ch-go/proto"
 
 	"github.com/housegate/housegate/pkg/chproto"
 	"github.com/housegate/housegate/pkg/chsession"
 	"github.com/housegate/housegate/pkg/plugin"
+	concurrencyplugin "github.com/housegate/housegate/pkg/plugins/concurrency"
 )
 
 func TestRelay_Handshake_PopulatesSessionState(t *testing.T) {
@@ -269,6 +272,7 @@ type exceptionRecordingHooks struct {
 	plugin.NoopHooks
 	mu             sync.Mutex
 	exceptions     []*chproto.Exception
+	querySuccesses int
 	queryCompletes int
 }
 
@@ -277,6 +281,12 @@ func (h *exceptionRecordingHooks) OnException(_ context.Context, _ chsession.Ses
 	defer h.mu.Unlock()
 	h.exceptions = append(h.exceptions, exc)
 	return nil
+}
+
+func (h *exceptionRecordingHooks) OnQuerySuccess(_ context.Context, _ chsession.Session, _ string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.querySuccesses++
 }
 
 func (h *exceptionRecordingHooks) OnQueryComplete(_ context.Context, _ chsession.Session) {
@@ -361,6 +371,910 @@ func TestRelay_UpstreamException_FiresOnException(t *testing.T) {
 	if hooks.queryCompletes != 1 {
 		t.Errorf("OnQueryComplete fired %d times, want 1", hooks.queryCompletes)
 	}
+	if hooks.querySuccesses != 0 {
+		t.Errorf("OnQuerySuccess fired %d times for Exception, want 0", hooks.querySuccesses)
+	}
+}
+
+func TestRelay_UpstreamEndOfStream_FiresQuerySuccess(t *testing.T) {
+	hooks, err := runFramedUpstreamBytes(t, []byte{byte(chproto.ServerEndOfStreamCode)})
+	if err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("upstreamToClient: %v", err)
+	}
+
+	hooks.mu.Lock()
+	defer hooks.mu.Unlock()
+	if hooks.querySuccesses != 1 {
+		t.Errorf("OnQuerySuccess fired %d times, want 1", hooks.querySuccesses)
+	}
+	if hooks.queryCompletes != 1 {
+		t.Errorf("OnQueryComplete fired %d times, want 1", hooks.queryCompletes)
+	}
+	if len(hooks.exceptions) != 0 {
+		t.Errorf("OnException fired %d times for EndOfStream, want 0", len(hooks.exceptions))
+	}
+}
+
+func TestRelay_CoalescedProgressAndEndOfStream_FiresQuerySuccess(t *testing.T) {
+	const rev = 54453
+	var b proto.Buffer
+	b.PutUVarInt(uint64(chproto.ServerProgressCode))
+	(proto.Progress{Rows: 5, Bytes: 8, TotalRows: 13}).EncodeAware(&b, rev)
+	b.PutUVarInt(uint64(chproto.ServerEndOfStreamCode))
+
+	hooks, err := runFramedUpstreamBytes(t, b.Buf)
+	if err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("upstreamToClient: %v", err)
+	}
+
+	hooks.mu.Lock()
+	defer hooks.mu.Unlock()
+	if hooks.querySuccesses != 1 {
+		t.Errorf("OnQuerySuccess fired %d times, want 1", hooks.querySuccesses)
+	}
+	if hooks.queryCompletes != 1 {
+		t.Errorf("OnQueryComplete fired %d times, want 1", hooks.queryCompletes)
+	}
+}
+
+func TestRelay_FragmentedProgressPayloadByteCannotImpersonateEndOfStream(t *testing.T) {
+	clientProxy, proxyClient := net.Pipe()
+	upstreamProxy, proxyUpstream := net.Pipe()
+	defer clientProxy.Close()
+	defer upstreamProxy.Close()
+
+	go func() {
+		_, _ = io.Copy(io.Discard, clientProxy)
+	}()
+
+	const rev = 54453
+	sess := chsession.New(1, proxyClient)
+	up := chproto.NewCodec(proxyUpstream, chproto.DirToUpstream)
+	up.SetRevision(rev)
+	if err := sess.BindUpstream(context.Background(), up); err != nil {
+		t.Fatalf("BindUpstream: %v", err)
+	}
+	hooks := &exceptionRecordingHooks{}
+	r := &Relay{sess: sess, hooks: hooks}
+	if !r.beginActiveQuery("qid-fragmented") {
+		t.Fatal("beginActiveQuery unexpectedly reported an active query")
+	}
+
+	relayDone := make(chan error, 1)
+	go func() {
+		relayDone <- r.upstreamToClient(context.Background())
+	}()
+
+	var progress proto.Buffer
+	progress.PutUVarInt(uint64(chproto.ServerProgressCode))
+	(proto.Progress{Rows: uint64(chproto.ServerEndOfStreamCode)}).EncodeAware(&progress, rev)
+	if len(progress.Buf) < 3 || progress.Buf[1] != byte(chproto.ServerEndOfStreamCode) {
+		t.Fatalf("test fixture does not isolate payload 0x05: %x", progress.Buf)
+	}
+
+	// Send the Progress type and its rows value as separate TCP writes. The
+	// second write is exactly one 0x05 byte, but it is Progress payload, not a
+	// server packet. A raw-read heuristic would report false success here.
+	if _, err := upstreamProxy.Write(progress.Buf[:1]); err != nil {
+		t.Fatalf("write Progress type: %v", err)
+	}
+	if _, err := upstreamProxy.Write(progress.Buf[1:2]); err != nil {
+		t.Fatalf("write isolated payload byte: %v", err)
+	}
+	time.Sleep(25 * time.Millisecond)
+	hooks.mu.Lock()
+	if hooks.querySuccesses != 0 || hooks.queryCompletes != 0 {
+		gotSuccess, gotComplete := hooks.querySuccesses, hooks.queryCompletes
+		hooks.mu.Unlock()
+		t.Fatalf("isolated payload byte fired hooks: successes=%d completes=%d", gotSuccess, gotComplete)
+	}
+	hooks.mu.Unlock()
+
+	terminal := append(append([]byte(nil), progress.Buf[2:]...), byte(chproto.ServerEndOfStreamCode))
+	if _, err := upstreamProxy.Write(terminal); err != nil {
+		t.Fatalf("finish Progress and EndOfStream: %v", err)
+	}
+	_ = upstreamProxy.Close()
+
+	select {
+	case err := <-relayDone:
+		if err != nil && !errors.Is(err, io.EOF) {
+			t.Fatalf("upstreamToClient: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("upstreamToClient did not finish")
+	}
+
+	hooks.mu.Lock()
+	defer hooks.mu.Unlock()
+	if hooks.querySuccesses != 1 {
+		t.Errorf("genuine EndOfStream fired OnQuerySuccess %d times, want 1", hooks.querySuccesses)
+	}
+	if hooks.queryCompletes != 1 {
+		t.Errorf("genuine EndOfStream fired OnQueryComplete %d times, want 1", hooks.queryCompletes)
+	}
+}
+
+func TestRelay_ChunkedAggregateStateRemainsPacketFramed(t *testing.T) {
+	for _, compression := range []proto.Compression{
+		proto.CompressionDisabled,
+		proto.CompressionEnabled,
+	} {
+		t.Run(compression.String(), func(t *testing.T) {
+			clientProxy, proxyClient := net.Pipe()
+			upstreamProxy, proxyUpstream := net.Pipe()
+			defer clientProxy.Close()
+			defer upstreamProxy.Close()
+
+			const rev = chproto.MaxSupportedRevision
+			sess := chsession.New(1, proxyClient)
+			up := chproto.NewCodec(proxyUpstream, chproto.DirToUpstream)
+			up.SetRevision(rev)
+			up.SetCompression(compression)
+			up.EnableChunked(true, false)
+			if err := sess.BindUpstream(context.Background(), up); err != nil {
+				t.Fatalf("BindUpstream: %v", err)
+			}
+
+			hooks := &exceptionRecordingHooks{}
+			r := &Relay{sess: sess, hooks: hooks}
+			if !r.beginActiveQuery("qid-aggregate-state") {
+				t.Fatal("beginActiveQuery unexpectedly reported an active query")
+			}
+
+			data := aggregateStateDataPacket(t, rev, compression)
+			wire := append(append([]byte(nil), data...), byte(chproto.ServerEndOfStreamCode))
+
+			relayDone := make(chan error, 1)
+			go func() {
+				relayDone <- r.upstreamToClient(context.Background())
+			}()
+			go func() {
+				_ = upstreamProxy.SetWriteDeadline(time.Now().Add(time.Second))
+				chunked := chproto.NewChunkedWriter(upstreamProxy, true)
+				_, _ = chunked.Write(data)
+				_, _ = chunked.Write([]byte{byte(chproto.ServerEndOfStreamCode)})
+				_ = upstreamProxy.Close()
+			}()
+
+			got := make([]byte, len(wire))
+			_ = clientProxy.SetReadDeadline(time.Now().Add(time.Second))
+			if _, err := io.ReadFull(clientProxy, got); err != nil {
+				t.Fatalf("read packet-framed aggregate-state result: %v", err)
+			}
+			if !bytes.Equal(got, wire) {
+				t.Fatalf("packet-framed aggregate-state result changed:\ngot  %x\nwant %x", got, wire)
+			}
+
+			select {
+			case err := <-relayDone:
+				if err != nil && !errors.Is(err, io.EOF) {
+					t.Fatalf("upstreamToClient: %v", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("upstreamToClient did not finish")
+			}
+
+			hooks.mu.Lock()
+			defer hooks.mu.Unlock()
+			if hooks.querySuccesses != 1 {
+				t.Errorf("aggregate-state EndOfStream fired OnQuerySuccess %d times, want 1", hooks.querySuccesses)
+			}
+			if hooks.queryCompletes != 1 {
+				t.Errorf("aggregate-state EndOfStream fired OnQueryComplete %d times, want 1", hooks.queryCompletes)
+			}
+		})
+	}
+}
+
+func TestRelay_OpaqueResultUsesCompletionProbeWithoutValueDecoding(t *testing.T) {
+	clientProxy, proxyClient := net.Pipe()
+	upstreamProxy, proxyUpstream := net.Pipe()
+	defer clientProxy.Close()
+	defer upstreamProxy.Close()
+
+	const rev = chproto.MaxSupportedRevision
+	sess := chsession.New(1, proxyClient)
+	up := chproto.NewCodec(proxyUpstream, chproto.DirToUpstream)
+	up.SetRevision(rev)
+	up.SetCompression(proto.CompressionDisabled)
+	if err := sess.BindUpstream(context.Background(), up); err != nil {
+		t.Fatalf("BindUpstream: %v", err)
+	}
+
+	lifecycle := &aggregateLifecyclePlugin{}
+	chain := &plugin.PluginChain{
+		QuerySuccessPlugins:  []plugin.QuerySuccessPlugin{lifecycle},
+		QueryCompletePlugins: []plugin.QueryCompletePlugin{lifecycle},
+	}
+	probeCalled := make(chan string, 1)
+	r := &Relay{
+		sess:  sess,
+		hooks: chain,
+		completionProbe: func(_ context.Context, queryID string) error {
+			probeCalled <- queryID
+			return nil
+		},
+	}
+	const queryID = "qid-opaque-result"
+	if !r.beginActiveQuery(queryID) {
+		t.Fatal("beginActiveQuery unexpectedly reported an active query")
+	}
+
+	data := aggregateStateDataPacket(t, rev, proto.CompressionDisabled)
+	wire := append(append([]byte(nil), data...), byte(chproto.ServerEndOfStreamCode))
+	relayDone := make(chan error, 1)
+	go func() {
+		relayDone <- r.upstreamToClient(context.Background())
+	}()
+	go func() {
+		_, _ = upstreamProxy.Write(wire)
+		// Keep the upstream open after EndOfStream. Cleanup must come from the
+		// authoritative process probe, not socket EOF or a payload-byte guess.
+	}()
+
+	got := make([]byte, len(wire))
+	_ = clientProxy.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := io.ReadFull(clientProxy, got); err != nil {
+		t.Fatalf("read opaque aggregate-state response: %v", err)
+	}
+	if !bytes.Equal(got, wire) {
+		t.Fatalf("opaque response changed:\ngot  %x\nwant %x", got, wire)
+	}
+
+	select {
+	case gotID := <-probeCalled:
+		if gotID != queryID {
+			t.Fatalf("probe query ID=%q, want %q", gotID, queryID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("completion probe was not called")
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		lifecycle.mu.Lock()
+		completes, successes := lifecycle.completes, lifecycle.successes
+		lifecycle.mu.Unlock()
+		if completes == 1 {
+			if successes != 0 {
+				t.Fatalf("opaque completion fired OnQuerySuccess %d times, want 0", successes)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("OnQueryComplete count=%d, want 1", completes)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if _, active := r.currentActiveQuery(); active {
+		t.Fatal("completion probe left opaque query active")
+	}
+
+	_ = upstreamProxy.Close()
+	select {
+	case err := <-relayDone:
+		if err != nil && !errors.Is(err, io.EOF) {
+			t.Fatalf("upstreamToClient: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("upstreamToClient did not finish")
+	}
+}
+
+type opaquePipelineHooks struct {
+	plugin.NoopHooks
+	mu        sync.Mutex
+	queries   int
+	completes int
+	successes int
+}
+
+func (h *opaquePipelineHooks) OnQuery(context.Context, *plugin.QueryContext) error {
+	h.mu.Lock()
+	h.queries++
+	h.mu.Unlock()
+	return nil
+}
+
+func (h *opaquePipelineHooks) OnQueryComplete(context.Context, chsession.Session) {
+	h.mu.Lock()
+	h.completes++
+	h.mu.Unlock()
+}
+
+func (h *opaquePipelineHooks) OnQuerySuccess(context.Context, chsession.Session, string) {
+	h.mu.Lock()
+	h.successes++
+	h.mu.Unlock()
+}
+
+func TestRelay_OpaqueResultRejectsPipelinedQueryBeforeWithheldTerminal(t *testing.T) {
+	clientProxy, proxyClient := net.Pipe()
+	upstreamProxy, proxyUpstream := net.Pipe()
+	defer clientProxy.Close()
+	defer upstreamProxy.Close()
+
+	const rev = chproto.MaxSupportedRevision
+	sess := chsession.New(1, proxyClient)
+	sess.Client().SetRevision(rev)
+	up := chproto.NewCodec(proxyUpstream, chproto.DirToUpstream)
+	up.SetRevision(rev)
+	if err := sess.BindUpstream(context.Background(), up); err != nil {
+		t.Fatalf("BindUpstream: %v", err)
+	}
+
+	probeStarted := make(chan struct{})
+	releaseProbe := make(chan struct{})
+	hooks := &opaquePipelineHooks{}
+	r := &Relay{
+		sess:  sess,
+		hooks: hooks,
+		completionProbe: func(context.Context, string) error {
+			close(probeStarted)
+			<-releaseProbe
+			return nil
+		},
+	}
+	if !r.beginActiveQuery("query-a") {
+		t.Fatal("beginActiveQuery unexpectedly reported an active query")
+	}
+
+	first := &chproto.Packet{
+		Type: uint64(chproto.ServerDataCode),
+		Raw:  []byte{byte(chproto.ServerDataCode), 0xAA},
+	}
+	opaqueDone := make(chan error, 1)
+	go func() {
+		opaqueDone <- r.relayOpaqueResult(context.Background(), up, first)
+	}()
+	select {
+	case <-probeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("completion probe did not start")
+	}
+	gotPrefix := make([]byte, len(first.Raw))
+	_ = clientProxy.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := io.ReadFull(clientProxy, gotPrefix); err != nil {
+		t.Fatalf("read opaque result prefix: %v", err)
+	}
+	if !bytes.Equal(gotPrefix, first.Raw) {
+		t.Fatalf("opaque prefix changed: got %x, want %x", gotPrefix, first.Raw)
+	}
+	_ = clientProxy.SetReadDeadline(time.Time{})
+	clientDrainDone := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(io.Discard, clientProxy)
+		close(clientDrainDone)
+	}()
+
+	// Query B is fully pipelined before the auxiliary process probe reports
+	// Query A complete. Query A's EndOfStream remains withheld on the same
+	// upstream connection.
+	var queryB proto.Buffer
+	(&proto.Query{
+		ID:   "query-b",
+		Body: "CREATE TABLE should_not_run (x UInt64) ENGINE = Memory",
+		Info: proto.ClientInfo{
+			ProtocolVersion: rev,
+			Major:           24,
+			Minor:           1,
+			Interface:       proto.InterfaceTCP,
+			Query:           proto.ClientQueryInitial,
+		},
+	}).EncodeAware(&queryB, rev)
+	clientLoopDone := make(chan error, 1)
+	go func() {
+		clientLoopDone <- r.clientToUpstream(context.Background())
+	}()
+	queryBWritten := make(chan error, 1)
+	go func() {
+		_, err := clientProxy.Write(queryB.Buf)
+		queryBWritten <- err
+	}()
+	select {
+	case err := <-queryBWritten:
+		if err != nil {
+			t.Fatalf("write pipelined Query B: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("proxy did not read pipelined Query B")
+	}
+
+	upstreamQuery := make(chan *chproto.Packet, 1)
+	go func() {
+		codec := chproto.NewCodec(upstreamProxy, chproto.DirFromClient)
+		codec.SetRevision(rev)
+		_ = upstreamProxy.SetReadDeadline(time.Now().Add(250 * time.Millisecond))
+		pkt, _ := codec.ReadPacket(uint64(chproto.ClientQueryCode))
+		upstreamQuery <- pkt
+	}()
+	close(releaseProbe)
+
+	var loopErr error
+	select {
+	case pkt := <-upstreamQuery:
+		if pkt != nil {
+			_ = sess.Close()
+			t.Fatalf("pipelined Query B reached the legacy opaque upstream")
+		}
+	case loopErr = <-clientLoopDone:
+	case <-time.After(time.Second):
+		_ = sess.Close()
+		t.Fatal("pipelined Query B was neither rejected nor forwarded")
+	}
+	if loopErr == nil {
+		select {
+		case loopErr = <-clientLoopDone:
+		case <-time.After(time.Second):
+			_ = sess.Close()
+			t.Fatal("client loop did not reject legacy opaque connection reuse")
+		}
+	}
+	if loopErr == nil || !strings.Contains(loopErr.Error(), "cannot be safely reused") {
+		_ = sess.Close()
+		t.Fatalf("client loop err=%v, want legacy opaque reuse rejection", loopErr)
+	}
+	select {
+	case pkt := <-upstreamQuery:
+		if pkt != nil {
+			_ = sess.Close()
+			t.Fatalf("pipelined Query B reached the upstream after rejection")
+		}
+	case <-time.After(time.Second):
+		_ = sess.Close()
+		t.Fatal("upstream read did not finish")
+	}
+
+	// Deliver Query A's real terminal packet only after its completion probe
+	// returned and Query B was rejected. The raw reader may forward it, but it
+	// must never attribute that success to Query B.
+	_ = upstreamProxy.SetReadDeadline(time.Time{})
+	if _, err := upstreamProxy.Write([]byte{byte(chproto.ServerEndOfStreamCode)}); err != nil {
+		_ = sess.Close()
+		t.Fatalf("write withheld Query A EndOfStream: %v", err)
+	}
+	hooks.mu.Lock()
+	queries, completes, successes := hooks.queries, hooks.completes, hooks.successes
+	hooks.mu.Unlock()
+	if queries != 0 {
+		t.Errorf("OnQuery calls=%d, want 0 for rejected Query B", queries)
+	}
+	if completes != 1 {
+		t.Errorf("OnQueryComplete calls=%d, want 1 for Query A cleanup", completes)
+	}
+	if successes != 0 {
+		t.Errorf("OnQuerySuccess calls=%d, want 0", successes)
+	}
+
+	_ = sess.Close()
+	select {
+	case err := <-opaqueDone:
+		if err != nil &&
+			!errors.Is(err, io.EOF) &&
+			!errors.Is(err, io.ErrClosedPipe) &&
+			!errors.Is(err, net.ErrClosed) {
+			t.Fatalf("relayOpaqueResult: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("opaque reader did not stop")
+	}
+	<-clientDrainDone
+}
+
+type singlePermitLimiter struct {
+	mu       sync.Mutex
+	held     bool
+	released chan struct{}
+}
+
+func (l *singlePermitLimiter) Acquire(
+	context.Context,
+	[]concurrencyplugin.Dimension,
+) (concurrencyplugin.Permit, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.held {
+		return concurrencyplugin.Permit{}, concurrencyplugin.ErrQuotaExceeded
+	}
+	l.held = true
+	return concurrencyplugin.Permit{ID: "aggregate-state-permit"}, nil
+}
+
+func (l *singlePermitLimiter) Release(context.Context, concurrencyplugin.Permit) {
+	l.mu.Lock()
+	l.held = false
+	l.mu.Unlock()
+	select {
+	case l.released <- struct{}{}:
+	default:
+	}
+}
+
+type aggregateLifecyclePlugin struct {
+	mu        sync.Mutex
+	completes int
+	successes int
+}
+
+func (p *aggregateLifecyclePlugin) OnQueryComplete(context.Context, chsession.Session) {
+	p.mu.Lock()
+	p.completes++
+	p.mu.Unlock()
+}
+
+func (p *aggregateLifecyclePlugin) OnQuerySuccess(context.Context, chsession.Session, string) {
+	p.mu.Lock()
+	p.successes++
+	p.mu.Unlock()
+}
+
+func TestRelay_IncompleteAggregateStateDoesNotReleaseConcurrencyPermit(t *testing.T) {
+	clientProxy, proxyClient := net.Pipe()
+	upstreamProxy, proxyUpstream := net.Pipe()
+	defer clientProxy.Close()
+	defer upstreamProxy.Close()
+
+	const rev = chproto.MaxSupportedRevision
+	sess := chsession.New(1, proxyClient)
+	up := chproto.NewCodec(proxyUpstream, chproto.DirToUpstream)
+	up.SetRevision(rev)
+	up.SetCompression(proto.CompressionDisabled)
+	up.EnableChunked(true, false)
+	if err := sess.BindUpstream(context.Background(), up); err != nil {
+		t.Fatalf("BindUpstream: %v", err)
+	}
+
+	limiter := &singlePermitLimiter{released: make(chan struct{}, 1)}
+	concurrency := &concurrencyplugin.Plugin{
+		Limiter: limiter,
+		Resolvers: []concurrencyplugin.DimensionResolver{
+			func(chsession.Session, *plugin.QueryContext) concurrencyplugin.Dimension {
+				return concurrencyplugin.Dimension{Name: "user", Value: "alice", Quota: 1}
+			},
+		},
+	}
+	lifecycle := &aggregateLifecyclePlugin{}
+	chain := &plugin.PluginChain{
+		QueryPlugins:         []plugin.QueryPlugin{concurrency},
+		QuerySuccessPlugins:  []plugin.QuerySuccessPlugin{lifecycle},
+		QueryCompletePlugins: []plugin.QueryCompletePlugin{concurrency, lifecycle},
+	}
+	qctx := &plugin.QueryContext{
+		Session: sess,
+		Query:   &chproto.Query{ID: "qid-incomplete-aggregate", Body: "SELECT sumState(number) FROM numbers(10)"},
+	}
+	if err := chain.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("first OnQuery: %v", err)
+	}
+
+	otherClient, otherProxy := net.Pipe()
+	defer otherClient.Close()
+	defer otherProxy.Close()
+	otherSess := chsession.New(2, otherProxy)
+	otherQctx := &plugin.QueryContext{
+		Session: otherSess,
+		Query:   &chproto.Query{ID: "qid-other", Body: "SELECT 1"},
+	}
+	if err := concurrency.OnQuery(context.Background(), otherQctx); !errors.Is(err, concurrencyplugin.ErrQuotaExceeded) {
+		t.Fatalf("second session before completion error=%v, want ErrQuotaExceeded", err)
+	}
+
+	r := &Relay{sess: sess, hooks: chain}
+	if !r.beginActiveQuery("qid-incomplete-aggregate") {
+		t.Fatal("beginActiveQuery unexpectedly reported an active query")
+	}
+	relayDone := make(chan error, 1)
+	go func() {
+		relayDone <- r.upstreamToClient(context.Background())
+	}()
+	clientDrainDone := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(io.Discard, clientProxy)
+		close(clientDrainDone)
+	}()
+
+	data := aggregateStateDataPacket(t, rev, proto.CompressionDisabled)
+	if len(data) < 8 {
+		t.Fatalf("aggregate-state packet is only %d bytes", len(data))
+	}
+	// Announce the full packet chunk, but provide only the first byte of the
+	// eight-byte aggregate state (0x05). The chunk end marker and remaining
+	// state bytes stay withheld.
+	partial := data[:len(data)-7]
+	go func() {
+		var header [4]byte
+		binary.LittleEndian.PutUint32(header[:], uint32(len(data)))
+		_, _ = upstreamProxy.Write(header[:])
+		_, _ = upstreamProxy.Write(partial)
+	}()
+
+	select {
+	case <-limiter.released:
+		t.Fatal("aggregate-state payload byte 0x05 released the concurrency permit early")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := concurrency.OnQuery(context.Background(), otherQctx); !errors.Is(err, concurrencyplugin.ErrQuotaExceeded) {
+		t.Fatalf("second session during incomplete aggregate state error=%v, want ErrQuotaExceeded", err)
+	}
+
+	lifecycle.mu.Lock()
+	if lifecycle.completes != 0 {
+		t.Errorf("OnQueryComplete fired %d times before the aggregate state completed, want 0", lifecycle.completes)
+	}
+	if lifecycle.successes != 0 {
+		t.Errorf("OnQuerySuccess fired %d times before the aggregate state completed, want 0", lifecycle.successes)
+	}
+	lifecycle.mu.Unlock()
+
+	_ = upstreamProxy.Close()
+	select {
+	case err := <-relayDone:
+		if err == nil {
+			t.Fatal("incomplete aggregate state unexpectedly ended without an error")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("upstreamToClient did not exit after cleanup")
+	}
+	select {
+	case <-limiter.released:
+	case <-time.After(time.Second):
+		t.Fatal("connection teardown did not release the concurrency permit")
+	}
+	_ = clientProxy.Close()
+	<-clientDrainDone
+}
+
+func aggregateStateDataPacket(
+	t *testing.T,
+	rev int,
+	compression proto.Compression,
+) []byte {
+	t.Helper()
+	var body proto.Buffer
+	(proto.BlockInfo{BucketNum: -1}).Encode(&body)
+	body.PutUVarInt(1)
+	body.PutUVarInt(1)
+	body.PutString("state")
+	body.PutString("AggregateFunction(sum, UInt64)")
+	if proto.FeatureCustomSerialization.In(rev) {
+		body.PutBool(false)
+	}
+	body.PutUInt64(5)
+
+	var data proto.Buffer
+	data.PutUVarInt(uint64(proto.ServerCodeData))
+	data.PutString("")
+	if compression == proto.CompressionEnabled {
+		compressor := chcompress.NewWriter(0, chcompress.LZ4)
+		if err := compressor.Compress(body.Buf); err != nil {
+			t.Fatalf("compress aggregate state: %v", err)
+		}
+		data.Buf = append(data.Buf, compressor.Data...)
+	} else {
+		data.Buf = append(data.Buf, body.Buf...)
+	}
+	return append([]byte(nil), data.Buf...)
+}
+
+func TestRelay_AggregateStateThenNextQueryStaysPacketFramed(t *testing.T) {
+	clientProxy, proxyClient := net.Pipe()
+	upstreamProxy, proxyUpstream := net.Pipe()
+	defer clientProxy.Close()
+	defer upstreamProxy.Close()
+
+	const rev = chproto.MaxSupportedRevision
+	sess := chsession.New(1, proxyClient)
+	up := chproto.NewCodec(proxyUpstream, chproto.DirToUpstream)
+	up.SetRevision(rev)
+	up.SetCompression(proto.CompressionEnabled)
+	up.EnableChunked(true, false)
+	if err := sess.BindUpstream(context.Background(), up); err != nil {
+		t.Fatalf("BindUpstream: %v", err)
+	}
+
+	hooks := &exceptionRecordingHooks{}
+	r := &Relay{sess: sess, hooks: hooks}
+	if !r.beginActiveQuery("qid-aggregate-state") {
+		t.Fatal("beginActiveQuery unexpectedly reported an active query")
+	}
+
+	firstData := aggregateStateDataPacket(t, rev, proto.CompressionEnabled)
+	first := append(append([]byte(nil), firstData...), byte(chproto.ServerEndOfStreamCode))
+
+	relayDone := make(chan error, 1)
+	go func() {
+		relayDone <- r.upstreamToClient(context.Background())
+	}()
+	go func() {
+		chunked := chproto.NewChunkedWriter(upstreamProxy, true)
+		_, _ = chunked.Write(firstData)
+		_, _ = chunked.Write([]byte{byte(chproto.ServerEndOfStreamCode)})
+	}()
+
+	gotFirst := make([]byte, len(first))
+	_ = clientProxy.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := io.ReadFull(clientProxy, gotFirst); err != nil {
+		t.Fatalf("read aggregate-state response: %v", err)
+	}
+	if !bytes.Equal(gotFirst, first) {
+		t.Fatalf("aggregate-state response changed:\ngot  %x\nwant %x", gotFirst, first)
+	}
+
+	if _, active := r.currentActiveQuery(); active {
+		t.Fatal("aggregate-state EndOfStream left the previous query active")
+	}
+
+	if !r.beginActiveQuery("qid-framed-after-aggregate") {
+		t.Fatal("beginActiveQuery after aggregate-state response reported an active query")
+	}
+	go func() {
+		chunked := chproto.NewChunkedWriter(upstreamProxy, true)
+		_, _ = chunked.Write([]byte{byte(chproto.ServerEndOfStreamCode)})
+		_ = upstreamProxy.Close()
+	}()
+
+	var terminal [1]byte
+	_ = clientProxy.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := io.ReadFull(clientProxy, terminal[:]); err != nil {
+		t.Fatalf("read framed EndOfStream after aggregate-state response: %v", err)
+	}
+	if terminal[0] != byte(chproto.ServerEndOfStreamCode) {
+		t.Fatalf("terminal byte=%d, want EndOfStream(%d)", terminal[0], chproto.ServerEndOfStreamCode)
+	}
+
+	select {
+	case err := <-relayDone:
+		if err != nil && !errors.Is(err, io.EOF) {
+			t.Fatalf("upstreamToClient: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("upstreamToClient did not finish")
+	}
+
+	hooks.mu.Lock()
+	defer hooks.mu.Unlock()
+	if hooks.querySuccesses != 2 {
+		t.Errorf("two framed query responses fired OnQuerySuccess %d times, want 2", hooks.querySuccesses)
+	}
+	if hooks.queryCompletes != 2 {
+		t.Errorf("two query lifecycles fired OnQueryComplete %d times, want 2", hooks.queryCompletes)
+	}
+}
+
+type blockingQuerySuccessHooks struct {
+	plugin.NoopHooks
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (h *blockingQuerySuccessHooks) OnQuerySuccess(context.Context, chsession.Session, string) {
+	close(h.entered)
+	<-h.release
+}
+
+func TestRelay_QuerySuccessRunsBeforeEndOfStreamIsExposed(t *testing.T) {
+	clientProxy, proxyClient := net.Pipe()
+	upstreamProxy, proxyUpstream := net.Pipe()
+	defer clientProxy.Close()
+	defer upstreamProxy.Close()
+
+	sess := chsession.New(1, proxyClient)
+	up := chproto.NewCodec(proxyUpstream, chproto.DirToUpstream)
+	up.SetRevision(54453)
+	if err := sess.BindUpstream(context.Background(), up); err != nil {
+		t.Fatalf("BindUpstream: %v", err)
+	}
+
+	hooks := &blockingQuerySuccessHooks{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	r := &Relay{sess: sess, hooks: hooks}
+	if !r.beginActiveQuery("qid-order") {
+		t.Fatal("beginActiveQuery unexpectedly reported an active query")
+	}
+
+	upstreamDone := make(chan struct{})
+	go func() {
+		_, _ = upstreamProxy.Write([]byte{byte(chproto.ServerEndOfStreamCode)})
+		_ = upstreamProxy.Close()
+		close(upstreamDone)
+	}()
+	relayDone := make(chan error, 1)
+	go func() {
+		relayDone <- r.upstreamToClient(context.Background())
+	}()
+
+	select {
+	case <-hooks.entered:
+	case <-time.After(time.Second):
+		t.Fatal("OnQuerySuccess did not run")
+	}
+
+	_ = clientProxy.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+	var got [1]byte
+	if _, err := clientProxy.Read(got[:]); err == nil {
+		t.Fatal("EndOfStream reached client before OnQuerySuccess returned")
+	} else if netErr, ok := err.(net.Error); !ok || !netErr.Timeout() {
+		t.Fatalf("client read before success release = %v, want timeout", err)
+	}
+	_ = clientProxy.SetReadDeadline(time.Time{})
+
+	close(hooks.release)
+	if _, err := io.ReadFull(clientProxy, got[:]); err != nil {
+		t.Fatalf("read EndOfStream after success release: %v", err)
+	}
+	if got[0] != byte(chproto.ServerEndOfStreamCode) {
+		t.Fatalf("client byte = %d, want EndOfStream", got[0])
+	}
+
+	select {
+	case err := <-relayDone:
+		if err != nil && !errors.Is(err, io.EOF) {
+			t.Fatalf("upstreamToClient: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("upstreamToClient did not finish")
+	}
+	<-upstreamDone
+}
+
+func TestRelay_UpstreamMalformedException_DoesNotFireQuerySuccess(t *testing.T) {
+	hooks, err := runFramedUpstreamBytes(t, []byte{byte(chproto.ServerExceptionCode)})
+	if err == nil || errors.Is(err, io.EOF) {
+		t.Fatalf("malformed Exception error = %v, want framing error", err)
+	}
+
+	hooks.mu.Lock()
+	defer hooks.mu.Unlock()
+	if hooks.querySuccesses != 0 {
+		t.Errorf("OnQuerySuccess fired %d times for malformed Exception, want 0", hooks.querySuccesses)
+	}
+	if hooks.queryCompletes != 1 {
+		t.Errorf("OnQueryComplete fired %d times, want 1", hooks.queryCompletes)
+	}
+	if len(hooks.exceptions) != 0 {
+		t.Errorf("OnException fired %d times for undecodable Exception, want 0", len(hooks.exceptions))
+	}
+}
+
+func runFramedUpstreamBytes(t *testing.T, raw []byte) (*exceptionRecordingHooks, error) {
+	t.Helper()
+	clientProxy, proxyClient := net.Pipe()
+	upstreamProxy, proxyUpstream := net.Pipe()
+	defer clientProxy.Close()
+	defer upstreamProxy.Close()
+
+	go func() {
+		sink := make([]byte, 64)
+		for {
+			if _, err := clientProxy.Read(sink); err != nil {
+				return
+			}
+		}
+	}()
+
+	sess := chsession.New(1, proxyClient)
+	up := chproto.NewCodec(proxyUpstream, chproto.DirToUpstream)
+	up.SetRevision(54453)
+	if err := sess.BindUpstream(context.Background(), up); err != nil {
+		t.Fatalf("BindUpstream: %v", err)
+	}
+
+	hooks := &exceptionRecordingHooks{}
+	r := &Relay{sess: sess, hooks: hooks}
+	if !r.beginActiveQuery("qid-outcome") {
+		t.Fatal("beginActiveQuery unexpectedly reported an active query")
+	}
+	go func() {
+		_, _ = upstreamProxy.Write(raw)
+		_ = upstreamProxy.Close()
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return hooks, r.upstreamToClient(ctx)
 }
 
 // rewritingExceptionHooks mutates exc.Message in OnException to mimic
@@ -447,9 +1361,16 @@ func TestRelay_UpstreamException_RewrittenMessageReachesClient(t *testing.T) {
 	if raw[0] != byte(chproto.ServerExceptionCode) {
 		t.Fatalf("client got first byte %d, want ServerExceptionCode (%d)", raw[0], chproto.ServerExceptionCode)
 	}
-	got := tryDecodeException(raw, rev)
-	if got == nil {
-		t.Fatalf("client bytes did not decode as Exception: %x", raw)
+	rawReader := bytes.NewBuffer(raw)
+	decoder := chproto.NewCodec(rawReader, chproto.DirToUpstream)
+	decoder.SetRevision(rev)
+	pkt, err := decoder.ReadPacket(uint64(chproto.ServerExceptionCode))
+	if err != nil {
+		t.Fatalf("decode client Exception: %v; raw=%x", err, raw)
+	}
+	got, ok := pkt.Decoded.(*chproto.Exception)
+	if !ok {
+		t.Fatalf("client bytes decoded as %T, want *Exception", pkt.Decoded)
 	}
 	if got.Message != hooks.rewriteTo {
 		t.Errorf("client Exception.Message=%q, want %q (the rewrite)", got.Message, hooks.rewriteTo)

@@ -2,6 +2,7 @@ package chproto
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"sync/atomic"
@@ -37,14 +38,25 @@ import (
 // need write-side buffering beyond what ch-go's *proto.Buffer provides.
 type Codec struct {
 	conn        io.ReadWriter
+	chunkedR    *ChunkedReader
+	chunkedW    *ChunkedWriter
 	br          *bufio.Reader
 	cap         *captureByteReader
 	r           *proto.Reader // permanent; reads via cap
 	w           io.Writer
 	rev         atomic.Int64 // negotiated protocol revision; 0 until SetRevision
 	helloRev    atomic.Int64 // ClientHello revision used by server to shape ServerHello
-	compression atomic.Int32 // proto.Compression value; 0=Disabled, 1=Enabled
-	dir         Direction
+	serverMajor atomic.Int64 // upstream server version, captured from ServerHello
+	serverMinor atomic.Int64
+	serverPatch atomic.Int64
+	// serverSendChunked/serverRecvChunked are the upstream capabilities read
+	// from its original ServerHello. Housegate advertises its own capabilities
+	// downstream, so the two addendum negotiations are intentionally
+	// independent.
+	serverSendChunked string
+	serverRecvChunked string
+	compression       atomic.Int32 // proto.Compression value; 0=Disabled, 1=Enabled
+	dir               Direction
 }
 
 const defaultBufSize = 131072 // 128KB, matches legacy proxy.go
@@ -52,21 +64,70 @@ const defaultBufSize = 131072 // 128KB, matches legacy proxy.go
 // NewCodec constructs a Codec wrapping conn. direction controls the code-set
 // ReadPacket expects.
 func NewCodec(conn io.ReadWriter, direction Direction) *Codec {
-	br := bufio.NewReaderSize(conn, defaultBufSize)
+	chunkedR := NewChunkedReader(conn, false)
+	chunkedW := NewChunkedWriter(conn, false)
+	br := bufio.NewReaderSize(chunkedR, defaultBufSize)
 	cap := newCaptureByteReader(br)
 	return &Codec{
-		conn: conn,
-		br:   br,
-		cap:  cap,
-		r:    proto.NewReader(cap),
-		w:    conn,
-		dir:  direction,
+		conn:     conn,
+		chunkedR: chunkedR,
+		chunkedW: chunkedW,
+		br:       br,
+		cap:      cap,
+		r:        proto.NewReader(cap),
+		w:        chunkedW,
+		dir:      direction,
 	}
 }
 
 // Conn returns the underlying io.ReadWriter (for Splice targets and
 // Close from the session).
 func (c *Codec) Conn() io.ReadWriter { return c.conn }
+
+// EnableChunked switches either post-addendum direction to ClickHouse's
+// chunked transport. recv applies to bytes read by this codec; send applies
+// to bytes written by it. The transition is one-way for a connection.
+func (c *Codec) EnableChunked(recv, send bool) {
+	if recv {
+		c.chunkedR.Enable()
+	}
+	if send {
+		c.chunkedW.Enable()
+	}
+}
+
+// ChunkedSendEnabled reports whether WriteRawPacket adds chunk framing.
+func (c *Codec) ChunkedSendEnabled() bool {
+	return c.chunkedW.Enabled()
+}
+
+// WriteRawPacket writes one complete, unframed native-protocol packet. When
+// chunked transport was negotiated, the codec adds one logical chunk around
+// the packet; otherwise it writes the bytes unchanged.
+func (c *Codec) WriteRawPacket(raw []byte) error {
+	if len(raw) == 0 {
+		return fmt.Errorf("%w: empty raw packet", ErrMalformed)
+	}
+	n, err := c.w.Write(raw)
+	if err != nil {
+		return err
+	}
+	if n != len(raw) {
+		return io.ErrShortWrite
+	}
+	return nil
+}
+
+// ReadRaw reads the remaining unframed byte stream directly. It is reserved
+// for the legacy non-chunked fallback after a Native result type proves
+// undecodable. A chunked codec always has authoritative packet boundaries and
+// must continue through ReadPacket instead.
+func (c *Codec) ReadRaw(p []byte) (int, error) {
+	if c.chunkedR.Enabled() {
+		return 0, fmt.Errorf("%w: raw read on chunked transport", ErrMalformed)
+	}
+	return c.br.Read(p)
+}
 
 // SetRevision records the negotiated protocol revision. Called by the caller
 // after handshake completes; affects decoding of packets whose layout varies
@@ -103,19 +164,19 @@ func (c *Codec) Compression() proto.Compression { return proto.Compression(c.com
 //
 // ServerHello is special: when an upstream-direction codec decodes a
 // ServerHello successfully, Raw is ALSO populated with the full on-wire
-// bytes (including trailing fields ch-go's ServerHello struct does not
-// know about, such as proto_send_chunked_srv, password_complexity_rules,
-// nonce, etc.). Callers that need to echo the ServerHello to the client
-// must write Raw directly instead of calling WriteServerHello, otherwise
-// newer ClickHouse servers' trailing fields will be silently dropped and
-// the client will hang waiting for them during addendum negotiation.
+// bytes (including the revision-54470 fields ch-go's ServerHello struct does
+// not know about: password_complexity_rules, nonce, and chunked capabilities).
+// Callers that need to echo the ServerHello to the client must write Raw
+// directly instead of calling WriteServerHello, otherwise those fields would
+// be silently dropped.
 //
 // Known sentinels:
 //
 //	io.EOF           — peer closed cleanly
 //	ErrMalformed     — protocol error; caller must close
-//	ErrUnknownPacket — type not in known table; Packet still carries Raw bytes
-//	                   so caller can Splice through for forward-compat
+//	ErrUnknownPacket — type not in the known table. Packet carries the bytes
+//	                   consumed before the framing gap, but the caller must
+//	                   close rather than splice an incomplete packet.
 //	ErrDecode        — decode of a requested type failed; per spec D8, caller
 //	                   falls back to Splice(Raw) — this function populates
 //	                   both Raw and the Decode error.
@@ -131,6 +192,14 @@ func (c *Codec) ReadPacketWithDataLimit(maxDataBytes uint64, decodeTypes ...uint
 }
 
 func (c *Codec) readPacket(maxDataBytes uint64, enforceDataLimit bool, decodeTypes ...uint64) (*Packet, error) {
+	// ClickHouse's server calls finishChunk after each emitted packet. Once the
+	// upstream addendum selects chunking, that transport boundary is stronger
+	// than any value decoder: even opaque AggregateFunction states can be
+	// relayed without interpreting their implementation-specific bytes.
+	if c.dir == DirToUpstream && c.chunkedR.Enabled() {
+		return c.readChunkedServerPacket(decodeTypes...)
+	}
+
 	// The 1-byte-at-a-time capture reader guarantees proto.Reader's inner
 	// bufio is empty at a packet boundary, so it's safe to drop the capture
 	// buffer from the previous packet here.
@@ -200,59 +269,67 @@ func (c *Codec) readPacket(maxDataBytes uint64, enforceDataLimit bool, decodeTyp
 	}
 
 	// ServerHello pass-through: ch-go's ServerHello struct only covers fields
-	// up to Patch (FeatureVersionPatch). Newer ClickHouse revisions append
-	// proto_send_chunked_srv, proto_recv_chunked_srv, parallel_replicas_version,
-	// password_complexity_rules, nonce, server_settings, and
-	// query_plan_serialization_version. DecodeAware leaves those bytes in the
-	// underlying bufio; re-encoding via EncodeAware would drop them.
+	// up to Patch (FeatureVersionPatch). decodeServerHello explicitly consumes
+	// every revision-gated field through Housegate's 54470 cap so Raw is a
+	// complete packet even when TCP fragments its tail. Re-encoding through
+	// ch-go would drop password rules, nonce, and chunked capabilities.
 	//
-	// Drain any remaining buffered bytes in c.br into the capture so the caller
-	// can forward the raw ServerHello byte-for-byte. This is safe because the
-	// client blocks after sending ClientHello until it receives the full
-	// ServerHello; no subsequent upstream packets are pipelined behind it.
-	//
-	// Additionally, rewrite the server's chunked-protocol advertisements to
-	// "notchunked" before handing Raw back. The codec does not yet wrap
-	// reads/writes in ChunkedReader / ChunkedWriter, so honoring the server's
-	// chunked_optional would break the packet loop (the 4-byte chunked frame
-	// header gets parsed as a varint packet type). See
-	// rewriteServerHelloChunkedToNotChunked for the detailed rationale and the
-	// TODO to remove this once chunked support lands.
+	// Additionally, replace the server's chunked-protocol advertisements with
+	// Housegate's own capability. The upstream and downstream legs negotiate
+	// independently: both codecs can terminate chunk framing, while Housegate
+	// advertises chunked responses downstream only when the upstream can also
+	// provide authoritative packet chunks.
 	if c.dir == DirToUpstream && typeVar == uint64(proto.ServerCodeHello) {
-		c.drainBufferedIntoCapture()
 		raw := c.cap.snapshot()
-		rewritten, rerr := rewriteServerHelloChunkedToNotChunked(raw, c.serverHelloRevisionHint())
+		rewritten, serverSend, serverRecv, rerr := rewriteServerHelloForProxy(raw, c.serverHelloRevisionHint())
 		if rerr != nil {
 			return &Packet{Type: typeVar, RawLen: len(raw), Raw: raw, Decoded: decoded},
 				fmt.Errorf("%w: server hello chunked-rewrite: %v", ErrDecode, rerr)
 		}
+		c.serverSendChunked = serverSend
+		c.serverRecvChunked = serverRecv
 		return &Packet{Type: typeVar, RawLen: len(rewritten), Raw: rewritten, Decoded: decoded}, nil
 	}
 	raw := c.cap.snapshot()
 	return &Packet{Type: typeVar, RawLen: len(raw), Decoded: decoded}, nil
 }
 
-// drainBufferedIntoCapture appends any currently-buffered bytes in c.br to
-// the capture. Used after ServerHello decode to capture forward-compatible
-// trailing fields that ch-go's ServerHello struct does not know about.
-//
-// Safety: only invoke this in handshake contexts where the peer is known to
-// be blocked waiting for us — never on the client side (the client may have
-// already pipelined the next packet) nor on the upstream side after the
-// handshake has completed (the upstream may be mid-stream on a result set).
-func (c *Codec) drainBufferedIntoCapture() {
-	for {
-		n := c.br.Buffered()
-		if n <= 0 {
-			return
-		}
-		buf := make([]byte, n)
-		read, _ := c.br.Read(buf)
-		if read <= 0 {
-			return
-		}
-		c.cap.appendRaw(buf[:read])
+// readChunkedServerPacket consumes one complete logical chunk. ClickHouse's
+// TCPHandler terminates every server packet with finishChunk(), including
+// Data, Totals, Extremes, Exception, Progress, and EndOfStream. The returned
+// Raw bytes exclude chunk headers and can therefore be reframed independently
+// for the downstream client.
+func (c *Codec) readChunkedServerPacket(decodeTypes ...uint64) (*Packet, error) {
+	raw, err := c.chunkedR.ReadChunk()
+	if err != nil {
+		return nil, err
 	}
+	typeVar, n, ok := decodeUVarInt(raw)
+	if !ok {
+		return &Packet{RawLen: len(raw), Raw: raw}, fmt.Errorf("%w: chunked packet type", ErrMalformed)
+	}
+	pkt := &Packet{Type: typeVar, RawLen: len(raw), Raw: raw}
+
+	wantDecode := false
+	for _, typ := range decodeTypes {
+		if typ == typeVar {
+			wantDecode = true
+			break
+		}
+	}
+	if !wantDecode {
+		return pkt, nil
+	}
+	if typeVar != uint64(proto.ServerCodeException) {
+		return pkt, fmt.Errorf("%w: chunked decode type=%d", ErrUnknownPacket, typeVar)
+	}
+
+	exc := &proto.Exception{}
+	if err := exc.DecodeAware(proto.NewReader(bytes.NewReader(raw[n:])), c.Revision()); err != nil {
+		return pkt, fmt.Errorf("%w: chunked exception: %v", ErrDecode, err)
+	}
+	pkt.Decoded = exc
+	return pkt, nil
 }
 
 // skipPacketBody consumes bytes belonging to a packet whose type is not in
@@ -316,17 +393,23 @@ func (c *Codec) skipServerPacketBody(typeVar uint64) error {
 	rev := c.Revision()
 	switch typeVar {
 	case uint64(proto.ServerCodePong),
-		uint64(proto.ServerCodeEndOfStream):
+		uint64(proto.ServerCodeEndOfStream),
+		uint64(ServerReadTaskRequestCode):
 		return nil
 
-	// Block-formatted packets: all use the same wire layout as a Data block
-	// (block_name string + optional compressed frame(s) / BlockInfo+columns).
-	// Totals / Extremes / Log / ProfileEvents all follow this shape.
+	// Data / Totals / Extremes always follow the query's compression mode.
 	case uint64(proto.ServerCodeData),
 		uint64(proto.ServerCodeTotals),
-		uint64(proto.ServerCodeExtremes),
-		uint64(proto.ServerCodeLog),
-		uint64(proto.ServerProfileEvents): // 14
+		uint64(proto.ServerCodeExtremes):
+		return c.walkDataBlock()
+
+	// Log / ProfileEvents use the same Native block body, but older revisions
+	// send it uncompressed even when the query's Data packets are compressed.
+	case uint64(proto.ServerCodeLog),
+		uint64(ServerProfileEventsCode):
+		if rev < revisionMinCompressedLogsProfileEventsColumns {
+			return c.walkDataBlockWithCompression(proto.CompressionDisabled)
+		}
 		return c.walkDataBlock()
 
 	case uint64(proto.ServerCodeException):
@@ -337,27 +420,148 @@ func (c *Codec) skipServerPacketBody(typeVar uint64) error {
 		return nil
 
 	case uint64(proto.ServerCodeProgress):
-		var p proto.Progress
-		if err := p.DecodeAware(c.r, rev); err != nil {
-			return fmt.Errorf("progress decode: %w", err)
-		}
-		return nil
+		return c.skipServerProgress(rev)
 
 	case uint64(proto.ServerCodeProfile):
-		var p proto.Profile
-		if err := p.DecodeAware(c.r, rev); err != nil {
-			return fmt.Errorf("profile decode: %w", err)
-		}
-		return nil
+		return c.skipServerProfile(rev)
+
+	case uint64(proto.ServerCodeTablesStatus):
+		return c.skipTablesStatusResponse(rev)
 
 	case uint64(proto.ServerCodeTableColumns):
+		// Since revision 54481, TableColumns travels through the same
+		// maybe-compressed stream as Data/Log/ProfileEvents.
+		if rev >= revisionMinCompressedLogsProfileEventsColumns &&
+			c.Compression() == proto.CompressionEnabled {
+			return c.walkCompressedTableColumns()
+		}
 		var t proto.TableColumns
 		if err := t.DecodeAware(c.r, rev); err != nil {
 			return fmt.Errorf("table_columns decode: %w", err)
 		}
 		return nil
+
+	case uint64(ServerPartUUIDsCode):
+		return c.skipPartUUIDs()
+
+	case uint64(ServerTimezoneUpdateCode),
+		uint64(ServerSSHChallengeCode):
+		if _, err := c.r.Str(); err != nil {
+			return fmt.Errorf("server string packet type=%d: %w", typeVar, err)
+		}
+		return nil
 	}
 	return fmt.Errorf("%w: skip body for server type=%d not yet supported", ErrUnknownPacket, typeVar)
+}
+
+// Protocol revision gates used by current ClickHouse server packet layouts.
+// ch-go v0.73 does not yet model these trailing fields, so the framing path
+// consumes them directly instead of relying on its shorter decoders.
+const (
+	revisionMinClientWriteInfo                    = 54420
+	revisionMinTotalBytesInProgress               = 54463
+	revisionMinServerQueryTimeInProgress          = 54460
+	revisionMinTableReadOnlyCheck                 = 54467
+	revisionMinRowsBeforeAggregation              = 54469
+	revisionMinCompressedLogsProfileEventsColumns = 54481
+)
+
+func (c *Codec) skipServerProgress(rev int) error {
+	fields := 3 // read_rows, read_bytes, total_rows_to_read
+	if rev >= revisionMinTotalBytesInProgress {
+		fields++ // total_bytes_to_read
+	}
+	if rev >= revisionMinClientWriteInfo {
+		fields += 2 // written_rows, written_bytes
+	}
+	if rev >= revisionMinServerQueryTimeInProgress {
+		fields++ // elapsed_ns
+	}
+	for i := 0; i < fields; i++ {
+		if _, err := c.r.UVarInt(); err != nil {
+			return fmt.Errorf("progress field %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
+func (c *Codec) skipServerProfile(rev int) error {
+	for i := 0; i < 3; i++ { // rows, blocks, bytes
+		if _, err := c.r.UVarInt(); err != nil {
+			return fmt.Errorf("profile counter %d: %w", i, err)
+		}
+	}
+	if _, err := c.r.Bool(); err != nil { // applied_limit
+		return fmt.Errorf("profile applied_limit: %w", err)
+	}
+	if _, err := c.r.UVarInt(); err != nil { // rows_before_limit
+		return fmt.Errorf("profile rows_before_limit: %w", err)
+	}
+	if _, err := c.r.Bool(); err != nil { // obsolete calculated_rows_before_limit
+		return fmt.Errorf("profile obsolete flag: %w", err)
+	}
+	if rev >= revisionMinRowsBeforeAggregation {
+		if _, err := c.r.Bool(); err != nil {
+			return fmt.Errorf("profile applied_aggregation: %w", err)
+		}
+		if _, err := c.r.UVarInt(); err != nil {
+			return fmt.Errorf("profile rows_before_aggregation: %w", err)
+		}
+	}
+	return nil
+}
+
+// skipTablesStatusResponse consumes the response body:
+//
+//	varuint count
+//	for each:
+//	  string database, string table, bool replicated
+//	  if replicated: varuint absolute_delay
+//	  if replicated && revision >= 54467: varuint readonly
+func (c *Codec) skipTablesStatusResponse(rev int) error {
+	n, err := c.r.UVarInt()
+	if err != nil {
+		return fmt.Errorf("tables status response count: %w", err)
+	}
+	for i := uint64(0); i < n; i++ {
+		if _, err := c.r.Str(); err != nil {
+			return fmt.Errorf("tables status response[%d] database: %w", i, err)
+		}
+		if _, err := c.r.Str(); err != nil {
+			return fmt.Errorf("tables status response[%d] table: %w", i, err)
+		}
+		replicated, err := c.r.Bool()
+		if err != nil {
+			return fmt.Errorf("tables status response[%d] replicated: %w", i, err)
+		}
+		if !replicated {
+			continue
+		}
+		if _, err := c.r.UVarInt(); err != nil {
+			return fmt.Errorf("tables status response[%d] delay: %w", i, err)
+		}
+		if rev >= revisionMinTableReadOnlyCheck {
+			if _, err := c.r.UVarInt(); err != nil {
+				return fmt.Errorf("tables status response[%d] readonly: %w", i, err)
+			}
+		}
+	}
+	return nil
+}
+
+func (c *Codec) skipPartUUIDs() error {
+	n, err := c.r.UVarInt()
+	if err != nil {
+		return fmt.Errorf("part UUID count: %w", err)
+	}
+	maxInt := int(^uint(0) >> 1)
+	if n > uint64(maxInt/16) {
+		return fmt.Errorf("part UUID count %d overflows packet size", n)
+	}
+	if _, err := c.readFullRaw(int(n) * 16); err != nil {
+		return fmt.Errorf("part UUID payload: %w", err)
+	}
+	return nil
 }
 
 // Splice forwards a Packet read by ReadPacket to dst, byte-for-byte.
@@ -445,25 +649,6 @@ func (c *Codec) readFullRaw(n int) ([]byte, error) {
 	}
 	c.cap.appendRaw(buf)
 	return buf, nil
-}
-
-// ReadRaw reads bytes directly from the underlying buffered reader without
-// going through the capture layer or proto.Reader. Used by callers that
-// splice bytes straight through (the upstream→client path in the relay)
-// and deliberately do not want packet-level parsing — which lets us
-// transparently forward any packet type, present or future, without a
-// hand-rolled decoder per type.
-//
-// The returned byte count can be zero even without an error (standard
-// bufio.Reader semantics on short reads); callers should treat that as
-// "try again".
-//
-// Do not mix ReadRaw with ReadPacket on the same codec: the capture layer
-// and proto.Reader state would disagree with the underlying bufio. The
-// relay uses ReadPacket on the upstream codec only during handshake, and
-// ReadRaw exclusively after.
-func (c *Codec) ReadRaw(p []byte) (int, error) {
-	return c.br.Read(p)
 }
 
 // captureByteReader wraps a bufio.Reader with a read discipline that returns
