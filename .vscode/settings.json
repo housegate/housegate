@@ -1,0 +1,47 @@
+{
+    // https://github.com/bazel-contrib/rules_go/blob/master/docs/editors.md
+    // rules_go 0.62 qualifies the downloaded SDK repository by host platform.
+    "go.goroot": "${workspaceFolder}/bazel-${workspaceFolderBasename}/external/rules_go++go_sdk+main___download_0_darwin_arm64/",
+    "go.toolsEnvVars": {
+        "GOPACKAGESDRIVER": "${workspaceFolder}/scripts/tools/gopackagesdriver.sh"
+    },
+    "go.useLanguageServer": true,
+    "go.enableCodeLens": {
+        "runtest": false
+    },
+    "gopls": {
+        "build.directoryFilters": [
+            "-node_modules",
+            "-output",
+            "-bazel-bin",
+            "-bazel-out",
+            "-bazel-testlogs",
+            "-bazel-housegate",
+        ],
+        // "formatting.gofumpt": true,
+        // "formatting.local": "github.com/housegate/housegate",
+        "ui.semanticTokens": true,
+        "ui.completion.usePlaceholders": true,
+        "ui.diagnostic.analyses": {
+            "nilness": true,
+            "shadow": true,
+            "unusedparams": true,
+            "unusedwrite": true
+        },
+        "build.workspaceFiles": [
+            "**/BUILD",
+            "**/WORKSPACE",
+            "**/*.{bzl,bazel}",
+        ],
+        "ui.codelenses": {
+            "gc_details": false,
+            "regenerate_cgo": false,
+            "generate": false,
+            "test": false,
+            "tidy": false,
+            "upgrade_dependency": false,
+            "vendor": false
+        },
+    },
+    "makefile.configureOnOpen": false,
+}

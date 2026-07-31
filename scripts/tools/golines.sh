@@ -1,23 +1,25 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-set -e
+set -euo pipefail
 
-export GOROOT=$(bazel run @go_sdk//:bin/go env GOROOT)
-export PATH=$GOROOT/bin:$PATH
-export GOPATH=$(go env GOPATH)
+GOROOT="$(bazel run -- @rules_go//go env GOROOT)"
+export GOROOT
+GOPATH="$("$GOROOT/bin/go" env GOPATH)"
+export GOPATH
+export PATH="$GOROOT/bin:$GOPATH/bin:$PATH"
 
-if ! command -v golines &> /dev/null; then
+if [ ! -x "$GOPATH/bin/golines" ]; then
   echo "installing golines"
-  go install github.com/segmentio/golines@latest
+  "$GOROOT/bin/go" install github.com/segmentio/golines@latest
 fi
 
-if ! command -v goimports &> /dev/null; then
+if [ ! -x "$GOPATH/bin/goimports" ]; then
   echo "installing goimports"
-  go install golang.org/x/tools/cmd/goimports@latest
+  "$GOROOT/bin/go" install golang.org/x/tools/cmd/goimports@latest
 fi
 
-DEFAULT_ARGS="-m 120 --shorten-comments"
+DEFAULT_ARGS=(-m 120 --shorten-comments)
 
-echo "$GOPATH/bin/golines $DEFAULT_ARGS $*"
+echo "$GOPATH/bin/golines ${DEFAULT_ARGS[*]} $*"
 
-$GOPATH/bin/golines $DEFAULT_ARGS "$@"
+"$GOPATH/bin/golines" "${DEFAULT_ARGS[@]}" "$@"
