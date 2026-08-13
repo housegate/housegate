@@ -163,8 +163,8 @@ github.com/holiman/bloomfilter/v2 v2.0.3 h1:73e0e/V0tCydx14a0SCYS/EWCxgwLZ18CZcZ
 github.com/holiman/bloomfilter/v2 v2.0.3/go.mod h1:zpoh+gs7qcpqrHr3dB55AMiJwo0iURXE7ZOP9L9hSkA=
 github.com/holiman/uint256 v1.3.2 h1:a9EgMPSC1AAaj1SZL5zIQD3WbwTuHrMGOerLjGmM/TA=
 github.com/holiman/uint256 v1.3.2/go.mod h1:EOMSn4q6Nyt9P6efbI3bueV4e1b3dGlUCXeiRV4ng7E=
-github.com/housegate/rewriter-go v0.5.0 h1:WYLTZ//gvsJQHfzFI6LIIItAwCQHngu7Fst6vMdEuW8=
-github.com/housegate/rewriter-go v0.5.0/go.mod h1:0t8X31hw1kliVRjZ66uuB6ABAU09Gn03Fp8xLK+M24Y=
+github.com/housegate/rewriter-go v0.6.0 h1:Pl+tYx6DCeNCqz9xfh3uk6qfoSbz1rJ6Hw3YqPVOK1A=
+github.com/housegate/rewriter-go v0.6.0/go.mod h1:AeGg1zEIWh+cNapEewCjALP0lsAJ9URdZZ2IOAIGlJE=
 github.com/housegate/rewriter-proto v0.1.0 h1:Ga+qyReOUjA9P+Qyd6Cd+QwaaRpX07I1jKtLq8aAVIA=
 github.com/housegate/rewriter-proto v0.1.0/go.mod h1:37lVQ0Qz3nK5vDZ6jspyIAvCR0dOFLHKsGv6d03Ifxk=
 github.com/huin/goupnp v1.3.0 h1:UvLUlWDNpoUdYzb2TCn+MuTWtcjXKSza2n6CBdQ0xXc=
@@ -320,8 +320,8 @@ github.com/tklauser/go-sysconf v0.4.0 h1:7H0uAN+7RkwWRaxhYXDLqa5V3LPrJeV8wmD9dRU
 github.com/tklauser/go-sysconf v0.4.0/go.mod h1:8mTNWyog7H+MpKijp4VmKJAd2bbYQ2zuUwkYRbUArPI=
 github.com/tklauser/numcpus v0.12.0 h1:NR85qdvHA9pFse3x3weVZ0r0ST8R6l5RHbZrlRaqob4=
 github.com/tklauser/numcpus v0.12.0/go.mod h1:ABHeXzJnr/qqwguhClkZKT1/8VABcYrsyUiUGobwWJg=
-github.com/tobilg/polyglot/packages/go v0.6.2 h1:vN3sVu0L1GxeCVsQD7a6qh2Jp5yH+O4aOrBnvIDwu48=
-github.com/tobilg/polyglot/packages/go v0.6.2/go.mod h1:S3rORX9g0cs3n5hLXR0ah6vqRMS4G71LXDzuNju2rH0=
+github.com/tobilg/polyglot/packages/go v0.8.1 h1:ReHUVuMGoLj9Ouzk5qd35LZ14tYVyzWKvTL7flklTME=
+github.com/tobilg/polyglot/packages/go v0.8.1/go.mod h1:S3rORX9g0cs3n5hLXR0ah6vqRMS4G71LXDzuNju2rH0=
 github.com/twitchyliquid64/golang-asm v0.15.1 h1:SU5vSMR7hnwNxj24w34ZyCi/FmDZTkS4MhqMhdFk5YI=
 github.com/twitchyliquid64/golang-asm v0.15.1/go.mod h1:a1lVb/DtPvCB8fslRZhAngC2+aY1QWCk3Cedj/Gdt08=
 github.com/urfave/cli/v2 v2.27.5 h1:WoHEJLdsXr6dDWoJgMq/CboDmyY/8HMMH1fTECbih+w=
