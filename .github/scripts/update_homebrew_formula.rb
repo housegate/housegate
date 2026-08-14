@@ -21,8 +21,18 @@ module HomebrewFormulaUpdater
     version = tag.delete_prefix("v")
     body = File.read(path)
     original = body.dup
-    old_version = body[/^  version "(\d+\.\d+\.\d+)"$/, 1]
-    raise ArgumentError, "version stanza not found" unless old_version
+    release_versions = body.scan(
+      %r{releases/download/v(\d+\.\d+\.\d+)/housegate-v\1-(?:darwin-arm64|linux-amd64)},
+    ).flatten
+    unless release_versions.length == 2 && release_versions.uniq.length == 1
+      raise ArgumentError, "expected one shared version across two release URLs"
+    end
+
+    old_version = release_versions.first
+    explicit_version = body[/^  version "([^"]+)"$/, 1]
+    if explicit_version && explicit_version != old_version
+      raise ArgumentError, "version stanza #{explicit_version} does not match release URLs #{old_version}"
+    end
     if Gem::Version.new(version) < Gem::Version.new(old_version)
       raise ArgumentError, "refusing downgrade #{old_version} -> #{version}"
     end
@@ -41,7 +51,7 @@ module HomebrewFormulaUpdater
       raise ArgumentError, "expected one #{name}, found #{count}" unless count == 1
     end
 
-    body.sub!(/^  version "#{Regexp.escape(old_version)}"$/, %(  version "#{version}"))
+    body.sub!(/^  version "#{Regexp.escape(old_version)}"\n/, "") if explicit_version
     body.gsub!(old_reference, "v#{version}")
 
     checksums.each do |platform, checksum|
