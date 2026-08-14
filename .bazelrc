@@ -31,7 +31,7 @@ common --per_file_copt=external/.*grpc.*@--GRPC_WAS_NOT_SUPPOSED_TO_BE_BUILT
 common --host_per_file_copt=external/.*grpc.*@--GRPC_WAS_NOT_SUPPOSED_TO_BE_BUILT
 
 build --java_runtime_version=remotejdk_11 --tool_java_runtime_version=remotejdk_11
-build --disk_cache=~/.cache/bazel-disk-housegate
+build --disk_cache=~/.cache/bazel-disk
 build --experimental_disk_cache_gc_max_size=50G
 build --action_env=PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 build --nobuild_tests_only
