@@ -38,6 +38,7 @@ class UpdateHomebrewFormulaTest < Minitest::Test
       end
     end
   RUBY
+  FORMULA_WITHOUT_VERSION = FORMULA.sub(/^  version ".*"\n/, "")
 
   def test_updates_every_versioned_reference_and_platform_checksum
     with_formula do |path|
@@ -49,7 +50,7 @@ class UpdateHomebrewFormulaTest < Minitest::Test
       )
 
       body = File.read(path)
-      assert_includes body, 'version "0.6.0"'
+      refute_match(/^  version /, body)
       assert_equal 7, body.scan("v0.6.0").length
       refute_includes body, "v0.3.0"
       assert_match(/darwin-arm64"\n    sha256 "#{"c" * 64}"/, body)
@@ -57,8 +58,37 @@ class UpdateHomebrewFormulaTest < Minitest::Test
     end
   end
 
-  def test_rejects_downgrades_without_changing_the_formula
+  def test_updates_formula_without_explicit_version
+    with_formula(FORMULA_WITHOUT_VERSION) do |path|
+      HomebrewFormulaUpdater.update(
+        path: path,
+        tag: "v0.6.0",
+        darwin_sha: "c" * 64,
+        linux_sha: "d" * 64,
+      )
+
+      body = File.read(path)
+      refute_match(/^  version /, body)
+      assert_equal 7, body.scan("v0.6.0").length
+      refute_includes body, "v0.3.0"
+    end
+  end
+
+  def test_removes_redundant_explicit_version
     with_formula do |path|
+      HomebrewFormulaUpdater.update(
+        path: path,
+        tag: "v0.6.0",
+        darwin_sha: "c" * 64,
+        linux_sha: "d" * 64,
+      )
+
+      refute_match(/^  version /, File.read(path))
+    end
+  end
+
+  def test_rejects_downgrades_without_changing_the_formula
+    with_formula(FORMULA_WITHOUT_VERSION) do |path|
       error = assert_raises(ArgumentError) do
         HomebrewFormulaUpdater.update(
           path: path,
@@ -69,7 +99,7 @@ class UpdateHomebrewFormulaTest < Minitest::Test
       end
 
       assert_match "refusing downgrade 0.3.0 -> 0.2.0", error.message
-      assert_equal FORMULA, File.read(path)
+      assert_equal FORMULA_WITHOUT_VERSION, File.read(path)
     end
   end
 
@@ -162,7 +192,7 @@ class UpdateHomebrewFormulaTest < Minitest::Test
       assert status.success?, stderr
       assert_equal "updated #{path} to v0.6.0\n", stdout
       assert_empty stderr
-      assert_includes File.read(path), 'version "0.6.0"'
+      refute_match(/^  version /, File.read(path))
     end
   end
 
