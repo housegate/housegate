@@ -1045,7 +1045,23 @@ func dialRaw(ctx context.Context, addr string, timeout time.Duration) (*chproto.
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", addr, err)
 	}
-	return chproto.NewCodec(conn, chproto.DirToUpstream), nil
+	return chproto.NewCodec(&configuredAddressConn{
+		Conn:            conn,
+		upstreamAddress: addr,
+	}, chproto.DirToUpstream), nil
+}
+
+// configuredAddressConn preserves the configured endpoint across DNS
+// resolution. Post-commit observers need this stable identity to reconnect to
+// the same ClickHouse replica that executed the statement; RemoteAddr alone
+// would expose only the resolved socket address.
+type configuredAddressConn struct {
+	net.Conn
+	upstreamAddress string
+}
+
+func (c *configuredAddressConn) UpstreamAddress() string {
+	return c.upstreamAddress
 }
 
 func pickRandomBoundProxy(topo registry.Topology, selfPort int) (string, error) {

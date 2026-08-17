@@ -29,6 +29,14 @@ func (c *PooledConn) Replica() ReplicaConfig {
 	return c.replica
 }
 
+// UpstreamAddress returns the configured replica endpoint rather than the
+// socket's resolved remote address. Consumers that need to reconnect to the
+// exact replica (for example a post-DDL schema reader) must not lose this
+// identity to DNS or service-address resolution.
+func (c *PooledConn) UpstreamAddress() string {
+	return c.replica.Addr()
+}
+
 // Close closes the underlying TCP connection.
 // If the connection is currently in use (checked out), it also decrements
 // the pool's active count. Safe to call multiple times.

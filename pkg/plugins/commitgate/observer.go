@@ -162,6 +162,19 @@ type Event struct {
 	// bounded by the Query — do not retain.
 	AccessedTables []sqlmeta.AccessedTable
 
+	// TableRewrites maps each original qualified or bare table name to the
+	// exact post-rewrite qualified name sent to ClickHouse. It is a defensive
+	// copy of QueryContext.TableRewrites so the success callback can safely
+	// consume it after the query pipeline returns. Observers MUST NOT mutate
+	// the map.
+	TableRewrites map[string]string
+
+	// UpstreamAddress is the configured ClickHouse endpoint that executed the
+	// statement. For a shard-backed connection this preserves the selected
+	// replica address instead of the socket's resolved address. Empty means
+	// the session had no address-bearing upstream connection.
+	UpstreamAddress string
+
 	// QueryID is the upstream-bound ClickHouse query id, useful
 	// for log correlation.
 	QueryID string
