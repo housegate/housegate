@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "cluster",
@@ -15,4 +15,10 @@ go_library(
     deps = [
         "//pkg/log",
     ],
+)
+
+go_test(
+    name = "cluster_test",
+    srcs = ["pool_test.go"],
+    embed = [":cluster"],
 )

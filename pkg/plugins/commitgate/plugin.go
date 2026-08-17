@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"net"
+	"slices"
 	"strings"
 
 	"github.com/housegate/housegate/pkg/log"
@@ -320,11 +323,13 @@ func buildEvent(qctx *plugin.QueryContext) *Event {
 		Type:             qctx.StatementType,
 		User:             user,
 		Owner:            owner,
+		TableRewrites:    maps.Clone(qctx.TableRewrites),
+		UpstreamAddress:  eventUpstreamAddress(qctx.Session),
 		QueryID:          queryID,
 		OriginalSQL:      qctx.OriginalSQL,
 		RewrittenSQL:     qctx.RewrittenSQL,
 		Settings:         settings,
-		AccessedTables:   qctx.AccessedTables,
+		AccessedTables:   slices.Clone(qctx.AccessedTables),
 		PrivilegesDeltas: qctx.PrivilegesDeltas,
 		ExistenceClause:  qctx.ExistenceClause,
 	}
@@ -355,6 +360,26 @@ func buildEvent(qctx *plugin.QueryContext) *Event {
 		}
 	}
 	return ev
+}
+
+type upstreamAddressProvider interface {
+	UpstreamAddress() string
+}
+
+func eventUpstreamAddress(sess chsession.Session) string {
+	if sess == nil || sess.Upstream() == nil {
+		return ""
+	}
+	conn := sess.Upstream().Conn()
+	if provider, ok := conn.(upstreamAddressProvider); ok {
+		if address := strings.TrimSpace(provider.UpstreamAddress()); address != "" {
+			return address
+		}
+	}
+	if conn, ok := conn.(net.Conn); ok && conn.RemoteAddr() != nil {
+		return conn.RemoteAddr().String()
+	}
+	return ""
 }
 
 // synthDatabaseScopedAccess fabricates an AccessedTable for USE /

@@ -71,6 +71,46 @@ func minimalRouterOnlyCfg(t *testing.T) *config.Config {
 	return &cfg
 }
 
+func TestDialRawPreservesConfiguredAddress(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatalf("split listener address: %v", err)
+	}
+	configuredAddress := net.JoinHostPort("localhost", port)
+	codec, err := dialRaw(context.Background(), configuredAddress, time.Second)
+	if err != nil {
+		t.Fatalf("dialRaw: %v", err)
+	}
+	clientConn, ok := codec.Conn().(net.Conn)
+	if !ok {
+		t.Fatalf("codec connection type = %T, want net.Conn", codec.Conn())
+	}
+	t.Cleanup(func() { _ = clientConn.Close() })
+
+	serverConn, err := listener.Accept()
+	if err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	t.Cleanup(func() { _ = serverConn.Close() })
+
+	provider, ok := codec.Conn().(interface{ UpstreamAddress() string })
+	if !ok {
+		t.Fatalf("codec connection type = %T, want UpstreamAddress provider", codec.Conn())
+	}
+	if got := provider.UpstreamAddress(); got != configuredAddress {
+		t.Fatalf("UpstreamAddress() = %q, want %q", got, configuredAddress)
+	}
+	if got := clientConn.RemoteAddr().String(); got == configuredAddress {
+		t.Fatalf("RemoteAddr() unexpectedly retained configured hostname %q", got)
+	}
+}
+
 func requireProxyServer(t *testing.T, listener serverListener) *proxy.Server {
 	t.Helper()
 	runner, ok := listener.Runner.(*proxyServerRunner)

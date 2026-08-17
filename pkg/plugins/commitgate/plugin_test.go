@@ -65,15 +65,19 @@ func (o *successObserver) AfterStatementSuccess(_ context.Context, ev Event) {
 // Mirrors the same pattern in pkg/plugins/sessionstate/tracker_test.go.
 type stateOnlySession struct {
 	state *chsession.SessionState
+	up    *chproto.Codec
 }
 
-func (s *stateOnlySession) ID() int64                                          { return 0 }
-func (s *stateOnlySession) State() *chsession.SessionState                     { return s.state }
-func (s *stateOnlySession) Client() *chproto.Codec                             { return nil }
-func (s *stateOnlySession) Upstream() *chproto.Codec                           { return nil }
-func (s *stateOnlySession) RemoteAddr() net.Addr                               { return nil }
-func (s *stateOnlySession) Close() error                                       { return nil }
-func (s *stateOnlySession) BindUpstream(context.Context, *chproto.Codec) error { return nil }
+func (s *stateOnlySession) ID() int64                      { return 0 }
+func (s *stateOnlySession) State() *chsession.SessionState { return s.state }
+func (s *stateOnlySession) Client() *chproto.Codec         { return nil }
+func (s *stateOnlySession) Upstream() *chproto.Codec       { return s.up }
+func (s *stateOnlySession) RemoteAddr() net.Addr           { return nil }
+func (s *stateOnlySession) Close() error                   { return nil }
+func (s *stateOnlySession) BindUpstream(_ context.Context, up *chproto.Codec) error {
+	s.up = up
+	return nil
+}
 func (s *stateOnlySession) RebindUpstream(context.Context, *chproto.Codec, bool) error {
 	return nil
 }
@@ -285,6 +289,52 @@ func TestOnQuery_EventExtraction(t *testing.T) {
 				t.Errorf("RewrittenSQL=%q, want <rewritten>", ev.RewrittenSQL)
 			}
 		})
+	}
+}
+
+type addressedReadWriter struct {
+	strings.Builder
+	address string
+}
+
+func (rw *addressedReadWriter) Read([]byte) (int, error) { return 0, fmt.Errorf("unused") }
+func (rw *addressedReadWriter) UpstreamAddress() string  { return rw.address }
+
+func TestOnQuery_EventCarriesStableRewriteAndUpstreamMetadata(t *testing.T) {
+	obs := &fakeObserver{types: []sqlmeta.StatementType{sqlmeta.StatementTypeCreateTable}}
+	p := NewPlugin([]Observer{obs})
+	qctx := newQctx(sqlmeta.StatementTypeCreateTable,
+		[]sqlmeta.AccessedTable{tableEntry("orders", "audit", "orders")})
+	qctx.TableRewrites = map[string]string{"orders.audit": `devnet2."orders.audit"`}
+	upstream := &addressedReadWriter{address: "clickhouse-1.local:9000"}
+	if err := qctx.Session.BindUpstream(
+		context.Background(),
+		chproto.NewCodec(upstream, chproto.DirToUpstream),
+	); err != nil {
+		t.Fatalf("BindUpstream: %v", err)
+	}
+
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	if len(obs.calls) != 1 {
+		t.Fatalf("observer fired %d times, want 1", len(obs.calls))
+	}
+	event := obs.calls[0]
+	if got := event.TableRewrites["orders.audit"]; got != `devnet2."orders.audit"` {
+		t.Fatalf("Event.TableRewrites[orders.audit] = %q", got)
+	}
+	if event.UpstreamAddress != "clickhouse-1.local:9000" {
+		t.Fatalf("Event.UpstreamAddress = %q, want clickhouse-1.local:9000", event.UpstreamAddress)
+	}
+
+	qctx.TableRewrites["orders.audit"] = "mutated.after.dispatch"
+	if got := event.TableRewrites["orders.audit"]; got != `devnet2."orders.audit"` {
+		t.Fatalf("Event.TableRewrites aliases QueryContext map: %q", got)
+	}
+	qctx.AccessedTables[0].OriginalTable = "mutated_after_dispatch"
+	if got := event.AccessedTables[0].OriginalTable; got != "audit" {
+		t.Fatalf("Event.AccessedTables aliases QueryContext slice: %q", got)
 	}
 }
 
