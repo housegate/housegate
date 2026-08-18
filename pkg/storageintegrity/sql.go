@@ -10,6 +10,9 @@ import (
 // native TCP ClientData packets: SQL FORMAT controls client-side parsing, so
 // both Native and CSVWithNames SQL arrive and are stored as Native blocks.
 func InsertPayloadEncoding(sql string) (string, error) {
+	if _, err := ParseInsertTarget(sql); err != nil {
+		return "", err
+	}
 	source, format, ok := insertDataSource(sql)
 	if !ok {
 		return "", fmt.Errorf("requires streaming Native INSERT input")
