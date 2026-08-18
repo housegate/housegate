@@ -1,12 +1,16 @@
 package storageintegrity
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/housegate/housegate/pkg/replay/payloadexec"
+)
 
 // EncodingCSVWithNames names the CSVWithNames wire payload encoding. It sits
 // beside PayloadEncodingClickHouseNativeData (native_payload.go) so the runtime
 // selects a materializer by an explicit encoding string rather than defaulting
 // silently.
-const EncodingCSVWithNames = "csv-with-names-v1"
+const EncodingCSVWithNames = payloadexec.PayloadFormatCSVWithNames
 
 // MaterializerKind is the replay materializer family the P1e runtime uses to
 // re-produce rows from a captured payload. The kind is selected from the

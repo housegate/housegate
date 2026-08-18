@@ -19,9 +19,9 @@ func TestInsertPayloadEncodingAcceptsStreamingPayloadFormats(t *testing.T) {
 			want: PayloadEncodingClickHouseNativeData,
 		},
 		{
-			name: "explicit CSVWithNames replay payload",
+			name: "CSVWithNames in SQL still rides the Native wire",
 			sql:  "INSERT INTO events FORMAT CSVWithNames",
-			want: EncodingCSVWithNames,
+			want: PayloadEncodingClickHouseNativeData,
 		},
 	}
 	for _, tc := range tests {

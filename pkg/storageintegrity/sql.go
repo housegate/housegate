@@ -6,9 +6,9 @@ import (
 )
 
 // InsertPayloadEncoding returns the replay payload encoding selected by an
-// admitted payload-local INSERT. Server-side ingress currently captures
-// ClickHouse native TCP ClientData packets. CSVWithNames is supported by
-// materializing that Native capture into CSVWithNames before admission.
+// admitted payload-local INSERT. Server-side ingress captures ClickHouse
+// native TCP ClientData packets: SQL FORMAT controls client-side parsing, so
+// both Native and CSVWithNames SQL arrive and are stored as Native blocks.
 func InsertPayloadEncoding(sql string) (string, error) {
 	source, format, ok := insertDataSource(sql)
 	if !ok {
@@ -19,10 +19,10 @@ func InsertPayloadEncoding(sql string) (string, error) {
 		return PayloadEncodingClickHouseNativeData, nil
 	case "FORMAT":
 		switch format {
-		case "NATIVE":
+		case "NATIVE", "CSVWITHNAMES":
+			// The native TCP client parses CSVWithNames locally and sends
+			// Native blocks; the stored payload is the wire capture either way.
 			return PayloadEncodingClickHouseNativeData, nil
-		case "CSVWITHNAMES":
-			return EncodingCSVWithNames, nil
 		}
 		if format == "" {
 			return "", fmt.Errorf("requires streaming Native INSERT input; FORMAT without Native is not supported")
