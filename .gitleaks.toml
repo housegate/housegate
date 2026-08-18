@@ -56,3 +56,12 @@ paths = [
 regexes = [
     '''ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80''',
 ]
+
+[[allowlists]]
+description = "Deterministic statement-v2 interoperability vectors"
+# The committed cross-repo fixture intentionally contains compact JWS tokens
+# plus the repeated-a throwaway key used to regenerate them. It is consumed by
+# both Housegate and Arbiter tests and is never accepted by production config.
+paths = [
+    '''^pkg/auth/testdata/statement_jws_v2\.json$''',
+]
