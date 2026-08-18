@@ -1,0 +1,17 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "sistatement",
+    srcs = [
+        "doc.go",
+        "seq.go",
+    ],
+    importpath = "github.com/housegate/housegate/pkg/plugins/sistatement",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "sistatement_test",
+    srcs = ["seq_test.go"],
+    embed = [":sistatement"],
+)
