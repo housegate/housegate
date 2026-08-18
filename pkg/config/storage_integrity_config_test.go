@@ -75,6 +75,12 @@ func TestConfigValidateStorageIntegrityBackpressure(t *testing.T) {
 		"unsafe database required": {func(c *Config) {
 			c.StorageIntegrity.Runtime.Backpressure.UnsafeDatabase = " "
 		}, "backpressure.unsafe_database"},
+		"safe database required": {func(c *Config) {
+			c.StorageIntegrity.Runtime.Backpressure.SafeDatabase = " "
+		}, "backpressure.safe_database"},
+		"safe and unsafe databases differ": {func(c *Config) {
+			c.StorageIntegrity.Runtime.Backpressure.SafeDatabase = c.StorageIntegrity.Runtime.Backpressure.UnsafeDatabase
+		}, "backpressure.safe_database must differ"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

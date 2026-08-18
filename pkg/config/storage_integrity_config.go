@@ -198,8 +198,15 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 			}
 		}
 		if bp := c.Runtime.Backpressure; bp.Enabled {
-			if strings.TrimSpace(bp.UnsafeDatabase) == "" {
+			unsafeDatabase := strings.TrimSpace(bp.UnsafeDatabase)
+			safeDatabase := strings.TrimSpace(bp.SafeDatabase)
+			if unsafeDatabase == "" {
 				errs = append(errs, errors.New("storage_integrity.runtime.backpressure.unsafe_database is required when backpressure is enabled"))
+			}
+			if safeDatabase == "" {
+				errs = append(errs, errors.New("storage_integrity.runtime.backpressure.safe_database is required when backpressure is enabled"))
+			} else if safeDatabase == unsafeDatabase {
+				errs = append(errs, errors.New("storage_integrity.runtime.backpressure.safe_database must differ from unsafe_database"))
 			}
 			if bp.PollInterval.Duration <= 0 {
 				errs = append(errs, errors.New("storage_integrity.runtime.backpressure.poll_interval must be > 0"))
