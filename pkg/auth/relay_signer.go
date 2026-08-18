@@ -18,6 +18,8 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
+const canonicalJWSProtectedHeader = `{"alg":"ES256K","typ":"JWT"}`
+
 // RelaySigner wraps an Ethereum-style private key and produces JWS
 // tokens whose payload binds a query's SQL text.
 type RelaySigner struct {
@@ -72,11 +74,7 @@ func (s *RelaySigner) SignStatementV2(payload JWSStatementPayloadV2) (string, er
 // header, signing input, Ethereum recovery-byte convention, and encoding in
 // one place prevents a new lane from drifting from the canonical profile.
 func (s *RelaySigner) signCompactJWS(payload any) (string, error) {
-	header := JWSHeader{Alg: "ES256K", Typ: "JWT"}
-	headerJSON, err := json.Marshal(header)
-	if err != nil {
-		return "", fmt.Errorf("marshal header: %w", err)
-	}
+	headerJSON := []byte(canonicalJWSProtectedHeader)
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
 		return "", fmt.Errorf("marshal JWS payload: %w", err)

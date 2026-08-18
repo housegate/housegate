@@ -362,15 +362,8 @@ func (v *EthValidator) ValidateStatementV2(token string, want JWSStatementPayloa
 	if err != nil {
 		return "", fmt.Errorf("invalid statement header encoding: %w", err)
 	}
-	var header JWSHeader
-	if err := json.Unmarshal(headerBytes, &header); err != nil {
-		return "", fmt.Errorf("invalid statement header JSON: %w", err)
-	}
-	if header.Alg != "ES256K" {
-		return "", fmt.Errorf("unsupported algorithm: %s", header.Alg)
-	}
-	if header.Typ != "JWT" {
-		return "", fmt.Errorf("unsupported statement token type: %s", header.Typ)
+	if string(headerBytes) != canonicalJWSProtectedHeader {
+		return "", fmt.Errorf("invalid statement protected header: must be exact canonical %s", canonicalJWSProtectedHeader)
 	}
 	payload, err := DecodeStatementV2Payload(token)
 	if err != nil {

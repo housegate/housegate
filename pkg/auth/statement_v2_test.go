@@ -141,6 +141,28 @@ func TestStatementV2_RejectsNonCanonicalProtectedHeader(t *testing.T) {
 	}
 }
 
+func TestStatementV2_RejectsCanonicalFieldsInNonCanonicalProtectedJSON(t *testing.T) {
+	signer, _ := NewRelaySigner(statementV2TestKey)
+	validator := NewEthValidator([]string{signer.Address()}, time.Minute, true, false, "", nil)
+	want := statementV2Fixture(signer.Address())
+	want.Iat = time.Now().Unix()
+	tests := map[string]string{
+		"extra field":      `{"alg":"ES256K","typ":"JWT","kid":"key-1"}`,
+		"unknown crit":     `{"alg":"ES256K","typ":"JWT","crit":["exp"]}`,
+		"reordered keys":   `{"typ":"JWT","alg":"ES256K"}`,
+		"whitespace":       `{ "alg":"ES256K","typ":"JWT"}`,
+		"duplicate member": `{"alg":"ES256K","alg":"ES256K","typ":"JWT"}`,
+	}
+	for name, rawHeader := range tests {
+		t.Run(name, func(t *testing.T) {
+			token := signStatementV2WithRawHeader(t, rawHeader, want)
+			if _, err := validator.ValidateStatementV2(token, want); err == nil || !strings.Contains(err.Error(), "canonical") {
+				t.Fatalf("ValidateStatementV2 = %v, want canonical-header rejection for %s", err, rawHeader)
+			}
+		})
+	}
+}
+
 func TestRelaySigner_AllCompactJWSLanesUseCanonicalProtectedHeader(t *testing.T) {
 	signer, _ := NewRelaySigner(statementV2TestKey)
 	statement := statementV2Fixture(signer.Address())
@@ -184,16 +206,21 @@ func TestRelaySigner_AllCompactJWSLanesUseCanonicalProtectedHeader(t *testing.T)
 
 func signStatementV2WithHeader(t *testing.T, header JWSHeader, payload JWSStatementPayloadV2) string {
 	t.Helper()
-	payload.Purpose = StatementPurposeV2
 	headerJSON, err := json.Marshal(header)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return signStatementV2WithRawHeader(t, string(headerJSON), payload)
+}
+
+func signStatementV2WithRawHeader(t *testing.T, rawHeader string, payload JWSStatementPayloadV2) string {
+	t.Helper()
+	payload.Purpose = StatementPurposeV2
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
 		t.Fatal(err)
 	}
-	input := base64.RawURLEncoding.EncodeToString(headerJSON) + "." + base64.RawURLEncoding.EncodeToString(payloadJSON)
+	input := base64.RawURLEncoding.EncodeToString([]byte(rawHeader)) + "." + base64.RawURLEncoding.EncodeToString(payloadJSON)
 	key, err := crypto.HexToECDSA(statementV2TestKey)
 	if err != nil {
 		t.Fatal(err)
