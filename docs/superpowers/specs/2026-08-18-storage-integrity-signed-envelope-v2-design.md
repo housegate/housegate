@@ -37,7 +37,7 @@ Non-goals: per-statement `schema_snapshot_id` / DDL lane; signing anything seque
 
 **D5 — `schema_hash`, not `schema_snapshot_id`, in the envelope.** The agent signs the Phase-B `schema_hash` of the table version it built the sample block from; SNode and verifier verify it against their own schema source before decoding. `schema_snapshot_id` remains the block-level genesis parameter (base design §7 "v1: block-level").
 
-**D6 — Agent-generated `statement_id` when the client did not supply one.** `client_account` = agent signer address; `client_seq` from a durable per-agent counter; `client_nonce` = 16 random bytes hex. A client that already set the ClickHouse query id in the flat SI form with a matching account keeps it (SDK path).
+**D6 — Agent-generated `statement_id` when the client did not supply one.** `client_account` = agent signer address; `client_seq` from a durable per-agent counter; `client_nonce` = 16 random bytes hex. A client that already set the ClickHouse query id in the flat SI form with a matching account keeps it (SDK path), canonicalized to the lowercase-account flat form; before signing, the agent durably advances its counter to at least that supplied `client_seq`, so the next generated id cannot reuse the SDK-reserved sequence.
 
 ## 4. Envelope v2
 

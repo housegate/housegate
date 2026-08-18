@@ -97,7 +97,7 @@ QueryContext.DeferredInsert *DeferredInsertPlan
 // pkg/plugins/sistatement
 type Options struct { Signer auth.StatementSignerV2; Schemas registry.TableSchemas; NetworkID string; KeeperShardID uint32; Seq *SeqCounter; MaxPayloadBytes uint64 }
 func New(opts Options) (*Plugin, error)
-func OpenSeqCounter(stateDir, account string) (*SeqCounter, error); func (c *SeqCounter) Next() (uint64, error); func (c *SeqCounter) Last() uint64
+func OpenSeqCounter(stateDir, account string) (*SeqCounter, error); func (c *SeqCounter) Next() (uint64, error); func (c *SeqCounter) AdvanceTo(seq uint64) error; func (c *SeqCounter) Last() uint64
 
 // pkg/config
 StorageIntegrityConfig.Agent StorageIntegrityAgentConfig{Enabled bool; NetworkID string; KeeperShardID uint32; StateDir string; MaxPayloadBytes uint64; RequireNetworkState bool}
@@ -2990,7 +2990,7 @@ Working directory: `/Users/uranuswch/Dev/housegate/housegate`
 - Create: `pkg/plugins/sistatement/seq.go`, `pkg/plugins/sistatement/seq_test.go`, `pkg/plugins/sistatement/doc.go`
 
 **Interfaces:**
-- Produces: `OpenSeqCounter(stateDir, account string) (*SeqCounter, error)`, `(*SeqCounter).Next() (uint64, error)` (write+fsync BEFORE returning), `(*SeqCounter).Last() uint64`, `(*SeqCounter).Path() string`.
+- Produces: `OpenSeqCounter(stateDir, account string) (*SeqCounter, error)`, `(*SeqCounter).Next() (uint64, error)` and `(*SeqCounter).AdvanceTo(seq uint64) error` (both write+fsync BEFORE returning a newly reserved value), `(*SeqCounter).Last() uint64`, `(*SeqCounter).Path() string`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3032,6 +3032,30 @@ func TestSeqCounter_StartsAtOneAndPersistsAcrossReopen(t *testing.T) {
 	}
 	if got, _ := reopened.Next(); got != 4 {
 		t.Fatalf("after restart Next = %d, want 4 (last+1)", got)
+	}
+}
+
+func TestSeqCounter_AdvanceToReservesSuppliedSequenceDurably(t *testing.T) {
+	dir := t.TempDir()
+	c, err := OpenSeqCounter(dir, "0xabc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := c.Next(); err != nil || got != 1 {
+		t.Fatalf("Next = %d err=%v, want 1", got, err)
+	}
+	if err := c.AdvanceTo(41); err != nil {
+		t.Fatalf("AdvanceTo: %v", err)
+	}
+	if err := c.AdvanceTo(7); err != nil || c.Last() != 41 {
+		t.Fatalf("AdvanceTo must not move backwards: last=%d err=%v", c.Last(), err)
+	}
+	reopened, err := OpenSeqCounter(dir, "0xabc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := reopened.Next(); err != nil || got != 42 {
+		t.Fatalf("Next after supplied seq = %d err=%v, want 42", got, err)
 	}
 }
 
@@ -3125,9 +3149,10 @@ import (
 )
 
 // SeqCounter is the durable per-account client_seq source (spec §5.1 /
-// D6). Next writes and fsyncs the new value BEFORE returning it, so a seq
-// can never be issued twice across restarts; a crash between fsync and
-// submission wastes one seq (a gap the accumulator's K=64 budget absorbs).
+// D6). Next and AdvanceTo write and fsync a newly reserved value BEFORE
+// returning, so neither an agent-generated nor an SDK-supplied seq can be
+// issued again across restarts; a crash between fsync and submission wastes
+// one seq (a gap the accumulator's K=64 budget absorbs).
 // One process per (state_dir, account) — sharing a key across agents is out
 // of scope.
 type SeqCounter struct {
@@ -3176,36 +3201,54 @@ func (c *SeqCounter) Last() uint64 {
 	return c.last
 }
 
-// Next issues last+1 after durably recording it (temp file, fsync, rename,
-// directory fsync).
-func (c *SeqCounter) Next() (uint64, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	next := c.last + 1
+func (c *SeqCounter) persistLocked(next uint64) error {
 	tmp := c.path + ".tmp"
 	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
-		return 0, fmt.Errorf("sistatement: open %s: %w", tmp, err)
+		return fmt.Errorf("sistatement: open %s: %w", tmp, err)
 	}
 	if _, err := f.WriteString(strconv.FormatUint(next, 10) + "\n"); err != nil {
 		_ = f.Close()
-		return 0, fmt.Errorf("sistatement: write %s: %w", tmp, err)
+		return fmt.Errorf("sistatement: write %s: %w", tmp, err)
 	}
 	if err := f.Sync(); err != nil {
 		_ = f.Close()
-		return 0, fmt.Errorf("sistatement: fsync %s: %w", tmp, err)
+		return fmt.Errorf("sistatement: fsync %s: %w", tmp, err)
 	}
 	if err := f.Close(); err != nil {
-		return 0, fmt.Errorf("sistatement: close %s: %w", tmp, err)
+		return fmt.Errorf("sistatement: close %s: %w", tmp, err)
 	}
 	if err := os.Rename(tmp, c.path); err != nil {
-		return 0, fmt.Errorf("sistatement: rename %s: %w", tmp, err)
+		return fmt.Errorf("sistatement: rename %s: %w", tmp, err)
 	}
 	if dir, err := os.Open(filepath.Dir(c.path)); err == nil {
 		_ = dir.Sync()
 		_ = dir.Close()
 	}
 	c.last = next
+	return nil
+}
+
+// AdvanceTo reserves seq if it is above the current durable high watermark.
+// Lower/equal SDK values never move the counter backwards.
+func (c *SeqCounter) AdvanceTo(seq uint64) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if seq <= c.last {
+		return nil
+	}
+	return c.persistLocked(seq)
+}
+
+// Next issues last+1 after durably recording it (temp file, fsync, rename,
+// directory fsync).
+func (c *SeqCounter) Next() (uint64, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	next := c.last + 1
+	if err := c.persistLocked(next); err != nil {
+		return 0, err
+	}
 	return next, nil
 }
 ```
@@ -3818,11 +3861,18 @@ func TestPlugin_ClientSuppliedStatementIDIsKeptOnlyForOwnAccount(t *testing.T) {
 	declareSchema(t, ns, testSchema())
 	p, signer := newTestPlugin(t, ns, t.TempDir())
 	own := insertQctx(newSession(1, ""), "INSERT INTO shop.orders FORMAT Native")
-	own.Query.ID = signer.Address() + ":41:sdk-nonce"
+	own.Query.ID = "0x" + strings.ToUpper(strings.TrimPrefix(signer.Address(), "0x")) + ":41:sdk-nonce"
 	if err := p.OnQuery(context.Background(), own); err != nil || own.Query.ID != signer.Address()+":41:sdk-nonce" {
 		t.Fatalf("own-account id must be kept: id=%q err=%v", own.Query.ID, err)
 	}
-	foreign := insertQctx(newSession(2, ""), "INSERT INTO shop.orders FORMAT Native")
+	generated := insertQctx(newSession(2, ""), "INSERT INTO shop.orders FORMAT Native")
+	if err := p.OnQuery(context.Background(), generated); err != nil {
+		t.Fatal(err)
+	}
+	if account, seq, _, err := sicore.ParseFlatStatementID(generated.Query.ID); err != nil || account != signer.Address() || seq != 42 {
+		t.Fatalf("generated id after SDK reservation = %q account=%s seq=%d err=%v, want seq 42", generated.Query.ID, account, seq, err)
+	}
+	foreign := insertQctx(newSession(3, ""), "INSERT INTO shop.orders FORMAT Native")
 	foreign.Query.ID = "0x0000000000000000000000000000000000000001:5:n"
 	if err := p.OnQuery(context.Background(), foreign); err != nil {
 		t.Fatal(err)
@@ -4139,10 +4189,14 @@ func (p *Plugin) loadSchema(ctx context.Context, tableID string) (payloadexec.Ta
 }
 
 // statementIDFor keeps a client-supplied flat id for this agent's own
-// account (SDK path, D6) and otherwise mints <account>:<seq>:<nonce>.
+// account (SDK path, D6), after durably reserving its seq and canonicalizing
+// the account; otherwise it mints <account>:<seq>:<nonce>.
 func (p *Plugin) statementIDFor(queryID string) (string, error) {
-	if account, _, _, err := sicore.ParseFlatStatementID(strings.TrimSpace(queryID)); err == nil && account == p.account {
-		return strings.TrimSpace(queryID), nil
+	if canonical, seq, ok := ownSuppliedStatementID(queryID, p.account); ok {
+		if err := p.seq.AdvanceTo(seq); err != nil {
+			return "", fmt.Errorf("storage_integrity agent: reserve supplied client_seq: %w", err)
+		}
+		return canonical, nil
 	}
 	seq, err := p.seq.Next()
 	if err != nil {
@@ -4153,6 +4207,22 @@ func (p *Plugin) statementIDFor(queryID string) (string, error) {
 		return "", fmt.Errorf("storage_integrity agent: nonce: %w", err)
 	}
 	return p.account + ":" + strconv.FormatUint(seq, 10) + ":" + hex.EncodeToString(nonce[:]), nil
+}
+
+// ownSuppliedStatementID accepts account casing from SDK query ids, but keeps
+// the shared parser strict for the sequence and nonce. Only the account segment
+// is normalized; the client nonce is preserved byte-for-byte.
+func ownSuppliedStatementID(queryID, ownAccount string) (canonical string, seq uint64, ok bool) {
+	account, tail, found := strings.Cut(strings.TrimSpace(queryID), ":")
+	if !found || !strings.EqualFold(account, ownAccount) {
+		return "", 0, false
+	}
+	account = strings.ToLower(account)
+	parsedAccount, parsedSeq, nonce, err := sicore.ParseFlatStatementID(account + ":" + tail)
+	if err != nil || parsedAccount != strings.ToLower(ownAccount) {
+		return "", 0, false
+	}
+	return parsedAccount + ":" + strconv.FormatUint(parsedSeq, 10) + ":" + nonce, parsedSeq, true
 }
 
 // OnClientDataStrict buffers one raw non-empty Data packet under the budget.

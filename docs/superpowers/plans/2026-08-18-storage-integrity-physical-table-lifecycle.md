@@ -4,7 +4,7 @@
 
 **Goal:** Every storage-integrity data-plane role derives, creates, and verifies the protocol-owned `hg_unsafe.*` / `hg_safe.*` tables (pinned engine, columns, keys, MergeTree settings) from the schema source, and the ingress HouseGate (plus the SNode prepare as a mirror) refuses INSERTs into a partition whose `hg_unsafe` part count crosses a soft limit with a retryable ClickHouse `TOO_MANY_PARTS` (252) exception.
 
-**Architecture:** A new pure package `arbiter-core/dataplane/ddl` renders the D3-pinned DDL from `payloadexec.TableSchema` (`BuildDDL`, golden-tested), verifies live tables against the same intent (`VerifyProtocolTable`, `system.tables` / `system.columns` / `system.replicas` / `system.merge_tree_settings` + an `engine_full` SETTINGS parser), and exposes `EnsureProtocolTables` that `snode.Role.Register` / `verifier.Role.Register` run before registering with the Arbiter and re-run on a 60s reconcile ticker. housegate gains a `PartsPressureGuard` over the existing `MergeConn` port that snapshots `system.parts` grouped by `(database, table, partition)`, a `ClientError` seam so a plugin rejection can carry code 252, config `storage_integrity.runtime.backpressure`, a poller/supervisor with Prometheus gauges, and the ingress check between the merge-health latch and the payload put. sentio-node passes NodeID + schema-source-derived mode, wires the schema resolver into the housegate runtime, and maps the SNode mirror error to the same retryable rejection.
+**Architecture:** A new pure package `arbiter-core/dataplane/ddl` renders the D3-pinned DDL from `payloadexec.TableSchema` (`BuildDDL`, golden-tested), verifies live tables against the same intent (`VerifyProtocolTable`, `system.tables` / `system.columns` / `system.replicas` / `system.merge_tree_settings` + an `engine_full` SETTINGS parser), and exposes `EnsureProtocolTables` that `snode.Role.Register` / `verifier.Role.Register` run before registering with the Arbiter and re-run on a 60s reconcile ticker against the same schema-root-bound startup table slice. The ticker detects deletion/drift; it does not hot-adopt later declarations, which require a controlled restart until the schema-transition lane exists. housegate gains a `PartsPressureGuard` over the existing `MergeConn` port that snapshots `system.parts` grouped by `(database, table, partition)`, a `ClientError` seam so a plugin rejection can carry code 252, config `storage_integrity.runtime.backpressure`, a poller/supervisor with Prometheus gauges, and the ingress check between the merge-health latch and the payload put. sentio-node passes NodeID + schema-source-derived mode, wires the schema resolver into the housegate runtime, and maps the SNode mirror error to the same retryable rejection.
 
 **Tech Stack:** Go 1.26, Bazel 9 + Bzlmod + gazelle in all repos, clickhouse-go v2 (sentioxyz fork), ClickHouse 25.8 docker image (arbiter-core CI service / housegate testcontainers), Prometheus client_golang, slog (arbiter-core) / `pkg/log` (housegate).
 
@@ -22,6 +22,7 @@
 - ClickHouse facts verified in docker (25.8.28): `engine_full` for the pinned RMT is `ReplicatedMergeTree('/sentio/0/unsafe/db__t', 'node-1') PARTITION BY p ORDER BY (p, _hg_row_id) SETTINGS max_bytes_to_merge_at_max_space_in_pool = 0, parts_to_delay_insert = 1000, parts_to_throw_insert = 3000, max_parts_in_total = 100000, replicated_deduplication_window = 0, index_granularity = 8192` (ClickHouse appends `index_granularity = 8192`; backtick-quoted identifiers in the CREATE are normalized away; `sorting_key = "p, _hg_row_id"`, `partition_key = "p"`, empty for unpartitioned); `ALTER TABLE … MODIFY SETTING` rewrites the value inside `engine_full`; `CREATE TABLE IF NOT EXISTS` with a different definition is a silent no-op; two RMT tables in different databases on one server sharing a zk path replicate parts; reusing a replica name fails with code 253 `REPLICA_ALREADY_EXISTS`; `DROP TABLE … SYNC` removes the replica's zk metadata; `parts_to_throw_insert = N` rejects the insert that would create part N+1 with code 252 `TOO_MANY_PARTS`.
 - English-only code, comments, log and error strings. housegate logging via `github.com/housegate/housegate/pkg/log` (`log.Infow`/`Warnw`/`WarnEveryN`); arbiter-core via the role's `*slog.Logger`. Errors wrapped with `fmt.Errorf("context: %w", err)`; config errors aggregated with `errors.Join`.
 - Markdown docs: no hard line-wrapping.
+- `Config.Tables` and `SchemaRoot` are one coherent startup snapshot. Protocol-table reconcile intentionally reuses that frozen slice and only detects deletion/drift; hot table/schema onboarding is part of the future authenticated schema-transition lane and requires a role restart in v1.
 - Test isolation for RMT: every docker test that creates an RMT must use a per-test unique table id (zk paths are shared across databases and across the parallel `snode_test` / `verifier_test` / `ddl_test` Bazel targets) and drop with `DROP DATABASE … SYNC` in `t.Cleanup`.
 
 ## File Structure
@@ -1252,7 +1253,7 @@ Expected: PASS (all six tests). Also `bazel test //dataplane/ddl:ddl_test` witho
 
 **Interfaces:**
 - Consumes: Task 3 `ddl.EnsureProtocolTables`, `ddl.Mode`, `ddl.DefaultReconcileInterval`, `ddl.Pinned`, `ddl.ErrProtocolTableDrift`.
-- Produces (used by Tasks 8, 20): `snode.Config.ProtocolTables ddl.Mode` (zero value `ddl.ModeOff` keeps existing harnesses that pre-create MergeTree tables working — production wiring always sets it), `snode.Config.ProtocolTablesReconcile time.Duration` (0 → `ddl.DefaultReconcileInterval`), `snode.Config.KeeperShardID uint32` (0 in v1). `Register(ctx)` now ensures tables before `RegisterNode`; `Run(ctx)` starts the reconcile goroutine.
+- Produces (used by Tasks 8, 20): `snode.Config.ProtocolTables ddl.Mode` (zero value `ddl.ModeOff` keeps existing harnesses that pre-create MergeTree tables working — production wiring always sets it), `snode.Config.ProtocolTablesReconcile time.Duration` (0 → `ddl.DefaultReconcileInterval`), `snode.Config.KeeperShardID uint32` (0 in v1). `Register(ctx)` now ensures tables before `RegisterNode`; `Run(ctx)` starts the reconcile goroutine against the frozen `cfg.Tables` snapshot (drift detection only, never dynamic schema discovery).
 
 - [ ] **Step 1: Write the failing test** `snode/protocol_tables_test.go`
 
@@ -1424,6 +1425,8 @@ func (r *Role) reconcileProtocolTables(ctx context.Context) {
 }
 ```
 
+The `r.cfg.Tables` argument is deliberate: it is the schema-root-validated startup snapshot used by the rest of the role. Do not re-read a mutable schema source in this ticker and thereby mix schema snapshots; a newly declared table is admitted after a controlled role restart in v1.
+
 Modify `Register`: first statement `if err := r.ensureProtocolTables(ctx); err != nil { return err }`. Modify `Run`: after `convergeStartup` succeeds, `if r.cfg.ProtocolTables != ddl.ModeOff { go r.reconcileProtocolTables(ctx) }`. Add `"errors"` to imports.
 
 - [ ] **Step 4: Run** — `bazel run //:gazelle && go test ./snode/... && ARBITER_CH_INTEGRATION=1 ARBITER_CH_KEEPER=1 CH_ADDR=127.0.0.1:9000 bazel test //snode:snode_test --test_env=ARBITER_CH_INTEGRATION --test_env=ARBITER_CH_KEEPER --test_env=CH_ADDR --test_output=errors` Expected: PASS (existing harness tests still pre-create MergeTree tables under `ModeOff`).
@@ -1441,7 +1444,7 @@ Modify `Register`: first statement `if err := r.ensureProtocolTables(ctx); err !
 - Create: `verifier/protocol_tables_test.go`
 
 **Interfaces:**
-- Produces (used by Tasks 8, 20): `verifier.Config.SafeDatabase`, `verifier.Config.PromoteDatabase` (defaults `hg_safe` / `hg_promote`), `verifier.Config.ProtocolTables ddl.Mode`, `verifier.Config.ProtocolTablesReconcile time.Duration`, `verifier.Config.KeeperShardID uint32`; `verifier.Deps.Conn clickhouse.Conn` (required when `ProtocolTables != ddl.ModeOff`, validated in `New`).
+- Produces (used by Tasks 8, 20): `verifier.Config.SafeDatabase`, `verifier.Config.PromoteDatabase` (defaults `hg_safe` / `hg_promote`), `verifier.Config.ProtocolTables ddl.Mode`, `verifier.Config.ProtocolTablesReconcile time.Duration`, `verifier.Config.KeeperShardID uint32`; `verifier.Deps.Conn clickhouse.Conn` (required when `ProtocolTables != ddl.ModeOff`, validated in `New`). As in SNode, reconcile uses the schema-root-validated startup `cfg.Tables` slice and only detects drift.
 
 - [ ] **Step 1: Write the failing test** `verifier/protocol_tables_test.go`
 
@@ -3134,7 +3137,7 @@ func backpressureClientError(table string, err error) error {
 }
 ```
 
-In `ConsumeStorageIntegrityAdmission`: after the merge-health block and the materializer/revision checks, before `if i.payloadWriter != nil {`, insert `if err := i.checkPartsPressure(rec); err != nil { return err }`. Around `i.orch.Orchestrate`: 
+In `ConsumeStorageIntegrityAdmission`: after the merge-health block and the materializer/revision checks, before `if i.payloadWriter != nil {`, insert `if err := i.checkPartsPressure(rec); err != nil { return err }`. Around `i.orch.Orchestrate`:
 
 ```go
 	res, err := i.orch.Orchestrate(ctx, rec)
