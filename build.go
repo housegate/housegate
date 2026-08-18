@@ -908,6 +908,14 @@ func buildReplicationInterserverRoutes(routes []config.ReplicationProxyInterserv
 }
 
 func buildAgent(opts Options, rf *redisFactory) (*builtServer, error) {
+	return buildAgentWithMaterializerBuilder(opts, rf, buildMaterializer)
+}
+
+func buildAgentWithMaterializerBuilder(
+	opts Options,
+	rf *redisFactory,
+	materializerBuilder func(*config.Config) (rewriter.Materializer, error),
+) (*builtServer, error) {
 	cfg := opts.Config
 
 	var signer auth.Signer
@@ -938,8 +946,14 @@ func buildAgent(opts Options, rf *redisFactory) (*builtServer, error) {
 	var completePlugins []plugin.QueryCompletePlugin
 	var closePlugins []plugin.ClosePlugin
 	var materializerClose func()
+	buildSucceeded := false
+	defer func() {
+		if !buildSucceeded && materializerClose != nil {
+			materializerClose()
+		}
+	}()
 	if cfg.Materialize.Enabled {
-		m, err := buildMaterializer(cfg)
+		m, err := materializerBuilder(cfg)
 		if err != nil {
 			return nil, fmt.Errorf("materialize: %w", err) // startup fail-fast
 		}
@@ -965,9 +979,13 @@ func buildAgent(opts Options, rf *redisFactory) (*builtServer, error) {
 		if !ok {
 			return nil, fmt.Errorf("storage_integrity.agent: signer %T does not implement auth.StatementSignerV2", signer)
 		}
-		reg, err := agentNetworkState(opts, rf)
-		if err != nil {
-			return nil, fmt.Errorf("storage_integrity.agent: %w", err)
+		var reg registry.Registry
+		if opts.StorageIntegrityTableSchemas == nil {
+			var err error
+			reg, err = agentNetworkState(opts, rf)
+			if err != nil {
+				return nil, fmt.Errorf("storage_integrity.agent: %w", err)
+			}
 		}
 		schemas, err := resolveTableSchemas(opts, reg, "storage_integrity.agent")
 		if err != nil {
@@ -1035,7 +1053,7 @@ func buildAgent(opts Options, rf *redisFactory) (*builtServer, error) {
 	srv := proxy.NewServerWithObserver(chain, dialer, obs)
 	srv.ShutdownTimeout = cfg.ShutdownTimeout.Duration
 
-	return &builtServer{
+	built := &builtServer{
 		listeners: []serverListener{
 			{Runner: &proxyServerRunner{server: srv}, ListenAddr: cfg.Listen, Label: "agent"},
 		},
@@ -1045,7 +1063,9 @@ func buildAgent(opts Options, rf *redisFactory) (*builtServer, error) {
 				materializerClose()
 			}
 		},
-	}, nil
+	}
+	buildSucceeded = true
+	return built, nil
 }
 
 // agentNetworkState resolves the agent's registry. A host-injected registry

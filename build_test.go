@@ -234,12 +234,79 @@ func TestBuildAgent_StorageIntegrityAgentRequiresTableSchemas(t *testing.T) {
 	bs.teardown()
 }
 
+func TestBuildAgent_StorageIntegrityAgentPinnedUpstreamUsesExplicitTableSchemasWithoutNetworkState(t *testing.T) {
+	cfg := agentSICfg(t)
+	bs, err := buildAgent(Options{
+		Config:                       cfg,
+		StorageIntegrityTableSchemas: network.NewInMemoryNetworkState(),
+	}, nil)
+	if err != nil {
+		t.Fatalf("pinned upstream with explicit TableSchemas: %v", err)
+	}
+	bs.teardown()
+}
+
+func TestBuildAgentClosesMaterializerOnBuildFailureAndTeardown(t *testing.T) {
+	t.Run("build failure", func(t *testing.T) {
+		cfg := agentSICfg(t)
+		cfg.Materialize.Enabled = true
+		materializer := &recordingAgentMaterializer{}
+		_, err := buildAgentWithMaterializerBuilder(Options{
+			Config:       cfg,
+			NetworkState: registryWithoutSchemas{network.NewInMemoryNetworkState()},
+		}, nil, func(*config.Config) (rewriter.Materializer, error) {
+			return materializer, nil
+		})
+		if err == nil || !strings.Contains(err.Error(), "TableSchemas") {
+			t.Fatalf("expected TableSchemas build failure, got %v", err)
+		}
+		if materializer.closeCalls != 1 {
+			t.Fatalf("materializer Close calls = %d, want 1 on build failure", materializer.closeCalls)
+		}
+	})
+
+	t.Run("successful teardown", func(t *testing.T) {
+		cfg := agentSICfg(t)
+		cfg.Materialize.Enabled = true
+		materializer := &recordingAgentMaterializer{}
+		bs, err := buildAgentWithMaterializerBuilder(Options{
+			Config:       cfg,
+			NetworkState: network.NewInMemoryNetworkState(),
+		}, nil, func(*config.Config) (rewriter.Materializer, error) {
+			return materializer, nil
+		})
+		if err != nil {
+			t.Fatalf("buildAgentWithMaterializerBuilder: %v", err)
+		}
+		if materializer.closeCalls != 0 {
+			t.Fatalf("materializer closed before teardown: %d", materializer.closeCalls)
+		}
+		bs.teardown()
+		if materializer.closeCalls != 1 {
+			t.Fatalf("materializer Close calls = %d, want 1 after teardown", materializer.closeCalls)
+		}
+	})
+}
+
 // registryWithoutSchemas preserves routing/permission Registry methods while
 // deliberately hiding the embedded state's TableSchemas method signatures.
 type registryWithoutSchemas struct{ *network.InMemoryNetworkState }
 
 func (registryWithoutSchemas) TableSchema(string, string, uint32) {}
 func (registryWithoutSchemas) LatestTableSchema(string, string)   {}
+
+type recordingAgentMaterializer struct {
+	closeCalls int
+}
+
+func (*recordingAgentMaterializer) Materialize(_ context.Context, sql string) (rewriter.MaterializeOutcome, error) {
+	return rewriter.MaterializeOutcome{SQL: sql}, nil
+}
+
+func (m *recordingAgentMaterializer) Close() error {
+	m.closeCalls++
+	return nil
+}
 
 func TestBuildServer_TwoListenersWhenInternalListenSet(t *testing.T) {
 	cfg := minimalServerCfg(t)
