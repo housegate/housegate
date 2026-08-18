@@ -23,7 +23,12 @@ import (
 // (agent plugin, relay signer plugin) and the verifier (EthValidator)
 // consult this constant; any change must be made in lockstep.
 const (
-	AuthTokenSettingKey        = "SQL_x_auth_token"
+	AuthTokenSettingKey = "SQL_x_auth_token"
+	// StatementTokenSettingKey carries the storage-integrity statement JWS
+	// (purpose StatementPurposeV2). It is deliberately distinct from
+	// AuthTokenSettingKey so the ordinary auth plugin's purpose-optional legacy
+	// path can never accept a statement token and vice versa.
+	StatementTokenSettingKey   = "SQL_x_statement_token"
 	MaintenanceSettingKey      = "SQL_sentio_maintenance"
 	PlatformOperatorSettingKey = "SQL_sentio_platform_operator"
 	DriverSettingKey           = "SQL_sentio_driver"
@@ -138,6 +143,66 @@ type JWSPayload struct {
 // other JWS payloads. Legacy query validation remains purpose-optional, while
 // correctness-sensitive lanes can require this exact value.
 const QueryPurpose = "housegate-query"
+
+// StatementPurposeV2 is the JWSStatementPayloadV2.Purpose value.
+const StatementPurposeV2 = "housegate-statement-v2"
+
+// JWSStatementPayloadV2 is the signed payload of a storage-integrity
+// statement token. Every field except Iat is bound: verifiers derive the
+// expected value from the envelope and require exact equality.
+type JWSStatementPayloadV2 struct {
+	Purpose        string `json:"purpose"`
+	Iat            int64  `json:"iat"`
+	NetworkID      string `json:"network_id"`
+	KeeperShardID  uint32 `json:"keeper_shard_id"`
+	StatementID    string `json:"statement_id"`
+	SQLHash        string `json:"sql_hash"`
+	SettingsHash   string `json:"settings_hash"`
+	SchemaHash     string `json:"schema_hash"`
+	PayloadHash    string `json:"payload_hash"`
+	PayloadLength  uint64 `json:"payload_length"`
+	PayloadFormat  string `json:"payload_format"`
+	ClientRevision uint32 `json:"client_revision"`
+	TargetTableID  string `json:"target_table_id"`
+	RowIDProfileID string `json:"row_id_profile_id"`
+}
+
+// StatementPayloadV2Mismatch returns the JSON name of the first bound field
+// that differs between got and want, or "" when every bound field is equal.
+// Iat is not a bound field (freshness is checked separately at the ingress
+// edge); Purpose is compared. Deterministic and side-effect free so the
+// Arbiter FSM can reuse it inside Apply.
+func StatementPayloadV2Mismatch(got, want JWSStatementPayloadV2) string {
+	switch {
+	case got.Purpose != want.Purpose:
+		return "purpose"
+	case got.NetworkID != want.NetworkID:
+		return "network_id"
+	case got.KeeperShardID != want.KeeperShardID:
+		return "keeper_shard_id"
+	case got.StatementID != want.StatementID:
+		return "statement_id"
+	case got.SQLHash != want.SQLHash:
+		return "sql_hash"
+	case got.SettingsHash != want.SettingsHash:
+		return "settings_hash"
+	case got.SchemaHash != want.SchemaHash:
+		return "schema_hash"
+	case got.PayloadHash != want.PayloadHash:
+		return "payload_hash"
+	case got.PayloadLength != want.PayloadLength:
+		return "payload_length"
+	case got.PayloadFormat != want.PayloadFormat:
+		return "payload_format"
+	case got.ClientRevision != want.ClientRevision:
+		return "client_revision"
+	case got.TargetTableID != want.TargetTableID:
+		return "target_table_id"
+	case got.RowIDProfileID != want.RowIDProfileID:
+		return "row_id_profile_id"
+	}
+	return ""
+}
 
 // PeerLoginPurpose is the JWSPeerPayload.Purpose value for a
 // peer-relay login token. Domain-separated from the SQL-binding query

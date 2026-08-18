@@ -327,6 +327,85 @@ func (v *EthValidator) recoverAddressFromInput(signingInput string, signature []
 	return recoverAddress(messageHash, signature)
 }
 
+// DecodeStatementV2Payload parses the payload of a compact statement token
+// without verifying it. Callers that need trust must use ValidateStatementV2.
+func DecodeStatementV2Payload(token string) (JWSStatementPayloadV2, error) {
+	parts := strings.Split(strings.Trim(strings.TrimSpace(token), "\"'"), ".")
+	if len(parts) != 3 {
+		return JWSStatementPayloadV2{}, errors.New("invalid statement JWS format: expected 3 parts")
+	}
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return JWSStatementPayloadV2{}, fmt.Errorf("invalid statement payload encoding: %w", err)
+	}
+	var payload JWSStatementPayloadV2
+	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+		return JWSStatementPayloadV2{}, fmt.Errorf("invalid statement payload JSON: %w", err)
+	}
+	return payload, nil
+}
+
+// ValidateStatementV2 verifies a storage-integrity statement token: compact
+// serialization only, ES256K/secp256k1, purpose == StatementPurposeV2, iat
+// within MaxTokenAge (5s skew), exact equality of every bound field against
+// want (StatementPayloadV2Mismatch), then signer recovery and allowlist.
+// Returns the recovered lowercase 0x address. Callers compare it against
+// statement_id.client_account themselves.
+func (v *EthValidator) ValidateStatementV2(token string, want JWSStatementPayloadV2) (string, error) {
+	token = strings.Trim(strings.TrimSpace(token), "\"'")
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return "", errors.New("invalid statement JWS format: expected 3 parts")
+	}
+	headerBytes, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return "", fmt.Errorf("invalid statement header encoding: %w", err)
+	}
+	var header JWSHeader
+	if err := json.Unmarshal(headerBytes, &header); err != nil {
+		return "", fmt.Errorf("invalid statement header JSON: %w", err)
+	}
+	if header.Alg != "ES256K" && header.Alg != "secp256k1" {
+		return "", fmt.Errorf("unsupported algorithm: %s", header.Alg)
+	}
+	payload, err := DecodeStatementV2Payload(token)
+	if err != nil {
+		return "", err
+	}
+	if payload.Purpose != StatementPurposeV2 {
+		return "", fmt.Errorf("statement token purpose mismatch: expected %q, got %q", StatementPurposeV2, payload.Purpose)
+	}
+	const clockSkewTolerance int64 = 5
+	now := time.Now().Unix()
+	tokenAge := now - payload.Iat
+	if tokenAge < -clockSkewTolerance {
+		return "", errors.New("statement token issued in the future")
+	}
+	if tokenAge < 0 {
+		tokenAge = 0
+	}
+	if time.Duration(tokenAge)*time.Second > v.MaxTokenAge {
+		return "", fmt.Errorf("statement token expired: age %ds exceeds max %s", tokenAge, v.MaxTokenAge)
+	}
+	want.Purpose = StatementPurposeV2
+	if field := StatementPayloadV2Mismatch(payload, want); field != "" {
+		return "", fmt.Errorf("statement token binding mismatch on %s", field)
+	}
+	signature, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		return "", fmt.Errorf("invalid statement signature encoding: %w", err)
+	}
+	recoveredAddr, err := v.recoverAddressFromInput(parts[0]+"."+parts[1], signature)
+	if err != nil {
+		return "", fmt.Errorf("statement signature verification failed: %w", err)
+	}
+	if len(v.AllowedAddresses) > 0 && !v.AllowedAddresses[strings.ToLower(recoveredAddr)] {
+		return "", fmt.Errorf("statement signer %s not in allowlist", recoveredAddr)
+	}
+	log.Debugw("statement token validated", "source", "eth_validator", "address", recoveredAddr, "statement_id", payload.StatementID)
+	return strings.ToLower(recoveredAddr), nil
+}
+
 // ValidatePeerLogin verifies a peer-relay JWS (produced by
 // RelaySigner.SignPeerLogin) and returns the recovered signer address.
 // expectedAudience must match the token's `aud` claim — pass the

@@ -54,6 +54,34 @@ func (s *RelaySigner) SignTokenWithPurpose(sql, purpose string) (string, error) 
 	return s.signToken(sql, purpose)
 }
 
+// SignStatementV2 produces the storage-integrity statement token. Purpose is
+// forced to StatementPurposeV2 and Iat is filled with the current time when
+// zero (tests and vector generation pass an explicit Iat for determinism;
+// secp256k1 signing is RFC 6979 deterministic so a fixed payload yields a
+// fixed token).
+func (s *RelaySigner) SignStatementV2(payload JWSStatementPayloadV2) (string, error) {
+	payload.Purpose = StatementPurposeV2
+	if payload.Iat == 0 {
+		payload.Iat = time.Now().Unix()
+	}
+	header := JWSHeader{Alg: "ES256K", Typ: "JWT"}
+	headerJSON, err := json.Marshal(header)
+	if err != nil {
+		return "", fmt.Errorf("marshal header: %w", err)
+	}
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("marshal statement payload: %w", err)
+	}
+	signingInput := base64.RawURLEncoding.EncodeToString(headerJSON) + "." + base64.RawURLEncoding.EncodeToString(payloadJSON)
+	sig, err := crypto.Sign(keccak256([]byte(signingInput)), s.privateKey)
+	if err != nil {
+		return "", fmt.Errorf("sign statement: %w", err)
+	}
+	sig[64] += 27
+	return signingInput + "." + base64.RawURLEncoding.EncodeToString(sig), nil
+}
+
 func (s *RelaySigner) signToken(sql, purpose string) (string, error) {
 	header := JWSHeader{Alg: "ES256K", Typ: "JWT"}
 	headerJSON, err := json.Marshal(header)
