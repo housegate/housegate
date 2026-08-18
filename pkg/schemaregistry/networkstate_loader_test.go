@@ -170,3 +170,50 @@ func TestNetworkStateLoaderLoad(t *testing.T) {
 		})
 	}
 }
+
+func TestNetworkStateLoaderRejectsSchemaContentForDifferentTable(t *testing.T) {
+	ref := TableRef{TableID: "orders.t", Database: "hg_unsafe", Table: "orders__t"}
+	other := payloadexec.TableSchema{
+		TableID: "other.table",
+		Columns: []lthash.Column{{Name: "id", Type: "UInt64"}},
+	}
+	otherJSON := `{"table_id":"other.table","columns":[{"name":"id","type":"UInt64"}]}`
+	declared := registry.TableSchema{
+		DatabaseId: "orders",
+		TableId:    "t",
+		Version:    1,
+		SchemaHash: payloadexec.TableSchemaHash(networkStateLoaderTestNetwork, other),
+		SchemaJson: otherJSON,
+	}
+	loader := NewNetworkStateLoader(fakeTableSchemas{
+		latest: map[string]registry.TableSchema{"orders/t": declared},
+		exact:  map[string]registry.TableSchema{"orders/t@1": declared},
+	}, networkStateLoaderTestNetwork)
+
+	if _, err := loader.Load(context.Background(), []TableRef{ref}); !errors.Is(err, ErrSchemaIdentityMismatch) {
+		t.Fatalf("Load error = %v, want errors.Is(ErrSchemaIdentityMismatch)", err)
+	}
+}
+
+func TestNetworkStateLoaderRejectsDeclarationForDifferentCoordinates(t *testing.T) {
+	ref := TableRef{TableID: "orders.t", Database: "hg_unsafe", Table: "orders__t"}
+	schema := payloadexec.TableSchema{
+		TableID: ref.TableID,
+		Columns: []lthash.Column{{Name: "id", Type: "UInt64"}},
+	}
+	declared := registry.TableSchema{
+		DatabaseId: "other",
+		TableId:    "table",
+		Version:    1,
+		SchemaHash: payloadexec.TableSchemaHash(networkStateLoaderTestNetwork, schema),
+		SchemaJson: `{"table_id":"orders.t","columns":[{"name":"id","type":"UInt64"}]}`,
+	}
+	loader := NewNetworkStateLoader(fakeTableSchemas{
+		latest: map[string]registry.TableSchema{"orders/t": declared},
+		exact:  map[string]registry.TableSchema{"orders/t@1": declared},
+	}, networkStateLoaderTestNetwork)
+
+	if _, err := loader.Load(context.Background(), []TableRef{ref}); !errors.Is(err, ErrSchemaIdentityMismatch) {
+		t.Fatalf("Load error = %v, want errors.Is(ErrSchemaIdentityMismatch)", err)
+	}
+}
