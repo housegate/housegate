@@ -4,28 +4,61 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 type fakePartsRow struct {
-	database, table, partition string
-	number                     uint64
+	database, table, partition, partitionKey string
+	number                                   uint64
 }
 
 type fakePartsConn struct {
-	rows     []fakePartsRow
-	queryErr error
-	queries  []string
+	mu                sync.Mutex
+	rows              []fakePartsRow
+	queryErr          error
+	queries           []string
+	blockUntilContext bool
+	queryStarted      chan struct{}
 }
 
 func (c *fakePartsConn) Exec(context.Context, string, ...any) error { return nil }
 
-func (c *fakePartsConn) Query(_ context.Context, query string, _ ...any) (MergeRows, error) {
+func (c *fakePartsConn) Query(ctx context.Context, query string, _ ...any) (MergeRows, error) {
+	c.mu.Lock()
 	c.queries = append(c.queries, query)
-	if c.queryErr != nil {
-		return nil, c.queryErr
+	queryErr := c.queryErr
+	rows := append([]fakePartsRow(nil), c.rows...)
+	blockUntilContext := c.blockUntilContext
+	queryStarted := c.queryStarted
+	c.mu.Unlock()
+	if queryStarted != nil {
+		select {
+		case queryStarted <- struct{}{}:
+		default:
+		}
 	}
-	return &fakePartsRows{rows: c.rows}, nil
+	if blockUntilContext {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	if queryErr != nil {
+		return nil, queryErr
+	}
+	return &fakePartsRows{rows: rows}, nil
+}
+
+func (c *fakePartsConn) setRows(rows ...fakePartsRow) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.rows = append([]fakePartsRow(nil), rows...)
+}
+
+func (c *fakePartsConn) setQueryError(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.queryErr = err
 }
 
 type fakePartsRows struct {
@@ -40,7 +73,8 @@ func (r *fakePartsRows) Scan(dest ...any) error {
 	*(dest[0].(*string)) = row.database
 	*(dest[1].(*string)) = row.table
 	*(dest[2].(*string)) = row.partition
-	*(dest[3].(*uint64)) = row.number
+	*(dest[3].(*string)) = row.partitionKey
+	*(dest[4].(*uint64)) = row.number
 	return nil
 }
 func (r *fakePartsRows) Err() error   { return nil }
@@ -58,7 +92,7 @@ func pressureFixture(rows ...fakePartsRow) (*PartsPressureGuard, *fakePartsConn)
 func TestPartsPressureGuard_BuildSnapshotQuery(t *testing.T) {
 	guard, _ := pressureFixture()
 	query := guard.BuildSnapshotQuery()
-	for _, want := range []string{"system.parts", "active", "GROUP BY database, table, partition", "'hg_unsafe'", "'hg_safe'"} {
+	for _, want := range []string{"system.parts", "system.tables", "partition_key", "active", "GROUP BY", "'hg_unsafe'", "'hg_safe'"} {
 		if !strings.Contains(query, want) {
 			t.Fatalf("query %q missing %q", query, want)
 		}
@@ -70,9 +104,9 @@ func TestPartsPressureGuard_BuildSnapshotQuery(t *testing.T) {
 
 func TestPartsPressureGuard_RefreshMapsPartitionsToLogicalIDs(t *testing.T) {
 	guard, _ := pressureFixture(
-		fakePartsRow{"hg_unsafe", "db__t", "a", 3},
-		fakePartsRow{"hg_unsafe", "db__u", "tuple()", 1},
-		fakePartsRow{"hg_safe", "db__t", "a", 7},
+		fakePartsRow{"hg_unsafe", "db__t", "a", "p", 3},
+		fakePartsRow{"hg_unsafe", "db__u", "tuple()", "", 1},
+		fakePartsRow{"hg_safe", "db__t", "a", "p", 7},
 	)
 	snapshot, err := guard.Refresh(context.Background())
 	if err != nil {
@@ -86,12 +120,35 @@ func TestPartsPressureGuard_RefreshMapsPartitionsToLogicalIDs(t *testing.T) {
 	}
 }
 
+func TestPartsPressureGuard_TupleTextUsesTablePartitionMetadata(t *testing.T) {
+	guard, _ := pressureFixture(
+		fakePartsRow{"hg_unsafe", "db__partitioned", "tuple()", "p", 3},
+		fakePartsRow{"hg_unsafe", "db__unpartitioned", "tuple()", "", 1},
+	)
+	snapshot, err := guard.Refresh(context.Background())
+	if err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if got := snapshot[PartsKey{"hg_unsafe", "db__partitioned", "p_tuple()"}]; got != 3 {
+		t.Fatalf("partitioned tuple() value = %d parts, want 3", got)
+	}
+	if got := snapshot[PartsKey{"hg_unsafe", "db__unpartitioned", "all"}]; got != 1 {
+		t.Fatalf("unpartitioned table = %d parts, want 1", got)
+	}
+	if err := guard.Allow("db__partitioned", "p_tuple()"); !errors.Is(err, ErrBackpressure) {
+		t.Fatalf("partitioned tuple() at soft limit must be refused: %v", err)
+	}
+	if err := guard.Allow("db__unpartitioned", "all"); err != nil {
+		t.Fatalf("unpartitioned below soft must be allowed: %v", err)
+	}
+}
+
 func TestPartsPressureGuard_AllowBelowAtAboveSoftAndHard(t *testing.T) {
 	guard, _ := pressureFixture(
-		fakePartsRow{"hg_unsafe", "db__t", "below", 2},
-		fakePartsRow{"hg_unsafe", "db__t", "at_soft", 3},
-		fakePartsRow{"hg_unsafe", "db__t", "above_soft", 4},
-		fakePartsRow{"hg_unsafe", "db__t", "at_hard", 5},
+		fakePartsRow{"hg_unsafe", "db__t", "below", "p", 2},
+		fakePartsRow{"hg_unsafe", "db__t", "at_soft", "p", 3},
+		fakePartsRow{"hg_unsafe", "db__t", "above_soft", "p", 4},
+		fakePartsRow{"hg_unsafe", "db__t", "at_hard", "p", 5},
 	)
 	if _, err := guard.Refresh(context.Background()); err != nil {
 		t.Fatalf("Refresh: %v", err)
@@ -131,17 +188,133 @@ func TestPartsPressureGuard_AllowWithoutSnapshotIsUnavailable(t *testing.T) {
 }
 
 func TestPartsPressureGuard_RefreshErrorKeepsLastGoodSnapshot(t *testing.T) {
-	guard, conn := pressureFixture(fakePartsRow{"hg_unsafe", "db__t", "a", 1})
+	guard, conn := pressureFixture(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 1})
 	if _, err := guard.Refresh(context.Background()); err != nil {
 		t.Fatalf("Refresh: %v", err)
 	}
-	conn.queryErr = errors.New("connection reset")
+	conn.setQueryError(errors.New("connection reset"))
 	if _, err := guard.Refresh(context.Background()); err == nil {
 		t.Fatal("refresh error must surface")
 	}
 	if err := guard.Allow("db__t", "p_a"); err != nil {
 		t.Fatalf("last good snapshot must remain usable: %v", err)
 	}
+}
+
+func TestPartsPressureGuard_ExpiredSnapshotFailsClosedAndRecovers(t *testing.T) {
+	guard, conn := pressureFixture(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 1})
+	now := time.Unix(100, 0)
+	guard.now = func() time.Time { return now }
+	guard.cfg.SnapshotTTL = time.Second
+	if _, err := guard.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if err := guard.Allow("db__t", "p_a"); err != nil {
+		t.Fatalf("fresh snapshot must allow: %v", err)
+	}
+
+	now = now.Add(2 * time.Second)
+	conn.setQueryError(errors.New("connection reset"))
+	if _, err := guard.Refresh(context.Background()); err == nil {
+		t.Fatal("failed refresh must surface")
+	}
+	var unavailable *BackpressureError
+	if err := guard.Allow("db__t", "p_a"); !errors.As(err, &unavailable) || unavailable.Kind != "unavailable" {
+		t.Fatalf("expired snapshot must fail closed: %v", err)
+	}
+
+	conn.setQueryError(nil)
+	conn.setRows(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 2})
+	if _, err := guard.Refresh(context.Background()); err != nil {
+		t.Fatalf("recovery Refresh: %v", err)
+	}
+	if err := guard.Allow("db__t", "p_a"); err != nil {
+		t.Fatalf("successful refresh must recover admission: %v", err)
+	}
+}
+
+func TestPartsPressureGuard_RefreshTimesOut(t *testing.T) {
+	guard, conn := pressureFixture()
+	guard.cfg.RefreshTimeout = 20 * time.Millisecond
+	conn.mu.Lock()
+	conn.blockUntilContext = true
+	conn.queryStarted = make(chan struct{}, 1)
+	conn.mu.Unlock()
+	started := time.Now()
+	if _, err := guard.Refresh(context.Background()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Refresh error = %v, want deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("Refresh took %s, want bounded by refresh timeout", elapsed)
+	}
+}
+
+func TestPartsPressureGuard_ReservePreventsConcurrentOversubscription(t *testing.T) {
+	guard, conn := pressureFixture(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 2})
+	const callers = 16
+	start := make(chan struct{})
+	type result struct {
+		reservation PartsReservation
+		err         error
+	}
+	results := make(chan result, callers)
+	var wg sync.WaitGroup
+	for range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			reservation, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+			results <- result{reservation: reservation, err: err}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	var winner PartsReservation
+	refused := 0
+	for got := range results {
+		if got.err == nil {
+			if winner != nil {
+				t.Fatal("more than one reservation passed at soft-1")
+			}
+			winner = got.reservation
+			continue
+		}
+		if !errors.Is(got.err, ErrBackpressure) {
+			t.Fatalf("reservation error = %v, want ErrBackpressure", got.err)
+		}
+		refused++
+	}
+	if winner == nil || refused != callers-1 {
+		t.Fatalf("winner=%v refused=%d want one winner and %d refusals", winner != nil, refused, callers-1)
+	}
+
+	winner.Release()
+	replacement, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("released capacity must be reusable: %v", err)
+	}
+	replacement.Commit()
+	conn.setRows(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 3})
+	if _, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"}); !errors.Is(err, ErrBackpressure) {
+		t.Fatalf("committed part at soft limit must refuse: %v", err)
+	}
+}
+
+func TestPartsPressureGuard_ReserveIsAllOrNothing(t *testing.T) {
+	guard, _ := pressureFixture(
+		fakePartsRow{"hg_unsafe", "db__t", "a", "p", 2},
+		fakePartsRow{"hg_unsafe", "db__t", "b", "p", 3},
+	)
+	if _, err := guard.Reserve(context.Background(), "db__t", []string{"p_a", "p_b"}); !errors.Is(err, ErrBackpressure) {
+		t.Fatalf("mixed reservation must refuse: %v", err)
+	}
+	reservation, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("failed multi-partition reservation leaked capacity: %v", err)
+	}
+	reservation.Release()
 }
 
 func TestPartsPressureGuard_InvalidateSignalsOnce(t *testing.T) {
@@ -161,7 +334,7 @@ func TestPartsPressureGuard_InvalidateSignalsOnce(t *testing.T) {
 }
 
 func TestLogicalPartitionID(t *testing.T) {
-	if LogicalPartitionID("tuple()") != "all" || LogicalPartitionID("2026") != "p_2026" || LogicalPartitionID("") != "p_" {
+	if LogicalPartitionID("tuple()", false) != "p_tuple()" || LogicalPartitionID("tuple()", true) != "all" || LogicalPartitionID("2026", false) != "p_2026" || LogicalPartitionID("", false) != "p_" {
 		t.Fatal("LogicalPartitionID mapping")
 	}
 }

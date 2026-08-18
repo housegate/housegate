@@ -64,6 +64,9 @@ func TestPartsPressureGuard_AgainstRealSystemParts(t *testing.T) {
 	for i := 1; i <= 3; i++ {
 		mustExec(t, conn, fmt.Sprintf("INSERT INTO %s.%s VALUES (unhex('%064x'), 'p0', %d)", unsafeDB, table, i, i))
 	}
+	for i := 10; i <= 12; i++ {
+		mustExec(t, conn, fmt.Sprintf("INSERT INTO %s.%s VALUES (unhex('%064x'), 'tuple()', %d)", unsafeDB, table, i, i))
+	}
 	mustExec(t, conn, fmt.Sprintf("INSERT INTO %s.%s VALUES (unhex('%064x'), 'p1', 9)", unsafeDB, table, 9))
 	mustExec(t, conn, fmt.Sprintf("INSERT INTO %s.%s VALUES (unhex('%064x'), 7)", unsafeDB, unpartitioned, 7))
 	mustExec(t, conn, fmt.Sprintf("INSERT INTO %s.%s VALUES (unhex('%064x'), 'p0', 1)", safeDB, table, 1))
@@ -79,6 +82,7 @@ func TestPartsPressureGuard_AgainstRealSystemParts(t *testing.T) {
 		t.Fatalf("Refresh: %v", err)
 	}
 	if snapshot[sicore.PartsKey{Database: unsafeDB, Table: table, Partition: "p_p0"}] != 3 ||
+		snapshot[sicore.PartsKey{Database: unsafeDB, Table: table, Partition: "p_tuple()"}] != 3 ||
 		snapshot[sicore.PartsKey{Database: unsafeDB, Table: table, Partition: "p_p1"}] != 1 ||
 		snapshot[sicore.PartsKey{Database: unsafeDB, Table: unpartitioned, Partition: "all"}] != 1 ||
 		snapshot[sicore.PartsKey{Database: safeDB, Table: table, Partition: "p_p0"}] != 1 {
@@ -86,6 +90,9 @@ func TestPartsPressureGuard_AgainstRealSystemParts(t *testing.T) {
 	}
 	if err := guard.Allow(table, "p_p0"); !errors.Is(err, sicore.ErrBackpressure) {
 		t.Fatalf("p_p0 at soft limit must be refused: %v", err)
+	}
+	if err := guard.Allow(table, "p_tuple()"); !errors.Is(err, sicore.ErrBackpressure) {
+		t.Fatalf("partitioned tuple() value at soft limit must be refused: %v", err)
 	}
 	if err := guard.Allow(table, "p_p1"); err != nil {
 		t.Fatalf("p_p1 below soft must be allowed: %v", err)
