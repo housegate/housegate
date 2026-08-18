@@ -1,0 +1,72 @@
+# Multi-Replica Safe Set: Promotion Fan-Out, Lag Replay, and Cold Bootstrap
+
+**Date:** 2026-08-18 **Status:** Proposed **Roadmap:** [v1 closure roadmap](2026-08-18-storage-integrity-v1-closure-roadmap.md) Spec D. **Base:** [2026-06-22 storage integrity design](2026-06-22-storage-integrity-design.md) §10 (pre-state availability), §12.2, §12.5, §13, §15 Q14; [2026-06-30 Arbiter design](2026-06-30-sentio-arbiter-design.md) §8.2–§8.6, §10.5; [2026-07-06 P1c data plane](2026-07-06-arbiter-p1c-dataplane-design.md). **Code base:** arbiter `edd23c3` (`fsm/state.go` `PendingPromotion`, `server/gateway.go` `SubscribePromotions`), arbiter-core `829c44f` (`snode/promote*.go`, `verifier/`), arbiter-proto `v0.4.0`. **Depends on:** Spec A (`SafeState.GetL3Block`, native payloads), Spec C (protocol-created tables on every node). **Source of truth:** English version.
+
+## 1. Problem
+
+The base design promotes on **every** replica that fetched the candidate parts (§12.2 "Promotion runs locally on every replica"), which is what gives it multi-replica `hg_safe` (pre-state availability for mutations §10, cross-node serving audit §13, cold bootstrap from a peer §12.5). What is implemented is **single-writer, single safe replica**: exactly one SNODE-role node subscribes to `PromotionGateway.SubscribePromotions`, `PendingPromotion.Acked` is one bool, and verifiers hold `hg_unsafe` (they byte-side scan it) but no `hg_safe`. Consequences today: one `hg_safe` copy network-wide; a restarted/lagging SNode receives no history from the live-only stream (`server/gateway.go` sends only messages produced after subscription); a new node has no way to obtain `hg_safe` at all; `hg_unsafe` cleanup is scheduled after the single ack, so a replica that missed a promotion can never rebuild it from `hg_unsafe`.
+
+§12.5 lists lag replay and cold bootstrap as a P1 spike. This spec turns them into a design by first making the safe replica set plural, then giving every replica one uniform way to obtain candidate bytes it no longer finds in `hg_unsafe`.
+
+## 2. Goals / non-goals
+
+Goals: (1) every node that hosts protocol tables applies every promotion, in order, and acks per node; (2) a reconnecting/lagging replica receives the promotions it missed and applies them against the recorded base (§12.5), not the live watermark; (3) a replica whose `hg_unsafe` no longer holds the candidate parts (cleaned, or never received because it joined later) obtains byte-equivalent parts by materializing the signed statements through the pinned executor and verifying each part's content commitment before attaching — this is also the cold-bootstrap path; (4) `hg_unsafe` cleanup waits for the active safe replicas but cannot be blocked forever by a dead one; (5) a replica knows, and exposes, whether it is caught up, and refuses SI reads while it is not.
+
+Non-goals: peer-to-peer `hg_safe` part copy (§12.5 path 2 — deferred; L3-replay bootstrap is sufficient for v1 sizes and reuses verifier code); multi-writer (several SOURCE nodes — routing alignment stays the recorded P1e obligation); the P3 SafeAudit / read-set eviction machinery beyond the local caught-up gate; mutation pre-state (P2 consumes the multi-replica `hg_safe` this spec creates).
+
+## 3. Decisions
+
+**D1 — Roles.** `NodeRegistration` gains a `safe_replica bool` (default true for every data-plane role that runs Spec C's `EnsureProtocolTables` in create mode). Verifiers become safe replicas; the SNode stays the sole SOURCE. Verification does not depend on local `hg_safe` (replay uses the previous manifest + DA payloads; the byte-side scan reads `hg_unsafe`), so a verifier's `hg_safe` lag never blocks quorum.
+
+**D2 — Ack model.** `PendingPromotion.Acked bool` → `Acks map[nodeID]PromotionAck` plus a per-node monotone `AppliedPromotionSeq[nodeID]`. **Manifest publication keeps today's latency**: the FSM publishes when the **source node** (the node whose `hg_unsafe` produced the parts, always Active) acks — that ack is what carries the exact `Parts[]` mapping the manifest needs — and other replicas converge asynchronously. Rejected: waiting for a replica quorum before publishing (turns every slow replica into ACK3 latency; the design's ACK3 is defined by the three-way check + finality, not by fan-out completion).
+
+**D3 — Cleanup gate.** `ScheduleUnsafeCleanup` for a promotion is proposed only when `Acks ⊇ ActiveSafeReplicas` **or** each missing replica is `Lagging` (D6). A replica that is Lagging is excluded from the wait and must recover via D5.
+
+**D4 — Uniform candidate acquisition on the replica.** `snode.Role` (renamed conceptually to the *safe-replica executor*; the package stays) applies a promotion by: (a) taking the publish lock, (b) checking the recorded base (`base_safe_snapshot_id` / `base_partition_root` carried in the command) against local `hg_safe` — because a replica applies strictly in `promotion_seq` order, its live state equals the recorded base at every step, so the existing CAS passes and the §12.5 "evaluate per recorded promotion, not against wall-clock-current safe state" rule falls out of ordering; (c) obtaining every candidate part: **prefer** the `hg_unsafe` hardlink path (unchanged); **else** materialize it — fetch the statement envelope(s) via `SafeState.GetL3Block` (Spec A) and payload bytes via the DA store, run the pinned executor (`payloadexec` + `chexec` — the verifier's code) into a scratch `hg_promote` staging table one statement at a time so ClickHouse produces one part per statement-partition exactly like the source did under STOP MERGES, read the part back, compute `part_row_lthash` with `chexec.ScanParts`, and require equality with the `PartRef.part_row_lthash` in the command; mismatch → refuse (do not ack Applied) and raise an alert (it means the anchored claim and the signed payload disagree — challenge evidence, not a local error); (d) build the shadow, run the closure gate and `REPLACE PARTITION` exactly as today. `PromoteSafePartition` therefore gains `repeated uint64 statement_seqs` (the FSM already tracks `PendingPromotion.StatementSeqs`) and each `PartRef` gains `statement_seq` so the replica knows which payload produced which part. Rejected: a separate bootstrap tool — the "missing in `hg_unsafe`" case *is* the bootstrap case; one code path, one test matrix.
+
+**D5 — Cold bootstrap = subscribe from zero.** A new replica registers, runs `EnsureProtocolTables`, and subscribes with `last_applied_promotion_seq = 0`. The gateway replays every issued promotion in order (D7); each is applied via D4 (all candidates come from DA since `hg_unsafe` is empty). Payload availability is guaranteed by the v1 custody chain (`AUDIT` pins are never released). Rejected for v1: peer copy (needs a new inter-node transfer surface; not needed while DA retention is total).
+
+**D6 — Lag classes.** Per replica: `CaughtUp` (applied == issued), `Behind` (applied ≥ issued − `max_lag_promotions`, default 64), `Lagging` (further behind, or unacked for > `lag_timeout`, default 10 min). Transitions are FSM-derived from acks + issued seqs (deterministic; the timeout is evaluated against the leader's clock **outside** Apply and proposed as `MarkLaggingCmd`, mirroring how anchor finality is observed leader-side and recorded). `Lagging` nodes are excluded from the cleanup wait (D3) and are not eligible for `MarkActive` until caught up.
+
+**D7 — Stream resume.** `SNodeHello` gains `last_applied_promotion_seq`; `SubscribePromotions` first sends every issued promotion (and cleanup) with seq > that value from the FSM's retained log, then live messages. The FSM retains issued promotions until every Active or Behind safe replica has acked them; Lagging replicas do not pin retention (they will bootstrap via D5 through the *manifest*: on reconnect the leader sends the current watermark and the replica re-syncs from the oldest retained promotion, materializing everything older from the manifest's `active_parts` — see §4.3).
+
+**D8 — Local read gate.** The replica exposes `SafeReplicaStatus{applied_seq, issued_seq, class}`; sentio-node's SI read rewrite (Spec G) refuses `safe`/`unsafe_latest` reads with a retryable exception while the local class is `Lagging` (config `storage_integrity.read.max_lag_promotions`, default = D6's). `Behind` still serves (bounded staleness). This is the v1 form of §15 Q14 / §13's read-set membership; P3 moves the decision into the Arbiter.
+
+## 4. Protocol and state changes
+
+### 4.1 arbiter-proto (minor bump)
+
+- `NodeRegistration.safe_replica bool`.
+- `SNodeHello.last_applied_promotion_seq uint64`.
+- `PromoteSafePartition.statement_seqs repeated uint64`; `PartRef.statement_seq uint64`.
+- `PromotionAck` unchanged (already carries `node_id`, `promotion_seq`, `applied`, `parts`).
+- `SafeState.GetSafeReplicas() → repeated SafeReplicaStatus{node_id, applied_promotion_seq, class}`.
+- raftlog: `MarkLaggingCmd{node_id}`; `RecordPromotionAckCmd` unchanged (the FSM keys the ack by `ack.node_id`).
+
+### 4.2 arbiter FSM
+
+- `PendingPromotion{Acks map[string]PromotionAck, SourceAcked bool}`; `State.SafeReplicas map[nodeID]*SafeReplicaState{AppliedSeq, Class}`; `State.IssuedPromotions []uint64` retained per D7.
+- `applyRecordPromotionAck`: idempotent per `(promotion_seq, node_id)`; when `ack.node_id == source` and `Applied` → today's manifest/closure/exact-Parts logic runs; other nodes' acks only advance `AppliedSeq[node]` after a **closure re-check** with the same `post == base ⊕ Σverified` equality over the ack's reported post commitment (a replica that produced different bytes cannot advance). `Applied=false` from a non-source node does not rebase the promotion (that is the source's job); it is recorded and the node's class evaluation sees the gap.
+- Cleanup scheduling condition per D3; `MarkLagging` per D6; `MarkActive` for a `safe_replica` node requires `Class != Lagging` (verifier-role Active is unaffected).
+- Snapshot version bump (Spec A already bumps to 2; this spec bumps to 3 if it lands separately — combine if landed together).
+
+### 4.3 arbiter-core replica executor (`snode/`)
+
+- `Role.Run` subscribes with the journaled `last_applied_promotion_seq`; applies strictly in order; a promotion whose seq < the oldest retained is answered by the leader with `NotRetained{oldest_seq, watermark}` → the replica performs **manifest catch-up**: for every table/partition in the current `SafeSnapshotManifest`, materialize the partition's `active_parts` from their statements (needs `SafeState.GetManifest` + `GetL3Block` + DA; every active part is keyed by `part_row_lthash` and Spec A's `PartRef.statement_seq` is mirrored into `PartManifestEntry.statement_seq`), verify each part commitment, `REPLACE PARTITION` from the shadow, journal `applied = oldest_retained − 1`, then continue with the retained stream. This is the cold-bootstrap path when the network has run long enough that promotion 1 is no longer retained.
+- `promote_replace.go`: candidate acquisition per D4 (`acquireCandidate(part) → hardlink | materialize`); the materialize branch is `chexec`-backed and reuses `payloadexec.RowID` so `_hg_row_id` and hence `part_row_lthash` are identical by construction.
+- Local `SafeReplicaStatus` for Spec G's read gate; metrics `storage_integrity_replica_applied_seq`, `..._issued_seq`, `..._class`.
+
+## 5. Testing / acceptance
+
+- FSM: per-node ack table (source ack publishes; second node ack advances its seq only; wrong post commitment does not advance); cleanup gated on `Acks ⊇ ActiveSafeReplicas`; Lagging exclusion; MarkActive gate; snapshot round-trip; determinism suite unchanged (no wall clock in Apply — `MarkLaggingCmd` is proposed leader-side).
+- Gateway: resume from `last_applied` sends the retained backlog in order then live; `NotRetained` when below retention.
+- Docker (`integration/chpipeline` + arbiter-core `snode`): 1 source + 2 safe replicas; (a) all three converge to identical `hg_safe` partition roots after N statements; (b) kill replica B mid-stream, promote twice more, restart B → B catches up in order, CAS passes at every step; (c) let cleanup drop the parts on the source before B applies (force via short lag timeout) → B materializes from DA and its `part_row_lthash` matches; (d) brand-new replica C joins after 20 promotions with retention 10 → manifest catch-up then stream; (e) tamper: change one payload byte in the DA fake for C → C refuses to ack, alert logged, `hg_safe` on C untouched.
+- Spec G integration: a Lagging replica refuses SI reads with a retryable exception; Behind serves.
+
+## 6. Delivery
+
+1. arbiter-proto fields + `GetSafeReplicas` + `MarkLaggingCmd` → tag.
+2. arbiter FSM: per-node acks, classes, cleanup gate, retention, `MarkActive` gate, snapshot bump; gateway resume.
+3. arbiter-core: ordered apply with resume journal; `acquireCandidate` materialize branch; manifest catch-up; status/metrics.
+4. sentio-node: register `safe_replica`, expose status to the read gate.
+5. Docs (Spec B): §12.5 marked implemented; §12.2 "every replica" restored as true.
