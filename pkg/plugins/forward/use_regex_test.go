@@ -14,6 +14,7 @@ func TestMatchUse(t *testing.T) {
 		{"USE tenant1;", "tenant1", true},
 		{"USE `tenant-1`", "tenant-1", true},
 		{"USE \"tenant1\"", "tenant1", true},
+		{"USE /* route */ `tenant``prod`", "tenant`prod", true},
 		{"USE tenant1 SETTINGS x=1", "", false},
 		{"SELECT 1", "", false},
 		{"-- USE comment", "", false},

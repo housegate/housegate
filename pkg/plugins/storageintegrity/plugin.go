@@ -152,6 +152,14 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	if kind == KindInsert && qctx.Query.Compression == proto.CompressionEnabled {
 		return fmt.Errorf("storage_integrity rejects compressed payloads; retry INSERT with ClickHouse query compression disabled")
 	}
+	if err := rejectInlineUserSettings(signedSQL); err != nil {
+		return err
+	}
+	if forwardSQL != signedSQL {
+		if err := rejectInlineUserSettings(forwardSQL); err != nil {
+			return fmt.Errorf("storage_integrity rewritten SQL: %w", err)
+		}
+	}
 	stmtID, err := statementID(qctx)
 	if err != nil {
 		return err
@@ -619,9 +627,10 @@ func classifyStorageIntegrityKind(typ sqlmeta.StatementType, sql string) (Kind, 
 
 func storageIntegrityKindFromSQL(sql string) (Kind, bool, bool) {
 	trimmed := strings.TrimSpace(sql)
-	switch {
-	case insertTargetPattern.MatchString(trimmed):
+	if _, err := sicore.ParseInsertTarget(sql); err == nil || !errors.Is(err, sicore.ErrNotInsert) {
 		return KindInsert, true, false
+	}
+	switch {
 	case updateTargetPattern.MatchString(trimmed), alterUpdateTargetPattern.MatchString(trimmed):
 		return KindUpdate, true, false
 	case deleteTargetPattern.MatchString(trimmed), alterDeleteTargetPattern.MatchString(trimmed):
@@ -635,6 +644,14 @@ func storageIntegrityKindFromSQL(sql string) (Kind, bool, bool) {
 	}
 }
 
+func rejectInlineUserSettings(sql string) error {
+	keys, err := sicore.InlineInsertSettingKeys(sql)
+	if err != nil {
+		return fmt.Errorf("storage_integrity inspect inline SETTINGS: %w", err)
+	}
+	return sicore.RejectUserSettings(keys)
+}
+
 func requirePayloadLocalInsert(sql string) (string, error) {
 	encoding, err := sicore.InsertPayloadEncoding(sql)
 	if err != nil {
@@ -644,21 +661,21 @@ func requirePayloadLocalInsert(sql string) (string, error) {
 }
 
 func targetTableID(qctx *plugin.QueryContext, sql string) (string, error) {
-	sqlTarget := parseTarget(sql)
-	if sqlTarget == "" {
-		return "", errors.New("storage_integrity target table is required")
-	}
-	sqlDB, sqlTable := sqlident.SplitLastPath(sqlTarget)
-	if sqlTable == "" {
-		return "", fmt.Errorf("storage_integrity target table path %q is invalid", sqlTarget)
-	}
 	sessionDB := ""
 	if qctx.Session != nil && qctx.Session.State() != nil {
 		sessionDB = qctx.Session.State().LogicalDatabaseName()
 	}
-	resolvedSQLTarget, err := normalizeSQLTargetTablePath(qctx, sqlTarget, sessionDB)
+	target, err := sicore.ParseInsertTarget(sql)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("storage_integrity target table: %w", err)
+	}
+	if target.Database == "" && sessionDB != "" {
+		target.Database = sessionDB
+	}
+	canonicalTable := sqlident.NormalizePath(sqlident.Quote(target.Table))
+	resolvedSQLTarget := canonicalTable
+	if target.Database != "" {
+		resolvedSQLTarget = target.CanonicalID()
 	}
 	matches := make(map[string]struct{})
 	for _, table := range qctx.AccessedTables {
@@ -669,7 +686,7 @@ func targetTableID(qctx *plugin.QueryContext, sql string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if metadataTable != sqlTable {
+		if metadataTable != canonicalTable {
 			continue
 		}
 		referenceDB := firstNonEmpty(table.OriginalDatabase, table.LogicalDatabase, sessionDB)
@@ -677,7 +694,7 @@ func targetTableID(qctx *plugin.QueryContext, sql string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if sqlDB != "" || sessionDB != "" {
+		if target.Database != "" {
 			if metadataTarget != resolvedSQLTarget {
 				continue
 			}
@@ -698,32 +715,12 @@ func targetTableID(qctx *plugin.QueryContext, sql string) (string, error) {
 		}
 	}
 	if len(matches) > 1 {
-		return "", fmt.Errorf("storage_integrity ambiguous target table %s in rewriter metadata", sqlTarget)
+		return "", fmt.Errorf("storage_integrity ambiguous target table %s in rewriter metadata", resolvedSQLTarget)
 	}
 	if len(qctx.AccessedTables) > 0 {
-		return "", fmt.Errorf("storage_integrity target table mismatch: SQL target %s does not match rewriter metadata", sqlTarget)
+		return "", fmt.Errorf("storage_integrity target table mismatch: SQL target %s does not match rewriter metadata", resolvedSQLTarget)
 	}
 	return resolvedSQLTarget, nil
-}
-
-func normalizeSQLTargetTablePath(qctx *plugin.QueryContext, target, fallbackDB string) (string, error) {
-	db, table := sqlident.SplitLastPath(target)
-	if table == "" {
-		return "", fmt.Errorf("storage_integrity target table path %q is invalid", target)
-	}
-	if db != "" {
-		return normalizeTablePath(target)
-	}
-	db = fallbackDB
-	if db == "" && qctx != nil && qctx.Session != nil && qctx.Session.State() != nil {
-		db = qctx.Session.State().LogicalDatabaseName()
-	}
-	if db != "" {
-		target = sqlident.Quote(db) + "." + table
-	} else {
-		target = table
-	}
-	return normalizeTablePath(target)
 }
 
 func normalizeStructuredTablePath(db, table string) (string, error) {
@@ -739,23 +736,6 @@ func normalizeTablePath(path string) (string, error) {
 		return "", fmt.Errorf("storage_integrity target table path %q is invalid", path)
 	}
 	return normalized, nil
-}
-
-func parseTarget(sql string) string {
-	patterns := []*regexp.Regexp{
-		insertTargetPattern,
-		updateTargetPattern,
-		deleteTargetPattern,
-		alterUpdateTargetPattern,
-		alterDeleteTargetPattern,
-	}
-	for _, pattern := range patterns {
-		match := pattern.FindStringSubmatch(sql)
-		if len(match) == 2 {
-			return match[1]
-		}
-	}
-	return ""
 }
 
 func containsUnmaterializedNondeterminism(sql string) (string, bool) {
@@ -922,7 +902,6 @@ func firstNonEmpty(values ...string) string {
 const identifierPath = "(?:`(?:``|[^`])+`|[A-Za-z_][A-Za-z0-9_]*)(?:\\s*\\.\\s*(?:`(?:``|[^`])+`|[A-Za-z_][A-Za-z0-9_]*))*"
 
 var (
-	insertTargetPattern      = regexp.MustCompile(`(?is)^\s*INSERT\s+INTO\s+(` + identifierPath + `)(?:\s|\(|;|$)`)
 	updateTargetPattern      = regexp.MustCompile(`(?is)^\s*UPDATE\s+(` + identifierPath + `)\s+SET\b`)
 	deleteTargetPattern      = regexp.MustCompile(`(?is)^\s*DELETE\s+FROM\s+(` + identifierPath + `)(?:\s|;|$)`)
 	alterUpdateTargetPattern = regexp.MustCompile(`(?is)^\s*ALTER\s+TABLE\s+(` + identifierPath + `)\s+UPDATE\b`)

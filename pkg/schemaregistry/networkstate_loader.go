@@ -65,9 +65,13 @@ func (l *NetworkStateLoader) Load(ctx context.Context, refs []TableRef) ([]paylo
 
 	out := make([]payloadexec.TableSchema, 0, len(refs))
 	for _, ref := range refs {
-		databaseID, tableID, err := logicalTableCoordinates(ref.TableID)
-		if err != nil {
-			return nil, err
+		databaseID, tableID := ref.LogicalDatabase, ref.LogicalTable
+		if databaseID == "" || tableID == "" {
+			var err error
+			databaseID, tableID, err = logicalTableCoordinates(ref.TableID)
+			if err != nil {
+				return nil, err
+			}
 		}
 		latest, ok := l.schemas.LatestTableSchema(databaseID, tableID)
 		if !ok {

@@ -65,6 +65,11 @@ func declareSchema(t *testing.T, ns *network.InMemoryNetworkState, schema payloa
 	if !ok {
 		t.Fatalf("schema table id %q", schema.TableID)
 	}
+	return declareSchemaAt(t, ns, schema, db, table)
+}
+
+func declareSchemaAt(t *testing.T, ns *network.InMemoryNetworkState, schema payloadexec.TableSchema, db, table string) string {
+	t.Helper()
 	js, err := json.Marshal(schema)
 	if err != nil {
 		t.Fatal(err)
@@ -394,6 +399,53 @@ func TestPlugin_UseTrackingCommitsOnlyAfterUpstreamSuccess(t *testing.T) {
 	}
 	if q.DeferredInsert == nil {
 		t.Fatal("expected deferred plan for shop.orders")
+	}
+}
+
+func TestPlugin_SharedParserBindsRealStructuredTargetAndColumnOrder(t *testing.T) {
+	ns := network.NewInMemoryNetworkState()
+	schema := testSchema()
+	schema.TableID = "`shop-2`.`order.items`"
+	declareSchemaAt(t, ns, schema, "shop-2", "order.items")
+	p, _ := newTestPlugin(t, ns, t.TempDir())
+	sess := newSession(31, "other")
+	use := insertQctx(sess, "USE /* switch */ `shop-2`")
+	if err := p.OnQuery(context.Background(), use); err != nil {
+		t.Fatal(err)
+	}
+	p.OnQuerySuccess(context.Background(), sess, use.Query.ID)
+	p.OnQueryComplete(context.Background(), sess)
+
+	q := insertQctx(sess, "/*lead*/ INSERT /*a*/ INTO TABLE `order.items` /*target*/ (amount, /*c*/ id, region) FORMAT Native")
+	if err := p.OnQuery(context.Background(), q); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	if q.DeferredInsert == nil {
+		t.Fatal("expected deferred plan")
+	}
+	cols := q.DeferredInsert.SampleColumns
+	if len(cols) != 3 || cols[0].Name != "amount" || cols[1].Name != "id" || cols[2].Name != "region" {
+		t.Fatalf("sample columns = %#v", cols)
+	}
+}
+
+func TestPlugin_RejectsInlineSettingsAndInsertIntoFunction(t *testing.T) {
+	ns := network.NewInMemoryNetworkState()
+	declareSchema(t, ns, testSchema())
+	p, _ := newTestPlugin(t, ns, t.TempDir())
+	for _, tc := range []struct {
+		sql, want string
+	}{
+		{"INSERT INTO shop.orders SeTtInGs /*c*/ AsYnC_InSeRt=1 FORMAT Native", "AsYnC_InSeRt"},
+		{"INSERT INTO FUNCTION file('x', Native) FORMAT Native", "FUNCTION"},
+	} {
+		q := insertQctx(newSession(32, "shop"), tc.sql)
+		if err := p.OnQuery(context.Background(), q); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%q: err=%v, want %q rejection", tc.sql, err, tc.want)
+		}
+		if q.DeferredInsert != nil {
+			t.Fatalf("%q admitted deferred plan", tc.sql)
+		}
 	}
 }
 

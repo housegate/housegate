@@ -118,6 +118,9 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 		return nil
 	}
 	if _, err := sicore.InsertPayloadEncoding(sql); err != nil {
+		if errors.Is(err, sicore.ErrInsertIntoFunction) {
+			return fmt.Errorf("storage_integrity agent: %w", err)
+		}
 		// VALUES / SELECT / non-INSERT: ordinary path.
 		return nil
 	}
@@ -128,14 +131,20 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	for _, s := range qctx.Query.Settings {
 		keys = append(keys, s.Key)
 	}
+	inlineKeys, err := sicore.InlineInsertSettingKeys(sql)
+	if err != nil {
+		return fmt.Errorf("storage_integrity agent: inspect inline SETTINGS: %w", err)
+	}
+	keys = append(keys, inlineKeys...)
 	if err := sicore.RejectUserSettings(keys); err != nil {
 		return err
 	}
-	tableID, err := resolveTargetTableID(sql, p.sessionDatabase(qctx.Session))
+	target, err := sicore.ResolveInsertTarget(sql, p.sessionDatabase(qctx.Session))
 	if err != nil {
 		return fmt.Errorf("storage_integrity agent: %w", err)
 	}
-	schema, schemaHash, err := p.loadSchema(ctx, tableID)
+	tableID := target.CanonicalID()
+	schema, schemaHash, err := p.loadSchema(ctx, target)
 	if err != nil {
 		return err
 	}
@@ -187,12 +196,20 @@ func (p *Plugin) sessionDatabase(sess chsession.Session) string {
 	return ""
 }
 
-func (p *Plugin) loadSchema(ctx context.Context, tableID string) (payloadexec.TableSchema, string, error) {
-	db, table, ok := strings.Cut(tableID, ".")
-	if !ok || db == "" || table == "" {
-		return payloadexec.TableSchema{}, "", fmt.Errorf("storage_integrity agent: table id %q must be db.table", tableID)
+func (p *Plugin) loadSchema(ctx context.Context, target sicore.InsertTarget) (payloadexec.TableSchema, string, error) {
+	tableID := target.CanonicalID()
+	if tableID == "" || target.Database == "" || target.Table == "" {
+		return payloadexec.TableSchema{}, "", fmt.Errorf("storage_integrity agent: invalid structured table target %#v", target)
 	}
-	schemas, err := p.loader.Load(ctx, []schemaregistry.TableRef{{TableID: tableID, Database: db, Table: table}})
+	schemas, err := p.loader.Load(ctx, []schemaregistry.TableRef{
+		{
+			TableID:         tableID,
+			Database:        target.Database,
+			Table:           target.Table,
+			LogicalDatabase: target.Database,
+			LogicalTable:    target.Table,
+		},
+	})
 	if err != nil {
 		return payloadexec.TableSchema{}, "", fmt.Errorf("storage_integrity agent: table %s is not declared in network state (SI INSERT requires a declared, hash-verified schema): %w", tableID, err)
 	}

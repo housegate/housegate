@@ -390,6 +390,42 @@ func TestIngressResolvesUnqualifiedTargetAgainstSessionDatabase(t *testing.T) {
 	}
 }
 
+func TestIngressSharedParserBindsOptionalTableStructuredTargetWithoutRewriteMetadata(t *testing.T) {
+	p, signer := newSignedIngress(t)
+	sql := "/*lead*/ InSeRt /*a*/ InTo TABLE `tenant.prod`.`event``log` /*target*/ FORMAT Native"
+	qctx := signedQueryContext(t, 630, signer, sql, sql, sqlmeta.StatementTypeInsert)
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	p.mu.Lock()
+	tableID := p.active[qctx.Session.ID()].admission.TableID
+	p.mu.Unlock()
+	if tableID != "`tenant.prod`.`event``log`" {
+		t.Fatalf("target table = %q, want structured canonical id", tableID)
+	}
+}
+
+func TestIngressRejectsInlineSettingsAndInsertIntoFunction(t *testing.T) {
+	for i, tc := range []struct {
+		sql, want string
+	}{
+		{"INSERT INTO tenant.events SeTtInGs /*c*/ AsYnC_InSeRt=1 FORMAT Native", "AsYnC_InSeRt"},
+		{"INSERT INTO FUNCTION file('x', Native) FORMAT Native", "FUNCTION"},
+	} {
+		p, signer := newSignedIngress(t)
+		qctx := signedQueryContext(t, int64(631+i), signer, tc.sql, tc.sql, sqlmeta.StatementTypeInsert)
+		if err := p.OnQuery(context.Background(), qctx); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%q: err=%v, want %q rejection", tc.sql, err, tc.want)
+		}
+		p.mu.Lock()
+		active := p.active[qctx.Session.ID()]
+		p.mu.Unlock()
+		if active != nil {
+			t.Fatalf("%q created admission %#v", tc.sql, active)
+		}
+	}
+}
+
 func TestIngressRejectsAmbiguousUnqualifiedTargetMetadata(t *testing.T) {
 	p, signer := newSignedIngress(t)
 	sql := "INSERT INTO events FORMAT Native"

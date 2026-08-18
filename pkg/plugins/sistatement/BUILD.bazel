@@ -20,7 +20,6 @@ go_library(
         "//pkg/replay",
         "//pkg/replay/payloadexec",
         "//pkg/schemaregistry",
-        "//pkg/sqlident",
         "//pkg/storageintegrity",
         "@com_github_clickhouse_ch_go//proto",
     ],

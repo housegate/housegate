@@ -26,7 +26,10 @@ func TestResolveTargetTableID(t *testing.T) {
 	}{
 		{"INSERT INTO shop.orders FORMAT Native", "", "shop.orders", ""},
 		{"INSERT INTO `shop`.`orders` (id, region, amount) FORMAT Native", "", "shop.orders", ""},
+		{"/*lead*/ INSERT /*a*/ INTO /*b*/ TABLE /*c*/ `shop-2`.`order.items` FORMAT Native", "", "`shop-2`.`order.items`", ""},
 		{"insert into orders format Native", "shop", "shop.orders", ""},
+		{"insert into `order.items` format Native", "shop.prod", "`shop.prod`.`order.items`", ""},
+		{"INSERT INTO FUNCTION file('x', Native) FORMAT Native", "shop", "", "FUNCTION"},
 		{"INSERT INTO orders FORMAT Native", "", "", "database-qualified"},
 		{"SELECT 1", "", "", "not an INSERT"},
 	}
@@ -54,6 +57,7 @@ func TestInsertColumnList(t *testing.T) {
 		{"INSERT INTO shop.orders FORMAT Native", nil, false, false},
 		{"INSERT INTO shop.orders (id, region, amount) FORMAT Native", []string{"id", "region", "amount"}, true, false},
 		{"INSERT INTO shop.orders (`region`, \"id\", amount) FORMAT Native", []string{"region", "id", "amount"}, true, false},
+		{"INSERT INTO TABLE shop.orders /*target*/ (`region`, /* c */ \"id\", amount) FORMAT Native", []string{"region", "id", "amount"}, true, false},
 		{"INSERT INTO shop.orders ( id ,region ) FORMAT Native", []string{"id", "region"}, true, false},
 		{"INSERT INTO shop.orders (id, ) FORMAT Native", nil, true, true},
 		{"INSERT INTO shop.orders (id region) FORMAT Native", nil, true, true},
@@ -102,6 +106,9 @@ func TestMatchUse(t *testing.T) {
 	}
 	if db, ok := matchUse("  use `shop-2`; "); !ok || db != "shop-2" {
 		t.Fatalf("quoted USE → %q %v", db, ok)
+	}
+	if db, ok := matchUse("USE /* route */ `shop``prod`; "); !ok || db != "shop`prod" {
+		t.Fatalf("commented/escaped USE → %q %v", db, ok)
 	}
 	if _, ok := matchUse("USE shop SETTINGS x=1"); ok {
 		t.Fatal("USE with SETTINGS must not match")

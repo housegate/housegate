@@ -21,9 +21,11 @@ const protocolRowIDColumn = "_hg_row_id"
 // TableSchemaHash, and the physical ClickHouse coordinates to introspect.
 // Callers own the id-to-physical mapping.
 type TableRef struct {
-	TableID  string
-	Database string
-	Table    string
+	TableID         string
+	Database        string
+	Table           string
+	LogicalDatabase string
+	LogicalTable    string
 }
 
 // Loader is the schema-source seam. Phase A implements it over the local
