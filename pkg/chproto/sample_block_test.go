@@ -2,10 +2,18 @@ package chproto
 
 import (
 	"bytes"
+	"errors"
+	"io"
+	"strings"
 	"testing"
 
 	"github.com/ClickHouse/ch-go/proto"
 )
+
+type sampleBlockErrorReadWriter struct{ err error }
+
+func (w sampleBlockErrorReadWriter) Read([]byte) (int, error)  { return 0, io.EOF }
+func (w sampleBlockErrorReadWriter) Write([]byte) (int, error) { return 0, w.err }
 
 func chgoSampleBlock(t *testing.T, rev int) []byte {
 	t.Helper()
@@ -102,5 +110,18 @@ func TestWriteSampleBlock_RejectsUnnamedOrUntypedColumns(t *testing.T) {
 	}
 	if err := c.WriteSampleBlock(nil); err == nil {
 		t.Fatal("a sample block needs at least one column")
+	}
+}
+
+func TestWriteSampleBlock_WriterErrorPreservesCauseWithOperationContext(t *testing.T) {
+	want := errors.New("sink failed")
+	c := NewCodec(sampleBlockErrorReadWriter{err: want}, DirFromClient)
+	c.SetRevision(54460)
+	err := c.WriteSampleBlock([]SampleColumn{{Name: "v", Type: "UInt64"}})
+	if !errors.Is(err, want) {
+		t.Fatalf("WriteSampleBlock error lost writer cause: %v", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "write sample block") {
+		t.Fatalf("WriteSampleBlock error lacks operation context: %v", err)
 	}
 }

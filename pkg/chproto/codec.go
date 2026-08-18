@@ -712,10 +712,10 @@ func (c *Codec) WriteSampleBlock(cols []SampleColumn) error {
 	// net.Pipe-backed test peers.
 	n, err := c.w.Write(buf.Buf)
 	if err != nil {
-		return err
+		return fmt.Errorf("write sample block: %w", err)
 	}
 	if n != len(buf.Buf) {
-		return io.ErrShortWrite
+		return fmt.Errorf("write sample block: %w", io.ErrShortWrite)
 	}
 	return nil
 }
