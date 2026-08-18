@@ -746,13 +746,13 @@ func (o *Orchestrator) Orchestrate(ctx context.Context, adm AdmissionRecord) (In
 	// one, so a resume can only ever advance the statement it first prepared.
 	res, runErr := o.run(ctx, rec.env, rec.adm, rec)
 
-	// Release the frontier only when this intake reaches a success boundary or
-	// completes cleanup. A pre-write prepare rejection reports Cleaned but stays
-	// retryable; releasing is safe because no unsafe source write exists. A retryable/unknown
-	// outcome or a still-pending abort keeps the frontier held so no later
-	// source write jumps ahead of an undecided one; the holder stays this
-	// statement, so its own next retry re-enters.
-	releaseFrontier := runErr == nil && (res.terminal || res.Lifecycle == LifecycleRCBound || res.Lifecycle == LifecycleCleaned)
+	// Release the frontier only when this intake reaches a true terminal/success
+	// boundary. A pre-write prepare rejection reports Cleaned to the caller but
+	// remains retryable and therefore keeps its original source ordering claim:
+	// letting a later statement write first could change the earlier retry's
+	// source claim root. Retryable/unknown outcomes and still-pending aborts keep
+	// the frontier held for the same reason; the holder's own retry is re-entrant.
+	releaseFrontier := runErr == nil && (res.terminal || res.Lifecycle == LifecycleRCBound)
 	o.finishAttempt(rec, res, runErr, releaseFrontier)
 	return res, runErr
 }
@@ -763,16 +763,20 @@ func (o *Orchestrator) Orchestrate(ctx context.Context, adm AdmissionRecord) (In
 func (o *Orchestrator) finishAttempt(rec *intakeRecord, res IntakeResult, err error, releaseFrontier bool) {
 	o.mu.Lock()
 	rec.res, rec.err = res, err
-	rec.active = false
 	if err == nil && res.terminal {
 		rec.isTerminal = true
 		rec.terminalRes = res
 	}
+	// Transfer the frontier in the same critical section that publishes the
+	// completed attempt. Otherwise a same-statement retry can observe active=false
+	// and re-enter the old holder immediately before the prior attempt releases
+	// that holder to another statement.
+	if releaseFrontier {
+		o.releaseFrontierLocked(rec.source, rec.statementID)
+	}
+	rec.active = false
 	close(rec.done)
 	o.mu.Unlock()
-	if releaseFrontier {
-		o.releaseFrontier(rec.source, rec.statementID)
-	}
 }
 
 // finishAttemptAndDropRecord is used only before any source frontier is acquired
@@ -866,6 +870,13 @@ func (o *Orchestrator) run(ctx context.Context, env StatementEnvelope, adm Admis
 				if errors.Is(prepareErr, ErrPrepareTerminalReject) {
 					res := o.resultFor(rec)
 					res.Submit = s
+					// Prepare is known not to have written anything, but a
+					// concurrently returned terminal Submit outcome is still
+					// authoritative. Resolve that outcome through the ordinary
+					// terminal empty-abort path instead of resetting it for retry.
+					if submitErr == nil && s.Category.RequiresAbort() {
+						return o.abort(ctx, res, rec, s.Reason)
+					}
 					return o.abortTerminalPrepareReject(ctx, res, rec, prepareErr.Error())
 				}
 				// The source may have committed its durable unsafe write before a
@@ -1417,9 +1428,7 @@ func (o *Orchestrator) recoverJournalRecordsLocked(records []IntakeJournalRecord
 		}
 		rec.requirePreparedLookup = needsPreparedLookupAfterRestart(rec)
 		o.records[rec.statementID] = rec
-		if !(rec.prepareKnownUnwritten && rec.stage == LifecyclePreparing) {
-			o.fenceRecoveredFrontierLocked(rec.source, rec.statementID)
-		}
+		o.fenceRecoveredFrontierLocked(rec.source, rec.statementID)
 	}
 }
 
@@ -1553,6 +1562,10 @@ func (o *Orchestrator) acquireFrontier(ctx context.Context, source, statementID 
 func (o *Orchestrator) releaseFrontier(source, statementID string) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	o.releaseFrontierLocked(source, statementID)
+}
+
+func (o *Orchestrator) releaseFrontierLocked(source, statementID string) {
 	f := o.frontiers[source]
 	if f == nil || f.holder != statementID {
 		return

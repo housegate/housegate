@@ -458,6 +458,43 @@ func TestOrchestrate_TerminalPrepareRejectAbortsWithoutLookupFence(t *testing.T)
 	}
 }
 
+func TestOrchestrate_TerminalPrepareRejectHonorsConcurrentTerminalSubmit(t *testing.T) {
+	prep := &recordingPreparer{
+		prepareErr: fmt.Errorf("schema_hash mismatch: %w", ErrPrepareTerminalReject),
+	}
+	sub := &recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeTerminalReject, Reason: "conflicting duplicate"}}
+	orch := NewOrchestrator(sub, prep, OrchestratorConfig{ExpectedSource: "snode-A"})
+
+	res, err := orch.Orchestrate(context.Background(), admissionFixture())
+	if err != nil {
+		t.Fatalf("terminal prepare + submit reject: %v", err)
+	}
+	if res.Ack2 || res.Lifecycle != LifecycleCleaned || !res.terminal {
+		t.Fatalf("result = %+v, want terminal Cleaned", res)
+	}
+	if res.Submit.Category != OutcomeTerminalReject {
+		t.Fatalf("submit category = %v, want terminal reject", res.Submit.Category)
+	}
+	if len(prep.abortParts) != 0 {
+		t.Fatalf("abort parts = %+v, want exact empty set", prep.abortParts)
+	}
+	beforePrepare := atomic.LoadInt64(&prep.prepareCount)
+	beforeAbort := atomic.LoadInt64(&prep.abortAt)
+	second, err := orch.Orchestrate(context.Background(), admissionFixture())
+	if err != nil {
+		t.Fatalf("terminal replay: %v", err)
+	}
+	if !second.terminal || second.Lifecycle != LifecycleCleaned {
+		t.Fatalf("terminal replay = %+v, want cached Cleaned", second)
+	}
+	if got := atomic.LoadInt64(&prep.prepareCount); got != beforePrepare {
+		t.Fatalf("terminal replay prepare count = %d, want %d", got, beforePrepare)
+	}
+	if got := atomic.LoadInt64(&prep.abortAt); got != beforeAbort {
+		t.Fatalf("terminal replay abort count = %d, want %d", got, beforeAbort)
+	}
+}
+
 func TestOrchestrate_TerminalPrepareRejectRetriesAfterRestartWithoutLookup(t *testing.T) {
 	journal, err := NewFileIntakeJournal(t.TempDir())
 	if err != nil {
@@ -485,7 +522,7 @@ func TestOrchestrate_TerminalPrepareRejectRetriesAfterRestartWithoutLookup(t *te
 	}
 }
 
-func TestOrchestrate_CleanedPreWriteRejectDoesNotFenceOtherStatementAfterRestart(t *testing.T) {
+func TestOrchestrate_CleanedPreWriteRejectFencesOtherStatementAfterRestart(t *testing.T) {
 	journal, err := NewFileIntakeJournal(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -500,18 +537,146 @@ func TestOrchestrate_CleanedPreWriteRejectDoesNotFenceOtherStatementAfterRestart
 		t.Fatalf("first terminal prepare reject: %v", err)
 	}
 
-	secondPrep := &recordingPreparer{
-		prepared:     boundSource(),
-		claimOutcome: ClaimOutcome{Category: OutcomeAccepted, BoundSource: "snode-A"},
-	}
+	secondPrep := newFrontierProbePreparer()
+	secondPrep.prepared = boundSource()
 	second := NewOrchestrator(&recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeAccepted}}, secondPrep, cfg)
-	adm := admissionFixture()
-	adm.StatementID = "0xabc:2:n2"
+	admA := admissionFixture()
+	admB := admissionFixture()
+	admB.StatementID = fixtureStatementID(2)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	res, err := second.Orchestrate(ctx, adm)
-	if err != nil || !res.Ack2 {
-		t.Fatalf("different statement after restart = %+v, %v, want ACK2 without safe-record frontier fence", res, err)
+	bDone := make(chan error, 1)
+	go func() {
+		_, err := second.Orchestrate(ctx, admB)
+		bDone <- err
+	}()
+	time.Sleep(30 * time.Millisecond)
+	if got := secondPrep.prepareCountFor(admB.StatementID); got != 0 {
+		t.Fatalf("B prepared %d times before safe-retry A converged; recovered frontier must preserve statement order", got)
+	}
+
+	resA, err := second.Orchestrate(ctx, admA)
+	if err != nil || !resA.Ack2 {
+		t.Fatalf("A retry after restart = %+v, %v, want ACK2", resA, err)
+	}
+	select {
+	case err := <-bDone:
+		if err != nil {
+			t.Fatalf("B after A converged: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("B remained blocked after safe-retry A reached a terminal boundary")
+	}
+	if got := secondPrep.prepareCountFor(admB.StatementID); got != 1 {
+		t.Fatalf("B prepare count = %d, want 1 after A converged", got)
+	}
+}
+
+type preWriteRejectFrontierPreparer struct {
+	mu        sync.Mutex
+	aID       string
+	counts    map[string]int
+	retryGate chan struct{}
+}
+
+func (p *preWriteRejectFrontierPreparer) PrepareLocalStatement(_ context.Context, env StatementEnvelope, _ []byte) (PreparedLocalResult, error) {
+	p.mu.Lock()
+	p.counts[env.StatementID]++
+	count := p.counts[env.StatementID]
+	p.mu.Unlock()
+	if env.StatementID == p.aID && count == 1 {
+		return PreparedLocalResult{}, fmt.Errorf("schema_hash mismatch: %w", ErrPrepareTerminalReject)
+	}
+	if env.StatementID == p.aID && count == 2 && p.retryGate != nil {
+		<-p.retryGate
+	}
+	res := boundSource()
+	res.StatementID = env.StatementID
+	return res, nil
+}
+
+func (p *preWriteRejectFrontierPreparer) RegisterPreparedClaim(_ context.Context, _ string) (ClaimOutcome, error) {
+	return ClaimOutcome{Category: OutcomeAccepted, BoundSource: "snode-A"}, nil
+}
+
+func (p *preWriteRejectFrontierPreparer) AbortPreparedStatement(_ context.Context, _ string, parts []CandidatePart, _ string) error {
+	if len(parts) != 0 {
+		return fmt.Errorf("pre-write reject abort received %d candidate parts", len(parts))
+	}
+	return nil
+}
+
+func (p *preWriteRejectFrontierPreparer) count(statementID string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.counts[statementID]
+}
+
+func TestOrchestrate_PreWriteRejectRetainsFrontierUntilRetryConverges(t *testing.T) {
+	admA := admissionFixture()
+	admB := admissionFixture()
+	admB.StatementID = fixtureStatementID(2)
+	retryGate := make(chan struct{})
+	prep := &preWriteRejectFrontierPreparer{
+		aID:       admA.StatementID,
+		counts:    map[string]int{},
+		retryGate: retryGate,
+	}
+	orch := NewOrchestrator(
+		&recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeAccepted}},
+		prep,
+		OrchestratorConfig{ExpectedSource: "snode-A"},
+	)
+
+	first, err := orch.Orchestrate(context.Background(), admA)
+	if err != nil || first.Lifecycle != LifecycleCleaned || first.terminal {
+		t.Fatalf("first pre-write reject = %+v, %v, want retryable Cleaned", first, err)
+	}
+
+	bDone := make(chan error, 1)
+	go func() {
+		_, err := orch.Orchestrate(context.Background(), admB)
+		bDone <- err
+	}()
+	time.Sleep(30 * time.Millisecond)
+	if got := prep.count(admB.StatementID); got != 0 {
+		t.Fatalf("B prepared %d times while safe-retry A remained nonterminal", got)
+	}
+
+	aDone := make(chan error, 1)
+	go func() {
+		_, err := orch.Orchestrate(context.Background(), admA)
+		aDone <- err
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for prep.count(admA.StatementID) < 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := prep.count(admA.StatementID); got != 2 {
+		t.Fatalf("A retry prepare count = %d, want 2", got)
+	}
+	if got := prep.count(admB.StatementID); got != 0 {
+		t.Fatalf("B prepared %d times while A retry held the frontier", got)
+	}
+	close(retryGate)
+	select {
+	case err := <-aDone:
+		if err != nil {
+			t.Fatalf("A retry: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("A retry did not finish")
+	}
+	select {
+	case err := <-bDone:
+		if err != nil {
+			t.Fatalf("B after A: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("B did not acquire the frontier after A converged")
+	}
+	if got := prep.count(admB.StatementID); got != 1 {
+		t.Fatalf("B prepare count = %d, want 1", got)
 	}
 }
 
