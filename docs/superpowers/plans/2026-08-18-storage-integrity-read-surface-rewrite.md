@@ -42,6 +42,10 @@
 
 **D-8 — Wire compatibility needs a positive SI contract acknowledgement.** An older protobuf backend may ignore additive `StorageIntegrityArgs`, return `Success`, and leave all SI fields zero. `RewriteCode=Success` is therefore not trustworthy proof that SI policy ran. Task 1 adds `STORAGE_INTEGRITY_CONTRACT_V1`, request field `StorageIntegrityArgs.contract_version = 4`, and response field `RewriteSQLResponse.storage_integrity_contract_version = 16` (tag 15 stays Spec E's `insert_class`). Both engines first resolve the existing effective table-rewrite selection (last `TableNameRewrite` carrying static/dynamic args wins; static wins within one option). Only an effective dynamic option with non-empty SI tables is validated/acknowledged: missing/unknown version → `InvalidRewriteRequest` without an acknowledgement; accepted v1 → response v1 on every parse/dispatch outcome. A shadowed earlier SI option triggers nothing, while the opposite order makes it active. This is deliberately the table-policy selection: DB-level handlers may still use `FindDynamicArgs`/`findDynamicArgs` for an earlier option's `database_map`, but none consumes `storage_integrity`, so that separate mapping path cannot acknowledge the shadowed SI submessage. HouseGate requires the exact echo before trusting either Success or rejection. The proof also crosses custom seams: `RewriteResult` carries the echo, a configured-SI injected factory must implement `StorageIntegrityCapableFactory` and advertise v1 at startup, and the plugin still verifies every returned result. This closes old gRPC/native backends, no-op injected factories, and adapters that drop the field without changing empty-SI compatibility.
 
+**D-9 — SI mapping precedence is not account authorization, and SI physical databases are protocol-owned namespaces.** Review found that consulting the global `storage_integrity.tables` map before ordinary dynamic resolution could otherwise bypass the account-filtered `database_map`. “SI mapping wins” only selects the safe/unsafe physical rewrite after the logical database has been authorized: every logical SI SELECT/EXISTS/DESCRIBE and INSERT must first find its logical database in `dynamic_args.database_map`; `known_physical_databases` is a direct-physical compatibility surface and never authorizes a global logical SI key. Conversely, every database named by a configured `safe_table` or `unsafe_table` is reserved in its entirety, not only at the configured table name. Both engines reverse-recognize qualified/unqualified table nodes, current-database context, database-scope DCL, USE/SHOW and database DDL; the same unified namespace extractor covers remote/cluster/merge plus local namespace-bearing table functions, `IN`/`GLOBAL IN` table RHS forms, Remote/Distributed/Merge/Buffer table engines, and local ClickHouse dictionary sources. CTAS, INSERT SELECT, and view bodies preflight their embedded sources, while an indirect namespace argument that cannot be resolved rejects conservatively. Every rejection returns structured SI-classified `original_accessed_tables`. Database-scope rejects reuse the existing database-level AccessedTable shape (`original_table=""`), set `physical_database` to the reserved namespace, leave `logical_database` empty, and set `is_storage_integrity=true`, giving HouseGate D-2 an unambiguous fail-closed proof without inventing a synthetic table. This is a review-driven security clarification of D-5, not a change to the frozen physical rewrite choice.
+
+**D-10 — The shared corpus is an atomic Go/C++ publication gate.** Review expanded the corpus with security regressions after the first Go release gate was prepared. The corpus must not be published from only one engine: finish the Go closure, copy the final JSON byte-for-byte into the rewriter-grpc worktree, prove `cmp`/SHA equality, then complete Tasks 10–14 and local cross-engine parity/review. Only after both local gates are clean may publication proceed in dependency order: merge/release rewriter-go v0.7.0 first, then merge/release rewriter-grpc. This sequencing prevents an official Go corpus from temporarily specifying behavior the C++ backend cannot yet enforce.
+
 ## File map
 
 | Repo | Create | Modify |
@@ -68,7 +72,7 @@
 **Interfaces:**
 - Produces (Go, package `pb`): `pb.StorageIntegrityArgs{Tables map[string]*pb.StorageIntegrityArgs_Table, ReadMode pb.StorageIntegrityArgs_ReadMode, ReservedRowIdColumn string, ContractVersion pb.StorageIntegrityContractVersion}`, `pb.StorageIntegrityArgs_Table{SafeTable, UnsafeTable string, ExcludedUnsafeParts []string}`, enum values `pb.StorageIntegrityArgs_READ_MODE_UNSPECIFIED/READ_MODE_SAFE/READ_MODE_UNSAFE_LATEST`, `pb.StorageIntegrityContractVersion_STORAGE_INTEGRITY_CONTRACT_UNSPECIFIED/V1`, `pb.RewriteTableDynamicArgs.StorageIntegrity *pb.StorageIntegrityArgs` (getter `GetStorageIntegrity()`), `pb.RewriteSQLResponse.StorageIntegrityContractVersion` (getter `GetStorageIntegrityContractVersion()`), `pb.AccessedTable.IsStorageIntegrity bool`, `pb.StatementType_STATEMENT_TYPE_DESCRIBE = 22`.
 
-- [ ] **Step 1: Add the messages/fields to `proto/rewriter.proto`**
+- [x] **Step 1: Add the messages/fields to `proto/rewriter.proto`**
 
 Insert immediately before the closing `}` of `message RewriteTableDynamicArgs` (after the `remote_upstreams = 8;` field):
 
@@ -158,17 +162,17 @@ Add to `enum StatementType` after `STATEMENT_TYPE_DROP_VIEW = 21;` **only if Spe
     STATEMENT_TYPE_DESCRIBE = 22;
 ```
 
-- [ ] **Step 2: Lint, regenerate, breaking-check, test**
+- [x] **Step 2: Lint, regenerate, breaking-check, test**
 
 Run: `make lint && make proto && make breaking BREAKING_BASELINE=main && make test`
 Expected: `buf lint` silent; `git status --short gen/` shows `M gen/pb/rewriter.pb.go` (grpc stub unchanged); `buf breaking` silent (additive only); `scripts/next-version_test.sh` + `go test ./...` print `ok`.
 
-- [ ] **Step 3: Verify the generated Go surface**
+- [x] **Step 3: Verify the generated Go surface**
 
 Run: `grep -n "GetStorageIntegrity()\|GetStorageIntegrityContractVersion()\|GetIsStorageIntegrity()\|STORAGE_INTEGRITY_CONTRACT_V1\|StorageIntegrityArgs_READ_MODE_UNSAFE_LATEST\|STATEMENT_TYPE_DESCRIBE" gen/pb/rewriter.pb.go | head`
 Expected: all six surfaces present (DESCRIBE may already have landed from E, but the symbol must exist).
 
-- [ ] **Step 4: Commit and release**
+- [x] **Step 4: Commit and release**
 
 ```bash
 git checkout -b feat/storage-integrity-args
@@ -191,19 +195,19 @@ Expected: `v0.2.0`.
 **Files:**
 - Modify: `go.mod`, `go.sum`
 
-- [ ] **Step 1: Bump**
+- [x] **Step 1: Bump**
 
 Run: `git checkout -b feat/storage-integrity-read-surface && go get github.com/housegate/rewriter-proto@v0.2.0 && go mod tidy`
 Expected: `go.mod` line `github.com/housegate/rewriter-proto v0.2.0`.
 
-- [ ] **Step 2: Build/vet/test (pure-Go lane) and the FFI lane**
+- [x] **Step 2: Build/vet/test (pure-Go lane) and the FFI lane**
 
 Run: `go build ./... && go vet ./... && go test ./...`
 Expected: `ok` for every package (engine-backed tests skip).
 Run: `make test`
 Expected: all packages `ok` (this also proves the FFI lib is built at `third_party/lib/libpolyglot_sql_ffi.<ext>`).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add go.mod go.sum
@@ -222,7 +226,7 @@ git commit -m "build: bump rewriter-proto to v0.2.0 (StorageIntegrityArgs)"
 **Interfaces:**
 - Produces: the JSON schema every engine test consumes — per case: `name`, `sql`, `dynamic{database_map, known_physical_databases, upstream_logical_database_in_context, delim, storage_integrity{tables{<key>{safe_table,unsafe_table,excluded_unsafe_parts}}, read_mode: "SAFE"|"UNSAFE_LATEST", reserved_row_id_column}}`, `want_code`, `want_stmt`, `want_table_rewrites`, `want_accessed[]{original_database, original_table, logical_database, physical_database, is_remote, is_storage_integrity}`, `want_sql` (polyglot canonical, compared semantically in Go), `sql_exact` (byte compare — used only for string-built outputs both engines emit verbatim), `want_sql_contains[]` / `want_sql_not_contains[]` (engine-agnostic substrings; the C++ test uses these), `want_message_contains`, `reject`, `allow_sql_divergence` (oracle: exempt `sql_after_rewrite` because ClickHouse renders `* EXCEPT _hg_row_id` without parens for a single column while polyglot renders `* EXCEPT (_hg_row_id)`; structured fields stay gated).
 
-- [ ] **Step 1: Write the golden file (this exact content — the C++ copy in Task 11 must be byte-identical)**
+- [x] **Step 1: Write the golden file (this exact content — the C++ copy in Task 11 must be byte-identical)**
 
 ```json
 [
@@ -645,7 +649,7 @@ git commit -m "build: bump rewriter-proto to v0.2.0 (StorageIntegrityArgs)"
 ]
 ```
 
-- [ ] **Step 2: Extend `accessedJSON` + `checkAccessed` in `internal/harness/select_golden_test.go`**
+- [x] **Step 2: Extend `accessedJSON` + `checkAccessed` in `internal/harness/select_golden_test.go`**
 
 Change the struct (line ~57) and the comparison (inside `checkAccessed`, the `if g.GetOriginalDatabase() != w.OriginalDatabase || …` chain):
 
@@ -662,7 +666,7 @@ type accessedJSON struct {
 
 and add `|| g.GetIsStorageIntegrity() != w.IsStorageIntegrity` to the mismatch condition in `checkAccessed` (existing corpora omit the field → `false`, so they keep passing).
 
-- [ ] **Step 3: Write the harness runner `internal/harness/storage_integrity_golden_test.go`**
+- [x] **Step 3: Write the harness runner `internal/harness/storage_integrity_golden_test.go`**
 
 ```go
 package harness
@@ -873,12 +877,12 @@ func TestStorageIntegrityGolden(t *testing.T) {
 }
 ```
 
-- [ ] **Step 4: Run the new golden test — it must be RED (nothing implemented yet)**
+- [x] **Step 4: Run the new golden test — it must be RED (nothing implemented yet)**
 
 Run: `POLYGLOT_SQL_FFI_PATH=$PWD/third_party/lib/libpolyglot_sql_ffi.dylib go test ./internal/harness -run TestStorageIntegrityGolden -count=1 2>&1 | tail -30`
 Expected: `--- FAIL: TestStorageIntegrityGolden` with sub-failures for every `si_*` case (`sql (semantic)` / `code = Success, want UnsupportedStatement` / `accessed len` mismatches); `non_si_table_unaffected` and `si_absent_args_ordinary_rewrite` pass. Existing corpora still green: `go test ./internal/harness -run 'TestSelectGolden|TestPhase4Golden|TestWritesGolden|TestDBLevelGolden' -count=1` → `ok`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/harness/testdata/storage_integrity_cases.json internal/harness/storage_integrity_golden_test.go internal/harness/select_golden_test.go
@@ -906,14 +910,14 @@ git commit -m "test(harness): add shared storage-integrity golden corpus (Spec G
   - `func StorageIntegrityWriteRejectMessage(logicalKey string) string` → `"storage-integrity table " + logicalKey + " accepts writes only through the signed statement lane"`.
   - `Accessed.IsStorageIntegrity bool` populated by `ResolveAccessed` in dynamic mode.
 
-- [ ] **Step 1: Write the failing contract tests in `native_test.go`**
+- [x] **Step 1: Write the failing contract tests in `native_test.go`**
 
 Use a small `siContractOptions(version)` helper with one `db1.t` table and table-driven cases covering: v1 + valid SELECT → Success/v1; v1 + syntax error → SyntaxError/v1; v1 + an SI semantic rejection after the later handlers land → reject/v1 (until then use a parseable path that returns any response); unspecified and unknown numeric versions → `InvalidRewriteRequest`/unspecified; no `storage_integrity` block and an empty `tables` block → existing behavior/unspecified. Add opposite-order multi-option cases: `[SI-v1 dynamic, static]` uses the later static table selection and returns no acknowledgement; `[static, SI-v1 dynamic]` acknowledges v1; repeat with a missing-version SI option to prove only the active order rejects. Add a DB-level `USE db1` variant proving that the earlier dynamic `database_map` may still rewrite USE under `FindDynamicArgs` while its shadowed SI block remains unacknowledged; reversing the order acknowledges v1. Assert `resultFromPB` preserves the version. In `internal/harness/compare_test.go`, clone two responses that differ only in `storage_integrity_contract_version` and require `Compare(...).Mismatches` to contain that field. These tests must call the public `NativeRewriter.Rewrite`, not only a helper, so the interface boundary is covered.
 
 Run: `go test . -run 'TestStorageIntegrityContract' -count=1`
 Expected: compile errors for the new enum/result field before Task 1's dependency bump, then assertion failures until the central gate is implemented.
 
-- [ ] **Step 2: Implement the central contract gate in `native.go` and the result copy in `rewriter.go`**
+- [x] **Step 2: Implement the central contract gate in `native.go` and the result copy in `rewriter.go`**
 
 Use `nameresolve.FindActive(opts)` as the single source of truth; do not independently scan every option. Inspect SI only when the returned selection is `ModeDynamic`. In `doRewrite`, allocate the response first, resolve/validate the effective selection **before `ParseOne`**, and on an active SI request either (a) return `InvalidRewriteRequest` with message `storage-integrity contract version V1 is required`, original SQL echoed, and the acknowledgement unspecified, or (b) set `resp.StorageIntegrityContractVersion = ...V1` and continue. Because every later branch returns that same response (or a handler response), ensure `finalize` copies/stamps v1 onto handler-created responses as well; the simplest safe shape is to carry the accepted version into `finalize(resp, sql, ec, siVersion)` and stamp it before every return. Internal Go errors still return no response and remain HouseGate fail-closed. Add `StorageIntegrityContractVersion` to `RewriteResult` and root `resultFromPB`.
 
@@ -926,7 +930,7 @@ Then make the harness proof load-bearing in the same task (now that the result f
 			}
 ```
 
-- [ ] **Step 3: Write the failing name-resolution tests (append to `resolve_test.go`)**
+- [x] **Step 3: Write the failing name-resolution tests (append to `resolve_test.go`)**
 
 ```go
 func siArgs(upstream string) *pb.RewriteTableDynamicArgs {
@@ -1001,12 +1005,12 @@ func TestStorageIntegrityWriteRejectMessage(t *testing.T) {
 }
 ```
 
-- [ ] **Step 4: Run to verify name-resolution failure**
+- [x] **Step 4: Run to verify name-resolution failure**
 
 Run: `go test ./internal/nameresolve -run 'TestLookupStorageIntegrity|TestReservedRowIDColumn|TestResolveAccessed_flagsStorageIntegrity|TestStorageIntegrityWriteRejectMessage' -count=1`
 Expected: compile error `undefined: LookupStorageIntegrity` (and the others).
 
-- [ ] **Step 5: Implement in `resolve.go`**
+- [x] **Step 5: Implement in `resolve.go`**
 
 Add the field to `Accessed`:
 
@@ -1074,12 +1078,12 @@ func StorageIntegrityWriteRejectMessage(logicalKey string) string {
 }
 ```
 
-- [ ] **Step 6: Run tests**
+- [x] **Step 6: Run tests**
 
 Run: `go test . ./internal/nameresolve -run 'TestStorageIntegrityContract|TestLookupStorageIntegrity|TestReservedRowIDColumn|TestResolveAccessed_flagsStorageIntegrity|TestStorageIntegrityWriteRejectMessage' -count=1 && go test ./internal/harness -run 'TestCompare.*StorageIntegrityContract' -count=1`
 Expected: all targeted packages pass. The full SI golden remains red on the not-yet-implemented rewrite behavior, but its acknowledgement assertions now pass.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add native.go native_test.go rewriter.go internal/nameresolve/resolve.go internal/nameresolve/resolve_test.go internal/harness/storage_integrity_golden_test.go internal/harness/writes_golden_test.go internal/harness/compare.go internal/harness/compare_test.go
@@ -1097,7 +1101,7 @@ git commit -m "feat(rewriter): require and acknowledge storage-integrity contrac
 **Interfaces:**
 - Produces: `engine.ActionSubquery TableAction` (after `ActionRemote`); `TableDecision.Subquery AST` (a parsed `{"select":…}` / `{"union":…}` node from `Engine.ParseOne`, used as the derived-table body; the alias is the user alias or the original qualified name, exactly like `ActionRemote`); `func ReferencesIdentifier(ast AST, name string) (bool, error)` (any `column` node whose final name part equals `name`, or any `star.except/replace/rename` entry named `name`; string literals do not count).
 
-- [ ] **Step 1: Write the failing tests (append to `nodes_test.go`)**
+- [x] **Step 1: Write the failing tests (append to `nodes_test.go`)**
 
 ```go
 func TestRewriteSelectTables_subquerySubstitution(t *testing.T) {
@@ -1205,12 +1209,12 @@ func TestReferencesIdentifier(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `POLYGLOT_SQL_FFI_PATH=$PWD/third_party/lib/libpolyglot_sql_ffi.dylib go test ./internal/engine -run 'TestRewriteSelectTables_subquery|TestReferencesIdentifier' -count=1`
 Expected: compile error `undefined: ActionSubquery` / `unknown field Subquery` / `undefined: ReferencesIdentifier`.
 
-- [ ] **Step 3: Implement in `nodes.go`**
+- [x] **Step 3: Implement in `nodes.go`**
 
 Constants and decision:
 
@@ -1318,12 +1322,12 @@ func refWalk(node any, name string) bool {
 }
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `POLYGLOT_SQL_FFI_PATH=$PWD/third_party/lib/libpolyglot_sql_ffi.dylib go test ./internal/engine -count=1`
 Expected: `ok  	github.com/housegate/rewriter-go/internal/engine` (incl. `TestCharacterizeAST` regenerating fixtures — check `git status` shows no fixture drift).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/engine/nodes.go internal/engine/nodes_test.go
@@ -1342,7 +1346,7 @@ git commit -m "feat(engine): ActionSubquery derived-table substitution and Refer
 - Consumes: Task 4 `nameresolve.LookupStorageIntegrity/ReservedRowIDColumn`, Task 5 `engine.ActionSubquery/ReferencesIdentifier`.
 - Produces: `func storageIntegritySurfaceSQL(tbl *pb.StorageIntegrityArgs_Table, args *pb.StorageIntegrityArgs) string`; `func splitPhysicalName(name string) (db, table string)` (split at first `.`; `("", name)` when none); `const reservedColumnRejectFmt = "reserved column %s is not addressable"`.
 
-- [ ] **Step 1: Write failing handler tests (`storage_integrity_test.go`)**
+- [x] **Step 1: Write failing handler tests (`storage_integrity_test.go`)**
 
 ```go
 package handlers
@@ -1471,12 +1475,12 @@ func TestRewriteSelect_reservedColumnOnNonSITableAllowed(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `POLYGLOT_SQL_FFI_PATH=$PWD/third_party/lib/libpolyglot_sql_ffi.dylib go test ./internal/handlers -run 'TestStorageIntegritySurfaceSQL|TestRewriteSelect_storageIntegrity|TestRewriteSelect_reservedColumn' -count=1`
 Expected: compile error `undefined: storageIntegritySurfaceSQL`.
 
-- [ ] **Step 3: Create `internal/handlers/storage_integrity.go`**
+- [x] **Step 3: Create `internal/handlers/storage_integrity.go`**
 
 ```go
 package handlers
@@ -1549,7 +1553,7 @@ func storageIntegrityDecision(e engine.Engine, tt engine.TableTarget, tbl *pb.St
 }
 ```
 
-- [ ] **Step 4: Wire it into `select.go`**
+- [x] **Step 4: Wire it into `select.go`**
 
 Replace the `RewriteSelectTables` call in `rewriteSelectCore` (lines ~103-108) with the SI-aware version, and add the reserved-column guard right after `resp.OriginalAccessedTables = buildAccessed(originals, sel)`:
 
@@ -1639,14 +1643,14 @@ In `writes.go` `dispatchView`, right after `newBody, bodyResp, err := rewriteSel
 			}
 ```
 
-- [ ] **Step 5: Run tests**
+- [x] **Step 5: Run tests**
 
 Run: `POLYGLOT_SQL_FFI_PATH=$PWD/third_party/lib/libpolyglot_sql_ffi.dylib go test ./internal/handlers -count=1`
 Expected: `ok  	github.com/housegate/rewriter-go/internal/handlers`.
 Run: `POLYGLOT_SQL_FFI_PATH=$PWD/third_party/lib/libpolyglot_sql_ffi.dylib go test ./internal/harness -run TestStorageIntegrityGolden -count=1 2>&1 | grep -E '^\s+--- (PASS|FAIL)'`
 Expected: PASS for `si_safe_plain_select`, `si_safe_alias_join_non_si`, `si_unsafe_latest_*`, `si_safe_subquery_in_where`, `si_reserved_column_*`, `si_star_hides_rid`, `si_use_default_database`, `non_si_table_unaffected`, `si_absent_args_ordinary_rewrite`; the write/EXISTS/DESCRIBE cases still FAIL.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/handlers/storage_integrity.go internal/handlers/storage_integrity_test.go internal/handlers/select.go internal/handlers/writes.go
@@ -1665,7 +1669,7 @@ git commit -m "feat(handlers): storage-integrity SELECT surface (safe/unsafe_lat
 - Consumes: Task 4 helpers, Task 6 `splitPhysicalName`.
 - Produces: SI branch semantics — `decideWriteTarget` rejects every non-INSERT slot resolving to an SI table with `nameresolve.StorageIntegrityWriteRejectMessage(key)` (accessed recorded first, `IsStorageIntegrity=true`); `RewriteExistsShowCreate`: EXISTS → `EXISTS TABLE <safe>` (`table_rewrites[key] = safe_table`), SHOW CREATE → `UnsupportedStatement` `"SHOW CREATE TABLE on storage-integrity table <key> is not supported"`; `RewriteGrant`: table-scoped GRANT/REVOKE on an SI table → `UnsupportedStatement` with the write message.
 
-- [ ] **Step 1: Append failing tests**
+- [x] **Step 1: Append failing tests**
 
 ```go
 func TestWrites_storageIntegrityRejectsNonLane(t *testing.T) {
@@ -1768,12 +1772,12 @@ func TestGrant_storageIntegrityRejected(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `POLYGLOT_SQL_FFI_PATH=$PWD/third_party/lib/libpolyglot_sql_ffi.dylib go test ./internal/handlers -run 'TestWrites_storageIntegrity|TestExists_storageIntegrity|TestShowCreate_storageIntegrity|TestGrant_storageIntegrity' -count=1`
 Expected: FAIL — `code=Success msg="success"` for the reject cases; EXISTS produces ``EXISTS TABLE phys.`db1.t` ``.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `writes.go` — `decideWriteTarget` becomes:
 
@@ -1827,12 +1831,12 @@ func decideWriteTarget(tt engine.TableTarget, kind string, sel nameresolve.Selec
 
 (`origDB`, `origTable`, `scopeDatabase`, `dyn` are the existing locals in `RewriteGrant`.) Add opposite-order GRANT tests (`[SI dynamic, static]` does not take the SI branch; `[static, SI dynamic]` does) to prevent this handler from drifting away from D-8.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `POLYGLOT_SQL_FFI_PATH=$PWD/third_party/lib/libpolyglot_sql_ffi.dylib go test ./internal/handlers ./internal/harness -count=1 2>&1 | tail -20`
 Expected: handlers `ok`; `TestStorageIntegrityGolden` now fails ONLY on `si_describe_metadata_select` (statement_type UNSPECIFIED, sql passthrough) — all others PASS; existing corpora `ok`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/handlers/writes.go internal/handlers/exists.go internal/handlers/grant.go internal/handlers/storage_integrity_test.go
@@ -1854,7 +1858,7 @@ git commit -m "feat(handlers): reject non-lane writes/DDL on storage-integrity t
 
 > If Spec E's `handlers.RewriteDescribe` already exists when you get here: skip creating `describe.go`, add only the SI branch (`describeMetadataSQL` + the `LookupStorageIntegrity` check before its EXISTS-style resolution) and the tests below.
 
-- [ ] **Step 1: Failing tests (`describe_test.go`)**
+- [x] **Step 1: Failing tests (`describe_test.go`)**
 
 ```go
 package handlers
@@ -1922,12 +1926,12 @@ func TestRewriteDescribe_nonSIPassesThrough(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `POLYGLOT_SQL_FFI_PATH=$PWD/third_party/lib/libpolyglot_sql_ffi.dylib go test ./internal/handlers -run 'TestDescribe|TestRewriteDescribe' -count=1`
 Expected: compile error `undefined: describeMetadataSQL` / `RewriteDescribe`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `internal/engine/objtarget.go` — add the verb and recognise it:
 
@@ -2037,12 +2041,12 @@ and in `classifyCommand` add before the `default:` (note `DESCRIBE` also starts 
 		return pb.StatementType_STATEMENT_TYPE_DESCRIBE
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `POLYGLOT_SQL_FFI_PATH=$PWD/third_party/lib/libpolyglot_sql_ffi.dylib go test ./internal/handlers ./internal/harness ./ -count=1 2>&1 | tail -20`
 Expected: all `ok`; `TestStorageIntegrityGolden` fully green (23/23 subtests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/engine/objtarget.go internal/handlers/exists.go internal/handlers/describe.go internal/handlers/describe_test.go native.go native_test.go
@@ -2056,12 +2060,12 @@ git commit -m "feat: minimal DESCRIBE handler with storage-integrity metadata SE
 **Files:**
 - Modify: `AGENTS.md` (CODE MAP + CONVENTIONS), `README.md` (Status paragraph), `internal/handlers/AGENTS.md`, `internal/harness/AGENTS.md` (WHERE TO LOOK rows)
 
-- [ ] **Step 1: Full test run (pure + FFI + fidelity spike)**
+- [x] **Step 1: Full test run (pure + FFI + fidelity spike)**
 
 Run: `go vet ./... && make test && POLYGLOT_SQL_FFI_PATH=$PWD/third_party/lib/libpolyglot_sql_ffi.dylib go run ./cmd/fidelity-spike | tail -3`
 Expected: every package `ok`; fidelity spike prints its summary line unchanged from `main` (no new parse failures — the SI paths only add nodes polyglot already round-trips).
 
-- [ ] **Step 2: Docs**
+- [x] **Step 2: Docs**
 
 Add to `AGENTS.md` CODE MAP: `| handlers.RewriteDescribe | function | internal/handlers/describe.go | DESCRIBE classification; SI metadata SELECT |`, `| nameresolve.LookupStorageIntegrity | function | internal/nameresolve/resolve.go | SI table lookup consulted before dynamic resolution |`, `| engine.ActionSubquery | const | internal/engine/nodes.go | derived-table substitution used by the SI read surface |`. Add to CONVENTIONS: "Storage-integrity (Spec G) goldens live in `internal/harness/testdata/storage_integrity_cases.json`; the C++ repo carries a byte-identical copy — change both in lockstep." Add the same one-line WHERE TO LOOK rows to `internal/handlers/AGENTS.md` (`storage_integrity.go`, `describe.go`) and `internal/harness/AGENTS.md` (`storage_integrity_golden_test.go`).
 
@@ -2099,7 +2103,7 @@ ssh -p 30100 sentio@64.38.131.242 "cd /home/sentio/chen/rewriter-grpc && ./scrip
 **Interfaces:**
 - Produces: gtest suite `StorageIntegrityGolden/*` reading `REWRITER_TEST_DATA_DIR/storage_integrity_cases.json`; helper `applyStorageIntegrityArgs(rewriter::RewriteTableDynamicArgs*, const Poco::JSON::Object::Ptr&)`.
 
-- [ ] **Step 1: Bump the submodule and copy the corpus**
+- [x] **Step 1: Bump the submodule and copy the corpus**
 
 ```bash
 git checkout -b feat/storage-integrity-read-surface
@@ -2111,7 +2115,7 @@ cmp tests/testdata/storage_integrity_cases.json ../rewriter-go/internal/harness/
 ```
 Expected: `IDENTICAL`.
 
-- [ ] **Step 2: Test data path define in `tests/CMakeLists.txt`**
+- [x] **Step 2: Test data path define in `tests/CMakeLists.txt`**
 
 After `target_include_directories(rewriter_tests PRIVATE …)` add:
 
@@ -2120,7 +2124,7 @@ target_compile_definitions(rewriter_tests PRIVATE
     REWRITER_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/testdata")
 ```
 
-- [ ] **Step 3: Append the parametrised suite to `tests/rewriter_test.cc`**
+- [x] **Step 3: Append the parametrised suite to `tests/rewriter_test.cc`**
 
 ```cpp
 // ============================================================================
@@ -2303,12 +2307,12 @@ INSTANTIATE_TEST_SUITE_P(SpecG, StorageIntegrityGolden, ::testing::ValuesIn(load
 
 `FindAccessed` is the existing helper defined earlier in the same file (anonymous namespace at ~:727) — keep this block *below* it. If the include of `<Poco/JSON/Parser.h>` fails to resolve, add `Poco::JSON` to `target_link_libraries(rewriter_tests PRIVATE …)` in `tests/CMakeLists.txt` (ClickHouse's contrib Poco ships the JSON module).
 
-- [ ] **Step 4: Build and run — must be RED**
+- [x] **Step 4: Build and run — must be RED**
 
 Run: rsync + rebuild, then `$RB "cd $WD && ./build/rewriter_tests --gtest_filter='SpecG/StorageIntegrityGolden.*' 2>&1 | tail -40"`
 Expected: build succeeds (the proto generates `has_storage_integrity()` and the v1 enum); `[  FAILED  ]` for every `si_*` case, including a missing contract acknowledgement, while `non_si_table_unaffected` and `si_absent_args_ordinary_rewrite` pass with an unspecified response version.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add third_party/rewriter-proto tests/testdata/storage_integrity_cases.json tests/CMakeLists.txt tests/rewriter_test.cc
@@ -2339,14 +2343,14 @@ git commit -m "test: shared storage-integrity golden corpus + proto v0.2.0 (Spec
   - `std::string describeMetadataSQL(const std::string &safe_table, const std::string &rid);` (Task 13 uses it; define here so both handlers share one string builder)
   - `AccessedTableResolution::is_storage_integrity` (bool) filled by `resolveAccessedTable` in dynamic mode; `recordAccessedTable` copies it into the proto.
 
-- [ ] **Step 1: Add the central contract tests and implementation**
+- [x] **Step 1: Add the central contract tests and implementation**
 
 In `tests/rewriter_test.cc`, construct direct requests (not only shared corpus cases) covering v1+valid SQL, v1+syntax error, unspecified/unknown versions, no block, and an empty `tables` block. Add the same opposite-order `[SI dynamic, static]` / `[static, SI dynamic]` cases (including missing-version SI) as native Task 4 to lock last-wins behavior, plus the DB-level `USE` regression: an earlier dynamic `database_map` can still drive USE through `findDynamicArgs` behind a later static option, but that shadowed SI block receives no acknowledgement; reversed order receives v1. Assert the same code/version matrix and that invalid-version responses echo the original SQL. Include `handlers/name_rewrite.h` in `rewriter-server.cc`; in `doRewrite`, call `rewriter_handlers::findActiveTableRewrite` and stamp before `QueryPreprocessor::preprocess` / `parseQuery`. On invalid active version set `sql_after_rewrite` to the original query, `InvalidRewriteRequest`, and the shared message, without an acknowledgement. Do not put logic in the thin gRPC wrapper, so the HTTP façade and `doRewriteErrorMessage` re-run share it. The access log may include the response code as today; no SQL is logged.
 
 Run: rsync + rebuild, then `$RB "cd $WD && ./build/rewriter_tests --gtest_filter='StorageIntegrityContract.*'"`
 Expected: PASS after implementation.
 
-- [ ] **Step 2: Write the header + implementation**
+- [x] **Step 2: Write the header + implementation**
 
 `src/handlers/storage_integrity.h` declares the functions above (`#pragma once`, includes `<Parsers/IAST.h>`, `<optional>`, `<string>`, `"rewriter.grpc.pb.h"`). `src/handlers/storage_integrity.cc`:
 
@@ -2458,11 +2462,11 @@ std::string describeMetadataSQL(const std::string &safe_table, const std::string
 
 Add `src/handlers/storage_integrity.cc` to the `rewriter_core` source list in `CMakeLists.txt`.
 
-- [ ] **Step 3: `name_rewrite` — accessed flag**
+- [x] **Step 3: `name_rewrite` — accessed flag**
 
 `name_rewrite.h`: add `bool is_storage_integrity = false;` to `AccessedTableResolution`. `name_rewrite.cc`: `#include "handlers/storage_integrity.h"`; in `resolveAccessedTable`'s dynamic branch, before `return out;` add `if (lookupStorageIntegrity(origin_db, origin_table, args)) out.is_storage_integrity = true;`; in `recordAccessedTable` add `entry->set_is_storage_integrity(resolution.is_storage_integrity);`.
 
-- [ ] **Step 4: `select.cc` — SI branch in `dynamicRewriteWalk`, reserved guard in `handleSelectQuery`**
+- [x] **Step 4: `select.cc` — SI branch in `dynamicRewriteWalk`, reserved guard in `handleSelectQuery`**
 
 `#include "handlers/storage_integrity.h"`. In `dynamicRewriteWalk`, after the CTE-alias early-return and the db/table split, BEFORE `applyDynamicRewrite`:
 
@@ -2499,12 +2503,12 @@ In `handleSelectQuery`, move the `original_accessed_tables` population loop (cur
 
 (`entry->set_is_storage_integrity(resolution.is_storage_integrity);` goes into the moved loop.) `rewriteEmbeddedViewBody` gets the same guard, returning after setting the code (its caller in writes.cc already returns Rejected when `response->code() != Success` after the body rewrite — verify; if not, add `if (response->code() != rewriter::RewriteCode::Success) return WriteDispatchResult::Rejected;` after the `rewriteEmbeddedViewBody` call).
 
-- [ ] **Step 5: Build + run the golden suite**
+- [x] **Step 5: Build + run the golden suite**
 
 Run: rsync + rebuild, then `$RB "cd $WD && ./build/rewriter_tests --gtest_filter='SpecG/StorageIntegrityGolden.*:AccessedTable.*:TableOnly.*:CTE*' 2>&1 | tail -40"`
 Expected: SELECT-family cases OK (`si_safe_plain_select`, `si_safe_alias_join_non_si`, `si_unsafe_latest_*`, `si_safe_subquery_in_where`, `si_reserved_column_*`, `si_star_hides_rid`, `si_use_default_database`, `non_si_*`, `si_absent_*`); write/EXISTS/DESCRIBE cases still FAILED; all pre-existing suites OK.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/rewriter-server.cc src/handlers/storage_integrity.h src/handlers/storage_integrity.cc src/handlers/name_rewrite.h src/handlers/name_rewrite.cc src/handlers/select.cc tests/rewriter_test.cc CMakeLists.txt
@@ -2522,7 +2526,7 @@ git commit -m "feat(select): require SI contract v1 and add storage-integrity re
 - Consumes: Task 11 helpers.
 - Produces: identical semantics to rewriter-go Task 7.
 
-- [ ] **Step 1: `writes.cc` `rewriteOneTarget`** — after `recordAccessedTable(...)` and before `switch (sel.mode)`:
+- [x] **Step 1: `writes.cc` `rewriteOneTarget`** — after `recordAccessedTable(...)` and before `switch (sel.mode)`:
 
 ```cpp
   if (sel.mode == TableRewriteMode::Dynamic && stmt_kind != "INSERT") {
@@ -2534,7 +2538,7 @@ git commit -m "feat(select): require SI contract v1 and add storage-integrity re
 ```
 `stmt_kind` is the existing `std::string_view` parameter; every caller passes `"INSERT"` for the insert slot (writes.cc:515) and other literals elsewhere, so this exemption is exact. RENAME/EXCHANGE sides and CREATE TABLE AS source flow through `rewriteOneTarget` too, so they are covered.
 
-- [ ] **Step 2: `exists.cc`** — inside `case TableRewriteMode::Dynamic:` before `applyDynamicRewrite`:
+- [x] **Step 2: `exists.cc`** — inside `case TableRewriteMode::Dynamic:` before `applyDynamicRewrite`:
 
 ```cpp
     if (auto hit = lookupStorageIntegrity(origin_db, origin_table, *sel.dynamic_args)) {
@@ -2550,7 +2554,7 @@ git commit -m "feat(select): require SI contract v1 and add storage-integrity re
 
 `show_create.cc` — same spot, but reject: `rejectShowCreate(response, rewriter::RewriteCode::UnsupportedStatement, "SHOW CREATE TABLE on storage-integrity table " + hit->logical_key + " is not supported"); return ShowCreateDispatchResult::Handled;` (use whatever the file's local reject helper is named — mirror `rejectExists`).
 
-- [ ] **Step 3: `grant.cc`** — compute `const auto si_selection = findActiveTableRewrite(request->options());` once, while retaining the existing `dynamic = findDynamicArgs(...)` for database-policy mapping. Inside the element loop, right after the column-level reject and before the `original_database` computation:
+- [x] **Step 3: `grant.cc`** — compute `const auto si_selection = findActiveTableRewrite(request->options());` once, while retaining the existing `dynamic = findDynamicArgs(...)` for database-policy mapping. Inside the element loop, right after the column-level reject and before the `original_database` computation:
 
 ```cpp
     if (!elem.anyTable() && si_selection.mode == TableRewriteMode::Dynamic) {
@@ -2562,12 +2566,12 @@ git commit -m "feat(select): require SI contract v1 and add storage-integrity re
     }
 ```
 
-- [ ] **Step 4: Build + run**
+- [x] **Step 4: Build + run**
 
 Run: rsync + rebuild, then `$RB "cd $WD && ./build/rewriter_tests --gtest_filter='SpecG/StorageIntegrityGolden.*' 2>&1 | grep -E 'OK|FAILED' | tail -30"`
 Expected: only `si_describe_metadata_select` FAILED (statement_type UNSPECIFIED); everything else OK.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/handlers/writes.cc src/handlers/exists.cc src/handlers/show_create.cc src/handlers/grant.cc
@@ -2587,7 +2591,7 @@ git commit -m "feat(writes): refuse non-lane writes on storage-integrity tables;
 
 > If Spec E already added `handlers/describe.cc`, only add the SI branch (`lookupStorageIntegrity` → `describeMetadataSQL`) before its EXISTS-style resolution.
 
-- [ ] **Step 1: Implement**
+- [x] **Step 1: Implement**
 
 ```cpp
 // src/handlers/describe.cc
@@ -2653,12 +2657,12 @@ Dispatch in `rewriter-server.cc` — after the `handleShowTablesQuery` line and 
 
 Add `#include "handlers/describe.h"` and `src/handlers/describe.cc` to `rewriter_core`.
 
-- [ ] **Step 2: Build + run the whole test binary**
+- [x] **Step 2: Build + run the whole test binary**
 
 Run: rsync + rebuild, then `$RB "cd $WD && ctest --test-dir build --output-on-failure 2>&1 | tail -15"`
 Expected: `100% tests passed, 0 tests failed` (the gtest binary is one ctest entry; the `SpecG/StorageIntegrityGolden.*` cases are all OK, incl. `si_describe_metadata_select` with byte-exact SQL).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add src/handlers/describe.h src/handlers/describe.cc src/rewriter-server.cc CMakeLists.txt
@@ -2672,9 +2676,9 @@ git commit -m "feat: DESCRIBE handler (STATEMENT_TYPE_DESCRIBE) with storage-int
 **Files:**
 - Modify: `CLAUDE.md` (Request flow list — add the DESCRIBE bullet and the SI paragraph under "Dynamic construction"), `AGENTS.md` (mirror), `README.md` (config example mentioning `storage_integrity`)
 
-- [ ] **Step 1: Docs** — add to CLAUDE.md "Request flow" step 3 a bullet: "`ASTDescribeQuery` → [handlers/describe.cc]: `STATEMENT_TYPE_DESCRIBE`; storage-integrity target → `system.columns` metadata SELECT hiding `_hg_row_id`; otherwise passthrough (until Spec E D6)." Under "Dynamic construction" add a paragraph: "**Storage-integrity surface (`dynamic_args.storage_integrity`, [handlers/storage_integrity.cc]):** consulted by every table-targeting handler BEFORE `applyDynamicRewrite`. SELECT-side hits become `(SELECT * EXCEPT (_hg_row_id) FROM hg_safe.<t> [UNION ALL … hg_unsafe.<t> WHERE _part NOT IN (…)]) AS <alias>`; EXISTS maps to the safe table; DESCRIBE → metadata SELECT; every other statement kind (incl. GRANT/REVOKE, SHOW CREATE) rejects `UnsupportedStatement`; INSERT deliberately stays on the ordinary path (the caller's signed ingress decides). Any `_hg_row_id` identifier in an SI-touching statement → `RewriteError`. Golden corpus: `tests/testdata/storage_integrity_cases.json`, byte-identical to rewriter-go's; change both."
+- [x] **Step 1: Docs** — add to CLAUDE.md "Request flow" step 3 a bullet: "`ASTDescribeQuery` → [handlers/describe.cc]: `STATEMENT_TYPE_DESCRIBE`; storage-integrity target → `system.columns` metadata SELECT hiding `_hg_row_id`; otherwise passthrough (until Spec E D6)." Under "Dynamic construction" add a paragraph: "**Storage-integrity surface (`dynamic_args.storage_integrity`, [handlers/storage_integrity.cc]):** consulted by every table-targeting handler BEFORE `applyDynamicRewrite`. SELECT-side hits become `(SELECT * EXCEPT (_hg_row_id) FROM hg_safe.<t> [UNION ALL … hg_unsafe.<t> WHERE _part NOT IN (…)]) AS <alias>`; EXISTS maps to the safe table; DESCRIBE → metadata SELECT; every other statement kind (incl. GRANT/REVOKE, SHOW CREATE) rejects `UnsupportedStatement`; INSERT deliberately stays on the ordinary path (the caller's signed ingress decides). Any `_hg_row_id` identifier in an SI-touching statement → `RewriteError`. Golden corpus: `tests/testdata/storage_integrity_cases.json`, byte-identical to rewriter-go's; change both."
 
-- [ ] **Step 2: Oracle parity from rewriter-go against this build**
+- [x] **Step 2: Oracle parity from rewriter-go against this build**
 
 On the box start the server (`$RB "cd $WD && ./build/clickhousegate_rewriter --port 50051 &"`), then locally, with an SSH tunnel `ssh -p 30100 -L 50051:localhost:50051 sentio@64.38.131.242 -N &`, in `/Users/uranuswch/Dev/housegate/rewriter-go`:
 Run: `POLYGLOT_SQL_FFI_PATH=$PWD/third_party/lib/libpolyglot_sql_ffi.dylib REWRITER_ORACLE_ADDR=localhost:50051 go test ./internal/harness -run TestStorageIntegrityGolden -count=1`
