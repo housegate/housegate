@@ -215,6 +215,17 @@ func parseFlatStatementID(id string) (flatStatementID, error) {
 	return flatStatementID{ClientAccount: account, ClientSeq: seq, ClientNonce: nonce}, nil
 }
 
+// ParseFlatStatementID validates the flat "<lowercase 0x account>:<seq>:<nonce>"
+// form and returns its parts. Exported for the agent-side plugin so both ends
+// apply identical rules.
+func ParseFlatStatementID(id string) (account string, seq uint64, nonce string, err error) {
+	parsed, err := parseFlatStatementID(id)
+	if err != nil {
+		return "", 0, "", err
+	}
+	return parsed.ClientAccount, parsed.ClientSeq, parsed.ClientNonce, nil
+}
+
 func isLowerHex(s string) bool {
 	if s == "" {
 		return false

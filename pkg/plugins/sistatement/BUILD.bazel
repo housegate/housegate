@@ -5,13 +5,26 @@ go_library(
     srcs = [
         "doc.go",
         "seq.go",
+        "sqlparse.go",
     ],
     importpath = "github.com/housegate/housegate/pkg/plugins/sistatement",
     visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/chproto",
+        "//pkg/replay/payloadexec",
+        "//pkg/sqlident",
+    ],
 )
 
 go_test(
     name = "sistatement_test",
-    srcs = ["seq_test.go"],
+    srcs = [
+        "seq_test.go",
+        "sqlparse_test.go",
+    ],
     embed = [":sistatement"],
+    deps = [
+        "//pkg/lthash",
+        "//pkg/replay/payloadexec",
+    ],
 )
