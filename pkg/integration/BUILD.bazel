@@ -32,6 +32,7 @@ go_test(
         "single_upstream_test.go",
         "smoke_test.go",
         "storage_integrity_agent_test.go",
+        "storage_backpressure_test.go",
         "storage_promotion_mvp_test.go",
         "upstream_dies_test.go",
         "usage_test.go",
