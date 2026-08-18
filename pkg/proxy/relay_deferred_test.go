@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -424,12 +425,163 @@ func TestRelay_DeferredInsert_UpstreamExceptionAtSampleStep(t *testing.T) {
 	h.close(t)
 }
 
+// An Exception after the upstream sample has been consumed terminates the
+// deferred writer before any later buffered packet is written. The abort hook
+// runs before completion/terminal bytes, and the session closes because the
+// upstream did not consume the remainder of the INSERT stream.
+func TestRelay_DeferredInsert_UpstreamExceptionAfterSampleStopsWriter(t *testing.T) {
+	hooks := &deferredInsertHooks{}
+	h := newDeferredHarness(t, hooks)
+	nonEmpty := encodeNonEmptyClientDataPacket(t, deferredTestRev)
+	sample := encodeServerSampleDataPacket(t, deferredTestRev)
+	empty := encodeEmptyClientData(t)
+
+	type upstreamResult struct {
+		extraPacket bool
+		extraType   uint64
+		err         error
+	}
+	upDone := make(chan upstreamResult, 1)
+	go func() {
+		codec := chproto.NewCodec(h.upstreamProxy, chproto.DirFromClient)
+		codec.SetRevision(deferredTestRev)
+		codec.SetCompression(proto.CompressionDisabled)
+		if _, err := codec.ReadPacket(uint64(chproto.ClientQueryCode)); err != nil {
+			upDone <- upstreamResult{err: err}
+			return
+		}
+		if _, err := codec.ReadPacket(); err != nil { // external-tables marker
+			upDone <- upstreamResult{err: err}
+			return
+		}
+		if _, err := h.upstreamProxy.Write(sample); err != nil {
+			upDone <- upstreamResult{err: err}
+			return
+		}
+		if _, err := codec.ReadPacket(); err != nil { // first payload packet
+			upDone <- upstreamResult{err: err}
+			return
+		}
+		if err := codec.WriteException(&chproto.Exception{Code: 27, Name: "DB::Exception", Message: "cannot parse input"}); err != nil {
+			upDone <- upstreamResult{err: err}
+			return
+		}
+		// Give the relay loop a scheduling turn to observe the terminal packet;
+		// any subsequent write after that observation violates the writer gate.
+		time.Sleep(20 * time.Millisecond)
+		_ = h.upstreamProxy.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+		extra, err := codec.ReadPacket()
+		result := upstreamResult{extraPacket: err == nil}
+		if extra != nil {
+			result.extraType = extra.Type
+		}
+		upDone <- result
+	}()
+
+	writeAllConn(t, h.clientProxy, encodeInsertQuery(t, "qid", "INSERT INTO t FORMAT Native"))
+	if got := readExact(t, h.clientProxy, len(sample)); !bytes.Equal(got, sample) {
+		t.Fatalf("client sample block mismatch")
+	}
+	writeAllConn(t, h.clientProxy, empty)
+	writeAllConn(t, h.clientProxy, nonEmpty)
+	writeAllConn(t, h.clientProxy, nonEmpty)
+	writeAllConn(t, h.clientProxy, empty)
+	clientCodec := chproto.NewCodec(h.clientProxy, chproto.DirToUpstream)
+	clientCodec.SetRevision(deferredTestRev)
+	_ = h.clientProxy.SetReadDeadline(time.Now().Add(2 * time.Second))
+	pkt, err := clientCodec.ReadPacket(uint64(chproto.ServerExceptionCode))
+	if err != nil {
+		t.Fatalf("client read: %v", err)
+	}
+	if exc, ok := pkt.Decoded.(*chproto.Exception); !ok || exc.Code != 27 {
+		t.Fatalf("client got %#v, want upstream parse Exception", pkt.Decoded)
+	}
+	result := <-upDone
+	if result.err != nil {
+		t.Fatalf("upstream flow: %v", result.err)
+	}
+	if result.extraPacket {
+		t.Fatalf("relay wrote packet type %d after the upstream terminal Exception", result.extraType)
+	}
+	if _, _, inputCompletes, queryCompletes, aborts := hooks.counts(); inputCompletes != 0 || queryCompletes != 1 || aborts != 1 {
+		t.Fatalf("counts input/complete/abort = %d/%d/%d, want 0/1/1", inputCompletes, queryCompletes, aborts)
+	}
+	h.close(t)
+}
+
+func TestRelay_DeferredInsert_RequiresExternalTablesMarkerBeforePayload(t *testing.T) {
+	hooks := &deferredInsertHooks{}
+	h := newDeferredHarness(t, hooks)
+	nonEmpty := encodeNonEmptyClientDataPacket(t, deferredTestRev)
+	sample := encodeServerSampleDataPacket(t, deferredTestRev)
+
+	upstreamBytes := make(chan int, 1)
+	go func() {
+		buf := make([]byte, 1024)
+		n, _ := h.upstreamProxy.Read(buf)
+		upstreamBytes <- n
+	}()
+	writeAllConn(t, h.clientProxy, encodeInsertQuery(t, "qid", "INSERT INTO t FORMAT Native"))
+	if got := readExact(t, h.clientProxy, len(sample)); !bytes.Equal(got, sample) {
+		t.Fatalf("client sample block mismatch")
+	}
+	writeAllConn(t, h.clientProxy, nonEmpty) // marker deliberately omitted
+	clientCodec := chproto.NewCodec(h.clientProxy, chproto.DirToUpstream)
+	clientCodec.SetRevision(deferredTestRev)
+	_ = h.clientProxy.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	pkt, err := clientCodec.ReadPacket(uint64(chproto.ServerExceptionCode))
+	if err != nil {
+		t.Fatalf("client read: %v", err)
+	}
+	if exc, ok := pkt.Decoded.(*chproto.Exception); !ok || !strings.Contains(exc.Message, "external-tables marker") {
+		t.Fatalf("client got %#v, want missing-marker Exception", pkt.Decoded)
+	}
+	h.close(t)
+	if n := <-upstreamBytes; n != 0 {
+		t.Fatalf("upstream received %d bytes without the required marker, want 0", n)
+	}
+}
+
+func TestRelay_DeferredInsert_PayloadExactlyAtLimitAllowsTerminator(t *testing.T) {
+	nonEmpty := encodeNonEmptyClientDataPacket(t, deferredTestRev)
+	hooks := &deferredInsertHooks{maxPayload: uint64(len(nonEmpty))}
+	h := newDeferredHarness(t, hooks)
+	sample := encodeServerSampleDataPacket(t, deferredTestRev)
+	empty := encodeEmptyClientData(t)
+
+	var clientDone atomic.Bool
+	upDone := make(chan error, 1)
+	go upstreamAcceptsDeferredInsert(t, h.upstreamProxy, &clientDone, nonEmpty, upDone)
+	writeAllConn(t, h.clientProxy, encodeInsertQuery(t, "qid", "INSERT INTO t FORMAT Native"))
+	if got := readExact(t, h.clientProxy, len(sample)); !bytes.Equal(got, sample) {
+		t.Fatalf("client sample block mismatch")
+	}
+	writeAllConn(t, h.clientProxy, empty)
+	writeAllConn(t, h.clientProxy, nonEmpty)
+	clientDone.Store(true)
+	terminatorWrite := make(chan error, 1)
+	go func() {
+		_, err := h.clientProxy.Write(empty)
+		terminatorWrite <- err
+	}()
+	if got := readExact(t, h.clientProxy, 1); got[0] != byte(chproto.ServerEndOfStreamCode) {
+		t.Fatalf("client got %d, want EndOfStream at exact payload limit", got[0])
+	}
+	if err := <-terminatorWrite; err != nil {
+		t.Fatalf("write terminator: %v", err)
+	}
+	if err := <-upDone; err != nil {
+		t.Fatalf("upstream flow: %v", err)
+	}
+	h.close(t)
+}
+
 // Payload larger than the plan's MaxPayloadBytes: rejected before any byte
 // reaches upstream, connection closes fail-closed.
 func TestRelay_DeferredInsert_OversizedPayloadIsRejectedBeforeForwarding(t *testing.T) {
-	hooks := &deferredInsertHooks{maxPayload: 8}
+	nonEmpty := encodeNonEmptyClientDataPacket(t, deferredTestRev)
+	hooks := &deferredInsertHooks{maxPayload: uint64(len(nonEmpty) - 1)}
 	h := newDeferredHarness(t, hooks)
-	nonEmpty := encodeNonEmptyClientDataPacket(t, deferredTestRev) // > 8 bytes
 	sample := encodeServerSampleDataPacket(t, deferredTestRev)
 	empty := encodeEmptyClientData(t)
 
@@ -464,9 +616,7 @@ func TestRelay_DeferredInsert_OversizedPayloadIsRejectedBeforeForwarding(t *test
 		t.Fatalf("client got %#v, want limit Exception", pkt.Decoded)
 	}
 	errs := h.close(t)
-	if err := <-payloadWrite; err == nil {
-		t.Fatal("oversized upload unexpectedly completed after fail-closed rejection")
-	}
+	<-payloadWrite // may complete when the one-byte overflow is fully buffered
 	if n := <-upstreamBytes; n != 0 {
 		t.Fatalf("upstream received %d bytes, want 0", n)
 	}
