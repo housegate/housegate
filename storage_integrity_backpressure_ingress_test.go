@@ -47,23 +47,46 @@ func (f *fakePartsPressure) Invalidate() {
 
 type fakePartsReservation struct {
 	pressure *fakePartsPressure
-	once     sync.Once
+	mu       sync.Mutex
+	state    string
 }
 
 func (r *fakePartsReservation) Commit() {
-	r.once.Do(func() {
-		r.pressure.mu.Lock()
-		defer r.pressure.mu.Unlock()
-		r.pressure.committed++
-	})
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.state != "" {
+		return
+	}
+	r.pressure.mu.Lock()
+	r.pressure.committed++
+	r.pressure.mu.Unlock()
+	r.state = "committed"
 }
 
 func (r *fakePartsReservation) Release() {
-	r.once.Do(func() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.state == "released" || r.state == "finalized" {
+		return
+	}
+	r.pressure.mu.Lock()
+	r.pressure.released++
+	r.pressure.mu.Unlock()
+	r.state = "released"
+}
+
+func (r *fakePartsReservation) Finalize() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.state == "released" || r.state == "finalized" {
+		return
+	}
+	if r.state == "" {
 		r.pressure.mu.Lock()
-		defer r.pressure.mu.Unlock()
-		r.pressure.released++
-	})
+		r.pressure.committed++
+		r.pressure.mu.Unlock()
+	}
+	r.state = "finalized"
 }
 
 func bpSchemas() []payloadexec.TableSchema {
@@ -93,7 +116,7 @@ func bpAdmission() siplugin.Admission {
 	}
 }
 
-func newBackpressureIngress(t *testing.T, pressure *fakePartsPressure) (*StorageIntegrityIngress, *rootRecordingPayloadWriter, *rootRecordingSubmitter, *rootRecordingPreparer) {
+func newBackpressureIngress(t *testing.T, pressure StorageIntegrityPartsPressure) (*StorageIntegrityIngress, *rootRecordingPayloadWriter, *rootRecordingSubmitter, *rootRecordingPreparer) {
 	t.Helper()
 	writer := &rootRecordingPayloadWriter{result: sicore.PayloadPutResult{PayloadRef: "payload://store/ref-1", State: sicore.PayloadStateAvailable}}
 	submitter := &rootRecordingSubmitter{outcome: sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}}
@@ -322,6 +345,35 @@ func TestIngress_IndeterminatePrepareRetryLooksUpSourceBeforePressureGate(t *tes
 	}
 }
 
+func TestIngress_IndeterminatePrepareNoWriteProofReleasesSoftLimitSlot(t *testing.T) {
+	conn := &rootPartsConn{rows: []rootPartsRow{
+		{"hg_unsafe", "net1__events", "eu", "region", 1},
+		{"hg_unsafe", "net1__events", "us", "region", 1},
+	}}
+	pressure := sicore.NewPartsPressureGuard(conn, sicore.PartsPressureConfig{
+		UnsafeDatabase: "hg_unsafe", SafeDatabase: "hg_safe",
+		SoftPartsPerPartition: 2, HardPartsPerPartition: 5,
+	})
+	ingress, _, submitter, preparer := newBackpressureIngress(t, pressure)
+	preparer.err = errors.New("prepare response lost")
+	if err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), bpAdmission()); err == nil || !strings.Contains(err.Error(), "prepare response lost") {
+		t.Fatalf("first admission = %v, want indeterminate prepare error", err)
+	}
+
+	// The required source lookup proves the first attempt wrote nothing. Its
+	// statement-addressed committed slot must be canceled before the retry asks
+	// for the sole soft-limit slot again.
+	preparer.err = nil
+	preparer.lookupFound = false
+	submitter.outcome = sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}
+	if err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), bpAdmission()); err != nil {
+		t.Fatalf("no-write-proven retry at soft-1: %v", err)
+	}
+	if preparer.lookupCalls != 1 || preparer.prepareCalls != 2 {
+		t.Fatalf("lookup/prepare calls = %d/%d, want 1/2", preparer.lookupCalls, preparer.prepareCalls)
+	}
+}
+
 func TestIngress_TerminalCleanupInvalidatesPressure(t *testing.T) {
 	pressure := &fakePartsPressure{}
 	ingress, _, submitter, _ := newBackpressureIngress(t, pressure)
@@ -329,8 +381,94 @@ func TestIngress_TerminalCleanupInvalidatesPressure(t *testing.T) {
 	if err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), bpAdmission()); err == nil || !strings.Contains(err.Error(), string(sicore.LifecycleCleaned)) {
 		t.Fatalf("terminal cleanup admission = %v, want Cleaned non-ACK2", err)
 	}
-	if pressure.invalidated != 1 || pressure.committed != 1 {
-		t.Fatalf("cleanup invalidate/commit = %d/%d want 1/1", pressure.invalidated, pressure.committed)
+	if pressure.invalidated != 1 || pressure.committed != 0 || pressure.released != 1 {
+		t.Fatalf("cleanup invalidate/commit/release = %d/%d/%d want 1/0/1", pressure.invalidated, pressure.committed, pressure.released)
+	}
+}
+
+type failFirstCleanedSaveJournal struct {
+	*countingIntakeJournal
+	err    error
+	failed bool
+}
+
+type failEverySaveJournal struct {
+	*countingIntakeJournal
+	err error
+}
+
+func (j *failEverySaveJournal) SaveIntakeRecord(context.Context, sicore.IntakeJournalRecord) error {
+	return j.err
+}
+
+func TestIngress_DefinitePrePrepareFailureReleasesReservation(t *testing.T) {
+	pressure := &fakePartsPressure{}
+	journalErr := errors.New("initial journal save failed")
+	journal := &failEverySaveJournal{countingIntakeJournal: &countingIntakeJournal{}, err: journalErr}
+	writer := &rootRecordingPayloadWriter{result: sicore.PayloadPutResult{PayloadRef: "payload://store/ref-1", State: sicore.PayloadStateAvailable}}
+	submitter := &rootRecordingSubmitter{outcome: sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}}
+	preparer := &rootRecordingPreparer{source: "snode-A", claim: sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"}}
+	orch := sicore.NewOrchestrator(submitter, preparer, sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal})
+	ingress, err := NewStorageIntegrityIngressWithPayloadWriter(orch, nil, sicore.MaterializerCSV, writer)
+	if err != nil {
+		t.Fatalf("NewStorageIntegrityIngressWithPayloadWriter: %v", err)
+	}
+	ingress.WithPartsPressure(pressure, bpSchemaResolver())
+
+	if err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), bpAdmission()); !errors.Is(err, journalErr) {
+		t.Fatalf("admission = %v, want definite pre-prepare failure", err)
+	}
+	if preparer.prepareCalls != 0 || submitter.calls != 0 {
+		t.Fatalf("prepare/submit calls = %d/%d, want 0/0", preparer.prepareCalls, submitter.calls)
+	}
+	if pressure.committed != 0 || pressure.released != 1 {
+		t.Fatalf("reservation commit/release = %d/%d, want 0/1", pressure.committed, pressure.released)
+	}
+}
+
+func (j *failFirstCleanedSaveJournal) SaveIntakeRecord(ctx context.Context, rec sicore.IntakeJournalRecord) error {
+	if rec.IsTerminal && rec.Stage == sicore.LifecycleCleaned && !j.failed {
+		j.failed = true
+		return j.err
+	}
+	return j.countingIntakeJournal.SaveIntakeRecord(ctx, rec)
+}
+
+func TestIngress_RepeatedCleanupAndTerminalSaveFailureReleaseZeroGrowthSlot(t *testing.T) {
+	conn := &rootPartsConn{rows: []rootPartsRow{
+		{"hg_unsafe", "net1__events", "eu", "region", 1},
+		{"hg_unsafe", "net1__events", "us", "region", 1},
+	}}
+	pressure := sicore.NewPartsPressureGuard(conn, sicore.PartsPressureConfig{
+		UnsafeDatabase: "hg_unsafe", SafeDatabase: "hg_safe",
+		SoftPartsPerPartition: 2, HardPartsPerPartition: 5,
+	})
+	journalErr := errors.New("cleaned journal save failed")
+	journal := &failFirstCleanedSaveJournal{countingIntakeJournal: &countingIntakeJournal{}, err: journalErr}
+	writer := &rootRecordingPayloadWriter{result: sicore.PayloadPutResult{PayloadRef: "payload://store/ref-1", State: sicore.PayloadStateAvailable}}
+	submitter := &rootRecordingSubmitter{outcome: sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: "conflict"}}
+	preparer := &rootRecordingPreparer{source: "snode-A", claim: sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"}}
+	orch := sicore.NewOrchestrator(submitter, preparer, sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal})
+	ingress, err := NewStorageIntegrityIngressWithPayloadWriter(orch, nil, sicore.MaterializerCSV, writer)
+	if err != nil {
+		t.Fatalf("NewStorageIntegrityIngressWithPayloadWriter: %v", err)
+	}
+	ingress.WithPartsPressure(pressure, bpSchemaResolver())
+
+	if err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), bpAdmission()); !errors.Is(err, journalErr) {
+		t.Fatalf("first cleaned admission = %v, want terminal journal error", err)
+	}
+	if err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), bpAdmission()); err == nil || !strings.Contains(err.Error(), string(sicore.LifecycleCleaned)) {
+		t.Fatalf("repeated exact cleanup = %v, want Cleaned non-ACK2", err)
+	}
+
+	// No system.parts growth occurred: exact cleanup removed the candidate both
+	// times. A different statement must still acquire the soft-1 capacity.
+	submitter.outcome = sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}
+	next := bpAdmission()
+	next.StatementID = "0xabc:2:n2"
+	if err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), next); err != nil {
+		t.Fatalf("new statement after repeated cleanup: %v", err)
 	}
 }
 

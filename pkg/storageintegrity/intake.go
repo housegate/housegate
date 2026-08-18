@@ -473,11 +473,27 @@ type IntakeResult struct {
 	// Submit/Claim and Ack2.
 	Reason string
 
+	// sourceWritePossible is set only after PrepareLocalStatement was attempted
+	// or a prepared result is known. It lets the ingress release a pre-prepare
+	// reservation on definite local failures while retaining indeterminate calls.
+	sourceWritePossible bool
+
 	// terminal marks an outcome that will not change on retry (ACK2, or a
 	// successfully cleaned ordinary abort). Only terminal outcomes are recorded for
 	// idempotent replay; retryable/unknown outcomes and failed aborts are not,
 	// so they reconverge on a later call.
 	terminal bool
+}
+
+// SourceWriteMayExist reports whether this attempt may have created a source
+// part that must remain charged against the parts-pressure guard. Exact cleanup
+// is definitive proof that no candidate remains, including when persisting the
+// Cleaned terminal journal record subsequently fails.
+func (r IntakeResult) SourceWriteMayExist() bool {
+	if r.Lifecycle == LifecycleCleaned {
+		return false
+	}
+	return r.sourceWritePossible || r.Prepared.StatementID != ""
 }
 
 // Orchestrator runs the staged intake for one admission: it starts
@@ -961,16 +977,16 @@ func (o *Orchestrator) run(ctx context.Context, env StatementEnvelope, adm Admis
 				o.mu.Lock()
 				rec.requirePreparedLookup = true
 				o.mu.Unlock()
-				return IntakeResult{StatementID: env.StatementID, Submit: s}, fmt.Errorf("intake: prepare failed for %s: %w", env.StatementID, prepareErr)
+				return IntakeResult{StatementID: env.StatementID, Submit: s, sourceWritePossible: true}, fmt.Errorf("intake: prepare failed for %s: %w", env.StatementID, prepareErr)
 			}
 			// Prepare succeeded: cache it so any retry never re-runs the unsafe
 			// write, even if submit errored or is non-terminal below.
 			if err := o.cachePrepared(ctx, rec, p); err != nil {
-				return IntakeResult{StatementID: env.StatementID, Prepared: p}, err
+				return IntakeResult{StatementID: env.StatementID, Prepared: p, sourceWritePossible: true}, err
 			}
 			prepared = p
 			if submitErr != nil {
-				return IntakeResult{StatementID: env.StatementID, Prepared: p}, fmt.Errorf("intake: submit failed for %s: %w", env.StatementID, submitErr)
+				return IntakeResult{StatementID: env.StatementID, Prepared: p, sourceWritePossible: true}, fmt.Errorf("intake: submit failed for %s: %w", env.StatementID, submitErr)
 			}
 			submit = s
 		}
@@ -1225,7 +1241,7 @@ func (o *Orchestrator) releasePayloadLease(rec *intakeRecord) {
 func (o *Orchestrator) resultFor(rec *intakeRecord) IntakeResult {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	res := IntakeResult{StatementID: rec.statementID}
+	res := IntakeResult{StatementID: rec.statementID, sourceWritePossible: rec.hasPrepared}
 	if rec.hasPrepared {
 		res.Prepared = rec.prepared
 		res.Lifecycle = rec.prepared.Lifecycle

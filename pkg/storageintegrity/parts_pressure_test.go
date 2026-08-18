@@ -377,6 +377,121 @@ func TestPartsPressureGuard_DelayedVisibilityKeepsCommittedCapacityReserved(t *t
 	}
 }
 
+func TestPartsPressureGuard_RefreshBeforeCommitAbsorbsOriginalReservation(t *testing.T) {
+	guard, conn := pressureFixture(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 2})
+	guard.cfg.SoftPartsPerPartition = 4
+	reservation, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("Reserve: %v", err)
+	}
+
+	// The source write becomes visible while the caller still holds the
+	// reservation. Commit must retain the original count/generation so the
+	// already-visible N+1 snapshot absorbs it instead of creating a phantom slot.
+	conn.setRows(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 3})
+	if _, err := guard.Refresh(context.Background()); err != nil {
+		t.Fatalf("pre-commit Refresh: %v", err)
+	}
+	reservation.Commit()
+	if _, err := guard.Refresh(context.Background()); err != nil {
+		t.Fatalf("stable post-commit Refresh: %v", err)
+	}
+	key := PartsKey{Database: "hg_unsafe", Table: "db__t", Partition: "p_a"}
+	if got := guard.committed[key]; got != 0 {
+		t.Fatalf("committed capacity after pre-commit visibility = %d, want 0", got)
+	}
+	if replacement, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"}); err != nil {
+		t.Fatalf("stable N+1 snapshot must leave one soft-limit slot: %v", err)
+	} else {
+		replacement.Release()
+	}
+}
+
+func TestPartsPressureGuard_ReleaseAfterCommitCancelsPendingReservation(t *testing.T) {
+	guard, _ := pressureFixture(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 2})
+	reservation, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("Reserve: %v", err)
+	}
+	reservation.Commit()
+	reservation.Release()
+	reservation.Release()
+	key := PartsKey{Database: "hg_unsafe", Table: "db__t", Partition: "p_a"}
+	if got := guard.committed[key]; got != 0 {
+		t.Fatalf("committed capacity after cancel = %d, want 0", got)
+	}
+	if replacement, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"}); err != nil {
+		t.Fatalf("canceled committed capacity must be reusable: %v", err)
+	} else {
+		replacement.Release()
+	}
+}
+
+func TestPartsPressureGuard_CancelOneOfAmbiguousCohortRecomputesAggregateDebt(t *testing.T) {
+	guard, conn := pressureFixture(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 2})
+	guard.cfg.SoftPartsPerPartition = 5
+	first, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("first Reserve: %v", err)
+	}
+	first.Commit()
+	second, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("second Reserve: %v", err)
+	}
+	second.Commit()
+
+	conn.setRows(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 3})
+	if _, err := guard.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	key := PartsKey{Database: "hg_unsafe", Table: "db__t", Partition: "p_a"}
+	if got := guard.committed[key]; got != 1 {
+		t.Fatalf("one visible increment must leave one aggregate debt, committed = %d", got)
+	}
+	first.Release()
+	if got := guard.committed[key]; got != 0 {
+		t.Fatalf("canceling either ambiguous identity must recompute aggregate debt, committed = %d", got)
+	}
+	second.Release()
+}
+
+func TestPartsPressureGuard_FinalizedCohortCapacityCannotBeReused(t *testing.T) {
+	guard, conn := pressureFixture(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 2})
+	guard.cfg.SoftPartsPerPartition = 5
+	first, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("first Reserve: %v", err)
+	}
+	first.Commit()
+	second, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("second Reserve: %v", err)
+	}
+	second.Commit()
+
+	conn.setRows(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 3})
+	if _, err := guard.Refresh(context.Background()); err != nil {
+		t.Fatalf("first visible Refresh: %v", err)
+	}
+	first.Finalize()
+	if _, err := guard.Refresh(context.Background()); err != nil {
+		t.Fatalf("stable Refresh: %v", err)
+	}
+	key := PartsKey{Database: "hg_unsafe", Table: "db__t", Partition: "p_a"}
+	if got := guard.committed[key]; got != 1 {
+		t.Fatalf("finalized first credit must not cover second identity, committed = %d", got)
+	}
+	conn.setRows(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 4})
+	if _, err := guard.Refresh(context.Background()); err != nil {
+		t.Fatalf("second visible Refresh: %v", err)
+	}
+	if got := guard.committed[key]; got != 0 {
+		t.Fatalf("second distinct growth must cover second identity, committed = %d", got)
+	}
+	second.Release()
+}
+
 func TestPartsPressureGuard_ReserveIsAllOrNothing(t *testing.T) {
 	guard, _ := pressureFixture(
 		fakePartsRow{"hg_unsafe", "db__t", "a", "p", 2},

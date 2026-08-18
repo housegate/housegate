@@ -69,12 +69,21 @@ type PartsPressureConfig struct {
 }
 
 // PartsReservation holds one prospective part per touched partition. Callers
-// must finish it exactly once: Release before a source write, or Commit once a
-// source write may have happened. Committed counts remain admission-visible
-// until a later successful snapshot absorbs them.
+// Commit once a source write may have happened. Release cancels the reservation
+// before or after Commit when a later source lookup / exact cleanup proves no
+// part remains. Finalize makes a committed reservation non-cancelable after
+// ACK2; its capacity remains charged until a snapshot covers the whole cohort.
 type PartsReservation interface {
 	Commit()
 	Release()
+	Finalize()
+}
+
+type committedPartReservation struct {
+	reservationID      uint64
+	baseline           int
+	reservedGeneration uint64
+	final              bool
 }
 
 // PartsPressureGuard caches active-part counts and answers ingress admission
@@ -90,14 +99,16 @@ type PartsPressureGuard struct {
 	snapshot    PartsSnapshot
 	reserved    PartsSnapshot
 	committed   PartsSnapshot
-	// committedBaselines records the last active-part count against which each
-	// committed reservation was made. A successful metadata query may absorb a
-	// committed slot only after its count growth covers that baseline; query
-	// success alone is not visibility proof.
-	committedBaselines map[PartsKey][]int
-	takenAt            time.Time
-	haveSnap           bool
-	now                func() time.Time
+	// committedReservations retain reservation identity across visibility so a
+	// later no-write lookup or exact cleanup can cancel the right slot. Snapshot
+	// generations and original counts prove only aggregate cohort coverage; they
+	// never attribute an ambiguous count increase to a particular statement.
+	committedReservations map[PartsKey][]committedPartReservation
+	nextReservationID     uint64
+	snapshotGeneration    uint64
+	takenAt               time.Time
+	haveSnap              bool
+	now                   func() time.Time
 
 	invalidated chan struct{}
 }
@@ -116,13 +127,13 @@ func NewPartsPressureGuard(conn MergeConn, cfg PartsPressureConfig) *PartsPressu
 		cfg.SnapshotTTL = DefaultPartsSnapshotTTL
 	}
 	return &PartsPressureGuard{
-		conn:               conn,
-		cfg:                cfg,
-		reserved:           PartsSnapshot{},
-		committed:          PartsSnapshot{},
-		committedBaselines: map[PartsKey][]int{},
-		now:                time.Now,
-		invalidated:        make(chan struct{}, 1),
+		conn:                  conn,
+		cfg:                   cfg,
+		reserved:              PartsSnapshot{},
+		committed:             PartsSnapshot{},
+		committedReservations: map[PartsKey][]committedPartReservation{},
+		now:                   time.Now,
+		invalidated:           make(chan struct{}, 1),
 	}
 }
 
@@ -171,17 +182,11 @@ func (g *PartsPressureGuard) Refresh(ctx context.Context) (PartsSnapshot, error)
 	}
 	g.mu.Lock()
 	g.snapshot = snapshot
+	g.snapshotGeneration++
 	g.takenAt = g.now()
 	g.haveSnap = true
-	for key, baselines := range g.committedBaselines {
-		remaining := committedAfterSnapshot(baselines, snapshot[key])
-		if len(remaining) == 0 {
-			delete(g.committed, key)
-			delete(g.committedBaselines, key)
-		} else {
-			g.committed[key] = len(remaining)
-			g.committedBaselines[key] = remaining
-		}
+	for key := range g.committedReservations {
+		g.reconcileCommittedKeyLocked(key)
 	}
 	g.mu.Unlock()
 	return g.copySnapshot(), nil
@@ -228,6 +233,7 @@ func (g *PartsPressureGuard) Reserve(ctx context.Context, table string, partitio
 	defer g.mu.Unlock()
 	keys := make([]PartsKey, 0, len(partitionIDs))
 	baselines := make([]int, 0, len(partitionIDs))
+	generation := g.snapshotGeneration
 	seen := make(map[string]bool, len(partitionIDs))
 	for _, partitionID := range partitionIDs {
 		if seen[partitionID] {
@@ -244,7 +250,15 @@ func (g *PartsPressureGuard) Reserve(ctx context.Context, table string, partitio
 	for _, key := range keys {
 		g.reserved[key]++
 	}
-	return &partsReservation{guard: g, keys: keys, baselines: baselines}, nil
+	g.nextReservationID++
+	return &partsReservation{
+		guard:              g,
+		id:                 g.nextReservationID,
+		keys:               keys,
+		baselines:          baselines,
+		reservedGeneration: generation,
+		state:              reservationReserved,
+	}, nil
 }
 
 func (g *PartsPressureGuard) checkLocked(table, partitionID string) error {
@@ -264,47 +278,99 @@ func (g *PartsPressureGuard) checkLocked(table, partitionID string) error {
 }
 
 type partsReservation struct {
-	guard     *PartsPressureGuard
-	keys      []PartsKey
-	baselines []int
-	once      sync.Once
+	guard              *PartsPressureGuard
+	id                 uint64
+	keys               []PartsKey
+	baselines          []int
+	reservedGeneration uint64
+	state              reservationState // protected by guard.mu
 }
+
+type reservationState uint8
+
+const (
+	reservationReserved reservationState = iota + 1
+	reservationCommitted
+	reservationFinalized
+	reservationReleased
+)
 
 func (r *partsReservation) Commit() {
 	if r == nil || r.guard == nil {
 		return
 	}
-	r.once.Do(func() {
-		r.guard.commitMu.Lock()
-		defer r.guard.commitMu.Unlock()
-		r.guard.mu.Lock()
-		defer r.guard.mu.Unlock()
-		for idx, key := range r.keys {
-			decrementPartCount(r.guard.reserved, key)
-			baseline := r.baselines[idx]
-			// A refresh may have completed while the source write was in flight.
-			// Do not let this late Commit reuse growth already represented by that
-			// snapshot; keeping the slot is conservative until later visibility.
-			if current := r.guard.snapshot[key]; current > baseline {
-				baseline = current
-			}
-			r.guard.committedBaselines[key] = append(r.guard.committedBaselines[key], baseline)
-			r.guard.committed[key]++
-		}
-	})
+	r.guard.commitMu.Lock()
+	defer r.guard.commitMu.Unlock()
+	r.guard.mu.Lock()
+	defer r.guard.mu.Unlock()
+	r.commitLocked()
 }
 
 func (r *partsReservation) Release() {
 	if r == nil || r.guard == nil {
 		return
 	}
-	r.once.Do(func() {
-		r.guard.mu.Lock()
-		defer r.guard.mu.Unlock()
+	r.guard.commitMu.Lock()
+	defer r.guard.commitMu.Unlock()
+	r.guard.mu.Lock()
+	defer r.guard.mu.Unlock()
+	switch r.state {
+	case reservationReserved:
 		for _, key := range r.keys {
 			decrementPartCount(r.guard.reserved, key)
 		}
-	})
+	case reservationCommitted:
+		for _, key := range r.keys {
+			r.guard.removeCommittedReservationLocked(key, r.id)
+			r.guard.reconcileCommittedKeyLocked(key)
+		}
+	case reservationFinalized, reservationReleased:
+		return
+	}
+	r.state = reservationReleased
+}
+
+func (r *partsReservation) Finalize() {
+	if r == nil || r.guard == nil {
+		return
+	}
+	r.guard.commitMu.Lock()
+	defer r.guard.commitMu.Unlock()
+	r.guard.mu.Lock()
+	defer r.guard.mu.Unlock()
+	if r.state == reservationReserved {
+		r.commitLocked()
+	}
+	if r.state != reservationCommitted {
+		return
+	}
+	for _, key := range r.keys {
+		entries := r.guard.committedReservations[key]
+		for idx := range entries {
+			if entries[idx].reservationID == r.id {
+				entries[idx].final = true
+			}
+		}
+		r.guard.committedReservations[key] = entries
+		r.guard.reconcileCommittedKeyLocked(key)
+	}
+	r.state = reservationFinalized
+}
+
+func (r *partsReservation) commitLocked() {
+	if r.state != reservationReserved {
+		return
+	}
+	for idx, key := range r.keys {
+		decrementPartCount(r.guard.reserved, key)
+		r.guard.committedReservations[key] = append(r.guard.committedReservations[key], committedPartReservation{
+			reservationID:      r.id,
+			baseline:           r.baselines[idx],
+			reservedGeneration: r.reservedGeneration,
+		})
+		r.guard.reconcileCommittedKeyLocked(key)
+	}
+	r.state = reservationCommitted
 }
 
 func decrementPartCount(counts PartsSnapshot, key PartsKey) {
@@ -315,32 +381,81 @@ func decrementPartCount(counts PartsSnapshot, key PartsKey) {
 	}
 }
 
-// committedAfterSnapshot removes only reservations whose distinct count growth
-// is visible in observed. Remaining baselines are advanced past growth already
-// credited during this refresh so a later identical snapshot cannot absorb the
-// same increment twice.
-func committedAfterSnapshot(baselines []int, observed int) []int {
-	ordered := append([]int(nil), baselines...)
-	sort.Ints(ordered)
-	covered := 0
+func (g *PartsPressureGuard) removeCommittedReservationLocked(key PartsKey, reservationID uint64) {
+	entries := g.committedReservations[key]
+	kept := entries[:0]
+	for _, entry := range entries {
+		if entry.reservationID != reservationID {
+			kept = append(kept, entry)
+		}
+	}
+	if len(kept) == 0 {
+		delete(g.committedReservations, key)
+		delete(g.committed, key)
+		return
+	}
+	g.committedReservations[key] = kept
+}
+
+// reconcileCommittedKeyLocked computes aggregate visibility debt for the
+// reservation cohort without claiming that any count increase belongs to a
+// particular identity. Original reserve baselines survive a refresh that races
+// ahead of Commit; removing a canceled identity recomputes the cohort proof.
+func (g *PartsPressureGuard) reconcileCommittedKeyLocked(key PartsKey) {
+	entries := g.committedReservations[key]
+	if len(entries) == 0 {
+		delete(g.committed, key)
+		return
+	}
+	sort.SliceStable(entries, func(i, j int) bool {
+		if entries[i].baseline != entries[j].baseline {
+			return entries[i].baseline < entries[j].baseline
+		}
+		if entries[i].reservedGeneration != entries[j].reservedGeneration {
+			return entries[i].reservedGeneration < entries[j].reservedGeneration
+		}
+		return entries[i].reservationID < entries[j].reservationID
+	})
+	observed := g.snapshot[key]
 	nextVisible := 0
-	for idx, baseline := range ordered {
-		if idx == 0 || baseline+1 > nextVisible {
-			nextVisible = baseline + 1
+	covered := 0
+	for idx := range entries {
+		if idx == 0 || entries[idx].baseline+1 > nextVisible {
+			nextVisible = entries[idx].baseline + 1
 		}
-		if nextVisible > observed {
-			break
-		}
-		covered++
-		nextVisible++
-	}
-	remaining := append([]int(nil), ordered[covered:]...)
-	for idx, baseline := range remaining {
-		if baseline < observed {
-			remaining[idx] = observed
+		if nextVisible <= observed {
+			covered++
+			nextVisible++
 		}
 	}
-	return remaining
+
+	// Final identities become non-cancelable at ACK2. Compact them only when the
+	// snapshot covers the entire cohort, so no ambiguous aggregate growth is ever
+	// assigned to a specific statement merely to free its handle.
+	if covered == len(entries) {
+		kept := entries[:0]
+		for _, entry := range entries {
+			if !entry.final {
+				kept = append(kept, entry)
+			}
+		}
+		entries = kept
+		if len(entries) == 0 {
+			delete(g.committedReservations, key)
+			delete(g.committed, key)
+			return
+		}
+		g.committedReservations[key] = entries
+		// Every retained (cancelable) identity was already covered as part of the
+		// larger cohort; removing finalized members cannot invalidate that proof.
+		covered = len(entries)
+	}
+	pending := len(entries) - covered
+	if pending == 0 {
+		delete(g.committed, key)
+	} else {
+		g.committed[key] = pending
+	}
 }
 
 func copyPartsSnapshot(in PartsSnapshot) PartsSnapshot {

@@ -38,6 +38,11 @@ type StorageIntegrityIngress struct {
 	schemas        sicore.TableSchemaResolver
 	pressureRunner StorageIntegrityPartsPressureLifecycle
 	statementLocks [64]sync.Mutex
+	pressureMu     sync.Mutex
+	// pressureReservations keeps indeterminate/unsafe-written reservations
+	// addressable by statement until ACK2 finalizes them or a required source
+	// lookup / exact cleanup proves that no candidate part remains.
+	pressureReservations map[string]sicore.PartsReservation
 
 	backgroundMu     sync.Mutex
 	backgroundCancel context.CancelFunc
@@ -66,7 +71,13 @@ func NewStorageIntegrityIngressWithPayloadWriter(orch *sicore.Orchestrator, guar
 	default:
 		return nil, fmt.Errorf("storage_integrity ingress: valid materializer kind is required")
 	}
-	return &StorageIntegrityIngress{orch: orch, guard: guard, matKind: matKind, payloadWriter: writer}, nil
+	return &StorageIntegrityIngress{
+		orch:                 orch,
+		guard:                guard,
+		matKind:              matKind,
+		payloadWriter:        writer,
+		pressureReservations: map[string]sicore.PartsReservation{},
+	}, nil
 }
 
 // RecoverPending drains durable non-terminal intake records before listeners
@@ -229,38 +240,55 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 	if err != nil {
 		return fmt.Errorf("storage_integrity ingress: preflight %s: %w", rec.StatementID, err)
 	}
-	var reservation sicore.PartsReservation
+	trackedReservation := i.pressureReservation(rec.StatementID)
+	if requiresPrepare && trackedReservation != nil {
+		// For an existing statement, true means the required source lookup proved
+		// the previous indeterminate prepare wrote nothing (or no prepare was ever
+		// attempted). Cancel that statement's old committed slot before re-gating.
+		trackedReservation.Release()
+		i.deletePressureReservation(rec.StatementID)
+		trackedReservation = nil
+	}
+	var attemptReservation sicore.PartsReservation
 	if i.pressure != nil && requiresPrepare {
-		reservation, err = i.reservePartsPressure(ctx, table, partitions)
+		attemptReservation, err = i.reservePartsPressure(ctx, table, partitions)
 		if err != nil {
 			return err
 		}
+		trackedReservation = attemptReservation
+		i.setPressureReservation(rec.StatementID, attemptReservation)
 	}
 	if i.payloadWriter != nil {
 		put, err := i.payloadWriter.PutPayload(ctx, rec.Payload, rec.PayloadHash, rec.PayloadLength)
 		if err != nil {
-			if reservation != nil {
-				reservation.Release()
-			}
+			i.cancelAttemptReservation(rec.StatementID, attemptReservation)
 			return fmt.Errorf("storage_integrity ingress: put payload for %s: %w", rec.StatementID, err)
 		}
 		if put.PayloadRef == "" {
-			if reservation != nil {
-				reservation.Release()
-			}
+			i.cancelAttemptReservation(rec.StatementID, attemptReservation)
 			return fmt.Errorf("storage_integrity ingress: payload store returned empty payload_ref for %s", rec.StatementID)
 		}
 		rec.PayloadRef = put.PayloadRef
 	}
 	res, err := i.orch.Orchestrate(ctx, rec)
-	if reservation != nil {
-		if errors.Is(err, sicore.ErrBackpressure) {
-			reservation.Release()
-		} else {
-			// Any non-backpressure return may follow a durable source write or an
-			// indeterminate response. Keep the slot charged until Refresh absorbs it.
-			reservation.Commit()
+	switch {
+	case res.Lifecycle == sicore.LifecycleCleaned:
+		// Exact cleanup is definitive even when the following terminal-journal
+		// save failed. Cancel a reserved, committed, or already-visible identity.
+		i.cancelTrackedReservation(rec.StatementID, trackedReservation)
+	case attemptReservation != nil && (errors.Is(err, sicore.ErrBackpressure) || !res.SourceWriteMayExist()):
+		// SNode hard pressure and every definite pre-prepare failure occur before a
+		// source write. Only an actually attempted/known prepare stays charged.
+		i.cancelTrackedReservation(rec.StatementID, attemptReservation)
+	case attemptReservation != nil:
+		attemptReservation.Commit()
+		if res.Ack2 {
+			attemptReservation.Finalize()
+			i.deletePressureReservation(rec.StatementID)
 		}
+	case trackedReservation != nil && res.Ack2:
+		trackedReservation.Finalize()
+		i.deletePressureReservation(rec.StatementID)
 	}
 	if i.pressure != nil {
 		// Orchestrate may create or clean candidate parts on success, retryable
@@ -278,6 +306,42 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 		return fmt.Errorf("storage_integrity ingress: statement %s did not reach ACK2 (lifecycle %s, reason %q)", rec.StatementID, res.Lifecycle, res.Reason)
 	}
 	return nil
+}
+
+func (i *StorageIntegrityIngress) pressureReservation(statementID string) sicore.PartsReservation {
+	i.pressureMu.Lock()
+	defer i.pressureMu.Unlock()
+	return i.pressureReservations[statementID]
+}
+
+func (i *StorageIntegrityIngress) setPressureReservation(statementID string, reservation sicore.PartsReservation) {
+	if reservation == nil {
+		return
+	}
+	i.pressureMu.Lock()
+	i.pressureReservations[statementID] = reservation
+	i.pressureMu.Unlock()
+}
+
+func (i *StorageIntegrityIngress) deletePressureReservation(statementID string) {
+	i.pressureMu.Lock()
+	delete(i.pressureReservations, statementID)
+	i.pressureMu.Unlock()
+}
+
+func (i *StorageIntegrityIngress) cancelAttemptReservation(statementID string, reservation sicore.PartsReservation) {
+	if reservation == nil {
+		return
+	}
+	reservation.Release()
+	i.deletePressureReservation(statementID)
+}
+
+func (i *StorageIntegrityIngress) cancelTrackedReservation(statementID string, reservation sicore.PartsReservation) {
+	if reservation != nil {
+		reservation.Release()
+	}
+	i.deletePressureReservation(statementID)
 }
 
 func storageIntegrityMaterializerName(kind sicore.MaterializerKind) string {
