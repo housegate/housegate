@@ -108,6 +108,15 @@ type Options struct {
 	// config.storage_integrity.runtime.enabled is true. It lets HouseGate build
 	// the admission consumer while the host supplies the source-side adapter.
 	StorageIntegrityRuntime StorageIntegrityRuntimeOptions
+	// StorageIntegrityTableSchemas optionally supplies the declared table
+	// schema source used by the agent-mode statement plugin
+	// (storage_integrity.agent) and the server-mode ingress
+	// (storage_integrity.ingress) to resolve schema_hash. When nil, housegate
+	// type-asserts the effective registry (Options.NetworkState or the
+	// config-loaded one) to registry.TableSchemas; the YAML-backed in-memory
+	// state and sentio-node's adapter implement it, while the agent RPC backend
+	// does not.
+	StorageIntegrityTableSchemas registry.TableSchemas
 
 	// CommitGateObservers gate DDL statements (CREATE / DROP TABLE,
 	// CREATE / DROP DATABASE) on host-supplied external commits.

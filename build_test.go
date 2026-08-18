@@ -18,8 +18,11 @@ import (
 	"github.com/housegate/housegate/pkg/config"
 	"github.com/housegate/housegate/pkg/network"
 	"github.com/housegate/housegate/pkg/plugin"
+	"github.com/housegate/housegate/pkg/plugins/agent"
 	"github.com/housegate/housegate/pkg/plugins/forward"
 	"github.com/housegate/housegate/pkg/plugins/rewrite"
+	"github.com/housegate/housegate/pkg/plugins/sessionstate"
+	"github.com/housegate/housegate/pkg/plugins/sistatement"
 	"github.com/housegate/housegate/pkg/plugins/storageintegrity"
 	"github.com/housegate/housegate/pkg/proxy"
 	"github.com/housegate/housegate/pkg/replay"
@@ -136,6 +139,107 @@ func requireExternalChain(t *testing.T, bs *builtServer) *plugin.PluginChain {
 	t.Fatal("external listener missing")
 	return nil
 }
+
+func agentSICfg(t *testing.T) *config.Config {
+	t.Helper()
+	cfg := config.Default()
+	cfg.Listen = "127.0.0.1:0"
+	cfg.MetricsListen = ""
+	cfg.Agent.Mode = true
+	cfg.Agent.PrivateKeyHex = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	cfg.Agent.Upstream = "127.0.0.1:9000"
+	cfg.StorageIntegrity.Agent.Enabled = true
+	cfg.StorageIntegrity.Agent.NetworkID = "testnet-v2"
+	cfg.StorageIntegrity.Agent.StateDir = t.TempDir()
+	cfg.StorageIntegrity.Agent.RequireNetworkState = false
+	return &cfg
+}
+
+func TestBuildAgent_StorageIntegrityAgentWiresPluginChain(t *testing.T) {
+	cfg := agentSICfg(t)
+	bs, err := buildAgent(Options{Config: cfg, NetworkState: network.NewInMemoryNetworkState()}, nil)
+	if err != nil {
+		t.Fatalf("buildAgent: %v", err)
+	}
+	defer bs.teardown()
+	srv := requireProxyServer(t, bs.listeners[0])
+	chain, ok := srv.Hooks.(*plugin.PluginChain)
+	if !ok {
+		t.Fatalf("Hooks type %T", srv.Hooks)
+	}
+
+	// sistatement runs after materialization and before the agent signer. The
+	// same signer instance must refresh SQL_x_auth_token after deferred input.
+	var (
+		siPlug    *sistatement.Plugin
+		agentPlug *agent.Plugin
+		siIdx     = -1
+		signerIdx = -1
+	)
+	for i, candidate := range chain.QueryPlugins {
+		switch p := candidate.(type) {
+		case *sistatement.Plugin:
+			siPlug, siIdx = p, i
+		case *agent.Plugin:
+			agentPlug, signerIdx = p, i
+		}
+	}
+	if siPlug == nil || agentPlug == nil || siIdx > signerIdx {
+		t.Fatalf("query plugin order sistatement=%d signer=%d", siIdx, signerIdx)
+	}
+	if len(chain.HelloPlugins) != 1 {
+		t.Fatalf("agent SI hello plugins = %d, want sessionstate only", len(chain.HelloPlugins))
+	}
+	if _, ok := chain.HelloPlugins[0].(*sessionstate.Plugin); !ok {
+		t.Fatalf("agent SI hello plugin type = %T, want *sessionstate.Plugin", chain.HelloPlugins[0])
+	}
+	if len(chain.StrictDataPlugins) != 1 || chain.StrictDataPlugins[0] != siPlug {
+		t.Fatalf("strict-data plugins = %#v, want sistatement instance", chain.StrictDataPlugins)
+	}
+	if len(chain.QueryInputCompleteStrictPlugins) != 2 ||
+		chain.QueryInputCompleteStrictPlugins[0] != siPlug ||
+		chain.QueryInputCompleteStrictPlugins[1] != agentPlug {
+		t.Fatalf("input-complete-strict plugins = %#v, want [sistatement agent] instances", chain.QueryInputCompleteStrictPlugins)
+	}
+	if len(chain.QueryAbortPlugins) != 1 || chain.QueryAbortPlugins[0] != siPlug {
+		t.Fatalf("abort plugins = %#v, want sistatement instance", chain.QueryAbortPlugins)
+	}
+	if len(chain.QuerySuccessPlugins) != 1 || chain.QuerySuccessPlugins[0] != siPlug {
+		t.Fatalf("success plugins = %#v, want sistatement instance", chain.QuerySuccessPlugins)
+	}
+	if len(chain.QueryCompletePlugins) != 1 || chain.QueryCompletePlugins[0] != siPlug {
+		t.Fatalf("complete plugins = %#v, want sistatement instance", chain.QueryCompletePlugins)
+	}
+	if len(chain.ClosePlugins) != 1 || chain.ClosePlugins[0] != siPlug {
+		t.Fatalf("close plugins = %#v, want sistatement instance", chain.ClosePlugins)
+	}
+}
+
+func TestBuildAgent_StorageIntegrityAgentRequiresTableSchemas(t *testing.T) {
+	cfg := agentSICfg(t)
+	withoutSchemas := registryWithoutSchemas{network.NewInMemoryNetworkState()}
+	_, err := buildAgent(Options{Config: cfg, NetworkState: withoutSchemas}, nil)
+	if err == nil || !strings.Contains(err.Error(), "TableSchemas") {
+		t.Fatalf("expected TableSchemas requirement error, got %v", err)
+	}
+
+	bs, err := buildAgent(Options{
+		Config:                       cfg,
+		NetworkState:                 withoutSchemas,
+		StorageIntegrityTableSchemas: network.NewInMemoryNetworkState(),
+	}, nil)
+	if err != nil {
+		t.Fatalf("explicit TableSchemas override: %v", err)
+	}
+	bs.teardown()
+}
+
+// registryWithoutSchemas preserves routing/permission Registry methods while
+// deliberately hiding the embedded state's TableSchemas method signatures.
+type registryWithoutSchemas struct{ *network.InMemoryNetworkState }
+
+func (registryWithoutSchemas) TableSchema(string, string, uint32) {}
+func (registryWithoutSchemas) LatestTableSchema(string, string)   {}
 
 func TestBuildServer_TwoListenersWhenInternalListenSet(t *testing.T) {
 	cfg := minimalServerCfg(t)
