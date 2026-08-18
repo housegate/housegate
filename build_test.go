@@ -636,6 +636,34 @@ func TestBuildStorageIntegrityRuntimeRequiresPorts(t *testing.T) {
 	}
 }
 
+func TestBuildStorageIntegrityRuntimeBackpressureRequiresConnAndResolver(t *testing.T) {
+	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatalf("NewRelaySigner: %v", err)
+	}
+	cfg := minimalRouterOnlyCfg(t)
+	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
+	cfg.StorageIntegrity.Runtime.Backpressure.Enabled = true
+	base := StorageIntegrityRuntimeOptions{
+		StatementSubmitter: &rootRecordingSubmitter{}, SourcePreparer: &rootRecordingPreparer{},
+		StatusQuerier: rootRecordingStatusQuerier{}, PayloadWriter: &rootRecordingPayloadWriter{},
+		MergeGuard: &recordingBuildMergeGuard{},
+	}
+	if _, _, err := buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, base); err == nil || !strings.Contains(err.Error(), "backpressure") {
+		t.Fatalf("enabled backpressure without merge_conn/schema_resolver must fail: %v", err)
+	}
+	withPorts := base
+	withPorts.MergeConn = &recordingBuildMergeConn{}
+	withPorts.SchemaResolver = bpSchemaResolver()
+	ingress, _, err := buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, withPorts)
+	if err != nil {
+		t.Fatalf("buildStorageIntegrityRuntimeConsumer: %v", err)
+	}
+	if ingress.pressure == nil || ingress.pressureRunner == nil {
+		t.Fatal("runtime must construct the parts-pressure guard and its supervisor")
+	}
+}
+
 func TestBuildStorageIntegrityRuntimeRequiresPreparedLookup(t *testing.T) {
 	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	if err != nil {
@@ -955,6 +983,38 @@ func TestStartStorageIntegrityRuntimeFailsClosedOnMergeGuardError(t *testing.T) 
 	err = startStorageIntegrityRuntime(context.Background(), ingress, mergeGuard)
 	if err == nil || !strings.Contains(err.Error(), "storage_integrity.merge_guard") {
 		t.Fatalf("startStorageIntegrityRuntime err = %v, want merge guard failure", err)
+	}
+}
+
+func TestStartStorageIntegrityRuntimeFailsClosedOnInitialPartsSnapshot(t *testing.T) {
+	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatalf("NewRelaySigner: %v", err)
+	}
+	cfg := minimalRouterOnlyCfg(t)
+	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
+	cfg.StorageIntegrity.Runtime.Backpressure.Enabled = true
+	partsErr := errors.New("system.parts unavailable")
+	ingress, mergeGuard, err := buildStorageIntegrityRuntimeConsumer(
+		cfg.StorageIntegrity.Runtime,
+		StorageIntegrityRuntimeOptions{
+			StatementSubmitter: &rootRecordingSubmitter{outcome: sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}},
+			SourcePreparer:     &rootRecordingPreparer{source: "snode-A", claim: sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"}},
+			StatusQuerier:      rootRecordingStatusQuerier{},
+			PayloadWriter:      &rootRecordingPayloadWriter{result: sicore.PayloadPutResult{PayloadRef: "payload://store/ref-1", State: sicore.PayloadStateAvailable}},
+			MergeGuard:         &recordingBuildMergeGuard{},
+			MergeConn:          &rootPartsConn{err: partsErr},
+			SchemaResolver:     bpSchemaResolver(),
+		},
+	)
+	if err != nil {
+		t.Fatalf("buildStorageIntegrityRuntimeConsumer: %v", err)
+	}
+	defer ingress.Close()
+
+	err = startStorageIntegrityRuntime(context.Background(), ingress, mergeGuard)
+	if err == nil || !errors.Is(err, partsErr) || !strings.Contains(err.Error(), "initial parts snapshot") {
+		t.Fatalf("startStorageIntegrityRuntime err = %v, want initial parts snapshot failure", err)
 	}
 }
 
@@ -1315,6 +1375,7 @@ func enableStorageIntegrityRuntimeTestConfig(t *testing.T, cfg *config.Config, s
 	cfg.StorageIntegrity.Ingress.RequestTimeout.Duration = 50 * time.Millisecond
 	cfg.StorageIntegrity.Ingress.MaxPayloadBytes = 64
 	cfg.StorageIntegrity.Runtime.Enabled = true
+	cfg.StorageIntegrity.Runtime.Backpressure.Enabled = false
 	cfg.StorageIntegrity.Runtime.ExpectedSource = "snode-A"
 	runtimeDir := t.TempDir()
 	cfg.StorageIntegrity.Runtime.JournalDir = filepath.Join(runtimeDir, "journal")

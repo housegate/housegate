@@ -37,6 +37,8 @@ type StorageIntegrityRuntimeOptions struct {
 	PayloadSpool       *sicore.FilePayloadSpool
 	MergeConn          sicore.MergeConn
 	MergeGuard         StorageIntegrityMergeGuard
+	SchemaResolver     sicore.TableSchemaResolver
+	PartsPressure      StorageIntegrityPartsPressure
 }
 
 func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRuntimeConfig, opts StorageIntegrityRuntimeOptions) (*StorageIntegrityIngress, StorageIntegrityMergeGuard, error) {
@@ -136,6 +138,32 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 	}
 	ingress.leaseManager = leaseManager
 	ingress.mergeRunner = mergeGuard
+	if backpressure := runtimeCfg.Backpressure; backpressure.Enabled {
+		pressure := opts.PartsPressure
+		if pressure == nil {
+			if opts.MergeConn == nil {
+				return nil, nil, errors.New("storage_integrity.runtime.backpressure requires merge_conn (or set storage_integrity.runtime.backpressure.enabled: false)")
+			}
+			guard := sicore.NewPartsPressureGuard(opts.MergeConn, sicore.PartsPressureConfig{
+				UnsafeDatabase:        strings.TrimSpace(backpressure.UnsafeDatabase),
+				SafeDatabase:          strings.TrimSpace(backpressure.SafeDatabase),
+				SoftPartsPerPartition: backpressure.SoftPartsPerPartition,
+				HardPartsPerPartition: backpressure.HardPartsPerPartition,
+			})
+			supervisor := NewStorageIntegrityPartsPressureSupervisor(
+				guard,
+				backpressure.PollInterval.Duration,
+				strings.TrimSpace(backpressure.UnsafeDatabase),
+				strings.TrimSpace(backpressure.SafeDatabase),
+			)
+			ingress.pressureRunner = supervisor
+			pressure = supervisor
+		}
+		if opts.SchemaResolver == nil {
+			return nil, nil, errors.New("storage_integrity.runtime.backpressure requires a table schema resolver (StorageIntegrityRuntimeOptions.SchemaResolver)")
+		}
+		ingress.WithPartsPressure(pressure, opts.SchemaResolver)
+	}
 	return ingress, mergeGuard, nil
 }
 
@@ -147,6 +175,11 @@ func startStorageIntegrityRuntime(ctx context.Context, runtime *StorageIntegrity
 	}
 	if runtime == nil {
 		return nil
+	}
+	if runtime.pressureRunner != nil {
+		if err := runtime.pressureRunner.Refresh(ctx); err != nil {
+			return fmt.Errorf("storage_integrity.backpressure: initial parts snapshot: %w", err)
+		}
 	}
 	runtime.StartBackground(ctx)
 	if err := runtime.RecoverPending(ctx); err != nil {

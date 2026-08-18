@@ -2,9 +2,11 @@ package housegate
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
+	"github.com/housegate/housegate/pkg/chproto"
 	siplugin "github.com/housegate/housegate/pkg/plugins/storageintegrity"
 	"github.com/housegate/housegate/pkg/replay"
 	sicore "github.com/housegate/housegate/pkg/storageintegrity"
@@ -26,12 +28,15 @@ import (
 // adapters. The embedding host supplies the selected-SNode SourcePreparer plus
 // PreparedStatementLookup adapter.
 type StorageIntegrityIngress struct {
-	orch          *sicore.Orchestrator
-	guard         StorageIntegrityMergeGuard
-	matKind       sicore.MaterializerKind
-	payloadWriter sicore.PayloadWriter
-	leaseManager  sicore.PayloadLeaseManager
-	mergeRunner   *StorageIntegrityMergeSupervisor
+	orch           *sicore.Orchestrator
+	guard          StorageIntegrityMergeGuard
+	matKind        sicore.MaterializerKind
+	payloadWriter  sicore.PayloadWriter
+	leaseManager   sicore.PayloadLeaseManager
+	mergeRunner    *StorageIntegrityMergeSupervisor
+	pressure       StorageIntegrityPartsPressure
+	schemas        sicore.TableSchemaResolver
+	pressureRunner *StorageIntegrityPartsPressureSupervisor
 
 	backgroundMu     sync.Mutex
 	backgroundCancel context.CancelFunc
@@ -71,7 +76,7 @@ func (i *StorageIntegrityIngress) RecoverPending(ctx context.Context) error {
 }
 
 func (i *StorageIntegrityIngress) StartBackground(ctx context.Context) {
-	if i == nil || (i.leaseManager == nil && i.mergeRunner == nil) {
+	if i == nil || (i.leaseManager == nil && i.mergeRunner == nil && i.pressureRunner == nil) {
 		return
 	}
 	i.backgroundMu.Lock()
@@ -88,6 +93,9 @@ func (i *StorageIntegrityIngress) StartBackground(ctx context.Context) {
 	if i.mergeRunner != nil {
 		go i.mergeRunner.Run(runCtx)
 	}
+	if i.pressureRunner != nil {
+		go i.pressureRunner.Run(runCtx)
+	}
 }
 
 func (i *StorageIntegrityIngress) Close() {
@@ -101,6 +109,47 @@ func (i *StorageIntegrityIngress) Close() {
 	if cancel != nil {
 		cancel()
 	}
+}
+
+// WithPartsPressure enables the ingress back-pressure check. The resolver
+// supplies the pinned schema used to derive every payload partition.
+func (i *StorageIntegrityIngress) WithPartsPressure(pressure StorageIntegrityPartsPressure, schemas sicore.TableSchemaResolver) {
+	i.pressure = pressure
+	i.schemas = schemas
+}
+
+func (i *StorageIntegrityIngress) checkPartsPressure(rec sicore.AdmissionRecord) error {
+	if i.pressure == nil {
+		return nil
+	}
+	if i.schemas == nil {
+		return fmt.Errorf("storage_integrity ingress: back-pressure requires a table schema resolver")
+	}
+	schema, ok := i.schemas.StorageIntegrityTableSchema(rec.TableID)
+	if !ok {
+		return fmt.Errorf("storage_integrity ingress: no pinned schema for table %q", rec.TableID)
+	}
+	partitions, err := sicore.PayloadPartitionIDs(schema, rec.PayloadEncoding, rec.Revision, rec.Payload)
+	if err != nil {
+		return fmt.Errorf("storage_integrity ingress: %w", err)
+	}
+	table := sicore.PhysicalTableName(rec.TableID)
+	for _, partition := range partitions {
+		if err := i.pressure.Allow(table, partition); err != nil {
+			return backpressureClientError(table, err)
+		}
+	}
+	return nil
+}
+
+func backpressureClientError(table string, err error) error {
+	storageIntegrityBackpressureTotal.WithLabelValues(table).Inc()
+	var backpressure *sicore.BackpressureError
+	message := "storage_integrity: back-pressure: retry later"
+	if errors.As(err, &backpressure) {
+		message = backpressure.Error()
+	}
+	return &chproto.ClientError{Code: chproto.CodeTooManyParts, Message: message, Err: err}
 }
 
 // ConsumeStorageIntegrityAdmission maps a completed plugin admission into a core
@@ -127,6 +176,9 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 			storageIntegrityMaterializerName(actualMaterializer),
 		)
 	}
+	if err := i.checkPartsPressure(rec); err != nil {
+		return err
+	}
 	if i.payloadWriter != nil {
 		put, err := i.payloadWriter.PutPayload(ctx, rec.Payload, rec.PayloadHash, rec.PayloadLength)
 		if err != nil {
@@ -139,10 +191,16 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 	}
 	res, err := i.orch.Orchestrate(ctx, rec)
 	if err != nil {
+		if errors.Is(err, sicore.ErrBackpressure) {
+			return backpressureClientError(sicore.PhysicalTableName(rec.TableID), err)
+		}
 		return fmt.Errorf("storage_integrity ingress: orchestrate %s: %w", rec.StatementID, err)
 	}
 	if !res.Ack2 {
 		return fmt.Errorf("storage_integrity ingress: statement %s did not reach ACK2 (lifecycle %s, reason %q)", rec.StatementID, res.Lifecycle, res.Reason)
+	}
+	if i.pressure != nil {
+		i.pressure.Invalidate()
 	}
 	return nil
 }
