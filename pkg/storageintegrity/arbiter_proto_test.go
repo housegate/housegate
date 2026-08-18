@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/housegate/housegate/pkg/replay"
+	"github.com/housegate/housegate/pkg/replay/payloadexec"
 )
 
 func TestArbiterStatementEnvelopeToProtoMapsFields(t *testing.T) {
@@ -42,8 +43,56 @@ func TestArbiterStatementEnvelopeToProtoMapsFields(t *testing.T) {
 	if got.GetTargetTableId() != env.TargetTableID || got.GetUserJws() != env.UserJWS {
 		t.Fatalf("target/jws = %q/%q", got.GetTargetTableId(), got.GetUserJws())
 	}
-	if got.GetSettingsHash() != "" {
-		t.Fatalf("settings_hash = %q, want empty until HouseGate captures session settings", got.GetSettingsHash())
+	if got.GetSettingsHash() != env.SettingsHash {
+		t.Fatalf("settings_hash = %q, want %q", got.GetSettingsHash(), env.SettingsHash)
+	}
+}
+
+func TestArbiterStatementEnvelopeToProto_FillsEveryV2Field(t *testing.T) {
+	adm := validNativeAdmissionV2(t)
+	env, err := EnvelopeFromAdmission(adm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg, err := ArbiterStatementEnvelopeToProto(env)
+	if err != nil {
+		t.Fatalf("ArbiterStatementEnvelopeToProto: %v", err)
+	}
+	if msg.GetEnvelopeVersion() != EnvelopeVersionV2 || msg.GetNetworkId() != "testnet-v2" || msg.GetKeeperShardId() != 0 ||
+		msg.GetPayloadFormat() != PayloadEncodingClickHouseNativeData || msg.GetClientRevision() != 54460 ||
+		msg.GetSchemaHash() != adm.SchemaHash || msg.GetRowIdProfileId() != payloadexec.RowIDProfileID ||
+		msg.GetSettingsHash() != EmptySettingsHash {
+		t.Fatalf("proto v2 fields: %+v", msg)
+	}
+	if msg.GetSettingsHash() == "" {
+		t.Fatal("settings_hash must no longer be empty")
+	}
+}
+
+func TestArbiterStatementEnvelopeToProto_RejectsV2Violations(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*StatementEnvelope)
+		want   string
+	}{
+		{"wrong envelope version", func(e *StatementEnvelope) { e.EnvelopeVersion = 1 }, "envelope_version"},
+		{"blank network id", func(e *StatementEnvelope) { e.NetworkID = " \t" }, "missing v2 fields"},
+		{"non-zero shard", func(e *StatementEnvelope) { e.KeeperShardID = 1 }, "keeper_shard_id"},
+		{"wrong settings hash", func(e *StatementEnvelope) { e.SettingsHash = replay.DigestString("x") }, "settings_hash"},
+		{"missing schema hash", func(e *StatementEnvelope) { e.SchemaHash = "" }, "missing v2 fields"},
+		{"wrong row profile", func(e *StatementEnvelope) { e.RowIDProfileID = "housegate-row-id-v0" }, "row_id_profile_id"},
+		{"wrong payload format", func(e *StatementEnvelope) { e.PayloadEncoding = EncodingCSVWithNames }, "payload format"},
+		{"negative revision", func(e *StatementEnvelope) { e.Revision = -1 }, "missing v2 fields"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := arbiterProtoEnvelopeFixture()
+			tc.mutate(&env)
+			_, err := ArbiterStatementEnvelopeToProto(env)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want containing %q", err, tc.want)
+			}
+		})
 	}
 }
 
@@ -432,6 +481,12 @@ func arbiterProtoEnvelopeFixture() StatementEnvelope {
 		Revision:        54465,
 		Signer:          "0xabc",
 		UserJWS:         "jws",
+		EnvelopeVersion: EnvelopeVersionV2,
+		NetworkID:       "testnet-v2",
+		KeeperShardID:   0,
+		SettingsHash:    EmptySettingsHash,
+		SchemaHash:      "0x" + strings.Repeat("44", 32),
+		RowIDProfileID:  payloadexec.RowIDProfileID,
 	}
 }
 

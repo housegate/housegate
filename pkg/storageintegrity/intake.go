@@ -3,6 +3,7 @@ package storageintegrity
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/housegate/housegate/pkg/replay"
+	"github.com/housegate/housegate/pkg/replay/payloadexec"
 )
 
 // Kind mirrors the storage-integrity statement kind admitted by the ingress
@@ -44,6 +46,14 @@ type AdmissionRecord struct {
 	PayloadHash     string
 	PayloadEncoding string
 	Revision        int
+
+	// Envelope v2 fields are all authenticated by UserJWS.
+	EnvelopeVersion uint32
+	NetworkID       string
+	KeeperShardID   uint32
+	SettingsHash    string
+	SchemaHash      string
+	RowIDProfileID  string
 }
 
 // PayloadState is the subset of DA payload lifecycle states HouseGate accepts
@@ -86,13 +96,18 @@ type StatementEnvelope struct {
 	PayloadRef    string
 	PayloadHash   string
 	PayloadLength uint64
-	// PayloadEncoding pins how the payload is decoded. Native payloads must
-	// carry the captured client protocol revision; CSVWithNames payloads are
-	// already materialized replay bytes and do not require a revision.
+	// PayloadEncoding pins how the payload is decoded. Envelope v2 admits only
+	// exact Native Data bytes, which must carry the captured client revision.
 	PayloadEncoding string
 	Revision        int
 	Signer          string
 	UserJWS         string
+	EnvelopeVersion uint32
+	NetworkID       string
+	KeeperShardID   uint32
+	SettingsHash    string
+	SchemaHash      string
+	RowIDProfileID  string
 }
 
 // EnvelopeFromAdmission builds the source statement envelope from a completed
@@ -116,8 +131,29 @@ func EnvelopeFromAdmission(adm AdmissionRecord) (StatementEnvelope, error) {
 	if adm.PayloadEncoding == "" {
 		return StatementEnvelope{}, fmt.Errorf("intake: admission %s has no payload encoding", adm.StatementID)
 	}
+	if adm.PayloadEncoding != PayloadEncodingClickHouseNativeData {
+		return StatementEnvelope{}, fmt.Errorf("intake: admission %s payload encoding %q is not the SI lane's %q", adm.StatementID, adm.PayloadEncoding, PayloadEncodingClickHouseNativeData)
+	}
 	if adm.PayloadEncoding != sqlEncoding {
 		return StatementEnvelope{}, fmt.Errorf("intake: admission %s payload encoding %q does not match SQL encoding %q", adm.StatementID, adm.PayloadEncoding, sqlEncoding)
+	}
+	if adm.EnvelopeVersion != EnvelopeVersionV2 {
+		return StatementEnvelope{}, fmt.Errorf("intake: admission %s envelope_version %d, want %d", adm.StatementID, adm.EnvelopeVersion, EnvelopeVersionV2)
+	}
+	if strings.TrimSpace(adm.NetworkID) == "" {
+		return StatementEnvelope{}, fmt.Errorf("intake: admission %s has no network_id", adm.StatementID)
+	}
+	if adm.KeeperShardID != 0 {
+		return StatementEnvelope{}, fmt.Errorf("intake: admission %s keeper_shard_id %d, want 0 in v1", adm.StatementID, adm.KeeperShardID)
+	}
+	if adm.SettingsHash != EmptySettingsHash {
+		return StatementEnvelope{}, fmt.Errorf("intake: admission %s settings_hash %q, want the empty-settings digest", adm.StatementID, adm.SettingsHash)
+	}
+	if adm.SchemaHash == "" {
+		return StatementEnvelope{}, fmt.Errorf("intake: admission %s has no schema_hash", adm.StatementID)
+	}
+	if adm.RowIDProfileID != payloadexec.RowIDProfileID {
+		return StatementEnvelope{}, fmt.Errorf("intake: admission %s row_id_profile_id %q, want %q", adm.StatementID, adm.RowIDProfileID, payloadexec.RowIDProfileID)
 	}
 	stmtID, err := parseFlatStatementID(adm.StatementID)
 	if err != nil {
@@ -151,11 +187,8 @@ func EnvelopeFromAdmission(adm AdmissionRecord) (StatementEnvelope, error) {
 		if got := replay.DigestBytes(adm.Payload); got != adm.PayloadHash {
 			return StatementEnvelope{}, fmt.Errorf("intake: INSERT admission %s payload hash mismatch", adm.StatementID)
 		}
-		// Native ClientData captures must pin the client protocol revision used
-		// to decode the block. CSVWithNames payloads have already been
-		// materialized before admission.
-		if adm.PayloadEncoding == PayloadEncodingClickHouseNativeData && adm.Revision == 0 {
-			return StatementEnvelope{}, fmt.Errorf("intake: INSERT admission %s has no client protocol revision", adm.StatementID)
+		if adm.Revision <= 0 || uint64(adm.Revision) > uint64(^uint32(0)) {
+			return StatementEnvelope{}, fmt.Errorf("intake: INSERT admission %s has invalid client protocol revision %d", adm.StatementID, adm.Revision)
 		}
 	}
 	payloadRef := adm.PayloadRef
@@ -178,6 +211,12 @@ func EnvelopeFromAdmission(adm AdmissionRecord) (StatementEnvelope, error) {
 		Revision:        adm.Revision,
 		Signer:          adm.Signer,
 		UserJWS:         adm.UserJWS,
+		EnvelopeVersion: adm.EnvelopeVersion,
+		NetworkID:       adm.NetworkID,
+		KeeperShardID:   adm.KeeperShardID,
+		SettingsHash:    adm.SettingsHash,
+		SchemaHash:      adm.SchemaHash,
+		RowIDProfileID:  adm.RowIDProfileID,
 	}, nil
 }
 
@@ -403,6 +442,13 @@ type SourcePreparer interface {
 type PreparedStatementLookup interface {
 	LookupPreparedStatement(ctx context.Context, statementID string) (PreparedLocalResult, bool, error)
 }
+
+// ErrPrepareTerminalReject marks a PrepareLocalStatement failure the source
+// classified as terminal before any unsafe write. Envelope-v2 schema-hash
+// mismatches and unsupported payload formats use this class so the orchestrator
+// cleans the exact empty candidate set instead of fencing a later attempt
+// behind a source lookup for a write that cannot exist.
+var ErrPrepareTerminalReject = errors.New("intake: source rejected prepare terminally")
 
 // OrchestratorConfig pins the deterministic source the FSM is expected to record
 // for this HouseGate's statements. A committed-source mismatch fails closed.
@@ -800,6 +846,11 @@ func (o *Orchestrator) run(ctx context.Context, env StatementEnvelope, adm Admis
 		} else {
 			p, s, prepareErr, submitErr := o.prepareAndSubmit(ctx, env, adm)
 			if prepareErr != nil {
+				if errors.Is(prepareErr, ErrPrepareTerminalReject) {
+					res := o.resultFor(rec)
+					res.Submit = s
+					return o.abort(ctx, res, rec, prepareErr.Error())
+				}
 				// The source may have committed its durable unsafe write before a
 				// transport error or cancellation hid the response. Fence every
 				// later prepare behind an explicit source lookup.

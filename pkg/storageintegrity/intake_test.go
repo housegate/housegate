@@ -3,13 +3,16 @@ package storageintegrity
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/housegate/housegate/pkg/replay"
+	"github.com/housegate/housegate/pkg/replay/payloadexec"
 )
 
 // fixtureRevision is the pinned client protocol revision shared by
@@ -34,6 +37,38 @@ func admissionFixture() AdmissionRecord {
 		PayloadHash:     replay.DigestBytes([]byte(fixturePayload)),
 		PayloadEncoding: PayloadEncodingClickHouseNativeData,
 		Revision:        fixtureRevision,
+		EnvelopeVersion: EnvelopeVersionV2,
+		NetworkID:       "testnet-v2",
+		KeeperShardID:   0,
+		SettingsHash:    EmptySettingsHash,
+		SchemaHash:      "0x" + strings.Repeat("22", 32),
+		RowIDProfileID:  payloadexec.RowIDProfileID,
+	}
+}
+
+func validNativeAdmissionV2(t *testing.T) AdmissionRecord {
+	t.Helper()
+	sql := "INSERT INTO tenant.events FORMAT Native"
+	payload := []byte{byte(2), 0, 0xab, 0xcd}
+	return AdmissionRecord{
+		StatementID:     "0xabc0000000000000000000000000000000000001:1:n1",
+		Kind:            KindInsert,
+		TableID:         "tenant.events",
+		SQL:             sql,
+		SQLHash:         replay.DigestString(sql),
+		Signer:          "0xabc0000000000000000000000000000000000001",
+		UserJWS:         "h.p.s",
+		Payload:         payload,
+		PayloadLength:   uint64(len(payload)),
+		PayloadHash:     replay.DigestBytes(payload),
+		PayloadEncoding: PayloadEncodingClickHouseNativeData,
+		Revision:        54460,
+		EnvelopeVersion: EnvelopeVersionV2,
+		NetworkID:       "testnet-v2",
+		KeeperShardID:   0,
+		SettingsHash:    EmptySettingsHash,
+		SchemaHash:      "0x" + strings.Repeat("33", 32),
+		RowIDProfileID:  payloadexec.RowIDProfileID,
 	}
 }
 
@@ -81,6 +116,49 @@ func TestEnvelopeFromAdmission_MirrorsPayloadIdentity(t *testing.T) {
 	}
 	if env.Revision != adm.Revision {
 		t.Fatalf("revision: got %d want %d", env.Revision, adm.Revision)
+	}
+}
+
+func TestEnvelopeFromAdmission_CarriesV2Fields(t *testing.T) {
+	adm := validNativeAdmissionV2(t)
+	env, err := EnvelopeFromAdmission(adm)
+	if err != nil {
+		t.Fatalf("EnvelopeFromAdmission: %v", err)
+	}
+	if env.EnvelopeVersion != EnvelopeVersionV2 || env.NetworkID != "testnet-v2" || env.KeeperShardID != 0 ||
+		env.SettingsHash != EmptySettingsHash || env.SchemaHash != adm.SchemaHash ||
+		env.RowIDProfileID != payloadexec.RowIDProfileID || env.PayloadEncoding != PayloadEncodingClickHouseNativeData ||
+		env.Revision != 54460 {
+		t.Fatalf("envelope v2 fields not carried: %+v", env)
+	}
+}
+
+func TestEnvelopeFromAdmission_RejectsV2Violations(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*AdmissionRecord)
+		want   string
+	}{
+		{"wrong envelope version", func(a *AdmissionRecord) { a.EnvelopeVersion = 1 }, "envelope_version"},
+		{"missing network id", func(a *AdmissionRecord) { a.NetworkID = "" }, "network_id"},
+		{"blank network id", func(a *AdmissionRecord) { a.NetworkID = " \t" }, "network_id"},
+		{"non-zero shard", func(a *AdmissionRecord) { a.KeeperShardID = 1 }, "keeper_shard_id"},
+		{"non-empty settings hash", func(a *AdmissionRecord) { a.SettingsHash = replay.DigestString("x") }, "settings_hash"},
+		{"missing schema hash", func(a *AdmissionRecord) { a.SchemaHash = "" }, "schema_hash"},
+		{"wrong row id profile", func(a *AdmissionRecord) { a.RowIDProfileID = "housegate-row-id-v0" }, "row_id_profile_id"},
+		{"csv encoding no longer admitted", func(a *AdmissionRecord) { a.PayloadEncoding = EncodingCSVWithNames }, "payload encoding"},
+		{"missing revision", func(a *AdmissionRecord) { a.Revision = 0 }, "revision"},
+		{"negative revision", func(a *AdmissionRecord) { a.Revision = -1 }, "revision"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			adm := validNativeAdmissionV2(t)
+			tc.mutate(&adm)
+			_, err := EnvelopeFromAdmission(adm)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want containing %q", err, tc.want)
+			}
+		})
 	}
 }
 
@@ -256,6 +334,7 @@ type recordingPreparer struct {
 	registerAt   int64
 	abortAt      int64
 	prepareCount int64
+	abortParts   []CandidatePart
 }
 
 func (p *recordingPreparer) PrepareLocalStatement(_ context.Context, env StatementEnvelope, _ []byte) (PreparedLocalResult, error) {
@@ -274,8 +353,9 @@ func (p *recordingPreparer) RegisterPreparedClaim(_ context.Context, _ string) (
 	return p.claimOutcome, p.claimErr
 }
 
-func (p *recordingPreparer) AbortPreparedStatement(_ context.Context, _ string, _ []CandidatePart, _ string) error {
+func (p *recordingPreparer) AbortPreparedStatement(_ context.Context, _ string, parts []CandidatePart, _ string) error {
 	p.abortAt = atomic.AddInt64(&p.seq, 1)
+	p.abortParts = append([]CandidatePart(nil), parts...)
 	return p.abortErr
 }
 
@@ -325,6 +405,48 @@ func TestOrchestrate_RegistersClaimOnlyAfterAcceptedSubmit(t *testing.T) {
 	}
 	if prep.abortAt != 0 {
 		t.Fatal("a fully accepted intake must not abort")
+	}
+}
+
+func TestOrchestrate_TerminalPrepareRejectAbortsWithoutLookupFence(t *testing.T) {
+	prep := &recordingPreparer{prepareErr: fmt.Errorf("schema_hash mismatch: %w", ErrPrepareTerminalReject)}
+	sub := &recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeAccepted}}
+	orch := NewOrchestrator(sub, prep, OrchestratorConfig{ExpectedSource: "snode-A"})
+	res, err := orch.Orchestrate(context.Background(), admissionFixture())
+	if err != nil {
+		t.Fatalf("terminal prepare reject must resolve cleanly, got %v", err)
+	}
+	if res.Ack2 || res.Lifecycle != LifecycleCleaned {
+		t.Fatalf("result = %+v, want cleaned non-ACK2", res)
+	}
+	if atomic.LoadInt64(&prep.abortAt) == 0 {
+		t.Fatal("terminal prepare reject must abort the empty candidate set")
+	}
+	if len(prep.abortParts) != 0 {
+		t.Fatalf("terminal prepare reject abort parts = %+v, want exact empty set", prep.abortParts)
+	}
+
+	// A terminally cleaned reject remains idempotent on retry, but it must not
+	// leave the crash-ambiguity lookup fence set: the source rejected before any
+	// unsafe write could have happened.
+	orch.mu.Lock()
+	rec := orch.records[admissionFixture().StatementID]
+	lookupRequired := rec != nil && rec.requirePreparedLookup
+	orch.mu.Unlock()
+	if rec == nil {
+		t.Fatal("terminal prepare reject record was not retained for idempotent replay")
+	}
+	if lookupRequired {
+		t.Fatal("terminal prepare reject must not leave a prepared-source lookup fence")
+	}
+
+	before := atomic.LoadInt64(&prep.prepareCount)
+	replay, err := orch.Orchestrate(context.Background(), admissionFixture())
+	if err != nil || replay.Lifecycle != LifecycleCleaned || replay.Ack2 {
+		t.Fatalf("terminal replay = %+v, %v, want cached cleaned non-ACK2", replay, err)
+	}
+	if atomic.LoadInt64(&prep.prepareCount) != before {
+		t.Fatal("retry after a terminal prepare reject must return the cached terminal result")
 	}
 }
 
