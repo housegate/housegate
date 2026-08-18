@@ -26,13 +26,23 @@ type Signer interface {
 	SignReplayReceipt(ctx context.Context, receiptHash string) (replicaID, signature string, err error)
 }
 
+// SchemaHashSource resolves the verifier's own Phase-B schema hash for a
+// table. When set on Verifier, every statement that carries a non-empty
+// SchemaHash is compared against it BEFORE execution: a mismatch is
+// challenge evidence (base design C.4) and yields a signed non-matching
+// receipt; a table the source cannot resolve is a local refusal to attest.
+type SchemaHashSource interface {
+	TableSchemaHash(tableID string) (string, bool)
+}
+
 // Verifier validates replay inputs, delegates execution to a pinned executor,
 // and signs the resulting receipt.
 type Verifier struct {
-	Snapshots SnapshotStore
-	Payloads  PayloadStore
-	Executor  Executor
-	Signer    Signer
+	Snapshots    SnapshotStore
+	Payloads     PayloadStore
+	Executor     Executor
+	Signer       Signer
+	SchemaHashes SchemaHashSource // optional
 }
 
 func (v *Verifier) Verify(ctx context.Context, job ReplayJob) (ReplayAttestation, error) {
@@ -81,6 +91,20 @@ func (v *Verifier) Verify(ctx context.Context, job ReplayJob) (ReplayAttestation
 	prepared, err := v.prepareStatements(ctx, job.Statements)
 	if err != nil {
 		return ReplayAttestation{}, err
+	}
+	if v.SchemaHashes != nil {
+		for i, st := range job.Statements {
+			if st.SchemaHash == "" {
+				continue
+			}
+			local, ok := v.SchemaHashes.TableSchemaHash(st.TargetTableID)
+			if !ok {
+				return ReplayAttestation{}, fmt.Errorf("statement %d: no local schema for table %q", i, st.TargetTableID)
+			}
+			if local != st.SchemaHash {
+				return v.signSchemaMismatch(ctx, job, prepared, i, st, local)
+			}
+		}
 	}
 
 	result, err := v.Executor.Replay(ctx, ExecutionRequest{
@@ -140,6 +164,56 @@ func (v *Verifier) Verify(ctx context.Context, job ReplayJob) (ReplayAttestation
 		Signature:       sig,
 		MatchSourceRoot: receipt.MatchSourceRoot,
 	}, nil
+}
+
+// signSchemaMismatch signs a non-matching receipt when a statement's signed
+// schema_hash differs from this verifier's schema source. Nothing is
+// executed; ComputedStateRoot is empty and ReplayLogHash commits to the
+// mismatch so the receipt is non-repudiable challenge evidence.
+func (v *Verifier) signSchemaMismatch(ctx context.Context, job ReplayJob, prepared []PreparedStatement, index int, st Statement, local string) (ReplayAttestation, error) {
+	statementRoot, err := statementRoot(job.Statements)
+	if err != nil {
+		return ReplayAttestation{}, err
+	}
+	payloadRoot, err := payloadRoot(prepared)
+	if err != nil {
+		return ReplayAttestation{}, err
+	}
+	logHash, err := canonicalDigest("replay-schema-hash-mismatch", struct {
+		StatementIndex int    `json:"statement_index"`
+		StatementID    string `json:"statement_id"`
+		TableID        string `json:"table_id"`
+		SignedHash     string `json:"signed_schema_hash"`
+		LocalHash      string `json:"local_schema_hash"`
+	}{index, st.StatementID, st.TargetTableID, st.SchemaHash, local})
+	if err != nil {
+		return ReplayAttestation{}, err
+	}
+	receipt := ExecutionReceipt{
+		BlockSeq:           job.BlockSeq,
+		PrevSafeSnapshotID: job.PrevSafeSnapshotID,
+		PrevStateRoot:      job.PrevStateRoot,
+		SchemaSnapshotID:   job.SchemaSnapshotID,
+		ExecutorProfileID:  job.ExecutorProfileID,
+		StatementRoot:      statementRoot,
+		PayloadRoot:        payloadRoot,
+		SourceClaimRoot:    job.SourceClaimRoot,
+		ComputedStateRoot:  "",
+		MatchSourceRoot:    false,
+		ReplayLogHash:      logHash,
+	}
+	receiptHash, err := receipt.Hash()
+	if err != nil {
+		return ReplayAttestation{}, err
+	}
+	replicaID, sig, err := v.Signer.SignReplayReceipt(ctx, receiptHash)
+	if err != nil {
+		return ReplayAttestation{}, fmt.Errorf("sign schema-mismatch receipt: %w", err)
+	}
+	if replicaID == "" || sig == "" {
+		return ReplayAttestation{}, fmt.Errorf("signer returned empty replica id or signature")
+	}
+	return ReplayAttestation{ReplicaID: replicaID, Receipt: receipt, ReceiptHash: receiptHash, Signature: sig, MatchSourceRoot: false}, nil
 }
 
 func validateJobShape(job ReplayJob) error {

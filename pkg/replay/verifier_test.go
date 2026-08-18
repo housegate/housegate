@@ -110,6 +110,84 @@ func TestVerifierRejectsNonIncreasingStatementSeq(t *testing.T) {
 	}
 }
 
+type fakeSchemaHashes map[string]string
+
+func (f fakeSchemaHashes) TableSchemaHash(tableID string) (string, bool) {
+	h, ok := f[tableID]
+	return h, ok
+}
+
+func TestVerifierSchemaHashMismatchIsSignedNotErrored(t *testing.T) {
+	ctx := context.Background()
+	snap := testSnapshot(t)
+	payload := []byte("name,balance\nalice,10\n")
+	job := testJob(snap, payload, DigestString("source-claim"))
+	job.Statements[0].SchemaHash = DigestString("agent-thought-schema")
+	exec := &fakeExecutor{result: resultForJob(job, DigestString("source-claim"))}
+	signer := &fakeSigner{replicaID: "replica-a", signature: "sig-a"}
+
+	got, err := (&Verifier{
+		Snapshots:    fakeSnapshotStore{snap.SnapshotID: snap},
+		Payloads:     fakePayloadStore{"payload-1": payload},
+		Executor:     exec,
+		Signer:       signer,
+		SchemaHashes: fakeSchemaHashes{"table-1": DigestString("verifier-schema")},
+	}).Verify(ctx, job)
+	if err != nil {
+		t.Fatalf("schema hash mismatch must be signed evidence, got error: %v", err)
+	}
+	if got.MatchSourceRoot || got.Receipt.MatchSourceRoot {
+		t.Fatal("schema hash mismatch must produce a non-matching receipt")
+	}
+	if exec.called {
+		t.Fatal("executor must not run when the signed schema hash mismatches the verifier's schema source")
+	}
+	if got.Signature == "" || got.Receipt.ReplayLogHash == "" {
+		t.Fatalf("mismatch receipt must be signed and carry a replay log hash: %#v", got)
+	}
+}
+
+func TestVerifierSchemaHashMatchRunsExecutor(t *testing.T) {
+	ctx := context.Background()
+	snap := testSnapshot(t)
+	payload := []byte("name,balance\nalice,10\n")
+	root := DigestString("root-after")
+	job := testJob(snap, payload, root)
+	job.Statements[0].SchemaHash = DigestString("shared-schema")
+	exec := &fakeExecutor{result: resultForJob(job, root)}
+	got, err := (&Verifier{
+		Snapshots:    fakeSnapshotStore{snap.SnapshotID: snap},
+		Payloads:     fakePayloadStore{"payload-1": payload},
+		Executor:     exec,
+		Signer:       &fakeSigner{replicaID: "replica-a", signature: "sig-a"},
+		SchemaHashes: fakeSchemaHashes{"table-1": DigestString("shared-schema")},
+	}).Verify(ctx, job)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if !exec.called || !got.MatchSourceRoot {
+		t.Fatalf("matching schema hash must run the executor and match: called=%v match=%v", exec.called, got.MatchSourceRoot)
+	}
+}
+
+func TestVerifierUnknownTableInSchemaSourceIsLocalRefusal(t *testing.T) {
+	ctx := context.Background()
+	snap := testSnapshot(t)
+	payload := []byte("name,balance\nalice,10\n")
+	job := testJob(snap, payload, DigestString("x"))
+	job.Statements[0].SchemaHash = DigestString("shared-schema")
+	_, err := (&Verifier{
+		Snapshots:    fakeSnapshotStore{snap.SnapshotID: snap},
+		Payloads:     fakePayloadStore{"payload-1": payload},
+		Executor:     &fakeExecutor{},
+		Signer:       &fakeSigner{replicaID: "replica-a", signature: "sig-a"},
+		SchemaHashes: fakeSchemaHashes{},
+	}).Verify(ctx, job)
+	if err == nil {
+		t.Fatal("a table the verifier cannot resolve is a local refusal to attest, not signed evidence")
+	}
+}
+
 // TestVerifierRejectsExecutorTamperingWithResultIdentity exercises the
 // validateExecutionResult guards (Appendix C.1): an executor must not change the
 // prev-safe/state/schema/profile identity or return an empty computed root. Each

@@ -171,6 +171,12 @@ type Statement struct {
 	PayloadLength uint64 `json:"payload_length,omitempty"`
 	TargetTableID string `json:"target_table_id"`
 	UserJWS       string `json:"user_jws,omitempty"`
+	// v2 additions (envelope v2): how to decode the payload and which
+	// declared schema the signer encoded against. JSON tags are frozen
+	// against arbiter-proto replay.proto Statement fields 11-13.
+	PayloadFormat  string `json:"payload_format,omitempty"`
+	ClientRevision uint32 `json:"client_revision,omitempty"`
+	SchemaHash     string `json:"schema_hash,omitempty"`
 }
 
 // PreparedStatement is passed to the executor after payload hash/length
