@@ -334,7 +334,7 @@ func DecodeStatementV2Payload(token string) (JWSStatementPayloadV2, error) {
 	if len(parts) != 3 {
 		return JWSStatementPayloadV2{}, errors.New("invalid statement JWS format: expected 3 parts")
 	}
-	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
+	payloadBytes, err := decodeCanonicalRawURL("statement payload", parts[1])
 	if err != nil {
 		return JWSStatementPayloadV2{}, fmt.Errorf("invalid statement payload encoding: %w", err)
 	}
@@ -358,7 +358,7 @@ func (v *EthValidator) ValidateStatementV2(token string, want JWSStatementPayloa
 	if len(parts) != 3 {
 		return "", errors.New("invalid statement JWS format: expected 3 parts")
 	}
-	headerBytes, err := base64.RawURLEncoding.DecodeString(parts[0])
+	headerBytes, err := decodeCanonicalRawURL("statement header", parts[0])
 	if err != nil {
 		return "", fmt.Errorf("invalid statement header encoding: %w", err)
 	}
@@ -388,7 +388,7 @@ func (v *EthValidator) ValidateStatementV2(token string, want JWSStatementPayloa
 	if field := StatementPayloadV2Mismatch(payload, want); field != "" {
 		return "", fmt.Errorf("statement token binding mismatch on %s", field)
 	}
-	signature, err := base64.RawURLEncoding.DecodeString(parts[2])
+	signature, err := decodeCanonicalRawURL("statement signature", parts[2])
 	if err != nil {
 		return "", fmt.Errorf("invalid statement signature encoding: %w", err)
 	}

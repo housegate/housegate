@@ -17,6 +17,17 @@ import (
 	"golang.org/x/crypto/sha3"
 )
 
+func decodeCanonicalRawURL(segmentName, encoded string) ([]byte, error) {
+	decoded, err := base64.RawURLEncoding.Strict().DecodeString(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("invalid %s canonical base64url encoding: %w", segmentName, err)
+	}
+	if canonical := base64.RawURLEncoding.EncodeToString(decoded); encoded != canonical {
+		return nil, fmt.Errorf("invalid %s canonical base64url encoding: non-canonical representation", segmentName)
+	}
+	return decoded, nil
+}
+
 // parseJWSCompact parses a JWS compact serialisation token into its
 // three components. Each component is returned decoded (header and
 // payload as typed structs, signature as raw bytes).

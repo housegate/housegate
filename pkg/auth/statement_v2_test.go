@@ -163,6 +163,95 @@ func TestStatementV2_RejectsCanonicalFieldsInNonCanonicalProtectedJSON(t *testin
 	}
 }
 
+func TestStatementV2_RejectsNonCanonicalBase64URLSegments(t *testing.T) {
+	signer, _ := NewRelaySigner(statementV2TestKey)
+	validator := NewEthValidator([]string{signer.Address()}, time.Minute, true, false, "", nil)
+	want := statementV2Fixture(signer.Address())
+	want.Iat = time.Now().Unix()
+	token, err := signer.SignStatementV2(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		t.Fatalf("token parts = %d", len(parts))
+	}
+	signatureAlias, ok := nonCanonicalPadBitAlias(parts[2])
+	if !ok {
+		t.Fatalf("65-byte signature segment unexpectedly has no unused pad bits: len=%d", len(parts[2]))
+	}
+
+	payloadWant, payloadParts := statementTokenWithPadBits(t, signer, want)
+	payAlias, ok := nonCanonicalPadBitAlias(payloadParts[1])
+	if !ok {
+		t.Fatal("failed to construct payload segment with unused pad bits")
+	}
+	tests := []struct {
+		name  string
+		parts []string
+		want  JWSStatementPayloadV2
+	}{
+		{"header CRLF", []string{parts[0][:1] + "\r\n" + parts[0][1:], parts[1], parts[2]}, want},
+		{"payload CRLF", []string{parts[0], parts[1][:1] + "\n" + parts[1][1:], parts[2]}, want},
+		{"signature CRLF", []string{parts[0], parts[1], parts[2][:1] + "\r\n" + parts[2][1:]}, want},
+		{"payload unused pad bits", []string{payloadParts[0], payAlias, payloadParts[2]}, payloadWant},
+		{"signature unused pad bits", []string{parts[0], parts[1], signatureAlias}, want},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mutated := strings.Join(tc.parts, ".")
+			if _, err := validator.ValidateStatementV2(mutated, tc.want); err == nil || !strings.Contains(err.Error(), "canonical base64url") {
+				t.Fatalf("ValidateStatementV2 = %v, want canonical base64url rejection", err)
+			}
+			if strings.Contains(tc.name, "payload") {
+				if _, err := DecodeStatementV2Payload(mutated); err == nil || !strings.Contains(err.Error(), "canonical base64url") {
+					t.Fatalf("DecodeStatementV2Payload = %v, want canonical base64url rejection", err)
+				}
+			}
+		})
+	}
+}
+
+func statementTokenWithPadBits(t *testing.T, signer *RelaySigner, base JWSStatementPayloadV2) (JWSStatementPayloadV2, []string) {
+	t.Helper()
+	for i := 0; i < 4; i++ {
+		candidate := base
+		candidate.StatementID += strings.Repeat("x", i)
+		token, err := signer.SignStatementV2(candidate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		parts := strings.Split(token, ".")
+		if _, ok := nonCanonicalPadBitAlias(parts[1]); ok {
+			return candidate, parts
+		}
+	}
+	t.Fatal("could not construct payload base64url segment with unused pad bits")
+	return JWSStatementPayloadV2{}, nil
+}
+
+func nonCanonicalPadBitAlias(segment string) (string, bool) {
+	remainder := len(segment) % 4
+	if remainder != 2 && remainder != 3 {
+		return "", false
+	}
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+	idx := strings.IndexByte(alphabet, segment[len(segment)-1])
+	if idx < 0 {
+		return "", false
+	}
+	unusedBits := 4
+	if remainder == 3 {
+		unusedBits = 2
+	}
+	mask := (1 << unusedBits) - 1
+	if idx&mask != 0 {
+		return "", false
+	}
+	alias := idx | 1
+	return segment[:len(segment)-1] + string(alphabet[alias]), true
+}
+
 func TestRelaySigner_AllCompactJWSLanesUseCanonicalProtectedHeader(t *testing.T) {
 	signer, _ := NewRelaySigner(statementV2TestKey)
 	statement := statementV2Fixture(signer.Address())
