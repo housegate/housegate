@@ -835,9 +835,9 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 			if qctx.DeferredInsert != nil {
 				if qctx.SuppressUpstreamExecution {
 					err := fmt.Errorf("query %q: DeferredInsert and SuppressUpstreamExecution are mutually exclusive", q.ID)
-					r.writeExceptionToClient(ctx, err)
 					r.hooks.OnQueryAbort(ctx, qctx)
 					r.hooks.OnQueryComplete(ctx, r.sess)
+					r.writeExceptionToClient(ctx, err)
 					rejectedQctx = qctx
 					continue
 				}
@@ -1036,15 +1036,15 @@ func (r *Relay) runDeferredInsert(ctx context.Context, qctx *plugin.QueryContext
 	q := qctx.Query
 	if plan.MaxPayloadBytes == 0 {
 		err := fmt.Errorf("query %q: deferred INSERT plan requires MaxPayloadBytes > 0", q.ID)
-		r.writeExceptionToClient(ctx, err)
 		r.hooks.OnQueryAbort(ctx, qctx)
 		r.hooks.OnQueryComplete(ctx, r.sess)
+		r.writeExceptionToClient(ctx, err)
 		return err
 	}
 	rejectClose := func(err error) error {
-		r.writeExceptionToClient(ctx, err)
 		r.hooks.OnQueryAbort(ctx, qctx)
 		r.hooks.OnQueryComplete(ctx, r.sess)
+		r.writeExceptionToClient(ctx, err)
 		return err
 	}
 	if err := client.WriteSampleBlock(plan.SampleColumns); err != nil {
@@ -1116,11 +1116,10 @@ func (r *Relay) runDeferredInsert(ctx context.Context, qctx *plugin.QueryContext
 			// Nothing reached upstream. ClickHouse answers a cancelled query
 			// with EndOfStream; do the same locally and drop the buffer.
 			r.hooks.OnQueryAbort(ctx, qctx)
+			r.hooks.OnQueryComplete(ctx, r.sess)
 			if err := client.WriteRawPacket([]byte{byte(chproto.ServerEndOfStreamCode)}); err != nil {
-				r.hooks.OnQueryComplete(ctx, r.sess)
 				return fmt.Errorf("write end-of-stream after deferred cancel: %w", err)
 			}
-			r.hooks.OnQueryComplete(ctx, r.sess)
 			logger.Debugw("deferred INSERT cancelled by client before forwarding", "query_id", q.ID)
 			return nil
 		default:

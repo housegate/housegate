@@ -284,3 +284,299 @@ func TestRelay_DeferredInsert_HappyPathAnswersSampleLocallyAndForwardsAfterTermi
 		}
 	}
 }
+
+// Query + external-tables marker + payload + terminator arrive in ONE TCP
+// segment (net.Pipe delivers one Write as one Read into the codec's bufio).
+func TestRelay_DeferredInsert_CoalescedQueryAndPayloadInOneSegment(t *testing.T) {
+	hooks := &deferredInsertHooks{}
+	h := newDeferredHarness(t, hooks)
+	nonEmpty := encodeNonEmptyClientDataPacket(t, deferredTestRev)
+	sample := encodeServerSampleDataPacket(t, deferredTestRev)
+	empty := encodeEmptyClientData(t)
+
+	var clientDone atomic.Bool
+	clientDone.Store(true) // everything is on the wire before the relay reads
+	upDone := make(chan error, 1)
+	go upstreamAcceptsDeferredInsert(t, h.upstreamProxy, &clientDone, nonEmpty, upDone)
+
+	segment := append(append(append(encodeInsertQuery(t, "qid", "INSERT INTO t FORMAT Native"), empty...), nonEmpty...), empty...)
+	writeAllConn(t, h.clientProxy, segment)
+	if got := readExact(t, h.clientProxy, len(sample)); !bytes.Equal(got, sample) {
+		t.Fatalf("client sample block = %x, want %x", got, sample)
+	}
+	if got := readExact(t, h.clientProxy, 1); got[0] != byte(chproto.ServerEndOfStreamCode) {
+		t.Fatalf("client got %d, want EndOfStream", got[0])
+	}
+	if err := <-upDone; err != nil {
+		t.Fatalf("upstream flow: %v", err)
+	}
+	if strictData, strictComplete, _, _, aborts := hooks.counts(); strictData != 1 || strictComplete != 1 || aborts != 0 {
+		t.Fatalf("counts strictData/strictComplete/aborts = %d/%d/%d", strictData, strictComplete, aborts)
+	}
+	h.close(t)
+}
+
+// The terminator (and the payload packet) is split across two Writes.
+func TestRelay_DeferredInsert_TerminatorSplitAcrossSegments(t *testing.T) {
+	hooks := &deferredInsertHooks{}
+	h := newDeferredHarness(t, hooks)
+	nonEmpty := encodeNonEmptyClientDataPacket(t, deferredTestRev)
+	sample := encodeServerSampleDataPacket(t, deferredTestRev)
+	empty := encodeEmptyClientData(t)
+
+	var clientDone atomic.Bool
+	upDone := make(chan error, 1)
+	go upstreamAcceptsDeferredInsert(t, h.upstreamProxy, &clientDone, nonEmpty, upDone)
+
+	writeAllConn(t, h.clientProxy, encodeInsertQuery(t, "qid", "INSERT INTO t FORMAT Native"))
+	if got := readExact(t, h.clientProxy, len(sample)); !bytes.Equal(got, sample) {
+		t.Fatalf("client sample block mismatch")
+	}
+	writeAllConn(t, h.clientProxy, empty)
+	writeAllConn(t, h.clientProxy, nonEmpty[:3])
+	time.Sleep(20 * time.Millisecond)
+	writeAllConn(t, h.clientProxy, nonEmpty[3:])
+	writeAllConn(t, h.clientProxy, empty[:1])
+	clientDone.Store(true)
+	time.Sleep(20 * time.Millisecond)
+	writeAllConn(t, h.clientProxy, empty[1:])
+	if got := readExact(t, h.clientProxy, 1); got[0] != byte(chproto.ServerEndOfStreamCode) {
+		t.Fatalf("client got %d, want EndOfStream", got[0])
+	}
+	if err := <-upDone; err != nil {
+		t.Fatalf("upstream flow: %v", err)
+	}
+	if strictData, _, inputCompletes, _, aborts := hooks.counts(); strictData != 1 || inputCompletes != 1 || aborts != 0 {
+		t.Fatalf("counts strictData/input/aborts = %d/%d/%d", strictData, inputCompletes, aborts)
+	}
+	h.close(t)
+}
+
+// Upstream answers the deferred Query with an Exception instead of a sample
+// block: the Exception reaches the client, no payload is forwarded, the
+// query lifecycle is aborted+completed, and the session stays usable.
+func TestRelay_DeferredInsert_UpstreamExceptionAtSampleStep(t *testing.T) {
+	hooks := &deferredInsertHooks{}
+	h := newDeferredHarness(t, hooks)
+	nonEmpty := encodeNonEmptyClientDataPacket(t, deferredTestRev)
+	sample := encodeServerSampleDataPacket(t, deferredTestRev)
+	empty := encodeEmptyClientData(t)
+
+	upDone := make(chan error, 1)
+	upstreamGotPayload := make(chan struct{}, 1)
+	go func() {
+		codec := chproto.NewCodec(h.upstreamProxy, chproto.DirFromClient)
+		codec.SetRevision(deferredTestRev)
+		codec.SetCompression(proto.CompressionDisabled)
+		if _, err := codec.ReadPacket(uint64(chproto.ClientQueryCode)); err != nil {
+			upDone <- err
+			return
+		}
+		if _, err := codec.ReadPacket(); err != nil { // external-tables marker
+			upDone <- err
+			return
+		}
+		if err := codec.WriteException(&chproto.Exception{Code: 60, Name: "DB::Exception", Message: "Table default.t does not exist"}); err != nil {
+			upDone <- err
+			return
+		}
+		upDone <- nil
+		if _, err := codec.ReadPacket(); err == nil {
+			upstreamGotPayload <- struct{}{}
+		}
+	}()
+
+	writeAllConn(t, h.clientProxy, encodeInsertQuery(t, "qid", "INSERT INTO t FORMAT Native"))
+	if got := readExact(t, h.clientProxy, len(sample)); !bytes.Equal(got, sample) {
+		t.Fatalf("client sample block mismatch")
+	}
+	writeAllConn(t, h.clientProxy, empty)
+	writeAllConn(t, h.clientProxy, nonEmpty)
+	writeAllConn(t, h.clientProxy, empty)
+	clientCodec := chproto.NewCodec(h.clientProxy, chproto.DirToUpstream)
+	clientCodec.SetRevision(deferredTestRev)
+	_ = h.clientProxy.SetReadDeadline(time.Now().Add(2 * time.Second))
+	pkt, err := clientCodec.ReadPacket(uint64(chproto.ServerExceptionCode))
+	if err != nil {
+		t.Fatalf("client read: %v", err)
+	}
+	exc, ok := pkt.Decoded.(*chproto.Exception)
+	if !ok || exc.Code != 60 {
+		t.Fatalf("client got %#v, want the upstream Exception (code 60)", pkt.Decoded)
+	}
+	if err := <-upDone; err != nil {
+		t.Fatalf("upstream flow: %v", err)
+	}
+	select {
+	case <-upstreamGotPayload:
+		t.Fatal("payload must not be forwarded after the upstream rejected the Query")
+	case <-time.After(200 * time.Millisecond):
+	}
+	if _, _, inputCompletes, queryCompletes, aborts := hooks.counts(); inputCompletes != 0 || queryCompletes != 1 || aborts != 1 {
+		t.Fatalf("counts input/complete/abort = %d/%d/%d, want 0/1/1", inputCompletes, queryCompletes, aborts)
+	}
+	// Session still alive: both relay loops must still be running.
+	select {
+	case err := <-h.loopErr:
+		t.Fatalf("relay loop exited after a recoverable upstream Exception: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	h.close(t)
+}
+
+// Payload larger than the plan's MaxPayloadBytes: rejected before any byte
+// reaches upstream, connection closes fail-closed.
+func TestRelay_DeferredInsert_OversizedPayloadIsRejectedBeforeForwarding(t *testing.T) {
+	hooks := &deferredInsertHooks{maxPayload: 8}
+	h := newDeferredHarness(t, hooks)
+	nonEmpty := encodeNonEmptyClientDataPacket(t, deferredTestRev) // > 8 bytes
+	sample := encodeServerSampleDataPacket(t, deferredTestRev)
+	empty := encodeEmptyClientData(t)
+
+	upstreamBytes := make(chan int, 1)
+	go func() {
+		buf := make([]byte, 1024)
+		n, _ := h.upstreamProxy.Read(buf)
+		upstreamBytes <- n
+	}()
+
+	writeAllConn(t, h.clientProxy, encodeInsertQuery(t, "qid", "INSERT INTO t FORMAT Native"))
+	if got := readExact(t, h.clientProxy, len(sample)); !bytes.Equal(got, sample) {
+		t.Fatalf("client sample block mismatch")
+	}
+	writeAllConn(t, h.clientProxy, empty)
+	// ReadPacketWithDataLimit intentionally stops before consuming the full
+	// oversized packet. Write concurrently so the test can read Housegate's
+	// fail-closed Exception while the client upload is still backpressured.
+	payloadWrite := make(chan error, 1)
+	go func() {
+		_, err := h.clientProxy.Write(nonEmpty)
+		payloadWrite <- err
+	}()
+	clientCodec := chproto.NewCodec(h.clientProxy, chproto.DirToUpstream)
+	clientCodec.SetRevision(deferredTestRev)
+	_ = h.clientProxy.SetReadDeadline(time.Now().Add(2 * time.Second))
+	pkt, err := clientCodec.ReadPacket(uint64(chproto.ServerExceptionCode))
+	if err != nil {
+		t.Fatalf("client read: %v", err)
+	}
+	if exc, ok := pkt.Decoded.(*chproto.Exception); !ok || !bytes.Contains([]byte(exc.Message), []byte("exceeds limit")) {
+		t.Fatalf("client got %#v, want limit Exception", pkt.Decoded)
+	}
+	errs := h.close(t)
+	if err := <-payloadWrite; err == nil {
+		t.Fatal("oversized upload unexpectedly completed after fail-closed rejection")
+	}
+	if n := <-upstreamBytes; n != 0 {
+		t.Fatalf("upstream received %d bytes, want 0", n)
+	}
+	if _, _, _, queryCompletes, aborts := hooks.counts(); queryCompletes != 1 || aborts != 1 {
+		t.Fatalf("counts complete/abort = %d/%d, want 1/1", queryCompletes, aborts)
+	}
+	sawLimit := false
+	for _, err := range errs {
+		if err != nil && errors.Is(err, chproto.ErrPacketTooLarge) {
+			sawLimit = true
+		}
+	}
+	if !sawLimit {
+		t.Fatalf("clientToUpstream must return the limit error, got %v", errs)
+	}
+}
+
+// Cancel mid-payload: local EndOfStream, buffer dropped, nothing upstream,
+// session usable for the next query.
+func TestRelay_DeferredInsert_CancelMidPayloadDropsBufferAndAnswersEndOfStream(t *testing.T) {
+	hooks := &deferredInsertHooks{}
+	h := newDeferredHarness(t, hooks)
+	nonEmpty := encodeNonEmptyClientDataPacket(t, deferredTestRev)
+	sample := encodeServerSampleDataPacket(t, deferredTestRev)
+	empty := encodeEmptyClientData(t)
+
+	upstreamBytes := make(chan int, 1)
+	go func() {
+		buf := make([]byte, 1024)
+		n, _ := h.upstreamProxy.Read(buf)
+		upstreamBytes <- n
+	}()
+
+	writeAllConn(t, h.clientProxy, encodeInsertQuery(t, "qid", "INSERT INTO t FORMAT Native"))
+	if got := readExact(t, h.clientProxy, len(sample)); !bytes.Equal(got, sample) {
+		t.Fatalf("client sample block mismatch")
+	}
+	writeAllConn(t, h.clientProxy, empty)
+	writeAllConn(t, h.clientProxy, nonEmpty)
+	writeAllConn(t, h.clientProxy, []byte{byte(chproto.ClientCancelCode)})
+	if got := readExact(t, h.clientProxy, 1); got[0] != byte(chproto.ServerEndOfStreamCode) {
+		t.Fatalf("client got %d after cancel, want EndOfStream", got[0])
+	}
+	if strictData, _, inputCompletes, queryCompletes, aborts := hooks.counts(); strictData != 1 || inputCompletes != 0 || queryCompletes != 1 || aborts != 1 {
+		t.Fatalf("counts strictData/input/complete/abort = %d/%d/%d/%d, want 1/0/1/1", strictData, inputCompletes, queryCompletes, aborts)
+	}
+	select {
+	case err := <-h.loopErr:
+		t.Fatalf("relay loop exited after a client cancel: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	h.close(t)
+	if n := <-upstreamBytes; n != 0 {
+		t.Fatalf("upstream received %d bytes after cancel, want 0", n)
+	}
+}
+
+// A plan that also sets SuppressUpstreamExecution is rejected outright.
+func TestRelay_DeferredInsert_MutuallyExclusiveWithSuppressUpstreamExecution(t *testing.T) {
+	hooks := &deferredInsertHooks{alsoSuppress: true}
+	h := newDeferredHarness(t, hooks)
+	writeAllConn(t, h.clientProxy, encodeInsertQuery(t, "qid", "INSERT INTO t FORMAT Native"))
+	clientCodec := chproto.NewCodec(h.clientProxy, chproto.DirToUpstream)
+	clientCodec.SetRevision(deferredTestRev)
+	_ = h.clientProxy.SetReadDeadline(time.Now().Add(2 * time.Second))
+	pkt, err := clientCodec.ReadPacket(uint64(chproto.ServerExceptionCode))
+	if err != nil {
+		t.Fatalf("client read: %v", err)
+	}
+	if exc, ok := pkt.Decoded.(*chproto.Exception); !ok || !bytes.Contains([]byte(exc.Message), []byte("mutually exclusive")) {
+		t.Fatalf("client got %#v, want mutual-exclusion Exception", pkt.Decoded)
+	}
+	if _, _, _, queryCompletes, aborts := hooks.counts(); queryCompletes != 1 || aborts != 1 {
+		t.Fatalf("counts complete/abort = %d/%d, want 1/1", queryCompletes, aborts)
+	}
+	h.close(t)
+}
+
+// A strict data hook error aborts before forwarding and closes the session.
+func TestRelay_DeferredInsert_StrictDataErrorAbortsBeforeForwarding(t *testing.T) {
+	hooks := &deferredInsertHooks{strictDataErr: errors.New("compressed block rejected")}
+	h := newDeferredHarness(t, hooks)
+	nonEmpty := encodeNonEmptyClientDataPacket(t, deferredTestRev)
+	sample := encodeServerSampleDataPacket(t, deferredTestRev)
+	empty := encodeEmptyClientData(t)
+	upstreamBytes := make(chan int, 1)
+	go func() {
+		buf := make([]byte, 1024)
+		n, _ := h.upstreamProxy.Read(buf)
+		upstreamBytes <- n
+	}()
+	writeAllConn(t, h.clientProxy, encodeInsertQuery(t, "qid", "INSERT INTO t FORMAT Native"))
+	readExact(t, h.clientProxy, len(sample))
+	writeAllConn(t, h.clientProxy, empty)
+	writeAllConn(t, h.clientProxy, nonEmpty)
+	clientCodec := chproto.NewCodec(h.clientProxy, chproto.DirToUpstream)
+	clientCodec.SetRevision(deferredTestRev)
+	_ = h.clientProxy.SetReadDeadline(time.Now().Add(2 * time.Second))
+	pkt, err := clientCodec.ReadPacket(uint64(chproto.ServerExceptionCode))
+	if err != nil {
+		t.Fatalf("client read: %v", err)
+	}
+	if exc, ok := pkt.Decoded.(*chproto.Exception); !ok || !bytes.Contains([]byte(exc.Message), []byte("compressed block rejected")) {
+		t.Fatalf("client got %#v, want the strict hook error", pkt.Decoded)
+	}
+	h.close(t)
+	if n := <-upstreamBytes; n != 0 {
+		t.Fatalf("upstream received %d bytes, want 0", n)
+	}
+	if _, _, _, queryCompletes, aborts := hooks.counts(); queryCompletes != 1 || aborts != 1 {
+		t.Fatalf("counts complete/abort = %d/%d, want 1/1", queryCompletes, aborts)
+	}
+}
