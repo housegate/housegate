@@ -4,7 +4,7 @@
 
 **Goal:** Make storage-integrity (SI) tables readable through HouseGate: reads of an SI table resolve to `hg_safe.<t>` (mode `safe`) or `hg_safe ∪ hg_unsafe` minus promoted-not-yet-cleaned unsafe parts (mode `unsafe_latest`), `_hg_row_id` is hidden and unaddressable, non-lane writes/DDL against SI tables are refused, and both rewriter engines implement one contract from one shared golden file.
 
-**Architecture:** A minor rewriter-proto bump adds `StorageIntegrityArgs` (per-logical-table safe/unsafe physical names + excluded unsafe parts + read mode + reserved column) to `RewriteTableDynamicArgs`, and `AccessedTable.is_storage_integrity`. rewriter-go and rewriter-grpc consult it *before* ordinary dynamic name resolution: SELECT-family table references become derived tables `(SELECT * EXCEPT (_hg_row_id) FROM hg_safe.<t> [UNION ALL … hg_unsafe.<t> WHERE _part NOT IN (…)]) AS <alias>`, `EXISTS TABLE` maps to the safe table, `DESCRIBE` becomes a `system.columns` metadata SELECT, and every non-INSERT SI-touching write/DDL statement is refused. INSERT remains a successful ordinary physical rewrite with `is_storage_integrity = true`; HouseGate's signed ingress lane, which runs after rewrite, owns its admission. HouseGate fills the new args from `storage_integrity.tables[]` + `storage_integrity.read.default_mode` + the per-query `SQL_x_read_mode` setting, and gets the excluded-part list from a new host port (`StorageIntegrityReadState.PromotedUnsafeParts(tableID)`) that sentio-node satisfies with the embedded `snode.Role`, which now journals promoted-unsafe-part names until their cleanup ack. HouseGate fails **closed** on any non-Success response involving an SI table and, because a missing response cannot be classified, on every pre-response rewrite failure whenever the configured SI set is non-empty; inability to wire a startup rewriter refuses `buildServer`. Empty-SI deployments retain the legacy fail-open path.
+**Architecture:** A minor rewriter-proto bump adds `StorageIntegrityArgs` (per-logical-table safe/unsafe physical names + excluded unsafe parts + read mode + reserved column + requested contract version) to `RewriteTableDynamicArgs`, `AccessedTable.is_storage_integrity`, and a top-level response acknowledgement. rewriter-go and rewriter-grpc consult it *before* ordinary dynamic name resolution: SELECT-family table references become derived tables `(SELECT * EXCEPT (_hg_row_id) FROM hg_safe.<t> [UNION ALL … hg_unsafe.<t> WHERE _part NOT IN (…)]) AS <alias>`, `EXISTS TABLE` maps to the safe table, `DESCRIBE` becomes a `system.columns` metadata SELECT, and every non-INSERT SI-touching write/DDL statement is refused. INSERT remains a successful ordinary physical rewrite with `is_storage_integrity = true`; HouseGate's signed ingress lane, which runs after rewrite, owns its admission. HouseGate fills the new args from `storage_integrity.tables[]` + `storage_integrity.read.default_mode` + the per-query `SQL_x_read_mode` setting, and gets the excluded-part list from a new host port (`StorageIntegrityReadState.PromotedUnsafeParts(tableID)`) that sentio-node satisfies with the embedded `snode.Role`, which now journals promoted-unsafe-part names until their cleanup ack. Whenever SI tables are configured, HouseGate sends `STORAGE_INTEGRITY_CONTRACT_V1` and accepts no response unless it echoes v1; this positive proof prevents an old wire-compatible backend from silently ignoring SI fields. It also fails **closed** on any non-Success SI response and every pre-response rewrite failure; inability to wire a v1-capable startup rewriter refuses `buildServer`. Empty-SI deployments retain the legacy fail-open path.
 
 **Tech Stack:** protobuf/buf (rewriter-proto), Go 1.25 + polyglot FFI via PureGo (rewriter-go), C++23 + ClickHouse parser + gtest (rewriter-grpc, built on the remote build box), Go + Bazel 9 (housegate), Go (sentio-node, arbiter-core).
 
@@ -17,7 +17,7 @@
 - SI write rejection message: `storage-integrity table <t> accepts writes only through the signed statement lane` (`RewriteCode = UnsupportedStatement`), `<t>` = the logical `db.table` key.
 - Read modes: config `storage_integrity.read.default_mode: safe|unsafe_latest` (unset = `safe`, base design §11); per-query override setting `SQL_x_read_mode = 'safe' | 'unsafe_latest'`. `unsafe_latest` with no promotion-state port is **refused with an Exception**, never degraded (Spec G D2).
 - SI membership is explicit: `storage_integrity.tables[]` (renamed from `runtime.merge_guard.tables`), a list of logical `<database>.<table>` ids shared by merge guard, ingress, and the read rewrite (Spec G D4).
-- Proto: `StorageIntegrityArgs storage_integrity = 12` inside `RewriteTableDynamicArgs`; `bool is_storage_integrity = 6` on `AccessedTable`. Do NOT touch Spec E's `RewriteSQLResponse.insert_class` field; `STATEMENT_TYPE_DESCRIBE = 22` is added by whichever of E/G lands first (identical name+number, see Task 1).
+- Proto: `StorageIntegrityArgs storage_integrity = 12` inside `RewriteTableDynamicArgs`; `bool is_storage_integrity = 6` on `AccessedTable`; `StorageIntegrityArgs.contract_version = 4`; `RewriteSQLResponse.storage_integrity_contract_version = 16`. Do NOT touch Spec E's `RewriteSQLResponse.insert_class` field at tag 15; `STATEMENT_TYPE_DESCRIBE = 22` is added by whichever of E/G lands first (identical name+number, see Task 1).
 - Both engines are golden-tested from ONE file: `storage_integrity_cases.json` (authored in Task 3, byte-identical copy in rewriter-grpc `tests/testdata/`).
 - Housegate: Bazel is the test ground truth; `go.mod` module path `github.com/housegate/housegate`; run `bazel mod tidy && bazel run //:gazelle` after dependency changes; English identifiers/comments/log messages; structured logging via `pkg/log` (`Infow/Warnw/...`).
 - rewriter-go: polyglot imports only inside `internal/engine`; `internal/nameresolve` imports neither engine nor polyglot; engine-backed tests skip unless `POLYGLOT_SQL_FFI_PATH` is set (`make ffi` builds it at `third_party/lib/libpolyglot_sql_ffi.<dylib|so>`).
@@ -40,12 +40,14 @@
 
 **D-7 — DESCRIBE.** Spec E D6 has not landed. Task 8/13 add the *minimal* DESCRIBE handling G needs: classify `DESCRIBE|DESC [TABLE] [db.]t` as `STATEMENT_TYPE_DESCRIBE`, SI table → metadata SELECT, non-SI → pass through unchanged (today's behaviour). If E's `RewriteDescribe` / `handlers/describe.cc` already exists when the task runs, add the SI branch inside it instead of creating a new handler.
 
+**D-8 — Wire compatibility needs a positive SI contract acknowledgement.** An older protobuf backend may ignore additive `StorageIntegrityArgs`, return `Success`, and leave all SI fields zero. `RewriteCode=Success` is therefore not trustworthy proof that SI policy ran. Task 1 adds `STORAGE_INTEGRITY_CONTRACT_V1`, request field `StorageIntegrityArgs.contract_version = 4`, and response field `RewriteSQLResponse.storage_integrity_contract_version = 16` (tag 15 stays Spec E's `insert_class`). Both engines first resolve the existing effective table-rewrite selection (last `TableNameRewrite` carrying static/dynamic args wins; static wins within one option). Only an effective dynamic option with non-empty SI tables is validated/acknowledged: missing/unknown version → `InvalidRewriteRequest` without an acknowledgement; accepted v1 → response v1 on every parse/dispatch outcome. A shadowed earlier SI option triggers nothing, while the opposite order makes it active. This is deliberately the table-policy selection: DB-level handlers may still use `FindDynamicArgs`/`findDynamicArgs` for an earlier option's `database_map`, but none consumes `storage_integrity`, so that separate mapping path cannot acknowledge the shadowed SI submessage. HouseGate requires the exact echo before trusting either Success or rejection. The proof also crosses custom seams: `RewriteResult` carries the echo, a configured-SI injected factory must implement `StorageIntegrityCapableFactory` and advertise v1 at startup, and the plugin still verifies every returned result. This closes old gRPC/native backends, no-op injected factories, and adapters that drop the field without changing empty-SI compatibility.
+
 ## File map
 
 | Repo | Create | Modify |
 |---|---|---|
 | rewriter-proto | — | `proto/rewriter.proto`, `gen/pb/*` (regenerated) |
-| rewriter-go | `internal/harness/testdata/storage_integrity_cases.json`, `internal/harness/storage_integrity_golden_test.go`, `internal/handlers/storage_integrity.go`, `internal/handlers/storage_integrity_test.go`, `internal/handlers/describe.go`, `internal/handlers/describe_test.go` | `go.mod`, `internal/nameresolve/resolve.go` (+test), `internal/engine/nodes.go` (+test), `internal/engine/objtarget.go`, `internal/handlers/select.go`, `writes.go`, `exists.go`, `grant.go`, `native.go`, `internal/harness/select_golden_test.go` (accessedJSON), `AGENTS.md`, `README.md` |
+| rewriter-go | `internal/harness/testdata/storage_integrity_cases.json`, `internal/harness/storage_integrity_golden_test.go`, `internal/handlers/storage_integrity.go`, `internal/handlers/storage_integrity_test.go`, `internal/handlers/describe.go`, `internal/handlers/describe_test.go` | `go.mod`, `rewriter.go`, `native.go` (+test), `internal/nameresolve/resolve.go` (+test), `internal/engine/nodes.go` (+test), `internal/engine/objtarget.go`, `internal/handlers/select.go`, `writes.go`, `exists.go`, `grant.go`, `internal/harness/select_golden_test.go` (accessedJSON), `internal/harness/writes_golden_test.go` (`pbFromResult`), `internal/harness/compare.go` (+test), `AGENTS.md`, `README.md` |
 | rewriter-grpc | `src/handlers/storage_integrity.h/.cc`, `src/handlers/describe.h/.cc`, `tests/testdata/storage_integrity_cases.json` | `third_party/rewriter-proto` (submodule pin), `src/handlers/name_rewrite.h/.cc`, `select.cc`, `writes.cc`, `exists.cc`, `show_create.cc`, `grant.cc`, `src/rewriter-server.cc`, `CMakeLists.txt`, `tests/CMakeLists.txt`, `tests/rewriter_test.cc`, `CLAUDE.md`, `AGENTS.md` |
 | housegate | `pkg/rewriter/storage_integrity.go` (+test), `pkg/integration/storage_integrity_read_test.go` | `go.mod`, `pkg/sqlmeta/accessed_table.go`, `pkg/sqlmeta/statement_type.go`, `pkg/config/storage_integrity_config.go` (+test), `storage_integrity_runtime.go`, `build.go`, `build_test.go`, `proxy.go`, `pkg/rewriter/args.go`, `sentio.go`, `types.go`, `backend_test.go`, `pkg/plugins/rewrite/rewriter.go` (+test), `pkg/plugins/storageintegrity/plugin.go` (DESCRIBE in read-only list), `pkg/integration/testenv/proxy.go`, `configs/local.server.yaml`, `CLAUDE.md`, `README.md` |
 | arbiter-core | — | `snode/state.go` (+test), `snode/promote.go`, `snode/cleanup.go`, `snode/snode.go` (`PromotedUnsafeParts`), `snode/promote_test.go`, `snode/cleanup_test.go` |
@@ -55,7 +57,7 @@
 
 ## Part A — rewriter-proto (contract)
 
-### Task 1: `StorageIntegrityArgs` + `AccessedTable.is_storage_integrity` in rewriter-proto, release tag
+### Task 1: `StorageIntegrityArgs` + positive contract acknowledgement + `AccessedTable.is_storage_integrity` in rewriter-proto, release tag
 
 **Working directory:** `/Users/uranuswch/Dev/housegate/rewriter-proto`
 
@@ -64,7 +66,7 @@
 - Regenerate: `gen/pb/rewriter.pb.go`, `gen/pb/rewriter_grpc.pb.go`
 
 **Interfaces:**
-- Produces (Go, package `pb`): `pb.StorageIntegrityArgs{Tables map[string]*pb.StorageIntegrityArgs_Table, ReadMode pb.StorageIntegrityArgs_ReadMode, ReservedRowIdColumn string}`, `pb.StorageIntegrityArgs_Table{SafeTable, UnsafeTable string, ExcludedUnsafeParts []string}`, enum values `pb.StorageIntegrityArgs_READ_MODE_UNSPECIFIED/READ_MODE_SAFE/READ_MODE_UNSAFE_LATEST`, `pb.RewriteTableDynamicArgs.StorageIntegrity *pb.StorageIntegrityArgs` (getter `GetStorageIntegrity()`), `pb.AccessedTable.IsStorageIntegrity bool`, `pb.StatementType_STATEMENT_TYPE_DESCRIBE = 22`.
+- Produces (Go, package `pb`): `pb.StorageIntegrityArgs{Tables map[string]*pb.StorageIntegrityArgs_Table, ReadMode pb.StorageIntegrityArgs_ReadMode, ReservedRowIdColumn string, ContractVersion pb.StorageIntegrityContractVersion}`, `pb.StorageIntegrityArgs_Table{SafeTable, UnsafeTable string, ExcludedUnsafeParts []string}`, enum values `pb.StorageIntegrityArgs_READ_MODE_UNSPECIFIED/READ_MODE_SAFE/READ_MODE_UNSAFE_LATEST`, `pb.StorageIntegrityContractVersion_STORAGE_INTEGRITY_CONTRACT_UNSPECIFIED/V1`, `pb.RewriteTableDynamicArgs.StorageIntegrity *pb.StorageIntegrityArgs` (getter `GetStorageIntegrity()`), `pb.RewriteSQLResponse.StorageIntegrityContractVersion` (getter `GetStorageIntegrityContractVersion()`), `pb.AccessedTable.IsStorageIntegrity bool`, `pb.StatementType_STATEMENT_TYPE_DESCRIBE = 22`.
 
 - [ ] **Step 1: Add the messages/fields to `proto/rewriter.proto`**
 
@@ -110,7 +112,31 @@ message StorageIntegrityArgs {
     ReadMode read_mode = 2;
     // Reserved per-row identity column; "" means "_hg_row_id".
     string reserved_row_id_column = 3;
+    // Required to be V1 when tables is non-empty. Backends acknowledge an
+    // accepted version on every response path; see the top-level enum.
+    StorageIntegrityContractVersion contract_version = 4;
 }
+```
+
+Insert this top-level enum immediately before `StorageIntegrityArgs`:
+
+```proto
+// Positive proof that a backend understood and enforced the SI contract.
+// Additive protobuf fields alone are insufficient because an older backend
+// can ignore them and still return RewriteCode=Success.
+enum StorageIntegrityContractVersion {
+    STORAGE_INTEGRITY_CONTRACT_UNSPECIFIED = 0;
+    STORAGE_INTEGRITY_CONTRACT_V1 = 1;
+}
+```
+
+Add to `message RewriteSQLResponse` after Spec E's optional `insert_class = 15` (whether or not E has landed, use tag 16 and do not claim tag 15):
+
+```proto
+    // Echoed as V1 on every response path only after the backend accepted an
+    // SI request whose StorageIntegrityArgs.tables is non-empty and whose
+    // contract_version is V1. Zero for non-SI or unsupported-version calls.
+    StorageIntegrityContractVersion storage_integrity_contract_version = 16;
 ```
 
 Add to `message AccessedTable` after `bool is_remote = 5;`:
@@ -139,15 +165,15 @@ Expected: `buf lint` silent; `git status --short gen/` shows `M gen/pb/rewriter.
 
 - [ ] **Step 3: Verify the generated Go surface**
 
-Run: `grep -n "GetStorageIntegrity()\|GetIsStorageIntegrity()\|StorageIntegrityArgs_READ_MODE_UNSAFE_LATEST\|STATEMENT_TYPE_DESCRIBE" gen/pb/rewriter.pb.go | head`
-Expected: four (or three, if DESCRIBE was E's) matching lines.
+Run: `grep -n "GetStorageIntegrity()\|GetStorageIntegrityContractVersion()\|GetIsStorageIntegrity()\|STORAGE_INTEGRITY_CONTRACT_V1\|StorageIntegrityArgs_READ_MODE_UNSAFE_LATEST\|STATEMENT_TYPE_DESCRIBE" gen/pb/rewriter.pb.go | head`
+Expected: all six surfaces present (DESCRIBE may already have landed from E, but the symbol must exist).
 
 - [ ] **Step 4: Commit and release**
 
 ```bash
 git checkout -b feat/storage-integrity-args
 git add proto/rewriter.proto gen/pb
-git commit -m "feat(proto): add StorageIntegrityArgs and AccessedTable.is_storage_integrity (Spec G)"
+git commit -m "feat(proto): add StorageIntegrityArgs contract and acknowledgement (Spec G)"
 ```
 
 Open the PR, merge to `main`, then run the `release` GitHub Actions workflow from `main` (`gh workflow run release.yml --ref main`). It computes the version (first release on a later Asia/Shanghai day than `v0.1.0` → **`v0.2.0`**; if Spec E already released `v0.2.0` today the workflow prints `v0.2.1` — use whatever it prints as `<proto-tag>` in every later task).
@@ -732,6 +758,7 @@ func (c siCase) options() []*pb.RewriteOption {
 			Tables:              map[string]*pb.StorageIntegrityArgs_Table{},
 			ReadMode:            siReadModeByName[si.ReadMode],
 			ReservedRowIdColumn: si.ReservedRowIDColumn,
+			ContractVersion:     pb.StorageIntegrityContractVersion_STORAGE_INTEGRITY_CONTRACT_V1,
 		}
 		for k, t := range si.Tables {
 			args.Tables[k] = &pb.StorageIntegrityArgs_Table{
@@ -858,22 +885,48 @@ git add internal/harness/testdata/storage_integrity_cases.json internal/harness/
 git commit -m "test(harness): add shared storage-integrity golden corpus (Spec G, red)"
 ```
 
-### Task 4: `nameresolve` — SI lookup, reserved column, `Accessed.IsStorageIntegrity`
+### Task 4: Native contract gate + `nameresolve` SI lookup, reserved column, `Accessed.IsStorageIntegrity`
 
 **Working directory:** `/Users/uranuswch/Dev/housegate/rewriter-go`
 
 **Files:**
+- Modify: `native.go` (central `doRewrite` contract validation/response stamp), `rewriter.go` (`RewriteResult` echo)
+- Test: `native_test.go` (v1 every-path acknowledgement; old/missing version rejection; no-SI compatibility)
+- Modify: `internal/harness/storage_integrity_golden_test.go` (v1 assertion), `internal/harness/writes_golden_test.go` (`pbFromResult`), `internal/harness/compare.go` (exact response-field comparison)
+- Test: `internal/harness/compare_test.go`
 - Modify: `internal/nameresolve/resolve.go` (`Accessed` struct ~:179, `ResolveAccessed` ~:224)
 - Test: `internal/nameresolve/resolve_test.go`
 
 **Interfaces:**
 - Produces:
+  - `RewriteResult.StorageIntegrityContractVersion pb.StorageIntegrityContractVersion`, copied by `resultFromPB`.
+  - central `doRewrite` pre-dispatch gate: call `nameresolve.FindActive(opts)` and inspect only an effective `ModeDynamic` selection. If its `dynamic_args.storage_integrity.tables` is non-empty it must request exactly `STORAGE_INTEGRITY_CONTRACT_V1`, otherwise return `InvalidRewriteRequest` with no acknowledgement. Once accepted, stamp response v1 before parse/dispatch so Success, SyntaxError, and semantic rejects all carry it. Effective static/non-SI selections keep the zero response field, even if an earlier shadowed option carried SI.
   - `func LookupStorageIntegrity(db, table string, a *pb.RewriteTableDynamicArgs) (tbl *pb.StorageIntegrityArgs_Table, logicalKey string, ok bool)` — `logical := db` or `a.UpstreamLogicalDatabaseInContext`; `logicalKey = logical + "." + table`; ok iff `a.GetStorageIntegrity().GetTables()[logicalKey]` exists.
   - `func ReservedRowIDColumn(a *pb.RewriteTableDynamicArgs) string` — `storage_integrity.reserved_row_id_column` or `"_hg_row_id"`.
   - `func StorageIntegrityWriteRejectMessage(logicalKey string) string` → `"storage-integrity table " + logicalKey + " accepts writes only through the signed statement lane"`.
   - `Accessed.IsStorageIntegrity bool` populated by `ResolveAccessed` in dynamic mode.
 
-- [ ] **Step 1: Write the failing tests (append to `resolve_test.go`)**
+- [ ] **Step 1: Write the failing contract tests in `native_test.go`**
+
+Use a small `siContractOptions(version)` helper with one `db1.t` table and table-driven cases covering: v1 + valid SELECT → Success/v1; v1 + syntax error → SyntaxError/v1; v1 + an SI semantic rejection after the later handlers land → reject/v1 (until then use a parseable path that returns any response); unspecified and unknown numeric versions → `InvalidRewriteRequest`/unspecified; no `storage_integrity` block and an empty `tables` block → existing behavior/unspecified. Add opposite-order multi-option cases: `[SI-v1 dynamic, static]` uses the later static table selection and returns no acknowledgement; `[static, SI-v1 dynamic]` acknowledges v1; repeat with a missing-version SI option to prove only the active order rejects. Add a DB-level `USE db1` variant proving that the earlier dynamic `database_map` may still rewrite USE under `FindDynamicArgs` while its shadowed SI block remains unacknowledged; reversing the order acknowledges v1. Assert `resultFromPB` preserves the version. In `internal/harness/compare_test.go`, clone two responses that differ only in `storage_integrity_contract_version` and require `Compare(...).Mismatches` to contain that field. These tests must call the public `NativeRewriter.Rewrite`, not only a helper, so the interface boundary is covered.
+
+Run: `go test . -run 'TestStorageIntegrityContract' -count=1`
+Expected: compile errors for the new enum/result field before Task 1's dependency bump, then assertion failures until the central gate is implemented.
+
+- [ ] **Step 2: Implement the central contract gate in `native.go` and the result copy in `rewriter.go`**
+
+Use `nameresolve.FindActive(opts)` as the single source of truth; do not independently scan every option. Inspect SI only when the returned selection is `ModeDynamic`. In `doRewrite`, allocate the response first, resolve/validate the effective selection **before `ParseOne`**, and on an active SI request either (a) return `InvalidRewriteRequest` with message `storage-integrity contract version V1 is required`, original SQL echoed, and the acknowledgement unspecified, or (b) set `resp.StorageIntegrityContractVersion = ...V1` and continue. Because every later branch returns that same response (or a handler response), ensure `finalize` copies/stamps v1 onto handler-created responses as well; the simplest safe shape is to carry the accepted version into `finalize(resp, sql, ec, siVersion)` and stamp it before every return. Internal Go errors still return no response and remain HouseGate fail-closed. Add `StorageIntegrityContractVersion` to `RewriteResult` and root `resultFromPB`.
+
+Then make the harness proof load-bearing in the same task (now that the result field exists): in `storage_integrity_golden_test.go`, immediately after a successful `Rewrite`, assert v1 whenever the case's SI table map is non-empty; in `writes_golden_test.go` copy `StorageIntegrityContractVersion: r.StorageIntegrityContractVersion` inside `pbFromResult`; and in `compare.go` add an exact `GetStorageIntegrityContractVersion()` comparison beside code/statement/existence. This ensures the native-vs-C++ oracle fails if either engine drops the echo.
+
+```go
+			if c.Dynamic != nil && c.Dynamic.StorageIntegrity != nil && len(c.Dynamic.StorageIntegrity.Tables) > 0 &&
+				res.StorageIntegrityContractVersion != pb.StorageIntegrityContractVersion_STORAGE_INTEGRITY_CONTRACT_V1 {
+				t.Errorf("storage_integrity_contract_version = %v, want V1", res.StorageIntegrityContractVersion)
+			}
+```
+
+- [ ] **Step 3: Write the failing name-resolution tests (append to `resolve_test.go`)**
 
 ```go
 func siArgs(upstream string) *pb.RewriteTableDynamicArgs {
@@ -885,7 +938,8 @@ func siArgs(upstream string) *pb.RewriteTableDynamicArgs {
 			Tables: map[string]*pb.StorageIntegrityArgs_Table{
 				"db1.t": {SafeTable: "hg_safe.db1__t", UnsafeTable: "hg_unsafe.db1__t"},
 			},
-			ReadMode: pb.StorageIntegrityArgs_READ_MODE_SAFE,
+			ReadMode:        pb.StorageIntegrityArgs_READ_MODE_SAFE,
+			ContractVersion: pb.StorageIntegrityContractVersion_STORAGE_INTEGRITY_CONTRACT_V1,
 		},
 	}
 }
@@ -947,12 +1001,12 @@ func TestStorageIntegrityWriteRejectMessage(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [ ] **Step 4: Run to verify name-resolution failure**
 
 Run: `go test ./internal/nameresolve -run 'TestLookupStorageIntegrity|TestReservedRowIDColumn|TestResolveAccessed_flagsStorageIntegrity|TestStorageIntegrityWriteRejectMessage' -count=1`
 Expected: compile error `undefined: LookupStorageIntegrity` (and the others).
 
-- [ ] **Step 3: Implement in `resolve.go`**
+- [ ] **Step 5: Implement in `resolve.go`**
 
 Add the field to `Accessed`:
 
@@ -1020,16 +1074,16 @@ func StorageIntegrityWriteRejectMessage(logicalKey string) string {
 }
 ```
 
-- [ ] **Step 4: Run tests**
+- [ ] **Step 6: Run tests**
 
-Run: `go test ./internal/nameresolve -count=1`
-Expected: `ok  	github.com/housegate/rewriter-go/internal/nameresolve`.
+Run: `go test . ./internal/nameresolve -run 'TestStorageIntegrityContract|TestLookupStorageIntegrity|TestReservedRowIDColumn|TestResolveAccessed_flagsStorageIntegrity|TestStorageIntegrityWriteRejectMessage' -count=1 && go test ./internal/harness -run 'TestCompare.*StorageIntegrityContract' -count=1`
+Expected: all targeted packages pass. The full SI golden remains red on the not-yet-implemented rewrite behavior, but its acknowledgement assertions now pass.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add internal/nameresolve/resolve.go internal/nameresolve/resolve_test.go
-git commit -m "feat(nameresolve): storage-integrity table lookup, reserved column, accessed flag"
+git add native.go native_test.go rewriter.go internal/nameresolve/resolve.go internal/nameresolve/resolve_test.go internal/harness/storage_integrity_golden_test.go internal/harness/writes_golden_test.go internal/harness/compare.go internal/harness/compare_test.go
+git commit -m "feat(rewriter): require and acknowledge storage-integrity contract v1"
 ```
 
 ### Task 5: `engine` — `ActionSubquery` derived-table substitution + `ReferencesIdentifier`
@@ -1760,18 +1814,18 @@ func decideWriteTarget(tt engine.TableTarget, kind string, sel nameresolve.Selec
 	}
 ```
 
-`grant.go` — inside the `for _, p := range gp.Privileges {` loop, right after the column-level reject and before `if !resolved {`:
+`grant.go` — compute `siSel := nameresolve.FindActive(opts)` once alongside the existing `dyn := nameresolve.FindDynamicArgs(opts)`. Keep `dyn` for the grant handler's existing database-policy behavior, but use only `siSel` for SI membership so acknowledgement and SI enforcement share the same last-wins table selection. Inside the `for _, p := range gp.Privileges {` loop, right after the column-level reject and before `if !resolved {`:
 
 ```go
-		if !scopeDatabase {
-			if _, key, ok := nameresolve.LookupStorageIntegrity(origDB, origTable, dyn); ok {
+		if !scopeDatabase && siSel.Mode == nameresolve.ModeDynamic {
+			if _, key, ok := nameresolve.LookupStorageIntegrity(origDB, origTable, siSel.Dynamic); ok {
 				rejectUnsupported(resp, nameresolve.StorageIntegrityWriteRejectMessage(key))
 				return resp, true, nil
 			}
 		}
 ```
 
-(`origDB`, `origTable`, `scopeDatabase`, `dyn` are the existing locals in `RewriteGrant`.)
+(`origDB`, `origTable`, `scopeDatabase`, `dyn` are the existing locals in `RewriteGrant`.) Add opposite-order GRANT tests (`[SI dynamic, static]` does not take the SI branch; `[static, SI dynamic]` does) to prevent this handler from drifting away from D-8.
 
 - [ ] **Step 4: Run tests**
 
@@ -1792,6 +1846,7 @@ git commit -m "feat(handlers): reject non-lane writes/DDL on storage-integrity t
 **Files:**
 - Create: `internal/handlers/describe.go`, `internal/handlers/describe_test.go`
 - Modify: `internal/engine/objtarget.go` (:9-15 verbs, :36-52 switch), `internal/handlers/exists.go` (:31-33 verb guard), `native.go` (`doRewrite` :132-141 dispatch, `classifyCommand` :239-261)
+- Test: `native_test.go` (DESCRIBE path retains the accepted v1 acknowledgement)
 
 **Interfaces:**
 - Consumes: `engine.ParseObjectTarget`, Task 4/6 helpers.
@@ -1968,10 +2023,12 @@ func RewriteDescribe(e engine.Engine, ast engine.AST, sql string, opts []*pb.Rew
 	if dresp, handled, derr := handlers.RewriteDescribe(e, ast, sql, opts); derr != nil {
 		return nil, derr
 	} else if handled {
-		finalize(dresp, sql, ec)
+		finalize(dresp, sql, ec, siVersion)
 		return dresp, nil
 	}
 ```
+
+Append `TestStorageIntegrityContract_DescribeRetainsAcknowledgement` to `native_test.go`: call the public `NativeRewriter.Rewrite` with v1 SI options and `DESCRIBE db1.t`; assert `STATEMENT_TYPE_DESCRIBE` and `StorageIntegrityContractVersion == ...V1`. This is the regression for every newly added handler branch passing `siVersion` into `finalize`.
 
 and in `classifyCommand` add before the `default:` (note `DESCRIBE` also starts with `DESC`):
 
@@ -1988,7 +2045,7 @@ Expected: all `ok`; `TestStorageIntegrityGolden` fully green (23/23 subtests).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add internal/engine/objtarget.go internal/handlers/exists.go internal/handlers/describe.go internal/handlers/describe_test.go native.go
+git add internal/engine/objtarget.go internal/handlers/exists.go internal/handlers/describe.go internal/handlers/describe_test.go native.go native_test.go
 git commit -m "feat: minimal DESCRIBE handler with storage-integrity metadata SELECT (STATEMENT_TYPE_DESCRIBE)"
 ```
 
@@ -2130,6 +2187,7 @@ void applyStorageIntegrityArgs(rewriter::RewriteTableDynamicArgs *dyn, const Poc
   if (!d->has("storage_integrity")) return;
   auto si = d->getObject("storage_integrity");
   auto *args = dyn->mutable_storage_integrity();
+  args->set_contract_version(rewriter::STORAGE_INTEGRITY_CONTRACT_V1);
   const std::string mode = si->has("read_mode") ? si->getValue<std::string>("read_mode") : "";
   args->set_read_mode(mode == "UNSAFE_LATEST" ? rewriter::StorageIntegrityArgs::READ_MODE_UNSAFE_LATEST
                     : mode == "SAFE" ? rewriter::StorageIntegrityArgs::READ_MODE_SAFE
@@ -2207,6 +2265,13 @@ TEST_P(StorageIntegrityGolden, MatchesSharedCorpus) {
   ASSERT_TRUE(service.Rewrite(&ctx, &req, &resp).ok());
   SCOPED_TRACE("sql_after_rewrite: " + resp.sql_after_rewrite() + " | message: " + resp.message());
 
+  if (c.has_dynamic && c.dynamic->has("storage_integrity") &&
+      c.dynamic->getObject("storage_integrity")->getObject("tables")->size() != 0) {
+    EXPECT_EQ(resp.storage_integrity_contract_version(), rewriter::STORAGE_INTEGRITY_CONTRACT_V1);
+  } else {
+    EXPECT_EQ(resp.storage_integrity_contract_version(), rewriter::STORAGE_INTEGRITY_CONTRACT_UNSPECIFIED);
+  }
+
   if (!c.want_code.empty()) EXPECT_EQ(resp.code(), kSICodeByName.at(c.want_code));
   EXPECT_EQ(resp.statement_type(), kSIStmtByName.at(c.want_stmt));
   if (!c.want_message_contains.empty()) EXPECT_NE(resp.message().find(c.want_message_contains), std::string::npos);
@@ -2241,7 +2306,7 @@ INSTANTIATE_TEST_SUITE_P(SpecG, StorageIntegrityGolden, ::testing::ValuesIn(load
 - [ ] **Step 4: Build and run — must be RED**
 
 Run: rsync + rebuild, then `$RB "cd $WD && ./build/rewriter_tests --gtest_filter='SpecG/StorageIntegrityGolden.*' 2>&1 | tail -40"`
-Expected: build succeeds (proto v0.2.0 generates `has_storage_integrity()`); `[  FAILED  ]` for every `si_*` case, `[       OK ]` for `non_si_table_unaffected` and `si_absent_args_ordinary_rewrite`.
+Expected: build succeeds (the proto generates `has_storage_integrity()` and the v1 enum); `[  FAILED  ]` for every `si_*` case, including a missing contract acknowledgement, while `non_si_table_unaffected` and `si_absent_args_ordinary_rewrite` pass with an unspecified response version.
 
 - [ ] **Step 5: Commit**
 
@@ -2250,16 +2315,19 @@ git add third_party/rewriter-proto tests/testdata/storage_integrity_cases.json t
 git commit -m "test: shared storage-integrity golden corpus + proto v0.2.0 (Spec G, red)"
 ```
 
-### Task 11: `handlers/storage_integrity.{h,cc}` + SELECT derived table + reserved column + `is_storage_integrity`
+### Task 11: Central C++ contract gate + `handlers/storage_integrity.{h,cc}` + SELECT derived table + reserved column + `is_storage_integrity`
 
 **Working directory:** `/Users/uranuswch/Dev/housegate/rewriter-grpc`
 
 **Files:**
 - Create: `src/handlers/storage_integrity.h`, `src/handlers/storage_integrity.cc`
+- Modify: `src/rewriter-server.cc` (pre-parse v1 validation and every-path acknowledgement)
 - Modify: `src/handlers/name_rewrite.h` (`AccessedTableResolution` :~250), `src/handlers/name_rewrite.cc` (`resolveAccessedTable` dynamic branch, `recordAccessedTable`), `src/handlers/select.cc` (`dynamicRewriteWalk` :148-251, `handleSelectQuery` :754-824), `CMakeLists.txt` (`rewriter_core` sources :175-190)
+- Test: `tests/rewriter_test.cc` (missing/unknown v1 rejection, syntax-error acknowledgement, no-SI compatibility)
 
 **Interfaces:**
 - Produces (namespace `rewriter_handlers`):
+  - central `RewriterServiceImpl::doRewrite` gate mirroring Go: call `findActiveTableRewrite(request->options())`, inspect only `TableRewriteMode::Dynamic`, and require exact v1 only when that active dynamic block has non-empty SI tables. Missing/unknown → `InvalidRewriteRequest`, message `storage-integrity contract version V1 is required`, no acknowledgement. Once accepted, set response v1 **before parsing** so Success, SyntaxError, and handler rejections retain it. Effective static/non-SI selections keep zero, even when an earlier shadowed option carried SI.
   - `constexpr std::string_view kDefaultReservedRowIdColumn = "_hg_row_id";`
   - `struct StorageIntegrityHit { const rewriter::StorageIntegrityArgs::Table *table; std::string logical_key; };`
   - `std::optional<StorageIntegrityHit> lookupStorageIntegrity(const std::string &origin_db, const std::string &origin_table, const rewriter::RewriteTableDynamicArgs &args);` (logical = origin_db or upstream ctx; key = logical + "." + table; miss when unqualified w/o context or block absent)
@@ -2271,7 +2339,14 @@ git commit -m "test: shared storage-integrity golden corpus + proto v0.2.0 (Spec
   - `std::string describeMetadataSQL(const std::string &safe_table, const std::string &rid);` (Task 13 uses it; define here so both handlers share one string builder)
   - `AccessedTableResolution::is_storage_integrity` (bool) filled by `resolveAccessedTable` in dynamic mode; `recordAccessedTable` copies it into the proto.
 
-- [ ] **Step 1: Write the header + implementation**
+- [ ] **Step 1: Add the central contract tests and implementation**
+
+In `tests/rewriter_test.cc`, construct direct requests (not only shared corpus cases) covering v1+valid SQL, v1+syntax error, unspecified/unknown versions, no block, and an empty `tables` block. Add the same opposite-order `[SI dynamic, static]` / `[static, SI dynamic]` cases (including missing-version SI) as native Task 4 to lock last-wins behavior, plus the DB-level `USE` regression: an earlier dynamic `database_map` can still drive USE through `findDynamicArgs` behind a later static option, but that shadowed SI block receives no acknowledgement; reversed order receives v1. Assert the same code/version matrix and that invalid-version responses echo the original SQL. Include `handlers/name_rewrite.h` in `rewriter-server.cc`; in `doRewrite`, call `rewriter_handlers::findActiveTableRewrite` and stamp before `QueryPreprocessor::preprocess` / `parseQuery`. On invalid active version set `sql_after_rewrite` to the original query, `InvalidRewriteRequest`, and the shared message, without an acknowledgement. Do not put logic in the thin gRPC wrapper, so the HTTP façade and `doRewriteErrorMessage` re-run share it. The access log may include the response code as today; no SQL is logged.
+
+Run: rsync + rebuild, then `$RB "cd $WD && ./build/rewriter_tests --gtest_filter='StorageIntegrityContract.*'"`
+Expected: PASS after implementation.
+
+- [ ] **Step 2: Write the header + implementation**
 
 `src/handlers/storage_integrity.h` declares the functions above (`#pragma once`, includes `<Parsers/IAST.h>`, `<optional>`, `<string>`, `"rewriter.grpc.pb.h"`). `src/handlers/storage_integrity.cc`:
 
@@ -2383,11 +2458,11 @@ std::string describeMetadataSQL(const std::string &safe_table, const std::string
 
 Add `src/handlers/storage_integrity.cc` to the `rewriter_core` source list in `CMakeLists.txt`.
 
-- [ ] **Step 2: `name_rewrite` — accessed flag**
+- [ ] **Step 3: `name_rewrite` — accessed flag**
 
 `name_rewrite.h`: add `bool is_storage_integrity = false;` to `AccessedTableResolution`. `name_rewrite.cc`: `#include "handlers/storage_integrity.h"`; in `resolveAccessedTable`'s dynamic branch, before `return out;` add `if (lookupStorageIntegrity(origin_db, origin_table, args)) out.is_storage_integrity = true;`; in `recordAccessedTable` add `entry->set_is_storage_integrity(resolution.is_storage_integrity);`.
 
-- [ ] **Step 3: `select.cc` — SI branch in `dynamicRewriteWalk`, reserved guard in `handleSelectQuery`**
+- [ ] **Step 4: `select.cc` — SI branch in `dynamicRewriteWalk`, reserved guard in `handleSelectQuery`**
 
 `#include "handlers/storage_integrity.h"`. In `dynamicRewriteWalk`, after the CTE-alias early-return and the db/table split, BEFORE `applyDynamicRewrite`:
 
@@ -2424,16 +2499,16 @@ In `handleSelectQuery`, move the `original_accessed_tables` population loop (cur
 
 (`entry->set_is_storage_integrity(resolution.is_storage_integrity);` goes into the moved loop.) `rewriteEmbeddedViewBody` gets the same guard, returning after setting the code (its caller in writes.cc already returns Rejected when `response->code() != Success` after the body rewrite — verify; if not, add `if (response->code() != rewriter::RewriteCode::Success) return WriteDispatchResult::Rejected;` after the `rewriteEmbeddedViewBody` call).
 
-- [ ] **Step 4: Build + run the golden suite**
+- [ ] **Step 5: Build + run the golden suite**
 
 Run: rsync + rebuild, then `$RB "cd $WD && ./build/rewriter_tests --gtest_filter='SpecG/StorageIntegrityGolden.*:AccessedTable.*:TableOnly.*:CTE*' 2>&1 | tail -40"`
 Expected: SELECT-family cases OK (`si_safe_plain_select`, `si_safe_alias_join_non_si`, `si_unsafe_latest_*`, `si_safe_subquery_in_where`, `si_reserved_column_*`, `si_star_hides_rid`, `si_use_default_database`, `non_si_*`, `si_absent_*`); write/EXISTS/DESCRIBE cases still FAILED; all pre-existing suites OK.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add src/handlers/storage_integrity.h src/handlers/storage_integrity.cc src/handlers/name_rewrite.h src/handlers/name_rewrite.cc src/handlers/select.cc CMakeLists.txt
-git commit -m "feat(select): storage-integrity derived-table surface, reserved-column reject, is_storage_integrity"
+git add src/rewriter-server.cc src/handlers/storage_integrity.h src/handlers/storage_integrity.cc src/handlers/name_rewrite.h src/handlers/name_rewrite.cc src/handlers/select.cc tests/rewriter_test.cc CMakeLists.txt
+git commit -m "feat(select): require SI contract v1 and add storage-integrity read surface"
 ```
 
 ### Task 12: C++ writes / EXISTS / SHOW CREATE / GRANT — SI rejection and safe-table mapping
@@ -2475,12 +2550,12 @@ git commit -m "feat(select): storage-integrity derived-table surface, reserved-c
 
 `show_create.cc` — same spot, but reject: `rejectShowCreate(response, rewriter::RewriteCode::UnsupportedStatement, "SHOW CREATE TABLE on storage-integrity table " + hit->logical_key + " is not supported"); return ShowCreateDispatchResult::Handled;` (use whatever the file's local reject helper is named — mirror `rejectExists`).
 
-- [ ] **Step 3: `grant.cc`** — inside the element loop, right after the column-level reject and before the `original_database` computation:
+- [ ] **Step 3: `grant.cc`** — compute `const auto si_selection = findActiveTableRewrite(request->options());` once, while retaining the existing `dynamic = findDynamicArgs(...)` for database-policy mapping. Inside the element loop, right after the column-level reject and before the `original_database` computation:
 
 ```cpp
-    if (!elem.anyTable()) {
+    if (!elem.anyTable() && si_selection.mode == TableRewriteMode::Dynamic) {
       const std::string odb = elem.default_database ? std::string() : elem.database;
-      if (auto hit = lookupStorageIntegrity(odb, elem.table, *dynamic)) {
+      if (auto hit = lookupStorageIntegrity(odb, elem.table, *si_selection.dynamic_args)) {
         rejectUnsupported(response, storageIntegrityWriteRejectMessage(hit->logical_key));
         return GrantDispatchResult::Rejected;
       }
@@ -2659,6 +2734,8 @@ func TestSentioRewriter_AccessedTablesCarryStorageIntegrityFlag(t *testing.T) {
 	}
 }
 ```
+
+Mirror Go's two opposite-order GRANT tests so SI enforcement and the response acknowledgement cannot disagree under multiple `TableNameRewrite` options.
 
 Append to `pkg/plugins/storageintegrity/plugin_test.go`:
 
@@ -2987,6 +3064,8 @@ git commit -m "feat(config): storage_integrity.tables (renamed from runtime.merg
 
 **Interfaces:**
 - Produces:
+  - `const rewriter.StorageIntegrityContractV1 = pb.StorageIntegrityContractVersion_STORAGE_INTEGRITY_CONTRACT_V1` and `type rewriter.StorageIntegrityCapableFactory interface { Factory; StorageIntegrityContractVersion() pb.StorageIntegrityContractVersion }`. `*SentioNetworkFactory` implements the method and returns v1 because its wrapper validates every backend response.
+  - `RewriteResult.StorageIntegrityContractVersion pb.StorageIntegrityContractVersion`, copied from the wire response; custom `Rewriter` implementations must populate it themselves.
   - `const rewriter.ReadModeSettingKey = "SQL_x_read_mode"`
   - `type rewriter.ReadMode string`; `rewriter.ReadModeSafe = "safe"`, `rewriter.ReadModeUnsafeLatest = "unsafe_latest"`; `func rewriter.ParseReadMode(raw string) (ReadMode, error)` (trims spaces and `'"`; strict — `""` is an error)
   - `type rewriter.StorageIntegrityReadState interface { PromotedUnsafeParts(tableID string) ([]string, error) }`
@@ -2994,7 +3073,7 @@ git commit -m "feat(config): storage_integrity.tables (renamed from runtime.merg
   - `type rewriter.StorageIntegrityOptions struct { Tables []StorageIntegrityTable; DefaultReadMode ReadMode; ReadState StorageIntegrityReadState; InsertLaneEnabled bool }` on `rewriter.Options.StorageIntegrity`
   - `func rewriter.WithReadMode(ctx context.Context, m ReadMode) context.Context`; `func rewriter.ReadModeFromContext(ctx context.Context) (ReadMode, bool)`
   - `type rewriter.RejectedError struct { Code pb.RewriteCode; Message string }` with `Error()`; returned by `Rewrite` for every SI-related rejection and every pre-response rewrite failure while `StorageIntegrityOptions.Tables` is non-empty (D-2)
-  - `func buildStorageIntegrityArgs(opts StorageIntegrityOptions, mode ReadMode) (*pb.StorageIntegrityArgs, error)`; `buildDynamicArgs(..., si *pb.StorageIntegrityArgs)`
+  - `func buildStorageIntegrityArgs(opts StorageIntegrityOptions, mode ReadMode) (*pb.StorageIntegrityArgs, error)`; for non-empty tables it always sets `ContractVersion: StorageIntegrityContractV1`; `buildDynamicArgs(..., si *pb.StorageIntegrityArgs)`
 
 - [ ] **Step 1: Failing tests** — `pkg/rewriter/storage_integrity_test.go`:
 
@@ -3055,7 +3134,8 @@ func TestBuildStorageIntegrityArgs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.GetReadMode() != pb.StorageIntegrityArgs_READ_MODE_SAFE || got.GetReservedRowIdColumn() != "_hg_row_id" {
+	if got.GetReadMode() != pb.StorageIntegrityArgs_READ_MODE_SAFE || got.GetReservedRowIdColumn() != "_hg_row_id" ||
+		got.GetContractVersion() != StorageIntegrityContractV1 {
 		t.Fatalf("args = %v", got)
 	}
 	tbl := got.GetTables()["db1.t"]
@@ -3106,6 +3186,11 @@ func TestReadModeContext(t *testing.T) {
 Append to `pkg/rewriter/backend_test.go`:
 
 ```go
+func acknowledgedSIResponse(resp *pb.RewriteSQLResponse) *pb.RewriteSQLResponse {
+	resp.StorageIntegrityContractVersion = StorageIntegrityContractV1
+	return resp
+}
+
 func newSIFactory(be backend, rs StorageIntegrityReadState, insertLane bool) *SentioNetworkFactory {
 	f := newFakeFactory(be)
 	f.options.StorageIntegrity = siOpts(rs)
@@ -3114,14 +3199,14 @@ func newSIFactory(be backend, rs StorageIntegrityReadState, insertLane bool) *Se
 }
 
 func TestSentioRewriter_ShipsStorageIntegrityArgs(t *testing.T) {
-	be := &fakeBackend{resp: &pb.RewriteSQLResponse{Code: pb.RewriteCode_Success, SqlAfterRewrite: "x", StatementType: pb.StatementType_STATEMENT_TYPE_SELECT}}
+	be := &fakeBackend{resp: acknowledgedSIResponse(&pb.RewriteSQLResponse{Code: pb.RewriteCode_Success, SqlAfterRewrite: "x", StatementType: pb.StatementType_STATEMENT_TYPE_SELECT})}
 	rs := &fakeReadState{parts: map[string][]string{"db1.t": {"all_1_1_0"}}}
 	rw := newSIFactory(be, rs, true).NewRewriter(&fakeSession{})
 	if _, err := rw.Rewrite(context.Background(), "SELECT a FROM db1.t", ""); err != nil {
 		t.Fatal(err)
 	}
 	si := be.lastReq.GetOptions()[0].GetTableNameArgs().GetDynamicArgs().GetStorageIntegrity()
-	if si.GetReadMode() != pb.StorageIntegrityArgs_READ_MODE_SAFE || si.GetTables()["db1.t"].GetSafeTable() != "hg_safe.db1__t" {
+	if si.GetReadMode() != pb.StorageIntegrityArgs_READ_MODE_SAFE || si.GetContractVersion() != StorageIntegrityContractV1 || si.GetTables()["db1.t"].GetSafeTable() != "hg_safe.db1__t" {
 		t.Fatalf("default-mode args = %v", si)
 	}
 	ctx := WithReadMode(context.Background(), ReadModeUnsafeLatest)
@@ -3135,7 +3220,7 @@ func TestSentioRewriter_ShipsStorageIntegrityArgs(t *testing.T) {
 }
 
 func TestSentioRewriter_UnsafeLatestWithoutPortIsRejectedBeforeBackend(t *testing.T) {
-	be := &fakeBackend{resp: &pb.RewriteSQLResponse{Code: pb.RewriteCode_Success}}
+	be := &fakeBackend{resp: acknowledgedSIResponse(&pb.RewriteSQLResponse{Code: pb.RewriteCode_Success})}
 	rw := newSIFactory(be, nil, true).NewRewriter(&fakeSession{})
 	_, err := rw.Rewrite(WithReadMode(context.Background(), ReadModeUnsafeLatest), "SELECT 1", "")
 	var rej *RejectedError
@@ -3149,10 +3234,10 @@ func TestSentioRewriter_UnsafeLatestWithoutPortIsRejectedBeforeBackend(t *testin
 
 func TestSentioRewriter_StorageIntegrityRejectIsFailClosed(t *testing.T) {
 	for _, code := range []pb.RewriteCode{pb.RewriteCode_UnsupportedStatement, pb.RewriteCode_RewriteError} {
-		be := &fakeBackend{resp: &pb.RewriteSQLResponse{
+		be := &fakeBackend{resp: acknowledgedSIResponse(&pb.RewriteSQLResponse{
 			Code: code, Message: "storage-integrity table db1.t accepts writes only through the signed statement lane",
 			OriginalAccessedTables: []*pb.AccessedTable{{OriginalDatabase: "db1", OriginalTable: "t", IsStorageIntegrity: true}},
-		}}
+		})}
 		rw := newSIFactory(be, nil, true).NewRewriter(&fakeSession{})
 		_, err := rw.Rewrite(context.Background(), "DROP TABLE db1.t", "")
 		var rej *RejectedError
@@ -3161,11 +3246,45 @@ func TestSentioRewriter_StorageIntegrityRejectIsFailClosed(t *testing.T) {
 		}
 	}
 	// Non-SI Unsupported keeps today's pass-through contract.
-	be := &fakeBackend{resp: &pb.RewriteSQLResponse{Code: pb.RewriteCode_UnsupportedStatement, Message: "nope",
-		OriginalAccessedTables: []*pb.AccessedTable{{OriginalDatabase: "other", OriginalTable: "u"}}}}
+	be := &fakeBackend{resp: acknowledgedSIResponse(&pb.RewriteSQLResponse{Code: pb.RewriteCode_UnsupportedStatement, Message: "nope",
+		OriginalAccessedTables: []*pb.AccessedTable{{OriginalDatabase: "other", OriginalTable: "u"}}})}
 	res, err := newSIFactory(be, nil, true).NewRewriter(&fakeSession{}).Rewrite(context.Background(), "OPTIMIZE TABLE other.u", "")
-	if err != nil || res.SQL != "OPTIMIZE TABLE other.u" {
+	if err != nil || res.SQL != "OPTIMIZE TABLE other.u" || res.StorageIntegrityContractVersion != StorageIntegrityContractV1 {
 		t.Fatalf("non-SI unsupported must pass through: %v %v", res, err)
+	}
+}
+
+func TestSentioRewriter_OldSuccessfulBackendWithoutSIAcknowledgementFailsClosed(t *testing.T) {
+	// Simulates an older protobuf server: it ignores StorageIntegrityArgs,
+	// returns Success, and leaves the additive response field at zero.
+	be := &fakeBackend{resp: &pb.RewriteSQLResponse{Code: pb.RewriteCode_Success, SqlAfterRewrite: "SELECT 1"}}
+	_, err := newSIFactory(be, nil, true).NewRewriter(&fakeSession{}).Rewrite(context.Background(), "SELECT 1", "")
+	var rej *RejectedError
+	if !errors.As(err, &rej) || !strings.Contains(rej.Message, "contract acknowledgement") {
+		t.Fatalf("err = %v, want fail-closed missing-ack RejectedError", err)
+	}
+}
+
+func TestSentioRewriter_BackendWithWrongSIAcknowledgementFailsClosed(t *testing.T) {
+	be := &fakeBackend{resp: &pb.RewriteSQLResponse{
+		Code: pb.RewriteCode_Success, SqlAfterRewrite: "SELECT 1",
+		StorageIntegrityContractVersion: pb.StorageIntegrityContractVersion(99),
+	}}
+	_, err := newSIFactory(be, nil, true).NewRewriter(&fakeSession{}).Rewrite(context.Background(), "SELECT 1", "")
+	var rej *RejectedError
+	if !errors.As(err, &rej) || !strings.Contains(rej.Message, "contract acknowledgement") {
+		t.Fatalf("err = %v, want fail-closed wrong-ack RejectedError", err)
+	}
+}
+
+func TestSentioRewriter_AcknowledgedBackendAllowsNonSITableQuery(t *testing.T) {
+	be := &fakeBackend{resp: acknowledgedSIResponse(&pb.RewriteSQLResponse{
+		Code: pb.RewriteCode_Success, SqlAfterRewrite: "SELECT 1",
+		OriginalAccessedTables: []*pb.AccessedTable{{OriginalDatabase: "system", OriginalTable: "one"}},
+	})}
+	res, err := newSIFactory(be, nil, true).NewRewriter(&fakeSession{}).Rewrite(context.Background(), "SELECT 1", "")
+	if err != nil || res.StorageIntegrityContractVersion != StorageIntegrityContractV1 {
+		t.Fatalf("acknowledged non-SI query = %+v, %v", res, err)
 	}
 }
 
@@ -3210,10 +3329,10 @@ func TestSentioRewriter_ConfiguredSISurfaceUnavailableFailsClosed(t *testing.T) 
 }
 
 func TestSentioRewriter_InsertIntoSITableWithoutLaneIsRejected(t *testing.T) {
-	be := &fakeBackend{resp: &pb.RewriteSQLResponse{
+	be := &fakeBackend{resp: acknowledgedSIResponse(&pb.RewriteSQLResponse{
 		Code: pb.RewriteCode_Success, SqlAfterRewrite: `INSERT INTO phys."db1.t" (a) VALUES (1)`, StatementType: pb.StatementType_STATEMENT_TYPE_INSERT,
 		OriginalAccessedTables: []*pb.AccessedTable{{OriginalDatabase: "db1", OriginalTable: "t", LogicalDatabase: "db1", IsStorageIntegrity: true}},
-	}}
+	})}
 	_, err := newSIFactory(be, nil, false).NewRewriter(&fakeSession{}).Rewrite(context.Background(), "INSERT INTO db1.t (a) VALUES (1)", "")
 	var rej *RejectedError
 	if !errors.As(err, &rej) || rej.Message != "storage-integrity table db1.t accepts writes only through the signed statement lane" {
@@ -3226,7 +3345,7 @@ func TestSentioRewriter_InsertIntoSITableWithoutLaneIsRejected(t *testing.T) {
 }
 ```
 
-Run: `go test ./pkg/rewriter -run 'TestParseReadMode|TestBuildStorageIntegrityArgs|TestReadModeContext|TestSentioRewriter_ShipsStorageIntegrityArgs|TestSentioRewriter_UnsafeLatest|TestSentioRewriter_StorageIntegrityReject|TestSentioRewriter_ConfiguredSISurfaceUnavailable|TestSentioRewriter_InsertIntoSI' -count=1`
+Run: `go test ./pkg/rewriter -run 'TestParseReadMode|TestBuildStorageIntegrityArgs|TestReadModeContext|TestSentioRewriter_ShipsStorageIntegrityArgs|TestSentioRewriter_UnsafeLatest|TestSentioRewriter_StorageIntegrityReject|TestSentioRewriter_ConfiguredSISurfaceUnavailable|TestSentioRewriter_OldSuccessfulBackend|TestSentioRewriter_BackendWithWrongSI|TestSentioRewriter_AcknowledgedBackend|TestSentioRewriter_InsertIntoSI' -count=1`
 Expected: compile errors (`undefined: ReadMode`, `RejectedError`, …).
 
 - [ ] **Step 2: Implement `pkg/rewriter/storage_integrity.go`**
@@ -3341,6 +3460,7 @@ func buildStorageIntegrityArgs(opts StorageIntegrityOptions, mode ReadMode) (*pb
 		Tables:              make(map[string]*pb.StorageIntegrityArgs_Table, len(opts.Tables)),
 		ReadMode:            pb.StorageIntegrityArgs_READ_MODE_SAFE,
 		ReservedRowIdColumn: DefaultReservedRowIDColumn,
+		ContractVersion:     StorageIntegrityContractV1,
 	}
 	if mode == ReadModeUnsafeLatest {
 		if opts.ReadState == nil {
@@ -3383,7 +3503,7 @@ func storageIntegrityAccess(tables []*pb.AccessedTable) (string, bool) {
 }
 ```
 
-`types.go` `Options`: add `StorageIntegrity StorageIntegrityOptions` with a doc comment pointing at Spec G. `args.go`: add trailing param `si *pb.StorageIntegrityArgs` and `StorageIntegrity: si` in the literal (update both callers in `sentio.go`).
+`types.go`: add `StorageIntegrity StorageIntegrityOptions` to `Options`; add `StorageIntegrityContractVersion pb.StorageIntegrityContractVersion` to `RewriteResult`; define `StorageIntegrityContractV1` and `StorageIntegrityCapableFactory`; and implement `func (*SentioNetworkFactory) StorageIntegrityContractVersion() pb.StorageIntegrityContractVersion { return StorageIntegrityContractV1 }`. This marker is truthful only because the `sentioRewriter` check below rejects every missing/wrong wire echo. `args.go`: add trailing param `si *pb.StorageIntegrityArgs` and `StorageIntegrity: si` in the literal (update both callers in `sentio.go`).
 
 `sentio.go` `Rewrite` — add a small `rewriteFailure(err error) error` helper: when `len(r.factory.options.StorageIntegrity.Tables) > 0`, wrap the cause in `&RejectedError{Code: pb.RewriteCode_RewriteError, Message: "storage-integrity rewrite classification unavailable: " + err.Error()}`; otherwise return the ordinary error. Use it for the closed-backend check, any non-nil error returned by `buildDatabaseMap`, `callWithTimeout` failure, and a nil response. The frozen `buildDatabaseMap` implementation has no failing branch, so do not add a fake production seam solely to synthesize that impossible branch; the generic plugin-level `FailClosedOnError` regression covers any ordinary factory error. After building `dbMap/knownPhys/logicalToRemote/remoteUpstreams`:
 
@@ -3401,7 +3521,21 @@ func storageIntegrityAccess(tables []*pb.AccessedTable) (string, bool) {
 
 The existing no-mappings fast path must become `if len(dbMap) == 0 && len(knownPhys) == 0 && r.sess.LogicalDatabaseName() == "" && siArgs == nil`; configured SI membership always calls the backend so it receives classification even when ordinary database maps are empty. After `resp, err := r.callWithTimeout(ctx, req)`, route `err` through `rewriteFailure`; route `resp == nil` through the same helper before dereferencing it.
 
-and after `resp, err := r.callWithTimeout(ctx, req)` succeeded, before the `switch resp.Code`:
+and after `resp, err := r.callWithTimeout(ctx, req)` succeeded, before inspecting `resp.Code` or any accessed-table fields:
+
+```go
+	// Spec G D-8: additive protobuf fields are not proof that the backend
+	// understood SI. An old server can ignore the request and still return
+	// Success, so require an exact positive acknowledgement first.
+	if len(r.factory.options.StorageIntegrity.Tables) > 0 &&
+		resp.GetStorageIntegrityContractVersion() != StorageIntegrityContractV1 {
+		return RewriteResult{}, &RejectedError{Code: pb.RewriteCode_RewriteError,
+			Message: fmt.Sprintf("storage-integrity rewriter contract acknowledgement unavailable: got %s, want %s",
+				resp.GetStorageIntegrityContractVersion(), StorageIntegrityContractV1)}
+	}
+```
+
+Then apply the response-code/access policy:
 
 ```go
 	// Spec G fail-closed rule (plan D-2): a non-Success answer that involves
@@ -3414,14 +3548,16 @@ and after `resp, err := r.callWithTimeout(ctx, req)` succeeded, before the `swit
 			return RewriteResult{}, &RejectedError{Code: pb.RewriteCode_UnsupportedStatement,
 				Message: "storage-integrity table " + key + " accepts writes only through the signed statement lane"}
 		}
-	}
+}
 ```
+
+Every successful return that wraps the protobuf response must set `RewriteResult.StorageIntegrityContractVersion = resp.GetStorageIntegrityContractVersion()`. Do not synthesize v1 in the adapter: the field is evidence from the backend. A non-SI-configured factory neither requires nor invents the echo.
 
 `RewriteErrorMessage`: build `siArgs, _ := buildStorageIntegrityArgs(r.factory.options.StorageIntegrity, r.factory.options.StorageIntegrity.DefaultReadMode)` (ignore the error — reverse-mapping is best-effort; a nil block just skips SI names) and pass it to `buildDynamicArgs`.
 
 - [ ] **Step 3: Run**
 
-Run: `bazel run //:gazelle && bazel test //pkg/rewriter:rewriter_test --test_output=errors`
+Run: `bazel run //:gazelle && bazel test //pkg/rewriter:rewriter_test --test_filter='TestBuildStorageIntegrityArgs|TestSentioRewriter' --test_output=errors`
 Expected: PASS (new + existing tests).
 
 - [ ] **Step 4: Guidance bookkeeping** — do not create `pkg/rewriter/AGENTS.md`: no such tracked file exists and the user's global ignore rule excludes `AGENTS.md`. Task 21 updates the tracked root `CLAUDE.md` (and therefore its tracked `AGENTS.md -> CLAUDE.md` symlink) with the read-surface and fail-closed conventions after the entire HouseGate slice lands.
@@ -3430,7 +3566,7 @@ Expected: PASS (new + existing tests).
 
 ```bash
 git add pkg/rewriter
-git commit -m "feat(rewriter): storage-integrity read mode, promotion-state port, fail-closed RejectedError"
+git commit -m "feat(rewriter): require acknowledged storage-integrity v1 read surface"
 ```
 
 ### Task 18: `pkg/plugins/rewrite` — parse `SQL_x_read_mode`, carry it, enforce configured-SI fail-closed
@@ -3443,9 +3579,9 @@ git commit -m "feat(rewriter): storage-integrity read mode, promotion-state port
 
 **Interfaces:**
 - Consumes: `rewriter.ReadModeSettingKey`, `rewriter.ParseReadMode`, `rewriter.WithReadMode`, `*rewriter.RejectedError`.
-- Produces: `func readModeFromQuery(q *chproto.Query) (rewriter.ReadMode, bool, error)` and `Plugin.FailClosedOnError bool` (set whenever SI membership is configured, so injected/custom factories cannot bypass D-2).
+- Produces: `func readModeFromQuery(q *chproto.Query) (rewriter.ReadMode, bool, error)`, `Plugin.FailClosedOnError bool`, and `Plugin.RequiredStorageIntegrityContractVersion pb.StorageIntegrityContractVersion` (both fields are set whenever SI membership is configured, so injected/custom factories cannot bypass D-2/D-8). The plugin verifies the result echo even after a nil-error custom `Rewriter` return.
 
-- [ ] **Step 1: Failing tests** (append to `rewriter_test.go`; `fakeRewriter` gains `err error` and `lastCtx context.Context` fields returned/recorded by `Rewrite`)
+- [ ] **Step 1: Failing tests** (append to `rewriter_test.go`; `fakeRewriter` gains `err error`, `lastCtx context.Context`, and `storageIntegrityContractVersion pb.StorageIntegrityContractVersion` fields returned/recorded by `Rewrite`)
 
 ```go
 func TestOnQuery_ReadModeSettingIsCarriedInContext(t *testing.T) {
@@ -3515,12 +3651,47 @@ func TestOnQuery_OrdinaryErrorFailsClosedWhenSISurfaceIsConfigured(t *testing.T)
 		t.Fatalf("err = %v, want configured-SI fail-closed error", err)
 	}
 }
+
+func TestOnQuery_MissingContractAcknowledgementFromCustomRewriterFailsClosed(t *testing.T) {
+	rw := &fakeRewriter{out: "SELECT 1"} // nil error, zero acknowledgement
+	p := &Plugin{Factory: &fakeFactory{rw: rw},
+		RequiredStorageIntegrityContractVersion: rewriter.StorageIntegrityContractV1}
+	sess := newSessionForTest(t, 45)
+	qctx := &plugin.QueryContext{Session: sess, OriginalSQL: "SELECT 1", Query: &chproto.Query{Body: "SELECT 1"}}
+	err := p.OnQuery(context.Background(), qctx)
+	if err == nil || !strings.Contains(err.Error(), "contract acknowledgement") {
+		t.Fatalf("err = %v, want missing-ack rejection", err)
+	}
+}
+
+func TestOnQuery_WrongContractAcknowledgementFromCustomRewriterFailsClosed(t *testing.T) {
+	rw := &fakeRewriter{out: "SELECT 1", storageIntegrityContractVersion: pb.StorageIntegrityContractVersion(99)}
+	p := &Plugin{Factory: &fakeFactory{rw: rw},
+		RequiredStorageIntegrityContractVersion: rewriter.StorageIntegrityContractV1}
+	sess := newSessionForTest(t, 46)
+	qctx := &plugin.QueryContext{Session: sess, OriginalSQL: "SELECT 1", Query: &chproto.Query{Body: "SELECT 1"}}
+	err := p.OnQuery(context.Background(), qctx)
+	if err == nil || !strings.Contains(err.Error(), "contract acknowledgement") {
+		t.Fatalf("err = %v, want wrong-ack rejection", err)
+	}
+}
+
+func TestOnQuery_AcknowledgedCustomRewriterAllowsNormalQuery(t *testing.T) {
+	rw := &fakeRewriter{out: "SELECT 1", storageIntegrityContractVersion: rewriter.StorageIntegrityContractV1}
+	p := &Plugin{Factory: &fakeFactory{rw: rw},
+		RequiredStorageIntegrityContractVersion: rewriter.StorageIntegrityContractV1}
+	sess := newSessionForTest(t, 47)
+	qctx := &plugin.QueryContext{Session: sess, OriginalSQL: "SELECT 1", Query: &chproto.Query{Body: "SELECT 1"}}
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("acknowledged normal query: %v", err)
+	}
+}
 ```
 
-(imports: `errors`, `strings`, `pb "github.com/housegate/rewriter-proto/gen/pb"`.) In `fakeRewriter.Rewrite`: record `f.lastCtx = ctx`; `if f.err != nil { return rewriter.RewriteResult{}, f.err }`.
+(imports: `errors`, `strings`, `pb "github.com/housegate/rewriter-proto/gen/pb"`.) In `fakeRewriter.Rewrite`: record `f.lastCtx = ctx`; `if f.err != nil { return rewriter.RewriteResult{}, f.err }`; otherwise include `StorageIntegrityContractVersion: f.storageIntegrityContractVersion` in the returned result.
 
-Run: `go test ./pkg/plugins/rewrite -run 'TestOnQuery_ReadMode|TestOnQuery_InvalidReadMode|TestOnQuery_RejectedError|TestOnQuery_OrdinaryError' -count=1`
-Expected: FAIL (`ctx read mode = "" false`, invalid mode not rejected, RejectedError swallowed, configured-SI ordinary error swallowed).
+Run: `go test ./pkg/plugins/rewrite -run 'TestOnQuery_ReadMode|TestOnQuery_InvalidReadMode|TestOnQuery_RejectedError|TestOnQuery_OrdinaryError|TestOnQuery_MissingContract|TestOnQuery_WrongContract|TestOnQuery_AcknowledgedCustom' -count=1`
+Expected: FAIL (`ctx read mode = "" false`, invalid mode not rejected, RejectedError swallowed, configured-SI ordinary error swallowed, and missing/wrong acknowledgements are accepted).
 
 - [ ] **Step 2: Implement in `OnQuery`** — after the maintenance/platform-operator bypass and before `rw := p.rewriterFor(...)`:
 
@@ -3552,6 +3723,12 @@ and replace the error branch after `rw.Rewrite`:
 		logger.Warne(err, "rewriter: rewrite failed, forwarding original SQL")
 		return nil
 	}
+	if p.RequiredStorageIntegrityContractVersion != pb.StorageIntegrityContractVersion_STORAGE_INTEGRITY_CONTRACT_UNSPECIFIED &&
+		res.StorageIntegrityContractVersion != p.RequiredStorageIntegrityContractVersion {
+		return &rewriter.RejectedError{Code: pb.RewriteCode_RewriteError,
+			Message: fmt.Sprintf("storage-integrity rewriter contract acknowledgement unavailable: got %s, want %s",
+				res.StorageIntegrityContractVersion, p.RequiredStorageIntegrityContractVersion)}
+	}
 ```
 
 Add the helper:
@@ -3576,7 +3753,7 @@ func readModeFromQuery(q *chproto.Query) (rewriter.ReadMode, bool, error) {
 }
 ```
 
-Add `FailClosedOnError bool` to `Plugin` with the comment that it is the defense-in-depth boundary for configured SI membership, including caller-injected factories; add `fmt` alongside `errors` in the imports. Update the package comment's unconditional fail-open sentence to describe the empty-SI-only exception.
+Add `FailClosedOnError bool` and `RequiredStorageIntegrityContractVersion pb.StorageIntegrityContractVersion` to `Plugin`, with comments that they are the defense-in-depth boundaries for configured SI membership, including caller-injected factories; add `fmt` alongside `errors` in the imports. Update the package comment's unconditional fail-open sentence to describe the empty-SI-only exception.
 
 (add `"errors"` to imports.)
 
@@ -3592,7 +3769,7 @@ git add pkg/plugins/rewrite
 git commit -m "feat(rewrite): SQL_x_read_mode setting → per-query read mode; fail closed on RejectedError"
 ```
 
-### Task 19: Root `Options.StorageIntegrityReadState` + `build.go` wiring + startup guard + testenv option
+### Task 19: Root `Options.StorageIntegrityReadState` + v1-capable factory startup guard + `build.go` wiring + testenv option
 
 **Working directory:** `/Users/uranuswch/Dev/housegate/housegate`
 
@@ -3601,7 +3778,7 @@ git commit -m "feat(rewrite): SQL_x_read_mode setting → per-query read mode; f
 - Test: `build_test.go`
 
 **Interfaces:**
-- Produces: `housegate.Options.StorageIntegrityReadState rewriter.StorageIntegrityReadState`; `func buildRewriterFactory(cfg *config.Config, reg registry.Registry, si rewriter.StorageIntegrityOptions) rewriter.Factory`; `func storageIntegrityRewriterOptions(cfg *config.Config, rs rewriter.StorageIntegrityReadState) rewriter.StorageIntegrityOptions`; `rewrite.Plugin.FailClosedOnError = len(siOptions.Tables) > 0`; `testenv.WithStorageIntegrityReadState(rs rewriter.StorageIntegrityReadState) ProxyOption`.
+- Produces: `housegate.Options.StorageIntegrityReadState rewriter.StorageIntegrityReadState`; `func buildRewriterFactory(cfg *config.Config, reg registry.Registry, si rewriter.StorageIntegrityOptions) rewriter.Factory`; `func storageIntegrityRewriterOptions(cfg *config.Config, rs rewriter.StorageIntegrityReadState) rewriter.StorageIntegrityOptions`; when SI is configured, startup requires `rewriter.StorageIntegrityCapableFactory.StorageIntegrityContractVersion() == rewriter.StorageIntegrityContractV1`; plugin fields `FailClosedOnError = true` and `RequiredStorageIntegrityContractVersion = ...V1`; `testenv.WithStorageIntegrityReadState(rs rewriter.StorageIntegrityReadState) ProxyOption`.
 
 - [ ] **Step 1: Failing tests** (append to `build_test.go`)
 
@@ -3633,11 +3810,28 @@ func TestBuildServer_UnsafeLatestDefaultRequiresReadState(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "storage_integrity.read.default_mode unsafe_latest requires Options.StorageIntegrityReadState") {
 		t.Fatalf("err = %v", err)
 	}
-	bs, err := buildServer(Options{Config: cfg, NetworkState: network.NewInMemoryNetworkState(), Rewriter: stubRewriterFactory{}, StorageIntegrityReadState: &buildFakeReadState{}}, nil)
+	bs, err := buildServer(Options{Config: cfg, NetworkState: network.NewInMemoryNetworkState(), Rewriter: siCapableStubRewriterFactory{}, StorageIntegrityReadState: &buildFakeReadState{}}, nil)
 	if err != nil {
 		t.Fatalf("with a port wired: %v", err)
 	}
 	bs.teardown()
+}
+
+func TestBuildServer_ConfiguredSISurfaceRejectsUnawareInjectedFactory(t *testing.T) {
+	cfg := minimalServerCfg(t)
+	cfg.StorageIntegrity.Tables = []string{"tenant.events"}
+	_, err := buildServer(Options{Config: cfg, NetworkState: network.NewInMemoryNetworkState(), Rewriter: stubRewriterFactory{}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "storage-integrity contract v1") {
+		t.Fatalf("err = %v, want unaware injected factory rejection", err)
+	}
+}
+
+// Only tests that intentionally model a v1-aware injected factory use this.
+// Its per-query result still has to echo v1; Task 18 covers that second gate.
+type siCapableStubRewriterFactory struct{ stubRewriterFactory }
+
+func (siCapableStubRewriterFactory) StorageIntegrityContractVersion() rewriterpb.StorageIntegrityContractVersion {
+	return rewriter.StorageIntegrityContractV1
 }
 
 func TestBuildServer_ConfiguredSISurfaceRequiresAvailableRewriter(t *testing.T) {
@@ -3657,6 +3851,8 @@ type buildFakeReadState struct{}
 
 func (buildFakeReadState) PromotedUnsafeParts(string) ([]string, error) { return nil, nil }
 ```
+
+Add `rewriterpb "github.com/housegate/rewriter-proto/gen/pb"` to `build_test.go` imports (`pb` is already the arbiter-proto alias). Replace any other test that configures SI and expects startup success with `siCapableStubRewriterFactory`; keep raw `stubRewriterFactory` only where the test intentionally proves rejection.
 
 Run: `go vet . 2>&1 | grep -v "unkeyed fields" | head -5`
 Expected: `undefined: storageIntegrityRewriterOptions` / `unknown field StorageIntegrityReadState`.
@@ -3715,9 +3911,15 @@ Call `buildRewriterFactory(cfg, reg, siOptions)`. After the injected/built `rwFa
 	if len(siOptions.Tables) > 0 && rwFactory == nil {
 		return nil, fmt.Errorf("storage_integrity.tables requires an available SQL rewriter; refusing fail-open startup")
 	}
+	if len(siOptions.Tables) > 0 {
+		capable, ok := rwFactory.(rewriter.StorageIntegrityCapableFactory)
+		if !ok || capable.StorageIntegrityContractVersion() != rewriter.StorageIntegrityContractV1 {
+			return nil, fmt.Errorf("storage_integrity.tables requires a storage-integrity contract v1 capable SQL rewriter; refusing fail-open startup")
+		}
+	}
 ```
 
-This converts router-only disablement, native-library resolution failure, and factory construction failure into startup refusal whenever SI membership is configured; empty-SI deployments keep the existing warn-and-disable posture. In the `rewrite.Plugin{...}` literal set `FailClosedOnError: len(siOptions.Tables) > 0`, which preserves the same rule for caller-injected factories. `pkg/integration/testenv/proxy.go`:
+This converts router-only disablement, native-library resolution failure, factory construction failure, and old/no-op injected factories into startup refusal whenever SI membership is configured; empty-SI deployments keep the existing warn-and-disable posture. In the `rewrite.Plugin{...}` literal set both `FailClosedOnError: len(siOptions.Tables) > 0` and `RequiredStorageIntegrityContractVersion: rewriter.StorageIntegrityContractV1` when non-empty (otherwise unspecified). The per-query check remains mandatory even for a factory that advertises the marker, so a lying or buggy custom adapter cannot bypass D-8. `pkg/integration/testenv/proxy.go`:
 
 ```go
 // WithStorageIntegrityReadState wires the promotion-state port the SI read
@@ -3736,7 +3938,7 @@ Expected: PASS (testenv_test is docker-bound; if no docker socket, run `bazel bu
 
 ```bash
 git add proxy.go build.go build_test.go pkg/integration/testenv/proxy.go pkg/integration/testenv/BUILD.bazel
-git commit -m "feat: Options.StorageIntegrityReadState port + SI read-surface rewriter wiring"
+git commit -m "feat: require SI contract v1 capable rewriter wiring"
 ```
 
 ### Task 20: Docker integration test — SI reads through the native engine
@@ -3948,7 +4150,7 @@ git commit -m "test(integration): storage-integrity read surface e2e (safe / uns
 **Files:**
 - Modify: `CLAUDE.md` (§4 rewriter paragraph :119; the `pkg/plugins/` bullet listing `rewrite`; add a `storage_integrity.*` bullet under Key Modules), `README.md` (config reference: `storage_integrity.tables`, `storage_integrity.read.default_mode`, `SQL_x_read_mode`)
 
-- [ ] **Step 1: Write** — CLAUDE.md §4: after "Each call ships a single `dynamic_args` payload …" add: "When `storage_integrity.tables` is configured the same payload carries `storage_integrity` (`StorageIntegrityArgs`, rewriter-proto ≥ v0.2.0): per-logical-table `hg_safe`/`hg_unsafe` physical names (`config.StorageIntegrityPhysicalTable`), the read mode (config `storage_integrity.read.default_mode`, per query `SQL_x_read_mode`), and — in `unsafe_latest` — the promoted-not-yet-cleaned unsafe part names from `Options.StorageIntegrityReadState.PromotedUnsafeParts(tableID)` (sentio-node's `snode.Role`). Both engines turn SI reads into `(SELECT * EXCEPT (_hg_row_id) FROM hg_safe.<t> [UNION ALL … hg_unsafe.<t> WHERE _part NOT IN (…)]) AS <alias>`, `EXISTS TABLE` → safe table, `DESCRIBE` → `system.columns` SELECT, and refuse every non-INSERT SI-touching write/DDL statement (`UnsupportedStatement`) or a `_hg_row_id` reference (`RewriteError`); INSERT stays a successful ordinary physical rewrite marked `is_storage_integrity` so HouseGate can apply the signed-lane decision. HouseGate **fails closed** on any non-Success answer whose `original_accessed_tables` carry `is_storage_integrity` (`*rewriter.RejectedError` → Exception), on `unsafe_latest` without the port, on INSERT into an SI table when the ingress lane is off, and on every pre-response classification failure while SI tables are configured; legacy fail-open remains only when the SI set is empty. `SQL_x_read_mode` is read but not stripped (no `SQL_x_*` key is). Golden contract: `rewriter-go/internal/harness/testdata/storage_integrity_cases.json` (byte-identical copy in rewriter-grpc)." Under Known Rough Edges add: "SI INSERT is deliberately not rejected by the rewriter (ingress runs after rewrite and needs the classification + a resolvable physical target for sample-block negotiation) — see plan `docs/superpowers/plans/2026-08-18-storage-integrity-read-surface-rewrite.md` D-1."
+- [ ] **Step 1: Write** — CLAUDE.md §4: after "Each call ships a single `dynamic_args` payload …" add: "When `storage_integrity.tables` is configured the same payload carries `storage_integrity` (`StorageIntegrityArgs`, rewriter-proto ≥ v0.2.0): per-logical-table `hg_safe`/`hg_unsafe` physical names (`config.StorageIntegrityPhysicalTable`), the read mode (config `storage_integrity.read.default_mode`, per query `SQL_x_read_mode`), and — in `unsafe_latest` — the promoted-not-yet-cleaned unsafe part names from `Options.StorageIntegrityReadState.PromotedUnsafeParts(tableID)` (sentio-node's `snode.Role`). Both engines turn SI reads into `(SELECT * EXCEPT (_hg_row_id) FROM hg_safe.<t> [UNION ALL … hg_unsafe.<t> WHERE _part NOT IN (…)]) AS <alias>`, `EXISTS TABLE` → safe table, `DESCRIBE` → `system.columns` SELECT, and refuse every non-INSERT SI-touching write/DDL statement (`UnsupportedStatement`) or a `_hg_row_id` reference (`RewriteError`); INSERT stays a successful ordinary physical rewrite marked `is_storage_integrity` so HouseGate can apply the signed-lane decision. SI requests carry `STORAGE_INTEGRITY_CONTRACT_V1`, and both engines must echo it on every response path; HouseGate refuses startup for a non-v1-capable injected factory and rejects any result with a missing/wrong acknowledgement, including an otherwise successful old backend. HouseGate also **fails closed** on any non-Success answer whose `original_accessed_tables` carry `is_storage_integrity` (`*rewriter.RejectedError` → Exception), on `unsafe_latest` without the port, on INSERT into an SI table when the ingress lane is off, and on every pre-response classification failure while SI tables are configured; legacy fail-open remains only when the SI set is empty. `SQL_x_read_mode` is read but not stripped (no `SQL_x_*` key is). Golden contract: `rewriter-go/internal/harness/testdata/storage_integrity_cases.json` (byte-identical copy in rewriter-grpc)." Under Known Rough Edges add: "SI INSERT is deliberately not rejected by the rewriter (ingress runs after rewrite and needs the classification + a resolvable physical target for sample-block negotiation) — see plan `docs/superpowers/plans/2026-08-18-storage-integrity-read-surface-rewrite.md` D-1."
 
 - [ ] **Step 2: Full ladder** — `go build ./... && go vet ./... 2>&1 | grep -v "unkeyed fields"; bazel build //... && bazel test //...` → all PASS; then push and open the PR:
 
@@ -4328,7 +4530,7 @@ git push -u origin feat/storage-integrity-read-surface
 
 **2. Placeholder scan** — no TBD/TODO. Version tags that do not exist yet are stated with the rule that produces them (`v0.2.0` proto, `v0.7.0` rewriter-go, `v0.1.3` arbiter-core) plus the "use the printed tag" instruction; the housegate commit hash sentio-node pins is written as `<housegate-commit-or-tag-from-Task-21>` because it is produced by Task 21's merge. `$FFI` / `$RB` / `$WD` are shell variables defined in the same task/part.
 
-**3. Type consistency** — checked: `nameresolve.LookupStorageIntegrity(db, table, args) (*pb.StorageIntegrityArgs_Table, string, bool)` used identically in Tasks 4/6/7/8; `engine.ActionSubquery` + `TableDecision.Subquery` (Task 5) consumed by Task 6's `storageIntegrityDecision`; `splitPhysicalName` defined in Task 6 and used by Tasks 7/8; `rewriter.StorageIntegrityReadState.PromotedUnsafeParts(tableID string) ([]string, error)` (Task 17) == `(*snode.Role).PromotedUnsafeParts` (Task 22) == the fakes in Tasks 17/19/20; `buildDynamicArgs(..., si *pb.StorageIntegrityArgs)` (Task 17) matches both call sites; `buildStorageIntegrityRuntimeConsumer(runtimeCfg, tables []string, opts)` (Task 16) matches `build.go` and `build_test.go`; `config.StorageIntegrityPhysicalTable` / `SplitStorageIntegrityTableID` (Task 16) used in Task 19; the SI reject message string is identical in Go (`nameresolve.StorageIntegrityWriteRejectMessage`), C++ (`storageIntegrityWriteRejectMessage`), housegate (`sentio.go` insert-lane reject) and the golden JSON.
+**3. Type consistency** — checked: `nameresolve.LookupStorageIntegrity(db, table, args) (*pb.StorageIntegrityArgs_Table, string, bool)` used identically in Tasks 4/6/7/8; `engine.ActionSubquery` + `TableDecision.Subquery` (Task 5) consumed by Task 6's `storageIntegrityDecision`; `splitPhysicalName` defined in Task 6 and used by Tasks 7/8; proto `StorageIntegrityContractVersion` flows request args → both engine response fields → rewriter-go and HouseGate `RewriteResult` → plugin exact-match check, while `StorageIntegrityCapableFactory` gates injected factories at startup (Tasks 1/3/4/10/11/17/18/19); `rewriter.StorageIntegrityReadState.PromotedUnsafeParts(tableID string) ([]string, error)` (Task 17) == `(*snode.Role).PromotedUnsafeParts` (Task 22) == the fakes in Tasks 17/19/20; `buildDynamicArgs(..., si *pb.StorageIntegrityArgs)` (Task 17) matches both call sites; `buildStorageIntegrityRuntimeConsumer(runtimeCfg, tables []string, opts)` (Task 16) matches `build.go` and `build_test.go`; `config.StorageIntegrityPhysicalTable` / `SplitStorageIntegrityTableID` (Task 16) used in Task 19; the SI reject message string is identical in Go (`nameresolve.StorageIntegrityWriteRejectMessage`), C++ (`storageIntegrityWriteRejectMessage`), housegate (`sentio.go` insert-lane reject) and the golden JSON.
 
 **Fixes applied inline during review:** Task 20 originally contained a log-only "column probe"; it is removed below (the `_hg_row_id` rejection and the DESCRIBE column list are the assertions).
 
@@ -4340,7 +4542,7 @@ git push -u origin feat/storage-integrity-read-surface
 | §3 D2 part-name exclusion list from SNode journal; nil port ⇒ refuse | 17 (`buildStorageIntegrityArgs`, `RejectedError`), 19, 22 (journal + port), 23 (wiring) |
 | §3 D3 projection subquery hides `_hg_row_id`; explicit reference ⇒ `RewriteError` | 5 (`ActionSubquery`, `ReferencesIdentifier`), 6, 11 |
 | §3 D4 explicit membership `storage_integrity.tables[]` (renamed) | 16, 23 (cross-check) |
-| §4 proto `StorageIntegrityArgs` (=12) + `AccessedTable.is_storage_integrity` (=6) | 1; bumps 2, 10, 15 |
+| §4 proto `StorageIntegrityArgs` (=12) + request contract (=4) + response acknowledgement (=16) + `AccessedTable.is_storage_integrity` (=6) | 1; engine proof 3/4/10/11; HouseGate enforcement 15/17/18/19 |
 | §4.1 SELECT family SAFE / UNSAFE_LATEST (+ empty list omits WHERE), SI wins over `database_map`, reserved reject, `is_storage_integrity` on accessed | 4, 5, 6 (Go); 11 (C++); goldens 3/10 |
 | §4.2 EXISTS → safe table; SHOW TABLES unchanged | 7, 12; golden `si_exists_table_safe`, `si_show_tables_unchanged` |
 | §4.3 DESCRIBE metadata SELECT; SHOW CREATE unsupported (E D6 prerequisite handled per D-7) | 1 (enum), 8, 13; 7/12 (SHOW CREATE) |
