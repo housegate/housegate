@@ -275,7 +275,7 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 	case res.Lifecycle == sicore.LifecycleCleaned:
 		// Exact cleanup is definitive even when the following terminal-journal
 		// save failed. Cancel a reserved, committed, or already-visible identity.
-		i.cancelTrackedReservation(rec.StatementID, trackedReservation)
+		i.cancelCleanedReservation(rec.StatementID, trackedReservation)
 	case attemptReservation != nil && (errors.Is(err, sicore.ErrBackpressure) || !res.SourceWriteMayExist()):
 		// SNode hard pressure and every definite pre-prepare failure occur before a
 		// source write. Only an actually attempted/known prepare stays charged.
@@ -340,6 +340,13 @@ func (i *StorageIntegrityIngress) cancelAttemptReservation(statementID string, r
 func (i *StorageIntegrityIngress) cancelTrackedReservation(statementID string, reservation sicore.PartsReservation) {
 	if reservation != nil {
 		reservation.Release()
+	}
+	i.deletePressureReservation(statementID)
+}
+
+func (i *StorageIntegrityIngress) cancelCleanedReservation(statementID string, reservation sicore.PartsReservation) {
+	if reservation != nil {
+		reservation.ReleaseCleaned()
 	}
 	i.deletePressureReservation(statementID)
 }

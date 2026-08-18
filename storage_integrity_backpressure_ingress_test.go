@@ -24,6 +24,7 @@ type fakePartsPressure struct {
 	invalidated int
 	committed   int
 	released    int
+	cleaned     int
 }
 
 func (f *fakePartsPressure) Reserve(_ context.Context, table string, partitionIDs []string) (sicore.PartsReservation, error) {
@@ -64,6 +65,14 @@ func (r *fakePartsReservation) Commit() {
 }
 
 func (r *fakePartsReservation) Release() {
+	r.release(false)
+}
+
+func (r *fakePartsReservation) ReleaseCleaned() {
+	r.release(true)
+}
+
+func (r *fakePartsReservation) release(cleaned bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.state == "released" || r.state == "finalized" {
@@ -71,6 +80,9 @@ func (r *fakePartsReservation) Release() {
 	}
 	r.pressure.mu.Lock()
 	r.pressure.released++
+	if cleaned {
+		r.pressure.cleaned++
+	}
 	r.pressure.mu.Unlock()
 	r.state = "released"
 }
@@ -381,8 +393,8 @@ func TestIngress_TerminalCleanupInvalidatesPressure(t *testing.T) {
 	if err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), bpAdmission()); err == nil || !strings.Contains(err.Error(), string(sicore.LifecycleCleaned)) {
 		t.Fatalf("terminal cleanup admission = %v, want Cleaned non-ACK2", err)
 	}
-	if pressure.invalidated != 1 || pressure.committed != 0 || pressure.released != 1 {
-		t.Fatalf("cleanup invalidate/commit/release = %d/%d/%d want 1/0/1", pressure.invalidated, pressure.committed, pressure.released)
+	if pressure.invalidated != 1 || pressure.committed != 0 || pressure.released != 1 || pressure.cleaned != 1 {
+		t.Fatalf("cleanup invalidate/commit/release/exact = %d/%d/%d/%d want 1/0/1/1", pressure.invalidated, pressure.committed, pressure.released, pressure.cleaned)
 	}
 }
 

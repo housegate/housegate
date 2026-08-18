@@ -492,6 +492,171 @@ func TestPartsPressureGuard_FinalizedCohortCapacityCannotBeReused(t *testing.T) 
 	second.Release()
 }
 
+func TestPartsPressureGuard_CleanupReplacementAtSameCountDoesNotLeaveDebt(t *testing.T) {
+	guard, conn := pressureFixture(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 1})
+	guard.cfg.SoftPartsPerPartition = 3
+	first, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("first Reserve: %v", err)
+	}
+	first.Commit()
+
+	// The first candidate is visible at soft-1 when the second statement takes
+	// its baseline, then exact cleanup removes it while the second is queued.
+	conn.setRows(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 2})
+	second, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("second Reserve: %v", err)
+	}
+	releaseAfterExactCleanup(t, first)
+
+	// The second write restores the same count (N -> N-1 -> N). A stable N
+	// snapshot is sufficient; requiring N+1 would leave a permanent phantom debt.
+	second.Commit()
+	if _, err := guard.Refresh(context.Background()); err != nil {
+		t.Fatalf("same-count Refresh: %v", err)
+	}
+	key := PartsKey{Database: "hg_unsafe", Table: "db__t", Partition: "p_a"}
+	if got := guard.committed[key]; got != 0 {
+		t.Fatalf("committed capacity after cleanup/replacement = %d, want 0", got)
+	}
+	if replacement, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"}); err != nil {
+		t.Fatalf("stable soft-1 replacement must leave one slot: %v", err)
+	} else {
+		replacement.Release()
+	}
+}
+
+func TestPartsPressureGuard_InFlightCleanupRebasesQueuedReplacement(t *testing.T) {
+	guard, conn := pressureFixture(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 1})
+	guard.cfg.SoftPartsPerPartition = 5
+	first, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("first Reserve: %v", err)
+	}
+
+	// In production the next statement reserves before it waits on the source
+	// frontier. The first part can therefore be visible while its ingress call
+	// still owns an uncommitted reservation.
+	conn.setRows(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 2})
+	second, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("second Reserve: %v", err)
+	}
+	releaseAfterExactCleanup(t, first)
+	second.Commit()
+	if _, err := guard.Refresh(context.Background()); err != nil {
+		t.Fatalf("replacement Refresh: %v", err)
+	}
+	key := PartsKey{Database: "hg_unsafe", Table: "db__t", Partition: "p_a"}
+	if got := guard.committed[key]; got != 0 {
+		t.Fatalf("in-flight cleanup/replacement debt = %d, want 0", got)
+	}
+}
+
+func TestPartsPressureGuard_CleanupReplacementRequiresPostCleanupSnapshot(t *testing.T) {
+	guard, conn := pressureFixture(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 1})
+	guard.cfg.SoftPartsPerPartition = 4
+	first, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("first Reserve: %v", err)
+	}
+	first.Commit()
+
+	// The second reservation's baseline includes the first part. Exact cleanup
+	// rebases that dependency, but the cached count=2 snapshot predates cleanup
+	// and therefore cannot prove that the second part is visible.
+	conn.setRows(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 2})
+	second, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("second Reserve: %v", err)
+	}
+	releaseAfterExactCleanup(t, first)
+	conn.setRows(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 1})
+	second.Commit()
+
+	key := PartsKey{Database: "hg_unsafe", Table: "db__t", Partition: "p_a"}
+	if got := guard.committed[key]; got != 1 {
+		t.Fatalf("pre-cleanup snapshot cleared replacement debt: committed = %d, want 1", got)
+	}
+
+	// Only a successful refresh after cleanup that observes the replacement may
+	// absorb the reservation.
+	conn.setRows(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 2})
+	if _, err := guard.Refresh(context.Background()); err != nil {
+		t.Fatalf("post-cleanup Refresh: %v", err)
+	}
+	if got := guard.committed[key]; got != 0 {
+		t.Fatalf("post-cleanup visible replacement debt = %d, want 0", got)
+	}
+}
+
+func TestPartsPressureGuard_CleanupRebasesFinalizedReplacementUntilVisible(t *testing.T) {
+	guard, conn := pressureFixture(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 1})
+	guard.cfg.SoftPartsPerPartition = 5
+	first, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("first Reserve: %v", err)
+	}
+	first.Commit()
+	conn.setRows(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 2})
+	second, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("second Reserve: %v", err)
+	}
+	second.Commit()
+	second.Finalize()
+	releaseAfterExactCleanup(t, first)
+
+	key := PartsKey{Database: "hg_unsafe", Table: "db__t", Partition: "p_a"}
+	if got := guard.committed[key]; got != 1 {
+		t.Fatalf("finalized replacement used stale snapshot: committed = %d, want 1", got)
+	}
+	if _, err := guard.Refresh(context.Background()); err != nil {
+		t.Fatalf("replacement Refresh: %v", err)
+	}
+	if got := guard.committed[key]; got != 0 {
+		t.Fatalf("visible finalized replacement debt = %d, want 0", got)
+	}
+	if got := len(guard.liveReservations); got != 0 {
+		t.Fatalf("finalized visible reservation handles = %d, want 0", got)
+	}
+}
+
+func TestPartsPressureGuard_NoWriteReleaseDoesNotRebaseDescendant(t *testing.T) {
+	guard, conn := pressureFixture(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 1})
+	guard.cfg.SoftPartsPerPartition = 5
+	first, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("first Reserve: %v", err)
+	}
+	first.Commit()
+
+	// The count growth may be unrelated to the first statement. A no-write proof
+	// cancels its slot but must not attribute that ambiguous growth to its ID or
+	// lower a descendant's baseline; only exact part cleanup has that meaning.
+	conn.setRows(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 2})
+	second, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("second Reserve: %v", err)
+	}
+	first.Release()
+	second.Commit()
+	if _, err := guard.Refresh(context.Background()); err != nil {
+		t.Fatalf("stable Refresh: %v", err)
+	}
+	key := PartsKey{Database: "hg_unsafe", Table: "db__t", Partition: "p_a"}
+	if got := guard.committed[key]; got != 1 {
+		t.Fatalf("no-write release rebased descendant: committed = %d, want 1", got)
+	}
+	second.Release()
+}
+
+func releaseAfterExactCleanup(t *testing.T, reservation PartsReservation) {
+	t.Helper()
+	reservation.ReleaseCleaned()
+}
+
 func TestPartsPressureGuard_ReserveIsAllOrNothing(t *testing.T) {
 	guard, _ := pressureFixture(
 		fakePartsRow{"hg_unsafe", "db__t", "a", "p", 2},

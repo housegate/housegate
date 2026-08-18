@@ -137,9 +137,10 @@ func TestStorageIntegrityBackpressureMetricsRegisteredOnce(t *testing.T) {
 
 type noopPartsReservation struct{}
 
-func (noopPartsReservation) Commit()   {}
-func (noopPartsReservation) Release()  {}
-func (noopPartsReservation) Finalize() {}
+func (noopPartsReservation) Commit()         {}
+func (noopPartsReservation) Release()        {}
+func (noopPartsReservation) ReleaseCleaned() {}
+func (noopPartsReservation) Finalize()       {}
 
 type blockingPressureLifecycle struct {
 	refreshes   atomic.Int64
