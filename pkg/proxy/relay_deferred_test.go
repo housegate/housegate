@@ -139,6 +139,50 @@ type blockingSuccessDeferredInsertHooks struct {
 	releaseSuccess chan struct{}
 }
 
+type blockingDeferredTerminalObserver struct {
+	armed   atomic.Bool
+	once    sync.Once
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (o *blockingDeferredTerminalObserver) ClientPacket(string) {}
+func (o *blockingDeferredTerminalObserver) ServerPacket(string) {
+	if !o.armed.Load() {
+		return
+	}
+	o.once.Do(func() {
+		close(o.entered)
+		<-o.release
+	})
+}
+func (o *blockingDeferredTerminalObserver) BytesTransferred(string, float64) {}
+func (o *blockingDeferredTerminalObserver) StreamingDataBlock(string)        {}
+
+func TestDeferredInputGate_LifecycleOwnershipIsExclusive(t *testing.T) {
+	upstream := newDeferredInputGate(&plugin.QueryContext{})
+	if !upstream.claimUpstreamLifecycle() {
+		t.Fatal("upstream terminal did not claim an unowned lifecycle")
+	}
+	if upstream.claimWriterLifecycle() {
+		t.Fatal("client abort displaced upstream terminal ownership")
+	}
+	if !upstream.claimUpstreamLifecycle() {
+		t.Fatal("upstream terminal did not retain its own lifecycle claim")
+	}
+
+	client := newDeferredInputGate(&plugin.QueryContext{})
+	if !client.claimWriterLifecycle() {
+		t.Fatal("client abort did not claim an unowned lifecycle")
+	}
+	if client.claimUpstreamLifecycle() {
+		t.Fatal("upstream terminal displaced client abort ownership")
+	}
+	if !client.claimWriterLifecycle() {
+		t.Fatal("client abort did not retain its own lifecycle claim")
+	}
+}
+
 func (h *blockingSuccessDeferredInsertHooks) OnQuerySuccess(ctx context.Context, sess chsession.Session, queryID string) {
 	h.deferredInsertHooks.OnQuerySuccess(ctx, sess, queryID)
 	close(h.successEntered)
@@ -1437,6 +1481,177 @@ func TestRelay_DeferredInsert_EOSOwnsLifecycleBeforeSuccessHooks(t *testing.T) {
 	}
 	if successes, lifecycle := hooks.terminalCounts(); successes != 1 || !slices.Equal(lifecycle, []string{"success", "complete"}) {
 		t.Fatalf("successes/lifecycle = %d/%v, want 1/[success complete]", successes, lifecycle)
+	}
+}
+
+func TestRelay_DeferredInsert_EOSOwnsLifecycleAtDecodeBeforeObserver(t *testing.T) {
+	hooks := &deferredInsertHooks{inputDone: make(chan struct{}, 1)}
+	h := newDeferredHarness(t, hooks)
+	observer := &blockingDeferredTerminalObserver{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	h.relay.obs = observer
+	nonEmpty := encodeNonEmptyClientDataPacket(t, deferredTestRev)
+	sample := encodeServerSampleDataPacket(t, deferredTestRev)
+	empty := encodeEmptyClientData(t)
+	upDone := make(chan error, 1)
+
+	go func() {
+		codec := chproto.NewCodec(h.upstreamProxy, chproto.DirFromClient)
+		codec.SetRevision(deferredTestRev)
+		codec.SetCompression(proto.CompressionDisabled)
+		if _, err := codec.ReadPacket(uint64(chproto.ClientQueryCode)); err != nil {
+			upDone <- err
+			return
+		}
+		if _, err := codec.ReadPacket(); err != nil { // marker
+			upDone <- err
+			return
+		}
+		if _, err := h.upstreamProxy.Write(sample); err != nil {
+			upDone <- err
+			return
+		}
+		if _, err := codec.ReadPacket(); err != nil { // payload
+			upDone <- err
+			return
+		}
+		if _, err := codec.ReadPacket(); err != nil { // terminator
+			upDone <- err
+			return
+		}
+		select {
+		case <-hooks.inputDone:
+		case <-time.After(time.Second):
+			upDone <- errors.New("relay did not publish terminator completion")
+			return
+		}
+		observer.armed.Store(true)
+		_, err := h.upstreamProxy.Write([]byte{byte(chproto.ServerEndOfStreamCode)})
+		upDone <- err
+	}()
+
+	writeAllConn(t, h.clientProxy, encodeInsertQuery(t, "qid", "INSERT INTO t FORMAT Native"))
+	readExact(t, h.clientProxy, len(sample))
+	writeAllConn(t, h.clientProxy, empty)
+	writeAllConn(t, h.clientProxy, nonEmpty)
+	writeAllConn(t, h.clientProxy, empty)
+	select {
+	case <-observer.entered:
+	case <-time.After(time.Second):
+		t.Fatal("upstream EOS did not reach the post-decode observer")
+	}
+	gate := h.relay.currentDeferredInput()
+	if gate == nil {
+		t.Fatal("deferred input gate missing after EOS decode")
+	}
+	if gate.claimWriterLifecycle() {
+		t.Fatal("client abort displaced EOS ownership after decode")
+	}
+	_ = h.clientProxy.Close()
+	close(observer.release)
+
+	for i := 0; i < 2; i++ {
+		select {
+		case <-h.loopErr:
+		case <-time.After(time.Second):
+			t.Fatal("terminal-vs-abort ownership left relay goroutines parked")
+		}
+	}
+	if err := <-upDone; err != nil {
+		t.Fatalf("upstream EOS write: %v", err)
+	}
+	if successes, lifecycle := hooks.terminalCounts(); successes != 1 || !slices.Equal(lifecycle, []string{"success", "complete"}) {
+		t.Fatalf("successes/lifecycle = %d/%v, want 1/[success complete]", successes, lifecycle)
+	}
+}
+
+func TestRelay_DeferredInsert_ClientAbortOwnsBeforeTerminalDecode(t *testing.T) {
+	hooks := &deferredInsertHooks{inputDone: make(chan struct{}, 1)}
+	h := newDeferredHarness(t, hooks)
+	nonEmpty := encodeNonEmptyClientDataPacket(t, deferredTestRev)
+	sample := encodeServerSampleDataPacket(t, deferredTestRev)
+	empty := encodeEmptyClientData(t)
+	ready := make(chan struct{})
+	attemptEOS := make(chan struct{})
+	upDone := make(chan error, 1)
+
+	go func() {
+		codec := chproto.NewCodec(h.upstreamProxy, chproto.DirFromClient)
+		codec.SetRevision(deferredTestRev)
+		codec.SetCompression(proto.CompressionDisabled)
+		if _, err := codec.ReadPacket(uint64(chproto.ClientQueryCode)); err != nil {
+			upDone <- err
+			return
+		}
+		if _, err := codec.ReadPacket(); err != nil { // marker
+			upDone <- err
+			return
+		}
+		if _, err := h.upstreamProxy.Write(sample); err != nil {
+			upDone <- err
+			return
+		}
+		if _, err := codec.ReadPacket(); err != nil { // payload
+			upDone <- err
+			return
+		}
+		if _, err := codec.ReadPacket(); err != nil { // terminator
+			upDone <- err
+			return
+		}
+		select {
+		case <-hooks.inputDone:
+		case <-time.After(time.Second):
+			upDone <- errors.New("relay did not publish terminator completion")
+			return
+		}
+		close(ready)
+		<-attemptEOS
+		_, err := h.upstreamProxy.Write([]byte{byte(chproto.ServerEndOfStreamCode)})
+		upDone <- err
+	}()
+
+	writeAllConn(t, h.clientProxy, encodeInsertQuery(t, "qid", "INSERT INTO t FORMAT Native"))
+	readExact(t, h.clientProxy, len(sample))
+	writeAllConn(t, h.clientProxy, empty)
+	writeAllConn(t, h.clientProxy, nonEmpty)
+	writeAllConn(t, h.clientProxy, empty)
+	select {
+	case <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("upstream did not reach the pre-terminal barrier")
+	}
+	gate := h.relay.currentDeferredInput()
+	if gate == nil {
+		t.Fatal("deferred input gate missing before client abort")
+	}
+	writeAllConn(t, h.clientProxy, []byte{byte(chproto.ClientCancelCode)})
+	select {
+	case <-gate.delivered:
+	case <-time.After(time.Second):
+		t.Fatal("client abort did not settle before terminal decode")
+	}
+	close(attemptEOS)
+	if err := <-upDone; err == nil {
+		t.Fatal("upstream terminal unexpectedly crossed the abort-closed connection")
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case <-h.loopErr:
+		case <-time.After(time.Second):
+			t.Fatal("pre-decode client ownership left relay goroutines parked")
+		}
+	}
+	_ = h.clientProxy.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	var terminal [1]byte
+	if _, err := h.clientProxy.Read(terminal[:]); err == nil {
+		t.Fatalf("terminal was forwarded after client abort as packet %d", terminal[0])
+	}
+	_ = h.clientProxy.SetReadDeadline(time.Time{})
+	if successes, lifecycle := hooks.terminalCounts(); successes != 0 || !slices.Equal(lifecycle, []string{"abort", "complete"}) {
+		t.Fatalf("successes/lifecycle = %d/%v, want 0/[abort complete]", successes, lifecycle)
 	}
 }
 

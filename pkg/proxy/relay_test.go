@@ -331,6 +331,9 @@ func TestRelay_UpstreamException_FiresOnException(t *testing.T) {
 
 	hooks := &exceptionRecordingHooks{}
 	r := &Relay{sess: sess, hooks: hooks, obs: nil}
+	if !r.beginActiveQuery("qid-exception") {
+		t.Fatal("beginActiveQuery unexpectedly reported an active query")
+	}
 
 	// Encode an Exception packet on the upstream side.
 	go func() {

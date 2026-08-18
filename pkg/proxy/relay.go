@@ -121,23 +121,30 @@ type clientPacketResult struct {
 // delivered keeps runDeferredInsert alive until upstreamToClient has exposed
 // or rejected the terminal and completed the query lifecycle.
 type deferredInputGate struct {
-	done          chan struct{}
-	terminal      chan struct{}
-	exposed       chan struct{}
-	exposureDone  chan struct{}
-	delivered     chan struct{}
-	qctx          *plugin.QueryContext
-	marker        atomic.Bool
-	terminator    atomic.Bool
-	terminalClaim atomic.Bool
-	doneOnce      sync.Once
-	terminalOnce  sync.Once
-	exposedOnce   sync.Once
-	exposureOnce  sync.Once
-	deliveredOnce sync.Once
-	abortOnce     sync.Once
-	completeOnce  sync.Once
+	done           chan struct{}
+	terminal       chan struct{}
+	exposed        chan struct{}
+	exposureDone   chan struct{}
+	delivered      chan struct{}
+	qctx           *plugin.QueryContext
+	marker         atomic.Bool
+	terminator     atomic.Bool
+	lifecycleOwner atomic.Uint32
+	terminalClaim  atomic.Bool
+	doneOnce       sync.Once
+	terminalOnce   sync.Once
+	exposedOnce    sync.Once
+	exposureOnce   sync.Once
+	deliveredOnce  sync.Once
+	abortOnce      sync.Once
+	completeOnce   sync.Once
 }
+
+const (
+	deferredLifecycleUnclaimed uint32 = iota
+	deferredLifecycleUpstream
+	deferredLifecycleWriter
+)
 
 func newDeferredInputGate(qctx *plugin.QueryContext) *deferredInputGate {
 	return &deferredInputGate{
@@ -150,9 +157,17 @@ func newDeferredInputGate(qctx *plugin.QueryContext) *deferredInputGate {
 	}
 }
 
-func (g *deferredInputGate) finishWriter()  { g.doneOnce.Do(func() { close(g.done) }) }
-func (g *deferredInputGate) stopWriter()    { g.terminalOnce.Do(func() { close(g.terminal) }) }
-func (g *deferredInputGate) claimTerminal() { g.terminalClaim.Store(true) }
+func (g *deferredInputGate) finishWriter() { g.doneOnce.Do(func() { close(g.done) }) }
+func (g *deferredInputGate) stopWriter()   { g.terminalOnce.Do(func() { close(g.terminal) }) }
+func (g *deferredInputGate) claimUpstreamLifecycle() bool {
+	return g.lifecycleOwner.CompareAndSwap(deferredLifecycleUnclaimed, deferredLifecycleUpstream) ||
+		g.lifecycleOwner.Load() == deferredLifecycleUpstream
+}
+func (g *deferredInputGate) claimWriterLifecycle() bool {
+	return g.lifecycleOwner.CompareAndSwap(deferredLifecycleUnclaimed, deferredLifecycleWriter) ||
+		g.lifecycleOwner.Load() == deferredLifecycleWriter
+}
+func (g *deferredInputGate) publishUpstreamTerminal() { g.terminalClaim.Store(true) }
 func (g *deferredInputGate) finishTerminalExposure(ok bool) {
 	if ok {
 		g.exposedOnce.Do(func() { close(g.exposed) })
@@ -191,7 +206,9 @@ func (g *deferredInputGate) terminalExposed() bool {
 	}
 }
 
-func (g *deferredInputGate) terminalClaimed() bool { return g.terminalClaim.Load() }
+func (g *deferredInputGate) terminalClaimed() bool {
+	return g.terminalClaim.Load()
+}
 
 func (r *Relay) armDeferredSample(queryID string) <-chan deferredSampleResult {
 	r.deferredMu.Lock()
@@ -286,6 +303,13 @@ func (r *Relay) currentDeferredInput() *deferredInputGate {
 
 func (r *Relay) unblockDeferredInputOnServerExit(ctx context.Context) {
 	if g := r.currentDeferredInput(); g != nil {
+		if !g.claimUpstreamLifecycle() {
+			// The writer already settled abort+complete. It deliberately kept the
+			// gate as an ownership tombstone until this reader exited.
+			<-g.done
+			r.clearDeferredInput(g)
+			return
+		}
 		g.stopWriter()
 		closeCodec(r.sess.Upstream())
 		g.abort(ctx, r.hooks)
@@ -1302,20 +1326,37 @@ func (r *Relay) runDeferredInsert(ctx context.Context, qctx *plugin.QueryContext
 	inputGate := r.armDeferredInput(qctx)
 	defer r.finishDeferredInput(inputGate)
 	gate := r.armDeferredSample(q.ID)
-	forwardFail := func(stage string, err error) error {
+	abortFromWriter := func(stage string, cause error) error {
 		r.disarmDeferredSample()
+		if !inputGate.claimWriterLifecycle() {
+			// The upstream reader won the single lifecycle owner CAS. Close the
+			// downstream so a pending terminal write cannot block, release writer
+			// ownership, and wait for that owner to settle exactly once.
+			closeCodec(client)
+			r.finishDeferredInput(inputGate)
+			select {
+			case <-inputGate.delivered:
+				return fmt.Errorf("deferred INSERT %q %s after upstream lifecycle ownership: %w", q.ID, stage, cause)
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
 		inputGate.stopWriter()
 		closeCodec(up)
 		inputGate.abort(ctx, r.hooks)
 		r.finishDeferredInput(inputGate)
+		r.sess.State().ClearActiveRewrite()
 		r.takeActiveQuery()
 		inputGate.complete(ctx, r.hooks, r.sess)
+		// Retain the writer-owned tombstone until the upstream reader exits so
+		// an already-decoded packet cannot be mistaken for a fresh lifecycle.
 		inputGate.markDelivered()
-		r.clearDeferredInput(inputGate)
-		return fmt.Errorf("deferred INSERT %q %s to %s: %w", q.ID, stage, upstreamAddr(up), err)
+		return fmt.Errorf("deferred INSERT %q %s: %w", q.ID, stage, cause)
+	}
+	forwardFail := func(stage string, err error) error {
+		return abortFromWriter(fmt.Sprintf("%s to %s", stage, upstreamAddr(up)), err)
 	}
 	abortAfterTerminal := func(stage string) error {
-		inputGate.abort(ctx, r.hooks)
 		r.finishDeferredInput(inputGate)
 		select {
 		case <-inputGate.delivered:
@@ -1325,16 +1366,7 @@ func (r *Relay) runDeferredInsert(ctx context.Context, qctx *plugin.QueryContext
 		}
 	}
 	abortFromClient := func(cause error) error {
-		r.disarmDeferredSample()
-		inputGate.stopWriter()
-		closeCodec(up)
-		inputGate.abort(ctx, r.hooks)
-		r.finishDeferredInput(inputGate)
-		r.sess.State().ClearActiveRewrite()
-		r.takeActiveQuery()
-		inputGate.complete(ctx, r.hooks, r.sess)
-		r.deliverDeferredInput(inputGate)
-		return fmt.Errorf("deferred INSERT %q client terminated while awaiting upstream: %w", q.ID, cause)
+		return abortFromWriter("client terminated while awaiting upstream", cause)
 	}
 	// Raw buffered Data uses the client's original framing regardless of any
 	// QueryPlugin mutation, exactly like the ordinary relay path.
@@ -1359,11 +1391,7 @@ func (r *Relay) runDeferredInsert(ctx context.Context, qctx *plugin.QueryContext
 		case sampleResult = <-gate:
 			goto sampleSettled
 		case <-ctx.Done():
-			r.disarmDeferredSample()
-			inputGate.stopWriter()
-			closeCodec(up)
-			inputGate.abort(ctx, r.hooks)
-			return ctx.Err()
+			return abortFromClient(ctx.Err())
 		default:
 		}
 
@@ -1395,7 +1423,6 @@ func (r *Relay) runDeferredInsert(ctx context.Context, qctx *plugin.QueryContext
 
 sampleSettled:
 	if sampleResult.err != nil {
-		inputGate.abort(ctx, r.hooks)
 		r.finishDeferredInput(inputGate)
 		select {
 		case <-inputGate.delivered:
@@ -1409,7 +1436,6 @@ sampleSettled:
 		// terminal hooks (takeActiveQuery + OnQueryComplete); only the
 		// plugin-side buffer state is left to drop.
 		logger.Debugw("deferred INSERT rejected by upstream at sample step", "query_id", q.ID, "code", sampleResult.exception.Code, "message", sampleResult.exception.Message)
-		inputGate.abort(ctx, r.hooks)
 		r.finishDeferredInput(inputGate)
 		select {
 		case <-inputGate.delivered:
@@ -1500,10 +1526,7 @@ sampleSettled:
 			}
 			return nil
 		case <-ctx.Done():
-			inputGate.stopWriter()
-			closeCodec(up)
-			inputGate.abort(ctx, r.hooks)
-			return ctx.Err()
+			return abortFromClient(ctx.Err())
 		default:
 		}
 
@@ -1759,6 +1782,9 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 				continue
 			}
 			if g := r.currentDeferredInput(); g != nil {
+				if !g.claimUpstreamLifecycle() {
+					return fmt.Errorf("upstream read failed after deferred writer owned lifecycle: %w", err)
+				}
 				// Wake a writer that is still negotiating the sample before
 				// waiting for it. Fatal ordering is always abort -> writer stopped
 				// -> one complete; never complete -> abort.
@@ -1785,6 +1811,25 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 			return fmt.Errorf("upstream read packet: %w", err)
 		}
 
+		// The packet decode boundary is the lifecycle arbitration boundary. Once
+		// EOS/Exception has been identified, claim upstream ownership before any
+		// logging, metrics observer, hook, or writer wait can block. Conversely,
+		// a writer abort that won before decode makes this terminal a loser that
+		// must never be forwarded or treated as reusable success.
+		waitingDeferredSample := r.deferredSampleArmed()
+		inputGateAtPacket := r.currentDeferredInput()
+		deferredTerminatorAtDecode := inputGateAtPacket != nil && inputGateAtPacket.terminatorWritten()
+		isEndOfStream := pkt.Type == uint64(chproto.ServerEndOfStreamCode)
+		isException := pkt.Type == uint64(chproto.ServerExceptionCode)
+		if inputGateAtPacket != nil && (isEndOfStream || isException) {
+			if !inputGateAtPacket.claimUpstreamLifecycle() {
+				return fmt.Errorf("deferred writer owned lifecycle before upstream %s decode", serverPacketName(pkt.Type))
+			}
+			if isException || isEndOfStream && !waitingDeferredSample && deferredTerminatorAtDecode {
+				inputGateAtPacket.publishUpstreamTerminal()
+			}
+		}
+
 		packetName := serverPacketName(pkt.Type)
 		_, logger := log.FromContext(ctx)
 		logger.Debugw("upstream packet relayed to client",
@@ -1796,8 +1841,6 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 			r.obs.ServerPacket(packetName)
 		}
 
-		waitingDeferredSample := r.deferredSampleArmed()
-		inputGateAtPacket := r.currentDeferredInput()
 		if waitingDeferredSample {
 			switch pkt.Type {
 			case uint64(chproto.ServerDataCode):
@@ -1838,12 +1881,9 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 			}
 		}
 
-		isEndOfStream := pkt.Type == uint64(chproto.ServerEndOfStreamCode)
-		isException := pkt.Type == uint64(chproto.ServerExceptionCode)
 		deferredTerminal := inputGateAtPacket
 		deferredTerminalFatal := false
 		if isException && deferredTerminal != nil {
-			deferredTerminal.claimTerminal()
 			if waitingDeferredSample && deferredTerminal.markerWritten() {
 				// A sample-step rejection is recoverable: no payload write began.
 				// The complete marker write proves no client→upstream write is
@@ -1871,7 +1911,7 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 			}
 		}
 		if isEndOfStream && deferredTerminal != nil {
-			if !deferredTerminal.terminatorWritten() {
+			if !deferredTerminatorAtDecode {
 				// The decode-time snapshot is authoritative. A write that happens
 				// to finish later cannot turn an already-observed premature EOS
 				// into success.
@@ -1888,7 +1928,6 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 			// The decode-time terminal decision owns the query before waiting for
 			// the writer's input-complete hook. Client EOF/Cancel in that window
 			// must not install a contradictory abort outcome.
-			deferredTerminal.claimTerminal()
 			// A fast upstream can send EOS immediately after the local
 			// terminator write. Wait for input-complete before success/completion.
 			select {
@@ -1934,7 +1973,7 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 			}
 			if deferredTerminal != nil {
 				deferredTerminal.complete(ctx, r.hooks, r.sess)
-			} else {
+			} else if active {
 				r.hooks.OnQueryComplete(ctx, r.sess)
 			}
 		}
@@ -1968,6 +2007,9 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 					// active deferred query. If it cannot be exposed to the client,
 					// the connection is no longer recoverable: stop the upstream,
 					// abort, and complete exactly once before releasing the gate.
+					if !deferredTerminal.claimUpstreamLifecycle() {
+						return fmt.Errorf("splice upstream packet after deferred writer owned lifecycle: %w", err)
+					}
 					if waitingDeferredSample {
 						r.settleDeferredSample(deferredSampleResult{err: fmt.Errorf("forward pre-sample server packet to client: %w", err)})
 					}
