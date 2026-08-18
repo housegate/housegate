@@ -158,10 +158,10 @@ func (c *Codec) SetCompression(comp proto.Compression) { c.compression.Store(int
 func (c *Codec) Compression() proto.Compression { return proto.Compression(c.compression.Load()) }
 
 // WaitForPacketStart waits up to timeout for at least one unread wire byte
-// without consuming it. Relay uses this only for the optional external-table
-// marker lookahead: once a byte is available, the normal unbounded packet
+// without consuming it. Relay uses it for liveness polling while an upstream
+// terminal is pending; once a byte is available, the normal unbounded packet
 // decoder owns the complete (possibly fragmented) packet. This avoids leaving
-// the codec half-consumed when the bounded lookahead expires.
+// the codec half-consumed when a bounded poll expires.
 func (c *Codec) WaitForPacketStart(timeout time.Duration) (bool, error) {
 	deadliner, ok := c.conn.(interface{ SetReadDeadline(time.Time) error })
 	if !ok {
