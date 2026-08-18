@@ -22,7 +22,10 @@ import (
 	"github.com/housegate/housegate/pkg/auth"
 	"github.com/housegate/housegate/pkg/chsession"
 	"github.com/housegate/housegate/pkg/plugin"
+	"github.com/housegate/housegate/pkg/registry"
 	"github.com/housegate/housegate/pkg/replay"
+	"github.com/housegate/housegate/pkg/replay/payloadexec"
+	"github.com/housegate/housegate/pkg/schemaregistry"
 	"github.com/housegate/housegate/pkg/sqlident"
 	"github.com/housegate/housegate/pkg/sqlmeta"
 	sicore "github.com/housegate/housegate/pkg/storageintegrity"
@@ -49,6 +52,13 @@ type Config struct {
 	MaxPayloadBytes     uint64
 	AdmissionConsumer   AdmissionConsumer
 	PayloadMaterializer sicore.PayloadMaterializer
+
+	// TableSchemas resolves the declared network-state schema for the target
+	// table so the ingress can compute its own schema_hash expectation
+	// (fail closed when unresolvable). NetworkID is the genesis network id
+	// every statement token must carry.
+	TableSchemas registry.TableSchemas
+	NetworkID    string
 }
 
 type AdmissionConsumer interface {
@@ -63,6 +73,8 @@ type Plugin struct {
 	maxPayload          uint64
 	admissionConsumer   AdmissionConsumer
 	payloadMaterializer sicore.PayloadMaterializer
+	schemaLoader        *schemaregistry.NetworkStateLoader
+	networkID           string
 
 	mu      sync.Mutex
 	active  map[int64]*admissionState
@@ -77,7 +89,16 @@ type Admission struct {
 	SQLHash     string
 	Signer      string
 	UserJWS     string
-	Payload     CapturedPayload
+	// AuthToken is the SQL_x_auth_token query JWS (audit only). UserJWS is
+	// the SQL_x_statement_token envelope-v2 token that is sequenced.
+	AuthToken       string
+	EnvelopeVersion uint32
+	NetworkID       string
+	KeeperShardID   uint32
+	SettingsHash    string
+	SchemaHash      string
+	RowIDProfileID  string
+	Payload         CapturedPayload
 }
 
 type CapturedPayload struct {
@@ -94,6 +115,8 @@ type admissionState struct {
 	payload         bytes.Buffer
 	payloadEncoding string
 	revision        int
+	statementToken  string
+	schemaHash      string
 	complete        bool
 }
 
@@ -114,7 +137,7 @@ func New(cfg Config) *Plugin {
 	if requestTimeout == 0 {
 		requestTimeout = DefaultRequestTimeout
 	}
-	return &Plugin{
+	p := &Plugin{
 		enabled:             cfg.Enabled,
 		authValidator:       cfg.AuthValidator,
 		purpose:             purpose,
@@ -122,9 +145,14 @@ func New(cfg Config) *Plugin {
 		maxPayload:          maxPayload,
 		admissionConsumer:   cfg.AdmissionConsumer,
 		payloadMaterializer: cfg.PayloadMaterializer,
+		networkID:           cfg.NetworkID,
 		active:              map[int64]*admissionState{},
 		pending:             map[int64]*admissionState{},
 	}
+	if cfg.TableSchemas != nil {
+		p.schemaLoader = schemaregistry.NewNetworkStateLoader(cfg.TableSchemas, cfg.NetworkID)
+	}
+	return p
 }
 
 func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
@@ -188,10 +216,11 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 			return fmt.Errorf("storage_integrity rewritten INSERT payload encoding mismatch: signed %s forwarded %s", payloadEncoding, forwardEncoding)
 		}
 	}
-	tableID, err := targetTableID(qctx, signedSQL)
+	target, err := resolveTargetTable(qctx, signedSQL)
 	if err != nil {
 		return err
 	}
+	tableID := target.id
 	userJWS, err := queryAuthToken(qctx)
 	if err != nil {
 		return err
@@ -203,6 +232,20 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	if err := requireStatementIDSigner(stmtID, signer); err != nil {
 		return err
 	}
+	if p.schemaLoader == nil || strings.TrimSpace(p.networkID) == "" {
+		return errors.New("storage_integrity ingress requires a network-state TableSchemas source and network_id to verify envelope v2 statements")
+	}
+	statementToken, err := statementTokenFromSettings(querySettings(qctx))
+	if err != nil {
+		return err
+	}
+	if err := sicore.RejectUserSettings(settingKeys(qctx)); err != nil {
+		return err
+	}
+	schemaHash, err := p.resolveSchemaHash(ctx, target)
+	if err != nil {
+		return err
+	}
 	state := &admissionState{
 		admission: Admission{
 			StatementID: stmtID,
@@ -211,9 +254,12 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 			SQL:         signedSQL,
 			SQLHash:     replay.DigestString(signedSQL),
 			Signer:      signer,
-			UserJWS:     userJWS,
+			UserJWS:     statementToken,
+			AuthToken:   userJWS,
 		},
 		payloadEncoding: payloadEncoding,
+		statementToken:  statementToken,
+		schemaHash:      schemaHash,
 	}
 	if qctx.Session.State() != nil {
 		state.revision = qctx.Session.State().ClientRevision
@@ -428,6 +474,43 @@ func (p *Plugin) admissionFromState(ctx context.Context, state *admissionState) 
 		}
 		payload = append([]byte(nil), out.Payload...)
 	}
+	if state.revision <= 0 || uint64(state.revision) > uint64(^uint32(0)) {
+		return Admission{}, fmt.Errorf("storage_integrity admission %s has invalid client protocol revision %d", admission.StatementID, state.revision)
+	}
+	want := auth.JWSStatementPayloadV2{
+		NetworkID:      p.networkID,
+		KeeperShardID:  0,
+		StatementID:    admission.StatementID,
+		SQLHash:        admission.SQLHash,
+		SettingsHash:   sicore.EmptySettingsHash,
+		SchemaHash:     state.schemaHash,
+		PayloadHash:    replay.DigestBytes(payload),
+		PayloadLength:  uint64(len(payload)),
+		PayloadFormat:  sicore.PayloadEncodingClickHouseNativeData,
+		ClientRevision: uint32(state.revision),
+		TargetTableID:  admission.TableID,
+		RowIDProfileID: payloadexec.RowIDProfileID,
+	}
+	validator, ok := p.authValidator.(auth.StatementValidatorV2)
+	if !ok {
+		return Admission{}, errors.New("storage_integrity auth validator does not support envelope v2 statement tokens")
+	}
+	recovered, err := validator.ValidateStatementV2(state.statementToken, want)
+	if err != nil {
+		return Admission{}, fmt.Errorf("storage_integrity statement token rejected for %s: %w", admission.StatementID, err)
+	}
+	if !strings.EqualFold(recovered, admission.Signer) {
+		return Admission{}, fmt.Errorf("storage_integrity statement token signer %s does not match query signer %s", recovered, admission.Signer)
+	}
+	if err := requireStatementIDSigner(admission.StatementID, recovered); err != nil {
+		return Admission{}, err
+	}
+	admission.EnvelopeVersion = sicore.EnvelopeVersionV2
+	admission.NetworkID = p.networkID
+	admission.KeeperShardID = 0
+	admission.SettingsHash = sicore.EmptySettingsHash
+	admission.SchemaHash = state.schemaHash
+	admission.RowIDProfileID = payloadexec.RowIDProfileID
 	if p != nil && p.maxPayload > 0 && uint64(len(payload)) > p.maxPayload {
 		return Admission{}, fmt.Errorf("storage_integrity payload exceeds max_payload_bytes after materialization (%d > %d)", len(payload), p.maxPayload)
 	}
@@ -496,6 +579,25 @@ func authTokenFromSettings(settings map[string]string) (string, error) {
 		return "", fmt.Errorf("storage_integrity requires %s", auth.AuthTokenSettingKey)
 	}
 	return token, nil
+}
+
+func statementTokenFromSettings(settings map[string]string) (string, error) {
+	token := strings.Trim(strings.TrimSpace(settings[auth.StatementTokenSettingKey]), "\"'")
+	if token == "" {
+		return "", fmt.Errorf("storage_integrity requires %s (envelope v2 statement token)", auth.StatementTokenSettingKey)
+	}
+	return token, nil
+}
+
+func settingKeys(qctx *plugin.QueryContext) []string {
+	if qctx == nil || qctx.Query == nil {
+		return nil
+	}
+	keys := make([]string, 0, len(qctx.Query.Settings))
+	for _, setting := range qctx.Query.Settings {
+		keys = append(keys, setting.Key)
+	}
+	return keys
 }
 
 func querySettings(qctx *plugin.QueryContext) map[string]string {
@@ -660,14 +762,25 @@ func requirePayloadLocalInsert(sql string) (string, error) {
 	return encoding, nil
 }
 
+type resolvedTableTarget struct {
+	id       string
+	database string
+	table    string
+}
+
 func targetTableID(qctx *plugin.QueryContext, sql string) (string, error) {
+	target, err := resolveTargetTable(qctx, sql)
+	return target.id, err
+}
+
+func resolveTargetTable(qctx *plugin.QueryContext, sql string) (resolvedTableTarget, error) {
 	sessionDB := ""
 	if qctx.Session != nil && qctx.Session.State() != nil {
 		sessionDB = qctx.Session.State().LogicalDatabaseName()
 	}
 	target, err := sicore.ParseInsertTarget(sql)
 	if err != nil {
-		return "", fmt.Errorf("storage_integrity target table: %w", err)
+		return resolvedTableTarget{}, fmt.Errorf("storage_integrity target table: %w", err)
 	}
 	if target.Database == "" && sessionDB != "" {
 		target.Database = sessionDB
@@ -677,14 +790,14 @@ func targetTableID(qctx *plugin.QueryContext, sql string) (string, error) {
 	if target.Database != "" {
 		resolvedSQLTarget = target.CanonicalID()
 	}
-	matches := make(map[string]struct{})
+	matches := make(map[string]resolvedTableTarget)
 	for _, table := range qctx.AccessedTables {
 		if strings.TrimSpace(table.OriginalTable) == "" {
 			continue
 		}
 		metadataTable, err := normalizeTablePath(sqlident.Quote(table.OriginalTable))
 		if err != nil {
-			return "", err
+			return resolvedTableTarget{}, err
 		}
 		if metadataTable != canonicalTable {
 			continue
@@ -692,7 +805,7 @@ func targetTableID(qctx *plugin.QueryContext, sql string) (string, error) {
 		referenceDB := firstNonEmpty(table.OriginalDatabase, table.LogicalDatabase, sessionDB)
 		metadataTarget, err := normalizeStructuredTablePath(referenceDB, table.OriginalTable)
 		if err != nil {
-			return "", err
+			return resolvedTableTarget{}, err
 		}
 		if target.Database != "" {
 			if metadataTarget != resolvedSQLTarget {
@@ -702,25 +815,48 @@ func targetTableID(qctx *plugin.QueryContext, sql string) (string, error) {
 		logicalDB := firstNonEmpty(table.LogicalDatabase, table.OriginalDatabase, sessionDB)
 		logicalID, err := normalizeStructuredTablePath(logicalDB, table.OriginalTable)
 		if err != nil {
-			return "", err
+			return resolvedTableTarget{}, err
 		}
 		if logicalID == "" {
 			continue
 		}
-		matches[logicalID] = struct{}{}
+		matches[logicalID] = resolvedTableTarget{id: logicalID, database: logicalDB, table: table.OriginalTable}
 	}
 	if len(matches) == 1 {
-		for tableID := range matches {
-			return tableID, nil
+		for _, resolved := range matches {
+			return resolved, nil
 		}
 	}
 	if len(matches) > 1 {
-		return "", fmt.Errorf("storage_integrity ambiguous target table %s in rewriter metadata", resolvedSQLTarget)
+		return resolvedTableTarget{}, fmt.Errorf("storage_integrity ambiguous target table %s in rewriter metadata", resolvedSQLTarget)
 	}
 	if len(qctx.AccessedTables) > 0 {
-		return "", fmt.Errorf("storage_integrity target table mismatch: SQL target %s does not match rewriter metadata", resolvedSQLTarget)
+		return resolvedTableTarget{}, fmt.Errorf("storage_integrity target table mismatch: SQL target %s does not match rewriter metadata", resolvedSQLTarget)
 	}
-	return resolvedSQLTarget, nil
+	return resolvedTableTarget{id: resolvedSQLTarget, database: target.Database, table: target.Table}, nil
+}
+
+// resolveSchemaHash computes this ingress's own expectation from the declared,
+// hash-verified network-state schema. The structured target is carried from SQL
+// parsing/rewriter metadata so quoted dots are never split from a canonical id.
+func (p *Plugin) resolveSchemaHash(ctx context.Context, target resolvedTableTarget) (string, error) {
+	if target.id == "" || target.database == "" || target.table == "" {
+		return "", fmt.Errorf("storage_integrity target table id %q must be db.table for schema resolution", target.id)
+	}
+	schemas, err := p.schemaLoader.Load(ctx, []schemaregistry.TableRef{{
+		TableID:         target.id,
+		Database:        target.database,
+		Table:           target.table,
+		LogicalDatabase: target.database,
+		LogicalTable:    target.table,
+	}})
+	if err != nil {
+		return "", fmt.Errorf("storage_integrity cannot resolve declared schema for %s: %w", target.id, err)
+	}
+	if len(schemas) != 1 {
+		return "", fmt.Errorf("storage_integrity schema source returned %d schemas for %s, want 1", len(schemas), target.id)
+	}
+	return payloadexec.TableSchemaHash(p.networkID, schemas[0]), nil
 }
 
 func normalizeStructuredTablePath(db, table string) (string, error) {
