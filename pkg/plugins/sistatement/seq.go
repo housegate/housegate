@@ -15,6 +15,12 @@ import (
 // value. Callers must fail closed; the counter never wraps to zero.
 var ErrClientSeqExhausted = errors.New("sistatement: client_seq exhausted")
 
+// ErrClientSeqReused means an SDK supplied a sequence at or below the durable
+// high watermark. The counter intentionally cannot distinguish an unused gap
+// from a previously signed value, so accepting either would make sequence
+// reuse possible after restart.
+var ErrClientSeqReused = errors.New("sistatement: client_seq was already reserved")
+
 // SeqCounter is the durable per-account client_seq source (spec §5.1 /
 // D6). Next and AdvanceTo write and fsync a newly reserved value BEFORE
 // returning, so neither an agent-generated nor an SDK-supplied seq can be
@@ -129,19 +135,26 @@ func (c *SeqCounter) persistLocked(next uint64) error {
 	return nil
 }
 
-// AdvanceTo reserves seq if it is above the current durable high watermark.
-// Lower/equal SDK values never move the counter backwards.
-func (c *SeqCounter) AdvanceTo(seq uint64) error {
+// ReserveSupplied atomically validates and durably reserves a fresh
+// SDK-supplied seq above the current high
+// watermark. Lower/equal values fail closed: a high-watermark-only store cannot
+// prove that a gap was never signed, and zero cannot be recorded distinctly
+// from the initial state.
+func (c *SeqCounter) ReserveSupplied(seq uint64) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if seq == ^uint64(0) {
 		return ErrClientSeqExhausted
 	}
 	if seq <= c.last {
-		return nil
+		return fmt.Errorf("%w: supplied %d, durable high watermark %d", ErrClientSeqReused, seq, c.last)
 	}
 	return c.persistLocked(seq)
 }
+
+// AdvanceTo is retained for callers of the original counter API. Its stricter
+// semantics are identical to ReserveSupplied: supplied sequences must be fresh.
+func (c *SeqCounter) AdvanceTo(seq uint64) error { return c.ReserveSupplied(seq) }
 
 // Next issues last+1 after durably recording it (temp file, fsync, rename,
 // directory fsync).

@@ -151,6 +151,9 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	if revision <= 0 {
 		return errors.New("storage_integrity agent: client protocol revision is unknown; cannot sign client_revision")
 	}
+	if !proto.FeatureSettingsSerializedAsStrings.In(revision) {
+		return fmt.Errorf("storage_integrity agent: client protocol revision %d cannot carry required string settings; revision >= %d is required", revision, proto.FeatureSettingsSerializedAsStrings.Version())
+	}
 	statementID, err := p.statementIDFor(qctx.Query.ID)
 	if err != nil {
 		return err
@@ -202,7 +205,7 @@ func (p *Plugin) loadSchema(ctx context.Context, tableID string) (payloadexec.Ta
 // the account; otherwise it mints <account>:<seq>:<nonce>.
 func (p *Plugin) statementIDFor(queryID string) (string, error) {
 	if canonical, seq, ok := ownSuppliedStatementID(queryID, p.account); ok {
-		if err := p.seq.AdvanceTo(seq); err != nil {
+		if err := p.seq.ReserveSupplied(seq); err != nil {
 			return "", fmt.Errorf("storage_integrity agent: reserve supplied client_seq: %w", err)
 		}
 		return canonical, nil

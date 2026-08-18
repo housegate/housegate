@@ -71,8 +71,10 @@ func TestSeqCounter_AdvanceToReservesSuppliedSequenceDurably(t *testing.T) {
 	if err := c.AdvanceTo(41); err != nil {
 		t.Fatalf("AdvanceTo: %v", err)
 	}
-	if err := c.AdvanceTo(7); err != nil || c.Last() != 41 {
-		t.Fatalf("AdvanceTo must not move backwards: last=%d err=%v", c.Last(), err)
+	for _, reused := range []uint64{7, 41} {
+		if err := c.AdvanceTo(reused); !errors.Is(err, ErrClientSeqReused) || c.Last() != 41 {
+			t.Fatalf("AdvanceTo(%d) = %v, last=%d; want ErrClientSeqReused and last 41", reused, err, c.Last())
+		}
 	}
 	reopened, err := OpenSeqCounter(dir, "0xabc")
 	if err != nil {
@@ -80,6 +82,19 @@ func TestSeqCounter_AdvanceToReservesSuppliedSequenceDurably(t *testing.T) {
 	}
 	if got, err := reopened.Next(); err != nil || got != 42 {
 		t.Fatalf("Next after supplied seq = %d err=%v, want 42", got, err)
+	}
+}
+
+func TestSeqCounter_RejectsZeroAsNonDurablyDistinguishableReuse(t *testing.T) {
+	c, err := OpenSeqCounter(t.TempDir(), "0xabc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.AdvanceTo(0); !errors.Is(err, ErrClientSeqReused) {
+		t.Fatalf("AdvanceTo(0) = %v, want ErrClientSeqReused", err)
+	}
+	if c.Last() != 0 {
+		t.Fatalf("rejected zero changed last to %d", c.Last())
 	}
 }
 

@@ -232,6 +232,79 @@ func TestPlugin_ClientSuppliedStatementIDIsKeptOnlyForOwnAccount(t *testing.T) {
 	}
 }
 
+func TestPlugin_ClientSuppliedSequenceCannotBeSignedTwice(t *testing.T) {
+	ns := network.NewInMemoryNetworkState()
+	declareSchema(t, ns, testSchema())
+	p, signer := newTestPlugin(t, ns, t.TempDir())
+
+	first := insertQctx(newSession(1, ""), "INSERT INTO shop.orders FORMAT Native")
+	first.Query.ID = signer.Address() + ":41:first-nonce"
+	if err := p.OnQuery(context.Background(), first); err != nil {
+		t.Fatalf("first reservation: %v", err)
+	}
+
+	reused := insertQctx(newSession(2, ""), "INSERT INTO shop.orders FORMAT Native")
+	reused.Query.ID = signer.Address() + ":41:different-nonce"
+	if err := p.OnQuery(context.Background(), reused); !errors.Is(err, ErrClientSeqReused) {
+		t.Fatalf("reused sequence = %v, want ErrClientSeqReused", err)
+	}
+	if reused.DeferredInsert != nil || reused.Query.ID != signer.Address()+":41:different-nonce" {
+		t.Fatalf("reused sequence admitted: deferred=%#v id=%q", reused.DeferredInsert, reused.Query.ID)
+	}
+}
+
+func TestPlugin_ConcurrentClientSuppliedSequenceAdmitsExactlyOne(t *testing.T) {
+	ns := network.NewInMemoryNetworkState()
+	declareSchema(t, ns, testSchema())
+	p, signer := newTestPlugin(t, ns, t.TempDir())
+	queries := []*plugin.QueryContext{
+		insertQctx(newSession(11, ""), "INSERT INTO shop.orders FORMAT Native"),
+		insertQctx(newSession(12, ""), "INSERT INTO shop.orders FORMAT Native"),
+	}
+	queries[0].Query.ID = signer.Address() + ":41:first-nonce"
+	queries[1].Query.ID = signer.Address() + ":41:second-nonce"
+	start := make(chan struct{})
+	results := make(chan error, len(queries))
+	for _, q := range queries {
+		q := q
+		go func() {
+			<-start
+			results <- p.OnQuery(context.Background(), q)
+		}()
+	}
+	close(start)
+	var admitted, reused int
+	for range queries {
+		err := <-results
+		switch {
+		case err == nil:
+			admitted++
+		case errors.Is(err, ErrClientSeqReused):
+			reused++
+		default:
+			t.Fatalf("concurrent reservation returned unexpected error: %v", err)
+		}
+	}
+	if admitted != 1 || reused != 1 {
+		t.Fatalf("concurrent same-seq reservations: admitted=%d reused=%d, want 1/1", admitted, reused)
+	}
+}
+
+func TestPlugin_RejectsRevisionThatCannotCarryStringSettings(t *testing.T) {
+	ns := network.NewInMemoryNetworkState()
+	declareSchema(t, ns, testSchema())
+	p, _ := newTestPlugin(t, ns, t.TempDir())
+	sess := newSession(8, "")
+	sess.state.ClientRevision = proto.FeatureSettingsSerializedAsStrings.Version() - 1
+	q := insertQctx(sess, "INSERT INTO shop.orders FORMAT Native")
+	if err := p.OnQuery(context.Background(), q); err == nil || !strings.Contains(err.Error(), "string settings") {
+		t.Fatalf("old revision = %v, want string-settings rejection", err)
+	}
+	if q.DeferredInsert != nil || q.Query.ID != "client-uuid-1" {
+		t.Fatalf("old revision admitted: deferred=%#v id=%q", q.DeferredInsert, q.Query.ID)
+	}
+}
+
 func TestPlugin_ClientSuppliedMaxSequenceIsRejectedWithoutAdvancing(t *testing.T) {
 	ns := network.NewInMemoryNetworkState()
 	declareSchema(t, ns, testSchema())
