@@ -620,6 +620,10 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			return nil, fmt.Errorf("storage_integrity.ingress admission consumer is required when enabled")
 		}
 		ingressCfg := cfg.StorageIntegrity.Ingress
+		ingressSchemas, err := resolveTableSchemas(opts, reg, "storage_integrity.ingress")
+		if err != nil {
+			return nil, err
+		}
 		ingressValidator := auth.NewEthValidator(
 			ingressCfg.AllowedAddresses,
 			ingressCfg.MaxTokenAge.Duration,
@@ -635,6 +639,8 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			RequestTimeout:    ingressCfg.RequestTimeout.Duration,
 			MaxPayloadBytes:   ingressCfg.MaxPayloadBytes,
 			AdmissionConsumer: admissionConsumer,
+			TableSchemas:      ingressSchemas,
+			NetworkID:         ingressCfg.NetworkID,
 		})
 		queryPlugins = append(queryPlugins, storageIntegrityIngress)
 		strictDataPlugins = append(strictDataPlugins, storageIntegrityIngress)
@@ -643,6 +649,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		queryAbortPlugins = append(queryAbortPlugins, storageIntegrityIngress)
 		closePlugins = append(closePlugins, storageIntegrityIngress)
 		log.Infow("storage_integrity ingress enabled",
+			"network_id", ingressCfg.NetworkID,
 			"allowed_addresses", len(ingressCfg.AllowedAddresses),
 			"max_token_age", ingressCfg.MaxTokenAge.Duration,
 			"request_timeout", ingressCfg.RequestTimeout.Duration,

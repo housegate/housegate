@@ -49,6 +49,7 @@ type StorageIntegritySafeMergesConfig struct {
 // StorageIntegrityIngressConfig is the server-side signed admission surface.
 type StorageIntegrityIngressConfig struct {
 	Enabled          bool     `json:"enabled"           yaml:"enabled"`
+	NetworkID        string   `json:"network_id"        yaml:"network_id"`
 	AllowedAddresses []string `json:"allowed_addresses" yaml:"allowed_addresses"`
 	MaxTokenAge      Duration `json:"max_token_age"     yaml:"max_token_age"`
 	RequestTimeout   Duration `json:"request_timeout"  yaml:"request_timeout"`
@@ -129,6 +130,9 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 	}
 	if len(c.Ingress.AllowedAddresses) == 0 {
 		errs = append(errs, errors.New("storage_integrity.ingress.allowed_addresses is required when storage_integrity.ingress.enabled"))
+	}
+	if strings.TrimSpace(c.Ingress.NetworkID) == "" {
+		errs = append(errs, errors.New("storage_integrity.ingress.network_id is required when storage_integrity.ingress.enabled"))
 	}
 	if c.Ingress.MaxTokenAge.Duration <= 0 {
 		errs = append(errs, errors.New("storage_integrity.ingress.max_token_age must be > 0 when storage_integrity.ingress.enabled"))

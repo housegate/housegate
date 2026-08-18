@@ -16,6 +16,7 @@ import (
 	"github.com/housegate/housegate/pkg/chproto"
 	"github.com/housegate/housegate/pkg/chsession"
 	"github.com/housegate/housegate/pkg/config"
+	"github.com/housegate/housegate/pkg/lthash"
 	"github.com/housegate/housegate/pkg/network"
 	"github.com/housegate/housegate/pkg/plugin"
 	"github.com/housegate/housegate/pkg/plugins/agent"
@@ -495,15 +496,17 @@ func TestBuildServer_StorageIntegrityIngressEnabledWiresRuntimeHooks(t *testing.
 	}
 	cfg := minimalRouterOnlyCfg(t)
 	cfg.StorageIntegrity.Ingress.Enabled = true
+	cfg.StorageIntegrity.Ingress.NetworkID = "testnet-v2"
 	cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{signer.Address()}
 	cfg.StorageIntegrity.Ingress.MaxTokenAge.Duration = time.Minute
 	cfg.StorageIntegrity.Ingress.RequestTimeout.Duration = 50 * time.Millisecond
 	cfg.StorageIntegrity.Ingress.MaxPayloadBytes = 7
 	consumer := &recordingAdmissionConsumer{}
+	ns := buildTestStorageIntegrityNetworkState()
 
 	bs, err := buildServer(Options{
 		Config:                            cfg,
-		NetworkState:                      network.NewInMemoryNetworkState(),
+		NetworkState:                      ns,
 		StorageIntegrityAdmissionConsumer: consumer,
 	}, nil)
 	if err != nil {
@@ -563,6 +566,7 @@ func TestBuildServer_StorageIntegrityIngressRequiresAdmissionConsumer(t *testing
 	}
 	cfg := minimalRouterOnlyCfg(t)
 	cfg.StorageIntegrity.Ingress.Enabled = true
+	cfg.StorageIntegrity.Ingress.NetworkID = "testnet-v2"
 	cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{signer.Address()}
 
 	_, err = buildServer(Options{
@@ -572,6 +576,39 @@ func TestBuildServer_StorageIntegrityIngressRequiresAdmissionConsumer(t *testing
 	if err == nil || !strings.Contains(err.Error(), "storage_integrity.ingress admission consumer is required") {
 		t.Fatalf("buildServer err = %v, want missing admission consumer rejection", err)
 	}
+}
+
+func TestBuildServer_StorageIntegrityIngressRequiresTableSchemas(t *testing.T) {
+	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatalf("NewRelaySigner: %v", err)
+	}
+	cfg := minimalRouterOnlyCfg(t)
+	cfg.StorageIntegrity.Ingress.Enabled = true
+	cfg.StorageIntegrity.Ingress.NetworkID = "testnet-v2"
+	cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{signer.Address()}
+	cfg.StorageIntegrity.Ingress.MaxTokenAge.Duration = time.Minute
+	cfg.StorageIntegrity.Ingress.RequestTimeout.Duration = time.Second
+	cfg.StorageIntegrity.Ingress.MaxPayloadBytes = 1 << 20
+
+	_, err = buildServer(Options{
+		Config:                            cfg,
+		NetworkState:                      registryWithoutSchemas{network.NewInMemoryNetworkState()},
+		StorageIntegrityAdmissionConsumer: &recordingAdmissionConsumer{},
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "TableSchemas") {
+		t.Fatalf("expected TableSchemas requirement, got %v", err)
+	}
+
+	bs, err := buildServer(Options{
+		Config:                            cfg,
+		NetworkState:                      network.NewInMemoryNetworkState(),
+		StorageIntegrityAdmissionConsumer: &recordingAdmissionConsumer{},
+	}, nil)
+	if err != nil {
+		t.Fatalf("buildServer with in-memory TableSchemas: %v", err)
+	}
+	bs.teardown()
 }
 
 func TestBuildStorageIntegrityRuntimeRequiresPorts(t *testing.T) {
@@ -1147,6 +1184,24 @@ func signedStorageIntegrityQuerySQL(t *testing.T, signer *auth.RelaySigner, sql 
 	}
 	state := chsession.NewSessionState()
 	state.ClientRevision = 54453
+	statementID := buildTestStatementID(signer, 1)
+	payload := []byte{byte(chproto.ClientDataCode), 1}
+	statementToken, err := signer.SignStatementV2(auth.JWSStatementPayloadV2{
+		NetworkID:      "testnet-v2",
+		StatementID:    statementID,
+		SQLHash:        replay.DigestString(sql),
+		SettingsHash:   sicore.EmptySettingsHash,
+		SchemaHash:     payloadexec.TableSchemaHash("testnet-v2", buildTestStorageIntegritySchema()),
+		PayloadHash:    replay.DigestBytes(payload),
+		PayloadLength:  uint64(len(payload)),
+		PayloadFormat:  sicore.PayloadEncodingClickHouseNativeData,
+		ClientRevision: uint32(state.ClientRevision),
+		TargetTableID:  "tenant.events",
+		RowIDProfileID: payloadexec.RowIDProfileID,
+	})
+	if err != nil {
+		t.Fatalf("SignStatementV2: %v", err)
+	}
 	return &plugin.QueryContext{
 		Session: &buildTestSession{
 			id:    1001,
@@ -1154,13 +1209,12 @@ func signedStorageIntegrityQuerySQL(t *testing.T, signer *auth.RelaySigner, sql 
 		},
 		OriginalSQL: sql,
 		Query: &chproto.Query{
-			ID:   buildTestStatementID(signer, 1),
+			ID:   statementID,
 			Body: sql,
-			Settings: []chproto.Setting{{
-				Key:    auth.AuthTokenSettingKey,
-				Value:  "'" + token + "'",
-				Custom: true,
-			}},
+			Settings: []chproto.Setting{
+				{Key: auth.AuthTokenSettingKey, Value: "'" + token + "'", Custom: true},
+				{Key: auth.StatementTokenSettingKey, Value: "'" + statementToken + "'", Custom: true},
+			},
 		},
 		StatementType: sqlmeta.StatementTypeInsert,
 		AccessedTables: []sqlmeta.AccessedTable{{
@@ -1169,6 +1223,29 @@ func signedStorageIntegrityQuerySQL(t *testing.T, signer *auth.RelaySigner, sql 
 			LogicalDatabase:  "tenant",
 		}},
 	}
+}
+
+func buildTestStorageIntegritySchema() payloadexec.TableSchema {
+	return payloadexec.TableSchema{
+		TableID: "tenant.events",
+		Columns: []lthash.Column{
+			{Name: "id", Type: "UInt64"},
+			{Name: "region", Type: "String"},
+		},
+	}
+}
+
+func buildTestStorageIntegrityNetworkState() *network.InMemoryNetworkState {
+	ns := network.NewInMemoryNetworkState()
+	schema := buildTestStorageIntegritySchema()
+	ns.TableSchemas["tenant/events@1"] = network.TableSchemaInfo{
+		DatabaseId: "tenant",
+		TableId:    "events",
+		Version:    1,
+		SchemaHash: payloadexec.TableSchemaHash("testnet-v2", schema),
+		SchemaJson: `{"table_id":"tenant.events","columns":[{"name":"id","type":"UInt64"},{"name":"region","type":"String"}]}`,
+	}
+	return ns
 }
 
 func buildTestStatementID(signer *auth.RelaySigner, seq uint64) string {
@@ -1232,6 +1309,7 @@ func (c *rootArbiterIngressClient) GetStatementStatus(context.Context, *pb.GetSt
 func enableStorageIntegrityRuntimeTestConfig(t *testing.T, cfg *config.Config, signer *auth.RelaySigner) {
 	t.Helper()
 	cfg.StorageIntegrity.Ingress.Enabled = true
+	cfg.StorageIntegrity.Ingress.NetworkID = "testnet-v2"
 	cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{signer.Address()}
 	cfg.StorageIntegrity.Ingress.MaxTokenAge.Duration = time.Minute
 	cfg.StorageIntegrity.Ingress.RequestTimeout.Duration = 50 * time.Millisecond
