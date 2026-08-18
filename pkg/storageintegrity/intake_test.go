@@ -409,7 +409,11 @@ func TestOrchestrate_RegistersClaimOnlyAfterAcceptedSubmit(t *testing.T) {
 }
 
 func TestOrchestrate_TerminalPrepareRejectAbortsWithoutLookupFence(t *testing.T) {
-	prep := &recordingPreparer{prepareErr: fmt.Errorf("schema_hash mismatch: %w", ErrPrepareTerminalReject)}
+	prep := &recordingPreparer{
+		prepared:     boundSource(),
+		prepareErr:   fmt.Errorf("schema_hash mismatch: %w", ErrPrepareTerminalReject),
+		claimOutcome: ClaimOutcome{Category: OutcomeAccepted, BoundSource: "snode-A"},
+	}
 	sub := &recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeAccepted}}
 	orch := NewOrchestrator(sub, prep, OrchestratorConfig{ExpectedSource: "snode-A"})
 	res, err := orch.Orchestrate(context.Background(), admissionFixture())
@@ -426,9 +430,8 @@ func TestOrchestrate_TerminalPrepareRejectAbortsWithoutLookupFence(t *testing.T)
 		t.Fatalf("terminal prepare reject abort parts = %+v, want exact empty set", prep.abortParts)
 	}
 
-	// A terminally cleaned reject remains idempotent on retry, but it must not
-	// leave the crash-ambiguity lookup fence set: the source rejected before any
-	// unsafe write could have happened.
+	// The source rejected before any unsafe write could happen, so a retry may
+	// re-prepare directly after the source's schema view catches up.
 	orch.mu.Lock()
 	rec := orch.records[admissionFixture().StatementID]
 	lookupRequired := rec != nil && rec.requirePreparedLookup
@@ -440,13 +443,75 @@ func TestOrchestrate_TerminalPrepareRejectAbortsWithoutLookupFence(t *testing.T)
 		t.Fatal("terminal prepare reject must not leave a prepared-source lookup fence")
 	}
 
-	before := atomic.LoadInt64(&prep.prepareCount)
-	replay, err := orch.Orchestrate(context.Background(), admissionFixture())
-	if err != nil || replay.Lifecycle != LifecycleCleaned || replay.Ack2 {
-		t.Fatalf("terminal replay = %+v, %v, want cached cleaned non-ACK2", replay, err)
+	prep.prepareErr = nil
+	beforePrepare := atomic.LoadInt64(&prep.prepareCount)
+	beforeAbort := atomic.LoadInt64(&prep.abortAt)
+	retry, err := orch.Orchestrate(context.Background(), admissionFixture())
+	if err != nil || !retry.Ack2 {
+		t.Fatalf("retry after source schema catch-up = %+v, %v, want ACK2", retry, err)
 	}
-	if atomic.LoadInt64(&prep.prepareCount) != before {
-		t.Fatal("retry after a terminal prepare reject must return the cached terminal result")
+	if atomic.LoadInt64(&prep.prepareCount) != beforePrepare+1 {
+		t.Fatal("retry after a terminal prepare reject must re-prepare without a lookup fence")
+	}
+	if atomic.LoadInt64(&prep.abortAt) != beforeAbort {
+		t.Fatal("successful retry must not repeat the already-completed empty cleanup")
+	}
+}
+
+func TestOrchestrate_TerminalPrepareRejectRetriesAfterRestartWithoutLookup(t *testing.T) {
+	journal, err := NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstPrep := &recordingPreparer{prepareErr: fmt.Errorf("schema_hash mismatch: %w", ErrPrepareTerminalReject)}
+	cfg := OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal}
+	first := NewOrchestrator(&recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeAccepted}}, firstPrep, cfg)
+	res, err := first.Orchestrate(context.Background(), admissionFixture())
+	if err != nil || res.Lifecycle != LifecycleCleaned {
+		t.Fatalf("first terminal prepare reject = %+v, %v", res, err)
+	}
+
+	secondPrep := &recordingPreparer{
+		prepared:     boundSource(),
+		claimOutcome: ClaimOutcome{Category: OutcomeAccepted, BoundSource: "snode-A"},
+	}
+	second := NewOrchestrator(&recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeExactIdempotent}}, secondPrep, cfg)
+	retry, err := second.Orchestrate(context.Background(), admissionFixture())
+	if err != nil || !retry.Ack2 {
+		t.Fatalf("post-restart retry = %+v, %v, want ACK2", retry, err)
+	}
+	if got := atomic.LoadInt64(&secondPrep.prepareCount); got != 1 {
+		t.Fatalf("post-restart prepare count = %d, want 1 without PreparedStatementLookup", got)
+	}
+}
+
+func TestOrchestrate_CleanedPreWriteRejectDoesNotFenceOtherStatementAfterRestart(t *testing.T) {
+	journal, err := NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal}
+	first := NewOrchestrator(
+		&recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeAccepted}},
+		&recordingPreparer{prepareErr: fmt.Errorf("schema_hash mismatch: %w", ErrPrepareTerminalReject)},
+		cfg,
+	)
+	if _, err := first.Orchestrate(context.Background(), admissionFixture()); err != nil {
+		t.Fatalf("first terminal prepare reject: %v", err)
+	}
+
+	secondPrep := &recordingPreparer{
+		prepared:     boundSource(),
+		claimOutcome: ClaimOutcome{Category: OutcomeAccepted, BoundSource: "snode-A"},
+	}
+	second := NewOrchestrator(&recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeAccepted}}, secondPrep, cfg)
+	adm := admissionFixture()
+	adm.StatementID = "0xabc:2:n2"
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	res, err := second.Orchestrate(ctx, adm)
+	if err != nil || !res.Ack2 {
+		t.Fatalf("different statement after restart = %+v, %v, want ACK2 without safe-record frontier fence", res, err)
 	}
 }
 

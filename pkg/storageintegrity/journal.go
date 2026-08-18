@@ -46,6 +46,10 @@ type IntakeJournalRecord struct {
 
 	SubmitUnknown bool `json:"submit_unknown"`
 	ClaimUnknown  bool `json:"claim_unknown"`
+	// PrepareKnownUnwritten is durable evidence that the previous source
+	// rejection happened before any unsafe write. It authorizes a lookup-free
+	// retry and is cleared durably before that retry begins.
+	PrepareKnownUnwritten bool `json:"prepare_known_unwritten,omitempty"`
 
 	TerminalResult IntakeResult `json:"terminal_result"`
 	IsTerminal     bool         `json:"is_terminal"`
@@ -198,42 +202,44 @@ func syncDir(dir string) error {
 
 func journalRecordFromIntakeRecord(rec *intakeRecord) IntakeJournalRecord {
 	return IntakeJournalRecord{
-		StatementID:     rec.statementID,
-		Source:          rec.source,
-		FrontierOrdinal: rec.frontierOrdinal,
-		Env:             rec.env,
-		Admission:       cloneAdmissionRecord(rec.adm),
-		Stage:           rec.stage,
-		AbortReason:     rec.abortReason,
-		Prepared:        clonePreparedLocalResult(rec.prepared),
-		HasPrepared:     rec.hasPrepared,
-		Submit:          rec.submit,
-		HasSubmit:       rec.hasSubmit,
-		SubmitUnknown:   rec.submitUnknown,
-		ClaimUnknown:    rec.claimUnknown,
-		TerminalResult:  cloneIntakeResult(rec.terminalRes),
-		IsTerminal:      rec.isTerminal,
-		UpdatedAtUnixMS: time.Now().UnixMilli(),
+		StatementID:           rec.statementID,
+		Source:                rec.source,
+		FrontierOrdinal:       rec.frontierOrdinal,
+		Env:                   rec.env,
+		Admission:             cloneAdmissionRecord(rec.adm),
+		Stage:                 rec.stage,
+		AbortReason:           rec.abortReason,
+		Prepared:              clonePreparedLocalResult(rec.prepared),
+		HasPrepared:           rec.hasPrepared,
+		Submit:                rec.submit,
+		HasSubmit:             rec.hasSubmit,
+		SubmitUnknown:         rec.submitUnknown,
+		ClaimUnknown:          rec.claimUnknown,
+		PrepareKnownUnwritten: rec.prepareKnownUnwritten,
+		TerminalResult:        cloneIntakeResult(rec.terminalRes),
+		IsTerminal:            rec.isTerminal,
+		UpdatedAtUnixMS:       time.Now().UnixMilli(),
 	}
 }
 
 func intakeRecordFromJournalRecord(rec IntakeJournalRecord) *intakeRecord {
 	return &intakeRecord{
-		statementID:     rec.StatementID,
-		source:          rec.Source,
-		frontierOrdinal: rec.FrontierOrdinal,
-		env:             rec.Env,
-		adm:             cloneAdmissionRecord(rec.Admission),
-		prepared:        clonePreparedLocalResult(rec.Prepared),
-		hasPrepared:     rec.HasPrepared,
-		submit:          rec.Submit,
-		hasSubmit:       rec.HasSubmit,
-		submitUnknown:   rec.SubmitUnknown,
-		claimUnknown:    rec.ClaimUnknown,
-		stage:           rec.Stage,
-		abortReason:     rec.AbortReason,
-		terminalRes:     cloneIntakeResult(rec.TerminalResult),
-		isTerminal:      rec.IsTerminal,
+		statementID:           rec.StatementID,
+		source:                rec.Source,
+		frontierOrdinal:       rec.FrontierOrdinal,
+		env:                   rec.Env,
+		adm:                   cloneAdmissionRecord(rec.Admission),
+		prepared:              clonePreparedLocalResult(rec.Prepared),
+		hasPrepared:           rec.HasPrepared,
+		submit:                rec.Submit,
+		hasSubmit:             rec.HasSubmit,
+		submitUnknown:         rec.SubmitUnknown,
+		claimUnknown:          rec.ClaimUnknown,
+		prepareKnownUnwritten: rec.PrepareKnownUnwritten,
+		stage:                 rec.Stage,
+		abortReason:           rec.AbortReason,
+		terminalRes:           cloneIntakeResult(rec.TerminalResult),
+		isTerminal:            rec.IsTerminal,
 	}
 }
 

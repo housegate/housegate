@@ -474,7 +474,7 @@ type IntakeResult struct {
 	Reason string
 
 	// terminal marks an outcome that will not change on retry (ACK2, or a
-	// successfully cleaned abort). Only terminal outcomes are recorded for
+	// successfully cleaned ordinary abort). Only terminal outcomes are recorded for
 	// idempotent replay; retryable/unknown outcomes and failed aborts are not,
 	// so they reconverge on a later call.
 	terminal bool
@@ -576,7 +576,13 @@ type intakeRecord struct {
 	// before any new PrepareLocalStatement.
 	requirePreparedLookup bool
 
-	// Terminal cache: an Ack2 or a successfully Cleaned abort. A repeated call
+	// prepareKnownUnwritten is durable evidence that the source rejected the
+	// previous PrepareLocalStatement before any unsafe write. It permits one
+	// later prepare without a source lookup; it is cleared durably immediately
+	// before that prepare begins, restoring the normal crash-ambiguity fence.
+	prepareKnownUnwritten bool
+
+	// Terminal cache: an Ack2 or a successfully Cleaned ordinary abort. A repeated call
 	// returns terminalRes without re-running anything.
 	terminalRes IntakeResult
 	isTerminal  bool
@@ -584,7 +590,8 @@ type intakeRecord struct {
 
 // sourceFrontier serializes source writes on one source: design section 3.2's
 // v1 serial constraint requires the next source write to wait until the prior
-// intake on the same source reaches RCBound/Ack2 or Cleaned. It is a
+// intake on the same source reaches a success boundary or completes cleanup
+// (RCBound/Ack2 or Cleaned). It is a
 // holder-identified gate (not a plain mutex) so a statement can re-enter the
 // frontier it already holds during its own retry without deadlocking, with a
 // FIFO waiter queue so distinct statements do not starve.
@@ -636,7 +643,8 @@ func (o *Orchestrator) frontierKey() string {
 // the cached prepare and resumes the unresolved submit/claim/abort stage rather
 // than re-executing the unsafe write. Distinct statement ids on the same source
 // are serialized on the source frontier: the next source write waits until the
-// prior intake is terminal (RCBound/Ack2 or Cleaned). It returns an error only
+// prior intake releases the source frontier (RCBound/Ack2 or completed
+// cleanup). It returns an error only
 // for a local coordination failure (bad admission, transport error, or a failed
 // abort that must be retried); protocol outcomes (retryable/unknown/terminal)
 // are carried in the IntakeResult with Ack2 == false.
@@ -738,12 +746,13 @@ func (o *Orchestrator) Orchestrate(ctx context.Context, adm AdmissionRecord) (In
 	// one, so a resume can only ever advance the statement it first prepared.
 	res, runErr := o.run(ctx, rec.env, rec.adm, rec)
 
-	// Release the frontier only when this intake reaches a terminal stage
-	// (RCBound/Ack2 success, or a completed Cleaned abort). A retryable/unknown
+	// Release the frontier only when this intake reaches a success boundary or
+	// completes cleanup. A pre-write prepare rejection reports Cleaned but stays
+	// retryable; releasing is safe because no unsafe source write exists. A retryable/unknown
 	// outcome or a still-pending abort keeps the frontier held so no later
 	// source write jumps ahead of an undecided one; the holder stays this
 	// statement, so its own next retry re-enters.
-	releaseFrontier := runErr == nil && (res.terminal || res.Lifecycle == LifecycleRCBound)
+	releaseFrontier := runErr == nil && (res.terminal || res.Lifecycle == LifecycleRCBound || res.Lifecycle == LifecycleCleaned)
 	o.finishAttempt(rec, res, runErr, releaseFrontier)
 	return res, runErr
 }
@@ -798,6 +807,9 @@ func (o *Orchestrator) run(ctx context.Context, env StatementEnvelope, adm Admis
 	case LifecycleAbortPending:
 		// A prior attempt judged this statement terminal but its abort did not
 		// complete. Reuse the cached candidate; re-run only the abort.
+		if o.isPrepareKnownUnwritten(rec) {
+			return o.abortTerminalPrepareReject(ctx, o.resultFor(rec), rec, rec.abortReason)
+		}
 		return o.abort(ctx, o.resultFor(rec), rec, rec.abortReason)
 
 	case LifecycleSubmitAccepted:
@@ -844,12 +856,17 @@ func (o *Orchestrator) run(ctx context.Context, env StatementEnvelope, adm Admis
 				}
 			}
 		} else {
+			if o.isPrepareKnownUnwritten(rec) {
+				if err := o.clearPrepareKnownUnwritten(ctx, rec); err != nil {
+					return IntakeResult{StatementID: env.StatementID}, err
+				}
+			}
 			p, s, prepareErr, submitErr := o.prepareAndSubmit(ctx, env, adm)
 			if prepareErr != nil {
 				if errors.Is(prepareErr, ErrPrepareTerminalReject) {
 					res := o.resultFor(rec)
 					res.Submit = s
-					return o.abort(ctx, res, rec, prepareErr.Error())
+					return o.abortTerminalPrepareReject(ctx, res, rec, prepareErr.Error())
 				}
 				// The source may have committed its durable unsafe write before a
 				// transport error or cancellation hid the response. Fence every
@@ -1077,6 +1094,33 @@ func (o *Orchestrator) abort(ctx context.Context, res IntakeResult, rec *intakeR
 	return res, nil
 }
 
+// abortTerminalPrepareReject cleans a source rejection that is known to have
+// happened before any unsafe write. The response reports Cleaned, but unlike a
+// normal terminal abort the record remains retryable: a later attempt may
+// re-run PrepareLocalStatement without a lookup after the source's schema view
+// catches up. The durable prepareKnownUnwritten bit distinguishes that safe
+// retry from an ambiguous crash during a normal prepare.
+func (o *Orchestrator) abortTerminalPrepareReject(ctx context.Context, res IntakeResult, rec *intakeRecord, reason string) (IntakeResult, error) {
+	res.Ack2 = false
+	res.Lifecycle = LifecycleAbortPending
+	if err := o.setPrepareRejectAbortPending(ctx, rec, reason); err != nil {
+		return res, err
+	}
+	parts := o.abortParts(rec)
+	if len(parts) != 0 {
+		return res, fmt.Errorf("intake: pre-write terminal prepare reject for %s unexpectedly has %d candidate parts", res.StatementID, len(parts))
+	}
+	if err := o.preparer.AbortPreparedStatement(ctx, res.StatementID, parts, reason); err != nil {
+		return res, fmt.Errorf("intake: abort failed for %s (%s): %w", res.StatementID, reason, err)
+	}
+	res.Lifecycle = LifecycleCleaned
+	res.terminal = false
+	if err := o.resetAfterPrepareReject(ctx, rec); err != nil {
+		return res, err
+	}
+	return res, nil
+}
+
 func (o *Orchestrator) releasePayloadLease(rec *intakeRecord) {
 	if o.cfg.PayloadLeaseManager == nil || rec == nil {
 		return
@@ -1128,6 +1172,7 @@ func (o *Orchestrator) cachePrepared(ctx context.Context, rec *intakeRecord, pre
 	rec.prepared = prepared
 	rec.hasPrepared = true
 	rec.requirePreparedLookup = false
+	rec.prepareKnownUnwritten = false
 	if rankLifecycle(rec.stage) < rankLifecycle(LifecycleUnsafeWritten) {
 		rec.stage = LifecycleUnsafeWritten
 	}
@@ -1153,6 +1198,87 @@ func (o *Orchestrator) setAbortPending(ctx context.Context, rec *intakeRecord, r
 	snap := journalRecordFromIntakeRecord(rec)
 	o.mu.Unlock()
 	return o.saveJournalSnapshot(ctx, snap)
+}
+
+func (o *Orchestrator) isPrepareKnownUnwritten(rec *intakeRecord) bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return rec.prepareKnownUnwritten
+}
+
+// setPrepareRejectAbortPending records the pre-write classification before
+// cleanup starts. Persist first, then publish in memory, so a failed journal
+// write cannot accidentally authorize a lookup-free retry after restart.
+func (o *Orchestrator) setPrepareRejectAbortPending(ctx context.Context, rec *intakeRecord, reason string) error {
+	o.mu.Lock()
+	snap := journalRecordFromIntakeRecord(rec)
+	snap.Stage = LifecycleAbortPending
+	snap.AbortReason = reason
+	snap.PrepareKnownUnwritten = true
+	o.mu.Unlock()
+	if err := o.saveJournalSnapshot(ctx, snap); err != nil {
+		return err
+	}
+	o.mu.Lock()
+	rec.stage = LifecycleAbortPending
+	rec.abortReason = reason
+	rec.prepareKnownUnwritten = true
+	o.mu.Unlock()
+	return nil
+}
+
+// resetAfterPrepareReject makes a successfully cleaned pre-write rejection
+// retryable while retaining durable evidence that no lookup fence is needed.
+func (o *Orchestrator) resetAfterPrepareReject(ctx context.Context, rec *intakeRecord) error {
+	o.mu.Lock()
+	snap := journalRecordFromIntakeRecord(rec)
+	snap.Stage = LifecyclePreparing
+	snap.AbortReason = ""
+	snap.Prepared = PreparedLocalResult{}
+	snap.HasPrepared = false
+	snap.Submit = SubmitOutcome{}
+	snap.HasSubmit = false
+	snap.SubmitUnknown = false
+	snap.ClaimUnknown = false
+	snap.TerminalResult = IntakeResult{}
+	snap.IsTerminal = false
+	snap.PrepareKnownUnwritten = true
+	o.mu.Unlock()
+	if err := o.saveJournalSnapshot(ctx, snap); err != nil {
+		return err
+	}
+	o.mu.Lock()
+	rec.stage = LifecyclePreparing
+	rec.abortReason = ""
+	rec.prepared = PreparedLocalResult{}
+	rec.hasPrepared = false
+	rec.submit = SubmitOutcome{}
+	rec.hasSubmit = false
+	rec.submitUnknown = false
+	rec.claimUnknown = false
+	rec.terminalRes = IntakeResult{}
+	rec.isTerminal = false
+	rec.requirePreparedLookup = false
+	rec.prepareKnownUnwritten = true
+	o.mu.Unlock()
+	return nil
+}
+
+// clearPrepareKnownUnwritten closes the safe-retry window durably immediately
+// before PrepareLocalStatement is called. From this point a crash is ambiguous
+// again and restart must perform the normal prepared-source lookup.
+func (o *Orchestrator) clearPrepareKnownUnwritten(ctx context.Context, rec *intakeRecord) error {
+	o.mu.Lock()
+	snap := journalRecordFromIntakeRecord(rec)
+	snap.PrepareKnownUnwritten = false
+	o.mu.Unlock()
+	if err := o.saveJournalSnapshot(ctx, snap); err != nil {
+		return err
+	}
+	o.mu.Lock()
+	rec.prepareKnownUnwritten = false
+	o.mu.Unlock()
+	return nil
 }
 
 func (o *Orchestrator) setTerminal(ctx context.Context, rec *intakeRecord, res IntakeResult) error {
@@ -1291,7 +1417,9 @@ func (o *Orchestrator) recoverJournalRecordsLocked(records []IntakeJournalRecord
 		}
 		rec.requirePreparedLookup = needsPreparedLookupAfterRestart(rec)
 		o.records[rec.statementID] = rec
-		o.fenceRecoveredFrontierLocked(rec.source, rec.statementID)
+		if !(rec.prepareKnownUnwritten && rec.stage == LifecyclePreparing) {
+			o.fenceRecoveredFrontierLocked(rec.source, rec.statementID)
+		}
 	}
 }
 
@@ -1344,7 +1472,7 @@ func (o *Orchestrator) lookupPreparedBeforePrepare(ctx context.Context, rec *int
 }
 
 func needsPreparedLookupAfterRestart(rec *intakeRecord) bool {
-	if rec == nil || rec.hasPrepared || rec.isTerminal {
+	if rec == nil || rec.hasPrepared || rec.isTerminal || rec.prepareKnownUnwritten {
 		return false
 	}
 	return rec.stage == "" || rec.stage == LifecyclePreparing
