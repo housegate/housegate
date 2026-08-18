@@ -66,6 +66,7 @@ type StorageIntegrityRuntimeConfig struct {
 	PayloadSpoolDir string                                    `json:"payload_spool_dir" yaml:"payload_spool_dir"`
 	PayloadLease    StorageIntegrityRuntimePayloadLeaseConfig `json:"payload_lease"     yaml:"payload_lease"`
 	MergeGuard      StorageIntegrityRuntimeMergeGuardConfig   `json:"merge_guard"       yaml:"merge_guard"`
+	Backpressure    StorageIntegrityRuntimeBackpressureConfig `json:"backpressure"      yaml:"backpressure"`
 }
 
 type StorageIntegrityRuntimePayloadLeaseConfig struct {
@@ -87,6 +88,21 @@ type StorageIntegrityRuntimeMergeTableConfig struct {
 	Table    string `json:"table"    yaml:"table"`
 }
 
+// StorageIntegrityRuntimeBackpressureConfig governs the ingress part-count
+// throttle. The runtime polls system.parts of the co-located ClickHouse and
+// refuses inserts at the soft limit; the hard limit is mirrored by the SNode.
+// Both limits stay below the protocol-pinned parts_to_throw_insert setting.
+type StorageIntegrityRuntimeBackpressureConfig struct {
+	Enabled               bool     `json:"enabled"                  yaml:"enabled"`
+	UnsafeDatabase        string   `json:"unsafe_database"          yaml:"unsafe_database"`
+	SafeDatabase          string   `json:"safe_database"            yaml:"safe_database"`
+	PollInterval          Duration `json:"poll_interval"            yaml:"poll_interval"`
+	SoftPartsPerPartition int      `json:"soft_parts_per_partition" yaml:"soft_parts_per_partition"`
+	HardPartsPerPartition int      `json:"hard_parts_per_partition" yaml:"hard_parts_per_partition"`
+}
+
+const pinnedPartsToThrowInsert = 3000
+
 func defaultStorageIntegrityConfig() StorageIntegrityConfig {
 	return StorageIntegrityConfig{
 		Ingress: StorageIntegrityIngressConfig{
@@ -102,6 +118,14 @@ func defaultStorageIntegrityConfig() StorageIntegrityConfig {
 			},
 			MergeGuard: StorageIntegrityRuntimeMergeGuardConfig{
 				ReassertInterval: Duration{Duration: 30 * time.Second},
+			},
+			Backpressure: StorageIntegrityRuntimeBackpressureConfig{
+				Enabled:               true,
+				UnsafeDatabase:        "hg_unsafe",
+				SafeDatabase:          "hg_safe",
+				PollInterval:          Duration{Duration: 2 * time.Second},
+				SoftPartsPerPartition: 2400,
+				HardPartsPerPartition: 2950,
 			},
 		},
 		Agent: StorageIntegrityAgentConfig{
@@ -171,6 +195,20 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 			}
 			if strings.TrimSpace(table.Table) == "" {
 				errs = append(errs, fmt.Errorf("storage_integrity.runtime.merge_guard.tables[%d].table is required", i))
+			}
+		}
+		if bp := c.Runtime.Backpressure; bp.Enabled {
+			if strings.TrimSpace(bp.UnsafeDatabase) == "" {
+				errs = append(errs, errors.New("storage_integrity.runtime.backpressure.unsafe_database is required when backpressure is enabled"))
+			}
+			if bp.PollInterval.Duration <= 0 {
+				errs = append(errs, errors.New("storage_integrity.runtime.backpressure.poll_interval must be > 0"))
+			}
+			if bp.SoftPartsPerPartition <= 0 {
+				errs = append(errs, errors.New("storage_integrity.runtime.backpressure.soft_parts_per_partition must be > 0"))
+			}
+			if bp.HardPartsPerPartition <= bp.SoftPartsPerPartition || bp.HardPartsPerPartition >= pinnedPartsToThrowInsert {
+				errs = append(errs, fmt.Errorf("storage_integrity.runtime.backpressure.hard_parts_per_partition must be > soft_parts_per_partition and < the pinned parts_to_throw_insert (%d)", pinnedPartsToThrowInsert))
 			}
 		}
 	}
