@@ -135,7 +135,7 @@ Working directory: `/Users/uranuswch/Dev/sentio_xyz/arbiter-proto`
 **Interfaces:**
 - Produces: `pb.StatementEnvelopeV2{EnvelopeVersion uint32; NetworkId string; KeeperShardId uint32; PayloadFormat string; ClientRevision uint32; SchemaHash string; RowIdProfileId string}` (fields 11–17), `pb.Statement{PayloadFormat string; ClientRevision uint32; SchemaHash string}` (fields 11–13), `pb.L3BlockHeader`, `pb.L3BlockRef`, `pb.L3Block`, `SafeStateClient.GetL3Block(ctx, *pb.L3BlockRef) (*pb.L3Block, error)`.
 
-- [ ] **Step 1: Write the failing conformance test**
+- [x] **Step 1: Write the failing conformance test**
 
 Create `conformance/envelope_v2_test.go`:
 
@@ -223,12 +223,12 @@ func protoreflectName(s string) protoreflect.Name { return protoreflect.Name(s) 
 
 (Put the `protoreflect` import into the file's import block.)
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cd /Users/uranuswch/Dev/sentio_xyz/arbiter-proto && go test ./conformance/ -run 'TestStatementEnvelopeV2HasSignedV2Fields|TestReplayStatementCarriesFormatRevisionSchemaHash|TestSafeStateExposesGetL3Block' -count=1`
 Expected: compile error `pb.L3Block undefined` (or FAIL "missing field envelope_version").
 
-- [ ] **Step 3: Edit the protos**
+- [x] **Step 3: Edit the protos**
 
 In `proto/arbiter.proto` replace the `StatementEnvelopeV2` message body with:
 
@@ -309,12 +309,12 @@ In `proto/replay.proto` append to `message Statement`:
   string schema_hash = 13;
 ```
 
-- [ ] **Step 4: Regenerate, lint, breaking-check, test**
+- [x] **Step 4: Regenerate, lint, breaking-check, test**
 
 Run: `cd /Users/uranuswch/Dev/sentio_xyz/arbiter-proto && make tools && make proto && make lint && make breaking && make test`
 Expected: `buf breaking` passes (append-only), `go test ./...` PASS including the three new tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add proto/arbiter.proto proto/replay.proto gen/pb conformance/envelope_v2_test.go
@@ -326,19 +326,19 @@ git rev-parse HEAD   # record as ARBITER_PROTO_SHA for Task 3
 
 Working directory: `/Users/uranuswch/Dev/sentio_xyz/arbiter-proto`
 
-- [ ] **Step 1: Confirm main is at the Task 1 commit and clean**
+- [x] **Step 1: Confirm main is at the Task 1 commit and clean**
 
 Run: `git status --short && git log --oneline -1`
 Expected: no output from status; the Task 1 commit on top.
 
-- [ ] **Step 2: Tag and push (only after the branch is merged to main; if working on a branch, do this task after merge)**
+- [x] **Step 2: Tag and push (only after the branch is merged to main; if working on a branch, do this task after merge)**
 
 ```bash
 git tag -a v0.5.0 -m "arbiter-proto v0.5.0: statement envelope v2, replay statement payload_format/client_revision/schema_hash, SafeState.GetL3Block"
 git push origin main --tags
 ```
 
-- [ ] **Step 3: Verify the module resolves**
+- [x] **Step 3: Verify the module resolves**
 
 Run: `cd /tmp && GOFLAGS=-mod=mod go list -m github.com/sentioxyz/arbiter-proto@v0.5.0`
 Expected: `github.com/sentioxyz/arbiter-proto v0.5.0`.
@@ -354,7 +354,7 @@ Working directory: `/Users/uranuswch/Dev/housegate/housegate`
 **Files:**
 - Modify: `go.mod`, `go.sum`, `MODULE.bazel.lock`
 
-- [ ] **Step 1: Bump the module (commit pseudo-version now; Task 21 re-pins to the tag)**
+- [x] **Step 1: Bump the module (commit pseudo-version now; Task 21 re-pins to the tag)**
 
 ```bash
 go get github.com/sentioxyz/arbiter-proto@$ARBITER_PROTO_SHA   # or @v0.5.0 once Task 2 is done
@@ -363,12 +363,12 @@ bazel mod tidy
 bazel run //:gazelle
 ```
 
-- [ ] **Step 2: Verify the new fields are visible to housegate**
+- [x] **Step 2: Verify the new fields are visible to housegate**
 
 Run: `bazel build //pkg/storageintegrity:storageintegrity && go doc github.com/sentioxyz/arbiter-proto/gen/pb.StatementEnvelopeV2 | grep -c 'EnvelopeVersion\|RowIdProfileId'`
 Expected: build OK; grep prints `2`.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add go.mod go.sum MODULE.bazel.lock
@@ -387,7 +387,7 @@ Working directory: `/Users/uranuswch/Dev/housegate/housegate`
 - Consumes: existing `keccak256`, `keccak256Hex`, `recoverAddress`, `RelaySigner.privateKey`, `EthValidator.{AllowedAddresses,MaxTokenAge,Enabled}`.
 - Produces: `StatementPurposeV2`, `StatementTokenSettingKey`, `JWSStatementPayloadV2`, `StatementPayloadV2Mismatch`, `(*RelaySigner).SignStatementV2`, `(*EthValidator).ValidateStatementV2`, `StatementSignerV2`, `StatementValidatorV2` (used by Tasks 5, 16, 19 and arbiter Task 30).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `pkg/auth/statement_v2_test.go`:
 
@@ -549,12 +549,12 @@ func TestStatementPayloadV2Mismatch_IgnoresIat(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `bazel test //pkg/auth:auth_test --test_filter='TestStatementV2|TestStatementPayloadV2Mismatch' --test_output=errors`
 Expected: build failure `undefined: JWSStatementPayloadV2` (gazelle will add the new test file automatically only after `bazel run //:gazelle`; run it first).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Append to `pkg/auth/types.go`:
 
@@ -762,12 +762,12 @@ var (
 )
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `bazel run //:gazelle && bazel test //pkg/auth:auth_test --test_output=errors`
 Expected: PASS (all existing + 8 new tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pkg/auth
@@ -799,7 +799,7 @@ Working directory: `/Users/uranuswch/Dev/housegate/housegate`
 ```
 `payload` is the envelope-derived expectation the verifier compares against; `token` is the JWS. Reject vectors reuse the valid token but alter one expected field, or use a wrong-key/wrong-purpose token.
 
-- [ ] **Step 1: Write the generator + consumer test**
+- [x] **Step 1: Write the generator + consumer test**
 
 Create `pkg/auth/statement_v2_vectors_test.go`:
 
@@ -938,17 +938,17 @@ func TestStatementV2Vectors(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Generate the vector file**
+- [x] **Step 2: Generate the vector file**
 
 Run: `cd pkg/auth && HOUSEGATE_WRITE_VECTORS=1 go test . -run TestGenerateStatementV2Vectors -count=1 && ls -la testdata/statement_jws_v2.json && cd -`
 Expected: `ok`, file exists (~6 KB), 16 vectors.
 
-- [ ] **Step 3: Run the consumer under Bazel**
+- [x] **Step 3: Run the consumer under Bazel**
 
 Run: `bazel run //:gazelle && grep -n 'testdata' pkg/auth/BUILD.bazel; bazel test //pkg/auth:auth_test --test_filter=TestStatementV2Vectors --test_output=errors`
 Expected: `data = glob(["testdata/**"])` present in `go_test(name="auth_test")` (if gazelle did not add it, add `data = glob(["testdata/**"]),` to the `auth_test` rule by hand); PASS with 16 subtests.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add pkg/auth/statement_v2_vectors_test.go pkg/auth/testdata/statement_jws_v2.json pkg/auth/BUILD.bazel
@@ -966,7 +966,7 @@ Working directory: `/Users/uranuswch/Dev/housegate/housegate`
 **Interfaces:**
 - Produces: `replay.Statement.{PayloadFormat string; ClientRevision uint32; SchemaHash string}` (json `payload_format`, `client_revision`, `schema_hash`, all `omitempty` — the arbiter-core conformance gate in Task 25 checks these names against the proto), `replay.SchemaHashSource`, `Verifier.SchemaHashes`, `payloadexec.RowIDProfileID`, `payloadexec.PayloadFormatCSVWithNames`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `pkg/replay/verifier_test.go`:
 
@@ -1063,12 +1063,12 @@ func TestRowIDProfileIDMatchesDomain(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `bazel test //pkg/replay:replay_test //pkg/replay/payloadexec:payloadexec_test --test_output=errors`
 Expected: build errors `unknown field SchemaHash`, `undefined: RowIDProfileID`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `pkg/replay/types.go` — extend `Statement`:
 
@@ -1200,12 +1200,12 @@ const RowIDProfileID = rowIDDomain
 const PayloadFormatCSVWithNames = "csv-with-names-v1"
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `bazel test //pkg/replay:replay_test //pkg/replay/payloadexec:payloadexec_test --test_output=errors`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pkg/replay
@@ -1224,7 +1224,7 @@ Working directory: `/Users/uranuswch/Dev/housegate/housegate`
 **Interfaces:**
 - Produces: `nativepayload.PayloadFormat`, `nativepayload.ErrUnsupported`, `nativepayload.Materializer{NetworkID, Revision}`, `nativepayload.Decode`, `nativepayload.ValidateDecodable`; sicore keeps `PayloadEncodingClickHouseNativeData`, `ErrNativePayloadUnsupported`, `NativeMaterializer`, `DecodeNativePayload`, `ValidateNativePayloadDecodable` as aliases (no caller changes).
 
-- [ ] **Step 1: Do the move**
+- [x] **Step 1: Do the move**
 
 ```bash
 mkdir -p pkg/replay/nativepayload
@@ -1297,7 +1297,7 @@ func ValidateNativePayloadDecodable(schema payloadexec.TableSchema, revision int
 }
 ```
 
-- [ ] **Step 2: Write the failing chexec format test**
+- [x] **Step 2: Write the failing chexec format test**
 
 Create `pkg/replay/chexec/materializer_format_test.go`:
 
@@ -1342,7 +1342,7 @@ func TestDecodeRowsBranchesOnPayloadFormat(t *testing.T) {
 }
 ```
 
-- [ ] **Step 3: Implement the chexec branch**
+- [x] **Step 3: Implement the chexec branch**
 
 In `pkg/replay/chexec/materializer.go` add the import `"github.com/housegate/housegate/pkg/replay/nativepayload"`, replace the first lines of `Materialize` (`decoded, err := payloadexec.DecodeCSV(st.Payload, schema)`) with `decoded, err := decodeRows(ctx, schema, st)`, and add:
 
@@ -1365,12 +1365,12 @@ func decodeRows(_ context.Context, schema payloadexec.TableSchema, st replay.Pre
 }
 ```
 
-- [ ] **Step 4: Regenerate BUILD files and run**
+- [x] **Step 4: Regenerate BUILD files and run**
 
 Run: `bazel run //:gazelle && bazel test //pkg/replay/nativepayload:nativepayload_test //pkg/replay/chexec:chexec_test //pkg/storageintegrity:storageintegrity_test --test_output=errors`
 Expected: PASS; the 17 moved tests run under the new package name (`bazel test //pkg/replay/nativepayload:nativepayload_test --test_arg=-test.v | grep -c '^--- PASS'` prints 17).
 
-- [ ] **Step 5: Docker equivalence test — Native payload through chexec == in-process nativepayload executor**
+- [x] **Step 5: Docker equivalence test — Native payload through chexec == in-process nativepayload executor**
 
 Append to `pkg/integration/chreplay_test.go` (docker-bound, already in the CI target list):
 
@@ -1433,7 +1433,7 @@ func TestReplayCHExecutorNativePayloadMatchesInProcessRoot(t *testing.T) {
 
 (imports: `github.com/ClickHouse/ch-go/proto`, `github.com/housegate/housegate/pkg/replay/nativepayload`.) Run: `bazel run //:gazelle && bazel test //pkg/integration:integration_test --test_filter=TestReplayCHExecutorNativePayloadMatchesInProcessRoot --test_output=errors` — Expected: PASS (docker ClickHouse required).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add pkg/replay/nativepayload pkg/replay/chexec pkg/storageintegrity/native_payload.go pkg/storageintegrity/BUILD.bazel pkg/integration/chreplay_test.go pkg/integration/BUILD.bazel
@@ -1451,7 +1451,7 @@ Working directory: `/Users/uranuswch/Dev/housegate/housegate`
 **Interfaces:**
 - Produces: `sicore.EmptySettingsHash`, `sicore.SettingsHashDomain`, `sicore.EnvelopeVersionV2`, `sicore.IsHousegateOwnedSettingKey`, `sicore.RejectUserSettings`; `InsertPayloadEncoding("... FORMAT CSVWithNames")` now returns `PayloadEncodingClickHouseNativeData` (the wire is Native regardless of the SQL FORMAT); `EncodingCSVWithNames = payloadexec.PayloadFormatCSVWithNames`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `pkg/storageintegrity/settings_test.go`:
 
@@ -1502,12 +1502,12 @@ Edit `pkg/storageintegrity/sql_test.go`: change the third case to
 		},
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `bazel run //:gazelle && bazel test //pkg/storageintegrity:storageintegrity_test --test_filter='TestEmptySettingsHash|TestRejectUserSettings|TestInsertPayloadEncodingAccepts' --test_output=errors`
 Expected: build error `undefined: SettingsHashDomain`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `pkg/storageintegrity/settings.go`:
 
@@ -1570,12 +1570,12 @@ Edit `pkg/storageintegrity/sql.go` `InsertPayloadEncoding`: replace the `case "F
 
 Edit `pkg/storageintegrity/materializer_select.go` line 9 to `const EncodingCSVWithNames = payloadexec.PayloadFormatCSVWithNames` and add the import `"github.com/housegate/housegate/pkg/replay/payloadexec"`.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `bazel test //pkg/storageintegrity:storageintegrity_test --test_output=errors`
 Expected: PASS. (`TestEnvelopeFromAdmission_AcceptsMaterializedCSVWithNames` in intake_test.go now fails because CSV SQL maps to native — delete that test in this task; the CSV admission path is removed by Task 20 anyway.)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pkg/storageintegrity
@@ -1597,7 +1597,7 @@ Working directory: `/Users/uranuswch/Dev/housegate/housegate`
 **Interfaces:**
 - Produces: `chproto.SampleColumn{Name, Type string}`, `(*Codec).WriteSampleBlock(cols []SampleColumn) error` — writes ONE server `Data` packet (`ServerCodeData`) holding a 0-row block with the given columns, encoded for `c.Revision()`, through the codec's own writer (chunk-framed when negotiated), LZ4-wrapped when the codec's compression is enabled. Byte-identical to ch-go `proto.Block{Rows:0,Columns:n}.EncodeBlock` for the same revision.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `pkg/chproto/sample_block_test.go`:
 
@@ -1710,12 +1710,12 @@ func TestWriteSampleBlock_RejectsUnnamedOrUntypedColumns(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `bazel run //:gazelle && bazel test //pkg/chproto:chproto_test --test_filter=TestWriteSampleBlock --test_output=errors`
 Expected: build error `undefined: SampleColumn`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Append to `pkg/chproto/codec.go`:
 
@@ -1785,12 +1785,12 @@ func (c *Codec) WriteSampleBlock(cols []SampleColumn) error {
 }
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `bazel test //pkg/chproto:chproto_test --test_output=errors`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pkg/chproto
@@ -1810,7 +1810,7 @@ Working directory: `/Users/uranuswch/Dev/housegate/housegate`
 - Consumes: `chproto.SampleColumn`, `Codec.WriteSampleBlock` (Task 9), `Codec.ReadPacketWithDataLimit`, `chproto.ClientDataPacketIsEmpty`, hooks `OnClientDataStrict/OnClientData/OnQueryInputCompleteStrict/OnQueryInputComplete/OnQueryAbort/OnQueryComplete/ClientDataReadLimit`.
 - Produces: `plugin.DeferredInsertPlan{SampleColumns []chproto.SampleColumn; MaxPayloadBytes uint64}`, `QueryContext.DeferredInsert *DeferredInsertPlan` (set by Task 16's plugin); Relay behaviour per spec §5.2 steps 1–4.
 
-- [ ] **Step 1: Add the plan type**
+- [x] **Step 1: Add the plan type**
 
 Append to `pkg/plugin/context.go` (inside `QueryContext`, after `SuppressUpstreamExecution`):
 
@@ -1841,7 +1841,7 @@ type DeferredInsertPlan struct {
 }
 ```
 
-- [ ] **Step 2: Write the failing happy-path test + harness**
+- [x] **Step 2: Write the failing happy-path test + harness**
 
 Create `pkg/proxy/relay_deferred_test.go`:
 
@@ -2134,12 +2134,12 @@ func TestRelay_DeferredInsert_HappyPathAnswersSampleLocallyAndForwardsAfterTermi
 }
 ```
 
-- [ ] **Step 3: Run to verify failure**
+- [x] **Step 3: Run to verify failure**
 
 Run: `bazel run //:gazelle && bazel test //pkg/proxy:proxy_test --test_filter=TestRelay_DeferredInsert_HappyPath --test_output=errors`
 Expected: FAIL — the client blocks reading the sample block (Relay forwarded the Query immediately; the test times out at 2s: `read 47 bytes: i/o timeout` or "upstream received the Query before the client finished").
 
-- [ ] **Step 4: Implement the Relay side**
+- [x] **Step 4: Implement the Relay side**
 
 Add fields to `Relay` (after `opaqueErr error`):
 
@@ -2449,12 +2449,12 @@ and after the observer counters (`r.obs.ServerPacket(packetName)` block) and BEF
 		}
 ```
 
-- [ ] **Step 5: Run the happy-path test and the whole proxy suite**
+- [x] **Step 5: Run the happy-path test and the whole proxy suite**
 
 Run: `bazel test //pkg/proxy:proxy_test --test_output=errors`
 Expected: PASS (existing staged-input / pipelining tests untouched).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add pkg/plugin/context.go pkg/proxy/relay.go pkg/proxy/relay_deferred_test.go
@@ -2471,7 +2471,7 @@ Working directory: `/Users/uranuswch/Dev/housegate/housegate`
 **Interfaces:**
 - Consumes: harness from Task 10 (`newDeferredHarness`, `deferredInsertHooks`, `encodeInsertQuery`, `encodeEmptyClientData`, `readExact`, `writeAllConn`, `upstreamAcceptsDeferredInsert`).
 
-- [ ] **Step 1: Write the matrix tests**
+- [x] **Step 1: Write the matrix tests**
 
 Append to `pkg/proxy/relay_deferred_test.go`:
 
@@ -2763,12 +2763,12 @@ func TestRelay_DeferredInsert_StrictDataErrorAbortsBeforeForwarding(t *testing.T
 }
 ```
 
-- [ ] **Step 2: Run the matrix (and with the race detector)**
+- [x] **Step 2: Run the matrix (and with the race detector)**
 
 Run: `bazel test //pkg/proxy:proxy_test --test_filter='TestRelay_DeferredInsert' --test_output=errors && bazel test //pkg/proxy:proxy_test --@rules_go//go/config:race --test_filter='TestRelay_DeferredInsert' --test_output=errors`
 Expected: PASS ×2 (8 tests). If `TerminatorSplitAcrossSegments` flakes on the 20ms sleeps, raise them to 50ms — the assertion is on packet boundaries, not timing.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add pkg/proxy/relay_deferred_test.go
@@ -2790,7 +2790,7 @@ Working directory: `/Users/uranuswch/Dev/housegate/housegate`
 **Interfaces:**
 - Produces: `config.StorageIntegrityAgentConfig{Enabled bool; NetworkID string; KeeperShardID uint32; StateDir string; MaxPayloadBytes uint64; RequireNetworkState bool}` at `cfg.StorageIntegrity.Agent` (yaml `storage_integrity.agent.*`); defaults `MaxPayloadBytes: 64<<20`, `RequireNetworkState: true`; `(StorageIntegrityConfig).validateAgent(root *Config) error` — agent-mode-only; a `storage_integrity.agent` block with `enabled: true` in server mode is rejected.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `pkg/config/storage_integrity_agent_config_test.go`:
 
@@ -2866,12 +2866,12 @@ func TestStorageIntegrityAgentConfig_Validate(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `bazel run //:gazelle && bazel test //pkg/config:config_test --test_filter=TestStorageIntegrityAgentConfig --test_output=errors`
 Expected: build error `c.StorageIntegrity.Agent undefined`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `pkg/config/storage_integrity_config.go` add the field to `StorageIntegrityConfig`:
 
@@ -2971,12 +2971,12 @@ In `pkg/config/config.go` `case ModeAgent:` (after the Materialize validation) a
 		}
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `bazel test //pkg/config:config_test --test_output=errors`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pkg/config
@@ -2993,7 +2993,7 @@ Working directory: `/Users/uranuswch/Dev/housegate/housegate`
 **Interfaces:**
 - Produces: `OpenSeqCounter(stateDir, account string) (*SeqCounter, error)`, `(*SeqCounter).Next() (uint64, error)` and `(*SeqCounter).AdvanceTo(seq uint64) error` (both write+fsync BEFORE returning a newly reserved value), `ErrClientSeqExhausted` (checked-increment sentinel; no wraparound), `(*SeqCounter).Last() uint64`, `(*SeqCounter).Path() string`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `pkg/plugins/sistatement/seq_test.go`:
 
@@ -3145,12 +3145,12 @@ func TestSeqCounter_RequiresAccountAndDir(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `bazel run //:gazelle && bazel test //pkg/plugins/sistatement:sistatement_test --test_output=errors`
 Expected: build error `undefined: OpenSeqCounter` (create `doc.go` first so the package exists — see Step 3).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `pkg/plugins/sistatement/doc.go`:
 
@@ -3296,12 +3296,12 @@ func (c *SeqCounter) Next() (uint64, error) {
 }
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `bazel run //:gazelle && bazel test //pkg/plugins/sistatement:sistatement_test --test_output=errors`
 Expected: PASS (all counter tests, including terminal-value rejection and exhausted-file reopen).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pkg/plugins/sistatement
@@ -3319,7 +3319,7 @@ Working directory: `/Users/uranuswch/Dev/housegate/housegate`
 **Interfaces:**
 - Produces: `insertTargetPath(sql) (string, bool)`, `resolveTargetTableID(sql, sessionDB string) (tableID string, err error)`, `insertColumnList(sql) ([]string, bool, error)`, `sampleColumnsFor(schema payloadexec.TableSchema, listed []string) ([]chproto.SampleColumn, error)`, `matchUse(sql) (string, bool)`; `sicore.ParseFlatStatementID(id string) (account string, seq uint64, nonce string, err error)`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `pkg/plugins/sistatement/sqlparse_test.go`:
 
@@ -3438,12 +3438,12 @@ func TestMatchUse(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `bazel run //:gazelle && bazel test //pkg/plugins/sistatement:sistatement_test --test_filter='TestResolveTargetTableID|TestInsertColumnList|TestSampleColumnsFor|TestMatchUse' --test_output=errors`
 Expected: build error `undefined: resolveTargetTableID`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `pkg/plugins/sistatement/sqlparse.go`:
 
@@ -3665,12 +3665,12 @@ func ParseFlatStatementID(id string) (account string, seq uint64, nonce string, 
 }
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `bazel run //:gazelle && bazel test //pkg/plugins/sistatement:sistatement_test //pkg/storageintegrity:storageintegrity_test --test_output=errors`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pkg/plugins/sistatement pkg/storageintegrity/intake.go
@@ -3688,7 +3688,7 @@ Working directory: `/Users/uranuswch/Dev/housegate/housegate`
 - Consumes: Task 4 (`auth.StatementSignerV2`, `auth.JWSStatementPayloadV2`, `auth.StatementTokenSettingKey`), Task 8 (`sicore.RejectUserSettings`, `sicore.EmptySettingsHash`, `sicore.InsertPayloadEncoding`, `sicore.PayloadEncodingClickHouseNativeData`), Task 6 (`payloadexec.RowIDProfileID`), Task 10 (`plugin.DeferredInsertPlan`), Task 13 (`SeqCounter`), Task 14 helpers, `schemaregistry.NewNetworkStateLoader`, `registry.TableSchemas`.
 - Produces: `sistatement.Options`, `sistatement.New(opts) (*Plugin, error)`; `*Plugin` implements `plugin.QueryPlugin`, `plugin.StrictDataPlugin`, `plugin.StrictDataLimitPlugin`, `plugin.QueryInputCompleteStrictPlugin`, `plugin.QueryAbortPlugin`, `plugin.ClosePlugin`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `pkg/plugins/sistatement/plugin_test.go`:
 
@@ -4048,12 +4048,12 @@ func TestPlugin_OversizedPayloadAndAbortAndClose(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `bazel run //:gazelle && bazel test //pkg/plugins/sistatement:sistatement_test --test_output=errors`
 Expected: build error `undefined: Options`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `pkg/plugins/sistatement/plugin.go`:
 
@@ -4400,12 +4400,12 @@ var (
 )
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `bazel run //:gazelle && bazel test //pkg/plugins/sistatement:sistatement_test --test_output=errors`
 Expected: PASS (all tests in the package).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pkg/plugins/sistatement
@@ -4424,7 +4424,7 @@ Working directory: `/Users/uranuswch/Dev/housegate/housegate`
 - Consumes: Task 12 config, Task 15 plugin, `sessionstate.Plugin`.
 - Produces: `Options.StorageIntegrityTableSchemas registry.TableSchemas` (optional override, both modes); `agentNetworkState(opts, rf) (registry.Registry, error)`; agent chain order `HelloPlugins: [sessionstate]`, `QueryPlugins: [materialize?, sistatement?, agent.Signer, metrics]`, `StrictDataPlugins/QueryInputCompleteStrictPlugins/QueryAbortPlugins/ClosePlugins: [sistatement]`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `build_test.go`:
 
@@ -4503,12 +4503,12 @@ func (r registryWithoutSchemas) LatestTableSchema(string, string) {}
 
 (Add imports `"github.com/housegate/housegate/pkg/plugins/agent"` and `"github.com/housegate/housegate/pkg/plugins/sistatement"` to build_test.go. The two shadowing methods have a different signature from `registry.TableSchemas`, so the type assertion in `buildAgent` fails as intended.)
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `bazel run //:gazelle && bazel test //:housegate_test --test_filter='TestBuildAgent_StorageIntegrityAgent' --test_output=errors`
 Expected: build error `unknown field StorageIntegrityTableSchemas`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `proxy.go` — add to `Options` after `StorageIntegrityRuntime`:
 
@@ -4641,12 +4641,12 @@ In `buildAgent`, replace the plugin assembly between `queryPlugins := []plugin.Q
 
 Add import `"github.com/housegate/housegate/pkg/plugins/sistatement"` to build.go.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `bazel run //:gazelle && bazel test //:housegate_test --test_output=errors`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add build.go proxy.go build_test.go BUILD.bazel
@@ -4669,7 +4669,7 @@ Working directory: `/Users/uranuswch/Dev/housegate/housegate`
 - Consumes: Task 8 constants, Task 6 `payloadexec.RowIDProfileID`, Task 3 proto fields.
 - Produces: `AdmissionRecord`/`StatementEnvelope` + `EnvelopeVersion uint32; NetworkID string; KeeperShardID uint32; SettingsHash string; SchemaHash string; RowIDProfileID string`; `EnvelopeFromAdmission` enforces the v2 invariants; `ArbiterStatementEnvelopeToProto` fills fields 5, 11–17.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `pkg/storageintegrity/intake_test.go` (the file already has a helper that builds a valid Native admission — if its name differs, use it; the plan calls it `validNativeAdmission`; if absent add it as below):
 
@@ -4764,12 +4764,12 @@ func TestArbiterStatementEnvelopeToProto_FillsEveryV2Field(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `bazel test //pkg/storageintegrity:storageintegrity_test --test_filter='TestEnvelopeFromAdmission_CarriesV2Fields|TestEnvelopeFromAdmission_RejectsV2Violations|TestArbiterStatementEnvelopeToProto_FillsEveryV2Field' --test_output=errors`
 Expected: build error `unknown field EnvelopeVersion`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Add to `AdmissionRecord` (after `Revision int`):
 
@@ -4859,7 +4859,7 @@ and fill the message:
 
 Update every existing test fixture in `pkg/storageintegrity/*_test.go` and `storage_integrity_ingress_test.go` / `build_test.go` that builds an `AdmissionRecord` for the Native path so it sets the six v2 fields (grep `PayloadEncoding: PayloadEncodingClickHouseNativeData` / `storageIntegrityAdmissionForEncoding` and add `EnvelopeVersion: EnvelopeVersionV2, NetworkID: "testnet-v2", SettingsHash: EmptySettingsHash, SchemaHash: "0x…", RowIDProfileID: payloadexec.RowIDProfileID`).
 
-- [ ] **Step 3b: Terminal prepare-reject class for the source's `schema_hash` check (spec §8)**
+- [x] **Step 3b: Terminal prepare-reject class for the source's `schema_hash` check (spec §8)**
 
 Add to `pkg/storageintegrity/intake.go` (near the other sentinels / after `PreparedStatementLookup`):
 
@@ -4923,12 +4923,12 @@ func TestOrchestrate_TerminalPrepareRejectAbortsWithoutLookupFence(t *testing.T)
 
 (`admissionFixture()` is the existing valid-admission helper in intake_test.go; it must set the six v2 fields after this task's Step 3.)
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `bazel test //pkg/storageintegrity:storageintegrity_test //:housegate_test --test_output=errors`
 Expected: PASS (root tests still reference the CSV materializer — that is Task 19; if `//:housegate_test` fails only on `MaterializerCSV`-named tests, proceed and fix them in Task 19).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pkg/storageintegrity storage_integrity_ingress_test.go build_test.go
@@ -4947,7 +4947,7 @@ Working directory: `/Users/uranuswch/Dev/housegate/housegate`
 - Consumes: Task 4 (`auth.StatementValidatorV2`, `auth.JWSStatementPayloadV2`, `auth.StatementTokenSettingKey`, `auth.DecodeStatementV2Payload`), Task 8, Task 6, `registry.TableSchemas`, `schemaregistry.NewNetworkStateLoader`.
 - Produces: `Config.TableSchemas registry.TableSchemas`, `Config.NetworkID string`; `Admission.{AuthToken string; EnvelopeVersion uint32; NetworkID string; KeeperShardID uint32; SettingsHash string; SchemaHash string; RowIDProfileID string}` with `Admission.UserJWS` now holding the **v2 statement token**; `Config.PayloadMaterializer` is removed in Task 19 (leave it in place here).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `pkg/plugins/storageintegrity/plugin_test.go`:
 
@@ -5119,12 +5119,12 @@ func TestIngressV2_RequiresTableSchemasAndNetworkID(t *testing.T) {
 
 Add imports to the test file: `"encoding/json"`, `"github.com/housegate/housegate/pkg/lthash"`, `"github.com/housegate/housegate/pkg/network"`, `"github.com/housegate/housegate/pkg/replay/payloadexec"`.
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `bazel run //:gazelle && bazel test //pkg/plugins/storageintegrity:storageintegrity_test --test_filter='TestIngressV2' --test_output=errors`
 Expected: build error `unknown field TableSchemas in struct literal`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `Config` gains:
 
@@ -5256,12 +5256,12 @@ Also change the existing `Admission.SHA256` doc if needed (unchanged); imports: 
 
 Every existing plugin test that admits an INSERT (`newSignedIngress` users) now needs a schema source + statement token: change `newSignedIngress` to build the network state from `ingressNetworkState` and set `NetworkID`, and have `signedQueryContext` also append a valid statement token for the empty payload it will capture? Simpler: keep `signedQueryContext` as is and add `withStatementToken(...)` calls where a test drives capture through `OnQueryInputComplete`/`ConsumeAdmission` (the tests listed in `plugin_test.go` that call `ConsumeAdmission` or a consumer). Tests that only exercise `OnQuery` rejections (`TestIngressRejects*`) still need a token present because the missing-token check runs in OnQuery after auth: add the token in `signedQueryContext` for the default payload `[]byte{2,0,0xab,0xcd}` and 54453; tests that capture other bytes override with `withStatementToken` before OnQuery.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `bazel test //pkg/plugins/storageintegrity:storageintegrity_test --test_output=errors`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pkg/plugins/storageintegrity
@@ -5280,7 +5280,7 @@ Working directory: `/Users/uranuswch/Dev/housegate/housegate`
 **Interfaces:**
 - Produces: `AdmissionRecordFromPlugin` copies `EnvelopeVersion/NetworkID/KeeperShardID/SettingsHash/SchemaHash/RowIDProfileID`; built-in runtime materializer kind = `sicore.MaterializerNative`; `sicore.PayloadMaterializer`, `sicore.TableSchemaResolver`, `sicore.NativeCSVPayloadMaterializer` no longer exist.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `storage_integrity_ingress_test.go`:
 
@@ -5318,7 +5318,7 @@ func TestBuildStorageIntegrityRuntimePinsNativeMaterializer(t *testing.T) {
 
 (`runtimeTestConfig(t)` is whatever helper the existing `TestBuildStorageIntegrityRuntime*` tests use to produce a valid `config.StorageIntegrityRuntimeConfig`; reuse it by name — grep `buildStorageIntegrityRuntimeConsumer(` in `build_test.go` / `storage_integrity_ingress_test.go` and mirror the config construction there.)
 
-- [ ] **Step 2: Remove the bridge**
+- [x] **Step 2: Remove the bridge**
 
 ```bash
 git rm pkg/storageintegrity/csv_payload.go pkg/storageintegrity/csv_payload_test.go
@@ -5332,12 +5332,12 @@ git rm pkg/storageintegrity/csv_payload.go pkg/storageintegrity/csv_payload_test
 - `pkg/storageintegrity/materializer_select.go`: update the doc comment: "The built-in runtime pins MaterializerNative; MaterializerCSV remains for payloadexec test payloads."
 - Tests: delete `TestBuildServer_StorageIntegrityIngressWiresCSVPayloadMaterializer`, `TestBuildServer_StorageIntegrityRuntimeRequiresCSVPayloadMaterializer`, `recordingBuildPayloadMaterializer` (build_test.go); in `storage_integrity_ingress_test.go` change every `sicore.MaterializerCSV` argument to `sicore.MaterializerNative`, delete `TestStorageIntegrityIngressRejectsCSVWithoutRevisionBeforePayloadPut`, and change `TestStorageIntegrityIngressRejectsWrongMaterializerBeforePayloadPut` to feed `sicore.EncodingCSVWithNames` and expect `"requires Native materializer"`; delete `TestIngressRejectsCSVWithNamesWithoutMaterializer` and `TestIngressMaterializesCSVWithNamesAdmissionFromCapturedNativeData` in the plugin tests; in `build_test.go` remove `StorageIntegrityPayloadMaterializer:` from every `Options{...}` literal.
 
-- [ ] **Step 3: Run the whole housegate suite**
+- [x] **Step 3: Run the whole housegate suite**
 
 Run: `bazel run //:gazelle && bazel test //... --test_output=errors`
 Expected: PASS (integration targets are `manual` and skipped here).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add -A pkg/storageintegrity pkg/plugins/storageintegrity proxy.go build.go build_test.go storage_integrity_ingress.go storage_integrity_ingress_test.go storage_integrity_runtime.go BUILD.bazel
@@ -5356,7 +5356,7 @@ Working directory: `/Users/uranuswch/Dev/housegate/housegate`
 - Consumes: Task 16 `resolveTableSchemas`, Task 18 `Config.TableSchemas/NetworkID`, `testenv.StartServerProxy/StartAgentProxy`, `network.InMemoryNetworkState.TableSchemas`.
 - Produces: `storage_integrity.ingress.network_id` (yaml), server-side wiring; the integration test proves stored bytes == signed bytes.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `pkg/config/storage_integrity_agent_config_test.go` — append:
 
@@ -5567,12 +5567,12 @@ func TestStorageIntegrity_AgentSignsEnvelopeV2EndToEnd(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run the unit parts to verify failure**
+- [x] **Step 2: Run the unit parts to verify failure**
 
 Run: `bazel run //:gazelle && bazel test //pkg/config:config_test //:housegate_test --test_filter='TestStorageIntegrityIngressConfig_RequiresNetworkID|TestBuildServer_StorageIntegrityIngressRequiresTableSchemas' --test_output=errors`
 Expected: FAIL (`network_id` not rejected; `TableSchemas` requirement missing).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `pkg/config/storage_integrity_config.go`: add `NetworkID string \`json:"network_id" yaml:"network_id"\`` to `StorageIntegrityIngressConfig` and, in `validate(mode)` next to the allowlist check:
 
@@ -5595,12 +5595,12 @@ and add `TableSchemas: ingressSchemas, NetworkID: ingressCfg.NetworkID,` to the 
 
 Every existing `build_test.go` test enabling the ingress must now set `cfg.StorageIntegrity.Ingress.NetworkID = "testnet-v2"` (grep `Ingress.Enabled = true`); `enableStorageIntegrityRuntimeTestConfig` likewise.
 
-- [ ] **Step 4: Run unit + docker integration**
+- [x] **Step 4: Run unit + docker integration**
 
 Run: `bazel test //pkg/config:config_test //:housegate_test --test_output=errors && bazel test //pkg/integration:integration_test --test_filter='TestStorageIntegrity_AgentSignsEnvelopeV2EndToEnd|TestAgent_PinnedUpstream_HappyPath' --test_output=errors`
 Expected: PASS (docker + `clickhouse/clickhouse-server:25.8` must be available locally, as for every `pkg/integration` target; the target is already in `.github/workflows/ci.yml`'s explicit list, so no CI change is needed).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pkg/config build.go build_test.go pkg/integration/storage_integrity_agent_test.go pkg/integration/BUILD.bazel
@@ -5614,7 +5614,7 @@ Working directory: `/Users/uranuswch/Dev/housegate/housegate`
 **Files:**
 - Modify: `CLAUDE.md` (Key Modules bullets), `go.mod`/`go.sum`/`MODULE.bazel.lock`
 
-- [ ] **Step 1: Update CLAUDE.md**
+- [x] **Step 1: Update CLAUDE.md**
 
 In the `pkg/plugins/` bullet list add, after the `storageintegrity` ingress mention (add one if missing):
 
@@ -5628,14 +5628,14 @@ Add a `pkg/replay/nativepayload/` bullet: "Native `ClientData` payload decoder (
 
 In the storage-integrity ingress description note: "ingress validates the v2 statement token against its own capture (`payload_hash` of the exact Native bytes, `schema_hash` from network state, `settings_hash == EmptySettingsHash`); the CSV bridge (`NativeCSVPayloadMaterializer`, `StorageIntegrityPayloadMaterializer`) is gone; the runtime pins `MaterializerNative`."
 
-- [ ] **Step 2: Re-pin arbiter-proto to the tag (after Task 2)**
+- [x] **Step 2: Re-pin arbiter-proto to the tag (after Task 2)**
 
 ```bash
 go get github.com/sentioxyz/arbiter-proto@v0.5.0 && go mod tidy && bazel mod tidy && bazel run //:gazelle
 git diff --stat go.mod
 ```
 
-- [ ] **Step 3: Full verification**
+- [x] **Step 3: Full verification**
 
 Run: `bazel build //... && bazel test //... --test_output=errors && bazel test //pkg/integration:integration_test //pkg/integration/testenv:testenv_test --test_output=errors`
 Expected: PASS; compare any integration failures against a clean `main` build before calling them regressions (CLAUDE.md rule).
