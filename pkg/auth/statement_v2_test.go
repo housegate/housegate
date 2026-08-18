@@ -1,9 +1,13 @@
 package auth
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ethereum/go-ethereum/crypto"
 )
 
 const statementV2TestKey = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -116,6 +120,90 @@ func TestStatementV2_PurposeMismatchRejects(t *testing.T) {
 	if _, err := validator.ValidateStatementV2(legacy, want); err == nil || !strings.Contains(err.Error(), "purpose") {
 		t.Fatalf("legacy token accepted as statement token: %v", err)
 	}
+}
+
+func TestStatementV2_RejectsNonCanonicalProtectedHeader(t *testing.T) {
+	signer, _ := NewRelaySigner(statementV2TestKey)
+	validator := NewEthValidator([]string{signer.Address()}, time.Minute, true, false, "", nil)
+	want := statementV2Fixture(signer.Address())
+	want.Iat = time.Now().Unix()
+	for name, header := range map[string]JWSHeader{
+		"legacy algorithm alias": {Alg: "secp256k1", Typ: "JWT"},
+		"missing type":           {Alg: "ES256K"},
+		"wrong type":             {Alg: "ES256K", Typ: "JOSE"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			token := signStatementV2WithHeader(t, header, want)
+			if _, err := validator.ValidateStatementV2(token, want); err == nil {
+				t.Fatalf("accepted non-canonical protected header %+v", header)
+			}
+		})
+	}
+}
+
+func TestRelaySigner_AllCompactJWSLanesUseCanonicalProtectedHeader(t *testing.T) {
+	signer, _ := NewRelaySigner(statementV2TestKey)
+	statement := statementV2Fixture(signer.Address())
+	statement.Iat = time.Now().Unix()
+	queryToken, err := signer.SignToken("SELECT 1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	statementToken, err := signer.SignStatementV2(statement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peerToken, err := signer.SignPeerLogin("peer-1", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for lane, token := range map[string]string{
+		"query":     queryToken,
+		"statement": statementToken,
+		"peer":      peerToken,
+	} {
+		t.Run(lane, func(t *testing.T) {
+			parts := strings.Split(token, ".")
+			if len(parts) != 3 {
+				t.Fatalf("not compact JWS: %q", token)
+			}
+			raw, err := base64.RawURLEncoding.DecodeString(parts[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			var header JWSHeader
+			if err := json.Unmarshal(raw, &header); err != nil {
+				t.Fatal(err)
+			}
+			if header != (JWSHeader{Alg: "ES256K", Typ: "JWT"}) {
+				t.Fatalf("protected header = %+v", header)
+			}
+		})
+	}
+}
+
+func signStatementV2WithHeader(t *testing.T, header JWSHeader, payload JWSStatementPayloadV2) string {
+	t.Helper()
+	payload.Purpose = StatementPurposeV2
+	headerJSON, err := json.Marshal(header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := base64.RawURLEncoding.EncodeToString(headerJSON) + "." + base64.RawURLEncoding.EncodeToString(payloadJSON)
+	key, err := crypto.HexToECDSA(statementV2TestKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig, err := crypto.Sign(keccak256([]byte(input)), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig[64] += 27
+	return input + "." + base64.RawURLEncoding.EncodeToString(sig)
 }
 
 func TestStatementV2_RecoveredAddressNotInAllowlistRejects(t *testing.T) {

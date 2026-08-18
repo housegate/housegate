@@ -346,7 +346,8 @@ func DecodeStatementV2Payload(token string) (JWSStatementPayloadV2, error) {
 }
 
 // ValidateStatementV2 verifies a storage-integrity statement token: compact
-// serialization only, ES256K/secp256k1, purpose == StatementPurposeV2, iat
+// serialization only, canonical alg=ES256K + typ=JWT, purpose ==
+// StatementPurposeV2, iat
 // within MaxTokenAge (5s skew), exact equality of every bound field against
 // want (StatementPayloadV2Mismatch), then signer recovery and allowlist.
 // Returns the recovered lowercase 0x address. Callers compare it against
@@ -365,8 +366,11 @@ func (v *EthValidator) ValidateStatementV2(token string, want JWSStatementPayloa
 	if err := json.Unmarshal(headerBytes, &header); err != nil {
 		return "", fmt.Errorf("invalid statement header JSON: %w", err)
 	}
-	if header.Alg != "ES256K" && header.Alg != "secp256k1" {
+	if header.Alg != "ES256K" {
 		return "", fmt.Errorf("unsupported algorithm: %s", header.Alg)
+	}
+	if header.Typ != "JWT" {
+		return "", fmt.Errorf("unsupported statement token type: %s", header.Typ)
 	}
 	payload, err := DecodeStatementV2Payload(token)
 	if err != nil {
