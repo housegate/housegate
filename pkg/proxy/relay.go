@@ -2134,16 +2134,25 @@ func compressionMode(c proto.Compression) string {
 	return "uncompressed"
 }
 
-// writeExceptionToClient converts a plugin error into a synthetic
-// ClickHouse Exception and writes it to the client side. Used when the
-// OnQuery chain short-circuits (e.g. JWS invalid, rate-limit).
-func (r *Relay) writeExceptionToClient(ctx context.Context, pluginErr error) {
-	exc := &chproto.Exception{
+// exceptionForPluginError maps a plugin error to the synthetic Exception the
+// client sees. ClientError selects an explicit code and message; all other
+// plugin rejections keep the generic 403 behavior.
+func exceptionForPluginError(pluginErr error) *chproto.Exception {
+	var clientErr *chproto.ClientError
+	if errors.As(pluginErr, &clientErr) {
+		return &chproto.Exception{Code: proto.Error(clientErr.Code), Name: "DB::Exception", Message: clientErr.Message}
+	}
+	return &chproto.Exception{
 		Code:    403, // ClickHouse AUTHENTICATION_FAILED; generic plugin-reject
 		Name:    "DB::Exception",
 		Message: pluginErr.Error(),
 	}
-	if err := r.sess.Client().WriteException(exc); err != nil {
+}
+
+// writeExceptionToClient converts a plugin error into a synthetic ClickHouse
+// Exception and writes it to the client side.
+func (r *Relay) writeExceptionToClient(ctx context.Context, pluginErr error) {
+	if err := r.sess.Client().WriteException(exceptionForPluginError(pluginErr)); err != nil {
 		_, logger := log.FromContext(ctx)
 		logger.Warne(err, "failed to write plugin-error exception")
 	}

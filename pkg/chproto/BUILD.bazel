@@ -4,6 +4,7 @@ go_library(
     name = "chproto",
     srcs = [
         "addendum.go",
+        "client_error.go",
         "codec.go",
         "compress.go",
         "exception.go",
@@ -27,6 +28,7 @@ go_test(
     name = "chproto_test",
     srcs = [
         "addendum_test.go",
+        "client_error_test.go",
         "codec_test.go",
         "compress_test.go",
         "query_codec_test.go",

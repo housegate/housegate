@@ -25,6 +25,7 @@ go_test(
     srcs = [
         "commitgate_e2e_test.go",
         "relay_deferred_test.go",
+        "relay_exception_test.go",
         "relay_helpers_test.go",
         "relay_test.go",
         "server_test.go",
