@@ -1062,6 +1062,7 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 		// capture hooks run before splice and may fail closed; legacy
 		// DataPlugins remain fail-open observers.
 		inputComplete := false
+		initialEmptyMarker := false
 		if pkt.Type == uint64(chproto.ClientDataCode) {
 			var err error
 			inputComplete, err = chproto.ClientDataPacketIsEmpty(pkt.Raw, client.Compression())
@@ -1087,11 +1088,10 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 				!curQctxSawInitialEmpty
 			if deferInputComplete {
 				curQctxSawInitialEmpty = true
+				initialEmptyMarker = true
 				inputComplete = false
-			} else {
-				if !inputComplete {
-					curQctxSawPayload = true
-				}
+			} else if !inputComplete {
+				curQctxSawPayload = true
 				if err := r.hooks.OnClientDataStrict(ctx, curQctx, pkt.Raw); err != nil {
 					r.writeExceptionToClient(ctx, err)
 					r.hooks.OnQueryAbort(ctx, curQctx)
@@ -1125,9 +1125,10 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 		}
 
 		if pkt.Type == uint64(chproto.ClientDataCode) && curQctx != nil && curQctx.SuppressUpstreamExecution {
-			if inputComplete {
-				logger.Debugw("staged client data terminator forwarded to upstream",
+			if inputComplete || initialEmptyMarker {
+				logger.Debugw("staged client data control packet forwarded to upstream",
 					"query_id", curQctx.Query.ID,
+					"initial_marker", initialEmptyMarker,
 					"raw_len", pkt.RawLen,
 				)
 			} else {
