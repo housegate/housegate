@@ -122,6 +122,11 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 	if rawMergeGuard == nil {
 		errs = append(errs, errors.New("storage_integrity.runtime.merge_guard or merge_conn is required"))
 	}
+	if len(opts.TableSchemas) == 0 {
+		errs = append(errs, errors.New("storage_integrity.runtime requires the authoritative table schema set (StorageIntegrityRuntimeOptions.TableSchemas)"))
+	} else if err := sicore.ValidatePhysicalTableNames(opts.TableSchemas); err != nil {
+		errs = append(errs, fmt.Errorf("storage_integrity.runtime schema set: %w", err))
+	}
 	if joined := errors.Join(errs...); joined != nil {
 		return nil, nil, joined
 	}
@@ -148,12 +153,6 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 		safeDatabase := strings.TrimSpace(backpressure.SafeDatabase)
 		if safeDatabase == "" || safeDatabase == unsafeDatabase {
 			return nil, nil, errors.New("storage_integrity.runtime.backpressure requires a non-empty safe_database distinct from unsafe_database")
-		}
-		if len(opts.TableSchemas) == 0 {
-			return nil, nil, errors.New("storage_integrity.runtime.backpressure requires the authoritative table schema set (StorageIntegrityRuntimeOptions.TableSchemas)")
-		}
-		if err := sicore.ValidatePhysicalTableNames(opts.TableSchemas); err != nil {
-			return nil, nil, fmt.Errorf("storage_integrity.runtime.backpressure schema set: %w", err)
 		}
 		pressure := opts.PartsPressure
 		var pressureRunner StorageIntegrityPartsPressureLifecycle

@@ -367,10 +367,14 @@ func (s *rootRecordingSubmitter) SubmitStatement(_ context.Context, env sicore.S
 
 type rootRecordingPreparer struct {
 	prepareCalls int
+	lookupCalls  int
 	env          sicore.StatementEnvelope
 	source       string
 	claim        sicore.ClaimOutcome
 	err          error
+	lookupResult sicore.PreparedLocalResult
+	lookupFound  bool
+	lookupErr    error
 }
 
 func (p *rootRecordingPreparer) PrepareLocalStatement(_ context.Context, env sicore.StatementEnvelope, _ []byte) (sicore.PreparedLocalResult, error) {
@@ -400,7 +404,8 @@ func (p *rootRecordingPreparer) AbortPreparedStatement(context.Context, string, 
 }
 
 func (p *rootRecordingPreparer) LookupPreparedStatement(context.Context, string) (sicore.PreparedLocalResult, bool, error) {
-	return sicore.PreparedLocalResult{}, false, nil
+	p.lookupCalls++
+	return p.lookupResult, p.lookupFound, p.lookupErr
 }
 
 type rootPreparerWithoutLookup struct{}

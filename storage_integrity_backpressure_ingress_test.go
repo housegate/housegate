@@ -276,6 +276,48 @@ func TestIngress_CachedPrepareResumeBypassesPressureGate(t *testing.T) {
 	}
 }
 
+func TestIngress_IndeterminatePrepareRetryLooksUpSourceBeforePressureGate(t *testing.T) {
+	pressure := &fakePartsPressure{}
+	ingress, _, submitter, preparer := newBackpressureIngress(t, pressure)
+	preparer.err = errors.New("prepare response lost")
+	if err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), bpAdmission()); err == nil || !strings.Contains(err.Error(), "prepare response lost") {
+		t.Fatalf("first admission = %v, want indeterminate prepare error", err)
+	}
+	firstPressureCalls := len(pressure.allowCalls)
+	if preparer.prepareCalls != 1 {
+		t.Fatalf("first prepare calls = %d, want 1", preparer.prepareCalls)
+	}
+
+	preparer.err = nil
+	preparer.lookupFound = true
+	preparer.lookupResult = sicore.PreparedLocalResult{
+		StatementID:     preparer.env.StatementID,
+		SourceNode:      "snode-A",
+		PayloadRef:      preparer.env.PayloadRef,
+		PayloadHash:     preparer.env.PayloadHash,
+		PayloadLength:   preparer.env.PayloadLength,
+		PayloadEncoding: preparer.env.PayloadEncoding,
+		Revision:        preparer.env.Revision,
+		Lifecycle:       sicore.LifecycleUnsafeWritten,
+	}
+	pressure.refuse = map[string]error{
+		"net1__events/p_eu": &sicore.BackpressureError{Database: "hg_unsafe", Table: "net1__events", Partition: "p_eu", Parts: 2400, Limit: 2400, Kind: "soft"},
+	}
+	submitter.outcome = sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}
+	if err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), bpAdmission()); err != nil {
+		t.Fatalf("source-proven prepared retry must bypass soft pressure: %v", err)
+	}
+	if preparer.lookupCalls != 1 {
+		t.Fatalf("prepared lookup calls = %d, want 1", preparer.lookupCalls)
+	}
+	if preparer.prepareCalls != 1 {
+		t.Fatalf("prepare calls = %d, want no second prepare", preparer.prepareCalls)
+	}
+	if len(pressure.allowCalls) != firstPressureCalls {
+		t.Fatalf("pressure calls = %d, want unchanged %d after source-proven resume", len(pressure.allowCalls), firstPressureCalls)
+	}
+}
+
 func TestIngress_TerminalCleanupInvalidatesPressure(t *testing.T) {
 	pressure := &fakePartsPressure{}
 	ingress, _, submitter, _ := newBackpressureIngress(t, pressure)

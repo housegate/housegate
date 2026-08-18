@@ -647,7 +647,8 @@ func TestBuildStorageIntegrityRuntimeBackpressureRequiresConnAndResolver(t *test
 	base := StorageIntegrityRuntimeOptions{
 		StatementSubmitter: &rootRecordingSubmitter{}, SourcePreparer: &rootRecordingPreparer{},
 		StatusQuerier: rootRecordingStatusQuerier{}, PayloadWriter: &rootRecordingPayloadWriter{},
-		MergeGuard: &recordingBuildMergeGuard{},
+		MergeGuard:   &recordingBuildMergeGuard{},
+		TableSchemas: bpSchemas(),
 	}
 	if _, _, err := buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, base); err == nil || !strings.Contains(err.Error(), "backpressure") {
 		t.Fatalf("enabled backpressure without merge_conn/schema_resolver must fail: %v", err)
@@ -711,6 +712,30 @@ func TestBuildStorageIntegrityRuntimeRejectsPhysicalTableNameCollision(t *testin
 	})
 	if !errors.Is(err, sicore.ErrPhysicalTableNameCollision) {
 		t.Fatalf("colliding physical table outputs err = %v", err)
+	}
+}
+
+func TestBuildStorageIntegrityRuntimeRejectsPhysicalTableNameCollisionWhenBackpressureDisabled(t *testing.T) {
+	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatalf("NewRelaySigner: %v", err)
+	}
+	cfg := minimalRouterOnlyCfg(t)
+	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
+	cfg.StorageIntegrity.Runtime.Backpressure.Enabled = false
+	_, _, err = buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, StorageIntegrityRuntimeOptions{
+		StatementSubmitter: &rootRecordingSubmitter{},
+		SourcePreparer:     &rootRecordingPreparer{},
+		StatusQuerier:      rootRecordingStatusQuerier{},
+		PayloadWriter:      &rootRecordingPayloadWriter{},
+		MergeGuard:         &recordingBuildMergeGuard{},
+		TableSchemas: []payloadexec.TableSchema{
+			{TableID: "a.b__c"},
+			{TableID: "a__b.c"},
+		},
+	})
+	if !errors.Is(err, sicore.ErrPhysicalTableNameCollision) {
+		t.Fatalf("colliding physical table outputs with backpressure disabled err = %v", err)
 	}
 }
 
@@ -815,6 +840,7 @@ func TestBuildServer_StorageIntegrityRuntimeAutoWiresArbiterStatusQuerier(t *tes
 			SourcePreparer:       &rootRecordingPreparer{},
 			PayloadWriter:        &rootRecordingPayloadWriter{},
 			MergeGuard:           &recordingBuildMergeGuard{},
+			TableSchemas:         bpSchemas(),
 		},
 	}, nil)
 	if err != nil {
@@ -880,6 +906,7 @@ func TestBuildStorageIntegrityRuntimeBuildsConsumerAndRunsMergeGuard(t *testing.
 			StatusQuerier:      rootRecordingStatusQuerier{},
 			PayloadWriter:      writer,
 			MergeGuard:         guard,
+			TableSchemas:       bpSchemas(),
 		},
 	)
 	if err != nil {
@@ -982,6 +1009,7 @@ func TestBuildStorageIntegrityRuntimeBuildsMergeGuardFromConnAndConfig(t *testin
 			StatusQuerier:      rootRecordingStatusQuerier{},
 			PayloadWriter:      &rootRecordingPayloadWriter{result: sicore.PayloadPutResult{PayloadRef: "payload://store/ref-1", State: sicore.PayloadStateAvailable}},
 			MergeConn:          mergeConn,
+			TableSchemas:       bpSchemas(),
 		},
 	)
 	if err != nil {
@@ -1031,7 +1059,8 @@ func TestBuildStorageIntegrityRuntimeWrapsMergeSupervisor(t *testing.T) {
 				State:              sicore.PayloadStateAvailable,
 				LeaseExpiresUnixMS: uint64(time.Now().Add(time.Hour).UnixMilli()),
 			}},
-			MergeGuard: rawGuard,
+			MergeGuard:   rawGuard,
+			TableSchemas: bpSchemas(),
 		},
 	)
 	if err != nil {
@@ -1063,6 +1092,7 @@ func TestStartStorageIntegrityRuntimeFailsClosedOnMergeGuardError(t *testing.T) 
 			StatusQuerier:      rootRecordingStatusQuerier{},
 			PayloadWriter:      &rootRecordingPayloadWriter{result: sicore.PayloadPutResult{PayloadRef: "payload://store/ref-1", State: sicore.PayloadStateAvailable}},
 			MergeGuard:         guard,
+			TableSchemas:       bpSchemas(),
 		},
 	)
 	if err != nil {

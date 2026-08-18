@@ -661,7 +661,19 @@ func (o *Orchestrator) AdmissionRequiresPrepare(ctx context.Context, adm Admissi
 	if rec != nil {
 		requires, err := recordRequiresPrepare(rec.env, rec.adm, rec.hasPrepared, rec.isTerminal, rec.stage, adm)
 		o.mu.Unlock()
-		return requires, err
+		if err != nil || !requires {
+			return requires, err
+		}
+		// A prior PrepareLocalStatement response may have been lost after the
+		// source durably wrote the unsafe part. Resolve that uncertainty before
+		// ingress consults part pressure: a found prepare is a resume and must not
+		// be blocked by the part it already created; found=false proves that the
+		// later Orchestrate call may execute a genuinely new prepare.
+		_, found, err := o.lookupPreparedBeforePrepare(ctx, rec)
+		if err != nil {
+			return false, err
+		}
+		return !found, nil
 	}
 	o.mu.Unlock()
 
