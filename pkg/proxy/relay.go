@@ -59,6 +59,20 @@ type Relay struct {
 	opaqueMode bool
 	opaqueDone chan struct{}
 	opaqueErr  error
+
+	// deferredGate coordinates the deferred-INSERT sample step between the
+	// two relay goroutines: clientToUpstream arms it right before writing the
+	// deferred Query upstream; upstreamToClient settles it when the upstream
+	// answers with its own sample Data block (consumed, never forwarded), an
+	// Exception (forwarded to the client), or fails.
+	deferredMu   sync.Mutex
+	deferredGate *deferredSampleGate
+	// deferredInputDone closes only after the buffered INSERT terminator is
+	// written upstream and OnQueryInputComplete has returned. An upstream may
+	// produce EndOfStream immediately after reading that terminator, so the
+	// server loop waits on this gate before exposing the terminal packet and
+	// completion hooks to the client.
+	deferredInputDone chan struct{}
 }
 
 // UpstreamDialer dials and returns the codec for this session's upstream.
@@ -81,6 +95,72 @@ var errOpaqueConnectionNotReusable = errors.New(
 // metrics are not emitted.
 func NewRelay(sess chsession.Session, hooks plugin.Hooks, obs PacketObserver, dialer UpstreamDialer) *Relay {
 	return &Relay{sess: sess, hooks: hooks, obs: obs, dialer: dialer}
+}
+
+type deferredSampleGate struct {
+	queryID string
+	done    chan deferredSampleResult // buffered(1): settle never blocks
+}
+
+type deferredSampleResult struct {
+	exception *chproto.Exception // upstream rejected the Query at the sample step
+	err       error              // transport / protocol failure; session closes
+}
+
+func (r *Relay) armDeferredSample(queryID string) <-chan deferredSampleResult {
+	r.deferredMu.Lock()
+	defer r.deferredMu.Unlock()
+	g := &deferredSampleGate{queryID: queryID, done: make(chan deferredSampleResult, 1)}
+	r.deferredGate = g
+	return g.done
+}
+
+// settleDeferredSample delivers res to the armed gate (no-op when none) and
+// disarms it. Returns whether a gate was armed.
+func (r *Relay) settleDeferredSample(res deferredSampleResult) bool {
+	r.deferredMu.Lock()
+	defer r.deferredMu.Unlock()
+	if r.deferredGate == nil {
+		return false
+	}
+	r.deferredGate.done <- res
+	r.deferredGate = nil
+	return true
+}
+
+func (r *Relay) disarmDeferredSample() {
+	r.deferredMu.Lock()
+	r.deferredGate = nil
+	r.deferredMu.Unlock()
+}
+
+func (r *Relay) deferredSampleArmed() bool {
+	r.deferredMu.Lock()
+	defer r.deferredMu.Unlock()
+	return r.deferredGate != nil
+}
+
+func (r *Relay) armDeferredInputComplete() {
+	r.deferredMu.Lock()
+	r.deferredInputDone = make(chan struct{})
+	r.deferredMu.Unlock()
+}
+
+func (r *Relay) settleDeferredInputComplete() bool {
+	r.deferredMu.Lock()
+	defer r.deferredMu.Unlock()
+	if r.deferredInputDone == nil {
+		return false
+	}
+	close(r.deferredInputDone)
+	r.deferredInputDone = nil
+	return true
+}
+
+func (r *Relay) deferredInputCompletion() <-chan struct{} {
+	r.deferredMu.Lock()
+	defer r.deferredMu.Unlock()
+	return r.deferredInputDone
 }
 
 func (r *Relay) beginActiveQuery(queryID string) bool {
@@ -752,6 +832,20 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 				rejectedQctx = qctx
 				continue
 			}
+			if qctx.DeferredInsert != nil {
+				if qctx.SuppressUpstreamExecution {
+					err := fmt.Errorf("query %q: DeferredInsert and SuppressUpstreamExecution are mutually exclusive", q.ID)
+					r.writeExceptionToClient(ctx, err)
+					r.hooks.OnQueryAbort(ctx, qctx)
+					r.hooks.OnQueryComplete(ctx, r.sess)
+					rejectedQctx = qctx
+					continue
+				}
+				if err := r.runDeferredInsert(ctx, qctx, clientCompression); err != nil {
+					return err
+				}
+				continue
+			}
 			// Re-fetch upstream after OnQuery: a USE-triggered pivot
 			// (forward plugin's OnQuery) calls RebindToPeer which atomically
 			// swaps the upstream codec to the peer and closes the old one.
@@ -911,6 +1005,191 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 			curQctxSawPayload = false
 		}
 	}
+}
+
+// runDeferredInsert drives the deferred-INSERT protocol (spec 2026-08-18
+// signed envelope v2 §5.2) for one query whose OnQuery chain set
+// qctx.DeferredInsert:
+//
+//  1. write the plan's 0-row sample block to the client (the Query is NOT
+//     forwarded yet);
+//  2. read client packets: the first empty Data before any payload is the
+//     end-of-external-tables marker (kept for replay upstream); non-empty
+//     Data runs OnClientDataStrict/OnClientData and is buffered under
+//     MaxPayloadBytes; the empty terminator runs OnQueryInputCompleteStrict;
+//     Cancel aborts with a local EndOfStream; anything else is a protocol
+//     error;
+//  3. forward Query (+ external-tables marker), wait for upstreamToClient to
+//     consume the upstream's own sample block (or forward its Exception),
+//     then forward every buffered Data packet and the terminator via
+//     WriteRawPacket, and fire OnQueryInputComplete. The ordinary
+//     upstreamToClient loop delivers the terminal EndOfStream/Exception.
+//
+// A nil return means the session stays usable (success, upstream Exception,
+// or client Cancel); a non-nil return closes the session (fail-closed on
+// strict-hook errors, limits, protocol violations, transport errors). The
+// buffer is a local variable and is released on every path.
+func (r *Relay) runDeferredInsert(ctx context.Context, qctx *plugin.QueryContext, compression proto.Compression) error {
+	_, logger := log.FromContext(ctx)
+	client := r.sess.Client()
+	plan := qctx.DeferredInsert
+	q := qctx.Query
+	if plan.MaxPayloadBytes == 0 {
+		err := fmt.Errorf("query %q: deferred INSERT plan requires MaxPayloadBytes > 0", q.ID)
+		r.writeExceptionToClient(ctx, err)
+		r.hooks.OnQueryAbort(ctx, qctx)
+		r.hooks.OnQueryComplete(ctx, r.sess)
+		return err
+	}
+	rejectClose := func(err error) error {
+		r.writeExceptionToClient(ctx, err)
+		r.hooks.OnQueryAbort(ctx, qctx)
+		r.hooks.OnQueryComplete(ctx, r.sess)
+		return err
+	}
+	if err := client.WriteSampleBlock(plan.SampleColumns); err != nil {
+		r.hooks.OnQueryAbort(ctx, qctx)
+		r.hooks.OnQueryComplete(ctx, r.sess)
+		return fmt.Errorf("write deferred sample block: %w", err)
+	}
+
+	var (
+		buffered        [][]byte
+		bufferedBytes   uint64
+		initialEmptyRaw []byte
+		terminatorRaw   []byte
+		sawPayload      bool
+	)
+	for terminatorRaw == nil {
+		remaining := plan.MaxPayloadBytes - bufferedBytes
+		if limit, enforce := r.hooks.ClientDataReadLimit(qctx); enforce && limit < remaining {
+			remaining = limit
+		}
+		pkt, decErr := client.ReadPacketWithDataLimit(remaining, uint64(chproto.ClientQueryCode))
+		if errors.Is(decErr, chproto.ErrPacketTooLarge) {
+			return rejectClose(fmt.Errorf("deferred INSERT %q payload exceeds limit of %d bytes: %w", q.ID, plan.MaxPayloadBytes, decErr))
+		}
+		if pkt == nil || (decErr != nil && !errors.Is(decErr, chproto.ErrDecode)) {
+			r.hooks.OnQueryAbort(ctx, qctx)
+			r.hooks.OnQueryComplete(ctx, r.sess)
+			if decErr == nil {
+				decErr = io.EOF
+			}
+			return decErr
+		}
+		if r.obs != nil {
+			r.obs.ClientPacket(clientPacketName(pkt.Type))
+			if pkt.RawLen > 0 {
+				r.obs.BytesTransferred("client_to_upstream", float64(pkt.RawLen))
+			}
+		}
+		switch pkt.Type {
+		case uint64(chproto.ClientDataCode):
+			empty, err := chproto.ClientDataPacketIsEmpty(pkt.Raw, compression)
+			if err != nil {
+				r.hooks.OnQueryAbort(ctx, qctx)
+				r.hooks.OnQueryComplete(ctx, r.sess)
+				return fmt.Errorf("classify deferred client data packet: %w", err)
+			}
+			switch {
+			case empty && !sawPayload && initialEmptyRaw == nil:
+				// End-of-external-tables marker every client sends after the
+				// Query; replayed upstream so ClickHouse proceeds to its sample.
+				initialEmptyRaw = append([]byte(nil), pkt.Raw...)
+			case empty:
+				terminatorRaw = append([]byte(nil), pkt.Raw...)
+			default:
+				sawPayload = true
+				if err := r.hooks.OnClientDataStrict(ctx, qctx, pkt.Raw); err != nil {
+					return rejectClose(fmt.Errorf("client data strict hook: %w", err))
+				}
+				if err := r.hooks.OnClientData(ctx, qctx, pkt.Raw); err != nil {
+					logger.Warnw("client data hook failed (fail-open)", "raw_len", pkt.RawLen, "err", err)
+				}
+				bufferedBytes += uint64(len(pkt.Raw))
+				if bufferedBytes > plan.MaxPayloadBytes {
+					return rejectClose(fmt.Errorf("deferred INSERT %q payload exceeds limit of %d bytes", q.ID, plan.MaxPayloadBytes))
+				}
+				buffered = append(buffered, append([]byte(nil), pkt.Raw...))
+			}
+		case uint64(chproto.ClientCancelCode):
+			// Nothing reached upstream. ClickHouse answers a cancelled query
+			// with EndOfStream; do the same locally and drop the buffer.
+			r.hooks.OnQueryAbort(ctx, qctx)
+			if err := client.WriteRawPacket([]byte{byte(chproto.ServerEndOfStreamCode)}); err != nil {
+				r.hooks.OnQueryComplete(ctx, r.sess)
+				return fmt.Errorf("write end-of-stream after deferred cancel: %w", err)
+			}
+			r.hooks.OnQueryComplete(ctx, r.sess)
+			logger.Debugw("deferred INSERT cancelled by client before forwarding", "query_id", q.ID)
+			return nil
+		default:
+			return rejectClose(fmt.Errorf("client sent packet type %d (%s) while deferred INSERT %q was collecting its payload", pkt.Type, clientPacketName(pkt.Type), q.ID))
+		}
+	}
+	if err := r.hooks.OnQueryInputCompleteStrict(ctx, qctx); err != nil {
+		return rejectClose(fmt.Errorf("query input complete strict hook: %w", err))
+	}
+
+	up := r.sess.Upstream()
+	if up == nil {
+		r.hooks.OnQueryAbort(ctx, qctx)
+		r.hooks.OnQueryComplete(ctx, r.sess)
+		return chsession.ErrNoUpstream
+	}
+	up.SetCompression(compression)
+	if !r.beginActiveQuery(q.ID) {
+		return rejectClose(fmt.Errorf("query %q raced with another active upstream query", q.ID))
+	}
+	gate := r.armDeferredSample(q.ID)
+	forwardFail := func(stage string, err error) error {
+		r.disarmDeferredSample()
+		r.takeActiveQuery()
+		r.hooks.OnQueryAbort(ctx, qctx)
+		r.hooks.OnQueryComplete(ctx, r.sess)
+		return fmt.Errorf("deferred INSERT %q %s to %s: %w", q.ID, stage, upstreamAddr(up), err)
+	}
+	if err := up.WriteQuery(q); err != nil {
+		return forwardFail("forward query", err)
+	}
+	if initialEmptyRaw != nil {
+		if err := up.WriteRawPacket(initialEmptyRaw); err != nil {
+			return forwardFail("forward external-tables marker", err)
+		}
+	}
+	select {
+	case res := <-gate:
+		if res.err != nil {
+			r.hooks.OnQueryAbort(ctx, qctx)
+			return fmt.Errorf("deferred INSERT %q sample negotiation: %w", q.ID, res.err)
+		}
+		if res.exception != nil {
+			// upstreamToClient already forwarded the Exception and ran the
+			// terminal hooks (takeActiveQuery + OnQueryComplete); only the
+			// plugin-side buffer state is left to drop.
+			logger.Debugw("deferred INSERT rejected by upstream at sample step", "query_id", q.ID, "code", res.exception.Code, "message", res.exception.Message)
+			r.hooks.OnQueryAbort(ctx, qctx)
+			return nil
+		}
+	case <-ctx.Done():
+		r.disarmDeferredSample()
+		r.hooks.OnQueryAbort(ctx, qctx)
+		return ctx.Err()
+	}
+	r.armDeferredInputComplete()
+	defer r.settleDeferredInputComplete()
+	for _, raw := range buffered {
+		if err := up.WriteRawPacket(raw); err != nil {
+			return forwardFail("forward payload", err)
+		}
+	}
+	if err := up.WriteRawPacket(terminatorRaw); err != nil {
+		return forwardFail("forward terminator", err)
+	}
+	r.hooks.OnQueryInputComplete(ctx, qctx)
+	r.settleDeferredInputComplete()
+	logger.Debugw("deferred INSERT forwarded", "query_id", q.ID, "packets", len(buffered), "payload_bytes", bufferedBytes)
+	return nil
 }
 
 func queryMayStreamClientData(qctx *plugin.QueryContext) bool {
@@ -1075,6 +1354,9 @@ func isSQLIdentPart(c byte) bool {
 // success, and coalesced Progress+EndOfStream packets remain two events.
 func (r *Relay) upstreamToClient(ctx context.Context) error {
 	client := r.sess.Client()
+	// A deferred INSERT may be waiting for this loop to consume the upstream
+	// sample block; never leave it parked when this loop exits.
+	defer r.settleDeferredSample(deferredSampleResult{err: errors.New("upstream relay loop exited")})
 	for {
 		up := r.sess.Upstream()
 		if up == nil {
@@ -1122,8 +1404,53 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 			r.obs.ServerPacket(packetName)
 		}
 
+		if r.deferredSampleArmed() {
+			switch pkt.Type {
+			case uint64(chproto.ServerDataCode):
+				// The upstream's INSERT sample block for a deferred INSERT: the
+				// client already received housegate's locally synthesized sample
+				// and is past its data phase, so this one is consumed here.
+				r.settleDeferredSample(deferredSampleResult{})
+				logger.Debugw("deferred INSERT upstream sample block consumed")
+				continue
+			case uint64(chproto.ServerTableColumnsCode):
+				// ClickHouse sends TableColumns ahead of the sample when
+				// input_format_defaults_for_omitted_fields is on; the client
+				// would treat it as an unexpected packet after its data phase.
+				continue
+			case uint64(chproto.ServerEndOfStreamCode):
+				err := fmt.Errorf("%w: upstream ended a deferred INSERT before its sample block", chproto.ErrMalformed)
+				r.settleDeferredSample(deferredSampleResult{err: err})
+				if _, active := r.takeActiveQuery(); active {
+					r.hooks.OnQueryComplete(ctx, r.sess)
+				}
+				return err
+			case uint64(chproto.ServerExceptionCode):
+				if exc, ok := pkt.Decoded.(*chproto.Exception); ok {
+					r.settleDeferredSample(deferredSampleResult{exception: exc})
+				} else {
+					r.settleDeferredSample(deferredSampleResult{err: fmt.Errorf("upstream exception packet decoded as %T", pkt.Decoded)})
+				}
+				// Fall through: the Exception is forwarded to the client and the
+				// terminal hooks run exactly as for any other query.
+			}
+		}
+
 		isEndOfStream := pkt.Type == uint64(chproto.ServerEndOfStreamCode)
 		isException := pkt.Type == uint64(chproto.ServerExceptionCode)
+		if isEndOfStream {
+			// A fast upstream can send EOS as soon as it reads the deferred
+			// terminator. Preserve the lifecycle contract: the client-side
+			// input-complete hook must finish before success/completion hooks
+			// and terminal bytes become visible downstream.
+			if done := r.deferredInputCompletion(); done != nil {
+				select {
+				case <-done:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+		}
 		var rewrittenException *chproto.Exception
 		if isException {
 			exc, ok := pkt.Decoded.(*chproto.Exception)
