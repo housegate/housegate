@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -28,6 +30,7 @@ type deferredInsertHooks struct {
 	mu             sync.Mutex
 	maxPayload     uint64
 	alsoSuppress   bool
+	mutateCompress bool
 	strictDataErr  error
 	strictDoneErr  error
 	strictDataRaw  [][]byte
@@ -35,6 +38,9 @@ type deferredInsertHooks struct {
 	inputCompletes int
 	queryCompletes int
 	queryAborts    int
+	querySuccesses int
+	lifecycle      []string
+	inputDone      chan struct{}
 }
 
 func (h *deferredInsertHooks) OnQuery(_ context.Context, qctx *plugin.QueryContext) error {
@@ -47,6 +53,9 @@ func (h *deferredInsertHooks) OnQuery(_ context.Context, qctx *plugin.QueryConte
 		MaxPayloadBytes: max,
 	}
 	qctx.SuppressUpstreamExecution = h.alsoSuppress
+	if h.mutateCompress {
+		qctx.Query.Compression = proto.CompressionEnabled
+	}
 	return nil
 }
 
@@ -70,18 +79,33 @@ func (h *deferredInsertHooks) OnQueryInputCompleteStrict(context.Context, *plugi
 func (h *deferredInsertHooks) OnQueryInputComplete(context.Context, *plugin.QueryContext) {
 	h.mu.Lock()
 	h.inputCompletes++
+	if h.inputDone != nil {
+		select {
+		case h.inputDone <- struct{}{}:
+		default:
+		}
+	}
 	h.mu.Unlock()
 }
 
 func (h *deferredInsertHooks) OnQueryComplete(context.Context, chsession.Session) {
 	h.mu.Lock()
 	h.queryCompletes++
+	h.lifecycle = append(h.lifecycle, "complete")
 	h.mu.Unlock()
 }
 
 func (h *deferredInsertHooks) OnQueryAbort(context.Context, *plugin.QueryContext) {
 	h.mu.Lock()
 	h.queryAborts++
+	h.lifecycle = append(h.lifecycle, "abort")
+	h.mu.Unlock()
+}
+
+func (h *deferredInsertHooks) OnQuerySuccess(context.Context, chsession.Session, string) {
+	h.mu.Lock()
+	h.querySuccesses++
+	h.lifecycle = append(h.lifecycle, "success")
 	h.mu.Unlock()
 }
 
@@ -89,6 +113,12 @@ func (h *deferredInsertHooks) counts() (strictData, strictComplete, inputComplet
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return len(h.strictDataRaw), h.strictComplete, h.inputCompletes, h.queryCompletes, h.queryAborts
+}
+
+func (h *deferredInsertHooks) terminalCounts() (successes int, lifecycle []string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.querySuccesses, append([]string(nil), h.lifecycle...)
 }
 
 // deferredHarness wires a Relay between two net.Pipe pairs with codecs at
@@ -121,6 +151,62 @@ func newDeferredHarness(t *testing.T, hooks plugin.Hooks) *deferredHarness {
 		cancel()
 		clientProxy.Close()
 		upstreamProxy.Close()
+	})
+	return h
+}
+
+func tcpConnPair(t *testing.T) (peer, relay net.Conn) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	accept := make(chan net.Conn, 1)
+	acceptErr := make(chan error, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			acceptErr <- err
+			return
+		}
+		accept <- conn
+	}()
+	relay, err = net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		_ = ln.Close()
+		t.Fatal(err)
+	}
+	select {
+	case peer = <-accept:
+	case err := <-acceptErr:
+		_ = relay.Close()
+		_ = ln.Close()
+		t.Fatal(err)
+	}
+	_ = ln.Close()
+	return peer, relay
+}
+
+func newDeferredTCPHarness(t *testing.T, hooks plugin.Hooks) *deferredHarness {
+	t.Helper()
+	clientProxy, proxyClient := tcpConnPair(t)
+	upstreamProxy, proxyUpstream := tcpConnPair(t)
+	sess := chsession.New(1, proxyClient)
+	sess.Client().SetRevision(deferredTestRev)
+	up := chproto.NewCodec(proxyUpstream, chproto.DirToUpstream)
+	up.SetRevision(deferredTestRev)
+	if err := sess.BindUpstream(context.Background(), up); err != nil {
+		t.Fatalf("BindUpstream: %v", err)
+	}
+	r := &Relay{sess: sess, hooks: hooks}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	h := &deferredHarness{clientProxy: clientProxy, proxyClient: proxyClient, upstreamProxy: upstreamProxy, proxyUpstream: proxyUpstream, relay: r, loopErr: make(chan error, 2), cancel: cancel}
+	go func() { h.loopErr <- r.clientToUpstream(ctx) }()
+	go func() { h.loopErr <- r.upstreamToClient(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		_ = clientProxy.Close()
+		_ = upstreamProxy.Close()
 	})
 	return h
 }
@@ -317,6 +403,60 @@ func TestRelay_DeferredInsert_CoalescedQueryAndPayloadInOneSegment(t *testing.T)
 	h.close(t)
 }
 
+func TestRelay_DeferredInsert_RestoresClientCompressionAfterPluginMutation(t *testing.T) {
+	hooks := &deferredInsertHooks{mutateCompress: true}
+	h := newDeferredHarness(t, hooks)
+	nonEmpty := encodeNonEmptyClientDataPacket(t, deferredTestRev)
+	sample := encodeServerSampleDataPacket(t, deferredTestRev)
+	empty := encodeEmptyClientData(t)
+
+	upDone := make(chan error, 1)
+	go func() {
+		codec := chproto.NewCodec(h.upstreamProxy, chproto.DirFromClient)
+		codec.SetRevision(deferredTestRev)
+		codec.SetCompression(proto.CompressionDisabled)
+		pkt, err := codec.ReadPacket(uint64(chproto.ClientQueryCode))
+		if err != nil {
+			upDone <- err
+			return
+		}
+		q, ok := pkt.Decoded.(*chproto.Query)
+		if !ok || q.Compression != proto.CompressionDisabled {
+			upDone <- fmt.Errorf("upstream Query compression = %v (%T), want original disabled", q.Compression, pkt.Decoded)
+			return
+		}
+		if _, err := codec.ReadPacket(); err != nil {
+			upDone <- err
+			return
+		}
+		if _, err := h.upstreamProxy.Write(sample); err != nil {
+			upDone <- err
+			return
+		}
+		if _, err := codec.ReadPacket(); err != nil {
+			upDone <- err
+			return
+		}
+		if _, err := codec.ReadPacket(); err != nil {
+			upDone <- err
+			return
+		}
+		_, err = h.upstreamProxy.Write([]byte{byte(chproto.ServerEndOfStreamCode)})
+		upDone <- err
+	}()
+
+	writeAllConn(t, h.clientProxy, encodeInsertQuery(t, "qid", "INSERT INTO t FORMAT Native"))
+	readExact(t, h.clientProxy, len(sample))
+	writeAllConn(t, h.clientProxy, empty)
+	writeAllConn(t, h.clientProxy, nonEmpty)
+	writeAllConn(t, h.clientProxy, empty)
+	readExact(t, h.clientProxy, 1)
+	if err := <-upDone; err != nil {
+		t.Fatal(err)
+	}
+	h.close(t)
+}
+
 // The terminator (and the payload packet) is split across two Writes.
 func TestRelay_DeferredInsert_TerminatorSplitAcrossSegments(t *testing.T) {
 	hooks := &deferredInsertHooks{}
@@ -509,11 +649,293 @@ func TestRelay_DeferredInsert_UpstreamExceptionAfterSampleStopsWriter(t *testing
 	h.close(t)
 }
 
-func TestRelay_DeferredInsert_RequiresExternalTablesMarkerBeforePayload(t *testing.T) {
+func TestRelay_DeferredInsert_PrematureEOSStopsBackpressuredWriter(t *testing.T) {
 	hooks := &deferredInsertHooks{}
 	h := newDeferredHarness(t, hooks)
 	nonEmpty := encodeNonEmptyClientDataPacket(t, deferredTestRev)
 	sample := encodeServerSampleDataPacket(t, deferredTestRev)
+	empty := encodeEmptyClientData(t)
+
+	upDone := make(chan error, 1)
+	go func() {
+		codec := chproto.NewCodec(h.upstreamProxy, chproto.DirFromClient)
+		codec.SetRevision(deferredTestRev)
+		codec.SetCompression(proto.CompressionDisabled)
+		if _, err := codec.ReadPacket(uint64(chproto.ClientQueryCode)); err != nil {
+			upDone <- err
+			return
+		}
+		if _, err := codec.ReadPacket(); err != nil {
+			upDone <- err
+			return
+		}
+		// Send sample+EOS without reading the payload. net.Pipe backpressures the
+		// relay's first payload write, so EOS must actively stop that writer.
+		_, err := h.upstreamProxy.Write(append(append([]byte(nil), sample...), byte(chproto.ServerEndOfStreamCode)))
+		upDone <- err
+	}()
+
+	writeAllConn(t, h.clientProxy, encodeInsertQuery(t, "qid", "INSERT INTO t FORMAT Native"))
+	readExact(t, h.clientProxy, len(sample))
+	writeAllConn(t, h.clientProxy, empty)
+	writeAllConn(t, h.clientProxy, nonEmpty)
+	writeAllConn(t, h.clientProxy, empty)
+
+	var errs []error
+	for len(errs) < 2 {
+		select {
+		case err := <-h.loopErr:
+			errs = append(errs, err)
+			if len(errs) == 1 {
+				_ = h.clientProxy.Close()
+			}
+		case <-time.After(time.Second):
+			t.Fatal("premature EOS deadlocked the deferred writer")
+		}
+	}
+	if err := <-upDone; err != nil {
+		t.Fatalf("upstream flow: %v", err)
+	}
+	if _, _, inputCompletes, queryCompletes, aborts := hooks.counts(); inputCompletes != 0 || queryCompletes != 1 || aborts != 1 {
+		t.Fatalf("hooks input/complete/abort = %d/%d/%d, want 0/1/1", inputCompletes, queryCompletes, aborts)
+	}
+	if successes, lifecycle := hooks.terminalCounts(); successes != 0 || !slices.Equal(lifecycle, []string{"abort", "complete"}) {
+		t.Fatalf("successes/lifecycle = %d/%v, want 0/[abort complete]", successes, lifecycle)
+	}
+}
+
+func TestRelay_DeferredInsert_PostTerminatorEOSAllowsSuccessWithKernelBufferedWriter(t *testing.T) {
+	hooks := &deferredInsertHooks{inputDone: make(chan struct{}, 1)}
+	h := newDeferredTCPHarness(t, hooks)
+	nonEmpty := encodeNonEmptyClientDataPacket(t, deferredTestRev)
+	sample := encodeServerSampleDataPacket(t, deferredTestRev)
+	empty := encodeEmptyClientData(t)
+
+	upDone := make(chan error, 1)
+	go func() {
+		codec := chproto.NewCodec(h.upstreamProxy, chproto.DirFromClient)
+		codec.SetRevision(deferredTestRev)
+		codec.SetCompression(proto.CompressionDisabled)
+		if _, err := codec.ReadPacket(uint64(chproto.ClientQueryCode)); err != nil {
+			upDone <- err
+			return
+		}
+		if _, err := codec.ReadPacket(); err != nil {
+			upDone <- err
+			return
+		}
+		if _, err := h.upstreamProxy.Write(sample); err != nil {
+			upDone <- err
+			return
+		}
+		select {
+		case <-hooks.inputDone:
+		case <-time.After(time.Second):
+			upDone <- errors.New("relay did not finish writing terminator")
+			return
+		}
+		// The server intentionally has not read payload bytes; successful local
+		// writes sit in the TCP send buffer. EOS is nevertheless post-terminator
+		// from Relay's observable ordering and is the only EOS success case.
+		_, err := h.upstreamProxy.Write([]byte{byte(chproto.ServerEndOfStreamCode)})
+		upDone <- err
+	}()
+
+	writeAllConn(t, h.clientProxy, encodeInsertQuery(t, "qid", "INSERT INTO t FORMAT Native"))
+	readExact(t, h.clientProxy, len(sample))
+	writeAllConn(t, h.clientProxy, empty)
+	writeAllConn(t, h.clientProxy, nonEmpty)
+	writeAllConn(t, h.clientProxy, empty)
+	if got := readExact(t, h.clientProxy, 1); got[0] != byte(chproto.ServerEndOfStreamCode) {
+		t.Fatalf("client got %d, want EndOfStream", got[0])
+	}
+	if err := <-upDone; err != nil {
+		t.Fatal(err)
+	}
+	if successes, lifecycle := hooks.terminalCounts(); successes != 1 || !slices.Equal(lifecycle, []string{"success", "complete"}) {
+		t.Fatalf("successes/lifecycle = %d/%v, want 1/[success complete]", successes, lifecycle)
+	}
+	h.close(t)
+}
+
+func TestRelay_DeferredInsert_LateExceptionClosesKernelBufferedSession(t *testing.T) {
+	hooks := &deferredInsertHooks{inputDone: make(chan struct{}, 1)}
+	h := newDeferredTCPHarness(t, hooks)
+	nonEmpty := encodeNonEmptyClientDataPacket(t, deferredTestRev)
+	sample := encodeServerSampleDataPacket(t, deferredTestRev)
+	empty := encodeEmptyClientData(t)
+
+	type upstreamResult struct {
+		sawNextQuery bool
+		err          error
+	}
+	upDone := make(chan upstreamResult, 1)
+	go func() {
+		codec := chproto.NewCodec(h.upstreamProxy, chproto.DirFromClient)
+		codec.SetRevision(deferredTestRev)
+		codec.SetCompression(proto.CompressionDisabled)
+		if _, err := codec.ReadPacket(uint64(chproto.ClientQueryCode)); err != nil {
+			upDone <- upstreamResult{err: err}
+			return
+		}
+		if _, err := codec.ReadPacket(); err != nil {
+			upDone <- upstreamResult{err: err}
+			return
+		}
+		if _, err := h.upstreamProxy.Write(sample); err != nil {
+			upDone <- upstreamResult{err: err}
+			return
+		}
+		select {
+		case <-hooks.inputDone:
+		case <-time.After(time.Second):
+			upDone <- upstreamResult{err: errors.New("relay did not finish queueing payload")}
+			return
+		}
+		if err := codec.WriteException(&chproto.Exception{Code: 27, Name: "DB::Exception", Message: "late payload parse failure"}); err != nil {
+			upDone <- upstreamResult{err: err}
+			return
+		}
+		_ = h.upstreamProxy.SetReadDeadline(time.Now().Add(time.Second))
+		for {
+			pkt, err := codec.ReadPacket(uint64(chproto.ClientQueryCode))
+			if err != nil {
+				upDone <- upstreamResult{}
+				return
+			}
+			if pkt.Type == uint64(chproto.ClientQueryCode) {
+				upDone <- upstreamResult{sawNextQuery: true}
+				return
+			}
+		}
+	}()
+
+	writeAllConn(t, h.clientProxy, encodeInsertQuery(t, "qid", "INSERT INTO t FORMAT Native"))
+	readExact(t, h.clientProxy, len(sample))
+	writeAllConn(t, h.clientProxy, empty)
+	writeAllConn(t, h.clientProxy, nonEmpty)
+	writeAllConn(t, h.clientProxy, empty)
+	clientCodec := chproto.NewCodec(h.clientProxy, chproto.DirToUpstream)
+	clientCodec.SetRevision(deferredTestRev)
+	_ = h.clientProxy.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if pkt, err := clientCodec.ReadPacket(uint64(chproto.ServerExceptionCode)); err != nil {
+		t.Fatalf("client read Exception: %v", err)
+	} else if exc, ok := pkt.Decoded.(*chproto.Exception); !ok || exc.Code != 27 {
+		t.Fatalf("client got %#v, want late Exception", pkt.Decoded)
+	}
+	_ = h.clientProxy.SetReadDeadline(time.Time{})
+	_, _ = h.clientProxy.Write(encodeInsertQuery(t, "qid-next", "INSERT INTO t FORMAT Native"))
+	select {
+	case err := <-h.loopErr:
+		if err == nil {
+			t.Fatal("late Exception closed relay with nil error")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("late post-sample Exception left the deferred session reusable")
+	}
+	result := <-upDone
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	if result.sawNextQuery {
+		t.Fatal("next Query crossed an upstream polluted by queued INSERT data")
+	}
+	if _, _, _, queryCompletes, aborts := hooks.counts(); queryCompletes != 1 || aborts != 1 {
+		t.Fatalf("complete/abort = %d/%d, want 1/1", queryCompletes, aborts)
+	}
+	if successes, lifecycle := hooks.terminalCounts(); successes != 0 || !slices.Equal(lifecycle, []string{"abort", "complete"}) {
+		t.Fatalf("successes/lifecycle = %d/%v, want 0/[abort complete]", successes, lifecycle)
+	}
+}
+
+func TestRelay_DeferredInsert_UpstreamReadErrorOrdersAbortBeforeSingleComplete100x(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		hooks := &deferredInsertHooks{}
+		h := newDeferredHarness(t, hooks)
+		nonEmpty := encodeNonEmptyClientDataPacket(t, deferredTestRev)
+		sample := encodeServerSampleDataPacket(t, deferredTestRev)
+		empty := encodeEmptyClientData(t)
+		upDone := make(chan error, 1)
+		go func() {
+			codec := chproto.NewCodec(h.upstreamProxy, chproto.DirFromClient)
+			codec.SetRevision(deferredTestRev)
+			codec.SetCompression(proto.CompressionDisabled)
+			if _, err := codec.ReadPacket(uint64(chproto.ClientQueryCode)); err != nil {
+				upDone <- err
+				return
+			}
+			if _, err := codec.ReadPacket(); err != nil {
+				upDone <- err
+				return
+			}
+			if _, err := h.upstreamProxy.Write(sample); err != nil {
+				upDone <- err
+				return
+			}
+			upDone <- h.upstreamProxy.Close()
+		}()
+
+		writeAllConn(t, h.clientProxy, encodeInsertQuery(t, fmt.Sprintf("qid-%d", i), "INSERT INTO t FORMAT Native"))
+		readExact(t, h.clientProxy, len(sample))
+		writeAllConn(t, h.clientProxy, empty)
+		writeAllConn(t, h.clientProxy, nonEmpty)
+		writeAllConn(t, h.clientProxy, empty)
+		if err := <-upDone; err != nil {
+			t.Fatalf("iteration %d upstream: %v", i, err)
+		}
+		for n := 0; n < 2; n++ {
+			select {
+			case <-h.loopErr:
+				if n == 0 {
+					_ = h.clientProxy.Close()
+				}
+			case <-time.After(time.Second):
+				_ = h.clientProxy.Close()
+				t.Fatalf("iteration %d relay loop did not exit", i)
+			}
+		}
+		if successes, lifecycle := hooks.terminalCounts(); successes != 0 || !slices.Equal(lifecycle, []string{"abort", "complete"}) {
+			t.Fatalf("iteration %d successes/lifecycle = %d/%v, want 0/[abort complete]", i, successes, lifecycle)
+		}
+		_ = h.clientProxy.Close()
+	}
+}
+
+func TestRelay_DeferredInsert_AcceptsPayloadWithoutExternalTablesMarker(t *testing.T) {
+	hooks := &deferredInsertHooks{}
+	h := newDeferredHarness(t, hooks)
+	nonEmpty := encodeNonEmptyClientDataPacket(t, deferredTestRev)
+	sample := encodeServerSampleDataPacket(t, deferredTestRev)
+	empty := encodeEmptyClientData(t)
+
+	var clientDone atomic.Bool
+	upDone := make(chan error, 1)
+	go upstreamAcceptsDeferredInsert(t, h.upstreamProxy, &clientDone, nonEmpty, upDone)
+	writeAllConn(t, h.clientProxy, encodeInsertQuery(t, "qid", "INSERT INTO t FORMAT Native"))
+	if got := readExact(t, h.clientProxy, len(sample)); !bytes.Equal(got, sample) {
+		t.Fatalf("client sample block mismatch")
+	}
+	writeAllConn(t, h.clientProxy, nonEmpty) // external-tables marker deliberately omitted
+	clientDone.Store(true)
+	writeAllConn(t, h.clientProxy, empty)
+	if got := readExact(t, h.clientProxy, 1); got[0] != byte(chproto.ServerEndOfStreamCode) {
+		t.Fatalf("client got %d, want EndOfStream", got[0])
+	}
+	if err := <-upDone; err != nil {
+		t.Fatalf("upstream flow: %v", err)
+	}
+	h.close(t)
+	if strictData, strictComplete, inputCompletes, queryCompletes, aborts := hooks.counts(); strictData != 1 || strictComplete != 1 || inputCompletes != 1 || queryCompletes != 1 || aborts != 0 {
+		t.Fatalf("hooks data/strict/input/complete/abort = %d/%d/%d/%d/%d, want 1/1/1/1/0", strictData, strictComplete, inputCompletes, queryCompletes, aborts)
+	}
+}
+
+func TestRelay_DeferredInsert_MarkerlessZeroRowsCompletesWithinBound(t *testing.T) {
+	hooks := &deferredInsertHooks{strictDoneErr: errors.New("SI payload must contain non-empty Data bytes")}
+	h := newDeferredHarness(t, hooks)
+	h.relay.deferredMarkerLookahead = 25 * time.Millisecond
+	sample := encodeServerSampleDataPacket(t, deferredTestRev)
+	empty := encodeEmptyClientData(t)
 
 	upstreamBytes := make(chan int, 1)
 	go func() {
@@ -521,24 +943,30 @@ func TestRelay_DeferredInsert_RequiresExternalTablesMarkerBeforePayload(t *testi
 		n, _ := h.upstreamProxy.Read(buf)
 		upstreamBytes <- n
 	}()
-	writeAllConn(t, h.clientProxy, encodeInsertQuery(t, "qid", "INSERT INTO t FORMAT Native"))
+
+	writeAllConn(t, h.clientProxy, encodeInsertQuery(t, "qid-zero", "INSERT INTO t FORMAT Native"))
 	if got := readExact(t, h.clientProxy, len(sample)); !bytes.Equal(got, sample) {
-		t.Fatalf("client sample block mismatch")
+		t.Fatal("client sample block mismatch")
 	}
-	writeAllConn(t, h.clientProxy, nonEmpty) // marker deliberately omitted
+	started := time.Now()
+	writeAllConn(t, h.clientProxy, empty) // the only post-sample packet
 	clientCodec := chproto.NewCodec(h.clientProxy, chproto.DirToUpstream)
 	clientCodec.SetRevision(deferredTestRev)
-	_ = h.clientProxy.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	_ = h.clientProxy.SetReadDeadline(time.Now().Add(2 * time.Second))
 	pkt, err := clientCodec.ReadPacket(uint64(chproto.ServerExceptionCode))
 	if err != nil {
 		t.Fatalf("client read: %v", err)
 	}
-	if exc, ok := pkt.Decoded.(*chproto.Exception); !ok || !strings.Contains(exc.Message, "external-tables marker") {
-		t.Fatalf("client got %#v, want missing-marker Exception", pkt.Decoded)
+	exc, ok := pkt.Decoded.(*chproto.Exception)
+	if !ok || !strings.Contains(exc.Message, "non-empty Data") {
+		t.Fatalf("client got %#v, want zero-payload rejection", pkt.Decoded)
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("markerless zero-row rejection took %s, want bounded lookahead", elapsed)
 	}
 	h.close(t)
 	if n := <-upstreamBytes; n != 0 {
-		t.Fatalf("upstream received %d bytes without the required marker, want 0", n)
+		t.Fatalf("upstream received %d bytes for rejected zero-row INSERT", n)
 	}
 }
 

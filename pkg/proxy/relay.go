@@ -9,6 +9,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ClickHouse/ch-go/proto"
@@ -68,6 +69,11 @@ type Relay struct {
 	deferredMu    sync.Mutex
 	deferredGate  *deferredSampleGate
 	deferredInput *deferredInputGate
+
+	// Test override for the bounded lookahead that distinguishes an optional
+	// external-tables marker from a markerless zero-row terminator. Zero uses
+	// deferredMarkerLookaheadDefault.
+	deferredMarkerLookahead time.Duration
 }
 
 // UpstreamDialer dials and returns the codec for this session's upstream.
@@ -80,6 +86,8 @@ type UpstreamDialer func(ctx context.Context, sess chsession.Session) (*chproto.
 var errOpaqueConnectionNotReusable = errors.New(
 	"legacy non-chunked opaque result connection cannot be safely reused",
 )
+
+const deferredMarkerLookaheadDefault = 250 * time.Millisecond
 
 // NewRelay constructs a Relay.
 //
@@ -104,23 +112,31 @@ type deferredSampleResult struct {
 
 // deferredInputGate coordinates the post-sample writer with terminal packets.
 // done closes after the writer has either finished OnQueryInputComplete or
-// observed a terminal Exception and run OnQueryAbort. terminal stops further
-// writes; delivered keeps the writer alive until upstreamToClient has exposed
-// the Exception, preventing runPostHandshake from closing the client first.
+// observed a fatal terminal and stopped. terminal stops further writes;
+// delivered keeps runDeferredInsert alive until upstreamToClient has exposed
+// or rejected the terminal and completed the query lifecycle.
 type deferredInputGate struct {
-	done          chan struct{}
-	terminal      chan struct{}
-	delivered     chan struct{}
-	doneOnce      sync.Once
-	terminalOnce  sync.Once
-	deliveredOnce sync.Once
+	done           chan struct{}
+	terminal       chan struct{}
+	delivered      chan struct{}
+	terminatorDone chan struct{}
+	qctx           *plugin.QueryContext
+	termStarted    atomic.Bool
+	terminator     atomic.Bool
+	doneOnce       sync.Once
+	terminalOnce   sync.Once
+	deliveredOnce  sync.Once
+	abortOnce      sync.Once
+	completeOnce   sync.Once
 }
 
-func newDeferredInputGate() *deferredInputGate {
+func newDeferredInputGate(qctx *plugin.QueryContext) *deferredInputGate {
 	return &deferredInputGate{
-		done:      make(chan struct{}),
-		terminal:  make(chan struct{}),
-		delivered: make(chan struct{}),
+		done:           make(chan struct{}),
+		terminal:       make(chan struct{}),
+		delivered:      make(chan struct{}),
+		terminatorDone: make(chan struct{}),
+		qctx:           qctx,
 	}
 }
 
@@ -128,6 +144,21 @@ func (g *deferredInputGate) finishWriter() { g.doneOnce.Do(func() { close(g.done
 func (g *deferredInputGate) stopWriter()   { g.terminalOnce.Do(func() { close(g.terminal) }) }
 func (g *deferredInputGate) markDelivered() {
 	g.deliveredOnce.Do(func() { close(g.delivered) })
+}
+func (g *deferredInputGate) startTerminatorWrite() { g.termStarted.Store(true) }
+func (g *deferredInputGate) finishTerminatorWrite(ok bool) {
+	if ok {
+		g.terminator.Store(true)
+	}
+	close(g.terminatorDone)
+}
+func (g *deferredInputGate) terminatorWriteStarted() bool { return g.termStarted.Load() }
+func (g *deferredInputGate) terminatorWritten() bool      { return g.terminator.Load() }
+func (g *deferredInputGate) abort(ctx context.Context, hooks plugin.Hooks) {
+	g.abortOnce.Do(func() { hooks.OnQueryAbort(ctx, g.qctx) })
+}
+func (g *deferredInputGate) complete(ctx context.Context, hooks plugin.Hooks, sess chsession.Session) {
+	g.completeOnce.Do(func() { hooks.OnQueryComplete(ctx, sess) })
 }
 
 func (g *deferredInputGate) terminalObserved() bool {
@@ -172,10 +203,10 @@ func (r *Relay) deferredSampleArmed() bool {
 	return r.deferredGate != nil
 }
 
-func (r *Relay) armDeferredInput() *deferredInputGate {
+func (r *Relay) armDeferredInput(qctx *plugin.QueryContext) *deferredInputGate {
 	r.deferredMu.Lock()
 	defer r.deferredMu.Unlock()
-	g := newDeferredInputGate()
+	g := newDeferredInputGate(qctx)
 	r.deferredInput = g
 	return g
 }
@@ -185,11 +216,43 @@ func (r *Relay) finishDeferredInput(g *deferredInputGate) {
 		return
 	}
 	g.finishWriter()
+	// Keep the gate installed until the real upstream terminal arrives. Local
+	// writes can complete into a kernel buffer before ClickHouse parses them;
+	// clearing here would misclassify a later payload Exception as reusable.
+}
+
+func (r *Relay) clearDeferredInput(g *deferredInputGate) {
+	if g == nil {
+		return
+	}
 	r.deferredMu.Lock()
 	if r.deferredInput == g {
 		r.deferredInput = nil
 	}
 	r.deferredMu.Unlock()
+}
+
+func (r *Relay) stopDeferredInput(ctx context.Context, up *chproto.Codec, g *deferredInputGate) error {
+	if g == nil {
+		return nil
+	}
+	g.stopWriter()
+	closeCodec(up)
+	g.abort(ctx, r.hooks)
+	select {
+	case <-g.done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (r *Relay) deliverDeferredInput(g *deferredInputGate) {
+	if g == nil {
+		return
+	}
+	g.markDelivered()
+	r.clearDeferredInput(g)
 }
 
 func (r *Relay) currentDeferredInput() *deferredInputGate {
@@ -198,10 +261,16 @@ func (r *Relay) currentDeferredInput() *deferredInputGate {
 	return r.deferredInput
 }
 
-func (r *Relay) unblockDeferredInputOnServerExit() {
+func (r *Relay) unblockDeferredInputOnServerExit(ctx context.Context) {
 	if g := r.currentDeferredInput(); g != nil {
 		g.stopWriter()
-		g.markDelivered()
+		closeCodec(r.sess.Upstream())
+		g.abort(ctx, r.hooks)
+		<-g.done
+		r.sess.State().ClearActiveRewrite()
+		r.takeActiveQuery()
+		g.complete(ctx, r.hooks, r.sess)
+		r.deliverDeferredInput(g)
 	}
 }
 
@@ -1055,13 +1124,14 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 //
 //  1. write the plan's 0-row sample block to the client (the Query is NOT
 //     forwarded yet);
-//  2. read client packets: the first empty Data before any payload is the
-//     end-of-external-tables marker (kept for replay upstream); non-empty
+//  2. read client packets: an optional first empty Data before any payload is
+//     the end-of-external-tables marker; a lone empty Data is classified as a
+//     markerless terminator after bounded packet-start lookahead; non-empty
 //     Data runs OnClientDataStrict/OnClientData and is buffered under
-//     MaxPayloadBytes; the empty terminator runs OnQueryInputCompleteStrict;
-//     Cancel aborts with a local EndOfStream; anything else is a protocol
-//     error;
-//  3. forward Query (+ external-tables marker), wait for upstreamToClient to
+//     MaxPayloadBytes; the terminator runs OnQueryInputCompleteStrict; Cancel
+//     aborts with a local EndOfStream; anything else is a protocol error;
+//  3. forward Query plus exactly one external-tables marker (synthesized from
+//     the terminator when the client omitted it), wait for upstreamToClient to
 //     consume the upstream's own sample block (or forward its Exception),
 //     then forward every buffered Data packet and the terminator via
 //     WriteRawPacket, and fire OnQueryInputComplete. The ordinary
@@ -1096,13 +1166,34 @@ func (r *Relay) runDeferredInsert(ctx context.Context, qctx *plugin.QueryContext
 	}
 
 	var (
-		buffered        [][]byte
-		bufferedBytes   uint64
-		initialEmptyRaw []byte
-		terminatorRaw   []byte
-		sawPayload      bool
+		buffered                [][]byte
+		bufferedBytes           uint64
+		initialEmptyRaw         []byte
+		terminatorRaw           []byte
+		sawPayload              bool
+		awaitingMarkerLookahead bool
 	)
 	for terminatorRaw == nil {
+		if awaitingMarkerLookahead {
+			lookahead := r.deferredMarkerLookahead
+			if lookahead <= 0 {
+				lookahead = deferredMarkerLookaheadDefault
+			}
+			available, err := client.WaitForPacketStart(lookahead)
+			if err != nil {
+				return rejectClose(fmt.Errorf("deferred INSERT %q optional-marker lookahead: %w", q.ID, err))
+			}
+			if !available {
+				// No second packet began within the bounded lookahead. The sole
+				// empty Data is therefore the markerless zero-row terminator. It
+				// will also be replayed as the required upstream external-tables
+				// marker; empty Data has identical encoding in both positions.
+				terminatorRaw = initialEmptyRaw
+				initialEmptyRaw = nil
+				break
+			}
+			awaitingMarkerLookahead = false
+		}
 		remaining := plan.MaxPayloadBytes - bufferedBytes
 		if limit, enforce := r.hooks.ClientDataReadLimit(qctx); enforce && limit < remaining {
 			remaining = limit
@@ -1147,15 +1238,16 @@ func (r *Relay) runDeferredInsert(ctx context.Context, qctx *plugin.QueryContext
 			}
 			switch {
 			case empty && !sawPayload && initialEmptyRaw == nil:
-				// End-of-external-tables marker every client sends after the
-				// Query; replayed upstream so ClickHouse proceeds to its sample.
+				// This is either the optional external-tables marker or a
+				// markerless zero-row terminator. A bounded, non-consuming packet
+				// start lookahead distinguishes them without deadlocking forever.
 				initialEmptyRaw = append([]byte(nil), pkt.Raw...)
+				awaitingMarkerLookahead = true
 			case empty:
 				terminatorRaw = append([]byte(nil), pkt.Raw...)
 			default:
-				if initialEmptyRaw == nil {
-					return rejectClose(errors.New("deferred INSERT requires the external-tables marker before payload Data"))
-				}
+				// The client-side marker is optional. When absent, terminatorRaw is
+				// later replayed once before the sample and once after payload.
 				sawPayload = true
 				if uint64(len(pkt.Raw)) > remaining {
 					return rejectClose(fmt.Errorf("deferred INSERT %q payload exceeds limit (remaining %d bytes): %w", q.ID, remaining, chproto.ErrPacketTooLarge))
@@ -1200,36 +1292,52 @@ func (r *Relay) runDeferredInsert(ctx context.Context, qctx *plugin.QueryContext
 	if !r.beginActiveQuery(q.ID) {
 		return rejectClose(fmt.Errorf("query %q raced with another active upstream query", q.ID))
 	}
-	inputGate := r.armDeferredInput()
+	inputGate := r.armDeferredInput(qctx)
 	defer r.finishDeferredInput(inputGate)
 	gate := r.armDeferredSample(q.ID)
 	forwardFail := func(stage string, err error) error {
 		r.disarmDeferredSample()
+		inputGate.stopWriter()
+		closeCodec(up)
+		inputGate.abort(ctx, r.hooks)
+		r.finishDeferredInput(inputGate)
 		r.takeActiveQuery()
-		r.hooks.OnQueryAbort(ctx, qctx)
-		r.hooks.OnQueryComplete(ctx, r.sess)
+		inputGate.complete(ctx, r.hooks, r.sess)
+		inputGate.markDelivered()
+		r.clearDeferredInput(inputGate)
 		return fmt.Errorf("deferred INSERT %q %s to %s: %w", q.ID, stage, upstreamAddr(up), err)
 	}
+	// Raw buffered Data uses the client's original framing regardless of any
+	// QueryPlugin mutation, exactly like the ordinary relay path.
+	q.Compression = compression
 	if err := up.WriteQuery(q); err != nil {
 		return forwardFail("forward query", err)
 	}
-	if initialEmptyRaw != nil {
-		if err := up.WriteRawPacket(initialEmptyRaw); err != nil {
-			return forwardFail("forward external-tables marker", err)
-		}
+	markerRaw := initialEmptyRaw
+	if markerRaw == nil {
+		markerRaw = terminatorRaw
+	}
+	if err := up.WriteRawPacket(markerRaw); err != nil {
+		return forwardFail("forward external-tables marker", err)
 	}
 	select {
 	case res := <-gate:
 		if res.err != nil {
-			r.hooks.OnQueryAbort(ctx, qctx)
-			return fmt.Errorf("deferred INSERT %q sample negotiation: %w", q.ID, res.err)
+			inputGate.abort(ctx, r.hooks)
+			r.finishDeferredInput(inputGate)
+			select {
+			case <-inputGate.delivered:
+				return fmt.Errorf("deferred INSERT %q sample negotiation: %w", q.ID, res.err)
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
 		if res.exception != nil {
 			// upstreamToClient already forwarded the Exception and ran the
 			// terminal hooks (takeActiveQuery + OnQueryComplete); only the
 			// plugin-side buffer state is left to drop.
 			logger.Debugw("deferred INSERT rejected by upstream at sample step", "query_id", q.ID, "code", res.exception.Code, "message", res.exception.Message)
-			r.hooks.OnQueryAbort(ctx, qctx)
+			inputGate.abort(ctx, r.hooks)
 			r.finishDeferredInput(inputGate)
 			select {
 			case <-inputGate.delivered:
@@ -1240,11 +1348,13 @@ func (r *Relay) runDeferredInsert(ctx context.Context, qctx *plugin.QueryContext
 		}
 	case <-ctx.Done():
 		r.disarmDeferredSample()
-		r.hooks.OnQueryAbort(ctx, qctx)
+		inputGate.stopWriter()
+		closeCodec(up)
+		inputGate.abort(ctx, r.hooks)
 		return ctx.Err()
 	}
 	abortAfterTerminal := func() error {
-		r.hooks.OnQueryAbort(ctx, qctx)
+		inputGate.abort(ctx, r.hooks)
 		r.finishDeferredInput(inputGate)
 		select {
 		case <-inputGate.delivered:
@@ -1267,19 +1377,32 @@ func (r *Relay) runDeferredInsert(ctx context.Context, qctx *plugin.QueryContext
 			return abortAfterTerminal()
 		}
 	}
+	inputGate.startTerminatorWrite()
 	if err := up.WriteRawPacket(terminatorRaw); err != nil {
+		inputGate.finishTerminatorWrite(false)
 		if inputGate.terminalObserved() {
 			return abortAfterTerminal()
 		}
 		return forwardFail("forward terminator", err)
 	}
+	inputGate.finishTerminatorWrite(true)
 	if inputGate.terminalObserved() {
 		return abortAfterTerminal()
 	}
 	r.hooks.OnQueryInputComplete(ctx, qctx)
 	r.finishDeferredInput(inputGate)
 	logger.Debugw("deferred INSERT forwarded", "query_id", q.ID, "packets", len(buffered), "payload_bytes", bufferedBytes)
-	return nil
+	select {
+	case <-inputGate.terminal:
+		return abortAfterTerminal()
+	case <-inputGate.delivered:
+		return nil
+	case <-ctx.Done():
+		inputGate.stopWriter()
+		closeCodec(up)
+		inputGate.abort(ctx, r.hooks)
+		return ctx.Err()
+	}
 }
 
 func queryMayStreamClientData(qctx *plugin.QueryContext) bool {
@@ -1446,8 +1569,12 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 	client := r.sess.Client()
 	// A deferred INSERT may be waiting for this loop to consume the upstream
 	// sample block; never leave it parked when this loop exits.
-	defer r.settleDeferredSample(deferredSampleResult{err: errors.New("upstream relay loop exited")})
-	defer r.unblockDeferredInputOnServerExit()
+	defer func() {
+		// Settle the sample first so runDeferredInsert can relinquish writer
+		// ownership before the terminal fallback waits for done.
+		r.settleDeferredSample(deferredSampleResult{err: errors.New("upstream relay loop exited")})
+		r.unblockDeferredInputOnServerExit(ctx)
+	}()
 	for {
 		up := r.sess.Upstream()
 		if up == nil {
@@ -1473,6 +1600,23 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 					"new_up_addr", upstreamAddr(newUp),
 				)
 				continue
+			}
+			if g := r.currentDeferredInput(); g != nil {
+				// Wake a writer that is still negotiating the sample before
+				// waiting for it. Fatal ordering is always abort -> writer stopped
+				// -> one complete; never complete -> abort.
+				r.settleDeferredSample(deferredSampleResult{err: err})
+				if stopErr := r.stopDeferredInput(ctx, up, g); stopErr != nil {
+					return stopErr
+				}
+				r.sess.State().ClearActiveRewrite()
+				r.takeActiveQuery()
+				g.complete(ctx, r.hooks, r.sess)
+				r.deliverDeferredInput(g)
+				if errors.Is(err, io.EOF) {
+					return io.EOF
+				}
+				return fmt.Errorf("upstream read packet: %w", err)
 			}
 			if _, active := r.takeActiveQuery(); active {
 				r.sess.State().ClearActiveRewrite()
@@ -1514,7 +1658,15 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 			case uint64(chproto.ServerEndOfStreamCode):
 				err := fmt.Errorf("%w: upstream ended a deferred INSERT before its sample block", chproto.ErrMalformed)
 				r.settleDeferredSample(deferredSampleResult{err: err})
-				if _, active := r.takeActiveQuery(); active {
+				if inputGateAtPacket != nil {
+					if stopErr := r.stopDeferredInput(ctx, up, inputGateAtPacket); stopErr != nil {
+						return stopErr
+					}
+					r.sess.State().ClearActiveRewrite()
+					r.takeActiveQuery()
+					inputGateAtPacket.complete(ctx, r.hooks, r.sess)
+					r.deliverDeferredInput(inputGateAtPacket)
+				} else if _, active := r.takeActiveQuery(); active {
 					r.hooks.OnQueryComplete(ctx, r.sess)
 				}
 				return err
@@ -1531,41 +1683,77 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 
 		isEndOfStream := pkt.Type == uint64(chproto.ServerEndOfStreamCode)
 		isException := pkt.Type == uint64(chproto.ServerExceptionCode)
-		var (
-			deferredTerminal      *deferredInputGate
-			deferredTerminalFatal bool
-		)
-		if isException && inputGateAtPacket != nil {
-			g := inputGateAtPacket
-			if !waitingDeferredSample {
-				// A terminal Exception after sample negotiation means ClickHouse
-				// may not consume the remaining INSERT stream. Stop the writer,
-				// close this now-unreusable upstream to unblock an in-flight
-				// WriteRawPacket, and wait until OnQueryAbort has run before
-				// completion hooks/terminal bytes become visible downstream.
-				g.stopWriter()
-				closeCodec(up)
-				deferredTerminalFatal = true
-			}
-			select {
-			case <-g.done:
-				deferredTerminal = g
-			case <-ctx.Done():
-				g.markDelivered()
-				return ctx.Err()
-			}
-		}
-		if isEndOfStream {
-			// A fast upstream can send EOS as soon as it reads the deferred
-			// terminator. Preserve the lifecycle contract: the client-side
-			// input-complete hook must finish before success/completion hooks
-			// and terminal bytes become visible downstream.
-			if g := r.currentDeferredInput(); g != nil {
+		deferredTerminal := inputGateAtPacket
+		deferredTerminalFatal := false
+		if isException && deferredTerminal != nil {
+			if waitingDeferredSample {
+				// A sample-step rejection is recoverable: no payload write began.
+				// Abort before completion, wake runDeferredInsert through the
+				// sample gate above, then wait for its writer ownership to end.
+				deferredTerminal.abort(ctx, r.hooks)
 				select {
-				case <-g.done:
+				case <-deferredTerminal.done:
 				case <-ctx.Done():
+					deferredTerminal.stopWriter()
+					closeCodec(up)
+					deferredTerminal.abort(ctx, r.hooks)
 					return ctx.Err()
 				}
+			} else {
+				// Post-sample Exception never proves that ClickHouse consumed the
+				// full terminator. Stop/close the writer and fail the session.
+				if err := r.stopDeferredInput(ctx, up, deferredTerminal); err != nil {
+					return err
+				}
+				deferredTerminalFatal = true
+			}
+		}
+		if isEndOfStream && deferredTerminal != nil {
+			if !deferredTerminal.terminatorWritten() && deferredTerminal.terminatorWriteStarted() {
+				// net.Conn.Write returning and the peer's response becoming
+				// readable are concurrent. Give the writer a bounded chance to
+				// publish its completed result; a genuinely backpressured write
+				// does not get to turn premature EOS into success.
+				timer := time.NewTimer(100 * time.Millisecond)
+				select {
+				case <-deferredTerminal.terminatorDone:
+					if !timer.Stop() {
+						<-timer.C
+					}
+				case <-timer.C:
+				case <-ctx.Done():
+					if !timer.Stop() {
+						select {
+						case <-timer.C:
+						default:
+						}
+					}
+					deferredTerminal.stopWriter()
+					closeCodec(up)
+					deferredTerminal.abort(ctx, r.hooks)
+					return ctx.Err()
+				}
+			}
+			if !deferredTerminal.terminatorWritten() {
+				err := fmt.Errorf("%w: upstream ended deferred INSERT before the terminator was written", chproto.ErrMalformed)
+				if stopErr := r.stopDeferredInput(ctx, up, deferredTerminal); stopErr != nil {
+					return stopErr
+				}
+				r.sess.State().ClearActiveRewrite()
+				r.takeActiveQuery()
+				deferredTerminal.complete(ctx, r.hooks, r.sess)
+				r.deliverDeferredInput(deferredTerminal)
+				return err
+			}
+			// A fast upstream can send EOS immediately after the local
+			// terminator write. Wait for input-complete before success/completion.
+			select {
+			case <-deferredTerminal.done:
+			case <-ctx.Done():
+				deferredTerminal.stopWriter()
+				closeCodec(up)
+				deferredTerminal.abort(ctx, r.hooks)
+				return ctx.Err()
 			}
 		}
 		var rewrittenException *chproto.Exception
@@ -1575,11 +1763,13 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 				// Keep this defensive branch resource-safe even though Codec
 				// currently guarantees decoded Exception packets have this type.
 				r.sess.State().ClearActiveRewrite()
-				if _, active := r.takeActiveQuery(); active {
-					r.hooks.OnQueryComplete(ctx, r.sess)
-				}
 				if deferredTerminal != nil {
-					deferredTerminal.markDelivered()
+					deferredTerminal.abort(ctx, r.hooks)
+					r.takeActiveQuery()
+					deferredTerminal.complete(ctx, r.hooks, r.sess)
+					r.deliverDeferredInput(deferredTerminal)
+				} else if _, active := r.takeActiveQuery(); active {
+					r.hooks.OnQueryComplete(ctx, r.sess)
 				}
 				return fmt.Errorf("upstream exception packet decoded as %T", pkt.Decoded)
 			}
@@ -1595,7 +1785,11 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 			if active && isEndOfStream && !canceled {
 				r.hooks.OnQuerySuccess(ctx, r.sess, queryID)
 			}
-			r.hooks.OnQueryComplete(ctx, r.sess)
+			if deferredTerminal != nil {
+				deferredTerminal.complete(ctx, r.hooks, r.sess)
+			} else {
+				r.hooks.OnQueryComplete(ctx, r.sess)
+			}
 		}
 
 		// Terminal hooks run before terminal bytes are exposed to the client.
@@ -1603,12 +1797,12 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 		if rewrittenException != nil {
 			if err := client.WriteException(rewrittenException); err != nil {
 				if deferredTerminal != nil {
-					deferredTerminal.markDelivered()
+					r.deliverDeferredInput(deferredTerminal)
 				}
 				return fmt.Errorf("write rewritten exception to client: %w", err)
 			}
 			if deferredTerminal != nil {
-				deferredTerminal.markDelivered()
+				r.deliverDeferredInput(deferredTerminal)
 				if deferredTerminalFatal {
 					return fmt.Errorf("deferred INSERT upstream terminated after sample: code=%d %s", rewrittenException.Code, rewrittenException.Message)
 				}
@@ -1616,7 +1810,13 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 			continue
 		}
 		if err := client.WriteRawPacket(pkt.Raw); err != nil {
+			if deferredTerminal != nil {
+				r.deliverDeferredInput(deferredTerminal)
+			}
 			return fmt.Errorf("splice upstream packet to client: %w", err)
+		}
+		if isEndOfStream && deferredTerminal != nil {
+			r.deliverDeferredInput(deferredTerminal)
 		}
 	}
 }

@@ -3,9 +3,11 @@ package chproto
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"sync/atomic"
+	"time"
 
 	"github.com/ClickHouse/ch-go/compress"
 	"github.com/ClickHouse/ch-go/proto"
@@ -154,6 +156,36 @@ func (c *Codec) SetCompression(comp proto.Compression) { c.compression.Store(int
 // Compression returns the current compression mode, or CompressionDisabled if
 // SetCompression has not been called.
 func (c *Codec) Compression() proto.Compression { return proto.Compression(c.compression.Load()) }
+
+// WaitForPacketStart waits up to timeout for at least one unread wire byte
+// without consuming it. Relay uses this only for the optional external-table
+// marker lookahead: once a byte is available, the normal unbounded packet
+// decoder owns the complete (possibly fragmented) packet. This avoids leaving
+// the codec half-consumed when the bounded lookahead expires.
+func (c *Codec) WaitForPacketStart(timeout time.Duration) (bool, error) {
+	deadliner, ok := c.conn.(interface{ SetReadDeadline(time.Time) error })
+	if !ok {
+		return false, errors.New("underlying connection does not support read deadlines")
+	}
+	if timeout <= 0 {
+		return false, fmt.Errorf("packet-start timeout must be positive, got %s", timeout)
+	}
+	if err := deadliner.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+		return false, fmt.Errorf("set packet-start read deadline: %w", err)
+	}
+	_, peekErr := c.br.Peek(1)
+	clearErr := deadliner.SetReadDeadline(time.Time{})
+	if clearErr != nil {
+		return false, fmt.Errorf("clear packet-start read deadline: %w", clearErr)
+	}
+	if peekErr != nil {
+		if netErr, ok := peekErr.(interface{ Timeout() bool }); ok && netErr.Timeout() {
+			return false, nil
+		}
+		return false, fmt.Errorf("wait for packet start: %w", peekErr)
+	}
+	return true, nil
+}
 
 // ReadPacket reads the next packet from the wire.
 //
