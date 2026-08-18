@@ -48,7 +48,8 @@ type Plugin struct {
 
 	mu      sync.Mutex
 	pending map[int64]*pendingStatement // by session id; at most one per session
-	useDB   map[int64]string            // last standalone USE per session
+	useDB   map[int64]string            // last successful standalone USE per session
+	useNext map[int64]pendingUse        // candidate USE awaiting upstream success
 }
 
 type pendingStatement struct {
@@ -57,6 +58,11 @@ type pendingStatement struct {
 	schemaHash     string
 	clientRevision uint32
 	payload        bytes.Buffer
+}
+
+type pendingUse struct {
+	queryID string
+	db      string
 }
 
 // New validates opts and returns the plugin.
@@ -93,6 +99,7 @@ func New(opts Options) (*Plugin, error) {
 		maxPayload:    opts.MaxPayloadBytes,
 		pending:       map[int64]*pendingStatement{},
 		useDB:         map[int64]string{},
+		useNext:       map[int64]pendingUse{},
 	}, nil
 }
 
@@ -106,7 +113,7 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	sessID := qctx.Session.ID()
 	if db, ok := matchUse(sql); ok {
 		p.mu.Lock()
-		p.useDB[sessID] = db
+		p.useNext[sessID] = pendingUse{queryID: qctx.Query.ID, db: db}
 		p.mu.Unlock()
 		return nil
 	}
@@ -316,6 +323,39 @@ func (p *Plugin) OnQueryAbort(_ context.Context, qctx *plugin.QueryContext) {
 	if st := p.pending[qctx.Session.ID()]; st != nil && st.statementID == qctx.Query.ID {
 		delete(p.pending, qctx.Session.ID())
 	}
+	if use, ok := p.useNext[qctx.Session.ID()]; ok && use.queryID == qctx.Query.ID {
+		delete(p.useNext, qctx.Session.ID())
+	}
+	p.mu.Unlock()
+}
+
+// OnQuerySuccess commits a standalone USE only after Relay observes the
+// upstream EndOfStream for that exact query. An Exception or local rejection
+// reaches completion without this hook and therefore cannot change the signing
+// database for later unqualified INSERTs.
+func (p *Plugin) OnQuerySuccess(_ context.Context, sess chsession.Session, queryID string) {
+	if p == nil || sess == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	use, ok := p.useNext[sess.ID()]
+	if !ok || use.queryID != queryID {
+		return
+	}
+	p.useDB[sess.ID()] = use.db
+	delete(p.useNext, sess.ID())
+}
+
+// OnQueryComplete drops any candidate USE that did not reach the success
+// boundary. Relay permits only one query in flight per session, so the session
+// id is sufficient at this terminal hook.
+func (p *Plugin) OnQueryComplete(_ context.Context, sess chsession.Session) {
+	if p == nil || sess == nil {
+		return
+	}
+	p.mu.Lock()
+	delete(p.useNext, sess.ID())
 	p.mu.Unlock()
 }
 
@@ -327,6 +367,7 @@ func (p *Plugin) OnClose(sess chsession.Session) {
 	p.mu.Lock()
 	delete(p.pending, sess.ID())
 	delete(p.useDB, sess.ID())
+	delete(p.useNext, sess.ID())
 	p.mu.Unlock()
 }
 
@@ -336,5 +377,7 @@ var (
 	_ plugin.StrictDataLimitPlugin          = (*Plugin)(nil)
 	_ plugin.QueryInputCompleteStrictPlugin = (*Plugin)(nil)
 	_ plugin.QueryAbortPlugin               = (*Plugin)(nil)
+	_ plugin.QuerySuccessPlugin             = (*Plugin)(nil)
+	_ plugin.QueryCompletePlugin            = (*Plugin)(nil)
 	_ plugin.ClosePlugin                    = (*Plugin)(nil)
 )

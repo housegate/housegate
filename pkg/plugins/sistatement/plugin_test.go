@@ -294,14 +294,27 @@ func TestPlugin_NonSILaneStatementsPassThrough(t *testing.T) {
 	}
 }
 
-func TestPlugin_UseTrackingResolvesUnqualifiedTarget(t *testing.T) {
+func TestPlugin_UseTrackingCommitsOnlyAfterUpstreamSuccess(t *testing.T) {
 	ns := network.NewInMemoryNetworkState()
 	declareSchema(t, ns, testSchema())
 	p, _ := newTestPlugin(t, ns, t.TempDir())
 	sess := newSession(3, "other")
-	if err := p.OnQuery(context.Background(), insertQctx(sess, "USE shop")); err != nil {
+	rejectedUse := insertQctx(sess, "USE shop")
+	if err := p.OnQuery(context.Background(), rejectedUse); err != nil {
 		t.Fatal(err)
 	}
+	p.OnQueryComplete(context.Background(), sess)
+	rejectedInsert := insertQctx(sess, "INSERT INTO orders FORMAT Native")
+	if err := p.OnQuery(context.Background(), rejectedInsert); err == nil || !strings.Contains(err.Error(), "other.orders") {
+		t.Fatalf("rejected USE must preserve the prior database: %v", err)
+	}
+
+	successfulUse := insertQctx(sess, "USE shop")
+	if err := p.OnQuery(context.Background(), successfulUse); err != nil {
+		t.Fatal(err)
+	}
+	p.OnQuerySuccess(context.Background(), sess, successfulUse.Query.ID)
+	p.OnQueryComplete(context.Background(), sess)
 	q := insertQctx(sess, "INSERT INTO orders FORMAT Native")
 	if err := p.OnQuery(context.Background(), q); err != nil {
 		t.Fatalf("USE-resolved target: %v", err)
