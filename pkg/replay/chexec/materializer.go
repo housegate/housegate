@@ -23,6 +23,7 @@ import (
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 
 	"github.com/housegate/housegate/pkg/replay"
+	"github.com/housegate/housegate/pkg/replay/nativepayload"
 	"github.com/housegate/housegate/pkg/replay/payloadexec"
 )
 
@@ -51,7 +52,7 @@ func NewMaterializer(networkID string, conn clickhouse.Conn) *Materializer {
 // root stays comparable to the in-process executor, while the row VALUES come
 // from ClickHouse's read-back.
 func (m *Materializer) Materialize(ctx context.Context, schema payloadexec.TableSchema, st replay.PreparedStatement) ([]payloadexec.Row, error) {
-	decoded, err := payloadexec.DecodeCSV(st.Payload, schema)
+	decoded, err := decodeRows(ctx, schema, st)
 	if err != nil {
 		return nil, err
 	}
@@ -80,6 +81,23 @@ func (m *Materializer) Materialize(ctx context.Context, schema payloadexec.Table
 		return nil, err
 	}
 	return m.readBack(ctx, scratch, schema, wire)
+}
+
+// decodeRows selects the wire decoder from the statement's signed
+// payload_format. Native is the production SI lane; CSVWithNames (and the
+// empty legacy value) is kept for the in-process executor tests.
+func decodeRows(_ context.Context, schema payloadexec.TableSchema, st replay.PreparedStatement) ([]payloadexec.Row, error) {
+	switch st.PayloadFormat {
+	case nativepayload.PayloadFormat:
+		if st.ClientRevision == 0 {
+			return nil, fmt.Errorf("statement %s: native payload requires client_revision", st.StatementID)
+		}
+		return nativepayload.Decode(schema, int(st.ClientRevision), st.Payload)
+	case "", payloadexec.PayloadFormatCSVWithNames:
+		return payloadexec.DecodeCSV(st.Payload, schema)
+	default:
+		return nil, fmt.Errorf("statement %s: unsupported payload_format %q", st.StatementID, st.PayloadFormat)
+	}
 }
 
 func (m *Materializer) createScratch(ctx context.Context, table string, schema payloadexec.TableSchema) error {

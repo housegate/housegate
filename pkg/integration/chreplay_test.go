@@ -6,11 +6,13 @@ import (
 	"encoding/hex"
 	"testing"
 
+	"github.com/ClickHouse/ch-go/proto"
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 
 	"github.com/housegate/housegate/pkg/lthash"
 	"github.com/housegate/housegate/pkg/replay"
 	"github.com/housegate/housegate/pkg/replay/chexec"
+	"github.com/housegate/housegate/pkg/replay/nativepayload"
 	"github.com/housegate/housegate/pkg/replay/payloadexec"
 )
 
@@ -288,5 +290,60 @@ func TestReplayCHExecutorMultiPartition(t *testing.T) {
 	inRoot := execRoot(t, inE, genIn, tableID, "stmt-1", payload)
 	if res.ComputedStateRoot != inRoot {
 		t.Fatalf("multi-partition ClickHouse root != in-process root:\n  ch: %s\n  in: %s", res.ComputedStateRoot, inRoot)
+	}
+}
+
+// nativeReplayPayload encodes one client Data packet for the schema used by
+// TestReplayCHExecutorNativePayloadMatchesInProcessRoot at revision 54460.
+func nativeReplayPayload(t *testing.T) []byte {
+	t.Helper()
+	user := proto.ColStr{}
+	user.Append("0x123")
+	user.Append("0xabc")
+	balance := proto.ColUInt64{10, 250}
+	var buf proto.Buffer
+	buf.PutUVarInt(uint64(proto.ClientCodeData))
+	buf.PutString("")
+	if err := (proto.Block{Rows: 2, Columns: 2}).EncodeBlock(&buf, 54460, proto.Input{{Name: "user_id", Data: &user}, {Name: "balance", Data: &balance}}); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	return append([]byte(nil), buf.Buf...)
+}
+
+// TestReplayCHExecutorNativePayloadMatchesInProcessRoot: with
+// payload_format = clickhouse-native-data-v1 the ClickHouse-backed
+// materializer and the in-process nativepayload materializer must produce
+// the same state root (executor equivalence, envelope v2 §8).
+func TestReplayCHExecutorNativePayloadMatchesInProcessRoot(t *testing.T) {
+	conn := openDirectCH(t)
+	tableID := uniqueTable(t)
+	schema := payloadexec.TableSchema{TableID: tableID, Columns: []lthash.Column{{Name: "user_id", Type: "String"}, {Name: "balance", Type: "UInt64"}}}
+	chE := payloadexec.NewWithMaterializer(chReplayNetwork, chexec.NewMaterializer(chReplayNetwork, conn), schema)
+	inE := payloadexec.NewWithMaterializer(chReplayNetwork, nativepayload.Materializer{NetworkID: chReplayNetwork}, schema)
+	genCH, err := chE.GenesisSnapshot(0, "schema-1", "ch-26.x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	genIn, err := inE.GenesisSnapshot(0, "schema-1", "ch-26.x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := nativeReplayPayload(t)
+	job := chReplayJob(genCH, tableID, "stmt-native-1", "probe", payload, "")
+	job.Statements[0].SQL = "INSERT INTO " + tableID + " FORMAT Native"
+	job.Statements[0].SQLHash = replay.DigestString(job.Statements[0].SQL)
+	job.Statements[0].PayloadFormat = nativepayload.PayloadFormat
+	job.Statements[0].ClientRevision = 54460
+	prepared := []replay.PreparedStatement{{Statement: job.Statements[0], Payload: payload}}
+	_, chRes, err := chE.ApplyContext(context.Background(), genCH, job, prepared)
+	if err != nil {
+		t.Fatalf("chexec native: %v", err)
+	}
+	_, inRes, err := inE.ApplyContext(context.Background(), genIn, job, prepared)
+	if err != nil {
+		t.Fatalf("in-process native: %v", err)
+	}
+	if chRes.ComputedStateRoot != inRes.ComputedStateRoot {
+		t.Fatalf("native executor equivalence broken:\n  ch: %s\n  in: %s", chRes.ComputedStateRoot, inRes.ComputedStateRoot)
 	}
 }

@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "chexec",
@@ -11,7 +11,19 @@ go_library(
     deps = [
         "//pkg/lthash",
         "//pkg/replay",
+        "//pkg/replay/nativepayload",
         "//pkg/replay/payloadexec",
         "@com_github_clickhouse_clickhouse_go_v2//:clickhouse-go",
+    ],
+)
+
+go_test(
+    name = "chexec_test",
+    srcs = ["materializer_format_test.go"],
+    embed = [":chexec"],
+    deps = [
+        "//pkg/lthash",
+        "//pkg/replay",
+        "//pkg/replay/payloadexec",
     ],
 )

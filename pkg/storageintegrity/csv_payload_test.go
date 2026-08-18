@@ -7,8 +7,41 @@ import (
 
 	"github.com/ClickHouse/ch-go/proto"
 
+	"github.com/housegate/housegate/pkg/lthash"
 	"github.com/housegate/housegate/pkg/replay/payloadexec"
 )
+
+const nativePayloadTestRevision = 54453
+
+func nativeMaterializerSchema() payloadexec.TableSchema {
+	return payloadexec.TableSchema{
+		TableID: "tenant.events",
+		Columns: []lthash.Column{
+			{Name: "id", Type: "UInt64"},
+			{Name: "region", Type: "String"},
+		},
+		PartitionBy: "region",
+	}
+}
+
+func encodeNativePayload(t *testing.T, input proto.Input) []byte {
+	t.Helper()
+	var buf proto.Buffer
+	buf.PutUVarInt(uint64(proto.ClientCodeData))
+	buf.PutString("")
+	if err := (proto.Block{Rows: input[0].Data.Rows(), Columns: len(input)}).EncodeBlock(&buf, nativePayloadTestRevision, input); err != nil {
+		t.Fatalf("encode block: %v", err)
+	}
+	return buf.Buf
+}
+
+func newColStr(values ...string) *proto.ColStr {
+	col := new(proto.ColStr)
+	for _, value := range values {
+		col.Append(value)
+	}
+	return col
+}
 
 func TestNativeCSVPayloadMaterializerConvertsCapturedClientData(t *testing.T) {
 	schema := nativeMaterializerSchema()
