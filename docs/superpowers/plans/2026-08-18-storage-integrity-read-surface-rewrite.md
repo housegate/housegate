@@ -4,7 +4,7 @@
 
 **Goal:** Make storage-integrity (SI) tables readable through HouseGate: reads of an SI table resolve to `hg_safe.<t>` (mode `safe`) or `hg_safe ∪ hg_unsafe` minus promoted-not-yet-cleaned unsafe parts (mode `unsafe_latest`), `_hg_row_id` is hidden and unaddressable, non-lane writes/DDL against SI tables are refused, and both rewriter engines implement one contract from one shared golden file.
 
-**Architecture:** A minor rewriter-proto bump adds `StorageIntegrityArgs` (per-logical-table safe/unsafe physical names + excluded unsafe parts + read mode + reserved column) to `RewriteTableDynamicArgs`, and `AccessedTable.is_storage_integrity`. rewriter-go and rewriter-grpc consult it *before* ordinary dynamic name resolution: SELECT-family table references become derived tables `(SELECT * EXCEPT (_hg_row_id) FROM hg_safe.<t> [UNION ALL … hg_unsafe.<t> WHERE _part NOT IN (…)]) AS <alias>`, `EXISTS TABLE` maps to the safe table, `DESCRIBE` becomes a `system.columns` metadata SELECT, and every non-INSERT SI-touching write/DDL statement is refused. INSERT remains a successful ordinary physical rewrite with `is_storage_integrity = true`; HouseGate's signed ingress lane, which runs after rewrite, owns its admission. HouseGate fills the new args from `storage_integrity.tables[]` + `storage_integrity.read.default_mode` + the per-query `SQL_x_read_mode` setting, and gets the excluded-part list from a new host port (`StorageIntegrityReadState.PromotedUnsafeParts(tableID)`) that sentio-node satisfies with the embedded `snode.Role`, which now journals promoted-unsafe-part names until their cleanup ack. HouseGate fails **closed** on any non-Success rewriter response that involves an SI table (a rejection must reach the client as an Exception, never fall open to the un-rewritten SQL).
+**Architecture:** A minor rewriter-proto bump adds `StorageIntegrityArgs` (per-logical-table safe/unsafe physical names + excluded unsafe parts + read mode + reserved column) to `RewriteTableDynamicArgs`, and `AccessedTable.is_storage_integrity`. rewriter-go and rewriter-grpc consult it *before* ordinary dynamic name resolution: SELECT-family table references become derived tables `(SELECT * EXCEPT (_hg_row_id) FROM hg_safe.<t> [UNION ALL … hg_unsafe.<t> WHERE _part NOT IN (…)]) AS <alias>`, `EXISTS TABLE` maps to the safe table, `DESCRIBE` becomes a `system.columns` metadata SELECT, and every non-INSERT SI-touching write/DDL statement is refused. INSERT remains a successful ordinary physical rewrite with `is_storage_integrity = true`; HouseGate's signed ingress lane, which runs after rewrite, owns its admission. HouseGate fills the new args from `storage_integrity.tables[]` + `storage_integrity.read.default_mode` + the per-query `SQL_x_read_mode` setting, and gets the excluded-part list from a new host port (`StorageIntegrityReadState.PromotedUnsafeParts(tableID)`) that sentio-node satisfies with the embedded `snode.Role`, which now journals promoted-unsafe-part names until their cleanup ack. HouseGate fails **closed** on any non-Success response involving an SI table and, because a missing response cannot be classified, on every pre-response rewrite failure whenever the configured SI set is non-empty; inability to wire a startup rewriter refuses `buildServer`. Empty-SI deployments retain the legacy fail-open path.
 
 **Tech Stack:** protobuf/buf (rewriter-proto), Go 1.25 + polyglot FFI via PureGo (rewriter-go), C++23 + ClickHouse parser + gtest (rewriter-grpc, built on the remote build box), Go + Bazel 9 (housegate), Go (sentio-node, arbiter-core).
 
@@ -28,7 +28,7 @@
 
 **D-1 — INSERT admission is permanently owned by HouseGate, not the rewriter.** In housegate the SI ingress plugin (`pkg/plugins/storageintegrity`) runs *after* the rewrite plugin ([build.go](../../build.go) appends `rewritePlug` before `storageIntegrityIngress`), classifies the statement from `qctx.StatementType`, resolves the target from `qctx.AccessedTables`, and — with `SuppressUpstreamExecution` — still forwards the rewritten INSERT Query to ClickHouse for Native sample-block negotiation. A rewriter `UnsupportedStatement` would (a) clear `statement_type` (both engines do on reject) so the ingress fails with "statement type mismatch", and (b) leave no resolvable rewritten physical target for the upstream exchange. The rewriter therefore keeps INSERT on the ordinary dynamic path (Success, target = multi-tenant physical table, exactly today's behaviour) and marks the accessed table `is_storage_integrity = true`. Refusing a non-lane INSERT is HouseGate's job: the SI ingress refuses an INSERT without the signed lane token; for deployments with SI tables but *no* ingress (`storage_integrity.ingress.enabled: false`) the rewriter wrapper (`pkg/rewriter/sentio.go`) rejects INSERTs whose accessed tables carry the SI flag with the spec's message. Golden case `si_insert_rewrites_like_today` (Task 3) records this. Spec A's agent-side sample synthesis does not change this server-side ordering or ownership rule.
 
-**D-2 — Fail-closed rule in HouseGate.** Today `pkg/plugins/rewrite` fails open on every rewriter error (forwards original SQL). For SI that would silently send `SELECT _hg_row_id FROM db.t` or `DROP TABLE db.t` upstream as logical SQL. New rule (Task 17/18): if the rewriter response is non-Success **and** any `original_accessed_tables` entry has `is_storage_integrity = true`, `sentioRewriter.Rewrite` returns `*rewriter.RejectedError` and the plugin returns it (Exception to client). Ordinary fail-open is unchanged (`TestRewriter_FailOpen` keeps passing).
+**D-2 — Fail-closed rule in HouseGate.** Today `pkg/plugins/rewrite` fails open on every rewriter error (forwards original SQL). For SI that would silently send `SELECT _hg_row_id FROM db.t` or `DROP TABLE db.t` upstream as logical SQL. New rule (Task 17/18): if the rewriter response is non-Success **and** any `original_accessed_tables` entry has `is_storage_integrity = true`, `sentioRewriter.Rewrite` returns `*rewriter.RejectedError` and the plugin returns it (Exception to client). A transport/protocol/nil-response/closed-backend failure has no trustworthy accessed-table classification; when `StorageIntegrityOptions.Tables` is non-empty it also becomes `RejectedError`, so even ingress-disabled INSERT cannot escape during an outage. This conservatively rejects non-SI queries on an SI-configured HouseGate while classification is unavailable. Ordinary fail-open remains only when the SI table set is empty (`TestRewriter_FailOpen` keeps passing there); a partial SQL parser in HouseGate is explicitly out of scope and is not a security boundary. (`buildDatabaseMap` retains an `error` return for historical shape but has no failing branch in the frozen base, so this plan does not invent an untestable registry-error seam.)
 
 **D-3 — `SQL_x_read_mode` is not stripped before forwarding.** No `SQL_x_*` key is stripped today (`SQL_x_auth_token`, `SQL_x_payer` reach ClickHouse as `custom_settings_prefixes = SQL_` custom settings). Adding a strip mechanism only for this key would be an inconsistent cross-cutting change; the plan reads the setting and leaves it in place like its siblings.
 
@@ -2982,7 +2982,7 @@ git commit -m "feat(config): storage_integrity.tables (renamed from runtime.merg
 
 **Files:**
 - Create: `pkg/rewriter/storage_integrity.go`, `pkg/rewriter/storage_integrity_test.go`
-- Modify: `pkg/rewriter/types.go` (`Options`), `pkg/rewriter/args.go` (`buildDynamicArgs`), `pkg/rewriter/sentio.go` (`Rewrite` :266-330, `RewriteErrorMessage` :402-407), `pkg/rewriter/BUILD.bazel` (gazelle), `pkg/rewriter/AGENTS.md`
+- Modify: `pkg/rewriter/types.go` (`Options`), `pkg/rewriter/args.go` (`buildDynamicArgs`), `pkg/rewriter/sentio.go` (`Rewrite` :266-330, `RewriteErrorMessage` :402-407), `pkg/rewriter/BUILD.bazel` (gazelle)
 - Test: `pkg/rewriter/backend_test.go`
 
 **Interfaces:**
@@ -2993,7 +2993,7 @@ git commit -m "feat(config): storage_integrity.tables (renamed from runtime.merg
   - `type rewriter.StorageIntegrityTable struct { TableID, SafeTable, UnsafeTable string }` (`TableID` doubles as the logical key)
   - `type rewriter.StorageIntegrityOptions struct { Tables []StorageIntegrityTable; DefaultReadMode ReadMode; ReadState StorageIntegrityReadState; InsertLaneEnabled bool }` on `rewriter.Options.StorageIntegrity`
   - `func rewriter.WithReadMode(ctx context.Context, m ReadMode) context.Context`; `func rewriter.ReadModeFromContext(ctx context.Context) (ReadMode, bool)`
-  - `type rewriter.RejectedError struct { Code pb.RewriteCode; Message string }` with `Error()`; returned by `Rewrite` for every SI-related rejection (D-2)
+  - `type rewriter.RejectedError struct { Code pb.RewriteCode; Message string }` with `Error()`; returned by `Rewrite` for every SI-related rejection and every pre-response rewrite failure while `StorageIntegrityOptions.Tables` is non-empty (D-2)
   - `func buildStorageIntegrityArgs(opts StorageIntegrityOptions, mode ReadMode) (*pb.StorageIntegrityArgs, error)`; `buildDynamicArgs(..., si *pb.StorageIntegrityArgs)`
 
 - [ ] **Step 1: Failing tests** — `pkg/rewriter/storage_integrity_test.go`:
@@ -3169,6 +3169,46 @@ func TestSentioRewriter_StorageIntegrityRejectIsFailClosed(t *testing.T) {
 	}
 }
 
+func TestSentioRewriter_ConfiguredSISurfaceUnavailableFailsClosed(t *testing.T) {
+	for name, be := range map[string]*fakeBackend{
+		"transport":    {err: errors.New("transport down")},
+		"nil response": {},
+	} {
+		for _, insertLane := range []bool{false, true} {
+			_, err := newSIFactory(be, nil, insertLane).NewRewriter(&fakeSession{}).Rewrite(context.Background(), "INSERT INTO db1.t FORMAT Native", "")
+			var rej *RejectedError
+			if !errors.As(err, &rej) || rej.Code != pb.RewriteCode_RewriteError || !strings.Contains(rej.Message, "classification unavailable") {
+				t.Fatalf("%s insertLane=%v err=%v, want fail-closed RejectedError", name, insertLane, err)
+			}
+		}
+	}
+	// The identical outage retains an ordinary error only when no SI
+	// membership is configured; the plugin will fail open on that error.
+	be := &fakeBackend{err: errors.New("transport down")}
+	_, err := newFakeFactory(be).NewRewriter(&fakeSession{}).Rewrite(context.Background(), "SELECT 1", "")
+	var rej *RejectedError
+	if err == nil || errors.As(err, &rej) {
+		t.Fatalf("empty-SI backend error = %v, want ordinary error", err)
+	}
+
+	siClosed := newSIFactory(&fakeBackend{}, nil, false).NewRewriter(&fakeSession{})
+	if err := siClosed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, err = siClosed.Rewrite(context.Background(), "INSERT INTO db1.t FORMAT Native", "")
+	if !errors.As(err, &rej) || !strings.Contains(rej.Message, "classification unavailable") {
+		t.Fatalf("configured-SI closed rewriter = %v, want RejectedError", err)
+	}
+	emptyClosed := newFakeFactory(&fakeBackend{}).NewRewriter(&fakeSession{})
+	if err := emptyClosed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, err = emptyClosed.Rewrite(context.Background(), "SELECT 1", "")
+	if err == nil || errors.As(err, &rej) {
+		t.Fatalf("empty-SI closed rewriter = %v, want ordinary error", err)
+	}
+}
+
 func TestSentioRewriter_InsertIntoSITableWithoutLaneIsRejected(t *testing.T) {
 	be := &fakeBackend{resp: &pb.RewriteSQLResponse{
 		Code: pb.RewriteCode_Success, SqlAfterRewrite: `INSERT INTO phys."db1.t" (a) VALUES (1)`, StatementType: pb.StatementType_STATEMENT_TYPE_INSERT,
@@ -3186,7 +3226,7 @@ func TestSentioRewriter_InsertIntoSITableWithoutLaneIsRejected(t *testing.T) {
 }
 ```
 
-Run: `go test ./pkg/rewriter -run 'TestParseReadMode|TestBuildStorageIntegrityArgs|TestReadModeContext|TestSentioRewriter_ShipsStorageIntegrityArgs|TestSentioRewriter_UnsafeLatest|TestSentioRewriter_StorageIntegrityReject|TestSentioRewriter_InsertIntoSI' -count=1`
+Run: `go test ./pkg/rewriter -run 'TestParseReadMode|TestBuildStorageIntegrityArgs|TestReadModeContext|TestSentioRewriter_ShipsStorageIntegrityArgs|TestSentioRewriter_UnsafeLatest|TestSentioRewriter_StorageIntegrityReject|TestSentioRewriter_ConfiguredSISurfaceUnavailable|TestSentioRewriter_InsertIntoSI' -count=1`
 Expected: compile errors (`undefined: ReadMode`, `RejectedError`, …).
 
 - [ ] **Step 2: Implement `pkg/rewriter/storage_integrity.go`**
@@ -3275,8 +3315,9 @@ func ReadModeFromContext(ctx context.Context) (ReadMode, bool) {
 
 // RejectedError is a rewrite outcome that MUST reach the client as an
 // Exception (the plugin fails closed on it) instead of falling open to
-// the original SQL. Used for every storage-integrity rejection: reserved
-// column, non-lane write, unavailable read mode.
+// the original SQL. Used for every storage-integrity rejection (reserved
+// column, non-lane write, unavailable read mode) and for any failure before
+// a trustworthy classification when SI membership is configured.
 type RejectedError struct {
 	Code    pb.RewriteCode
 	Message string
@@ -3344,7 +3385,7 @@ func storageIntegrityAccess(tables []*pb.AccessedTable) (string, bool) {
 
 `types.go` `Options`: add `StorageIntegrity StorageIntegrityOptions` with a doc comment pointing at Spec G. `args.go`: add trailing param `si *pb.StorageIntegrityArgs` and `StorageIntegrity: si` in the literal (update both callers in `sentio.go`).
 
-`sentio.go` `Rewrite` — after building `dbMap/knownPhys/logicalToRemote/remoteUpstreams`:
+`sentio.go` `Rewrite` — add a small `rewriteFailure(err error) error` helper: when `len(r.factory.options.StorageIntegrity.Tables) > 0`, wrap the cause in `&RejectedError{Code: pb.RewriteCode_RewriteError, Message: "storage-integrity rewrite classification unavailable: " + err.Error()}`; otherwise return the ordinary error. Use it for the closed-backend check, any non-nil error returned by `buildDatabaseMap`, `callWithTimeout` failure, and a nil response. The frozen `buildDatabaseMap` implementation has no failing branch, so do not add a fake production seam solely to synthesize that impossible branch; the generic plugin-level `FailClosedOnError` regression covers any ordinary factory error. After building `dbMap/knownPhys/logicalToRemote/remoteUpstreams`:
 
 ```go
 	mode := r.factory.options.StorageIntegrity.DefaultReadMode
@@ -3357,6 +3398,8 @@ func storageIntegrityAccess(tables []*pb.AccessedTable) (string, bool) {
 	}
 	dynArgs := buildDynamicArgs(dbMap, knownPhys, r.sess.LogicalDatabaseName(), r.sess.PhysicalDatabaseName(), r.factory.options.Delim, logicalToRemote, remoteUpstreams, siArgs)
 ```
+
+The existing no-mappings fast path must become `if len(dbMap) == 0 && len(knownPhys) == 0 && r.sess.LogicalDatabaseName() == "" && siArgs == nil`; configured SI membership always calls the backend so it receives classification even when ordinary database maps are empty. After `resp, err := r.callWithTimeout(ctx, req)`, route `err` through `rewriteFailure`; route `resp == nil` through the same helper before dereferencing it.
 
 and after `resp, err := r.callWithTimeout(ctx, req)` succeeded, before the `switch resp.Code`:
 
@@ -3381,7 +3424,7 @@ and after `resp, err := r.callWithTimeout(ctx, req)` succeeded, before the `swit
 Run: `bazel run //:gazelle && bazel test //pkg/rewriter:rewriter_test --test_output=errors`
 Expected: PASS (new + existing tests).
 
-- [ ] **Step 4: AGENTS.md** — add to `pkg/rewriter/AGENTS.md` WHERE TO LOOK: `| Storage-integrity read surface | storage_integrity.go | ReadMode/SQL_x_read_mode, StorageIntegrityReadState port, RejectedError (fail-closed), StorageIntegrityArgs builder |` and CONVENTIONS bullet: "Any non-Success rewriter answer whose accessed tables carry `is_storage_integrity` is a `*RejectedError`, never fail-open."
+- [ ] **Step 4: Guidance bookkeeping** — do not create `pkg/rewriter/AGENTS.md`: no such tracked file exists and the user's global ignore rule excludes `AGENTS.md`. Task 21 updates the tracked root `CLAUDE.md` (and therefore its tracked `AGENTS.md -> CLAUDE.md` symlink) with the read-surface and fail-closed conventions after the entire HouseGate slice lands.
 
 - [ ] **Step 5: Commit**
 
@@ -3390,7 +3433,7 @@ git add pkg/rewriter
 git commit -m "feat(rewriter): storage-integrity read mode, promotion-state port, fail-closed RejectedError"
 ```
 
-### Task 18: `pkg/plugins/rewrite` — parse `SQL_x_read_mode`, carry it, fail closed on `RejectedError`
+### Task 18: `pkg/plugins/rewrite` — parse `SQL_x_read_mode`, carry it, enforce configured-SI fail-closed
 
 **Working directory:** `/Users/uranuswch/Dev/housegate/housegate`
 
@@ -3400,7 +3443,7 @@ git commit -m "feat(rewriter): storage-integrity read mode, promotion-state port
 
 **Interfaces:**
 - Consumes: `rewriter.ReadModeSettingKey`, `rewriter.ParseReadMode`, `rewriter.WithReadMode`, `*rewriter.RejectedError`.
-- Produces: `func readModeFromQuery(q *chproto.Query) (rewriter.ReadMode, bool, error)`.
+- Produces: `func readModeFromQuery(q *chproto.Query) (rewriter.ReadMode, bool, error)` and `Plugin.FailClosedOnError bool` (set whenever SI membership is configured, so injected/custom factories cannot bypass D-2).
 
 - [ ] **Step 1: Failing tests** (append to `rewriter_test.go`; `fakeRewriter` gains `err error` and `lastCtx context.Context` fields returned/recorded by `Rewrite`)
 
@@ -3449,7 +3492,7 @@ func TestOnQuery_RejectedErrorFailsClosed(t *testing.T) {
 	}
 }
 
-func TestOnQuery_OrdinaryErrorStaysFailOpen(t *testing.T) {
+func TestOnQuery_OrdinaryErrorStaysFailOpenWhenNoSISurfaceIsConfigured(t *testing.T) {
 	rw := &fakeRewriter{err: errors.New("transport down")}
 	p := &Plugin{Factory: &fakeFactory{rw: rw}}
 	sess := newSessionForTest(t, 43)
@@ -3461,12 +3504,23 @@ func TestOnQuery_OrdinaryErrorStaysFailOpen(t *testing.T) {
 		t.Fatalf("body = %q", qctx.Query.Body)
 	}
 }
+
+func TestOnQuery_OrdinaryErrorFailsClosedWhenSISurfaceIsConfigured(t *testing.T) {
+	rw := &fakeRewriter{err: errors.New("transport down")}
+	p := &Plugin{Factory: &fakeFactory{rw: rw}, FailClosedOnError: true}
+	sess := newSessionForTest(t, 44)
+	qctx := &plugin.QueryContext{Session: sess, OriginalSQL: "INSERT INTO db1.t FORMAT Native", Query: &chproto.Query{Body: "INSERT INTO db1.t FORMAT Native"}}
+	err := p.OnQuery(context.Background(), qctx)
+	if err == nil || !strings.Contains(err.Error(), "classification unavailable") {
+		t.Fatalf("err = %v, want configured-SI fail-closed error", err)
+	}
+}
 ```
 
 (imports: `errors`, `strings`, `pb "github.com/housegate/rewriter-proto/gen/pb"`.) In `fakeRewriter.Rewrite`: record `f.lastCtx = ctx`; `if f.err != nil { return rewriter.RewriteResult{}, f.err }`.
 
 Run: `go test ./pkg/plugins/rewrite -run 'TestOnQuery_ReadMode|TestOnQuery_InvalidReadMode|TestOnQuery_RejectedError|TestOnQuery_OrdinaryError' -count=1`
-Expected: FAIL (`ctx read mode = "" false`, invalid mode not rejected, RejectedError swallowed).
+Expected: FAIL (`ctx read mode = "" false`, invalid mode not rejected, RejectedError swallowed, configured-SI ordinary error swallowed).
 
 - [ ] **Step 2: Implement in `OnQuery`** — after the maintenance/platform-operator bypass and before `rw := p.rewriterFor(...)`:
 
@@ -3490,6 +3544,10 @@ and replace the error branch after `rw.Rewrite`:
 		if errors.As(err, &rej) {
 			logger.Infow("rewriter: statement rejected (fail-closed)", "code", rej.Code.String(), "message", rej.Message)
 			return rej
+		}
+		if p.FailClosedOnError {
+			logger.Errorw("rewriter: classification unavailable with storage-integrity configured (fail-closed)", "error", err)
+			return fmt.Errorf("storage-integrity rewrite classification unavailable: %w", err)
 		}
 		logger.Warne(err, "rewriter: rewrite failed, forwarding original SQL")
 		return nil
@@ -3518,6 +3576,8 @@ func readModeFromQuery(q *chproto.Query) (rewriter.ReadMode, bool, error) {
 }
 ```
 
+Add `FailClosedOnError bool` to `Plugin` with the comment that it is the defense-in-depth boundary for configured SI membership, including caller-injected factories; add `fmt` alongside `errors` in the imports. Update the package comment's unconditional fail-open sentence to describe the empty-SI-only exception.
+
 (add `"errors"` to imports.)
 
 - [ ] **Step 3: Run**
@@ -3541,7 +3601,7 @@ git commit -m "feat(rewrite): SQL_x_read_mode setting → per-query read mode; f
 - Test: `build_test.go`
 
 **Interfaces:**
-- Produces: `housegate.Options.StorageIntegrityReadState rewriter.StorageIntegrityReadState`; `func buildRewriterFactory(cfg *config.Config, reg registry.Registry, si rewriter.StorageIntegrityOptions) rewriter.Factory`; `func storageIntegrityRewriterOptions(cfg *config.Config, rs rewriter.StorageIntegrityReadState) rewriter.StorageIntegrityOptions`; `testenv.WithStorageIntegrityReadState(rs rewriter.StorageIntegrityReadState) ProxyOption`.
+- Produces: `housegate.Options.StorageIntegrityReadState rewriter.StorageIntegrityReadState`; `func buildRewriterFactory(cfg *config.Config, reg registry.Registry, si rewriter.StorageIntegrityOptions) rewriter.Factory`; `func storageIntegrityRewriterOptions(cfg *config.Config, rs rewriter.StorageIntegrityReadState) rewriter.StorageIntegrityOptions`; `rewrite.Plugin.FailClosedOnError = len(siOptions.Tables) > 0`; `testenv.WithStorageIntegrityReadState(rs rewriter.StorageIntegrityReadState) ProxyOption`.
 
 - [ ] **Step 1: Failing tests** (append to `build_test.go`)
 
@@ -3578,6 +3638,19 @@ func TestBuildServer_UnsafeLatestDefaultRequiresReadState(t *testing.T) {
 		t.Fatalf("with a port wired: %v", err)
 	}
 	bs.teardown()
+}
+
+func TestBuildServer_ConfiguredSISurfaceRequiresAvailableRewriter(t *testing.T) {
+	cfg := minimalServerCfg(t)
+	cfg.StorageIntegrity.Tables = []string{"tenant.events"}
+	// Router-only mode deliberately returns a nil rewriter factory. With an
+	// SI surface configured that must be a startup error, never a bypass.
+	cfg.Shard = nil
+	cfg.Upstream = ""
+	_, err := buildServer(Options{Config: cfg, NetworkState: network.NewInMemoryNetworkState()}, nil)
+	if err == nil || !strings.Contains(err.Error(), "storage_integrity.tables requires an available SQL rewriter") {
+		t.Fatalf("err = %v", err)
+	}
 }
 
 type buildFakeReadState struct{}
@@ -3625,7 +3698,7 @@ func storageIntegrityRewriterOptions(cfg *config.Config, rs rewriter.StorageInte
 }
 ```
 
-`buildRewriterFactory(cfg, reg, si rewriter.StorageIntegrityOptions)`: set `StorageIntegrity: si` in the `rewriter.Options` literal. In `buildServer`, before the `var rwFactory` block:
+`buildRewriterFactory(cfg, reg, si rewriter.StorageIntegrityOptions)`: set `StorageIntegrity: si` in the `rewriter.Options` literal. In `buildServer`, compute `siOptions := storageIntegrityRewriterOptions(cfg, opts.StorageIntegrityReadState)` once, before the `var rwFactory` block, and use it for both the factory call and the safety guard below:
 
 ```go
 	if cfg.StorageIntegrity.Read.DefaultMode == config.StorageIntegrityReadModeUnsafeLatest && opts.StorageIntegrityReadState == nil {
@@ -3633,10 +3706,18 @@ func storageIntegrityRewriterOptions(cfg *config.Config, rs rewriter.StorageInte
 	}
 	if len(cfg.StorageIntegrity.Tables) > 0 && opts.StorageIntegrityReadState == nil {
 		log.Warnw("storage_integrity: no read-state port wired; unsafe_latest reads will be refused", "tables", len(cfg.StorageIntegrity.Tables))
+}
+```
+
+Call `buildRewriterFactory(cfg, reg, siOptions)`. After the injected/built `rwFactory` branch and before constructing plugins:
+
+```go
+	if len(siOptions.Tables) > 0 && rwFactory == nil {
+		return nil, fmt.Errorf("storage_integrity.tables requires an available SQL rewriter; refusing fail-open startup")
 	}
 ```
 
-and call `buildRewriterFactory(cfg, reg, storageIntegrityRewriterOptions(cfg, opts.StorageIntegrityReadState))`. `pkg/integration/testenv/proxy.go`:
+This converts router-only disablement, native-library resolution failure, and factory construction failure into startup refusal whenever SI membership is configured; empty-SI deployments keep the existing warn-and-disable posture. In the `rewrite.Plugin{...}` literal set `FailClosedOnError: len(siOptions.Tables) > 0`, which preserves the same rule for caller-injected factories. `pkg/integration/testenv/proxy.go`:
 
 ```go
 // WithStorageIntegrityReadState wires the promotion-state port the SI read
@@ -3867,7 +3948,7 @@ git commit -m "test(integration): storage-integrity read surface e2e (safe / uns
 **Files:**
 - Modify: `CLAUDE.md` (§4 rewriter paragraph :119; the `pkg/plugins/` bullet listing `rewrite`; add a `storage_integrity.*` bullet under Key Modules), `README.md` (config reference: `storage_integrity.tables`, `storage_integrity.read.default_mode`, `SQL_x_read_mode`)
 
-- [ ] **Step 1: Write** — CLAUDE.md §4: after "Each call ships a single `dynamic_args` payload …" add: "When `storage_integrity.tables` is configured the same payload carries `storage_integrity` (`StorageIntegrityArgs`, rewriter-proto ≥ v0.2.0): per-logical-table `hg_safe`/`hg_unsafe` physical names (`config.StorageIntegrityPhysicalTable`), the read mode (config `storage_integrity.read.default_mode`, per query `SQL_x_read_mode`), and — in `unsafe_latest` — the promoted-not-yet-cleaned unsafe part names from `Options.StorageIntegrityReadState.PromotedUnsafeParts(tableID)` (sentio-node's `snode.Role`). Both engines turn SI reads into `(SELECT * EXCEPT (_hg_row_id) FROM hg_safe.<t> [UNION ALL … hg_unsafe.<t> WHERE _part NOT IN (…)]) AS <alias>`, `EXISTS TABLE` → safe table, `DESCRIBE` → `system.columns` SELECT, and refuse every non-INSERT SI-touching write/DDL statement (`UnsupportedStatement`) or a `_hg_row_id` reference (`RewriteError`); INSERT stays a successful ordinary physical rewrite marked `is_storage_integrity` so HouseGate can apply the signed-lane decision. HouseGate **fails closed** on any non-Success answer whose `original_accessed_tables` carry `is_storage_integrity` (`*rewriter.RejectedError` → Exception), on `unsafe_latest` without the port, and on INSERT into an SI table when the ingress lane is off; ordinary rewriter errors stay fail-open. `SQL_x_read_mode` is read but not stripped (no `SQL_x_*` key is). Golden contract: `rewriter-go/internal/harness/testdata/storage_integrity_cases.json` (byte-identical copy in rewriter-grpc)." Under Known Rough Edges add: "SI INSERT is deliberately not rejected by the rewriter (ingress runs after rewrite and needs the classification + a resolvable physical target for sample-block negotiation) — see plan `docs/superpowers/plans/2026-08-18-storage-integrity-read-surface-rewrite.md` D-1."
+- [ ] **Step 1: Write** — CLAUDE.md §4: after "Each call ships a single `dynamic_args` payload …" add: "When `storage_integrity.tables` is configured the same payload carries `storage_integrity` (`StorageIntegrityArgs`, rewriter-proto ≥ v0.2.0): per-logical-table `hg_safe`/`hg_unsafe` physical names (`config.StorageIntegrityPhysicalTable`), the read mode (config `storage_integrity.read.default_mode`, per query `SQL_x_read_mode`), and — in `unsafe_latest` — the promoted-not-yet-cleaned unsafe part names from `Options.StorageIntegrityReadState.PromotedUnsafeParts(tableID)` (sentio-node's `snode.Role`). Both engines turn SI reads into `(SELECT * EXCEPT (_hg_row_id) FROM hg_safe.<t> [UNION ALL … hg_unsafe.<t> WHERE _part NOT IN (…)]) AS <alias>`, `EXISTS TABLE` → safe table, `DESCRIBE` → `system.columns` SELECT, and refuse every non-INSERT SI-touching write/DDL statement (`UnsupportedStatement`) or a `_hg_row_id` reference (`RewriteError`); INSERT stays a successful ordinary physical rewrite marked `is_storage_integrity` so HouseGate can apply the signed-lane decision. HouseGate **fails closed** on any non-Success answer whose `original_accessed_tables` carry `is_storage_integrity` (`*rewriter.RejectedError` → Exception), on `unsafe_latest` without the port, on INSERT into an SI table when the ingress lane is off, and on every pre-response classification failure while SI tables are configured; legacy fail-open remains only when the SI set is empty. `SQL_x_read_mode` is read but not stripped (no `SQL_x_*` key is). Golden contract: `rewriter-go/internal/harness/testdata/storage_integrity_cases.json` (byte-identical copy in rewriter-grpc)." Under Known Rough Edges add: "SI INSERT is deliberately not rejected by the rewriter (ingress runs after rewrite and needs the classification + a resolvable physical target for sample-block negotiation) — see plan `docs/superpowers/plans/2026-08-18-storage-integrity-read-surface-rewrite.md` D-1."
 
 - [ ] **Step 2: Full ladder** — `go build ./... && go vet ./... 2>&1 | grep -v "unkeyed fields"; bazel build //... && bazel test //...` → all PASS; then push and open the PR:
 

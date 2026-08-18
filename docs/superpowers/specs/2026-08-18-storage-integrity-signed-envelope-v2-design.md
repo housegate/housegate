@@ -37,7 +37,7 @@ Non-goals: per-statement `schema_snapshot_id` / DDL lane; signing anything seque
 
 **D5 — `schema_hash`, not `schema_snapshot_id`, in the envelope.** The agent signs the Phase-B `schema_hash` of the table version it built the sample block from; SNode and verifier verify it against their own schema source before decoding. `schema_snapshot_id` remains the block-level genesis parameter (base design §7 "v1: block-level").
 
-**D6 — Agent-generated `statement_id` when the client did not supply one.** `client_account` = agent signer address; `client_seq` from a durable per-agent counter; `client_nonce` = 16 random bytes hex. A client that already set the ClickHouse query id in the flat SI form with a matching account keeps it (SDK path), canonicalized to the lowercase-account flat form; before signing, the agent durably advances its counter to at least that supplied `client_seq`, so the next generated id cannot reuse the SDK-reserved sequence.
+**D6 — Agent-generated `statement_id` when the client did not supply one.** `client_account` = agent signer address; `client_seq` from a durable per-agent counter; `client_nonce` = 16 random bytes hex. A client that already set the ClickHouse query id in the flat SI form with a matching account keeps it (SDK path), canonicalized to the lowercase-account flat form; before signing, the agent durably advances its counter to at least that supplied `client_seq`, so the next generated id cannot reuse the SDK-reserved sequence. Increment is checked: `Next` at `MaxUint64` fails with `ErrClientSeqExhausted` without modifying durable state, and an SDK-supplied `MaxUint64` is rejected before signing because it leaves no next value. Sequence exhaustion is fail-closed and never wraps to zero.
 
 ## 4. Envelope v2
 
@@ -117,7 +117,7 @@ Runs **after** `materialize` and **before** `agent.Signer` in `buildAgent`. Hook
 3. **OnQueryInputCompleteStrict.** Compute `payload_hash`/`payload_length`, build `JWSStatementPayloadV2`, sign with the agent key, append `SQL_x_statement_token` (Custom, quoted like the auth token) to `qctx.Query.Settings`. Return; Relay now forwards.
 4. **OnQueryAbort / OnClose.** Drop the buffer.
 
-`client_seq` durability: `storage_integrity.agent.state_dir/<account>.seq` holds the last issued seq; write-and-fsync **before** signing; on restart continue from `last+1`. A crash between fsync and submission wastes one seq (a gap the accumulator's K=64 budget absorbs); reuse is impossible by construction. Multiple agents sharing one key are out of scope (documented).
+`client_seq` durability: `storage_integrity.agent.state_dir/<account>.seq` holds the last issued seq; write-and-fsync **before** signing; on restart continue from checked `last+1`. At `MaxUint64`, generation returns `ErrClientSeqExhausted` and leaves the persisted high watermark unchanged; an SDK cannot reserve that terminal value. A crash between fsync and submission wastes one seq (a gap the accumulator's K=64 budget absorbs); reuse and wraparound are impossible by construction. Multiple agents sharing one key are out of scope (documented).
 
 Config: `storage_integrity.agent.{enabled, network_id, keeper_shard_id(=0), state_dir, max_payload_bytes(64MiB), require_network_state(true)}`; `Validate()` runs agent-mode-only; requires `agent.private_key_hex` and `network_state.source`.
 

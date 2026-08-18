@@ -97,6 +97,7 @@ QueryContext.DeferredInsert *DeferredInsertPlan
 // pkg/plugins/sistatement
 type Options struct { Signer auth.StatementSignerV2; Schemas registry.TableSchemas; NetworkID string; KeeperShardID uint32; Seq *SeqCounter; MaxPayloadBytes uint64 }
 func New(opts Options) (*Plugin, error)
+var ErrClientSeqExhausted error
 func OpenSeqCounter(stateDir, account string) (*SeqCounter, error); func (c *SeqCounter) Next() (uint64, error); func (c *SeqCounter) AdvanceTo(seq uint64) error; func (c *SeqCounter) Last() uint64
 
 // pkg/config
@@ -2990,7 +2991,7 @@ Working directory: `/Users/uranuswch/Dev/housegate/housegate`
 - Create: `pkg/plugins/sistatement/seq.go`, `pkg/plugins/sistatement/seq_test.go`, `pkg/plugins/sistatement/doc.go`
 
 **Interfaces:**
-- Produces: `OpenSeqCounter(stateDir, account string) (*SeqCounter, error)`, `(*SeqCounter).Next() (uint64, error)` and `(*SeqCounter).AdvanceTo(seq uint64) error` (both write+fsync BEFORE returning a newly reserved value), `(*SeqCounter).Last() uint64`, `(*SeqCounter).Path() string`.
+- Produces: `OpenSeqCounter(stateDir, account string) (*SeqCounter, error)`, `(*SeqCounter).Next() (uint64, error)` and `(*SeqCounter).AdvanceTo(seq uint64) error` (both write+fsync BEFORE returning a newly reserved value), `ErrClientSeqExhausted` (checked-increment sentinel; no wraparound), `(*SeqCounter).Last() uint64`, `(*SeqCounter).Path() string`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3000,6 +3001,7 @@ Create `pkg/plugins/sistatement/seq_test.go`:
 package sistatement
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -3056,6 +3058,37 @@ func TestSeqCounter_AdvanceToReservesSuppliedSequenceDurably(t *testing.T) {
 	}
 	if got, err := reopened.Next(); err != nil || got != 42 {
 		t.Fatalf("Next after supplied seq = %d err=%v, want 42", got, err)
+	}
+}
+
+func TestSeqCounter_MaxUint64NeverWrapsOrAdvances(t *testing.T) {
+	dir := t.TempDir()
+	c, err := OpenSeqCounter(dir, "0xabc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.AdvanceTo(^uint64(0)); !errors.Is(err, ErrClientSeqExhausted) {
+		t.Fatalf("AdvanceTo(MaxUint64) = %v, want ErrClientSeqExhausted", err)
+	}
+	if c.Last() != 0 {
+		t.Fatalf("rejected terminal reservation changed last to %d", c.Last())
+	}
+	if got, err := c.Next(); err != nil || got != 1 {
+		t.Fatalf("Next after rejected terminal reservation = %d, %v; want 1", got, err)
+	}
+	exhaustedDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(exhaustedDir, "0xabc.seq"), []byte("18446744073709551615\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	exhausted, err := OpenSeqCounter(exhaustedDir, "0xabc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := exhausted.Next(); got != 0 || !errors.Is(err, ErrClientSeqExhausted) {
+		t.Fatalf("Next at exhaustion = %d, %v", got, err)
+	}
+	if exhausted.Last() != ^uint64(0) {
+		t.Fatalf("exhaustion changed durable high watermark to %d", exhausted.Last())
 	}
 }
 
@@ -3148,6 +3181,10 @@ import (
 	"sync"
 )
 
+// ErrClientSeqExhausted means the durable uint64 sequence space has no next
+// value. Callers must fail closed; the counter never wraps to zero.
+var ErrClientSeqExhausted = errors.New("sistatement: client_seq exhausted")
+
 // SeqCounter is the durable per-account client_seq source (spec §5.1 /
 // D6). Next and AdvanceTo write and fsync a newly reserved value BEFORE
 // returning, so neither an agent-generated nor an SDK-supplied seq can be
@@ -3234,6 +3271,9 @@ func (c *SeqCounter) persistLocked(next uint64) error {
 func (c *SeqCounter) AdvanceTo(seq uint64) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if seq == ^uint64(0) {
+		return ErrClientSeqExhausted
+	}
 	if seq <= c.last {
 		return nil
 	}
@@ -3245,6 +3285,9 @@ func (c *SeqCounter) AdvanceTo(seq uint64) error {
 func (c *SeqCounter) Next() (uint64, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.last == ^uint64(0) {
+		return 0, ErrClientSeqExhausted
+	}
 	next := c.last + 1
 	if err := c.persistLocked(next); err != nil {
 		return 0, err
@@ -3256,7 +3299,7 @@ func (c *SeqCounter) Next() (uint64, error) {
 - [ ] **Step 4: Run tests**
 
 Run: `bazel run //:gazelle && bazel test //pkg/plugins/sistatement:sistatement_test --test_output=errors`
-Expected: PASS (4 tests).
+Expected: PASS (all counter tests, including terminal-value rejection and exhausted-file reopen).
 
 - [ ] **Step 5: Commit**
 
@@ -3655,6 +3698,7 @@ package sistatement
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"strings"
 	"testing"
@@ -3879,6 +3923,24 @@ func TestPlugin_ClientSuppliedStatementIDIsKeptOnlyForOwnAccount(t *testing.T) {
 	}
 	if account, _, _, _ := sicore.ParseFlatStatementID(foreign.Query.ID); account != signer.Address() {
 		t.Fatalf("foreign-account id must be replaced, got %q", foreign.Query.ID)
+	}
+}
+
+func TestPlugin_ClientSuppliedMaxSequenceIsRejectedWithoutAdvancing(t *testing.T) {
+	ns := network.NewInMemoryNetworkState()
+	declareSchema(t, ns, testSchema())
+	p, signer := newTestPlugin(t, ns, t.TempDir())
+	terminal := insertQctx(newSession(1, ""), "INSERT INTO shop.orders FORMAT Native")
+	terminal.Query.ID = signer.Address() + ":18446744073709551615:sdk-nonce"
+	if err := p.OnQuery(context.Background(), terminal); !errors.Is(err, ErrClientSeqExhausted) {
+		t.Fatalf("terminal supplied sequence = %v, want ErrClientSeqExhausted", err)
+	}
+	generated := insertQctx(newSession(2, ""), "INSERT INTO shop.orders FORMAT Native")
+	if err := p.OnQuery(context.Background(), generated); err != nil {
+		t.Fatal(err)
+	}
+	if _, seq, _, err := sicore.ParseFlatStatementID(generated.Query.ID); err != nil || seq != 1 {
+		t.Fatalf("generated id after rejected terminal reservation = %q seq=%d err=%v, want seq 1", generated.Query.ID, seq, err)
 	}
 }
 
