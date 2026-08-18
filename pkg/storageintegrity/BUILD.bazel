@@ -5,7 +5,6 @@ go_library(
     srcs = [
         "ack2_gate.go",
         "arbiter_proto.go",
-        "csv_payload.go",
         "insert_parser.go",
         "intake.go",
         "intake_abort.go",
@@ -38,7 +37,6 @@ go_test(
     srcs = [
         "ack2_gate_test.go",
         "arbiter_proto_test.go",
-        "csv_payload_test.go",
         "ingress_drive_test.go",
         "intake_abort_test.go",
         "intake_journal_test.go",
@@ -54,10 +52,8 @@ go_test(
     ],
     embed = [":storageintegrity"],
     deps = [
-        "//pkg/lthash",
         "//pkg/replay",
         "//pkg/replay/payloadexec",
-        "@com_github_clickhouse_ch_go//proto",
         "@com_github_sentioxyz_arbiter_proto//gen/pb",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//codes",

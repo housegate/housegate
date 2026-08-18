@@ -607,9 +607,6 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			if admissionConsumer != nil {
 				return nil, fmt.Errorf("storage_integrity.runtime.enabled cannot be combined with StorageIntegrityAdmissionConsumer")
 			}
-			if opts.StorageIntegrityPayloadMaterializer == nil {
-				return nil, fmt.Errorf("storage_integrity.runtime: StorageIntegrityPayloadMaterializer is required for CSVWithNames")
-			}
 			consumer, guard, err := buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, opts.StorageIntegrityRuntime)
 			if err != nil {
 				return nil, err
@@ -632,13 +629,12 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			nil,
 		)
 		storageIntegrityIngress = storageintegrity.New(storageintegrity.Config{
-			Enabled:             true,
-			AuthValidator:       ingressValidator,
-			Purpose:             auth.QueryPurpose,
-			RequestTimeout:      ingressCfg.RequestTimeout.Duration,
-			MaxPayloadBytes:     ingressCfg.MaxPayloadBytes,
-			AdmissionConsumer:   admissionConsumer,
-			PayloadMaterializer: opts.StorageIntegrityPayloadMaterializer,
+			Enabled:           true,
+			AuthValidator:     ingressValidator,
+			Purpose:           auth.QueryPurpose,
+			RequestTimeout:    ingressCfg.RequestTimeout.Duration,
+			MaxPayloadBytes:   ingressCfg.MaxPayloadBytes,
+			AdmissionConsumer: admissionConsumer,
 		})
 		queryPlugins = append(queryPlugins, storageIntegrityIngress)
 		strictDataPlugins = append(strictDataPlugins, storageIntegrityIngress)

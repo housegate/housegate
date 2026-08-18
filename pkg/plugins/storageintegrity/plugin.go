@@ -45,13 +45,12 @@ const (
 )
 
 type Config struct {
-	Enabled             bool
-	AuthValidator       auth.Validator
-	Purpose             string
-	RequestTimeout      time.Duration
-	MaxPayloadBytes     uint64
-	AdmissionConsumer   AdmissionConsumer
-	PayloadMaterializer sicore.PayloadMaterializer
+	Enabled           bool
+	AuthValidator     auth.Validator
+	Purpose           string
+	RequestTimeout    time.Duration
+	MaxPayloadBytes   uint64
+	AdmissionConsumer AdmissionConsumer
 
 	// TableSchemas resolves the declared network-state schema for the target
 	// table so the ingress can compute its own schema_hash expectation
@@ -66,15 +65,14 @@ type AdmissionConsumer interface {
 }
 
 type Plugin struct {
-	enabled             bool
-	authValidator       auth.Validator
-	purpose             string
-	requestTimeout      time.Duration
-	maxPayload          uint64
-	admissionConsumer   AdmissionConsumer
-	payloadMaterializer sicore.PayloadMaterializer
-	schemaLoader        *schemaregistry.NetworkStateLoader
-	networkID           string
+	enabled           bool
+	authValidator     auth.Validator
+	purpose           string
+	requestTimeout    time.Duration
+	maxPayload        uint64
+	admissionConsumer AdmissionConsumer
+	schemaLoader      *schemaregistry.NetworkStateLoader
+	networkID         string
 
 	mu      sync.Mutex
 	active  map[int64]*admissionState
@@ -138,16 +136,15 @@ func New(cfg Config) *Plugin {
 		requestTimeout = DefaultRequestTimeout
 	}
 	p := &Plugin{
-		enabled:             cfg.Enabled,
-		authValidator:       cfg.AuthValidator,
-		purpose:             purpose,
-		requestTimeout:      requestTimeout,
-		maxPayload:          maxPayload,
-		admissionConsumer:   cfg.AdmissionConsumer,
-		payloadMaterializer: cfg.PayloadMaterializer,
-		networkID:           cfg.NetworkID,
-		active:              map[int64]*admissionState{},
-		pending:             map[int64]*admissionState{},
+		enabled:           cfg.Enabled,
+		authValidator:     cfg.AuthValidator,
+		purpose:           purpose,
+		requestTimeout:    requestTimeout,
+		maxPayload:        maxPayload,
+		admissionConsumer: cfg.AdmissionConsumer,
+		networkID:         cfg.NetworkID,
+		active:            map[int64]*admissionState{},
+		pending:           map[int64]*admissionState{},
 	}
 	if cfg.TableSchemas != nil {
 		p.schemaLoader = schemaregistry.NewNetworkStateLoader(cfg.TableSchemas, cfg.NetworkID)
@@ -203,9 +200,6 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	payloadEncoding, err := requirePayloadLocalInsert(signedSQL)
 	if err != nil {
 		return err
-	}
-	if payloadEncoding == sicore.EncodingCSVWithNames && p.payloadMaterializer == nil {
-		return fmt.Errorf("storage_integrity FORMAT CSVWithNames requires a payload materializer")
 	}
 	if forwardSQL != signedSQL {
 		forwardEncoding, err := requirePayloadLocalInsert(forwardSQL)
@@ -444,36 +438,13 @@ func (p *Plugin) ConsumeAdmission(sessionID int64) (Admission, error) {
 	return p.admissionFromState(context.Background(), state)
 }
 
-func (p *Plugin) admissionFromState(ctx context.Context, state *admissionState) (Admission, error) {
+func (p *Plugin) admissionFromState(_ context.Context, state *admissionState) (Admission, error) {
 	admission := state.admission
 	if admission.Kind == KindInsert && state.payload.Len() == 0 {
 		return Admission{}, fmt.Errorf("storage_integrity incomplete payload capture for statement %s", admission.StatementID)
 	}
 	payload := append([]byte(nil), state.payload.Bytes()...)
 	payloadEncoding := state.payloadEncoding
-	if payloadEncoding == sicore.EncodingCSVWithNames {
-		if p == nil || p.payloadMaterializer == nil {
-			return Admission{}, fmt.Errorf("storage_integrity payload materializer is required for %s", payloadEncoding)
-		}
-		out, err := p.payloadMaterializer.MaterializePayload(ctx, sicore.PayloadMaterializationInput{
-			StatementID:     admission.StatementID,
-			TableID:         admission.TableID,
-			SQL:             admission.SQL,
-			PayloadEncoding: payloadEncoding,
-			NativeWire:      payload,
-			Revision:        state.revision,
-		})
-		if err != nil {
-			return Admission{}, err
-		}
-		if out.Encoding != payloadEncoding {
-			return Admission{}, fmt.Errorf("storage_integrity payload materializer returned encoding %q, want %q", out.Encoding, payloadEncoding)
-		}
-		if len(out.Payload) == 0 {
-			return Admission{}, fmt.Errorf("storage_integrity payload materializer returned empty payload")
-		}
-		payload = append([]byte(nil), out.Payload...)
-	}
 	if state.revision <= 0 || uint64(state.revision) > uint64(^uint32(0)) {
 		return Admission{}, fmt.Errorf("storage_integrity admission %s has invalid client protocol revision %d", admission.StatementID, state.revision)
 	}
@@ -512,7 +483,7 @@ func (p *Plugin) admissionFromState(ctx context.Context, state *admissionState) 
 	admission.SchemaHash = state.schemaHash
 	admission.RowIDProfileID = payloadexec.RowIDProfileID
 	if p != nil && p.maxPayload > 0 && uint64(len(payload)) > p.maxPayload {
-		return Admission{}, fmt.Errorf("storage_integrity payload exceeds max_payload_bytes after materialization (%d > %d)", len(payload), p.maxPayload)
+		return Admission{}, fmt.Errorf("storage_integrity payload exceeds max_payload_bytes (%d > %d)", len(payload), p.maxPayload)
 	}
 	sum := sha256.Sum256(payload)
 	admission.Payload = CapturedPayload{

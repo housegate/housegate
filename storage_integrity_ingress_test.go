@@ -8,6 +8,7 @@ import (
 
 	siplugin "github.com/housegate/housegate/pkg/plugins/storageintegrity"
 	"github.com/housegate/housegate/pkg/replay"
+	"github.com/housegate/housegate/pkg/replay/payloadexec"
 	sicore "github.com/housegate/housegate/pkg/storageintegrity"
 )
 
@@ -71,6 +72,44 @@ func TestAdmissionRecordFromPlugin_MapsAllFields(t *testing.T) {
 	}
 }
 
+func TestAdmissionRecordFromPluginCarriesEnvelopeV2Fields(t *testing.T) {
+	adm := siplugin.Admission{
+		StatementID: "0xabc0000000000000000000000000000000000001:1:n1",
+		Kind:        siplugin.KindInsert,
+		TableID:     "tenant.events",
+		SQL:         "INSERT INTO tenant.events FORMAT Native",
+		SQLHash:     replay.DigestString("INSERT INTO tenant.events FORMAT Native"),
+		Signer:      "0xabc0000000000000000000000000000000000001",
+		UserJWS:     "v2.token.x",
+		AuthToken:   "v1.token.x",
+		Payload: siplugin.CapturedPayload{
+			Bytes:    []byte{2, 0, 1},
+			Length:   3,
+			Encoding: sicore.PayloadEncodingClickHouseNativeData,
+			Revision: 54460,
+			Complete: true,
+		},
+		EnvelopeVersion: sicore.EnvelopeVersionV2,
+		NetworkID:       "testnet-v2",
+		KeeperShardID:   0,
+		SettingsHash:    sicore.EmptySettingsHash,
+		SchemaHash:      "0x11",
+		RowIDProfileID:  payloadexec.RowIDProfileID,
+	}
+	rec := AdmissionRecordFromPlugin(adm)
+	if rec.EnvelopeVersion != sicore.EnvelopeVersionV2 ||
+		rec.NetworkID != "testnet-v2" ||
+		rec.KeeperShardID != 0 ||
+		rec.SettingsHash != sicore.EmptySettingsHash ||
+		rec.SchemaHash != "0x11" ||
+		rec.RowIDProfileID != payloadexec.RowIDProfileID ||
+		rec.UserJWS != "v2.token.x" ||
+		rec.Revision != 54460 ||
+		rec.PayloadEncoding != sicore.PayloadEncodingClickHouseNativeData {
+		t.Fatalf("v2 fields not carried: %+v", rec)
+	}
+}
+
 // TestNewStorageIntegrityIngress_RequiresOrchestrator pins that the ingress
 // runtime requires an orchestrator and constructs no Verifier/Promoter — the
 // struct carries only {orch, guard, matKind}, so verifier selection / quorum /
@@ -104,39 +143,17 @@ func TestStorageIntegrityIngressRejectsWrongMaterializerBeforePayloadPut(t *test
 	submitter := &rootRecordingSubmitter{}
 	preparer := &rootRecordingPreparer{}
 	orch := sicore.NewOrchestrator(submitter, preparer, sicore.OrchestratorConfig{})
-	ing, err := NewStorageIntegrityIngressWithPayloadWriter(orch, nil, sicore.MaterializerCSV, writer)
-	if err != nil {
-		t.Fatalf("NewStorageIntegrityIngressWithPayloadWriter: %v", err)
-	}
-
-	err = ing.ConsumeStorageIntegrityAdmission(context.Background(), storageIntegrityAdmissionForEncoding(
-		sicore.PayloadEncodingClickHouseNativeData,
-		54465,
-	))
-	if err == nil || !strings.Contains(err.Error(), "requires CSV materializer") {
-		t.Fatalf("ConsumeStorageIntegrityAdmission err = %v, want CSV materializer mismatch", err)
-	}
-	if writer.calls != 0 || submitter.calls != 0 || preparer.prepareCalls != 0 {
-		t.Fatalf("writer/submit/prepare calls = %d/%d/%d, want 0/0/0", writer.calls, submitter.calls, preparer.prepareCalls)
-	}
-}
-
-func TestStorageIntegrityIngressRejectsCSVWithoutRevisionBeforePayloadPut(t *testing.T) {
-	writer := &rootRecordingPayloadWriter{}
-	submitter := &rootRecordingSubmitter{}
-	preparer := &rootRecordingPreparer{}
-	orch := sicore.NewOrchestrator(submitter, preparer, sicore.OrchestratorConfig{})
-	ing, err := NewStorageIntegrityIngressWithPayloadWriter(orch, nil, sicore.MaterializerCSV, writer)
+	ing, err := NewStorageIntegrityIngressWithPayloadWriter(orch, nil, sicore.MaterializerNative, writer)
 	if err != nil {
 		t.Fatalf("NewStorageIntegrityIngressWithPayloadWriter: %v", err)
 	}
 
 	err = ing.ConsumeStorageIntegrityAdmission(context.Background(), storageIntegrityAdmissionForEncoding(
 		sicore.EncodingCSVWithNames,
-		0,
+		54465,
 	))
-	if err == nil || !strings.Contains(err.Error(), "client protocol revision") {
-		t.Fatalf("ConsumeStorageIntegrityAdmission err = %v, want missing revision", err)
+	if err == nil || !strings.Contains(err.Error(), "requires Native materializer") {
+		t.Fatalf("ConsumeStorageIntegrityAdmission err = %v, want Native materializer mismatch", err)
 	}
 	if writer.calls != 0 || submitter.calls != 0 || preparer.prepareCalls != 0 {
 		t.Fatalf("writer/submit/prepare calls = %d/%d/%d, want 0/0/0", writer.calls, submitter.calls, preparer.prepareCalls)
@@ -146,7 +163,7 @@ func TestStorageIntegrityIngressRejectsCSVWithoutRevisionBeforePayloadPut(t *tes
 func TestStorageIntegrityIngressRejectsUnknownEncodingBeforePayloadPut(t *testing.T) {
 	writer := &rootRecordingPayloadWriter{}
 	orch := sicore.NewOrchestrator(&rootRecordingSubmitter{}, &rootRecordingPreparer{}, sicore.OrchestratorConfig{})
-	ing, err := NewStorageIntegrityIngressWithPayloadWriter(orch, nil, sicore.MaterializerCSV, writer)
+	ing, err := NewStorageIntegrityIngressWithPayloadWriter(orch, nil, sicore.MaterializerNative, writer)
 	if err != nil {
 		t.Fatalf("NewStorageIntegrityIngressWithPayloadWriter: %v", err)
 	}
@@ -167,13 +184,18 @@ func storageIntegrityAdmissionForEncoding(encoding string, revision int) siplugi
 	}
 	payload := []byte("id,region\n1,eu\n")
 	return siplugin.Admission{
-		StatementID: "0xabc:1:n1",
-		Kind:        siplugin.KindInsert,
-		TableID:     "net1.events",
-		SQL:         sql,
-		SQLHash:     replay.DigestString(sql),
-		Signer:      "0xabc",
-		UserJWS:     "jws",
+		StatementID:     "0xabc:1:n1",
+		Kind:            siplugin.KindInsert,
+		TableID:         "net1.events",
+		SQL:             sql,
+		SQLHash:         replay.DigestString(sql),
+		Signer:          "0xabc",
+		UserJWS:         "jws",
+		EnvelopeVersion: sicore.EnvelopeVersionV2,
+		NetworkID:       "testnet-v2",
+		SettingsHash:    sicore.EmptySettingsHash,
+		SchemaHash:      "0x11",
+		RowIDProfileID:  payloadexec.RowIDProfileID,
 		Payload: siplugin.CapturedPayload{
 			Bytes:    payload,
 			Length:   uint64(len(payload)),
@@ -186,13 +208,18 @@ func storageIntegrityAdmissionForEncoding(encoding string, revision int) siplugi
 
 func TestStorageIntegrityIngress_PutsPayloadBeforeOrchestrate(t *testing.T) {
 	pluginAdmission := siplugin.Admission{
-		StatementID: "0xabc:1:n1",
-		Kind:        siplugin.KindInsert,
-		TableID:     "net1.events",
-		SQL:         "INSERT INTO events FORMAT Native",
-		SQLHash:     replay.DigestString("INSERT INTO events FORMAT Native"),
-		Signer:      "0xabc",
-		UserJWS:     "jws",
+		StatementID:     "0xabc:1:n1",
+		Kind:            siplugin.KindInsert,
+		TableID:         "net1.events",
+		SQL:             "INSERT INTO events FORMAT Native",
+		SQLHash:         replay.DigestString("INSERT INTO events FORMAT Native"),
+		Signer:          "0xabc",
+		UserJWS:         "jws",
+		EnvelopeVersion: sicore.EnvelopeVersionV2,
+		NetworkID:       "testnet-v2",
+		SettingsHash:    sicore.EmptySettingsHash,
+		SchemaHash:      "0x11",
+		RowIDProfileID:  payloadexec.RowIDProfileID,
 		Payload: siplugin.CapturedPayload{
 			Bytes:    []byte("native-block-bytes"),
 			Length:   uint64(len("native-block-bytes")),

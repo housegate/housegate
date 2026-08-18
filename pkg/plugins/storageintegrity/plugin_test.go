@@ -77,71 +77,6 @@ func TestIngressAcceptsSignedMaterializedInsert(t *testing.T) {
 	}
 }
 
-func TestIngressRejectsCSVWithNamesWithoutMaterializer(t *testing.T) {
-	p, signer := newSignedIngress(t)
-	sql := "INSERT INTO tenant.events FORMAT CSVWithNames"
-	qctx := signedQueryContext(t, 16, signer, sql, sql, sqlmeta.StatementTypeInsert)
-	qctx.AccessedTables = []sqlmeta.AccessedTable{{
-		OriginalDatabase: "tenant",
-		OriginalTable:    "events",
-		LogicalDatabase:  "tenant",
-		PhysicalDatabase: "tenant",
-	}}
-
-	err := p.OnQuery(context.Background(), qctx)
-	if err == nil || !strings.Contains(err.Error(), "payload materializer") {
-		t.Fatalf("OnQuery err = %v, want missing materializer rejection", err)
-	}
-}
-
-func TestIngressMaterializesCSVWithNamesAdmissionFromCapturedNativeData(t *testing.T) {
-	materializer := &recordingPayloadMaterializer{
-		out: sicore.PayloadMaterializationResult{
-			Payload:  []byte("id,region\n1,eu\n"),
-			Encoding: sicore.EncodingCSVWithNames,
-		},
-	}
-	p, signer := newSignedIngressWithConfig(t, Config{PayloadMaterializer: materializer})
-	sql := "INSERT INTO tenant.events FORMAT CSVWithNames"
-	qctx := signedQueryContext(t, 17, signer, sql, sql, sqlmeta.StatementTypeInsert)
-	qctx.AccessedTables = []sqlmeta.AccessedTable{{
-		OriginalDatabase: "tenant",
-		OriginalTable:    "events",
-		LogicalDatabase:  "tenant",
-		PhysicalDatabase: "tenant",
-	}}
-
-	if err := p.OnQuery(context.Background(), qctx); err != nil {
-		t.Fatalf("OnQuery: %v", err)
-	}
-	raw := []byte{byte(chproto.ClientDataCode), 0, 0xab, 0xcd}
-	if err := p.OnClientDataStrict(context.Background(), qctx, raw); err != nil {
-		t.Fatalf("OnClientDataStrict: %v", err)
-	}
-	p.OnQueryInputComplete(context.Background(), qctx)
-
-	admission, err := p.ConsumeAdmission(qctx.Session.ID())
-	if err != nil {
-		t.Fatalf("ConsumeAdmission: %v", err)
-	}
-	if !bytes.Equal(materializer.input.NativeWire, raw) {
-		t.Fatalf("materializer NativeWire = %v, want captured raw %v", materializer.input.NativeWire, raw)
-	}
-	if materializer.input.PayloadEncoding != sicore.EncodingCSVWithNames || materializer.input.TableID != "tenant.events" {
-		t.Fatalf("materializer input encoding/table = %q/%q", materializer.input.PayloadEncoding, materializer.input.TableID)
-	}
-	if admission.Payload.Encoding != sicore.EncodingCSVWithNames {
-		t.Fatalf("admission encoding = %q, want %q", admission.Payload.Encoding, sicore.EncodingCSVWithNames)
-	}
-	if !bytes.Equal(admission.Payload.Bytes, materializer.out.Payload) {
-		t.Fatalf("admission payload = %q, want materialized CSV %q", admission.Payload.Bytes, materializer.out.Payload)
-	}
-	sum := sha256.Sum256(materializer.out.Payload)
-	if admission.Payload.Length != uint64(len(materializer.out.Payload)) || admission.Payload.SHA256 != "sha256:"+hex.EncodeToString(sum[:]) {
-		t.Fatalf("payload metadata = len %d hash %q, want materialized CSV metadata", admission.Payload.Length, admission.Payload.SHA256)
-	}
-}
-
 func TestIngressRejectsMalformedStatementID(t *testing.T) {
 	p, signer := newSignedIngress(t)
 	sql := "INSERT INTO tenant.events FORMAT Native"
@@ -917,20 +852,6 @@ func (c *recordingConsumer) requireOne(t *testing.T) Admission {
 		t.Fatalf("consumed admissions = %d, want 1", len(c.admissions))
 	}
 	return c.admissions[0]
-}
-
-type recordingPayloadMaterializer struct {
-	err   error
-	input sicore.PayloadMaterializationInput
-	out   sicore.PayloadMaterializationResult
-}
-
-func (m *recordingPayloadMaterializer) MaterializePayload(_ context.Context, input sicore.PayloadMaterializationInput) (sicore.PayloadMaterializationResult, error) {
-	m.input = input
-	if m.err != nil {
-		return sicore.PayloadMaterializationResult{}, m.err
-	}
-	return m.out, nil
 }
 
 func TestIngressRejectsOversizedNativePayload(t *testing.T) {
