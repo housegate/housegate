@@ -179,7 +179,8 @@ func (c *Codec) WaitForPacketStart(timeout time.Duration) (bool, error) {
 		return false, fmt.Errorf("clear packet-start read deadline: %w", clearErr)
 	}
 	if peekErr != nil {
-		if netErr, ok := peekErr.(interface{ Timeout() bool }); ok && netErr.Timeout() {
+		var netErr interface{ Timeout() bool }
+		if errors.As(peekErr, &netErr) && netErr.Timeout() {
 			return false, nil
 		}
 		return false, fmt.Errorf("wait for packet start: %w", peekErr)

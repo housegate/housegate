@@ -50,6 +50,8 @@ type ChunkedReader struct {
 	r         io.Reader
 	enabled   bool
 	remaining int // Remaining unread bytes in the current frame.
+	header    [chunkedHeaderSize]byte
+	headerN   int // Bytes retained from a fragmented frame header.
 }
 
 // NewChunkedReader creates a ChunkedReader. enabled controls whether chunked deframing is active.
@@ -160,15 +162,24 @@ func (cr *ChunkedReader) Read(p []byte) (int, error) {
 // readChunkHeader reads the 4-byte chunk frame header and returns the chunk size.
 // If the underlying Reader has reached EOF, returns (0, io.EOF).
 func (cr *ChunkedReader) readChunkHeader() (uint32, error) {
-	var header [chunkedHeaderSize]byte
-	_, err := io.ReadFull(cr.r, header[:])
-	if err != nil {
-		if err == io.EOF || err == io.ErrUnexpectedEOF {
-			return 0, io.EOF
+	for cr.headerN < len(cr.header) {
+		n, err := cr.r.Read(cr.header[cr.headerN:])
+		cr.headerN += n
+		if err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				return 0, io.EOF
+			}
+			// In particular, retain a partial header across a temporary read
+			// deadline. WaitForPacketStart clears that deadline, and the normal
+			// decoder resumes from exactly these bytes.
+			return 0, fmt.Errorf("chunked: read frame header: %w", err)
 		}
-		return 0, fmt.Errorf("chunked: read frame header: %w", err)
+		if n == 0 {
+			return 0, fmt.Errorf("chunked: read frame header: %w", io.ErrNoProgress)
+		}
 	}
-	size := binary.LittleEndian.Uint32(header[:])
+	size := binary.LittleEndian.Uint32(cr.header[:])
+	cr.headerN = 0
 	if size > uint32(maxChunkSize) {
 		return 0, fmt.Errorf("chunked: frame size %d exceeds max %d", size, maxChunkSize)
 	}
