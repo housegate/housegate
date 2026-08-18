@@ -34,6 +34,7 @@ go_test(
         "observability_config_test.go",
         "replication_proxy_config_test.go",
         "replication_proxy_config_yaml_test.go",
+        "storage_integrity_agent_config_test.go",
         "storage_integrity_config_test.go",
     ],
     embed = [":config"],
