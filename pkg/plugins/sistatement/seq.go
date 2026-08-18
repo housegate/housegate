@@ -23,12 +23,23 @@ var ErrClientSeqExhausted = errors.New("sistatement: client_seq exhausted")
 // One process per (state_dir, account) — sharing a key across agents is out
 // of scope.
 type SeqCounter struct {
-	path string
-	mu   sync.Mutex
-	last uint64
+	path    string
+	openDir func(string) (seqDir, error)
+	mu      sync.Mutex
+	last    uint64
 }
 
+type seqDir interface {
+	Sync() error
+	Close() error
+}
+
+func openSeqDir(path string) (seqDir, error) { return os.Open(path) }
+
 // OpenSeqCounter loads <stateDir>/<lowercase account>.seq (0 when absent).
+// stateDir must already exist: deployment owns creating it durably before the
+// agent starts, because syncing only stateDir cannot make a newly created
+// stateDir entry durable in its parent directory.
 func OpenSeqCounter(stateDir, account string) (*SeqCounter, error) {
 	stateDir = strings.TrimSpace(stateDir)
 	account = strings.ToLower(strings.TrimSpace(account))
@@ -38,10 +49,17 @@ func OpenSeqCounter(stateDir, account string) (*SeqCounter, error) {
 	if account == "" {
 		return nil, errors.New("sistatement: account is required")
 	}
-	if err := os.MkdirAll(stateDir, 0o700); err != nil {
-		return nil, fmt.Errorf("sistatement: create state dir: %w", err)
+	info, err := os.Stat(stateDir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("sistatement: state dir %s must already exist", stateDir)
 	}
-	c := &SeqCounter{path: filepath.Join(stateDir, account+".seq")}
+	if err != nil {
+		return nil, fmt.Errorf("sistatement: stat state dir %s: %w", stateDir, err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("sistatement: state dir %s is not a directory", stateDir)
+	}
+	c := &SeqCounter{path: filepath.Join(stateDir, account+".seq"), openDir: openSeqDir}
 	b, err := os.ReadFile(c.path)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -88,9 +106,24 @@ func (c *SeqCounter) persistLocked(next uint64) error {
 	if err := os.Rename(tmp, c.path); err != nil {
 		return fmt.Errorf("sistatement: rename %s: %w", tmp, err)
 	}
-	if dir, err := os.Open(filepath.Dir(c.path)); err == nil {
-		_ = dir.Sync()
-		_ = dir.Close()
+	dirPath := filepath.Dir(c.path)
+	dir, err := c.openDir(dirPath)
+	if err != nil {
+		return fmt.Errorf("sistatement: open state dir %s for fsync: %w", dirPath, err)
+	}
+	var durabilityErrs []error
+	if err := dir.Sync(); err != nil {
+		durabilityErrs = append(durabilityErrs, fmt.Errorf("fsync state dir %s: %w", dirPath, err))
+	}
+	if err := dir.Close(); err != nil {
+		durabilityErrs = append(durabilityErrs, fmt.Errorf("close state dir %s: %w", dirPath, err))
+	}
+	if err := errors.Join(durabilityErrs...); err != nil {
+		// Rename may already be visible, but its crash durability is unproven.
+		// Keep last unchanged so an in-process retry repeats the full durable
+		// reservation. A restart may observe the renamed value; that only burns a
+		// sequence whose failed caller never received.
+		return fmt.Errorf("sistatement: persist client_seq %d: %w", next, err)
 	}
 	c.last = next
 	return nil

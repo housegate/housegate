@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -349,5 +350,74 @@ func TestPlugin_OversizedPayloadAndAbortAndClose(t *testing.T) {
 	// Input-complete without any payload fails closed.
 	if err := p.OnQueryInputCompleteStrict(context.Background(), q4); err == nil || !strings.Contains(err.Error(), "no payload") {
 		t.Fatalf("empty payload must be rejected: %v", err)
+	}
+}
+
+func TestPlugin_SequenceDirectoryDurabilityFailureDoesNotAdmitOrSign(t *testing.T) {
+	injected := errors.New("injected directory durability failure")
+	tests := []struct {
+		name    string
+		openDir func(string) (seqDir, error)
+	}{
+		{
+			name: "open",
+			openDir: func(string) (seqDir, error) {
+				return nil, injected
+			},
+		},
+		{
+			name: "sync",
+			openDir: func(path string) (seqDir, error) {
+				f, err := os.Open(path)
+				if err != nil {
+					return nil, err
+				}
+				return &failingSeqDir{file: f, syncErr: injected}, nil
+			},
+		},
+		{
+			name: "close",
+			openDir: func(path string) (seqDir, error) {
+				f, err := os.Open(path)
+				if err != nil {
+					return nil, err
+				}
+				return &failingSeqDir{file: f, closeErr: injected}, nil
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ns := network.NewInMemoryNetworkState()
+			declareSchema(t, ns, testSchema())
+			signer, err := auth.NewRelaySigner(testKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			seq, err := OpenSeqCounter(t.TempDir(), signer.Address())
+			if err != nil {
+				t.Fatal(err)
+			}
+			seq.openDir = tc.openDir
+			p, err := New(Options{Signer: signer, Schemas: ns, NetworkID: testNetworkID, Seq: seq, MaxPayloadBytes: 1 << 20})
+			if err != nil {
+				t.Fatal(err)
+			}
+			q := insertQctx(newSession(100, ""), "INSERT INTO shop.orders FORMAT Native")
+			if err := p.OnQuery(context.Background(), q); !errors.Is(err, injected) {
+				t.Fatalf("OnQuery = %v, want injected durability error", err)
+			}
+			if q.DeferredInsert != nil || q.Query.ID != "client-uuid-1" {
+				t.Fatalf("failed reservation admitted query: deferred=%#v id=%q", q.DeferredInsert, q.Query.ID)
+			}
+			if err := p.OnQueryInputCompleteStrict(context.Background(), q); err != nil {
+				t.Fatalf("failed reservation unexpectedly left signable state: %v", err)
+			}
+			for _, setting := range q.Query.Settings {
+				if setting.Key == auth.StatementTokenSettingKey {
+					t.Fatalf("failed reservation emitted statement token: %#v", setting)
+				}
+			}
+		})
 	}
 }

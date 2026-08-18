@@ -4,9 +4,31 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
+
+type failingSeqDir struct {
+	file     *os.File
+	syncErr  error
+	closeErr error
+}
+
+func (d *failingSeqDir) Sync() error {
+	if d.syncErr != nil {
+		return d.syncErr
+	}
+	return d.file.Sync()
+}
+
+func (d *failingSeqDir) Close() error {
+	err := d.file.Close()
+	if d.closeErr != nil {
+		return d.closeErr
+	}
+	return err
+}
 
 func TestSeqCounter_StartsAtOneAndPersistsAcrossReopen(t *testing.T) {
 	dir := t.TempDir()
@@ -141,5 +163,111 @@ func TestSeqCounter_RequiresAccountAndDir(t *testing.T) {
 	}
 	if _, err := OpenSeqCounter(t.TempDir(), ""); err == nil {
 		t.Fatal("empty account must be rejected")
+	}
+	missing := filepath.Join(t.TempDir(), "not-created")
+	if _, err := OpenSeqCounter(missing, "0xabc"); err == nil || !strings.Contains(err.Error(), "must already exist") {
+		t.Fatalf("missing state dir = %v, want pre-existing-directory error", err)
+	}
+	notDir := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(notDir, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenSeqCounter(notDir, "0xabc"); err == nil || !strings.Contains(err.Error(), "not a directory") {
+		t.Fatalf("file state dir = %v, want not-a-directory error", err)
+	}
+}
+
+func TestSeqCounter_DirectoryDurabilityFailuresNeverIssueSequence(t *testing.T) {
+	injected := errors.New("injected directory durability failure")
+	tests := []struct {
+		name    string
+		openDir func(string) (seqDir, error)
+	}{
+		{
+			name: "open",
+			openDir: func(string) (seqDir, error) {
+				return nil, injected
+			},
+		},
+		{
+			name: "sync",
+			openDir: func(path string) (seqDir, error) {
+				f, err := os.Open(path)
+				if err != nil {
+					return nil, err
+				}
+				return &failingSeqDir{file: f, syncErr: injected}, nil
+			},
+		},
+		{
+			name: "close",
+			openDir: func(path string) (seqDir, error) {
+				f, err := os.Open(path)
+				if err != nil {
+					return nil, err
+				}
+				return &failingSeqDir{file: f, closeErr: injected}, nil
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			c, err := OpenSeqCounter(dir, "0xabc")
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.openDir = tc.openDir
+			if got, err := c.Next(); got != 0 || !errors.Is(err, injected) {
+				t.Fatalf("Next = %d, %v; want 0 and injected error", got, err)
+			}
+			if got := c.Last(); got != 0 {
+				t.Fatalf("failed reservation changed issued high watermark to %d", got)
+			}
+
+			// Rename precedes directory durability. In a live process the new file is
+			// visible even when the directory operation reports failure; a restart
+			// must therefore advance from it, never move backwards or reissue it as
+			// though the failed call had succeeded.
+			reopened, err := OpenSeqCounter(dir, "0xabc")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := reopened.Last(); got != 1 {
+				t.Fatalf("reopened high watermark = %d, want visible renamed value 1", got)
+			}
+			if got, err := reopened.Next(); err != nil || got != 2 {
+				t.Fatalf("Next after restart = %d, %v; want 2", got, err)
+			}
+		})
+	}
+}
+
+func TestSeqCounter_DirectoryDurabilityFailuresRejectAdvanceTo(t *testing.T) {
+	injected := errors.New("injected directory sync failure")
+	dir := t.TempDir()
+	c, err := OpenSeqCounter(dir, "0xabc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.openDir = func(path string) (seqDir, error) {
+		f, err := os.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		return &failingSeqDir{file: f, syncErr: injected}, nil
+	}
+	if err := c.AdvanceTo(41); !errors.Is(err, injected) {
+		t.Fatalf("AdvanceTo = %v, want injected error", err)
+	}
+	if got := c.Last(); got != 0 {
+		t.Fatalf("failed AdvanceTo changed issued high watermark to %d", got)
+	}
+	reopened, err := OpenSeqCounter(dir, "0xabc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := reopened.Next(); err != nil || got != 42 {
+		t.Fatalf("Next after restart = %d, %v; want 42", got, err)
 	}
 }
