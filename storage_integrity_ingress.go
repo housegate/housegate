@@ -168,7 +168,7 @@ func (i *StorageIntegrityIngress) reservePartsPressure(ctx context.Context, tabl
 		return nil, ctx.Err()
 	}
 	if !errors.Is(err, sicore.ErrBackpressure) {
-		err = fmt.Errorf("%w: pressure refresh unavailable: %v", sicore.ErrBackpressure, err)
+		err = fmt.Errorf("%w: pressure refresh unavailable: %w", sicore.ErrBackpressure, err)
 	}
 	return nil, backpressureClientError(table, err)
 }

@@ -249,6 +249,35 @@ func TestPartsPressureGuard_RefreshTimesOut(t *testing.T) {
 	}
 }
 
+type partsTransportError struct{ message string }
+
+func (e *partsTransportError) Error() string { return e.message }
+
+func TestPartsPressureGuard_ReservePreservesRefreshCauses(t *testing.T) {
+	t.Run("transport", func(t *testing.T) {
+		guard, conn := pressureFixture()
+		cause := &partsTransportError{message: "connection reset"}
+		conn.setQueryError(cause)
+		_, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+		var got *partsTransportError
+		if !errors.Is(err, ErrBackpressure) || !errors.Is(err, cause) || !errors.As(err, &got) {
+			t.Fatalf("Reserve error = %v, want ErrBackpressure and transport cause", err)
+		}
+	})
+
+	t.Run("timeout", func(t *testing.T) {
+		guard, conn := pressureFixture()
+		guard.cfg.RefreshTimeout = 20 * time.Millisecond
+		conn.mu.Lock()
+		conn.blockUntilContext = true
+		conn.mu.Unlock()
+		_, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+		if !errors.Is(err, ErrBackpressure) || !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Reserve error = %v, want ErrBackpressure and deadline cause", err)
+		}
+	})
+}
+
 func TestPartsPressureGuard_ReservePreventsConcurrentOversubscription(t *testing.T) {
 	guard, conn := pressureFixture(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 2})
 	const callers = 16
@@ -299,6 +328,52 @@ func TestPartsPressureGuard_ReservePreventsConcurrentOversubscription(t *testing
 	conn.setRows(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 3})
 	if _, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"}); !errors.Is(err, ErrBackpressure) {
 		t.Fatalf("committed part at soft limit must refuse: %v", err)
+	}
+}
+
+func TestPartsPressureGuard_DelayedVisibilityKeepsCommittedCapacityReserved(t *testing.T) {
+	guard, conn := pressureFixture(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 2})
+	reservation, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("initial Reserve: %v", err)
+	}
+	reservation.Commit()
+
+	// ClickHouse still reports the pre-write count. A successful refresh must
+	// not discard the committed slot until system.parts exposes its growth.
+	if _, err := guard.Refresh(context.Background()); err != nil {
+		t.Fatalf("delayed Refresh: %v", err)
+	}
+	key := PartsKey{Database: "hg_unsafe", Table: "db__t", Partition: "p_a"}
+	if got := guard.committed[key]; got != 1 {
+		t.Fatalf("committed capacity after delayed snapshot = %d, want 1", got)
+	}
+
+	const callers = 8
+	results := make(chan error, callers)
+	var wg sync.WaitGroup
+	for range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, reserveErr := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+			results <- reserveErr
+		}()
+	}
+	wg.Wait()
+	close(results)
+	for reserveErr := range results {
+		if !errors.Is(reserveErr, ErrBackpressure) {
+			t.Fatalf("concurrent delayed-visibility Reserve = %v, want ErrBackpressure", reserveErr)
+		}
+	}
+
+	conn.setRows(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 3})
+	if _, err := guard.Refresh(context.Background()); err != nil {
+		t.Fatalf("visible Refresh: %v", err)
+	}
+	if got := guard.committed[key]; got != 0 {
+		t.Fatalf("committed capacity after visible growth = %d, want 0", got)
 	}
 }
 

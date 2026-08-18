@@ -137,14 +137,18 @@ func TestIngress_BackpressureRefusesWithException252BeforePayloadPut(t *testing.
 }
 
 func TestIngress_PressureUnavailableFailsClosedWithException252(t *testing.T) {
+	cause := errors.New("snapshot expired")
 	pressure := &fakePartsPressure{refuse: map[string]error{
-		"net1__events/p_eu": errors.New("snapshot expired"),
+		"net1__events/p_eu": cause,
 	}}
 	ingress, writer, submitter, preparer := newBackpressureIngress(t, pressure)
 	err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), bpAdmission())
 	var clientErr *chproto.ClientError
 	if !errors.As(err, &clientErr) || clientErr.Code != chproto.CodeTooManyParts || !errors.Is(err, sicore.ErrBackpressure) {
 		t.Fatalf("err = %v, want unavailable ClientError 252 wrapping ErrBackpressure", err)
+	}
+	if !errors.Is(err, cause) {
+		t.Fatalf("err = %v, want original pressure cause", err)
 	}
 	if writer.calls != 0 || submitter.calls != 0 || preparer.prepareCalls != 0 {
 		t.Fatalf("unavailable pressure writer/submit/prepare = %d/%d/%d want 0/0/0", writer.calls, submitter.calls, preparer.prepareCalls)

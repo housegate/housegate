@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -84,13 +85,19 @@ type PartsPressureGuard struct {
 
 	refreshMu   sync.Mutex
 	admissionMu sync.Mutex
+	commitMu    sync.Mutex
 	mu          sync.RWMutex
 	snapshot    PartsSnapshot
 	reserved    PartsSnapshot
 	committed   PartsSnapshot
-	takenAt     time.Time
-	haveSnap    bool
-	now         func() time.Time
+	// committedBaselines records the last active-part count against which each
+	// committed reservation was made. A successful metadata query may absorb a
+	// committed slot only after its count growth covers that baseline; query
+	// success alone is not visibility proof.
+	committedBaselines map[PartsKey][]int
+	takenAt            time.Time
+	haveSnap           bool
+	now                func() time.Time
 
 	invalidated chan struct{}
 }
@@ -109,12 +116,13 @@ func NewPartsPressureGuard(conn MergeConn, cfg PartsPressureConfig) *PartsPressu
 		cfg.SnapshotTTL = DefaultPartsSnapshotTTL
 	}
 	return &PartsPressureGuard{
-		conn:        conn,
-		cfg:         cfg,
-		reserved:    PartsSnapshot{},
-		committed:   PartsSnapshot{},
-		now:         time.Now,
-		invalidated: make(chan struct{}, 1),
+		conn:               conn,
+		cfg:                cfg,
+		reserved:           PartsSnapshot{},
+		committed:          PartsSnapshot{},
+		committedBaselines: map[PartsKey][]int{},
+		now:                time.Now,
+		invalidated:        make(chan struct{}, 1),
 	}
 }
 
@@ -137,12 +145,11 @@ func (g *PartsPressureGuard) BuildSnapshotQuery() string {
 func (g *PartsPressureGuard) Refresh(ctx context.Context) (PartsSnapshot, error) {
 	g.refreshMu.Lock()
 	defer g.refreshMu.Unlock()
-
-	// A commit that exists before the query begins is covered by the resulting
-	// system.parts snapshot. Commits racing the query are retained afterward.
-	g.mu.RLock()
-	committedAtStart := copyPartsSnapshot(g.committed)
-	g.mu.RUnlock()
+	// Freeze Commit while the query is in flight. A commit completed after this
+	// snapshot will use the new snapshot count as its baseline and cannot consume
+	// visibility growth already credited here.
+	g.commitMu.Lock()
+	defer g.commitMu.Unlock()
 	refreshCtx, cancel := context.WithTimeout(ctx, g.cfg.RefreshTimeout)
 	defer cancel()
 	rows, err := g.conn.Query(refreshCtx, g.BuildSnapshotQuery())
@@ -166,11 +173,14 @@ func (g *PartsPressureGuard) Refresh(ctx context.Context) (PartsSnapshot, error)
 	g.snapshot = snapshot
 	g.takenAt = g.now()
 	g.haveSnap = true
-	for key, number := range committedAtStart {
-		if left := g.committed[key] - number; left > 0 {
-			g.committed[key] = left
-		} else {
+	for key, baselines := range g.committedBaselines {
+		remaining := committedAfterSnapshot(baselines, snapshot[key])
+		if len(remaining) == 0 {
 			delete(g.committed, key)
+			delete(g.committedBaselines, key)
+		} else {
+			g.committed[key] = len(remaining)
+			g.committedBaselines[key] = remaining
 		}
 	}
 	g.mu.Unlock()
@@ -212,11 +222,12 @@ func (g *PartsPressureGuard) Reserve(ctx context.Context, table string, partitio
 			return nil, ctx.Err()
 		}
 		unavailable := &BackpressureError{Database: g.cfg.UnsafeDatabase, Table: table, Kind: "unavailable"}
-		return nil, fmt.Errorf("%w: refresh parts snapshot: %v", unavailable, err)
+		return nil, fmt.Errorf("%w: refresh parts snapshot: %w", unavailable, err)
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	keys := make([]PartsKey, 0, len(partitionIDs))
+	baselines := make([]int, 0, len(partitionIDs))
 	seen := make(map[string]bool, len(partitionIDs))
 	for _, partitionID := range partitionIDs {
 		if seen[partitionID] {
@@ -226,12 +237,14 @@ func (g *PartsPressureGuard) Reserve(ctx context.Context, table string, partitio
 		if err := g.checkLocked(table, partitionID); err != nil {
 			return nil, err
 		}
-		keys = append(keys, PartsKey{Database: g.cfg.UnsafeDatabase, Table: table, Partition: partitionID})
+		key := PartsKey{Database: g.cfg.UnsafeDatabase, Table: table, Partition: partitionID}
+		keys = append(keys, key)
+		baselines = append(baselines, g.snapshot[key])
 	}
 	for _, key := range keys {
 		g.reserved[key]++
 	}
-	return &partsReservation{guard: g, keys: keys}, nil
+	return &partsReservation{guard: g, keys: keys, baselines: baselines}, nil
 }
 
 func (g *PartsPressureGuard) checkLocked(table, partitionID string) error {
@@ -251,9 +264,10 @@ func (g *PartsPressureGuard) checkLocked(table, partitionID string) error {
 }
 
 type partsReservation struct {
-	guard *PartsPressureGuard
-	keys  []PartsKey
-	once  sync.Once
+	guard     *PartsPressureGuard
+	keys      []PartsKey
+	baselines []int
+	once      sync.Once
 }
 
 func (r *partsReservation) Commit() {
@@ -261,10 +275,20 @@ func (r *partsReservation) Commit() {
 		return
 	}
 	r.once.Do(func() {
+		r.guard.commitMu.Lock()
+		defer r.guard.commitMu.Unlock()
 		r.guard.mu.Lock()
 		defer r.guard.mu.Unlock()
-		for _, key := range r.keys {
+		for idx, key := range r.keys {
 			decrementPartCount(r.guard.reserved, key)
+			baseline := r.baselines[idx]
+			// A refresh may have completed while the source write was in flight.
+			// Do not let this late Commit reuse growth already represented by that
+			// snapshot; keeping the slot is conservative until later visibility.
+			if current := r.guard.snapshot[key]; current > baseline {
+				baseline = current
+			}
+			r.guard.committedBaselines[key] = append(r.guard.committedBaselines[key], baseline)
 			r.guard.committed[key]++
 		}
 	})
@@ -289,6 +313,34 @@ func decrementPartCount(counts PartsSnapshot, key PartsKey) {
 	} else {
 		delete(counts, key)
 	}
+}
+
+// committedAfterSnapshot removes only reservations whose distinct count growth
+// is visible in observed. Remaining baselines are advanced past growth already
+// credited during this refresh so a later identical snapshot cannot absorb the
+// same increment twice.
+func committedAfterSnapshot(baselines []int, observed int) []int {
+	ordered := append([]int(nil), baselines...)
+	sort.Ints(ordered)
+	covered := 0
+	nextVisible := 0
+	for idx, baseline := range ordered {
+		if idx == 0 || baseline+1 > nextVisible {
+			nextVisible = baseline + 1
+		}
+		if nextVisible > observed {
+			break
+		}
+		covered++
+		nextVisible++
+	}
+	remaining := append([]int(nil), ordered[covered:]...)
+	for idx, baseline := range remaining {
+		if baseline < observed {
+			remaining[idx] = observed
+		}
+	}
+	return remaining
 }
 
 func copyPartsSnapshot(in PartsSnapshot) PartsSnapshot {
