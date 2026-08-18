@@ -14,6 +14,11 @@ var (
 	// ErrInsertIntoFunction identifies ClickHouse's table-function INSERT form,
 	// which has no declared logical table identity and cannot enter the SI lane.
 	ErrInsertIntoFunction = errors.New("storage_integrity: INSERT INTO FUNCTION is not supported on the SI lane")
+	// ErrBackslashEscapedIdentifier rejects quoted identifiers whose decoded
+	// bytes depend on ClickHouse's C-style escape table. The SI lane supports
+	// doubled quote escaping and fails closed rather than risk signing a
+	// different structured target from the table ClickHouse executes against.
+	ErrBackslashEscapedIdentifier = errors.New("storage_integrity: backslash-escaped quoted identifiers are not supported on the SI lane")
 )
 
 // InsertTarget is the decoded, structured target of an INSERT. Database and
@@ -57,7 +62,9 @@ func ResolveInsertTarget(sql, sessionDatabase string) (InsertTarget, error) {
 		return InsertTarget{}, err
 	}
 	if target.Database == "" {
-		target.Database = strings.TrimSpace(sessionDatabase)
+		// SessionState stores the decoded identifier, not SQL source text. Spaces
+		// can therefore be significant bytes of a quoted ClickHouse database name.
+		target.Database = sessionDatabase
 		if target.Database == "" {
 			return InsertTarget{}, fmt.Errorf("storage_integrity: INSERT target %q must be database-qualified or the session must select a database", target.Table)
 		}
@@ -392,10 +399,8 @@ func (s *storageScanner) identifier() (value string, quoted bool, ok bool, err e
 	var b strings.Builder
 	for s.pos < len(s.sql) {
 		ch := s.sql[s.pos]
-		if ch == '\\' && s.pos+1 < len(s.sql) {
-			b.WriteByte(s.sql[s.pos+1])
-			s.pos += 2
-			continue
+		if ch == '\\' {
+			return "", true, false, fmt.Errorf("%w at SQL byte %d", ErrBackslashEscapedIdentifier, s.pos)
 		}
 		if ch == quote {
 			if s.pos+1 < len(s.sql) && s.sql[s.pos+1] == quote {

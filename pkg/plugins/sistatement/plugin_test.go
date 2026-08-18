@@ -429,6 +429,29 @@ func TestPlugin_SharedParserBindsRealStructuredTargetAndColumnOrder(t *testing.T
 	}
 }
 
+func TestPlugin_UsePreservesQuotedDatabaseWhitespaceForUnqualifiedInsert(t *testing.T) {
+	ns := network.NewInMemoryNetworkState()
+	schema := testSchema()
+	schema.TableID = "` shop `.orders"
+	declareSchemaAt(t, ns, schema, " shop ", "orders")
+	p, _ := newTestPlugin(t, ns, t.TempDir())
+	sess := newSession(32, "other")
+	use := insertQctx(sess, "USE ` shop `")
+	if err := p.OnQuery(context.Background(), use); err != nil {
+		t.Fatal(err)
+	}
+	p.OnQuerySuccess(context.Background(), sess, use.Query.ID)
+	p.OnQueryComplete(context.Background(), sess)
+
+	q := insertQctx(sess, "INSERT INTO orders FORMAT Native")
+	if err := p.OnQuery(context.Background(), q); err != nil {
+		t.Fatalf("exact USE-resolved target: %v", err)
+	}
+	if q.DeferredInsert == nil {
+		t.Fatal("expected deferred plan for exact quoted database")
+	}
+}
+
 func TestPlugin_RejectsInlineSettingsAndInsertIntoFunction(t *testing.T) {
 	ns := network.NewInMemoryNetworkState()
 	declareSchema(t, ns, testSchema())

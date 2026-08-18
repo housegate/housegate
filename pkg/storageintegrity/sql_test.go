@@ -128,3 +128,42 @@ func TestParseUseDatabaseHandlesCommentsAndEscapedQuotes(t *testing.T) {
 		t.Fatal("USE with trailing clause must not match")
 	}
 }
+
+func TestStructuredSQLParserRejectsBackslashEscapedIdentifiers(t *testing.T) {
+	for _, sql := range []string{
+		"INSERT INTO `foo\\nbar` FORMAT Native",
+		"INSERT INTO \"foo\\nbar\" FORMAT Native",
+		"INSERT INTO db.`foo\\`bar` FORMAT Native",
+	} {
+		if _, err := ParseInsertTarget(sql); !errors.Is(err, ErrBackslashEscapedIdentifier) {
+			t.Fatalf("ParseInsertTarget(%q) = %v, want ErrBackslashEscapedIdentifier", sql, err)
+		}
+	}
+
+	if target, err := ParseInsertTarget("INSERT INTO foonbar FORMAT Native"); err != nil || target.Table != "foonbar" {
+		t.Fatalf("plain non-colliding target = %#v, %v", target, err)
+	}
+	if _, _, err := InsertColumnList("INSERT INTO db.t (`foo\\nbar`) FORMAT Native"); !errors.Is(err, ErrBackslashEscapedIdentifier) {
+		t.Fatalf("InsertColumnList backslash escape = %v, want ErrBackslashEscapedIdentifier", err)
+	}
+	if _, ok := ParseUseDatabase("USE `foo\\nbar`"); ok {
+		t.Fatal("ParseUseDatabase accepted a backslash-escaped identifier")
+	}
+}
+
+func TestResolveInsertTargetPreservesExactQuotedSessionDatabase(t *testing.T) {
+	db, ok := ParseUseDatabase("USE ` shop `")
+	if !ok || db != " shop " {
+		t.Fatalf("ParseUseDatabase = %q/%v, want exact quoted whitespace", db, ok)
+	}
+	target, err := ResolveInsertTarget("INSERT INTO orders FORMAT Native", db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.Database != " shop " || target.Table != "orders" {
+		t.Fatalf("target = %#v, want exact session database", target)
+	}
+	if got, want := target.CanonicalID(), "` shop `.orders"; got != want {
+		t.Fatalf("CanonicalID = %q, want %q", got, want)
+	}
+}

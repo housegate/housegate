@@ -405,6 +405,21 @@ func TestIngressSharedParserBindsOptionalTableStructuredTargetWithoutRewriteMeta
 	}
 }
 
+func TestIngressSharedParserRejectsBackslashEscapedTargetWithoutRewriteMetadata(t *testing.T) {
+	p, signer := newSignedIngress(t)
+	sql := "INSERT INTO `tenant`.`foo\\nbar` FORMAT Native"
+	qctx := signedQueryContext(t, 631, signer, sql, sql, sqlmeta.StatementTypeInsert)
+	if err := p.OnQuery(context.Background(), qctx); !errors.Is(err, sicore.ErrBackslashEscapedIdentifier) {
+		t.Fatalf("OnQuery err = %v, want ErrBackslashEscapedIdentifier", err)
+	}
+	p.mu.Lock()
+	active := p.active[qctx.Session.ID()]
+	p.mu.Unlock()
+	if active != nil {
+		t.Fatalf("backslash-escaped target created admission %#v", active)
+	}
+}
+
 func TestIngressRejectsInlineSettingsAndInsertIntoFunction(t *testing.T) {
 	for i, tc := range []struct {
 		sql, want string

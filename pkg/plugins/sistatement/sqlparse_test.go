@@ -30,6 +30,7 @@ func TestResolveTargetTableID(t *testing.T) {
 		{"insert into orders format Native", "shop", "shop.orders", ""},
 		{"insert into `order.items` format Native", "shop.prod", "`shop.prod`.`order.items`", ""},
 		{"INSERT INTO FUNCTION file('x', Native) FORMAT Native", "shop", "", "FUNCTION"},
+		{"INSERT INTO `foo\\nbar` FORMAT Native", "shop", "", "backslash-escaped"},
 		{"INSERT INTO orders FORMAT Native", "", "", "database-qualified"},
 		{"SELECT 1", "", "", "not an INSERT"},
 	}
@@ -112,6 +113,9 @@ func TestMatchUse(t *testing.T) {
 	}
 	if _, ok := matchUse("USE shop SETTINGS x=1"); ok {
 		t.Fatal("USE with SETTINGS must not match")
+	}
+	if _, ok := matchUse("USE `foo\\nbar`"); ok {
+		t.Fatal("backslash-escaped USE must fail closed")
 	}
 	if _, ok := matchUse("SELECT 1"); ok {
 		t.Fatal("SELECT must not match")
