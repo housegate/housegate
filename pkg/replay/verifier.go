@@ -329,26 +329,32 @@ func validateExecutionResult(job ReplayJob, result ExecutionResult) error {
 
 func statementRoot(statements []Statement) (string, error) {
 	type statementCommitment struct {
-		StatementID   string `json:"statement_id"`
-		StatementSeq  uint64 `json:"statement_seq"`
-		SQLHash       string `json:"sql_hash"`
-		SettingsHash  string `json:"settings_hash"`
-		PayloadRef    string `json:"payload_ref,omitempty"`
-		PayloadHash   string `json:"payload_hash,omitempty"`
-		PayloadLength uint64 `json:"payload_length,omitempty"`
-		TargetTableID string `json:"target_table_id"`
+		StatementID    string `json:"statement_id"`
+		StatementSeq   uint64 `json:"statement_seq"`
+		SQLHash        string `json:"sql_hash"`
+		SettingsHash   string `json:"settings_hash"`
+		PayloadRef     string `json:"payload_ref,omitempty"`
+		PayloadHash    string `json:"payload_hash,omitempty"`
+		PayloadLength  uint64 `json:"payload_length,omitempty"`
+		TargetTableID  string `json:"target_table_id"`
+		PayloadFormat  string `json:"payload_format,omitempty"`
+		ClientRevision uint32 `json:"client_revision,omitempty"`
+		SchemaHash     string `json:"schema_hash,omitempty"`
 	}
 	out := make([]statementCommitment, 0, len(statements))
 	for _, st := range statements {
 		out = append(out, statementCommitment{
-			StatementID:   st.StatementID,
-			StatementSeq:  st.StatementSeq,
-			SQLHash:       st.SQLHash,
-			SettingsHash:  st.SettingsHash,
-			PayloadRef:    st.PayloadRef,
-			PayloadHash:   st.PayloadHash,
-			PayloadLength: st.PayloadLength,
-			TargetTableID: st.TargetTableID,
+			StatementID:    st.StatementID,
+			StatementSeq:   st.StatementSeq,
+			SQLHash:        st.SQLHash,
+			SettingsHash:   st.SettingsHash,
+			PayloadRef:     st.PayloadRef,
+			PayloadHash:    st.PayloadHash,
+			PayloadLength:  st.PayloadLength,
+			TargetTableID:  st.TargetTableID,
+			PayloadFormat:  st.PayloadFormat,
+			ClientRevision: st.ClientRevision,
+			SchemaHash:     st.SchemaHash,
 		})
 	}
 	return canonicalDigest("replay-statement-root", out)

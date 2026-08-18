@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"io"
 	"reflect"
 	"testing"
 	"time"
@@ -155,6 +156,31 @@ func TestNativePayloadRejectsUndecodableBlock(t *testing.T) {
 	err := ValidateDecodable(nativeMaterializerSchema(), nativePayloadTestRevision, []byte{byte(proto.ClientCodeData)})
 	if err == nil || !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("undecodable native payload must be rejected with ErrNativePayloadUnsupported, got %v", err)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("ValidateDecodable must preserve the decoder cause for errors.Is/As, got %v", err)
+	}
+}
+
+func TestDecodeNativePayloadRejectsEmbeddedZeroRowDataPackets(t *testing.T) {
+	schema := nativeMaterializerSchema()
+	zero := encodeNativePacket(t, uint64(proto.ClientCodeData), proto.Input{
+		{Name: "region", Data: newColStr()},
+		{Name: "id", Data: &proto.ColUInt64{}},
+	}, 0)
+	valid := encodeNativePayload(t, proto.Input{
+		{Name: "region", Data: newColStr("eu")},
+		{Name: "id", Data: &proto.ColUInt64{1}},
+	})
+	for name, payload := range map[string][]byte{
+		"prefix": append(append([]byte{}, zero...), valid...),
+		"suffix": append(append([]byte{}, valid...), zero...),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Decode(schema, nativePayloadTestRevision, payload); err == nil {
+				t.Fatal("captured Native payload must reject embedded zero-row control packets")
+			}
+		})
 	}
 }
 
@@ -390,10 +416,14 @@ func TestNativeMaterializerAdmittedScalarGoldenMatrix(t *testing.T) {
 }
 
 func TestNativePayloadDecodesClickHouseGoClientData(t *testing.T) {
+	// This fixture is the single non-empty ClientData packet captured from a
+	// clickhouse-go INSERT. The leading external-tables marker and trailing
+	// zero-row terminator are control packets and are deliberately excluded
+	// from payload_format=clickhouse-native-data-v1.
 	payloadHex := "" +
-		"0200010002ffffffff0000000200010002ffffffff0002010269640655496e74" +
+		"0200010002ffffffff0002010269640655496e74" +
 		"3634000100000000000000056c6162656c06537472696e67001074656e616e74" +
-		"5f6532655f612d726f770200010002ffffffff000000"
+		"5f6532655f612d726f77"
 	payload, err := hex.DecodeString(payloadHex)
 	if err != nil {
 		t.Fatalf("DecodeString: %v", err)

@@ -100,7 +100,7 @@ func Decode(schema payloadexec.TableSchema, revision int, payload []byte) ([]pay
 			return nil, err
 		}
 		if block.Rows == 0 {
-			continue
+			return nil, fmt.Errorf("native payload contains an embedded zero-row Data control packet")
 		}
 		colPos, err := nativeBlockColumnPositions(schema, block.Columns)
 		if err != nil {
@@ -132,7 +132,7 @@ func Decode(schema payloadexec.TableSchema, revision int, payload []byte) ([]pay
 // under the pinned table schema before callers emit any publication evidence.
 func ValidateDecodable(schema payloadexec.TableSchema, revision int, payload []byte) error {
 	if _, err := Decode(schema, revision, payload); err != nil {
-		return fmt.Errorf("%w: %v", ErrUnsupported, err)
+		return fmt.Errorf("%w: %w", ErrUnsupported, err)
 	}
 	return nil
 }

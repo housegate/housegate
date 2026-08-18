@@ -110,6 +110,44 @@ func TestVerifierRejectsNonIncreasingStatementSeq(t *testing.T) {
 	}
 }
 
+func TestStatementRootCommitsReplaySemanticPayloadFields(t *testing.T) {
+	base := Statement{
+		StatementID:    "stmt-1",
+		StatementSeq:   1,
+		SQLHash:        DigestString("sql"),
+		SettingsHash:   DigestString("settings"),
+		PayloadRef:     "payload-1",
+		PayloadHash:    DigestString("payload"),
+		PayloadLength:  7,
+		TargetTableID:  "db.table",
+		PayloadFormat:  "clickhouse-native-data-v1",
+		ClientRevision: 54460,
+		SchemaHash:     DigestString("schema"),
+	}
+	want, err := statementRoot([]Statement{base})
+	if err != nil {
+		t.Fatalf("statementRoot(base): %v", err)
+	}
+	cases := map[string]func(*Statement){
+		"payload_format":  func(st *Statement) { st.PayloadFormat = "csv-with-names-v1" },
+		"client_revision": func(st *Statement) { st.ClientRevision++ },
+		"schema_hash":     func(st *Statement) { st.SchemaHash = DigestString("other-schema") },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			changed := base
+			mutate(&changed)
+			got, err := statementRoot([]Statement{changed})
+			if err != nil {
+				t.Fatalf("statementRoot(mutated): %v", err)
+			}
+			if got == want {
+				t.Fatalf("statement root did not commit to %s: %s", name, got)
+			}
+		})
+	}
+}
+
 type fakeSchemaHashes map[string]string
 
 func (f fakeSchemaHashes) TableSchemaHash(tableID string) (string, bool) {
