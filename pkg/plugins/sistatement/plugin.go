@@ -111,14 +111,18 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	}
 	sql := qctx.Query.Body
 	sessID := qctx.Session.ID()
-	if db, ok := matchUse(sql); ok {
+	db, isUse, err := matchUse(sql)
+	if err != nil {
+		return fmt.Errorf("storage_integrity agent: inspect USE: %w", err)
+	}
+	if isUse {
 		p.mu.Lock()
 		p.useNext[sessID] = pendingUse{queryID: qctx.Query.ID, db: db}
 		p.mu.Unlock()
 		return nil
 	}
 	if _, err := sicore.InsertPayloadEncoding(sql); err != nil {
-		if errors.Is(err, sicore.ErrInsertIntoFunction) {
+		if errors.Is(err, sicore.ErrInsertIntoFunction) || errors.Is(err, sicore.ErrBackslashEscapedIdentifier) {
 			return fmt.Errorf("storage_integrity agent: %w", err)
 		}
 		// VALUES / SELECT / non-INSERT: ordinary path.

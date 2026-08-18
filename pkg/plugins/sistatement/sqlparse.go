@@ -76,7 +76,8 @@ func sampleColumnsFor(schema payloadexec.TableSchema, listed []string) ([]chprot
 	return out, nil
 }
 
-// matchUse returns (database, true) for a standalone USE statement.
-func matchUse(sql string) (string, bool) {
-	return sicore.ParseUseDatabase(sql)
+// matchUse returns (database, true, nil) for a standalone USE statement and
+// preserves parser errors that the signed lane must reject fail-closed.
+func matchUse(sql string) (string, bool, error) {
+	return sicore.ParseUseDatabaseStrict(sql)
 }

@@ -149,6 +149,9 @@ func TestStructuredSQLParserRejectsBackslashEscapedIdentifiers(t *testing.T) {
 	if _, ok := ParseUseDatabase("USE `foo\\nbar`"); ok {
 		t.Fatal("ParseUseDatabase accepted a backslash-escaped identifier")
 	}
+	if _, ok, err := ParseUseDatabaseStrict("USE `foo\\nbar`"); ok || !errors.Is(err, ErrBackslashEscapedIdentifier) {
+		t.Fatalf("ParseUseDatabaseStrict = %v/%v, want ErrBackslashEscapedIdentifier", ok, err)
+	}
 }
 
 func TestResolveInsertTargetPreservesExactQuotedSessionDatabase(t *testing.T) {

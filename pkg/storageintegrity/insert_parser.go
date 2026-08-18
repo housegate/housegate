@@ -303,29 +303,46 @@ func isInsertPayloadSourceKeyword(word string) bool {
 }
 
 // ParseUseDatabase returns the decoded database for a standalone USE command.
-// It accepts comments and quoted/escaped ClickHouse identifiers.
+// It accepts comments and quoted ClickHouse identifiers, including doubled
+// quote escapes. Parse failures are collapsed to no-match for non-SI callers;
+// correctness-critical callers must use ParseUseDatabaseStrict.
 func ParseUseDatabase(sql string) (string, bool) {
+	db, ok, _ := ParseUseDatabaseStrict(sql)
+	return db, ok
+}
+
+// ParseUseDatabaseStrict is the error-bearing form used by the SI signed lane.
+// In particular, it preserves ErrBackslashEscapedIdentifier so an ambiguous
+// USE cannot be forwarded while the agent silently retains a different session
+// database for the next unqualified INSERT.
+func ParseUseDatabaseStrict(sql string) (string, bool, error) {
 	s := storageScanner{sql: sql}
 	word, ok, err := s.bareWord()
-	if err != nil || !ok || !strings.EqualFold(word, "USE") {
-		return "", false
+	if err != nil {
+		return "", false, err
+	}
+	if !ok || !strings.EqualFold(word, "USE") {
+		return "", false, nil
 	}
 	db, _, ok, err := s.identifier()
-	if err != nil || !ok || db == "" {
-		return "", false
+	if err != nil {
+		return "", false, err
+	}
+	if !ok || db == "" {
+		return "", false, nil
 	}
 	if err := s.skip(); err != nil {
-		return "", false
+		return "", false, err
 	}
 	if s.take(';') {
 		if err := s.skip(); err != nil {
-			return "", false
+			return "", false, err
 		}
 	}
 	if s.pos != len(sql) {
-		return "", false
+		return "", false, nil
 	}
-	return db, true
+	return db, true, nil
 }
 
 type storageScanner struct {

@@ -1,11 +1,13 @@
 package sistatement
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/housegate/housegate/pkg/lthash"
 	"github.com/housegate/housegate/pkg/replay/payloadexec"
+	sicore "github.com/housegate/housegate/pkg/storageintegrity"
 )
 
 func testSchema() payloadexec.TableSchema {
@@ -102,22 +104,22 @@ func TestSampleColumnsFor(t *testing.T) {
 }
 
 func TestMatchUse(t *testing.T) {
-	if db, ok := matchUse("USE shop"); !ok || db != "shop" {
-		t.Fatalf("USE shop → %q %v", db, ok)
+	if db, ok, err := matchUse("USE shop"); err != nil || !ok || db != "shop" {
+		t.Fatalf("USE shop → %q %v %v", db, ok, err)
 	}
-	if db, ok := matchUse("  use `shop-2`; "); !ok || db != "shop-2" {
-		t.Fatalf("quoted USE → %q %v", db, ok)
+	if db, ok, err := matchUse("  use `shop-2`; "); err != nil || !ok || db != "shop-2" {
+		t.Fatalf("quoted USE → %q %v %v", db, ok, err)
 	}
-	if db, ok := matchUse("USE /* route */ `shop``prod`; "); !ok || db != "shop`prod" {
-		t.Fatalf("commented/escaped USE → %q %v", db, ok)
+	if db, ok, err := matchUse("USE /* route */ `shop``prod`; "); err != nil || !ok || db != "shop`prod" {
+		t.Fatalf("commented/escaped USE → %q %v %v", db, ok, err)
 	}
-	if _, ok := matchUse("USE shop SETTINGS x=1"); ok {
+	if _, ok, err := matchUse("USE shop SETTINGS x=1"); err != nil || ok {
 		t.Fatal("USE with SETTINGS must not match")
 	}
-	if _, ok := matchUse("USE `foo\\nbar`"); ok {
-		t.Fatal("backslash-escaped USE must fail closed")
+	if _, ok, err := matchUse("USE `foo\\nbar`"); ok || !errors.Is(err, sicore.ErrBackslashEscapedIdentifier) {
+		t.Fatalf("backslash-escaped USE = %v/%v, want ErrBackslashEscapedIdentifier", ok, err)
 	}
-	if _, ok := matchUse("SELECT 1"); ok {
+	if _, ok, err := matchUse("SELECT 1"); err != nil || ok {
 		t.Fatal("SELECT must not match")
 	}
 }

@@ -211,6 +211,38 @@ func TestPlugin_SeqSurvivesRestart(t *testing.T) {
 	}
 }
 
+func TestPluginRejectsBackslashEscapedInsertTarget(t *testing.T) {
+	ns := network.NewInMemoryNetworkState()
+	p, _ := newTestPlugin(t, ns, t.TempDir())
+	qctx := insertQctx(newSession(1, "shop"), "INSERT INTO `foo\\nbar` FORMAT Native")
+
+	err := p.OnQuery(context.Background(), qctx)
+	if !errors.Is(err, sicore.ErrBackslashEscapedIdentifier) {
+		t.Fatalf("OnQuery = %v, want ErrBackslashEscapedIdentifier", err)
+	}
+	if qctx.DeferredInsert != nil {
+		t.Fatalf("ambiguous target entered deferred SI lane: %#v", qctx.DeferredInsert)
+	}
+}
+
+func TestPluginRejectsBackslashEscapedUseDatabase(t *testing.T) {
+	ns := network.NewInMemoryNetworkState()
+	p, _ := newTestPlugin(t, ns, t.TempDir())
+	sess := newSession(1, "shop")
+	qctx := insertQctx(sess, "USE `foo\\nbar`")
+
+	err := p.OnQuery(context.Background(), qctx)
+	if !errors.Is(err, sicore.ErrBackslashEscapedIdentifier) {
+		t.Fatalf("OnQuery = %v, want ErrBackslashEscapedIdentifier", err)
+	}
+	p.mu.Lock()
+	_, pending := p.useNext[sess.ID()]
+	p.mu.Unlock()
+	if pending {
+		t.Fatal("ambiguous USE left a pending database transition")
+	}
+}
+
 func TestPlugin_ClientSuppliedStatementIDIsKeptOnlyForOwnAccount(t *testing.T) {
 	ns := network.NewInMemoryNetworkState()
 	declareSchema(t, ns, testSchema())
