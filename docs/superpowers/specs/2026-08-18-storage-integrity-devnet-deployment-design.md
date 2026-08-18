@@ -26,7 +26,7 @@ Nothing of the storage-integrity path is deployed. `k8s-sea/sentio-network-devne
 - **arbiter**: 3-replica StatefulSet from the arbiter image (all four binaries are in the image; entrypoint `arbiter`), headless service for raft peers, one gRPC Service `arbiter:7080` for data-plane clients (`NotLeader` re-homing handles follower hits), PVC per replica for raft/bolt. Config from `configs/local.yaml` shape with `raft.peers` = the three pod DNS names, `payload_store` set, `anchor.backend: evm` (`rpc_url` = devnet2 RPC already used by the contracts upgrade workflow, `contract_address` from the deploy step, `finality: confirmations` with a small depth for devnet), `authority.private_key_hex` from a Secret, `genesis.{network_id, schema_snapshot_id, executor_profile_id, schema_root}` where `schema_root` is computed from the declared table set at bootstrap (`cmd/arbiter --print-genesis` or the existing `table_ids` tooling — the executing agent picks the existing helper).
 - **arbiter-verifier ×3**: Deployment (or StatefulSet, one per SI CH), `schema_source: chain` once the 07-30 spec lands, else `network_state`; `--ensure-tables=create` (Spec C); `safe_replica: true` (Spec D).
 - **da-store**: 1 replica, image `ghcr.io/sentioxyz/network-da:devnet`, `fs` backend on a PVC for devnet (GCS later), ports 9001 (data) / 9002 (control), plaintext in-cluster (TLS is a da-store stub — accepted for devnet).
-- **AnchorRegistry**: deployed to devnet2 chain 7892301 with `cmd/arbiter-anchor deploy` + `set-poster <authority address>`; address recorded in the arbiter ConfigMap and in the production repo (`rollup.json` neighbour, e.g. `storage-integrity.json`).
+- **AnchorRegistry**: deployed to devnet2 chain 7892301 with `cmd/arbiter-anchor deploy` + `set-poster <authority address>` — deploy the **v2** contract from Spec H (`anchor(bytes32,bytes32,string daRef)`) if H's contract has landed, so devnet2 never carries a v1 anchor history; address recorded in the arbiter ConfigMap and in the production repo (`rollup.json` neighbour, e.g. `storage-integrity.json`).
 - **Keeper**: reuse `clickhouse-keeper-extra`; the RMT zk root `/sentio/0/unsafe/...` is namespaced by Spec C's DDL, so sharing the ensemble with other CHIs is safe. Replication-plane forwarding via housegate (§12.1) is **not** deployed on devnet2 (network policy isolates the ns instead) — recorded as a conscious omission.
 
 ## 3. Config values (the parts that are policy, not plumbing)
@@ -50,7 +50,7 @@ Images: pin **immutable** tags everywhere (`:devnet-<sha>` for sentio-node / net
 1. Prereqs merged and released: Spec A (envelope v2), Spec C (tables + backpressure), Spec G (read rewrite) at minimum; Spec D before adding the second/third safe replica by rolling restart; Spec E's `INSERT … SELECT` + `DEFAULT now()` guards preferred.
 2. `production`: CHI `clickhouse-devnet2-si` (4 replicas, zookeeper block) → wait Ready → verify `system.zookeeper` reachable from each.
 3. da-store Deployment + PVC + Service → smoke `GetStoreLimits`.
-4. AnchorRegistry deploy on 7892301; record address.
+4. AnchorRegistry (v2 per Spec H when available) deploy on 7892301; record address.
 5. arbiter StatefulSet (bootstrap on replica 0, join 1–2) → `SafeState.GetSafeWatermark` answers; leader elected.
 6. Declare the smoke table schema on chain (existing `sentio-node declare-table-schemas` / Phase B path) → verifiers start with `--ensure-tables=create` → `hg_unsafe`/`hg_safe` exist on all 4 SI CH nodes with pinned settings.
 7. Switch `indexer-a` to `clickhouse-si-a` + SI config; roll.

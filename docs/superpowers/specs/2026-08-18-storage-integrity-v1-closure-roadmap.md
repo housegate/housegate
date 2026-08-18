@@ -6,7 +6,7 @@ This document is the index for the work that closes v1 (INSERT end-to-end, deplo
 
 ## 1. What the review found (one paragraph)
 
-Route A's INSERT path is implemented and tested end-to-end in arbiter / arbiter-core / housegate (three fraud-rejection classes proved in docker), but (a) nothing of it is deployed, (b) three v1-mandatory pieces of the base design are missing — Phase-2 physical rewrite / read modes, §12.3 admission back-pressure + pinned DDL, §12.5 lag replay / bootstrap — and (c) two protocol shortcuts weaken the base design's core argument: the user JWS binds only the SQL text (not `statement_id`, `payload_hash`, target table, purpose), and the L3 block header does not commit statement content, so an untrusted ingress can swap payloads under a valid signature and the anchored chain hash does not pin what was sequenced. Several documented-vs-implemented mismatches also accumulated (row-id injection point, accumulator construction, physical naming, hash family, challenge semantics, materializer profiles). Two further gaps surfaced while writing these specs: the network has exactly **one** `hg_safe` copy (single-writer, single safe replica — verifiers hold `hg_unsafe` for the byte-side scan but never promote; the promotion stream is live-only, so even that one replica cannot recover missed promotions), and the user-facing **read side of SI tables is unrewritten** (an SI INSERT lands only in `hg_unsafe`/`hg_safe`; the user's `SELECT` still hits the empty multi-tenant table).
+Route A's INSERT path is implemented and tested end-to-end in arbiter / arbiter-core / housegate (three fraud-rejection classes proved in docker), but (a) nothing of it is deployed, (b) three v1-mandatory pieces of the base design are missing — Phase-2 physical rewrite / read modes, §12.3 admission back-pressure + pinned DDL, §12.5 lag replay / bootstrap — and (c) two protocol shortcuts weaken the base design's core argument: the user JWS binds only the SQL text (not `statement_id`, `payload_hash`, target table, purpose), and the L3 block header does not commit statement content, so an untrusted ingress can swap payloads under a valid signature and the anchored chain hash does not pin what was sequenced. Several documented-vs-implemented mismatches also accumulated (row-id injection point, accumulator construction, physical naming, hash family, challenge semantics, materializer profiles). Two further gaps surfaced while writing these specs: the network has exactly **one** `hg_safe` copy (single-writer, single safe replica — verifiers hold `hg_unsafe` for the byte-side scan but never promote; the promotion stream is live-only, so even that one replica cannot recover missed promotions), and the user-facing **read side of SI tables is unrewritten** (an SI INSERT lands only in `hg_unsafe`/`hg_safe`; the user's `SELECT` still hits the empty multi-tenant table). A third surfaced when discussing decentralization: **the L3 has only its producer half** — the Arbiter seals and anchors blocks, but block content (the envelopes, hence the SQL text) exists only in the Arbiter's Raft state, the anchor carries no DA reference, the accumulator is private, and no process can follow/verify the L3 stream without trusting the Arbiter's RPC (Spec H).
 
 ## 2. Spec set
 
@@ -19,6 +19,7 @@ Route A's INSERT path is implemented and tested end-to-end in arbiter / arbiter-
 | E | [Rewriter convergence](2026-08-18-rewriter-convergence-design.md) | rewriter-proto, rewriter-go, rewriter-grpc, housegate | — | — | engine fixes |
 | F | [Devnet2 storage-integrity deployment](2026-08-18-storage-integrity-devnet-deployment-design.md) | production, sentio-node config, arbiter configs | first real e2e outside docker | A, C, G (D before >1 safe replica) | ops |
 | G | [Storage-integrity read surface rewrite](2026-08-18-storage-integrity-read-surface-rewrite-design.md) (safe / unsafe_latest, `_hg_row_id` hiding, non-lane write rejection) | rewriter-proto, rewriter-go, rewriter-grpc, housegate, sentio-node | F (without it an SI table is write-only for users) | — (shares the proto bump with E) | contract + engine + proxy |
+| H | [L3 block publication and the L3 follower node](2026-08-18-storage-integrity-l3-follower-design.md) (block objects on DA, `da_ref` in the anchor, accumulator public, follower verifies chain/`statements_root`/`spent_ids_root`/JWS) | arbiter-proto, arbiter, arbiter-core, network-da | P5+ decentralization; D's untrusted `L3Source` | A (`statements_root`, `GetL3Block`); contract v2 before F deploys the anchor | control plane + public library |
 
 Already-written specs that are ready to execute and are **not** re-specified here:
 
@@ -35,11 +36,12 @@ Already-written specs that are ready to execute and are **not** re-specified her
    D (multi-replica safe set) ── after A + C; before F adds the 2nd/3rd safe replica (verifiers)
    B (docs v4) ── PROGRESS.md / CLAUDE.md fixes now; base-design sections after each spec merges
    07-30 chain schema source ── any time; F prefers it done
+   H (L3 publication + follower) ── after A; its AnchorRegistry v2 should be what F deploys, so land H's contract before F step 4
 ```
 
 A, C, G are the critical path to a user-visible devnet e2e (write via A, tables via C, read via G). A first because it is a wire break — every later phase that persists envelopes (FSM snapshots, journals, DA payload refs, EVM anchors on devnet2) would otherwise have to migrate. Nothing is deployed today, so A is a **hard cutover** (proto minor bump, FSM snapshot version bump, no dual-read). D is required before the network has more than one `hg_safe` copy; F is staged so that its first milestone (one safe replica) does not wait on D.
 
-Parallelism: A ‖ C ‖ E+G can be developed concurrently by three agents; D starts once A's proto lands (it needs `GetL3Block` and native payloads) and C's `EnsureProtocolTables` is available on verifiers.
+Parallelism: A ‖ C ‖ E+G can be developed concurrently by three agents; D starts once A's proto lands (it needs `GetL3Block` and native payloads) and C's `EnsureProtocolTables` is available on verifiers; H starts once A's `statements_root` lands and can run alongside D.
 
 ## 4. Decisions this roadmap takes (override before executing)
 
@@ -54,6 +56,8 @@ Parallelism: A ‖ C ‖ E+G can be developed concurrently by three agents; D st
 9. **Read mode is a config policy** (`storage_integrity.read.default_mode`), shipped default `safe` per base design §11, devnet2 set to `unsafe_latest` per the 07-08 product preference. **Needs the product owner's call** before F; the mechanism supports both (Spec G D1).
 10. **Manifest publication keeps single-source-ack latency under multi-replica promotion**; other safe replicas converge asynchronously and cleanup waits for Active/Behind replicas only (Spec D D2/D3). Rejected: replica-quorum before publish.
 11. **Cold bootstrap = L3 replay through the executor from DA**, not peer part copy (Spec D D5). Depends on DA never releasing AUDIT pins in v1 (already the case).
+12. **L3 blocks are published to DA and the anchor carries the DA ref** (Spec H D1/D2): the anchored `ChainHash` stays the chain commitment; the block object is a carrier the follower checks against it; `AnchorRegistry` v2 `anchor(bytes32,bytes32,string daRef)`. Rejected: deriving the ref from the hash (refs are opaque by the DA backend-swap rule) or letting followers ask the Arbiter.
+13. **The `statement_id` accumulator and the JWS v2 verifier become public** (move to arbiter-core, Spec H D3) so a follower can recompute `spent_ids_root_after` and verify envelopes; the follower verifies sequencing, not execution (`state_root` stays a claim until replay).
 
 ## 5. Bounded tasks (no spec; do directly)
 
@@ -68,4 +72,4 @@ Parallelism: A ‖ C ‖ E+G can be developed concurrently by three agents; D st
 
 ## 6. Out of scope for v1 closure (tracked, not specified)
 
-P2 bounded mutations; P3 SafeAudit / read-set gating; P4 controlled compaction; the DDL / schema-transition lane; multi-Raft sharding; threshold authority signing; independent challenger dispatch; `INSERT ... SELECT` support (v2); per-account fair scheduling in the admission throttle; peer-copy cold bootstrap (D specifies L3-replay bootstrap only).
+P2 bounded mutations; P3 SafeAudit / read-set gating; P4 controlled compaction; the DDL / schema-transition lane; multi-Raft sharding; threshold authority signing; independent challenger dispatch; `INSERT ... SELECT` support (v2); per-account fair scheduling in the admission throttle; peer-copy cold bootstrap (D specifies L3-replay bootstrap only); follower P2P/gossip and follower-side state-root verification (H covers L2-event + DA sync and sequencing verification only).
