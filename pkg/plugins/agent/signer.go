@@ -62,21 +62,9 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	if p.Signer == nil || qctx.Query == nil {
 		return nil
 	}
-	token, err := p.Signer.SignToken(qctx.Query.Body)
-	if err != nil {
-		if p.Observer != nil {
-			p.Observer.AgentTokenError()
-		}
-		return fmt.Errorf("agent-sign: %w", err)
+	if err := p.refreshAuthToken(ctx, qctx); err != nil {
+		return err
 	}
-	qctx.Query.Settings = append(qctx.Query.Settings, chproto.Setting{
-		Key: auth.AuthTokenSettingKey,
-		// See routeplugin.Signer for the wrapping-in-quotes rationale:
-		// Custom=true triggers Field::restoreFromDump which expects
-		// `'…'` for a String. EthValidator strips the quotes back off.
-		Value:  "'" + token + "'",
-		Custom: true,
-	})
 	if p.Owner != "" {
 		// Same Custom-string wrapping as the auth token: the upstream
 		// usage plugin trims `'…'` before HexToAddress (see
@@ -102,12 +90,65 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 			Custom: true,
 		})
 	}
+	return nil
+}
+
+// OnQueryInputCompleteStrict refreshes the legacy query JWS after a deferred
+// payload has been collected. Collection can outlive MaxTokenAge; replacing the
+// setting here keeps the forwarded Query fresh while binding the same final SQL
+// that OnQuery signed. Non-deferred queries keep the ordinary single-sign path.
+func (p *Plugin) OnQueryInputCompleteStrict(ctx context.Context, qctx *plugin.QueryContext) error {
+	if qctx == nil || qctx.DeferredInsert == nil || qctx.Query == nil || p.Signer == nil {
+		return nil
+	}
+	return p.refreshAuthToken(ctx, qctx)
+}
+
+func (p *Plugin) refreshAuthToken(ctx context.Context, qctx *plugin.QueryContext) error {
+	token, err := p.Signer.SignToken(qctx.Query.Body)
+	if err != nil {
+		if p.Observer != nil {
+			p.Observer.AgentTokenError()
+		}
+		return fmt.Errorf("agent-sign: %w", err)
+	}
+	setting := chproto.Setting{
+		Key: auth.AuthTokenSettingKey,
+		// See routeplugin.Signer for the wrapping-in-quotes rationale:
+		// Custom=true triggers Field::restoreFromDump which expects
+		// `'…'` for a String. EthValidator strips the quotes back off.
+		Value:  "'" + token + "'",
+		Custom: true,
+	}
+	qctx.Query.Settings = replaceUniqueSetting(qctx.Query.Settings, setting)
 	if p.Observer != nil {
 		p.Observer.AgentTokenInjected()
 	}
 	_, logger := log.FromContext(ctx)
-	logger.Debugw("agent signer: injected auth token", auth.AuthTokenSettingKey, token)
+	logger.Debugw("agent signer: injected auth token", "query_id", qctx.Query.ID)
 	return nil
 }
 
-var _ plugin.QueryPlugin = (*Plugin)(nil)
+func replaceUniqueSetting(settings []chproto.Setting, replacement chproto.Setting) []chproto.Setting {
+	out := settings[:0]
+	replaced := false
+	for _, setting := range settings {
+		if setting.Key != replacement.Key {
+			out = append(out, setting)
+			continue
+		}
+		if !replaced {
+			out = append(out, replacement)
+			replaced = true
+		}
+	}
+	if !replaced {
+		out = append(out, replacement)
+	}
+	return out
+}
+
+var (
+	_ plugin.QueryPlugin                    = (*Plugin)(nil)
+	_ plugin.QueryInputCompleteStrictPlugin = (*Plugin)(nil)
+)
