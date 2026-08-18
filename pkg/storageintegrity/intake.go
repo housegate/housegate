@@ -635,6 +635,70 @@ func (o *Orchestrator) frontierKey() string {
 	return defaultFrontierKey
 }
 
+// AdmissionRequiresPrepare is the read-only preflight used by ingress before
+// it performs a payload put, creates a journal record, submits to Arbiter, or
+// asks the source to write an unsafe part. It returns true only when this
+// statement has no cached/terminal intake and a later Orchestrate call may
+// execute PrepareLocalStatement. Existing prepared retries and terminal ACK2
+// replays return false so part pressure cannot deadlock their frontier.
+func (o *Orchestrator) AdmissionRequiresPrepare(ctx context.Context, adm AdmissionRecord) (bool, error) {
+	if o == nil {
+		return false, errors.New("intake: orchestrator is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	incoming, err := EnvelopeFromAdmission(adm)
+	if err != nil {
+		return false, err
+	}
+	if err := o.ensureJournalRecovered(ctx); err != nil {
+		return false, err
+	}
+
+	o.mu.Lock()
+	rec := o.records[incoming.StatementID]
+	if rec != nil {
+		requires, err := recordRequiresPrepare(rec.env, rec.adm, rec.hasPrepared, rec.isTerminal, rec.stage, adm)
+		o.mu.Unlock()
+		return requires, err
+	}
+	o.mu.Unlock()
+
+	// Terminal records are intentionally not retained during bulk journal
+	// recovery. Load this statement on demand so a post-restart ACK2 replay also
+	// bypasses pressure without mutating the orchestrator or journal.
+	if o.journal != nil {
+		persisted, ok, err := o.journal.LoadIntakeRecord(ctx, incoming.StatementID)
+		if err != nil {
+			return false, err
+		}
+		if ok {
+			return recordRequiresPrepare(persisted.Env, persisted.Admission, persisted.HasPrepared, persisted.IsTerminal, persisted.Stage, adm)
+		}
+	}
+	return true, nil
+}
+
+func recordRequiresPrepare(boundEnv StatementEnvelope, boundAdmission AdmissionRecord, hasPrepared, terminal bool, stage Lifecycle, incoming AdmissionRecord) (bool, error) {
+	if incoming.PayloadRef != "" && incoming.PayloadRef != boundEnv.PayloadRef {
+		return false, fmt.Errorf("intake: statement id %s reused with a different envelope", boundEnv.StatementID)
+	}
+	candidate := cloneAdmissionRecord(incoming)
+	candidate.PayloadRef = boundEnv.PayloadRef
+	candidateEnv, err := EnvelopeFromAdmission(candidate)
+	if err != nil {
+		return false, err
+	}
+	if !sameStatement(boundEnv, boundAdmission, candidateEnv, candidate) {
+		return false, fmt.Errorf("intake: statement id %s reused with a different envelope", boundEnv.StatementID)
+	}
+	if terminal || hasPrepared {
+		return false, nil
+	}
+	return stage == "" || stage == LifecyclePreparing, nil
+}
+
 // Orchestrate drives one admission through the staged intake. Prepare runs at
 // most once per statement id — even under concurrency and across retries: a
 // call for a statement with a recorded terminal outcome returns it without

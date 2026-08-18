@@ -55,6 +55,7 @@ go_library(
         "//pkg/proxy",
         "//pkg/registry",
         "//pkg/replay",
+        "//pkg/replay/payloadexec",
         "//pkg/replicationproxy",
         "//pkg/rewriter",
         "//pkg/sqlmeta",

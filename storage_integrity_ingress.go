@@ -36,10 +36,13 @@ type StorageIntegrityIngress struct {
 	mergeRunner    *StorageIntegrityMergeSupervisor
 	pressure       StorageIntegrityPartsPressure
 	schemas        sicore.TableSchemaResolver
-	pressureRunner *StorageIntegrityPartsPressureSupervisor
+	pressureRunner StorageIntegrityPartsPressureLifecycle
+	statementLocks [64]sync.Mutex
 
 	backgroundMu     sync.Mutex
 	backgroundCancel context.CancelFunc
+	backgroundWG     sync.WaitGroup
+	backgroundClosed bool
 }
 
 // NewStorageIntegrityIngress constructs the ingress runtime over an orchestrator
@@ -80,22 +83,37 @@ func (i *StorageIntegrityIngress) StartBackground(ctx context.Context) {
 		return
 	}
 	i.backgroundMu.Lock()
-	if i.backgroundCancel != nil {
+	if i.backgroundCancel != nil || i.backgroundClosed {
 		i.backgroundMu.Unlock()
 		return
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	i.backgroundCancel = cancel
+	leaseManager := i.leaseManager
+	mergeRunner := i.mergeRunner
+	pressureRunner := i.pressureRunner
+	if leaseManager != nil {
+		i.backgroundWG.Add(1)
+		go func() {
+			defer i.backgroundWG.Done()
+			leaseManager.Run(runCtx)
+		}()
+	}
+	if mergeRunner != nil {
+		i.backgroundWG.Add(1)
+		go func() {
+			defer i.backgroundWG.Done()
+			mergeRunner.Run(runCtx)
+		}()
+	}
+	if pressureRunner != nil {
+		i.backgroundWG.Add(1)
+		go func() {
+			defer i.backgroundWG.Done()
+			pressureRunner.Run(runCtx)
+		}()
+	}
 	i.backgroundMu.Unlock()
-	if i.leaseManager != nil {
-		go i.leaseManager.Run(runCtx)
-	}
-	if i.mergeRunner != nil {
-		go i.mergeRunner.Run(runCtx)
-	}
-	if i.pressureRunner != nil {
-		go i.pressureRunner.Run(runCtx)
-	}
 }
 
 func (i *StorageIntegrityIngress) Close() {
@@ -105,10 +123,12 @@ func (i *StorageIntegrityIngress) Close() {
 	i.backgroundMu.Lock()
 	cancel := i.backgroundCancel
 	i.backgroundCancel = nil
+	i.backgroundClosed = true
 	i.backgroundMu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
+	i.backgroundWG.Wait()
 }
 
 // WithPartsPressure enables the ingress back-pressure check. The resolver
@@ -118,28 +138,50 @@ func (i *StorageIntegrityIngress) WithPartsPressure(pressure StorageIntegrityPar
 	i.schemas = schemas
 }
 
-func (i *StorageIntegrityIngress) checkPartsPressure(rec sicore.AdmissionRecord) error {
+func (i *StorageIntegrityIngress) partsPressureTarget(rec sicore.AdmissionRecord) (string, []string, error) {
 	if i.pressure == nil {
-		return nil
+		return "", nil, nil
 	}
 	if i.schemas == nil {
-		return fmt.Errorf("storage_integrity ingress: back-pressure requires a table schema resolver")
+		return "", nil, fmt.Errorf("storage_integrity ingress: back-pressure requires a table schema resolver")
 	}
 	schema, ok := i.schemas.StorageIntegrityTableSchema(rec.TableID)
 	if !ok {
-		return fmt.Errorf("storage_integrity ingress: no pinned schema for table %q", rec.TableID)
+		return "", nil, fmt.Errorf("storage_integrity ingress: no pinned schema for table %q", rec.TableID)
+	}
+	if schema.TableID != rec.TableID {
+		return "", nil, fmt.Errorf("storage_integrity ingress: schema table_id %q does not match admission table_id %q", schema.TableID, rec.TableID)
 	}
 	partitions, err := sicore.PayloadPartitionIDs(schema, rec.PayloadEncoding, rec.Revision, rec.Payload)
 	if err != nil {
-		return fmt.Errorf("storage_integrity ingress: %w", err)
+		return "", nil, fmt.Errorf("storage_integrity ingress: %w", err)
 	}
-	table := sicore.PhysicalTableName(rec.TableID)
-	for _, partition := range partitions {
-		if err := i.pressure.Allow(table, partition); err != nil {
-			return backpressureClientError(table, err)
-		}
+	return sicore.PhysicalTableName(rec.TableID), partitions, nil
+}
+
+func (i *StorageIntegrityIngress) reservePartsPressure(ctx context.Context, table string, partitions []string) (sicore.PartsReservation, error) {
+	reservation, err := i.pressure.Reserve(ctx, table, partitions)
+	if err == nil {
+		return reservation, nil
 	}
-	return nil
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if !errors.Is(err, sicore.ErrBackpressure) {
+		err = fmt.Errorf("%w: pressure refresh unavailable: %v", sicore.ErrBackpressure, err)
+	}
+	return nil, backpressureClientError(table, err)
+}
+
+func (i *StorageIntegrityIngress) lockStatement(statementID string) func() {
+	var hash uint32 = 2166136261
+	for idx := 0; idx < len(statementID); idx++ {
+		hash ^= uint32(statementID[idx])
+		hash *= 16777619
+	}
+	lock := &i.statementLocks[hash%uint32(len(i.statementLocks))]
+	lock.Lock()
+	return lock.Unlock
 }
 
 func backpressureClientError(table string, err error) error {
@@ -176,20 +218,56 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 			storageIntegrityMaterializerName(actualMaterializer),
 		)
 	}
-	if err := i.checkPartsPressure(rec); err != nil {
+	unlockStatement := i.lockStatement(rec.StatementID)
+	defer unlockStatement()
+
+	table, partitions, err := i.partsPressureTarget(rec)
+	if err != nil {
 		return err
+	}
+	requiresPrepare, err := i.orch.AdmissionRequiresPrepare(ctx, rec)
+	if err != nil {
+		return fmt.Errorf("storage_integrity ingress: preflight %s: %w", rec.StatementID, err)
+	}
+	var reservation sicore.PartsReservation
+	if i.pressure != nil && requiresPrepare {
+		reservation, err = i.reservePartsPressure(ctx, table, partitions)
+		if err != nil {
+			return err
+		}
 	}
 	if i.payloadWriter != nil {
 		put, err := i.payloadWriter.PutPayload(ctx, rec.Payload, rec.PayloadHash, rec.PayloadLength)
 		if err != nil {
+			if reservation != nil {
+				reservation.Release()
+			}
 			return fmt.Errorf("storage_integrity ingress: put payload for %s: %w", rec.StatementID, err)
 		}
 		if put.PayloadRef == "" {
+			if reservation != nil {
+				reservation.Release()
+			}
 			return fmt.Errorf("storage_integrity ingress: payload store returned empty payload_ref for %s", rec.StatementID)
 		}
 		rec.PayloadRef = put.PayloadRef
 	}
 	res, err := i.orch.Orchestrate(ctx, rec)
+	if reservation != nil {
+		if errors.Is(err, sicore.ErrBackpressure) {
+			reservation.Release()
+		} else {
+			// Any non-backpressure return may follow a durable source write or an
+			// indeterminate response. Keep the slot charged until Refresh absorbs it.
+			reservation.Commit()
+		}
+	}
+	if i.pressure != nil {
+		// Orchestrate may create or clean candidate parts on success, retryable
+		// outcomes, terminal rejection, or indeterminate errors. Refresh every
+		// such transition; local preflight refusals return above without mutation.
+		i.pressure.Invalidate()
+	}
 	if err != nil {
 		if errors.Is(err, sicore.ErrBackpressure) {
 			return backpressureClientError(sicore.PhysicalTableName(rec.TableID), err)
@@ -198,9 +276,6 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 	}
 	if !res.Ack2 {
 		return fmt.Errorf("storage_integrity ingress: statement %s did not reach ACK2 (lifecycle %s, reason %q)", rec.StatementID, res.Lifecycle, res.Reason)
-	}
-	if i.pressure != nil {
-		i.pressure.Invalidate()
 	}
 	return nil
 }

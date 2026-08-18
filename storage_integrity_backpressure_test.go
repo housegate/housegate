@@ -15,8 +15,8 @@ import (
 )
 
 type rootPartsRow struct {
-	db, table, partition string
-	n                    uint64
+	db, table, partition, partitionKey string
+	n                                  uint64
 }
 
 type rootPartsConn struct {
@@ -55,7 +55,8 @@ func (r *rootPartsRows) Scan(dest ...any) error {
 	*(dest[0].(*string)) = row.db
 	*(dest[1].(*string)) = row.table
 	*(dest[2].(*string)) = row.partition
-	*(dest[3].(*uint64)) = row.n
+	*(dest[3].(*string)) = row.partitionKey
+	*(dest[4].(*uint64)) = row.n
 	return nil
 }
 func (r *rootPartsRows) Err() error   { return nil }
@@ -63,8 +64,8 @@ func (r *rootPartsRows) Close() error { return nil }
 
 func TestPartsPressureSupervisor_RefreshSetsGauges(t *testing.T) {
 	conn := &rootPartsConn{rows: []rootPartsRow{
-		{"hg_unsafe", "db__t", "a", 5},
-		{"hg_safe", "db__t", "a", 9},
+		{"hg_unsafe", "db__t", "a", "p", 5},
+		{"hg_safe", "db__t", "a", "p", 9},
 	}}
 	guard := sicore.NewPartsPressureGuard(conn, sicore.PartsPressureConfig{UnsafeDatabase: "hg_unsafe", SafeDatabase: "hg_safe", SoftPartsPerPartition: 3, HardPartsPerPartition: 4})
 	sup := NewStorageIntegrityPartsPressureSupervisor(guard, time.Second, "hg_unsafe", "hg_safe")
@@ -77,11 +78,11 @@ func TestPartsPressureSupervisor_RefreshSetsGauges(t *testing.T) {
 	if got := testutil.ToFloat64(storageIntegritySafeParts.WithLabelValues("db__t", "p_a")); got != 9 {
 		t.Fatalf("safe gauge = %v want 9", got)
 	}
-	if err := sup.Allow("db__t", "p_a"); !errors.Is(err, sicore.ErrBackpressure) {
-		t.Fatalf("supervisor must delegate Allow: %v", err)
+	if _, err := sup.Reserve(context.Background(), "db__t", []string{"p_a"}); !errors.Is(err, sicore.ErrBackpressure) {
+		t.Fatalf("supervisor must delegate Reserve: %v", err)
 	}
 
-	conn.setRows([]rootPartsRow{{"hg_safe", "db__t", "a", 9}})
+	conn.setRows([]rootPartsRow{{"hg_safe", "db__t", "a", "p", 9}})
 	if err := sup.Refresh(context.Background()); err != nil {
 		t.Fatalf("Refresh: %v", err)
 	}
@@ -131,5 +132,84 @@ func TestStorageIntegrityBackpressureMetricsRegisteredOnce(t *testing.T) {
 		if !found[name] {
 			t.Fatalf("metric %s not registered on the default registry", name)
 		}
+	}
+}
+
+type noopPartsReservation struct{}
+
+func (noopPartsReservation) Commit()  {}
+func (noopPartsReservation) Release() {}
+
+type blockingPressureLifecycle struct {
+	refreshes   atomic.Int64
+	invalidates atomic.Int64
+	started     chan struct{}
+	canceled    chan struct{}
+	release     chan struct{}
+	startOnce   sync.Once
+	cancelOnce  sync.Once
+}
+
+func newBlockingPressureLifecycle() *blockingPressureLifecycle {
+	return &blockingPressureLifecycle{
+		started:  make(chan struct{}),
+		canceled: make(chan struct{}),
+		release:  make(chan struct{}),
+	}
+}
+
+func (p *blockingPressureLifecycle) Reserve(context.Context, string, []string) (sicore.PartsReservation, error) {
+	return noopPartsReservation{}, nil
+}
+
+func (p *blockingPressureLifecycle) Invalidate() { p.invalidates.Add(1) }
+
+func (p *blockingPressureLifecycle) Refresh(context.Context) error {
+	p.refreshes.Add(1)
+	return nil
+}
+
+func (p *blockingPressureLifecycle) Run(ctx context.Context) {
+	p.startOnce.Do(func() { close(p.started) })
+	<-ctx.Done()
+	p.cancelOnce.Do(func() { close(p.canceled) })
+	<-p.release
+}
+
+func TestStorageIntegrityIngressCloseCancelsAndJoinsPressureRunner(t *testing.T) {
+	orch := sicore.NewOrchestrator(&rootRecordingSubmitter{}, &rootRecordingPreparer{}, sicore.OrchestratorConfig{})
+	ingress, err := NewStorageIntegrityIngress(orch, nil, sicore.MaterializerCSV)
+	if err != nil {
+		t.Fatalf("NewStorageIntegrityIngress: %v", err)
+	}
+	runner := newBlockingPressureLifecycle()
+	ingress.pressureRunner = runner
+	ingress.StartBackground(context.Background())
+	select {
+	case <-runner.started:
+	case <-time.After(time.Second):
+		t.Fatal("pressure runner did not start")
+	}
+
+	closed := make(chan struct{})
+	go func() {
+		ingress.Close()
+		close(closed)
+	}()
+	select {
+	case <-runner.canceled:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not cancel pressure runner")
+	}
+	select {
+	case <-closed:
+		t.Fatal("Close returned before pressure runner exited")
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(runner.release)
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not join released pressure runner")
 	}
 }

@@ -9,6 +9,7 @@ import (
 	pb "github.com/sentioxyz/arbiter-proto/gen/pb"
 
 	"github.com/housegate/housegate/pkg/config"
+	"github.com/housegate/housegate/pkg/replay/payloadexec"
 	sicore "github.com/housegate/housegate/pkg/storageintegrity"
 )
 
@@ -38,7 +39,11 @@ type StorageIntegrityRuntimeOptions struct {
 	MergeConn          sicore.MergeConn
 	MergeGuard         StorageIntegrityMergeGuard
 	SchemaResolver     sicore.TableSchemaResolver
-	PartsPressure      StorageIntegrityPartsPressure
+	// TableSchemas is the complete authoritative startup schema set. Runtime
+	// construction validates its frozen physical outputs globally before any
+	// listener, DDL, or Keeper-backed role can mix distinct logical tables.
+	TableSchemas  []payloadexec.TableSchema
+	PartsPressure StorageIntegrityPartsPressure
 }
 
 func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRuntimeConfig, opts StorageIntegrityRuntimeOptions) (*StorageIntegrityIngress, StorageIntegrityMergeGuard, error) {
@@ -139,29 +144,48 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 	ingress.leaseManager = leaseManager
 	ingress.mergeRunner = mergeGuard
 	if backpressure := runtimeCfg.Backpressure; backpressure.Enabled {
+		unsafeDatabase := strings.TrimSpace(backpressure.UnsafeDatabase)
+		safeDatabase := strings.TrimSpace(backpressure.SafeDatabase)
+		if safeDatabase == "" || safeDatabase == unsafeDatabase {
+			return nil, nil, errors.New("storage_integrity.runtime.backpressure requires a non-empty safe_database distinct from unsafe_database")
+		}
+		if len(opts.TableSchemas) == 0 {
+			return nil, nil, errors.New("storage_integrity.runtime.backpressure requires the authoritative table schema set (StorageIntegrityRuntimeOptions.TableSchemas)")
+		}
+		if err := sicore.ValidatePhysicalTableNames(opts.TableSchemas); err != nil {
+			return nil, nil, fmt.Errorf("storage_integrity.runtime.backpressure schema set: %w", err)
+		}
 		pressure := opts.PartsPressure
+		var pressureRunner StorageIntegrityPartsPressureLifecycle
 		if pressure == nil {
 			if opts.MergeConn == nil {
 				return nil, nil, errors.New("storage_integrity.runtime.backpressure requires merge_conn (or set storage_integrity.runtime.backpressure.enabled: false)")
 			}
 			guard := sicore.NewPartsPressureGuard(opts.MergeConn, sicore.PartsPressureConfig{
-				UnsafeDatabase:        strings.TrimSpace(backpressure.UnsafeDatabase),
-				SafeDatabase:          strings.TrimSpace(backpressure.SafeDatabase),
+				UnsafeDatabase:        unsafeDatabase,
+				SafeDatabase:          safeDatabase,
 				SoftPartsPerPartition: backpressure.SoftPartsPerPartition,
 				HardPartsPerPartition: backpressure.HardPartsPerPartition,
 			})
 			supervisor := NewStorageIntegrityPartsPressureSupervisor(
 				guard,
 				backpressure.PollInterval.Duration,
-				strings.TrimSpace(backpressure.UnsafeDatabase),
-				strings.TrimSpace(backpressure.SafeDatabase),
+				unsafeDatabase,
+				safeDatabase,
 			)
-			ingress.pressureRunner = supervisor
+			pressureRunner = supervisor
 			pressure = supervisor
+		} else {
+			var ok bool
+			pressureRunner, ok = pressure.(StorageIntegrityPartsPressureLifecycle)
+			if !ok {
+				return nil, nil, errors.New("storage_integrity.runtime injected parts pressure must implement the parts pressure lifecycle (Refresh and Run)")
+			}
 		}
 		if opts.SchemaResolver == nil {
 			return nil, nil, errors.New("storage_integrity.runtime.backpressure requires a table schema resolver (StorageIntegrityRuntimeOptions.SchemaResolver)")
 		}
+		ingress.pressureRunner = pressureRunner
 		ingress.WithPartsPressure(pressure, opts.SchemaResolver)
 	}
 	return ingress, mergeGuard, nil
@@ -181,10 +205,16 @@ func startStorageIntegrityRuntime(ctx context.Context, runtime *StorageIntegrity
 			return fmt.Errorf("storage_integrity.backpressure: initial parts snapshot: %w", err)
 		}
 	}
-	runtime.StartBackground(ctx)
 	if err := runtime.RecoverPending(ctx); err != nil {
 		return fmt.Errorf("storage_integrity.recovery: %w", err)
 	}
+	if runtime.pressureRunner != nil {
+		runtime.pressureRunner.Invalidate()
+		if err := runtime.pressureRunner.Refresh(ctx); err != nil {
+			return fmt.Errorf("storage_integrity.backpressure: post-recovery parts snapshot: %w", err)
+		}
+	}
+	runtime.StartBackground(ctx)
 	return nil
 }
 

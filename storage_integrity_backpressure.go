@@ -35,8 +35,18 @@ func init() {
 // StorageIntegrityPartsPressure is the ingress-facing admission port; the
 // supervisor and PartsPressureGuard both satisfy it.
 type StorageIntegrityPartsPressure interface {
-	Allow(table, partitionID string) error
+	Reserve(ctx context.Context, table string, partitionIDs []string) (sicore.PartsReservation, error)
 	Invalidate()
+}
+
+// StorageIntegrityPartsPressureLifecycle is required for every runtime-owned
+// pressure implementation, including injected ones. Startup performs a
+// fail-fast refresh, Run maintains the snapshot, and Close cancels and joins
+// that worker before its ClickHouse connection may be closed.
+type StorageIntegrityPartsPressureLifecycle interface {
+	StorageIntegrityPartsPressure
+	Refresh(context.Context) error
+	Run(context.Context)
 }
 
 // StorageIntegrityPartsPressureSupervisor polls the guard on an interval and
@@ -95,8 +105,8 @@ func (s *StorageIntegrityPartsPressureSupervisor) Run(ctx context.Context) {
 	}
 }
 
-func (s *StorageIntegrityPartsPressureSupervisor) Allow(table, partitionID string) error {
-	return s.guard.Allow(table, partitionID)
+func (s *StorageIntegrityPartsPressureSupervisor) Reserve(ctx context.Context, table string, partitionIDs []string) (sicore.PartsReservation, error) {
+	return s.guard.Reserve(ctx, table, partitionIDs)
 }
 
 func (s *StorageIntegrityPartsPressureSupervisor) Invalidate() { s.guard.Invalidate() }

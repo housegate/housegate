@@ -680,6 +680,33 @@ func TestOrchestrate_PreWriteRejectRetainsFrontierUntilRetryConverges(t *testing
 	}
 }
 
+func TestAdmissionRequiresPrepare_PostRestartTerminalReplayIsFalse(t *testing.T) {
+	journal, err := NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	prep := &recordingPreparer{
+		prepared:     boundSource(),
+		claimOutcome: ClaimOutcome{Category: OutcomeAccepted, BoundSource: "snode-A"},
+	}
+	sub := &recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeAccepted}}
+	adm := admissionFixture()
+	first := NewOrchestrator(sub, prep, OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal})
+	res, err := first.Orchestrate(context.Background(), adm)
+	if err != nil || !res.Ack2 {
+		t.Fatalf("first Orchestrate = %+v, %v", res, err)
+	}
+
+	restarted := NewOrchestrator(sub, prep, OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal})
+	requires, err := restarted.AdmissionRequiresPrepare(context.Background(), adm)
+	if err != nil {
+		t.Fatalf("AdmissionRequiresPrepare: %v", err)
+	}
+	if requires {
+		t.Fatal("post-restart terminal replay must not be gated as a new prepare")
+	}
+}
+
 // rcRetryThenAcceptPreparer prepares successfully and returns a retryable RC on
 // the first RegisterPreparedClaim and an accepted RC afterwards, so a test can
 // drive the SubmitAccepted resume path: first attempt accepts the submit but the

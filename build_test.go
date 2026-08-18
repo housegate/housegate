@@ -655,6 +655,7 @@ func TestBuildStorageIntegrityRuntimeBackpressureRequiresConnAndResolver(t *test
 	withPorts := base
 	withPorts.MergeConn = &recordingBuildMergeConn{}
 	withPorts.SchemaResolver = bpSchemaResolver()
+	withPorts.TableSchemas = bpSchemas()
 	ingress, _, err := buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, withPorts)
 	if err != nil {
 		t.Fatalf("buildStorageIntegrityRuntimeConsumer: %v", err)
@@ -662,6 +663,95 @@ func TestBuildStorageIntegrityRuntimeBackpressureRequiresConnAndResolver(t *test
 	if ingress.pressure == nil || ingress.pressureRunner == nil {
 		t.Fatal("runtime must construct the parts-pressure guard and its supervisor")
 	}
+}
+
+func TestBuildStorageIntegrityRuntimeInjectedPressureRequiresLifecycle(t *testing.T) {
+	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatalf("NewRelaySigner: %v", err)
+	}
+	cfg := minimalRouterOnlyCfg(t)
+	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
+	cfg.StorageIntegrity.Runtime.Backpressure.Enabled = true
+	_, _, err = buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, StorageIntegrityRuntimeOptions{
+		StatementSubmitter: &rootRecordingSubmitter{},
+		SourcePreparer:     &rootRecordingPreparer{},
+		StatusQuerier:      rootRecordingStatusQuerier{},
+		PayloadWriter:      &rootRecordingPayloadWriter{},
+		MergeGuard:         &recordingBuildMergeGuard{},
+		SchemaResolver:     bpSchemaResolver(),
+		TableSchemas:       bpSchemas(),
+		PartsPressure:      &fakePartsPressure{},
+	})
+	if err == nil || !strings.Contains(err.Error(), "parts pressure lifecycle") {
+		t.Fatalf("injected pressure without lifecycle err = %v", err)
+	}
+}
+
+func TestBuildStorageIntegrityRuntimeRejectsPhysicalTableNameCollision(t *testing.T) {
+	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatalf("NewRelaySigner: %v", err)
+	}
+	cfg := minimalRouterOnlyCfg(t)
+	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
+	cfg.StorageIntegrity.Runtime.Backpressure.Enabled = true
+	_, _, err = buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, StorageIntegrityRuntimeOptions{
+		StatementSubmitter: &rootRecordingSubmitter{},
+		SourcePreparer:     &rootRecordingPreparer{},
+		StatusQuerier:      rootRecordingStatusQuerier{},
+		PayloadWriter:      &rootRecordingPayloadWriter{},
+		MergeGuard:         &recordingBuildMergeGuard{},
+		SchemaResolver:     bpSchemaResolver(),
+		TableSchemas: []payloadexec.TableSchema{
+			{TableID: "a.b__c"},
+			{TableID: "a__b.c"},
+		},
+		PartsPressure: newBlockingPressureLifecycle(),
+	})
+	if !errors.Is(err, sicore.ErrPhysicalTableNameCollision) {
+		t.Fatalf("colliding physical table outputs err = %v", err)
+	}
+}
+
+func TestBuildStorageIntegrityRuntimeInjectedPressureRefreshesAndPolls(t *testing.T) {
+	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatalf("NewRelaySigner: %v", err)
+	}
+	cfg := minimalRouterOnlyCfg(t)
+	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
+	cfg.StorageIntegrity.Runtime.Backpressure.Enabled = true
+	runner := newBlockingPressureLifecycle()
+	ingress, mergeGuard, err := buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, StorageIntegrityRuntimeOptions{
+		StatementSubmitter: &rootRecordingSubmitter{},
+		SourcePreparer:     &rootRecordingPreparer{},
+		StatusQuerier:      rootRecordingStatusQuerier{},
+		PayloadWriter:      &rootRecordingPayloadWriter{},
+		MergeGuard:         &recordingBuildMergeGuard{},
+		SchemaResolver:     bpSchemaResolver(),
+		TableSchemas:       bpSchemas(),
+		PartsPressure:      runner,
+	})
+	if err != nil {
+		t.Fatalf("buildStorageIntegrityRuntimeConsumer: %v", err)
+	}
+	if ingress.pressureRunner != runner {
+		t.Fatalf("pressure runner = %T, want injected lifecycle", ingress.pressureRunner)
+	}
+	if err := startStorageIntegrityRuntime(context.Background(), ingress, mergeGuard); err != nil {
+		t.Fatalf("startStorageIntegrityRuntime: %v", err)
+	}
+	select {
+	case <-runner.started:
+	case <-time.After(time.Second):
+		t.Fatal("injected pressure Run did not start")
+	}
+	if got := runner.refreshes.Load(); got != 2 {
+		t.Fatalf("startup/recovery refreshes = %d want 2", got)
+	}
+	close(runner.release)
+	ingress.Close()
 }
 
 func TestBuildStorageIntegrityRuntimeRequiresPreparedLookup(t *testing.T) {
@@ -1005,6 +1095,7 @@ func TestStartStorageIntegrityRuntimeFailsClosedOnInitialPartsSnapshot(t *testin
 			MergeGuard:         &recordingBuildMergeGuard{},
 			MergeConn:          &rootPartsConn{err: partsErr},
 			SchemaResolver:     bpSchemaResolver(),
+			TableSchemas:       bpSchemas(),
 		},
 	)
 	if err != nil {
@@ -1048,6 +1139,23 @@ type orderedBuildSubmitter struct {
 	order *preServeOrderRecorder
 }
 
+type orderedBuildPartsPressure struct {
+	order *preServeOrderRecorder
+}
+
+func (p *orderedBuildPartsPressure) Reserve(context.Context, string, []string) (sicore.PartsReservation, error) {
+	return noopPartsReservation{}, nil
+}
+
+func (p *orderedBuildPartsPressure) Refresh(context.Context) error {
+	p.order.add("pressure-refresh")
+	return nil
+}
+
+func (p *orderedBuildPartsPressure) Invalidate() { p.order.add("pressure-invalidate") }
+
+func (p *orderedBuildPartsPressure) Run(ctx context.Context) { <-ctx.Done() }
+
 func (s *orderedBuildSubmitter) SubmitStatement(context.Context, sicore.StatementEnvelope) (sicore.SubmitOutcome, error) {
 	s.order.add("recover")
 	return sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}, nil
@@ -1060,6 +1168,7 @@ func TestStartStorageIntegrityRuntimeRecoversAfterInitialMergeAssert(t *testing.
 	}
 	cfg := minimalRouterOnlyCfg(t)
 	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
+	cfg.StorageIntegrity.Runtime.Backpressure.Enabled = true
 
 	journal, err := sicore.NewFileIntakeJournal(cfg.StorageIntegrity.Runtime.JournalDir)
 	if err != nil {
@@ -1114,6 +1223,7 @@ func TestStartStorageIntegrityRuntimeRecoversAfterInitialMergeAssert(t *testing.
 	}
 
 	order := &preServeOrderRecorder{}
+	pressure := &orderedBuildPartsPressure{order: order}
 	payloadWriter := &rootRecordingPayloadWriter{
 		result: sicore.PayloadPutResult{
 			PayloadRef:         env.PayloadRef,
@@ -1129,9 +1239,12 @@ func TestStartStorageIntegrityRuntimeRecoversAfterInitialMergeAssert(t *testing.
 				source: "snode-A",
 				claim:  sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"},
 			},
-			StatusQuerier: rootRecordingStatusQuerier{},
-			PayloadWriter: payloadWriter,
-			MergeGuard:    &orderedBuildMergeGuard{order: order},
+			StatusQuerier:  rootRecordingStatusQuerier{},
+			PayloadWriter:  payloadWriter,
+			MergeGuard:     &orderedBuildMergeGuard{order: order},
+			SchemaResolver: bpSchemaResolver(),
+			TableSchemas:   bpSchemas(),
+			PartsPressure:  pressure,
 		},
 	)
 	if err != nil {
@@ -1144,8 +1257,9 @@ func TestStartStorageIntegrityRuntimeRecoversAfterInitialMergeAssert(t *testing.
 		t.Fatalf("startStorageIntegrityRuntime: %v", err)
 	}
 	events := order.snapshot()
-	if len(events) < 2 || events[0] != "merge" || events[1] != "recover" {
-		t.Fatalf("preServe events = %v, want [merge recover]", events)
+	wantPrefix := []string{"merge", "pressure-refresh", "recover", "pressure-invalidate", "pressure-refresh"}
+	if len(events) < len(wantPrefix) || strings.Join(events[:len(wantPrefix)], ",") != strings.Join(wantPrefix, ",") {
+		t.Fatalf("preServe events = %v, want prefix %v", events, wantPrefix)
 	}
 	if payloadWriter.calls != 1 {
 		t.Fatalf("recovery payload lease puts = %d, want 1", payloadWriter.calls)
