@@ -2069,7 +2069,7 @@ Expected: every package `ok`; fidelity spike prints its summary line unchanged f
 
 Add to `AGENTS.md` CODE MAP: `| handlers.RewriteDescribe | function | internal/handlers/describe.go | DESCRIBE classification; SI metadata SELECT |`, `| nameresolve.LookupStorageIntegrity | function | internal/nameresolve/resolve.go | SI table lookup consulted before dynamic resolution |`, `| engine.ActionSubquery | const | internal/engine/nodes.go | derived-table substitution used by the SI read surface |`. Add to CONVENTIONS: "Storage-integrity (Spec G) goldens live in `internal/harness/testdata/storage_integrity_cases.json`; the C++ repo carries a byte-identical copy — change both in lockstep." Add the same one-line WHERE TO LOOK rows to `internal/handlers/AGENTS.md` (`storage_integrity.go`, `describe.go`) and `internal/harness/AGENTS.md` (`storage_integrity_golden_test.go`).
 
-- [ ] **Step 3: Commit, PR, release**
+- [x] **Step 3: Commit, PR, release**
 
 ```bash
 git add AGENTS.md README.md internal/handlers/AGENTS.md internal/harness/AGENTS.md
@@ -2684,7 +2684,7 @@ On the box start the server (`$RB "cd $WD && ./build/clickhousegate_rewriter --p
 Run: `POLYGLOT_SQL_FFI_PATH=$PWD/third_party/lib/libpolyglot_sql_ffi.dylib REWRITER_ORACLE_ADDR=localhost:50051 go test ./internal/harness -run TestStorageIntegrityGolden -count=1`
 Expected: `ok` — structured fields identical on both engines; `sql_after_rewrite` exempted only where the corpus says `allow_sql_divergence` (`EXCEPT` paren rendering). Record the run in the PR description.
 
-- [ ] **Step 3: Commit, PR, release**
+- [x] **Step 3: Commit, PR, release**
 
 ```bash
 git add CLAUDE.md AGENTS.md README.md
