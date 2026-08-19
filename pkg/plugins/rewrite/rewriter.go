@@ -14,14 +14,19 @@
 //     the exception message.
 //   - OnClose — evicts and Close()s the per-conn Rewriter.
 //
-// Fail-open posture is unchanged from the previous implementation:
-// any error from Rewrite is logged and the original SQL is forwarded.
+// Ordinary rewrite errors retain the legacy fail-open posture only when no
+// storage-integrity surface is configured. RejectedError and configured-SI
+// classification/acknowledgement failures are returned to the client.
 package rewrite
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"time"
+
+	pb "github.com/housegate/rewriter-proto/gen/pb"
 
 	"github.com/housegate/housegate/pkg/log"
 
@@ -56,6 +61,15 @@ type Plugin struct {
 	// rewrite call is timed regardless of success/failure so operators
 	// can see fail-open latency on the same histogram.
 	Observer Observer
+
+	// FailClosedOnError turns otherwise ordinary rewriter failures into client
+	// Exceptions. It is enabled whenever SI membership is configured, including
+	// for caller-injected factories that do not return RejectedError themselves.
+	FailClosedOnError bool
+
+	// RequiredStorageIntegrityContractVersion is the defense-in-depth response
+	// echo gate for every Rewriter implementation, including custom factories.
+	RequiredStorageIntegrityContractVersion pb.StorageIntegrityContractVersion
 
 	// rewriters caches one Rewriter per session id (int64). Lifetime
 	// is OnQuery-first-touch through OnClose.
@@ -96,8 +110,8 @@ func (p *Plugin) rewriterFor(sess chsession.Session) rewriter.Rewriter {
 	return actual.(rewriter.Rewriter)
 }
 
-// OnQuery routes the query through the rewriter. Fail-open: errors
-// log and the original SQL flows through.
+// OnQuery routes the query through the rewriter. Ordinary errors fail open only
+// when FailClosedOnError is false; RejectedError always fails closed.
 func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	if qctx.Session != nil {
 		snap := qctx.Session.State().Snapshot()
@@ -116,6 +130,15 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 		if snap.Maintenance || snap.PlatformOperator {
 			qctx.RewrittenSQL = qctx.OriginalSQL
 			return nil
+		}
+	}
+	if qctx.Query != nil {
+		mode, ok, err := readModeFromQuery(qctx.Query)
+		if err != nil {
+			return err
+		}
+		if ok {
+			ctx = rewriter.WithReadMode(ctx, mode)
 		}
 	}
 	rw := p.rewriterFor(qctx.Session)
@@ -139,8 +162,23 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	}
 	_, logger := log.FromContext(ctx)
 	if err != nil {
+		var rej *rewriter.RejectedError
+		if errors.As(err, &rej) {
+			logger.Infow("rewriter: statement rejected (fail-closed)", "code", rej.Code.String(), "message", rej.Message)
+			return rej
+		}
+		if p.FailClosedOnError {
+			logger.Errorw("rewriter: classification unavailable with storage-integrity configured (fail-closed)", "error", err)
+			return fmt.Errorf("storage-integrity rewrite classification unavailable: %w", err)
+		}
 		logger.Warne(err, "rewriter: rewrite failed, forwarding original SQL")
 		return nil
+	}
+	if p.RequiredStorageIntegrityContractVersion != pb.StorageIntegrityContractVersion_STORAGE_INTEGRITY_CONTRACT_UNSPECIFIED &&
+		res.StorageIntegrityContractVersion != p.RequiredStorageIntegrityContractVersion {
+		return &rewriter.RejectedError{Code: pb.RewriteCode_RewriteError,
+			Message: fmt.Sprintf("storage-integrity rewriter contract acknowledgement unavailable: got %s, want %s",
+				res.StorageIntegrityContractVersion, p.RequiredStorageIntegrityContractVersion)}
 	}
 	qctx.StatementType = res.StatementType
 	qctx.AccessedTables = res.AccessedTables
@@ -174,6 +212,24 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 		)
 	}
 	return nil
+}
+
+// readModeFromQuery reads SQL_x_read_mode from the per-query settings.
+// ok=false when absent; err when present but invalid. The setting is NOT
+// removed -- like SQL_x_auth_token / SQL_x_payer it flows to ClickHouse as
+// a custom setting (plan deviation D-3).
+func readModeFromQuery(q *chproto.Query) (rewriter.ReadMode, bool, error) {
+	for _, s := range q.Settings {
+		if s.Key != rewriter.ReadModeSettingKey {
+			continue
+		}
+		m, err := rewriter.ParseReadMode(s.Value)
+		if err != nil {
+			return "", false, err
+		}
+		return m, true, nil
+	}
+	return "", false, nil
 }
 
 // OnException reverse-maps any rewritten table/database names in the
@@ -222,6 +278,14 @@ func (p *Plugin) evict(id int64) {
 	}
 }
 
+// RejectUndecodableQuery implements plugin.StrictQueryDecodePlugin. When SI
+// membership is configured, an undecodable Query has no trustworthy
+// classification or v1 acknowledgement and must not take Relay's raw-splice
+// fallback. Empty-SI deployments retain the legacy decode fallback.
+func (p *Plugin) RejectUndecodableQuery() bool {
+	return p != nil && p.FailClosedOnError
+}
+
 // RunOnPeerTrust opts the rewrite plugin out of peer-trusted sessions.
 // The inner SQL arriving on a peer-trusted connection was already
 // rewritten by an upstream housegate (table names resolved to
@@ -239,11 +303,12 @@ func (p *Plugin) RunOnPeerTrust() bool { return false }
 func (p *Plugin) RunOnForward() bool { return false }
 
 var (
-	_ plugin.HelloPlugin         = (*Plugin)(nil)
-	_ plugin.QueryPlugin         = (*Plugin)(nil)
-	_ plugin.ExceptionPlugin     = (*Plugin)(nil)
-	_ plugin.ConnLifecyclePlugin = (*Plugin)(nil)
-	_ plugin.ClosePlugin         = (*Plugin)(nil)
-	_ plugin.PeerTrustAware      = (*Plugin)(nil)
-	_ plugin.ForwardAware        = (*Plugin)(nil)
+	_ plugin.HelloPlugin             = (*Plugin)(nil)
+	_ plugin.QueryPlugin             = (*Plugin)(nil)
+	_ plugin.StrictQueryDecodePlugin = (*Plugin)(nil)
+	_ plugin.ExceptionPlugin         = (*Plugin)(nil)
+	_ plugin.ConnLifecyclePlugin     = (*Plugin)(nil)
+	_ plugin.ClosePlugin             = (*Plugin)(nil)
+	_ plugin.PeerTrustAware          = (*Plugin)(nil)
+	_ plugin.ForwardAware            = (*Plugin)(nil)
 )

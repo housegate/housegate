@@ -79,10 +79,11 @@ func TestStorageIntegrity_AgentSignsEnvelopeV2EndToEnd(t *testing.T) {
 	consumer := &capturingConsumer{}
 	rewriterOpt, rewriterMock := testenv.WithRewriterMock(t)
 	rewriterMock.SetAccessedTables("INSERT INTO "+chEnv.Database+".si_events", []*pb.AccessedTable{{
-		OriginalDatabase: chEnv.Database,
-		OriginalTable:    "si_events",
-		LogicalDatabase:  chEnv.Database,
-		PhysicalDatabase: chEnv.Database,
+		OriginalDatabase:   chEnv.Database,
+		OriginalTable:      "si_events",
+		LogicalDatabase:    chEnv.Database,
+		PhysicalDatabase:   chEnv.Database,
+		IsStorageIntegrity: true,
 	}})
 	server := testenv.StartServerProxy(t, chEnv.Addr,
 		rewriterOpt,

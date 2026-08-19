@@ -15,6 +15,9 @@ go_library(
 
 go_test(
     name = "sqlmeta_test",
-    srcs = ["privilege_category_test.go"],
+    srcs = [
+        "privilege_category_test.go",
+        "statement_type_test.go",
+    ],
     embed = [":sqlmeta"],
 )

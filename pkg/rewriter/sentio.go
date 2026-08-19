@@ -13,13 +13,13 @@ import (
 
 	"github.com/housegate/housegate/pkg/log"
 
-	pb "github.com/housegate/rewriter-proto/gen/pb"
 	"github.com/housegate/housegate/pkg/cluster"
 	"github.com/housegate/housegate/pkg/credentials"
 	"github.com/housegate/housegate/pkg/peer"
 	"github.com/housegate/housegate/pkg/registry"
 	"github.com/housegate/housegate/pkg/route"
 	"github.com/housegate/housegate/pkg/sqlmeta"
+	pb "github.com/housegate/rewriter-proto/gen/pb"
 )
 
 // statementTypeFromProto narrows the protobuf enum to the
@@ -47,11 +47,12 @@ func accessedTablesFromProto(in []*pb.AccessedTable) []sqlmeta.AccessedTable {
 	out := make([]sqlmeta.AccessedTable, len(in))
 	for i, t := range in {
 		out[i] = sqlmeta.AccessedTable{
-			OriginalDatabase: t.GetOriginalDatabase(),
-			OriginalTable:    t.GetOriginalTable(),
-			LogicalDatabase:  t.GetLogicalDatabase(),
-			PhysicalDatabase: t.GetPhysicalDatabase(),
-			IsRemote:         t.GetIsRemote(),
+			OriginalDatabase:   t.GetOriginalDatabase(),
+			OriginalTable:      t.GetOriginalTable(),
+			LogicalDatabase:    t.GetLogicalDatabase(),
+			PhysicalDatabase:   t.GetPhysicalDatabase(),
+			IsRemote:           t.GetIsRemote(),
+			IsStorageIntegrity: t.GetIsStorageIntegrity(),
 		}
 	}
 	return out
@@ -215,6 +216,13 @@ func (f *SentioNetworkFactory) NewRewriter(sess Session) Rewriter {
 	return &sentioRewriter{factory: f, sess: sess}
 }
 
+// StorageIntegrityContractVersion implements StorageIntegrityCapableFactory.
+// The marker is truthful because sentioRewriter requires the exact backend
+// acknowledgement whenever SI membership is configured.
+func (*SentioNetworkFactory) StorageIntegrityContractVersion() pb.StorageIntegrityContractVersion {
+	return StorageIntegrityContractV1
+}
+
 // Close tears down the shared rewrite backend. Per-connection
 // Rewriters share that backend, so Close on the factory ends rewriting
 // for all of them. Safe to call multiple times.
@@ -257,15 +265,14 @@ func (r *sentioRewriter) Close() error {
 //  3. Stash the input SQL so RewriteErrorMessage can use it as
 //     context.
 //
-// Error handling: callers (the rewrite plugin) are expected to be
-// fail-open — log the returned error and forward the original SQL.
-// We return errors for genuine failures (parse error, network drop,
-// InvalidRewriteRequest); UnsupportedStatement is downgraded to
-// (sql, nil) since "rewriter doesn't handle it" is a passthrough
-// signal, not a failure.
+// Error handling: ordinary failures retain the legacy fail-open contract when
+// no SI membership is configured. With SI membership, pre-classification
+// failures and SI-specific rejections return *RejectedError and MUST reach the
+// client as an Exception. Non-SI UnsupportedStatement remains a passthrough
+// result, not a failure.
 func (r *sentioRewriter) Rewrite(ctx context.Context, sql, effectiveAccount string) (RewriteResult, error) {
 	if r.closed.Load() {
-		return RewriteResult{}, fmt.Errorf("rewriter closed")
+		return RewriteResult{}, r.rewriteFailure(fmt.Errorf("rewriter closed"))
 	}
 
 	r.mu.Lock()
@@ -275,12 +282,20 @@ func (r *sentioRewriter) Rewrite(ctx context.Context, sql, effectiveAccount stri
 
 	dbMap, knownPhys, err := r.factory.buildDatabaseMap(effectiveAccount)
 	if err != nil {
-		return RewriteResult{}, fmt.Errorf("build database map: %w", err)
+		return RewriteResult{}, r.rewriteFailure(fmt.Errorf("build database map: %w", err))
 	}
 	logicalToRemote, remoteUpstreams := r.factory.buildRemoteUpstreams(dbMap)
-	dynArgs := buildDynamicArgs(dbMap, knownPhys, r.sess.LogicalDatabaseName(), r.sess.PhysicalDatabaseName(), r.factory.options.Delim, logicalToRemote, remoteUpstreams)
+	mode := r.factory.options.StorageIntegrity.DefaultReadMode
+	if m, ok := ReadModeFromContext(ctx); ok {
+		mode = m
+	}
+	siArgs, err := buildStorageIntegrityArgs(r.factory.options.StorageIntegrity, mode)
+	if err != nil {
+		return RewriteResult{}, err
+	}
+	dynArgs := buildDynamicArgs(dbMap, knownPhys, r.sess.LogicalDatabaseName(), r.sess.PhysicalDatabaseName(), r.factory.options.Delim, logicalToRemote, remoteUpstreams, siArgs)
 
-	if len(dbMap) == 0 && len(knownPhys) == 0 && r.sess.LogicalDatabaseName() == "" {
+	if len(dbMap) == 0 && len(knownPhys) == 0 && r.sess.LogicalDatabaseName() == "" && siArgs == nil {
 		// Nothing to do — no mappings, no session context. No gRPC
 		// call, so classification / accessed-tables / rewrite maps
 		// are unknown.
@@ -293,19 +308,43 @@ func (r *sentioRewriter) Rewrite(ctx context.Context, sql, effectiveAccount stri
 	}
 	resp, err := r.callWithTimeout(ctx, req)
 	if err != nil {
-		return RewriteResult{}, fmt.Errorf("rewrite: %w", err)
+		return RewriteResult{}, r.rewriteFailure(fmt.Errorf("rewrite: %w", err))
+	}
+	if resp == nil {
+		return RewriteResult{}, r.rewriteFailure(fmt.Errorf("rewrite: nil response"))
+	}
+	// Spec G D-8: additive protobuf fields are not proof that the backend
+	// understood SI. An old server can ignore the request and still return
+	// Success, so require an exact positive acknowledgement first.
+	if len(r.factory.options.StorageIntegrity.Tables) > 0 &&
+		resp.GetStorageIntegrityContractVersion() != StorageIntegrityContractV1 {
+		return RewriteResult{}, &RejectedError{Code: pb.RewriteCode_RewriteError,
+			Message: fmt.Sprintf("storage-integrity rewriter contract acknowledgement unavailable: got %s, want %s",
+				resp.GetStorageIntegrityContractVersion(), StorageIntegrityContractV1)}
+	}
+	// Spec G fail-closed rule (plan D-2): a non-Success answer that involves
+	// a storage-integrity table must reach the client as an Exception.
+	if key, si := storageIntegrityAccess(resp.GetOriginalAccessedTables()); si {
+		if resp.GetCode() != pb.RewriteCode_Success {
+			return RewriteResult{}, &RejectedError{Code: resp.GetCode(), Message: resp.GetMessage()}
+		}
+		if resp.GetStatementType() == pb.StatementType_STATEMENT_TYPE_INSERT && !r.factory.options.StorageIntegrity.InsertLaneEnabled {
+			return RewriteResult{}, &RejectedError{Code: pb.RewriteCode_UnsupportedStatement,
+				Message: "storage-integrity table " + key + " accepts writes only through the signed statement lane"}
+		}
 	}
 	switch resp.Code {
 	case pb.RewriteCode_Success:
 		r.maybeUpdateLogicalDatabase(sql, resp)
 		return RewriteResult{
-			SQL:              resp.GetSqlAfterRewrite(),
-			StatementType:    statementTypeFromProto(resp.GetStatementType()),
-			AccessedTables:   accessedTablesFromProto(resp.GetOriginalAccessedTables()),
-			TableRewrites:    resp.GetTableRewrites(),
-			DatabaseRewrites: resp.GetDatabaseRewrites(),
-			PrivilegesDeltas: privilegesDeltasFromProto(resp.GetPrivilegesDeltas()),
-			ExistenceClause:  existenceClauseFromProto(resp.GetExistenceClause()),
+			SQL:                             resp.GetSqlAfterRewrite(),
+			StatementType:                   statementTypeFromProto(resp.GetStatementType()),
+			AccessedTables:                  accessedTablesFromProto(resp.GetOriginalAccessedTables()),
+			TableRewrites:                   resp.GetTableRewrites(),
+			DatabaseRewrites:                resp.GetDatabaseRewrites(),
+			PrivilegesDeltas:                privilegesDeltasFromProto(resp.GetPrivilegesDeltas()),
+			ExistenceClause:                 existenceClauseFromProto(resp.GetExistenceClause()),
+			StorageIntegrityContractVersion: resp.GetStorageIntegrityContractVersion(),
 		}, nil
 	case pb.RewriteCode_UnsupportedStatement:
 		log.Debugw("rewriter unsupported statement, forwarding original SQL", "message", resp.Message)
@@ -316,17 +355,27 @@ func (r *sentioRewriter) Rewrite(ctx context.Context, sql, effectiveAccount stri
 		// existence_clause is accurate once the SQL parses. Propagate
 		// whatever the rewriter set.
 		return RewriteResult{
-			SQL:              sql,
-			StatementType:    statementTypeFromProto(resp.GetStatementType()),
-			AccessedTables:   accessedTablesFromProto(resp.GetOriginalAccessedTables()),
-			TableRewrites:    resp.GetTableRewrites(),
-			DatabaseRewrites: resp.GetDatabaseRewrites(),
-			PrivilegesDeltas: privilegesDeltasFromProto(resp.GetPrivilegesDeltas()),
-			ExistenceClause:  existenceClauseFromProto(resp.GetExistenceClause()),
+			SQL:                             sql,
+			StatementType:                   statementTypeFromProto(resp.GetStatementType()),
+			AccessedTables:                  accessedTablesFromProto(resp.GetOriginalAccessedTables()),
+			TableRewrites:                   resp.GetTableRewrites(),
+			DatabaseRewrites:                resp.GetDatabaseRewrites(),
+			PrivilegesDeltas:                privilegesDeltasFromProto(resp.GetPrivilegesDeltas()),
+			ExistenceClause:                 existenceClauseFromProto(resp.GetExistenceClause()),
+			StorageIntegrityContractVersion: resp.GetStorageIntegrityContractVersion(),
 		}, nil
 	default:
 		return RewriteResult{}, fmt.Errorf("rewriter rejected SQL (code=%s): %s", resp.Code, resp.Message)
 	}
+}
+
+func (r *sentioRewriter) rewriteFailure(err error) error {
+	if len(r.factory.options.StorageIntegrity.Tables) == 0 {
+		return err
+	}
+	return &RejectedError{Code: pb.RewriteCode_RewriteError,
+		Message: "storage-integrity rewrite classification unavailable: " + err.Error(),
+		Cause:   err}
 }
 
 // maybeUpdateLogicalDatabase mirrors a `USE` observation back into
@@ -404,7 +453,8 @@ func (r *sentioRewriter) RewriteErrorMessage(ctx context.Context, message string
 		return message, fmt.Errorf("build database map: %w", err)
 	}
 	logicalToRemote, remoteUpstreams := r.factory.buildRemoteUpstreams(dbMap)
-	dynArgs := buildDynamicArgs(dbMap, knownPhys, r.sess.LogicalDatabaseName(), r.sess.PhysicalDatabaseName(), r.factory.options.Delim, logicalToRemote, remoteUpstreams)
+	siArgs, _ := buildStorageIntegrityArgs(r.factory.options.StorageIntegrity, r.factory.options.StorageIntegrity.DefaultReadMode)
+	dynArgs := buildDynamicArgs(dbMap, knownPhys, r.sess.LogicalDatabaseName(), r.sess.PhysicalDatabaseName(), r.factory.options.Delim, logicalToRemote, remoteUpstreams, siArgs)
 
 	req := &pb.RewriteErrorMessageRequest{
 		Sql:          sql,

@@ -159,6 +159,9 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	if p == nil || !p.enabled || qctx == nil || qctx.Query == nil || qctx.Session == nil {
 		return nil
 	}
+	if !accessesStorageIntegrity(qctx.AccessedTables) {
+		return nil
+	}
 	forwardSQL := qctx.Query.Body
 	signedSQL := qctx.OriginalSQL
 	if signedSQL == "" {
@@ -277,6 +280,15 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 		qctx.SuppressUpstreamExecution = true
 	}
 	return nil
+}
+
+func accessesStorageIntegrity(tables []sqlmeta.AccessedTable) bool {
+	for _, table := range tables {
+		if table.IsStorageIntegrity {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *Plugin) OnClientDataStrict(ctx context.Context, qctx *plugin.QueryContext, raw []byte) error {
@@ -688,7 +700,8 @@ func classifyStorageIntegrityKind(typ sqlmeta.StatementType, sql string) (Kind, 
 		return textKind, true, nil
 	case sqlmeta.StatementTypeSelect, sqlmeta.StatementTypeUse, sqlmeta.StatementTypeShowTables,
 		sqlmeta.StatementTypeShowCreateTable, sqlmeta.StatementTypeExistsTable,
-		sqlmeta.StatementTypeShowDatabases, sqlmeta.StatementTypeUnspecified:
+		sqlmeta.StatementTypeShowDatabases, sqlmeta.StatementTypeDescribe,
+		sqlmeta.StatementTypeUnspecified:
 		if textWrite || textUnsupported {
 			return "", false, fmt.Errorf("storage_integrity statement type mismatch: %s classified as %s", firstKeyword(sql), typ)
 		}
@@ -762,10 +775,12 @@ func resolveTargetTable(qctx *plugin.QueryContext, sql string) (resolvedTableTar
 		resolvedSQLTarget = target.CanonicalID()
 	}
 	matches := make(map[string]resolvedTableTarget)
+	hasNamedMetadata := false
 	for _, table := range qctx.AccessedTables {
 		if strings.TrimSpace(table.OriginalTable) == "" {
 			continue
 		}
+		hasNamedMetadata = true
 		metadataTable, err := normalizeTablePath(sqlident.Quote(table.OriginalTable))
 		if err != nil {
 			return resolvedTableTarget{}, err
@@ -801,7 +816,7 @@ func resolveTargetTable(qctx *plugin.QueryContext, sql string) (resolvedTableTar
 	if len(matches) > 1 {
 		return resolvedTableTarget{}, fmt.Errorf("storage_integrity ambiguous target table %s in rewriter metadata", resolvedSQLTarget)
 	}
-	if len(qctx.AccessedTables) > 0 {
+	if hasNamedMetadata {
 		return resolvedTableTarget{}, fmt.Errorf("storage_integrity target table mismatch: SQL target %s does not match rewriter metadata", resolvedSQLTarget)
 	}
 	return resolvedTableTarget{id: resolvedSQLTarget, database: target.Database, table: target.Table}, nil

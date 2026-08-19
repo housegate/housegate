@@ -45,11 +45,21 @@ rewriter:
   engine: native
 #  service_addr: "localhost:50051"
 #  native_library_path: /path/to/libpolyglot_sql_ffi.dylib  # native only; empty → POLYGLOT_SQL_FFI_PATH env, then system paths
-  native_library_release: v0.6.0   # native only: auto-fetch the FFI lib from rewriter-go releases (cached; native_library_path wins)
+  native_library_release: v0.7.1   # native only: auto-fetch the FFI lib from rewriter-go releases (cached; native_library_path wins)
   native_library_sha256: ""        # optional hard pin for the fetched lib
   timeout: "5s"
   physical_database: testnet
   delimiter: "."
+
+# Storage-integrity table membership and read policy. The merge guard derives
+# both physical homes from each logical <database>.<table> id.
+# storage_integrity:
+#   tables: ["tenant.events"]        # logical <db>.<table> ids; hg_unsafe/hg_safe.tenant__events are derived
+#   read:
+#     default_mode: safe             # safe | unsafe_latest; per query: SETTINGS SQL_x_read_mode = 'unsafe_latest'
+#   runtime:
+#     merge_guard:
+#       reassert_interval: 30s
 
 # Optional replication-plane forwarding. Disabled here by default; uncomment in
 # deployments where ClickHouse should open replication-plane TCP only to its

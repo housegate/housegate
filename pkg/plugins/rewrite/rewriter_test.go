@@ -2,8 +2,12 @@ package rewrite
 
 import (
 	"context"
+	"errors"
 	"net"
+	"strings"
 	"testing"
+
+	pb "github.com/housegate/rewriter-proto/gen/pb"
 
 	"github.com/housegate/housegate/pkg/chproto"
 	"github.com/housegate/housegate/pkg/chsession"
@@ -18,22 +22,41 @@ func TestPlugin_RunOnForward_False(t *testing.T) {
 	}
 }
 
+func TestPlugin_RejectUndecodableQueryFollowsConfiguredSIPolicy(t *testing.T) {
+	p := &Plugin{}
+	var strict plugin.StrictQueryDecodePlugin = p
+	if strict.RejectUndecodableQuery() {
+		t.Fatal("empty-SI rewrite plugin must retain the legacy decode fallback")
+	}
+	p.FailClosedOnError = true
+	if !strict.RejectUndecodableQuery() {
+		t.Fatal("configured-SI rewrite plugin must reject undecodable Query packets")
+	}
+}
+
 // fakeRewriter is a test-only rewriter.Rewriter that records the number
 // of Rewrite calls and returns a fixed canned SQL. The canned SQL is
 // distinct from any input the tests pass in so a regression that lets
 // the rewriter run when it should be skipped will be visible as a
 // changed RewrittenSQL.
 type fakeRewriter struct {
-	out                  string
-	rewriteCalls         int
-	errMsgCalls          int
-	lastEffectiveAccount string
+	out                             string
+	err                             error
+	rewriteCalls                    int
+	errMsgCalls                     int
+	lastCtx                         context.Context
+	lastEffectiveAccount            string
+	storageIntegrityContractVersion pb.StorageIntegrityContractVersion
 }
 
-func (f *fakeRewriter) Rewrite(_ context.Context, _, effectiveAccount string) (rewriter.RewriteResult, error) {
+func (f *fakeRewriter) Rewrite(ctx context.Context, _, effectiveAccount string) (rewriter.RewriteResult, error) {
 	f.rewriteCalls++
+	f.lastCtx = ctx
 	f.lastEffectiveAccount = effectiveAccount
-	return rewriter.RewriteResult{SQL: f.out}, nil
+	if f.err != nil {
+		return rewriter.RewriteResult{}, f.err
+	}
+	return rewriter.RewriteResult{SQL: f.out, StorageIntegrityContractVersion: f.storageIntegrityContractVersion}, nil
 }
 
 func (f *fakeRewriter) RewriteErrorMessage(_ context.Context, message string) (string, error) {
@@ -165,5 +188,108 @@ func TestOnQuery_NonMaintenanceRunsRewriter(t *testing.T) {
 	}
 	if qctx.RewrittenSQL != "REWRITTEN-SQL" {
 		t.Errorf("RewrittenSQL=%q, want %q", qctx.RewrittenSQL, "REWRITTEN-SQL")
+	}
+}
+
+func TestOnQuery_ReadModeSettingIsCarriedInContext(t *testing.T) {
+	rw := &fakeRewriter{out: "REWRITTEN"}
+	p := &Plugin{Factory: &fakeFactory{rw: rw}}
+	sess := newSessionForTest(t, 40)
+	qctx := &plugin.QueryContext{Session: sess, OriginalSQL: "SELECT 1",
+		Query: &chproto.Query{Body: "SELECT 1", Settings: []chproto.Setting{{Key: rewriter.ReadModeSettingKey, Value: "'unsafe_latest'", Custom: true}}}}
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatal(err)
+	}
+	if m, ok := rewriter.ReadModeFromContext(rw.lastCtx); !ok || m != rewriter.ReadModeUnsafeLatest {
+		t.Fatalf("ctx read mode = %q %v", m, ok)
+	}
+	// Setting is left in place (D-3), like every other SQL_x_* key.
+	if len(qctx.Query.Settings) != 1 {
+		t.Fatalf("settings must not be stripped: %v", qctx.Query.Settings)
+	}
+}
+
+func TestOnQuery_InvalidReadModeIsAnException(t *testing.T) {
+	rw := &fakeRewriter{out: "REWRITTEN"}
+	p := &Plugin{Factory: &fakeFactory{rw: rw}}
+	sess := newSessionForTest(t, 41)
+	qctx := &plugin.QueryContext{Session: sess, OriginalSQL: "SELECT 1",
+		Query: &chproto.Query{Body: "SELECT 1", Settings: []chproto.Setting{{Key: rewriter.ReadModeSettingKey, Value: "latest"}}}}
+	err := p.OnQuery(context.Background(), qctx)
+	if err == nil || !strings.Contains(err.Error(), "SQL_x_read_mode") {
+		t.Fatalf("err = %v, want invalid-mode rejection", err)
+	}
+	if rw.rewriteCalls != 0 {
+		t.Fatal("rewriter must not run on an invalid mode")
+	}
+}
+
+func TestOnQuery_RejectedErrorFailsClosed(t *testing.T) {
+	rw := &fakeRewriter{err: &rewriter.RejectedError{Code: pb.RewriteCode_RewriteError, Message: "reserved column _hg_row_id is not addressable"}}
+	p := &Plugin{Factory: &fakeFactory{rw: rw}}
+	sess := newSessionForTest(t, 42)
+	qctx := &plugin.QueryContext{Session: sess, OriginalSQL: "SELECT _hg_row_id FROM db1.t", Query: &chproto.Query{Body: "SELECT _hg_row_id FROM db1.t"}}
+	err := p.OnQuery(context.Background(), qctx)
+	if err == nil || !strings.Contains(err.Error(), "reserved column _hg_row_id") {
+		t.Fatalf("err = %v, want the rewriter's rejection surfaced", err)
+	}
+}
+
+func TestOnQuery_OrdinaryErrorStaysFailOpenWhenNoSISurfaceIsConfigured(t *testing.T) {
+	rw := &fakeRewriter{err: errors.New("transport down")}
+	p := &Plugin{Factory: &fakeFactory{rw: rw}}
+	sess := newSessionForTest(t, 43)
+	qctx := &plugin.QueryContext{Session: sess, OriginalSQL: "SELECT 1", Query: &chproto.Query{Body: "SELECT 1"}}
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("ordinary rewriter errors must stay fail-open: %v", err)
+	}
+	if qctx.Query.Body != "SELECT 1" {
+		t.Fatalf("body = %q", qctx.Query.Body)
+	}
+}
+
+func TestOnQuery_OrdinaryErrorFailsClosedWhenSISurfaceIsConfigured(t *testing.T) {
+	rw := &fakeRewriter{err: errors.New("transport down")}
+	p := &Plugin{Factory: &fakeFactory{rw: rw}, FailClosedOnError: true}
+	sess := newSessionForTest(t, 44)
+	qctx := &plugin.QueryContext{Session: sess, OriginalSQL: "INSERT INTO db1.t FORMAT Native", Query: &chproto.Query{Body: "INSERT INTO db1.t FORMAT Native"}}
+	err := p.OnQuery(context.Background(), qctx)
+	if err == nil || !strings.Contains(err.Error(), "classification unavailable") {
+		t.Fatalf("err = %v, want configured-SI fail-closed error", err)
+	}
+}
+
+func TestOnQuery_MissingContractAcknowledgementFromCustomRewriterFailsClosed(t *testing.T) {
+	rw := &fakeRewriter{out: "SELECT 1"} // nil error, zero acknowledgement
+	p := &Plugin{Factory: &fakeFactory{rw: rw},
+		RequiredStorageIntegrityContractVersion: rewriter.StorageIntegrityContractV1}
+	sess := newSessionForTest(t, 45)
+	qctx := &plugin.QueryContext{Session: sess, OriginalSQL: "SELECT 1", Query: &chproto.Query{Body: "SELECT 1"}}
+	err := p.OnQuery(context.Background(), qctx)
+	if err == nil || !strings.Contains(err.Error(), "contract acknowledgement") {
+		t.Fatalf("err = %v, want missing-ack rejection", err)
+	}
+}
+
+func TestOnQuery_WrongContractAcknowledgementFromCustomRewriterFailsClosed(t *testing.T) {
+	rw := &fakeRewriter{out: "SELECT 1", storageIntegrityContractVersion: pb.StorageIntegrityContractVersion(99)}
+	p := &Plugin{Factory: &fakeFactory{rw: rw},
+		RequiredStorageIntegrityContractVersion: rewriter.StorageIntegrityContractV1}
+	sess := newSessionForTest(t, 46)
+	qctx := &plugin.QueryContext{Session: sess, OriginalSQL: "SELECT 1", Query: &chproto.Query{Body: "SELECT 1"}}
+	err := p.OnQuery(context.Background(), qctx)
+	if err == nil || !strings.Contains(err.Error(), "contract acknowledgement") {
+		t.Fatalf("err = %v, want wrong-ack rejection", err)
+	}
+}
+
+func TestOnQuery_AcknowledgedCustomRewriterAllowsNormalQuery(t *testing.T) {
+	rw := &fakeRewriter{out: "SELECT 1", storageIntegrityContractVersion: rewriter.StorageIntegrityContractV1}
+	p := &Plugin{Factory: &fakeFactory{rw: rw},
+		RequiredStorageIntegrityContractVersion: rewriter.StorageIntegrityContractV1}
+	sess := newSessionForTest(t, 47)
+	qctx := &plugin.QueryContext{Session: sess, OriginalSQL: "SELECT 1", Query: &chproto.Query{Body: "SELECT 1"}}
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("acknowledged normal query: %v", err)
 	}
 }

@@ -19,6 +19,7 @@ go_library(
         "//pkg/network",
         "//pkg/plugins/agent",
         "//pkg/registry",
+        "//pkg/rewriter",
         "@com_github_alicebob_miniredis_v2//:miniredis",
         "@com_github_housegate_rewriter_proto//gen/pb",
         "@com_github_redis_go_redis_v9//:go-redis",

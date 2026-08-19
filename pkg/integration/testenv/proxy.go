@@ -17,6 +17,7 @@ import (
 	"github.com/housegate/housegate/pkg/config"
 	"github.com/housegate/housegate/pkg/network"
 	"github.com/housegate/housegate/pkg/registry"
+	"github.com/housegate/housegate/pkg/rewriter"
 )
 
 // TestProxy is a running in-process housegate proxy started via RunWith.
@@ -37,6 +38,12 @@ type TestProxy struct {
 
 // ProxyOption mutates the Config and/or Options before the proxy starts.
 type ProxyOption func(cfg *config.Config, opts *housegate.Options)
+
+// WithStorageIntegrityReadState wires the promotion-state port the SI read
+// rewrite consults in unsafe_latest mode.
+func WithStorageIntegrityReadState(rs rewriter.StorageIntegrityReadState) ProxyOption {
+	return func(_ *config.Config, opts *housegate.Options) { opts.StorageIntegrityReadState = rs }
+}
 
 // WithConfigMutator returns a ProxyOption that only touches Config —
 // useful for one-off field overrides (e.g. flipping auth on for an

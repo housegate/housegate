@@ -5,16 +5,71 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/housegate/housegate/pkg/rewriter"
 )
 
-const defaultStorageIntegrityMaxPayloadBytes uint64 = 64 << 20
+const (
+	defaultStorageIntegrityMaxPayloadBytes uint64 = 64 << 20
+
+	// Physical homes of storage-integrity tables (Spec C D2 naming freeze).
+	StorageIntegrityUnsafeDatabase = "hg_unsafe"
+	StorageIntegritySafeDatabase   = "hg_safe"
+)
+
+// StorageIntegrityPhysicalTable maps a logical table id "<db>.<table>" to
+// the physical table name used under hg_unsafe / hg_safe / hg_promote --
+// the same rule as arbiter-core's snode.CHTableName (Spec C D2). Kept here
+// (one line) so housegate does not import arbiter-core.
+func StorageIntegrityPhysicalTable(tableID string) string {
+	return strings.ReplaceAll(tableID, ".", "__")
+}
+
+// SplitStorageIntegrityTableID validates and splits a logical table id using
+// the same simple-identifier grammar as the storage-integrity v1 rewriter:
+// exactly one dot and [A-Za-z_][A-Za-z0-9_]* on both sides.
+func SplitStorageIntegrityTableID(id string) (string, string, bool) {
+	parts := strings.Split(id, ".")
+	if len(parts) != 2 || !storageIntegritySimpleIdentifier(parts[0]) || !storageIntegritySimpleIdentifier(parts[1]) {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
+}
+
+func storageIntegritySimpleIdentifier(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		alpha := c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+		digit := c >= '0' && c <= '9'
+		if !alpha && !(i > 0 && digit) {
+			return false
+		}
+	}
+	return true
+}
 
 // StorageIntegrityConfig owns HouseGate-local storage-integrity toggles.
 type StorageIntegrityConfig struct {
+	// Tables is the explicit SI membership (Spec G D4): logical
+	// "<database>.<table>" ids. Shared by the merge guard (which guards
+	// hg_safe.<phys> and hg_unsafe.<phys>), the ingress, and the read
+	// rewrite. Renamed from runtime.merge_guard.tables.
+	Tables     []string                         `json:"tables"      yaml:"tables"`
+	Read       StorageIntegrityReadConfig       `json:"read"        yaml:"read"`
 	Ingress    StorageIntegrityIngressConfig    `json:"ingress"     yaml:"ingress"`
 	Runtime    StorageIntegrityRuntimeConfig    `json:"runtime"     yaml:"runtime"`
 	SafeMerges StorageIntegritySafeMergesConfig `json:"safe_merges" yaml:"safe_merges"`
 	Agent      StorageIntegrityAgentConfig      `json:"agent"       yaml:"agent"`
+}
+
+// StorageIntegrityReadConfig is the read-surface policy (Spec G D1).
+type StorageIntegrityReadConfig struct {
+	// DefaultMode is "safe" (default when empty) or "unsafe_latest"; a
+	// query may override it with the SQL_x_read_mode setting.
+	DefaultMode string `json:"default_mode" yaml:"default_mode"`
 }
 
 // StorageIntegrityAgentConfig turns on the agent-mode statement plugin
@@ -74,11 +129,13 @@ type StorageIntegrityRuntimePayloadLeaseConfig struct {
 	RefreshBefore   Duration `json:"refresh_before"   yaml:"refresh_before"`
 }
 
-// StorageIntegrityRuntimeMergeGuardConfig is the production table set that
-// HouseGate guards with table-scoped SYSTEM STOP MERGES at startup.
+// StorageIntegrityRuntimeMergeGuardConfig tunes the startup SYSTEM STOP
+// MERGES guard; the guarded table set is StorageIntegrityConfig.Tables.
 type StorageIntegrityRuntimeMergeGuardConfig struct {
-	ReassertInterval Duration                                  `json:"reassert_interval" yaml:"reassert_interval"`
-	Tables           []StorageIntegrityRuntimeMergeTableConfig `json:"tables"            yaml:"tables"`
+	ReassertInterval Duration `json:"reassert_interval" yaml:"reassert_interval"`
+	// LegacyTables only exists to catch the pre-Spec-G key and turn it into
+	// a pointed rename error instead of a silently unguarded deployment.
+	LegacyTables []StorageIntegrityRuntimeMergeTableConfig `json:"tables" yaml:"tables"`
 }
 
 // StorageIntegrityRuntimeMergeTableConfig identifies one ClickHouse table whose
@@ -121,8 +178,8 @@ func defaultStorageIntegrityConfig() StorageIntegrityConfig {
 			},
 			Backpressure: StorageIntegrityRuntimeBackpressureConfig{
 				Enabled:               true,
-				UnsafeDatabase:        "hg_unsafe",
-				SafeDatabase:          "hg_safe",
+				UnsafeDatabase:        StorageIntegrityUnsafeDatabase,
+				SafeDatabase:          StorageIntegritySafeDatabase,
 				PollInterval:          Duration{Duration: 2 * time.Second},
 				SoftPartsPerPartition: 2400,
 				HardPartsPerPartition: 2950,
@@ -136,16 +193,51 @@ func defaultStorageIntegrityConfig() StorageIntegrityConfig {
 }
 
 func (c StorageIntegrityConfig) validate(mode Mode) error {
+	var errs []error
 	if c.Agent.Enabled && mode != ModeAgent {
-		return errors.New("storage_integrity: storage_integrity.agent is agent mode only")
+		errs = append(errs, errors.New("storage_integrity.agent is agent mode only"))
+	}
+	if len(c.Runtime.MergeGuard.LegacyTables) > 0 {
+		errs = append(errs, errors.New("storage_integrity.runtime.merge_guard.tables was renamed to storage_integrity.tables (list of logical <database>.<table> ids; hg_unsafe/hg_safe physical names are derived)"))
+	}
+	if len(c.Tables) > 0 && mode != ModeServer {
+		errs = append(errs, errors.New("storage_integrity.tables is server mode only"))
+	}
+	seen := make(map[string]bool, len(c.Tables))
+	physicalOwners := make(map[string]string, len(c.Tables))
+	for i, id := range c.Tables {
+		_, _, valid := SplitStorageIntegrityTableID(id)
+		if !valid {
+			errs = append(errs, fmt.Errorf("storage_integrity.tables[%d] %q must be a logical <database>.<table> id", i, id))
+		}
+		if seen[id] {
+			errs = append(errs, fmt.Errorf("storage_integrity.tables[%d] duplicates %q", i, id))
+		}
+		seen[id] = true
+		if valid {
+			physical := StorageIntegrityPhysicalTable(id)
+			if previous, ok := physicalOwners[physical]; ok && previous != id {
+				errs = append(errs, fmt.Errorf("storage_integrity.tables[%d] %q collides with %q at physical table %q", i, id, previous, physical))
+			} else {
+				physicalOwners[physical] = id
+			}
+		}
+	}
+	if c.Read.DefaultMode != "" {
+		mode, err := rewriter.ParseReadMode(c.Read.DefaultMode)
+		if err != nil || string(mode) != c.Read.DefaultMode {
+			errs = append(errs, fmt.Errorf("storage_integrity.read.default_mode %q must be safe or unsafe_latest", c.Read.DefaultMode))
+		}
+	}
+	if c.Read.DefaultMode != "" && len(c.Tables) == 0 {
+		errs = append(errs, errors.New("storage_integrity.read.default_mode requires storage_integrity.tables"))
 	}
 	if !c.Ingress.Enabled {
 		if c.Runtime.Enabled {
-			return errors.New("storage_integrity: storage_integrity.runtime.enabled requires storage_integrity.ingress.enabled")
+			errs = append(errs, errors.New("storage_integrity.runtime.enabled requires storage_integrity.ingress.enabled"))
 		}
-		return nil
+		return joinStorageIntegrityErrs(errs)
 	}
-	var errs []error
 	if mode != ModeServer {
 		errs = append(errs, errors.New("storage_integrity.ingress is server mode only"))
 	}
@@ -186,27 +278,23 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 		if c.Runtime.MergeGuard.ReassertInterval.Duration <= 0 {
 			errs = append(errs, errors.New("storage_integrity.runtime.merge_guard.reassert_interval must be > 0 when storage_integrity.runtime.enabled"))
 		}
-		if len(c.Runtime.MergeGuard.Tables) == 0 {
-			errs = append(errs, errors.New("storage_integrity.runtime.merge_guard.tables is required when storage_integrity.runtime.enabled"))
-		}
-		for i, table := range c.Runtime.MergeGuard.Tables {
-			if strings.TrimSpace(table.Database) == "" {
-				errs = append(errs, fmt.Errorf("storage_integrity.runtime.merge_guard.tables[%d].database is required", i))
-			}
-			if strings.TrimSpace(table.Table) == "" {
-				errs = append(errs, fmt.Errorf("storage_integrity.runtime.merge_guard.tables[%d].table is required", i))
-			}
+		if len(c.Tables) == 0 {
+			errs = append(errs, errors.New("storage_integrity.tables is required when storage_integrity.runtime.enabled"))
 		}
 		if bp := c.Runtime.Backpressure; bp.Enabled {
 			unsafeDatabase := strings.TrimSpace(bp.UnsafeDatabase)
 			safeDatabase := strings.TrimSpace(bp.SafeDatabase)
 			if unsafeDatabase == "" {
 				errs = append(errs, errors.New("storage_integrity.runtime.backpressure.unsafe_database is required when backpressure is enabled"))
+			} else if unsafeDatabase != StorageIntegrityUnsafeDatabase {
+				errs = append(errs, fmt.Errorf("storage_integrity.runtime.backpressure.unsafe_database must be %q", StorageIntegrityUnsafeDatabase))
 			}
 			if safeDatabase == "" {
 				errs = append(errs, errors.New("storage_integrity.runtime.backpressure.safe_database is required when backpressure is enabled"))
 			} else if safeDatabase == unsafeDatabase {
 				errs = append(errs, errors.New("storage_integrity.runtime.backpressure.safe_database must differ from unsafe_database"))
+			} else if safeDatabase != StorageIntegritySafeDatabase {
+				errs = append(errs, fmt.Errorf("storage_integrity.runtime.backpressure.safe_database must be %q", StorageIntegritySafeDatabase))
 			}
 			if bp.PollInterval.Duration <= 0 {
 				errs = append(errs, errors.New("storage_integrity.runtime.backpressure.poll_interval must be > 0"))
@@ -219,6 +307,10 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 			}
 		}
 	}
+	return joinStorageIntegrityErrs(errs)
+}
+
+func joinStorageIntegrityErrs(errs []error) error {
 	if joined := errors.Join(errs...); joined != nil {
 		return fmt.Errorf("storage_integrity: %w", joined)
 	}

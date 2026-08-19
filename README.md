@@ -167,7 +167,7 @@ The rewriter is the canonical owner of physical/logical database mapping. Every 
 
 - **Two-phase Rewrite.** Phase 1 calls the rewriter backend with empty options to get back the AST-parsed accessed table names. Phase 2 builds `RewriteTableForSelectStmtArgs` (sentio-network table-name resolution via `SentioNetworkTableMapper`) and `RewriteTableForDynamicArgs` (auth-filtered `database_map`, plus `remote_upstreams` for logicals bound to other indexers) and re-calls the rewriter.
 - **Permission-aware `database_map`.** Only databases the connection's account has read/write/admin permission on appear; tables in inaccessible databases are not addressable.
-- **Fail-open.** A backend error or `UnsupportedStatement` falls back to the original SQL with a debug log; rewriter flakiness never blocks queries.
+- **Fail-open only without an SI surface.** With no `storage_integrity.tables`, a backend error or `UnsupportedStatement` falls back to the original SQL. Configured SI membership requires a contract-v1-capable backend at startup and fails closed on every untrustworthy response.
 - **Error reverse-mapping.** When upstream returns an `Exception` referring to rewritten table/database names, the same per-connection Rewriter re-maps the message back via `RewriteErrorMessage`.
 - **wire-level `hello.Database` rewrite.** `OnHello` substitutes `hello.Database` with `rewriter.physical_database`; the user-typed value is preserved in `SessionState.LogicalDatabase`.
 
@@ -181,6 +181,26 @@ The rewriter is the canonical owner of physical/logical database mapping. Every 
 | `rewriter.timeout` | duration | No | `5s` | Per-call gRPC timeout |
 | `rewriter.physical_database` | string | No | `` | The single physical ClickHouse database that hosts every logical database in this deployment. Empty disables both `database_map` and the `hello.Database` substitution |
 | `rewriter.delimiter` | string | No | `_` | Separator inserted between `<logical>` and `<original_table>` |
+
+### `storage_integrity` — Protected Table Read Policy
+
+`storage_integrity.tables` is the shared logical membership list. HouseGate derives both guarded physical homes from each `<database>.<table>` id; operators must not configure `runtime.merge_guard.tables` separately. An empty `read.default_mode` has the same safe behavior as `safe`.
+
+- `safe` reads only `hg_safe.<database>__<table>`.
+- `unsafe_latest` unions safe rows with staged `hg_unsafe` rows, excluding unsafe parts already copied into safe but not yet cleanup-acknowledged. It requires a co-located promotion journal through `Options.StorageIntegrityReadState`; HouseGate never silently degrades it to `safe`.
+- `SETTINGS SQL_x_read_mode = 'safe'|'unsafe_latest'` overrides the default for one query. The custom setting is forwarded unchanged; an unknown value is rejected.
+- `SELECT *` and DESCRIBE hide the protocol-owned `_hg_row_id`; addressing that identifier directly is rejected. Non-INSERT writes, DDL, and DCL touching an SI table are rejected. INSERT is admitted only through the signed statement lane.
+- SI requests require the rewriter's exact contract-v1 acknowledgement. Missing/old backends, unavailable classification, read-state failures, and SI-classified rewriter errors all fail closed; ordinary tables retain the legacy fail-open behavior when the SI list is empty.
+
+```yaml
+storage_integrity:
+  tables: ["tenant.events"]        # logical <db>.<table> ids; hg_unsafe/hg_safe.tenant__events are derived
+  read:
+    default_mode: safe             # safe | unsafe_latest; per query: SETTINGS SQL_x_read_mode = 'unsafe_latest'
+  runtime:
+    merge_guard:
+      reassert_interval: 30s
+```
 
 ### `agent` — Agent-Mode Settings
 

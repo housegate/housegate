@@ -93,6 +93,26 @@ func TestSentioRewriter_SuccessPopulatesResult(t *testing.T) {
 	}
 }
 
+func TestSentioRewriter_AccessedTablesCarryStorageIntegrityFlag(t *testing.T) {
+	be := &fakeBackend{resp: &pb.RewriteSQLResponse{
+		Code:            pb.RewriteCode_Success,
+		SqlAfterRewrite: "SELECT 1",
+		StatementType:   pb.StatementType_STATEMENT_TYPE_SELECT,
+		OriginalAccessedTables: []*pb.AccessedTable{{
+			OriginalDatabase:   "db1",
+			OriginalTable:      "t",
+			IsStorageIntegrity: true,
+		}},
+	}}
+	res, err := newFakeFactory(be).NewRewriter(&fakeSession{}).Rewrite(context.Background(), "SELECT a FROM db1.t", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.AccessedTables) != 1 || !res.AccessedTables[0].IsStorageIntegrity {
+		t.Fatalf("AccessedTables = %+v, want IsStorageIntegrity=true", res.AccessedTables)
+	}
+}
+
 func TestSentioRewriter_UnsupportedForwardsOriginal(t *testing.T) {
 	be := &fakeBackend{resp: &pb.RewriteSQLResponse{
 		Code:    pb.RewriteCode_UnsupportedStatement,
@@ -228,5 +248,176 @@ func TestSentioRewriter_RewriteErrorMessage(t *testing.T) {
 	}
 	if be.lastErrReq.GetSql() != "SELECT 1" {
 		t.Errorf("request sql = %q, want the stashed last SQL", be.lastErrReq.GetSql())
+	}
+}
+
+func acknowledgedSIResponse(resp *pb.RewriteSQLResponse) *pb.RewriteSQLResponse {
+	resp.StorageIntegrityContractVersion = StorageIntegrityContractV1
+	return resp
+}
+
+func newSIFactory(be backend, rs StorageIntegrityReadState, insertLane bool) *SentioNetworkFactory {
+	f := newFakeFactory(be)
+	f.options.StorageIntegrity = siOpts(rs)
+	f.options.StorageIntegrity.InsertLaneEnabled = insertLane
+	return f
+}
+
+func TestSentioRewriter_ShipsStorageIntegrityArgs(t *testing.T) {
+	be := &fakeBackend{resp: acknowledgedSIResponse(&pb.RewriteSQLResponse{Code: pb.RewriteCode_Success, SqlAfterRewrite: "x", StatementType: pb.StatementType_STATEMENT_TYPE_SELECT})}
+	rs := &fakeReadState{parts: map[string][]string{"db1.t": {"all_1_1_0"}}}
+	rw := newSIFactory(be, rs, true).NewRewriter(&fakeSession{})
+	if _, err := rw.Rewrite(context.Background(), "SELECT a FROM db1.t", ""); err != nil {
+		t.Fatal(err)
+	}
+	si := be.lastReq.GetOptions()[0].GetTableNameArgs().GetDynamicArgs().GetStorageIntegrity()
+	if si.GetReadMode() != pb.StorageIntegrityArgs_READ_MODE_SAFE || si.GetContractVersion() != StorageIntegrityContractV1 || si.GetTables()["db1.t"].GetSafeTable() != "hg_safe.db1__t" {
+		t.Fatalf("default-mode args = %v", si)
+	}
+	ctx := WithReadMode(context.Background(), ReadModeUnsafeLatest)
+	if _, err := rw.Rewrite(ctx, "SELECT a FROM db1.t", ""); err != nil {
+		t.Fatal(err)
+	}
+	si = be.lastReq.GetOptions()[0].GetTableNameArgs().GetDynamicArgs().GetStorageIntegrity()
+	if si.GetReadMode() != pb.StorageIntegrityArgs_READ_MODE_UNSAFE_LATEST || len(si.GetTables()["db1.t"].GetExcludedUnsafeParts()) != 1 {
+		t.Fatalf("per-query unsafe_latest args = %v", si)
+	}
+}
+
+func TestSentioRewriter_UnsafeLatestWithoutPortIsRejectedBeforeBackend(t *testing.T) {
+	be := &fakeBackend{resp: acknowledgedSIResponse(&pb.RewriteSQLResponse{Code: pb.RewriteCode_Success})}
+	rw := newSIFactory(be, nil, true).NewRewriter(&fakeSession{})
+	_, err := rw.Rewrite(WithReadMode(context.Background(), ReadModeUnsafeLatest), "SELECT 1", "")
+	var rej *RejectedError
+	if !errors.As(err, &rej) {
+		t.Fatalf("err = %v, want RejectedError", err)
+	}
+	if be.lastReq != nil {
+		t.Fatal("backend must not be called when the mode is unavailable")
+	}
+}
+
+func TestSentioRewriter_StorageIntegrityRejectIsFailClosed(t *testing.T) {
+	for _, code := range []pb.RewriteCode{pb.RewriteCode_UnsupportedStatement, pb.RewriteCode_RewriteError} {
+		be := &fakeBackend{resp: acknowledgedSIResponse(&pb.RewriteSQLResponse{
+			Code: code, Message: "storage-integrity table db1.t accepts writes only through the signed statement lane",
+			OriginalAccessedTables: []*pb.AccessedTable{{OriginalDatabase: "db1", OriginalTable: "t", IsStorageIntegrity: true}},
+		})}
+		rw := newSIFactory(be, nil, true).NewRewriter(&fakeSession{})
+		_, err := rw.Rewrite(context.Background(), "DROP TABLE db1.t", "")
+		var rej *RejectedError
+		if !errors.As(err, &rej) || rej.Code != code || !strings.Contains(rej.Message, "signed statement lane") {
+			t.Fatalf("code %v: err = %v, want RejectedError carrying the rewriter message", code, err)
+		}
+	}
+	// Non-SI Unsupported keeps today's pass-through contract.
+	be := &fakeBackend{resp: acknowledgedSIResponse(&pb.RewriteSQLResponse{Code: pb.RewriteCode_UnsupportedStatement, Message: "nope",
+		OriginalAccessedTables: []*pb.AccessedTable{{OriginalDatabase: "other", OriginalTable: "u"}}})}
+	res, err := newSIFactory(be, nil, true).NewRewriter(&fakeSession{}).Rewrite(context.Background(), "OPTIMIZE TABLE other.u", "")
+	if err != nil || res.SQL != "OPTIMIZE TABLE other.u" || res.StorageIntegrityContractVersion != StorageIntegrityContractV1 {
+		t.Fatalf("non-SI unsupported must pass through: %v %v", res, err)
+	}
+}
+
+func TestSentioRewriter_OldSuccessfulBackendWithoutSIAcknowledgementFailsClosed(t *testing.T) {
+	// Simulates an older protobuf server: it ignores StorageIntegrityArgs,
+	// returns Success, and leaves the additive response field at zero.
+	be := &fakeBackend{resp: &pb.RewriteSQLResponse{Code: pb.RewriteCode_Success, SqlAfterRewrite: "SELECT 1"}}
+	_, err := newSIFactory(be, nil, true).NewRewriter(&fakeSession{}).Rewrite(context.Background(), "SELECT 1", "")
+	var rej *RejectedError
+	if !errors.As(err, &rej) || !strings.Contains(rej.Message, "contract acknowledgement") {
+		t.Fatalf("err = %v, want fail-closed missing-ack RejectedError", err)
+	}
+}
+
+func TestSentioRewriter_BackendWithWrongSIAcknowledgementFailsClosed(t *testing.T) {
+	be := &fakeBackend{resp: &pb.RewriteSQLResponse{
+		Code: pb.RewriteCode_Success, SqlAfterRewrite: "SELECT 1",
+		StorageIntegrityContractVersion: pb.StorageIntegrityContractVersion(99),
+	}}
+	_, err := newSIFactory(be, nil, true).NewRewriter(&fakeSession{}).Rewrite(context.Background(), "SELECT 1", "")
+	var rej *RejectedError
+	if !errors.As(err, &rej) || !strings.Contains(rej.Message, "contract acknowledgement") {
+		t.Fatalf("err = %v, want fail-closed wrong-ack RejectedError", err)
+	}
+}
+
+func TestSentioRewriter_AcknowledgedBackendAllowsNonSITableQuery(t *testing.T) {
+	be := &fakeBackend{resp: acknowledgedSIResponse(&pb.RewriteSQLResponse{
+		Code: pb.RewriteCode_Success, SqlAfterRewrite: "SELECT 1",
+		OriginalAccessedTables: []*pb.AccessedTable{{OriginalDatabase: "system", OriginalTable: "one"}},
+	})}
+	res, err := newSIFactory(be, nil, true).NewRewriter(&fakeSession{}).Rewrite(context.Background(), "SELECT 1", "")
+	if err != nil || res.StorageIntegrityContractVersion != StorageIntegrityContractV1 {
+		t.Fatalf("acknowledged non-SI query = %+v, %v", res, err)
+	}
+}
+
+func TestSentioRewriter_ConfiguredSISurfaceUnavailableFailsClosed(t *testing.T) {
+	for name, be := range map[string]*fakeBackend{
+		"transport":    {err: errors.New("transport down")},
+		"nil response": {},
+	} {
+		for _, insertLane := range []bool{false, true} {
+			_, err := newSIFactory(be, nil, insertLane).NewRewriter(&fakeSession{}).Rewrite(context.Background(), "INSERT INTO db1.t FORMAT Native", "")
+			var rej *RejectedError
+			if !errors.As(err, &rej) || rej.Code != pb.RewriteCode_RewriteError || !strings.Contains(rej.Message, "classification unavailable") {
+				t.Fatalf("%s insertLane=%v err=%v, want fail-closed RejectedError", name, insertLane, err)
+			}
+		}
+	}
+	// The identical outage retains an ordinary error only when no SI
+	// membership is configured; the plugin will fail open on that error.
+	be := &fakeBackend{err: errors.New("transport down")}
+	_, err := newFakeFactory(be).NewRewriter(&fakeSession{}).Rewrite(context.Background(), "SELECT 1", "")
+	var rej *RejectedError
+	if err == nil || errors.As(err, &rej) {
+		t.Fatalf("empty-SI backend error = %v, want ordinary error", err)
+	}
+
+	siClosed := newSIFactory(&fakeBackend{}, nil, false).NewRewriter(&fakeSession{})
+	if err := siClosed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, err = siClosed.Rewrite(context.Background(), "INSERT INTO db1.t FORMAT Native", "")
+	if !errors.As(err, &rej) || !strings.Contains(rej.Message, "classification unavailable") {
+		t.Fatalf("configured-SI closed rewriter = %v, want RejectedError", err)
+	}
+	emptyClosed := newFakeFactory(&fakeBackend{}).NewRewriter(&fakeSession{})
+	if err := emptyClosed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, err = emptyClosed.Rewrite(context.Background(), "SELECT 1", "")
+	if err == nil || errors.As(err, &rej) {
+		t.Fatalf("empty-SI closed rewriter = %v, want ordinary error", err)
+	}
+}
+
+func TestSentioRewriter_ConfiguredSIFailurePreservesBackendCause(t *testing.T) {
+	backendErr := errors.New("backend unavailable")
+	rw := newSIFactory(&fakeBackend{err: backendErr}, nil, true).NewRewriter(&fakeSession{})
+	_, err := rw.Rewrite(context.Background(), "SELECT 1", "")
+	var rej *RejectedError
+	if !errors.As(err, &rej) {
+		t.Fatalf("err = %v, want fail-closed RejectedError", err)
+	}
+	if !errors.Is(err, backendErr) {
+		t.Fatalf("SI rejection must preserve backend cause: %v", err)
+	}
+}
+
+func TestSentioRewriter_InsertIntoSITableWithoutLaneIsRejected(t *testing.T) {
+	be := &fakeBackend{resp: acknowledgedSIResponse(&pb.RewriteSQLResponse{
+		Code: pb.RewriteCode_Success, SqlAfterRewrite: `INSERT INTO phys."db1.t" (a) VALUES (1)`, StatementType: pb.StatementType_STATEMENT_TYPE_INSERT,
+		OriginalAccessedTables: []*pb.AccessedTable{{OriginalDatabase: "db1", OriginalTable: "t", LogicalDatabase: "db1", IsStorageIntegrity: true}},
+	})}
+	_, err := newSIFactory(be, nil, false).NewRewriter(&fakeSession{}).Rewrite(context.Background(), "INSERT INTO db1.t (a) VALUES (1)", "")
+	var rej *RejectedError
+	if !errors.As(err, &rej) || rej.Message != "storage-integrity table db1.t accepts writes only through the signed statement lane" {
+		t.Fatalf("err = %v", err)
+	}
+	res, err := newSIFactory(be, nil, true).NewRewriter(&fakeSession{}).Rewrite(context.Background(), "INSERT INTO db1.t (a) VALUES (1)", "")
+	if err != nil || res.StatementType != sqlmeta.StatementTypeInsert {
+		t.Fatalf("with the lane enabled the INSERT proceeds to the ingress: %v %v", res, err)
 	}
 }

@@ -163,10 +163,10 @@ github.com/holiman/bloomfilter/v2 v2.0.3 h1:73e0e/V0tCydx14a0SCYS/EWCxgwLZ18CZcZ
 github.com/holiman/bloomfilter/v2 v2.0.3/go.mod h1:zpoh+gs7qcpqrHr3dB55AMiJwo0iURXE7ZOP9L9hSkA=
 github.com/holiman/uint256 v1.3.2 h1:a9EgMPSC1AAaj1SZL5zIQD3WbwTuHrMGOerLjGmM/TA=
 github.com/holiman/uint256 v1.3.2/go.mod h1:EOMSn4q6Nyt9P6efbI3bueV4e1b3dGlUCXeiRV4ng7E=
-github.com/housegate/rewriter-go v0.6.0 h1:Pl+tYx6DCeNCqz9xfh3uk6qfoSbz1rJ6Hw3YqPVOK1A=
-github.com/housegate/rewriter-go v0.6.0/go.mod h1:AeGg1zEIWh+cNapEewCjALP0lsAJ9URdZZ2IOAIGlJE=
-github.com/housegate/rewriter-proto v0.1.0 h1:Ga+qyReOUjA9P+Qyd6Cd+QwaaRpX07I1jKtLq8aAVIA=
-github.com/housegate/rewriter-proto v0.1.0/go.mod h1:37lVQ0Qz3nK5vDZ6jspyIAvCR0dOFLHKsGv6d03Ifxk=
+github.com/housegate/rewriter-go v0.7.1 h1:GsGxfNxNJiyo91GGmfUzvO41Ebbk6e7sKJDcDRs46/c=
+github.com/housegate/rewriter-go v0.7.1/go.mod h1:EsDo2ok1nVva+xR0x3iJJpeJj81JKhQPTFDjLFUmV3M=
+github.com/housegate/rewriter-proto v0.2.0 h1:NjWldNJ6e5bVCOFBg+8o1SkFu55+OypOcIAlz5dY5hc=
+github.com/housegate/rewriter-proto v0.2.0/go.mod h1:37lVQ0Qz3nK5vDZ6jspyIAvCR0dOFLHKsGv6d03Ifxk=
 github.com/huin/goupnp v1.3.0 h1:UvLUlWDNpoUdYzb2TCn+MuTWtcjXKSza2n6CBdQ0xXc=
 github.com/huin/goupnp v1.3.0/go.mod h1:gnGPsThkYa7bFi/KWmEysQRf48l2dvR5bxr2OFckNX8=
 github.com/influxdata/influxdb-client-go/v2 v2.4.0 h1:HGBfZYStlx3Kqvsv1h2pJixbCl/jhnFtxpKFAv9Tu5k=

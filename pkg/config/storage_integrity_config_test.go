@@ -75,9 +75,15 @@ func TestConfigValidateStorageIntegrityBackpressure(t *testing.T) {
 		"unsafe database required": {func(c *Config) {
 			c.StorageIntegrity.Runtime.Backpressure.UnsafeDatabase = " "
 		}, "backpressure.unsafe_database"},
+		"unsafe database is protocol owned": {func(c *Config) {
+			c.StorageIntegrity.Runtime.Backpressure.UnsafeDatabase = "shadow_unsafe"
+		}, `backpressure.unsafe_database must be "hg_unsafe"`},
 		"safe database required": {func(c *Config) {
 			c.StorageIntegrity.Runtime.Backpressure.SafeDatabase = " "
 		}, "backpressure.safe_database"},
+		"safe database is protocol owned": {func(c *Config) {
+			c.StorageIntegrity.Runtime.Backpressure.SafeDatabase = "shadow_safe"
+		}, `backpressure.safe_database must be "hg_safe"`},
 		"safe and unsafe databases differ": {func(c *Config) {
 			c.StorageIntegrity.Runtime.Backpressure.SafeDatabase = c.StorageIntegrity.Runtime.Backpressure.UnsafeDatabase
 		}, "backpressure.safe_database must differ"},
@@ -212,7 +218,7 @@ func TestConfigValidateStorageIntegrityIngress(t *testing.T) {
 		for _, want := range []string{
 			"storage_integrity.runtime.journal_dir",
 			"storage_integrity.runtime.payload_spool_dir",
-			"storage_integrity.runtime.merge_guard.tables",
+			"storage_integrity.tables",
 		} {
 			if !strings.Contains(err.Error(), want) {
 				t.Fatalf("Validate err = %v, missing %q", err, want)
@@ -220,19 +226,103 @@ func TestConfigValidateStorageIntegrityIngress(t *testing.T) {
 		}
 	})
 
-	t.Run("runtime merge guard rejects empty table identifiers", func(t *testing.T) {
+	t.Run("runtime enabled requires storage_integrity.tables", func(t *testing.T) {
 		cfg := storageIntegrityRuntimeConfigFixture(t)
-		cfg.StorageIntegrity.Runtime.MergeGuard.Tables = []StorageIntegrityRuntimeMergeTableConfig{
-			{Database: "hg_safe"},
-			{Table: "events"},
+		cfg.StorageIntegrity.Tables = nil
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "storage_integrity.tables is required when storage_integrity.runtime.enabled") {
+			t.Fatalf("Validate err = %v", err)
+		}
+	})
+
+	t.Run("legacy merge_guard.tables key is a pointed error", func(t *testing.T) {
+		cfg := storageIntegrityRuntimeConfigFixture(t)
+		cfg.StorageIntegrity.Runtime.MergeGuard.LegacyTables = []StorageIntegrityRuntimeMergeTableConfig{{Database: "hg_unsafe", Table: "events"}}
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "storage_integrity.runtime.merge_guard.tables was renamed to storage_integrity.tables") {
+			t.Fatalf("Validate err = %v", err)
+		}
+	})
+
+	t.Run("tables entries must be logical db.table ids, unique, server-mode only", func(t *testing.T) {
+		cfg := storageIntegrityRuntimeConfigFixture(t)
+		cfg.StorageIntegrity.Tables = []string{
+			"tenant.events",
+			"noDot",
+			"a.b.c",
+			"tenant.events",
+			"1tenant.events",
+			"tenant.event-name",
+			"tenant .events",
 		}
 		err := cfg.Validate()
 		if err == nil {
-			t.Fatal("Validate succeeded with incomplete merge_guard tables")
+			t.Fatal("Validate succeeded with malformed table ids")
 		}
 		for _, want := range []string{
-			"storage_integrity.runtime.merge_guard.tables[0].table",
-			"storage_integrity.runtime.merge_guard.tables[1].database",
+			`storage_integrity.tables[1] "noDot" must be a logical <database>.<table> id`,
+			`storage_integrity.tables[2] "a.b.c" must be a logical <database>.<table> id`,
+			`storage_integrity.tables[3] duplicates "tenant.events"`,
+			`storage_integrity.tables[4] "1tenant.events" must be a logical <database>.<table> id`,
+			`storage_integrity.tables[5] "tenant.event-name" must be a logical <database>.<table> id`,
+			`storage_integrity.tables[6] "tenant .events" must be a logical <database>.<table> id`,
+		} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("Validate err = %v, missing %q", err, want)
+			}
+		}
+	})
+
+	t.Run("tables reject non-injective physical names without runtime", func(t *testing.T) {
+		cfg := minimalServerConfig(t)
+		cfg.StorageIntegrity.Tables = []string{"a.b__c", "a__b.c"}
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("Validate succeeded with colliding storage-integrity physical table names")
+		}
+		for _, want := range []string{"a.b__c", "a__b.c", "a__b__c"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("Validate err = %v, missing %q", err, want)
+			}
+		}
+	})
+
+	t.Run("read.default_mode validation", func(t *testing.T) {
+		cfg := minimalServerConfig(t)
+		cfg.StorageIntegrity.Tables = []string{"tenant.events"}
+		for _, ok := range []string{"", "safe", "unsafe_latest"} {
+			cfg.StorageIntegrity.Read.DefaultMode = ok
+			if err := cfg.Validate(); err != nil {
+				t.Fatalf("default_mode %q: %v", ok, err)
+			}
+		}
+		cfg.StorageIntegrity.Read.DefaultMode = "latest"
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), `storage_integrity.read.default_mode "latest" must be safe or unsafe_latest`) {
+			t.Fatalf("Validate err = %v", err)
+		}
+		cfg.StorageIntegrity.Read.DefaultMode = "safe"
+		cfg.StorageIntegrity.Tables = nil
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "storage_integrity.read.default_mode requires storage_integrity.tables") {
+			t.Fatalf("Validate err = %v", err)
+		}
+	})
+
+	t.Run("agent mode error does not suppress table and read diagnostics", func(t *testing.T) {
+		cfg := minimalServerConfig(t)
+		cfg.StorageIntegrity.Agent.Enabled = true
+		cfg.StorageIntegrity.Tables = []string{"noDot", "noDot"}
+		cfg.StorageIntegrity.Read.DefaultMode = "latest"
+		cfg.StorageIntegrity.Runtime.MergeGuard.LegacyTables = []StorageIntegrityRuntimeMergeTableConfig{{Database: "hg_unsafe", Table: "events"}}
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("Validate succeeded with invalid combined storage-integrity config")
+		}
+		for _, want := range []string{
+			"storage_integrity.agent is agent mode only",
+			"storage_integrity.runtime.merge_guard.tables was renamed to storage_integrity.tables",
+			`storage_integrity.tables[0] "noDot" must be a logical <database>.<table> id`,
+			`storage_integrity.tables[1] duplicates "noDot"`,
+			`storage_integrity.read.default_mode "latest" must be safe or unsafe_latest`,
 		} {
 			if !strings.Contains(err.Error(), want) {
 				t.Fatalf("Validate err = %v, missing %q", err, want)
@@ -291,11 +381,28 @@ func storageIntegrityRuntimeConfigFixture(t *testing.T) Config {
 	cfg.StorageIntegrity.Runtime.PayloadLease.RefreshInterval.Duration = time.Second
 	cfg.StorageIntegrity.Runtime.PayloadLease.RefreshBefore.Duration = 30 * time.Second
 	cfg.StorageIntegrity.Runtime.MergeGuard.ReassertInterval.Duration = 30 * time.Second
-	cfg.StorageIntegrity.Runtime.MergeGuard.Tables = []StorageIntegrityRuntimeMergeTableConfig{
-		{Database: "hg_safe", Table: "events"},
-		{Database: "hg_unsafe", Table: "events"},
-	}
+	cfg.StorageIntegrity.Tables = []string{"tenant.events"}
 	return cfg
+}
+
+func TestStorageIntegrityPhysicalNaming(t *testing.T) {
+	if got := StorageIntegrityPhysicalTable("tenant.events"); got != "tenant__events" {
+		t.Fatalf("physical = %q", got)
+	}
+	for _, good := range []string{"tenant.events", "_tenant.event2", "T1._events"} {
+		db, table, ok := SplitStorageIntegrityTableID(good)
+		if !ok || db+"."+table != good {
+			t.Fatalf("split %q = %q %q %v", good, db, table, ok)
+		}
+	}
+	for _, bad := range []string{
+		"", "events", ".events", "tenant.", "a.b.c",
+		"1tenant.events", "tenant.event-name", "tenant .events",
+	} {
+		if _, _, ok := SplitStorageIntegrityTableID(bad); ok {
+			t.Fatalf("%q must be rejected", bad)
+		}
+	}
 }
 
 func TestConfigStorageIntegritySafeMerges(t *testing.T) {

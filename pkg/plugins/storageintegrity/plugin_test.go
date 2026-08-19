@@ -30,15 +30,39 @@ import (
 
 const storageIntegrityTestKey = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
+func TestIngressIgnoresOrdinaryInsert(t *testing.T) {
+	p := New(Config{Enabled: true})
+	qctx := &plugin.QueryContext{
+		Session:       &fakeSession{id: 9, state: chsession.NewSessionState()},
+		StatementType: sqlmeta.StatementTypeInsert,
+		Query:         &chproto.Query{Body: "INSERT INTO tenant.ordinary FORMAT Native"},
+		AccessedTables: []sqlmeta.AccessedTable{{
+			OriginalDatabase: "tenant",
+			OriginalTable:    "ordinary",
+		}},
+	}
+
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("ordinary INSERT must bypass SI admission: %v", err)
+	}
+	if qctx.SuppressUpstreamExecution {
+		t.Fatal("ordinary INSERT must remain on the normal upstream write path")
+	}
+	if _, err := p.ConsumeAdmission(qctx.Session.ID()); err == nil {
+		t.Fatal("ordinary INSERT must not create an SI admission")
+	}
+}
+
 func TestIngressAcceptsSignedMaterializedInsert(t *testing.T) {
 	p, signer := newSignedIngress(t)
 	sql := "INSERT INTO tenant.events FORMAT Native"
 	qctx := signedQueryContext(t, 10, signer, sql, sql, sqlmeta.StatementTypeInsert)
 	qctx.AccessedTables = []sqlmeta.AccessedTable{{
-		OriginalDatabase: "tenant",
-		OriginalTable:    "events",
-		LogicalDatabase:  "tenant",
-		PhysicalDatabase: "tenant",
+		OriginalDatabase:   "tenant",
+		OriginalTable:      "events",
+		LogicalDatabase:    "tenant",
+		PhysicalDatabase:   "tenant",
+		IsStorageIntegrity: true,
 	}}
 	payload := []byte{byte(chproto.ClientDataCode), 0, 1, 2, 3}
 	withDefaultCaptureToken(t, qctx, signer, payload)
@@ -82,7 +106,7 @@ func TestIngressRejectsMalformedStatementID(t *testing.T) {
 	sql := "INSERT INTO tenant.events FORMAT Native"
 	qctx := signedQueryContext(t, 12, signer, sql, sql, sqlmeta.StatementTypeInsert)
 	qctx.Query.ID = "query-id"
-	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
 
 	err := p.OnQuery(context.Background(), qctx)
 	if err == nil || !strings.Contains(err.Error(), "structured statement id") {
@@ -95,7 +119,7 @@ func TestIngressRejectsStatementIDSignerMismatch(t *testing.T) {
 	sql := "INSERT INTO tenant.events FORMAT Native"
 	qctx := signedQueryContext(t, 13, signer, sql, sql, sqlmeta.StatementTypeInsert)
 	qctx.Query.ID = "0x0000000000000000000000000000000000000000:1:n1"
-	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
 
 	err := p.OnQuery(context.Background(), qctx)
 	if err == nil || !strings.Contains(err.Error(), "does not match authenticated signer") {
@@ -107,7 +131,7 @@ func TestIngressCapturesExactNativeDataWithoutRowRewrite(t *testing.T) {
 	p, signer := newSignedIngress(t)
 	sql := "INSERT INTO tenant.events FORMAT Native"
 	qctx := signedQueryContext(t, 11, signer, sql, sql, sqlmeta.StatementTypeInsert)
-	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
 
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
 		t.Fatalf("OnQuery: %v", err)
@@ -140,7 +164,7 @@ func TestIngressRejectsCompressedInsertBeforeAdmission(t *testing.T) {
 	sql := "INSERT INTO tenant.events FORMAT Native"
 	qctx := signedQueryContext(t, 15, signer, sql, sql, sqlmeta.StatementTypeInsert)
 	qctx.Query.Compression = proto.CompressionEnabled
-	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
 
 	err := p.OnQuery(context.Background(), qctx)
 	if err == nil || !strings.Contains(err.Error(), "compressed payload") {
@@ -159,7 +183,7 @@ func TestIngressCopiesNativeDataAndDoesNotRetainRelaySlice(t *testing.T) {
 	p, signer := newSignedIngress(t)
 	sql := "INSERT INTO tenant.events FORMAT Native"
 	qctx := signedQueryContext(t, 12, signer, sql, sql, sqlmeta.StatementTypeInsert)
-	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
 	raw := []byte{byte(chproto.ClientDataCode), 0, 1, 2, 3}
 	withDefaultCaptureToken(t, qctx, signer, raw)
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
@@ -187,7 +211,7 @@ func TestIngressRejectsIncompleteNativePayloadCapture(t *testing.T) {
 	p, signer := newSignedIngress(t)
 	sql := "INSERT INTO tenant.events FORMAT Native"
 	qctx := signedQueryContext(t, 13, signer, sql, sql, sqlmeta.StatementTypeInsert)
-	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
 		t.Fatalf("OnQuery: %v", err)
 	}
@@ -204,7 +228,7 @@ func TestIngressRejectsMissingStatementID(t *testing.T) {
 	sql := "INSERT INTO tenant.events FORMAT Native"
 	qctx := signedQueryContext(t, 20, signer, sql, sql, sqlmeta.StatementTypeInsert)
 	qctx.Query.ID = ""
-	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
 
 	err := p.OnQuery(context.Background(), qctx)
 	if err == nil || !strings.Contains(err.Error(), "query id is required") {
@@ -216,7 +240,7 @@ func TestIngressRejectsStatementTypeSQLMismatch(t *testing.T) {
 	p, signer := newSignedIngress(t)
 	sql := "ALTER TABLE tenant.events UPDATE value = 2 WHERE id = 1"
 	qctx := signedQueryContext(t, 21, signer, sql, sql, sqlmeta.StatementTypeInsert)
-	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
 
 	err := p.OnQuery(context.Background(), qctx)
 	if err == nil || !strings.Contains(err.Error(), "statement type mismatch") {
@@ -255,7 +279,7 @@ func TestIngressRejectsNonInsertWrites(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			p, signer := newSignedIngress(t)
 			qctx := signedQueryContext(t, int64(30+i), signer, tt.sql, tt.sql, tt.typ)
-			qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+			qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
 
 			err := p.OnQuery(context.Background(), qctx)
 			if err == nil || !strings.Contains(err.Error(), "insert-only") {
@@ -265,11 +289,23 @@ func TestIngressRejectsNonInsertWrites(t *testing.T) {
 	}
 }
 
+func TestIngressIgnoresDescribe(t *testing.T) {
+	p, signer := newSignedIngress(t)
+	sql := "DESCRIBE TABLE tenant.events"
+	qctx := signedQueryContext(t, 61, signer, sql, sql, sqlmeta.StatementTypeDescribe)
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("DESCRIBE must be a read-only pass-through for the ingress: %v", err)
+	}
+	if qctx.SuppressUpstreamExecution {
+		t.Fatal("DESCRIBE must not be intercepted")
+	}
+}
+
 func TestIngressRejectsTargetTableMismatch(t *testing.T) {
 	p, signer := newSignedIngress(t)
 	sql := "INSERT INTO tenant.other FORMAT Native"
 	qctx := signedQueryContext(t, 22, signer, sql, sql, sqlmeta.StatementTypeInsert)
-	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
 
 	err := p.OnQuery(context.Background(), qctx)
 	if err == nil || !strings.Contains(err.Error(), "target table mismatch") {
@@ -282,7 +318,7 @@ func TestIngressAcceptsQuotedTargetIdentifiers(t *testing.T) {
 	p, signer := newSignedIngressWithConfig(t, Config{TableSchemas: ns, NetworkID: "testnet-v2"})
 	sql := "INSERT INTO `tenant`.`event.table` FORMAT Native"
 	qctx := signedQueryContext(t, 60, signer, sql, sql, sqlmeta.StatementTypeInsert)
-	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "event.table"}}
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "event.table"}}
 	payload := []byte{byte(chproto.ClientDataCode), 1}
 	statement := v2Statement(signer, qctx.Query.ID, sql, schemaHash, payload, 54453)
 	statement.TargetTableID = "tenant.`event.table`"
@@ -314,7 +350,7 @@ func TestIngressRejectsInlineInsertSources(t *testing.T) {
 		t.Run(sql, func(t *testing.T) {
 			p, signer := newSignedIngress(t)
 			qctx := signedQueryContext(t, int64(62+i), signer, sql, sql, sqlmeta.StatementTypeInsert)
-			qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+			qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
 			err := p.OnQuery(context.Background(), qctx)
 			if err == nil || !strings.Contains(err.Error(), "streaming Native INSERT") {
 				t.Fatalf("OnQuery err = %v, want payload-local INSERT rejection", err)
@@ -328,7 +364,7 @@ func TestIngressResolvesUnqualifiedTargetAgainstSessionDatabase(t *testing.T) {
 	sql := "INSERT INTO events FORMAT Native"
 	qctx := signedQueryContext(t, 63, signer, sql, sql, sqlmeta.StatementTypeInsert)
 	qctx.Session.State().SetLogicalDatabase("tenant")
-	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalTable: "events", LogicalDatabase: "tenant"}}
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalTable: "events", LogicalDatabase: "tenant"}}
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
 		t.Fatalf("OnQuery: %v", err)
 	}
@@ -400,8 +436,8 @@ func TestIngressRejectsAmbiguousUnqualifiedTargetMetadata(t *testing.T) {
 	sql := "INSERT INTO events FORMAT Native"
 	qctx := signedQueryContext(t, 64, signer, sql, sql, sqlmeta.StatementTypeInsert)
 	qctx.AccessedTables = []sqlmeta.AccessedTable{
-		{OriginalDatabase: "other", OriginalTable: "events", LogicalDatabase: "other"},
-		{OriginalDatabase: "tenant", OriginalTable: "events", LogicalDatabase: "tenant"},
+		{OriginalDatabase: "other", OriginalTable: "events", LogicalDatabase: "other", IsStorageIntegrity: true},
+		{OriginalDatabase: "tenant", OriginalTable: "events", LogicalDatabase: "tenant", IsStorageIntegrity: true},
 	}
 	err := p.OnQuery(context.Background(), qctx)
 	if err == nil || !strings.Contains(err.Error(), "ambiguous target table") {
@@ -415,7 +451,7 @@ func TestIngressRejectsQHashMismatch(t *testing.T) {
 	signedSQL := "INSERT INTO tenant.other FORMAT Native"
 	qctx := signedQueryContext(t, 14, signer, signedSQL, finalSQL, sqlmeta.StatementTypeInsert)
 	qctx.OriginalSQL = finalSQL
-	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
 
 	err := p.OnQuery(context.Background(), qctx)
 	if err == nil || !strings.Contains(err.Error(), "query hash mismatch") {
@@ -429,10 +465,11 @@ func TestIngressValidatesSignedSQLBeforeServerRewrite(t *testing.T) {
 	forwardSQL := "INSERT INTO physical_tenant.events FORMAT Native"
 	qctx := signedQueryContext(t, 23, signer, signedSQL, forwardSQL, sqlmeta.StatementTypeInsert)
 	qctx.AccessedTables = []sqlmeta.AccessedTable{{
-		OriginalDatabase: "tenant",
-		OriginalTable:    "events",
-		LogicalDatabase:  "tenant",
-		PhysicalDatabase: "physical_tenant",
+		OriginalDatabase:   "tenant",
+		OriginalTable:      "events",
+		LogicalDatabase:    "tenant",
+		PhysicalDatabase:   "physical_tenant",
+		IsStorageIntegrity: true,
 	}}
 	payload := []byte{byte(chproto.ClientDataCode), 1}
 	withDefaultCaptureToken(t, qctx, signer, payload)
@@ -465,10 +502,11 @@ func TestIngressRejectsInlineSignedSQLBeforeServerRewrite(t *testing.T) {
 	forwardSQL := "INSERT INTO tenant.events FORMAT Native"
 	qctx := signedQueryContext(t, 26, signer, signedSQL, forwardSQL, sqlmeta.StatementTypeInsert)
 	qctx.AccessedTables = []sqlmeta.AccessedTable{{
-		OriginalDatabase: "tenant",
-		OriginalTable:    "events",
-		LogicalDatabase:  "tenant",
-		PhysicalDatabase: "tenant",
+		OriginalDatabase:   "tenant",
+		OriginalTable:      "events",
+		LogicalDatabase:    "tenant",
+		PhysicalDatabase:   "tenant",
+		IsStorageIntegrity: true,
 	}}
 
 	err := p.OnQuery(context.Background(), qctx)
@@ -497,7 +535,7 @@ func TestIngressRejectsPurposeMismatch(t *testing.T) {
 			}},
 		},
 		StatementType:  sqlmeta.StatementTypeInsert,
-		AccessedTables: []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}},
+		AccessedTables: []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}},
 	}
 
 	err = p.OnQuery(context.Background(), qctx)
@@ -519,7 +557,7 @@ func TestIngressAuthValidationUsesRequestTimeout(t *testing.T) {
 	}
 	sql := "INSERT INTO tenant.events FORMAT Native"
 	qctx := signedQueryContext(t, 24, signer, sql, sql, sqlmeta.StatementTypeInsert)
-	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
 
 	err = p.OnQuery(context.Background(), qctx)
 	if err == nil || !strings.Contains(err.Error(), context.DeadlineExceeded.Error()) {
@@ -551,7 +589,7 @@ func TestIngressRejectsValidatorThatDoesNotAuthenticateSigner(t *testing.T) {
 	})
 	sql := "INSERT INTO tenant.events FORMAT Native"
 	qctx := signedQueryContext(t, 18, signer, sql, sql, sqlmeta.StatementTypeInsert)
-	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
 
 	err = p.OnQuery(context.Background(), qctx)
 	if err == nil || !strings.Contains(err.Error(), "authenticated signer is required") {
@@ -563,7 +601,7 @@ func TestIngressRejectsUnmaterializedNondeterminism(t *testing.T) {
 	p, signer := newSignedIngress(t)
 	sql := "INSERT INTO tenant.events VALUES (now())"
 	qctx := signedQueryContext(t, 15, signer, sql, sql, sqlmeta.StatementTypeInsert)
-	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
 
 	err := p.OnQuery(context.Background(), qctx)
 	if err == nil || !strings.Contains(err.Error(), "unmaterialized nondeterministic function") {
@@ -588,7 +626,7 @@ func TestIngressRejectsMaterializerProfileNondeterminism(t *testing.T) {
 		t.Run(sql, func(t *testing.T) {
 			p, signer := newSignedIngress(t)
 			qctx := signedQueryContext(t, int64(40+i), signer, sql, sql, sqlmeta.StatementTypeInsert)
-			qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+			qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
 
 			err := p.OnQuery(context.Background(), qctx)
 			if err == nil || !strings.Contains(err.Error(), "unmaterialized nondeterministic function") {
@@ -602,7 +640,7 @@ func TestIngressRejectsUnsupportedStorageIntegrityKind(t *testing.T) {
 	p, signer := newSignedIngress(t)
 	sql := "CREATE TABLE tenant.events (id UInt64)"
 	qctx := signedQueryContext(t, 16, signer, sql, sql, sqlmeta.StatementTypeCreateTable)
-	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
 
 	err := p.OnQuery(context.Background(), qctx)
 	if err == nil || !strings.Contains(err.Error(), "unsupported storage-integrity statement kind") {
@@ -614,7 +652,7 @@ func TestIngressRejectsWriteWhilePriorAdmissionPending(t *testing.T) {
 	p, signer := newSignedIngress(t)
 	sql := "INSERT INTO tenant.events FORMAT Native"
 	qctx := signedQueryContext(t, 50, signer, sql, sql, sqlmeta.StatementTypeInsert)
-	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
 		t.Fatalf("first OnQuery: %v", err)
 	}
@@ -625,7 +663,7 @@ func TestIngressRejectsWriteWhilePriorAdmissionPending(t *testing.T) {
 
 	nextSQL := "INSERT INTO tenant.events FORMAT Native"
 	next := signedQueryContext(t, 50, signer, nextSQL, nextSQL, sqlmeta.StatementTypeInsert)
-	next.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+	next.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
 	err := p.OnQuery(context.Background(), next)
 	if err == nil || !strings.Contains(err.Error(), "pending admission") {
 		t.Fatalf("second OnQuery err = %v, want pending admission rejection", err)
@@ -636,7 +674,7 @@ func TestIngressOnCloseDropsPendingAdmission(t *testing.T) {
 	p, signer := newSignedIngress(t)
 	sql := "INSERT INTO tenant.events FORMAT Native"
 	qctx := signedQueryContext(t, 51, signer, sql, sql, sqlmeta.StatementTypeInsert)
-	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
 		t.Fatalf("OnQuery: %v", err)
 	}
@@ -656,7 +694,7 @@ func TestIngressAbortsCaptureOnStrictDataError(t *testing.T) {
 	p, signer := newSignedIngress(t)
 	sql := "INSERT INTO tenant.events FORMAT Native"
 	qctx := signedQueryContext(t, 52, signer, sql, sql, sqlmeta.StatementTypeInsert)
-	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
 		t.Fatalf("OnQuery: %v", err)
 	}
@@ -680,7 +718,7 @@ func TestIngressQueryAbortDropsActiveCapture(t *testing.T) {
 	p, signer := newSignedIngress(t)
 	sql := "INSERT INTO tenant.events FORMAT Native"
 	qctx := signedQueryContext(t, 53, signer, sql, sql, sqlmeta.StatementTypeInsert)
-	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
 		t.Fatalf("OnQuery: %v", err)
 	}
@@ -701,7 +739,7 @@ func TestIngressAbortOnlyDropsMatchingStatement(t *testing.T) {
 	sql := "INSERT INTO tenant.events FORMAT Native"
 	active := signedQueryContext(t, 55, signer, sql, sql, sqlmeta.StatementTypeInsert)
 	active.Query.ID = statementIDFor(signer, 1)
-	active.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+	active.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
 	if err := p.OnQuery(context.Background(), active); err != nil {
 		t.Fatalf("OnQuery: %v", err)
 	}
@@ -721,7 +759,7 @@ func TestIngressFinalizesOnClientInputComplete(t *testing.T) {
 	p, signer := newSignedIngress(t)
 	sql := "INSERT INTO tenant.events FORMAT Native"
 	qctx := signedQueryContext(t, 56, signer, sql, sql, sqlmeta.StatementTypeInsert)
-	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
 	payload := []byte{byte(chproto.ClientDataCode), 1}
 	withDefaultCaptureToken(t, qctx, signer, payload)
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
@@ -754,7 +792,7 @@ func TestIngressConsumerReceivesCompletedAdmissionAndClearsPending(t *testing.T)
 	p, signer := newSignedIngressWithConfig(t, Config{AdmissionConsumer: consumer})
 	sql := "INSERT INTO tenant.events FORMAT Native"
 	qctx := signedQueryContext(t, 58, signer, sql, sql, sqlmeta.StatementTypeInsert)
-	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
 	payload := []byte{byte(chproto.ClientDataCode), 1}
 	withDefaultCaptureToken(t, qctx, signer, payload)
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
@@ -782,7 +820,7 @@ func TestIngressConsumerReceivesCompletedAdmissionAndClearsPending(t *testing.T)
 
 	next := signedQueryContext(t, 58, signer, sql, sql, sqlmeta.StatementTypeInsert)
 	next.Query.ID = statementIDFor(signer, 2)
-	next.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+	next.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
 	if err := p.OnQuery(context.Background(), next); err != nil {
 		t.Fatalf("second OnQuery after consumer success: %v", err)
 	}
@@ -793,7 +831,7 @@ func TestIngressWithConsumerSuppressesOrdinaryUpstreamPayloadRows(t *testing.T) 
 	p, signer := newSignedIngressWithConfig(t, Config{AdmissionConsumer: consumer})
 	sql := "INSERT INTO tenant.events FORMAT Native"
 	qctx := signedQueryContext(t, 61, signer, sql, sql, sqlmeta.StatementTypeInsert)
-	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
 
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
 		t.Fatalf("OnQuery: %v", err)
@@ -813,7 +851,7 @@ func TestIngressConsumerFailureIsFailClosed(t *testing.T) {
 	p, signer := newSignedIngressWithConfig(t, Config{AdmissionConsumer: consumer})
 	sql := "INSERT INTO tenant.events FORMAT Native"
 	qctx := signedQueryContext(t, 59, signer, sql, sql, sqlmeta.StatementTypeInsert)
-	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
 		t.Fatalf("OnQuery: %v", err)
 	}
@@ -858,7 +896,7 @@ func TestIngressRejectsOversizedNativePayload(t *testing.T) {
 	p, signer := newSignedIngressWithConfig(t, Config{MaxPayloadBytes: 3})
 	sql := "INSERT INTO tenant.events FORMAT Native"
 	qctx := signedQueryContext(t, 54, signer, sql, sql, sqlmeta.StatementTypeInsert)
-	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
 		t.Fatalf("OnQuery: %v", err)
 	}
@@ -876,7 +914,7 @@ func TestIngressClientDataReadLimitTracksRemainingPayload(t *testing.T) {
 	p, signer := newSignedIngressWithConfig(t, Config{MaxPayloadBytes: 5})
 	sql := "INSERT INTO tenant.events FORMAT Native"
 	qctx := signedQueryContext(t, 57, signer, sql, sql, sqlmeta.StatementTypeInsert)
-	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
 		t.Fatalf("OnQuery: %v", err)
 	}
@@ -982,7 +1020,7 @@ func TestIngressV2_AcceptsTokenBoundToItsOwnCapture(t *testing.T) {
 	p, signer, schemaHash := newV2Ingress(t)
 	sql := "INSERT INTO tenant.events FORMAT Native"
 	qctx := signedQueryContext(t, 21, signer, sql, sql, sqlmeta.StatementTypeInsert)
-	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
 	payload := []byte{byte(chproto.ClientDataCode), 0, 0xab, 0xcd}
 	withStatementToken(t, qctx, signer, v2Statement(signer, qctx.Query.ID, sql, schemaHash, payload, 54453))
 
@@ -1118,7 +1156,7 @@ func TestIngressV2_RejectionMatrix(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			p, signer, schemaHash := newV2Ingress(t)
 			qctx := signedQueryContext(t, int64(30+i), signer, sql, sql, sqlmeta.StatementTypeInsert)
-			qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+			qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
 			captured := tc.prepare(t, p, signer, schemaHash, qctx)
 			err := p.OnQuery(context.Background(), qctx)
 			if tc.atQuery {
@@ -1146,7 +1184,7 @@ func TestIngressV2_UndeclaredTableFailsClosedAtQuery(t *testing.T) {
 	p, signer := newSignedIngressWithConfig(t, Config{TableSchemas: network.NewInMemoryNetworkState(), NetworkID: "testnet-v2"})
 	sql := "INSERT INTO tenant.events FORMAT Native"
 	qctx := signedQueryContext(t, 40, signer, sql, sql, sqlmeta.StatementTypeInsert)
-	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
 	withStatementToken(t, qctx, signer, v2Statement(signer, qctx.Query.ID, sql, "0x00", []byte{2, 0}, 54453))
 	if err := p.OnQuery(context.Background(), qctx); err == nil || !strings.Contains(err.Error(), "schema") {
 		t.Fatalf("undeclared table must fail closed at OnQuery: %v", err)
@@ -1168,7 +1206,7 @@ func TestIngressV2_RequiresTableSchemasAndNetworkID(t *testing.T) {
 			p, signer := newSignedIngressWithoutV2Config(t, tc.cfg)
 			sql := "INSERT INTO tenant.events FORMAT Native"
 			qctx := signedQueryContext(t, int64(41+i), signer, sql, sql, sqlmeta.StatementTypeInsert)
-			qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+			qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
 			if err := p.OnQuery(context.Background(), qctx); err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("OnQuery err = %v, want missing %s rejection", err, tc.want)
 			}
@@ -1203,7 +1241,7 @@ func TestIngressV2_RequiresStatementValidatorV2(t *testing.T) {
 	})
 	sql := "INSERT INTO tenant.events FORMAT Native"
 	qctx := signedQueryContext(t, 43, signer, sql, sql, sqlmeta.StatementTypeInsert)
-	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events"}}
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
 	payload := []byte{byte(chproto.ClientDataCode), 0, 0xab, 0xcd}
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
 		t.Fatalf("OnQuery: %v", err)
@@ -1255,6 +1293,9 @@ func signedQueryContext(t *testing.T, sessionID int64, signer *auth.RelaySigner,
 	qctx := &plugin.QueryContext{
 		Session:     sess,
 		OriginalSQL: signedSQL,
+		AccessedTables: []sqlmeta.AccessedTable{{
+			IsStorageIntegrity: true,
+		}},
 		Query: &chproto.Query{
 			ID:   statementIDFor(signer, 1),
 			Body: finalSQL,
