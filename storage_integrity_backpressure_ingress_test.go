@@ -437,6 +437,40 @@ func TestIngress_TerminalPrewriteRejectWithTerminalSubmitReleasesReservation(t *
 	}
 }
 
+func TestIngress_RetryablePrewriteRejectRetainsReservationUntilSameIDRetry(t *testing.T) {
+	conn := &rootPartsConn{rows: []rootPartsRow{
+		{"hg_unsafe", "net1__events", "eu", "region", 1},
+		{"hg_unsafe", "net1__events", "us", "region", 1},
+	}}
+	pressure := sicore.NewPartsPressureGuard(conn, sicore.PartsPressureConfig{
+		UnsafeDatabase: "hg_unsafe", SafeDatabase: "hg_safe",
+		SoftPartsPerPartition: 2, HardPartsPerPartition: 5,
+	})
+	ingress, _, _, preparer := newBackpressureIngress(t, pressure)
+	preparer.err = fmt.Errorf("schema hash mismatch: %w", sicore.ErrPrepareTerminalReject)
+
+	err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), bpAdmission())
+	if err == nil || !strings.Contains(err.Error(), string(sicore.LifecycleCleaned)) {
+		t.Fatalf("retryable pre-write reject err=%v, want nonterminal Cleaned", err)
+	}
+	if ingress.pressureReservation(bpAdmission().StatementID) == nil {
+		t.Fatal("retryable pre-write reject released its statement reservation")
+	}
+	competing, err := pressure.ReserveStatement(context.Background(), "competing-statement", "net1__events", []string{"p_eu"})
+	if err == nil {
+		competing.Release()
+		t.Fatal("competing admission consumed the retrying statement's soft-limit slot")
+	}
+	if !errors.Is(err, sicore.ErrBackpressure) {
+		t.Fatalf("competing reservation error=%v, want ErrBackpressure", err)
+	}
+
+	preparer.err = nil
+	if err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), bpAdmission()); err != nil {
+		t.Fatalf("same-ID retry after retaining reservation: %v", err)
+	}
+}
+
 func TestIngress_RejectsSignedSchemaHashMismatchBeforePressure(t *testing.T) {
 	pressure := &fakePartsPressure{}
 	ingress, writer, submitter, preparer := newBackpressureIngress(t, pressure)

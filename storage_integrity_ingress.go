@@ -571,13 +571,20 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 	case errors.Is(err, sicore.ErrCleanupProofPending):
 		// Exact cleanup proof is pending (before or after the idempotent source
 		// abort). Keep the statement-addressed reservation/fence for same-ID retry.
-	case res.Lifecycle == sicore.LifecycleCleaned:
+	case res.Lifecycle == sicore.LifecycleCleaned && res.Submit.Category.RequiresAbort():
 		// Exact cleanup normally reconciles/releases this reservation from its
 		// hook while the source frontier is held. A terminal outcome whose Prepare
 		// was durably known unwritten has no exact candidates and deliberately
 		// bypasses that hook, so cancel the handle here as well. Release is
-		// idempotent after ReleaseCleaned.
+		// idempotent after ReleaseCleaned. A retryable pre-write Prepare rejection
+		// also reports Cleaned, but its accepted Submit is not terminal: retain its
+		// statement reservation with the source frontier until same-ID retry.
 		i.cancelTrackedReservation(rec.StatementID, trackedReservation)
+	case res.Lifecycle == sicore.LifecycleCleaned:
+		// A retryable pre-write Prepare rejection is known not to have created a
+		// part, but it deliberately retains the source frontier so a same-ID retry
+		// can converge ahead of queued statements. Keep the matching uncommitted
+		// capacity reservation for that same interval.
 	case attemptReservation != nil && (errors.Is(err, sicore.ErrBackpressure) || !res.SourceWriteMayExist()):
 		// SNode hard pressure and every definite pre-prepare failure occur before a
 		// source write. Only an actually attempted/known prepare stays charged.
