@@ -715,6 +715,124 @@ func TestPartsPressureGuard_DuplicateExactCandidateCannotCoverTwoReservations(t 
 	}
 }
 
+func TestPartsPressureGuard_CleanupProofRejectsCandidateClaimedByAnotherReservation(t *testing.T) {
+	guard, conn := pressureFixture()
+	guard.cfg.SoftPartsPerPartition = 5
+	base := fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", "a_base"}
+	shared := CandidatePart{TableID: "db.t", PartitionID: "p_a", PartName: "a_shared"}
+	conn.setInventory(base)
+	owner, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("owner Reserve: %v", err)
+	}
+	cleaner, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("cleaner Reserve: %v", err)
+	}
+	if err := owner.Commit(shared); err != nil {
+		t.Fatalf("owner Commit: %v", err)
+	}
+	conn.setInventory(base, fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", shared.PartName})
+	if err := cleaner.PrepareCleanupProof(context.Background(), []CandidatePart{shared}); err == nil {
+		t.Fatal("cleanup proof accepted a candidate owned by another reservation")
+	} else if !errors.Is(err, ErrCleanupProofPending) || !errors.Is(err, ErrBackpressure) {
+		t.Fatalf("cleanup proof error=%v, want pending back-pressure", err)
+	}
+	owner.Release()
+	cleaner.Release()
+}
+
+func TestPartsPressureGuard_FinalizedCandidateClaimProtectsAlreadyQueuedReservation(t *testing.T) {
+	guard, conn := pressureFixture()
+	guard.cfg.SoftPartsPerPartition = 6
+	base := fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", "a_base"}
+	shared := CandidatePart{TableID: "db.t", PartitionID: "p_a", PartName: "a_shared"}
+	conn.setInventory(base)
+	owner, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("owner Reserve: %v", err)
+	}
+	queued, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("queued Reserve: %v", err)
+	}
+	if err := owner.Commit(shared); err != nil {
+		t.Fatalf("owner Commit: %v", err)
+	}
+	owner.Finalize()
+	conn.setInventory(base, fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", shared.PartName})
+	if _, err := guard.Refresh(context.Background()); err != nil {
+		t.Fatalf("owner visibility Refresh: %v", err)
+	}
+	if err := queued.PrepareCleanupProof(context.Background(), []CandidatePart{shared}); err == nil {
+		t.Fatal("queued cleanup proof reused a finalized candidate's active part")
+	}
+	queued.Release()
+
+	// Once a later exact inventory proves the finalized part absent, retaining
+	// its old name would only leak an in-memory claim. A new no-op cleanup may
+	// bind that absent name without gaining any deletion proof.
+	conn.setInventory(base)
+	if _, err := guard.Refresh(context.Background()); err != nil {
+		t.Fatalf("part removal Refresh: %v", err)
+	}
+	reuse, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("reuse Reserve: %v", err)
+	}
+	if err := reuse.PrepareCleanupProof(context.Background(), []CandidatePart{shared}); err != nil {
+		t.Fatalf("absent finalized candidate name remained claimed: %v", err)
+	}
+	reuse.Release()
+}
+
+func TestPartsPressureGuard_FinalizedClaimSurvivesDelayedExactVisibility(t *testing.T) {
+	guard, conn := pressureFixture()
+	guard.cfg.SoftPartsPerPartition = 7
+	base := fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", "a_base"}
+	unrelated := fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", "a_unrelated"}
+	shared := CandidatePart{TableID: "db.t", PartitionID: "p_a", PartName: "a_shared"}
+	conn.setInventory(base)
+	owner, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("owner Reserve: %v", err)
+	}
+	queued, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("queued Reserve: %v", err)
+	}
+	if err := owner.Commit(shared); err != nil {
+		t.Fatalf("owner Commit: %v", err)
+	}
+	owner.Finalize()
+
+	// Aggregate growth may cover and compact the finalized reservation before
+	// ClickHouse exposes its exact candidate name. That must not discard the
+	// single-owner identity; the delayed exact part can still appear afterward.
+	conn.setInventory(base, unrelated)
+	if _, err := guard.Refresh(context.Background()); err != nil {
+		t.Fatalf("unrelated growth Refresh: %v", err)
+	}
+	conn.setInventory(base, fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", shared.PartName})
+	if err := queued.PrepareCleanupProof(context.Background(), []CandidatePart{shared}); err == nil {
+		t.Fatal("queued cleanup reused a finalized candidate after delayed exact visibility")
+	}
+	queued.Release()
+
+	conn.setInventory(base)
+	if _, err := guard.Refresh(context.Background()); err != nil {
+		t.Fatalf("exact removal Refresh: %v", err)
+	}
+	reuse, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("reuse Reserve: %v", err)
+	}
+	if err := reuse.PrepareCleanupProof(context.Background(), []CandidatePart{shared}); err != nil {
+		t.Fatalf("removed delayed candidate name remained claimed: %v", err)
+	}
+	reuse.Release()
+}
+
 func TestPartsPressureGuard_InFlightCleanupRebasesQueuedReplacement(t *testing.T) {
 	guard, conn := pressureFixture(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 1})
 	guard.cfg.SoftPartsPerPartition = 5

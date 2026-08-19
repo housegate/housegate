@@ -445,6 +445,42 @@ func TestIngress_CandidateBindingFailureStaysChargedAndFailsClosed(t *testing.T)
 	}
 }
 
+func TestIngress_CleanupProofRejectsAnotherStatementsActiveCandidateBeforeAbort(t *testing.T) {
+	conn := &rootPartsConn{rows: []rootPartsRow{
+		{"hg_unsafe", "net1__events", "eu", "region", 1},
+		{"hg_unsafe", "net1__events", "us", "region", 1},
+	}}
+	pressure := sicore.NewPartsPressureGuard(conn, sicore.PartsPressureConfig{
+		UnsafeDatabase: "hg_unsafe", SafeDatabase: "hg_safe",
+		SoftPartsPerPartition: 5, HardPartsPerPartition: 8,
+	})
+	ingress, _, submitter, preparer := newBackpressureIngress(t, pressure)
+	shared := sicore.CandidatePart{TableID: "net1.events", PartitionID: "p_eu", PartName: "eu_part_2"}
+	preparer.candidates = []sicore.CandidatePart{shared}
+
+	owner := bpAdmission()
+	if err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), owner); err != nil {
+		t.Fatalf("owner admission: %v", err)
+	}
+	// The owner reached ACK2 and its exact candidate is now active. A different
+	// statement returning that name must fail the pre-abort ownership proof;
+	// calling AbortPreparedStatement would DROP the owner's durable part.
+	conn.setRows([]rootPartsRow{
+		{"hg_unsafe", "net1__events", "eu", "region", 2},
+		{"hg_unsafe", "net1__events", "us", "region", 1},
+	})
+	submitter.outcome = sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: "conflict"}
+	other := bpAdmission()
+	other.StatementID = "0xabc:2:n2"
+	err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), other)
+	if !errors.Is(err, sicore.ErrCleanupProofPending) || !errors.Is(err, sicore.ErrBackpressure) {
+		t.Fatalf("conflicting cleanup error=%v, want pending back-pressure proof", err)
+	}
+	if preparer.abortCalls != 0 {
+		t.Fatalf("source abort calls=%d, want 0 before candidate ownership proof", preparer.abortCalls)
+	}
+}
+
 func TestIngress_CleanupProofCancellationReleasesSourceFrontier(t *testing.T) {
 	pressure := &fakePartsPressure{blockCleanup: true}
 	ingress, _, submitter, _ := newBackpressureIngress(t, pressure)

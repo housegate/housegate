@@ -98,6 +98,15 @@ type reservationSlot struct {
 	keyIndex    int
 }
 
+type candidateClaim struct {
+	reservationID uint64
+	// observedActive distinguishes an exact part that has existed in a
+	// successful inventory from one whose source write is still subject to
+	// ClickHouse visibility delay. A finalized claim is released only after an
+	// inventory first observes the part and a later inventory proves it absent.
+	observedActive bool
+}
+
 // PartsPressureGuard caches active-part counts plus exact names and answers
 // ingress admission from the last successful snapshot.
 type PartsPressureGuard struct {
@@ -119,7 +128,7 @@ type PartsPressureGuard struct {
 	committedReservations map[PartsKey][]reservationSlot
 	// candidateClaims makes an exact ClickHouse part name proof single-owner.
 	// Otherwise one malformed repeated candidate could cover multiple slots.
-	candidateClaims map[PartsKey]map[string]uint64
+	candidateClaims map[PartsKey]map[string]candidateClaim
 	// liveReservations retains cancelable and not-yet-visible finalized handles
 	// so a serialized post-cleanup snapshot can rebase every later reservation.
 	liveReservations   map[uint64]*partsReservation
@@ -152,7 +161,7 @@ func NewPartsPressureGuard(conn MergeConn, cfg PartsPressureConfig) *PartsPressu
 		reserved:              PartsSnapshot{},
 		committed:             PartsSnapshot{},
 		committedReservations: map[PartsKey][]reservationSlot{},
-		candidateClaims:       map[PartsKey]map[string]uint64{},
+		candidateClaims:       map[PartsKey]map[string]candidateClaim{},
 		liveReservations:      map[uint64]*partsReservation{},
 		now:                   time.Now,
 		invalidated:           make(chan struct{}, 1),
@@ -212,6 +221,7 @@ func (g *PartsPressureGuard) Refresh(ctx context.Context) (PartsSnapshot, error)
 	g.snapshot = snapshot
 	g.activeParts = inventory
 	g.snapshotGeneration++
+	g.reconcileCandidateClaimsLocked()
 	g.takenAt = g.now()
 	g.haveSnap = !g.hasPendingCleanupProofLocked()
 	for key := range g.committedReservations {
@@ -323,7 +333,7 @@ type partsReservation struct {
 	baselines []int
 	// baselineParts is the exact inventory represented by baselines. It can be
 	// advanced to a proven post-cleanup snapshot. initialParts is immutable and
-	// prevents a retry from claiming a candidate name that predated admission.
+	// prevents a pre-admission candidate name from covering new-write debt.
 	baselineParts    []map[string]struct{}
 	initialParts     []map[string]struct{}
 	candidateParts   []map[string]struct{}
@@ -399,6 +409,16 @@ func (r *partsReservation) PrepareCleanupProof(ctx context.Context, candidates [
 		r.guard.haveSnap = false
 		r.cleanupProofPending = true
 		return cleanupProofError(refreshErr)
+	}
+	// Bind the frozen candidate identity before any source abort can run. Commit
+	// also binds after a normal prepare, but terminal rejection reaches this
+	// hook from inside Orchestrate before ingress can call Commit. Delaying the
+	// check would let one statement ask the source to DROP another statement's
+	// already-claimed active part.
+	if err := r.bindCandidatePartsLocked(candidates); err != nil {
+		r.guard.haveSnap = false
+		r.cleanupProofPending = true
+		return cleanupProofError(err)
 	}
 	for _, candidate := range candidates {
 		if candidate.PartName == "" {
@@ -528,7 +548,8 @@ func (r *partsReservation) bindCandidatePartsLocked(candidates []CandidatePart) 
 			return err
 		}
 		key := r.keys[keyIndex]
-		if owner := r.guard.candidateClaims[key][candidate.PartName]; owner != 0 && owner != r.id {
+		claim := r.guard.candidateClaims[key][candidate.PartName]
+		if claim.reservationID != 0 && claim.reservationID != r.id {
 			return fmt.Errorf("exact candidate %q for %s/%s is already claimed by another reservation", candidate.PartName, key.Table, key.Partition)
 		}
 		keyIndexes[idx] = keyIndex
@@ -537,9 +558,14 @@ func (r *partsReservation) bindCandidatePartsLocked(candidates []CandidatePart) 
 		keyIndex := keyIndexes[idx]
 		key := r.keys[keyIndex]
 		if r.guard.candidateClaims[key] == nil {
-			r.guard.candidateClaims[key] = map[string]uint64{}
+			r.guard.candidateClaims[key] = map[string]candidateClaim{}
 		}
-		r.guard.candidateClaims[key][candidate.PartName] = r.id
+		claim := r.guard.candidateClaims[key][candidate.PartName]
+		claim.reservationID = r.id
+		if _, active := r.guard.activeParts[key][candidate.PartName]; active {
+			claim.observedActive = true
+		}
+		r.guard.candidateClaims[key][candidate.PartName] = claim
 		if r.candidateParts[keyIndex] == nil {
 			r.candidateParts[keyIndex] = map[string]struct{}{}
 		}
@@ -552,11 +578,35 @@ func (g *PartsPressureGuard) releaseCandidateClaimsLocked(reservation *partsRese
 	for keyIndex, candidates := range reservation.candidateParts {
 		key := reservation.keys[keyIndex]
 		for partName := range candidates {
-			if g.candidateClaims[key][partName] == reservation.id {
+			if g.candidateClaims[key][partName].reservationID == reservation.id {
 				delete(g.candidateClaims[key], partName)
 			}
 		}
 		if len(g.candidateClaims[key]) == 0 {
+			delete(g.candidateClaims, key)
+		}
+	}
+}
+
+// reconcileCandidateClaimsLocked keeps finalized exact names single-owner for
+// their full active lifetime. A source prepare result can precede system.parts
+// visibility, so absence alone is not enough to retire an orphaned finalized
+// claim: the name must first be observed active and only then observed absent.
+// Cancelled and exactly-cleaned reservations remove their own claims directly.
+func (g *PartsPressureGuard) reconcileCandidateClaimsLocked() {
+	for key, claims := range g.candidateClaims {
+		active := g.activeParts[key]
+		for partName, claim := range claims {
+			if _, ok := active[partName]; ok {
+				claim.observedActive = true
+				claims[partName] = claim
+				continue
+			}
+			if claim.observedActive && g.liveReservations[claim.reservationID] == nil {
+				delete(claims, partName)
+			}
+		}
+		if len(claims) == 0 {
 			delete(g.candidateClaims, key)
 		}
 	}
@@ -685,7 +735,9 @@ func (g *PartsPressureGuard) pruneFinalizedReservationLocked(reservation *partsR
 			}
 		}
 	}
-	g.releaseCandidateClaimsLocked(reservation)
+	// Exact names outlive a finalized reservation handle while their parts are
+	// active. Refresh retires each claim only after active -> absent evidence, so
+	// an already-queued statement cannot reuse the name and abort the ACK2 part.
 	delete(g.liveReservations, reservation.id)
 }
 

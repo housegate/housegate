@@ -368,9 +368,11 @@ func (s *rootRecordingSubmitter) SubmitStatement(_ context.Context, env sicore.S
 type rootRecordingPreparer struct {
 	prepareCalls int
 	lookupCalls  int
+	abortCalls   int
 	env          sicore.StatementEnvelope
 	source       string
 	claim        sicore.ClaimOutcome
+	candidates   []sicore.CandidatePart
 	err          error
 	lookupResult sicore.PreparedLocalResult
 	lookupFound  bool
@@ -392,6 +394,7 @@ func (p *rootRecordingPreparer) PrepareLocalStatement(_ context.Context, env sic
 		PayloadEncoding: env.PayloadEncoding,
 		Revision:        env.Revision,
 		Lifecycle:       sicore.LifecycleUnsafeWritten,
+		CandidateParts:  append([]sicore.CandidatePart(nil), p.candidates...),
 	}, nil
 }
 
@@ -400,6 +403,7 @@ func (p *rootRecordingPreparer) RegisterPreparedClaim(context.Context, string) (
 }
 
 func (p *rootRecordingPreparer) AbortPreparedStatement(context.Context, string, []sicore.CandidatePart, string) error {
+	p.abortCalls++
 	return nil
 }
 
