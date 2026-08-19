@@ -162,8 +162,8 @@ func defaultStorageIntegrityConfig() StorageIntegrityConfig {
 			},
 			Backpressure: StorageIntegrityRuntimeBackpressureConfig{
 				Enabled:               true,
-				UnsafeDatabase:        "hg_unsafe",
-				SafeDatabase:          "hg_safe",
+				UnsafeDatabase:        StorageIntegrityUnsafeDatabase,
+				SafeDatabase:          StorageIntegritySafeDatabase,
 				PollInterval:          Duration{Duration: 2 * time.Second},
 				SoftPartsPerPartition: 2400,
 				HardPartsPerPartition: 2950,
@@ -270,11 +270,15 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 			safeDatabase := strings.TrimSpace(bp.SafeDatabase)
 			if unsafeDatabase == "" {
 				errs = append(errs, errors.New("storage_integrity.runtime.backpressure.unsafe_database is required when backpressure is enabled"))
+			} else if unsafeDatabase != StorageIntegrityUnsafeDatabase {
+				errs = append(errs, fmt.Errorf("storage_integrity.runtime.backpressure.unsafe_database must be %q", StorageIntegrityUnsafeDatabase))
 			}
 			if safeDatabase == "" {
 				errs = append(errs, errors.New("storage_integrity.runtime.backpressure.safe_database is required when backpressure is enabled"))
 			} else if safeDatabase == unsafeDatabase {
 				errs = append(errs, errors.New("storage_integrity.runtime.backpressure.safe_database must differ from unsafe_database"))
+			} else if safeDatabase != StorageIntegritySafeDatabase {
+				errs = append(errs, fmt.Errorf("storage_integrity.runtime.backpressure.safe_database must be %q", StorageIntegritySafeDatabase))
 			}
 			if bp.PollInterval.Duration <= 0 {
 				errs = append(errs, errors.New("storage_integrity.runtime.backpressure.poll_interval must be > 0"))

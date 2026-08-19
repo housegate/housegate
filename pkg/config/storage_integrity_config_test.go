@@ -75,9 +75,15 @@ func TestConfigValidateStorageIntegrityBackpressure(t *testing.T) {
 		"unsafe database required": {func(c *Config) {
 			c.StorageIntegrity.Runtime.Backpressure.UnsafeDatabase = " "
 		}, "backpressure.unsafe_database"},
+		"unsafe database is protocol owned": {func(c *Config) {
+			c.StorageIntegrity.Runtime.Backpressure.UnsafeDatabase = "shadow_unsafe"
+		}, `backpressure.unsafe_database must be "hg_unsafe"`},
 		"safe database required": {func(c *Config) {
 			c.StorageIntegrity.Runtime.Backpressure.SafeDatabase = " "
 		}, "backpressure.safe_database"},
+		"safe database is protocol owned": {func(c *Config) {
+			c.StorageIntegrity.Runtime.Backpressure.SafeDatabase = "shadow_safe"
+		}, `backpressure.safe_database must be "hg_safe"`},
 		"safe and unsafe databases differ": {func(c *Config) {
 			c.StorageIntegrity.Runtime.Backpressure.SafeDatabase = c.StorageIntegrity.Runtime.Backpressure.UnsafeDatabase
 		}, "backpressure.safe_database must differ"},
