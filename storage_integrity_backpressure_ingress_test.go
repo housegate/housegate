@@ -1331,6 +1331,62 @@ func TestIngress_RecoverPendingRestoresReservationThroughExactCleanup(t *testing
 	reservation.Release()
 }
 
+func TestIngress_RecoverPendingKnownUnwrittenTerminalAbortHasNoPressureDebt(t *testing.T) {
+	ctx := context.Background()
+	journal, err := sicore.NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	abortErr := errors.New("crash during known-unwritten empty abort")
+	firstPreparer := &rootRecordingPreparer{
+		err:      fmt.Errorf("schema hash mismatch: %w", sicore.ErrPrepareTerminalReject),
+		abortErr: abortErr,
+	}
+	first := sicore.NewOrchestrator(
+		&rootRecordingSubmitter{outcome: sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: "conflict"}},
+		firstPreparer,
+		sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
+	)
+	adm := AdmissionRecordFromPlugin(bpEUAdmission())
+	adm.TouchedPartitionIDs = []string{"p_eu"}
+	res, err := first.Orchestrate(ctx, adm)
+	if !errors.Is(err, abortErr) || res.Lifecycle != sicore.LifecycleAbortPending {
+		t.Fatalf("seed known-unwritten abort=(%+v, %v), want AbortPending source error", res, err)
+	}
+
+	pressure := &fakePartsPressure{}
+	restartedPreparer := &rootRecordingPreparer{}
+	restarted := sicore.NewOrchestrator(
+		&rootRecordingSubmitter{},
+		restartedPreparer,
+		sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
+	)
+	ingress, err := NewStorageIntegrityIngress(restarted, nil, sicore.MaterializerNative)
+	if err != nil {
+		t.Fatalf("NewStorageIntegrityIngress: %v", err)
+	}
+	ingress.WithPartsPressure(pressure, bpSchemaResolver())
+	if err := ingress.RecoverPending(ctx); err != nil {
+		t.Fatalf("RecoverPending: %v", err)
+	}
+	if restartedPreparer.abortCalls != 1 {
+		t.Fatalf("restart empty abort calls=%d, want 1", restartedPreparer.abortCalls)
+	}
+	pressure.mu.Lock()
+	restored, restoreBatches := pressure.restored, pressure.restoreBatches
+	committed, released := pressure.committed, pressure.released
+	pressure.mu.Unlock()
+	if restoreBatches != 1 || restored != 0 {
+		t.Fatalf("pressure restore batches/records=%d/%d, want 1/0 for known-unwritten abort", restoreBatches, restored)
+	}
+	if committed != 0 || released != 0 {
+		t.Fatalf("known-unwritten restart committed/released pressure=%d/%d, want 0/0", committed, released)
+	}
+	if ingress.pressureReservation(adm.StatementID) != nil {
+		t.Fatal("known-unwritten restart left a tracked pressure reservation")
+	}
+}
+
 func TestIngress_RecoveredPendingPersistsTouchedPartitionsBeforeTerminalCompaction(t *testing.T) {
 	ctx := context.Background()
 	journal, err := sicore.NewFileIntakeJournal(t.TempDir())

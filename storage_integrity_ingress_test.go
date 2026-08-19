@@ -378,6 +378,7 @@ type rootRecordingPreparer struct {
 	lookupFound  bool
 	lookupErr    error
 	abortFn      func([]sicore.CandidatePart)
+	abortErr     error
 }
 
 func (p *rootRecordingPreparer) PrepareLocalStatement(_ context.Context, env sicore.StatementEnvelope, _ []byte) (sicore.PreparedLocalResult, error) {
@@ -408,7 +409,7 @@ func (p *rootRecordingPreparer) AbortPreparedStatement(_ context.Context, _ stri
 	if p.abortFn != nil {
 		p.abortFn(append([]sicore.CandidatePart(nil), candidates...))
 	}
-	return nil
+	return p.abortErr
 }
 
 func (p *rootRecordingPreparer) LookupPreparedStatement(context.Context, string) (sicore.PreparedLocalResult, bool, error) {

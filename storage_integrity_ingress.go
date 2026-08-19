@@ -279,6 +279,13 @@ func (i *StorageIntegrityIngress) restorePressureReservations(ctx context.Contex
 	restoreRecords := make([]sicore.PartsRestoreRecord, 0, len(records))
 	restoredPartitions := make(map[string][]string, len(records))
 	for _, record := range records {
+		if knownUnwrittenTerminalAbort(record) {
+			// The source durably proved that Prepare rejected before writing, and
+			// the concurrent Submit result is already an authoritative terminal
+			// rejection. Recovery must still re-run its idempotent empty abort, but
+			// it must not project capacity debt that no candidate can ever cover.
+			continue
+		}
 		if record.IsTerminal && !record.TerminalResult.Ack2 {
 			continue
 		}
@@ -360,6 +367,15 @@ func (i *StorageIntegrityIngress) restorePressureReservations(ctx context.Contex
 	}
 	i.pressureMu.Unlock()
 	return nil
+}
+
+func knownUnwrittenTerminalAbort(record sicore.IntakeJournalRecord) bool {
+	return !record.IsTerminal &&
+		record.Stage == sicore.LifecycleAbortPending &&
+		record.PrepareKnownUnwritten &&
+		!record.HasPrepared &&
+		record.HasSubmit &&
+		record.Submit.Category.RequiresAbort()
 }
 
 func validateObservedPressureCandidates(record sicore.IntakeJournalRecord) error {
