@@ -3784,7 +3784,7 @@ git commit -m "feat(rewrite): SQL_x_read_mode setting → per-query read mode; f
 **Interfaces:**
 - Produces: `housegate.Options.StorageIntegrityReadState rewriter.StorageIntegrityReadState`; `func buildRewriterFactory(cfg *config.Config, reg registry.Registry, si rewriter.StorageIntegrityOptions) rewriter.Factory`; `func storageIntegrityRewriterOptions(cfg *config.Config, rs rewriter.StorageIntegrityReadState) rewriter.StorageIntegrityOptions`; when SI is configured, startup requires `rewriter.StorageIntegrityCapableFactory.StorageIntegrityContractVersion() == rewriter.StorageIntegrityContractV1`; plugin fields `FailClosedOnError = true` and `RequiredStorageIntegrityContractVersion = ...V1`; `testenv.WithStorageIntegrityReadState(rs rewriter.StorageIntegrityReadState) ProxyOption`.
 
-- [ ] **Step 1: Failing tests** (append to `build_test.go`)
+- [x] **Step 1: Failing tests** (append to `build_test.go`)
 
 ```go
 func TestStorageIntegrityRewriterOptions_DerivesPhysicalNames(t *testing.T) {
@@ -3861,7 +3861,7 @@ Add `rewriterpb "github.com/housegate/rewriter-proto/gen/pb"` to `build_test.go`
 Run: `go vet . 2>&1 | grep -v "unkeyed fields" | head -5`
 Expected: `undefined: storageIntegrityRewriterOptions` / `unknown field StorageIntegrityReadState`.
 
-- [ ] **Step 2: Implement**
+- [x] **Step 2: Implement**
 
 `proxy.go` `Options` (after `StorageIntegrityRuntime`):
 
@@ -3933,12 +3933,12 @@ func WithStorageIntegrityReadState(rs rewriter.StorageIntegrityReadState) ProxyO
 }
 ```
 
-- [ ] **Step 3: Run**
+- [x] **Step 3: Run**
 
 Run: `bazel run //:gazelle && bazel test //:housegate_test //pkg/integration/testenv:testenv_test --test_output=errors`
 Expected: PASS (testenv_test is docker-bound; if no docker socket, run `bazel build //pkg/integration/testenv:testenv_test` instead and note it).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add proxy.go build.go build_test.go pkg/integration/testenv/proxy.go pkg/integration/testenv/BUILD.bazel
