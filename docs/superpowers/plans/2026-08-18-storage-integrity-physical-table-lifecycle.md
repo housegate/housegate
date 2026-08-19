@@ -25,6 +25,10 @@
 - 2026-08-19 approved external publication-review correction for Housegate Tasks 14–15: runtime pressure resolution is derived exclusively from the same globally collision-validated authoritative `TableSchemas` set used by ingress, rather than accepting an independent resolver, and a v2 admission's signed `schema_hash` must match that resolved schema before reservation, payload, journal, submit, or source side effects. When a source-proven pre-write `Prepare` rejection races an authoritative terminal `Submit` rejection, intake durably records both facts and performs an idempotent empty abort without exact-candidate inventory; the terminal outcome survives restart and its statement reservation is released. A no-write attempt that retains the source frontier keeps and directly reuses its statement-addressed capacity reservation across empty-abort failure, payload-store failure, and same-ID prepare retry; there is no release/re-reserve interval for a queued admission to invert capacity and frontier order. An indeterminate Prepare without an exact candidate is committed through a distinct retained-unbound state, so unrelated aggregate growth cannot surrender its slot before source lookup or exact binding. Core exposes the authoritative terminal/frontier disposition rather than inferring it from `LifecycleCleaned` or an untrusted Submit outcome returned alongside an error, and disk recovery reconstructs terminal disposition from the durable journal marker. Restart keeps a pending terminal intake for its idempotent empty abort but omits it from pressure `RestoreBatch`, because a proven no-write transition has no candidate or capacity debt for later inventory to cover. Exact cleanup that begins before durable `SubmitAccepted` retains its still-owned payload lease through post-cleanup inventory proof and durable terminal publication, so a proof or terminal-journal failure leaves the same-ID retry fully recoverable and the source frontier fenced; after sequencing is durably accepted, the existing payload-lease contract permits release before a later RC cleanup.
 
 - 2026-08-19 final publication-review capacity/frontier correction for Housegate Tasks 11/14/15: a source-side error cannot be classified from `ErrBackpressure` alone as definitely unwritten once `PrepareLocalStatement` was invoked. The SNode hard-pressure mirror therefore keeps the source frontier and commits its statement-addressed slot as retained-unbound until source lookup proves no write or exact candidate binding identifies the write. A competing admission cannot take that slot while waiting behind the same frontier. `RestoreBatch` reconstructs the same retained-unbound debt for every candidate-less non-terminal record with touched partitions, so unrelated aggregate growth during restart recovery cannot absorb an identity-unknown write.
+- 2026-08-19 final dependency-gate correction: after Plan C's original arbiter-core publication, the independently merged envelope-v2/G follow-up was officially released as non-draft/non-prerelease `arbiter-core/v0.3.1`, whose annotated tag peels to `b669ccd26db001a20f78c3ef9d9f4f8cc2ddeb8d`. That release supersedes the historical `v0.2.1` downstream instruction above: final arbiter Tasks 7–8 and sentio-node Tasks 16–18 consume only `v0.3.1` at that exact commit, without overwriting the merged G surface.
+- 2026-08-19 Plan C publication evidence: Housegate PR [#125](https://github.com/housegate/housegate/pull/125) merged as `f184cb092509556219fe4d8485a5d9c5b02486dd`; official release run `32231751651` published annotated `v0.9.1` at that exact commit, and `ghcr.io/housegate/housegate:v0.9.1` resolves to OCI digest `sha256:fef90f7d12fae455c6f3862c8e9e9e37bdc25e9a4f9e58a09056de5e2d5ca2e1`. Arbiter PR [#16](https://github.com/sentioxyz/arbiter/pull/16) merged Tasks 7–8 as `8e08e80e848fd07f42f3058f0527dc0d3e209fcd` after Go, race, strict-lock Bazel, Gazelle, offline DDL/root, and real two-ClickHouse/shared-Keeper acceptance.
+- 2026-08-19 approved review-driven sentio-node Tasks 16–18 correction: `network_state` startup first loads and root-validates authoritative schemas without requiring local physical tables, creates/verifies the pinned protocol tables, then performs the local ClickHouse schema cross-check before role registration or listener exposure; this preserves create-on-missing without weakening post-create drift detection. Presence-aware config loading applies Housegate's soft-pressure defaults when the backpressure block is absent, preserves an explicit `enabled: false`, and requires enabled safe/unsafe databases to equal the pinned `hg_safe`/`hg_unsafe` names. The SNode mirror maps parsed partition/count/limit details into exception 252 and never fabricates zero-valued metadata. The Phase-B smoke synchronously drops both acceptance tables before the create assertion and arms bounded pinned-DDL restoration before that first drop, while ClickHouse is still open.
+- 2026-08-19 sentio-node publication and rollout evidence: PR [#177](https://github.com/sentioxyz/sentio-node/pull/177) merged as `ecdea1c10bab4ed46be454005869d09bc97849e3`, pinned Housegate `v0.9.1` / `f184cb092509556219fe4d8485a5d9c5b02486dd` and arbiter-core `v0.3.1` / `b669ccd26db001a20f78c3ef9d9f4f8cc2ddeb8d`, and passed Go, race, full uncached Bazel, strict Bzlmod lock, Gazelle, and public-module resolution gates. Devnet workflow run `32237268883` published exact commit `ecdea1c10bab4ed46be454005869d09bc97849e3`; both mutable and commit tags resolve to OCI index `sha256:061a442e3c319962ba9c4b2127c80d17fda09a7ce895b54aa85303af443a461d`. The authorized sequential devnet2 rollout completed A then B at that image ID with `currentRevision == updateRevision`, `1/1` ready, and zero restarts. The operator-only `SENTIO_SI_E2E` environment was unavailable, so its Bazel compile/skip gate passed but no live Phase-B smoke pass is claimed.
 
 ## Global Constraints
 
@@ -1684,9 +1688,9 @@ to the `var (...)` block, and in `PrepareLocalStatement` right after the `invent
 **Interfaces:**
 - Produces: `github.com/sentioxyz/arbiter-core/dataplane/ddl` resolvable as `@arbiter_core//dataplane/ddl`; `snode.Config.ProtocolTables`, `verifier.Config.ProtocolTables`, `verifier.Deps.Conn` available to Task 8.
 
-- [ ] **Step 1: Bump** — `bash scripts/update-arbiter-core.sh <tag-or-40-char-sha-of-the-merged-Task-6-commit>` (the script resolves the pseudo-version, runs `go get` + `go mod tidy`, rewrites the `bazel_dep` version and `git_override` commit in `MODULE.bazel`, and re-syncs housegate via `scripts/update-housegate.sh`; it prints `Updated arbiter-core dependency:` with the resolved version and commit).
-- [ ] **Step 2: Verify** — `go doc github.com/sentioxyz/arbiter-core/dataplane/ddl.EnsureProtocolTables` prints the signature; `bazel mod tidy && bazel build //... && bazel test //cmd/... --test_output=errors` Expected: PASS.
-- [ ] **Step 3: Commit** — `git add go.mod go.sum MODULE.bazel MODULE.bazel.lock && git commit -m "chore(deps): upgrade arbiter-core for protocol-table DDL"`
+- [x] **Step 1: Bump** — `bash scripts/update-arbiter-core.sh <tag-or-40-char-sha-of-the-merged-Task-6-commit>` (the script resolves the pseudo-version, runs `go get` + `go mod tidy`, rewrites the `bazel_dep` version and `git_override` commit in `MODULE.bazel`, and re-syncs housegate via `scripts/update-housegate.sh`; it prints `Updated arbiter-core dependency:` with the resolved version and commit).
+- [x] **Step 2: Verify** — `go doc github.com/sentioxyz/arbiter-core/dataplane/ddl.EnsureProtocolTables` prints the signature; `bazel mod tidy && bazel build //... && bazel test //cmd/... --test_output=errors` Expected: PASS.
+- [x] **Step 3: Commit** — `git add go.mod go.sum MODULE.bazel MODULE.bazel.lock && git commit -m "chore(deps): upgrade arbiter-core for protocol-table DDL"`
 
 ---
 
@@ -1701,7 +1705,7 @@ to the `var (...)` block, and in `PrepareLocalStatement` right after the `invent
 - Consumes: Task 7 pins; `ddl.ParseMode`, `ddl.BuildDDL`, `ddl.Pinned`, `snode.Config.ProtocolTables`, `verifier.Config.{ProtocolTables,SafeDatabase,PromoteDatabase}`, `verifier.Deps.Conn`.
 - Produces: `defaultEnsureMode(cfg Config) string` in each cmd (`"create"` when inline `tables`, `"verify"` when `table_ids`), `printDDL(ctx, cfg, w io.Writer) error`.
 
-- [ ] **Step 1: Write the failing tests** (append to `cmd/arbiter-snode/main_test.go`; mirror in `cmd/arbiter-verifier/main_test.go` with `validVerifierConfig`/`writeVerifierConfig` and `replica_id: verifier-1`)
+- [x] **Step 1: Write the failing tests** (append to `cmd/arbiter-snode/main_test.go`; mirror in `cmd/arbiter-verifier/main_test.go` with `validVerifierConfig`/`writeVerifierConfig` and `replica_id: verifier-1`)
 
 ```go
 func TestDefaultEnsureMode_FollowsSchemaSource(t *testing.T) {
@@ -1741,9 +1745,9 @@ func TestPrintDDL_PrintsPinnedStatements(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify it fails** — `go test ./cmd/arbiter-snode/ -run 'TestDefaultEnsureMode|TestPrintDDL'` Expected: FAIL (`undefined: defaultEnsureMode`, `printDDL`).
+- [x] **Step 2: Run to verify it fails** — `go test ./cmd/arbiter-snode/ -run 'TestDefaultEnsureMode|TestPrintDDL'` Expected: FAIL (`undefined: defaultEnsureMode`, `printDDL`).
 
-- [ ] **Step 3: Implement (`cmd/arbiter-snode`).** `main.go`: new flags
+- [x] **Step 3: Implement (`cmd/arbiter-snode`).** `main.go`: new flags
 
 ```go
 	ensureTables := flag.String("ensure-tables", "", "protocol table DDL mode: off|verify|create (default: create with inline tables, verify with table_ids)")
@@ -1795,11 +1799,11 @@ func orDefault(v, d string) string {
 
 `config.go`: `toRoleConfig(tables []payloadexec.TableSchema, mode ddl.Mode) snode.Config` sets `ProtocolTables: mode`. Existing `TestRun_NoArbiterFailsFast` passes `ddl.ModeOff` to `run` (it has no ClickHouse). Verifier cmd: identical flags/helpers with `NodeID: cfg.ReplicaID`, `verifier.Config{..., SafeDatabase: cfg.SafeDatabase, PromoteDatabase: cfg.PromoteDatabase, ProtocolTables: mode}` — add `safe_database`/`promote_database` yaml keys to the verifier `Config` — and `verifier.Deps{..., Conn: conn}`.
 
-- [ ] **Step 4: Run** — `bazel run //:gazelle && go test ./cmd/... && bazel test //cmd/... --test_output=errors && bazel run //cmd/arbiter-snode -- -config configs/snode.local.yaml -print-ddl` (needs a reachable ClickHouse because the sample uses `table_ids`; with `configs/verifier.local.yaml` the print is offline). Expected: PASS; DDL printed.
+- [x] **Step 4: Run** — `bazel run //:gazelle && go test ./cmd/... && bazel test //cmd/... --test_output=errors && bazel run //cmd/arbiter-snode -- -config configs/snode.local.yaml -print-ddl` (needs a reachable ClickHouse because the sample uses `table_ids`; with `configs/verifier.local.yaml` the print is offline). Expected: PASS; DDL printed.
 
-- [ ] **Step 5: README** — in `README.md` "P1c data-plane roles": add the two flags, state that both binaries create/verify the pinned `hg_unsafe`/`hg_safe` DDL on start (`--ensure-tables=create` with inline `tables`, `verify` with `table_ids`, `off` only for harnesses that own DDL), replace the "physical tables must already exist" onboarding sentence with "print with `-print-ddl` or let the role create them", and note that `table_ids` bootstrap still needs the tables (verify-only). Also mention `docker run … -v scripts/ci/clickhouse-keeper.xml…` is required for RMT.
+- [x] **Step 5: README** — in `README.md` "P1c data-plane roles": add the two flags, state that both binaries create/verify the pinned `hg_unsafe`/`hg_safe` DDL on start (`--ensure-tables=create` with inline `tables`, `verify` with `table_ids`, `off` only for harnesses that own DDL), replace the "physical tables must already exist" onboarding sentence with "print with `-print-ddl` or let the role create them", and note that `table_ids` bootstrap still needs the tables (verify-only). Also mention `docker run … -v scripts/ci/clickhouse-keeper.xml…` is required for RMT.
 
-- [ ] **Step 6: Commit + PR** — `git add cmd README.md && git commit -m "feat(cmd): --ensure-tables and -print-ddl for snode/verifier reference binaries" && git push -u origin feat/ensure-tables-flag && gh pr create --title "feat(cmd): --ensure-tables / -print-ddl (Spec C)" --body "Bumps arbiter-core; reference binaries create/verify pinned protocol DDL."`
+- [x] **Step 6: Commit + PR** — `git add cmd README.md && git commit -m "feat(cmd): --ensure-tables and -print-ddl for snode/verifier reference binaries" && git push -u origin feat/ensure-tables-flag && gh pr create --title "feat(cmd): --ensure-tables / -print-ddl (Spec C)" --body "Bumps arbiter-core; reference binaries create/verify pinned protocol DDL."`
 
 ---
 
@@ -3320,7 +3324,7 @@ with `bpTableSchema()` returning `payloadexec.TableSchema{TableID: "db.t", Parti
 **Interfaces:**
 - Produces: `sicore.PhysicalTableName`, `sicore.ErrBackpressure`, `sicore.BackpressureError`, `housegate.StorageIntegrityRuntimeOptions.SchemaResolver`, `config.StorageIntegrityRuntimeBackpressureConfig` (Tasks 10–14) and `ddl.Mode`, `snode.Config.{ProtocolTables,KeeperShardID,HardPartsPerPartition}`, `snode.ErrBackpressure` (Tasks 3–6) available to Tasks 17–18.
 
-- [ ] **Step 1: Bump Go pins** — with `HG_SHA` = merge commit of the housegate PR (Task 15) and `AC_SHA` = merge commit of the arbiter-core PR (Task 6):
+- [x] **Step 1: Bump Go pins** — with `HG_SHA` = merge commit of the housegate PR (Task 15) and `AC_SHA` = merge commit of the arbiter-core PR (Task 6):
 
 ```bash
 go get github.com/housegate/housegate@${HG_SHA} github.com/sentioxyz/arbiter-core@${AC_SHA}
@@ -3328,9 +3332,9 @@ bazel run @rules_go//go -- mod tidy
 go list -m github.com/housegate/housegate github.com/sentioxyz/arbiter-core   # note both pseudo-versions
 ```
 
-- [ ] **Step 2: Bump Bzlmod pins** — in `MODULE.bazel` set `bazel_dep(name = "housegate", version = "<housegate pseudo-version without leading v>")` and `bazel_dep(name = "arbiter_core", version = "<arbiter-core pseudo-version without leading v>")`, and in the two `git_override` blocks set `commit = "<full 40-char sha>"` and refresh the `# Resolved … ; source is pinned by the commit below.` comment lines (same shape as the current lines 30-40). sentio-node has no updater script for these two modules; edit by hand exactly as `0c9a37a` did.
-- [ ] **Step 3: Verify** — `./scripts/update-bazel-deps.sh && bazel build //... && bazel test //config/... //storageintegrityadapter/... //standalone/... --test_output=errors` Expected: PASS (`go doc github.com/housegate/housegate/pkg/storageintegrity.PartsPressureGuard` and `go doc github.com/sentioxyz/arbiter-core/dataplane/ddl.Mode` print).
-- [ ] **Step 4: Commit** — `git add go.mod go.sum MODULE.bazel MODULE.bazel.lock && git commit -m "chore(deps): upgrade housegate and arbiter-core for protocol tables + back-pressure"`
+- [x] **Step 2: Bump Bzlmod pins** — in `MODULE.bazel` set `bazel_dep(name = "housegate", version = "<housegate pseudo-version without leading v>")` and `bazel_dep(name = "arbiter_core", version = "<arbiter-core pseudo-version without leading v>")`, and in the two `git_override` blocks set `commit = "<full 40-char sha>"` and refresh the `# Resolved … ; source is pinned by the commit below.` comment lines (same shape as the current lines 30-40). sentio-node has no updater script for these two modules; edit by hand exactly as `0c9a37a` did.
+- [x] **Step 3: Verify** — `./scripts/update-bazel-deps.sh && bazel build //... && bazel test //config/... //storageintegrityadapter/... //standalone/... --test_output=errors` Expected: PASS (`go doc github.com/housegate/housegate/pkg/storageintegrity.PartsPressureGuard` and `go doc github.com/sentioxyz/arbiter-core/dataplane/ddl.Mode` print).
+- [x] **Step 4: Commit** — `git add go.mod go.sum MODULE.bazel MODULE.bazel.lock && git commit -m "chore(deps): upgrade housegate and arbiter-core for protocol tables + back-pressure"`
 
 ---
 
@@ -3345,7 +3349,7 @@ go list -m github.com/housegate/housegate github.com/sentioxyz/arbiter-core   # 
 - Consumes: Task 16 pins.
 - Produces: `storageintegrityadapter.ProtocolTablesMode(schemaSource string) ddl.Mode` (`"network_state"` → `ddl.ModeCreateAndVerify`; `""`/`"clickhouse"` → `ddl.ModeVerifyOnly`); `SourcePreparer.PrepareLocalStatement` translates `snode.ErrBackpressure` into a `*sicore.BackpressureError` (Kind `"hard"`, `Unwrap` → `sicore.ErrBackpressure`) so housegate's ingress surfaces exception 252; config validation: `housegate.storage_integrity.runtime.backpressure.unsafe_database` must equal `config.StorageIntegrityUnsafeDatabase`, and `snode.CHTableName(id) == sicore.PhysicalTableName(id)` for every configured table id (cross-repo D2 tripwire).
 
-- [ ] **Step 1: Write the failing tests.** `storageintegrityadapter/adapter_test.go`:
+- [x] **Step 1: Write the failing tests.** `storageintegrityadapter/adapter_test.go`:
 
 ```go
 func TestPrepareMapsSNodeBackpressureToHousegateBackpressure(t *testing.T) {
@@ -3387,9 +3391,9 @@ func TestPhysicalTableNameMatchesArbiterCore(t *testing.T) {
 
 (`indexerConfig(t)` builds the housegate config by hand, so `Backpressure` is zero-valued there; the subtest sets `Enabled` explicitly.)
 
-- [ ] **Step 2: Run to verify they fail** — `go test ./storageintegrityadapter/ ./config/ -run 'Backpressure|ProtocolTablesMode|PhysicalTableName'` Expected: FAIL (`undefined: ProtocolTablesMode`; the adapter returns the raw snode error; config passes).
+- [x] **Step 2: Run to verify they fail** — `go test ./storageintegrityadapter/ ./config/ -run 'Backpressure|ProtocolTablesMode|PhysicalTableName'` Expected: FAIL (`undefined: ProtocolTablesMode`; the adapter returns the raw snode error; config passes).
 
-- [ ] **Step 3: Implement.** `storageintegrityadapter/adapter.go`:
+- [x] **Step 3: Implement.** `storageintegrityadapter/adapter.go`:
 
 ```go
 // ProtocolTablesMode maps the configured schema source to the DDL mode (spec
@@ -3455,9 +3459,9 @@ func (e *prepareBackpressureError) Unwrap() []error {
 
 `standalone/standalone.go`: in the `snode.New(snode.Config{...})` literal add `SafeDatabase: "hg_safe", PromoteDatabase: "hg_promote", ProtocolTables: storageintegrityadapter.ProtocolTablesMode(si.SNode.SchemaSource), KeeperShardID: 0, HardPartsPerPartition: cfg.Housegate.StorageIntegrity.Runtime.Backpressure.HardPartsPerPartition,` (NodeID stays `si.SNode.NodeID` — the id the role registers with, per spec §4). Build the resolver once — `siResolver := storageintegrityadapter.NewSchemaResolver(tables)` — and use it in both `siRuntime` (`SchemaResolver: siResolver`) and `siMaterializer` (`SchemaResolver: siResolver`).
 
-- [ ] **Step 4: Run** — `./scripts/update-bazel-deps.sh && bazel test //config/... //storageintegrityadapter/... //standalone/... --test_output=errors` Expected: PASS.
+- [x] **Step 4: Run** — `./scripts/update-bazel-deps.sh && bazel test //config/... //storageintegrityadapter/... //standalone/... --test_output=errors` Expected: PASS.
 
-- [ ] **Step 5: Commit** — `git add standalone storageintegrityadapter config && git commit -m "feat(storage-integrity): ensure protocol tables by schema source; map SNode back-pressure; wire schema resolver"`
+- [x] **Step 5: Commit** — `git add standalone storageintegrityadapter config && git commit -m "feat(storage-integrity): ensure protocol tables by schema source; map SNode back-pressure; wire schema resolver"`
 
 ---
 
@@ -3471,7 +3475,7 @@ func (e *prepareBackpressureError) Unwrap() []error {
 **Interfaces:**
 - Consumes: `ddl.VerifyProtocolTable`, `ddl.Intents`, `ddl.Pinned`, `ddl.ErrProtocolTableDrift`; existing `startSmokeStandalone`, `waitForListener`, `smokeStandalone.stop`.
 
-- [ ] **Step 1: Extend the smoke.** In `TestSchemaRegistryPhaseBSmoke`, after `waitForStatementRCBound(t, phase2.ctx, cfg, statementID)` append:
+- [x] **Step 1: Extend the smoke.** In `TestSchemaRegistryPhaseBSmoke`, after `waitForStatementRCBound(t, phase2.ctx, cfg, statementID)` append:
 
 ```go
 	// Spec C: with schema_source network_state the SNode creates + verifies the
@@ -3510,11 +3514,11 @@ func (e *prepareBackpressureError) Unwrap() []error {
 
 (imports: `"github.com/sentioxyz/arbiter-core/dataplane/ddl"`; `declared` is the `payloadexec.TableSchema` unmarshalled earlier in the same test.) If `Run` wraps the snode error with `%v` instead of `%w`, change that `fmt.Errorf` in `standalone.go` to `%w` so `ErrorIs` holds.
 
-- [ ] **Step 2: Docs.** README smoke section: state that the smoke ClickHouse must have Keeper (`config.d` `<zookeeper>`/`<keeper_server>`, e.g. the `scripts/ci/clickhouse-keeper.xml` from arbiter-core), that Phase-1 tables must already conform to the pinned DDL (`hg_unsafe.*` ReplicatedMergeTree at `/sentio/0/unsafe/<t>` replica `<snode.node_id>`, `hg_safe.*` MergeTree, both with the pinned settings — print them with `arbiter-snode -print-ddl` or let a `network_state` boot create them), that Phase 2 now creates the acceptance table's protocol tables and Phase 3 proves drift refusal, and that between runs the operator drops `hg_unsafe.<t> SYNC` / `hg_safe.<t>` for the acceptance table. Onboarding step 2: replace "add the corresponding `snode.CHTableName(id)` physical table to `merge_guard.tables`" with the same sentence plus "the role creates `hg_unsafe.<t>`/`hg_safe.<t>` itself when `schema_source: network_state`; with `clickhouse` they must pre-exist with the pinned DDL". Runbook: one paragraph under the source-flip step noting that flipping to `network_state` also enables protocol-table creation and that startup now fails on DDL drift.
+- [x] **Step 2: Docs.** README smoke section: state that the smoke ClickHouse must have Keeper (`config.d` `<zookeeper>`/`<keeper_server>`, e.g. the `scripts/ci/clickhouse-keeper.xml` from arbiter-core), that Phase-1 tables must already conform to the pinned DDL (`hg_unsafe.*` ReplicatedMergeTree at `/sentio/0/unsafe/<t>` replica `<snode.node_id>`, `hg_safe.*` MergeTree, both with the pinned settings — print them with `arbiter-snode -print-ddl` or let a `network_state` boot create them), that Phase 2 now creates the acceptance table's protocol tables and Phase 3 proves drift refusal, and that between runs the operator drops `hg_unsafe.<t> SYNC` / `hg_safe.<t>` for the acceptance table. Onboarding step 2: replace "add the corresponding `snode.CHTableName(id)` physical table to `merge_guard.tables`" with the same sentence plus "the role creates `hg_unsafe.<t>`/`hg_safe.<t>` itself when `schema_source: network_state`; with `clickhouse` they must pre-exist with the pinned DDL". Runbook: one paragraph under the source-flip step noting that flipping to `network_state` also enables protocol-table creation and that startup now fails on DDL drift.
 
-- [ ] **Step 3: Run** — `bazel test //standalone:standalone_test --test_output=errors` (gated tests skip; the file must compile) and, when the operator environment is available: `SENTIO_SI_E2E=1 SENTIO_SI_CONFIG=… <the README env> go test ./standalone -run TestSchemaRegistryPhaseBSmoke -count=1 -timeout=15m` Expected: PASS.
+- [x] **Step 3: Run** — `bazel test //standalone:standalone_test --test_output=errors` (gated tests skip; the file must compile) and, when the operator environment is available: `SENTIO_SI_E2E=1 SENTIO_SI_CONFIG=… <the README env> go test ./standalone -run TestSchemaRegistryPhaseBSmoke -count=1 -timeout=15m` Expected: PASS. Local compile/skip passed; the operator environment was unavailable, so no live Phase-B smoke pass is claimed.
 
-- [ ] **Step 4: Commit + PR** — `git add standalone README.md docs && git commit -m "test(standalone): smoke proves pinned protocol tables and drift refusal" && git push -u origin feat/si-protocol-tables && gh pr create --title "feat(storage-integrity): protocol tables + back-pressure wiring (Spec C)" --body "Tasks 16-18 of housegate docs/superpowers/plans/2026-08-18-storage-integrity-physical-table-lifecycle.md."`
+- [x] **Step 4: Commit + PR** — `git add standalone README.md docs && git commit -m "test(standalone): smoke proves pinned protocol tables and drift refusal" && git push -u origin feat/si-protocol-tables && gh pr create --title "feat(storage-integrity): protocol tables + back-pressure wiring (Spec C)" --body "Tasks 16-18 of housegate docs/superpowers/plans/2026-08-18-storage-integrity-physical-table-lifecycle.md."`
 
 ---
 
@@ -3525,9 +3529,9 @@ func (e *prepareBackpressureError) Unwrap() []error {
 **Files:**
 - Modify: housegate `CLAUDE.md` (Key Modules bullets for `pkg/storageintegrity` / root runtime; Known Rough Edges), housegate `docs/superpowers/specs/2026-08-18-storage-integrity-physical-table-lifecycle-design.md` (status line only)
 
-- [ ] **Step 1: CLAUDE.md** — under Key Modules add a bullet (one paragraph, no hard wraps): `pkg/storageintegrity` back-pressure: `PartsPressureGuard` (reads exact active `system.parts.name` rows, aggregates counts by `(database, table, partition)`, and retains names for exact cleanup proof; keys use `LogicalPartitionID` = `p_<partition text>`/`all`, never `partition_id`, which is a SipHash for String keys), `PayloadPartitionIDs` (CSV + Native), `PhysicalTableName` (D2 mirror of arbiter-core `ddl.CHTableName`), `ErrBackpressure`/`BackpressureError`; root `StorageIntegrityPartsPressureSupervisor` polls every `storage_integrity.runtime.backpressure.poll_interval` (2s), first refresh is startup fail-fast, gauges `storage_integrity_unsafe_parts` / `storage_integrity_safe_parts` and counter `storage_integrity_backpressure_total`; ingress refuses with `chproto.ClientError{Code: 252}` between the merge-health latch and the payload put; the plugin chain can now reject with an explicit code via `chproto.ClientError` (relay `exceptionForPluginError`, default stays 403). Under Known Rough Edges add: `hg_safe` part counts only grow in v1 (merges stay stopped, `allow_native_background_merges` still rejected) — a `hg_safe` partition approaching `parts_to_throw_insert` is the P4 controlled-compaction prerequisite, not an incident to fix by enabling merges; the strict-input rejection path still closes the client connection after the exception. Mark the spec status `Proposed` → `Implemented (see plan)` once all PRs merge.
-- [ ] **Step 2: Verify the two READMEs** — arbiter-core `README.md` shows the keeper mount + `//dataplane/ddl:ddl_test` (Task 3); arbiter `README.md` documents `--ensure-tables` / `-print-ddl` and no longer says tables "must already exist" for inline-tables roles (Task 8). Base-design §6 replacement (naming/DDL example = `BuildDDL` golden output) is Spec B's job — leave it.
-- [ ] **Step 3: Commit** — `git add CLAUDE.md docs && git commit -m "docs: storage-integrity back-pressure and protocol-table lifecycle notes"`
+- [x] **Step 1: CLAUDE.md** — under Key Modules add a bullet (one paragraph, no hard wraps): `pkg/storageintegrity` back-pressure: `PartsPressureGuard` (reads exact active `system.parts.name` rows, aggregates counts by `(database, table, partition)`, and retains names for exact cleanup proof; keys use `LogicalPartitionID` = `p_<partition text>`/`all`, never `partition_id`, which is a SipHash for String keys), `PayloadPartitionIDs` (CSV + Native), `PhysicalTableName` (D2 mirror of arbiter-core `ddl.CHTableName`), `ErrBackpressure`/`BackpressureError`; root `StorageIntegrityPartsPressureSupervisor` polls every `storage_integrity.runtime.backpressure.poll_interval` (2s), first refresh is startup fail-fast, gauges `storage_integrity_unsafe_parts` / `storage_integrity_safe_parts` and counter `storage_integrity_backpressure_total`; ingress refuses with `chproto.ClientError{Code: 252}` between the merge-health latch and the payload put; the plugin chain can now reject with an explicit code via `chproto.ClientError` (relay `exceptionForPluginError`, default stays 403). Under Known Rough Edges add: `hg_safe` part counts only grow in v1 (merges stay stopped, `allow_native_background_merges` still rejected) — a `hg_safe` partition approaching `parts_to_throw_insert` is the P4 controlled-compaction prerequisite, not an incident to fix by enabling merges; the strict-input rejection path still closes the client connection after the exception. Mark the spec status `Proposed` → `Implemented (see plan)` once all PRs merge.
+- [x] **Step 2: Verify the two READMEs** — arbiter-core `README.md` shows the keeper mount + `//dataplane/ddl:ddl_test` (Task 3); arbiter `README.md` documents `--ensure-tables` / `-print-ddl` and no longer says tables "must already exist" for inline-tables roles (Task 8). Base-design §6 replacement (naming/DDL example = `BuildDDL` golden output) is Spec B's job — leave it.
+- [x] **Step 3: Commit** — `git add CLAUDE.md docs && git commit -m "docs: storage-integrity back-pressure and protocol-table lifecycle notes"`
 
 ---
 
