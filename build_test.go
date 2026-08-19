@@ -857,6 +857,32 @@ func TestBuildStorageIntegrityRuntimeRejectsPhysicalTableNameCollisionWhenBackpr
 	}
 }
 
+func TestBuildStorageIntegrityRuntimeRejectsTableSchemaMembershipMismatch(t *testing.T) {
+	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatalf("NewRelaySigner: %v", err)
+	}
+	cfg := minimalRouterOnlyCfg(t)
+	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
+	cfg.StorageIntegrity.Runtime.Backpressure.Enabled = false
+	_, _, err = buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, []string{"tenant.events"}, StorageIntegrityRuntimeOptions{
+		StatementSubmitter: &rootRecordingSubmitter{},
+		SourcePreparer:     &rootRecordingPreparer{},
+		StatusQuerier:      rootRecordingStatusQuerier{},
+		PayloadWriter:      &rootRecordingPayloadWriter{},
+		MergeGuard:         &recordingBuildMergeGuard{},
+		TableSchemas:       bpSchemas(),
+	})
+	if err == nil {
+		t.Fatal("mismatched storage_integrity.tables and runtime schemas unexpectedly succeeded")
+	}
+	for _, want := range []string{"tenant.events", "net1.events", "storage_integrity.tables"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("membership mismatch err = %v, missing %q", err, want)
+		}
+	}
+}
+
 func TestBuildStorageIntegrityRuntimeBackpressureDisabledStillBindsTouchedPartitions(t *testing.T) {
 	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	if err != nil {
@@ -1203,8 +1229,8 @@ func TestBuildStorageIntegrityRuntimeBuildsMergeGuardFromConnAndConfig(t *testin
 		t.Fatalf("startStorageIntegrityRuntime: %v", err)
 	}
 	wantExecs := []string{
-		"SYSTEM STOP MERGES `hg_safe`.`tenant__events`",
-		"SYSTEM STOP MERGES `hg_unsafe`.`tenant__events`",
+		"SYSTEM STOP MERGES `hg_safe`.`net1__events`",
+		"SYSTEM STOP MERGES `hg_unsafe`.`net1__events`",
 	}
 	if strings.Join(mergeConn.execs, "\n") != strings.Join(wantExecs, "\n") {
 		t.Fatalf("STOP MERGES execs = %v, want %v", mergeConn.execs, wantExecs)
@@ -1725,7 +1751,7 @@ func enableStorageIntegrityRuntimeTestConfig(t *testing.T, cfg *config.Config, s
 	runtimeDir := t.TempDir()
 	cfg.StorageIntegrity.Runtime.JournalDir = filepath.Join(runtimeDir, "journal")
 	cfg.StorageIntegrity.Runtime.PayloadSpoolDir = filepath.Join(runtimeDir, "payload-spool")
-	cfg.StorageIntegrity.Tables = []string{"tenant.events"}
+	cfg.StorageIntegrity.Tables = []string{"net1.events"}
 }
 
 type recordingBuildMergeGuard struct {

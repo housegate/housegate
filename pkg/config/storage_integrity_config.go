@@ -188,14 +188,24 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 		errs = append(errs, errors.New("storage_integrity.tables is server mode only"))
 	}
 	seen := make(map[string]bool, len(c.Tables))
+	physicalOwners := make(map[string]string, len(c.Tables))
 	for i, id := range c.Tables {
-		if _, _, ok := SplitStorageIntegrityTableID(id); !ok {
+		_, _, valid := SplitStorageIntegrityTableID(id)
+		if !valid {
 			errs = append(errs, fmt.Errorf("storage_integrity.tables[%d] %q must be a logical <database>.<table> id", i, id))
 		}
 		if seen[id] {
 			errs = append(errs, fmt.Errorf("storage_integrity.tables[%d] duplicates %q", i, id))
 		}
 		seen[id] = true
+		if valid {
+			physical := StorageIntegrityPhysicalTable(id)
+			if previous, ok := physicalOwners[physical]; ok && previous != id {
+				errs = append(errs, fmt.Errorf("storage_integrity.tables[%d] %q collides with %q at physical table %q", i, id, previous, physical))
+			} else {
+				physicalOwners[physical] = id
+			}
+		}
 	}
 	if c.Read.DefaultMode != "" {
 		mode, err := rewriter.ParseReadMode(c.Read.DefaultMode)

@@ -256,6 +256,20 @@ func TestConfigValidateStorageIntegrityIngress(t *testing.T) {
 		}
 	})
 
+	t.Run("tables reject non-injective physical names without runtime", func(t *testing.T) {
+		cfg := minimalServerConfig(t)
+		cfg.StorageIntegrity.Tables = []string{"a.b__c", "a__b.c"}
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("Validate succeeded with colliding storage-integrity physical table names")
+		}
+		for _, want := range []string{"a.b__c", "a__b.c", "a__b__c"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("Validate err = %v, missing %q", err, want)
+			}
+		}
+	})
+
 	t.Run("read.default_mode validation", func(t *testing.T) {
 		cfg := minimalServerConfig(t)
 		cfg.StorageIntegrity.Tables = []string{"tenant.events"}

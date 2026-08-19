@@ -123,8 +123,13 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 	}
 	if len(opts.TableSchemas) == 0 {
 		errs = append(errs, errors.New("storage_integrity.runtime requires the authoritative table schema set (StorageIntegrityRuntimeOptions.TableSchemas)"))
-	} else if err := sicore.ValidatePhysicalTableNames(opts.TableSchemas); err != nil {
-		errs = append(errs, fmt.Errorf("storage_integrity.runtime schema set: %w", err))
+	} else {
+		if err := sicore.ValidatePhysicalTableNames(opts.TableSchemas); err != nil {
+			errs = append(errs, fmt.Errorf("storage_integrity.runtime schema set: %w", err))
+		}
+		if err := validateStorageIntegrityRuntimeTableSchemas(tables, opts.TableSchemas); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	if joined := errors.Join(errs...); joined != nil {
 		return nil, nil, joined
@@ -186,6 +191,27 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 		ingress.WithPartsPressure(pressure, schemaResolver)
 	}
 	return ingress, mergeGuard, nil
+}
+
+func validateStorageIntegrityRuntimeTableSchemas(tables []string, schemas []payloadexec.TableSchema) error {
+	configured := make(map[string]struct{}, len(tables))
+	for _, tableID := range tables {
+		configured[tableID] = struct{}{}
+	}
+	resolved := make(map[string]struct{}, len(schemas))
+	var errs []error
+	for _, schema := range schemas {
+		resolved[schema.TableID] = struct{}{}
+		if _, ok := configured[schema.TableID]; !ok {
+			errs = append(errs, fmt.Errorf("storage_integrity.runtime table schema %q is not listed in storage_integrity.tables", schema.TableID))
+		}
+	}
+	for _, tableID := range tables {
+		if _, ok := resolved[tableID]; !ok {
+			errs = append(errs, fmt.Errorf("storage_integrity.tables entry %q has no authoritative runtime table schema", tableID))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func runtimeTableSchemaResolver(schemas []payloadexec.TableSchema) StorageIntegrityTableSchemaResolver {
