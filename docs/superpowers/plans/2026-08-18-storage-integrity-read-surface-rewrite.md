@@ -2708,7 +2708,7 @@ Merge the PR, then `Actions → cut-release → Run workflow` (tags `main` `vX.Y
 **Interfaces:**
 - Produces: `sqlmeta.AccessedTable.IsStorageIntegrity bool`; `sqlmeta.StatementTypeDescribe StatementType = 22` (String `"DESCRIBE"`).
 
-- [ ] **Step 1: Bump (upgrade-dependency recipe: plain `require`, no replace edits needed here)**
+- [x] **Step 1: Bump (upgrade-dependency recipe: plain `require`, no replace edits needed here)**
 
 ```bash
 git checkout -b feat/storage-integrity-read-surface
@@ -2719,7 +2719,7 @@ go run ./cmd fetch-rewriter-lib --tag v0.7.0
 Expected: `go.mod` shows both new versions; gazelle may reorder unrelated `load()`s (keep); the last command prints the cached lib path (e.g. `~/Library/Caches/housegate/rewriter-ffi/v0.7.0/libpolyglot_sql_ffi.dylib`) — export it as `$FFI` for the rest of this part.
 Chase the version string: `sed -i '' 's/native_library_release: v0.6.0/native_library_release: v0.7.0/' configs/local.server.yaml`; in `CLAUDE.md` change "requires an FFI library built from rewriter-go >= v0.6.0" to `>= v0.7.0`.
 
-- [ ] **Step 2: Failing tests**
+- [x] **Step 2: Failing tests**
 
 Append to `pkg/rewriter/backend_test.go`:
 
@@ -2760,18 +2760,18 @@ func TestIngressIgnoresDescribe(t *testing.T) {
 Run: `go test ./pkg/rewriter ./pkg/plugins/storageintegrity ./pkg/sqlmeta -run 'TestSentioRewriter_AccessedTablesCarryStorageIntegrityFlag|TestIngressIgnoresDescribe' -count=1`
 Expected: compile errors `unknown field IsStorageIntegrity` / `undefined: sqlmeta.StatementTypeDescribe`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `pkg/sqlmeta/accessed_table.go`: add `IsStorageIntegrity bool` after `IsRemote` with the doc comment "true iff the rewriter resolved this access to a storage-integrity table (Spec G); auth/usage keep using the logical names above." `pkg/sqlmeta/statement_type.go`: add `StatementTypeDescribe StatementType = 22` after `StatementTypeDropView` and `case StatementTypeDescribe: return "DESCRIBE"` in `String()`. `pkg/rewriter/sentio.go` `accessedTablesFromProto`: `IsStorageIntegrity: t.GetIsStorageIntegrity(),`. `pkg/plugins/storageintegrity/plugin.go` `classifyStorageIntegrityKind`: add `sqlmeta.StatementTypeDescribe` to the read-only `case` list next to `StatementTypeShowDatabases`.
 
-- [ ] **Step 4: Verification ladder**
+- [x] **Step 4: Verification ladder**
 
 Run: `go build ./... && go vet ./... 2>&1 | grep -v "unkeyed fields"; bazel build //... && bazel test //pkg/rewriter:rewriter_test //pkg/plugins/storageintegrity:storageintegrity_test //pkg/sqlmeta:sqlmeta_test`
 Expected: builds clean; the three targets PASS.
 Run: `bazel test //pkg/rewriter:rewriter_test --test_env=POLYGLOT_SQL_FFI_PATH=$FFI --test_output=all --test_arg=-test.v --nocache_test_results 2>&1 | grep -E '^--- (PASS|FAIL): TestNativeEngineSmoke'`
 Expected: `--- PASS: TestNativeEngineSmoke` (the new lib actually ran).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add go.mod go.sum MODULE.bazel pkg/sqlmeta pkg/rewriter/sentio.go pkg/rewriter/backend_test.go pkg/plugins/storageintegrity configs/local.server.yaml CLAUDE.md
