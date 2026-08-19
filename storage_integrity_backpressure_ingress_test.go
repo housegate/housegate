@@ -471,6 +471,74 @@ func TestIngress_RetryablePrewriteRejectRetainsReservationUntilSameIDRetry(t *te
 	}
 }
 
+func TestIngress_RetryablePrewriteRejectReusesReservationWithoutRegating(t *testing.T) {
+	pressure := &fakePartsPressure{}
+	ingress, writer, _, preparer := newBackpressureIngress(t, pressure)
+	preparer.err = fmt.Errorf("schema hash mismatch: %w", sicore.ErrPrepareTerminalReject)
+
+	if err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), bpAdmission()); err == nil || !strings.Contains(err.Error(), string(sicore.LifecycleCleaned)) {
+		t.Fatalf("retryable pre-write reject err=%v, want nonterminal Cleaned", err)
+	}
+	beforeAllows := len(pressure.allowCalls)
+	writer.err = errors.New("payload store temporarily unavailable")
+	if err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), bpAdmission()); !errors.Is(err, writer.err) {
+		t.Fatalf("same-ID retry payload failure=%v, want %v", err, writer.err)
+	}
+	if len(pressure.allowCalls) != beforeAllows || pressure.released != 0 || ingress.pressureReservation(bpAdmission().StatementID) == nil {
+		t.Fatalf("failed same-ID retry pressure allows/releases/tracked=%d/%d/%v, want %d/0/true", len(pressure.allowCalls), pressure.released, ingress.pressureReservation(bpAdmission().StatementID) != nil, beforeAllows)
+	}
+	writer.err = nil
+	preparer.err = nil
+	if err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), bpAdmission()); err != nil {
+		t.Fatalf("same-ID retry: %v", err)
+	}
+	if len(pressure.allowCalls) != beforeAllows || pressure.released != 0 {
+		t.Fatalf("same-ID retry pressure allows/releases=%d/%d, want %d/0 (reuse existing slot)", len(pressure.allowCalls), pressure.released, beforeAllows)
+	}
+}
+
+func TestIngress_NonAuthoritativeTerminalSubmitOutcomeRetainsRetryableReservation(t *testing.T) {
+	pressure := &fakePartsPressure{}
+	ingress, _, submitter, preparer := newBackpressureIngress(t, pressure)
+	submitter.outcome = sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: "untrusted alongside error"}
+	submitter.err = errors.New("submit transport failed")
+	preparer.err = fmt.Errorf("schema hash mismatch: %w", sicore.ErrPrepareTerminalReject)
+
+	if err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), bpAdmission()); err == nil || !strings.Contains(err.Error(), string(sicore.LifecycleCleaned)) {
+		t.Fatalf("non-authoritative terminal outcome err=%v, want nonterminal Cleaned", err)
+	}
+	if pressure.released != 0 || ingress.pressureReservation(bpAdmission().StatementID) == nil {
+		t.Fatalf("non-authoritative terminal outcome released/tracked=%d/%v, want 0/true", pressure.released, ingress.pressureReservation(bpAdmission().StatementID) != nil)
+	}
+}
+
+func TestIngress_PrewriteRejectAbortFailureRetainsReservationWithFrontier(t *testing.T) {
+	pressure := &fakePartsPressure{}
+	ingress, _, _, preparer := newBackpressureIngress(t, pressure)
+	preparer.err = fmt.Errorf("schema hash mismatch: %w", sicore.ErrPrepareTerminalReject)
+	preparer.abortErr = errors.New("empty abort temporarily unavailable")
+
+	if err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), bpAdmission()); !errors.Is(err, preparer.abortErr) {
+		t.Fatalf("pre-write reject abort error=%v, want %v", err, preparer.abortErr)
+	}
+	if pressure.released != 0 || ingress.pressureReservation(bpAdmission().StatementID) == nil {
+		t.Fatalf("failed empty abort released/tracked=%d/%v, want 0/true", pressure.released, ingress.pressureReservation(bpAdmission().StatementID) != nil)
+	}
+
+	preparer.abortErr = nil
+	if err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), bpAdmission()); err == nil || !strings.Contains(err.Error(), string(sicore.LifecycleCleaned)) {
+		t.Fatalf("empty abort retry err=%v, want nonterminal Cleaned", err)
+	}
+	beforeAllows := len(pressure.allowCalls)
+	preparer.err = nil
+	if err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), bpAdmission()); err != nil {
+		t.Fatalf("prepare retry after empty abort convergence: %v", err)
+	}
+	if len(pressure.allowCalls) != beforeAllows || pressure.released != 0 {
+		t.Fatalf("converged same-ID retry pressure allows/releases=%d/%d, want %d/0", len(pressure.allowCalls), pressure.released, beforeAllows)
+	}
+}
+
 func TestIngress_RejectsSignedSchemaHashMismatchBeforePressure(t *testing.T) {
 	pressure := &fakePartsPressure{}
 	ingress, writer, submitter, preparer := newBackpressureIngress(t, pressure)

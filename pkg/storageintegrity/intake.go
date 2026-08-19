@@ -512,6 +512,12 @@ type IntakeResult struct {
 	// idempotent replay; retryable/unknown outcomes and failed aborts are not,
 	// so they reconverge on a later call.
 	terminal bool
+
+	// sourceFrontierRetained is set on results returned after this statement
+	// acquired and kept its source-ordering frontier. Ingress uses the explicit
+	// disposition to keep a matching no-write capacity reservation; lifecycle
+	// and protocol outcomes alone cannot distinguish every error path.
+	sourceFrontierRetained bool
 }
 
 // SourceWriteMayExist reports whether this attempt may have created a source
@@ -523,6 +529,20 @@ func (r IntakeResult) SourceWriteMayExist() bool {
 		return false
 	}
 	return r.sourceWritePossible || r.Prepared.StatementID != ""
+}
+
+// IsTerminal reports whether this result has an authoritative final intake
+// disposition. Lifecycle alone is insufficient: a source-proven pre-write
+// rejection also reports Cleaned while deliberately remaining retryable.
+func (r IntakeResult) IsTerminal() bool {
+	return r.terminal
+}
+
+// RetainsSourceFrontier reports whether this attempt kept the statement's
+// source-ordering frontier for same-ID convergence. It is false for failures
+// before frontier acquisition and for completed terminal/RC-bound outcomes.
+func (r IntakeResult) RetainsSourceFrontier() bool {
+	return r.sourceFrontierRetained
 }
 
 // Orchestrator runs the staged intake for one admission: it starts
@@ -943,6 +963,7 @@ func (o *Orchestrator) Orchestrate(ctx context.Context, adm AdmissionRecord) (In
 	// source claim root. Retryable/unknown outcomes and still-pending aborts keep
 	// the frontier held for the same reason; the holder's own retry is re-entrant.
 	releaseFrontier := runErr == nil && (res.terminal || res.Lifecycle == LifecycleRCBound)
+	res.sourceFrontierRetained = !releaseFrontier
 	o.finishAttempt(rec, res, runErr, releaseFrontier)
 	return res, runErr
 }

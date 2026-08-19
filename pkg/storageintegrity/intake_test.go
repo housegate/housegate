@@ -474,7 +474,7 @@ func TestOrchestrate_TerminalPrepareRejectHonorsConcurrentTerminalSubmit(t *test
 	if err != nil {
 		t.Fatalf("terminal prepare + submit reject: %v", err)
 	}
-	if res.Ack2 || res.Lifecycle != LifecycleCleaned || !res.terminal {
+	if res.Ack2 || res.Lifecycle != LifecycleCleaned || !res.IsTerminal() || res.RetainsSourceFrontier() {
 		t.Fatalf("result = %+v, want terminal Cleaned", res)
 	}
 	if res.Submit.Category != OutcomeTerminalReject {
@@ -714,7 +714,7 @@ func TestOrchestrate_PreWriteRejectRetainsFrontierUntilRetryConverges(t *testing
 	)
 
 	first, err := orch.Orchestrate(context.Background(), admA)
-	if err != nil || first.Lifecycle != LifecycleCleaned || first.terminal {
+	if err != nil || first.Lifecycle != LifecycleCleaned || first.IsTerminal() || !first.RetainsSourceFrontier() {
 		t.Fatalf("first pre-write reject = %+v, %v, want retryable Cleaned", first, err)
 	}
 

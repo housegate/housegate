@@ -71,9 +71,10 @@ type StorageIntegrityIngress struct {
 }
 
 type trackedPartsReservation struct {
-	reservation sicore.PartsReservation
-	tableID     string
-	partitions  []string
+	reservation            sicore.PartsReservation
+	tableID                string
+	partitions             []string
+	reuseWhileFrontierHeld bool
 }
 
 // NewStorageIntegrityIngress constructs the ingress runtime over an orchestrator
@@ -536,17 +537,28 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 	if err != nil {
 		return fmt.Errorf("storage_integrity ingress: preflight %s: %w", rec.StatementID, err)
 	}
-	trackedReservation := i.pressureReservation(rec.StatementID)
-	if requiresPrepare && trackedReservation != nil {
-		// For an existing statement, true means the required source lookup proved
-		// the previous indeterminate prepare wrote nothing (or no prepare was ever
-		// attempted). Cancel that statement's old committed slot before re-gating.
-		trackedReservation.Release()
-		i.deletePressureReservation(rec.StatementID)
-		trackedReservation = nil
-	}
+	tracked, _ := i.trackedPressureReservation(rec.StatementID)
+	trackedReservation := tracked.reservation
 	var attemptReservation sicore.PartsReservation
-	if i.pressure != nil && requiresPrepare {
+	reusedRetryReservation := false
+	if requiresPrepare && trackedReservation != nil {
+		if tracked.reuseWhileFrontierHeld {
+			// A pre-write Prepare rejection retains both the source frontier and its
+			// original uncommitted capacity slot. Reuse that handle: releasing and
+			// re-reserving would let a queued statement take the slot while still
+			// blocking behind this statement's frontier.
+			attemptReservation = trackedReservation
+			reusedRetryReservation = true
+		} else {
+			// For an existing indeterminate prepare, true means the required source
+			// lookup proved the previous attempt wrote nothing. Cancel its committed
+			// slot before the ordinary fresh admission gate.
+			trackedReservation.Release()
+			i.deletePressureReservation(rec.StatementID)
+			trackedReservation = nil
+		}
+	}
+	if i.pressure != nil && requiresPrepare && attemptReservation == nil {
 		attemptReservation, err = i.reservePartsPressure(ctx, rec.StatementID, table, partitions)
 		if err != nil {
 			return err
@@ -557,11 +569,15 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 	if i.payloadWriter != nil {
 		put, err := i.payloadWriter.PutPayload(ctx, rec.Payload, rec.PayloadHash, rec.PayloadLength)
 		if err != nil {
-			i.cancelAttemptReservation(rec.StatementID, attemptReservation)
+			if !reusedRetryReservation {
+				i.cancelAttemptReservation(rec.StatementID, attemptReservation)
+			}
 			return fmt.Errorf("storage_integrity ingress: put payload for %s: %w", rec.StatementID, err)
 		}
 		if put.PayloadRef == "" {
-			i.cancelAttemptReservation(rec.StatementID, attemptReservation)
+			if !reusedRetryReservation {
+				i.cancelAttemptReservation(rec.StatementID, attemptReservation)
+			}
 			return fmt.Errorf("storage_integrity ingress: payload store returned empty payload_ref for %s", rec.StatementID)
 		}
 		rec.PayloadRef = put.PayloadRef
@@ -571,7 +587,8 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 	case errors.Is(err, sicore.ErrCleanupProofPending):
 		// Exact cleanup proof is pending (before or after the idempotent source
 		// abort). Keep the statement-addressed reservation/fence for same-ID retry.
-	case res.Lifecycle == sicore.LifecycleCleaned && res.Submit.Category.RequiresAbort():
+		i.setReuseWhileFrontierHeld(rec.StatementID, false)
+	case res.Lifecycle == sicore.LifecycleCleaned && res.IsTerminal():
 		// Exact cleanup normally reconciles/releases this reservation from its
 		// hook while the source frontier is held. A terminal outcome whose Prepare
 		// was durably known unwritten has no exact candidates and deliberately
@@ -580,16 +597,19 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 		// also reports Cleaned, but its accepted Submit is not terminal: retain its
 		// statement reservation with the source frontier until same-ID retry.
 		i.cancelTrackedReservation(rec.StatementID, trackedReservation)
-	case res.Lifecycle == sicore.LifecycleCleaned:
-		// A retryable pre-write Prepare rejection is known not to have created a
-		// part, but it deliberately retains the source frontier so a same-ID retry
-		// can converge ahead of queued statements. Keep the matching uncommitted
-		// capacity reservation for that same interval.
+	case res.RetainsSourceFrontier() && !res.SourceWriteMayExist():
+		// A pre-write failure can report Cleaned, AbortPending, or another local
+		// error while deliberately retaining the source frontier. Keep the matching
+		// uncommitted capacity reservation for that same interval, including across
+		// payload-store retries, so a queued statement cannot invert capacity and
+		// source ordering.
+		i.setReuseWhileFrontierHeld(rec.StatementID, true)
 	case attemptReservation != nil && (errors.Is(err, sicore.ErrBackpressure) || !res.SourceWriteMayExist()):
 		// SNode hard pressure and every definite pre-prepare failure occur before a
 		// source write. Only an actually attempted/known prepare stays charged.
 		i.cancelTrackedReservation(rec.StatementID, attemptReservation)
 	case attemptReservation != nil:
+		i.setReuseWhileFrontierHeld(rec.StatementID, false)
 		if commitErr := attemptReservation.Commit(res.Prepared.CandidateParts...); commitErr != nil {
 			err = errors.Join(err, fmt.Errorf("storage_integrity ingress: bind prepared candidates for %s: %w", rec.StatementID, commitErr))
 		} else if res.Ack2 {
@@ -600,6 +620,7 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 		// A resumed indeterminate prepare may reveal its exact candidates only on
 		// lookup. Bind them even on a non-terminal retry so exact inventory can
 		// account for a net-zero cleanup/write interleaving.
+		i.setReuseWhileFrontierHeld(rec.StatementID, false)
 		if commitErr := trackedReservation.Commit(res.Prepared.CandidateParts...); commitErr != nil {
 			err = errors.Join(err, fmt.Errorf("storage_integrity ingress: bind resumed candidates for %s: %w", rec.StatementID, commitErr))
 		} else if res.Ack2 {
@@ -649,6 +670,16 @@ func (i *StorageIntegrityIngress) setPressureReservation(statementID, tableID st
 		reservation: reservation,
 		tableID:     tableID,
 		partitions:  clonePartitionIDs(partitions),
+	}
+	i.pressureMu.Unlock()
+}
+
+func (i *StorageIntegrityIngress) setReuseWhileFrontierHeld(statementID string, reusable bool) {
+	i.pressureMu.Lock()
+	tracked, ok := i.pressureReservations[statementID]
+	if ok {
+		tracked.reuseWhileFrontierHeld = reusable
+		i.pressureReservations[statementID] = tracked
 	}
 	i.pressureMu.Unlock()
 }
