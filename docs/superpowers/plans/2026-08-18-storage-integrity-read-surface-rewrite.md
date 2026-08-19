@@ -46,6 +46,12 @@
 
 **D-10 — The shared corpus is an atomic Go/C++ publication gate.** Review expanded the corpus with security regressions after the first Go release gate was prepared. The corpus must not be published from only one engine: finish the Go closure, copy the final JSON byte-for-byte into the rewriter-grpc worktree, prove `cmp`/SHA equality, then complete Tasks 10–14 and local cross-engine parity/review. Only after both local gates are clean may publication proceed in dependency order: merge/release rewriter-go v0.7.0 first, then merge/release rewriter-grpc. This sequencing prevents an official Go corpus from temporarily specifying behavior the C++ backend cannot yet enforce.
 
+**D-11 — Live ClickHouse DESCRIBE proof required a coordinated patch release.** The first engine releases (`rewriter-go` v0.7.0 and rewriter-grpc v0.12.0) preserved the seven-field DESCRIBE shape but selected metadata names that do not exist in ClickHouse 25.8. The byte-identical Go/C++ corpus and a real ClickHouse 25.8 execution regression were updated before HouseGate integration: rewriter-go v0.7.1 (merge `dbac7bc27bf904ea2182f389603f5b439c77d1db`) and rewriter-grpc v0.12.1 (merge `ddc24b9e31dfa9a27dc9313a453d5d595f2ad921`, image digest `sha256:d1d5216570e8990129b17bc45faf551b3b41990408a6b16cd7e4a5786fa7b43a`) are the minimum downstream pins. HouseGate therefore upgrades both its Go module and fetched FFI tag to v0.7.1 before Task 20.
+
+**D-12 — Task 22 starts from the superseding arbiter-core release.** Plan C / Plan A changes landed after this plan was frozen. The implementation branch is based on official arbiter-core v0.3.0 / main `5b941e770cfed59f7a7cea073b2746628fa53123`, which contains v0.2.1 and preserves the merged Plan A surface; rebasing from the older v0.2.1 commit would overwrite accepted work.
+
+**D-13 — HouseGate publication follows the overlapping Plan C merge.** Plan C PR #125 changes runtime/config seams also touched by Tasks 16–21 and is first in the merge queue. Plan G may finish and pass local review beforehand, but its final ready PR is created only after #125 merges, followed by an exact-main rebase and rerun of every impacted Bazel/integration/review gate.
+
 ## File map
 
 | Repo | Create | Modify |
@@ -3956,7 +3962,7 @@ git commit -m "feat: require SI contract v1 capable rewriter wiring"
 **Interfaces:**
 - Consumes: `testenv.StartServerProxy`, `testenv.WithConfigMutator`, `testenv.WithExtraDatabases`, `testenv.WithStorageIntegrityReadState`, `openConnNoDB`, `openConn`, `chEnv`.
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 ```go
 package integration
@@ -4127,20 +4133,20 @@ func TestStorageIntegrityRead_SafeAndUnsafeLatest(t *testing.T) {
 
 Delete step 4's `cols` probe if the `SELECT length(columns)` shape errors on your CH image — it is a log-only probe; the `_hg_row_id` rejection is the assertion.
 
-- [ ] **Step 2: Run against docker (native engine)**
+- [x] **Step 2: Run against docker (native engine)**
 
 Run: `bazel test //pkg/integration:integration_test --test_filter='TestStorageIntegrityRead_SafeAndUnsafeLatest' --test_output=all --nocache_test_results --test_env=DOCKER_HOST=$(docker context inspect --format '{{.Endpoints.docker.Host}}') --test_env=HOME --test_env=POLYGLOT_SQL_FFI_PATH=$FFI 2>&1 | grep -E '^(--- |ok|FAIL)'`
 Expected: `--- PASS: TestStorageIntegrityRead_SafeAndUnsafeLatest`. Then the whole suite once, and diff any unrelated failure against `main` per the main-baseline rule.
 
-- [ ] **Step 3: CI** — in `.github/workflows/ci.yml` integration job, before the `bazel test //pkg/integration…` step add:
+- [x] **Step 3: CI** — in `.github/workflows/ci.yml` integration job, before the `bazel test //pkg/integration…` step add:
 
 ```yaml
       - name: Fetch rewriter FFI lib
-        run: echo "POLYGLOT_SQL_FFI_PATH=$(bazel run //cmd:housegate -- fetch-rewriter-lib --tag v0.7.0 2>/dev/null | tail -1)" >> "$GITHUB_ENV"
+        run: echo "POLYGLOT_SQL_FFI_PATH=$(bazel run //cmd:housegate -- fetch-rewriter-lib --tag v0.7.1 2>/dev/null | tail -1)" >> "$GITHUB_ENV"
 ```
 and append `--test_env=POLYGLOT_SQL_FFI_PATH` to that `bazel test` command line.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add pkg/integration/storage_integrity_read_test.go pkg/integration/BUILD.bazel .github/workflows/ci.yml
