@@ -38,8 +38,8 @@ Bump header to `Status: Proposed (v4, reconciled with P0–P1e implementation, 2
 ### Base design §7 implementation inputs from Spec A
 
 - Base design §7 signing payload table: replace `schema_snapshot_id` with `schema_hash` (Phase-B `payloadexec.TableSchemaHash`) and add `client_revision`; `payload_format = clickhouse-native-data-v1`; `settings_hash = CanonicalDigest("housegate-settings-v1", [])` (constant `storageintegrity.EmptySettingsHash`); purpose `housegate-statement-v2`, setting `SQL_x_statement_token`; the legacy `SQL_x_auth_token` query JWS stays for the auth plugin. Source: 2026-08-18-storage-integrity-signed-envelope-v2-design.md §4.
-- Base design §5.1 / §6.1: the stored payload is byte-identical to the signed Native `ClientData` bytes; the CSV bridge (`NativeCSVPayloadMaterializer`, `StorageIntegrityPayloadMaterializer`) no longer exists; SNode/verifier decode Native via `pkg/replay/nativepayload`.
-- Base design §4.1: the agent-mode HouseGate answers the INSERT sample block from network-state schema (Relay deferred-INSERT mode) so it can sign `payload_hash` before forwarding.
+- Base design §5.1 / §6: the stored payload is byte-identical to the signed Native `ClientData` bytes; the CSV bridge (`NativeCSVPayloadMaterializer`, `StorageIntegrityPayloadMaterializer`) no longer exists; SNode/verifier decode Native via `pkg/replay/nativepayload`.
+- Base design §5.1: the agent-mode HouseGate answers the INSERT sample block from network-state schema (Relay deferred-INSERT mode) so it can sign `payload_hash` before forwarding.
 - Arbiter design §5: `L3BlockHeader.statements_root` (`arbiter-l3-statements-v1`) is part of `ChainHash`; `SafeState.GetL3Block` exposes header + envelopes; FSM snapshot version 2; genesis `network_id`.
 - housegate CLAUDE.md `pkg/storageintegrity` / `pkg/plugins/{storageintegrity,sistatement}` / `storage_integrity.{ingress,runtime,agent}` section (Task 21 wrote the bullets; B consolidates).
 
