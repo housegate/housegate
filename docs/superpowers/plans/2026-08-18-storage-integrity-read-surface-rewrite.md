@@ -4439,7 +4439,7 @@ Actual publication evidence (2026-08-19): implementation commits `06ae0f819541e9
 **Interfaces:**
 - Consumes: housegate `Options.StorageIntegrityReadState`, `config.StorageIntegrityConfig.Tables`, `config.StorageIntegrityReadConfig`; arbiter-core `(*snode.Role).PromotedUnsafeParts`.
 
-- [ ] **Step 1: Bump pins**
+- [x] **Step 1: Bump pins**
 
 ```bash
 git checkout -b feat/storage-integrity-read-surface
@@ -4448,7 +4448,7 @@ bazel mod tidy
 ```
 Expected: `go.mod` shows the new arbiter-core tag and the housegate pseudo-version/tag; transitive `rewriter-go v0.7.0` / `rewriter-proto v0.2.0`.
 
-- [ ] **Step 2: Failing config test** — replace `TestConfigValidate_StorageIntegrityAssembly`'s base setup and the "table id not merge-guarded" subtest:
+- [x] **Step 2: Failing config test** — replace `TestConfigValidate_StorageIntegrityAssembly`'s base setup and the "table id not merge-guarded" subtest:
 
 ```go
 func TestConfigValidate_StorageIntegrityAssembly(t *testing.T) {
@@ -4481,7 +4481,7 @@ func TestConfigValidate_StorageIntegrityAssembly(t *testing.T) {
 Run: `go test ./config -run TestConfigValidate_StorageIntegrityAssembly -count=1`
 Expected: compile error (`Tables` unknown / old `MergeGuard.Tables` field gone).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `config/config.go` `validateStorageIntegrity` — replace the `guarded` map + loop with:
 
@@ -4530,18 +4530,24 @@ with, just above the literal:
 ```
 and onboarding step 2: "Add its logical `<database>.<table>` id to BOTH `storage_integrity.snode.table_ids` and `housegate.storage_integrity.tables` (one list drives the merge guard, the ingress and the read rewrite)."
 
-- [ ] **Step 4: Run**
+- [x] **Step 4: Run**
 
 Run: `go build ./... && go test ./config ./standalone -count=1 && bazel build //... && bazel test //config:config_test //standalone:standalone_test --test_output=errors`
 Expected: `ok` / PASS (`storage_integrity_smoke_test.go` self-skips without `SENTIO_SI_E2E=1`). If `SENTIO_SI_E2E=1` infra is available: run it once and additionally issue `SELECT count() FROM <table> SETTINGS SQL_x_read_mode = 'unsafe_latest'` through the node's housegate right after the smoke INSERT — expected to return the inserted row count (the smoke's INSERT lands in `hg_unsafe`).
 
-- [ ] **Step 5: Commit + PR**
+- [x] **Step 5: Commit + PR**
 
 ```bash
 git add go.mod go.sum MODULE.bazel config standalone README.md
 git commit -m "feat(storage-integrity): wire snode.Role as housegate read-state port; storage_integrity.tables cross-check"
 git push -u origin feat/storage-integrity-read-surface
 ```
+
+Actual publication and deployment evidence (2026-08-19): the implementation was rebased after sentio-node Plan C PR #177 onto `main` `ecdea1c10bab4ed46be454005869d09bc97849e3`, preserving PRs #176 and #177. It pins official HouseGate v0.9.2 (`23759a271cac33b4e3b9de63a8f50a0a7fdca687`) and arbiter-core v0.3.1 (`b669ccd26db001a20f78c3ef9d9f4f8cc2ddeb8d`), with rewriter-go v0.7.1 and rewriter-proto v0.2.0 transitively resolved. Repository-required `./scripts/update-sentio-core.sh` advanced the Bazel override to official sentio-core `d9474c3314eb0b1a360ba015bcc1281258b2e773`.
+
+Review-driven closure widened the literal implementation while preserving the frozen subset contract: HouseGate loads the authoritative full schema set, SNode manages only `storage_integrity.snode.table_ids`, and the read-state port is exposed only when SNode owns every HouseGate SI table. A safe-default superset starts successfully but per-query `unsafe_latest` fails closed; an unsafe-default superset is rejected at startup. The exact reviewed head was `de6c2baffc9a741d770655b7ab1d44435b8fe872`; both frozen-spec and standards/correctness reviews returned No findings. Evidence: `go build ./...`, `go test ./... -count=1`, `go test -race ./... -count=1`, `go vet ./...`, idempotent Gazelle, lockfile-strict Bazel build, and lockfile-strict full Bazel test (14/14) all passed.
+
+Ready PR [sentioxyz/sentio-node#178](https://github.com/sentioxyz/sentio-node/pull/178) had CI run `32240593374` green, no unresolved reviews/comments/threads, and squash-merged as `ba136ea0df4d91ddc546aca41c16d098edf9a540`. Release Devnet run `32240781289` succeeded from that exact merge. Immutable tag `devnet-ba136ea0df4d91ddc546aca41c16d098edf9a540` and mutable `devnet` both resolve to OCI index digest `sha256:698fe1686d20457f21983effbb8b3682f231124111697d6743335a3796f20099` (linux/amd64 manifest `sha256:cdd74e0cb8efa3aad5247a3531c03a5fb95483adddada89fa12dbaf0e136ed44`). The production `scripts/rollout-sentio-node-devnet.sh` completed A then B in context `sentio-sea`, namespace `sentio-network-devnet2`; both StatefulSets reached 1/1 Ready on new revisions, both sentio-node containers reported the new index digest, every container had restart count zero, and no related Warning event was present.
 
 ---
 
