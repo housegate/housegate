@@ -637,7 +637,7 @@ func TestBuildStorageIntegrityRuntimeRequiresPorts(t *testing.T) {
 	}
 }
 
-func TestBuildStorageIntegrityRuntimeBackpressureRequiresConnAndResolver(t *testing.T) {
+func TestBuildStorageIntegrityRuntimeBackpressureRequiresConnAndUsesValidatedSchemas(t *testing.T) {
 	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	if err != nil {
 		t.Fatalf("NewRelaySigner: %v", err)
@@ -652,12 +652,10 @@ func TestBuildStorageIntegrityRuntimeBackpressureRequiresConnAndResolver(t *test
 		TableSchemas: bpSchemas(),
 	}
 	if _, _, err := buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, base); err == nil || !strings.Contains(err.Error(), "backpressure") {
-		t.Fatalf("enabled backpressure without merge_conn/schema_resolver must fail: %v", err)
+		t.Fatalf("enabled backpressure without merge_conn must fail: %v", err)
 	}
 	withPorts := base
 	withPorts.MergeConn = &recordingBuildMergeConn{}
-	withPorts.SchemaResolver = bpSchemaResolver()
-	withPorts.TableSchemas = bpSchemas()
 	ingress, _, err := buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, withPorts)
 	if err != nil {
 		t.Fatalf("buildStorageIntegrityRuntimeConsumer: %v", err)
@@ -681,7 +679,6 @@ func TestBuildStorageIntegrityRuntimeInjectedPressureRequiresLifecycle(t *testin
 		StatusQuerier:      rootRecordingStatusQuerier{},
 		PayloadWriter:      &rootRecordingPayloadWriter{},
 		MergeGuard:         &recordingBuildMergeGuard{},
-		SchemaResolver:     bpSchemaResolver(),
 		TableSchemas:       bpSchemas(),
 		PartsPressure:      &fakePartsPressure{},
 	})
@@ -704,7 +701,6 @@ func TestBuildStorageIntegrityRuntimeRejectsPhysicalTableNameCollision(t *testin
 		StatusQuerier:      rootRecordingStatusQuerier{},
 		PayloadWriter:      &rootRecordingPayloadWriter{},
 		MergeGuard:         &recordingBuildMergeGuard{},
-		SchemaResolver:     bpSchemaResolver(),
 		TableSchemas: []payloadexec.TableSchema{
 			{TableID: "a.b__c"},
 			{TableID: "a__b.c"},
@@ -808,7 +804,6 @@ func TestBuildStorageIntegrityRuntimeInjectedPressureRefreshesAndPolls(t *testin
 		StatusQuerier:      rootRecordingStatusQuerier{},
 		PayloadWriter:      &rootRecordingPayloadWriter{},
 		MergeGuard:         &recordingBuildMergeGuard{},
-		SchemaResolver:     bpSchemaResolver(),
 		TableSchemas:       bpSchemas(),
 		PartsPressure:      runner,
 	})
@@ -994,7 +989,7 @@ func TestBuildStorageIntegrityRuntimeBuildsConsumerAndRunsMergeGuard(t *testing.
 		EnvelopeVersion: sicore.EnvelopeVersionV2,
 		NetworkID:       "testnet-v2",
 		SettingsHash:    sicore.EmptySettingsHash,
-		SchemaHash:      "0x11",
+		SchemaHash:      payloadexec.TableSchemaHash("testnet-v2", bpSchemas()[0]),
 		RowIDProfileID:  payloadexec.RowIDProfileID,
 		Payload: storageintegrity.CapturedPayload{
 			Bytes:    payload,
@@ -1182,7 +1177,6 @@ func TestStartStorageIntegrityRuntimeFailsClosedOnInitialPartsSnapshot(t *testin
 			PayloadWriter:      &rootRecordingPayloadWriter{result: sicore.PayloadPutResult{PayloadRef: "payload://store/ref-1", State: sicore.PayloadStateAvailable}},
 			MergeGuard:         &recordingBuildMergeGuard{},
 			MergeConn:          &rootPartsConn{err: partsErr},
-			SchemaResolver:     bpSchemaResolver(),
 			TableSchemas:       bpSchemas(),
 		},
 	)
@@ -1294,7 +1288,7 @@ func TestStartStorageIntegrityRuntimeRecoversAfterInitialMergeAssert(t *testing.
 		EnvelopeVersion: sicore.EnvelopeVersionV2,
 		NetworkID:       "testnet-v2",
 		SettingsHash:    sicore.EmptySettingsHash,
-		SchemaHash:      "0x11",
+		SchemaHash:      payloadexec.TableSchemaHash("testnet-v2", bpSchemas()[0]),
 		RowIDProfileID:  payloadexec.RowIDProfileID,
 	}
 	env, err := sicore.EnvelopeFromAdmission(adm)
@@ -1344,12 +1338,11 @@ func TestStartStorageIntegrityRuntimeRecoversAfterInitialMergeAssert(t *testing.
 				source: "snode-A",
 				claim:  sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"},
 			},
-			StatusQuerier:  rootRecordingStatusQuerier{},
-			PayloadWriter:  payloadWriter,
-			MergeGuard:     &orderedBuildMergeGuard{order: order},
-			SchemaResolver: bpSchemaResolver(),
-			TableSchemas:   bpSchemas(),
-			PartsPressure:  pressure,
+			StatusQuerier: rootRecordingStatusQuerier{},
+			PayloadWriter: payloadWriter,
+			MergeGuard:    &orderedBuildMergeGuard{order: order},
+			TableSchemas:  bpSchemas(),
+			PartsPressure: pressure,
 		},
 	)
 	if err != nil {

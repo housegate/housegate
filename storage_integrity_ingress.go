@@ -429,6 +429,17 @@ func (i *StorageIntegrityIngress) partsPressureTarget(rec sicore.AdmissionRecord
 	if schema.TableID != rec.TableID {
 		return "", nil, fmt.Errorf("storage_integrity ingress: schema table_id %q does not match admission table_id %q", schema.TableID, rec.TableID)
 	}
+	if rec.EnvelopeVersion >= sicore.EnvelopeVersionV2 {
+		expectedSchemaHash := payloadexec.TableSchemaHash(rec.NetworkID, schema)
+		if rec.SchemaHash != expectedSchemaHash {
+			return "", nil, fmt.Errorf(
+				"storage_integrity ingress: schema_hash %q does not match authoritative table schema %q for %s",
+				rec.SchemaHash,
+				expectedSchemaHash,
+				rec.TableID,
+			)
+		}
+	}
 	partitions, err := sicore.PayloadPartitionIDs(schema, rec.PayloadEncoding, rec.Revision, rec.Payload)
 	if err != nil {
 		return "", nil, fmt.Errorf("storage_integrity ingress: %w", err)
@@ -545,8 +556,12 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 		// Exact cleanup proof is pending (before or after the idempotent source
 		// abort). Keep the statement-addressed reservation/fence for same-ID retry.
 	case res.Lifecycle == sicore.LifecycleCleaned:
-		// The exact-cleanup hook already reconciled/released this reservation while
-		// the source frontier was still held.
+		// Exact cleanup normally reconciles/releases this reservation from its
+		// hook while the source frontier is held. A terminal outcome whose Prepare
+		// was durably known unwritten has no exact candidates and deliberately
+		// bypasses that hook, so cancel the handle here as well. Release is
+		// idempotent after ReleaseCleaned.
+		i.cancelTrackedReservation(rec.StatementID, trackedReservation)
 	case attemptReservation != nil && (errors.Is(err, sicore.ErrBackpressure) || !res.SourceWriteMayExist()):
 		// SNode hard pressure and every definite pre-prepare failure occur before a
 		// source write. Only an actually attempted/known prepare stays charged.

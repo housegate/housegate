@@ -1002,7 +1002,11 @@ func (o *Orchestrator) run(ctx context.Context, env StatementEnvelope, adm Admis
 		// A prior attempt judged this statement terminal but its abort did not
 		// complete. Reuse the cached candidate; re-run only the abort.
 		if o.isPrepareKnownUnwritten(rec) {
-			return o.abortTerminalPrepareReject(ctx, o.resultFor(rec), rec, rec.abortReason)
+			res := o.resultFor(rec)
+			if res.Submit.Category.RequiresAbort() {
+				return o.abortKnownUnwrittenTerminal(ctx, res, rec, res.Submit, rec.abortReason)
+			}
+			return o.abortTerminalPrepareReject(ctx, res, rec, rec.abortReason)
 		}
 		return o.abort(ctx, o.resultFor(rec), rec, rec.abortReason)
 
@@ -1064,8 +1068,11 @@ func (o *Orchestrator) run(ctx context.Context, env StatementEnvelope, adm Admis
 					// concurrently returned terminal Submit outcome is still
 					// authoritative. Resolve that outcome through the ordinary
 					// terminal empty-abort path instead of resetting it for retry.
+					// The pre-write classification means no exact candidate proof
+					// is needed, but the Submit outcome must be durable so an abort
+					// or terminal-journal retry remains terminal across restart.
 					if submitErr == nil && s.Category.RequiresAbort() {
-						return o.abort(ctx, res, rec, s.Reason)
+						return o.abortKnownUnwrittenTerminal(ctx, res, rec, s, s.Reason)
 					}
 					return o.abortTerminalPrepareReject(ctx, res, rec, prepareErr.Error())
 				}
@@ -1329,7 +1336,6 @@ func (o *Orchestrator) abort(ctx context.Context, res IntakeResult, rec *intakeR
 	if afterCleanup != nil {
 		cleanupProofErr = afterCleanup(ctx, res)
 	}
-	o.releasePayloadLease(rec)
 	if cleanupProofErr != nil {
 		// Source cleanup is idempotently complete, but keep the durable record at
 		// AbortPending until inventory proof succeeds. The current statement keeps
@@ -1342,6 +1348,36 @@ func (o *Orchestrator) abort(ctx context.Context, res IntakeResult, rec *intakeR
 	if err := o.setTerminal(ctx, rec, res); err != nil {
 		return res, err
 	}
+	o.releasePayloadLease(rec)
+	return res, nil
+}
+
+// abortKnownUnwrittenTerminal resolves the rare concurrent outcome where the
+// source proves Prepare rejected before any write while Arbiter independently
+// returns a terminal Submit rejection. The terminal Submit is authoritative,
+// but there are no exact candidates to inventory or clean. Persist both facts,
+// run the source's idempotent empty abort, and release the payload lease only
+// after the terminal journal record is durable.
+func (o *Orchestrator) abortKnownUnwrittenTerminal(ctx context.Context, res IntakeResult, rec *intakeRecord, submit SubmitOutcome, reason string) (IntakeResult, error) {
+	res.Ack2 = false
+	res.Submit = submit
+	res.Lifecycle = LifecycleAbortPending
+	if err := o.setKnownUnwrittenTerminalAbortPending(ctx, rec, submit, reason); err != nil {
+		return res, err
+	}
+	parts := o.abortParts(rec)
+	if len(parts) != 0 {
+		return res, fmt.Errorf("intake: known-unwritten terminal abort for %s unexpectedly has %d candidate parts", res.StatementID, len(parts))
+	}
+	if err := o.preparer.AbortPreparedStatement(ctx, res.StatementID, parts, reason); err != nil {
+		return res, fmt.Errorf("intake: abort failed for %s (%s): %w", res.StatementID, reason, err)
+	}
+	res.Lifecycle = LifecycleCleaned
+	res.terminal = true
+	if err := o.setTerminal(ctx, rec, res); err != nil {
+		return res, err
+	}
+	o.releasePayloadLease(rec)
 	return res, nil
 }
 
@@ -1474,6 +1510,32 @@ func (o *Orchestrator) setPrepareRejectAbortPending(ctx context.Context, rec *in
 	rec.stage = LifecycleAbortPending
 	rec.abortReason = reason
 	rec.prepareKnownUnwritten = true
+	o.mu.Unlock()
+	return nil
+}
+
+// setKnownUnwrittenTerminalAbortPending durably combines the source's
+// no-write proof with the concurrent authoritative terminal Submit outcome.
+// A retry can therefore re-run only the empty abort and terminal publication;
+// it may neither require candidate inventory nor reopen Prepare.
+func (o *Orchestrator) setKnownUnwrittenTerminalAbortPending(ctx context.Context, rec *intakeRecord, submit SubmitOutcome, reason string) error {
+	o.mu.Lock()
+	snap := journalRecordFromIntakeRecord(rec)
+	snap.Stage = LifecycleAbortPending
+	snap.AbortReason = reason
+	snap.PrepareKnownUnwritten = true
+	snap.Submit = submit
+	snap.HasSubmit = true
+	o.mu.Unlock()
+	if err := o.saveJournalSnapshot(ctx, snap); err != nil {
+		return err
+	}
+	o.mu.Lock()
+	rec.stage = LifecycleAbortPending
+	rec.abortReason = reason
+	rec.prepareKnownUnwritten = true
+	rec.submit = submit
+	rec.hasSubmit = true
 	o.mu.Unlock()
 	return nil
 }

@@ -3,6 +3,7 @@ package housegate
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -401,6 +402,53 @@ func TestIngress_BackpressureRefusalHasNoDurableOrSourceSideEffects(t *testing.T
 	}
 	if writer.calls != 0 || journal.saves != 0 || submitter.calls != 0 || preparer.prepareCalls != 0 {
 		t.Fatalf("writer/journal/submit/prepare calls = %d/%d/%d/%d, want all zero", writer.calls, journal.saves, submitter.calls, preparer.prepareCalls)
+	}
+}
+
+func TestIngress_TerminalPrewriteRejectWithTerminalSubmitReleasesReservation(t *testing.T) {
+	pressure := &fakePartsPressure{}
+	ingress, _, submitter, preparer := newBackpressureIngress(t, pressure)
+	submitter.outcome = sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: "conflicting duplicate"}
+	preparer.err = fmt.Errorf("schema hash mismatch: %w", sicore.ErrPrepareTerminalReject)
+
+	err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), bpAdmission())
+	if err == nil || !strings.Contains(err.Error(), string(sicore.LifecycleCleaned)) {
+		t.Fatalf("terminal pre-write reject err=%v, want terminal Cleaned non-ACK2", err)
+	}
+	if strings.Contains(err.Error(), "candidate partition") {
+		t.Fatalf("known-unwritten empty abort incorrectly required candidates: %v", err)
+	}
+	if preparer.abortCalls != 1 {
+		t.Fatalf("empty source abort calls=%d, want 1", preparer.abortCalls)
+	}
+	if pressure.committed != 0 || pressure.released != 1 || pressure.cleaned != 0 {
+		t.Fatalf("reservation commit/release/cleaned=%d/%d/%d, want 0/1/0", pressure.committed, pressure.released, pressure.cleaned)
+	}
+
+	beforeAllows := len(pressure.allowCalls)
+	beforePrepares := preparer.prepareCalls
+	beforeAborts := preparer.abortCalls
+	err = ingress.ConsumeStorageIntegrityAdmission(context.Background(), bpAdmission())
+	if err == nil || !strings.Contains(err.Error(), string(sicore.LifecycleCleaned)) {
+		t.Fatalf("terminal replay err=%v, want cached Cleaned non-ACK2", err)
+	}
+	if len(pressure.allowCalls) != beforeAllows || preparer.prepareCalls != beforePrepares || preparer.abortCalls != beforeAborts {
+		t.Fatalf("terminal replay pressure/prepare/abort=%d/%d/%d, want %d/%d/%d", len(pressure.allowCalls), preparer.prepareCalls, preparer.abortCalls, beforeAllows, beforePrepares, beforeAborts)
+	}
+}
+
+func TestIngress_RejectsSignedSchemaHashMismatchBeforePressure(t *testing.T) {
+	pressure := &fakePartsPressure{}
+	ingress, writer, submitter, preparer := newBackpressureIngress(t, pressure)
+	adm := bpAdmission()
+	adm.SchemaHash = replay.DigestString("different schema")
+
+	err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), adm)
+	if err == nil || !strings.Contains(err.Error(), "schema_hash") {
+		t.Fatalf("schema hash mismatch err=%v", err)
+	}
+	if len(pressure.allowCalls) != 0 || writer.calls != 0 || submitter.calls != 0 || preparer.prepareCalls != 0 {
+		t.Fatalf("mismatched schema pressure/put/submit/prepare=%d/%d/%d/%d, want all zero", len(pressure.allowCalls), writer.calls, submitter.calls, preparer.prepareCalls)
 	}
 }
 
@@ -1757,6 +1805,10 @@ func TestIngress_UnknownSchemaOrFreezeViolationRefusedWithoutPut(t *testing.T) {
 		t.Fatalf("err = %v writer calls = %d", err, writer.calls)
 	}
 
+	freezeSchema := payloadexec.TableSchema{
+		TableID: "net1.events", PartitionBy: "region",
+		Columns: []lthash.Column{{Name: "region", Type: "UInt64"}},
+	}
 	ingress.schemas = StorageIntegrityTableSchemaResolverFunc(func(tableID string) (payloadexec.TableSchema, bool) {
 		return payloadexec.TableSchema{
 			TableID: tableID, PartitionBy: "region",
@@ -1764,6 +1816,7 @@ func TestIngress_UnknownSchemaOrFreezeViolationRefusedWithoutPut(t *testing.T) {
 		}, true
 	})
 	adm = bpAdmission()
+	adm.SchemaHash = payloadexec.TableSchemaHash(adm.NetworkID, freezeSchema)
 	err = ingress.ConsumeStorageIntegrityAdmission(context.Background(), adm)
 	if !errors.Is(err, sicore.ErrPartitionFreeze) || writer.calls != 0 {
 		t.Fatalf("freeze err = %v writer calls = %d", err, writer.calls)

@@ -38,7 +38,6 @@ type StorageIntegrityRuntimeOptions struct {
 	PayloadSpool       *sicore.FilePayloadSpool
 	MergeConn          sicore.MergeConn
 	MergeGuard         StorageIntegrityMergeGuard
-	SchemaResolver     StorageIntegrityTableSchemaResolver
 	// TableSchemas is the complete authoritative startup schema set. Runtime
 	// construction validates its frozen physical outputs globally before any
 	// listener, DDL, or Keeper-backed role can mix distinct logical tables.
@@ -148,7 +147,8 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 	}
 	ingress.leaseManager = leaseManager
 	ingress.mergeRunner = mergeGuard
-	ingress.WithTableSchemas(runtimeTableSchemaResolver(opts.TableSchemas))
+	schemaResolver := runtimeTableSchemaResolver(opts.TableSchemas)
+	ingress.WithTableSchemas(schemaResolver)
 	if backpressure := runtimeCfg.Backpressure; backpressure.Enabled {
 		unsafeDatabase := strings.TrimSpace(backpressure.UnsafeDatabase)
 		safeDatabase := strings.TrimSpace(backpressure.SafeDatabase)
@@ -182,11 +182,8 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 				return nil, nil, errors.New("storage_integrity.runtime injected parts pressure must implement the parts pressure lifecycle (Refresh and Run)")
 			}
 		}
-		if opts.SchemaResolver == nil {
-			return nil, nil, errors.New("storage_integrity.runtime.backpressure requires a table schema resolver (StorageIntegrityRuntimeOptions.SchemaResolver)")
-		}
 		ingress.pressureRunner = pressureRunner
-		ingress.WithPartsPressure(pressure, opts.SchemaResolver)
+		ingress.WithPartsPressure(pressure, schemaResolver)
 	}
 	return ingress, mergeGuard, nil
 }

@@ -464,6 +464,11 @@ func TestOrchestrate_TerminalPrepareRejectHonorsConcurrentTerminalSubmit(t *test
 	}
 	sub := &recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeTerminalReject, Reason: "conflicting duplicate"}}
 	orch := NewOrchestrator(sub, prep, OrchestratorConfig{ExpectedSource: "snode-A"})
+	cleanupProofCalls := 0
+	orch.SetBeforeExactCleanup(func(context.Context, IntakeResult) error {
+		cleanupProofCalls++
+		return errors.New("known-unwritten abort must not require candidate inventory")
+	})
 
 	res, err := orch.Orchestrate(context.Background(), admissionFixture())
 	if err != nil {
@@ -477,6 +482,9 @@ func TestOrchestrate_TerminalPrepareRejectHonorsConcurrentTerminalSubmit(t *test
 	}
 	if len(prep.abortParts) != 0 {
 		t.Fatalf("abort parts = %+v, want exact empty set", prep.abortParts)
+	}
+	if cleanupProofCalls != 0 {
+		t.Fatalf("known-unwritten abort ran %d exact-candidate proof hooks", cleanupProofCalls)
 	}
 	beforePrepare := atomic.LoadInt64(&prep.prepareCount)
 	beforeAbort := atomic.LoadInt64(&prep.abortAt)
@@ -492,6 +500,83 @@ func TestOrchestrate_TerminalPrepareRejectHonorsConcurrentTerminalSubmit(t *test
 	}
 	if got := atomic.LoadInt64(&prep.abortAt); got != beforeAbort {
 		t.Fatalf("terminal replay abort count = %d, want %d", got, beforeAbort)
+	}
+}
+
+func TestOrchestrate_KnownUnwrittenTerminalAbortResumesAcrossRestart(t *testing.T) {
+	journal, err := NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	abortErr := errors.New("source abort temporarily unavailable")
+	firstPreparer := &recordingPreparer{
+		prepareErr: fmt.Errorf("schema_hash mismatch: %w", ErrPrepareTerminalReject),
+		abortErr:   abortErr,
+	}
+	config := OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal}
+	first := NewOrchestrator(
+		&recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeTerminalReject, Reason: "conflicting duplicate"}},
+		firstPreparer,
+		config,
+	)
+	res, err := first.Orchestrate(context.Background(), admissionFixture())
+	if !errors.Is(err, abortErr) || res.Lifecycle != LifecycleAbortPending {
+		t.Fatalf("first known-unwritten abort=(%+v, %v), want AbortPending source error", res, err)
+	}
+
+	secondPreparer := &recordingPreparer{}
+	second := NewOrchestrator(&recordingSubmitter{}, secondPreparer, config)
+	res, err = second.Orchestrate(context.Background(), admissionFixture())
+	if err != nil || res.Lifecycle != LifecycleCleaned || !res.terminal {
+		t.Fatalf("restart known-unwritten abort=(%+v, %v), want terminal Cleaned", res, err)
+	}
+	if got := atomic.LoadInt64(&secondPreparer.prepareCount); got != 0 {
+		t.Fatalf("restart prepare calls=%d, want 0", got)
+	}
+	if got := atomic.LoadInt64(&secondPreparer.abortAt); got != 1 {
+		t.Fatalf("restart empty abort calls=%d, want 1", got)
+	}
+	if len(secondPreparer.abortParts) != 0 {
+		t.Fatalf("restart abort parts=%+v, want exact empty set", secondPreparer.abortParts)
+	}
+	if res.Submit.Category != OutcomeTerminalReject {
+		t.Fatalf("restart submit category=%v, want terminal reject", res.Submit.Category)
+	}
+}
+
+func TestOrchestrate_CleanupProofFailureRetainsPayloadLeaseUntilTerminal(t *testing.T) {
+	prep := newFrontierProbePreparer()
+	prep.prepared = boundSource()
+	sub := &recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeTerminalReject, Reason: "conflict"}}
+	lease := &recordingPayloadLeaseManager{}
+	orch := NewOrchestrator(sub, prep, OrchestratorConfig{
+		ExpectedSource:      "snode-A",
+		PayloadLeaseManager: lease,
+	})
+	proofErr := errors.New("post-cleanup inventory unavailable")
+	proofCalls := 0
+	orch.SetAfterExactCleanup(func(context.Context, IntakeResult) error {
+		proofCalls++
+		if proofCalls == 1 {
+			return proofErr
+		}
+		return nil
+	})
+
+	res, err := orch.Orchestrate(context.Background(), admissionFixture())
+	if !errors.Is(err, proofErr) || res.Lifecycle != LifecycleAbortPending {
+		t.Fatalf("first cleanup=(%+v, %v), want AbortPending proof error", res, err)
+	}
+	if got := atomic.LoadInt64(&lease.releases); got != 0 {
+		t.Fatalf("payload lease releases after failed proof=%d, want 0", got)
+	}
+
+	res, err = orch.Orchestrate(context.Background(), admissionFixture())
+	if err != nil || res.Lifecycle != LifecycleCleaned || !res.terminal {
+		t.Fatalf("proof retry=(%+v, %v), want terminal Cleaned", res, err)
+	}
+	if got := atomic.LoadInt64(&lease.releases); got != 1 {
+		t.Fatalf("payload lease releases after terminal cleanup=%d, want 1", got)
 	}
 }
 

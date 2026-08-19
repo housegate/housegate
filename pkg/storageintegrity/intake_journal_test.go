@@ -196,6 +196,44 @@ func TestOrchestrate_TerminalSaveFailureDoesNotPublishMemoryTerminal(t *testing.
 	}
 }
 
+func TestOrchestrate_TerminalSaveFailureRetainsPayloadLeaseUntilRetry(t *testing.T) {
+	ctx := context.Background()
+	baseJournal, err := NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	saveErr := errors.New("terminal journal save failed")
+	journal := &failFirstTerminalSaveJournal{base: baseJournal, err: saveErr}
+	prep := newFrontierProbePreparer()
+	prep.prepared = boundSource()
+	lease := &recordingPayloadLeaseManager{}
+	orch := NewOrchestrator(
+		&recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeTerminalReject, Reason: "conflict"}},
+		prep,
+		OrchestratorConfig{
+			ExpectedSource:      "snode-A",
+			Journal:             journal,
+			PayloadLeaseManager: lease,
+		},
+	)
+
+	res, err := orch.Orchestrate(ctx, admissionFixture())
+	if !errors.Is(err, saveErr) || res.Lifecycle != LifecycleCleaned {
+		t.Fatalf("first cleanup=(%+v, %v), want computed Cleaned with terminal save error", res, err)
+	}
+	if got := atomic.LoadInt64(&lease.releases); got != 0 {
+		t.Fatalf("payload lease releases after failed terminal save=%d, want 0", got)
+	}
+
+	res, err = orch.Orchestrate(ctx, admissionFixture())
+	if err != nil || res.Lifecycle != LifecycleCleaned || !res.terminal {
+		t.Fatalf("terminal save retry=(%+v, %v), want terminal Cleaned", res, err)
+	}
+	if got := atomic.LoadInt64(&lease.releases); got != 1 {
+		t.Fatalf("payload lease releases after durable terminal=%d, want 1", got)
+	}
+}
+
 func TestFileIntakeJournalCompactsTerminalPayloadAndReplaysFromEnvelope(t *testing.T) {
 	ctx := context.Background()
 	journal, err := NewFileIntakeJournal(t.TempDir())
