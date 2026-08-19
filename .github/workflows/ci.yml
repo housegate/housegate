@@ -93,6 +93,9 @@ jobs:
           fi
           tests/bin/clickhouse --version
 
+      - name: Fetch rewriter FFI lib
+        run: echo "POLYGLOT_SQL_FFI_PATH=$(bazel run //cmd:housegate -- fetch-rewriter-lib --tag v0.7.1 2>/dev/null | tail -1)" >> "$GITHUB_ENV"
+
       # Integration targets are tagged `manual` so plain `bazel test //...`
       # leaves them alone (docker-less environments would fail). Listing
       # them explicitly bypasses the manual filter; expand this list when
@@ -102,4 +105,5 @@ jobs:
           bazel test \
             //pkg/integration:integration_test \
             //pkg/integration/testenv:testenv_test \
+            --test_env=POLYGLOT_SQL_FFI_PATH \
             --test_output=errors
