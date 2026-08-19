@@ -145,17 +145,9 @@ func TestAgentAutoDiscover_PermissionedTier(t *testing.T) {
 		t.Fatalf("expected 1 listener, got %d", len(bs.listeners))
 	}
 
-	// Reach the dialer through the Server. The Server exposes its dialer
-	// via the public Dial method since the codec it returns is the
-	// upstream we care about. Without that, run the dialer logic
-	// directly via the package-private helper.
-	dialer, err := buildAgentDialer(Options{
-		Config:       cfg,
-		NetworkState: ns,
-	}, nil, account, proxy.NewMetricsObserver())
-	if err != nil {
-		t.Fatalf("buildAgentDialer: %v", err)
-	}
+	// Exercise the dialer installed by buildAgent so this also locks the
+	// empty-owner fallback to the signer account.
+	dialer := requireProxyServer(t, bs.listeners[0]).UpstreamDialer
 
 	const trials = 30
 	hits := map[string]int{}
@@ -178,6 +170,56 @@ func TestAgentAutoDiscover_PermissionedTier(t *testing.T) {
 	}
 	if hits[addrB] != 0 {
 		t.Errorf("expected 0 hits on non-permissioned addrB=%s, got %d", addrB, hits[addrB])
+	}
+}
+
+func TestAgentAutoDiscover_OwnerAccountWinsOverSigner(t *testing.T) {
+	addrOwner := startFakeIndexerProxy(t)
+	addrSigner := startFakeIndexerProxy(t)
+
+	signer, err := auth.NewRelaySigner(testRelayKeyHex)
+	if err != nil {
+		t.Fatalf("NewRelaySigner: %v", err)
+	}
+	const owner = "0x1111111111111111111111111111111111111111"
+
+	ns := network.NewInMemoryNetworkState()
+	ns.IndexerInfos[1] = indexerInfoForAddr(t, 1, addrOwner)
+	ns.IndexerInfos[2] = indexerInfoForAddr(t, 2, addrSigner)
+	ns.DatabaseInfos["ownerDB"] = network.DatabaseInfo{DatabaseId: "ownerDB", IndexerId: 1}
+	ns.DatabaseInfos["signerDB"] = network.DatabaseInfo{DatabaseId: "signerDB", IndexerId: 2}
+	ns.DatabasePermissions[network.AccountAddress(owner)] = network.DatabasePermissions{
+		"ownerDB": registry.DbAuthRead,
+	}
+	ns.DatabasePermissions[network.AccountAddress(signer.Address())] = network.DatabasePermissions{
+		"signerDB": registry.DbAuthRead,
+	}
+
+	cfg := minimalAgentCfgAutoDiscover(t)
+	cfg.Agent.Owner = owner
+	bs, err := buildAgent(Options{
+		Config:       cfg,
+		NetworkState: ns,
+		Signer:       signer,
+	}, nil)
+	if err != nil {
+		t.Fatalf("buildAgent: %v", err)
+	}
+	defer bs.teardown()
+
+	dialer := requireProxyServer(t, bs.listeners[0]).UpstreamDialer
+	codec, err := dialer(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("dial owner-permissioned upstream: %v", err)
+	}
+	defer func() {
+		if conn, ok := codec.Conn().(net.Conn); ok {
+			_ = conn.Close()
+		}
+	}()
+
+	if got := codecRemoteAddr(codec); got != addrOwner {
+		t.Fatalf("owner routing account selected %s, want owner-permissioned %s (signer-permissioned %s)", got, addrOwner, addrSigner)
 	}
 }
 

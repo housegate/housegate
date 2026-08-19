@@ -1118,7 +1118,13 @@ func buildAgentWithMaterializerBuilder(
 	//   2. Auto-discovery via Selector — read NetworkState (yaml or
 	//      redis-backed) and pick a random permissioned peer per session.
 	//      Validation in pkg/config guarantees one of the two is set.
-	dialer, err := buildAgentDialer(opts, rf, signer.Address(), obs)
+	// Auto-discovery follows the on-behalf-of owner when configured. The
+	// agent plugin above still signs JWS tokens with the operator signer.
+	routingAccount := cfg.Agent.Owner
+	if routingAccount == "" {
+		routingAccount = signer.Address()
+	}
+	dialer, err := buildAgentDialer(opts, rf, routingAccount, obs)
 	if err != nil {
 		return nil, err
 	}
