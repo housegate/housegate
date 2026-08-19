@@ -168,6 +168,21 @@ func TestBuildServer_ConfiguredSISurfaceRejectsUnawareInjectedFactory(t *testing
 	}
 }
 
+func TestBuildServer_ConfiguredSISurfaceRejectsTypedNilInjectedFactory(t *testing.T) {
+	cfg := minimalServerCfg(t)
+	cfg.StorageIntegrity.Tables = []string{"tenant.events"}
+	var typedNil *rewriter.SentioNetworkFactory
+
+	_, err := buildServer(Options{
+		Config:       cfg,
+		NetworkState: network.NewInMemoryNetworkState(),
+		Rewriter:     typedNil,
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "storage_integrity.tables requires an available SQL rewriter") {
+		t.Fatalf("err = %v, want typed-nil factory rejection", err)
+	}
+}
+
 func TestBuildServer_ConfiguredSISurfaceRequiresAvailableRewriter(t *testing.T) {
 	cfg := minimalServerCfg(t)
 	cfg.StorageIntegrity.Tables = []string{"tenant.events"}

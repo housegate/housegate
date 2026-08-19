@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+	"reflect"
 	"strconv"
 	"time"
 
@@ -122,6 +123,22 @@ func storageIntegrityRewriterOptions(cfg *config.Config, rs rewriter.StorageInte
 		})
 	}
 	return out
+}
+
+// isNilRewriterFactory recognizes typed-nil implementations stored in the
+// Factory interface. A plain interface comparison would treat such a value as
+// available and let its capability marker pass before the first query panics.
+func isNilRewriterFactory(factory rewriter.Factory) bool {
+	if factory == nil {
+		return true
+	}
+	v := reflect.ValueOf(factory)
+	switch v.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+		return v.IsNil()
+	default:
+		return false
+	}
 }
 
 // buildRewriterFactory constructs the SQL rewriter factory for the
@@ -409,6 +426,9 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			rwf.SetGetIndexerId(opts.GetIndexerId)
 			pushTeardown(func() { rwf.Close() })
 		}
+	}
+	if isNilRewriterFactory(rwFactory) {
+		rwFactory = nil
 	}
 	if len(siOptions.Tables) > 0 && rwFactory == nil {
 		return nil, fmt.Errorf("storage_integrity.tables requires an available SQL rewriter; refusing fail-open startup")
