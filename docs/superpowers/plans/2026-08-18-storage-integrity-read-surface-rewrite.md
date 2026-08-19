@@ -2789,7 +2789,7 @@ git commit -m "chore(deps): rewriter-proto v0.2.0 + rewriter-go v0.7.0; sqlmeta 
 **Interfaces:**
 - Produces: `config.StorageIntegrityConfig.Tables []string` (yaml `tables`), `config.StorageIntegrityReadConfig{DefaultMode string}` (yaml `read.default_mode`), constants `config.StorageIntegrityUnsafeDatabase = "hg_unsafe"`, `config.StorageIntegritySafeDatabase = "hg_safe"`, `config.StorageIntegrityReadModeSafe = "safe"`, `config.StorageIntegrityReadModeUnsafeLatest = "unsafe_latest"`; `func config.StorageIntegrityPhysicalTable(tableID string) string`; `func config.SplitStorageIntegrityTableID(id string) (db, table string, ok bool)`; `StorageIntegrityRuntimeMergeGuardConfig` loses `Tables` (keeps `ReassertInterval`, gains hidden `LegacyTables` for the rename error); `buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRuntimeConfig, tables []string, opts StorageIntegrityRuntimeOptions)`; `storageIntegrityMergeTables(tableIDs []string) ([]sicore.MergeTable, error)` → for each id, `{hg_safe, phys}` then `{hg_unsafe, phys}`.
 
-- [ ] **Step 1: Failing config tests** — replace the two merge-guard subtests in `pkg/config/storage_integrity_config_test.go` (lines ~117-160) and the fixture (~195-216) with:
+- [x] **Step 1: Failing config tests** — replace the two merge-guard subtests in `pkg/config/storage_integrity_config_test.go` (lines ~117-160) and the fixture (~195-216) with:
 
 ```go
 	t.Run("runtime enabled requires storage_integrity.tables", func(t *testing.T) {
@@ -2873,7 +2873,7 @@ Update `build_test.go`: `enableStorageIntegrityRuntimeTestConfig` sets `cfg.Stor
 Run: `go test ./pkg/config -run 'TestConfigValidateStorageIntegrityIngress|TestStorageIntegrityPhysicalNaming' -count=1 && go vet . 2>&1 | grep -v "unkeyed fields" | head`
 Expected: compile errors (`LegacyTables`, `Tables`, `Read`, `StorageIntegrityPhysicalTable` undefined).
 
-- [ ] **Step 2: Implement `pkg/config/storage_integrity_config.go`**
+- [x] **Step 2: Implement `pkg/config/storage_integrity_config.go`**
 
 ```go
 const (
@@ -3033,12 +3033,12 @@ func storageIntegrityMergeTables(tableIDs []string) ([]sicore.MergeTable, error)
 
 `build.go` (~:604): `consumer, guard, err := buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, cfg.StorageIntegrity.Tables, opts.StorageIntegrityRuntime)`.
 
-- [ ] **Step 3: Run**
+- [x] **Step 3: Run**
 
 Run: `bazel test //pkg/config:config_test //:housegate_test --test_output=errors`
 Expected: PASS (all subtests, incl. the updated merge-guard exec expectations).
 
-- [ ] **Step 4: Docs sample** — in `README.md`'s storage-integrity example and `configs/local.server.yaml`, replace the `merge_guard: tables:` list with:
+- [x] **Step 4: Docs sample** — in `README.md`'s storage-integrity example and `configs/local.server.yaml`, replace the `merge_guard: tables:` list with:
 
 ```yaml
 storage_integrity:
@@ -3050,7 +3050,7 @@ storage_integrity:
       reassert_interval: 30s
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pkg/config storage_integrity_runtime.go build.go build_test.go README.md configs/local.server.yaml
