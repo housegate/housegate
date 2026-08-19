@@ -772,12 +772,12 @@ func TestBuildStorageIntegrityRuntimeBackpressureRequiresConnAndUsesValidatedSch
 		MergeGuard:   &recordingBuildMergeGuard{},
 		TableSchemas: bpSchemas(),
 	}
-	if _, _, err := buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, base); err == nil || !strings.Contains(err.Error(), "backpressure") {
+	if _, _, err := buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, cfg.StorageIntegrity.Tables, base); err == nil || !strings.Contains(err.Error(), "backpressure") {
 		t.Fatalf("enabled backpressure without merge_conn must fail: %v", err)
 	}
 	withPorts := base
 	withPorts.MergeConn = &recordingBuildMergeConn{}
-	ingress, _, err := buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, withPorts)
+	ingress, _, err := buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, cfg.StorageIntegrity.Tables, withPorts)
 	if err != nil {
 		t.Fatalf("buildStorageIntegrityRuntimeConsumer: %v", err)
 	}
@@ -794,7 +794,7 @@ func TestBuildStorageIntegrityRuntimeInjectedPressureRequiresLifecycle(t *testin
 	cfg := minimalRouterOnlyCfg(t)
 	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
 	cfg.StorageIntegrity.Runtime.Backpressure.Enabled = true
-	_, _, err = buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, StorageIntegrityRuntimeOptions{
+	_, _, err = buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, cfg.StorageIntegrity.Tables, StorageIntegrityRuntimeOptions{
 		StatementSubmitter: &rootRecordingSubmitter{},
 		SourcePreparer:     &rootRecordingPreparer{},
 		StatusQuerier:      rootRecordingStatusQuerier{},
@@ -816,7 +816,7 @@ func TestBuildStorageIntegrityRuntimeRejectsPhysicalTableNameCollision(t *testin
 	cfg := minimalRouterOnlyCfg(t)
 	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
 	cfg.StorageIntegrity.Runtime.Backpressure.Enabled = true
-	_, _, err = buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, StorageIntegrityRuntimeOptions{
+	_, _, err = buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, cfg.StorageIntegrity.Tables, StorageIntegrityRuntimeOptions{
 		StatementSubmitter: &rootRecordingSubmitter{},
 		SourcePreparer:     &rootRecordingPreparer{},
 		StatusQuerier:      rootRecordingStatusQuerier{},
@@ -841,7 +841,7 @@ func TestBuildStorageIntegrityRuntimeRejectsPhysicalTableNameCollisionWhenBackpr
 	cfg := minimalRouterOnlyCfg(t)
 	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
 	cfg.StorageIntegrity.Runtime.Backpressure.Enabled = false
-	_, _, err = buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, StorageIntegrityRuntimeOptions{
+	_, _, err = buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, cfg.StorageIntegrity.Tables, StorageIntegrityRuntimeOptions{
 		StatementSubmitter: &rootRecordingSubmitter{},
 		SourcePreparer:     &rootRecordingPreparer{},
 		StatusQuerier:      rootRecordingStatusQuerier{},
@@ -866,7 +866,7 @@ func TestBuildStorageIntegrityRuntimeBackpressureDisabledStillBindsTouchedPartit
 	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
 	cfg.StorageIntegrity.Runtime.Backpressure.Enabled = false
 	journal := &countingIntakeJournal{}
-	ingress, mergeGuard, err := buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, StorageIntegrityRuntimeOptions{
+	ingress, mergeGuard, err := buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, cfg.StorageIntegrity.Tables, StorageIntegrityRuntimeOptions{
 		StatementSubmitter: &rootRecordingSubmitter{outcome: sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}},
 		SourcePreparer: &rootRecordingPreparer{
 			source:     "snode-A",
@@ -919,7 +919,7 @@ func TestBuildStorageIntegrityRuntimeInjectedPressureRefreshesAndPolls(t *testin
 	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
 	cfg.StorageIntegrity.Runtime.Backpressure.Enabled = true
 	runner := newBlockingPressureLifecycle()
-	ingress, mergeGuard, err := buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, StorageIntegrityRuntimeOptions{
+	ingress, mergeGuard, err := buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, cfg.StorageIntegrity.Tables, StorageIntegrityRuntimeOptions{
 		StatementSubmitter: &rootRecordingSubmitter{},
 		SourcePreparer:     &rootRecordingPreparer{},
 		StatusQuerier:      rootRecordingStatusQuerier{},
@@ -1300,6 +1300,7 @@ func TestStartStorageIntegrityRuntimeFailsClosedOnInitialPartsSnapshot(t *testin
 	partsErr := errors.New("system.parts unavailable")
 	ingress, mergeGuard, err := buildStorageIntegrityRuntimeConsumer(
 		cfg.StorageIntegrity.Runtime,
+		cfg.StorageIntegrity.Tables,
 		StorageIntegrityRuntimeOptions{
 			StatementSubmitter: &rootRecordingSubmitter{outcome: sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}},
 			SourcePreparer:     &rootRecordingPreparer{source: "snode-A", claim: sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"}},
