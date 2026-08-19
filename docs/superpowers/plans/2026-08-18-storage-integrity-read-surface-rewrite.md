@@ -52,6 +52,8 @@
 
 **D-13 — HouseGate publication follows the overlapping Plan C merge.** Plan C PR #125 changes runtime/config seams also touched by Tasks 16–21 and is first in the merge queue. Plan G may finish and pass local review beforehand, but its final ready PR is created only after #125 merges, followed by an exact-main rebase and rerun of every impacted Bazel/integration/review gate.
 
+**D-14 — Promotion exclusions are write-ahead state, not post-publication bookkeeping.** Review found that recording promoted unsafe part names only after `REPLACE PARTITION` leaves an observable and crash-persistent double-read window. The v0.3.1 implementation therefore durably records a promotion intent, including candidate names, before safe publication; `PromotedUnsafeParts` fails closed while an intent is unresolved; retry reconciles either the verified base or post-promotion content root and refreshes content-neutral part-inventory changes. ACK/watermark and cleanup journal updates use copy-on-write state installed only after persistence succeeds, and cleanup treats only ClickHouse `NO_SUCH_DATA_PART` as an idempotent missing-part result. This preserves the invariant that safe publication cannot become visible without an exclusion proof and that every crash/retry boundary converges without prematurely acknowledging or dropping exclusions.
+
 ## File map
 
 | Repo | Create | Modify |
@@ -4192,7 +4194,7 @@ git push -u origin feat/storage-integrity-read-surface
   - `func (st *stateStore) PromotedUnsafeParts(table string) []string` — union over every partition of `table`, sorted.
   - `func (r *Role) PromotedUnsafeParts(tableID string) ([]string, error)` — the housegate `rewriter.StorageIntegrityReadState` port; never errors today (signature reserved for a future journal-read failure).
 
-- [ ] **Step 1: Failing pure state tests** (append to `snode/state_test.go`)
+- [x] **Step 1: Failing pure state tests** (append to `snode/state_test.go`)
 
 ```go
 func TestStateStore_PromotedUnsafePartsLifecycle(t *testing.T) {
@@ -4253,7 +4255,7 @@ func TestStateStore_PromotedUnsafePartsLifecycle(t *testing.T) {
 Run: `go test ./snode -run TestStateStore_PromotedUnsafePartsLifecycle -count=1`
 Expected: compile error (`too many arguments in call to st.RecordAppliedPromotion`, `undefined: RecordCleanup`).
 
-- [ ] **Step 2: Implement in `state.go`**
+- [x] **Step 2: Implement in `state.go`**
 
 ```go
 type localState struct {
@@ -4388,7 +4390,7 @@ func (r *Role) PromotedUnsafeParts(tableID string) ([]string, error) {
 }
 ```
 
-- [ ] **Step 3: Docker-bound assertions** — in `snode/promote_test.go` `TestHandlePromote_HappyPath` after the watermark check add:
+- [x] **Step 3: Docker-bound assertions** — in `snode/promote_test.go` `TestHandlePromote_HappyPath` after the watermark check add:
 
 ```go
 	if got, err := role.PromotedUnsafeParts(schema.TableID); err != nil || !reflect.DeepEqual(got, []string{part.PartName}) {
@@ -4404,12 +4406,12 @@ and in `snode/cleanup_test.go` `TestHandleCleanup_HappyPath` after `assertUnsafe
 	}
 ```
 
-- [ ] **Step 4: Run**
+- [x] **Step 4: Run**
 
 Run: `go build ./... && go test ./snode -run 'TestStateStore' -count=1 && bazel test //snode:snode_test --test_output=errors`
 Expected: `ok` (pure tests); Bazel target PASS (CH-bound tests self-skip without `ARBITER_CH_INTEGRATION=1`). With a local ClickHouse: `ARBITER_CH_INTEGRATION=1 go test ./snode -run 'TestHandlePromote_HappyPath|TestHandleCleanup_HappyPath' -count=1` → `ok`.
 
-- [ ] **Step 5: Commit + tag**
+- [x] **Step 5: Commit + tag**
 
 ```bash
 git checkout -b feat/promoted-unsafe-parts
@@ -4418,6 +4420,8 @@ git commit -m "feat(snode): journal promoted unsafe parts until cleanup; Role.Pr
 git push -u origin feat/promoted-unsafe-parts
 ```
 Merge, then tag from `main`: `git tag -a v0.1.3 -m "snode.Role.PromotedUnsafeParts" && git push origin v0.1.3` (arbiter-core tags are `v0.1.x`; the current sentio-node pin is a pseudo-version past `v0.1.2`, so `v0.1.3` is the next tag — if a `v0.1.3` already exists use `v0.1.4`).
+
+Actual publication evidence (2026-08-19): implementation commits `06ae0f819541e9a48a11b0fbcbe5ca737ce2c5c2`, `db27504bd6c6881b12fa7148c33c3f19b19d6c08`, and `db22cbb9265d6a23fa0276462274aadd30281a2b`; ready PR [sentioxyz/arbiter-core#13](https://github.com/sentioxyz/arbiter-core/pull/13); CI run `32230110362` (`test` and `integration-clickhouse` both green); squash merge `b669ccd26db001a20f78c3ef9d9f4f8cc2ddeb8d`; official Cut Release run `32230446784`; annotated tag object `930a0d2e85d44a6de1a8bf94cebbde862f45ac94` for v0.3.1, peeling to the exact merge. The public GitHub release is non-draft/non-prerelease and a fresh `go list -m github.com/sentioxyz/arbiter-core@v0.3.1` resolves Origin Hash `b669ccd26db001a20f78c3ef9d9f4f8cc2ddeb8d`.
 
 ### Task 23: sentio-node — bump pins, `storage_integrity.tables` cross-check, wire the port
 
