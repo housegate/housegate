@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/housegate/housegate/pkg/replay"
 )
 
 type panicSubmitter struct {
@@ -231,6 +233,103 @@ func TestFileIntakeJournalCompactsTerminalPayloadAndReplaysFromEnvelope(t *testi
 	}
 	if got := atomic.LoadInt64(&restartedPrep.prepareCount); got != 0 {
 		t.Fatalf("cached terminal replay prepared %d times", got)
+	}
+}
+
+func TestFileIntakeJournalListCompactsLegacyTerminalPayloadBeforeRetainingHistory(t *testing.T) {
+	ctx := context.Background()
+	journal, err := NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	for seq := uint64(1); seq <= 2; seq++ {
+		adm := admissionFixture()
+		adm.StatementID = fixtureStatementID(seq)
+		adm.Payload = []byte(strings.Repeat(string(rune('a'+seq)), 1<<20))
+		adm.PayloadLength = uint64(len(adm.Payload))
+		adm.PayloadHash = replay.DigestBytes(adm.Payload)
+		env, err := EnvelopeFromAdmission(adm)
+		if err != nil {
+			t.Fatalf("EnvelopeFromAdmission %d: %v", seq, err)
+		}
+		prepared := boundSource()
+		prepared.StatementID = adm.StatementID
+		prepared.PayloadRef = adm.PayloadHash
+		prepared.PayloadHash = adm.PayloadHash
+		prepared.PayloadLength = adm.PayloadLength
+		if err := journal.SaveIntakeRecord(ctx, IntakeJournalRecord{
+			StatementID: adm.StatementID, Source: "snode-A", FrontierOrdinal: seq,
+			Env: env, Admission: adm, Stage: LifecycleRCBound,
+			Prepared: prepared, HasPrepared: true,
+			TerminalResult: IntakeResult{
+				StatementID: adm.StatementID, Ack2: true, Lifecycle: LifecycleRCBound,
+				Prepared: prepared,
+			},
+			IsTerminal: true,
+		}); err != nil {
+			t.Fatalf("SaveIntakeRecord %d: %v", seq, err)
+		}
+	}
+
+	records, err := journal.ListIntakeRecords(ctx)
+	if err != nil {
+		t.Fatalf("ListIntakeRecords: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("records=%d, want 2", len(records))
+	}
+	for _, record := range records {
+		if len(record.Admission.Payload) != 0 {
+			t.Fatalf("listed terminal %s retained %d legacy payload bytes", record.StatementID, len(record.Admission.Payload))
+		}
+		persisted, ok, err := journal.LoadIntakeRecord(ctx, record.StatementID)
+		if err != nil || !ok {
+			t.Fatalf("LoadIntakeRecord %s=(%+v, %v, %v)", record.StatementID, persisted, ok, err)
+		}
+		if len(persisted.Admission.Payload) != 0 {
+			t.Fatalf("persisted terminal %s retained %d legacy payload bytes", record.StatementID, len(persisted.Admission.Payload))
+		}
+	}
+}
+
+func TestObservedMarkerCannotRegressDurableTerminalRecord(t *testing.T) {
+	ctx := context.Background()
+	journal, err := NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	prepared := boundSourceWithParts()
+	prep := &partsRecordingPreparer{
+		prepared:     prepared,
+		claimOutcome: ClaimOutcome{Category: OutcomeAccepted, BoundSource: "snode-A"},
+	}
+	orch := NewOrchestrator(
+		&recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeAccepted}}, prep,
+		OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
+	)
+	adm := admissionFixture()
+	res, err := orch.Orchestrate(ctx, adm)
+	if err != nil || !res.Ack2 {
+		t.Fatalf("Orchestrate=(%+v, %v), want ACK2", res, err)
+	}
+
+	// Recreate the only state window that matters: terminal is already durable,
+	// while an observation writer still holds the pre-publish in-memory view.
+	orch.mu.Lock()
+	rec := orch.records[adm.StatementID]
+	rec.isTerminal = false
+	rec.stage = LifecycleRCBound
+	rec.adm.Payload = append([]byte(nil), adm.Payload...)
+	orch.mu.Unlock()
+	if err := orch.MarkCandidateObserved(ctx, adm.StatementID, prepared.CandidateParts[0]); err != nil {
+		t.Fatalf("MarkCandidateObserved: %v", err)
+	}
+	persisted, ok, err := journal.LoadIntakeRecord(ctx, adm.StatementID)
+	if err != nil || !ok {
+		t.Fatalf("LoadIntakeRecord=(%+v, %v, %v)", persisted, ok, err)
+	}
+	if !persisted.IsTerminal || !persisted.TerminalResult.Ack2 || len(persisted.Admission.Payload) != 0 {
+		t.Fatalf("observed marker regressed durable terminal: terminal=%v ack2=%v payload=%d", persisted.IsTerminal, persisted.TerminalResult.Ack2, len(persisted.Admission.Payload))
 	}
 }
 

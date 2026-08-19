@@ -9,6 +9,11 @@ import (
 
 const defaultRecoveryRetryInterval = time.Second
 
+type recoveryStateRestoreAttempt struct {
+	done chan struct{}
+	err  error
+}
+
 // RecoverPending drains every durable non-terminal intake in source-frontier
 // order. It is intended for preServe: callers must not expose new admissions
 // until it returns.
@@ -38,59 +43,60 @@ func (o *Orchestrator) RecoverPending(ctx context.Context) error {
 }
 
 func (o *Orchestrator) restoreRecoveryState(ctx context.Context) error {
-	for {
-		o.mu.Lock()
-		if o.recoveryStateRestored {
-			o.mu.Unlock()
-			return nil
-		}
-		if o.recoveryStateRestoring {
-			done := o.recoveryStateRestoreDone
-			o.mu.Unlock()
-			select {
-			case <-done:
-				continue
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
-		o.recoveryStateRestoring = true
-		o.recoveryStateRestoreDone = make(chan struct{})
-		done := o.recoveryStateRestoreDone
-		records := cloneIntakeJournalRecords(o.recoveredJournal)
-		beforeRecovery := o.beforeRecovery
+	o.mu.Lock()
+	if o.recoveryStateRestored {
 		o.mu.Unlock()
-
-		sort.Slice(records, func(i, k int) bool {
-			if records[i].Source != records[k].Source {
-				return records[i].Source < records[k].Source
-			}
-			if records[i].FrontierOrdinal != records[k].FrontierOrdinal {
-				return records[i].FrontierOrdinal < records[k].FrontierOrdinal
-			}
-			return records[i].StatementID < records[k].StatementID
-		})
-		var restoreErr error
-		if beforeRecovery != nil {
-			restoreErr = beforeRecovery(ctx, records)
-		}
-
-		o.mu.Lock()
-		if restoreErr == nil {
-			o.recoveryStateRestored = true
-			// The non-terminal intake records own the only payload bytes still
-			// required for recovery. Release the full projection, especially the
-			// monotonically growing terminal history, after runtime reconstruction.
-			o.recoveredJournal = nil
-		}
-		o.recoveryStateRestoring = false
-		close(done)
-		o.mu.Unlock()
-		if restoreErr != nil {
-			return fmt.Errorf("intake: restore runtime state before recovery: %w", restoreErr)
-		}
 		return nil
 	}
+	if attempt := o.recoveryStateRestore; attempt != nil {
+		done := attempt.done
+		o.mu.Unlock()
+		select {
+		case <-done:
+			if attempt.err != nil {
+				return fmt.Errorf("intake: restore runtime state before recovery: %w", attempt.err)
+			}
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	attempt := &recoveryStateRestoreAttempt{done: make(chan struct{})}
+	o.recoveryStateRestore = attempt
+	records := cloneIntakeJournalRecords(o.recoveredJournal)
+	beforeRecovery := o.beforeRecovery
+	o.mu.Unlock()
+
+	sort.Slice(records, func(i, k int) bool {
+		if records[i].Source != records[k].Source {
+			return records[i].Source < records[k].Source
+		}
+		if records[i].FrontierOrdinal != records[k].FrontierOrdinal {
+			return records[i].FrontierOrdinal < records[k].FrontierOrdinal
+		}
+		return records[i].StatementID < records[k].StatementID
+	})
+	if beforeRecovery != nil {
+		attempt.err = beforeRecovery(ctx, records)
+	}
+
+	o.mu.Lock()
+	if attempt.err == nil {
+		o.recoveryStateRestored = true
+		// The non-terminal intake records own the only payload bytes still
+		// required for recovery. Release the full projection, especially the
+		// monotonically growing terminal history, after runtime reconstruction.
+		o.recoveredJournal = nil
+	}
+	if o.recoveryStateRestore == attempt {
+		o.recoveryStateRestore = nil
+	}
+	close(attempt.done)
+	o.mu.Unlock()
+	if attempt.err != nil {
+		return fmt.Errorf("intake: restore runtime state before recovery: %w", attempt.err)
+	}
+	return nil
 }
 
 func (o *Orchestrator) nextRecoveryAdmission() (AdmissionRecord, bool) {

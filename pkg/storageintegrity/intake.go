@@ -54,6 +54,10 @@ type AdmissionRecord struct {
 	SettingsHash    string
 	SchemaHash      string
 	RowIDProfileID  string
+	// TouchedPartitionIDs is the canonical payload-derived logical partition
+	// set used by admission pressure and prepared-candidate consistency. It is
+	// persisted because terminal payload bytes are compacted after ACK2.
+	TouchedPartitionIDs []string
 }
 
 // PayloadState is the subset of DA payload lifecycle states HouseGate accepts
@@ -298,10 +302,28 @@ func sameStatement(a StatementEnvelope, aAdm AdmissionRecord, b StatementEnvelop
 	if a != b {
 		return false
 	}
+	if !equalStrings(aAdm.TouchedPartitionIDs, bAdm.TouchedPartitionIDs) {
+		return false
+	}
 	// Terminal journal records compact the payload bytes after the envelope has
 	// durably bound their hash/length/ref. A replay still has to present the exact
 	// envelope, but need not keep an unbounded second copy of historical payloads.
 	return (storedTerminal && len(aAdm.Payload) == 0) || bytes.Equal(aAdm.Payload, bAdm.Payload)
+}
+
+func equalStrings(a, b []string) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	if len(a) != len(b) {
+		return false
+	}
+	for idx := range a {
+		if a[idx] != b[idx] {
+			return false
+		}
+	}
+	return true
 }
 
 // OutcomeCategory classifies a SubmitStatement or RegisterResultClaim result
@@ -530,17 +552,16 @@ type Orchestrator struct {
 	// source. New records increment it before their initial journal save.
 	nextFrontierOrdinal map[string]uint64
 
-	journalRecovered         bool
-	journalRecovering        bool
-	journalRecoveryDone      chan struct{}
-	recoveredJournal         []IntakeJournalRecord
-	recoveryStateRestored    bool
-	recoveryStateRestoring   bool
-	recoveryStateRestoreDone chan struct{}
-	beforeRecovery           func(context.Context, []IntakeJournalRecord) error
-	beforeRegisterClaim      func(context.Context, IntakeResult) error
-	beforeExactCleanup       func(context.Context, IntakeResult) error
-	afterExactCleanup        func(context.Context, IntakeResult) error
+	journalRecovered      bool
+	journalRecovering     bool
+	journalRecoveryDone   chan struct{}
+	recoveredJournal      []IntakeJournalRecord
+	recoveryStateRestored bool
+	recoveryStateRestore  *recoveryStateRestoreAttempt
+	beforeRecovery        func(context.Context, []IntakeJournalRecord) error
+	beforeRegisterClaim   func(context.Context, IntakeResult) error
+	beforeExactCleanup    func(context.Context, IntakeResult) error
+	afterExactCleanup     func(context.Context, IntakeResult) error
 }
 
 // SetBeforeRecovery installs a pre-serve hook that reconstructs runtime-owned
@@ -601,6 +622,7 @@ func (o *Orchestrator) SetAfterExactCleanup(hook func(context.Context, IntakeRes
 // guarded by Orchestrator.mu except res/err, which follow the usual
 // write-before-close(done) / read-after-<-done happens-before.
 type intakeRecord struct {
+	journalVersion  uint32
 	statementID     string
 	source          string // frontier key this intake queues on
 	frontierOrdinal uint64 // immutable same-source admission order
@@ -848,6 +870,7 @@ func (o *Orchestrator) Orchestrate(ctx context.Context, adm AdmissionRecord) (In
 		ordinal := o.nextFrontierOrdinal[source] + 1
 		o.nextFrontierOrdinal[source] = ordinal
 		rec = &intakeRecord{
+			journalVersion:  currentIntakeJournalVersion,
 			statementID:     env.StatementID,
 			source:          source,
 			frontierOrdinal: ordinal,
@@ -1101,7 +1124,11 @@ func (o *Orchestrator) afterSubmit(ctx context.Context, env StatementEnvelope, p
 	// even a terminal reject cannot turn a malformed/colliding physical alias
 	// into permission to delete another statement's part. An untrusted candidate
 	// keeps the source frontier fenced for operator/source reconciliation.
-	if reason := preparedCandidateConsistencyReject(env, prepared); reason != "" {
+	reason := preparedCandidateConsistencyReject(env, prepared)
+	if rec.adm.TouchedPartitionIDs != nil {
+		reason = preparedCandidateConsistencyReject(env, prepared, rec.adm.TouchedPartitionIDs)
+	}
+	if reason != "" {
 		res.Reason = reason
 		return true, res, fmt.Errorf("intake: prepared candidate consistency failed for %s: %s", env.StatementID, reason)
 	}
@@ -1497,17 +1524,24 @@ func (o *Orchestrator) clearPrepareKnownUnwritten(ctx context.Context, rec *inta
 }
 
 func (o *Orchestrator) setTerminal(ctx context.Context, rec *intakeRecord, res IntakeResult) error {
+	o.journalWriteMu.Lock()
+	defer o.journalWriteMu.Unlock()
+
 	o.mu.Lock()
 	snap := journalRecordFromIntakeRecord(rec)
+	snap.JournalVersion = currentIntakeJournalVersion
 	snap.Stage = res.Lifecycle
 	snap.IsTerminal = true
 	snap.TerminalResult = cloneIntakeResult(res)
 	snap.Admission.Payload = nil
 	o.mu.Unlock()
-	if err := o.saveJournalSnapshot(ctx, snap); err != nil {
-		return err
+	if o.journal != nil {
+		if err := o.journal.SaveIntakeRecord(ctx, snap); err != nil {
+			return fmt.Errorf("intake: persist journal for %s: %w", snap.StatementID, err)
+		}
 	}
 	o.mu.Lock()
+	rec.journalVersion = currentIntakeJournalVersion
 	rec.stage = res.Lifecycle
 	rec.isTerminal = true
 	rec.terminalRes = res
@@ -1550,6 +1584,14 @@ func (o *Orchestrator) ensureJournalRecovered(ctx context.Context) error {
 
 		records, err := o.journal.ListIntakeRecords(ctx)
 		if err == nil {
+			for _, record := range records {
+				if versionErr := validateIntakeJournalVersion(record); versionErr != nil {
+					err = versionErr
+					break
+				}
+			}
+		}
+		if err == nil {
 			records, err = o.normalizeRecoveredFrontierOrdinals(ctx, records)
 		}
 		if err == nil {
@@ -1574,10 +1616,23 @@ func (o *Orchestrator) ensureJournalRecovered(ctx context.Context) error {
 
 func (o *Orchestrator) compactRecoveredTerminalPayloads(ctx context.Context, records []IntakeJournalRecord) ([]IntakeJournalRecord, error) {
 	for idx := range records {
-		if !records[idx].IsTerminal || len(records[idx].Admission.Payload) == 0 {
+		if !records[idx].IsTerminal {
 			continue
 		}
-		records[idx].Admission.Payload = nil
+		changed := false
+		if len(records[idx].Admission.Payload) != 0 {
+			records[idx].Admission.Payload = nil
+			changed = true
+		}
+		if records[idx].JournalVersion == 0 &&
+			(len(records[idx].Prepared.CandidateParts) == 0 ||
+				(records[idx].Admission.TouchedPartitionIDs != nil && allCandidatePartsObserved(records[idx].Prepared.CandidateParts, records[idx].ObservedCandidateParts))) {
+			records[idx].JournalVersion = currentIntakeJournalVersion
+			changed = true
+		}
+		if !changed {
+			continue
+		}
 		records[idx].UpdatedAtUnixMS = time.Now().UnixMilli()
 		if err := o.journal.SaveIntakeRecord(ctx, records[idx]); err != nil {
 			return nil, fmt.Errorf("intake: compact recovered terminal payload for %s: %w", records[idx].StatementID, err)
@@ -1719,14 +1774,104 @@ func (o *Orchestrator) saveJournalSnapshot(ctx context.Context, snap IntakeJourn
 	defer o.journalWriteMu.Unlock()
 	o.mu.Lock()
 	if rec := o.records[snap.StatementID]; rec != nil {
-		snap.ObservedCandidateParts = cloneCandidateParts(rec.observedCandidateParts)
-		if snap.IsTerminal {
-			snap.Admission.Payload = nil
+		if rec.isTerminal {
+			// A snapshot captured before terminal publication may wait behind the
+			// terminal journal write. Never let it overwrite the monotonic durable
+			// outcome after the write lock becomes available.
+			snap = journalRecordFromIntakeRecord(rec)
+		} else {
+			snap.Admission.TouchedPartitionIDs = append([]string(nil), rec.adm.TouchedPartitionIDs...)
+			snap.ObservedCandidateParts = cloneCandidateParts(rec.observedCandidateParts)
 		}
+	}
+	if snap.IsTerminal {
+		snap.Admission.Payload = nil
 	}
 	o.mu.Unlock()
 	if err := o.journal.SaveIntakeRecord(ctx, snap); err != nil {
 		return fmt.Errorf("intake: persist journal for %s: %w", snap.StatementID, err)
+	}
+	return nil
+}
+
+// PersistRecoveredTouchedPartitions binds the payload-derived partition set to
+// a recovered statement before runtime admission state is restored. Recovery
+// later compacts terminal payload bytes, so this fact must reach the journal
+// before a resumed statement can become ACK2. Legacy terminal records use the
+// same seam to persist candidate-derived partitions without upgrading their
+// observation version; exact inventory proof performs that upgrade separately.
+func (o *Orchestrator) PersistRecoveredTouchedPartitions(ctx context.Context, statementID string, partitionIDs []string) error {
+	if o == nil || statementID == "" {
+		return errors.New("intake: recovered touched partitions require a statement id")
+	}
+	if len(partitionIDs) == 0 {
+		return fmt.Errorf("intake: recovered statement %s has no touched partitions", statementID)
+	}
+	seen := make(map[string]struct{}, len(partitionIDs))
+	for _, partitionID := range partitionIDs {
+		if partitionID == "" {
+			return fmt.Errorf("intake: recovered statement %s has an empty touched partition", statementID)
+		}
+		if _, duplicate := seen[partitionID]; duplicate {
+			return fmt.Errorf("intake: recovered statement %s repeats touched partition %s", statementID, partitionID)
+		}
+		seen[partitionID] = struct{}{}
+	}
+	partitions := append([]string{}, partitionIDs...)
+
+	o.journalWriteMu.Lock()
+	defer o.journalWriteMu.Unlock()
+
+	o.mu.Lock()
+	rec := o.records[statementID]
+	if rec != nil && rec.adm.TouchedPartitionIDs != nil && !equalStrings(rec.adm.TouchedPartitionIDs, partitions) {
+		o.mu.Unlock()
+		return fmt.Errorf("intake: recovered statement %s changed touched partitions", statementID)
+	}
+	recoveredIdx := -1
+	for idx := range o.recoveredJournal {
+		if o.recoveredJournal[idx].StatementID != statementID {
+			continue
+		}
+		recoveredIdx = idx
+		if existing := o.recoveredJournal[idx].Admission.TouchedPartitionIDs; existing != nil && !equalStrings(existing, partitions) {
+			o.mu.Unlock()
+			return fmt.Errorf("intake: recovered statement %s changed touched partitions", statementID)
+		}
+		break
+	}
+	if rec == nil && recoveredIdx < 0 {
+		o.mu.Unlock()
+		return fmt.Errorf("intake: recovered statement %s is unavailable", statementID)
+	}
+	if rec != nil {
+		// Publish the deterministic payload fact before releasing the mutex so
+		// any concurrently captured snapshot carries it. If persistence fails,
+		// recovery remains fail-closed and the next attempt writes it again.
+		rec.adm.TouchedPartitionIDs = append([]string{}, partitions...)
+		if rec.isTerminal && allCandidatePartsObserved(rec.prepared.CandidateParts, rec.observedCandidateParts) {
+			rec.journalVersion = currentIntakeJournalVersion
+		}
+	}
+	if recoveredIdx >= 0 {
+		o.recoveredJournal[recoveredIdx].Admission.TouchedPartitionIDs = append([]string{}, partitions...)
+		if o.recoveredJournal[recoveredIdx].IsTerminal &&
+			allCandidatePartsObserved(o.recoveredJournal[recoveredIdx].Prepared.CandidateParts, o.recoveredJournal[recoveredIdx].ObservedCandidateParts) {
+			o.recoveredJournal[recoveredIdx].JournalVersion = currentIntakeJournalVersion
+		}
+	}
+	var snap IntakeJournalRecord
+	if rec != nil {
+		snap = journalRecordFromIntakeRecord(rec)
+	} else {
+		snap = cloneIntakeJournalRecords(o.recoveredJournal[recoveredIdx : recoveredIdx+1])[0]
+	}
+	o.mu.Unlock()
+
+	if o.journal != nil {
+		if err := o.journal.SaveIntakeRecord(ctx, snap); err != nil {
+			return fmt.Errorf("intake: persist recovered touched partitions for %s: %w", statementID, err)
+		}
 	}
 	return nil
 }
@@ -1762,14 +1907,32 @@ func (o *Orchestrator) MarkCandidateObserved(ctx context.Context, statementID st
 		if o.journal == nil {
 			o.mu.Lock()
 			rec.observedCandidateParts = observed
+			if allCandidatePartsObserved(rec.prepared.CandidateParts, observed) {
+				rec.journalVersion = currentIntakeJournalVersion
+			}
 			o.mu.Unlock()
 			return nil
+		}
+		// A terminal save from an older writer may already be durable even if
+		// this observation captured the pre-publish memory view. Merge the
+		// monotonic terminal facts before appending the marker so a refresh can
+		// never resurrect a pending RCBound record or its compacted payload.
+		if durable, ok, err := o.journal.LoadIntakeRecord(ctx, statementID); err != nil {
+			return fmt.Errorf("intake: load durable observation base for %s: %w", statementID, err)
+		} else if ok && durable.IsTerminal {
+			snap = durable
+			snap.ObservedCandidateParts = cloneCandidateParts(observed)
+			snap.Admission.Payload = nil
+		}
+		if allCandidatePartsObserved(snap.Prepared.CandidateParts, snap.ObservedCandidateParts) {
+			snap.JournalVersion = currentIntakeJournalVersion
 		}
 		if err := o.journal.SaveIntakeRecord(ctx, snap); err != nil {
 			return fmt.Errorf("intake: persist observed candidate for %s: %w", statementID, err)
 		}
 		o.mu.Lock()
 		rec.observedCandidateParts = observed
+		rec.journalVersion = snap.JournalVersion
 		o.updateRecoveredObservationLocked(statementID, candidate)
 		o.mu.Unlock()
 		return nil
@@ -1789,6 +1952,9 @@ func (o *Orchestrator) MarkCandidateObserved(ctx context.Context, statementID st
 		return nil
 	}
 	record.ObservedCandidateParts = append(record.ObservedCandidateParts, candidate)
+	if allCandidatePartsObserved(record.Prepared.CandidateParts, record.ObservedCandidateParts) {
+		record.JournalVersion = currentIntakeJournalVersion
+	}
 	record.UpdatedAtUnixMS = time.Now().UnixMilli()
 	if record.IsTerminal {
 		record.Admission.Payload = nil
@@ -1800,6 +1966,15 @@ func (o *Orchestrator) MarkCandidateObserved(ctx context.Context, statementID st
 	o.updateRecoveredObservationLocked(statementID, candidate)
 	o.mu.Unlock()
 	return nil
+}
+
+func allCandidatePartsObserved(candidates, observed []CandidatePart) bool {
+	for _, candidate := range candidates {
+		if !candidatePartIn(candidate, observed) {
+			return false
+		}
+	}
+	return true
 }
 
 func (o *Orchestrator) updateRecoveredObservationLocked(statementID string, candidate CandidatePart) {
@@ -1986,7 +2161,11 @@ func (o *Orchestrator) preparedConsistencyReject(env StatementEnvelope, prepared
 	return preparedCandidateConsistencyReject(env, prepared)
 }
 
-func preparedCandidateConsistencyReject(env StatementEnvelope, prepared PreparedLocalResult) string {
+func preparedCandidateConsistencyReject(env StatementEnvelope, prepared PreparedLocalResult, touchedPartitionIDs ...[]string) string {
+	var candidatePartitions map[string]struct{}
+	if len(touchedPartitionIDs) != 0 {
+		candidatePartitions = make(map[string]struct{}, len(prepared.CandidateParts))
+	}
 	for _, candidate := range prepared.CandidateParts {
 		if candidate.TableID == "" || candidate.TableID != env.TargetTableID {
 			return "candidate table mismatch"
@@ -1996,6 +2175,34 @@ func preparedCandidateConsistencyReject(env StatementEnvelope, prepared Prepared
 		}
 		if candidate.PartName == "" {
 			return "candidate has no part_name"
+		}
+		if candidatePartitions != nil {
+			if _, duplicate := candidatePartitions[candidate.PartitionID]; duplicate {
+				return "candidate partition is duplicated"
+			}
+			candidatePartitions[candidate.PartitionID] = struct{}{}
+		}
+	}
+	if len(touchedPartitionIDs) != 0 {
+		expected := make(map[string]struct{}, len(touchedPartitionIDs[0]))
+		for _, partitionID := range touchedPartitionIDs[0] {
+			if partitionID == "" {
+				return "touched candidate partition is empty"
+			}
+			if _, duplicate := expected[partitionID]; duplicate {
+				return "touched candidate partition is duplicated"
+			}
+			expected[partitionID] = struct{}{}
+		}
+		for partitionID := range candidatePartitions {
+			if _, ok := expected[partitionID]; !ok {
+				return "candidate partition was not touched by the payload"
+			}
+		}
+		for partitionID := range expected {
+			if _, ok := candidatePartitions[partitionID]; !ok {
+				return "candidate partition is missing for touched payload partition"
+			}
 		}
 	}
 	return ""

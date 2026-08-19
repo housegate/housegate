@@ -3,6 +3,7 @@ package storageintegrity
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -115,6 +116,42 @@ func TestRecoverPendingCompactsLegacyTerminalPayload(t *testing.T) {
 	}
 }
 
+func TestRecoverPendingRejectsUnknownJournalVersion(t *testing.T) {
+	ctx := context.Background()
+	journal, err := NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	adm := admissionFixture()
+	env, err := EnvelopeFromAdmission(adm)
+	if err != nil {
+		t.Fatalf("EnvelopeFromAdmission: %v", err)
+	}
+	prepared := boundSource()
+	prepared.StatementID = adm.StatementID
+	if err := journal.SaveIntakeRecord(ctx, IntakeJournalRecord{
+		JournalVersion: currentIntakeJournalVersion + 1,
+		StatementID:    adm.StatementID, Source: "snode-A", FrontierOrdinal: 1,
+		Env: env, Admission: adm, Stage: LifecycleRCBound,
+		Prepared: prepared, HasPrepared: true,
+		TerminalResult: IntakeResult{
+			StatementID: adm.StatementID, Ack2: true, Lifecycle: LifecycleRCBound,
+			Prepared: prepared,
+		},
+		IsTerminal: true,
+	}); err != nil {
+		t.Fatalf("SaveIntakeRecord: %v", err)
+	}
+	orch := NewOrchestrator(
+		panicSubmitter{t: t}, newLookupRecordingPreparer(boundSource()),
+		OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
+	)
+	err = orch.RecoverPending(ctx)
+	if err == nil || !strings.Contains(err.Error(), "newer than supported") || !strings.Contains(err.Error(), adm.StatementID) {
+		t.Fatalf("RecoverPending error=%v, want named unsupported journal version", err)
+	}
+}
+
 func TestRecoverPendingConcurrentCallsRestoreRuntimeStateOnce(t *testing.T) {
 	orch := NewOrchestrator(
 		panicSubmitter{t: t}, newLookupRecordingPreparer(boundSource()),
@@ -161,6 +198,55 @@ releaseRestore:
 	}
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("concurrent runtime restore calls=%d, want one", got)
+	}
+}
+
+func TestRecoverPendingConcurrentRestoreFailureIsSharedByWaiters(t *testing.T) {
+	orch := NewOrchestrator(
+		panicSubmitter{t: t}, newLookupRecordingPreparer(boundSource()),
+		OrchestratorConfig{ExpectedSource: "snode-A"},
+	)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	restoreErr := errors.New("restore inventory unavailable")
+	var calls atomic.Int64
+	orch.SetBeforeRecovery(func(context.Context, []IntakeJournalRecord) error {
+		if calls.Add(1) == 1 {
+			close(started)
+		}
+		<-release
+		return restoreErr
+	})
+
+	errs := make(chan error, 2)
+	go func() { errs <- orch.RecoverPending(context.Background()) }()
+	<-started
+	waiterStarted := make(chan struct{})
+	go func() {
+		close(waiterStarted)
+		errs <- orch.RecoverPending(context.Background())
+	}()
+	<-waiterStarted
+	time.Sleep(10 * time.Millisecond)
+	close(release)
+	for range 2 {
+		if err := <-errs; !errors.Is(err, restoreErr) {
+			t.Fatalf("concurrent RecoverPending error=%v, want shared %v", err, restoreErr)
+		}
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("failed runtime restore calls=%d, want one shared attempt", got)
+	}
+
+	orch.SetBeforeRecovery(func(context.Context, []IntakeJournalRecord) error {
+		calls.Add(1)
+		return nil
+	})
+	if err := orch.RecoverPending(context.Background()); err != nil {
+		t.Fatalf("independent retry after failed cohort: %v", err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("runtime restore calls after independent retry=%d, want 2", got)
 	}
 }
 

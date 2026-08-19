@@ -14,6 +14,8 @@ import (
 	"time"
 )
 
+const currentIntakeJournalVersion uint32 = 1
+
 // IntakeJournal persists the HouseGate-local intake record. It is intentionally
 // statement-scoped: the orchestrator owns concurrency/frontier bookkeeping in
 // memory, while the journal owns the durable facts needed to resume one
@@ -28,8 +30,12 @@ type IntakeJournal interface {
 // protocol and recovery facts; active/done waiters and source-frontier queues
 // are process-local and rebuilt by the orchestrator.
 type IntakeJournalRecord struct {
-	StatementID string `json:"statement_id"`
-	Source      string `json:"source"`
+	// JournalVersion distinguishes observation-aware finalized ownership from
+	// the pre-rollout shape whose empty observed list is ambiguous. Version zero
+	// is legacy and must never be silently interpreted as delayed visibility.
+	JournalVersion uint32 `json:"journal_version,omitempty"`
+	StatementID    string `json:"statement_id"`
+	Source         string `json:"source"`
 	// FrontierOrdinal is immutable for the lifetime of the statement. It
 	// reconstructs same-source admission order independently of later updates.
 	FrontierOrdinal uint64            `json:"frontier_ordinal"`
@@ -98,6 +104,9 @@ func (j *FileIntakeJournal) LoadIntakeRecord(ctx context.Context, statementID st
 	if rec.StatementID != statementID {
 		return IntakeJournalRecord{}, false, fmt.Errorf("storageintegrity: journal statement id mismatch: file for %s contained %s", statementID, rec.StatementID)
 	}
+	if err := validateIntakeJournalVersion(rec); err != nil {
+		return IntakeJournalRecord{}, false, err
+	}
 	return rec, true, nil
 }
 
@@ -110,6 +119,7 @@ func (j *FileIntakeJournal) ListIntakeRecords(ctx context.Context) ([]IntakeJour
 		return nil, fmt.Errorf("storageintegrity: list intake journal dir: %w", err)
 	}
 	records := make([]IntakeJournalRecord, 0, len(entries))
+	migrationIndexes := make([]int, 0)
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" || strings.HasPrefix(entry.Name(), ".tmp-intake-") {
 			continue
@@ -129,7 +139,43 @@ func (j *FileIntakeJournal) ListIntakeRecords(ctx context.Context) ([]IntakeJour
 		if rec.StatementID == "" {
 			return nil, fmt.Errorf("storageintegrity: journal file %s missing statement id", entry.Name())
 		}
+		if err := validateIntakeJournalVersion(rec); err != nil {
+			return nil, err
+		}
+		// Migrate terminal payload bytes while processing this one file, before
+		// retaining the record in the aggregate result. This bounds first-upgrade
+		// memory by one legacy payload instead of the full historical corpus.
+		changed := false
+		if rec.IsTerminal && len(rec.Admission.Payload) != 0 {
+			rec.Admission.Payload = nil
+			changed = true
+		}
+		if rec.IsTerminal && rec.JournalVersion == 0 &&
+			(len(rec.Prepared.CandidateParts) == 0 ||
+				(rec.Admission.TouchedPartitionIDs != nil && allCandidatePartsObserved(rec.Prepared.CandidateParts, rec.ObservedCandidateParts))) {
+			rec.JournalVersion = currentIntakeJournalVersion
+			changed = true
+		}
+		if changed {
+			migrationIndexes = append(migrationIndexes, len(records))
+		}
 		records = append(records, rec)
+	}
+	// Publish all per-file atomic rewrites with one directory sync. The retained
+	// migration set contains metadata only; every large payload was already
+	// dropped while its source file was the sole decoded record in memory.
+	for _, idx := range migrationIndexes {
+		if err := j.saveIntakeRecord(ctx, records[idx], false); err != nil {
+			if syncErr := syncDir(j.dir); syncErr != nil {
+				err = errors.Join(err, syncErr)
+			}
+			return nil, fmt.Errorf("storageintegrity: migrate terminal intake journal %s: %w", records[idx].StatementID, err)
+		}
+	}
+	if len(migrationIndexes) != 0 {
+		if err := syncDir(j.dir); err != nil {
+			return nil, fmt.Errorf("storageintegrity: publish terminal intake journal migrations: %w", err)
+		}
 	}
 	sort.Slice(records, func(i, k int) bool {
 		if records[i].Source != records[k].Source {
@@ -147,6 +193,10 @@ func (j *FileIntakeJournal) ListIntakeRecords(ctx context.Context) ([]IntakeJour
 }
 
 func (j *FileIntakeJournal) SaveIntakeRecord(ctx context.Context, rec IntakeJournalRecord) error {
+	return j.saveIntakeRecord(ctx, rec, true)
+}
+
+func (j *FileIntakeJournal) saveIntakeRecord(ctx context.Context, rec IntakeJournalRecord, syncDirectory bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -185,6 +235,9 @@ func (j *FileIntakeJournal) SaveIntakeRecord(ctx context.Context, rec IntakeJour
 	if err := os.Rename(tmpPath, j.recordPath(rec.StatementID)); err != nil {
 		return fmt.Errorf("storageintegrity: publish intake journal %s: %w", rec.StatementID, err)
 	}
+	if !syncDirectory {
+		return nil
+	}
 	return syncDir(j.dir)
 }
 
@@ -205,8 +258,19 @@ func syncDir(dir string) error {
 	return nil
 }
 
+func validateIntakeJournalVersion(rec IntakeJournalRecord) error {
+	if rec.JournalVersion > currentIntakeJournalVersion {
+		return fmt.Errorf(
+			"storageintegrity: intake journal version %d for statement %s is newer than supported version %d",
+			rec.JournalVersion, rec.StatementID, currentIntakeJournalVersion,
+		)
+	}
+	return nil
+}
+
 func journalRecordFromIntakeRecord(rec *intakeRecord) IntakeJournalRecord {
 	return IntakeJournalRecord{
+		JournalVersion:         rec.journalVersion,
 		StatementID:            rec.statementID,
 		Source:                 rec.source,
 		FrontierOrdinal:        rec.frontierOrdinal,
@@ -230,6 +294,7 @@ func journalRecordFromIntakeRecord(rec *intakeRecord) IntakeJournalRecord {
 
 func intakeRecordFromJournalRecord(rec IntakeJournalRecord) *intakeRecord {
 	return &intakeRecord{
+		journalVersion:         rec.JournalVersion,
 		statementID:            rec.StatementID,
 		source:                 rec.Source,
 		frontierOrdinal:        rec.FrontierOrdinal,
@@ -253,6 +318,7 @@ func intakeRecordFromJournalRecord(rec IntakeJournalRecord) *intakeRecord {
 func cloneAdmissionRecord(in AdmissionRecord) AdmissionRecord {
 	out := in
 	out.Payload = append([]byte(nil), in.Payload...)
+	out.TouchedPartitionIDs = append([]string(nil), in.TouchedPartitionIDs...)
 	return out
 }
 

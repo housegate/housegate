@@ -1252,6 +1252,9 @@ func TestStartStorageIntegrityRuntimeRecoversAfterInitialMergeAssert(t *testing.
 		PayloadEncoding: env.PayloadEncoding,
 		Revision:        env.Revision,
 		Lifecycle:       sicore.LifecycleUnsafeWritten,
+		CandidateParts: []sicore.CandidatePart{{
+			TableID: adm.TableID, PartitionID: "p_eu", PartName: "eu_part_1",
+		}},
 	}
 	if err := journal.SaveIntakeRecord(context.Background(), sicore.IntakeJournalRecord{
 		StatementID:     adm.StatementID,

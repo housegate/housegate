@@ -25,6 +25,12 @@ var ErrBackpressure = errors.New("storage_integrity: back-pressure")
 // fenced until the same-ID proof retry succeeds.
 var ErrCleanupProofPending = errors.New("storage_integrity: cleanup inventory proof pending")
 
+// ErrIntakeJournalMigrationRequired means a legacy finalized candidate lacks
+// the durable exact-observation fact needed to distinguish delayed visibility
+// from historical cleanup. Startup must stop for an explicit operator/source
+// proof instead of silently dropping or permanently charging the candidate.
+var ErrIntakeJournalMigrationRequired = errors.New("storage_integrity: intake journal migration required")
+
 // BackpressureError describes the refused physical table and partition.
 type BackpressureError struct {
 	Database  string
@@ -104,6 +110,7 @@ type PartsRestoreRecord struct {
 	Candidates         []CandidatePart
 	ObservedCandidates []CandidatePart
 	Finalized          bool
+	LegacyObservation  bool
 }
 
 type reservationSlot struct {
@@ -430,6 +437,15 @@ func (g *PartsPressureGuard) RestoreBatch(ctx context.Context, records []PartsRe
 				}
 				key := PartsKey{Database: g.cfg.UnsafeDatabase, Table: record.Table, Partition: candidate.PartitionID}
 				_, active := g.activeParts[key][candidate.PartName]
+				if record.LegacyObservation && !observedCandidates[candidateCoordinateKey(candidate)] && !active {
+					rollback()
+					g.mu.Unlock()
+					g.commitMu.Unlock()
+					return nil, fmt.Errorf(
+						"%w: terminal statement %s candidate %s is absent without durable observation proof",
+						ErrIntakeJournalMigrationRequired, record.StatementID, candidate.PartName,
+					)
+				}
 				if observedCandidates[candidateCoordinateKey(candidate)] && !active {
 					continue
 				}
