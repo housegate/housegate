@@ -83,7 +83,7 @@ sentio-node: `standalone/standalone.go`, `storageintegrityadapter/adapter.go`, `
 
 **Interfaces:**
 - Consumes: `payloadexec.TableSchema{TableID, PartitionBy string; Columns []lthash.Column}`, `lthash.Column{Name, Type string}` (housegate v0.8.1, already a dep).
-- Produces (used by Tasks 2–7, 10, 17, 18):
+- Produces (used by Tasks 2–8, 10, 17, 18):
   - `ddl.CHTableName(tableID string) string`
   - `ddl.Pinned{UnsafeDB, SafeDB, PromoteDB, NodeID string; KeeperShardID uint32}`
   - `ddl.ZooKeeperPath(p Pinned, tableID string) string`
@@ -615,7 +615,7 @@ func ParseEngineFullSettings(engineFull string) (map[string]string, error) {
 
 **Interfaces:**
 - Consumes: Task 1 `Intents`/`TableIntent`/`Pinned`, Task 2 `ParseEngineFullSettings`; `clickhouse.Conn` (`github.com/ClickHouse/clickhouse-go/v2`).
-- Produces (used by Tasks 5, 6, 10, 17, 18):
+- Produces (used by Tasks 4–6, 8, 10, 17, 18):
   - `ddl.Mode` (`ModeOff`, `ModeVerifyOnly`, `ModeCreateAndVerify`), `ddl.ParseMode(s string) (Mode, error)` (`"off"|"verify"|"create"`), `func (m Mode) String() string`
   - `ddl.DefaultReconcileInterval = 60 * time.Second`
   - `ddl.ErrProtocolTableDrift`, `ddl.ErrProtocolTableMissing`
