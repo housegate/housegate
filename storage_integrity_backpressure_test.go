@@ -3,6 +3,7 @@ package housegate
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -40,11 +41,24 @@ func (c *rootPartsConn) Query(context.Context, string, ...any) (sicore.MergeRows
 	if c.err != nil {
 		return nil, c.err
 	}
-	return &rootPartsRows{rows: append([]rootPartsRow(nil), c.rows...)}, nil
+	rows := make([]rootPartInventoryRow, 0)
+	for _, row := range c.rows {
+		for idx := uint64(1); idx <= row.n; idx++ {
+			rows = append(rows, rootPartInventoryRow{
+				db: row.db, table: row.table, partition: row.partition,
+				partitionKey: row.partitionKey, partName: fmt.Sprintf("%s_part_%d", row.partition, idx),
+			})
+		}
+	}
+	return &rootPartsRows{rows: rows}, nil
+}
+
+type rootPartInventoryRow struct {
+	db, table, partition, partitionKey, partName string
 }
 
 type rootPartsRows struct {
-	rows []rootPartsRow
+	rows []rootPartInventoryRow
 	i    int
 }
 
@@ -56,7 +70,7 @@ func (r *rootPartsRows) Scan(dest ...any) error {
 	*(dest[1].(*string)) = row.table
 	*(dest[2].(*string)) = row.partition
 	*(dest[3].(*string)) = row.partitionKey
-	*(dest[4].(*uint64)) = row.n
+	*(dest[4].(*string)) = row.partName
 	return nil
 }
 func (r *rootPartsRows) Err() error   { return nil }
@@ -137,10 +151,13 @@ func TestStorageIntegrityBackpressureMetricsRegisteredOnce(t *testing.T) {
 
 type noopPartsReservation struct{}
 
-func (noopPartsReservation) Commit()         {}
-func (noopPartsReservation) Release()        {}
-func (noopPartsReservation) ReleaseCleaned() {}
-func (noopPartsReservation) Finalize()       {}
+func (noopPartsReservation) Commit(...sicore.CandidatePart) error { return nil }
+func (noopPartsReservation) Release()                             {}
+func (noopPartsReservation) PrepareCleanupProof(context.Context, []sicore.CandidatePart) error {
+	return nil
+}
+func (noopPartsReservation) ReleaseCleaned(context.Context) error { return nil }
+func (noopPartsReservation) Finalize()                            {}
 
 type blockingPressureLifecycle struct {
 	refreshes   atomic.Int64

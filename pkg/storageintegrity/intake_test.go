@@ -976,6 +976,33 @@ func TestPreparedConsistencyReject_RequiresCompleteExactBinding(t *testing.T) {
 	}
 }
 
+func TestPreparedConsistencyReject_CandidateInventoryBindsTargetTable(t *testing.T) {
+	adm := admissionFixture()
+	env, err := EnvelopeFromAdmission(adm)
+	if err != nil {
+		t.Fatalf("EnvelopeFromAdmission: %v", err)
+	}
+	orch := NewOrchestrator(&recordingSubmitter{}, &recordingPreparer{}, OrchestratorConfig{ExpectedSource: "snode-A"})
+	valid := boundSource()
+	valid.CandidateParts = []CandidatePart{{TableID: env.TargetTableID, PartitionID: "p_eu", PartName: "eu_1_1_0"}}
+	if reason := orch.preparedConsistencyReject(env, valid); reason != "" {
+		t.Fatalf("valid exact candidate rejected: %s", reason)
+	}
+	for _, candidate := range []CandidatePart{
+		// This logical id maps to the same legacy physical name as net1.events;
+		// exact logical equality must still reject it.
+		{TableID: "net1__events", PartitionID: "p_eu", PartName: "eu_1_1_0"},
+		{TableID: env.TargetTableID, PartitionID: "", PartName: "eu_1_1_0"},
+		{TableID: env.TargetTableID, PartitionID: "p_eu", PartName: ""},
+	} {
+		prepared := boundSource()
+		prepared.CandidateParts = []CandidatePart{candidate}
+		if reason := orch.preparedConsistencyReject(env, prepared); reason == "" {
+			t.Fatalf("invalid exact candidate accepted: %+v", candidate)
+		}
+	}
+}
+
 func TestEnvelopeFromAdmissionRejectsNonInsertKind(t *testing.T) {
 	adm := AdmissionRecord{StatementID: fixtureStatementID(1), Kind: Kind("DELETE"), TableID: "net1.events", SQL: "DELETE FROM events WHERE k=1"}
 	if _, err := EnvelopeFromAdmission(adm); err == nil {
@@ -1395,6 +1422,120 @@ func TestOrchestrate_DifferentStatementBlockedOnFrontier(t *testing.T) {
 	wg.Wait()
 	if got := prep.prepareCountFor(adm2.StatementID); got != 1 {
 		t.Fatalf("after adm1 became terminal, adm2 must prepare exactly once, got %d", got)
+	}
+}
+
+func TestOrchestrate_CleanupProofFailureFencesQueuedPrepareUntilSameIDRetry(t *testing.T) {
+	prep := newFrontierProbePreparer()
+	prep.prepared = boundSource()
+	sub := &recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeTerminalReject, Reason: "conflict"}}
+	baseJournal, err := NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	saveErr := errors.New("terminal journal save failed")
+	journal := &failFirstTerminalSaveJournal{base: baseJournal, err: saveErr}
+	orch := NewOrchestrator(sub, prep, OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal})
+	proofErr := errors.New("inventory proof unavailable")
+	var hookMu sync.Mutex
+	hookCalls := 0
+	orch.SetAfterExactCleanup(func(context.Context, IntakeResult) error {
+		hookMu.Lock()
+		defer hookMu.Unlock()
+		hookCalls++
+		if hookCalls == 1 {
+			return proofErr
+		}
+		return nil
+	})
+
+	admA := admissionFixture()
+	admB := admissionFixture()
+	admB.StatementID = fixtureStatementID(2)
+	res, err := orch.Orchestrate(context.Background(), admA)
+	if !errors.Is(err, proofErr) || res.Lifecycle != LifecycleAbortPending {
+		t.Fatalf("A first attempt = (%+v, %v), want AbortPending proof error", res, err)
+	}
+
+	bDone := make(chan error, 1)
+	go func() {
+		_, err := orch.Orchestrate(context.Background(), admB)
+		bDone <- err
+	}()
+	time.Sleep(30 * time.Millisecond)
+	if got := prep.prepareCountFor(admB.StatementID); got != 0 {
+		t.Fatalf("B prepared %d times while A cleanup proof was pending", got)
+	}
+
+	res, err = orch.Orchestrate(context.Background(), admA)
+	if !errors.Is(err, saveErr) || res.Lifecycle != LifecycleCleaned {
+		t.Fatalf("A proof retry = (%+v, %v), want Cleaned terminal-save error", res, err)
+	}
+	time.Sleep(30 * time.Millisecond)
+	if got := prep.prepareCountFor(admB.StatementID); got != 0 {
+		t.Fatalf("B prepared %d times while A terminal journal was pending", got)
+	}
+	res, err = orch.Orchestrate(context.Background(), admA)
+	if err != nil || res.Lifecycle != LifecycleCleaned {
+		t.Fatalf("A terminal-save retry = (%+v, %v), want Cleaned", res, err)
+	}
+	select {
+	case err := <-bDone:
+		if err != nil {
+			t.Fatalf("B after proof retry: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("B remained fenced after A proof retry")
+	}
+	if got := prep.prepareCountFor(admB.StatementID); got != 1 {
+		t.Fatalf("B prepare count after proof retry = %d, want 1", got)
+	}
+}
+
+func TestOrchestrate_PreCleanupProofFailureFencesAlreadyQueuedPrepare(t *testing.T) {
+	prep := newFrontierProbePreparer()
+	prep.prepared = boundSource()
+	sub := &recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeTerminalReject, Reason: "conflict"}}
+	orch := NewOrchestrator(sub, prep, OrchestratorConfig{ExpectedSource: "snode-A"})
+	proofErr := errors.New("pre-cleanup inventory unavailable")
+	proofCalls := 0
+	orch.SetBeforeExactCleanup(func(context.Context, IntakeResult) error {
+		proofCalls++
+		if proofCalls == 1 {
+			return proofErr
+		}
+		return nil
+	})
+
+	admA := admissionFixture()
+	admB := admissionFixture()
+	admB.StatementID = fixtureStatementID(2)
+	res, err := orch.Orchestrate(context.Background(), admA)
+	if !errors.Is(err, proofErr) || res.Lifecycle != LifecycleAbortPending {
+		t.Fatalf("A first attempt=(%+v, %v), want AbortPending proof error", res, err)
+	}
+	bDone := make(chan error, 1)
+	go func() {
+		_, err := orch.Orchestrate(context.Background(), admB)
+		bDone <- err
+	}()
+	time.Sleep(30 * time.Millisecond)
+	if got := prep.prepareCountFor(admB.StatementID); got != 0 {
+		t.Fatalf("B prepared %d times while A pre-cleanup proof was pending", got)
+	}
+	if res, err = orch.Orchestrate(context.Background(), admA); err != nil || res.Lifecycle != LifecycleCleaned {
+		t.Fatalf("A proof retry=(%+v, %v), want Cleaned", res, err)
+	}
+	select {
+	case err := <-bDone:
+		if err != nil {
+			t.Fatalf("B after proof retry: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("B remained fenced after A proof retry")
+	}
+	if got := prep.prepareCountFor(admB.StatementID); got != 1 {
+		t.Fatalf("B prepare count=%d want 1", got)
 	}
 }
 

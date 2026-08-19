@@ -526,6 +526,32 @@ type Orchestrator struct {
 	journalRecovered    bool
 	journalRecovering   bool
 	journalRecoveryDone chan struct{}
+	beforeExactCleanup  func(context.Context, IntakeResult) error
+	afterExactCleanup   func(context.Context, IntakeResult) error
+}
+
+// SetBeforeExactCleanup installs the runtime hook that freezes exact active
+// candidate evidence before source cleanup. The callback is copied under the
+// orchestrator mutex and invoked without it while the source frontier is held.
+func (o *Orchestrator) SetBeforeExactCleanup(hook func(context.Context, IntakeResult) error) {
+	if o == nil {
+		return
+	}
+	o.mu.Lock()
+	o.beforeExactCleanup = hook
+	o.mu.Unlock()
+}
+
+// SetAfterExactCleanup installs the runtime hook that reconciles pressure
+// inventory after source cleanup and before the source frontier is released.
+// The callback is copied under the orchestrator mutex and invoked without it.
+func (o *Orchestrator) SetAfterExactCleanup(hook func(context.Context, IntakeResult) error) {
+	if o == nil {
+		return
+	}
+	o.mu.Lock()
+	o.afterExactCleanup = hook
+	o.mu.Unlock()
 }
 
 // intakeRecord is the cross-call coordination state for one statement id. It
@@ -1185,15 +1211,41 @@ func (o *Orchestrator) abort(ctx context.Context, res IntakeResult, rec *intakeR
 		return res, err
 	}
 	parts := o.abortParts(rec)
+	o.mu.Lock()
+	beforeCleanup := o.beforeExactCleanup
+	o.mu.Unlock()
+	if beforeCleanup != nil {
+		if err := beforeCleanup(ctx, res); err != nil {
+			// No cleanup ran, so AbortPending remains durable and the source
+			// frontier stays fenced. The same-ID retry re-enters to obtain proof.
+			return res, err
+		}
+	}
 	if err := o.preparer.AbortPreparedStatement(ctx, res.StatementID, parts, reason); err != nil {
 		return res, fmt.Errorf("intake: abort failed for %s (%s): %w", res.StatementID, reason, err)
 	}
 	res.Lifecycle = LifecycleCleaned
 	res.terminal = true
+	o.mu.Lock()
+	afterCleanup := o.afterExactCleanup
+	o.mu.Unlock()
+	var cleanupProofErr error
+	if afterCleanup != nil {
+		cleanupProofErr = afterCleanup(ctx, res)
+	}
+	o.releasePayloadLease(rec)
+	if cleanupProofErr != nil {
+		// Source cleanup is idempotently complete, but keep the durable record at
+		// AbortPending until inventory proof succeeds. The current statement keeps
+		// the source frontier as a fail-closed fence; its same-ID retry is re-entrant
+		// and re-runs only abort+proof, while queued statements cannot prepare.
+		res.Lifecycle = LifecycleAbortPending
+		res.terminal = false
+		return res, cleanupProofErr
+	}
 	if err := o.setTerminal(ctx, rec, res); err != nil {
 		return res, err
 	}
-	o.releasePayloadLease(rec)
 	return res, nil
 }
 
@@ -1743,6 +1795,17 @@ func (o *Orchestrator) preparedConsistencyReject(env StatementEnvelope, prepared
 		// The source must decode with exactly the pinned client revision.
 		if prepared.Revision == 0 || prepared.Revision != env.Revision {
 			return "payload revision mismatch"
+		}
+	}
+	for _, candidate := range prepared.CandidateParts {
+		if candidate.TableID == "" || candidate.TableID != env.TargetTableID {
+			return "candidate table mismatch"
+		}
+		if candidate.PartitionID == "" {
+			return "candidate has no partition_id"
+		}
+		if candidate.PartName == "" {
+			return "candidate has no part_name"
 		}
 	}
 	return ""

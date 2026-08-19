@@ -20,6 +20,11 @@ const (
 // ErrBackpressure is the sentinel every part-pressure refusal unwraps to.
 var ErrBackpressure = errors.New("storage_integrity: back-pressure")
 
+// ErrCleanupProofPending means the exact pre/post cleanup inventory proof has
+// not completed. The statement reservation and source frontier must remain
+// fenced until the same-ID proof retry succeeds.
+var ErrCleanupProofPending = errors.New("storage_integrity: cleanup inventory proof pending")
+
 // BackpressureError describes the refused physical table and partition.
 type BackpressureError struct {
 	Database  string
@@ -59,6 +64,11 @@ type PartsKey struct {
 
 type PartsSnapshot map[PartsKey]int
 
+// partsInventory is the exact active part-name set behind a count snapshot.
+// Counts remain the admission input, while names provide proof that an exact
+// cleanup removed a part rather than merely coinciding with unrelated growth.
+type partsInventory map[PartsKey]map[string]struct{}
+
 type PartsPressureConfig struct {
 	UnsafeDatabase        string
 	SafeDatabase          string
@@ -71,14 +81,15 @@ type PartsPressureConfig struct {
 // PartsReservation holds one prospective part per touched partition. Callers
 // Commit once a source write may have happened. Release cancels the reservation
 // before or after Commit when a later source lookup proves no write occurred.
-// ReleaseCleaned cancels after exact candidate cleanup and rebases any later
-// reservation whose baseline provably included this identity. Finalize makes a
-// committed reservation non-cancelable after ACK2; its capacity remains charged
-// until a snapshot covers the whole cohort.
+// PrepareCleanupProof freezes exact candidates that are active immediately
+// before source cleanup. ReleaseCleaned then proves those names absent and
+// cancels the reservation. Finalize makes a committed reservation non-cancelable
+// after ACK2; its capacity remains charged until a snapshot covers the cohort.
 type PartsReservation interface {
-	Commit()
+	Commit(...CandidatePart) error
 	Release()
-	ReleaseCleaned()
+	PrepareCleanupProof(context.Context, []CandidatePart) error
+	ReleaseCleaned(context.Context) error
 	Finalize()
 }
 
@@ -87,8 +98,8 @@ type reservationSlot struct {
 	keyIndex    int
 }
 
-// PartsPressureGuard caches active-part counts and answers ingress admission
-// from the last successful snapshot.
+// PartsPressureGuard caches active-part counts plus exact names and answers
+// ingress admission from the last successful snapshot.
 type PartsPressureGuard struct {
 	conn MergeConn
 	cfg  PartsPressureConfig
@@ -98,16 +109,19 @@ type PartsPressureGuard struct {
 	commitMu    sync.Mutex
 	mu          sync.RWMutex
 	snapshot    PartsSnapshot
+	activeParts partsInventory
 	reserved    PartsSnapshot
 	committed   PartsSnapshot
 	// committedReservations retain reservation identity across visibility so a
-	// later no-write lookup or exact cleanup can cancel the right slot. Snapshot
+	// later no-write lookup can cancel the right slot. Snapshot
 	// generations and original counts prove only aggregate cohort coverage; they
 	// never attribute an ambiguous count increase to a particular statement.
 	committedReservations map[PartsKey][]reservationSlot
+	// candidateClaims makes an exact ClickHouse part name proof single-owner.
+	// Otherwise one malformed repeated candidate could cover multiple slots.
+	candidateClaims map[PartsKey]map[string]uint64
 	// liveReservations retains cancelable and not-yet-visible finalized handles
-	// so exact cleanup can rebase only descendants that explicitly captured the
-	// cleaned reservation in a fully-covered snapshot.
+	// so a serialized post-cleanup snapshot can rebase every later reservation.
 	liveReservations   map[uint64]*partsReservation
 	nextReservationID  uint64
 	snapshotGeneration uint64
@@ -134,28 +148,32 @@ func NewPartsPressureGuard(conn MergeConn, cfg PartsPressureConfig) *PartsPressu
 	return &PartsPressureGuard{
 		conn:                  conn,
 		cfg:                   cfg,
+		activeParts:           partsInventory{},
 		reserved:              PartsSnapshot{},
 		committed:             PartsSnapshot{},
 		committedReservations: map[PartsKey][]reservationSlot{},
+		candidateClaims:       map[PartsKey]map[string]uint64{},
 		liveReservations:      map[uint64]*partsReservation{},
 		now:                   time.Now,
 		invalidated:           make(chan struct{}, 1),
 	}
 }
 
-// BuildSnapshotQuery groups active parts by partition text, not partition_id,
-// and joins the table's partition key so an unpartitioned table can be
-// distinguished from a partitioned String value whose bytes are "tuple()".
+// BuildSnapshotQuery reads every active part name together with partition text,
+// not partition_id, and joins the table's partition key so an unpartitioned
+// table can be distinguished from a partitioned String value whose bytes are
+// "tuple()". Aggregation happens in Go because exact names are required for
+// cleanup proof.
 func (g *PartsPressureGuard) BuildSnapshotQuery() string {
 	databases := []string{quoteMergeString(g.cfg.UnsafeDatabase)}
 	if g.cfg.SafeDatabase != "" {
 		databases = append(databases, quoteMergeString(g.cfg.SafeDatabase))
 	}
-	return "SELECT parts.database, parts.table, parts.partition, tables.partition_key, count() " +
+	return "SELECT parts.database, parts.table, parts.partition, tables.partition_key, parts.name " +
 		"FROM system.parts AS parts INNER JOIN system.tables AS tables " +
 		"ON parts.database = tables.database AND parts.table = tables.name " +
 		"WHERE parts.database IN (" + strings.Join(databases, ", ") + ") AND parts.active " +
-		"GROUP BY parts.database, parts.table, parts.partition, tables.partition_key"
+		"ORDER BY parts.database, parts.table, parts.partition, parts.name"
 }
 
 // Refresh replaces the cached snapshot only after a complete successful read.
@@ -174,27 +192,34 @@ func (g *PartsPressureGuard) Refresh(ctx context.Context) (PartsSnapshot, error)
 	}
 	defer rows.Close()
 	snapshot := PartsSnapshot{}
+	inventory := partsInventory{}
 	for rows.Next() {
-		var database, table, partition, partitionKey string
-		var number uint64
-		if err := rows.Scan(&database, &table, &partition, &partitionKey, &number); err != nil {
+		var database, table, partition, partitionKey, partName string
+		if err := rows.Scan(&database, &table, &partition, &partitionKey, &partName); err != nil {
 			return nil, fmt.Errorf("storage_integrity: scan parts snapshot: %w", err)
 		}
-		snapshot[PartsKey{Database: database, Table: table, Partition: LogicalPartitionID(partition, partitionKey == "")}] = int(number)
+		key := PartsKey{Database: database, Table: table, Partition: LogicalPartitionID(partition, partitionKey == "")}
+		snapshot[key]++
+		if inventory[key] == nil {
+			inventory[key] = map[string]struct{}{}
+		}
+		inventory[key][partName] = struct{}{}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("storage_integrity: read parts snapshot: %w", err)
 	}
 	g.mu.Lock()
 	g.snapshot = snapshot
+	g.activeParts = inventory
 	g.snapshotGeneration++
 	g.takenAt = g.now()
-	g.haveSnap = true
+	g.haveSnap = !g.hasPendingCleanupProofLocked()
 	for key := range g.committedReservations {
 		g.reconcileCommittedKeyLocked(key)
 	}
+	result := copyPartsSnapshot(g.snapshot)
 	g.mu.Unlock()
-	return g.copySnapshot(), nil
+	return result, nil
 }
 
 func (g *PartsPressureGuard) Snapshot() (PartsSnapshot, bool) {
@@ -204,11 +229,6 @@ func (g *PartsPressureGuard) Snapshot() (PartsSnapshot, bool) {
 		return nil, false
 	}
 	return copyPartsSnapshot(g.snapshot), true
-}
-
-func (g *PartsPressureGuard) copySnapshot() PartsSnapshot {
-	snapshot, _ := g.Snapshot()
-	return snapshot
 }
 
 // Allow is a point-in-time check for diagnostics. Admission paths must use
@@ -238,8 +258,9 @@ func (g *PartsPressureGuard) Reserve(ctx context.Context, table string, partitio
 	defer g.mu.Unlock()
 	keys := make([]PartsKey, 0, len(partitionIDs))
 	baselines := make([]int, 0, len(partitionIDs))
+	baselineParts := make([]map[string]struct{}, 0, len(partitionIDs))
+	initialParts := make([]map[string]struct{}, 0, len(partitionIDs))
 	visibleAfterGenerations := make([]uint64, 0, len(partitionIDs))
-	coveredAncestors := make([][]uint64, 0, len(partitionIDs))
 	generation := g.snapshotGeneration
 	seen := make(map[string]bool, len(partitionIDs))
 	for _, partitionID := range partitionIDs {
@@ -253,8 +274,10 @@ func (g *PartsPressureGuard) Reserve(ctx context.Context, table string, partitio
 		key := PartsKey{Database: g.cfg.UnsafeDatabase, Table: table, Partition: partitionID}
 		keys = append(keys, key)
 		baselines = append(baselines, g.snapshot[key])
+		captured := copyPartNames(g.activeParts[key])
+		baselineParts = append(baselineParts, captured)
+		initialParts = append(initialParts, copyPartNames(captured))
 		visibleAfterGenerations = append(visibleAfterGenerations, generation)
-		coveredAncestors = append(coveredAncestors, g.fullyCoveredCancelableReservationIDsLocked(key))
 	}
 	for _, key := range keys {
 		g.reserved[key]++
@@ -265,8 +288,12 @@ func (g *PartsPressureGuard) Reserve(ctx context.Context, table string, partitio
 		id:               g.nextReservationID,
 		keys:             keys,
 		baselines:        baselines,
+		baselineParts:    baselineParts,
+		initialParts:     initialParts,
+		candidateParts:   make([]map[string]struct{}, len(keys)),
+		candidateCovered: make([]bool, len(keys)),
+		cleanupObserved:  make([]map[string]struct{}, len(keys)),
 		visibleAfter:     visibleAfterGenerations,
-		coveredAncestors: coveredAncestors,
 		state:            reservationReserved,
 	}
 	g.liveReservations[reservation.id] = reservation
@@ -294,12 +321,21 @@ type partsReservation struct {
 	id        uint64
 	keys      []PartsKey
 	baselines []int
+	// baselineParts is the exact inventory represented by baselines. It can be
+	// advanced to a proven post-cleanup snapshot. initialParts is immutable and
+	// prevents a retry from claiming a candidate name that predated admission.
+	baselineParts    []map[string]struct{}
+	initialParts     []map[string]struct{}
+	candidateParts   []map[string]struct{}
+	candidateCovered []bool
 	// visibleAfter is an exclusive snapshot-generation barrier. A reservation
 	// can only be absorbed by a successful refresh after this generation. Exact
 	// cleanup advances it so a cached pre-cleanup snapshot cannot be reused.
-	visibleAfter     []uint64
-	coveredAncestors [][]uint64
-	state            reservationState // protected by guard.mu
+	visibleAfter        []uint64
+	cleanupObserved     []map[string]struct{}
+	cleanupProofArmed   bool
+	cleanupProofPending bool
+	state               reservationState // protected by guard.mu
 }
 
 type reservationState uint8
@@ -311,34 +347,231 @@ const (
 	reservationReleased
 )
 
-func (r *partsReservation) Commit() {
+func (r *partsReservation) Commit(candidates ...CandidatePart) error {
 	if r == nil || r.guard == nil {
-		return
+		return nil
 	}
 	// Keep lifecycle changes outside Reserve's refresh-to-baseline critical
-	// section; otherwise exact cleanup could occur after the refresh but before
-	// the new reservation captures its covered ancestors.
+	// section; otherwise cleanup proof could occur after the refresh but before
+	// the new reservation captures its baseline.
 	r.guard.admissionMu.Lock()
 	defer r.guard.admissionMu.Unlock()
 	r.guard.commitMu.Lock()
 	defer r.guard.commitMu.Unlock()
 	r.guard.mu.Lock()
 	defer r.guard.mu.Unlock()
+	bindErr := r.bindCandidatePartsLocked(candidates)
 	r.commitLocked()
+	for _, key := range r.keys {
+		r.guard.reconcileCommittedKeyLocked(key)
+	}
+	return bindErr
 }
 
 func (r *partsReservation) Release() {
-	r.release(false)
+	r.release()
 }
 
-// ReleaseCleaned cancels the reservation after exact candidate cleanup. It
-// additionally rebases later reservations whose baselines provably included
-// this identity as part of a fully-covered cohort.
-func (r *partsReservation) ReleaseCleaned() {
-	r.release(true)
+// PrepareCleanupProof captures only frozen candidate names that are active in a
+// successful inventory immediately before AbortPreparedStatement. It fences
+// all new admission until the matching post-cleanup proof completes. A retry
+// never overwrites an already-armed pre-cleanup snapshot: abort may have
+// succeeded before the prior post-cleanup refresh failed.
+func (r *partsReservation) PrepareCleanupProof(ctx context.Context, candidates []CandidatePart) error {
+	if r == nil || r.guard == nil {
+		return nil
+	}
+	r.guard.admissionMu.Lock()
+	defer r.guard.admissionMu.Unlock()
+	r.guard.mu.RLock()
+	done := r.state == reservationFinalized || r.state == reservationReleased
+	armed := r.cleanupProofArmed
+	r.guard.mu.RUnlock()
+	if done || armed {
+		return nil
+	}
+	_, refreshErr := r.guard.Refresh(ctx)
+	r.guard.commitMu.Lock()
+	defer r.guard.commitMu.Unlock()
+	r.guard.mu.Lock()
+	defer r.guard.mu.Unlock()
+	if refreshErr != nil {
+		r.guard.haveSnap = false
+		r.cleanupProofPending = true
+		return cleanupProofError(refreshErr)
+	}
+	for _, candidate := range candidates {
+		if candidate.PartName == "" {
+			err := errors.New("exact cleanup candidate has empty part name")
+			r.guard.haveSnap = false
+			r.cleanupProofPending = true
+			return cleanupProofError(err)
+		}
+		keyIndex, candidateErr := r.keyIndexForCandidate(candidate)
+		if candidateErr != nil {
+			r.guard.haveSnap = false
+			r.cleanupProofPending = true
+			return cleanupProofError(candidateErr)
+		}
+		key := r.keys[keyIndex]
+		if _, active := r.guard.activeParts[key][candidate.PartName]; !active {
+			continue
+		}
+		if r.cleanupObserved[keyIndex] == nil {
+			r.cleanupObserved[keyIndex] = map[string]struct{}{}
+		}
+		r.cleanupObserved[keyIndex][candidate.PartName] = struct{}{}
+	}
+	r.cleanupProofArmed = true
+	r.cleanupProofPending = true
+	r.guard.haveSnap = false
+	return nil
 }
 
-func (r *partsReservation) release(cleaned bool) {
+// ReleaseCleaned cancels after exact candidate cleanup. It requires a preceding
+// PrepareCleanupProof and proves every candidate that existed before cleanup is
+// absent afterward. Only reservations whose captured baseline contained a
+// proven-removed name advance to the complete post-cleanup inventory.
+func (r *partsReservation) ReleaseCleaned(ctx context.Context) error {
+	if r == nil || r.guard == nil {
+		return nil
+	}
+	r.guard.admissionMu.Lock()
+	defer r.guard.admissionMu.Unlock()
+	r.guard.mu.RLock()
+	done := r.state == reservationFinalized || r.state == reservationReleased
+	r.guard.mu.RUnlock()
+	if done {
+		return nil
+	}
+	r.guard.mu.RLock()
+	armed := r.cleanupProofArmed
+	r.guard.mu.RUnlock()
+	if !armed {
+		r.guard.commitMu.Lock()
+		r.guard.mu.Lock()
+		r.guard.haveSnap = false
+		r.cleanupProofPending = true
+		r.guard.mu.Unlock()
+		r.guard.commitMu.Unlock()
+		return cleanupProofError(errors.New("pre-cleanup candidate inventory was not prepared"))
+	}
+	_, refreshErr := r.guard.Refresh(ctx)
+	r.guard.commitMu.Lock()
+	defer r.guard.commitMu.Unlock()
+	r.guard.mu.Lock()
+	defer r.guard.mu.Unlock()
+	if refreshErr != nil {
+		// Cleanup is already complete, but without a post-cleanup inventory proof
+		// no descendant baseline may move. Make the cache unavailable immediately.
+		r.guard.haveSnap = false
+		r.cleanupProofPending = true
+	} else if remaining := r.remainingObservedCandidatesLocked(); remaining != "" {
+		r.guard.haveSnap = false
+		r.cleanupProofPending = true
+		refreshErr = fmt.Errorf("exact cleanup candidate %s remains active", remaining)
+	} else {
+		r.guard.rebaseLiveReservationsAfterCleanupLocked(r.id, r.cleanupObserved)
+		r.cleanupProofPending = false
+		r.releaseLocked()
+		r.guard.haveSnap = !r.guard.hasPendingCleanupProofLocked()
+	}
+	if refreshErr != nil {
+		return cleanupProofError(refreshErr)
+	}
+	return nil
+}
+
+func cleanupProofError(cause error) error {
+	return fmt.Errorf("%w: %w: %w", ErrCleanupProofPending, ErrBackpressure, cause)
+}
+
+func (r *partsReservation) keyIndexForCandidate(candidate CandidatePart) (int, error) {
+	if candidate.TableID == "" {
+		return -1, fmt.Errorf("exact candidate %q has empty table_id", candidate.PartName)
+	}
+	physicalTable := PhysicalTableName(candidate.TableID)
+	for idx, key := range r.keys {
+		if key.Table == physicalTable && key.Partition == candidate.PartitionID {
+			return idx, nil
+		}
+	}
+	return -1, fmt.Errorf(
+		"exact candidate %q maps to %s/%s outside reserved table/partitions",
+		candidate.PartName, physicalTable, candidate.PartitionID,
+	)
+}
+
+func (r *partsReservation) remainingObservedCandidatesLocked() string {
+	for keyIndex, observed := range r.cleanupObserved {
+		active := r.guard.activeParts[r.keys[keyIndex]]
+		for partName := range observed {
+			if _, ok := active[partName]; ok {
+				return partName
+			}
+		}
+	}
+	return ""
+}
+
+func (r *partsReservation) bindCandidatePartsLocked(candidates []CandidatePart) error {
+	if r.state == reservationReleased {
+		return nil
+	}
+	keyIndexes := make([]int, len(candidates))
+	for idx, candidate := range candidates {
+		if candidate.PartName == "" {
+			return errors.New("exact candidate has empty part name")
+		}
+		keyIndex, err := r.keyIndexForCandidate(candidate)
+		if err != nil {
+			return err
+		}
+		key := r.keys[keyIndex]
+		if owner := r.guard.candidateClaims[key][candidate.PartName]; owner != 0 && owner != r.id {
+			return fmt.Errorf("exact candidate %q for %s/%s is already claimed by another reservation", candidate.PartName, key.Table, key.Partition)
+		}
+		keyIndexes[idx] = keyIndex
+	}
+	for idx, candidate := range candidates {
+		keyIndex := keyIndexes[idx]
+		key := r.keys[keyIndex]
+		if r.guard.candidateClaims[key] == nil {
+			r.guard.candidateClaims[key] = map[string]uint64{}
+		}
+		r.guard.candidateClaims[key][candidate.PartName] = r.id
+		if r.candidateParts[keyIndex] == nil {
+			r.candidateParts[keyIndex] = map[string]struct{}{}
+		}
+		r.candidateParts[keyIndex][candidate.PartName] = struct{}{}
+	}
+	return nil
+}
+
+func (g *PartsPressureGuard) releaseCandidateClaimsLocked(reservation *partsReservation) {
+	for keyIndex, candidates := range reservation.candidateParts {
+		key := reservation.keys[keyIndex]
+		for partName := range candidates {
+			if g.candidateClaims[key][partName] == reservation.id {
+				delete(g.candidateClaims[key], partName)
+			}
+		}
+		if len(g.candidateClaims[key]) == 0 {
+			delete(g.candidateClaims, key)
+		}
+	}
+}
+
+func (g *PartsPressureGuard) hasPendingCleanupProofLocked() bool {
+	for _, reservation := range g.liveReservations {
+		if reservation.cleanupProofPending {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *partsReservation) release() {
 	if r == nil || r.guard == nil {
 		return
 	}
@@ -351,10 +584,11 @@ func (r *partsReservation) release(cleaned bool) {
 	if r.state == reservationFinalized || r.state == reservationReleased {
 		return
 	}
+	r.releaseLocked()
+}
+
+func (r *partsReservation) releaseLocked() {
 	affected := make(map[PartsKey]struct{}, len(r.keys))
-	if cleaned {
-		r.guard.rebaseCleanupDescendantsLocked(r.id, affected)
-	}
 	switch r.state {
 	case reservationReserved:
 		for _, key := range r.keys {
@@ -368,6 +602,7 @@ func (r *partsReservation) release(cleaned bool) {
 		}
 	}
 	r.state = reservationReleased
+	r.guard.releaseCandidateClaimsLocked(r)
 	delete(r.guard.liveReservations, r.id)
 	for key := range affected {
 		r.guard.reconcileCommittedKeyLocked(key)
@@ -450,36 +685,8 @@ func (g *PartsPressureGuard) pruneFinalizedReservationLocked(reservation *partsR
 			}
 		}
 	}
+	g.releaseCandidateClaimsLocked(reservation)
 	delete(g.liveReservations, reservation.id)
-}
-
-// fullyCoveredCancelableReservationIDsLocked returns identities only when the
-// current successful snapshot covers the entire cancelable cohort for key.
-// Partial growth is deliberately not attributed to a concrete statement.
-func (g *PartsPressureGuard) fullyCoveredCancelableReservationIDsLocked(key PartsKey) []uint64 {
-	slots := make([]reservationSlot, 0)
-	for _, reservation := range g.liveReservations {
-		if reservation.state != reservationReserved && reservation.state != reservationCommitted {
-			continue
-		}
-		for keyIndex, candidate := range reservation.keys {
-			if candidate == key {
-				slots = append(slots, reservationSlot{reservation: reservation, keyIndex: keyIndex})
-				break
-			}
-		}
-	}
-	if len(slots) == 0 {
-		return nil
-	}
-	if g.coveredReservationSlotsLocked(key, slots) != len(slots) {
-		return nil
-	}
-	ids := make([]uint64, 0, len(slots))
-	for _, slot := range slots {
-		ids = append(ids, slot.reservation.id)
-	}
-	return ids
 }
 
 // coveredReservationSlotsLocked returns aggregate visible capacity without
@@ -512,40 +719,78 @@ func (g *PartsPressureGuard) coveredReservationSlotsLocked(key PartsKey, slots [
 			nextVisible++
 		}
 	}
+	exactCovered := 0
+	for _, slot := range slots {
+		reservation := slot.reservation
+		keyIndex := slot.keyIndex
+		if !reservation.candidateCovered[keyIndex] && g.snapshotGeneration > reservation.visibleAfter[keyIndex] {
+			for partName := range reservation.candidateParts[keyIndex] {
+				if _, preexisting := reservation.initialParts[keyIndex][partName]; preexisting {
+					continue
+				}
+				if _, active := g.activeParts[key][partName]; active {
+					reservation.candidateCovered[keyIndex] = true
+					break
+				}
+			}
+		}
+		if reservation.candidateCovered[keyIndex] {
+			exactCovered++
+		}
+	}
+	// Aggregate growth cannot identify an owner, while an exact candidate name
+	// can prove additional coverage even when a cleanup made the count net-zero.
+	// Taking the maximum (not the sum) prevents the same visible part from
+	// covering both its exact reservation and another aggregate slot.
+	if exactCovered > covered {
+		return exactCovered
+	}
 	return covered
 }
 
-// rebaseCleanupDescendantsLocked applies an exact physical decrement only to
-// later slots that captured the cleaned identity in a fully-covered snapshot.
-// Advancing visibleAfter is essential: the old snapshot included the cleaned
-// part and cannot immediately be reused as proof of the replacement part.
-func (g *PartsPressureGuard) rebaseCleanupDescendantsLocked(cleanedID uint64, affected map[PartsKey]struct{}) {
+// rebaseLiveReservationsAfterCleanupLocked advances a reservation only when its
+// captured baseline contained an exact candidate observed before cleanup and
+// absent afterward. The new baseline is the complete post-cleanup inventory,
+// not baseline-1: this includes any offsetting concurrent write and prevents it
+// from being misattributed to a queued reservation. Reserve order is irrelevant.
+func (g *PartsPressureGuard) rebaseLiveReservationsAfterCleanupLocked(cleanedID uint64, removed []map[string]struct{}) {
+	affected := map[PartsKey]struct{}{}
 	for id, reservation := range g.liveReservations {
 		if id == cleanedID || reservation.state == reservationReleased {
 			continue
 		}
-		for keyIndex, ancestors := range reservation.coveredAncestors {
-			kept := ancestors[:0]
-			matched := false
-			for _, ancestorID := range ancestors {
-				if ancestorID == cleanedID {
-					matched = true
-					continue
+		for keyIndex, key := range reservation.keys {
+			cleanerKeyIndex := -1
+			cleaner := g.liveReservations[cleanedID]
+			if cleaner != nil {
+				for idx, cleanerKey := range cleaner.keys {
+					if cleanerKey == key {
+						cleanerKeyIndex = idx
+						break
+					}
 				}
-				kept = append(kept, ancestorID)
 			}
-			if !matched {
+			if cleanerKeyIndex < 0 {
 				continue
 			}
-			reservation.coveredAncestors[keyIndex] = kept
-			if reservation.baselines[keyIndex] > 0 {
-				reservation.baselines[keyIndex]--
+			containsRemoved := false
+			for partName := range removed[cleanerKeyIndex] {
+				if _, captured := reservation.baselineParts[keyIndex][partName]; captured {
+					containsRemoved = true
+					break
+				}
 			}
-			if reservation.visibleAfter[keyIndex] < g.snapshotGeneration {
-				reservation.visibleAfter[keyIndex] = g.snapshotGeneration
+			if !containsRemoved {
+				continue
 			}
-			affected[reservation.keys[keyIndex]] = struct{}{}
+			reservation.baselines[keyIndex] = g.snapshot[key]
+			reservation.baselineParts[keyIndex] = copyPartNames(g.activeParts[key])
+			reservation.visibleAfter[keyIndex] = g.snapshotGeneration
+			affected[key] = struct{}{}
 		}
+	}
+	for key := range affected {
+		g.reconcileCommittedKeyLocked(key)
 	}
 }
 
@@ -603,6 +848,14 @@ func copyPartsSnapshot(in PartsSnapshot) PartsSnapshot {
 	out := make(PartsSnapshot, len(in))
 	for key, number := range in {
 		out[key] = number
+	}
+	return out
+}
+
+func copyPartNames(in map[string]struct{}) map[string]struct{} {
+	out := make(map[string]struct{}, len(in))
+	for partName := range in {
+		out[partName] = struct{}{}
 	}
 	return out
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/housegate/housegate/pkg/chproto"
 	siplugin "github.com/housegate/housegate/pkg/plugins/storageintegrity"
@@ -43,6 +44,7 @@ type StorageIntegrityIngress struct {
 	// addressable by statement until ACK2 finalizes them or a required source
 	// lookup / exact cleanup proves that no candidate part remains.
 	pressureReservations map[string]sicore.PartsReservation
+	cleanupProofTimeout  time.Duration
 
 	backgroundMu     sync.Mutex
 	backgroundCancel context.CancelFunc
@@ -77,6 +79,7 @@ func NewStorageIntegrityIngressWithPayloadWriter(orch *sicore.Orchestrator, guar
 		matKind:              matKind,
 		payloadWriter:        writer,
 		pressureReservations: map[string]sicore.PartsReservation{},
+		cleanupProofTimeout:  sicore.DefaultPartsRefreshTimeout,
 	}, nil
 }
 
@@ -147,6 +150,36 @@ func (i *StorageIntegrityIngress) Close() {
 func (i *StorageIntegrityIngress) WithPartsPressure(pressure StorageIntegrityPartsPressure, schemas sicore.TableSchemaResolver) {
 	i.pressure = pressure
 	i.schemas = schemas
+	i.orch.SetBeforeExactCleanup(i.beforeExactCleanup)
+	i.orch.SetAfterExactCleanup(i.afterExactCleanup)
+}
+
+func (i *StorageIntegrityIngress) beforeExactCleanup(ctx context.Context, res sicore.IntakeResult) error {
+	reservation := i.pressureReservation(res.StatementID)
+	if reservation == nil {
+		return nil
+	}
+	proofCtx, cancel := i.cleanupProofContext(ctx)
+	defer cancel()
+	return reservation.PrepareCleanupProof(proofCtx, res.Prepared.CandidateParts)
+}
+
+func (i *StorageIntegrityIngress) afterExactCleanup(ctx context.Context, res sicore.IntakeResult) error {
+	reservation := i.pressureReservation(res.StatementID)
+	if reservation == nil {
+		return nil
+	}
+	proofCtx, cancel := i.cleanupProofContext(ctx)
+	defer cancel()
+	err := reservation.ReleaseCleaned(proofCtx)
+	if err == nil {
+		i.deletePressureReservation(res.StatementID)
+	}
+	return err
+}
+
+func (i *StorageIntegrityIngress) cleanupProofContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), i.cleanupProofTimeout)
 }
 
 func (i *StorageIntegrityIngress) partsPressureTarget(rec sicore.AdmissionRecord) (string, []string, error) {
@@ -272,23 +305,33 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 	}
 	res, err := i.orch.Orchestrate(ctx, rec)
 	switch {
+	case errors.Is(err, sicore.ErrCleanupProofPending):
+		// Exact cleanup proof is pending (before or after the idempotent source
+		// abort). Keep the statement-addressed reservation/fence for same-ID retry.
 	case res.Lifecycle == sicore.LifecycleCleaned:
-		// Exact cleanup is definitive even when the following terminal-journal
-		// save failed. Cancel a reserved, committed, or already-visible identity.
-		i.cancelCleanedReservation(rec.StatementID, trackedReservation)
+		// The exact-cleanup hook already reconciled/released this reservation while
+		// the source frontier was still held.
 	case attemptReservation != nil && (errors.Is(err, sicore.ErrBackpressure) || !res.SourceWriteMayExist()):
 		// SNode hard pressure and every definite pre-prepare failure occur before a
 		// source write. Only an actually attempted/known prepare stays charged.
 		i.cancelTrackedReservation(rec.StatementID, attemptReservation)
 	case attemptReservation != nil:
-		attemptReservation.Commit()
-		if res.Ack2 {
+		if commitErr := attemptReservation.Commit(res.Prepared.CandidateParts...); commitErr != nil {
+			err = errors.Join(err, fmt.Errorf("storage_integrity ingress: bind prepared candidates for %s: %w", rec.StatementID, commitErr))
+		} else if res.Ack2 {
 			attemptReservation.Finalize()
 			i.deletePressureReservation(rec.StatementID)
 		}
-	case trackedReservation != nil && res.Ack2:
-		trackedReservation.Finalize()
-		i.deletePressureReservation(rec.StatementID)
+	case trackedReservation != nil && res.SourceWriteMayExist():
+		// A resumed indeterminate prepare may reveal its exact candidates only on
+		// lookup. Bind them even on a non-terminal retry so exact inventory can
+		// account for a net-zero cleanup/write interleaving.
+		if commitErr := trackedReservation.Commit(res.Prepared.CandidateParts...); commitErr != nil {
+			err = errors.Join(err, fmt.Errorf("storage_integrity ingress: bind resumed candidates for %s: %w", rec.StatementID, commitErr))
+		} else if res.Ack2 {
+			trackedReservation.Finalize()
+			i.deletePressureReservation(rec.StatementID)
+		}
 	}
 	if i.pressure != nil {
 		// Orchestrate may create or clean candidate parts on success, retryable
@@ -340,13 +383,6 @@ func (i *StorageIntegrityIngress) cancelAttemptReservation(statementID string, r
 func (i *StorageIntegrityIngress) cancelTrackedReservation(statementID string, reservation sicore.PartsReservation) {
 	if reservation != nil {
 		reservation.Release()
-	}
-	i.deletePressureReservation(statementID)
-}
-
-func (i *StorageIntegrityIngress) cancelCleanedReservation(statementID string, reservation sicore.PartsReservation) {
-	if reservation != nil {
-		reservation.ReleaseCleaned()
 	}
 	i.deletePressureReservation(statementID)
 }

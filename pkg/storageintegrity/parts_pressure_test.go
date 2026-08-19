@@ -3,6 +3,7 @@ package storageintegrity
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -17,10 +18,15 @@ type fakePartsRow struct {
 type fakePartsConn struct {
 	mu                sync.Mutex
 	rows              []fakePartsRow
+	inventory         []fakePartInventoryRow
 	queryErr          error
 	queries           []string
 	blockUntilContext bool
 	queryStarted      chan struct{}
+}
+
+type fakePartInventoryRow struct {
+	database, table, partition, partitionKey, partName string
 }
 
 func (c *fakePartsConn) Exec(context.Context, string, ...any) error { return nil }
@@ -30,6 +36,7 @@ func (c *fakePartsConn) Query(ctx context.Context, query string, _ ...any) (Merg
 	c.queries = append(c.queries, query)
 	queryErr := c.queryErr
 	rows := append([]fakePartsRow(nil), c.rows...)
+	inventory := append([]fakePartInventoryRow(nil), c.inventory...)
 	blockUntilContext := c.blockUntilContext
 	queryStarted := c.queryStarted
 	c.mu.Unlock()
@@ -46,13 +53,31 @@ func (c *fakePartsConn) Query(ctx context.Context, query string, _ ...any) (Merg
 	if queryErr != nil {
 		return nil, queryErr
 	}
-	return &fakePartsRows{rows: rows}, nil
+	if inventory == nil {
+		for _, row := range rows {
+			for idx := uint64(1); idx <= row.number; idx++ {
+				inventory = append(inventory, fakePartInventoryRow{
+					database: row.database, table: row.table, partition: row.partition,
+					partitionKey: row.partitionKey, partName: fmt.Sprintf("%s_part_%d", row.partition, idx),
+				})
+			}
+		}
+	}
+	return &fakePartsRows{rows: inventory}, nil
 }
 
 func (c *fakePartsConn) setRows(rows ...fakePartsRow) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.rows = append([]fakePartsRow(nil), rows...)
+	c.inventory = nil
+}
+
+func (c *fakePartsConn) setInventory(rows ...fakePartInventoryRow) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.rows = nil
+	c.inventory = append([]fakePartInventoryRow{}, rows...)
 }
 
 func (c *fakePartsConn) setQueryError(err error) {
@@ -62,7 +87,7 @@ func (c *fakePartsConn) setQueryError(err error) {
 }
 
 type fakePartsRows struct {
-	rows []fakePartsRow
+	rows []fakePartInventoryRow
 	i    int
 }
 
@@ -74,7 +99,7 @@ func (r *fakePartsRows) Scan(dest ...any) error {
 	*(dest[1].(*string)) = row.table
 	*(dest[2].(*string)) = row.partition
 	*(dest[3].(*string)) = row.partitionKey
-	*(dest[4].(*uint64)) = row.number
+	*(dest[4].(*string)) = row.partName
 	return nil
 }
 func (r *fakePartsRows) Err() error   { return nil }
@@ -92,13 +117,35 @@ func pressureFixture(rows ...fakePartsRow) (*PartsPressureGuard, *fakePartsConn)
 func TestPartsPressureGuard_BuildSnapshotQuery(t *testing.T) {
 	guard, _ := pressureFixture()
 	query := guard.BuildSnapshotQuery()
-	for _, want := range []string{"system.parts", "system.tables", "partition_key", "active", "GROUP BY", "'hg_unsafe'", "'hg_safe'"} {
+	for _, want := range []string{"system.parts", "system.tables", "partition_key", "parts.name", "active", "ORDER BY", "'hg_unsafe'", "'hg_safe'"} {
 		if !strings.Contains(query, want) {
 			t.Fatalf("query %q missing %q", query, want)
 		}
 	}
 	if strings.Contains(query, "partition_id") {
-		t.Fatal("must group by partition text, not partition_id (SipHash for String keys)")
+		t.Fatal("must read partition text, not partition_id (SipHash for String keys)")
+	}
+	if strings.Contains(query, "count()") || strings.Contains(query, "GROUP BY") {
+		t.Fatal("cleanup proof requires exact active part names, not only aggregate counts")
+	}
+}
+
+func TestPartsPressureGuard_RefreshRetainsExactPartInventory(t *testing.T) {
+	guard, conn := pressureFixture()
+	conn.setInventory(
+		fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", "a_1_1_0"},
+		fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", "a_2_2_0"},
+	)
+	snapshot, err := guard.Refresh(context.Background())
+	if err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if got := snapshot[PartsKey{"hg_unsafe", "db__t", "p_a"}]; got != 2 {
+		t.Fatalf("snapshot count=%d want 2 exact inventory rows", got)
+	}
+	key := PartsKey{"hg_unsafe", "db__t", "p_a"}
+	if _, ok := guard.activeParts[key]["a_2_2_0"]; !ok {
+		t.Fatalf("exact inventory=%v missing candidate", guard.activeParts[key])
 	}
 }
 
@@ -508,11 +555,14 @@ func TestPartsPressureGuard_CleanupReplacementAtSameCountDoesNotLeaveDebt(t *tes
 	if err != nil {
 		t.Fatalf("second Reserve: %v", err)
 	}
+	prepareExactCleanup(t, first, CandidatePart{PartitionID: "p_a", PartName: "a_part_2"})
+	conn.setRows(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 1})
 	releaseAfterExactCleanup(t, first)
 
 	// The second write restores the same count (N -> N-1 -> N). A stable N
 	// snapshot is sufficient; requiring N+1 would leave a permanent phantom debt.
 	second.Commit()
+	conn.setRows(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 2})
 	if _, err := guard.Refresh(context.Background()); err != nil {
 		t.Fatalf("same-count Refresh: %v", err)
 	}
@@ -524,6 +574,144 @@ func TestPartsPressureGuard_CleanupReplacementAtSameCountDoesNotLeaveDebt(t *tes
 		t.Fatalf("stable soft-1 replacement must leave one slot: %v", err)
 	} else {
 		replacement.Release()
+	}
+}
+
+func TestPartsPressureGuard_ExactCleanupDistinguishesOffsettingVisibleWrite(t *testing.T) {
+	guard, conn := pressureFixture()
+	guard.cfg.SoftPartsPerPartition = 4
+	base := fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", "a_base"}
+	cleaned := fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", "a_cleaned"}
+	replacement := fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", "a_replacement"}
+	conn.setInventory(base)
+
+	first, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("first Reserve: %v", err)
+	}
+	if err := first.Commit(CandidatePart{TableID: "db.t", PartitionID: "p_a", PartName: cleaned.partName}); err != nil {
+		t.Fatalf("first Commit: %v", err)
+	}
+	conn.setInventory(base, cleaned)
+	second, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("second Reserve: %v", err)
+	}
+	if err := second.Commit(CandidatePart{TableID: "db.t", PartitionID: "p_a", PartName: replacement.partName}); err != nil {
+		t.Fatalf("second Commit: %v", err)
+	}
+
+	if err := first.PrepareCleanupProof(context.Background(), []CandidatePart{{TableID: "db.t", PartitionID: "p_a", PartName: cleaned.partName}}); err != nil {
+		t.Fatalf("PrepareCleanupProof: %v", err)
+	}
+	// A was really removed, while B became visible before the post-cleanup
+	// inventory. The total stays at two; exact names must clear B's debt without
+	// treating an absent/no-op A as a decrement.
+	conn.setInventory(base, replacement)
+	if err := first.ReleaseCleaned(context.Background()); err != nil {
+		t.Fatalf("ReleaseCleaned: %v", err)
+	}
+	key := PartsKey{"hg_unsafe", "db__t", "p_a"}
+	if got := guard.committed[key]; got != 0 {
+		t.Fatalf("offsetting visible replacement debt=%d want 0", got)
+	}
+	if _, err := guard.Refresh(context.Background()); err != nil {
+		t.Fatalf("stable Refresh: %v", err)
+	}
+	if got := guard.committed[key]; got != 0 {
+		t.Fatalf("stable same-count inventory recreated debt=%d", got)
+	}
+}
+
+func TestPartsPressureGuard_CandidateMustMatchReservedTableAndPartition(t *testing.T) {
+	guard, _ := pressureFixture(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 1})
+	for _, candidate := range []CandidatePart{
+		{TableID: "other.t", PartitionID: "p_a", PartName: "a_new"},
+		{TableID: "db.t", PartitionID: "p_other", PartName: "a_new"},
+		{TableID: "", PartitionID: "p_a", PartName: "a_new"},
+	} {
+		reservation, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+		if err != nil {
+			t.Fatalf("Reserve: %v", err)
+		}
+		if err := reservation.Commit(candidate); err == nil {
+			t.Fatalf("Commit accepted mismatched candidate %+v", candidate)
+		}
+		key := PartsKey{"hg_unsafe", "db__t", "p_a"}
+		if got := guard.committed[key]; got != 1 {
+			t.Fatalf("mismatched candidate must remain charged, committed=%d", got)
+		}
+		reservation.Release()
+	}
+}
+
+func TestPartsPressureGuard_ExactCoverageDoesNotDoubleCountAggregateGrowth(t *testing.T) {
+	guard, conn := pressureFixture()
+	guard.cfg.SoftPartsPerPartition = 6
+	base := fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", "a_base"}
+	exact := fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", "a_exact"}
+	unknown := fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", "a_unknown"}
+	conn.setInventory(base)
+	first, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("first Reserve: %v", err)
+	}
+	second, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("second Reserve: %v", err)
+	}
+	if err := first.Commit(CandidatePart{TableID: "db.t", PartitionID: "p_a", PartName: exact.partName}); err != nil {
+		t.Fatalf("first Commit: %v", err)
+	}
+	if err := second.Commit(); err != nil {
+		t.Fatalf("second Commit: %v", err)
+	}
+
+	conn.setInventory(base, exact)
+	if _, err := guard.Refresh(context.Background()); err != nil {
+		t.Fatalf("exact-only Refresh: %v", err)
+	}
+	key := PartsKey{"hg_unsafe", "db__t", "p_a"}
+	if got := guard.committed[key]; got != 1 {
+		t.Fatalf("one exact part covered two slots: debt=%d want 1", got)
+	}
+
+	conn.setInventory(base, exact, unknown)
+	if _, err := guard.Refresh(context.Background()); err != nil {
+		t.Fatalf("second-growth Refresh: %v", err)
+	}
+	if got := guard.committed[key]; got != 0 {
+		t.Fatalf("distinct exact+aggregate growth debt=%d want 0", got)
+	}
+}
+
+func TestPartsPressureGuard_DuplicateExactCandidateCannotCoverTwoReservations(t *testing.T) {
+	guard, conn := pressureFixture()
+	guard.cfg.SoftPartsPerPartition = 5
+	base := fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", "a_base"}
+	shared := CandidatePart{TableID: "db.t", PartitionID: "p_a", PartName: "a_shared"}
+	conn.setInventory(base)
+	first, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("first Reserve: %v", err)
+	}
+	second, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("second Reserve: %v", err)
+	}
+	if err := first.Commit(shared); err != nil {
+		t.Fatalf("first Commit: %v", err)
+	}
+	if err := second.Commit(shared); err == nil {
+		t.Fatal("second reservation claimed an already-owned exact candidate")
+	}
+	conn.setInventory(base, fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", shared.PartName})
+	if _, err := guard.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	key := PartsKey{"hg_unsafe", "db__t", "p_a"}
+	if got := guard.committed[key]; got != 1 {
+		t.Fatalf("one exact part covered duplicate reservations: debt=%d want 1", got)
 	}
 }
 
@@ -543,14 +731,81 @@ func TestPartsPressureGuard_InFlightCleanupRebasesQueuedReplacement(t *testing.T
 	if err != nil {
 		t.Fatalf("second Reserve: %v", err)
 	}
+	prepareExactCleanup(t, first, CandidatePart{PartitionID: "p_a", PartName: "a_part_2"})
+	conn.setRows(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 1})
 	releaseAfterExactCleanup(t, first)
 	second.Commit()
+	conn.setRows(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 2})
 	if _, err := guard.Refresh(context.Background()); err != nil {
 		t.Fatalf("replacement Refresh: %v", err)
 	}
 	key := PartsKey{Database: "hg_unsafe", Table: "db__t", Partition: "p_a"}
 	if got := guard.committed[key]; got != 0 {
 		t.Fatalf("in-flight cleanup/replacement debt = %d, want 0", got)
+	}
+}
+
+func TestPartsPressureGuard_CleanupRebasesOlderReservationQueuedBehind(t *testing.T) {
+	guard, conn := pressureFixture(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 2})
+	guard.cfg.SoftPartsPerPartition = 8
+	queued, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("queued Reserve: %v", err)
+	}
+	cleaner, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("cleaner Reserve: %v", err)
+	}
+	// The newer reservation reaches the source frontier first and cleans the
+	// part represented in the older reservation's baseline.
+	prepareExactCleanup(t, cleaner, CandidatePart{PartitionID: "p_a", PartName: "a_part_2"})
+	conn.setRows(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 1})
+	releaseAfterExactCleanup(t, cleaner)
+	queued.Commit()
+	conn.setRows(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 2})
+	if _, err := guard.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	key := PartsKey{"hg_unsafe", "db__t", "p_a"}
+	if got := guard.committed[key]; got != 0 {
+		t.Fatalf("older queued replacement debt=%d, want 0", got)
+	}
+}
+
+func TestPartsPressureGuard_CleanupDoesNotRebaseReservationBeforeCandidateVisibility(t *testing.T) {
+	guard, conn := pressureFixture()
+	guard.cfg.SoftPartsPerPartition = 6
+	base := fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", "a_base"}
+	cleaned := fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", "a_cleaned"}
+	replacement := fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", "a_replacement"}
+	conn.setInventory(base)
+	queued, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("queued Reserve: %v", err)
+	}
+	cleaner, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("cleaner Reserve: %v", err)
+	}
+	conn.setInventory(base, cleaned)
+	prepareExactCleanup(t, cleaner, CandidatePart{PartitionID: "p_a", PartName: cleaned.partName})
+	conn.setInventory(base)
+	releaseAfterExactCleanup(t, cleaner)
+
+	queued.Commit()
+	if _, err := guard.Refresh(context.Background()); err != nil {
+		t.Fatalf("stable pre-write Refresh: %v", err)
+	}
+	key := PartsKey{"hg_unsafe", "db__t", "p_a"}
+	if got := guard.committed[key]; got != 1 {
+		t.Fatalf("cleanup of part absent from queued baseline cleared debt=%d want 1", got)
+	}
+	conn.setInventory(base, replacement)
+	if _, err := guard.Refresh(context.Background()); err != nil {
+		t.Fatalf("replacement Refresh: %v", err)
+	}
+	if got := guard.committed[key]; got != 0 {
+		t.Fatalf("visible replacement debt=%d want 0", got)
 	}
 }
 
@@ -571,8 +826,9 @@ func TestPartsPressureGuard_CleanupReplacementRequiresPostCleanupSnapshot(t *tes
 	if err != nil {
 		t.Fatalf("second Reserve: %v", err)
 	}
-	releaseAfterExactCleanup(t, first)
+	prepareExactCleanup(t, first, CandidatePart{PartitionID: "p_a", PartName: "a_part_2"})
 	conn.setRows(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 1})
+	releaseAfterExactCleanup(t, first)
 	second.Commit()
 
 	key := PartsKey{Database: "hg_unsafe", Table: "db__t", Partition: "p_a"}
@@ -606,12 +862,15 @@ func TestPartsPressureGuard_CleanupRebasesFinalizedReplacementUntilVisible(t *te
 	}
 	second.Commit()
 	second.Finalize()
+	prepareExactCleanup(t, first, CandidatePart{PartitionID: "p_a", PartName: "a_part_2"})
+	conn.setRows(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 1})
 	releaseAfterExactCleanup(t, first)
 
 	key := PartsKey{Database: "hg_unsafe", Table: "db__t", Partition: "p_a"}
 	if got := guard.committed[key]; got != 1 {
 		t.Fatalf("finalized replacement used stale snapshot: committed = %d, want 1", got)
 	}
+	conn.setRows(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 2})
 	if _, err := guard.Refresh(context.Background()); err != nil {
 		t.Fatalf("replacement Refresh: %v", err)
 	}
@@ -621,6 +880,152 @@ func TestPartsPressureGuard_CleanupRebasesFinalizedReplacementUntilVisible(t *te
 	if got := len(guard.liveReservations); got != 0 {
 		t.Fatalf("finalized visible reservation handles = %d, want 0", got)
 	}
+}
+
+func TestPartsPressureGuard_PartialCohortCleanupReplacementConverges(t *testing.T) {
+	guard, conn := pressureFixture(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 1})
+	guard.cfg.SoftPartsPerPartition = 8
+	first, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("first Reserve: %v", err)
+	}
+	first.Commit()
+	other, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("other Reserve: %v", err)
+	}
+	other.Commit()
+	// Only one member of the two-reservation cohort is visible.
+	conn.setRows(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 2})
+	replacement, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("replacement Reserve: %v", err)
+	}
+	prepareExactCleanup(t, first, CandidatePart{PartitionID: "p_a", PartName: "a_part_2"})
+	conn.setRows(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 1})
+	releaseAfterExactCleanup(t, first)
+	replacement.Commit()
+	replacement.Finalize()
+	conn.setRows(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 2})
+	// The other candidate was absent, so its cleanup is a no-op; it releases its
+	// own debt without inventing another decrement.
+	prepareExactCleanup(t, other, CandidatePart{PartitionID: "p_a", PartName: "a_missing"})
+	releaseAfterExactCleanup(t, other)
+	if _, err := guard.Refresh(context.Background()); err != nil {
+		t.Fatalf("stable Refresh: %v", err)
+	}
+	key := PartsKey{"hg_unsafe", "db__t", "p_a"}
+	if got := guard.committed[key]; got != 0 {
+		t.Fatalf("partial cohort replacement debt=%d, want 0", got)
+	}
+}
+
+func TestPartsPressureGuard_NoOpCleanupDoesNotRebaseDescendant(t *testing.T) {
+	guard, conn := pressureFixture(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 1})
+	guard.cfg.SoftPartsPerPartition = 5
+	first, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("first Reserve: %v", err)
+	}
+	first.Commit()
+	conn.setRows(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 2})
+	second, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("second Reserve: %v", err)
+	}
+	// Empty/absent-candidate cleanup leaves the physical count unchanged.
+	prepareExactCleanup(t, first, CandidatePart{PartitionID: "p_a", PartName: "a_missing"})
+	releaseAfterExactCleanup(t, first)
+	second.Commit()
+	if _, err := guard.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	key := PartsKey{"hg_unsafe", "db__t", "p_a"}
+	if got := guard.committed[key]; got != 1 {
+		t.Fatalf("no-op cleanup undercharged descendant: committed=%d want 1", got)
+	}
+	second.Release()
+}
+
+func TestPartsPressureGuard_PreexistingCandidateMustDisappearAfterCleanup(t *testing.T) {
+	guard, conn := pressureFixture()
+	base := fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", "a_base"}
+	candidate := fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", "a_candidate"}
+	conn.setInventory(base)
+	reservation, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("Reserve: %v", err)
+	}
+	conn.setInventory(base, candidate)
+	prepareExactCleanup(t, reservation, CandidatePart{PartitionID: "p_a", PartName: candidate.partName})
+	if err := reservation.ReleaseCleaned(context.Background()); !errors.Is(err, ErrCleanupProofPending) {
+		t.Fatalf("still-active cleanup proof=%v want ErrCleanupProofPending", err)
+	}
+	if _, ok := guard.Snapshot(); ok {
+		t.Fatal("still-active exact candidate must make inventory unavailable")
+	}
+	conn.setInventory(base)
+	if err := reservation.ReleaseCleaned(context.Background()); err != nil {
+		t.Fatalf("proof retry after exact removal: %v", err)
+	}
+}
+
+func TestPartsPressureGuard_CleanupRefreshFailureKeepsDebtAndInvalidatesSnapshot(t *testing.T) {
+	guard, conn := pressureFixture(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 1})
+	first, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("Reserve: %v", err)
+	}
+	first.Commit()
+	conn.setRows(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 2})
+	second, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("second Reserve: %v", err)
+	}
+	if err := first.PrepareCleanupProof(context.Background(), []CandidatePart{{TableID: "db.t", PartitionID: "p_a", PartName: "a_part_2"}}); err != nil {
+		t.Fatalf("PrepareCleanupProof: %v", err)
+	}
+	guard.cfg.RefreshTimeout = 20 * time.Millisecond
+	conn.mu.Lock()
+	conn.blockUntilContext = true
+	conn.mu.Unlock()
+	err = first.ReleaseCleaned(context.Background())
+	if !errors.Is(err, ErrCleanupProofPending) || !errors.Is(err, ErrBackpressure) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("ReleaseCleaned error=%v, want pressure deadline", err)
+	}
+	if _, ok := guard.Snapshot(); ok {
+		t.Fatal("failed cleanup proof must make snapshot unavailable")
+	}
+	conn.mu.Lock()
+	conn.blockUntilContext = false
+	conn.mu.Unlock()
+	conn.setRows(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 1})
+	pendingSnapshot, err := guard.Refresh(context.Background())
+	if err != nil {
+		t.Fatalf("background recovery Refresh: %v", err)
+	}
+	key := PartsKey{"hg_unsafe", "db__t", "p_a"}
+	if got := pendingSnapshot[key]; got != 1 {
+		t.Fatalf("successful fenced Refresh snapshot=%v, want physical count 1 for metrics", pendingSnapshot)
+	}
+	if _, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"}); !errors.Is(err, ErrBackpressure) {
+		t.Fatalf("new admission before proof retry=%v, want unavailable pressure", err)
+	}
+	if err := first.ReleaseCleaned(context.Background()); err != nil {
+		t.Fatalf("cleanup proof retry: %v", err)
+	}
+	second.Commit()
+	if got := guard.committed[key]; got != 1 {
+		t.Fatalf("cleanup proof retry descendant debt=%d, want 1 before replacement visibility", got)
+	}
+	conn.setRows(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 2})
+	if _, err := guard.Refresh(context.Background()); err != nil {
+		t.Fatalf("replacement Refresh: %v", err)
+	}
+	if got := guard.committed[key]; got != 0 {
+		t.Fatalf("visible replacement debt=%d, want 0", got)
+	}
+	second.Release()
 }
 
 func TestPartsPressureGuard_NoWriteReleaseDoesNotRebaseDescendant(t *testing.T) {
@@ -652,9 +1057,23 @@ func TestPartsPressureGuard_NoWriteReleaseDoesNotRebaseDescendant(t *testing.T) 
 	second.Release()
 }
 
+func prepareExactCleanup(t *testing.T, reservation PartsReservation, candidates ...CandidatePart) {
+	t.Helper()
+	for idx := range candidates {
+		if candidates[idx].TableID == "" {
+			candidates[idx].TableID = "db.t"
+		}
+	}
+	if err := reservation.PrepareCleanupProof(context.Background(), candidates); err != nil {
+		t.Fatalf("PrepareCleanupProof: %v", err)
+	}
+}
+
 func releaseAfterExactCleanup(t *testing.T, reservation PartsReservation) {
 	t.Helper()
-	reservation.ReleaseCleaned()
+	if err := reservation.ReleaseCleaned(context.Background()); err != nil {
+		t.Fatalf("ReleaseCleaned: %v", err)
+	}
 }
 
 func TestPartsPressureGuard_ReserveIsAllOrNothing(t *testing.T) {

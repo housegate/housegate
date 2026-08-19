@@ -107,4 +107,74 @@ func TestPartsPressureGuard_AgainstRealSystemParts(t *testing.T) {
 	if err != nil || len(partitions) != 2 || partitions[0] != "p_p0" || partitions[1] != "p_p1" {
 		t.Fatalf("PayloadPartitionIDs = %v err=%v", partitions, err)
 	}
+
+	// Exact cleanup proof uses real system.parts names, not an aggregate count.
+	// A queued replacement whose baseline includes the cleaned name must converge
+	// after DROP PART and the replacement's later visibility.
+	activeNames := func(partition string) map[string]bool {
+		rows, err := conn.Query(ctx,
+			"SELECT name FROM system.parts WHERE database = ? AND table = ? AND partition = ? AND active ORDER BY name",
+			unsafeDB, table, partition,
+		)
+		if err != nil {
+			t.Fatalf("query active part names: %v", err)
+		}
+		defer rows.Close()
+		out := map[string]bool{}
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				t.Fatalf("scan active part name: %v", err)
+			}
+			out[name] = true
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("read active part names: %v", err)
+		}
+		return out
+	}
+	before := activeNames("p1")
+	cleaner, err := guard.Reserve(ctx, table, []string{"p_p1"})
+	if err != nil {
+		t.Fatalf("cleaner Reserve: %v", err)
+	}
+	mustExec(t, conn, fmt.Sprintf("INSERT INTO %s.%s VALUES (unhex('%064x'), 'p1', 10)", unsafeDB, table, 10))
+	afterInsert := activeNames("p1")
+	candidateName := ""
+	for name := range afterInsert {
+		if !before[name] {
+			candidateName = name
+			break
+		}
+	}
+	if candidateName == "" {
+		t.Fatalf("new p1 candidate not found: before=%v after=%v", before, afterInsert)
+	}
+	candidate := sicore.CandidatePart{TableID: "db.t", PartitionID: "p_p1", PartName: candidateName}
+	if err := cleaner.Commit(candidate); err != nil {
+		t.Fatalf("cleaner Commit: %v", err)
+	}
+	queued, err := guard.Reserve(ctx, table, []string{"p_p1"})
+	if err != nil {
+		t.Fatalf("queued Reserve: %v", err)
+	}
+	if err := cleaner.PrepareCleanupProof(ctx, []sicore.CandidatePart{candidate}); err != nil {
+		t.Fatalf("PrepareCleanupProof: %v", err)
+	}
+	mustExec(t, conn, fmt.Sprintf("ALTER TABLE %s.%s DROP PART '%s'", unsafeDB, table, candidateName))
+	if err := cleaner.ReleaseCleaned(ctx); err != nil {
+		t.Fatalf("ReleaseCleaned: %v", err)
+	}
+	if err := queued.Commit(); err != nil {
+		t.Fatalf("queued Commit: %v", err)
+	}
+	mustExec(t, conn, fmt.Sprintf("INSERT INTO %s.%s VALUES (unhex('%064x'), 'p1', 11)", unsafeDB, table, 11))
+	if _, err := guard.Refresh(ctx); err != nil {
+		t.Fatalf("replacement Refresh: %v", err)
+	}
+	probe, err := guard.Reserve(ctx, table, []string{"p_p1"})
+	if err != nil {
+		t.Fatalf("stable soft-1 inventory retained phantom cleanup debt: %v", err)
+	}
+	probe.Release()
 }

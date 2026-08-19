@@ -155,6 +155,36 @@ func TestOrchestrate_EmptyCandidatePartsAbortCleansIdempotently(t *testing.T) {
 	}
 }
 
+func TestOrchestrate_PreCleanupProofFailureDoesNotRunSourceAbort(t *testing.T) {
+	prep := &partsRecordingPreparer{prepared: boundSourceWithParts()}
+	sub := &recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeTerminalReject, Reason: "conflict"}}
+	orch := NewOrchestrator(sub, prep, OrchestratorConfig{ExpectedSource: "snode-A"})
+	proofErr := errors.New("pre-cleanup inventory unavailable")
+	orch.SetBeforeExactCleanup(func(context.Context, IntakeResult) error { return proofErr })
+
+	res, err := orch.Orchestrate(context.Background(), admissionFixture())
+	if !errors.Is(err, proofErr) || res.Lifecycle != LifecycleAbortPending {
+		t.Fatalf("first attempt=(%+v, %v), want AbortPending proof error", res, err)
+	}
+	if got := atomic.LoadInt64(&prep.abortCalls); got != 0 {
+		t.Fatalf("source abort ran %d times without a pre-cleanup inventory proof", got)
+	}
+
+	// Same-ID retry is re-entrant on its source frontier and reruns proof before
+	// the one exact abort; the unsafe prepare itself is never repeated.
+	orch.SetBeforeExactCleanup(func(context.Context, IntakeResult) error { return nil })
+	res, err = orch.Orchestrate(context.Background(), admissionFixture())
+	if err != nil || res.Lifecycle != LifecycleCleaned {
+		t.Fatalf("proof retry=(%+v, %v), want Cleaned", res, err)
+	}
+	if got := atomic.LoadInt64(&prep.abortCalls); got != 1 {
+		t.Fatalf("source abort count=%d want 1", got)
+	}
+	if got := atomic.LoadInt64(&prep.prepareCount); got != 1 {
+		t.Fatalf("unsafe prepare count=%d want 1", got)
+	}
+}
+
 // TestOrchestrate_AbortPendingResumesExactPartsAfterFailure extends the
 // failed-abort retry contract with the exact-parts assertion: a mid-abort
 // failure leaves a resumable AbortPending record; both the failed attempt and

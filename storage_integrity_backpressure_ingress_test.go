@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
@@ -18,13 +19,18 @@ import (
 )
 
 type fakePartsPressure struct {
-	mu          sync.Mutex
-	refuse      map[string]error
-	allowCalls  []string
-	invalidated int
-	committed   int
-	released    int
-	cleaned     int
+	mu                   sync.Mutex
+	refuse               map[string]error
+	allowCalls           []string
+	invalidated          int
+	committed            int
+	released             int
+	cleaned              int
+	blockCleanup         bool
+	blockPrepareCleanup  bool
+	cleanupCtxErr        error
+	prepareCleanupCtxErr error
+	commitErr            error
 }
 
 func (f *fakePartsPressure) Reserve(_ context.Context, table string, partitionIDs []string) (sicore.PartsReservation, error) {
@@ -52,24 +58,47 @@ type fakePartsReservation struct {
 	state    string
 }
 
-func (r *fakePartsReservation) Commit() {
+func (r *fakePartsReservation) Commit(...sicore.CandidatePart) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.state != "" {
-		return
+		return nil
 	}
 	r.pressure.mu.Lock()
 	r.pressure.committed++
+	commitErr := r.pressure.commitErr
 	r.pressure.mu.Unlock()
 	r.state = "committed"
+	return commitErr
+}
+
+func (r *fakePartsReservation) PrepareCleanupProof(ctx context.Context, _ []sicore.CandidatePart) error {
+	r.pressure.mu.Lock()
+	r.pressure.prepareCleanupCtxErr = ctx.Err()
+	block := r.pressure.blockPrepareCleanup
+	r.pressure.mu.Unlock()
+	if block {
+		<-ctx.Done()
+		return errors.Join(sicore.ErrCleanupProofPending, sicore.ErrBackpressure, ctx.Err())
+	}
+	return nil
 }
 
 func (r *fakePartsReservation) Release() {
 	r.release(false)
 }
 
-func (r *fakePartsReservation) ReleaseCleaned() {
+func (r *fakePartsReservation) ReleaseCleaned(ctx context.Context) error {
+	r.pressure.mu.Lock()
+	block := r.pressure.blockCleanup
+	r.pressure.cleanupCtxErr = ctx.Err()
+	r.pressure.mu.Unlock()
+	if block {
+		<-ctx.Done()
+		return errors.Join(sicore.ErrCleanupProofPending, sicore.ErrBackpressure, ctx.Err())
+	}
 	r.release(true)
+	return nil
 }
 
 func (r *fakePartsReservation) release(cleaned bool) {
@@ -395,6 +424,72 @@ func TestIngress_TerminalCleanupInvalidatesPressure(t *testing.T) {
 	}
 	if pressure.invalidated != 1 || pressure.committed != 0 || pressure.released != 1 || pressure.cleaned != 1 {
 		t.Fatalf("cleanup invalidate/commit/release/exact = %d/%d/%d/%d want 1/0/1/1", pressure.invalidated, pressure.committed, pressure.released, pressure.cleaned)
+	}
+}
+
+func TestIngress_CandidateBindingFailureStaysChargedAndFailsClosed(t *testing.T) {
+	bindErr := errors.New("candidate maps outside reserved table")
+	pressure := &fakePartsPressure{commitErr: bindErr}
+	ingress, _, submitter, _ := newBackpressureIngress(t, pressure)
+	submitter.outcome = sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}
+	adm := bpAdmission()
+	err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), adm)
+	if !errors.Is(err, bindErr) {
+		t.Fatalf("candidate binding error=%v want %v", err, bindErr)
+	}
+	if pressure.committed != 1 || pressure.released != 0 {
+		t.Fatalf("mismatched candidate reservation committed/released=%d/%d want 1/0", pressure.committed, pressure.released)
+	}
+	if ingress.pressureReservation(adm.StatementID) == nil {
+		t.Fatal("mismatched candidate reservation was deleted instead of staying charged")
+	}
+}
+
+func TestIngress_CleanupProofCancellationReleasesSourceFrontier(t *testing.T) {
+	pressure := &fakePartsPressure{blockCleanup: true}
+	ingress, _, submitter, _ := newBackpressureIngress(t, pressure)
+	ingress.cleanupProofTimeout = 20 * time.Millisecond
+	submitter.outcome = sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: "conflict"}
+	if err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), bpAdmission()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("blocked cleanup proof error=%v, want deadline", err)
+	}
+
+	pressure.mu.Lock()
+	pressure.blockCleanup = false
+	pressure.mu.Unlock()
+	// Same-ID retry re-runs only idempotent abort+proof and closes the pending
+	// proof before any new prepare can pass the unavailable inventory.
+	if err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), bpAdmission()); err == nil || !strings.Contains(err.Error(), string(sicore.LifecycleCleaned)) {
+		t.Fatalf("same-ID cleanup proof retry=%v, want Cleaned non-ACK2", err)
+	}
+	submitter.outcome = sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}
+	next := bpAdmission()
+	next.StatementID = "0xabc:2:n2"
+	if err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), next); err != nil {
+		t.Fatalf("next statement after cleanup proof cancellation: %v", err)
+	}
+}
+
+func TestIngress_CleanupProofUsesRuntimeContextAfterClientCancellation(t *testing.T) {
+	pressure := &fakePartsPressure{}
+	ingress, _, _, _ := newBackpressureIngress(t, pressure)
+	reservation, err := pressure.Reserve(context.Background(), "net1__events", []string{"p_eu"})
+	if err != nil {
+		t.Fatalf("Reserve: %v", err)
+	}
+	ingress.setPressureReservation("stmt", reservation)
+	clientCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := ingress.beforeExactCleanup(clientCtx, sicore.IntakeResult{StatementID: "stmt"}); err != nil {
+		t.Fatalf("beforeExactCleanup: %v", err)
+	}
+	if err := ingress.afterExactCleanup(clientCtx, sicore.IntakeResult{StatementID: "stmt"}); err != nil {
+		t.Fatalf("afterExactCleanup: %v", err)
+	}
+	pressure.mu.Lock()
+	defer pressure.mu.Unlock()
+	if pressure.prepareCleanupCtxErr != nil || pressure.cleanupCtxErr != nil {
+		t.Fatalf("proof contexts inherited client cancellation: before=%v after=%v", pressure.prepareCleanupCtxErr, pressure.cleanupCtxErr)
 	}
 }
 
