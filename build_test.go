@@ -620,7 +620,7 @@ func TestBuildStorageIntegrityRuntimeRequiresPorts(t *testing.T) {
 	cfg := minimalRouterOnlyCfg(t)
 	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
 
-	_, _, err = buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, StorageIntegrityRuntimeOptions{})
+	_, _, err = buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, cfg.StorageIntegrity.Tables, StorageIntegrityRuntimeOptions{})
 	if err == nil {
 		t.Fatal("runtime assembly succeeded without storage-integrity runtime ports")
 	}
@@ -838,6 +838,7 @@ func TestBuildStorageIntegrityRuntimeRequiresPreparedLookup(t *testing.T) {
 
 	_, _, err = buildStorageIntegrityRuntimeConsumer(
 		cfg.StorageIntegrity.Runtime,
+		cfg.StorageIntegrity.Tables,
 		StorageIntegrityRuntimeOptions{
 			StatementSubmitter: &rootRecordingSubmitter{},
 			SourcePreparer:     &rootPreparerWithoutLookup{},
@@ -861,6 +862,7 @@ func TestBuildStorageIntegrityRuntimeRequiresStatusQuerier(t *testing.T) {
 
 	_, _, err = buildStorageIntegrityRuntimeConsumer(
 		cfg.StorageIntegrity.Runtime,
+		cfg.StorageIntegrity.Tables,
 		StorageIntegrityRuntimeOptions{
 			StatementSubmitter: &rootRecordingSubmitter{},
 			SourcePreparer:     &rootRecordingPreparer{},
@@ -952,6 +954,7 @@ func TestBuildStorageIntegrityRuntimeBuildsConsumerAndRunsMergeGuard(t *testing.
 
 	ingress, mergeGuard, err := buildStorageIntegrityRuntimeConsumer(
 		cfg.StorageIntegrity.Runtime,
+		cfg.StorageIntegrity.Tables,
 		StorageIntegrityRuntimeOptions{
 			StatementSubmitter: submitter,
 			SourcePreparer:     preparer,
@@ -1027,6 +1030,7 @@ func TestBuildStorageIntegrityRuntimePinsNativeMaterializer(t *testing.T) {
 	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
 	ingress, _, err := buildStorageIntegrityRuntimeConsumer(
 		cfg.StorageIntegrity.Runtime,
+		cfg.StorageIntegrity.Tables,
 		StorageIntegrityRuntimeOptions{
 			StatementSubmitter: &rootRecordingSubmitter{},
 			SourcePreparer:     &rootRecordingPreparer{},
@@ -1056,6 +1060,7 @@ func TestBuildStorageIntegrityRuntimeBuildsMergeGuardFromConnAndConfig(t *testin
 	mergeConn := &recordingBuildMergeConn{}
 	ingress, guard, err := buildStorageIntegrityRuntimeConsumer(
 		cfg.StorageIntegrity.Runtime,
+		cfg.StorageIntegrity.Tables,
 		StorageIntegrityRuntimeOptions{
 			StatementSubmitter: &rootRecordingSubmitter{outcome: sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}},
 			SourcePreparer:     &rootRecordingPreparer{source: "snode-A", claim: sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"}},
@@ -1075,8 +1080,8 @@ func TestBuildStorageIntegrityRuntimeBuildsMergeGuardFromConnAndConfig(t *testin
 		t.Fatalf("startStorageIntegrityRuntime: %v", err)
 	}
 	wantExecs := []string{
-		"SYSTEM STOP MERGES `hg_safe`.`events`",
-		"SYSTEM STOP MERGES `hg_unsafe`.`events`",
+		"SYSTEM STOP MERGES `hg_safe`.`tenant__events`",
+		"SYSTEM STOP MERGES `hg_unsafe`.`tenant__events`",
 	}
 	if strings.Join(mergeConn.execs, "\n") != strings.Join(wantExecs, "\n") {
 		t.Fatalf("STOP MERGES execs = %v, want %v", mergeConn.execs, wantExecs)
@@ -1100,6 +1105,7 @@ func TestBuildStorageIntegrityRuntimeWrapsMergeSupervisor(t *testing.T) {
 
 	ingress, guard, err := buildStorageIntegrityRuntimeConsumer(
 		cfg.StorageIntegrity.Runtime,
+		cfg.StorageIntegrity.Tables,
 		StorageIntegrityRuntimeOptions{
 			StatementSubmitter: &rootRecordingSubmitter{outcome: sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}},
 			SourcePreparer: &rootRecordingPreparer{
@@ -1139,6 +1145,7 @@ func TestStartStorageIntegrityRuntimeFailsClosedOnMergeGuardError(t *testing.T) 
 	guard := &recordingBuildMergeGuard{err: errors.New("native merge still active")}
 	ingress, mergeGuard, err := buildStorageIntegrityRuntimeConsumer(
 		cfg.StorageIntegrity.Runtime,
+		cfg.StorageIntegrity.Tables,
 		StorageIntegrityRuntimeOptions{
 			StatementSubmitter: &rootRecordingSubmitter{outcome: sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}},
 			SourcePreparer:     &rootRecordingPreparer{source: "snode-A", claim: sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"}},
@@ -1332,6 +1339,7 @@ func TestStartStorageIntegrityRuntimeRecoversAfterInitialMergeAssert(t *testing.
 	}
 	ingress, mergeGuard, err := buildStorageIntegrityRuntimeConsumer(
 		cfg.StorageIntegrity.Runtime,
+		cfg.StorageIntegrity.Tables,
 		StorageIntegrityRuntimeOptions{
 			StatementSubmitter: &orderedBuildSubmitter{order: order},
 			SourcePreparer: &rootRecordingPreparer{
@@ -1592,10 +1600,7 @@ func enableStorageIntegrityRuntimeTestConfig(t *testing.T, cfg *config.Config, s
 	runtimeDir := t.TempDir()
 	cfg.StorageIntegrity.Runtime.JournalDir = filepath.Join(runtimeDir, "journal")
 	cfg.StorageIntegrity.Runtime.PayloadSpoolDir = filepath.Join(runtimeDir, "payload-spool")
-	cfg.StorageIntegrity.Runtime.MergeGuard.Tables = []config.StorageIntegrityRuntimeMergeTableConfig{
-		{Database: "hg_safe", Table: "events"},
-		{Database: "hg_unsafe", Table: "events"},
-	}
+	cfg.StorageIntegrity.Tables = []string{"tenant.events"}
 }
 
 type recordingBuildMergeGuard struct {

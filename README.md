@@ -182,6 +182,23 @@ The rewriter is the canonical owner of physical/logical database mapping. Every 
 | `rewriter.physical_database` | string | No | `` | The single physical ClickHouse database that hosts every logical database in this deployment. Empty disables both `database_map` and the `hello.Database` substitution |
 | `rewriter.delimiter` | string | No | `_` | Separator inserted between `<logical>` and `<original_table>` |
 
+### `storage_integrity` — Protected Table Read Policy
+
+`storage_integrity.tables` is the shared logical membership list. HouseGate
+derives both guarded physical homes from each `<database>.<table>` id; operators
+must not configure `runtime.merge_guard.tables` separately. An empty
+`read.default_mode` has the same safe behavior as `safe`.
+
+```yaml
+storage_integrity:
+  tables: ["tenant.events"]        # logical <db>.<table> ids; hg_unsafe/hg_safe.tenant__events are derived
+  read:
+    default_mode: safe             # safe | unsafe_latest; per query: SETTINGS SQL_x_read_mode = 'unsafe_latest'
+  runtime:
+    merge_guard:
+      reassert_interval: 30s
+```
+
 ### `agent` — Agent-Mode Settings
 
 | Key | Type | Required | Default | Description |

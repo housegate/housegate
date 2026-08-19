@@ -51,6 +51,16 @@ rewriter:
   physical_database: testnet
   delimiter: "."
 
+# Storage-integrity table membership and read policy. The merge guard derives
+# both physical homes from each logical <database>.<table> id.
+# storage_integrity:
+#   tables: ["tenant.events"]        # logical <db>.<table> ids; hg_unsafe/hg_safe.tenant__events are derived
+#   read:
+#     default_mode: safe             # safe | unsafe_latest; per query: SETTINGS SQL_x_read_mode = 'unsafe_latest'
+#   runtime:
+#     merge_guard:
+#       reassert_interval: 30s
+
 # Optional replication-plane forwarding. Disabled here by default; uncomment in
 # deployments where ClickHouse should open replication-plane TCP only to its
 # co-located HouseGate. This is forwarding for network isolation, not integrity:

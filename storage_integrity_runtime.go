@@ -45,7 +45,7 @@ type StorageIntegrityRuntimeOptions struct {
 	PartsPressure StorageIntegrityPartsPressure
 }
 
-func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRuntimeConfig, opts StorageIntegrityRuntimeOptions) (*StorageIntegrityIngress, StorageIntegrityMergeGuard, error) {
+func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRuntimeConfig, tables []string, opts StorageIntegrityRuntimeOptions) (*StorageIntegrityIngress, StorageIntegrityMergeGuard, error) {
 	expectedSource := strings.TrimSpace(runtimeCfg.ExpectedSource)
 
 	submitter := opts.StatementSubmitter
@@ -92,7 +92,7 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 		)
 	}
 
-	rawMergeGuard, err := buildStorageIntegrityMergeGuard(runtimeCfg.MergeGuard, opts)
+	rawMergeGuard, err := buildStorageIntegrityMergeGuard(tables, opts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -226,35 +226,36 @@ func startStorageIntegrityRuntime(ctx context.Context, runtime *StorageIntegrity
 	return nil
 }
 
-func buildStorageIntegrityMergeGuard(cfg config.StorageIntegrityRuntimeMergeGuardConfig, opts StorageIntegrityRuntimeOptions) (StorageIntegrityMergeGuard, error) {
+func buildStorageIntegrityMergeGuard(tables []string, opts StorageIntegrityRuntimeOptions) (StorageIntegrityMergeGuard, error) {
 	if opts.MergeGuard != nil {
 		return opts.MergeGuard, nil
 	}
 	if opts.MergeConn == nil {
 		return nil, nil
 	}
-	tables, err := storageIntegrityMergeTables(cfg.Tables)
+	mergeTables, err := storageIntegrityMergeTables(tables)
 	if err != nil {
 		return nil, err
 	}
-	return sicore.NewMergeGuard(opts.MergeConn, tables), nil
+	return sicore.NewMergeGuard(opts.MergeConn, mergeTables), nil
 }
 
-func storageIntegrityMergeTables(cfgTables []config.StorageIntegrityRuntimeMergeTableConfig) ([]sicore.MergeTable, error) {
-	if len(cfgTables) == 0 {
-		return nil, errors.New("storage_integrity.runtime.merge_guard.tables is required when using merge_conn")
+// storageIntegrityMergeTables derives the guarded physical set from the
+// logical ids: hg_safe.<phys> then hg_unsafe.<phys> per id.
+func storageIntegrityMergeTables(tableIDs []string) ([]sicore.MergeTable, error) {
+	if len(tableIDs) == 0 {
+		return nil, errors.New("storage_integrity.tables is required when using merge_conn")
 	}
-	tables := make([]sicore.MergeTable, 0, len(cfgTables))
-	for i, table := range cfgTables {
-		db := strings.TrimSpace(table.Database)
-		tbl := strings.TrimSpace(table.Table)
-		if db == "" {
-			return nil, fmt.Errorf("storage_integrity.runtime.merge_guard.tables[%d].database is required", i)
+	out := make([]sicore.MergeTable, 0, 2*len(tableIDs))
+	for i, id := range tableIDs {
+		if _, _, ok := config.SplitStorageIntegrityTableID(id); !ok {
+			return nil, fmt.Errorf("storage_integrity.tables[%d] %q must be a logical <database>.<table> id", i, id)
 		}
-		if tbl == "" {
-			return nil, fmt.Errorf("storage_integrity.runtime.merge_guard.tables[%d].table is required", i)
-		}
-		tables = append(tables, sicore.MergeTable{Database: db, Table: tbl})
+		phys := config.StorageIntegrityPhysicalTable(id)
+		out = append(out,
+			sicore.MergeTable{Database: config.StorageIntegritySafeDatabase, Table: phys},
+			sicore.MergeTable{Database: config.StorageIntegrityUnsafeDatabase, Table: phys},
+		)
 	}
-	return tables, nil
+	return out, nil
 }

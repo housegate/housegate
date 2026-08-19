@@ -607,7 +607,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			if admissionConsumer != nil {
 				return nil, fmt.Errorf("storage_integrity.runtime.enabled cannot be combined with StorageIntegrityAdmissionConsumer")
 			}
-			consumer, guard, err := buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, opts.StorageIntegrityRuntime)
+			consumer, guard, err := buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, cfg.StorageIntegrity.Tables, opts.StorageIntegrityRuntime)
 			if err != nil {
 				return nil, err
 			}
