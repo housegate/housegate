@@ -3585,7 +3585,7 @@ git commit -m "feat(rewriter): require acknowledged storage-integrity v1 read su
 - Consumes: `rewriter.ReadModeSettingKey`, `rewriter.ParseReadMode`, `rewriter.WithReadMode`, `*rewriter.RejectedError`.
 - Produces: `func readModeFromQuery(q *chproto.Query) (rewriter.ReadMode, bool, error)`, `Plugin.FailClosedOnError bool`, and `Plugin.RequiredStorageIntegrityContractVersion pb.StorageIntegrityContractVersion` (both fields are set whenever SI membership is configured, so injected/custom factories cannot bypass D-2/D-8). The plugin verifies the result echo even after a nil-error custom `Rewriter` return.
 
-- [ ] **Step 1: Failing tests** (append to `rewriter_test.go`; `fakeRewriter` gains `err error`, `lastCtx context.Context`, and `storageIntegrityContractVersion pb.StorageIntegrityContractVersion` fields returned/recorded by `Rewrite`)
+- [x] **Step 1: Failing tests** (append to `rewriter_test.go`; `fakeRewriter` gains `err error`, `lastCtx context.Context`, and `storageIntegrityContractVersion pb.StorageIntegrityContractVersion` fields returned/recorded by `Rewrite`)
 
 ```go
 func TestOnQuery_ReadModeSettingIsCarriedInContext(t *testing.T) {
@@ -3697,7 +3697,7 @@ func TestOnQuery_AcknowledgedCustomRewriterAllowsNormalQuery(t *testing.T) {
 Run: `go test ./pkg/plugins/rewrite -run 'TestOnQuery_ReadMode|TestOnQuery_InvalidReadMode|TestOnQuery_RejectedError|TestOnQuery_OrdinaryError|TestOnQuery_MissingContract|TestOnQuery_WrongContract|TestOnQuery_AcknowledgedCustom' -count=1`
 Expected: FAIL (`ctx read mode = "" false`, invalid mode not rejected, RejectedError swallowed, configured-SI ordinary error swallowed, and missing/wrong acknowledgements are accepted).
 
-- [ ] **Step 2: Implement in `OnQuery`** — after the maintenance/platform-operator bypass and before `rw := p.rewriterFor(...)`:
+- [x] **Step 2: Implement in `OnQuery`** — after the maintenance/platform-operator bypass and before `rw := p.rewriterFor(...)`:
 
 ```go
 	if qctx.Query != nil {
@@ -3761,12 +3761,12 @@ Add `FailClosedOnError bool` and `RequiredStorageIntegrityContractVersion pb.Sto
 
 (add `"errors"` to imports.)
 
-- [ ] **Step 3: Run**
+- [x] **Step 3: Run**
 
 Run: `bazel test //pkg/plugins/rewrite:rewrite_test --test_output=errors`
 Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add pkg/plugins/rewrite
