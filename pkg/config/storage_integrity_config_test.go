@@ -246,7 +246,15 @@ func TestConfigValidateStorageIntegrityIngress(t *testing.T) {
 
 	t.Run("tables entries must be logical db.table ids, unique, server-mode only", func(t *testing.T) {
 		cfg := storageIntegrityRuntimeConfigFixture(t)
-		cfg.StorageIntegrity.Tables = []string{"tenant.events", "noDot", "a.b.c", "tenant.events"}
+		cfg.StorageIntegrity.Tables = []string{
+			"tenant.events",
+			"noDot",
+			"a.b.c",
+			"tenant.events",
+			"1tenant.events",
+			"tenant.event-name",
+			"tenant .events",
+		}
 		err := cfg.Validate()
 		if err == nil {
 			t.Fatal("Validate succeeded with malformed table ids")
@@ -255,6 +263,9 @@ func TestConfigValidateStorageIntegrityIngress(t *testing.T) {
 			`storage_integrity.tables[1] "noDot" must be a logical <database>.<table> id`,
 			`storage_integrity.tables[2] "a.b.c" must be a logical <database>.<table> id`,
 			`storage_integrity.tables[3] duplicates "tenant.events"`,
+			`storage_integrity.tables[4] "1tenant.events" must be a logical <database>.<table> id`,
+			`storage_integrity.tables[5] "tenant.event-name" must be a logical <database>.<table> id`,
+			`storage_integrity.tables[6] "tenant .events" must be a logical <database>.<table> id`,
 		} {
 			if !strings.Contains(err.Error(), want) {
 				t.Fatalf("Validate err = %v, missing %q", err, want)
@@ -378,11 +389,16 @@ func TestStorageIntegrityPhysicalNaming(t *testing.T) {
 	if got := StorageIntegrityPhysicalTable("tenant.events"); got != "tenant__events" {
 		t.Fatalf("physical = %q", got)
 	}
-	db, table, ok := SplitStorageIntegrityTableID("tenant.events")
-	if !ok || db != "tenant" || table != "events" {
-		t.Fatalf("split = %q %q %v", db, table, ok)
+	for _, good := range []string{"tenant.events", "_tenant.event2", "T1._events"} {
+		db, table, ok := SplitStorageIntegrityTableID(good)
+		if !ok || db+"."+table != good {
+			t.Fatalf("split %q = %q %q %v", good, db, table, ok)
+		}
 	}
-	for _, bad := range []string{"", "events", ".events", "tenant.", "a.b.c"} {
+	for _, bad := range []string{
+		"", "events", ".events", "tenant.", "a.b.c",
+		"1tenant.events", "tenant.event-name", "tenant .events",
+	} {
 		if _, _, ok := SplitStorageIntegrityTableID(bad); ok {
 			t.Fatalf("%q must be rejected", bad)
 		}

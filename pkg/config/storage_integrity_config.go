@@ -25,14 +25,30 @@ func StorageIntegrityPhysicalTable(tableID string) string {
 	return strings.ReplaceAll(tableID, ".", "__")
 }
 
-// SplitStorageIntegrityTableID validates and splits a logical table id:
-// exactly one dot, non-empty database and table.
+// SplitStorageIntegrityTableID validates and splits a logical table id using
+// the same simple-identifier grammar as the storage-integrity v1 rewriter:
+// exactly one dot and [A-Za-z_][A-Za-z0-9_]* on both sides.
 func SplitStorageIntegrityTableID(id string) (string, string, bool) {
 	parts := strings.Split(id, ".")
-	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+	if len(parts) != 2 || !storageIntegritySimpleIdentifier(parts[0]) || !storageIntegritySimpleIdentifier(parts[1]) {
 		return "", "", false
 	}
 	return parts[0], parts[1], true
+}
+
+func storageIntegritySimpleIdentifier(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		alpha := c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+		digit := c >= '0' && c <= '9'
+		if !alpha && !(i > 0 && digit) {
+			return false
+		}
+	}
+	return true
 }
 
 // StorageIntegrityConfig owns HouseGate-local storage-integrity toggles.
