@@ -41,8 +41,13 @@ type IntakeJournalRecord struct {
 
 	Prepared    PreparedLocalResult `json:"prepared"`
 	HasPrepared bool                `json:"has_prepared"`
-	Submit      SubmitOutcome       `json:"submit"`
-	HasSubmit   bool                `json:"has_submit"`
+	// ObservedCandidateParts are exact prepared names durably acknowledged by a
+	// successful local system.parts inventory. They let restart distinguish a
+	// delayed candidate (unobserved + absent, retain debt) from historical
+	// cleanup (observed + absent, retire ownership).
+	ObservedCandidateParts []CandidatePart `json:"observed_candidate_parts,omitempty"`
+	Submit                 SubmitOutcome   `json:"submit"`
+	HasSubmit              bool            `json:"has_submit"`
 
 	SubmitUnknown bool `json:"submit_unknown"`
 	ClaimUnknown  bool `json:"claim_unknown"`
@@ -202,44 +207,46 @@ func syncDir(dir string) error {
 
 func journalRecordFromIntakeRecord(rec *intakeRecord) IntakeJournalRecord {
 	return IntakeJournalRecord{
-		StatementID:           rec.statementID,
-		Source:                rec.source,
-		FrontierOrdinal:       rec.frontierOrdinal,
-		Env:                   rec.env,
-		Admission:             cloneAdmissionRecord(rec.adm),
-		Stage:                 rec.stage,
-		AbortReason:           rec.abortReason,
-		Prepared:              clonePreparedLocalResult(rec.prepared),
-		HasPrepared:           rec.hasPrepared,
-		Submit:                rec.submit,
-		HasSubmit:             rec.hasSubmit,
-		SubmitUnknown:         rec.submitUnknown,
-		ClaimUnknown:          rec.claimUnknown,
-		PrepareKnownUnwritten: rec.prepareKnownUnwritten,
-		TerminalResult:        cloneIntakeResult(rec.terminalRes),
-		IsTerminal:            rec.isTerminal,
-		UpdatedAtUnixMS:       time.Now().UnixMilli(),
+		StatementID:            rec.statementID,
+		Source:                 rec.source,
+		FrontierOrdinal:        rec.frontierOrdinal,
+		Env:                    rec.env,
+		Admission:              cloneAdmissionRecord(rec.adm),
+		Stage:                  rec.stage,
+		AbortReason:            rec.abortReason,
+		Prepared:               clonePreparedLocalResult(rec.prepared),
+		HasPrepared:            rec.hasPrepared,
+		ObservedCandidateParts: cloneCandidateParts(rec.observedCandidateParts),
+		Submit:                 rec.submit,
+		HasSubmit:              rec.hasSubmit,
+		SubmitUnknown:          rec.submitUnknown,
+		ClaimUnknown:           rec.claimUnknown,
+		PrepareKnownUnwritten:  rec.prepareKnownUnwritten,
+		TerminalResult:         cloneIntakeResult(rec.terminalRes),
+		IsTerminal:             rec.isTerminal,
+		UpdatedAtUnixMS:        time.Now().UnixMilli(),
 	}
 }
 
 func intakeRecordFromJournalRecord(rec IntakeJournalRecord) *intakeRecord {
 	return &intakeRecord{
-		statementID:           rec.StatementID,
-		source:                rec.Source,
-		frontierOrdinal:       rec.FrontierOrdinal,
-		env:                   rec.Env,
-		adm:                   cloneAdmissionRecord(rec.Admission),
-		prepared:              clonePreparedLocalResult(rec.Prepared),
-		hasPrepared:           rec.HasPrepared,
-		submit:                rec.Submit,
-		hasSubmit:             rec.HasSubmit,
-		submitUnknown:         rec.SubmitUnknown,
-		claimUnknown:          rec.ClaimUnknown,
-		prepareKnownUnwritten: rec.PrepareKnownUnwritten,
-		stage:                 rec.Stage,
-		abortReason:           rec.AbortReason,
-		terminalRes:           cloneIntakeResult(rec.TerminalResult),
-		isTerminal:            rec.IsTerminal,
+		statementID:            rec.StatementID,
+		source:                 rec.Source,
+		frontierOrdinal:        rec.FrontierOrdinal,
+		env:                    rec.Env,
+		adm:                    cloneAdmissionRecord(rec.Admission),
+		prepared:               clonePreparedLocalResult(rec.Prepared),
+		hasPrepared:            rec.HasPrepared,
+		observedCandidateParts: cloneCandidateParts(rec.ObservedCandidateParts),
+		submit:                 rec.Submit,
+		hasSubmit:              rec.HasSubmit,
+		submitUnknown:          rec.SubmitUnknown,
+		claimUnknown:           rec.ClaimUnknown,
+		prepareKnownUnwritten:  rec.PrepareKnownUnwritten,
+		stage:                  rec.Stage,
+		abortReason:            rec.AbortReason,
+		terminalRes:            cloneIntakeResult(rec.TerminalResult),
+		isTerminal:             rec.IsTerminal,
 	}
 }
 
@@ -256,6 +263,10 @@ func clonePreparedLocalResult(in PreparedLocalResult) PreparedLocalResult {
 	return out
 }
 
+func cloneCandidateParts(in []CandidatePart) []CandidatePart {
+	return append([]CandidatePart(nil), in...)
+}
+
 func cloneIntakeResult(in IntakeResult) IntakeResult {
 	out := in
 	out.Prepared = clonePreparedLocalResult(in.Prepared)
@@ -268,6 +279,7 @@ func cloneIntakeJournalRecords(in []IntakeJournalRecord) []IntakeJournalRecord {
 		out[idx] = record
 		out[idx].Admission = cloneAdmissionRecord(record.Admission)
 		out[idx].Prepared = clonePreparedLocalResult(record.Prepared)
+		out[idx].ObservedCandidateParts = cloneCandidateParts(record.ObservedCandidateParts)
 		out[idx].TerminalResult = cloneIntakeResult(record.TerminalResult)
 	}
 	return out

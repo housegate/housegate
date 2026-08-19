@@ -177,12 +177,21 @@ func newBlockingPressureLifecycle() *blockingPressureLifecycle {
 	}
 }
 
-func (p *blockingPressureLifecycle) Reserve(context.Context, string, []string) (sicore.PartsReservation, error) {
+func (p *blockingPressureLifecycle) ReserveStatement(context.Context, string, string, []string) (sicore.PartsReservation, error) {
 	return noopPartsReservation{}, nil
 }
 
-func (p *blockingPressureLifecycle) Restore(context.Context, string, []string, []sicore.CandidatePart, bool) (sicore.PartsReservation, error) {
-	return noopPartsReservation{}, nil
+func (p *blockingPressureLifecycle) RestoreBatch(_ context.Context, records []sicore.PartsRestoreRecord) (map[string]sicore.PartsReservation, error) {
+	restored := make(map[string]sicore.PartsReservation, len(records))
+	for _, record := range records {
+		if !record.Finalized {
+			restored[record.StatementID] = noopPartsReservation{}
+		}
+	}
+	return restored, nil
+}
+
+func (p *blockingPressureLifecycle) SetCandidateObservedHook(func(context.Context, string, sicore.CandidatePart) error) {
 }
 
 func (p *blockingPressureLifecycle) Invalidate() { p.invalidates.Add(1) }

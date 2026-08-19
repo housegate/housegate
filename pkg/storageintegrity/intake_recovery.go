@@ -16,11 +16,8 @@ func (o *Orchestrator) RecoverPending(ctx context.Context) error {
 	if err := o.ensureJournalRecovered(ctx); err != nil {
 		return err
 	}
-	records, beforeRecovery := o.recoverySnapshot()
-	if beforeRecovery != nil {
-		if err := beforeRecovery(ctx, records); err != nil {
-			return fmt.Errorf("intake: restore runtime state before recovery: %w", err)
-		}
+	if err := o.restoreRecoveryState(ctx); err != nil {
+		return err
 	}
 	for {
 		adm, ok := o.nextRecoveryAdmission()
@@ -40,20 +37,60 @@ func (o *Orchestrator) RecoverPending(ctx context.Context) error {
 	}
 }
 
-func (o *Orchestrator) recoverySnapshot() ([]IntakeJournalRecord, func(context.Context, []IntakeJournalRecord) error) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	records := cloneIntakeJournalRecords(o.recoveredJournal)
-	sort.Slice(records, func(i, k int) bool {
-		if records[i].Source != records[k].Source {
-			return records[i].Source < records[k].Source
+func (o *Orchestrator) restoreRecoveryState(ctx context.Context) error {
+	for {
+		o.mu.Lock()
+		if o.recoveryStateRestored {
+			o.mu.Unlock()
+			return nil
 		}
-		if records[i].FrontierOrdinal != records[k].FrontierOrdinal {
-			return records[i].FrontierOrdinal < records[k].FrontierOrdinal
+		if o.recoveryStateRestoring {
+			done := o.recoveryStateRestoreDone
+			o.mu.Unlock()
+			select {
+			case <-done:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
-		return records[i].StatementID < records[k].StatementID
-	})
-	return records, o.beforeRecovery
+		o.recoveryStateRestoring = true
+		o.recoveryStateRestoreDone = make(chan struct{})
+		done := o.recoveryStateRestoreDone
+		records := cloneIntakeJournalRecords(o.recoveredJournal)
+		beforeRecovery := o.beforeRecovery
+		o.mu.Unlock()
+
+		sort.Slice(records, func(i, k int) bool {
+			if records[i].Source != records[k].Source {
+				return records[i].Source < records[k].Source
+			}
+			if records[i].FrontierOrdinal != records[k].FrontierOrdinal {
+				return records[i].FrontierOrdinal < records[k].FrontierOrdinal
+			}
+			return records[i].StatementID < records[k].StatementID
+		})
+		var restoreErr error
+		if beforeRecovery != nil {
+			restoreErr = beforeRecovery(ctx, records)
+		}
+
+		o.mu.Lock()
+		if restoreErr == nil {
+			o.recoveryStateRestored = true
+			// The non-terminal intake records own the only payload bytes still
+			// required for recovery. Release the full projection, especially the
+			// monotonically growing terminal history, after runtime reconstruction.
+			o.recoveredJournal = nil
+		}
+		o.recoveryStateRestoring = false
+		close(done)
+		o.mu.Unlock()
+		if restoreErr != nil {
+			return fmt.Errorf("intake: restore runtime state before recovery: %w", restoreErr)
+		}
+		return nil
+	}
 }
 
 func (o *Orchestrator) nextRecoveryAdmission() (AdmissionRecord, bool) {

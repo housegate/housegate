@@ -194,6 +194,46 @@ func TestOrchestrate_TerminalSaveFailureDoesNotPublishMemoryTerminal(t *testing.
 	}
 }
 
+func TestFileIntakeJournalCompactsTerminalPayloadAndReplaysFromEnvelope(t *testing.T) {
+	ctx := context.Background()
+	journal, err := NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	adm := admissionFixture()
+	prep := newLookupRecordingPreparer(boundSource())
+	orch := NewOrchestrator(
+		&recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeAccepted}}, prep,
+		OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
+	)
+	res, err := orch.Orchestrate(ctx, adm)
+	if err != nil || !res.Ack2 {
+		t.Fatalf("Orchestrate=(%+v, %v), want ACK2", res, err)
+	}
+	persisted, ok, err := journal.LoadIntakeRecord(ctx, adm.StatementID)
+	if err != nil {
+		t.Fatalf("LoadIntakeRecord: %v", err)
+	}
+	if !ok || !persisted.IsTerminal {
+		t.Fatalf("persisted terminal=%v/%v, want present terminal", ok, persisted.IsTerminal)
+	}
+	if len(persisted.Admission.Payload) != 0 {
+		t.Fatalf("terminal journal retained %d payload bytes", len(persisted.Admission.Payload))
+	}
+
+	restartedPrep := newLookupRecordingPreparer(boundSource())
+	restarted := NewOrchestrator(panicSubmitter{t: t}, restartedPrep, OrchestratorConfig{
+		ExpectedSource: "snode-A", Journal: journal,
+	})
+	replayed, err := restarted.Orchestrate(ctx, adm)
+	if err != nil || !replayed.Ack2 {
+		t.Fatalf("cached terminal replay=(%+v, %v), want ACK2", replayed, err)
+	}
+	if got := atomic.LoadInt64(&restartedPrep.prepareCount); got != 0 {
+		t.Fatalf("cached terminal replay prepared %d times", got)
+	}
+}
+
 func TestOrchestrate_TerminalSaveFailureRestartsFromDurableStage(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

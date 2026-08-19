@@ -93,6 +93,19 @@ type PartsReservation interface {
 	Finalize()
 }
 
+// PartsRestoreRecord is one durable intake projected into the pressure
+// lifecycle. ObservedCandidates are exact names that a previous successful
+// local inventory proved active; if such a name is now absent, it is historical
+// cleanup rather than delayed visibility and needs neither ownership nor debt.
+type PartsRestoreRecord struct {
+	StatementID        string
+	Table              string
+	PartitionIDs       []string
+	Candidates         []CandidatePart
+	ObservedCandidates []CandidatePart
+	Finalized          bool
+}
+
 type reservationSlot struct {
 	reservation *partsReservation
 	keyIndex    int
@@ -100,11 +113,19 @@ type reservationSlot struct {
 
 type candidateClaim struct {
 	reservationID uint64
+	statementID   string
+	candidate     CandidatePart
 	// observedActive distinguishes an exact part that has existed in a
 	// successful inventory from one whose source write is still subject to
 	// ClickHouse visibility delay. A finalized claim is released only after an
 	// inventory first observes the part and a later inventory proves it absent.
-	observedActive bool
+	observedActive    bool
+	observedPersisted bool
+}
+
+type candidateObservation struct {
+	statementID string
+	candidate   CandidatePart
 }
 
 // PartsPressureGuard caches active-part counts plus exact names and answers
@@ -129,6 +150,8 @@ type PartsPressureGuard struct {
 	// candidateClaims makes an exact ClickHouse part name proof single-owner.
 	// Otherwise one malformed repeated candidate could cover multiple slots.
 	candidateClaims map[PartsKey]map[string]candidateClaim
+	pendingObserved map[string]candidateObservation
+	observedHook    func(context.Context, string, CandidatePart) error
 	// liveReservations retains cancelable and not-yet-visible finalized handles
 	// so a serialized post-cleanup snapshot can rebase every later reservation.
 	liveReservations   map[uint64]*partsReservation
@@ -162,10 +185,24 @@ func NewPartsPressureGuard(conn MergeConn, cfg PartsPressureConfig) *PartsPressu
 		committed:             PartsSnapshot{},
 		committedReservations: map[PartsKey][]reservationSlot{},
 		candidateClaims:       map[PartsKey]map[string]candidateClaim{},
+		pendingObserved:       map[string]candidateObservation{},
 		liveReservations:      map[uint64]*partsReservation{},
 		now:                   time.Now,
 		invalidated:           make(chan struct{}, 1),
 	}
+}
+
+// SetCandidateObservedHook installs the durable acknowledgement used before a
+// locally observed exact candidate may later be retired as historical cleanup.
+// A hook failure makes the current inventory unavailable and is retried on the
+// next Refresh.
+func (g *PartsPressureGuard) SetCandidateObservedHook(hook func(context.Context, string, CandidatePart) error) {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	g.observedHook = hook
+	g.mu.Unlock()
 }
 
 // BuildSnapshotQuery reads every active part name together with partition text,
@@ -223,7 +260,23 @@ func (g *PartsPressureGuard) Refresh(ctx context.Context) (PartsSnapshot, error)
 	g.snapshotGeneration++
 	g.reconcileCandidateClaimsLocked()
 	g.takenAt = g.now()
-	g.haveSnap = !g.hasPendingCleanupProofLocked()
+	g.haveSnap = !g.hasPendingCleanupProofLocked() && len(g.pendingObserved) == 0
+	for key := range g.committedReservations {
+		g.reconcileCommittedKeyLocked(key)
+	}
+	g.mu.Unlock()
+	if err := g.flushCandidateObservations(ctx); err != nil {
+		g.mu.Lock()
+		g.haveSnap = false
+		g.mu.Unlock()
+		return nil, fmt.Errorf("storage_integrity: persist observed candidate: %w", err)
+	}
+	g.mu.Lock()
+	// A prior inventory may have observed a candidate whose durable marker was
+	// only just persisted. Reconcile again so an already-absent finalized claim
+	// can retire without waiting for another poll.
+	g.reconcileCandidateClaimsLocked()
+	g.haveSnap = !g.hasPendingCleanupProofLocked() && len(g.pendingObserved) == 0
 	for key := range g.committedReservations {
 		g.reconcileCommittedKeyLocked(key)
 	}
@@ -255,6 +308,21 @@ func (g *PartsPressureGuard) Allow(table, partitionID string) error {
 // cannot all pass against the same soft-limit slot. Either all partitions are
 // reserved or none are.
 func (g *PartsPressureGuard) Reserve(ctx context.Context, table string, partitionIDs []string) (PartsReservation, error) {
+	return g.reserve(ctx, "", table, partitionIDs)
+}
+
+// ReserveStatement is the journal-addressable admission form. Runtime callers
+// that install a candidate-observation hook must use it so an exact name first
+// seen after Commit can be persisted against the owning statement before the
+// claim is ever retired.
+func (g *PartsPressureGuard) ReserveStatement(ctx context.Context, statementID, table string, partitionIDs []string) (PartsReservation, error) {
+	if statementID == "" {
+		return nil, errors.New("storage_integrity: pressure reservation requires a statement id")
+	}
+	return g.reserve(ctx, statementID, table, partitionIDs)
+}
+
+func (g *PartsPressureGuard) reserve(ctx context.Context, statementID, table string, partitionIDs []string) (PartsReservation, error) {
 	g.admissionMu.Lock()
 	defer g.admissionMu.Unlock()
 	if _, err := g.Refresh(ctx); err != nil {
@@ -266,17 +334,21 @@ func (g *PartsPressureGuard) Reserve(ctx context.Context, table string, partitio
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return g.newReservationLocked(table, partitionIDs, true)
+	reservation, err := g.newReservationLocked(table, partitionIDs, true)
+	if err != nil {
+		return nil, err
+	}
+	reservation.statementID = statementID
+	return reservation, nil
 }
 
-// Restore reconstructs one durable pre-crash admission without applying the
-// new-write soft/hard gate. The original process already admitted and journaled
-// this statement while owning capacity; restart must restore that debt/claim
-// before recovery can resume or abort it. A successful inventory is still
-// required. Candidate binding is transactional: a conflict releases the
-// provisional slot before returning, so a later startup retry cannot
-// double-charge the same durable statement.
-func (g *PartsPressureGuard) Restore(ctx context.Context, table string, partitionIDs []string, candidates []CandidatePart, finalized bool) (PartsReservation, error) {
+// RestoreBatch reconstructs a complete durable-journal projection from one
+// successful exact inventory. It is transactional: any malformed coordinate,
+// ownership conflict, or observation-persistence failure rolls back every
+// provisional slot/claim in the batch. Finalized candidates that were observed
+// by an earlier local inventory and are now absent are historical cleanup; an
+// unseen absent candidate retains finalized capacity debt until it appears.
+func (g *PartsPressureGuard) RestoreBatch(ctx context.Context, records []PartsRestoreRecord) (map[string]PartsReservation, error) {
 	g.admissionMu.Lock()
 	defer g.admissionMu.Unlock()
 	if _, err := g.Refresh(ctx); err != nil {
@@ -285,73 +357,185 @@ func (g *PartsPressureGuard) Restore(ctx context.Context, table string, partitio
 		}
 		return nil, fmt.Errorf("storage_integrity: restore parts snapshot: %w", err)
 	}
+
 	g.commitMu.Lock()
-	defer g.commitMu.Unlock()
 	g.mu.Lock()
-	defer g.mu.Unlock()
-	if finalized {
-		return nil, g.restoreFinalizedClaimsLocked(table, partitionIDs, candidates)
+	reservations := make(map[string]PartsReservation, len(records))
+	type appliedRestore struct {
+		reservation *partsReservation
+		finalized   bool
 	}
-	reservation, err := g.newReservationLocked(table, partitionIDs, false)
-	if err != nil {
-		return nil, err
+	applied := make([]appliedRestore, 0, len(records))
+	seenStatements := make(map[string]struct{}, len(records))
+	rollback := func() {
+		for idx := len(applied) - 1; idx >= 0; idx-- {
+			applied[idx].reservation.releaseLocked()
+		}
 	}
-	reservation.recovered = true
-	if err := reservation.bindCandidatePartsLocked(candidates); err != nil {
-		reservation.releaseLocked()
-		return nil, err
+	for _, record := range records {
+		if record.StatementID == "" {
+			rollback()
+			g.mu.Unlock()
+			g.commitMu.Unlock()
+			return nil, errors.New("storage_integrity: restored pressure record has no statement id")
+		}
+		if _, duplicate := seenStatements[record.StatementID]; duplicate {
+			rollback()
+			g.mu.Unlock()
+			g.commitMu.Unlock()
+			return nil, fmt.Errorf("storage_integrity: duplicate restored pressure statement %s", record.StatementID)
+		}
+		seenStatements[record.StatementID] = struct{}{}
+		for _, observed := range record.ObservedCandidates {
+			if !candidatePartIn(observed, record.Candidates) {
+				rollback()
+				g.mu.Unlock()
+				g.commitMu.Unlock()
+				return nil, fmt.Errorf("storage_integrity: restored observation %q is not a candidate for statement %s", observed.PartName, record.StatementID)
+			}
+		}
+		if record.Finalized && len(record.Candidates) == 0 {
+			continue
+		}
+		observedCandidates := make(map[string]bool, len(record.ObservedCandidates))
+		for _, candidate := range record.ObservedCandidates {
+			observedCandidates[candidateCoordinateKey(candidate)] = true
+		}
+		partitionIDs := record.PartitionIDs
+		candidates := record.Candidates
+		if record.Finalized {
+			allowedPartitions := make(map[string]struct{}, len(record.PartitionIDs))
+			for _, partitionID := range record.PartitionIDs {
+				allowedPartitions[partitionID] = struct{}{}
+			}
+			effective := make([]CandidatePart, 0, len(record.Candidates))
+			for _, candidate := range record.Candidates {
+				if candidate.PartName == "" {
+					rollback()
+					g.mu.Unlock()
+					g.commitMu.Unlock()
+					return nil, errors.New("storage_integrity: finalized recovery candidate has empty part name")
+				}
+				if PhysicalTableName(candidate.TableID) != record.Table {
+					rollback()
+					g.mu.Unlock()
+					g.commitMu.Unlock()
+					return nil, fmt.Errorf("storage_integrity: finalized recovery candidate %q maps outside table %s", candidate.PartName, record.Table)
+				}
+				if _, ok := allowedPartitions[candidate.PartitionID]; !ok {
+					rollback()
+					g.mu.Unlock()
+					g.commitMu.Unlock()
+					return nil, fmt.Errorf("storage_integrity: finalized recovery candidate %q maps outside restored partition %s", candidate.PartName, candidate.PartitionID)
+				}
+				key := PartsKey{Database: g.cfg.UnsafeDatabase, Table: record.Table, Partition: candidate.PartitionID}
+				_, active := g.activeParts[key][candidate.PartName]
+				if observedCandidates[candidateCoordinateKey(candidate)] && !active {
+					continue
+				}
+				effective = append(effective, candidate)
+			}
+			if len(effective) == 0 {
+				continue
+			}
+			candidates = effective
+			partitionIDs = restoreCandidatePartitions(effective)
+		}
+		if len(partitionIDs) == 0 {
+			rollback()
+			g.mu.Unlock()
+			g.commitMu.Unlock()
+			return nil, fmt.Errorf("storage_integrity: restored statement %s has no effective partitions", record.StatementID)
+		}
+		reservation, err := g.newReservationLocked(record.Table, partitionIDs, false)
+		if err != nil {
+			rollback()
+			g.mu.Unlock()
+			g.commitMu.Unlock()
+			return nil, err
+		}
+		reservation.statementID = record.StatementID
+		reservation.recovered = true
+		reservation.observedCandidates = observedCandidates
+
+		bindCandidates := candidates
+		if record.Finalized {
+			bindCandidates = make([]CandidatePart, 0, len(candidates))
+			unseenAbsent := make([]bool, len(reservation.keys))
+			for _, candidate := range candidates {
+				keyIndex, candidateErr := reservation.keyIndexForCandidate(candidate)
+				if candidateErr != nil {
+					reservation.releaseLocked()
+					rollback()
+					g.mu.Unlock()
+					g.commitMu.Unlock()
+					return nil, candidateErr
+				}
+				key := reservation.keys[keyIndex]
+				_, active := g.activeParts[key][candidate.PartName]
+				observed := reservation.candidateWasObserved(candidate)
+				if observed && !active {
+					continue
+				}
+				bindCandidates = append(bindCandidates, candidate)
+				if !observed && !active {
+					unseenAbsent[keyIndex] = true
+				}
+			}
+			for keyIndex := range reservation.keys {
+				if !unseenAbsent[keyIndex] {
+					reservation.candidateCovered[keyIndex] = true
+				}
+			}
+		}
+		if err := reservation.bindCandidatePartsLocked(bindCandidates); err != nil {
+			reservation.releaseLocked()
+			rollback()
+			g.mu.Unlock()
+			g.commitMu.Unlock()
+			return nil, err
+		}
+		reservation.commitLocked()
+		applied = append(applied, appliedRestore{reservation: reservation, finalized: record.Finalized})
+		if !record.Finalized {
+			reservations[record.StatementID] = reservation
+		}
 	}
-	reservation.commitLocked()
-	return reservation, nil
+	g.mu.Unlock()
+
+	if err := g.flushCandidateObservations(ctx); err != nil {
+		g.mu.Lock()
+		rollback()
+		g.haveSnap = false
+		g.mu.Unlock()
+		g.commitMu.Unlock()
+		return nil, fmt.Errorf("storage_integrity: persist restored candidate observation: %w", err)
+	}
+
+	g.mu.Lock()
+	for _, restored := range applied {
+		if restored.finalized {
+			restored.reservation.finalizeLocked()
+		}
+	}
+	g.haveSnap = !g.hasPendingCleanupProofLocked() && len(g.pendingObserved) == 0
+	g.mu.Unlock()
+	g.commitMu.Unlock()
+	return reservations, nil
 }
 
-// restoreFinalizedClaimsLocked seeds single-owner names from durable ACK2
-// records without adding capacity debt: active parts are already counted in the
-// startup snapshot. Names not yet visible remain reserved because restart can
-// race ClickHouse visibility; once observed active, a later absent snapshot
-// retires them through reconcileCandidateClaimsLocked.
-func (g *PartsPressureGuard) restoreFinalizedClaimsLocked(table string, partitionIDs []string, candidates []CandidatePart) error {
-	if len(candidates) == 0 {
-		return errors.New("finalized recovery record has no exact candidate parts")
-	}
-	allowedPartitions := make(map[string]struct{}, len(partitionIDs))
-	for _, partitionID := range partitionIDs {
-		allowedPartitions[partitionID] = struct{}{}
-	}
-	type claimTarget struct {
-		key      PartsKey
-		partName string
-	}
-	targets := make([]claimTarget, 0, len(candidates))
+func restoreCandidatePartitions(candidates []CandidatePart) []string {
+	seen := make(map[string]struct{}, len(candidates))
+	partitions := make([]string, 0, len(candidates))
 	for _, candidate := range candidates {
-		if candidate.PartName == "" {
-			return errors.New("finalized recovery candidate has empty part name")
+		if _, ok := seen[candidate.PartitionID]; ok {
+			continue
 		}
-		if PhysicalTableName(candidate.TableID) != table {
-			return fmt.Errorf("finalized recovery candidate %q maps outside table %s", candidate.PartName, table)
-		}
-		if _, ok := allowedPartitions[candidate.PartitionID]; !ok {
-			return fmt.Errorf("finalized recovery candidate %q maps outside restored partition %s", candidate.PartName, candidate.PartitionID)
-		}
-		key := PartsKey{Database: g.cfg.UnsafeDatabase, Table: table, Partition: candidate.PartitionID}
-		if claim := g.candidateClaims[key][candidate.PartName]; claim.reservationID != 0 {
-			return fmt.Errorf("exact candidate %q for %s/%s is already claimed by another recovery record", candidate.PartName, key.Table, key.Partition)
-		}
-		targets = append(targets, claimTarget{key: key, partName: candidate.PartName})
+		seen[candidate.PartitionID] = struct{}{}
+		partitions = append(partitions, candidate.PartitionID)
 	}
-	g.nextReservationID++
-	ownerID := g.nextReservationID
-	for _, target := range targets {
-		if g.candidateClaims[target.key] == nil {
-			g.candidateClaims[target.key] = map[string]candidateClaim{}
-		}
-		_, active := g.activeParts[target.key][target.partName]
-		g.candidateClaims[target.key][target.partName] = candidateClaim{
-			reservationID:  ownerID,
-			observedActive: active,
-		}
-	}
-	return nil
+	sort.Strings(partitions)
+	return partitions
 }
 
 // newReservationLocked captures the current exact inventory into a live
@@ -422,10 +606,11 @@ func (g *PartsPressureGuard) checkLocked(table, partitionID string) error {
 }
 
 type partsReservation struct {
-	guard     *PartsPressureGuard
-	id        uint64
-	keys      []PartsKey
-	baselines []int
+	guard       *PartsPressureGuard
+	id          uint64
+	statementID string
+	keys        []PartsKey
+	baselines   []int
 	// baselineParts is the exact inventory represented by baselines. It can be
 	// advanced to a proven post-cleanup snapshot. initialParts is immutable and
 	// prevents a pre-admission candidate name from covering new-write debt.
@@ -441,6 +626,7 @@ type partsReservation struct {
 	cleanupProofArmed   bool
 	cleanupProofPending bool
 	recovered           bool
+	observedCandidates  map[string]bool
 	state               reservationState // protected by guard.mu
 }
 
@@ -630,9 +816,31 @@ func (r *partsReservation) remainingObservedCandidatesLocked() string {
 	return ""
 }
 
+func candidateCoordinateKey(candidate CandidatePart) string {
+	return fmt.Sprintf("%d:%s/%d:%s/%d:%s",
+		len(candidate.TableID), candidate.TableID,
+		len(candidate.PartitionID), candidate.PartitionID,
+		len(candidate.PartName), candidate.PartName,
+	)
+}
+
+func observationKey(statementID string, candidate CandidatePart) string {
+	return fmt.Sprintf("%d:%s/%s", len(statementID), statementID, candidateCoordinateKey(candidate))
+}
+
+func (r *partsReservation) candidateWasObserved(candidate CandidatePart) bool {
+	if r == nil || r.observedCandidates == nil {
+		return false
+	}
+	return r.observedCandidates[candidateCoordinateKey(candidate)]
+}
+
 func (r *partsReservation) bindCandidatePartsLocked(candidates []CandidatePart) error {
 	if r.state == reservationReleased {
 		return nil
+	}
+	if len(candidates) > 0 && r.guard.observedHook != nil && r.statementID == "" {
+		return errors.New("storage_integrity: exact candidate reservation is not bound to a statement id")
 	}
 	keyIndexes := make([]int, len(candidates))
 	for idx, candidate := range candidates {
@@ -658,8 +866,20 @@ func (r *partsReservation) bindCandidatePartsLocked(candidates []CandidatePart) 
 		}
 		claim := r.guard.candidateClaims[key][candidate.PartName]
 		claim.reservationID = r.id
+		claim.statementID = r.statementID
+		claim.candidate = candidate
+		if r.candidateWasObserved(candidate) {
+			claim.observedActive = true
+			claim.observedPersisted = true
+		}
 		if _, active := r.guard.activeParts[key][candidate.PartName]; active {
 			claim.observedActive = true
+			if !claim.observedPersisted {
+				r.guard.pendingObserved[observationKey(r.statementID, candidate)] = candidateObservation{
+					statementID: r.statementID,
+					candidate:   candidate,
+				}
+			}
 			if r.recovered {
 				r.candidateCovered[keyIndex] = true
 			}
@@ -677,7 +897,9 @@ func (g *PartsPressureGuard) releaseCandidateClaimsLocked(reservation *partsRese
 	for keyIndex, candidates := range reservation.candidateParts {
 		key := reservation.keys[keyIndex]
 		for partName := range candidates {
-			if g.candidateClaims[key][partName].reservationID == reservation.id {
+			claim := g.candidateClaims[key][partName]
+			if claim.reservationID == reservation.id {
+				delete(g.pendingObserved, observationKey(claim.statementID, claim.candidate))
 				delete(g.candidateClaims[key], partName)
 			}
 		}
@@ -698,16 +920,62 @@ func (g *PartsPressureGuard) reconcileCandidateClaimsLocked() {
 		for partName, claim := range claims {
 			if _, ok := active[partName]; ok {
 				claim.observedActive = true
+				if !claim.observedPersisted {
+					g.pendingObserved[observationKey(claim.statementID, claim.candidate)] = candidateObservation{
+						statementID: claim.statementID,
+						candidate:   claim.candidate,
+					}
+				}
 				claims[partName] = claim
 				continue
 			}
-			if claim.observedActive && g.liveReservations[claim.reservationID] == nil {
+			if claim.observedActive && claim.observedPersisted && g.liveReservations[claim.reservationID] == nil {
+				delete(g.pendingObserved, observationKey(claim.statementID, claim.candidate))
 				delete(claims, partName)
 			}
 		}
 		if len(claims) == 0 {
 			delete(g.candidateClaims, key)
 		}
+	}
+}
+
+func (g *PartsPressureGuard) flushCandidateObservations(ctx context.Context) error {
+	for {
+		g.mu.Lock()
+		var (
+			key         string
+			observation candidateObservation
+		)
+		for pendingKey, pending := range g.pendingObserved {
+			key, observation = pendingKey, pending
+			break
+		}
+		hook := g.observedHook
+		g.mu.Unlock()
+		if key == "" {
+			return nil
+		}
+		if hook != nil {
+			if err := hook(ctx, observation.statementID, observation.candidate); err != nil {
+				return err
+			}
+		}
+		g.mu.Lock()
+		claimKey := PartsKey{
+			Database:  g.cfg.UnsafeDatabase,
+			Table:     PhysicalTableName(observation.candidate.TableID),
+			Partition: observation.candidate.PartitionID,
+		}
+		claims := g.candidateClaims[claimKey]
+		claim, claimed := claims[observation.candidate.PartName]
+		if claimed && claim.statementID == observation.statementID {
+			claim.observedActive = true
+			claim.observedPersisted = true
+			claims[observation.candidate.PartName] = claim
+		}
+		delete(g.pendingObserved, key)
+		g.mu.Unlock()
 	}
 }
 
@@ -768,6 +1036,10 @@ func (r *partsReservation) Finalize() {
 	defer r.guard.commitMu.Unlock()
 	r.guard.mu.Lock()
 	defer r.guard.mu.Unlock()
+	r.finalizeLocked()
+}
+
+func (r *partsReservation) finalizeLocked() {
 	if r.state == reservationReserved {
 		r.commitLocked()
 	}
@@ -871,6 +1143,7 @@ func (g *PartsPressureGuard) coveredReservationSlotsLocked(key PartsKey, slots [
 		}
 	}
 	exactCovered := 0
+	unresolvedExact := 0
 	for _, slot := range slots {
 		reservation := slot.reservation
 		keyIndex := slot.keyIndex
@@ -887,6 +1160,12 @@ func (g *PartsPressureGuard) coveredReservationSlotsLocked(key PartsKey, slots [
 		}
 		if reservation.candidateCovered[keyIndex] {
 			exactCovered++
+		} else if len(reservation.candidateParts[keyIndex]) > 0 {
+			// Once a prepared result names an exact candidate, unrelated aggregate
+			// growth cannot prove this slot visible. In particular, a finalized
+			// restart candidate may appear after another source's part; releasing
+			// its debt at the earlier N+1 would oversubscribe the partition.
+			unresolvedExact++
 		}
 	}
 	// Aggregate growth cannot identify an owner, while an exact candidate name
@@ -894,7 +1173,10 @@ func (g *PartsPressureGuard) coveredReservationSlotsLocked(key PartsKey, slots [
 	// Taking the maximum (not the sum) prevents the same visible part from
 	// covering both its exact reservation and another aggregate slot.
 	if exactCovered > covered {
-		return exactCovered
+		covered = exactCovered
+	}
+	if maximum := len(slots) - unresolvedExact; covered > maximum {
+		covered = maximum
 	}
 	return covered
 }

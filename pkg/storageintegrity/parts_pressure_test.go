@@ -749,14 +749,20 @@ func TestPartsPressureGuard_RestoreCandidateConflictDoesNotLeakCapacity(t *testi
 	shared := CandidatePart{TableID: "db.t", PartitionID: "p_a", PartName: "a_shared"}
 	conn.setInventory(base, fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", shared.PartName})
 
-	if _, err := guard.Restore(context.Background(), "db__t", []string{"p_a"}, []CandidatePart{shared}, true); err != nil {
+	if _, err := guard.RestoreBatch(context.Background(), []PartsRestoreRecord{{
+		StatementID: "finalized-owner", Table: "db__t", PartitionIDs: []string{"p_a"},
+		Candidates: []CandidatePart{shared}, Finalized: true,
+	}}); err != nil {
 		t.Fatalf("restore finalized owner: %v", err)
 	}
-	reservation, err := guard.Restore(context.Background(), "db__t", []string{"p_a"}, []CandidatePart{shared}, false)
+	restored, err := guard.RestoreBatch(context.Background(), []PartsRestoreRecord{{
+		StatementID: "pending-conflict", Table: "db__t", PartitionIDs: []string{"p_a"},
+		Candidates: []CandidatePart{shared},
+	}})
 	if err == nil {
 		t.Fatal("restored pending statement claimed a finalized owner's candidate")
 	}
-	if reservation != nil {
+	if restored != nil {
 		t.Fatal("failed Restore returned a live reservation")
 	}
 	key := PartsKey{"hg_unsafe", "db__t", "p_a"}
@@ -765,6 +771,253 @@ func TestPartsPressureGuard_RestoreCandidateConflictDoesNotLeakCapacity(t *testi
 	}
 	if got := len(guard.liveReservations); got != 0 {
 		t.Fatalf("failed Restore leaked %d live reservations", got)
+	}
+}
+
+func TestPartsPressureGuard_RestoreBatchConflictRollsBackEarlierRecords(t *testing.T) {
+	guard, conn := pressureFixture()
+	guard.cfg.SoftPartsPerPartition = 5
+	base := fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", "a_base"}
+	shared := CandidatePart{TableID: "db.t", PartitionID: "p_a", PartName: "a_shared"}
+	conn.setInventory(base, fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", shared.PartName})
+	if _, err := guard.RestoreBatch(context.Background(), []PartsRestoreRecord{{
+		StatementID: "finalized-owner", Table: "db__t", PartitionIDs: []string{"p_a"},
+		Candidates: []CandidatePart{shared}, Finalized: true,
+	}}); err != nil {
+		t.Fatalf("restore owner: %v", err)
+	}
+
+	if restored, err := guard.RestoreBatch(context.Background(), []PartsRestoreRecord{
+		{StatementID: "applied-first", Table: "db__t", PartitionIDs: []string{"p_a"}},
+		{StatementID: "conflicts-second", Table: "db__t", PartitionIDs: []string{"p_a"}, Candidates: []CandidatePart{shared}},
+	}); err == nil {
+		t.Fatal("RestoreBatch accepted a candidate owned by finalized history")
+	} else if restored != nil {
+		t.Fatalf("failed RestoreBatch returned handles=%v", restored)
+	}
+	key := PartsKey{"hg_unsafe", "db__t", "p_a"}
+	if got := guard.reserved[key] + guard.committed[key]; got != 0 {
+		t.Fatalf("failed batch retained capacity debt=%d", got)
+	}
+	if got := len(guard.liveReservations); got != 0 {
+		t.Fatalf("failed batch retained %d live reservations", got)
+	}
+	if got := len(guard.candidateClaims[key]); got != 1 {
+		t.Fatalf("failed batch changed finalized owner claims=%d, want 1", got)
+	}
+}
+
+func TestPartsPressureGuard_RestoreBatchUsesOneSnapshotAndDropsObservedAbsentHistory(t *testing.T) {
+	guard, conn := pressureFixture(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 1})
+	records := make([]PartsRestoreRecord, 0, 128)
+	for idx := range 128 {
+		candidate := CandidatePart{
+			TableID: "db.t", PartitionID: "p_a", PartName: fmt.Sprintf("a_historical_%d", idx),
+		}
+		records = append(records, PartsRestoreRecord{
+			StatementID: fmt.Sprintf("stmt-%d", idx), Table: "db__t",
+			PartitionIDs: []string{"p_a"}, Candidates: []CandidatePart{candidate},
+			ObservedCandidates: []CandidatePart{candidate}, Finalized: true,
+		})
+	}
+
+	if _, err := guard.RestoreBatch(context.Background(), records); err != nil {
+		t.Fatalf("RestoreBatch: %v", err)
+	}
+	conn.mu.Lock()
+	queries := len(conn.queries)
+	conn.mu.Unlock()
+	if queries != 1 {
+		t.Fatalf("batch restore ran %d inventory queries, want exactly one", queries)
+	}
+	if got := len(guard.candidateClaims); got != 0 {
+		t.Fatalf("observed-then-absent history retained %d candidate claim groups", got)
+	}
+	if got := len(guard.liveReservations); got != 0 {
+		t.Fatalf("observed-then-absent history retained %d reservation handles", got)
+	}
+	if got := len(guard.committed) + len(guard.reserved); got != 0 {
+		t.Fatalf("observed-then-absent history retained capacity debt: committed=%v reserved=%v", guard.committed, guard.reserved)
+	}
+}
+
+func TestPartsPressureGuard_RestoreBatchFinalizedZeroCandidateIsNoop(t *testing.T) {
+	guard, conn := pressureFixture(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 1})
+	if restored, err := guard.RestoreBatch(context.Background(), []PartsRestoreRecord{{
+		StatementID: "stmt-empty-finalized", Table: "db__t", Finalized: true,
+	}}); err != nil {
+		t.Fatalf("RestoreBatch: %v", err)
+	} else if len(restored) != 0 {
+		t.Fatalf("finalized zero-candidate restore returned handles=%v", restored)
+	}
+	if got := len(conn.queries); got != 1 {
+		t.Fatalf("zero-candidate batch inventory queries=%d, want one", got)
+	}
+	if len(guard.liveReservations) != 0 || len(guard.candidateClaims) != 0 || len(guard.committed) != 0 || len(guard.reserved) != 0 {
+		t.Fatalf("zero-candidate finalized restore retained state: live=%d claims=%d committed=%v reserved=%v",
+			len(guard.liveReservations), len(guard.candidateClaims), guard.committed, guard.reserved)
+	}
+}
+
+func TestPartsPressureGuard_RestoreBatchChargesUnseenFinalizedCandidateUntilVisible(t *testing.T) {
+	guard, conn := pressureFixture()
+	guard.cfg.SoftPartsPerPartition = 2
+	base := fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", "a_base"}
+	shared := CandidatePart{TableID: "db.t", PartitionID: "p_a", PartName: "a_delayed"}
+	conn.setInventory(base)
+
+	if _, err := guard.RestoreBatch(context.Background(), []PartsRestoreRecord{{
+		StatementID: "stmt-finalized", Table: "db__t", PartitionIDs: []string{"p_a"},
+		Candidates: []CandidatePart{shared}, Finalized: true,
+	}}); err != nil {
+		t.Fatalf("RestoreBatch: %v", err)
+	}
+	key := PartsKey{"hg_unsafe", "db__t", "p_a"}
+	if got := guard.committed[key]; got != 1 {
+		t.Fatalf("unseen finalized candidate debt=%d, want 1", got)
+	}
+	if _, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"}); !errors.Is(err, ErrBackpressure) {
+		t.Fatalf("unseen finalized candidate did not reserve the last soft slot: %v", err)
+	}
+
+	conn.setInventory(base, fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", shared.PartName})
+	if _, err := guard.Refresh(context.Background()); err != nil {
+		t.Fatalf("visible Refresh: %v", err)
+	}
+	if got := guard.committed[key]; got != 0 {
+		t.Fatalf("visible finalized candidate left debt=%d", got)
+	}
+	if got := len(guard.candidateClaims[key]); got != 1 {
+		t.Fatalf("visible finalized candidate claims=%d want 1 until cleanup", got)
+	}
+	conn.setInventory(base)
+	if _, err := guard.Refresh(context.Background()); err != nil {
+		t.Fatalf("post-cleanup Refresh: %v", err)
+	}
+	if got := len(guard.candidateClaims[key]); got != 0 {
+		t.Fatalf("observed-then-absent finalized candidate retained %d claims", got)
+	}
+}
+
+func TestPartsPressureGuard_UnrelatedGrowthCannotCoverUnseenFinalizedCandidate(t *testing.T) {
+	guard, conn := pressureFixture()
+	guard.cfg.SoftPartsPerPartition = 3
+	base := fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", "a_base"}
+	delayed := CandidatePart{TableID: "db.t", PartitionID: "p_a", PartName: "a_delayed"}
+	conn.setInventory(base)
+	if _, err := guard.RestoreBatch(context.Background(), []PartsRestoreRecord{{
+		StatementID: "stmt-finalized", Table: "db__t", PartitionIDs: []string{"p_a"},
+		Candidates: []CandidatePart{delayed}, Finalized: true,
+	}}); err != nil {
+		t.Fatalf("RestoreBatch: %v", err)
+	}
+
+	// Another source's part becomes visible first. Aggregate N+1 growth cannot
+	// prove that this statement's exact delayed candidate exists, so its debt
+	// must remain and consume the final soft-limit slot.
+	conn.setInventory(base, fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", "a_unrelated"})
+	if _, err := guard.Refresh(context.Background()); err != nil {
+		t.Fatalf("unrelated Refresh: %v", err)
+	}
+	key := PartsKey{"hg_unsafe", "db__t", "p_a"}
+	if got := guard.committed[key]; got != 1 {
+		t.Fatalf("unrelated growth covered exact delayed debt=%d, want 1", got)
+	}
+	if _, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"}); !errors.Is(err, ErrBackpressure) {
+		t.Fatalf("unrelated growth reopened delayed candidate capacity: %v", err)
+	}
+
+	conn.setInventory(base,
+		fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", "a_unrelated"},
+		fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", delayed.PartName},
+	)
+	if _, err := guard.Refresh(context.Background()); err != nil {
+		t.Fatalf("exact visibility Refresh: %v", err)
+	}
+	if got := guard.committed[key]; got != 0 {
+		t.Fatalf("exact delayed visibility left debt=%d", got)
+	}
+}
+
+func TestPartsPressureGuard_ObservationPersistenceFailureFailsClosedAndRetries(t *testing.T) {
+	guard, conn := pressureFixture()
+	base := fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", "a_base"}
+	shared := CandidatePart{TableID: "db.t", PartitionID: "p_a", PartName: "a_delayed"}
+	conn.setInventory(base)
+	if _, err := guard.RestoreBatch(context.Background(), []PartsRestoreRecord{{
+		StatementID: "stmt-finalized", Table: "db__t", PartitionIDs: []string{"p_a"},
+		Candidates: []CandidatePart{shared}, Finalized: true,
+	}}); err != nil {
+		t.Fatalf("RestoreBatch: %v", err)
+	}
+
+	persistErr := errors.New("journal fsync failed")
+	guard.SetCandidateObservedHook(func(context.Context, string, CandidatePart) error { return persistErr })
+	conn.setInventory(base, fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", shared.PartName})
+	if _, err := guard.Refresh(context.Background()); !errors.Is(err, persistErr) {
+		t.Fatalf("Refresh error=%v want observation persistence cause", err)
+	}
+	if _, ok := guard.Snapshot(); ok {
+		t.Fatal("failed observation persistence left snapshot available")
+	}
+
+	var observedStatement string
+	guard.SetCandidateObservedHook(func(_ context.Context, statementID string, candidate CandidatePart) error {
+		observedStatement = statementID
+		if candidate.PartName != shared.PartName {
+			t.Fatalf("observed candidate=%+v want %+v", candidate, shared)
+		}
+		return nil
+	})
+	if _, err := guard.Refresh(context.Background()); err != nil {
+		t.Fatalf("retry Refresh: %v", err)
+	}
+	if observedStatement != "stmt-finalized" {
+		t.Fatalf("observed statement=%q want stmt-finalized", observedStatement)
+	}
+	if _, ok := guard.Snapshot(); !ok {
+		t.Fatal("successful observation retry did not recover snapshot")
+	}
+}
+
+func TestPartsPressureGuard_ObservationHookRequiresStatementAddressedReservation(t *testing.T) {
+	guard, _ := pressureFixture()
+	guard.SetCandidateObservedHook(func(context.Context, string, CandidatePart) error { return nil })
+	reservation, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("Reserve: %v", err)
+	}
+	defer reservation.Release()
+	if err := reservation.Commit(CandidatePart{TableID: "db.t", PartitionID: "p_a", PartName: "a_new"}); err == nil {
+		t.Fatal("exact candidate bound without statement-addressed reservation")
+	}
+}
+
+func TestPartsPressureGuard_RestoreBatchObservationFailureRollsBack(t *testing.T) {
+	guard, conn := pressureFixture()
+	base := fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", "a_base"}
+	candidate := CandidatePart{TableID: "db.t", PartitionID: "p_a", PartName: "a_restored"}
+	conn.setInventory(base, fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", candidate.PartName})
+	persistErr := errors.New("journal fsync failed")
+	guard.SetCandidateObservedHook(func(context.Context, string, CandidatePart) error { return persistErr })
+	if restored, err := guard.RestoreBatch(context.Background(), []PartsRestoreRecord{{
+		StatementID: "stmt-finalized", Table: "db__t", PartitionIDs: []string{"p_a"},
+		Candidates: []CandidatePart{candidate}, Finalized: true,
+	}}); !errors.Is(err, persistErr) {
+		t.Fatalf("RestoreBatch error=%v, want persistence cause", err)
+	} else if restored != nil {
+		t.Fatalf("failed RestoreBatch returned handles=%v", restored)
+	}
+	key := PartsKey{"hg_unsafe", "db__t", "p_a"}
+	if got := guard.reserved[key] + guard.committed[key]; got != 0 {
+		t.Fatalf("observation failure retained capacity debt=%d", got)
+	}
+	if len(guard.liveReservations) != 0 || len(guard.candidateClaims) != 0 || len(guard.pendingObserved) != 0 {
+		t.Fatalf("observation failure retained state: live=%d claims=%d pending=%d",
+			len(guard.liveReservations), len(guard.candidateClaims), len(guard.pendingObserved))
+	}
+	if _, ok := guard.Snapshot(); ok {
+		t.Fatal("observation failure left inventory available")
 	}
 }
 

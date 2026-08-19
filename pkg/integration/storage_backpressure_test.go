@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"testing"
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
@@ -43,14 +45,17 @@ func TestPartsPressureGuard_AgainstRealSystemParts(t *testing.T) {
 	safeDB := "hg_safe_bp_" + uniqueTable(t)
 	table := "db__t"
 	unpartitioned := "db__u"
+	restoreTable := "db__restore"
 	for _, query := range []string{
 		"CREATE DATABASE IF NOT EXISTS " + unsafeDB,
 		"CREATE DATABASE IF NOT EXISTS " + safeDB,
 		fmt.Sprintf("CREATE TABLE %s.%s (_hg_row_id FixedString(32), p String, v UInt64) ENGINE = MergeTree PARTITION BY p ORDER BY (p, _hg_row_id) SETTINGS max_bytes_to_merge_at_max_space_in_pool = 0", unsafeDB, table),
 		fmt.Sprintf("CREATE TABLE %s.%s (_hg_row_id FixedString(32), v UInt64) ENGINE = MergeTree ORDER BY (_hg_row_id) SETTINGS max_bytes_to_merge_at_max_space_in_pool = 0", unsafeDB, unpartitioned),
+		fmt.Sprintf("CREATE TABLE %s.%s (_hg_row_id FixedString(32), p String, v UInt64) ENGINE = MergeTree PARTITION BY p ORDER BY (p, _hg_row_id) SETTINGS max_bytes_to_merge_at_max_space_in_pool = 0", unsafeDB, restoreTable),
 		fmt.Sprintf("CREATE TABLE %s.%s (_hg_row_id FixedString(32), p String, v UInt64) ENGINE = MergeTree PARTITION BY p ORDER BY (p, _hg_row_id) SETTINGS max_bytes_to_merge_at_max_space_in_pool = 0", safeDB, table),
 		fmt.Sprintf("SYSTEM STOP MERGES %s.%s", unsafeDB, table),
 		fmt.Sprintf("SYSTEM STOP MERGES %s.%s", unsafeDB, unpartitioned),
+		fmt.Sprintf("SYSTEM STOP MERGES %s.%s", unsafeDB, restoreTable),
 	} {
 		mustExec(t, conn, query)
 	}
@@ -111,10 +116,10 @@ func TestPartsPressureGuard_AgainstRealSystemParts(t *testing.T) {
 	// Exact cleanup proof uses real system.parts names, not an aggregate count.
 	// A queued replacement whose baseline includes the cleaned name must converge
 	// after DROP PART and the replacement's later visibility.
-	activeNames := func(partition string) map[string]bool {
+	activeNames := func(target, partition string) map[string]bool {
 		rows, err := conn.Query(ctx,
 			"SELECT name FROM system.parts WHERE database = ? AND table = ? AND partition = ? AND active ORDER BY name",
-			unsafeDB, table, partition,
+			unsafeDB, target, partition,
 		)
 		if err != nil {
 			t.Fatalf("query active part names: %v", err)
@@ -133,13 +138,13 @@ func TestPartsPressureGuard_AgainstRealSystemParts(t *testing.T) {
 		}
 		return out
 	}
-	before := activeNames("p1")
+	before := activeNames(table, "p1")
 	cleaner, err := guard.Reserve(ctx, table, []string{"p_p1"})
 	if err != nil {
 		t.Fatalf("cleaner Reserve: %v", err)
 	}
 	mustExec(t, conn, fmt.Sprintf("INSERT INTO %s.%s VALUES (unhex('%064x'), 'p1', 10)", unsafeDB, table, 10))
-	afterInsert := activeNames("p1")
+	afterInsert := activeNames(table, "p1")
 	candidateName := ""
 	for name := range afterInsert {
 		if !before[name] {
@@ -177,4 +182,94 @@ func TestPartsPressureGuard_AgainstRealSystemParts(t *testing.T) {
 		t.Fatalf("stable soft-1 inventory retained phantom cleanup debt: %v", err)
 	}
 	probe.Release()
+
+	// Restart restoration uses one exact inventory and charges an ACK2
+	// candidate that has never been observed locally even while its detached
+	// part is absent. The debt clears only after that exact name is attached and
+	// observed; unrelated count growth cannot stand in for name visibility.
+	mustExec(t, conn, fmt.Sprintf("INSERT INTO %s.%s VALUES (unhex('%064x'), 'restore', 1)", unsafeDB, restoreTable, 101))
+	restoreBefore := activeNames(restoreTable, "restore")
+	mustExec(t, conn, fmt.Sprintf("INSERT INTO %s.%s VALUES (unhex('%064x'), 'restore', 2)", unsafeDB, restoreTable, 102))
+	restoreAfter := activeNames(restoreTable, "restore")
+	restoreCandidateName := ""
+	for name := range restoreAfter {
+		if !restoreBefore[name] {
+			restoreCandidateName = name
+			break
+		}
+	}
+	if restoreCandidateName == "" {
+		t.Fatalf("restore candidate not found: before=%v after=%v", restoreBefore, restoreAfter)
+	}
+	detachedPartName := restoreCandidateName
+	nameFields := strings.Split(detachedPartName, "_")
+	if len(nameFields) < 4 {
+		t.Fatalf("unexpected MergeTree part name %q", detachedPartName)
+	}
+	block, err := strconv.Atoi(nameFields[len(nameFields)-3])
+	if err != nil {
+		t.Fatalf("parse MergeTree part block from %q: %v", detachedPartName, err)
+	}
+	// ClickHouse 25.8 allocates the next block while preserving the partition
+	// prefix. The controlled table has block 1 active and block 2 detached; an
+	// unrelated insert takes block 3 before ATTACH makes the delayed exact name
+	// visible as block 4.
+	nameFields[len(nameFields)-3] = strconv.Itoa(block + 2)
+	nameFields[len(nameFields)-2] = strconv.Itoa(block + 2)
+	restoreCandidateName = strings.Join(nameFields, "_")
+	mustExec(t, conn, fmt.Sprintf("ALTER TABLE %s.%s DETACH PART '%s'", unsafeDB, restoreTable, detachedPartName))
+	restoreGuard := sicore.NewPartsPressureGuard(chMergeConn{conn: conn}, sicore.PartsPressureConfig{
+		UnsafeDatabase: unsafeDB, SafeDatabase: safeDB,
+		SoftPartsPerPartition: 3, HardPartsPerPartition: 5,
+	})
+	if _, err := restoreGuard.RestoreBatch(ctx, []sicore.PartsRestoreRecord{{
+		StatementID: "restored-finalized", Table: restoreTable, PartitionIDs: []string{"p_restore"},
+		Candidates: []sicore.CandidatePart{{
+			TableID: "db.restore", PartitionID: "p_restore", PartName: restoreCandidateName,
+		}},
+		Finalized: true,
+	}}); err != nil {
+		t.Fatalf("RestoreBatch against detached candidate: %v", err)
+	}
+	mustExec(t, conn, fmt.Sprintf("INSERT INTO %s.%s VALUES (unhex('%064x'), 'restore', 3)", unsafeDB, restoreTable, 103))
+	unrelatedNames := activeNames(restoreTable, "restore")
+	unrelatedName := ""
+	for name := range unrelatedNames {
+		if !restoreBefore[name] {
+			unrelatedName = name
+			break
+		}
+	}
+	if unrelatedName == "" {
+		t.Fatalf("unrelated restore part not found: base=%v active=%v", restoreBefore, unrelatedNames)
+	}
+	if _, err := restoreGuard.Reserve(ctx, restoreTable, []string{"p_restore"}); !errors.Is(err, sicore.ErrBackpressure) {
+		t.Fatalf("unrelated growth absorbed unseen exact debt: %v", err)
+	}
+	mustExec(t, conn, fmt.Sprintf("ALTER TABLE %s.%s ATTACH PART '%s'", unsafeDB, restoreTable, detachedPartName))
+	attachedNames := activeNames(restoreTable, "restore")
+	if !attachedNames[restoreCandidateName] {
+		t.Fatalf("attached candidate changed exact name: want=%s active=%v", restoreCandidateName, attachedNames)
+	}
+	if _, err := restoreGuard.Refresh(ctx); err != nil {
+		t.Fatalf("attached candidate Refresh: %v", err)
+	}
+	baseName := ""
+	for name := range restoreBefore {
+		baseName = name
+		break
+	}
+	if baseName == "" {
+		t.Fatal("restore base part not found")
+	}
+	mustExec(t, conn, fmt.Sprintf("ALTER TABLE %s.%s DROP PART '%s'", unsafeDB, restoreTable, baseName))
+	mustExec(t, conn, fmt.Sprintf("ALTER TABLE %s.%s DROP PART '%s'", unsafeDB, restoreTable, unrelatedName))
+	if _, err := restoreGuard.Refresh(ctx); err != nil {
+		t.Fatalf("post-base-cleanup Refresh: %v", err)
+	}
+	postRestoreProbe, err := restoreGuard.Reserve(ctx, restoreTable, []string{"p_restore"})
+	if err != nil {
+		t.Fatalf("exact attached visibility did not clear restored debt: %v", err)
+	}
+	postRestoreProbe.Release()
 }

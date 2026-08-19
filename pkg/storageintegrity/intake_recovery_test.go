@@ -63,6 +63,105 @@ func TestRecoverPendingResumesHolderWithoutClientRetry(t *testing.T) {
 	if got := atomic.LoadInt64(&prep.prepareCount); got != 1 {
 		t.Fatalf("prepare count = %d, want 1", got)
 	}
+	if len(persisted.Admission.Payload) != 0 {
+		t.Fatalf("terminal recovery retained %d payload bytes", len(persisted.Admission.Payload))
+	}
+	orch2.mu.Lock()
+	recoveredHistory := len(orch2.recoveredJournal)
+	orch2.mu.Unlock()
+	if recoveredHistory != 0 {
+		t.Fatalf("recovery retained %d full-journal records after runtime restore", recoveredHistory)
+	}
+}
+
+func TestRecoverPendingCompactsLegacyTerminalPayload(t *testing.T) {
+	ctx := context.Background()
+	journal, err := NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	adm := admissionFixture()
+	env, err := EnvelopeFromAdmission(adm)
+	if err != nil {
+		t.Fatalf("EnvelopeFromAdmission: %v", err)
+	}
+	prepared := boundSource()
+	prepared.StatementID = adm.StatementID
+	if err := journal.SaveIntakeRecord(ctx, IntakeJournalRecord{
+		StatementID: adm.StatementID, Source: "snode-A", FrontierOrdinal: 1,
+		Env: env, Admission: adm, Stage: LifecycleRCBound,
+		Prepared: prepared, HasPrepared: true,
+		TerminalResult: IntakeResult{
+			StatementID: adm.StatementID, Ack2: true, Lifecycle: LifecycleRCBound,
+			Prepared: prepared,
+		},
+		IsTerminal: true,
+	}); err != nil {
+		t.Fatalf("SaveIntakeRecord: %v", err)
+	}
+	orch := NewOrchestrator(
+		panicSubmitter{t: t}, newLookupRecordingPreparer(boundSource()),
+		OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
+	)
+	if err := orch.RecoverPending(ctx); err != nil {
+		t.Fatalf("RecoverPending: %v", err)
+	}
+	persisted, ok, err := journal.LoadIntakeRecord(ctx, adm.StatementID)
+	if err != nil || !ok {
+		t.Fatalf("LoadIntakeRecord=(%+v, %v, %v)", persisted, ok, err)
+	}
+	if len(persisted.Admission.Payload) != 0 {
+		t.Fatalf("legacy terminal retained %d payload bytes after recovery", len(persisted.Admission.Payload))
+	}
+}
+
+func TestRecoverPendingConcurrentCallsRestoreRuntimeStateOnce(t *testing.T) {
+	orch := NewOrchestrator(
+		panicSubmitter{t: t}, newLookupRecordingPreparer(boundSource()),
+		OrchestratorConfig{ExpectedSource: "snode-A"},
+	)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int64
+	orch.SetBeforeRecovery(func(context.Context, []IntakeJournalRecord) error {
+		if calls.Add(1) == 1 {
+			close(started)
+		}
+		<-release
+		return nil
+	})
+	errs := make(chan error, 2)
+	go func() { errs <- orch.RecoverPending(context.Background()) }()
+	<-started
+	secondLaunched := make(chan struct{})
+	go func() {
+		close(secondLaunched)
+		errs <- orch.RecoverPending(context.Background())
+	}()
+	<-secondLaunched
+	deadline := time.NewTimer(30 * time.Millisecond)
+	for calls.Load() < 2 {
+		select {
+		case <-deadline.C:
+			goto releaseRestore
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if !deadline.Stop() {
+		<-deadline.C
+	}
+
+releaseRestore:
+	close(release)
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatalf("RecoverPending: %v", err)
+		}
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("concurrent runtime restore calls=%d, want one", got)
+	}
 }
 
 func TestRecoverPendingRetriesRetryableOutcomeUntilTerminal(t *testing.T) {

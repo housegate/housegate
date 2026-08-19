@@ -33,13 +33,15 @@ func init() {
 }
 
 // StorageIntegrityPartsPressure is the ingress-facing admission port; the
-// supervisor and PartsPressureGuard both satisfy it. Restore reconstructs one
-// durable journal record before recovery: non-final records return a live
-// reservation, while finalized records install exact candidate ownership and
-// return no handle.
+// supervisor and PartsPressureGuard both satisfy it. RestoreBatch reconstructs
+// one durable journal batch from one inventory before recovery; non-final
+// records return live reservations, while finalized records install exact
+// ownership and delayed-visibility debt. Candidate observations are persisted
+// through the installed hook before a later absence may retire ownership.
 type StorageIntegrityPartsPressure interface {
-	Reserve(ctx context.Context, table string, partitionIDs []string) (sicore.PartsReservation, error)
-	Restore(ctx context.Context, table string, partitionIDs []string, candidates []sicore.CandidatePart, finalized bool) (sicore.PartsReservation, error)
+	ReserveStatement(ctx context.Context, statementID, table string, partitionIDs []string) (sicore.PartsReservation, error)
+	RestoreBatch(ctx context.Context, records []sicore.PartsRestoreRecord) (map[string]sicore.PartsReservation, error)
+	SetCandidateObservedHook(func(context.Context, string, sicore.CandidatePart) error)
 	Invalidate()
 }
 
@@ -109,12 +111,20 @@ func (s *StorageIntegrityPartsPressureSupervisor) Run(ctx context.Context) {
 	}
 }
 
+func (s *StorageIntegrityPartsPressureSupervisor) ReserveStatement(ctx context.Context, statementID, table string, partitionIDs []string) (sicore.PartsReservation, error) {
+	return s.guard.ReserveStatement(ctx, statementID, table, partitionIDs)
+}
+
 func (s *StorageIntegrityPartsPressureSupervisor) Reserve(ctx context.Context, table string, partitionIDs []string) (sicore.PartsReservation, error) {
 	return s.guard.Reserve(ctx, table, partitionIDs)
 }
 
-func (s *StorageIntegrityPartsPressureSupervisor) Restore(ctx context.Context, table string, partitionIDs []string, candidates []sicore.CandidatePart, finalized bool) (sicore.PartsReservation, error) {
-	return s.guard.Restore(ctx, table, partitionIDs, candidates, finalized)
+func (s *StorageIntegrityPartsPressureSupervisor) RestoreBatch(ctx context.Context, records []sicore.PartsRestoreRecord) (map[string]sicore.PartsReservation, error) {
+	return s.guard.RestoreBatch(ctx, records)
+}
+
+func (s *StorageIntegrityPartsPressureSupervisor) SetCandidateObservedHook(hook func(context.Context, string, sicore.CandidatePart) error) {
+	s.guard.SetCandidateObservedHook(hook)
 }
 
 func (s *StorageIntegrityPartsPressureSupervisor) Invalidate() { s.guard.Invalidate() }

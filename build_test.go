@@ -1173,13 +1173,22 @@ type orderedBuildPartsPressure struct {
 	order *preServeOrderRecorder
 }
 
-func (p *orderedBuildPartsPressure) Reserve(context.Context, string, []string) (sicore.PartsReservation, error) {
+func (p *orderedBuildPartsPressure) ReserveStatement(context.Context, string, string, []string) (sicore.PartsReservation, error) {
 	return noopPartsReservation{}, nil
 }
 
-func (p *orderedBuildPartsPressure) Restore(context.Context, string, []string, []sicore.CandidatePart, bool) (sicore.PartsReservation, error) {
+func (p *orderedBuildPartsPressure) RestoreBatch(_ context.Context, records []sicore.PartsRestoreRecord) (map[string]sicore.PartsReservation, error) {
 	p.order.add("pressure-restore")
-	return noopPartsReservation{}, nil
+	restored := make(map[string]sicore.PartsReservation, len(records))
+	for _, record := range records {
+		if !record.Finalized {
+			restored[record.StatementID] = noopPartsReservation{}
+		}
+	}
+	return restored, nil
+}
+
+func (p *orderedBuildPartsPressure) SetCandidateObservedHook(func(context.Context, string, sicore.CandidatePart) error) {
 }
 
 func (p *orderedBuildPartsPressure) Refresh(context.Context) error {
