@@ -118,6 +118,7 @@ func TestPermission_AllowsSystemReads(t *testing.T) {
 
 	for _, typ := range []sqlmeta.StatementType{
 		sqlmeta.StatementTypeSelect,
+		sqlmeta.StatementTypeDescribe,
 		sqlmeta.StatementTypeShowTables,
 		sqlmeta.StatementTypeShowCreateTable,
 		sqlmeta.StatementTypeExistsTable,
@@ -221,6 +222,7 @@ func TestPermission_ReadBitGatesSelect(t *testing.T) {
 	}{
 		// Read-bit-required → Bob (Read) passes.
 		{"select_ok", sqlmeta.StatementTypeSelect, true},
+		{"describe_ok", sqlmeta.StatementTypeDescribe, true},
 		{"use_ok", sqlmeta.StatementTypeUse, true},
 		{"show_tables_ok", sqlmeta.StatementTypeShowTables, true},
 

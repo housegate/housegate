@@ -48,7 +48,7 @@ func openDirectConn(t *testing.T) clickhouse.Conn {
 // then exercises:
 //
 //   - SELECT on perm_iso_a → succeeds (Read granted)
-//   - SELECT on perm_iso_b → rejected with permission error
+//   - SELECT and DESCRIBE on perm_iso_b → rejected with permission error
 //     (no Read granted; error surfaces before CH is contacted)
 func TestAuth_PermissionIsolationAcrossDatabases(t *testing.T) {
 	signer, err := auth.NewRelaySigner(authTestKey1)
@@ -82,6 +82,7 @@ func TestAuth_PermissionIsolationAcrossDatabases(t *testing.T) {
 	}}
 	mock.SetAccessedTables("SELECT * FROM "+dbA, tablesA)
 	mock.SetAccessedTables("SELECT * FROM "+dbB, tablesB)
+	mock.SetAccessedTables("DESCRIBE TABLE "+dbB, tablesB)
 
 	// Seed the physical databases and tables on CH directly (bypassing
 	// the proxy so commitgate DDL gating is not in our way).
@@ -142,5 +143,19 @@ func TestAuth_PermissionIsolationAcrossDatabases(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), dbB) {
 		t.Errorf("error = %q, want to contain database name %q", err.Error(), dbB)
+	}
+
+	// DESCRIBE is a read surface too. It must be denied by the same
+	// DbAuthRead gate instead of bypassing commitgate after the rewriter
+	// classifies it as StatementTypeDescribe.
+	rows, err := conn.Query(context.Background(),
+		fmt.Sprintf("DESCRIBE TABLE %s.%s", dbB, tbl),
+	)
+	if err == nil {
+		_ = rows.Close()
+		t.Fatalf("DESCRIBE on unpermitted database %s succeeded; expected rejection", dbB)
+	}
+	if !strings.Contains(err.Error(), dbB) {
+		t.Errorf("DESCRIBE error = %q, want to contain database name %q", err.Error(), dbB)
 	}
 }

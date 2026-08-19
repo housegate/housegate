@@ -31,8 +31,8 @@ import (
 //
 //   - StatementTypeUnspecified → always rejected. The rewriter failed
 //     to classify the statement; refusing to forward is fail-safe.
-//   - Read-bit-required: SELECT, SHOW TABLES, SHOW CREATE TABLE,
-//     EXISTS TABLE, USE.
+//   - Read-bit-required: SELECT, DESCRIBE, SHOW TABLES, SHOW CREATE
+//     TABLE, EXISTS TABLE, USE.
 //   - Write-bit-required: INSERT, UPDATE, DELETE, TRUNCATE TABLE,
 //     CREATE TABLE, DROP TABLE, CREATE VIEW, CREATE MATERIALIZED VIEW,
 //     DROP VIEW.
@@ -104,6 +104,7 @@ func NewPermissionCommitGateObserver(reg registry.Registry) *PermissionCommitGat
 // (always reject) and is not in this table.
 var permissionPolicy = map[sqlmeta.StatementType]registry.DbAuth{
 	sqlmeta.StatementTypeSelect:          registry.DbAuthRead,
+	sqlmeta.StatementTypeDescribe:        registry.DbAuthRead,
 	sqlmeta.StatementTypeShowTables:      registry.DbAuthRead,
 	sqlmeta.StatementTypeShowCreateTable: registry.DbAuthRead,
 	sqlmeta.StatementTypeExistsTable:     registry.DbAuthRead,
@@ -142,6 +143,7 @@ func (o *PermissionCommitGateObserver) SubscribedTypes() []sqlmeta.StatementType
 	return []sqlmeta.StatementType{
 		sqlmeta.StatementTypeUnspecified,
 		sqlmeta.StatementTypeSelect,
+		sqlmeta.StatementTypeDescribe,
 		sqlmeta.StatementTypeShowTables,
 		sqlmeta.StatementTypeShowCreateTable,
 		sqlmeta.StatementTypeExistsTable,

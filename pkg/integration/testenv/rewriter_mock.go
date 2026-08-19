@@ -225,6 +225,8 @@ func classify(sql string) pb.StatementType {
 	switch {
 	case strings.HasPrefix(upper, "SELECT"):
 		return pb.StatementType_STATEMENT_TYPE_SELECT
+	case strings.HasPrefix(upper, "DESCRIBE "), strings.HasPrefix(upper, "DESC "):
+		return pb.StatementType_STATEMENT_TYPE_DESCRIBE
 	case strings.HasPrefix(upper, "INSERT"):
 		return pb.StatementType_STATEMENT_TYPE_INSERT
 	case strings.HasPrefix(upper, "UPDATE"):
