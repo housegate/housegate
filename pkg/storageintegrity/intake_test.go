@@ -542,6 +542,15 @@ func TestOrchestrate_KnownUnwrittenTerminalAbortResumesAcrossRestart(t *testing.
 	if res.Submit.Category != OutcomeTerminalReject {
 		t.Fatalf("restart submit category=%v, want terminal reject", res.Submit.Category)
 	}
+	thirdPreparer := &recordingPreparer{}
+	third := NewOrchestrator(&recordingSubmitter{}, thirdPreparer, config)
+	replayed, err := third.Orchestrate(context.Background(), admissionFixture())
+	if err != nil || replayed.Lifecycle != LifecycleCleaned || !replayed.IsTerminal() || replayed.RetainsSourceFrontier() {
+		t.Fatalf("second-restart cleaned replay=(%+v, %v), want terminal without frontier", replayed, err)
+	}
+	if atomic.LoadInt64(&thirdPreparer.prepareCount) != 0 || atomic.LoadInt64(&thirdPreparer.abortAt) != 0 {
+		t.Fatal("second-restart cleaned replay repeated source work")
+	}
 }
 
 func TestOrchestrate_CleanupProofFailureRetainsPayloadLeaseUntilTerminal(t *testing.T) {
@@ -789,6 +798,10 @@ func TestAdmissionRequiresPrepare_PostRestartTerminalReplayIsFalse(t *testing.T)
 	}
 	if requires {
 		t.Fatal("post-restart terminal replay must not be gated as a new prepare")
+	}
+	replayed, err := restarted.Orchestrate(context.Background(), adm)
+	if err != nil || !replayed.IsTerminal() || replayed.RetainsSourceFrontier() {
+		t.Fatalf("post-restart terminal replay=%+v, %v, want terminal without frontier", replayed, err)
 	}
 }
 

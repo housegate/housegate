@@ -424,6 +424,30 @@ func TestPartsPressureGuard_DelayedVisibilityKeepsCommittedCapacityReserved(t *t
 	}
 }
 
+func TestPartsPressureGuard_UnboundCommittedSlotCannotBeCoveredByUnrelatedGrowth(t *testing.T) {
+	guard, conn := pressureFixture(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 1})
+	reservation, err := guard.Reserve(context.Background(), "db__t", []string{"p_a"})
+	if err != nil {
+		t.Fatalf("Reserve: %v", err)
+	}
+	reservation.CommitIndeterminate()
+
+	// A lost Prepare response has no exact candidate identity yet. Unrelated
+	// aggregate growth cannot prove that statement's write visible or surrender
+	// its source-frontier capacity slot to a queued statement.
+	conn.setRows(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 2})
+	if _, err := guard.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if competing, err := guard.ReserveStatement(context.Background(), "competing", "db__t", []string{"p_a"}); err == nil {
+		competing.Release()
+		t.Fatal("unrelated growth covered an unbound committed reservation")
+	} else if !errors.Is(err, ErrBackpressure) {
+		t.Fatalf("competing Reserve=%v, want ErrBackpressure", err)
+	}
+	reservation.Release()
+}
+
 func TestPartsPressureGuard_RefreshBeforeCommitAbsorbsOriginalReservation(t *testing.T) {
 	guard, conn := pressureFixture(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 2})
 	guard.cfg.SoftPartsPerPartition = 4
@@ -439,7 +463,9 @@ func TestPartsPressureGuard_RefreshBeforeCommitAbsorbsOriginalReservation(t *tes
 	if _, err := guard.Refresh(context.Background()); err != nil {
 		t.Fatalf("pre-commit Refresh: %v", err)
 	}
-	reservation.Commit()
+	if err := reservation.Commit(CandidatePart{TableID: "db.t", PartitionID: "p_a", PartName: "a_part_3"}); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
 	if _, err := guard.Refresh(context.Background()); err != nil {
 		t.Fatalf("stable post-commit Refresh: %v", err)
 	}

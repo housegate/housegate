@@ -330,6 +330,9 @@ func journalRecordFromIntakeRecord(rec *intakeRecord) IntakeJournalRecord {
 }
 
 func intakeRecordFromJournalRecord(rec IntakeJournalRecord) *intakeRecord {
+	terminalResult := cloneIntakeResult(rec.TerminalResult)
+	terminalResult.terminal = rec.IsTerminal
+	terminalResult.sourceFrontierRetained = false
 	return &intakeRecord{
 		journalVersion:         rec.JournalVersion,
 		statementID:            rec.StatementID,
@@ -347,7 +350,7 @@ func intakeRecordFromJournalRecord(rec IntakeJournalRecord) *intakeRecord {
 		prepareKnownUnwritten:  rec.PrepareKnownUnwritten,
 		stage:                  rec.Stage,
 		abortReason:            rec.AbortReason,
-		terminalRes:            cloneIntakeResult(rec.TerminalResult),
+		terminalRes:            terminalResult,
 		isTerminal:             rec.IsTerminal,
 	}
 }

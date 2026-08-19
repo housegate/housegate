@@ -152,6 +152,7 @@ func TestStorageIntegrityBackpressureMetricsRegisteredOnce(t *testing.T) {
 type noopPartsReservation struct{}
 
 func (noopPartsReservation) Commit(...sicore.CandidatePart) error { return nil }
+func (noopPartsReservation) CommitIndeterminate()                 {}
 func (noopPartsReservation) Release()                             {}
 func (noopPartsReservation) PrepareCleanupProof(context.Context, []sicore.CandidatePart) error {
 	return nil

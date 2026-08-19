@@ -87,12 +87,15 @@ type PartsPressureConfig struct {
 // PartsReservation holds one prospective part per touched partition. Callers
 // Commit once a source write may have happened. Release cancels the reservation
 // before or after Commit when a later source lookup proves no write occurred.
+// CommitIndeterminate is the no-result form: it keeps candidate-less debt from
+// being absorbed by unrelated aggregate growth until lookup or exact binding.
 // PrepareCleanupProof freezes exact candidates that are active immediately
 // before source cleanup. ReleaseCleaned then proves those names absent and
 // cancels the reservation. Finalize makes a committed reservation non-cancelable
 // after ACK2; its capacity remains charged until a snapshot covers the cohort.
 type PartsReservation interface {
 	Commit(...CandidatePart) error
+	CommitIndeterminate()
 	Release()
 	PrepareCleanupProof(context.Context, []CandidatePart) error
 	ReleaseCleaned(context.Context) error
@@ -642,6 +645,7 @@ type partsReservation struct {
 	cleanupProofPending bool
 	recovered           bool
 	observedCandidates  map[string]bool
+	unboundRetained     bool
 	state               reservationState // protected by guard.mu
 }
 
@@ -668,11 +672,33 @@ func (r *partsReservation) Commit(candidates ...CandidatePart) error {
 	r.guard.mu.Lock()
 	defer r.guard.mu.Unlock()
 	bindErr := r.bindCandidatePartsLocked(candidates)
+	if bindErr != nil {
+		r.unboundRetained = true
+	} else if len(candidates) > 0 {
+		r.unboundRetained = false
+	}
 	r.commitLocked()
 	for _, key := range r.keys {
 		r.guard.reconcileCommittedKeyLocked(key)
 	}
 	return bindErr
+}
+
+func (r *partsReservation) CommitIndeterminate() {
+	if r == nil || r.guard == nil {
+		return
+	}
+	r.guard.admissionMu.Lock()
+	defer r.guard.admissionMu.Unlock()
+	r.guard.commitMu.Lock()
+	defer r.guard.commitMu.Unlock()
+	r.guard.mu.Lock()
+	defer r.guard.mu.Unlock()
+	r.unboundRetained = true
+	r.commitLocked()
+	for _, key := range r.keys {
+		r.guard.reconcileCommittedKeyLocked(key)
+	}
 }
 
 func (r *partsReservation) Release() {
@@ -1158,7 +1184,7 @@ func (g *PartsPressureGuard) coveredReservationSlotsLocked(key PartsKey, slots [
 		}
 	}
 	exactCovered := 0
-	unresolvedExact := 0
+	unresolvedIdentity := 0
 	for _, slot := range slots {
 		reservation := slot.reservation
 		keyIndex := slot.keyIndex
@@ -1180,7 +1206,13 @@ func (g *PartsPressureGuard) coveredReservationSlotsLocked(key PartsKey, slots [
 			// growth cannot prove this slot visible. In particular, a finalized
 			// restart candidate may appear after another source's part; releasing
 			// its debt at the earlier N+1 would oversubscribe the partition.
-			unresolvedExact++
+			unresolvedIdentity++
+		} else if reservation.unboundRetained && reservation.state != reservationFinalized {
+			// A cancelable committed slot with no candidate identity represents an
+			// indeterminate Prepare response. Aggregate growth cannot prove that
+			// statement wrote the visible part: a later source lookup may prove it
+			// wrote nothing and reuse the same frontier-owned slot for retry.
+			unresolvedIdentity++
 		}
 	}
 	// Aggregate growth cannot identify an owner, while an exact candidate name
@@ -1190,7 +1222,7 @@ func (g *PartsPressureGuard) coveredReservationSlotsLocked(key PartsKey, slots [
 	if exactCovered > covered {
 		covered = exactCovered
 	}
-	if maximum := len(slots) - unresolvedExact; covered > maximum {
+	if maximum := len(slots) - unresolvedIdentity; covered > maximum {
 		covered = maximum
 	}
 	return covered

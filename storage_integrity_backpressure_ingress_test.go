@@ -115,6 +115,10 @@ func (r *fakePartsReservation) Commit(...sicore.CandidatePart) error {
 	return commitErr
 }
 
+func (r *fakePartsReservation) CommitIndeterminate() {
+	_ = r.Commit()
+}
+
 func (r *fakePartsReservation) PrepareCleanupProof(ctx context.Context, _ []sicore.CandidatePart) error {
 	r.pressure.mu.Lock()
 	r.pressure.prepareCleanupCtxErr = ctx.Err()
@@ -690,6 +694,25 @@ func TestIngress_IndeterminatePrepareNoWriteProofReleasesSoftLimitSlot(t *testin
 	}
 	if preparer.lookupCalls != 1 || preparer.prepareCalls != 2 {
 		t.Fatalf("lookup/prepare calls = %d/%d, want 1/2", preparer.lookupCalls, preparer.prepareCalls)
+	}
+}
+
+func TestIngress_IndeterminatePrepareNoWriteProofReusesSlotWithoutRegating(t *testing.T) {
+	pressure := &fakePartsPressure{}
+	ingress, _, _, preparer := newBackpressureIngress(t, pressure)
+	preparer.err = errors.New("prepare response lost")
+	if err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), bpAdmission()); err == nil || !strings.Contains(err.Error(), "prepare response lost") {
+		t.Fatalf("first admission=%v, want indeterminate prepare error", err)
+	}
+
+	beforeAllows := len(pressure.allowCalls)
+	preparer.err = nil
+	preparer.lookupFound = false
+	if err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), bpAdmission()); err != nil {
+		t.Fatalf("no-write-proven retry: %v", err)
+	}
+	if len(pressure.allowCalls) != beforeAllows || pressure.released != 0 {
+		t.Fatalf("no-write retry pressure allows/releases=%d/%d, want %d/0", len(pressure.allowCalls), pressure.released, beforeAllows)
 	}
 }
 
