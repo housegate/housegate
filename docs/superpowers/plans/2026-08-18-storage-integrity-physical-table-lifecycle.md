@@ -1464,7 +1464,7 @@ Modify `Register`: first statement `if err := r.ensureProtocolTables(ctx); err !
 - Create: `verifier/protocol_tables_test.go`
 
 **Interfaces:**
-- Produces (used by Tasks 8, 17): `verifier.Config.SafeDatabase`, `verifier.Config.PromoteDatabase` (defaults `hg_safe` / `hg_promote`), `verifier.Config.ProtocolTables ddl.Mode`, `verifier.Config.ProtocolTablesReconcile time.Duration`, `verifier.Config.KeeperShardID uint32`; `verifier.Deps.Conn clickhouse.Conn` (required when `ProtocolTables != ddl.ModeOff`, validated in `New`). As in SNode, reconcile uses the schema-root-validated startup `cfg.Tables` slice and only detects drift.
+- Produces (used by Task 8): `verifier.Config.SafeDatabase`, `verifier.Config.PromoteDatabase` (defaults `hg_safe` / `hg_promote`), `verifier.Config.ProtocolTables ddl.Mode`, `verifier.Config.ProtocolTablesReconcile time.Duration`, `verifier.Config.KeeperShardID uint32`; `verifier.Deps.Conn clickhouse.Conn` (required when `ProtocolTables != ddl.ModeOff`, validated in `New`). As in SNode, reconcile uses the schema-root-validated startup `cfg.Tables` slice and only detects drift.
 
 - [x] **Step 1: Write the failing test** `verifier/protocol_tables_test.go`
 
