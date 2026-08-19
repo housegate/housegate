@@ -91,6 +91,7 @@ go_test(
         "//pkg/chsession",
         "//pkg/cluster",
         "//pkg/config",
+        "//pkg/log",
         "//pkg/lthash",
         "//pkg/network",
         "//pkg/peer",
