@@ -4433,22 +4433,24 @@ Actual publication evidence (2026-08-19): implementation commits `06ae0f819541e9
 **Working directory:** `/Users/uranuswch/Dev/sentio_xyz/sentio-node`
 
 **Files:**
-- Modify: `go.mod`, `go.sum`, `config/config.go:393-425` (`validateStorageIntegrity`), `standalone/standalone.go:332-343` (`housegate.Options` literal), `README.md:56-59,94` (config sample + onboarding step 2), `MODULE.bazel` (only if `bazel mod tidy` changes it)
-- Test: `config/config_test.go:166-193`
+- Modify: `go.mod`, `go.sum`, `MODULE.bazel`, `README.md`, `config/config.go`, `config/config_test.go`, `standalone/standalone.go`, `standalone/BUILD.bazel`
+- Create: `standalone/storage_integrity_read_state.go`, `standalone/storage_integrity_read_state_test.go`, `standalone/storage_integrity_schemas.go`, `standalone/storage_integrity_schemas_test.go`
 
 **Interfaces:**
 - Consumes: housegate `Options.StorageIntegrityReadState`, `config.StorageIntegrityConfig.Tables`, `config.StorageIntegrityReadConfig`; arbiter-core `(*snode.Role).PromotedUnsafeParts`.
 
-- [ ] **Step 1: Bump pins**
+- [x] **Step 1: Bump pins**
 
 ```bash
-git checkout -b feat/storage-integrity-read-surface
-go get github.com/sentioxyz/arbiter-core@v0.1.3 github.com/housegate/housegate@<housegate-commit-or-tag-from-Task-21> && go mod tidy
+git checkout -b feature/storage-integrity-read-surface
+go get github.com/sentioxyz/arbiter-core@v0.3.1 github.com/housegate/housegate@v0.9.2
+go mod tidy
+./scripts/update-sentio-core.sh
 bazel mod tidy
 ```
-Expected: `go.mod` shows the new arbiter-core tag and the housegate pseudo-version/tag; transitive `rewriter-go v0.7.0` / `rewriter-proto v0.2.0`.
+Expected: `go.mod` shows arbiter-core v0.3.1, HouseGate v0.9.2, rewriter-go v0.7.1, and direct rewriter-proto v0.2.0; `MODULE.bazel` pins HouseGate merge `23759a271cac33b4e3b9de63a8f50a0a7fdca687`, exposes the proto repo needed by the runtime-construction test, and contains the sentio-core commit emitted by the repository-required update script.
 
-- [ ] **Step 2: Failing config test** — replace `TestConfigValidate_StorageIntegrityAssembly`'s base setup and the "table id not merge-guarded" subtest:
+- [x] **Step 2: Failing config test** — replace `TestConfigValidate_StorageIntegrityAssembly`'s base setup and the "table id not merge-guarded" subtest:
 
 ```go
 func TestConfigValidate_StorageIntegrityAssembly(t *testing.T) {
@@ -4468,12 +4470,18 @@ func TestConfigValidate_StorageIntegrityAssembly(t *testing.T) {
 		require.Contains(t, err.Error(), `storage_integrity.snode.table_ids[1] "ghost.t" is not listed in housegate.storage_integrity.tables`)
 	})
 
+	t.Run("housegate table list may be a superset", func(t *testing.T) {
+		cfg := base
+		cfg.Housegate.StorageIntegrity.Tables = append(cfg.Housegate.StorageIntegrity.Tables, "catalog.products")
+		require.NoError(t, cfg.Validate())
+	})
+
 	t.Run("legacy merge_guard.tables is rejected by housegate validation", func(t *testing.T) {
 		cfg := base
 		cfg.Housegate.StorageIntegrity.Runtime.MergeGuard.LegacyTables = []housegateConfig.StorageIntegrityRuntimeMergeTableConfig{{Database: "hg_unsafe", Table: "orders__t"}}
 		err := cfg.Validate()
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "was renamed to storage_integrity.tables")
+		require.Contains(t, err.Error(), "was renamed to housegate.storage_integrity.tables")
 	})
 }
 ```
@@ -4481,9 +4489,9 @@ func TestConfigValidate_StorageIntegrityAssembly(t *testing.T) {
 Run: `go test ./config -run TestConfigValidate_StorageIntegrityAssembly -count=1`
 Expected: compile error (`Tables` unknown / old `MergeGuard.Tables` field gone).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
-`config/config.go` `validateStorageIntegrity` — replace the `guarded` map + loop with:
+`config/config.go` `validateStorageIntegrity` — replace only the legacy `guarded` membership map/check while retaining the Plan C physical-name freeze inside the loop:
 
 ```go
 	declared := make(map[string]bool, len(c.Housegate.StorageIntegrity.Tables))
@@ -4491,6 +4499,12 @@ Expected: compile error (`Tables` unknown / old `MergeGuard.Tables` field gone).
 		declared[id] = true
 	}
 	for i, tableID := range c.StorageIntegrity.SNode.TableIDs {
+		if got, want := snode.CHTableName(tableID), sicore.PhysicalTableName(tableID); got != want {
+			return fmt.Errorf(
+				"storage_integrity.snode.table_ids[%d] %q: arbiter-core and housegate disagree on the physical table name (D2 freeze broken): %q != %q",
+				i, tableID, got, want,
+			)
+		}
 		if !declared[tableID] {
 			return fmt.Errorf(
 				"storage_integrity.snode.table_ids[%d] %q is not listed in housegate.storage_integrity.tables (the merge guard, ingress and read rewrite derive hg_unsafe/hg_safe.%s from it)",
@@ -4500,20 +4514,38 @@ Expected: compile error (`Tables` unknown / old `MergeGuard.Tables` field gone).
 	}
 ```
 
-`standalone/standalone.go` — the `housegate.Options{...}` literal gains:
+`standalone/standalone.go` loads the authoritative HouseGate schema superset once, then preserves the configured SNode subset for consensus while giving the complete set to the HouseGate runtime:
 
 ```go
-			StorageIntegrityReadState:           siReadState,
+		schemaSets, err := loadStorageIntegritySchemaSets(
+			ctx,
+			schemaLoader,
+			si.SNode.TableIDs,
+			cfg.Housegate.StorageIntegrity.Tables,
+		)
+		// snode.New consumes schemaSets.snode; HouseGate runtime consumes
+		// schemaSets.runtime; the ClickHouse cross-check consumes schemaSets.refs.
 ```
-with, just above the literal:
+
+The read-state port is nil-safe and ownership-aware. A partial journal must not advertise `unsafe_latest`: `newOwnedStorageIntegrityReadState` returns nil when any HouseGate-exposed table is outside the SNode-owned set, and its wrapper rejects an unknown table before delegating.
 
 ```go
 		var siReadState rewriter.StorageIntegrityReadState // nil-safe: an untyped nil *snode.Role must not become a non-nil interface
 		if siRole != nil {
-			siReadState = siRole
+			siReadState = newOwnedStorageIntegrityReadState(
+				siRole,
+				cfg.StorageIntegrity.SNode.TableIDs,
+				cfg.Housegate.StorageIntegrity.Tables,
+			)
 		}
+
+		hg, err := housegate.New(housegate.Options{
+			// ...existing options...
+			StorageIntegrityRuntime:   siRuntime, // TableSchemas: schemaSets.runtime
+			StorageIntegrityReadState: siReadState,
+		})
 ```
-(import `"github.com/housegate/housegate/pkg/rewriter"`.) `siRole` is declared at :206 and assigned inside `if cfg.StorageIntegrity.Enabled {…}`, so this compiles as-is.
+(import `"github.com/housegate/housegate/pkg/rewriter"`.) Real `housegate.New` tests lock safe-default superset startup, unsafe-default superset refusal, full runtime schema membership, and no delegation for unowned tables.
 
 `README.md` — config sample: replace the `merge_guard:` block with
 
@@ -4530,18 +4562,24 @@ with, just above the literal:
 ```
 and onboarding step 2: "Add its logical `<database>.<table>` id to BOTH `storage_integrity.snode.table_ids` and `housegate.storage_integrity.tables` (one list drives the merge guard, the ingress and the read rewrite)."
 
-- [ ] **Step 4: Run**
+- [x] **Step 4: Run**
 
-Run: `go build ./... && go test ./config ./standalone -count=1 && bazel build //... && bazel test //config:config_test //standalone:standalone_test --test_output=errors`
-Expected: `ok` / PASS (`storage_integrity_smoke_test.go` self-skips without `SENTIO_SI_E2E=1`). If `SENTIO_SI_E2E=1` infra is available: run it once and additionally issue `SELECT count() FROM <table> SETTINGS SQL_x_read_mode = 'unsafe_latest'` through the node's housegate right after the smoke INSERT — expected to return the inserted row count (the smoke's INSERT lands in `hg_unsafe`).
+Run: `go build ./...`; `go test ./... -count=1`; `go test -race ./... -count=1`; `go vet ./...`; `bazel run --workspace_status_command='bash workspace_status.sh' //:gazelle` (idempotent); `bazel mod graph --lockfile_mode=error`; `bazel build --workspace_status_command='bash workspace_status.sh' --lockfile_mode=error //...`; `bazel test --workspace_status_command='bash workspace_status.sh' --lockfile_mode=error //... --nocache_test_results --test_output=errors`.
+Expected: all PASS, including 14/14 Bazel test targets. (`storage_integrity_smoke_test.go` self-skips without `SENTIO_SI_E2E=1`; the final devnet publication and A→B rollout evidence is recorded below.)
 
-- [ ] **Step 5: Commit + PR**
+- [x] **Step 5: Commit + PR**
 
 ```bash
 git add go.mod go.sum MODULE.bazel config standalone README.md
-git commit -m "feat(storage-integrity): wire snode.Role as housegate read-state port; storage_integrity.tables cross-check"
-git push -u origin feat/storage-integrity-read-surface
+git commit -m "feat(storage-integrity): wire read-state surface"
+git push -u origin feature/storage-integrity-read-surface
 ```
+
+Actual publication and deployment evidence (2026-08-19): the implementation was rebased after sentio-node Plan C PR #177 onto `main` `ecdea1c10bab4ed46be454005869d09bc97849e3`, preserving PRs #176 and #177. It pins official HouseGate v0.9.2 (`23759a271cac33b4e3b9de63a8f50a0a7fdca687`) and arbiter-core v0.3.1 (`b669ccd26db001a20f78c3ef9d9f4f8cc2ddeb8d`), directly requires rewriter-proto v0.2.0, and transitively resolves rewriter-go v0.7.1. Repository-required `./scripts/update-sentio-core.sh` advanced the Bazel override to official sentio-core `d9474c3314eb0b1a360ba015bcc1281258b2e773`.
+
+Review-driven closure widened the literal implementation while preserving the frozen subset contract: HouseGate loads the authoritative full schema set, SNode manages only `storage_integrity.snode.table_ids`, and the read-state port is exposed only when SNode owns every HouseGate SI table. A safe-default superset starts successfully but per-query `unsafe_latest` fails closed; an unsafe-default superset is rejected at startup. The exact reviewed head was `de6c2baffc9a741d770655b7ab1d44435b8fe872`; both frozen-spec and standards/correctness reviews returned No findings. Evidence: `go build ./...`, `go test ./... -count=1`, `go test -race ./... -count=1`, `go vet ./...`, idempotent Gazelle, lockfile-strict Bazel build, and lockfile-strict full Bazel test (14/14) all passed.
+
+Ready PR [sentioxyz/sentio-node#178](https://github.com/sentioxyz/sentio-node/pull/178) had CI run `32240593374` green, no unresolved reviews/comments/threads, and squash-merged as `ba136ea0df4d91ddc546aca41c16d098edf9a540`. Release Devnet run `32240781289` succeeded from that exact merge. Immutable tag `devnet-ba136ea0df4d91ddc546aca41c16d098edf9a540` and mutable `devnet` both resolve to OCI index digest `sha256:698fe1686d20457f21983effbb8b3682f231124111697d6743335a3796f20099` (linux/amd64 manifest `sha256:cdd74e0cb8efa3aad5247a3531c03a5fb95483adddada89fa12dbaf0e136ed44`). The production `scripts/rollout-sentio-node-devnet.sh` completed A then B in context `sentio-sea`, namespace `sentio-network-devnet2`; both StatefulSets reached 1/1 Ready on new revisions, both sentio-node containers reported the new index digest, every container had restart count zero, and no related Warning event was present.
 
 ---
 
@@ -4549,7 +4587,7 @@ git push -u origin feat/storage-integrity-read-surface
 
 **1. Spec coverage** — see the map below; every spec section maps to at least one task. Gaps found and closed while reviewing: `SHOW TABLES` "nothing to do beyond a test" → golden case `si_show_tables_unchanged` (Task 3); GRANT/REVOKE on SI tables → Task 7/12; view bodies referencing SI tables (reject propagation) → Task 6 `dispatchView` and Task 11 `rewriteEmbeddedViewBody`; startup guard for `default_mode: unsafe_latest` without a port → Task 19.
 
-**2. Placeholder scan** — no TBD/TODO. Version tags that do not exist yet are stated with the rule that produces them (`v0.2.0` proto, `v0.7.0` rewriter-go, `v0.1.3` arbiter-core) plus the "use the printed tag" instruction; the housegate commit hash sentio-node pins is written as `<housegate-commit-or-tag-from-Task-21>` because it is produced by Task 21's merge. `$FFI` / `$RB` / `$WD` are shell variables defined in the same task/part.
+**2. Placeholder scan** — no TBD/TODO or unresolved release placeholder remains. Actual publication evidence records rewriter-proto v0.2.0, rewriter-go v0.7.1, rewriter-grpc v0.12.1, arbiter-core v0.3.1, and HouseGate v0.9.2. `$FFI` / `$RB` / `$WD` are shell variables defined in the same task/part.
 
 **3. Type consistency** — checked: `nameresolve.LookupStorageIntegrity(db, table, args) (*pb.StorageIntegrityArgs_Table, string, bool)` used identically in Tasks 4/6/7/8; `engine.ActionSubquery` + `TableDecision.Subquery` (Task 5) consumed by Task 6's `storageIntegrityDecision`; `splitPhysicalName` defined in Task 6 and used by Tasks 7/8; proto `StorageIntegrityContractVersion` flows request args → both engine response fields → rewriter-go and HouseGate `RewriteResult` → plugin exact-match check, while `StorageIntegrityCapableFactory` gates injected factories at startup (Tasks 1/3/4/10/11/17/18/19); `rewriter.StorageIntegrityReadState.PromotedUnsafeParts(tableID string) ([]string, error)` (Task 17) == `(*snode.Role).PromotedUnsafeParts` (Task 22) == the fakes in Tasks 17/19/20; `buildDynamicArgs(..., si *pb.StorageIntegrityArgs)` (Task 17) matches both call sites; `buildStorageIntegrityRuntimeConsumer(runtimeCfg, tables []string, opts)` (Task 16) matches `build.go` and `build_test.go`; `config.StorageIntegrityPhysicalTable` / `SplitStorageIntegrityTableID` (Task 16) used in Task 19; the SI reject message string is identical in Go (`nameresolve.StorageIntegrityWriteRejectMessage`), C++ (`storageIntegrityWriteRejectMessage`), housegate (`sentio.go` insert-lane reject) and the golden JSON.
 
