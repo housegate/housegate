@@ -7,6 +7,7 @@ go_test(
         "auth_test.go",
         "cancel_test.go",
         "chreplay_test.go",
+        "chreplay_time_test.go",
         "chscan_test.go",
         "chschema_test.go",
         "cli_test.go",

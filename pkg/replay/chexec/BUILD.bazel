@@ -19,7 +19,10 @@ go_library(
 
 go_test(
     name = "chexec_test",
-    srcs = ["materializer_format_test.go"],
+    srcs = [
+        "materializer_format_test.go",
+        "materializer_time_test.go",
+    ],
     embed = [":chexec"],
     deps = [
         "//pkg/lthash",

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 
@@ -204,13 +205,15 @@ func (m *Materializer) readBack(ctx context.Context, table string, schema payloa
 // supportedColumnType reports whether the executor can materialize and read back
 // a column of this ClickHouse type. It is the single source of truth shared by
 // createScratch (DDL validation) and newScanDest (read-back), kept in sync with
-// payloadexec.parseValue's wire-side whitelist so the two executors admit the
-// same schema set.
+// the Native decoder's admitted scalar matrix so the in-process and
+// ClickHouse-backed Native executors admit the same schema set.
 func supportedColumnType(typeName string) bool {
 	switch {
 	case typeName == "String", strings.HasPrefix(typeName, "FixedString("):
 		return true
 	case typeName == "Bool", typeName == "Float32", typeName == "Float64":
+		return true
+	case isTemporalColumnType(typeName):
 		return true
 	case typeName == "UInt8", typeName == "UInt16", typeName == "UInt32", typeName == "UInt64":
 		return true
@@ -219,6 +222,13 @@ func supportedColumnType(typeName string) bool {
 	default:
 		return false
 	}
+}
+
+func isTemporalColumnType(typeName string) bool {
+	return typeName == "Date" ||
+		typeName == "DateTime" ||
+		strings.HasPrefix(typeName, "DateTime(") ||
+		strings.HasPrefix(typeName, "DateTime64(")
 }
 
 // newScanDest returns a pointer of the Go type clickhouse-go scans this column
@@ -237,6 +247,8 @@ func newScanDest(typeName string) (any, error) {
 		return new(float32), nil
 	case typeName == "Float64":
 		return new(float64), nil
+	case isTemporalColumnType(typeName):
+		return new(time.Time), nil
 	case typeName == "UInt8":
 		return new(uint8), nil
 	case typeName == "UInt16":
@@ -272,6 +284,8 @@ func derefScan(p any) (any, error) {
 	case *float32:
 		return *v, nil
 	case *float64:
+		return *v, nil
+	case *time.Time:
 		return *v, nil
 	case *uint8:
 		return *v, nil
