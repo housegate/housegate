@@ -265,6 +265,18 @@ func TestIngressRejectsNonInsertWrites(t *testing.T) {
 	}
 }
 
+func TestIngressIgnoresDescribe(t *testing.T) {
+	p, signer := newSignedIngress(t)
+	sql := "DESCRIBE TABLE tenant.events"
+	qctx := signedQueryContext(t, 61, signer, sql, sql, sqlmeta.StatementTypeDescribe)
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("DESCRIBE must be a read-only pass-through for the ingress: %v", err)
+	}
+	if qctx.SuppressUpstreamExecution {
+		t.Fatal("DESCRIBE must not be intercepted")
+	}
+}
+
 func TestIngressRejectsTargetTableMismatch(t *testing.T) {
 	p, signer := newSignedIngress(t)
 	sql := "INSERT INTO tenant.other FORMAT Native"

@@ -47,11 +47,12 @@ func accessedTablesFromProto(in []*pb.AccessedTable) []sqlmeta.AccessedTable {
 	out := make([]sqlmeta.AccessedTable, len(in))
 	for i, t := range in {
 		out[i] = sqlmeta.AccessedTable{
-			OriginalDatabase: t.GetOriginalDatabase(),
-			OriginalTable:    t.GetOriginalTable(),
-			LogicalDatabase:  t.GetLogicalDatabase(),
-			PhysicalDatabase: t.GetPhysicalDatabase(),
-			IsRemote:         t.GetIsRemote(),
+			OriginalDatabase:   t.GetOriginalDatabase(),
+			OriginalTable:      t.GetOriginalTable(),
+			LogicalDatabase:    t.GetLogicalDatabase(),
+			PhysicalDatabase:   t.GetPhysicalDatabase(),
+			IsRemote:           t.GetIsRemote(),
+			IsStorageIntegrity: t.GetIsStorageIntegrity(),
 		}
 	}
 	return out

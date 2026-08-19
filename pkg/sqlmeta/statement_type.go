@@ -40,6 +40,7 @@ const (
 	StatementTypeCreateView             StatementType = 19
 	StatementTypeCreateMaterializedView StatementType = 20
 	StatementTypeDropView               StatementType = 21
+	StatementTypeDescribe               StatementType = 22
 )
 
 // String returns a short human label, matching the proto enum names
@@ -96,6 +97,8 @@ func (s StatementType) String() string {
 		return "CREATE_MATERIALIZED_VIEW"
 	case StatementTypeDropView:
 		return "DROP_VIEW"
+	case StatementTypeDescribe:
+		return "DESCRIBE"
 	default:
 		return "STATEMENT_TYPE(" + strconv.Itoa(int(s)) + ")"
 	}

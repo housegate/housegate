@@ -19,4 +19,7 @@ type AccessedTable struct {
 	LogicalDatabase  string
 	PhysicalDatabase string
 	IsRemote         bool
+	// IsStorageIntegrity is true iff the rewriter resolved this access to a
+	// storage-integrity table (Spec G); auth/usage keep using the logical names above.
+	IsStorageIntegrity bool
 }

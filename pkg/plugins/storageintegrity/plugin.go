@@ -688,7 +688,8 @@ func classifyStorageIntegrityKind(typ sqlmeta.StatementType, sql string) (Kind, 
 		return textKind, true, nil
 	case sqlmeta.StatementTypeSelect, sqlmeta.StatementTypeUse, sqlmeta.StatementTypeShowTables,
 		sqlmeta.StatementTypeShowCreateTable, sqlmeta.StatementTypeExistsTable,
-		sqlmeta.StatementTypeShowDatabases, sqlmeta.StatementTypeUnspecified:
+		sqlmeta.StatementTypeShowDatabases, sqlmeta.StatementTypeDescribe,
+		sqlmeta.StatementTypeUnspecified:
 		if textWrite || textUnsupported {
 			return "", false, fmt.Errorf("storage_integrity statement type mismatch: %s classified as %s", firstKeyword(sql), typ)
 		}

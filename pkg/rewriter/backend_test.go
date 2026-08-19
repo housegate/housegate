@@ -93,6 +93,26 @@ func TestSentioRewriter_SuccessPopulatesResult(t *testing.T) {
 	}
 }
 
+func TestSentioRewriter_AccessedTablesCarryStorageIntegrityFlag(t *testing.T) {
+	be := &fakeBackend{resp: &pb.RewriteSQLResponse{
+		Code:            pb.RewriteCode_Success,
+		SqlAfterRewrite: "SELECT 1",
+		StatementType:   pb.StatementType_STATEMENT_TYPE_SELECT,
+		OriginalAccessedTables: []*pb.AccessedTable{{
+			OriginalDatabase:   "db1",
+			OriginalTable:      "t",
+			IsStorageIntegrity: true,
+		}},
+	}}
+	res, err := newFakeFactory(be).NewRewriter(&fakeSession{}).Rewrite(context.Background(), "SELECT a FROM db1.t", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.AccessedTables) != 1 || !res.AccessedTables[0].IsStorageIntegrity {
+		t.Fatalf("AccessedTables = %+v, want IsStorageIntegrity=true", res.AccessedTables)
+	}
+}
+
 func TestSentioRewriter_UnsupportedForwardsOriginal(t *testing.T) {
 	be := &fakeBackend{resp: &pb.RewriteSQLResponse{
 		Code:    pb.RewriteCode_UnsupportedStatement,
