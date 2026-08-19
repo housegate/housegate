@@ -10,6 +10,16 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-18-storage-integrity-signed-envelope-v2-design.md` (Spec A) + roadmap `docs/superpowers/specs/2026-08-18-storage-integrity-v1-closure-roadmap.md` §4 decisions 1–4. Base specs: `docs/superpowers/specs/housegate-storage-integrity-insert/2026-07-16-housegate-storage-integrity-signed-ingress-design.md`, `.../2026-07-20-housegate-storage-integrity-p1e-runtime-e2e-design.md`.
 
+## Progress and Publication Evidence
+
+- 2026-08-18 arbiter-proto publication: PR [#3](https://github.com/sentioxyz/arbiter-proto/pull/3) merged the Task 1 contract as `bb1823f5b533b5a6b0d311777ac497a5fb6defca`; annotated tag object `6b437704bbc3c2b0ad4ea98c2af0fa9465b0b088` publishes `v0.5.0` and peels to that exact merge.
+- 2026-08-19 HouseGate publication: PR [#123](https://github.com/housegate/housegate/pull/123) merged Tasks 3–21 as `ce024686d83206a3f5d2aa8335ee7a6b59b58700` after Build, Integration, Release tooling, Cursor, AgentConnect, focused race, full Bazel, and real ClickHouse gates. Official release run [32205789351](https://github.com/housegate/housegate/actions/runs/32205789351) published non-draft/non-prerelease `v0.9.0`; annotated tag object `23d3860d2edb6d7a2b14c304aee75509ea7982a9` peels to that exact merge.
+- 2026-08-19 arbiter-core publication: PR [#12](https://github.com/sentioxyz/arbiter-core/pull/12) merged Tasks 22–25 as `5b941e770cfed59f7a7cea073b2746628fa53123` with pure-Go, Bazel, race, public-boundary, and real ClickHouse SNode/verifier gates green. Official Cut Release run [32209318351](https://github.com/sentioxyz/arbiter-core/actions/runs/32209318351) published non-draft/non-prerelease `v0.3.0`; annotated tag object `31f41d5a4cc645b42238acfe3b059b54d0d37120` peels to that exact merge. Later `v0.3.1` is the superseding downstream pin and preserves this surface.
+- 2026-08-19 Arbiter publication: PR [#15](https://github.com/sentioxyz/arbiter/pull/15) merged Tasks 27–31 as `202b3fcf7b3d30f98d8a1304b2f7c1c36bc17f96`; test, ClickHouse integration, anchor provenance, and Anvil CI gates passed. Official Cut Release run [32215740829](https://github.com/sentioxyz/arbiter/actions/runs/32215740829) published non-draft/non-prerelease `v0.2.0`; annotated tag object `b77cbb4168ecfee93a9547716d3b8add52250953` peels to that exact merge.
+- 2026-08-19 sentio-node consumer publication: PR [#176](https://github.com/sentioxyz/sentio-node/pull/176) merged Tasks 33–35 as `81d3163035b79151f115cf8aa12a8f7f09d4718a` after the full Go/Bazel, race, strict-lock, real HouseGate construction, Native packet, and adapter gates. Later storage-integrity consumer PRs #177 and #178 preserve that v2 surface and the final devnet rollout runs exact sentio-node image index `sha256:698fe1686d20457f21983effbb8b3682f231124111697d6743335a3796f20099` on both indexers.
+- 2026-08-19 documentation outcome: Spec A is `Implemented`; Spec B contains the signed-envelope, exact Native payload, deferred sample-block, `statements_root`, `GetL3Block`, snapshot-v2, and `network_id` reconciliation inputs required by Task 36. The operator-only `SENTIO_SI_E2E` environment was unavailable, so its compiled skip is not represented as a live Phase-B pass.
+- 2026-08-19 final agent acceptance: review of the released lane found auto-discovery incorrectly used the signer instead of a configured owner. HouseGate PR [#129](https://github.com/housegate/housegate/pull/129) fixed owner-first routing without changing JWS signing and merged as `5db617f8c9d5258e8632421546ce55f5040aaeb4`; official release run [32246403474](https://github.com/housegate/housegate/actions/runs/32246403474) published `v0.9.3`. The exact release binary passed checksum verification and live `SELECT 1`, `SELECT version()`, and an owner-authorized `devnet101` session through the permissioned upstream; the supplied private key was injected with terminal echo disabled and was neither persisted nor logged.
+
 ## Global Constraints
 
 - Hard cutover: envelope v2 replaces v1; arbiter-proto minor bump `v0.4.0 → v0.5.0`; arbiter FSM `snapshotVersion = 2`; no dual-read (spec §1, §7).
@@ -5640,7 +5650,7 @@ git diff --stat go.mod
 Run: `bazel build //... && bazel test //... --test_output=errors && bazel test //pkg/integration:integration_test //pkg/integration/testenv:testenv_test --test_output=errors`
 Expected: PASS; compare any integration failures against a clean `main` build before calling them regressions (CLAUDE.md rule).
 
-- [ ] **Step 4: Commit, merge, tag**
+- [x] **Step 4: Commit, merge, tag**
 
 ```bash
 git add CLAUDE.md go.mod go.sum MODULE.bazel.lock
@@ -5662,7 +5672,7 @@ Working directory: `/Users/uranuswch/Dev/sentio_xyz/arbiter-core`
 **Files:**
 - Modify: `go.mod`, `go.sum`, `MODULE.bazel` (housegate `bazel_dep` version + `git_override` commit), `MODULE.bazel.lock`, `README.md` (pin comment), root `BUILD.bazel` (gazelle resolve lines)
 
-- [ ] **Step 1: Bump pins**
+- [x] **Step 1: Bump pins**
 
 ```bash
 # housegate: tag when Task 21 is tagged, else the commit sha
@@ -5672,7 +5682,7 @@ GOWORK=off go mod tidy
 bazel mod deps --lockfile_mode=update >/dev/null
 ```
 
-- [ ] **Step 2: Teach gazelle the two new housegate imports**
+- [x] **Step 2: Teach gazelle the two new housegate imports**
 
 In root `BUILD.bazel` add next to the existing `# gazelle:resolve go github.com/housegate/housegate/pkg/replay/payloadexec ...` line:
 
@@ -5681,12 +5691,12 @@ In root `BUILD.bazel` add next to the existing `# gazelle:resolve go github.com/
 # gazelle:resolve go github.com/housegate/housegate/pkg/auth @housegate//pkg/auth
 ```
 
-- [ ] **Step 3: Build; observe the conformance gate now failing (expected until Task 23)**
+- [x] **Step 3: Build; observe the conformance gate now failing (expected until Task 23)**
 
 Run: `bazel run //:gazelle && bazel build //... && bazel test //conformance:conformance_test --test_output=errors`
 Expected: build OK; `TestArbiterMirrorsMatchProto` FAILS with `StatementEnvelope: proto field "envelope_version" has no Go mirror json tag` (and the six siblings) — this is Task 23's red test.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add go.mod go.sum MODULE.bazel MODULE.bazel.lock README.md BUILD.bazel
@@ -5704,7 +5714,7 @@ Working directory: `/Users/uranuswch/Dev/sentio_xyz/arbiter-core`
 **Interfaces:**
 - Produces: `arbiter.StatementEnvelope{...; EnvelopeVersion uint32 \`json:"envelope_version"\`; NetworkID string \`json:"network_id"\`; KeeperShardID uint32 \`json:"keeper_shard_id"\`; PayloadFormat string \`json:"payload_format"\`; ClientRevision uint32 \`json:"client_revision"\`; SchemaHash string \`json:"schema_hash"\`; RowIDProfileID string \`json:"row_id_profile_id"\`}`, `arbiter.DomainL3Statements = "arbiter-l3-statements-v1"`, `wire.EnvelopeFromPB/EnvelopeToPB` and `statementToPB/StatementFromPB` carry the new fields.
 
-- [ ] **Step 1: Write the failing round-trip test**
+- [x] **Step 1: Write the failing round-trip test**
 
 Append to `wire/convert_test.go` (create the file if it does not exist, package `wire`):
 
@@ -5742,12 +5752,12 @@ func TestEnvelopeV2RoundTripsEveryField(t *testing.T) {
 
 (imports: `reflect`, `testing`, `github.com/housegate/housegate/pkg/replay`, `github.com/sentioxyz/arbiter-core`.)
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `bazel run //:gazelle && bazel test //wire:wire_test //conformance:conformance_test --test_output=errors`
 Expected: build error `unknown field EnvelopeVersion` / conformance FAIL.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `types.go` — extend `StatementEnvelope`:
 
@@ -5834,12 +5844,12 @@ func EnvelopeToPB(v arbiter.StatementEnvelope) *pb.StatementEnvelopeV2 {
 
 `wire/dispatch.go` — add to `statementToPB`: `PayloadFormat: s.PayloadFormat, ClientRevision: s.ClientRevision, SchemaHash: s.SchemaHash,` and to `StatementFromPB`: `PayloadFormat: m.GetPayloadFormat(), ClientRevision: m.GetClientRevision(), SchemaHash: m.GetSchemaHash(),`.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `bazel test //wire:wire_test //conformance:conformance_test //:arbiter-core_test --test_output=errors`
 Expected: PASS (`TestArbiterMirrorsMatchProto`, `TestReplayWireTypesMirrorPkgReplay` green again).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add types.go domains.go wire conformance
@@ -5858,7 +5868,7 @@ Working directory: `/Users/uranuswch/Dev/sentio_xyz/arbiter-core`
 - Consumes: `nativepayload.PayloadFormat`, `nativepayload.Decode`, `payloadexec.TableSchemaHash`, `payloadexec.RowIDProfileID`.
 - Produces: `snode.ErrSchemaHashMismatch` (terminal reject class; sentio-node maps it to `sicore.OutcomeTerminalReject` in Task 33), `PrepareRequest.PayloadEncoding` must be `clickhouse-native-data-v1`.
 
-- [ ] **Step 1: Write the fixture + failing tests**
+- [x] **Step 1: Write the fixture + failing tests**
 
 Create `snode/native_fixture_test.go`:
 
@@ -5973,12 +5983,12 @@ func TestPrepareLocalStatement_RejectsSchemaHashMismatchBeforeDecode(t *testing.
 }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `bazel run //:gazelle && bazel test //snode:snode_test --test_output=errors` (non-docker part) and, with ClickHouse running (`docker run -d --rm --name arbiter-core-ch -p 9000:9000 -e CLICKHOUSE_SKIP_USER_SETUP=1 clickhouse/clickhouse-server:25.8`): `ARBITER_CH_INTEGRATION=1 CH_ADDR=127.0.0.1:9000 bazel test //snode:snode_test --test_env=ARBITER_CH_INTEGRATION --test_env=CH_ADDR --test_timeout=900 --test_output=errors`
 Expected: build error `undefined: ErrSchemaHashMismatch`; after adding only the sentinel, `TestPrepareLocalStatement_CleanPath` fails with `encoding "clickhouse-native-data-v1": snode: payload encoding not supported`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `snode/staged.go`: replace `const stagedCSVEncoding = "csv-with-names-v1"` with
 
@@ -6031,12 +6041,12 @@ and rewrite the section from `if req.PayloadEncoding != stagedCSVEncoding {` thr
 
 Add import `"github.com/housegate/housegate/pkg/replay/nativepayload"`.
 
-- [ ] **Step 4: Run tests (unit + docker)**
+- [x] **Step 4: Run tests (unit + docker)**
 
 Run: `bazel run //:gazelle && bazel test //snode:snode_test --test_output=errors && ARBITER_CH_INTEGRATION=1 CH_ADDR=127.0.0.1:9000 bazel test //snode:snode_test --test_env=ARBITER_CH_INTEGRATION --test_env=CH_ADDR --test_timeout=900 --test_output=errors`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add snode BUILD.bazel
@@ -6055,7 +6065,7 @@ Working directory: `/Users/uranuswch/Dev/sentio_xyz/arbiter-core`
 - Consumes: Task 6 `replay.Verifier.SchemaHashes` / `replay.SchemaHashSource`.
 - Produces: `NewReplayCore` sets `SchemaHashes` from `cfg.Tables` (`payloadexec.TableSchemaHash(cfg.NetworkID, t)`); the Native replay branch is `chexec` (housegate Task 7) — equivalence with the in-process executor is proven by housegate's docker test `TestReplayCHExecutorNativePayloadMatchesInProcessRoot` (added in Task 7 Step 5).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `verifier/backends_test.go`:
 
@@ -6079,12 +6089,12 @@ func TestNewReplayCore_WiresSchemaHashSourceFromTables(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `bazel test //verifier:verifier_test --test_filter=TestNewReplayCore_WiresSchemaHashSourceFromTables --test_output=errors`
 Expected: FAIL `verifier must verify signed schema_hash against its own tables`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `verifier/backends.go`:
 
@@ -6108,7 +6118,7 @@ func (s tableSchemaHashes) TableSchemaHash(tableID string) (string, bool) {
 
 and in `NewReplayCore` add `SchemaHashes: tableSchemaHashes{networkID: cfg.NetworkID, tables: cfg.Tables},` to the `&replay.Verifier{...}` literal.
 
-- [ ] **Step 4: Run, commit**
+- [x] **Step 4: Run, commit**
 
 Run: `bazel test //verifier:verifier_test --test_output=errors && bash scripts/check-public-boundary.sh && bazel build //... && bazel test --build_tests_only --@rules_go//go/config:race //... --test_output=errors`
 Expected: PASS.
@@ -6122,9 +6132,9 @@ git commit -m "feat(verifier): verify signed schema_hash against the verifier's 
 
 Working directory: `/Users/uranuswch/Dev/sentio_xyz/arbiter-core`
 
-- [ ] **Step 1: Merge to main, run the "Cut Release" GitHub workflow from `main`** (it validates the module, runs the ClickHouse-backed snode/verifier tests, and creates the annotated tag per the README calendar scheme). Record the resulting tag as `ARBITER_CORE_TAG` and `git rev-parse HEAD` as `ARBITER_CORE_SHA`.
+- [x] **Step 1: Merge to main, run the "Cut Release" GitHub workflow from `main`** (it validates the module, runs the ClickHouse-backed snode/verifier tests, and creates the annotated tag per the README calendar scheme). Record the resulting tag as `ARBITER_CORE_TAG` and `git rev-parse HEAD` as `ARBITER_CORE_SHA`.
 
-- [ ] **Step 2: Verify**
+- [x] **Step 2: Verify**
 
 Run: `cd /tmp && GOFLAGS=-mod=mod go list -m github.com/sentioxyz/arbiter-core@$ARBITER_CORE_TAG`
 Expected: prints the module@tag.
@@ -6140,7 +6150,7 @@ Working directory: `/Users/uranuswch/Dev/sentio_xyz/arbiter`
 **Files:**
 - Modify: `go.mod`, `go.sum`, `MODULE.bazel`, `MODULE.bazel.lock`, root `BUILD.bazel` (gazelle resolve for `pkg/auth`, `pkg/replay/nativepayload`)
 
-- [ ] **Step 1: Bump pins**
+- [x] **Step 1: Bump pins**
 
 ```bash
 bash scripts/update-arbiter-core.sh $ARBITER_CORE_TAG      # or the sha
@@ -6157,12 +6167,12 @@ Add to root `BUILD.bazel` next to the existing housegate resolve lines:
 # gazelle:resolve go github.com/housegate/housegate/pkg/replay/nativepayload @housegate//pkg/replay/nativepayload
 ```
 
-- [ ] **Step 2: Build**
+- [x] **Step 2: Build**
 
 Run: `bazel run //:gazelle && bazel build //... && bazel test //fsm:fsm_test //server:server_test //orchestrator:orchestrator_test --test_output=errors`
 Expected: build OK; fsm tests still pass (v1 admission still in place — the v2 cutover is Task 28).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add go.mod go.sum MODULE.bazel MODULE.bazel.lock BUILD.bazel
@@ -6182,7 +6192,7 @@ Working directory: `/Users/uranuswch/Dev/sentio_xyz/arbiter`
 - Consumes: `auth.JWSStatementPayloadV2`, `auth.StatementPurposeV2`, `auth.StatementPayloadV2Mismatch` (pure, wall-clock-free), arbiter-core v2 fields.
 - Produces: `fsm.Params.NetworkID string \`json:"network_id"\``; `verifyUserJWSV2(env arbiter.StatementEnvelope) error`; admission order: 1 shape → 1b v2 invariants (`envelope_version==2`, `network_id==Params.NetworkID`, `keeper_shard_id==0`, `payload_format=="clickhouse-native-data-v1"`, `row_id_profile_id=="housegate-row-id-v1"`, `settings_hash==EmptySettingsHash`, `schema_hash!=""`, `client_revision!=0`) → 2 kind → 3 `verifyUserJWSV2` → 5 dedup → 6 bind.
 
-- [ ] **Step 1: Copy the shared vectors and write the failing tests**
+- [x] **Step 1: Copy the shared vectors and write the failing tests**
 
 ```bash
 mkdir -p fsm/testdata
@@ -6425,12 +6435,12 @@ func TestAdmission_V2Invariants(t *testing.T) {
 
 Edit `fsm/fsm_test.go` `testParams()` to include `NetworkID: "testnet-fsm"`.
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `bazel run //:gazelle && bazel test //fsm:fsm_test --test_output=errors`
 Expected: build error `undefined: verifyUserJWSV2` / `unknown field NetworkID in Params`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `fsm/state.go` `Params`:
 
@@ -6571,12 +6581,12 @@ and replace step 3 with:
 
 (add `"fmt"` import if missing). `config/config.go`: add `NetworkID string \`yaml:"network_id"\`` to `GenesisConfig` and `req(c.Genesis.NetworkID, "genesis.network_id")` next to the other genesis requirements. `cmd/arbiter/services.go:40-44`: add `NetworkID: cfg.Genesis.NetworkID,` to the `fsm.Params{...}` literal. `integration/chpipeline/cluster_test.go`: add `NetworkID: testNetworkID` to the `config.GenesisConfig{...}` literal (~:132) and `NetworkID: cfg.Genesis.NetworkID` to the `fsm.Params{...}` literal in `startNode` (~:153). Update every `configs/*.yaml` example that has a `genesis:` block with `network_id: <value>` and `config/config_test.go` fixtures accordingly (grep `schema_snapshot_id`).
 
-- [ ] **Step 4: Run tests + tripwires**
+- [x] **Step 4: Run tests + tripwires**
 
 Run: `bazel test //fsm:fsm_test //config:config_test //server:server_test --test_output=errors && ! (bazel query 'deps(//fsm:fsm, 1)' | grep -q com_github_sentioxyz_arbiter_proto) && ! grep -rn 'time\.Now' fsm/`
 Expected: PASS; both tripwire commands succeed (no output).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add fsm config cmd integration/chpipeline/cluster_test.go configs
@@ -6594,7 +6604,7 @@ Working directory: `/Users/uranuswch/Dev/sentio_xyz/arbiter`
 **Interfaces:**
 - Produces: `L3BlockHeader.StatementsRoot string \`json:"statements_root"\`` (included in `ChainHash`), `applySealL3Block` computes it as `replay.CanonicalDigest(arbiter.DomainL3Statements, []arbiter.StatementEnvelope)` in statement_seq order; `snapshotVersion = 2` (v1 refused: `unsupported snapshot version 1`); `(*FSM).L3BlockView(seq uint64) (header L3BlockHeader, chainHash string, envelopes []arbiter.StatementEnvelope, ok bool)`; `BlockDispatchInfo.Statements[i].{PayloadFormat, ClientRevision, SchemaHash}` populated.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `fsm/seal_test.go`:
 
@@ -6714,12 +6724,12 @@ func TestBlockDispatchInfo_StatementsCarryV2Fields(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `bazel test //fsm:fsm_test --test_filter='TestSealL3Block_StatementsRoot|TestL3BlockHeader_ChainHashGoldenV2|TestSnapshotVersion2|TestBlockDispatchInfo_StatementsCarryV2Fields' --test_output=errors`
 Expected: build error `unknown field StatementsRoot` / `undefined: L3BlockView`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `fsm/state.go` — add to `L3BlockHeader` after `SpentIDsRootAfter`:
 
@@ -6778,12 +6788,12 @@ func (f *FSM) L3BlockView(seq uint64) (L3BlockHeader, string, []arbiter.Statemen
 }
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `bazel test //fsm:fsm_test --test_output=errors && ! grep -rn 'time\.Now' fsm/`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add fsm
@@ -6802,7 +6812,7 @@ Working directory: `/Users/uranuswch/Dev/sentio_xyz/arbiter`
 - Consumes: `pb.L3BlockRef`, `pb.L3Block`, `pb.L3BlockHeader` (Task 1), `wire.EnvelopeToPB`, `wire.AnchorRefToPB`, `fsm.L3BlockView` (Task 29).
 - Produces: `safeStateService.GetL3Block(ctx, *pb.L3BlockRef) (*pb.L3Block, error)` (`codes.NotFound` for unknown seq); `l3HeaderToPB(fsm.L3BlockHeader) *pb.L3BlockHeader`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `server/safestate_l3block_test.go` (mirror the fixture style of the existing `server/*_test.go` — the FSM under test is built with `fsm.New(fsm.Params{...})` and driven with `wire.Command`s; if a shared server-test harness exists (grep `newTestServer` / `safeStateService{s:` in `server/*_test.go`), use it):
 
@@ -6867,12 +6877,12 @@ func TestGetL3Block_ReturnsHeaderChainHashAndEnvelopes(t *testing.T) {
 
 Write `newSafeStateTestHarness` in the same file by copying how the existing safestate/ingress server tests construct `*Server` and `fsm.FSM` (grep `safeStateService{s:` and `fsm.New(` in `server/*_test.go`), sealing one block through `wire.Command{SubmitStatement: ...}` ×2 + `wire.Command{SealL3Block: ...}` (envelopes built like `fsm/admission_test.go`'s `validEnvelope` — copy that helper into the server test package as `serverValidEnvelope`).
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `bazel run //:gazelle && bazel test //server:server_test --test_filter='TestL3BlockHeaderMirrorsProto|TestGetL3Block' --test_output=errors`
 Expected: build error `svc.GetL3Block undefined`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Append to `server/safestate.go`:
 
@@ -6915,12 +6925,12 @@ func l3HeaderToPB(h fsm.L3BlockHeader) *pb.L3BlockHeader {
 
 (imports: `github.com/sentioxyz/arbiter-core/wire`, `github.com/sentioxyz/arbiter/fsm` if not already present.) `pb.RegisterSafeStateServer` in `server/server.go` picks the new method up through the interface — the build fails until it exists, which is the point.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `bazel test //server:server_test --test_output=errors`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add server
@@ -6938,7 +6948,7 @@ Working directory: `/Users/uranuswch/Dev/sentio_xyz/arbiter`
 **Interfaces:**
 - Consumes: `nativepayload.Decode`, `payloadexec.TableSchemaHash`, `payloadexec.RowIDProfileID`, `auth.JWSStatementPayloadV2`/`auth.StatementPurposeV2`; harness fields `h.key`, `h.account`, `h.schema`.
 
-- [ ] **Step 1: Write the fourth fraud class (failing) and adapt the harness**
+- [x] **Step 1: Write the fourth fraud class (failing) and adapt the harness**
 
 Create `integration/chpipeline/native_payload_test.go`:
 
@@ -7082,12 +7092,12 @@ func TestPipeline_FraudIngressSwapsPayloadAfterSigning(t *testing.T) {
 
 (imports in fraud_test.go: `context`, `strings`, `google.golang.org/grpc`, `pb`, `github.com/sentioxyz/arbiter-core/wire`.)
 
-- [ ] **Step 2: Run the docker suite**
+- [x] **Step 2: Run the docker suite**
 
 Run (ClickHouse on :9000 as in CI): `bazel run //:gazelle && ARBITER_CH_INTEGRATION=1 CH_ADDR=127.0.0.1:9000 bazel test //integration/chpipeline:chpipeline_test --test_env=ARBITER_CH_INTEGRATION --test_env=CH_ADDR --test_timeout=1800 --test_output=errors`
 Expected: PASS — the honest, three v1 fraud classes and the fourth class all green; before Task 28's admission changes the fourth class would have been ACCEPTED (that is the property this spec closes).
 
-- [ ] **Step 3: Full arbiter gate + commit**
+- [x] **Step 3: Full arbiter gate + commit**
 
 Run: `bazel build //... && bazel test --build_tests_only --@rules_go//go/config:race //... --test_output=errors && ./scripts/anchor-bindings.sh check`
 Expected: PASS.
@@ -7101,11 +7111,11 @@ git commit -m "test(chpipeline): native payloads, envelope v2, and the ingress-p
 
 Working directory: `/Users/uranuswch/Dev/sentio_xyz/arbiter`
 
-- [ ] **Step 1: Merge to main; run the arbiter release workflow / tag per the repo's calendar scheme** (`git tag --sort=-v:refname | head -1` shows the last tag; `scripts/next-version.sh` computes the next). Record `ARBITER_TAG`.
+- [x] **Step 1: Merge to main; run the arbiter release workflow / tag per the repo's calendar scheme** (`git tag --sort=-v:refname | head -1` shows the last tag; `scripts/next-version.sh` computes the next). Record `ARBITER_TAG`.
 
-- [ ] **Step 2: Deployment note** — devnet2 has no v1 snapshots (`snapshotVersion=2` refuses them); confirm with `configs/*.yaml` that `genesis.network_id` is set before rolling.
+- [x] **Step 2: Deployment note** — devnet2 has no v1 snapshots (`snapshotVersion=2` refuses them); confirm with `configs/*.yaml` that `genesis.network_id` is set before rolling.
 
-- [ ] **Step 3: Verify the tag resolves**
+- [x] **Step 3: Verify the tag resolves**
 
 Run: `cd /tmp && GOFLAGS=-mod=mod go list -m github.com/sentioxyz/arbiter@$ARBITER_TAG`
 Expected: prints the module@tag (sentio-node does not import arbiter — the tag is for the devnet2 rollout in Spec F).
@@ -7121,7 +7131,7 @@ Working directory: `/Users/uranuswch/Dev/sentio_xyz/sentio-node`
 **Files:**
 - Modify: `go.mod`, `go.sum`, `MODULE.bazel` (`bazel_dep(name="housegate", version=...)`, `git_override(module_name="housegate", commit=...)`, same pair for `arbiter_core`), `MODULE.bazel.lock`
 
-- [ ] **Step 1: Bump the Go pins**
+- [x] **Step 1: Bump the Go pins**
 
 ```bash
 go get github.com/housegate/housegate@v0.9.0 \
@@ -7130,7 +7140,7 @@ go get github.com/housegate/housegate@v0.9.0 \
 bazel run @rules_go//go -- mod tidy
 ```
 
-- [ ] **Step 2: Bump the Bzlmod pins by hand (no update script in this repo)**
+- [x] **Step 2: Bump the Bzlmod pins by hand (no update script in this repo)**
 
 In `MODULE.bazel` set `bazel_dep(name = "housegate", version = "0.9.0")` and, in the housegate `git_override`, `commit = "<full 40-hex sha of the v0.9.0 tag>"` with the `# Resolved Housegate v0.9.0; …` comment; do the same for `arbiter_core` (`version = "<go version without v>"`, `commit = "$ARBITER_CORE_SHA"`). Resolve the SHAs with:
 
@@ -7140,12 +7150,12 @@ GOWORK=off go list -m -f '{{.Version}} {{with .Origin}}{{.Hash}}{{end}}' github.
 bazel mod deps --lockfile_mode=update >/dev/null
 ```
 
-- [ ] **Step 3: Regenerate BUILD files; observe the expected breakage**
+- [x] **Step 3: Regenerate BUILD files; observe the expected breakage**
 
 Run: `./scripts/update-bazel-deps.sh && bazel build //... 2>&1 | grep -E 'NativeCSVPayloadMaterializer|StorageIntegrityPayloadMaterializer|TableSchemaResolver' | head`
 Expected: compile errors in `standalone/standalone.go` (`sicore.NativeCSVPayloadMaterializer undefined`, `unknown field StorageIntegrityPayloadMaterializer`) and `storageintegrityadapter/adapter.go` (`sicore.TableSchemaResolver undefined`) — fixed by Tasks 34–35.
 
-- [ ] **Step 4: Commit (WIP — the tree does not build until Task 35)**
+- [x] **Step 4: Commit (WIP — the tree does not build until Task 35)**
 
 ```bash
 git add go.mod go.sum MODULE.bazel MODULE.bazel.lock
@@ -7164,7 +7174,7 @@ Working directory: `/Users/uranuswch/Dev/sentio_xyz/sentio-node`
 - Consumes: `sicore.StatementEnvelope` v2 fields (Task 17), `sicore.ErrPrepareTerminalReject` (Task 17 Step 3b), `snode.ErrSchemaHashMismatch` (Task 24), `arbiter.StatementEnvelope` v2 fields (Task 23).
 - Produces: `toArbiterEnvelope` maps `EnvelopeVersion/NetworkID/KeeperShardID/PayloadFormat(=PayloadEncoding)/ClientRevision(=Revision)/SchemaHash/RowIDProfileID`; `PrepareLocalStatement` wraps `snode.ErrSchemaHashMismatch` and `snode.ErrEncodingNotSupported` so `errors.Is(err, sicore.ErrPrepareTerminalReject)` AND the original sentinel both hold.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Replace `validEnvelope` in `adapter_test.go`:
 
@@ -7221,12 +7231,12 @@ func TestPrepareErrorClassificationPreservesSentinels(t *testing.T) {
 
 Delete `TestSchemaResolver`.
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `bazel test //storageintegrityadapter:storageintegrityadapter_test --test_output=errors`
 Expected: build error `sicore.TableSchemaResolver undefined` (the resolver is deleted in Step 3); once that is removed, `TestPrepareFieldMappingBothDirections` FAILS on the v2 field assertions and `TestPrepareErrorClassificationPreservesSentinels` FAILS on the terminal classification.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `toArbiterEnvelope` returns:
 
@@ -7267,12 +7277,12 @@ Expected: build error `sicore.TableSchemaResolver undefined` (the resolver is de
 
 (add `"errors"` import.) Delete `type schemaResolver`, `NewSchemaResolver`, and `StorageIntegrityTableSchema`.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `./scripts/update-bazel-deps.sh && bazel test //storageintegrityadapter:storageintegrityadapter_test --test_output=errors`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add storageintegrityadapter
@@ -7291,7 +7301,7 @@ Working directory: `/Users/uranuswch/Dev/sentio_xyz/sentio-node`
 - Consumes: `housegate.Options` without `StorageIntegrityPayloadMaterializer` (Task 19), `Options.StorageIntegrityTableSchemas` (Task 16; not needed — `networkstate.FromStatecore` implements `registry.TableSchemas`), `auth.RelaySigner.SignStatementV2` (Task 4).
 - Produces: standalone passes `cfg.Housegate.StorageIntegrity.Ingress.NetworkID` (defaults to `storage_integrity.snode.network_id` when empty; mismatch is a config error); smoke test signs both tokens in-process from `SENTIO_SI_SIGNER_KEY_HEX` and needs `SENTIO_SI_SCHEMA_HASH`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `config/config_test.go` (mirror the file's existing SI config test builder — grep `StorageIntegrity.SNode.NetworkID` for the fixture used by other tests and reuse it as `validSIConfig(t)`):
 
@@ -7312,12 +7322,12 @@ func TestStorageIntegrityIngressNetworkIDDefaultsToSNodeNetworkID(t *testing.T) 
 
 Extend `TestRunStagedInsertWireOrdersExternalMarkerSamplePayloadAndTerminator` (the in-process fixture that already asserts `SQL_x_auth_token`): after `hasSetting(query.Settings, "SQL_x_auth_token", ...)` add an assertion that the Query carries `SQL_x_statement_token` whose payload (decoded with `auth.DecodeStatementV2Payload`) has `PayloadHash == replay.DigestBytes(<the payload bytes the fixture received>)`, `PayloadFormat == "clickhouse-native-data-v1"`, `ClientRevision == uint32(revision)`, `StatementID == request.StatementID`, `SchemaHash == request.SchemaHash`; the fixture must capture the received Data packet raw bytes (it already reads them to check ordering).
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `bazel test //config:config_test //standalone:standalone_test --test_filter='TestStorageIntegrityIngressNetworkIDDefaultsToSNodeNetworkID|TestRunStagedInsertWireOrdersExternalMarkerSamplePayloadAndTerminator' --test_output=errors`
 Expected: FAIL / build errors (`stagedInsertWireRequest` has no `SchemaHash`, standalone still references the removed materializer).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `config/config.go` — in `Config.Validate` where `c.StorageIntegrity.Validate(...)` runs (~:394), add before it:
 
@@ -7377,12 +7387,12 @@ and set `Settings: []chproto.Setting{{Key: "SQL_x_auth_token", Value: queryJWS, 
 - In `TestStorageIntegritySmoke` read `SENTIO_SI_SIGNER_KEY_HEX` (required), `SENTIO_SI_SCHEMA_HASH` (required), `SENTIO_SI_TARGET_TABLE_ID` (default `<database>.orders`), pass `NetworkID: cfg.StorageIntegrity.SNode.NetworkID`, and default `SENTIO_SI_INSERT_SQL` to `INSERT INTO orders (partition, value) FORMAT Native` (CSVWithNames in the SQL still works — the wire is Native — but Native is the documented form). Update the smoke's doc comment listing the env vars.
 - In `serveStagedInsertFixture` capture the raw payload packet bytes and assert the statement token as described in Step 1 (fixture signer key: `aaaa…aa` × 32; the fixture's `hasSetting("SQL_x_auth_token", "fixture-jws")` check becomes "present and non-empty").
 
-- [ ] **Step 4: Run tests + full build**
+- [x] **Step 4: Run tests + full build**
 
 Run: `./scripts/update-bazel-deps.sh && bazel build //... && bazel test //config:config_test //standalone:standalone_test //storageintegrityadapter:storageintegrityadapter_test --test_output=errors`
 Expected: PASS (`TestStorageIntegritySmoke` / `TestSchemaRegistryPhaseBSmoke` skip without `SENTIO_SI_E2E=1`).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add standalone config
@@ -7400,7 +7410,7 @@ Working directory: `/Users/uranuswch/Dev/housegate/housegate`
 **Files:**
 - Modify: `docs/superpowers/specs/2026-08-18-storage-integrity-signed-envelope-v2-design.md` (Status line), `docs/superpowers/specs/2026-08-18-storage-integrity-design-v4-reconciliation.md` (Spec B — add the items below to its checklist; do NOT rewrite the base design here)
 
-- [ ] **Step 1: Flip Spec A's status and list Spec B's inputs**
+- [x] **Step 1: Flip Spec A's status and list Spec B's inputs**
 
 In `2026-08-18-storage-integrity-signed-envelope-v2-design.md` change `**Status:** Proposed` to `**Status:** Implemented (plan docs/superpowers/plans/2026-08-18-storage-integrity-signed-envelope-v2.md)`.
 
@@ -7414,7 +7424,7 @@ In `2026-08-18-storage-integrity-design-v4-reconciliation.md` add under its base
 - housegate CLAUDE.md `pkg/storageintegrity` / `pkg/plugins/{storageintegrity,sistatement}` / `storage_integrity.{ingress,runtime,agent}` section (Task 21 wrote the bullets; B consolidates).
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add docs/superpowers/specs/2026-08-18-storage-integrity-signed-envelope-v2-design.md docs/superpowers/specs/2026-08-18-storage-integrity-design-v4-reconciliation.md
