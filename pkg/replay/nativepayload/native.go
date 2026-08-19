@@ -20,7 +20,7 @@ import (
 	"github.com/housegate/housegate/pkg/replay/payloadexec"
 )
 
-const PayloadFormat = "clickhouse-native-data-v1"
+const PayloadFormat = replay.PayloadFormatClickHouseNativeData
 
 var ErrUnsupported = errors.New("unsupported native payload")
 

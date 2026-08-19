@@ -120,7 +120,7 @@ func TestVerifierRequiresEnvelopeV2ReplayBindingsBeforeExecution(t *testing.T) {
 	snap := testSnapshot(t)
 	payload := []byte("name,balance\nalice,10\n")
 	base := testJob(snap, payload, DigestString("source-claim"))
-	base.Statements[0].PayloadFormat = "clickhouse-native-data-v1"
+	base.Statements[0].PayloadFormat = PayloadFormatClickHouseNativeData
 	base.Statements[0].ClientRevision = 54460
 	base.Statements[0].SchemaHash = DigestString("table-schema")
 
@@ -138,6 +138,16 @@ func TestVerifierRequiresEnvelopeV2ReplayBindingsBeforeExecution(t *testing.T) {
 			name: "payload format",
 			want: "payload_format is required",
 			edit: func(job *ReplayJob, _ *Verifier) { job.Statements[0].PayloadFormat = "" },
+		},
+		{
+			name: "legacy CSV payload format",
+			want: "payload_format must be clickhouse-native-data-v1",
+			edit: func(job *ReplayJob, _ *Verifier) { job.Statements[0].PayloadFormat = "csv-with-names-v1" },
+		},
+		{
+			name: "unknown payload format",
+			want: "payload_format must be clickhouse-native-data-v1",
+			edit: func(job *ReplayJob, _ *Verifier) { job.Statements[0].PayloadFormat = "future-v9" },
 		},
 		{
 			name: "client revision",
@@ -190,7 +200,7 @@ func TestStatementRootCommitsReplaySemanticPayloadFields(t *testing.T) {
 		PayloadHash:    DigestString("payload"),
 		PayloadLength:  7,
 		TargetTableID:  "db.table",
-		PayloadFormat:  "clickhouse-native-data-v1",
+		PayloadFormat:  PayloadFormatClickHouseNativeData,
 		ClientRevision: 54460,
 		SchemaHash:     DigestString("schema"),
 	}
@@ -408,7 +418,7 @@ func testSnapshot(t *testing.T) SafeSnapshotManifest {
 }
 
 func testJob(snap SafeSnapshotManifest, payload []byte, sourceRoot string) ReplayJob {
-	sql := "INSERT INTO balances FORMAT CSV"
+	sql := "INSERT INTO balances FORMAT Native"
 	return ReplayJob{
 		BlockSeq:           snap.SafeBlockSeq + 1,
 		PrevSafeSnapshotID: snap.SnapshotID,
@@ -428,7 +438,7 @@ func testJob(snap SafeSnapshotManifest, payload []byte, sourceRoot string) Repla
 				PayloadLength:  uint64(len(payload)),
 				TargetTableID:  "table-1",
 				UserJWS:        "jws",
-				PayloadFormat:  "csv-with-names-v1",
+				PayloadFormat:  PayloadFormatClickHouseNativeData,
 				ClientRevision: 54460,
 				SchemaHash:     DigestString("table-schema"),
 			},

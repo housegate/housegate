@@ -271,6 +271,9 @@ func validateJobShape(job ReplayJob) error {
 		if st.PayloadFormat == "" {
 			return fmt.Errorf("statement %d: payload_format is required", i)
 		}
+		if st.PayloadFormat != PayloadFormatClickHouseNativeData {
+			return fmt.Errorf("statement %d: payload_format must be %s", i, PayloadFormatClickHouseNativeData)
+		}
 		if st.ClientRevision == 0 {
 			return fmt.Errorf("statement %d: client_revision is required", i)
 		}

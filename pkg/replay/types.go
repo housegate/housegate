@@ -5,6 +5,11 @@ import (
 	"sort"
 )
 
+// PayloadFormatClickHouseNativeData is the only production payload format
+// accepted by the envelope-v2 verifier. Legacy/test decoders live below that
+// verifier boundary and must not be able to produce signed receipts.
+const PayloadFormatClickHouseNativeData = "clickhouse-native-data-v1"
+
 // SafeSnapshotManifest is the replay verifier's immutable view of a previous
 // safe state. It is a manifest of stable table/part commitments, not a
 // ClickHouse filesystem backup.

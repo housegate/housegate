@@ -93,6 +93,14 @@ func chReplayJob(snap replay.SafeSnapshotManifest, tableID, statementID, payload
 	}
 }
 
+func nativeCHReplayJob(snap replay.SafeSnapshotManifest, tableID, statementID, payloadRef string, payload []byte, sourceClaim string) replay.ReplayJob {
+	job := chReplayJob(snap, tableID, statementID, payloadRef, payload, sourceClaim)
+	job.Statements[0].SQL = "INSERT INTO " + tableID + " FORMAT Native"
+	job.Statements[0].SQLHash = replay.DigestString(job.Statements[0].SQL)
+	job.Statements[0].PayloadFormat = replay.PayloadFormatClickHouseNativeData
+	return job
+}
+
 type chReplaySchemaHashes map[string]string
 
 func (s chReplaySchemaHashes) TableSchemaHash(tableID string) (string, bool) {
@@ -112,6 +120,50 @@ func execRoot(t *testing.T, exec *payloadexec.Executor, snap replay.SafeSnapshot
 		t.Fatalf("probe ApplyContext: %v", err)
 	}
 	return res.ComputedStateRoot
+}
+
+func nativeExecRoot(t *testing.T, exec *payloadexec.Executor, snap replay.SafeSnapshotManifest, tableID, statementID string, payload []byte) string {
+	t.Helper()
+	job := nativeCHReplayJob(snap, tableID, statementID, "probe", payload, "")
+	prepared := []replay.PreparedStatement{{Statement: job.Statements[0], Payload: payload}}
+	_, res, err := exec.ApplyContext(context.Background(), snap, job, prepared)
+	if err != nil {
+		t.Fatalf("Native probe ApplyContext: %v", err)
+	}
+	return res.ComputedStateRoot
+}
+
+type chReplayRow struct {
+	userID  string
+	balance uint64
+	score   int32
+	ratio   float64
+}
+
+func nativeCHReplayPayload(t *testing.T, rows ...chReplayRow) []byte {
+	t.Helper()
+	users := proto.ColStr{}
+	balances := proto.ColUInt64{}
+	scores := proto.ColInt32{}
+	ratios := proto.ColFloat64{}
+	for _, row := range rows {
+		users.Append(row.userID)
+		balances.Append(row.balance)
+		scores.Append(row.score)
+		ratios.Append(row.ratio)
+	}
+	var buf proto.Buffer
+	buf.PutUVarInt(uint64(proto.ClientCodeData))
+	buf.PutString("")
+	if err := (proto.Block{Rows: len(rows), Columns: 4}).EncodeBlock(&buf, 54460, proto.Input{
+		{Name: "user_id", Data: &users},
+		{Name: "balance", Data: &balances},
+		{Name: "score", Data: &scores},
+		{Name: "ratio", Data: &ratios},
+	}); err != nil {
+		t.Fatalf("encode Native replay payload: %v", err)
+	}
+	return append([]byte(nil), buf.Buf...)
 }
 
 func chReplaySigner(t *testing.T) *payloadexec.Ed25519Signer {
@@ -173,11 +225,14 @@ func newCHReplayHarness(t *testing.T) (*payloadexec.Executor, replay.SafeSnapsho
 func TestReplayCHExecutorHonestMatch(t *testing.T) {
 	exec, gen, _, payloads, signer, verifier, tableID := newCHReplayHarness(t)
 
-	payload := []byte("user_id,balance,score,ratio\n0x123,10,-5,1.5\n0xabc,250,99,-0.25\n")
+	payload := nativeCHReplayPayload(t,
+		chReplayRow{userID: "0x123", balance: 10, score: -5, ratio: 1.5},
+		chReplayRow{userID: "0xabc", balance: 250, score: 99, ratio: -0.25},
+	)
 	payloads.Put("p1", payload)
-	claim := execRoot(t, exec, gen, tableID, "stmt-1", payload)
+	claim := nativeExecRoot(t, exec, gen, tableID, "stmt-1", payload)
 
-	att, err := verifier.Verify(context.Background(), chReplayJob(gen, tableID, "stmt-1", "p1", payload, claim))
+	att, err := verifier.Verify(context.Background(), nativeCHReplayJob(gen, tableID, "stmt-1", "p1", payload, claim))
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -197,17 +252,17 @@ func TestReplayCHExecutorHonestMatch(t *testing.T) {
 func TestReplayCHExecutorFraudMismatch(t *testing.T) {
 	exec, gen, _, payloads, signer, verifier, tableID := newCHReplayHarness(t)
 
-	signed := []byte("user_id,balance,score,ratio\n0x123,10,-5,1.5\n")
-	tampered := []byte("user_id,balance,score,ratio\n0x123,0,-5,1.5\n")
+	signed := nativeCHReplayPayload(t, chReplayRow{userID: "0x123", balance: 10, score: -5, ratio: 1.5})
+	tampered := nativeCHReplayPayload(t, chReplayRow{userID: "0x123", balance: 0, score: -5, ratio: 1.5})
 	payloads.Put("p1", signed)
 
-	truth := execRoot(t, exec, gen, tableID, "stmt-1", signed)
-	fraud := execRoot(t, exec, gen, tableID, "stmt-1", tampered)
+	truth := nativeExecRoot(t, exec, gen, tableID, "stmt-1", signed)
+	fraud := nativeExecRoot(t, exec, gen, tableID, "stmt-1", tampered)
 	if truth == fraud {
 		t.Fatal("test setup broken: signed and tampered payloads hash equal")
 	}
 
-	att, err := verifier.Verify(context.Background(), chReplayJob(gen, tableID, "stmt-1", "p1", signed, fraud))
+	att, err := verifier.Verify(context.Background(), nativeCHReplayJob(gen, tableID, "stmt-1", "p1", signed, fraud))
 	if err != nil {
 		t.Fatalf("Verify must sign a mismatch, not error: %v", err)
 	}
