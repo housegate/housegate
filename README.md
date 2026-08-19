@@ -184,10 +184,7 @@ The rewriter is the canonical owner of physical/logical database mapping. Every 
 
 ### `storage_integrity` — Protected Table Read Policy
 
-`storage_integrity.tables` is the shared logical membership list. HouseGate
-derives both guarded physical homes from each `<database>.<table>` id; operators
-must not configure `runtime.merge_guard.tables` separately. An empty
-`read.default_mode` has the same safe behavior as `safe`.
+`storage_integrity.tables` is the shared logical membership list. HouseGate derives both guarded physical homes from each `<database>.<table>` id; operators must not configure `runtime.merge_guard.tables` separately. An empty `read.default_mode` has the same safe behavior as `safe`.
 
 - `safe` reads only `hg_safe.<database>__<table>`.
 - `unsafe_latest` unions safe rows with staged `hg_unsafe` rows, excluding unsafe parts already copied into safe but not yet cleanup-acknowledged. It requires a co-located promotion journal through `Options.StorageIntegrityReadState`; HouseGate never silently degrades it to `safe`.
