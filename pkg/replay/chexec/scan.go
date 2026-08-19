@@ -116,7 +116,7 @@ func scanPartRow(rows rowScanner, schema payloadexec.TableSchema) (string, *ltha
 
 	values := make([]any, len(schema.Columns))
 	for i := range schema.Columns {
-		value, err := derefScan(holders[i])
+		value, err := derefScan(schema.Columns[i].Type, holders[i])
 		if err != nil {
 			return "", nil, err
 		}

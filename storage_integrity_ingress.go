@@ -127,9 +127,6 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 			storageIntegrityMaterializerName(actualMaterializer),
 		)
 	}
-	if i.matKind == sicore.MaterializerCSV && rec.Revision == 0 {
-		return fmt.Errorf("storage_integrity ingress: CSV materialization requires a non-zero client protocol revision")
-	}
 	if i.payloadWriter != nil {
 		put, err := i.payloadWriter.PutPayload(ctx, rec.Payload, rec.PayloadHash, rec.PayloadLength)
 		if err != nil {
@@ -185,6 +182,12 @@ func AdmissionRecordFromPlugin(adm siplugin.Admission) sicore.AdmissionRecord {
 		PayloadHash:     replay.DigestBytes(adm.Payload.Bytes),
 		PayloadEncoding: encoding,
 		Revision:        adm.Payload.Revision,
+		EnvelopeVersion: adm.EnvelopeVersion,
+		NetworkID:       adm.NetworkID,
+		KeeperShardID:   adm.KeeperShardID,
+		SettingsHash:    adm.SettingsHash,
+		SchemaHash:      adm.SchemaHash,
+		RowIDProfileID:  adm.RowIDProfileID,
 	}
 }
 

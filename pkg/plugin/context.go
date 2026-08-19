@@ -123,5 +123,26 @@ type QueryContext struct {
 	// path after input capture, such as storage-integrity staged INSERT.
 	SuppressUpstreamExecution bool
 
+	// DeferredInsert, when set by a QueryPlugin during OnQuery, switches Relay
+	// into deferred-INSERT mode for this query (spec 2026-08-18 signed
+	// envelope v2 §5.2): Relay answers the INSERT sample block itself from
+	// SampleColumns, buffers every client Data packet (bounded by
+	// MaxPayloadBytes) while running the strict data hooks, runs the strict
+	// input-complete hook, and only then forwards Query + buffered Data +
+	// terminator upstream — so a plugin can sign the payload before the
+	// upstream ever sees the Query. Mutually exclusive with
+	// SuppressUpstreamExecution; Relay rejects a query that sets both.
+	DeferredInsert *DeferredInsertPlan
+
 	Values map[string]any
+}
+
+// DeferredInsertPlan tells Relay how to run the deferred-INSERT protocol.
+type DeferredInsertPlan struct {
+	// SampleColumns is the 0-row sample block Relay writes to the client in
+	// place of the upstream's (name + exact ClickHouse type, table order).
+	SampleColumns []chproto.SampleColumn
+	// MaxPayloadBytes bounds the buffered on-wire payload; exceeding it
+	// aborts the query with an Exception before any byte reaches upstream.
+	MaxPayloadBytes uint64
 }

@@ -3,9 +3,11 @@ package chproto
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"sync/atomic"
+	"time"
 
 	"github.com/ClickHouse/ch-go/compress"
 	"github.com/ClickHouse/ch-go/proto"
@@ -154,6 +156,37 @@ func (c *Codec) SetCompression(comp proto.Compression) { c.compression.Store(int
 // Compression returns the current compression mode, or CompressionDisabled if
 // SetCompression has not been called.
 func (c *Codec) Compression() proto.Compression { return proto.Compression(c.compression.Load()) }
+
+// WaitForPacketStart waits up to timeout for at least one unread wire byte
+// without consuming it. Relay uses it for liveness polling while an upstream
+// terminal is pending; once a byte is available, the normal unbounded packet
+// decoder owns the complete (possibly fragmented) packet. This avoids leaving
+// the codec half-consumed when a bounded poll expires.
+func (c *Codec) WaitForPacketStart(timeout time.Duration) (bool, error) {
+	deadliner, ok := c.conn.(interface{ SetReadDeadline(time.Time) error })
+	if !ok {
+		return false, errors.New("underlying connection does not support read deadlines")
+	}
+	if timeout <= 0 {
+		return false, fmt.Errorf("packet-start timeout must be positive, got %s", timeout)
+	}
+	if err := deadliner.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+		return false, fmt.Errorf("set packet-start read deadline: %w", err)
+	}
+	_, peekErr := c.br.Peek(1)
+	clearErr := deadliner.SetReadDeadline(time.Time{})
+	if clearErr != nil {
+		return false, fmt.Errorf("clear packet-start read deadline: %w", clearErr)
+	}
+	if peekErr != nil {
+		var netErr interface{ Timeout() bool }
+		if errors.As(peekErr, &netErr) && netErr.Timeout() {
+			return false, nil
+		}
+		return false, fmt.Errorf("wait for packet start: %w", peekErr)
+	}
+	return true, nil
+}
 
 // ReadPacket reads the next packet from the wire.
 //
@@ -654,6 +687,70 @@ func (c *Codec) WriteEmptyDataBlock() error {
 	// receive everything in one read.
 	_, err := c.w.Write(buf.Buf)
 	return err
+}
+
+// SampleColumn is one column of a synthesized INSERT sample block: the
+// ClickHouse column name and its exact type string (e.g. "UInt64",
+// "LowCardinality(String)"). Housegate never instantiates a typed ch-go
+// column for it — a 0-row block only carries name + type on the wire.
+type SampleColumn struct {
+	Name string
+	Type string
+}
+
+// WriteSampleBlock writes the server-side INSERT sample block (a Data packet
+// holding a 0-row block with cols) that ClickHouse would send after an INSERT
+// Query. Relay uses it in deferred-INSERT mode so the client starts streaming
+// its payload before the Query reaches the upstream. The encoding is
+// byte-identical to ch-go's proto.Block.EncodeBlock for the negotiated
+// revision (BlockInfo when >= 51903, per-column custom-serialization flag when
+// >= 54454) and follows WriteEmptyDataBlock's compression handling.
+func (c *Codec) WriteSampleBlock(cols []SampleColumn) error {
+	if len(cols) == 0 {
+		return fmt.Errorf("%w: sample block requires at least one column", ErrMalformed)
+	}
+	rev := c.Revision()
+	var buf proto.Buffer
+	buf.PutUVarInt(uint64(proto.ServerCodeData))
+	buf.PutString("")
+
+	var payload proto.Buffer
+	if proto.FeatureBlockInfo.In(rev) {
+		bi := proto.BlockInfo{}
+		bi.Encode(&payload)
+	}
+	payload.PutUVarInt(uint64(len(cols)))
+	payload.PutUVarInt(0) // rows
+	for _, col := range cols {
+		if col.Name == "" || col.Type == "" {
+			return fmt.Errorf("%w: sample column requires name and type (got %q/%q)", ErrMalformed, col.Name, col.Type)
+		}
+		payload.PutString(col.Name)
+		payload.PutString(col.Type)
+		if proto.FeatureCustomSerialization.In(rev) {
+			payload.PutBool(false) // no custom serialization
+		}
+	}
+
+	if c.Compression() == proto.CompressionEnabled {
+		w := compress.NewWriter(0, compress.LZ4)
+		if err := w.Compress(payload.Buf); err != nil {
+			return fmt.Errorf("compress sample block: %w", err)
+		}
+		buf.Buf = append(buf.Buf, w.Data...)
+	} else {
+		buf.Buf = append(buf.Buf, payload.Buf...)
+	}
+	// Single Write: one logical chunk on a chunked leg, one segment for
+	// net.Pipe-backed test peers.
+	n, err := c.w.Write(buf.Buf)
+	if err != nil {
+		return fmt.Errorf("write sample block: %w", err)
+	}
+	if n != len(buf.Buf) {
+		return fmt.Errorf("write sample block: %w", io.ErrShortWrite)
+	}
+	return nil
 }
 
 // readFullRaw reads exactly n bytes directly from c.br — bypassing the

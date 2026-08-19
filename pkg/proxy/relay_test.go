@@ -331,6 +331,9 @@ func TestRelay_UpstreamException_FiresOnException(t *testing.T) {
 
 	hooks := &exceptionRecordingHooks{}
 	r := &Relay{sess: sess, hooks: hooks, obs: nil}
+	if !r.beginActiveQuery("qid-exception") {
+		t.Fatal("beginActiveQuery unexpectedly reported an active query")
+	}
 
 	// Encode an Exception packet on the upstream side.
 	go func() {
@@ -1818,6 +1821,7 @@ func TestRelay_StagedNativeInsertPreservesSampleNegotiationAndSuppressesPayload(
 
 	const rev = 54453
 	sample := encodeServerSampleDataPacket(t, rev)
+	empty := encodeEmptyClientData(t)
 	nonEmpty := encodeNonEmptyClientDataPacket(t, rev)
 
 	upstreamErrCh := make(chan error, 1)
@@ -1834,6 +1838,20 @@ func TestRelay_StagedNativeInsertPreservesSampleNegotiationAndSuppressesPayload(
 			return
 		}
 		upstreamQueryCh <- pkt.Decoded.(*chproto.Query)
+		pkt, err = codec.ReadPacket()
+		if err != nil {
+			upstreamErrCh <- err
+			return
+		}
+		markerEmpty, err := chproto.ClientDataPacketIsEmpty(pkt.Raw, proto.CompressionDisabled)
+		if err != nil {
+			upstreamErrCh <- err
+			return
+		}
+		if !markerEmpty {
+			upstreamErrCh <- errors.New("external-tables marker was not an empty Data packet")
+			return
+		}
 		if _, err := upstreamProxy.Write(sample); err != nil {
 			upstreamErrCh <- err
 			return
@@ -1874,6 +1892,10 @@ func TestRelay_StagedNativeInsertPreservesSampleNegotiationAndSuppressesPayload(
 			},
 		}).EncodeAware(&qb, rev)
 		if _, err := clientProxy.Write(qb.Buf); err != nil {
+			clientErrCh <- err
+			return
+		}
+		if _, err := clientProxy.Write(empty); err != nil {
 			clientErrCh <- err
 			return
 		}
@@ -1962,8 +1984,8 @@ func TestRelay_StagedNativeInsertPreservesSampleNegotiationAndSuppressesPayload(
 
 	hooks.mu.Lock()
 	defer hooks.mu.Unlock()
-	if len(hooks.strictDataRaw) == 0 || !bytes.Equal(hooks.strictDataRaw[0], nonEmpty) {
-		t.Fatalf("strict data captured %d packets, first must be the staged payload", len(hooks.strictDataRaw))
+	if len(hooks.strictDataRaw) != 1 || !bytes.Equal(hooks.strictDataRaw[0], nonEmpty) {
+		t.Fatalf("strict data captured %d packets, want exactly the staged payload", len(hooks.strictDataRaw))
 	}
 	if hooks.strictComplete != 1 || hooks.inputCompletes != 1 || hooks.queryCompletes != 1 {
 		t.Fatalf("completion counts strict/input/query = %d/%d/%d, want 1/1/1", hooks.strictComplete, hooks.inputCompletes, hooks.queryCompletes)

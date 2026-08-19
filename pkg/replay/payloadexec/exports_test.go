@@ -53,3 +53,15 @@ func TestTableSchemaCanonicalJSON(t *testing.T) {
 		t.Fatalf("canonical schema JSON = %s, want %s", got, want)
 	}
 }
+
+func TestRowIDProfileIDMatchesDomain(t *testing.T) {
+	if RowIDProfileID != rowIDDomain {
+		t.Fatalf("RowIDProfileID = %q, rowIDDomain = %q", RowIDProfileID, rowIDDomain)
+	}
+	if RowIDProfileID != "housegate-row-id-v1" {
+		t.Fatalf("RowIDProfileID = %q", RowIDProfileID)
+	}
+	if PayloadFormatCSVWithNames != "csv-with-names-v1" {
+		t.Fatalf("PayloadFormatCSVWithNames = %q", PayloadFormatCSVWithNames)
+	}
+}

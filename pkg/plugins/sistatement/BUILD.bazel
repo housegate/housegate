@@ -1,0 +1,48 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "sistatement",
+    srcs = [
+        "doc.go",
+        "plugin.go",
+        "seq.go",
+        "sqlparse.go",
+    ],
+    importpath = "github.com/housegate/housegate/pkg/plugins/sistatement",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/auth",
+        "//pkg/chproto",
+        "//pkg/chsession",
+        "//pkg/log",
+        "//pkg/plugin",
+        "//pkg/registry",
+        "//pkg/replay",
+        "//pkg/replay/payloadexec",
+        "//pkg/schemaregistry",
+        "//pkg/storageintegrity",
+        "@com_github_clickhouse_ch_go//proto",
+    ],
+)
+
+go_test(
+    name = "sistatement_test",
+    srcs = [
+        "plugin_test.go",
+        "seq_test.go",
+        "sqlparse_test.go",
+    ],
+    embed = [":sistatement"],
+    deps = [
+        "//pkg/auth",
+        "//pkg/chproto",
+        "//pkg/chsession",
+        "//pkg/lthash",
+        "//pkg/network",
+        "//pkg/plugin",
+        "//pkg/replay",
+        "//pkg/replay/payloadexec",
+        "//pkg/storageintegrity",
+        "@com_github_clickhouse_ch_go//proto",
+    ],
+)

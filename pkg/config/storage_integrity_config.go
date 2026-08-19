@@ -14,6 +14,26 @@ type StorageIntegrityConfig struct {
 	Ingress    StorageIntegrityIngressConfig    `json:"ingress"     yaml:"ingress"`
 	Runtime    StorageIntegrityRuntimeConfig    `json:"runtime"     yaml:"runtime"`
 	SafeMerges StorageIntegritySafeMergesConfig `json:"safe_merges" yaml:"safe_merges"`
+	Agent      StorageIntegrityAgentConfig      `json:"agent"       yaml:"agent"`
+}
+
+// StorageIntegrityAgentConfig turns on the agent-mode statement plugin
+// (pkg/plugins/sistatement): the agent answers the INSERT sample block from
+// the network-state table schema, buffers and hashes the payload, and signs
+// the envelope-v2 statement token before forwarding.
+type StorageIntegrityAgentConfig struct {
+	Enabled bool `json:"enabled" yaml:"enabled"`
+	// NetworkID is the Arbiter genesis network id signed into every token.
+	NetworkID string `json:"network_id" yaml:"network_id"`
+	// KeeperShardID must be 0 in v1.
+	KeeperShardID uint32 `json:"keeper_shard_id" yaml:"keeper_shard_id"`
+	// StateDir holds <account>.seq, the durable client_seq counter.
+	StateDir string `json:"state_dir" yaml:"state_dir"`
+	// MaxPayloadBytes bounds one buffered INSERT payload (default 64 MiB).
+	MaxPayloadBytes uint64 `json:"max_payload_bytes" yaml:"max_payload_bytes"`
+	// RequireNetworkState (default true) makes Validate insist on
+	// network_state.source; hosts that inject Options.NetworkState set false.
+	RequireNetworkState bool `json:"require_network_state" yaml:"require_network_state"`
 }
 
 // StorageIntegritySafeMergesConfig governs the P1e runtime's merge guard, which
@@ -29,6 +49,7 @@ type StorageIntegritySafeMergesConfig struct {
 // StorageIntegrityIngressConfig is the server-side signed admission surface.
 type StorageIntegrityIngressConfig struct {
 	Enabled          bool     `json:"enabled"           yaml:"enabled"`
+	NetworkID        string   `json:"network_id"        yaml:"network_id"`
 	AllowedAddresses []string `json:"allowed_addresses" yaml:"allowed_addresses"`
 	MaxTokenAge      Duration `json:"max_token_age"     yaml:"max_token_age"`
 	RequestTimeout   Duration `json:"request_timeout"  yaml:"request_timeout"`
@@ -83,10 +104,17 @@ func defaultStorageIntegrityConfig() StorageIntegrityConfig {
 				ReassertInterval: Duration{Duration: 30 * time.Second},
 			},
 		},
+		Agent: StorageIntegrityAgentConfig{
+			MaxPayloadBytes:     defaultStorageIntegrityMaxPayloadBytes,
+			RequireNetworkState: true,
+		},
 	}
 }
 
 func (c StorageIntegrityConfig) validate(mode Mode) error {
+	if c.Agent.Enabled && mode != ModeAgent {
+		return errors.New("storage_integrity: storage_integrity.agent is agent mode only")
+	}
 	if !c.Ingress.Enabled {
 		if c.Runtime.Enabled {
 			return errors.New("storage_integrity: storage_integrity.runtime.enabled requires storage_integrity.ingress.enabled")
@@ -102,6 +130,9 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 	}
 	if len(c.Ingress.AllowedAddresses) == 0 {
 		errs = append(errs, errors.New("storage_integrity.ingress.allowed_addresses is required when storage_integrity.ingress.enabled"))
+	}
+	if strings.TrimSpace(c.Ingress.NetworkID) == "" {
+		errs = append(errs, errors.New("storage_integrity.ingress.network_id is required when storage_integrity.ingress.enabled"))
 	}
 	if c.Ingress.MaxTokenAge.Duration <= 0 {
 		errs = append(errs, errors.New("storage_integrity.ingress.max_token_age must be > 0 when storage_integrity.ingress.enabled"))
@@ -145,6 +176,41 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 	}
 	if joined := errors.Join(errs...); joined != nil {
 		return fmt.Errorf("storage_integrity: %w", joined)
+	}
+	return nil
+}
+
+// validateAgent checks the agent-mode statement plugin block. Called from
+// Config.Validate in ModeAgent only.
+func (c StorageIntegrityConfig) validateAgent(root *Config) error {
+	a := c.Agent
+	if !a.Enabled {
+		return nil
+	}
+	var errs []error
+	if strings.TrimSpace(a.NetworkID) == "" {
+		errs = append(errs, errors.New("storage_integrity.agent.network_id is required when storage_integrity.agent.enabled"))
+	}
+	if a.KeeperShardID != 0 {
+		errs = append(errs, fmt.Errorf("storage_integrity.agent.keeper_shard_id must be 0 in v1, got %d", a.KeeperShardID))
+	}
+	if strings.TrimSpace(a.StateDir) == "" {
+		errs = append(errs, errors.New("storage_integrity.agent.state_dir is required when storage_integrity.agent.enabled"))
+	}
+	if a.MaxPayloadBytes == 0 {
+		errs = append(errs, errors.New("storage_integrity.agent.max_payload_bytes must be > 0 when storage_integrity.agent.enabled"))
+	}
+	if root.Agent.PrivateKeyHex == "" {
+		errs = append(errs, errors.New("storage_integrity.agent requires agent.private_key_hex"))
+	}
+	if a.RequireNetworkState &&
+		!root.NetworkState.IsYAMLSource() &&
+		!root.NetworkState.IsRpcSource() &&
+		root.ResolveRedisAddr(root.NetworkState.Source) == "" {
+		errs = append(errs, errors.New("storage_integrity.agent requires network_state.source (or set storage_integrity.agent.require_network_state: false when the host injects Options.NetworkState)"))
+	}
+	if joined := errors.Join(errs...); joined != nil {
+		return fmt.Errorf("storage_integrity.agent: %w", joined)
 	}
 	return nil
 }

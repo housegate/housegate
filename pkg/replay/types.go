@@ -5,6 +5,11 @@ import (
 	"sort"
 )
 
+// PayloadFormatClickHouseNativeData is the only production payload format
+// accepted by the envelope-v2 verifier. Legacy/test decoders live below that
+// verifier boundary and must not be able to produce signed receipts.
+const PayloadFormatClickHouseNativeData = "clickhouse-native-data-v1"
+
 // SafeSnapshotManifest is the replay verifier's immutable view of a previous
 // safe state. It is a manifest of stable table/part commitments, not a
 // ClickHouse filesystem backup.
@@ -171,6 +176,12 @@ type Statement struct {
 	PayloadLength uint64 `json:"payload_length,omitempty"`
 	TargetTableID string `json:"target_table_id"`
 	UserJWS       string `json:"user_jws,omitempty"`
+	// v2 additions (envelope v2): how to decode the payload and which
+	// declared schema the signer encoded against. JSON tags are frozen
+	// against arbiter-proto replay.proto Statement fields 11-13.
+	PayloadFormat  string `json:"payload_format,omitempty"`
+	ClientRevision uint32 `json:"client_revision,omitempty"`
+	SchemaHash     string `json:"schema_hash,omitempty"`
 }
 
 // PreparedStatement is passed to the executor after payload hash/length

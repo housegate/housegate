@@ -21,6 +21,9 @@ var (
 	// ErrSchemaHashMismatch means canonical schema content did not reproduce
 	// the mirrored per-table commitment under this loader's network id.
 	ErrSchemaHashMismatch = errors.New("schemaregistry: schema hash mismatch")
+	// ErrSchemaIdentityMismatch means a declaration resolved for one logical
+	// table embeds coordinates or canonical schema content for another table.
+	ErrSchemaIdentityMismatch = errors.New("schemaregistry: schema identity mismatch")
 	// ErrClickHouseDrift means the declared schema differs from the schema
 	// materialized by the local ClickHouse.
 	ErrClickHouseDrift = errors.New("schemaregistry: clickhouse schema drift")
@@ -65,9 +68,13 @@ func (l *NetworkStateLoader) Load(ctx context.Context, refs []TableRef) ([]paylo
 
 	out := make([]payloadexec.TableSchema, 0, len(refs))
 	for _, ref := range refs {
-		databaseID, tableID, err := logicalTableCoordinates(ref.TableID)
-		if err != nil {
-			return nil, err
+		databaseID, tableID := ref.LogicalDatabase, ref.LogicalTable
+		if databaseID == "" || tableID == "" {
+			var err error
+			databaseID, tableID, err = logicalTableCoordinates(ref.TableID)
+			if err != nil {
+				return nil, err
+			}
 		}
 		latest, ok := l.schemas.LatestTableSchema(databaseID, tableID)
 		if !ok {
@@ -82,6 +89,16 @@ func (l *NetworkStateLoader) Load(ctx context.Context, refs []TableRef) ([]paylo
 				latest.Version,
 			)
 		}
+		if declared.DatabaseId != databaseID || declared.TableId != tableID {
+			return nil, fmt.Errorf(
+				"%w: table %q version %d declaration coordinates %q.%q",
+				ErrSchemaIdentityMismatch,
+				ref.TableID,
+				declared.Version,
+				declared.DatabaseId,
+				declared.TableId,
+			)
+		}
 
 		var schema payloadexec.TableSchema
 		if err := json.Unmarshal([]byte(declared.SchemaJson), &schema); err != nil {
@@ -90,6 +107,15 @@ func (l *NetworkStateLoader) Load(ctx context.Context, refs []TableRef) ([]paylo
 				ref.TableID,
 				declared.Version,
 				err,
+			)
+		}
+		if schema.TableID != ref.TableID {
+			return nil, fmt.Errorf(
+				"%w: requested table %q version %d embeds table_id %q",
+				ErrSchemaIdentityMismatch,
+				ref.TableID,
+				declared.Version,
+				schema.TableID,
 			)
 		}
 		computed := payloadexec.TableSchemaHash(l.networkID, schema)

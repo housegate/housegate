@@ -24,7 +24,10 @@ go_test(
         "eth_validator_test.go",
         "peer_signer_test.go",
         "relay_signer_test.go",
+        "statement_v2_test.go",
+        "statement_v2_vectors_test.go",
     ],
+    data = glob(["testdata/**"]),
     embed = [":auth"],
     deps = ["@com_github_ethereum_go_ethereum//crypto"],
 )

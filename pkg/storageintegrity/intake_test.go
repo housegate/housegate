@@ -3,13 +3,16 @@ package storageintegrity
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/housegate/housegate/pkg/replay"
+	"github.com/housegate/housegate/pkg/replay/payloadexec"
 )
 
 // fixtureRevision is the pinned client protocol revision shared by
@@ -34,6 +37,38 @@ func admissionFixture() AdmissionRecord {
 		PayloadHash:     replay.DigestBytes([]byte(fixturePayload)),
 		PayloadEncoding: PayloadEncodingClickHouseNativeData,
 		Revision:        fixtureRevision,
+		EnvelopeVersion: EnvelopeVersionV2,
+		NetworkID:       "testnet-v2",
+		KeeperShardID:   0,
+		SettingsHash:    EmptySettingsHash,
+		SchemaHash:      "0x" + strings.Repeat("22", 32),
+		RowIDProfileID:  payloadexec.RowIDProfileID,
+	}
+}
+
+func validNativeAdmissionV2(t *testing.T) AdmissionRecord {
+	t.Helper()
+	sql := "INSERT INTO tenant.events FORMAT Native"
+	payload := []byte{byte(2), 0, 0xab, 0xcd}
+	return AdmissionRecord{
+		StatementID:     "0xabc0000000000000000000000000000000000001:1:n1",
+		Kind:            KindInsert,
+		TableID:         "tenant.events",
+		SQL:             sql,
+		SQLHash:         replay.DigestString(sql),
+		Signer:          "0xabc0000000000000000000000000000000000001",
+		UserJWS:         "h.p.s",
+		Payload:         payload,
+		PayloadLength:   uint64(len(payload)),
+		PayloadHash:     replay.DigestBytes(payload),
+		PayloadEncoding: PayloadEncodingClickHouseNativeData,
+		Revision:        54460,
+		EnvelopeVersion: EnvelopeVersionV2,
+		NetworkID:       "testnet-v2",
+		KeeperShardID:   0,
+		SettingsHash:    EmptySettingsHash,
+		SchemaHash:      "0x" + strings.Repeat("33", 32),
+		RowIDProfileID:  payloadexec.RowIDProfileID,
 	}
 }
 
@@ -84,6 +119,49 @@ func TestEnvelopeFromAdmission_MirrorsPayloadIdentity(t *testing.T) {
 	}
 }
 
+func TestEnvelopeFromAdmission_CarriesV2Fields(t *testing.T) {
+	adm := validNativeAdmissionV2(t)
+	env, err := EnvelopeFromAdmission(adm)
+	if err != nil {
+		t.Fatalf("EnvelopeFromAdmission: %v", err)
+	}
+	if env.EnvelopeVersion != EnvelopeVersionV2 || env.NetworkID != "testnet-v2" || env.KeeperShardID != 0 ||
+		env.SettingsHash != EmptySettingsHash || env.SchemaHash != adm.SchemaHash ||
+		env.RowIDProfileID != payloadexec.RowIDProfileID || env.PayloadEncoding != PayloadEncodingClickHouseNativeData ||
+		env.Revision != 54460 {
+		t.Fatalf("envelope v2 fields not carried: %+v", env)
+	}
+}
+
+func TestEnvelopeFromAdmission_RejectsV2Violations(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*AdmissionRecord)
+		want   string
+	}{
+		{"wrong envelope version", func(a *AdmissionRecord) { a.EnvelopeVersion = 1 }, "envelope_version"},
+		{"missing network id", func(a *AdmissionRecord) { a.NetworkID = "" }, "network_id"},
+		{"blank network id", func(a *AdmissionRecord) { a.NetworkID = " \t" }, "network_id"},
+		{"non-zero shard", func(a *AdmissionRecord) { a.KeeperShardID = 1 }, "keeper_shard_id"},
+		{"non-empty settings hash", func(a *AdmissionRecord) { a.SettingsHash = replay.DigestString("x") }, "settings_hash"},
+		{"missing schema hash", func(a *AdmissionRecord) { a.SchemaHash = "" }, "schema_hash"},
+		{"wrong row id profile", func(a *AdmissionRecord) { a.RowIDProfileID = "housegate-row-id-v0" }, "row_id_profile_id"},
+		{"csv encoding no longer admitted", func(a *AdmissionRecord) { a.PayloadEncoding = EncodingCSVWithNames }, "payload encoding"},
+		{"missing revision", func(a *AdmissionRecord) { a.Revision = 0 }, "revision"},
+		{"negative revision", func(a *AdmissionRecord) { a.Revision = -1 }, "revision"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			adm := validNativeAdmissionV2(t)
+			tc.mutate(&adm)
+			_, err := EnvelopeFromAdmission(adm)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want containing %q", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestEnvelopeFromAdmission_UsesOpaquePayloadRefWhenPresent(t *testing.T) {
 	adm := admissionFixture()
 	adm.PayloadRef = "payload://store/ref-1"
@@ -97,25 +175,6 @@ func TestEnvelopeFromAdmission_UsesOpaquePayloadRefWhenPresent(t *testing.T) {
 	}
 	if env.PayloadHash != adm.PayloadHash {
 		t.Fatalf("payload hash: got %q want %q", env.PayloadHash, adm.PayloadHash)
-	}
-}
-
-func TestEnvelopeFromAdmission_AcceptsMaterializedCSVWithNames(t *testing.T) {
-	adm := admissionFixture()
-	adm.SQL = "INSERT INTO events FORMAT CSVWithNames"
-	adm.SQLHash = replay.DigestString(adm.SQL)
-	adm.Payload = []byte("p,v\nwest,7\n")
-	adm.PayloadLength = uint64(len(adm.Payload))
-	adm.PayloadHash = replay.DigestBytes(adm.Payload)
-	adm.PayloadEncoding = EncodingCSVWithNames
-	adm.Revision = 0
-
-	env, err := EnvelopeFromAdmission(adm)
-	if err != nil {
-		t.Fatalf("EnvelopeFromAdmission: %v", err)
-	}
-	if env.PayloadEncoding != EncodingCSVWithNames || env.Revision != 0 {
-		t.Fatalf("encoding/revision = %q/%d, want CSVWithNames/0", env.PayloadEncoding, env.Revision)
 	}
 }
 
@@ -275,6 +334,7 @@ type recordingPreparer struct {
 	registerAt   int64
 	abortAt      int64
 	prepareCount int64
+	abortParts   []CandidatePart
 }
 
 func (p *recordingPreparer) PrepareLocalStatement(_ context.Context, env StatementEnvelope, _ []byte) (PreparedLocalResult, error) {
@@ -293,8 +353,9 @@ func (p *recordingPreparer) RegisterPreparedClaim(_ context.Context, _ string) (
 	return p.claimOutcome, p.claimErr
 }
 
-func (p *recordingPreparer) AbortPreparedStatement(_ context.Context, _ string, _ []CandidatePart, _ string) error {
+func (p *recordingPreparer) AbortPreparedStatement(_ context.Context, _ string, parts []CandidatePart, _ string) error {
 	p.abortAt = atomic.AddInt64(&p.seq, 1)
+	p.abortParts = append([]CandidatePart(nil), parts...)
 	return p.abortErr
 }
 
@@ -344,6 +405,278 @@ func TestOrchestrate_RegistersClaimOnlyAfterAcceptedSubmit(t *testing.T) {
 	}
 	if prep.abortAt != 0 {
 		t.Fatal("a fully accepted intake must not abort")
+	}
+}
+
+func TestOrchestrate_TerminalPrepareRejectAbortsWithoutLookupFence(t *testing.T) {
+	prep := &recordingPreparer{
+		prepared:     boundSource(),
+		prepareErr:   fmt.Errorf("schema_hash mismatch: %w", ErrPrepareTerminalReject),
+		claimOutcome: ClaimOutcome{Category: OutcomeAccepted, BoundSource: "snode-A"},
+	}
+	sub := &recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeAccepted}}
+	orch := NewOrchestrator(sub, prep, OrchestratorConfig{ExpectedSource: "snode-A"})
+	res, err := orch.Orchestrate(context.Background(), admissionFixture())
+	if err != nil {
+		t.Fatalf("terminal prepare reject must resolve cleanly, got %v", err)
+	}
+	if res.Ack2 || res.Lifecycle != LifecycleCleaned {
+		t.Fatalf("result = %+v, want cleaned non-ACK2", res)
+	}
+	if atomic.LoadInt64(&prep.abortAt) == 0 {
+		t.Fatal("terminal prepare reject must abort the empty candidate set")
+	}
+	if len(prep.abortParts) != 0 {
+		t.Fatalf("terminal prepare reject abort parts = %+v, want exact empty set", prep.abortParts)
+	}
+
+	// The source rejected before any unsafe write could happen, so a retry may
+	// re-prepare directly after the source's schema view catches up.
+	orch.mu.Lock()
+	rec := orch.records[admissionFixture().StatementID]
+	lookupRequired := rec != nil && rec.requirePreparedLookup
+	orch.mu.Unlock()
+	if rec == nil {
+		t.Fatal("terminal prepare reject record was not retained for idempotent replay")
+	}
+	if lookupRequired {
+		t.Fatal("terminal prepare reject must not leave a prepared-source lookup fence")
+	}
+
+	prep.prepareErr = nil
+	beforePrepare := atomic.LoadInt64(&prep.prepareCount)
+	beforeAbort := atomic.LoadInt64(&prep.abortAt)
+	retry, err := orch.Orchestrate(context.Background(), admissionFixture())
+	if err != nil || !retry.Ack2 {
+		t.Fatalf("retry after source schema catch-up = %+v, %v, want ACK2", retry, err)
+	}
+	if atomic.LoadInt64(&prep.prepareCount) != beforePrepare+1 {
+		t.Fatal("retry after a terminal prepare reject must re-prepare without a lookup fence")
+	}
+	if atomic.LoadInt64(&prep.abortAt) != beforeAbort {
+		t.Fatal("successful retry must not repeat the already-completed empty cleanup")
+	}
+}
+
+func TestOrchestrate_TerminalPrepareRejectHonorsConcurrentTerminalSubmit(t *testing.T) {
+	prep := &recordingPreparer{
+		prepareErr: fmt.Errorf("schema_hash mismatch: %w", ErrPrepareTerminalReject),
+	}
+	sub := &recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeTerminalReject, Reason: "conflicting duplicate"}}
+	orch := NewOrchestrator(sub, prep, OrchestratorConfig{ExpectedSource: "snode-A"})
+
+	res, err := orch.Orchestrate(context.Background(), admissionFixture())
+	if err != nil {
+		t.Fatalf("terminal prepare + submit reject: %v", err)
+	}
+	if res.Ack2 || res.Lifecycle != LifecycleCleaned || !res.terminal {
+		t.Fatalf("result = %+v, want terminal Cleaned", res)
+	}
+	if res.Submit.Category != OutcomeTerminalReject {
+		t.Fatalf("submit category = %v, want terminal reject", res.Submit.Category)
+	}
+	if len(prep.abortParts) != 0 {
+		t.Fatalf("abort parts = %+v, want exact empty set", prep.abortParts)
+	}
+	beforePrepare := atomic.LoadInt64(&prep.prepareCount)
+	beforeAbort := atomic.LoadInt64(&prep.abortAt)
+	second, err := orch.Orchestrate(context.Background(), admissionFixture())
+	if err != nil {
+		t.Fatalf("terminal replay: %v", err)
+	}
+	if !second.terminal || second.Lifecycle != LifecycleCleaned {
+		t.Fatalf("terminal replay = %+v, want cached Cleaned", second)
+	}
+	if got := atomic.LoadInt64(&prep.prepareCount); got != beforePrepare {
+		t.Fatalf("terminal replay prepare count = %d, want %d", got, beforePrepare)
+	}
+	if got := atomic.LoadInt64(&prep.abortAt); got != beforeAbort {
+		t.Fatalf("terminal replay abort count = %d, want %d", got, beforeAbort)
+	}
+}
+
+func TestOrchestrate_TerminalPrepareRejectRetriesAfterRestartWithoutLookup(t *testing.T) {
+	journal, err := NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstPrep := &recordingPreparer{prepareErr: fmt.Errorf("schema_hash mismatch: %w", ErrPrepareTerminalReject)}
+	cfg := OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal}
+	first := NewOrchestrator(&recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeAccepted}}, firstPrep, cfg)
+	res, err := first.Orchestrate(context.Background(), admissionFixture())
+	if err != nil || res.Lifecycle != LifecycleCleaned {
+		t.Fatalf("first terminal prepare reject = %+v, %v", res, err)
+	}
+
+	secondPrep := &recordingPreparer{
+		prepared:     boundSource(),
+		claimOutcome: ClaimOutcome{Category: OutcomeAccepted, BoundSource: "snode-A"},
+	}
+	second := NewOrchestrator(&recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeExactIdempotent}}, secondPrep, cfg)
+	retry, err := second.Orchestrate(context.Background(), admissionFixture())
+	if err != nil || !retry.Ack2 {
+		t.Fatalf("post-restart retry = %+v, %v, want ACK2", retry, err)
+	}
+	if got := atomic.LoadInt64(&secondPrep.prepareCount); got != 1 {
+		t.Fatalf("post-restart prepare count = %d, want 1 without PreparedStatementLookup", got)
+	}
+}
+
+func TestOrchestrate_CleanedPreWriteRejectFencesOtherStatementAfterRestart(t *testing.T) {
+	journal, err := NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal}
+	first := NewOrchestrator(
+		&recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeAccepted}},
+		&recordingPreparer{prepareErr: fmt.Errorf("schema_hash mismatch: %w", ErrPrepareTerminalReject)},
+		cfg,
+	)
+	if _, err := first.Orchestrate(context.Background(), admissionFixture()); err != nil {
+		t.Fatalf("first terminal prepare reject: %v", err)
+	}
+
+	secondPrep := newFrontierProbePreparer()
+	secondPrep.prepared = boundSource()
+	second := NewOrchestrator(&recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeAccepted}}, secondPrep, cfg)
+	admA := admissionFixture()
+	admB := admissionFixture()
+	admB.StatementID = fixtureStatementID(2)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	bDone := make(chan error, 1)
+	go func() {
+		_, err := second.Orchestrate(ctx, admB)
+		bDone <- err
+	}()
+	time.Sleep(30 * time.Millisecond)
+	if got := secondPrep.prepareCountFor(admB.StatementID); got != 0 {
+		t.Fatalf("B prepared %d times before safe-retry A converged; recovered frontier must preserve statement order", got)
+	}
+
+	resA, err := second.Orchestrate(ctx, admA)
+	if err != nil || !resA.Ack2 {
+		t.Fatalf("A retry after restart = %+v, %v, want ACK2", resA, err)
+	}
+	select {
+	case err := <-bDone:
+		if err != nil {
+			t.Fatalf("B after A converged: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("B remained blocked after safe-retry A reached a terminal boundary")
+	}
+	if got := secondPrep.prepareCountFor(admB.StatementID); got != 1 {
+		t.Fatalf("B prepare count = %d, want 1 after A converged", got)
+	}
+}
+
+type preWriteRejectFrontierPreparer struct {
+	mu        sync.Mutex
+	aID       string
+	counts    map[string]int
+	retryGate chan struct{}
+}
+
+func (p *preWriteRejectFrontierPreparer) PrepareLocalStatement(_ context.Context, env StatementEnvelope, _ []byte) (PreparedLocalResult, error) {
+	p.mu.Lock()
+	p.counts[env.StatementID]++
+	count := p.counts[env.StatementID]
+	p.mu.Unlock()
+	if env.StatementID == p.aID && count == 1 {
+		return PreparedLocalResult{}, fmt.Errorf("schema_hash mismatch: %w", ErrPrepareTerminalReject)
+	}
+	if env.StatementID == p.aID && count == 2 && p.retryGate != nil {
+		<-p.retryGate
+	}
+	res := boundSource()
+	res.StatementID = env.StatementID
+	return res, nil
+}
+
+func (p *preWriteRejectFrontierPreparer) RegisterPreparedClaim(_ context.Context, _ string) (ClaimOutcome, error) {
+	return ClaimOutcome{Category: OutcomeAccepted, BoundSource: "snode-A"}, nil
+}
+
+func (p *preWriteRejectFrontierPreparer) AbortPreparedStatement(_ context.Context, _ string, parts []CandidatePart, _ string) error {
+	if len(parts) != 0 {
+		return fmt.Errorf("pre-write reject abort received %d candidate parts", len(parts))
+	}
+	return nil
+}
+
+func (p *preWriteRejectFrontierPreparer) count(statementID string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.counts[statementID]
+}
+
+func TestOrchestrate_PreWriteRejectRetainsFrontierUntilRetryConverges(t *testing.T) {
+	admA := admissionFixture()
+	admB := admissionFixture()
+	admB.StatementID = fixtureStatementID(2)
+	retryGate := make(chan struct{})
+	prep := &preWriteRejectFrontierPreparer{
+		aID:       admA.StatementID,
+		counts:    map[string]int{},
+		retryGate: retryGate,
+	}
+	orch := NewOrchestrator(
+		&recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeAccepted}},
+		prep,
+		OrchestratorConfig{ExpectedSource: "snode-A"},
+	)
+
+	first, err := orch.Orchestrate(context.Background(), admA)
+	if err != nil || first.Lifecycle != LifecycleCleaned || first.terminal {
+		t.Fatalf("first pre-write reject = %+v, %v, want retryable Cleaned", first, err)
+	}
+
+	bDone := make(chan error, 1)
+	go func() {
+		_, err := orch.Orchestrate(context.Background(), admB)
+		bDone <- err
+	}()
+	time.Sleep(30 * time.Millisecond)
+	if got := prep.count(admB.StatementID); got != 0 {
+		t.Fatalf("B prepared %d times while safe-retry A remained nonterminal", got)
+	}
+
+	aDone := make(chan error, 1)
+	go func() {
+		_, err := orch.Orchestrate(context.Background(), admA)
+		aDone <- err
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for prep.count(admA.StatementID) < 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := prep.count(admA.StatementID); got != 2 {
+		t.Fatalf("A retry prepare count = %d, want 2", got)
+	}
+	if got := prep.count(admB.StatementID); got != 0 {
+		t.Fatalf("B prepared %d times while A retry held the frontier", got)
+	}
+	close(retryGate)
+	select {
+	case err := <-aDone:
+		if err != nil {
+			t.Fatalf("A retry: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("A retry did not finish")
+	}
+	select {
+	case err := <-bDone:
+		if err != nil {
+			t.Fatalf("B after A: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("B did not acquire the frontier after A converged")
+	}
+	if got := prep.count(admB.StatementID); got != 1 {
+		t.Fatalf("B prepare count = %d, want 1", got)
 	}
 }
 

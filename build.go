@@ -34,6 +34,7 @@ import (
 	"github.com/housegate/housegate/pkg/plugins/rewrite"
 	routeplugin "github.com/housegate/housegate/pkg/plugins/route"
 	"github.com/housegate/housegate/pkg/plugins/sessionstate"
+	"github.com/housegate/housegate/pkg/plugins/sistatement"
 	"github.com/housegate/housegate/pkg/plugins/storageintegrity"
 	"github.com/housegate/housegate/pkg/plugins/usage"
 	"github.com/housegate/housegate/pkg/proxy"
@@ -606,9 +607,6 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			if admissionConsumer != nil {
 				return nil, fmt.Errorf("storage_integrity.runtime.enabled cannot be combined with StorageIntegrityAdmissionConsumer")
 			}
-			if opts.StorageIntegrityPayloadMaterializer == nil {
-				return nil, fmt.Errorf("storage_integrity.runtime: StorageIntegrityPayloadMaterializer is required for CSVWithNames")
-			}
 			consumer, guard, err := buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, opts.StorageIntegrityRuntime)
 			if err != nil {
 				return nil, err
@@ -622,6 +620,10 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			return nil, fmt.Errorf("storage_integrity.ingress admission consumer is required when enabled")
 		}
 		ingressCfg := cfg.StorageIntegrity.Ingress
+		ingressSchemas, err := resolveTableSchemas(opts, reg, "storage_integrity.ingress")
+		if err != nil {
+			return nil, err
+		}
 		ingressValidator := auth.NewEthValidator(
 			ingressCfg.AllowedAddresses,
 			ingressCfg.MaxTokenAge.Duration,
@@ -631,13 +633,14 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			nil,
 		)
 		storageIntegrityIngress = storageintegrity.New(storageintegrity.Config{
-			Enabled:             true,
-			AuthValidator:       ingressValidator,
-			Purpose:             auth.QueryPurpose,
-			RequestTimeout:      ingressCfg.RequestTimeout.Duration,
-			MaxPayloadBytes:     ingressCfg.MaxPayloadBytes,
-			AdmissionConsumer:   admissionConsumer,
-			PayloadMaterializer: opts.StorageIntegrityPayloadMaterializer,
+			Enabled:           true,
+			AuthValidator:     ingressValidator,
+			Purpose:           auth.QueryPurpose,
+			RequestTimeout:    ingressCfg.RequestTimeout.Duration,
+			MaxPayloadBytes:   ingressCfg.MaxPayloadBytes,
+			AdmissionConsumer: admissionConsumer,
+			TableSchemas:      ingressSchemas,
+			NetworkID:         ingressCfg.NetworkID,
 		})
 		queryPlugins = append(queryPlugins, storageIntegrityIngress)
 		strictDataPlugins = append(strictDataPlugins, storageIntegrityIngress)
@@ -646,6 +649,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		queryAbortPlugins = append(queryAbortPlugins, storageIntegrityIngress)
 		closePlugins = append(closePlugins, storageIntegrityIngress)
 		log.Infow("storage_integrity ingress enabled",
+			"network_id", ingressCfg.NetworkID,
 			"allowed_addresses", len(ingressCfg.AllowedAddresses),
 			"max_token_age", ingressCfg.MaxTokenAge.Duration,
 			"request_timeout", ingressCfg.RequestTimeout.Duration,
@@ -907,6 +911,14 @@ func buildReplicationInterserverRoutes(routes []config.ReplicationProxyInterserv
 }
 
 func buildAgent(opts Options, rf *redisFactory) (*builtServer, error) {
+	return buildAgentWithMaterializerBuilder(opts, rf, buildMaterializer)
+}
+
+func buildAgentWithMaterializerBuilder(
+	opts Options,
+	rf *redisFactory,
+	materializerBuilder func(*config.Config) (rewriter.Materializer, error),
+) (*builtServer, error) {
 	cfg := opts.Config
 
 	var signer auth.Signer
@@ -923,14 +935,28 @@ func buildAgent(opts Options, rf *redisFactory) (*builtServer, error) {
 	obs := proxy.NewMetricsObserver()
 	metrics := metricsplugin.New(obs)
 
-	// materialize runs first in the query chain (before the agent signer)
+	// materialize runs first in the query chain (before the statement and agent
+	// signers)
 	// so that, when enabled, the signed and forwarded SQL are identical —
 	// non-deterministic functions are already resolved to constants by
-	// the time Signer's JWS binds the query body.
+	// the time either JWS binds the query body.
 	queryPlugins := []plugin.QueryPlugin{}
+	var helloPlugins []plugin.HelloPlugin
+	var strictDataPlugins []plugin.StrictDataPlugin
+	var inputCompleteStrictPlugins []plugin.QueryInputCompleteStrictPlugin
+	var abortPlugins []plugin.QueryAbortPlugin
+	var successPlugins []plugin.QuerySuccessPlugin
+	var completePlugins []plugin.QueryCompletePlugin
+	var closePlugins []plugin.ClosePlugin
 	var materializerClose func()
+	buildSucceeded := false
+	defer func() {
+		if !buildSucceeded && materializerClose != nil {
+			materializerClose()
+		}
+	}()
 	if cfg.Materialize.Enabled {
-		m, err := buildMaterializer(cfg)
+		m, err := materializerBuilder(cfg)
 		if err != nil {
 			return nil, fmt.Errorf("materialize: %w", err) // startup fail-fast
 		}
@@ -944,16 +970,76 @@ func buildAgent(opts Options, rf *redisFactory) (*builtServer, error) {
 		})
 		log.Infow("agent materialize enabled", "engine", cfg.Materialize.Engine)
 	}
+	agentPlug := &agent.Plugin{Signer: signer, Observer: obs, Owner: cfg.Agent.Owner, IsDriver: cfg.Agent.Driver}
+
+	// The SI statement plugin runs after materialization so it signs the final
+	// SQL, and before agentPlug so both tokens bind the same body and the
+	// statement id is final when SQL_x_auth_token is minted. Deferred payload
+	// collection can outlive the auth token's max age, so the same agentPlug
+	// instance also refreshes that token at the strict input-complete boundary.
+	if cfg.StorageIntegrity.Agent.Enabled {
+		stmtSigner, ok := signer.(auth.StatementSignerV2)
+		if !ok {
+			return nil, fmt.Errorf("storage_integrity.agent: signer %T does not implement auth.StatementSignerV2", signer)
+		}
+		var reg registry.Registry
+		if opts.StorageIntegrityTableSchemas == nil {
+			var err error
+			reg, err = agentNetworkState(opts, rf)
+			if err != nil {
+				return nil, fmt.Errorf("storage_integrity.agent: %w", err)
+			}
+		}
+		schemas, err := resolveTableSchemas(opts, reg, "storage_integrity.agent")
+		if err != nil {
+			return nil, err
+		}
+		seq, err := sistatement.OpenSeqCounter(cfg.StorageIntegrity.Agent.StateDir, signer.Address())
+		if err != nil {
+			return nil, fmt.Errorf("storage_integrity.agent: %w", err)
+		}
+		siPlug, err := sistatement.New(sistatement.Options{
+			Signer:          stmtSigner,
+			Schemas:         schemas,
+			NetworkID:       cfg.StorageIntegrity.Agent.NetworkID,
+			KeeperShardID:   cfg.StorageIntegrity.Agent.KeeperShardID,
+			Seq:             seq,
+			MaxPayloadBytes: cfg.StorageIntegrity.Agent.MaxPayloadBytes,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("storage_integrity.agent: %w", err)
+		}
+		helloPlugins = append(helloPlugins, &sessionstate.Plugin{})
+		queryPlugins = append(queryPlugins, siPlug)
+		strictDataPlugins = append(strictDataPlugins, siPlug)
+		inputCompleteStrictPlugins = append(inputCompleteStrictPlugins, siPlug, agentPlug)
+		abortPlugins = append(abortPlugins, siPlug)
+		successPlugins = append(successPlugins, siPlug)
+		completePlugins = append(completePlugins, siPlug)
+		closePlugins = append(closePlugins, siPlug)
+		log.Infow("storage_integrity agent statement plugin enabled",
+			"network_id", cfg.StorageIntegrity.Agent.NetworkID,
+			"state_dir", cfg.StorageIntegrity.Agent.StateDir,
+			"seq_last", seq.Last(),
+			"max_payload_bytes", cfg.StorageIntegrity.Agent.MaxPayloadBytes)
+	}
 	queryPlugins = append(queryPlugins,
-		&agent.Plugin{Signer: signer, Observer: obs, Owner: cfg.Agent.Owner, IsDriver: cfg.Agent.Driver},
+		agentPlug,
 		metrics,
 	)
 
 	chain := &plugin.PluginChain{
-		ConnLifecyclePlugins:     []plugin.ConnLifecyclePlugin{metrics},
-		HandshakeCompletePlugins: []plugin.HandshakeCompletePlugin{metrics},
-		QueryPlugins:             queryPlugins,
-		ExceptionPlugins:         []plugin.ExceptionPlugin{metrics},
+		ConnLifecyclePlugins:            []plugin.ConnLifecyclePlugin{metrics},
+		HelloPlugins:                    helloPlugins,
+		HandshakeCompletePlugins:        []plugin.HandshakeCompletePlugin{metrics},
+		QueryPlugins:                    queryPlugins,
+		StrictDataPlugins:               strictDataPlugins,
+		QueryInputCompleteStrictPlugins: inputCompleteStrictPlugins,
+		QueryAbortPlugins:               abortPlugins,
+		QuerySuccessPlugins:             successPlugins,
+		QueryCompletePlugins:            completePlugins,
+		ExceptionPlugins:                []plugin.ExceptionPlugin{metrics},
+		ClosePlugins:                    closePlugins,
 	}
 
 	// Two ways to choose an upstream:
@@ -970,7 +1056,7 @@ func buildAgent(opts Options, rf *redisFactory) (*builtServer, error) {
 	srv := proxy.NewServerWithObserver(chain, dialer, obs)
 	srv.ShutdownTimeout = cfg.ShutdownTimeout.Duration
 
-	return &builtServer{
+	built := &builtServer{
 		listeners: []serverListener{
 			{Runner: &proxyServerRunner{server: srv}, ListenAddr: cfg.Listen, Label: "agent"},
 		},
@@ -980,7 +1066,31 @@ func buildAgent(opts Options, rf *redisFactory) (*builtServer, error) {
 				materializerClose()
 			}
 		},
-	}, nil
+	}
+	buildSucceeded = true
+	return built, nil
+}
+
+// agentNetworkState resolves the agent's registry. A host-injected registry
+// wins; otherwise the configured YAML/RPC source is loaded.
+func agentNetworkState(opts Options, rf *redisFactory) (registry.Registry, error) {
+	if opts.NetworkState != nil {
+		return opts.NetworkState, nil
+	}
+	return loadNetworkState(opts.Config, rf)
+}
+
+// resolveTableSchemas selects the declared-schema source used to bind SI
+// statement envelopes. Routing-only Registry implementations may omit schema
+// content, so embedders can supply the narrower interface independently.
+func resolveTableSchemas(opts Options, reg registry.Registry, feature string) (registry.TableSchemas, error) {
+	if opts.StorageIntegrityTableSchemas != nil {
+		return opts.StorageIntegrityTableSchemas, nil
+	}
+	if schemas, ok := reg.(registry.TableSchemas); ok && schemas != nil {
+		return schemas, nil
+	}
+	return nil, fmt.Errorf("%s requires a NetworkState that implements registry.TableSchemas (YAML source or host-injected state); set Options.StorageIntegrityTableSchemas explicitly otherwise", feature)
 }
 
 // buildAgentDialer returns the per-session upstream dialer for agent
@@ -999,15 +1109,9 @@ func buildAgentDialer(opts Options, rf *redisFactory, account string, obs *proxy
 		}, nil
 	}
 
-	var reg registry.Registry
-	if opts.NetworkState != nil {
-		reg = opts.NetworkState
-	} else {
-		var err error
-		reg, err = loadNetworkState(cfg, rf)
-		if err != nil {
-			return nil, err
-		}
+	reg, err := agentNetworkState(opts, rf)
+	if err != nil {
+		return nil, err
 	}
 	if reg == nil {
 		return nil, fmt.Errorf("agent auto-discovery: NetworkState is nil")

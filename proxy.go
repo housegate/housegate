@@ -30,7 +30,6 @@ import (
 	"github.com/housegate/housegate/pkg/plugins/storageintegrity"
 	"github.com/housegate/housegate/pkg/registry"
 	"github.com/housegate/housegate/pkg/rewriter"
-	sicore "github.com/housegate/housegate/pkg/storageintegrity"
 )
 
 // Proxy is a started, ready-to-Serve proxy. Run/RunWith blocks until
@@ -97,17 +96,19 @@ type Options struct {
 	// consumer, because otherwise completed admissions would remain pending
 	// and block subsequent storage writes on persistent client sessions.
 	StorageIntegrityAdmissionConsumer storageintegrity.AdmissionConsumer
-	// StorageIntegrityPayloadMaterializer converts captured Native ClientData
-	// into the replay payload encoding selected by the admitted INSERT. Hosts
-	// that want FORMAT CSVWithNames support must provide one; without it, the
-	// ingress plugin rejects CSVWithNames fail-closed. It is mandatory when the
-	// built-in storage-integrity runtime is enabled because that production
-	// profile admits only csv-with-names-v1.
-	StorageIntegrityPayloadMaterializer sicore.PayloadMaterializer
 	// StorageIntegrityRuntime supplies the real P1e runtime ports used when
 	// config.storage_integrity.runtime.enabled is true. It lets HouseGate build
 	// the admission consumer while the host supplies the source-side adapter.
 	StorageIntegrityRuntime StorageIntegrityRuntimeOptions
+	// StorageIntegrityTableSchemas optionally supplies the declared table
+	// schema source used by the agent-mode statement plugin
+	// (storage_integrity.agent) and the server-mode ingress
+	// (storage_integrity.ingress) to resolve schema_hash. When nil, housegate
+	// type-asserts the effective registry (Options.NetworkState or the
+	// config-loaded one) to registry.TableSchemas; the YAML-backed in-memory
+	// state and sentio-node's adapter implement it, while the agent RPC backend
+	// does not.
+	StorageIntegrityTableSchemas registry.TableSchemas
 
 	// CommitGateObservers gate DDL statements (CREATE / DROP TABLE,
 	// CREATE / DROP DATABASE) on host-supplied external commits.

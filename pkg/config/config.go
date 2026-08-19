@@ -306,6 +306,9 @@ func (c *Config) Validate() error {
 		if err := c.Materialize.Validate(); err != nil {
 			errs = append(errs, err)
 		}
+		if err := c.StorageIntegrity.validateAgent(c); err != nil {
+			errs = append(errs, err)
+		}
 	case ModeServer:
 		// NetworkState is needed both for cross-shard rewriter routing
 		// (when shard/upstream is set) and for router-only fallback

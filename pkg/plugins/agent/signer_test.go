@@ -6,9 +6,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/sha3"
 
@@ -17,6 +20,20 @@ import (
 	"github.com/housegate/housegate/pkg/chsession"
 	"github.com/housegate/housegate/pkg/plugin"
 )
+
+type clockTokenSigner struct {
+	mu    sync.Mutex
+	now   time.Time
+	calls []string
+}
+
+func (s *clockTokenSigner) Address() string { return "0x0000000000000000000000000000000000000001" }
+func (s *clockTokenSigner) SignToken(sql string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, sql)
+	return fmt.Sprintf("token-at-%d", s.now.Unix()), nil
+}
 
 func newTestSession(t *testing.T, id int64) chsession.Session {
 	t.Helper()
@@ -77,6 +94,39 @@ func TestPlugin_InjectsTokenIntoSettings(t *testing.T) {
 	}
 	if parts := strings.Split(token, "."); len(parts) != 3 {
 		t.Errorf("expected JWS compact token (3 parts), got %d: %q", len(parts), token)
+	}
+}
+
+func TestPlugin_RefreshesDeferredAuthTokenAtInputCompleteWithoutDuplicate(t *testing.T) {
+	clock := &clockTokenSigner{now: time.Unix(100, 0)}
+	p := &Plugin{Signer: clock}
+	qctx := newTestQueryContext(newTestSession(t, 51), "INSERT INTO t FORMAT Native")
+	qctx.DeferredInsert = &plugin.DeferredInsertPlan{MaxPayloadBytes: 1024}
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := findAuthToken(qctx.Query.Settings); got != "'token-at-100'" {
+		t.Fatalf("initial token = %q", got)
+	}
+	clock.mu.Lock()
+	clock.now = time.Unix(220, 0) // beyond the default one-minute max token age
+	clock.mu.Unlock()
+	if err := p.OnQueryInputCompleteStrict(context.Background(), qctx); err != nil {
+		t.Fatal(err)
+	}
+	var tokens []string
+	for _, setting := range qctx.Query.Settings {
+		if setting.Key == auth.AuthTokenSettingKey {
+			tokens = append(tokens, setting.Value)
+		}
+	}
+	if len(tokens) != 1 || tokens[0] != "'token-at-220'" {
+		t.Fatalf("refreshed auth settings = %v, want one fresh token", tokens)
+	}
+	clock.mu.Lock()
+	defer clock.mu.Unlock()
+	if len(clock.calls) != 2 || clock.calls[0] != qctx.Query.Body || clock.calls[1] != qctx.Query.Body {
+		t.Fatalf("signed SQL calls = %v, want final SQL twice", clock.calls)
 	}
 }
 

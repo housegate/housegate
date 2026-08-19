@@ -241,3 +241,62 @@ func TestRecoverPendingDrainsAThenBInOrdinalOrder(t *testing.T) {
 		t.Fatalf("submit order = %v, want [%s %s]", order, admissions[0].StatementID, admissions[1].StatementID)
 	}
 }
+
+func TestRecoverPendingDrainsKnownUnwrittenHolderBeforeLaterUnsafeRecord(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	journal, err := NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	admA := admissionFixture()
+	admB := admissionFixture()
+	admB.StatementID = fixtureStatementID(2)
+	envA, err := EnvelopeFromAdmission(admA)
+	if err != nil {
+		t.Fatalf("EnvelopeFromAdmission A: %v", err)
+	}
+	envB, err := EnvelopeFromAdmission(admB)
+	if err != nil {
+		t.Fatalf("EnvelopeFromAdmission B: %v", err)
+	}
+	if err := journal.SaveIntakeRecord(ctx, IntakeJournalRecord{
+		StatementID:           admA.StatementID,
+		Source:                "snode-A",
+		FrontierOrdinal:       1,
+		Env:                   envA,
+		Admission:             admA,
+		Stage:                 LifecyclePreparing,
+		PrepareKnownUnwritten: true,
+	}); err != nil {
+		t.Fatalf("SaveIntakeRecord A: %v", err)
+	}
+	preparedB := boundSource()
+	preparedB.StatementID = admB.StatementID
+	if err := journal.SaveIntakeRecord(ctx, IntakeJournalRecord{
+		StatementID:     admB.StatementID,
+		Source:          "snode-A",
+		FrontierOrdinal: 2,
+		Env:             envB,
+		Admission:       admB,
+		Stage:           LifecycleUnsafeWritten,
+		Prepared:        preparedB,
+		HasPrepared:     true,
+	}); err != nil {
+		t.Fatalf("SaveIntakeRecord B: %v", err)
+	}
+
+	sub := &orderedRecoverySubmitter{}
+	orch := NewOrchestrator(sub, newLookupRecordingPreparer(boundSource()), OrchestratorConfig{
+		ExpectedSource:        "snode-A",
+		Journal:               journal,
+		RecoveryRetryInterval: time.Millisecond,
+	})
+	if err := orch.RecoverPending(ctx); err != nil {
+		t.Fatalf("RecoverPending mixed known-unwritten/unsafe records: %v", err)
+	}
+	order := sub.callOrder()
+	if len(order) != 2 || order[0] != admA.StatementID || order[1] != admB.StatementID {
+		t.Fatalf("submit order = %v, want safe-retry A then unsafe B", order)
+	}
+}

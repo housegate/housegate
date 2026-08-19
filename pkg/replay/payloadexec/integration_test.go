@@ -6,8 +6,11 @@ import (
 	"encoding/hex"
 	"testing"
 
+	"github.com/ClickHouse/ch-go/proto"
+
 	"github.com/housegate/housegate/pkg/lthash"
 	"github.com/housegate/housegate/pkg/replay"
+	"github.com/housegate/housegate/pkg/replay/nativepayload"
 	"github.com/housegate/housegate/pkg/replay/payloadexec"
 )
 
@@ -17,20 +20,32 @@ import (
 // walkthroughs (§12) the design layer is built to catch.
 
 const (
-	network = "sentio-net"
-	table   = "balances"
-	schema  = "schema-1"
-	profile = "ch-26.x-pinned"
+	network  = "sentio-net"
+	table    = "balances"
+	schema   = "schema-1"
+	profile  = "ch-26.x-pinned"
+	revision = 54460
 )
 
 func newExecutor() *payloadexec.Executor {
-	return payloadexec.New(network, payloadexec.TableSchema{
+	return payloadexec.NewWithMaterializer(network, nativepayload.Materializer{NetworkID: network, Revision: revision}, integrationSchema())
+}
+
+func integrationSchema() payloadexec.TableSchema {
+	return payloadexec.TableSchema{
 		TableID: table,
 		Columns: []lthash.Column{
 			{Name: "user_id", Type: "String"},
 			{Name: "balance", Type: "UInt64"},
 		},
-	})
+	}
+}
+
+type schemaHashes map[string]string
+
+func (s schemaHashes) TableSchemaHash(tableID string) (string, bool) {
+	hash, ok := s[tableID]
+	return hash, ok
 }
 
 // harness bundles the fully wired verifier and the stores feeding it.
@@ -67,17 +82,18 @@ func newHarness(t *testing.T) *harness {
 		payloads:  payloads,
 		signer:    signer,
 		verifier: &replay.Verifier{
-			Snapshots: snapshots,
-			Payloads:  payloads,
-			Executor:  exec,
-			Signer:    signer,
+			Snapshots:    snapshots,
+			Payloads:     payloads,
+			Executor:     exec,
+			Signer:       signer,
+			SchemaHashes: schemaHashes{table: payloadexec.TableSchemaHash(network, integrationSchema())},
 		},
 		genesis: gen,
 	}
 }
 
 func buildJob(snap replay.SafeSnapshotManifest, statementID, payloadRef string, payload []byte, sourceClaimRoot string) replay.ReplayJob {
-	sql := "INSERT INTO balances FORMAT CSVWithNames"
+	sql := "INSERT INTO balances FORMAT Native"
 	return replay.ReplayJob{
 		BlockSeq:           snap.SafeBlockSeq + 1,
 		PrevSafeSnapshotID: snap.SnapshotID,
@@ -86,17 +102,45 @@ func buildJob(snap replay.SafeSnapshotManifest, statementID, payloadRef string, 
 		ExecutorProfileID:  snap.ExecutorProfileID,
 		SourceClaimRoot:    sourceClaimRoot,
 		Statements: []replay.Statement{{
-			StatementID:   statementID,
-			StatementSeq:  snap.SafeBlockSeq + 1,
-			SQL:           sql,
-			SQLHash:       replay.DigestString(sql),
-			SettingsHash:  replay.DigestString("settings"),
-			PayloadRef:    payloadRef,
-			PayloadHash:   replay.DigestBytes(payload),
-			PayloadLength: uint64(len(payload)),
-			TargetTableID: table,
+			StatementID:    statementID,
+			StatementSeq:   snap.SafeBlockSeq + 1,
+			SQL:            sql,
+			SQLHash:        replay.DigestString(sql),
+			SettingsHash:   replay.DigestString("settings"),
+			PayloadRef:     payloadRef,
+			PayloadHash:    replay.DigestBytes(payload),
+			PayloadLength:  uint64(len(payload)),
+			TargetTableID:  table,
+			PayloadFormat:  replay.PayloadFormatClickHouseNativeData,
+			ClientRevision: revision,
+			SchemaHash:     payloadexec.TableSchemaHash(network, integrationSchema()),
 		}},
 	}
+}
+
+type balanceRow struct {
+	userID  string
+	balance uint64
+}
+
+func nativeBalancePayload(t *testing.T, rows ...balanceRow) []byte {
+	t.Helper()
+	users := proto.ColStr{}
+	balances := proto.ColUInt64{}
+	for _, row := range rows {
+		users.Append(row.userID)
+		balances.Append(row.balance)
+	}
+	var buf proto.Buffer
+	buf.PutUVarInt(uint64(proto.ClientCodeData))
+	buf.PutString("")
+	if err := (proto.Block{Rows: len(rows), Columns: 2}).EncodeBlock(&buf, revision, proto.Input{
+		{Name: "user_id", Data: &users},
+		{Name: "balance", Data: &balances},
+	}); err != nil {
+		t.Fatalf("encode Native balance payload: %v", err)
+	}
+	return append([]byte(nil), buf.Buf...)
 }
 
 // rootFor simulates a source executing a payload under a given statement_id and
@@ -116,7 +160,7 @@ func rootFor(t *testing.T, exec *payloadexec.Executor, snap replay.SafeSnapshotM
 
 func TestIntegrationHonestInsertProducesMatchingSignedAttestation(t *testing.T) {
 	h := newHarness(t)
-	payload := []byte("user_id,balance\n0x123,10\n")
+	payload := nativeBalancePayload(t, balanceRow{userID: "0x123", balance: 10})
 	h.payloads.Put("payload-1", payload)
 	claim := rootFor(t, h.exec, h.genesis, "stmt-1", payload)
 
@@ -141,8 +185,8 @@ func TestIntegrationHonestInsertProducesMatchingSignedAttestation(t *testing.T) 
 // non-repudiable challenge evidence (it does not error).
 func TestIntegrationFraudulentSourceProducesSignedMismatch(t *testing.T) {
 	h := newHarness(t)
-	signedPayload := []byte("user_id,balance\n0x123,10\n")
-	tamperedPayload := []byte("user_id,balance\n0x123,0\n")
+	signedPayload := nativeBalancePayload(t, balanceRow{userID: "0x123", balance: 10})
+	tamperedPayload := nativeBalancePayload(t, balanceRow{userID: "0x123", balance: 0})
 	h.payloads.Put("payload-1", signedPayload)
 
 	fraudRoot := rootFor(t, h.exec, h.genesis, "stmt-1", tamperedPayload) // root the bad source registers
@@ -172,7 +216,10 @@ func TestIntegrationFraudulentSourceProducesSignedMismatch(t *testing.T) {
 // the correct commitment is recomputable, so two independent verifiers with
 // different keys derive the identical receipt hash for the same job.
 func TestIntegrationRecomputabilityAcrossVerifiers(t *testing.T) {
-	payload := []byte("user_id,balance\n0x123,10\nveritas,42\n")
+	payload := nativeBalancePayload(t,
+		balanceRow{userID: "0x123", balance: 10},
+		balanceRow{userID: "veritas", balance: 42},
+	)
 
 	verifyWith := func(replicaSeed byte, replicaID string) replay.ReplayAttestation {
 		h := newHarness(t)
@@ -208,9 +255,9 @@ func TestIntegrationRecomputabilityAcrossVerifiers(t *testing.T) {
 // executor runs (local refusal to attest — no signed receipt).
 func TestIntegrationPayloadTamperRejectedBeforeExecutor(t *testing.T) {
 	h := newHarness(t)
-	signedPayload := []byte("user_id,balance\n0x123,10\n")
+	signedPayload := nativeBalancePayload(t, balanceRow{userID: "0x123", balance: 10})
 	// Store DIFFERENT bytes than the statement's payload_hash commits to.
-	h.payloads.Put("payload-1", []byte("user_id,balance\n0x123,999999\n"))
+	h.payloads.Put("payload-1", nativeBalancePayload(t, balanceRow{userID: "0x123", balance: 999999}))
 
 	job := buildJob(h.genesis, "stmt-1", "payload-1", signedPayload, "anything")
 	if _, err := h.verifier.Verify(context.Background(), job); err == nil {
@@ -222,7 +269,7 @@ func TestIntegrationPayloadTamperRejectedBeforeExecutor(t *testing.T) {
 // from a snapshot the verifier cannot load as safe.
 func TestIntegrationRejectsUnknownPrevSnapshot(t *testing.T) {
 	h := newHarness(t)
-	payload := []byte("user_id,balance\n0x123,10\n")
+	payload := nativeBalancePayload(t, balanceRow{userID: "0x123", balance: 10})
 	h.payloads.Put("payload-1", payload)
 
 	job := buildJob(h.genesis, "stmt-1", "payload-1", payload, "x")
@@ -238,7 +285,7 @@ func TestIntegrationRejectsUnknownPrevSnapshot(t *testing.T) {
 func TestIntegrationSafeChainAdvancesAcrossBlocks(t *testing.T) {
 	h := newHarness(t)
 
-	p1 := []byte("user_id,balance\n0x123,10\n")
+	p1 := nativeBalancePayload(t, balanceRow{userID: "0x123", balance: 10})
 	h.payloads.Put("p1", p1)
 	claim1 := rootFor(t, h.exec, h.genesis, "stmt-1", p1)
 	att1, err := h.verifier.Verify(context.Background(), buildJob(h.genesis, "stmt-1", "p1", p1, claim1))
@@ -262,7 +309,7 @@ func TestIntegrationSafeChainAdvancesAcrossBlocks(t *testing.T) {
 	}
 	h.snapshots.Put(safe1)
 
-	p2 := []byte("user_id,balance\n0xabc,250\n")
+	p2 := nativeBalancePayload(t, balanceRow{userID: "0xabc", balance: 250})
 	h.payloads.Put("p2", p2)
 	claim2 := rootFor(t, h.exec, safe1, "stmt-2", p2)
 	att2, err := h.verifier.Verify(context.Background(), buildJob(safe1, "stmt-2", "p2", p2, claim2))

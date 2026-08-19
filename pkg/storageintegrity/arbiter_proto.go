@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/housegate/housegate/pkg/replay"
+	"github.com/housegate/housegate/pkg/replay/payloadexec"
 )
 
 // ArbiterStatementSubmitter adapts the HouseGate intake StatementSubmitter port
@@ -319,21 +320,46 @@ func ArbiterStatementEnvelopeToProto(env StatementEnvelope) (*pb.StatementEnvelo
 	if env.UserJWS == "" {
 		return nil, fmt.Errorf("storageintegrity: user JWS is required for arbiter SubmitStatement")
 	}
+	if env.EnvelopeVersion != EnvelopeVersionV2 {
+		return nil, fmt.Errorf("storageintegrity: envelope %s has envelope_version %d, want %d", env.StatementID, env.EnvelopeVersion, EnvelopeVersionV2)
+	}
+	if strings.TrimSpace(env.NetworkID) == "" || env.SettingsHash == "" || env.SchemaHash == "" || env.RowIDProfileID == "" || env.PayloadEncoding == "" || env.Revision <= 0 || uint64(env.Revision) > uint64(^uint32(0)) {
+		return nil, fmt.Errorf("storageintegrity: envelope %s is missing v2 fields (version=%d network=%q settings=%q schema=%q profile=%q format=%q revision=%d)", env.StatementID, env.EnvelopeVersion, env.NetworkID, env.SettingsHash, env.SchemaHash, env.RowIDProfileID, env.PayloadEncoding, env.Revision)
+	}
+	if env.KeeperShardID != 0 {
+		return nil, fmt.Errorf("storageintegrity: envelope %s keeper_shard_id %d, want 0 in v1", env.StatementID, env.KeeperShardID)
+	}
+	if env.SettingsHash != EmptySettingsHash {
+		return nil, fmt.Errorf("storageintegrity: envelope %s settings_hash %q, want empty-settings digest", env.StatementID, env.SettingsHash)
+	}
+	if env.RowIDProfileID != payloadexec.RowIDProfileID {
+		return nil, fmt.Errorf("storageintegrity: envelope %s row_id_profile_id %q, want %q", env.StatementID, env.RowIDProfileID, payloadexec.RowIDProfileID)
+	}
+	if env.PayloadEncoding != PayloadEncodingClickHouseNativeData {
+		return nil, fmt.Errorf("storageintegrity: envelope %s payload format %q, want %q", env.StatementID, env.PayloadEncoding, PayloadEncodingClickHouseNativeData)
+	}
 	return &pb.StatementEnvelopeV2{
 		StatementId: &pb.StatementID{
 			ClientAccount: id.ClientAccount,
 			ClientSeq:     id.ClientSeq,
 			ClientNonce:   id.ClientNonce,
 		},
-		StatementKind: pb.StatementKind_STATEMENT_KIND_INSERT,
-		Sql:           env.SQL,
-		SqlHash:       env.SQLHash,
-		SettingsHash:  "",
-		PayloadRef:    env.PayloadRef,
-		PayloadHash:   env.PayloadHash,
-		PayloadLength: env.PayloadLength,
-		TargetTableId: env.TargetTableID,
-		UserJws:       env.UserJWS,
+		StatementKind:   pb.StatementKind_STATEMENT_KIND_INSERT,
+		Sql:             env.SQL,
+		SqlHash:         env.SQLHash,
+		SettingsHash:    env.SettingsHash,
+		PayloadRef:      env.PayloadRef,
+		PayloadHash:     env.PayloadHash,
+		PayloadLength:   env.PayloadLength,
+		TargetTableId:   env.TargetTableID,
+		UserJws:         env.UserJWS,
+		EnvelopeVersion: env.EnvelopeVersion,
+		NetworkId:       env.NetworkID,
+		KeeperShardId:   env.KeeperShardID,
+		PayloadFormat:   env.PayloadEncoding,
+		ClientRevision:  uint32(env.Revision),
+		SchemaHash:      env.SchemaHash,
+		RowIdProfileId:  env.RowIDProfileID,
 	}, nil
 }
 

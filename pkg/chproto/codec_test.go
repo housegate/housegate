@@ -808,6 +808,83 @@ func TestReadPacket_AcrossDecodeAndRawBoundaries(t *testing.T) {
 	}
 }
 
+func TestWaitForPacketStart_IsNonConsuming(t *testing.T) {
+	peer, relay := net.Pipe()
+	defer peer.Close()
+	defer relay.Close()
+	c := NewCodec(relay, DirFromClient)
+	written := make(chan error, 1)
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		_, err := peer.Write([]byte{byte(proto.ClientCodePing)})
+		written <- err
+	}()
+	available, err := c.WaitForPacketStart(time.Second)
+	if err != nil || !available {
+		t.Fatalf("WaitForPacketStart = %v, %v; want true, nil", available, err)
+	}
+	pkt, err := c.ReadPacket()
+	if err != nil || pkt.Type != uint64(proto.ClientCodePing) {
+		t.Fatalf("ReadPacket after lookahead = %#v, %v; want Ping", pkt, err)
+	}
+	if err := <-written; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWaitForPacketStart_TimeoutDoesNotPoisonNextRead(t *testing.T) {
+	peer, relay := net.Pipe()
+	defer peer.Close()
+	defer relay.Close()
+	c := NewCodec(relay, DirFromClient)
+	available, err := c.WaitForPacketStart(10 * time.Millisecond)
+	if err != nil || available {
+		t.Fatalf("WaitForPacketStart timeout = %v, %v; want false, nil", available, err)
+	}
+	written := make(chan error, 1)
+	go func() {
+		_, err := peer.Write([]byte{byte(proto.ClientCodePing)})
+		written <- err
+	}()
+	pkt, err := c.ReadPacket()
+	if err != nil || pkt.Type != uint64(proto.ClientCodePing) {
+		t.Fatalf("ReadPacket after timeout = %#v, %v; want Ping", pkt, err)
+	}
+	if err := <-written; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWaitForPacketStart_ChunkedPartialHeaderTimeoutDoesNotConsume(t *testing.T) {
+	peer, relay := net.Pipe()
+	defer peer.Close()
+	defer relay.Close()
+	c := NewCodec(relay, DirFromClient)
+	c.EnableChunked(true, false)
+	written := make(chan error, 1)
+	go func() {
+		// Fragment the 4-byte chunk header across the lookahead deadline. The
+		// completed frame is one Ping packet followed by the logical-chunk end.
+		_, err := peer.Write([]byte{1, 0})
+		if err == nil {
+			time.Sleep(50 * time.Millisecond)
+			_, err = peer.Write([]byte{0, 0, byte(proto.ClientCodePing)})
+		}
+		written <- err
+	}()
+	available, err := c.WaitForPacketStart(20 * time.Millisecond)
+	if err != nil || available {
+		t.Fatalf("fragmented header lookahead = %v, %v; want false, nil", available, err)
+	}
+	pkt, err := c.ReadPacket()
+	if err != nil || pkt.Type != uint64(proto.ClientCodePing) {
+		t.Fatalf("ReadPacket after fragmented timeout = %#v, %v; want Ping", pkt, err)
+	}
+	if err := <-written; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSplice_DecodedPacket_Errors(t *testing.T) {
 	// Per spec: callers must NOT Splice a Packet that was decoded; they should
 	// call WriteClientHello/WriteQuery/etc. instead. Splice should error out.

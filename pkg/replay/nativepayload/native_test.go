@@ -1,9 +1,10 @@
-package storageintegrity
+package nativepayload
 
 import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"io"
 	"reflect"
 	"testing"
 	"time"
@@ -35,7 +36,7 @@ func TestDecodeNativePayloadMaterializesPinnedSchemaRows(t *testing.T) {
 		{Name: "id", Data: &proto.ColUInt64{1, 2}},
 	})
 
-	rows, err := DecodeNativePayload(schema, nativePayloadTestRevision, payload)
+	rows, err := Decode(schema, nativePayloadTestRevision, payload)
 	if err != nil {
 		t.Fatalf("DecodeNativePayload: %v", err)
 	}
@@ -77,7 +78,7 @@ func TestNativeMaterializerInjectsSharedRowIDsAcrossBlocks(t *testing.T) {
 		Payload: payload,
 	}
 
-	rows, err := (NativeMaterializer{NetworkID: "network-1", Revision: nativePayloadTestRevision}).Materialize(context.Background(), schema, statement)
+	rows, err := (Materializer{NetworkID: "network-1", Revision: nativePayloadTestRevision}).Materialize(context.Background(), schema, statement)
 	if err != nil {
 		t.Fatalf("Materialize: %v", err)
 	}
@@ -99,7 +100,7 @@ func TestDecodeNativePayloadRejectsPinnedSchemaMismatch(t *testing.T) {
 		{Name: "region", Data: newColStr("eu")},
 		{Name: "id", Data: &proto.ColUInt64{1}},
 	})
-	if _, err := DecodeNativePayload(schema, nativePayloadTestRevision, withInjectedRowID); err == nil {
+	if _, err := Decode(schema, nativePayloadTestRevision, withInjectedRowID); err == nil {
 		t.Fatal("DecodeNativePayload must reject payloads that include reserved _hg_row_id")
 	}
 
@@ -107,12 +108,12 @@ func TestDecodeNativePayloadRejectsPinnedSchemaMismatch(t *testing.T) {
 		{Name: "region", Data: newColStr("eu")},
 		{Name: "id", Data: newColStr("1")},
 	})
-	if _, err := DecodeNativePayload(schema, nativePayloadTestRevision, wrongType); err == nil {
+	if _, err := Decode(schema, nativePayloadTestRevision, wrongType); err == nil {
 		t.Fatal("DecodeNativePayload must reject unchanged column names with different Native types")
 	}
 
 	missingColumn := encodeNativePayload(t, proto.Input{{Name: "id", Data: &proto.ColUInt64{1}}})
-	if _, err := DecodeNativePayload(schema, nativePayloadTestRevision, missingColumn); err == nil {
+	if _, err := Decode(schema, nativePayloadTestRevision, missingColumn); err == nil {
 		t.Fatal("DecodeNativePayload must reject payloads missing pinned schema columns")
 	}
 }
@@ -123,7 +124,7 @@ func TestValidateNativePayloadDecodable(t *testing.T) {
 		{Name: "region", Data: newColStr("eu")},
 		{Name: "id", Data: &proto.ColUInt64{1}},
 	})
-	if err := ValidateNativePayloadDecodable(schema, nativePayloadTestRevision, ok); err != nil {
+	if err := ValidateDecodable(schema, nativePayloadTestRevision, ok); err != nil {
 		t.Fatalf("supported scalar payload must validate: %v", err)
 	}
 
@@ -131,8 +132,8 @@ func TestValidateNativePayloadDecodable(t *testing.T) {
 		{Name: "region", Data: newColStr("eu")},
 		{Name: "id", Data: &proto.ColInt128{proto.Int128{Low: 1}}},
 	})
-	err := ValidateNativePayloadDecodable(schema, nativePayloadTestRevision, bad)
-	if err == nil || !errors.Is(err, ErrNativePayloadUnsupported) {
+	err := ValidateDecodable(schema, nativePayloadTestRevision, bad)
+	if err == nil || !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("unsupported column type must be rejected with ErrNativePayloadUnsupported, got %v", err)
 	}
 }
@@ -145,29 +146,54 @@ func TestNativePayloadRejectsUnsupportedPinnedScalarType(t *testing.T) {
 	payload := encodeNativePayload(t, proto.Input{
 		{Name: "value", Data: &proto.ColInt128{proto.Int128{Low: 1}}},
 	})
-	err := ValidateNativePayloadDecodable(schema, nativePayloadTestRevision, payload)
-	if err == nil || !errors.Is(err, ErrNativePayloadUnsupported) {
+	err := ValidateDecodable(schema, nativePayloadTestRevision, payload)
+	if err == nil || !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("matching but unsupported pinned scalar must fail closed, got %v", err)
 	}
 }
 
 func TestNativePayloadRejectsUndecodableBlock(t *testing.T) {
-	err := ValidateNativePayloadDecodable(nativeMaterializerSchema(), nativePayloadTestRevision, []byte{byte(proto.ClientCodeData)})
-	if err == nil || !errors.Is(err, ErrNativePayloadUnsupported) {
+	err := ValidateDecodable(nativeMaterializerSchema(), nativePayloadTestRevision, []byte{byte(proto.ClientCodeData)})
+	if err == nil || !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("undecodable native payload must be rejected with ErrNativePayloadUnsupported, got %v", err)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("ValidateDecodable must preserve the decoder cause for errors.Is/As, got %v", err)
+	}
+}
+
+func TestDecodeNativePayloadRejectsEmbeddedZeroRowDataPackets(t *testing.T) {
+	schema := nativeMaterializerSchema()
+	zero := encodeNativePacket(t, uint64(proto.ClientCodeData), proto.Input{
+		{Name: "region", Data: newColStr()},
+		{Name: "id", Data: &proto.ColUInt64{}},
+	}, 0)
+	valid := encodeNativePayload(t, proto.Input{
+		{Name: "region", Data: newColStr("eu")},
+		{Name: "id", Data: &proto.ColUInt64{1}},
+	})
+	for name, payload := range map[string][]byte{
+		"prefix": append(append([]byte{}, zero...), valid...),
+		"suffix": append(append([]byte{}, valid...), zero...),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Decode(schema, nativePayloadTestRevision, payload); err == nil {
+				t.Fatal("captured Native payload must reject embedded zero-row control packets")
+			}
+		})
 	}
 }
 
 func TestNativePayloadRejectsEmptyStream(t *testing.T) {
-	err := ValidateNativePayloadDecodable(nativeMaterializerSchema(), nativePayloadTestRevision, nil)
-	if err == nil || !errors.Is(err, ErrNativePayloadUnsupported) {
+	err := ValidateDecodable(nativeMaterializerSchema(), nativePayloadTestRevision, nil)
+	if err == nil || !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("empty native payload must be rejected with ErrNativePayloadUnsupported, got %v", err)
 	}
 }
 
 func TestNativeMaterializerRejectsStatementWithoutPayload(t *testing.T) {
 	schema := nativeMaterializerSchema()
-	_, err := (NativeMaterializer{NetworkID: "network-1", Revision: nativePayloadTestRevision}).Materialize(
+	_, err := (Materializer{NetworkID: "network-1", Revision: nativePayloadTestRevision}).Materialize(
 		context.Background(),
 		schema,
 		replay.PreparedStatement{Statement: replay.Statement{StatementID: "stmt-mutation", TargetTableID: schema.TableID}},
@@ -183,7 +209,7 @@ func TestNativeMaterializerRejectsTargetSchemaMismatch(t *testing.T) {
 		{Name: "region", Data: newColStr("eu")},
 		{Name: "id", Data: &proto.ColUInt64{1}},
 	})
-	_, err := (NativeMaterializer{NetworkID: "network-1", Revision: nativePayloadTestRevision}).Materialize(
+	_, err := (Materializer{NetworkID: "network-1", Revision: nativePayloadTestRevision}).Materialize(
 		context.Background(),
 		schema,
 		replay.PreparedStatement{
@@ -207,7 +233,7 @@ func TestNativeMaterializerRejectsEmptyTargetTable(t *testing.T) {
 		{Name: "region", Data: newColStr("eu")},
 		{Name: "id", Data: &proto.ColUInt64{1}},
 	})
-	_, err := (NativeMaterializer{NetworkID: "network-1", Revision: nativePayloadTestRevision}).Materialize(
+	_, err := (Materializer{NetworkID: "network-1", Revision: nativePayloadTestRevision}).Materialize(
 		context.Background(),
 		schema,
 		replay.PreparedStatement{
@@ -240,7 +266,7 @@ func TestNativeMaterializerMatchesCSVExecutorProfile(t *testing.T) {
 		csvPayload,
 	)
 	nativeRoot, nativeCommitments, nativeParts := applySharedPayloadExecutor(t,
-		payloadexec.NewWithMaterializer(networkID, NativeMaterializer{NetworkID: networkID, Revision: nativePayloadTestRevision}, schema),
+		payloadexec.NewWithMaterializer(networkID, Materializer{NetworkID: networkID, Revision: nativePayloadTestRevision}, schema),
 		schema.TableID,
 		"stmt-shared-1",
 		nativePayload,
@@ -278,7 +304,7 @@ func TestNativeMaterializerPopulatesDeterministicPartBytes(t *testing.T) {
 		{Name: "id", Data: &proto.ColUInt64{1, 2}},
 	})
 
-	rows, err := DecodeNativePayload(schema, nativePayloadTestRevision, nativePayload)
+	rows, err := Decode(schema, nativePayloadTestRevision, nativePayload)
 	if err != nil {
 		t.Fatalf("DecodeNativePayload: %v", err)
 	}
@@ -287,7 +313,7 @@ func TestNativeMaterializerPopulatesDeterministicPartBytes(t *testing.T) {
 	}
 
 	_, _, parts := applySharedPayloadExecutor(t,
-		payloadexec.NewWithMaterializer(networkID, NativeMaterializer{NetworkID: networkID, Revision: nativePayloadTestRevision}, schema),
+		payloadexec.NewWithMaterializer(networkID, Materializer{NetworkID: networkID, Revision: nativePayloadTestRevision}, schema),
 		schema.TableID,
 		"stmt-native-bytes",
 		nativePayload,
@@ -351,7 +377,7 @@ func TestNativeMaterializerAdmittedScalarGoldenMatrix(t *testing.T) {
 		{Name: "millisecond", Data: dateTime64},
 	})
 
-	rows, err := DecodeNativePayload(schema, nativePayloadTestRevision, payload)
+	rows, err := Decode(schema, nativePayloadTestRevision, payload)
 	if err != nil {
 		t.Fatalf("DecodeNativePayload: %v", err)
 	}
@@ -379,7 +405,7 @@ func TestNativeMaterializerAdmittedScalarGoldenMatrix(t *testing.T) {
 	}
 
 	_, _, parts := applySharedPayloadExecutor(t,
-		payloadexec.NewWithMaterializer("network-1", NativeMaterializer{NetworkID: "network-1", Revision: nativePayloadTestRevision}, schema),
+		payloadexec.NewWithMaterializer("network-1", Materializer{NetworkID: "network-1", Revision: nativePayloadTestRevision}, schema),
 		schema.TableID,
 		"stmt-native-scalars",
 		payload,
@@ -390,16 +416,20 @@ func TestNativeMaterializerAdmittedScalarGoldenMatrix(t *testing.T) {
 }
 
 func TestNativePayloadDecodesClickHouseGoClientData(t *testing.T) {
+	// This fixture is the single non-empty ClientData packet captured from a
+	// clickhouse-go INSERT. The leading external-tables marker and trailing
+	// zero-row terminator are control packets and are deliberately excluded
+	// from payload_format=clickhouse-native-data-v1.
 	payloadHex := "" +
-		"0200010002ffffffff0000000200010002ffffffff0002010269640655496e74" +
+		"0200010002ffffffff0002010269640655496e74" +
 		"3634000100000000000000056c6162656c06537472696e67001074656e616e74" +
-		"5f6532655f612d726f770200010002ffffffff000000"
+		"5f6532655f612d726f77"
 	payload, err := hex.DecodeString(payloadHex)
 	if err != nil {
 		t.Fatalf("DecodeString: %v", err)
 	}
 
-	rows, err := DecodeNativePayload(payloadexec.TableSchema{
+	rows, err := Decode(payloadexec.TableSchema{
 		TableID: "tenant_e2e_a.events",
 		Columns: []lthash.Column{
 			{Name: "id", Type: "UInt64"},

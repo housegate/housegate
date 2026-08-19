@@ -27,9 +27,25 @@ func TestStorageIntegrityDisabledIsNoOp(t *testing.T) {
 	}
 }
 
+func TestStorageIntegrityIngressConfig_RequiresNetworkID(t *testing.T) {
+	c := Default()
+	c.Listen = "127.0.0.1:0"
+	c.NetworkState.Source = "ns.yaml"
+	c.StorageIntegrity.Ingress.Enabled = true
+	c.StorageIntegrity.Ingress.AllowedAddresses = []string{"0x0000000000000000000000000000000000000001"}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "network_id") {
+		t.Fatalf("ingress without network_id must be rejected: %v", err)
+	}
+	c.StorageIntegrity.Ingress.NetworkID = "testnet-v2"
+	if err := c.Validate(); err != nil {
+		t.Fatalf("valid ingress config rejected: %v", err)
+	}
+}
+
 func TestConfigValidateStorageIntegrityIngress(t *testing.T) {
 	base := minimalServerConfig(t)
 	base.StorageIntegrity.Ingress.Enabled = true
+	base.StorageIntegrity.Ingress.NetworkID = "testnet-v2"
 	base.StorageIntegrity.Ingress.AllowedAddresses = []string{"0x1111111111111111111111111111111111111111"}
 	base.StorageIntegrity.Ingress.MaxTokenAge.Duration = time.Minute
 	base.StorageIntegrity.Ingress.RequestTimeout.Duration = 5 * time.Second
@@ -44,6 +60,7 @@ func TestConfigValidateStorageIntegrityIngress(t *testing.T) {
 			Agent:  agentConfigForStorageIntegrityTest(),
 		}
 		cfg.StorageIntegrity.Ingress.Enabled = true
+		cfg.StorageIntegrity.Ingress.NetworkID = "testnet-v2"
 		cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{"0x1111111111111111111111111111111111111111"}
 		cfg.StorageIntegrity.Ingress.MaxTokenAge.Duration = time.Minute
 		cfg.StorageIntegrity.Ingress.RequestTimeout.Duration = 5 * time.Second
@@ -57,6 +74,7 @@ func TestConfigValidateStorageIntegrityIngress(t *testing.T) {
 	t.Run("signer allowlist required", func(t *testing.T) {
 		cfg := minimalServerConfig(t)
 		cfg.StorageIntegrity.Ingress.Enabled = true
+		cfg.StorageIntegrity.Ingress.NetworkID = "testnet-v2"
 		cfg.StorageIntegrity.Ingress.MaxPayloadBytes = defaultStorageIntegrityMaxPayloadBytes
 		err := cfg.Validate()
 		if err == nil || !strings.Contains(err.Error(), "allowed_addresses") {
@@ -67,6 +85,7 @@ func TestConfigValidateStorageIntegrityIngress(t *testing.T) {
 	t.Run("positive timeout required", func(t *testing.T) {
 		cfg := minimalServerConfig(t)
 		cfg.StorageIntegrity.Ingress.Enabled = true
+		cfg.StorageIntegrity.Ingress.NetworkID = "testnet-v2"
 		cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{"0x1111111111111111111111111111111111111111"}
 		cfg.StorageIntegrity.Ingress.MaxTokenAge.Duration = time.Minute
 		cfg.StorageIntegrity.Ingress.RequestTimeout.Duration = 0
@@ -80,6 +99,7 @@ func TestConfigValidateStorageIntegrityIngress(t *testing.T) {
 	t.Run("positive max payload required", func(t *testing.T) {
 		cfg := minimalServerConfig(t)
 		cfg.StorageIntegrity.Ingress.Enabled = true
+		cfg.StorageIntegrity.Ingress.NetworkID = "testnet-v2"
 		cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{"0x1111111111111111111111111111111111111111"}
 		cfg.StorageIntegrity.Ingress.MaxTokenAge.Duration = time.Minute
 		cfg.StorageIntegrity.Ingress.RequestTimeout.Duration = 5 * time.Second
@@ -103,6 +123,7 @@ func TestConfigValidateStorageIntegrityIngress(t *testing.T) {
 	t.Run("runtime enabled requires expected source", func(t *testing.T) {
 		cfg := minimalServerConfig(t)
 		cfg.StorageIntegrity.Ingress.Enabled = true
+		cfg.StorageIntegrity.Ingress.NetworkID = "testnet-v2"
 		cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{"0x1111111111111111111111111111111111111111"}
 		cfg.StorageIntegrity.Ingress.MaxTokenAge.Duration = time.Minute
 		cfg.StorageIntegrity.Ingress.RequestTimeout.Duration = 5 * time.Second
@@ -117,6 +138,7 @@ func TestConfigValidateStorageIntegrityIngress(t *testing.T) {
 	t.Run("runtime enabled requires durable runtime config", func(t *testing.T) {
 		cfg := minimalServerConfig(t)
 		cfg.StorageIntegrity.Ingress.Enabled = true
+		cfg.StorageIntegrity.Ingress.NetworkID = "testnet-v2"
 		cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{"0x1111111111111111111111111111111111111111"}
 		cfg.StorageIntegrity.Ingress.MaxTokenAge.Duration = time.Minute
 		cfg.StorageIntegrity.Ingress.RequestTimeout.Duration = 5 * time.Second
@@ -197,6 +219,7 @@ func storageIntegrityRuntimeConfigFixture(t *testing.T) Config {
 	t.Helper()
 	cfg := minimalServerConfig(t)
 	cfg.StorageIntegrity.Ingress.Enabled = true
+	cfg.StorageIntegrity.Ingress.NetworkID = "testnet-v2"
 	cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{"0x1111111111111111111111111111111111111111"}
 	cfg.StorageIntegrity.Ingress.MaxTokenAge.Duration = time.Minute
 	cfg.StorageIntegrity.Ingress.RequestTimeout.Duration = 5 * time.Second
@@ -226,6 +249,7 @@ func TestConfigStorageIntegritySafeMerges(t *testing.T) {
 	t.Run("enabling native merges rejected", func(t *testing.T) {
 		cfg := minimalServerConfig(t)
 		cfg.StorageIntegrity.Ingress.Enabled = true
+		cfg.StorageIntegrity.Ingress.NetworkID = "testnet-v2"
 		cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{"0x1111111111111111111111111111111111111111"}
 		cfg.StorageIntegrity.Ingress.MaxTokenAge.Duration = time.Minute
 		cfg.StorageIntegrity.Ingress.RequestTimeout.Duration = 5 * time.Second

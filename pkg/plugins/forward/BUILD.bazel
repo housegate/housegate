@@ -17,6 +17,7 @@ go_library(
         "//pkg/peer",
         "//pkg/plugin",
         "//pkg/registry",
+        "//pkg/storageintegrity",
     ],
 )
 

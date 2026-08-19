@@ -18,6 +18,8 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
+const canonicalJWSProtectedHeader = `{"alg":"ES256K","typ":"JWT"}`
+
 // RelaySigner wraps an Ethereum-style private key and produces JWS
 // tokens whose payload binds a query's SQL text.
 type RelaySigner struct {
@@ -54,36 +56,46 @@ func (s *RelaySigner) SignTokenWithPurpose(sql, purpose string) (string, error) 
 	return s.signToken(sql, purpose)
 }
 
-func (s *RelaySigner) signToken(sql, purpose string) (string, error) {
-	header := JWSHeader{Alg: "ES256K", Typ: "JWT"}
-	headerJSON, err := json.Marshal(header)
-	if err != nil {
-		return "", fmt.Errorf("marshal header: %w", err)
+// SignStatementV2 produces the storage-integrity statement token. Purpose is
+// forced to StatementPurposeV2 and Iat is filled with the current time when
+// zero (tests and vector generation pass an explicit Iat for determinism;
+// secp256k1 signing is RFC 6979 deterministic so a fixed payload yields a
+// fixed token).
+func (s *RelaySigner) SignStatementV2(payload JWSStatementPayloadV2) (string, error) {
+	payload.Purpose = StatementPurposeV2
+	if payload.Iat == 0 {
+		payload.Iat = time.Now().Unix()
 	}
-	headerB64 := base64.RawURLEncoding.EncodeToString(headerJSON)
+	return s.signCompactJWS(payload)
+}
 
+// signCompactJWS is the single compact-JWS construction primitive for every
+// RelaySigner lane (query, statement, and peer login). Keeping the protected
+// header, signing input, Ethereum recovery-byte convention, and encoding in
+// one place prevents a new lane from drifting from the canonical profile.
+func (s *RelaySigner) signCompactJWS(payload any) (string, error) {
+	headerJSON := []byte(canonicalJWSProtectedHeader)
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("marshal JWS payload: %w", err)
+	}
+	signingInput := base64.RawURLEncoding.EncodeToString(headerJSON) + "." + base64.RawURLEncoding.EncodeToString(payloadJSON)
+	sig, err := crypto.Sign(keccak256([]byte(signingInput)), s.privateKey)
+	if err != nil {
+		return "", fmt.Errorf("sign compact JWS: %w", err)
+	}
+	// Adjust V (0/1 → 27/28) for Ethereum convention.
+	sig[64] += 27
+	return signingInput + "." + base64.RawURLEncoding.EncodeToString(sig), nil
+}
+
+func (s *RelaySigner) signToken(sql, purpose string) (string, error) {
 	payload := JWSPayload{
 		Iat:       time.Now().Unix(),
 		QueryHash: keccak256Hex([]byte(sql)),
 		Purpose:   purpose,
 	}
-	payloadJSON, err := json.Marshal(payload)
-	if err != nil {
-		return "", fmt.Errorf("marshal payload: %w", err)
-	}
-	payloadB64 := base64.RawURLEncoding.EncodeToString(payloadJSON)
-
-	signingInput := headerB64 + "." + payloadB64
-	hash := keccak256([]byte(signingInput))
-	sig, err := crypto.Sign(hash, s.privateKey)
-	if err != nil {
-		return "", fmt.Errorf("sign: %w", err)
-	}
-	// Adjust V (0/1 → 27/28) for Ethereum convention.
-	sig[64] += 27
-
-	signatureB64 := base64.RawURLEncoding.EncodeToString(sig)
-	return signingInput + "." + signatureB64, nil
+	return s.signCompactJWS(payload)
 }
 
 // SignPeerLogin produces a JWS compact-serialisation token whose
@@ -98,13 +110,6 @@ func (s *RelaySigner) signToken(sql, purpose string) (string, error) {
 // pick a value short enough to limit replay impact (a few minutes is
 // typical) but long enough to absorb clock skew between peers.
 func (s *RelaySigner) SignPeerLogin(audience string, ttl time.Duration) (string, error) {
-	header := JWSHeader{Alg: "ES256K", Typ: "JWT"}
-	headerJSON, err := json.Marshal(header)
-	if err != nil {
-		return "", fmt.Errorf("marshal header: %w", err)
-	}
-	headerB64 := base64.RawURLEncoding.EncodeToString(headerJSON)
-
 	now := time.Now().Unix()
 	payload := JWSPeerPayload{
 		Iat:     now,
@@ -112,20 +117,5 @@ func (s *RelaySigner) SignPeerLogin(audience string, ttl time.Duration) (string,
 		Aud:     audience,
 		Purpose: PeerLoginPurpose,
 	}
-	payloadJSON, err := json.Marshal(payload)
-	if err != nil {
-		return "", fmt.Errorf("marshal peer payload: %w", err)
-	}
-	payloadB64 := base64.RawURLEncoding.EncodeToString(payloadJSON)
-
-	signingInput := headerB64 + "." + payloadB64
-	hash := keccak256([]byte(signingInput))
-	sig, err := crypto.Sign(hash, s.privateKey)
-	if err != nil {
-		return "", fmt.Errorf("sign peer: %w", err)
-	}
-	sig[64] += 27
-
-	signatureB64 := base64.RawURLEncoding.EncodeToString(sig)
-	return signingInput + "." + signatureB64, nil
+	return s.signCompactJWS(payload)
 }

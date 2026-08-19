@@ -130,7 +130,7 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 		PayloadLeaseManager: leaseManager,
 	}
 	orch = sicore.NewOrchestratorWithQuerier(submitter, opts.SourcePreparer, statusQuerier, orchCfg)
-	ingress, err := NewStorageIntegrityIngressWithPayloadWriter(orch, mergeGuard, sicore.MaterializerCSV, payloadWriter)
+	ingress, err := NewStorageIntegrityIngressWithPayloadWriter(orch, mergeGuard, sicore.MaterializerNative, payloadWriter)
 	if err != nil {
 		return nil, nil, fmt.Errorf("storage_integrity.runtime: %w", err)
 	}

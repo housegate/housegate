@@ -16,6 +16,18 @@ type Signer interface {
 	SignToken(sql string) (string, error)
 }
 
+// StatementSignerV2 signs storage-integrity statement tokens (agent side).
+type StatementSignerV2 interface {
+	Address() string
+	SignStatementV2(payload JWSStatementPayloadV2) (string, error)
+}
+
+// StatementValidatorV2 verifies storage-integrity statement tokens against
+// an envelope-derived expectation (ingress side).
+type StatementValidatorV2 interface {
+	ValidateStatementV2(token string, want JWSStatementPayloadV2) (string, error)
+}
+
 // Compile-time guard: *RelaySigner must satisfy Signer.
 var _ Signer = (*RelaySigner)(nil)
 
@@ -46,6 +58,8 @@ type PeerValidator interface {
 
 // Compile-time guards.
 var (
-	_ PeerSigner    = (*RelaySigner)(nil)
-	_ PeerValidator = (*EthValidator)(nil)
+	_ PeerSigner           = (*RelaySigner)(nil)
+	_ PeerValidator        = (*EthValidator)(nil)
+	_ StatementSignerV2    = (*RelaySigner)(nil)
+	_ StatementValidatorV2 = (*EthValidator)(nil)
 )

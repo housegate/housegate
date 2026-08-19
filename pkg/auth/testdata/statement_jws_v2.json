@@ -1,0 +1,342 @@
+{
+  "signer_private_key_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "signer_address": "0x8fd379246834eac74b8419ffda202cf8051f7a03",
+  "vectors": [
+    {
+      "name": "valid",
+      "expect": "accept",
+      "payload": {
+        "purpose": "housegate-statement-v2",
+        "iat": 1755000000,
+        "network_id": "testnet-v2",
+        "keeper_shard_id": 0,
+        "statement_id": "0x8fd379246834eac74b8419ffda202cf8051f7a03:1:n1",
+        "sql_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+        "settings_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+        "schema_hash": "0x3333333333333333333333333333333333333333333333333333333333333333",
+        "payload_hash": "0x4444444444444444444444444444444444444444444444444444444444444444",
+        "payload_length": 12345,
+        "payload_format": "clickhouse-native-data-v1",
+        "client_revision": 54460,
+        "target_table_id": "db.table",
+        "row_id_profile_id": "housegate-row-id-v1"
+      },
+      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIn0.5OsHRhh3ZLSL5PDHRqysy_hDv56-maCKpmNma_287x9rWB2bfvrCkHNlf05XZUhiDwydzcE8O6pDasizZa2b3hw"
+    },
+    {
+      "name": "network_id_mismatch",
+      "expect": "reject",
+      "payload": {
+        "purpose": "housegate-statement-v2",
+        "iat": 1755000000,
+        "network_id": "other-net",
+        "keeper_shard_id": 0,
+        "statement_id": "0x8fd379246834eac74b8419ffda202cf8051f7a03:1:n1",
+        "sql_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+        "settings_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+        "schema_hash": "0x3333333333333333333333333333333333333333333333333333333333333333",
+        "payload_hash": "0x4444444444444444444444444444444444444444444444444444444444444444",
+        "payload_length": 12345,
+        "payload_format": "clickhouse-native-data-v1",
+        "client_revision": 54460,
+        "target_table_id": "db.table",
+        "row_id_profile_id": "housegate-row-id-v1"
+      },
+      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIn0.5OsHRhh3ZLSL5PDHRqysy_hDv56-maCKpmNma_287x9rWB2bfvrCkHNlf05XZUhiDwydzcE8O6pDasizZa2b3hw"
+    },
+    {
+      "name": "keeper_shard_id_mismatch",
+      "expect": "reject",
+      "payload": {
+        "purpose": "housegate-statement-v2",
+        "iat": 1755000000,
+        "network_id": "testnet-v2",
+        "keeper_shard_id": 1,
+        "statement_id": "0x8fd379246834eac74b8419ffda202cf8051f7a03:1:n1",
+        "sql_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+        "settings_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+        "schema_hash": "0x3333333333333333333333333333333333333333333333333333333333333333",
+        "payload_hash": "0x4444444444444444444444444444444444444444444444444444444444444444",
+        "payload_length": 12345,
+        "payload_format": "clickhouse-native-data-v1",
+        "client_revision": 54460,
+        "target_table_id": "db.table",
+        "row_id_profile_id": "housegate-row-id-v1"
+      },
+      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIn0.5OsHRhh3ZLSL5PDHRqysy_hDv56-maCKpmNma_287x9rWB2bfvrCkHNlf05XZUhiDwydzcE8O6pDasizZa2b3hw"
+    },
+    {
+      "name": "statement_id_mismatch",
+      "expect": "reject",
+      "payload": {
+        "purpose": "housegate-statement-v2",
+        "iat": 1755000000,
+        "network_id": "testnet-v2",
+        "keeper_shard_id": 0,
+        "statement_id": "0x8fd379246834eac74b8419ffda202cf8051f7a03:2:n1",
+        "sql_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+        "settings_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+        "schema_hash": "0x3333333333333333333333333333333333333333333333333333333333333333",
+        "payload_hash": "0x4444444444444444444444444444444444444444444444444444444444444444",
+        "payload_length": 12345,
+        "payload_format": "clickhouse-native-data-v1",
+        "client_revision": 54460,
+        "target_table_id": "db.table",
+        "row_id_profile_id": "housegate-row-id-v1"
+      },
+      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIn0.5OsHRhh3ZLSL5PDHRqysy_hDv56-maCKpmNma_287x9rWB2bfvrCkHNlf05XZUhiDwydzcE8O6pDasizZa2b3hw"
+    },
+    {
+      "name": "sql_hash_mismatch",
+      "expect": "reject",
+      "payload": {
+        "purpose": "housegate-statement-v2",
+        "iat": 1755000000,
+        "network_id": "testnet-v2",
+        "keeper_shard_id": 0,
+        "statement_id": "0x8fd379246834eac74b8419ffda202cf8051f7a03:1:n1",
+        "sql_hash": "0xabababababababababababababababababababababababababababababababab",
+        "settings_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+        "schema_hash": "0x3333333333333333333333333333333333333333333333333333333333333333",
+        "payload_hash": "0x4444444444444444444444444444444444444444444444444444444444444444",
+        "payload_length": 12345,
+        "payload_format": "clickhouse-native-data-v1",
+        "client_revision": 54460,
+        "target_table_id": "db.table",
+        "row_id_profile_id": "housegate-row-id-v1"
+      },
+      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIn0.5OsHRhh3ZLSL5PDHRqysy_hDv56-maCKpmNma_287x9rWB2bfvrCkHNlf05XZUhiDwydzcE8O6pDasizZa2b3hw"
+    },
+    {
+      "name": "settings_hash_mismatch",
+      "expect": "reject",
+      "payload": {
+        "purpose": "housegate-statement-v2",
+        "iat": 1755000000,
+        "network_id": "testnet-v2",
+        "keeper_shard_id": 0,
+        "statement_id": "0x8fd379246834eac74b8419ffda202cf8051f7a03:1:n1",
+        "sql_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+        "settings_hash": "0xabababababababababababababababababababababababababababababababab",
+        "schema_hash": "0x3333333333333333333333333333333333333333333333333333333333333333",
+        "payload_hash": "0x4444444444444444444444444444444444444444444444444444444444444444",
+        "payload_length": 12345,
+        "payload_format": "clickhouse-native-data-v1",
+        "client_revision": 54460,
+        "target_table_id": "db.table",
+        "row_id_profile_id": "housegate-row-id-v1"
+      },
+      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIn0.5OsHRhh3ZLSL5PDHRqysy_hDv56-maCKpmNma_287x9rWB2bfvrCkHNlf05XZUhiDwydzcE8O6pDasizZa2b3hw"
+    },
+    {
+      "name": "schema_hash_mismatch",
+      "expect": "reject",
+      "payload": {
+        "purpose": "housegate-statement-v2",
+        "iat": 1755000000,
+        "network_id": "testnet-v2",
+        "keeper_shard_id": 0,
+        "statement_id": "0x8fd379246834eac74b8419ffda202cf8051f7a03:1:n1",
+        "sql_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+        "settings_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+        "schema_hash": "0xabababababababababababababababababababababababababababababababab",
+        "payload_hash": "0x4444444444444444444444444444444444444444444444444444444444444444",
+        "payload_length": 12345,
+        "payload_format": "clickhouse-native-data-v1",
+        "client_revision": 54460,
+        "target_table_id": "db.table",
+        "row_id_profile_id": "housegate-row-id-v1"
+      },
+      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIn0.5OsHRhh3ZLSL5PDHRqysy_hDv56-maCKpmNma_287x9rWB2bfvrCkHNlf05XZUhiDwydzcE8O6pDasizZa2b3hw"
+    },
+    {
+      "name": "payload_hash_mismatch",
+      "expect": "reject",
+      "payload": {
+        "purpose": "housegate-statement-v2",
+        "iat": 1755000000,
+        "network_id": "testnet-v2",
+        "keeper_shard_id": 0,
+        "statement_id": "0x8fd379246834eac74b8419ffda202cf8051f7a03:1:n1",
+        "sql_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+        "settings_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+        "schema_hash": "0x3333333333333333333333333333333333333333333333333333333333333333",
+        "payload_hash": "0xabababababababababababababababababababababababababababababababab",
+        "payload_length": 12345,
+        "payload_format": "clickhouse-native-data-v1",
+        "client_revision": 54460,
+        "target_table_id": "db.table",
+        "row_id_profile_id": "housegate-row-id-v1"
+      },
+      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIn0.5OsHRhh3ZLSL5PDHRqysy_hDv56-maCKpmNma_287x9rWB2bfvrCkHNlf05XZUhiDwydzcE8O6pDasizZa2b3hw"
+    },
+    {
+      "name": "payload_length_mismatch",
+      "expect": "reject",
+      "payload": {
+        "purpose": "housegate-statement-v2",
+        "iat": 1755000000,
+        "network_id": "testnet-v2",
+        "keeper_shard_id": 0,
+        "statement_id": "0x8fd379246834eac74b8419ffda202cf8051f7a03:1:n1",
+        "sql_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+        "settings_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+        "schema_hash": "0x3333333333333333333333333333333333333333333333333333333333333333",
+        "payload_hash": "0x4444444444444444444444444444444444444444444444444444444444444444",
+        "payload_length": 1,
+        "payload_format": "clickhouse-native-data-v1",
+        "client_revision": 54460,
+        "target_table_id": "db.table",
+        "row_id_profile_id": "housegate-row-id-v1"
+      },
+      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIn0.5OsHRhh3ZLSL5PDHRqysy_hDv56-maCKpmNma_287x9rWB2bfvrCkHNlf05XZUhiDwydzcE8O6pDasizZa2b3hw"
+    },
+    {
+      "name": "payload_format_mismatch",
+      "expect": "reject",
+      "payload": {
+        "purpose": "housegate-statement-v2",
+        "iat": 1755000000,
+        "network_id": "testnet-v2",
+        "keeper_shard_id": 0,
+        "statement_id": "0x8fd379246834eac74b8419ffda202cf8051f7a03:1:n1",
+        "sql_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+        "settings_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+        "schema_hash": "0x3333333333333333333333333333333333333333333333333333333333333333",
+        "payload_hash": "0x4444444444444444444444444444444444444444444444444444444444444444",
+        "payload_length": 12345,
+        "payload_format": "csv-with-names-v1",
+        "client_revision": 54460,
+        "target_table_id": "db.table",
+        "row_id_profile_id": "housegate-row-id-v1"
+      },
+      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIn0.5OsHRhh3ZLSL5PDHRqysy_hDv56-maCKpmNma_287x9rWB2bfvrCkHNlf05XZUhiDwydzcE8O6pDasizZa2b3hw"
+    },
+    {
+      "name": "client_revision_mismatch",
+      "expect": "reject",
+      "payload": {
+        "purpose": "housegate-statement-v2",
+        "iat": 1755000000,
+        "network_id": "testnet-v2",
+        "keeper_shard_id": 0,
+        "statement_id": "0x8fd379246834eac74b8419ffda202cf8051f7a03:1:n1",
+        "sql_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+        "settings_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+        "schema_hash": "0x3333333333333333333333333333333333333333333333333333333333333333",
+        "payload_hash": "0x4444444444444444444444444444444444444444444444444444444444444444",
+        "payload_length": 12345,
+        "payload_format": "clickhouse-native-data-v1",
+        "client_revision": 54470,
+        "target_table_id": "db.table",
+        "row_id_profile_id": "housegate-row-id-v1"
+      },
+      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIn0.5OsHRhh3ZLSL5PDHRqysy_hDv56-maCKpmNma_287x9rWB2bfvrCkHNlf05XZUhiDwydzcE8O6pDasizZa2b3hw"
+    },
+    {
+      "name": "target_table_id_mismatch",
+      "expect": "reject",
+      "payload": {
+        "purpose": "housegate-statement-v2",
+        "iat": 1755000000,
+        "network_id": "testnet-v2",
+        "keeper_shard_id": 0,
+        "statement_id": "0x8fd379246834eac74b8419ffda202cf8051f7a03:1:n1",
+        "sql_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+        "settings_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+        "schema_hash": "0x3333333333333333333333333333333333333333333333333333333333333333",
+        "payload_hash": "0x4444444444444444444444444444444444444444444444444444444444444444",
+        "payload_length": 12345,
+        "payload_format": "clickhouse-native-data-v1",
+        "client_revision": 54460,
+        "target_table_id": "db.other",
+        "row_id_profile_id": "housegate-row-id-v1"
+      },
+      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIn0.5OsHRhh3ZLSL5PDHRqysy_hDv56-maCKpmNma_287x9rWB2bfvrCkHNlf05XZUhiDwydzcE8O6pDasizZa2b3hw"
+    },
+    {
+      "name": "row_id_profile_id_mismatch",
+      "expect": "reject",
+      "payload": {
+        "purpose": "housegate-statement-v2",
+        "iat": 1755000000,
+        "network_id": "testnet-v2",
+        "keeper_shard_id": 0,
+        "statement_id": "0x8fd379246834eac74b8419ffda202cf8051f7a03:1:n1",
+        "sql_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+        "settings_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+        "schema_hash": "0x3333333333333333333333333333333333333333333333333333333333333333",
+        "payload_hash": "0x4444444444444444444444444444444444444444444444444444444444444444",
+        "payload_length": 12345,
+        "payload_format": "clickhouse-native-data-v1",
+        "client_revision": 54460,
+        "target_table_id": "db.table",
+        "row_id_profile_id": "housegate-row-id-v0"
+      },
+      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIn0.5OsHRhh3ZLSL5PDHRqysy_hDv56-maCKpmNma_287x9rWB2bfvrCkHNlf05XZUhiDwydzcE8O6pDasizZa2b3hw"
+    },
+    {
+      "name": "wrong_signer",
+      "expect": "reject",
+      "payload": {
+        "purpose": "housegate-statement-v2",
+        "iat": 1755000000,
+        "network_id": "testnet-v2",
+        "keeper_shard_id": 0,
+        "statement_id": "0x8fd379246834eac74b8419ffda202cf8051f7a03:1:n1",
+        "sql_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+        "settings_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+        "schema_hash": "0x3333333333333333333333333333333333333333333333333333333333333333",
+        "payload_hash": "0x4444444444444444444444444444444444444444444444444444444444444444",
+        "payload_length": 12345,
+        "payload_format": "clickhouse-native-data-v1",
+        "client_revision": 54460,
+        "target_table_id": "db.table",
+        "row_id_profile_id": "housegate-row-id-v1"
+      },
+      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIn0.uyH5haOSLKE6pleyfkSRkoVhcr7vVBZCdB881zwTvMIDq31Jb1gjUqXAcB53_mqnArnA4KUG_6QSXu-UoZWe-hs"
+    },
+    {
+      "name": "legacy_query_token",
+      "expect": "reject",
+      "payload": {
+        "purpose": "housegate-statement-v2",
+        "iat": 1755000000,
+        "network_id": "testnet-v2",
+        "keeper_shard_id": 0,
+        "statement_id": "0x8fd379246834eac74b8419ffda202cf8051f7a03:1:n1",
+        "sql_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+        "settings_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+        "schema_hash": "0x3333333333333333333333333333333333333333333333333333333333333333",
+        "payload_hash": "0x4444444444444444444444444444444444444444444444444444444444444444",
+        "payload_length": 12345,
+        "payload_format": "clickhouse-native-data-v1",
+        "client_revision": 54460,
+        "target_table_id": "db.table",
+        "row_id_profile_id": "housegate-row-id-v1"
+      },
+      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJpYXQiOjE3ODcwNjg5ODgsInFoYXNoIjoiMHgxZDBhYjI2NDE4OWE4NDdiNzVmOGU5ZmE5MzRiZGFmNTQzOThiZTc3MDMxYmJhMWNjNGY3M2QyNTc2MjY1NWI3IiwicHVycG9zZSI6ImhvdXNlZ2F0ZS1xdWVyeSJ9.jGlJplYbNcjKOdT_iS2nWong-Bo5WQTmKnOSHMNGQWESM_mkOde63e7QxP_BcI2_hMC2ox8rDf1PM4J_arOdWBs"
+    },
+    {
+      "name": "garbage_token",
+      "expect": "reject",
+      "payload": {
+        "purpose": "housegate-statement-v2",
+        "iat": 1755000000,
+        "network_id": "testnet-v2",
+        "keeper_shard_id": 0,
+        "statement_id": "0x8fd379246834eac74b8419ffda202cf8051f7a03:1:n1",
+        "sql_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+        "settings_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+        "schema_hash": "0x3333333333333333333333333333333333333333333333333333333333333333",
+        "payload_hash": "0x4444444444444444444444444444444444444444444444444444444444444444",
+        "payload_length": 12345,
+        "payload_format": "clickhouse-native-data-v1",
+        "client_revision": 54460,
+        "target_table_id": "db.table",
+        "row_id_profile_id": "housegate-row-id-v1"
+      },
+      "token": "not.a.jws"
+    }
+  ]
+}

@@ -16,13 +16,18 @@ import (
 	"github.com/housegate/housegate/pkg/chproto"
 	"github.com/housegate/housegate/pkg/chsession"
 	"github.com/housegate/housegate/pkg/config"
+	"github.com/housegate/housegate/pkg/lthash"
 	"github.com/housegate/housegate/pkg/network"
 	"github.com/housegate/housegate/pkg/plugin"
+	"github.com/housegate/housegate/pkg/plugins/agent"
 	"github.com/housegate/housegate/pkg/plugins/forward"
 	"github.com/housegate/housegate/pkg/plugins/rewrite"
+	"github.com/housegate/housegate/pkg/plugins/sessionstate"
+	"github.com/housegate/housegate/pkg/plugins/sistatement"
 	"github.com/housegate/housegate/pkg/plugins/storageintegrity"
 	"github.com/housegate/housegate/pkg/proxy"
 	"github.com/housegate/housegate/pkg/replay"
+	"github.com/housegate/housegate/pkg/replay/payloadexec"
 	"github.com/housegate/housegate/pkg/rewriter"
 	"github.com/housegate/housegate/pkg/sqlmeta"
 	sicore "github.com/housegate/housegate/pkg/storageintegrity"
@@ -134,6 +139,174 @@ func requireExternalChain(t *testing.T, bs *builtServer) *plugin.PluginChain {
 		return chain
 	}
 	t.Fatal("external listener missing")
+	return nil
+}
+
+func agentSICfg(t *testing.T) *config.Config {
+	t.Helper()
+	cfg := config.Default()
+	cfg.Listen = "127.0.0.1:0"
+	cfg.MetricsListen = ""
+	cfg.Agent.Mode = true
+	cfg.Agent.PrivateKeyHex = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	cfg.Agent.Upstream = "127.0.0.1:9000"
+	cfg.StorageIntegrity.Agent.Enabled = true
+	cfg.StorageIntegrity.Agent.NetworkID = "testnet-v2"
+	cfg.StorageIntegrity.Agent.StateDir = t.TempDir()
+	cfg.StorageIntegrity.Agent.RequireNetworkState = false
+	return &cfg
+}
+
+func TestBuildAgent_StorageIntegrityAgentWiresPluginChain(t *testing.T) {
+	cfg := agentSICfg(t)
+	bs, err := buildAgent(Options{Config: cfg, NetworkState: network.NewInMemoryNetworkState()}, nil)
+	if err != nil {
+		t.Fatalf("buildAgent: %v", err)
+	}
+	defer bs.teardown()
+	srv := requireProxyServer(t, bs.listeners[0])
+	chain, ok := srv.Hooks.(*plugin.PluginChain)
+	if !ok {
+		t.Fatalf("Hooks type %T", srv.Hooks)
+	}
+
+	// sistatement runs after materialization and before the agent signer. The
+	// same signer instance must refresh SQL_x_auth_token after deferred input.
+	var (
+		siPlug    *sistatement.Plugin
+		agentPlug *agent.Plugin
+		siIdx     = -1
+		signerIdx = -1
+	)
+	for i, candidate := range chain.QueryPlugins {
+		switch p := candidate.(type) {
+		case *sistatement.Plugin:
+			siPlug, siIdx = p, i
+		case *agent.Plugin:
+			agentPlug, signerIdx = p, i
+		}
+	}
+	if siPlug == nil || agentPlug == nil || siIdx > signerIdx {
+		t.Fatalf("query plugin order sistatement=%d signer=%d", siIdx, signerIdx)
+	}
+	if len(chain.HelloPlugins) != 1 {
+		t.Fatalf("agent SI hello plugins = %d, want sessionstate only", len(chain.HelloPlugins))
+	}
+	if _, ok := chain.HelloPlugins[0].(*sessionstate.Plugin); !ok {
+		t.Fatalf("agent SI hello plugin type = %T, want *sessionstate.Plugin", chain.HelloPlugins[0])
+	}
+	if len(chain.StrictDataPlugins) != 1 || chain.StrictDataPlugins[0] != siPlug {
+		t.Fatalf("strict-data plugins = %#v, want sistatement instance", chain.StrictDataPlugins)
+	}
+	if len(chain.QueryInputCompleteStrictPlugins) != 2 ||
+		chain.QueryInputCompleteStrictPlugins[0] != siPlug ||
+		chain.QueryInputCompleteStrictPlugins[1] != agentPlug {
+		t.Fatalf("input-complete-strict plugins = %#v, want [sistatement agent] instances", chain.QueryInputCompleteStrictPlugins)
+	}
+	if len(chain.QueryAbortPlugins) != 1 || chain.QueryAbortPlugins[0] != siPlug {
+		t.Fatalf("abort plugins = %#v, want sistatement instance", chain.QueryAbortPlugins)
+	}
+	if len(chain.QuerySuccessPlugins) != 1 || chain.QuerySuccessPlugins[0] != siPlug {
+		t.Fatalf("success plugins = %#v, want sistatement instance", chain.QuerySuccessPlugins)
+	}
+	if len(chain.QueryCompletePlugins) != 1 || chain.QueryCompletePlugins[0] != siPlug {
+		t.Fatalf("complete plugins = %#v, want sistatement instance", chain.QueryCompletePlugins)
+	}
+	if len(chain.ClosePlugins) != 1 || chain.ClosePlugins[0] != siPlug {
+		t.Fatalf("close plugins = %#v, want sistatement instance", chain.ClosePlugins)
+	}
+}
+
+func TestBuildAgent_StorageIntegrityAgentRequiresTableSchemas(t *testing.T) {
+	cfg := agentSICfg(t)
+	withoutSchemas := registryWithoutSchemas{network.NewInMemoryNetworkState()}
+	_, err := buildAgent(Options{Config: cfg, NetworkState: withoutSchemas}, nil)
+	if err == nil || !strings.Contains(err.Error(), "TableSchemas") {
+		t.Fatalf("expected TableSchemas requirement error, got %v", err)
+	}
+
+	bs, err := buildAgent(Options{
+		Config:                       cfg,
+		NetworkState:                 withoutSchemas,
+		StorageIntegrityTableSchemas: network.NewInMemoryNetworkState(),
+	}, nil)
+	if err != nil {
+		t.Fatalf("explicit TableSchemas override: %v", err)
+	}
+	bs.teardown()
+}
+
+func TestBuildAgent_StorageIntegrityAgentPinnedUpstreamUsesExplicitTableSchemasWithoutNetworkState(t *testing.T) {
+	cfg := agentSICfg(t)
+	bs, err := buildAgent(Options{
+		Config:                       cfg,
+		StorageIntegrityTableSchemas: network.NewInMemoryNetworkState(),
+	}, nil)
+	if err != nil {
+		t.Fatalf("pinned upstream with explicit TableSchemas: %v", err)
+	}
+	bs.teardown()
+}
+
+func TestBuildAgentClosesMaterializerOnBuildFailureAndTeardown(t *testing.T) {
+	t.Run("build failure", func(t *testing.T) {
+		cfg := agentSICfg(t)
+		cfg.Materialize.Enabled = true
+		materializer := &recordingAgentMaterializer{}
+		_, err := buildAgentWithMaterializerBuilder(Options{
+			Config:       cfg,
+			NetworkState: registryWithoutSchemas{network.NewInMemoryNetworkState()},
+		}, nil, func(*config.Config) (rewriter.Materializer, error) {
+			return materializer, nil
+		})
+		if err == nil || !strings.Contains(err.Error(), "TableSchemas") {
+			t.Fatalf("expected TableSchemas build failure, got %v", err)
+		}
+		if materializer.closeCalls != 1 {
+			t.Fatalf("materializer Close calls = %d, want 1 on build failure", materializer.closeCalls)
+		}
+	})
+
+	t.Run("successful teardown", func(t *testing.T) {
+		cfg := agentSICfg(t)
+		cfg.Materialize.Enabled = true
+		materializer := &recordingAgentMaterializer{}
+		bs, err := buildAgentWithMaterializerBuilder(Options{
+			Config:       cfg,
+			NetworkState: network.NewInMemoryNetworkState(),
+		}, nil, func(*config.Config) (rewriter.Materializer, error) {
+			return materializer, nil
+		})
+		if err != nil {
+			t.Fatalf("buildAgentWithMaterializerBuilder: %v", err)
+		}
+		if materializer.closeCalls != 0 {
+			t.Fatalf("materializer closed before teardown: %d", materializer.closeCalls)
+		}
+		bs.teardown()
+		if materializer.closeCalls != 1 {
+			t.Fatalf("materializer Close calls = %d, want 1 after teardown", materializer.closeCalls)
+		}
+	})
+}
+
+// registryWithoutSchemas preserves routing/permission Registry methods while
+// deliberately hiding the embedded state's TableSchemas method signatures.
+type registryWithoutSchemas struct{ *network.InMemoryNetworkState }
+
+func (registryWithoutSchemas) TableSchema(string, string, uint32) {}
+func (registryWithoutSchemas) LatestTableSchema(string, string)   {}
+
+type recordingAgentMaterializer struct {
+	closeCalls int
+}
+
+func (*recordingAgentMaterializer) Materialize(_ context.Context, sql string) (rewriter.MaterializeOutcome, error) {
+	return rewriter.MaterializeOutcome{SQL: sql}, nil
+}
+
+func (m *recordingAgentMaterializer) Close() error {
+	m.closeCalls++
 	return nil
 }
 
@@ -323,15 +496,17 @@ func TestBuildServer_StorageIntegrityIngressEnabledWiresRuntimeHooks(t *testing.
 	}
 	cfg := minimalRouterOnlyCfg(t)
 	cfg.StorageIntegrity.Ingress.Enabled = true
+	cfg.StorageIntegrity.Ingress.NetworkID = "testnet-v2"
 	cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{signer.Address()}
 	cfg.StorageIntegrity.Ingress.MaxTokenAge.Duration = time.Minute
 	cfg.StorageIntegrity.Ingress.RequestTimeout.Duration = 50 * time.Millisecond
 	cfg.StorageIntegrity.Ingress.MaxPayloadBytes = 7
 	consumer := &recordingAdmissionConsumer{}
+	ns := buildTestStorageIntegrityNetworkState()
 
 	bs, err := buildServer(Options{
 		Config:                            cfg,
-		NetworkState:                      network.NewInMemoryNetworkState(),
+		NetworkState:                      ns,
 		StorageIntegrityAdmissionConsumer: consumer,
 	}, nil)
 	if err != nil {
@@ -384,59 +559,6 @@ func TestBuildServer_StorageIntegrityIngressEnabledWiresRuntimeHooks(t *testing.
 	}
 }
 
-func TestBuildServer_StorageIntegrityIngressWiresCSVPayloadMaterializer(t *testing.T) {
-	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	if err != nil {
-		t.Fatalf("NewRelaySigner: %v", err)
-	}
-	cfg := minimalRouterOnlyCfg(t)
-	cfg.StorageIntegrity.Ingress.Enabled = true
-	cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{signer.Address()}
-	cfg.StorageIntegrity.Ingress.MaxTokenAge.Duration = time.Minute
-	cfg.StorageIntegrity.Ingress.RequestTimeout.Duration = 50 * time.Millisecond
-	cfg.StorageIntegrity.Ingress.MaxPayloadBytes = 64
-	consumer := &recordingAdmissionConsumer{}
-	materializer := &recordingBuildPayloadMaterializer{
-		out: sicore.PayloadMaterializationResult{
-			Payload:  []byte("id,region\n1,eu\n"),
-			Encoding: sicore.EncodingCSVWithNames,
-		},
-	}
-
-	bs, err := buildServer(Options{
-		Config:                              cfg,
-		NetworkState:                        network.NewInMemoryNetworkState(),
-		StorageIntegrityAdmissionConsumer:   consumer,
-		StorageIntegrityPayloadMaterializer: materializer,
-	}, nil)
-	if err != nil {
-		t.Fatalf("buildServer: %v", err)
-	}
-	defer bs.teardown()
-
-	chain := requireExternalChain(t, bs)
-	sql := "INSERT INTO tenant.events FORMAT CSVWithNames"
-	qctx := signedStorageIntegrityQuerySQL(t, signer, sql)
-	if err := chain.OnQuery(context.Background(), qctx); err != nil {
-		t.Fatalf("OnQuery: %v", err)
-	}
-	raw := []byte{byte(chproto.ClientDataCode), 0, 0xab, 0xcd}
-	if err := chain.OnClientDataStrict(context.Background(), qctx, raw); err != nil {
-		t.Fatalf("OnClientDataStrict: %v", err)
-	}
-	if err := chain.OnQueryInputCompleteStrict(context.Background(), qctx); err != nil {
-		t.Fatalf("OnQueryInputCompleteStrict: %v", err)
-	}
-
-	if materializer.input.PayloadEncoding != sicore.EncodingCSVWithNames || materializer.input.TableID != "tenant.events" {
-		t.Fatalf("materializer input encoding/table = %q/%q", materializer.input.PayloadEncoding, materializer.input.TableID)
-	}
-	admission := consumer.requireOne(t)
-	if admission.Payload.Encoding != sicore.EncodingCSVWithNames || string(admission.Payload.Bytes) != string(materializer.out.Payload) {
-		t.Fatalf("admission payload = %q/%q, want materialized CSV %q", admission.Payload.Encoding, admission.Payload.Bytes, materializer.out.Payload)
-	}
-}
-
 func TestBuildServer_StorageIntegrityIngressRequiresAdmissionConsumer(t *testing.T) {
 	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	if err != nil {
@@ -444,6 +566,7 @@ func TestBuildServer_StorageIntegrityIngressRequiresAdmissionConsumer(t *testing
 	}
 	cfg := minimalRouterOnlyCfg(t)
 	cfg.StorageIntegrity.Ingress.Enabled = true
+	cfg.StorageIntegrity.Ingress.NetworkID = "testnet-v2"
 	cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{signer.Address()}
 
 	_, err = buildServer(Options{
@@ -453,6 +576,39 @@ func TestBuildServer_StorageIntegrityIngressRequiresAdmissionConsumer(t *testing
 	if err == nil || !strings.Contains(err.Error(), "storage_integrity.ingress admission consumer is required") {
 		t.Fatalf("buildServer err = %v, want missing admission consumer rejection", err)
 	}
+}
+
+func TestBuildServer_StorageIntegrityIngressRequiresTableSchemas(t *testing.T) {
+	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatalf("NewRelaySigner: %v", err)
+	}
+	cfg := minimalRouterOnlyCfg(t)
+	cfg.StorageIntegrity.Ingress.Enabled = true
+	cfg.StorageIntegrity.Ingress.NetworkID = "testnet-v2"
+	cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{signer.Address()}
+	cfg.StorageIntegrity.Ingress.MaxTokenAge.Duration = time.Minute
+	cfg.StorageIntegrity.Ingress.RequestTimeout.Duration = time.Second
+	cfg.StorageIntegrity.Ingress.MaxPayloadBytes = 1 << 20
+
+	_, err = buildServer(Options{
+		Config:                            cfg,
+		NetworkState:                      registryWithoutSchemas{network.NewInMemoryNetworkState()},
+		StorageIntegrityAdmissionConsumer: &recordingAdmissionConsumer{},
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "TableSchemas") {
+		t.Fatalf("expected TableSchemas requirement, got %v", err)
+	}
+
+	bs, err := buildServer(Options{
+		Config:                            cfg,
+		NetworkState:                      network.NewInMemoryNetworkState(),
+		StorageIntegrityAdmissionConsumer: &recordingAdmissionConsumer{},
+	}, nil)
+	if err != nil {
+		t.Fatalf("buildServer with in-memory TableSchemas: %v", err)
+	}
+	bs.teardown()
 }
 
 func TestBuildStorageIntegrityRuntimeRequiresPorts(t *testing.T) {
@@ -534,9 +690,8 @@ func TestBuildServer_StorageIntegrityRuntimeAutoWiresArbiterStatusQuerier(t *tes
 	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
 
 	bs, err := buildServer(Options{
-		Config:                              cfg,
-		NetworkState:                        network.NewInMemoryNetworkState(),
-		StorageIntegrityPayloadMaterializer: &recordingBuildPayloadMaterializer{},
+		Config:       cfg,
+		NetworkState: network.NewInMemoryNetworkState(),
 		StorageIntegrityRuntime: StorageIntegrityRuntimeOptions{
 			ArbiterIngressClient: &rootArbiterIngressClient{},
 			SourcePreparer:       &rootRecordingPreparer{},
@@ -548,30 +703,6 @@ func TestBuildServer_StorageIntegrityRuntimeAutoWiresArbiterStatusQuerier(t *tes
 		t.Fatalf("buildServer: %v", err)
 	}
 	defer bs.teardown()
-}
-
-func TestBuildServer_StorageIntegrityRuntimeRequiresCSVPayloadMaterializer(t *testing.T) {
-	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	if err != nil {
-		t.Fatalf("NewRelaySigner: %v", err)
-	}
-	cfg := minimalRouterOnlyCfg(t)
-	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
-
-	_, err = buildServer(Options{
-		Config:       cfg,
-		NetworkState: network.NewInMemoryNetworkState(),
-		StorageIntegrityRuntime: StorageIntegrityRuntimeOptions{
-			StatementSubmitter: &rootRecordingSubmitter{},
-			SourcePreparer:     &rootRecordingPreparer{},
-			StatusQuerier:      rootRecordingStatusQuerier{},
-			PayloadWriter:      &rootRecordingPayloadWriter{},
-			MergeGuard:         &recordingBuildMergeGuard{},
-		},
-	}, nil)
-	if err == nil || !strings.Contains(err.Error(), "StorageIntegrityPayloadMaterializer is required") {
-		t.Fatalf("buildServer err = %v, want missing CSV payload materializer rejection", err)
-	}
 }
 
 func TestBuildServer_StorageIntegrityRuntimeRejectsManualConsumer(t *testing.T) {
@@ -636,8 +767,8 @@ func TestBuildStorageIntegrityRuntimeBuildsConsumerAndRunsMergeGuard(t *testing.
 	if err != nil {
 		t.Fatalf("buildStorageIntegrityRuntimeConsumer: %v", err)
 	}
-	if ingress.matKind != sicore.MaterializerCSV {
-		t.Fatalf("runtime materializer = %v, want CSV", ingress.matKind)
+	if ingress.matKind != sicore.MaterializerNative {
+		t.Fatalf("runtime materializer = %v, want Native", ingress.matKind)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -648,20 +779,25 @@ func TestBuildStorageIntegrityRuntimeBuildsConsumerAndRunsMergeGuard(t *testing.
 	if guard.calls != 1 {
 		t.Fatalf("merge guard calls = %d, want 1", guard.calls)
 	}
-	payload := []byte("id,region\n1,eu\n")
-	sql := "INSERT INTO events FORMAT CSVWithNames"
+	payload := []byte("native-block-bytes")
+	sql := "INSERT INTO events FORMAT Native"
 	if err := ingress.ConsumeStorageIntegrityAdmission(ctx, storageintegrity.Admission{
-		StatementID: strings.ToLower(signer.Address()) + ":1:n1",
-		Kind:        storageintegrity.KindInsert,
-		TableID:     "net1.events",
-		SQL:         sql,
-		SQLHash:     replay.DigestString(sql),
-		Signer:      strings.ToLower(signer.Address()),
-		UserJWS:     "jws",
+		StatementID:     strings.ToLower(signer.Address()) + ":1:n1",
+		Kind:            storageintegrity.KindInsert,
+		TableID:         "net1.events",
+		SQL:             sql,
+		SQLHash:         replay.DigestString(sql),
+		Signer:          strings.ToLower(signer.Address()),
+		UserJWS:         "jws",
+		EnvelopeVersion: sicore.EnvelopeVersionV2,
+		NetworkID:       "testnet-v2",
+		SettingsHash:    sicore.EmptySettingsHash,
+		SchemaHash:      "0x11",
+		RowIDProfileID:  payloadexec.RowIDProfileID,
 		Payload: storageintegrity.CapturedPayload{
 			Bytes:    payload,
 			Length:   uint64(len(payload)),
-			Encoding: sicore.EncodingCSVWithNames,
+			Encoding: sicore.PayloadEncodingClickHouseNativeData,
 			Revision: 54465,
 			Complete: true,
 		},
@@ -683,6 +819,32 @@ func TestBuildStorageIntegrityRuntimeBuildsConsumerAndRunsMergeGuard(t *testing.
 	}
 	requireDirHasFiles(t, cfg.StorageIntegrity.Runtime.PayloadSpoolDir, "payload spool", 2)
 	requireDirHasFiles(t, cfg.StorageIntegrity.Runtime.JournalDir, "intake journal", 1)
+}
+
+func TestBuildStorageIntegrityRuntimePinsNativeMaterializer(t *testing.T) {
+	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatalf("NewRelaySigner: %v", err)
+	}
+	cfg := minimalRouterOnlyCfg(t)
+	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
+	ingress, _, err := buildStorageIntegrityRuntimeConsumer(
+		cfg.StorageIntegrity.Runtime,
+		StorageIntegrityRuntimeOptions{
+			StatementSubmitter: &rootRecordingSubmitter{},
+			SourcePreparer:     &rootRecordingPreparer{},
+			StatusQuerier:      rootRecordingStatusQuerier{},
+			PayloadWriter:      &rootRecordingPayloadWriter{},
+			MergeGuard:         &recordingBuildMergeGuard{},
+		},
+	)
+	if err != nil {
+		t.Fatalf("buildStorageIntegrityRuntimeConsumer: %v", err)
+	}
+	defer ingress.Close()
+	if ingress.matKind != sicore.MaterializerNative {
+		t.Fatalf("runtime materializer = %v, want Native", ingress.matKind)
+	}
 }
 
 func TestBuildStorageIntegrityRuntimeBuildsMergeGuardFromConnAndConfig(t *testing.T) {
@@ -843,8 +1005,8 @@ func TestStartStorageIntegrityRuntimeRecoversAfterInitialMergeAssert(t *testing.
 	if err != nil {
 		t.Fatalf("NewFileIntakeJournal: %v", err)
 	}
-	payload := []byte("id,region\n1,eu\n")
-	sql := "INSERT INTO events FORMAT CSVWithNames"
+	payload := []byte("native-block-bytes")
+	sql := "INSERT INTO events FORMAT Native"
 	adm := sicore.AdmissionRecord{
 		StatementID:     "0xabc:1:n1",
 		Kind:            sicore.KindInsert,
@@ -856,8 +1018,13 @@ func TestStartStorageIntegrityRuntimeRecoversAfterInitialMergeAssert(t *testing.
 		Payload:         payload,
 		PayloadLength:   uint64(len(payload)),
 		PayloadHash:     replay.DigestBytes(payload),
-		PayloadEncoding: sicore.EncodingCSVWithNames,
+		PayloadEncoding: sicore.PayloadEncodingClickHouseNativeData,
 		Revision:        54465,
+		EnvelopeVersion: sicore.EnvelopeVersionV2,
+		NetworkID:       "testnet-v2",
+		SettingsHash:    sicore.EmptySettingsHash,
+		SchemaHash:      "0x11",
+		RowIDProfileID:  payloadexec.RowIDProfileID,
 	}
 	env, err := sicore.EnvelopeFromAdmission(adm)
 	if err != nil {
@@ -1017,6 +1184,24 @@ func signedStorageIntegrityQuerySQL(t *testing.T, signer *auth.RelaySigner, sql 
 	}
 	state := chsession.NewSessionState()
 	state.ClientRevision = 54453
+	statementID := buildTestStatementID(signer, 1)
+	payload := []byte{byte(chproto.ClientDataCode), 1}
+	statementToken, err := signer.SignStatementV2(auth.JWSStatementPayloadV2{
+		NetworkID:      "testnet-v2",
+		StatementID:    statementID,
+		SQLHash:        replay.DigestString(sql),
+		SettingsHash:   sicore.EmptySettingsHash,
+		SchemaHash:     payloadexec.TableSchemaHash("testnet-v2", buildTestStorageIntegritySchema()),
+		PayloadHash:    replay.DigestBytes(payload),
+		PayloadLength:  uint64(len(payload)),
+		PayloadFormat:  sicore.PayloadEncodingClickHouseNativeData,
+		ClientRevision: uint32(state.ClientRevision),
+		TargetTableID:  "tenant.events",
+		RowIDProfileID: payloadexec.RowIDProfileID,
+	})
+	if err != nil {
+		t.Fatalf("SignStatementV2: %v", err)
+	}
 	return &plugin.QueryContext{
 		Session: &buildTestSession{
 			id:    1001,
@@ -1024,13 +1209,12 @@ func signedStorageIntegrityQuerySQL(t *testing.T, signer *auth.RelaySigner, sql 
 		},
 		OriginalSQL: sql,
 		Query: &chproto.Query{
-			ID:   buildTestStatementID(signer, 1),
+			ID:   statementID,
 			Body: sql,
-			Settings: []chproto.Setting{{
-				Key:    auth.AuthTokenSettingKey,
-				Value:  "'" + token + "'",
-				Custom: true,
-			}},
+			Settings: []chproto.Setting{
+				{Key: auth.AuthTokenSettingKey, Value: "'" + token + "'", Custom: true},
+				{Key: auth.StatementTokenSettingKey, Value: "'" + statementToken + "'", Custom: true},
+			},
 		},
 		StatementType: sqlmeta.StatementTypeInsert,
 		AccessedTables: []sqlmeta.AccessedTable{{
@@ -1039,6 +1223,29 @@ func signedStorageIntegrityQuerySQL(t *testing.T, signer *auth.RelaySigner, sql 
 			LogicalDatabase:  "tenant",
 		}},
 	}
+}
+
+func buildTestStorageIntegritySchema() payloadexec.TableSchema {
+	return payloadexec.TableSchema{
+		TableID: "tenant.events",
+		Columns: []lthash.Column{
+			{Name: "id", Type: "UInt64"},
+			{Name: "region", Type: "String"},
+		},
+	}
+}
+
+func buildTestStorageIntegrityNetworkState() *network.InMemoryNetworkState {
+	ns := network.NewInMemoryNetworkState()
+	schema := buildTestStorageIntegritySchema()
+	ns.TableSchemas["tenant/events@1"] = network.TableSchemaInfo{
+		DatabaseId: "tenant",
+		TableId:    "events",
+		Version:    1,
+		SchemaHash: payloadexec.TableSchemaHash("testnet-v2", schema),
+		SchemaJson: `{"table_id":"tenant.events","columns":[{"name":"id","type":"UInt64"},{"name":"region","type":"String"}]}`,
+	}
+	return ns
 }
 
 func buildTestStatementID(signer *auth.RelaySigner, seq uint64) string {
@@ -1089,11 +1296,6 @@ func (c *recordingAdmissionConsumer) requireOne(t *testing.T) storageintegrity.A
 	return c.admission[0]
 }
 
-type recordingBuildPayloadMaterializer struct {
-	input sicore.PayloadMaterializationInput
-	out   sicore.PayloadMaterializationResult
-}
-
 type rootArbiterIngressClient struct{}
 
 func (c *rootArbiterIngressClient) SubmitStatement(context.Context, *pb.StatementEnvelopeV2, ...grpc.CallOption) (*pb.SequencedAck, error) {
@@ -1104,14 +1306,10 @@ func (c *rootArbiterIngressClient) GetStatementStatus(context.Context, *pb.GetSt
 	return &pb.StatementStatus{Found: false}, nil
 }
 
-func (m *recordingBuildPayloadMaterializer) MaterializePayload(_ context.Context, input sicore.PayloadMaterializationInput) (sicore.PayloadMaterializationResult, error) {
-	m.input = input
-	return m.out, nil
-}
-
 func enableStorageIntegrityRuntimeTestConfig(t *testing.T, cfg *config.Config, signer *auth.RelaySigner) {
 	t.Helper()
 	cfg.StorageIntegrity.Ingress.Enabled = true
+	cfg.StorageIntegrity.Ingress.NetworkID = "testnet-v2"
 	cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{signer.Address()}
 	cfg.StorageIntegrity.Ingress.MaxTokenAge.Duration = time.Minute
 	cfg.StorageIntegrity.Ingress.RequestTimeout.Duration = 50 * time.Millisecond

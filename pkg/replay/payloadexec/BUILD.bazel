@@ -30,5 +30,7 @@ go_test(
     deps = [
         "//pkg/lthash",
         "//pkg/replay",
+        "//pkg/replay/nativepayload",
+        "@com_github_clickhouse_ch_go//proto",
     ],
 )

@@ -19,10 +19,12 @@ import (
 	"fmt"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 
 	"github.com/housegate/housegate/pkg/replay"
+	"github.com/housegate/housegate/pkg/replay/nativepayload"
 	"github.com/housegate/housegate/pkg/replay/payloadexec"
 )
 
@@ -51,7 +53,7 @@ func NewMaterializer(networkID string, conn clickhouse.Conn) *Materializer {
 // root stays comparable to the in-process executor, while the row VALUES come
 // from ClickHouse's read-back.
 func (m *Materializer) Materialize(ctx context.Context, schema payloadexec.TableSchema, st replay.PreparedStatement) ([]payloadexec.Row, error) {
-	decoded, err := payloadexec.DecodeCSV(st.Payload, schema)
+	decoded, err := decodeRows(ctx, schema, st)
 	if err != nil {
 		return nil, err
 	}
@@ -80,6 +82,23 @@ func (m *Materializer) Materialize(ctx context.Context, schema payloadexec.Table
 		return nil, err
 	}
 	return m.readBack(ctx, scratch, schema, wire)
+}
+
+// decodeRows selects the wire decoder from the statement's signed
+// payload_format. Native is the production SI lane; explicit CSVWithNames is
+// kept for legacy executor tests. An empty format is never inferred.
+func decodeRows(_ context.Context, schema payloadexec.TableSchema, st replay.PreparedStatement) ([]payloadexec.Row, error) {
+	switch st.PayloadFormat {
+	case nativepayload.PayloadFormat:
+		if st.ClientRevision == 0 {
+			return nil, fmt.Errorf("statement %s: native payload requires client_revision", st.StatementID)
+		}
+		return nativepayload.Decode(schema, int(st.ClientRevision), st.Payload)
+	case payloadexec.PayloadFormatCSVWithNames:
+		return payloadexec.DecodeCSV(st.Payload, schema)
+	default:
+		return nil, fmt.Errorf("statement %s: unsupported payload_format %q", st.StatementID, st.PayloadFormat)
+	}
 }
 
 func (m *Materializer) createScratch(ctx context.Context, table string, schema payloadexec.TableSchema) error {
@@ -161,7 +180,7 @@ func (m *Materializer) readBack(ctx context.Context, table string, schema payloa
 		}
 		values := make([]any, len(schema.Columns))
 		for i := range schema.Columns {
-			v, err := derefScan(holders[i])
+			v, err := derefScan(schema.Columns[i].Type, holders[i])
 			if err != nil {
 				return nil, err
 			}
@@ -186,13 +205,15 @@ func (m *Materializer) readBack(ctx context.Context, table string, schema payloa
 // supportedColumnType reports whether the executor can materialize and read back
 // a column of this ClickHouse type. It is the single source of truth shared by
 // createScratch (DDL validation) and newScanDest (read-back), kept in sync with
-// payloadexec.parseValue's wire-side whitelist so the two executors admit the
-// same schema set.
+// the Native decoder's admitted scalar matrix so the in-process and
+// ClickHouse-backed Native executors admit the same schema set.
 func supportedColumnType(typeName string) bool {
 	switch {
 	case typeName == "String", strings.HasPrefix(typeName, "FixedString("):
 		return true
 	case typeName == "Bool", typeName == "Float32", typeName == "Float64":
+		return true
+	case isTemporalColumnType(typeName):
 		return true
 	case typeName == "UInt8", typeName == "UInt16", typeName == "UInt32", typeName == "UInt64":
 		return true
@@ -201,6 +222,13 @@ func supportedColumnType(typeName string) bool {
 	default:
 		return false
 	}
+}
+
+func isTemporalColumnType(typeName string) bool {
+	return typeName == "Date" ||
+		typeName == "DateTime" ||
+		strings.HasPrefix(typeName, "DateTime(") ||
+		strings.HasPrefix(typeName, "DateTime64(")
 }
 
 // newScanDest returns a pointer of the Go type clickhouse-go scans this column
@@ -219,6 +247,8 @@ func newScanDest(typeName string) (any, error) {
 		return new(float32), nil
 	case typeName == "Float64":
 		return new(float64), nil
+	case isTemporalColumnType(typeName):
+		return new(time.Time), nil
 	case typeName == "UInt8":
 		return new(uint8), nil
 	case typeName == "UInt16":
@@ -240,7 +270,7 @@ func newScanDest(typeName string) (any, error) {
 	}
 }
 
-func derefScan(p any) (any, error) {
+func derefScan(typeName string, p any) (any, error) {
 	switch v := p.(type) {
 	case *string:
 		return *v, nil
@@ -255,6 +285,20 @@ func derefScan(p any) (any, error) {
 		return *v, nil
 	case *float64:
 		return *v, nil
+	case *time.Time:
+		switch {
+		case typeName == "Date":
+			// clickhouse-go preserves Date's calendar day but relocates its
+			// midnight into the server/user timezone. Rebuild that calendar
+			// value at UTC midnight so Date's day commitment is independent
+			// of the executor session timezone and matches nativepayload.
+			year, month, day := v.Date()
+			return time.Date(year, month, day, 0, 0, 0, 0, time.UTC), nil
+		case typeName == "DateTime", strings.HasPrefix(typeName, "DateTime("), strings.HasPrefix(typeName, "DateTime64("):
+			return v.UTC(), nil
+		default:
+			return nil, fmt.Errorf("chexec: unexpected time.Time destination for column type %q", typeName)
+		}
 	case *uint8:
 		return *v, nil
 	case *uint16:

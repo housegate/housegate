@@ -6,11 +6,13 @@ import (
 	"encoding/hex"
 	"testing"
 
+	"github.com/ClickHouse/ch-go/proto"
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 
 	"github.com/housegate/housegate/pkg/lthash"
 	"github.com/housegate/housegate/pkg/replay"
 	"github.com/housegate/housegate/pkg/replay/chexec"
+	"github.com/housegate/housegate/pkg/replay/nativepayload"
 	"github.com/housegate/housegate/pkg/replay/payloadexec"
 )
 
@@ -57,6 +59,16 @@ func chReplaySchema(tableID string) payloadexec.TableSchema {
 
 func chReplayJob(snap replay.SafeSnapshotManifest, tableID, statementID, payloadRef string, payload []byte, sourceClaim string) replay.ReplayJob {
 	sql := "INSERT INTO " + tableID + " FORMAT CSVWithNames"
+	schemaHash := ""
+	for _, table := range snap.Tables {
+		if table.TableID == tableID {
+			schemaHash = table.SchemaHash
+			break
+		}
+	}
+	if schemaHash == "" {
+		panic("chReplayJob: snapshot has no schema for " + tableID)
+	}
 	return replay.ReplayJob{
 		BlockSeq:           snap.SafeBlockSeq + 1,
 		PrevSafeSnapshotID: snap.SnapshotID,
@@ -65,17 +77,35 @@ func chReplayJob(snap replay.SafeSnapshotManifest, tableID, statementID, payload
 		ExecutorProfileID:  snap.ExecutorProfileID,
 		SourceClaimRoot:    sourceClaim,
 		Statements: []replay.Statement{{
-			StatementID:   statementID,
-			StatementSeq:  snap.SafeBlockSeq + 1,
-			SQL:           sql,
-			SQLHash:       replay.DigestString(sql),
-			SettingsHash:  replay.DigestString("settings"),
-			PayloadRef:    payloadRef,
-			PayloadHash:   replay.DigestBytes(payload),
-			PayloadLength: uint64(len(payload)),
-			TargetTableID: tableID,
+			StatementID:    statementID,
+			StatementSeq:   snap.SafeBlockSeq + 1,
+			SQL:            sql,
+			SQLHash:        replay.DigestString(sql),
+			SettingsHash:   replay.DigestString("settings"),
+			PayloadRef:     payloadRef,
+			PayloadHash:    replay.DigestBytes(payload),
+			PayloadLength:  uint64(len(payload)),
+			TargetTableID:  tableID,
+			PayloadFormat:  payloadexec.PayloadFormatCSVWithNames,
+			ClientRevision: 54460,
+			SchemaHash:     schemaHash,
 		}},
 	}
+}
+
+func nativeCHReplayJob(snap replay.SafeSnapshotManifest, tableID, statementID, payloadRef string, payload []byte, sourceClaim string) replay.ReplayJob {
+	job := chReplayJob(snap, tableID, statementID, payloadRef, payload, sourceClaim)
+	job.Statements[0].SQL = "INSERT INTO " + tableID + " FORMAT Native"
+	job.Statements[0].SQLHash = replay.DigestString(job.Statements[0].SQL)
+	job.Statements[0].PayloadFormat = replay.PayloadFormatClickHouseNativeData
+	return job
+}
+
+type chReplaySchemaHashes map[string]string
+
+func (s chReplaySchemaHashes) TableSchemaHash(tableID string) (string, bool) {
+	hash, ok := s[tableID]
+	return hash, ok
 }
 
 // execRoot runs an executor over a payload and returns the state root it
@@ -90,6 +120,50 @@ func execRoot(t *testing.T, exec *payloadexec.Executor, snap replay.SafeSnapshot
 		t.Fatalf("probe ApplyContext: %v", err)
 	}
 	return res.ComputedStateRoot
+}
+
+func nativeExecRoot(t *testing.T, exec *payloadexec.Executor, snap replay.SafeSnapshotManifest, tableID, statementID string, payload []byte) string {
+	t.Helper()
+	job := nativeCHReplayJob(snap, tableID, statementID, "probe", payload, "")
+	prepared := []replay.PreparedStatement{{Statement: job.Statements[0], Payload: payload}}
+	_, res, err := exec.ApplyContext(context.Background(), snap, job, prepared)
+	if err != nil {
+		t.Fatalf("Native probe ApplyContext: %v", err)
+	}
+	return res.ComputedStateRoot
+}
+
+type chReplayRow struct {
+	userID  string
+	balance uint64
+	score   int32
+	ratio   float64
+}
+
+func nativeCHReplayPayload(t *testing.T, rows ...chReplayRow) []byte {
+	t.Helper()
+	users := proto.ColStr{}
+	balances := proto.ColUInt64{}
+	scores := proto.ColInt32{}
+	ratios := proto.ColFloat64{}
+	for _, row := range rows {
+		users.Append(row.userID)
+		balances.Append(row.balance)
+		scores.Append(row.score)
+		ratios.Append(row.ratio)
+	}
+	var buf proto.Buffer
+	buf.PutUVarInt(uint64(proto.ClientCodeData))
+	buf.PutString("")
+	if err := (proto.Block{Rows: len(rows), Columns: 4}).EncodeBlock(&buf, 54460, proto.Input{
+		{Name: "user_id", Data: &users},
+		{Name: "balance", Data: &balances},
+		{Name: "score", Data: &scores},
+		{Name: "ratio", Data: &ratios},
+	}); err != nil {
+		t.Fatalf("encode Native replay payload: %v", err)
+	}
+	return append([]byte(nil), buf.Buf...)
 }
 
 func chReplaySigner(t *testing.T) *payloadexec.Ed25519Signer {
@@ -138,18 +212,27 @@ func newCHReplayHarness(t *testing.T) (*payloadexec.Executor, replay.SafeSnapsho
 	snapshots.Put(gen)
 	payloads := payloadexec.NewMemPayloadStore()
 	signer := chReplaySigner(t)
-	verifier := &replay.Verifier{Snapshots: snapshots, Payloads: payloads, Executor: exec, Signer: signer}
+	verifier := &replay.Verifier{
+		Snapshots:    snapshots,
+		Payloads:     payloads,
+		Executor:     exec,
+		Signer:       signer,
+		SchemaHashes: chReplaySchemaHashes{tableID: payloadexec.TableSchemaHash(chReplayNetwork, schema)},
+	}
 	return exec, gen, snapshots, payloads, signer, verifier, tableID
 }
 
 func TestReplayCHExecutorHonestMatch(t *testing.T) {
 	exec, gen, _, payloads, signer, verifier, tableID := newCHReplayHarness(t)
 
-	payload := []byte("user_id,balance,score,ratio\n0x123,10,-5,1.5\n0xabc,250,99,-0.25\n")
+	payload := nativeCHReplayPayload(t,
+		chReplayRow{userID: "0x123", balance: 10, score: -5, ratio: 1.5},
+		chReplayRow{userID: "0xabc", balance: 250, score: 99, ratio: -0.25},
+	)
 	payloads.Put("p1", payload)
-	claim := execRoot(t, exec, gen, tableID, "stmt-1", payload)
+	claim := nativeExecRoot(t, exec, gen, tableID, "stmt-1", payload)
 
-	att, err := verifier.Verify(context.Background(), chReplayJob(gen, tableID, "stmt-1", "p1", payload, claim))
+	att, err := verifier.Verify(context.Background(), nativeCHReplayJob(gen, tableID, "stmt-1", "p1", payload, claim))
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -169,17 +252,17 @@ func TestReplayCHExecutorHonestMatch(t *testing.T) {
 func TestReplayCHExecutorFraudMismatch(t *testing.T) {
 	exec, gen, _, payloads, signer, verifier, tableID := newCHReplayHarness(t)
 
-	signed := []byte("user_id,balance,score,ratio\n0x123,10,-5,1.5\n")
-	tampered := []byte("user_id,balance,score,ratio\n0x123,0,-5,1.5\n")
+	signed := nativeCHReplayPayload(t, chReplayRow{userID: "0x123", balance: 10, score: -5, ratio: 1.5})
+	tampered := nativeCHReplayPayload(t, chReplayRow{userID: "0x123", balance: 0, score: -5, ratio: 1.5})
 	payloads.Put("p1", signed)
 
-	truth := execRoot(t, exec, gen, tableID, "stmt-1", signed)
-	fraud := execRoot(t, exec, gen, tableID, "stmt-1", tampered)
+	truth := nativeExecRoot(t, exec, gen, tableID, "stmt-1", signed)
+	fraud := nativeExecRoot(t, exec, gen, tableID, "stmt-1", tampered)
 	if truth == fraud {
 		t.Fatal("test setup broken: signed and tampered payloads hash equal")
 	}
 
-	att, err := verifier.Verify(context.Background(), chReplayJob(gen, tableID, "stmt-1", "p1", signed, fraud))
+	att, err := verifier.Verify(context.Background(), nativeCHReplayJob(gen, tableID, "stmt-1", "p1", signed, fraud))
 	if err != nil {
 		t.Fatalf("Verify must sign a mismatch, not error: %v", err)
 	}
@@ -288,5 +371,60 @@ func TestReplayCHExecutorMultiPartition(t *testing.T) {
 	inRoot := execRoot(t, inE, genIn, tableID, "stmt-1", payload)
 	if res.ComputedStateRoot != inRoot {
 		t.Fatalf("multi-partition ClickHouse root != in-process root:\n  ch: %s\n  in: %s", res.ComputedStateRoot, inRoot)
+	}
+}
+
+// nativeReplayPayload encodes one client Data packet for the schema used by
+// TestReplayCHExecutorNativePayloadMatchesInProcessRoot at revision 54460.
+func nativeReplayPayload(t *testing.T) []byte {
+	t.Helper()
+	user := proto.ColStr{}
+	user.Append("0x123")
+	user.Append("0xabc")
+	balance := proto.ColUInt64{10, 250}
+	var buf proto.Buffer
+	buf.PutUVarInt(uint64(proto.ClientCodeData))
+	buf.PutString("")
+	if err := (proto.Block{Rows: 2, Columns: 2}).EncodeBlock(&buf, 54460, proto.Input{{Name: "user_id", Data: &user}, {Name: "balance", Data: &balance}}); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	return append([]byte(nil), buf.Buf...)
+}
+
+// TestReplayCHExecutorNativePayloadMatchesInProcessRoot: with
+// payload_format = clickhouse-native-data-v1 the ClickHouse-backed
+// materializer and the in-process nativepayload materializer must produce
+// the same state root (executor equivalence, envelope v2 §8).
+func TestReplayCHExecutorNativePayloadMatchesInProcessRoot(t *testing.T) {
+	conn := openDirectCH(t)
+	tableID := uniqueTable(t)
+	schema := payloadexec.TableSchema{TableID: tableID, Columns: []lthash.Column{{Name: "user_id", Type: "String"}, {Name: "balance", Type: "UInt64"}}}
+	chE := payloadexec.NewWithMaterializer(chReplayNetwork, chexec.NewMaterializer(chReplayNetwork, conn), schema)
+	inE := payloadexec.NewWithMaterializer(chReplayNetwork, nativepayload.Materializer{NetworkID: chReplayNetwork}, schema)
+	genCH, err := chE.GenesisSnapshot(0, "schema-1", "ch-26.x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	genIn, err := inE.GenesisSnapshot(0, "schema-1", "ch-26.x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := nativeReplayPayload(t)
+	job := chReplayJob(genCH, tableID, "stmt-native-1", "probe", payload, "")
+	job.Statements[0].SQL = "INSERT INTO " + tableID + " FORMAT Native"
+	job.Statements[0].SQLHash = replay.DigestString(job.Statements[0].SQL)
+	job.Statements[0].PayloadFormat = nativepayload.PayloadFormat
+	job.Statements[0].ClientRevision = 54460
+	prepared := []replay.PreparedStatement{{Statement: job.Statements[0], Payload: payload}}
+	_, chRes, err := chE.ApplyContext(context.Background(), genCH, job, prepared)
+	if err != nil {
+		t.Fatalf("chexec native: %v", err)
+	}
+	_, inRes, err := inE.ApplyContext(context.Background(), genIn, job, prepared)
+	if err != nil {
+		t.Fatalf("in-process native: %v", err)
+	}
+	if chRes.ComputedStateRoot != inRes.ComputedStateRoot {
+		t.Fatalf("native executor equivalence broken:\n  ch: %s\n  in: %s", chRes.ComputedStateRoot, inRes.ComputedStateRoot)
 	}
 }

@@ -30,6 +30,7 @@ go_test(
         "codec_test.go",
         "compress_test.go",
         "query_codec_test.go",
+        "sample_block_test.go",
     ],
     embed = [":chproto"],
     deps = [
