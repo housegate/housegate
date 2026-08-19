@@ -143,6 +143,17 @@ func TestRecoverPendingCompactsLegacyTerminalPayload(t *testing.T) {
 	if len(persisted.Admission.Payload) != 0 {
 		t.Fatalf("legacy terminal retained %d payload bytes after recovery", len(persisted.Admission.Payload))
 	}
+	if persisted.JournalVersion == 0 {
+		t.Fatal("legacy zero-candidate terminal retained version 0")
+	}
+	if persisted.Admission.TouchedPartitionIDs == nil || len(persisted.Admission.TouchedPartitionIDs) != 0 {
+		t.Fatalf("legacy zero-candidate touched partitions=%v, want non-nil empty", persisted.Admission.TouchedPartitionIDs)
+	}
+	replay := adm
+	replay.TouchedPartitionIDs = []string{}
+	if res, err := orch.Orchestrate(ctx, replay); err != nil || !res.Ack2 {
+		t.Fatalf("migrated zero-candidate terminal replay=(%+v, %v), want cached ACK2", res, err)
+	}
 }
 
 func TestRecoverPendingRejectsUnknownJournalVersion(t *testing.T) {

@@ -411,6 +411,9 @@ func (g *PartsPressureGuard) RestoreBatch(ctx context.Context, records []PartsRe
 				return fail(fmt.Errorf("storage_integrity: restored observation %q is not a candidate for statement %s", observed.PartName, record.StatementID))
 			}
 		}
+		if !record.Finalized && record.PartitionIDs == nil {
+			return fail(fmt.Errorf("storage_integrity: restored statement %s has no known partition set", record.StatementID))
+		}
 		if record.Finalized && len(record.Candidates) == 0 {
 			continue
 		}
@@ -539,6 +542,11 @@ func restoreCandidatePartitions(candidates []CandidatePart) []string {
 // admissionMu, and Restore additionally holds commitMu because it commits the
 // new handle before returning.
 func (g *PartsPressureGuard) newReservationLocked(table string, partitionIDs []string, enforceLimits bool) (*partsReservation, error) {
+	if enforceLimits {
+		if err := g.checkAvailableLocked(table, ""); err != nil {
+			return nil, err
+		}
+	}
 	keys := make([]PartsKey, 0, len(partitionIDs))
 	baselines := make([]int, 0, len(partitionIDs))
 	baselineParts := make([]map[string]struct{}, 0, len(partitionIDs))
@@ -552,7 +560,7 @@ func (g *PartsPressureGuard) newReservationLocked(table string, partitionIDs []s
 		}
 		seen[partitionID] = true
 		if enforceLimits {
-			if err := g.checkLocked(table, partitionID); err != nil {
+			if err := g.checkCapacityLocked(table, partitionID); err != nil {
 				return nil, err
 			}
 		}
@@ -586,9 +594,20 @@ func (g *PartsPressureGuard) newReservationLocked(table string, partitionIDs []s
 }
 
 func (g *PartsPressureGuard) checkLocked(table, partitionID string) error {
-	if !g.haveSnap || g.now().Sub(g.takenAt) > g.cfg.SnapshotTTL {
+	if err := g.checkAvailableLocked(table, partitionID); err != nil {
+		return err
+	}
+	return g.checkCapacityLocked(table, partitionID)
+}
+
+func (g *PartsPressureGuard) checkAvailableLocked(table, partitionID string) error {
+	if g.restoreBlocked || !g.haveSnap || g.now().Sub(g.takenAt) > g.cfg.SnapshotTTL {
 		return &BackpressureError{Database: g.cfg.UnsafeDatabase, Table: table, Partition: partitionID, Kind: "unavailable"}
 	}
+	return nil
+}
+
+func (g *PartsPressureGuard) checkCapacityLocked(table, partitionID string) error {
 	key := PartsKey{Database: g.cfg.UnsafeDatabase, Table: table, Partition: partitionID}
 	number := g.snapshot[key] + g.reserved[key] + g.committed[key]
 	switch {

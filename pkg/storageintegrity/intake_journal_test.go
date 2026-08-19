@@ -876,6 +876,11 @@ func TestOrchestratorTerminalWithCandidatesAndUnknownTouchedPartitionsStaysLegac
 	if persisted.JournalVersion != 0 {
 		t.Fatalf("observed but partition-incomplete terminal journal version=%d, want 0", persisted.JournalVersion)
 	}
+	replay := adm
+	replay.TouchedPartitionIDs = []string{}
+	if _, err := orch.Orchestrate(ctx, replay); err == nil || !strings.Contains(err.Error(), "reused with a different envelope") {
+		t.Fatalf("candidate-bearing unknown/known-empty replay error=%v, want envelope mismatch", err)
+	}
 }
 
 func TestOrchestratorKnownEmptyTouchedPartitionsSurviveTerminalReplay(t *testing.T) {
@@ -916,5 +921,42 @@ func TestOrchestratorKnownEmptyTouchedPartitionsSurviveTerminalReplay(t *testing
 	)
 	if res, err := restarted.Orchestrate(ctx, adm); err != nil || !res.Ack2 {
 		t.Fatalf("terminal replay=(%+v, %v), want cached ACK2", res, err)
+	}
+}
+
+func TestOrchestratorZeroCandidateTerminalCanonicalizesUnknownTouchedPartitions(t *testing.T) {
+	ctx := context.Background()
+	journal, err := NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	adm := admissionFixture()
+	first := NewOrchestrator(
+		&recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeAccepted}},
+		&recordingPreparer{
+			prepared: boundSource(),
+			claimOutcome: ClaimOutcome{
+				Category: OutcomeAccepted, BoundSource: "snode-A",
+			},
+		},
+		OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
+	)
+	if res, err := first.Orchestrate(ctx, adm); err != nil || !res.Ack2 {
+		t.Fatalf("first Orchestrate=(%+v, %v), want ACK2", res, err)
+	}
+	persisted, ok, err := journal.LoadIntakeRecord(ctx, adm.StatementID)
+	if err != nil || !ok {
+		t.Fatalf("LoadIntakeRecord=(%+v, %v, %v)", persisted, ok, err)
+	}
+	if persisted.JournalVersion == 0 {
+		t.Fatal("zero-candidate terminal retained legacy journal version")
+	}
+	if persisted.Admission.TouchedPartitionIDs == nil || len(persisted.Admission.TouchedPartitionIDs) != 0 {
+		t.Fatalf("zero-candidate touched partitions=%v, want non-nil empty", persisted.Admission.TouchedPartitionIDs)
+	}
+	replay := adm
+	replay.TouchedPartitionIDs = []string{}
+	if res, err := first.Orchestrate(ctx, replay); err != nil || !res.Ack2 {
+		t.Fatalf("zero-candidate terminal replay=(%+v, %v), want cached ACK2", res, err)
 	}
 }

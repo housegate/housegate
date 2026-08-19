@@ -298,11 +298,12 @@ func isDecimalDigits(s string) bool {
 // == covers every signed/routed field (SQL, target, kind, payload identity,
 // signer, JWS). The raw payload bytes are compared too, so a caller cannot keep
 // the envelope's payload hash while swapping the underlying bytes.
-func sameStatement(a StatementEnvelope, aAdm AdmissionRecord, b StatementEnvelope, bAdm AdmissionRecord, storedTerminal bool) bool {
+func sameStatement(a StatementEnvelope, aAdm AdmissionRecord, b StatementEnvelope, bAdm AdmissionRecord, storedTerminal, zeroCandidateTerminal bool) bool {
 	if a != b {
 		return false
 	}
-	if !equalStrings(aAdm.TouchedPartitionIDs, bAdm.TouchedPartitionIDs) {
+	if !equalStrings(aAdm.TouchedPartitionIDs, bAdm.TouchedPartitionIDs) &&
+		!(zeroCandidateTerminal && len(aAdm.TouchedPartitionIDs) == 0 && len(bAdm.TouchedPartitionIDs) == 0) {
 		return false
 	}
 	// Terminal journal records compact the payload bytes after the envelope has
@@ -767,7 +768,7 @@ func (o *Orchestrator) AdmissionRequiresPrepare(ctx context.Context, adm Admissi
 	o.mu.Lock()
 	rec := o.records[incoming.StatementID]
 	if rec != nil {
-		requires, err := recordRequiresPrepare(rec.env, rec.adm, rec.hasPrepared, rec.isTerminal, rec.stage, adm)
+		requires, err := recordRequiresPrepare(rec.env, rec.adm, rec.prepared, rec.hasPrepared, rec.isTerminal, rec.stage, adm)
 		o.mu.Unlock()
 		if err != nil || !requires {
 			return requires, err
@@ -794,13 +795,13 @@ func (o *Orchestrator) AdmissionRequiresPrepare(ctx context.Context, adm Admissi
 			return false, err
 		}
 		if ok {
-			return recordRequiresPrepare(persisted.Env, persisted.Admission, persisted.HasPrepared, persisted.IsTerminal, persisted.Stage, adm)
+			return recordRequiresPrepare(persisted.Env, persisted.Admission, persisted.Prepared, persisted.HasPrepared, persisted.IsTerminal, persisted.Stage, adm)
 		}
 	}
 	return true, nil
 }
 
-func recordRequiresPrepare(boundEnv StatementEnvelope, boundAdmission AdmissionRecord, hasPrepared, terminal bool, stage Lifecycle, incoming AdmissionRecord) (bool, error) {
+func recordRequiresPrepare(boundEnv StatementEnvelope, boundAdmission AdmissionRecord, prepared PreparedLocalResult, hasPrepared, terminal bool, stage Lifecycle, incoming AdmissionRecord) (bool, error) {
 	if incoming.PayloadRef != "" && incoming.PayloadRef != boundEnv.PayloadRef {
 		return false, fmt.Errorf("intake: statement id %s reused with a different envelope", boundEnv.StatementID)
 	}
@@ -810,13 +811,17 @@ func recordRequiresPrepare(boundEnv StatementEnvelope, boundAdmission AdmissionR
 	if err != nil {
 		return false, err
 	}
-	if !sameStatement(boundEnv, boundAdmission, candidateEnv, candidate, terminal) {
+	if !sameStatement(boundEnv, boundAdmission, candidateEnv, candidate, terminal, zeroCandidateTerminal(terminal, hasPrepared, prepared)) {
 		return false, fmt.Errorf("intake: statement id %s reused with a different envelope", boundEnv.StatementID)
 	}
 	if terminal || hasPrepared {
 		return false, nil
 	}
 	return stage == "" || stage == LifecyclePreparing, nil
+}
+
+func zeroCandidateTerminal(terminal, hasPrepared bool, prepared PreparedLocalResult) bool {
+	return terminal && hasPrepared && len(prepared.CandidateParts) == 0
 }
 
 // Orchestrate drives one admission through the staged intake. Prepare runs at
@@ -884,7 +889,7 @@ func (o *Orchestrator) Orchestrate(ctx context.Context, adm AdmissionRecord) (In
 		}
 		o.records[env.StatementID] = rec
 		created = true
-	} else if !sameStatement(rec.env, rec.adm, env, adm, rec.isTerminal) {
+	} else if !sameStatement(rec.env, rec.adm, env, adm, rec.isTerminal, zeroCandidateTerminal(rec.isTerminal, rec.hasPrepared, rec.prepared)) {
 		// The statement id is already bound to a different envelope. A retry may
 		// not swap the SQL/target/kind/signer/JWS/payload under a reused id and
 		// ride the originally prepared unsafe write; fail closed.
@@ -1533,12 +1538,13 @@ func (o *Orchestrator) setTerminal(ctx context.Context, rec *intakeRecord, res I
 
 	o.mu.Lock()
 	snap := journalRecordFromIntakeRecord(rec)
-	terminalVersion := terminalIntakeJournalVersion(rec)
-	snap.JournalVersion = terminalVersion
+	snap.JournalVersion = terminalIntakeJournalVersion(rec)
 	snap.Stage = res.Lifecycle
 	snap.IsTerminal = true
 	snap.TerminalResult = cloneIntakeResult(res)
 	snap.Admission.Payload = nil
+	normalizeTerminalJournalRecord(&snap)
+	terminalVersion := snap.JournalVersion
 	o.mu.Unlock()
 	if o.journal != nil {
 		if err := o.journal.SaveIntakeRecord(ctx, snap); err != nil {
@@ -1551,6 +1557,7 @@ func (o *Orchestrator) setTerminal(ctx context.Context, rec *intakeRecord, res I
 	rec.isTerminal = true
 	rec.terminalRes = res
 	rec.adm.Payload = nil
+	rec.adm.TouchedPartitionIDs = cloneStringsPreserveNil(snap.Admission.TouchedPartitionIDs)
 	o.mu.Unlock()
 	return nil
 }
@@ -1634,10 +1641,7 @@ func (o *Orchestrator) compactRecoveredTerminalPayloads(ctx context.Context, rec
 			records[idx].Admission.Payload = nil
 			changed = true
 		}
-		if records[idx].JournalVersion == 0 &&
-			(len(records[idx].Prepared.CandidateParts) == 0 ||
-				(records[idx].Admission.TouchedPartitionIDs != nil && allCandidatePartsObserved(records[idx].Prepared.CandidateParts, records[idx].ObservedCandidateParts))) {
-			records[idx].JournalVersion = currentIntakeJournalVersion
+		if normalizeTerminalJournalRecord(&records[idx]) {
 			changed = true
 		}
 		if !changed {
