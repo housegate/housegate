@@ -9,6 +9,7 @@ import (
 	pb "github.com/sentioxyz/arbiter-proto/gen/pb"
 
 	"github.com/housegate/housegate/pkg/config"
+	"github.com/housegate/housegate/pkg/replay/payloadexec"
 	sicore "github.com/housegate/housegate/pkg/storageintegrity"
 )
 
@@ -37,6 +38,11 @@ type StorageIntegrityRuntimeOptions struct {
 	PayloadSpool       *sicore.FilePayloadSpool
 	MergeConn          sicore.MergeConn
 	MergeGuard         StorageIntegrityMergeGuard
+	// TableSchemas is the complete authoritative startup schema set. Runtime
+	// construction validates its frozen physical outputs globally before any
+	// listener, DDL, or Keeper-backed role can mix distinct logical tables.
+	TableSchemas  []payloadexec.TableSchema
+	PartsPressure StorageIntegrityPartsPressure
 }
 
 func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRuntimeConfig, opts StorageIntegrityRuntimeOptions) (*StorageIntegrityIngress, StorageIntegrityMergeGuard, error) {
@@ -115,6 +121,11 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 	if rawMergeGuard == nil {
 		errs = append(errs, errors.New("storage_integrity.runtime.merge_guard or merge_conn is required"))
 	}
+	if len(opts.TableSchemas) == 0 {
+		errs = append(errs, errors.New("storage_integrity.runtime requires the authoritative table schema set (StorageIntegrityRuntimeOptions.TableSchemas)"))
+	} else if err := sicore.ValidatePhysicalTableNames(opts.TableSchemas); err != nil {
+		errs = append(errs, fmt.Errorf("storage_integrity.runtime schema set: %w", err))
+	}
 	if joined := errors.Join(errs...); joined != nil {
 		return nil, nil, joined
 	}
@@ -136,7 +147,56 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 	}
 	ingress.leaseManager = leaseManager
 	ingress.mergeRunner = mergeGuard
+	schemaResolver := runtimeTableSchemaResolver(opts.TableSchemas)
+	ingress.WithTableSchemas(schemaResolver)
+	if backpressure := runtimeCfg.Backpressure; backpressure.Enabled {
+		unsafeDatabase := strings.TrimSpace(backpressure.UnsafeDatabase)
+		safeDatabase := strings.TrimSpace(backpressure.SafeDatabase)
+		if safeDatabase == "" || safeDatabase == unsafeDatabase {
+			return nil, nil, errors.New("storage_integrity.runtime.backpressure requires a non-empty safe_database distinct from unsafe_database")
+		}
+		pressure := opts.PartsPressure
+		var pressureRunner StorageIntegrityPartsPressureLifecycle
+		if pressure == nil {
+			if opts.MergeConn == nil {
+				return nil, nil, errors.New("storage_integrity.runtime.backpressure requires merge_conn (or set storage_integrity.runtime.backpressure.enabled: false)")
+			}
+			guard := sicore.NewPartsPressureGuard(opts.MergeConn, sicore.PartsPressureConfig{
+				UnsafeDatabase:        unsafeDatabase,
+				SafeDatabase:          safeDatabase,
+				SoftPartsPerPartition: backpressure.SoftPartsPerPartition,
+				HardPartsPerPartition: backpressure.HardPartsPerPartition,
+			})
+			supervisor := NewStorageIntegrityPartsPressureSupervisor(
+				guard,
+				backpressure.PollInterval.Duration,
+				unsafeDatabase,
+				safeDatabase,
+			)
+			pressureRunner = supervisor
+			pressure = supervisor
+		} else {
+			var ok bool
+			pressureRunner, ok = pressure.(StorageIntegrityPartsPressureLifecycle)
+			if !ok {
+				return nil, nil, errors.New("storage_integrity.runtime injected parts pressure must implement the parts pressure lifecycle (Refresh and Run)")
+			}
+		}
+		ingress.pressureRunner = pressureRunner
+		ingress.WithPartsPressure(pressure, schemaResolver)
+	}
 	return ingress, mergeGuard, nil
+}
+
+func runtimeTableSchemaResolver(schemas []payloadexec.TableSchema) StorageIntegrityTableSchemaResolver {
+	byID := make(map[string]payloadexec.TableSchema, len(schemas))
+	for _, schema := range schemas {
+		byID[schema.TableID] = schema
+	}
+	return StorageIntegrityTableSchemaResolverFunc(func(tableID string) (payloadexec.TableSchema, bool) {
+		schema, ok := byID[tableID]
+		return schema, ok
+	})
 }
 
 func startStorageIntegrityRuntime(ctx context.Context, runtime *StorageIntegrityIngress, guard StorageIntegrityMergeGuard) error {
@@ -148,10 +208,21 @@ func startStorageIntegrityRuntime(ctx context.Context, runtime *StorageIntegrity
 	if runtime == nil {
 		return nil
 	}
-	runtime.StartBackground(ctx)
+	if runtime.pressureRunner != nil {
+		if err := runtime.pressureRunner.Refresh(ctx); err != nil {
+			return fmt.Errorf("storage_integrity.backpressure: initial parts snapshot: %w", err)
+		}
+	}
 	if err := runtime.RecoverPending(ctx); err != nil {
 		return fmt.Errorf("storage_integrity.recovery: %w", err)
 	}
+	if runtime.pressureRunner != nil {
+		runtime.pressureRunner.Invalidate()
+		if err := runtime.pressureRunner.Refresh(ctx); err != nil {
+			return fmt.Errorf("storage_integrity.backpressure: post-recovery parts snapshot: %w", err)
+		}
+	}
+	runtime.StartBackground(ctx)
 	return nil
 }
 

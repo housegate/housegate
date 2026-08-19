@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/housegate/housegate/pkg/replay"
 )
 
 type panicSubmitter struct {
@@ -191,6 +193,181 @@ func TestOrchestrate_TerminalSaveFailureDoesNotPublishMemoryTerminal(t *testing.
 	}
 	if !ok || !persisted.IsTerminal {
 		t.Fatalf("persisted terminal = %v/%v, want present terminal record", ok, persisted.IsTerminal)
+	}
+}
+
+func TestOrchestrate_TerminalSaveFailureRetainsPayloadLeaseUntilRetry(t *testing.T) {
+	ctx := context.Background()
+	baseJournal, err := NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	saveErr := errors.New("terminal journal save failed")
+	journal := &failFirstTerminalSaveJournal{base: baseJournal, err: saveErr}
+	prep := newFrontierProbePreparer()
+	prep.prepared = boundSource()
+	lease := &recordingPayloadLeaseManager{}
+	orch := NewOrchestrator(
+		&recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeTerminalReject, Reason: "conflict"}},
+		prep,
+		OrchestratorConfig{
+			ExpectedSource:      "snode-A",
+			Journal:             journal,
+			PayloadLeaseManager: lease,
+		},
+	)
+
+	res, err := orch.Orchestrate(ctx, admissionFixture())
+	if !errors.Is(err, saveErr) || res.Lifecycle != LifecycleCleaned {
+		t.Fatalf("first cleanup=(%+v, %v), want computed Cleaned with terminal save error", res, err)
+	}
+	if got := atomic.LoadInt64(&lease.releases); got != 0 {
+		t.Fatalf("payload lease releases after failed terminal save=%d, want 0", got)
+	}
+
+	res, err = orch.Orchestrate(ctx, admissionFixture())
+	if err != nil || res.Lifecycle != LifecycleCleaned || !res.terminal {
+		t.Fatalf("terminal save retry=(%+v, %v), want terminal Cleaned", res, err)
+	}
+	if got := atomic.LoadInt64(&lease.releases); got != 1 {
+		t.Fatalf("payload lease releases after durable terminal=%d, want 1", got)
+	}
+}
+
+func TestFileIntakeJournalCompactsTerminalPayloadAndReplaysFromEnvelope(t *testing.T) {
+	ctx := context.Background()
+	journal, err := NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	adm := admissionFixture()
+	prep := newLookupRecordingPreparer(boundSource())
+	orch := NewOrchestrator(
+		&recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeAccepted}}, prep,
+		OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
+	)
+	res, err := orch.Orchestrate(ctx, adm)
+	if err != nil || !res.Ack2 {
+		t.Fatalf("Orchestrate=(%+v, %v), want ACK2", res, err)
+	}
+	persisted, ok, err := journal.LoadIntakeRecord(ctx, adm.StatementID)
+	if err != nil {
+		t.Fatalf("LoadIntakeRecord: %v", err)
+	}
+	if !ok || !persisted.IsTerminal {
+		t.Fatalf("persisted terminal=%v/%v, want present terminal", ok, persisted.IsTerminal)
+	}
+	if len(persisted.Admission.Payload) != 0 {
+		t.Fatalf("terminal journal retained %d payload bytes", len(persisted.Admission.Payload))
+	}
+
+	restartedPrep := newLookupRecordingPreparer(boundSource())
+	restarted := NewOrchestrator(panicSubmitter{t: t}, restartedPrep, OrchestratorConfig{
+		ExpectedSource: "snode-A", Journal: journal,
+	})
+	replayed, err := restarted.Orchestrate(ctx, adm)
+	if err != nil || !replayed.Ack2 {
+		t.Fatalf("cached terminal replay=(%+v, %v), want ACK2", replayed, err)
+	}
+	if got := atomic.LoadInt64(&restartedPrep.prepareCount); got != 0 {
+		t.Fatalf("cached terminal replay prepared %d times", got)
+	}
+}
+
+func TestFileIntakeJournalListCompactsLegacyTerminalPayloadBeforeRetainingHistory(t *testing.T) {
+	ctx := context.Background()
+	journal, err := NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	for seq := uint64(1); seq <= 2; seq++ {
+		adm := admissionFixture()
+		adm.StatementID = fixtureStatementID(seq)
+		adm.Payload = []byte(strings.Repeat(string(rune('a'+seq)), 1<<20))
+		adm.PayloadLength = uint64(len(adm.Payload))
+		adm.PayloadHash = replay.DigestBytes(adm.Payload)
+		env, err := EnvelopeFromAdmission(adm)
+		if err != nil {
+			t.Fatalf("EnvelopeFromAdmission %d: %v", seq, err)
+		}
+		prepared := boundSource()
+		prepared.StatementID = adm.StatementID
+		prepared.PayloadRef = adm.PayloadHash
+		prepared.PayloadHash = adm.PayloadHash
+		prepared.PayloadLength = adm.PayloadLength
+		if err := journal.SaveIntakeRecord(ctx, IntakeJournalRecord{
+			StatementID: adm.StatementID, Source: "snode-A", FrontierOrdinal: seq,
+			Env: env, Admission: adm, Stage: LifecycleRCBound,
+			Prepared: prepared, HasPrepared: true,
+			TerminalResult: IntakeResult{
+				StatementID: adm.StatementID, Ack2: true, Lifecycle: LifecycleRCBound,
+				Prepared: prepared,
+			},
+			IsTerminal: true,
+		}); err != nil {
+			t.Fatalf("SaveIntakeRecord %d: %v", seq, err)
+		}
+	}
+
+	records, err := journal.ListIntakeRecords(ctx)
+	if err != nil {
+		t.Fatalf("ListIntakeRecords: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("records=%d, want 2", len(records))
+	}
+	for _, record := range records {
+		if len(record.Admission.Payload) != 0 {
+			t.Fatalf("listed terminal %s retained %d legacy payload bytes", record.StatementID, len(record.Admission.Payload))
+		}
+		persisted, ok, err := journal.LoadIntakeRecord(ctx, record.StatementID)
+		if err != nil || !ok {
+			t.Fatalf("LoadIntakeRecord %s=(%+v, %v, %v)", record.StatementID, persisted, ok, err)
+		}
+		if len(persisted.Admission.Payload) != 0 {
+			t.Fatalf("persisted terminal %s retained %d legacy payload bytes", record.StatementID, len(persisted.Admission.Payload))
+		}
+	}
+}
+
+func TestObservedMarkerCannotRegressDurableTerminalRecord(t *testing.T) {
+	ctx := context.Background()
+	journal, err := NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	prepared := boundSourceWithParts()
+	prep := &partsRecordingPreparer{
+		prepared:     prepared,
+		claimOutcome: ClaimOutcome{Category: OutcomeAccepted, BoundSource: "snode-A"},
+	}
+	orch := NewOrchestrator(
+		&recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeAccepted}}, prep,
+		OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
+	)
+	adm := admissionFixture()
+	res, err := orch.Orchestrate(ctx, adm)
+	if err != nil || !res.Ack2 {
+		t.Fatalf("Orchestrate=(%+v, %v), want ACK2", res, err)
+	}
+
+	// Recreate the only state window that matters: terminal is already durable,
+	// while an observation writer still holds the pre-publish in-memory view.
+	orch.mu.Lock()
+	rec := orch.records[adm.StatementID]
+	rec.isTerminal = false
+	rec.stage = LifecycleRCBound
+	rec.adm.Payload = append([]byte(nil), adm.Payload...)
+	orch.mu.Unlock()
+	if err := orch.MarkCandidateObserved(ctx, adm.StatementID, prepared.CandidateParts[0]); err != nil {
+		t.Fatalf("MarkCandidateObserved: %v", err)
+	}
+	persisted, ok, err := journal.LoadIntakeRecord(ctx, adm.StatementID)
+	if err != nil || !ok {
+		t.Fatalf("LoadIntakeRecord=(%+v, %v, %v)", persisted, ok, err)
+	}
+	if !persisted.IsTerminal || !persisted.TerminalResult.Ack2 || len(persisted.Admission.Payload) != 0 {
+		t.Fatalf("observed marker regressed durable terminal: terminal=%v ack2=%v payload=%d", persisted.IsTerminal, persisted.TerminalResult.Ack2, len(persisted.Admission.Payload))
 	}
 }
 
@@ -690,5 +867,134 @@ func TestOrchestratorRecoveryRejectsMultipleLegacyRecordsWithoutOrdinal(t *testi
 	err = orch.ensureJournalRecovered(ctx)
 	if err == nil || !strings.Contains(err.Error(), "frontier ordinal") {
 		t.Fatalf("ensureJournalRecovered err = %v, want ambiguous legacy frontier error", err)
+	}
+}
+
+func TestOrchestratorTerminalWithCandidatesAndUnknownTouchedPartitionsStaysLegacy(t *testing.T) {
+	ctx := context.Background()
+	journal, err := NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	adm := admissionFixture()
+	prepared := boundSourceWithParts()
+	prep := &recordingPreparer{
+		prepared: prepared,
+		claimOutcome: ClaimOutcome{
+			Category: OutcomeAccepted, BoundSource: "snode-A",
+		},
+	}
+	orch := NewOrchestrator(
+		&recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeAccepted}}, prep,
+		OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
+	)
+	res, err := orch.Orchestrate(ctx, adm)
+	if err != nil || !res.Ack2 {
+		t.Fatalf("Orchestrate=(%+v, %v), want ACK2", res, err)
+	}
+	persisted, ok, err := journal.LoadIntakeRecord(ctx, adm.StatementID)
+	if err != nil || !ok {
+		t.Fatalf("LoadIntakeRecord=(%+v, %v, %v)", persisted, ok, err)
+	}
+	if persisted.Admission.TouchedPartitionIDs != nil {
+		t.Fatalf("unknown touched partitions=%v, want nil", persisted.Admission.TouchedPartitionIDs)
+	}
+	if persisted.JournalVersion != 0 {
+		t.Fatalf("incomplete terminal journal version=%d, want legacy version 0", persisted.JournalVersion)
+	}
+	for _, candidate := range prepared.CandidateParts {
+		if err := orch.MarkCandidateObserved(ctx, adm.StatementID, candidate); err != nil {
+			t.Fatalf("MarkCandidateObserved(%s): %v", candidate.PartName, err)
+		}
+	}
+	persisted, ok, err = journal.LoadIntakeRecord(ctx, adm.StatementID)
+	if err != nil || !ok {
+		t.Fatalf("LoadIntakeRecord after observations=(%+v, %v, %v)", persisted, ok, err)
+	}
+	if persisted.JournalVersion != 0 {
+		t.Fatalf("observed but partition-incomplete terminal journal version=%d, want 0", persisted.JournalVersion)
+	}
+	replay := adm
+	replay.TouchedPartitionIDs = []string{}
+	if _, err := orch.Orchestrate(ctx, replay); err == nil || !strings.Contains(err.Error(), "reused with a different envelope") {
+		t.Fatalf("candidate-bearing unknown/known-empty replay error=%v, want envelope mismatch", err)
+	}
+}
+
+func TestOrchestratorKnownEmptyTouchedPartitionsSurviveTerminalReplay(t *testing.T) {
+	ctx := context.Background()
+	journal, err := NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	adm := admissionFixture()
+	adm.TouchedPartitionIDs = []string{}
+	first := NewOrchestrator(
+		&recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeAccepted}},
+		&recordingPreparer{
+			prepared: boundSource(),
+			claimOutcome: ClaimOutcome{
+				Category: OutcomeAccepted, BoundSource: "snode-A",
+			},
+		},
+		OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
+	)
+	if res, err := first.Orchestrate(ctx, adm); err != nil || !res.Ack2 {
+		t.Fatalf("first Orchestrate=(%+v, %v), want ACK2", res, err)
+	}
+	persisted, ok, err := journal.LoadIntakeRecord(ctx, adm.StatementID)
+	if err != nil || !ok {
+		t.Fatalf("LoadIntakeRecord=(%+v, %v, %v)", persisted, ok, err)
+	}
+	if persisted.Admission.TouchedPartitionIDs == nil || len(persisted.Admission.TouchedPartitionIDs) != 0 {
+		t.Fatalf("persisted known-empty touched partitions=%v, want non-nil empty", persisted.Admission.TouchedPartitionIDs)
+	}
+	if persisted.JournalVersion == 0 {
+		t.Fatal("known-complete zero-candidate terminal retained legacy journal version")
+	}
+
+	restarted := NewOrchestrator(
+		panicSubmitter{t: t}, newLookupRecordingPreparer(boundSource()),
+		OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
+	)
+	if res, err := restarted.Orchestrate(ctx, adm); err != nil || !res.Ack2 {
+		t.Fatalf("terminal replay=(%+v, %v), want cached ACK2", res, err)
+	}
+}
+
+func TestOrchestratorZeroCandidateTerminalCanonicalizesUnknownTouchedPartitions(t *testing.T) {
+	ctx := context.Background()
+	journal, err := NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	adm := admissionFixture()
+	first := NewOrchestrator(
+		&recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeAccepted}},
+		&recordingPreparer{
+			prepared: boundSource(),
+			claimOutcome: ClaimOutcome{
+				Category: OutcomeAccepted, BoundSource: "snode-A",
+			},
+		},
+		OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
+	)
+	if res, err := first.Orchestrate(ctx, adm); err != nil || !res.Ack2 {
+		t.Fatalf("first Orchestrate=(%+v, %v), want ACK2", res, err)
+	}
+	persisted, ok, err := journal.LoadIntakeRecord(ctx, adm.StatementID)
+	if err != nil || !ok {
+		t.Fatalf("LoadIntakeRecord=(%+v, %v, %v)", persisted, ok, err)
+	}
+	if persisted.JournalVersion == 0 {
+		t.Fatal("zero-candidate terminal retained legacy journal version")
+	}
+	if persisted.Admission.TouchedPartitionIDs == nil || len(persisted.Admission.TouchedPartitionIDs) != 0 {
+		t.Fatalf("zero-candidate touched partitions=%v, want non-nil empty", persisted.Admission.TouchedPartitionIDs)
+	}
+	replay := adm
+	replay.TouchedPartitionIDs = []string{}
+	if res, err := first.Orchestrate(ctx, replay); err != nil || !res.Ack2 {
+		t.Fatalf("zero-candidate terminal replay=(%+v, %v), want cached ACK2", res, err)
 	}
 }

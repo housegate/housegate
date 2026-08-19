@@ -4,11 +4,27 @@
 
 **Goal:** Every storage-integrity data-plane role derives, creates, and verifies the protocol-owned `hg_unsafe.*` / `hg_safe.*` tables (pinned engine, columns, keys, MergeTree settings) from the schema source, and the ingress HouseGate (plus the SNode prepare as a mirror) refuses INSERTs into a partition whose `hg_unsafe` part count crosses a soft limit with a retryable ClickHouse `TOO_MANY_PARTS` (252) exception.
 
-**Architecture:** A new pure package `arbiter-core/dataplane/ddl` renders the D3-pinned DDL from `payloadexec.TableSchema` (`BuildDDL`, golden-tested), verifies live tables against the same intent (`VerifyProtocolTable`, `system.tables` / `system.columns` / `system.replicas` / `system.merge_tree_settings` + an `engine_full` SETTINGS parser), and exposes `EnsureProtocolTables` that `snode.Role.Register` / `verifier.Role.Register` run before registering with the Arbiter and re-run on a 60s reconcile ticker against the same schema-root-bound startup table slice. The ticker detects deletion/drift; it does not hot-adopt later declarations, which require a controlled restart until the schema-transition lane exists. housegate gains a `PartsPressureGuard` over the existing `MergeConn` port that snapshots `system.parts` grouped by `(database, table, partition)`, a `ClientError` seam so a plugin rejection can carry code 252, config `storage_integrity.runtime.backpressure`, a poller/supervisor with Prometheus gauges, and the ingress check between the merge-health latch and the payload put. sentio-node passes NodeID + schema-source-derived mode, wires the schema resolver into the housegate runtime, and maps the SNode mirror error to the same retryable rejection.
+**Architecture:** A new pure package `arbiter-core/dataplane/ddl` renders the D3-pinned DDL from `payloadexec.TableSchema` (`BuildDDL`, golden-tested), verifies live tables against the same intent (`VerifyProtocolTable`, `system.tables` / `system.columns` / `system.replicas` / `system.merge_tree_settings` + an `engine_full` SETTINGS parser), and exposes `EnsureProtocolTables` that `snode.Role.Register` / `verifier.Role.Register` run before registering with the Arbiter and re-run on a 60s reconcile ticker against the same schema-root-bound startup table slice. The ticker detects deletion/drift; it does not hot-adopt later declarations, which require a controlled restart until the schema-transition lane exists. housegate gains a `PartsPressureGuard` over the existing `MergeConn` port that reads exact active `system.parts.name` rows and aggregates counts by `(database, table, partition)`, a `ClientError` seam so a plugin rejection can carry code 252, config `storage_integrity.runtime.backpressure`, a poller/supervisor with Prometheus gauges, and the ingress check between the merge-health latch and the payload put. sentio-node passes NodeID + schema-source-derived mode, wires the schema resolver into the housegate runtime, and maps the SNode mirror error to the same retryable rejection.
 
 **Tech Stack:** Go 1.26, Bazel 9 + Bzlmod + gazelle in all repos, clickhouse-go v2 (sentioxyz fork), ClickHouse 25.8 docker image (arbiter-core CI service / housegate testcontainers), Prometheus client_golang, slog (arbiter-core) / `pkg/log` (housegate).
 
 **Spec:** `/Users/uranuswch/Dev/housegate/housegate/docs/superpowers/specs/2026-08-18-storage-integrity-physical-table-lifecycle-design.md` (Spec C). Roadmap: `docs/superpowers/specs/2026-08-18-storage-integrity-v1-closure-roadmap.md` §4 decisions 6 (`hg_safe` merges stay stopped) and 5/1 (row profile / Native payload — the ingress guard must decode both `csv-with-names-v1` and `clickhouse-native-data-v1`). Context: `docs/superpowers/specs/2026-07-06-arbiter-p1c-dataplane-design.md`.
+
+## Progress and Evidence-Backed Deviations
+
+- 2026-08-19 approved review-driven deviation for arbiter-core Tasks 4–5: the literal task pseudocode used create-or-verify on every reconcile and only logged periodic failures, but Spec C D1/D4/§4/§7 requires deletion/drift detection and fail-closed role behavior. The implemented lifecycle is startup `Register` with the configured create-or-verify mode, then ticker passes with `ModeVerifyOnly`; any reconcile error propagates from `Run`, which cancels and joins both the subscription and reconcile child work before returning. Lifecycle acceptance holds an in-flight metadata probe after cancellation and proves `Run` joins that worker before returning. The ticker continues to use the frozen schema-root-validated `cfg.Tables` snapshot.
+- 2026-08-19 approved review-driven deviation for arbiter-core Task 3: live key metadata is canonicalized from ClickHouse's quoted identifier rendering (including C-style control escapes), while DDL identifier rendering escapes literal backslashes before backticks so `\\n` / `\\x41` remain literal identifier bytes. Bare metadata tokens are accepted only when they match ClickHouse's unquoted-identifier grammar, so an expression such as `arr[1]` cannot compare equal to an intended quoted column of that name. Every D3 pin must be explicitly present and equal in the table's parsed `engine_full` settings; verification never falls back to a matching global MergeTree setting. Replication acceptance runs two ClickHouse 25.8 nodes sharing one Keeper, not two databases on one server. CI/release containers and networks include `${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}` so concurrent jobs on a shared self-hosted Docker daemon cannot delete each other's resources.
+- 2026-08-19 release and collision correction: the original Tasks 1–6 merge `ec3293b5dd98a38b1cf76979f2f92a2714f0c378` was officially published as `arbiter-core/v0.2.0` because `scripts/next-version.sh` returned `v0.2.0`, not the plan prose's assumed `v0.1.3`. Review then proved that frozen D2 mapping is non-injective (`a.b__c` and `a__b.c` both map to `a__b__c`), so arbiter-core now performs a schema-set-wide safe/unsafe physical-output collision check at `Intents`/`Ensure` and role config boundaries; the clean collision follow-up merged as `98da905f96c1fd4af1190bc48b23324cb5c4b2ea`. The final fixture follow-up merged as `248b114ce66335b4eff6a7941462bb6db2efd62e`, and the official Cut Release published non-draft/non-prerelease `arbiter-core/v0.2.1` at that exact merge. `v0.2.0` is superseded; downstream Tasks 7 and 16 must use only `v0.2.1` / `248b114ce66335b4eff6a7941462bb6db2efd62e`.
+- 2026-08-19 release-fixture correction: repeated Cut Release runs exposed an asynchronous ClickHouse database-drop race in `TestCHScanner_MatchesSourceHashing`, independent of the collision runtime change. The TDD follow-up gives every invocation a unique database/table and uses `DROP TABLE ... SYNC` plus `DROP DATABASE ... SYNC`; cleanup is registered before the first setup DDL so even an injected setup failure cannot leak the unique database. Commit `dfb0fe46e37d1dd5bf447977f7d4c84448640297` passed 20 concurrent live ClickHouse 25.8 repetitions and the full Go/Bazel/two-node Keeper gates; its final merge is included in the official `v0.2.1` release above.
+- 2026-08-19 approved review-driven hardening for Housegate Tasks 9–15: `system.parts.partition = 'tuple()'` maps to `all` only when `system.tables.partition_key` proves the table is unpartitioned, preserving a partitioned String value literally equal to `tuple()` as `p_tuple()`. Refreshes have a deadline and snapshot TTL and fail closed with code 252 when unavailable/expired. Admission is an atomic multi-part reservation performed before payload, journal, submit, or prepare side effects, and only a genuinely new prepare transition is gated; cached prepare resume, identical-statement retry, and terminal ACK2 replay remain serviceable. Reservations commit/release/invalidate explicitly, recovery refreshes before listeners, cleanup invalidates, injected guards must expose the same startup-refresh/poll/close lifecycle, `Close` cancels and joins the poller, resolver results must preserve the requested `TableID`, enabled safe/unsafe databases must be nonblank and distinct, and the authoritative schema set is rejected on any physical-output collision. Fake, race, and live ClickHouse tests cover these behaviors, including the partitioned String `tuple()` collision.
+- 2026-08-19 approved review-driven cleanup-proof correction for Housegate Tasks 11/14/15: aggregate part counts cannot distinguish an exact deletion from an empty/no-op cleanup or from an offsetting concurrent write. `PartsPressureGuard` therefore reads exact active `system.parts.name` rows, captures each reservation's baseline inventory, and brackets `AbortPreparedStatement` with runtime-owned bounded pre/post hooks while the source frontier remains held. Only a candidate observed active before cleanup and absent afterward may advance reservations whose captured baseline contained that exact name; the replacement baseline becomes the complete post-cleanup inventory, so an unrelated offsetting write cannot be assigned to a queued slot. Prepared candidates bind exact logical `TableID`, physical mapping, partition, and a single-owner part name; terminal-reject cleanup performs that binding in the pre-cleanup hook before any source abort, and a successful prepare binds its candidate before RC registration or source-frontier release. Restart recovery first reconstructs every non-terminal reservation debt plus terminal ACK2 candidate ownership from the complete durable journal, before any pending abort can run; restoration is idempotent and a conflicting candidate rolls back its provisional slot. A terminal-reject candidate whose logical `TableID` does not exactly match the admission fails closed before destructive cleanup. Finalized claims remain single-owner from first exact visibility until a later inventory proves the part absent, so an already-queued statement cannot reuse an ACK2 part name. Exact and aggregate coverage combine by `max`, never sum, so one visible part cannot cover two debts. A failed proof leaves the snapshot unavailable, preserves the armed evidence across same-ID retries, retains the reservation, and fences already-queued source prepares. Live ClickHouse 25.8 acceptance performs an actual `DROP PART` against a name read from `system.parts` and proves replacement debt converges.
+- 2026-08-19 approved review-driven restart correction for Housegate Tasks 11/14/15: pressure recovery now projects the complete durable journal into one transactional `RestoreBatch` backed by one exact `system.parts` inventory, rather than issuing a full inventory query per historical statement. A finalized zero-candidate record is a no-op. A finalized candidate absent before it has ever been locally observed retains exact-name ownership and visibility debt; unrelated aggregate growth cannot absorb that debt. Once a successful inventory observes the exact name, `MarkCandidateObserved` persists that proof in the intake journal before the claim may retire, so a later observed-then-absent restart is historical cleanup rather than delayed visibility. New live reservations are statement-addressed before candidate binding for the same durability rule. Terminal journal records compact payload bytes after their immutable envelope binds hash/length/ref, the full recovered history projection is released after the single restore, and concurrent `RecoverPending` calls join the same restoration. Any malformed record, claim conflict, or observation-persistence failure rolls the batch back and leaves admission unavailable.
+- 2026-08-19 approved review-driven journal migration and candidate-set correction for Housegate Tasks 11/14/15: the payload-derived touched-partition set is now durable, and RC/ACK2 requires exactly one prepared candidate per touched partition; recovered pending records persist that set before `RestoreBatch` or any resumed source/frontier work, so terminal payload compaction cannot erase restart debt. `FileIntakeJournal.ListIntakeRecords` compacts each legacy terminal payload before retaining that record, bounding first-upgrade memory by one historical payload rather than the full corpus, then publishes the atomic rewrites with one batched directory sync. Terminal publication and `MarkCandidateObserved` serialize and merge monotonically, preventing a waiting observation writer from overwriting a durable ACK2 with a stale non-terminal record. Concurrent `RecoverPending` callers share the same restore-attempt error; only a later independent call retries. The journal is versioned because version-0 `ObservedCandidateParts == []` cannot distinguish pre-rollout cleanup from delayed visibility: a zero-candidate terminal record is a no-op, and a candidate may migrate automatically only when exact inventory currently proves the name active (or the exact observation is already durable), at which point partitions/observation/version are persisted; versions newer than the running binary fail before any migration rewrite. An absent unobserved version-0 candidate fails startup with the statement and candidate named under `ErrIntakeJournalMigrationRequired`; absence or aggregate counts are never treated as proof. This feature has not been production-published, so rollout requires either no such development journals, an Arbiter/SNode durable promotion/applied-safe fact proving cleanup, or an operator drain/clear of the incompatible development journal after that proof; the runtime does not guess.
+- 2026-08-19 final review-driven completeness correction for Housegate Tasks 11/14/15: schema-bound touched partitions are derived and journaled even when pressure is disabled, because candidate-set integrity is independent of capacity gating. Nil and known-empty partition sets are distinct protocol states: non-nil empty survives clones/journal replay and a recovered zero-row pending statement receives a zero-capacity reservation handle so it can converge; every zero-candidate terminal publication or version-0 migration canonicalizes unknown nil to known-empty before version 1, preserving identical terminal replay after restart. Candidate-bearing records with unknown partitions remain journal version 0; observation alone cannot falsely upgrade them. Legacy touched-partition migration stages the durable snapshot first and publishes memory only after a successful save, so a transient failure is retried rather than skipped. Every recovered `HasPrepared` record is validated for exactly one candidate per touched partition before `ClaimUnknown` status convergence or any RC/cleanup path. Concurrent callers share both full-journal and runtime-restore attempt errors, with later independent retry, while any malformed/conflicting/persistence-failed `RestoreBatch` latches all admission unavailable across ordinary refreshes—including a zero-capacity reservation—until a complete successful batch restores the full durable projection; non-terminal nil partition sets are rejected as unknown, but non-nil empty remains a valid zero-row projection.
+- 2026-08-19 signed-envelope-v2 integration correction: rebasing onto Housegate `main` after the envelope-v2 rollout preserves that lane's production Native-only contract—the removed CSV bridge and core `TableSchemaResolver` API are not reintroduced. The authoritative schema resolver remains a Housegate host-runtime seam, while `PayloadPartitionIDs` stays encoding-general at the core boundary for historical/direct consumers. Root ingress acceptance and pressure tests now use real `clickhouse-native-data-v1` blocks with the complete v2 envelope. The v2 Native decoder rejects zero-row payloads, so known-empty remains a durable core/legacy recovery state rather than a new live-ingress shape. A terminal rejection before any successful prepare can also have zero candidates without proving a zero-row payload; journal normalization therefore canonicalizes nil to known-empty only for `HasPrepared` zero-candidate terminals.
+- 2026-08-19 approved external publication-review correction for Housegate Tasks 14–15: runtime pressure resolution is derived exclusively from the same globally collision-validated authoritative `TableSchemas` set used by ingress, rather than accepting an independent resolver, and a v2 admission's signed `schema_hash` must match that resolved schema before reservation, payload, journal, submit, or source side effects. When a source-proven pre-write `Prepare` rejection races an authoritative terminal `Submit` rejection, intake durably records both facts and performs an idempotent empty abort without exact-candidate inventory; the terminal outcome survives restart and its statement reservation is released. A no-write attempt that retains the source frontier keeps and directly reuses its statement-addressed capacity reservation across empty-abort failure, payload-store failure, and same-ID prepare retry; there is no release/re-reserve interval for a queued admission to invert capacity and frontier order. An indeterminate Prepare without an exact candidate is committed through a distinct retained-unbound state, so unrelated aggregate growth cannot surrender its slot before source lookup or exact binding. Core exposes the authoritative terminal/frontier disposition rather than inferring it from `LifecycleCleaned` or an untrusted Submit outcome returned alongside an error, and disk recovery reconstructs terminal disposition from the durable journal marker. Restart keeps a pending terminal intake for its idempotent empty abort but omits it from pressure `RestoreBatch`, because a proven no-write transition has no candidate or capacity debt for later inventory to cover. Exact cleanup that begins before durable `SubmitAccepted` retains its still-owned payload lease through post-cleanup inventory proof and durable terminal publication, so a proof or terminal-journal failure leaves the same-ID retry fully recoverable and the source frontier fenced; after sequencing is durably accepted, the existing payload-lease contract permits release before a later RC cleanup.
+
+- 2026-08-19 final publication-review capacity/frontier correction for Housegate Tasks 11/14/15: a source-side error cannot be classified from `ErrBackpressure` alone as definitely unwritten once `PrepareLocalStatement` was invoked. The SNode hard-pressure mirror therefore keeps the source frontier and commits its statement-addressed slot as retained-unbound until source lookup proves no write or exact candidate binding identifies the write. A competing admission cannot take that slot while waiting behind the same frontier. `RestoreBatch` reconstructs the same retained-unbound debt for every candidate-less non-terminal record with touched partitions, so unrelated aggregate growth during restart recovery cannot absorb an identity-unknown write.
 
 ## Global Constraints
 
@@ -18,7 +34,7 @@
 - Naming freeze (spec D2): physical table = `strings.ReplaceAll(tableID, ".", "__")`; zk path = `/sentio/<keeper_shard_id>/unsafe/<physical>`; replica = the node id the role registers with; `keeper_shard_id = 0` in v1.
 - Pinned settings (spec D3), verbatim: `hg_unsafe.*` = `ReplicatedMergeTree` + `max_bytes_to_merge_at_max_space_in_pool = 0, parts_to_delay_insert = 1000, parts_to_throw_insert = 3000, max_parts_in_total = 100000, replicated_deduplication_window = 0`; `hg_safe.*` = `MergeTree` + `max_bytes_to_merge_at_max_space_in_pool = 0`; columns `_hg_row_id FixedString(32)` first then declared user columns; `PARTITION BY <partition_by>`; `ORDER BY (<partition_by>, _hg_row_id)` (unpartitioned: `ORDER BY (_hg_row_id)`).
 - Back-pressure constants (spec D5): soft = 2400, hard = 2950 per partition; poll interval 2s; rejection = ClickHouse exception code `252` with message prefix `storage_integrity: back-pressure`; never journaled.
-- Partition identity (verified on ClickHouse 25.8.28 in docker while writing this plan): for a `String` partition key `system.parts.partition` is the raw value (`p0`), while `system.parts.partition_id` is a 32-hex SipHash that cannot be derived from a row. All partition keys in this plan therefore use the existing logical convention `p_<system.parts.partition>` / `all` (unpartitioned tables show `partition = 'tuple()'`), which is exactly what `payloadexec.PartitionIDForRow`, `payloadexec.DecodeCSV`, `sicore.DecodeNativePayload` (`Row.PartitionID`) and arbiter-core `snode.logicalPartitionID` already produce. Never invent another derivation.
+- Partition identity (verified on ClickHouse 25.8.28 in docker while writing this plan): for a `String` partition key `system.parts.partition` is the raw value (`p0`), while `system.parts.partition_id` is a 32-hex SipHash that cannot be derived from a row. All partition keys in this plan therefore use the existing logical convention `p_<system.parts.partition>` / `all`, which is exactly what `payloadexec.PartitionIDForRow`, `payloadexec.DecodeCSV`, `sicore.DecodeNativePayload` (`Row.PartitionID`) and arbiter-core `snode.logicalPartitionID` already produce. Because both an unpartitioned table and a partitioned String row whose value is literally `tuple()` expose `system.parts.partition = 'tuple()'`, snapshot conversion must join `system.tables.partition_key` and choose `all` only when that key is empty; otherwise the logical key is `p_tuple()`. Never infer unpartitioned state from the partition text alone or invent another derivation.
 - ClickHouse facts verified in docker (25.8.28): `engine_full` for the pinned RMT is `ReplicatedMergeTree('/sentio/0/unsafe/db__t', 'node-1') PARTITION BY p ORDER BY (p, _hg_row_id) SETTINGS max_bytes_to_merge_at_max_space_in_pool = 0, parts_to_delay_insert = 1000, parts_to_throw_insert = 3000, max_parts_in_total = 100000, replicated_deduplication_window = 0, index_granularity = 8192` (ClickHouse appends `index_granularity = 8192`; backtick-quoted identifiers in the CREATE are normalized away; `sorting_key = "p, _hg_row_id"`, `partition_key = "p"`, empty for unpartitioned); `ALTER TABLE … MODIFY SETTING` rewrites the value inside `engine_full`; `CREATE TABLE IF NOT EXISTS` with a different definition is a silent no-op; two RMT tables in different databases on one server sharing a zk path replicate parts; reusing a replica name fails with code 253 `REPLICA_ALREADY_EXISTS`; `DROP TABLE … SYNC` removes the replica's zk metadata; `parts_to_throw_insert = N` rejects the insert that would create part N+1 with code 252 `TOO_MANY_PARTS`.
 - English-only code, comments, log and error strings. housegate logging via `github.com/housegate/housegate/pkg/log` (`log.Infow`/`Warnw`/`WarnEveryN`); arbiter-core via the role's `*slog.Logger`. Errors wrapped with `fmt.Errorf("context: %w", err)`; config errors aggregated with `errors.Join`.
 - Markdown docs: no hard line-wrapping.
@@ -73,7 +89,7 @@ sentio-node: `standalone/standalone.go`, `storageintegrityadapter/adapter.go`, `
   - `ddl.BuildDDL(p Pinned, t payloadexec.TableSchema) (unsafeDDL, safeDDL string, err error)`
   - `ddl.ErrPartitionFreeze` sentinel.
 
-- [ ] **Step 1: Write the failing golden test** `dataplane/ddl/build_test.go`
+- [x] **Step 1: Write the failing golden test** `dataplane/ddl/build_test.go`
 
 ```go
 package ddl
@@ -240,9 +256,9 @@ func indexOf(s, sub string) int {
 }
 ```
 
-- [ ] **Step 2: Run to verify it fails** — `mkdir -p dataplane/ddl && go test ./dataplane/ddl/...` Expected: FAIL (`undefined: BuildDDL` etc.).
+- [x] **Step 2: Run to verify it fails** — `mkdir -p dataplane/ddl && go test ./dataplane/ddl/...` Expected: FAIL (`undefined: BuildDDL` etc.).
 
-- [ ] **Step 3: Implement** — `dataplane/ddl/naming.go`:
+- [x] **Step 3: Implement** — `dataplane/ddl/naming.go`:
 
 ```go
 // Package ddl renders and verifies the protocol-owned physical tables of the
@@ -452,9 +468,9 @@ func validatePartitionFreeze(t payloadexec.TableSchema) error {
 
 Then in `snode/parts.go` replace the body of `CHTableName` with `return ddl.CHTableName(tableID)`, add import `"github.com/sentioxyz/arbiter-core/dataplane/ddl"`, drop the now-unused `strings` import.
 
-- [ ] **Step 4: Gazelle + run** — `bazel run //:gazelle && go test ./dataplane/ddl/... ./snode/... && bazel test //dataplane/ddl:ddl_test //snode:snode_test --test_output=errors` Expected: PASS (docker-gated snode tests skip). Confirm `dataplane/ddl/BUILD.bazel` deps contain `@housegate//pkg/lthash` and `@housegate//pkg/replay/payloadexec`.
+- [x] **Step 4: Gazelle + run** — `bazel run //:gazelle && go test ./dataplane/ddl/... ./snode/... && bazel test //dataplane/ddl:ddl_test //snode:snode_test --test_output=errors` Expected: PASS (docker-gated snode tests skip). Confirm `dataplane/ddl/BUILD.bazel` deps contain `@housegate//pkg/lthash` and `@housegate//pkg/replay/payloadexec`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add dataplane/ddl snode/parts.go snode/BUILD.bazel
@@ -473,7 +489,7 @@ git commit -m "feat(ddl): pinned protocol-table DDL builder (BuildDDL, D2 naming
 **Interfaces:**
 - Produces: `ddl.ParseEngineFullSettings(engineFull string) (map[string]string, error)` — returns the per-table overrides in the trailing `SETTINGS a = 1, b = 2` clause of `system.tables.engine_full`; empty map when no `SETTINGS` clause. Used by Task 3.
 
-- [ ] **Step 1: Write the failing test** `dataplane/ddl/engine_full_test.go` (strings captured verbatim from ClickHouse 25.8.28)
+- [x] **Step 1: Write the failing test** `dataplane/ddl/engine_full_test.go` (strings captured verbatim from ClickHouse 25.8.28)
 
 ```go
 package ddl
@@ -538,9 +554,9 @@ func TestParseEngineFullSettings_RejectsMalformedPair(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify it fails** — `go test ./dataplane/ddl/ -run TestParseEngineFull` Expected: FAIL (`undefined: ParseEngineFullSettings`).
+- [x] **Step 2: Run to verify it fails** — `go test ./dataplane/ddl/ -run TestParseEngineFull` Expected: FAIL (`undefined: ParseEngineFullSettings`).
 
-- [ ] **Step 3: Implement** `dataplane/ddl/engine_full.go`
+- [x] **Step 3: Implement** `dataplane/ddl/engine_full.go`
 
 ```go
 package ddl
@@ -579,9 +595,9 @@ func ParseEngineFullSettings(engineFull string) (map[string]string, error) {
 }
 ```
 
-- [ ] **Step 4: Run** — `go test ./dataplane/ddl/... && bazel run //:gazelle && bazel test //dataplane/ddl:ddl_test --test_output=errors` Expected: PASS.
+- [x] **Step 4: Run** — `go test ./dataplane/ddl/... && bazel run //:gazelle && bazel test //dataplane/ddl:ddl_test --test_output=errors` Expected: PASS.
 
-- [ ] **Step 5: Commit** — `git add dataplane/ddl && git commit -m "feat(ddl): parse per-table settings from system.tables.engine_full"`
+- [x] **Step 5: Commit** — `git add dataplane/ddl && git commit -m "feat(ddl): parse per-table settings from system.tables.engine_full"`
 
 ---
 
@@ -602,7 +618,7 @@ func ParseEngineFullSettings(engineFull string) (map[string]string, error) {
   - `ddl.VerifyProtocolTable(ctx context.Context, conn clickhouse.Conn, want TableIntent) error`
   - `ddl.EnsureProtocolTables(ctx context.Context, conn clickhouse.Conn, p Pinned, tables []payloadexec.TableSchema, mode Mode, logger *slog.Logger) error`
 
-- [ ] **Step 1: Keeper config + test gates.** Create `scripts/ci/clickhouse-keeper.xml` (embedded single-node Keeper; identical to housegate's `pkg/integration/storage_promotion_mvp_test.go::writePromotionKeeperConfig`):
+- [x] **Step 1: Keeper config + test gates.** Create `scripts/ci/clickhouse-keeper.xml` (embedded single-node Keeper; identical to housegate's `pkg/integration/storage_promotion_mvp_test.go::writePromotionKeeperConfig`):
 
 ```xml
 <clickhouse>
@@ -707,7 +723,7 @@ func dropDatabasesSync(t *testing.T, conn clickhouse.Conn, p Pinned) {
 }
 ```
 
-- [ ] **Step 2: Write the failing docker tests** `dataplane/ddl/ensure_ch_test.go`
+- [x] **Step 2: Write the failing docker tests** `dataplane/ddl/ensure_ch_test.go`
 
 ```go
 package ddl
@@ -892,9 +908,9 @@ func TestParseMode(t *testing.T) {
 }
 ```
 
-- [ ] **Step 3: Run to verify it fails** — `go test ./dataplane/ddl/ -run 'TestParseMode|TestEnsure'` Expected: FAIL to compile (`undefined: EnsureProtocolTables`, `ModeOff`, …).
+- [x] **Step 3: Run to verify it fails** — `go test ./dataplane/ddl/ -run 'TestParseMode|TestEnsure'` Expected: FAIL to compile (`undefined: EnsureProtocolTables`, `ModeOff`, …).
 
-- [ ] **Step 4: Implement** `dataplane/ddl/verify.go`
+- [x] **Step 4: Implement** `dataplane/ddl/verify.go`
 
 ```go
 package ddl
@@ -1174,7 +1190,7 @@ func EnsureProtocolTables(ctx context.Context, conn clickhouse.Conn, p Pinned, t
 
 Note on `readGlobalMergeTreeSettings`: clickhouse-go expands a `[]string` bound to `IN (?)`; if the pinned fork rejects it, fall back to building the `IN ('a', 'b')` list with `quoteLiteral` — do not silently drop the query.
 
-- [ ] **Step 5: CI + README.** In `.github/workflows/ci.yml` replace the `services:` block of `integration-clickhouse` with a docker-run step after checkout (mirrors `cut-release.yml`), and add `//dataplane/ddl:ddl_test` + `ARBITER_CH_KEEPER`:
+- [x] **Step 5: CI + README.** In `.github/workflows/ci.yml` replace the `services:` block of `integration-clickhouse` with a docker-run step after checkout (mirrors `cut-release.yml`), and add `//dataplane/ddl:ddl_test` + `ARBITER_CH_KEEPER`:
 
 ```yaml
   integration-clickhouse:
@@ -1226,7 +1242,7 @@ Note on `readGlobalMergeTreeSettings`: clickhouse-go expands a `[]string` bound 
 
 Apply the same three edits to `cut-release.yml`'s `start ClickHouse` step (add the `-v …keeper.xml` mount), its test step (add `//dataplane/ddl:ddl_test`, `ARBITER_CH_KEEPER: "1"`, `--test_env=ARBITER_CH_KEEPER`). In `README.md` replace the docker run example with the mounted-keeper form and add `//dataplane/ddl:ddl_test` + `ARBITER_CH_KEEPER=1` to the bazel test example.
 
-- [ ] **Step 6: Run locally against a keeper-enabled ClickHouse**
+- [x] **Step 6: Run locally against a keeper-enabled ClickHouse**
 
 ```bash
 docker rm -f arbiter-core-ch >/dev/null 2>&1 || true
@@ -1239,7 +1255,7 @@ ARBITER_CH_INTEGRATION=1 ARBITER_CH_KEEPER=1 CH_ADDR=127.0.0.1:9000 \
 ```
 Expected: PASS (all six tests). Also `bazel test //dataplane/ddl:ddl_test` without env: PASS with the docker tests skipped.
 
-- [ ] **Step 7: Commit** — `git add dataplane/ddl scripts/ci .github README.md && git commit -m "feat(ddl): EnsureProtocolTables + VerifyProtocolTable; keeper-enabled ClickHouse in CI"`
+- [x] **Step 7: Commit** — `git add dataplane/ddl scripts/ci .github README.md && git commit -m "feat(ddl): EnsureProtocolTables + VerifyProtocolTable; keeper-enabled ClickHouse in CI"`
 
 ---
 
@@ -1255,7 +1271,7 @@ Expected: PASS (all six tests). Also `bazel test //dataplane/ddl:ddl_test` witho
 - Consumes: Task 3 `ddl.EnsureProtocolTables`, `ddl.Mode`, `ddl.DefaultReconcileInterval`, `ddl.Pinned`, `ddl.ErrProtocolTableDrift`.
 - Produces (used by Tasks 8, 20): `snode.Config.ProtocolTables ddl.Mode` (zero value `ddl.ModeOff` keeps existing harnesses that pre-create MergeTree tables working — production wiring always sets it), `snode.Config.ProtocolTablesReconcile time.Duration` (0 → `ddl.DefaultReconcileInterval`), `snode.Config.KeeperShardID uint32` (0 in v1). `Register(ctx)` now ensures tables before `RegisterNode`; `Run(ctx)` starts the reconcile goroutine against the frozen `cfg.Tables` snapshot (drift detection only, never dynamic schema discovery).
 
-- [ ] **Step 1: Write the failing test** `snode/protocol_tables_test.go`
+- [x] **Step 1: Write the failing test** `snode/protocol_tables_test.go`
 
 ```go
 package snode
@@ -1367,9 +1383,9 @@ func TestRegister_ProtocolTablesModeRequiresConn(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify it fails** — `go test ./snode/ -run 'TestRegister_ProtocolTables|TestRegister_Ensures'` Expected: FAIL (`cfg.ProtocolTables undefined`).
+- [x] **Step 2: Run to verify it fails** — `go test ./snode/ -run 'TestRegister_ProtocolTables|TestRegister_Ensures'` Expected: FAIL (`cfg.ProtocolTables undefined`).
 
-- [ ] **Step 3: Implement.** `snode/config.go`: add to `Config`
+- [x] **Step 3: Implement.** `snode/config.go`: add to `Config`
 
 ```go
 	// ProtocolTables selects whether Register creates/verifies the pinned
@@ -1429,9 +1445,9 @@ The `r.cfg.Tables` argument is deliberate: it is the schema-root-validated start
 
 Modify `Register`: first statement `if err := r.ensureProtocolTables(ctx); err != nil { return err }`. Modify `Run`: after `convergeStartup` succeeds, `if r.cfg.ProtocolTables != ddl.ModeOff { go r.reconcileProtocolTables(ctx) }`. Add `"errors"` to imports.
 
-- [ ] **Step 4: Run** — `bazel run //:gazelle && go test ./snode/... && ARBITER_CH_INTEGRATION=1 ARBITER_CH_KEEPER=1 CH_ADDR=127.0.0.1:9000 bazel test //snode:snode_test --test_env=ARBITER_CH_INTEGRATION --test_env=ARBITER_CH_KEEPER --test_env=CH_ADDR --test_output=errors` Expected: PASS (existing harness tests still pre-create MergeTree tables under `ModeOff`).
+- [x] **Step 4: Run** — `bazel run //:gazelle && go test ./snode/... && ARBITER_CH_INTEGRATION=1 ARBITER_CH_KEEPER=1 CH_ADDR=127.0.0.1:9000 bazel test //snode:snode_test --test_env=ARBITER_CH_INTEGRATION --test_env=ARBITER_CH_KEEPER --test_env=CH_ADDR --test_output=errors` Expected: PASS (existing harness tests still pre-create MergeTree tables under `ModeOff`).
 
-- [ ] **Step 5: Commit** — `git add snode && git commit -m "feat(snode): ensure protocol tables in Register and reconcile every 60s"`
+- [x] **Step 5: Commit** — `git add snode && git commit -m "feat(snode): ensure protocol tables in Register and reconcile every 60s"`
 
 ---
 
@@ -1446,7 +1462,7 @@ Modify `Register`: first statement `if err := r.ensureProtocolTables(ctx); err !
 **Interfaces:**
 - Produces (used by Tasks 8, 20): `verifier.Config.SafeDatabase`, `verifier.Config.PromoteDatabase` (defaults `hg_safe` / `hg_promote`), `verifier.Config.ProtocolTables ddl.Mode`, `verifier.Config.ProtocolTablesReconcile time.Duration`, `verifier.Config.KeeperShardID uint32`; `verifier.Deps.Conn clickhouse.Conn` (required when `ProtocolTables != ddl.ModeOff`, validated in `New`). As in SNode, reconcile uses the schema-root-validated startup `cfg.Tables` slice and only detects drift.
 
-- [ ] **Step 1: Write the failing test** `verifier/protocol_tables_test.go`
+- [x] **Step 1: Write the failing test** `verifier/protocol_tables_test.go`
 
 ```go
 package verifier
@@ -1528,9 +1544,9 @@ func TestRegister_EnsuresProtocolTablesOnVerifier(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify it fails** — `go test ./verifier/ -run 'ProtocolTables'` Expected: FAIL (`cfg.ProtocolTables undefined`).
+- [x] **Step 2: Run to verify it fails** — `go test ./verifier/ -run 'ProtocolTables'` Expected: FAIL (`cfg.ProtocolTables undefined`).
 
-- [ ] **Step 3: Implement.** `verifier/config.go`: add fields `SafeDatabase`, `PromoteDatabase string`, `ProtocolTables ddl.Mode`, `ProtocolTablesReconcile time.Duration`, `KeeperShardID uint32`; constants `defaultSafeDatabase = "hg_safe"`, `defaultPromoteDatabase = "hg_promote"`; in `validate()` default the two databases and `ProtocolTablesReconcile` like snode. `verifier/verifier.go`: add `Conn clickhouse.Conn` to `Deps`; in `New`, after the existing required-deps check: `if cfg.ProtocolTables != ddl.ModeOff && d.Conn == nil { return nil, fmt.Errorf("verifier: clickhouse connection is required when protocol tables are ensured") }`; add
+- [x] **Step 3: Implement.** `verifier/config.go`: add fields `SafeDatabase`, `PromoteDatabase string`, `ProtocolTables ddl.Mode`, `ProtocolTablesReconcile time.Duration`, `KeeperShardID uint32`; constants `defaultSafeDatabase = "hg_safe"`, `defaultPromoteDatabase = "hg_promote"`; in `validate()` default the two databases and `ProtocolTablesReconcile` like snode. `verifier/verifier.go`: add `Conn clickhouse.Conn` to `Deps`; in `New`, after the existing required-deps check: `if cfg.ProtocolTables != ddl.ModeOff && d.Conn == nil { return nil, fmt.Errorf("verifier: clickhouse connection is required when protocol tables are ensured") }`; add
 
 ```go
 func (r *Role) ensureProtocolTables(ctx context.Context) error {
@@ -1550,9 +1566,9 @@ func (r *Role) ensureProtocolTables(ctx context.Context) error {
 
 plus a `reconcileProtocolTables(ctx)` ticker identical in shape to snode's. `Register` calls `ensureProtocolTables` first; `Run` starts `go r.reconcileProtocolTables(ctx)` before `RunVerifierSubscription` when mode != Off. `verifier/backends.go`: `qualified := s.cfg.UnsafeDatabase + "." + ddl.CHTableName(tableID)`, delete `chTableName` and the `strings` import; import `"github.com/sentioxyz/arbiter-core/dataplane/ddl"`; the `scanner_test.go` call `chTableName("db.t")` becomes `ddl.CHTableName("db.t")`.
 
-- [ ] **Step 4: Run** — `bazel run //:gazelle && go test ./verifier/... && ARBITER_CH_INTEGRATION=1 ARBITER_CH_KEEPER=1 CH_ADDR=127.0.0.1:9000 bazel test //verifier:verifier_test --test_env=ARBITER_CH_INTEGRATION --test_env=ARBITER_CH_KEEPER --test_env=CH_ADDR --test_output=errors` Expected: PASS.
+- [x] **Step 4: Run** — `bazel run //:gazelle && go test ./verifier/... && ARBITER_CH_INTEGRATION=1 ARBITER_CH_KEEPER=1 CH_ADDR=127.0.0.1:9000 bazel test //verifier:verifier_test --test_env=ARBITER_CH_INTEGRATION --test_env=ARBITER_CH_KEEPER --test_env=CH_ADDR --test_output=errors` Expected: PASS.
 
-- [ ] **Step 5: Commit** — `git add verifier && git commit -m "feat(verifier): ensure protocol tables in Register; use ddl.CHTableName"`
+- [x] **Step 5: Commit** — `git add verifier && git commit -m "feat(verifier): ensure protocol tables in Register; use ddl.CHTableName"`
 
 ---
 
@@ -1568,7 +1584,7 @@ plus a `reconcileProtocolTables(ctx)` ticker identical in shape to snode's. `Reg
 - Consumes: existing `activeParts`, `partNamesForPartition`, `touchedPartitions` in `snode/staged.go` (the pre-write `before` inventory is already the per-partition part list — no extra query).
 - Produces (used by Task 20): `snode.ErrBackpressure` sentinel (`errors.Is`-able), `snode.Config.HardPartsPerPartition int` (0 → `snode.DefaultHardPartsPerPartition = 2950`).
 
-- [ ] **Step 1: Write the failing docker test** `snode/staged_backpressure_test.go`
+- [x] **Step 1: Write the failing docker test** `snode/staged_backpressure_test.go`
 
 ```go
 package snode
@@ -1629,9 +1645,9 @@ func TestPrepareLocalStatement_RefusesAboveHardPartsLimitBeforeWriting(t *testin
 }
 ```
 
-- [ ] **Step 2: Run to verify it fails** — `go test ./snode/ -run TestPrepareLocalStatement_RefusesAboveHardPartsLimit` Expected: FAIL (`ErrBackpressure`, `HardPartsPerPartition` undefined; the docker body skips without `ARBITER_CH_INTEGRATION`).
+- [x] **Step 2: Run to verify it fails** — `go test ./snode/ -run TestPrepareLocalStatement_RefusesAboveHardPartsLimit` Expected: FAIL (`ErrBackpressure`, `HardPartsPerPartition` undefined; the docker body skips without `ARBITER_CH_INTEGRATION`).
 
-- [ ] **Step 3: Implement.** `snode/config.go`: `const DefaultHardPartsPerPartition = 2950` (spec D5: `parts_to_throw_insert - 50`), field `HardPartsPerPartition int` with doc "SNode-side mirror of the ingress back-pressure hard stop; a prepare that would land at or above this many active parts in any touched hg_unsafe partition is refused before touching ClickHouse", default applied in `validate()` when 0. `snode/staged.go`: add
+- [x] **Step 3: Implement.** `snode/config.go`: `const DefaultHardPartsPerPartition = 2950` (spec D5: `parts_to_throw_insert - 50`), field `HardPartsPerPartition int` with doc "SNode-side mirror of the ingress back-pressure hard stop; a prepare that would land at or above this many active parts in any touched hg_unsafe partition is refused before touching ClickHouse", default applied in `validate()` when 0. `snode/staged.go`: add
 
 ```go
 	// ErrBackpressure: a touched hg_unsafe partition is at or above the hard
@@ -1652,9 +1668,9 @@ to the `var (...)` block, and in `PrepareLocalStatement` right after the `invent
 	}
 ```
 
-- [ ] **Step 4: Run** — `ARBITER_CH_INTEGRATION=1 CH_ADDR=127.0.0.1:9000 bazel test //snode:snode_test --test_env=ARBITER_CH_INTEGRATION --test_env=CH_ADDR --test_output=errors` Expected: PASS.
+- [x] **Step 4: Run** — `ARBITER_CH_INTEGRATION=1 CH_ADDR=127.0.0.1:9000 bazel test //snode:snode_test --test_env=ARBITER_CH_INTEGRATION --test_env=CH_ADDR --test_output=errors` Expected: PASS.
 
-- [ ] **Step 5: Commit + PR** — `git add snode && git commit -m "feat(snode): refuse prepare above the hard parts-per-partition limit (ErrBackpressure)"`, then `git push -u origin feat/protocol-tables && gh pr create --title "feat: protocol-owned physical tables + prepare back-pressure mirror (Spec C)" --body "Tasks 1-6 of docs/superpowers/plans/2026-08-18-storage-integrity-physical-table-lifecycle.md (housegate repo). BuildDDL golden, EnsureProtocolTables/VerifyProtocolTable, snode/verifier Register wiring + reconcile, ErrBackpressure mirror, keeper-enabled CI."`. After merge, either run the **Cut Release** workflow (`gh workflow run cut-release.yml`) to get a `vX.Y.Z` tag, or use the merge commit SHA in Task 7.
+- [x] **Step 5: Commit + PR** — `git add snode && git commit -m "feat(snode): refuse prepare above the hard parts-per-partition limit (ErrBackpressure)"`, then `git push -u origin feat/protocol-tables && gh pr create --title "feat: protocol-owned physical tables + prepare back-pressure mirror (Spec C)" --body "Tasks 1-6 of docs/superpowers/plans/2026-08-18-storage-integrity-physical-table-lifecycle.md (housegate repo). BuildDDL golden, EnsureProtocolTables/VerifyProtocolTable, snode/verifier Register wiring + reconcile, ErrBackpressure mirror, keeper-enabled CI."`. Merged as `ec3293b5dd98a38b1cf76979f2f92a2714f0c378` and published by the official Cut Release as `v0.2.0`; the subsequent collision/fixture corrections and required follow-up release are recorded above and intentionally keep Tasks 7/16 blocked.
 
 ---
 
@@ -1798,7 +1814,7 @@ func orDefault(v, d string) string {
 **Interfaces:**
 - Produces (used by Task 14): `chproto.ClientError{Code int32; Message string; Err error}` with `Error()` / `Unwrap()`; `chproto.CodeTooManyParts int32 = 252`; `proxy.exceptionForPluginError(err error) *chproto.Exception` (unexported, tested in-package). Relay behavior: an error chain containing a `*chproto.ClientError` is written with that code and exactly `Message`; every other plugin error keeps today's `403` + `err.Error()`.
 
-- [ ] **Step 1: Write the failing tests** — `pkg/chproto/client_error_test.go`
+- [x] **Step 1: Write the failing tests** — `pkg/chproto/client_error_test.go`
 
 ```go
 package chproto
@@ -1861,9 +1877,9 @@ func TestExceptionForPluginError_HonorsClientError(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify they fail** — `go test ./pkg/chproto/ -run ClientError; go test ./pkg/proxy/ -run ExceptionForPluginError` Expected: FAIL (`undefined: ClientError`, `exceptionForPluginError`).
+- [x] **Step 2: Run to verify they fail** — `go test ./pkg/chproto/ -run ClientError; go test ./pkg/proxy/ -run ExceptionForPluginError` Expected: FAIL (`undefined: ClientError`, `exceptionForPluginError`).
 
-- [ ] **Step 3: Implement** `pkg/chproto/client_error.go`
+- [x] **Step 3: Implement** `pkg/chproto/client_error.go`
 
 ```go
 package chproto
@@ -1922,9 +1938,9 @@ func (r *Relay) writeExceptionToClient(ctx context.Context, pluginErr error) {
 
 (`relay.go` already imports `errors` and `github.com/ClickHouse/ch-go/proto` — check; add if missing.) Behavior note for the plan reader: the strict end-of-input path still closes the connection after writing the exception (pre-existing; unchanged here).
 
-- [ ] **Step 4: Run** — `bazel run //:gazelle && bazel test //pkg/chproto:chproto_test //pkg/proxy:proxy_test --test_output=errors` Expected: PASS.
+- [x] **Step 4: Run** — `bazel run //:gazelle && bazel test //pkg/chproto:chproto_test //pkg/proxy:proxy_test --test_output=errors` Expected: PASS.
 
-- [ ] **Step 5: Commit** — `git add pkg/chproto pkg/proxy && git commit -m "feat(proxy): plugins can reject with an explicit ClickHouse exception code (ClientError)"`
+- [x] **Step 5: Commit** — `git add pkg/chproto pkg/proxy && git commit -m "feat(proxy): plugins can reject with an explicit ClickHouse exception code (ClientError)"`
 
 ---
 
@@ -1939,7 +1955,7 @@ func (r *Relay) writeExceptionToClient(ctx context.Context, pluginErr error) {
 - Consumes: `payloadexec.DecodeCSV(payload []byte, sch TableSchema) ([]Row, error)` (Row.PartitionID = `p_<raw csv token>`/`all`), `DecodeNativePayload(schema, revision, payload) ([]payloadexec.Row, error)` (Row.PartitionID from `PartitionIDForRow`), constants `EncodingCSVWithNames`, `PayloadEncodingClickHouseNativeData`.
 - Produces (used by Tasks 11, 14, 20): `sicore.PhysicalTableName(tableID string) string` (D2 rule, mirror of arbiter-core `ddl.CHTableName`), `sicore.ErrPartitionFreeze`, `sicore.PayloadPartitionIDs(schema payloadexec.TableSchema, encoding string, revision int, payload []byte) ([]string, error)` (sorted, unique logical partition ids).
 
-- [ ] **Step 1: Write the failing tests** — `pkg/storageintegrity/physical_table_test.go`
+- [x] **Step 1: Write the failing tests** — `pkg/storageintegrity/physical_table_test.go`
 
 ```go
 package storageintegrity
@@ -2026,9 +2042,9 @@ func TestPayloadPartitionIDs_RejectsFreezeViolationAndUnknownEncoding(t *testing
 
 (The test file imports `"github.com/ClickHouse/ch-go/proto"` for `proto.Input` / `proto.ColUInt64`, already a test dep of the package.)
 
-- [ ] **Step 2: Run to verify they fail** — `go test ./pkg/storageintegrity/ -run 'PhysicalTableName|PayloadPartitionIDs'` Expected: FAIL (`undefined: PhysicalTableName`, `PayloadPartitionIDs`).
+- [x] **Step 2: Run to verify they fail** — `go test ./pkg/storageintegrity/ -run 'PhysicalTableName|PayloadPartitionIDs'` Expected: FAIL (`undefined: PhysicalTableName`, `PayloadPartitionIDs`).
 
-- [ ] **Step 3: Implement** — `pkg/storageintegrity/physical_table.go`
+- [x] **Step 3: Implement** — `pkg/storageintegrity/physical_table.go`
 
 ```go
 package storageintegrity
@@ -2117,9 +2133,9 @@ func validatePartitionFreeze(schema payloadexec.TableSchema) error {
 }
 ```
 
-- [ ] **Step 4: Run** — `bazel run //:gazelle && bazel test //pkg/storageintegrity:storageintegrity_test --test_output=errors` Expected: PASS.
+- [x] **Step 4: Run** — `bazel run //:gazelle && bazel test //pkg/storageintegrity:storageintegrity_test --test_output=errors` Expected: PASS.
 
-- [ ] **Step 5: Commit** — `git add pkg/storageintegrity && git commit -m "feat(storageintegrity): PhysicalTableName and per-payload partition derivation"`
+- [x] **Step 5: Commit** — `git add pkg/storageintegrity && git commit -m "feat(storageintegrity): PhysicalTableName and per-payload partition derivation"`
 
 ---
 
@@ -2139,7 +2155,7 @@ func validatePartitionFreeze(schema payloadexec.TableSchema) error {
   - `sicore.PartsPressureConfig{UnsafeDatabase, SafeDatabase string; SoftPartsPerPartition, HardPartsPerPartition int}`, `sicore.DefaultSoftPartsPerPartition = 2400`, `sicore.DefaultHardPartsPerPartition = 2950`.
   - `sicore.NewPartsPressureGuard(conn MergeConn, cfg PartsPressureConfig) *PartsPressureGuard`; methods `BuildSnapshotQuery() string`, `Refresh(ctx) (PartsSnapshot, error)` (queries + stores), `Snapshot() (PartsSnapshot, bool)` (copy of last good snapshot), `Allow(table, partitionID string) error` (nil / `*BackpressureError`), `Invalidate()`, `Invalidated() <-chan struct{}`.
 
-- [ ] **Step 1: Write the failing tests** `pkg/storageintegrity/parts_pressure_test.go`
+- [x] **Step 1: Write the failing tests** `pkg/storageintegrity/parts_pressure_test.go`
 
 ```go
 package storageintegrity
@@ -2311,9 +2327,9 @@ func TestLogicalPartitionID(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify they fail** — `go test ./pkg/storageintegrity/ -run 'PartsPressureGuard|LogicalPartitionID'` Expected: FAIL (`undefined: NewPartsPressureGuard`).
+- [x] **Step 2: Run to verify they fail** — `go test ./pkg/storageintegrity/ -run 'PartsPressureGuard|LogicalPartitionID'` Expected: FAIL (`undefined: NewPartsPressureGuard`).
 
-- [ ] **Step 3: Implement** `pkg/storageintegrity/parts_pressure.go`
+- [x] **Step 3: Implement** `pkg/storageintegrity/parts_pressure.go`
 
 ```go
 package storageintegrity
@@ -2510,9 +2526,9 @@ func (g *PartsPressureGuard) Invalidate() {
 func (g *PartsPressureGuard) Invalidated() <-chan struct{} { return g.invalidated }
 ```
 
-- [ ] **Step 4: Run** — `bazel test //pkg/storageintegrity:storageintegrity_test --test_output=errors` Expected: PASS.
+- [x] **Step 4: Run** — `bazel test //pkg/storageintegrity:storageintegrity_test --test_output=errors` Expected: PASS.
 
-- [ ] **Step 5: Commit** — `git add pkg/storageintegrity && git commit -m "feat(storageintegrity): PartsPressureGuard over system.parts with soft/hard per-partition limits"`
+- [x] **Step 5: Commit** — `git add pkg/storageintegrity && git commit -m "feat(storageintegrity): PartsPressureGuard over system.parts with soft/hard per-partition limits"`
 
 ---
 
@@ -2526,7 +2542,7 @@ func (g *PartsPressureGuard) Invalidated() <-chan struct{} { return g.invalidate
 **Interfaces:**
 - Produces (used by Tasks 14, 20): `config.StorageIntegrityRuntimeConfig.Backpressure StorageIntegrityRuntimeBackpressureConfig` with fields `Enabled bool` (default true), `UnsafeDatabase string` (default `"hg_unsafe"`), `SafeDatabase string` (default `"hg_safe"`), `PollInterval Duration` (default 2s), `SoftPartsPerPartition int` (2400), `HardPartsPerPartition int` (2950); yaml/json keys `enabled`, `unsafe_database`, `safe_database`, `poll_interval`, `soft_parts_per_partition`, `hard_parts_per_partition`.
 
-- [ ] **Step 1: Write the failing tests** (append to `pkg/config/storage_integrity_config_test.go`)
+- [x] **Step 1: Write the failing tests** (append to `pkg/config/storage_integrity_config_test.go`)
 
 ```go
 func TestStorageIntegrityBackpressureDefaults(t *testing.T) {
@@ -2588,9 +2604,9 @@ func TestConfigValidateStorageIntegrityBackpressure(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify it fails** — `go test ./pkg/config/ -run 'Backpressure'` Expected: FAIL (`Backpressure` undefined).
+- [x] **Step 2: Run to verify it fails** — `go test ./pkg/config/ -run 'Backpressure'` Expected: FAIL (`Backpressure` undefined).
 
-- [ ] **Step 3: Implement.** In `storage_integrity_config.go` add to `StorageIntegrityRuntimeConfig`: `Backpressure StorageIntegrityRuntimeBackpressureConfig \`json:"backpressure" yaml:"backpressure"\``, and
+- [x] **Step 3: Implement.** In `storage_integrity_config.go` add to `StorageIntegrityRuntimeConfig`: `Backpressure StorageIntegrityRuntimeBackpressureConfig \`json:"backpressure" yaml:"backpressure"\``, and
 
 ```go
 // StorageIntegrityRuntimeBackpressureConfig governs the ingress part-count
@@ -2630,9 +2646,9 @@ Defaults in `defaultStorageIntegrityConfig()` → `Backpressure: StorageIntegrit
 		}
 ```
 
-- [ ] **Step 4: Run** — `bazel test //pkg/config:config_test --test_output=errors` Expected: PASS.
+- [x] **Step 4: Run** — `bazel test //pkg/config:config_test --test_output=errors` Expected: PASS.
 
-- [ ] **Step 5: Commit** — `git add pkg/config && git commit -m "feat(config): storage_integrity.runtime.backpressure block"`
+- [x] **Step 5: Commit** — `git add pkg/config && git commit -m "feat(config): storage_integrity.runtime.backpressure block"`
 
 ---
 
@@ -2650,7 +2666,7 @@ Defaults in `defaultStorageIntegrityConfig()` → `Backpressure: StorageIntegrit
   - `housegate.StorageIntegrityPartsPressureSupervisor` — `NewStorageIntegrityPartsPressureSupervisor(guard *sicore.PartsPressureGuard, interval time.Duration, unsafeDB, safeDB string) *StorageIntegrityPartsPressureSupervisor`; methods `Refresh(ctx) error` (poll + gauges), `Run(ctx)` (ticker + invalidation channel), `Allow`, `Invalidate` (delegate).
   - Prometheus (init()-registered globals, names verbatim from spec D6/§6): `storage_integrity_unsafe_parts{table,partition}` gauge, `storage_integrity_safe_parts{table,partition}` gauge, `storage_integrity_backpressure_total{table}` counter; exported helper `storageIntegrityBackpressureTotal.WithLabelValues(table).Inc()` used by the ingress (same package).
 
-- [ ] **Step 1: Write the failing tests** `storage_integrity_backpressure_test.go`
+- [x] **Step 1: Write the failing tests** `storage_integrity_backpressure_test.go`
 
 ```go
 package housegate
@@ -2791,9 +2807,9 @@ func TestStorageIntegrityBackpressureMetricsRegisteredOnce(t *testing.T) {
 
 (In `TestStorageIntegrityBackpressureMetricsRegisteredOnce`, touch `storageIntegrityUnsafeParts.WithLabelValues("t", "p").Set(0)`, `storageIntegritySafeParts.WithLabelValues("t", "p").Set(0)`, `storageIntegrityBackpressureTotal.WithLabelValues("t").Add(0)` at the top so all three families gather; a duplicate `MustRegister` would panic at package init, which is the "registered once" property.)
 
-- [ ] **Step 2: Run to verify it fails** — `go test . -run 'PartsPressureSupervisor|BackpressureMetrics'` Expected: FAIL (`undefined: NewStorageIntegrityPartsPressureSupervisor`).
+- [x] **Step 2: Run to verify it fails** — `go test . -run 'PartsPressureSupervisor|BackpressureMetrics'` Expected: FAIL (`undefined: NewStorageIntegrityPartsPressureSupervisor`).
 
-- [ ] **Step 3: Implement** `storage_integrity_backpressure.go`
+- [x] **Step 3: Implement** `storage_integrity_backpressure.go`
 
 ```go
 package housegate
@@ -2904,9 +2920,9 @@ func (s *StorageIntegrityPartsPressureSupervisor) Invalidate() { s.guard.Invalid
 
 (`log.WarnEveryN(id string, n int64, msg string, kv ...any)` is the existing helper in `pkg/log/log.go:476`.)
 
-- [ ] **Step 4: Run** — `bazel run //:gazelle && bazel test //:housegate_test --test_filter='PartsPressureSupervisor|BackpressureMetrics' --test_output=errors` Expected: PASS.
+- [x] **Step 4: Run** — `bazel run //:gazelle && bazel test //:housegate_test --test_filter='PartsPressureSupervisor|BackpressureMetrics' --test_output=errors` Expected: PASS.
 
-- [ ] **Step 5: Commit** — `git add storage_integrity_backpressure.go storage_integrity_backpressure_test.go BUILD.bazel && git commit -m "feat(storage-integrity): parts-pressure poller with unsafe/safe parts gauges and back-pressure counter"`
+- [x] **Step 5: Commit** — `git add storage_integrity_backpressure.go storage_integrity_backpressure_test.go BUILD.bazel && git commit -m "feat(storage-integrity): parts-pressure poller with unsafe/safe parts gauges and back-pressure counter"`
 
 ---
 
@@ -2922,7 +2938,7 @@ func (s *StorageIntegrityPartsPressureSupervisor) Invalidate() { s.guard.Invalid
 - Consumes: Tasks 9–13.
 - Produces (used by Task 20): `StorageIntegrityRuntimeOptions.SchemaResolver sicore.TableSchemaResolver` (required when `backpressure.enabled`), `StorageIntegrityRuntimeOptions.PartsPressure StorageIntegrityPartsPressure` (optional injection; when nil and enabled, built from `MergeConn` + config), `startStorageIntegrityRuntime` performs the first `Refresh` fail-fast. Ingress behavior: after the merge-health latch and before the payload put, for every partition of the payload `Allow(PhysicalTableName(TableID), partition)`; refusal → `storageIntegrityBackpressureTotal.Inc()` and `&chproto.ClientError{Code: chproto.CodeTooManyParts, Message: <BackpressureError text>, Err: err}`; an orchestrate error wrapping `sicore.ErrBackpressure` (SNode mirror via host adapter) → same `ClientError`; after a bound ACK2 → `Invalidate()`.
 
-- [ ] **Step 1: Write the failing tests** `storage_integrity_backpressure_ingress_test.go`
+- [x] **Step 1: Write the failing tests** `storage_integrity_backpressure_ingress_test.go`
 
 ```go
 package housegate
@@ -3086,9 +3102,9 @@ func TestBuildStorageIntegrityRuntimeBackpressureRequiresConnAndResolver(t *test
 }
 ```
 
-- [ ] **Step 2: Run to verify they fail** — `go test . -run 'TestIngress_|BackpressureRequires'` Expected: FAIL (`WithPartsPressure` undefined, `SchemaResolver` field missing).
+- [x] **Step 2: Run to verify they fail** — `go test . -run 'TestIngress_|BackpressureRequires'` Expected: FAIL (`WithPartsPressure` undefined, `SchemaResolver` field missing).
 
-- [ ] **Step 3: Implement.** `storage_integrity_ingress.go` — new fields on `StorageIntegrityIngress`: `pressure StorageIntegrityPartsPressure`, `schemas sicore.TableSchemaResolver`, `pressureRunner *StorageIntegrityPartsPressureSupervisor`; add
+- [x] **Step 3: Implement.** `storage_integrity_ingress.go` — new fields on `StorageIntegrityIngress`: `pressure StorageIntegrityPartsPressure`, `schemas sicore.TableSchemaResolver`, `pressureRunner *StorageIntegrityPartsPressureSupervisor`; add
 
 ```go
 // WithPartsPressure enables the ingress back-pressure check (spec C §5). Both
@@ -3184,9 +3200,9 @@ In `startStorageIntegrityRuntime`, after the merge guard assert and before `runt
 
 `build_test.go::enableStorageIntegrityRuntimeTestConfig`: add `cfg.StorageIntegrity.Runtime.Backpressure.Enabled = false // existing runtime tests inject a MergeGuard without a MergeConn; back-pressure has its own tests` so the untouched tests keep passing.
 
-- [ ] **Step 4: Run** — `bazel run //:gazelle && bazel test //:housegate_test //pkg/proxy:proxy_test --test_output=errors` Expected: PASS.
+- [x] **Step 4: Run** — `bazel run //:gazelle && bazel test //:housegate_test //pkg/proxy:proxy_test --test_output=errors` Expected: PASS.
 
-- [ ] **Step 5: Commit** — `git add storage_integrity_ingress.go storage_integrity_runtime.go storage_integrity_backpressure_ingress_test.go build_test.go BUILD.bazel && git commit -m "feat(storage-integrity): ingress back-pressure (exception 252) wired between merge-health latch and payload put"`
+- [x] **Step 5: Commit** — `git add storage_integrity_ingress.go storage_integrity_runtime.go storage_integrity_backpressure_ingress_test.go build_test.go BUILD.bazel && git commit -m "feat(storage-integrity): ingress back-pressure (exception 252) wired between merge-health latch and payload put"`
 
 ---
 
@@ -3201,7 +3217,7 @@ In `startStorageIntegrityRuntime`, after the merge guard assert and before `runt
 **Interfaces:**
 - Consumes: `openDirectCH`, `mustExec`, `uniqueTable` (existing helpers), Task 11 guard.
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 ```go
 package integration
@@ -3288,9 +3304,9 @@ func TestPartsPressureGuard_AgainstRealSystemParts(t *testing.T) {
 
 with `bpTableSchema()` returning `payloadexec.TableSchema{TableID: "db.t", PartitionBy: "p", Columns: []lthash.Column{{Name: "p", Type: "String"}, {Name: "v", Type: "UInt64"}}}` (imports `pkg/lthash`, `pkg/replay/payloadexec`).
 
-- [ ] **Step 2: Run** — `bazel run //:gazelle && bazel test //pkg/integration:integration_test --test_filter=TestPartsPressureGuard_AgainstRealSystemParts --test_output=errors` (docker required; the target is already in `ci.yml`'s explicit list, so no CI edit). Expected: PASS.
+- [x] **Step 2: Run** — `bazel run //:gazelle && bazel test //pkg/integration:integration_test --test_filter=TestPartsPressureGuard_AgainstRealSystemParts --test_output=errors` (docker required; the target is already in `ci.yml`'s explicit list, so no CI edit). Expected: PASS.
 
-- [ ] **Step 3: Commit + PR** — `git add pkg/integration && git commit -m "test(integration): PartsPressureGuard against real system.parts partitions" && git push -u origin feat/si-backpressure && gh pr create --title "feat(storage-integrity): ingress back-pressure + exception-code plugin rejections (Spec C)" --body "Tasks 9-15 of docs/superpowers/plans/2026-08-18-storage-integrity-physical-table-lifecycle.md."`
+- [x] **Step 3: Commit + PR** — published the reviewed cumulative Tasks 9–15 branch as ready PR [housegate#125](https://github.com/housegate/housegate/pull/125), including the real-ClickHouse regression and review-driven lifecycle closure commits.
 
 ---
 
@@ -3509,7 +3525,7 @@ func (e *prepareBackpressureError) Unwrap() []error {
 **Files:**
 - Modify: housegate `CLAUDE.md` (Key Modules bullets for `pkg/storageintegrity` / root runtime; Known Rough Edges), housegate `docs/superpowers/specs/2026-08-18-storage-integrity-physical-table-lifecycle-design.md` (status line only)
 
-- [ ] **Step 1: CLAUDE.md** — under Key Modules add a bullet (one paragraph, no hard wraps): `pkg/storageintegrity` back-pressure: `PartsPressureGuard` (snapshot of `system.parts` grouped by `(database, table, partition)`; keys use `LogicalPartitionID` = `p_<partition text>`/`all`, never `partition_id`, which is a SipHash for String keys), `PayloadPartitionIDs` (CSV + Native), `PhysicalTableName` (D2 mirror of arbiter-core `ddl.CHTableName`), `ErrBackpressure`/`BackpressureError`; root `StorageIntegrityPartsPressureSupervisor` polls every `storage_integrity.runtime.backpressure.poll_interval` (2s), first refresh is startup fail-fast, gauges `storage_integrity_unsafe_parts` / `storage_integrity_safe_parts` and counter `storage_integrity_backpressure_total`; ingress refuses with `chproto.ClientError{Code: 252}` between the merge-health latch and the payload put; the plugin chain can now reject with an explicit code via `chproto.ClientError` (relay `exceptionForPluginError`, default stays 403). Under Known Rough Edges add: `hg_safe` part counts only grow in v1 (merges stay stopped, `allow_native_background_merges` still rejected) — a `hg_safe` partition approaching `parts_to_throw_insert` is the P4 controlled-compaction prerequisite, not an incident to fix by enabling merges; the strict-input rejection path still closes the client connection after the exception. Mark the spec status `Proposed` → `Implemented (see plan)` once all PRs merge.
+- [ ] **Step 1: CLAUDE.md** — under Key Modules add a bullet (one paragraph, no hard wraps): `pkg/storageintegrity` back-pressure: `PartsPressureGuard` (reads exact active `system.parts.name` rows, aggregates counts by `(database, table, partition)`, and retains names for exact cleanup proof; keys use `LogicalPartitionID` = `p_<partition text>`/`all`, never `partition_id`, which is a SipHash for String keys), `PayloadPartitionIDs` (CSV + Native), `PhysicalTableName` (D2 mirror of arbiter-core `ddl.CHTableName`), `ErrBackpressure`/`BackpressureError`; root `StorageIntegrityPartsPressureSupervisor` polls every `storage_integrity.runtime.backpressure.poll_interval` (2s), first refresh is startup fail-fast, gauges `storage_integrity_unsafe_parts` / `storage_integrity_safe_parts` and counter `storage_integrity_backpressure_total`; ingress refuses with `chproto.ClientError{Code: 252}` between the merge-health latch and the payload put; the plugin chain can now reject with an explicit code via `chproto.ClientError` (relay `exceptionForPluginError`, default stays 403). Under Known Rough Edges add: `hg_safe` part counts only grow in v1 (merges stay stopped, `allow_native_background_merges` still rejected) — a `hg_safe` partition approaching `parts_to_throw_insert` is the P4 controlled-compaction prerequisite, not an incident to fix by enabling merges; the strict-input rejection path still closes the client connection after the exception. Mark the spec status `Proposed` → `Implemented (see plan)` once all PRs merge.
 - [ ] **Step 2: Verify the two READMEs** — arbiter-core `README.md` shows the keeper mount + `//dataplane/ddl:ddl_test` (Task 3); arbiter `README.md` documents `--ensure-tables` / `-print-ddl` and no longer says tables "must already exist" for inline-tables roles (Task 8). Base-design §6 replacement (naming/DDL example = `BuildDDL` golden output) is Spec B's job — leave it.
 - [ ] **Step 3: Commit** — `git add CLAUDE.md docs && git commit -m "docs: storage-integrity back-pressure and protocol-table lifecycle notes"`
 
@@ -3521,7 +3537,7 @@ func (e *prepareBackpressureError) Unwrap() []error {
 
 **2. Placeholder scan** — the only open values are the merge-commit SHAs / tags used by the dependency-bump tasks (Tasks 7, 16), which cannot exist before the upstream PRs merge; each states exactly which commit to use. No "TBD"/"similar to task N"; every code step carries the code.
 
-**3. Type consistency** — checked: `ddl.Pinned{UnsafeDB, SafeDB, PromoteDB, NodeID, KeeperShardID}` (Tasks 1, 3, 4, 5, 8, 18); `ddl.EnsureProtocolTables(ctx, conn, p, tables, mode, logger)` (Tasks 3, 4, 5); `ddl.Mode` values `ModeOff|ModeVerifyOnly|ModeCreateAndVerify` and `ParseMode("off"|"verify"|"create")` (Tasks 3, 4, 5, 8, 17); `snode.Config.{ProtocolTables, ProtocolTablesReconcile, KeeperShardID, HardPartsPerPartition}` (Tasks 4, 6, 8, 17); `snode.ErrBackpressure` (Tasks 6, 17); `verifier.Deps.Conn` + `verifier.Config.{SafeDatabase, PromoteDatabase, ProtocolTables}` (Tasks 5, 8); `chproto.ClientError{Code int32, Message, Err}` + `chproto.CodeTooManyParts` (Tasks 9, 14); `sicore.PhysicalTableName`, `sicore.PayloadPartitionIDs(schema, encoding, revision, payload)`, `sicore.ErrPartitionFreeze` (Tasks 10, 14, 15, 17); `sicore.PartsPressureGuard` methods `BuildSnapshotQuery/Refresh/Snapshot/Allow/Invalidate/Invalidated`, `sicore.PartsKey{Database, Table, Partition}`, `sicore.PartsPressureConfig`, `sicore.BackpressureError{Database, Table, Partition, Parts, Limit, Kind}`, `sicore.LogicalPartitionID` (Tasks 11, 13, 14, 15, 17); `config.StorageIntegrityRuntimeBackpressureConfig{Enabled, UnsafeDatabase, SafeDatabase, PollInterval, SoftPartsPerPartition, HardPartsPerPartition}` (Tasks 12, 14, 17); root `StorageIntegrityPartsPressure` interface `{Allow, Invalidate}`, `NewStorageIntegrityPartsPressureSupervisor(guard, interval, unsafeDB, safeDB)`, `StorageIntegrityIngress.WithPartsPressure(pressure, schemas)`, fields `pressure`/`pressureRunner`, `StorageIntegrityRuntimeOptions.{SchemaResolver, PartsPressure}` (Tasks 13, 14, 17); metric names `storage_integrity_unsafe_parts{table,partition}`, `storage_integrity_safe_parts{table,partition}`, `storage_integrity_backpressure_total{table}` (Tasks 13, 14, 19).
+**3. Type consistency** — checked: `ddl.Pinned{UnsafeDB, SafeDB, PromoteDB, NodeID, KeeperShardID}` (Tasks 1, 3, 4, 5, 8, 18); `ddl.EnsureProtocolTables(ctx, conn, p, tables, mode, logger)` (Tasks 3, 4, 5); `ddl.Mode` values `ModeOff|ModeVerifyOnly|ModeCreateAndVerify` and `ParseMode("off"|"verify"|"create")` (Tasks 3, 4, 5, 8, 17); `snode.Config.{ProtocolTables, ProtocolTablesReconcile, KeeperShardID, HardPartsPerPartition}` (Tasks 4, 6, 8, 17); `snode.ErrBackpressure` (Tasks 6, 17); `verifier.Deps.Conn` + `verifier.Config.{SafeDatabase, PromoteDatabase, ProtocolTables}` (Tasks 5, 8); `chproto.ClientError{Code int32, Message, Err}` + `chproto.CodeTooManyParts` (Tasks 9, 14); `sicore.PhysicalTableName`, `sicore.ValidatePhysicalTableNames`, `sicore.PayloadPartitionIDs(schema, encoding, revision, payload)`, `sicore.ErrPartitionFreeze` (Tasks 10, 14, 15, 17); `sicore.PartsPressureGuard` methods `BuildSnapshotQuery/Refresh/Snapshot/Allow/Reserve/ReserveStatement/RestoreBatch/SetCandidateObservedHook/Invalidate/Invalidated`, `sicore.PartsRestoreRecord{StatementID,Table,PartitionIDs,Candidates,ObservedCandidates,Finalized,LegacyObservation}`, `sicore.PartsReservation{Commit(candidates...),Release,PrepareCleanupProof,ReleaseCleaned,Finalize}`, `sicore.PartsKey{Database, Table, Partition}`, `sicore.PartsPressureConfig{RefreshTimeout,SnapshotTTL}`, `sicore.BackpressureError{Database, Table, Partition, Parts, Limit, Kind}`, `sicore.ErrIntakeJournalMigrationRequired`, `sicore.LogicalPartitionID(partitionText, unpartitioned)`, `sicore.Orchestrator.SetBeforeRecovery/SetBeforeRegisterPreparedClaim/SetBeforeExactCleanup/SetAfterExactCleanup`, `sicore.Orchestrator.MarkCandidateObserved`, `sicore.Orchestrator.PersistRecoveredTouchedPartitions`, `sicore.AdmissionRecord.TouchedPartitionIDs`, and `sicore.IntakeJournalRecord.JournalVersion` (Tasks 11, 13, 14, 15, 17); `config.StorageIntegrityRuntimeBackpressureConfig{Enabled, UnsafeDatabase, SafeDatabase, PollInterval, SoftPartsPerPartition, HardPartsPerPartition}` (Tasks 12, 14, 17); root `StorageIntegrityPartsPressure` interface `{ReserveStatement,RestoreBatch,SetCandidateObservedHook,Invalidate}`, lifecycle extension `{Refresh,Run}`, `NewStorageIntegrityPartsPressureSupervisor(guard, interval, unsafeDB, safeDB)`, `StorageIntegrityIngress.WithPartsPressure(pressure, schemas)`, fields `pressure`/`pressureRunner`, `StorageIntegrityRuntimeOptions.{SchemaResolver,TableSchemas,PartsPressure}` (Tasks 13, 14, 17); metric names `storage_integrity_unsafe_parts{table,partition}`, `storage_integrity_safe_parts{table,partition}`, `storage_integrity_backpressure_total{table}` (Tasks 13, 14, 19).
 
 ## Spec coverage map
 

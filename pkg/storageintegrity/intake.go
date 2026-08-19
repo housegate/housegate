@@ -54,6 +54,10 @@ type AdmissionRecord struct {
 	SettingsHash    string
 	SchemaHash      string
 	RowIDProfileID  string
+	// TouchedPartitionIDs is the canonical payload-derived logical partition
+	// set used by admission pressure and prepared-candidate consistency. It is
+	// persisted because terminal payload bytes are compacted after ACK2.
+	TouchedPartitionIDs []string
 }
 
 // PayloadState is the subset of DA payload lifecycle states HouseGate accepts
@@ -294,8 +298,33 @@ func isDecimalDigits(s string) bool {
 // == covers every signed/routed field (SQL, target, kind, payload identity,
 // signer, JWS). The raw payload bytes are compared too, so a caller cannot keep
 // the envelope's payload hash while swapping the underlying bytes.
-func sameStatement(a StatementEnvelope, aAdm AdmissionRecord, b StatementEnvelope, bAdm AdmissionRecord) bool {
-	return a == b && bytes.Equal(aAdm.Payload, bAdm.Payload)
+func sameStatement(a StatementEnvelope, aAdm AdmissionRecord, b StatementEnvelope, bAdm AdmissionRecord, storedTerminal, zeroCandidateTerminal bool) bool {
+	if a != b {
+		return false
+	}
+	if !equalStrings(aAdm.TouchedPartitionIDs, bAdm.TouchedPartitionIDs) &&
+		!(zeroCandidateTerminal && len(aAdm.TouchedPartitionIDs) == 0 && len(bAdm.TouchedPartitionIDs) == 0) {
+		return false
+	}
+	// Terminal journal records compact the payload bytes after the envelope has
+	// durably bound their hash/length/ref. A replay still has to present the exact
+	// envelope, but need not keep an unbounded second copy of historical payloads.
+	return (storedTerminal && len(aAdm.Payload) == 0) || bytes.Equal(aAdm.Payload, bAdm.Payload)
+}
+
+func equalStrings(a, b []string) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	if len(a) != len(b) {
+		return false
+	}
+	for idx := range a {
+		if a[idx] != b[idx] {
+			return false
+		}
+	}
+	return true
 }
 
 // OutcomeCategory classifies a SubmitStatement or RegisterResultClaim result
@@ -473,11 +502,47 @@ type IntakeResult struct {
 	// Submit/Claim and Ack2.
 	Reason string
 
+	// sourceWritePossible is set only after PrepareLocalStatement was attempted
+	// or a prepared result is known. It lets the ingress release a pre-prepare
+	// reservation on definite local failures while retaining indeterminate calls.
+	sourceWritePossible bool
+
 	// terminal marks an outcome that will not change on retry (ACK2, or a
 	// successfully cleaned ordinary abort). Only terminal outcomes are recorded for
 	// idempotent replay; retryable/unknown outcomes and failed aborts are not,
 	// so they reconverge on a later call.
 	terminal bool
+
+	// sourceFrontierRetained is set on results returned after this statement
+	// acquired and kept its source-ordering frontier. Ingress uses the explicit
+	// disposition to keep a matching no-write capacity reservation; lifecycle
+	// and protocol outcomes alone cannot distinguish every error path.
+	sourceFrontierRetained bool
+}
+
+// SourceWriteMayExist reports whether this attempt may have created a source
+// part that must remain charged against the parts-pressure guard. Exact cleanup
+// is definitive proof that no candidate remains, including when persisting the
+// Cleaned terminal journal record subsequently fails.
+func (r IntakeResult) SourceWriteMayExist() bool {
+	if r.Lifecycle == LifecycleCleaned {
+		return false
+	}
+	return r.sourceWritePossible || r.Prepared.StatementID != ""
+}
+
+// IsTerminal reports whether this result has an authoritative final intake
+// disposition. Lifecycle alone is insufficient: a source-proven pre-write
+// rejection also reports Cleaned while deliberately remaining retryable.
+func (r IntakeResult) IsTerminal() bool {
+	return r.terminal
+}
+
+// RetainsSourceFrontier reports whether this attempt kept the statement's
+// source-ordering frontier for same-ID convergence. It is false for failures
+// before frontier acquisition and for completed terminal/RC-bound outcomes.
+func (r IntakeResult) RetainsSourceFrontier() bool {
+	return r.sourceFrontierRetained
 }
 
 // Orchestrator runs the staged intake for one admission: it starts
@@ -500,16 +565,78 @@ type Orchestrator struct {
 	// re-send that never repeats the unsafe write. See intake_retry.go.
 	querier IntakeStatusQuerier
 
-	mu        sync.Mutex
-	records   map[string]*intakeRecord   // statement_id -> cross-call intake state
-	frontiers map[string]*sourceFrontier // frontier key (source) -> serial gate
+	mu             sync.Mutex
+	journalWriteMu sync.Mutex
+	records        map[string]*intakeRecord   // statement_id -> cross-call intake state
+	frontiers      map[string]*sourceFrontier // frontier key (source) -> serial gate
 	// nextFrontierOrdinal stores the greatest assigned durable ordinal per
 	// source. New records increment it before their initial journal save.
 	nextFrontierOrdinal map[string]uint64
 
-	journalRecovered    bool
-	journalRecovering   bool
-	journalRecoveryDone chan struct{}
+	journalRecovered      bool
+	journalRecovery       *journalRecoveryAttempt
+	recoveredJournal      []IntakeJournalRecord
+	recoveryStateRestored bool
+	recoveryStateRestore  *recoveryStateRestoreAttempt
+	beforeRecovery        func(context.Context, []IntakeJournalRecord) error
+	beforeRegisterClaim   func(context.Context, IntakeResult) error
+	beforeExactCleanup    func(context.Context, IntakeResult) error
+	afterExactCleanup     func(context.Context, IntakeResult) error
+}
+
+type journalRecoveryAttempt struct {
+	done chan struct{}
+	err  error
+}
+
+// SetBeforeRecovery installs a pre-serve hook that reconstructs runtime-owned
+// state from the complete durable journal snapshot before any pending intake
+// resumes. The callback is copied with the records under the orchestrator mutex
+// and invoked without it; a failure aborts startup recovery fail-closed.
+func (o *Orchestrator) SetBeforeRecovery(hook func(context.Context, []IntakeJournalRecord) error) {
+	if o == nil {
+		return
+	}
+	o.mu.Lock()
+	o.beforeRecovery = hook
+	o.mu.Unlock()
+}
+
+// SetBeforeRegisterPreparedClaim installs a hook that must bind the successful
+// prepared candidate before the RC can bind and ACK2 can release the source
+// frontier. The callback is copied under the orchestrator mutex and invoked
+// without it while the source frontier is still held.
+func (o *Orchestrator) SetBeforeRegisterPreparedClaim(hook func(context.Context, IntakeResult) error) {
+	if o == nil {
+		return
+	}
+	o.mu.Lock()
+	o.beforeRegisterClaim = hook
+	o.mu.Unlock()
+}
+
+// SetBeforeExactCleanup installs the runtime hook that freezes exact active
+// candidate evidence before source cleanup. The callback is copied under the
+// orchestrator mutex and invoked without it while the source frontier is held.
+func (o *Orchestrator) SetBeforeExactCleanup(hook func(context.Context, IntakeResult) error) {
+	if o == nil {
+		return
+	}
+	o.mu.Lock()
+	o.beforeExactCleanup = hook
+	o.mu.Unlock()
+}
+
+// SetAfterExactCleanup installs the runtime hook that reconciles pressure
+// inventory after source cleanup and before the source frontier is released.
+// The callback is copied under the orchestrator mutex and invoked without it.
+func (o *Orchestrator) SetAfterExactCleanup(hook func(context.Context, IntakeResult) error) {
+	if o == nil {
+		return
+	}
+	o.mu.Lock()
+	o.afterExactCleanup = hook
+	o.mu.Unlock()
 }
 
 // intakeRecord is the cross-call coordination state for one statement id. It
@@ -520,6 +647,7 @@ type Orchestrator struct {
 // guarded by Orchestrator.mu except res/err, which follow the usual
 // write-before-close(done) / read-after-<-done happens-before.
 type intakeRecord struct {
+	journalVersion  uint32
 	statementID     string
 	source          string // frontier key this intake queues on
 	frontierOrdinal uint64 // immutable same-source admission order
@@ -541,8 +669,9 @@ type intakeRecord struct {
 
 	// Cached prepare: set once PrepareLocalStatement succeeds; reused by every
 	// later attempt so the unsafe write is never repeated (design section 3.2).
-	prepared    PreparedLocalResult
-	hasPrepared bool
+	prepared               PreparedLocalResult
+	hasPrepared            bool
+	observedCandidateParts []CandidatePart
 
 	// Cached accepted submit outcome: set once SubmitStatement returns an
 	// ACK2-permitting outcome ({Accepted, ExactIdempotent}). Retained verbatim so
@@ -635,6 +764,86 @@ func (o *Orchestrator) frontierKey() string {
 	return defaultFrontierKey
 }
 
+// AdmissionRequiresPrepare is the read-only preflight used by ingress before
+// it performs a payload put, creates a journal record, submits to Arbiter, or
+// asks the source to write an unsafe part. It returns true only when this
+// statement has no cached/terminal intake and a later Orchestrate call may
+// execute PrepareLocalStatement. Existing prepared retries and terminal ACK2
+// replays return false so part pressure cannot deadlock their frontier.
+func (o *Orchestrator) AdmissionRequiresPrepare(ctx context.Context, adm AdmissionRecord) (bool, error) {
+	if o == nil {
+		return false, errors.New("intake: orchestrator is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	incoming, err := EnvelopeFromAdmission(adm)
+	if err != nil {
+		return false, err
+	}
+	if err := o.ensureJournalRecovered(ctx); err != nil {
+		return false, err
+	}
+
+	o.mu.Lock()
+	rec := o.records[incoming.StatementID]
+	if rec != nil {
+		requires, err := recordRequiresPrepare(rec.env, rec.adm, rec.prepared, rec.hasPrepared, rec.isTerminal, rec.stage, adm)
+		o.mu.Unlock()
+		if err != nil || !requires {
+			return requires, err
+		}
+		// A prior PrepareLocalStatement response may have been lost after the
+		// source durably wrote the unsafe part. Resolve that uncertainty before
+		// ingress consults part pressure: a found prepare is a resume and must not
+		// be blocked by the part it already created; found=false proves that the
+		// later Orchestrate call may execute a genuinely new prepare.
+		_, found, err := o.lookupPreparedBeforePrepare(ctx, rec)
+		if err != nil {
+			return false, err
+		}
+		return !found, nil
+	}
+	o.mu.Unlock()
+
+	// Terminal records are intentionally not retained during bulk journal
+	// recovery. Load this statement on demand so a post-restart ACK2 replay also
+	// bypasses pressure without mutating the orchestrator or journal.
+	if o.journal != nil {
+		persisted, ok, err := o.journal.LoadIntakeRecord(ctx, incoming.StatementID)
+		if err != nil {
+			return false, err
+		}
+		if ok {
+			return recordRequiresPrepare(persisted.Env, persisted.Admission, persisted.Prepared, persisted.HasPrepared, persisted.IsTerminal, persisted.Stage, adm)
+		}
+	}
+	return true, nil
+}
+
+func recordRequiresPrepare(boundEnv StatementEnvelope, boundAdmission AdmissionRecord, prepared PreparedLocalResult, hasPrepared, terminal bool, stage Lifecycle, incoming AdmissionRecord) (bool, error) {
+	if incoming.PayloadRef != "" && incoming.PayloadRef != boundEnv.PayloadRef {
+		return false, fmt.Errorf("intake: statement id %s reused with a different envelope", boundEnv.StatementID)
+	}
+	candidate := cloneAdmissionRecord(incoming)
+	candidate.PayloadRef = boundEnv.PayloadRef
+	candidateEnv, err := EnvelopeFromAdmission(candidate)
+	if err != nil {
+		return false, err
+	}
+	if !sameStatement(boundEnv, boundAdmission, candidateEnv, candidate, terminal, zeroCandidateTerminal(terminal, hasPrepared, prepared)) {
+		return false, fmt.Errorf("intake: statement id %s reused with a different envelope", boundEnv.StatementID)
+	}
+	if terminal || hasPrepared {
+		return false, nil
+	}
+	return stage == "" || stage == LifecyclePreparing, nil
+}
+
+func zeroCandidateTerminal(terminal, hasPrepared bool, prepared PreparedLocalResult) bool {
+	return terminal && hasPrepared && len(prepared.CandidateParts) == 0
+}
+
 // Orchestrate drives one admission through the staged intake. Prepare runs at
 // most once per statement id — even under concurrency and across retries: a
 // call for a statement with a recorded terminal outcome returns it without
@@ -690,6 +899,7 @@ func (o *Orchestrator) Orchestrate(ctx context.Context, adm AdmissionRecord) (In
 		ordinal := o.nextFrontierOrdinal[source] + 1
 		o.nextFrontierOrdinal[source] = ordinal
 		rec = &intakeRecord{
+			journalVersion:  intakeJournalVersionForAdmission(adm),
 			statementID:     env.StatementID,
 			source:          source,
 			frontierOrdinal: ordinal,
@@ -699,7 +909,7 @@ func (o *Orchestrator) Orchestrate(ctx context.Context, adm AdmissionRecord) (In
 		}
 		o.records[env.StatementID] = rec
 		created = true
-	} else if !sameStatement(rec.env, rec.adm, env, adm) {
+	} else if !sameStatement(rec.env, rec.adm, env, adm, rec.isTerminal, zeroCandidateTerminal(rec.isTerminal, rec.hasPrepared, rec.prepared)) {
 		// The statement id is already bound to a different envelope. A retry may
 		// not swap the SQL/target/kind/signer/JWS/payload under a reused id and
 		// ride the originally prepared unsafe write; fail closed.
@@ -753,6 +963,7 @@ func (o *Orchestrator) Orchestrate(ctx context.Context, adm AdmissionRecord) (In
 	// source claim root. Retryable/unknown outcomes and still-pending aborts keep
 	// the frontier held for the same reason; the holder's own retry is re-entrant.
 	releaseFrontier := runErr == nil && (res.terminal || res.Lifecycle == LifecycleRCBound)
+	res.sourceFrontierRetained = !releaseFrontier
 	o.finishAttempt(rec, res, runErr, releaseFrontier)
 	return res, runErr
 }
@@ -812,7 +1023,11 @@ func (o *Orchestrator) run(ctx context.Context, env StatementEnvelope, adm Admis
 		// A prior attempt judged this statement terminal but its abort did not
 		// complete. Reuse the cached candidate; re-run only the abort.
 		if o.isPrepareKnownUnwritten(rec) {
-			return o.abortTerminalPrepareReject(ctx, o.resultFor(rec), rec, rec.abortReason)
+			res := o.resultFor(rec)
+			if res.Submit.Category.RequiresAbort() {
+				return o.abortKnownUnwrittenTerminal(ctx, res, rec, res.Submit, rec.abortReason)
+			}
+			return o.abortTerminalPrepareReject(ctx, res, rec, rec.abortReason)
 		}
 		return o.abort(ctx, o.resultFor(rec), rec, rec.abortReason)
 
@@ -874,8 +1089,11 @@ func (o *Orchestrator) run(ctx context.Context, env StatementEnvelope, adm Admis
 					// concurrently returned terminal Submit outcome is still
 					// authoritative. Resolve that outcome through the ordinary
 					// terminal empty-abort path instead of resetting it for retry.
+					// The pre-write classification means no exact candidate proof
+					// is needed, but the Submit outcome must be durable so an abort
+					// or terminal-journal retry remains terminal across restart.
 					if submitErr == nil && s.Category.RequiresAbort() {
-						return o.abort(ctx, res, rec, s.Reason)
+						return o.abortKnownUnwrittenTerminal(ctx, res, rec, s, s.Reason)
 					}
 					return o.abortTerminalPrepareReject(ctx, res, rec, prepareErr.Error())
 				}
@@ -885,16 +1103,16 @@ func (o *Orchestrator) run(ctx context.Context, env StatementEnvelope, adm Admis
 				o.mu.Lock()
 				rec.requirePreparedLookup = true
 				o.mu.Unlock()
-				return IntakeResult{StatementID: env.StatementID, Submit: s}, fmt.Errorf("intake: prepare failed for %s: %w", env.StatementID, prepareErr)
+				return IntakeResult{StatementID: env.StatementID, Submit: s, sourceWritePossible: true}, fmt.Errorf("intake: prepare failed for %s: %w", env.StatementID, prepareErr)
 			}
 			// Prepare succeeded: cache it so any retry never re-runs the unsafe
 			// write, even if submit errored or is non-terminal below.
 			if err := o.cachePrepared(ctx, rec, p); err != nil {
-				return IntakeResult{StatementID: env.StatementID, Prepared: p}, err
+				return IntakeResult{StatementID: env.StatementID, Prepared: p, sourceWritePossible: true}, err
 			}
 			prepared = p
 			if submitErr != nil {
-				return IntakeResult{StatementID: env.StatementID, Prepared: p}, fmt.Errorf("intake: submit failed for %s: %w", env.StatementID, submitErr)
+				return IntakeResult{StatementID: env.StatementID, Prepared: p, sourceWritePossible: true}, fmt.Errorf("intake: submit failed for %s: %w", env.StatementID, submitErr)
 			}
 			submit = s
 		}
@@ -938,6 +1156,19 @@ func (o *Orchestrator) prepareAndSubmit(ctx context.Context, env StatementEnvelo
 func (o *Orchestrator) afterSubmit(ctx context.Context, env StatementEnvelope, prepared PreparedLocalResult, submit SubmitOutcome, rec *intakeRecord) (bool, IntakeResult, error) {
 	res := o.resultFor(rec)
 	res.Submit = submit
+	// Candidate coordinates are the authority for a destructive abort. Validate
+	// their exact logical table binding before inspecting the submit category, so
+	// even a terminal reject cannot turn a malformed/colliding physical alias
+	// into permission to delete another statement's part. An untrusted candidate
+	// keeps the source frontier fenced for operator/source reconciliation.
+	reason := preparedCandidateConsistencyReject(env, prepared)
+	if rec.adm.TouchedPartitionIDs != nil {
+		reason = preparedCandidateConsistencyReject(env, prepared, rec.adm.TouchedPartitionIDs)
+	}
+	if reason != "" {
+		res.Reason = reason
+		return true, res, fmt.Errorf("intake: prepared candidate consistency failed for %s: %s", env.StatementID, reason)
+	}
 
 	// Terminal submit reject: abort the exact prepared candidate, no ACK2.
 	if submit.Category.RequiresAbort() {
@@ -991,6 +1222,17 @@ func (o *Orchestrator) registerAndFinish(ctx context.Context, env StatementEnvel
 	// category (Accepted vs ExactIdempotent), not a synthesized one, and the ACK2
 	// gate reads the same authoritative value on both paths.
 	res := o.resultFor(rec)
+	o.mu.Lock()
+	beforeRegisterClaim := o.beforeRegisterClaim
+	o.mu.Unlock()
+	if beforeRegisterClaim != nil {
+		if err := beforeRegisterClaim(ctx, res); err != nil {
+			// No RC or ACK2 ran, so this statement retains the source frontier.
+			// Its same-ID retry re-enters and retries the idempotent candidate bind
+			// before any queued statement can prepare or abort that exact part.
+			return res, err
+		}
+	}
 
 	claim, claimErr := o.preparer.RegisterPreparedClaim(ctx, env.StatementID)
 	if claimErr != nil {
@@ -1093,6 +1335,61 @@ func (o *Orchestrator) abort(ctx context.Context, res IntakeResult, rec *intakeR
 		return res, err
 	}
 	parts := o.abortParts(rec)
+	o.mu.Lock()
+	beforeCleanup := o.beforeExactCleanup
+	o.mu.Unlock()
+	if beforeCleanup != nil {
+		if err := beforeCleanup(ctx, res); err != nil {
+			// No cleanup ran, so AbortPending remains durable and the source
+			// frontier stays fenced. The same-ID retry re-enters to obtain proof.
+			return res, err
+		}
+	}
+	if err := o.preparer.AbortPreparedStatement(ctx, res.StatementID, parts, reason); err != nil {
+		return res, fmt.Errorf("intake: abort failed for %s (%s): %w", res.StatementID, reason, err)
+	}
+	res.Lifecycle = LifecycleCleaned
+	res.terminal = true
+	o.mu.Lock()
+	afterCleanup := o.afterExactCleanup
+	o.mu.Unlock()
+	var cleanupProofErr error
+	if afterCleanup != nil {
+		cleanupProofErr = afterCleanup(ctx, res)
+	}
+	if cleanupProofErr != nil {
+		// Source cleanup is idempotently complete, but keep the durable record at
+		// AbortPending until inventory proof succeeds. The current statement keeps
+		// the source frontier as a fail-closed fence; its same-ID retry is re-entrant
+		// and re-runs only abort+proof, while queued statements cannot prepare.
+		res.Lifecycle = LifecycleAbortPending
+		res.terminal = false
+		return res, cleanupProofErr
+	}
+	if err := o.setTerminal(ctx, rec, res); err != nil {
+		return res, err
+	}
+	o.releasePayloadLease(rec)
+	return res, nil
+}
+
+// abortKnownUnwrittenTerminal resolves the rare concurrent outcome where the
+// source proves Prepare rejected before any write while Arbiter independently
+// returns a terminal Submit rejection. The terminal Submit is authoritative,
+// but there are no exact candidates to inventory or clean. Persist both facts,
+// run the source's idempotent empty abort, and release the payload lease only
+// after the terminal journal record is durable.
+func (o *Orchestrator) abortKnownUnwrittenTerminal(ctx context.Context, res IntakeResult, rec *intakeRecord, submit SubmitOutcome, reason string) (IntakeResult, error) {
+	res.Ack2 = false
+	res.Submit = submit
+	res.Lifecycle = LifecycleAbortPending
+	if err := o.setKnownUnwrittenTerminalAbortPending(ctx, rec, submit, reason); err != nil {
+		return res, err
+	}
+	parts := o.abortParts(rec)
+	if len(parts) != 0 {
+		return res, fmt.Errorf("intake: known-unwritten terminal abort for %s unexpectedly has %d candidate parts", res.StatementID, len(parts))
+	}
 	if err := o.preparer.AbortPreparedStatement(ctx, res.StatementID, parts, reason); err != nil {
 		return res, fmt.Errorf("intake: abort failed for %s (%s): %w", res.StatementID, reason, err)
 	}
@@ -1149,7 +1446,7 @@ func (o *Orchestrator) releasePayloadLease(rec *intakeRecord) {
 func (o *Orchestrator) resultFor(rec *intakeRecord) IntakeResult {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	res := IntakeResult{StatementID: rec.statementID}
+	res := IntakeResult{StatementID: rec.statementID, sourceWritePossible: rec.hasPrepared}
 	if rec.hasPrepared {
 		res.Prepared = rec.prepared
 		res.Lifecycle = rec.prepared.Lifecycle
@@ -1238,6 +1535,32 @@ func (o *Orchestrator) setPrepareRejectAbortPending(ctx context.Context, rec *in
 	return nil
 }
 
+// setKnownUnwrittenTerminalAbortPending durably combines the source's
+// no-write proof with the concurrent authoritative terminal Submit outcome.
+// A retry can therefore re-run only the empty abort and terminal publication;
+// it may neither require candidate inventory nor reopen Prepare.
+func (o *Orchestrator) setKnownUnwrittenTerminalAbortPending(ctx context.Context, rec *intakeRecord, submit SubmitOutcome, reason string) error {
+	o.mu.Lock()
+	snap := journalRecordFromIntakeRecord(rec)
+	snap.Stage = LifecycleAbortPending
+	snap.AbortReason = reason
+	snap.PrepareKnownUnwritten = true
+	snap.Submit = submit
+	snap.HasSubmit = true
+	o.mu.Unlock()
+	if err := o.saveJournalSnapshot(ctx, snap); err != nil {
+		return err
+	}
+	o.mu.Lock()
+	rec.stage = LifecycleAbortPending
+	rec.abortReason = reason
+	rec.prepareKnownUnwritten = true
+	rec.submit = submit
+	rec.hasSubmit = true
+	o.mu.Unlock()
+	return nil
+}
+
 // resetAfterPrepareReject makes a successfully cleaned pre-write rejection
 // retryable while retaining durable evidence that no lookup fence is needed.
 func (o *Orchestrator) resetAfterPrepareReject(ctx context.Context, rec *intakeRecord) error {
@@ -1293,19 +1616,31 @@ func (o *Orchestrator) clearPrepareKnownUnwritten(ctx context.Context, rec *inta
 }
 
 func (o *Orchestrator) setTerminal(ctx context.Context, rec *intakeRecord, res IntakeResult) error {
+	o.journalWriteMu.Lock()
+	defer o.journalWriteMu.Unlock()
+
 	o.mu.Lock()
 	snap := journalRecordFromIntakeRecord(rec)
+	snap.JournalVersion = terminalIntakeJournalVersion(rec)
 	snap.Stage = res.Lifecycle
 	snap.IsTerminal = true
 	snap.TerminalResult = cloneIntakeResult(res)
+	snap.Admission.Payload = nil
+	normalizeTerminalJournalRecord(&snap)
+	terminalVersion := snap.JournalVersion
 	o.mu.Unlock()
-	if err := o.saveJournalSnapshot(ctx, snap); err != nil {
-		return err
+	if o.journal != nil {
+		if err := o.journal.SaveIntakeRecord(ctx, snap); err != nil {
+			return fmt.Errorf("intake: persist journal for %s: %w", snap.StatementID, err)
+		}
 	}
 	o.mu.Lock()
+	rec.journalVersion = terminalVersion
 	rec.stage = res.Lifecycle
 	rec.isTerminal = true
 	rec.terminalRes = res
+	rec.adm.Payload = nil
+	rec.adm.TouchedPartitionIDs = cloneStringsPreserveNil(snap.Admission.TouchedPartitionIDs)
 	o.mu.Unlock()
 	return nil
 }
@@ -1327,39 +1662,80 @@ func (o *Orchestrator) ensureJournalRecovered(ctx context.Context) error {
 			o.mu.Unlock()
 			return nil
 		}
-		if o.journalRecovering {
-			done := o.journalRecoveryDone
+		if attempt := o.journalRecovery; attempt != nil {
+			done := attempt.done
 			o.mu.Unlock()
 			select {
 			case <-done:
-				continue
+				if attempt.err != nil {
+					return fmt.Errorf("intake: recover journal: %w", attempt.err)
+				}
+				return nil
 			case <-ctx.Done():
 				return ctx.Err()
 			}
 		}
-		o.journalRecovering = true
-		o.journalRecoveryDone = make(chan struct{})
-		done := o.journalRecoveryDone
+		attempt := &journalRecoveryAttempt{done: make(chan struct{})}
+		o.journalRecovery = attempt
 		o.mu.Unlock()
 
 		records, err := o.journal.ListIntakeRecords(ctx)
 		if err == nil {
+			for _, record := range records {
+				if versionErr := validateIntakeJournalVersion(record); versionErr != nil {
+					err = versionErr
+					break
+				}
+			}
+		}
+		if err == nil {
 			records, err = o.normalizeRecoveredFrontierOrdinals(ctx, records)
+		}
+		if err == nil {
+			records, err = o.compactRecoveredTerminalPayloads(ctx, records)
 		}
 
 		o.mu.Lock()
 		if err == nil {
+			o.recoveredJournal = cloneIntakeJournalRecords(records)
 			o.recoverJournalRecordsLocked(records)
 			o.journalRecovered = true
 		}
-		o.journalRecovering = false
-		close(done)
+		attempt.err = err
+		if o.journalRecovery == attempt {
+			o.journalRecovery = nil
+		}
+		close(attempt.done)
 		o.mu.Unlock()
 		if err != nil {
 			return fmt.Errorf("intake: recover journal: %w", err)
 		}
 		return nil
 	}
+}
+
+func (o *Orchestrator) compactRecoveredTerminalPayloads(ctx context.Context, records []IntakeJournalRecord) ([]IntakeJournalRecord, error) {
+	for idx := range records {
+		if !records[idx].IsTerminal {
+			continue
+		}
+		changed := false
+		if len(records[idx].Admission.Payload) != 0 {
+			records[idx].Admission.Payload = nil
+			changed = true
+		}
+		if normalizeTerminalJournalRecord(&records[idx]) {
+			changed = true
+		}
+		if !changed {
+			continue
+		}
+		records[idx].UpdatedAtUnixMS = time.Now().UnixMilli()
+		if err := o.journal.SaveIntakeRecord(ctx, records[idx]); err != nil {
+			return nil, fmt.Errorf("intake: compact recovered terminal payload for %s: %w", records[idx].StatementID, err)
+		}
+	}
+	return records, nil
 }
 
 func (o *Orchestrator) normalizeRecoveredFrontierOrdinals(ctx context.Context, records []IntakeJournalRecord) ([]IntakeJournalRecord, error) {
@@ -1491,10 +1867,255 @@ func (o *Orchestrator) saveJournalSnapshot(ctx context.Context, snap IntakeJourn
 	if o.journal == nil {
 		return nil
 	}
+	o.journalWriteMu.Lock()
+	defer o.journalWriteMu.Unlock()
+	o.mu.Lock()
+	if rec := o.records[snap.StatementID]; rec != nil {
+		if rec.isTerminal {
+			// A snapshot captured before terminal publication may wait behind the
+			// terminal journal write. Never let it overwrite the monotonic durable
+			// outcome after the write lock becomes available.
+			snap = journalRecordFromIntakeRecord(rec)
+		} else {
+			snap.Admission.TouchedPartitionIDs = cloneStringsPreserveNil(rec.adm.TouchedPartitionIDs)
+			snap.ObservedCandidateParts = cloneCandidateParts(rec.observedCandidateParts)
+		}
+	}
+	if snap.IsTerminal {
+		snap.Admission.Payload = nil
+	}
+	o.mu.Unlock()
 	if err := o.journal.SaveIntakeRecord(ctx, snap); err != nil {
 		return fmt.Errorf("intake: persist journal for %s: %w", snap.StatementID, err)
 	}
 	return nil
+}
+
+// PersistRecoveredTouchedPartitions binds the payload-derived partition set to
+// a recovered statement before runtime admission state is restored. Recovery
+// later compacts terminal payload bytes, so this fact must reach the journal
+// before a resumed statement can become ACK2. Legacy terminal records use the
+// same seam to persist candidate-derived partitions without upgrading their
+// observation version; exact inventory proof performs that upgrade separately.
+func (o *Orchestrator) PersistRecoveredTouchedPartitions(ctx context.Context, statementID string, partitionIDs []string) error {
+	if o == nil || statementID == "" {
+		return errors.New("intake: recovered touched partitions require a statement id")
+	}
+	if partitionIDs == nil {
+		return fmt.Errorf("intake: recovered statement %s has no known touched partition set", statementID)
+	}
+	seen := make(map[string]struct{}, len(partitionIDs))
+	for _, partitionID := range partitionIDs {
+		if partitionID == "" {
+			return fmt.Errorf("intake: recovered statement %s has an empty touched partition", statementID)
+		}
+		if _, duplicate := seen[partitionID]; duplicate {
+			return fmt.Errorf("intake: recovered statement %s repeats touched partition %s", statementID, partitionID)
+		}
+		seen[partitionID] = struct{}{}
+	}
+	partitions := append([]string{}, partitionIDs...)
+
+	o.journalWriteMu.Lock()
+	defer o.journalWriteMu.Unlock()
+
+	o.mu.Lock()
+	rec := o.records[statementID]
+	if rec != nil && rec.adm.TouchedPartitionIDs != nil && !equalStrings(rec.adm.TouchedPartitionIDs, partitions) {
+		o.mu.Unlock()
+		return fmt.Errorf("intake: recovered statement %s changed touched partitions", statementID)
+	}
+	recoveredIdx := -1
+	for idx := range o.recoveredJournal {
+		if o.recoveredJournal[idx].StatementID != statementID {
+			continue
+		}
+		recoveredIdx = idx
+		if existing := o.recoveredJournal[idx].Admission.TouchedPartitionIDs; existing != nil && !equalStrings(existing, partitions) {
+			o.mu.Unlock()
+			return fmt.Errorf("intake: recovered statement %s changed touched partitions", statementID)
+		}
+		break
+	}
+	if rec == nil && recoveredIdx < 0 {
+		o.mu.Unlock()
+		return fmt.Errorf("intake: recovered statement %s is unavailable", statementID)
+	}
+	var snap IntakeJournalRecord
+	if rec != nil {
+		snap = journalRecordFromIntakeRecord(rec)
+	} else {
+		snap = cloneIntakeJournalRecords(o.recoveredJournal[recoveredIdx : recoveredIdx+1])[0]
+	}
+	snap.Admission.TouchedPartitionIDs = cloneStringsPreserveNil(partitions)
+	if snap.IsTerminal && legacyJournalMigrationComplete(snap.Admission.TouchedPartitionIDs, snap.Prepared.CandidateParts, snap.ObservedCandidateParts) {
+		snap.JournalVersion = currentIntakeJournalVersion
+	}
+	o.mu.Unlock()
+
+	if o.journal != nil {
+		if err := o.journal.SaveIntakeRecord(ctx, snap); err != nil {
+			return fmt.Errorf("intake: persist recovered touched partitions for %s: %w", statementID, err)
+		}
+	}
+
+	// Publish only the state proven durable above. In particular, a failed
+	// legacy-terminal migration must leave the in-memory discriminator missing
+	// so the next recovery attempt retries the write instead of skipping it.
+	o.mu.Lock()
+	if rec := o.records[statementID]; rec != nil {
+		rec.adm.TouchedPartitionIDs = cloneStringsPreserveNil(partitions)
+		if rec.isTerminal && legacyJournalMigrationComplete(rec.adm.TouchedPartitionIDs, rec.prepared.CandidateParts, rec.observedCandidateParts) {
+			rec.journalVersion = currentIntakeJournalVersion
+		}
+	}
+	for idx := range o.recoveredJournal {
+		if o.recoveredJournal[idx].StatementID != statementID {
+			continue
+		}
+		o.recoveredJournal[idx].Admission.TouchedPartitionIDs = cloneStringsPreserveNil(partitions)
+		if o.recoveredJournal[idx].IsTerminal &&
+			legacyJournalMigrationComplete(
+				o.recoveredJournal[idx].Admission.TouchedPartitionIDs,
+				o.recoveredJournal[idx].Prepared.CandidateParts,
+				o.recoveredJournal[idx].ObservedCandidateParts,
+			) {
+			o.recoveredJournal[idx].JournalVersion = currentIntakeJournalVersion
+		}
+		break
+	}
+	o.mu.Unlock()
+	return nil
+}
+
+// MarkCandidateObserved durably records one exact candidate that a successful
+// local inventory proved active. Restart may charge an unobserved+absent
+// finalized candidate as delayed visibility, while observed+absent is safe to
+// retire as historical cleanup.
+func (o *Orchestrator) MarkCandidateObserved(ctx context.Context, statementID string, candidate CandidatePart) error {
+	if o == nil || statementID == "" {
+		return errors.New("intake: observed candidate requires a statement id")
+	}
+	o.journalWriteMu.Lock()
+	defer o.journalWriteMu.Unlock()
+
+	o.mu.Lock()
+	if rec := o.records[statementID]; rec != nil {
+		if !candidatePartIn(candidate, rec.prepared.CandidateParts) {
+			o.mu.Unlock()
+			return fmt.Errorf("intake: observed candidate %s is not prepared for %s", candidate.PartName, statementID)
+		}
+		if candidatePartIn(candidate, rec.observedCandidateParts) {
+			o.mu.Unlock()
+			return nil
+		}
+		observed := append(cloneCandidateParts(rec.observedCandidateParts), candidate)
+		snap := journalRecordFromIntakeRecord(rec)
+		snap.ObservedCandidateParts = cloneCandidateParts(observed)
+		if rec.isTerminal {
+			snap.Admission.Payload = nil
+		}
+		o.mu.Unlock()
+		if o.journal == nil {
+			o.mu.Lock()
+			rec.observedCandidateParts = observed
+			if legacyJournalMigrationComplete(rec.adm.TouchedPartitionIDs, rec.prepared.CandidateParts, observed) {
+				rec.journalVersion = currentIntakeJournalVersion
+			}
+			o.mu.Unlock()
+			return nil
+		}
+		// A terminal save from an older writer may already be durable even if
+		// this observation captured the pre-publish memory view. Merge the
+		// monotonic terminal facts before appending the marker so a refresh can
+		// never resurrect a pending RCBound record or its compacted payload.
+		if durable, ok, err := o.journal.LoadIntakeRecord(ctx, statementID); err != nil {
+			return fmt.Errorf("intake: load durable observation base for %s: %w", statementID, err)
+		} else if ok && durable.IsTerminal {
+			snap = durable
+			snap.ObservedCandidateParts = cloneCandidateParts(observed)
+			snap.Admission.Payload = nil
+		}
+		if legacyJournalMigrationComplete(snap.Admission.TouchedPartitionIDs, snap.Prepared.CandidateParts, snap.ObservedCandidateParts) {
+			snap.JournalVersion = currentIntakeJournalVersion
+		}
+		if err := o.journal.SaveIntakeRecord(ctx, snap); err != nil {
+			return fmt.Errorf("intake: persist observed candidate for %s: %w", statementID, err)
+		}
+		o.mu.Lock()
+		rec.observedCandidateParts = observed
+		rec.journalVersion = snap.JournalVersion
+		o.updateRecoveredObservationLocked(statementID, candidate)
+		o.mu.Unlock()
+		return nil
+	}
+	o.mu.Unlock()
+	if o.journal == nil {
+		return fmt.Errorf("intake: observed candidate statement %s is unknown", statementID)
+	}
+	record, ok, err := o.journal.LoadIntakeRecord(ctx, statementID)
+	if err != nil {
+		return fmt.Errorf("intake: load observed candidate statement %s: %w", statementID, err)
+	}
+	if !ok || !candidatePartIn(candidate, record.Prepared.CandidateParts) {
+		return fmt.Errorf("intake: observed candidate %s is not prepared for %s", candidate.PartName, statementID)
+	}
+	if candidatePartIn(candidate, record.ObservedCandidateParts) {
+		return nil
+	}
+	record.ObservedCandidateParts = append(record.ObservedCandidateParts, candidate)
+	if legacyJournalMigrationComplete(record.Admission.TouchedPartitionIDs, record.Prepared.CandidateParts, record.ObservedCandidateParts) {
+		record.JournalVersion = currentIntakeJournalVersion
+	}
+	record.UpdatedAtUnixMS = time.Now().UnixMilli()
+	if record.IsTerminal {
+		record.Admission.Payload = nil
+	}
+	if err := o.journal.SaveIntakeRecord(ctx, record); err != nil {
+		return fmt.Errorf("intake: persist observed candidate for %s: %w", statementID, err)
+	}
+	o.mu.Lock()
+	o.updateRecoveredObservationLocked(statementID, candidate)
+	o.mu.Unlock()
+	return nil
+}
+
+func allCandidatePartsObserved(candidates, observed []CandidatePart) bool {
+	for _, candidate := range candidates {
+		if !candidatePartIn(candidate, observed) {
+			return false
+		}
+	}
+	return true
+}
+
+func legacyJournalMigrationComplete(touchedPartitions []string, candidates, observed []CandidatePart) bool {
+	return len(candidates) == 0 || (touchedPartitions != nil && allCandidatePartsObserved(candidates, observed))
+}
+
+func (o *Orchestrator) updateRecoveredObservationLocked(statementID string, candidate CandidatePart) {
+	for idx := range o.recoveredJournal {
+		if o.recoveredJournal[idx].StatementID != statementID {
+			continue
+		}
+		if !candidatePartIn(candidate, o.recoveredJournal[idx].ObservedCandidateParts) {
+			o.recoveredJournal[idx].ObservedCandidateParts = append(o.recoveredJournal[idx].ObservedCandidateParts, candidate)
+		}
+		if o.recoveredJournal[idx].IsTerminal {
+			o.recoveredJournal[idx].Admission.Payload = nil
+		}
+		break
+	}
+}
+
+func candidatePartIn(candidate CandidatePart, candidates []CandidatePart) bool {
+	key := candidateCoordinateKey(candidate)
+	for _, current := range candidates {
+		if candidateCoordinateKey(current) == key {
+			return true
+		}
+	}
+	return false
 }
 
 // rankLifecycle orders the linear success stages so setStage never regresses.
@@ -1651,6 +2272,53 @@ func (o *Orchestrator) preparedConsistencyReject(env StatementEnvelope, prepared
 		// The source must decode with exactly the pinned client revision.
 		if prepared.Revision == 0 || prepared.Revision != env.Revision {
 			return "payload revision mismatch"
+		}
+	}
+	return preparedCandidateConsistencyReject(env, prepared)
+}
+
+func preparedCandidateConsistencyReject(env StatementEnvelope, prepared PreparedLocalResult, touchedPartitionIDs ...[]string) string {
+	var candidatePartitions map[string]struct{}
+	if len(touchedPartitionIDs) != 0 {
+		candidatePartitions = make(map[string]struct{}, len(prepared.CandidateParts))
+	}
+	for _, candidate := range prepared.CandidateParts {
+		if candidate.TableID == "" || candidate.TableID != env.TargetTableID {
+			return "candidate table mismatch"
+		}
+		if candidate.PartitionID == "" {
+			return "candidate has no partition_id"
+		}
+		if candidate.PartName == "" {
+			return "candidate has no part_name"
+		}
+		if candidatePartitions != nil {
+			if _, duplicate := candidatePartitions[candidate.PartitionID]; duplicate {
+				return "candidate partition is duplicated"
+			}
+			candidatePartitions[candidate.PartitionID] = struct{}{}
+		}
+	}
+	if len(touchedPartitionIDs) != 0 {
+		expected := make(map[string]struct{}, len(touchedPartitionIDs[0]))
+		for _, partitionID := range touchedPartitionIDs[0] {
+			if partitionID == "" {
+				return "touched candidate partition is empty"
+			}
+			if _, duplicate := expected[partitionID]; duplicate {
+				return "touched candidate partition is duplicated"
+			}
+			expected[partitionID] = struct{}{}
+		}
+		for partitionID := range candidatePartitions {
+			if _, ok := expected[partitionID]; !ok {
+				return "candidate partition was not touched by the payload"
+			}
+		}
+		for partitionID := range expected {
+			if _, ok := candidatePartitions[partitionID]; !ok {
+				return "candidate partition is missing for touched payload partition"
+			}
 		}
 	}
 	return ""

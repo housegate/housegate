@@ -42,6 +42,66 @@ func TestStorageIntegrityIngressConfig_RequiresNetworkID(t *testing.T) {
 	}
 }
 
+func TestStorageIntegrityBackpressureDefaults(t *testing.T) {
+	bp := Default().StorageIntegrity.Runtime.Backpressure
+	if !bp.Enabled || bp.UnsafeDatabase != "hg_unsafe" || bp.SafeDatabase != "hg_safe" {
+		t.Fatalf("defaults = %+v", bp)
+	}
+	if bp.PollInterval.Duration != 2*time.Second || bp.SoftPartsPerPartition != 2400 || bp.HardPartsPerPartition != 2950 {
+		t.Fatalf("defaults = %+v", bp)
+	}
+}
+
+func TestConfigValidateStorageIntegrityBackpressure(t *testing.T) {
+	valid := func(t *testing.T) *Config {
+		cfg := storageIntegrityRuntimeConfigFixture(t)
+		cfg.StorageIntegrity.Runtime.Backpressure = StorageIntegrityRuntimeBackpressureConfig{
+			Enabled: true, UnsafeDatabase: "hg_unsafe", SafeDatabase: "hg_safe",
+			PollInterval: Duration{Duration: 2 * time.Second}, SoftPartsPerPartition: 2400, HardPartsPerPartition: 2950,
+		}
+		return &cfg
+	}
+	if err := valid(t).Validate(); err != nil {
+		t.Fatalf("valid runtime config: %v", err)
+	}
+	cases := map[string]struct {
+		mutate func(*Config)
+		want   string
+	}{
+		"soft must be positive":   {func(c *Config) { c.StorageIntegrity.Runtime.Backpressure.SoftPartsPerPartition = 0 }, "backpressure.soft_parts_per_partition"},
+		"hard must exceed soft":   {func(c *Config) { c.StorageIntegrity.Runtime.Backpressure.HardPartsPerPartition = 2400 }, "backpressure.hard_parts_per_partition"},
+		"hard below pinned throw": {func(c *Config) { c.StorageIntegrity.Runtime.Backpressure.HardPartsPerPartition = 3000 }, "backpressure.hard_parts_per_partition"},
+		"poll interval positive":  {func(c *Config) { c.StorageIntegrity.Runtime.Backpressure.PollInterval.Duration = 0 }, "backpressure.poll_interval"},
+		"unsafe database required": {func(c *Config) {
+			c.StorageIntegrity.Runtime.Backpressure.UnsafeDatabase = " "
+		}, "backpressure.unsafe_database"},
+		"safe database required": {func(c *Config) {
+			c.StorageIntegrity.Runtime.Backpressure.SafeDatabase = " "
+		}, "backpressure.safe_database"},
+		"safe and unsafe databases differ": {func(c *Config) {
+			c.StorageIntegrity.Runtime.Backpressure.SafeDatabase = c.StorageIntegrity.Runtime.Backpressure.UnsafeDatabase
+		}, "backpressure.safe_database must differ"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			cfg := valid(t)
+			tc.mutate(cfg)
+			err := cfg.Validate()
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Validate err = %v, want %q", err, tc.want)
+			}
+		})
+	}
+	t.Run("disabled skips limit validation", func(t *testing.T) {
+		cfg := valid(t)
+		cfg.StorageIntegrity.Runtime.Backpressure.Enabled = false
+		cfg.StorageIntegrity.Runtime.Backpressure.SoftPartsPerPartition = 0
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("disabled backpressure must not validate limits: %v", err)
+		}
+	})
+}
+
 func TestConfigValidateStorageIntegrityIngress(t *testing.T) {
 	base := minimalServerConfig(t)
 	base.StorageIntegrity.Ingress.Enabled = true
