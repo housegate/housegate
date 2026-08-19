@@ -209,6 +209,7 @@ storage_integrity:
 | `agent.mode` | bool | No | `false` | Enable agent mode |
 | `agent.upstream` | string | Conditional | `` | Pinned server-side proxy address (e.g. `10.0.0.8:9001`). **Either** this **or** a top-level `network_state.source` must be set. When unset, agent auto-discovers a server-mode peer per session via NetworkState (see [§Agent auto-discovery](#agent-auto-discovery)). |
 | `agent.private_key_hex` | string | Yes (agent) | `` | Agent's Ethereum private key for JWS signing. Prefer `HOUSEGATE_AGENT_KEY` env or an age-encrypted config over a plaintext file. |
+| `agent.owner` | string | No | `` | Optional billed owner represented by the signing key. Auto-discovery uses this owner (lowercased for the registry lookup) when set, while JWS signing continues to use `agent.private_key_hex`; otherwise discovery uses the signer address. |
 
 ### `usage` — Billing / Usage Reporting
 
@@ -637,8 +638,8 @@ The `ForwardAware` marker mirrors `PeerTrustAware` (default-on, opt-out). Plugin
 When `agent.upstream` is empty, [`pkg/plugins/agent.Selector`](pkg/plugins/agent/upstream_select.go) picks a server-mode peer per session via a two-tier algorithm against `network_state.source`:
 
 ```
-account = derive_address(agent.private_key_hex)
-perms   = NetworkState.RetrieveDatabasePermissions(account)
+routing_account = lower(agent.owner) when set, otherwise derive_address(agent.private_key_hex)
+perms           = NetworkState.RetrieveDatabasePermissions(routing_account)
 
 permissioned = indexers hosting at least one DB in `perms` AND with a non-zero ClickhouseProxyPort
 bound        = any indexer with a non-zero ClickhouseProxyPort
@@ -652,7 +653,7 @@ default:                     return error("no bound indexers")
 
 **Bootstrap fallback.** A brand-new account has no permissions on any database — by construction, because they haven't created one yet. Failing the connection at dial time would lock new users out of `CREATE DATABASE` (chicken-and-egg). When `permissioned` is empty but `bound` is non-empty, the Selector picks a random bound indexer anyway; their first `CREATE DATABASE` lands there, `commitgate` registers the new DB in NetworkState, and subsequent sessions resolve correctly.
 
-The bootstrap path emits a warn log and increments the `clickhouse_proxy_agent_bootstrap_fallback_total` Prometheus counter so operators can spot accounts that should not be in the bootstrap path.
+The owner/signer choice affects routing only: query JWS tokens are always signed by `agent.private_key_hex`, and `agent.owner` remains the billed payer carried on the wire. The bootstrap path emits a warn log and increments the `clickhouse_proxy_agent_bootstrap_fallback_total` Prometheus counter so operators can spot routing accounts that should not be in the bootstrap path.
 
 Random selection across the chosen tier balances load and gives free failover (the next session re-rolls). A pinned `agent.upstream` still works as an explicit override.
 

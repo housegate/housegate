@@ -56,8 +56,8 @@ Production runs many server-mode housegates side by side, one per indexer. A age
 
 The `ForwardAware` marker mirrors `PeerTrustAware` (default-on, opt-out): plugins that should fire on the *originating* proxy regardless (auth, metrics, concurrency, usage, sessionstate, credential) implement `RunOnForward()=true`; plugins that belong to the *host* proxy (rewrite, commitgate) implement `RunOnForward()=false`.
 
-**d) Agent auto-discovery via NetworkState.** Agents no longer need a pinned `agent.upstream`; setting `network_state.source` instead lets `pkg/plugins/agent.Selector` pick a server-mode proxy per session. The two-tier algorithm reads `RetrieveDatabasePermissions(account)` against `RetrieveAllIndexerInfos()`:
-1. **Permissioned tier** — random pick across indexers hosting at least one DB the agent's account has perms on (the normal path).
+**d) Agent auto-discovery via NetworkState.** Agents no longer need a pinned `agent.upstream`; setting `network_state.source` instead lets `pkg/plugins/agent.Selector` pick a server-mode proxy per session. Its routing account is the lowercase `agent.owner` when configured, otherwise the private-key-derived signer address. This precedence affects only NetworkState selection: the operator key still signs every JWS and the original owner value remains the billed payer. The two-tier algorithm reads `RetrieveDatabasePermissions(routingAccount)` against `RetrieveAllIndexerInfos()`:
+1. **Permissioned tier** — random pick across indexers hosting at least one DB the routing account has perms on (the normal path).
 2. **Bootstrap tier** — random pick across any bound indexer when tier 1 is empty. Covers brand-new accounts that have not run their first `CREATE DATABASE` yet (chicken-and-egg). Emits warn log + `clickhouse_proxy_agent_bootstrap_fallback_total` so operators can spot accounts that should not be in the bootstrap path.
 Once the agent lands on *any* server proxy, that proxy's `forward.Plugin` handles the rest via (c) above. A pinned `agent.upstream` still works as an explicit override.
 

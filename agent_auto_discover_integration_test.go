@@ -16,21 +16,25 @@ package housegate
 //      configured, an explicit address overrides the Selector path.
 
 import (
+	"bytes"
 	"context"
 	"io"
+	"log/slog"
 	"net"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ClickHouse/ch-go/proto"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/housegate/housegate/pkg/auth"
 	"github.com/housegate/housegate/pkg/chproto"
 	"github.com/housegate/housegate/pkg/config"
+	housegatelog "github.com/housegate/housegate/pkg/log"
 	"github.com/housegate/housegate/pkg/network"
 	agentcfg "github.com/housegate/housegate/pkg/plugins/agent"
-	"github.com/housegate/housegate/pkg/proxy"
 	"github.com/housegate/housegate/pkg/registry"
 )
 
@@ -112,6 +116,36 @@ func codecRemoteAddr(c *chproto.Codec) string {
 	return ""
 }
 
+func agentBootstrapFallbackCount(t *testing.T) float64 {
+	t.Helper()
+	mfs, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		t.Fatalf("prometheus.Gather: %v", err)
+	}
+	for _, mf := range mfs {
+		if mf.GetName() != "clickhouse_proxy_agent_bootstrap_fallback_total" {
+			continue
+		}
+		var sum float64
+		for _, metric := range mf.GetMetric() {
+			if counter := metric.GetCounter(); counter != nil {
+				sum += counter.GetValue()
+			}
+		}
+		return sum
+	}
+	return 0
+}
+
+func captureAgentBuildLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	previous := housegatelog.Default()
+	housegatelog.SetDefault(housegatelog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { housegatelog.SetDefault(previous) })
+	return &buf
+}
+
 func TestAgentAutoDiscover_PermissionedTier(t *testing.T) {
 	addrA := startFakeIndexerProxy(t)
 	addrB := startFakeIndexerProxy(t)
@@ -145,17 +179,9 @@ func TestAgentAutoDiscover_PermissionedTier(t *testing.T) {
 		t.Fatalf("expected 1 listener, got %d", len(bs.listeners))
 	}
 
-	// Reach the dialer through the Server. The Server exposes its dialer
-	// via the public Dial method since the codec it returns is the
-	// upstream we care about. Without that, run the dialer logic
-	// directly via the package-private helper.
-	dialer, err := buildAgentDialer(Options{
-		Config:       cfg,
-		NetworkState: ns,
-	}, nil, account, proxy.NewMetricsObserver())
-	if err != nil {
-		t.Fatalf("buildAgentDialer: %v", err)
-	}
+	// Exercise the dialer installed by buildAgent so this also locks the
+	// empty-owner fallback to the signer account.
+	dialer := requireProxyServer(t, bs.listeners[0]).UpstreamDialer
 
 	const trials = 30
 	hits := map[string]int{}
@@ -181,6 +207,68 @@ func TestAgentAutoDiscover_PermissionedTier(t *testing.T) {
 	}
 }
 
+func TestAgentAutoDiscover_OwnerAccountWinsOverSigner(t *testing.T) {
+	addrOwner := startFakeIndexerProxy(t)
+	addrSigner := startFakeIndexerProxy(t)
+
+	signer, err := auth.NewRelaySigner(testRelayKeyHex)
+	if err != nil {
+		t.Fatalf("NewRelaySigner: %v", err)
+	}
+	const (
+		owner                  = "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa"
+		ownerRegistryLookupKey = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	)
+
+	ns := network.NewInMemoryNetworkState()
+	ns.IndexerInfos[1] = indexerInfoForAddr(t, 1, addrOwner)
+	ns.IndexerInfos[2] = indexerInfoForAddr(t, 2, addrSigner)
+	ns.DatabaseInfos["ownerDB"] = network.DatabaseInfo{DatabaseId: "ownerDB", IndexerId: 1}
+	ns.DatabaseInfos["signerDB"] = network.DatabaseInfo{DatabaseId: "signerDB", IndexerId: 2}
+	ns.DatabasePermissions[network.AccountAddress(ownerRegistryLookupKey)] = network.DatabasePermissions{
+		"ownerDB": registry.DbAuthRead,
+	}
+	ns.DatabasePermissions[network.AccountAddress(signer.Address())] = network.DatabasePermissions{
+		"signerDB": registry.DbAuthRead,
+	}
+
+	cfg := minimalAgentCfgAutoDiscover(t)
+	cfg.Agent.Owner = owner
+	logs := captureAgentBuildLogs(t)
+	bs, err := buildAgent(Options{
+		Config:       cfg,
+		NetworkState: ns,
+		Signer:       signer,
+	}, nil)
+	if err != nil {
+		t.Fatalf("buildAgent: %v", err)
+	}
+	defer bs.teardown()
+
+	dialer := requireProxyServer(t, bs.listeners[0]).UpstreamDialer
+	bootstrapBefore := agentBootstrapFallbackCount(t)
+	codec, err := dialer(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("dial owner-permissioned upstream: %v", err)
+	}
+	defer func() {
+		if conn, ok := codec.Conn().(net.Conn); ok {
+			_ = conn.Close()
+		}
+	}()
+
+	if got := codecRemoteAddr(codec); got != addrOwner {
+		t.Fatalf("owner routing account selected %s, want owner-permissioned %s (signer-permissioned %s)", got, addrOwner, addrSigner)
+	}
+	if delta := agentBootstrapFallbackCount(t) - bootstrapBefore; delta != 0 {
+		t.Fatalf("owner routing fell back to bootstrap; counter delta=%v", delta)
+	}
+	if out := logs.String(); !strings.Contains(out, "signer_address="+signer.Address()) ||
+		!strings.Contains(out, "routing_account="+ownerRegistryLookupKey) {
+		t.Fatalf("auto-discovery log does not distinguish signer and routing account: %s", out)
+	}
+}
+
 func TestAgentAutoDiscover_BootstrapTier_NoPerms(t *testing.T) {
 	addrA := startFakeIndexerProxy(t)
 	addrB := startFakeIndexerProxy(t)
@@ -189,8 +277,6 @@ func TestAgentAutoDiscover_BootstrapTier_NoPerms(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRelaySigner: %v", err)
 	}
-	account := signer.Address()
-
 	ns := network.NewInMemoryNetworkState()
 	ns.IndexerInfos[1] = indexerInfoForAddr(t, 1, addrA)
 	ns.IndexerInfos[2] = indexerInfoForAddr(t, 2, addrB)
@@ -207,13 +293,7 @@ func TestAgentAutoDiscover_BootstrapTier_NoPerms(t *testing.T) {
 	}
 	defer bs.teardown()
 
-	dialer, err := buildAgentDialer(Options{
-		Config:       cfg,
-		NetworkState: ns,
-	}, nil, account, proxy.NewMetricsObserver())
-	if err != nil {
-		t.Fatalf("buildAgentDialer: %v", err)
-	}
+	dialer := requireProxyServer(t, bs.listeners[0]).UpstreamDialer
 
 	// Use a fairly high trial count so randomness almost certainly hits
 	// both indexers at least once. Probability of skipping either over
@@ -252,13 +332,13 @@ func TestAgentAutoDiscover_ExplicitUpstreamOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRelaySigner: %v", err)
 	}
-	account := signer.Address()
-
 	ns := network.NewInMemoryNetworkState()
 	ns.IndexerInfos[1] = indexerInfoForAddr(t, 1, addrIndexer)
 
 	cfg := minimalAgentCfgAutoDiscover(t)
 	cfg.Agent.Upstream = addrUpstream
+	cfg.Agent.Owner = "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa"
+	logs := captureAgentBuildLogs(t)
 
 	bs, err := buildAgent(Options{
 		Config:       cfg,
@@ -270,13 +350,7 @@ func TestAgentAutoDiscover_ExplicitUpstreamOverride(t *testing.T) {
 	}
 	defer bs.teardown()
 
-	dialer, err := buildAgentDialer(Options{
-		Config:       cfg,
-		NetworkState: ns,
-	}, nil, account, proxy.NewMetricsObserver())
-	if err != nil {
-		t.Fatalf("buildAgentDialer: %v", err)
-	}
+	dialer := requireProxyServer(t, bs.listeners[0]).UpstreamDialer
 
 	const trials = 10
 	hits := map[string]int{}
@@ -294,6 +368,13 @@ func TestAgentAutoDiscover_ExplicitUpstreamOverride(t *testing.T) {
 
 	if hits[addrUpstream] != trials {
 		t.Errorf("expected all %d dials on explicit upstream %s, got %v", trials, addrUpstream, hits)
+	}
+	out := logs.String()
+	if !strings.Contains(out, "signer_address="+signer.Address()) {
+		t.Fatalf("explicit-upstream log omits signer identity: %s", out)
+	}
+	if strings.Contains(out, "routing_account=") {
+		t.Fatalf("explicit-upstream log reports unused routing identity: %s", out)
 	}
 }
 
