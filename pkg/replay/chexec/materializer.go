@@ -180,7 +180,7 @@ func (m *Materializer) readBack(ctx context.Context, table string, schema payloa
 		}
 		values := make([]any, len(schema.Columns))
 		for i := range schema.Columns {
-			v, err := derefScan(holders[i])
+			v, err := derefScan(schema.Columns[i].Type, holders[i])
 			if err != nil {
 				return nil, err
 			}
@@ -270,7 +270,7 @@ func newScanDest(typeName string) (any, error) {
 	}
 }
 
-func derefScan(p any) (any, error) {
+func derefScan(typeName string, p any) (any, error) {
 	switch v := p.(type) {
 	case *string:
 		return *v, nil
@@ -286,7 +286,19 @@ func derefScan(p any) (any, error) {
 	case *float64:
 		return *v, nil
 	case *time.Time:
-		return *v, nil
+		switch {
+		case typeName == "Date":
+			// clickhouse-go preserves Date's calendar day but relocates its
+			// midnight into the server/user timezone. Rebuild that calendar
+			// value at UTC midnight so Date's day commitment is independent
+			// of the executor session timezone and matches nativepayload.
+			year, month, day := v.Date()
+			return time.Date(year, month, day, 0, 0, 0, 0, time.UTC), nil
+		case typeName == "DateTime", strings.HasPrefix(typeName, "DateTime("), strings.HasPrefix(typeName, "DateTime64("):
+			return v.UTC(), nil
+		default:
+			return nil, fmt.Errorf("chexec: unexpected time.Time destination for column type %q", typeName)
+		}
 	case *uint8:
 		return *v, nil
 	case *uint16:

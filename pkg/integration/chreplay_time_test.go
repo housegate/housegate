@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ClickHouse/ch-go/proto"
+	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 
 	"github.com/housegate/housegate/pkg/lthash"
 	"github.com/housegate/housegate/pkg/replay"
@@ -16,6 +17,11 @@ import (
 
 func TestReplayCHExecutorNativeTemporalScalarsMatchInProcessRoot(t *testing.T) {
 	conn := openDirectCH(t)
+	shanghai, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatalf("load non-UTC test location: %v", err)
+	}
+	ctx := clickhouse.Context(context.Background(), clickhouse.WithUserLocation(shanghai))
 	tableID := uniqueTable(t)
 	schema := payloadexec.TableSchema{
 		TableID: tableID,
@@ -60,7 +66,7 @@ func TestReplayCHExecutorNativeTemporalScalarsMatchInProcessRoot(t *testing.T) {
 	job.Statements[0].PayloadFormat = nativepayload.PayloadFormat
 	job.Statements[0].ClientRevision = 54460
 	prepared := []replay.PreparedStatement{{Statement: job.Statements[0], Payload: payload}}
-	_, chRes, err := chE.ApplyContext(context.Background(), genCH, job, prepared)
+	_, chRes, err := chE.ApplyContext(ctx, genCH, job, prepared)
 	if err != nil {
 		t.Fatalf("chexec temporal Native: %v", err)
 	}
