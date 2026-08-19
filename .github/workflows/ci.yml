@@ -94,7 +94,13 @@ jobs:
           tests/bin/clickhouse --version
 
       - name: Fetch rewriter FFI lib
-        run: echo "POLYGLOT_SQL_FFI_PATH=$(bazel run //cmd:housegate -- fetch-rewriter-lib --tag v0.7.1 2>/dev/null | tail -1)" >> "$GITHUB_ENV"
+        shell: bash
+        run: |
+          set -euo pipefail
+          ffi_path="$(bazel run //cmd:housegate -- fetch-rewriter-lib --tag v0.7.1 | tail -n 1)"
+          test -n "$ffi_path"
+          test -s "$ffi_path"
+          echo "POLYGLOT_SQL_FFI_PATH=$ffi_path" >> "$GITHUB_ENV"
 
       # Integration targets are tagged `manual` so plain `bazel test //...`
       # leaves them alone (docker-less environments would fail). Listing
