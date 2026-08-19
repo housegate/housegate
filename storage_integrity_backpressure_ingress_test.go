@@ -37,6 +37,19 @@ type fakePartsPressure struct {
 	observedHook         func(context.Context, string, sicore.CandidatePart) error
 }
 
+type boundClaimStatusQuerier struct {
+	claimCalls int
+}
+
+func (q *boundClaimStatusQuerier) QuerySubmitStatus(context.Context, string) (sicore.SubmitOutcome, error) {
+	return sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}, nil
+}
+
+func (q *boundClaimStatusQuerier) QueryClaimStatus(context.Context, string) (sicore.ClaimOutcome, error) {
+	q.claimCalls++
+	return sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"}, nil
+}
+
 func (f *fakePartsPressure) ReserveStatement(_ context.Context, _ string, table string, partitionIDs []string) (sicore.PartsReservation, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -922,6 +935,59 @@ func TestIngress_LegacyFinalizedActiveCandidateMigratesObservationAndPartitions(
 	probe.Release()
 }
 
+func TestIngress_LegacyFinalizedKnownEmptyPartitionsRejectsCandidate(t *testing.T) {
+	ctx := context.Background()
+	journal, err := sicore.NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	owner := AdmissionRecordFromPlugin(bpEUAdmission())
+	owner.TouchedPartitionIDs = []string{}
+	env, err := sicore.EnvelopeFromAdmission(owner)
+	if err != nil {
+		t.Fatalf("EnvelopeFromAdmission: %v", err)
+	}
+	candidate := sicore.CandidatePart{TableID: owner.TableID, PartitionID: "p_eu", PartName: "eu_part_1"}
+	prepared := sicore.PreparedLocalResult{
+		StatementID: owner.StatementID, SourceNode: "snode-A",
+		PayloadRef: env.PayloadRef, PayloadHash: env.PayloadHash, PayloadLength: env.PayloadLength,
+		PayloadEncoding: env.PayloadEncoding, Revision: env.Revision,
+		CandidateParts: []sicore.CandidatePart{candidate}, Lifecycle: sicore.LifecycleUnsafeWritten,
+	}
+	if err := journal.SaveIntakeRecord(ctx, sicore.IntakeJournalRecord{
+		StatementID: owner.StatementID, Source: "snode-A", FrontierOrdinal: 1,
+		Env: env, Admission: owner, Stage: sicore.LifecycleRCBound,
+		Prepared: prepared, HasPrepared: true,
+		TerminalResult: sicore.IntakeResult{
+			StatementID: owner.StatementID, Ack2: true, Lifecycle: sicore.LifecycleRCBound,
+			Prepared: prepared,
+		},
+		IsTerminal: true,
+	}); err != nil {
+		t.Fatalf("SaveIntakeRecord: %v", err)
+	}
+	pressure := sicore.NewPartsPressureGuard(
+		&rootPartsConn{rows: []rootPartsRow{{"hg_unsafe", "net1__events", "eu", "region", 1}}},
+		sicore.PartsPressureConfig{
+			UnsafeDatabase: "hg_unsafe", SafeDatabase: "hg_safe",
+			SoftPartsPerPartition: 3, HardPartsPerPartition: 5,
+		},
+	)
+	restarted := sicore.NewOrchestrator(
+		&rootRecordingSubmitter{}, &rootRecordingPreparer{source: "snode-A"},
+		sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
+	)
+	ingress, err := NewStorageIntegrityIngress(restarted, nil, sicore.MaterializerCSV)
+	if err != nil {
+		t.Fatalf("NewStorageIntegrityIngress: %v", err)
+	}
+	ingress.WithPartsPressure(pressure, bpSchemaResolver())
+	err = ingress.RecoverPending(ctx)
+	if err == nil || !strings.Contains(err.Error(), "candidate partition \"p_eu\" was not touched") {
+		t.Fatalf("RecoverPending error=%v, want known-empty candidate mismatch", err)
+	}
+}
+
 func TestIngress_LegacyFinalizedObservedCandidateMigratesWithoutCurrentPart(t *testing.T) {
 	ctx := context.Background()
 	journal, err := sicore.NewFileIntakeJournal(t.TempDir())
@@ -1254,6 +1320,74 @@ func TestIngress_RecoveredPendingPersistsTouchedPartitionsBeforeTerminalCompacti
 	}
 }
 
+func TestIngress_RecoveredPendingKnownEmptyPartitionsConvergesWithoutCapacity(t *testing.T) {
+	ctx := context.Background()
+	journal, err := sicore.NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	adm := bpAdmission()
+	adm.StatementID = "0xabc:2:n1"
+	payload := []byte("id,region\n")
+	adm.Payload.Bytes = payload
+	adm.Payload.Length = uint64(len(payload))
+
+	newGuard := func() *sicore.PartsPressureGuard {
+		return sicore.NewPartsPressureGuard(&rootPartsConn{}, sicore.PartsPressureConfig{
+			UnsafeDatabase: "hg_unsafe", SafeDatabase: "hg_safe",
+			SoftPartsPerPartition: 2, HardPartsPerPartition: 4,
+		})
+	}
+	first := sicore.NewOrchestrator(
+		&rootRecordingSubmitter{outcome: sicore.SubmitOutcome{Category: sicore.OutcomeRetryable, Reason: "NotLeader"}},
+		&rootRecordingPreparer{
+			source: "snode-A",
+			claim:  sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"},
+		},
+		sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
+	)
+	firstIngress, err := NewStorageIntegrityIngressWithPayloadWriter(
+		first, nil, sicore.MaterializerCSV,
+		&rootRecordingPayloadWriter{result: sicore.PayloadPutResult{
+			PayloadRef: "payload://store/zero-row", State: sicore.PayloadStateAvailable,
+		}},
+	)
+	if err != nil {
+		t.Fatalf("NewStorageIntegrityIngressWithPayloadWriter first: %v", err)
+	}
+	firstIngress.WithPartsPressure(newGuard(), bpSchemaResolver())
+	if err := firstIngress.ConsumeStorageIntegrityAdmission(ctx, adm); err == nil || !strings.Contains(err.Error(), "did not reach ACK2") {
+		t.Fatalf("retryable seed error=%v, want durable non-ACK2", err)
+	}
+
+	restarted := sicore.NewOrchestrator(
+		&rootRecordingSubmitter{outcome: sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}},
+		&rootRecordingPreparer{
+			source: "snode-A",
+			claim:  sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"},
+		},
+		sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
+	)
+	restartedIngress, err := NewStorageIntegrityIngress(restarted, nil, sicore.MaterializerCSV)
+	if err != nil {
+		t.Fatalf("NewStorageIntegrityIngress restarted: %v", err)
+	}
+	restartedIngress.WithPartsPressure(newGuard(), bpSchemaResolver())
+	if err := restartedIngress.RecoverPending(ctx); err != nil {
+		t.Fatalf("RecoverPending: %v", err)
+	}
+	persisted, ok, err := journal.LoadIntakeRecord(ctx, adm.StatementID)
+	if err != nil || !ok {
+		t.Fatalf("LoadIntakeRecord=(%+v, %v, %v)", persisted, ok, err)
+	}
+	if !persisted.IsTerminal || !persisted.TerminalResult.Ack2 {
+		t.Fatalf("zero-row recovery terminal=%v ack2=%v, want ACK2", persisted.IsTerminal, persisted.TerminalResult.Ack2)
+	}
+	if persisted.Admission.TouchedPartitionIDs == nil || len(persisted.Admission.TouchedPartitionIDs) != 0 {
+		t.Fatalf("zero-row touched partitions=%v, want non-nil empty", persisted.Admission.TouchedPartitionIDs)
+	}
+}
+
 func TestIngress_RecoveredTouchedPartitionPersistenceFailsBeforePressureRestore(t *testing.T) {
 	ctx := context.Background()
 	persistErr := errors.New("persist recovered touched partitions")
@@ -1308,6 +1442,190 @@ func TestIngress_RecoveredTouchedPartitionPersistenceFailsBeforePressureRestore(
 	pressure.mu.Unlock()
 	if restoreBatches != 1 || submitter.calls != 1 {
 		t.Fatalf("successful retry restore/submit calls=%d/%d, want 1/1", restoreBatches, submitter.calls)
+	}
+}
+
+func TestIngress_LegacyTerminalTouchedPersistenceFailureRetriesDurably(t *testing.T) {
+	ctx := context.Background()
+	persistErr := errors.New("persist legacy terminal touched partitions")
+	journal := &failTouchedPartitionSaveJournal{
+		countingIntakeJournal: &countingIntakeJournal{},
+		err:                   persistErr,
+	}
+	adm := AdmissionRecordFromPlugin(bpEUAdmission())
+	env, err := sicore.EnvelopeFromAdmission(adm)
+	if err != nil {
+		t.Fatalf("EnvelopeFromAdmission: %v", err)
+	}
+	candidate := sicore.CandidatePart{TableID: adm.TableID, PartitionID: "p_eu", PartName: "eu_part_2"}
+	prepared := sicore.PreparedLocalResult{
+		StatementID: adm.StatementID, SourceNode: "snode-A",
+		PayloadRef: env.PayloadRef, PayloadHash: env.PayloadHash, PayloadLength: env.PayloadLength,
+		PayloadEncoding: env.PayloadEncoding, Revision: env.Revision,
+		CandidateParts: []sicore.CandidatePart{candidate}, Lifecycle: sicore.LifecycleUnsafeWritten,
+	}
+	if err := journal.SaveIntakeRecord(ctx, sicore.IntakeJournalRecord{
+		StatementID: adm.StatementID, Source: "snode-A", FrontierOrdinal: 1,
+		Env: env, Admission: adm, Stage: sicore.LifecycleRCBound,
+		Prepared: prepared, HasPrepared: true,
+		TerminalResult: sicore.IntakeResult{
+			StatementID: adm.StatementID, Ack2: true, Lifecycle: sicore.LifecycleRCBound,
+			Prepared: prepared,
+		},
+		IsTerminal: true,
+	}); err != nil {
+		t.Fatalf("SaveIntakeRecord: %v", err)
+	}
+
+	newGuard := func() *sicore.PartsPressureGuard {
+		return sicore.NewPartsPressureGuard(
+			&rootPartsConn{rows: []rootPartsRow{{"hg_unsafe", "net1__events", "eu", "region", 2}}},
+			sicore.PartsPressureConfig{
+				UnsafeDatabase: "hg_unsafe", SafeDatabase: "hg_safe",
+				SoftPartsPerPartition: 4, HardPartsPerPartition: 6,
+			},
+		)
+	}
+	orch := sicore.NewOrchestrator(
+		&rootRecordingSubmitter{}, &rootRecordingPreparer{source: "snode-A"},
+		sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
+	)
+	ingress, err := NewStorageIntegrityIngress(orch, nil, sicore.MaterializerCSV)
+	if err != nil {
+		t.Fatalf("NewStorageIntegrityIngress: %v", err)
+	}
+	ingress.WithPartsPressure(newGuard(), bpSchemaResolver())
+	journal.fail = true
+	if err := ingress.RecoverPending(ctx); !errors.Is(err, persistErr) {
+		t.Fatalf("first RecoverPending error=%v, want %v", err, persistErr)
+	}
+	journal.fail = false
+	if err := ingress.RecoverPending(ctx); err != nil {
+		t.Fatalf("RecoverPending retry: %v", err)
+	}
+	persisted, ok, err := journal.LoadIntakeRecord(ctx, adm.StatementID)
+	if err != nil || !ok {
+		t.Fatalf("LoadIntakeRecord=(%+v, %v, %v)", persisted, ok, err)
+	}
+	if persisted.JournalVersion == 0 || !reflect.DeepEqual(persisted.Admission.TouchedPartitionIDs, []string{"p_eu"}) || !candidatePartIn(candidate, persisted.ObservedCandidateParts) {
+		t.Fatalf("durable migration version=%d touched=%v observed=%+v", persisted.JournalVersion, persisted.Admission.TouchedPartitionIDs, persisted.ObservedCandidateParts)
+	}
+
+	second := sicore.NewOrchestrator(
+		&rootRecordingSubmitter{}, &rootRecordingPreparer{source: "snode-A"},
+		sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
+	)
+	secondIngress, err := NewStorageIntegrityIngress(second, nil, sicore.MaterializerCSV)
+	if err != nil {
+		t.Fatalf("NewStorageIntegrityIngress second: %v", err)
+	}
+	secondIngress.WithPartsPressure(newGuard(), bpSchemaResolver())
+	if err := secondIngress.RecoverPending(ctx); err != nil {
+		t.Fatalf("second restart RecoverPending: %v", err)
+	}
+}
+
+func TestIngress_RecoveryRejectsMalformedPreparedBindingBeforeClaimStatusConvergence(t *testing.T) {
+	ctx := context.Background()
+	journal, err := sicore.NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	adm := AdmissionRecordFromPlugin(bpAdmission())
+	env, err := sicore.EnvelopeFromAdmission(adm)
+	if err != nil {
+		t.Fatalf("EnvelopeFromAdmission: %v", err)
+	}
+	prepared := sicore.PreparedLocalResult{
+		StatementID: adm.StatementID, SourceNode: "snode-A",
+		PayloadRef: env.PayloadRef, PayloadHash: env.PayloadHash, PayloadLength: env.PayloadLength,
+		PayloadEncoding: env.PayloadEncoding, Revision: env.Revision,
+		CandidateParts: []sicore.CandidatePart{{
+			TableID: adm.TableID, PartitionID: "p_eu", PartName: "eu_part_1",
+		}},
+		Lifecycle: sicore.LifecycleUnsafeWritten,
+	}
+	if err := journal.SaveIntakeRecord(ctx, sicore.IntakeJournalRecord{
+		StatementID: adm.StatementID, Source: "snode-A", FrontierOrdinal: 1,
+		Env: env, Admission: adm, Stage: sicore.LifecycleSubmitAccepted,
+		Prepared: prepared, HasPrepared: true,
+		Submit: sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}, HasSubmit: true,
+		ClaimUnknown: true,
+	}); err != nil {
+		t.Fatalf("SaveIntakeRecord: %v", err)
+	}
+	querier := &boundClaimStatusQuerier{}
+	orch := sicore.NewOrchestratorWithQuerier(
+		&rootRecordingSubmitter{}, &rootRecordingPreparer{source: "snode-A"}, querier,
+		sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
+	)
+	pressure := &fakePartsPressure{}
+	ingress, err := NewStorageIntegrityIngress(orch, nil, sicore.MaterializerCSV)
+	if err != nil {
+		t.Fatalf("NewStorageIntegrityIngress: %v", err)
+	}
+	ingress.WithPartsPressure(pressure, bpSchemaResolver())
+	err = ingress.RecoverPending(ctx)
+	if err == nil || !strings.Contains(err.Error(), "candidate partition \"p_us\" is missing") {
+		t.Fatalf("RecoverPending error=%v, want touched/candidate binding failure", err)
+	}
+	if querier.claimCalls != 0 {
+		t.Fatalf("malformed recovery queried claim status %d times, want 0", querier.claimCalls)
+	}
+	persisted, ok, loadErr := journal.LoadIntakeRecord(ctx, adm.StatementID)
+	if loadErr != nil || !ok {
+		t.Fatalf("LoadIntakeRecord=(%+v, %v, %v)", persisted, ok, loadErr)
+	}
+	if persisted.IsTerminal {
+		t.Fatal("malformed recovered candidate binding reached terminal ACK2")
+	}
+}
+
+func TestIngress_SchemaOnlyRecoveryRejectsMalformedPreparedBindingBeforeClaimStatusConvergence(t *testing.T) {
+	ctx := context.Background()
+	journal, err := sicore.NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	adm := AdmissionRecordFromPlugin(bpAdmission())
+	env, err := sicore.EnvelopeFromAdmission(adm)
+	if err != nil {
+		t.Fatalf("EnvelopeFromAdmission: %v", err)
+	}
+	prepared := sicore.PreparedLocalResult{
+		StatementID: adm.StatementID, SourceNode: "snode-A",
+		PayloadRef: env.PayloadRef, PayloadHash: env.PayloadHash, PayloadLength: env.PayloadLength,
+		PayloadEncoding: env.PayloadEncoding, Revision: env.Revision,
+		CandidateParts: []sicore.CandidatePart{{
+			TableID: adm.TableID, PartitionID: "p_eu", PartName: "eu_part_1",
+		}},
+		Lifecycle: sicore.LifecycleUnsafeWritten,
+	}
+	if err := journal.SaveIntakeRecord(ctx, sicore.IntakeJournalRecord{
+		StatementID: adm.StatementID, Source: "snode-A", FrontierOrdinal: 1,
+		Env: env, Admission: adm, Stage: sicore.LifecycleSubmitAccepted,
+		Prepared: prepared, HasPrepared: true,
+		Submit: sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}, HasSubmit: true,
+		ClaimUnknown: true,
+	}); err != nil {
+		t.Fatalf("SaveIntakeRecord: %v", err)
+	}
+	querier := &boundClaimStatusQuerier{}
+	orch := sicore.NewOrchestratorWithQuerier(
+		&rootRecordingSubmitter{}, &rootRecordingPreparer{source: "snode-A"}, querier,
+		sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
+	)
+	ingress, err := NewStorageIntegrityIngress(orch, nil, sicore.MaterializerCSV)
+	if err != nil {
+		t.Fatalf("NewStorageIntegrityIngress: %v", err)
+	}
+	ingress.WithTableSchemas(bpSchemaResolver())
+	err = ingress.RecoverPending(ctx)
+	if err == nil || !strings.Contains(err.Error(), "candidate partition \"p_us\" is missing") {
+		t.Fatalf("RecoverPending error=%v, want schema-only touched/candidate binding failure", err)
+	}
+	if querier.claimCalls != 0 {
+		t.Fatalf("malformed schema-only recovery queried claim status %d times, want 0", querier.claimCalls)
 	}
 }
 

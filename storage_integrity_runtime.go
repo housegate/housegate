@@ -148,6 +148,7 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 	}
 	ingress.leaseManager = leaseManager
 	ingress.mergeRunner = mergeGuard
+	ingress.WithTableSchemas(runtimeTableSchemaResolver(opts.TableSchemas))
 	if backpressure := runtimeCfg.Backpressure; backpressure.Enabled {
 		unsafeDatabase := strings.TrimSpace(backpressure.UnsafeDatabase)
 		safeDatabase := strings.TrimSpace(backpressure.SafeDatabase)
@@ -188,6 +189,17 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 		ingress.WithPartsPressure(pressure, opts.SchemaResolver)
 	}
 	return ingress, mergeGuard, nil
+}
+
+func runtimeTableSchemaResolver(schemas []payloadexec.TableSchema) sicore.TableSchemaResolver {
+	byID := make(map[string]payloadexec.TableSchema, len(schemas))
+	for _, schema := range schemas {
+		byID[schema.TableID] = schema
+	}
+	return sicore.TableSchemaResolverFunc(func(tableID string) (payloadexec.TableSchema, bool) {
+		schema, ok := byID[tableID]
+		return schema, ok
+	})
 }
 
 func startStorageIntegrityRuntime(ctx context.Context, runtime *StorageIntegrityIngress, guard StorageIntegrityMergeGuard) error {

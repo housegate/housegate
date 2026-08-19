@@ -172,6 +172,14 @@ func (i *StorageIntegrityIngress) WithPartsPressure(pressure StorageIntegrityPar
 	i.orch.SetAfterExactCleanup(i.afterExactCleanup)
 }
 
+// WithTableSchemas binds the authoritative schema resolver even when parts
+// pressure is disabled. Candidate validation still needs the payload-derived
+// touched partition set; disabling admission pressure only skips reservation.
+func (i *StorageIntegrityIngress) WithTableSchemas(schemas sicore.TableSchemaResolver) {
+	i.schemas = schemas
+	i.orch.SetBeforeRecovery(i.restorePressureReservations)
+}
+
 func (i *StorageIntegrityIngress) bindPreparedCandidates(_ context.Context, res sicore.IntakeResult) error {
 	tracked, ok := i.trackedPressureReservation(res.StatementID)
 	if !ok {
@@ -249,7 +257,7 @@ func validatePressureCandidateBinding(statementID, tableID string, touchedPartit
 }
 
 func (i *StorageIntegrityIngress) restorePressureReservations(ctx context.Context, records []sicore.IntakeJournalRecord) error {
-	if i.pressure == nil {
+	if i.pressure == nil && i.schemas == nil {
 		return nil
 	}
 	restoreRecords := make([]sicore.PartsRestoreRecord, 0, len(records))
@@ -262,10 +270,11 @@ func (i *StorageIntegrityIngress) restorePressureReservations(ctx context.Contex
 			return fmt.Errorf("storage_integrity ingress: terminal ACK2 statement %s has no prepared result", record.StatementID)
 		}
 		var (
-			table      string
-			partitions []string
-			candidates []sicore.CandidatePart
-			err        error
+			table                   string
+			partitions              []string
+			candidates              []sicore.CandidatePart
+			legacyMissingPartitions bool
+			err                     error
 		)
 		if record.HasPrepared {
 			candidates = record.Prepared.CandidateParts
@@ -275,27 +284,30 @@ func (i *StorageIntegrityIngress) restorePressureReservations(ctx context.Contex
 		}
 		if record.IsTerminal {
 			table = sicore.PhysicalTableName(record.Admission.TableID)
-			partitions = append([]string(nil), record.Admission.TouchedPartitionIDs...)
-			legacyMissingPartitions := len(partitions) == 0 && record.JournalVersion == 0 && len(candidates) > 0
+			partitions = clonePartitionIDs(record.Admission.TouchedPartitionIDs)
+			legacyMissingPartitions = partitions == nil && record.JournalVersion == 0 && len(candidates) > 0
 			if legacyMissingPartitions {
 				// The observation-unaware development journal predates the durable
 				// payload-derived set. It may only migrate when exact active names
 				// provide the proof enforced by RestoreBatch below.
 				partitions = candidatePartitionIDs(candidates)
 			}
-			if err := validatePressureCandidateBinding(record.StatementID, record.Admission.TableID, partitions, candidates); err != nil {
-				return err
-			}
-			if legacyMissingPartitions {
-				if err := i.orch.PersistRecoveredTouchedPartitions(ctx, record.StatementID, partitions); err != nil {
-					return fmt.Errorf("storage_integrity ingress: migrate recovered touched partitions for %s: %w", record.StatementID, err)
-				}
-			}
 		} else {
 			table, partitions, err = i.partsPressureTarget(record.Admission)
 			if err != nil {
 				return fmt.Errorf("storage_integrity ingress: restore pressure target for %s: %w", record.StatementID, err)
 			}
+		}
+		if record.HasPrepared {
+			if err := validatePressureCandidateBinding(record.StatementID, record.Admission.TableID, partitions, candidates); err != nil {
+				return err
+			}
+		}
+		if legacyMissingPartitions {
+			if err := i.orch.PersistRecoveredTouchedPartitions(ctx, record.StatementID, partitions); err != nil {
+				return fmt.Errorf("storage_integrity ingress: migrate recovered touched partitions for %s: %w", record.StatementID, err)
+			}
+		} else if !record.IsTerminal {
 			if err := i.orch.PersistRecoveredTouchedPartitions(ctx, record.StatementID, partitions); err != nil {
 				return fmt.Errorf("storage_integrity ingress: bind recovered touched partitions for %s: %w", record.StatementID, err)
 			}
@@ -309,7 +321,10 @@ func (i *StorageIntegrityIngress) restorePressureReservations(ctx context.Contex
 			Finalized:          record.IsTerminal,
 			LegacyObservation:  record.JournalVersion == 0,
 		})
-		restoredPartitions[record.StatementID] = append([]string(nil), partitions...)
+		restoredPartitions[record.StatementID] = clonePartitionIDs(partitions)
+	}
+	if i.pressure == nil {
+		return nil
 	}
 	restored, err := i.pressure.RestoreBatch(ctx, restoreRecords)
 	if err != nil {
@@ -324,7 +339,7 @@ func (i *StorageIntegrityIngress) restorePressureReservations(ctx context.Contex
 		i.pressureReservations[record.StatementID] = trackedPartsReservation{
 			reservation: reservation,
 			tableID:     record.Admission.TableID,
-			partitions:  append([]string(nil), restoredPartitions[record.StatementID]...),
+			partitions:  clonePartitionIDs(restoredPartitions[record.StatementID]),
 		}
 	}
 	i.pressureMu.Unlock()
@@ -363,6 +378,13 @@ func candidatePartitionIDs(candidates []sicore.CandidatePart) []string {
 	return partitions
 }
 
+func clonePartitionIDs(partitionIDs []string) []string {
+	if partitionIDs == nil {
+		return nil
+	}
+	return append([]string{}, partitionIDs...)
+}
+
 func (i *StorageIntegrityIngress) finalizeRecoveredReservations() {
 	i.pressureMu.Lock()
 	restored := i.pressureReservations
@@ -378,7 +400,7 @@ func (i *StorageIntegrityIngress) cleanupProofContext(ctx context.Context) (cont
 }
 
 func (i *StorageIntegrityIngress) partsPressureTarget(rec sicore.AdmissionRecord) (string, []string, error) {
-	if i.pressure == nil {
+	if i.schemas == nil && i.pressure == nil {
 		return "", nil, nil
 	}
 	if i.schemas == nil {
@@ -464,7 +486,9 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 	if err != nil {
 		return err
 	}
-	rec.TouchedPartitionIDs = append([]string{}, partitions...)
+	if partitions != nil {
+		rec.TouchedPartitionIDs = clonePartitionIDs(partitions)
+	}
 	requiresPrepare, err := i.orch.AdmissionRequiresPrepare(ctx, rec)
 	if err != nil {
 		return fmt.Errorf("storage_integrity ingress: preflight %s: %w", rec.StatementID, err)
@@ -570,7 +594,7 @@ func (i *StorageIntegrityIngress) setPressureReservation(statementID, tableID st
 	i.pressureReservations[statementID] = trackedPartsReservation{
 		reservation: reservation,
 		tableID:     tableID,
-		partitions:  append([]string(nil), partitions...),
+		partitions:  clonePartitionIDs(partitions),
 	}
 	i.pressureMu.Unlock()
 }

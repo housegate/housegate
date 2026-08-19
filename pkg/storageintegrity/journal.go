@@ -151,8 +151,7 @@ func (j *FileIntakeJournal) ListIntakeRecords(ctx context.Context) ([]IntakeJour
 			changed = true
 		}
 		if rec.IsTerminal && rec.JournalVersion == 0 &&
-			(len(rec.Prepared.CandidateParts) == 0 ||
-				(rec.Admission.TouchedPartitionIDs != nil && allCandidatePartsObserved(rec.Prepared.CandidateParts, rec.ObservedCandidateParts))) {
+			legacyJournalMigrationComplete(rec.Admission.TouchedPartitionIDs, rec.Prepared.CandidateParts, rec.ObservedCandidateParts) {
 			rec.JournalVersion = currentIntakeJournalVersion
 			changed = true
 		}
@@ -268,6 +267,23 @@ func validateIntakeJournalVersion(rec IntakeJournalRecord) error {
 	return nil
 }
 
+func intakeJournalVersionForAdmission(adm AdmissionRecord) uint32 {
+	if adm.TouchedPartitionIDs == nil {
+		return 0
+	}
+	return currentIntakeJournalVersion
+}
+
+func terminalIntakeJournalVersion(rec *intakeRecord) uint32 {
+	if rec == nil {
+		return 0
+	}
+	if rec.adm.TouchedPartitionIDs != nil || !rec.hasPrepared || len(rec.prepared.CandidateParts) == 0 {
+		return currentIntakeJournalVersion
+	}
+	return 0
+}
+
 func journalRecordFromIntakeRecord(rec *intakeRecord) IntakeJournalRecord {
 	return IntakeJournalRecord{
 		JournalVersion:         rec.journalVersion,
@@ -318,8 +334,15 @@ func intakeRecordFromJournalRecord(rec IntakeJournalRecord) *intakeRecord {
 func cloneAdmissionRecord(in AdmissionRecord) AdmissionRecord {
 	out := in
 	out.Payload = append([]byte(nil), in.Payload...)
-	out.TouchedPartitionIDs = append([]string(nil), in.TouchedPartitionIDs...)
+	out.TouchedPartitionIDs = cloneStringsPreserveNil(in.TouchedPartitionIDs)
 	return out
+}
+
+func cloneStringsPreserveNil(in []string) []string {
+	if in == nil {
+		return nil
+	}
+	return append([]string{}, in...)
 }
 
 func clonePreparedLocalResult(in PreparedLocalResult) PreparedLocalResult {

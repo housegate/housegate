@@ -15,6 +15,35 @@ type retryThenAcceptSubmitter struct {
 	calls      int64
 }
 
+type failFirstListJournal struct {
+	base    IntakeJournal
+	err     error
+	started chan struct{}
+	release chan struct{}
+	calls   atomic.Int64
+}
+
+func (j *failFirstListJournal) LoadIntakeRecord(ctx context.Context, statementID string) (IntakeJournalRecord, bool, error) {
+	return j.base.LoadIntakeRecord(ctx, statementID)
+}
+
+func (j *failFirstListJournal) ListIntakeRecords(ctx context.Context) ([]IntakeJournalRecord, error) {
+	if j.calls.Add(1) == 1 {
+		close(j.started)
+		select {
+		case <-j.release:
+			return nil, j.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return j.base.ListIntakeRecords(ctx)
+}
+
+func (j *failFirstListJournal) SaveIntakeRecord(ctx context.Context, record IntakeJournalRecord) error {
+	return j.base.SaveIntakeRecord(ctx, record)
+}
+
 func (s *retryThenAcceptSubmitter) SubmitStatement(context.Context, StatementEnvelope) (SubmitOutcome, error) {
 	if atomic.AddInt64(&s.calls, 1) <= s.retryUntil {
 		return SubmitOutcome{Category: OutcomeRetryable, Reason: "NotLeader"}, nil
@@ -247,6 +276,47 @@ func TestRecoverPendingConcurrentRestoreFailureIsSharedByWaiters(t *testing.T) {
 	}
 	if got := calls.Load(); got != 2 {
 		t.Fatalf("runtime restore calls after independent retry=%d, want 2", got)
+	}
+}
+
+func TestRecoverPendingConcurrentJournalFailureIsSharedByWaiters(t *testing.T) {
+	base, err := NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	listErr := errors.New("journal listing unavailable")
+	journal := &failFirstListJournal{
+		base: base, err: listErr, started: make(chan struct{}), release: make(chan struct{}),
+	}
+	orch := NewOrchestrator(
+		panicSubmitter{t: t}, newLookupRecordingPreparer(boundSource()),
+		OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
+	)
+	errs := make(chan error, 2)
+	go func() { errs <- orch.RecoverPending(context.Background()) }()
+	<-journal.started
+	waiterStarted := make(chan struct{})
+	go func() {
+		close(waiterStarted)
+		errs <- orch.RecoverPending(context.Background())
+	}()
+	<-waiterStarted
+	time.Sleep(10 * time.Millisecond)
+	close(journal.release)
+	for range 2 {
+		if err := <-errs; !errors.Is(err, listErr) {
+			t.Fatalf("concurrent RecoverPending error=%v, want shared %v", err, listErr)
+		}
+	}
+	if got := journal.calls.Load(); got != 1 {
+		t.Fatalf("failed journal recovery calls=%d, want one shared attempt", got)
+	}
+
+	if err := orch.RecoverPending(context.Background()); err != nil {
+		t.Fatalf("independent retry after failed journal cohort: %v", err)
+	}
+	if got := journal.calls.Load(); got != 2 {
+		t.Fatalf("journal recovery calls after independent retry=%d, want 2", got)
 	}
 }
 

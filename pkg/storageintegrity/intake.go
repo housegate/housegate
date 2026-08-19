@@ -553,8 +553,7 @@ type Orchestrator struct {
 	nextFrontierOrdinal map[string]uint64
 
 	journalRecovered      bool
-	journalRecovering     bool
-	journalRecoveryDone   chan struct{}
+	journalRecovery       *journalRecoveryAttempt
 	recoveredJournal      []IntakeJournalRecord
 	recoveryStateRestored bool
 	recoveryStateRestore  *recoveryStateRestoreAttempt
@@ -562,6 +561,11 @@ type Orchestrator struct {
 	beforeRegisterClaim   func(context.Context, IntakeResult) error
 	beforeExactCleanup    func(context.Context, IntakeResult) error
 	afterExactCleanup     func(context.Context, IntakeResult) error
+}
+
+type journalRecoveryAttempt struct {
+	done chan struct{}
+	err  error
 }
 
 // SetBeforeRecovery installs a pre-serve hook that reconstructs runtime-owned
@@ -870,7 +874,7 @@ func (o *Orchestrator) Orchestrate(ctx context.Context, adm AdmissionRecord) (In
 		ordinal := o.nextFrontierOrdinal[source] + 1
 		o.nextFrontierOrdinal[source] = ordinal
 		rec = &intakeRecord{
-			journalVersion:  currentIntakeJournalVersion,
+			journalVersion:  intakeJournalVersionForAdmission(adm),
 			statementID:     env.StatementID,
 			source:          source,
 			frontierOrdinal: ordinal,
@@ -1529,7 +1533,8 @@ func (o *Orchestrator) setTerminal(ctx context.Context, rec *intakeRecord, res I
 
 	o.mu.Lock()
 	snap := journalRecordFromIntakeRecord(rec)
-	snap.JournalVersion = currentIntakeJournalVersion
+	terminalVersion := terminalIntakeJournalVersion(rec)
+	snap.JournalVersion = terminalVersion
 	snap.Stage = res.Lifecycle
 	snap.IsTerminal = true
 	snap.TerminalResult = cloneIntakeResult(res)
@@ -1541,7 +1546,7 @@ func (o *Orchestrator) setTerminal(ctx context.Context, rec *intakeRecord, res I
 		}
 	}
 	o.mu.Lock()
-	rec.journalVersion = currentIntakeJournalVersion
+	rec.journalVersion = terminalVersion
 	rec.stage = res.Lifecycle
 	rec.isTerminal = true
 	rec.terminalRes = res
@@ -1567,19 +1572,21 @@ func (o *Orchestrator) ensureJournalRecovered(ctx context.Context) error {
 			o.mu.Unlock()
 			return nil
 		}
-		if o.journalRecovering {
-			done := o.journalRecoveryDone
+		if attempt := o.journalRecovery; attempt != nil {
+			done := attempt.done
 			o.mu.Unlock()
 			select {
 			case <-done:
-				continue
+				if attempt.err != nil {
+					return fmt.Errorf("intake: recover journal: %w", attempt.err)
+				}
+				return nil
 			case <-ctx.Done():
 				return ctx.Err()
 			}
 		}
-		o.journalRecovering = true
-		o.journalRecoveryDone = make(chan struct{})
-		done := o.journalRecoveryDone
+		attempt := &journalRecoveryAttempt{done: make(chan struct{})}
+		o.journalRecovery = attempt
 		o.mu.Unlock()
 
 		records, err := o.journal.ListIntakeRecords(ctx)
@@ -1604,8 +1611,11 @@ func (o *Orchestrator) ensureJournalRecovered(ctx context.Context) error {
 			o.recoverJournalRecordsLocked(records)
 			o.journalRecovered = true
 		}
-		o.journalRecovering = false
-		close(done)
+		attempt.err = err
+		if o.journalRecovery == attempt {
+			o.journalRecovery = nil
+		}
+		close(attempt.done)
 		o.mu.Unlock()
 		if err != nil {
 			return fmt.Errorf("intake: recover journal: %w", err)
@@ -1780,7 +1790,7 @@ func (o *Orchestrator) saveJournalSnapshot(ctx context.Context, snap IntakeJourn
 			// outcome after the write lock becomes available.
 			snap = journalRecordFromIntakeRecord(rec)
 		} else {
-			snap.Admission.TouchedPartitionIDs = append([]string(nil), rec.adm.TouchedPartitionIDs...)
+			snap.Admission.TouchedPartitionIDs = cloneStringsPreserveNil(rec.adm.TouchedPartitionIDs)
 			snap.ObservedCandidateParts = cloneCandidateParts(rec.observedCandidateParts)
 		}
 	}
@@ -1804,8 +1814,8 @@ func (o *Orchestrator) PersistRecoveredTouchedPartitions(ctx context.Context, st
 	if o == nil || statementID == "" {
 		return errors.New("intake: recovered touched partitions require a statement id")
 	}
-	if len(partitionIDs) == 0 {
-		return fmt.Errorf("intake: recovered statement %s has no touched partitions", statementID)
+	if partitionIDs == nil {
+		return fmt.Errorf("intake: recovered statement %s has no known touched partition set", statementID)
 	}
 	seen := make(map[string]struct{}, len(partitionIDs))
 	for _, partitionID := range partitionIDs {
@@ -1844,27 +1854,15 @@ func (o *Orchestrator) PersistRecoveredTouchedPartitions(ctx context.Context, st
 		o.mu.Unlock()
 		return fmt.Errorf("intake: recovered statement %s is unavailable", statementID)
 	}
-	if rec != nil {
-		// Publish the deterministic payload fact before releasing the mutex so
-		// any concurrently captured snapshot carries it. If persistence fails,
-		// recovery remains fail-closed and the next attempt writes it again.
-		rec.adm.TouchedPartitionIDs = append([]string{}, partitions...)
-		if rec.isTerminal && allCandidatePartsObserved(rec.prepared.CandidateParts, rec.observedCandidateParts) {
-			rec.journalVersion = currentIntakeJournalVersion
-		}
-	}
-	if recoveredIdx >= 0 {
-		o.recoveredJournal[recoveredIdx].Admission.TouchedPartitionIDs = append([]string{}, partitions...)
-		if o.recoveredJournal[recoveredIdx].IsTerminal &&
-			allCandidatePartsObserved(o.recoveredJournal[recoveredIdx].Prepared.CandidateParts, o.recoveredJournal[recoveredIdx].ObservedCandidateParts) {
-			o.recoveredJournal[recoveredIdx].JournalVersion = currentIntakeJournalVersion
-		}
-	}
 	var snap IntakeJournalRecord
 	if rec != nil {
 		snap = journalRecordFromIntakeRecord(rec)
 	} else {
 		snap = cloneIntakeJournalRecords(o.recoveredJournal[recoveredIdx : recoveredIdx+1])[0]
+	}
+	snap.Admission.TouchedPartitionIDs = cloneStringsPreserveNil(partitions)
+	if snap.IsTerminal && legacyJournalMigrationComplete(snap.Admission.TouchedPartitionIDs, snap.Prepared.CandidateParts, snap.ObservedCandidateParts) {
+		snap.JournalVersion = currentIntakeJournalVersion
 	}
 	o.mu.Unlock()
 
@@ -1873,6 +1871,33 @@ func (o *Orchestrator) PersistRecoveredTouchedPartitions(ctx context.Context, st
 			return fmt.Errorf("intake: persist recovered touched partitions for %s: %w", statementID, err)
 		}
 	}
+
+	// Publish only the state proven durable above. In particular, a failed
+	// legacy-terminal migration must leave the in-memory discriminator missing
+	// so the next recovery attempt retries the write instead of skipping it.
+	o.mu.Lock()
+	if rec := o.records[statementID]; rec != nil {
+		rec.adm.TouchedPartitionIDs = cloneStringsPreserveNil(partitions)
+		if rec.isTerminal && legacyJournalMigrationComplete(rec.adm.TouchedPartitionIDs, rec.prepared.CandidateParts, rec.observedCandidateParts) {
+			rec.journalVersion = currentIntakeJournalVersion
+		}
+	}
+	for idx := range o.recoveredJournal {
+		if o.recoveredJournal[idx].StatementID != statementID {
+			continue
+		}
+		o.recoveredJournal[idx].Admission.TouchedPartitionIDs = cloneStringsPreserveNil(partitions)
+		if o.recoveredJournal[idx].IsTerminal &&
+			legacyJournalMigrationComplete(
+				o.recoveredJournal[idx].Admission.TouchedPartitionIDs,
+				o.recoveredJournal[idx].Prepared.CandidateParts,
+				o.recoveredJournal[idx].ObservedCandidateParts,
+			) {
+			o.recoveredJournal[idx].JournalVersion = currentIntakeJournalVersion
+		}
+		break
+	}
+	o.mu.Unlock()
 	return nil
 }
 
@@ -1907,7 +1932,7 @@ func (o *Orchestrator) MarkCandidateObserved(ctx context.Context, statementID st
 		if o.journal == nil {
 			o.mu.Lock()
 			rec.observedCandidateParts = observed
-			if allCandidatePartsObserved(rec.prepared.CandidateParts, observed) {
+			if legacyJournalMigrationComplete(rec.adm.TouchedPartitionIDs, rec.prepared.CandidateParts, observed) {
 				rec.journalVersion = currentIntakeJournalVersion
 			}
 			o.mu.Unlock()
@@ -1924,7 +1949,7 @@ func (o *Orchestrator) MarkCandidateObserved(ctx context.Context, statementID st
 			snap.ObservedCandidateParts = cloneCandidateParts(observed)
 			snap.Admission.Payload = nil
 		}
-		if allCandidatePartsObserved(snap.Prepared.CandidateParts, snap.ObservedCandidateParts) {
+		if legacyJournalMigrationComplete(snap.Admission.TouchedPartitionIDs, snap.Prepared.CandidateParts, snap.ObservedCandidateParts) {
 			snap.JournalVersion = currentIntakeJournalVersion
 		}
 		if err := o.journal.SaveIntakeRecord(ctx, snap); err != nil {
@@ -1952,7 +1977,7 @@ func (o *Orchestrator) MarkCandidateObserved(ctx context.Context, statementID st
 		return nil
 	}
 	record.ObservedCandidateParts = append(record.ObservedCandidateParts, candidate)
-	if allCandidatePartsObserved(record.Prepared.CandidateParts, record.ObservedCandidateParts) {
+	if legacyJournalMigrationComplete(record.Admission.TouchedPartitionIDs, record.Prepared.CandidateParts, record.ObservedCandidateParts) {
 		record.JournalVersion = currentIntakeJournalVersion
 	}
 	record.UpdatedAtUnixMS = time.Now().UnixMilli()
@@ -1975,6 +2000,10 @@ func allCandidatePartsObserved(candidates, observed []CandidatePart) bool {
 		}
 	}
 	return true
+}
+
+func legacyJournalMigrationComplete(touchedPartitions []string, candidates, observed []CandidatePart) bool {
+	return len(candidates) == 0 || (touchedPartitions != nil && allCandidatePartsObserved(candidates, observed))
 }
 
 func (o *Orchestrator) updateRecoveredObservationLocked(statementID string, candidate CandidatePart) {

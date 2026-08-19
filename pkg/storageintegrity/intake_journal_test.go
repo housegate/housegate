@@ -831,3 +831,90 @@ func TestOrchestratorRecoveryRejectsMultipleLegacyRecordsWithoutOrdinal(t *testi
 		t.Fatalf("ensureJournalRecovered err = %v, want ambiguous legacy frontier error", err)
 	}
 }
+
+func TestOrchestratorTerminalWithCandidatesAndUnknownTouchedPartitionsStaysLegacy(t *testing.T) {
+	ctx := context.Background()
+	journal, err := NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	adm := admissionFixture()
+	prepared := boundSourceWithParts()
+	prep := &recordingPreparer{
+		prepared: prepared,
+		claimOutcome: ClaimOutcome{
+			Category: OutcomeAccepted, BoundSource: "snode-A",
+		},
+	}
+	orch := NewOrchestrator(
+		&recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeAccepted}}, prep,
+		OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
+	)
+	res, err := orch.Orchestrate(ctx, adm)
+	if err != nil || !res.Ack2 {
+		t.Fatalf("Orchestrate=(%+v, %v), want ACK2", res, err)
+	}
+	persisted, ok, err := journal.LoadIntakeRecord(ctx, adm.StatementID)
+	if err != nil || !ok {
+		t.Fatalf("LoadIntakeRecord=(%+v, %v, %v)", persisted, ok, err)
+	}
+	if persisted.Admission.TouchedPartitionIDs != nil {
+		t.Fatalf("unknown touched partitions=%v, want nil", persisted.Admission.TouchedPartitionIDs)
+	}
+	if persisted.JournalVersion != 0 {
+		t.Fatalf("incomplete terminal journal version=%d, want legacy version 0", persisted.JournalVersion)
+	}
+	for _, candidate := range prepared.CandidateParts {
+		if err := orch.MarkCandidateObserved(ctx, adm.StatementID, candidate); err != nil {
+			t.Fatalf("MarkCandidateObserved(%s): %v", candidate.PartName, err)
+		}
+	}
+	persisted, ok, err = journal.LoadIntakeRecord(ctx, adm.StatementID)
+	if err != nil || !ok {
+		t.Fatalf("LoadIntakeRecord after observations=(%+v, %v, %v)", persisted, ok, err)
+	}
+	if persisted.JournalVersion != 0 {
+		t.Fatalf("observed but partition-incomplete terminal journal version=%d, want 0", persisted.JournalVersion)
+	}
+}
+
+func TestOrchestratorKnownEmptyTouchedPartitionsSurviveTerminalReplay(t *testing.T) {
+	ctx := context.Background()
+	journal, err := NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	adm := admissionFixture()
+	adm.TouchedPartitionIDs = []string{}
+	first := NewOrchestrator(
+		&recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeAccepted}},
+		&recordingPreparer{
+			prepared: boundSource(),
+			claimOutcome: ClaimOutcome{
+				Category: OutcomeAccepted, BoundSource: "snode-A",
+			},
+		},
+		OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
+	)
+	if res, err := first.Orchestrate(ctx, adm); err != nil || !res.Ack2 {
+		t.Fatalf("first Orchestrate=(%+v, %v), want ACK2", res, err)
+	}
+	persisted, ok, err := journal.LoadIntakeRecord(ctx, adm.StatementID)
+	if err != nil || !ok {
+		t.Fatalf("LoadIntakeRecord=(%+v, %v, %v)", persisted, ok, err)
+	}
+	if persisted.Admission.TouchedPartitionIDs == nil || len(persisted.Admission.TouchedPartitionIDs) != 0 {
+		t.Fatalf("persisted known-empty touched partitions=%v, want non-nil empty", persisted.Admission.TouchedPartitionIDs)
+	}
+	if persisted.JournalVersion == 0 {
+		t.Fatal("known-complete zero-candidate terminal retained legacy journal version")
+	}
+
+	restarted := NewOrchestrator(
+		panicSubmitter{t: t}, newLookupRecordingPreparer(boundSource()),
+		OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
+	)
+	if res, err := restarted.Orchestrate(ctx, adm); err != nil || !res.Ack2 {
+		t.Fatalf("terminal replay=(%+v, %v), want cached ACK2", res, err)
+	}
+}

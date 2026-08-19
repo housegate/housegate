@@ -805,6 +805,17 @@ func TestPartsPressureGuard_RestoreBatchConflictRollsBackEarlierRecords(t *testi
 	if got := len(guard.candidateClaims[key]); got != 1 {
 		t.Fatalf("failed batch changed finalized owner claims=%d, want 1", got)
 	}
+	if _, ok := guard.Snapshot(); ok {
+		t.Fatal("claim-conflict restore left inventory available")
+	}
+	if _, err := guard.ReserveStatement(context.Background(), "after-conflict", "db__t", []string{"p_a"}); err == nil {
+		t.Fatal("claim-conflict restore allowed a later reservation")
+	} else {
+		var unavailable *BackpressureError
+		if !errors.As(err, &unavailable) || unavailable.Kind != "unavailable" {
+			t.Fatalf("post-conflict reservation error=%v, want unavailable backpressure", err)
+		}
+	}
 }
 
 func TestPartsPressureGuard_RestoreBatchUsesOneSnapshotAndDropsObservedAbsentHistory(t *testing.T) {
@@ -1018,6 +1029,52 @@ func TestPartsPressureGuard_RestoreBatchObservationFailureRollsBack(t *testing.T
 	}
 	if _, ok := guard.Snapshot(); ok {
 		t.Fatal("observation failure left inventory available")
+	}
+}
+
+func TestPartsPressureGuard_RestoreBatchValidationFailureLatchesUnavailableUntilSuccessfulBatch(t *testing.T) {
+	guard, conn := pressureFixture()
+	conn.setInventory(fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", "a_base"})
+	if restored, err := guard.RestoreBatch(context.Background(), []PartsRestoreRecord{{
+		Table: "db__t", PartitionIDs: []string{"p_a"},
+	}}); err == nil {
+		t.Fatal("RestoreBatch accepted a record without statement id")
+	} else if restored != nil {
+		t.Fatalf("failed RestoreBatch returned handles=%v", restored)
+	}
+	if _, ok := guard.Snapshot(); ok {
+		t.Fatal("validation failure left the inventory snapshot available")
+	}
+	if _, err := guard.ReserveStatement(context.Background(), "blocked", "db__t", []string{"p_a"}); err == nil {
+		t.Fatal("ReserveStatement refreshed past a failed durable restore")
+	} else {
+		var unavailable *BackpressureError
+		if !errors.As(err, &unavailable) || unavailable.Kind != "unavailable" {
+			t.Fatalf("ReserveStatement error=%v, want unavailable backpressure", err)
+		}
+	}
+	if err := guard.Allow("db__t", "p_a"); err == nil {
+		t.Fatal("Allow passed after a failed durable restore")
+	} else {
+		var unavailable *BackpressureError
+		if !errors.As(err, &unavailable) || unavailable.Kind != "unavailable" {
+			t.Fatalf("Allow error=%v, want unavailable backpressure", err)
+		}
+	}
+
+	restored, err := guard.RestoreBatch(context.Background(), []PartsRestoreRecord{{
+		StatementID: "restored", Table: "db__t", PartitionIDs: []string{"p_a"},
+	}})
+	if err != nil {
+		t.Fatalf("successful RestoreBatch retry: %v", err)
+	}
+	reservation := restored["restored"]
+	if reservation == nil {
+		t.Fatal("successful RestoreBatch retry returned no reservation")
+	}
+	defer reservation.Release()
+	if err := guard.Allow("db__t", "p_a"); err != nil {
+		t.Fatalf("successful full RestoreBatch did not release unavailable latch: %v", err)
 	}
 }
 

@@ -166,7 +166,11 @@ type PartsPressureGuard struct {
 	snapshotGeneration uint64
 	takenAt            time.Time
 	haveSnap           bool
-	now                func() time.Time
+	// restoreBlocked latches any incomplete durable-journal projection. Normal
+	// polling may refresh inventory but cannot reopen admission; only a complete
+	// successful RestoreBatch proves all durable reservations/claims installed.
+	restoreBlocked bool
+	now            func() time.Time
 
 	invalidated chan struct{}
 }
@@ -267,7 +271,7 @@ func (g *PartsPressureGuard) Refresh(ctx context.Context) (PartsSnapshot, error)
 	g.snapshotGeneration++
 	g.reconcileCandidateClaimsLocked()
 	g.takenAt = g.now()
-	g.haveSnap = !g.hasPendingCleanupProofLocked() && len(g.pendingObserved) == 0
+	g.haveSnap = !g.restoreBlocked && !g.hasPendingCleanupProofLocked() && len(g.pendingObserved) == 0
 	for key := range g.committedReservations {
 		g.reconcileCommittedKeyLocked(key)
 	}
@@ -283,7 +287,7 @@ func (g *PartsPressureGuard) Refresh(ctx context.Context) (PartsSnapshot, error)
 	// only just persisted. Reconcile again so an already-absent finalized claim
 	// can retire without waiting for another poll.
 	g.reconcileCandidateClaimsLocked()
-	g.haveSnap = !g.hasPendingCleanupProofLocked() && len(g.pendingObserved) == 0
+	g.haveSnap = !g.restoreBlocked && !g.hasPendingCleanupProofLocked() && len(g.pendingObserved) == 0
 	for key := range g.committedReservations {
 		g.reconcileCommittedKeyLocked(key)
 	}
@@ -359,6 +363,10 @@ func (g *PartsPressureGuard) RestoreBatch(ctx context.Context, records []PartsRe
 	g.admissionMu.Lock()
 	defer g.admissionMu.Unlock()
 	if _, err := g.Refresh(ctx); err != nil {
+		g.mu.Lock()
+		g.restoreBlocked = true
+		g.haveSnap = false
+		g.mu.Unlock()
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
@@ -367,6 +375,9 @@ func (g *PartsPressureGuard) RestoreBatch(ctx context.Context, records []PartsRe
 
 	g.commitMu.Lock()
 	g.mu.Lock()
+	// RestoreBatch owns admissionMu, so it can provisionally clear an earlier
+	// restore latch while rebuilding. Any error below re-latches before unlock.
+	g.restoreBlocked = false
 	reservations := make(map[string]PartsReservation, len(records))
 	type appliedRestore struct {
 		reservation *partsReservation
@@ -379,26 +390,25 @@ func (g *PartsPressureGuard) RestoreBatch(ctx context.Context, records []PartsRe
 			applied[idx].reservation.releaseLocked()
 		}
 	}
+	fail := func(err error) (map[string]PartsReservation, error) {
+		rollback()
+		g.restoreBlocked = true
+		g.haveSnap = false
+		g.mu.Unlock()
+		g.commitMu.Unlock()
+		return nil, err
+	}
 	for _, record := range records {
 		if record.StatementID == "" {
-			rollback()
-			g.mu.Unlock()
-			g.commitMu.Unlock()
-			return nil, errors.New("storage_integrity: restored pressure record has no statement id")
+			return fail(errors.New("storage_integrity: restored pressure record has no statement id"))
 		}
 		if _, duplicate := seenStatements[record.StatementID]; duplicate {
-			rollback()
-			g.mu.Unlock()
-			g.commitMu.Unlock()
-			return nil, fmt.Errorf("storage_integrity: duplicate restored pressure statement %s", record.StatementID)
+			return fail(fmt.Errorf("storage_integrity: duplicate restored pressure statement %s", record.StatementID))
 		}
 		seenStatements[record.StatementID] = struct{}{}
 		for _, observed := range record.ObservedCandidates {
 			if !candidatePartIn(observed, record.Candidates) {
-				rollback()
-				g.mu.Unlock()
-				g.commitMu.Unlock()
-				return nil, fmt.Errorf("storage_integrity: restored observation %q is not a candidate for statement %s", observed.PartName, record.StatementID)
+				return fail(fmt.Errorf("storage_integrity: restored observation %q is not a candidate for statement %s", observed.PartName, record.StatementID))
 			}
 		}
 		if record.Finalized && len(record.Candidates) == 0 {
@@ -418,33 +428,21 @@ func (g *PartsPressureGuard) RestoreBatch(ctx context.Context, records []PartsRe
 			effective := make([]CandidatePart, 0, len(record.Candidates))
 			for _, candidate := range record.Candidates {
 				if candidate.PartName == "" {
-					rollback()
-					g.mu.Unlock()
-					g.commitMu.Unlock()
-					return nil, errors.New("storage_integrity: finalized recovery candidate has empty part name")
+					return fail(errors.New("storage_integrity: finalized recovery candidate has empty part name"))
 				}
 				if PhysicalTableName(candidate.TableID) != record.Table {
-					rollback()
-					g.mu.Unlock()
-					g.commitMu.Unlock()
-					return nil, fmt.Errorf("storage_integrity: finalized recovery candidate %q maps outside table %s", candidate.PartName, record.Table)
+					return fail(fmt.Errorf("storage_integrity: finalized recovery candidate %q maps outside table %s", candidate.PartName, record.Table))
 				}
 				if _, ok := allowedPartitions[candidate.PartitionID]; !ok {
-					rollback()
-					g.mu.Unlock()
-					g.commitMu.Unlock()
-					return nil, fmt.Errorf("storage_integrity: finalized recovery candidate %q maps outside restored partition %s", candidate.PartName, candidate.PartitionID)
+					return fail(fmt.Errorf("storage_integrity: finalized recovery candidate %q maps outside restored partition %s", candidate.PartName, candidate.PartitionID))
 				}
 				key := PartsKey{Database: g.cfg.UnsafeDatabase, Table: record.Table, Partition: candidate.PartitionID}
 				_, active := g.activeParts[key][candidate.PartName]
 				if record.LegacyObservation && !observedCandidates[candidateCoordinateKey(candidate)] && !active {
-					rollback()
-					g.mu.Unlock()
-					g.commitMu.Unlock()
-					return nil, fmt.Errorf(
+					return fail(fmt.Errorf(
 						"%w: terminal statement %s candidate %s is absent without durable observation proof",
 						ErrIntakeJournalMigrationRequired, record.StatementID, candidate.PartName,
-					)
+					))
 				}
 				if observedCandidates[candidateCoordinateKey(candidate)] && !active {
 					continue
@@ -457,18 +455,9 @@ func (g *PartsPressureGuard) RestoreBatch(ctx context.Context, records []PartsRe
 			candidates = effective
 			partitionIDs = restoreCandidatePartitions(effective)
 		}
-		if len(partitionIDs) == 0 {
-			rollback()
-			g.mu.Unlock()
-			g.commitMu.Unlock()
-			return nil, fmt.Errorf("storage_integrity: restored statement %s has no effective partitions", record.StatementID)
-		}
 		reservation, err := g.newReservationLocked(record.Table, partitionIDs, false)
 		if err != nil {
-			rollback()
-			g.mu.Unlock()
-			g.commitMu.Unlock()
-			return nil, err
+			return fail(err)
 		}
 		reservation.statementID = record.StatementID
 		reservation.recovered = true
@@ -482,10 +471,7 @@ func (g *PartsPressureGuard) RestoreBatch(ctx context.Context, records []PartsRe
 				keyIndex, candidateErr := reservation.keyIndexForCandidate(candidate)
 				if candidateErr != nil {
 					reservation.releaseLocked()
-					rollback()
-					g.mu.Unlock()
-					g.commitMu.Unlock()
-					return nil, candidateErr
+					return fail(candidateErr)
 				}
 				key := reservation.keys[keyIndex]
 				_, active := g.activeParts[key][candidate.PartName]
@@ -506,10 +492,7 @@ func (g *PartsPressureGuard) RestoreBatch(ctx context.Context, records []PartsRe
 		}
 		if err := reservation.bindCandidatePartsLocked(bindCandidates); err != nil {
 			reservation.releaseLocked()
-			rollback()
-			g.mu.Unlock()
-			g.commitMu.Unlock()
-			return nil, err
+			return fail(err)
 		}
 		reservation.commitLocked()
 		applied = append(applied, appliedRestore{reservation: reservation, finalized: record.Finalized})
@@ -521,11 +504,7 @@ func (g *PartsPressureGuard) RestoreBatch(ctx context.Context, records []PartsRe
 
 	if err := g.flushCandidateObservations(ctx); err != nil {
 		g.mu.Lock()
-		rollback()
-		g.haveSnap = false
-		g.mu.Unlock()
-		g.commitMu.Unlock()
-		return nil, fmt.Errorf("storage_integrity: persist restored candidate observation: %w", err)
+		return fail(fmt.Errorf("storage_integrity: persist restored candidate observation: %w", err))
 	}
 
 	g.mu.Lock()
@@ -534,6 +513,7 @@ func (g *PartsPressureGuard) RestoreBatch(ctx context.Context, records []PartsRe
 			restored.reservation.finalizeLocked()
 		}
 	}
+	g.restoreBlocked = false
 	g.haveSnap = !g.hasPendingCleanupProofLocked() && len(g.pendingObserved) == 0
 	g.mu.Unlock()
 	g.commitMu.Unlock()
@@ -792,7 +772,7 @@ func (r *partsReservation) ReleaseCleaned(ctx context.Context) error {
 		r.guard.rebaseLiveReservationsAfterCleanupLocked(r.id, r.cleanupObserved)
 		r.cleanupProofPending = false
 		r.releaseLocked()
-		r.guard.haveSnap = !r.guard.hasPendingCleanupProofLocked()
+		r.guard.haveSnap = !r.guard.restoreBlocked && !r.guard.hasPendingCleanupProofLocked()
 	}
 	if refreshErr != nil {
 		return cleanupProofError(refreshErr)
