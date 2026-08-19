@@ -374,7 +374,8 @@ func (r *sentioRewriter) rewriteFailure(err error) error {
 		return err
 	}
 	return &RejectedError{Code: pb.RewriteCode_RewriteError,
-		Message: "storage-integrity rewrite classification unavailable: " + err.Error()}
+		Message: "storage-integrity rewrite classification unavailable: " + err.Error(),
+		Cause:   err}
 }
 
 // maybeUpdateLogicalDatabase mirrors a `USE` observation back into

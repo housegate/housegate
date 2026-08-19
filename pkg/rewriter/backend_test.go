@@ -393,6 +393,19 @@ func TestSentioRewriter_ConfiguredSISurfaceUnavailableFailsClosed(t *testing.T) 
 	}
 }
 
+func TestSentioRewriter_ConfiguredSIFailurePreservesBackendCause(t *testing.T) {
+	backendErr := errors.New("backend unavailable")
+	rw := newSIFactory(&fakeBackend{err: backendErr}, nil, true).NewRewriter(&fakeSession{})
+	_, err := rw.Rewrite(context.Background(), "SELECT 1", "")
+	var rej *RejectedError
+	if !errors.As(err, &rej) {
+		t.Fatalf("err = %v, want fail-closed RejectedError", err)
+	}
+	if !errors.Is(err, backendErr) {
+		t.Fatalf("SI rejection must preserve backend cause: %v", err)
+	}
+}
+
 func TestSentioRewriter_InsertIntoSITableWithoutLaneIsRejected(t *testing.T) {
 	be := &fakeBackend{resp: acknowledgedSIResponse(&pb.RewriteSQLResponse{
 		Code: pb.RewriteCode_Success, SqlAfterRewrite: `INSERT INTO phys."db1.t" (a) VALUES (1)`, StatementType: pb.StatementType_STATEMENT_TYPE_INSERT,

@@ -86,9 +86,13 @@ func TestBuildStorageIntegrityArgs_unsafeLatestWithoutPortIsRejected(t *testing.
 	if !errors.As(err, &rej) || !strings.Contains(rej.Message, "unsafe_latest") {
 		t.Fatalf("err = %v, want RejectedError about unsafe_latest", err)
 	}
-	_, err = buildStorageIntegrityArgs(siOpts(&fakeReadState{err: errors.New("journal locked")}), ReadModeUnsafeLatest)
+	journalErr := errors.New("journal locked")
+	_, err = buildStorageIntegrityArgs(siOpts(&fakeReadState{err: journalErr}), ReadModeUnsafeLatest)
 	if !errors.As(err, &rej) || !strings.Contains(rej.Message, "journal locked") {
 		t.Fatalf("port error must surface as RejectedError: %v", err)
+	}
+	if !errors.Is(err, journalErr) {
+		t.Fatalf("port rejection must preserve the read-state cause: %v", err)
 	}
 }
 

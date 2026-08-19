@@ -87,10 +87,15 @@ func ReadModeFromContext(ctx context.Context) (ReadMode, bool) {
 type RejectedError struct {
 	Code    pb.RewriteCode
 	Message string
+	Cause   error
 }
 
 func (e *RejectedError) Error() string {
 	return "rewriter rejected SQL (code=" + e.Code.String() + "): " + e.Message
+}
+
+func (e *RejectedError) Unwrap() error {
+	return e.Cause
 }
 
 // buildStorageIntegrityArgs renders the proto block for one call. Safe mode
@@ -122,7 +127,8 @@ func buildStorageIntegrityArgs(opts StorageIntegrityOptions, mode ReadMode) (*pb
 			parts, err := opts.ReadState.PromotedUnsafeParts(t.TableID)
 			if err != nil {
 				return nil, &RejectedError{Code: pb.RewriteCode_RewriteError,
-					Message: fmt.Sprintf("storage_integrity read mode unsafe_latest: cannot resolve promoted unsafe parts for %s: %v", t.TableID, err)}
+					Message: fmt.Sprintf("storage_integrity read mode unsafe_latest: cannot resolve promoted unsafe parts for %s: %v", t.TableID, err),
+					Cause:   err}
 			}
 			entry.ExcludedUnsafeParts = parts
 		}
