@@ -125,20 +125,24 @@ func storageIntegrityRewriterOptions(cfg *config.Config, rs rewriter.StorageInte
 	return out
 }
 
-// isNilRewriterFactory recognizes typed-nil implementations stored in the
-// Factory interface. A plain interface comparison would treat such a value as
-// available and let its capability marker pass before the first query panics.
-func isNilRewriterFactory(factory rewriter.Factory) bool {
-	if factory == nil {
+// isNilInterface recognizes typed-nil implementations stored in an interface.
+// A plain interface comparison would treat such a value as available and let
+// the first method call panic.
+func isNilInterface(value any) bool {
+	if value == nil {
 		return true
 	}
-	v := reflect.ValueOf(factory)
+	v := reflect.ValueOf(value)
 	switch v.Kind() {
 	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
 		return v.IsNil()
 	default:
 		return false
 	}
+}
+
+func isNilRewriterFactory(factory rewriter.Factory) bool {
+	return isNilInterface(factory)
 }
 
 // buildRewriterFactory constructs the SQL rewriter factory for the
@@ -409,11 +413,15 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		opts.CommitGateObservers...,
 	)
 
-	siOptions := storageIntegrityRewriterOptions(cfg, opts.StorageIntegrityReadState)
-	if siOptions.DefaultReadMode == rewriter.ReadModeUnsafeLatest && opts.StorageIntegrityReadState == nil {
+	siReadState := opts.StorageIntegrityReadState
+	if isNilInterface(siReadState) {
+		siReadState = nil
+	}
+	siOptions := storageIntegrityRewriterOptions(cfg, siReadState)
+	if siOptions.DefaultReadMode == rewriter.ReadModeUnsafeLatest && siReadState == nil {
 		return nil, fmt.Errorf("storage_integrity.read.default_mode unsafe_latest requires Options.StorageIntegrityReadState (co-located SNode promotion journal); reference binaries can only serve safe reads")
 	}
-	if len(cfg.StorageIntegrity.Tables) > 0 && opts.StorageIntegrityReadState == nil {
+	if len(cfg.StorageIntegrity.Tables) > 0 && siReadState == nil {
 		log.Warnw("storage_integrity: no read-state port wired; unsafe_latest reads will be refused", "tables", len(cfg.StorageIntegrity.Tables))
 	}
 

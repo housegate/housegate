@@ -154,6 +154,26 @@ func TestBuildServer_UnsafeLatestDefaultRequiresReadState(t *testing.T) {
 	}
 }
 
+func TestBuildServer_UnsafeLatestDefaultRejectsTypedNilReadState(t *testing.T) {
+	cfg := minimalServerCfg(t)
+	cfg.StorageIntegrity.Tables = []string{"tenant.events"}
+	cfg.StorageIntegrity.Read.DefaultMode = "unsafe_latest"
+	var typedNil *buildFakeReadState
+
+	bs, err := buildServer(Options{
+		Config:                    cfg,
+		NetworkState:              network.NewInMemoryNetworkState(),
+		Rewriter:                  siCapableStubRewriterFactory{},
+		StorageIntegrityReadState: typedNil,
+	}, nil)
+	if bs != nil {
+		defer bs.teardown()
+	}
+	if err == nil || !strings.Contains(err.Error(), "storage_integrity.read.default_mode unsafe_latest requires Options.StorageIntegrityReadState") {
+		t.Fatalf("err = %v, want typed-nil read-state rejection", err)
+	}
+}
+
 func TestBuildServer_ConfiguredSISurfaceRejectsUnawareInjectedFactory(t *testing.T) {
 	cfg := minimalServerCfg(t)
 	cfg.StorageIntegrity.Tables = []string{"tenant.events"}
