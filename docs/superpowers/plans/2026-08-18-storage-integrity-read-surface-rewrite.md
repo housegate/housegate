@@ -4491,7 +4491,7 @@ Expected: compile error (`Tables` unknown / old `MergeGuard.Tables` field gone).
 
 - [x] **Step 3: Implement**
 
-`config/config.go` `validateStorageIntegrity` — replace the `guarded` map + loop with:
+`config/config.go` `validateStorageIntegrity` — replace only the legacy `guarded` membership map/check while retaining the Plan C physical-name freeze inside the loop:
 
 ```go
 	declared := make(map[string]bool, len(c.Housegate.StorageIntegrity.Tables))
@@ -4499,6 +4499,12 @@ Expected: compile error (`Tables` unknown / old `MergeGuard.Tables` field gone).
 		declared[id] = true
 	}
 	for i, tableID := range c.StorageIntegrity.SNode.TableIDs {
+		if got, want := snode.CHTableName(tableID), sicore.PhysicalTableName(tableID); got != want {
+			return fmt.Errorf(
+				"storage_integrity.snode.table_ids[%d] %q: arbiter-core and housegate disagree on the physical table name (D2 freeze broken): %q != %q",
+				i, tableID, got, want,
+			)
+		}
 		if !declared[tableID] {
 			return fmt.Errorf(
 				"storage_integrity.snode.table_ids[%d] %q is not listed in housegate.storage_integrity.tables (the merge guard, ingress and read rewrite derive hg_unsafe/hg_safe.%s from it)",
