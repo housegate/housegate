@@ -35,8 +35,10 @@ type Selector struct {
 	Databases registry.Databases
 	Access    registry.Access
 
-	// Account is the agent's Ethereum address (derived from
-	// PrivateKeyHex). Used as the lookup key for Access.PermissionsFor.
+	// Account is the lowercase Ethereum address used as the lookup key for
+	// Access.PermissionsFor. The agent owner takes precedence when configured;
+	// otherwise callers use the address derived from PrivateKeyHex. This choice
+	// affects routing only; the private-key address still signs every query.
 	Account string
 }
 

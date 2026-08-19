@@ -7,6 +7,7 @@ import (
 	"net"
 	"reflect"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -1120,11 +1121,11 @@ func buildAgentWithMaterializerBuilder(
 	//      Validation in pkg/config guarantees one of the two is set.
 	// Auto-discovery follows the on-behalf-of owner when configured. The
 	// agent plugin above still signs JWS tokens with the operator signer.
-	routingAccount := cfg.Agent.Owner
+	routingAccount := strings.ToLower(cfg.Agent.Owner)
 	if routingAccount == "" {
 		routingAccount = signer.Address()
 	}
-	dialer, err := buildAgentDialer(opts, rf, routingAccount, obs)
+	dialer, err := buildAgentDialer(opts, rf, signer.Address(), routingAccount, obs)
 	if err != nil {
 		return nil, err
 	}
@@ -1174,12 +1175,12 @@ func resolveTableSchemas(opts Options, reg registry.Registry, feature string) (r
 // address. Otherwise, NetworkState is loaded once at build time and a
 // Selector picks a random permissioned peer (or any bound peer for
 // brand-new accounts) for each new session.
-func buildAgentDialer(opts Options, rf *redisFactory, account string, obs *proxy.MetricsObserver) (func(context.Context, chsession.Session) (*chproto.Codec, error), error) {
+func buildAgentDialer(opts Options, rf *redisFactory, signerAddress, routingAccount string, obs *proxy.MetricsObserver) (func(context.Context, chsession.Session) (*chproto.Codec, error), error) {
 	cfg := opts.Config
 
 	if cfg.Agent.Upstream != "" {
 		log.Infow("agent proxy mode: signing queries",
-			"address", account, "upstream", cfg.Agent.Upstream)
+			"signer_address", signerAddress, "upstream", cfg.Agent.Upstream)
 		return func(ctx context.Context, _ chsession.Session) (*chproto.Codec, error) {
 			return dialRaw(ctx, cfg.Agent.Upstream, cfg.DialTimeout.Duration)
 		}, nil
@@ -1196,10 +1197,12 @@ func buildAgentDialer(opts Options, rf *redisFactory, account string, obs *proxy
 		Topology:  reg,
 		Databases: reg,
 		Access:    reg,
-		Account:   account,
+		Account:   routingAccount,
 	}
 	log.Infow("agent proxy mode: signing queries with NetworkState upstream auto-discovery",
-		"address", account, "network_state_source", cfg.NetworkState.Source)
+		"signer_address", signerAddress,
+		"routing_account", routingAccount,
+		"network_state_source", cfg.NetworkState.Source)
 
 	return func(ctx context.Context, _ chsession.Session) (*chproto.Codec, error) {
 		// One *rand.Rand per Pick keeps the lock-free path goroutine-safe;
@@ -1212,7 +1215,7 @@ func buildAgentDialer(opts Options, rf *redisFactory, account string, obs *proxy
 		}
 		if choice.IsBootstrap {
 			log.Warnw("agent bootstrap fallback: no permissioned databases for account",
-				"account", account, "indexer_id", choice.IndexerId, "addr", choice.Addr())
+				"routing_account", routingAccount, "indexer_id", choice.IndexerId, "addr", choice.Addr())
 			obs.AgentBootstrapFallback()
 		}
 		return dialRaw(ctx, choice.Addr(), cfg.DialTimeout.Duration)
