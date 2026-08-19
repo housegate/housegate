@@ -742,6 +742,32 @@ func TestPartsPressureGuard_CleanupProofRejectsCandidateClaimedByAnotherReservat
 	cleaner.Release()
 }
 
+func TestPartsPressureGuard_RestoreCandidateConflictDoesNotLeakCapacity(t *testing.T) {
+	guard, conn := pressureFixture()
+	guard.cfg.SoftPartsPerPartition = 3
+	base := fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", "a_base"}
+	shared := CandidatePart{TableID: "db.t", PartitionID: "p_a", PartName: "a_shared"}
+	conn.setInventory(base, fakePartInventoryRow{"hg_unsafe", "db__t", "a", "p", shared.PartName})
+
+	if _, err := guard.Restore(context.Background(), "db__t", []string{"p_a"}, []CandidatePart{shared}, true); err != nil {
+		t.Fatalf("restore finalized owner: %v", err)
+	}
+	reservation, err := guard.Restore(context.Background(), "db__t", []string{"p_a"}, []CandidatePart{shared}, false)
+	if err == nil {
+		t.Fatal("restored pending statement claimed a finalized owner's candidate")
+	}
+	if reservation != nil {
+		t.Fatal("failed Restore returned a live reservation")
+	}
+	key := PartsKey{"hg_unsafe", "db__t", "p_a"}
+	if got := guard.reserved[key] + guard.committed[key]; got != 0 {
+		t.Fatalf("failed Restore leaked capacity debt=%d", got)
+	}
+	if got := len(guard.liveReservations); got != 0 {
+		t.Fatalf("failed Restore leaked %d live reservations", got)
+	}
+}
+
 func TestPartsPressureGuard_FinalizedCandidateClaimProtectsAlreadyQueuedReservation(t *testing.T) {
 	guard, conn := pressureFixture()
 	guard.cfg.SoftPartsPerPartition = 6

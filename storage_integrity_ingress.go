@@ -43,13 +43,22 @@ type StorageIntegrityIngress struct {
 	// pressureReservations keeps indeterminate/unsafe-written reservations
 	// addressable by statement until ACK2 finalizes them or a required source
 	// lookup / exact cleanup proves that no candidate part remains.
-	pressureReservations map[string]sicore.PartsReservation
-	cleanupProofTimeout  time.Duration
+	pressureReservations map[string]trackedPartsReservation
+	// restoredPressureRecords makes the pre-serve journal hook idempotent. A
+	// transient failure after restoring an earlier record may retry the hook;
+	// already reconstructed debt/claims must not be charged a second time.
+	restoredPressureRecords map[string]struct{}
+	cleanupProofTimeout     time.Duration
 
 	backgroundMu     sync.Mutex
 	backgroundCancel context.CancelFunc
 	backgroundWG     sync.WaitGroup
 	backgroundClosed bool
+}
+
+type trackedPartsReservation struct {
+	reservation sicore.PartsReservation
+	tableID     string
 }
 
 // NewStorageIntegrityIngress constructs the ingress runtime over an orchestrator
@@ -74,12 +83,13 @@ func NewStorageIntegrityIngressWithPayloadWriter(orch *sicore.Orchestrator, guar
 		return nil, fmt.Errorf("storage_integrity ingress: valid materializer kind is required")
 	}
 	return &StorageIntegrityIngress{
-		orch:                 orch,
-		guard:                guard,
-		matKind:              matKind,
-		payloadWriter:        writer,
-		pressureReservations: map[string]sicore.PartsReservation{},
-		cleanupProofTimeout:  sicore.DefaultPartsRefreshTimeout,
+		orch:                    orch,
+		guard:                   guard,
+		matKind:                 matKind,
+		payloadWriter:           writer,
+		pressureReservations:    map[string]trackedPartsReservation{},
+		restoredPressureRecords: map[string]struct{}{},
+		cleanupProofTimeout:     sicore.DefaultPartsRefreshTimeout,
 	}, nil
 }
 
@@ -89,7 +99,14 @@ func (i *StorageIntegrityIngress) RecoverPending(ctx context.Context) error {
 	if i == nil || i.orch == nil {
 		return fmt.Errorf("storage_integrity ingress: orchestrator is required")
 	}
-	return i.orch.RecoverPending(ctx)
+	if err := i.orch.RecoverPending(ctx); err != nil {
+		return err
+	}
+	// Every recovered non-terminal record is now either exactly cleaned (whose
+	// hook removed its reservation) or ACK2. Finalize the remaining restored
+	// handles so their visible debt/claims follow normal post-ACK2 semantics.
+	i.finalizeRecoveredReservations()
+	return nil
 }
 
 func (i *StorageIntegrityIngress) StartBackground(ctx context.Context) {
@@ -150,32 +167,111 @@ func (i *StorageIntegrityIngress) Close() {
 func (i *StorageIntegrityIngress) WithPartsPressure(pressure StorageIntegrityPartsPressure, schemas sicore.TableSchemaResolver) {
 	i.pressure = pressure
 	i.schemas = schemas
+	i.orch.SetBeforeRecovery(i.restorePressureReservations)
+	i.orch.SetBeforeRegisterPreparedClaim(i.bindPreparedCandidates)
 	i.orch.SetBeforeExactCleanup(i.beforeExactCleanup)
 	i.orch.SetAfterExactCleanup(i.afterExactCleanup)
 }
 
-func (i *StorageIntegrityIngress) beforeExactCleanup(ctx context.Context, res sicore.IntakeResult) error {
-	reservation := i.pressureReservation(res.StatementID)
-	if reservation == nil {
+func (i *StorageIntegrityIngress) bindPreparedCandidates(_ context.Context, res sicore.IntakeResult) error {
+	tracked, ok := i.trackedPressureReservation(res.StatementID)
+	if !ok {
 		return nil
+	}
+	if err := validatePressureCandidateBinding(res.StatementID, tracked.tableID, res.Prepared.CandidateParts); err != nil {
+		return err
+	}
+	if err := tracked.reservation.Commit(res.Prepared.CandidateParts...); err != nil {
+		return fmt.Errorf("storage_integrity ingress: bind prepared candidates for %s before RC: %w", res.StatementID, err)
+	}
+	return nil
+}
+
+func (i *StorageIntegrityIngress) beforeExactCleanup(ctx context.Context, res sicore.IntakeResult) error {
+	tracked, ok := i.trackedPressureReservation(res.StatementID)
+	if !ok {
+		return nil
+	}
+	if err := validatePressureCandidateBinding(res.StatementID, tracked.tableID, res.Prepared.CandidateParts); err != nil {
+		return err
 	}
 	proofCtx, cancel := i.cleanupProofContext(ctx)
 	defer cancel()
-	return reservation.PrepareCleanupProof(proofCtx, res.Prepared.CandidateParts)
+	return tracked.reservation.PrepareCleanupProof(proofCtx, res.Prepared.CandidateParts)
 }
 
 func (i *StorageIntegrityIngress) afterExactCleanup(ctx context.Context, res sicore.IntakeResult) error {
-	reservation := i.pressureReservation(res.StatementID)
-	if reservation == nil {
+	tracked, ok := i.trackedPressureReservation(res.StatementID)
+	if !ok {
 		return nil
 	}
 	proofCtx, cancel := i.cleanupProofContext(ctx)
 	defer cancel()
-	err := reservation.ReleaseCleaned(proofCtx)
+	err := tracked.reservation.ReleaseCleaned(proofCtx)
 	if err == nil {
 		i.deletePressureReservation(res.StatementID)
 	}
 	return err
+}
+
+func validatePressureCandidateBinding(statementID, tableID string, candidates []sicore.CandidatePart) error {
+	for _, candidate := range candidates {
+		if candidate.TableID == "" || candidate.TableID != tableID {
+			return fmt.Errorf("storage_integrity ingress: statement %s candidate table_id %q does not match admission table_id %q", statementID, candidate.TableID, tableID)
+		}
+		if candidate.PartitionID == "" || candidate.PartName == "" {
+			return fmt.Errorf("storage_integrity ingress: statement %s has incomplete exact candidate %q/%q", statementID, candidate.PartitionID, candidate.PartName)
+		}
+	}
+	return nil
+}
+
+func (i *StorageIntegrityIngress) restorePressureReservations(ctx context.Context, records []sicore.IntakeJournalRecord) error {
+	if i.pressure == nil {
+		return nil
+	}
+	for _, record := range records {
+		if i.pressureRecordRestored(record.StatementID) {
+			continue
+		}
+		if record.IsTerminal && !record.TerminalResult.Ack2 {
+			i.markPressureRecordRestored(record.StatementID)
+			continue
+		}
+		table, partitions, err := i.partsPressureTarget(record.Admission)
+		if err != nil {
+			return fmt.Errorf("storage_integrity ingress: restore pressure target for %s: %w", record.StatementID, err)
+		}
+		var candidates []sicore.CandidatePart
+		if record.HasPrepared {
+			candidates = record.Prepared.CandidateParts
+			if err := validatePressureCandidateBinding(record.StatementID, record.Admission.TableID, candidates); err != nil {
+				return err
+			}
+		}
+		reservation, restoreErr := i.pressure.Restore(ctx, table, partitions, candidates, record.IsTerminal)
+		if restoreErr != nil {
+			if reservation != nil {
+				reservation.Release()
+			}
+			return fmt.Errorf("storage_integrity ingress: restore pressure reservation for %s: %w", record.StatementID, restoreErr)
+		}
+		if !record.IsTerminal {
+			i.setPressureReservation(record.StatementID, record.Admission.TableID, reservation)
+		}
+		i.markPressureRecordRestored(record.StatementID)
+	}
+	return nil
+}
+
+func (i *StorageIntegrityIngress) finalizeRecoveredReservations() {
+	i.pressureMu.Lock()
+	restored := i.pressureReservations
+	i.pressureReservations = map[string]trackedPartsReservation{}
+	i.pressureMu.Unlock()
+	for _, tracked := range restored {
+		tracked.reservation.Finalize()
+	}
 }
 
 func (i *StorageIntegrityIngress) cleanupProofContext(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -289,7 +385,7 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 			return err
 		}
 		trackedReservation = attemptReservation
-		i.setPressureReservation(rec.StatementID, attemptReservation)
+		i.setPressureReservation(rec.StatementID, rec.TableID, attemptReservation)
 	}
 	if i.payloadWriter != nil {
 		put, err := i.payloadWriter.PutPayload(ctx, rec.Payload, rec.PayloadHash, rec.PayloadLength)
@@ -352,17 +448,42 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 }
 
 func (i *StorageIntegrityIngress) pressureReservation(statementID string) sicore.PartsReservation {
-	i.pressureMu.Lock()
-	defer i.pressureMu.Unlock()
-	return i.pressureReservations[statementID]
+	tracked, ok := i.trackedPressureReservation(statementID)
+	if !ok {
+		return nil
+	}
+	return tracked.reservation
 }
 
-func (i *StorageIntegrityIngress) setPressureReservation(statementID string, reservation sicore.PartsReservation) {
+func (i *StorageIntegrityIngress) trackedPressureReservation(statementID string) (trackedPartsReservation, bool) {
+	i.pressureMu.Lock()
+	defer i.pressureMu.Unlock()
+	tracked, ok := i.pressureReservations[statementID]
+	return tracked, ok
+}
+
+func (i *StorageIntegrityIngress) pressureRecordRestored(statementID string) bool {
+	i.pressureMu.Lock()
+	defer i.pressureMu.Unlock()
+	_, ok := i.restoredPressureRecords[statementID]
+	return ok
+}
+
+func (i *StorageIntegrityIngress) markPressureRecordRestored(statementID string) {
+	i.pressureMu.Lock()
+	if i.restoredPressureRecords == nil {
+		i.restoredPressureRecords = map[string]struct{}{}
+	}
+	i.restoredPressureRecords[statementID] = struct{}{}
+	i.pressureMu.Unlock()
+}
+
+func (i *StorageIntegrityIngress) setPressureReservation(statementID, tableID string, reservation sicore.PartsReservation) {
 	if reservation == nil {
 		return
 	}
 	i.pressureMu.Lock()
-	i.pressureReservations[statementID] = reservation
+	i.pressureReservations[statementID] = trackedPartsReservation{reservation: reservation, tableID: tableID}
 	i.pressureMu.Unlock()
 }
 

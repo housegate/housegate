@@ -1177,6 +1177,11 @@ func (p *orderedBuildPartsPressure) Reserve(context.Context, string, []string) (
 	return noopPartsReservation{}, nil
 }
 
+func (p *orderedBuildPartsPressure) Restore(context.Context, string, []string, []sicore.CandidatePart, bool) (sicore.PartsReservation, error) {
+	p.order.add("pressure-restore")
+	return noopPartsReservation{}, nil
+}
+
 func (p *orderedBuildPartsPressure) Refresh(context.Context) error {
 	p.order.add("pressure-refresh")
 	return nil
@@ -1287,7 +1292,7 @@ func TestStartStorageIntegrityRuntimeRecoversAfterInitialMergeAssert(t *testing.
 		t.Fatalf("startStorageIntegrityRuntime: %v", err)
 	}
 	events := order.snapshot()
-	wantPrefix := []string{"merge", "pressure-refresh", "recover", "pressure-invalidate", "pressure-refresh"}
+	wantPrefix := []string{"merge", "pressure-refresh", "pressure-restore", "recover", "pressure-invalidate", "pressure-refresh"}
 	if len(events) < len(wantPrefix) || strings.Join(events[:len(wantPrefix)], ",") != strings.Join(wantPrefix, ",") {
 		t.Fatalf("preServe events = %v, want prefix %v", events, wantPrefix)
 	}

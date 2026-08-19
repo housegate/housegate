@@ -526,8 +526,37 @@ type Orchestrator struct {
 	journalRecovered    bool
 	journalRecovering   bool
 	journalRecoveryDone chan struct{}
+	recoveredJournal    []IntakeJournalRecord
+	beforeRecovery      func(context.Context, []IntakeJournalRecord) error
+	beforeRegisterClaim func(context.Context, IntakeResult) error
 	beforeExactCleanup  func(context.Context, IntakeResult) error
 	afterExactCleanup   func(context.Context, IntakeResult) error
+}
+
+// SetBeforeRecovery installs a pre-serve hook that reconstructs runtime-owned
+// state from the complete durable journal snapshot before any pending intake
+// resumes. The callback is copied with the records under the orchestrator mutex
+// and invoked without it; a failure aborts startup recovery fail-closed.
+func (o *Orchestrator) SetBeforeRecovery(hook func(context.Context, []IntakeJournalRecord) error) {
+	if o == nil {
+		return
+	}
+	o.mu.Lock()
+	o.beforeRecovery = hook
+	o.mu.Unlock()
+}
+
+// SetBeforeRegisterPreparedClaim installs a hook that must bind the successful
+// prepared candidate before the RC can bind and ACK2 can release the source
+// frontier. The callback is copied under the orchestrator mutex and invoked
+// without it while the source frontier is still held.
+func (o *Orchestrator) SetBeforeRegisterPreparedClaim(hook func(context.Context, IntakeResult) error) {
+	if o == nil {
+		return
+	}
+	o.mu.Lock()
+	o.beforeRegisterClaim = hook
+	o.mu.Unlock()
 }
 
 // SetBeforeExactCleanup installs the runtime hook that freezes exact active
@@ -1056,6 +1085,15 @@ func (o *Orchestrator) prepareAndSubmit(ctx context.Context, env StatementEnvelo
 func (o *Orchestrator) afterSubmit(ctx context.Context, env StatementEnvelope, prepared PreparedLocalResult, submit SubmitOutcome, rec *intakeRecord) (bool, IntakeResult, error) {
 	res := o.resultFor(rec)
 	res.Submit = submit
+	// Candidate coordinates are the authority for a destructive abort. Validate
+	// their exact logical table binding before inspecting the submit category, so
+	// even a terminal reject cannot turn a malformed/colliding physical alias
+	// into permission to delete another statement's part. An untrusted candidate
+	// keeps the source frontier fenced for operator/source reconciliation.
+	if reason := preparedCandidateConsistencyReject(env, prepared); reason != "" {
+		res.Reason = reason
+		return true, res, fmt.Errorf("intake: prepared candidate consistency failed for %s: %s", env.StatementID, reason)
+	}
 
 	// Terminal submit reject: abort the exact prepared candidate, no ACK2.
 	if submit.Category.RequiresAbort() {
@@ -1109,6 +1147,17 @@ func (o *Orchestrator) registerAndFinish(ctx context.Context, env StatementEnvel
 	// category (Accepted vs ExactIdempotent), not a synthesized one, and the ACK2
 	// gate reads the same authoritative value on both paths.
 	res := o.resultFor(rec)
+	o.mu.Lock()
+	beforeRegisterClaim := o.beforeRegisterClaim
+	o.mu.Unlock()
+	if beforeRegisterClaim != nil {
+		if err := beforeRegisterClaim(ctx, res); err != nil {
+			// No RC or ACK2 ran, so this statement retains the source frontier.
+			// Its same-ID retry re-enters and retries the idempotent candidate bind
+			// before any queued statement can prepare or abort that exact part.
+			return res, err
+		}
+	}
 
 	claim, claimErr := o.preparer.RegisterPreparedClaim(ctx, env.StatementID)
 	if claimErr != nil {
@@ -1493,6 +1542,7 @@ func (o *Orchestrator) ensureJournalRecovered(ctx context.Context) error {
 
 		o.mu.Lock()
 		if err == nil {
+			o.recoveredJournal = cloneIntakeJournalRecords(records)
 			o.recoverJournalRecordsLocked(records)
 			o.journalRecovered = true
 		}
@@ -1797,6 +1847,10 @@ func (o *Orchestrator) preparedConsistencyReject(env StatementEnvelope, prepared
 			return "payload revision mismatch"
 		}
 	}
+	return preparedCandidateConsistencyReject(env, prepared)
+}
+
+func preparedCandidateConsistencyReject(env StatementEnvelope, prepared PreparedLocalResult) string {
 	for _, candidate := range prepared.CandidateParts {
 		if candidate.TableID == "" || candidate.TableID != env.TargetTableID {
 			return "candidate table mismatch"

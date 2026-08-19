@@ -3,6 +3,7 @@ package storageintegrity
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -113,6 +114,22 @@ func TestOrchestrate_AbortPassesExactCandidateParts(t *testing.T) {
 		if !want[name] {
 			t.Fatalf("abort targeted extra part %q not in the journal candidate set", name)
 		}
+	}
+}
+
+func TestOrchestrate_TerminalRejectDoesNotAbortMismatchedCandidateTable(t *testing.T) {
+	prepared := boundSourceWithParts()
+	prepared.CandidateParts[0].TableID = prepared.CandidateParts[0].TableID + "__alias"
+	prep := &partsRecordingPreparer{prepared: prepared}
+	sub := &recordingSubmitter{outcome: SubmitOutcome{Category: OutcomeTerminalReject, Reason: "conflict"}}
+	orch := NewOrchestrator(sub, prep, OrchestratorConfig{ExpectedSource: "snode-A"})
+
+	res, err := orch.Orchestrate(context.Background(), admissionFixture())
+	if err == nil || !strings.Contains(err.Error(), "candidate table mismatch") {
+		t.Fatalf("terminal mismatched candidate=(%+v, %v), want fail-closed consistency error", res, err)
+	}
+	if got := atomic.LoadInt64(&prep.abortCalls); got != 0 {
+		t.Fatalf("source abort ran %d times for an untrusted logical table binding", got)
 	}
 }
 

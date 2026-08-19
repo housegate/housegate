@@ -266,6 +266,99 @@ func (g *PartsPressureGuard) Reserve(ctx context.Context, table string, partitio
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	return g.newReservationLocked(table, partitionIDs, true)
+}
+
+// Restore reconstructs one durable pre-crash admission without applying the
+// new-write soft/hard gate. The original process already admitted and journaled
+// this statement while owning capacity; restart must restore that debt/claim
+// before recovery can resume or abort it. A successful inventory is still
+// required. Candidate binding is transactional: a conflict releases the
+// provisional slot before returning, so a later startup retry cannot
+// double-charge the same durable statement.
+func (g *PartsPressureGuard) Restore(ctx context.Context, table string, partitionIDs []string, candidates []CandidatePart, finalized bool) (PartsReservation, error) {
+	g.admissionMu.Lock()
+	defer g.admissionMu.Unlock()
+	if _, err := g.Refresh(ctx); err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, fmt.Errorf("storage_integrity: restore parts snapshot: %w", err)
+	}
+	g.commitMu.Lock()
+	defer g.commitMu.Unlock()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if finalized {
+		return nil, g.restoreFinalizedClaimsLocked(table, partitionIDs, candidates)
+	}
+	reservation, err := g.newReservationLocked(table, partitionIDs, false)
+	if err != nil {
+		return nil, err
+	}
+	reservation.recovered = true
+	if err := reservation.bindCandidatePartsLocked(candidates); err != nil {
+		reservation.releaseLocked()
+		return nil, err
+	}
+	reservation.commitLocked()
+	return reservation, nil
+}
+
+// restoreFinalizedClaimsLocked seeds single-owner names from durable ACK2
+// records without adding capacity debt: active parts are already counted in the
+// startup snapshot. Names not yet visible remain reserved because restart can
+// race ClickHouse visibility; once observed active, a later absent snapshot
+// retires them through reconcileCandidateClaimsLocked.
+func (g *PartsPressureGuard) restoreFinalizedClaimsLocked(table string, partitionIDs []string, candidates []CandidatePart) error {
+	if len(candidates) == 0 {
+		return errors.New("finalized recovery record has no exact candidate parts")
+	}
+	allowedPartitions := make(map[string]struct{}, len(partitionIDs))
+	for _, partitionID := range partitionIDs {
+		allowedPartitions[partitionID] = struct{}{}
+	}
+	type claimTarget struct {
+		key      PartsKey
+		partName string
+	}
+	targets := make([]claimTarget, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.PartName == "" {
+			return errors.New("finalized recovery candidate has empty part name")
+		}
+		if PhysicalTableName(candidate.TableID) != table {
+			return fmt.Errorf("finalized recovery candidate %q maps outside table %s", candidate.PartName, table)
+		}
+		if _, ok := allowedPartitions[candidate.PartitionID]; !ok {
+			return fmt.Errorf("finalized recovery candidate %q maps outside restored partition %s", candidate.PartName, candidate.PartitionID)
+		}
+		key := PartsKey{Database: g.cfg.UnsafeDatabase, Table: table, Partition: candidate.PartitionID}
+		if claim := g.candidateClaims[key][candidate.PartName]; claim.reservationID != 0 {
+			return fmt.Errorf("exact candidate %q for %s/%s is already claimed by another recovery record", candidate.PartName, key.Table, key.Partition)
+		}
+		targets = append(targets, claimTarget{key: key, partName: candidate.PartName})
+	}
+	g.nextReservationID++
+	ownerID := g.nextReservationID
+	for _, target := range targets {
+		if g.candidateClaims[target.key] == nil {
+			g.candidateClaims[target.key] = map[string]candidateClaim{}
+		}
+		_, active := g.activeParts[target.key][target.partName]
+		g.candidateClaims[target.key][target.partName] = candidateClaim{
+			reservationID:  ownerID,
+			observedActive: active,
+		}
+	}
+	return nil
+}
+
+// newReservationLocked captures the current exact inventory into a live
+// reservation. Callers hold mu; lifecycle callers also serialize through
+// admissionMu, and Restore additionally holds commitMu because it commits the
+// new handle before returning.
+func (g *PartsPressureGuard) newReservationLocked(table string, partitionIDs []string, enforceLimits bool) (*partsReservation, error) {
 	keys := make([]PartsKey, 0, len(partitionIDs))
 	baselines := make([]int, 0, len(partitionIDs))
 	baselineParts := make([]map[string]struct{}, 0, len(partitionIDs))
@@ -278,8 +371,10 @@ func (g *PartsPressureGuard) Reserve(ctx context.Context, table string, partitio
 			continue
 		}
 		seen[partitionID] = true
-		if err := g.checkLocked(table, partitionID); err != nil {
-			return nil, err
+		if enforceLimits {
+			if err := g.checkLocked(table, partitionID); err != nil {
+				return nil, err
+			}
 		}
 		key := PartsKey{Database: g.cfg.UnsafeDatabase, Table: table, Partition: partitionID}
 		keys = append(keys, key)
@@ -345,6 +440,7 @@ type partsReservation struct {
 	cleanupObserved     []map[string]struct{}
 	cleanupProofArmed   bool
 	cleanupProofPending bool
+	recovered           bool
 	state               reservationState // protected by guard.mu
 }
 
@@ -564,6 +660,9 @@ func (r *partsReservation) bindCandidatePartsLocked(candidates []CandidatePart) 
 		claim.reservationID = r.id
 		if _, active := r.guard.activeParts[key][candidate.PartName]; active {
 			claim.observedActive = true
+			if r.recovered {
+				r.candidateCovered[keyIndex] = true
+			}
 		}
 		r.guard.candidateClaims[key][candidate.PartName] = claim
 		if r.candidateParts[keyIndex] == nil {

@@ -31,6 +31,7 @@ type fakePartsPressure struct {
 	cleanupCtxErr        error
 	prepareCleanupCtxErr error
 	commitErr            error
+	restored             int
 }
 
 func (f *fakePartsPressure) Reserve(_ context.Context, table string, partitionIDs []string) (sicore.PartsReservation, error) {
@@ -42,6 +43,16 @@ func (f *fakePartsPressure) Reserve(_ context.Context, table string, partitionID
 		if err := f.refuse[key]; err != nil {
 			return nil, err
 		}
+	}
+	return &fakePartsReservation{pressure: f}, nil
+}
+
+func (f *fakePartsPressure) Restore(_ context.Context, _ string, _ []string, _ []sicore.CandidatePart, finalized bool) (sicore.PartsReservation, error) {
+	f.mu.Lock()
+	f.restored++
+	f.mu.Unlock()
+	if finalized {
+		return nil, nil
 	}
 	return &fakePartsReservation{pressure: f}, nil
 }
@@ -481,6 +492,234 @@ func TestIngress_CleanupProofRejectsAnotherStatementsActiveCandidateBeforeAbort(
 	}
 }
 
+func TestIngress_PreparedCandidateClaimedBeforeSourceFrontierRelease(t *testing.T) {
+	conn := &rootPartsConn{rows: []rootPartsRow{
+		{"hg_unsafe", "net1__events", "eu", "region", 1},
+		{"hg_unsafe", "net1__events", "us", "region", 1},
+	}}
+	pressure := sicore.NewPartsPressureGuard(conn, sicore.PartsPressureConfig{
+		UnsafeDatabase: "hg_unsafe", SafeDatabase: "hg_safe",
+		SoftPartsPerPartition: 5, HardPartsPerPartition: 8,
+	})
+	submitter := &rootRecordingSubmitter{outcome: sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}}
+	shared := sicore.CandidatePart{TableID: "net1.events", PartitionID: "p_eu", PartName: "eu_part_2"}
+	preparer := &rootRecordingPreparer{
+		source: "snode-A", claim: sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"},
+		candidates: []sicore.CandidatePart{shared},
+	}
+	orch := sicore.NewOrchestrator(submitter, preparer, sicore.OrchestratorConfig{ExpectedSource: "snode-A"})
+	ingress, err := NewStorageIntegrityIngress(orch, nil, sicore.MaterializerCSV)
+	if err != nil {
+		t.Fatalf("NewStorageIntegrityIngress: %v", err)
+	}
+	ingress.WithPartsPressure(pressure, bpSchemaResolver())
+
+	ownerAdmission := bpAdmission()
+	ownerRecord := AdmissionRecordFromPlugin(ownerAdmission)
+	table, partitions, err := ingress.partsPressureTarget(ownerRecord)
+	if err != nil {
+		t.Fatalf("owner pressure target: %v", err)
+	}
+	ownerReservation, err := pressure.Reserve(context.Background(), table, partitions)
+	if err != nil {
+		t.Fatalf("owner Reserve: %v", err)
+	}
+	defer ownerReservation.Release()
+	ingress.setPressureReservation(ownerRecord.StatementID, ownerRecord.TableID, ownerReservation)
+	ownerResult, err := orch.Orchestrate(context.Background(), ownerRecord)
+	if err != nil || !ownerResult.Ack2 {
+		t.Fatalf("owner Orchestrate=%+v err=%v", ownerResult, err)
+	}
+	// Deliberately stop in the old post-Orchestrate/pre-Commit window. The
+	// source frontier has been released, but Consume has not yet had a chance to
+	// run its outer reservation Commit. The owner must already be bound here.
+	conn.setRows([]rootPartsRow{
+		{"hg_unsafe", "net1__events", "eu", "region", 2},
+		{"hg_unsafe", "net1__events", "us", "region", 1},
+	})
+	otherAdmission := bpAdmission()
+	otherAdmission.StatementID = "0xabc:2:n2"
+	otherRecord := AdmissionRecordFromPlugin(otherAdmission)
+	otherReservation, err := pressure.Reserve(context.Background(), table, partitions)
+	if err != nil {
+		t.Fatalf("other Reserve: %v", err)
+	}
+	defer otherReservation.Release()
+	ingress.setPressureReservation(otherRecord.StatementID, otherRecord.TableID, otherReservation)
+	submitter.outcome = sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: "conflict"}
+	_, err = orch.Orchestrate(context.Background(), otherRecord)
+	if !errors.Is(err, sicore.ErrCleanupProofPending) {
+		t.Fatalf("conflicting cleanup error=%v, want pending proof", err)
+	}
+	if preparer.abortCalls != 0 {
+		t.Fatalf("source abort calls=%d, want 0 after owner frontier release", preparer.abortCalls)
+	}
+}
+
+func TestIngress_RecoverPendingRestoresFinalizedCandidateOwnerBeforeAbort(t *testing.T) {
+	journal, err := sicore.NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	shared := sicore.CandidatePart{TableID: "net1.events", PartitionID: "p_eu", PartName: "eu_part_2"}
+	firstSubmitter := &rootRecordingSubmitter{outcome: sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}}
+	firstPreparer := &rootRecordingPreparer{
+		source: "snode-A", claim: sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"},
+		candidates: []sicore.CandidatePart{shared},
+	}
+	first := sicore.NewOrchestrator(firstSubmitter, firstPreparer, sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal})
+	owner := AdmissionRecordFromPlugin(bpAdmission())
+	if res, err := first.Orchestrate(context.Background(), owner); err != nil || !res.Ack2 {
+		t.Fatalf("persist owner=(%+v, %v)", res, err)
+	}
+	firstSubmitter.outcome = sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: "conflict"}
+	proofErr := errors.New("stop before source abort")
+	first.SetBeforeExactCleanup(func(context.Context, sicore.IntakeResult) error { return proofErr })
+	other := AdmissionRecordFromPlugin(bpAdmission())
+	other.StatementID = "0xabc:2:n2"
+	if _, err := first.Orchestrate(context.Background(), other); !errors.Is(err, proofErr) {
+		t.Fatalf("persist AbortPending=%v, want proof error", err)
+	}
+	if firstPreparer.abortCalls != 0 {
+		t.Fatalf("first process abort calls=%d want 0", firstPreparer.abortCalls)
+	}
+
+	conn := &rootPartsConn{rows: []rootPartsRow{
+		{"hg_unsafe", "net1__events", "eu", "region", 2},
+		{"hg_unsafe", "net1__events", "us", "region", 1},
+	}}
+	pressure := sicore.NewPartsPressureGuard(conn, sicore.PartsPressureConfig{
+		UnsafeDatabase: "hg_unsafe", SafeDatabase: "hg_safe",
+		SoftPartsPerPartition: 5, HardPartsPerPartition: 8,
+	})
+	if _, err := pressure.Refresh(context.Background()); err != nil {
+		t.Fatalf("initial pressure Refresh: %v", err)
+	}
+	restartedPreparer := &rootRecordingPreparer{source: "snode-A", candidates: []sicore.CandidatePart{shared}}
+	restarted := sicore.NewOrchestrator(
+		&rootRecordingSubmitter{}, restartedPreparer,
+		sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
+	)
+	ingress, err := NewStorageIntegrityIngress(restarted, nil, sicore.MaterializerCSV)
+	if err != nil {
+		t.Fatalf("NewStorageIntegrityIngress: %v", err)
+	}
+	ingress.WithPartsPressure(pressure, bpSchemaResolver())
+	err = ingress.RecoverPending(context.Background())
+	if err == nil {
+		t.Fatal("recovery accepted a pending cleanup that reused a finalized active candidate")
+	}
+	if restartedPreparer.abortCalls != 0 {
+		t.Fatalf("restart source abort calls=%d, want 0 before restored owner proof", restartedPreparer.abortCalls)
+	}
+}
+
+func TestIngress_RecoverPendingRestoresEachJournalRecordOnlyOnce(t *testing.T) {
+	journal, err := sicore.NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	owner := AdmissionRecordFromPlugin(bpAdmission())
+	first := sicore.NewOrchestrator(
+		&rootRecordingSubmitter{outcome: sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}},
+		&rootRecordingPreparer{
+			source: "snode-A",
+			claim:  sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"},
+			candidates: []sicore.CandidatePart{{
+				TableID: owner.TableID, PartitionID: "p_eu", PartName: "eu_part_2",
+			}},
+		},
+		sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
+	)
+	if res, err := first.Orchestrate(context.Background(), owner); err != nil || !res.Ack2 {
+		t.Fatalf("persist finalized owner=(%+v, %v)", res, err)
+	}
+
+	pressure := &fakePartsPressure{}
+	restarted := sicore.NewOrchestrator(
+		&rootRecordingSubmitter{}, &rootRecordingPreparer{source: "snode-A"},
+		sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
+	)
+	ingress, err := NewStorageIntegrityIngress(restarted, nil, sicore.MaterializerCSV)
+	if err != nil {
+		t.Fatalf("NewStorageIntegrityIngress: %v", err)
+	}
+	ingress.WithPartsPressure(pressure, bpSchemaResolver())
+	if err := ingress.RecoverPending(context.Background()); err != nil {
+		t.Fatalf("first RecoverPending: %v", err)
+	}
+	if err := ingress.RecoverPending(context.Background()); err != nil {
+		t.Fatalf("second RecoverPending: %v", err)
+	}
+	pressure.mu.Lock()
+	restored := pressure.restored
+	pressure.mu.Unlock()
+	if restored != 1 {
+		t.Fatalf("durable pressure record restored %d times, want once", restored)
+	}
+}
+
+func TestIngress_RecoverPendingRestoresReservationThroughExactCleanup(t *testing.T) {
+	journal, err := sicore.NewFileIntakeJournal(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileIntakeJournal: %v", err)
+	}
+	shared := sicore.CandidatePart{TableID: "net1.events", PartitionID: "p_eu", PartName: "eu_part_2"}
+	firstSubmitter := &rootRecordingSubmitter{outcome: sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: "conflict"}}
+	firstPreparer := &rootRecordingPreparer{source: "snode-A", candidates: []sicore.CandidatePart{shared}}
+	first := sicore.NewOrchestrator(firstSubmitter, firstPreparer, sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal})
+	proofErr := errors.New("crash before source abort")
+	first.SetBeforeExactCleanup(func(context.Context, sicore.IntakeResult) error { return proofErr })
+	admission := AdmissionRecordFromPlugin(bpAdmission())
+	if _, err := first.Orchestrate(context.Background(), admission); !errors.Is(err, proofErr) {
+		t.Fatalf("persist AbortPending=%v, want proof error", err)
+	}
+
+	conn := &rootPartsConn{rows: []rootPartsRow{
+		{"hg_unsafe", "net1__events", "eu", "region", 2},
+		{"hg_unsafe", "net1__events", "us", "region", 1},
+	}}
+	pressure := sicore.NewPartsPressureGuard(conn, sicore.PartsPressureConfig{
+		UnsafeDatabase: "hg_unsafe", SafeDatabase: "hg_safe",
+		SoftPartsPerPartition: 3, HardPartsPerPartition: 8,
+	})
+	if _, err := pressure.Refresh(context.Background()); err != nil {
+		t.Fatalf("initial pressure Refresh: %v", err)
+	}
+	restartedPreparer := &rootRecordingPreparer{
+		source: "snode-A", candidates: []sicore.CandidatePart{shared},
+		abortFn: func([]sicore.CandidatePart) {
+			conn.setRows([]rootPartsRow{
+				{"hg_unsafe", "net1__events", "eu", "region", 1},
+				{"hg_unsafe", "net1__events", "us", "region", 1},
+			})
+		},
+	}
+	restarted := sicore.NewOrchestrator(
+		&rootRecordingSubmitter{}, restartedPreparer,
+		sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
+	)
+	ingress, err := NewStorageIntegrityIngress(restarted, nil, sicore.MaterializerCSV)
+	if err != nil {
+		t.Fatalf("NewStorageIntegrityIngress: %v", err)
+	}
+	ingress.WithPartsPressure(pressure, bpSchemaResolver())
+	if err := ingress.RecoverPending(context.Background()); err != nil {
+		t.Fatalf("RecoverPending: %v", err)
+	}
+	if restartedPreparer.abortCalls != 1 {
+		t.Fatalf("restart source abort calls=%d want 1", restartedPreparer.abortCalls)
+	}
+	if ingress.pressureReservation(admission.StatementID) != nil {
+		t.Fatal("cleaned recovery left a tracked reservation")
+	}
+	reservation, err := pressure.Reserve(context.Background(), "net1__events", []string{"p_eu", "p_us"})
+	if err != nil {
+		t.Fatalf("post-cleanup capacity remained charged: %v", err)
+	}
+	reservation.Release()
+}
+
 func TestIngress_CleanupProofCancellationReleasesSourceFrontier(t *testing.T) {
 	pressure := &fakePartsPressure{blockCleanup: true}
 	ingress, _, submitter, _ := newBackpressureIngress(t, pressure)
@@ -513,7 +752,7 @@ func TestIngress_CleanupProofUsesRuntimeContextAfterClientCancellation(t *testin
 	if err != nil {
 		t.Fatalf("Reserve: %v", err)
 	}
-	ingress.setPressureReservation("stmt", reservation)
+	ingress.setPressureReservation("stmt", "net1.events", reservation)
 	clientCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if err := ingress.beforeExactCleanup(clientCtx, sicore.IntakeResult{StatementID: "stmt"}); err != nil {

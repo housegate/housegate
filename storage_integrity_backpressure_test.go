@@ -181,6 +181,10 @@ func (p *blockingPressureLifecycle) Reserve(context.Context, string, []string) (
 	return noopPartsReservation{}, nil
 }
 
+func (p *blockingPressureLifecycle) Restore(context.Context, string, []string, []sicore.CandidatePart, bool) (sicore.PartsReservation, error) {
+	return noopPartsReservation{}, nil
+}
+
 func (p *blockingPressureLifecycle) Invalidate() { p.invalidates.Add(1) }
 
 func (p *blockingPressureLifecycle) Refresh(context.Context) error {

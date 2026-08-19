@@ -261,3 +261,14 @@ func cloneIntakeResult(in IntakeResult) IntakeResult {
 	out.Prepared = clonePreparedLocalResult(in.Prepared)
 	return out
 }
+
+func cloneIntakeJournalRecords(in []IntakeJournalRecord) []IntakeJournalRecord {
+	out := make([]IntakeJournalRecord, len(in))
+	for idx, record := range in {
+		out[idx] = record
+		out[idx].Admission = cloneAdmissionRecord(record.Admission)
+		out[idx].Prepared = clonePreparedLocalResult(record.Prepared)
+		out[idx].TerminalResult = cloneIntakeResult(record.TerminalResult)
+	}
+	return out
+}

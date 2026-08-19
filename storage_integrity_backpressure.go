@@ -33,9 +33,13 @@ func init() {
 }
 
 // StorageIntegrityPartsPressure is the ingress-facing admission port; the
-// supervisor and PartsPressureGuard both satisfy it.
+// supervisor and PartsPressureGuard both satisfy it. Restore reconstructs one
+// durable journal record before recovery: non-final records return a live
+// reservation, while finalized records install exact candidate ownership and
+// return no handle.
 type StorageIntegrityPartsPressure interface {
 	Reserve(ctx context.Context, table string, partitionIDs []string) (sicore.PartsReservation, error)
+	Restore(ctx context.Context, table string, partitionIDs []string, candidates []sicore.CandidatePart, finalized bool) (sicore.PartsReservation, error)
 	Invalidate()
 }
 
@@ -107,6 +111,10 @@ func (s *StorageIntegrityPartsPressureSupervisor) Run(ctx context.Context) {
 
 func (s *StorageIntegrityPartsPressureSupervisor) Reserve(ctx context.Context, table string, partitionIDs []string) (sicore.PartsReservation, error) {
 	return s.guard.Reserve(ctx, table, partitionIDs)
+}
+
+func (s *StorageIntegrityPartsPressureSupervisor) Restore(ctx context.Context, table string, partitionIDs []string, candidates []sicore.CandidatePart, finalized bool) (sicore.PartsReservation, error) {
+	return s.guard.Restore(ctx, table, partitionIDs, candidates, finalized)
 }
 
 func (s *StorageIntegrityPartsPressureSupervisor) Invalidate() { s.guard.Invalidate() }

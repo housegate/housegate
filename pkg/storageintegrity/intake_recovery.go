@@ -2,6 +2,8 @@ package storageintegrity
 
 import (
 	"context"
+	"fmt"
+	"sort"
 	"time"
 )
 
@@ -13,6 +15,12 @@ const defaultRecoveryRetryInterval = time.Second
 func (o *Orchestrator) RecoverPending(ctx context.Context) error {
 	if err := o.ensureJournalRecovered(ctx); err != nil {
 		return err
+	}
+	records, beforeRecovery := o.recoverySnapshot()
+	if beforeRecovery != nil {
+		if err := beforeRecovery(ctx, records); err != nil {
+			return fmt.Errorf("intake: restore runtime state before recovery: %w", err)
+		}
 	}
 	for {
 		adm, ok := o.nextRecoveryAdmission()
@@ -30,6 +38,22 @@ func (o *Orchestrator) RecoverPending(ctx context.Context) error {
 			return err
 		}
 	}
+}
+
+func (o *Orchestrator) recoverySnapshot() ([]IntakeJournalRecord, func(context.Context, []IntakeJournalRecord) error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	records := cloneIntakeJournalRecords(o.recoveredJournal)
+	sort.Slice(records, func(i, k int) bool {
+		if records[i].Source != records[k].Source {
+			return records[i].Source < records[k].Source
+		}
+		if records[i].FrontierOrdinal != records[k].FrontierOrdinal {
+			return records[i].FrontierOrdinal < records[k].FrontierOrdinal
+		}
+		return records[i].StatementID < records[k].StatementID
+	})
+	return records, o.beforeRecovery
 }
 
 func (o *Orchestrator) nextRecoveryAdmission() (AdmissionRecord, bool) {
