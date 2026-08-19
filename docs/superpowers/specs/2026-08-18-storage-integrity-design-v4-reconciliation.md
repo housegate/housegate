@@ -35,6 +35,14 @@ Bump header to `Status: Proposed (v4, reconciled with P0–P1e implementation, 2
 | §15 | open questions | Q1 resolved (route A, implemented); Q4 resolved (protos frozen in arbiter-proto); Q5 resolved (commitment-only anchor `(l3BlockHash, stateRoot)`); Q6 partially (v1: DA never releases AUDIT pins; retention/custody proof still open); Q8 narrowed to Spec E's frozen set; Q11 resolved but requires Spec E D4 to be enforceable; Q14 → Spec D D6/D8; Q15 v1 HA done (3–5 node raft), sharding seam only; Q16 → Spec G | Update statuses in place. |
 | §16 | route B contrast | unchanged | leave. |
 
+### Base design §7 implementation inputs from Spec A
+
+- Base design §7 signing payload table: replace `schema_snapshot_id` with `schema_hash` (Phase-B `payloadexec.TableSchemaHash`) and add `client_revision`; `payload_format = clickhouse-native-data-v1`; `settings_hash = CanonicalDigest("housegate-settings-v1", [])` (constant `storageintegrity.EmptySettingsHash`); purpose `housegate-statement-v2`, setting `SQL_x_statement_token`; the legacy `SQL_x_auth_token` query JWS stays for the auth plugin. Source: 2026-08-18-storage-integrity-signed-envelope-v2-design.md §4.
+- Base design §5.1 / §6.1: the stored payload is byte-identical to the signed Native `ClientData` bytes; the CSV bridge (`NativeCSVPayloadMaterializer`, `StorageIntegrityPayloadMaterializer`) no longer exists; SNode/verifier decode Native via `pkg/replay/nativepayload`.
+- Base design §4.1: the agent-mode HouseGate answers the INSERT sample block from network-state schema (Relay deferred-INSERT mode) so it can sign `payload_hash` before forwarding.
+- Arbiter design §5: `L3BlockHeader.statements_root` (`arbiter-l3-statements-v1`) is part of `ChainHash`; `SafeState.GetL3Block` exposes header + envelopes; FSM snapshot version 2; genesis `network_id`.
+- housegate CLAUDE.md `pkg/storageintegrity` / `pkg/plugins/{storageintegrity,sistatement}` / `storage_integrity.{ingress,runtime,agent}` section (Task 21 wrote the bullets; B consolidates).
+
 ## 3. `designs/sento-network/PROGRESS.md`
 
 Snapshot is 07-08. Add a "2026-08-18 review" entry under 最新变化: P1c/P1d/DA client/P1e/schema registry A+B all landed; the honest architecture block (single safe replica today; nothing deployed); the two protocol gaps (JWS binding, L3 header) and their fix (Spec A); the roadmap link and its ordering; the DA storage decision status (network-da: GCS/fs/mem behind `da.proto`, GCS in prod — closes the 07-08 🔴 item as "protocol-first done, GCS chosen for v1"); the read-mode decision as a config policy (Spec G D1) awaiting the product call; update 分工 if changed; move the 06-24 action items about `MOVE PART`/`FETCH` and 双 unsafe 表轮换 to "superseded by `hg_promote` + `REPLACE PARTITION`, implemented".
