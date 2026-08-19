@@ -283,15 +283,17 @@ func terminalIntakeJournalVersion(rec *intakeRecord) uint32 {
 }
 
 // normalizeTerminalJournalRecord upgrades terminal records only when their
-// partition/candidate shape is complete. A zero-candidate terminal is the
-// durable zero-row no-op shape, so its touched set must be known-empty rather
-// than legacy/unknown; nil and [] are intentionally distinct statement facts.
+// partition/candidate shape is complete. A successfully prepared zero-candidate
+// terminal is the durable zero-row no-op shape, so its touched set must be
+// known-empty rather than legacy/unknown. A terminal rejection before prepare
+// may also have no candidates, but it does not prove that a non-empty payload
+// touched no partitions; preserve its existing nil/known state.
 func normalizeTerminalJournalRecord(rec *IntakeJournalRecord) bool {
 	if rec == nil || !rec.IsTerminal {
 		return false
 	}
 	changed := false
-	if len(rec.Prepared.CandidateParts) == 0 && rec.Admission.TouchedPartitionIDs == nil {
+	if rec.HasPrepared && len(rec.Prepared.CandidateParts) == 0 && rec.Admission.TouchedPartitionIDs == nil {
 		rec.Admission.TouchedPartitionIDs = []string{}
 		changed = true
 	}

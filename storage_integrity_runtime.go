@@ -38,7 +38,7 @@ type StorageIntegrityRuntimeOptions struct {
 	PayloadSpool       *sicore.FilePayloadSpool
 	MergeConn          sicore.MergeConn
 	MergeGuard         StorageIntegrityMergeGuard
-	SchemaResolver     sicore.TableSchemaResolver
+	SchemaResolver     StorageIntegrityTableSchemaResolver
 	// TableSchemas is the complete authoritative startup schema set. Runtime
 	// construction validates its frozen physical outputs globally before any
 	// listener, DDL, or Keeper-backed role can mix distinct logical tables.
@@ -191,12 +191,12 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 	return ingress, mergeGuard, nil
 }
 
-func runtimeTableSchemaResolver(schemas []payloadexec.TableSchema) sicore.TableSchemaResolver {
+func runtimeTableSchemaResolver(schemas []payloadexec.TableSchema) StorageIntegrityTableSchemaResolver {
 	byID := make(map[string]payloadexec.TableSchema, len(schemas))
 	for _, schema := range schemas {
 		byID[schema.TableID] = schema
 	}
-	return sicore.TableSchemaResolverFunc(func(tableID string) (payloadexec.TableSchema, bool) {
+	return StorageIntegrityTableSchemaResolverFunc(func(tableID string) (payloadexec.TableSchema, bool) {
 		schema, ok := byID[tableID]
 		return schema, ok
 	})

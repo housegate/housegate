@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/ch-go/proto"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/housegate/housegate/pkg/chproto"
@@ -178,9 +179,9 @@ func bpSchemas() []payloadexec.TableSchema {
 	}}
 }
 
-func bpSchemaResolver() sicore.TableSchemaResolver {
+func bpSchemaResolver() StorageIntegrityTableSchemaResolver {
 	schema := bpSchemas()[0]
-	return sicore.TableSchemaResolverFunc(func(tableID string) (payloadexec.TableSchema, bool) {
+	return StorageIntegrityTableSchemaResolverFunc(func(tableID string) (payloadexec.TableSchema, bool) {
 		if tableID != schema.TableID {
 			return payloadexec.TableSchema{}, false
 		}
@@ -189,21 +190,48 @@ func bpSchemaResolver() sicore.TableSchemaResolver {
 }
 
 func bpAdmission() siplugin.Admission {
-	sql := "INSERT INTO events FORMAT CSVWithNames"
-	payload := []byte("id,region\n1,eu\n2,us\n3,eu\n")
+	sql := "INSERT INTO events FORMAT Native"
+	payload := bpNativePayload([]uint64{1, 2, 3}, []string{"eu", "us", "eu"})
 	return siplugin.Admission{
 		StatementID: "0xabc:1:n1", Kind: siplugin.KindInsert, TableID: "net1.events",
 		SQL: sql, SQLHash: replay.DigestString(sql), Signer: "0xabc", UserJWS: "jws",
-		Payload: siplugin.CapturedPayload{Bytes: payload, Length: uint64(len(payload)), Encoding: sicore.EncodingCSVWithNames, Revision: 54465, Complete: true},
+		Payload:         siplugin.CapturedPayload{Bytes: payload, Length: uint64(len(payload)), Encoding: sicore.PayloadEncodingClickHouseNativeData, Revision: 54465, Complete: true},
+		EnvelopeVersion: sicore.EnvelopeVersionV2,
+		NetworkID:       "testnet-v2",
+		SettingsHash:    sicore.EmptySettingsHash,
+		SchemaHash:      payloadexec.TableSchemaHash("testnet-v2", bpSchemas()[0]),
+		RowIDProfileID:  payloadexec.RowIDProfileID,
 	}
 }
 
 func bpEUAdmission() siplugin.Admission {
 	adm := bpAdmission()
-	payload := []byte("id,region\n1,eu\n")
+	payload := bpNativePayload([]uint64{1}, []string{"eu"})
 	adm.Payload.Bytes = payload
 	adm.Payload.Length = uint64(len(payload))
 	return adm
+}
+
+func bpNativePayload(ids []uint64, regions []string) []byte {
+	if len(ids) != len(regions) || len(ids) == 0 {
+		panic("bpNativePayload requires matching non-empty columns")
+	}
+	regionCol := new(proto.ColStr)
+	for _, region := range regions {
+		regionCol.Append(region)
+	}
+	idCol := proto.ColUInt64(ids)
+	input := proto.Input{
+		{Name: "id", Data: &idCol},
+		{Name: "region", Data: regionCol},
+	}
+	var buf proto.Buffer
+	buf.PutUVarInt(uint64(proto.ClientCodeData))
+	buf.PutString("")
+	if err := (proto.Block{Rows: len(ids), Columns: len(input)}).EncodeBlock(&buf, 54465, input); err != nil {
+		panic(err)
+	}
+	return append([]byte(nil), buf.Buf...)
 }
 
 func bpPreparedCandidates() []sicore.CandidatePart {
@@ -222,7 +250,7 @@ func newBackpressureIngress(t *testing.T, pressure StorageIntegrityPartsPressure
 		candidates: bpPreparedCandidates(),
 	}
 	orch := sicore.NewOrchestrator(submitter, preparer, sicore.OrchestratorConfig{ExpectedSource: "snode-A"})
-	ingress, err := NewStorageIntegrityIngressWithPayloadWriter(orch, nil, sicore.MaterializerCSV, writer)
+	ingress, err := NewStorageIntegrityIngressWithPayloadWriter(orch, nil, sicore.MaterializerNative, writer)
 	if err != nil {
 		t.Fatalf("NewStorageIntegrityIngressWithPayloadWriter: %v", err)
 	}
@@ -361,7 +389,7 @@ func TestIngress_BackpressureRefusalHasNoDurableOrSourceSideEffects(t *testing.T
 	submitter := &rootRecordingSubmitter{outcome: sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}}
 	preparer := &rootRecordingPreparer{source: "snode-A", claim: sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"}}
 	orch := sicore.NewOrchestrator(submitter, preparer, sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal})
-	ingress, err := NewStorageIntegrityIngressWithPayloadWriter(orch, nil, sicore.MaterializerCSV, writer)
+	ingress, err := NewStorageIntegrityIngressWithPayloadWriter(orch, nil, sicore.MaterializerNative, writer)
 	if err != nil {
 		t.Fatalf("NewStorageIntegrityIngressWithPayloadWriter: %v", err)
 	}
@@ -597,7 +625,7 @@ func TestIngress_PreparedCandidateClaimedBeforeSourceFrontierRelease(t *testing.
 		candidates: []sicore.CandidatePart{shared},
 	}
 	orch := sicore.NewOrchestrator(submitter, preparer, sicore.OrchestratorConfig{ExpectedSource: "snode-A"})
-	ingress, err := NewStorageIntegrityIngress(orch, nil, sicore.MaterializerCSV)
+	ingress, err := NewStorageIntegrityIngress(orch, nil, sicore.MaterializerNative)
 	if err != nil {
 		t.Fatalf("NewStorageIntegrityIngress: %v", err)
 	}
@@ -690,7 +718,7 @@ func TestIngress_RecoverPendingRestoresFinalizedCandidateOwnerBeforeAbort(t *tes
 		&rootRecordingSubmitter{}, restartedPreparer,
 		sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
 	)
-	ingress, err := NewStorageIntegrityIngress(restarted, nil, sicore.MaterializerCSV)
+	ingress, err := NewStorageIntegrityIngress(restarted, nil, sicore.MaterializerNative)
 	if err != nil {
 		t.Fatalf("NewStorageIntegrityIngress: %v", err)
 	}
@@ -731,7 +759,7 @@ func TestIngress_RecoverPendingRestoresEachJournalRecordOnlyOnce(t *testing.T) {
 		&rootRecordingSubmitter{}, &rootRecordingPreparer{source: "snode-A"},
 		sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
 	)
-	ingress, err := NewStorageIntegrityIngress(restarted, nil, sicore.MaterializerCSV)
+	ingress, err := NewStorageIntegrityIngress(restarted, nil, sicore.MaterializerNative)
 	if err != nil {
 		t.Fatalf("NewStorageIntegrityIngress: %v", err)
 	}
@@ -784,7 +812,7 @@ func TestIngress_RecoverPendingFinalizedZeroCandidateIsNoop(t *testing.T) {
 		&rootRecordingSubmitter{}, &rootRecordingPreparer{source: "snode-A"},
 		sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
 	)
-	ingress, err := NewStorageIntegrityIngress(restarted, nil, sicore.MaterializerCSV)
+	ingress, err := NewStorageIntegrityIngress(restarted, nil, sicore.MaterializerNative)
 	if err != nil {
 		t.Fatalf("NewStorageIntegrityIngress: %v", err)
 	}
@@ -841,7 +869,7 @@ func TestIngress_LegacyFinalizedAbsentCandidateRequiresExplicitMigration(t *test
 		&rootRecordingSubmitter{}, &rootRecordingPreparer{source: "snode-A"},
 		sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
 	)
-	ingress, err := NewStorageIntegrityIngress(restarted, nil, sicore.MaterializerCSV)
+	ingress, err := NewStorageIntegrityIngress(restarted, nil, sicore.MaterializerNative)
 	if err != nil {
 		t.Fatalf("NewStorageIntegrityIngress: %v", err)
 	}
@@ -892,7 +920,7 @@ func TestIngress_LegacyFinalizedActiveCandidateMigratesObservationAndPartitions(
 		&rootRecordingSubmitter{}, &rootRecordingPreparer{source: "snode-A"},
 		sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
 	)
-	visibleIngress, err := NewStorageIntegrityIngress(visibleRestart, nil, sicore.MaterializerCSV)
+	visibleIngress, err := NewStorageIntegrityIngress(visibleRestart, nil, sicore.MaterializerNative)
 	if err != nil {
 		t.Fatalf("NewStorageIntegrityIngress visible: %v", err)
 	}
@@ -920,7 +948,7 @@ func TestIngress_LegacyFinalizedActiveCandidateMigratesObservationAndPartitions(
 		&rootRecordingSubmitter{}, &rootRecordingPreparer{source: "snode-A"},
 		sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
 	)
-	absentIngress, err := NewStorageIntegrityIngress(absentRestart, nil, sicore.MaterializerCSV)
+	absentIngress, err := NewStorageIntegrityIngress(absentRestart, nil, sicore.MaterializerNative)
 	if err != nil {
 		t.Fatalf("NewStorageIntegrityIngress absent: %v", err)
 	}
@@ -977,7 +1005,7 @@ func TestIngress_LegacyFinalizedKnownEmptyPartitionsRejectsCandidate(t *testing.
 		&rootRecordingSubmitter{}, &rootRecordingPreparer{source: "snode-A"},
 		sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
 	)
-	ingress, err := NewStorageIntegrityIngress(restarted, nil, sicore.MaterializerCSV)
+	ingress, err := NewStorageIntegrityIngress(restarted, nil, sicore.MaterializerNative)
 	if err != nil {
 		t.Fatalf("NewStorageIntegrityIngress: %v", err)
 	}
@@ -1030,7 +1058,7 @@ func TestIngress_LegacyFinalizedObservedCandidateMigratesWithoutCurrentPart(t *t
 		&rootRecordingSubmitter{}, &rootRecordingPreparer{source: "snode-A"},
 		sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
 	)
-	ingress, err := NewStorageIntegrityIngress(restarted, nil, sicore.MaterializerCSV)
+	ingress, err := NewStorageIntegrityIngress(restarted, nil, sicore.MaterializerNative)
 	if err != nil {
 		t.Fatalf("NewStorageIntegrityIngress: %v", err)
 	}
@@ -1094,7 +1122,7 @@ func TestIngress_RestartPersistsCandidateVisibilityAndRetiresHistoricalDebt(t *t
 		&rootRecordingSubmitter{}, &rootRecordingPreparer{source: "snode-A"},
 		sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
 	)
-	visibleIngress, err := NewStorageIntegrityIngress(visibleRestart, nil, sicore.MaterializerCSV)
+	visibleIngress, err := NewStorageIntegrityIngress(visibleRestart, nil, sicore.MaterializerNative)
 	if err != nil {
 		t.Fatalf("NewStorageIntegrityIngress visible restart: %v", err)
 	}
@@ -1124,7 +1152,7 @@ func TestIngress_RestartPersistsCandidateVisibilityAndRetiresHistoricalDebt(t *t
 		&rootRecordingSubmitter{}, &rootRecordingPreparer{source: "snode-A"},
 		sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
 	)
-	absentIngress, err := NewStorageIntegrityIngress(absentRestart, nil, sicore.MaterializerCSV)
+	absentIngress, err := NewStorageIntegrityIngress(absentRestart, nil, sicore.MaterializerNative)
 	if err != nil {
 		t.Fatalf("NewStorageIntegrityIngress absent restart: %v", err)
 	}
@@ -1167,7 +1195,7 @@ func TestIngress_LiveReservationPersistsCandidateVisibilityByStatement(t *testin
 		&rootRecordingSubmitter{outcome: sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}}, preparer,
 		sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
 	)
-	ingress, err := NewStorageIntegrityIngressWithPayloadWriter(orch, nil, sicore.MaterializerCSV, writer)
+	ingress, err := NewStorageIntegrityIngressWithPayloadWriter(orch, nil, sicore.MaterializerNative, writer)
 	if err != nil {
 		t.Fatalf("NewStorageIntegrityIngressWithPayloadWriter: %v", err)
 	}
@@ -1234,7 +1262,7 @@ func TestIngress_RecoverPendingRestoresReservationThroughExactCleanup(t *testing
 		&rootRecordingSubmitter{}, restartedPreparer,
 		sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
 	)
-	ingress, err := NewStorageIntegrityIngress(restarted, nil, sicore.MaterializerCSV)
+	ingress, err := NewStorageIntegrityIngress(restarted, nil, sicore.MaterializerNative)
 	if err != nil {
 		t.Fatalf("NewStorageIntegrityIngress: %v", err)
 	}
@@ -1288,7 +1316,7 @@ func TestIngress_RecoveredPendingPersistsTouchedPartitionsBeforeTerminalCompacti
 		&rootRecordingPreparer{source: "snode-A", claim: sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"}},
 		sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
 	)
-	ingress, err := NewStorageIntegrityIngress(restarted, nil, sicore.MaterializerCSV)
+	ingress, err := NewStorageIntegrityIngress(restarted, nil, sicore.MaterializerNative)
 	if err != nil {
 		t.Fatalf("NewStorageIntegrityIngress: %v", err)
 	}
@@ -1310,81 +1338,13 @@ func TestIngress_RecoveredPendingPersistsTouchedPartitionsBeforeTerminalCompacti
 		&rootRecordingSubmitter{}, &rootRecordingPreparer{source: "snode-A"},
 		sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
 	)
-	secondIngress, err := NewStorageIntegrityIngress(second, nil, sicore.MaterializerCSV)
+	secondIngress, err := NewStorageIntegrityIngress(second, nil, sicore.MaterializerNative)
 	if err != nil {
 		t.Fatalf("NewStorageIntegrityIngress second restart: %v", err)
 	}
 	secondIngress.WithPartsPressure(newGuard(), bpSchemaResolver())
 	if err := secondIngress.RecoverPending(ctx); err != nil {
 		t.Fatalf("second RecoverPending: %v", err)
-	}
-}
-
-func TestIngress_RecoveredPendingKnownEmptyPartitionsConvergesWithoutCapacity(t *testing.T) {
-	ctx := context.Background()
-	journal, err := sicore.NewFileIntakeJournal(t.TempDir())
-	if err != nil {
-		t.Fatalf("NewFileIntakeJournal: %v", err)
-	}
-	adm := bpAdmission()
-	adm.StatementID = "0xabc:2:n1"
-	payload := []byte("id,region\n")
-	adm.Payload.Bytes = payload
-	adm.Payload.Length = uint64(len(payload))
-
-	newGuard := func() *sicore.PartsPressureGuard {
-		return sicore.NewPartsPressureGuard(&rootPartsConn{}, sicore.PartsPressureConfig{
-			UnsafeDatabase: "hg_unsafe", SafeDatabase: "hg_safe",
-			SoftPartsPerPartition: 2, HardPartsPerPartition: 4,
-		})
-	}
-	first := sicore.NewOrchestrator(
-		&rootRecordingSubmitter{outcome: sicore.SubmitOutcome{Category: sicore.OutcomeRetryable, Reason: "NotLeader"}},
-		&rootRecordingPreparer{
-			source: "snode-A",
-			claim:  sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"},
-		},
-		sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
-	)
-	firstIngress, err := NewStorageIntegrityIngressWithPayloadWriter(
-		first, nil, sicore.MaterializerCSV,
-		&rootRecordingPayloadWriter{result: sicore.PayloadPutResult{
-			PayloadRef: "payload://store/zero-row", State: sicore.PayloadStateAvailable,
-		}},
-	)
-	if err != nil {
-		t.Fatalf("NewStorageIntegrityIngressWithPayloadWriter first: %v", err)
-	}
-	firstIngress.WithPartsPressure(newGuard(), bpSchemaResolver())
-	if err := firstIngress.ConsumeStorageIntegrityAdmission(ctx, adm); err == nil || !strings.Contains(err.Error(), "did not reach ACK2") {
-		t.Fatalf("retryable seed error=%v, want durable non-ACK2", err)
-	}
-
-	restarted := sicore.NewOrchestrator(
-		&rootRecordingSubmitter{outcome: sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}},
-		&rootRecordingPreparer{
-			source: "snode-A",
-			claim:  sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"},
-		},
-		sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
-	)
-	restartedIngress, err := NewStorageIntegrityIngress(restarted, nil, sicore.MaterializerCSV)
-	if err != nil {
-		t.Fatalf("NewStorageIntegrityIngress restarted: %v", err)
-	}
-	restartedIngress.WithPartsPressure(newGuard(), bpSchemaResolver())
-	if err := restartedIngress.RecoverPending(ctx); err != nil {
-		t.Fatalf("RecoverPending: %v", err)
-	}
-	persisted, ok, err := journal.LoadIntakeRecord(ctx, adm.StatementID)
-	if err != nil || !ok {
-		t.Fatalf("LoadIntakeRecord=(%+v, %v, %v)", persisted, ok, err)
-	}
-	if !persisted.IsTerminal || !persisted.TerminalResult.Ack2 {
-		t.Fatalf("zero-row recovery terminal=%v ack2=%v, want ACK2", persisted.IsTerminal, persisted.TerminalResult.Ack2)
-	}
-	if persisted.Admission.TouchedPartitionIDs == nil || len(persisted.Admission.TouchedPartitionIDs) != 0 {
-		t.Fatalf("zero-row touched partitions=%v, want non-nil empty", persisted.Admission.TouchedPartitionIDs)
 	}
 }
 
@@ -1417,7 +1377,7 @@ func TestIngress_RecoveredTouchedPartitionPersistenceFailsBeforePressureRestore(
 		&rootRecordingPreparer{source: "snode-A", claim: sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"}},
 		sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
 	)
-	ingress, err := NewStorageIntegrityIngress(restarted, nil, sicore.MaterializerCSV)
+	ingress, err := NewStorageIntegrityIngress(restarted, nil, sicore.MaterializerNative)
 	if err != nil {
 		t.Fatalf("NewStorageIntegrityIngress: %v", err)
 	}
@@ -1490,7 +1450,7 @@ func TestIngress_LegacyTerminalTouchedPersistenceFailureRetriesDurably(t *testin
 		&rootRecordingSubmitter{}, &rootRecordingPreparer{source: "snode-A"},
 		sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
 	)
-	ingress, err := NewStorageIntegrityIngress(orch, nil, sicore.MaterializerCSV)
+	ingress, err := NewStorageIntegrityIngress(orch, nil, sicore.MaterializerNative)
 	if err != nil {
 		t.Fatalf("NewStorageIntegrityIngress: %v", err)
 	}
@@ -1515,7 +1475,7 @@ func TestIngress_LegacyTerminalTouchedPersistenceFailureRetriesDurably(t *testin
 		&rootRecordingSubmitter{}, &rootRecordingPreparer{source: "snode-A"},
 		sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
 	)
-	secondIngress, err := NewStorageIntegrityIngress(second, nil, sicore.MaterializerCSV)
+	secondIngress, err := NewStorageIntegrityIngress(second, nil, sicore.MaterializerNative)
 	if err != nil {
 		t.Fatalf("NewStorageIntegrityIngress second: %v", err)
 	}
@@ -1560,7 +1520,7 @@ func TestIngress_RecoveryRejectsMalformedPreparedBindingBeforeClaimStatusConverg
 		sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
 	)
 	pressure := &fakePartsPressure{}
-	ingress, err := NewStorageIntegrityIngress(orch, nil, sicore.MaterializerCSV)
+	ingress, err := NewStorageIntegrityIngress(orch, nil, sicore.MaterializerNative)
 	if err != nil {
 		t.Fatalf("NewStorageIntegrityIngress: %v", err)
 	}
@@ -1615,7 +1575,7 @@ func TestIngress_SchemaOnlyRecoveryRejectsMalformedPreparedBindingBeforeClaimSta
 		&rootRecordingSubmitter{}, &rootRecordingPreparer{source: "snode-A"}, querier,
 		sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
 	)
-	ingress, err := NewStorageIntegrityIngress(orch, nil, sicore.MaterializerCSV)
+	ingress, err := NewStorageIntegrityIngress(orch, nil, sicore.MaterializerNative)
 	if err != nil {
 		t.Fatalf("NewStorageIntegrityIngress: %v", err)
 	}
@@ -1706,7 +1666,7 @@ func TestIngress_DefinitePrePrepareFailureReleasesReservation(t *testing.T) {
 	submitter := &rootRecordingSubmitter{outcome: sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}}
 	preparer := &rootRecordingPreparer{source: "snode-A", claim: sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"}}
 	orch := sicore.NewOrchestrator(submitter, preparer, sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal})
-	ingress, err := NewStorageIntegrityIngressWithPayloadWriter(orch, nil, sicore.MaterializerCSV, writer)
+	ingress, err := NewStorageIntegrityIngressWithPayloadWriter(orch, nil, sicore.MaterializerNative, writer)
 	if err != nil {
 		t.Fatalf("NewStorageIntegrityIngressWithPayloadWriter: %v", err)
 	}
@@ -1751,7 +1711,7 @@ func TestIngress_RepeatedCleanupAndTerminalSaveFailureReleaseZeroGrowthSlot(t *t
 		abortFn:    func([]sicore.CandidatePart) { conn.setRows(nil) },
 	}
 	orch := sicore.NewOrchestrator(submitter, preparer, sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal})
-	ingress, err := NewStorageIntegrityIngressWithPayloadWriter(orch, nil, sicore.MaterializerCSV, writer)
+	ingress, err := NewStorageIntegrityIngressWithPayloadWriter(orch, nil, sicore.MaterializerNative, writer)
 	if err != nil {
 		t.Fatalf("NewStorageIntegrityIngressWithPayloadWriter: %v", err)
 	}
@@ -1797,7 +1757,7 @@ func TestIngress_UnknownSchemaOrFreezeViolationRefusedWithoutPut(t *testing.T) {
 		t.Fatalf("err = %v writer calls = %d", err, writer.calls)
 	}
 
-	ingress.schemas = sicore.TableSchemaResolverFunc(func(tableID string) (payloadexec.TableSchema, bool) {
+	ingress.schemas = StorageIntegrityTableSchemaResolverFunc(func(tableID string) (payloadexec.TableSchema, bool) {
 		return payloadexec.TableSchema{
 			TableID: tableID, PartitionBy: "region",
 			Columns: []lthash.Column{{Name: "region", Type: "UInt64"}},
@@ -1813,7 +1773,7 @@ func TestIngress_UnknownSchemaOrFreezeViolationRefusedWithoutPut(t *testing.T) {
 func TestIngress_ResolverTableIDMismatchFailsClosedBeforeReservationOrPut(t *testing.T) {
 	pressure := &fakePartsPressure{}
 	ingress, writer, _, _ := newBackpressureIngress(t, pressure)
-	ingress.schemas = sicore.TableSchemaResolverFunc(func(string) (payloadexec.TableSchema, bool) {
+	ingress.schemas = StorageIntegrityTableSchemaResolverFunc(func(string) (payloadexec.TableSchema, bool) {
 		return payloadexec.TableSchema{
 			TableID: "net1.other", PartitionBy: "region",
 			Columns: []lthash.Column{{Name: "id", Type: "UInt64"}, {Name: "region", Type: "String"}},

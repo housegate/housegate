@@ -1,6 +1,7 @@
 package storageintegrity
 
 import (
+	"bytes"
 	"errors"
 	"reflect"
 	"testing"
@@ -10,6 +11,8 @@ import (
 	"github.com/housegate/housegate/pkg/lthash"
 	"github.com/housegate/housegate/pkg/replay/payloadexec"
 )
+
+const payloadPartitionsNativeRevision = 54453
 
 func partitionsSchema() payloadexec.TableSchema {
 	return payloadexec.TableSchema{
@@ -34,13 +37,33 @@ func TestPayloadPartitionIDs_NativeUsesDecodedRows(t *testing.T) {
 		{Name: "p", Data: newColStr("b", "a", "b")},
 		{Name: "v", Data: &proto.ColUInt64{1, 2, 3}},
 	})
-	got, err := PayloadPartitionIDs(partitionsSchema(), PayloadEncodingClickHouseNativeData, nativePayloadTestRevision, payload)
+	got, err := PayloadPartitionIDs(partitionsSchema(), PayloadEncodingClickHouseNativeData, payloadPartitionsNativeRevision, payload)
 	if err != nil {
 		t.Fatalf("PayloadPartitionIDs: %v", err)
 	}
 	if want := []string{"p_a", "p_b"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("partitions = %v want %v", got, want)
 	}
+}
+
+func encodeNativePayload(t *testing.T, input proto.Input) []byte {
+	t.Helper()
+	var buf proto.Buffer
+	buf.PutUVarInt(uint64(proto.ClientCodeData))
+	buf.PutString("")
+	rows := input[0].Data.Rows()
+	if err := (proto.Block{Rows: rows, Columns: len(input)}).EncodeBlock(&buf, payloadPartitionsNativeRevision, input); err != nil {
+		t.Fatalf("encode block: %v", err)
+	}
+	return bytes.Clone(buf.Buf)
+}
+
+func newColStr(values ...string) *proto.ColStr {
+	col := new(proto.ColStr)
+	for _, value := range values {
+		col.Append(value)
+	}
+	return col
 }
 
 func TestPayloadPartitionIDs_UnpartitionedIsAll(t *testing.T) {

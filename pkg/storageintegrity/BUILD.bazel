@@ -58,8 +58,10 @@ go_test(
     ],
     embed = [":storageintegrity"],
     deps = [
+        "//pkg/lthash",
         "//pkg/replay",
         "//pkg/replay/payloadexec",
+        "@com_github_clickhouse_ch_go//proto",
         "@com_github_sentioxyz_arbiter_proto//gen/pb",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//codes",

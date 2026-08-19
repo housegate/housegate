@@ -981,7 +981,7 @@ func TestBuildStorageIntegrityRuntimeBuildsConsumerAndRunsMergeGuard(t *testing.
 	if guard.calls != 1 {
 		t.Fatalf("merge guard calls = %d, want 1", guard.calls)
 	}
-	payload := []byte("native-block-bytes")
+	payload := bpNativePayload([]uint64{1}, []string{"eu"})
 	sql := "INSERT INTO events FORMAT Native"
 	if err := ingress.ConsumeStorageIntegrityAdmission(ctx, storageintegrity.Admission{
 		StatementID:     strings.ToLower(signer.Address()) + ":1:n1",
@@ -1038,6 +1038,7 @@ func TestBuildStorageIntegrityRuntimePinsNativeMaterializer(t *testing.T) {
 			StatusQuerier:      rootRecordingStatusQuerier{},
 			PayloadWriter:      &rootRecordingPayloadWriter{},
 			MergeGuard:         &recordingBuildMergeGuard{},
+			TableSchemas:       bpSchemas(),
 		},
 	)
 	if err != nil {
@@ -1275,7 +1276,7 @@ func TestStartStorageIntegrityRuntimeRecoversAfterInitialMergeAssert(t *testing.
 	if err != nil {
 		t.Fatalf("NewFileIntakeJournal: %v", err)
 	}
-	payload := []byte("native-block-bytes")
+	payload := bpNativePayload([]uint64{1}, []string{"eu"})
 	sql := "INSERT INTO events FORMAT Native"
 	adm := sicore.AdmissionRecord{
 		StatementID:     "0xabc:1:n1",

@@ -210,7 +210,7 @@ func (p *blockingPressureLifecycle) Run(ctx context.Context) {
 
 func TestStorageIntegrityIngressCloseCancelsAndJoinsPressureRunner(t *testing.T) {
 	orch := sicore.NewOrchestrator(&rootRecordingSubmitter{}, &rootRecordingPreparer{}, sicore.OrchestratorConfig{})
-	ingress, err := NewStorageIntegrityIngress(orch, nil, sicore.MaterializerCSV)
+	ingress, err := NewStorageIntegrityIngress(orch, nil, sicore.MaterializerNative)
 	if err != nil {
 		t.Fatalf("NewStorageIntegrityIngress: %v", err)
 	}

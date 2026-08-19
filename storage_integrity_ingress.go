@@ -11,8 +11,24 @@ import (
 	"github.com/housegate/housegate/pkg/chproto"
 	siplugin "github.com/housegate/housegate/pkg/plugins/storageintegrity"
 	"github.com/housegate/housegate/pkg/replay"
+	"github.com/housegate/housegate/pkg/replay/payloadexec"
 	sicore "github.com/housegate/housegate/pkg/storageintegrity"
 )
+
+// StorageIntegrityTableSchemaResolver resolves the immutable table schema used
+// to derive payload partitions. This host-level seam deliberately stays out of
+// pkg/storageintegrity: signed-envelope v2 removed schema resolution from the
+// core protocol and production ingress owns the authoritative schema set.
+type StorageIntegrityTableSchemaResolver interface {
+	StorageIntegrityTableSchema(tableID string) (payloadexec.TableSchema, bool)
+}
+
+// StorageIntegrityTableSchemaResolverFunc adapts a function into a resolver.
+type StorageIntegrityTableSchemaResolverFunc func(tableID string) (payloadexec.TableSchema, bool)
+
+func (fn StorageIntegrityTableSchemaResolverFunc) StorageIntegrityTableSchema(tableID string) (payloadexec.TableSchema, bool) {
+	return fn(tableID)
+}
 
 // StorageIntegrityIngress is the P1e runtime shell that connects the ingress
 // admission plugin to the staged-intake orchestrator. It implements the
@@ -37,7 +53,7 @@ type StorageIntegrityIngress struct {
 	leaseManager   sicore.PayloadLeaseManager
 	mergeRunner    *StorageIntegrityMergeSupervisor
 	pressure       StorageIntegrityPartsPressure
-	schemas        sicore.TableSchemaResolver
+	schemas        StorageIntegrityTableSchemaResolver
 	pressureRunner StorageIntegrityPartsPressureLifecycle
 	statementLocks [64]sync.Mutex
 	pressureMu     sync.Mutex
@@ -162,7 +178,7 @@ func (i *StorageIntegrityIngress) Close() {
 
 // WithPartsPressure enables the ingress back-pressure check. The resolver
 // supplies the pinned schema used to derive every payload partition.
-func (i *StorageIntegrityIngress) WithPartsPressure(pressure StorageIntegrityPartsPressure, schemas sicore.TableSchemaResolver) {
+func (i *StorageIntegrityIngress) WithPartsPressure(pressure StorageIntegrityPartsPressure, schemas StorageIntegrityTableSchemaResolver) {
 	i.pressure = pressure
 	i.schemas = schemas
 	pressure.SetCandidateObservedHook(i.orch.MarkCandidateObserved)
@@ -175,7 +191,7 @@ func (i *StorageIntegrityIngress) WithPartsPressure(pressure StorageIntegrityPar
 // WithTableSchemas binds the authoritative schema resolver even when parts
 // pressure is disabled. Candidate validation still needs the payload-derived
 // touched partition set; disabling admission pressure only skips reservation.
-func (i *StorageIntegrityIngress) WithTableSchemas(schemas sicore.TableSchemaResolver) {
+func (i *StorageIntegrityIngress) WithTableSchemas(schemas StorageIntegrityTableSchemaResolver) {
 	i.schemas = schemas
 	i.orch.SetBeforeRecovery(i.restorePressureReservations)
 }
