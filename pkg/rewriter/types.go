@@ -36,8 +36,12 @@ import (
 	"context"
 	"time"
 
+	pb "github.com/housegate/rewriter-proto/gen/pb"
+
 	"github.com/housegate/housegate/pkg/sqlmeta"
 )
+
+const StorageIntegrityContractV1 = pb.StorageIntegrityContractVersion_STORAGE_INTEGRITY_CONTRACT_V1
 
 // RewriteResult bundles everything the rewriter learned about one SQL
 // statement. All fields are best-effort: when Rewrite short-circuits
@@ -105,16 +109,22 @@ type RewriteResult struct {
 	// (Unsupported) response; only a SyntaxError or the short-circuit
 	// path leaves it Unspecified.
 	ExistenceClause sqlmeta.ExistenceClause
+
+	// StorageIntegrityContractVersion is the exact positive acknowledgement
+	// echoed by the backend. It remains unspecified when no SI-aware backend
+	// response was observed.
+	StorageIntegrityContractVersion pb.StorageIntegrityContractVersion
 }
 
 // Rewriter rewrites Sentio-Network mode SQL into real SQL. It is bound
 // to one client connection — the implementation reads account /
 // session state on each call.
 type Rewriter interface {
-	// Rewrite transforms the input SQL. Implementations are fail-open:
-	// any error short-circuits the call but the caller is expected to
-	// log and forward the original SQL unchanged so that a flaky
-	// rewriter never takes down query traffic.
+	// Rewrite transforms the input SQL. Ordinary implementation errors may
+	// be handled fail-open by callers when no storage-integrity surface is
+	// configured. A *RejectedError is different: it is a fail-closed SQL
+	// outcome and callers MUST propagate it as a client Exception rather
+	// than forwarding the original SQL.
 	//
 	// effectiveAccount is the principal whose database permissions gate
 	// the per-query database_map sent to the rewriter service. Pass the
@@ -160,6 +170,13 @@ type Factory interface {
 	// Close on the factory ends rewriting for all of them; callers must
 	// order shutdown accordingly.
 	Close() error
+}
+
+// StorageIntegrityCapableFactory is a Factory that can enforce the v1
+// storage-integrity request/response contract on every rewrite call.
+type StorageIntegrityCapableFactory interface {
+	Factory
+	StorageIntegrityContractVersion() pb.StorageIntegrityContractVersion
 }
 
 // Session is the minimal per-connection state Rewriter reads on each
@@ -254,6 +271,8 @@ type Options struct {
 	//
 	// Wired from cfg.Auth.Enabled in cmd.
 	AuthEnabled bool
+
+	StorageIntegrity StorageIntegrityOptions
 }
 
 // PeerSigner produces a peer-relay JWS authenticating this proxy to

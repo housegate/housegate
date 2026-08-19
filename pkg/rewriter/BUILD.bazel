@@ -8,6 +8,7 @@ go_library(
         "backend.go",
         "materialize.go",
         "sentio.go",
+        "storage_integrity.go",
         "types.go",
     ],
     importpath = "github.com/housegate/housegate/pkg/rewriter",
@@ -38,6 +39,7 @@ go_test(
         "materialize_test.go",
         "native_smoke_test.go",
         "sentio_test.go",
+        "storage_integrity_test.go",
     ],
     embed = [":rewriter"],
     deps = [

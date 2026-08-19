@@ -23,6 +23,7 @@ func buildDynamicArgs(
 	delim string,
 	logicalToRemoteIndex map[string]string,
 	remoteUpstreams map[string]*pb.RewriteTableDynamicArgs_RemoteUpstream,
+	si *pb.StorageIntegrityArgs,
 ) *pb.RewriteTableDynamicArgs {
 	out := &pb.RewriteTableDynamicArgs{
 		DatabaseMap:                          databaseMap,
@@ -31,6 +32,7 @@ func buildDynamicArgs(
 		Delim:                                delim,
 		LogicalDatabaseToRemoteUpstreamIndex: logicalToRemoteIndex,
 		RemoteUpstreams:                      remoteUpstreams,
+		StorageIntegrity:                     si,
 	}
 	if physicalCtx != "" {
 		v := physicalCtx
