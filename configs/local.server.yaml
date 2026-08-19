@@ -45,7 +45,7 @@ rewriter:
   engine: native
 #  service_addr: "localhost:50051"
 #  native_library_path: /path/to/libpolyglot_sql_ffi.dylib  # native only; empty → POLYGLOT_SQL_FFI_PATH env, then system paths
-  native_library_release: v0.7.0   # native only: auto-fetch the FFI lib from rewriter-go releases (cached; native_library_path wins)
+  native_library_release: v0.7.1   # native only: auto-fetch the FFI lib from rewriter-go releases (cached; native_library_path wins)
   native_library_sha256: ""        # optional hard pin for the fetched lib
   timeout: "5s"
   physical_database: testnet
