@@ -604,9 +604,13 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 		// uncommitted capacity reservation for that same interval, including across
 		// payload-store retries, so a queued statement cannot invert capacity and
 		// source ordering.
-	case attemptReservation != nil && (errors.Is(err, sicore.ErrBackpressure) || !res.SourceWriteMayExist()):
-		// SNode hard pressure and every definite pre-prepare failure occur before a
-		// source write. Only an actually attempted/known prepare stays charged.
+	case attemptReservation != nil && !res.SourceWriteMayExist():
+		// Definite pre-prepare failures that release the source frontier also release
+		// their capacity. A source-side pressure error is not necessarily in this
+		// class: once Prepare was invoked, the orchestrator deliberately retains the
+		// frontier until source lookup resolves whether the write occurred. Such an
+		// attempt falls through to CommitIndeterminate below and keeps both resources
+		// owned by the same statement.
 		i.cancelTrackedReservation(rec.StatementID, attemptReservation)
 	case attemptReservation != nil:
 		if commitErr := commitPressureReservation(attemptReservation, res.Prepared.CandidateParts, res.SourceWriteMayExist()); commitErr != nil {

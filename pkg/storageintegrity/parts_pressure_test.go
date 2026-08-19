@@ -448,6 +448,36 @@ func TestPartsPressureGuard_UnboundCommittedSlotCannotBeCoveredByUnrelatedGrowth
 	reservation.Release()
 }
 
+func TestPartsPressureGuard_RestoreBatchKeepsUnboundPendingDebtThroughUnrelatedGrowth(t *testing.T) {
+	guard, conn := pressureFixture(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 1})
+	guard.cfg.SoftPartsPerPartition = 3
+	restored, err := guard.RestoreBatch(context.Background(), []PartsRestoreRecord{{
+		StatementID: "pending-indeterminate", Table: "db__t", PartitionIDs: []string{"p_a"},
+	}})
+	if err != nil {
+		t.Fatalf("RestoreBatch: %v", err)
+	}
+	reservation := restored["pending-indeterminate"]
+	if reservation == nil {
+		t.Fatal("RestoreBatch returned no pending reservation")
+	}
+
+	// A different source becomes visible before recovery can look up the lost
+	// Prepare response. Aggregate N+1 growth cannot identify the pending writer
+	// and must not surrender its durable capacity slot.
+	conn.setRows(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 2})
+	if _, err := guard.Refresh(context.Background()); err != nil {
+		t.Fatalf("unrelated Refresh: %v", err)
+	}
+	if competing, err := guard.ReserveStatement(context.Background(), "competing", "db__t", []string{"p_a"}); err == nil {
+		competing.Release()
+		t.Fatal("unrelated growth covered restored indeterminate debt")
+	} else if !errors.Is(err, ErrBackpressure) {
+		t.Fatalf("competing Reserve=%v, want ErrBackpressure", err)
+	}
+	reservation.Release()
+}
+
 func TestPartsPressureGuard_RefreshBeforeCommitAbsorbsOriginalReservation(t *testing.T) {
 	guard, conn := pressureFixture(fakePartsRow{"hg_unsafe", "db__t", "a", "p", 2})
 	guard.cfg.SoftPartsPerPartition = 4

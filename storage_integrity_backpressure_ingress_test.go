@@ -1972,8 +1972,48 @@ func TestIngress_MapsSNodeMirrorBackpressureToException252(t *testing.T) {
 	if !errors.As(err, &clientErr) || clientErr.Code != chproto.CodeTooManyParts || !strings.Contains(clientErr.Message, "hard limit 2950") {
 		t.Fatalf("err = %v, want ClientError 252 from the SNode mirror", err)
 	}
-	if pressure.invalidated != 1 || pressure.released != 1 || pressure.committed != 0 {
-		t.Fatalf("mirror refusal invalidate/release/commit = %d/%d/%d want 1/1/0", pressure.invalidated, pressure.released, pressure.committed)
+	if pressure.invalidated != 1 || pressure.released != 0 || pressure.committed != 1 {
+		t.Fatalf("mirror refusal invalidate/release/commit = %d/%d/%d want 1/0/1", pressure.invalidated, pressure.released, pressure.committed)
+	}
+}
+
+func TestIngress_SNodeMirrorBackpressureRetainsSoftSlotWithSourceFrontier(t *testing.T) {
+	conn := &rootPartsConn{rows: []rootPartsRow{
+		{"hg_unsafe", "net1__events", "eu", "region", 1},
+		{"hg_unsafe", "net1__events", "us", "region", 1},
+	}}
+	pressure := sicore.NewPartsPressureGuard(conn, sicore.PartsPressureConfig{
+		UnsafeDatabase: "hg_unsafe", SafeDatabase: "hg_safe",
+		SoftPartsPerPartition: 2, HardPartsPerPartition: 5,
+	})
+	ingress, _, _, preparer := newBackpressureIngress(t, pressure)
+	preparer.err = &sicore.BackpressureError{
+		Database: "hg_unsafe", Table: "net1__events", Partition: "p_eu",
+		Parts: 5, Limit: 5, Kind: "hard",
+	}
+
+	if err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), bpAdmission()); !errors.Is(err, sicore.ErrBackpressure) {
+		t.Fatalf("first SNode mirror refusal=%v, want ErrBackpressure", err)
+	}
+	if ingress.pressureReservation(bpAdmission().StatementID) == nil {
+		t.Fatal("SNode mirror refusal released capacity while retaining the source frontier")
+	}
+	if competing, err := pressure.ReserveStatement(context.Background(), "competing", "net1__events", []string{"p_eu"}); err == nil {
+		competing.Release()
+		t.Fatal("competing admission stole the frontier holder's soft-limit slot")
+	} else if !errors.Is(err, sicore.ErrBackpressure) {
+		t.Fatalf("competing reservation=%v, want ErrBackpressure", err)
+	}
+
+	// The same statement proves the first source attempt wrote nothing and must
+	// reuse its retained slot without a release/re-reserve window.
+	preparer.err = nil
+	preparer.lookupFound = false
+	if err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), bpAdmission()); err != nil {
+		t.Fatalf("same-ID retry after no-write proof: %v", err)
+	}
+	if preparer.lookupCalls != 1 || preparer.prepareCalls != 2 {
+		t.Fatalf("lookup/prepare calls=%d/%d, want 1/2", preparer.lookupCalls, preparer.prepareCalls)
 	}
 }
 

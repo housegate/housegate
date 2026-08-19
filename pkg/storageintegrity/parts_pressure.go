@@ -500,6 +500,13 @@ func (g *PartsPressureGuard) RestoreBatch(ctx context.Context, records []PartsRe
 			reservation.releaseLocked()
 			return fail(err)
 		}
+		// A non-finalized durable record with touched partitions but no exact
+		// candidates represents a lost/indeterminate Prepare response. Preserve the
+		// same identity-unknown debt used by CommitIndeterminate: unrelated aggregate
+		// growth during recovery cannot prove that this statement wrote the visible
+		// part. Recovery will either bind exact candidates or cancel/reuse the handle
+		// after source lookup proves no write.
+		reservation.unboundRetained = !record.Finalized && len(partitionIDs) > 0 && len(bindCandidates) == 0
 		reservation.commitLocked()
 		applied = append(applied, appliedRestore{reservation: reservation, finalized: record.Finalized})
 		if !record.Finalized {
