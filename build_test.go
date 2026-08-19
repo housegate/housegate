@@ -32,6 +32,7 @@ import (
 	"github.com/housegate/housegate/pkg/rewriter"
 	"github.com/housegate/housegate/pkg/sqlmeta"
 	sicore "github.com/housegate/housegate/pkg/storageintegrity"
+	rewriterpb "github.com/housegate/rewriter-proto/gen/pb"
 	pb "github.com/sentioxyz/arbiter-proto/gen/pb"
 	"google.golang.org/grpc"
 )
@@ -45,6 +46,12 @@ func (stubRewriterFactory) NewRewriter(_ rewriter.Session) rewriter.Rewriter {
 	return stubRewriter{}
 }
 func (stubRewriterFactory) Close() error { return nil }
+
+type siCapableStubRewriterFactory struct{ stubRewriterFactory }
+
+func (siCapableStubRewriterFactory) StorageIntegrityContractVersion() rewriterpb.StorageIntegrityContractVersion {
+	return rewriter.StorageIntegrityContractV1
+}
 
 type stubRewriter struct{}
 
@@ -75,6 +82,105 @@ func minimalRouterOnlyCfg(t *testing.T) *config.Config {
 	cfg := config.Default()
 	cfg.Listen = "127.0.0.1:0"
 	return &cfg
+}
+
+type buildFakeReadState struct{}
+
+func (buildFakeReadState) PromotedUnsafeParts(string) ([]string, error) { return nil, nil }
+
+func TestStorageIntegrityRewriterOptions_DerivesPhysicalNames(t *testing.T) {
+	cfg := minimalServerCfg(t)
+	cfg.StorageIntegrity.Tables = []string{"tenant.events", "db1.t"}
+	cfg.StorageIntegrity.Read.DefaultMode = "unsafe_latest"
+	cfg.StorageIntegrity.Ingress.Enabled = false
+	rs := &buildFakeReadState{}
+
+	got := storageIntegrityRewriterOptions(cfg, rs)
+	if len(got.Tables) != 2 || got.Tables[0] != (rewriter.StorageIntegrityTable{
+		TableID:     "tenant.events",
+		SafeTable:   "hg_safe.tenant__events",
+		UnsafeTable: "hg_unsafe.tenant__events",
+	}) {
+		t.Fatalf("tables = %+v", got.Tables)
+	}
+	if got.DefaultReadMode != rewriter.ReadModeUnsafeLatest || got.ReadState != rs || got.InsertLaneEnabled {
+		t.Fatalf("opts = %+v", got)
+	}
+
+	cfg.StorageIntegrity.Ingress.Enabled = true
+	if !storageIntegrityRewriterOptions(cfg, nil).InsertLaneEnabled {
+		t.Fatal("ingress enabled must enable the insert lane")
+	}
+}
+
+func TestBuildServer_UnsafeLatestDefaultRequiresReadState(t *testing.T) {
+	cfg := minimalServerCfg(t)
+	cfg.StorageIntegrity.Tables = []string{"tenant.events"}
+	cfg.StorageIntegrity.Read.DefaultMode = "unsafe_latest"
+
+	_, err := buildServer(Options{
+		Config:       cfg,
+		NetworkState: network.NewInMemoryNetworkState(),
+		Rewriter:     stubRewriterFactory{},
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "storage_integrity.read.default_mode unsafe_latest requires Options.StorageIntegrityReadState") {
+		t.Fatalf("err = %v", err)
+	}
+
+	bs, err := buildServer(Options{
+		Config:                    cfg,
+		NetworkState:              network.NewInMemoryNetworkState(),
+		Rewriter:                  siCapableStubRewriterFactory{},
+		StorageIntegrityReadState: &buildFakeReadState{},
+	}, nil)
+	if err != nil {
+		t.Fatalf("with a port wired: %v", err)
+	}
+	defer bs.teardown()
+
+	var rewritePlugin *rewrite.Plugin
+	for _, candidate := range requireExternalChain(t, bs).QueryPlugins {
+		if p, ok := candidate.(*rewrite.Plugin); ok {
+			rewritePlugin = p
+			break
+		}
+	}
+	if rewritePlugin == nil {
+		t.Fatal("configured SI surface did not wire rewrite plugin")
+	}
+	if !rewritePlugin.FailClosedOnError || rewritePlugin.RequiredStorageIntegrityContractVersion != rewriter.StorageIntegrityContractV1 {
+		t.Fatalf("SI rewrite plugin safety fields = fail_closed:%v contract:%s",
+			rewritePlugin.FailClosedOnError, rewritePlugin.RequiredStorageIntegrityContractVersion)
+	}
+}
+
+func TestBuildServer_ConfiguredSISurfaceRejectsUnawareInjectedFactory(t *testing.T) {
+	cfg := minimalServerCfg(t)
+	cfg.StorageIntegrity.Tables = []string{"tenant.events"}
+
+	_, err := buildServer(Options{
+		Config:       cfg,
+		NetworkState: network.NewInMemoryNetworkState(),
+		Rewriter:     stubRewriterFactory{},
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "storage-integrity contract v1") {
+		t.Fatalf("err = %v, want unaware injected factory rejection", err)
+	}
+}
+
+func TestBuildServer_ConfiguredSISurfaceRequiresAvailableRewriter(t *testing.T) {
+	cfg := minimalServerCfg(t)
+	cfg.StorageIntegrity.Tables = []string{"tenant.events"}
+	cfg.Shard = nil
+	cfg.Upstream = ""
+
+	_, err := buildServer(Options{
+		Config:       cfg,
+		NetworkState: network.NewInMemoryNetworkState(),
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "storage_integrity.tables requires an available SQL rewriter") {
+		t.Fatalf("err = %v", err)
+	}
 }
 
 func TestDialRawPreservesConfiguredAddress(t *testing.T) {
@@ -886,6 +992,7 @@ func TestBuildServer_StorageIntegrityRuntimeAutoWiresArbiterStatusQuerier(t *tes
 	bs, err := buildServer(Options{
 		Config:       cfg,
 		NetworkState: network.NewInMemoryNetworkState(),
+		Rewriter:     siCapableStubRewriterFactory{},
 		StorageIntegrityRuntime: StorageIntegrityRuntimeOptions{
 			ArbiterIngressClient: &rootArbiterIngressClient{},
 			SourcePreparer:       &rootRecordingPreparer{},
@@ -911,6 +1018,7 @@ func TestBuildServer_StorageIntegrityRuntimeRejectsManualConsumer(t *testing.T) 
 	_, err = buildServer(Options{
 		Config:                            cfg,
 		NetworkState:                      network.NewInMemoryNetworkState(),
+		Rewriter:                          siCapableStubRewriterFactory{},
 		StorageIntegrityAdmissionConsumer: &recordingAdmissionConsumer{},
 		StorageIntegrityRuntime: StorageIntegrityRuntimeOptions{
 			StatementSubmitter: &rootRecordingSubmitter{},

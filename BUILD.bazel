@@ -111,6 +111,7 @@ go_test(
         "//pkg/sqlmeta",
         "//pkg/storageintegrity",
         "@com_github_clickhouse_ch_go//proto",
+        "@com_github_housegate_rewriter_proto//gen/pb",
         "@com_github_prometheus_client_golang//prometheus",
         "@com_github_prometheus_client_golang//prometheus/testutil",
         "@com_github_sentioxyz_arbiter_proto//gen/pb",

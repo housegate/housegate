@@ -104,12 +104,32 @@ func resolveNativeLibraryPath(engine, explicitPath, release, sha256, baseURL str
 	return p, nil
 }
 
+// storageIntegrityRewriterOptions derives the rewriter's SI read-surface
+// options from config: physical names per Spec C D2, the default read mode,
+// the host port, and whether the signed INSERT lane (ingress) is on.
+func storageIntegrityRewriterOptions(cfg *config.Config, rs rewriter.StorageIntegrityReadState) rewriter.StorageIntegrityOptions {
+	out := rewriter.StorageIntegrityOptions{
+		DefaultReadMode:   rewriter.ReadMode(cfg.StorageIntegrity.Read.DefaultMode),
+		ReadState:         rs,
+		InsertLaneEnabled: cfg.StorageIntegrity.Ingress.Enabled,
+	}
+	for _, id := range cfg.StorageIntegrity.Tables {
+		phys := config.StorageIntegrityPhysicalTable(id)
+		out.Tables = append(out.Tables, rewriter.StorageIntegrityTable{
+			TableID:     id,
+			SafeTable:   config.StorageIntegritySafeDatabase + "." + phys,
+			UnsafeTable: config.StorageIntegrityUnsafeDatabase + "." + phys,
+		})
+	}
+	return out
+}
+
 // buildRewriterFactory constructs the SQL rewriter factory for the
 // configured engine — dialing the external sql-rewriter gRPC service or
 // loading the in-process rewriter-go engine. Returns nil (and logs a
 // warning) when the backend is unavailable at startup — the relay path
 // tolerates a nil factory by skipping rewriting entirely.
-func buildRewriterFactory(cfg *config.Config, reg registry.Registry) rewriter.Factory {
+func buildRewriterFactory(cfg *config.Config, reg registry.Registry, si rewriter.StorageIntegrityOptions) rewriter.Factory {
 	// Router-only deployments (no shard, no upstream) never invoke the
 	// rewriter — every session gets forwarded to a peer instead.
 	if cfg.Shard == nil && cfg.Upstream == "" {
@@ -142,6 +162,7 @@ func buildRewriterFactory(cfg *config.Config, reg registry.Registry) rewriter.Fa
 		PhysicalDatabase:  cfg.Rewriter.PhysicalDatabase,
 		AuthEnabled:       cfg.Auth.Enabled,
 		Delim:             cfg.Rewriter.Delimiter,
+		StorageIntegrity:  si,
 	}
 	rwf, err := rewriter.NewSentioNetworkFactory(rwConfig, reg)
 	if err != nil {
@@ -371,14 +392,31 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		opts.CommitGateObservers...,
 	)
 
+	siOptions := storageIntegrityRewriterOptions(cfg, opts.StorageIntegrityReadState)
+	if cfg.StorageIntegrity.Read.DefaultMode == config.StorageIntegrityReadModeUnsafeLatest && opts.StorageIntegrityReadState == nil {
+		return nil, fmt.Errorf("storage_integrity.read.default_mode unsafe_latest requires Options.StorageIntegrityReadState (co-located SNode promotion journal); reference binaries can only serve safe reads")
+	}
+	if len(cfg.StorageIntegrity.Tables) > 0 && opts.StorageIntegrityReadState == nil {
+		log.Warnw("storage_integrity: no read-state port wired; unsafe_latest reads will be refused", "tables", len(cfg.StorageIntegrity.Tables))
+	}
+
 	var rwFactory rewriter.Factory
 	if opts.Rewriter != nil {
 		rwFactory = opts.Rewriter
 	} else {
-		rwFactory = buildRewriterFactory(cfg, reg)
+		rwFactory = buildRewriterFactory(cfg, reg, siOptions)
 		if rwf, ok := rwFactory.(*rewriter.SentioNetworkFactory); ok && rwf != nil {
 			rwf.SetGetIndexerId(opts.GetIndexerId)
 			pushTeardown(func() { rwf.Close() })
+		}
+	}
+	if len(siOptions.Tables) > 0 && rwFactory == nil {
+		return nil, fmt.Errorf("storage_integrity.tables requires an available SQL rewriter; refusing fail-open startup")
+	}
+	if len(siOptions.Tables) > 0 {
+		capable, ok := rwFactory.(rewriter.StorageIntegrityCapableFactory)
+		if !ok || capable.StorageIntegrityContractVersion() != rewriter.StorageIntegrityContractV1 {
+			return nil, fmt.Errorf("storage_integrity.tables requires a storage-integrity contract v1 capable SQL rewriter; refusing fail-open startup")
 		}
 	}
 
@@ -588,9 +626,13 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			physicalDB = rwf.PhysicalDatabase()
 		}
 		rewritePlug = &rewrite.Plugin{
-			Factory:          rwFactory,
-			PhysicalDatabase: physicalDB,
-			Observer:         obs,
+			Factory:           rwFactory,
+			PhysicalDatabase:  physicalDB,
+			Observer:          obs,
+			FailClosedOnError: len(siOptions.Tables) > 0,
+		}
+		if len(siOptions.Tables) > 0 {
+			rewritePlug.RequiredStorageIntegrityContractVersion = rewriter.StorageIntegrityContractV1
 		}
 	}
 

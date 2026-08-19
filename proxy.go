@@ -100,6 +100,12 @@ type Options struct {
 	// config.storage_integrity.runtime.enabled is true. It lets HouseGate build
 	// the admission consumer while the host supplies the source-side adapter.
 	StorageIntegrityRuntime StorageIntegrityRuntimeOptions
+	// StorageIntegrityReadState supplies the promoted-but-not-yet-cleaned
+	// unsafe part names the read rewrite excludes in unsafe_latest mode
+	// (Spec G D2). sentio-node passes its embedded *snode.Role. Nil means
+	// unsafe_latest is refused per query and rejected at startup as the
+	// configured default.
+	StorageIntegrityReadState rewriter.StorageIntegrityReadState
 	// StorageIntegrityTableSchemas optionally supplies the declared table
 	// schema source used by the agent-mode statement plugin
 	// (storage_integrity.agent) and the server-mode ingress
