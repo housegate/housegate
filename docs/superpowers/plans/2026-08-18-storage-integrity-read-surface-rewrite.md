@@ -3079,7 +3079,7 @@ git commit -m "feat(config): storage_integrity.tables (renamed from runtime.merg
   - `type rewriter.RejectedError struct { Code pb.RewriteCode; Message string }` with `Error()`; returned by `Rewrite` for every SI-related rejection and every pre-response rewrite failure while `StorageIntegrityOptions.Tables` is non-empty (D-2)
   - `func buildStorageIntegrityArgs(opts StorageIntegrityOptions, mode ReadMode) (*pb.StorageIntegrityArgs, error)`; for non-empty tables it always sets `ContractVersion: StorageIntegrityContractV1`; `buildDynamicArgs(..., si *pb.StorageIntegrityArgs)`
 
-- [ ] **Step 1: Failing tests** — `pkg/rewriter/storage_integrity_test.go`:
+- [x] **Step 1: Failing tests** — `pkg/rewriter/storage_integrity_test.go`:
 
 ```go
 package rewriter
@@ -3352,7 +3352,7 @@ func TestSentioRewriter_InsertIntoSITableWithoutLaneIsRejected(t *testing.T) {
 Run: `go test ./pkg/rewriter -run 'TestParseReadMode|TestBuildStorageIntegrityArgs|TestReadModeContext|TestSentioRewriter_ShipsStorageIntegrityArgs|TestSentioRewriter_UnsafeLatest|TestSentioRewriter_StorageIntegrityReject|TestSentioRewriter_ConfiguredSISurfaceUnavailable|TestSentioRewriter_OldSuccessfulBackend|TestSentioRewriter_BackendWithWrongSI|TestSentioRewriter_AcknowledgedBackend|TestSentioRewriter_InsertIntoSI' -count=1`
 Expected: compile errors (`undefined: ReadMode`, `RejectedError`, …).
 
-- [ ] **Step 2: Implement `pkg/rewriter/storage_integrity.go`**
+- [x] **Step 2: Implement `pkg/rewriter/storage_integrity.go`**
 
 ```go
 package rewriter
@@ -3559,14 +3559,14 @@ Every successful return that wraps the protobuf response must set `RewriteResult
 
 `RewriteErrorMessage`: build `siArgs, _ := buildStorageIntegrityArgs(r.factory.options.StorageIntegrity, r.factory.options.StorageIntegrity.DefaultReadMode)` (ignore the error — reverse-mapping is best-effort; a nil block just skips SI names) and pass it to `buildDynamicArgs`.
 
-- [ ] **Step 3: Run**
+- [x] **Step 3: Run**
 
 Run: `bazel run //:gazelle && bazel test //pkg/rewriter:rewriter_test --test_filter='TestBuildStorageIntegrityArgs|TestSentioRewriter' --test_output=errors`
 Expected: PASS (new + existing tests).
 
-- [ ] **Step 4: Guidance bookkeeping** — do not create `pkg/rewriter/AGENTS.md`: no such tracked file exists and the user's global ignore rule excludes `AGENTS.md`. Task 21 updates the tracked root `CLAUDE.md` (and therefore its tracked `AGENTS.md -> CLAUDE.md` symlink) with the read-surface and fail-closed conventions after the entire HouseGate slice lands.
+- [x] **Step 4: Guidance bookkeeping** — do not create `pkg/rewriter/AGENTS.md`: no such tracked file exists and the user's global ignore rule excludes `AGENTS.md`. Task 21 updates the tracked root `CLAUDE.md` (and therefore its tracked `AGENTS.md -> CLAUDE.md` symlink) with the read-surface and fail-closed conventions after the entire HouseGate slice lands.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add pkg/rewriter
