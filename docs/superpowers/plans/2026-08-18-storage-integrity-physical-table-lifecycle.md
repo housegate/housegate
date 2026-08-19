@@ -3303,7 +3303,7 @@ with `bpTableSchema()` returning `payloadexec.TableSchema{TableID: "db.t", Parti
 
 - [x] **Step 2: Run** — `bazel run //:gazelle && bazel test //pkg/integration:integration_test --test_filter=TestPartsPressureGuard_AgainstRealSystemParts --test_output=errors` (docker required; the target is already in `ci.yml`'s explicit list, so no CI edit). Expected: PASS.
 
-- [ ] **Step 3: Commit + PR** — `git add pkg/integration && git commit -m "test(integration): PartsPressureGuard against real system.parts partitions" && git push -u origin feat/si-backpressure && gh pr create --title "feat(storage-integrity): ingress back-pressure + exception-code plugin rejections (Spec C)" --body "Tasks 9-15 of docs/superpowers/plans/2026-08-18-storage-integrity-physical-table-lifecycle.md."`
+- [x] **Step 3: Commit + PR** — published the reviewed cumulative Tasks 9–15 branch as ready PR [housegate#125](https://github.com/housegate/housegate/pull/125), including the real-ClickHouse regression and review-driven lifecycle closure commits.
 
 ---
 
