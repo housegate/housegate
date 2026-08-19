@@ -4166,13 +4166,18 @@ git commit -m "test(integration): storage-integrity read surface e2e (safe / uns
 
 - [x] **Step 2: Full local ladder** — `go build ./... && go vet ./... 2>&1 | grep -v "unkeyed fields"; bazel build //... && bazel test //...` → all PASS.
 
-- [ ] **Step 3: Rebase and publish after Plan C** — after HouseGate PR #125 merges, fetch/rebase onto that exact `main`, rerun the impacted Bazel and Docker integration gates plus review, then push and open the ready PR (D-13):
+- [x] **Step 3: Rebase and publish after Plan C** — after HouseGate PR #125 merges, fetch/rebase onto that exact `main`, rerun the impacted Bazel and Docker integration gates plus review, then push and open the ready PR (D-13):
 
 ```bash
 git add CLAUDE.md README.md
 git commit -m "docs: storage-integrity read surface (Spec G) in CLAUDE.md/README"
 git push -u origin feat/storage-integrity-read-surface
 ```
+
+Evidence (2026-08-19): rebased onto Plan C merge
+`f184cb092509556219fe4d8485a5d9c5b02486dd`; full Bazel tests passed 56/56,
+the explicit Docker integration targets passed with rewriter-go v0.7.1, both
+exact-diff review axes returned `No findings`, and ready PR #126 was opened.
 
 ---
 
