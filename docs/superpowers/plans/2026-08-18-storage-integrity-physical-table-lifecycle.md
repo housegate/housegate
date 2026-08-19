@@ -83,7 +83,7 @@ sentio-node: `standalone/standalone.go`, `storageintegrityadapter/adapter.go`, `
 
 **Interfaces:**
 - Consumes: `payloadexec.TableSchema{TableID, PartitionBy string; Columns []lthash.Column}`, `lthash.Column{Name, Type string}` (housegate v0.8.1, already a dep).
-- Produces (used by Tasks 2–7, 10, 20, 21):
+- Produces (used by Tasks 2–7, 10, 17, 18):
   - `ddl.CHTableName(tableID string) string`
   - `ddl.Pinned{UnsafeDB, SafeDB, PromoteDB, NodeID string; KeeperShardID uint32}`
   - `ddl.ZooKeeperPath(p Pinned, tableID string) string`
@@ -615,7 +615,7 @@ func ParseEngineFullSettings(engineFull string) (map[string]string, error) {
 
 **Interfaces:**
 - Consumes: Task 1 `Intents`/`TableIntent`/`Pinned`, Task 2 `ParseEngineFullSettings`; `clickhouse.Conn` (`github.com/ClickHouse/clickhouse-go/v2`).
-- Produces (used by Tasks 5, 6, 10, 20, 21):
+- Produces (used by Tasks 5, 6, 10, 17, 18):
   - `ddl.Mode` (`ModeOff`, `ModeVerifyOnly`, `ModeCreateAndVerify`), `ddl.ParseMode(s string) (Mode, error)` (`"off"|"verify"|"create"`), `func (m Mode) String() string`
   - `ddl.DefaultReconcileInterval = 60 * time.Second`
   - `ddl.ErrProtocolTableDrift`, `ddl.ErrProtocolTableMissing`
@@ -1273,7 +1273,7 @@ Expected: PASS (all six tests). Also `bazel test //dataplane/ddl:ddl_test` witho
 
 **Interfaces:**
 - Consumes: Task 3 `ddl.EnsureProtocolTables`, `ddl.Mode`, `ddl.DefaultReconcileInterval`, `ddl.Pinned`, `ddl.ErrProtocolTableDrift`.
-- Produces (used by Tasks 8, 20): `snode.Config.ProtocolTables ddl.Mode` (zero value `ddl.ModeOff` keeps existing harnesses that pre-create MergeTree tables working — production wiring always sets it), `snode.Config.ProtocolTablesReconcile time.Duration` (0 → `ddl.DefaultReconcileInterval`), `snode.Config.KeeperShardID uint32` (0 in v1). `Register(ctx)` now ensures tables before `RegisterNode`; `Run(ctx)` starts the reconcile goroutine against the frozen `cfg.Tables` snapshot (drift detection only, never dynamic schema discovery).
+- Produces (used by Tasks 8, 17): `snode.Config.ProtocolTables ddl.Mode` (zero value `ddl.ModeOff` keeps existing harnesses that pre-create MergeTree tables working — production wiring always sets it), `snode.Config.ProtocolTablesReconcile time.Duration` (0 → `ddl.DefaultReconcileInterval`), `snode.Config.KeeperShardID uint32` (0 in v1). `Register(ctx)` now ensures tables before `RegisterNode`; `Run(ctx)` starts the reconcile goroutine against the frozen `cfg.Tables` snapshot (drift detection only, never dynamic schema discovery).
 
 - [x] **Step 1: Write the failing test** `snode/protocol_tables_test.go`
 
@@ -1464,7 +1464,7 @@ Modify `Register`: first statement `if err := r.ensureProtocolTables(ctx); err !
 - Create: `verifier/protocol_tables_test.go`
 
 **Interfaces:**
-- Produces (used by Tasks 8, 20): `verifier.Config.SafeDatabase`, `verifier.Config.PromoteDatabase` (defaults `hg_safe` / `hg_promote`), `verifier.Config.ProtocolTables ddl.Mode`, `verifier.Config.ProtocolTablesReconcile time.Duration`, `verifier.Config.KeeperShardID uint32`; `verifier.Deps.Conn clickhouse.Conn` (required when `ProtocolTables != ddl.ModeOff`, validated in `New`). As in SNode, reconcile uses the schema-root-validated startup `cfg.Tables` slice and only detects drift.
+- Produces (used by Tasks 8, 17): `verifier.Config.SafeDatabase`, `verifier.Config.PromoteDatabase` (defaults `hg_safe` / `hg_promote`), `verifier.Config.ProtocolTables ddl.Mode`, `verifier.Config.ProtocolTablesReconcile time.Duration`, `verifier.Config.KeeperShardID uint32`; `verifier.Deps.Conn clickhouse.Conn` (required when `ProtocolTables != ddl.ModeOff`, validated in `New`). As in SNode, reconcile uses the schema-root-validated startup `cfg.Tables` slice and only detects drift.
 
 - [x] **Step 1: Write the failing test** `verifier/protocol_tables_test.go`
 
@@ -1586,7 +1586,7 @@ plus a `reconcileProtocolTables(ctx)` ticker identical in shape to snode's. `Reg
 
 **Interfaces:**
 - Consumes: existing `activeParts`, `partNamesForPartition`, `touchedPartitions` in `snode/staged.go` (the pre-write `before` inventory is already the per-partition part list — no extra query).
-- Produces (used by Task 20): `snode.ErrBackpressure` sentinel (`errors.Is`-able), `snode.Config.HardPartsPerPartition int` (0 → `snode.DefaultHardPartsPerPartition = 2950`).
+- Produces (used by Task 17): `snode.ErrBackpressure` sentinel (`errors.Is`-able), `snode.Config.HardPartsPerPartition int` (0 → `snode.DefaultHardPartsPerPartition = 2950`).
 
 - [x] **Step 1: Write the failing docker test** `snode/staged_backpressure_test.go`
 
@@ -1957,7 +1957,7 @@ func (r *Relay) writeExceptionToClient(ctx context.Context, pluginErr error) {
 
 **Interfaces:**
 - Consumes: `payloadexec.DecodeCSV(payload []byte, sch TableSchema) ([]Row, error)` (Row.PartitionID = `p_<raw csv token>`/`all`), `DecodeNativePayload(schema, revision, payload) ([]payloadexec.Row, error)` (Row.PartitionID from `PartitionIDForRow`), constants `EncodingCSVWithNames`, `PayloadEncodingClickHouseNativeData`.
-- Produces (used by Tasks 11, 14, 20): `sicore.PhysicalTableName(tableID string) string` (D2 rule, mirror of arbiter-core `ddl.CHTableName`), `sicore.ErrPartitionFreeze`, `sicore.PayloadPartitionIDs(schema payloadexec.TableSchema, encoding string, revision int, payload []byte) ([]string, error)` (sorted, unique logical partition ids).
+- Produces (used by Tasks 11, 14, 17): `sicore.PhysicalTableName(tableID string) string` (D2 rule, mirror of arbiter-core `ddl.CHTableName`), `sicore.ErrPartitionFreeze`, `sicore.PayloadPartitionIDs(schema payloadexec.TableSchema, encoding string, revision int, payload []byte) ([]string, error)` (sorted, unique logical partition ids).
 
 - [x] **Step 1: Write the failing tests** — `pkg/storageintegrity/physical_table_test.go`
 
@@ -2152,7 +2152,7 @@ func validatePartitionFreeze(schema payloadexec.TableSchema) error {
 
 **Interfaces:**
 - Consumes: `MergeConn` / `MergeRows` (merge_guard.go), `quoteMergeString`.
-- Produces (used by Tasks 13, 14, 15, 20):
+- Produces (used by Tasks 13, 14, 15, 17):
   - `sicore.ErrBackpressure` sentinel; `sicore.BackpressureError{Database, Table, Partition string; Parts, Limit int; Kind string}` (`Kind` ∈ `"soft"`, `"hard"`, `"unavailable"`), `Error()` starts with `storage_integrity: back-pressure`, `Unwrap()` → `ErrBackpressure`.
   - `sicore.LogicalPartitionID(partitionText string) string` (`"tuple()"` → `"all"`, else `"p_"+text`).
   - `sicore.PartsKey{Database, Table, Partition string}`, `sicore.PartsSnapshot map[PartsKey]int`.
@@ -2544,7 +2544,7 @@ func (g *PartsPressureGuard) Invalidated() <-chan struct{} { return g.invalidate
 - Modify: `pkg/config/storage_integrity_config.go` (struct, defaults, validate), `pkg/config/storage_integrity_config_test.go`
 
 **Interfaces:**
-- Produces (used by Tasks 14, 20): `config.StorageIntegrityRuntimeConfig.Backpressure StorageIntegrityRuntimeBackpressureConfig` with fields `Enabled bool` (default true), `UnsafeDatabase string` (default `"hg_unsafe"`), `SafeDatabase string` (default `"hg_safe"`), `PollInterval Duration` (default 2s), `SoftPartsPerPartition int` (2400), `HardPartsPerPartition int` (2950); yaml/json keys `enabled`, `unsafe_database`, `safe_database`, `poll_interval`, `soft_parts_per_partition`, `hard_parts_per_partition`.
+- Produces (used by Tasks 14, 17): `config.StorageIntegrityRuntimeConfig.Backpressure StorageIntegrityRuntimeBackpressureConfig` with fields `Enabled bool` (default true), `UnsafeDatabase string` (default `"hg_unsafe"`), `SafeDatabase string` (default `"hg_safe"`), `PollInterval Duration` (default 2s), `SoftPartsPerPartition int` (2400), `HardPartsPerPartition int` (2950); yaml/json keys `enabled`, `unsafe_database`, `safe_database`, `poll_interval`, `soft_parts_per_partition`, `hard_parts_per_partition`.
 
 - [x] **Step 1: Write the failing tests** (append to `pkg/config/storage_integrity_config_test.go`)
 
@@ -2940,7 +2940,7 @@ func (s *StorageIntegrityPartsPressureSupervisor) Invalidate() { s.guard.Invalid
 
 **Interfaces:**
 - Consumes: Tasks 9–13.
-- Produces (used by Task 20): `StorageIntegrityRuntimeOptions.TableSchemas []payloadexec.TableSchema` (the complete authoritative startup set, required for the runtime independent of whether backpressure is enabled), `StorageIntegrityRuntimeOptions.PartsPressure StorageIntegrityPartsPressure` (optional injection; when nil and enabled, built from `MergeConn` + config), and startup fail-fast `Refresh` through the owned pressure lifecycle. Ingress behavior: after the merge-health latch and before the payload put, derive every payload partition against that frozen table set and atomically reserve the corresponding physical table/partition; refusal → `storageIntegrityBackpressureTotal.Inc()` and `&chproto.ClientError{Code: chproto.CodeTooManyParts, Message: <BackpressureError text>, Err: err}`; an orchestrate error wrapping `sicore.ErrBackpressure` (SNode mirror via host adapter) → same `ClientError`; reservation lifecycle and exact cleanup/recovery behavior are recorded in the evidence-backed deviations above.
+- Produces (used by Task 17): `StorageIntegrityRuntimeOptions.TableSchemas []payloadexec.TableSchema` (the complete authoritative startup set, required for the runtime independent of whether backpressure is enabled), `StorageIntegrityRuntimeOptions.PartsPressure StorageIntegrityPartsPressure` (optional injection; when nil and enabled, built from `MergeConn` + config), and startup fail-fast `Refresh` through the owned pressure lifecycle. Ingress behavior: after the merge-health latch and before the payload put, derive every payload partition against that frozen table set and atomically reserve the corresponding physical table/partition; refusal → `storageIntegrityBackpressureTotal.Inc()` and `&chproto.ClientError{Code: chproto.CodeTooManyParts, Message: <BackpressureError text>, Err: err}`; an orchestrate error wrapping `sicore.ErrBackpressure` (SNode mirror via host adapter) → same `ClientError`; reservation lifecycle and exact cleanup/recovery behavior are recorded in the evidence-backed deviations above.
 
 > **Closure API note:** The literal RED/implementation snippets in Steps 1–3 below preserve the initial pre-envelope-v2 TDD sketch and use the now-removed `sicore.TableSchemaResolver` / `StorageIntegrityRuntimeOptions.SchemaResolver` names. They are superseded by the final reviewed API above: the host passes one globally validated `TableSchemas` slice, Housegate derives its internal lookup from that slice, and ingress plus pressure share it. Do not copy the historical resolver symbols into a current host.
 
