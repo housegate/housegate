@@ -66,6 +66,7 @@ go_test(
         "//pkg/replay/chexec",
         "//pkg/replay/nativepayload",
         "//pkg/replay/payloadexec",
+        "//pkg/rewriter",
         "//pkg/route",
         "//pkg/schemaregistry",
         "//pkg/sqlmeta",

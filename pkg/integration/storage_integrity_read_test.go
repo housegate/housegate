@@ -12,6 +12,7 @@ import (
 
 	"github.com/housegate/housegate/pkg/config"
 	"github.com/housegate/housegate/pkg/integration/testenv"
+	"github.com/housegate/housegate/pkg/rewriter"
 )
 
 type siReadStateStub struct {
@@ -80,7 +81,7 @@ func TestStorageIntegrityRead_SafeAndUnsafeLatest(t *testing.T) {
 			cfg.Rewriter.NativeLibraryPath = lib
 			cfg.Rewriter.PhysicalDatabase = phys
 			cfg.StorageIntegrity.Tables = []string{"db1.t"}
-			cfg.StorageIntegrity.Read.DefaultMode = config.StorageIntegrityReadModeSafe
+			cfg.StorageIntegrity.Read.DefaultMode = string(rewriter.ReadModeSafe)
 		}),
 	)
 	conn := openConn(t, proxy.Addr)

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/housegate/housegate/pkg/rewriter"
 )
 
 const (
@@ -13,9 +15,6 @@ const (
 	// Physical homes of storage-integrity tables (Spec C D2 naming freeze).
 	StorageIntegrityUnsafeDatabase = "hg_unsafe"
 	StorageIntegritySafeDatabase   = "hg_safe"
-
-	StorageIntegrityReadModeSafe         = "safe"
-	StorageIntegrityReadModeUnsafeLatest = "unsafe_latest"
 )
 
 // StorageIntegrityPhysicalTable maps a logical table id "<db>.<table>" to
@@ -198,10 +197,11 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 		}
 		seen[id] = true
 	}
-	switch c.Read.DefaultMode {
-	case "", StorageIntegrityReadModeSafe, StorageIntegrityReadModeUnsafeLatest:
-	default:
-		errs = append(errs, fmt.Errorf("storage_integrity.read.default_mode %q must be safe or unsafe_latest", c.Read.DefaultMode))
+	if c.Read.DefaultMode != "" {
+		mode, err := rewriter.ParseReadMode(c.Read.DefaultMode)
+		if err != nil || string(mode) != c.Read.DefaultMode {
+			errs = append(errs, fmt.Errorf("storage_integrity.read.default_mode %q must be safe or unsafe_latest", c.Read.DefaultMode))
+		}
 	}
 	if c.Read.DefaultMode != "" && len(c.Tables) == 0 {
 		errs = append(errs, errors.New("storage_integrity.read.default_mode requires storage_integrity.tables"))

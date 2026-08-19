@@ -410,7 +410,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	)
 
 	siOptions := storageIntegrityRewriterOptions(cfg, opts.StorageIntegrityReadState)
-	if cfg.StorageIntegrity.Read.DefaultMode == config.StorageIntegrityReadModeUnsafeLatest && opts.StorageIntegrityReadState == nil {
+	if siOptions.DefaultReadMode == rewriter.ReadModeUnsafeLatest && opts.StorageIntegrityReadState == nil {
 		return nil, fmt.Errorf("storage_integrity.read.default_mode unsafe_latest requires Options.StorageIntegrityReadState (co-located SNode promotion journal); reference binaries can only serve safe reads")
 	}
 	if len(cfg.StorageIntegrity.Tables) > 0 && opts.StorageIntegrityReadState == nil {
