@@ -21,8 +21,8 @@ func TestDecodeRowsBranchesOnPayloadFormat(t *testing.T) {
 	}
 	legacy := csv
 	legacy.PayloadFormat = ""
-	if _, err := decodeRows(context.Background(), schema, legacy); err != nil {
-		t.Fatalf("empty format must decode as csv (legacy tests): %v", err)
+	if _, err := decodeRows(context.Background(), schema, legacy); err == nil || !strings.Contains(err.Error(), "payload_format") {
+		t.Fatalf("empty format must fail closed: %v", err)
 	}
 	native := csv
 	native.PayloadFormat = "clickhouse-native-data-v1"

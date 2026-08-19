@@ -27,10 +27,10 @@ type Signer interface {
 }
 
 // SchemaHashSource resolves the verifier's own Phase-B schema hash for a
-// table. When set on Verifier, every statement that carries a non-empty
-// SchemaHash is compared against it BEFORE execution: a mismatch is
-// challenge evidence (base design C.4) and yields a signed non-matching
-// receipt; a table the source cannot resolve is a local refusal to attest.
+// table. Every envelope-v2 statement is compared against it BEFORE execution:
+// a mismatch is challenge evidence (base design C.4) and yields a signed
+// non-matching receipt; a table the source cannot resolve is a local refusal
+// to attest.
 type SchemaHashSource interface {
 	TableSchemaHash(tableID string) (string, bool)
 }
@@ -42,7 +42,7 @@ type Verifier struct {
 	Payloads     PayloadStore
 	Executor     Executor
 	Signer       Signer
-	SchemaHashes SchemaHashSource // optional
+	SchemaHashes SchemaHashSource
 }
 
 func (v *Verifier) Verify(ctx context.Context, job ReplayJob) (ReplayAttestation, error) {
@@ -60,6 +60,9 @@ func (v *Verifier) Verify(ctx context.Context, job ReplayJob) (ReplayAttestation
 	}
 	if v.Signer == nil {
 		return ReplayAttestation{}, fmt.Errorf("signer is required")
+	}
+	if v.SchemaHashes == nil {
+		return ReplayAttestation{}, fmt.Errorf("schema hash source is required")
 	}
 	if err := validateJobShape(job); err != nil {
 		return ReplayAttestation{}, err
@@ -92,18 +95,13 @@ func (v *Verifier) Verify(ctx context.Context, job ReplayJob) (ReplayAttestation
 	if err != nil {
 		return ReplayAttestation{}, err
 	}
-	if v.SchemaHashes != nil {
-		for i, st := range job.Statements {
-			if st.SchemaHash == "" {
-				continue
-			}
-			local, ok := v.SchemaHashes.TableSchemaHash(st.TargetTableID)
-			if !ok {
-				return ReplayAttestation{}, fmt.Errorf("statement %d: no local schema for table %q", i, st.TargetTableID)
-			}
-			if local != st.SchemaHash {
-				return v.signSchemaMismatch(ctx, job, prepared, i, st, local)
-			}
+	for i, st := range job.Statements {
+		local, ok := v.SchemaHashes.TableSchemaHash(st.TargetTableID)
+		if !ok {
+			return ReplayAttestation{}, fmt.Errorf("statement %d: no local schema for table %q", i, st.TargetTableID)
+		}
+		if local != st.SchemaHash {
+			return v.signSchemaMismatch(ctx, job, prepared, i, st, local)
 		}
 	}
 
@@ -269,6 +267,15 @@ func validateJobShape(job ReplayJob) error {
 		}
 		if st.TargetTableID == "" {
 			return fmt.Errorf("statement %d: target_table_id is required", i)
+		}
+		if st.PayloadFormat == "" {
+			return fmt.Errorf("statement %d: payload_format is required", i)
+		}
+		if st.ClientRevision == 0 {
+			return fmt.Errorf("statement %d: client_revision is required", i)
+		}
+		if st.SchemaHash == "" {
+			return fmt.Errorf("statement %d: schema_hash is required", i)
 		}
 		if st.PayloadRef == "" {
 			if st.PayloadHash != "" || st.PayloadLength != 0 {

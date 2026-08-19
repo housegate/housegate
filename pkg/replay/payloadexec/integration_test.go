@@ -24,13 +24,24 @@ const (
 )
 
 func newExecutor() *payloadexec.Executor {
-	return payloadexec.New(network, payloadexec.TableSchema{
+	return payloadexec.New(network, integrationSchema())
+}
+
+func integrationSchema() payloadexec.TableSchema {
+	return payloadexec.TableSchema{
 		TableID: table,
 		Columns: []lthash.Column{
 			{Name: "user_id", Type: "String"},
 			{Name: "balance", Type: "UInt64"},
 		},
-	})
+	}
+}
+
+type schemaHashes map[string]string
+
+func (s schemaHashes) TableSchemaHash(tableID string) (string, bool) {
+	hash, ok := s[tableID]
+	return hash, ok
 }
 
 // harness bundles the fully wired verifier and the stores feeding it.
@@ -67,10 +78,11 @@ func newHarness(t *testing.T) *harness {
 		payloads:  payloads,
 		signer:    signer,
 		verifier: &replay.Verifier{
-			Snapshots: snapshots,
-			Payloads:  payloads,
-			Executor:  exec,
-			Signer:    signer,
+			Snapshots:    snapshots,
+			Payloads:     payloads,
+			Executor:     exec,
+			Signer:       signer,
+			SchemaHashes: schemaHashes{table: payloadexec.TableSchemaHash(network, integrationSchema())},
 		},
 		genesis: gen,
 	}
@@ -86,15 +98,18 @@ func buildJob(snap replay.SafeSnapshotManifest, statementID, payloadRef string, 
 		ExecutorProfileID:  snap.ExecutorProfileID,
 		SourceClaimRoot:    sourceClaimRoot,
 		Statements: []replay.Statement{{
-			StatementID:   statementID,
-			StatementSeq:  snap.SafeBlockSeq + 1,
-			SQL:           sql,
-			SQLHash:       replay.DigestString(sql),
-			SettingsHash:  replay.DigestString("settings"),
-			PayloadRef:    payloadRef,
-			PayloadHash:   replay.DigestBytes(payload),
-			PayloadLength: uint64(len(payload)),
-			TargetTableID: table,
+			StatementID:    statementID,
+			StatementSeq:   snap.SafeBlockSeq + 1,
+			SQL:            sql,
+			SQLHash:        replay.DigestString(sql),
+			SettingsHash:   replay.DigestString("settings"),
+			PayloadRef:     payloadRef,
+			PayloadHash:    replay.DigestBytes(payload),
+			PayloadLength:  uint64(len(payload)),
+			TargetTableID:  table,
+			PayloadFormat:  payloadexec.PayloadFormatCSVWithNames,
+			ClientRevision: 54460,
+			SchemaHash:     payloadexec.TableSchemaHash(network, integrationSchema()),
 		}},
 	}
 }

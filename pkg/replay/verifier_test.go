@@ -3,6 +3,7 @@ package replay
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -16,10 +17,11 @@ func TestVerifierSignsMatchingReplay(t *testing.T) {
 	signer := &fakeSigner{replicaID: "replica-a", signature: "sig-a"}
 
 	got, err := (&Verifier{
-		Snapshots: fakeSnapshotStore{snap.SnapshotID: snap},
-		Payloads:  fakePayloadStore{"payload-1": payload},
-		Executor:  exec,
-		Signer:    signer,
+		Snapshots:    fakeSnapshotStore{snap.SnapshotID: snap},
+		Payloads:     fakePayloadStore{"payload-1": payload},
+		Executor:     exec,
+		Signer:       signer,
+		SchemaHashes: fakeSchemaHashes{"table-1": job.Statements[0].SchemaHash},
 	}).Verify(ctx, job)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
@@ -50,10 +52,11 @@ func TestVerifierSignsMismatchingReplayForChallenge(t *testing.T) {
 	signer := &fakeSigner{replicaID: "replica-a", signature: "sig-a"}
 
 	got, err := (&Verifier{
-		Snapshots: fakeSnapshotStore{snap.SnapshotID: snap},
-		Payloads:  fakePayloadStore{"payload-1": payload},
-		Executor:  &fakeExecutor{result: resultForJob(job, computed)},
-		Signer:    signer,
+		Snapshots:    fakeSnapshotStore{snap.SnapshotID: snap},
+		Payloads:     fakePayloadStore{"payload-1": payload},
+		Executor:     &fakeExecutor{result: resultForJob(job, computed)},
+		Signer:       signer,
+		SchemaHashes: fakeSchemaHashes{"table-1": job.Statements[0].SchemaHash},
 	}).Verify(ctx, job)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
@@ -78,10 +81,11 @@ func TestVerifierRejectsPayloadHashMismatchBeforeExecution(t *testing.T) {
 	exec := &fakeExecutor{result: resultForJob(job, DigestString("unused"))}
 
 	_, err := (&Verifier{
-		Snapshots: fakeSnapshotStore{snap.SnapshotID: snap},
-		Payloads:  fakePayloadStore{"payload-1": payload},
-		Executor:  exec,
-		Signer:    &fakeSigner{replicaID: "replica-a", signature: "sig-a"},
+		Snapshots:    fakeSnapshotStore{snap.SnapshotID: snap},
+		Payloads:     fakePayloadStore{"payload-1": payload},
+		Executor:     exec,
+		Signer:       &fakeSigner{replicaID: "replica-a", signature: "sig-a"},
+		SchemaHashes: fakeSchemaHashes{"table-1": job.Statements[0].SchemaHash},
 	}).Verify(ctx, job)
 	if err == nil {
 		t.Fatal("expected payload hash mismatch")
@@ -100,13 +104,79 @@ func TestVerifierRejectsNonIncreasingStatementSeq(t *testing.T) {
 	job.Statements[1].StatementID = "stmt-2"
 
 	_, err := (&Verifier{
-		Snapshots: fakeSnapshotStore{snap.SnapshotID: snap},
-		Payloads:  fakePayloadStore{"payload-1": payload},
-		Executor:  &fakeExecutor{result: resultForJob(job, DigestString("unused"))},
-		Signer:    &fakeSigner{replicaID: "replica-a", signature: "sig-a"},
+		Snapshots:    fakeSnapshotStore{snap.SnapshotID: snap},
+		Payloads:     fakePayloadStore{"payload-1": payload},
+		Executor:     &fakeExecutor{result: resultForJob(job, DigestString("unused"))},
+		Signer:       &fakeSigner{replicaID: "replica-a", signature: "sig-a"},
+		SchemaHashes: fakeSchemaHashes{"table-1": job.Statements[0].SchemaHash},
 	}).Verify(ctx, job)
 	if err == nil {
 		t.Fatal("expected non-increasing statement sequence error")
+	}
+}
+
+func TestVerifierRequiresEnvelopeV2ReplayBindingsBeforeExecution(t *testing.T) {
+	ctx := context.Background()
+	snap := testSnapshot(t)
+	payload := []byte("name,balance\nalice,10\n")
+	base := testJob(snap, payload, DigestString("source-claim"))
+	base.Statements[0].PayloadFormat = "clickhouse-native-data-v1"
+	base.Statements[0].ClientRevision = 54460
+	base.Statements[0].SchemaHash = DigestString("table-schema")
+
+	tests := []struct {
+		name string
+		want string
+		edit func(*ReplayJob, *Verifier)
+	}{
+		{
+			name: "schema hash source",
+			want: "schema hash source is required",
+			edit: func(_ *ReplayJob, v *Verifier) { v.SchemaHashes = nil },
+		},
+		{
+			name: "payload format",
+			want: "payload_format is required",
+			edit: func(job *ReplayJob, _ *Verifier) { job.Statements[0].PayloadFormat = "" },
+		},
+		{
+			name: "client revision",
+			want: "client_revision is required",
+			edit: func(job *ReplayJob, _ *Verifier) { job.Statements[0].ClientRevision = 0 },
+		},
+		{
+			name: "schema hash",
+			want: "schema_hash is required",
+			edit: func(job *ReplayJob, _ *Verifier) { job.Statements[0].SchemaHash = "" },
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			job := base
+			job.Statements = append([]Statement(nil), base.Statements...)
+			exec := &fakeExecutor{result: resultForJob(job, DigestString("unused"))}
+			signer := &fakeSigner{replicaID: "replica-a", signature: "sig-a"}
+			verifier := &Verifier{
+				Snapshots:    fakeSnapshotStore{snap.SnapshotID: snap},
+				Payloads:     fakePayloadStore{"payload-1": payload},
+				Executor:     exec,
+				Signer:       signer,
+				SchemaHashes: fakeSchemaHashes{"table-1": base.Statements[0].SchemaHash},
+			}
+			tt.edit(&job, verifier)
+
+			_, err := verifier.Verify(ctx, job)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Verify error = %v, want %q", err, tt.want)
+			}
+			if exec.called {
+				t.Fatal("executor must not run without complete envelope-v2 replay bindings")
+			}
+			if signer.seenHash != "" {
+				t.Fatal("verifier must not sign without complete envelope-v2 replay bindings")
+			}
+		})
 	}
 }
 
@@ -253,10 +323,11 @@ func TestVerifierRejectsExecutorTamperingWithResultIdentity(t *testing.T) {
 			mutate(&r)
 			signer := &fakeSigner{replicaID: "replica-a", signature: "sig-a"}
 			got, err := (&Verifier{
-				Snapshots: fakeSnapshotStore{snap.SnapshotID: snap},
-				Payloads:  fakePayloadStore{"payload-1": payload},
-				Executor:  &fakeExecutor{result: r},
-				Signer:    signer,
+				Snapshots:    fakeSnapshotStore{snap.SnapshotID: snap},
+				Payloads:     fakePayloadStore{"payload-1": payload},
+				Executor:     &fakeExecutor{result: r},
+				Signer:       signer,
+				SchemaHashes: fakeSchemaHashes{"table-1": job.Statements[0].SchemaHash},
 			}).Verify(ctx, job)
 			if err == nil {
 				t.Fatal("expected the verifier to reject the tampered executor result")
@@ -347,16 +418,19 @@ func testJob(snap SafeSnapshotManifest, payload []byte, sourceRoot string) Repla
 		SourceClaimRoot:    sourceRoot,
 		Statements: []Statement{
 			{
-				StatementID:   "stmt-1",
-				StatementSeq:  snap.SafeBlockSeq + 1,
-				SQL:           sql,
-				SQLHash:       DigestString(sql),
-				SettingsHash:  DigestString("settings"),
-				PayloadRef:    "payload-1",
-				PayloadHash:   DigestBytes(payload),
-				PayloadLength: uint64(len(payload)),
-				TargetTableID: "table-1",
-				UserJWS:       "jws",
+				StatementID:    "stmt-1",
+				StatementSeq:   snap.SafeBlockSeq + 1,
+				SQL:            sql,
+				SQLHash:        DigestString(sql),
+				SettingsHash:   DigestString("settings"),
+				PayloadRef:     "payload-1",
+				PayloadHash:    DigestBytes(payload),
+				PayloadLength:  uint64(len(payload)),
+				TargetTableID:  "table-1",
+				UserJWS:        "jws",
+				PayloadFormat:  "csv-with-names-v1",
+				ClientRevision: 54460,
+				SchemaHash:     DigestString("table-schema"),
 			},
 		},
 	}

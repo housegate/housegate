@@ -84,8 +84,8 @@ func (m *Materializer) Materialize(ctx context.Context, schema payloadexec.Table
 }
 
 // decodeRows selects the wire decoder from the statement's signed
-// payload_format. Native is the production SI lane; CSVWithNames (and the
-// empty legacy value) is kept for the in-process executor tests.
+// payload_format. Native is the production SI lane; explicit CSVWithNames is
+// kept for legacy executor tests. An empty format is never inferred.
 func decodeRows(_ context.Context, schema payloadexec.TableSchema, st replay.PreparedStatement) ([]payloadexec.Row, error) {
 	switch st.PayloadFormat {
 	case nativepayload.PayloadFormat:
@@ -93,7 +93,7 @@ func decodeRows(_ context.Context, schema payloadexec.TableSchema, st replay.Pre
 			return nil, fmt.Errorf("statement %s: native payload requires client_revision", st.StatementID)
 		}
 		return nativepayload.Decode(schema, int(st.ClientRevision), st.Payload)
-	case "", payloadexec.PayloadFormatCSVWithNames:
+	case payloadexec.PayloadFormatCSVWithNames:
 		return payloadexec.DecodeCSV(st.Payload, schema)
 	default:
 		return nil, fmt.Errorf("statement %s: unsupported payload_format %q", st.StatementID, st.PayloadFormat)

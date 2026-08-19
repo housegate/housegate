@@ -59,6 +59,16 @@ func chReplaySchema(tableID string) payloadexec.TableSchema {
 
 func chReplayJob(snap replay.SafeSnapshotManifest, tableID, statementID, payloadRef string, payload []byte, sourceClaim string) replay.ReplayJob {
 	sql := "INSERT INTO " + tableID + " FORMAT CSVWithNames"
+	schemaHash := ""
+	for _, table := range snap.Tables {
+		if table.TableID == tableID {
+			schemaHash = table.SchemaHash
+			break
+		}
+	}
+	if schemaHash == "" {
+		panic("chReplayJob: snapshot has no schema for " + tableID)
+	}
 	return replay.ReplayJob{
 		BlockSeq:           snap.SafeBlockSeq + 1,
 		PrevSafeSnapshotID: snap.SnapshotID,
@@ -67,17 +77,27 @@ func chReplayJob(snap replay.SafeSnapshotManifest, tableID, statementID, payload
 		ExecutorProfileID:  snap.ExecutorProfileID,
 		SourceClaimRoot:    sourceClaim,
 		Statements: []replay.Statement{{
-			StatementID:   statementID,
-			StatementSeq:  snap.SafeBlockSeq + 1,
-			SQL:           sql,
-			SQLHash:       replay.DigestString(sql),
-			SettingsHash:  replay.DigestString("settings"),
-			PayloadRef:    payloadRef,
-			PayloadHash:   replay.DigestBytes(payload),
-			PayloadLength: uint64(len(payload)),
-			TargetTableID: tableID,
+			StatementID:    statementID,
+			StatementSeq:   snap.SafeBlockSeq + 1,
+			SQL:            sql,
+			SQLHash:        replay.DigestString(sql),
+			SettingsHash:   replay.DigestString("settings"),
+			PayloadRef:     payloadRef,
+			PayloadHash:    replay.DigestBytes(payload),
+			PayloadLength:  uint64(len(payload)),
+			TargetTableID:  tableID,
+			PayloadFormat:  payloadexec.PayloadFormatCSVWithNames,
+			ClientRevision: 54460,
+			SchemaHash:     schemaHash,
 		}},
 	}
+}
+
+type chReplaySchemaHashes map[string]string
+
+func (s chReplaySchemaHashes) TableSchemaHash(tableID string) (string, bool) {
+	hash, ok := s[tableID]
+	return hash, ok
 }
 
 // execRoot runs an executor over a payload and returns the state root it
@@ -140,7 +160,13 @@ func newCHReplayHarness(t *testing.T) (*payloadexec.Executor, replay.SafeSnapsho
 	snapshots.Put(gen)
 	payloads := payloadexec.NewMemPayloadStore()
 	signer := chReplaySigner(t)
-	verifier := &replay.Verifier{Snapshots: snapshots, Payloads: payloads, Executor: exec, Signer: signer}
+	verifier := &replay.Verifier{
+		Snapshots:    snapshots,
+		Payloads:     payloads,
+		Executor:     exec,
+		Signer:       signer,
+		SchemaHashes: chReplaySchemaHashes{tableID: payloadexec.TableSchemaHash(chReplayNetwork, schema)},
+	}
 	return exec, gen, snapshots, payloads, signer, verifier, tableID
 }
 
