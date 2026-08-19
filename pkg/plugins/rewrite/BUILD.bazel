@@ -15,6 +15,7 @@ go_library(
         "//pkg/log",
         "//pkg/plugin",
         "//pkg/rewriter",
+        "@com_github_housegate_rewriter_proto//gen/pb",
     ],
 )
 
@@ -27,5 +28,6 @@ go_test(
         "//pkg/chsession",
         "//pkg/plugin",
         "//pkg/rewriter",
+        "@com_github_housegate_rewriter_proto//gen/pb",
     ],
 )
