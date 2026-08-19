@@ -1621,9 +1621,10 @@ func signedStorageIntegrityQuerySQL(t *testing.T, signer *auth.RelaySigner, sql 
 		},
 		StatementType: sqlmeta.StatementTypeInsert,
 		AccessedTables: []sqlmeta.AccessedTable{{
-			OriginalDatabase: "tenant",
-			OriginalTable:    "events",
-			LogicalDatabase:  "tenant",
+			OriginalDatabase:   "tenant",
+			OriginalTable:      "events",
+			LogicalDatabase:    "tenant",
+			IsStorageIntegrity: true,
 		}},
 	}
 }
