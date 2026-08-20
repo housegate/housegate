@@ -3229,15 +3229,16 @@ Maintenance and platform-operator sessions keep their rewrite bypass — they le
 **Interfaces:**
 - Consumes: `sqlident` / the token scan Task 2 added for `AnnotateStorageIntegrityReject`; the configured SI table set and reserved databases from `pkg/config`.
 - Produces: `func reservedNamespaceViolation(sql string, dbs []string, rid string) string` — the offending name, or `""`. Same return-the-string shape as Task 19's warning so it is unit-testable without a session.
+- Produces: two new `Plugin` fields, `ReservedDatabases []string` and `ReservedRowIDColumn string`, populated in `build.go` from `storage_integrity` config when SI tables are configured and left zero otherwise (a zero value disables the pre-check, so non-SI deployments are byte-identical).
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `pkg/plugins/rewrite/rewriter_test.go`:
+Append to `pkg/plugins/rewrite/rewriter_test.go`. These follow the exact shape of the existing `TestOnQuery_MaintenanceSkipsRewrite` (`:96-126`) — `&Plugin{Factory: &fakeFactory{rw: rw}}`, `newSessionForTest`, `sess.State().SetMaintenance(true)`, a literal `plugin.QueryContext` — because the helpers a fresh reader might expect (`newTestRewritePlugin`, `newMaintenanceQueryContext`) **do not exist in this repo**; only `newSessionForTest` does. Do not invent them.
 
 ```go
 // A maintenance session keeps its rewrite bypass but must not be able to
 // address the protocol-owned namespaces. Spec I D6, operator branch.
-func TestRewritePlugin_MaintenanceSessionRefusesReservedNamespace(t *testing.T) {
+func TestOnQuery_MaintenanceRefusesReservedNamespace(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		sql     string
@@ -3248,8 +3249,19 @@ func TestRewritePlugin_MaintenanceSessionRefusesReservedNamespace(t *testing.T) 
 		{"reserved column", "SELECT _hg_row_id FROM db1.t", "_hg_row_id"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p := newTestRewritePlugin(t, withStorageIntegrityTables("db1.t"))
-			qctx := newMaintenanceQueryContext(t, tc.sql)
+			rw := &fakeRewriter{out: "REWRITTEN-SQL"}
+			p := &Plugin{
+				Factory:             &fakeFactory{rw: rw},
+				ReservedDatabases:   []string{"hg_safe", "hg_unsafe"},
+				ReservedRowIDColumn: "_hg_row_id",
+			}
+			sess := newSessionForTest(t, 1)
+			sess.State().SetMaintenance(true)
+			qctx := &plugin.QueryContext{
+				Session:     sess,
+				OriginalSQL: tc.sql,
+				Query:       &chproto.Query{Body: tc.sql},
+			}
 			err := p.OnQuery(context.Background(), qctx)
 			if err == nil {
 				t.Fatal("maintenance session must be refused on a reserved name")
@@ -3257,25 +3269,43 @@ func TestRewritePlugin_MaintenanceSessionRefusesReservedNamespace(t *testing.T) 
 			if !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("error must name %q: %v", tc.wantErr, err)
 			}
+			if rw.rewriteCalls != 0 {
+				t.Errorf("the bypass must still skip the rewriter, got %d calls", rw.rewriteCalls)
+			}
 		})
 	}
 }
 
 // The bypass itself is unchanged: ordinary tables still pass through
 // un-rewritten for these sessions.
-func TestRewritePlugin_MaintenanceSessionStillBypassesOrdinaryTables(t *testing.T) {
-	p := newTestRewritePlugin(t, withStorageIntegrityTables("db1.t"))
-	qctx := newMaintenanceQueryContext(t, "SELECT * FROM other.u")
+func TestOnQuery_MaintenanceStillBypassesOrdinaryTables(t *testing.T) {
+	rw := &fakeRewriter{out: "REWRITTEN-SQL"}
+	p := &Plugin{
+		Factory:             &fakeFactory{rw: rw},
+		ReservedDatabases:   []string{"hg_safe", "hg_unsafe"},
+		ReservedRowIDColumn: "_hg_row_id",
+	}
+	sess := newSessionForTest(t, 1)
+	sess.State().SetMaintenance(true)
+	const original = "SELECT * FROM other.u"
+	qctx := &plugin.QueryContext{
+		Session:     sess,
+		OriginalSQL: original,
+		Query:       &chproto.Query{Body: original},
+	}
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
 		t.Fatalf("ordinary table must still bypass: %v", err)
 	}
-	if qctx.Query.Body != "SELECT * FROM other.u" {
+	if qctx.Query.Body != original {
 		t.Fatalf("bypassed SQL must be untouched, got %q", qctx.Query.Body)
+	}
+	if rw.rewriteCalls != 0 {
+		t.Errorf("maintenance must skip the rewriter, got %d calls", rw.rewriteCalls)
 	}
 }
 ```
 
-Add the same two cases for a platform-operator session (`newPlatformOperatorQueryContext`), so both flags are covered rather than one standing in for the other.
+Duplicate both tests for the platform-operator flag, substituting `sess.State().SetPlatformOperator(true)` for `SetMaintenance(true)` — confirm the exact setter name in `pkg/chsession/state.go` before writing it, and if the two flags share one bypass branch, still assert both so neither can be dropped from the condition without a failing test.
 
 - [ ] **Step 2: Run to verify they fail**
 

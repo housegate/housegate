@@ -461,9 +461,13 @@ This is the case the working-tree scan cannot see, so it is worth proving before
 ```bash
 git rm -q pkg/replay/AGENTS.md
 git ls-files '*AGENTS.md' | sort | diff - scripts/agents-md-manifest.txt; echo "diff exit=$?"
-git checkout -- . && git reset -q HEAD pkg/replay/AGENTS.md 2>/dev/null; git status --porcelain | head
+# Restore: a staged deletion needs the index reset BEFORE the worktree
+# checkout — `git checkout -- .` alone will not bring the file back.
+git reset -q HEAD pkg/replay/AGENTS.md
+git checkout -- pkg/replay/AGENTS.md
+git status --porcelain | grep AGENTS.md; echo "restore clean=$?"
 ```
-Expected: `diff exit=1` with `> pkg/replay/AGENTS.md` — the manifest names a path the tree no longer tracks. Restore before continuing.
+Expected: `diff exit=1` with `> pkg/replay/AGENTS.md` — the manifest names a path the tree no longer tracks. Then `restore clean=1` (no AGENTS.md line in `git status`), confirming the file is back before continuing.
 
 - [ ] **Step 1: Write the failing check by hand first**
 
