@@ -415,7 +415,7 @@ housegate's pkg/replay in 63 places. Spec J D6."
 **Read this before writing the check.** A CI check cannot, on its own, stop a future ignored `AGENTS.md` from being hidden: an uncommitted file is simply absent from CI's checkout, so there is nothing for any script to find. Review of this plan flagged exactly that — the deliberate-untrack proof would pass in CI, not fail. The three controls have different jobs and only the first one protects future files:
 
 1. **`.gitignore` negation (the real fix).** A repo `.gitignore` takes precedence over `core.excludesFile`, so `!AGENTS.md` in the root re-exposes every nested `AGENTS.md` in this repo regardless of anyone's global configuration. Verified: with the global bare `AGENTS.md` rule active a nested file is invisible to `git status`; after adding the negation the same file reports as `?? sub/AGENTS.md`.
-2. **CI manifest check.** Asserts every path in the committed manifest is present and tracked. This is the half that works in a clean checkout, and it is the reason the manifest has to exist as a committed file: a script that only scans the working tree sees nothing when a path is deleted *and the deletion committed*, so it would pass exactly when it should fail. The manifest is the expected set; the tree is the actual set; the check compares them in both directions.
+2. **CI manifest check.** Asserts every path in the committed manifest is present and tracked. This is the half that works in a clean checkout, and it is the reason the manifest has to exist as a committed file: a script that only scans the working tree sees nothing when a path is deleted *and the deletion committed*, so it would pass exactly when it should fail. The manifest is the expected set; the tree is the actual set; the check compares them in both directions — manifest-minus-tree catches a committed deletion, and tree-minus-manifest catches a file added without being registered, which would otherwise leave the deletion gate with a hole for every file added after the manifest was written.
 3. **Local visibility.** With (1) in place a newly created nested `AGENTS.md` appears in the author's own `git status`, which is where it has to be caught. The script's untracked scan serves that local case.
 
 - [ ] **Step 0: Add the repo-level negation and prove it works**
@@ -523,6 +523,20 @@ if [ -n "$missing" ]; then
   exit 1
 fi
 
+# Direction 1b: a tracked AGENTS.md that the manifest does not list. Without
+# this, a file added later never enters the manifest, and its eventual
+# deletion is invisible to Direction 1 — the deletion gate would have a hole
+# exactly for the files added after it was written.
+extra="$(
+  LC_ALL=C comm -13 "$manifest" <(LC_ALL=C git ls-files '*AGENTS.md' | LC_ALL=C sort)
+)"
+if [ -n "$extra" ]; then
+  echo "error: tracked AGENTS.md paths missing from the manifest:" >&2
+  printf '  %s\n' $extra >&2
+  echo "Add them to scripts/agents-md-manifest.txt in the same commit so their removal is gated too." >&2
+  exit 1
+fi
+
 # Direction 2 (local only): a file present but untracked. CI cannot see this —
 # an uncommitted file is absent from its checkout — but a developer can, which
 # is where a newly created AGENTS.md has to be caught. The repo-level
@@ -586,8 +600,12 @@ The check needs no Bazel and no self-hosted runner, so it belongs in the `releas
 - [ ] **Step 6: Commit and observe green in CI**
 
 ```bash
-git add scripts/check-agents-md-tracked.sh .github/workflows/ci.yml
-git commit -m "ci: fail when an AGENTS.md is untracked"
+# Stage everything this task created. Omitting .gitignore or the manifest
+# makes the pushed job fail immediately: the check exits 1 when the manifest
+# is absent, and without the negation a future nested file stays invisible.
+git add .gitignore scripts/agents-md-manifest.txt scripts/check-agents-md-tracked.sh .github/workflows/ci.yml
+git status --porcelain -- .gitignore scripts/agents-md-manifest.txt scripts/check-agents-md-tracked.sh .github/workflows/ci.yml
+git commit -m "ci: keep AGENTS.md visible and verify the tracked set"
 git push
 ```
 

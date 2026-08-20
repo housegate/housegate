@@ -3221,19 +3221,29 @@ git commit -m "feat(storage-integrity): warn about and pin the peer-trust bypass
 
 Maintenance and platform-operator sessions keep their rewrite bypass — they legitimately need un-rewritten SQL — but Spec I D6 requires that they still cannot address the reserved SI physical namespaces or the reserved column. The control is a narrow pre-check that runs independently of the rewrite plugin, so it survives the bypass.
 
+**Where this guard must live — read before writing code.** The obvious placement is inside `rewrite.Plugin`, next to the bypass it protects. That is wrong, and review of an earlier draft of this task caught it: `rewrite.Plugin` declares `RunOnForward() == false` (`pkg/plugins/rewrite/rewriter.go:303`), and `forward.Plugin` runs earlier in the chain and can set `IsForwarding`. On a forwarded session the whole rewrite plugin is skipped, so a guard inside it never runs — precisely for raw operator SQL, which is what it exists to stop. The guard therefore lives in its own tiny plugin that opts **into** both filters and gates on the session flags instead:
+
+- `RunOnForward() bool { return true }` and `RunOnPeerTrust() bool { return true }` — the chain must not be able to skip it.
+- Its `OnQuery` returns immediately unless `Maintenance || PlatformOperator` is set, so a plain peer-trusted or forwarded session is untouched and Spec I D6's peer decision is preserved exactly.
+
+**There is also no importable scanner.** Task 2's token scan lives in `rewriter-go/internal/engine`, which housegate cannot import, and `pkg/sqlident` only offers path helpers (`NormalizePath`, `SplitLastPath`, `Quote`, `QuotePath`). The literal- and comment-stripping housegate already relies on is `stripSQLLiteralsAndComments` (`pkg/plugins/storageintegrity/plugin.go:950`), unexported. Move it to `pkg/storageintegrity` as `StripSQLLiteralsAndComments` (a pure move plus its existing tests) and build the scan on top of it, so there is one literal-skipping implementation in housegate rather than two.
+
 **Files:**
-- Modify: `pkg/plugins/rewrite/rewriter.go` (the maintenance/platform-operator bypass at `:130-133`)
-- Modify: `build.go` (extend the warning helper)
-- Test: `pkg/plugins/rewrite/rewriter_test.go`, `build_test.go`
+- Create: `pkg/plugins/sireserved/plugin.go` (+ `plugin_test.go`, `BUILD.bazel`)
+- Modify: `pkg/storageintegrity/sql.go` (export the literal stripper), `pkg/plugins/storageintegrity/plugin.go` (call the moved helper)
+- Modify: `build.go` (register the plugin when SI tables are configured; extend the warning helper)
+- Test: `pkg/plugins/sireserved/plugin_test.go`, `build_test.go`
+
+**Step 3 also registers the plugin** in `buildServer`'s query-plugin list, ahead of `forward.Plugin`, and `build_test.go` asserts it is present when `storage_integrity.tables` is set and absent when it is not.
 
 **Interfaces:**
-- Consumes: `sqlident` / the token scan Task 2 added for `AnnotateStorageIntegrityReject`; the configured SI table set and reserved databases from `pkg/config`.
-- Produces: `func reservedNamespaceViolation(sql string, dbs []string, rid string) string` — the offending name, or `""`. Same return-the-string shape as Task 19's warning so it is unit-testable without a session.
-- Produces: two new `Plugin` fields, `ReservedDatabases []string` and `ReservedRowIDColumn string`, populated in `build.go` from `storage_integrity` config when SI tables are configured and left zero otherwise (a zero value disables the pre-check, so non-SI deployments are byte-identical).
+- Consumes: `sicore.StripSQLLiteralsAndComments(sql string) string` (moved this task); the configured SI table set and reserved databases from `pkg/config`.
+- Produces: `func ReservedNamespaceViolation(sql string, dbs []string, rid string) string` in `pkg/plugins/sireserved` — the offending name, or `""`. Returning the string keeps it unit-testable without a session.
+- Produces: `sireserved.Plugin{ReservedDatabases []string, ReservedRowIDColumn string}`, populated in `build.go` from `storage_integrity` config when SI tables are configured and left unregistered otherwise, so non-SI deployments keep a byte-identical chain.
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `pkg/plugins/rewrite/rewriter_test.go`. These follow the exact shape of the existing `TestOnQuery_MaintenanceSkipsRewrite` (`:96-126`) — `&Plugin{Factory: &fakeFactory{rw: rw}}`, `newSessionForTest`, `sess.State().SetMaintenance(true)`, a literal `plugin.QueryContext` — because the helpers a fresh reader might expect (`newTestRewritePlugin`, `newMaintenanceQueryContext`) **do not exist in this repo**; only `newSessionForTest` does. Do not invent them.
+Create `pkg/plugins/sireserved/plugin_test.go`. Construct the session with `chsession.New` exactly as `pkg/plugins/rewrite/rewriter_test.go:80-88`'s `newSessionForTest` does (copy that helper; do not invent `newTestRewritePlugin` / `newMaintenanceQueryContext` — they do not exist in this repo).
 
 ```go
 // A maintenance session keeps its rewrite bypass but must not be able to
@@ -3249,9 +3259,7 @@ func TestOnQuery_MaintenanceRefusesReservedNamespace(t *testing.T) {
 		{"reserved column", "SELECT _hg_row_id FROM db1.t", "_hg_row_id"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			rw := &fakeRewriter{out: "REWRITTEN-SQL"}
 			p := &Plugin{
-				Factory:             &fakeFactory{rw: rw},
 				ReservedDatabases:   []string{"hg_safe", "hg_unsafe"},
 				ReservedRowIDColumn: "_hg_row_id",
 			}
@@ -3269,73 +3277,128 @@ func TestOnQuery_MaintenanceRefusesReservedNamespace(t *testing.T) {
 			if !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("error must name %q: %v", tc.wantErr, err)
 			}
-			if rw.rewriteCalls != 0 {
-				t.Errorf("the bypass must still skip the rewriter, got %d calls", rw.rewriteCalls)
-			}
 		})
 	}
 }
 
-// The bypass itself is unchanged: ordinary tables still pass through
-// un-rewritten for these sessions.
-func TestOnQuery_MaintenanceStillBypassesOrdinaryTables(t *testing.T) {
-	rw := &fakeRewriter{out: "REWRITTEN-SQL"}
-	p := &Plugin{
-		Factory:             &fakeFactory{rw: rw},
-		ReservedDatabases:   []string{"hg_safe", "hg_unsafe"},
-		ReservedRowIDColumn: "_hg_row_id",
+// The guard must survive the forward filter. rewrite.Plugin declares
+// RunOnForward() == false, so a guard living inside it would be skipped on a
+// forwarded session — which is exactly when raw operator SQL is in flight.
+func TestOnQuery_RefusesOnForwardedSession(t *testing.T) {
+	p := &Plugin{ReservedDatabases: []string{"hg_safe"}, ReservedRowIDColumn: "_hg_row_id"}
+	if !p.RunOnForward() || !p.RunOnPeerTrust() {
+		t.Fatal("the guard must opt into both chain filters or it can be skipped")
 	}
 	sess := newSessionForTest(t, 1)
 	sess.State().SetMaintenance(true)
-	const original = "SELECT * FROM other.u"
-	qctx := &plugin.QueryContext{
-		Session:     sess,
-		OriginalSQL: original,
-		Query:       &chproto.Query{Body: original},
+	sess.State().SetForwarding(true)
+	const sql = "SELECT * FROM hg_safe.db1__t"
+	qctx := &plugin.QueryContext{Session: sess, OriginalSQL: sql, Query: &chproto.Query{Body: sql}}
+	if err := p.OnQuery(context.Background(), qctx); err == nil {
+		t.Fatal("a forwarded maintenance session must still be refused")
 	}
+}
+
+// Ordinary tables pass through untouched, and a session without the operator
+// flags is not affected at all — the peer branch of D6 is unchanged.
+func TestOnQuery_LeavesOrdinaryAndNonOperatorSessionsAlone(t *testing.T) {
+	p := &Plugin{ReservedDatabases: []string{"hg_safe"}, ReservedRowIDColumn: "_hg_row_id"}
+
+	sess := newSessionForTest(t, 1)
+	sess.State().SetMaintenance(true)
+	const ordinary = "SELECT * FROM other.u"
+	qctx := &plugin.QueryContext{Session: sess, OriginalSQL: ordinary, Query: &chproto.Query{Body: ordinary}}
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
-		t.Fatalf("ordinary table must still bypass: %v", err)
+		t.Fatalf("ordinary table must pass: %v", err)
 	}
-	if qctx.Query.Body != original {
-		t.Fatalf("bypassed SQL must be untouched, got %q", qctx.Query.Body)
+
+	peer := newSessionForTest(t, 2)
+	peer.State().SetPeerTrusted(true)
+	const reserved = "SELECT * FROM hg_safe.db1__t"
+	pctx := &plugin.QueryContext{Session: peer, OriginalSQL: reserved, Query: &chproto.Query{Body: reserved}}
+	if err := p.OnQuery(context.Background(), pctx); err != nil {
+		t.Fatalf("a peer session without operator flags is out of scope for this guard: %v", err)
 	}
-	if rw.rewriteCalls != 0 {
-		t.Errorf("maintenance must skip the rewriter, got %d calls", rw.rewriteCalls)
+}
+
+// A reserved name inside a string literal is not an address.
+func TestReservedNamespaceViolation_IgnoresLiterals(t *testing.T) {
+	if got := ReservedNamespaceViolation("SELECT 'hg_safe' AS s FROM db1.t", []string{"hg_safe"}, "_hg_row_id"); got != "" {
+		t.Fatalf("literal must not trip the guard, got %q", got)
+	}
+	if got := ReservedNamespaceViolation("SELECT * FROM hg_safe_backup.t", []string{"hg_safe"}, "_hg_row_id"); got != "" {
+		t.Fatalf("identifier boundaries must be respected, got %q", got)
 	}
 }
 ```
 
-Duplicate both tests for the platform-operator flag, substituting `sess.State().SetPlatformOperator(true)` for `SetMaintenance(true)` — confirm the exact setter name in `pkg/chsession/state.go` before writing it, and if the two flags share one bypass branch, still assert both so neither can be dropped from the condition without a failing test.
+Duplicate the first test for the platform-operator flag, substituting `SetPlatformOperator(true)` for `SetMaintenance(true)` — confirm the exact setter names in `pkg/chsession/state.go` before writing them (this task's guard gates on both, so neither may be dropped from the condition without a failing test).
 
 - [ ] **Step 2: Run to verify they fail**
 
-Run: `bazel test //pkg/plugins/rewrite:rewrite_test --test_filter='Maintenance|PlatformOperator' --test_output=all`
-Expected: FAIL — `undefined: newMaintenanceQueryContext` (and, once the helper exists, "maintenance session must be refused on a reserved name").
+Run: `bazel run //:gazelle && bazel test //pkg/plugins/sireserved:sireserved_test --test_output=all`
+Expected: FAIL — the package does not compile yet (`undefined: Plugin`).
 
 - [ ] **Step 3: Implement the pre-check**
 
-In `pkg/plugins/rewrite/rewriter.go`, at the maintenance/platform-operator bypass (`:130-133`), run the check before returning:
+Create `pkg/plugins/sireserved/plugin.go`:
 
 ```go
-// The bypass exists because these roles need un-rewritten SQL, not because
-// they may address protocol-owned storage. Re-running the full SI rewrite
-// here would defeat the bypass; this narrow name check does not.
+// Package sireserved refuses statements that address storage-integrity
+// protocol-owned names on sessions whose rewrite is bypassed.
+//
+// The bypass exists because maintenance and platform-operator roles need
+// un-rewritten SQL, not because they may address protocol-owned storage.
+// Running the full SI rewrite for them would defeat the bypass; this narrow
+// name check does not. It opts into the forward and peer-trust filters so the
+// chain cannot skip it, and then gates on the operator flags itself.
 // Spec I D6, operator branch.
-if snap.Maintenance || snap.PlatformOperator {
-	if name := reservedNamespaceViolation(qctx.Query.Body, p.reservedDatabases, p.reservedRowIDColumn); name != "" {
+package sireserved
+
+type Plugin struct {
+	ReservedDatabases   []string
+	ReservedRowIDColumn string
+}
+
+func (p *Plugin) RunOnForward() bool   { return true }
+func (p *Plugin) RunOnPeerTrust() bool { return true }
+
+func (p *Plugin) OnQuery(_ context.Context, qctx *plugin.QueryContext) error {
+	st := qctx.Session.State()
+	if st == nil || !(st.Maintenance() || st.PlatformOperator()) {
+		return nil
+	}
+	if name := ReservedNamespaceViolation(qctx.Query.Body, p.ReservedDatabases, p.ReservedRowIDColumn); name != "" {
 		return fmt.Errorf(
 			"storage-integrity reserved name %q is not addressable through the proxy; use a direct ClickHouse connection for physical access",
 			name)
 	}
 	return nil
 }
+
+// ReservedNamespaceViolation reports the first reserved database or reserved
+// column the statement names, ignoring occurrences inside string literals and
+// comments. It reuses housegate's single literal stripper rather than adding a
+// second one.
+func ReservedNamespaceViolation(sql string, dbs []string, rid string) string {
+	scan := strings.ToLower(sicore.StripSQLLiteralsAndComments(sql))
+	for _, db := range dbs {
+		if containsIdentifier(scan, strings.ToLower(db)) {
+			return db
+		}
+	}
+	if rid != "" && containsIdentifier(scan, strings.ToLower(rid)) {
+		return rid
+	}
+	return ""
+}
 ```
 
-`reservedNamespaceViolation` reuses the Task 2 token scan: it reports the first reserved database or reserved column the statement names, ignoring occurrences inside string literals (the same literal-skipping the scan already does).
+`containsIdentifier` matches on identifier boundaries so `hg_safe_backup` does not trip the `hg_safe` rule; confirm the exact setter/getter names on `chsession.SessionState` (`Maintenance()` / `PlatformOperator()`) before writing, since the plugin gates on them.
 
 - [ ] **Step 4: Run the tests**
 
-Run: `bazel test //pkg/plugins/rewrite:rewrite_test --test_filter='Maintenance|PlatformOperator' --test_output=all`
+Run: `bazel test //pkg/plugins/sireserved:sireserved_test --test_output=all`
 Expected: PASS.
 
 - [ ] **Step 5: Extend the startup warning**
@@ -3344,12 +3407,12 @@ Expected: PASS.
 
 - [ ] **Step 6: Full suite + commit**
 
-Run: `bazel test //pkg/plugins/rewrite:all //:housegate_test --test_output=errors`
-Expected: PASS.
+Run: `bazel test //pkg/plugins/sireserved:all //pkg/plugins/storageintegrity:all //pkg/storageintegrity:all //:housegate_test --test_output=errors`
+Expected: PASS (the storageintegrity targets cover the literal-stripper move).
 
 ```bash
-git add pkg/plugins/rewrite/rewriter.go pkg/plugins/rewrite/rewriter_test.go build.go build_test.go
-git commit -m "feat(rewrite): refuse reserved SI names on maintenance and operator sessions"
+git add pkg/plugins/sireserved pkg/storageintegrity/sql.go pkg/plugins/storageintegrity/plugin.go build.go build_test.go
+git commit -m "feat(sireserved): refuse reserved SI names on operator-bypassed sessions"
 ```
 
 ### Task 20: Bump housegate onto the fixed engines
