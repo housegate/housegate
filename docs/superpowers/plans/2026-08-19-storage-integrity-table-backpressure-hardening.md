@@ -1903,8 +1903,17 @@ Keep `Refresh`'s external behaviour (full exact inventory of both configured dat
 
 ```go
 // fullScope covers every key in both configured databases.
+//
+// SafeDatabase must be set, not just IncludeSafeDatabase: Covers, IsFull and
+// BuildExactPartsQuery all require SafeDatabase != "" before the safe database
+// is included, so setting only the flag silently reads the unsafe database
+// alone while claiming to be a full pass.
 func (g *PartsPressureGuard) fullScope() PartsScope {
-	return PartsScope{Database: g.cfg.UnsafeDatabase, IncludeSafeDatabase: true}
+	return PartsScope{
+		Database:            g.cfg.UnsafeDatabase,
+		IncludeSafeDatabase: g.cfg.SafeDatabase != "",
+		SafeDatabase:        g.cfg.SafeDatabase,
+	}
 }
 
 // Refresh replaces the cached inventory for every key in both configured
@@ -2032,6 +2041,19 @@ func (g *PartsPressureGuard) applyExactScopeLocked(scope PartsScope, snapshot Pa
 			covered[key] = struct{}{}
 		}
 	}
+	// A key the scope explicitly asked about is covered even when it returned
+	// no rows: for an enumerated scope, zero rows proves zero active parts.
+	// Installing an explicit empty entry is what lets the first INSERT into a
+	// brand new partition proceed instead of failing closed as unavailable.
+	for _, key := range scope.RequestedKeys() {
+		if _, present := g.snapshot[key]; !present {
+			g.snapshot[key] = 0
+		}
+		if _, present := g.activeParts[key]; !present {
+			g.activeParts[key] = map[string]struct{}{}
+		}
+		covered[key] = struct{}{}
+	}
 	for key := range covered {
 		g.keyGeneration[key]++
 		g.countFreshAt[key] = now
@@ -2053,6 +2075,81 @@ func (g *PartsPressureGuard) reconcileScopeLocked(scope PartsScope) {
 ```
 
 Note the `covered` set deliberately includes keys that already had freshness inside the scope even when this read returned no rows for them, so a partition that drained to zero still advances its generation and stays admissible.
+
+- [ ] **Step 6b: Regression tests for the two scope-installer defects**
+
+Both were found by review of this plan before implementation; each fails against the naive version of Step 6.
+
+Add to `pkg/storageintegrity/parts_pressure_test.go`:
+
+```go
+// A full refresh must cover the safe database. Setting only
+// IncludeSafeDatabase leaves SafeDatabase empty, and Covers/IsFull/
+// BuildExactPartsQuery all require a non-empty SafeDatabase, so the safe
+// database would be silently excluded from a pass that claims to be full.
+func TestPartsPressureGuard_FullScopeCoversSafeDatabase(t *testing.T) {
+	g := newTestGuard(t, PartsPressureConfig{
+		UnsafeDatabase: "hg_unsafe",
+		SafeDatabase:   "hg_safe",
+	})
+	scope := g.fullScope()
+	if scope.SafeDatabase != "hg_safe" || !scope.IncludeSafeDatabase {
+		t.Fatalf("fullScope must name the safe database: %+v", scope)
+	}
+	if !scope.IsFull(g.cfg) {
+		t.Fatal("fullScope must satisfy IsFull")
+	}
+	if !scope.Covers(PartsKey{Database: "hg_safe", Table: "db__t", Partition: "p_a"}) {
+		t.Fatal("fullScope must cover safe-database keys")
+	}
+	query, args := g.BuildExactPartsQuery(scope)
+	if !strings.Contains(query, "parts.database IN (?, ?)") {
+		t.Fatalf("full scope must read both databases: %s", query)
+	}
+	if len(args) < 2 || args[1] != "hg_safe" {
+		t.Fatalf("safe database must be bound: %v", args)
+	}
+}
+
+// An enumerated scope proves absence: a partition that returns no rows has
+// zero active parts, and must be installed fresh. Otherwise the first INSERT
+// into a brand new partition is refused as inventory-unavailable, because the
+// key it asked about was never marked fresh by the read that asked for it.
+func TestPartsPressureGuard_ExactScopeMarksUnseenEmptyPartitionFresh(t *testing.T) {
+	g := newTestGuard(t, PartsPressureConfig{
+		UnsafeDatabase: "hg_unsafe",
+		SafeDatabase:   "hg_safe",
+		SoftPartsPerPartition: 2400,
+		HardPartsPerPartition: 2950,
+	})
+	// The fake conn holds no parts at all: this partition has never existed.
+	scope := PartsScope{Database: "hg_unsafe", Table: "db__t", Partitions: []string{"p_new"}}
+	if _, err := g.refreshScope(context.Background(), scope); err != nil {
+		t.Fatalf("refreshScope: %v", err)
+	}
+	key := PartsKey{Database: "hg_unsafe", Table: "db__t", Partition: "p_new"}
+	g.mu.Lock()
+	count, hasCount := g.snapshot[key]
+	_, hasNames := g.activeParts[key]
+	_, fresh := g.namesFreshAt[key]
+	g.mu.Unlock()
+	if !hasCount || count != 0 || !hasNames || !fresh {
+		t.Fatalf("enumerated empty partition must install as fresh zero: count=%d hasCount=%v hasNames=%v fresh=%v",
+			count, hasCount, hasNames, fresh)
+	}
+	if err := g.checkAvailable(key); err != nil {
+		t.Fatalf("first INSERT into a new partition must be admitted: %v", err)
+	}
+}
+```
+
+- [ ] **Step 6c: Run them, and prove they catch the defects**
+
+Run: `bazel test //pkg/storageintegrity:storageintegrity_test --test_filter='TestPartsPressureGuard_(FullScopeCoversSafeDatabase|ExactScopeMarksUnseenEmptyPartitionFresh)' --test_output=all`
+Expected: PASS.
+
+Then prove each test is load-bearing. Temporarily drop `SafeDatabase` from `fullScope`, re-run: `FullScopeCoversSafeDatabase` FAILS with "fullScope must name the safe database". Restore. Temporarily delete the `scope.RequestedKeys()` loop from `applyExactScopeLocked`, re-run: `ExactScopeMarksUnseenEmptyPartitionFresh` FAILS with "enumerated empty partition must install as fresh zero". Restore, re-run, both PASS.
+
 
 - [ ] **Step 7: Thread the scope through the remaining `haveSnap` sites**
 
@@ -2135,6 +2232,28 @@ func (s PartsScope) Covers(key PartsKey) bool {
 		}
 	}
 	return false
+}
+
+// RequestedKeys returns the keys this scope explicitly asked about, when the
+// scope enumerates them (a table plus an explicit partition list). For such a
+// read, a key that returns no rows is authoritative information — the
+// partition exists in the request and has zero active parts — so it must be
+// installed and marked fresh rather than left unknown. Without this, a brand
+// new partition is never marked fresh by the exact read that asked for it, and
+// the first INSERT into it fails closed as inventory-unavailable.
+//
+// A broad scope (no table, or no partition list) cannot enumerate what it
+// asked for, so it returns nil and absence is handled by the existing
+// delete-then-install pass over previously known keys.
+func (s PartsScope) RequestedKeys() []PartsKey {
+	if s.Table == "" || len(s.Partitions) == 0 {
+		return nil
+	}
+	keys := make([]PartsKey, 0, len(s.Partitions))
+	for _, partition := range s.Partitions {
+		keys = append(keys, PartsKey{Database: s.Database, Table: s.Table, Partition: partition})
+	}
+	return keys
 }
 
 // IsFull reports whether the scope covers every key of both configured

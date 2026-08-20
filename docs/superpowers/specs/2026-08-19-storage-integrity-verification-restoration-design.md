@@ -48,9 +48,21 @@ Non-goals: raising coverage percentages; adding new behavioural tests beyond wha
 
 **D4 — Normalization is shared and literal-aware.** The backtick→double-quote normalization moves into a documented function applied to identifiers only, and the two runners implement the same rule. A test asserts that a quoting change inside a string literal is *not* normalized away.
 
-**D5 — sentio-node CI gains a ClickHouse service and sets `SENTIO_SI_E2E=1`.** Mirror arbiter-core's `integration-clickhouse` job, including the shared-Keeper configuration (the SI smoke creates ReplicatedMergeTree tables). The smoke's skip stays for local runs; CI sets the variable so the Phase 3 drift assertion executes. Rejected: converting the smoke to a mock — its entire value is that it boots a real node against a real ClickHouse.
+**D5 — Spec C's drift assertion executes in CI; the production-wiring assertion is separated out and named.** Adding a ClickHouse service alone does **not** make `SENTIO_SI_E2E` run: `standalone.Run` requires Ethereum RPC, contracts, arbiter gRPC, Redis and sentio-core before it reaches `EnsureProtocolTables`. Split the two things that smoke was standing in for:
 
-**D6 — Agent-guidance files are corrected and tracked.** Rewrite `pkg/replay/AGENTS.md` to state the real dependency direction (housegate is the source of truth; arbiter-core consumes it; wire form is mirrored in arbiter-proto `replay.proto` with a field-name freeze enforced by arbiter-core conformance tests) and keep its invariant list. Force-add it and the other seven nested `AGENTS.md` files so review and CI can see them. Add a CI check that fails when an untracked `AGENTS.md` exists in the tree, so the global ignore rule cannot silently re-hide them.
+1. **Drift logic** — run Phase 3's tamper-and-refuse assertion in CI against a Keeper-enabled ClickHouse through the same production helper the node calls, so `ErrProtocolTableDrift` is genuinely exercised. This is achievable now.
+2. **Production wiring** — that `standalone.Run` invokes that helper *before* opening listeners is a separate claim, and the existing `storage_integrity_bootstrap_test.go` does not establish it (the 2026-08-19 review found it tautological: it asserts an order over three closures the test itself defines). Replace it with an assertion against the real call site — extract the boot sequence into a named, table-driven ordering function that both `standalone.Run` and the test consume, so reordering the production path breaks the test.
+3. **Full-stack smoke** — booting the whole node against a real devnet remains an explicit operator decision, recorded as out of scope here rather than quietly dropped.
+
+Rejected: converting the smoke to a mock — its value is the real ClickHouse. Rejected: claiming (1) covers (2).
+
+**D6 — Agent-guidance files are corrected, tracked, and un-ignored at the repo level.** Rewrite `pkg/replay/AGENTS.md` to state the real dependency direction (housegate is the source of truth; arbiter-core consumes it; wire form is mirrored in arbiter-proto `replay.proto` with a field-name freeze enforced by arbiter-core conformance tests) and keep its invariant list. Force-add it and the other seven nested `AGENTS.md` files.
+
+The mechanism matters here, because a CI check alone cannot do this job: an ignored, uncommitted file is simply absent from CI's checkout, and `git status --porcelain` excludes ignored files anyway. Three controls, each with a stated scope:
+
+1. **Repo-level un-ignore.** Add `!AGENTS.md` to housegate's root `.gitignore`. A repo `.gitignore` takes precedence over `core.excludesFile`, so this defeats the user's global bare `AGENTS.md` rule for this repo regardless of any individual's git configuration — verified empirically: with the global rule active, a nested `AGENTS.md` is invisible to `git status`; after adding the negation the same file reports as `?? sub/AGENTS.md`. This is the control that actually works, and it protects future files, not just today's eight.
+2. **CI manifest check.** Assert that every path in a committed `AGENTS.md` manifest is present and tracked. This catches deletion or re-untracking of a known file. It cannot catch a brand-new file that was never committed — no CI check can — which is why control 1 exists.
+3. **Local visibility.** With control 1 in place, a newly created nested `AGENTS.md` shows up in the author's own `git status`, which is where it has to be caught. Record this explicitly rather than implying CI covers it.
 
 **D7 — Capture tests never write tracked files.** `characterize_test.go` becomes a comparison test by default and regenerates only under an explicit `-update` flag (or `UPDATE_GOLDEN=1`), following the repo's own harness convention. Regenerate the stale `ast-shapes` fixtures once, in the same PR, so the committed state matches the pinned polyglot. Add a CI step asserting `git diff --exit-code` after the test run.
 
@@ -65,7 +77,7 @@ D3/D4 change the corpus contract that Spec I extends. Land J's runner changes **
 - Corpus: a meta-test in both repos asserts the D3 schema over every case (every case has `want_sql` or is a reject with `want_message`; no vacuous `want_sql_contains`; `allow_sql_divergence` implies both per-engine expectations). Running it against the pre-fix corpus must report the 7 vacuous cases and the 12 unasserted `want_sql`s.
 - sentio-node: the SI smoke's Phase 3 executes and fails when `parts_to_throw_insert` is tampered.
 - `git diff --exit-code` clean after `make test` in rewriter-go.
-- `git status --porcelain` shows no untracked `AGENTS.md` in housegate.
+- With the repo negation in place, creating a new nested `AGENTS.md` makes it appear in `git status` (demonstrate); the CI manifest check fails when a known `AGENTS.md` is deleted or untracked (demonstrate).
 
 ## 6. Delivery
 

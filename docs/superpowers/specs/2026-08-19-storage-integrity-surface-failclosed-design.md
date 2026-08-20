@@ -41,7 +41,16 @@ Non-goals: making peer/forwarded sessions run SI policy (D6); a general `ErrorRe
 
 **D5 — HouseGate asserts the engine build, not just the contract enum.** `STORAGE_INTEGRITY_CONTRACT_V1` cannot distinguish rewriter-go v0.7.0 (broken DESCRIBE) from v0.7.1, nor rewriter-grpc v0.12.0 from v0.12.1. At startup, when SI tables are configured, HouseGate issues one probe rewrite of a known SI DESCRIBE and requires the exact expected SQL; a mismatch refuses startup naming the engine and the expected build. Rejected: a new contract enum value — it would need a proto bump per patch release; rejected: version strings in the response — the native engine has no version RPC and adding one is a larger change than the probe.
 
-**D6 — Peer-trusted / forwarded / maintenance / platform-operator sessions keep bypassing SI policy in v1; this is recorded and made visible.** Running SI rewrite on peer SQL would re-rewrite already-rewritten statements, which the peer-trust design forbids. Instead: (a) a decision record in this spec and in the base design (Spec B's edit list); (b) HouseGate logs a startup warning when SI tables are configured *and* `internal_listen` is set, naming the requirement that the internal port be reachable only from peer subnets; (c) a test asserting the bypass is deliberate (a peer-trusted session's SI-table SELECT is *not* rewritten), so a future change to the bypass is a visible test change rather than a silent behaviour change.
+**D6 — The four bypasses are two different problems and get two different treatments.** They were grouped in the review; the double-rewrite rationale only covers half of them.
+
+*Peer-trusted and forwarded sessions* carry SQL the originating proxy already rewrote. Running SI rewrite again would double-rewrite it, which the peer-trust design forbids, so the bypass stays in v1. Controls: (a) a decision record here and in the base design (Spec B's edit list); (b) a HouseGate startup warning when SI tables are configured *and* `internal_listen` is set, naming the requirement that the internal port be reachable only from peer subnets; (c) a test asserting the bypass is deliberate (a peer-trusted session's SI-table SELECT is not rewritten), so changing it later is a visible test change.
+
+*Maintenance and platform-operator sessions* have no such excuse. Their SQL is raw and un-rewritten, and the bypass exists only because those roles are trusted operators — which means an operator credential, or anything that can set those flags, can address `hg_safe`/`hg_unsafe` directly and read `_hg_row_id`. That is a distinct threat model and needs its own answer in this spec rather than inheriting the peer one:
+- Reserved-namespace addressing is refused for these sessions too. The rewrite bypass stays (they legitimately need un-rewritten SQL), but a narrow pre-check rejects any statement that names a reserved SI physical database or the reserved column, independent of the rewrite plugin. Operators who need raw physical access use a direct ClickHouse connection, not the proxy — which is the existing posture for every other protocol-owned surface.
+- A startup warning names the SI tables that are reachable this way, and the count of configured platform-operator addresses.
+- Dedicated tests: a maintenance session and a platform-operator session are each refused on `SELECT … FROM hg_safe.<t>` and on `_hg_row_id`, and are still allowed on an ordinary table.
+
+Rejected: running full SI rewrite for maintenance sessions (it would defeat the purpose of the bypass); rejected: leaving them undocumented under the peer rationale (the review's finding, and correct).
 
 **D7 — The four correctness defects.**
 - (a) Scope the reserved-column check to references that resolve to an SI table; an identically named column on an ordinary table is allowed.
@@ -71,7 +80,7 @@ Spec J makes the C++ runner actually compare `want_sql`; without J these cases a
 - Both engines: the new corpus cases pass; the Go oracle diff (`REWRITER_ORACLE_ADDR`) is green across the whole corpus.
 - HouseGate unit: `TestRewriter_FailOpen` (empty SI) still passes; new `TestRewriter_FailsClosedOnAnyNonSuccessWhenSIConfigured` covers `UnsupportedStatement`/`SyntaxError`/`RewriteError` with and without an SI-flagged accessed table; D5 probe refuses startup against a stubbed old-build response; D6 asserts the peer-trust bypass.
 - HouseGate docker (`pkg/integration/storage_integrity_read_test.go`, native engine, already in the CI list): `SYSTEM START MERGES hg_unsafe.<phys>` and `TRUNCATE DATABASE hg_safe` both return an Exception and **the tables are provably untouched afterwards** — assert `system.parts` count and a `SELECT count()` on `hg_safe` before and after. This is the regression test for the two Critical findings and must fail on the pre-fix build.
-- A test that a peer-trusted session reaching the internal port is *not* SI-rewritten (D6c).
+- A test that a peer-trusted session reaching the internal port is *not* SI-rewritten (D6, peer branch); and that maintenance / platform-operator sessions are refused on reserved-namespace and reserved-column addressing while ordinary tables still work (D6, operator branch).
 
 ## 6. Delivery
 

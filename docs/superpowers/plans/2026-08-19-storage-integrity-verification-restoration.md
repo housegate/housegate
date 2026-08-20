@@ -4,7 +4,7 @@
 
 **Goal:** Make every repo's tests actually execute in CI, turn the 178-case storage-integrity corpus into a real two-engine parity gate, correct and version-control the agent-guidance files, and stop `make test` from rewriting tracked fixtures.
 
-**Architecture:** Five repos, four independent workstreams. (A) housegate: uncomment the disabled `bazel test` step, correct + force-add the nested `AGENTS.md` files, add a CI check that untracked `AGENTS.md` cannot reappear. (B) rewriter-go + rewriter-grpc: a frozen corpus schema with a validator implemented twice (Go and C++), a shared literal-aware identifier-quote normalization implemented twice, and per-engine SQL pins so every non-reject case is compared exactly on both sides. (C) rewriter-grpc: a `pull_request` + `push: main` job that drives the existing remote build box over SSH. (D) sentio-node: a ClickHouse + Keeper CI job modelled on arbiter-core's, plus a chain-free test that executes the protocol-table drift refusal the SI smoke's Phase 3 has never run.
+**Architecture:** Five repos, four independent workstreams. (A) housegate: uncomment the disabled `bazel test` step, correct + force-add the nested `AGENTS.md` files, un-ignore them at the repo level so the user's global rule cannot hide future ones, and add a CI manifest check that a known file cannot be quietly deleted or untracked. (B) rewriter-go + rewriter-grpc: a frozen corpus schema with a validator implemented twice (Go and C++), a shared literal-aware identifier-quote normalization implemented twice, and per-engine SQL pins so every non-reject case is compared exactly on both sides. (C) rewriter-grpc: a `pull_request` + `push: main` job that drives the existing remote build box over SSH. (D) sentio-node: a ClickHouse + Keeper CI job modelled on arbiter-core's, plus a chain-free test that executes the protocol-table drift refusal the SI smoke's Phase 3 has never run.
 
 **Tech Stack:** Bazel 9.1.0 + Bzlmod (housegate, sentio-node, arbiter-core), Go 1.22+ (`go test`, rewriter-go), CMake + Ninja + GoogleTest v1.14 + Poco JSON (rewriter-grpc), GitHub Actions (self-hosted `linux/x64` runners for housegate/arbiter-core/sentio-node; `ubuntu-latest` + SSH to the shared build box for rewriter-grpc), Docker (ClickHouse 25.8 with shared Keeper).
 
@@ -24,7 +24,7 @@
 - Branch-mode development in every repo: cut `feat/<topic>` or `fix/<topic>`, land via PR, never commit feature work to `main`.
 - English for identifiers, comments, log strings, and operator-facing messages in every repo.
 - Markdown docs: no hard line-wrapping; one paragraph per line.
-- Do not change the user's global git configuration. `~/.git/.gitignore` line 20's bare `AGENTS.md` rule is a user-environment decision recorded on the roadmap (§5 bounded tasks), explicitly out of scope here — this plan works *around* it with `git add -f` plus a CI check.
+- Do not change the user's global git configuration. `~/.git/.gitignore` line 20's bare `AGENTS.md` rule is a user-environment decision recorded on the roadmap (§5 bounded tasks), explicitly out of scope here — this plan works *around* it with a repo-level `!AGENTS.md` negation (which takes precedence over `core.excludesFile`), `git add -f` for today's files, and a CI manifest check.
 
 ---
 
@@ -399,15 +399,49 @@ housegate's pkg/replay in 63 places. Spec J D6."
 
 ---
 
-## Task 3: CI fails when an `AGENTS.md` is untracked
+## Task 3: Un-ignore `AGENTS.md` at the repo level, and add a CI manifest check
 
 **Files:**
+- Modify: `.gitignore` (repo root)
 - Create: `scripts/check-agents-md-tracked.sh`
 - Modify: `.github/workflows/ci.yml` (the `release-tooling` job)
 
 **Interfaces:**
 - Consumes: Task 2's tracked files — the check passes only because they are tracked.
-- Produces: `scripts/check-agents-md-tracked.sh`, exit 0 when clean, exit 1 with a per-file listing otherwise.
+- Produces: a repo-level negation that defeats the global ignore rule for this repo, plus `scripts/check-agents-md-tracked.sh` (exit 0 when clean, exit 1 with a per-file listing otherwise).
+
+**Read this before writing the check.** A CI check cannot, on its own, stop a future ignored `AGENTS.md` from being hidden: an uncommitted file is simply absent from CI's checkout, so there is nothing for any script to find. Review of this plan flagged exactly that — the deliberate-untrack proof would pass in CI, not fail. The three controls have different jobs and only the first one protects future files:
+
+1. **`.gitignore` negation (the real fix).** A repo `.gitignore` takes precedence over `core.excludesFile`, so `!AGENTS.md` in the root re-exposes every nested `AGENTS.md` in this repo regardless of anyone's global configuration. Verified: with the global bare `AGENTS.md` rule active a nested file is invisible to `git status`; after adding the negation the same file reports as `?? sub/AGENTS.md`.
+2. **CI manifest check.** Asserts every path in the committed manifest is present and tracked — this catches deletion or re-untracking of a known file, which *is* visible in a clean checkout.
+3. **Local visibility.** With (1) in place a newly created nested `AGENTS.md` appears in the author's own `git status`, which is where it has to be caught. The script's untracked scan serves that local case.
+
+- [ ] **Step 0: Add the repo-level negation and prove it works**
+
+Append to the repo-root `.gitignore`:
+
+```gitignore
+# Agent-guidance files must stay visible in this repo even when a contributor's
+# global core.excludesFile ignores them (a bare `AGENTS.md` rule is common).
+# A repo .gitignore takes precedence over the global file, so this negation is
+# what keeps future nested AGENTS.md files reviewable. Spec J D6.
+!AGENTS.md
+```
+
+Prove it, since the whole control rests on this precedence:
+
+```bash
+git check-ignore -v pkg/replay/AGENTS.md; echo "exit=$?"
+```
+Expected before: `/Users/uranuswch/.git/.gitignore:20:AGENTS.md	pkg/replay/AGENTS.md`, `exit=0`.
+Expected after: the negation line is reported (or no output), `exit=1` — the file is no longer ignored.
+
+```bash
+mkdir -p pkg/tmpcheck && echo x > pkg/tmpcheck/AGENTS.md
+git status --porcelain --untracked-files=all | grep AGENTS.md
+rm -rf pkg/tmpcheck
+```
+Expected: `?? pkg/tmpcheck/AGENTS.md` appears. Before the negation it does not.
 
 - [ ] **Step 1: Write the failing check by hand first**
 
@@ -2993,6 +3027,108 @@ Expected: `integration-clickhouse` green again with the test running.
 The `build` job runs `bazel test //...`, which now includes the new test with `SENTIO_SI_CH_E2E` unset. Check its log shows the target passing (the test skips inside it). Expected: no new failures in the `build` job.
 
 ---
+
+## Task 14b: sentio-node — prove the production wiring, not just the helper (D5, half three)
+
+**Files:**
+- Modify: `standalone/standalone.go`
+- Modify: `standalone/storage_integrity_bootstrap_test.go`
+
+**Interfaces:**
+- Consumes: `runStorageIntegrityProtocolBootstrap` (`standalone/standalone.go:448`) and its call site at `:316`.
+- Produces: `storageIntegrityBootPlan` — an ordered, named step list that `Run` executes and the test asserts against.
+
+**Why this task exists.** Task 13 proves the drift *logic* by driving the same production helper. It does not prove that `standalone.Run` calls that helper, or that it calls it before opening listeners — and the existing `storage_integrity_bootstrap_test.go` cannot close that gap: the 2026-08-19 review found it tautological, because it asserts an order over three closures the test itself constructs. Swapping the first two arguments at the real call site leaves it green. Review of this plan raised the same objection about Task 13's substitute. This task makes the ordering a value produced by production code.
+
+- [ ] **Step 1: Write the failing test**
+
+Replace the body of `standalone/storage_integrity_bootstrap_test.go` with an assertion over the production plan:
+
+```go
+// The boot plan is produced by production code, so reordering the real
+// sequence changes this value and fails the test. The previous version of
+// this test asserted an order over closures it defined itself, which could
+// not detect a reorder at the call site.
+func TestStorageIntegrityBootPlanOrdersEnsureBeforeListeners(t *testing.T) {
+	plan := storageIntegrityBootPlan()
+
+	var names []string
+	for _, step := range plan {
+		names = append(names, step.Name)
+	}
+	require.Equal(t, []string{"ensure-protocol-tables", "cross-check-schemas", "register-role"}, names)
+
+	for _, step := range plan {
+		require.NotNil(t, step.Run, "step %q must carry a runnable", step.Name)
+	}
+}
+
+// The SI bootstrap must complete before any listener is opened, so a node
+// whose protocol tables drifted never serves traffic.
+func TestStorageIntegrityBootstrapPrecedesListeners(t *testing.T) {
+	require.Less(t,
+		sourceLineOf(t, "runStorageIntegrityProtocolBootstrap("),
+		sourceLineOf(t, "startHousegateListener("),
+		"protocol-table bootstrap must run before the housegate listener starts")
+}
+```
+
+`sourceLineOf` is a small helper in the same file that scans `standalone.go` for the first occurrence of a literal and fails if it is absent — so deleting or renaming either call site fails the test rather than silently passing.
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `bazel test //standalone:standalone_test --test_filter='TestStorageIntegrityBootPlan|TestStorageIntegrityBootstrapPrecedes' --test_output=all`
+Expected: FAIL — `undefined: storageIntegrityBootPlan`.
+
+- [ ] **Step 3: Extract the plan in production code**
+
+In `standalone/standalone.go`, replace the three inline closures at `:316-340` with a named plan the same function executes:
+
+```go
+// storageIntegrityBootStep is one named phase of the SI bootstrap. Naming the
+// steps lets a test assert the production order instead of an order it made up.
+type storageIntegrityBootStep struct {
+	Name string
+	Run  func(context.Context) error
+}
+
+// storageIntegrityBootPlan is the frozen order: protocol tables are ensured and
+// verified, the schemas are cross-checked against what was created, and only
+// then is the role registered. Listeners start after this returns.
+func storageIntegrityBootPlan(steps ...func(context.Context) error) []storageIntegrityBootStep {
+	names := []string{"ensure-protocol-tables", "cross-check-schemas", "register-role"}
+	plan := make([]storageIntegrityBootStep, len(names))
+	for i, name := range names {
+		plan[i] = storageIntegrityBootStep{Name: name}
+		if i < len(steps) {
+			plan[i].Run = steps[i]
+		}
+	}
+	return plan
+}
+```
+
+Call it with the three existing closures and have `runStorageIntegrityProtocolBootstrap` take the plan, executing steps in order and wrapping any error with the step name. Behaviour is unchanged; the order becomes a value.
+
+- [ ] **Step 4: Run the tests**
+
+Run: `bazel test //standalone:standalone_test --test_filter='TestStorageIntegrityBootPlan|TestStorageIntegrityBootstrapPrecedes' --test_output=all`
+Expected: PASS.
+
+- [ ] **Step 5: Prove the test is load-bearing**
+
+Temporarily swap the first two closures at the call site and re-run. Expected: FAIL, naming the wrong order. Restore and re-run: PASS.
+
+- [ ] **Step 6: Full package + commit**
+
+Run: `bazel test //standalone:standalone_test --test_output=errors`
+Expected: PASS.
+
+```bash
+git add standalone/standalone.go standalone/storage_integrity_bootstrap_test.go
+git commit -m "test(storage-integrity): assert the production boot order, not a test-local one"
+```
+
 
 ## Task 15: documentation and the spec §5 acceptance sweep
 
