@@ -403,6 +403,7 @@ housegate's pkg/replay in 63 places. Spec J D6."
 
 **Files:**
 - Modify: `.gitignore` (repo root)
+- Create: `scripts/agents-md-manifest.txt`
 - Create: `scripts/check-agents-md-tracked.sh`
 - Modify: `.github/workflows/ci.yml` (the `release-tooling` job)
 
@@ -413,7 +414,7 @@ housegate's pkg/replay in 63 places. Spec J D6."
 **Read this before writing the check.** A CI check cannot, on its own, stop a future ignored `AGENTS.md` from being hidden: an uncommitted file is simply absent from CI's checkout, so there is nothing for any script to find. Review of this plan flagged exactly that — the deliberate-untrack proof would pass in CI, not fail. The three controls have different jobs and only the first one protects future files:
 
 1. **`.gitignore` negation (the real fix).** A repo `.gitignore` takes precedence over `core.excludesFile`, so `!AGENTS.md` in the root re-exposes every nested `AGENTS.md` in this repo regardless of anyone's global configuration. Verified: with the global bare `AGENTS.md` rule active a nested file is invisible to `git status`; after adding the negation the same file reports as `?? sub/AGENTS.md`.
-2. **CI manifest check.** Asserts every path in the committed manifest is present and tracked — this catches deletion or re-untracking of a known file, which *is* visible in a clean checkout.
+2. **CI manifest check.** Asserts every path in the committed manifest is present and tracked. This is the half that works in a clean checkout, and it is the reason the manifest has to exist as a committed file: a script that only scans the working tree sees nothing when a path is deleted *and the deletion committed*, so it would pass exactly when it should fail. The manifest is the expected set; the tree is the actual set; the check compares them in both directions.
 3. **Local visibility.** With (1) in place a newly created nested `AGENTS.md` appears in the author's own `git status`, which is where it has to be caught. The script's untracked scan serves that local case.
 
 - [ ] **Step 0: Add the repo-level negation and prove it works**
@@ -442,6 +443,27 @@ git status --porcelain --untracked-files=all | grep AGENTS.md
 rm -rf pkg/tmpcheck
 ```
 Expected: `?? pkg/tmpcheck/AGENTS.md` appears. Before the negation it does not.
+
+- [ ] **Step 0b: Create the manifest**
+
+`scripts/agents-md-manifest.txt` — the expected set, one path per line. Generate it from the tracked state after Task 2, so it cannot disagree with reality at creation time:
+
+```bash
+git ls-files '*AGENTS.md' | sort > scripts/agents-md-manifest.txt
+cat scripts/agents-md-manifest.txt
+```
+Expected: 9 lines — the root `AGENTS.md` plus the 8 nested files Task 2 tracked.
+
+- [ ] **Step 0c: Prove the manifest check catches a committed deletion**
+
+This is the case the working-tree scan cannot see, so it is worth proving before writing the script:
+
+```bash
+git rm -q pkg/replay/AGENTS.md
+git ls-files '*AGENTS.md' | sort | diff - scripts/agents-md-manifest.txt; echo "diff exit=$?"
+git checkout -- . && git reset -q HEAD pkg/replay/AGENTS.md 2>/dev/null; git status --porcelain | head
+```
+Expected: `diff exit=1` with `> pkg/replay/AGENTS.md` — the manifest names a path the tree no longer tracks. Restore before continuing.
 
 - [ ] **Step 1: Write the failing check by hand first**
 
@@ -477,7 +499,25 @@ git add -f pkg/chproto/AGENTS.md
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
+manifest="scripts/agents-md-manifest.txt"
+[ -f "$manifest" ] || { echo "error: $manifest is missing" >&2; exit 1; }
 
+# Direction 1 (works in a clean CI checkout): every manifest path must still be
+# tracked. This is what catches a deletion or untracking that was committed.
+missing="$(
+  comm -23 "$manifest" <(git ls-files '*AGENTS.md' | sort)
+)"
+if [ -n "$missing" ]; then
+  echo "error: manifest lists AGENTS.md paths that are no longer tracked:" >&2
+  printf '  %s\n' $missing >&2
+  echo "If the removal is intentional, update scripts/agents-md-manifest.txt in the same commit." >&2
+  exit 1
+fi
+
+# Direction 2 (local only): a file present but untracked. CI cannot see this —
+# an uncommitted file is absent from its checkout — but a developer can, which
+# is where a newly created AGENTS.md has to be caught. The repo-level
+# !AGENTS.md negation is what makes it visible to git status at all.
 # --others lists untracked files; adding --ignored also surfaces the ones a
 # global ignore rule hides. --ignored collapses wholly-ignored directories into
 # a single trailing-slash entry, so filter down to real AGENTS.md paths.
@@ -3042,29 +3082,60 @@ The `build` job runs `bazel test //...`, which now includes the new test with `S
 
 - [ ] **Step 1: Write the failing test**
 
-Replace the body of `standalone/storage_integrity_bootstrap_test.go` with an assertion over the production plan:
+The previous draft of this task was wrong in two ways, both caught in review, and the replacement exists to avoid them: a plan built with no runnables cannot satisfy a `NotNil` assertion, and — the substantive point — assigning names to closures *by position* means swapping the closures at the call site just mislabels them, so the test still passes. The names must be bound to the functions in production code, and the test must check that binding, not the order of a list it was handed.
+
+Replace the body of `standalone/storage_integrity_bootstrap_test.go`:
 
 ```go
-// The boot plan is produced by production code, so reordering the real
-// sequence changes this value and fails the test. The previous version of
-// this test asserted an order over closures it defined itself, which could
-// not detect a reorder at the call site.
-func TestStorageIntegrityBootPlanOrdersEnsureBeforeListeners(t *testing.T) {
-	plan := storageIntegrityBootPlan()
+// funcIdentity returns the fully-qualified name of f, so a step's binding can
+// be compared against the function production code is supposed to have put
+// there. Anonymous closures would defeat this, which is why the three steps
+// are named methods.
+func funcIdentity(f func(context.Context) error) string {
+	return runtime.FuncForPC(reflect.ValueOf(f).Pointer()).Name()
+}
+
+// The plan is built by production code with each name bound to a named
+// method, so swapping two bindings at the call site changes what this test
+// observes. The earlier version of this test asserted an order over closures
+// it defined itself and could not detect that swap.
+func TestStorageIntegrityBootPlanBindsEachNameToItsStep(t *testing.T) {
+	deps := &storageIntegrityBootDeps{}
+	plan := deps.bootPlan()
 
 	var names []string
 	for _, step := range plan {
 		names = append(names, step.Name)
+		require.NotNil(t, step.Run, "step %q must carry a runnable", step.Name)
 	}
 	require.Equal(t, []string{"ensure-protocol-tables", "cross-check-schemas", "register-role"}, names)
 
-	for _, step := range plan {
-		require.NotNil(t, step.Run, "step %q must carry a runnable", step.Name)
-	}
+	// Each name must be bound to the method of the same meaning.
+	require.Contains(t, funcIdentity(plan[0].Run), "ensureProtocolTables")
+	require.Contains(t, funcIdentity(plan[1].Run), "crossCheckSchemas")
+	require.Contains(t, funcIdentity(plan[2].Run), "registerRole")
 }
 
-// The SI bootstrap must complete before any listener is opened, so a node
-// whose protocol tables drifted never serves traffic.
+// Execution order is the plan's order, and a failing step stops the ones
+// after it — a node whose protocol tables drifted must never register.
+func TestRunStorageIntegrityProtocolBootstrapStopsAtFirstFailure(t *testing.T) {
+	var ran []string
+	plan := []storageIntegrityBootStep{
+		{Name: "ensure-protocol-tables", Run: func(context.Context) error {
+			ran = append(ran, "ensure")
+			return ddl.ErrProtocolTableDrift
+		}},
+		{Name: "cross-check-schemas", Run: func(context.Context) error { ran = append(ran, "cross"); return nil }},
+		{Name: "register-role", Run: func(context.Context) error { ran = append(ran, "register"); return nil }},
+	}
+	err := runStorageIntegrityProtocolBootstrap(context.Background(), plan)
+	require.ErrorIs(t, err, ddl.ErrProtocolTableDrift)
+	require.Contains(t, err.Error(), "ensure-protocol-tables", "the failing step must name itself")
+	require.Equal(t, []string{"ensure"}, ran, "later steps must not run after a failure")
+}
+
+// The bootstrap must complete before any listener opens, so a drifted node
+// never serves traffic.
 func TestStorageIntegrityBootstrapPrecedesListeners(t *testing.T) {
 	require.Less(t,
 		sourceLineOf(t, "runStorageIntegrityProtocolBootstrap("),
@@ -3073,51 +3144,70 @@ func TestStorageIntegrityBootstrapPrecedesListeners(t *testing.T) {
 }
 ```
 
-`sourceLineOf` is a small helper in the same file that scans `standalone.go` for the first occurrence of a literal and fails if it is absent — so deleting or renaming either call site fails the test rather than silently passing.
+`sourceLineOf` is a small helper in the same file that scans `standalone.go` for the first occurrence of a literal and fails if it is absent, so renaming or deleting either call site fails the test rather than silently passing.
 
 - [ ] **Step 2: Run it to verify it fails**
 
-Run: `bazel test //standalone:standalone_test --test_filter='TestStorageIntegrityBootPlan|TestStorageIntegrityBootstrapPrecedes' --test_output=all`
-Expected: FAIL — `undefined: storageIntegrityBootPlan`.
+Run: `bazel test //standalone:standalone_test --test_filter='TestStorageIntegrityBootPlan|TestRunStorageIntegrityProtocolBootstrapStops|TestStorageIntegrityBootstrapPrecedes' --test_output=all`
+Expected: FAIL — `undefined: storageIntegrityBootDeps`.
 
-- [ ] **Step 3: Extract the plan in production code**
+- [ ] **Step 3: Bind the names in production code**
 
-In `standalone/standalone.go`, replace the three inline closures at `:316-340` with a named plan the same function executes:
+In `standalone/standalone.go`, replace the three inline closures at `:316-340` with named methods on a deps struct, and have the plan bind each name to its method:
 
 ```go
-// storageIntegrityBootStep is one named phase of the SI bootstrap. Naming the
-// steps lets a test assert the production order instead of an order it made up.
+// storageIntegrityBootStep is one named phase of the SI bootstrap. The name is
+// bound to the method here, in production code, so a test can verify the
+// binding rather than an order it was handed.
 type storageIntegrityBootStep struct {
 	Name string
 	Run  func(context.Context) error
 }
 
-// storageIntegrityBootPlan is the frozen order: protocol tables are ensured and
-// verified, the schemas are cross-checked against what was created, and only
-// then is the role registered. Listeners start after this returns.
-func storageIntegrityBootPlan(steps ...func(context.Context) error) []storageIntegrityBootStep {
-	names := []string{"ensure-protocol-tables", "cross-check-schemas", "register-role"}
-	plan := make([]storageIntegrityBootStep, len(names))
-	for i, name := range names {
-		plan[i] = storageIntegrityBootStep{Name: name}
-		if i < len(steps) {
-			plan[i].Run = steps[i]
-		}
+type storageIntegrityBootDeps struct {
+	conn       clickhouse.Conn
+	pinned     ddl.Pinned
+	tables     []payloadexec.TableSchema
+	mode       ddl.Mode
+	netState   registry.Registry
+	schemaSets storageIntegritySchemaSets
+	networkID  string
+	role       *snode.Role
+	logger     *slog.Logger
+}
+
+func (d *storageIntegrityBootDeps) ensureProtocolTables(ctx context.Context) error {
+	if err := ddl.EnsureProtocolTables(ctx, d.conn, d.pinned, d.tables, d.mode, d.logger); err != nil {
+		return fmt.Errorf("ensure storage-integrity protocol tables: %w", err)
 	}
-	return plan
+	return nil
+}
+
+func (d *storageIntegrityBootDeps) crossCheckSchemas(ctx context.Context) error { /* existing body */ }
+
+func (d *storageIntegrityBootDeps) registerRole(ctx context.Context) error { /* existing body */ }
+
+// bootPlan is the frozen order. Each entry pairs a name with the method that
+// implements it; swapping two pairings is what the binding test detects.
+func (d *storageIntegrityBootDeps) bootPlan() []storageIntegrityBootStep {
+	return []storageIntegrityBootStep{
+		{Name: "ensure-protocol-tables", Run: d.ensureProtocolTables},
+		{Name: "cross-check-schemas", Run: d.crossCheckSchemas},
+		{Name: "register-role", Run: d.registerRole},
+	}
 }
 ```
 
-Call it with the three existing closures and have `runStorageIntegrityProtocolBootstrap` take the plan, executing steps in order and wrapping any error with the step name. Behaviour is unchanged; the order becomes a value.
+Change `runStorageIntegrityProtocolBootstrap` to take `[]storageIntegrityBootStep`, execute in order, and wrap any error as `fmt.Errorf("storage-integrity bootstrap step %q: %w", step.Name, err)`. Update the call site at `:316` to `runStorageIntegrityProtocolBootstrap(ctx, deps.bootPlan())`. Behaviour is unchanged; the binding becomes inspectable.
 
 - [ ] **Step 4: Run the tests**
 
-Run: `bazel test //standalone:standalone_test --test_filter='TestStorageIntegrityBootPlan|TestStorageIntegrityBootstrapPrecedes' --test_output=all`
+Run: `bazel test //standalone:standalone_test --test_filter='TestStorageIntegrityBootPlan|TestRunStorageIntegrityProtocolBootstrapStops|TestStorageIntegrityBootstrapPrecedes' --test_output=all`
 Expected: PASS.
 
-- [ ] **Step 5: Prove the test is load-bearing**
+- [ ] **Step 5: Prove the binding test is load-bearing**
 
-Temporarily swap the first two closures at the call site and re-run. Expected: FAIL, naming the wrong order. Restore and re-run: PASS.
+Temporarily swap the `ensureProtocolTables` and `crossCheckSchemas` bindings inside `bootPlan` and re-run. Expected: FAIL at `require.Contains(funcIdentity(plan[0].Run), "ensureProtocolTables")` — the name is now bound to the wrong method. Restore and re-run: PASS. This is the exact scenario the previous positional design could not detect.
 
 - [ ] **Step 6: Full package + commit**
 
@@ -3126,9 +3216,8 @@ Expected: PASS.
 
 ```bash
 git add standalone/standalone.go standalone/storage_integrity_bootstrap_test.go
-git commit -m "test(storage-integrity): assert the production boot order, not a test-local one"
+git commit -m "test(storage-integrity): assert the production boot bindings, not a test-local order"
 ```
-
 
 ## Task 15: documentation and the spec §5 acceptance sweep
 

@@ -3080,9 +3080,13 @@ git add pkg/rewriter/probe.go pkg/rewriter/probe_test.go pkg/rewriter/BUILD.baze
 git commit -m "feat(storage-integrity): verify the rewriter engine build at startup (Spec I D5)"
 ```
 
-### Task 19: D6 — record, warn about, and test the peer-trust bypass
+### Task 19: D6 — the peer branch (record, warn, characterize)
 
-Rewrite is skipped for peer-trusted, forwarded, maintenance and platform-operator sessions (`pkg/plugins/rewrite/rewriter.go:130-133,298,303`), and with no accessed tables the SI ingress short-circuits too (`pkg/plugins/storageintegrity/plugin.go:162`). Those sessions can address `hg_safe`/`hg_unsafe` directly. That stays true in v1 — re-rewriting already-rewritten peer SQL is what the peer-trust design forbids — so the mitigation is a documented network-isolation requirement, an operator-visible warning, and a test that makes any future change to the bypass a visible test change.
+Rewrite is skipped for peer-trusted, forwarded, maintenance and platform-operator sessions (`pkg/plugins/rewrite/rewriter.go:130-133,298,303`), and with no accessed tables the SI ingress short-circuits too (`pkg/plugins/storageintegrity/plugin.go:162`). Those sessions can address `hg_safe`/`hg_unsafe` directly.
+
+**Spec I D6 splits these into two branches, and they need different work.** This task implements the *peer* branch only; Task 19b implements the *operator* branch. The split exists because the double-rewrite rationale — re-rewriting SQL the originating proxy already rewrote is what the peer-trust design forbids — justifies the peer and forward bypasses and nothing else. Maintenance and platform-operator sessions carry raw, un-rewritten SQL and are bypassed purely because those roles are trusted, which is a separate threat model with its own controls.
+
+For the peer branch the mitigation is a documented network-isolation requirement, an operator-visible warning, and a test that makes any future change to the bypass a visible test change.
 
 **Files:**
 - Modify: `build.go` (new helper + one call in `buildServer`)
@@ -3211,6 +3215,111 @@ Expected: PASS.
 cd /Users/uranuswch/Dev/housegate/housegate
 git add build.go build_test.go pkg/plugins/rewrite/rewriter_test.go
 git commit -m "feat(storage-integrity): warn about and pin the peer-trust bypass (Spec I D6)"
+```
+
+### Task 19b: D6 — the operator branch (reserved-namespace pre-check)
+
+Maintenance and platform-operator sessions keep their rewrite bypass — they legitimately need un-rewritten SQL — but Spec I D6 requires that they still cannot address the reserved SI physical namespaces or the reserved column. The control is a narrow pre-check that runs independently of the rewrite plugin, so it survives the bypass.
+
+**Files:**
+- Modify: `pkg/plugins/rewrite/rewriter.go` (the maintenance/platform-operator bypass at `:130-133`)
+- Modify: `build.go` (extend the warning helper)
+- Test: `pkg/plugins/rewrite/rewriter_test.go`, `build_test.go`
+
+**Interfaces:**
+- Consumes: `sqlident` / the token scan Task 2 added for `AnnotateStorageIntegrityReject`; the configured SI table set and reserved databases from `pkg/config`.
+- Produces: `func reservedNamespaceViolation(sql string, dbs []string, rid string) string` — the offending name, or `""`. Same return-the-string shape as Task 19's warning so it is unit-testable without a session.
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `pkg/plugins/rewrite/rewriter_test.go`:
+
+```go
+// A maintenance session keeps its rewrite bypass but must not be able to
+// address the protocol-owned namespaces. Spec I D6, operator branch.
+func TestRewritePlugin_MaintenanceSessionRefusesReservedNamespace(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		sql     string
+		wantErr string
+	}{
+		{"safe database", "SELECT * FROM hg_safe.db1__t", "hg_safe"},
+		{"unsafe database", "INSERT INTO hg_unsafe.db1__t VALUES (1)", "hg_unsafe"},
+		{"reserved column", "SELECT _hg_row_id FROM db1.t", "_hg_row_id"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newTestRewritePlugin(t, withStorageIntegrityTables("db1.t"))
+			qctx := newMaintenanceQueryContext(t, tc.sql)
+			err := p.OnQuery(context.Background(), qctx)
+			if err == nil {
+				t.Fatal("maintenance session must be refused on a reserved name")
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error must name %q: %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+// The bypass itself is unchanged: ordinary tables still pass through
+// un-rewritten for these sessions.
+func TestRewritePlugin_MaintenanceSessionStillBypassesOrdinaryTables(t *testing.T) {
+	p := newTestRewritePlugin(t, withStorageIntegrityTables("db1.t"))
+	qctx := newMaintenanceQueryContext(t, "SELECT * FROM other.u")
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("ordinary table must still bypass: %v", err)
+	}
+	if qctx.Query.Body != "SELECT * FROM other.u" {
+		t.Fatalf("bypassed SQL must be untouched, got %q", qctx.Query.Body)
+	}
+}
+```
+
+Add the same two cases for a platform-operator session (`newPlatformOperatorQueryContext`), so both flags are covered rather than one standing in for the other.
+
+- [ ] **Step 2: Run to verify they fail**
+
+Run: `bazel test //pkg/plugins/rewrite:rewrite_test --test_filter='Maintenance|PlatformOperator' --test_output=all`
+Expected: FAIL — `undefined: newMaintenanceQueryContext` (and, once the helper exists, "maintenance session must be refused on a reserved name").
+
+- [ ] **Step 3: Implement the pre-check**
+
+In `pkg/plugins/rewrite/rewriter.go`, at the maintenance/platform-operator bypass (`:130-133`), run the check before returning:
+
+```go
+// The bypass exists because these roles need un-rewritten SQL, not because
+// they may address protocol-owned storage. Re-running the full SI rewrite
+// here would defeat the bypass; this narrow name check does not.
+// Spec I D6, operator branch.
+if snap.Maintenance || snap.PlatformOperator {
+	if name := reservedNamespaceViolation(qctx.Query.Body, p.reservedDatabases, p.reservedRowIDColumn); name != "" {
+		return fmt.Errorf(
+			"storage-integrity reserved name %q is not addressable through the proxy; use a direct ClickHouse connection for physical access",
+			name)
+	}
+	return nil
+}
+```
+
+`reservedNamespaceViolation` reuses the Task 2 token scan: it reports the first reserved database or reserved column the statement names, ignoring occurrences inside string literals (the same literal-skipping the scan already does).
+
+- [ ] **Step 4: Run the tests**
+
+Run: `bazel test //pkg/plugins/rewrite:rewrite_test --test_filter='Maintenance|PlatformOperator' --test_output=all`
+Expected: PASS.
+
+- [ ] **Step 5: Extend the startup warning**
+
+`storageIntegrityInternalListenWarning` (Task 19) gains a second sentence when SI tables are configured and `auth.platform_operator_addresses` is non-empty: name the count of operator addresses and the SI tables reachable through the operator bypass. Assert the new text in `build_test.go`.
+
+- [ ] **Step 6: Full suite + commit**
+
+Run: `bazel test //pkg/plugins/rewrite:all //:housegate_test --test_output=errors`
+Expected: PASS.
+
+```bash
+git add pkg/plugins/rewrite/rewriter.go pkg/plugins/rewrite/rewriter_test.go build.go build_test.go
+git commit -m "feat(rewrite): refuse reserved SI names on maintenance and operator sessions"
 ```
 
 ### Task 20: Bump housegate onto the fixed engines
