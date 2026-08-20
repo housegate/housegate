@@ -54,7 +54,7 @@ Non-goals: §12.4 ledger-gated `hg_safe` merges (still P4); partition-key expres
 - A transient (non-drift) ClickHouse error during reconcile is retried and the role survives; a real drift kills it. Both asserted distinctly.
 - `hg_promote` drift is detected at startup; `promote_replace` errors clearly when it is absent.
 - Back-pressure refusal: the client receives Exception 252 **and the connection remains usable for a subsequent query** (this is the regression test for D6).
-- sentio-node's SI smoke (now running in CI per Spec J) covers the type-validation reject and the survivable-throttle behaviour.
+- sentio-node coverage, stated against what Spec J actually delivers: the **full** `SENTIO_SI_E2E` smoke still does not run in CI (it needs a devnet — Spec J D5), so the type-validation reject and the survivable-throttle behaviour are asserted by the chain-free ClickHouse test Spec J adds, driving the same production helper. Do not write an acceptance step that depends on the full smoke executing.
 
 ## 5. Delivery
 

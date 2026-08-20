@@ -81,7 +81,7 @@ D3/D4 change the corpus contract that Spec I extends. Land J's runner changes **
 
 ## 6. Delivery
 
-1. housegate: uncomment CI tests, fix or quarantine fallout, D6 files + untracked-`AGENTS.md` check.
+1. housegate: uncomment CI tests, fix or quarantine fallout, D6 — the repo-level `!AGENTS.md` negation (the control that protects future files), the corrected + force-added files, and the CI manifest check.
 2. rewriter-go + rewriter-grpc: D3 schema + validator + both runners, D4 normalization, D7 capture test and fixture regeneration, corpus meta-test.
 3. rewriter-grpc: the new CI job.
 4. sentio-node: ClickHouse service + `SENTIO_SI_E2E=1`.
