@@ -107,7 +107,8 @@ The **12 dead `want_sql`** cases (present but never compared by the pre-fix C++ 
 | `.github/workflows/ci.yml` | Modify: enable `bazel test --config=ci //...` in the `build` job; add the untracked-`AGENTS.md` check step to the `release-tooling` job. |
 | `pkg/replay/AGENTS.md` | Modify: replace the inverted dependency guidance with the true one. |
 | `docs/superpowers/AGENTS.md`, `pkg/chproto/AGENTS.md`, `pkg/integration/AGENTS.md`, `pkg/plugins/AGENTS.md`, `pkg/proxy/AGENTS.md`, `pkg/rewriter/AGENTS.md`, `tools/da-mvp/AGENTS.md` | Track: `git add -f`, content unchanged. |
-| `scripts/check-agents-md-tracked.sh` | Create: fails when any `AGENTS.md` in the tree is untracked (ignored or not). Single responsibility, no other lint logic. |
+| `scripts/agents-md-manifest.txt` | Create: the expected set of tracked `AGENTS.md` paths, generated from the tracked state under `LC_ALL=C`. |
+| `scripts/check-agents-md-tracked.sh` | Create: two-way check — every manifest path is still tracked (the half a clean CI checkout can observe), and no `AGENTS.md` in the tree is untracked (the local half). Single responsibility, no other lint logic. |
 | `CLAUDE.md` | Modify: CI section — record that the unit suite now runs. |
 
 **rewriter-go** (`/Users/uranuswch/Dev/housegate/rewriter-go`)
@@ -449,7 +450,11 @@ Expected: `?? pkg/tmpcheck/AGENTS.md` appears. Before the negation it does not.
 `scripts/agents-md-manifest.txt` — the expected set, one path per line. Generate it from the tracked state after Task 2, so it cannot disagree with reality at creation time:
 
 ```bash
-git ls-files '*AGENTS.md' | sort > scripts/agents-md-manifest.txt
+# LC_ALL=C pins the collation. `comm` requires both inputs sorted the same way,
+# and a manifest generated under one locale then compared under another (CI is
+# routinely a different locale from a dev laptop) yields spurious differences.
+# Every sort of this list in this task and in the script uses LC_ALL=C.
+LC_ALL=C git ls-files '*AGENTS.md' | LC_ALL=C sort > scripts/agents-md-manifest.txt
 cat scripts/agents-md-manifest.txt
 ```
 Expected: 9 lines — the root `AGENTS.md` plus the 8 nested files Task 2 tracked.
@@ -460,7 +465,7 @@ This is the case the working-tree scan cannot see, so it is worth proving before
 
 ```bash
 git rm -q pkg/replay/AGENTS.md
-git ls-files '*AGENTS.md' | sort | diff - scripts/agents-md-manifest.txt; echo "diff exit=$?"
+LC_ALL=C git ls-files '*AGENTS.md' | LC_ALL=C sort | diff - scripts/agents-md-manifest.txt; echo "diff exit=$?"
 # Restore: a staged deletion needs the index reset BEFORE the worktree
 # checkout — `git checkout -- .` alone will not bring the file back.
 git reset -q HEAD pkg/replay/AGENTS.md
@@ -509,7 +514,7 @@ manifest="scripts/agents-md-manifest.txt"
 # Direction 1 (works in a clean CI checkout): every manifest path must still be
 # tracked. This is what catches a deletion or untracking that was committed.
 missing="$(
-  comm -23 "$manifest" <(git ls-files '*AGENTS.md' | sort)
+  LC_ALL=C comm -23 "$manifest" <(LC_ALL=C git ls-files '*AGENTS.md' | LC_ALL=C sort)
 )"
 if [ -n "$missing" ]; then
   echo "error: manifest lists AGENTS.md paths that are no longer tracked:" >&2
