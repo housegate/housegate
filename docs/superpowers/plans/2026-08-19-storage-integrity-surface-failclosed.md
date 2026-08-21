@@ -3396,6 +3396,7 @@ func TestReservedNamespaceViolation_LiteralsAndCommentsAreNotMentions(t *testing
 	for _, tc := range []struct{ name, sql string }{
 		{"single-quoted literal", "SELECT 'hg_safe' AS s FROM ordinary.t"},
 		{"escaped quote inside literal", `SELECT 'it''s hg_safe' AS s FROM ordinary.t`},
+		{"backslash-escaped quote inside literal", `SELECT 'a\' hg_safe b' AS s FROM ordinary.t`},
 		{"line comment", "SELECT a FROM ordinary.t -- hg_safe"},
 		{"hash comment", "SELECT a FROM ordinary.t # hg_safe"},
 		{"slash comment", "SELECT a FROM ordinary.t // hg_safe"},
@@ -3414,6 +3415,21 @@ func TestReservedNamespaceViolation_LiteralsAndCommentsAreNotMentions(t *testing
 				t.Fatalf("must not fire on %q, got %q", tc.sql, got)
 			}
 		})
+	}
+}
+
+// The one remaining bypass vector in a mention-based design: a literal whose
+// escapes are mishandled can swallow the rest of the statement, so the mention
+// is never scanned. 'a\\' is a complete literal (escaped backslash); a
+// stripper that reads the trailing \' as an escaped quote runs to EOF and
+// hides hg_safe.
+func TestReservedNamespaceViolation_EscapedBackslashDoesNotSwallowTheStatement(t *testing.T) {
+	got, err := ReservedNamespaceViolation(`SELECT 'a\\', hg_safe FROM ordinary.t`, []string{"hg_safe"}, "_hg_row_id")
+	if err != nil {
+		t.Fatalf("this literal is terminated; scrubbing must succeed: %v", err)
+	}
+	if got != "hg_safe" {
+		t.Fatalf("the mention after an escaped-backslash literal must be seen, got %q", got)
 	}
 }
 
@@ -3442,6 +3458,71 @@ func TestReservedNamespaceViolation_OrdinaryColumnIsRefusedByDesign(t *testing.T
 		t.Fatalf("mention-is-the-rule must refuse an ordinary column named hg_safe, got %q", got)
 	}
 }
+
+- [ ] **Step 2: Run to verify they fail**
+
+Run: `bazel run //:gazelle && bazel test //pkg/plugins/sireserved:sireserved_test --test_output=all`
+Expected: FAIL — the package does not compile yet (`undefined: Plugin`).
+
+- [ ] **Step 3: Implement the guard**
+
+Create `pkg/plugins/sireserved/plugin.go` with the plugin from the design note above plus:
+
+```go
+// ReservedNamespaceViolation reports the first reserved name the statement
+// mentions outside string literals and comments, or "" when it mentions none.
+//
+// It deliberately does not parse SQL. Distinguishing a qualifier from a bare
+// database target from an implicit alias requires a ClickHouse parser, and
+// every gap in such a parser is a bypass on sessions that already skip every
+// other storage-integrity control. Mention is the rule; the accepted cost is
+// that an ordinary column named hg_safe is refused for these sessions, with a
+// remedy the error names.
+func ReservedNamespaceViolation(sql string, dbs []string, rid string) (string, error) {
+	scrubbed, err := stripLiteralsAndComments(sql)
+	if err != nil {
+		// Unterminated literal or comment: refuse rather than guess.
+		return "", err
+	}
+	names := make([]string, 0, len(dbs)+1)
+	names = append(names, dbs...)
+	if rid != "" {
+		names = append(names, rid)
+	}
+	for _, ident := range identifiers(scrubbed) {
+		for _, name := range names {
+			if strings.EqualFold(ident, name) {
+				return name, nil
+			}
+		}
+	}
+	return "", nil
+}
+```
+
+`stripLiteralsAndComments` has one job and one hard rule about which direction it may be wrong in:
+
+- Erase `'…'` string literals. **Both escape forms must be handled**: the doubled quote `''` and the backslash escape `\'`, *and* the escaped backslash `\\`. Getting this wrong is the one way this design can still be bypassed: in `SELECT 'a\\', hg_safe FROM t` the literal ends at the second quote, but a stripper that treats the final `\'` as an escaped quote runs on to end-of-input and swallows `hg_safe` — a mention that never gets scanned. Consume `\` plus the following byte as a unit, then test for the terminator.
+- Erase every ClickHouse comment form: `--`, `#`, `#!` and `//` to end of line, and `/* … */` **tracking nesting depth**.
+- Return an error for an unterminated literal or an unterminated block comment. Line comments ending at EOF are normal, not errors.
+- **Never** erase `` ` `` or `"` spans. They delimit identifiers; erasing them is the round-5 bypass. Unquote them in place (collapsing the doubled-quote escape) so `` `hg_safe` `` compares equal to `hg_safe`.
+
+`identifiers` splits the scrubbed text on non-identifier characters (`[A-Za-z0-9_]` is the identifier set) and returns the tokens. Both helpers are table-tested in the same file.
+
+The plugin propagates a scrub failure as a rejection with the same shape as a violation:
+
+```go
+name, err := ReservedNamespaceViolation(qctx.Query.Body, p.ReservedDatabases, p.ReservedRowIDColumn)
+if err != nil {
+	return fmt.Errorf("storage-integrity guard could not scan the statement: %w", err)
+}
+if name != "" {
+	return fmt.Errorf(
+		"storage-integrity reserved name %q is not addressable through the proxy; use a direct ClickHouse connection for physical access",
+		name)
+}
+return nil
+```
 
 - [ ] **Step 4: Run the tests**
 
