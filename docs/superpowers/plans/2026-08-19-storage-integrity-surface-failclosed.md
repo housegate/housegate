@@ -3237,9 +3237,10 @@ Write a small purpose-built scan in `sireserved` instead. It has two rules, and 
 1. **Remove string literals and comments; preserve quoted identifiers.** `'…'`, `--…`, `/*…*/` are erased; `` `…` `` and `"…"` are kept and unquoted into path segments, so quoting cannot hide a reserved name.
 2. **A reserved database is a violation as a qualifier *or* as a bare database target.** Emit candidate dotted paths and resolve each with `sqlident.SplitLastPath`, then compare the *database* segment — that covers `hg_safe.t`. But qualifier position alone is **not** sufficient, and getting this wrong is a fail-open on the flagship attack: in `TRUNCATE DATABASE hg_safe`, `DROP DATABASE hg_safe` and `USE hg_safe` the reserved name is a bare path, so `SplitLastPath` returns an empty database and a qualifier-only rule waves it through. `TRUNCATE DATABASE hg_safe` is one of the two Critical attacks this entire spec exists to close, and operator sessions skip rewrite, so the engine's own rejection cannot save it here.
 
-   The scan therefore needs a little lexical context. A **bare** reserved identifier is a database reference when either:
-   - the preceding significant token is `USE`, or `DATABASE` (which covers `CREATE`/`DROP`/`ALTER`/`ATTACH`/`DETACH`/`TRUNCATE`/`RENAME`/`EXISTS`/`SHOW CREATE` + `DATABASE`), or is `FROM`/`IN` immediately preceded by `TABLES` or `DICTIONARIES` (covering `SHOW TABLES FROM <db>`, `SHOW TABLES IN <db>`, `TRUNCATE ALL TABLES FROM <db>`); **or**
-   - the statement contains the standalone keyword `DATABASE` anywhere outside literals. This is the fail-closed backstop, and it is deliberate: it mirrors D1's philosophy that the enumeration exists for message quality while a catch-all provides the safety property. A statement that says `DATABASE` and also names a reserved identifier is refused even if nobody enumerated its exact syntax.
+   The scan therefore needs a little lexical context, and it must be anchored in grammar rather than in keyword presence — review of a looser draft caught that `SELECT database(), hg_safe FROM ordinary.t` would otherwise flag the ordinary column, because ClickHouse has a `database()` **function**. Two rules, both grammar-anchored:
+
+   - **Database-target state.** A token sets "the next identifier is a database" when it is `USE`, or a standalone `DATABASE` **keyword** — standalone meaning the next non-space character is *not* `(`, which is what separates the keyword from the `database()` function — or `FROM`/`IN` immediately preceded by `TABLES` or `DICTIONARIES` (covering `SHOW TABLES FROM <db>`, `SHOW TABLES IN <db>`, `TRUNCATE ALL TABLES FROM <db>`). The modifiers `IF`, `NOT` and `EXISTS` are skipped without clearing the state, so `DROP DATABASE IF EXISTS hg_safe` and `CREATE DATABASE IF NOT EXISTS hg_safe` still resolve — the preceding-token-only formulation missed both. Any other token clears the state.
+   - **DDL backstop, scoped to DDL.** If the statement's leading keyword is one of `USE`/`DROP`/`TRUNCATE`/`CREATE`/`ATTACH`/`DETACH`/`RENAME`/`ALTER`/`SHOW`/`EXISTS` **and** a standalone `DATABASE` keyword appears in it, then any reserved identifier anywhere in the statement is a violation. This keeps D1's philosophy — the enumeration is for message quality, a catch-all carries the safety property — for unenumerated *DDL* forms, while a `SELECT`-shaped statement can never trip it, which is what protects ordinary operator traffic.
 
    Anywhere else a bare reserved identifier is an ordinary name and is allowed, which is what keeps `SELECT hg_safe FROM ordinary.t` working. The reserved *column* needs none of this: any identifier segment equal to it is a violation, qualified or not, because there is no legitimate reference to `_hg_row_id`.
 
@@ -3366,6 +3367,7 @@ func TestReservedNamespaceViolation(t *testing.T) {
 		{"truncate database quoted", "TRUNCATE DATABASE `hg_safe`", "hg_safe"},
 		{"drop database", "DROP DATABASE hg_unsafe", "hg_unsafe"},
 		{"drop database if exists", "DROP DATABASE IF EXISTS hg_safe", "hg_safe"},
+		{"create database if not exists", "CREATE DATABASE IF NOT EXISTS hg_safe", "hg_safe"},
 		{"use", "USE hg_safe", "hg_safe"},
 		{"use quoted", "USE `hg_safe`", "hg_safe"},
 		{"attach database", "ATTACH DATABASE hg_safe", "hg_safe"},
@@ -3380,6 +3382,10 @@ func TestReservedNamespaceViolation(t *testing.T) {
 		{"ordinary column with the same name", "SELECT hg_safe FROM ordinary.t", ""},
 		{"ordinary column, aliased", "SELECT hg_safe AS x FROM ordinary.t", ""},
 		{"ordinary column in WHERE", "SELECT a FROM ordinary.t WHERE hg_safe > 1", ""},
+		{"database() function beside an ordinary column", "SELECT database(), hg_safe FROM ordinary.t", ""},
+		{"database() alone", "SELECT database() AS d, hg_safe AS s FROM ordinary.t", ""},
+		{"currentDatabase() beside an ordinary column", "SELECT currentDatabase(), hg_safe FROM ordinary.t", ""},
+		{"column literally named database", "SELECT database, hg_safe FROM ordinary.t", ""},
 		{"prefix is not a match", "SELECT * FROM hg_safe_backup.t", ""},
 		{"suffix is not a match", "SELECT * FROM my_hg_safe.t", ""},
 		{"column literal mentioning the rid", "SELECT '_hg_row_id' AS s FROM db1.t", ""},
@@ -3405,6 +3411,35 @@ func TestReservedNamespaceViolation_BareDatabaseTargetIsNotABypass(t *testing.T)
 	} {
 		if got := ReservedNamespaceViolation(sql, []string{"hg_safe", "hg_unsafe"}, "_hg_row_id"); got == "" {
 			t.Fatalf("a bare database target must be refused: %q", sql)
+		}
+	}
+}
+
+// Guards the regression a looser backstop introduced: keying on the presence
+// of the word DATABASE anywhere flags an ordinary column, because ClickHouse
+// has a database() function. A SELECT-shaped statement must never trip the
+// DDL backstop.
+func TestReservedNamespaceViolation_DatabaseFunctionIsNotATarget(t *testing.T) {
+	for _, sql := range []string{
+		"SELECT database(), hg_safe FROM ordinary.t",
+		"SELECT currentDatabase(), hg_safe FROM ordinary.t",
+		"SELECT database, hg_safe FROM ordinary.t",
+	} {
+		if got := ReservedNamespaceViolation(sql, []string{"hg_safe", "hg_unsafe"}, "_hg_row_id"); got != "" {
+			t.Fatalf("a SELECT must not trip the DDL backstop: %q returned %q", sql, got)
+		}
+	}
+}
+
+// Modifiers between the trigger keyword and the name must not clear the
+// database-target state; a preceding-token-only rule misses both of these.
+func TestReservedNamespaceViolation_ModifiersBetweenKeywordAndName(t *testing.T) {
+	for _, sql := range []string{
+		"DROP DATABASE IF EXISTS hg_safe",
+		"CREATE DATABASE IF NOT EXISTS hg_safe",
+	} {
+		if got := ReservedNamespaceViolation(sql, []string{"hg_safe"}, "_hg_row_id"); got == "" {
+			t.Fatalf("intervening modifiers must not lose the target: %q", sql)
 		}
 	}
 }
@@ -3489,7 +3524,7 @@ func ReservedNamespaceViolation(sql string, dbs []string, rid string) string {
 	lowerRID := strings.ToLower(rid)
 
 	for _, path := range scanPaths(sql) {
-		database, table := sqlident.SplitLastPath(path)
+		database, table := sqlident.SplitLastPath(path.Text)
 		// The reserved column is a violation wherever it appears.
 		if lowerRID != "" {
 			if strings.EqualFold(unquoteSegment(table), rid) {
@@ -3521,7 +3556,7 @@ func ReservedNamespaceViolation(sql string, dbs []string, rid string) string {
 }
 ```
 
-`scanPaths` is the ~70-line lexer described above. It returns `[]scannedPath{Text string; DatabasePosition bool}`, where `DatabasePosition` is set by the rule-2 context test (preceding token `USE` / `DATABASE` / `TABLES|DICTIONARIES FROM|IN`, or the statement carrying a standalone `DATABASE` keyword). `unquoteSegment` strips one layer of backticks or double quotes, collapsing the doubled-quote escape. Both live in the same file with their own table tests.
+`scanPaths` is the ~70-line lexer described above. It returns `[]scannedPath{Text string; DatabasePosition bool}`, where `DatabasePosition` is set by the database-target state machine above (note the call site passes `path.Text`, not `path`, since `sqlident.SplitLastPath` takes a string). The DDL backstop is evaluated once per statement and, when it applies, forces `DatabasePosition` true for every emitted path. `unquoteSegment` strips one layer of backticks or double quotes, collapsing the doubled-quote escape. Both live in the same file with their own table tests.
 
 
 
