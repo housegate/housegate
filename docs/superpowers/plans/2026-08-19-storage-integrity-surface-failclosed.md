@@ -3235,7 +3235,13 @@ Maintenance and platform-operator sessions keep their rewrite bypass — they le
 Write a small purpose-built scan in `sireserved` instead. It has two rules, and the second one matters as much as the first:
 
 1. **Remove string literals and comments; preserve quoted identifiers.** `'…'`, `--…`, `/*…*/` are erased; `` `…` `` and `"…"` are kept and unquoted into path segments, so quoting cannot hide a reserved name.
-2. **A reserved database is a violation only as a qualifier.** Emit candidate dotted paths and resolve each with `sqlident.SplitLastPath`, then compare the *database* segment. Matching the bare token anywhere would reject `SELECT hg_safe FROM ordinary.t`, where `hg_safe` is an ordinary column name — a false positive that would break unrelated operator traffic. The reserved *column* is the opposite: any identifier segment equal to it is a violation, qualified or not, because there is no legitimate reference to `_hg_row_id`.
+2. **A reserved database is a violation as a qualifier *or* as a bare database target.** Emit candidate dotted paths and resolve each with `sqlident.SplitLastPath`, then compare the *database* segment — that covers `hg_safe.t`. But qualifier position alone is **not** sufficient, and getting this wrong is a fail-open on the flagship attack: in `TRUNCATE DATABASE hg_safe`, `DROP DATABASE hg_safe` and `USE hg_safe` the reserved name is a bare path, so `SplitLastPath` returns an empty database and a qualifier-only rule waves it through. `TRUNCATE DATABASE hg_safe` is one of the two Critical attacks this entire spec exists to close, and operator sessions skip rewrite, so the engine's own rejection cannot save it here.
+
+   The scan therefore needs a little lexical context. A **bare** reserved identifier is a database reference when either:
+   - the preceding significant token is `USE`, or `DATABASE` (which covers `CREATE`/`DROP`/`ALTER`/`ATTACH`/`DETACH`/`TRUNCATE`/`RENAME`/`EXISTS`/`SHOW CREATE` + `DATABASE`), or is `FROM`/`IN` immediately preceded by `TABLES` or `DICTIONARIES` (covering `SHOW TABLES FROM <db>`, `SHOW TABLES IN <db>`, `TRUNCATE ALL TABLES FROM <db>`); **or**
+   - the statement contains the standalone keyword `DATABASE` anywhere outside literals. This is the fail-closed backstop, and it is deliberate: it mirrors D1's philosophy that the enumeration exists for message quality while a catch-all provides the safety property. A statement that says `DATABASE` and also names a reserved identifier is refused even if nobody enumerated its exact syntax.
+
+   Anywhere else a bare reserved identifier is an ordinary name and is allowed, which is what keeps `SELECT hg_safe FROM ordinary.t` working. The reserved *column* needs none of this: any identifier segment equal to it is a violation, qualified or not, because there is no legitimate reference to `_hg_row_id`.
 
 Segment comparison is exact and case-insensitive on the unquoted value, so `hg_safe_backup` does not match `hg_safe`.
 
@@ -3353,10 +3359,27 @@ func TestReservedNamespaceViolation(t *testing.T) {
 		{"reserved column quoted", "SELECT `_hg_row_id` FROM db1.t", rid},
 		{"reserved column qualified", "SELECT t._hg_row_id FROM db1.t AS t", rid},
 
+		// Bare database targets. A qualifier-only rule fails open on every one
+		// of these, and the first is one of the two Critical attacks this spec
+		// exists to close.
+		{"truncate database", "TRUNCATE DATABASE hg_safe", "hg_safe"},
+		{"truncate database quoted", "TRUNCATE DATABASE `hg_safe`", "hg_safe"},
+		{"drop database", "DROP DATABASE hg_unsafe", "hg_unsafe"},
+		{"drop database if exists", "DROP DATABASE IF EXISTS hg_safe", "hg_safe"},
+		{"use", "USE hg_safe", "hg_safe"},
+		{"use quoted", "USE `hg_safe`", "hg_safe"},
+		{"attach database", "ATTACH DATABASE hg_safe", "hg_safe"},
+		{"alter database", "ALTER DATABASE hg_safe MODIFY COMMENT 'x'", "hg_safe"},
+		{"show tables from", "SHOW TABLES FROM hg_safe", "hg_safe"},
+		{"show tables in", "SHOW TABLES IN hg_unsafe", "hg_unsafe"},
+		{"truncate all tables from", "TRUNCATE ALL TABLES FROM hg_safe", "hg_safe"},
+
 		// Must NOT be caught.
 		{"reserved name in a literal", "SELECT 'hg_safe' AS s FROM db1.t", ""},
 		{"reserved name in a comment", "SELECT * FROM db1.t -- hg_safe", ""},
 		{"ordinary column with the same name", "SELECT hg_safe FROM ordinary.t", ""},
+		{"ordinary column, aliased", "SELECT hg_safe AS x FROM ordinary.t", ""},
+		{"ordinary column in WHERE", "SELECT a FROM ordinary.t WHERE hg_safe > 1", ""},
 		{"prefix is not a match", "SELECT * FROM hg_safe_backup.t", ""},
 		{"suffix is not a match", "SELECT * FROM my_hg_safe.t", ""},
 		{"column literal mentioning the rid", "SELECT '_hg_row_id' AS s FROM db1.t", ""},
@@ -3366,6 +3389,23 @@ func TestReservedNamespaceViolation(t *testing.T) {
 				t.Fatalf("ReservedNamespaceViolation(%q) = %q, want %q", tc.sql, got, tc.want)
 			}
 		})
+	}
+}
+
+// Guards the specific regression review found in the qualifier-only design:
+// a rule that only inspects SplitLastPath's database segment fails open on
+// every statement whose reserved name is the bare target.
+func TestReservedNamespaceViolation_BareDatabaseTargetIsNotABypass(t *testing.T) {
+	for _, sql := range []string{
+		"TRUNCATE DATABASE hg_safe",
+		"DROP DATABASE hg_safe",
+		"USE hg_safe",
+		"SHOW TABLES FROM hg_safe",
+		"TRUNCATE ALL TABLES FROM hg_safe",
+	} {
+		if got := ReservedNamespaceViolation(sql, []string{"hg_safe", "hg_unsafe"}, "_hg_row_id"); got == "" {
+			t.Fatalf("a bare database target must be refused: %q", sql)
+		}
 	}
 }
 
@@ -3459,12 +3499,21 @@ func ReservedNamespaceViolation(sql string, dbs []string, rid string) string {
 				return rid
 			}
 		}
-		// A reserved database is a violation only as a qualifier, so that an
-		// ordinary column named hg_safe is not a false positive.
-		if database == "" {
+		// A reserved database is a violation as a qualifier...
+		if database != "" {
+			if original, ok := reserved[strings.ToLower(unquoteSegment(database))]; ok {
+				return original
+			}
 			continue
 		}
-		if original, ok := reserved[strings.ToLower(unquoteSegment(database))]; ok {
+		// ...or as a bare database target. Skipping this is a fail-open on
+		// TRUNCATE/DROP DATABASE and USE, where the reserved name is the whole
+		// path. Only bare identifiers in database position count, so an
+		// ordinary column named hg_safe is still allowed.
+		if !path.DatabasePosition {
+			continue
+		}
+		if original, ok := reserved[strings.ToLower(unquoteSegment(table))]; ok {
 			return original
 		}
 	}
@@ -3472,7 +3521,7 @@ func ReservedNamespaceViolation(sql string, dbs []string, rid string) string {
 }
 ```
 
-`scanPaths` is the ~50-line lexer described above and `unquoteSegment` strips one layer of backticks or double quotes (collapsing the doubled-quote escape). Both live in the same file with their own table tests.
+`scanPaths` is the ~70-line lexer described above. It returns `[]scannedPath{Text string; DatabasePosition bool}`, where `DatabasePosition` is set by the rule-2 context test (preceding token `USE` / `DATABASE` / `TABLES|DICTIONARIES FROM|IN`, or the statement carrying a standalone `DATABASE` keyword). `unquoteSegment` strips one layer of backticks or double quotes, collapsing the doubled-quote escape. Both live in the same file with their own table tests.
 
 
 
