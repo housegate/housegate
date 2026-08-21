@@ -3451,15 +3451,27 @@ func TestReservedNamespaceViolation_UnterminatedInputIsAnError(t *testing.T) {
 // encoded spelling and match nothing. Rather than decode the whole escape set,
 // an escaped quoted identifier is refused.
 func TestReservedNamespaceViolation_EscapedQuotedIdentifierIsRefused(t *testing.T) {
+	// Spelling these in Go is fiddly and getting it wrong makes the test
+	// vacuous, so read carefully. A Go interpreted string ("...") may contain
+	// raw backticks but decodes \x5F to "_" unless the backslash is doubled;
+	// a Go raw string (`...`) keeps backslashes literal but cannot contain a
+	// backtick. So backtick-quoted SQL identifiers use the interpreted form
+	// with \\, and double-quoted SQL identifiers use the raw form. Every case
+	// must reach ReservedNamespaceViolation still carrying a backslash; the
+	// guard inside the loop fails the test if one does not.
 	for _, sql := range []string{
-		"SELECT * FROM `hg\x5Fsafe`.t",
-		`SELECT * FROM "hg_safe".t`,
-		"SELECT `\x5Fhg\x5Frow\x5Fid` FROM db1.t",
-		"SELECT * FROM `hg\u005Fsafe`.t",
+		"SELECT * FROM `hg\\x5Fsafe`.t",
+		`SELECT * FROM "hg\x5Fsafe".t`,
+		"SELECT `\\x5Fhg\\x5Frow\\x5Fid` FROM db1.t",
+		`SELECT "\x5Fhg\x5Frow\x5Fid" FROM db1.t`,
+		"SELECT * FROM `hg\\u005Fsafe`.t",
 		// A backslash in a quoted identifier is refused even when the decoded
 		// value would have been harmless: the guard does not decode.
-		"SELECT * FROM `ordinary\x5Ftable`.t",
+		"SELECT * FROM `ordinary\\x5Ftable`.t",
 	} {
+		if !strings.Contains(sql, `\`) {
+			t.Fatalf("case lost its backslash in Go quoting, so it tests nothing: %q", sql)
+		}
 		if _, err := ReservedNamespaceViolation(sql, []string{"hg_safe", "hg_unsafe"}, "_hg_row_id"); err == nil {
 			t.Fatalf("an escaped quoted identifier must be refused, not decoded: %q", sql)
 		}
@@ -3478,6 +3490,19 @@ func TestReservedNamespaceViolation_PlainQuotedIdentifiersStillResolve(t *testin
 	}
 	if _, err := ReservedNamespaceViolation("SELECT * FROM `ordinary`.`t`", []string{"hg_safe"}, "_hg_row_id"); err != nil {
 		t.Fatalf("an unrelated quoted identifier must not error: %v", err)
+	}
+
+	// The double-quoted branch must resolve too, or an implementation that
+	// handles only backticks passes every case in this file.
+	got, err = ReservedNamespaceViolation(`SELECT * FROM "hg_safe"."t"`, []string{"hg_safe"}, "_hg_row_id")
+	if err != nil {
+		t.Fatalf("a plain double-quoted identifier must scrub cleanly: %v", err)
+	}
+	if got != "hg_safe" {
+		t.Fatalf("plain double-quoted identifier must still match, got %q", got)
+	}
+	if _, err := ReservedNamespaceViolation(`SELECT * FROM "ordinary"."t"`, []string{"hg_safe"}, "_hg_row_id"); err != nil {
+		t.Fatalf("an unrelated double-quoted identifier must not error: %v", err)
 	}
 }
 
