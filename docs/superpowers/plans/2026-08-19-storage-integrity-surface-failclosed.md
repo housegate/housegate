@@ -3226,18 +3226,28 @@ Maintenance and platform-operator sessions keep their rewrite bypass — they le
 - `RunOnForward() bool { return true }` and `RunOnPeerTrust() bool { return true }` — the chain must not be able to skip it.
 - Its `OnQuery` returns immediately unless `Maintenance || PlatformOperator` is set, so a plain peer-trusted or forwarded session is untouched and Spec I D6's peer decision is preserved exactly.
 
-**There is also no importable scanner.** Task 2's token scan lives in `rewriter-go/internal/engine`, which housegate cannot import, and `pkg/sqlident` only offers path helpers (`NormalizePath`, `SplitLastPath`, `Quote`, `QuotePath`). The literal- and comment-stripping housegate already relies on is `stripSQLLiteralsAndComments` (`pkg/plugins/storageintegrity/plugin.go:950`), unexported. Move it to `pkg/storageintegrity` as `StripSQLLiteralsAndComments` (a pure move plus its existing tests) and build the scan on top of it, so there is one literal-skipping implementation in housegate rather than two.
+**The scanner must be written for this job; nothing existing fits.** Three candidates were considered and all are wrong here, so do not reach for them:
+
+- Task 2's token scan lives in `rewriter-go/internal/engine` — not importable from housegate.
+- `pkg/sqlident` offers only path helpers (`NormalizePath`, `SplitLastPath`, `Quote`, `QuotePath`). Useful as a *component* (below), not as the scan.
+- `stripSQLLiteralsAndComments` (`pkg/plugins/storageintegrity/plugin.go:950`) is **actively unsafe for this purpose**, which review caught: `blankQuoted` erases backtick- and double-quoted spans exactly like single-quoted ones (`:955-956`). In ClickHouse those delimit *identifiers*, not string literals, so ``SELECT * FROM `hg_safe`.`t` `` and ``SELECT `_hg_row_id` FROM t`` would have the protected names blanked away and sail straight through the guard. That function is correct for its own job — finding non-deterministic function *names*, which cannot appear as quoted identifiers — and wrong for this one. Leave it where it is.
+
+Write a small purpose-built scan in `sireserved` instead. It has two rules, and the second one matters as much as the first:
+
+1. **Remove string literals and comments; preserve quoted identifiers.** `'…'`, `--…`, `/*…*/` are erased; `` `…` `` and `"…"` are kept and unquoted into path segments, so quoting cannot hide a reserved name.
+2. **A reserved database is a violation only as a qualifier.** Emit candidate dotted paths and resolve each with `sqlident.SplitLastPath`, then compare the *database* segment. Matching the bare token anywhere would reject `SELECT hg_safe FROM ordinary.t`, where `hg_safe` is an ordinary column name — a false positive that would break unrelated operator traffic. The reserved *column* is the opposite: any identifier segment equal to it is a violation, qualified or not, because there is no legitimate reference to `_hg_row_id`.
+
+Segment comparison is exact and case-insensitive on the unquoted value, so `hg_safe_backup` does not match `hg_safe`.
 
 **Files:**
 - Create: `pkg/plugins/sireserved/plugin.go` (+ `plugin_test.go`, `BUILD.bazel`)
-- Modify: `pkg/storageintegrity/sql.go` (export the literal stripper), `pkg/plugins/storageintegrity/plugin.go` (call the moved helper)
 - Modify: `build.go` (register the plugin when SI tables are configured; extend the warning helper)
 - Test: `pkg/plugins/sireserved/plugin_test.go`, `build_test.go`
 
 **Step 3 also registers the plugin** in `buildServer`'s query-plugin list, ahead of `forward.Plugin`, and `build_test.go` asserts it is present when `storage_integrity.tables` is set and absent when it is not.
 
 **Interfaces:**
-- Consumes: `sicore.StripSQLLiteralsAndComments(sql string) string` (moved this task); the configured SI table set and reserved databases from `pkg/config`.
+- Consumes: `sqlident.SplitLastPath(value string) (database, table string)`; the configured SI table set and reserved databases from `pkg/config`.
 - Produces: `func ReservedNamespaceViolation(sql string, dbs []string, rid string) string` in `pkg/plugins/sireserved` — the offending name, or `""`. Returning the string keeps it unit-testable without a session.
 - Produces: `sireserved.Plugin{ReservedDatabases []string, ReservedRowIDColumn string}`, populated in `build.go` from `storage_integrity` config when SI tables are configured and left unregistered otherwise, so non-SI deployments keep a byte-identical chain.
 
@@ -3313,7 +3323,7 @@ func TestOnQuery_LeavesOrdinaryAndNonOperatorSessionsAlone(t *testing.T) {
 	}
 
 	peer := newSessionForTest(t, 2)
-	peer.State().SetPeerTrusted(true)
+	peer.State().SetPeerTrust("10.0.0.7:9000") // SetPeerTrust takes the peer address; there is no SetPeerTrusted(bool)
 	const reserved = "SELECT * FROM hg_safe.db1__t"
 	pctx := &plugin.QueryContext{Session: peer, OriginalSQL: reserved, Query: &chproto.Query{Body: reserved}}
 	if err := p.OnQuery(context.Background(), pctx); err != nil {
@@ -3321,13 +3331,55 @@ func TestOnQuery_LeavesOrdinaryAndNonOperatorSessionsAlone(t *testing.T) {
 	}
 }
 
-// A reserved name inside a string literal is not an address.
-func TestReservedNamespaceViolation_IgnoresLiterals(t *testing.T) {
-	if got := ReservedNamespaceViolation("SELECT 'hg_safe' AS s FROM db1.t", []string{"hg_safe"}, "_hg_row_id"); got != "" {
-		t.Fatalf("literal must not trip the guard, got %q", got)
+// The scan must survive quoting and must not fire on ordinary names. The
+// quoted cases are the ones that bypass a literal-blanking stripper, and the
+// false-positive cases are what a bare-token match would break.
+func TestReservedNamespaceViolation(t *testing.T) {
+	const rid = "_hg_row_id"
+	dbs := []string{"hg_safe", "hg_unsafe"}
+
+	for _, tc := range []struct {
+		name string
+		sql  string
+		want string
+	}{
+		// Must be caught.
+		{"plain qualifier", "SELECT * FROM hg_safe.db1__t", "hg_safe"},
+		{"backtick-quoted qualifier", "SELECT * FROM `hg_safe`.`db1__t`", "hg_safe"},
+		{"double-quoted qualifier", `SELECT * FROM "hg_safe"."db1__t"`, "hg_safe"},
+		{"mixed quoting", "SELECT * FROM `hg_unsafe`.db1__t", "hg_unsafe"},
+		{"uppercase", "SELECT * FROM HG_SAFE.db1__t", "hg_safe"},
+		{"reserved column bare", "SELECT _hg_row_id FROM db1.t", rid},
+		{"reserved column quoted", "SELECT `_hg_row_id` FROM db1.t", rid},
+		{"reserved column qualified", "SELECT t._hg_row_id FROM db1.t AS t", rid},
+
+		// Must NOT be caught.
+		{"reserved name in a literal", "SELECT 'hg_safe' AS s FROM db1.t", ""},
+		{"reserved name in a comment", "SELECT * FROM db1.t -- hg_safe", ""},
+		{"ordinary column with the same name", "SELECT hg_safe FROM ordinary.t", ""},
+		{"prefix is not a match", "SELECT * FROM hg_safe_backup.t", ""},
+		{"suffix is not a match", "SELECT * FROM my_hg_safe.t", ""},
+		{"column literal mentioning the rid", "SELECT '_hg_row_id' AS s FROM db1.t", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ReservedNamespaceViolation(tc.sql, dbs, rid); got != tc.want {
+				t.Fatalf("ReservedNamespaceViolation(%q) = %q, want %q", tc.sql, got, tc.want)
+			}
+		})
 	}
-	if got := ReservedNamespaceViolation("SELECT * FROM hg_safe_backup.t", []string{"hg_safe"}, "_hg_row_id"); got != "" {
-		t.Fatalf("identifier boundaries must be respected, got %q", got)
+}
+
+// Guards the specific regression the review found: a scanner that blanks
+// quoted identifiers (as stripSQLLiteralsAndComments does) passes this input.
+func TestReservedNamespaceViolation_QuotingIsNotABypass(t *testing.T) {
+	for _, sql := range []string{
+		"SELECT * FROM `hg_safe`.`t`",
+		`SELECT * FROM "hg_unsafe"."t"`,
+		"SELECT `_hg_row_id` FROM db1.t",
+	} {
+		if got := ReservedNamespaceViolation(sql, []string{"hg_safe", "hg_unsafe"}, "_hg_row_id"); got == "" {
+			t.Fatalf("quoting must not bypass the guard: %q", sql)
+		}
 	}
 }
 ```
@@ -3365,7 +3417,12 @@ func (p *Plugin) RunOnPeerTrust() bool { return true }
 
 func (p *Plugin) OnQuery(_ context.Context, qctx *plugin.QueryContext) error {
 	st := qctx.Session.State()
-	if st == nil || !(st.Maintenance() || st.PlatformOperator()) {
+	if st == nil {
+		return nil
+	}
+	// Maintenance / PlatformOperator are Snapshot() fields, not methods.
+	snap := st.Snapshot()
+	if !snap.Maintenance && !snap.PlatformOperator {
 		return nil
 	}
 	if name := ReservedNamespaceViolation(qctx.Query.Body, p.ReservedDatabases, p.ReservedRowIDColumn); name != "" {
@@ -3376,25 +3433,48 @@ func (p *Plugin) OnQuery(_ context.Context, qctx *plugin.QueryContext) error {
 	return nil
 }
 
-// ReservedNamespaceViolation reports the first reserved database or reserved
-// column the statement names, ignoring occurrences inside string literals and
-// comments. It reuses housegate's single literal stripper rather than adding a
-// second one.
+// ReservedNamespaceViolation reports the first reserved database used as a
+// qualifier, or the reserved column referenced anywhere. Returns "" when the
+// statement is clean.
+//
+// scanPaths removes string literals and comments but PRESERVES quoted
+// identifiers, unquoting them into path segments: `hg_safe`.`t` and hg_safe.t
+// must resolve identically, or backticks become a bypass. Do not substitute
+// stripSQLLiteralsAndComments here — it blanks quoted identifiers.
 func ReservedNamespaceViolation(sql string, dbs []string, rid string) string {
-	scan := strings.ToLower(sicore.StripSQLLiteralsAndComments(sql))
+	reserved := make(map[string]string, len(dbs))
 	for _, db := range dbs {
-		if containsIdentifier(scan, strings.ToLower(db)) {
-			return db
-		}
+		reserved[strings.ToLower(db)] = db
 	}
-	if rid != "" && containsIdentifier(scan, strings.ToLower(rid)) {
-		return rid
+	lowerRID := strings.ToLower(rid)
+
+	for _, path := range scanPaths(sql) {
+		database, table := sqlident.SplitLastPath(path)
+		// The reserved column is a violation wherever it appears.
+		if lowerRID != "" {
+			if strings.EqualFold(unquoteSegment(table), rid) {
+				return rid
+			}
+			if database != "" && strings.EqualFold(unquoteSegment(database), rid) {
+				return rid
+			}
+		}
+		// A reserved database is a violation only as a qualifier, so that an
+		// ordinary column named hg_safe is not a false positive.
+		if database == "" {
+			continue
+		}
+		if original, ok := reserved[strings.ToLower(unquoteSegment(database))]; ok {
+			return original
+		}
 	}
 	return ""
 }
 ```
 
-`containsIdentifier` matches on identifier boundaries so `hg_safe_backup` does not trip the `hg_safe` rule; confirm the exact setter/getter names on `chsession.SessionState` (`Maintenance()` / `PlatformOperator()`) before writing, since the plugin gates on them.
+`scanPaths` is the ~50-line lexer described above and `unquoteSegment` strips one layer of backticks or double quotes (collapsing the doubled-quote escape). Both live in the same file with their own table tests.
+
+
 
 - [ ] **Step 4: Run the tests**
 
