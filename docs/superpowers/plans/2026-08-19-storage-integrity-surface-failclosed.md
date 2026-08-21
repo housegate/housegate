@@ -3238,7 +3238,7 @@ That leaves exactly one lexical job, and its failure modes are safe by construct
 - **Never** treat `` ` `` or `"` spans as literals. They delimit identifiers, and erasing them is precisely the round-5 bypass. Unquote them into plain text instead so `` `hg_safe` `` and `hg_safe` compare equal.
 - Match reserved names on identifier boundaries, case-insensitively, so `hg_safe_backup` and `my_hg_safe` do not match.
 
-Getting the stripping *wrong* now only produces a false positive (a reserved name that should have been ignored inside a literal), never a bypass — the failure direction is the safe one, which is the property the previous design lacked.
+Mis-stripping in the *under*-stripping direction is harmless: a reserved name that should have been ignored inside a literal produces a false positive. **Over**-stripping is not harmless and is the one bypass this design still has to guard: a literal whose escapes are mishandled can run past its terminator and swallow a later mention, so it is never scanned. Step 3 pins the escape rules and a regression test covers the case. That is a single enumerable lexical obligation rather than the whole-parser surface the previous design carried, which is the point of the change — not that mistakes became impossible.
 
 **The accepted false positive, stated plainly.** `SELECT hg_safe FROM ordinary.t` — an ordinary column that happens to be named `hg_safe` — is refused for these sessions. That is acceptable and is the documented behaviour: the guard only exists when SI tables are configured; the reserved names (`hg_safe`, `hg_unsafe`, `_hg_row_id`) are protocol-owned and no user column should carry them; maintenance traffic in this system is DDL on fully-qualified physical names rather than analytical SELECTs (see the comment at `pkg/plugins/rewrite/rewriter_test.go:91-95`); and the error already names the remedy — use a direct ClickHouse connection for physical access. Record it in the error text and in the operator warning so it is never a surprise.
 
@@ -3458,6 +3458,8 @@ func TestReservedNamespaceViolation_OrdinaryColumnIsRefusedByDesign(t *testing.T
 		t.Fatalf("mention-is-the-rule must refuse an ordinary column named hg_safe, got %q", got)
 	}
 }
+```
+
 
 - [ ] **Step 2: Run to verify they fail**
 
@@ -3535,11 +3537,11 @@ Expected: PASS.
 
 - [ ] **Step 6: Full suite + commit**
 
-Run: `bazel test //pkg/plugins/sireserved:all //pkg/plugins/storageintegrity:all //pkg/storageintegrity:all //:housegate_test --test_output=errors`
-Expected: PASS (the storageintegrity targets cover the literal-stripper move).
+Run: `bazel test //pkg/plugins/sireserved:all //:housegate_test --test_output=errors`
+Expected: PASS. (`pkg/storageintegrity` and `pkg/plugins/storageintegrity` are deliberately **not** in this list: this design leaves their existing `stripSQLLiteralsAndComments` untouched, so no target there changes.)
 
 ```bash
-git add pkg/plugins/sireserved pkg/storageintegrity/sql.go pkg/plugins/storageintegrity/plugin.go build.go build_test.go
+git add pkg/plugins/sireserved build.go build_test.go
 git commit -m "feat(sireserved): refuse reserved SI names on operator-bypassed sessions"
 ```
 
