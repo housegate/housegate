@@ -3226,25 +3226,24 @@ Maintenance and platform-operator sessions keep their rewrite bypass — they le
 - `RunOnForward() bool { return true }` and `RunOnPeerTrust() bool { return true }` — the chain must not be able to skip it.
 - Its `OnQuery` returns immediately unless `Maintenance || PlatformOperator` is set, so a plain peer-trusted or forwarded session is untouched and Spec I D6's peer decision is preserved exactly.
 
-**The scanner must be written for this job; nothing existing fits.** Three candidates were considered and all are wrong here, so do not reach for them:
+**The guard refuses on mention, and deliberately does not parse SQL.** Five review rounds pushed an earlier draft of this task toward a hand-written ClickHouse lexer — quoted identifiers, qualifier vs. bare target, `database()` vs. the `DATABASE` keyword, `IF [NOT] EXISTS` modifiers, then `#`/`#!`/`//` and nested block comments, then implicit `AS`-less aliases. Each fix was correct and each one exposed another lexical corner, because the design was wrong: a defense-in-depth guard for trusted operator roles was being asked to re-implement a SQL parser, and every gap in that parser is a bypass.
 
-- Task 2's token scan lives in `rewriter-go/internal/engine` — not importable from housegate.
-- `pkg/sqlident` offers only path helpers (`NormalizePath`, `SplitLastPath`, `Quote`, `QuotePath`). Useful as a *component* (below), not as the scan.
-- `stripSQLLiteralsAndComments` (`pkg/plugins/storageintegrity/plugin.go:950`) is **actively unsafe for this purpose**, which review caught: `blankQuoted` erases backtick- and double-quoted spans exactly like single-quoted ones (`:955-956`). In ClickHouse those delimit *identifiers*, not string literals, so ``SELECT * FROM `hg_safe`.`t` `` and ``SELECT `_hg_row_id` FROM t`` would have the protected names blanked away and sail straight through the guard. That function is correct for its own job — finding non-deterministic function *names*, which cannot appear as quoted identifiers — and wrong for this one. Leave it where it is.
+The tradeoff is inverted here. For this guard a rare false positive costs an operator one clear error message with a stated remedy; a lexical gap costs the protection entirely, on sessions that skip every other SI control. So:
 
-Write a small purpose-built scan in `sireserved` instead. It has two rules, and the second one matters as much as the first:
+**A statement from a maintenance or platform-operator session that mentions a reserved name anywhere outside a string literal or comment is refused.** No statement grammar, no keyword recognition, no qualifier/target distinction, no alias handling.
 
-1. **Remove string literals and comments; preserve quoted identifiers.** `'…'`, `--…`, `/*…*/` are erased; `` `…` `` and `"…"` are kept and unquoted into path segments, so quoting cannot hide a reserved name.
-2. **A reserved database is a violation as a qualifier *or* as a bare database target.** Emit candidate dotted paths and resolve each with `sqlident.SplitLastPath`, then compare the *database* segment — that covers `hg_safe.t`. But qualifier position alone is **not** sufficient, and getting this wrong is a fail-open on the flagship attack: in `TRUNCATE DATABASE hg_safe`, `DROP DATABASE hg_safe` and `USE hg_safe` the reserved name is a bare path, so `SplitLastPath` returns an empty database and a qualifier-only rule waves it through. `TRUNCATE DATABASE hg_safe` is one of the two Critical attacks this entire spec exists to close, and operator sessions skip rewrite, so the engine's own rejection cannot save it here.
+That leaves exactly one lexical job, and its failure modes are safe by construction:
 
-   The scan therefore needs a little lexical context, and it must be anchored in grammar rather than in keyword presence — review of a looser draft caught that `SELECT database(), hg_safe FROM ordinary.t` would otherwise flag the ordinary column, because ClickHouse has a `database()` **function**. Two rules, both grammar-anchored:
+- Erase `'…'` string literals and every ClickHouse comment form — `--`, `#`, `#!`, `//`, and `/* … */` **with nesting depth** ([ClickHouse syntax](https://clickhouse.com/docs/reference/syntax#comments)). An unterminated literal or comment is a rejection, not a best guess.
+- **Never** treat `` ` `` or `"` spans as literals. They delimit identifiers, and erasing them is precisely the round-5 bypass. Unquote them into plain text instead so `` `hg_safe` `` and `hg_safe` compare equal.
+- Match reserved names on identifier boundaries, case-insensitively, so `hg_safe_backup` and `my_hg_safe` do not match.
 
-   - **Database-target state.** A token sets "the next identifier is a database" when it is `USE`, or a standalone `DATABASE` **keyword** — standalone meaning the next non-space character is *not* `(`, which is what separates the keyword from the `database()` function — or `FROM`/`IN` immediately preceded by `TABLES` or `DICTIONARIES` (covering `SHOW TABLES FROM <db>`, `SHOW TABLES IN <db>`, `TRUNCATE ALL TABLES FROM <db>`). The modifiers `IF`, `NOT` and `EXISTS` are skipped without clearing the state, so `DROP DATABASE IF EXISTS hg_safe` and `CREATE DATABASE IF NOT EXISTS hg_safe` still resolve — the preceding-token-only formulation missed both. Any other token clears the state.
-   - **DDL backstop, scoped to DDL.** If the statement's leading keyword is one of `USE`/`DROP`/`TRUNCATE`/`CREATE`/`ATTACH`/`DETACH`/`RENAME`/`ALTER`/`SHOW`/`EXISTS` **and** a standalone `DATABASE` keyword appears in it, then any reserved identifier anywhere in the statement is a violation. This keeps D1's philosophy — the enumeration is for message quality, a catch-all carries the safety property — for unenumerated *DDL* forms, while a `SELECT`-shaped statement can never trip it, which is what protects ordinary operator traffic.
+Getting the stripping *wrong* now only produces a false positive (a reserved name that should have been ignored inside a literal), never a bypass — the failure direction is the safe one, which is the property the previous design lacked.
 
-   Anywhere else a bare reserved identifier is an ordinary name and is allowed, which is what keeps `SELECT hg_safe FROM ordinary.t` working. The reserved *column* needs none of this: any identifier segment equal to it is a violation, qualified or not, because there is no legitimate reference to `_hg_row_id`.
+**The accepted false positive, stated plainly.** `SELECT hg_safe FROM ordinary.t` — an ordinary column that happens to be named `hg_safe` — is refused for these sessions. That is acceptable and is the documented behaviour: the guard only exists when SI tables are configured; the reserved names (`hg_safe`, `hg_unsafe`, `_hg_row_id`) are protocol-owned and no user column should carry them; maintenance traffic in this system is DDL on fully-qualified physical names rather than analytical SELECTs (see the comment at `pkg/plugins/rewrite/rewriter_test.go:91-95`); and the error already names the remedy — use a direct ClickHouse connection for physical access. Record it in the error text and in the operator warning so it is never a surprise.
 
-Segment comparison is exact and case-insensitive on the unquoted value, so `hg_safe_backup` does not match `hg_safe`.
+**Nothing existing fits for the stripping, either.** Task 2's scan lives in `rewriter-go/internal/engine` (not importable). `pkg/sqlident` offers only path helpers. `stripSQLLiteralsAndComments` (`pkg/plugins/storageintegrity/plugin.go:955-956`) blanks backtick and double-quoted spans exactly like single-quoted ones, which is correct for finding function names and fatal here — leave it where it is.
+
 
 **Files:**
 - Create: `pkg/plugins/sireserved/plugin.go` (+ `plugin_test.go`, `BUILD.bazel`)
@@ -3254,8 +3253,8 @@ Segment comparison is exact and case-insensitive on the unquoted value, so `hg_s
 **Step 3 also registers the plugin** in `buildServer`'s query-plugin list, ahead of `forward.Plugin`, and `build_test.go` asserts it is present when `storage_integrity.tables` is set and absent when it is not.
 
 **Interfaces:**
-- Consumes: `sqlident.SplitLastPath(value string) (database, table string)`; the configured SI table set and reserved databases from `pkg/config`.
-- Produces: `func ReservedNamespaceViolation(sql string, dbs []string, rid string) string` in `pkg/plugins/sireserved` — the offending name, or `""`. Returning the string keeps it unit-testable without a session.
+- Consumes: the configured SI table set and reserved databases from `pkg/config`. (No SQL parsing helper: see the design note above — the guard refuses on mention rather than parsing.)
+- Produces: `func ReservedNamespaceViolation(sql string, dbs []string, rid string) (string, error)` in `pkg/plugins/sireserved` — the offending name (or `""`), plus an error when the statement cannot be scrubbed (unterminated literal or comment), which is itself a rejection. Returning values rather than logging keeps it unit-testable without a session.
 - Produces: `sireserved.Plugin{ReservedDatabases []string, ReservedRowIDColumn string}`, populated in `build.go` from `storage_integrity` config when SI tables are configured and left unregistered otherwise, so non-SI deployments keep a byte-identical chain.
 
 - [ ] **Step 1: Write the failing tests**
@@ -3338,10 +3337,9 @@ func TestOnQuery_LeavesOrdinaryAndNonOperatorSessionsAlone(t *testing.T) {
 	}
 }
 
-// The scan must survive quoting and must not fire on ordinary names. The
-// quoted cases are the ones that bypass a literal-blanking stripper, and the
-// false-positive cases are what a bare-token match would break.
-func TestReservedNamespaceViolation(t *testing.T) {
+// Mention is the rule. These are the statements that must be refused, and
+// they cover every form earlier parser-based drafts leaked on.
+func TestReservedNamespaceViolation_RefusesOnMention(t *testing.T) {
 	const rid = "_hg_row_id"
 	dbs := []string{"hg_safe", "hg_unsafe"}
 
@@ -3350,215 +3348,100 @@ func TestReservedNamespaceViolation(t *testing.T) {
 		sql  string
 		want string
 	}{
-		// Must be caught.
-		{"plain qualifier", "SELECT * FROM hg_safe.db1__t", "hg_safe"},
+		{"qualifier", "SELECT * FROM hg_safe.db1__t", "hg_safe"},
 		{"backtick-quoted qualifier", "SELECT * FROM `hg_safe`.`db1__t`", "hg_safe"},
 		{"double-quoted qualifier", `SELECT * FROM "hg_safe"."db1__t"`, "hg_safe"},
-		{"mixed quoting", "SELECT * FROM `hg_unsafe`.db1__t", "hg_unsafe"},
 		{"uppercase", "SELECT * FROM HG_SAFE.db1__t", "hg_safe"},
-		{"reserved column bare", "SELECT _hg_row_id FROM db1.t", rid},
+		{"bare target: truncate database", "TRUNCATE DATABASE hg_safe", "hg_safe"},
+		{"bare target: drop database if exists", "DROP DATABASE IF EXISTS hg_safe", "hg_safe"},
+		{"bare target: create database if not exists", "CREATE DATABASE IF NOT EXISTS hg_safe", "hg_safe"},
+		{"bare target: use", "USE hg_safe", "hg_safe"},
+		{"bare target: show tables from", "SHOW TABLES FROM hg_safe", "hg_safe"},
+		{"bare target: truncate all tables from", "TRUNCATE ALL TABLES FROM hg_unsafe", "hg_unsafe"},
+		{"reserved column", "SELECT _hg_row_id FROM db1.t", rid},
 		{"reserved column quoted", "SELECT `_hg_row_id` FROM db1.t", rid},
-		{"reserved column qualified", "SELECT t._hg_row_id FROM db1.t AS t", rid},
 
-		// Bare database targets. A qualifier-only rule fails open on every one
-		// of these, and the first is one of the two Critical attacks this spec
-		// exists to close.
-		{"truncate database", "TRUNCATE DATABASE hg_safe", "hg_safe"},
-		{"truncate database quoted", "TRUNCATE DATABASE `hg_safe`", "hg_safe"},
-		{"drop database", "DROP DATABASE hg_unsafe", "hg_unsafe"},
-		{"drop database if exists", "DROP DATABASE IF EXISTS hg_safe", "hg_safe"},
-		{"create database if not exists", "CREATE DATABASE IF NOT EXISTS hg_safe", "hg_safe"},
-		{"use", "USE hg_safe", "hg_safe"},
-		{"use quoted", "USE `hg_safe`", "hg_safe"},
-		{"attach database", "ATTACH DATABASE hg_safe", "hg_safe"},
-		{"alter database", "ALTER DATABASE hg_safe MODIFY COMMENT 'x'", "hg_safe"},
-		{"show tables from", "SHOW TABLES FROM hg_safe", "hg_safe"},
-		{"show tables in", "SHOW TABLES IN hg_unsafe", "hg_unsafe"},
-		{"truncate all tables from", "TRUNCATE ALL TABLES FROM hg_safe", "hg_safe"},
+		// Comment forms must be whitespace, not state-clearing tokens and not
+		// hiding places. All five ClickHouse forms, plus nesting.
+		{"line comment before target", "USE -- pick one\nhg_safe", "hg_safe"},
+		{"hash comment before target", "USE # pick one\nhg_safe", "hg_safe"},
+		{"shebang comment before target", "USE #! pick one\nhg_safe", "hg_safe"},
+		{"slash comment before target", "USE // pick one\nhg_safe", "hg_safe"},
+		{"block comment before target", "SHOW TABLES FROM /* pick one */ hg_safe", "hg_safe"},
+		{"nested block comment", "SHOW TABLES FROM /* a /* b */ c */ hg_safe", "hg_safe"},
 
-		// Must NOT be caught.
-		{"reserved name in a literal", "SELECT 'hg_safe' AS s FROM db1.t", ""},
-		{"reserved name in a comment", "SELECT * FROM db1.t -- hg_safe", ""},
-		{"ordinary column with the same name", "SELECT hg_safe FROM ordinary.t", ""},
-		{"ordinary column, aliased", "SELECT hg_safe AS x FROM ordinary.t", ""},
-		{"ordinary column in WHERE", "SELECT a FROM ordinary.t WHERE hg_safe > 1", ""},
-		{"database() function beside an ordinary column", "SELECT database(), hg_safe FROM ordinary.t", ""},
-		{"database() alone", "SELECT database() AS d, hg_safe AS s FROM ordinary.t", ""},
-		{"currentDatabase() beside an ordinary column", "SELECT currentDatabase(), hg_safe FROM ordinary.t", ""},
-		{"column literally named database", "SELECT database, hg_safe FROM ordinary.t", ""},
-		{"prefix is not a match", "SELECT * FROM hg_safe_backup.t", ""},
-		{"suffix is not a match", "SELECT * FROM my_hg_safe.t", ""},
-		{"column literal mentioning the rid", "SELECT '_hg_row_id' AS s FROM db1.t", ""},
+		// An implicit AS-less alias is not a reason to allow the name either;
+		// under mention-is-the-rule there is nothing to get wrong.
+		{"implicit alias position", "SELECT database hg_safe FROM ordinary.t", "hg_safe"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := ReservedNamespaceViolation(tc.sql, dbs, rid); got != tc.want {
+			got, err := ReservedNamespaceViolation(tc.sql, dbs, rid)
+			if err != nil {
+				t.Fatalf("unexpected scrub error: %v", err)
+			}
+			if got != tc.want {
 				t.Fatalf("ReservedNamespaceViolation(%q) = %q, want %q", tc.sql, got, tc.want)
 			}
 		})
 	}
 }
 
-// Guards the specific regression review found in the qualifier-only design:
-// a rule that only inspects SplitLastPath's database segment fails open on
-// every statement whose reserved name is the bare target.
-func TestReservedNamespaceViolation_BareDatabaseTargetIsNotABypass(t *testing.T) {
-	for _, sql := range []string{
-		"TRUNCATE DATABASE hg_safe",
-		"DROP DATABASE hg_safe",
-		"USE hg_safe",
-		"SHOW TABLES FROM hg_safe",
-		"TRUNCATE ALL TABLES FROM hg_safe",
+// What must still pass: the reserved name appears only inside a literal or a
+// comment, or the statement merely resembles one of these. Over-stripping here
+// would be a bypass, which is why quoted identifiers are never erased.
+func TestReservedNamespaceViolation_LiteralsAndCommentsAreNotMentions(t *testing.T) {
+	const rid = "_hg_row_id"
+	dbs := []string{"hg_safe", "hg_unsafe"}
+
+	for _, tc := range []struct{ name, sql string }{
+		{"single-quoted literal", "SELECT 'hg_safe' AS s FROM ordinary.t"},
+		{"escaped quote inside literal", `SELECT 'it''s hg_safe' AS s FROM ordinary.t`},
+		{"line comment", "SELECT a FROM ordinary.t -- hg_safe"},
+		{"hash comment", "SELECT a FROM ordinary.t # hg_safe"},
+		{"slash comment", "SELECT a FROM ordinary.t // hg_safe"},
+		{"block comment", "SELECT a FROM /* hg_safe */ ordinary.t"},
+		{"nested block comment", "SELECT a FROM /* x /* hg_safe */ y */ ordinary.t"},
+		{"rid inside a literal", "SELECT '_hg_row_id' AS s FROM ordinary.t"},
+		{"prefix is not a match", "SELECT * FROM hg_safe_backup.t"},
+		{"suffix is not a match", "SELECT * FROM my_hg_safe.t"},
 	} {
-		if got := ReservedNamespaceViolation(sql, []string{"hg_safe", "hg_unsafe"}, "_hg_row_id"); got == "" {
-			t.Fatalf("a bare database target must be refused: %q", sql)
-		}
-	}
-}
-
-// Guards the regression a looser backstop introduced: keying on the presence
-// of the word DATABASE anywhere flags an ordinary column, because ClickHouse
-// has a database() function. A SELECT-shaped statement must never trip the
-// DDL backstop.
-func TestReservedNamespaceViolation_DatabaseFunctionIsNotATarget(t *testing.T) {
-	for _, sql := range []string{
-		"SELECT database(), hg_safe FROM ordinary.t",
-		"SELECT currentDatabase(), hg_safe FROM ordinary.t",
-		"SELECT database, hg_safe FROM ordinary.t",
-	} {
-		if got := ReservedNamespaceViolation(sql, []string{"hg_safe", "hg_unsafe"}, "_hg_row_id"); got != "" {
-			t.Fatalf("a SELECT must not trip the DDL backstop: %q returned %q", sql, got)
-		}
-	}
-}
-
-// Modifiers between the trigger keyword and the name must not clear the
-// database-target state; a preceding-token-only rule misses both of these.
-func TestReservedNamespaceViolation_ModifiersBetweenKeywordAndName(t *testing.T) {
-	for _, sql := range []string{
-		"DROP DATABASE IF EXISTS hg_safe",
-		"CREATE DATABASE IF NOT EXISTS hg_safe",
-	} {
-		if got := ReservedNamespaceViolation(sql, []string{"hg_safe"}, "_hg_row_id"); got == "" {
-			t.Fatalf("intervening modifiers must not lose the target: %q", sql)
-		}
-	}
-}
-
-// Guards the specific regression the review found: a scanner that blanks
-// quoted identifiers (as stripSQLLiteralsAndComments does) passes this input.
-func TestReservedNamespaceViolation_QuotingIsNotABypass(t *testing.T) {
-	for _, sql := range []string{
-		"SELECT * FROM `hg_safe`.`t`",
-		`SELECT * FROM "hg_unsafe"."t"`,
-		"SELECT `_hg_row_id` FROM db1.t",
-	} {
-		if got := ReservedNamespaceViolation(sql, []string{"hg_safe", "hg_unsafe"}, "_hg_row_id"); got == "" {
-			t.Fatalf("quoting must not bypass the guard: %q", sql)
-		}
-	}
-}
-```
-
-Duplicate the first test for the platform-operator flag, substituting `SetPlatformOperator(true)` for `SetMaintenance(true)` — confirm the exact setter names in `pkg/chsession/state.go` before writing them (this task's guard gates on both, so neither may be dropped from the condition without a failing test).
-
-- [ ] **Step 2: Run to verify they fail**
-
-Run: `bazel run //:gazelle && bazel test //pkg/plugins/sireserved:sireserved_test --test_output=all`
-Expected: FAIL — the package does not compile yet (`undefined: Plugin`).
-
-- [ ] **Step 3: Implement the pre-check**
-
-Create `pkg/plugins/sireserved/plugin.go`:
-
-```go
-// Package sireserved refuses statements that address storage-integrity
-// protocol-owned names on sessions whose rewrite is bypassed.
-//
-// The bypass exists because maintenance and platform-operator roles need
-// un-rewritten SQL, not because they may address protocol-owned storage.
-// Running the full SI rewrite for them would defeat the bypass; this narrow
-// name check does not. It opts into the forward and peer-trust filters so the
-// chain cannot skip it, and then gates on the operator flags itself.
-// Spec I D6, operator branch.
-package sireserved
-
-type Plugin struct {
-	ReservedDatabases   []string
-	ReservedRowIDColumn string
-}
-
-func (p *Plugin) RunOnForward() bool   { return true }
-func (p *Plugin) RunOnPeerTrust() bool { return true }
-
-func (p *Plugin) OnQuery(_ context.Context, qctx *plugin.QueryContext) error {
-	st := qctx.Session.State()
-	if st == nil {
-		return nil
-	}
-	// Maintenance / PlatformOperator are Snapshot() fields, not methods.
-	snap := st.Snapshot()
-	if !snap.Maintenance && !snap.PlatformOperator {
-		return nil
-	}
-	if name := ReservedNamespaceViolation(qctx.Query.Body, p.ReservedDatabases, p.ReservedRowIDColumn); name != "" {
-		return fmt.Errorf(
-			"storage-integrity reserved name %q is not addressable through the proxy; use a direct ClickHouse connection for physical access",
-			name)
-	}
-	return nil
-}
-
-// ReservedNamespaceViolation reports the first reserved database used as a
-// qualifier, or the reserved column referenced anywhere. Returns "" when the
-// statement is clean.
-//
-// scanPaths removes string literals and comments but PRESERVES quoted
-// identifiers, unquoting them into path segments: `hg_safe`.`t` and hg_safe.t
-// must resolve identically, or backticks become a bypass. Do not substitute
-// stripSQLLiteralsAndComments here — it blanks quoted identifiers.
-func ReservedNamespaceViolation(sql string, dbs []string, rid string) string {
-	reserved := make(map[string]string, len(dbs))
-	for _, db := range dbs {
-		reserved[strings.ToLower(db)] = db
-	}
-	lowerRID := strings.ToLower(rid)
-
-	for _, path := range scanPaths(sql) {
-		database, table := sqlident.SplitLastPath(path.Text)
-		// The reserved column is a violation wherever it appears.
-		if lowerRID != "" {
-			if strings.EqualFold(unquoteSegment(table), rid) {
-				return rid
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ReservedNamespaceViolation(tc.sql, dbs, rid)
+			if err != nil {
+				t.Fatalf("unexpected scrub error: %v", err)
 			}
-			if database != "" && strings.EqualFold(unquoteSegment(database), rid) {
-				return rid
+			if got != "" {
+				t.Fatalf("must not fire on %q, got %q", tc.sql, got)
 			}
-		}
-		// A reserved database is a violation as a qualifier...
-		if database != "" {
-			if original, ok := reserved[strings.ToLower(unquoteSegment(database))]; ok {
-				return original
-			}
-			continue
-		}
-		// ...or as a bare database target. Skipping this is a fail-open on
-		// TRUNCATE/DROP DATABASE and USE, where the reserved name is the whole
-		// path. Only bare identifiers in database position count, so an
-		// ordinary column named hg_safe is still allowed.
-		if !path.DatabasePosition {
-			continue
-		}
-		if original, ok := reserved[strings.ToLower(unquoteSegment(table))]; ok {
-			return original
+		})
+	}
+}
+
+// A statement that cannot be scrubbed is refused rather than scanned blind.
+func TestReservedNamespaceViolation_UnterminatedInputIsAnError(t *testing.T) {
+	for _, sql := range []string{
+		"SELECT 'unterminated FROM ordinary.t",
+		"SELECT a FROM ordinary.t /* unterminated",
+		"SELECT a FROM ordinary.t /* outer /* inner */ still open",
+	} {
+		if _, err := ReservedNamespaceViolation(sql, []string{"hg_safe"}, "_hg_row_id"); err == nil {
+			t.Fatalf("unterminated input must be an error: %q", sql)
 		}
 	}
-	return ""
 }
-```
 
-`scanPaths` is the ~70-line lexer described above. It returns `[]scannedPath{Text string; DatabasePosition bool}`, where `DatabasePosition` is set by the database-target state machine above (note the call site passes `path.Text`, not `path`, since `sqlident.SplitLastPath` takes a string). The DDL backstop is evaluated once per statement and, when it applies, forces `DatabasePosition` true for every emitted path. `unquoteSegment` strips one layer of backticks or double quotes, collapsing the doubled-quote escape. Both live in the same file with their own table tests.
-
-
+// The documented, accepted false positive. Asserting it keeps the tradeoff
+// visible: if someone later "fixes" this case by adding grammar, they have
+// re-opened the bypass class this design exists to close.
+func TestReservedNamespaceViolation_OrdinaryColumnIsRefusedByDesign(t *testing.T) {
+	got, err := ReservedNamespaceViolation("SELECT hg_safe FROM ordinary.t", []string{"hg_safe"}, "_hg_row_id")
+	if err != nil {
+		t.Fatalf("unexpected scrub error: %v", err)
+	}
+	if got != "hg_safe" {
+		t.Fatalf("mention-is-the-rule must refuse an ordinary column named hg_safe, got %q", got)
+	}
+}
 
 - [ ] **Step 4: Run the tests**
 
