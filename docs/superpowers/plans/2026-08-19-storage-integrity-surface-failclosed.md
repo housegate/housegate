@@ -3446,6 +3446,41 @@ func TestReservedNamespaceViolation_UnterminatedInputIsAnError(t *testing.T) {
 	}
 }
 
+// ClickHouse applies string escape rules inside quoted identifiers, so
+// `hg\x5Fsafe` IS hg_safe. Collapsing only doubled delimiters would leave the
+// encoded spelling and match nothing. Rather than decode the whole escape set,
+// an escaped quoted identifier is refused.
+func TestReservedNamespaceViolation_EscapedQuotedIdentifierIsRefused(t *testing.T) {
+	for _, sql := range []string{
+		"SELECT * FROM `hg\x5Fsafe`.t",
+		`SELECT * FROM "hg_safe".t`,
+		"SELECT `\x5Fhg\x5Frow\x5Fid` FROM db1.t",
+		"SELECT * FROM `hg\u005Fsafe`.t",
+		// A backslash in a quoted identifier is refused even when the decoded
+		// value would have been harmless: the guard does not decode.
+		"SELECT * FROM `ordinary\x5Ftable`.t",
+	} {
+		if _, err := ReservedNamespaceViolation(sql, []string{"hg_safe", "hg_unsafe"}, "_hg_row_id"); err == nil {
+			t.Fatalf("an escaped quoted identifier must be refused, not decoded: %q", sql)
+		}
+	}
+}
+
+// Unescaped quoted identifiers still resolve normally, so the rejection above
+// is narrow rather than a blanket ban on quoting.
+func TestReservedNamespaceViolation_PlainQuotedIdentifiersStillResolve(t *testing.T) {
+	got, err := ReservedNamespaceViolation("SELECT * FROM `hg_safe`.`t`", []string{"hg_safe"}, "_hg_row_id")
+	if err != nil {
+		t.Fatalf("a plain quoted identifier must scrub cleanly: %v", err)
+	}
+	if got != "hg_safe" {
+		t.Fatalf("plain quoted identifier must still match, got %q", got)
+	}
+	if _, err := ReservedNamespaceViolation("SELECT * FROM `ordinary`.`t`", []string{"hg_safe"}, "_hg_row_id"); err != nil {
+		t.Fatalf("an unrelated quoted identifier must not error: %v", err)
+	}
+}
+
 // The documented, accepted false positive. Asserting it keeps the tradeoff
 // visible: if someone later "fixes" this case by adding grammar, they have
 // re-opened the bypass class this design exists to close.
@@ -3507,7 +3542,8 @@ func ReservedNamespaceViolation(sql string, dbs []string, rid string) (string, e
 - Erase `'…'` string literals. **Both escape forms must be handled**: the doubled quote `''` and the backslash escape `\'`, *and* the escaped backslash `\\`. Getting this wrong is the one way this design can still be bypassed: in `SELECT 'a\\', hg_safe FROM t` the literal ends at the second quote, but a stripper that treats the final `\'` as an escaped quote runs on to end-of-input and swallows `hg_safe` — a mention that never gets scanned. Consume `\` plus the following byte as a unit, then test for the terminator.
 - Erase every ClickHouse comment form: `--`, `#`, `#!` and `//` to end of line, and `/* … */` **tracking nesting depth**.
 - Return an error for an unterminated literal or an unterminated block comment. Line comments ending at EOF are normal, not errors.
-- **Never** erase `` ` `` or `"` spans. They delimit identifiers; erasing them is the round-5 bypass. Unquote them in place (collapsing the doubled-quote escape) so `` `hg_safe` `` compares equal to `hg_safe`.
+- **Never** erase `` ` `` or `"` spans. They delimit identifiers; erasing them is the round-5 bypass. Unquote them in place, collapsing the doubled delimiter, so `` `hg_safe` `` compares equal to `hg_safe`.
+- **A quoted identifier containing a backslash is a rejection, not a decode.** ClickHouse applies string-literal escape rules inside quoted identifiers ([syntax](https://clickhouse.com/docs/reference/syntax#identifiers), [lexer grammar](https://github.com/ClickHouse/ClickHouse/blob/master/utils/antlr/ClickHouseLexer.g4#L246-L250)), so `` `hg\x5Fsafe` `` *is* the `hg_safe` database. Collapsing only doubled delimiters leaves the encoded spelling and the match silently fails — a bypass. Decoding the full escape set (`\x`, `\0`, `\a`, `\b`, `\f`, `\n`, `\r`, `\t`, `\v`, `\\`, and the quote forms) is exactly the re-implement-ClickHouse trap this design exists to avoid, so take the other branch: if a `` ` `` or `"` span contains a backslash, return an error and refuse the statement. Legitimate operator traffic does not spell identifiers with escapes, and the error names the reason.
 
 `identifiers` splits the scrubbed text on non-identifier characters (`[A-Za-z0-9_]` is the identifier set) and returns the tokens. Both helpers are table-tested in the same file.
 
