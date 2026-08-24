@@ -26,6 +26,12 @@ jobs:
       - name: Test Homebrew formula updater
         run: bazel test //:homebrew_formula_updater_test --test_output=errors
 
+      # Spec J D6: a bare `AGENTS.md` rule in a contributor's global
+      # core.excludesFile silently untracks nested agent-guidance files. This
+      # step makes that state red instead of invisible.
+      - name: Check AGENTS.md files are tracked
+        run: ./scripts/check-agents-md-tracked.sh
+
   build:
     name: Build
     # Self-hosted runners must never execute code from forked PRs — a
