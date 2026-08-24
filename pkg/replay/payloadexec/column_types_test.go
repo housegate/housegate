@@ -3,6 +3,7 @@ package payloadexec
 import (
 	"errors"
 	"math"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -131,5 +132,155 @@ func TestValidateTableSchemaColumns_NamesTableAndColumn(t *testing.T) {
 	}
 	if err := ValidateTableSchemaColumns(TableSchema{TableID: "db.t", Columns: []lthash.Column{{Name: "ok", Type: "UInt64"}}}); err != nil {
 		t.Fatalf("clean schema rejected: %v", err)
+	}
+}
+
+func TestCanonicalColumnType_PreservesWhitelistScalars(t *testing.T) {
+	for _, typeName := range []string{
+		"String", "Bool", "Float32", "Float64",
+		"UInt8", "UInt16", "UInt32", "UInt64",
+		"Int8", "Int16", "Int32", "Int64",
+	} {
+		t.Run(typeName, func(t *testing.T) {
+			got, err := CanonicalColumnType(typeName)
+			if err != nil {
+				t.Fatalf("CanonicalColumnType(%q) error = %v", typeName, err)
+			}
+			if got != typeName {
+				t.Fatalf("CanonicalColumnType(%q) = %q, want unchanged", typeName, got)
+			}
+		})
+	}
+}
+
+func TestCanonicalColumnType_NormalizesEveryAcceptedFixedStringSpelling(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  string
+	}{
+		{input: "FixedString(1)", want: "FixedString(1)"},
+		{input: "FixedString( 1 )", want: "FixedString(1)"},
+		{input: "FixedString(+1)", want: "FixedString(1)"},
+		{input: "FixedString(0001)", want: "FixedString(1)"},
+		{input: "FixedString(\t +0001 \n)", want: "FixedString(1)"},
+		{input: "FixedString( +016777215 )", want: "FixedString(16777215)"},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			if !SupportedColumnType(tc.input) {
+				t.Fatalf("test precondition: %q is not accepted by the authoritative classifier", tc.input)
+			}
+			got, err := CanonicalColumnType(tc.input)
+			if err != nil {
+				t.Fatalf("CanonicalColumnType(%q) error = %v", tc.input, err)
+			}
+			if got != tc.want {
+				t.Fatalf("CanonicalColumnType(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCanonicalColumnType_RejectsUnsupportedAndInjectionSpellings(t *testing.T) {
+	for _, typeName := range []string{
+		"Nullable(String)",
+		"FixedString(16777216)",
+		"FixedString(4) ENGINE = MergeTree)",
+		"String, injected UInt64",
+	} {
+		t.Run(typeName, func(t *testing.T) {
+			got, err := CanonicalColumnType(typeName)
+			if got != "" {
+				t.Errorf("CanonicalColumnType(%q) = %q on rejection, want empty", typeName, got)
+			}
+			if !errors.Is(err, ErrUnsupportedColumnType) {
+				t.Fatalf("CanonicalColumnType(%q) error = %v, want ErrUnsupportedColumnType", typeName, err)
+			}
+			if !strings.Contains(err.Error(), typeName) {
+				t.Errorf("CanonicalColumnType(%q) error %q does not name the offending type", typeName, err)
+			}
+		})
+	}
+}
+
+func TestCanonicalizeTableSchemaColumnTypes_ReturnsCanonicalDeepCopy(t *testing.T) {
+	schema := TableSchema{
+		TableID:     "db.t",
+		PartitionBy: "p",
+		Columns: []lthash.Column{
+			{Name: "p", Type: "String"},
+			{Name: "value", Type: "FixedString( +0008 )"},
+		},
+	}
+	original := TableSchema{
+		TableID:     schema.TableID,
+		PartitionBy: schema.PartitionBy,
+		Columns:     append([]lthash.Column(nil), schema.Columns...),
+	}
+
+	got, err := CanonicalizeTableSchemaColumnTypes(schema)
+	if err != nil {
+		t.Fatalf("CanonicalizeTableSchemaColumnTypes error = %v", err)
+	}
+	want := TableSchema{
+		TableID:     "db.t",
+		PartitionBy: "p",
+		Columns: []lthash.Column{
+			{Name: "p", Type: "String"},
+			{Name: "value", Type: "FixedString(8)"},
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("canonical schema = %#v, want %#v", got, want)
+	}
+	if !reflect.DeepEqual(schema, original) {
+		t.Fatalf("input schema mutated: got %#v, want %#v", schema, original)
+	}
+
+	got.Columns[0].Type = "Int8"
+	if !reflect.DeepEqual(schema, original) {
+		t.Fatalf("returned schema aliases input columns: input = %#v, want %#v", schema, original)
+	}
+}
+
+func TestCanonicalizeTableSchemaColumnTypes_JoinsContextualErrors(t *testing.T) {
+	schema := TableSchema{
+		TableID: "db.t",
+		Columns: []lthash.Column{
+			{Name: "canonicalized", Type: "FixedString( 004 )"},
+			{Name: "bad_nullable", Type: "Nullable(String)"},
+			{Name: "bad_injection", Type: "String, injected UInt64"},
+		},
+	}
+
+	got, err := CanonicalizeTableSchemaColumnTypes(schema)
+	if !errors.Is(err, ErrUnsupportedColumnType) {
+		t.Fatalf("CanonicalizeTableSchemaColumnTypes error = %v, want ErrUnsupportedColumnType", err)
+	}
+	joined, ok := err.(interface{ Unwrap() []error })
+	if !ok || len(joined.Unwrap()) != 2 {
+		t.Fatalf("CanonicalizeTableSchemaColumnTypes error = %#v, want two joined failures", err)
+	}
+	for _, want := range []string{
+		"table db.t column \"bad_nullable\"",
+		"Nullable(String)",
+		"table db.t column \"bad_injection\"",
+		"String, injected UInt64",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not contain %q", err, want)
+		}
+	}
+	if got.Columns[0].Type != "FixedString(4)" {
+		t.Errorf("supported column was not canonicalized while collecting errors: got %q", got.Columns[0].Type)
+	}
+	if got.Columns[1].Type != schema.Columns[1].Type || got.Columns[2].Type != schema.Columns[2].Type {
+		t.Errorf("unsupported column spellings changed: got %#v, input %#v", got.Columns, schema.Columns)
+	}
+	if !reflect.DeepEqual(schema.Columns, []lthash.Column{
+		{Name: "canonicalized", Type: "FixedString( 004 )"},
+		{Name: "bad_nullable", Type: "Nullable(String)"},
+		{Name: "bad_injection", Type: "String, injected UInt64"},
+	}) {
+		t.Fatalf("input schema mutated: %#v", schema)
 	}
 }
