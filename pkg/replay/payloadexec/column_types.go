@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/housegate/housegate/pkg/lthash"
 )
 
 // ErrUnsupportedColumnType is the sentinel every column-type rejection unwraps
@@ -109,6 +111,23 @@ func ValidateColumnType(typeName string) error {
 	return unsupportedColumnTypeError(typeName)
 }
 
+// CanonicalColumnType validates a declared ClickHouse type against the pinned
+// storage-integrity profile and returns its canonical spelling. Scalar types
+// already have one accepted spelling and are returned unchanged. FixedString
+// widths are rendered in base 10 without whitespace, a leading plus or leading
+// zeroes. Every rejection unwraps to ErrUnsupportedColumnType.
+func CanonicalColumnType(typeName string) (string, error) {
+	classified := classifyColumnType(typeName)
+	switch classified.kind {
+	case columnTypeUnsupported:
+		return "", unsupportedColumnTypeError(typeName)
+	case columnTypeFixedString:
+		return "FixedString(" + strconv.Itoa(classified.fixedStringWidth) + ")", nil
+	default:
+		return typeName, nil
+	}
+}
+
 func unsupportedColumnTypeError(typeName string) error {
 	return fmt.Errorf("%w %q (whitelist: String, FixedString(N) with 0 < N <= 0xFFFFFF, Bool, Float32/64, [U]Int8/16/32/64)", ErrUnsupportedColumnType, typeName)
 }
@@ -116,11 +135,30 @@ func unsupportedColumnTypeError(typeName string) error {
 // ValidateTableSchemaColumns validates every declared column of one table and
 // joins the failures, so an operator sees all offending columns at once.
 func ValidateTableSchemaColumns(t TableSchema) error {
-	var errs []error
-	for _, column := range t.Columns {
-		if err := ValidateColumnType(column.Type); err != nil {
-			errs = append(errs, fmt.Errorf("table %s column %q: %w", t.TableID, column.Name, err))
-		}
+	_, err := CanonicalizeTableSchemaColumnTypes(t)
+	return err
+}
+
+// CanonicalizeTableSchemaColumnTypes validates and canonicalizes every column
+// type in one table. It returns a copy with its own Columns slice and never
+// mutates the input. Supported columns are canonicalized even when other
+// columns fail validation; every failure is joined with table and column
+// context so callers can report the complete declaration error at once.
+func CanonicalizeTableSchemaColumnTypes(t TableSchema) (TableSchema, error) {
+	canonical := t
+	if t.Columns != nil {
+		canonical.Columns = make([]lthash.Column, len(t.Columns))
+		copy(canonical.Columns, t.Columns)
 	}
-	return errors.Join(errs...)
+
+	var errs []error
+	for i, column := range canonical.Columns {
+		typeName, err := CanonicalColumnType(column.Type)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("table %s column %q: %w", t.TableID, column.Name, err))
+			continue
+		}
+		canonical.Columns[i].Type = typeName
+	}
+	return canonical, errors.Join(errs...)
 }
