@@ -25,6 +25,24 @@ const (
 	KindInsert Kind = "INSERT"
 )
 
+// StatementKindCodeInsert pins the envelope's numeric INSERT enum value
+// (pb.StatementKind_STATEMENT_KIND_INSERT). StatementKindCode maps this
+// package's domain Kind to the frozen wire value; a cross-boundary ingress
+// test asserts parity with the generated enum.
+const StatementKindCodeInsert uint32 = 1
+
+// StatementKindCode maps an admitted Kind onto the numeric value the signed
+// payload binds. An unmodelled kind fails closed rather than signing 0, which
+// is STATEMENT_KIND_UNSPECIFIED and would be admitted by no verifier.
+func StatementKindCode(k Kind) (uint32, error) {
+	switch k {
+	case KindInsert:
+		return StatementKindCodeInsert, nil
+	default:
+		return 0, fmt.Errorf("storageintegrity: statement kind %q has no signed code", k)
+	}
+}
+
 // AdmissionRecord is the completed, input-bound admission the intake
 // orchestrator consumes. It is the HouseGate-core projection of the ingress
 // plugin's Admission: statement identity, admitted kind, logical target table,

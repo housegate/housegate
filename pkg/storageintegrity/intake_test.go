@@ -1793,3 +1793,19 @@ func waitForMapCount(t *testing.T, p *frontierProbePreparer, id string, want int
 	}
 	t.Fatalf("prepare for %s never reached %d", id, want)
 }
+
+func TestStatementKindCode(t *testing.T) {
+	code, err := StatementKindCode(KindInsert)
+	if err != nil {
+		t.Fatalf("StatementKindCode(KindInsert): %v", err)
+	}
+	if code != StatementKindCodeInsert || code != 1 {
+		t.Fatalf("StatementKindCode(KindInsert) = %d, want 1", code)
+	}
+	if _, err := StatementKindCode(Kind("")); err == nil {
+		t.Fatal("an empty kind must not resolve to a signed code")
+	}
+	if _, err := StatementKindCode(Kind("UPDATE")); err == nil {
+		t.Fatal("an unmodelled kind must fail closed rather than sign 0")
+	}
+}

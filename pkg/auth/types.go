@@ -165,6 +165,11 @@ type JWSStatementPayloadV2 struct {
 	ClientRevision uint32 `json:"client_revision"`
 	TargetTableID  string `json:"target_table_id"`
 	RowIDProfileID string `json:"row_id_profile_id"`
+	// StatementKind is pb.StatementKind's numeric value (1 = INSERT). Bound
+	// from envelope v2.1 so an operator cannot re-label a signed statement as
+	// another kind once the mutation lane ships. Appended last: the field set
+	// grows, the existing field order does not move.
+	StatementKind uint32 `json:"statement_kind"`
 }
 
 // StatementPayloadV2Mismatch returns the JSON name of the first bound field
@@ -200,6 +205,8 @@ func StatementPayloadV2Mismatch(got, want JWSStatementPayloadV2) string {
 		return "target_table_id"
 	case got.RowIDProfileID != want.RowIDProfileID:
 		return "row_id_profile_id"
+	case got.StatementKind != want.StatementKind:
+		return "statement_kind"
 	}
 	return ""
 }

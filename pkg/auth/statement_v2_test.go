@@ -27,6 +27,7 @@ func statementV2Fixture(account string) JWSStatementPayloadV2 {
 		ClientRevision: 54460,
 		TargetTableID:  "db.table",
 		RowIDProfileID: "housegate-row-id-v1",
+		StatementKind:  1,
 	}
 }
 
@@ -355,5 +356,45 @@ func TestStatementPayloadV2Mismatch_IgnoresIat(t *testing.T) {
 	b.PayloadLength++
 	if got := StatementPayloadV2Mismatch(a, b); got != "payload_length" {
 		t.Fatalf("mismatch = %q, want payload_length", got)
+	}
+}
+
+func TestStatementPayloadV2MismatchReportsStatementKind(t *testing.T) {
+	want := statementV2Fixture("0x0000000000000000000000000000000000000001")
+	want.Purpose = StatementPurposeV2
+	got := want
+	got.StatementKind = 7
+	if field := StatementPayloadV2Mismatch(got, want); field != "statement_kind" {
+		t.Fatalf("mismatch field = %q, want statement_kind", field)
+	}
+	got = want
+	if field := StatementPayloadV2Mismatch(got, want); field != "" {
+		t.Fatalf("identical payloads must not mismatch, got %q", field)
+	}
+}
+
+func TestStatementKindIsSignedAndRoundTrips(t *testing.T) {
+	signer, err := NewRelaySigner(statementV2TestKey)
+	if err != nil {
+		t.Fatalf("NewRelaySigner: %v", err)
+	}
+	payload := statementV2Fixture(signer.Address())
+	payload.StatementKind = 1
+	token, err := signer.SignStatementV2(payload)
+	if err != nil {
+		t.Fatalf("SignStatementV2: %v", err)
+	}
+	decoded, err := DecodeStatementV2Payload(token)
+	if err != nil {
+		t.Fatalf("DecodeStatementV2Payload: %v", err)
+	}
+	if decoded.StatementKind != 1 {
+		t.Fatalf("decoded statement_kind = %d, want 1", decoded.StatementKind)
+	}
+	validator := NewEthValidator([]string{signer.Address()}, 100*365*24*time.Hour, true, false, "", nil)
+	want := payload
+	want.StatementKind = 0 // an operator claiming a different kind
+	if _, err := validator.ValidateStatementV2(token, want); err == nil {
+		t.Fatal("a statement_kind the signer did not sign must be rejected")
 	}
 }
