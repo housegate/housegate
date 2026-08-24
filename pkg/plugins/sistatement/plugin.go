@@ -327,6 +327,7 @@ func (p *Plugin) OnQueryInputCompleteStrict(ctx context.Context, qctx *plugin.Qu
 		ClientRevision: st.clientRevision,
 		TargetTableID:  st.tableID,
 		RowIDProfileID: payloadexec.RowIDProfileID,
+		StatementKind:  sicore.StatementKindCodeInsert,
 	})
 	if err != nil {
 		return fmt.Errorf("storage_integrity agent: sign statement %s: %w", st.statementID, err)

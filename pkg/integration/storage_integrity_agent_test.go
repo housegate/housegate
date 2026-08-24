@@ -161,6 +161,7 @@ func TestStorageIntegrity_AgentSignsEnvelopeV2EndToEnd(t *testing.T) {
 		ClientRevision: uint32(adm.Payload.Revision),
 		TargetTableID:  chEnv.Database + ".si_events",
 		RowIDProfileID: payloadexec.RowIDProfileID,
+		StatementKind:  sicore.StatementKindCodeInsert,
 	}
 	if got, err := validator.ValidateStatementV2(adm.UserJWS, want); err != nil || got != signer.Address() {
 		t.Fatalf("stored bytes do not match the signed envelope: signer=%s err=%v", got, err)
