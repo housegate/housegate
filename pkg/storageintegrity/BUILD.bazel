@@ -25,6 +25,7 @@ go_library(
     importpath = "github.com/housegate/housegate/pkg/storageintegrity",
     visibility = ["//visibility:public"],
     deps = [
+        "//pkg/auth",
         "//pkg/replay",
         "//pkg/replay/nativepayload",
         "//pkg/replay/payloadexec",
@@ -58,6 +59,7 @@ go_test(
     ],
     embed = [":storageintegrity"],
     deps = [
+        "//pkg/auth",
         "//pkg/lthash",
         "//pkg/replay",
         "//pkg/replay/payloadexec",
