@@ -10,6 +10,8 @@
 
 **Spec:** [docs/superpowers/specs/2026-08-19-storage-integrity-verification-restoration-design.md](../specs/2026-08-19-storage-integrity-verification-restoration-design.md) (Spec J). Roadmap context: [docs/superpowers/specs/2026-08-19-storage-integrity-remediation-roadmap.md](../specs/2026-08-19-storage-integrity-remediation-roadmap.md).
 
+> **Execution note (2026-08-24):** All original repository implementation and verification steps are complete, including the live terminal required checks, across HouseGate [#132](https://github.com/housegate/housegate/pull/132), rewriter-go [#31](https://github.com/housegate/rewriter-go/pull/31), rewriter-grpc [#51](https://github.com/housegate/rewriter/pull/51), and sentio-node [#179](https://github.com/sentioxyz/sentio-node/pull/179). Spec J remains Partially Implemented only because D2's base-selected source-policy workflow cannot be enforced at the organization level on the current plan; that separate plan/licensing blocker is tracked as P1 [#137](https://github.com/housegate/housegate/issues/137).
+
 ## Global Constraints
 
 - Repo checkouts on this machine: housegate `/Users/uranuswch/Dev/housegate/housegate`, rewriter-go `/Users/uranuswch/Dev/housegate/rewriter-go`, rewriter-grpc `/Users/uranuswch/Dev/housegate/rewriter-grpc`, sentio-node `/Users/uranuswch/Dev/sentio_xyz/sentio-node`, arbiter-core `/Users/uranuswch/Dev/sentio_xyz/arbiter-core`.
@@ -161,7 +163,7 @@ The **12 dead `want_sql`** cases (present but never compared by the pre-fix C++ 
 - Consumes: nothing from earlier tasks.
 - Produces: a green-or-red merge gate over all 56 unit targets. Tasks 2, 3 and 16 rely on `.github/workflows/ci.yml` already containing the enabled `Build & Test All` step.
 
-- [ ] **Step 1: Record the local baseline**
+- [x] **Step 1: Record the local baseline**
 
 Run from the housegate repo root:
 
@@ -171,7 +173,7 @@ bazel test --nocache_test_results --test_output=summary //... 2>&1 | tail -70
 
 Expected: `Executed 56 out of 56 tests: 56 tests pass.` Save the tail of that output — it goes in the PR description as the "before" evidence. Do **not** run `--config=ci` locally; on darwin `--platforms=//:linux_amd64` has no matching test toolchain and Bazel aborts analysis before running anything.
 
-- [ ] **Step 2: Enable the step**
+- [x] **Step 2: Enable the step**
 
 In `.github/workflows/ci.yml`, replace lines 54-55:
 
@@ -194,7 +196,7 @@ with:
 
 and change line 38's job timeout from `timeout-minutes: 15` to `timeout-minutes: 30` (a cold cache has to build and run 56 targets where it previously only built them).
 
-- [ ] **Step 3: Commit and push the branch, then read the runner output**
+- [x] **Step 3: Commit and push the branch, then read the runner output**
 
 ```bash
 git checkout -b feat/ci-run-unit-suite
@@ -206,7 +208,7 @@ gh pr create --fill
 
 Open the `Build` job log. Record the `Executed N out of M tests` line.
 
-- [ ] **Step 4: Handle fallout, if the linux runner disagrees with the darwin baseline**
+- [x] **Step 4: Handle fallout, if the linux runner disagrees with the darwin baseline**
 
 If the runner is green (the expected outcome given Step 1), skip to Step 5.
 
@@ -231,7 +233,7 @@ If any target fails, for **each** failing target decide fix-or-quarantine and do
         run: bazel test --config=ci //... --test_tag_filters=-ci-quarantine
 ```
 
-- [ ] **Step 5: Prove the gate is real — deliberately break an assertion**
+- [x] **Step 5: Prove the gate is real — deliberately break an assertion**
 
 Spec §5 requires red-on-break, not merely observed-green. Edit `pkg/storageintegrity/ack2_gate_test.go`, in `TestAck2Gate_AllFiveConditionsGrantAck2`, changing:
 
@@ -259,11 +261,11 @@ git commit -m "test: deliberate break to prove the CI gate (revert next commit)"
 git push
 ```
 
-- [ ] **Step 6: Observe red**
+- [x] **Step 6: Observe red**
 
 Wait for the `Build` job. Expected: FAILED on `//pkg/storageintegrity:storageintegrity_test`, with `SPEC-J GATE PROOF` in the log. Screenshot or copy the failing line into the PR description. If the job is green, the gate is not wired — stop and re-check Step 2 before continuing.
 
-- [ ] **Step 7: Revert the break and observe green**
+- [x] **Step 7: Revert the break and observe green**
 
 ```bash
 git revert --no-edit HEAD
@@ -272,7 +274,7 @@ git push
 
 Expected: the `Build` job returns to PASSED with `Executed 56 out of 56 tests`.
 
-- [ ] **Step 8: Update `CLAUDE.md`**
+- [x] **Step 8: Update `CLAUDE.md`**
 
 In the `## CI` section, replace the sentence beginning "- **Build** — `bazel build //...`." with:
 
@@ -280,7 +282,7 @@ In the `## CI` section, replace the sentence beginning "- **Build** — `bazel b
 - **Build** — `bazel build //...` followed by `bazel test --config=ci //...`, which runs all 56 unit targets as a merge gate (Spec J D1). `--config=ci` pins `--platforms=//:linux_amd64`, so this exact invocation only resolves a test toolchain on the linux/x64 runner; locally use plain `bazel test //...`. Integration targets are tagged `manual` and are not reached by this step.
 ```
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add CLAUDE.md
@@ -300,7 +302,7 @@ git push
 - Consumes: nothing.
 - Produces: all eight nested `AGENTS.md` files present in `git ls-files`, which is the precondition Task 3's CI check asserts.
 
-- [ ] **Step 1: Confirm the untracked set before touching anything**
+- [x] **Step 1: Confirm the untracked set before touching anything**
 
 ```bash
 { git ls-files --others --ignored --exclude-standard -- '*AGENTS.md'
@@ -310,7 +312,7 @@ git push
 
 Expected: exactly the eight paths listed in "Verified Baseline Facts". The `grep` filter matters — without it `git ls-files --others --ignored` also emits collapsed ignored directories such as `tools/da-mvp/contracts/lib/forge-std/`.
 
-- [ ] **Step 2: Replace `pkg/replay/AGENTS.md` in full**
+- [x] **Step 2: Replace `pkg/replay/AGENTS.md` in full**
 
 Every load-bearing sentence in the current file is false. Overwrite it with:
 
@@ -363,7 +365,7 @@ bazel test //pkg/integration:integration_test --test_filter='TestCHReplay|Test.*
 ```
 ````
 
-- [ ] **Step 3: Force-add all eight files**
+- [x] **Step 3: Force-add all eight files**
 
 The global ignore rule means plain `git add` is a silent no-op. Use `-f`:
 
@@ -379,7 +381,7 @@ git add -f \
   tools/da-mvp/AGENTS.md
 ```
 
-- [ ] **Step 4: Verify all eight are now tracked**
+- [x] **Step 4: Verify all eight are now tracked**
 
 ```bash
 git ls-files '*AGENTS.md'
@@ -387,7 +389,7 @@ git ls-files '*AGENTS.md'
 
 Expected: nine lines — the root `AGENTS.md` plus the eight above. Then re-run the Step 1 detection command; expected: no output.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git commit -m "docs: track nested AGENTS.md and correct pkg/replay guidance
@@ -418,7 +420,7 @@ housegate's pkg/replay in 63 places. Spec J D6."
 2. **CI manifest check.** Asserts every path in the committed manifest is present and tracked. This is the half that works in a clean checkout, and it is the reason the manifest has to exist as a committed file: a script that only scans the working tree sees nothing when a path is deleted *and the deletion committed*, so it would pass exactly when it should fail. The manifest is the expected set; the tree is the actual set; the check compares them in both directions — manifest-minus-tree catches a committed deletion, and tree-minus-manifest catches a file added without being registered, which would otherwise leave the deletion gate with a hole for every file added after the manifest was written.
 3. **Local visibility.** With (1) in place a newly created nested `AGENTS.md` appears in the author's own `git status`, which is where it has to be caught. The script's untracked scan serves that local case.
 
-- [ ] **Step 0: Add the repo-level negation and prove it works**
+- [x] **Step 0: Add the repo-level negation and prove it works**
 
 Append to the repo-root `.gitignore`:
 
@@ -445,7 +447,7 @@ rm -rf pkg/tmpcheck
 ```
 Expected: `?? pkg/tmpcheck/AGENTS.md` appears. Before the negation it does not.
 
-- [ ] **Step 0b: Create the manifest**
+- [x] **Step 0b: Create the manifest**
 
 `scripts/agents-md-manifest.txt` — the expected set, one path per line. Generate it from the tracked state after Task 2, so it cannot disagree with reality at creation time:
 
@@ -459,7 +461,7 @@ cat scripts/agents-md-manifest.txt
 ```
 Expected: 9 lines — the root `AGENTS.md` plus the 8 nested files Task 2 tracked.
 
-- [ ] **Step 0c: Prove the manifest check catches a committed deletion**
+- [x] **Step 0c: Prove the manifest check catches a committed deletion**
 
 This is the case the working-tree scan cannot see, so it is worth proving before writing the script:
 
@@ -474,7 +476,7 @@ git status --porcelain | grep AGENTS.md; echo "restore clean=$?"
 ```
 Expected: `diff exit=1` with `> pkg/replay/AGENTS.md` — the manifest names a path the tree no longer tracks. Then `restore clean=1` (no AGENTS.md line in `git status`), confirming the file is back before continuing.
 
-- [ ] **Step 1: Write the failing check by hand first**
+- [x] **Step 1: Write the failing check by hand first**
 
 Before creating the script, prove the detection command distinguishes the two states. Untrack one file temporarily:
 
@@ -491,7 +493,7 @@ Expected: one line, `pkg/chproto/AGENTS.md`. Restore it:
 git add -f pkg/chproto/AGENTS.md
 ```
 
-- [ ] **Step 2: Create the script**
+- [x] **Step 2: Create the script**
 
 `scripts/check-agents-md-tracked.sh`:
 
@@ -567,7 +569,7 @@ echo "ok: every AGENTS.md in the tree is tracked"
 chmod +x scripts/check-agents-md-tracked.sh
 ```
 
-- [ ] **Step 3: Run it — expect pass**
+- [x] **Step 3: Run it — expect pass**
 
 ```bash
 ./scripts/check-agents-md-tracked.sh
@@ -575,7 +577,7 @@ chmod +x scripts/check-agents-md-tracked.sh
 
 Expected: `ok: every AGENTS.md in the tree is tracked`, exit 0.
 
-- [ ] **Step 4: Run it against an untracked file — expect fail**
+- [x] **Step 4: Run it against an untracked file — expect fail**
 
 ```bash
 git rm --cached pkg/proxy/AGENTS.md
@@ -585,7 +587,7 @@ git add -f pkg/proxy/AGENTS.md
 
 Expected: the error listing `pkg/proxy/AGENTS.md` and `exit=1`.
 
-- [ ] **Step 5: Wire it into CI**
+- [x] **Step 5: Wire it into CI**
 
 The check needs no Bazel and no self-hosted runner, so it belongs in the `release-tooling` job where it also runs for fork PRs. In `.github/workflows/ci.yml`, append to the `release-tooling` job's steps (after the `Test Homebrew formula updater` step):
 
@@ -597,7 +599,7 @@ The check needs no Bazel and no self-hosted runner, so it belongs in the `releas
         run: ./scripts/check-agents-md-tracked.sh
 ```
 
-- [ ] **Step 6: Commit and observe green in CI**
+- [x] **Step 6: Commit and observe green in CI**
 
 ```bash
 # Stage everything this task created. Omitting .gitignore or the manifest
@@ -611,7 +613,7 @@ git push
 
 Expected: `Release tooling` job green with `ok: every AGENTS.md in the tree is tracked`.
 
-- [ ] **Step 7: Prove the gate — untrack a file in CI and observe red**
+- [x] **Step 7: Prove the gate — untrack a file in CI and observe red**
 
 ```bash
 git rm --cached pkg/rewriter/AGENTS.md
@@ -621,7 +623,7 @@ git push
 
 Expected: the `Release tooling` job fails with `error: untracked AGENTS.md files found:` and `pkg/rewriter/AGENTS.md`. Copy that into the PR description.
 
-- [ ] **Step 8: Revert and observe green**
+- [x] **Step 8: Revert and observe green**
 
 ```bash
 git revert --no-edit HEAD
@@ -630,7 +632,7 @@ git push
 
 Expected: `Release tooling` green again.
 
-- [ ] **Step 9: Verify spec §5's `git status` acceptance line**
+- [x] **Step 9: Verify spec §5's `git status` acceptance line**
 
 ```bash
 git status --porcelain | grep -i 'AGENTS.md' || echo "clean: no untracked AGENTS.md"
@@ -650,7 +652,7 @@ Expected: `clean: no untracked AGENTS.md`.
 - Consumes: nothing.
 - Produces: `func NormalizeSIIdentifierQuotes(sql string) string` in package `harness`. Tasks 5, 6 and 7 call it; Task 8 ports the identical state machine to C++.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `internal/harness/sinormalize_test.go`:
 
@@ -696,7 +698,7 @@ func TestNormalizeSIIdentifierQuotes_LiteralQuotingBugIsNotHidden(t *testing.T) 
 }
 ```
 
-- [ ] **Step 2: Run it to confirm it fails**
+- [x] **Step 2: Run it to confirm it fails**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go
@@ -705,7 +707,7 @@ go test ./internal/harness/ -run TestNormalizeSIIdentifierQuotes
 
 Expected: FAIL with `undefined: NormalizeSIIdentifierQuotes`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `internal/harness/sinormalize.go`:
 
@@ -804,7 +806,7 @@ func NormalizeSIIdentifierQuotes(sql string) string {
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 ```bash
 go test ./internal/harness/ -run TestNormalizeSIIdentifierQuotes -v
@@ -812,7 +814,7 @@ go test ./internal/harness/ -run TestNormalizeSIIdentifierQuotes -v
 
 Expected: PASS, 13 subtests plus the literal-bug test.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git checkout -b feat/si-corpus-contract
@@ -840,7 +842,7 @@ git commit -m "test: add literal-aware SI identifier-quote normalization"
 
   Task 6 calls `LoadSICorpus`/`SICorpusPath`; Task 7 calls `SICase` and its `options()`; Task 9/10 mirror `ValidateSICorpus`'s rules in C++.
 
-- [ ] **Step 1: Write the corpus schema and validator**
+- [x] **Step 1: Write the corpus schema and validator**
 
 Create `internal/harness/sicorpus_test.go`:
 
@@ -1080,7 +1082,7 @@ func LegacyCoverageReport(raw []byte) (vacuous, deadWantSQL []string, err error)
 }
 ```
 
-- [ ] **Step 2: Write the failing contract meta-test**
+- [x] **Step 2: Write the failing contract meta-test**
 
 Create `internal/harness/sicorpus_contract_test.go`:
 
@@ -1176,7 +1178,7 @@ func TestSICorpusLegacyCoverageReport(t *testing.T) {
 }
 ```
 
-- [ ] **Step 3: Run the meta-test — expect the corpus to FAIL and the report to PASS**
+- [x] **Step 3: Run the meta-test — expect the corpus to FAIL and the report to PASS**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go
@@ -1190,7 +1192,7 @@ Expected, before Task 6 migrates the data:
 
 Copy both `t.Logf` lines into the PR description — they are spec §5's "must report the 7 vacuous cases and the 12 unasserted `want_sql`s" evidence.
 
-- [ ] **Step 4: Commit (with the contract test knowingly red)**
+- [x] **Step 4: Commit (with the contract test knowingly red)**
 
 The corpus migration is Task 6; committing a red meta-test between two commits on the same branch is fine because the branch is not merged until Task 7 finishes.
 
@@ -1214,7 +1216,7 @@ commit. Spec J D3."
 - Consumes: `LoadSICorpus`, `SICorpusPath`, `SICase`, `UpdateGoldenEnv`, `NormalizeSIIdentifierQuotes` (Tasks 4-5); `newWriteRewriter` (`writes_golden_test.go:131`), `DialOracle`/`Oracle.Rewrite` (`oracle.go`).
 - Produces: `func (c SICase) options() []*pb.RewriteOption` on the new type (moved from the deleted `siCase`), and a migrated corpus file that satisfies `ValidateSICorpus`. Task 9 copies that exact file into rewriter-grpc.
 
-- [ ] **Step 1: Move `options()` onto `SICase` and delete the old local types**
+- [x] **Step 1: Move `options()` onto `SICase` and delete the old local types**
 
 In `storage_integrity_golden_test.go`, delete `siDynamicJSON`, `siArgsJSON`, `siTableJSON`, `siCase` (lines 15-55) and `loadSICases` (lines 122-133). Re-point the receiver and the field names of the existing `options()` method (lines 84-120) at the new types:
 
@@ -1258,7 +1260,7 @@ func (c SICase) options() []*pb.RewriteOption {
 }
 ```
 
-- [ ] **Step 2: Add the regeneration writer**
+- [x] **Step 2: Add the regeneration writer**
 
 Append to `storage_integrity_golden_test.go`:
 
@@ -1284,7 +1286,7 @@ func writeSICorpus(t *testing.T, cases []SICase) {
 }
 ```
 
-- [ ] **Step 3: Add the `UPDATE_GOLDEN` branch to the runner**
+- [x] **Step 3: Add the `UPDATE_GOLDEN` branch to the runner**
 
 Inside `TestStorageIntegrityGolden`, immediately after `semEq := semanticSQLEq(e)`, insert:
 
@@ -1338,7 +1340,7 @@ Change the loop header from `for _, c := range loadSICases(t) {` to `for i := ra
 
 Add `"bytes"` and `"os"` to the import block if not already present (`os` is).
 
-- [ ] **Step 4: Build the FFI lib and start the C++ oracle**
+- [x] **Step 4: Build the FFI lib and start the C++ oracle**
 
 Regeneration needs both engines. Build the Go engine's FFI lib once:
 
@@ -1363,14 +1365,14 @@ grpcurl -plaintext 127.0.0.1:50051 list 2>/dev/null || \
   curl -sf -XPOST 127.0.0.1:50052/healthz && echo " oracle up"
 ```
 
-- [ ] **Step 5: Save the pre-migration corpus for the semantic diff**
+- [x] **Step 5: Save the pre-migration corpus for the semantic diff**
 
 ```bash
 cp internal/harness/testdata/storage_integrity_cases.json \
    /tmp/si_cases_prefix.json
 ```
 
-- [ ] **Step 6: Regenerate**
+- [x] **Step 6: Regenerate**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go
@@ -1384,7 +1386,7 @@ Expected: PASS with a final `rewrote testdata/storage_integrity_cases.json: 178 
 
 Note that the file is reformatted wholesale — the committed corpus is hand-formatted with compact inline objects, and the encoder emits fully expanded two-space indentation. The raw `git diff` is therefore useless for review; Step 7 exists precisely for that.
 
-- [ ] **Step 7: Review the migration semantically, not textually**
+- [x] **Step 7: Review the migration semantically, not textually**
 
 Compare the pre- and post-migration corpora key by key, ignoring the three keys the migration is allowed to change:
 
@@ -1413,7 +1415,7 @@ Expected: no `UNEXPECTED CHANGE` lines, `cases: 178`, `sql_exact still present: 
 
 If any `UNEXPECTED CHANGE` line appears, stop: the regeneration touched something it should not have, and the schema struct's `omitempty` tags or field set is wrong.
 
-- [ ] **Step 8: Fix the three reject cases that carry no `want_message_contains`**
+- [x] **Step 8: Fix the three reject cases that carry no `want_message_contains`**
 
 `si_optimize_rejected`, `si_detach_rejected` and `si_attach_rejected` violate R3. Run the engine once to read each one's real message:
 
@@ -1438,7 +1440,7 @@ for m,n in sorted(seen.items(), key=lambda kv:-kv[1])[:8]: print(n, repr(m))
 
 Use the dominant phrasing that actually appears in each of the three messages.
 
-- [ ] **Step 9: Remove the seven vacuous `want_sql_contains` entries**
+- [x] **Step 9: Remove the seven vacuous `want_sql_contains` entries**
 
 D3 makes each of these a hard violation. For each case, delete the vacuous entries; the newly generated `want_sql` / per-engine pins carry the assertion. For the five cases where a physically-rewritten form exists, replace the vacuous entry with the rewritten substring **read out of the regenerated pin** (do not invent it):
 
@@ -1454,7 +1456,7 @@ D3 makes each of these a hard violation. For each case, delete the vacuous entri
 
 The replacement value must be verbatim from the file, and it must not be a substring of the case's input SQL — the validator re-checks that in Step 10.
 
-- [ ] **Step 10: Run the contract meta-test — expect green**
+- [x] **Step 10: Run the contract meta-test — expect green**
 
 ```bash
 go test ./internal/harness/ -run 'TestSICorpus|TestValidateSICorpus' -v
@@ -1462,7 +1464,7 @@ go test ./internal/harness/ -run 'TestSICorpus|TestValidateSICorpus' -v
 
 Expected: `TestSICorpusContract` PASS, all four validator unit tests PASS, `TestSICorpusLegacyCoverageReport` PASS (it reads the baseline blob from git, not the working tree, so it still reports 7 and 12).
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ```bash
 git add internal/harness/storage_integrity_golden_test.go \
@@ -1486,7 +1488,7 @@ removes the seven vacuous want_sql_contains entries. Spec J D3."
 - Consumes: everything from Tasks 4-6.
 - Produces: a Go runner in which every non-reject case is compared byte-exactly after normalization, and `allow_sql_divergence` selects `want_sql_go`. Task 9 mirrors this comparison in C++.
 
-- [ ] **Step 1: Replace the SQL-comparison block**
+- [x] **Step 1: Replace the SQL-comparison block**
 
 In `TestStorageIntegrityGolden`, replace the `if c.Reject { … } else { switch { case c.SQLExact: … case c.WantSQL != "": … } }` block with:
 
@@ -1509,7 +1511,7 @@ In `TestStorageIntegrityGolden`, replace the `if c.Reject { … } else { switch 
 			}
 ```
 
-- [ ] **Step 2: Delete the now-unused semantic path for `want_sql`**
+- [x] **Step 2: Delete the now-unused semantic path for `want_sql`**
 
 `semanticSQLEq` is still used by the oracle comparison further down; leave that call site alone. Remove nothing else. Confirm the package still builds:
 
@@ -1520,7 +1522,7 @@ go vet ./internal/harness/
 
 Expected: no output.
 
-- [ ] **Step 3: Run the golden suite with the engine — expect green**
+- [x] **Step 3: Run the golden suite with the engine — expect green**
 
 ```bash
 POLYGLOT_SQL_FFI_PATH="$PWD/third_party/lib/libpolyglot_sql_ffi.dylib" \
@@ -1529,7 +1531,7 @@ POLYGLOT_SQL_FFI_PATH="$PWD/third_party/lib/libpolyglot_sql_ffi.dylib" \
 
 Expected: `ok  github.com/housegate/rewriter-go/internal/harness`.
 
-- [ ] **Step 4: Prove the gate — corrupt one pin and observe red**
+- [x] **Step 4: Prove the gate — corrupt one pin and observe red**
 
 ```bash
 python3 - <<'EOF'
@@ -1547,7 +1549,7 @@ POLYGLOT_SQL_FFI_PATH="$PWD/third_party/lib/libpolyglot_sql_ffi.dylib" \
 
 Expected: FAIL with `sql (exact after normalization)` showing `hg_safe` got vs `hg_unsafe` want. Copy that into the PR description.
 
-- [ ] **Step 5: Prove a *divergent* case is also gated**
+- [x] **Step 5: Prove a *divergent* case is also gated**
 
 The pre-fix runner compared these only semantically and the C++ side not at all, so this second proof matters:
 
@@ -1567,7 +1569,7 @@ POLYGLOT_SQL_FFI_PATH="$PWD/third_party/lib/libpolyglot_sql_ffi.dylib" \
 
 Expected: FAIL on the same message.
 
-- [ ] **Step 6: Restore and observe green**
+- [x] **Step 6: Restore and observe green**
 
 ```bash
 git checkout -- internal/harness/testdata/storage_integrity_cases.json
@@ -1577,7 +1579,7 @@ POLYGLOT_SQL_FFI_PATH="$PWD/third_party/lib/libpolyglot_sql_ffi.dylib" \
 
 Expected: `ok`.
 
-- [ ] **Step 7: Record the published corpus digest**
+- [x] **Step 7: Record the published corpus digest**
 
 ```bash
 shasum -a 256 internal/harness/testdata/storage_integrity_cases.json | tee /tmp/si_corpus_sha256.txt
@@ -1585,7 +1587,7 @@ shasum -a 256 internal/harness/testdata/storage_integrity_cases.json | tee /tmp/
 
 Task 9 copies this exact file into rewriter-grpc and Task 10 asserts this digest in both repos.
 
-- [ ] **Step 8: Commit and open the PR**
+- [x] **Step 8: Commit and open the PR**
 
 ```bash
 git add internal/harness/storage_integrity_golden_test.go
@@ -1606,7 +1608,7 @@ gh pr create --fill
 - Consumes: the state machine specified in Task 4's doc comment.
 - Produces: `si_corpus::NormalizeSIIdentifierQuotes(const std::string&) -> std::string` in `tests/si_normalize.h`. Tasks 9 and 10 include it.
 
-- [ ] **Step 1: Create the header**
+- [x] **Step 1: Create the header**
 
 `tests/si_normalize.h`:
 
@@ -1678,11 +1680,11 @@ inline std::string NormalizeSIIdentifierQuotes(const std::string &sql) {
 }  // namespace si_corpus
 ```
 
-- [ ] **Step 2: Delete the old global-replace helper**
+- [x] **Step 2: Delete the old global-replace helper**
 
 In `tests/rewriter_test.cc`, delete the whole `normalizeSIIdentifierQuotes` function (`:4541-4547`) and add `#include "si_normalize.h"` to the file's include block.
 
-- [ ] **Step 3: Add the mirror tests**
+- [x] **Step 3: Add the mirror tests**
 
 Add near the top of the storage-integrity section of `tests/rewriter_test.cc` (outside the anonymous namespace is fine; keep it adjacent to the corpus test):
 
@@ -1711,7 +1713,7 @@ TEST(SINormalize, LiteralQuotingBugIsNotHidden) {
 }
 ```
 
-- [ ] **Step 4: Build and run on the build box**
+- [x] **Step 4: Build and run on the build box**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-grpc
@@ -1727,7 +1729,7 @@ ssh -p 30100 sentio@64.38.131.242 \
 
 Expected: `[  PASSED  ] 2 tests.`
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/si_normalize.h tests/rewriter_test.cc
@@ -1748,7 +1750,7 @@ git commit -m "test: replace the global backtick replace with a literal-aware no
 - Consumes: `si_corpus::NormalizeSIIdentifierQuotes` (Task 8); the migrated corpus file produced by Task 6.
 - Produces: `si_corpus::Case` (with `ExpectedSQL()`), `si_corpus::LoadCases(path, &violations)`, `si_corpus::ValidateCorpus(cases)` — Task 10's meta-test consumes them.
 
-- [ ] **Step 1: Publish the migrated corpus byte-identically**
+- [x] **Step 1: Publish the migrated corpus byte-identically**
 
 ```bash
 cp /Users/uranuswch/Dev/housegate/rewriter-go/internal/harness/testdata/storage_integrity_cases.json \
@@ -1760,7 +1762,7 @@ diff <(shasum -a 256 < /Users/uranuswch/Dev/housegate/rewriter-go/internal/harne
 
 Expected: `byte-identical`.
 
-- [ ] **Step 2: Create the C++ corpus schema, loader and validator**
+- [x] **Step 2: Create the C++ corpus schema, loader and validator**
 
 `tests/si_corpus.h`:
 
@@ -1992,7 +1994,7 @@ inline std::vector<std::string> ValidateCorpus(const std::vector<Case> &cases) {
 }  // namespace si_corpus
 ```
 
-- [ ] **Step 3: Delete the duplicated structs and loader from `rewriter_test.cc`**
+- [x] **Step 3: Delete the duplicated structs and loader from `rewriter_test.cc`**
 
 Delete `struct SIAccessed` and `struct SIGoldenCase` (`:4504-4517`), `jsonStrings` (`:4533-4539`) and `loadSIGoldenCases` (`:4595-4639`). Add `#include "si_corpus.h"` and, inside the anonymous namespace, the two aliases the rest of the file uses:
 
@@ -2009,7 +2011,7 @@ std::vector<SIGoldenCase> loadSIGoldenCases() {
 
 `applyStorageIntegrityArgs` stays in `rewriter_test.cc` (it depends on the proto types) but must now use `si_corpus::JsonStrings` instead of the deleted local `jsonStrings`.
 
-- [ ] **Step 4: Make the runner compare `want_sql` unconditionally**
+- [x] **Step 4: Make the runner compare `want_sql` unconditionally**
 
 Replace `rewriter_test.cc:4685-4689`:
 
@@ -2040,7 +2042,7 @@ with:
     EXPECT_EQ(normalized_sql.find(s), std::string::npos) << "unexpected " << s;
 ```
 
-- [ ] **Step 5: Make the new headers reachable from the test target**
+- [x] **Step 5: Make the new headers reachable from the test target**
 
 In `tests/CMakeLists.txt`, add the test directory to the include path so `#include "si_corpus.h"` resolves regardless of the compiler's working directory:
 
@@ -2053,7 +2055,7 @@ target_include_directories(rewriter_tests PRIVATE
 )
 ```
 
-- [ ] **Step 6: Build and run the corpus suite on the build box**
+- [x] **Step 6: Build and run the corpus suite on the build box**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-grpc
@@ -2068,7 +2070,7 @@ ssh -p 30100 sentio@64.38.131.242 \
 
 Expected: `[  PASSED  ] 178 tests.` If a case fails, the C++ engine genuinely disagrees with the pin generated in Task 6 — that is a real finding, not a fixture problem. Diagnose it against the SI design; **do not** relax the pin to make it green. If the disagreement is legitimate engine divergence, the fix is to re-run Task 6 Step 6 so the case gets per-engine pins.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add tests/si_corpus.h tests/rewriter_test.cc tests/CMakeLists.txt tests/testdata/storage_integrity_cases.json
@@ -2093,7 +2095,7 @@ allow_sql_divergence was never even parsed. Spec J D3."
 - Consumes: `si_corpus::ValidateCorpus`, `si_corpus::LoadCases`, `si_corpus::Fingerprint` (Task 9); `ValidateSICorpus`, `SICorpusPath` (Task 5).
 - Produces: `SICorpusFingerprint`/`SICorpusBytes`/`SICorpusCases` in Go and `kCorpusFingerprint`/`kCorpusBytes`/`kCorpusCases` in C++, pinned to the same three values.
 
-- [ ] **Step 1: Compute the three pinned values from the published file**
+- [x] **Step 1: Compute the three pinned values from the published file**
 
 ```bash
 python3 - <<'EOF'
@@ -2112,7 +2114,7 @@ shasum -a 256 /Users/uranuswch/Dev/housegate/rewriter-go/internal/harness/testda
 
 Record all four numbers. `cases` must be `178`.
 
-- [ ] **Step 2: Pin them in rewriter-go**
+- [x] **Step 2: Pin them in rewriter-go**
 
 Append to `internal/harness/sicorpus_test.go`:
 
@@ -2165,7 +2167,7 @@ func TestSICorpusIsBytePinned(t *testing.T) {
 
 Add `"os"` to that file's imports.
 
-- [ ] **Step 3: Pin them in rewriter-grpc**
+- [x] **Step 3: Pin them in rewriter-grpc**
 
 Append inside `namespace si_corpus` in `tests/si_corpus.h`:
 
@@ -2178,7 +2180,7 @@ constexpr size_t kCorpusBytes = 0;          // <-- replace with the Step 1 value
 constexpr size_t kCorpusCases = 178;
 ```
 
-- [ ] **Step 4: Add the C++ meta-tests**
+- [x] **Step 4: Add the C++ meta-tests**
 
 Add to `tests/rewriter_test.cc`, next to the corpus suite:
 
@@ -2211,7 +2213,7 @@ TEST(StorageIntegrityCorpus, IsBytePinnedToRewriterGo) {
 }
 ```
 
-- [ ] **Step 5: Run both meta-tests — expect green**
+- [x] **Step 5: Run both meta-tests — expect green**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go
@@ -2231,7 +2233,7 @@ ssh -p 30100 sentio@64.38.131.242 \
 
 Expected: `[  PASSED  ] 4 tests.`
 
-- [ ] **Step 6: Prove the vacuity check fires — introduce a violating case, observe red, revert**
+- [x] **Step 6: Prove the vacuity check fires — introduce a violating case, observe red, revert**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go
@@ -2256,7 +2258,7 @@ go test ./internal/harness/ -run TestSICorpusContract
 
 Expected: `ok`.
 
-- [ ] **Step 7: Prove the byte-identity gate fires**
+- [x] **Step 7: Prove the byte-identity gate fires**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go
@@ -2267,7 +2269,7 @@ git checkout -- internal/harness/testdata/storage_integrity_cases.json
 
 Expected: FAIL naming both the size and the fingerprint mismatch, then a clean tree.
 
-- [ ] **Step 8: Commit in both repos**
+- [x] **Step 8: Commit in both repos**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go
@@ -2292,7 +2294,7 @@ git commit -m "test: add the corpus contract meta-test and byte-identity pin"
 - Consumes: nothing from other tasks. `internal/harness` imports `internal/engine`, so the `UPDATE_GOLDEN` constant cannot be shared without an import cycle — it is duplicated locally with a cross-reference comment.
 - Produces: a `TestCharacterizeAST` that never writes unless `UPDATE_GOLDEN=1`, and three regenerated fixtures. `internal/engine/ast_test.go` and `nodes_test.go` stop being order-dependent on it.
 
-- [ ] **Step 1: Verify the drift before changing anything**
+- [x] **Step 1: Verify the drift before changing anything**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go
@@ -2305,7 +2307,7 @@ git checkout -- internal/engine/testdata/ast-shapes/
 
 Expected: exactly three changed files — `alter_delete.json`, `create_mv_to.json`, `create_view.json`. If more files move, the pinned polyglot differs from the one measured for this plan; record the new set and continue with it.
 
-- [ ] **Step 2: Rewrite the test to compare by default**
+- [x] **Step 2: Rewrite the test to compare by default**
 
 Replace `TestCharacterizeAST` (`characterize_test.go:68-96`) with:
 
@@ -2397,7 +2399,7 @@ import (
 )
 ```
 
-- [ ] **Step 3: Run it — expect three failures**
+- [x] **Step 3: Run it — expect three failures**
 
 ```bash
 POLYGLOT_SQL_FFI_PATH="$PWD/third_party/lib/libpolyglot_sql_ffi.dylib" \
@@ -2406,7 +2408,7 @@ POLYGLOT_SQL_FFI_PATH="$PWD/third_party/lib/libpolyglot_sql_ffi.dylib" \
 
 Expected: `alter_delete`, `create_mv_to` and `create_view` reported stale; the other 38 pass. This is the D7 gate proving itself before the fixtures are fixed — record the output.
 
-- [ ] **Step 4: Regenerate the stale fixtures**
+- [x] **Step 4: Regenerate the stale fixtures**
 
 ```bash
 UPDATE_GOLDEN=1 POLYGLOT_SQL_FFI_PATH="$PWD/third_party/lib/libpolyglot_sql_ffi.dylib" \
@@ -2416,7 +2418,7 @@ git diff --stat -- internal/engine/testdata/ast-shapes/
 
 Expected: exactly the same three files changed. Review the diffs: `alter_delete.json`'s `Delete { where_clause }` node becomes `Raw { sql: "DELETE WHERE y=2" }`, and `create_view.json` / `create_mv_to.json` flip `"security_sql_style"` from `true` to `false`. These are the pinned polyglot's real output; the committed files predate the v0.8.1 bump.
 
-- [ ] **Step 5: Run the whole engine and harness suites**
+- [x] **Step 5: Run the whole engine and harness suites**
 
 ```bash
 POLYGLOT_SQL_FFI_PATH="$PWD/third_party/lib/libpolyglot_sql_ffi.dylib" \
@@ -2425,7 +2427,7 @@ POLYGLOT_SQL_FFI_PATH="$PWD/third_party/lib/libpolyglot_sql_ffi.dylib" \
 
 Expected: all packages `ok`. In particular `ast_test.go`'s `TestNodeKindFromSnapshots` and `nodes_test.go`'s readers must still pass against the regenerated fixtures — `alter_delete` is not in `TestNodeKindFromSnapshots`'s map, and `nodes_test.go` reads `select*`, `use` and `create_*` shapes.
 
-- [ ] **Step 6: Prove `make test` no longer mutates the tree**
+- [x] **Step 6: Prove `make test` no longer mutates the tree**
 
 ```bash
 make test
@@ -2443,7 +2445,7 @@ git stash pop
 
 Expected: `clean after make test`.
 
-- [ ] **Step 7: Add the CI step**
+- [x] **Step 7: Add the CI step**
 
 In `.github/workflows/ci.yml`, in the `ffi` job, insert after `- run: make test`:
 
@@ -2458,7 +2460,7 @@ In `.github/workflows/ci.yml`, in the `ffi` job, insert after `- run: make test`
         run: git diff --exit-code --ignore-submodules=all
 ```
 
-- [ ] **Step 8: Prove the CI step fires**
+- [x] **Step 8: Prove the CI step fires**
 
 Locally reproduce what CI would see if the test still wrote:
 
@@ -2476,7 +2478,7 @@ git checkout -- internal/engine/testdata/ast-shapes/use.json
 
 Expected: a diff plus `exit=1`, then a clean tree.
 
-- [ ] **Step 9: Commit and push**
+- [x] **Step 9: Commit and push**
 
 ```bash
 git add internal/engine/characterize_test.go \
@@ -2505,7 +2507,7 @@ git push
 - Consumes: the corpus suite and meta-tests from Tasks 8-10 — the job's value is that it runs them.
 - Produces: a `test` job on `pull_request` and `push: main`, named so branch protection can require it.
 
-- [ ] **Step 1: One-time build-host prerequisite**
+- [x] **Step 1: One-time build-host prerequisite**
 
 `release.yml` uses `~/ci/rewriter` for tag builds. A PR job must not check a PR head out of that workdir while a release is building, so give CI its own. Create it once:
 
@@ -2534,7 +2536,7 @@ Expected: the first `rebuild` takes 15-20 minutes and leaves a warm `build/` so 
 ssh -p 30100 sentio@64.38.131.242 "ls -l ~/ci/rewriter-ci/build/rewriter_tests"
 ```
 
-- [ ] **Step 2: Create the workflow**
+- [x] **Step 2: Create the workflow**
 
 `.github/workflows/ci.yml`:
 
@@ -2645,7 +2647,7 @@ jobs:
           REMOTE
 ```
 
-- [ ] **Step 3: Push and observe green**
+- [x] **Step 3: Push and observe green**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-grpc
@@ -2657,7 +2659,7 @@ gh pr create --fill
 
 Expected: the `Build & test (build box)` job passes, with `storage-integrity corpus cases: 178` in the last step's log.
 
-- [ ] **Step 4: Prove the gate — break a corpus expectation, observe red**
+- [x] **Step 4: Prove the gate — break a corpus expectation, observe red**
 
 ```bash
 python3 - <<'EOF'
@@ -2680,7 +2682,7 @@ Expected: the job fails. Two assertions should fire, and both matter:
 
 Copy both failures into the PR description.
 
-- [ ] **Step 5: Revert and observe green**
+- [x] **Step 5: Revert and observe green**
 
 ```bash
 git revert --no-edit HEAD
@@ -2689,7 +2691,7 @@ git push
 
 Expected: the job returns to green.
 
-- [ ] **Step 6: Ask the operator to make the job required**
+- [x] **Step 6: Ask the operator to make the job required**
 
 Branch protection is not a repo file. Record in the PR description: *"Set `Build & test (build box)` as a required status check on `main` before merging."* This is an operator action; do not claim D2 complete without it.
 
@@ -2708,7 +2710,7 @@ Branch protection is not a repo file. Record in the PR description: *"Set `Build
 
 Read DEV-2 above before starting: this test deliberately does **not** call `standalone.Run`, because `Run` needs a full devnet before it reaches the bootstrap.
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 Create `standalone/storage_integrity_drift_ch_test.go`:
 
@@ -2861,7 +2863,7 @@ func TestStorageIntegrityProtocolTableDriftFailsBootstrap(t *testing.T) {
 
 `quoteSmokeIdentifier` already exists at `standalone/storage_integrity_smoke_test.go:352` in this package; reuse it rather than adding a second quoter.
 
-- [ ] **Step 2: Regenerate the Bazel target**
+- [x] **Step 2: Regenerate the Bazel target**
 
 ```bash
 cd /Users/uranuswch/Dev/sentio_xyz/sentio-node
@@ -2871,7 +2873,7 @@ git diff -- standalone/BUILD.bazel
 
 Expected: `storage_integrity_drift_ch_test.go` added to `go_test.srcs` and `@housegate//pkg/lthash` added to `deps`. If gazelle does not run in this repo, add both by hand.
 
-- [ ] **Step 3: Confirm the test skips without the env gate**
+- [x] **Step 3: Confirm the test skips without the env gate**
 
 ```bash
 bazel test //standalone:standalone_test --test_output=all \
@@ -2880,7 +2882,7 @@ bazel test //standalone:standalone_test --test_output=all \
 
 Expected: PASS with `--- SKIP` and the `set SENTIO_SI_CH_E2E=1` message. This is what keeps `bazel test //...` green for everyone else.
 
-- [ ] **Step 4: Run it for real against a local ClickHouse with Keeper**
+- [x] **Step 4: Run it for real against a local ClickHouse with Keeper**
 
 ```bash
 docker rm -f sn-drift-ch >/dev/null 2>&1 || true
@@ -2906,7 +2908,7 @@ SENTIO_SI_CH_E2E=1 CH_ADDR=127.0.0.1:19000 \
 
 Expected: PASS. The whole point is Phase 3 — if the run passes without ever entering Phase 3, the gate did not execute.
 
-- [ ] **Step 5: Prove Phase 3 is load-bearing**
+- [x] **Step 5: Prove Phase 3 is load-bearing**
 
 Temporarily change `2999` to the pinned value (`3000`) so nothing actually drifts:
 
@@ -2923,13 +2925,13 @@ mv standalone/storage_integrity_drift_ch_test.go.bak standalone/storage_integrit
 
 Expected: FAIL at `require.Error(t, driftErr)` — no drift means no refusal. That is the proof the assertion is real. Copy it into the PR description, then re-run Step 4 and confirm PASS again.
 
-- [ ] **Step 6: Tear down the local container**
+- [x] **Step 6: Tear down the local container**
 
 ```bash
 docker rm -f sn-drift-ch
 ```
 
-- [ ] **Step 7: Document the new gate in the README**
+- [x] **Step 7: Document the new gate in the README**
 
 In `README.md`, immediately after the `TestSchemaRegistryPhaseBSmoke` block, add:
 
@@ -2942,7 +2944,7 @@ SENTIO_SI_CH_E2E=1 CH_ADDR=127.0.0.1:9000 \
 ```
 ````
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git checkout -b feat/si-drift-ci
@@ -2968,7 +2970,7 @@ Spec J D5."
 - Consumes: `TestStorageIntegrityProtocolTableDriftFailsBootstrap` (Task 13) and the `SENTIO_SI_CH_E2E` / `CH_ADDR` contract.
 - Produces: an `integration-clickhouse` job whose shape mirrors arbiter-core's.
 
-- [ ] **Step 1: Copy the Keeper config**
+- [x] **Step 1: Copy the Keeper config**
 
 sentio-node's own README already points at this exact file as the reference configuration:
 
@@ -2983,7 +2985,7 @@ Expected: the `<clickhouse><keeper_server><tcp_port>9181</tcp_port>` preamble.
 
 Note on scope: arbiter-core's job runs **two** nodes with `clickhouse-shared-keeper-{server,client}.xml` because its `//verifier` and `//snode` tests assert cross-replica replication. The drift acceptance needs one node with a Keeper, which is what `clickhouse-keeper.xml` provides and what sentio-node's README already prescribes. Record in the job comment that the two-node shared-Keeper pair is the shape to copy if sentio-node later adds a replication assertion.
 
-- [ ] **Step 2: Add the job**
+- [x] **Step 2: Add the job**
 
 Append to `.github/workflows/ci.yml`, after the `build` job and before `docker-push`:
 
@@ -3057,7 +3059,7 @@ Append to `.github/workflows/ci.yml`, after the `build` job and before `docker-p
           docker rm -f "${CH_CONTAINER:-sentio-node-ci-clickhouse-${suffix}}" >/dev/null 2>&1 || true
 ```
 
-- [ ] **Step 3: Push and observe green**
+- [x] **Step 3: Push and observe green**
 
 ```bash
 git add scripts/ci/clickhouse-keeper.xml .github/workflows/ci.yml
@@ -3068,7 +3070,7 @@ gh pr create --fill
 
 Expected: `integration-clickhouse` green, and the `--test_output=all` log shows the test **running**, not skipping. Confirm the log does not contain `SKIP`.
 
-- [ ] **Step 4: Prove the gate — remove the tamper, observe red**
+- [x] **Step 4: Prove the gate — remove the tamper, observe red**
 
 ```bash
 sed -i.bak 's/parts_to_throw_insert = 2999/parts_to_throw_insert = 3000/' \
@@ -3080,7 +3082,7 @@ git push
 
 Expected: `integration-clickhouse` fails at `require.Error(t, driftErr)`. Copy the failure into the PR description.
 
-- [ ] **Step 5: Revert and observe green**
+- [x] **Step 5: Revert and observe green**
 
 ```bash
 git revert --no-edit HEAD
@@ -3089,7 +3091,7 @@ git push
 
 Expected: `integration-clickhouse` green again with the test running.
 
-- [ ] **Step 6: Confirm the existing suite is unaffected**
+- [x] **Step 6: Confirm the existing suite is unaffected**
 
 The `build` job runs `bazel test //...`, which now includes the new test with `SENTIO_SI_CH_E2E` unset. Check its log shows the target passing (the test skips inside it). Expected: no new failures in the `build` job.
 
@@ -3107,7 +3109,7 @@ The `build` job runs `bazel test //...`, which now includes the new test with `S
 
 **Why this task exists.** Task 13 proves the drift *logic* by driving the same production helper. It does not prove that `standalone.Run` calls that helper, or that it calls it before opening listeners — and the existing `storage_integrity_bootstrap_test.go` cannot close that gap: the 2026-08-19 review found it tautological, because it asserts an order over three closures the test itself constructs. Swapping the first two arguments at the real call site leaves it green. Review of this plan raised the same objection about Task 13's substitute. This task makes the ordering a value produced by production code.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 The previous draft of this task was wrong in two ways, both caught in review, and the replacement exists to avoid them: a plan built with no runnables cannot satisfy a `NotNil` assertion, and — the substantive point — assigning names to closures *by position* means swapping the closures at the call site just mislabels them, so the test still passes. The names must be bound to the functions in production code, and the test must check that binding, not the order of a list it was handed.
 
@@ -3173,12 +3175,12 @@ func TestStorageIntegrityBootstrapPrecedesListeners(t *testing.T) {
 
 `sourceLineOf` is a small helper in the same file that scans `standalone.go` for the first occurrence of a literal and fails if it is absent, so renaming or deleting either call site fails the test rather than silently passing.
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `bazel test //standalone:standalone_test --test_filter='TestStorageIntegrityBootPlan|TestRunStorageIntegrityProtocolBootstrapStops|TestStorageIntegrityBootstrapPrecedes' --test_output=all`
 Expected: FAIL — `undefined: storageIntegrityBootDeps`.
 
-- [ ] **Step 3: Bind the names in production code**
+- [x] **Step 3: Bind the names in production code**
 
 In `standalone/standalone.go`, replace the three inline closures at `:316-340` with named methods on a deps struct, and have the plan bind each name to its method:
 
@@ -3227,16 +3229,16 @@ func (d *storageIntegrityBootDeps) bootPlan() []storageIntegrityBootStep {
 
 Change `runStorageIntegrityProtocolBootstrap` to take `[]storageIntegrityBootStep`, execute in order, and wrap any error as `fmt.Errorf("storage-integrity bootstrap step %q: %w", step.Name, err)`. Update the call site at `:316` to `runStorageIntegrityProtocolBootstrap(ctx, deps.bootPlan())`. Behaviour is unchanged; the binding becomes inspectable.
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `bazel test //standalone:standalone_test --test_filter='TestStorageIntegrityBootPlan|TestRunStorageIntegrityProtocolBootstrapStops|TestStorageIntegrityBootstrapPrecedes' --test_output=all`
 Expected: PASS.
 
-- [ ] **Step 5: Prove the binding test is load-bearing**
+- [x] **Step 5: Prove the binding test is load-bearing**
 
 Temporarily swap the `ensureProtocolTables` and `crossCheckSchemas` bindings inside `bootPlan` and re-run. Expected: FAIL at `require.Contains(funcIdentity(plan[0].Run), "ensureProtocolTables")` — the name is now bound to the wrong method. Restore and re-run: PASS. This is the exact scenario the previous positional design could not detect.
 
-- [ ] **Step 6: Full package + commit**
+- [x] **Step 6: Full package + commit**
 
 Run: `bazel test //standalone:standalone_test --test_output=errors`
 Expected: PASS.
@@ -3257,7 +3259,7 @@ git commit -m "test(storage-integrity): assert the production boot bindings, not
 - Consumes: every preceding task.
 - Produces: nothing code depends on.
 
-- [ ] **Step 1: Document the corpus contract where the corpus lives**
+- [x] **Step 1: Document the corpus contract where the corpus lives**
 
 In `rewriter-go/internal/harness/AGENTS.md`, add:
 
@@ -3300,7 +3302,7 @@ and regenerates only under `UPDATE_GOLDEN=1`; CI asserts
 
 Add a one-line pointer in the repo-root `rewriter-go/AGENTS.md` to that section.
 
-- [ ] **Step 2: Document the CI job and the corpus contract in rewriter-grpc**
+- [x] **Step 2: Document the CI job and the corpus contract in rewriter-grpc**
 
 In `rewriter-grpc/CLAUDE.md`, under `### Tests`, append:
 
@@ -3310,11 +3312,11 @@ In `rewriter-grpc/CLAUDE.md`, under `### Tests`, append:
 The shared corpus is a real parity gate. `tests/si_corpus.h` holds the frozen schema, the validator (rule ids R1-R7, mirrored from rewriter-go `internal/harness/sicorpus_test.go`) and the pinned FNV-1a fingerprint that keeps the two copies byte-identical. `tests/si_normalize.h` holds the literal-aware identifier-quote normalization — it replaced a global backtick→double-quote `std::replace` that also rewrote string literals. `sql_exact` no longer exists: every non-reject case is compared exactly after normalization, and `allow_sql_divergence` selects `want_sql_cpp`.
 ```
 
-- [ ] **Step 3: Flip the spec status**
+- [x] **Step 3: Flip the spec status**
 
 In `docs/superpowers/specs/2026-08-19-storage-integrity-verification-restoration-design.md`, change `**Status:** Proposed` to `**Status:** Implemented` and append a short "Deviations" subsection at the end recording DEV-1, DEV-2 and DEV-3 from this plan, each with one sentence of rationale.
 
-- [ ] **Step 4: Run the full spec §5 acceptance checklist and record each result**
+- [x] **Step 4: Run the full spec §5 acceptance checklist and record each result**
 
 Work through the spec's six acceptance bullets in order and paste the observed output for each into the closing PR description:
 
@@ -3326,7 +3328,7 @@ Work through the spec's six acceptance bullets in order and paste the observed o
 6. **`git diff --exit-code` clean after `make test` in rewriter-go** — Task 11 Step 6.
 7. **`git status --porcelain` shows no untracked `AGENTS.md` in housegate** — Task 3 Step 9.
 
-- [ ] **Step 5: Re-verify the cross-repo corpus identity one final time**
+- [x] **Step 5: Re-verify the cross-repo corpus identity one final time**
 
 ```bash
 shasum -a 256 \
@@ -3336,7 +3338,7 @@ shasum -a 256 \
 
 Expected: identical digests. Record the value.
 
-- [ ] **Step 6: File the follow-ups this spec deliberately did not do**
+- [x] **Step 6: File the follow-ups this spec deliberately did not do**
 
 Open one tracking issue per item, referencing this plan:
 
@@ -3344,7 +3346,7 @@ Open one tracking issue per item, referencing this plan:
 - **housegate CI does not exercise the native rewriter engine.** `//pkg/rewriter:rewriter_test`'s `TestNativeEngineSmoke` skips because only the `integration` job fetches the FFI lib. Moving the `Fetch rewriter FFI lib` step into the `build` job and passing `--test_env=POLYGLOT_SQL_FFI_PATH` would close that, at the cost of coupling the unit job to a GitHub release download. Out of scope for Spec J, which is about executing the tests that already exist.
 - **`~/.git/.gitignore` line 20's bare `AGENTS.md` rule** — a user-environment change, already recorded on the roadmap (§5 bounded tasks). The repo-side fix and the CI check shipped here; tightening the global rule remains the user's call.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go

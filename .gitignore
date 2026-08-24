@@ -66,3 +66,9 @@ scripts/git-hooks/pre-commit.local
 !.harness/config.json
 .review-loop/
 .omo/
+
+# Agent-guidance files must stay visible in this repo even when a contributor's
+# global core.excludesFile ignores them (a bare `AGENTS.md` rule is common).
+# A repo .gitignore takes precedence over the global file, so this negation is
+# what keeps future nested AGENTS.md files reviewable. Spec J D6.
+!AGENTS.md
