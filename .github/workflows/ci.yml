@@ -36,7 +36,7 @@ jobs:
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, linux, x64]
-    timeout-minutes: 15
+    timeout-minutes: 30
 
     steps:
       - name: Checkout Repo
@@ -51,8 +51,13 @@ jobs:
       - name: Build All
         run: bazel build //...
 
-      # - name: Build & Test All
-      #   run: bazel test --config=ci //...
+      # Spec J D1: the unit suite is a merge gate. `--config=ci` pins
+      # --platforms=//:linux_amd64 (.bazelrc:46), which only resolves a test
+      # toolchain on this linux/x64 self-hosted runner — do not try to
+      # reproduce this invocation on darwin, use plain `bazel test //...`.
+      # Integration targets are tagged `manual` and stay in their own job.
+      - name: Build & Test All
+        run: bazel test --config=ci //...
 
   integration:
     name: Integration (ClickHouse)
