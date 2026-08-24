@@ -178,6 +178,7 @@ func TestPlugin_HappyPathSignsStatementTokenAfterPayload(t *testing.T) {
 		ClientRevision: testRevision,
 		TargetTableID:  "shop.orders",
 		RowIDProfileID: payloadexec.RowIDProfileID,
+		StatementKind:  sicore.StatementKindCodeInsert,
 	}
 	if got, err := validator.ValidateStatementV2(token, want); err != nil || got != signer.Address() {
 		t.Fatalf("token does not bind the envelope: got=%s err=%v", got, err)
@@ -612,5 +613,40 @@ func TestPlugin_SequenceDirectoryDurabilityFailureDoesNotAdmitOrSign(t *testing.
 				}
 			}
 		})
+	}
+}
+
+// TestPlugin_SignsInsertKind decodes the token the agent appended and asserts
+// the kind is signed, not left at STATEMENT_KIND_UNSPECIFIED.
+func TestPlugin_SignsInsertKind(t *testing.T) {
+	ns := network.NewInMemoryNetworkState()
+	declareSchema(t, ns, testSchema())
+	p, _ := newTestPlugin(t, ns, t.TempDir())
+	qctx := insertQctx(newSession(9, ""), "INSERT INTO shop.orders FORMAT Native")
+
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	if err := p.OnClientDataStrict(context.Background(), qctx, encodeRows(t)); err != nil {
+		t.Fatalf("OnClientDataStrict: %v", err)
+	}
+	if err := p.OnQueryInputCompleteStrict(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQueryInputCompleteStrict: %v", err)
+	}
+	var token string
+	for _, s := range qctx.Query.Settings {
+		if s.Key == auth.StatementTokenSettingKey {
+			token = strings.Trim(s.Value, "'")
+		}
+	}
+	if token == "" {
+		t.Fatal("SQL_x_statement_token missing")
+	}
+	payload, err := auth.DecodeStatementV2Payload(token)
+	if err != nil {
+		t.Fatalf("DecodeStatementV2Payload: %v", err)
+	}
+	if payload.StatementKind != sicore.StatementKindCodeInsert {
+		t.Fatalf("signed statement_kind = %d, want %d", payload.StatementKind, sicore.StatementKindCodeInsert)
 	}
 }

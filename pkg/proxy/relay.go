@@ -1263,19 +1263,29 @@ func (r *Relay) runDeferredInsert(ctx context.Context, qctx *plugin.QueryContext
 		}
 		switch pkt.Type {
 		case uint64(chproto.ClientDataCode):
-			empty, err := chproto.ClientDataPacketIsEmpty(pkt.Raw, compression)
+			info, err := chproto.InspectClientDataPacket(pkt.Raw, compression)
 			if err != nil {
 				r.hooks.OnQueryAbort(ctx, qctx)
 				r.hooks.OnQueryComplete(ctx, r.sess)
 				return fmt.Errorf("classify deferred client data packet: %w", err)
 			}
+			if info.BlockName != "" {
+				// A named block is external-temporary-table data (or that
+				// table's own zero-row terminator). Folding it into
+				// payload_hash would sign bytes the ingress never stores, and
+				// consuming its terminator would strand the real payload, so
+				// the signed lane refuses it outright.
+				return rejectClose(fmt.Errorf(
+					"deferred INSERT %q received external table block %q; external tables are not supported on the storage-integrity signed lane",
+					q.ID, info.BlockName))
+			}
 			switch {
-			case empty && !sawPayload && initialEmptyRaw == nil:
+			case info.Empty && !sawPayload && initialEmptyRaw == nil:
 				// Protocol state, never a timeout, identifies the first empty
 				// packet as the external-tables marker. A standard zero-row
 				// producer sends a second empty packet as its terminator.
 				initialEmptyRaw = append([]byte(nil), pkt.Raw...)
-			case empty:
+			case info.Empty:
 				terminatorRaw = append([]byte(nil), pkt.Raw...)
 			default:
 				// The client-side marker is optional. When absent, terminatorRaw is

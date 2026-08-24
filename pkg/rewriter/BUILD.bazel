@@ -38,6 +38,7 @@ go_test(
         "materialize_smoke_test.go",
         "materialize_test.go",
         "native_smoke_test.go",
+        "read_mode_key_test.go",
         "sentio_test.go",
         "storage_integrity_test.go",
     ],
@@ -46,6 +47,7 @@ go_test(
         "//pkg/network",
         "//pkg/registry",
         "//pkg/sqlmeta",
+        "//pkg/storageintegrity",
         "@com_github_housegate_rewriter_proto//gen/pb",
     ],
 )

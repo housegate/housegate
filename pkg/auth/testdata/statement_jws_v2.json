@@ -19,13 +19,16 @@
         "payload_format": "clickhouse-native-data-v1",
         "client_revision": 54460,
         "target_table_id": "db.table",
-        "row_id_profile_id": "housegate-row-id-v1"
+        "row_id_profile_id": "housegate-row-id-v1",
+        "statement_kind": 1
       },
-      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIn0.5OsHRhh3ZLSL5PDHRqysy_hDv56-maCKpmNma_287x9rWB2bfvrCkHNlf05XZUhiDwydzcE8O6pDasizZa2b3hw"
+      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIiwic3RhdGVtZW50X2tpbmQiOjF9.-mKEFCWh0cGj54nHnk_LaqrihRebSrRUx0FGTf_3avMGpsLrZFE1soAGHaymZ9CX2wcasdgsUu1_M5JRQizIZhw"
     },
     {
       "name": "network_id_mismatch",
       "expect": "reject",
+      "reject_reason": "binding",
+      "reject_field": "network_id",
       "payload": {
         "purpose": "housegate-statement-v2",
         "iat": 1755000000,
@@ -40,13 +43,16 @@
         "payload_format": "clickhouse-native-data-v1",
         "client_revision": 54460,
         "target_table_id": "db.table",
-        "row_id_profile_id": "housegate-row-id-v1"
+        "row_id_profile_id": "housegate-row-id-v1",
+        "statement_kind": 1
       },
-      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIn0.5OsHRhh3ZLSL5PDHRqysy_hDv56-maCKpmNma_287x9rWB2bfvrCkHNlf05XZUhiDwydzcE8O6pDasizZa2b3hw"
+      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIiwic3RhdGVtZW50X2tpbmQiOjF9.-mKEFCWh0cGj54nHnk_LaqrihRebSrRUx0FGTf_3avMGpsLrZFE1soAGHaymZ9CX2wcasdgsUu1_M5JRQizIZhw"
     },
     {
       "name": "keeper_shard_id_mismatch",
       "expect": "reject",
+      "reject_reason": "binding",
+      "reject_field": "keeper_shard_id",
       "payload": {
         "purpose": "housegate-statement-v2",
         "iat": 1755000000,
@@ -61,13 +67,16 @@
         "payload_format": "clickhouse-native-data-v1",
         "client_revision": 54460,
         "target_table_id": "db.table",
-        "row_id_profile_id": "housegate-row-id-v1"
+        "row_id_profile_id": "housegate-row-id-v1",
+        "statement_kind": 1
       },
-      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIn0.5OsHRhh3ZLSL5PDHRqysy_hDv56-maCKpmNma_287x9rWB2bfvrCkHNlf05XZUhiDwydzcE8O6pDasizZa2b3hw"
+      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIiwic3RhdGVtZW50X2tpbmQiOjF9.-mKEFCWh0cGj54nHnk_LaqrihRebSrRUx0FGTf_3avMGpsLrZFE1soAGHaymZ9CX2wcasdgsUu1_M5JRQizIZhw"
     },
     {
       "name": "statement_id_mismatch",
       "expect": "reject",
+      "reject_reason": "binding",
+      "reject_field": "statement_id",
       "payload": {
         "purpose": "housegate-statement-v2",
         "iat": 1755000000,
@@ -82,13 +91,16 @@
         "payload_format": "clickhouse-native-data-v1",
         "client_revision": 54460,
         "target_table_id": "db.table",
-        "row_id_profile_id": "housegate-row-id-v1"
+        "row_id_profile_id": "housegate-row-id-v1",
+        "statement_kind": 1
       },
-      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIn0.5OsHRhh3ZLSL5PDHRqysy_hDv56-maCKpmNma_287x9rWB2bfvrCkHNlf05XZUhiDwydzcE8O6pDasizZa2b3hw"
+      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIiwic3RhdGVtZW50X2tpbmQiOjF9.-mKEFCWh0cGj54nHnk_LaqrihRebSrRUx0FGTf_3avMGpsLrZFE1soAGHaymZ9CX2wcasdgsUu1_M5JRQizIZhw"
     },
     {
       "name": "sql_hash_mismatch",
       "expect": "reject",
+      "reject_reason": "binding",
+      "reject_field": "sql_hash",
       "payload": {
         "purpose": "housegate-statement-v2",
         "iat": 1755000000,
@@ -103,13 +115,16 @@
         "payload_format": "clickhouse-native-data-v1",
         "client_revision": 54460,
         "target_table_id": "db.table",
-        "row_id_profile_id": "housegate-row-id-v1"
+        "row_id_profile_id": "housegate-row-id-v1",
+        "statement_kind": 1
       },
-      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIn0.5OsHRhh3ZLSL5PDHRqysy_hDv56-maCKpmNma_287x9rWB2bfvrCkHNlf05XZUhiDwydzcE8O6pDasizZa2b3hw"
+      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIiwic3RhdGVtZW50X2tpbmQiOjF9.-mKEFCWh0cGj54nHnk_LaqrihRebSrRUx0FGTf_3avMGpsLrZFE1soAGHaymZ9CX2wcasdgsUu1_M5JRQizIZhw"
     },
     {
       "name": "settings_hash_mismatch",
       "expect": "reject",
+      "reject_reason": "binding",
+      "reject_field": "settings_hash",
       "payload": {
         "purpose": "housegate-statement-v2",
         "iat": 1755000000,
@@ -124,13 +139,16 @@
         "payload_format": "clickhouse-native-data-v1",
         "client_revision": 54460,
         "target_table_id": "db.table",
-        "row_id_profile_id": "housegate-row-id-v1"
+        "row_id_profile_id": "housegate-row-id-v1",
+        "statement_kind": 1
       },
-      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIn0.5OsHRhh3ZLSL5PDHRqysy_hDv56-maCKpmNma_287x9rWB2bfvrCkHNlf05XZUhiDwydzcE8O6pDasizZa2b3hw"
+      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIiwic3RhdGVtZW50X2tpbmQiOjF9.-mKEFCWh0cGj54nHnk_LaqrihRebSrRUx0FGTf_3avMGpsLrZFE1soAGHaymZ9CX2wcasdgsUu1_M5JRQizIZhw"
     },
     {
       "name": "schema_hash_mismatch",
       "expect": "reject",
+      "reject_reason": "binding",
+      "reject_field": "schema_hash",
       "payload": {
         "purpose": "housegate-statement-v2",
         "iat": 1755000000,
@@ -145,13 +163,16 @@
         "payload_format": "clickhouse-native-data-v1",
         "client_revision": 54460,
         "target_table_id": "db.table",
-        "row_id_profile_id": "housegate-row-id-v1"
+        "row_id_profile_id": "housegate-row-id-v1",
+        "statement_kind": 1
       },
-      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIn0.5OsHRhh3ZLSL5PDHRqysy_hDv56-maCKpmNma_287x9rWB2bfvrCkHNlf05XZUhiDwydzcE8O6pDasizZa2b3hw"
+      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIiwic3RhdGVtZW50X2tpbmQiOjF9.-mKEFCWh0cGj54nHnk_LaqrihRebSrRUx0FGTf_3avMGpsLrZFE1soAGHaymZ9CX2wcasdgsUu1_M5JRQizIZhw"
     },
     {
       "name": "payload_hash_mismatch",
       "expect": "reject",
+      "reject_reason": "binding",
+      "reject_field": "payload_hash",
       "payload": {
         "purpose": "housegate-statement-v2",
         "iat": 1755000000,
@@ -166,13 +187,16 @@
         "payload_format": "clickhouse-native-data-v1",
         "client_revision": 54460,
         "target_table_id": "db.table",
-        "row_id_profile_id": "housegate-row-id-v1"
+        "row_id_profile_id": "housegate-row-id-v1",
+        "statement_kind": 1
       },
-      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIn0.5OsHRhh3ZLSL5PDHRqysy_hDv56-maCKpmNma_287x9rWB2bfvrCkHNlf05XZUhiDwydzcE8O6pDasizZa2b3hw"
+      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIiwic3RhdGVtZW50X2tpbmQiOjF9.-mKEFCWh0cGj54nHnk_LaqrihRebSrRUx0FGTf_3avMGpsLrZFE1soAGHaymZ9CX2wcasdgsUu1_M5JRQizIZhw"
     },
     {
       "name": "payload_length_mismatch",
       "expect": "reject",
+      "reject_reason": "binding",
+      "reject_field": "payload_length",
       "payload": {
         "purpose": "housegate-statement-v2",
         "iat": 1755000000,
@@ -187,13 +211,16 @@
         "payload_format": "clickhouse-native-data-v1",
         "client_revision": 54460,
         "target_table_id": "db.table",
-        "row_id_profile_id": "housegate-row-id-v1"
+        "row_id_profile_id": "housegate-row-id-v1",
+        "statement_kind": 1
       },
-      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIn0.5OsHRhh3ZLSL5PDHRqysy_hDv56-maCKpmNma_287x9rWB2bfvrCkHNlf05XZUhiDwydzcE8O6pDasizZa2b3hw"
+      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIiwic3RhdGVtZW50X2tpbmQiOjF9.-mKEFCWh0cGj54nHnk_LaqrihRebSrRUx0FGTf_3avMGpsLrZFE1soAGHaymZ9CX2wcasdgsUu1_M5JRQizIZhw"
     },
     {
       "name": "payload_format_mismatch",
       "expect": "reject",
+      "reject_reason": "binding",
+      "reject_field": "payload_format",
       "payload": {
         "purpose": "housegate-statement-v2",
         "iat": 1755000000,
@@ -208,13 +235,16 @@
         "payload_format": "csv-with-names-v1",
         "client_revision": 54460,
         "target_table_id": "db.table",
-        "row_id_profile_id": "housegate-row-id-v1"
+        "row_id_profile_id": "housegate-row-id-v1",
+        "statement_kind": 1
       },
-      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIn0.5OsHRhh3ZLSL5PDHRqysy_hDv56-maCKpmNma_287x9rWB2bfvrCkHNlf05XZUhiDwydzcE8O6pDasizZa2b3hw"
+      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIiwic3RhdGVtZW50X2tpbmQiOjF9.-mKEFCWh0cGj54nHnk_LaqrihRebSrRUx0FGTf_3avMGpsLrZFE1soAGHaymZ9CX2wcasdgsUu1_M5JRQizIZhw"
     },
     {
       "name": "client_revision_mismatch",
       "expect": "reject",
+      "reject_reason": "binding",
+      "reject_field": "client_revision",
       "payload": {
         "purpose": "housegate-statement-v2",
         "iat": 1755000000,
@@ -229,13 +259,16 @@
         "payload_format": "clickhouse-native-data-v1",
         "client_revision": 54470,
         "target_table_id": "db.table",
-        "row_id_profile_id": "housegate-row-id-v1"
+        "row_id_profile_id": "housegate-row-id-v1",
+        "statement_kind": 1
       },
-      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIn0.5OsHRhh3ZLSL5PDHRqysy_hDv56-maCKpmNma_287x9rWB2bfvrCkHNlf05XZUhiDwydzcE8O6pDasizZa2b3hw"
+      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIiwic3RhdGVtZW50X2tpbmQiOjF9.-mKEFCWh0cGj54nHnk_LaqrihRebSrRUx0FGTf_3avMGpsLrZFE1soAGHaymZ9CX2wcasdgsUu1_M5JRQizIZhw"
     },
     {
       "name": "target_table_id_mismatch",
       "expect": "reject",
+      "reject_reason": "binding",
+      "reject_field": "target_table_id",
       "payload": {
         "purpose": "housegate-statement-v2",
         "iat": 1755000000,
@@ -250,13 +283,16 @@
         "payload_format": "clickhouse-native-data-v1",
         "client_revision": 54460,
         "target_table_id": "db.other",
-        "row_id_profile_id": "housegate-row-id-v1"
+        "row_id_profile_id": "housegate-row-id-v1",
+        "statement_kind": 1
       },
-      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIn0.5OsHRhh3ZLSL5PDHRqysy_hDv56-maCKpmNma_287x9rWB2bfvrCkHNlf05XZUhiDwydzcE8O6pDasizZa2b3hw"
+      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIiwic3RhdGVtZW50X2tpbmQiOjF9.-mKEFCWh0cGj54nHnk_LaqrihRebSrRUx0FGTf_3avMGpsLrZFE1soAGHaymZ9CX2wcasdgsUu1_M5JRQizIZhw"
     },
     {
       "name": "row_id_profile_id_mismatch",
       "expect": "reject",
+      "reject_reason": "binding",
+      "reject_field": "row_id_profile_id",
       "payload": {
         "purpose": "housegate-statement-v2",
         "iat": 1755000000,
@@ -271,13 +307,39 @@
         "payload_format": "clickhouse-native-data-v1",
         "client_revision": 54460,
         "target_table_id": "db.table",
-        "row_id_profile_id": "housegate-row-id-v0"
+        "row_id_profile_id": "housegate-row-id-v0",
+        "statement_kind": 1
       },
-      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIn0.5OsHRhh3ZLSL5PDHRqysy_hDv56-maCKpmNma_287x9rWB2bfvrCkHNlf05XZUhiDwydzcE8O6pDasizZa2b3hw"
+      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIiwic3RhdGVtZW50X2tpbmQiOjF9.-mKEFCWh0cGj54nHnk_LaqrihRebSrRUx0FGTf_3avMGpsLrZFE1soAGHaymZ9CX2wcasdgsUu1_M5JRQizIZhw"
+    },
+    {
+      "name": "statement_kind_mismatch",
+      "expect": "reject",
+      "reject_reason": "binding",
+      "reject_field": "statement_kind",
+      "payload": {
+        "purpose": "housegate-statement-v2",
+        "iat": 1755000000,
+        "network_id": "testnet-v2",
+        "keeper_shard_id": 0,
+        "statement_id": "0x8fd379246834eac74b8419ffda202cf8051f7a03:1:n1",
+        "sql_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+        "settings_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+        "schema_hash": "0x3333333333333333333333333333333333333333333333333333333333333333",
+        "payload_hash": "0x4444444444444444444444444444444444444444444444444444444444444444",
+        "payload_length": 12345,
+        "payload_format": "clickhouse-native-data-v1",
+        "client_revision": 54460,
+        "target_table_id": "db.table",
+        "row_id_profile_id": "housegate-row-id-v1",
+        "statement_kind": 0
+      },
+      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIiwic3RhdGVtZW50X2tpbmQiOjF9.-mKEFCWh0cGj54nHnk_LaqrihRebSrRUx0FGTf_3avMGpsLrZFE1soAGHaymZ9CX2wcasdgsUu1_M5JRQizIZhw"
     },
     {
       "name": "wrong_signer",
       "expect": "reject",
+      "reject_reason": "signature",
       "payload": {
         "purpose": "housegate-statement-v2",
         "iat": 1755000000,
@@ -292,13 +354,15 @@
         "payload_format": "clickhouse-native-data-v1",
         "client_revision": 54460,
         "target_table_id": "db.table",
-        "row_id_profile_id": "housegate-row-id-v1"
+        "row_id_profile_id": "housegate-row-id-v1",
+        "statement_kind": 1
       },
-      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIn0.uyH5haOSLKE6pleyfkSRkoVhcr7vVBZCdB881zwTvMIDq31Jb1gjUqXAcB53_mqnArnA4KUG_6QSXu-UoZWe-hs"
+      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MiIsImlhdCI6MTc1NTAwMDAwMCwibmV0d29ya19pZCI6InRlc3RuZXQtdjIiLCJrZWVwZXJfc2hhcmRfaWQiOjAsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOm4xIiwic3FsX2hhc2giOiIweDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIiwic2NoZW1hX2hhc2giOiIweDMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMiLCJwYXlsb2FkX2hhc2giOiIweDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQiLCJwYXlsb2FkX2xlbmd0aCI6MTIzNDUsInBheWxvYWRfZm9ybWF0IjoiY2xpY2tob3VzZS1uYXRpdmUtZGF0YS12MSIsImNsaWVudF9yZXZpc2lvbiI6NTQ0NjAsInRhcmdldF90YWJsZV9pZCI6ImRiLnRhYmxlIiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIiwic3RhdGVtZW50X2tpbmQiOjF9.3km1dfW6eLApZFftSho0lbNbNEWnu36qdQUev9-5mIZ7lmt9RqVsMabsRxh8iFHjKMs0pvRgTvAnpaeZYjuV4Bw"
     },
     {
       "name": "legacy_query_token",
       "expect": "reject",
+      "reject_reason": "purpose",
       "payload": {
         "purpose": "housegate-statement-v2",
         "iat": 1755000000,
@@ -313,13 +377,15 @@
         "payload_format": "clickhouse-native-data-v1",
         "client_revision": 54460,
         "target_table_id": "db.table",
-        "row_id_profile_id": "housegate-row-id-v1"
+        "row_id_profile_id": "housegate-row-id-v1",
+        "statement_kind": 1
       },
-      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJpYXQiOjE3ODcwNjg5ODgsInFoYXNoIjoiMHgxZDBhYjI2NDE4OWE4NDdiNzVmOGU5ZmE5MzRiZGFmNTQzOThiZTc3MDMxYmJhMWNjNGY3M2QyNTc2MjY1NWI3IiwicHVycG9zZSI6ImhvdXNlZ2F0ZS1xdWVyeSJ9.jGlJplYbNcjKOdT_iS2nWong-Bo5WQTmKnOSHMNGQWESM_mkOde63e7QxP_BcI2_hMC2ox8rDf1PM4J_arOdWBs"
+      "token": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJpYXQiOjE3ODcyMTU1NTAsInFoYXNoIjoiMHgxZDBhYjI2NDE4OWE4NDdiNzVmOGU5ZmE5MzRiZGFmNTQzOThiZTc3MDMxYmJhMWNjNGY3M2QyNTc2MjY1NWI3IiwicHVycG9zZSI6ImhvdXNlZ2F0ZS1xdWVyeSJ9.6IBsojPmcVoJlyNNBgqPU7uzSvYlzOFxblWKFRw7_Qpf9cYAjy9LwFO1zz-akkLIo0e3MdxvT4GmTLQbBfyyABs"
     },
     {
       "name": "garbage_token",
       "expect": "reject",
+      "reject_reason": "malformed",
       "payload": {
         "purpose": "housegate-statement-v2",
         "iat": 1755000000,
@@ -334,7 +400,8 @@
         "payload_format": "clickhouse-native-data-v1",
         "client_revision": 54460,
         "target_table_id": "db.table",
-        "row_id_profile_id": "housegate-row-id-v1"
+        "row_id_profile_id": "housegate-row-id-v1",
+        "statement_kind": 1
       },
       "token": "not.a.jws"
     }

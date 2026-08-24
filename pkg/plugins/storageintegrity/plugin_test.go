@@ -26,6 +26,7 @@ import (
 	"github.com/housegate/housegate/pkg/replay/payloadexec"
 	"github.com/housegate/housegate/pkg/sqlmeta"
 	sicore "github.com/housegate/housegate/pkg/storageintegrity"
+	pb "github.com/sentioxyz/arbiter-proto/gen/pb"
 )
 
 const storageIntegrityTestKey = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -997,7 +998,7 @@ func v2Statement(_ *auth.RelaySigner, statementID, sql, schemaHash string, paylo
 		SQLHash: replay.DigestString(sql), SettingsHash: sicore.EmptySettingsHash, SchemaHash: schemaHash,
 		PayloadHash: replay.DigestBytes(payload), PayloadLength: uint64(len(payload)),
 		PayloadFormat: sicore.PayloadEncodingClickHouseNativeData, ClientRevision: revision,
-		TargetTableID: "tenant.events", RowIDProfileID: payloadexec.RowIDProfileID,
+		TargetTableID: "tenant.events", RowIDProfileID: payloadexec.RowIDProfileID, StatementKind: sicore.StatementKindCodeInsert,
 	}
 }
 
@@ -1337,4 +1338,43 @@ func (s *fakeSession) RebindToPeer(context.Context, *chproto.Codec, *chproto.Cli
 }
 func (s *fakeSession) RebindToLocal(context.Context, *chproto.Codec, *chproto.ClientHello) error {
 	return nil
+}
+
+// TestIngressV2_BindsTheKindItClassifiedItself proves the ingress derives
+// statement_kind from its OWN classification of the SQL — a token signed with
+// any other kind is refused before the payload is uploaded.
+func TestIngressV2_BindsTheKindItClassifiedItself(t *testing.T) {
+	p, signer, schemaHash := newV2Ingress(t)
+	sql := "INSERT INTO tenant.events FORMAT Native"
+	payload := []byte{byte(chproto.ClientDataCode), 0, 0xab, 0xcd}
+
+	qctx := signedQueryContext(t, 41, signer, sql, sql, sqlmeta.StatementTypeInsert)
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
+	unspecified := v2Statement(signer, qctx.Query.ID, sql, schemaHash, payload, 54453)
+	unspecified.StatementKind = 0
+	withStatementToken(t, qctx, signer, unspecified)
+
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	if err := p.OnClientDataStrict(context.Background(), qctx, payload); err != nil {
+		t.Fatalf("OnClientDataStrict: %v", err)
+	}
+	p.OnQueryInputComplete(context.Background(), qctx)
+	_, err := p.ConsumeAdmission(qctx.Session.ID())
+	if err == nil || !strings.Contains(err.Error(), "statement_kind") {
+		t.Fatalf("ConsumeAdmission err = %v, want a statement_kind binding rejection", err)
+	}
+}
+
+// TestStatementKindCodeMatchesGeneratedEnum cross-checks the core's frozen
+// numeric code against the generated wire enum at the ingress boundary.
+func TestStatementKindCodeMatchesGeneratedEnum(t *testing.T) {
+	code, err := sicore.StatementKindCode(sicore.KindInsert)
+	if err != nil {
+		t.Fatalf("StatementKindCode: %v", err)
+	}
+	if code != uint32(pb.StatementKind_STATEMENT_KIND_INSERT) {
+		t.Fatalf("sicore kind code %d does not match pb.StatementKind_STATEMENT_KIND_INSERT %d", code, pb.StatementKind_STATEMENT_KIND_INSERT)
+	}
 }

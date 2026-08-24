@@ -36,5 +36,6 @@ go_test(
         "//pkg/sqlmeta",
         "//pkg/storageintegrity",
         "@com_github_clickhouse_ch_go//proto",
+        "@com_github_sentioxyz_arbiter_proto//gen/pb",
     ],
 )

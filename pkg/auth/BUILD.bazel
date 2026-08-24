@@ -6,6 +6,7 @@ go_library(
         "eth_validator.go",
         "jws.go",
         "relay_signer.go",
+        "shared_vectors.go",
         "signer.go",
         "types.go",
     ],

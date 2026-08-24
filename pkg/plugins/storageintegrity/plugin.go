@@ -460,6 +460,10 @@ func (p *Plugin) admissionFromState(_ context.Context, state *admissionState) (A
 	if state.revision <= 0 || uint64(state.revision) > uint64(^uint32(0)) {
 		return Admission{}, fmt.Errorf("storage_integrity admission %s has invalid client protocol revision %d", admission.StatementID, state.revision)
 	}
+	kindCode, err := sicore.StatementKindCode(sicore.Kind(admission.Kind))
+	if err != nil {
+		return Admission{}, fmt.Errorf("storage_integrity admission %s: %w", admission.StatementID, err)
+	}
 	want := auth.JWSStatementPayloadV2{
 		NetworkID:      p.networkID,
 		KeeperShardID:  0,
@@ -473,6 +477,7 @@ func (p *Plugin) admissionFromState(_ context.Context, state *admissionState) (A
 		ClientRevision: uint32(state.revision),
 		TargetTableID:  admission.TableID,
 		RowIDProfileID: payloadexec.RowIDProfileID,
+		StatementKind:  kindCode,
 	}
 	validator, ok := p.authValidator.(auth.StatementValidatorV2)
 	if !ok {

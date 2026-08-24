@@ -1648,6 +1648,7 @@ func signedStorageIntegrityQuerySQL(t *testing.T, signer *auth.RelaySigner, sql 
 		ClientRevision: uint32(state.ClientRevision),
 		TargetTableID:  "tenant.events",
 		RowIDProfileID: payloadexec.RowIDProfileID,
+		StatementKind:  sicore.StatementKindCodeInsert,
 	})
 	if err != nil {
 		t.Fatalf("SignStatementV2: %v", err)

@@ -276,8 +276,8 @@ github.com/russross/blackfriday/v2 v2.1.0 h1:JIOH55/0cWyOuilr9/qlrm0BSXldqnqwMsf
 github.com/russross/blackfriday/v2 v2.1.0/go.mod h1:+Rmxgy9KzJVeS9/2gXHxylqXiyQDYRxCVz55jmeOWTM=
 github.com/segmentio/asm v1.2.1 h1:DTNbBqs57ioxAD4PrArqftgypG4/qNpXoJx8TVXxPR0=
 github.com/segmentio/asm v1.2.1/go.mod h1:BqMnlJP91P8d+4ibuonYZw9mfnzI9HfxselHZr5aAcs=
-github.com/sentioxyz/arbiter-proto v0.5.0 h1:JUbSpk1Nm/hkfk/x4KML1qv7R+GDYnnneaXDvLOksgY=
-github.com/sentioxyz/arbiter-proto v0.5.0/go.mod h1:wm2g15E6zcJeV8w730pQyX78jOY/NRM6B4i+BjMfgB8=
+github.com/sentioxyz/arbiter-proto v0.6.0 h1:IOr/yxAwHzCRYaJIPXzGQeLkSWcRfnlGjDRu6M7CEIQ=
+github.com/sentioxyz/arbiter-proto v0.6.0/go.mod h1:0/EmyZ7f3VySfdZ1ROSoIPvg4/74FltRenewQHHplps=
 github.com/sentioxyz/ch-go v0.73.0-sentioxyz-20260629 h1:8AJXMs0181bT2q2ypwHugGEj5bAuOMLbzpSLnUfUWm8=
 github.com/sentioxyz/ch-go v0.73.0-sentioxyz-20260629/go.mod h1:wkFIxrqlXeRJ9cn3r5Fz5Qen9jl5aTMPuGZeuJpANNY=
 github.com/sentioxyz/clickhouse-go/v2 v2.47.0-sentioxyz-20260629 h1:CHJXXVucTfot08NA7M9sozaeWeHLcFv+opTysnQoLPE=
