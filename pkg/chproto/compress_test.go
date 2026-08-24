@@ -37,6 +37,37 @@ func buildEmptyUncompressedDataPacket(t *testing.T) []byte {
 	return append([]byte(nil), buf.Buf...)
 }
 
+// buildNamedClientDataPacket constructs a ClientData packet carrying an
+// external temporary table: a non-empty block name with rows.
+func buildNamedClientDataPacket(t *testing.T, name string, rows int) []byte {
+	t.Helper()
+	var buf proto.Buffer
+	buf.PutUVarInt(uint64(proto.ClientCodeData))
+	buf.PutString(name)
+	values := make(proto.ColUInt64, rows)
+	for i := range values {
+		values[i] = uint64(i + 1)
+	}
+	block := proto.Block{Info: proto.BlockInfo{BucketNum: -1}, Columns: 1, Rows: rows}
+	if err := block.EncodeBlock(&buf, 54453, []proto.InputColumn{{Name: "v", Data: &values}}); err != nil {
+		t.Fatalf("EncodeBlock: %v", err)
+	}
+	return append([]byte(nil), buf.Buf...)
+}
+
+// buildEmptyNamedClientDataPacket is the zero-row terminator of ONE external
+// table: an empty block that still carries that table's name.
+func buildEmptyNamedClientDataPacket(t *testing.T, name string) []byte {
+	t.Helper()
+	var buf proto.Buffer
+	buf.PutUVarInt(uint64(proto.ClientCodeData))
+	buf.PutString(name)
+	(proto.BlockInfo{BucketNum: -1}).Encode(&buf)
+	buf.PutUVarInt(0)
+	buf.PutUVarInt(0)
+	return append([]byte(nil), buf.Buf...)
+}
+
 func buildNativeBlockPayload(t *testing.T, rev int, values proto.ColUInt8) []byte {
 	t.Helper()
 	var payload proto.Buffer
@@ -172,6 +203,42 @@ func TestClientDataPacketIsEmptyCompressed(t *testing.T) {
 	}
 	if !empty {
 		t.Fatal("compressed empty ClientData block was not recognized as input completion")
+	}
+}
+
+func TestInspectClientDataPacketReportsBlockName(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		raw       []byte
+		wantName  string
+		wantEmpty bool
+	}{
+		{"unnamed terminator", buildEmptyUncompressedDataPacket(t), "", true},
+		{"named external table rows", buildNamedClientDataPacket(t, "tmp_ext", 3), "tmp_ext", false},
+		{"named external table terminator", buildEmptyNamedClientDataPacket(t, "tmp_ext"), "tmp_ext", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			info, err := InspectClientDataPacket(tc.raw, proto.CompressionDisabled)
+			if err != nil {
+				t.Fatalf("InspectClientDataPacket: %v", err)
+			}
+			if info.BlockName != tc.wantName || info.Empty != tc.wantEmpty {
+				t.Fatalf("info = %+v, want {BlockName:%q Empty:%v}", info, tc.wantName, tc.wantEmpty)
+			}
+		})
+	}
+}
+
+func TestClientDataPacketIsEmptyStillIgnoresTheName(t *testing.T) {
+	// The non-deferred input path (relay.go's ordinary INSERT loop) has always
+	// terminated on any empty block. Keep that behaviour byte-for-byte; only
+	// the deferred lane gets stricter.
+	empty, err := ClientDataPacketIsEmpty(buildEmptyNamedClientDataPacket(t, "tmp_ext"), proto.CompressionDisabled)
+	if err != nil {
+		t.Fatalf("ClientDataPacketIsEmpty: %v", err)
+	}
+	if !empty {
+		t.Fatal("ClientDataPacketIsEmpty must keep classifying a named empty block as empty")
 	}
 }
 

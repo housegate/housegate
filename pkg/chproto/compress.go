@@ -12,26 +12,37 @@ import (
 	chcolumn "github.com/ClickHouse/clickhouse-go/v2/lib/column"
 )
 
-// ClientDataPacketIsEmpty reports whether raw is the protocol-level empty
-// ClientData block that terminates one query's client input stream.
-func ClientDataPacketIsEmpty(raw []byte, compression proto.Compression) (bool, error) {
+// ClientDataInfo is what the framing of one client Data packet says about it:
+// the block name (empty for the INSERT payload stream, non-empty for an
+// external temporary table) and whether the block carries no columns and no
+// rows. Callers that need to distinguish the payload stream from external
+// tables must read BlockName; Empty alone cannot.
+type ClientDataInfo struct {
+	BlockName string
+	Empty     bool
+}
+
+// InspectClientDataPacket decodes the framing of raw far enough to report the
+// block name and emptiness without materialising any column data.
+func InspectClientDataPacket(raw []byte, compression proto.Compression) (ClientDataInfo, error) {
 	r := bytes.NewReader(raw)
 	code, err := binary.ReadUvarint(r)
 	if err != nil {
-		return false, fmt.Errorf("client data packet code: %w", err)
+		return ClientDataInfo{}, fmt.Errorf("client data packet code: %w", err)
 	}
 	if code != uint64(proto.ClientCodeData) {
-		return false, fmt.Errorf("packet type %d is not ClientData", code)
+		return ClientDataInfo{}, fmt.Errorf("packet type %d is not ClientData", code)
 	}
 	nameLen, err := binary.ReadUvarint(r)
 	if err != nil {
-		return false, fmt.Errorf("client data block name length: %w", err)
+		return ClientDataInfo{}, fmt.Errorf("client data block name length: %w", err)
 	}
 	if nameLen > uint64(r.Len()) {
-		return false, fmt.Errorf("client data block name length %d exceeds remaining packet bytes %d", nameLen, r.Len())
+		return ClientDataInfo{}, fmt.Errorf("client data block name length %d exceeds remaining packet bytes %d", nameLen, r.Len())
 	}
-	if _, err := r.Seek(int64(nameLen), io.SeekCurrent); err != nil {
-		return false, fmt.Errorf("client data block name: %w", err)
+	name := make([]byte, nameLen)
+	if _, err := io.ReadFull(r, name); err != nil {
+		return ClientDataInfo{}, fmt.Errorf("client data block name: %w", err)
 	}
 
 	var body io.Reader = r
@@ -40,17 +51,30 @@ func ClientDataPacketIsEmpty(raw []byte, compression proto.Compression) (bool, e
 	}
 	pr := proto.NewReader(body)
 	if _, _, err := decodeBlockInfoCompat(pr); err != nil {
-		return false, fmt.Errorf("client data BlockInfo: %w", err)
+		return ClientDataInfo{}, fmt.Errorf("client data BlockInfo: %w", err)
 	}
 	columns, err := pr.UVarInt()
 	if err != nil {
-		return false, fmt.Errorf("client data columns: %w", err)
+		return ClientDataInfo{}, fmt.Errorf("client data columns: %w", err)
 	}
 	rows, err := pr.UVarInt()
 	if err != nil {
-		return false, fmt.Errorf("client data rows: %w", err)
+		return ClientDataInfo{}, fmt.Errorf("client data rows: %w", err)
 	}
-	return columns == 0 && rows == 0, nil
+	return ClientDataInfo{BlockName: string(name), Empty: columns == 0 && rows == 0}, nil
+}
+
+// ClientDataPacketIsEmpty reports whether raw is a protocol-level empty
+// ClientData block. It deliberately ignores the block name: the ordinary
+// (non-deferred) input path terminates on any empty block, which is the
+// pre-existing behaviour. The signed deferred lane uses
+// InspectClientDataPacket instead so it can refuse external tables.
+func ClientDataPacketIsEmpty(raw []byte, compression proto.Compression) (bool, error) {
+	info, err := InspectClientDataPacket(raw, compression)
+	if err != nil {
+		return false, err
+	}
+	return info.Empty, nil
 }
 
 // blockInfoCompat is a minimal representation of ClickHouse BlockInfo.
