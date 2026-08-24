@@ -12,7 +12,7 @@ require (
 	github.com/prometheus/client_golang v1.23.2
 	github.com/redis/go-redis/v9 v9.18.0
 	github.com/segmentio/asm v1.2.1
-	github.com/sentioxyz/arbiter-proto v0.5.0
+	github.com/sentioxyz/arbiter-proto v0.6.0
 	github.com/shirou/gopsutil/v4 v4.26.5
 	github.com/testcontainers/testcontainers-go/modules/clickhouse v0.42.0
 	github.com/zeebo/blake3 v0.2.4
