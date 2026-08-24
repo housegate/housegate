@@ -2077,3 +2077,130 @@ func TestRelay_DeferredInsert_StrictDataErrorAbortsBeforeForwarding(t *testing.T
 		t.Fatalf("counts complete/abort = %d/%d, want 1/1", queryCompletes, aborts)
 	}
 }
+
+// encodeNamedClientData is an external temporary table block: named, with rows.
+func encodeNamedClientData(t *testing.T, name string) []byte {
+	t.Helper()
+	values := proto.ColUInt64{7, 8}
+	input := proto.Input{{Name: "v", Data: &values}}
+	var buf proto.Buffer
+	buf.PutUVarInt(uint64(proto.ClientCodeData))
+	buf.PutString(name)
+	block := proto.Block{Rows: values.Rows(), Columns: len(input)}
+	if err := block.EncodeBlock(&buf, deferredTestRev, input); err != nil {
+		t.Fatalf("encode named client data block: %v", err)
+	}
+	return append([]byte(nil), buf.Buf...)
+}
+
+// encodeEmptyNamedClientData is one external table's zero-row terminator.
+func encodeEmptyNamedClientData(t *testing.T, name string) []byte {
+	t.Helper()
+	var buf proto.Buffer
+	buf.PutUVarInt(uint64(proto.ClientCodeData))
+	buf.PutString(name)
+	(proto.BlockInfo{BucketNum: -1}).Encode(&buf)
+	buf.PutUVarInt(0)
+	buf.PutUVarInt(0)
+	return append([]byte(nil), buf.Buf...)
+}
+
+// assertDeferredNamedBlockRejected drives the deferred lane up to the sample
+// block, feeds it one named Data packet, and asserts the fail-closed shape:
+// Exception naming external tables, nothing forwarded upstream, strict hooks
+// never fired, abort + exactly one complete.
+func assertDeferredNamedBlockRejected(t *testing.T, named []byte) {
+	t.Helper()
+	hooks := &deferredInsertHooks{}
+	h := newDeferredHarness(t, hooks)
+	sample := encodeServerSampleDataPacket(t, deferredTestRev)
+
+	upstreamBytes := make(chan int, 1)
+	go func() {
+		buf := make([]byte, 1024)
+		n, _ := h.upstreamProxy.Read(buf)
+		upstreamBytes <- n
+	}()
+
+	writeAllConn(t, h.clientProxy, encodeInsertQuery(t, "qid", "INSERT INTO t FORMAT Native"))
+	if got := readExact(t, h.clientProxy, len(sample)); !bytes.Equal(got, sample) {
+		t.Fatalf("client sample block mismatch")
+	}
+	namedWrite := make(chan error, 1)
+	go func() {
+		_, err := h.clientProxy.Write(named)
+		namedWrite <- err
+	}()
+	clientCodec := chproto.NewCodec(h.clientProxy, chproto.DirToUpstream)
+	clientCodec.SetRevision(deferredTestRev)
+	_ = h.clientProxy.SetReadDeadline(time.Now().Add(2 * time.Second))
+	pkt, err := clientCodec.ReadPacket(uint64(chproto.ServerExceptionCode))
+	if err != nil {
+		t.Fatalf("client read: %v", err)
+	}
+	exc, ok := pkt.Decoded.(*chproto.Exception)
+	if !ok || !strings.Contains(exc.Message, "external table") {
+		t.Fatalf("client got %#v, want an external-table Exception", pkt.Decoded)
+	}
+	h.close(t)
+	<-namedWrite
+	if n := <-upstreamBytes; n != 0 {
+		t.Fatalf("upstream received %d bytes, want 0", n)
+	}
+	strictData, strictComplete, _, queryCompletes, aborts := hooks.counts()
+	if strictData != 0 || strictComplete != 0 {
+		t.Fatalf("strict hooks fired (%d data, %d complete); a rejected block must never reach the signer", strictData, strictComplete)
+	}
+	if queryCompletes != 1 || aborts != 1 {
+		t.Fatalf("counts complete/abort = %d/%d, want 1/1", queryCompletes, aborts)
+	}
+}
+
+func TestRelay_DeferredInsert_RejectsNamedExternalTableBlock(t *testing.T) {
+	assertDeferredNamedBlockRejected(t, encodeNamedClientData(t, "tmp_ext"))
+}
+
+func TestRelay_DeferredInsert_RejectsEmptyNamedExternalTableTerminator(t *testing.T) {
+	// An EMPTY named block is the per-external-table terminator. Accepting it
+	// as "the" payload terminator is exactly the confusion 1e describes, so it
+	// is refused rather than consumed.
+	assertDeferredNamedBlockRejected(t, encodeEmptyNamedClientData(t, "tmp_ext"))
+}
+
+func TestRelay_DeferredInsert_RejectsNamedBlockAfterPayload(t *testing.T) {
+	// A named block arriving after payload bytes must not be folded into
+	// payload_hash either.
+	hooks := &deferredInsertHooks{}
+	h := newDeferredHarness(t, hooks)
+	sample := encodeServerSampleDataPacket(t, deferredTestRev)
+	nonEmpty := encodeNonEmptyClientDataPacket(t, deferredTestRev)
+
+	writeAllConn(t, h.clientProxy, encodeInsertQuery(t, "qid", "INSERT INTO t FORMAT Native"))
+	if got := readExact(t, h.clientProxy, len(sample)); !bytes.Equal(got, sample) {
+		t.Fatalf("client sample block mismatch")
+	}
+	writeAllConn(t, h.clientProxy, encodeEmptyClientData(t))
+	writeAllConn(t, h.clientProxy, nonEmpty)
+	named := encodeNamedClientData(t, "tmp_ext")
+	namedWrite := make(chan error, 1)
+	go func() {
+		_, err := h.clientProxy.Write(named)
+		namedWrite <- err
+	}()
+	clientCodec := chproto.NewCodec(h.clientProxy, chproto.DirToUpstream)
+	clientCodec.SetRevision(deferredTestRev)
+	_ = h.clientProxy.SetReadDeadline(time.Now().Add(2 * time.Second))
+	pkt, err := clientCodec.ReadPacket(uint64(chproto.ServerExceptionCode))
+	if err != nil {
+		t.Fatalf("client read: %v", err)
+	}
+	exc, ok := pkt.Decoded.(*chproto.Exception)
+	if !ok || !strings.Contains(exc.Message, "external table") {
+		t.Fatalf("client got %#v, want an external-table Exception", pkt.Decoded)
+	}
+	h.close(t)
+	<-namedWrite
+	if _, strictComplete, _, _, aborts := hooks.counts(); strictComplete != 0 || aborts != 1 {
+		t.Fatalf("strictComplete/abort = %d/%d, want 0/1 (nothing may be signed)", strictComplete, aborts)
+	}
+}
