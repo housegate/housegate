@@ -216,7 +216,7 @@ Bumping `rewriter-go`/`rewriter-proto`/the `sentioxyz` ch-go & clickhouse-go for
 [.github/workflows/ci.yml](.github/workflows/ci.yml) runs three jobs. Release tooling runs on GitHub-hosted Ubuntu; build and integration use a self-hosted `linux/x64` runner with a fork-safety gate:
 
 - **Release tooling** — Bazel target `//:homebrew_formula_updater_test`, which runs Ruby syntax and unit tests for the Homebrew Formula updater.
-- **Build** — `bazel build //...` only; it compiles all test binaries but does not run them. The `bazel test --config=ci //...` step is currently commented out in `ci.yml`, so CI passing is **not** evidence the ~1100+ non-integration unit tests pass — run `bazel test //...` yourself before trusting a change. Don't try `--config=ci` locally on darwin to reproduce this: `.bazelrc` pins `build:ci --platforms=//:linux_amd64`, which only resolves a test toolchain on linux/x64 and fails Bazel analysis (`No matching toolchains found for @@bazel_tools//tools/test:default_test_toolchain_type`) elsewhere — use plain `bazel test //...`.
+- **Build** — `bazel build //...` followed by `bazel test --config=ci //...`, which runs all 56 unit targets as a merge gate (Spec J D1). `--config=ci` pins `--platforms=//:linux_amd64`, so this exact invocation only resolves a test toolchain on the linux/x64 runner; locally use plain `bazel test //...`. Integration targets are tagged `manual` and are not reached by this step.
 - **Integration (ClickHouse)** — pre-pulls `clickhouse/clickhouse-server:25.8`, installs a `clickhouse` client binary into `tests/bin/`, then runs the docker-bound integration suite explicitly:
   ```bash
   bazel test //pkg/integration:integration_test //pkg/integration/testenv:testenv_test --test_output=errors
