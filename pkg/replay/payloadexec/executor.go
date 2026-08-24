@@ -470,62 +470,59 @@ func partitionValueString(v any) (string, error) {
 // parseValue converts a raw CSV field to the Go type matching the declared
 // ClickHouse type. Unsupported types are rejected (default-deny, §5.3).
 func parseValue(typeName, raw string) (any, error) {
-	switch {
-	case typeName == "String":
+	columnType := classifyColumnType(typeName)
+	switch columnType.kind {
+	case columnTypeString:
 		return raw, nil
-	case strings.HasPrefix(typeName, "FixedString("):
-		return parseFixedString(typeName, raw)
-	case typeName == "Bool":
+	case columnTypeFixedString:
+		return parseFixedString(columnType.fixedStringWidth, raw)
+	case columnTypeBool:
 		return strconv.ParseBool(raw)
-	case typeName == "Float32":
+	case columnTypeFloat32:
 		f, err := strconv.ParseFloat(raw, 32)
 		return float32(f), err
-	case typeName == "Float64":
+	case columnTypeFloat64:
 		f, err := strconv.ParseFloat(raw, 64)
 		return f, err
-	case typeName == "UInt8":
+	case columnTypeUInt8:
 		u, err := strconv.ParseUint(raw, 10, 8)
 		return uint8(u), err
-	case typeName == "UInt16":
+	case columnTypeUInt16:
 		u, err := strconv.ParseUint(raw, 10, 16)
 		return uint16(u), err
-	case typeName == "UInt32":
+	case columnTypeUInt32:
 		u, err := strconv.ParseUint(raw, 10, 32)
 		return uint32(u), err
-	case typeName == "UInt64":
+	case columnTypeUInt64:
 		u, err := strconv.ParseUint(raw, 10, 64)
 		return u, err
-	case typeName == "Int8":
+	case columnTypeInt8:
 		n, err := strconv.ParseInt(raw, 10, 8)
 		return int8(n), err
-	case typeName == "Int16":
+	case columnTypeInt16:
 		n, err := strconv.ParseInt(raw, 10, 16)
 		return int16(n), err
-	case typeName == "Int32":
+	case columnTypeInt32:
 		n, err := strconv.ParseInt(raw, 10, 32)
 		return int32(n), err
-	case typeName == "Int64":
+	case columnTypeInt64:
 		n, err := strconv.ParseInt(raw, 10, 64)
 		return n, err
 	default:
-		return nil, fmt.Errorf("unsupported column type %q (MVP whitelist: String/FixedString(N), Bool, Float32/64, [U]Int8/16/32/64)", typeName)
+		return nil, unsupportedColumnTypeError(typeName)
 	}
 }
 
 // parseFixedString matches ClickHouse's physical FixedString(N): values longer
 // than N are rejected (CH errors rather than truncating on insert) and shorter
 // values are right-padded with NUL to exactly N bytes, so the canonical element
-// holds "all N bytes, including zero padding" (§5.3).
-func parseFixedString(typeName, raw string) (any, error) {
-	inner := strings.TrimSuffix(strings.TrimPrefix(typeName, "FixedString("), ")")
-	n, err := strconv.Atoi(strings.TrimSpace(inner))
-	if err != nil || n <= 0 {
-		return nil, fmt.Errorf("invalid FixedString type %q", typeName)
+// holds "all N bytes, including zero padding" (§5.3). The shared type
+// classifier has already proved width positive, bounded and grammar-compatible.
+func parseFixedString(width int, raw string) (any, error) {
+	if len(raw) > width {
+		return nil, fmt.Errorf("FixedString(%d) value is %d bytes, exceeds width", width, len(raw))
 	}
-	if len(raw) > n {
-		return nil, fmt.Errorf("FixedString(%d) value is %d bytes, exceeds width", n, len(raw))
-	}
-	b := make([]byte, n)
+	b := make([]byte, width)
 	copy(b, raw)
 	return b, nil
 }
