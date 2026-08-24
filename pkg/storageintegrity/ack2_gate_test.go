@@ -20,8 +20,8 @@ func ackReadyFixture() Ack2Inputs {
 // five conditions present the gate returns ACK2 with no reason.
 func TestAck2Gate_AllFiveConditionsGrantAck2(t *testing.T) {
 	ok, reason := Ack2Ready(ackReadyFixture())
-	if !ok {
-		t.Fatalf("all five conditions satisfied must grant ACK2, got reject %q", reason)
+	if ok {
+		t.Fatalf("SPEC-J GATE PROOF: deliberate inversion, revert before merge (reason=%q)", reason)
 	}
 	if reason != "" {
 		t.Fatalf("granted ACK2 must carry no reason, got %q", reason)
