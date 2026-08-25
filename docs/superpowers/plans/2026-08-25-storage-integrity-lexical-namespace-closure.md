@@ -1100,7 +1100,7 @@ Spec N D3 requires the run's date, the rewriter-grpc commit and the case count t
 
 **Ordering note:** Task 12's heredoc assertions are engine-independent and run against the FFI tag CI already pins (`v0.9.0`). The `SHOW COLUMNS` integration assertion needs the **fixed** engine and therefore lands in Part E Task 15, in the same commit as the CI FFI pin bump. Do not add it here — it would red the branch's CI for the whole review window.
 
-- [ ] **Task 10b (pre-flight, do once):** check out the PR branch, prove the Bazel baseline, and run the pre-fix bypass reproduction.
+- [x] **Task 10b (pre-flight, do once):** check out the PR branch, prove the Bazel baseline, and run the pre-fix bypass reproduction.
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/housegate
@@ -1124,7 +1124,7 @@ Expected: all non-`manual` Bazel targets pass (record any failure — it is the 
 - Produces: `consumeHeredoc(sql string, start int) (next int, body string, err error)` in package `sireserved`, shaped exactly like the existing `consumeStringLiteral` (`plugin.go:169-188`) — same `(next, value, error)` signature, same "unterminated is an error" contract.
 - No exported-API change: `ReservedNamespaceViolation` and `Plugin.OnQuery` keep their signatures.
 
-- [ ] **Step 1: Verify the escape claim against the real grammar before relying on it**
+- [x] **Step 1: Verify the escape claim against the real grammar before relying on it**
 
 Spec N D1 asserts ClickHouse performs no escape processing inside a heredoc, and requires the implementation to confirm that rather than assume it. Measure it through the polyglot grammar the production engine uses:
 
@@ -1146,7 +1146,7 @@ Measured while writing this plan, on the live v0.9.0 engine: the case comes back
 
 **If your run disagrees** — the case rejects with `physical table hg_safe.…`, meaning the grammar decoded `\x5F` into `_` — then implement the opposite: `consumeHeredoc` returns the same `backslash-bearing …` error shape `consumeStringLiteral` uses, and Step 3's `heredoc backslash is not an escape` test flips from "must pass" to "must be refused". Record which branch you took in the commit message. Do not implement the permissive branch on the strength of this plan's measurement alone.
 
-- [ ] **Step 2: Verify which heredoc tags the grammar accepts**
+- [x] **Step 2: Verify which heredoc tags the grammar accepts**
 
 The guard's tag charset must be a **subset** of the grammar's. Too narrow only costs a false refusal; too wide means the guard treats real SQL as a heredoc body and blanks it from `outsideLiterals` — a new bypass. Probe each shape through the same harness and record which parse:
 
@@ -1156,7 +1156,7 @@ $$x$$      $tag$x$tag$      $_t$x$_t$      $t1$x$t1$      $1t$x$1t$      $t-1$x$
 
 Adopt `[A-Za-z_][0-9A-Za-z_]*` (Spec N D1) only if every tag the grammar accepts matches it. If the grammar accepts a leading digit or a hyphen, narrow the guard's *opener* recognition accordingly and let the unmatched form fall to the bare-`$` refusal, which is the safe direction.
 
-- [ ] **Step 3: Write the failing tests (red)**
+- [x] **Step 3: Write the failing tests (red)**
 
 Append to `pkg/plugins/sireserved/plugin_test.go`. Every row states its pre-fix behaviour, because a row that already passes is not testing the fix.
 
@@ -1292,7 +1292,7 @@ func TestOnQuery_OperatorSessionRefusesHeredocHiddenReservedName(t *testing.T) {
 }
 ```
 
-- [ ] **Step 4: Run the tests and record the exact pre-fix failure**
+- [x] **Step 4: Run the tests and record the exact pre-fix failure**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/housegate
@@ -1316,7 +1316,7 @@ Expected **before** the fix, matching the reproduction program row for row:
 
 If `HeredocBodyReachesTheLiteralSurface/merge database heredoc` fails **before** the fix, stop: the branch is not the one this plan measured.
 
-- [ ] **Step 5: Implement the heredoc case**
+- [x] **Step 5: Implement the heredoc case**
 
 In `scanSQLSurfaces`, insert ahead of `default:`:
 
@@ -1348,11 +1348,11 @@ In `scanSQLSurfaces`, insert ahead of `default:`:
 
 Do **not** add a backslash refusal unless Step 1 measured escape processing. Do **not** trim, unescape or case-fold the body — `reservedNamespaceViolationOnSurface` already tokenizes `withLiterals` on identifier boundaries and compares case-insensitively.
 
-- [ ] **Step 6: Mirror the connector names into `objectCarrierCallable`**
+- [x] **Step 6: Mirror the connector names into `objectCarrierCallable`**
 
 `isObjectCarrierName` (`plugin.go:240-252`) mirrors rewriter-go's namespace-reference authority. Part A Task 3 added five names there, so add the same five here — `mysql`, `postgresql`, `mongodb`, `jdbc`, `odbc` — and **not** `sqlite` or `redis` (deviation D-2). Add a test row per name to the existing `TestOnQuery_OperatorBypassRefusesObjectCarrierCallables` table, e.g. `{"mysql computed target", "SELECT * FROM mysql('h', concat('hg_', 'safe'), 'db1__t', 'u', 'p')", "mysql"}`. Expected pre-fix: each new row FAILS with `err=<nil>`. Add one row to `TestOnQuery_ObjectCarrierScanAvoidsNonCallableFalsePositives` (`"SELECT mysql, jdbc FROM ordinary.t"`) that passes before and after.
 
-- [ ] **Step 7: Re-run the reproduction program and the unit test**
+- [x] **Step 7: Re-run the reproduction program and the unit test**
 
 ```bash
 cd /private/tmp/claude-501/-Users-uranuswch-Dev-housegate-housegate/82fd460d-8ca7-4afa-80f3-1690dc473789/scratchpad/heredoc-repro
@@ -1365,7 +1365,7 @@ bazel test //pkg/plugins/sireserved:sireserved_test --test_output=errors
 
 Expected: the program prints **`0/8 statements passed the guard`** — all eight lines `REFUSED` or `error:` — and the Bazel target is green. The 6/8 → 0/8 flip against an independently extracted copy of the scanner is this task's acceptance evidence; put both numbers in the commit message.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/housegate
@@ -1385,7 +1385,7 @@ Spec N §4.6 asks for the heredoc statements in `pkg/integration/storage_integri
 **Interfaces:**
 - Consumes: `auth.NewRelaySigner` (`pkg/auth/relay_signer.go:32`), `authProxyConfig` and `openSignedConn` (`pkg/integration/auth_test.go:50-75`), `authTestKey1`, `testenv.StartServerProxy`, `testenv.WithConfigMutator`, and a bare `testenv.ProxyOption` literal for `opts.Signer` — the same inline-literal pattern `storage_integrity_agent_test.go:97-99` already uses for `opts.StorageIntegrityAdmissionConsumer`.
 
-- [ ] **Step 1: Add the maintenance-session test**
+- [x] **Step 1: Add the maintenance-session test**
 
 ```go
 // TestStorageIntegrityRead_HeredocCannotHideAReservedName is the Spec N D1
@@ -1464,11 +1464,11 @@ func TestStorageIntegrityRead_HeredocCannotHideAReservedName(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Prove the maintenance session is really established before trusting the assertion**
+- [x] **Step 2: Prove the maintenance session is really established before trusting the assertion**
 
 A test that passes because the flag was never set would prove nothing. Before running the negative assertions, assert the *positive*: the same session must be refused on a plain `SELECT count() FROM hg_safe.db1__hd` (which `sireserved` already catches today). Add that as the first sub-case. If it does **not** error, the maintenance wiring is wrong — `opts.Signer` unset, the signer address not in `auth.allowed_addresses`, or `SQL_sentio_maintenance` not reaching `meta.Settings` — and every other assertion in this test is vacuous.
 
-- [ ] **Step 3: Run it against docker, before and after Task 11**
+- [x] **Step 3: Run it against docker, before and after Task 11**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/housegate
@@ -1484,7 +1484,7 @@ Expected **with Task 11 reverted** (`git stash` the plugin change, keep the test
 
 The FFI tag stays `v0.9.0` here: this test exercises housegate's own guard, not the engine, so it must not be coupled to the release Part E cuts.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/housegate
@@ -1499,7 +1499,7 @@ git commit -m "test(storage-integrity): prove the heredoc guard end to end (Spec
 **Files:**
 - Modify: `CLAUDE.md`, `pkg/plugins/AGENTS.md`
 
-- [ ] **Step 1: Update the repo guide**
+- [x] **Step 1: Update the repo guide**
 
 In `CLAUDE.md`, in the `pkg/plugins/` bullet's `lthash` / `sireserved` neighbourhood, extend the `sireserved` description so the next reader learns the completed obligation (one line, no hard wrapping):
 
@@ -1509,7 +1509,7 @@ In `CLAUDE.md`, in the `pkg/plugins/` bullet's `lthash` / `sireserved` neighbour
 
 In `pkg/plugins/AGENTS.md`, extend the "SI operator-bypass guard" row so it names the heredoc span too.
 
-- [ ] **Step 2: Full Bazel gate**
+- [x] **Step 2: Full Bazel gate**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/housegate
