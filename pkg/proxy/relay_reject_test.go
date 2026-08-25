@@ -186,3 +186,85 @@ func readServerException(t *testing.T, conn net.Conn) *chproto.Exception {
 	}
 	return exc
 }
+
+// deferredRejectHooks is the agent-side shape: Relay answers the sample block
+// locally, buffers the payload, and the strict hook refuses the first query.
+type deferredRejectHooks struct {
+	stagedRejectHooks
+}
+
+func (h *deferredRejectHooks) OnQuery(_ context.Context, qctx *plugin.QueryContext) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.queries = append(h.queries, qctx.Query.Body)
+	if len(h.queries) == 1 {
+		qctx.DeferredInsert = &plugin.DeferredInsertPlan{
+			SampleColumns:   []chproto.SampleColumn{{Name: "v", Type: "UInt64"}},
+			MaxPayloadBytes: 1 << 20,
+		}
+	}
+	return nil
+}
+
+func TestRelay_DeferredRejection_KeepsSessionAndServesNextQuery(t *testing.T) {
+	hooks := &deferredRejectHooks{stagedRejectHooks: stagedRejectHooks{rejectOne: true}}
+	h := newDeferredHarness(t, hooks)
+	empty := encodeEmptyClientData(t)
+	sample := encodeServerSampleDataPacket(t, deferredTestRev)
+
+	upDone := make(chan error, 1)
+	go func() { upDone <- serveSecondQueryOnlyUpstream(t, h.upstreamProxy) }()
+
+	writeAllConn(t, h.clientProxy, encodeInsertQuery(t, "q1", "INSERT INTO db.t FORMAT Native"))
+	if got := readExact(t, h.clientProxy, len(sample)); !bytes.Equal(got, sample) {
+		t.Fatalf("client sample block = %x, want %x", got, sample)
+	}
+	writeAllConn(t, h.clientProxy, empty)
+	writeAllConn(t, h.clientProxy, encodeNonEmptyClientDataPacket(t, deferredTestRev))
+	writeAllConn(t, h.clientProxy, empty)
+
+	exc := readServerException(t, h.clientProxy)
+	if exc.Code != proto.Error(chproto.CodeTooManyParts) {
+		t.Fatalf("exception code = %d, want 252", exc.Code)
+	}
+	waitForRejectCounts(t, &hooks.stagedRejectHooks)
+
+	writeAllConn(t, h.clientProxy, encodeInsertQuery(t, "q2", "SELECT 1"))
+	writeAllConn(t, h.clientProxy, empty)
+	if got := readExact(t, h.clientProxy, 1); got[0] != byte(chproto.ServerEndOfStreamCode) {
+		t.Fatalf("second query terminal = %d, want EndOfStream", got[0])
+	}
+	select {
+	case err := <-h.loopErr:
+		t.Fatalf("a relay loop exited after the deferred rejection: %v", err)
+	default:
+	}
+	if err := <-upDone; err != nil {
+		t.Fatalf("upstream flow: %v", err)
+	}
+}
+
+// serveSecondQueryOnlyUpstream proves the rejected deferred INSERT never
+// reached upstream: the first packet it sees is the SELECT.
+func serveSecondQueryOnlyUpstream(t *testing.T, conn net.Conn) error {
+	t.Helper()
+	codec := chproto.NewCodec(conn, chproto.DirFromClient)
+	codec.SetRevision(deferredTestRev)
+	codec.SetCompression(proto.CompressionDisabled)
+	pkt, err := codec.ReadPacket(uint64(chproto.ClientQueryCode))
+	if err != nil {
+		return err
+	}
+	if q, ok := pkt.Decoded.(*chproto.Query); !ok || q.Body != "SELECT 1" {
+		t.Errorf("upstream first query = %#v, want SELECT 1", pkt.Decoded)
+	}
+	marker, err := codec.ReadPacket()
+	if err != nil {
+		return err
+	}
+	if empty, inspectErr := chproto.ClientDataPacketIsEmpty(marker.Raw, proto.CompressionDisabled); inspectErr != nil || !empty {
+		t.Errorf("SELECT input marker empty/err = %v/%v, want true/nil", empty, inspectErr)
+	}
+	_, err = conn.Write([]byte{byte(chproto.ServerEndOfStreamCode)})
+	return err
+}

@@ -95,6 +95,11 @@ var errOpaqueConnectionNotReusable = errors.New(
 	"legacy non-chunked opaque result connection cannot be safely reused",
 )
 
+// errQueryRejectedResume marks a deferred INSERT that Housegate rejected
+// after consuming the client's complete input. Nothing reached upstream, so
+// clientToUpstream can continue on the same packet boundary.
+var errQueryRejectedResume = errors.New("query rejected without closing the session")
+
 // NewRelay constructs a Relay.
 //
 // dialer is the post-OnHello upstream dialer. When dialer is nil the
@@ -1036,6 +1041,11 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 					continue
 				}
 				if err := r.runDeferredInsert(ctx, qctx, clientCompression); err != nil {
+					if errors.Is(err, errQueryRejectedResume) {
+						logger.Infow("deferred INSERT rejected without closing the session",
+							"query_id", q.ID, "err", err)
+						continue
+					}
 					return err
 				}
 				continue
@@ -1260,6 +1270,15 @@ func (r *Relay) runDeferredInsert(ctx context.Context, qctx *plugin.QueryContext
 		r.writeExceptionToClient(ctx, err)
 		return err
 	}
+	// The complete terminator has already been consumed and nothing has been
+	// written upstream, so a retryable admission rejection can end only this
+	// query while leaving both packet streams on a clean boundary.
+	rejectResume := func(err error) error {
+		r.hooks.OnQueryAbort(ctx, qctx)
+		r.hooks.OnQueryComplete(ctx, r.sess)
+		r.writeExceptionToClient(ctx, err)
+		return fmt.Errorf("%w: %w", errQueryRejectedResume, err)
+	}
 	if err := client.WriteSampleBlock(plan.SampleColumns); err != nil {
 		r.hooks.OnQueryAbort(ctx, qctx)
 		r.hooks.OnQueryComplete(ctx, r.sess)
@@ -1368,6 +1387,9 @@ func (r *Relay) runDeferredInsert(ctx context.Context, qctx *plugin.QueryContext
 		}
 	}
 	if err := r.hooks.OnQueryInputCompleteStrict(ctx, qctx); err != nil {
+		if chproto.KeepsSession(err) {
+			return rejectResume(fmt.Errorf("query input complete strict hook: %w", err))
+		}
 		return rejectClose(fmt.Errorf("query input complete strict hook: %w", err))
 	}
 
