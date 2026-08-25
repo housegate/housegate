@@ -1494,6 +1494,26 @@ Recorded here rather than silently worked around, so the spec can be corrected. 
 10. **§4 item 3 under-states the `chexec` work.** Extending the equivalence test to the new types is not just adding columns: clickhouse-go's scan destinations for `UUID`, `Decimal` and `Nullable` are `uuid.UUID`, `decimal.Decimal` and `**T`, none of which is the canonical value type, so the profile needs a second `ScanGoType` field and an insert-side inverse. `github.com/shopspring/decimal` also becomes a direct module dependency.
 11. **Minor:** §4 item 2's "a `DateTime` column that fails validation before the change and passes after" is already the shape of `column_types_test.go`'s frozen `rejectedTypeMatrix` / `supportedTypeMatrix`, which the spec does not mention. Moving an entry between those two lists *is* the red test, and it is cheaper and more durable than writing a new one.
 
+## Corrections found during Phase 1 execution
+
+Recorded against the plan itself, in the same spirit as the section above. Each was measured while executing Tasks 0-9.
+
+12. **Task 5's `FixedString(32)` golden row is one NUL byte too long.** The prose says "`04` + `6669786564` + 27 × `00`", which is right — 1 kind tag + 32 payload bytes = 33 bytes — but the hex literal beside it carries 28 zero bytes. Every other one of the 19 measured rows reproduced exactly. The committed golden builds the padding with `strings.Repeat("00", 27)` so the count cannot drift from the prose again.
+
+13. **Task 3 must run after Task 6, not before it.** Task 3 Step 2 deletes `chexec.isTemporalColumnType` and dispatches `derefScan` on `profile.Family`, but Task 2 populates the authority with "exactly today's admitted set and nothing more" — which has no temporal families. Executed in the plan's order, Task 3 makes `chexec.supportedColumnType` reject `Date`/`DateTime`, breaking `materializer_time_test.go` and the docker temporal replay tests, with Task 6 restoring them three tasks later. Phase 1 was executed as 0, 1, 2, 5, 6, 3, 4, 7, 8, 9 so every commit is green. Task 5 moving earlier is free — it pins `lthash` value encodings, which nothing in Tasks 2/3/4/6 touches — and capturing it before the widening is what the task is for.
+
+14. **Task 3's predicted pre-fix failure names the wrong member.** It expects `chexec and authority disagree on "FixedString(17)"`, but the authority still admits every width up to `0xFFFFFF` until Task 9 narrows it, so chexec and the authority agree on `FixedString(17)` at Task 3. The seven live disagreements are `FixedString(0)`, `FixedString(x)`, `FixedString(-1)`, `DateTime64()`, `DateTime64(10)`, `DateTime()` and `DateTime('Not/AZone')` — all cases where chexec's prefix match accepted a parameter spelling the authority rejects. The guard bites; only the named member was wrong.
+
+15. **Task 8's "Task 9 does not have to rewrite this test" is wrong.** The width-4 canonicalization cases are driven through `CanonicalColumnType`, which *validates* as well as canonicalizes, so Task 9's narrowing makes `CanonicalColumnType("FixedString( 4 )")` an error. Task 9 drops those three rows; the width-32 spellings exercise the identical tolerance.
+
+16. **Task 2's `ColumnFamily` block cannot declare the Phase 2 families.** Its own Step 4 asserts that every declared family appears as the `Family` of at least one admitted vector, so declaring `FamilyUUID`/`FamilyDecimal`/`FamilyNullable`/`FamilyDate32` ahead of their vectors fails that assertion. Only live families are declared, and an `allColumnFamilies` slice makes the closed set checkable in both directions. `ColumnProfile.Elem` and `.Scale` are likewise deferred to Phase 2 rather than shipped as fields nothing sets.
+
+17. **Task 2 needs the exported `lthash.Kind*` constants that Task 4 lists.** The authority's `KindTag` column cannot be written without them, so the export moved from Task 4 to Task 2. Task 4 keeps the assertion that uses them.
+
+18. **Q-D5's comma-space is confirmed by ClickHouse itself, not only by ch-go.** Task 8's round trip measured `system.columns` reporting `DateTime64(3, 'UTC')` for a table created as `DateTime64(3,'UTC')`. Removing the space from the canonical form fails both timezone-bearing `DateTime64` cases against a real server, so the two normalizers agree rather than merely each being self-consistent.
+
+19. **Two existing partition tests encoded measurement M5 as an expectation.** `TestPartitionIDForRowRejectsUndefinedTypedPartitionValue` asserted that a `Date` partition column *fails*, and `TestPartitionIDForRowTypedValueGoldenMatrix` declared every partition column as the synthetic type `"fixture"`, which the authority does not admit once `PartitionIDForRow` resolves the column. Task 7 repoints both: the first at a genuinely undefined Go type plus a temporal column carrying a non-time value, the second at the real declared type each value belongs to.
+
 ## Self-review
 
 Run after the plan is written, before execution.
