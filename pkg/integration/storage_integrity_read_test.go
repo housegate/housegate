@@ -41,7 +41,7 @@ func (s *siReadStateStub) set(tableID string, parts ...string) {
 func TestStorageIntegrityRead_SafeAndUnsafeLatest(t *testing.T) {
 	lib := os.Getenv("POLYGLOT_SQL_FFI_PATH")
 	if lib == "" {
-		t.Skip("POLYGLOT_SQL_FFI_PATH not set; run `go run ./cmd fetch-rewriter-lib --tag v0.7.1` and pass --test_env")
+		t.Skip("POLYGLOT_SQL_FFI_PATH not set; run `go run ./cmd fetch-rewriter-lib --tag v0.9.0` and pass --test_env")
 	}
 	ctx := context.Background()
 	const phys = "phys_si"
@@ -175,7 +175,7 @@ func TestStorageIntegrityRead_SafeAndUnsafeLatest(t *testing.T) {
 func TestStorageIntegrityRead_CriticalStatementsAreRefused(t *testing.T) {
 	lib := os.Getenv("POLYGLOT_SQL_FFI_PATH")
 	if lib == "" {
-		t.Skip("POLYGLOT_SQL_FFI_PATH not set; fetch the Spec I rewriter-go release with `go run ./cmd fetch-rewriter-lib` and pass --test_env")
+		t.Skip("POLYGLOT_SQL_FFI_PATH not set; run `go run ./cmd fetch-rewriter-lib --tag v0.9.0` and pass --test_env")
 	}
 	ctx := context.Background()
 	const phys = "phys_si_guard"
