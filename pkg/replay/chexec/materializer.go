@@ -17,6 +17,7 @@ package chexec
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -202,121 +203,64 @@ func (m *Materializer) readBack(ctx context.Context, table string, schema payloa
 	return out, nil
 }
 
-// supportedColumnType reports whether the executor can materialize and read back
-// a column of this ClickHouse type. It is the single source of truth shared by
-// createScratch (DDL validation) and newScanDest (read-back), kept in sync with
-// the Native decoder's admitted scalar matrix so the in-process and
-// ClickHouse-backed Native executors admit the same schema set.
+// supportedColumnType reports whether the executor can materialize and read
+// back a column of this ClickHouse type. Spec Q Q-D1: it is a reader of the one
+// column-type authority rather than a list of its own, because the private list
+// it replaced accepted parameter spellings by prefix match that neither the
+// authority nor the Native decoder admits.
 func supportedColumnType(typeName string) bool {
-	switch {
-	case typeName == "String", strings.HasPrefix(typeName, "FixedString("):
-		return true
-	case typeName == "Bool", typeName == "Float32", typeName == "Float64":
-		return true
-	case isTemporalColumnType(typeName):
-		return true
-	case typeName == "UInt8", typeName == "UInt16", typeName == "UInt32", typeName == "UInt64":
-		return true
-	case typeName == "Int8", typeName == "Int16", typeName == "Int32", typeName == "Int64":
-		return true
-	default:
-		return false
-	}
-}
-
-func isTemporalColumnType(typeName string) bool {
-	return typeName == "Date" ||
-		typeName == "DateTime" ||
-		strings.HasPrefix(typeName, "DateTime(") ||
-		strings.HasPrefix(typeName, "DateTime64(")
+	return payloadexec.SupportedColumnType(typeName)
 }
 
 // newScanDest returns a pointer of the Go type clickhouse-go scans this column
-// into; the type must match what payloadexec/lthash expects so the canonical
-// element bytes agree across the wire-side and read-back paths. FixedString(N)
-// scans into []byte (exactly N bytes, NUL-padded) to match parseFixedString.
+// into. The type comes from the authority, so ClickHouse read-back and Native
+// decode hand lthash identical value types for the same row and the canonical
+// element bytes agree across the two lanes. FixedString(N) scans into []byte
+// (exactly N bytes, NUL-padded) to match parseFixedString.
 func newScanDest(typeName string) (any, error) {
-	switch {
-	case typeName == "String":
-		return new(string), nil
-	case strings.HasPrefix(typeName, "FixedString("):
-		return new([]byte), nil
-	case typeName == "Bool":
-		return new(bool), nil
-	case typeName == "Float32":
-		return new(float32), nil
-	case typeName == "Float64":
-		return new(float64), nil
-	case isTemporalColumnType(typeName):
-		return new(time.Time), nil
-	case typeName == "UInt8":
-		return new(uint8), nil
-	case typeName == "UInt16":
-		return new(uint16), nil
-	case typeName == "UInt32":
-		return new(uint32), nil
-	case typeName == "UInt64":
-		return new(uint64), nil
-	case typeName == "Int8":
-		return new(int8), nil
-	case typeName == "Int16":
-		return new(int16), nil
-	case typeName == "Int32":
-		return new(int32), nil
-	case typeName == "Int64":
-		return new(int64), nil
-	default:
-		return nil, fmt.Errorf("chexec: unsupported column type %q for ClickHouse read-back", typeName)
+	profile, err := payloadexec.ResolveColumnProfile(typeName)
+	if err != nil {
+		return nil, fmt.Errorf("chexec: unsupported column type %q for ClickHouse read-back: %w", typeName, err)
 	}
+	return reflect.New(profile.GoType).Interface(), nil
 }
 
+// derefScan unwraps a read-back destination and applies the lane-specific
+// normalization the ClickHouse driver makes necessary. It dispatches on the
+// authority's family and fails closed on any family it has no rule for, so a
+// type admitted into the profile without a read-back decision cannot silently
+// produce a differently-shaped value than the Native lane.
 func derefScan(typeName string, p any) (any, error) {
-	switch v := p.(type) {
-	case *string:
-		return *v, nil
-	case *[]byte:
+	profile, err := payloadexec.ResolveColumnProfile(typeName)
+	if err != nil {
+		return nil, fmt.Errorf("chexec: unsupported column type %q for ClickHouse read-back: %w", typeName, err)
+	}
+	holder := reflect.ValueOf(p)
+	if holder.Kind() != reflect.Pointer || holder.IsNil() || holder.Elem().Type() != profile.GoType {
+		return nil, fmt.Errorf("chexec: scan destination %T does not match the profile value type %s for column type %q", p, profile.GoType, typeName)
+	}
+	value := holder.Elem().Interface()
+
+	switch profile.Family {
+	case payloadexec.FamilyString, payloadexec.FamilyBool,
+		payloadexec.FamilyFloat, payloadexec.FamilyUInt, payloadexec.FamilyInt:
+		return value, nil
+	case payloadexec.FamilyFixedString:
 		// Defensive copy: clickhouse-go's FixedString column aliases a shared
 		// row buffer. The []byte flows through lthash's []byte->kindString path,
 		// matching the in-process parseFixedString encoding.
-		return append([]byte(nil), *v...), nil
-	case *bool:
-		return *v, nil
-	case *float32:
-		return *v, nil
-	case *float64:
-		return *v, nil
-	case *time.Time:
-		switch {
-		case typeName == "Date":
-			// clickhouse-go preserves Date's calendar day but relocates its
-			// midnight into the server/user timezone. Rebuild that calendar
-			// value at UTC midnight so Date's day commitment is independent
-			// of the executor session timezone and matches nativepayload.
-			year, month, day := v.Date()
-			return time.Date(year, month, day, 0, 0, 0, 0, time.UTC), nil
-		case typeName == "DateTime", strings.HasPrefix(typeName, "DateTime("), strings.HasPrefix(typeName, "DateTime64("):
-			return v.UTC(), nil
-		default:
-			return nil, fmt.Errorf("chexec: unexpected time.Time destination for column type %q", typeName)
-		}
-	case *uint8:
-		return *v, nil
-	case *uint16:
-		return *v, nil
-	case *uint32:
-		return *v, nil
-	case *uint64:
-		return *v, nil
-	case *int8:
-		return *v, nil
-	case *int16:
-		return *v, nil
-	case *int32:
-		return *v, nil
-	case *int64:
-		return *v, nil
+		return append([]byte(nil), value.([]byte)...), nil
+	case payloadexec.FamilyDate:
+		// clickhouse-go preserves Date's calendar day but relocates its midnight
+		// into the server/user timezone. Rebuild that calendar value at UTC
+		// midnight so Date's day commitment is independent of the executor
+		// session timezone and matches nativepayload.
+		year, month, day := value.(time.Time).Date()
+		return time.Date(year, month, day, 0, 0, 0, 0, time.UTC), nil
+	case payloadexec.FamilyDateTime, payloadexec.FamilyDateTime64:
+		return value.(time.Time).UTC(), nil
 	default:
-		return nil, fmt.Errorf("chexec: unexpected scan destination %T", p)
+		return nil, fmt.Errorf("chexec: no read-back normalization defined for column family %q (type %q)", profile.Family, typeName)
 	}
 }
 

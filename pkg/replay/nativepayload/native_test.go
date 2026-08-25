@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -108,8 +109,20 @@ func TestDecodeNativePayloadRejectsPinnedSchemaMismatch(t *testing.T) {
 		{Name: "region", Data: newColStr("eu")},
 		{Name: "id", Data: newColStr("1")},
 	})
-	if _, err := Decode(schema, nativePayloadTestRevision, wrongType); err == nil {
+	err := func() error {
+		_, err := Decode(schema, nativePayloadTestRevision, wrongType)
+		return err
+	}()
+	if err == nil {
 		t.Fatal("DecodeNativePayload must reject unchanged column names with different Native types")
+	}
+	// Spec Q Q-D1: the block type is compared against the wire type the
+	// column-type authority declares for the schema type, and the message names
+	// both so an operator can see which side moved.
+	for _, want := range []string{`column "id"`, `does not match schema type "UInt64"`, `expected wire type "UInt64"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("type-mismatch error %q does not contain %q", err, want)
+		}
 	}
 
 	missingColumn := encodeNativePayload(t, proto.Input{{Name: "id", Data: &proto.ColUInt64{1}}})
