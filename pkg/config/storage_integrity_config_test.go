@@ -52,12 +52,73 @@ func TestStorageIntegrityBackpressureDefaults(t *testing.T) {
 	}
 }
 
+func TestStorageIntegrity_DatabaseNamesArePinnedWithoutRuntime(t *testing.T) {
+	cfg := Default()
+	cfg.StorageIntegrity.Tables = []string{"db.t"}
+	cfg.StorageIntegrity.Runtime.Enabled = false
+	cfg.StorageIntegrity.Runtime.Backpressure.Enabled = true
+	cfg.StorageIntegrity.Runtime.Backpressure.UnsafeDatabase = "hg_unsafe_typo"
+	err := cfg.StorageIntegrity.validate(ModeServer)
+	if err == nil || !strings.Contains(err.Error(), "unsafe_database") {
+		t.Fatalf("validate = %v, want a pinned-name rejection", err)
+	}
+
+	cfg = Default()
+	cfg.StorageIntegrity.Tables = []string{"db.t"}
+	cfg.StorageIntegrity.Runtime.Backpressure.Enabled = false
+	cfg.StorageIntegrity.Runtime.Backpressure.SafeDatabase = "hg_safe_typo"
+	if err := cfg.StorageIntegrity.validate(ModeServer); err == nil ||
+		!strings.Contains(err.Error(), "safe_database") {
+		t.Fatalf("validate = %v, want a pinned-name rejection even with backpressure disabled", err)
+	}
+}
+
+func TestStorageIntegrityPromoteDatabaseIsPinned(t *testing.T) {
+	if StorageIntegrityPromoteDatabase != "hg_promote" {
+		t.Fatalf("promote database pin = %q", StorageIntegrityPromoteDatabase)
+	}
+}
+
+func TestStorageIntegrityBackpressure_RefreshTimeoutAndSnapshotTTL(t *testing.T) {
+	base := func() Config {
+		cfg := Default()
+		cfg.StorageIntegrity.Tables = []string{"db.t"}
+		cfg.StorageIntegrity.Ingress.Enabled = true
+		cfg.StorageIntegrity.Ingress.NetworkID = "net"
+		cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{"0x1"}
+		cfg.StorageIntegrity.Runtime.Enabled = true
+		cfg.StorageIntegrity.Runtime.ExpectedSource = "node-1"
+		cfg.StorageIntegrity.Runtime.JournalDir = "/tmp/j"
+		cfg.StorageIntegrity.Runtime.PayloadSpoolDir = "/tmp/p"
+		return cfg
+	}
+	if got := Default().StorageIntegrity.Runtime.Backpressure.RefreshTimeout.Duration; got != 2*time.Second {
+		t.Fatalf("default refresh_timeout = %s, want 2s", got)
+	}
+	if got := Default().StorageIntegrity.Runtime.Backpressure.SnapshotTTL.Duration; got != 6*time.Second {
+		t.Fatalf("default snapshot_ttl = %s, want 6s", got)
+	}
+	cfg := base()
+	cfg.StorageIntegrity.Runtime.Backpressure.RefreshTimeout = Duration{}
+	if err := cfg.StorageIntegrity.validate(ModeServer); err == nil ||
+		!strings.Contains(err.Error(), "refresh_timeout") {
+		t.Fatalf("zero refresh_timeout error = %v", err)
+	}
+	cfg = base()
+	cfg.StorageIntegrity.Runtime.Backpressure.SnapshotTTL = Duration{Duration: time.Second}
+	if err := cfg.StorageIntegrity.validate(ModeServer); err == nil ||
+		!strings.Contains(err.Error(), "snapshot_ttl") {
+		t.Fatalf("snapshot_ttl below refresh_timeout error = %v", err)
+	}
+}
+
 func TestConfigValidateStorageIntegrityBackpressure(t *testing.T) {
 	valid := func(t *testing.T) *Config {
 		cfg := storageIntegrityRuntimeConfigFixture(t)
 		cfg.StorageIntegrity.Runtime.Backpressure = StorageIntegrityRuntimeBackpressureConfig{
 			Enabled: true, UnsafeDatabase: "hg_unsafe", SafeDatabase: "hg_safe",
-			PollInterval: Duration{Duration: 2 * time.Second}, SoftPartsPerPartition: 2400, HardPartsPerPartition: 2950,
+			PollInterval: Duration{Duration: 2 * time.Second}, RefreshTimeout: Duration{Duration: 2 * time.Second},
+			SnapshotTTL: Duration{Duration: 6 * time.Second}, SoftPartsPerPartition: 2400, HardPartsPerPartition: 2950,
 		}
 		return &cfg
 	}

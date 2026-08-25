@@ -171,6 +171,8 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 				SafeDatabase:          safeDatabase,
 				SoftPartsPerPartition: backpressure.SoftPartsPerPartition,
 				HardPartsPerPartition: backpressure.HardPartsPerPartition,
+				RefreshTimeout:        backpressure.RefreshTimeout.Duration,
+				SnapshotTTL:           backpressure.SnapshotTTL.Duration,
 			})
 			supervisor := NewStorageIntegrityPartsPressureSupervisor(
 				guard,

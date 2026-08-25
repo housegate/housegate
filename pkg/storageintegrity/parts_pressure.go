@@ -144,14 +144,16 @@ type PartsPressureGuard struct {
 	conn MergeConn
 	cfg  PartsPressureConfig
 
-	refreshMu   sync.Mutex
-	admissionMu sync.Mutex
-	commitMu    sync.Mutex
-	mu          sync.RWMutex
-	snapshot    PartsSnapshot
-	activeParts partsInventory
-	reserved    PartsSnapshot
-	committed   PartsSnapshot
+	refreshGate   sync.RWMutex
+	admissionGate sync.RWMutex
+	tableLocksMu  sync.Mutex
+	tableLocks    map[string]*sync.Mutex
+	commitMu      sync.Mutex
+	mu            sync.RWMutex
+	snapshot      PartsSnapshot
+	activeParts   partsInventory
+	reserved      PartsSnapshot
+	committed     PartsSnapshot
 	// committedReservations retain reservation identity across visibility so a
 	// later no-write lookup can cancel the right slot. Snapshot
 	// generations and original counts prove only aggregate cohort coverage; they
@@ -164,16 +166,21 @@ type PartsPressureGuard struct {
 	observedHook    func(context.Context, string, CandidatePart) error
 	// liveReservations retains cancelable and not-yet-visible finalized handles
 	// so a serialized post-cleanup snapshot can rebase every later reservation.
-	liveReservations   map[uint64]*partsReservation
-	nextReservationID  uint64
-	snapshotGeneration uint64
-	takenAt            time.Time
-	haveSnap           bool
+	liveReservations  map[uint64]*partsReservation
+	nextReservationID uint64
+	// Per-key bookkeeping. A read is authoritative only for the keys its scope
+	// covered, so silence outside that scope cannot prove absence.
+	keyGeneration map[PartsKey]uint64
+	countFreshAt  map[PartsKey]time.Time
+	namesFreshAt  map[PartsKey]time.Time
+	lastFullOK    bool
+	lastFullAt    time.Time
 	// restoreBlocked latches any incomplete durable-journal projection. Normal
 	// polling may refresh inventory but cannot reopen admission; only a complete
 	// successful RestoreBatch proves all durable reservations/claims installed.
 	restoreBlocked bool
 	now            func() time.Time
+	stale          bool
 
 	invalidated chan struct{}
 }
@@ -194,6 +201,7 @@ func NewPartsPressureGuard(conn MergeConn, cfg PartsPressureConfig) *PartsPressu
 	return &PartsPressureGuard{
 		conn:                  conn,
 		cfg:                   cfg,
+		snapshot:              PartsSnapshot{},
 		activeParts:           partsInventory{},
 		reserved:              PartsSnapshot{},
 		committed:             PartsSnapshot{},
@@ -201,9 +209,36 @@ func NewPartsPressureGuard(conn MergeConn, cfg PartsPressureConfig) *PartsPressu
 		candidateClaims:       map[PartsKey]map[string]candidateClaim{},
 		pendingObserved:       map[string]candidateObservation{},
 		liveReservations:      map[uint64]*partsReservation{},
+		tableLocks:            map[string]*sync.Mutex{},
+		keyGeneration:         map[PartsKey]uint64{},
+		countFreshAt:          map[PartsKey]time.Time{},
+		namesFreshAt:          map[PartsKey]time.Time{},
 		now:                   time.Now,
 		invalidated:           make(chan struct{}, 1),
 	}
+}
+
+// lockTable serializes admission and lifecycle transitions for one physical
+// table. Whole-guard recovery takes admissionGate for writing.
+func (g *PartsPressureGuard) lockTable(table string) func() {
+	g.admissionGate.RLock()
+	g.tableLocksMu.Lock()
+	lock := g.tableLocks[table]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		g.tableLocks[table] = lock
+	}
+	g.tableLocksMu.Unlock()
+	lock.Lock()
+	return func() {
+		lock.Unlock()
+		g.admissionGate.RUnlock()
+	}
+}
+
+func (g *PartsPressureGuard) lockAllTables() func() {
+	g.admissionGate.Lock()
+	return g.admissionGate.Unlock
 }
 
 // SetCandidateObservedHook installs the durable acknowledgement used before a
@@ -219,11 +254,9 @@ func (g *PartsPressureGuard) SetCandidateObservedHook(hook func(context.Context,
 	g.mu.Unlock()
 }
 
-// BuildSnapshotQuery reads every active part name together with partition text,
-// not partition_id, and joins the table's partition key so an unpartitioned
-// table can be distinguished from a partitioned String value whose bytes are
-// "tuple()". Aggregation happens in Go because exact names are required for
-// cleanup proof.
+// BuildSnapshotQuery is the legacy full-inventory query retained for callers
+// that inspect it. Refresh uses BuildExactPartsQuery so narrower scopes can be
+// authoritative without implying anything about keys outside the scope.
 func (g *PartsPressureGuard) BuildSnapshotQuery() string {
 	databases := []string{quoteMergeString(g.cfg.UnsafeDatabase)}
 	if g.cfg.SafeDatabase != "" {
@@ -236,17 +269,191 @@ func (g *PartsPressureGuard) BuildSnapshotQuery() string {
 		"ORDER BY parts.database, parts.table, parts.partition, parts.name"
 }
 
-// Refresh replaces the cached snapshot only after a complete successful read.
+// BuildExactPartsQuery reads every active part name in scope. Aggregation stays
+// in Go because the reservation protocol needs exact candidate identities.
+func (g *PartsPressureGuard) BuildExactPartsQuery(scope PartsScope) (string, []any) {
+	var b strings.Builder
+	args := []any{}
+	b.WriteString("SELECT parts.database, parts.table, parts.partition, tables.partition_key, parts.name " +
+		"FROM system.parts AS parts INNER JOIN system.tables AS tables " +
+		"ON parts.database = tables.database AND parts.table = tables.name WHERE ")
+	if scope.IncludeSafeDatabase && scope.SafeDatabase != "" {
+		b.WriteString("parts.database IN (?, ?)")
+		args = append(args, scope.Database, scope.SafeDatabase)
+	} else {
+		b.WriteString("parts.database = ?")
+		args = append(args, scope.Database)
+	}
+	b.WriteString(" AND parts.active")
+	if scope.Table != "" {
+		b.WriteString(" AND parts.table = ?")
+		args = append(args, scope.Table)
+		if texts, whole, err := partitionTexts(scope.Partitions); err == nil && !whole {
+			b.WriteString(" AND parts.partition IN (")
+			for i, text := range texts {
+				if i > 0 {
+					b.WriteString(", ")
+				}
+				b.WriteString("?")
+				args = append(args, text)
+			}
+			b.WriteString(")")
+		}
+	}
+	b.WriteString(" ORDER BY parts.database, parts.table, parts.partition, parts.name")
+	return b.String(), args
+}
+
+// BuildAggregateSnapshotQuery counts active parts per logical key across both
+// databases. Its output is bounded by tables x partitions, not part names.
+func (g *PartsPressureGuard) BuildAggregateSnapshotQuery() (string, []any) {
+	args := []any{g.cfg.UnsafeDatabase}
+	predicate := "parts.database = ?"
+	if g.cfg.SafeDatabase != "" {
+		predicate = "parts.database IN (?, ?)"
+		args = append(args, g.cfg.SafeDatabase)
+	}
+	return "SELECT parts.database, parts.table, parts.partition, tables.partition_key, count() " +
+		"FROM system.parts AS parts INNER JOIN system.tables AS tables " +
+		"ON parts.database = tables.database AND parts.table = tables.name " +
+		"WHERE " + predicate + " AND parts.active " +
+		"GROUP BY parts.database, parts.table, parts.partition, tables.partition_key " +
+		"ORDER BY parts.database, parts.table, parts.partition", args
+}
+
+func (g *PartsPressureGuard) fullScope() PartsScope {
+	return PartsScope{
+		Database:            g.cfg.UnsafeDatabase,
+		IncludeSafeDatabase: g.cfg.SafeDatabase != "",
+		SafeDatabase:        g.cfg.SafeDatabase,
+	}
+}
+
+// Refresh replaces the cached inventory for every key in both configured
+// databases, exactly.
 func (g *PartsPressureGuard) Refresh(ctx context.Context) (PartsSnapshot, error) {
-	g.refreshMu.Lock()
-	defer g.refreshMu.Unlock()
-	// Freeze reservation lifecycle changes while the query is in flight so the
-	// snapshot generation and every visibility barrier move atomically.
+	unlock := g.lockAllTables()
+	defer unlock()
+	return g.refreshScope(ctx, g.fullScope())
+}
+
+// RefreshCounts runs the bounded aggregate pass. Counts are authoritative for
+// capacity and gauges, but never replace exact name evidence.
+func (g *PartsPressureGuard) RefreshCounts(ctx context.Context) (PartsSnapshot, error) {
+	g.refreshGate.Lock()
+	defer g.refreshGate.Unlock()
 	g.commitMu.Lock()
 	defer g.commitMu.Unlock()
 	refreshCtx, cancel := context.WithTimeout(ctx, g.cfg.RefreshTimeout)
 	defer cancel()
-	rows, err := g.conn.Query(refreshCtx, g.BuildSnapshotQuery())
+	query, args := g.BuildAggregateSnapshotQuery()
+	rows, err := g.conn.Query(refreshCtx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("storage_integrity: parts count query failed: %w", err)
+	}
+	defer rows.Close()
+	counts := PartsSnapshot{}
+	for rows.Next() {
+		var database, table, partition, partitionKey string
+		var number uint64
+		if err := rows.Scan(&database, &table, &partition, &partitionKey, &number); err != nil {
+			return nil, fmt.Errorf("storage_integrity: scan parts counts: %w", err)
+		}
+		counts[PartsKey{Database: database, Table: table, Partition: LogicalPartitionID(partition, partitionKey == "")}] = int(number)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("storage_integrity: read parts counts: %w", err)
+	}
+	scope := g.fullScope()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.applyCountScopeLocked(scope, counts)
+	g.reconcileScopeLocked(scope)
+	return copyPartsSnapshot(g.snapshot), nil
+}
+
+func (g *PartsPressureGuard) applyCountScopeLocked(scope PartsScope, counts PartsSnapshot) {
+	now := g.now()
+	for key := range g.snapshot {
+		if scope.Covers(key) {
+			if _, present := counts[key]; !present {
+				delete(g.snapshot, key)
+			}
+		}
+	}
+	covered := make(map[PartsKey]struct{}, len(counts))
+	for key, count := range counts {
+		g.snapshot[key] = count
+		covered[key] = struct{}{}
+	}
+	for key := range g.countFreshAt {
+		if scope.Covers(key) {
+			covered[key] = struct{}{}
+		}
+	}
+	for key := range covered {
+		g.keyGeneration[key]++
+		g.countFreshAt[key] = now
+	}
+	if scope.IsFull(g.cfg) {
+		g.lastFullOK = !g.restoreBlocked
+		g.lastFullAt = now
+	}
+}
+
+// RefreshLiveKeys reads exact names only for tables with live reservations or
+// unretired candidate claims.
+func (g *PartsPressureGuard) RefreshLiveKeys(ctx context.Context) error {
+	g.mu.RLock()
+	tables := map[string]map[string]struct{}{}
+	add := func(key PartsKey) {
+		if key.Database != g.cfg.UnsafeDatabase {
+			return
+		}
+		if tables[key.Table] == nil {
+			tables[key.Table] = map[string]struct{}{}
+		}
+		tables[key.Table][key.Partition] = struct{}{}
+	}
+	for _, reservation := range g.liveReservations {
+		for _, key := range reservation.keys {
+			add(key)
+		}
+	}
+	for key := range g.candidateClaims {
+		add(key)
+	}
+	g.mu.RUnlock()
+	var errs []error
+	for table, partitionSet := range tables {
+		partitions := make([]string, 0, len(partitionSet))
+		for partition := range partitionSet {
+			partitions = append(partitions, partition)
+		}
+		sort.Strings(partitions)
+		scope := PartsScope{Database: g.cfg.UnsafeDatabase, Table: table, Partitions: partitions}
+		unlock := g.lockTable(table)
+		if _, err := g.refreshScope(ctx, scope); err != nil {
+			errs = append(errs, err)
+		}
+		unlock()
+	}
+	return errors.Join(errs...)
+}
+
+// refreshScope installs authoritative counts and names for exactly scope.
+func (g *PartsPressureGuard) refreshScope(ctx context.Context, scope PartsScope) (PartsSnapshot, error) {
+	if scope.IsFull(g.cfg) {
+		g.refreshGate.Lock()
+		defer g.refreshGate.Unlock()
+	} else {
+		g.refreshGate.RLock()
+		defer g.refreshGate.RUnlock()
+	}
+	refreshCtx, cancel := context.WithTimeout(ctx, g.cfg.RefreshTimeout)
+	defer cancel()
+	query, args := g.BuildExactPartsQuery(scope)
+	rows, err := g.conn.Query(refreshCtx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("storage_integrity: parts snapshot query failed: %w", err)
 	}
@@ -269,19 +476,14 @@ func (g *PartsPressureGuard) Refresh(ctx context.Context) (PartsSnapshot, error)
 		return nil, fmt.Errorf("storage_integrity: read parts snapshot: %w", err)
 	}
 	g.mu.Lock()
-	g.snapshot = snapshot
-	g.activeParts = inventory
-	g.snapshotGeneration++
-	g.reconcileCandidateClaimsLocked()
-	g.takenAt = g.now()
-	g.haveSnap = !g.restoreBlocked && !g.hasPendingCleanupProofLocked() && len(g.pendingObserved) == 0
-	for key := range g.committedReservations {
-		g.reconcileCommittedKeyLocked(key)
-	}
+	g.applyExactScopeLocked(scope, snapshot, inventory)
+	g.reconcileCandidateClaimsLocked(scope)
+	g.reconcileScopeLocked(scope)
+	g.invalidatePendingObservationKeysLocked()
 	g.mu.Unlock()
 	if err := g.flushCandidateObservations(ctx); err != nil {
 		g.mu.Lock()
-		g.haveSnap = false
+		g.invalidateKeysLocked(scope.Covers)
 		g.mu.Unlock()
 		return nil, fmt.Errorf("storage_integrity: persist observed candidate: %w", err)
 	}
@@ -289,23 +491,127 @@ func (g *PartsPressureGuard) Refresh(ctx context.Context) (PartsSnapshot, error)
 	// A prior inventory may have observed a candidate whose durable marker was
 	// only just persisted. Reconcile again so an already-absent finalized claim
 	// can retire without waiting for another poll.
-	g.reconcileCandidateClaimsLocked()
-	g.haveSnap = !g.restoreBlocked && !g.hasPendingCleanupProofLocked() && len(g.pendingObserved) == 0
-	for key := range g.committedReservations {
-		g.reconcileCommittedKeyLocked(key)
-	}
+	g.reconcileCandidateClaimsLocked(scope)
+	g.reconcileScopeLocked(scope)
+	g.markExactScopeFreshLocked(scope)
+	g.invalidatePendingObservationKeysLocked()
 	result := copyPartsSnapshot(g.snapshot)
 	g.mu.Unlock()
 	return result, nil
 }
 
+func (g *PartsPressureGuard) markExactScopeFreshLocked(scope PartsScope) {
+	now := g.now()
+	for key := range g.snapshot {
+		if scope.Covers(key) {
+			g.countFreshAt[key] = now
+			g.namesFreshAt[key] = now
+		}
+	}
+	for key := range g.activeParts {
+		if scope.Covers(key) {
+			g.countFreshAt[key] = now
+			g.namesFreshAt[key] = now
+		}
+	}
+	for _, key := range scope.RequestedKeys() {
+		g.countFreshAt[key] = now
+		g.namesFreshAt[key] = now
+	}
+	if scope.IsFull(g.cfg) {
+		g.lastFullOK = !g.restoreBlocked
+		g.lastFullAt = now
+	}
+}
+
 func (g *PartsPressureGuard) Snapshot() (PartsSnapshot, bool) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	if !g.haveSnap {
+	if !g.lastFullOK || g.now().Sub(g.lastFullAt) > g.cfg.SnapshotTTL {
 		return nil, false
 	}
 	return copyPartsSnapshot(g.snapshot), true
+}
+
+func (g *PartsPressureGuard) applyExactScopeLocked(scope PartsScope, snapshot PartsSnapshot, inventory partsInventory) {
+	now := g.now()
+	for key := range g.snapshot {
+		if scope.Covers(key) {
+			if _, present := snapshot[key]; !present {
+				delete(g.snapshot, key)
+			}
+		}
+	}
+	for key := range g.activeParts {
+		if scope.Covers(key) {
+			if _, present := inventory[key]; !present {
+				delete(g.activeParts, key)
+			}
+		}
+	}
+	covered := make(map[PartsKey]struct{}, len(snapshot))
+	for key, count := range snapshot {
+		g.snapshot[key] = count
+		covered[key] = struct{}{}
+	}
+	for key, names := range inventory {
+		g.activeParts[key] = names
+		covered[key] = struct{}{}
+	}
+	for key := range g.countFreshAt {
+		if scope.Covers(key) {
+			covered[key] = struct{}{}
+		}
+	}
+	for key := range g.namesFreshAt {
+		if scope.Covers(key) {
+			covered[key] = struct{}{}
+		}
+	}
+	for _, key := range scope.RequestedKeys() {
+		if _, present := g.snapshot[key]; !present {
+			g.snapshot[key] = 0
+		}
+		if _, present := g.activeParts[key]; !present {
+			g.activeParts[key] = map[string]struct{}{}
+		}
+		covered[key] = struct{}{}
+	}
+	for key := range covered {
+		g.keyGeneration[key]++
+		g.countFreshAt[key] = now
+		g.namesFreshAt[key] = now
+	}
+	if scope.IsFull(g.cfg) {
+		g.lastFullOK = !g.restoreBlocked
+		g.lastFullAt = now
+	}
+}
+
+func (g *PartsPressureGuard) reconcileScopeLocked(scope PartsScope) {
+	for key := range g.committedReservations {
+		if scope.Covers(key) {
+			g.reconcileCommittedKeyLocked(key)
+		}
+	}
+}
+
+func (g *PartsPressureGuard) invalidatePendingObservationKeysLocked() {
+	if len(g.pendingObserved) == 0 {
+		return
+	}
+	pending := make(map[PartsKey]struct{}, len(g.pendingObserved))
+	for _, observation := range g.pendingObserved {
+		pending[PartsKey{
+			Database:  g.cfg.UnsafeDatabase,
+			Table:     PhysicalTableName(observation.candidate.TableID),
+			Partition: observation.candidate.PartitionID,
+		}] = struct{}{}
+	}
+	g.invalidateKeysLocked(func(key PartsKey) bool {
+		_, ok := pending[key]
+		return ok
+	})
 }
 
 // Allow is a point-in-time check for diagnostics. Admission paths must use
@@ -337,9 +643,13 @@ func (g *PartsPressureGuard) ReserveStatement(ctx context.Context, statementID, 
 }
 
 func (g *PartsPressureGuard) reserve(ctx context.Context, statementID, table string, partitionIDs []string) (PartsReservation, error) {
-	g.admissionMu.Lock()
-	defer g.admissionMu.Unlock()
-	if _, err := g.Refresh(ctx); err != nil {
+	if _, _, err := partitionTexts(partitionIDs); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrBackpressure, err)
+	}
+	unlock := g.lockTable(table)
+	defer unlock()
+	scope := PartsScope{Database: g.cfg.UnsafeDatabase, Table: table, Partitions: partitionIDs}
+	if _, err := g.refreshScope(ctx, scope); err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
@@ -363,12 +673,12 @@ func (g *PartsPressureGuard) reserve(ctx context.Context, statementID, table str
 // by an earlier local inventory and are now absent are historical cleanup; an
 // unseen absent candidate retains finalized capacity debt until it appears.
 func (g *PartsPressureGuard) RestoreBatch(ctx context.Context, records []PartsRestoreRecord) (map[string]PartsReservation, error) {
-	g.admissionMu.Lock()
-	defer g.admissionMu.Unlock()
-	if _, err := g.Refresh(ctx); err != nil {
+	unlock := g.lockAllTables()
+	defer unlock()
+	if _, err := g.refreshScope(ctx, g.fullScope()); err != nil {
 		g.mu.Lock()
 		g.restoreBlocked = true
-		g.haveSnap = false
+		g.invalidateKeysLocked(func(PartsKey) bool { return true })
 		g.mu.Unlock()
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -378,7 +688,7 @@ func (g *PartsPressureGuard) RestoreBatch(ctx context.Context, records []PartsRe
 
 	g.commitMu.Lock()
 	g.mu.Lock()
-	// RestoreBatch owns admissionMu, so it can provisionally clear an earlier
+	// RestoreBatch excludes per-table admissions, so it can provisionally clear an earlier
 	// restore latch while rebuilding. Any error below re-latches before unlock.
 	g.restoreBlocked = false
 	reservations := make(map[string]PartsReservation, len(records))
@@ -396,7 +706,7 @@ func (g *PartsPressureGuard) RestoreBatch(ctx context.Context, records []PartsRe
 	fail := func(err error) (map[string]PartsReservation, error) {
 		rollback()
 		g.restoreBlocked = true
-		g.haveSnap = false
+		g.invalidateKeysLocked(func(PartsKey) bool { return true })
 		g.mu.Unlock()
 		g.commitMu.Unlock()
 		return nil, err
@@ -527,7 +837,7 @@ func (g *PartsPressureGuard) RestoreBatch(ctx context.Context, records []PartsRe
 		}
 	}
 	g.restoreBlocked = false
-	g.haveSnap = !g.hasPendingCleanupProofLocked() && len(g.pendingObserved) == 0
+	g.invalidatePendingObservationKeysLocked()
 	g.mu.Unlock()
 	g.commitMu.Unlock()
 	return reservations, nil
@@ -549,7 +859,7 @@ func restoreCandidatePartitions(candidates []CandidatePart) []string {
 
 // newReservationLocked captures the current exact inventory into a live
 // reservation. Callers hold mu; lifecycle callers also serialize through
-// admissionMu, and Restore additionally holds commitMu because it commits the
+// its table lock, and Restore additionally holds commitMu because it commits the
 // new handle before returning.
 func (g *PartsPressureGuard) newReservationLocked(table string, partitionIDs []string, enforceLimits bool) (*partsReservation, error) {
 	if enforceLimits {
@@ -562,7 +872,6 @@ func (g *PartsPressureGuard) newReservationLocked(table string, partitionIDs []s
 	baselineParts := make([]map[string]struct{}, 0, len(partitionIDs))
 	initialParts := make([]map[string]struct{}, 0, len(partitionIDs))
 	visibleAfterGenerations := make([]uint64, 0, len(partitionIDs))
-	generation := g.snapshotGeneration
 	seen := make(map[string]bool, len(partitionIDs))
 	for _, partitionID := range partitionIDs {
 		if seen[partitionID] {
@@ -570,6 +879,9 @@ func (g *PartsPressureGuard) newReservationLocked(table string, partitionIDs []s
 		}
 		seen[partitionID] = true
 		if enforceLimits {
+			if err := g.checkAvailableLocked(table, partitionID); err != nil {
+				return nil, err
+			}
 			if err := g.checkCapacityLocked(table, partitionID); err != nil {
 				return nil, err
 			}
@@ -580,7 +892,7 @@ func (g *PartsPressureGuard) newReservationLocked(table string, partitionIDs []s
 		captured := copyPartNames(g.activeParts[key])
 		baselineParts = append(baselineParts, captured)
 		initialParts = append(initialParts, copyPartNames(captured))
-		visibleAfterGenerations = append(visibleAfterGenerations, generation)
+		visibleAfterGenerations = append(visibleAfterGenerations, g.generationForLocked(key))
 	}
 	for _, key := range keys {
 		g.reserved[key]++
@@ -610,8 +922,66 @@ func (g *PartsPressureGuard) checkLocked(table, partitionID string) error {
 	return g.checkCapacityLocked(table, partitionID)
 }
 
+func (g *PartsPressureGuard) generationForLocked(key PartsKey) uint64 {
+	return g.keyGeneration[key]
+}
+
+func (g *PartsPressureGuard) namesFreshLocked(key PartsKey) bool {
+	at, ok := g.namesFreshAt[key]
+	if ok {
+		return g.now().Sub(at) <= g.cfg.SnapshotTTL
+	}
+	return g.lastFullOK && g.now().Sub(g.lastFullAt) <= g.cfg.SnapshotTTL
+}
+
+func (g *PartsPressureGuard) invalidateKeysLocked(match func(PartsKey) bool) {
+	invalidated := false
+	for key := range g.countFreshAt {
+		if match(key) {
+			delete(g.countFreshAt, key)
+			invalidated = true
+		}
+	}
+	for key := range g.namesFreshAt {
+		if match(key) {
+			delete(g.namesFreshAt, key)
+			invalidated = true
+		}
+	}
+	if invalidated || match(PartsKey{Database: g.cfg.UnsafeDatabase}) {
+		g.lastFullOK = false
+	}
+}
+
+func (g *PartsPressureGuard) checkTableAvailableLocked(table string) error {
+	if g.restoreBlocked || g.pendingCleanupProofForTableLocked(table) {
+		return &BackpressureError{Database: g.cfg.UnsafeDatabase, Table: table, Kind: "unavailable"}
+	}
+	return nil
+}
+
+func (g *PartsPressureGuard) pendingCleanupProofForTableLocked(table string) bool {
+	for _, reservation := range g.liveReservations {
+		if !reservation.cleanupProofPending {
+			continue
+		}
+		for _, key := range reservation.keys {
+			if key.Table == table {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (g *PartsPressureGuard) checkAvailableLocked(table, partitionID string) error {
-	if g.restoreBlocked || !g.haveSnap || g.now().Sub(g.takenAt) > g.cfg.SnapshotTTL {
+	if err := g.checkTableAvailableLocked(table); err != nil {
+		return err
+	}
+	if partitionID == "" {
+		return nil
+	}
+	if !g.namesFreshLocked(PartsKey{Database: g.cfg.UnsafeDatabase, Table: table, Partition: partitionID}) {
 		return &BackpressureError{Database: g.cfg.UnsafeDatabase, Table: table, Partition: partitionID, Kind: "unavailable"}
 	}
 	return nil
@@ -656,6 +1026,26 @@ type partsReservation struct {
 	state               reservationState // protected by guard.mu
 }
 
+// tableScope is the reservation's own table. A pending cleanup proof fences
+// only that table, not every SI table in the deployment.
+func (r *partsReservation) tableScope() PartsScope {
+	table := ""
+	if len(r.keys) > 0 {
+		table = r.keys[0].Table
+	}
+	return PartsScope{Database: r.guard.cfg.UnsafeDatabase, Table: table}
+}
+
+// reservationScope is the reservation's exact table and partitions.
+func (r *partsReservation) reservationScope() PartsScope {
+	scope := PartsScope{Database: r.guard.cfg.UnsafeDatabase}
+	for _, key := range r.keys {
+		scope.Table = key.Table
+		scope.Partitions = append(scope.Partitions, key.Partition)
+	}
+	return scope
+}
+
 type reservationState uint8
 
 const (
@@ -672,8 +1062,8 @@ func (r *partsReservation) Commit(candidates ...CandidatePart) error {
 	// Keep lifecycle changes outside Reserve's refresh-to-baseline critical
 	// section; otherwise cleanup proof could occur after the refresh but before
 	// the new reservation captures its baseline.
-	r.guard.admissionMu.Lock()
-	defer r.guard.admissionMu.Unlock()
+	unlock := r.guard.lockTable(r.tableScope().Table)
+	defer unlock()
 	r.guard.commitMu.Lock()
 	defer r.guard.commitMu.Unlock()
 	r.guard.mu.Lock()
@@ -695,8 +1085,8 @@ func (r *partsReservation) CommitIndeterminate() {
 	if r == nil || r.guard == nil {
 		return
 	}
-	r.guard.admissionMu.Lock()
-	defer r.guard.admissionMu.Unlock()
+	unlock := r.guard.lockTable(r.tableScope().Table)
+	defer unlock()
 	r.guard.commitMu.Lock()
 	defer r.guard.commitMu.Unlock()
 	r.guard.mu.Lock()
@@ -721,8 +1111,8 @@ func (r *partsReservation) PrepareCleanupProof(ctx context.Context, candidates [
 	if r == nil || r.guard == nil {
 		return nil
 	}
-	r.guard.admissionMu.Lock()
-	defer r.guard.admissionMu.Unlock()
+	unlock := r.guard.lockTable(r.tableScope().Table)
+	defer unlock()
 	r.guard.mu.RLock()
 	done := r.state == reservationFinalized || r.state == reservationReleased
 	armed := r.cleanupProofArmed
@@ -730,13 +1120,13 @@ func (r *partsReservation) PrepareCleanupProof(ctx context.Context, candidates [
 	if done || armed {
 		return nil
 	}
-	_, refreshErr := r.guard.Refresh(ctx)
+	_, refreshErr := r.guard.refreshScope(ctx, r.reservationScope())
 	r.guard.commitMu.Lock()
 	defer r.guard.commitMu.Unlock()
 	r.guard.mu.Lock()
 	defer r.guard.mu.Unlock()
 	if refreshErr != nil {
-		r.guard.haveSnap = false
+		r.guard.invalidateKeysLocked(r.tableScope().Covers)
 		r.cleanupProofPending = true
 		return cleanupProofError(refreshErr)
 	}
@@ -746,20 +1136,20 @@ func (r *partsReservation) PrepareCleanupProof(ctx context.Context, candidates [
 	// check would let one statement ask the source to DROP another statement's
 	// already-claimed active part.
 	if err := r.bindCandidatePartsLocked(candidates); err != nil {
-		r.guard.haveSnap = false
+		r.guard.invalidateKeysLocked(r.tableScope().Covers)
 		r.cleanupProofPending = true
 		return cleanupProofError(err)
 	}
 	for _, candidate := range candidates {
 		if candidate.PartName == "" {
 			err := errors.New("exact cleanup candidate has empty part name")
-			r.guard.haveSnap = false
+			r.guard.invalidateKeysLocked(r.tableScope().Covers)
 			r.cleanupProofPending = true
 			return cleanupProofError(err)
 		}
 		keyIndex, candidateErr := r.keyIndexForCandidate(candidate)
 		if candidateErr != nil {
-			r.guard.haveSnap = false
+			r.guard.invalidateKeysLocked(r.tableScope().Covers)
 			r.cleanupProofPending = true
 			return cleanupProofError(candidateErr)
 		}
@@ -774,7 +1164,7 @@ func (r *partsReservation) PrepareCleanupProof(ctx context.Context, candidates [
 	}
 	r.cleanupProofArmed = true
 	r.cleanupProofPending = true
-	r.guard.haveSnap = false
+	r.guard.invalidateKeysLocked(r.tableScope().Covers)
 	return nil
 }
 
@@ -786,8 +1176,8 @@ func (r *partsReservation) ReleaseCleaned(ctx context.Context) error {
 	if r == nil || r.guard == nil {
 		return nil
 	}
-	r.guard.admissionMu.Lock()
-	defer r.guard.admissionMu.Unlock()
+	unlock := r.guard.lockTable(r.tableScope().Table)
+	defer unlock()
 	r.guard.mu.RLock()
 	done := r.state == reservationFinalized || r.state == reservationReleased
 	r.guard.mu.RUnlock()
@@ -800,13 +1190,13 @@ func (r *partsReservation) ReleaseCleaned(ctx context.Context) error {
 	if !armed {
 		r.guard.commitMu.Lock()
 		r.guard.mu.Lock()
-		r.guard.haveSnap = false
+		r.guard.invalidateKeysLocked(r.tableScope().Covers)
 		r.cleanupProofPending = true
 		r.guard.mu.Unlock()
 		r.guard.commitMu.Unlock()
 		return cleanupProofError(errors.New("pre-cleanup candidate inventory was not prepared"))
 	}
-	_, refreshErr := r.guard.Refresh(ctx)
+	_, refreshErr := r.guard.refreshScope(ctx, r.reservationScope())
 	r.guard.commitMu.Lock()
 	defer r.guard.commitMu.Unlock()
 	r.guard.mu.Lock()
@@ -814,17 +1204,16 @@ func (r *partsReservation) ReleaseCleaned(ctx context.Context) error {
 	if refreshErr != nil {
 		// Cleanup is already complete, but without a post-cleanup inventory proof
 		// no descendant baseline may move. Make the cache unavailable immediately.
-		r.guard.haveSnap = false
+		r.guard.invalidateKeysLocked(r.tableScope().Covers)
 		r.cleanupProofPending = true
 	} else if remaining := r.remainingObservedCandidatesLocked(); remaining != "" {
-		r.guard.haveSnap = false
+		r.guard.invalidateKeysLocked(r.tableScope().Covers)
 		r.cleanupProofPending = true
 		refreshErr = fmt.Errorf("exact cleanup candidate %s remains active", remaining)
 	} else {
 		r.guard.rebaseLiveReservationsAfterCleanupLocked(r.id, r.cleanupObserved)
 		r.cleanupProofPending = false
 		r.releaseLocked()
-		r.guard.haveSnap = !r.guard.restoreBlocked && !r.guard.hasPendingCleanupProofLocked()
 	}
 	if refreshErr != nil {
 		return cleanupProofError(refreshErr)
@@ -962,8 +1351,11 @@ func (g *PartsPressureGuard) releaseCandidateClaimsLocked(reservation *partsRese
 // visibility, so absence alone is not enough to retire an orphaned finalized
 // claim: the name must first be observed active and only then observed absent.
 // Cancelled and exactly-cleaned reservations remove their own claims directly.
-func (g *PartsPressureGuard) reconcileCandidateClaimsLocked() {
+func (g *PartsPressureGuard) reconcileCandidateClaimsLocked(scope PartsScope) {
 	for key, claims := range g.candidateClaims {
+		if !scope.Covers(key) {
+			continue
+		}
 		active := g.activeParts[key]
 		for partName, claim := range claims {
 			if _, ok := active[partName]; ok {
@@ -1027,21 +1419,12 @@ func (g *PartsPressureGuard) flushCandidateObservations(ctx context.Context) err
 	}
 }
 
-func (g *PartsPressureGuard) hasPendingCleanupProofLocked() bool {
-	for _, reservation := range g.liveReservations {
-		if reservation.cleanupProofPending {
-			return true
-		}
-	}
-	return false
-}
-
 func (r *partsReservation) release() {
 	if r == nil || r.guard == nil {
 		return
 	}
-	r.guard.admissionMu.Lock()
-	defer r.guard.admissionMu.Unlock()
+	unlock := r.guard.lockTable(r.tableScope().Table)
+	defer unlock()
 	r.guard.commitMu.Lock()
 	defer r.guard.commitMu.Unlock()
 	r.guard.mu.Lock()
@@ -1078,8 +1461,8 @@ func (r *partsReservation) Finalize() {
 	if r == nil || r.guard == nil {
 		return
 	}
-	r.guard.admissionMu.Lock()
-	defer r.guard.admissionMu.Unlock()
+	unlock := r.guard.lockTable(r.tableScope().Table)
+	defer unlock()
 	r.guard.commitMu.Lock()
 	defer r.guard.commitMu.Unlock()
 	r.guard.mu.Lock()
@@ -1185,7 +1568,7 @@ func (g *PartsPressureGuard) coveredReservationSlotsLocked(key PartsKey, slots [
 		if idx == 0 || baseline+1 > nextVisible {
 			nextVisible = baseline + 1
 		}
-		if g.snapshotGeneration > slot.reservation.visibleAfter[slot.keyIndex] && nextVisible <= observed {
+		if g.generationForLocked(key) > slot.reservation.visibleAfter[slot.keyIndex] && nextVisible <= observed {
 			covered++
 			nextVisible++
 		}
@@ -1195,7 +1578,7 @@ func (g *PartsPressureGuard) coveredReservationSlotsLocked(key PartsKey, slots [
 	for _, slot := range slots {
 		reservation := slot.reservation
 		keyIndex := slot.keyIndex
-		if !reservation.candidateCovered[keyIndex] && g.snapshotGeneration > reservation.visibleAfter[keyIndex] {
+		if !reservation.candidateCovered[keyIndex] && g.generationForLocked(key) > reservation.visibleAfter[keyIndex] {
 			for partName := range reservation.candidateParts[keyIndex] {
 				if _, preexisting := reservation.initialParts[keyIndex][partName]; preexisting {
 					continue
@@ -1272,7 +1655,7 @@ func (g *PartsPressureGuard) rebaseLiveReservationsAfterCleanupLocked(cleanedID 
 			}
 			reservation.baselines[keyIndex] = g.snapshot[key]
 			reservation.baselineParts[keyIndex] = copyPartNames(g.activeParts[key])
-			reservation.visibleAfter[keyIndex] = g.snapshotGeneration
+			reservation.visibleAfter[keyIndex] = g.generationForLocked(key)
 			affected[key] = struct{}{}
 		}
 	}
@@ -1348,6 +1731,9 @@ func copyPartNames(in map[string]struct{}) map[string]struct{} {
 }
 
 func (g *PartsPressureGuard) Invalidate() {
+	g.mu.Lock()
+	g.stale = true
+	g.mu.Unlock()
 	select {
 	case g.invalidated <- struct{}{}:
 	default:
@@ -1355,3 +1741,12 @@ func (g *PartsPressureGuard) Invalidate() {
 }
 
 func (g *PartsPressureGuard) Invalidated() <-chan struct{} { return g.invalidated }
+
+// TakeStale reports and clears the coalesced invalidation marker.
+func (g *PartsPressureGuard) TakeStale() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	stale := g.stale
+	g.stale = false
+	return stale
+}

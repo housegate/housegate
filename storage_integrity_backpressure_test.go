@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -34,12 +35,15 @@ func (c *rootPartsConn) setRows(rows []rootPartsRow) {
 }
 
 func (c *rootPartsConn) Exec(context.Context, string, ...any) error { return nil }
-func (c *rootPartsConn) Query(context.Context, string, ...any) (sicore.MergeRows, error) {
+func (c *rootPartsConn) Query(_ context.Context, query string, _ ...any) (sicore.MergeRows, error) {
 	c.queries.Add(1)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.err != nil {
 		return nil, c.err
+	}
+	if strings.Contains(query, "count()") {
+		return &rootPartsCountRows{rows: append([]rootPartsRow(nil), c.rows...)}, nil
 	}
 	rows := make([]rootPartInventoryRow, 0)
 	for _, row := range c.rows {
@@ -75,6 +79,25 @@ func (r *rootPartsRows) Scan(dest ...any) error {
 }
 func (r *rootPartsRows) Err() error   { return nil }
 func (r *rootPartsRows) Close() error { return nil }
+
+type rootPartsCountRows struct {
+	rows []rootPartsRow
+	i    int
+}
+
+func (r *rootPartsCountRows) Next() bool { return r.i < len(r.rows) }
+func (r *rootPartsCountRows) Scan(dest ...any) error {
+	row := r.rows[r.i]
+	r.i++
+	*(dest[0].(*string)) = row.db
+	*(dest[1].(*string)) = row.table
+	*(dest[2].(*string)) = row.partition
+	*(dest[3].(*string)) = row.partitionKey
+	*(dest[4].(*uint64)) = row.n
+	return nil
+}
+func (r *rootPartsCountRows) Err() error   { return nil }
+func (r *rootPartsCountRows) Close() error { return nil }
 
 func TestPartsPressureSupervisor_RefreshSetsGauges(t *testing.T) {
 	conn := &rootPartsConn{rows: []rootPartsRow{
@@ -127,6 +150,23 @@ func TestPartsPressureSupervisor_RunRefreshesOnTickAndInvalidate(t *testing.T) {
 	}
 	if conn.queries.Load() == before {
 		t.Fatal("Invalidate must trigger a prompt refresh")
+	}
+}
+
+func TestSupervisor_CoalescesInvalidationsIntoOnePass(t *testing.T) {
+	conn := &rootPartsConn{rows: []rootPartsRow{{"hg_unsafe", "db__t", "p0", "p", 1}}}
+	guard := sicore.NewPartsPressureGuard(conn, sicore.PartsPressureConfig{UnsafeDatabase: "hg_unsafe", SafeDatabase: "hg_safe"})
+	supervisor := NewStorageIntegrityPartsPressureSupervisor(guard, 50*time.Millisecond, "hg_unsafe", "hg_safe")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go supervisor.Run(ctx)
+	for i := 0; i < 50; i++ {
+		guard.Invalidate()
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(120 * time.Millisecond)
+	if got := conn.queries.Load(); got > 8 {
+		t.Fatalf("50 invalidations produced %d queries; they must coalesce into the poll cadence", got)
 	}
 }
 

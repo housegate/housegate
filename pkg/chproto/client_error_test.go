@@ -24,3 +24,19 @@ func TestClientError_UnwrapsAndFormats(t *testing.T) {
 		t.Fatal("Error() without cause must be the message alone")
 	}
 }
+
+func TestKeepsSession(t *testing.T) {
+	throttle := &ClientError{Code: CodeTooManyParts, Message: "storage_integrity: back-pressure: retry later", KeepSession: true}
+	if !KeepsSession(fmt.Errorf("wrapped: %w", throttle)) {
+		t.Fatal("a wrapped KeepSession ClientError must be recognised")
+	}
+	if KeepsSession(&ClientError{Code: 403, Message: "denied"}) {
+		t.Fatal("an ordinary ClientError must not keep the session")
+	}
+	if KeepsSession(errors.New("boom")) {
+		t.Fatal("a plain error must not keep the session")
+	}
+	if KeepsSession(nil) {
+		t.Fatal("nil must not keep the session")
+	}
+}

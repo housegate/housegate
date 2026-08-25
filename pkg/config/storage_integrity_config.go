@@ -13,8 +13,9 @@ const (
 	defaultStorageIntegrityMaxPayloadBytes uint64 = 64 << 20
 
 	// Physical homes of storage-integrity tables (Spec C D2 naming freeze).
-	StorageIntegrityUnsafeDatabase = "hg_unsafe"
-	StorageIntegritySafeDatabase   = "hg_safe"
+	StorageIntegrityUnsafeDatabase  = "hg_unsafe"
+	StorageIntegritySafeDatabase    = "hg_safe"
+	StorageIntegrityPromoteDatabase = "hg_promote"
 )
 
 // StorageIntegrityPhysicalTable maps a logical table id "<db>.<table>" to
@@ -154,6 +155,8 @@ type StorageIntegrityRuntimeBackpressureConfig struct {
 	UnsafeDatabase        string   `json:"unsafe_database"          yaml:"unsafe_database"`
 	SafeDatabase          string   `json:"safe_database"            yaml:"safe_database"`
 	PollInterval          Duration `json:"poll_interval"            yaml:"poll_interval"`
+	RefreshTimeout        Duration `json:"refresh_timeout"          yaml:"refresh_timeout"`
+	SnapshotTTL           Duration `json:"snapshot_ttl"             yaml:"snapshot_ttl"`
 	SoftPartsPerPartition int      `json:"soft_parts_per_partition" yaml:"soft_parts_per_partition"`
 	HardPartsPerPartition int      `json:"hard_parts_per_partition" yaml:"hard_parts_per_partition"`
 }
@@ -181,6 +184,8 @@ func defaultStorageIntegrityConfig() StorageIntegrityConfig {
 				UnsafeDatabase:        StorageIntegrityUnsafeDatabase,
 				SafeDatabase:          StorageIntegritySafeDatabase,
 				PollInterval:          Duration{Duration: 2 * time.Second},
+				RefreshTimeout:        Duration{Duration: 2 * time.Second},
+				SnapshotTTL:           Duration{Duration: 6 * time.Second},
 				SoftPartsPerPartition: 2400,
 				HardPartsPerPartition: 2950,
 			},
@@ -223,6 +228,7 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 			}
 		}
 	}
+	errs = append(errs, c.validateDatabaseNames()...)
 	if c.Read.DefaultMode != "" {
 		mode, err := rewriter.ParseReadMode(c.Read.DefaultMode)
 		if err != nil || string(mode) != c.Read.DefaultMode {
@@ -282,22 +288,16 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 			errs = append(errs, errors.New("storage_integrity.tables is required when storage_integrity.runtime.enabled"))
 		}
 		if bp := c.Runtime.Backpressure; bp.Enabled {
-			unsafeDatabase := strings.TrimSpace(bp.UnsafeDatabase)
-			safeDatabase := strings.TrimSpace(bp.SafeDatabase)
-			if unsafeDatabase == "" {
-				errs = append(errs, errors.New("storage_integrity.runtime.backpressure.unsafe_database is required when backpressure is enabled"))
-			} else if unsafeDatabase != StorageIntegrityUnsafeDatabase {
-				errs = append(errs, fmt.Errorf("storage_integrity.runtime.backpressure.unsafe_database must be %q", StorageIntegrityUnsafeDatabase))
-			}
-			if safeDatabase == "" {
-				errs = append(errs, errors.New("storage_integrity.runtime.backpressure.safe_database is required when backpressure is enabled"))
-			} else if safeDatabase == unsafeDatabase {
-				errs = append(errs, errors.New("storage_integrity.runtime.backpressure.safe_database must differ from unsafe_database"))
-			} else if safeDatabase != StorageIntegritySafeDatabase {
-				errs = append(errs, fmt.Errorf("storage_integrity.runtime.backpressure.safe_database must be %q", StorageIntegritySafeDatabase))
-			}
 			if bp.PollInterval.Duration <= 0 {
 				errs = append(errs, errors.New("storage_integrity.runtime.backpressure.poll_interval must be > 0"))
+			}
+			if bp.RefreshTimeout.Duration <= 0 {
+				errs = append(errs, errors.New("storage_integrity.runtime.backpressure.refresh_timeout must be > 0"))
+			}
+			if bp.SnapshotTTL.Duration <= 0 {
+				errs = append(errs, errors.New("storage_integrity.runtime.backpressure.snapshot_ttl must be > 0"))
+			} else if bp.RefreshTimeout.Duration > 0 && bp.SnapshotTTL.Duration <= bp.RefreshTimeout.Duration {
+				errs = append(errs, errors.New("storage_integrity.runtime.backpressure.snapshot_ttl must be greater than refresh_timeout"))
 			}
 			if bp.SoftPartsPerPartition <= 0 {
 				errs = append(errs, errors.New("storage_integrity.runtime.backpressure.soft_parts_per_partition must be > 0"))
@@ -308,6 +308,35 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 		}
 	}
 	return joinStorageIntegrityErrs(errs)
+}
+
+// validateDatabaseNames pins the physical storage-integrity database names.
+// This must run independently of the runtime, ingress, and back-pressure
+// enable switches: hosts share these names across Housegate and arbiter-core,
+// and a partial feature configuration must not admit a divergent topology.
+func (c StorageIntegrityConfig) validateDatabaseNames() []error {
+	bp := c.Runtime.Backpressure
+	unsafeDatabase := strings.TrimSpace(bp.UnsafeDatabase)
+	safeDatabase := strings.TrimSpace(bp.SafeDatabase)
+	var errs []error
+	if bp.Enabled {
+		if unsafeDatabase == "" {
+			errs = append(errs, errors.New("storage_integrity.runtime.backpressure.unsafe_database is required when backpressure is enabled"))
+		}
+		if safeDatabase == "" {
+			errs = append(errs, errors.New("storage_integrity.runtime.backpressure.safe_database is required when backpressure is enabled"))
+		}
+	}
+	if unsafeDatabase != "" && unsafeDatabase != StorageIntegrityUnsafeDatabase {
+		errs = append(errs, fmt.Errorf("storage_integrity.runtime.backpressure.unsafe_database must be %q", StorageIntegrityUnsafeDatabase))
+	}
+	if safeDatabase != "" && safeDatabase != StorageIntegritySafeDatabase {
+		errs = append(errs, fmt.Errorf("storage_integrity.runtime.backpressure.safe_database must be %q", StorageIntegritySafeDatabase))
+	}
+	if unsafeDatabase != "" && unsafeDatabase == safeDatabase {
+		errs = append(errs, errors.New("storage_integrity.runtime.backpressure.safe_database must differ from unsafe_database"))
+	}
+	return errs
 }
 
 func joinStorageIntegrityErrs(errs []error) error {

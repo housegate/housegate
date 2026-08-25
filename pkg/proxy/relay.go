@@ -50,6 +50,12 @@ type Relay struct {
 	activeQuery   bool
 	activeQueryID string
 	queryCanceled bool
+	// pendingRejection replaces the terminal packet of a query that Housegate
+	// rejected locally after its input was complete. The staged payload was
+	// withheld, but upstream still has to finish its zero-row INSERT before the
+	// connection is reusable. Guarded by queryMu.
+	pendingRejectionID  string
+	pendingRejectionExc *chproto.Exception
 
 	// completionProbe is replaceable in unit tests. Production uses
 	// probeQueryCompletion, which watches the exact upstream server's
@@ -88,6 +94,11 @@ type UpstreamDialer func(ctx context.Context, sess chsession.Session) (*chproto.
 var errOpaqueConnectionNotReusable = errors.New(
 	"legacy non-chunked opaque result connection cannot be safely reused",
 )
+
+// errQueryRejectedResume marks a deferred INSERT that Housegate rejected
+// after consuming the client's complete input. Nothing reached upstream, so
+// clientToUpstream can continue on the same packet boundary.
+var errQueryRejectedResume = errors.New("query rejected without closing the session")
 
 // NewRelay constructs a Relay.
 //
@@ -334,22 +345,30 @@ func (r *Relay) beginActiveQuery(queryID string) bool {
 }
 
 func (r *Relay) takeActiveQuery() (string, bool) {
-	queryID, _, active := r.takeActiveQueryState()
+	queryID, _, active, _ := r.takeActiveQueryState()
 	return queryID, active
 }
 
-func (r *Relay) takeActiveQueryState() (queryID string, canceled, active bool) {
+// takeActiveQueryState ends the active query and consumes its terminal
+// replacement under the same lock. Releasing queryMu between those actions
+// would let the client reader begin and reject the next query, overwriting the
+// single pending-rejection slot before the upstream reader took this one.
+func (r *Relay) takeActiveQueryState() (queryID string, canceled, active bool, rejection *chproto.Exception) {
 	r.queryMu.Lock()
 	defer r.queryMu.Unlock()
 	if !r.activeQuery {
-		return "", false, false
+		return "", false, false, nil
 	}
 	queryID = r.activeQueryID
 	canceled = r.queryCanceled
 	r.activeQuery = false
 	r.activeQueryID = ""
 	r.queryCanceled = false
-	return queryID, canceled, true
+	if r.pendingRejectionExc != nil && r.pendingRejectionID == queryID {
+		rejection = r.pendingRejectionExc
+		r.pendingRejectionID, r.pendingRejectionExc = "", nil
+	}
+	return queryID, canceled, true, rejection
 }
 
 func (r *Relay) currentActiveQuery() (string, bool) {
@@ -366,6 +385,20 @@ func (r *Relay) cancelActiveQuery() (string, bool) {
 	}
 	r.queryCanceled = true
 	return r.activeQueryID, true
+}
+
+// rejectActiveQueryTerminal arms the terminal swap for queryID. It returns
+// false when that query is no longer the active one, in which case the caller
+// must fall back to closing the session.
+func (r *Relay) rejectActiveQueryTerminal(queryID string, exc *chproto.Exception) bool {
+	r.queryMu.Lock()
+	defer r.queryMu.Unlock()
+	if !r.activeQuery || r.activeQueryID != queryID || exc == nil {
+		return false
+	}
+	r.pendingRejectionID = queryID
+	r.pendingRejectionExc = exc
+	return true
 }
 
 func (r *Relay) startOpaqueCompletionProbe(ctx context.Context, queryID string) error {
@@ -853,6 +886,7 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 		curQctx                *plugin.QueryContext
 		curQctxSawInitialEmpty bool
 		curQctxSawPayload      bool
+		curQctxRejected        bool
 		rejectedQctx           *plugin.QueryContext
 	)
 	for {
@@ -1003,6 +1037,11 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 					continue
 				}
 				if err := r.runDeferredInsert(ctx, qctx, clientCompression); err != nil {
+					if errors.Is(err, errQueryRejectedResume) {
+						logger.Infow("deferred INSERT rejected without closing the session",
+							"query_id", q.ID, "err", err)
+						continue
+					}
 					return err
 				}
 				continue
@@ -1117,10 +1156,21 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 		// success.
 		if inputComplete && curQctx != nil {
 			if err := r.hooks.OnQueryInputCompleteStrict(ctx, curQctx); err != nil {
-				r.writeExceptionToClient(ctx, err)
-				r.hooks.OnQueryAbort(ctx, curQctx)
-				r.hooks.OnQueryComplete(ctx, r.sess)
-				return fmt.Errorf("query input complete strict hook: %w", err)
+				if chproto.KeepsSession(err) && curQctx.SuppressUpstreamExecution &&
+					r.rejectActiveQueryTerminal(curQctx.Query.ID, exceptionForPluginError(err)) {
+					// The staged payload never reached upstream. Forwarding the
+					// terminator below completes its zero-row negotiation; the server
+					// loop then swaps that terminal for our local Exception.
+					r.hooks.OnQueryAbort(ctx, curQctx)
+					curQctxRejected = true
+					logger.Infow("query rejected without closing the session",
+						"query_id", curQctx.Query.ID, "err", err)
+				} else {
+					r.writeExceptionToClient(ctx, err)
+					r.hooks.OnQueryAbort(ctx, curQctx)
+					r.hooks.OnQueryComplete(ctx, r.sess)
+					return fmt.Errorf("query input complete strict hook: %w", err)
+				}
 			}
 		}
 
@@ -1161,8 +1211,11 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 			return fmt.Errorf("splice client→upstream type=%d: %w", pkt.Type, err)
 		}
 		if inputComplete {
-			r.hooks.OnQueryInputComplete(ctx, curQctx)
+			if !curQctxRejected {
+				r.hooks.OnQueryInputComplete(ctx, curQctx)
+			}
 			curQctx = nil
+			curQctxRejected = false
 			curQctxSawInitialEmpty = false
 			curQctxSawPayload = false
 		}
@@ -1212,6 +1265,15 @@ func (r *Relay) runDeferredInsert(ctx context.Context, qctx *plugin.QueryContext
 		r.hooks.OnQueryComplete(ctx, r.sess)
 		r.writeExceptionToClient(ctx, err)
 		return err
+	}
+	// The complete terminator has already been consumed and nothing has been
+	// written upstream, so a retryable admission rejection can end only this
+	// query while leaving both packet streams on a clean boundary.
+	rejectResume := func(err error) error {
+		r.hooks.OnQueryAbort(ctx, qctx)
+		r.hooks.OnQueryComplete(ctx, r.sess)
+		r.writeExceptionToClient(ctx, err)
+		return fmt.Errorf("%w: %w", errQueryRejectedResume, err)
 	}
 	if err := client.WriteSampleBlock(plan.SampleColumns); err != nil {
 		r.hooks.OnQueryAbort(ctx, qctx)
@@ -1321,6 +1383,9 @@ func (r *Relay) runDeferredInsert(ctx context.Context, qctx *plugin.QueryContext
 		}
 	}
 	if err := r.hooks.OnQueryInputCompleteStrict(ctx, qctx); err != nil {
+		if chproto.KeepsSession(err) {
+			return rejectResume(fmt.Errorf("query input complete strict hook: %w", err))
+		}
 		return rejectClose(fmt.Errorf("query input complete strict hook: %w", err))
 	}
 
@@ -1910,6 +1975,21 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 					deferredTerminal.abort(ctx, r.hooks)
 					return ctx.Err()
 				}
+			} else if isSessionPreservingBackpressureException(pkt.Decoded) {
+				// A server-mode Housegate emits this narrow wire class only after
+				// it consumed the complete staged input and returned its own upstream
+				// connection to a framed terminal boundary. Wait for our writer-side
+				// input hook, then abort this query without poisoning the agent
+				// session. Generic ClickHouse payload exceptions remain fatal below.
+				select {
+				case <-deferredTerminal.done:
+				case <-ctx.Done():
+					deferredTerminal.stopWriter()
+					closeCodec(up)
+					deferredTerminal.abort(ctx, r.hooks)
+					return ctx.Err()
+				}
+				deferredTerminal.abort(ctx, r.hooks)
 			} else {
 				// An Exception before the marker write completes can deadlock a
 				// backpressured writer just like a post-sample Exception. Neither
@@ -1978,14 +2058,21 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 
 		if isEndOfStream || isException {
 			r.sess.State().ClearActiveRewrite()
-			queryID, canceled, active := r.takeActiveQueryState()
-			if active && isEndOfStream && !canceled {
+			queryID, canceled, active, rejection := r.takeActiveQueryState()
+			if active && isEndOfStream && !canceled && rejection == nil {
 				r.hooks.OnQuerySuccess(ctx, r.sess, queryID)
 			}
 			if deferredTerminal != nil {
 				deferredTerminal.complete(ctx, r.hooks, r.sess)
 			} else if active {
 				r.hooks.OnQueryComplete(ctx, r.sess)
+			}
+			if rejection != nil {
+				if rewrittenException != nil {
+					logger.Debugw("upstream exception superseded by a local rejection",
+						"query_id", queryID, "upstream_code", rewrittenException.Code)
+				}
+				rewrittenException = rejection
 			}
 		}
 
@@ -2157,6 +2244,18 @@ func exceptionForPluginError(pluginErr error) *chproto.Exception {
 		Name:    "DB::Exception",
 		Message: pluginErr.Error(),
 	}
+}
+
+// isSessionPreservingBackpressureException recognises the on-wire projection
+// of a KeepSession ClientError. The ClickHouse Exception frame has no metadata
+// bit for this property, so the contract is deliberately narrower than code
+// 252 alone: only Housegate's storage-integrity back-pressure prefix qualifies.
+// A native ClickHouse TOO_MANY_PARTS or any other late payload exception stays
+// fail-closed because it does not prove the INSERT stream was fully consumed.
+func isSessionPreservingBackpressureException(decoded any) bool {
+	exc, ok := decoded.(*chproto.Exception)
+	return ok && exc != nil && int32(exc.Code) == chproto.CodeTooManyParts &&
+		strings.HasPrefix(strings.TrimSpace(exc.Message), "storage_integrity: back-pressure:")
 }
 
 // writeExceptionToClient converts a plugin error into a synthetic ClickHouse

@@ -31,7 +31,10 @@ go_library(
 
 go_test(
     name = "testenv_test",
-    srcs = ["clickhouse_test.go"],
+    srcs = [
+        "cli_test.go",
+        "clickhouse_test.go",
+    ],
     embed = [":testenv"],
     local = True,
     tags = [

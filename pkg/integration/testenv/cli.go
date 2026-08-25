@@ -2,6 +2,7 @@ package testenv
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -110,6 +111,34 @@ func RunCLICompressedMultiquery(t *testing.T, bin, proxyAddr, database, query st
 	)
 }
 
+// RunCLIMultiqueryIgnoreError runs several semicolon-separated statements in
+// one client process and keeps going after a server exception. Compression
+// stays off because the storage-integrity lanes capture raw Native blocks.
+//
+// When input is supplied, each semicolon-separated statement is passed as a
+// distinct --query argument and input becomes the command's stdin. This is the
+// official client's unambiguous streaming-INSERT form: the first Query omits
+// VALUES/FORMAT, the client encodes stdin into Native Data blocks, and later
+// Query arguments execute on that same connection.
+func RunCLIMultiqueryIgnoreError(t *testing.T, bin, proxyAddr, database, query string, input ...string) (string, error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if len(input) > 1 {
+		return "", errors.New("RunCLIMultiqueryIgnoreError accepts at most one stdin payload")
+	}
+	if len(input) == 1 {
+		var queries []string
+		for _, statement := range strings.Split(query, ";") {
+			if statement = strings.TrimSpace(statement); statement != "" {
+				queries = append(queries, statement)
+			}
+		}
+		return runCLIQueriesContext(ctx, t, bin, proxyAddr, database, queries, input[0], "--multiquery", "--ignore-error")
+	}
+	return runCLIContext(ctx, t, bin, proxyAddr, database, query, "--multiquery", "--ignore-error")
+}
+
 // RunCLIContext is RunCLI with a caller-supplied context for tests
 // (large streams, cancellation) that need to control the timeout.
 func RunCLIContext(ctx context.Context, t *testing.T, bin, proxyAddr, database, query string) (string, error) {
@@ -124,26 +153,53 @@ func runCLIContext(
 	extraArgs ...string,
 ) (string, error) {
 	t.Helper()
+	return runCLIQueriesContext(ctx, t, bin, proxyAddr, database, []string{query}, "", extraArgs...)
+}
+
+func runCLIQueriesContext(
+	ctx context.Context,
+	t *testing.T,
+	bin, proxyAddr, database string,
+	queries []string,
+	stdin string,
+	extraArgs ...string,
+) (string, error) {
+	t.Helper()
 	host, port, err := net.SplitHostPort(proxyAddr)
 	if err != nil {
 		return "", fmt.Errorf("parse proxy addr %q: %w", proxyAddr, err)
 	}
 
+	args := buildCLIArgs(host, port, database, queries, extraArgs...)
+	cmd := exec.CommandContext(ctx, bin, args...)
+	if stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	}
+
+	out, err := cmd.CombinedOutput()
+	return strings.TrimRight(string(out), "\n"), err
+}
+
+func buildCLIArgs(host, port, database string, queries []string, extraArgs ...string) []string {
 	// The clickhouse fat binary dispatches to its `client` subcommand
 	// here. --host/--port override the localhost:9000 default — the
-	// proxy binds an ephemeral port per test.
+	// proxy binds an ephemeral port per test. An empty database deliberately
+	// leaves the ClientHello database unset; this is useful for fully-qualified
+	// SI queries because ClickHouse 25.8 copies --database into Query settings
+	// for multi-query stdin and the signed lane correctly rejects that setting.
 	args := []string{
 		"client",
 		"--host", host,
 		"--port", port,
-		"--database", database,
+	}
+	if database != "" {
+		args = append(args, "--database", database)
 	}
 	args = append(args, extraArgs...)
-	args = append(args, "--query", query)
-	cmd := exec.CommandContext(ctx, bin, args...)
-
-	out, err := cmd.CombinedOutput()
-	return strings.TrimRight(string(out), "\n"), err
+	for _, query := range queries {
+		args = append(args, "--query", query)
+	}
+	return args
 }
 
 func findRepoRoot() (string, error) {
