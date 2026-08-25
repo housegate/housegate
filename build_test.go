@@ -53,6 +53,13 @@ func (siCapableStubRewriterFactory) StorageIntegrityContractVersion() rewriterpb
 	return rewriter.StorageIntegrityContractV1
 }
 
+type siProbeStubRewriterFactory struct {
+	siCapableStubRewriterFactory
+	err error
+}
+
+func (f siProbeStubRewriterFactory) ProbeStorageIntegrityBuild(context.Context) error { return f.err }
+
 type stubRewriter struct{}
 
 func (stubRewriter) Rewrite(_ context.Context, sql, _ string) (rewriter.RewriteResult, error) {
@@ -186,6 +193,32 @@ func TestBuildServer_ConfiguredSISurfaceRejectsUnawareInjectedFactory(t *testing
 	if err == nil || !strings.Contains(err.Error(), "storage-integrity contract v1") {
 		t.Fatalf("err = %v, want unaware injected factory rejection", err)
 	}
+}
+
+func TestBuildServer_RefusesStartupOnStorageIntegrityProbeMismatch(t *testing.T) {
+	cfg := minimalServerCfg(t)
+	cfg.StorageIntegrity.Tables = []string{"tenant.events"}
+
+	_, err := buildServer(Options{
+		Config:       cfg,
+		NetworkState: network.NewInMemoryNetworkState(),
+		Rewriter: siProbeStubRewriterFactory{
+			err: errors.New("storage-integrity engine probe (engine=native): unexpected build"),
+		},
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "storage-integrity engine probe") {
+		t.Fatalf("err = %v, want the probe refusal", err)
+	}
+
+	bs, err := buildServer(Options{
+		Config:       cfg,
+		NetworkState: network.NewInMemoryNetworkState(),
+		Rewriter:     siProbeStubRewriterFactory{},
+	}, nil)
+	if err != nil {
+		t.Fatalf("a passing probe must start: %v", err)
+	}
+	bs.teardown()
 }
 
 func TestBuildServer_ConfiguredSISurfaceRejectsTypedNilInjectedFactory(t *testing.T) {

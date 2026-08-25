@@ -447,6 +447,20 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		if !ok || capable.StorageIntegrityContractVersion() != rewriter.StorageIntegrityContractV1 {
 			return nil, fmt.Errorf("storage_integrity.tables requires a storage-integrity contract v1 capable SQL rewriter; refusing fail-open startup")
 		}
+		// Contract v1 proves that the backend understood the request, but it
+		// cannot distinguish engine patch builds. Verify one fixed DESCRIBE
+		// fingerprint when the concrete factory exposes a probe. Injected host
+		// factories have no separately deployable engine build, so retain them
+		// with an explicit warning instead of rejecting them.
+		if prober, ok := rwFactory.(rewriter.StorageIntegrityProbeFactory); ok {
+			if err := prober.ProbeStorageIntegrityBuild(context.Background()); err != nil {
+				return nil, err
+			}
+			log.Infow("storage-integrity rewriter build verified", "tables", len(siOptions.Tables))
+		} else {
+			log.Warnw("storage_integrity.tables: injected rewriter factory cannot be build-probed; the SI behavior of this engine is unverified",
+				"tables", len(siOptions.Tables))
+		}
 	}
 
 	// Cluster: lib-built path constructs and registers Close+Start;
