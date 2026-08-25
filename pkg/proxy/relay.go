@@ -1979,6 +1979,21 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 					deferredTerminal.abort(ctx, r.hooks)
 					return ctx.Err()
 				}
+			} else if isSessionPreservingBackpressureException(pkt.Decoded) {
+				// A server-mode Housegate emits this narrow wire class only after
+				// it consumed the complete staged input and returned its own upstream
+				// connection to a framed terminal boundary. Wait for our writer-side
+				// input hook, then abort this query without poisoning the agent
+				// session. Generic ClickHouse payload exceptions remain fatal below.
+				select {
+				case <-deferredTerminal.done:
+				case <-ctx.Done():
+					deferredTerminal.stopWriter()
+					closeCodec(up)
+					deferredTerminal.abort(ctx, r.hooks)
+					return ctx.Err()
+				}
+				deferredTerminal.abort(ctx, r.hooks)
 			} else {
 				// An Exception before the marker write completes can deadlock a
 				// backpressured writer just like a post-sample Exception. Neither
@@ -2234,6 +2249,18 @@ func exceptionForPluginError(pluginErr error) *chproto.Exception {
 		Name:    "DB::Exception",
 		Message: pluginErr.Error(),
 	}
+}
+
+// isSessionPreservingBackpressureException recognises the on-wire projection
+// of a KeepSession ClientError. The ClickHouse Exception frame has no metadata
+// bit for this property, so the contract is deliberately narrower than code
+// 252 alone: only Housegate's storage-integrity back-pressure prefix qualifies.
+// A native ClickHouse TOO_MANY_PARTS or any other late payload exception stays
+// fail-closed because it does not prove the INSERT stream was fully consumed.
+func isSessionPreservingBackpressureException(decoded any) bool {
+	exc, ok := decoded.(*chproto.Exception)
+	return ok && exc != nil && int32(exc.Code) == chproto.CodeTooManyParts &&
+		strings.HasPrefix(strings.TrimSpace(exc.Message), "storage_integrity: back-pressure:")
 }
 
 // writeExceptionToClient converts a plugin error into a synthetic ClickHouse

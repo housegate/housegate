@@ -268,3 +268,87 @@ func serveSecondQueryOnlyUpstream(t *testing.T, conn net.Conn) error {
 	_, err = conn.Write([]byte{byte(chproto.ServerEndOfStreamCode)})
 	return err
 }
+
+// An agent relay has already consumed and signed its whole deferred payload
+// when a server-mode Housegate returns the session-preserving back-pressure
+// Exception. That terminal must not force the agent to reconnect either.
+func TestRelay_DeferredUpstreamBackpressure_KeepsSessionAndServesNextQuery(t *testing.T) {
+	baseHooks := &deferredInsertHooks{}
+	hooks := &firstDeferredInsertHooks{deferredInsertHooks: baseHooks}
+	h := newDeferredHarness(t, hooks)
+	empty := encodeEmptyClientData(t)
+	sample := encodeServerSampleDataPacket(t, deferredTestRev)
+	payload := encodeNonEmptyClientDataPacket(t, deferredTestRev)
+
+	upDone := make(chan error, 1)
+	go func() { upDone <- serveDeferredBackpressureThenSelect(t, h.upstreamProxy) }()
+
+	writeAllConn(t, h.clientProxy, encodeInsertQuery(t, "q1", "INSERT INTO db.t FORMAT Native"))
+	if got := readExact(t, h.clientProxy, len(sample)); !bytes.Equal(got, sample) {
+		t.Fatalf("client sample block = %x, want %x", got, sample)
+	}
+	writeAllConn(t, h.clientProxy, empty)
+	writeAllConn(t, h.clientProxy, payload)
+	writeAllConn(t, h.clientProxy, empty)
+	if exc := readServerException(t, h.clientProxy); exc.Code != proto.Error(chproto.CodeTooManyParts) {
+		t.Fatalf("exception code = %d, want 252", exc.Code)
+	}
+
+	writeAllConn(t, h.clientProxy, encodeInsertQuery(t, "q2", "SELECT 1"))
+	writeAllConn(t, h.clientProxy, empty)
+	if got := readExact(t, h.clientProxy, 1); got[0] != byte(chproto.ServerEndOfStreamCode) {
+		t.Fatalf("second query terminal = %d, want EndOfStream", got[0])
+	}
+	select {
+	case err := <-h.loopErr:
+		t.Fatalf("relay loop exited after session-preserving upstream rejection: %v", err)
+	default:
+	}
+	if err := <-upDone; err != nil {
+		t.Fatalf("upstream flow: %v", err)
+	}
+	if successes, lifecycle := baseHooks.terminalCounts(); successes != 1 || len(lifecycle) != 4 || lifecycle[0] != "abort" || lifecycle[1] != "complete" || lifecycle[2] != "success" || lifecycle[3] != "complete" {
+		t.Fatalf("successes/lifecycle = %d/%v, want 1/[abort complete success complete]", successes, lifecycle)
+	}
+}
+
+func serveDeferredBackpressureThenSelect(t *testing.T, conn net.Conn) error {
+	t.Helper()
+	codec := chproto.NewCodec(conn, chproto.DirFromClient)
+	codec.SetRevision(deferredTestRev)
+	codec.SetCompression(proto.CompressionDisabled)
+	if _, err := codec.ReadPacket(uint64(chproto.ClientQueryCode)); err != nil {
+		return err
+	}
+	if _, err := codec.ReadPacket(); err != nil { // external-tables marker
+		return err
+	}
+	if _, err := conn.Write(encodeServerSampleDataPacket(t, deferredTestRev)); err != nil {
+		return err
+	}
+	if _, err := codec.ReadPacket(); err != nil { // payload
+		return err
+	}
+	if _, err := codec.ReadPacket(); err != nil { // terminator
+		return err
+	}
+	if err := codec.WriteException(&chproto.Exception{
+		Code:    proto.Error(chproto.CodeTooManyParts),
+		Name:    "DB::Exception",
+		Message: "storage_integrity: back-pressure: retry later",
+	}); err != nil {
+		return err
+	}
+	pkt, err := codec.ReadPacket(uint64(chproto.ClientQueryCode))
+	if err != nil {
+		return err
+	}
+	if q, ok := pkt.Decoded.(*chproto.Query); !ok || q.Body != "SELECT 1" {
+		t.Errorf("upstream second query = %#v, want SELECT 1", pkt.Decoded)
+	}
+	if _, err := codec.ReadPacket(); err != nil {
+		return err
+	}
+	_, err = conn.Write([]byte{byte(chproto.ServerEndOfStreamCode)})
+	return err
+}
