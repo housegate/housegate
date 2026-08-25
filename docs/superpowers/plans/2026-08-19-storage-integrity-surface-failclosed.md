@@ -4,7 +4,7 @@
 
 **Goal:** Close the two Critical storage-integrity (SI) read-surface holes — `SYSTEM START MERGES hg_unsafe.<t>` passing through as `Success`, and `TRUNCATE DATABASE hg_safe` being forwarded verbatim after a target-less engine rejection — by making both rewriter engines fail closed on every statement class they do not model whenever SI is configured, making HouseGate fail closed on every non-`Success` response in that configuration, and fixing the five correctness defects (literal escaping, reserved-column scoping, CTE scoping, `PREWHERE`, C++ literal-mangling) plus the peer-trust bypass decision record.
 
-**Architecture:** Three layers, each independently safe. (1) The engines gain a *catch-all*: when the request carries a non-empty `storage_integrity.tables`, any execution path that reaches the unmodelled-statement pass-through returns `UnsupportedStatement` instead of `Success` (D1), and one shared annotator upgrades any non-`Success` message to name the SI table or reserved namespace the statement touched (D2). (2) HouseGate treats **any** non-`Success` response as a `*RejectedError` when SI tables are configured (D3), so an old or regressed engine cannot re-open the hole, and proves the engine build at startup with one fixed DESCRIBE probe (D5). (3) The remaining defects are point fixes with corpus coverage (D4, D7a–e) and the peer-trust bypass becomes a recorded, warned-about, tested decision (D6). The two engines stay behaviourally identical through one byte-identical golden corpus.
+**Architecture:** Three layers, each independently safe. (1) The engines gain a *catch-all*: when the request carries a non-empty `storage_integrity.tables`, any execution path that reaches the unmodelled-statement pass-through returns `UnsupportedStatement` instead of `Success` (D1), and one shared annotator upgrades any non-`Success` message to name the SI table or reserved namespace the statement touched (D2). (2) HouseGate treats **any** non-`Success` response as a `*RejectedError` when SI tables are configured (D3), so an old or regressed engine cannot re-open the hole, and proves the selected engine's Spec I behavior at startup with a bounded DESCRIBE/catch-all/protected-target conformance suite that every concrete or injected factory must implement and pass (D5). (3) The remaining defects are point fixes with corpus coverage (D4, D7a–e), while D6 records the deliberate ordinary peer bypass and independently fail-closes operator-bypassed SQL on reserved tokens, Identifier placeholders, and local-catalog object carriers. The two engines stay behaviourally identical through one byte-identical golden corpus.
 
 **Tech Stack:** Go 1.25 + polyglot FFI via PureGo (rewriter-go), C++23 + ClickHouse parser + gtest built on the remote box (rewriter-grpc), Go + Bazel 9 (housegate), ClickHouse 25.8 in docker for the regression test.
 
@@ -1595,7 +1595,7 @@ python3 -c "import json;d=json.load(open('internal/harness/testdata/storage_inte
 env -u REWRITER_ORACLE_ADDR make test
 ```
 
-Expected: `201 cases`, no duplicate name, every package `ok`.
+Expected: `210 cases` / `211531 bytes`, no duplicate name, every package `ok`.
 
 - [ ] **Step 3: Record the new checksum**
 
@@ -2795,7 +2795,7 @@ git commit -m "fix(storage-integrity): scrub protocol-owned names from Exception
 
 ### Task 18: D5 — prove the engine build at startup, not just the contract enum
 
-`STORAGE_INTEGRITY_CONTRACT_V1` cannot distinguish rewriter-go v0.7.0 (broken DESCRIBE metadata names) from v0.7.1, nor rewriter-grpc v0.12.0 from v0.12.1 — and after this spec it cannot distinguish a pre-D1 build from a post-D1 build either. One fixed probe rewrite does.
+`STORAGE_INTEGRITY_CONTRACT_V1` cannot distinguish engine patch builds, and one fixed `DESCRIBE` cannot prove Spec I either: live comparison showed rewriter-grpc v0.12.1 and v0.13.0 emit byte-identical DESCRIBE output while the older build still forwards unmodelled and physical-target `SYSTEM` statements. D5 therefore requires a bounded four-probe behavioral suite. It retains the exact DESCRIBE fingerprint, then requires deterministic v1 `UnsupportedStatement` semantics for `SYSTEM RELOAD CONFIG`, the protected physical target in `SYSTEM START MERGES hg_unsafe.db1__t`, and `TRUNCATE DATABASE hg_safe`. The first two SYSTEM cases distinguish the old/new gRPC builds; TRUNCATE is a D2 protected-database invariant, not a version discriminator.
 
 **Files:**
 - Create: `pkg/rewriter/probe.go`, `pkg/rewriter/probe_test.go`
@@ -2803,74 +2803,21 @@ git commit -m "fix(storage-integrity): scrub protocol-owned names from Exception
 - Test: `build_test.go`
 
 **Interfaces:**
-- Produces: `const rewriter.StorageIntegrityProbeExpectedSQL string`; `type rewriter.StorageIntegrityProbeFactory interface { Factory; ProbeStorageIntegrityBuild(ctx context.Context) error }`; `func (*SentioNetworkFactory) ProbeStorageIntegrityBuild(ctx context.Context) error`.
+- Produces: `const rewriter.StorageIntegrityProbeExpectedSQL string`; the fixed `storageIntegrityBuildProbes` table; `type rewriter.StorageIntegrityProbeFactory interface { Factory; ProbeStorageIntegrityBuild(ctx context.Context) error }`; `func (*SentioNetworkFactory) ProbeStorageIntegrityBuild(ctx context.Context) error`.
 - Consumes: `rewriteOption` (`pkg/rewriter/args.go:47`), `SentioNetworkFactory.backend` / `.options` (`pkg/rewriter/sentio.go`).
 
 - [ ] **Step 1: Write the failing test**
 
-Create `pkg/rewriter/probe_test.go`:
+Create `pkg/rewriter/probe_test.go` around a scripted fake backend, not a single-response fake. The passing case must assert all four requests arrive in order, carry the fixed SI args and one shared bounded context deadline, and match these exact responses:
 
-```go
-package rewriter
+| Probe | Code / type | Exact output |
+|---|---|---|
+| `DESCRIBE TABLE db1.t` | `Success` / `DESCRIBE` | `StorageIntegrityProbeExpectedSQL`, message `success` |
+| `SYSTEM RELOAD CONFIG` | `UnsupportedStatement` / `UNSPECIFIED` | SQL echoed unchanged; generic unmodelled-class message |
+| `SYSTEM START MERGES hg_unsafe.db1__t` | `UnsupportedStatement` / `UNSPECIFIED` | SQL echoed unchanged; exact protected-physical-table message |
+| `TRUNCATE DATABASE hg_safe` | `UnsupportedStatement` / `UNSPECIFIED` | SQL echoed unchanged; exact protected-physical-database message |
 
-import (
-	"context"
-	"strings"
-	"testing"
-
-	pb "github.com/housegate/rewriter-proto/gen/pb"
-)
-
-func TestProbeStorageIntegrityBuild(t *testing.T) {
-	t.Run("correct build passes", func(t *testing.T) {
-		be := &fakeBackend{resp: acknowledgedSIResponse(&pb.RewriteSQLResponse{
-			Code:            pb.RewriteCode_Success,
-			StatementType:   pb.StatementType_STATEMENT_TYPE_DESCRIBE,
-			SqlAfterRewrite: StorageIntegrityProbeExpectedSQL,
-		})}
-		f := newSIFactory(be, nil, true)
-		if err := f.ProbeStorageIntegrityBuild(context.Background()); err != nil {
-			t.Fatalf("probe: %v", err)
-		}
-		si := be.lastReq.GetOptions()[0].GetTableNameArgs().GetDynamicArgs().GetStorageIntegrity()
-		if si.GetContractVersion() != StorageIntegrityContractV1 || si.GetTables()["db1.t"].GetSafeTable() != "hg_safe.db1__t" {
-			t.Fatalf("probe request did not carry the fixed SI args: %v", si)
-		}
-	})
-
-	t.Run("old build is refused", func(t *testing.T) {
-		// rewriter-go v0.7.0 / rewriter-grpc v0.12.0 emitted metadata column
-		// names that do not exist in ClickHouse 25.8 (Spec G plan D-11).
-		be := &fakeBackend{resp: acknowledgedSIResponse(&pb.RewriteSQLResponse{
-			Code:            pb.RewriteCode_Success,
-			StatementType:   pb.StatementType_STATEMENT_TYPE_DESCRIBE,
-			SqlAfterRewrite: "SELECT name, type, default_type, default_expression, comment, codec_expression, ttl_expression FROM system.columns WHERE database = 'hg_safe' AND table = 'db1__t' AND name != '_hg_row_id' ORDER BY position",
-		})}
-		err := newSIFactory(be, nil, true).ProbeStorageIntegrityBuild(context.Background())
-		if err == nil || !strings.Contains(err.Error(), "storage-integrity engine probe") {
-			t.Fatalf("err = %v, want a build-probe refusal", err)
-		}
-	})
-
-	t.Run("missing acknowledgement is refused", func(t *testing.T) {
-		be := &fakeBackend{resp: &pb.RewriteSQLResponse{
-			Code: pb.RewriteCode_Success, SqlAfterRewrite: StorageIntegrityProbeExpectedSQL}}
-		err := newSIFactory(be, nil, true).ProbeStorageIntegrityBuild(context.Background())
-		if err == nil || !strings.Contains(err.Error(), "acknowledgement") {
-			t.Fatalf("err = %v, want an acknowledgement refusal", err)
-		}
-	})
-
-	t.Run("rejected probe is refused", func(t *testing.T) {
-		be := &fakeBackend{resp: acknowledgedSIResponse(&pb.RewriteSQLResponse{
-			Code: pb.RewriteCode_UnsupportedStatement, Message: "nope"})}
-		err := newSIFactory(be, nil, true).ProbeStorageIntegrityBuild(context.Background())
-		if err == nil || !strings.Contains(err.Error(), "UnsupportedStatement") {
-			t.Fatalf("err = %v, want a rejected-probe refusal", err)
-		}
-	})
-}
-```
+Every response must acknowledge `StorageIntegrityContractV1`. Table tests must reject: an empty/wrong DESCRIBE success message (the released engines emit exact `success`), the old catch-all `Success`, the old physical-`SYSTEM` `Success`, a missing/wrong acknowledgement, nil/transport responses, and a stub with the wrong TRUNCATE message. Errors must identify the engine, probe name, and required released build without echoing the protocol-owned SQL or physical names unnecessarily.
 
 - [ ] **Step 2: Run to verify failure**
 
@@ -2896,12 +2843,12 @@ import (
 	pb "github.com/housegate/rewriter-proto/gen/pb"
 )
 
-// storageIntegrityProbeSQL is the fixed statement the startup build probe
-// rewrites. DESCRIBE is chosen because both engines build its answer as a
-// string, byte-identically, from the same shared corpus case
-// (si_describe_metadata_select) — so the expected output is an exact,
-// version-sensitive fingerprint of the engine build.
-const storageIntegrityProbeSQL = "DESCRIBE TABLE db1.t"
+const (
+	storageIntegrityProbeSQL = "DESCRIBE TABLE db1.t"
+	storageIntegrityProbeUnmodelledSQL = "SYSTEM RELOAD CONFIG"
+	storageIntegrityProbePhysicalSystemSQL = "SYSTEM START MERGES hg_unsafe.db1__t"
+	storageIntegrityProbePhysicalDatabaseSQL = "TRUNCATE DATABASE hg_safe"
+)
 
 // StorageIntegrityProbeExpectedSQL is what a correct v1 engine build emits for
 // storageIntegrityProbeSQL under the fixed probe args. It must stay identical
@@ -2910,7 +2857,7 @@ const StorageIntegrityProbeExpectedSQL = "SELECT name, type, default_kind AS def
 
 // storageIntegrityProbeMinBuilds names the minimum engine builds in the failure
 // message so an operator knows what to deploy.
-const storageIntegrityProbeMinBuilds = "rewriter-go >= v0.7.2 / rewriter-grpc >= v0.12.2 (Spec I)"
+const storageIntegrityProbeRequiredBuild = "rewriter-go >= v0.9.0 or rewriter-grpc >= v0.13.0 (storage-integrity Spec I)"
 
 // StorageIntegrityProbeFactory is a Factory whose engine build can be verified
 // at startup. STORAGE_INTEGRITY_CONTRACT_V1 proves the backend understood the
@@ -2941,10 +2888,46 @@ func storageIntegrityProbeArgs() *pb.RewriteTableDynamicArgs {
 	}
 }
 
-// ProbeStorageIntegrityBuild issues one fixed SI DESCRIBE through the shared
-// backend and requires the exact expected SQL plus a v1 acknowledgement.
-// Returns an error naming the engine and the expected build on any mismatch;
-// buildServer refuses to start on it.
+type storageIntegrityBuildProbe struct {
+	name string
+	sql string
+	code pb.RewriteCode
+	statementType pb.StatementType
+	sqlAfter string
+	message string
+}
+
+// Keep each expected code, statement type, SQL echo/fingerprint, and message
+// byte-exact; TRUNCATE is a D2 invariant, not a version discriminator.
+var storageIntegrityBuildProbes = []storageIntegrityBuildProbe{
+	{
+		name: "describe-fingerprint", sql: storageIntegrityProbeSQL,
+		code: pb.RewriteCode_Success, statementType: pb.StatementType_STATEMENT_TYPE_DESCRIBE,
+		sqlAfter: StorageIntegrityProbeExpectedSQL, message: "success",
+	},
+	{
+		name: "unmodelled-catch-all", sql: storageIntegrityProbeUnmodelledSQL,
+		code: pb.RewriteCode_UnsupportedStatement, statementType: pb.StatementType_STATEMENT_TYPE_UNSPECIFIED,
+		sqlAfter: storageIntegrityProbeUnmodelledSQL,
+		message: "storage-integrity is configured; statement class is not modelled by the rewriter and cannot be forwarded",
+	},
+	{
+		name: "protected-physical-system-target", sql: storageIntegrityProbePhysicalSystemSQL,
+		code: pb.RewriteCode_UnsupportedStatement, statementType: pb.StatementType_STATEMENT_TYPE_UNSPECIFIED,
+		sqlAfter: storageIntegrityProbePhysicalSystemSQL,
+		message: "storage-integrity physical table hg_unsafe.db1__t is not directly addressable",
+	},
+	{
+		name: "protected-physical-database", sql: storageIntegrityProbePhysicalDatabaseSQL,
+		code: pb.RewriteCode_UnsupportedStatement, statementType: pb.StatementType_STATEMENT_TYPE_UNSPECIFIED,
+		sqlAfter: storageIntegrityProbePhysicalDatabaseSQL,
+		message: "storage-integrity physical database hg_safe is not directly addressable",
+	},
+}
+
+// ProbeStorageIntegrityBuild issues the bounded SI conformance suite through
+// the shared backend. Every response must match exactly and acknowledge v1;
+// buildServer refuses startup on any mismatch.
 func (f *SentioNetworkFactory) ProbeStorageIntegrityBuild(ctx context.Context) error {
 	engine := f.options.Engine
 	if engine == "" {
@@ -2960,27 +2943,21 @@ func (f *SentioNetworkFactory) ProbeStorageIntegrityBuild(ctx context.Context) e
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	resp, err := f.backend.Rewrite(probeCtx, &pb.RewriteSQLRequest{
-		Sql:     storageIntegrityProbeSQL,
-		Options: []*pb.RewriteOption{rewriteOption(storageIntegrityProbeArgs())},
-	})
-	if err != nil {
-		return fmt.Errorf("storage-integrity engine probe (engine=%s): %w", engine, err)
-	}
-	if resp == nil {
-		return fmt.Errorf("storage-integrity engine probe (engine=%s): nil response", engine)
-	}
-	if resp.GetStorageIntegrityContractVersion() != StorageIntegrityContractV1 {
-		return fmt.Errorf("storage-integrity engine probe (engine=%s): contract acknowledgement %s, want %s; deploy %s",
-			engine, resp.GetStorageIntegrityContractVersion(), StorageIntegrityContractV1, storageIntegrityProbeMinBuilds)
-	}
-	if resp.GetCode() != pb.RewriteCode_Success {
-		return fmt.Errorf("storage-integrity engine probe (engine=%s): code=%s message=%q; deploy %s",
-			engine, resp.GetCode(), resp.GetMessage(), storageIntegrityProbeMinBuilds)
-	}
-	if got := resp.GetSqlAfterRewrite(); got != StorageIntegrityProbeExpectedSQL {
-		return fmt.Errorf("storage-integrity engine probe (engine=%s): unexpected build\n got: %s\nwant: %s\ndeploy %s",
-			engine, got, StorageIntegrityProbeExpectedSQL, storageIntegrityProbeMinBuilds)
+	for _, probe := range storageIntegrityBuildProbes {
+		resp, err := f.backend.Rewrite(probeCtx, &pb.RewriteSQLRequest{
+			Sql: probe.sql,
+			Options: []*pb.RewriteOption{rewriteOption(storageIntegrityProbeArgs())},
+		})
+		// Fail closed on transport/nil/ack/code/type/SQL/message mismatch. Every
+		// error names engine, probe.name, and storageIntegrityProbeRequiredBuild;
+		// do not echo probe SQL or protocol-owned names unnecessarily.
+		if err != nil || resp == nil ||
+			resp.GetStorageIntegrityContractVersion() != StorageIntegrityContractV1 ||
+			resp.GetCode() != probe.code || resp.GetStatementType() != probe.statementType ||
+			resp.GetSqlAfterRewrite() != probe.sqlAfter || resp.GetMessage() != probe.message {
+			return fmt.Errorf("storage-integrity engine probe (engine=%s probe=%s): conformance mismatch; deploy %s",
+				engine, probe.name, storageIntegrityProbeRequiredBuild)
+		}
 	}
 	return nil
 }
@@ -2996,7 +2973,7 @@ bazel run //:gazelle
 bazel test //pkg/rewriter:rewriter_test --test_filter='TestProbeStorageIntegrityBuild' --test_output=all --nocache_test_results
 ```
 
-Expected: all four subtests PASS.
+Expected: the correct scripted suite and all old/stub mismatch cases PASS.
 
 - [ ] **Step 5: Run the probe at startup**
 
@@ -3008,19 +2985,23 @@ In `build.go`, replace the capable-factory check at `:445-450` with:
 		if !ok || capable.StorageIntegrityContractVersion() != rewriter.StorageIntegrityContractV1 {
 			return nil, fmt.Errorf("storage_integrity.tables requires a storage-integrity contract v1 capable SQL rewriter; refusing fail-open startup")
 		}
-		// Spec I D5: the contract enum cannot distinguish engine builds. One
-		// fixed DESCRIBE probe does. A factory that cannot be probed (an
-		// injected test/host factory) is warned about rather than refused —
-		// the probe verifies an engine build, and such a factory has none.
-		if prober, ok := rwFactory.(rewriter.StorageIntegrityProbeFactory); ok {
-			if err := prober.ProbeStorageIntegrityBuild(context.Background()); err != nil {
-				return nil, err
-			}
-			log.Infow("storage-integrity rewriter build verified", "tables", len(siOptions.Tables))
-		} else {
-			log.Warnw("storage_integrity.tables: injected rewriter factory cannot be build-probed; the SI behaviour of this engine is unverified",
-				"tables", len(siOptions.Tables))
+		// Contract v1 alone cannot distinguish old behavior. Every concrete or
+		// injected SI factory must expose and pass the same conformance suite.
+		prober, ok := rwFactory.(rewriter.StorageIntegrityProbeFactory)
+		if !ok {
+			return nil, fmt.Errorf("storage_integrity.tables requires a SQL rewriter implementing rewriter.StorageIntegrityProbeFactory; refusing unverified startup")
 		}
+		probeTimeout := cfg.Rewriter.Timeout.Duration
+		if probeTimeout <= 0 {
+			probeTimeout = 5 * time.Second
+		}
+		probeCtx, cancelProbe := context.WithTimeout(context.Background(), probeTimeout)
+		err := prober.ProbeStorageIntegrityBuild(probeCtx)
+		cancelProbe()
+		if err != nil {
+			return nil, err
+		}
+		log.Infow("storage-integrity rewriter build verified", "tables", len(siOptions.Tables))
 	}
 ```
 
@@ -3037,6 +3018,18 @@ type siProbeStubRewriterFactory struct {
 }
 
 func (f siProbeStubRewriterFactory) ProbeStorageIntegrityBuild(context.Context) error { return f.err }
+
+func TestBuildServer_ConfiguredSISurfaceRejectsUnprobedCapableInjectedFactory(t *testing.T) {
+	cfg := minimalServerCfg(t)
+	cfg.StorageIntegrity.Tables = []string{"tenant.events"}
+	_, err := buildServer(Options{
+		Config: cfg, NetworkState: network.NewInMemoryNetworkState(),
+		Rewriter: siCapableStubRewriterFactory{},
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "StorageIntegrityProbeFactory") {
+		t.Fatalf("err = %v, want refusal of unverified injected factory", err)
+	}
+}
 
 func TestBuildServer_RefusesStartupOnStorageIntegrityProbeMismatch(t *testing.T) {
 	cfg := minimalServerCfg(t)
@@ -3082,7 +3075,7 @@ git commit -m "feat(storage-integrity): verify the rewriter engine build at star
 
 ### Task 19: D6 — the peer branch (record, warn, characterize)
 
-Rewrite is skipped for peer-trusted, forwarded, maintenance and platform-operator sessions (`pkg/plugins/rewrite/rewriter.go:130-133,298,303`), and with no accessed tables the SI ingress short-circuits too (`pkg/plugins/storageintegrity/plugin.go:162`). Those sessions can address `hg_safe`/`hg_unsafe` directly.
+Rewrite is skipped for peer-trusted, forwarded, maintenance and platform-operator sessions (`pkg/plugins/rewrite/rewriter.go:130-133,298,303`), and with no accessed tables the SI ingress short-circuits too (`pkg/plugins/storageintegrity/plugin.go:162`). Before Task 19b all four paths could address `hg_safe`/`hg_unsafe` directly; after Task 19b only ordinary peer/forward sessions retain that deliberate bypass, while operator-flagged paths run through `sireserved`.
 
 **Spec I D6 splits these into two branches, and they need different work.** This task implements the *peer* branch only; Task 19b implements the *operator* branch. The split exists because the double-rewrite rationale — re-rewriting SQL the originating proxy already rewrote is what the peer-trust design forbids — justifies the peer and forward bypasses and nothing else. Maintenance and platform-operator sessions carry raw, un-rewritten SQL and are bypassed purely because those roles are trusted, which is a separate threat model with its own controls.
 
@@ -3176,14 +3169,12 @@ Add to `build.go`, next to `storageIntegrityRewriterOptions` (`:112`):
 // storageIntegrityInternalListenWarning returns the operator warning for the
 // Spec I D6 trust boundary, or "" when it does not apply.
 //
-// Peer-trusted, forwarded, maintenance and platform-operator sessions bypass
-// the rewrite plugin (pkg/plugins/rewrite/rewriter.go RunOnPeerTrust /
-// RunOnForward and the maintenance short-circuit), and with no accessed tables
-// the SI ingress short-circuits too. Such a session can therefore address
-// hg_safe / hg_unsafe directly. Running SI rewrite on peer SQL is not an
-// option — it was already rewritten by the originating proxy — so the
-// mitigation is network isolation: the internal port must be reachable only
-// from peer subnets.
+// Ordinary peer/forward sessions bypass rewrite and can therefore address the
+// physical namespace directly; running SI rewrite again would double-prefix
+// SQL already rewritten at the origin. Maintenance/platform-operator sessions
+// also bypass rewrite, but Task 19b independently guards their raw SQL through
+// sireserved. The ordinary-peer mitigation is network isolation: the internal
+// port must be reachable only from peer subnets.
 func storageIntegrityInternalListenWarning(cfg *config.Config) string {
 	if len(cfg.StorageIntegrity.Tables) == 0 || cfg.InternalListen == "" {
 		return ""
@@ -3230,17 +3221,20 @@ Maintenance and platform-operator sessions keep their rewrite bypass — they le
 
 The tradeoff is inverted here. For this guard a rare false positive costs an operator one clear error message with a stated remedy; a lexical gap costs the protection entirely, on sessions that skip every other SI control. So:
 
-**A statement from a maintenance or platform-operator session that mentions a reserved name anywhere outside a string literal or comment is refused.** No statement grammar, no keyword recognition, no qualifier/target distinction, no alias handling.
+**A statement from a maintenance or platform-operator session that mentions a reserved name anywhere outside a comment — including inside a string literal — is refused. Identifier placeholders and known local-catalog object-carrier callables are also refused independent of their values/arguments.** No statement grammar, no keyword recognition, no qualifier/target distinction, no alias handling, and no attempt to prove a computed carrier argument safe.
 
 That leaves exactly one lexical job, and its failure modes are safe by construction:
 
-- Erase `'…'` string literals and every ClickHouse comment form — `--`, `#`, `#!`, `//`, and `/* … */` **with nesting depth** ([ClickHouse syntax](https://clickhouse.com/docs/reference/syntax#comments)). An unterminated literal or comment is a rejection, not a best guess.
+- Erase every ClickHouse comment form — `--`, `#`, `#!`, `//`, and `/* … */` **with nesting depth** ([ClickHouse syntax](https://clickhouse.com/docs/reference/syntax#comments)). An unterminated literal or comment is a rejection, not a best guess. Retain single-quoted literal contents for reserved-token matching because `merge()`, `remote()`, and other table functions interpret strings as identifiers.
 - **Never** treat `` ` `` or `"` spans as literals. They delimit identifiers, and erasing them is precisely the round-5 bypass. Unquote them into plain text instead so `` `hg_safe` `` and `hg_safe` compare equal.
+- Refuse any backslash-bearing single-quoted literal or quoted identifier rather than decoding ClickHouse escapes; `hg\x5Fsafe` must not hide `hg_safe`.
 - Match reserved names on identifier boundaries, case-insensitively, so `hg_safe_backup` and `my_hg_safe` do not match.
+- Reject `{name:Identifier}` outside literals/comments independent of the value or transport. This covers `Query.Parameters` when `FeatureParameters >= 54459`, `param_*` settings on older revisions, and future substitution paths. `{name:String}` remains allowed.
+- Reject the full known local-catalog carrier family by callable name and independent of arguments: `remote`/`remoteSecure`, `cluster`/`clusterAllReplicas`, `merge`, `loop`, `dictionary`, `timeSeriesData`/`Tags`/`Metrics`/`Selector`, `prometheusQuery`/`Range`, every `MergeTree*`, plus `distributed`, `buffer`, and `clickhouse` for table-engine/dictionary-source forms. ClickHouse constant-folds concat-split object identities, so argument scanning cannot prove these safe.
 
-Mis-stripping in the *under*-stripping direction is harmless: a reserved name that should have been ignored inside a literal produces a false positive. **Over**-stripping is not harmless and is the one bypass this design still has to guard: a literal whose escapes are mishandled can run past its terminator and swallow a later mention, so it is never scanned. Step 3 pins the escape rules and a regression test covers the case. That is a single enumerable lexical obligation rather than the whole-parser surface the previous design carried, which is the point of the change — not that mistakes became impossible.
+Comments are the only ignored surface. A literal/comment decoy cannot change scanner state or hide a later placeholder/carrier, and unterminated input is refused. No escape decoding or constant-expression evaluation is attempted: both are fail-closed boundaries rather than new parser obligations.
 
-**The accepted false positive, stated plainly.** `SELECT hg_safe FROM ordinary.t` — an ordinary column that happens to be named `hg_safe` — is refused for these sessions. That is acceptable and is the documented behaviour: the guard only exists when SI tables are configured; the reserved names (`hg_safe`, `hg_unsafe`, `_hg_row_id`) are protocol-owned and no user column should carry them; maintenance traffic in this system is DDL on fully-qualified physical names rather than analytical SELECTs (see the comment at `pkg/plugins/rewrite/rewriter_test.go:91-95`); and the error already names the remedy — use a direct ClickHouse connection for physical access. Record it in the error text and in the operator warning so it is never a surprise.
+**The accepted false positives, stated plainly.** `SELECT hg_safe FROM ordinary.t`, `SELECT 'hg_safe'`, any backslash-bearing data literal, or a safe-looking call to a listed carrier is refused for these sessions. That is acceptable and documented: the guard only exists when SI tables are configured and `Maintenance || PlatformOperator`; the reserved names are protocol-owned; and the error names the remedy — use a direct ClickHouse connection for physical access. Ordinary non-operator sessions, including ordinary peer-trusted/forwarded traffic, return before this scan and preserve the deliberate D6 bypass.
 
 **Nothing existing fits for the stripping, either.** Task 2's scan lives in `rewriter-go/internal/engine` (not importable). `pkg/sqlident` offers only path helpers. `stripSQLLiteralsAndComments` (`pkg/plugins/storageintegrity/plugin.go:955-956`) blanks backtick and double-quoted spans exactly like single-quoted ones, which is correct for finding function names and fatal here — leave it where it is.
 
@@ -3253,8 +3247,8 @@ Mis-stripping in the *under*-stripping direction is harmless: a reserved name th
 **Step 3 also registers the plugin** in `buildServer`'s query-plugin list, ahead of `forward.Plugin`, and `build_test.go` asserts it is present when `storage_integrity.tables` is set and absent when it is not.
 
 **Interfaces:**
-- Consumes: the configured SI table set and reserved databases from `pkg/config`. (No SQL parsing helper: see the design note above — the guard refuses on mention rather than parsing.)
-- Produces: `func ReservedNamespaceViolation(sql string, dbs []string, rid string) (string, error)` in `pkg/plugins/sireserved` — the offending name (or `""`), plus an error when the statement cannot be scrubbed (unterminated literal or comment), which is itself a rejection. Returning values rather than logging keeps it unit-testable without a session.
+- Consumes: the configured SI table set and reserved databases from `pkg/config`, plus the raw Query body. Parameter values are deliberately not trusted: an Identifier placeholder is refused whether it arrived through `Query.Parameters` (`FeatureParameters >= 54459`) or `param_*` settings on an older protocol.
+- Produces: `func ReservedNamespaceViolation(sql string, dbs []string, rid string) (string, error)` in `pkg/plugins/sireserved` — the first reserved token outside comments, including inside string literals (or `""`), plus an error for unterminated/backslash-bearing input. Package-private helpers additionally detect Identifier placeholders and the known carrier callable family. Returning values rather than logging keeps the core scan unit-testable without a session.
 - Produces: `sireserved.Plugin{ReservedDatabases []string, ReservedRowIDColumn string}`, populated in `build.go` from `storage_integrity` config when SI tables are configured and left unregistered otherwise, so non-SI deployments keep a byte-identical chain.
 
 - [ ] **Step 1: Write the failing tests**
@@ -3386,23 +3380,32 @@ func TestReservedNamespaceViolation_RefusesOnMention(t *testing.T) {
 	}
 }
 
-// What must still pass: the reserved name appears only inside a literal or a
-// comment, or the statement merely resembles one of these. Over-stripping here
-// would be a bypass, which is why quoted identifiers are never erased.
-func TestReservedNamespaceViolation_LiteralsAndCommentsAreNotMentions(t *testing.T) {
+// Comments are ignored, but literals remain part of the protected surface
+// because table functions interpret them as object identities.
+func TestReservedNamespaceViolation_LiteralsAreMentionsCommentsAreNot(t *testing.T) {
 	const rid = "_hg_row_id"
 	dbs := []string{"hg_safe", "hg_unsafe"}
 
+	for _, tc := range []struct{ name, sql, want string }{
+		{"single-quoted literal", "SELECT 'hg_safe' AS s FROM ordinary.t", "hg_safe"},
+		{"merge literal", "SELECT * FROM merge('hg_safe', '.*')", "hg_safe"},
+		{"remote literal", "SELECT * FROM remote('host', 'hg_safe.t')", "hg_safe"},
+		{"rid inside a literal", "SELECT '_hg_row_id' AS s FROM ordinary.t", rid},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ReservedNamespaceViolation(tc.sql, dbs, rid)
+			if err != nil || got != tc.want {
+				t.Fatalf("ReservedNamespaceViolation(%q) = %q, %v; want %q", tc.sql, got, err, tc.want)
+			}
+		})
+	}
+
 	for _, tc := range []struct{ name, sql string }{
-		{"single-quoted literal", "SELECT 'hg_safe' AS s FROM ordinary.t"},
-		{"escaped quote inside literal", `SELECT 'it''s hg_safe' AS s FROM ordinary.t`},
-		{"backslash-escaped quote inside literal", `SELECT 'a\' hg_safe b' AS s FROM ordinary.t`},
 		{"line comment", "SELECT a FROM ordinary.t -- hg_safe"},
 		{"hash comment", "SELECT a FROM ordinary.t # hg_safe"},
 		{"slash comment", "SELECT a FROM ordinary.t // hg_safe"},
 		{"block comment", "SELECT a FROM /* hg_safe */ ordinary.t"},
 		{"nested block comment", "SELECT a FROM /* x /* hg_safe */ y */ ordinary.t"},
-		{"rid inside a literal", "SELECT '_hg_row_id' AS s FROM ordinary.t"},
 		{"prefix is not a match", "SELECT * FROM hg_safe_backup.t"},
 		{"suffix is not a match", "SELECT * FROM my_hg_safe.t"},
 	} {
@@ -3412,24 +3415,19 @@ func TestReservedNamespaceViolation_LiteralsAndCommentsAreNotMentions(t *testing
 				t.Fatalf("unexpected scrub error: %v", err)
 			}
 			if got != "" {
-				t.Fatalf("must not fire on %q, got %q", tc.sql, got)
+				t.Fatalf("comment/boundary case must not fire on %q, got %q", tc.sql, got)
 			}
 		})
 	}
 }
 
-// The one remaining bypass vector in a mention-based design: a literal whose
-// escapes are mishandled can swallow the rest of the statement, so the mention
-// is never scanned. 'a\\' is a complete literal (escaped backslash); a
-// stripper that reads the trailing \' as an escaped quote runs to EOF and
-// hides hg_safe.
-func TestReservedNamespaceViolation_EscapedBackslashDoesNotSwallowTheStatement(t *testing.T) {
-	got, err := ReservedNamespaceViolation(`SELECT 'a\\', hg_safe FROM ordinary.t`, []string{"hg_safe"}, "_hg_row_id")
-	if err != nil {
-		t.Fatalf("this literal is terminated; scrubbing must succeed: %v", err)
-	}
-	if got != "hg_safe" {
-		t.Fatalf("the mention after an escaped-backslash literal must be seen, got %q", got)
+// Any backslash-bearing literal is refused rather than decoded. This pins the
+// \x5F bypass and intentionally accepts the false positive for ordinary data.
+func TestReservedNamespaceViolation_BackslashBearingLiteralIsRefused(t *testing.T) {
+	for _, sql := range []string{`SELECT 'hg\x5Fsafe'`, `SELECT 'ordinary\\value'`} {
+		if _, err := ReservedNamespaceViolation(sql, []string{"hg_safe"}, "_hg_row_id"); err == nil {
+			t.Fatalf("backslash-bearing literal must be refused: %q", sql)
+		}
 	}
 }
 
@@ -3518,6 +3516,105 @@ func TestReservedNamespaceViolation_OrdinaryColumnIsRefusedByDesign(t *testing.T
 		t.Fatalf("mention-is-the-rule must refuse an ordinary column named hg_safe, got %q", got)
 	}
 }
+
+// OnQuery must reject Identifier placeholders on maintenance, platform,
+// forwarded, and peer-trusted operator sessions. Use real proto.Parameter
+// values and assert FeatureParameters begins at revision 54459; also cover the
+// older serialized Settings/param_* transports. A {value:String} placeholder,
+// placeholder text inside a literal/comment, and every non-operator session
+// must remain allowed.
+func TestOnQuery_IdentifierPlaceholderTransports(t *testing.T) {
+	if !proto.FeatureParameters.In(54459) || proto.FeatureParameters.In(54458) {
+		t.Fatal("test revisions no longer straddle FeatureParameters")
+	}
+	cases := []struct {
+		revision int
+		query    *chproto.Query
+		wantErr  bool
+	}{
+		{54459, &chproto.Query{Body: "SELECT * FROM {db:Identifier}.t", Parameters: []proto.Parameter{{Key: "db", Value: "hg_safe"}}}, true},
+		{54458, &chproto.Query{Body: "SELECT * FROM {db:Identifier}.t", Settings: []proto.Setting{{Key: "param_db", Value: "hg_safe"}}}, true},
+		{54428, &chproto.Query{Body: "SELECT * FROM {db:Identifier}.t", OldSettings: []chproto.OldSetting{{Key: "param_db", Value: 1}}}, true},
+		{54459, &chproto.Query{Body: "SELECT {value:String}", Parameters: []proto.Parameter{{Key: "value", Value: "hg_safe"}}}, false},
+		{54459, &chproto.Query{Body: "SELECT '{db:Identifier}' /* {x:Identifier} */", Parameters: []proto.Parameter{{Key: "db", Value: "hg_safe"}}}, false},
+		{54459, &chproto.Query{Body: "SELECT '{fake:Identifier}', * FROM {db:Identifier}.t", Parameters: []proto.Parameter{{Key: "db", Value: "hg_safe"}}}, true},
+	}
+	for _, tc := range cases {
+		sess := newSessionForTest(t, 26)
+		sess.State().ClientRevision = tc.revision
+		sess.State().SetMaintenance(true)
+		err := (&Plugin{ReservedDatabases: []string{"hg_safe", "hg_unsafe"}, ReservedRowIDColumn: "_hg_row_id"}).OnQuery(
+			context.Background(), &plugin.QueryContext{Session: sess, OriginalSQL: tc.query.Body, Query: tc.query})
+		if (err != nil) != tc.wantErr {
+			t.Fatalf("revision=%d body=%q err=%v wantErr=%t", tc.revision, tc.query.Body, err, tc.wantErr)
+		}
+	}
+}
+
+// Carrier names are rejected independent of arguments, including computed
+// concat-split identities. Cover remote/remoteSecure, cluster/
+// clusterAllReplicas, merge, loop, dictionary, all time-series/prometheus
+// carriers, any MergeTree* prefix, distributed, buffer, and clickhouse.
+func TestOnQuery_ObjectCarrierCallables(t *testing.T) {
+	cases := []struct{ sql, carrier string }{
+		{"SELECT * FROM remote('host', concat('hg_', 'safe', '.t'))", "remote"},
+		{"SELECT * FROM remoteSecure('host', 'other.u')", "remoteSecure"},
+		{"SELECT * FROM cluster('c', concat('hg_', 'safe'), 't')", "cluster"},
+		{"SELECT * FROM clusterAllReplicas('c', 'other', 'u')", "clusterAllReplicas"},
+		{"SELECT * FROM merge(concat('hg_', 'safe'), '.*')", "merge"},
+		{"SELECT * FROM loop('other.u')", "loop"},
+		{"SELECT * FROM dictionary('other.d')", "dictionary"},
+		{"SELECT * FROM timeSeriesData(other.ts)", "timeSeriesData"},
+		{"SELECT * FROM timeSeriesTags(other.ts)", "timeSeriesTags"},
+		{"SELECT * FROM timeSeriesMetrics(other.ts)", "timeSeriesMetrics"},
+		{"SELECT * FROM timeSeriesSelector(other.ts, 'x', 0, 1)", "timeSeriesSelector"},
+		{"SELECT * FROM prometheusQuery(other.ts, 'x', 1)", "prometheusQuery"},
+		{"SELECT * FROM prometheusQueryRange(other.ts, 'x', 1, 2, 3)", "prometheusQueryRange"},
+		{"SELECT * FROM mergeTreeCodecBlockCounts('other', 'u')", "mergeTreeCodecBlockCounts"},
+		{"CREATE TABLE x (a UInt64) ENGINE = Distributed('c', 'other', 'u')", "Distributed"},
+		{"CREATE TABLE x (a UInt64) ENGINE = Buffer('other', 'u', 1, 1, 1, 1, 1, 1, 1)", "Buffer"},
+		{"CREATE DICTIONARY d (a UInt64) PRIMARY KEY a SOURCE(CLICKHOUSE(DB 'other' TABLE 'u'))", "CLICKHOUSE"},
+	}
+	for _, tc := range cases {
+		sess := newSessionForTest(t, 27)
+		sess.State().SetMaintenance(true)
+		err := (&Plugin{}).OnQuery(context.Background(), &plugin.QueryContext{Session: sess, Query: &chproto.Query{Body: tc.sql}})
+		if err == nil || !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(tc.carrier)) {
+			t.Fatalf("carrier %q must be refused: %v", tc.carrier, err)
+		}
+	}
+}
+
+func TestOnQuery_ComputedObjectIdentitiesAreRefused(t *testing.T) {
+	for _, sql := range []string{
+		"SELECT * FROM merge(concat('hg_', 'safe'), '.*')",
+		"SELECT * FROM remote('host', concat('hg_', 'safe', '.t'))",
+		"SELECT * FROM cluster('c', concat('hg_', 'safe', '.t'))",
+	} {
+		// privileged OnQuery must reject even though no contiguous reserved
+		// token exists for ReservedNamespaceViolation to find.
+		_ = sql
+	}
+}
+
+// False-positive boundaries remain explicit: bare columns named remote/
+// cluster/merge, callable text in comments/literals, myRemote(), and ordinary
+// concat('hg_', 'safe') are not carrier calls and remain allowed.
+func TestOnQuery_ObjectCarrierFalsePositiveBoundaries(t *testing.T) {
+	for _, sql := range []string{
+		"SELECT remote, cluster, merge FROM ordinary.t",
+		"SELECT 'remote(other.u)'",
+		"SELECT 1 /* cluster('c', 'other', 'u') */",
+		"SELECT myRemote('other.u')",
+		"SELECT concat('hg_', 'safe')",
+	} {
+		sess := newSessionForTest(t, 28)
+		sess.State().SetMaintenance(true)
+		if err := (&Plugin{}).OnQuery(context.Background(), &plugin.QueryContext{Session: sess, Query: &chproto.Query{Body: sql}}); err != nil {
+			t.Fatalf("non-carrier SQL %q must pass: %v", sql, err)
+		}
+	}
+}
 ```
 
 
@@ -3532,7 +3629,8 @@ Create `pkg/plugins/sireserved/plugin.go` with the plugin from the design note a
 
 ```go
 // ReservedNamespaceViolation reports the first reserved name the statement
-// mentions outside string literals and comments, or "" when it mentions none.
+// mentions outside comments, including inside string literals, or "" when it
+// mentions none.
 //
 // It deliberately does not parse SQL. Distinguishing a qualifier from a bare
 // database target from an implicit alias requires a ClickHouse parser, and
@@ -3541,9 +3639,8 @@ Create `pkg/plugins/sireserved/plugin.go` with the plugin from the design note a
 // that an ordinary column named hg_safe is refused for these sessions, with a
 // remedy the error names.
 func ReservedNamespaceViolation(sql string, dbs []string, rid string) (string, error) {
-	scrubbed, err := stripLiteralsAndComments(sql)
+	surfaces, err := scanSQLSurfaces(sql)
 	if err != nil {
-		// Unterminated literal or comment: refuse rather than guess.
 		return "", err
 	}
 	names := make([]string, 0, len(dbs)+1)
@@ -3551,7 +3648,7 @@ func ReservedNamespaceViolation(sql string, dbs []string, rid string) (string, e
 	if rid != "" {
 		names = append(names, rid)
 	}
-	for _, ident := range identifiers(scrubbed) {
+	for _, ident := range identifiers(surfaces.withLiterals) {
 		for _, name := range names {
 			if strings.EqualFold(ident, name) {
 				return name, nil
@@ -3562,27 +3659,33 @@ func ReservedNamespaceViolation(sql string, dbs []string, rid string) (string, e
 }
 ```
 
-`stripLiteralsAndComments` has one job and one hard rule about which direction it may be wrong in:
+`scanSQLSurfaces` produces two comment-free views: `withLiterals` for reserved-token matching and `outsideLiterals` for placeholder/callable syntax. Its fail-closed rules are:
 
-- Erase `'…'` string literals. **Both escape forms must be handled**: the doubled quote `''` and the backslash escape `\'`, *and* the escaped backslash `\\`. Getting this wrong is the one way this design can still be bypassed: in `SELECT 'a\\', hg_safe FROM t` the literal ends at the second quote, but a stripper that treats the final `\'` as an escaped quote runs on to end-of-input and swallows `hg_safe` — a mention that never gets scanned. Consume `\` plus the following byte as a unit, then test for the terminator.
+- Retain `'…'` contents in `withLiterals` and blank them in `outsideLiterals`; doubled quotes stay within the literal. Refuse every backslash-bearing literal rather than decode ClickHouse escapes.
 - Erase every ClickHouse comment form: `--`, `#`, `#!` and `//` to end of line, and `/* … */` **tracking nesting depth**.
 - Return an error for an unterminated literal or an unterminated block comment. Line comments ending at EOF are normal, not errors.
 - **Never** erase `` ` `` or `"` spans. They delimit identifiers; erasing them is the round-5 bypass. Unquote them in place, collapsing the doubled delimiter, so `` `hg_safe` `` compares equal to `hg_safe`.
 - **A quoted identifier containing a backslash is a rejection, not a decode.** ClickHouse applies string-literal escape rules inside quoted identifiers ([syntax](https://clickhouse.com/docs/reference/syntax#identifiers), [lexer grammar](https://github.com/ClickHouse/ClickHouse/blob/master/utils/antlr/ClickHouseLexer.g4#L246-L250)), so `` `hg\x5Fsafe` `` *is* the `hg_safe` database. Collapsing only doubled delimiters leaves the encoded spelling and the match silently fails — a bypass. Decoding the full escape set (`\x`, `\0`, `\a`, `\b`, `\f`, `\n`, `\r`, `\t`, `\v`, `\\`, and the quote forms) is exactly the re-implement-ClickHouse trap this design exists to avoid, so take the other branch: if a `` ` `` or `"` span contains a backslash, return an error and refuse the statement. Legitimate operator traffic does not spell identifiers with escapes, and the error names the reason.
 
-`identifiers` splits the scrubbed text on non-identifier characters (`[A-Za-z0-9_]` is the identifier set) and returns the tokens. Both helpers are table-tested in the same file.
+`identifiers` splits `withLiterals` on non-identifier characters (`[A-Za-z0-9_]` is the identifier set). `containsIdentifierPlaceholder` scans `outsideLiterals` for a non-empty `{name:Identifier}` case-insensitively; it does not inspect parameter values. `objectCarrierCallable` scans `outsideLiterals` for the exact family above followed by `(`, case-insensitively, and never interprets arguments. All helpers are table-tested.
 
 The plugin propagates a scrub failure as a rejection with the same shape as a violation:
 
 ```go
-name, err := ReservedNamespaceViolation(qctx.Query.Body, p.ReservedDatabases, p.ReservedRowIDColumn)
+surfaces, err := scanSQLSurfaces(qctx.Query.Body)
 if err != nil {
 	return fmt.Errorf("storage-integrity guard could not scan the statement: %w", err)
 }
-if name != "" {
+if containsIdentifierPlaceholder(surfaces.outsideLiterals) {
+	return fmt.Errorf("storage-integrity guard refuses ClickHouse Identifier placeholders on privileged proxy-bypass sessions; use a direct ClickHouse connection for physical access")
+}
+if name := reservedNamespaceViolationOnSurface(surfaces.withLiterals, p.ReservedDatabases, p.ReservedRowIDColumn); name != "" {
 	return fmt.Errorf(
 		"storage-integrity reserved name %q is not addressable through the proxy; use a direct ClickHouse connection for physical access",
 		name)
+}
+if carrier := objectCarrierCallable(surfaces.outsideLiterals); carrier != "" {
+	return fmt.Errorf("storage-integrity object-carrier callable %q is not accepted on privileged proxy-bypass sessions; use a direct ClickHouse connection for physical access", carrier)
 }
 return nil
 ```
@@ -3594,7 +3697,7 @@ Expected: PASS.
 
 - [ ] **Step 5: Extend the startup warning**
 
-`storageIntegrityInternalListenWarning` (Task 19) gains a second sentence when SI tables are configured and `auth.platform_operator_addresses` is non-empty: name the count of operator addresses and the SI tables reachable through the operator bypass. Assert the new text in `build_test.go`.
+`storageIntegrityInternalListenWarning` (Task 19) gains a second sentence when SI tables are configured and `auth.platform_operator_addresses` is non-empty. It names the operator-address count and protected SI tables, then explicitly warns that the guard rejects reserved tokens in ordinary columns/string literals, Identifier placeholders, backslash-bearing literals/quoted identifiers, and the local-catalog object-carrier family regardless of arguments; it names a direct ClickHouse connection as the remedy. Assert every part in `build_test.go` so the operator-visible false-positive boundary cannot drift behind the implementation.
 
 - [ ] **Step 6: Full suite + commit**
 
@@ -3887,7 +3990,7 @@ git commit -m "test(storage-integrity): regression-test the two Critical refusal
 In `CLAUDE.md`, extend the rewriter section so the next reader learns the new invariants. Add to the storage-integrity paragraph of "**4. SQL rewriter is a pluggable backend**":
 
 ```markdown
-With a configured SI table set the engines also fail **closed on their catch-all**: any statement class the rewriter does not model (`SYSTEM`, `CHECK TABLE`, and whatever ClickHouse adds next) is rejected with `UnsupportedStatement` rather than forwarded, and every reject's message names the SI table or reserved namespace the statement addressed. HouseGate mirrors that posture: with `storage_integrity.tables` non-empty, **every** non-`Success` response becomes a `RejectedError`, not only one whose accessed tables carry the SI flag. Startup additionally issues one fixed DESCRIBE probe (`rewriter.StorageIntegrityProbeExpectedSQL`) and refuses to start when the engine build does not emit the exact expected SQL — the contract enum alone cannot distinguish engine patch releases. Exception text is scrubbed of `hg_safe` / `hg_unsafe` names and `_hg_row_id` before it reaches the client. Peer-trusted / forwarded / maintenance / platform-operator sessions still bypass SI rewrite entirely (Spec I D6): that is a recorded decision, pinned by `TestPeerTrustedSessionBypassesStorageIntegrityRewrite`, and its mitigation is that `internal_listen` must be reachable only from trusted peer subnets — `buildServer` warns when SI tables and an internal port are configured together.
+With a configured SI table set the engines also fail **closed on their catch-all**: any statement class the rewriter does not model (`SYSTEM`, `CHECK TABLE`, and whatever ClickHouse adds next) is rejected with `UnsupportedStatement` rather than forwarded, and every reject's message names the SI table or reserved namespace the statement addressed. HouseGate mirrors that posture: with `storage_integrity.tables` non-empty, **every** non-`Success` response becomes a `RejectedError`, not only one whose accessed tables carry the SI flag. Startup requires every concrete or injected factory to implement `rewriter.StorageIntegrityProbeFactory` and pass one bounded four-case suite: the exact DESCRIBE fingerprint (`rewriter.StorageIntegrityProbeExpectedSQL`), generic `SYSTEM RELOAD CONFIG` catch-all, protected `SYSTEM START MERGES hg_unsafe.db1__t`, and `TRUNCATE DATABASE hg_safe` D2 invariant. Every response must acknowledge contract v1 and match the exact code/type/SQL/message; v0.9.0 native and v0.13.0 gRPC are the minimum released builds. Exception text is scrubbed of `hg_safe` / `hg_unsafe` names and `_hg_row_id` before it reaches the client. Ordinary peer-trusted/forwarded sessions deliberately bypass SI rewrite because the origin already rewrote their SQL; `internal_listen` must therefore be reachable only from trusted peer subnets, and `buildServer` warns when it is combined with SI tables. Maintenance/platform-operator sessions retain their rewrite bypass but run through the independent `sireserved` guard: comments are ignored, while reserved tokens (including inside literals), backslash-bearing literals/quoted identifiers, `{name:Identifier}` across `Query.Parameters` and `param_*` transport, and the known local-catalog carrier callable family are refused. These conservative operator-only false positives name the direct-ClickHouse remedy.
 ```
 
 - [ ] **Step 2: Full Bazel gate**
@@ -3945,7 +4048,7 @@ Spec I §6 item 4: "Spec B edit list gains the D6 decision record."
 In `docs/superpowers/specs/2026-06-22-storage-integrity-design.md`, in the section that covers the trust boundaries (§11/§12 area, next to the merge-guard discussion), add:
 
 ```markdown
-**Peer-trust bypass (recorded 2026-08-19, Spec I D6).** Peer-trusted, forwarded, maintenance and platform-operator sessions bypass the SQL rewrite plugin, and with no accessed tables the signed ingress short-circuits too. Such a session can address `hg_safe` / `hg_unsafe` directly and is not subject to storage-integrity read policy. This is deliberate in v1: peer SQL was already rewritten by the originating proxy, and re-running the rewrite would double-prefix physical names, which the peer-trust design forbids. The mitigation is network isolation — `internal_listen` MUST be reachable only from trusted peer subnets — plus a startup warning when storage-integrity tables and an internal port are configured together. The bypass is pinned by `TestPeerTrustedSessionBypassesStorageIntegrityRewrite`, so changing it is a visible test change rather than a silent behaviour change.
+**Storage-integrity rewrite bypass (recorded 2026-08-19, Spec I D6).** Ordinary peer-trusted and origin-side forwarding sessions bypass SQL rewrite because the originating HouseGate already rewrote their SQL; re-running it would double-prefix physical names. This deliberate v1 boundary is pinned by `TestPeerTrustedSessionBypassesStorageIntegrityRewrite` and protected by network isolation: `internal_listen` MUST be reachable only from trusted peer subnets, with a startup warning when SI tables and an internal port are configured together. Maintenance and platform-operator sessions also bypass rewrite, but unlike ordinary peers they carry raw SQL and must pass the independent `sireserved` guard. That parser-free operator guard ignores comments while refusing reserved tokens even in string literals, backslash-bearing literals/quoted identifiers, `{name:Identifier}` independent of parameter transport, and the known local-catalog object-carrier callable family independent of arguments; accepted false positives name the direct-ClickHouse remedy. Ordinary peer/forward sessions without an operator flag remain out of scope for the guard.
 ```
 
 Write it as one line (no hard wrapping) per the repo's markdown convention.
@@ -3955,7 +4058,7 @@ Write it as one line (no hard wrapping) per the repo's markdown convention.
 In `2026-08-19-storage-integrity-surface-failclosed-design.md`, change `**Status:** Proposed` to `**Status:** Implemented` and append a closure line to §6 naming the three tags:
 
 ```markdown
-**Delivered:** rewriter-go `<rewriter-go-tag>`, rewriter-grpc `<rewriter-grpc-tag>`, housegate `<housegate-tag>`. Corpus: 201 cases, sha256 `<corpus-sha>`, byte-identical in both engine repos.
+**Delivered:** rewriter-go `<rewriter-go-tag>`, rewriter-grpc `<rewriter-grpc-tag>`, housegate `<housegate-tag>`. Corpus: 210 cases / 211531 bytes, sha256 `309d738050fd05edd8e1f51f59a071c9c593e7aae10ea79dc7d4781c708ce281`, FNV-1a64 `15695596693549276030`, byte-identical in both engine repos.
 ```
 
 In `2026-08-19-storage-integrity-remediation-roadmap.md` §2, change Spec I's row urgency cell from `**Blocker** — ship before any SI deployment` to `**Shipped** — <rewriter-go-tag> / <rewriter-grpc-tag> / <housegate-tag>`.
