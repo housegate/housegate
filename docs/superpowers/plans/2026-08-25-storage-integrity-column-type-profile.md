@@ -510,7 +510,7 @@ Spec Q §4 item 2 wants "a test asserting that row hashes for the existing scala
 
 **Interfaces:** test-only. Uses the exported `lthash.Kind*` constants added in Task 4.
 
-- [ ] **Step 1: Write the golden**
+- [x] **Step 1: Write the golden**
 
 The golden pins the **canonical value encoding** — the framed value field `encodeValue` produces — rather than admission, so it stays meaningful when Task 9 narrows `FixedString` and Task 10 appends kind tags. `EncodeRow`'s layout is `domain ‖ table ‖ uint32(count) ‖ [name ‖ type ‖ value]`, every field length-framed with a little-endian `uint32`, so for a single column the value field is the third framed field after the count. Reuse the `encodedValueField` helper shape from Task 4 Step 2.
 
@@ -544,7 +544,7 @@ Three of these rows are the load-bearing ones and each carries a comment in the 
 - `Date32` at `1900-01-01` encodes as `int64(-25567)` little-endian under `kindTime`. `encodeTime`'s `strings.HasPrefix(col.Type, "Date")` branch computes `t.Unix()/86400`, which truncates toward zero — correct here only because `ColDate32` values are always UTC midnight and therefore exact multiples of 86400. The comment must say so, because a future non-midnight temporal type in that branch would be silently wrong.
 - `Date` and `Date32` on the same calendar day produce identical value bytes. This is intended: the framed type string separates them.
 
-- [ ] **Step 2: Add the kind-tag freeze assertion in the same file**
+- [x] **Step 2: Add the kind-tag freeze assertion in the same file**
 
 ```go
 // TestCanonicalKindTagsAreFrozen guards Spec Q Q-D3's append-only rule. New
@@ -574,7 +574,7 @@ func TestCanonicalDomainIsUnchanged(t *testing.T) {
 }
 ```
 
-- [ ] **Step 3: Run**
+- [x] **Step 3: Run**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/hg-specq
