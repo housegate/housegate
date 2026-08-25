@@ -739,7 +739,7 @@ bazel test //pkg/replay/payloadexec:payloadexec_test --test_output=errors
 
 **Interfaces:** test-only. Reuses `pkg/integration/testenv`'s ClickHouse container helper — read `pkg/integration/chschema_test.go` for the established pattern rather than inventing a new one.
 
-- [ ] **Step 1: Write the round trip**
+- [x] **Step 1: Write the round trip**
 
 ```go
 // TestColumnProfileCanonicalSpellingsSurviveClickHouse is Spec Q Q-D5's proof.
@@ -760,7 +760,7 @@ func TestColumnProfileCanonicalSpellingsSurviveClickHouse(t *testing.T) {
 
 Also assert the non-canonical spellings **round-trip to the canonical one**: create with `DateTime64( 03 , 'UTC' )` and assert `system.columns` reports `DateTime64(3, 'UTC')`, i.e. that our canonicalization and ClickHouse's agree rather than merely both being self-consistent. Include `FixedString( 4 )`, `FixedString(+4)`, `FixedString(04)` — the three legacy spellings `classifyColumnType` tolerates — as inputs whose canonical form is `FixedString(4)`. (Task 9 removes width 4 from the admitted set; keep these as *canonicalization* cases driven by `CanonicalColumnType` directly, not through the admitted-vector loop, so Task 9 does not have to rewrite this test.)
 
-- [ ] **Step 2: Register the target in CI**
+- [x] **Step 2: Register the target in CI**
 
 `.github/workflows/ci.yml:122-127` lists docker-bound targets explicitly because they are `manual`-tagged. If gazelle puts the new test in the existing `//pkg/integration:integration_test` target — which it will, since that target compiles the whole package — **no ci.yml change is needed**, and the step is to *verify* that:
 
@@ -772,7 +772,7 @@ bazel query 'attr(srcs, chcolumntype_test.go, //pkg/integration:all)'
 
 Expected: the second query prints `//pkg/integration:integration_test`. If gazelle instead created a new target, add it to the ci.yml list in the same commit and say so in the commit message.
 
-- [ ] **Step 3: Run**
+- [x] **Step 3: Run**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/hg-specq
