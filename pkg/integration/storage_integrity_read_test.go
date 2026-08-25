@@ -166,3 +166,129 @@ func TestStorageIntegrityRead_SafeAndUnsafeLatest(t *testing.T) {
 		t.Fatalf("DESCRIBE columns = %v, want [a]", names)
 	}
 }
+
+// TestStorageIntegrityRead_CriticalStatementsAreRefused is the regression
+// test for the two Critical Spec I findings: SYSTEM START MERGES could mutate
+// the candidate-part boundary, and TRUNCATE DATABASE could empty authoritative
+// committed state after a target-less engine rejection. Both statements must
+// be Exceptions and both physical tables must remain untouched.
+func TestStorageIntegrityRead_CriticalStatementsAreRefused(t *testing.T) {
+	lib := os.Getenv("POLYGLOT_SQL_FFI_PATH")
+	if lib == "" {
+		t.Skip("POLYGLOT_SQL_FFI_PATH not set; fetch the Spec I rewriter-go release with `go run ./cmd fetch-rewriter-lib` and pass --test_env")
+	}
+	ctx := context.Background()
+	const phys = "phys_si_guard"
+	seed := openConnNoDB(t, chEnv.Addr)
+	for _, query := range []string{
+		"CREATE DATABASE IF NOT EXISTS " + phys,
+		"CREATE DATABASE IF NOT EXISTS hg_safe",
+		"CREATE DATABASE IF NOT EXISTS hg_unsafe",
+		"DROP TABLE IF EXISTS hg_safe.db1__guard",
+		"DROP TABLE IF EXISTS hg_unsafe.db1__guard",
+		"CREATE TABLE hg_unsafe.db1__guard (_hg_row_id FixedString(32), a UInt32) ENGINE = MergeTree ORDER BY a",
+		"CREATE TABLE hg_safe.db1__guard AS hg_unsafe.db1__guard ENGINE = MergeTree ORDER BY a",
+		"SYSTEM STOP MERGES hg_unsafe.db1__guard",
+		"SYSTEM STOP MERGES hg_safe.db1__guard",
+		"INSERT INTO hg_unsafe.db1__guard VALUES (repeat('a', 32), 1)",
+		"INSERT INTO hg_unsafe.db1__guard VALUES (repeat('b', 32), 2)",
+		"INSERT INTO hg_safe.db1__guard VALUES (repeat('c', 32), 3)",
+	} {
+		if err := seed.Exec(ctx, query); err != nil {
+			t.Fatalf("seed %q: %v", query, err)
+		}
+	}
+	t.Cleanup(func() {
+		_ = seed.Exec(ctx, "DROP TABLE IF EXISTS hg_safe.db1__guard")
+		_ = seed.Exec(ctx, "DROP TABLE IF EXISTS hg_unsafe.db1__guard")
+		_ = seed.Exec(ctx, "DROP DATABASE IF EXISTS "+phys)
+	})
+
+	activeParts := func(database, table string) uint64 {
+		t.Helper()
+		var count uint64
+		if err := seed.QueryRow(ctx,
+			"SELECT count() FROM system.parts WHERE database = ? AND table = ? AND active",
+			database, table).Scan(&count); err != nil {
+			t.Fatalf("system.parts(%s.%s): %v", database, table, err)
+		}
+		return count
+	}
+	rows := func(table string) uint64 {
+		t.Helper()
+		var count uint64
+		if err := seed.QueryRow(ctx, "SELECT count() FROM "+table).Scan(&count); err != nil {
+			t.Fatalf("count(%s): %v", table, err)
+		}
+		return count
+	}
+
+	unsafePartsBefore := activeParts("hg_unsafe", "db1__guard")
+	safePartsBefore := activeParts("hg_safe", "db1__guard")
+	unsafeRowsBefore := rows("hg_unsafe.db1__guard")
+	safeRowsBefore := rows("hg_safe.db1__guard")
+	if unsafePartsBefore != 2 || safePartsBefore != 1 || unsafeRowsBefore != 2 || safeRowsBefore != 1 {
+		t.Fatalf("seed shape = unsafe(parts=%d rows=%d) safe(parts=%d rows=%d), want unsafe(2,2) safe(1,1)",
+			unsafePartsBefore, unsafeRowsBefore, safePartsBefore, safeRowsBefore)
+	}
+
+	port := &siReadStateStub{parts: map[string][]string{}}
+	proxy := testenv.StartServerProxy(t, chEnv.Addr,
+		testenv.WithExtraDatabases("db1"),
+		testenv.WithStorageIntegrityReadState(port),
+		testenv.WithConfigMutator(func(cfg *config.Config) {
+			cfg.Rewriter.Engine = "native"
+			cfg.Rewriter.NativeLibraryPath = lib
+			cfg.Rewriter.PhysicalDatabase = phys
+			cfg.StorageIntegrity.Tables = []string{"db1.guard"}
+			cfg.StorageIntegrity.Read.DefaultMode = string(rewriter.ReadModeSafe)
+		}),
+	)
+	conn := openConn(t, proxy.Addr)
+
+	for _, tc := range []struct {
+		name        string
+		sql         string
+		wantMessage string
+	}{
+		{"system start merges on the unsafe namespace", "SYSTEM START MERGES hg_unsafe.db1__guard",
+			"storage-integrity physical table hg_unsafe.db1__guard is not directly addressable"},
+		{"system stop merges on the safe namespace", "SYSTEM STOP MERGES hg_safe.db1__guard",
+			"storage-integrity physical table hg_safe.db1__guard is not directly addressable"},
+		{"truncate the safe database", "TRUNCATE DATABASE hg_safe",
+			"storage-integrity physical database hg_safe is not directly addressable"},
+		{"unmodelled statement naming nothing storage-integrity", "SYSTEM RELOAD CONFIG",
+			"statement class is not modelled by the rewriter"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := conn.Exec(ctx, tc.sql)
+			if err == nil {
+				t.Fatalf("%q must be refused with an Exception", tc.sql)
+			}
+			if !strings.Contains(err.Error(), tc.wantMessage) {
+				t.Fatalf("%q error = %v, want it to contain %q", tc.sql, err, tc.wantMessage)
+			}
+		})
+	}
+
+	if got := activeParts("hg_unsafe", "db1__guard"); got != unsafePartsBefore {
+		t.Fatalf("hg_unsafe active parts = %d, want %d; merges must still be stopped", got, unsafePartsBefore)
+	}
+	if got := activeParts("hg_safe", "db1__guard"); got != safePartsBefore {
+		t.Fatalf("hg_safe active parts = %d, want %d", got, safePartsBefore)
+	}
+	if got := rows("hg_unsafe.db1__guard"); got != unsafeRowsBefore {
+		t.Fatalf("hg_unsafe rows = %d, want %d", got, unsafeRowsBefore)
+	}
+	if got := rows("hg_safe.db1__guard"); got != safeRowsBefore {
+		t.Fatalf("hg_safe rows = %d, want %d; TRUNCATE DATABASE must never reach ClickHouse", got, safeRowsBefore)
+	}
+
+	var count uint64
+	if err := conn.QueryRow(ctx, "SELECT count() FROM db1.guard").Scan(&count); err != nil {
+		t.Fatalf("SELECT after refusals: %v", err)
+	}
+	if count != safeRowsBefore {
+		t.Fatalf("safe-mode count = %d, want %d", count, safeRowsBefore)
+	}
+}
