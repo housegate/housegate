@@ -36,6 +36,7 @@ import (
 	"github.com/housegate/housegate/pkg/plugins/rewrite"
 	routeplugin "github.com/housegate/housegate/pkg/plugins/route"
 	"github.com/housegate/housegate/pkg/plugins/sessionstate"
+	"github.com/housegate/housegate/pkg/plugins/sireserved"
 	"github.com/housegate/housegate/pkg/plugins/sistatement"
 	"github.com/housegate/housegate/pkg/plugins/storageintegrity"
 	"github.com/housegate/housegate/pkg/plugins/usage"
@@ -126,18 +127,27 @@ func storageIntegrityRewriterOptions(cfg *config.Config, rs rewriter.StorageInte
 	return out
 }
 
-// storageIntegrityInternalListenWarning returns the operator warning for the
-// Spec I D6 peer boundary, or an empty string when it does not apply.
+// storageIntegrityInternalListenWarning returns the operator warnings for the
+// Spec I D6 peer and privileged-operator boundaries, or an empty string when
+// neither applies.
 //
 // A peer-trusted remote() loopback carries SQL already rewritten by its origin;
 // running the rewriter again could double-prefix physical names. The bypass is
 // therefore deliberate, and network isolation of the internal port is the
 // corresponding control.
 func storageIntegrityInternalListenWarning(cfg *config.Config) string {
-	if len(cfg.StorageIntegrity.Tables) == 0 || cfg.InternalListen == "" {
+	if len(cfg.StorageIntegrity.Tables) == 0 {
 		return ""
 	}
-	return "storage_integrity: peer-trusted sessions arriving on internal_listen bypass storage-integrity rewrite and can address the hg_safe / hg_unsafe namespaces directly; internal_listen MUST be reachable only from trusted peer subnets"
+	var warnings []string
+	if cfg.InternalListen != "" {
+		warnings = append(warnings, "storage_integrity: peer-trusted sessions arriving on internal_listen bypass storage-integrity rewrite and can address the hg_safe / hg_unsafe namespaces directly; internal_listen MUST be reachable only from trusted peer subnets")
+	}
+	if count := len(cfg.Auth.PlatformOperatorAddresses); count > 0 {
+		warnings = append(warnings, fmt.Sprintf("storage_integrity: %d platform-operator addresses use the raw-SQL bypass for SI tables [%s]; the reserved-name guard rejects every hg_safe / hg_unsafe / _hg_row_id mention, including an ordinary column with one of those names; use a direct ClickHouse connection for physical access",
+			count, strings.Join(cfg.StorageIntegrity.Tables, ", ")))
+	}
+	return strings.Join(warnings, "; ")
 }
 
 // isNilInterface recognizes typed-nil implementations stored in an interface.
@@ -583,6 +593,16 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	queryPlugins := []plugin.QueryPlugin{
 		&authplugin.Plugin{Validator: validator, Access: reg},
 		&usage.Plugin{Client: usageClient},
+	}
+	if len(siOptions.Tables) > 0 {
+		queryPlugins = append(queryPlugins, &sireserved.Plugin{
+			ReservedDatabases: []string{
+				config.StorageIntegritySafeDatabase,
+				config.StorageIntegrityUnsafeDatabase,
+			},
+			ReservedRowIDColumn: rewriter.DefaultReservedRowIDColumn,
+		})
+		log.Infow("storage-integrity reserved-name guard enabled", "tables", len(siOptions.Tables))
 	}
 	querySuccessPlugins := []plugin.QuerySuccessPlugin{}
 	queryCompletePlugins := []plugin.QueryCompletePlugin{}

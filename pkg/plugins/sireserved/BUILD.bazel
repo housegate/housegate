@@ -1,0 +1,20 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_test(
+    name = "sireserved_test",
+    srcs = ["plugin_test.go"],
+    embed = [":sireserved"],
+    deps = [
+        "//pkg/chproto",
+        "//pkg/chsession",
+        "//pkg/plugin",
+    ],
+)
+
+go_library(
+    name = "sireserved",
+    srcs = ["plugin.go"],
+    importpath = "github.com/housegate/housegate/pkg/plugins/sireserved",
+    visibility = ["//visibility:public"],
+    deps = ["//pkg/plugin"],
+)

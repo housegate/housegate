@@ -24,6 +24,7 @@ import (
 	"github.com/housegate/housegate/pkg/plugins/forward"
 	"github.com/housegate/housegate/pkg/plugins/rewrite"
 	"github.com/housegate/housegate/pkg/plugins/sessionstate"
+	"github.com/housegate/housegate/pkg/plugins/sireserved"
 	"github.com/housegate/housegate/pkg/plugins/sistatement"
 	"github.com/housegate/housegate/pkg/plugins/storageintegrity"
 	"github.com/housegate/housegate/pkg/proxy"
@@ -135,6 +136,65 @@ func TestStorageIntegrityInternalListenWarning(t *testing.T) {
 	got := storageIntegrityInternalListenWarning(cfg)
 	if !strings.Contains(got, "peer-trusted") || !strings.Contains(got, "internal_listen") {
 		t.Fatalf("warning = %q, want it to name the peer-trust bypass and the internal port", got)
+	}
+
+	cfg.InternalListen = ""
+	cfg.Auth.PlatformOperatorAddresses = []string{"0x1", "0x2"}
+	got = storageIntegrityInternalListenWarning(cfg)
+	if !strings.Contains(got, "2 platform-operator") || !strings.Contains(got, "tenant.events") || !strings.Contains(got, "ordinary column") {
+		t.Fatalf("operator warning = %q, want count, protected SI table, and the mention-rule false positive", got)
+	}
+}
+
+func TestBuildServer_StorageIntegrityReservedGuardWiring(t *testing.T) {
+	withoutSI := minimalServerCfg(t)
+	plain, err := buildServer(Options{
+		Config:       withoutSI,
+		NetworkState: network.NewInMemoryNetworkState(),
+		Rewriter:     stubRewriterFactory{},
+	}, nil)
+	if err != nil {
+		t.Fatalf("build without SI: %v", err)
+	}
+	for _, candidate := range requireExternalChain(t, plain).QueryPlugins {
+		if _, ok := candidate.(*sireserved.Plugin); ok {
+			t.Fatal("reserved-name guard must not be wired without SI tables")
+		}
+	}
+	plain.teardown()
+
+	withSI := minimalServerCfg(t)
+	withSI.StorageIntegrity.Tables = []string{"tenant.events"}
+	guarded, err := buildServer(Options{
+		Config:       withSI,
+		NetworkState: network.NewInMemoryNetworkState(),
+		Rewriter:     siCapableStubRewriterFactory{},
+	}, nil)
+	if err != nil {
+		t.Fatalf("build with SI: %v", err)
+	}
+	defer guarded.teardown()
+
+	guardIndex, forwardIndex := -1, -1
+	var guard *sireserved.Plugin
+	for i, candidate := range requireExternalChain(t, guarded).QueryPlugins {
+		switch typed := candidate.(type) {
+		case *sireserved.Plugin:
+			guard = typed
+			guardIndex = i
+		case *forward.Plugin:
+			forwardIndex = i
+		}
+	}
+	if guard == nil {
+		t.Fatal("configured SI surface did not wire the reserved-name guard")
+	}
+	if guardIndex >= forwardIndex || forwardIndex < 0 {
+		t.Fatalf("guard index=%d forward index=%d, want guard before forward", guardIndex, forwardIndex)
+	}
+	if !reflect.DeepEqual(guard.ReservedDatabases, []string{config.StorageIntegritySafeDatabase, config.StorageIntegrityUnsafeDatabase}) ||
+		guard.ReservedRowIDColumn != rewriter.DefaultReservedRowIDColumn {
+		t.Fatalf("guard config = %+v", guard)
 	}
 }
 
