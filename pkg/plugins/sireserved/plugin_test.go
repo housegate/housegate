@@ -314,6 +314,14 @@ func TestOnQuery_OperatorBypassRefusesObjectCarrierCallables(t *testing.T) {
 		{"mongodb computed target", "SELECT * FROM mongodb('h:27017', concat('hg_', 'safe'), 'db1__t', 'u', 'p', 'a UInt32')", "mongodb"},
 		{"jdbc computed target", "SELECT * FROM jdbc('ds', concat('hg_', 'safe'), 'db1__t')", "jdbc"},
 		{"odbc computed target", "SELECT * FROM odbc('ds', concat('hg_', 'safe'), 'db1__t')", "odbc"},
+		// Heredoc arguments do not escape the carrier refusal. A heredoc body
+		// is blanked from outsideLiterals, so the reserved name is not visible
+		// there -- exactly as concat('hg_', 'safe') is not -- and the callable
+		// name is what carries the refusal. PRE-FIX and post-fix: refused.
+		// These rows exist so a future "inspect carrier arguments" refactor
+		// cannot quietly reopen the concatenation bypass.
+		{"merge with concatenated heredoc arguments", "SELECT * FROM merge($$hg$$||$$_safe$$, '^db1__t$')", "merge"},
+		{"merge with heredoc concat() arguments", "SELECT * FROM merge(concat($$hg_$$, $$safe$$), '^db1__t$')", "merge"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sess := newSessionForTest(t, 24)
