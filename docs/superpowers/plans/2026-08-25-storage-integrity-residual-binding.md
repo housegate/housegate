@@ -55,7 +55,7 @@ Spec P was written against a reading of the source that is wrong in five places.
 
 **Working directory for every Part A task:** `/Users/uranuswch/Dev/sentio_xyz/arbiter`
 
-- [ ] **Task 0 (pre-flight, do once, all repos):** create the branches and record the baselines every later task compares against.
+- [ ] **Task 0 (pre-flight, do once, all repos):** create the branches and record the baselines every later task compares against. *(Part A round: the arbiter row only — branch `fix/si-dispatch-completeness` rather than the `fix/si-residual-binding` this plan names, and a 16/16-green `bazel test //...` baseline with an empty failing set. The other four repos' branches and baselines belong to the Part B–E rounds.)*
 
 ```bash
 cd /Users/uranuswch/Dev/sentio_xyz/arbiter        && git checkout -b fix/si-residual-binding && bazel test //... --test_output=errors
@@ -81,7 +81,7 @@ This is the whole safety property of Part A. It lands first and alone, and it de
 **Interfaces:**
 - Produces: `(*FSM).blockStatementsComplete(blockSeq uint64) ([]*StatementState, bool)` — package-private, consumed by Tasks 2, 3 and 4.
 
-- [ ] **Step 1: Confirm the caller inventory is still exactly these eleven sites**
+- [x] **Step 1: Confirm the caller inventory is still exactly these eleven sites**
 
 ```bash
 cd /Users/uranuswch/Dev/sentio_xyz/arbiter
@@ -104,7 +104,7 @@ Expected — and if the set differs, classify the new entry before writing any c
 | 10 | `reads_work.go:73` → `:118` `WorkSet` | `UnanchoredVerified[].StateRoot = blockStateRoot(stmts)` — **the root the orchestrator anchors on L2** | **→ checked (Task 4)** | Not named by Spec P, and the highest-consequence of the four: quorum latches (`reevaluateBlock` returns early once `Verdict.Quorum`), so Task 3's fix does not protect a block corrupted *after* quorum. `WorkSet` already returns `(WorkSet, error)` and already errors on a `ChainHash()` failure two lines above, so an error return is the in-idiom refusal. |
 | 11 | `reads_custody_test.go:118-119` | test-local expectation | **keep unchecked** | Test fixture that deliberately mirrors production's current derivation; not a production path. |
 
-- [ ] **Step 2: Write the failing test**
+- [x] **Step 2: Write the failing test**
 
 Append to `fsm/seal_test.go`:
 
@@ -140,7 +140,7 @@ func TestBlockStatementsCompleteRejectsMissingStatement(t *testing.T) {
 }
 ```
 
-- [ ] **Step 3: Run it to verify it fails**
+- [x] **Step 3: Run it to verify it fails**
 
 ```bash
 cd /Users/uranuswch/Dev/sentio_xyz/arbiter
@@ -150,7 +150,7 @@ bazel test //fsm:fsm_test --test_filter='TestBlockStatementsCompleteRejectsMissi
 
 Expected: FAIL — `f.blockStatementsComplete undefined`.
 
-- [ ] **Step 4: Add the checked sibling and document the distinction**
+- [x] **Step 4: Add the checked sibling and document the distinction**
 
 In `fsm/apply.go`, replace the doc comment on `blockStatements` and add the sibling immediately below it:
 
@@ -204,7 +204,7 @@ Also extend `forEachBlockStatement`'s doc so the helper it wraps is not mistaken
 // effects only (see blockStatements). It is not a completeness-checked read.
 ```
 
-- [ ] **Step 5: Re-run the test**
+- [x] **Step 5: Re-run the test**
 
 ```bash
 cd /Users/uranuswch/Dev/sentio_xyz/arbiter
@@ -213,7 +213,7 @@ bazel test //fsm:fsm_test --test_filter='TestBlockStatementsCompleteRejectsMissi
 
 Expected: PASS. No other test changes behaviour — this task adds an unused function and two comments.
 
-- [ ] **Step 6: Full package + commit**
+- [x] **Step 6: Full package + commit**
 
 ```bash
 cd /Users/uranuswch/Dev/sentio_xyz/arbiter
@@ -234,7 +234,7 @@ git commit -m "fsm: add a completeness-checked block statement read (Spec P D1)"
 - Consumes: `blockStatementsComplete` (Task 1).
 - Produces: nothing new. `BlockDispatchInfo` keeps its `(BlockDispatchInfo, bool)` signature; `orchestrator/dispatch.go:49-51` already treats `ok == false` as "not dispatchable yet" and returns nil, so no orchestrator change is needed. Confirm that in Step 4.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `fsm/reads_dispatch_test.go`:
 
@@ -273,7 +273,7 @@ func TestBlockDispatchInfo_RefusesIncompleteBlock(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run it to verify it fails against the unfixed code**
+- [x] **Step 2: Run it to verify it fails against the unfixed code**
 
 ```bash
 cd /Users/uranuswch/Dev/sentio_xyz/arbiter
@@ -283,7 +283,7 @@ bazel test //fsm:fsm_test --test_filter='TestBlockDispatchInfo_RefusesIncomplete
 
 Expected: **FAIL** at `an incomplete block must not dispatch; got root="0xr1" over 1 statements (header declares 2)`. Record that line verbatim in the PR body — it is the evidence that the forgery path was reachable.
 
-- [ ] **Step 3: Adopt the checked read**
+- [x] **Step 3: Adopt the checked read**
 
 In `fsm/reads_dispatch.go`, replace `:37`:
 
@@ -307,7 +307,7 @@ and delete the now-unreachable nil guard inside the loop (`:45-47`), because `bl
 		info.Statements = append(info.Statements, replay.Statement{
 ```
 
-- [ ] **Step 4: Confirm the orchestrator needs no change**
+- [x] **Step 4: Confirm the orchestrator needs no change**
 
 ```bash
 cd /Users/uranuswch/Dev/sentio_xyz/arbiter
@@ -316,7 +316,7 @@ sed -n '48,56p' orchestrator/dispatch.go
 
 Expected: `info, ok := o.d.FSM.BlockDispatchInfo(be.BlockSeq); if !ok { return nil }` — the incomplete block is simply not dispatched this round and is re-examined on the next rescan. Do not add a log line here: `dispatchEvidence` is called once per rescan tick per block and would spam. If operator visibility is wanted, it belongs on Task 4's `WorkSet` error path, which is already rate-shaped by `o.d.Logger.Warn("workset scan failed", ...)` in `orchestrator/loop.go:120`.
 
-- [ ] **Step 5: Re-run the test and the package**
+- [x] **Step 5: Re-run the test and the package**
 
 ```bash
 cd /Users/uranuswch/Dev/sentio_xyz/arbiter
@@ -326,7 +326,7 @@ bazel test //fsm:fsm_test //orchestrator:orchestrator_test --test_output=errors
 
 Expected: PASS. `orchestrator`'s dispatch fixtures (`orchestrator/dispatch_fixtures_test.go`, `orchestrator/evm_anchor_test.go`) all build complete blocks and must stay green; if one goes red it was silently relying on a short list — fix the fixture, not the guard.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 cd /Users/uranuswch/Dev/sentio_xyz/arbiter
@@ -346,7 +346,7 @@ git commit -m "fix(fsm): refuse to dispatch an incomplete L3 block (Spec P D1)"
 - Consumes: `blockStatementsComplete` (Task 1).
 - Produces: `evidenceBlockN(t, f, n)` — a test helper generalising the existing one-statement `evidenceBlock` (`threeway_test.go:26`), consumed by Task 4's `WorkSet` test.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `fsm/threeway_test.go`:
 
@@ -408,7 +408,7 @@ func TestThreeWay_IncompleteBlockProducesNoVerdict(t *testing.T) {
 
 Add `"fmt"` to `threeway_test.go`'s imports.
 
-- [ ] **Step 2: Run it to verify it fails against the unfixed code**
+- [x] **Step 2: Run it to verify it fails against the unfixed code**
 
 ```bash
 cd /Users/uranuswch/Dev/sentio_xyz/arbiter
@@ -418,7 +418,7 @@ bazel test //fsm:fsm_test --test_filter='TestThreeWay_IncompleteBlockProducesNoV
 
 Expected: **FAIL** at `an incomplete block must produce no verdict at all, got &{Replicas:map[...] Quorum:false}` — today the predicate evaluates the honest two-replica bundle against a one-statement claim and records a (failing) verdict rather than declining. Record the line. Note the direction matters both ways: with the tampering on the *evidence* side instead, the same short list can produce `Quorum: true` over an under-counted block.
 
-- [ ] **Step 3: Adopt the checked read**
+- [x] **Step 3: Adopt the checked read**
 
 In `fsm/threeway.go`, replace `:46-49`:
 
@@ -433,7 +433,7 @@ In `fsm/threeway.go`, replace `:46-49`:
 	}
 ```
 
-- [ ] **Step 4: Re-run the test and the package**
+- [x] **Step 4: Re-run the test and the package**
 
 ```bash
 cd /Users/uranuswch/Dev/sentio_xyz/arbiter
@@ -443,7 +443,7 @@ bazel test //fsm:fsm_test --test_output=errors
 
 Expected: PASS, including every existing `TestThreeWay_*` — they all build complete blocks.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 cd /Users/uranuswch/Dev/sentio_xyz/arbiter
@@ -465,7 +465,7 @@ Spec P's §1a names only `BlockDispatchInfo` and `reevaluateBlock`. Reading the 
 - Consumes: `blockStatementsComplete` (Task 1), `evidenceBlockN` (Task 3), `fsm.ErrL3BlockIncomplete` (`reads.go:19`, already exported and already mapped by `server/safestate.go:54`).
 - Produces: nothing new. `WorkSet` keeps its `(WorkSet, error)` signature.
 
-- [ ] **Step 1: Write the two failing tests**
+- [x] **Step 1: Write the two failing tests**
 
 Append to `fsm/reads_work_test.go`:
 
@@ -523,7 +523,7 @@ func TestWorkSet_RefusesAnchorRootForIncompleteBlock(t *testing.T) {
 
 Add `"errors"` and `"github.com/housegate/housegate/pkg/replay"` to `reads_work_test.go`'s imports if they are not already there.
 
-- [ ] **Step 2: Run both to verify they fail against the unfixed code**
+- [x] **Step 2: Run both to verify they fail against the unfixed code**
 
 ```bash
 cd /Users/uranuswch/Dev/sentio_xyz/arbiter
@@ -534,7 +534,7 @@ bazel test //fsm:fsm_test \
 
 Expected: **both FAIL** — `an incomplete block must not advance the safe prefix, got 1` and `WorkSet must refuse … got err=<nil>`. Record both lines.
 
-- [ ] **Step 3: Stall the safe prefix**
+- [x] **Step 3: Stall the safe prefix**
 
 In `fsm/reads_work.go`, replace `safePrefixLocked`'s per-block body:
 
@@ -562,7 +562,7 @@ In `fsm/reads_work.go`, replace `safePrefixLocked`'s per-block body:
 	}
 ```
 
-- [ ] **Step 4: Refuse the anchor root**
+- [x] **Step 4: Refuse the anchor root**
 
 In the `UnanchoredVerified` branch of `WorkSet` (`:106`), re-resolve with the checked read before deriving the root. Keep the unchecked `stmts` from `:73` for the `AwaitingRC` / `SealedUnmarked` / `blockChallenged` classification above — those are advisory work rows, not derivations:
 
@@ -598,7 +598,7 @@ In the `UnanchoredVerified` branch of `WorkSet` (`:106`), re-resolve with the ch
 
 Add `"fmt"` to `reads_work.go`'s imports.
 
-- [ ] **Step 5: Confirm the orchestrator surfaces the refusal**
+- [x] **Step 5: Confirm the orchestrator surfaces the refusal**
 
 ```bash
 cd /Users/uranuswch/Dev/sentio_xyz/arbiter
@@ -607,7 +607,7 @@ sed -n '117,124p' orchestrator/loop.go
 
 Expected: `ws, err := o.d.FSM.WorkSet(); if err != nil { o.d.Logger.Warn("workset scan failed", "err", err); return nil }` — the refusal is logged once per rescan tick and nothing is anchored. That is the intended behaviour: loud, local, retried, and never a silent short root. No orchestrator change.
 
-- [ ] **Step 6: Re-run and commit**
+- [x] **Step 6: Re-run and commit**
 
 ```bash
 cd /Users/uranuswch/Dev/sentio_xyz/arbiter
@@ -627,7 +627,7 @@ The last golden regenerator in the tree. Spec K D1's `statements_root` goldens a
 
 **Interfaces:** none. `buildVectors()` stays — it is the deterministic construction the file documents and it keeps `testdata/spent_ids_vectors.json` reviewable — but nothing writes the file any more.
 
-- [ ] **Step 1: Prove the flag currently works (the structural pre-fix state)**
+- [x] **Step 1: Prove the flag currently works (the structural pre-fix state)**
 
 ```bash
 cd /Users/uranuswch/Dev/sentio_xyz/arbiter
@@ -638,7 +638,7 @@ git status --short accumulator/testdata/spent_ids_vectors.json
 
 Expected: the test passes and `git status` shows the file either unchanged (already in sync) or rewritten. Either way the flag exists and rewrites the freeze on demand — that is the defect. `git checkout accumulator/testdata/spent_ids_vectors.json` afterwards.
 
-- [ ] **Step 2: Delete the flag and its branch**
+- [x] **Step 2: Delete the flag and its branch**
 
 In `accumulator/vectors_test.go`:
 
@@ -662,7 +662,7 @@ In `accumulator/vectors_test.go`:
 
 - also fix `:243`'s now-stale failure message: `t.Fatalf("read vectors (run with -update once to generate): %v", err)` → `t.Fatalf("read %s (frozen vectors; regenerating them is a protocol migration): %v", vectorPath, err)`.
 
-- [ ] **Step 3: Prove the flag is gone**
+- [x] **Step 3: Prove the flag is gone**
 
 ```bash
 cd /Users/uranuswch/Dev/sentio_xyz/arbiter
@@ -672,7 +672,7 @@ grep -rn 'flag.Bool' --include="*_test.go" . || echo "no test regenerator flags 
 
 Expected: `accumulator_test` PASS; the grep prints the "no test regenerator flags remain" line (the two `flag.Bool` uses under `cmd/` are CLI flags on non-test files and are untouched).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 cd /Users/uranuswch/Dev/sentio_xyz/arbiter
@@ -684,7 +684,7 @@ git commit -m "test(accumulator): freeze the spent-ids vectors by deleting -upda
 
 ### Task 5b: Part A close-out
 
-- [ ] **Step 1: Full repo gate**
+- [x] **Step 1: Full repo gate**
 
 ```bash
 cd /Users/uranuswch/Dev/sentio_xyz/arbiter
@@ -693,7 +693,7 @@ bazel build //... && bazel test //... --test_output=errors
 
 Expected: identical to Task 0's baseline plus the four new tests. Any newly failing target is a regression — fix it before opening the PR.
 
-- [ ] **Step 2: Open the PR**
+- [ ] **Step 2: Open the PR** *(Deferred: this round commits on `fix/si-dispatch-completeness` but does not push or open the PR. The four recorded pre-fix failure lines are in Part A's report; the eleven-row caller classification reproduced unchanged.)*
 
 ```bash
 cd /Users/uranuswch/Dev/sentio_xyz/arbiter
