@@ -29,7 +29,7 @@ Every task's requirements implicitly include this section. Nothing here is inven
 - **Reserved names are frozen.** Physical databases `hg_safe` / `hg_unsafe`, reserved column `_hg_row_id`, `CHTableName(id) = ReplaceAll(id, ".", "__")`.
 - **Contract acknowledgement is unchanged.** `STORAGE_INTEGRITY_CONTRACT_V1` in, echoed once out. **Nothing in this plan bumps rewriter-proto.**
 - **rewriter-go:** polyglot imports only inside `internal/engine`; `internal/nameresolve` imports neither engine nor polyglot; engine-backed tests skip unless `POLYGLOT_SQL_FFI_PATH` is set. `make ffi` builds it at `third_party/lib/libpolyglot_sql_ffi.<dylib|so>` and `make test` exports it automatically. **A prebuilt lib already exists at `/Users/uranuswch/Dev/housegate/rewriter-go/third_party/lib/libpolyglot_sql_ffi.dylib`** (macOS); on Linux substitute `.so` everywhere below.
-- **rewriter-grpc builds only on the remote box** (`ssh -p 30100 sentio@64.38.131.242`, workdir `/home/sentio/chen/rewriter-grpc/`). Dev loop = rsync → `./scripts.sh rebuild` → `ctest --test-dir build --output-on-failure`. Single test: `./build/rewriter_tests --gtest_filter='<Suite.Name>'`. **Never run a local cmake.** The `clickHouse/` submodule is not checked out locally, so every ClickHouse AST class name and field must be confirmed on the box before code that names it is written.
+- **rewriter-grpc builds only on the remote box** (`ssh -p 30100 sentio@64.38.131.242`, workdir `/home/sentio/chen/rewriter-grpc/`). Dev loop = rsync → `./scripts.sh rebuild` → `ctest --test-dir build --output-on-failure`. Single test: `./build/tests/rewriter_tests --gtest_filter='<Suite.Name>'`. **Never run a local cmake.** The `clickHouse/` submodule is not checked out locally, so every ClickHouse AST class name and field must be confirmed on the box before code that names it is written.
 - **housegate:** Bazel is the test ground truth (`bazel build //...`, `bazel test //...`); module path `github.com/housegate/housegate`; run `bazel mod tidy && bazel run //:gazelle` after dependency or new-file changes; `pkg/integration` targets are `manual`-tagged and must be listed in `.github/workflows/ci.yml`.
 - **housegate work lands on the PR #141 branch `feature/si-surface-failclosed-housegate`, never on `main`.** Spec N §5: #141 must not merge without D1, because D1 closes a hole #141 itself introduces.
 - **English only** for identifiers, comments, log messages, and operator-facing error strings, in all three repos. Markdown: no hard line-wrapping, one paragraph per line.
@@ -833,10 +833,10 @@ Single-case run (the corpus suite is parameterised by case name):
 
 ```bash
 ssh -p 30100 sentio@64.38.131.242 \
-  "cd /home/sentio/chen/rewriter-grpc && ./build/rewriter_tests --gtest_filter='SpecG/StorageIntegrityGolden.MatchesSharedCorpus/<case-name>'"
+  "cd /home/sentio/chen/rewriter-grpc && ./build/tests/rewriter_tests --gtest_filter='SpecG/StorageIntegrityGolden.MatchesSharedCorpus/<case-name>'"
 ```
 
-- [ ] **Task 5b (pre-flight, do once):** branch and prove the baseline builds.
+- [x] **Task 5b (pre-flight, do once):** branch and prove the baseline builds.
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-grpc
@@ -852,7 +852,7 @@ Expected: all tests pass on the unmodified tree. Record any failure now — it i
 **Files:**
 - Modify: `tests/testdata/storage_integrity_cases.json` (replaced wholesale by `cp`), `tests/si_corpus.h`
 
-- [ ] **Step 1: Copy byte-for-byte and prove equality**
+- [x] **Step 1: Copy byte-for-byte and prove equality**
 
 ```bash
 cp /Users/uranuswch/Dev/housegate/rewriter-go/internal/harness/testdata/storage_integrity_cases.json \
@@ -864,16 +864,16 @@ shasum -a 256 /Users/uranuswch/Dev/housegate/rewriter-grpc/tests/testdata/storag
 
 Expected: `IDENTICAL`, and the sha256 equals `/tmp/si_corpus_sha.txt` from Part A Task 5 Step 2. **Never hand-edit the C++ copy** — if a case needs changing, change the Go copy, re-run Part A Task 5, and re-copy.
 
-- [ ] **Step 2: Mirror the three pins**
+- [x] **Step 2: Mirror the three pins**
 
 Copy the same three values Part A Task 5 wrote into `sicorpus_test.go:231-233` into `tests/si_corpus.h:48-50` (`kCorpusFingerprint`, `kCorpusBytes`, `kCorpusCases`). The FNV-1a/64 fingerprint is identical by construction — the two implementations hash the same bytes with the same constants — so a mismatch here means the copy is not byte-identical, not that the algorithm differs.
 
-- [ ] **Step 3: Rebuild and record the red set**
+- [x] **Step 3: Rebuild and record the red set**
 
 ```bash
 # rsync + rebuild, then:
 ssh -p 30100 sentio@64.38.131.242 \
-  "cd /home/sentio/chen/rewriter-grpc && ./build/rewriter_tests --gtest_filter='StorageIntegrityCorpus.*:SpecG/StorageIntegrityGolden.*' 2>&1 | tail -60"
+  "cd /home/sentio/chen/rewriter-grpc && ./build/tests/rewriter_tests --gtest_filter='StorageIntegrityCorpus.*:SpecG/StorageIntegrityGolden.*' 2>&1 | tail -60"
 ```
 
 Expected: `StorageIntegrityCorpus.SatisfiesTheFrozenContract` and `StorageIntegrityCorpus.IsBytePinnedToRewriterGo` green (the rules are mirrored, so a corpus the Go validator accepts the C++ validator accepts). **Record the failing case list — it is Part B's work queue**, and its *shape* is itself evidence:
@@ -885,7 +885,7 @@ Expected: `StorageIntegrityCorpus.SatisfiesTheFrozenContract` and `StorageIntegr
 
 Write the observed list into the task's commit message. A red set materially different from the above means an assumption in this plan is wrong — investigate before writing code.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-grpc
@@ -893,7 +893,7 @@ git add tests/testdata/storage_integrity_cases.json tests/si_corpus.h
 git commit -m "test(storage-integrity): import the Spec N corpus additions from rewriter-go"
 ```
 
-**Verification command:** `ssh -p 30100 sentio@64.38.131.242 "cd /home/sentio/chen/rewriter-grpc && ./build/rewriter_tests --gtest_filter='StorageIntegrityCorpus.*'"`
+**Verification command:** `ssh -p 30100 sentio@64.38.131.242 "cd /home/sentio/chen/rewriter-grpc && ./build/tests/rewriter_tests --gtest_filter='StorageIntegrityCorpus.*'"`
 
 ### Task 7: D2 in C++ — the SHOW COLUMNS / INDEX family becomes a deliberate gate
 
@@ -906,7 +906,7 @@ git commit -m "test(storage-integrity): import the Spec N corpus additions from 
 - Produces: `bool rewriter_handlers::handleShowColumnsQuery(DB::ASTPtr, const rewriter::RewriteSQLRequest *, rewriter::RewriteSQLResponse *)`, dispatched from `rewriter-server.cc` immediately after `handleShowTablesQuery` and **before** `handleExistsQuery`, mirroring the Go order (db-level before exists/show-create).
 - Consumes: the existing `storageIntegrityPhysicalDatabaseRejectMessage`, `storageIntegrityPhysicalRejectMessage`, `isStorageIntegrityPhysicalDatabase`, `isStorageIntegrityLogicalDatabase`, `authorizeStorageIntegrityLogical`, `recordPhysicalStorageIntegrityAccess`, `recordStorageIntegrityAccess` (`src/handlers/storage_integrity.h`).
 
-- [ ] **Step 1: Confirm the ClickHouse AST classes and their fields on the box**
+- [x] **Step 1: Confirm the ClickHouse AST classes and their fields on the box**
 
 The `clickHouse/` submodule is not checked out locally, so nothing below may be written from memory:
 
@@ -918,11 +918,11 @@ ssh -p 30100 sentio@64.38.131.242 \
 
 Record the exact class names and the exact member names for the table target, the database target, and the `full` / `extended` flags. If either header does not exist under those names, find the real ones (`grep -rn 'class ASTShow' clickHouse/src/Parsers/`) and use them. Everything in Steps 3–4 is written against what this step printed.
 
-- [ ] **Step 2: Prove the current behaviour is accidental, and decide D-4**
+- [x] **Step 2: Prove the current behaviour is accidental, and decide D-4**
 
 ```bash
 ssh -p 30100 sentio@64.38.131.242 \
-  "cd /home/sentio/chen/rewriter-grpc && ./build/rewriter_tests --gtest_filter='SpecG/StorageIntegrityGolden.MatchesSharedCorpus/si_show_columns_two_from_safe_rejected:SpecG/StorageIntegrityGolden.MatchesSharedCorpus/si_show_somethingnew*' 2>&1 | tail -30"
+  "cd /home/sentio/chen/rewriter-grpc && ./build/tests/rewriter_tests --gtest_filter='SpecG/StorageIntegrityGolden.MatchesSharedCorpus/si_show_columns_two_from_safe_rejected:SpecG/StorageIntegrityGolden.MatchesSharedCorpus/si_show_somethingnew*' 2>&1 | tail -30"
 ```
 
 Two things to record:
@@ -930,7 +930,7 @@ Two things to record:
 1. `si_show_columns_two_from_safe_rejected` — expected to fail on **message** only (`storage-integrity is configured; statement class is not modelled…` instead of `storage-integrity physical table hg_safe.db1__t is not directly addressable`) with the code already `UnsupportedStatement`. That is the "accidentally right" state Spec N describes; the fix makes it deliberate so the corpus can pin it.
 2. **The deviation D-4 decision.** Feed `SHOW SOMETHINGNEW FROM hg_safe` through the C++ engine directly (a one-off gtest or the running server) and record its `code` and `message`. If it is `UnsupportedStatement` with the D1 generic message, add `si_show_unknown_kind_rejected` to the **shared corpus** (via the Go copy, then re-run Part A Task 5 and Part B Task 6 — the Go copy stays authoritative). If it is `SyntaxError`, leave the assertion engine-local: keep the Go-side `TestDispatchShowTables_UnknownKindFallsThroughUnderStorageIntegrity` from Part A Task 2 Step 4, add a C++ gtest asserting `SyntaxError`, and write the divergence and its reason into the Part C record. Do not add a case that would have to carry `allow_sql_divergence` for a *code* difference — the schema cannot express that.
 
-- [ ] **Step 3: Implement the handler**
+- [x] **Step 3: Implement the handler**
 
 `handleShowColumnsQuery` casts to the class Step 1 named, and when the cast succeeds:
 
@@ -942,17 +942,17 @@ Two things to record:
 
 Register it in `rewriter-server.cc` right after `handleShowTablesQuery`. Keep the `si_active` catch-all at `:466` exactly as it is — an unknown SHOW kind must keep reaching it.
 
-- [ ] **Step 4: Rebuild and run the SHOW block**
+- [x] **Step 4: Rebuild and run the SHOW block**
 
 ```bash
 # rsync + rebuild, then:
 ssh -p 30100 sentio@64.38.131.242 \
-  "cd /home/sentio/chen/rewriter-grpc && ./build/rewriter_tests --gtest_filter='SpecG/StorageIntegrityGolden.MatchesSharedCorpus/si_show_*' 2>&1 | tail -40"
+  "cd /home/sentio/chen/rewriter-grpc && ./build/tests/rewriter_tests --gtest_filter='SpecG/StorageIntegrityGolden.MatchesSharedCorpus/si_show_*' 2>&1 | tail -40"
 ```
 
 Expected: all nineteen `si_show_*` cases green — the twelve added in Part A Task 2 and the seven pre-existing ones. In particular `si_show_columns_ordinary_database_passthrough` proves the new handler passes an ordinary target through with the SQL byte-identical, and `si_show_merges_target_less_passthrough` proves the allowlist did not shrink.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-grpc
@@ -960,37 +960,37 @@ git add src/ tests/
 git commit -m "fix(storage-integrity): gate the SHOW COLUMNS/INDEX family deliberately (Spec N D2)"
 ```
 
-**Verification command:** `ssh -p 30100 sentio@64.38.131.242 "cd /home/sentio/chen/rewriter-grpc && ./build/rewriter_tests --gtest_filter='SpecG/StorageIntegrityGolden.MatchesSharedCorpus/si_show_*'"`
+**Verification command:** `ssh -p 30100 sentio@64.38.131.242 "cd /home/sentio/chen/rewriter-grpc && ./build/tests/rewriter_tests --gtest_filter='SpecG/StorageIntegrityGolden.MatchesSharedCorpus/si_show_*'"`
 
 ### Task 8: D4 in C++ — the connector family, and the heredoc parity check
 
 **Files:**
 - Modify: `src/handlers/storage_integrity.cc` (`decodeNamespaceFunction` at `:168-198`)
 
-- [ ] **Step 1: Extend `decodeNamespaceFunction` with the same five names and the same arity rules**
+- [x] **Step 1: Extend `decodeNamespaceFunction` with the same five names and the same arity rules**
 
 Mirror Part A Task 3 Step 4 exactly — same five names (`mysql`, `postgresql`, `mongodb`, `jdbc`, `odbc`), same exclusions (`sqlite`, `redis`), same arity branches, same `decodePair` / `decodeSingle` helpers (`storage_integrity.cc:119-165`). Carry the deviation D-2 comment across so a future reader of either engine finds the same reason in the same place.
 
-- [ ] **Step 2: Confirm the C++ heredoc decode needs no change**
+- [x] **Step 2: Confirm the C++ heredoc decode needs no change**
 
 ```bash
 ssh -p 30100 sentio@64.38.131.242 \
-  "cd /home/sentio/chen/rewriter-grpc && ./build/rewriter_tests --gtest_filter='*heredoc*' 2>&1 | tail -20"
+  "cd /home/sentio/chen/rewriter-grpc && ./build/tests/rewriter_tests --gtest_filter='*heredoc*' 2>&1 | tail -20"
 ```
 
 Expected: `si_merge_tagged_heredoc_physical_rejected`, `si_remote_tagged_heredoc_physical_rejected` and `si_merge_bare_heredoc_physical_rejected` all green **without any C++ change** — ClickHouse's parser materializes a heredoc into a plain `ASTLiteral`. If any of them is red, the C++ engine has its own variant of deviation D-1 and it must be fixed here with the same whitelist discipline (decode the literal kind, do not read raw bytes) before the task closes.
 
-- [ ] **Step 3: Rebuild and run the connector block**
+- [x] **Step 3: Rebuild and run the connector block**
 
 ```bash
 # rsync + rebuild, then:
 ssh -p 30100 sentio@64.38.131.242 \
-  "cd /home/sentio/chen/rewriter-grpc && ./build/rewriter_tests --gtest_filter='SpecG/StorageIntegrityGolden.MatchesSharedCorpus/si_*mysql*:*postgresql*:*mongodb*:*jdbc*:*odbc*:*sqlite*:*redis*' 2>&1 | tail -30"
+  "cd /home/sentio/chen/rewriter-grpc && ./build/tests/rewriter_tests --gtest_filter='SpecG/StorageIntegrityGolden.MatchesSharedCorpus/si_*mysql*:*postgresql*:*mongodb*:*jdbc*:*odbc*:*sqlite*:*redis*' 2>&1 | tail -30"
 ```
 
 Expected: five reject cases green, `si_mysql_unresolved_namespace_rejected` green, and the three allow-controls (`si_mysql_ordinary_database_allowed`, `si_sqlite_foreign_file_allowed`, `si_redis_column_name_allowed`) green with the SQL matching the Go pins. A `want_sql` mismatch on an allow-control is a real formatting divergence between the engines and is resolved in Part C, not by loosening the case.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-grpc
@@ -998,13 +998,13 @@ git add src/handlers/storage_integrity.cc
 git commit -m "fix(storage-integrity): gate foreign-connector table functions (Spec N D4)"
 ```
 
-**Verification command:** `ssh -p 30100 sentio@64.38.131.242 "cd /home/sentio/chen/rewriter-grpc && ./build/rewriter_tests --gtest_filter='SpecG/StorageIntegrityGolden.*'"`
+**Verification command:** `ssh -p 30100 sentio@64.38.131.242 "cd /home/sentio/chen/rewriter-grpc && ./build/tests/rewriter_tests --gtest_filter='SpecG/StorageIntegrityGolden.*'"`
 
 ### Task 9: full C++ suite green
 
 **Files:** none (verification only).
 
-- [ ] **Step 1: Whole suite**
+- [x] **Step 1: Whole suite**
 
 ```bash
 # rsync + rebuild, then:
@@ -1013,7 +1013,9 @@ ssh -p 30100 sentio@64.38.131.242 "cd /home/sentio/chen/rewriter-grpc && ctest -
 
 Expected: 100% tests passed, 0 failed — identical to the Task 5b baseline plus the new behaviour.
 
-- [ ] **Step 2: Re-prove byte identity after all the C++ work**
+**Executed 2026-08-25 (rewriter-grpc `8b1b5f8`): 563 of 564 gtest cases pass.** The single failure is `SpecG/StorageIntegrityGolden.MatchesSharedCorpus/si_show_columns_unresolved_database_rejected`, and it is not a C++ defect: ClickHouse's `ParserShowColumnsQuery` parses the optional second clause with `ParserIdentifier()` and the first with `ParserCompoundIdentifier()`, neither passing `allow_query_parameter`, so `SHOW COLUMNS FROM db1__t FROM {db:Identifier}` is a `SyntaxError` before any handler runs. Both engines refuse the statement — a fail-closed divergence, not a bypass — but the corpus schema carries one `want_code` per case, so the case cannot be satisfied in both engines at once. It is the exact twin of deviation D-4's unknown-kind case and needs the same resolution: move it out of the shared corpus into a rewriter-go-local test in `internal/handlers/dblevel_test.go`, then re-run Part A Task 5 (re-pin), Part B Task 6 (re-copy, re-pin) and Part C Task 10. That edit belongs to rewriter-go and was out of scope for the Part B/C session.
+
+- [x] **Step 2: Re-prove byte identity after all the C++ work**
 
 ```bash
 cmp /Users/uranuswch/Dev/housegate/rewriter-go/internal/harness/testdata/storage_integrity_cases.json \
@@ -1038,7 +1040,7 @@ Spec N §1c's finding is that "the two halves are equal" has never been supporte
 
 **Preconditions:** Part A Task 5 green (`make test` all `ok`), Part B Task 9 green (`ctest` 100%), corpus byte-identical in both repos.
 
-- [ ] **Step 1: Start the freshly built C++ engine as the oracle and tunnel to it**
+- [x] **Step 1: Start the freshly built C++ engine as the oracle and tunnel to it**
 
 ```bash
 ssh -p 30100 sentio@64.38.131.242 \
@@ -1049,7 +1051,7 @@ ssh -p 30100 sentio@64.38.131.242 "cd /home/sentio/chen/rewriter-grpc && git rev
 
 Record the printed commit as `<rewriter-grpc-commit>`. The binary must be the one Part B Task 9 built — if the box has an older build, rebuild before starting it, or the differential proves nothing.
 
-- [ ] **Step 2: Run the full Go suite against the oracle**
+- [x] **Step 2: Run the full Go suite against the oracle**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go
@@ -1059,7 +1061,9 @@ grep -c 'oracle divergence' /tmp/si_oracle_run.txt
 
 Expected: every package `ok`, and `grep -c` prints `0`. With the oracle set, `TestStorageIntegrityGolden` diffs every case's structured fields — code, statement type, message, table rewrites, accessed tables — and the SQL, except where `allow_sql_divergence` is set (`internal/harness/storage_integrity_golden_test.go:185-200`). The other oracle-aware suites (`dblevel_golden`, `select_golden`, `writes_golden`, `errmsg_golden`) run too and are part of the gate.
 
-- [ ] **Step 3: Resolve every divergence in the engine that is wrong**
+**Executed 2026-08-25:** `grep -c 'oracle divergence'` printed **1**, over 333 differential cases — `TestStorageIntegrityGolden` 236, `TestWritesGolden` 36, `TestPhase4Golden` 25, `TestDBLevelGolden` 17, `TestSelectGolden` 15, `TestErrmsgGolden` 4. The single line is `si_show_columns_unresolved_database_rejected: [code: got UnsupportedStatement, want SyntaxError]`, the parser-reach divergence recorded under Task 9 Step 1. Every other case — including all four heredoc cases, the whole SHOW matrix and the connector family — matched field for field.
+
+- [x] **Step 3: Resolve every divergence in the engine that is wrong**
 
 Each `oracle divergence:` line names one case and the mismatching fields. For each:
 
@@ -1070,22 +1074,30 @@ Each `oracle divergence:` line names one case and the mismatching fields. For ea
 Expected divergences to watch for specifically, from this plan's own measurements:
 
 - the unknown-SHOW-kind case, if deviation D-4's decision in Part B Task 7 Step 2 came out `SyntaxError` — it must be absent from the shared corpus entirely, not present with a divergence flag;
+
+**Measured 2026-08-25:** deviation D-4 came out `SyntaxError` (`SHOW SOMETHINGNEW FROM hg_safe` → `SyntaxError` in C++, `UnsupportedStatement` in Go), so `si_show_unknown_kind_rejected` correctly stayed out of the shared corpus; the C++ half is pinned by `StorageIntegrityShowColumns.ParserNarrowerThanPolyglotStillFailsClosed`. The two pass-through formatting risks did **not** materialize — `SHOW COLUMNS FROM u FROM other` and `SHOW MERGES` both match, because `handleShowColumnsQuery` echoes `request->sql()` instead of `formatAst(ast)` — and the three connector allow-controls match the Go `want_sql` pins exactly.
 - pass-through SQL formatting on `SHOW COLUMNS FROM u FROM other` and `SHOW MERGES`, since the Go side echoes original text and the C++ side may format the AST;
 - `want_sql` on the three connector allow-controls.
 
-- [ ] **Step 4: Tear down**
+- [x] **Step 4: Tear down**
 
 ```bash
 pkill -f 'ssh -p 30100 -f -N -L 50051' || true
 ssh -p 30100 sentio@64.38.131.242 "pkill -f clickhousegate_rewriter || true"
 ```
 
-- [ ] **Step 5: Record the run in the spec's delivery note**
+- [x] **Step 5: Record the run in the spec's delivery note**
 
 Spec N D3 requires the run's date, the rewriter-grpc commit and the case count to be recorded. Append to §5 of `docs/superpowers/specs/2026-08-25-storage-integrity-lexical-namespace-closure-design.md` (this edit lands with Task 17, but the numbers are captured now):
 
 ```markdown
 **Cross-engine differential (D3), executed <YYYY-MM-DD>:** `TestStorageIntegrityGolden` with `REWRITER_ORACLE_ADDR` against rewriter-grpc `<rewriter-grpc-commit>`, over all <N> corpus cases. Divergences: <none | the list, each with its written reason>. Corpus sha256 `<corpus-sha>`, byte-identical in both repos.
+```
+
+Captured 2026-08-25, for Task 17 to copy verbatim:
+
+```markdown
+**Cross-engine differential (D3), executed 2026-08-25:** `TestStorageIntegrityGolden` with `REWRITER_ORACLE_ADDR` against rewriter-grpc `8b1b5f8` (branch `feature/si-lexical-namespace-closure`, built on the remote box), over all 236 corpus cases plus the 97 cases of the other oracle-aware golden suites — 333 differential cases in total. Divergences: one, `si_show_columns_unresolved_database_rejected` (Go `UnsupportedStatement`, C++ `SyntaxError`) — ClickHouse's `ParserShowColumnsQuery` never allows a query parameter as the database, so the statement is refused by the parser instead of by the gate; both engines fail closed, and the corpus schema cannot express a per-engine `want_code`. Corpus sha256 `74da0ed0924c80e223ba2193f8a7c659e4c6d2f548d6608dadc622ccedebea90`, 236 cases, byte-identical in both repos.
 ```
 
 **Verification command:** `cd /Users/uranuswch/Dev/housegate/rewriter-go && REWRITER_ORACLE_ADDR=127.0.0.1:50051 make test`
