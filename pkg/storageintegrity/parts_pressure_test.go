@@ -21,6 +21,7 @@ type fakePartsConn struct {
 	inventory         []fakePartInventoryRow
 	queryErr          error
 	queries           []string
+	args              [][]any
 	blockUntilContext bool
 	queryStarted      chan struct{}
 }
@@ -31,9 +32,10 @@ type fakePartInventoryRow struct {
 
 func (c *fakePartsConn) Exec(context.Context, string, ...any) error { return nil }
 
-func (c *fakePartsConn) Query(ctx context.Context, query string, _ ...any) (MergeRows, error) {
+func (c *fakePartsConn) Query(ctx context.Context, query string, args ...any) (MergeRows, error) {
 	c.mu.Lock()
 	c.queries = append(c.queries, query)
+	c.args = append(c.args, append([]any(nil), args...))
 	queryErr := c.queryErr
 	rows := append([]fakePartsRow(nil), c.rows...)
 	inventory := append([]fakePartInventoryRow(nil), c.inventory...)
@@ -63,7 +65,66 @@ func (c *fakePartsConn) Query(ctx context.Context, query string, _ ...any) (Merg
 			}
 		}
 	}
-	return &fakePartsRows{rows: inventory}, nil
+	return &fakePartsRows{rows: filterFakeInventory(query, args, inventory)}, nil
+}
+
+func filterFakeInventory(query string, args []any, inventory []fakePartInventoryRow) []fakePartInventoryRow {
+	databases := map[string]bool{}
+	table := ""
+	partitions := map[string]bool{}
+	rest := args
+	if strings.Contains(query, "parts.database IN (?, ?)") {
+		databases[rest[0].(string)], databases[rest[1].(string)] = true, true
+		rest = rest[2:]
+	} else if len(rest) > 0 {
+		databases[rest[0].(string)] = true
+		rest = rest[1:]
+	} else {
+		return inventory
+	}
+	if strings.Contains(query, "parts.table = ?") && len(rest) > 0 {
+		table = rest[0].(string)
+		rest = rest[1:]
+		for _, value := range rest {
+			partitions[value.(string)] = true
+		}
+	}
+	out := make([]fakePartInventoryRow, 0, len(inventory))
+	for _, row := range inventory {
+		if !databases[row.database] {
+			continue
+		}
+		if table != "" && row.table != table {
+			continue
+		}
+		if len(partitions) > 0 && !partitions[row.partition] {
+			continue
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+func (c *fakePartsConn) lastArgs() []any {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.args) == 0 {
+		return nil
+	}
+	return append([]any(nil), c.args[len(c.args)-1]...)
+}
+
+func (c *fakePartsConn) recordedQueries() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.queries...)
+}
+
+func (c *fakePartsConn) resetQueries() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.queries = nil
+	c.args = nil
 }
 
 func (c *fakePartsConn) setRows(rows ...fakePartsRow) {
@@ -231,6 +292,124 @@ func TestPartsPressureGuard_AllowWithoutSnapshotIsUnavailable(t *testing.T) {
 	var backpressure *BackpressureError
 	if !errors.As(err, &backpressure) || backpressure.Kind != "unavailable" {
 		t.Fatalf("err = %v want unavailable BackpressureError", err)
+	}
+}
+
+func TestPartsPressureGuard_PerKeyGenerationOnlyAdvancesForCoveredKeys(t *testing.T) {
+	conn := &fakePartsConn{}
+	conn.setRows(
+		fakePartsRow{database: "hg_unsafe", table: "db__a", partition: "p0", partitionKey: "p", number: 1},
+		fakePartsRow{database: "hg_unsafe", table: "db__b", partition: "p0", partitionKey: "p", number: 1},
+	)
+	g := NewPartsPressureGuard(conn, PartsPressureConfig{UnsafeDatabase: "hg_unsafe", SafeDatabase: "hg_safe"})
+	if _, err := g.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	keyA := PartsKey{Database: "hg_unsafe", Table: "db__a", Partition: "p_p0"}
+	keyB := PartsKey{Database: "hg_unsafe", Table: "db__b", Partition: "p_p0"}
+	g.mu.RLock()
+	genA, genB := g.generationForLocked(keyA), g.generationForLocked(keyB)
+	g.mu.RUnlock()
+	if genA == 0 || genB == 0 {
+		t.Fatalf("full refresh must advance both keys: a=%d b=%d", genA, genB)
+	}
+	if _, err := g.Refresh(context.Background()); err != nil {
+		t.Fatalf("second Refresh: %v", err)
+	}
+	g.mu.RLock()
+	gen2A, gen2B := g.generationForLocked(keyA), g.generationForLocked(keyB)
+	g.mu.RUnlock()
+	if gen2A != genA+1 || gen2B != genB+1 {
+		t.Fatalf("generations = %d/%d, want %d/%d", gen2A, gen2B, genA+1, genB+1)
+	}
+}
+
+func TestPartsPressureGuard_ExpiredKeyFailsClosedPerKey(t *testing.T) {
+	conn := &fakePartsConn{}
+	conn.setRows(fakePartsRow{database: "hg_unsafe", table: "db__t", partition: "p0", partitionKey: "p", number: 1})
+	g := NewPartsPressureGuard(conn, PartsPressureConfig{UnsafeDatabase: "hg_unsafe", SnapshotTTL: time.Second})
+	now := time.Now()
+	g.now = func() time.Time { return now }
+	if _, err := g.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if err := g.Allow("db__t", "p_p0"); err != nil {
+		t.Fatalf("fresh key must be allowed: %v", err)
+	}
+	now = now.Add(2 * time.Second)
+	if err := g.Allow("db__t", "p_p0"); !errors.Is(err, ErrBackpressure) {
+		t.Fatalf("expired key must fail closed, got %v", err)
+	}
+}
+
+func TestPartsPressureGuard_InvalidateKeysDropsOnlyMatchingFreshness(t *testing.T) {
+	conn := &fakePartsConn{}
+	conn.setRows(
+		fakePartsRow{database: "hg_unsafe", table: "db__a", partition: "p0", partitionKey: "p", number: 1},
+		fakePartsRow{database: "hg_unsafe", table: "db__b", partition: "p0", partitionKey: "p", number: 1},
+	)
+	g := NewPartsPressureGuard(conn, PartsPressureConfig{UnsafeDatabase: "hg_unsafe"})
+	if _, err := g.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	g.mu.Lock()
+	g.invalidateKeysLocked(func(key PartsKey) bool { return key.Table == "db__a" })
+	g.mu.Unlock()
+	if err := g.Allow("db__a", "p_p0"); !errors.Is(err, ErrBackpressure) {
+		t.Fatalf("invalidated key must fail closed, got %v", err)
+	}
+	if err := g.Allow("db__b", "p_p0"); err != nil {
+		t.Fatalf("untouched key must stay available: %v", err)
+	}
+}
+
+func TestPartsPressureGuard_FullScopeCoversSafeDatabase(t *testing.T) {
+	g := NewPartsPressureGuard(&fakePartsConn{}, PartsPressureConfig{
+		UnsafeDatabase: "hg_unsafe",
+		SafeDatabase:   "hg_safe",
+	})
+	scope := g.fullScope()
+	if scope.SafeDatabase != "hg_safe" || !scope.IncludeSafeDatabase {
+		t.Fatalf("fullScope must name the safe database: %+v", scope)
+	}
+	if !scope.IsFull(g.cfg) {
+		t.Fatal("fullScope must satisfy IsFull")
+	}
+	if !scope.Covers(PartsKey{Database: "hg_safe", Table: "db__t", Partition: "p_a"}) {
+		t.Fatal("fullScope must cover safe-database keys")
+	}
+	query, args := g.BuildExactPartsQuery(scope)
+	if !strings.Contains(query, "parts.database IN (?, ?)") {
+		t.Fatalf("full scope must read both databases: %s", query)
+	}
+	if len(args) < 2 || args[1] != "hg_safe" {
+		t.Fatalf("safe database must be bound: %v", args)
+	}
+}
+
+func TestPartsPressureGuard_ExactScopeMarksUnseenEmptyPartitionFresh(t *testing.T) {
+	g := NewPartsPressureGuard(&fakePartsConn{}, PartsPressureConfig{
+		UnsafeDatabase:        "hg_unsafe",
+		SafeDatabase:          "hg_safe",
+		SoftPartsPerPartition: 2400,
+		HardPartsPerPartition: 2950,
+	})
+	scope := PartsScope{Database: "hg_unsafe", Table: "db__t", Partitions: []string{"p_new"}}
+	if _, err := g.refreshScope(context.Background(), scope); err != nil {
+		t.Fatalf("refreshScope: %v", err)
+	}
+	key := PartsKey{Database: "hg_unsafe", Table: "db__t", Partition: "p_new"}
+	g.mu.Lock()
+	count, hasCount := g.snapshot[key]
+	_, hasNames := g.activeParts[key]
+	_, fresh := g.namesFreshAt[key]
+	g.mu.Unlock()
+	if !hasCount || count != 0 || !hasNames || !fresh {
+		t.Fatalf("enumerated empty partition must install as fresh zero: count=%d hasCount=%v hasNames=%v fresh=%v",
+			count, hasCount, hasNames, fresh)
+	}
+	if err := g.Allow("db__t", "p_new"); err != nil {
+		t.Fatalf("first INSERT into a new partition must be admitted: %v", err)
 	}
 }
 

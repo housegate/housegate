@@ -15,6 +15,7 @@ go_library(
         "merge_guard.go",
         "native_payload.go",
         "parts_pressure.go",
+        "parts_pressure_scope.go",
         "payload_lease.go",
         "payload_partitions.go",
         "payload_spool.go",
