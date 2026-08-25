@@ -3,6 +3,7 @@ package rewriter
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	pb "github.com/housegate/rewriter-proto/gen/pb"
@@ -153,4 +154,59 @@ func storageIntegrityAccess(tables []*pb.AccessedTable) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// storageIntegrityRedaction replaces a protocol-owned name that has no logical
+// equivalent, such as a reserved physical database or the row-id column.
+const storageIntegrityRedaction = "<storage-integrity>"
+
+// StorageIntegrityScrubber removes protocol-owned SI names from text that is
+// about to reach a client. Qualified physical names map back to their logical
+// table id; reserved databases and the row-id column are redacted.
+//
+// This is deliberately a narrow SI mapping, not a general exception reverse
+// mapper. The selected rewriter backend still owns general reverse mapping.
+type StorageIntegrityScrubber struct {
+	replacer *strings.Replacer
+}
+
+// NewStorageIntegrityScrubber returns nil when no SI table is configured, so
+// non-SI deployments pay no scrubbing cost.
+func NewStorageIntegrityScrubber(opts StorageIntegrityOptions) *StorageIntegrityScrubber {
+	if len(opts.Tables) == 0 {
+		return nil
+	}
+	// Qualified names must precede their bare database prefixes.
+	pairs := make([]string, 0, len(opts.Tables)*4+6)
+	databases := make(map[string]bool)
+	for _, table := range opts.Tables {
+		pairs = append(pairs,
+			table.SafeTable, table.TableID,
+			table.UnsafeTable, table.TableID,
+		)
+		if db, _, ok := strings.Cut(table.SafeTable, "."); ok {
+			databases[db] = true
+		}
+		if db, _, ok := strings.Cut(table.UnsafeTable, "."); ok {
+			databases[db] = true
+		}
+	}
+	databaseNames := make([]string, 0, len(databases))
+	for db := range databases {
+		databaseNames = append(databaseNames, db)
+	}
+	sort.Strings(databaseNames)
+	for _, db := range databaseNames {
+		pairs = append(pairs, db, storageIntegrityRedaction)
+	}
+	pairs = append(pairs, DefaultReservedRowIDColumn, storageIntegrityRedaction)
+	return &StorageIntegrityScrubber{replacer: strings.NewReplacer(pairs...)}
+}
+
+// Scrub is safe on a nil receiver and an empty message.
+func (s *StorageIntegrityScrubber) Scrub(message string) string {
+	if s == nil || s.replacer == nil || message == "" {
+		return message
+	}
+	return s.replacer.Replace(message)
 }

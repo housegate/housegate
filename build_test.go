@@ -24,6 +24,7 @@ import (
 	"github.com/housegate/housegate/pkg/plugins/forward"
 	"github.com/housegate/housegate/pkg/plugins/rewrite"
 	"github.com/housegate/housegate/pkg/plugins/sessionstate"
+	"github.com/housegate/housegate/pkg/plugins/sireserved"
 	"github.com/housegate/housegate/pkg/plugins/sistatement"
 	"github.com/housegate/housegate/pkg/plugins/storageintegrity"
 	"github.com/housegate/housegate/pkg/proxy"
@@ -51,6 +52,20 @@ type siCapableStubRewriterFactory struct{ stubRewriterFactory }
 
 func (siCapableStubRewriterFactory) StorageIntegrityContractVersion() rewriterpb.StorageIntegrityContractVersion {
 	return rewriter.StorageIntegrityContractV1
+}
+
+type siProbeStubRewriterFactory struct {
+	siCapableStubRewriterFactory
+	err              error
+	deadlineObserved *bool
+}
+
+func (f siProbeStubRewriterFactory) ProbeStorageIntegrityBuild(ctx context.Context) error {
+	if f.deadlineObserved != nil {
+		_, ok := ctx.Deadline()
+		*f.deadlineObserved = ok
+	}
+	return f.err
 }
 
 type stubRewriter struct{}
@@ -113,6 +128,85 @@ func TestStorageIntegrityRewriterOptions_DerivesPhysicalNames(t *testing.T) {
 	}
 }
 
+func TestStorageIntegrityInternalListenWarning(t *testing.T) {
+	cfg := minimalServerCfg(t)
+	if got := storageIntegrityInternalListenWarning(cfg); got != "" {
+		t.Fatalf("no SI tables, no internal port: got %q, want no warning", got)
+	}
+
+	cfg.StorageIntegrity.Tables = []string{"tenant.events"}
+	if got := storageIntegrityInternalListenWarning(cfg); got != "" {
+		t.Fatalf("SI tables without an internal port: got %q, want no warning", got)
+	}
+
+	cfg.InternalListen = "0.0.0.0:9001"
+	got := storageIntegrityInternalListenWarning(cfg)
+	if !strings.Contains(got, "peer-trusted") || !strings.Contains(got, "internal_listen") {
+		t.Fatalf("warning = %q, want it to name the peer-trust bypass and the internal port", got)
+	}
+
+	cfg.InternalListen = ""
+	cfg.Auth.PlatformOperatorAddresses = []string{"0x1", "0x2"}
+	got = storageIntegrityInternalListenWarning(cfg)
+	for _, want := range []string{"2 platform-operator", "tenant.events", "ordinary columns", "string literals", "Identifier placeholders", "backslash-bearing", "object-carrier", "regardless of arguments", "direct ClickHouse"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("operator warning = %q, want %q from the conservative false-positive boundary", got, want)
+		}
+	}
+}
+
+func TestBuildServer_StorageIntegrityReservedGuardWiring(t *testing.T) {
+	withoutSI := minimalServerCfg(t)
+	plain, err := buildServer(Options{
+		Config:       withoutSI,
+		NetworkState: network.NewInMemoryNetworkState(),
+		Rewriter:     stubRewriterFactory{},
+	}, nil)
+	if err != nil {
+		t.Fatalf("build without SI: %v", err)
+	}
+	for _, candidate := range requireExternalChain(t, plain).QueryPlugins {
+		if _, ok := candidate.(*sireserved.Plugin); ok {
+			t.Fatal("reserved-name guard must not be wired without SI tables")
+		}
+	}
+	plain.teardown()
+
+	withSI := minimalServerCfg(t)
+	withSI.StorageIntegrity.Tables = []string{"tenant.events"}
+	guarded, err := buildServer(Options{
+		Config:       withSI,
+		NetworkState: network.NewInMemoryNetworkState(),
+		Rewriter:     siProbeStubRewriterFactory{},
+	}, nil)
+	if err != nil {
+		t.Fatalf("build with SI: %v", err)
+	}
+	defer guarded.teardown()
+
+	guardIndex, forwardIndex := -1, -1
+	var guard *sireserved.Plugin
+	for i, candidate := range requireExternalChain(t, guarded).QueryPlugins {
+		switch typed := candidate.(type) {
+		case *sireserved.Plugin:
+			guard = typed
+			guardIndex = i
+		case *forward.Plugin:
+			forwardIndex = i
+		}
+	}
+	if guard == nil {
+		t.Fatal("configured SI surface did not wire the reserved-name guard")
+	}
+	if guardIndex >= forwardIndex || forwardIndex < 0 {
+		t.Fatalf("guard index=%d forward index=%d, want guard before forward", guardIndex, forwardIndex)
+	}
+	if !reflect.DeepEqual(guard.ReservedDatabases, []string{config.StorageIntegritySafeDatabase, config.StorageIntegrityUnsafeDatabase}) ||
+		guard.ReservedRowIDColumn != rewriter.DefaultReservedRowIDColumn {
+		t.Fatalf("guard config = %+v", guard)
+	}
+}
+
 func TestBuildServer_UnsafeLatestDefaultRequiresReadState(t *testing.T) {
 	cfg := minimalServerCfg(t)
 	cfg.StorageIntegrity.Tables = []string{"tenant.events"}
@@ -130,7 +224,7 @@ func TestBuildServer_UnsafeLatestDefaultRequiresReadState(t *testing.T) {
 	bs, err := buildServer(Options{
 		Config:                    cfg,
 		NetworkState:              network.NewInMemoryNetworkState(),
-		Rewriter:                  siCapableStubRewriterFactory{},
+		Rewriter:                  siProbeStubRewriterFactory{},
 		StorageIntegrityReadState: &buildFakeReadState{},
 	}, nil)
 	if err != nil {
@@ -186,6 +280,53 @@ func TestBuildServer_ConfiguredSISurfaceRejectsUnawareInjectedFactory(t *testing
 	if err == nil || !strings.Contains(err.Error(), "storage-integrity contract v1") {
 		t.Fatalf("err = %v, want unaware injected factory rejection", err)
 	}
+}
+
+func TestBuildServer_ConfiguredSISurfaceRejectsUnprobedCapableInjectedFactory(t *testing.T) {
+	cfg := minimalServerCfg(t)
+	cfg.StorageIntegrity.Tables = []string{"tenant.events"}
+
+	bs, err := buildServer(Options{
+		Config:       cfg,
+		NetworkState: network.NewInMemoryNetworkState(),
+		Rewriter:     siCapableStubRewriterFactory{},
+	}, nil)
+	if bs != nil {
+		defer bs.teardown()
+	}
+	if err == nil || !strings.Contains(err.Error(), "StorageIntegrityProbeFactory") {
+		t.Fatalf("err = %v, want unprobed capable factory rejection", err)
+	}
+}
+
+func TestBuildServer_RefusesStartupOnStorageIntegrityProbeMismatch(t *testing.T) {
+	cfg := minimalServerCfg(t)
+	cfg.StorageIntegrity.Tables = []string{"tenant.events"}
+
+	_, err := buildServer(Options{
+		Config:       cfg,
+		NetworkState: network.NewInMemoryNetworkState(),
+		Rewriter: siProbeStubRewriterFactory{
+			err: errors.New("storage-integrity engine probe (engine=native): unexpected build"),
+		},
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "storage-integrity engine probe") {
+		t.Fatalf("err = %v, want the probe refusal", err)
+	}
+
+	deadlineObserved := false
+	bs, err := buildServer(Options{
+		Config:       cfg,
+		NetworkState: network.NewInMemoryNetworkState(),
+		Rewriter:     siProbeStubRewriterFactory{deadlineObserved: &deadlineObserved},
+	}, nil)
+	if err != nil {
+		t.Fatalf("a passing probe must start: %v", err)
+	}
+	if !deadlineObserved {
+		t.Fatal("the startup gate must give injected probers a bounded context")
+	}
+	bs.teardown()
 }
 
 func TestBuildServer_ConfiguredSISurfaceRejectsTypedNilInjectedFactory(t *testing.T) {
@@ -1053,7 +1194,7 @@ func TestBuildServer_StorageIntegrityRuntimeAutoWiresArbiterStatusQuerier(t *tes
 	bs, err := buildServer(Options{
 		Config:       cfg,
 		NetworkState: network.NewInMemoryNetworkState(),
-		Rewriter:     siCapableStubRewriterFactory{},
+		Rewriter:     siProbeStubRewriterFactory{},
 		StorageIntegrityRuntime: StorageIntegrityRuntimeOptions{
 			ArbiterIngressClient: &rootArbiterIngressClient{},
 			SourcePreparer:       &rootRecordingPreparer{},
@@ -1079,7 +1220,7 @@ func TestBuildServer_StorageIntegrityRuntimeRejectsManualConsumer(t *testing.T) 
 	_, err = buildServer(Options{
 		Config:                            cfg,
 		NetworkState:                      network.NewInMemoryNetworkState(),
-		Rewriter:                          siCapableStubRewriterFactory{},
+		Rewriter:                          siProbeStubRewriterFactory{},
 		StorageIntegrityAdmissionConsumer: &recordingAdmissionConsumer{},
 		StorageIntegrityRuntime: StorageIntegrityRuntimeOptions{
 			StatementSubmitter: &rootRecordingSubmitter{},
