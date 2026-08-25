@@ -55,11 +55,13 @@ func (s PartsScope) RequestedKeys() []PartsKey {
 	return keys
 }
 
-// IsFull reports whether the scope covers every key in both configured
-// databases.
+// IsFull reports whether the scope covers the whole capacity-relevant surface:
+// every key in the unsafe database. The safe database is gauge-only - counts,
+// never names - and is deliberately NOT required here, so the unsafe-only
+// exact scope still latches lastFullOK, still takes refreshGate's write lock in
+// refreshScope, and still clears RestoreBatch's latch (Spec P D4).
 func (s PartsScope) IsFull(cfg PartsPressureConfig) bool {
-	return s.Table == "" && s.Database == cfg.UnsafeDatabase &&
-		(cfg.SafeDatabase == "" || (s.IncludeSafeDatabase && s.SafeDatabase == cfg.SafeDatabase))
+	return s.Table == "" && s.Database == cfg.UnsafeDatabase
 }
 
 // partitionTexts maps logical partition IDs back to system.parts.partition

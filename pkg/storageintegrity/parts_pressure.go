@@ -254,21 +254,6 @@ func (g *PartsPressureGuard) SetCandidateObservedHook(hook func(context.Context,
 	g.mu.Unlock()
 }
 
-// BuildSnapshotQuery is the legacy full-inventory query retained for callers
-// that inspect it. Refresh uses BuildExactPartsQuery so narrower scopes can be
-// authoritative without implying anything about keys outside the scope.
-func (g *PartsPressureGuard) BuildSnapshotQuery() string {
-	databases := []string{quoteMergeString(g.cfg.UnsafeDatabase)}
-	if g.cfg.SafeDatabase != "" {
-		databases = append(databases, quoteMergeString(g.cfg.SafeDatabase))
-	}
-	return "SELECT parts.database, parts.table, parts.partition, tables.partition_key, parts.name " +
-		"FROM system.parts AS parts INNER JOIN system.tables AS tables " +
-		"ON parts.database = tables.database AND parts.table = tables.name " +
-		"WHERE parts.database IN (" + strings.Join(databases, ", ") + ") AND parts.active " +
-		"ORDER BY parts.database, parts.table, parts.partition, parts.name"
-}
-
 // BuildExactPartsQuery reads every active part name in scope. Aggregation stays
 // in Go because the reservation protocol needs exact candidate identities.
 func (g *PartsPressureGuard) BuildExactPartsQuery(scope PartsScope) (string, []any) {
@@ -321,7 +306,20 @@ func (g *PartsPressureGuard) BuildAggregateSnapshotQuery() (string, []any) {
 		"ORDER BY parts.database, parts.table, parts.partition", args
 }
 
-func (g *PartsPressureGuard) fullScope() PartsScope {
+// exactScope is the scope of every exact part-NAME read: the unsafe database
+// only. Every exact-name consumer keys on UnsafeDatabase - by literal
+// construction or transitively through partsReservation.keys, whose sole
+// constructor (newReservationLocked) hard-codes it - so safe-database names
+// are provably dead weight here, and dropping them closes Spec L D3(b)'s
+// growth cliff without touching the reservation protocol (Spec P D4).
+func (g *PartsPressureGuard) exactScope() PartsScope {
+	return PartsScope{Database: g.cfg.UnsafeDatabase}
+}
+
+// countScope is the scope of the bounded aggregate pass: BOTH databases. That
+// read is a count() GROUP BY bounded by tables x partitions, not by part
+// names, and storage_integrity_safe_parts needs the safe half.
+func (g *PartsPressureGuard) countScope() PartsScope {
 	return PartsScope{
 		Database:            g.cfg.UnsafeDatabase,
 		IncludeSafeDatabase: g.cfg.SafeDatabase != "",
@@ -329,12 +327,13 @@ func (g *PartsPressureGuard) fullScope() PartsScope {
 	}
 }
 
-// Refresh replaces the cached inventory for every key in both configured
-// databases, exactly.
+// Refresh replaces the cached exact inventory for every key in the unsafe
+// database. It has no production caller today - the supervisor runs
+// RefreshCounts + RefreshLiveKeys - and is retained for hosts and tests.
 func (g *PartsPressureGuard) Refresh(ctx context.Context) (PartsSnapshot, error) {
 	unlock := g.lockAllTables()
 	defer unlock()
-	return g.refreshScope(ctx, g.fullScope())
+	return g.refreshScope(ctx, g.exactScope())
 }
 
 // RefreshCounts runs the bounded aggregate pass. Counts are authoritative for
@@ -364,7 +363,7 @@ func (g *PartsPressureGuard) RefreshCounts(ctx context.Context) (PartsSnapshot, 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("storage_integrity: read parts counts: %w", err)
 	}
-	scope := g.fullScope()
+	scope := g.countScope()
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.applyCountScopeLocked(scope, counts)
@@ -675,7 +674,7 @@ func (g *PartsPressureGuard) reserve(ctx context.Context, statementID, table str
 func (g *PartsPressureGuard) RestoreBatch(ctx context.Context, records []PartsRestoreRecord) (map[string]PartsReservation, error) {
 	unlock := g.lockAllTables()
 	defer unlock()
-	if _, err := g.refreshScope(ctx, g.fullScope()); err != nil {
+	if _, err := g.refreshScope(ctx, g.exactScope()); err != nil {
 		g.mu.Lock()
 		g.restoreBlocked = true
 		g.invalidateKeysLocked(func(PartsKey) bool { return true })
