@@ -77,3 +77,52 @@ func TestRefreshLiveKeys_ReadsOnlyKeysWithLiveOwnership(t *testing.T) {
 		t.Fatalf("live-key read args = %v, want the reserved table and partition only", args)
 	}
 }
+
+func TestReserve_ReadsOnlyTheStatementsPartitions(t *testing.T) {
+	conn := &fakePartsConn{}
+	conn.setRows(
+		fakePartsRow{database: "hg_unsafe", table: "db__t", partition: "p0", partitionKey: "p", number: 1},
+		fakePartsRow{database: "hg_unsafe", table: "db__t", partition: "p1", partitionKey: "p", number: 1},
+		fakePartsRow{database: "hg_unsafe", table: "db__other", partition: "p0", partitionKey: "p", number: 900},
+		fakePartsRow{database: "hg_safe", table: "db__t", partition: "p0", partitionKey: "p", number: 5000},
+	)
+	g := NewPartsPressureGuard(conn, PartsPressureConfig{UnsafeDatabase: "hg_unsafe", SafeDatabase: "hg_safe"})
+	if _, err := g.Refresh(context.Background()); err != nil {
+		t.Fatalf("seed Refresh: %v", err)
+	}
+	conn.resetQueries()
+	reservation, err := g.ReserveStatement(context.Background(), "0xabc:1:n", "db__t", []string{"p_p0"})
+	if err != nil {
+		t.Fatalf("ReserveStatement: %v", err)
+	}
+	defer reservation.Release()
+	queries := conn.recordedQueries()
+	if len(queries) != 1 {
+		t.Fatalf("Reserve issued %d queries, want 1", len(queries))
+	}
+	if strings.Contains(queries[0], "hg_safe") {
+		t.Fatalf("hot-path query touched the safe database: %q", queries[0])
+	}
+	args := conn.lastArgs()
+	if len(args) != 3 || args[0] != "hg_unsafe" || args[1] != "db__t" || args[2] != "p0" {
+		t.Fatalf("hot-path args = %v, want [hg_unsafe db__t p0]", args)
+	}
+	g.mu.RLock()
+	other := g.snapshot[PartsKey{Database: "hg_unsafe", Table: "db__other", Partition: "p_p0"}]
+	safe := g.snapshot[PartsKey{Database: "hg_safe", Table: "db__t", Partition: "p_p0"}]
+	g.mu.RUnlock()
+	if other != 900 || safe != 5000 {
+		t.Fatalf("scoped read clobbered untouched keys: other=%d safe=%d", other, safe)
+	}
+}
+
+func TestReserve_RejectsMalformedPartitionIDs(t *testing.T) {
+	conn := &fakePartsConn{}
+	g := NewPartsPressureGuard(conn, PartsPressureConfig{UnsafeDatabase: "hg_unsafe"})
+	if _, err := g.ReserveStatement(context.Background(), "0xabc:1:n", "db__t", []string{"p_p0", "all"}); err == nil {
+		t.Fatal("mixing all with partitioned ids must fail closed")
+	}
+	if _, err := g.ReserveStatement(context.Background(), "0xabc:1:n", "db__t", []string{"bogus"}); err == nil {
+		t.Fatal("a partition id that is neither all nor p_-prefixed must fail closed")
+	}
+}

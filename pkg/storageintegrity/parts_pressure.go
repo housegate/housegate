@@ -611,9 +611,13 @@ func (g *PartsPressureGuard) ReserveStatement(ctx context.Context, statementID, 
 }
 
 func (g *PartsPressureGuard) reserve(ctx context.Context, statementID, table string, partitionIDs []string) (PartsReservation, error) {
+	if _, _, err := partitionTexts(partitionIDs); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrBackpressure, err)
+	}
 	g.admissionMu.Lock()
 	defer g.admissionMu.Unlock()
-	if _, err := g.Refresh(ctx); err != nil {
+	scope := PartsScope{Database: g.cfg.UnsafeDatabase, Table: table, Partitions: partitionIDs}
+	if _, err := g.refreshScope(ctx, scope); err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
@@ -1000,6 +1004,16 @@ func (r *partsReservation) tableScope() PartsScope {
 	return PartsScope{Database: r.guard.cfg.UnsafeDatabase, Table: table}
 }
 
+// reservationScope is the reservation's exact table and partitions.
+func (r *partsReservation) reservationScope() PartsScope {
+	scope := PartsScope{Database: r.guard.cfg.UnsafeDatabase}
+	for _, key := range r.keys {
+		scope.Table = key.Table
+		scope.Partitions = append(scope.Partitions, key.Partition)
+	}
+	return scope
+}
+
 type reservationState uint8
 
 const (
@@ -1074,7 +1088,7 @@ func (r *partsReservation) PrepareCleanupProof(ctx context.Context, candidates [
 	if done || armed {
 		return nil
 	}
-	_, refreshErr := r.guard.Refresh(ctx)
+	_, refreshErr := r.guard.refreshScope(ctx, r.reservationScope())
 	r.guard.commitMu.Lock()
 	defer r.guard.commitMu.Unlock()
 	r.guard.mu.Lock()
@@ -1150,7 +1164,7 @@ func (r *partsReservation) ReleaseCleaned(ctx context.Context) error {
 		r.guard.commitMu.Unlock()
 		return cleanupProofError(errors.New("pre-cleanup candidate inventory was not prepared"))
 	}
-	_, refreshErr := r.guard.Refresh(ctx)
+	_, refreshErr := r.guard.refreshScope(ctx, r.reservationScope())
 	r.guard.commitMu.Lock()
 	defer r.guard.commitMu.Unlock()
 	r.guard.mu.Lock()
