@@ -154,6 +154,8 @@ type StorageIntegrityRuntimeBackpressureConfig struct {
 	UnsafeDatabase        string   `json:"unsafe_database"          yaml:"unsafe_database"`
 	SafeDatabase          string   `json:"safe_database"            yaml:"safe_database"`
 	PollInterval          Duration `json:"poll_interval"            yaml:"poll_interval"`
+	RefreshTimeout        Duration `json:"refresh_timeout"          yaml:"refresh_timeout"`
+	SnapshotTTL           Duration `json:"snapshot_ttl"             yaml:"snapshot_ttl"`
 	SoftPartsPerPartition int      `json:"soft_parts_per_partition" yaml:"soft_parts_per_partition"`
 	HardPartsPerPartition int      `json:"hard_parts_per_partition" yaml:"hard_parts_per_partition"`
 }
@@ -181,6 +183,8 @@ func defaultStorageIntegrityConfig() StorageIntegrityConfig {
 				UnsafeDatabase:        StorageIntegrityUnsafeDatabase,
 				SafeDatabase:          StorageIntegritySafeDatabase,
 				PollInterval:          Duration{Duration: 2 * time.Second},
+				RefreshTimeout:        Duration{Duration: 2 * time.Second},
+				SnapshotTTL:           Duration{Duration: 6 * time.Second},
 				SoftPartsPerPartition: 2400,
 				HardPartsPerPartition: 2950,
 			},
@@ -298,6 +302,14 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 			}
 			if bp.PollInterval.Duration <= 0 {
 				errs = append(errs, errors.New("storage_integrity.runtime.backpressure.poll_interval must be > 0"))
+			}
+			if bp.RefreshTimeout.Duration <= 0 {
+				errs = append(errs, errors.New("storage_integrity.runtime.backpressure.refresh_timeout must be > 0"))
+			}
+			if bp.SnapshotTTL.Duration <= 0 {
+				errs = append(errs, errors.New("storage_integrity.runtime.backpressure.snapshot_ttl must be > 0"))
+			} else if bp.RefreshTimeout.Duration > 0 && bp.SnapshotTTL.Duration <= bp.RefreshTimeout.Duration {
+				errs = append(errs, errors.New("storage_integrity.runtime.backpressure.snapshot_ttl must be greater than refresh_timeout"))
 			}
 			if bp.SoftPartsPerPartition <= 0 {
 				errs = append(errs, errors.New("storage_integrity.runtime.backpressure.soft_parts_per_partition must be > 0"))
