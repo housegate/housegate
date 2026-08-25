@@ -320,7 +320,17 @@ func isObjectCarrierName(name string) bool {
 		"merge", "loop", "dictionary",
 		"timeseriesdata", "timeseriestags", "timeseriesmetrics", "timeseriesselector",
 		"prometheusquery", "prometheusqueryrange",
-		"distributed", "buffer", "clickhouse":
+		"distributed", "buffer", "clickhouse",
+		// Foreign-connector table functions whose documented signature carries
+		// an explicit (database, table) pair. ClickHouse ships its own MySQL
+		// and PostgreSQL wire listeners (9004 / 9005), so these are a loopback
+		// into the protected namespace; jdbc/odbc reach it through a DSN.
+		// sqlite and redis are deliberately NOT here: redis()'s second
+		// argument is a column name and sqlite()'s is a table inside a SQLite
+		// file, so neither names a ClickHouse namespace and listing them would
+		// only generate false refusals (Spec N D4 as corrected by plan
+		// deviation D-2).
+		"mysql", "postgresql", "mongodb", "jdbc", "odbc":
 		return true
 	default:
 		return strings.HasPrefix(lower, "mergetree")

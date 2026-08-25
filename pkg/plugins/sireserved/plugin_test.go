@@ -306,6 +306,14 @@ func TestOnQuery_OperatorBypassRefusesObjectCarrierCallables(t *testing.T) {
 		{"Merge table engine", "CREATE TABLE other.x (a UInt64) ENGINE = Merge('other', '^u$')", "Merge"},
 		{"Buffer table engine", "CREATE TABLE other.x (a UInt64) ENGINE = Buffer('other', 'u', 1, 1, 1, 1, 1, 1, 1)", "Buffer"},
 		{"dictionary CLICKHOUSE source", "CREATE DICTIONARY other.d (a UInt64) PRIMARY KEY a SOURCE(CLICKHOUSE(DB 'other' TABLE 'u'))", "CLICKHOUSE"},
+		// Foreign-connector family (Spec N D4). PRE-FIX: each row returns
+		// err=<nil>, because concat('hg_', 'safe') never appears as the single
+		// identifier hg_safe on either surface.
+		{"mysql computed target", "SELECT * FROM mysql('h', concat('hg_', 'safe'), 'db1__t', 'u', 'p')", "mysql"},
+		{"postgresql computed target", "SELECT * FROM postgresql('h:5432', concat('hg_', 'safe'), 'db1__t', 'u', 'p')", "postgresql"},
+		{"mongodb computed target", "SELECT * FROM mongodb('h:27017', concat('hg_', 'safe'), 'db1__t', 'u', 'p', 'a UInt32')", "mongodb"},
+		{"jdbc computed target", "SELECT * FROM jdbc('ds', concat('hg_', 'safe'), 'db1__t')", "jdbc"},
+		{"odbc computed target", "SELECT * FROM odbc('ds', concat('hg_', 'safe'), 'db1__t')", "odbc"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sess := newSessionForTest(t, 24)
@@ -327,6 +335,13 @@ func TestOnQuery_ObjectCarrierScanAvoidsNonCallableFalsePositives(t *testing.T) 
 		"SELECT 1 /* cluster('c', 'other', 'u') */",
 		"SELECT myRemote('other.u')",
 		"SELECT concat('hg_', 'safe')",
+		"SELECT mysql, jdbc FROM ordinary.t",
+		// sqlite() and redis() are deliberately outside the carrier list: their
+		// second argument is a file-local table and a column name respectively,
+		// so neither can name a ClickHouse namespace (plan deviation D-2).
+		// These rows exist so the exclusion cannot be "tidied up" back in.
+		"SELECT * FROM sqlite('/tmp/x.db', 'db1__t')",
+		"SELECT * FROM redis('h:6379', 'k', 'a UInt32')",
 	} {
 		sess := newSessionForTest(t, 25)
 		sess.State().SetMaintenance(true)
