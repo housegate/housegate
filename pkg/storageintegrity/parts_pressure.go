@@ -180,6 +180,7 @@ type PartsPressureGuard struct {
 	// successful RestoreBatch proves all durable reservations/claims installed.
 	restoreBlocked bool
 	now            func() time.Time
+	stale          bool
 
 	invalidated chan struct{}
 }
@@ -1730,6 +1731,9 @@ func copyPartNames(in map[string]struct{}) map[string]struct{} {
 }
 
 func (g *PartsPressureGuard) Invalidate() {
+	g.mu.Lock()
+	g.stale = true
+	g.mu.Unlock()
 	select {
 	case g.invalidated <- struct{}{}:
 	default:
@@ -1737,3 +1741,12 @@ func (g *PartsPressureGuard) Invalidate() {
 }
 
 func (g *PartsPressureGuard) Invalidated() <-chan struct{} { return g.invalidated }
+
+// TakeStale reports and clears the coalesced invalidation marker.
+func (g *PartsPressureGuard) TakeStale() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	stale := g.stale
+	g.stale = false
+	return stale
+}

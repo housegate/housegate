@@ -101,13 +101,21 @@ func (s *StorageIntegrityPartsPressureSupervisor) Run(ctx context.Context) {
 	}
 	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()
+	pending := false
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		case <-s.guard.Invalidated():
+			if pending {
+				continue
+			}
+			pending = true
+			continue
 		}
+		pending = false
+		s.guard.TakeStale()
 		if err := s.Refresh(ctx); err != nil && ctx.Err() == nil {
 			log.WarnEveryN("storage_integrity.parts_pressure.refresh", 30, "storage_integrity parts snapshot failed; keeping last snapshot", "err", err)
 		}

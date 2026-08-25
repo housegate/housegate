@@ -153,6 +153,23 @@ func TestPartsPressureSupervisor_RunRefreshesOnTickAndInvalidate(t *testing.T) {
 	}
 }
 
+func TestSupervisor_CoalescesInvalidationsIntoOnePass(t *testing.T) {
+	conn := &rootPartsConn{rows: []rootPartsRow{{"hg_unsafe", "db__t", "p0", "p", 1}}}
+	guard := sicore.NewPartsPressureGuard(conn, sicore.PartsPressureConfig{UnsafeDatabase: "hg_unsafe", SafeDatabase: "hg_safe"})
+	supervisor := NewStorageIntegrityPartsPressureSupervisor(guard, 50*time.Millisecond, "hg_unsafe", "hg_safe")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go supervisor.Run(ctx)
+	for i := 0; i < 50; i++ {
+		guard.Invalidate()
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(120 * time.Millisecond)
+	if got := conn.queries.Load(); got > 8 {
+		t.Fatalf("50 invalidations produced %d queries; they must coalesce into the poll cadence", got)
+	}
+}
+
 func TestStorageIntegrityBackpressureMetricsRegisteredOnce(t *testing.T) {
 	storageIntegrityUnsafeParts.WithLabelValues("t", "p").Set(0)
 	storageIntegritySafeParts.WithLabelValues("t", "p").Set(0)
