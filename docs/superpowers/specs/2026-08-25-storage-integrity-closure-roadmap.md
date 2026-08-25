@@ -23,13 +23,15 @@ Full evidence with file:line and reproduction is in the review artifact; each sp
 | **N** | [Lexical and SHOW-namespace closure](2026-08-25-storage-integrity-lexical-namespace-closure-design.md) | housegate, rewriter-go, rewriter-grpc | the tagged-heredoc namespace bypass, the operator-guard heredoc bypass, the `SHOW COLUMNS`/`INDEX` family and the Go↔C++ divergence, the cross-engine differential run, connector table functions | **Blocker** — must land before PR #141 merges |
 | **O** | [Production rollout of Specs I–L](2026-08-25-storage-integrity-production-rollout-design.md) | rewriter-go, housegate, arbiter, arbiter-core, sentio-node | the pin chain, the #141 merge, the `ErrPayloadMismatch` split, the back-pressure disable sentinel, the duplicate mode derivation, the two missing acceptance tests | **Blocker** — nothing shipped so far is reachable in production without it |
 | **P** | [Residual binding and verification closure](2026-08-25-storage-integrity-residual-binding-design.md) | arbiter, housegate, arbiter-core, sentio-node | dispatch-path completeness, the `SET` record, read-mode e2e, the safe-database part scan, the last golden regenerator, CI honesty, bookkeeping | High — independent of N/O |
+| **Q** | [Column-type profile widening](2026-08-25-storage-integrity-column-type-profile-design.md) | housegate, arbiter-core | one authority for the admitted type set; `DateTime` restored (Phase 1); `UUID` / `Decimal` / `Nullable` added (Phase 2) | Phase 1 **blocks Spec O**; Phase 2 blocks devnet2 |
 
 ## 3. Order
 
 ```
    N (lexical + SHOW + literal decode) ──► rewriter-go tag ──┐
                                                               ├──► O (rollout: pins, #141, host)
-   P (residual)  ── independent ───────────────────────────────┘   ├─ arbiter-core tag
+   Q ph.1 (type authority + temporal) ─────────────────────────┤   ├─ arbiter-core tag
+   P (residual)  ── independent ───────────────────────────────┘   │
                                                                    ├─ housegate v0.12.0
                                                                    └─ sentio-node first tag ──► M (devnet2)
 ```
@@ -41,6 +43,8 @@ Version numbers are **resolved at cut time, not written here**: rewriter-go's an
 **P runs in parallel with N.** Different repos and files (arbiter's FSM, HouseGate's pressure guard, arbiter's accumulator vectors, three CI files). Its one HouseGate code change — `fullScope()` — does not touch anything N touches.
 
 **O is strictly sequential inside itself.** Engine tag → HouseGate pin + merge + tag → arbiter-core tag → sentio-node pins + tag. Each step's failure must be loud and local; nothing is bundled to save a round trip. O's arbiter-core work (the sentinel split, the disable sentinel) has to land before sentio-node's bump, since the bump is what makes it consumable.
+
+**Q Phase 1 blocks O.** Spec O's sentio-node bump stops at the first table declaring a `DateTime`, so the validator fix has to be in the housegate release O cuts. It is a defect fix — the executors already handle those types — so it carries no migration cost and does not change the order of anything else. **Q Phase 2 blocks devnet2**, not O: it bumps `ExecutorProfileID`, and `replay.Verifier` requires the job's profile to equal the previous safe snapshot's, so the bump is free before the first chain and a hard fork after it.
 
 **M last**, unchanged from the previous roadmap: it pins the release tags this round produces.
 
@@ -56,7 +60,7 @@ Version numbers are **resolved at cut time, not written here**: rewriter-go's an
 8. **The dispatch path refuses to dispatch an incomplete block** (P D1) rather than extending `ReplayJob` with `statement_count` / `statements_root`. The wire change is the better long-term answer and is recorded as debt; refusing locally is correct, cheap and does not cross a protocol boundary.
 9. **Every new guard ships with a step proving it fails against the unfixed code.** Carried forward from the previous round, where it was the discipline that caught eight self-inflicted defects.
 10. **Policy must inspect the value the generator will emit** (N D6). The tagged-heredoc bypass exists because the namespace decoder read a raw AST field while `Generate` interpreted it differently. Decoding `dollar_string` fixes today's instance; refusing an unmodelled `literal_type` and testing policy-view equals generated-text for every literal kind is what closes the class.
-11. **SI v1 is scalar-typed, and the rollout is where that becomes visible** (O §1g). Spec L D1 moved the column-type check to startup, and the whitelist has no `DateTime`, `Date`, `Decimal`, `UUID`, `Nullable`, `Array`, `LowCardinality` or `Enum`. The executor never supported them, so nothing regresses in capability — but any deployment whose SI tables declare a `DateTime` stops starting the moment it takes the bump. Spec O surfaces it; whether v1 ships with a wider profile, or devnet2's tables are constrained to the current one, is a product decision this roadmap does not take. It must be answered before Spec M.
+11. **SI v1 widens its type profile rather than constraining devnet2's tables — DECIDED by the operator.** Spec L D1 moved the column-type check to startup with a whitelist that has no `DateTime`, `Decimal`, `UUID` or `Nullable`, so any deployment whose SI tables declare a `DateTime` stops starting the moment it takes Spec O's bump. [Spec Q](2026-08-25-storage-integrity-column-type-profile-design.md) widens it. Measuring first changed the shape of that work: the temporal types are **already** supported by the Native decoder, the canonical row encoder and the ClickHouse-backed executor, and only the new validator rejects them — so restoring them is a defect fix with no protocol consequence, and it gates Spec O rather than following it. `UUID` / `Decimal` / `Nullable` are genuinely new and bump `ExecutorProfileID`, which cannot change once a chain is running.
 
 ## 5. Bounded tasks (no spec; do directly)
 
