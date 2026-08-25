@@ -144,14 +144,16 @@ type PartsPressureGuard struct {
 	conn MergeConn
 	cfg  PartsPressureConfig
 
-	refreshMu   sync.Mutex
-	admissionMu sync.Mutex
-	commitMu    sync.Mutex
-	mu          sync.RWMutex
-	snapshot    PartsSnapshot
-	activeParts partsInventory
-	reserved    PartsSnapshot
-	committed   PartsSnapshot
+	refreshGate   sync.RWMutex
+	admissionGate sync.RWMutex
+	tableLocksMu  sync.Mutex
+	tableLocks    map[string]*sync.Mutex
+	commitMu      sync.Mutex
+	mu            sync.RWMutex
+	snapshot      PartsSnapshot
+	activeParts   partsInventory
+	reserved      PartsSnapshot
+	committed     PartsSnapshot
 	// committedReservations retain reservation identity across visibility so a
 	// later no-write lookup can cancel the right slot. Snapshot
 	// generations and original counts prove only aggregate cohort coverage; they
@@ -206,12 +208,36 @@ func NewPartsPressureGuard(conn MergeConn, cfg PartsPressureConfig) *PartsPressu
 		candidateClaims:       map[PartsKey]map[string]candidateClaim{},
 		pendingObserved:       map[string]candidateObservation{},
 		liveReservations:      map[uint64]*partsReservation{},
+		tableLocks:            map[string]*sync.Mutex{},
 		keyGeneration:         map[PartsKey]uint64{},
 		countFreshAt:          map[PartsKey]time.Time{},
 		namesFreshAt:          map[PartsKey]time.Time{},
 		now:                   time.Now,
 		invalidated:           make(chan struct{}, 1),
 	}
+}
+
+// lockTable serializes admission and lifecycle transitions for one physical
+// table. Whole-guard recovery takes admissionGate for writing.
+func (g *PartsPressureGuard) lockTable(table string) func() {
+	g.admissionGate.RLock()
+	g.tableLocksMu.Lock()
+	lock := g.tableLocks[table]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		g.tableLocks[table] = lock
+	}
+	g.tableLocksMu.Unlock()
+	lock.Lock()
+	return func() {
+		lock.Unlock()
+		g.admissionGate.RUnlock()
+	}
+}
+
+func (g *PartsPressureGuard) lockAllTables() func() {
+	g.admissionGate.Lock()
+	return g.admissionGate.Unlock
 }
 
 // SetCandidateObservedHook installs the durable acknowledgement used before a
@@ -305,14 +331,16 @@ func (g *PartsPressureGuard) fullScope() PartsScope {
 // Refresh replaces the cached inventory for every key in both configured
 // databases, exactly.
 func (g *PartsPressureGuard) Refresh(ctx context.Context) (PartsSnapshot, error) {
+	unlock := g.lockAllTables()
+	defer unlock()
 	return g.refreshScope(ctx, g.fullScope())
 }
 
 // RefreshCounts runs the bounded aggregate pass. Counts are authoritative for
 // capacity and gauges, but never replace exact name evidence.
 func (g *PartsPressureGuard) RefreshCounts(ctx context.Context) (PartsSnapshot, error) {
-	g.refreshMu.Lock()
-	defer g.refreshMu.Unlock()
+	g.refreshGate.Lock()
+	defer g.refreshGate.Unlock()
 	g.commitMu.Lock()
 	defer g.commitMu.Unlock()
 	refreshCtx, cancel := context.WithTimeout(ctx, g.cfg.RefreshTimeout)
@@ -403,21 +431,24 @@ func (g *PartsPressureGuard) RefreshLiveKeys(ctx context.Context) error {
 		}
 		sort.Strings(partitions)
 		scope := PartsScope{Database: g.cfg.UnsafeDatabase, Table: table, Partitions: partitions}
+		unlock := g.lockTable(table)
 		if _, err := g.refreshScope(ctx, scope); err != nil {
 			errs = append(errs, err)
 		}
+		unlock()
 	}
 	return errors.Join(errs...)
 }
 
 // refreshScope installs authoritative counts and names for exactly scope.
 func (g *PartsPressureGuard) refreshScope(ctx context.Context, scope PartsScope) (PartsSnapshot, error) {
-	g.refreshMu.Lock()
-	defer g.refreshMu.Unlock()
-	// Freeze reservation lifecycle changes while the query is in flight so the
-	// snapshot generation and every visibility barrier move atomically.
-	g.commitMu.Lock()
-	defer g.commitMu.Unlock()
+	if scope.IsFull(g.cfg) {
+		g.refreshGate.Lock()
+		defer g.refreshGate.Unlock()
+	} else {
+		g.refreshGate.RLock()
+		defer g.refreshGate.RUnlock()
+	}
 	refreshCtx, cancel := context.WithTimeout(ctx, g.cfg.RefreshTimeout)
 	defer cancel()
 	query, args := g.BuildExactPartsQuery(scope)
@@ -614,8 +645,8 @@ func (g *PartsPressureGuard) reserve(ctx context.Context, statementID, table str
 	if _, _, err := partitionTexts(partitionIDs); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrBackpressure, err)
 	}
-	g.admissionMu.Lock()
-	defer g.admissionMu.Unlock()
+	unlock := g.lockTable(table)
+	defer unlock()
 	scope := PartsScope{Database: g.cfg.UnsafeDatabase, Table: table, Partitions: partitionIDs}
 	if _, err := g.refreshScope(ctx, scope); err != nil {
 		if ctx.Err() != nil {
@@ -641,9 +672,9 @@ func (g *PartsPressureGuard) reserve(ctx context.Context, statementID, table str
 // by an earlier local inventory and are now absent are historical cleanup; an
 // unseen absent candidate retains finalized capacity debt until it appears.
 func (g *PartsPressureGuard) RestoreBatch(ctx context.Context, records []PartsRestoreRecord) (map[string]PartsReservation, error) {
-	g.admissionMu.Lock()
-	defer g.admissionMu.Unlock()
-	if _, err := g.Refresh(ctx); err != nil {
+	unlock := g.lockAllTables()
+	defer unlock()
+	if _, err := g.refreshScope(ctx, g.fullScope()); err != nil {
 		g.mu.Lock()
 		g.restoreBlocked = true
 		g.invalidateKeysLocked(func(PartsKey) bool { return true })
@@ -656,7 +687,7 @@ func (g *PartsPressureGuard) RestoreBatch(ctx context.Context, records []PartsRe
 
 	g.commitMu.Lock()
 	g.mu.Lock()
-	// RestoreBatch owns admissionMu, so it can provisionally clear an earlier
+	// RestoreBatch excludes per-table admissions, so it can provisionally clear an earlier
 	// restore latch while rebuilding. Any error below re-latches before unlock.
 	g.restoreBlocked = false
 	reservations := make(map[string]PartsReservation, len(records))
@@ -827,7 +858,7 @@ func restoreCandidatePartitions(candidates []CandidatePart) []string {
 
 // newReservationLocked captures the current exact inventory into a live
 // reservation. Callers hold mu; lifecycle callers also serialize through
-// admissionMu, and Restore additionally holds commitMu because it commits the
+// its table lock, and Restore additionally holds commitMu because it commits the
 // new handle before returning.
 func (g *PartsPressureGuard) newReservationLocked(table string, partitionIDs []string, enforceLimits bool) (*partsReservation, error) {
 	if enforceLimits {
@@ -1030,8 +1061,8 @@ func (r *partsReservation) Commit(candidates ...CandidatePart) error {
 	// Keep lifecycle changes outside Reserve's refresh-to-baseline critical
 	// section; otherwise cleanup proof could occur after the refresh but before
 	// the new reservation captures its baseline.
-	r.guard.admissionMu.Lock()
-	defer r.guard.admissionMu.Unlock()
+	unlock := r.guard.lockTable(r.tableScope().Table)
+	defer unlock()
 	r.guard.commitMu.Lock()
 	defer r.guard.commitMu.Unlock()
 	r.guard.mu.Lock()
@@ -1053,8 +1084,8 @@ func (r *partsReservation) CommitIndeterminate() {
 	if r == nil || r.guard == nil {
 		return
 	}
-	r.guard.admissionMu.Lock()
-	defer r.guard.admissionMu.Unlock()
+	unlock := r.guard.lockTable(r.tableScope().Table)
+	defer unlock()
 	r.guard.commitMu.Lock()
 	defer r.guard.commitMu.Unlock()
 	r.guard.mu.Lock()
@@ -1079,8 +1110,8 @@ func (r *partsReservation) PrepareCleanupProof(ctx context.Context, candidates [
 	if r == nil || r.guard == nil {
 		return nil
 	}
-	r.guard.admissionMu.Lock()
-	defer r.guard.admissionMu.Unlock()
+	unlock := r.guard.lockTable(r.tableScope().Table)
+	defer unlock()
 	r.guard.mu.RLock()
 	done := r.state == reservationFinalized || r.state == reservationReleased
 	armed := r.cleanupProofArmed
@@ -1144,8 +1175,8 @@ func (r *partsReservation) ReleaseCleaned(ctx context.Context) error {
 	if r == nil || r.guard == nil {
 		return nil
 	}
-	r.guard.admissionMu.Lock()
-	defer r.guard.admissionMu.Unlock()
+	unlock := r.guard.lockTable(r.tableScope().Table)
+	defer unlock()
 	r.guard.mu.RLock()
 	done := r.state == reservationFinalized || r.state == reservationReleased
 	r.guard.mu.RUnlock()
@@ -1391,8 +1422,8 @@ func (r *partsReservation) release() {
 	if r == nil || r.guard == nil {
 		return
 	}
-	r.guard.admissionMu.Lock()
-	defer r.guard.admissionMu.Unlock()
+	unlock := r.guard.lockTable(r.tableScope().Table)
+	defer unlock()
 	r.guard.commitMu.Lock()
 	defer r.guard.commitMu.Unlock()
 	r.guard.mu.Lock()
@@ -1429,8 +1460,8 @@ func (r *partsReservation) Finalize() {
 	if r == nil || r.guard == nil {
 		return
 	}
-	r.guard.admissionMu.Lock()
-	defer r.guard.admissionMu.Unlock()
+	unlock := r.guard.lockTable(r.tableScope().Table)
+	defer unlock()
 	r.guard.commitMu.Lock()
 	defer r.guard.commitMu.Unlock()
 	r.guard.mu.Lock()

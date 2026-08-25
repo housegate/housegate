@@ -24,6 +24,9 @@ type fakePartsConn struct {
 	args              [][]any
 	blockUntilContext bool
 	queryStarted      chan struct{}
+	blockedTable      string
+	blockRelease      <-chan struct{}
+	blockedStarted    chan struct{}
 }
 
 type fakePartInventoryRow struct {
@@ -41,6 +44,9 @@ func (c *fakePartsConn) Query(ctx context.Context, query string, args ...any) (M
 	inventory := append([]fakePartInventoryRow(nil), c.inventory...)
 	blockUntilContext := c.blockUntilContext
 	queryStarted := c.queryStarted
+	blockedTable := c.blockedTable
+	blockRelease := c.blockRelease
+	blockedStarted := c.blockedStarted
 	c.mu.Unlock()
 	if queryStarted != nil {
 		select {
@@ -51,6 +57,20 @@ func (c *fakePartsConn) Query(ctx context.Context, query string, args ...any) (M
 	if blockUntilContext {
 		<-ctx.Done()
 		return nil, ctx.Err()
+	}
+	for _, arg := range args {
+		if arg == blockedTable && blockRelease != nil {
+			select {
+			case blockedStarted <- struct{}{}:
+			default:
+			}
+			select {
+			case <-blockRelease:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			break
+		}
 	}
 	if queryErr != nil {
 		return nil, queryErr
@@ -144,6 +164,28 @@ func (c *fakePartsConn) resetQueries() {
 	defer c.mu.Unlock()
 	c.queries = nil
 	c.args = nil
+}
+
+func (c *fakePartsConn) blockTable(table string) chan struct{} {
+	release := make(chan struct{})
+	c.mu.Lock()
+	c.blockedTable = table
+	c.blockRelease = release
+	c.blockedStarted = make(chan struct{}, 1)
+	c.mu.Unlock()
+	return release
+}
+
+func (c *fakePartsConn) waitForBlocked(t *testing.T) {
+	t.Helper()
+	c.mu.Lock()
+	started := c.blockedStarted
+	c.mu.Unlock()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for blocked table query")
+	}
 }
 
 func (c *fakePartsConn) setRows(rows ...fakePartsRow) {
@@ -449,6 +491,85 @@ func TestPartsPressureGuard_ExactScopeMarksUnseenEmptyPartitionFresh(t *testing.
 	if err := g.Allow("db__t", "p_new"); err != nil {
 		t.Fatalf("first INSERT into a new partition must be admitted: %v", err)
 	}
+}
+
+func TestPartsPressureGuard_AdmissionsOnDifferentTablesDoNotSerialize(t *testing.T) {
+	conn := &fakePartsConn{}
+	conn.setRows(
+		fakePartsRow{database: "hg_unsafe", table: "db__slow", partition: "p0", partitionKey: "p", number: 1},
+		fakePartsRow{database: "hg_unsafe", table: "db__fast", partition: "p0", partitionKey: "p", number: 1},
+	)
+	g := NewPartsPressureGuard(conn, PartsPressureConfig{UnsafeDatabase: "hg_unsafe"})
+	if _, err := g.Refresh(context.Background()); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	release := conn.blockTable("db__slow")
+	type result struct {
+		reservation PartsReservation
+		err         error
+	}
+	slowDone := make(chan result, 1)
+	go func() {
+		reservation, err := g.Reserve(context.Background(), "db__slow", []string{"p_p0"})
+		slowDone <- result{reservation: reservation, err: err}
+	}()
+	conn.waitForBlocked(t)
+	fastDone := make(chan result, 1)
+	go func() {
+		reservation, err := g.Reserve(context.Background(), "db__fast", []string{"p_p0"})
+		fastDone <- result{reservation: reservation, err: err}
+	}()
+	select {
+	case fast := <-fastDone:
+		if fast.err != nil {
+			close(release)
+			t.Fatalf("admission on another table failed behind a slow read: %v", fast.err)
+		}
+		fast.reservation.Release()
+		close(release)
+	case <-time.After(250 * time.Millisecond):
+		close(release)
+		fast := <-fastDone
+		if fast.reservation != nil {
+			fast.reservation.Release()
+		}
+		t.Fatal("admission on another table blocked behind a slow read")
+	}
+	slow := <-slowDone
+	if slow.err != nil {
+		t.Fatalf("slow admission: %v", slow.err)
+	}
+	slow.reservation.Release()
+}
+
+func TestPartsPressureGuard_StuckCleanupProofFencesOnlyItsTable(t *testing.T) {
+	conn := &fakePartsConn{}
+	conn.setInventory(
+		fakePartInventoryRow{database: "hg_unsafe", table: "db__a", partition: "p0", partitionKey: "p", partName: "a_1_1_0"},
+		fakePartInventoryRow{database: "hg_unsafe", table: "db__b", partition: "p0", partitionKey: "p", partName: "b_1_1_0"},
+	)
+	g := NewPartsPressureGuard(conn, PartsPressureConfig{UnsafeDatabase: "hg_unsafe"})
+	if _, err := g.Refresh(context.Background()); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	cleaner, err := g.ReserveStatement(context.Background(), "0xabc:1:n", "db__a", []string{"p_p0"})
+	if err != nil {
+		t.Fatalf("ReserveStatement: %v", err)
+	}
+	if err := cleaner.Commit(CandidatePart{TableID: "db.a", PartitionID: "p_p0", PartName: "a_1_1_0"}); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if err := cleaner.PrepareCleanupProof(context.Background(), []CandidatePart{{TableID: "db.a", PartitionID: "p_p0", PartName: "a_1_1_0"}}); err != nil {
+		t.Fatalf("PrepareCleanupProof: %v", err)
+	}
+	if _, err := g.Reserve(context.Background(), "db__a", []string{"p_p0"}); !errors.Is(err, ErrBackpressure) {
+		t.Fatalf("the proving table must be fenced, got %v", err)
+	}
+	other, err := g.Reserve(context.Background(), "db__b", []string{"p_p0"})
+	if err != nil {
+		t.Fatalf("an unrelated table was fenced by another table's cleanup proof: %v", err)
+	}
+	other.Release()
 }
 
 func TestPartsPressureGuard_RefreshErrorKeepsLastGoodSnapshot(t *testing.T) {
