@@ -520,3 +520,217 @@ func TestReservedNamespaceViolation_OrdinaryColumnIsRefusedByDesign(t *testing.T
 		t.Fatalf("mention-is-the-rule = %q, %v", got, err)
 	}
 }
+
+// TestReservedNamespaceViolation_HeredocCannotHideAComment is the Spec N 1a
+// regression. ClickHouse's heredoc ($$...$$ / $tag$...$tag$) is a string
+// literal, so a --, # or // inside one is content, not a comment. The shipped
+// scanner copied `$` through its default branch, so consumeLineComment blanked
+// the rest of the statement from both surfaces and the guard saw nothing.
+func TestReservedNamespaceViolation_HeredocCannotHideAComment(t *testing.T) {
+	const rid = "_hg_row_id"
+	dbs := []string{"hg_safe", "hg_unsafe"}
+	for _, tc := range []struct {
+		name string
+		sql  string
+		want string
+	}{
+		// PRE-FIX: all four return "" (no violation). Reproduced at
+		// scratchpad/heredoc-repro, 6/8 statements passed the guard.
+		{"bare heredoc hiding a line comment", "SELECT $$--$$ AS x, count() FROM hg_safe.db1__t", "hg_safe"},
+		// reservedNamespaceViolationOnSurface reports the FIRST reserved name on
+		// the surface, and this reproduction statement mentions two: the
+		// _hg_row_id column precedes hg_unsafe. The next row isolates the
+		// database so both reserved names stay pinned.
+		{"bare heredoc hiding a hash comment", "SELECT $$#$$ AS x, _hg_row_id FROM hg_unsafe.db1__t", rid},
+		{"bare heredoc hiding a hash comment, database only", "SELECT $$#$$ AS x, count() FROM hg_unsafe.db1__t", "hg_unsafe"},
+		{"heredoc in an INSERT ... SELECT export", "INSERT INTO ordinary.t SELECT $$--$$, a FROM hg_safe.db1__t", "hg_safe"},
+		{"tagged heredoc hiding a slash comment", "SELECT $tag$//$tag$ AS x, count() FROM hg_safe.db1__t", "hg_safe"},
+		// PRE-FIX: already refused. Controls that must not regress.
+		{"control: no heredoc", "SELECT count() FROM hg_safe.db1__t", "hg_safe"},
+		{"control: reserved column", "SELECT _hg_row_id FROM db1.t", rid},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ReservedNamespaceViolation(tc.sql, dbs, rid)
+			if err != nil {
+				t.Fatalf("unexpected scan error: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("ReservedNamespaceViolation(%q) = %q, want %q", tc.sql, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestReservedNamespaceViolation_HeredocBodyReachesTheLiteralSurface is the
+// half that is easy to break while fixing the half above. ClickHouse table
+// functions read literal arguments as identifiers, so a heredoc body must be
+// blanked from outsideLiterals and written VERBATIM to withLiterals. These
+// statements are refused TODAY (the body carries no comment marker, so hg_safe
+// survives as ordinary bytes); a fix that blanks heredoc bodies from both
+// surfaces would turn a currently-caught statement into a bypass.
+func TestReservedNamespaceViolation_HeredocBodyReachesTheLiteralSurface(t *testing.T) {
+	for _, tc := range []struct{ name, sql, want string }{
+		// PRE-FIX: already refused. MUST still be refused after the fix.
+		{"merge database heredoc", "SELECT * FROM merge($$hg_safe$$, '^db1__t$')", "hg_safe"},
+		// PRE-FIX: refused. Post-fix the tagged body must resolve to hg_safe too.
+		{"tagged merge database heredoc", "SELECT * FROM merge($tag$hg_safe$tag$, '^db1__t$')", "hg_safe"},
+		{"reserved column in a heredoc", "SELECT $$_hg_row_id$$", "_hg_row_id"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ReservedNamespaceViolation(tc.sql, []string{"hg_safe", "hg_unsafe"}, "_hg_row_id")
+			if err != nil || got != tc.want {
+				t.Fatalf("heredoc body on the literal surface = %q, %v; want %q", got, err, tc.want)
+			}
+		})
+	}
+}
+
+// TestReservedNamespaceViolation_HeredocIsNotABlanketRefusal keeps the fix from
+// degenerating into "any $ is an error": an ordinary heredoc naming nothing
+// reserved must still pass, or every maintenance session that uses one breaks.
+func TestReservedNamespaceViolation_HeredocIsNotABlanketRefusal(t *testing.T) {
+	for _, sql := range []string{
+		"SELECT $$ordinary$$ AS x FROM other.u",
+		"SELECT $tag$ordinary$tag$ AS x FROM other.u",
+		"SELECT $$hg_safe_backup$$ AS x FROM other.u",
+		"SELECT $$$$ AS empty FROM other.u",
+		"SELECT $$a$$, $$b$$ FROM other.u",
+		// No escape processing inside a heredoc: measured on the live v0.9.0
+		// polyglot grammar, merge($$hg\x5Fsafe$$, ...) comes back Success and
+		// re-emits as merge('hg\\x5Fsafe', ...), so the body is the literal
+		// text hg\x5Fsafe and is NOT hg_safe. Heredoc bodies therefore do not
+		// inherit the backslash refusal consumeStringLiteral applies to '...'.
+		`SELECT $$hg\x5Fsafe$$ AS x FROM other.u`,
+	} {
+		t.Run(sql, func(t *testing.T) {
+			got, err := ReservedNamespaceViolation(sql, []string{"hg_safe", "hg_unsafe"}, "_hg_row_id")
+			if err != nil {
+				t.Fatalf("unexpected scan error: %v", err)
+			}
+			if got != "" {
+				t.Fatalf("must not fire on %q, got %q", sql, got)
+			}
+		})
+	}
+}
+
+// TestReservedNamespaceViolation_UnterminatedOrStrayDollarIsRefused pins the
+// two remaining rows of the reproduction. An unterminated heredoc is an error
+// like an unterminated literal or block comment; a `$` that opens nothing is
+// refused, because outside a heredoc opener and a quoted span `$` is not part
+// of any identifier or operator this guard needs to admit, and copying it
+// through is exactly what produced the bypass (Spec N D1).
+func TestReservedNamespaceViolation_UnterminatedOrStrayDollarIsRefused(t *testing.T) {
+	for _, sql := range []string{
+		// PRE-FIX: all return "" (no violation).
+		"SELECT $$unterminated",
+		"SELECT $tag$unterminated$tog$",
+		"SELECT 1 $ 2",
+		"SELECT $ FROM other.u",
+		"SELECT $1 FROM other.u",
+		// A well-formed heredoc followed by an unterminated opener: the guard
+		// refuses the whole statement rather than guessing where the second
+		// span ends.
+		"SELECT $t$a$t$ AS x, $t$ FROM hg_safe.db1__t",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			if _, err := ReservedNamespaceViolation(sql, []string{"hg_safe"}, "_hg_row_id"); err == nil {
+				t.Fatalf("unterminated or stray $ must be an error: %q", sql)
+			}
+		})
+	}
+}
+
+// TestReservedNamespaceViolation_HeredocOpenerCharsetIsNarrowerThanTheGrammar
+// pins a deliberate divergence measured against the live v0.9.0 polyglot
+// grammar. The grammar accepts heredoc tags this guard does not model — a
+// leading digit ($1t$), a digits-only tag ($1$) and a non-ASCII tag ($ta$ with
+// a multi-byte rune) all parse as heredocs and re-emit as ordinary quoted
+// strings. Spec N D1 specifies the charset [A-Za-z_][0-9A-Za-z_]*, which is a
+// strict SUBSET of that. Narrower is the safe direction: an opener the guard
+// does not recognise falls to the stray-$ refusal, costing a false refusal
+// rather than opening a span the guard would blank from the executable
+// surface. Widening this charset past the grammar is what would create a new
+// bypass, so these rows exist to make any such widening fail loudly.
+func TestReservedNamespaceViolation_HeredocOpenerCharsetIsNarrowerThanTheGrammar(t *testing.T) {
+	for _, sql := range []string{
+		// PRE-FIX: all return "" (no violation), no error.
+		"SELECT $1t$x$1t$ AS c FROM other.u",
+		"SELECT $1$x$1$ AS c FROM other.u",
+		"SELECT $tä$x$tä$ AS c FROM other.u",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			if _, err := ReservedNamespaceViolation(sql, []string{"hg_safe"}, "_hg_row_id"); err == nil {
+				t.Fatalf("a heredoc tag outside the guard's charset must be refused, not parsed: %q", sql)
+			}
+		})
+	}
+}
+
+// TestReservedNamespaceViolation_HeredocSpanMatchesTheGrammar pins the span
+// boundaries against behaviour measured on the live v0.9.0 grammar: the
+// closing tag is matched byte-exactly (so $tag$x$TAG$ does not close), a lone
+// `$` inside a body is content, and a heredoc opener outranks a single quote
+// exactly as it outranks a comment marker.
+func TestReservedNamespaceViolation_HeredocSpanMatchesTheGrammar(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		sql     string
+		want    string
+		wantErr bool
+	}{
+		// PRE-FIX: "" and no error. The closing tag is case-sensitive, so this
+		// heredoc is never terminated.
+		{"closing tag is case sensitive", "SELECT $tag$x$TAG$ AS c FROM other.u", "", true},
+		// PRE-FIX: "" and no error -- `--` inside the body was read as a comment.
+		{"lone dollar inside a body is content", "SELECT $t$--$x$t$ AS c, count() FROM hg_safe.db1__t", "hg_safe", false},
+		// PRE-FIX: an error -- the ' inside the heredoc opened a string literal
+		// that ran to the end of the statement. Post-fix the heredoc wins and
+		// the trailing SQL is scanned.
+		{"heredoc outranks a single quote", "SELECT $$'$$ AS x, count() FROM hg_safe.db1__t", "hg_safe", false},
+		// PRE-FIX and post-fix: a comment outranks a heredoc opener, so the
+		// blanked tail is genuinely not executed by ClickHouse either.
+		{"comment outranks a heredoc opener", "SELECT 1 FROM other.u -- $$hg_safe$$", "", false},
+		// PRE-FIX and post-fix: a single quote outranks a heredoc opener.
+		{"single quote outranks a heredoc opener", "SELECT '$$' AS x, count() FROM hg_safe.db1__t", "hg_safe", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ReservedNamespaceViolation(tc.sql, []string{"hg_safe", "hg_unsafe"}, "_hg_row_id")
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("%q must be a scan error, got %q", tc.sql, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected scan error on %q: %v", tc.sql, err)
+			}
+			if got != tc.want {
+				t.Fatalf("ReservedNamespaceViolation(%q) = %q, want %q", tc.sql, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestOnQuery_OperatorSessionRefusesHeredocHiddenReservedName drives the same
+// statements through the plugin so the refusal is proved on the production
+// path, including the error text an operator actually receives.
+func TestOnQuery_OperatorSessionRefusesHeredocHiddenReservedName(t *testing.T) {
+	p := &Plugin{ReservedDatabases: []string{"hg_safe", "hg_unsafe"}, ReservedRowIDColumn: "_hg_row_id"}
+	for _, tc := range []struct{ name, sql, want string }{
+		{"maintenance heredoc comment", "SELECT $$--$$ AS x, count() FROM hg_safe.db1__t", "hg_safe"},
+		{"maintenance tagged heredoc comment", "SELECT $tag$//$tag$ AS x, count() FROM hg_safe.db1__t", "hg_safe"},
+		{"maintenance heredoc export", "INSERT INTO ordinary.t SELECT $$--$$, a FROM hg_safe.db1__t", "hg_safe"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sess := newSessionForTest(t, 30)
+			sess.State().SetMaintenance(true)
+			qctx := &plugin.QueryContext{Session: sess, OriginalSQL: tc.sql, Query: &chproto.Query{Body: tc.sql}}
+			chain := &plugin.PluginChain{QueryPlugins: []plugin.QueryPlugin{p}}
+			err := chain.OnQuery(context.Background(), qctx)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("heredoc-hidden reserved name must be refused with %q, err=%v", tc.want, err)
+			}
+		})
+	}
+}

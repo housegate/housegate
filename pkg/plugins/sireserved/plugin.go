@@ -109,9 +109,14 @@ type sqlSurfaces struct {
 }
 
 // scanSQLSurfaces ignores every ClickHouse comment form, retains quoted
-// identifiers, and produces separate views with/without string contents. Any
-// backslash-bearing string is refused: interpreting ClickHouse escape forms
-// here would create an encoding bypass such as hg\x5Fsafe.
+// identifiers, models heredoc string literals, and produces separate views
+// with/without string contents. Any backslash-bearing single-quoted string is
+// refused: interpreting ClickHouse escape forms here would create an encoding
+// bypass such as hg\x5Fsafe. Heredoc bodies are exempt from that refusal
+// because ClickHouse applies no escape processing inside them (see
+// consumeHeredoc). Case order is the lexer's precedence and matches the
+// grammar: a single quote and a comment marker both outrank a heredoc opener,
+// and a heredoc opener outranks everything inside its own body.
 func scanSQLSurfaces(sql string) (sqlSurfaces, error) {
 	var outside, withLiterals strings.Builder
 	outside.Grow(len(sql))
@@ -157,6 +162,26 @@ func scanSQLSurfaces(sql string) (sqlSurfaces, error) {
 			withLiterals.WriteByte(' ')
 			i = next
 
+		case sql[i] == '$':
+			// ClickHouse heredoc: $$body$$ or $tag$body$tag$. The body is a
+			// string literal, so it is blanked from outsideLiterals and written
+			// verbatim to withLiterals -- table functions read literal arguments
+			// as identifiers, so merge($$hg_safe$$, ...) must still be caught.
+			// A `$` that opens no well-formed heredoc is refused: outside a
+			// heredoc opener and a quoted span it is not part of any identifier
+			// or operator this guard needs to admit, and copying it through is
+			// what let a comment marker inside a heredoc blank the rest of a
+			// statement from both surfaces (Spec N D1).
+			outside.WriteByte(' ')
+			withLiterals.WriteByte(' ')
+			next, body, err := consumeHeredoc(sql, i)
+			if err != nil {
+				return sqlSurfaces{}, err
+			}
+			withLiterals.WriteString(body)
+			withLiterals.WriteByte(' ')
+			i = next
+
 		default:
 			outside.WriteByte(sql[i])
 			withLiterals.WriteByte(sql[i])
@@ -185,6 +210,57 @@ func consumeStringLiteral(sql string, start int) (int, string, error) {
 		}
 	}
 	return 0, "", fmt.Errorf("unterminated single-quoted string literal")
+}
+
+// consumeHeredoc reads a ClickHouse heredoc string literal ($$body$$ or
+// $tag$body$tag$) starting at the opening `$`, and returns the offset just
+// past the closing $tag$ together with the body. Its contract matches
+// consumeStringLiteral: an unterminated span is an error, never a silent
+// truncation.
+//
+// The tag charset is [A-Za-z_][0-9A-Za-z_]* with an empty tag allowed, which
+// is a deliberate strict SUBSET of the grammar's. Measured on the live v0.9.0
+// polyglot grammar the engine also accepts a leading-digit tag ($1t$), a
+// digits-only tag ($1$) and a non-ASCII tag, all of which this guard refuses
+// through the stray-$ branch instead. Recognising fewer openers than the
+// grammar only costs a false refusal, because an unrecognised `$` is refused
+// rather than copied through; recognising more would let the guard blank a
+// span the grammar executes, which is the shape of the bypass this closes.
+//
+// The closing delimiter is matched byte-exactly, so $tag$x$TAG$ is
+// unterminated, and a lone `$` inside the body is content -- both measured on
+// the same grammar.
+//
+// ClickHouse performs no escape processing inside a heredoc: merge($$hg\x5Fsafe$$,
+// ...) is Success on the live engine and re-emits as merge('hg\\x5Fsafe', ...),
+// so the body is the literal text hg\x5Fsafe and is not hg_safe. Heredoc bodies
+// therefore do not inherit consumeStringLiteral's backslash refusal and are
+// returned verbatim.
+func consumeHeredoc(sql string, start int) (int, string, error) {
+	tag := start + 1
+	for tag < len(sql) && isHeredocTagByte(sql[tag], tag == start+1) {
+		tag++
+	}
+	if tag >= len(sql) || sql[tag] != '$' {
+		return 0, "", fmt.Errorf("stray $ is not a heredoc opener and is not accepted by the storage-integrity guard")
+	}
+	delimiter := sql[start : tag+1]
+	body := sql[tag+1:]
+	end := strings.Index(body, delimiter)
+	if end < 0 {
+		return 0, "", fmt.Errorf("unterminated heredoc string literal")
+	}
+	return tag + 1 + end + len(delimiter), body[:end], nil
+}
+
+// isHeredocTagByte reports whether value may appear in a heredoc tag. A digit
+// is rejected in the leading position so a bare `$1` cannot be mistaken for an
+// opener.
+func isHeredocTagByte(value byte, leading bool) bool {
+	if value == '_' || value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' {
+		return true
+	}
+	return !leading && value >= '0' && value <= '9'
 }
 
 func containsIdentifierPlaceholder(sql string) bool {
