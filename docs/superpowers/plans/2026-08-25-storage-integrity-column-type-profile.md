@@ -67,7 +67,7 @@ Copied from Spec Q and the repo contract. Every task's requirements implicitly i
 
 Everything else hangs off this part. It ships in Phase 1 and changes no admitted type: it is a pure restructuring plus one new test, so the existing suite is its own regression proof.
 
-- [ ] **Task 0 (pre-flight, do once):** prove the baseline is green and record it.
+- [x] **Task 0 (pre-flight, do once):** prove the baseline is green and record it.
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/hg-specq
@@ -88,7 +88,7 @@ The M1/M2/M3 results are properties of `ch-go v0.73.0-sentioxyz-20260629`, not o
 
 **Interfaces:** none exported. Test-only.
 
-- [ ] **Step 1: Write the three pins**
+- [x] **Step 1: Write the three pins**
 
 Create `pkg/replay/nativepayload/chgo_capability_test.go`, `package nativepayload`. It reuses the existing `encodeNativePacket` / `nativePayloadTestRevision` helpers from `native_test.go`.
 
@@ -171,7 +171,7 @@ func TestChGoNullableSeamShape(t *testing.T) {
 func TestNativeDecoderRejectsUndecodableInferableTypes(t *testing.T) { /* see Step 2 */ }
 ```
 
-- [ ] **Step 2: Write the negative decode pin**
+- [x] **Step 2: Write the negative decode pin**
 
 `TestNativeDecoderRejectsUndecodableInferableTypes` encodes a one-column block per case and asserts `Decode` fails with the named message. Cases and expected substrings, all measured:
 
@@ -186,7 +186,7 @@ func TestNativeDecoderRejectsUndecodableInferableTypes(t *testing.T) { /* see St
 
 Note the `Decimal` row fails one stage earlier than the others — in `nativeBlockColumnPositions`, not `nativeColumnValue`. That difference is M4 and it is why Task 12 exists.
 
-- [ ] **Step 3: Sync Bazel and run**
+- [x] **Step 3: Sync Bazel and run**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/hg-specq
