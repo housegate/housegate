@@ -89,9 +89,20 @@ func TestPartsPressureGuard_AgainstRealSystemParts(t *testing.T) {
 	if snapshot[sicore.PartsKey{Database: unsafeDB, Table: table, Partition: "p_p0"}] != 3 ||
 		snapshot[sicore.PartsKey{Database: unsafeDB, Table: table, Partition: "p_tuple()"}] != 3 ||
 		snapshot[sicore.PartsKey{Database: unsafeDB, Table: table, Partition: "p_p1"}] != 1 ||
-		snapshot[sicore.PartsKey{Database: unsafeDB, Table: unpartitioned, Partition: "all"}] != 1 ||
-		snapshot[sicore.PartsKey{Database: safeDB, Table: table, Partition: "p_p0"}] != 1 {
+		snapshot[sicore.PartsKey{Database: unsafeDB, Table: unpartitioned, Partition: "all"}] != 1 {
 		t.Fatalf("snapshot = %v", snapshot)
+	}
+	// Spec P D4: the exact-name read is hg_unsafe-only. Safe counts are gauge
+	// input and come from the bounded aggregate pass, never from a name scan.
+	if _, present := snapshot[sicore.PartsKey{Database: safeDB, Table: table, Partition: "p_p0"}]; present {
+		t.Fatalf("the exact-name read must not report safe-database keys: %v", snapshot)
+	}
+	counts, err := guard.RefreshCounts(ctx)
+	if err != nil {
+		t.Fatalf("RefreshCounts: %v", err)
+	}
+	if counts[sicore.PartsKey{Database: safeDB, Table: table, Partition: "p_p0"}] != 1 {
+		t.Fatalf("the bounded aggregate must still supply the safe count: %v", counts)
 	}
 	if err := guard.Allow(table, "p_p0"); !errors.Is(err, sicore.ErrBackpressure) {
 		t.Fatalf("p_p0 at soft limit must be refused: %v", err)
