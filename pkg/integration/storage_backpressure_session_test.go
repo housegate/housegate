@@ -71,6 +71,9 @@ func TestStorageIntegrity_BackpressureKeepsTheClientSession(t *testing.T) {
 		testenv.WithDatabasePermission(signer.Address(), chEnv.Database, registry.DbAuthWrite),
 		withDeclaredSchema(t, networkID),
 		testenv.WithConfigMutator(func(cfg *config.Config) {
+			// Keep one physical context so the rewriter mock still classifies
+			// fully-qualified queries when ClientHello.Database is empty.
+			cfg.Rewriter.PhysicalDatabase = chEnv.Database
 			cfg.StorageIntegrity.Ingress.Enabled = true
 			cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{signer.Address()}
 			cfg.StorageIntegrity.Ingress.NetworkID = networkID
@@ -89,7 +92,10 @@ func TestStorageIntegrity_BackpressureKeepsTheClientSession(t *testing.T) {
 		}),
 	)
 
-	out, err := testenv.RunCLIMultiqueryIgnoreError(t, bin, agentProxy.Addr, chEnv.Database,
+	// The SQL is fully qualified, so leave ClientHello.Database unset. The
+	// 25.8 client used by CI otherwise copies --database into Query settings;
+	// that unsigned setting is correctly refused before pressure admission.
+	out, err := testenv.RunCLIMultiqueryIgnoreError(t, bin, agentProxy.Addr, "",
 		"INSERT INTO "+chEnv.Database+".si_events FORMAT CSVWithNames; SELECT 42", "id,region\n1,eu\n")
 	if !strings.Contains(out, "252") && !strings.Contains(out, "TOO_MANY_PARTS") {
 		t.Fatalf("client did not see exception 252 (exec err %v):\n%s", err, out)

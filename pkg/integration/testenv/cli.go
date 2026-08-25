@@ -170,19 +170,7 @@ func runCLIQueriesContext(
 		return "", fmt.Errorf("parse proxy addr %q: %w", proxyAddr, err)
 	}
 
-	// The clickhouse fat binary dispatches to its `client` subcommand
-	// here. --host/--port override the localhost:9000 default — the
-	// proxy binds an ephemeral port per test.
-	args := []string{
-		"client",
-		"--host", host,
-		"--port", port,
-		"--database", database,
-	}
-	args = append(args, extraArgs...)
-	for _, query := range queries {
-		args = append(args, "--query", query)
-	}
+	args := buildCLIArgs(host, port, database, queries, extraArgs...)
 	cmd := exec.CommandContext(ctx, bin, args...)
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)
@@ -190,6 +178,28 @@ func runCLIQueriesContext(
 
 	out, err := cmd.CombinedOutput()
 	return strings.TrimRight(string(out), "\n"), err
+}
+
+func buildCLIArgs(host, port, database string, queries []string, extraArgs ...string) []string {
+	// The clickhouse fat binary dispatches to its `client` subcommand
+	// here. --host/--port override the localhost:9000 default — the
+	// proxy binds an ephemeral port per test. An empty database deliberately
+	// leaves the ClientHello database unset; this is useful for fully-qualified
+	// SI queries because ClickHouse 25.8 copies --database into Query settings
+	// for multi-query stdin and the signed lane correctly rejects that setting.
+	args := []string{
+		"client",
+		"--host", host,
+		"--port", port,
+	}
+	if database != "" {
+		args = append(args, "--database", database)
+	}
+	args = append(args, extraArgs...)
+	for _, query := range queries {
+		args = append(args, "--query", query)
+	}
+	return args
 }
 
 func findRepoRoot() (string, error) {
