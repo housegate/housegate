@@ -50,6 +50,12 @@ type Relay struct {
 	activeQuery   bool
 	activeQueryID string
 	queryCanceled bool
+	// pendingRejection replaces the terminal packet of a query that Housegate
+	// rejected locally after its input was complete. The staged payload was
+	// withheld, but upstream still has to finish its zero-row INSERT before the
+	// connection is reusable. Guarded by queryMu.
+	pendingRejectionID  string
+	pendingRejectionExc *chproto.Exception
 
 	// completionProbe is replaceable in unit tests. Production uses
 	// probeQueryCompletion, which watches the exact upstream server's
@@ -366,6 +372,32 @@ func (r *Relay) cancelActiveQuery() (string, bool) {
 	}
 	r.queryCanceled = true
 	return r.activeQueryID, true
+}
+
+// rejectActiveQueryTerminal arms the terminal swap for queryID. It returns
+// false when that query is no longer the active one, in which case the caller
+// must fall back to closing the session.
+func (r *Relay) rejectActiveQueryTerminal(queryID string, exc *chproto.Exception) bool {
+	r.queryMu.Lock()
+	defer r.queryMu.Unlock()
+	if !r.activeQuery || r.activeQueryID != queryID || exc == nil {
+		return false
+	}
+	r.pendingRejectionID = queryID
+	r.pendingRejectionExc = exc
+	return true
+}
+
+// takePendingRejection consumes the armed rejection for queryID, if any.
+func (r *Relay) takePendingRejection(queryID string) *chproto.Exception {
+	r.queryMu.Lock()
+	defer r.queryMu.Unlock()
+	if r.pendingRejectionExc == nil || r.pendingRejectionID != queryID {
+		return nil
+	}
+	exc := r.pendingRejectionExc
+	r.pendingRejectionID, r.pendingRejectionExc = "", nil
+	return exc
 }
 
 func (r *Relay) startOpaqueCompletionProbe(ctx context.Context, queryID string) error {
@@ -853,6 +885,7 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 		curQctx                *plugin.QueryContext
 		curQctxSawInitialEmpty bool
 		curQctxSawPayload      bool
+		curQctxRejected        bool
 		rejectedQctx           *plugin.QueryContext
 	)
 	for {
@@ -1117,10 +1150,21 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 		// success.
 		if inputComplete && curQctx != nil {
 			if err := r.hooks.OnQueryInputCompleteStrict(ctx, curQctx); err != nil {
-				r.writeExceptionToClient(ctx, err)
-				r.hooks.OnQueryAbort(ctx, curQctx)
-				r.hooks.OnQueryComplete(ctx, r.sess)
-				return fmt.Errorf("query input complete strict hook: %w", err)
+				if chproto.KeepsSession(err) && curQctx.SuppressUpstreamExecution &&
+					r.rejectActiveQueryTerminal(curQctx.Query.ID, exceptionForPluginError(err)) {
+					// The staged payload never reached upstream. Forwarding the
+					// terminator below completes its zero-row negotiation; the server
+					// loop then swaps that terminal for our local Exception.
+					r.hooks.OnQueryAbort(ctx, curQctx)
+					curQctxRejected = true
+					logger.Infow("query rejected without closing the session",
+						"query_id", curQctx.Query.ID, "err", err)
+				} else {
+					r.writeExceptionToClient(ctx, err)
+					r.hooks.OnQueryAbort(ctx, curQctx)
+					r.hooks.OnQueryComplete(ctx, r.sess)
+					return fmt.Errorf("query input complete strict hook: %w", err)
+				}
 			}
 		}
 
@@ -1161,8 +1205,11 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 			return fmt.Errorf("splice client→upstream type=%d: %w", pkt.Type, err)
 		}
 		if inputComplete {
-			r.hooks.OnQueryInputComplete(ctx, curQctx)
+			if !curQctxRejected {
+				r.hooks.OnQueryInputComplete(ctx, curQctx)
+			}
 			curQctx = nil
+			curQctxRejected = false
 			curQctxSawInitialEmpty = false
 			curQctxSawPayload = false
 		}
@@ -1979,13 +2026,21 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 		if isEndOfStream || isException {
 			r.sess.State().ClearActiveRewrite()
 			queryID, canceled, active := r.takeActiveQueryState()
-			if active && isEndOfStream && !canceled {
+			rejection := r.takePendingRejection(queryID)
+			if active && isEndOfStream && !canceled && rejection == nil {
 				r.hooks.OnQuerySuccess(ctx, r.sess, queryID)
 			}
 			if deferredTerminal != nil {
 				deferredTerminal.complete(ctx, r.hooks, r.sess)
 			} else if active {
 				r.hooks.OnQueryComplete(ctx, r.sess)
+			}
+			if rejection != nil {
+				if rewrittenException != nil {
+					logger.Debugw("upstream exception superseded by a local rejection",
+						"query_id", queryID, "upstream_code", rewrittenException.Code)
+				}
+				rewrittenException = rejection
 			}
 		}
 
