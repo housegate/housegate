@@ -22,6 +22,38 @@ func TestPlugin_RunOnForward_False(t *testing.T) {
 	}
 }
 
+// TestPeerTrustedSessionBypassesStorageIntegrityRewrite pins the Spec I D6
+// peer boundary: the origin already rewrote this SQL, so running the host
+// rewriter again could double-prefix its physical names. Network isolation of
+// internal_listen is the mitigation.
+func TestPeerTrustedSessionBypassesStorageIntegrityRewrite(t *testing.T) {
+	rw := &fakeRewriter{out: "REWRITTEN-SQL"}
+	p := &Plugin{
+		Factory:                                 &fakeFactory{rw: rw},
+		FailClosedOnError:                       true,
+		RequiredStorageIntegrityContractVersion: pb.StorageIntegrityContractVersion_STORAGE_INTEGRITY_CONTRACT_V1,
+	}
+	chain := &plugin.PluginChain{QueryPlugins: []plugin.QueryPlugin{p}}
+
+	sess := newSessionForTest(t, 49)
+	sess.State().SetPeerTrust("10.0.0.7:9001")
+
+	qctx := &plugin.QueryContext{
+		Session:     sess,
+		OriginalSQL: "SELECT a FROM db1.t",
+		Query:       &chproto.Query{Body: "SELECT a FROM db1.t"},
+	}
+	if err := chain.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	if rw.rewriteCalls != 0 {
+		t.Fatalf("rewriteCalls = %d, want 0", rw.rewriteCalls)
+	}
+	if qctx.Query.Body != "SELECT a FROM db1.t" {
+		t.Fatalf("query body = %q, want the peer SQL forwarded verbatim", qctx.Query.Body)
+	}
+}
+
 func TestPlugin_RejectUndecodableQueryFollowsConfiguredSIPolicy(t *testing.T) {
 	p := &Plugin{}
 	var strict plugin.StrictQueryDecodePlugin = p

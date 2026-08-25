@@ -120,6 +120,24 @@ func TestStorageIntegrityRewriterOptions_DerivesPhysicalNames(t *testing.T) {
 	}
 }
 
+func TestStorageIntegrityInternalListenWarning(t *testing.T) {
+	cfg := minimalServerCfg(t)
+	if got := storageIntegrityInternalListenWarning(cfg); got != "" {
+		t.Fatalf("no SI tables, no internal port: got %q, want no warning", got)
+	}
+
+	cfg.StorageIntegrity.Tables = []string{"tenant.events"}
+	if got := storageIntegrityInternalListenWarning(cfg); got != "" {
+		t.Fatalf("SI tables without an internal port: got %q, want no warning", got)
+	}
+
+	cfg.InternalListen = "0.0.0.0:9001"
+	got := storageIntegrityInternalListenWarning(cfg)
+	if !strings.Contains(got, "peer-trusted") || !strings.Contains(got, "internal_listen") {
+		t.Fatalf("warning = %q, want it to name the peer-trust bypass and the internal port", got)
+	}
+}
+
 func TestBuildServer_UnsafeLatestDefaultRequiresReadState(t *testing.T) {
 	cfg := minimalServerCfg(t)
 	cfg.StorageIntegrity.Tables = []string{"tenant.events"}

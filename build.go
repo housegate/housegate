@@ -126,6 +126,20 @@ func storageIntegrityRewriterOptions(cfg *config.Config, rs rewriter.StorageInte
 	return out
 }
 
+// storageIntegrityInternalListenWarning returns the operator warning for the
+// Spec I D6 peer boundary, or an empty string when it does not apply.
+//
+// A peer-trusted remote() loopback carries SQL already rewritten by its origin;
+// running the rewriter again could double-prefix physical names. The bypass is
+// therefore deliberate, and network isolation of the internal port is the
+// corresponding control.
+func storageIntegrityInternalListenWarning(cfg *config.Config) string {
+	if len(cfg.StorageIntegrity.Tables) == 0 || cfg.InternalListen == "" {
+		return ""
+	}
+	return "storage_integrity: peer-trusted sessions arriving on internal_listen bypass storage-integrity rewrite and can address the hg_safe / hg_unsafe namespaces directly; internal_listen MUST be reachable only from trusted peer subnets"
+}
+
 // isNilInterface recognizes typed-nil implementations stored in an interface.
 // A plain interface comparison would treat such a value as available and let
 // the first method call panic.
@@ -424,6 +438,9 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	}
 	if len(cfg.StorageIntegrity.Tables) > 0 && siReadState == nil {
 		log.Warnw("storage_integrity: no read-state port wired; unsafe_latest reads will be refused", "tables", len(cfg.StorageIntegrity.Tables))
+	}
+	if warning := storageIntegrityInternalListenWarning(cfg); warning != "" {
+		log.Warnw(warning, "internal_listen", cfg.InternalListen, "tables", len(cfg.StorageIntegrity.Tables))
 	}
 
 	var rwFactory rewriter.Factory
