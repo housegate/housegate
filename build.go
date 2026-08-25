@@ -662,6 +662,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		}
 		if len(siOptions.Tables) > 0 {
 			rewritePlug.RequiredStorageIntegrityContractVersion = rewriter.StorageIntegrityContractV1
+			rewritePlug.StorageIntegrityScrubber = rewriter.NewStorageIntegrityScrubber(siOptions)
 		}
 	}
 

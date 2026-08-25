@@ -105,3 +105,29 @@ func TestReadModeContext(t *testing.T) {
 		t.Fatalf("got %q %v", m, ok)
 	}
 }
+
+func TestStorageIntegrityScrubber(t *testing.T) {
+	s := NewStorageIntegrityScrubber(StorageIntegrityOptions{Tables: []StorageIntegrityTable{
+		{TableID: "db1.t", SafeTable: "hg_safe.db1__t", UnsafeTable: "hg_unsafe.db1__t"},
+	}})
+	for _, tc := range []struct{ in, want string }{
+		{"Table hg_safe.db1__t does not exist", "Table db1.t does not exist"},
+		{"Missing columns: '_hg_row_id' while processing hg_unsafe.db1__t",
+			"Missing columns: '<storage-integrity>' while processing db1.t"},
+		{"Database hg_safe does not exist", "Database <storage-integrity> does not exist"},
+		{"Table other.u does not exist", "Table other.u does not exist"},
+		{"", ""},
+	} {
+		if got := s.Scrub(tc.in); got != tc.want {
+			t.Errorf("Scrub(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+
+	var none *StorageIntegrityScrubber
+	if got := none.Scrub("Table hg_safe.db1__t does not exist"); got != "Table hg_safe.db1__t does not exist" {
+		t.Errorf("a nil scrubber must be a no-op, got %q", got)
+	}
+	if NewStorageIntegrityScrubber(StorageIntegrityOptions{}) != nil {
+		t.Error("an empty SI surface must produce no scrubber")
+	}
+}

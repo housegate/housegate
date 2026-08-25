@@ -293,3 +293,26 @@ func TestOnQuery_AcknowledgedCustomRewriterAllowsNormalQuery(t *testing.T) {
 		t.Fatalf("acknowledged normal query: %v", err)
 	}
 }
+
+func TestOnException_ScrubsStorageIntegrityNames(t *testing.T) {
+	rw := &fakeRewriter{out: "REWRITTEN-SQL"}
+	p := &Plugin{
+		Factory: &fakeFactory{rw: rw},
+		StorageIntegrityScrubber: rewriter.NewStorageIntegrityScrubber(rewriter.StorageIntegrityOptions{
+			Tables: []rewriter.StorageIntegrityTable{
+				{TableID: "db1.t", SafeTable: "hg_safe.db1__t", UnsafeTable: "hg_unsafe.db1__t"},
+			}}),
+	}
+	sess := newSessionForTest(t, 48)
+
+	exc := &chproto.Exception{Message: "Unknown identifier _hg_row_id in table hg_safe.db1__t"}
+	if err := p.OnException(context.Background(), sess, exc); err != nil {
+		t.Fatalf("OnException: %v", err)
+	}
+	if strings.Contains(exc.Message, "hg_safe") || strings.Contains(exc.Message, "_hg_row_id") {
+		t.Fatalf("protocol-owned names leaked to the client: %q", exc.Message)
+	}
+	if !strings.Contains(exc.Message, "db1.t") {
+		t.Fatalf("the logical name must survive scrubbing: %q", exc.Message)
+	}
+}
