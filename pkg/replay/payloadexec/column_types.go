@@ -3,7 +3,6 @@ package payloadexec
 import (
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/housegate/housegate/pkg/lthash"
@@ -23,83 +22,13 @@ var ErrUnsupportedColumnType = errors.New("payloadexec: unsupported column type"
 // declarations from reaching a make([]byte, width) allocation.
 const maxFixedStringWidth int64 = 0xFFFFFF
 
-type columnTypeKind uint8
-
-const (
-	columnTypeUnsupported columnTypeKind = iota
-	columnTypeString
-	columnTypeFixedString
-	columnTypeBool
-	columnTypeFloat32
-	columnTypeFloat64
-	columnTypeUInt8
-	columnTypeUInt16
-	columnTypeUInt32
-	columnTypeUInt64
-	columnTypeInt8
-	columnTypeInt16
-	columnTypeInt32
-	columnTypeInt64
-)
-
-type classifiedColumnType struct {
-	kind             columnTypeKind
-	fixedStringWidth int
-}
-
-// classifyColumnType is the one authoritative parser for the declared SI type
-// profile. parseValue dispatches on this result, so validation cannot admit a
-// type for which the executor has no materializer branch. FixedString widths
-// intentionally preserve the legacy parseFixedString grammar: surrounding
-// whitespace, a leading plus and leading zeroes are accepted.
-func classifyColumnType(typeName string) classifiedColumnType {
-	switch typeName {
-	case "String":
-		return classifiedColumnType{kind: columnTypeString}
-	case "Bool":
-		return classifiedColumnType{kind: columnTypeBool}
-	case "Float32":
-		return classifiedColumnType{kind: columnTypeFloat32}
-	case "Float64":
-		return classifiedColumnType{kind: columnTypeFloat64}
-	case "UInt8":
-		return classifiedColumnType{kind: columnTypeUInt8}
-	case "UInt16":
-		return classifiedColumnType{kind: columnTypeUInt16}
-	case "UInt32":
-		return classifiedColumnType{kind: columnTypeUInt32}
-	case "UInt64":
-		return classifiedColumnType{kind: columnTypeUInt64}
-	case "Int8":
-		return classifiedColumnType{kind: columnTypeInt8}
-	case "Int16":
-		return classifiedColumnType{kind: columnTypeInt16}
-	case "Int32":
-		return classifiedColumnType{kind: columnTypeInt32}
-	case "Int64":
-		return classifiedColumnType{kind: columnTypeInt64}
-	}
-
-	const fixedStringPrefix = "FixedString("
-	if !strings.HasPrefix(typeName, fixedStringPrefix) || !strings.HasSuffix(typeName, ")") {
-		return classifiedColumnType{}
-	}
-	widthText := strings.TrimSpace(typeName[len(fixedStringPrefix) : len(typeName)-1])
-	width, err := strconv.ParseInt(widthText, 10, 64)
-	if err != nil || width <= 0 || width > maxFixedStringWidth {
-		return classifiedColumnType{}
-	}
-	return classifiedColumnType{kind: columnTypeFixedString, fixedStringWidth: int(width)}
-}
-
 // SupportedColumnType reports whether a declared ClickHouse type is inside the
-// MVP whitelist (§5.3): String, FixedString(N) with 0 < N <= 0xFFFFFF, Bool,
-// Float32/64 and [U]Int8/16/32/64. For compatibility, FixedString widths retain
-// the executor's legacy whitespace, leading-plus and leading-zero spellings.
-// It is the single source of truth shared by parseValue and every caller that
-// validates a declaration before executing DDL.
+// pinned storage-integrity profile (§5.3, Spec Q Q-D1). The admitted set lives
+// in column_profile.go; this is a reader of it, shared by parseValue and every
+// caller that validates a declaration before executing DDL.
 func SupportedColumnType(typeName string) bool {
-	return classifyColumnType(typeName).kind != columnTypeUnsupported
+	_, err := ResolveColumnProfile(typeName)
+	return err == nil
 }
 
 // ValidateColumnType returns ErrUnsupportedColumnType naming the offending
@@ -113,23 +42,22 @@ func ValidateColumnType(typeName string) error {
 
 // CanonicalColumnType validates a declared ClickHouse type against the pinned
 // storage-integrity profile and returns its canonical spelling. Scalar types
-// already have one accepted spelling and are returned unchanged. FixedString
-// widths are rendered in base 10 without whitespace, a leading plus or leading
-// zeroes. Every rejection unwraps to ErrUnsupportedColumnType.
+// have one accepted spelling and are returned unchanged. FixedString widths are
+// rendered in base 10 without whitespace, a leading plus or leading zeroes.
+// Every rejection unwraps to ErrUnsupportedColumnType.
 func CanonicalColumnType(typeName string) (string, error) {
-	classified := classifyColumnType(typeName)
-	switch classified.kind {
-	case columnTypeUnsupported:
-		return "", unsupportedColumnTypeError(typeName)
-	case columnTypeFixedString:
-		return "FixedString(" + strconv.Itoa(classified.fixedStringWidth) + ")", nil
-	default:
-		return typeName, nil
+	profile, err := ResolveColumnProfile(typeName)
+	if err != nil {
+		return "", err
 	}
+	return profile.Canonical, nil
 }
 
+// unsupportedColumnTypeError names the offending declaration and renders the
+// admitted profile from the authority table, so widening or narrowing the
+// profile never leaves stale prose behind in the operator message.
 func unsupportedColumnTypeError(typeName string) error {
-	return fmt.Errorf("%w %q (whitelist: String, FixedString(N) with 0 < N <= 0xFFFFFF, Bool, Float32/64, [U]Int8/16/32/64)", ErrUnsupportedColumnType, typeName)
+	return fmt.Errorf("%w %q (admitted profile: %s)", ErrUnsupportedColumnType, typeName, strings.Join(admittedProfileSummary(), ", "))
 }
 
 // ValidateTableSchemaColumns validates every declared column of one table and

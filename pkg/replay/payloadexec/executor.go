@@ -23,6 +23,7 @@ import (
 	"encoding/csv"
 	"encoding/hex"
 	"fmt"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -468,48 +469,85 @@ func partitionValueString(v any) (string, error) {
 }
 
 // parseValue converts a raw CSV field to the Go type matching the declared
-// ClickHouse type. Unsupported types are rejected (default-deny, §5.3).
+// ClickHouse type. It dispatches on the shared column profile (Spec Q Q-D1) and
+// must produce exactly profile.GoType, so the legacy CSV lane and the Native
+// lane hand lthash identical value types for the same row. Unsupported types are
+// rejected (default-deny, §5.3).
 func parseValue(typeName, raw string) (any, error) {
-	columnType := classifyColumnType(typeName)
-	switch columnType.kind {
-	case columnTypeString:
+	profile, err := ResolveColumnProfile(typeName)
+	if err != nil {
+		return nil, err
+	}
+	switch profile.Family {
+	case FamilyString:
 		return raw, nil
-	case columnTypeFixedString:
-		return parseFixedString(columnType.fixedStringWidth, raw)
-	case columnTypeBool:
+	case FamilyFixedString:
+		return parseFixedString(profile.FixedStringWidth, raw)
+	case FamilyBool:
 		return strconv.ParseBool(raw)
-	case columnTypeFloat32:
+	case FamilyFloat:
+		return parseFloatValue(profile, raw)
+	case FamilyUInt:
+		return parseUintValue(profile, raw)
+	case FamilyInt:
+		return parseIntValue(profile, raw)
+	default:
+		return nil, unsupportedColumnTypeError(typeName)
+	}
+}
+
+// parseFloatValue, parseUintValue and parseIntValue narrow to the exact declared
+// width. The width comes from profile.GoType rather than from a second switch on
+// the type name, so a numeric entry added to the authority cannot parse into a
+// Go type different from the one the authority promises.
+func parseFloatValue(profile ColumnProfile, raw string) (any, error) {
+	switch profile.GoType.Kind() {
+	case reflect.Float32:
 		f, err := strconv.ParseFloat(raw, 32)
 		return float32(f), err
-	case columnTypeFloat64:
+	case reflect.Float64:
 		f, err := strconv.ParseFloat(raw, 64)
 		return f, err
-	case columnTypeUInt8:
+	default:
+		return nil, unsupportedColumnTypeError(profile.Canonical)
+	}
+}
+
+func parseUintValue(profile ColumnProfile, raw string) (any, error) {
+	switch profile.GoType.Kind() {
+	case reflect.Uint8:
 		u, err := strconv.ParseUint(raw, 10, 8)
 		return uint8(u), err
-	case columnTypeUInt16:
+	case reflect.Uint16:
 		u, err := strconv.ParseUint(raw, 10, 16)
 		return uint16(u), err
-	case columnTypeUInt32:
+	case reflect.Uint32:
 		u, err := strconv.ParseUint(raw, 10, 32)
 		return uint32(u), err
-	case columnTypeUInt64:
+	case reflect.Uint64:
 		u, err := strconv.ParseUint(raw, 10, 64)
 		return u, err
-	case columnTypeInt8:
+	default:
+		return nil, unsupportedColumnTypeError(profile.Canonical)
+	}
+}
+
+func parseIntValue(profile ColumnProfile, raw string) (any, error) {
+	switch profile.GoType.Kind() {
+	case reflect.Int8:
 		n, err := strconv.ParseInt(raw, 10, 8)
 		return int8(n), err
-	case columnTypeInt16:
+	case reflect.Int16:
 		n, err := strconv.ParseInt(raw, 10, 16)
 		return int16(n), err
-	case columnTypeInt32:
+	case reflect.Int32:
 		n, err := strconv.ParseInt(raw, 10, 32)
 		return int32(n), err
-	case columnTypeInt64:
+	case reflect.Int64:
 		n, err := strconv.ParseInt(raw, 10, 64)
 		return n, err
 	default:
-		return nil, unsupportedColumnTypeError(typeName)
+		return nil, unsupportedColumnTypeError(profile.Canonical)
 	}
 }
 

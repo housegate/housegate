@@ -276,13 +276,13 @@ func ResolveColumnProfile(typeName string) (ColumnProfile, error)
 func AdmittedColumnTypeVectors() []string
 ```
 
-- [ ] **Step 1: Move the classification into the table, unchanged**
+- [x] **Step 1: Move the classification into the table, unchanged**
 
 Create `column_profile.go` with `ColumnFamily`, `ColumnProfile`, `ResolveColumnProfile` and `AdmittedColumnTypeVectors`. Populate it with **exactly today's admitted set and nothing more**: `String`, `FixedString(N)` for `0 < N <= 0xFFFFFF`, `Bool`, `Float32/64`, `[U]Int8/16/32/64`. Carry today's `GoType` values (`string`, `[]byte`, `bool`, `float32`, `float64`, `uint8`…`uint64`, `int8`…`int64`) and today's kind tags (`kindString`, `kindBool`, `kindFloat`, `kindUint`, `kindInt`). `NativeWireType` equals `Canonical` for every entry at this point. `Elem` is nil everywhere.
 
 Keep the existing `maxFixedStringWidth` constant and the legacy FixedString spelling tolerance (surrounding whitespace, leading `+`, leading zeroes) exactly as `classifyColumnType` has it — Task 9 is the task that changes FixedString, not this one.
 
-- [ ] **Step 2: Reduce `column_types.go` to readers**
+- [x] **Step 2: Reduce `column_types.go` to readers**
 
 `classifyColumnType` becomes a private wrapper over `ResolveColumnProfile`; `SupportedColumnType`, `ValidateColumnType`, `CanonicalColumnType`, `ValidateTableSchemaColumns` and `CanonicalizeTableSchemaColumnTypes` keep their exact signatures and behaviour. `unsupportedColumnTypeError`'s whitelist text moves to a generated form so later tasks do not have to hand-edit prose in two places:
 
@@ -294,15 +294,15 @@ func unsupportedColumnTypeError(typeName string) error {
 
 `admittedProfileSummary()` renders one line per family. Task 6, 9, 14, 15 and 16 each extend the families and the message follows automatically.
 
-- [ ] **Step 3: Point `parseValue` at the profile**
+- [x] **Step 3: Point `parseValue` at the profile**
 
 `parseValue` (`executor.go:472`) switches on `profile.Family` plus the FixedString width instead of the old `columnTypeKind`. No branch changes behaviour in this task.
 
-- [ ] **Step 4: Add the authority's own unit test**
+- [x] **Step 4: Add the authority's own unit test**
 
 `column_profile_test.go` asserts, for each entry in `AdmittedColumnTypeVectors()`: `ResolveColumnProfile` succeeds; `CanonicalColumnType(v) == v` (every vector is already canonical); `GoType != nil`; `KindTag != 0`; `NativeWireType != ""`. Plus: every `ColumnFamily` constant declared in the package appears as the `Family` of at least one vector.
 
-- [ ] **Step 5: Prove nothing moved**
+- [x] **Step 5: Prove nothing moved**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/hg-specq
