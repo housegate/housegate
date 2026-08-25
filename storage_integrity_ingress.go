@@ -495,7 +495,7 @@ func backpressureClientError(table string, err error) error {
 	if errors.As(err, &backpressure) {
 		message = backpressure.Error()
 	}
-	return &chproto.ClientError{Code: chproto.CodeTooManyParts, Message: message, Err: err}
+	return &chproto.ClientError{Code: chproto.CodeTooManyParts, Message: message, Err: err, KeepSession: true}
 }
 
 // ConsumeStorageIntegrityAdmission maps a completed plugin admission into a core
