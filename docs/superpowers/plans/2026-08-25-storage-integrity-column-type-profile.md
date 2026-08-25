@@ -418,7 +418,7 @@ This is the test Spec Q Q-D1 calls "the proof that they agree", and the reason 1
 
 **Interfaces:** test-only, plus the six exported `lthash.Kind*` constants.
 
-- [ ] **Step 1: Build the sample-column registry**
+- [x] **Step 1: Build the sample-column registry**
 
 The test needs one encodable ch-go column per admitted vector. It cannot live in `payloadexec` — that would make the authority depend on `ch-go/proto`, which it deliberately does not. It lives in the test as a map, with a completeness assertion that closes the loop:
 
@@ -447,7 +447,7 @@ func TestColumnProfileHasASampleForEveryAdmittedType(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Write the four-way assertion**
+- [x] **Step 2: Write the four-way assertion**
 
 ```go
 // TestColumnProfileAgreesAcrossAllFourComponents is Spec Q Q-D1's proof. For
@@ -476,13 +476,13 @@ Assertion 4 needs the value bytes, not just acceptance. `EncodeRow`'s layout is 
 
 The Native encode helper is ~12 lines and mirrors `nativepayload`'s unexported `encodeNativePacket`: `proto.Buffer`, `PutUVarInt(uint64(proto.ClientCodeData))`, `PutString("")`, `proto.Block{Rows: 1, Columns: 1}.EncodeBlock(&buf, revision, proto.Input{{Name: "c", Data: col}})`. Do **not** export the nativepayload helper for this — the duplication is 12 lines and the alternative widens a production package's surface for a test.
 
-- [ ] **Step 3: Prove it fails against a deliberately broken authority**
+- [x] **Step 3: Prove it fails against a deliberately broken authority**
 
 Temporarily add `{Family: FamilyUInt, Canonical: "UInt128", GoType: reflect.TypeOf(proto.UInt128{}), KindTag: lthash.KindUint, NativeWireType: "UInt128"}` to the profile and add `"UInt128"` to `AdmittedColumnTypeVectors()`, but give it no sample column.
 
 Expected: `TestColumnProfileHasASampleForEveryAdmittedType` FAILS with `admitted type "UInt128" has no sample column`. Then add a sample column for it and re-run: `TestColumnProfileAgreesAcrossAllFourComponents/UInt128` FAILS at assertion 1 with `unsupported column type *proto.ColUInt128`. **Revert both edits.** This step produces no commit content; it is the demonstration that the guard bites.
 
-- [ ] **Step 4: Run**
+- [x] **Step 4: Run**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/hg-specq
@@ -652,7 +652,7 @@ case FamilyDateTime64:
 
 Both helpers return `time.Time` in UTC so the value matches what the Native lane produces (`nativeColumnValue` returns `.UTC()` for `ColDateTime`/`ColDateTime64`, and `ColDate.Time()` is already UTC). Anything else and the two lanes hash differently for the same row.
 
-- [ ] **Step 5: Add the sample columns to Task 4's registry**
+- [x] **Step 5: Add the sample columns to Task 4's registry**
 
 ```go
 "Date":                 ColDate at 2026-07-16
