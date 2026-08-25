@@ -52,6 +52,33 @@ func TestStorageIntegrityBackpressureDefaults(t *testing.T) {
 	}
 }
 
+func TestStorageIntegrity_DatabaseNamesArePinnedWithoutRuntime(t *testing.T) {
+	cfg := Default()
+	cfg.StorageIntegrity.Tables = []string{"db.t"}
+	cfg.StorageIntegrity.Runtime.Enabled = false
+	cfg.StorageIntegrity.Runtime.Backpressure.Enabled = true
+	cfg.StorageIntegrity.Runtime.Backpressure.UnsafeDatabase = "hg_unsafe_typo"
+	err := cfg.StorageIntegrity.validate(ModeServer)
+	if err == nil || !strings.Contains(err.Error(), "unsafe_database") {
+		t.Fatalf("validate = %v, want a pinned-name rejection", err)
+	}
+
+	cfg = Default()
+	cfg.StorageIntegrity.Tables = []string{"db.t"}
+	cfg.StorageIntegrity.Runtime.Backpressure.Enabled = false
+	cfg.StorageIntegrity.Runtime.Backpressure.SafeDatabase = "hg_safe_typo"
+	if err := cfg.StorageIntegrity.validate(ModeServer); err == nil ||
+		!strings.Contains(err.Error(), "safe_database") {
+		t.Fatalf("validate = %v, want a pinned-name rejection even with backpressure disabled", err)
+	}
+}
+
+func TestStorageIntegrityPromoteDatabaseIsPinned(t *testing.T) {
+	if StorageIntegrityPromoteDatabase != "hg_promote" {
+		t.Fatalf("promote database pin = %q", StorageIntegrityPromoteDatabase)
+	}
+}
+
 func TestStorageIntegrityBackpressure_RefreshTimeoutAndSnapshotTTL(t *testing.T) {
 	base := func() Config {
 		cfg := Default()
