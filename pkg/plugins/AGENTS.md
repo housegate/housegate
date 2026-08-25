@@ -19,6 +19,7 @@ pkg/plugins/
 |-- rewrite/        # per-session SQL rewriter plugin
 |-- route/          # __route__ stripper and signer
 |-- sessionstate/   # OnHello capture of the logical ClientHello database
+|-- sireserved/     # privileged SI namespace/placeholder/object-carrier guard
 |-- sistatement/    # agent-side signed SI INSERT lane and successful-USE tracking
 |-- storageintegrity/ # server-side signed SI ingress and admission
 `-- usage/          # query billing usage reporting
@@ -35,6 +36,7 @@ pkg/plugins/
 | Agent USE state | `sistatement/` | Strictly parses standalone USE candidates and commits the database only after upstream success; USE is not statement-signed and server ingress does not use this parser. |
 | Other USE routing/state | `forward/`, `rewrite/`, `../../pkg/rewriter/` | `forward.matchUse` delegates to shared fail-open `ParseUseDatabase`; `sentioRewriter` uses backend classification plus a known-physical fallback to mirror state. |
 | SI metadata cross-check | `storageintegrity/plugin.go` | Enabled ingress independently classifies INSERT/UPDATE/DELETE/ALTER/read-like text shapes and rejects backend metadata mismatches. |
+| SI operator-bypass guard | `sireserved/` | Parser-free, fail-closed scan for reserved tokens, Identifier placeholders, and local-catalog object carriers on maintenance/platform-operator sessions. |
 | DDL/DCL gates | `commitgate/` | Observers may abort with synthetic success. |
 | Raw INSERT body observation | `lthash/` | Only registered `DataPlugin`; compressed blocks are out of MVP scope. |
 
@@ -44,12 +46,13 @@ pkg/plugins/
 - Forwarded sessions keep origin-side plugins such as auth, usage, concurrency, sessionstate, credential, and metrics; rewrite, indexing usage, commitgate, and storage-integrity ingress opt out so the receiving host owns that work on its own session.
 - In agent mode, enabled materialization runs before `sistatement`, which runs before the agent signer, so both statement and query tokens bind the same final SQL. Materializer construction is startup fail-fast, while individual plugin calls remain fail-open.
 - For ordinary non-bypass queries, any configured SI table surface makes rewrite fail closed on unavailable classification or contract mismatch. Maintenance/platform sessions bypass rewrite; routed sessions, `remote()`-style peer-trusted sessions, and origin-side forwarding pivots filter it out. `IsForwardedFromPeer` is the explicit host-ownership override that keeps rewrite eligible on the receiving proxy. Only when `storage_integrity.ingress.enabled` is true is signed ingress wired after rewrite to validate and capture exact INSERT payloads; it follows the same routing/peer/forward ownership filters and no-ops unless rewrite metadata marks an SI table. With ingress disabled, ordinary SI INSERT is rejected during rewrite and the SI surface remains read-only.
+- `sireserved` is the deliberate parser-free exception for maintenance/platform-operator sessions that bypass rewrite. It ignores comments but treats literals as identifier-bearing surfaces, rejects all backslash-bearing literals/quoted identifiers and `{name:Identifier}` placeholders independent of parameter transport, and rejects the known local-catalog carrier callable family independent of arguments. It opts into forward/peer filters but returns immediately for ordinary sessions, including ordinary peers; preserve that D6 boundary.
 - Plugin packages should expose narrow constructors and package-local config structs.
 - Hook implementations should degrade consistently with the existing fail-open/fail-closed boundary for that plugin.
 
 ## ANTI-PATTERNS
 - Do not import `pkg/proxy` from a plugin; use interfaces to avoid cycles.
-- Do not re-parse general SQL in downstream plugins when rewrite metadata exists. Deliberate narrow correctness boundaries are the shared agent/ingress INSERT identity parser, agent `ParseUseDatabaseStrict`, forward's shared fail-open `ParseUseDatabase` wrapper, `sentioRewriter`'s backend-classified known-physical USE fallback, and enabled ingress's INSERT/UPDATE/DELETE/ALTER/read-like metadata cross-check. The optional lthash MVP separately uses a fail-open INSERT-target regex only to arm its observer. None rewrites SQL locally; do not broaden or fork these parsers.
+- Do not re-parse general SQL in downstream plugins when rewrite metadata exists. Deliberate narrow correctness boundaries are the shared agent/ingress INSERT identity parser, agent `ParseUseDatabaseStrict`, forward's shared fail-open `ParseUseDatabase` wrapper, `sentioRewriter`'s backend-classified known-physical USE fallback, enabled ingress's INSERT/UPDATE/DELETE/ALTER/read-like metadata cross-check, and the conservative `sireserved` operator-bypass scanner. The optional lthash MVP separately uses a fail-open INSERT-target regex only to arm its observer. None rewrites SQL locally; do not turn `sireserved` into a partial ClickHouse parser or inspect carrier arguments—the full callable-name refusal exists because constant folding defeats token-level target proofs.
 - Do not double-fire commitgate on routed, ordinary `remote()` peer-trusted, or origin-side forwarding traffic. `IsForwardedFromPeer` is the receiving-host override where commitgate must run once against the original client SQL.
 - Do not add a plugin to `build.go` without tests proving marker-interface behavior if it participates in route, peer-trust, or forward paths.
 - Do not hide new Redis requirements outside config validation.

@@ -144,7 +144,7 @@ func storageIntegrityInternalListenWarning(cfg *config.Config) string {
 		warnings = append(warnings, "storage_integrity: peer-trusted sessions arriving on internal_listen bypass storage-integrity rewrite and can address the hg_safe / hg_unsafe namespaces directly; internal_listen MUST be reachable only from trusted peer subnets")
 	}
 	if count := len(cfg.Auth.PlatformOperatorAddresses); count > 0 {
-		warnings = append(warnings, fmt.Sprintf("storage_integrity: %d platform-operator addresses use the raw-SQL bypass for SI tables [%s]; the reserved-name guard rejects every hg_safe / hg_unsafe / _hg_row_id mention, including an ordinary column with one of those names; use a direct ClickHouse connection for physical access",
+		warnings = append(warnings, fmt.Sprintf("storage_integrity: %d platform-operator addresses use the raw-SQL bypass for SI tables [%s]; the operator guard conservatively rejects every hg_safe / hg_unsafe / _hg_row_id mention (including ordinary columns and string literals), Identifier placeholders, any backslash-bearing literal or quoted identifier, and local-catalog object-carrier callables regardless of arguments; use a direct ClickHouse connection for physical access",
 			count, strings.Join(cfg.StorageIntegrity.Tables, ", ")))
 	}
 	return strings.Join(warnings, "; ")
@@ -474,20 +474,25 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		if !ok || capable.StorageIntegrityContractVersion() != rewriter.StorageIntegrityContractV1 {
 			return nil, fmt.Errorf("storage_integrity.tables requires a storage-integrity contract v1 capable SQL rewriter; refusing fail-open startup")
 		}
-		// Contract v1 proves that the backend understood the request, but it
-		// cannot distinguish engine patch builds. Verify one fixed DESCRIBE
-		// fingerprint when the concrete factory exposes a probe. Injected host
-		// factories have no separately deployable engine build, so retain them
-		// with an explicit warning instead of rejecting them.
-		if prober, ok := rwFactory.(rewriter.StorageIntegrityProbeFactory); ok {
-			if err := prober.ProbeStorageIntegrityBuild(context.Background()); err != nil {
-				return nil, err
-			}
-			log.Infow("storage-integrity rewriter build verified", "tables", len(siOptions.Tables))
-		} else {
-			log.Warnw("storage_integrity.tables: injected rewriter factory cannot be build-probed; the SI behavior of this engine is unverified",
-				"tables", len(siOptions.Tables))
+		// Contract v1 proves only that the backend understood the request; old
+		// engines can acknowledge it while missing the Spec I fail-closed
+		// behavior. Every concrete or injected factory must expose and pass the
+		// same behavioral conformance probe before an SI surface can start.
+		prober, ok := rwFactory.(rewriter.StorageIntegrityProbeFactory)
+		if !ok {
+			return nil, fmt.Errorf("storage_integrity.tables requires a SQL rewriter implementing rewriter.StorageIntegrityProbeFactory; refusing unverified startup")
 		}
+		probeTimeout := cfg.Rewriter.Timeout.Duration
+		if probeTimeout <= 0 {
+			probeTimeout = 5 * time.Second
+		}
+		probeCtx, cancelProbe := context.WithTimeout(context.Background(), probeTimeout)
+		err := prober.ProbeStorageIntegrityBuild(probeCtx)
+		cancelProbe()
+		if err != nil {
+			return nil, err
+		}
+		log.Infow("storage-integrity rewriter build verified", "tables", len(siOptions.Tables))
 	}
 
 	// Cluster: lib-built path constructs and registers Close+Start;

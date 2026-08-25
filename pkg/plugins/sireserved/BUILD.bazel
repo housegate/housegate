@@ -8,6 +8,7 @@ go_test(
         "//pkg/chproto",
         "//pkg/chsession",
         "//pkg/plugin",
+        "@com_github_clickhouse_ch_go//proto",
     ],
 )
 

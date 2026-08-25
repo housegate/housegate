@@ -34,12 +34,19 @@ func (p *Plugin) OnQuery(_ context.Context, qctx *plugin.QueryContext) error {
 	if qctx.Query != nil && qctx.Query.Body != "" {
 		sql = qctx.Query.Body
 	}
-	name, err := ReservedNamespaceViolation(sql, p.ReservedDatabases, p.ReservedRowIDColumn)
+	surfaces, err := scanSQLSurfaces(sql)
 	if err != nil {
 		return fmt.Errorf("storage-integrity guard could not scan the statement: %w", err)
 	}
+	if containsIdentifierPlaceholder(surfaces.outsideLiterals) {
+		return fmt.Errorf("storage-integrity guard refuses ClickHouse Identifier placeholders on privileged proxy-bypass sessions; use a direct ClickHouse connection for physical access")
+	}
+	name := reservedNamespaceViolationOnSurface(surfaces.withLiterals, p.ReservedDatabases, p.ReservedRowIDColumn)
 	if name != "" {
 		return fmt.Errorf("storage-integrity reserved name %q is not addressable through the proxy (the operator guard rejects any mention, including an ordinary column with that name); use a direct ClickHouse connection for physical access", name)
+	}
+	if carrier := objectCarrierCallable(surfaces.outsideLiterals); carrier != "" {
+		return fmt.Errorf("storage-integrity object-carrier callable %q is not accepted on privileged proxy-bypass sessions; use a direct ClickHouse connection for physical access", carrier)
 	}
 	return nil
 }
@@ -58,14 +65,21 @@ func (*Plugin) RunOnPeerTrust() bool { return true }
 func (*Plugin) RejectUndecodableQuery() bool { return true }
 
 // ReservedNamespaceViolation reports the first reserved name mentioned
-// outside single-quoted string literals and comments. Mention is deliberately
-// the rule: attempting to distinguish SQL roles here would create a partial
-// ClickHouse parser whose gaps become bypasses on privileged sessions.
+// outside comments, including inside string literals. ClickHouse table
+// functions such as merge() and remote() interpret string arguments as
+// database/table identifiers, so literal contents are part of the protected
+// surface. Mention is deliberately the rule: attempting to distinguish SQL
+// roles here would create a partial ClickHouse parser whose gaps become
+// bypasses on privileged sessions.
 func ReservedNamespaceViolation(sql string, databases []string, rowIDColumn string) (string, error) {
-	scrubbed, err := stripLiteralsAndComments(sql)
+	surfaces, err := scanSQLSurfaces(sql)
 	if err != nil {
 		return "", err
 	}
+	return reservedNamespaceViolationOnSurface(surfaces.withLiterals, databases, rowIDColumn), nil
+}
+
+func reservedNamespaceViolationOnSurface(surface string, databases []string, rowIDColumn string) string {
 	names := make([]string, 0, len(databases)+1)
 	for _, database := range databases {
 		if database != "" {
@@ -75,84 +89,166 @@ func ReservedNamespaceViolation(sql string, databases []string, rowIDColumn stri
 	if rowIDColumn != "" {
 		names = append(names, rowIDColumn)
 	}
-	for _, identifier := range identifiers(scrubbed) {
+	for _, identifier := range identifiers(surface) {
 		for _, name := range names {
 			if strings.EqualFold(identifier, name) {
-				return name, nil
+				return name
 			}
 		}
 	}
-	return "", nil
+	return ""
 }
 
-// stripLiteralsAndComments blanks single-quoted strings and every ClickHouse
-// comment form. Quoted identifiers are unquoted rather than blanked so a
-// reserved name cannot hide inside backticks or double quotes.
-func stripLiteralsAndComments(sql string) (string, error) {
-	var out strings.Builder
-	out.Grow(len(sql))
+type sqlSurfaces struct {
+	// outsideLiterals keeps executable SQL but blanks comments and string
+	// literals. It is the only surface used for placeholder syntax.
+	outsideLiterals string
+	// withLiterals additionally keeps string contents because ClickHouse table
+	// functions interpret some literal arguments as identifiers.
+	withLiterals string
+}
+
+// scanSQLSurfaces ignores every ClickHouse comment form, retains quoted
+// identifiers, and produces separate views with/without string contents. Any
+// backslash-bearing string is refused: interpreting ClickHouse escape forms
+// here would create an encoding bypass such as hg\x5Fsafe.
+func scanSQLSurfaces(sql string) (sqlSurfaces, error) {
+	var outside, withLiterals strings.Builder
+	outside.Grow(len(sql))
+	withLiterals.Grow(len(sql))
 
 	for i := 0; i < len(sql); {
 		switch {
 		case sql[i] == '\'':
-			out.WriteByte(' ')
-			next, err := consumeStringLiteral(sql, i)
+			outside.WriteByte(' ')
+			withLiterals.WriteByte(' ')
+			next, literal, err := consumeStringLiteral(sql, i)
 			if err != nil {
-				return "", err
+				return sqlSurfaces{}, err
 			}
+			withLiterals.WriteString(literal)
+			withLiterals.WriteByte(' ')
 			i = next
 
 		case hasPrefixAt(sql, i, "--") || hasPrefixAt(sql, i, "//") || sql[i] == '#':
-			out.WriteByte(' ')
+			outside.WriteByte(' ')
+			withLiterals.WriteByte(' ')
 			i = consumeLineComment(sql, i)
 
 		case hasPrefixAt(sql, i, "/*"):
-			out.WriteByte(' ')
+			outside.WriteByte(' ')
+			withLiterals.WriteByte(' ')
 			next, err := consumeBlockComment(sql, i)
 			if err != nil {
-				return "", err
+				return sqlSurfaces{}, err
 			}
 			i = next
 
 		case sql[i] == '`' || sql[i] == '"':
-			out.WriteByte(' ')
+			outside.WriteByte(' ')
+			withLiterals.WriteByte(' ')
 			next, identifier, err := consumeQuotedIdentifier(sql, i, sql[i])
 			if err != nil {
-				return "", err
+				return sqlSurfaces{}, err
 			}
-			out.WriteString(identifier)
-			out.WriteByte(' ')
+			outside.WriteString(identifier)
+			outside.WriteByte(' ')
+			withLiterals.WriteString(identifier)
+			withLiterals.WriteByte(' ')
 			i = next
 
 		default:
-			out.WriteByte(sql[i])
+			outside.WriteByte(sql[i])
+			withLiterals.WriteByte(sql[i])
 			i++
 		}
 	}
-	return out.String(), nil
+	return sqlSurfaces{outsideLiterals: outside.String(), withLiterals: withLiterals.String()}, nil
 }
 
-func consumeStringLiteral(sql string, start int) (int, error) {
+func consumeStringLiteral(sql string, start int) (int, string, error) {
+	var literal strings.Builder
 	for i := start + 1; i < len(sql); {
 		switch sql[i] {
 		case '\\':
-			// ClickHouse consumes a backslash and the following byte as one
-			// escape. This ordering is what makes 'a\\' terminate correctly.
-			if i+1 >= len(sql) {
-				return 0, fmt.Errorf("unterminated single-quoted string literal")
-			}
-			i += 2
+			return 0, "", fmt.Errorf("backslash-bearing single-quoted string literal is not accepted by the storage-integrity guard")
 		case '\'':
 			if i+1 < len(sql) && sql[i+1] == '\'' {
+				literal.WriteByte(' ')
 				i += 2
 				continue
 			}
-			return i + 1, nil
+			return i + 1, literal.String(), nil
 		default:
+			literal.WriteByte(sql[i])
 			i++
 		}
 	}
-	return 0, fmt.Errorf("unterminated single-quoted string literal")
+	return 0, "", fmt.Errorf("unterminated single-quoted string literal")
+}
+
+func containsIdentifierPlaceholder(sql string) bool {
+	for offset := 0; offset < len(sql); {
+		open := strings.IndexByte(sql[offset:], '{')
+		if open < 0 {
+			return false
+		}
+		open += offset
+		close := strings.IndexByte(sql[open+1:], '}')
+		if close < 0 {
+			return false
+		}
+		close += open + 1
+		name, parameterType, ok := strings.Cut(sql[open+1:close], ":")
+		if ok && strings.TrimSpace(name) != "" && strings.EqualFold(strings.TrimSpace(parameterType), "Identifier") {
+			return true
+		}
+		offset = close + 1
+	}
+	return false
+}
+
+// objectCarrierCallable returns the first callable whose arguments can carry a
+// local ClickHouse database/table identity outside ordinary table syntax. The
+// list mirrors rewriter-go's Spec G namespace-reference authority and adds the
+// equivalent table-engine/dictionary-source callables. Arguments are
+// deliberately not interpreted: ClickHouse constant-folds expressions such as
+// concat('hg_', 'safe'), so any attempt to prove a carrier's target safe with a
+// token scanner would be bypassable.
+func objectCarrierCallable(sql string) string {
+	for i := 0; i < len(sql); {
+		if !isIdentifierByte(sql[i]) {
+			i++
+			continue
+		}
+		start := i
+		for i < len(sql) && isIdentifierByte(sql[i]) {
+			i++
+		}
+		name := sql[start:i]
+		call := i
+		for call < len(sql) && (sql[call] == ' ' || sql[call] == '\t' || sql[call] == '\r' || sql[call] == '\n') {
+			call++
+		}
+		if call < len(sql) && sql[call] == '(' && isObjectCarrierName(name) {
+			return name
+		}
+	}
+	return ""
+}
+
+func isObjectCarrierName(name string) bool {
+	lower := strings.ToLower(name)
+	switch lower {
+	case "remote", "remotesecure", "cluster", "clusterallreplicas",
+		"merge", "loop", "dictionary",
+		"timeseriesdata", "timeseriestags", "timeseriesmetrics", "timeseriesselector",
+		"prometheusquery", "prometheusqueryrange",
+		"distributed", "buffer", "clickhouse":
+		return true
+	default:
+		return strings.HasPrefix(lower, "mergetree")
+	}
 }
 
 func consumeLineComment(sql string, start int) int {

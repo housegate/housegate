@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ClickHouse/ch-go/proto"
+
 	"github.com/housegate/housegate/pkg/chproto"
 	"github.com/housegate/housegate/pkg/chsession"
 	"github.com/housegate/housegate/pkg/plugin"
@@ -86,6 +88,255 @@ func TestOnQuery_RefusesOnForwardedOperatorSession(t *testing.T) {
 	}
 }
 
+func TestOnQuery_OperatorBypassRefusesIdentifierPlaceholders(t *testing.T) {
+	if !proto.FeatureParameters.In(54459) || proto.FeatureParameters.In(54458) {
+		t.Fatal("test revisions no longer straddle ClickHouse FeatureParameters")
+	}
+
+	for _, tc := range []struct {
+		name string
+		set  func(*chsession.SessionState)
+	}{
+		{
+			name: "maintenance",
+			set:  func(state *chsession.SessionState) { state.SetMaintenance(true) },
+		},
+		{
+			name: "platform operator",
+			set:  func(state *chsession.SessionState) { state.SetPlatformOperator(true) },
+		},
+		{
+			name: "forwarded maintenance",
+			set: func(state *chsession.SessionState) {
+				state.SetMaintenance(true)
+				state.SetForwarding(true)
+			},
+		},
+		{
+			name: "peer-trusted platform operator",
+			set: func(state *chsession.SessionState) {
+				state.SetPlatformOperator(true)
+				state.SetPeerTrust("10.0.0.7:9000")
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &Plugin{ReservedDatabases: []string{"hg_safe", "hg_unsafe"}, ReservedRowIDColumn: "_hg_row_id"}
+			sess := newSessionForTest(t, 20)
+			sess.State().ClientRevision = 54459
+			tc.set(sess.State())
+			const sql = "SELECT * FROM {db:Identifier}.db1__t"
+			qctx := &plugin.QueryContext{
+				Session:     sess,
+				OriginalSQL: sql,
+				Query: &chproto.Query{
+					Body:       sql,
+					Parameters: []proto.Parameter{{Key: "db", Value: "hg_safe"}},
+				},
+			}
+			chain := &plugin.PluginChain{QueryPlugins: []plugin.QueryPlugin{p}}
+			err := chain.OnQuery(context.Background(), qctx)
+			if err == nil || !strings.Contains(err.Error(), "Identifier placeholder") {
+				t.Fatalf("privileged Identifier placeholder must be refused, err=%v", err)
+			}
+		})
+	}
+}
+
+func TestOnQuery_IdentifierPlaceholderTransportAndDecoyRules(t *testing.T) {
+	p := &Plugin{ReservedDatabases: []string{"hg_safe", "hg_unsafe"}, ReservedRowIDColumn: "_hg_row_id"}
+
+	for _, tc := range []struct {
+		name     string
+		revision int
+		query    *chproto.Query
+		wantErr  bool
+	}{
+		{
+			name:     "serialized param setting transport",
+			revision: 54458,
+			query: &chproto.Query{
+				Body:     "SELECT * FROM {db:Identifier}.db1__t",
+				Settings: []proto.Setting{{Key: "param_db", Value: "hg_safe"}},
+			},
+			wantErr: true,
+		},
+		{
+			name:     "old numeric setting transport is conservatively refused",
+			revision: 54428,
+			query: &chproto.Query{
+				Body:        "SELECT * FROM {db:Identifier}.db1__t",
+				OldSettings: []chproto.OldSetting{{Key: "param_db", Value: 1}},
+			},
+			wantErr: true,
+		},
+		{
+			name:     "String placeholder is harmless",
+			revision: 54459,
+			query: &chproto.Query{
+				Body:       "SELECT {value:String}",
+				Parameters: []proto.Parameter{{Key: "value", Value: "hg_safe"}},
+			},
+		},
+		{
+			name:     "Identifier-shaped text in literal and comments is harmless",
+			revision: 54459,
+			query: &chproto.Query{
+				Body:       "SELECT '{db:Identifier}' AS s /* {other:Identifier} */ -- {last:Identifier}\n",
+				Parameters: []proto.Parameter{{Key: "db", Value: "hg_safe"}},
+			},
+		},
+		{
+			name:     "literal and comment cannot hide a real placeholder",
+			revision: 54459,
+			query: &chproto.Query{
+				Body:       "SELECT '{fake:Identifier}', * FROM {db:Identifier}.db1__t /* {other:Identifier} */",
+				Parameters: []proto.Parameter{{Key: "db", Value: "hg_safe"}},
+			},
+			wantErr: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sess := newSessionForTest(t, 21)
+			sess.State().ClientRevision = tc.revision
+			sess.State().SetMaintenance(true)
+			qctx := &plugin.QueryContext{Session: sess, OriginalSQL: tc.query.Body, Query: tc.query}
+			err := p.OnQuery(context.Background(), qctx)
+			if tc.wantErr && (err == nil || !strings.Contains(err.Error(), "Identifier placeholder")) {
+				t.Fatalf("Identifier placeholder must be refused, err=%v", err)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("harmless parameter syntax must pass: %v", err)
+			}
+		})
+	}
+}
+
+func TestOnQuery_IdentifierPlaceholderLeavesOrdinaryPeerBypassAlone(t *testing.T) {
+	p := &Plugin{ReservedDatabases: []string{"hg_safe", "hg_unsafe"}, ReservedRowIDColumn: "_hg_row_id"}
+	for _, tc := range []struct {
+		name string
+		set  func(*chsession.SessionState)
+	}{
+		{name: "ordinary", set: func(*chsession.SessionState) {}},
+		{name: "ordinary peer", set: func(state *chsession.SessionState) { state.SetPeerTrust("10.0.0.7:9000") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sess := newSessionForTest(t, 22)
+			sess.State().ClientRevision = 54459
+			tc.set(sess.State())
+			const sql = "SELECT * FROM {db:Identifier}.db1__t"
+			qctx := &plugin.QueryContext{Session: sess, OriginalSQL: sql, Query: &chproto.Query{
+				Body: sql, Parameters: []proto.Parameter{{Key: "db", Value: "hg_safe"}},
+			}}
+			chain := &plugin.PluginChain{QueryPlugins: []plugin.QueryPlugin{p}}
+			if err := chain.OnQuery(context.Background(), qctx); err != nil {
+				t.Fatalf("non-operator D6 peer behavior must remain unchanged: %v", err)
+			}
+		})
+	}
+}
+
+func TestOnQuery_OperatorBypassRefusesLiteralIdentifierChannels(t *testing.T) {
+	p := &Plugin{ReservedDatabases: []string{"hg_safe", "hg_unsafe"}, ReservedRowIDColumn: "_hg_row_id"}
+	for _, tc := range []struct {
+		name string
+		set  func(*chsession.SessionState)
+		sql  string
+		want string
+	}{
+		{
+			name: "maintenance merge database literal",
+			set:  func(state *chsession.SessionState) { state.SetMaintenance(true) },
+			sql:  "SELECT * FROM merge('hg_safe', '^db1__t$')",
+			want: "hg_safe",
+		},
+		{
+			name: "platform remote table literal",
+			set:  func(state *chsession.SessionState) { state.SetPlatformOperator(true) },
+			sql:  "SELECT * FROM remote('127.0.0.1:9000', 'hg_unsafe.db1__t')",
+			want: "hg_unsafe",
+		},
+		{
+			name: "forwarded maintenance remote table literal",
+			set: func(state *chsession.SessionState) {
+				state.SetMaintenance(true)
+				state.SetForwarding(true)
+			},
+			sql:  "SELECT * FROM remote('127.0.0.1:9000', 'hg_safe.db1__t')",
+			want: "hg_safe",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sess := newSessionForTest(t, 23)
+			tc.set(sess.State())
+			qctx := &plugin.QueryContext{Session: sess, OriginalSQL: tc.sql, Query: &chproto.Query{Body: tc.sql}}
+			chain := &plugin.PluginChain{QueryPlugins: []plugin.QueryPlugin{p}}
+			err := chain.OnQuery(context.Background(), qctx)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("literal identifier channel must be refused with %q, err=%v", tc.want, err)
+			}
+		})
+	}
+}
+
+func TestOnQuery_OperatorBypassRefusesObjectCarrierCallables(t *testing.T) {
+	p := &Plugin{ReservedDatabases: []string{"hg_safe", "hg_unsafe"}, ReservedRowIDColumn: "_hg_row_id"}
+	for _, tc := range []struct {
+		name    string
+		sql     string
+		carrier string
+	}{
+		{"remote computed target", "SELECT * FROM remote('host', concat('hg_', 'safe', '.db1__t'))", "remote"},
+		{"remoteSecure", "SELECT * FROM remoteSecure('host', 'other.u')", "remoteSecure"},
+		{"cluster computed target", "SELECT * FROM cluster('c', concat('hg_', 'safe'), 'db1__t')", "cluster"},
+		{"clusterAllReplicas", "SELECT * FROM clusterAllReplicas('c', 'other', 'u')", "clusterAllReplicas"},
+		{"merge computed target", "SELECT * FROM merge(concat('hg_', 'safe'), '^db1__t$')", "merge"},
+		{"loop", "SELECT * FROM loop('other.u')", "loop"},
+		{"dictionary", "SELECT * FROM dictionary('other.dict')", "dictionary"},
+		{"timeSeriesData", "SELECT * FROM timeSeriesData(other.ts)", "timeSeriesData"},
+		{"timeSeriesTags", "SELECT * FROM timeSeriesTags(other.ts)", "timeSeriesTags"},
+		{"timeSeriesMetrics", "SELECT * FROM timeSeriesMetrics(other.ts)", "timeSeriesMetrics"},
+		{"timeSeriesSelector", "SELECT * FROM timeSeriesSelector(other.ts, 'x', 0, 1)", "timeSeriesSelector"},
+		{"prometheusQuery", "SELECT * FROM prometheusQuery(other.ts, 'x', 1)", "prometheusQuery"},
+		{"prometheusQueryRange", "SELECT * FROM prometheusQueryRange(other.ts, 'x', 1, 2, 3)", "prometheusQueryRange"},
+		{"mergeTree prefix", "SELECT * FROM mergeTreeCodecBlockCounts(concat('hg_', 'safe'), 'db1__t')", "mergeTreeCodecBlockCounts"},
+		{"Remote table engine", "CREATE TABLE other.x (a UInt64) ENGINE = Remote('host', 'other', 'u')", "Remote"},
+		{"Distributed table engine", "CREATE TABLE other.x (a UInt64) ENGINE = Distributed('c', 'other', 'u')", "Distributed"},
+		{"Merge table engine", "CREATE TABLE other.x (a UInt64) ENGINE = Merge('other', '^u$')", "Merge"},
+		{"Buffer table engine", "CREATE TABLE other.x (a UInt64) ENGINE = Buffer('other', 'u', 1, 1, 1, 1, 1, 1, 1)", "Buffer"},
+		{"dictionary CLICKHOUSE source", "CREATE DICTIONARY other.d (a UInt64) PRIMARY KEY a SOURCE(CLICKHOUSE(DB 'other' TABLE 'u'))", "CLICKHOUSE"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sess := newSessionForTest(t, 24)
+			sess.State().SetMaintenance(true)
+			qctx := &plugin.QueryContext{Session: sess, OriginalSQL: tc.sql, Query: &chproto.Query{Body: tc.sql}}
+			err := p.OnQuery(context.Background(), qctx)
+			if err == nil || !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(tc.carrier)) {
+				t.Fatalf("object-carrier callable %q must be refused, err=%v", tc.carrier, err)
+			}
+		})
+	}
+}
+
+func TestOnQuery_ObjectCarrierScanAvoidsNonCallableFalsePositives(t *testing.T) {
+	p := &Plugin{ReservedDatabases: []string{"hg_safe", "hg_unsafe"}, ReservedRowIDColumn: "_hg_row_id"}
+	for _, sql := range []string{
+		"SELECT remote, cluster, merge FROM ordinary.t",
+		"SELECT 'remote(other.u)'",
+		"SELECT 1 /* cluster('c', 'other', 'u') */",
+		"SELECT myRemote('other.u')",
+		"SELECT concat('hg_', 'safe')",
+	} {
+		sess := newSessionForTest(t, 25)
+		sess.State().SetMaintenance(true)
+		qctx := &plugin.QueryContext{Session: sess, OriginalSQL: sql, Query: &chproto.Query{Body: sql}}
+		if err := p.OnQuery(context.Background(), qctx); err != nil {
+			t.Fatalf("non-carrier SQL %q must pass: %v", sql, err)
+		}
+	}
+}
+
 func TestOnQuery_LeavesOrdinaryAndNonOperatorSessionsAlone(t *testing.T) {
 	p := &Plugin{ReservedDatabases: []string{"hg_safe"}, ReservedRowIDColumn: "_hg_row_id"}
 
@@ -153,17 +404,16 @@ func TestReservedNamespaceViolation_LiteralsAndCommentsAreNotMentions(t *testing
 	dbs := []string{"hg_safe", "hg_unsafe"}
 
 	for _, tc := range []struct{ name, sql string }{
-		{"single-quoted literal", "SELECT 'hg_safe' AS s FROM ordinary.t"},
-		{"escaped quote", `SELECT 'it''s hg_safe' AS s FROM ordinary.t`},
-		{"backslash-escaped quote", `SELECT 'a\' hg_safe b' AS s FROM ordinary.t`},
+		{"ordinary single-quoted literal", "SELECT 'ordinary' AS s FROM ordinary.t"},
 		{"line comment", "SELECT a FROM ordinary.t -- hg_safe"},
 		{"hash comment", "SELECT a FROM ordinary.t # hg_safe"},
 		{"slash comment", "SELECT a FROM ordinary.t // hg_safe"},
 		{"block comment", "SELECT a FROM /* hg_safe */ ordinary.t"},
 		{"nested block comment", "SELECT a FROM /* x /* hg_safe */ y */ ordinary.t"},
-		{"rid literal", "SELECT '_hg_row_id' AS s FROM ordinary.t"},
 		{"prefix", "SELECT * FROM hg_safe_backup.t"},
 		{"suffix", "SELECT * FROM my_hg_safe.t"},
+		{"literal prefix", "SELECT 'hg_safe_backup'"},
+		{"literal suffix", "SELECT 'my_hg_safe'"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := ReservedNamespaceViolation(tc.sql, dbs, rid)
@@ -177,13 +427,38 @@ func TestReservedNamespaceViolation_LiteralsAndCommentsAreNotMentions(t *testing
 	}
 }
 
-func TestReservedNamespaceViolation_EscapedBackslashDoesNotSwallowStatement(t *testing.T) {
-	got, err := ReservedNamespaceViolation(`SELECT 'a\\', hg_safe FROM ordinary.t`, []string{"hg_safe"}, "_hg_row_id")
-	if err != nil {
-		t.Fatalf("this literal is terminated: %v", err)
+func TestReservedNamespaceViolation_StringLiteralIdentifierTokensAreMentions(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{"database literal", "SELECT 'hg_safe'", "hg_safe"},
+		{"case-insensitive database literal", "SELECT 'HG_UNSAFE.db1__t'", "hg_unsafe"},
+		{"reserved row id literal", "SELECT '_hg_row_id'", "_hg_row_id"},
+		{"doubled quote does not hide token", "SELECT 'it''s hg_safe'", "hg_safe"},
+		{"merge identifier channel", "SELECT * FROM merge('hg_safe', '^db1__t$')", "hg_safe"},
+		{"remote identifier channel", "SELECT * FROM remote('127.0.0.1:9000', 'hg_unsafe.db1__t')", "hg_unsafe"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ReservedNamespaceViolation(tc.sql, []string{"hg_safe", "hg_unsafe"}, "_hg_row_id")
+			if err != nil || got != tc.want {
+				t.Fatalf("literal identifier token = %q, %v; want %q", got, err, tc.want)
+			}
+		})
 	}
-	if got != "hg_safe" {
-		t.Fatalf("the mention after the literal must be seen, got %q", got)
+}
+
+func TestReservedNamespaceViolation_BackslashBearingLiteralIsRefused(t *testing.T) {
+	for _, sql := range []string{
+		`SELECT 'ordinary\\path'`,
+		`SELECT * FROM merge('hg\x5Fsafe', '^db1__t$')`,
+		`SELECT '\x5Fhg\x5Frow\x5Fid'`,
+		`SELECT 'a\' hg_safe b'`,
+	} {
+		if _, err := ReservedNamespaceViolation(sql, []string{"hg_safe", "hg_unsafe"}, "_hg_row_id"); err == nil || !strings.Contains(err.Error(), "backslash") {
+			t.Fatalf("backslash-bearing literal must be refused: sql=%q err=%v", sql, err)
+		}
 	}
 }
 

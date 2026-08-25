@@ -56,10 +56,17 @@ func (siCapableStubRewriterFactory) StorageIntegrityContractVersion() rewriterpb
 
 type siProbeStubRewriterFactory struct {
 	siCapableStubRewriterFactory
-	err error
+	err              error
+	deadlineObserved *bool
 }
 
-func (f siProbeStubRewriterFactory) ProbeStorageIntegrityBuild(context.Context) error { return f.err }
+func (f siProbeStubRewriterFactory) ProbeStorageIntegrityBuild(ctx context.Context) error {
+	if f.deadlineObserved != nil {
+		_, ok := ctx.Deadline()
+		*f.deadlineObserved = ok
+	}
+	return f.err
+}
 
 type stubRewriter struct{}
 
@@ -141,8 +148,10 @@ func TestStorageIntegrityInternalListenWarning(t *testing.T) {
 	cfg.InternalListen = ""
 	cfg.Auth.PlatformOperatorAddresses = []string{"0x1", "0x2"}
 	got = storageIntegrityInternalListenWarning(cfg)
-	if !strings.Contains(got, "2 platform-operator") || !strings.Contains(got, "tenant.events") || !strings.Contains(got, "ordinary column") {
-		t.Fatalf("operator warning = %q, want count, protected SI table, and the mention-rule false positive", got)
+	for _, want := range []string{"2 platform-operator", "tenant.events", "ordinary columns", "string literals", "Identifier placeholders", "backslash-bearing", "object-carrier", "regardless of arguments", "direct ClickHouse"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("operator warning = %q, want %q from the conservative false-positive boundary", got, want)
+		}
 	}
 }
 
@@ -168,7 +177,7 @@ func TestBuildServer_StorageIntegrityReservedGuardWiring(t *testing.T) {
 	guarded, err := buildServer(Options{
 		Config:       withSI,
 		NetworkState: network.NewInMemoryNetworkState(),
-		Rewriter:     siCapableStubRewriterFactory{},
+		Rewriter:     siProbeStubRewriterFactory{},
 	}, nil)
 	if err != nil {
 		t.Fatalf("build with SI: %v", err)
@@ -215,7 +224,7 @@ func TestBuildServer_UnsafeLatestDefaultRequiresReadState(t *testing.T) {
 	bs, err := buildServer(Options{
 		Config:                    cfg,
 		NetworkState:              network.NewInMemoryNetworkState(),
-		Rewriter:                  siCapableStubRewriterFactory{},
+		Rewriter:                  siProbeStubRewriterFactory{},
 		StorageIntegrityReadState: &buildFakeReadState{},
 	}, nil)
 	if err != nil {
@@ -273,6 +282,23 @@ func TestBuildServer_ConfiguredSISurfaceRejectsUnawareInjectedFactory(t *testing
 	}
 }
 
+func TestBuildServer_ConfiguredSISurfaceRejectsUnprobedCapableInjectedFactory(t *testing.T) {
+	cfg := minimalServerCfg(t)
+	cfg.StorageIntegrity.Tables = []string{"tenant.events"}
+
+	bs, err := buildServer(Options{
+		Config:       cfg,
+		NetworkState: network.NewInMemoryNetworkState(),
+		Rewriter:     siCapableStubRewriterFactory{},
+	}, nil)
+	if bs != nil {
+		defer bs.teardown()
+	}
+	if err == nil || !strings.Contains(err.Error(), "StorageIntegrityProbeFactory") {
+		t.Fatalf("err = %v, want unprobed capable factory rejection", err)
+	}
+}
+
 func TestBuildServer_RefusesStartupOnStorageIntegrityProbeMismatch(t *testing.T) {
 	cfg := minimalServerCfg(t)
 	cfg.StorageIntegrity.Tables = []string{"tenant.events"}
@@ -288,13 +314,17 @@ func TestBuildServer_RefusesStartupOnStorageIntegrityProbeMismatch(t *testing.T)
 		t.Fatalf("err = %v, want the probe refusal", err)
 	}
 
+	deadlineObserved := false
 	bs, err := buildServer(Options{
 		Config:       cfg,
 		NetworkState: network.NewInMemoryNetworkState(),
-		Rewriter:     siProbeStubRewriterFactory{},
+		Rewriter:     siProbeStubRewriterFactory{deadlineObserved: &deadlineObserved},
 	}, nil)
 	if err != nil {
 		t.Fatalf("a passing probe must start: %v", err)
+	}
+	if !deadlineObserved {
+		t.Fatal("the startup gate must give injected probers a bounded context")
 	}
 	bs.teardown()
 }
@@ -1164,7 +1194,7 @@ func TestBuildServer_StorageIntegrityRuntimeAutoWiresArbiterStatusQuerier(t *tes
 	bs, err := buildServer(Options{
 		Config:       cfg,
 		NetworkState: network.NewInMemoryNetworkState(),
-		Rewriter:     siCapableStubRewriterFactory{},
+		Rewriter:     siProbeStubRewriterFactory{},
 		StorageIntegrityRuntime: StorageIntegrityRuntimeOptions{
 			ArbiterIngressClient: &rootArbiterIngressClient{},
 			SourcePreparer:       &rootRecordingPreparer{},
@@ -1190,7 +1220,7 @@ func TestBuildServer_StorageIntegrityRuntimeRejectsManualConsumer(t *testing.T) 
 	_, err = buildServer(Options{
 		Config:                            cfg,
 		NetworkState:                      network.NewInMemoryNetworkState(),
-		Rewriter:                          siCapableStubRewriterFactory{},
+		Rewriter:                          siProbeStubRewriterFactory{},
 		StorageIntegrityAdmissionConsumer: &recordingAdmissionConsumer{},
 		StorageIntegrityRuntime: StorageIntegrityRuntimeOptions{
 			StatementSubmitter: &rootRecordingSubmitter{},
