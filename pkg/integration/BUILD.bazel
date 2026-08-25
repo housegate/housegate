@@ -31,6 +31,7 @@ go_test(
         "sessionstate_test.go",
         "single_upstream_test.go",
         "smoke_test.go",
+        "storage_backpressure_bounded_test.go",
         "storage_backpressure_test.go",
         "storage_integrity_agent_test.go",
         "storage_integrity_read_test.go",
