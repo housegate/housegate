@@ -76,6 +76,13 @@ func TestStorageIntegrityRead_SafeAndUnsafeLatest(t *testing.T) {
 	}
 
 	port := &siReadStateStub{parts: map[string][]string{}}
+	// The ingress lane needs an allowed signer to pass Config.Validate; reuse
+	// the same key the envelope-v2 agent test signs with rather than weakening
+	// validation. No statement is signed here - this test only reads.
+	ingressSigner, err := auth.NewRelaySigner(authTestKey1)
+	if err != nil {
+		t.Fatal(err)
+	}
 	proxy := testenv.StartServerProxy(t, chEnv.Addr,
 		testenv.WithExtraDatabases("db1"),
 		testenv.WithStorageIntegrityReadState(port),
@@ -85,7 +92,20 @@ func TestStorageIntegrityRead_SafeAndUnsafeLatest(t *testing.T) {
 			cfg.Rewriter.PhysicalDatabase = phys
 			cfg.StorageIntegrity.Tables = []string{"db1.t"}
 			cfg.StorageIntegrity.Read.DefaultMode = string(rewriter.ReadModeSafe)
+			// Spec P D3: the read-mode surface must behave identically with the
+			// signed ingress configured. Without this the only read-mode
+			// integration test runs on a deployment where RejectUserSettings
+			// is never reached, so SQL_x_read_mode's owned-key membership
+			// (Spec K D6) is never exercised end to end.
+			cfg.StorageIntegrity.Ingress.Enabled = true
+			cfg.StorageIntegrity.Ingress.NetworkID = "itest-net-read"
+			cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{ingressSigner.Address()}
 		}),
+		func(_ *config.Config, opts *housegate.Options) {
+			// An enabled ingress needs a consumer; this test issues no signed
+			// statement, so nothing is ever handed to it.
+			opts.StorageIntegrityAdmissionConsumer = &capturingConsumer{}
+		},
 	)
 	conn := openConn(t, proxy.Addr)
 	count := func(mode string) (uint64, error) {
