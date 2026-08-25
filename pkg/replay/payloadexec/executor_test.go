@@ -2,6 +2,7 @@ package payloadexec
 
 import (
 	"context"
+	"errors"
 	"math"
 	"strings"
 	"testing"
@@ -176,37 +177,44 @@ func TestPartitionIDForRow(t *testing.T) {
 	}
 }
 
+// TestPartitionIDForRowTypedValueGoldenMatrix pins the non-temporal partition
+// renderings. Each case now carries the declared column type its value belongs
+// to, because PartitionIDForRow resolves the partition column against the
+// column-type authority before rendering (Spec Q Q-D1); the uint/int cases keep
+// their platform-width Go values under the 64-bit declaration they would arrive
+// as.
 func TestPartitionIDForRowTypedValueGoldenMatrix(t *testing.T) {
 	tests := []struct {
-		name  string
-		value any
-		want  string
+		name       string
+		columnType string
+		value      any
+		want       string
 	}{
-		{name: "string", value: "eu", want: "p_eu"},
-		{name: "bytes", value: []byte("eu"), want: "p_eu"},
-		{name: "bool", value: true, want: "p_true"},
-		{name: "uint8", value: uint8(8), want: "p_8"},
-		{name: "uint16", value: uint16(16), want: "p_16"},
-		{name: "uint32", value: uint32(32), want: "p_32"},
-		{name: "uint64", value: uint64(64), want: "p_64"},
-		{name: "uint", value: uint(65), want: "p_65"},
-		{name: "int8", value: int8(-8), want: "p_-8"},
-		{name: "int16", value: int16(-16), want: "p_-16"},
-		{name: "int32", value: int32(-32), want: "p_-32"},
-		{name: "int64", value: int64(-64), want: "p_-64"},
-		{name: "int", value: int(-65), want: "p_-65"},
-		{name: "float32", value: float32(1.5), want: "p_1.5"},
-		{name: "float64", value: float64(2.5), want: "p_2.5"},
-		{name: "float32 negative zero", value: math.Float32frombits(1 << 31), want: "p_0"},
-		{name: "float64 negative zero", value: math.Float64frombits(1 << 63), want: "p_0"},
-		{name: "float64 signaling nan", value: math.Float64frombits(0x7ff0000000000001), want: "p_NaN"},
-		{name: "float64 quiet nan", value: math.Float64frombits(0x7ff8000000000002), want: "p_NaN"},
+		{name: "string", columnType: "String", value: "eu", want: "p_eu"},
+		{name: "bytes", columnType: "FixedString(32)", value: []byte("eu"), want: "p_eu"},
+		{name: "bool", columnType: "Bool", value: true, want: "p_true"},
+		{name: "uint8", columnType: "UInt8", value: uint8(8), want: "p_8"},
+		{name: "uint16", columnType: "UInt16", value: uint16(16), want: "p_16"},
+		{name: "uint32", columnType: "UInt32", value: uint32(32), want: "p_32"},
+		{name: "uint64", columnType: "UInt64", value: uint64(64), want: "p_64"},
+		{name: "uint", columnType: "UInt64", value: uint(65), want: "p_65"},
+		{name: "int8", columnType: "Int8", value: int8(-8), want: "p_-8"},
+		{name: "int16", columnType: "Int16", value: int16(-16), want: "p_-16"},
+		{name: "int32", columnType: "Int32", value: int32(-32), want: "p_-32"},
+		{name: "int64", columnType: "Int64", value: int64(-64), want: "p_-64"},
+		{name: "int", columnType: "Int64", value: int(-65), want: "p_-65"},
+		{name: "float32", columnType: "Float32", value: float32(1.5), want: "p_1.5"},
+		{name: "float64", columnType: "Float64", value: float64(2.5), want: "p_2.5"},
+		{name: "float32 negative zero", columnType: "Float32", value: math.Float32frombits(1 << 31), want: "p_0"},
+		{name: "float64 negative zero", columnType: "Float64", value: math.Float64frombits(1 << 63), want: "p_0"},
+		{name: "float64 signaling nan", columnType: "Float64", value: math.Float64frombits(0x7ff0000000000001), want: "p_NaN"},
+		{name: "float64 quiet nan", columnType: "Float64", value: math.Float64frombits(0x7ff8000000000002), want: "p_NaN"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			schema := TableSchema{
 				TableID:     testTable,
-				Columns:     []lthash.Column{{Name: "shard", Type: "fixture"}},
+				Columns:     []lthash.Column{{Name: "shard", Type: tt.columnType}},
 				PartitionBy: "shard",
 			}
 			got, err := PartitionIDForRow(schema, []any{tt.value})
@@ -220,14 +228,37 @@ func TestPartitionIDForRowTypedValueGoldenMatrix(t *testing.T) {
 	}
 }
 
+// TestPartitionIDForRowRejectsUndefinedTypedPartitionValue keeps the renderer
+// fail-closed on a value whose Go type it has no rule for. Its original form
+// used a Date column, which encoded Spec Q measurement M5 as an expectation —
+// a temporal partition column is now supported, and
+// TestPartitionIDForRow_AcceptsTemporalPartitionColumns proves it.
 func TestPartitionIDForRowRejectsUndefinedTypedPartitionValue(t *testing.T) {
+	// An admitted declaration whose value arrives as an unexpected Go type.
 	schema := TableSchema{
+		TableID:     testTable,
+		Columns:     []lthash.Column{{Name: "shard", Type: "String"}},
+		PartitionBy: "shard",
+	}
+	if _, err := PartitionIDForRow(schema, []any{struct{ A int }{1}}); err == nil {
+		t.Fatal("PartitionIDForRow must fail closed for an undefined typed partition value")
+	}
+	// A temporal declaration whose value is not a time.Time must not silently
+	// fall through to the non-temporal renderer.
+	temporal := TableSchema{
 		TableID:     testTable,
 		Columns:     []lthash.Column{{Name: "day", Type: "Date"}},
 		PartitionBy: "day",
 	}
-	if _, err := PartitionIDForRow(schema, []any{time.Date(2026, time.July, 16, 0, 0, 0, 0, time.UTC)}); err == nil {
-		t.Fatal("PartitionIDForRow must fail closed for an undefined typed partition value")
+	err := func() error {
+		_, err := PartitionIDForRow(temporal, []any{"2026-07-16"})
+		return err
+	}()
+	if err == nil {
+		t.Fatal("PartitionIDForRow must fail closed when a temporal column carries a non-time value")
+	}
+	if !strings.Contains(err.Error(), "want time.Time") {
+		t.Errorf("error %q does not explain the temporal value-type mismatch", err)
 	}
 }
 
@@ -678,5 +709,107 @@ func TestExecutorChainsBlocksAdditively(t *testing.T) {
 	sum.AddHash(partDelta)
 	if !allAfter2.Equal(sum) {
 		t.Fatal("partition commitment is not additive across blocks (prev + delta != after)")
+	}
+}
+
+// TestPartitionIDForRow_AcceptsTemporalPartitionColumns proves a Date or
+// DateTime column is usable as the partition column. Spec Q measurement M5:
+// before this, partitionValueString had no time.Time case, so restoring the
+// temporal types to the validator alone would have turned a loud startup
+// refusal into a late per-statement replay failure — strictly worse than the
+// state being fixed.
+func TestPartitionIDForRow_AcceptsTemporalPartitionColumns(t *testing.T) {
+	for _, tc := range []struct {
+		typ  string
+		v    time.Time
+		want string
+	}{
+		{"Date", time.Date(2026, time.July, 16, 0, 0, 0, 0, time.UTC), "p_2026-07-16"},
+		{"DateTime", time.Date(2026, time.July, 16, 12, 34, 56, 0, time.UTC), "p_2026-07-16 12:34:56"},
+		{"DateTime('UTC')", time.Date(2026, time.July, 16, 12, 34, 56, 0, time.UTC), "p_2026-07-16 12:34:56"},
+		{"DateTime64(0)", time.Date(2026, time.July, 16, 12, 34, 56, 0, time.UTC), "p_2026-07-16 12:34:56"},
+		{"DateTime64(3, 'UTC')", time.Date(2026, time.July, 16, 12, 34, 56, 123000000, time.UTC), "p_2026-07-16 12:34:56.123"},
+		{"DateTime64(9)", time.Date(2026, time.July, 16, 12, 34, 56, 123456789, time.UTC), "p_2026-07-16 12:34:56.123456789"},
+	} {
+		t.Run(tc.typ, func(t *testing.T) {
+			schema := TableSchema{
+				TableID:     "db.t",
+				PartitionBy: "p",
+				Columns:     []lthash.Column{{Name: "p", Type: tc.typ}, {Name: "v", Type: "UInt64"}},
+			}
+			got, err := PartitionIDForRow(schema, []any{tc.v, uint64(1)})
+			if err != nil {
+				t.Fatalf("PartitionIDForRow(%q) = %v", tc.typ, err)
+			}
+			if got != tc.want {
+				t.Fatalf("PartitionIDForRow(%q) = %q, want %q", tc.typ, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestPartitionIDForRow_TemporalRenderingIsUTCAndInjective guards the two rules
+// the rendering rests on. The partition id is not hashed into a row element — it
+// is an executor-internal grouping key — but it must be stable across verifiers
+// and injective across the values one column can actually take.
+func TestPartitionIDForRow_TemporalRenderingIsUTCAndInjective(t *testing.T) {
+	milli := TableSchema{
+		TableID:     "db.t",
+		PartitionBy: "p",
+		Columns:     []lthash.Column{{Name: "p", Type: "DateTime64(3, 'UTC')"}},
+	}
+	second := TableSchema{
+		TableID:     "db.t",
+		PartitionBy: "p",
+		Columns:     []lthash.Column{{Name: "p", Type: "DateTime('UTC')"}},
+	}
+	base := time.Date(2026, time.July, 16, 12, 34, 56, 123000000, time.UTC)
+	next := base.Add(time.Millisecond)
+
+	id := func(sch TableSchema, v time.Time) string {
+		t.Helper()
+		got, err := PartitionIDForRow(sch, []any{v})
+		if err != nil {
+			t.Fatalf("PartitionIDForRow: %v", err)
+		}
+		return got
+	}
+
+	if a, b := id(milli, base), id(milli, next); a == b {
+		t.Fatalf("two instants one millisecond apart share partition id %q under DateTime64(3, 'UTC')", a)
+	}
+	// The same two instants under a one-second column must collide, and that is
+	// correct: the column's own resolution is one second.
+	if a, b := id(second, base), id(second, next); a != b {
+		t.Fatalf("two instants inside one second differ under DateTime('UTC'): %q vs %q", a, b)
+	}
+
+	// A non-UTC location must not change the id: PartitionIDForRow runs on both
+	// lanes, and a local-timezone rendering would put the same row in different
+	// partitions on two verifiers.
+	shanghai, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatalf("load non-UTC test location: %v", err)
+	}
+	if a, b := id(milli, base), id(milli, base.In(shanghai)); a != b {
+		t.Fatalf("partition id depends on the value's location: UTC=%q Shanghai=%q", a, b)
+	}
+}
+
+// TestPartitionIDForRow_RejectsUnadmittedPartitionColumnType keeps the partition
+// path inside the column-type authority: a declaration the profile does not
+// admit must fail here rather than reach the value switch.
+func TestPartitionIDForRow_RejectsUnadmittedPartitionColumnType(t *testing.T) {
+	schema := TableSchema{
+		TableID:     "db.t",
+		PartitionBy: "p",
+		Columns:     []lthash.Column{{Name: "p", Type: "Date32"}},
+	}
+	_, err := PartitionIDForRow(schema, []any{time.Now().UTC()})
+	if !errors.Is(err, ErrUnsupportedColumnType) {
+		t.Fatalf("PartitionIDForRow = %v, want ErrUnsupportedColumnType", err)
+	}
+	if !strings.Contains(err.Error(), `partition column "p"`) {
+		t.Errorf("error %q does not name the partition column", err)
 	}
 }

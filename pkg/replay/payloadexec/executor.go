@@ -417,7 +417,11 @@ func PartitionIDForRow(sch TableSchema, values []any) (string, error) {
 		if col.Name != sch.PartitionBy {
 			continue
 		}
-		raw, err := partitionValueString(values[i])
+		profile, err := ResolveColumnProfile(col.Type)
+		if err != nil {
+			return "", fmt.Errorf("partition column %q: %w", sch.PartitionBy, err)
+		}
+		raw, err := partitionValueString(profile, values[i])
 		if err != nil {
 			return "", fmt.Errorf("partition column %q: %w", sch.PartitionBy, err)
 		}
@@ -426,7 +430,20 @@ func PartitionIDForRow(sch TableSchema, values []any) (string, error) {
 	return "", fmt.Errorf("partition column %q not present in schema", sch.PartitionBy)
 }
 
-func partitionValueString(v any) (string, error) {
+// partitionValueString renders one partition-column value. The partition id is
+// not hashed into a row element — it is an executor-internal grouping key — but
+// it must be stable across verifiers and injective across the values a single
+// partition column can take, so the temporal families are rendered by family
+// rather than by Go type, and always in UTC.
+func partitionValueString(profile ColumnProfile, v any) (string, error) {
+	switch profile.Family {
+	case FamilyDate, FamilyDateTime, FamilyDateTime64:
+		t, ok := v.(time.Time)
+		if !ok {
+			return "", fmt.Errorf("partition column family %q carries %T, want time.Time", profile.Family, v)
+		}
+		return temporalPartitionValueString(profile, t), nil
+	}
 	switch x := v.(type) {
 	case string:
 		return x, nil
@@ -467,6 +484,26 @@ func partitionValueString(v any) (string, error) {
 	default:
 		return "", fmt.Errorf("unsupported partition value type %T", v)
 	}
+}
+
+// temporalPartitionValueString renders a temporal partition value under two
+// rules. First, always in UTC: PartitionIDForRow runs on both the Native and the
+// ClickHouse-backed lane, and a local-timezone rendering would put the same row
+// in different partitions on two verifiers. Second, per family rather than per
+// Go type, so a column's own resolution decides how much of the instant is
+// significant — DateTime64(0) renders with no fractional part, and DateTime64(P)
+// renders exactly P fractional digits.
+func temporalPartitionValueString(profile ColumnProfile, t time.Time) string {
+	utc := t.UTC()
+	switch profile.Family {
+	case FamilyDate:
+		return utc.Format(dateLayout)
+	case FamilyDateTime64:
+		if profile.Precision > 0 {
+			return utc.Format(dateTimeLayout + "." + strings.Repeat("0", profile.Precision))
+		}
+	}
+	return utc.Format(dateTimeLayout)
 }
 
 // parseValue converts a raw CSV field to the Go type matching the declared
