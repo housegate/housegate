@@ -71,7 +71,7 @@ env -u REWRITER_ORACLE_ADDR POLYGLOT_SQL_FFI_PATH=$PWD/third_party/lib/libpolygl
   go test ./<pkg>/ -run '<regex>' -v
 ```
 
-- [ ] **Task 0 (pre-flight, do once):** branch and prove the baseline is green and the corpus matches its recorded state.
+- [x] **Task 0 (pre-flight, do once):** branch and prove the baseline is green and the corpus matches its recorded state.
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go
@@ -97,7 +97,7 @@ Expected: every package `ok`; sha256 = `309d738050fd05edd8e1f51f59a071c9c593e7aa
 - Produces on `engine.DBLevelInfo`: `ShowTable string`, `ShowTableResolved bool`, `HasTableClause bool`. Task 2 is the only consumer.
 - Unchanged semantics for every non-`COLUMNS`/`INDEX`-family kind: `TABLES`, `DATABASES`, `DICTIONARIES`, `CREATE`, `CLUSTER`, `SETTINGS`, `MERGES` keep today's `DB` / `HasDBClause` / `DBResolved` meaning, byte for byte.
 
-- [ ] **Step 1: Write the failing table test (red)**
+- [x] **Step 1: Write the failing table test (red)**
 
 Append to `internal/engine/dblevel_test.go`:
 
@@ -182,7 +182,7 @@ func TestParseDBLevel_nonColumnsFamilyGrammarIsUnchanged(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run both tests and record the exact pre-fix failure**
+- [x] **Step 2: Run both tests and record the exact pre-fix failure**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go
@@ -196,7 +196,7 @@ Expected **before** the fix, measured on the live engine:
 - After adding only the three struct fields (zero-valued, no parser change), every `columnsFamily` row fails with the measured values: `SHOW COLUMNS FROM db1__t FROM hg_safe` → `DB:db1__t HasDBClause:true DBResolved:true`, i.e. the **table** bound as the database; `SHOW COLUMNS FROM hg_safe.db1__t` → `DB:hg_safe` but `ShowTable:""`; `SHOW COLUMNS FROM db1__t` → `DB:db1__t HasDBClause:true` (a table reported as a resolved database clause — the sharpest single symptom); every `EXTENDED` row → `ShowWhat:EXTENDED DB:"" HasDBClause:false`.
 - `TestParseDBLevel_nonColumnsFamilyGrammarIsUnchanged` **passes** before and after. If it ever fails, the fix has leaked into the TABLES/DICTIONARIES grammar.
 
-- [ ] **Step 3: Add the three fields**
+- [x] **Step 3: Add the three fields**
 
 In `internal/engine/dblevel.go`, extend `DBLevelInfo`:
 
@@ -209,7 +209,7 @@ In `internal/engine/dblevel.go`, extend `DBLevelInfo`:
 
 Keep the existing field comments intact; `DB` / `HasDBClause` / `DBResolved` keep meaning *database* for every kind, which is precisely what is wrong today for this family.
 
-- [ ] **Step 4: Teach the SHOW arm the prefix and the reversed grammar**
+- [x] **Step 4: Teach the SHOW arm the prefix and the reversed grammar**
 
 In the `case "SHOW":` arm, add `EXTENDED` ahead of `FULL` (ClickHouse's fixed order is `SHOW [EXTENDED] [FULL] …`; `TEMPORARY` keeps its existing position after `FULL`):
 
@@ -243,7 +243,7 @@ After `info.ShowWhat` is captured, branch on the kind before consuming clauses:
 4. if a second `FROM|IN` follows, sets `HasDBClause = true` and resolves `DB` / `DBResolved` from it — an already-set qualified `DB` is *overwritten* only if the second clause resolves, and the ambiguous `SHOW COLUMNS FROM a.b FROM c` form binds `DB = c` (ClickHouse's own precedence: the explicit database clause wins);
 5. returns the index at which the shared `LIKE` / `WHERE` / `LIMIT` tail loop resumes, so `SHOW COLUMNS FROM t FROM db LIKE 'a%'` keeps working.
 
-- [ ] **Step 5: Run the two tests plus the whole engine package**
+- [x] **Step 5: Run the two tests plus the whole engine package**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go
@@ -253,7 +253,7 @@ env -u REWRITER_ORACLE_ADDR POLYGLOT_SQL_FFI_PATH=$PWD/third_party/lib/libpolygl
 
 Expected: all `TestParseDBLevel*` green, including the four pre-existing ones — in particular `TestParseDBLevel_showPrefixesPrecedeKindAndDatabaseClause`'s `SHOW TEMPORARY FULL DICTIONARIES FROM hg_safe` → `ShowWhat: "FULL"` row, which proves prefix ordering is still strict and that `EXTENDED` did not become order-free.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/engine/dblevel.go internal/engine/dblevel_test.go
@@ -275,7 +275,7 @@ git commit -m "fix(show): parse the COLUMNS/INDEX family's table-then-database g
 - Consumes: `engine.DBLevelInfo.ShowTable` / `HasTableClause` / `ShowExtended` (Task 1), `recordAccessedDatabase` (`dblevel.go:90`), `recordAccessedStorageIntegrityLogicalDatabaseUnique` (`storage_integrity_policy.go:203`), `nameresolve.IsStorageIntegrityPhysicalDatabase` / `IsStorageIntegrityLogicalDatabase` / `AuthorizeStorageIntegrityLogical` / `LookupStorageIntegrity`, `StorageIntegrityPhysicalDatabaseRejectMessage`, `StorageIntegrityPhysicalRejectMessage`, `StorageIntegrityLogicalDatabaseRejectMessage`, `StorageIntegrityUnauthorizedMessage`, `rejectUnresolvedShowDatabase` (`dblevel.go:394`).
 - Produces: `showKindClass(kind string) showClass` with the three constants `showRewritten`, `showTargetBearing`, `showTargetLess`, plus `showUnknown`. No new message string is invented.
 
-- [ ] **Step 1: Add the corpus cases (red)**
+- [x] **Step 1: Add the corpus cases (red)**
 
 Append to the end of the JSON array in `internal/harness/testdata/storage_integrity_cases.json`. The `dynamic` block below is written once here and repeated verbatim per case (the corpus has no anchors); `<DYN>` in the table means exactly this object:
 
@@ -314,7 +314,7 @@ Plus the two pass-through controls, which are **success** cases and therefore pi
 
 `si_show_merges_target_less_passthrough` is the allowlist's own regression test: Spec N §2 deliberately keeps `MERGES` pass-through, and this case makes any later "tighten everything" edit a visible corpus change. Neither control may carry `want_sql_contains` — every candidate substring is already in the input SQL and `ValidateSICorpus` rule R4 rejects that as vacuous.
 
-- [ ] **Step 2: Run the new cases and record the pre-fix failure**
+- [x] **Step 2: Run the new cases and record the pre-fix failure**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go
@@ -324,7 +324,7 @@ env -u REWRITER_ORACLE_ADDR POLYGLOT_SQL_FFI_PATH=$PWD/third_party/lib/libpolygl
 
 Expected **before** the fix, measured: every one of the ten reject cases fails with `code = Success, want UnsupportedStatement` and `statement_type = STATEMENT_TYPE_SHOW_TABLES, want ""`. The two pass-through controls **pass** before and after — they are the proof that the gate is targeted rather than a blanket refusal. `TestSICorpusIsBytePinned` will also fail; that is expected and is re-pinned in Task 5, not now.
 
-- [ ] **Step 3: Replace the negative branch with the positive classification**
+- [x] **Step 3: Replace the negative branch with the positive classification**
 
 In `internal/handlers/dblevel.go`, add above `dispatchShowTables`:
 
@@ -404,7 +404,7 @@ Then replace the `if info.ShowWhat != "TABLES" { ... }` block with:
 
 Keep the existing call site's name in the `DICTIONARIES` path so the diff stays reviewable: `DICTIONARIES` has no table clause, so branch 2 is inert for it and its four existing corpus cases must not move.
 
-- [ ] **Step 4: Add the handler-local unknown-kind test**
+- [x] **Step 4: Add the handler-local unknown-kind test**
 
 Per deviation **D-4** the shared corpus may not be able to hold this case. Add it to `internal/handlers/dblevel_test.go` regardless, so the Go behaviour is pinned independently of what Part B measures:
 
@@ -442,7 +442,7 @@ Reuse the package's existing engine/option helpers rather than adding new ones �
 
 Expected **before** Step 3: the SI case fails with `code = Success` (measured: `SHOW SOMETHINGNEW FROM hg_safe` returns `Success` with `statement_type SHOW_TABLES` and the SQL unchanged). The non-SI case passes before and after.
 
-- [ ] **Step 5: Run the handler and harness tests**
+- [x] **Step 5: Run the handler and harness tests**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go
@@ -452,7 +452,7 @@ env -u REWRITER_ORACLE_ADDR POLYGLOT_SQL_FFI_PATH=$PWD/third_party/lib/libpolygl
 
 Expected: every `si_show_*` case green — the twelve new ones and the seven pre-existing ones (`si_show_create_rejected`, `si_show_tables_unchanged`, `si_show_tables_safe_database_rejected`, `si_show_tables_unsafe_context_rejected`, `si_show_dictionaries_safe_database_rejected`, `si_show_dictionaries_logical_database_rejected`, `si_show_dictionaries_ordinary_database_passthrough`). `TestSICorpusIsBytePinned` still fails until Task 5.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/handlers/dblevel.go internal/handlers/dblevel_test.go internal/harness/testdata/storage_integrity_cases.json
@@ -476,7 +476,7 @@ Read deviation **D-2** and **D-3** before starting: `redis` and `sqlite` are del
 - Consumes: `decodeNamespacePairDetail` / `decodeNamespaceSingleDetail` (unchanged), `NamespaceRefTableFunction`.
 - Produces: no new exported symbol. `objectCarrierCallable` in housegate's `sireserved` (`pkg/plugins/sireserved/plugin.go:240-252`) mirrors this list for operator sessions; Task 13 Step 6 adds the same five names there so the two lists do not drift.
 
-- [ ] **Step 1: Read each signature from the ClickHouse documentation and write the arity table down**
+- [x] **Step 1: Read each signature from the ClickHouse documentation and write the arity table down**
 
 Do not infer argument positions from the existing `remote` decode. Fetch each page and record the positional list in the commit message:
 
@@ -504,7 +504,7 @@ Documented signatures as read on 2026-08-25 — re-read them rather than trustin
 
 The single-at-index-1 fallback is `merge`'s existing one-argument semantics: a qualified `a.b` literal binds the pair, an unqualified one binds a table against the current database, and a non-literal is unresolved. That is the safe direction for a short form whose foreign namespace cannot be proved ordinary.
 
-- [ ] **Step 2: Add the corpus cases (red)**
+- [x] **Step 2: Add the corpus cases (red)**
 
 Reuse the `<DYN>` block from Task 2 Step 1. Five reject cases, one per decoded name:
 
@@ -529,7 +529,7 @@ The exact `want_sql` for the three `Success` cases is whatever the engine emits 
 
 `si_redis_column_name_allowed` is the case that makes D-2 permanent: it is the one statement whose *plain reading* looks like a reserved-name mention and is nonetheless correct to allow, so it cannot be "tidied up" later without an explicit corpus change.
 
-- [ ] **Step 3: Run the new cases and record the pre-fix failure**
+- [x] **Step 3: Run the new cases and record the pre-fix failure**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go
@@ -539,7 +539,7 @@ env -u REWRITER_ORACLE_ADDR POLYGLOT_SQL_FFI_PATH=$PWD/third_party/lib/libpolygl
 
 Expected **before** the fix, measured: the five physical cases and `si_mysql_unresolved_namespace_rejected` all fail with `code = Success, want RewriteError` and `statement_type = STATEMENT_TYPE_SELECT, want ""`. `si_mysql_ordinary_database_allowed`, `si_sqlite_foreign_file_allowed` and `si_redis_column_name_allowed` **pass** before and after (once their `want_sql` is filled in from this run) — three of the four controls in this task are pre-existing behaviour that must survive.
 
-- [ ] **Step 4: Extend the decoder**
+- [x] **Step 4: Extend the decoder**
 
 In `decodeNamespaceFunctionRefDetail`, after the `mergetree` prefix branch and before the final `return namespaceRefDetail{}, false`:
 
@@ -573,7 +573,7 @@ In `decodeNamespaceFunctionRefDetail`, after the `mergetree` prefix branch and b
 
 `argAt(args, 1)` returns `nil` when the slice is shorter, which `decodeNamespaceSingleDetail` already handles as "not a current-database arg, not a resolvable value" — the unresolved path. If no such helper exists in the file, add a two-line local one rather than indexing unguarded.
 
-- [ ] **Step 5: Pin the named-collection shape by measurement, not by assumption**
+- [x] **Step 5: Pin the named-collection shape by measurement, not by assumption**
 
 Every one of the five functions also accepts `f(named_collection[, k=v…])`, where no argument is a static namespace literal. Run each through the fixed engine and record what it produces:
 
@@ -592,7 +592,7 @@ env -u REWRITER_ORACLE_ADDR SI_CORPUS_PATH=/tmp/nc_probe.json \
 
 Decision rule, applied in this step and not deferred: if the named-collection shapes reject (unresolved namespace), add `si_mysql_named_collection_unresolved_rejected` to the corpus pinning that. If any of them returns `Success` while naming `hg_safe`, that is a residual bypass of the same class as this task and it must be closed here — extend the decode so a connector call whose namespace arguments are not static literals is unresolved — before the task is considered done. Do not proceed with a known-`Success` reserved-name shape.
 
-- [ ] **Step 6: Run the harness and the whole engine package**
+- [x] **Step 6: Run the harness and the whole engine package**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go
@@ -601,7 +601,7 @@ env -u REWRITER_ORACLE_ADDR make test
 
 Expected: everything green except `TestSICorpusIsBytePinned` (re-pinned in Task 5). Pay particular attention to `internal/harness`'s non-SI suites (`select_golden`, `writes_golden`, `dblevel_golden`): a recognized namespace function is also a read-source carrier (`containsReadBearingNode`, `nodes.go:1878`), so adding names changes the read-source walk for **every** request, not only SI ones. A failure there is this task's regression, not a flake.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add internal/engine/nodes.go internal/engine/nodes_test.go internal/harness/testdata/storage_integrity_cases.json
@@ -633,7 +633,7 @@ No operator marker is needed; any authenticated user reaches it.
 **Interfaces:**
 - Produces: `decodeStringLiteralValue(lit map[string]any) (string, bool)` in `internal/engine` — the single place that turns a polyglot literal node into the semantic string a namespace argument denotes. `tableFunctionArgValue` is its only caller in this task.
 
-- [ ] **Step 1: Enumerate the literal types polyglot emits in a namespace-argument position**
+- [x] **Step 1: Enumerate the literal types polyglot emits in a namespace-argument position**
 
 The fix must be a whitelist, not a special case for one type. Add a temporary probe (delete it before committing) that parses each shape and logs `literal_type` and `value`:
 
@@ -644,7 +644,7 @@ The fix must be a whitelist, not a special case for one type. Add a temporary pr
 
 Run with `env -u REWRITER_ORACLE_ADDR POLYGLOT_SQL_FFI_PATH=$PWD/third_party/lib/libpolyglot_sql_ffi.dylib go test ./internal/engine/ -run <probe> -v` and record the observed `literal_type` set in the commit message. Known from this plan's own measurement: `'…'` → `string`, `$$…$$` → `dollar_string` with `value = body`, `$tag$…$tag$` → `dollar_string` with `value = "tag\x00body"`.
 
-- [ ] **Step 2: Write the failing tests (red)**
+- [x] **Step 2: Write the failing tests (red)**
 
 Two layers, because the bug is a mismatch between two layers.
 
@@ -684,7 +684,7 @@ Corpus cases, reusing Task 2's `<DYN>` block:
 
 The third case is deliberately one that **already passes** — it is the regression guard for the bare form while the tagged form is being fixed.
 
-- [ ] **Step 3: Run and record the pre-fix failure**
+- [x] **Step 3: Run and record the pre-fix failure**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go
@@ -695,7 +695,7 @@ env -u REWRITER_ORACLE_ADDR POLYGLOT_SQL_FFI_PATH=$PWD/third_party/lib/libpolygl
 
 Expected **before** the fix, measured: the two `$tag$` rows of the unit test fail with the DB read as `tag` or `tag\x00hg_safe` (whatever `exactFunctionQualified` makes of the NUL-bearing value); `si_merge_tagged_heredoc_physical_rejected` and `si_remote_tagged_heredoc_physical_rejected` fail with `code = Success, want RewriteError`; `si_merge_bare_heredoc_physical_rejected` **passes**. Anything else — in particular the bare form failing — means the probe in Step 1 was misread.
 
-- [ ] **Step 4: Implement the whitelist decode**
+- [x] **Step 4: Implement the whitelist decode**
 
 In `internal/engine/nodes.go`:
 
@@ -740,7 +740,7 @@ with a call to `decodeStringLiteralValue`, keeping the existing `value != ""` em
 
 **The `default:` arm is a behaviour change for numeric and any other literal type in a namespace-argument position.** Before committing, confirm with the whole-repo run in Step 5 that no existing corpus or golden case relied on a numeric literal decoding to its digits there. If one does, add that literal type to the whitelist explicitly with a comment naming the case — never widen the default.
 
-- [ ] **Step 5: Confirm no other policy reader has the same defect**
+- [x] **Step 5: Confirm no other policy reader has the same defect**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go
@@ -749,7 +749,7 @@ grep -rn '\["literal"\]' --include='*.go' internal/ | grep -v _test
 
 Expected hits: `internal/engine/lexical.go:992` (presence check only), `internal/engine/lexical.go:2836` (already guards `literal_type != "string"` — the fail-closed direction, leave it), `internal/engine/nodes.go:1910` (fixed in Step 4), `internal/engine/nodes.go:2497` (LIMIT, numeric). Any *new* reader of `lit["value"]` in a namespace or identifier position must route through `decodeStringLiteralValue`. Record the audited list in the commit message.
 
-- [ ] **Step 6: Full Go run**
+- [x] **Step 6: Full Go run**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go
@@ -758,7 +758,7 @@ env -u REWRITER_ORACLE_ADDR make test
 
 Expected: green except `TestSICorpusIsBytePinned`.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add internal/engine/nodes.go internal/engine/nodes_test.go internal/harness/testdata/storage_integrity_cases.json
@@ -772,7 +772,7 @@ git commit -m "fix(storage-integrity): decode heredoc literals before the namesp
 **Files:**
 - Modify: `internal/harness/sicorpus_test.go` (`SICorpusFingerprint`, `SICorpusBytes`, `SICorpusCases` at `:231-233`)
 
-- [ ] **Step 1: Prove the corpus satisfies the frozen contract**
+- [x] **Step 1: Prove the corpus satisfies the frozen contract**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go
@@ -788,7 +788,7 @@ print('cases',len(c),'duplicates',dup)
 
 Expected: `TestSICorpusContract` green (it needs no engine and no oracle), zero duplicate names, and a case count of 210 + however many were added in Tasks 2–4 (25 if every case above landed as written).
 
-- [ ] **Step 2: Compute and record the new pins**
+- [x] **Step 2: Compute and record the new pins**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go
@@ -800,7 +800,7 @@ env -u REWRITER_ORACLE_ADDR POLYGLOT_SQL_FFI_PATH=$PWD/third_party/lib/libpolygl
 
 The failing `TestSICorpusIsBytePinned` prints the actual fingerprint, byte count and case count. Copy those three numbers into `sicorpus_test.go:231-233`. Do not compute the FNV-1a/64 fingerprint by hand — the test is the authority.
 
-- [ ] **Step 3: Re-run and commit**
+- [x] **Step 3: Re-run and commit**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go
