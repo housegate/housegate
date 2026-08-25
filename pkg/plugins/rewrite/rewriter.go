@@ -71,6 +71,10 @@ type Plugin struct {
 	// echo gate for every Rewriter implementation, including custom factories.
 	RequiredStorageIntegrityContractVersion pb.StorageIntegrityContractVersion
 
+	// StorageIntegrityScrubber removes protocol-owned SI names from Exception
+	// text before it reaches the client. Nil disables scrubbing.
+	StorageIntegrityScrubber *rewriter.StorageIntegrityScrubber
+
 	// rewriters caches one Rewriter per session id (int64). Lifetime
 	// is OnQuery-first-touch through OnClose.
 	rewriters sync.Map // map[int64]rewriter.Rewriter
@@ -236,6 +240,12 @@ func readModeFromQuery(q *chproto.Query) (rewriter.ReadMode, bool, error) {
 // exception message back to what the client used. No-op if no
 // rewrite was active for this session.
 func (p *Plugin) OnException(ctx context.Context, sess chsession.Session, exc *chproto.Exception) error {
+	// Scrubbing is independent of the general reverse-map gate: a ClickHouse
+	// Exception can expose the physical SI namespace even when this session did
+	// not record a successful active rewrite.
+	if scrubbed := p.StorageIntegrityScrubber.Scrub(exc.Message); scrubbed != exc.Message {
+		exc.Message = scrubbed
+	}
 	if !sess.State().Snapshot().HasActiveRewrite {
 		return nil
 	}

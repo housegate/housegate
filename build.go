@@ -36,6 +36,7 @@ import (
 	"github.com/housegate/housegate/pkg/plugins/rewrite"
 	routeplugin "github.com/housegate/housegate/pkg/plugins/route"
 	"github.com/housegate/housegate/pkg/plugins/sessionstate"
+	"github.com/housegate/housegate/pkg/plugins/sireserved"
 	"github.com/housegate/housegate/pkg/plugins/sistatement"
 	"github.com/housegate/housegate/pkg/plugins/storageintegrity"
 	"github.com/housegate/housegate/pkg/plugins/usage"
@@ -124,6 +125,29 @@ func storageIntegrityRewriterOptions(cfg *config.Config, rs rewriter.StorageInte
 		})
 	}
 	return out
+}
+
+// storageIntegrityInternalListenWarning returns the operator warnings for the
+// Spec I D6 peer and privileged-operator boundaries, or an empty string when
+// neither applies.
+//
+// A peer-trusted remote() loopback carries SQL already rewritten by its origin;
+// running the rewriter again could double-prefix physical names. The bypass is
+// therefore deliberate, and network isolation of the internal port is the
+// corresponding control.
+func storageIntegrityInternalListenWarning(cfg *config.Config) string {
+	if len(cfg.StorageIntegrity.Tables) == 0 {
+		return ""
+	}
+	var warnings []string
+	if cfg.InternalListen != "" {
+		warnings = append(warnings, "storage_integrity: peer-trusted sessions arriving on internal_listen bypass storage-integrity rewrite and can address the hg_safe / hg_unsafe namespaces directly; internal_listen MUST be reachable only from trusted peer subnets")
+	}
+	if count := len(cfg.Auth.PlatformOperatorAddresses); count > 0 {
+		warnings = append(warnings, fmt.Sprintf("storage_integrity: %d platform-operator addresses use the raw-SQL bypass for SI tables [%s]; the operator guard conservatively rejects every hg_safe / hg_unsafe / _hg_row_id mention (including ordinary columns and string literals), Identifier placeholders, any backslash-bearing literal or quoted identifier, and local-catalog object-carrier callables regardless of arguments; use a direct ClickHouse connection for physical access",
+			count, strings.Join(cfg.StorageIntegrity.Tables, ", ")))
+	}
+	return strings.Join(warnings, "; ")
 }
 
 // isNilInterface recognizes typed-nil implementations stored in an interface.
@@ -425,6 +449,9 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	if len(cfg.StorageIntegrity.Tables) > 0 && siReadState == nil {
 		log.Warnw("storage_integrity: no read-state port wired; unsafe_latest reads will be refused", "tables", len(cfg.StorageIntegrity.Tables))
 	}
+	if warning := storageIntegrityInternalListenWarning(cfg); warning != "" {
+		log.Warnw(warning, "internal_listen", cfg.InternalListen, "tables", len(cfg.StorageIntegrity.Tables))
+	}
 
 	var rwFactory rewriter.Factory
 	if opts.Rewriter != nil {
@@ -447,6 +474,25 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		if !ok || capable.StorageIntegrityContractVersion() != rewriter.StorageIntegrityContractV1 {
 			return nil, fmt.Errorf("storage_integrity.tables requires a storage-integrity contract v1 capable SQL rewriter; refusing fail-open startup")
 		}
+		// Contract v1 proves only that the backend understood the request; old
+		// engines can acknowledge it while missing the Spec I fail-closed
+		// behavior. Every concrete or injected factory must expose and pass the
+		// same behavioral conformance probe before an SI surface can start.
+		prober, ok := rwFactory.(rewriter.StorageIntegrityProbeFactory)
+		if !ok {
+			return nil, fmt.Errorf("storage_integrity.tables requires a SQL rewriter implementing rewriter.StorageIntegrityProbeFactory; refusing unverified startup")
+		}
+		probeTimeout := cfg.Rewriter.Timeout.Duration
+		if probeTimeout <= 0 {
+			probeTimeout = 5 * time.Second
+		}
+		probeCtx, cancelProbe := context.WithTimeout(context.Background(), probeTimeout)
+		err := prober.ProbeStorageIntegrityBuild(probeCtx)
+		cancelProbe()
+		if err != nil {
+			return nil, err
+		}
+		log.Infow("storage-integrity rewriter build verified", "tables", len(siOptions.Tables))
 	}
 
 	// Cluster: lib-built path constructs and registers Close+Start;
@@ -552,6 +598,16 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	queryPlugins := []plugin.QueryPlugin{
 		&authplugin.Plugin{Validator: validator, Access: reg},
 		&usage.Plugin{Client: usageClient},
+	}
+	if len(siOptions.Tables) > 0 {
+		queryPlugins = append(queryPlugins, &sireserved.Plugin{
+			ReservedDatabases: []string{
+				config.StorageIntegritySafeDatabase,
+				config.StorageIntegrityUnsafeDatabase,
+			},
+			ReservedRowIDColumn: rewriter.DefaultReservedRowIDColumn,
+		})
+		log.Infow("storage-integrity reserved-name guard enabled", "tables", len(siOptions.Tables))
 	}
 	querySuccessPlugins := []plugin.QuerySuccessPlugin{}
 	queryCompletePlugins := []plugin.QueryCompletePlugin{}
@@ -662,6 +718,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		}
 		if len(siOptions.Tables) > 0 {
 			rewritePlug.RequiredStorageIntegrityContractVersion = rewriter.StorageIntegrityContractV1
+			rewritePlug.StorageIntegrityScrubber = rewriter.NewStorageIntegrityScrubber(siOptions)
 		}
 	}
 

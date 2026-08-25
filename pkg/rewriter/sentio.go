@@ -268,8 +268,8 @@ func (r *sentioRewriter) Close() error {
 // Error handling: ordinary failures retain the legacy fail-open contract when
 // no SI membership is configured. With SI membership, pre-classification
 // failures and SI-specific rejections return *RejectedError and MUST reach the
-// client as an Exception. Non-SI UnsupportedStatement remains a passthrough
-// result, not a failure.
+// client as an Exception. UnsupportedStatement remains a passthrough only when
+// the configured SI table set is empty.
 func (r *sentioRewriter) Rewrite(ctx context.Context, sql, effectiveAccount string) (RewriteResult, error) {
 	if r.closed.Load() {
 		return RewriteResult{}, r.rewriteFailure(fmt.Errorf("rewriter closed"))
@@ -332,6 +332,15 @@ func (r *sentioRewriter) Rewrite(ctx context.Context, sql, effectiveAccount stri
 			return RewriteResult{}, &RejectedError{Code: pb.RewriteCode_UnsupportedStatement,
 				Message: "storage-integrity table " + key + " accepts writes only through the signed statement lane"}
 		}
+	}
+	// Spec I D3: with a configured SI surface, every non-Success answer is
+	// a rejection, even when the engine recorded no accessed table or only an
+	// ordinary table. Several engine paths reject before target collection;
+	// allowing those responses into the legacy Unsupported pass-through would
+	// forward unexamined SQL into protocol-owned namespaces. The SI-specific
+	// branch above stays first because it also owns the INSERT-lane decision.
+	if len(r.factory.options.StorageIntegrity.Tables) > 0 && resp.GetCode() != pb.RewriteCode_Success {
+		return RewriteResult{}, &RejectedError{Code: resp.GetCode(), Message: resp.GetMessage()}
 	}
 	switch resp.Code {
 	case pb.RewriteCode_Success:

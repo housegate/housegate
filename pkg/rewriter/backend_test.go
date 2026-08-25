@@ -310,12 +310,66 @@ func TestSentioRewriter_StorageIntegrityRejectIsFailClosed(t *testing.T) {
 			t.Fatalf("code %v: err = %v, want RejectedError carrying the rewriter message", code, err)
 		}
 	}
-	// Non-SI Unsupported keeps today's pass-through contract.
+	// With SI configured, even an Unsupported response naming an ordinary
+	// table is refused: a non-Success answer cannot prove the statement is safe.
 	be := &fakeBackend{resp: acknowledgedSIResponse(&pb.RewriteSQLResponse{Code: pb.RewriteCode_UnsupportedStatement, Message: "nope",
 		OriginalAccessedTables: []*pb.AccessedTable{{OriginalDatabase: "other", OriginalTable: "u"}}})}
-	res, err := newSIFactory(be, nil, true).NewRewriter(&fakeSession{}).Rewrite(context.Background(), "OPTIMIZE TABLE other.u", "")
-	if err != nil || res.SQL != "OPTIMIZE TABLE other.u" || res.StorageIntegrityContractVersion != StorageIntegrityContractV1 {
-		t.Fatalf("non-SI unsupported must pass through: %v %v", res, err)
+	_, err := newSIFactory(be, nil, true).NewRewriter(&fakeSession{}).Rewrite(context.Background(), "OPTIMIZE TABLE other.u", "")
+	var rej *RejectedError
+	if !errors.As(err, &rej) || rej.Code != pb.RewriteCode_UnsupportedStatement {
+		t.Fatalf("configured-SI unsupported response = %v, want RejectedError", err)
+	}
+}
+
+func TestSentioRewriter_FailsClosedOnAnyNonSuccessWhenSIConfigured(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		code     pb.RewriteCode
+		accessed []*pb.AccessedTable
+	}{
+		{"unsupported with no accessed table", pb.RewriteCode_UnsupportedStatement, nil},
+		{"rewrite error with no accessed table", pb.RewriteCode_RewriteError, nil},
+		{"syntax error with no accessed table", pb.RewriteCode_SyntaxError, nil},
+		{"invalid request with no accessed table", pb.RewriteCode_InvalidRewriteRequest, nil},
+		{"unsupported naming an ordinary table", pb.RewriteCode_UnsupportedStatement,
+			[]*pb.AccessedTable{{OriginalDatabase: "other", OriginalTable: "u"}}},
+		{"unsupported naming an SI table", pb.RewriteCode_UnsupportedStatement,
+			[]*pb.AccessedTable{{OriginalDatabase: "db1", OriginalTable: "t", IsStorageIntegrity: true}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			be := &fakeBackend{resp: acknowledgedSIResponse(&pb.RewriteSQLResponse{
+				Code:                   tc.code,
+				Message:                "storage-integrity physical database hg_safe is not directly addressable",
+				SqlAfterRewrite:        "TRUNCATE DATABASE hg_safe",
+				OriginalAccessedTables: tc.accessed,
+			})}
+			_, err := newSIFactory(be, nil, true).NewRewriter(&fakeSession{}).
+				Rewrite(context.Background(), "TRUNCATE DATABASE hg_safe", "")
+			var rej *RejectedError
+			if !errors.As(err, &rej) {
+				t.Fatalf("err = %v, want *RejectedError", err)
+			}
+			if rej.Code != tc.code {
+				t.Fatalf("rejected code = %v, want %v", rej.Code, tc.code)
+			}
+			if !strings.Contains(rej.Message, "hg_safe is not directly addressable") {
+				t.Fatalf("rejected message = %q, want the engine message", rej.Message)
+			}
+		})
+	}
+}
+
+func TestSentioRewriter_EmptySIKeepsUnsupportedPassthrough(t *testing.T) {
+	be := &fakeBackend{resp: &pb.RewriteSQLResponse{
+		Code: pb.RewriteCode_UnsupportedStatement, Message: "nope",
+		OriginalAccessedTables: []*pb.AccessedTable{{OriginalDatabase: "other", OriginalTable: "u"}}}}
+	res, err := newFakeFactory(be).NewRewriter(&fakeSession{}).
+		Rewrite(context.Background(), "OPTIMIZE TABLE other.u", "")
+	if err != nil {
+		t.Fatalf("empty-SI deployments keep the legacy pass-through: %v", err)
+	}
+	if res.SQL != "OPTIMIZE TABLE other.u" {
+		t.Fatalf("SQL = %q, want the original statement", res.SQL)
 	}
 }
 
