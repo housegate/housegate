@@ -1,6 +1,7 @@
 package payloadexec
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"math"
@@ -664,7 +665,7 @@ func TestVerifyLedgerRejectsOrphanActiveParts(t *testing.T) {
 }
 
 func TestParseFixedStringPadsAndLengthChecks(t *testing.T) {
-	v, err := parseValue("FixedString(4)", "ab")
+	v, err := parseValue("FixedString(32)", "ab")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -672,14 +673,29 @@ func TestParseFixedStringPadsAndLengthChecks(t *testing.T) {
 	if !ok {
 		t.Fatalf("FixedString should decode to []byte, got %T", v)
 	}
-	if len(b) != 4 || b[0] != 'a' || b[1] != 'b' || b[2] != 0 || b[3] != 0 {
-		t.Fatalf("FixedString not NUL-padded to width 4: %v", b)
+	want := make([]byte, 32)
+	copy(want, "ab")
+	if !bytes.Equal(b, want) {
+		t.Fatalf("FixedString not NUL-padded to width 32: %v", b)
 	}
-	if _, err := parseValue("FixedString(4)", "toolong"); err == nil {
+	// An exactly-full value must not be padded or rejected.
+	full, err := parseValue("FixedString(32)", strings.Repeat("f", 32))
+	if err != nil {
+		t.Fatalf("exactly-full FixedString rejected: %v", err)
+	}
+	if !bytes.Equal(full.([]byte), []byte(strings.Repeat("f", 32))) {
+		t.Fatalf("exactly-full FixedString altered: %v", full)
+	}
+	if _, err := parseValue("FixedString(32)", strings.Repeat("x", 33)); err == nil {
 		t.Fatal("expected over-length FixedString to be rejected")
 	}
 	if _, err := parseValue("FixedString(0)", "x"); err == nil {
 		t.Fatal("expected invalid FixedString width to be rejected")
+	}
+	// Spec Q Q-D7: a width the Native lane cannot decode is not a parseable
+	// column type either, so the two lanes cannot disagree about it.
+	if _, err := parseValue("FixedString(4)", "ab"); !errors.Is(err, ErrUnsupportedColumnType) {
+		t.Fatalf("parseValue(\"FixedString(4)\") = %v, want ErrUnsupportedColumnType", err)
 	}
 }
 

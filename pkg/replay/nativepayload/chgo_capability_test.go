@@ -100,33 +100,31 @@ func TestChGoNullableSeamShape(t *testing.T) {
 
 // TestNativeDecoderRejectsUndecodableInferableTypes is the honest statement of
 // the Native lane's reach: every declaration here infers in ch-go and none of
-// them replays. Each row also records which gate stops it — the column-type
-// profile, or nativeColumnValue having no case — so Spec Q Phase 2 has to move
-// both halves together. Deleting a row is the visible evidence a capability
-// landed.
+// them replays. It states both halves for every row — the column-type profile
+// refuses the declaration, and nativeColumnValue independently has no case for
+// the column ch-go inferred — which is Spec Q Q-D7's durable invariant that the
+// validator is never wider than the decoder. Phase 2 has to move both halves
+// together; deleting a row is the visible evidence a capability landed.
 func TestNativeDecoderRejectsUndecodableInferableTypes(t *testing.T) {
 	for _, tc := range []struct {
 		declared string
 		column   func() proto.ColInput
-		// profileAdmits records which of the two gates rejects this
-		// declaration. Spec Q Q-D7 forbids the true case as a durable state:
-		// the profile must never admit a width or shape the Native lane cannot
-		// decode, because that trades a loud startup refusal for a late replay
-		// failure.
-		profileAdmits bool
-		wantErr       string
+		// decoderErr is what nativeColumnValue says about the decoded column
+		// itself. Both halves are asserted for every row: the column-type
+		// profile must reject the declaration (Spec Q Q-D7 — the validator may
+		// never be wider than the decoder), and the decoder must independently
+		// still have no case for it. Phase 2 has to move both together.
+		decoderErr string
 	}{
 		{
-			declared:      "FixedString(16)",
-			column:        func() proto.ColInput { c := new(proto.ColFixedStr16); c.Append([16]byte{'a'}); return c },
-			profileAdmits: true,
-			wantErr:       "unsupported column type *proto.ColFixedStr16",
+			declared:   "FixedString(16)",
+			column:     func() proto.ColInput { c := new(proto.ColFixedStr16); c.Append([16]byte{'a'}); return c },
+			decoderErr: "unsupported column type *proto.ColFixedStr16",
 		},
 		{
-			declared:      "FixedString(64)",
-			column:        func() proto.ColInput { c := new(proto.ColFixedStr64); c.Append([64]byte{'a'}); return c },
-			profileAdmits: true,
-			wantErr:       "unsupported column type *proto.ColFixedStr64",
+			declared:   "FixedString(64)",
+			column:     func() proto.ColInput { c := new(proto.ColFixedStr64); c.Append([64]byte{'a'}); return c },
+			decoderErr: "unsupported column type *proto.ColFixedStr64",
 		},
 		{
 			declared: "Date32",
@@ -135,21 +133,20 @@ func TestNativeDecoderRejectsUndecodableInferableTypes(t *testing.T) {
 				c.Append(time.Date(1900, time.January, 1, 0, 0, 0, 0, time.UTC))
 				return c
 			},
-			wantErr: `unsupported column type "Date32"`,
+			decoderErr: "unsupported column type *proto.ColDate32",
 		},
 		{
-			declared: "UUID",
-			column:   func() proto.ColInput { c := new(proto.ColUUID); c.Append(uuid.UUID{}); return c },
-			wantErr:  `unsupported column type "UUID"`,
+			declared:   "UUID",
+			column:     func() proto.ColInput { c := new(proto.ColUUID); c.Append(uuid.UUID{}); return c },
+			decoderErr: "unsupported column type *proto.ColUUID",
 		},
 		{
 			declared: "Decimal(18, 4)",
 			column:   func() proto.ColInput { c := new(proto.ColDecimal64); c.Append(proto.Decimal64(12345)); return c },
-			// The ColAuto downcast that makes Decimal unreachable even once it
-			// is admitted is pinned directly by
-			// TestChGoDecodedColumnsReportTheirDeclaredType; here it is simply
-			// outside the profile.
-			wantErr: `unsupported column type "Decimal(18, 4)"`,
+			// Decimal has a second obstacle beyond the missing decoder case: the
+			// ColAuto downcast that erases its declared precision and scale,
+			// pinned directly by TestChGoDecodedColumnsReportTheirDeclaredType.
+			decoderErr: "unsupported column type *proto.ColDecimal64",
 		},
 		{
 			declared: "Nullable(UInt64)",
@@ -158,7 +155,7 @@ func TestNativeDecoderRejectsUndecodableInferableTypes(t *testing.T) {
 				c.Append(proto.NewNullable(uint64(1)))
 				return c
 			},
-			wantErr: `unsupported column type "Nullable(UInt64)"`,
+			decoderErr: "unsupported column type *proto.ColNullable[uint64]",
 		},
 	} {
 		t.Run(tc.declared, func(t *testing.T) {
@@ -166,19 +163,31 @@ func TestNativeDecoderRejectsUndecodableInferableTypes(t *testing.T) {
 				TableID: "tenant.capability",
 				Columns: []lthash.Column{{Name: "c", Type: tc.declared}},
 			}
-			if got := payloadexec.SupportedColumnType(tc.declared); got != tc.profileAdmits {
-				t.Fatalf("%s: SupportedColumnType = %v, want %v", tc.declared, got, tc.profileAdmits)
+			// Half one, Spec Q Q-D7: the profile is never wider than the
+			// decoder, so the declaration is refused before any payload runs.
+			if payloadexec.SupportedColumnType(tc.declared) {
+				t.Errorf("%s decodes nowhere but is admitted by the profile — Q-D7 forbids exactly this", tc.declared)
 			}
 			payload := encodeNativePayload(t, proto.Input{{Name: "c", Data: tc.column()}})
 			_, err := Decode(schema, nativePayloadTestRevision, payload)
 			if err == nil {
-				t.Fatalf("%s: Decode = nil, want %q", tc.declared, tc.wantErr)
+				t.Fatalf("%s: Decode = nil, want a rejection", tc.declared)
 			}
-			if !strings.Contains(err.Error(), tc.wantErr) {
-				t.Fatalf("%s: Decode = %v, want an error containing %q", tc.declared, err, tc.wantErr)
-			}
-			if !tc.profileAdmits && !errors.Is(err, payloadexec.ErrUnsupportedColumnType) {
+			if !errors.Is(err, payloadexec.ErrUnsupportedColumnType) {
 				t.Fatalf("%s: Decode = %v, want it to unwrap to ErrUnsupportedColumnType", tc.declared, err)
+			}
+
+			// Half two: the decoder independently still has no case for the
+			// column ch-go inferred, so the profile is not merely masking a
+			// capability that has quietly arrived.
+			decoded, ok := tc.column().(proto.ColResult)
+			if !ok {
+				t.Fatalf("%s: sample column is not a proto.ColResult", tc.declared)
+			}
+			if _, _, err := nativeColumnValue(decoded, 0); err == nil {
+				t.Fatalf("%s: nativeColumnValue now decodes it — Q-D7 wants the profile widened with it", tc.declared)
+			} else if !strings.Contains(err.Error(), tc.decoderErr) {
+				t.Fatalf("%s: nativeColumnValue = %v, want an error containing %q", tc.declared, err, tc.decoderErr)
 			}
 		})
 	}

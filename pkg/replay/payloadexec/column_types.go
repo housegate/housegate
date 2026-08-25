@@ -16,12 +16,6 @@ import (
 // refusal to create the table.
 var ErrUnsupportedColumnType = errors.New("payloadexec: unsupported column type")
 
-// maxFixedStringWidth mirrors MAX_FIXEDSTRING_SIZE in ClickHouse
-// v25.8.32.4-lts src/DataTypes/DataTypeFixedString.h. Keeping the 24-bit bound
-// here makes width parsing architecture-neutral and prevents oversized
-// declarations from reaching a make([]byte, width) allocation.
-const maxFixedStringWidth int64 = 0xFFFFFF
-
 // SupportedColumnType reports whether a declared ClickHouse type is inside the
 // pinned storage-integrity profile (§5.3, Spec Q Q-D1). The admitted set lives
 // in column_profile.go; this is a reader of it, shared by parseValue and every

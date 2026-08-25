@@ -144,9 +144,17 @@ func buildScalarColumnProfiles(entries ...ColumnProfile) map[string]ColumnProfil
 }
 
 // fixedStringProfileVector is the one FixedString declaration in the admitted
-// vector list. Widths are admitted by grammar, not by enumeration, at this
-// point; the vector exists so the cross-component test has a concrete case.
+// vector list.
 const fixedStringProfileVector = "FixedString(32)"
+
+// fixedStringAdmittedWidths is the intersection of what proto.ColAuto can infer
+// (inferGenerated: 8, 16, 32, 64, 128, 256, 512 — Spec Q measurement M1) with
+// what nativeColumnValue can decode (ColFixedStr32 only). Spec Q Q-D7: the
+// validator may never be wider than the decoder, because admitting a width that
+// cannot produce a root trades a loud startup refusal for a late replay failure.
+// Widening it is a capability addition and belongs with the profile-identity
+// bump, which widens both halves together.
+var fixedStringAdmittedWidths = map[int]struct{}{32: {}}
 
 // ResolveColumnProfile classifies one declared ClickHouse type against the
 // pinned storage-integrity profile. It is the only parser: SupportedColumnType,
@@ -182,7 +190,10 @@ func resolveFixedStringProfile(typeName string) (ColumnProfile, bool) {
 	// ParseInt before any arithmetic so a width literal that overflows int is
 	// rejected before it can reach a make([]byte, width) allocation.
 	width, err := strconv.ParseInt(widthText, 10, 64)
-	if err != nil || width <= 0 || width > maxFixedStringWidth {
+	if err != nil || width <= 0 {
+		return ColumnProfile{}, false
+	}
+	if _, admitted := fixedStringAdmittedWidths[int(width)]; !admitted {
 		return ColumnProfile{}, false
 	}
 	canonical := "FixedString(" + strconv.FormatInt(width, 10) + ")"

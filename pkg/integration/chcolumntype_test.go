@@ -41,9 +41,10 @@ func TestColumnProfileCanonicalSpellingsSurviveClickHouse(t *testing.T) {
 // form ClickHouse itself normalizes them to, so the two are not merely
 // self-consistent.
 //
-// The FixedString rows are driven through CanonicalColumnType directly rather
-// than through the admitted-vector loop, because Q-D7 narrows the admitted set
-// to one width while the spelling tolerance itself is unchanged.
+// Every input is driven through CanonicalColumnType directly rather than through
+// the admitted-vector loop, because these are non-canonical spellings and so are
+// not vectors. CanonicalColumnType validates as well as canonicalizes, so each
+// input must also be an admitted declaration.
 func TestColumnProfileCanonicalizationAgreesWithClickHouse(t *testing.T) {
 	conn := openDirectCH(t)
 	db := "hg_chcolumntype_canon"
@@ -51,7 +52,10 @@ func TestColumnProfileCanonicalizationAgreesWithClickHouse(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Exec(context.Background(), "DROP DATABASE IF EXISTS "+db) })
 
 	for i, declared := range []string{
-		"FixedString( 4 )", "FixedString(+4)", "FixedString(04)",
+		// The three legacy FixedString spellings the profile tolerates. Spec Q
+		// Q-D7 narrows the admitted widths to 32, and CanonicalColumnType
+		// validates as well as canonicalizes, so these exercise the spelling
+		// tolerance at the one admitted width rather than at an arbitrary one.
 		"FixedString( 32 )", "FixedString(+32)", "FixedString(032)",
 		"DateTime( 'UTC' )",
 		"DateTime64( 03 )", "DateTime64(+3)",

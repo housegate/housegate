@@ -290,13 +290,16 @@ func TestReplayCHExecutorFraudMismatch(t *testing.T) {
 func TestReplayCHExecutorMatchesInProcessRoot(t *testing.T) {
 	conn := openDirectCH(t)
 	tableID := uniqueTable(t)
-	// Include FixedString(10) to exercise the []byte read-back path: row 1 fills
-	// all 10 bytes, row 2 is shorter and must NUL-pad identically on both sides.
+	// Include a FixedString to exercise the []byte read-back path: row 1 fills
+	// all 32 bytes, row 2 is shorter and must NUL-pad identically on both sides.
+	// The width is 32 because that is the only width the Native decoder handles
+	// and therefore the only one the column-type profile admits (Spec Q Q-D7);
+	// it is not a property of this test.
 	schema := payloadexec.TableSchema{
 		TableID: tableID,
 		Columns: []lthash.Column{
 			{Name: "user_id", Type: "String"},
-			{Name: "tx_hash", Type: "FixedString(10)"},
+			{Name: "tx_hash", Type: "FixedString(32)"},
 			{Name: "balance", Type: "UInt64"},
 			{Name: "score", Type: "Int32"},
 			{Name: "ratio", Type: "Float64"},
@@ -318,7 +321,12 @@ func TestReplayCHExecutorMatchesInProcessRoot(t *testing.T) {
 		t.Fatalf("genesis roots differ: ch=%s in=%s", genCH.StateRoot, genIn.StateRoot)
 	}
 
-	payload := []byte("user_id,tx_hash,balance,score,ratio\n0x123,0xdeadbeef,10,-5,1.5\n0xabc,0xfeed,250,99,-0.25\n0x123,0xdeadbeef,10,-5,1.5\n")
+	// The first value is exactly 32 bytes (the full-width case); the second is
+	// shorter and must NUL-pad identically on both lanes.
+	payload := []byte("user_id,tx_hash,balance,score,ratio\n" +
+		"0x123,0xdddddddddddddddddddddddddddddd,10,-5,1.5\n" +
+		"0xabc,0xfeed,250,99,-0.25\n" +
+		"0x123,0xdddddddddddddddddddddddddddddd,10,-5,1.5\n")
 	chRoot := execRoot(t, chE, genCH, tableID, "stmt-1", payload)
 	inRoot := execRoot(t, inE, genIn, tableID, "stmt-1", payload)
 	if chRoot != inRoot {

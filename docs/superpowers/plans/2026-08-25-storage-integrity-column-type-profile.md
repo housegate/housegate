@@ -803,7 +803,7 @@ The alternative — widen `nativeColumnValue` to all seven in Phase 1 — is rej
 
 **Interfaces:** `ColumnProfile.FixedStringWidth int` becomes meaningful (it is `32` for the only admitted entry, and Task 11 makes it a real parameter).
 
-- [ ] **Step 1: Write the failing assertions (red)**
+- [x] **Step 1: Write the failing assertions (red)**
 
 In `column_types_test.go`:
 - `supportedTypeMatrix`: drop `"FixedString(1)"`, `"FixedString(255)"`, `"FixedString( 4 )"`, `"FixedString(+4)"`, `"FixedString(04)"`. Keep `"FixedString(32)"`.
@@ -815,7 +815,7 @@ In `executor_test.go`, the `parseValue("FixedString(4)", ...)` cases at `:636-65
 
 Expected pre-fix failures: `SupportedColumnType("FixedString(1)") = true, want false` and friends; `ValidateColumnType("FixedString(16777215)")` returning nil where an error is now wanted.
 
-- [ ] **Step 2: Narrow the authority**
+- [x] **Step 2: Narrow the authority**
 
 Replace the `0 < N <= maxFixedStringWidth` range check with membership in an enumerated set that currently holds one width:
 
@@ -830,13 +830,13 @@ var fixedStringAdmittedWidths = map[int]struct{}{32: {}}
 
 Keep the `strconv.ParseInt(widthText, 10, 64)` call so a width literal that overflows `int` is rejected before any arithmetic, and keep the legacy whitespace/leading-plus/leading-zero tolerance — that is spelling, not width, and Q-D5 wants it canonicalized rather than removed. Delete `maxFixedStringWidth` and update `unsupportedColumnTypeError`'s summary line via `admittedProfileSummary()`.
 
-- [ ] **Step 3: Fix the one production-adjacent fixture this breaks**
+- [x] **Step 3: Fix the one production-adjacent fixture this breaks**
 
 `pkg/integration/chreplay_test.go:299` declares `{Name: "tx_hash", Type: "FixedString(10)"}` on the CSV lane, with a comment at `:293` explaining that width 10 exercises the NUL-padded `[]byte` read-back path. Change it to `FixedString(32)` and keep both a short and an exactly-full value so the padding path is still exercised. Update the comment at `:282-293` to say the width is pinned by the Native decoder's reach, not chosen for the test.
 
 This is the visible cost of the narrowing and it is the only one in-tree: nothing else in the repo declares a non-32 `FixedString`. It is safe to pay now because, per the closure roadmap §1, no SI deployment is connected in production and the CSV lane is not the production lane (`MaterializerNative` is pinned by the intake runtime).
 
-- [ ] **Step 4: Delete the corresponding rows from Task 1's negative pin**
+- [x] **Step 4: Delete the corresponding rows from Task 1's negative pin**
 
 `TestNativeDecoderRejectsUndecodableInferableTypes` keeps its `FixedString(16)` / `FixedString(64)` rows — they are still undecodable — but add an assertion that the authority now also rejects them at declaration, so the two halves are stated together:
 
@@ -848,7 +848,7 @@ if payloadexec.SupportedColumnType(tc.declared) {
 
 That assertion is the durable statement of Q-D7 and it is what Task 11 has to flip deliberately.
 
-- [ ] **Step 5: Run**
+- [x] **Step 5: Run**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/hg-specq
