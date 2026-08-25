@@ -324,7 +324,7 @@ Expected: green with `column_types_test.go` **completely unmodified**. That file
 
 **Interfaces:** no new exports. `chexec.supportedColumnType` and `newScanDest` stay unexported; Task 4's test is an internal test file in `package chexec`.
 
-- [ ] **Step 1: Write the drift test first (red)**
+- [x] **Step 1: Write the drift test first (red)**
 
 Append to `pkg/replay/chexec/materializer_format_test.go`:
 
@@ -370,7 +370,7 @@ func TestChexecScanDestMatchesTheProfileGoType(t *testing.T) {
 
 Pre-fix expectation: `TestChexecAdmissionEqualsTheColumnProfile` FAILS with `chexec and authority disagree on "FixedString(17)": chexec=true authority=false`. `TestChexecScanDestMatchesTheProfileGoType` passes today by coincidence and becomes load-bearing from Task 6 onward.
 
-- [ ] **Step 2: Replace `chexec`'s private lists**
+- [x] **Step 2: Replace `chexec`'s private lists**
 
 `supportedColumnType(typeName string) bool { return payloadexec.SupportedColumnType(typeName) }`.
 
@@ -378,7 +378,7 @@ Pre-fix expectation: `TestChexecAdmissionEqualsTheColumnProfile` FAILS with `che
 
 `derefScan` keeps its post-processing switch — the calendar rebuild for `Date` and the `.UTC()` normalization for `DateTime` families are genuinely lane-specific and must stay — but dispatches on `profile.Family` instead of string prefixes, and its `default` becomes a fail-closed error naming the family. `isTemporalColumnType` is deleted; `profile.Family` replaces it at both call sites.
 
-- [ ] **Step 3: Make the Native block/schema comparison go through the authority**
+- [x] **Step 3: Make the Native block/schema comparison go through the authority**
 
 In `nativepayload.nativeBlockColumnPositions`, replace the raw `got.Type != want.Type` comparison with a comparison against the authority's declared wire type:
 
@@ -395,7 +395,7 @@ if got.Type != wantProfile.NativeWireType {
 
 At this task `NativeWireType == Canonical` for every entry, so behaviour is unchanged except that a schema declaring a type outside the profile now fails with `ErrUnsupportedColumnType` instead of a confusing string mismatch. Add one test for that in `native_test.go`. Task 12 is what makes `NativeWireType` diverge from `Canonical`.
 
-- [ ] **Step 4: Run**
+- [x] **Step 4: Run**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/hg-specq
@@ -664,7 +664,7 @@ Both helpers return `time.Time` in UTC so the value matches what the Native lane
 
 `TestColumnProfileAgreesAcrossAllFourComponents` now covers them for free. Note the `DateTime` (no timezone) sample: `ColDateTime.loc()` defaults to `time.Local` when `Location` is nil, so `nativeColumnValue`'s `.UTC()` is what makes the value deterministic — assert the decoded `time.Time` equals the instant in UTC, not that its `Location` is UTC.
 
-- [ ] **Step 6: Run**
+- [x] **Step 6: Run**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/hg-specq
