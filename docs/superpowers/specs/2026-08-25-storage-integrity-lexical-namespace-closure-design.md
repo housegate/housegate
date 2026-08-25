@@ -1,6 +1,6 @@
 # Storage-Integrity Surface: Lexical and SHOW-Namespace Closure
 
-**Date:** 2026-08-25 **Status:** Proposed **Roadmap:** [closure roadmap](2026-08-25-storage-integrity-closure-roadmap.md) Spec N. **Remediates:** [Spec I surface fail-closed](2026-08-19-storage-integrity-surface-failclosed-design.md) — findings from the 2026-08-25 verification review, each reproduced against the shipped scanner and the live v0.9.0 native engine. **Base:** [2026-06-22 storage integrity design](2026-06-22-storage-integrity-design.md) §5.1, §6, §11, §12.2. **Code base:** housegate `6fd56b8` (v0.11.0) plus open PR #141 `feature/si-surface-failclosed-housegate`, rewriter-go `23687cc` (v0.9.0), rewriter-grpc `a8ca4e7` (v0.13.0+1), rewriter-proto `19d90fc` (v0.6.0). **Source of truth:** English version.
+**Date:** 2026-08-25 **Status:** Implemented (Parts A-D; the release tag is Spec O's step 1) **Roadmap:** [closure roadmap](2026-08-25-storage-integrity-closure-roadmap.md) Spec N. **Remediates:** [Spec I surface fail-closed](2026-08-19-storage-integrity-surface-failclosed-design.md) — findings from the 2026-08-25 verification review, each reproduced against the shipped scanner and the live v0.9.0 native engine. **Base:** [2026-06-22 storage integrity design](2026-06-22-storage-integrity-design.md) §5.1, §6, §11, §12.2. **Code base:** housegate `6fd56b8` (v0.11.0) plus open PR #141 `feature/si-surface-failclosed-housegate`, rewriter-go `23687cc` (v0.9.0), rewriter-grpc `a8ca4e7` (v0.13.0+1), rewriter-proto `19d90fc` (v0.6.0). **Source of truth:** English version.
 
 ## 1. Problem
 
@@ -117,6 +117,27 @@ Before Spec N merges, `TestStorageIntegrityGolden` runs with `REWRITER_ORACLE_AD
 
 This is a one-shot gate for this spec, not a new CI job: rewriter-grpc builds only on the remote box, so wiring it into CI is separate work (recorded in §6).
 
+**Executed. The record:**
+
+```
+Spec N D3 cross-engine differential - 2026-08-25
+  rewriter-grpc   1faaf96 (feature/si-lexical-namespace-closure)
+  rewriter-go     f1e8626 (feature/si-lexical-namespace-closure)
+  oracle binary   sha256 5b5c6fc24d97e4d13b19ba32b23c0609c2ab42a91cffb1791d66f9d1b87b4940
+  suites          StorageIntegrity 237/237 - Writes 36/36 - Phase4 25/25 -
+                  DBLevel 17/17 - Select 15/15 - Errmsg 4/4  = 334 cases, 338 oracle RPCs
+  divergences     0
+  corpus          sha256 321cd51d515bdebb01228f2223481f3b1e2dc667c3406a4a3652e346b14cef78
+                  232837 bytes - 237 cases - fnv1a64 4366038644618079701
+  C++ suite       565/565
+```
+
+Two things the run established that the spec could not have asserted in advance.
+
+**C++ never had the 1e defect, and the reason is structural.** ClickHouse's lexer materializes a heredoc into a plain `ASTLiteral` String, so its policy already reads the value its formatter emits — which is exactly the invariant D6 makes the Go engine hold. All four heredoc corpus cases were green on the unmodified C++ binary with no code change, and `e'…'` does not exist in ClickHouse's grammar at all (`SyntaxError`). So 1e was a **Go-only** Critical on which the two engines silently disagreed, and nothing but an executed differential could have surfaced it. That is the argument for §6's "automate this in CI" debt, restated as evidence.
+
+**The differential's field set is narrower than "the engines agree."** `harness.Compare` diffs `code`, `statement_type`, `existence_clause`, `storage_integrity_contract_version`, `table_rewrites`, `database_rewrites`, `failed_cte_aliases`, `privileges_deltas` and `sql_after_rewrite`. It does **not** diff `message` or `original_accessed_tables`; those reach parity only through each engine asserting the same corpus `want_message_contains` / `want_accessed` locally, which covers only the cases that set those keys. "Zero divergences" is a statement about the diffed fields, and §6 records the gap.
+
 ### D4 — the namespace decoder covers foreign-connector table functions
 
 `decodeNamespaceFunctionRefDetail` gains the connector family whose signature carries an explicit ClickHouse-shaped `(database, table)` pair after a connection argument: **`mysql`, `postgresql`, `mongodb`, `jdbc`, `odbc`**. They inherit the existing unresolvable-argument rule: an argument that is not a static string literal is a rejection, not a pass (`si_remote_unresolved_namespace_rejected` is the precedent).
@@ -164,5 +185,6 @@ Ships as three PRs. rewriter-go and rewriter-grpc land D2/D4/D5/D6 together with
 
 - **`system.*` metadata exposure.** SI physical database, table and part names are readable through `system.tables` / `system.parts` / `system.columns` / `system.merges` by any authenticated user. Closing it means an allowlist over the `system` database, which breaks ordinary client introspection; it is a confidentiality property the v1 design never claimed. Revisit if SI is ever deployed to a multi-tenant read surface.
 - **`sireserved`'s hand-rolled scanner.** D1 completes its lexical model but the structure — a byte loop maintained by hand against a moving SQL dialect — is the same structure that produced 1a. The durable answer is to run the polyglot tokenizer over the statement and scan tokens, which is available in-process wherever the native engine is configured. Blocked on operator sessions being exactly the sessions where the rewriter is deliberately absent; needs its own design.
-- **Cross-engine differential in CI.** D3 is a manual gate because rewriter-grpc builds only on the remote box. Automating it needs a published rewriter-grpc image or a remote CI runner.
+- **Cross-engine differential in CI.** D3 is a manual gate because rewriter-grpc builds only on the remote box. Automating it needs a published rewriter-grpc image or a remote CI runner. The 2026-08-25 run is the argument for doing it: it is what proved 1e was Go-only, and a shared JSON file could never have shown that.
+- **`harness.Compare` does not diff `message` or `original_accessed_tables`.** Two engines could return the same code with different operator-facing text and the differential would stay green. Widening the diff is cheap; deciding what counts as an acceptable message difference is not, which is why it is debt rather than a decision here.
 - **`SHOW MERGES` and friends.** Deliberately pass-through per §2; reconsider only together with the `system.*` decision.
