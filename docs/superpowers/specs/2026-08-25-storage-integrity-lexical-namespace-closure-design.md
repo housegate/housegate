@@ -13,7 +13,9 @@ Spec I built three independent layers: an engine catch-all (D1), HouseGate's unc
 | `SELECT $$--$$ AS x, count() FROM hg_safe.db1__t` | no violation | valid, accessed `hg_safe.db1__t` |
 | `SELECT $$#$$ AS x, _hg_row_id FROM hg_unsafe.db1__t` | no violation | valid |
 | `INSERT INTO ordinary.t SELECT $$--$$, a FROM hg_safe.db1__t` | no violation | valid — exports safe state to an ordinary table |
+| `SELECT $tag$//$tag$ AS x, count() FROM hg_safe.db1__t` | no violation | valid — the tagged form bypasses too |
 | control: `SELECT count() FROM hg_safe.db1__t` | **refused** (correct) | — |
+| control: `SELECT * FROM merge($$hg_safe$$, '^db1__t$')` | **refused** (correct, accidentally — see D1) | — |
 
 `sireserved` is the *only* control on this path: maintenance and platform-operator sessions skip rewrite by design (Spec I D6), and the SI ingress short-circuits when the accessed-table set is empty. Refuse-on-mention was adopted in Spec I precisely to escape the parser-gap bypass class; it carries exactly one obligation — a complete lexical model of every span in which a reserved name can hide — and one span is missing.
 
@@ -30,6 +32,22 @@ UnsupportedStatement SHOW TABLES FROM hg_safe                → "physical datab
 `statement_type` is `SHOW_TABLES`, so these never reach `native.go:250`'s D1 catch-all. Any ordinary authenticated user — no maintenance or platform-operator marker needed — reads the SI physical schema including the `_hg_row_id` column name. The C++ engine fails closed on the same input because its `ASTShowColumnsQuery` cast fails and it drops to its catch-all, so **the two engines disagree** on live inputs, and the shared corpus has zero coverage of any of these forms (7 SHOW cases out of 210, all `TABLES` / `DICTIONARIES` / `CREATE`).
 
 Two structural causes sit behind the single wrong comment. First, the SHOW-kind classification is a **negative** rule (`!= "TABLES"` → assumed target-less), so every SHOW variant ClickHouse adds lands in the target-less bucket by default. Second, the prefix set is incomplete: `EXTENDED` is not modelled, so `SHOW EXTENDED COLUMNS …` classifies as kind `EXTENDED`.
+
+`ParseDBLevel` measured against the live v0.9.0 engine, which fixes exactly what each part of D2 has to do:
+
+| SQL | `ShowWhat` | `DB` | `DBResolved` |
+|---|---|---|---|
+| `SHOW COLUMNS FROM db1__t FROM hg_safe` | `COLUMNS` | `db1__t` | true |
+| `SHOW COLUMNS FROM hg_safe.db1__t` | `COLUMNS` | `hg_safe` | true |
+| `SHOW EXTENDED COLUMNS FROM db1__t FROM hg_safe` | `EXTENDED` | `` | false |
+| `SHOW FULL COLUMNS FROM db1__t IN hg_unsafe` | `COLUMNS` | `db1__t` | true |
+| `SHOW INDEX FROM hg_safe.db1__t` | `INDEX` | `hg_safe` | true |
+| `SHOW INDEXES FROM db1__t FROM hg_safe` | `INDEXES` | `db1__t` | true |
+| `SHOW KEYS FROM db1__t FROM hg_safe` | `KEYS` | `db1__t` | true |
+| `SHOW MERGES` | `MERGES` | `` | false |
+| `SHOW SOMETHINGNEW FROM hg_safe` | `SOMETHINGNEW` | `hg_safe` | true |
+
+Three consequences. The **qualified** form already binds the right database — `SHOW INDEX FROM hg_safe.db1__t` gives `DB = hg_safe` — so for that shape the whole fix is at the handler, and the parser needs no change. The **two-`FROM`** form binds the table into `DB`, so the parser genuinely has to learn the reversed grammar. And an unknown kind parses cleanly with its database bound, so the catch-all in D2 is implementable and would have caught this class.
 
 **1c — the corpus cannot see engine divergence (Medium).** Spec J made all 41 `Success` cases pin their SQL and grew the corpus to 210, which is a large improvement. But byte-identical JSON in two repos only proves the two runners are fed the same inputs; it does not prove the two engines *produce* the same output on anything the corpus omits. `REWRITER_ORACLE_ADDR` — the cross-engine differential harness — exists and is wired into `TestStorageIntegrityGolden`, and 1b is exactly the kind of divergence it would catch. There is no record of it having been run over the full corpus since Spec I.
 
@@ -48,7 +66,7 @@ Two structural causes sit behind the single wrong comment. First, the SHOW-kind 
 `scanSQLSurfaces` gains a heredoc case ahead of the `default:` branch:
 
 - A `$` opens a heredoc when it is followed by a (possibly empty) tag matching `[A-Za-z_][0-9A-Za-z_]*` and a closing `$`. The span ends at the next occurrence of the identical `$tag$`. An unterminated heredoc is an error, exactly like an unterminated `'…'` or `/* … */`.
-- The heredoc body is a **string literal**, so it is blanked from `outsideLiterals` and written verbatim to `withLiterals`. This is not optional: ClickHouse table functions interpret literal arguments as identifiers, so `merge($$hg_safe$$, '^db1__t$')` must still be caught by the `withLiterals` surface. A heredoc body that lands on neither surface would be a new bypass, strictly worse than the one being fixed.
+- The heredoc body is a **string literal**, so it is blanked from `outsideLiterals` and written verbatim to `withLiterals`. This is not optional, and it is a live regression risk rather than a hypothetical one: `merge($$hg_safe$$, '^db1__t$')` is **refused today**, because the body carries no comment marker and `hg_safe` survives on `withLiterals` as ordinary bytes. A fix that blanks heredoc bodies from both surfaces would turn a currently-caught statement into a bypass — strictly worse than the hole being closed.
 - ClickHouse performs **no escape processing** inside a heredoc: `$$hg\x5Fsafe$$` is literally `hg\x5Fsafe` and is not `hg_safe`. Heredoc bodies therefore do **not** inherit the backslash refusal that `consumeStringLiteral` applies to `'…'`. The implementation must confirm this against the real grammar before relying on it; if the grammar disagrees, refuse backslash-bearing heredocs the same way.
 - A `$` that does not open a well-formed heredoc is **refused**, with the same error shape as the existing lexical refusals. Rejecting is correct rather than merely conservative: outside a heredoc opener and a quoted span, `$` is not part of any identifier or operator this guard needs to admit, and the alternative — copying it through — is what created 1a.
 
