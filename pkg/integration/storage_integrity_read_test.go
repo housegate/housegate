@@ -10,8 +10,11 @@ import (
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 
+	housegate "github.com/housegate/housegate"
+	"github.com/housegate/housegate/pkg/auth"
 	"github.com/housegate/housegate/pkg/config"
 	"github.com/housegate/housegate/pkg/integration/testenv"
+	"github.com/housegate/housegate/pkg/registry"
 	"github.com/housegate/housegate/pkg/rewriter"
 )
 
@@ -290,5 +293,127 @@ func TestStorageIntegrityRead_CriticalStatementsAreRefused(t *testing.T) {
 	}
 	if count != safeRowsBefore {
 		t.Fatalf("safe-mode count = %d, want %d", count, safeRowsBefore)
+	}
+}
+
+// operatorGuardMessage is the distinctive half of pkg/plugins/sireserved's
+// refusal. It is deliberately NOT a substring of the rewriter's
+// "storage-integrity physical database ... is not directly addressable", so
+// asserting it proves the operator guard fired rather than the rewriter — and
+// therefore that the maintenance flag really took effect on the session.
+const operatorGuardMessage = "is not addressable through the proxy"
+
+// TestStorageIntegrityRead_HeredocCannotHideAReservedName is the Spec N D1
+// regression against a real ClickHouse. A maintenance session skips SQL
+// rewrite by design (Spec I D6), so pkg/plugins/sireserved is the only control
+// on this path; before Spec N a comment marker inside a ClickHouse heredoc
+// ($$...$$ / $tag$...$tag$) blanked the rest of the statement from both scan
+// surfaces and the guard saw nothing, so the statement executed against the
+// protected namespace and returned a result set.
+//
+// The maintenance flag is set only by authplugin after a JWS verify whose
+// signer equals the host-injected Options.Signer.Address() (build.go:374-385),
+// and testenv.StartServerProxy never sets opts.Signer — so the session is
+// built explicitly here. Steps 1 and 2 below prove the flag actually took
+// effect before any negative assertion runs; without them every "must be
+// refused" case could pass vacuously on a session that was never privileged.
+func TestStorageIntegrityRead_HeredocCannotHideAReservedName(t *testing.T) {
+	lib := os.Getenv("POLYGLOT_SQL_FFI_PATH")
+	if lib == "" {
+		t.Skip("POLYGLOT_SQL_FFI_PATH not set; run `go run ./cmd fetch-rewriter-lib --tag v0.9.0` and pass --test_env")
+	}
+	ctx := context.Background()
+	const phys = "phys_si_heredoc"
+	signer, err := auth.NewRelaySigner(authTestKey1)
+	if err != nil {
+		t.Fatalf("NewRelaySigner: %v", err)
+	}
+	seed := openConnNoDB(t, chEnv.Addr)
+	for _, query := range []string{
+		"CREATE DATABASE IF NOT EXISTS " + phys,
+		"CREATE DATABASE IF NOT EXISTS hg_safe",
+		"CREATE DATABASE IF NOT EXISTS hg_unsafe",
+		"DROP TABLE IF EXISTS hg_safe.db1__hd",
+		"CREATE TABLE hg_safe.db1__hd (_hg_row_id FixedString(32), a UInt32) ENGINE = MergeTree ORDER BY a",
+		"SYSTEM STOP MERGES hg_safe.db1__hd",
+		"INSERT INTO hg_safe.db1__hd VALUES (repeat('a', 32), 1)",
+	} {
+		if err := seed.Exec(ctx, query); err != nil {
+			t.Fatalf("seed %q: %v", query, err)
+		}
+	}
+	t.Cleanup(func() {
+		_ = seed.Exec(ctx, "DROP DATABASE IF EXISTS hg_safe")
+		_ = seed.Exec(ctx, "DROP DATABASE IF EXISTS hg_unsafe")
+		_ = seed.Exec(ctx, "DROP DATABASE IF EXISTS "+phys)
+	})
+
+	proxy := testenv.StartServerProxy(t, chEnv.Addr,
+		testenv.WithExtraDatabases("db1"),
+		authProxyConfig([]string{signer.Address()}, false),
+		testenv.WithDatabasePermission(signer.Address(), "db1", registry.DbAuthOwner),
+		testenv.WithDatabasePermission(signer.Address(), chEnv.Database, registry.DbAuthOwner),
+		// Options.Signer is the host attestation build.go requires before the
+		// validator will honour SQL_sentio_maintenance (build.go:374-385).
+		func(_ *config.Config, opts *housegate.Options) { opts.Signer = signer },
+		testenv.WithConfigMutator(func(cfg *config.Config) {
+			cfg.Rewriter.Engine = "native"
+			cfg.Rewriter.NativeLibraryPath = lib
+			cfg.Rewriter.PhysicalDatabase = phys
+			cfg.StorageIntegrity.Tables = []string{"db1.hd"}
+			cfg.StorageIntegrity.Read.DefaultMode = string(rewriter.ReadModeSafe)
+		}),
+	)
+	conn := openSignedConn(t, proxy.Addr, signer)
+	maintenance := clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{
+		"SQL_sentio_maintenance": clickhouse.CustomSetting{Value: "1"},
+	}))
+
+	// Step 1: the session is alive and not failing for unrelated reasons. If
+	// this errors, every negative assertion below would "pass" vacuously.
+	var alive uint8
+	if err := conn.QueryRow(maintenance, "SELECT 1").Scan(&alive); err != nil {
+		t.Fatalf("the maintenance session must serve an ordinary query: %v", err)
+	}
+
+	// Step 2: the maintenance flag actually took effect. A plain mention of the
+	// reserved database is refused today, and the refusal carries the OPERATOR
+	// GUARD's message rather than the rewriter's — which is only possible if
+	// rewrite was skipped, i.e. if the session really is privileged. Without
+	// this the whole test could pass on an ordinary session.
+	err = conn.Exec(maintenance, "SELECT count() FROM hg_safe.db1__hd")
+	if err == nil {
+		t.Fatal("a reserved name on a maintenance session must be refused; the maintenance wiring is broken")
+	}
+	if !strings.Contains(err.Error(), operatorGuardMessage) {
+		t.Fatalf("refusal must come from the operator guard (so the maintenance flag took effect), got: %v", err)
+	}
+
+	// Step 3: the heredoc forms. PRE-FIX each of these reached ClickHouse and
+	// returned a result set, because the comment marker inside the heredoc
+	// blanked the statement from both scan surfaces.
+	for _, tc := range []struct{ name, sql string }{
+		{"heredoc hiding a line comment", "SELECT $$--$$ AS x, count() FROM hg_safe.db1__hd"},
+		{"tagged heredoc hiding a slash comment", "SELECT $tag$//$tag$ AS x, count() FROM hg_safe.db1__hd"},
+		{"heredoc hiding a hash comment", "SELECT $$#$$ AS x, a FROM hg_safe.db1__hd"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := conn.Exec(maintenance, tc.sql)
+			if err == nil {
+				t.Fatalf("%q must reach the client as an Exception, not a result set", tc.sql)
+			}
+			if !strings.Contains(err.Error(), "hg_safe") {
+				t.Fatalf("%q error = %v, want it to name the reserved database", tc.sql, err)
+			}
+			if !strings.Contains(err.Error(), operatorGuardMessage) {
+				t.Fatalf("%q must be refused by the operator guard, got: %v", tc.sql, err)
+			}
+		})
+	}
+
+	// Step 4: the guard is targeted, not a blanket refusal of every heredoc on
+	// a maintenance session.
+	if err := conn.Exec(maintenance, "SELECT $$ordinary$$ AS x"); err != nil {
+		t.Fatalf("an ordinary heredoc on a maintenance session must pass: %v", err)
 	}
 }
