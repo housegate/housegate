@@ -74,6 +74,38 @@ func (h *stagedRejectHooks) counts() (aborts, completes, successes int) {
 	return h.aborts, h.completes, h.successes
 }
 
+// The upstream reader must consume q1's terminal replacement while it still
+// owns q1. If it clears activeQuery first, the client reader can begin and
+// reject q2 in between, overwriting the single pending-rejection slot and
+// exposing q1's withheld INSERT as a false-success EndOfStream.
+func TestRelay_TakeActiveQueryStateConsumesPendingRejectionAtomically(t *testing.T) {
+	r := &Relay{}
+	q1 := &chproto.Exception{Code: proto.Error(chproto.CodeTooManyParts), Message: "q1 back-pressure"}
+	if !r.beginActiveQuery("q1") {
+		t.Fatal("begin q1 = false")
+	}
+	if !r.rejectActiveQueryTerminal("q1", q1) {
+		t.Fatal("reject q1 = false")
+	}
+
+	queryID, canceled, active, rejection := r.takeActiveQueryState()
+	if queryID != "q1" || canceled || !active || rejection != q1 {
+		t.Fatalf("q1 terminal state = %q/%v/%v/%p, want q1/false/true/%p", queryID, canceled, active, rejection, q1)
+	}
+
+	q2 := &chproto.Exception{Code: proto.Error(chproto.CodeTooManyParts), Message: "q2 back-pressure"}
+	if !r.beginActiveQuery("q2") {
+		t.Fatal("begin q2 = false after taking q1")
+	}
+	if !r.rejectActiveQueryTerminal("q2", q2) {
+		t.Fatal("reject q2 = false")
+	}
+	queryID, canceled, active, rejection = r.takeActiveQueryState()
+	if queryID != "q2" || canceled || !active || rejection != q2 {
+		t.Fatalf("q2 terminal state = %q/%v/%v/%p, want q2/false/true/%p", queryID, canceled, active, rejection, q2)
+	}
+}
+
 // Spec L D6 acceptance: the client receives Exception 252 and the same
 // connection remains usable for a subsequent query.
 func TestRelay_StagedRejection_KeepsSessionAndServesNextQuery(t *testing.T) {

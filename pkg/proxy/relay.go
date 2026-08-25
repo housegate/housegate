@@ -345,22 +345,30 @@ func (r *Relay) beginActiveQuery(queryID string) bool {
 }
 
 func (r *Relay) takeActiveQuery() (string, bool) {
-	queryID, _, active := r.takeActiveQueryState()
+	queryID, _, active, _ := r.takeActiveQueryState()
 	return queryID, active
 }
 
-func (r *Relay) takeActiveQueryState() (queryID string, canceled, active bool) {
+// takeActiveQueryState ends the active query and consumes its terminal
+// replacement under the same lock. Releasing queryMu between those actions
+// would let the client reader begin and reject the next query, overwriting the
+// single pending-rejection slot before the upstream reader took this one.
+func (r *Relay) takeActiveQueryState() (queryID string, canceled, active bool, rejection *chproto.Exception) {
 	r.queryMu.Lock()
 	defer r.queryMu.Unlock()
 	if !r.activeQuery {
-		return "", false, false
+		return "", false, false, nil
 	}
 	queryID = r.activeQueryID
 	canceled = r.queryCanceled
 	r.activeQuery = false
 	r.activeQueryID = ""
 	r.queryCanceled = false
-	return queryID, canceled, true
+	if r.pendingRejectionExc != nil && r.pendingRejectionID == queryID {
+		rejection = r.pendingRejectionExc
+		r.pendingRejectionID, r.pendingRejectionExc = "", nil
+	}
+	return queryID, canceled, true, rejection
 }
 
 func (r *Relay) currentActiveQuery() (string, bool) {
@@ -391,18 +399,6 @@ func (r *Relay) rejectActiveQueryTerminal(queryID string, exc *chproto.Exception
 	r.pendingRejectionID = queryID
 	r.pendingRejectionExc = exc
 	return true
-}
-
-// takePendingRejection consumes the armed rejection for queryID, if any.
-func (r *Relay) takePendingRejection(queryID string) *chproto.Exception {
-	r.queryMu.Lock()
-	defer r.queryMu.Unlock()
-	if r.pendingRejectionExc == nil || r.pendingRejectionID != queryID {
-		return nil
-	}
-	exc := r.pendingRejectionExc
-	r.pendingRejectionID, r.pendingRejectionExc = "", nil
-	return exc
 }
 
 func (r *Relay) startOpaqueCompletionProbe(ctx context.Context, queryID string) error {
@@ -2062,8 +2058,7 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 
 		if isEndOfStream || isException {
 			r.sess.State().ClearActiveRewrite()
-			queryID, canceled, active := r.takeActiveQueryState()
-			rejection := r.takePendingRejection(queryID)
+			queryID, canceled, active, rejection := r.takeActiveQueryState()
 			if active && isEndOfStream && !canceled && rejection == nil {
 				r.hooks.OnQuerySuccess(ctx, r.sess, queryID)
 			}
