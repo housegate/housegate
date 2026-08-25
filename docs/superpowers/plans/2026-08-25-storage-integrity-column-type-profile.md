@@ -687,7 +687,7 @@ Spec Q does not mention this and Phase 1 is incomplete without it. `partitionVal
 
 **Interfaces:** none.
 
-- [ ] **Step 1: Write the failing test (red)**
+- [x] **Step 1: Write the failing test (red)**
 
 ```go
 // TestPartitionIDForRow_AcceptsTemporalPartitionColumns proves a Date or
@@ -708,7 +708,7 @@ func TestPartitionIDForRow_AcceptsTemporalPartitionColumns(t *testing.T) {
 
 Expected pre-fix failure, all three cases: `partition column "p": unsupported partition value type time.Time`.
 
-- [ ] **Step 2: Decide and document the rendering**
+- [x] **Step 2: Decide and document the rendering**
 
 The partition id is **not** hashed into a row element — it is an executor-internal grouping key that must merely be stable and injective across the values a single partition column can take. Two rules, both stated in the code comment:
 
@@ -717,11 +717,11 @@ The partition id is **not** hashed into a row element — it is an executor-inte
 
 Because the family is needed, `partitionValueString(v any)` becomes `partitionValueString(profile ColumnProfile, v any)` and `PartitionIDForRow` passes the already-resolved profile for the partition column. Its `default` branch stays fail-closed.
 
-- [ ] **Step 3: Guard the injectivity claim**
+- [x] **Step 3: Guard the injectivity claim**
 
 Add `TestPartitionIDForRow_TemporalRenderingIsInjective`: two distinct instants one millisecond apart under `DateTime64(3, 'UTC')` must produce different ids; the same two under `DateTime('UTC')` must produce the *same* id, and that is correct because the column's own resolution is one second.
 
-- [ ] **Step 4: Run**
+- [x] **Step 4: Run**
 
 ```bash
 bazel test //pkg/replay/payloadexec:payloadexec_test --test_output=errors
