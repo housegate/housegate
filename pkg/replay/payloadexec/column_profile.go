@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/housegate/housegate/pkg/lthash"
 )
@@ -32,6 +33,13 @@ const (
 	FamilyFloat       ColumnFamily = "Float"
 	FamilyUInt        ColumnFamily = "UInt"
 	FamilyInt         ColumnFamily = "Int"
+	// Temporal families. Spec Q §1a: the Native decoder, the canonical row
+	// encoder and the ClickHouse-backed executor already handle all of these;
+	// only this validator rejected them, which is what Spec L D1 narrowed by
+	// accident. Admitting them adds no digest byte and no kind tag.
+	FamilyDate       ColumnFamily = "Date"
+	FamilyDateTime   ColumnFamily = "DateTime"
+	FamilyDateTime64 ColumnFamily = "DateTime64"
 )
 
 // allColumnFamilies is the closed set of declared families. It exists so the
@@ -45,6 +53,9 @@ var allColumnFamilies = []ColumnFamily{
 	FamilyFloat,
 	FamilyUInt,
 	FamilyInt,
+	FamilyDate,
+	FamilyDateTime,
+	FamilyDateTime64,
 }
 
 // ColumnProfile is one resolved declaration. Every consumer reads these fields
@@ -69,6 +80,17 @@ type ColumnProfile struct {
 	// FixedStringWidth is the declared width of a FixedString(N) column and is
 	// zero for every other family.
 	FixedStringWidth int
+	// Precision is the declared sub-second precision of a DateTime64(P) column
+	// and is zero for every other family. Zero is also a legal DateTime64
+	// precision, so read it together with Family.
+	Precision int
+	// Timezone is the declared timezone of a DateTime(<tz>) or
+	// DateTime64(P, <tz>) column and is empty when none was declared. Spec Q
+	// Q-D2 keeps it rather than stripping it: the value encoding is already
+	// timezone-independent, so the spelling is what distinguishes the two
+	// declarations, and ClickHouse reports the timezone back for the physical
+	// column.
+	Timezone string
 }
 
 // scalarColumnProfiles is the fixed-spelling half of the authority: types whose
@@ -86,7 +108,15 @@ var scalarColumnProfiles = buildScalarColumnProfiles(
 	ColumnProfile{Family: FamilyInt, Canonical: "Int16", GoType: reflect.TypeOf(int16(0)), KindTag: lthash.KindInt},
 	ColumnProfile{Family: FamilyInt, Canonical: "Int32", GoType: reflect.TypeOf(int32(0)), KindTag: lthash.KindInt},
 	ColumnProfile{Family: FamilyInt, Canonical: "Int64", GoType: reflect.TypeOf(int64(0)), KindTag: lthash.KindInt},
+	ColumnProfile{Family: FamilyDate, Canonical: "Date", GoType: timeType, KindTag: lthash.KindTime},
+	ColumnProfile{Family: FamilyDateTime, Canonical: "DateTime", GoType: timeType, KindTag: lthash.KindTime},
 )
+
+// timeType is the Go value type every temporal family resolves to. Both lanes
+// must produce it in UTC: nativeColumnValue normalizes, and parseValue below
+// resolves every accepted text form to UTC, or the two lanes hash the same row
+// differently.
+var timeType = reflect.TypeOf(time.Time{})
 
 // scalarColumnProfileOrder pins the declaration order of the fixed-spelling
 // entries, because map iteration order would otherwise reorder the admitted
@@ -96,6 +126,7 @@ var scalarColumnProfileOrder = []string{
 	"Bool", "Float32", "Float64",
 	"UInt8", "UInt16", "UInt32", "UInt64",
 	"Int8", "Int16", "Int32", "Int64",
+	"Date", "DateTime",
 }
 
 func buildScalarColumnProfiles(entries ...ColumnProfile) map[string]ColumnProfile {
@@ -129,6 +160,12 @@ func ResolveColumnProfile(typeName string) (ColumnProfile, error) {
 	if profile, ok := resolveFixedStringProfile(typeName); ok {
 		return profile, nil
 	}
+	if profile, ok := resolveDateTimeProfile(typeName); ok {
+		return profile, nil
+	}
+	if profile, ok := resolveDateTime64Profile(typeName); ok {
+		return profile, nil
+	}
 	return ColumnProfile{}, unsupportedColumnTypeError(typeName)
 }
 
@@ -159,12 +196,103 @@ func resolveFixedStringProfile(typeName string) (ColumnProfile, bool) {
 	}, true
 }
 
+// maxDateTime64Precision mirrors ch-go's proto.Precision.Valid(), which admits
+// 0 through PrecisionNano = 9. The bound is duplicated rather than imported
+// because this package deliberately does not depend on ch-go: the authority has
+// to be readable by callers that never touch the Native wire. The capability
+// pin in pkg/replay/nativepayload is what keeps the two in step across a fork
+// bump.
+const maxDateTime64Precision = 9
+
+// resolveDateTimeProfile parses DateTime(<tz>). The bare DateTime spelling has
+// no parameters and lives in the fixed-spelling table instead.
+func resolveDateTimeProfile(typeName string) (ColumnProfile, bool) {
+	const prefix = "DateTime("
+	if !strings.HasPrefix(typeName, prefix) || !strings.HasSuffix(typeName, ")") {
+		return ColumnProfile{}, false
+	}
+	timezone, ok := parseQuotedTimezone(typeName[len(prefix) : len(typeName)-1])
+	if !ok {
+		return ColumnProfile{}, false
+	}
+	canonical := "DateTime('" + timezone + "')"
+	return ColumnProfile{
+		Family:         FamilyDateTime,
+		Canonical:      canonical,
+		GoType:         timeType,
+		KindTag:        lthash.KindTime,
+		NativeWireType: canonical,
+		Timezone:       timezone,
+	}, true
+}
+
+// resolveDateTime64Profile parses DateTime64(P) and DateTime64(P, <tz>).
+func resolveDateTime64Profile(typeName string) (ColumnProfile, bool) {
+	const prefix = "DateTime64("
+	if !strings.HasPrefix(typeName, prefix) || !strings.HasSuffix(typeName, ")") {
+		return ColumnProfile{}, false
+	}
+	inner := typeName[len(prefix) : len(typeName)-1]
+	precisionText, timezoneText, hasTimezone := strings.Cut(inner, ",")
+	// Leading whitespace, a leading plus and leading zeroes are canonicalized
+	// away rather than rejected, matching the FixedString width grammar.
+	precision, err := strconv.ParseInt(strings.TrimSpace(precisionText), 10, 64)
+	if err != nil || precision < 0 || precision > maxDateTime64Precision {
+		return ColumnProfile{}, false
+	}
+	canonical := "DateTime64(" + strconv.FormatInt(precision, 10)
+	timezone := ""
+	if hasTimezone {
+		var ok bool
+		if timezone, ok = parseQuotedTimezone(timezoneText); !ok {
+			return ColumnProfile{}, false
+		}
+		// The comma-space separator matches proto.ColumnType.With, so a decoded
+		// ch-go column reconstructs exactly this spelling.
+		canonical += ", '" + timezone + "'"
+	}
+	canonical += ")"
+	return ColumnProfile{
+		Family:         FamilyDateTime64,
+		Canonical:      canonical,
+		GoType:         timeType,
+		KindTag:        lthash.KindTime,
+		NativeWireType: canonical,
+		Precision:      int(precision),
+		Timezone:       timezone,
+	}, true
+}
+
+// parseQuotedTimezone accepts a single-quoted IANA timezone and returns its
+// canonical name. The zone must load: ch-go's ColDateTime/ColDateTime64 Infer
+// calls time.LoadLocation at decode time, and the validator must never be the
+// looser of the two. The empty spelling is rejected explicitly because
+// time.LoadLocation("") silently answers UTC, which would rewrite a nonsense
+// declaration into a valid-looking one.
+func parseQuotedTimezone(raw string) (string, bool) {
+	text := strings.TrimSpace(raw)
+	if len(text) < 3 || text[0] != '\'' || text[len(text)-1] != '\'' {
+		return "", false
+	}
+	name := text[1 : len(text)-1]
+	if name == "" || strings.ContainsAny(name, "'\\") {
+		return "", false
+	}
+	location, err := time.LoadLocation(name)
+	if err != nil {
+		return "", false
+	}
+	// Canonicalize through the loaded location so the stored spelling is
+	// exactly what a decoded ch-go column reports for the same declaration.
+	return location.String(), true
+}
+
 // AdmittedColumnTypeVectors returns one concrete admitted declaration per
 // distinguishable shape, in canonical spelling. The cross-component authority
 // test enumerates exactly this list, so adding a family without adding a vector
 // is a test failure rather than an untested widening.
 func AdmittedColumnTypeVectors() []string {
-	out := make([]string, 0, len(scalarColumnProfileOrder)+1)
+	out := make([]string, 0, len(scalarColumnProfileOrder)+3)
 	out = append(out, "String", fixedStringProfileVector)
 	for _, name := range scalarColumnProfileOrder {
 		if name == "String" {
@@ -172,6 +300,10 @@ func AdmittedColumnTypeVectors() []string {
 		}
 		out = append(out, name)
 	}
+	// The parameterized temporal shapes: a timezone-bearing DateTime, and a
+	// DateTime64 with and without one. Each is a distinguishable declaration
+	// shape, so each needs its own cross-component vector.
+	out = append(out, "DateTime('UTC')", "DateTime64(3)", "DateTime64(3, 'UTC')")
 	return out
 }
 

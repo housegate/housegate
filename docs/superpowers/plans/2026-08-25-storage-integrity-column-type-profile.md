@@ -598,13 +598,13 @@ Expected: green on first run. If any hex differs from the table above, **stop** 
 
 **Not included:** `Date32`. Measurement M2 proved it does not decode today, and Q-D2 says explicitly that it moves to Phase 2 rather than being declared supported on a prefix match. Task 11 lands it.
 
-- [ ] **Step 1: Move the temporal entries in `column_types_test.go` (red)**
+- [x] **Step 1: Move the temporal entries in `column_types_test.go` (red)**
 
 That file's `rejectedTypeMatrix` currently lists `"Date"`, `"DateTime"`, `"DateTime64(3)"`. Move them to `supportedTypeMatrix` and add `"DateTime('UTC')"` and `"DateTime64(3, 'UTC')"`. Add to `rejectedTypeMatrix`: `"Date32"` (Phase 2, and it must stay rejected until then), `"DateTime64()"`, `"DateTime64(10)"` (precision out of ch-go's valid range), `"DateTime('Not/AZone')"`, `"DateTime64(3,'UTC')"` (no space — see Step 3).
 
 Expected pre-fix failure: `SupportedColumnType("DateTime") = false, want true` from `TestValidateColumnType_AcceptsExactlyTheMVPWhitelist`, plus `TestValidateColumnType_AgreesWithParseValue` failing on the same names.
 
-- [ ] **Step 2: Add the three families to the authority**
+- [x] **Step 2: Add the three families to the authority**
 
 ```go
 // Temporal families. Spec Q §1a: the Native decoder, the canonical row encoder
@@ -620,7 +620,7 @@ Parameter validation, all fail-closed and all derived from what ch-go will actua
 - `DateTime64(P)`: `P` must satisfy `proto.Precision(P).Valid()` (0-9). Reject `DateTime64()` and any `P` outside that range.
 - `DateTime64(P, <tz>)`: both rules.
 
-- [ ] **Step 3: Define the canonical spellings (Q-D5)**
+- [x] **Step 3: Define the canonical spellings (Q-D5)**
 
 This is the decision that has to be written down rather than left to `strings.TrimSpace`, because it is hashed twice.
 
@@ -637,7 +637,7 @@ The comma-space is not a style choice. `ColumnType.With` joins parameters with `
 
 Extend `CanonicalColumnType` accordingly and add a `TestCanonicalColumnType_TemporalSpellings` table covering every row above plus the rejections from Step 1.
 
-- [ ] **Step 4: Add the three `parseValue` branches**
+- [x] **Step 4: Add the three `parseValue` branches**
 
 The CSV lane is legacy (`PayloadFormatCSVWithNames`; the SI intake runtime pins `MaterializerNative`), but Q-D1's authority is shared, so a family in the profile with no `parseValue` branch is exactly the drift this plan exists to stop. Parse RFC3339 first, then ClickHouse's own text forms:
 

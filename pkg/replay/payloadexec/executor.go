@@ -27,6 +27,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/zeebo/blake3"
 
@@ -491,6 +492,12 @@ func parseValue(typeName, raw string) (any, error) {
 		return parseUintValue(profile, raw)
 	case FamilyInt:
 		return parseIntValue(profile, raw)
+	case FamilyDate:
+		return time.ParseInLocation(dateLayout, raw, time.UTC)
+	case FamilyDateTime:
+		return parseCHDateTime(raw)
+	case FamilyDateTime64:
+		return parseCHDateTime64(raw, profile.Precision)
 	default:
 		return nil, unsupportedColumnTypeError(typeName)
 	}
@@ -549,6 +556,59 @@ func parseIntValue(profile ColumnProfile, raw string) (any, error) {
 	default:
 		return nil, unsupportedColumnTypeError(profile.Canonical)
 	}
+}
+
+// ClickHouse's own text renderings for the temporal families, alongside RFC3339.
+const (
+	dateLayout       = "2006-01-02"
+	dateTimeLayout   = "2006-01-02 15:04:05"
+	dateTime64Layout = "2006-01-02 15:04:05.999999999"
+)
+
+// parseCHDateTime and parseCHDateTime64 accept RFC3339 first and ClickHouse's
+// own space-separated rendering second, and always resolve to UTC. The Native
+// lane returns time.Time in UTC (nativeColumnValue normalizes ColDateTime and
+// ColDateTime64, and ColDate is already UTC), so anything else here would make
+// the two lanes hash the same row differently.
+func parseCHDateTime(raw string) (any, error) {
+	t, err := parseTemporalText(raw, dateTimeLayout)
+	if err != nil {
+		return nil, err
+	}
+	return t.Truncate(time.Second), nil
+}
+
+func parseCHDateTime64(raw string, precision int) (any, error) {
+	t, err := parseTemporalText(raw, dateTime64Layout)
+	if err != nil {
+		return nil, err
+	}
+	// Digits past the declared precision are dropped, matching the value the
+	// Native lane decodes for the same column: ch-go scales DateTime64 to the
+	// declared precision before handing back a time.Time.
+	return t.Truncate(dateTime64Resolution(precision)), nil
+}
+
+func parseTemporalText(raw, chLayout string) (time.Time, error) {
+	if t, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+		return t.UTC(), nil
+	}
+	t, err := time.ParseInLocation(chLayout, raw, time.UTC)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return t.UTC(), nil
+}
+
+// dateTime64Resolution renders a DateTime64 precision as the duration one tick
+// of that precision spans. Every value from 1s down to 1ns divides a second
+// evenly, so Truncate drops exactly the digits past the declared precision.
+func dateTime64Resolution(precision int) time.Duration {
+	resolution := time.Second
+	for i := 0; i < precision; i++ {
+		resolution /= 10
+	}
+	return resolution
 }
 
 // parseFixedString matches ClickHouse's physical FixedString(N): values longer
