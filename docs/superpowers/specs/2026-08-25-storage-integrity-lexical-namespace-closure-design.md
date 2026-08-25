@@ -4,7 +4,7 @@
 
 ## 1. Problem
 
-Spec I built three independent layers: an engine catch-all (D1), HouseGate's unconditional fail-closed on any non-`Success` (D3), and an operator-session guard that refuses on *mention* of a reserved name (D6/D7e, `pkg/plugins/sireserved`). The verification review found that two of the three have a hole, and that the mechanism meant to prove the two engines agree cannot see either hole.
+Spec I built three independent layers: an engine catch-all (D1), HouseGate's unconditional fail-closed on any non-`Success` (D3), and an operator-session guard that refuses on *mention* of a reserved name (D6/D7e, `pkg/plugins/sireserved`). The verification review found a hole in two of the three, and that the mechanism meant to prove the two engines agree cannot see either. Planning this spec then found a third, more severe than both (1e): the engine's namespace gate itself is defeated by a tagged heredoc, with no privileged session required. All four share one shape — **something reads a value that a later stage interprets differently**, whether that stage is the comment lexer, the SHOW classifier, or the SQL generator.
 
 **1a — heredoc literals blank the operator guard (Critical).** `sireserved`'s `scanSQLSurfaces` (`pkg/plugins/sireserved/plugin.go:115-165` on the PR branch) models `'…'`, `` `…` ``, `"…"`, `--`, `#`, `#!`, `//` and nested `/* */`. It does not model ClickHouse's heredoc string literal (`$$…$$`, `$tag$…$tag$`). A `$` falls to the byte-copying `default:` branch, so a `--`, `#` or `//` **inside** a heredoc is treated as a real comment and the rest of the statement is blanked from both scan surfaces. The reviewer extracted the shipped scanner verbatim and ran it, and confirmed against the real polyglot grammar that each statement is valid ClickHouse:
 
@@ -51,11 +51,28 @@ Three consequences. The **qualified** form already binds the right database — 
 
 **1c — the corpus cannot see engine divergence (Medium).** Spec J made all 41 `Success` cases pin their SQL and grew the corpus to 210, which is a large improvement. But byte-identical JSON in two repos only proves the two runners are fed the same inputs; it does not prove the two engines *produce* the same output on anything the corpus omits. `REWRITER_ORACLE_ADDR` — the cross-engine differential harness — exists and is wired into `TestStorageIntegrityGolden`, and 1b is exactly the kind of divergence it would catch. There is no record of it having been run over the full corpus since Spec I.
 
+**1e — a tagged heredoc defeats the engine's namespace gate outright (Critical).** Found while planning this spec, and the most severe item in the round: it is in the engine, not the operator guard, so **no maintenance or platform-operator marker is required — any authenticated user**. Polyglot encodes a heredoc literal as `literal_type: "dollar_string"`, and for the tagged form it packs the tag into the value as `<tag>\x00<body>`. `tableFunctionArgValue` (`internal/engine/nodes.go:1905-1913`) reads `lit["value"]` without ever consulting `literal_type`, so the namespace decoder is handed `tag\x00hg_safe` and matches nothing. `Generate` then re-emits the same literal as an ordinary quoted string. Measured on v0.9.0 with SI configured:
+
+```
+Success  SELECT count() FROM merge($tag$hg_safe$tag$, 'db1__t')
+         → emitted: SELECT count() FROM merge('hg_safe', 'db1__t')
+Success  SELECT count() FROM remote('h', $tag$hg_unsafe$tag$, 'db1__t')
+         → emitted: SELECT count() FROM remote('h', 'hg_unsafe', 'db1__t')
+controls (all correctly rejected):
+RewriteError  merge($$hg_safe$$, 'db1__t')      → "hg_safe.db1__t is not directly addressable"
+RewriteError  merge('hg_safe', 'db1__t')        → same
+RewriteError  remote('h', 'hg_unsafe', 'db1__t') → "hg_unsafe.db1__t is not directly addressable"
+```
+
+The statement that reaches ClickHouse is byte-for-byte the statement the gate would have refused. The **bare** `$$…$$` form encodes as a plain `{"literal_type":"dollar_string","value":"hg_safe"}` with no tag prefix, which is why it is caught — the hole is specific to the tagged form, and would have stayed invisible to any test that only tried `$$`.
+
+The class of defect matters more than the instance: **policy inspects a raw AST field while the generator interprets it differently.** Any future `literal_type` polyglot adds re-opens it the same way.
+
 **1d — external-connector table functions are outside the namespace gate (Medium).** Spec G's namespace decoder covers the local and cluster families thoroughly — `remote`, `remoteSecure`, `cluster`, `clusterAllReplicas`, `merge`, `loop`, `dictionary`, the `timeSeries*` and `prometheus*` families (`internal/engine/nodes.go:277-300`). It does not cover the foreign-connector family whose signature also carries an explicit `(database, table)` pair: `mysql`, `postgresql`, `mongodb`, `sqlite`, `redis`, `jdbc`, `odbc`. Because a `SELECT` *is* modelled, the D1 catch-all never fires for them. ClickHouse ships its own MySQL and PostgreSQL wire listeners (9004 / 9005), so `SELECT * FROM mysql('127.0.0.1:9004', 'hg_safe', 'db1__t', …)` is a loopback into the protected namespace. It is credential-gated — the attacker needs a ClickHouse account on that port — which is why this is Medium rather than Critical, but the gate is supposed to be the thing that does not depend on a second credential boundary.
 
 ## 2. Goals / non-goals
 
-**Goals.** Complete `sireserved`'s lexical model so no reserved name can hide in a span the scanner does not understand. Replace the SHOW family's negative classification with an explicit positive one that fails closed on an unknown kind, and gate every SHOW variant that names a database or a table. Prove the two engines agree by executing the differential harness over the whole corpus rather than by asserting that they share a JSON file. Extend the namespace decoder to the foreign-connector table-function family.
+**Goals.** Complete `sireserved`'s lexical model so no reserved name can hide in a span the scanner does not understand. Make the engine's namespace decoder read the value the generator will emit, and refuse a literal kind it does not model. Replace the SHOW family's negative classification with an explicit positive one that fails closed on an unknown kind, and gate every SHOW variant that names a database or a table. Prove the two engines agree by executing the differential harness over the whole corpus rather than by asserting that they share a JSON file. Extend the namespace decoder to the foreign-connector table-function family.
 
 **Non-goals.** Metadata confidentiality. `system.parts`, `system.tables`, `system.columns` and `system.merges` expose SI physical database, table and part names to any authenticated reader, and this spec does not change that — the SI property is integrity (nothing mutates a protected namespace, and no read escapes the safe/unsafe rewrite), not secrecy of the physical layout. `SHOW MERGES`, `SHOW CLUSTERS`, `SHOW CACHES` and `SHOW SETTINGS` name no object and stay pass-through for the same reason; gating them while `SELECT … FROM system.merges` stays open would be theatre. §6 records the debt. Also out of scope: replacing `sireserved`'s hand-rolled scanner with a real tokenizer (see §6), and the peer-trust / forwarded-session exemption, which Spec I D6 already recorded as a network-isolation requirement.
 
@@ -98,11 +115,25 @@ This is a one-shot gate for this spec, not a new CI job: rewriter-grpc builds on
 
 ### D4 — the namespace decoder covers foreign-connector table functions
 
-`decodeNamespaceFunctionRefDetail` gains the connector family whose signature carries an explicit `(database, table)` pair after a connection argument: `mysql`, `postgresql`, `mongodb`, `sqlite`, `redis`, `jdbc`, `odbc`. They decode exactly like `remote` — pair at argument index 1 — and inherit the existing unresolvable-argument rule: an argument that is not a static string literal is a rejection, not a pass (`si_remote_unresolved_namespace_rejected` is the precedent).
+`decodeNamespaceFunctionRefDetail` gains the connector family whose signature carries an explicit ClickHouse-shaped `(database, table)` pair after a connection argument: **`mysql`, `postgresql`, `mongodb`, `jdbc`, `odbc`**. They inherit the existing unresolvable-argument rule: an argument that is not a static string literal is a rejection, not a pass (`si_remote_unresolved_namespace_rejected` is the precedent).
 
-`sqlite` and `redis` take `(path|address, table)` rather than a database, so they decode as a single-name reference like `merge`'s one-argument form. The implementation must read each signature from the ClickHouse docs rather than assume, and pin each in the corpus.
+**`sqlite` and `redis` are excluded**, correcting an earlier draft of this decision. Read from the ClickHouse docs while planning: `redis(host:port, key, structure, …)` — `key` is *a column name*, not a table; `sqlite(db_path, table_name)` — a table inside a SQLite file, not a ClickHouse namespace. Neither names anything the gate protects, and including them would flip `sqlite('/tmp/x.db','db1__t')` from its measured `Success` into a rejection for no security benefit. The corpus pins `si_redis_column_name_allowed` so this cannot be "tidied up" back in later.
+
+**Decoding is by arity, not a flat "pair at index 1"** — also a correction. `mongodb` accepts a `(uri, collection, structure…)` form as well as the database-bearing one; `jdbc` and `odbc` accept both 2- and 3-argument forms; and all five accept a named-collection form whose namespace is not in the argument list at all. Each shape is measured first and pinned, and the task stops rather than guessing if any named-collection form returns `Success` while naming `hg_safe`.
 
 Object-storage and file connectors (`s3`, `url`, `hdfs`, `azureBlobStorage`, `file`, `iceberg`, `deltaLake`) are **not** included: they address paths, not `(database, table)` pairs, so there is no reserved name for the gate to match. They remain covered by whatever ClickHouse-level restrictions the deployment sets.
+
+### D6 — the namespace decoder reads the value the generator will emit, and refuses a literal kind it does not model
+
+Two changes, because the instance and the class need different fixes.
+
+**The instance:** `tableFunctionArgValue` consults `literal_type`. `"string"` is used as today; `"dollar_string"` is decoded by taking everything after the first `\x00` when one is present, and the whole value when it is not. Verified encodings: `$tag$hg_safe$tag$` → `{"literal_type":"dollar_string","value":"tag\u0000hg_safe"}`; `$$hg_safe$$` → `{"literal_type":"dollar_string","value":"hg_safe"}`; `'hg_safe'` → `{"literal_type":"string","value":"hg_safe"}`.
+
+**The class:** a `literal_type` the decoder does not model is **not** treated as an opaque non-namespace value — that is precisely how 1e happened. Under an active SI contract it resolves to `namespaceValueUnknown`, which the existing machinery already turns into a rejection (the precedent is `si_remote_unresolved_namespace_rejected`, where a non-static argument is refused rather than assumed harmless).
+
+**The proof that the class is closed:** a test that, for every `literal_type` polyglot can emit in a table-function argument position, asserts that the value policy sees equals the value `Generate` emits — or that policy refuses. That equality is the actual invariant; the `dollar_string` decode is just today's instance of it. Without this test the next literal kind reopens the hole silently.
+
+rewriter-grpc uses ClickHouse's own AST rather than polyglot's JSON, so it may not share the defect. The plan measures it on the remote box rather than assuming either way, and the corpus pins the outcome for both engines.
 
 ### D5 — every new behaviour is pinned in the shared corpus
 
@@ -119,9 +150,9 @@ The corpus grows by roughly 30 cases: the four heredoc reproductions from 1a plu
 
 ## 5. Delivery
 
-Ships as three PRs. rewriter-go and rewriter-grpc land D2/D4/D5 together with the corpus (they are one behaviour in two repos), then rewriter-go cuts **v0.9.1**. HouseGate lands D1 **onto PR #141's branch** — #141 must not merge without it, since D1 fixes a hole #141 itself introduces. D3's run happens between the two.
+Ships as three PRs. rewriter-go and rewriter-grpc land D2/D4/D5/D6 together with the corpus (they are one behaviour in two repos), then rewriter-go cuts a tag. HouseGate lands D1 **onto PR #141's branch** — #141 must not merge without it, since D1 fixes a hole #141 itself introduces. D3's run happens between the two.
 
-Spec O consumes v0.9.1: it is the pin bump plus the #141 merge.
+**Do not hard-code the rewriter-go version.** "v0.9.1" elsewhere in this spec set is a prediction, not an instruction: `scripts/next-version.sh` bumps the patch component only when the previous tag's date is today in `Asia/Shanghai`, and `v0.9.0` is dated 2026-08-25, so a cut on any later day yields **v0.10.0**. The plan records whatever the release workflow prints, and Spec O consumes that value rather than a literal.
 
 ## 6. Out of scope / recorded debt
 
