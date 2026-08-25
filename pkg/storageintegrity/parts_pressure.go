@@ -277,6 +277,23 @@ func (g *PartsPressureGuard) BuildExactPartsQuery(scope PartsScope) (string, []a
 	return b.String(), args
 }
 
+// BuildAggregateSnapshotQuery counts active parts per logical key across both
+// databases. Its output is bounded by tables x partitions, not part names.
+func (g *PartsPressureGuard) BuildAggregateSnapshotQuery() (string, []any) {
+	args := []any{g.cfg.UnsafeDatabase}
+	predicate := "parts.database = ?"
+	if g.cfg.SafeDatabase != "" {
+		predicate = "parts.database IN (?, ?)"
+		args = append(args, g.cfg.SafeDatabase)
+	}
+	return "SELECT parts.database, parts.table, parts.partition, tables.partition_key, count() " +
+		"FROM system.parts AS parts INNER JOIN system.tables AS tables " +
+		"ON parts.database = tables.database AND parts.table = tables.name " +
+		"WHERE " + predicate + " AND parts.active " +
+		"GROUP BY parts.database, parts.table, parts.partition, tables.partition_key " +
+		"ORDER BY parts.database, parts.table, parts.partition", args
+}
+
 func (g *PartsPressureGuard) fullScope() PartsScope {
 	return PartsScope{
 		Database:            g.cfg.UnsafeDatabase,
@@ -289,6 +306,108 @@ func (g *PartsPressureGuard) fullScope() PartsScope {
 // databases, exactly.
 func (g *PartsPressureGuard) Refresh(ctx context.Context) (PartsSnapshot, error) {
 	return g.refreshScope(ctx, g.fullScope())
+}
+
+// RefreshCounts runs the bounded aggregate pass. Counts are authoritative for
+// capacity and gauges, but never replace exact name evidence.
+func (g *PartsPressureGuard) RefreshCounts(ctx context.Context) (PartsSnapshot, error) {
+	g.refreshMu.Lock()
+	defer g.refreshMu.Unlock()
+	g.commitMu.Lock()
+	defer g.commitMu.Unlock()
+	refreshCtx, cancel := context.WithTimeout(ctx, g.cfg.RefreshTimeout)
+	defer cancel()
+	query, args := g.BuildAggregateSnapshotQuery()
+	rows, err := g.conn.Query(refreshCtx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("storage_integrity: parts count query failed: %w", err)
+	}
+	defer rows.Close()
+	counts := PartsSnapshot{}
+	for rows.Next() {
+		var database, table, partition, partitionKey string
+		var number uint64
+		if err := rows.Scan(&database, &table, &partition, &partitionKey, &number); err != nil {
+			return nil, fmt.Errorf("storage_integrity: scan parts counts: %w", err)
+		}
+		counts[PartsKey{Database: database, Table: table, Partition: LogicalPartitionID(partition, partitionKey == "")}] = int(number)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("storage_integrity: read parts counts: %w", err)
+	}
+	scope := g.fullScope()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.applyCountScopeLocked(scope, counts)
+	g.reconcileScopeLocked(scope)
+	return copyPartsSnapshot(g.snapshot), nil
+}
+
+func (g *PartsPressureGuard) applyCountScopeLocked(scope PartsScope, counts PartsSnapshot) {
+	now := g.now()
+	for key := range g.snapshot {
+		if scope.Covers(key) {
+			if _, present := counts[key]; !present {
+				delete(g.snapshot, key)
+			}
+		}
+	}
+	covered := make(map[PartsKey]struct{}, len(counts))
+	for key, count := range counts {
+		g.snapshot[key] = count
+		covered[key] = struct{}{}
+	}
+	for key := range g.countFreshAt {
+		if scope.Covers(key) {
+			covered[key] = struct{}{}
+		}
+	}
+	for key := range covered {
+		g.keyGeneration[key]++
+		g.countFreshAt[key] = now
+	}
+	if scope.IsFull(g.cfg) {
+		g.lastFullOK = !g.restoreBlocked
+		g.lastFullAt = now
+	}
+}
+
+// RefreshLiveKeys reads exact names only for tables with live reservations or
+// unretired candidate claims.
+func (g *PartsPressureGuard) RefreshLiveKeys(ctx context.Context) error {
+	g.mu.RLock()
+	tables := map[string]map[string]struct{}{}
+	add := func(key PartsKey) {
+		if key.Database != g.cfg.UnsafeDatabase {
+			return
+		}
+		if tables[key.Table] == nil {
+			tables[key.Table] = map[string]struct{}{}
+		}
+		tables[key.Table][key.Partition] = struct{}{}
+	}
+	for _, reservation := range g.liveReservations {
+		for _, key := range reservation.keys {
+			add(key)
+		}
+	}
+	for key := range g.candidateClaims {
+		add(key)
+	}
+	g.mu.RUnlock()
+	var errs []error
+	for table, partitionSet := range tables {
+		partitions := make([]string, 0, len(partitionSet))
+		for partition := range partitionSet {
+			partitions = append(partitions, partition)
+		}
+		sort.Strings(partitions)
+		scope := PartsScope{Database: g.cfg.UnsafeDatabase, Table: table, Partitions: partitions}
+		if _, err := g.refreshScope(ctx, scope); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // refreshScope installs authoritative counts and names for exactly scope.

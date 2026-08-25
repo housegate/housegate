@@ -55,6 +55,9 @@ func (c *fakePartsConn) Query(ctx context.Context, query string, args ...any) (M
 	if queryErr != nil {
 		return nil, queryErr
 	}
+	if strings.Contains(query, "count()") {
+		return &fakePartsCountRows{rows: filterFakeCountRows(args, rows)}, nil
+	}
 	if inventory == nil {
 		for _, row := range rows {
 			for idx := uint64(1); idx <= row.number; idx++ {
@@ -66,6 +69,22 @@ func (c *fakePartsConn) Query(ctx context.Context, query string, args ...any) (M
 		}
 	}
 	return &fakePartsRows{rows: filterFakeInventory(query, args, inventory)}, nil
+}
+
+func filterFakeCountRows(args []any, rows []fakePartsRow) []fakePartsRow {
+	databases := map[string]bool{}
+	for _, arg := range args {
+		if database, ok := arg.(string); ok {
+			databases[database] = true
+		}
+	}
+	out := make([]fakePartsRow, 0, len(rows))
+	for _, row := range rows {
+		if databases[row.database] {
+			out = append(out, row)
+		}
+	}
+	return out
 }
 
 func filterFakeInventory(query string, args []any, inventory []fakePartInventoryRow) []fakePartInventoryRow {
@@ -165,6 +184,25 @@ func (r *fakePartsRows) Scan(dest ...any) error {
 }
 func (r *fakePartsRows) Err() error   { return nil }
 func (r *fakePartsRows) Close() error { return nil }
+
+type fakePartsCountRows struct {
+	rows []fakePartsRow
+	i    int
+}
+
+func (r *fakePartsCountRows) Next() bool { return r.i < len(r.rows) }
+func (r *fakePartsCountRows) Scan(dest ...any) error {
+	row := r.rows[r.i]
+	r.i++
+	*(dest[0].(*string)) = row.database
+	*(dest[1].(*string)) = row.table
+	*(dest[2].(*string)) = row.partition
+	*(dest[3].(*string)) = row.partitionKey
+	*(dest[4].(*uint64)) = row.number
+	return nil
+}
+func (r *fakePartsCountRows) Err() error   { return nil }
+func (r *fakePartsCountRows) Close() error { return nil }
 
 func pressureFixture(rows ...fakePartsRow) (*PartsPressureGuard, *fakePartsConn) {
 	conn := &fakePartsConn{rows: rows}

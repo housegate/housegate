@@ -75,8 +75,11 @@ func (s *StorageIntegrityPartsPressureSupervisor) Refresh(ctx context.Context) e
 	if s == nil || s.guard == nil {
 		return errors.New("storage_integrity: parts pressure guard is required")
 	}
-	snap, err := s.guard.Refresh(ctx)
+	snap, err := s.guard.RefreshCounts(ctx)
 	if err != nil {
+		return err
+	}
+	if err := s.guard.RefreshLiveKeys(ctx); err != nil {
 		return err
 	}
 	storageIntegrityUnsafeParts.Reset()
