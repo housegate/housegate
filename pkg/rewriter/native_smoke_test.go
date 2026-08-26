@@ -60,3 +60,30 @@ func TestNativeEngineSmoke(t *testing.T) {
 		t.Errorf("TableRewrites empty, want the db1.t mapping")
 	}
 }
+
+// TestNativeEngineProbeSmoke runs the real startup build probe against the
+// pinned native engine. The scripted probe tests prove the probe's logic; this
+// proves the engine the pin actually resolves to answers every case, including
+// the Spec N tagged-heredoc discriminator. Without it the floor in go.mod and
+// ci.yml would be asserted only against a fake.
+func TestNativeEngineProbeSmoke(t *testing.T) {
+	if os.Getenv("POLYGLOT_SQL_FFI_PATH") == "" {
+		t.Skip("POLYGLOT_SQL_FFI_PATH not set; native engine FFI lib unavailable")
+	}
+	st := network.NewInMemoryNetworkState()
+	st.DatabaseInfos["db1"] = network.DatabaseInfo{DatabaseId: "db1"}
+
+	f, err := NewSentioNetworkFactory(Options{
+		Engine:           EngineNative,
+		PhysicalDatabase: "phys",
+		Listen:           ":9000",
+	}, st)
+	if err != nil {
+		t.Fatalf("NewSentioNetworkFactory(native): %v", err)
+	}
+	defer f.Close()
+
+	if err := f.ProbeStorageIntegrityBuild(context.Background()); err != nil {
+		t.Fatalf("the pinned native engine failed its own startup build probe: %v", err)
+	}
+}

@@ -38,11 +38,12 @@ func TestProbeStorageIntegrityBuild(t *testing.T) {
 		if err := f.ProbeStorageIntegrityBuild(context.Background()); err != nil {
 			t.Fatalf("probe: %v", err)
 		}
-		if len(be.requests) != 4 || be.requests[0].GetSql() != storageIntegrityProbeSQL ||
+		if len(be.requests) != 5 || be.requests[0].GetSql() != storageIntegrityProbeSQL ||
 			be.requests[1].GetSql() != "SYSTEM RELOAD CONFIG" ||
 			be.requests[2].GetSql() != "SYSTEM START MERGES hg_unsafe.db1__t" ||
-			be.requests[3].GetSql() != "TRUNCATE DATABASE hg_safe" {
-			t.Fatalf("probe SQLs = %v, want DESCRIBE, generic SYSTEM, protected physical SYSTEM, protected physical database", probeSQLs(be.requests))
+			be.requests[3].GetSql() != "TRUNCATE DATABASE hg_safe" ||
+			be.requests[4].GetSql() != storageIntegrityProbeHeredocSQL {
+			t.Fatalf("probe SQLs = %v, want DESCRIBE, generic SYSTEM, protected physical SYSTEM, protected physical database, tagged heredoc", probeSQLs(be.requests))
 		}
 		si := be.requests[3].GetOptions()[0].GetTableNameArgs().GetDynamicArgs().GetStorageIntegrity()
 		if si.GetContractVersion() != StorageIntegrityContractV1 || si.GetTables()["db1.t"].GetSafeTable() != "hg_safe.db1__t" {
@@ -52,6 +53,30 @@ func TestProbeStorageIntegrityBuild(t *testing.T) {
 			if !hasDeadline {
 				t.Fatalf("probe request %d had no deadline", i)
 			}
+		}
+	})
+
+	// A pre-Spec-N engine answers every Spec I probe correctly and then forwards
+	// the tagged heredoc as Success — which is exactly the shape rewriter-go
+	// v0.9.0 has. Without this case the probe would pass a build in which any
+	// authenticated user can read hg_safe through merge($tag$hg_safe$tag$, ...).
+	t.Run("pre-Spec-N build is refused on the heredoc probe", func(t *testing.T) {
+		responses := conformingProbeResponses()
+		responses[storageIntegrityProbeHeredocSQL] = acknowledgedSIResponse(&pb.RewriteSQLResponse{
+			Code:            pb.RewriteCode_Success,
+			StatementType:   pb.StatementType_STATEMENT_TYPE_SELECT,
+			SqlAfterRewrite: "SELECT * FROM merge('hg_safe', 'db1__t')",
+		})
+		be := &scriptedProbeBackend{responses: responses}
+		err := newSIFactory(be, nil, true).ProbeStorageIntegrityBuild(context.Background())
+		if err == nil {
+			t.Fatal("a build that forwards a tagged heredoc into hg_safe must fail the probe")
+		}
+		if !strings.Contains(err.Error(), "tagged-heredoc-namespace") {
+			t.Fatalf("err = %v, want the heredoc probe named", err)
+		}
+		if len(be.requests) != 5 {
+			t.Fatalf("the heredoc probe must run last, after all four Spec I probes; got %v", probeSQLs(be.requests))
 		}
 	})
 
@@ -200,6 +225,11 @@ func conformingProbeResponses() map[string]*pb.RewriteSQLResponse {
 			Code:            pb.RewriteCode_UnsupportedStatement,
 			SqlAfterRewrite: "TRUNCATE DATABASE hg_safe",
 			Message:         "storage-integrity physical database hg_safe is not directly addressable",
+		}),
+		storageIntegrityProbeHeredocSQL: acknowledgedSIResponse(&pb.RewriteSQLResponse{
+			Code:            pb.RewriteCode_RewriteError,
+			SqlAfterRewrite: storageIntegrityProbeHeredocSQL,
+			Message:         storageIntegrityProbeHeredocMessage,
 		}),
 	}
 }
