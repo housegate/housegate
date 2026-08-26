@@ -38,7 +38,7 @@ const StorageIntegrityProbeExpectedSQL = "SELECT name, type, default_kind AS def
 // The final release tags are pinned separately when the fixed Go and C++
 // engines are published. The probe itself identifies the required behavior
 // without guessing an unreleased version.
-const storageIntegrityProbeRequiredBuild = "rewriter-go >= v0.10.0 or rewriter-grpc >= v0.13.0+Spec-N (storage-integrity Specs I and N)"
+const storageIntegrityProbeRequiredBuild = "rewriter-go >= v0.10.0 or rewriter-grpc >= v0.13.1 (storage-integrity Specs I and N)"
 
 // StorageIntegrityProbeFactory is a Factory whose concrete engine behavior can
 // be verified at startup. Contract v1 alone cannot distinguish patch builds.
