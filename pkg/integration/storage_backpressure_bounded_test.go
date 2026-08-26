@@ -88,4 +88,49 @@ func TestPartsPressure_HotPathReadStaysBoundedWithManyParts(t *testing.T) {
 	if elapsed > time.Second {
 		t.Fatalf("admission took %s with %d parts in hg_safe; the hot path is not bounded", elapsed, noisyParts)
 	}
+
+	// Spec P D4: the exact-name read is hg_unsafe-only, so it must not grow
+	// with hg_safe. Compare the two query shapes against real system.parts.
+	// The property is asserted by row count, not by wall clock: hg_safe part
+	// counts only ever grow in storage-integrity v1, so the row budget is the
+	// invariant, and a latency threshold would be a hardware measurement.
+	oldShapeQuery, oldShapeArgs := guard.BuildExactPartsQuery(sicore.PartsScope{
+		Database: unsafeDB, IncludeSafeDatabase: true, SafeDatabase: safeDB,
+	})
+	newShapeQuery, newShapeArgs := guard.BuildExactPartsQuery(sicore.PartsScope{Database: unsafeDB})
+	oldRows := countRows(oldShapeQuery, oldShapeArgs...)
+	newRows := countRows(newShapeQuery, newShapeArgs...)
+	if oldRows < noisyParts {
+		t.Fatalf("fixture is not exercising the cliff: the both-database exact read returned %d rows", oldRows)
+	}
+	if newRows > 400 {
+		t.Fatalf("the unsafe-only exact read returned %d rows; it must not scale with hg_safe (%d parts)", newRows, noisyParts)
+	}
+
+	// The two shapes above compare the query BUILDER. What Spec P D4 actually
+	// changed is which scope the production callers hand it, so the
+	// load-bearing assertion is on the guard's own exact read: the startup
+	// recovery boundary must complete, must not latch restoreBlocked, and must
+	// install no safe-database key at all.
+	if _, err := guard.RestoreBatch(ctx, nil); err != nil {
+		t.Fatalf("RestoreBatch with %d parts in hg_safe: %v", noisyParts, err)
+	}
+	if err := guard.Allow(hot, "p_p0"); err != nil {
+		t.Fatalf("RestoreBatch must leave admissions open; a latched restoreBlocked is the startup failure Spec L D3(b) left open: %v", err)
+	}
+	restored, err := guard.Refresh(ctx)
+	if err != nil {
+		t.Fatalf("post-restore refresh: %v", err)
+	}
+	if _, ok := guard.Snapshot(); !ok {
+		t.Fatal("an hg_unsafe-only full pass must leave a usable snapshot")
+	}
+	for key := range restored {
+		if key.Database == safeDB {
+			t.Fatalf("the guard's exact read installed a safe-database key %+v; it must not scale with hg_safe (%d parts)", key, noisyParts)
+		}
+	}
+	if len(restored) > partitions {
+		t.Fatalf("the exact read produced %d keys; hg_unsafe has one table x %d partitions", len(restored), partitions)
+	}
 }

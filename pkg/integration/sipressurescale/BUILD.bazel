@@ -1,0 +1,23 @@
+load("@rules_go//go:def.bzl", "go_test")
+
+go_test(
+    name = "sipressurescale_test",
+    size = "large",
+    # Building 300k active parts takes minutes; "long" is 900s.
+    timeout = "long",
+    srcs = ["scale_test.go"],
+    local = True,
+    tags = [
+        # This fixture writes 300k parts and saturates the docker host's disk;
+        # run concurrently it starves the ordinary integration suite into its
+        # own timeout. "exclusive" makes Bazel run it on its own.
+        "exclusive",
+        "manual",
+        "requires-docker",
+    ],
+    deps = [
+        "//pkg/integration/testenv",
+        "//pkg/storageintegrity",
+        "@com_github_clickhouse_clickhouse_go_v2//:clickhouse-go",
+    ],
+)

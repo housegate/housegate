@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
+
 	housegate "github.com/housegate/housegate"
 	"github.com/housegate/housegate/pkg/auth"
 	"github.com/housegate/housegate/pkg/config"
@@ -61,13 +63,12 @@ func withDeclaredSchema(t *testing.T, networkID string) testenv.ProxyOption {
 	}
 }
 
-// TestStorageIntegrity_AgentSignsEnvelopeV2EndToEnd runs client -> agent
-// housegate (storage_integrity.agent) -> server housegate (ingress) -> CH and
-// proves the ingress stored exactly the bytes the agent signed: the v2 token
-// validates against a payload_hash recomputed from the stored bytes, and those
-// bytes decode (Native, at the pinned revision) into the rows the client sent.
-func TestStorageIntegrity_AgentSignsEnvelopeV2EndToEnd(t *testing.T) {
-	const networkID = "itest-net"
+// startSIAgentPair brings up the server (ingress) + agent (signer) pair the
+// envelope-v2 end-to-end tests share, and returns the agent proxy plus the
+// consumer that captures what the ingress admitted. Both tests use exactly one
+// fixture so a drift in one cannot silently diverge from the other.
+func startSIAgentPair(t *testing.T, networkID string) (*testenv.TestProxy, *capturingConsumer) {
+	t.Helper()
 	signer, err := auth.NewRelaySigner(authTestKey1)
 	if err != nil {
 		t.Fatal(err)
@@ -108,6 +109,24 @@ func TestStorageIntegrity_AgentSignsEnvelopeV2EndToEnd(t *testing.T) {
 			cfg.StorageIntegrity.Agent.RequireNetworkState = false
 		}),
 	)
+
+	return agentProxy, consumer
+}
+
+// TestStorageIntegrity_AgentSignsEnvelopeV2EndToEnd runs client -> agent
+// housegate (storage_integrity.agent) -> server housegate (ingress) -> CH and
+// proves the ingress stored exactly the bytes the agent signed: the v2 token
+// validates against a payload_hash recomputed from the stored bytes, and those
+// bytes decode (Native, at the pinned revision) into the rows the client sent.
+func TestStorageIntegrity_AgentSignsEnvelopeV2EndToEnd(t *testing.T) {
+	const networkID = "itest-net"
+	agentProxy, consumer := startSIAgentPair(t, networkID)
+	// Re-derived rather than returned: the address is a pure function of the
+	// constant key, so the shared fixture keeps a two-value signature.
+	signer, err := auth.NewRelaySigner(authTestKey1)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	conn := openConnNoCompression(t, agentProxy.Addr)
 	batch, err := conn.PrepareBatch(context.Background(), "INSERT INTO "+chEnv.Database+".si_events")
@@ -178,5 +197,77 @@ func TestStorageIntegrity_AgentSignsEnvelopeV2EndToEnd(t *testing.T) {
 	}
 	if !strings.HasPrefix(adm.SQL, "INSERT INTO "+chEnv.Database+".si_events") {
 		t.Fatalf("signed SQL = %q", adm.SQL)
+	}
+}
+
+// TestStorageIntegrity_OwnedSettingKeysEndToEnd is Spec P D3. Spec K D6 added
+// SQL_x_read_mode to the enumerated owned key set so a client may still choose
+// its read mode on an SI-configured deployment; the enumeration (not a
+// SQL_x_ / SQL_sentio_ prefix) is what keeps every OTHER client setting off the
+// signed lane, because settings_hash commits to the empty user-settings set.
+// Neither direction had an end-to-end proof.
+func TestStorageIntegrity_OwnedSettingKeysEndToEnd(t *testing.T) {
+	const networkID = "itest-net-settings"
+	agentProxy, consumer := startSIAgentPair(t, networkID)
+	conn := openConnNoCompression(t, agentProxy.Addr)
+
+	// An owned key rides through: the lane admits it and still signs the
+	// empty-settings digest.
+	ownedCtx := clickhouse.Context(context.Background(), clickhouse.WithSettings(clickhouse.Settings{
+		sicore.ReadModeSettingKey: clickhouse.CustomSetting{Value: "safe"},
+	}))
+	batch, err := conn.PrepareBatch(ownedCtx, "INSERT INTO "+chEnv.Database+".si_events")
+	if err != nil {
+		t.Fatalf("PrepareBatch with %s: %v", sicore.ReadModeSettingKey, err)
+	}
+	if err := batch.Append(uint64(10), "eu"); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.Send(); err != nil {
+		t.Fatalf("an owned setting key must not block the signed lane: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		consumer.mu.Lock()
+		n := len(consumer.seen)
+		consumer.mu.Unlock()
+		if n == 1 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	consumer.mu.Lock()
+	seen := append([]siplugin.Admission(nil), consumer.seen...)
+	consumer.mu.Unlock()
+	if len(seen) != 1 {
+		t.Fatalf("the ingress admitted %d statements, want 1", len(seen))
+	}
+	if seen[0].SettingsHash != sicore.EmptySettingsHash {
+		t.Fatalf("an owned key must still hash to the empty-settings digest, got %s", seen[0].SettingsHash)
+	}
+
+	// A non-owned key is refused, naming itself.
+	userCtx := clickhouse.Context(context.Background(), clickhouse.WithSettings(clickhouse.Settings{
+		"async_insert": 1,
+	}))
+	batch, err = conn.PrepareBatch(userCtx, "INSERT INTO "+chEnv.Database+".si_events")
+	if err == nil {
+		err = batch.Append(uint64(11), "us")
+		if err == nil {
+			err = batch.Send()
+		}
+	}
+	if err == nil {
+		t.Fatal("a non-owned client setting must be refused on the signed lane")
+	}
+	if !strings.Contains(err.Error(), "async_insert") {
+		t.Fatalf("the refusal must name the setting, got %v", err)
+	}
+	consumer.mu.Lock()
+	n := len(consumer.seen)
+	consumer.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("the refused statement must not be admitted; consumer saw %d", n)
 	}
 }

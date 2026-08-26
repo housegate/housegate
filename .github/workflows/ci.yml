@@ -122,5 +122,6 @@ jobs:
           bazel test \
             //pkg/integration:integration_test \
             //pkg/integration/testenv:testenv_test \
+            //pkg/integration/sipressurescale:sipressurescale_test \
             --test_env=POLYGLOT_SQL_FFI_PATH \
             --test_output=errors
