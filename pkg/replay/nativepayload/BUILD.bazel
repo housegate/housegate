@@ -15,12 +15,16 @@ go_library(
 
 go_test(
     name = "nativepayload_test",
-    srcs = ["native_test.go"],
+    srcs = [
+        "chgo_capability_test.go",
+        "native_test.go",
+    ],
     embed = [":nativepayload"],
     deps = [
         "//pkg/lthash",
         "//pkg/replay",
         "//pkg/replay/payloadexec",
         "@com_github_clickhouse_ch_go//proto",
+        "@com_github_google_uuid//:uuid",
     ],
 )

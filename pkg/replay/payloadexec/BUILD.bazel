@@ -3,6 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "payloadexec",
     srcs = [
+        "column_profile.go",
         "column_types.go",
         "executor.go",
         "exports.go",
@@ -21,6 +22,7 @@ go_library(
 go_test(
     name = "payloadexec_test",
     srcs = [
+        "column_profile_test.go",
         "column_types_test.go",
         "executor_test.go",
         "exports_test.go",
