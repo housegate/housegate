@@ -208,7 +208,7 @@ A new plugin is a 4-file change under `pkg/plugins/<name>/` plus a one-line wiri
 
 ## Upgrading a Dependency
 
-Bumping `rewriter-go`/`rewriter-proto`/the `sentioxyz` ch-go & clickhouse-go forks (or any module) touches three separate pin mechanisms — plain `go.mod require`, `go mod edit -replace` (a `go get` on the upstream `ClickHouse/*` module path silently does nothing, since the fork is the actual build target), and the out-of-band polyglot FFI binary release (`pkg/ffifetch`, versioned by the same rewriter-go tag but shipped separately) — plus the main-baseline rule for judging integration-test flakiness. Full recipe, verification ladder, and common-mistakes table: [.claude/skills/upgrade-dependency/SKILL.md](.claude/skills/upgrade-dependency/SKILL.md).
+Bumping `rewriter-go`/`rewriter-proto`/the `sentioxyz` ch-go & clickhouse-go forks (or any module) touches up to four pin mechanisms — plain `go.mod require`, `go mod edit -replace` (a `go get` on the upstream `ClickHouse/*` module path silently does nothing, since the fork is the actual build target), the out-of-band polyglot FFI binary release (`pkg/ffifetch`, versioned by the same rewriter-go tag but shipped separately), and, in downstream repos that consume housegate/arbiter-core as **Bazel modules** (e.g. sentio-node), a `bazel_dep`/`git_override` pin in `MODULE.bazel` — plus the main-baseline rule for judging integration-test flakiness. Housegate itself has no `bazel_dep`/`git_override` pin on those deps; the downstream one fails silently (green `bazel test` compiling the *old* sources) if only `go.mod` is bumped. Full recipe, verification ladder, and common-mistakes table: [.claude/skills/upgrade-dependency/SKILL.md](.claude/skills/upgrade-dependency/SKILL.md).
 
 ## Conventions
 
