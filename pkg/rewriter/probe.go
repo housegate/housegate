@@ -19,6 +19,15 @@ const (
 	storageIntegrityProbePhysicalSystemMessage   = "storage-integrity physical table hg_unsafe.db1__t is not directly addressable"
 	storageIntegrityProbePhysicalDatabaseSQL     = "TRUNCATE DATABASE hg_safe"
 	storageIntegrityProbePhysicalDatabaseMessage = "storage-integrity physical database hg_safe is not directly addressable"
+
+	// A tagged heredoc is the Spec N D6 version discriminator. Polyglot encodes
+	// it as literal_type "dollar_string" with the tag packed into the value as
+	// "<tag>\x00<body>"; an engine that reads the raw value without consulting
+	// literal_type is handed "tag\x00hg_safe", matches nothing, and forwards a
+	// statement its own generator re-emits as merge('hg_safe', ...). Every
+	// rewriter-go build before v0.10.0 answers Success here.
+	storageIntegrityProbeHeredocSQL     = "SELECT * FROM merge($tag$hg_safe$tag$, 'db1__t')"
+	storageIntegrityProbeHeredocMessage = "storage-integrity physical table hg_safe.db1__t is not directly addressable"
 )
 
 // StorageIntegrityProbeExpectedSQL is the exact output a compatible Spec I
@@ -29,7 +38,7 @@ const StorageIntegrityProbeExpectedSQL = "SELECT name, type, default_kind AS def
 // The final release tags are pinned separately when the fixed Go and C++
 // engines are published. The probe itself identifies the required behavior
 // without guessing an unreleased version.
-const storageIntegrityProbeRequiredBuild = "rewriter-go >= v0.9.0 or rewriter-grpc >= v0.13.0 (storage-integrity Spec I)"
+const storageIntegrityProbeRequiredBuild = "rewriter-go >= v0.10.0 or rewriter-grpc >= v0.13.0+Spec-N (storage-integrity Specs I and N)"
 
 // StorageIntegrityProbeFactory is a Factory whose concrete engine behavior can
 // be verified at startup. Contract v1 alone cannot distinguish patch builds.
@@ -98,6 +107,21 @@ var storageIntegrityBuildProbes = []storageIntegrityBuildProbe{
 		statementType: pb.StatementType_STATEMENT_TYPE_UNSPECIFIED,
 		sqlAfter:      storageIntegrityProbePhysicalDatabaseSQL,
 		message:       storageIntegrityProbePhysicalDatabaseMessage,
+	},
+	{
+		// Spec N D6. Unlike the D2 invariant above, this one IS a version
+		// discriminator, and it is the reason the required-build floor moved.
+		// It discriminates the ENGINE build, not the FFI library: v0.9.0 and
+		// v0.10.0 ship byte-identical polyglot artifacts (same SHA256SUMS), so
+		// the fix lives entirely in rewriter-go's Go code and no library pin
+		// could have caught a stale one. A behavioural probe can, which is why
+		// the floor is enforced here rather than only declared in go.mod.
+		name:          "tagged-heredoc-namespace",
+		sql:           storageIntegrityProbeHeredocSQL,
+		code:          pb.RewriteCode_RewriteError,
+		statementType: pb.StatementType_STATEMENT_TYPE_UNSPECIFIED,
+		sqlAfter:      storageIntegrityProbeHeredocSQL,
+		message:       storageIntegrityProbeHeredocMessage,
 	},
 }
 
