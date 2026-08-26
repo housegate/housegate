@@ -23,9 +23,11 @@ import (
 	"encoding/csv"
 	"encoding/hex"
 	"fmt"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/zeebo/blake3"
 
@@ -415,7 +417,11 @@ func PartitionIDForRow(sch TableSchema, values []any) (string, error) {
 		if col.Name != sch.PartitionBy {
 			continue
 		}
-		raw, err := partitionValueString(values[i])
+		profile, err := ResolveColumnProfile(col.Type)
+		if err != nil {
+			return "", fmt.Errorf("partition column %q: %w", sch.PartitionBy, err)
+		}
+		raw, err := partitionValueString(profile, values[i])
 		if err != nil {
 			return "", fmt.Errorf("partition column %q: %w", sch.PartitionBy, err)
 		}
@@ -424,7 +430,20 @@ func PartitionIDForRow(sch TableSchema, values []any) (string, error) {
 	return "", fmt.Errorf("partition column %q not present in schema", sch.PartitionBy)
 }
 
-func partitionValueString(v any) (string, error) {
+// partitionValueString renders one partition-column value. The partition id is
+// not hashed into a row element — it is an executor-internal grouping key — but
+// it must be stable across verifiers and injective across the values a single
+// partition column can take, so the temporal families are rendered by family
+// rather than by Go type, and always in UTC.
+func partitionValueString(profile ColumnProfile, v any) (string, error) {
+	switch profile.Family {
+	case FamilyDate, FamilyDateTime, FamilyDateTime64:
+		t, ok := v.(time.Time)
+		if !ok {
+			return "", fmt.Errorf("partition column family %q carries %T, want time.Time", profile.Family, v)
+		}
+		return temporalPartitionValueString(profile, t), nil
+	}
 	switch x := v.(type) {
 	case string:
 		return x, nil
@@ -467,50 +486,166 @@ func partitionValueString(v any) (string, error) {
 	}
 }
 
+// temporalPartitionValueString renders a temporal partition value under two
+// rules. First, always in UTC: PartitionIDForRow runs on both the Native and the
+// ClickHouse-backed lane, and a local-timezone rendering would put the same row
+// in different partitions on two verifiers. Second, per family rather than per
+// Go type, so a column's own resolution decides how much of the instant is
+// significant — DateTime64(0) renders with no fractional part, and DateTime64(P)
+// renders exactly P fractional digits.
+func temporalPartitionValueString(profile ColumnProfile, t time.Time) string {
+	utc := t.UTC()
+	switch profile.Family {
+	case FamilyDate:
+		return utc.Format(dateLayout)
+	case FamilyDateTime64:
+		if profile.Precision > 0 {
+			return utc.Format(dateTimeLayout + "." + strings.Repeat("0", profile.Precision))
+		}
+	}
+	return utc.Format(dateTimeLayout)
+}
+
 // parseValue converts a raw CSV field to the Go type matching the declared
-// ClickHouse type. Unsupported types are rejected (default-deny, §5.3).
+// ClickHouse type. It dispatches on the shared column profile (Spec Q Q-D1) and
+// must produce exactly profile.GoType, so the legacy CSV lane and the Native
+// lane hand lthash identical value types for the same row. Unsupported types are
+// rejected (default-deny, §5.3).
 func parseValue(typeName, raw string) (any, error) {
-	columnType := classifyColumnType(typeName)
-	switch columnType.kind {
-	case columnTypeString:
+	profile, err := ResolveColumnProfile(typeName)
+	if err != nil {
+		return nil, err
+	}
+	switch profile.Family {
+	case FamilyString:
 		return raw, nil
-	case columnTypeFixedString:
-		return parseFixedString(columnType.fixedStringWidth, raw)
-	case columnTypeBool:
+	case FamilyFixedString:
+		return parseFixedString(profile.FixedStringWidth, raw)
+	case FamilyBool:
 		return strconv.ParseBool(raw)
-	case columnTypeFloat32:
-		f, err := strconv.ParseFloat(raw, 32)
-		return float32(f), err
-	case columnTypeFloat64:
-		f, err := strconv.ParseFloat(raw, 64)
-		return f, err
-	case columnTypeUInt8:
-		u, err := strconv.ParseUint(raw, 10, 8)
-		return uint8(u), err
-	case columnTypeUInt16:
-		u, err := strconv.ParseUint(raw, 10, 16)
-		return uint16(u), err
-	case columnTypeUInt32:
-		u, err := strconv.ParseUint(raw, 10, 32)
-		return uint32(u), err
-	case columnTypeUInt64:
-		u, err := strconv.ParseUint(raw, 10, 64)
-		return u, err
-	case columnTypeInt8:
-		n, err := strconv.ParseInt(raw, 10, 8)
-		return int8(n), err
-	case columnTypeInt16:
-		n, err := strconv.ParseInt(raw, 10, 16)
-		return int16(n), err
-	case columnTypeInt32:
-		n, err := strconv.ParseInt(raw, 10, 32)
-		return int32(n), err
-	case columnTypeInt64:
-		n, err := strconv.ParseInt(raw, 10, 64)
-		return n, err
+	case FamilyFloat:
+		return parseFloatValue(profile, raw)
+	case FamilyUInt:
+		return parseUintValue(profile, raw)
+	case FamilyInt:
+		return parseIntValue(profile, raw)
+	case FamilyDate:
+		return time.ParseInLocation(dateLayout, raw, time.UTC)
+	case FamilyDateTime:
+		return parseCHDateTime(raw)
+	case FamilyDateTime64:
+		return parseCHDateTime64(raw, profile.Precision)
 	default:
 		return nil, unsupportedColumnTypeError(typeName)
 	}
+}
+
+// parseFloatValue, parseUintValue and parseIntValue narrow to the exact declared
+// width. The width comes from profile.GoType rather than from a second switch on
+// the type name, so a numeric entry added to the authority cannot parse into a
+// Go type different from the one the authority promises.
+func parseFloatValue(profile ColumnProfile, raw string) (any, error) {
+	switch profile.GoType.Kind() {
+	case reflect.Float32:
+		f, err := strconv.ParseFloat(raw, 32)
+		return float32(f), err
+	case reflect.Float64:
+		f, err := strconv.ParseFloat(raw, 64)
+		return f, err
+	default:
+		return nil, unsupportedColumnTypeError(profile.Canonical)
+	}
+}
+
+func parseUintValue(profile ColumnProfile, raw string) (any, error) {
+	switch profile.GoType.Kind() {
+	case reflect.Uint8:
+		u, err := strconv.ParseUint(raw, 10, 8)
+		return uint8(u), err
+	case reflect.Uint16:
+		u, err := strconv.ParseUint(raw, 10, 16)
+		return uint16(u), err
+	case reflect.Uint32:
+		u, err := strconv.ParseUint(raw, 10, 32)
+		return uint32(u), err
+	case reflect.Uint64:
+		u, err := strconv.ParseUint(raw, 10, 64)
+		return u, err
+	default:
+		return nil, unsupportedColumnTypeError(profile.Canonical)
+	}
+}
+
+func parseIntValue(profile ColumnProfile, raw string) (any, error) {
+	switch profile.GoType.Kind() {
+	case reflect.Int8:
+		n, err := strconv.ParseInt(raw, 10, 8)
+		return int8(n), err
+	case reflect.Int16:
+		n, err := strconv.ParseInt(raw, 10, 16)
+		return int16(n), err
+	case reflect.Int32:
+		n, err := strconv.ParseInt(raw, 10, 32)
+		return int32(n), err
+	case reflect.Int64:
+		n, err := strconv.ParseInt(raw, 10, 64)
+		return n, err
+	default:
+		return nil, unsupportedColumnTypeError(profile.Canonical)
+	}
+}
+
+// ClickHouse's own text renderings for the temporal families, alongside RFC3339.
+const (
+	dateLayout       = "2006-01-02"
+	dateTimeLayout   = "2006-01-02 15:04:05"
+	dateTime64Layout = "2006-01-02 15:04:05.999999999"
+)
+
+// parseCHDateTime and parseCHDateTime64 accept RFC3339 first and ClickHouse's
+// own space-separated rendering second, and always resolve to UTC. The Native
+// lane returns time.Time in UTC (nativeColumnValue normalizes ColDateTime and
+// ColDateTime64, and ColDate is already UTC), so anything else here would make
+// the two lanes hash the same row differently.
+func parseCHDateTime(raw string) (any, error) {
+	t, err := parseTemporalText(raw, dateTimeLayout)
+	if err != nil {
+		return nil, err
+	}
+	return t.Truncate(time.Second), nil
+}
+
+func parseCHDateTime64(raw string, precision int) (any, error) {
+	t, err := parseTemporalText(raw, dateTime64Layout)
+	if err != nil {
+		return nil, err
+	}
+	// Digits past the declared precision are dropped, matching the value the
+	// Native lane decodes for the same column: ch-go scales DateTime64 to the
+	// declared precision before handing back a time.Time.
+	return t.Truncate(dateTime64Resolution(precision)), nil
+}
+
+func parseTemporalText(raw, chLayout string) (time.Time, error) {
+	if t, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+		return t.UTC(), nil
+	}
+	t, err := time.ParseInLocation(chLayout, raw, time.UTC)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return t.UTC(), nil
+}
+
+// dateTime64Resolution renders a DateTime64 precision as the duration one tick
+// of that precision spans. Every value from 1s down to 1ns divides a second
+// evenly, so Truncate drops exactly the digits past the declared precision.
+func dateTime64Resolution(precision int) time.Duration {
+	resolution := time.Second
+	for i := 0; i < precision; i++ {
+		resolution /= 10
+	}
+	return resolution
 }
 
 // parseFixedString matches ClickHouse's physical FixedString(N): values longer

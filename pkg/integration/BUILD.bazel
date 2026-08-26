@@ -6,6 +6,7 @@ go_test(
         "agent_test.go",
         "auth_test.go",
         "cancel_test.go",
+        "chcolumntype_test.go",
         "chreplay_test.go",
         "chreplay_time_test.go",
         "chscan_test.go",

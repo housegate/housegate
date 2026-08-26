@@ -174,9 +174,20 @@ func nativeBlockColumnPositions(schema payloadexec.TableSchema, columns []lthash
 		if !ok {
 			return nil, fmt.Errorf("native block missing schema column %q", want.Name)
 		}
+		// Compare against the wire type the column-type authority declares for
+		// this schema type rather than against the schema spelling itself
+		// (Spec Q Q-D1). Two consequences: a schema declaring a type outside the
+		// admitted profile now fails with ErrUnsupportedColumnType instead of a
+		// confusing string mismatch, and a family whose decoded ch-go column
+		// reports something other than its declaration has one place to say so.
+		wantProfile, err := payloadexec.ResolveColumnProfile(want.Type)
+		if err != nil {
+			return nil, fmt.Errorf("native block column %q: %w", want.Name, err)
+		}
 		got := columns[blockPos]
-		if got.Type != want.Type {
-			return nil, fmt.Errorf("native block column %q type %q does not match schema type %q", want.Name, got.Type, want.Type)
+		if got.Type != wantProfile.NativeWireType {
+			return nil, fmt.Errorf("native block column %q type %q does not match schema type %q (expected wire type %q)",
+				want.Name, got.Type, want.Type, wantProfile.NativeWireType)
 		}
 		positions[schemaPos] = blockPos
 	}
