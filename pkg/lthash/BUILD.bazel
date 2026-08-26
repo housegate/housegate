@@ -14,6 +14,7 @@ go_library(
 go_test(
     name = "lthash_test",
     srcs = [
+        "canonical_golden_test.go",
         "canonical_test.go",
         "lthash_test.go",
     ],

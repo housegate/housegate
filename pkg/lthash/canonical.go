@@ -23,13 +23,28 @@ type Column struct {
 }
 
 // value kind tags keep differently-typed values from colliding byte-wise.
+// They are append-only: renumbering any of them silently rewrites every
+// historical row hash.
 const (
-	kindInt byte = iota + 1
-	kindUint
-	kindFloat
-	kindString
-	kindBool
-	kindTime
+	KindInt byte = iota + 1
+	KindUint
+	KindFloat
+	KindString
+	KindBool
+	KindTime
+)
+
+// Unexported aliases kept so this file reads as it always has. The exported
+// names exist so the column-type authority in pkg/replay/payloadexec can
+// declare which tag each admitted type encodes under, and so that claim is
+// checkable rather than decorative.
+const (
+	kindInt    = KindInt
+	kindUint   = KindUint
+	kindFloat  = KindFloat
+	kindString = KindString
+	kindBool   = KindBool
+	kindTime   = KindTime
 )
 
 // EncodeRow produces the canonical element bytes for one row under the MVP

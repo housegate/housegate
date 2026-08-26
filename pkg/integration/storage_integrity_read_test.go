@@ -76,6 +76,13 @@ func TestStorageIntegrityRead_SafeAndUnsafeLatest(t *testing.T) {
 	}
 
 	port := &siReadStateStub{parts: map[string][]string{}}
+	// The ingress lane needs an allowed signer to pass Config.Validate; reuse
+	// the same key the envelope-v2 agent test signs with rather than weakening
+	// validation. No statement is signed here - this test only reads.
+	ingressSigner, err := auth.NewRelaySigner(authTestKey1)
+	if err != nil {
+		t.Fatal(err)
+	}
 	proxy := testenv.StartServerProxy(t, chEnv.Addr,
 		testenv.WithExtraDatabases("db1"),
 		testenv.WithStorageIntegrityReadState(port),
@@ -85,7 +92,20 @@ func TestStorageIntegrityRead_SafeAndUnsafeLatest(t *testing.T) {
 			cfg.Rewriter.PhysicalDatabase = phys
 			cfg.StorageIntegrity.Tables = []string{"db1.t"}
 			cfg.StorageIntegrity.Read.DefaultMode = string(rewriter.ReadModeSafe)
+			// Spec P D3: the read-mode surface must behave identically with the
+			// signed ingress configured. Without this the only read-mode
+			// integration test runs on a deployment where RejectUserSettings
+			// is never reached, so SQL_x_read_mode's owned-key membership
+			// (Spec K D6) is never exercised end to end.
+			cfg.StorageIntegrity.Ingress.Enabled = true
+			cfg.StorageIntegrity.Ingress.NetworkID = "itest-net-read"
+			cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{ingressSigner.Address()}
 		}),
+		func(_ *config.Config, opts *housegate.Options) {
+			// An enabled ingress needs a consumer; this test issues no signed
+			// statement, so nothing is ever handed to it.
+			opts.StorageIntegrityAdmissionConsumer = &capturingConsumer{}
+		},
 	)
 	conn := openConn(t, proxy.Addr)
 	count := func(mode string) (uint64, error) {
@@ -415,5 +435,76 @@ func TestStorageIntegrityRead_HeredocCannotHideAReservedName(t *testing.T) {
 	// a maintenance session.
 	if err := conn.Exec(maintenance, "SELECT $$ordinary$$ AS x"); err != nil {
 		t.Fatalf("an ordinary heredoc on a maintenance session must pass: %v", err)
+	}
+}
+
+// TestStorageIntegrityRead_SessionLevelSetIsRefused records Spec P D2: an
+// SI-configured deployment refuses session-level SET. This is a consequence of
+// Spec I D1's catch-all (SET is modelled by no handler in either engine, so it
+// reaches the catch-all and returns UnsupportedStatement) plus Spec I D3
+// (HouseGate treats any non-Success as a rejection when SI tables are
+// configured). It matters because settings_hash commits to the EMPTY user
+// settings set: a session-level `SET async_insert=1` issued before an SI INSERT
+// would be invisible to both the agent signer and the server ingress, which
+// would honestly sign EmptySettingsHash for a statement that then executes
+// under different settings. The refusal is what makes that unreachable, and
+// this test is what stops a refactor from turning it back into an accident.
+func TestStorageIntegrityRead_SessionLevelSetIsRefused(t *testing.T) {
+	lib := os.Getenv("POLYGLOT_SQL_FFI_PATH")
+	if lib == "" {
+		t.Skip("POLYGLOT_SQL_FFI_PATH not set; run `go run ./cmd fetch-rewriter-lib --tag v0.9.0` and pass --test_env")
+	}
+	ctx := context.Background()
+	const phys = "phys_si_set"
+	seed := openConnNoDB(t, chEnv.Addr)
+	for _, q := range []string{
+		"CREATE DATABASE IF NOT EXISTS " + phys,
+		"CREATE DATABASE IF NOT EXISTS hg_safe",
+		"CREATE DATABASE IF NOT EXISTS hg_unsafe",
+		"DROP TABLE IF EXISTS hg_safe.db1__t",
+		"DROP TABLE IF EXISTS hg_unsafe.db1__t",
+		"CREATE TABLE hg_unsafe.db1__t (_hg_row_id FixedString(32), a UInt32) ENGINE = MergeTree ORDER BY a",
+		"CREATE TABLE hg_safe.db1__t AS hg_unsafe.db1__t ENGINE = MergeTree ORDER BY a",
+	} {
+		if err := seed.Exec(ctx, q); err != nil {
+			t.Fatalf("seed %q: %v", q, err)
+		}
+	}
+	t.Cleanup(func() {
+		_ = seed.Exec(ctx, "DROP DATABASE IF EXISTS hg_safe")
+		_ = seed.Exec(ctx, "DROP DATABASE IF EXISTS hg_unsafe")
+		_ = seed.Exec(ctx, "DROP DATABASE IF EXISTS "+phys)
+	})
+
+	withSI := testenv.StartServerProxy(t, chEnv.Addr,
+		testenv.WithExtraDatabases("db1"),
+		testenv.WithStorageIntegrityReadState(&siReadStateStub{parts: map[string][]string{}}),
+		testenv.WithConfigMutator(func(cfg *config.Config) {
+			cfg.Rewriter.Engine = "native"
+			cfg.Rewriter.NativeLibraryPath = lib
+			cfg.Rewriter.PhysicalDatabase = phys
+			cfg.StorageIntegrity.Tables = []string{"db1.t"}
+			cfg.StorageIntegrity.Read.DefaultMode = string(rewriter.ReadModeSafe)
+		}),
+	)
+	withoutSI := testenv.StartServerProxy(t, chEnv.Addr,
+		testenv.WithExtraDatabases("db1"),
+		testenv.WithConfigMutator(func(cfg *config.Config) {
+			cfg.Rewriter.Engine = "native"
+			cfg.Rewriter.NativeLibraryPath = lib
+			cfg.Rewriter.PhysicalDatabase = phys
+		}),
+	)
+
+	err := openConn(t, withSI.Addr).Exec(ctx, "SET async_insert = 1")
+	if err == nil {
+		t.Fatal("an SI-configured deployment must refuse session-level SET: settings_hash commits to the empty user-settings set")
+	}
+	if !strings.Contains(err.Error(), "storage-integrity is configured; statement class is not modelled by the rewriter and cannot be forwarded") {
+		t.Fatalf("SET must be refused with Spec I D1's generic catch-all message, got %v", err)
+	}
+
+	if err := openConn(t, withoutSI.Addr).Exec(ctx, "SET async_insert = 1"); err != nil {
+		t.Fatalf("without SI configured the legacy pass-through must be unchanged, got %v", err)
 	}
 }

@@ -255,22 +255,6 @@ func pressureFixture(rows ...fakePartsRow) (*PartsPressureGuard, *fakePartsConn)
 	return guard, conn
 }
 
-func TestPartsPressureGuard_BuildSnapshotQuery(t *testing.T) {
-	guard, _ := pressureFixture()
-	query := guard.BuildSnapshotQuery()
-	for _, want := range []string{"system.parts", "system.tables", "partition_key", "parts.name", "active", "ORDER BY", "'hg_unsafe'", "'hg_safe'"} {
-		if !strings.Contains(query, want) {
-			t.Fatalf("query %q missing %q", query, want)
-		}
-	}
-	if strings.Contains(query, "partition_id") {
-		t.Fatal("must read partition text, not partition_id (SipHash for String keys)")
-	}
-	if strings.Contains(query, "count()") || strings.Contains(query, "GROUP BY") {
-		t.Fatal("cleanup proof requires exact active part names, not only aggregate counts")
-	}
-}
-
 func TestPartsPressureGuard_RefreshRetainsExactPartInventory(t *testing.T) {
 	guard, conn := pressureFixture()
 	conn.setInventory(
@@ -300,11 +284,24 @@ func TestPartsPressureGuard_RefreshMapsPartitionsToLogicalIDs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Refresh: %v", err)
 	}
-	if snapshot[PartsKey{"hg_unsafe", "db__t", "p_a"}] != 3 || snapshot[PartsKey{"hg_unsafe", "db__u", "all"}] != 1 || snapshot[PartsKey{"hg_safe", "db__t", "p_a"}] != 7 {
+	if snapshot[PartsKey{"hg_unsafe", "db__t", "p_a"}] != 3 || snapshot[PartsKey{"hg_unsafe", "db__u", "all"}] != 1 {
 		t.Fatalf("snapshot = %v", snapshot)
 	}
-	if got, ok := guard.Snapshot(); !ok || len(got) != 3 {
+	// Spec P D4: the exact read binds hg_unsafe only, so the safe key is absent
+	// from it; the same partition-text mapping still reaches it through the
+	// bounded aggregate that feeds storage_integrity_safe_parts.
+	if _, present := snapshot[PartsKey{"hg_safe", "db__t", "p_a"}]; present {
+		t.Fatalf("the exact read must not report safe-database keys: %v", snapshot)
+	}
+	if got, ok := guard.Snapshot(); !ok || len(got) != 2 {
 		t.Fatalf("Snapshot() = %v %v", got, ok)
+	}
+	counts, err := guard.RefreshCounts(context.Background())
+	if err != nil {
+		t.Fatalf("RefreshCounts: %v", err)
+	}
+	if counts[PartsKey{"hg_safe", "db__t", "p_a"}] != 7 {
+		t.Fatalf("the bounded aggregate must still map safe partitions to logical ids: %v", counts)
 	}
 }
 
@@ -443,27 +440,45 @@ func TestPartsPressureGuard_InvalidateKeysDropsOnlyMatchingFreshness(t *testing.
 	}
 }
 
-func TestPartsPressureGuard_FullScopeCoversSafeDatabase(t *testing.T) {
+// TestPartsPressureGuard_ExactScopeNeverNamesTheSafeDatabase is Spec P D4's
+// acceptance. Task 6 proved every exact-name consumer keys on UnsafeDatabase,
+// so the safe database's part names are dead weight in this read - and at the
+// design's stated scale (10 tables x 12 partitions x 2500 parts) they are the
+// row budget that makes the startup RestoreBatch pass time out and latch
+// restoreBlocked.
+func TestPartsPressureGuard_ExactScopeNeverNamesTheSafeDatabase(t *testing.T) {
 	g := NewPartsPressureGuard(&fakePartsConn{}, PartsPressureConfig{
 		UnsafeDatabase: "hg_unsafe",
 		SafeDatabase:   "hg_safe",
 	})
-	scope := g.fullScope()
-	if scope.SafeDatabase != "hg_safe" || !scope.IncludeSafeDatabase {
-		t.Fatalf("fullScope must name the safe database: %+v", scope)
+
+	exact := g.exactScope()
+	if exact.IncludeSafeDatabase || exact.SafeDatabase != "" {
+		t.Fatalf("the exact-name scope must not name the safe database: %+v", exact)
 	}
-	if !scope.IsFull(g.cfg) {
-		t.Fatal("fullScope must satisfy IsFull")
+	if !exact.IsFull(g.cfg) {
+		t.Fatal("the exact-name scope must still satisfy IsFull: hg_unsafe is the whole capacity-relevant surface")
 	}
-	if !scope.Covers(PartsKey{Database: "hg_safe", Table: "db__t", Partition: "p_a"}) {
-		t.Fatal("fullScope must cover safe-database keys")
+	if exact.Covers(PartsKey{Database: "hg_safe", Table: "db__t", Partition: "p_a"}) {
+		t.Fatal("the exact-name scope must not claim authority over safe-database keys")
 	}
-	query, args := g.BuildExactPartsQuery(scope)
-	if !strings.Contains(query, "parts.database IN (?, ?)") {
-		t.Fatalf("full scope must read both databases: %s", query)
+	query, args := g.BuildExactPartsQuery(exact)
+	if strings.Contains(query, "IN (?, ?)") {
+		t.Fatalf("the exact-name read must bind one database: %s", query)
 	}
-	if len(args) < 2 || args[1] != "hg_safe" {
-		t.Fatalf("safe database must be bound: %v", args)
+	if len(args) != 1 || args[0] != "hg_unsafe" {
+		t.Fatalf("exact-name args = %v, want [hg_unsafe]", args)
+	}
+
+	count := g.countScope()
+	if !count.IncludeSafeDatabase || count.SafeDatabase != "hg_safe" {
+		t.Fatalf("the bounded count scope must still cover the safe database for the gauge: %+v", count)
+	}
+	if !count.IsFull(g.cfg) {
+		t.Fatal("the count scope must satisfy IsFull")
+	}
+	if !count.Covers(PartsKey{Database: "hg_safe", Table: "db__t", Partition: "p_a"}) {
+		t.Fatal("the count scope must remain authoritative for safe-database keys")
 	}
 }
 

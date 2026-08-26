@@ -59,6 +59,8 @@ Non-goals: making peer/forwarded sessions run SI policy (D6); a general `ErrorRe
 
 Rejected: running full SI rewrite for maintenance sessions (it would defeat the purpose of the bypass); rejected: leaving them undocumented under the peer rationale (the review's finding, and correct).
 
+**Session-level `SET` (recorded 2026-08-25, Spec P D2).** A consequence of D1's catch-all that is now a contract, not an accident: with `storage_integrity.tables` non-empty a session-level `SET` is refused with D1's generic message, because `settings_hash` commits to the empty user-settings set and a `SET` issued before an SI `INSERT` would be invisible to both the agent signer and the server ingress. The same sessions D6 exempts from SI rewrite — peer-trusted, forwarded, maintenance and platform-operator — can still issue `SET`, which is part of what the documented network-isolation requirement is protecting. Pinned by `TestStorageIntegrityRead_SessionLevelSetIsRefused`; the corpus case that would pin it byte-identically in both engines is deferred (see Spec P D2 note).
+
 **D7 — The four correctness defects.**
 - (a) Scope the reserved-column check to references that resolve to an SI table; an identically named column on an ordinary table is allowed.
 - (b) Make the SI namespace/`IN`-target gates CTE-aware, reusing the scope the collect/rewrite walkers already carry.
