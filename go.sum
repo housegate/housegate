@@ -163,8 +163,8 @@ github.com/holiman/bloomfilter/v2 v2.0.3 h1:73e0e/V0tCydx14a0SCYS/EWCxgwLZ18CZcZ
 github.com/holiman/bloomfilter/v2 v2.0.3/go.mod h1:zpoh+gs7qcpqrHr3dB55AMiJwo0iURXE7ZOP9L9hSkA=
 github.com/holiman/uint256 v1.3.2 h1:a9EgMPSC1AAaj1SZL5zIQD3WbwTuHrMGOerLjGmM/TA=
 github.com/holiman/uint256 v1.3.2/go.mod h1:EOMSn4q6Nyt9P6efbI3bueV4e1b3dGlUCXeiRV4ng7E=
-github.com/housegate/rewriter-go v0.7.1 h1:GsGxfNxNJiyo91GGmfUzvO41Ebbk6e7sKJDcDRs46/c=
-github.com/housegate/rewriter-go v0.7.1/go.mod h1:EsDo2ok1nVva+xR0x3iJJpeJj81JKhQPTFDjLFUmV3M=
+github.com/housegate/rewriter-go v0.10.0 h1:7c80EsnrpAkd8MrVFnJjvkzQA6AKerbyk3MmVuTOgOI=
+github.com/housegate/rewriter-go v0.10.0/go.mod h1:LgEGlIlUsbEDKN7hOr0N+ClHr9LJXfXgIDWXPQaKtFM=
 github.com/housegate/rewriter-proto v0.2.0 h1:NjWldNJ6e5bVCOFBg+8o1SkFu55+OypOcIAlz5dY5hc=
 github.com/housegate/rewriter-proto v0.2.0/go.mod h1:37lVQ0Qz3nK5vDZ6jspyIAvCR0dOFLHKsGv6d03Ifxk=
 github.com/huin/goupnp v1.3.0 h1:UvLUlWDNpoUdYzb2TCn+MuTWtcjXKSza2n6CBdQ0xXc=
@@ -320,8 +320,8 @@ github.com/tklauser/go-sysconf v0.4.0 h1:7H0uAN+7RkwWRaxhYXDLqa5V3LPrJeV8wmD9dRU
 github.com/tklauser/go-sysconf v0.4.0/go.mod h1:8mTNWyog7H+MpKijp4VmKJAd2bbYQ2zuUwkYRbUArPI=
 github.com/tklauser/numcpus v0.12.0 h1:NR85qdvHA9pFse3x3weVZ0r0ST8R6l5RHbZrlRaqob4=
 github.com/tklauser/numcpus v0.12.0/go.mod h1:ABHeXzJnr/qqwguhClkZKT1/8VABcYrsyUiUGobwWJg=
-github.com/tobilg/polyglot/packages/go v0.8.1 h1:ReHUVuMGoLj9Ouzk5qd35LZ14tYVyzWKvTL7flklTME=
-github.com/tobilg/polyglot/packages/go v0.8.1/go.mod h1:S3rORX9g0cs3n5hLXR0ah6vqRMS4G71LXDzuNju2rH0=
+github.com/tobilg/polyglot/packages/go v0.9.2 h1:k9mJLNtcrwUV2qQFc4ze1qi16kE6/gE68GkGw8/LJ+c=
+github.com/tobilg/polyglot/packages/go v0.9.2/go.mod h1:S3rORX9g0cs3n5hLXR0ah6vqRMS4G71LXDzuNju2rH0=
 github.com/twitchyliquid64/golang-asm v0.15.1 h1:SU5vSMR7hnwNxj24w34ZyCi/FmDZTkS4MhqMhdFk5YI=
 github.com/twitchyliquid64/golang-asm v0.15.1/go.mod h1:a1lVb/DtPvCB8fslRZhAngC2+aY1QWCk3Cedj/Gdt08=
 github.com/urfave/cli/v2 v2.27.5 h1:WoHEJLdsXr6dDWoJgMq/CboDmyY/8HMMH1fTECbih+w=

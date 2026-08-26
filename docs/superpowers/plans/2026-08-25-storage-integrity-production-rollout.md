@@ -91,7 +91,7 @@ Part A is independent of Specs N and O's other parts. It only gates Part E. Run 
 
 > **Docker note for all of Part A:** `snode` has both pure-Go and ClickHouse-bound tests. `requireCH(t)` gates on `ARBITER_CH_INTEGRATION` (`snode/ch_test.go:14`) and Go reports a skip as `PASS`, so a green `bazel test //...` is **not** evidence the docker tests ran (roadmap §1f; Spec P D6 fixes the convention, not this plan). Every task below therefore says which of its assertions are pure-Go and which need `ARBITER_CH_INTEGRATION=1` + `CH_ADDR`.
 
-- [ ] **Task 0 (pre-flight, do once):** branch and prove the baseline is green.
+- [x] **Task 0 (pre-flight, do once):** branch and prove the baseline is green.
 
 ```bash
 cd /Users/uranuswch/Dev/sentio_xyz/arbiter-core
@@ -125,7 +125,7 @@ The existing test file `snode/recorded_bindings_test.go` is the proof: `recorded
 - Produces: `snode.ErrPayloadMismatchPreWrite` and `snode.ErrPayloadMismatchPostRecord`, both wrapping `snode.ErrPayloadMismatch`. sentio-node Task 16 consumes `ErrPayloadMismatchPreWrite` by name; nothing consumes `ErrPayloadMismatchPostRecord` except its own tests and the negative assertions.
 - Changes (package-private): `validatePrepareBindings(req PrepareRequest, class error) (string, int, error)`.
 
-- [ ] **Step 1: Add the classification test (red)**
+- [x] **Step 1: Add the classification test (red)**
 
 Create `snode/payload_mismatch_class_test.go`. It has three parts: a **mutual-exclusion** unit assertion, a **behavioural table** over every raise site reachable without docker, and a **source-text guard** so a future raise site cannot inherit the wrong class by copy-paste.
 
@@ -229,7 +229,7 @@ func TestPayloadMismatchClassPerRaiseSite(t *testing.T) {
 
 Write the third function against the helpers named in its comment; do not invent a new harness and do not leave the `t.Fatal` placeholder in the committed code. Cover at minimum: pre-write × {payload format, request encoding, client revision zero, revision disagreement, payload binding mismatch}; post-record × {the three `recordedBindingMutations` payload-mismatch entries via `RegisterPreparedClaim` and via `AbortPreparedStatement`, plus envelope-changed / encoding-changed / revision-changed / payload-binding-changed via a seeded journal record}. The one raise site not reachable without a payload store — `nativepayload.Decode` at `staged.go:130` — is covered by the source-text guard above; say so in a comment rather than pretending it is behaviourally covered.
 
-- [ ] **Step 2: Run the new test and confirm it fails**
+- [x] **Step 2: Run the new test and confirm it fails**
 
 ```bash
 cd /Users/uranuswch/Dev/sentio_xyz/arbiter-core
@@ -238,7 +238,7 @@ bazel test //snode:snode_test --test_filter='TestPayloadMismatch|TestStagedGoRai
 
 Expected: **compile failure** — `undefined: ErrPayloadMismatchPreWrite`, `undefined: ErrPayloadMismatchPostRecord`. That is this guard's red: the sentinels do not exist yet. Record the exact compiler output.
 
-- [ ] **Step 3: Add the two sentinels**
+- [x] **Step 3: Add the two sentinels**
 
 In `snode/staged.go`, replace the `ErrPayloadMismatch` line inside the `var (...)` block at `:47-57` with:
 
@@ -259,7 +259,7 @@ In `snode/staged.go`, replace the `ErrPayloadMismatch` line inside the `var (...
 
 `fmt` is already imported (`staged.go:6`). Both derived values wrap the original with `%w`, so `errors.Is(x, ErrPayloadMismatch)` stays true for every existing caller; neither wraps the other, so the classes are disjoint.
 
-- [ ] **Step 4: Parameterise `validatePrepareBindings` and reclassify every raise site**
+- [x] **Step 4: Parameterise `validatePrepareBindings` and reclassify every raise site**
 
 In `snode/staged.go`:
 
@@ -297,13 +297,13 @@ func validatePrepareBindings(req PrepareRequest, class error) (string, int, erro
 4. `staged.go:122` and `:130` swap `ErrPayloadMismatch` for `ErrPayloadMismatchPreWrite` — both are before `journal.save` at `:166`; the only way to reach `:121` with a record present is a `LifecycleCleaned` record, which by definition left no unsafe bytes.
 5. `staged.go:242,245,248,251` (inside `validateReplayRequest`) swap `ErrPayloadMismatch` for `ErrPayloadMismatchPostRecord` — `validateReplayRequest` is called at `:94` only when `journal.load` returned `ok`.
 
-- [ ] **Step 5: Replace, do not extend, the existing post-record expectations**
+- [x] **Step 5: Replace, do not extend, the existing post-record expectations**
 
 In `snode/recorded_bindings_test.go`, change the three `want: ErrPayloadMismatch` entries in `recordedBindingMutations()` to `want: ErrPayloadMismatchPostRecord`. This is the same discipline Spec O D4 mandates on the sentio-node side: after this task no arbiter-core path raises the bare sentinel, so a test asserting its classification would be asserting dead behaviour. Leave the `ErrEncodingNotSupported` entry untouched.
 
 If the surrounding assertions use `errors.Is(err, tc.want)` they need no other change — `ErrPayloadMismatchPostRecord` is a strictly narrower assertion than the old one.
 
-- [ ] **Step 6: Run the pure-Go suite**
+- [x] **Step 6: Run the pure-Go suite**
 
 ```bash
 cd /Users/uranuswch/Dev/sentio_xyz/arbiter-core
@@ -312,7 +312,7 @@ bazel test --build_tests_only --@rules_go//go/config:race //... --test_output=er
 
 Expected: green, with the same failing set as Task 0 (empty). The classification test's placeholder `t.Fatal` must be gone.
 
-- [ ] **Step 7: Run the ClickHouse-bound `snode` tests**
+- [x] **Step 7: Run the ClickHouse-bound `snode` tests**
 
 The pre-write raise sites are also asserted end-to-end by `TestPrepareLocalStatement_RejectsRequestEnvelopeBindingMismatchBeforeWrite` (`staged_prepare_test.go:273`), which additionally proves no parts and no journal record were created — the behavioural meaning of "pre-write".
 
@@ -332,7 +332,7 @@ Expected: a non-zero PASS count and a **zero** SKIP count. A skip here is a red,
 
 **If any of Steps 6–7 is red, stop the chain here.** Do not start Part B, C, D or E; nothing downstream can be judged while arbiter-core's classification is unproven.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 cd /Users/uranuswch/Dev/sentio_xyz/arbiter-core
@@ -354,7 +354,7 @@ Spec O §1f: `snode/config.go:107-112` rewrites `HardPartsPerPartition == 0` to 
 **Interfaces:**
 - Produces: `snode.Config.DisableHardParts bool`. sentio-node Task 15 sets it from `storage_integrity.runtime.backpressure.enabled`.
 
-- [ ] **Step 1: Add the config tests (red)**
+- [x] **Step 1: Add the config tests (red)**
 
 Append to the existing config-validation test file (`snode/config_external_test.go`, or wherever the current table lives — read before writing):
 
@@ -400,7 +400,7 @@ func TestConfigZeroHardPartsStillDefaultsWhenNotDisabled(t *testing.T) {
 
 `testConfigS(t)` is the existing helper (used by `recorded_bindings_test.go:60`). If it lives in a file that is not visible from the chosen test file, put the new tests in that file instead of moving the helper. `validate()` has a pointer receiver and mutates, so call it on an addressable `cfg`.
 
-- [ ] **Step 2: Add the back-pressure skip test (red)**
+- [x] **Step 2: Add the back-pressure skip test (red)**
 
 The config change alone does not disable anything; `staged.go:150` must honour it. Add, next to the existing back-pressure tests in `snode/staged_backpressure_test.go`:
 
@@ -418,7 +418,7 @@ func TestPrepareLocalStatement_DisableHardPartsSkipsTheSourceRefusal(t *testing.
 
 Read the existing hard-limit test in that file and mirror its setup exactly — same schema, same part-count seeding — changing only the two config fields and the expectation. It is ClickHouse-bound like its sibling.
 
-- [ ] **Step 3: Run both and confirm they fail**
+- [x] **Step 3: Run both and confirm they fail**
 
 ```bash
 cd /Users/uranuswch/Dev/sentio_xyz/arbiter-core
@@ -427,7 +427,7 @@ bazel test //snode:snode_test --test_filter='TestConfig.*HardParts' --test_outpu
 
 Expected: **compile failure** — `cfg.DisableHardParts undefined`. Record it.
 
-- [ ] **Step 4: Implement**
+- [x] **Step 4: Implement**
 
 In `snode/config.go`, add the field to `Config` immediately after `HardPartsPerPartition`:
 
@@ -471,7 +471,7 @@ In `snode/staged.go`, guard the loop at `:149-154`:
 
 Keep the `before`/`inventory` computation outside the guard: `inventory` feeds `intakeRecord.PreWriteInventory` at `:163` and is not back-pressure state.
 
-- [ ] **Step 5: Verify**
+- [x] **Step 5: Verify**
 
 ```bash
 cd /Users/uranuswch/Dev/sentio_xyz/arbiter-core
@@ -488,7 +488,7 @@ Expected: pure-Go suite green; the filtered docker run shows PASS markers and a 
 
 **If red, stop the chain here.**
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 cd /Users/uranuswch/Dev/sentio_xyz/arbiter-core

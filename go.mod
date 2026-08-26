@@ -83,7 +83,7 @@ require (
 	github.com/testcontainers/testcontainers-go v0.43.0 // indirect
 	github.com/tklauser/go-sysconf v0.4.0 // indirect
 	github.com/tklauser/numcpus v0.12.0 // indirect
-	github.com/tobilg/polyglot/packages/go v0.8.1 // indirect
+	github.com/tobilg/polyglot/packages/go v0.9.2 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
@@ -105,7 +105,7 @@ require (
 	github.com/go-faster/errors v0.7.1 // indirect
 	github.com/google/uuid v1.6.0
 	github.com/holiman/uint256 v1.3.2 // indirect
-	github.com/housegate/rewriter-go v0.7.1
+	github.com/housegate/rewriter-go v0.10.0
 	github.com/housegate/rewriter-proto v0.2.0
 	github.com/klauspost/compress v1.18.6 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.9 // indirect

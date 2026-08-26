@@ -29,7 +29,7 @@ Every task's requirements implicitly include this section. Nothing here is inven
 - **Reserved names are frozen.** Physical databases `hg_safe` / `hg_unsafe`, reserved column `_hg_row_id`, `CHTableName(id) = ReplaceAll(id, ".", "__")`.
 - **Contract acknowledgement is unchanged.** `STORAGE_INTEGRITY_CONTRACT_V1` in, echoed once out. **Nothing in this plan bumps rewriter-proto.**
 - **rewriter-go:** polyglot imports only inside `internal/engine`; `internal/nameresolve` imports neither engine nor polyglot; engine-backed tests skip unless `POLYGLOT_SQL_FFI_PATH` is set. `make ffi` builds it at `third_party/lib/libpolyglot_sql_ffi.<dylib|so>` and `make test` exports it automatically. **A prebuilt lib already exists at `/Users/uranuswch/Dev/housegate/rewriter-go/third_party/lib/libpolyglot_sql_ffi.dylib`** (macOS); on Linux substitute `.so` everywhere below.
-- **rewriter-grpc builds only on the remote box** (`ssh -p 30100 sentio@64.38.131.242`, workdir `/home/sentio/chen/rewriter-grpc/`). Dev loop = rsync → `./scripts.sh rebuild` → `ctest --test-dir build --output-on-failure`. Single test: `./build/rewriter_tests --gtest_filter='<Suite.Name>'`. **Never run a local cmake.** The `clickHouse/` submodule is not checked out locally, so every ClickHouse AST class name and field must be confirmed on the box before code that names it is written.
+- **rewriter-grpc builds only on the remote box** (`ssh -p 30100 sentio@64.38.131.242`, workdir `/home/sentio/chen/rewriter-grpc/`). Dev loop = rsync → `./scripts.sh rebuild` → `ctest --test-dir build --output-on-failure`. Single test: `./build/tests/rewriter_tests --gtest_filter='<Suite.Name>'`. **Never run a local cmake.** The `clickHouse/` submodule is not checked out locally, so every ClickHouse AST class name and field must be confirmed on the box before code that names it is written.
 - **housegate:** Bazel is the test ground truth (`bazel build //...`, `bazel test //...`); module path `github.com/housegate/housegate`; run `bazel mod tidy && bazel run //:gazelle` after dependency or new-file changes; `pkg/integration` targets are `manual`-tagged and must be listed in `.github/workflows/ci.yml`.
 - **housegate work lands on the PR #141 branch `feature/si-surface-failclosed-housegate`, never on `main`.** Spec N §5: #141 must not merge without D1, because D1 closes a hole #141 itself introduces.
 - **English only** for identifiers, comments, log messages, and operator-facing error strings, in all three repos. Markdown: no hard line-wrapping, one paragraph per line.
@@ -71,7 +71,7 @@ env -u REWRITER_ORACLE_ADDR POLYGLOT_SQL_FFI_PATH=$PWD/third_party/lib/libpolygl
   go test ./<pkg>/ -run '<regex>' -v
 ```
 
-- [ ] **Task 0 (pre-flight, do once):** branch and prove the baseline is green and the corpus matches its recorded state.
+- [x] **Task 0 (pre-flight, do once):** branch and prove the baseline is green and the corpus matches its recorded state.
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go
@@ -97,7 +97,7 @@ Expected: every package `ok`; sha256 = `309d738050fd05edd8e1f51f59a071c9c593e7aa
 - Produces on `engine.DBLevelInfo`: `ShowTable string`, `ShowTableResolved bool`, `HasTableClause bool`. Task 2 is the only consumer.
 - Unchanged semantics for every non-`COLUMNS`/`INDEX`-family kind: `TABLES`, `DATABASES`, `DICTIONARIES`, `CREATE`, `CLUSTER`, `SETTINGS`, `MERGES` keep today's `DB` / `HasDBClause` / `DBResolved` meaning, byte for byte.
 
-- [ ] **Step 1: Write the failing table test (red)**
+- [x] **Step 1: Write the failing table test (red)**
 
 Append to `internal/engine/dblevel_test.go`:
 
@@ -182,7 +182,7 @@ func TestParseDBLevel_nonColumnsFamilyGrammarIsUnchanged(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run both tests and record the exact pre-fix failure**
+- [x] **Step 2: Run both tests and record the exact pre-fix failure**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go
@@ -196,7 +196,7 @@ Expected **before** the fix, measured on the live engine:
 - After adding only the three struct fields (zero-valued, no parser change), every `columnsFamily` row fails with the measured values: `SHOW COLUMNS FROM db1__t FROM hg_safe` → `DB:db1__t HasDBClause:true DBResolved:true`, i.e. the **table** bound as the database; `SHOW COLUMNS FROM hg_safe.db1__t` → `DB:hg_safe` but `ShowTable:""`; `SHOW COLUMNS FROM db1__t` → `DB:db1__t HasDBClause:true` (a table reported as a resolved database clause — the sharpest single symptom); every `EXTENDED` row → `ShowWhat:EXTENDED DB:"" HasDBClause:false`.
 - `TestParseDBLevel_nonColumnsFamilyGrammarIsUnchanged` **passes** before and after. If it ever fails, the fix has leaked into the TABLES/DICTIONARIES grammar.
 
-- [ ] **Step 3: Add the three fields**
+- [x] **Step 3: Add the three fields**
 
 In `internal/engine/dblevel.go`, extend `DBLevelInfo`:
 
@@ -209,7 +209,7 @@ In `internal/engine/dblevel.go`, extend `DBLevelInfo`:
 
 Keep the existing field comments intact; `DB` / `HasDBClause` / `DBResolved` keep meaning *database* for every kind, which is precisely what is wrong today for this family.
 
-- [ ] **Step 4: Teach the SHOW arm the prefix and the reversed grammar**
+- [x] **Step 4: Teach the SHOW arm the prefix and the reversed grammar**
 
 In the `case "SHOW":` arm, add `EXTENDED` ahead of `FULL` (ClickHouse's fixed order is `SHOW [EXTENDED] [FULL] …`; `TEMPORARY` keeps its existing position after `FULL`):
 
@@ -243,7 +243,7 @@ After `info.ShowWhat` is captured, branch on the kind before consuming clauses:
 4. if a second `FROM|IN` follows, sets `HasDBClause = true` and resolves `DB` / `DBResolved` from it — an already-set qualified `DB` is *overwritten* only if the second clause resolves, and the ambiguous `SHOW COLUMNS FROM a.b FROM c` form binds `DB = c` (ClickHouse's own precedence: the explicit database clause wins);
 5. returns the index at which the shared `LIKE` / `WHERE` / `LIMIT` tail loop resumes, so `SHOW COLUMNS FROM t FROM db LIKE 'a%'` keeps working.
 
-- [ ] **Step 5: Run the two tests plus the whole engine package**
+- [x] **Step 5: Run the two tests plus the whole engine package**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go
@@ -253,7 +253,7 @@ env -u REWRITER_ORACLE_ADDR POLYGLOT_SQL_FFI_PATH=$PWD/third_party/lib/libpolygl
 
 Expected: all `TestParseDBLevel*` green, including the four pre-existing ones — in particular `TestParseDBLevel_showPrefixesPrecedeKindAndDatabaseClause`'s `SHOW TEMPORARY FULL DICTIONARIES FROM hg_safe` → `ShowWhat: "FULL"` row, which proves prefix ordering is still strict and that `EXTENDED` did not become order-free.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/engine/dblevel.go internal/engine/dblevel_test.go
@@ -275,7 +275,7 @@ git commit -m "fix(show): parse the COLUMNS/INDEX family's table-then-database g
 - Consumes: `engine.DBLevelInfo.ShowTable` / `HasTableClause` / `ShowExtended` (Task 1), `recordAccessedDatabase` (`dblevel.go:90`), `recordAccessedStorageIntegrityLogicalDatabaseUnique` (`storage_integrity_policy.go:203`), `nameresolve.IsStorageIntegrityPhysicalDatabase` / `IsStorageIntegrityLogicalDatabase` / `AuthorizeStorageIntegrityLogical` / `LookupStorageIntegrity`, `StorageIntegrityPhysicalDatabaseRejectMessage`, `StorageIntegrityPhysicalRejectMessage`, `StorageIntegrityLogicalDatabaseRejectMessage`, `StorageIntegrityUnauthorizedMessage`, `rejectUnresolvedShowDatabase` (`dblevel.go:394`).
 - Produces: `showKindClass(kind string) showClass` with the three constants `showRewritten`, `showTargetBearing`, `showTargetLess`, plus `showUnknown`. No new message string is invented.
 
-- [ ] **Step 1: Add the corpus cases (red)**
+- [x] **Step 1: Add the corpus cases (red)**
 
 Append to the end of the JSON array in `internal/harness/testdata/storage_integrity_cases.json`. The `dynamic` block below is written once here and repeated verbatim per case (the corpus has no anchors); `<DYN>` in the table means exactly this object:
 
@@ -314,7 +314,7 @@ Plus the two pass-through controls, which are **success** cases and therefore pi
 
 `si_show_merges_target_less_passthrough` is the allowlist's own regression test: Spec N §2 deliberately keeps `MERGES` pass-through, and this case makes any later "tighten everything" edit a visible corpus change. Neither control may carry `want_sql_contains` — every candidate substring is already in the input SQL and `ValidateSICorpus` rule R4 rejects that as vacuous.
 
-- [ ] **Step 2: Run the new cases and record the pre-fix failure**
+- [x] **Step 2: Run the new cases and record the pre-fix failure**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go
@@ -324,7 +324,7 @@ env -u REWRITER_ORACLE_ADDR POLYGLOT_SQL_FFI_PATH=$PWD/third_party/lib/libpolygl
 
 Expected **before** the fix, measured: every one of the ten reject cases fails with `code = Success, want UnsupportedStatement` and `statement_type = STATEMENT_TYPE_SHOW_TABLES, want ""`. The two pass-through controls **pass** before and after — they are the proof that the gate is targeted rather than a blanket refusal. `TestSICorpusIsBytePinned` will also fail; that is expected and is re-pinned in Task 5, not now.
 
-- [ ] **Step 3: Replace the negative branch with the positive classification**
+- [x] **Step 3: Replace the negative branch with the positive classification**
 
 In `internal/handlers/dblevel.go`, add above `dispatchShowTables`:
 
@@ -404,7 +404,7 @@ Then replace the `if info.ShowWhat != "TABLES" { ... }` block with:
 
 Keep the existing call site's name in the `DICTIONARIES` path so the diff stays reviewable: `DICTIONARIES` has no table clause, so branch 2 is inert for it and its four existing corpus cases must not move.
 
-- [ ] **Step 4: Add the handler-local unknown-kind test**
+- [x] **Step 4: Add the handler-local unknown-kind test**
 
 Per deviation **D-4** the shared corpus may not be able to hold this case. Add it to `internal/handlers/dblevel_test.go` regardless, so the Go behaviour is pinned independently of what Part B measures:
 
@@ -442,7 +442,7 @@ Reuse the package's existing engine/option helpers rather than adding new ones �
 
 Expected **before** Step 3: the SI case fails with `code = Success` (measured: `SHOW SOMETHINGNEW FROM hg_safe` returns `Success` with `statement_type SHOW_TABLES` and the SQL unchanged). The non-SI case passes before and after.
 
-- [ ] **Step 5: Run the handler and harness tests**
+- [x] **Step 5: Run the handler and harness tests**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go
@@ -452,7 +452,7 @@ env -u REWRITER_ORACLE_ADDR POLYGLOT_SQL_FFI_PATH=$PWD/third_party/lib/libpolygl
 
 Expected: every `si_show_*` case green — the twelve new ones and the seven pre-existing ones (`si_show_create_rejected`, `si_show_tables_unchanged`, `si_show_tables_safe_database_rejected`, `si_show_tables_unsafe_context_rejected`, `si_show_dictionaries_safe_database_rejected`, `si_show_dictionaries_logical_database_rejected`, `si_show_dictionaries_ordinary_database_passthrough`). `TestSICorpusIsBytePinned` still fails until Task 5.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/handlers/dblevel.go internal/handlers/dblevel_test.go internal/harness/testdata/storage_integrity_cases.json
@@ -476,7 +476,7 @@ Read deviation **D-2** and **D-3** before starting: `redis` and `sqlite` are del
 - Consumes: `decodeNamespacePairDetail` / `decodeNamespaceSingleDetail` (unchanged), `NamespaceRefTableFunction`.
 - Produces: no new exported symbol. `objectCarrierCallable` in housegate's `sireserved` (`pkg/plugins/sireserved/plugin.go:240-252`) mirrors this list for operator sessions; Task 13 Step 6 adds the same five names there so the two lists do not drift.
 
-- [ ] **Step 1: Read each signature from the ClickHouse documentation and write the arity table down**
+- [x] **Step 1: Read each signature from the ClickHouse documentation and write the arity table down**
 
 Do not infer argument positions from the existing `remote` decode. Fetch each page and record the positional list in the commit message:
 
@@ -504,7 +504,7 @@ Documented signatures as read on 2026-08-25 — re-read them rather than trustin
 
 The single-at-index-1 fallback is `merge`'s existing one-argument semantics: a qualified `a.b` literal binds the pair, an unqualified one binds a table against the current database, and a non-literal is unresolved. That is the safe direction for a short form whose foreign namespace cannot be proved ordinary.
 
-- [ ] **Step 2: Add the corpus cases (red)**
+- [x] **Step 2: Add the corpus cases (red)**
 
 Reuse the `<DYN>` block from Task 2 Step 1. Five reject cases, one per decoded name:
 
@@ -529,7 +529,7 @@ The exact `want_sql` for the three `Success` cases is whatever the engine emits 
 
 `si_redis_column_name_allowed` is the case that makes D-2 permanent: it is the one statement whose *plain reading* looks like a reserved-name mention and is nonetheless correct to allow, so it cannot be "tidied up" later without an explicit corpus change.
 
-- [ ] **Step 3: Run the new cases and record the pre-fix failure**
+- [x] **Step 3: Run the new cases and record the pre-fix failure**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go
@@ -539,7 +539,7 @@ env -u REWRITER_ORACLE_ADDR POLYGLOT_SQL_FFI_PATH=$PWD/third_party/lib/libpolygl
 
 Expected **before** the fix, measured: the five physical cases and `si_mysql_unresolved_namespace_rejected` all fail with `code = Success, want RewriteError` and `statement_type = STATEMENT_TYPE_SELECT, want ""`. `si_mysql_ordinary_database_allowed`, `si_sqlite_foreign_file_allowed` and `si_redis_column_name_allowed` **pass** before and after (once their `want_sql` is filled in from this run) — three of the four controls in this task are pre-existing behaviour that must survive.
 
-- [ ] **Step 4: Extend the decoder**
+- [x] **Step 4: Extend the decoder**
 
 In `decodeNamespaceFunctionRefDetail`, after the `mergetree` prefix branch and before the final `return namespaceRefDetail{}, false`:
 
@@ -573,7 +573,7 @@ In `decodeNamespaceFunctionRefDetail`, after the `mergetree` prefix branch and b
 
 `argAt(args, 1)` returns `nil` when the slice is shorter, which `decodeNamespaceSingleDetail` already handles as "not a current-database arg, not a resolvable value" — the unresolved path. If no such helper exists in the file, add a two-line local one rather than indexing unguarded.
 
-- [ ] **Step 5: Pin the named-collection shape by measurement, not by assumption**
+- [x] **Step 5: Pin the named-collection shape by measurement, not by assumption**
 
 Every one of the five functions also accepts `f(named_collection[, k=v…])`, where no argument is a static namespace literal. Run each through the fixed engine and record what it produces:
 
@@ -592,7 +592,7 @@ env -u REWRITER_ORACLE_ADDR SI_CORPUS_PATH=/tmp/nc_probe.json \
 
 Decision rule, applied in this step and not deferred: if the named-collection shapes reject (unresolved namespace), add `si_mysql_named_collection_unresolved_rejected` to the corpus pinning that. If any of them returns `Success` while naming `hg_safe`, that is a residual bypass of the same class as this task and it must be closed here — extend the decode so a connector call whose namespace arguments are not static literals is unresolved — before the task is considered done. Do not proceed with a known-`Success` reserved-name shape.
 
-- [ ] **Step 6: Run the harness and the whole engine package**
+- [x] **Step 6: Run the harness and the whole engine package**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go
@@ -601,7 +601,7 @@ env -u REWRITER_ORACLE_ADDR make test
 
 Expected: everything green except `TestSICorpusIsBytePinned` (re-pinned in Task 5). Pay particular attention to `internal/harness`'s non-SI suites (`select_golden`, `writes_golden`, `dblevel_golden`): a recognized namespace function is also a read-source carrier (`containsReadBearingNode`, `nodes.go:1878`), so adding names changes the read-source walk for **every** request, not only SI ones. A failure there is this task's regression, not a flake.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add internal/engine/nodes.go internal/engine/nodes_test.go internal/harness/testdata/storage_integrity_cases.json
@@ -633,7 +633,7 @@ No operator marker is needed; any authenticated user reaches it.
 **Interfaces:**
 - Produces: `decodeStringLiteralValue(lit map[string]any) (string, bool)` in `internal/engine` — the single place that turns a polyglot literal node into the semantic string a namespace argument denotes. `tableFunctionArgValue` is its only caller in this task.
 
-- [ ] **Step 1: Enumerate the literal types polyglot emits in a namespace-argument position**
+- [x] **Step 1: Enumerate the literal types polyglot emits in a namespace-argument position**
 
 The fix must be a whitelist, not a special case for one type. Add a temporary probe (delete it before committing) that parses each shape and logs `literal_type` and `value`:
 
@@ -644,7 +644,7 @@ The fix must be a whitelist, not a special case for one type. Add a temporary pr
 
 Run with `env -u REWRITER_ORACLE_ADDR POLYGLOT_SQL_FFI_PATH=$PWD/third_party/lib/libpolyglot_sql_ffi.dylib go test ./internal/engine/ -run <probe> -v` and record the observed `literal_type` set in the commit message. Known from this plan's own measurement: `'…'` → `string`, `$$…$$` → `dollar_string` with `value = body`, `$tag$…$tag$` → `dollar_string` with `value = "tag\x00body"`.
 
-- [ ] **Step 2: Write the failing tests (red)**
+- [x] **Step 2: Write the failing tests (red)**
 
 Two layers, because the bug is a mismatch between two layers.
 
@@ -684,7 +684,7 @@ Corpus cases, reusing Task 2's `<DYN>` block:
 
 The third case is deliberately one that **already passes** — it is the regression guard for the bare form while the tagged form is being fixed.
 
-- [ ] **Step 3: Run and record the pre-fix failure**
+- [x] **Step 3: Run and record the pre-fix failure**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go
@@ -695,7 +695,7 @@ env -u REWRITER_ORACLE_ADDR POLYGLOT_SQL_FFI_PATH=$PWD/third_party/lib/libpolygl
 
 Expected **before** the fix, measured: the two `$tag$` rows of the unit test fail with the DB read as `tag` or `tag\x00hg_safe` (whatever `exactFunctionQualified` makes of the NUL-bearing value); `si_merge_tagged_heredoc_physical_rejected` and `si_remote_tagged_heredoc_physical_rejected` fail with `code = Success, want RewriteError`; `si_merge_bare_heredoc_physical_rejected` **passes**. Anything else — in particular the bare form failing — means the probe in Step 1 was misread.
 
-- [ ] **Step 4: Implement the whitelist decode**
+- [x] **Step 4: Implement the whitelist decode**
 
 In `internal/engine/nodes.go`:
 
@@ -740,7 +740,7 @@ with a call to `decodeStringLiteralValue`, keeping the existing `value != ""` em
 
 **The `default:` arm is a behaviour change for numeric and any other literal type in a namespace-argument position.** Before committing, confirm with the whole-repo run in Step 5 that no existing corpus or golden case relied on a numeric literal decoding to its digits there. If one does, add that literal type to the whitelist explicitly with a comment naming the case — never widen the default.
 
-- [ ] **Step 5: Confirm no other policy reader has the same defect**
+- [x] **Step 5: Confirm no other policy reader has the same defect**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go
@@ -749,7 +749,7 @@ grep -rn '\["literal"\]' --include='*.go' internal/ | grep -v _test
 
 Expected hits: `internal/engine/lexical.go:992` (presence check only), `internal/engine/lexical.go:2836` (already guards `literal_type != "string"` — the fail-closed direction, leave it), `internal/engine/nodes.go:1910` (fixed in Step 4), `internal/engine/nodes.go:2497` (LIMIT, numeric). Any *new* reader of `lit["value"]` in a namespace or identifier position must route through `decodeStringLiteralValue`. Record the audited list in the commit message.
 
-- [ ] **Step 6: Full Go run**
+- [x] **Step 6: Full Go run**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go
@@ -758,7 +758,7 @@ env -u REWRITER_ORACLE_ADDR make test
 
 Expected: green except `TestSICorpusIsBytePinned`.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add internal/engine/nodes.go internal/engine/nodes_test.go internal/harness/testdata/storage_integrity_cases.json
@@ -772,7 +772,7 @@ git commit -m "fix(storage-integrity): decode heredoc literals before the namesp
 **Files:**
 - Modify: `internal/harness/sicorpus_test.go` (`SICorpusFingerprint`, `SICorpusBytes`, `SICorpusCases` at `:231-233`)
 
-- [ ] **Step 1: Prove the corpus satisfies the frozen contract**
+- [x] **Step 1: Prove the corpus satisfies the frozen contract**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go
@@ -788,7 +788,7 @@ print('cases',len(c),'duplicates',dup)
 
 Expected: `TestSICorpusContract` green (it needs no engine and no oracle), zero duplicate names, and a case count of 210 + however many were added in Tasks 2–4 (25 if every case above landed as written).
 
-- [ ] **Step 2: Compute and record the new pins**
+- [x] **Step 2: Compute and record the new pins**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go
@@ -800,7 +800,7 @@ env -u REWRITER_ORACLE_ADDR POLYGLOT_SQL_FFI_PATH=$PWD/third_party/lib/libpolygl
 
 The failing `TestSICorpusIsBytePinned` prints the actual fingerprint, byte count and case count. Copy those three numbers into `sicorpus_test.go:231-233`. Do not compute the FNV-1a/64 fingerprint by hand — the test is the authority.
 
-- [ ] **Step 3: Re-run and commit**
+- [x] **Step 3: Re-run and commit**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go
@@ -833,10 +833,10 @@ Single-case run (the corpus suite is parameterised by case name):
 
 ```bash
 ssh -p 30100 sentio@64.38.131.242 \
-  "cd /home/sentio/chen/rewriter-grpc && ./build/rewriter_tests --gtest_filter='SpecG/StorageIntegrityGolden.MatchesSharedCorpus/<case-name>'"
+  "cd /home/sentio/chen/rewriter-grpc && ./build/tests/rewriter_tests --gtest_filter='SpecG/StorageIntegrityGolden.MatchesSharedCorpus/<case-name>'"
 ```
 
-- [ ] **Task 5b (pre-flight, do once):** branch and prove the baseline builds.
+- [x] **Task 5b (pre-flight, do once):** branch and prove the baseline builds.
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-grpc
@@ -852,7 +852,7 @@ Expected: all tests pass on the unmodified tree. Record any failure now — it i
 **Files:**
 - Modify: `tests/testdata/storage_integrity_cases.json` (replaced wholesale by `cp`), `tests/si_corpus.h`
 
-- [ ] **Step 1: Copy byte-for-byte and prove equality**
+- [x] **Step 1: Copy byte-for-byte and prove equality**
 
 ```bash
 cp /Users/uranuswch/Dev/housegate/rewriter-go/internal/harness/testdata/storage_integrity_cases.json \
@@ -864,16 +864,16 @@ shasum -a 256 /Users/uranuswch/Dev/housegate/rewriter-grpc/tests/testdata/storag
 
 Expected: `IDENTICAL`, and the sha256 equals `/tmp/si_corpus_sha.txt` from Part A Task 5 Step 2. **Never hand-edit the C++ copy** — if a case needs changing, change the Go copy, re-run Part A Task 5, and re-copy.
 
-- [ ] **Step 2: Mirror the three pins**
+- [x] **Step 2: Mirror the three pins**
 
 Copy the same three values Part A Task 5 wrote into `sicorpus_test.go:231-233` into `tests/si_corpus.h:48-50` (`kCorpusFingerprint`, `kCorpusBytes`, `kCorpusCases`). The FNV-1a/64 fingerprint is identical by construction — the two implementations hash the same bytes with the same constants — so a mismatch here means the copy is not byte-identical, not that the algorithm differs.
 
-- [ ] **Step 3: Rebuild and record the red set**
+- [x] **Step 3: Rebuild and record the red set**
 
 ```bash
 # rsync + rebuild, then:
 ssh -p 30100 sentio@64.38.131.242 \
-  "cd /home/sentio/chen/rewriter-grpc && ./build/rewriter_tests --gtest_filter='StorageIntegrityCorpus.*:SpecG/StorageIntegrityGolden.*' 2>&1 | tail -60"
+  "cd /home/sentio/chen/rewriter-grpc && ./build/tests/rewriter_tests --gtest_filter='StorageIntegrityCorpus.*:SpecG/StorageIntegrityGolden.*' 2>&1 | tail -60"
 ```
 
 Expected: `StorageIntegrityCorpus.SatisfiesTheFrozenContract` and `StorageIntegrityCorpus.IsBytePinnedToRewriterGo` green (the rules are mirrored, so a corpus the Go validator accepts the C++ validator accepts). **Record the failing case list — it is Part B's work queue**, and its *shape* is itself evidence:
@@ -885,7 +885,7 @@ Expected: `StorageIntegrityCorpus.SatisfiesTheFrozenContract` and `StorageIntegr
 
 Write the observed list into the task's commit message. A red set materially different from the above means an assumption in this plan is wrong — investigate before writing code.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-grpc
@@ -893,7 +893,7 @@ git add tests/testdata/storage_integrity_cases.json tests/si_corpus.h
 git commit -m "test(storage-integrity): import the Spec N corpus additions from rewriter-go"
 ```
 
-**Verification command:** `ssh -p 30100 sentio@64.38.131.242 "cd /home/sentio/chen/rewriter-grpc && ./build/rewriter_tests --gtest_filter='StorageIntegrityCorpus.*'"`
+**Verification command:** `ssh -p 30100 sentio@64.38.131.242 "cd /home/sentio/chen/rewriter-grpc && ./build/tests/rewriter_tests --gtest_filter='StorageIntegrityCorpus.*'"`
 
 ### Task 7: D2 in C++ — the SHOW COLUMNS / INDEX family becomes a deliberate gate
 
@@ -906,7 +906,7 @@ git commit -m "test(storage-integrity): import the Spec N corpus additions from 
 - Produces: `bool rewriter_handlers::handleShowColumnsQuery(DB::ASTPtr, const rewriter::RewriteSQLRequest *, rewriter::RewriteSQLResponse *)`, dispatched from `rewriter-server.cc` immediately after `handleShowTablesQuery` and **before** `handleExistsQuery`, mirroring the Go order (db-level before exists/show-create).
 - Consumes: the existing `storageIntegrityPhysicalDatabaseRejectMessage`, `storageIntegrityPhysicalRejectMessage`, `isStorageIntegrityPhysicalDatabase`, `isStorageIntegrityLogicalDatabase`, `authorizeStorageIntegrityLogical`, `recordPhysicalStorageIntegrityAccess`, `recordStorageIntegrityAccess` (`src/handlers/storage_integrity.h`).
 
-- [ ] **Step 1: Confirm the ClickHouse AST classes and their fields on the box**
+- [x] **Step 1: Confirm the ClickHouse AST classes and their fields on the box**
 
 The `clickHouse/` submodule is not checked out locally, so nothing below may be written from memory:
 
@@ -918,11 +918,11 @@ ssh -p 30100 sentio@64.38.131.242 \
 
 Record the exact class names and the exact member names for the table target, the database target, and the `full` / `extended` flags. If either header does not exist under those names, find the real ones (`grep -rn 'class ASTShow' clickHouse/src/Parsers/`) and use them. Everything in Steps 3–4 is written against what this step printed.
 
-- [ ] **Step 2: Prove the current behaviour is accidental, and decide D-4**
+- [x] **Step 2: Prove the current behaviour is accidental, and decide D-4**
 
 ```bash
 ssh -p 30100 sentio@64.38.131.242 \
-  "cd /home/sentio/chen/rewriter-grpc && ./build/rewriter_tests --gtest_filter='SpecG/StorageIntegrityGolden.MatchesSharedCorpus/si_show_columns_two_from_safe_rejected:SpecG/StorageIntegrityGolden.MatchesSharedCorpus/si_show_somethingnew*' 2>&1 | tail -30"
+  "cd /home/sentio/chen/rewriter-grpc && ./build/tests/rewriter_tests --gtest_filter='SpecG/StorageIntegrityGolden.MatchesSharedCorpus/si_show_columns_two_from_safe_rejected:SpecG/StorageIntegrityGolden.MatchesSharedCorpus/si_show_somethingnew*' 2>&1 | tail -30"
 ```
 
 Two things to record:
@@ -930,7 +930,7 @@ Two things to record:
 1. `si_show_columns_two_from_safe_rejected` — expected to fail on **message** only (`storage-integrity is configured; statement class is not modelled…` instead of `storage-integrity physical table hg_safe.db1__t is not directly addressable`) with the code already `UnsupportedStatement`. That is the "accidentally right" state Spec N describes; the fix makes it deliberate so the corpus can pin it.
 2. **The deviation D-4 decision.** Feed `SHOW SOMETHINGNEW FROM hg_safe` through the C++ engine directly (a one-off gtest or the running server) and record its `code` and `message`. If it is `UnsupportedStatement` with the D1 generic message, add `si_show_unknown_kind_rejected` to the **shared corpus** (via the Go copy, then re-run Part A Task 5 and Part B Task 6 — the Go copy stays authoritative). If it is `SyntaxError`, leave the assertion engine-local: keep the Go-side `TestDispatchShowTables_UnknownKindFallsThroughUnderStorageIntegrity` from Part A Task 2 Step 4, add a C++ gtest asserting `SyntaxError`, and write the divergence and its reason into the Part C record. Do not add a case that would have to carry `allow_sql_divergence` for a *code* difference — the schema cannot express that.
 
-- [ ] **Step 3: Implement the handler**
+- [x] **Step 3: Implement the handler**
 
 `handleShowColumnsQuery` casts to the class Step 1 named, and when the cast succeeds:
 
@@ -942,17 +942,17 @@ Two things to record:
 
 Register it in `rewriter-server.cc` right after `handleShowTablesQuery`. Keep the `si_active` catch-all at `:466` exactly as it is — an unknown SHOW kind must keep reaching it.
 
-- [ ] **Step 4: Rebuild and run the SHOW block**
+- [x] **Step 4: Rebuild and run the SHOW block**
 
 ```bash
 # rsync + rebuild, then:
 ssh -p 30100 sentio@64.38.131.242 \
-  "cd /home/sentio/chen/rewriter-grpc && ./build/rewriter_tests --gtest_filter='SpecG/StorageIntegrityGolden.MatchesSharedCorpus/si_show_*' 2>&1 | tail -40"
+  "cd /home/sentio/chen/rewriter-grpc && ./build/tests/rewriter_tests --gtest_filter='SpecG/StorageIntegrityGolden.MatchesSharedCorpus/si_show_*' 2>&1 | tail -40"
 ```
 
 Expected: all nineteen `si_show_*` cases green — the twelve added in Part A Task 2 and the seven pre-existing ones. In particular `si_show_columns_ordinary_database_passthrough` proves the new handler passes an ordinary target through with the SQL byte-identical, and `si_show_merges_target_less_passthrough` proves the allowlist did not shrink.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-grpc
@@ -960,37 +960,37 @@ git add src/ tests/
 git commit -m "fix(storage-integrity): gate the SHOW COLUMNS/INDEX family deliberately (Spec N D2)"
 ```
 
-**Verification command:** `ssh -p 30100 sentio@64.38.131.242 "cd /home/sentio/chen/rewriter-grpc && ./build/rewriter_tests --gtest_filter='SpecG/StorageIntegrityGolden.MatchesSharedCorpus/si_show_*'"`
+**Verification command:** `ssh -p 30100 sentio@64.38.131.242 "cd /home/sentio/chen/rewriter-grpc && ./build/tests/rewriter_tests --gtest_filter='SpecG/StorageIntegrityGolden.MatchesSharedCorpus/si_show_*'"`
 
 ### Task 8: D4 in C++ — the connector family, and the heredoc parity check
 
 **Files:**
 - Modify: `src/handlers/storage_integrity.cc` (`decodeNamespaceFunction` at `:168-198`)
 
-- [ ] **Step 1: Extend `decodeNamespaceFunction` with the same five names and the same arity rules**
+- [x] **Step 1: Extend `decodeNamespaceFunction` with the same five names and the same arity rules**
 
 Mirror Part A Task 3 Step 4 exactly — same five names (`mysql`, `postgresql`, `mongodb`, `jdbc`, `odbc`), same exclusions (`sqlite`, `redis`), same arity branches, same `decodePair` / `decodeSingle` helpers (`storage_integrity.cc:119-165`). Carry the deviation D-2 comment across so a future reader of either engine finds the same reason in the same place.
 
-- [ ] **Step 2: Confirm the C++ heredoc decode needs no change**
+- [x] **Step 2: Confirm the C++ heredoc decode needs no change**
 
 ```bash
 ssh -p 30100 sentio@64.38.131.242 \
-  "cd /home/sentio/chen/rewriter-grpc && ./build/rewriter_tests --gtest_filter='*heredoc*' 2>&1 | tail -20"
+  "cd /home/sentio/chen/rewriter-grpc && ./build/tests/rewriter_tests --gtest_filter='*heredoc*' 2>&1 | tail -20"
 ```
 
 Expected: `si_merge_tagged_heredoc_physical_rejected`, `si_remote_tagged_heredoc_physical_rejected` and `si_merge_bare_heredoc_physical_rejected` all green **without any C++ change** — ClickHouse's parser materializes a heredoc into a plain `ASTLiteral`. If any of them is red, the C++ engine has its own variant of deviation D-1 and it must be fixed here with the same whitelist discipline (decode the literal kind, do not read raw bytes) before the task closes.
 
-- [ ] **Step 3: Rebuild and run the connector block**
+- [x] **Step 3: Rebuild and run the connector block**
 
 ```bash
 # rsync + rebuild, then:
 ssh -p 30100 sentio@64.38.131.242 \
-  "cd /home/sentio/chen/rewriter-grpc && ./build/rewriter_tests --gtest_filter='SpecG/StorageIntegrityGolden.MatchesSharedCorpus/si_*mysql*:*postgresql*:*mongodb*:*jdbc*:*odbc*:*sqlite*:*redis*' 2>&1 | tail -30"
+  "cd /home/sentio/chen/rewriter-grpc && ./build/tests/rewriter_tests --gtest_filter='SpecG/StorageIntegrityGolden.MatchesSharedCorpus/si_*mysql*:*postgresql*:*mongodb*:*jdbc*:*odbc*:*sqlite*:*redis*' 2>&1 | tail -30"
 ```
 
 Expected: five reject cases green, `si_mysql_unresolved_namespace_rejected` green, and the three allow-controls (`si_mysql_ordinary_database_allowed`, `si_sqlite_foreign_file_allowed`, `si_redis_column_name_allowed`) green with the SQL matching the Go pins. A `want_sql` mismatch on an allow-control is a real formatting divergence between the engines and is resolved in Part C, not by loosening the case.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-grpc
@@ -998,13 +998,13 @@ git add src/handlers/storage_integrity.cc
 git commit -m "fix(storage-integrity): gate foreign-connector table functions (Spec N D4)"
 ```
 
-**Verification command:** `ssh -p 30100 sentio@64.38.131.242 "cd /home/sentio/chen/rewriter-grpc && ./build/rewriter_tests --gtest_filter='SpecG/StorageIntegrityGolden.*'"`
+**Verification command:** `ssh -p 30100 sentio@64.38.131.242 "cd /home/sentio/chen/rewriter-grpc && ./build/tests/rewriter_tests --gtest_filter='SpecG/StorageIntegrityGolden.*'"`
 
 ### Task 9: full C++ suite green
 
 **Files:** none (verification only).
 
-- [ ] **Step 1: Whole suite**
+- [x] **Step 1: Whole suite**
 
 ```bash
 # rsync + rebuild, then:
@@ -1013,7 +1013,9 @@ ssh -p 30100 sentio@64.38.131.242 "cd /home/sentio/chen/rewriter-grpc && ctest -
 
 Expected: 100% tests passed, 0 failed — identical to the Task 5b baseline plus the new behaviour.
 
-- [ ] **Step 2: Re-prove byte identity after all the C++ work**
+**Executed 2026-08-25 (rewriter-grpc `8b1b5f8`): 563 of 564 gtest cases pass.** The single failure is `SpecG/StorageIntegrityGolden.MatchesSharedCorpus/si_show_columns_unresolved_database_rejected`, and it is not a C++ defect: ClickHouse's `ParserShowColumnsQuery` parses the optional second clause with `ParserIdentifier()` and the first with `ParserCompoundIdentifier()`, neither passing `allow_query_parameter`, so `SHOW COLUMNS FROM db1__t FROM {db:Identifier}` is a `SyntaxError` before any handler runs. Both engines refuse the statement — a fail-closed divergence, not a bypass — but the corpus schema carries one `want_code` per case, so the case cannot be satisfied in both engines at once. It is the exact twin of deviation D-4's unknown-kind case and needs the same resolution: move it out of the shared corpus into a rewriter-go-local test in `internal/handlers/dblevel_test.go`, then re-run Part A Task 5 (re-pin), Part B Task 6 (re-copy, re-pin) and Part C Task 10. That edit belongs to rewriter-go and was out of scope for the Part B/C session.
+
+- [x] **Step 2: Re-prove byte identity after all the C++ work**
 
 ```bash
 cmp /Users/uranuswch/Dev/housegate/rewriter-go/internal/harness/testdata/storage_integrity_cases.json \
@@ -1038,7 +1040,7 @@ Spec N §1c's finding is that "the two halves are equal" has never been supporte
 
 **Preconditions:** Part A Task 5 green (`make test` all `ok`), Part B Task 9 green (`ctest` 100%), corpus byte-identical in both repos.
 
-- [ ] **Step 1: Start the freshly built C++ engine as the oracle and tunnel to it**
+- [x] **Step 1: Start the freshly built C++ engine as the oracle and tunnel to it**
 
 ```bash
 ssh -p 30100 sentio@64.38.131.242 \
@@ -1049,7 +1051,7 @@ ssh -p 30100 sentio@64.38.131.242 "cd /home/sentio/chen/rewriter-grpc && git rev
 
 Record the printed commit as `<rewriter-grpc-commit>`. The binary must be the one Part B Task 9 built — if the box has an older build, rebuild before starting it, or the differential proves nothing.
 
-- [ ] **Step 2: Run the full Go suite against the oracle**
+- [x] **Step 2: Run the full Go suite against the oracle**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/rewriter-go
@@ -1059,7 +1061,9 @@ grep -c 'oracle divergence' /tmp/si_oracle_run.txt
 
 Expected: every package `ok`, and `grep -c` prints `0`. With the oracle set, `TestStorageIntegrityGolden` diffs every case's structured fields — code, statement type, message, table rewrites, accessed tables — and the SQL, except where `allow_sql_divergence` is set (`internal/harness/storage_integrity_golden_test.go:185-200`). The other oracle-aware suites (`dblevel_golden`, `select_golden`, `writes_golden`, `errmsg_golden`) run too and are part of the gate.
 
-- [ ] **Step 3: Resolve every divergence in the engine that is wrong**
+**Executed 2026-08-25:** `grep -c 'oracle divergence'` printed **1**, over 333 differential cases — `TestStorageIntegrityGolden` 236, `TestWritesGolden` 36, `TestPhase4Golden` 25, `TestDBLevelGolden` 17, `TestSelectGolden` 15, `TestErrmsgGolden` 4. The single line is `si_show_columns_unresolved_database_rejected: [code: got UnsupportedStatement, want SyntaxError]`, the parser-reach divergence recorded under Task 9 Step 1. Every other case — including all four heredoc cases, the whole SHOW matrix and the connector family — matched field for field.
+
+- [x] **Step 3: Resolve every divergence in the engine that is wrong**
 
 Each `oracle divergence:` line names one case and the mismatching fields. For each:
 
@@ -1070,22 +1074,30 @@ Each `oracle divergence:` line names one case and the mismatching fields. For ea
 Expected divergences to watch for specifically, from this plan's own measurements:
 
 - the unknown-SHOW-kind case, if deviation D-4's decision in Part B Task 7 Step 2 came out `SyntaxError` — it must be absent from the shared corpus entirely, not present with a divergence flag;
+
+**Measured 2026-08-25:** deviation D-4 came out `SyntaxError` (`SHOW SOMETHINGNEW FROM hg_safe` → `SyntaxError` in C++, `UnsupportedStatement` in Go), so `si_show_unknown_kind_rejected` correctly stayed out of the shared corpus; the C++ half is pinned by `StorageIntegrityShowColumns.ParserNarrowerThanPolyglotStillFailsClosed`. The two pass-through formatting risks did **not** materialize — `SHOW COLUMNS FROM u FROM other` and `SHOW MERGES` both match, because `handleShowColumnsQuery` echoes `request->sql()` instead of `formatAst(ast)` — and the three connector allow-controls match the Go `want_sql` pins exactly.
 - pass-through SQL formatting on `SHOW COLUMNS FROM u FROM other` and `SHOW MERGES`, since the Go side echoes original text and the C++ side may format the AST;
 - `want_sql` on the three connector allow-controls.
 
-- [ ] **Step 4: Tear down**
+- [x] **Step 4: Tear down**
 
 ```bash
 pkill -f 'ssh -p 30100 -f -N -L 50051' || true
 ssh -p 30100 sentio@64.38.131.242 "pkill -f clickhousegate_rewriter || true"
 ```
 
-- [ ] **Step 5: Record the run in the spec's delivery note**
+- [x] **Step 5: Record the run in the spec's delivery note**
 
 Spec N D3 requires the run's date, the rewriter-grpc commit and the case count to be recorded. Append to §5 of `docs/superpowers/specs/2026-08-25-storage-integrity-lexical-namespace-closure-design.md` (this edit lands with Task 17, but the numbers are captured now):
 
 ```markdown
 **Cross-engine differential (D3), executed <YYYY-MM-DD>:** `TestStorageIntegrityGolden` with `REWRITER_ORACLE_ADDR` against rewriter-grpc `<rewriter-grpc-commit>`, over all <N> corpus cases. Divergences: <none | the list, each with its written reason>. Corpus sha256 `<corpus-sha>`, byte-identical in both repos.
+```
+
+Captured 2026-08-25, for Task 17 to copy verbatim:
+
+```markdown
+**Cross-engine differential (D3), executed 2026-08-25:** `TestStorageIntegrityGolden` with `REWRITER_ORACLE_ADDR` against rewriter-grpc `8b1b5f8` (branch `feature/si-lexical-namespace-closure`, built on the remote box), over all 236 corpus cases plus the 97 cases of the other oracle-aware golden suites — 333 differential cases in total. Divergences: one, `si_show_columns_unresolved_database_rejected` (Go `UnsupportedStatement`, C++ `SyntaxError`) — ClickHouse's `ParserShowColumnsQuery` never allows a query parameter as the database, so the statement is refused by the parser instead of by the gate; both engines fail closed, and the corpus schema cannot express a per-engine `want_code`. Corpus sha256 `74da0ed0924c80e223ba2193f8a7c659e4c6d2f548d6608dadc622ccedebea90`, 236 cases, byte-identical in both repos.
 ```
 
 **Verification command:** `cd /Users/uranuswch/Dev/housegate/rewriter-go && REWRITER_ORACLE_ADDR=127.0.0.1:50051 make test`
@@ -1100,7 +1112,7 @@ Spec N D3 requires the run's date, the rewriter-grpc commit and the case count t
 
 **Ordering note:** Task 12's heredoc assertions are engine-independent and run against the FFI tag CI already pins (`v0.9.0`). The `SHOW COLUMNS` integration assertion needs the **fixed** engine and therefore lands in Part E Task 15, in the same commit as the CI FFI pin bump. Do not add it here — it would red the branch's CI for the whole review window.
 
-- [ ] **Task 10b (pre-flight, do once):** check out the PR branch, prove the Bazel baseline, and run the pre-fix bypass reproduction.
+- [x] **Task 10b (pre-flight, do once):** check out the PR branch, prove the Bazel baseline, and run the pre-fix bypass reproduction.
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/housegate
@@ -1124,7 +1136,7 @@ Expected: all non-`manual` Bazel targets pass (record any failure — it is the 
 - Produces: `consumeHeredoc(sql string, start int) (next int, body string, err error)` in package `sireserved`, shaped exactly like the existing `consumeStringLiteral` (`plugin.go:169-188`) — same `(next, value, error)` signature, same "unterminated is an error" contract.
 - No exported-API change: `ReservedNamespaceViolation` and `Plugin.OnQuery` keep their signatures.
 
-- [ ] **Step 1: Verify the escape claim against the real grammar before relying on it**
+- [x] **Step 1: Verify the escape claim against the real grammar before relying on it**
 
 Spec N D1 asserts ClickHouse performs no escape processing inside a heredoc, and requires the implementation to confirm that rather than assume it. Measure it through the polyglot grammar the production engine uses:
 
@@ -1146,7 +1158,7 @@ Measured while writing this plan, on the live v0.9.0 engine: the case comes back
 
 **If your run disagrees** — the case rejects with `physical table hg_safe.…`, meaning the grammar decoded `\x5F` into `_` — then implement the opposite: `consumeHeredoc` returns the same `backslash-bearing …` error shape `consumeStringLiteral` uses, and Step 3's `heredoc backslash is not an escape` test flips from "must pass" to "must be refused". Record which branch you took in the commit message. Do not implement the permissive branch on the strength of this plan's measurement alone.
 
-- [ ] **Step 2: Verify which heredoc tags the grammar accepts**
+- [x] **Step 2: Verify which heredoc tags the grammar accepts**
 
 The guard's tag charset must be a **subset** of the grammar's. Too narrow only costs a false refusal; too wide means the guard treats real SQL as a heredoc body and blanks it from `outsideLiterals` — a new bypass. Probe each shape through the same harness and record which parse:
 
@@ -1156,7 +1168,7 @@ $$x$$      $tag$x$tag$      $_t$x$_t$      $t1$x$t1$      $1t$x$1t$      $t-1$x$
 
 Adopt `[A-Za-z_][0-9A-Za-z_]*` (Spec N D1) only if every tag the grammar accepts matches it. If the grammar accepts a leading digit or a hyphen, narrow the guard's *opener* recognition accordingly and let the unmatched form fall to the bare-`$` refusal, which is the safe direction.
 
-- [ ] **Step 3: Write the failing tests (red)**
+- [x] **Step 3: Write the failing tests (red)**
 
 Append to `pkg/plugins/sireserved/plugin_test.go`. Every row states its pre-fix behaviour, because a row that already passes is not testing the fix.
 
@@ -1292,7 +1304,7 @@ func TestOnQuery_OperatorSessionRefusesHeredocHiddenReservedName(t *testing.T) {
 }
 ```
 
-- [ ] **Step 4: Run the tests and record the exact pre-fix failure**
+- [x] **Step 4: Run the tests and record the exact pre-fix failure**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/housegate
@@ -1316,7 +1328,7 @@ Expected **before** the fix, matching the reproduction program row for row:
 
 If `HeredocBodyReachesTheLiteralSurface/merge database heredoc` fails **before** the fix, stop: the branch is not the one this plan measured.
 
-- [ ] **Step 5: Implement the heredoc case**
+- [x] **Step 5: Implement the heredoc case**
 
 In `scanSQLSurfaces`, insert ahead of `default:`:
 
@@ -1348,11 +1360,11 @@ In `scanSQLSurfaces`, insert ahead of `default:`:
 
 Do **not** add a backslash refusal unless Step 1 measured escape processing. Do **not** trim, unescape or case-fold the body — `reservedNamespaceViolationOnSurface` already tokenizes `withLiterals` on identifier boundaries and compares case-insensitively.
 
-- [ ] **Step 6: Mirror the connector names into `objectCarrierCallable`**
+- [x] **Step 6: Mirror the connector names into `objectCarrierCallable`**
 
 `isObjectCarrierName` (`plugin.go:240-252`) mirrors rewriter-go's namespace-reference authority. Part A Task 3 added five names there, so add the same five here — `mysql`, `postgresql`, `mongodb`, `jdbc`, `odbc` — and **not** `sqlite` or `redis` (deviation D-2). Add a test row per name to the existing `TestOnQuery_OperatorBypassRefusesObjectCarrierCallables` table, e.g. `{"mysql computed target", "SELECT * FROM mysql('h', concat('hg_', 'safe'), 'db1__t', 'u', 'p')", "mysql"}`. Expected pre-fix: each new row FAILS with `err=<nil>`. Add one row to `TestOnQuery_ObjectCarrierScanAvoidsNonCallableFalsePositives` (`"SELECT mysql, jdbc FROM ordinary.t"`) that passes before and after.
 
-- [ ] **Step 7: Re-run the reproduction program and the unit test**
+- [x] **Step 7: Re-run the reproduction program and the unit test**
 
 ```bash
 cd /private/tmp/claude-501/-Users-uranuswch-Dev-housegate-housegate/82fd460d-8ca7-4afa-80f3-1690dc473789/scratchpad/heredoc-repro
@@ -1365,7 +1377,7 @@ bazel test //pkg/plugins/sireserved:sireserved_test --test_output=errors
 
 Expected: the program prints **`0/8 statements passed the guard`** — all eight lines `REFUSED` or `error:` — and the Bazel target is green. The 6/8 → 0/8 flip against an independently extracted copy of the scanner is this task's acceptance evidence; put both numbers in the commit message.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/housegate
@@ -1385,7 +1397,7 @@ Spec N §4.6 asks for the heredoc statements in `pkg/integration/storage_integri
 **Interfaces:**
 - Consumes: `auth.NewRelaySigner` (`pkg/auth/relay_signer.go:32`), `authProxyConfig` and `openSignedConn` (`pkg/integration/auth_test.go:50-75`), `authTestKey1`, `testenv.StartServerProxy`, `testenv.WithConfigMutator`, and a bare `testenv.ProxyOption` literal for `opts.Signer` — the same inline-literal pattern `storage_integrity_agent_test.go:97-99` already uses for `opts.StorageIntegrityAdmissionConsumer`.
 
-- [ ] **Step 1: Add the maintenance-session test**
+- [x] **Step 1: Add the maintenance-session test**
 
 ```go
 // TestStorageIntegrityRead_HeredocCannotHideAReservedName is the Spec N D1
@@ -1464,11 +1476,11 @@ func TestStorageIntegrityRead_HeredocCannotHideAReservedName(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Prove the maintenance session is really established before trusting the assertion**
+- [x] **Step 2: Prove the maintenance session is really established before trusting the assertion**
 
 A test that passes because the flag was never set would prove nothing. Before running the negative assertions, assert the *positive*: the same session must be refused on a plain `SELECT count() FROM hg_safe.db1__hd` (which `sireserved` already catches today). Add that as the first sub-case. If it does **not** error, the maintenance wiring is wrong — `opts.Signer` unset, the signer address not in `auth.allowed_addresses`, or `SQL_sentio_maintenance` not reaching `meta.Settings` — and every other assertion in this test is vacuous.
 
-- [ ] **Step 3: Run it against docker, before and after Task 11**
+- [x] **Step 3: Run it against docker, before and after Task 11**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/housegate
@@ -1484,7 +1496,7 @@ Expected **with Task 11 reverted** (`git stash` the plugin change, keep the test
 
 The FFI tag stays `v0.9.0` here: this test exercises housegate's own guard, not the engine, so it must not be coupled to the release Part E cuts.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/housegate
@@ -1499,7 +1511,7 @@ git commit -m "test(storage-integrity): prove the heredoc guard end to end (Spec
 **Files:**
 - Modify: `CLAUDE.md`, `pkg/plugins/AGENTS.md`
 
-- [ ] **Step 1: Update the repo guide**
+- [x] **Step 1: Update the repo guide**
 
 In `CLAUDE.md`, in the `pkg/plugins/` bullet's `lthash` / `sireserved` neighbourhood, extend the `sireserved` description so the next reader learns the completed obligation (one line, no hard wrapping):
 
@@ -1509,7 +1521,7 @@ In `CLAUDE.md`, in the `pkg/plugins/` bullet's `lthash` / `sireserved` neighbour
 
 In `pkg/plugins/AGENTS.md`, extend the "SI operator-bypass guard" row so it names the heredoc span too.
 
-- [ ] **Step 2: Full Bazel gate**
+- [x] **Step 2: Full Bazel gate**
 
 ```bash
 cd /Users/uranuswch/Dev/housegate/housegate

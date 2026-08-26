@@ -1,6 +1,6 @@
 # Storage-Integrity Surface: Lexical and SHOW-Namespace Closure
 
-**Date:** 2026-08-25 **Status:** Proposed **Roadmap:** [closure roadmap](2026-08-25-storage-integrity-closure-roadmap.md) Spec N. **Remediates:** [Spec I surface fail-closed](2026-08-19-storage-integrity-surface-failclosed-design.md) — findings from the 2026-08-25 verification review, each reproduced against the shipped scanner and the live v0.9.0 native engine. **Base:** [2026-06-22 storage integrity design](2026-06-22-storage-integrity-design.md) §5.1, §6, §11, §12.2. **Code base:** housegate `6fd56b8` (v0.11.0) plus open PR #141 `feature/si-surface-failclosed-housegate`, rewriter-go `23687cc` (v0.9.0), rewriter-grpc `a8ca4e7` (v0.13.0+1), rewriter-proto `19d90fc` (v0.6.0). **Source of truth:** English version.
+**Date:** 2026-08-25 **Status:** Implemented (Parts A-D; the release tag is Spec O's step 1) **Roadmap:** [closure roadmap](2026-08-25-storage-integrity-closure-roadmap.md) Spec N. **Remediates:** [Spec I surface fail-closed](2026-08-19-storage-integrity-surface-failclosed-design.md) — findings from the 2026-08-25 verification review, each reproduced against the shipped scanner and the live v0.9.0 native engine. **Base:** [2026-06-22 storage integrity design](2026-06-22-storage-integrity-design.md) §5.1, §6, §11, §12.2. **Code base:** housegate `6fd56b8` (v0.11.0) plus open PR #141 `feature/si-surface-failclosed-housegate`, rewriter-go `23687cc` (v0.9.0), rewriter-grpc `a8ca4e7` (v0.13.0+1), rewriter-proto `19d90fc` (v0.6.0). **Source of truth:** English version.
 
 ## 1. Problem
 
@@ -68,6 +68,8 @@ The statement that reaches ClickHouse is byte-for-byte the statement the gate wo
 
 The class of defect matters more than the instance: **policy inspects a raw AST field while the generator interprets it differently.** Any future `literal_type` polyglot adds re-opens it the same way.
 
+**And the tagged heredoc was not the only live instance.** Implementing D6 turned up a second one, measured the same way: `e'hg_safe'` encodes as `{"literal_type":"escape_string","value":"e:hg_safe"}` and generates as `E'hg_safe'`. Policy is handed `e:hg_safe`, matches nothing, and ClickHouse receives a literal that *is* `hg_safe`. Ten more literal kinds — `number`, `hex_number`, `hex_string`, `bit_string`, `date`, `time`, `timestamp`, `datetime` among them — resolve to a value ClickHouse never sees as that string. Enumerating the instances was never going to be the fix; the whitelist in D6 is, and it closes all of them at once. This is the second time in this spec that a negative rule ("anything I do not recognise is harmless") turned out to be the bug — the first being §1b's SHOW classification.
+
 **1d — external-connector table functions are outside the namespace gate (Medium).** Spec G's namespace decoder covers the local and cluster families thoroughly — `remote`, `remoteSecure`, `cluster`, `clusterAllReplicas`, `merge`, `loop`, `dictionary`, the `timeSeries*` and `prometheus*` families (`internal/engine/nodes.go:277-300`). It does not cover the foreign-connector family whose signature also carries an explicit `(database, table)` pair: `mysql`, `postgresql`, `mongodb`, `sqlite`, `redis`, `jdbc`, `odbc`. Because a `SELECT` *is* modelled, the D1 catch-all never fires for them. ClickHouse ships its own MySQL and PostgreSQL wire listeners (9004 / 9005), so `SELECT * FROM mysql('127.0.0.1:9004', 'hg_safe', 'db1__t', …)` is a loopback into the protected namespace. It is credential-gated — the attacker needs a ClickHouse account on that port — which is why this is Medium rather than Critical, but the gate is supposed to be the thing that does not depend on a second credential boundary.
 
 ## 2. Goals / non-goals
@@ -82,7 +84,9 @@ The class of defect matters more than the instance: **policy inspects a raw AST 
 
 `scanSQLSurfaces` gains a heredoc case ahead of the `default:` branch:
 
-- A `$` opens a heredoc when it is followed by a (possibly empty) tag matching `[A-Za-z_][0-9A-Za-z_]*` and a closing `$`. The span ends at the next occurrence of the identical `$tag$`. An unterminated heredoc is an error, exactly like an unterminated `'…'` or `/* … */`.
+- The guard recognizes a heredoc opener as a `$` followed by a (possibly empty) tag matching `[A-Za-z_][0-9A-Za-z_]*` and a closing `$`. The span ends at the next occurrence of the identical `$tag$`. An unterminated heredoc is an error, exactly like an unterminated `'…'` or `/* … */`.
+
+  **This charset is a deliberately narrower subset, not the grammar.** An earlier draft of this bullet stated it as ClickHouse's rule; measured against the live engine, the real grammar is wider — `$1t$x$1t$`, `$1$x$1$` and the non-ASCII `$tä$x$tä$` all parse as heredocs and generate as `'x'`. Narrower is the safe direction *only because* of the next bullet: an opener the guard does not recognize falls through to the stray-`$` refusal rather than being copied through. The divergence is pinned by a test, so widening the subset has to be a deliberate act.
 - The heredoc body is a **string literal**, so it is blanked from `outsideLiterals` and written verbatim to `withLiterals`. This is not optional, and it is a live regression risk rather than a hypothetical one: `merge($$hg_safe$$, '^db1__t$')` is **refused today**, because the body carries no comment marker and `hg_safe` survives on `withLiterals` as ordinary bytes. A fix that blanks heredoc bodies from both surfaces would turn a currently-caught statement into a bypass — strictly worse than the hole being closed.
 - ClickHouse performs **no escape processing** inside a heredoc: `$$hg\x5Fsafe$$` is literally `hg\x5Fsafe` and is not `hg_safe`. Heredoc bodies therefore do **not** inherit the backslash refusal that `consumeStringLiteral` applies to `'…'`. The implementation must confirm this against the real grammar before relying on it; if the grammar disagrees, refuse backslash-bearing heredocs the same way.
 - A `$` that does not open a well-formed heredoc is **refused**, with the same error shape as the existing lexical refusals. Rejecting is correct rather than merely conservative: outside a heredoc opener and a quoted span, `$` is not part of any identifier or operator this guard needs to admit, and the alternative — copying it through — is what created 1a.
@@ -113,6 +117,27 @@ Before Spec N merges, `TestStorageIntegrityGolden` runs with `REWRITER_ORACLE_AD
 
 This is a one-shot gate for this spec, not a new CI job: rewriter-grpc builds only on the remote box, so wiring it into CI is separate work (recorded in §6).
 
+**Executed. The record:**
+
+```
+Spec N D3 cross-engine differential - 2026-08-25
+  rewriter-grpc   1faaf96 (feature/si-lexical-namespace-closure)
+  rewriter-go     f1e8626 (feature/si-lexical-namespace-closure)
+  oracle binary   sha256 5b5c6fc24d97e4d13b19ba32b23c0609c2ab42a91cffb1791d66f9d1b87b4940
+  suites          StorageIntegrity 237/237 - Writes 36/36 - Phase4 25/25 -
+                  DBLevel 17/17 - Select 15/15 - Errmsg 4/4  = 334 cases, 338 oracle RPCs
+  divergences     0
+  corpus          sha256 321cd51d515bdebb01228f2223481f3b1e2dc667c3406a4a3652e346b14cef78
+                  232837 bytes - 237 cases - fnv1a64 4366038644618079701
+  C++ suite       565/565
+```
+
+Two things the run established that the spec could not have asserted in advance.
+
+**C++ never had the 1e defect, and the reason is structural.** ClickHouse's lexer materializes a heredoc into a plain `ASTLiteral` String, so its policy already reads the value its formatter emits — which is exactly the invariant D6 makes the Go engine hold. All four heredoc corpus cases were green on the unmodified C++ binary with no code change, and `e'…'` does not exist in ClickHouse's grammar at all (`SyntaxError`). So 1e was a **Go-only** Critical on which the two engines silently disagreed, and nothing but an executed differential could have surfaced it. That is the argument for §6's "automate this in CI" debt, restated as evidence.
+
+**The differential's field set is narrower than "the engines agree."** `harness.Compare` diffs `code`, `statement_type`, `existence_clause`, `storage_integrity_contract_version`, `table_rewrites`, `database_rewrites`, `failed_cte_aliases`, `privileges_deltas` and `sql_after_rewrite`. It does **not** diff `message` or `original_accessed_tables`; those reach parity only through each engine asserting the same corpus `want_message_contains` / `want_accessed` locally, which covers only the cases that set those keys. "Zero divergences" is a statement about the diffed fields, and §6 records the gap.
+
 ### D4 — the namespace decoder covers foreign-connector table functions
 
 `decodeNamespaceFunctionRefDetail` gains the connector family whose signature carries an explicit ClickHouse-shaped `(database, table)` pair after a connection argument: **`mysql`, `postgresql`, `mongodb`, `jdbc`, `odbc`**. They inherit the existing unresolvable-argument rule: an argument that is not a static string literal is a rejection, not a pass (`si_remote_unresolved_namespace_rejected` is the precedent).
@@ -127,7 +152,9 @@ Object-storage and file connectors (`s3`, `url`, `hdfs`, `azureBlobStorage`, `fi
 
 Two changes, because the instance and the class need different fixes.
 
-**The instance:** `tableFunctionArgValue` consults `literal_type`. `"string"` is used as today; `"dollar_string"` is decoded by taking everything after the first `\x00` when one is present, and the whole value when it is not. Verified encodings: `$tag$hg_safe$tag$` → `{"literal_type":"dollar_string","value":"tag\u0000hg_safe"}`; `$$hg_safe$$` → `{"literal_type":"dollar_string","value":"hg_safe"}`; `'hg_safe'` → `{"literal_type":"string","value":"hg_safe"}`.
+**The instance:** `tableFunctionArgValue` consults `literal_type`. `"string"` is used as today; `"dollar_string"` is decoded by taking everything after the first `\x00` when one is present, and the whole value when it is not. Verified encodings: `$tag$hg_safe$tag$` → `{"literal_type":"dollar_string","value":"tag\u0000hg_safe"}`; `$$hg_safe$$` → `{"literal_type":"dollar_string","value":"hg_safe"}`; `'hg_safe'` → `{"literal_type":"string","value":"hg_safe"}`. And — the second live instance — `e'hg_safe'` → `{"literal_type":"escape_string","value":"e:hg_safe"}`, generated as `E'hg_safe'`.
+
+`escape_string` is deliberately **not** decoded. Its escape grammar is ClickHouse's, and re-implementing it here would rebuild the partial-parser bypass class that D6 exists to escape. It resolves to unknown and is refused, which is both correct and cheap: the measured refusal is `storage-integrity table function namespace is not statically resolvable`.
 
 **The class:** a `literal_type` the decoder does not model is **not** treated as an opaque non-namespace value — that is precisely how 1e happened. Under an active SI contract it resolves to `namespaceValueUnknown`, which the existing machinery already turns into a rejection (the precedent is `si_remote_unresolved_namespace_rejected`, where a non-static argument is refused rather than assumed harmless).
 
@@ -158,5 +185,6 @@ Ships as three PRs. rewriter-go and rewriter-grpc land D2/D4/D5/D6 together with
 
 - **`system.*` metadata exposure.** SI physical database, table and part names are readable through `system.tables` / `system.parts` / `system.columns` / `system.merges` by any authenticated user. Closing it means an allowlist over the `system` database, which breaks ordinary client introspection; it is a confidentiality property the v1 design never claimed. Revisit if SI is ever deployed to a multi-tenant read surface.
 - **`sireserved`'s hand-rolled scanner.** D1 completes its lexical model but the structure — a byte loop maintained by hand against a moving SQL dialect — is the same structure that produced 1a. The durable answer is to run the polyglot tokenizer over the statement and scan tokens, which is available in-process wherever the native engine is configured. Blocked on operator sessions being exactly the sessions where the rewriter is deliberately absent; needs its own design.
-- **Cross-engine differential in CI.** D3 is a manual gate because rewriter-grpc builds only on the remote box. Automating it needs a published rewriter-grpc image or a remote CI runner.
+- **Cross-engine differential in CI.** D3 is a manual gate because rewriter-grpc builds only on the remote box. Automating it needs a published rewriter-grpc image or a remote CI runner. The 2026-08-25 run is the argument for doing it: it is what proved 1e was Go-only, and a shared JSON file could never have shown that.
+- **`harness.Compare` does not diff `message` or `original_accessed_tables`.** Two engines could return the same code with different operator-facing text and the differential would stay green. Widening the diff is cheap; deciding what counts as an acceptable message difference is not, which is why it is debt rather than a decision here.
 - **`SHOW MERGES` and friends.** Deliberately pass-through per §2; reconsider only together with the `system.*` decision.
