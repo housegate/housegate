@@ -1,4 +1,3 @@
-startup --max_idle_secs=0
 
 # Workspace status command — populates x_defs placeholders ({STABLE_GIT_COMMIT}, etc.)
 common --workspace_status_command=tools/workspace_status.sh
