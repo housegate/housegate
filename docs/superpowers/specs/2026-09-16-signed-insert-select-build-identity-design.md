@@ -26,6 +26,8 @@ NativeArtifactV1 {
 
 The unchanged profile identity remains `Q = CanonicalDigest("snapshot-query-profile-v1", record)`. Engines implement the canonical byte rules independently and do not import Housegate; shared literal canonical-JSON and digest vectors prove equality.
 
+The new-profile `scalar_operators` values `prepare-integer-literal-exact-v1` and `prepare-integer-scalar-null-throw-v1`, together with the required `settings` member `cast_keep_nullable='0'`, are semantic commitments under that unchanged record and domain. The first denotes only Prepare's compiler-generated checked conversion of a losslessly proven original decimal integer literal to its authenticated integer target. The second denotes only Prepare's NULL-throw unwrap of a direct scalar subquery whose underlying integer type already equals that target. They are not ClickHouse user-function allowlist entries and add no record, RPC or digest field. Adding them and the setting changes Q through ordinary record hashing; every frozen A1/A3 vector remains byte-for-byte unchanged and new-profile vectors are separate.
+
 ## 2. Strict external profile witness
 
 The version-1 external profile file has ordered fields `version`, `profiles`. Each profile entry has ordered fields `query_profile_id`, `record`, `native_artifact_set`. Entries are unique and sorted by `query_profile_id`, which is Q.
@@ -46,7 +48,7 @@ The measured constructor refuses unsupported executable-memory-file or dependenc
 
 Build complete test or release role executables first, measure their final bytes second, generate the corresponding external profile bundle third, then execute those exact unchanged binaries. A rebuilt test binary has a different measured identity and cannot claim the earlier profile. Test executables use their own measured test Q; production executables use a separately generated production Q.
 
-Membership in `native_artifact_set` is necessary but does not establish semantic equivalence. Every member must pass the real role/parity gates against the pinned gRPC executable and SQL-execution ClickHouse environment before publication. Preserve every published historical bundle and all referenced executable, FFI, gRPC and executor artifacts needed for its retention period.
+Membership in `native_artifact_set` is necessary but does not establish semantic equivalence. A loader accepting a record, a measured binary containing the record, or an A4.1c RED corpus expectation cannot advertise either new semantic operation. A4.4 qualifies the real native implementation, A4.5 independently qualifies the real C++ implementation, and A4.6 runs their exact Prepare SQL under the final measured Q on the pinned ClickHouse and compares paired responses. That sequence covers original-token literal proof and lowering, user-helper refusal, all integer bounds and target order, exact volatility family/pools, scalar zero/one/many behavior, wrong-setting refusal, predicates left unwrapped and derived-type mismatches. B2/B4/D4 then retain exact target-type readback and all-or-abort output/commit gates. Every final role member must pass those gates against the pinned gRPC executable and SQL-execution ClickHouse environment before publication. Preserve every published historical bundle and all referenced executable, FFI, gRPC and executor artifacts needed for its retention period.
 
 ## 5. Historical executor routing
 
@@ -58,7 +60,7 @@ The design adds no automatic supervisor, sidecar or general artifact-attestation
 
 ## 6. Required evidence
 
-A4 adds independent executable and FFI mutation tests, tuple ordering/uniqueness/platform tests, canonical witness vectors, sealed-file mutation/load-race tests, native and gRPC own-build mismatch tests, and real measured native/gRPC equality. It also verifies the gRPC semantic dependency closure before qualification.
+A4 adds independent executable and FFI mutation tests, tuple ordering/uniqueness/platform tests, canonical witness vectors, sealed-file mutation/load-race tests, native and gRPC own-build mismatch tests, and real measured native/gRPC equality. Its A4.4/A4.5/A4.6 stages also prove the two versioned Prepare operations, exact `cast_keep_nullable='0'`, the bounded `rand`/`rand32`/`rand64` materialization surface and all refusals above on final measured artifacts. It verifies the gRPC semantic dependency closure before qualification.
 
 A5 tests locally supported-profile filtering, exact-Q constructor and probe failures, unchanged ordinary constructor behavior, and idempotent/concurrent `Close` behavior.
 
