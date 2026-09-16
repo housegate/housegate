@@ -499,7 +499,11 @@ func TestRunRejectsMissingCaseVariantOutputs(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("case_insensitive_test_filesystem=%t", caseInsensitive)
+	assertMissingOutputAliasRejected(t, dir, filepath.Join(dir, "profile-case.json"), filepath.Join(dir, "PROFILE-CASE.JSON"))
+}
 
+func assertMissingOutputAliasRejected(t *testing.T, dir, profile, provenance string) {
+	t.Helper()
 	recipe := validRecipe(t, dir)
 	recipePath := filepath.Join(dir, "recipe.json")
 	if err := os.WriteFile(recipePath, marshalRecipe(t, recipe), 0o600); err != nil {
@@ -517,8 +521,6 @@ func TestRunRejectsMissingCaseVariantOutputs(t *testing.T) {
 		}
 		before[path] = data
 	}
-	profile := filepath.Join(dir, "profile-case.json")
-	provenance := filepath.Join(dir, "PROFILE-CASE.JSON")
 	if _, err := os.Stat(profile); !os.IsNotExist(err) {
 		t.Fatalf("profile must initially be missing: %v", err)
 	}
@@ -543,6 +545,60 @@ func TestRunRejectsMissingCaseVariantOutputs(t *testing.T) {
 			t.Fatalf("protected path %q changed", path)
 		}
 	}
+}
+
+func TestRunRejectsMissingCaseVariantOutputsThroughParentAliases(t *testing.T) {
+	t.Run("case_variant_parent", func(t *testing.T) {
+		dir := t.TempDir()
+		parent := filepath.Join(dir, "Parent")
+		if err := os.Mkdir(parent, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		variantParent := filepath.Join(dir, "PARENT")
+		parentInfo, err := os.Stat(parent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		variantInfo, variantErr := os.Stat(variantParent)
+		sameActualParent := variantErr == nil && os.SameFile(parentInfo, variantInfo)
+		if variantErr != nil && !os.IsNotExist(variantErr) {
+			t.Fatal(variantErr)
+		}
+		t.Logf("case_variant_parent_same_file=%t", sameActualParent)
+		if !sameActualParent {
+			t.Skip("test filesystem is case-sensitive; no actual parent alias to exercise")
+		}
+		assertMissingOutputAliasRejected(t, dir,
+			filepath.Join(parent, "profile.json"),
+			filepath.Join(variantParent, "PROFILE.JSON"),
+		)
+	})
+	t.Run("symlink_parent", func(t *testing.T) {
+		dir := t.TempDir()
+		parent := filepath.Join(dir, "actual-parent")
+		if err := os.Mkdir(parent, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		aliasParent := filepath.Join(dir, "alias-parent")
+		if err := os.Symlink(parent, aliasParent); err != nil {
+			t.Fatal(err)
+		}
+		parentInfo, err := os.Stat(parent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		aliasInfo, err := os.Stat(aliasParent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !os.SameFile(parentInfo, aliasInfo) {
+			t.Fatal("symlink parent must identify the actual parent directory")
+		}
+		assertMissingOutputAliasRejected(t, dir,
+			filepath.Join(parent, "profile.json"),
+			filepath.Join(aliasParent, "PROFILE.JSON"),
+		)
+	})
 }
 
 func TestFIFOInputsAreRejectedWithoutBlocking(t *testing.T) {

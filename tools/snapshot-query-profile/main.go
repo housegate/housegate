@@ -428,8 +428,9 @@ type namedPath struct {
 }
 
 type pathIdentity struct {
-	canonical string
-	info      os.FileInfo
+	canonical  string
+	info       os.FileInfo
+	parentInfo os.FileInfo
 }
 
 func inspectPathIdentity(path string) (pathIdentity, error) {
@@ -441,7 +442,11 @@ func inspectPathIdentity(path string) (pathIdentity, error) {
 	if err != nil && !os.IsNotExist(err) {
 		return pathIdentity{}, err
 	}
-	return pathIdentity{canonical: canonical, info: info}, nil
+	parentInfo, err := os.Stat(filepath.Dir(canonical))
+	if err != nil && !os.IsNotExist(err) {
+		return pathIdentity{}, err
+	}
+	return pathIdentity{canonical: canonical, info: info, parentInfo: parentInfo}, nil
 }
 
 // resolvePathIdentity resolves all symlinks in the existing portion of a path
@@ -479,6 +484,9 @@ func identitiesAlias(left, right pathIdentity) bool {
 		return true
 	}
 	sameParent := filepath.Dir(left.canonical) == filepath.Dir(right.canonical)
+	if !sameParent && left.parentInfo != nil && right.parentInfo != nil {
+		sameParent = os.SameFile(left.parentInfo, right.parentInfo)
+	}
 	caseFoldedBasename := strings.EqualFold(filepath.Base(left.canonical), filepath.Base(right.canonical))
 	if sameParent && caseFoldedBasename {
 		return true
