@@ -85,6 +85,40 @@ token = signing input + "." + raw-base64url(signature)
 
 Verification recovers the lowercase Ethereum `0x` address, which is the key identity. Reject high-S, bad V, alternate headers/algorithms/encoding, `kid`, `jwk`, certificate URLs, claimed roles and caller-supplied authority identities. The payload has no `iat`, `exp` or `aud`, and historical verification applies no token-age rule. The dedicated schema-authority credential is separately configured and network/shard scoped; it never defaults to a user, source, generic publisher or relay key.
 
+### Artifact-set commitment
+
+The existing A1 artifact-set records have exactly these ordered fields and no kind, version, S, path or storage-reference field:
+
+```text
+SnapshotArtifactSet {
+  parts: []SnapshotArtifactEntry
+  schema_artifact_digest: string
+}
+SnapshotArtifactEntry {
+  table_id: string
+  partition_id: string
+  part_name: string
+  part_phys_hash: string
+  object_digest: string
+  bytes: uint64
+}
+```
+
+Canonicalization copies `parts`, rejects an empty `schema_artifact_digest`, any empty part-entry string field and duplicate structured `(table_id, partition_id, part_name)` identities, sorts entries by that exact lexicographic tuple, and preserves every entry field. An empty set encodes `parts:[]`, never `null` or omission. Do not sort by either digest, collapse duplicate identities or conflate `part_phys_hash` with `object_digest`. `schema_artifact_digest` is `DigestBytes(O)`, never the certificate's `DigestBytes(A)`.
+
+`ArtifactSetRoot = CanonicalDigest("snapshot-query-artifact-set-v1", normalizedSet)`: `0x` plus lowercase SHA-256 of the UTF-8 bytes `housegate-replay-mvp-v0:` + `snapshot-query-artifact-set-v1` + one NUL byte + compact canonical JSON under the root replay field-order and JSON string/`uint64` profile. Object integrity, selected-manifest completeness, exact byte counts and the authenticated S/readiness association are separate B1/C1 checks; the ancillary hash alone is not admission authority.
+
+The frozen `constant_empty_reads.contracts` vectors below are synthetic canonical commitment vectors, not valid schema certificates or published snapshots. Equal `part_phys_hash` and `object_digest` values in the populated synthetic case establish no equality rule. The complete fixture is pinned at SHA-256 `3558d62035a23f4e572d09a59f82bc0ebac4f9cae175ccee127b0034600ed137` in [`snapshot_query_v1.json` at `7ed1259a`](https://github.com/housegate/housegate/blob/7ed1259a702f83990149eaa95e9cc43e8b2d9015/pkg/replay/testdata/snapshot_query_v1.json).
+
+```text
+artifact_set canonical JSON = {"parts":[{"table_id":"events","partition_id":"1","part_name":"p1a","part_phys_hash":"0x47ea7b3b0757e53b1c1ec281d24bae7216435467d0a6d9622606e56a9a9691ac","object_digest":"0x47ea7b3b0757e53b1c1ec281d24bae7216435467d0a6d9622606e56a9a9691ac","bytes":128},{"table_id":"events","partition_id":"1","part_name":"p1b","part_phys_hash":"0x5ee7c79afddbbf5d9208d40bb07397919db80e9c5ff5cb8d9014b0d4f3b194c7","object_digest":"0x5ee7c79afddbbf5d9208d40bb07397919db80e9c5ff5cb8d9014b0d4f3b194c7","bytes":128},{"table_id":"events","partition_id":"2","part_name":"p2a","part_phys_hash":"0xe9cc5bf143e2041791518df5e5b2b15ee762f401ea92eb30ff8452ea5e6cd232","object_digest":"0xe9cc5bf143e2041791518df5e5b2b15ee762f401ea92eb30ff8452ea5e6cd232","bytes":128}],"schema_artifact_digest":"0xe1902f64876ca35f2dc8f2109c25e606a593c5aa4926194bdb3e02f1352622f8"}
+artifact_set root = 0xfa6eadd01f43632dbbf9f7db82e2a8d06e154786398d5ab97b3226e5a0378354
+empty_artifact_set canonical JSON = {"parts":[],"schema_artifact_digest":"0xe1902f64876ca35f2dc8f2109c25e606a593c5aa4926194bdb3e02f1352622f8"}
+empty_artifact_set root = 0xa84173887aeda7bc80df6133fd86e64b3926ae144c040fe1b6976b47799a7147
+```
+
+This preserves the sequence A, inner digest, JWS, O, outer digest, artifact-set root, readiness and publication, and C1's unique committed exact-S association.
+
 ## 3. Independent verification and exact-S commitment
 
 B1 and C1 independently fetch bounded exact O bytes from the artifact store, strictly decode and byte-for-byte re-encode them, verify both digest layers and the complete artifact-set root, verify the exact purpose/version/signature and recovered role, match network/shard/snapshot/manifest/schema identities, and recompute the complete legacy projection. No publisher availability signature, current live metadata, old `SchemaJson` hash, boolean, self-consistent manifest or uncommitted certificate supplies semantic or publication proof.
