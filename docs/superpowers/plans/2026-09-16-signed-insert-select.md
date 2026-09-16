@@ -24,6 +24,7 @@
 - Historical executable profiles grant replay capability only. New admissions cannot choose an older installed profile, even with a valid user signature.
 - Analyzer build identity, the strict external profile witness and executable historical routing follow the [normative build-identity addendum](../specs/2026-09-16-signed-insert-select-build-identity-design.md). Profile JSON alone never proves local executable support.
 - Column eligibility, exact-S schema certification, two-layer object digests and automatic trusted issuance follow the [normative schema-semantics addendum](../specs/2026-09-16-signed-insert-select-schema-semantics-design.md). Legacy name/type hashes and live metadata alone never authorize this lane.
+- B1 publication uses the addendum's fixed-scope AC-local control injected only into the trusted AR worker. Source/verifier construction is explicitly read-only and carries no publisher or schema-authority publication secret; published-safe reads and retention remain available.
 - Source execution starts after durable singleton sequencing. Exact touched-partition capacity is reserved before unsafe writes. Accepted work survives client disconnects and reservation timers.
 - Query-only execution creates no `DeferredInsertPlan`, emits no sample block, and does not wait for a row terminator. An empty external-table marker is protocol input to drain, not an execution trigger.
 - Agent `OnQuery` installs an asynchronous preparation plan and returns promptly; the sole client codec reader must observe Cancel/EOF while acquire is drain-blocked and while finalization runs. Only the relay's serialized generation/forward gate may transfer a completed preparation to one upstream Query. A late grant or worker cannot forward a canceled generation; suspended query-auth hooks resume in order exactly once.
@@ -64,8 +65,8 @@ Paths in the component plans are repository-relative and prefixed by the aliases
 | RP | `housegate/rewriter-proto` | AST analysis/materialization/prepare contract and capability acknowledgement |
 | RG | `housegate/rewriter-go` | Native AST analysis, restricted profile and exact logical-to-scratch relation binding |
 | RC | `housegate/rewriter` (local checkout `rewriter-grpc`) | gRPC implementation with the same corpus and rejection semantics |
-| AC | `sentioxyz/arbiter-core` | Typed schema/part artifact publication, restoration and retention; source candidates, verifier and wire adapters |
-| AR | `sentioxyz/arbiter` | Deterministic admission, barrier/reservation log, singleton block, abort, activation, trusted automatic schema issuance/publication and restart |
+| AC | `sentioxyz/arbiter-core` | Typed schema/part artifact publication, restoration and retention; local publication-control port/read-only mode; source candidates, verifier and wire adapters |
+| AR | `sentioxyz/arbiter` | Deterministic admission, barrier/reservation log, singleton block, abort, activation, trusted automatic schema issuance/publication, concrete publication-control adapter and restart |
 | SN | `sentioxyz/sentio-node` | `storageintegrityadapter`, embedded Housegate/core wiring and dependency pins |
 | PD | `sentioxyz/production` | Deployment manifests and durable artifact/profile wiring, after separate rollout authorization |
 

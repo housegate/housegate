@@ -123,7 +123,7 @@ This preserves the sequence A, inner digest, JWS, O, outer digest, artifact-set 
 
 B1 and C1 independently fetch bounded exact O bytes from the artifact store, strictly decode and byte-for-byte re-encode them, verify both digest layers and the complete artifact-set root, verify the exact purpose/version/signature and recovered role, match network/shard/snapshot/manifest/schema identities, and recompute the complete legacy projection. No publisher availability signature, current live metadata, old `SchemaJson` hash, boolean, self-consistent manifest or uncommitted certificate supplies semantic or publication proof.
 
-Before readiness, B1 requires the recovered address to be authorized for the dedicated current schema-authority role and scope, verifies the frozen capture provenance, persists the exact O and all parts, retains provisional ownership and then uses the separately authenticated publisher credential to submit readiness. C1 fetches O independently, repeats byte/digest/signature/S/projection checks, authorizes the current schema-authority role for first commitment, separately authenticates the publisher, and only then proposes readiness. Fetch, crypto, capture and role work remain outside Raft apply; deterministic identity/conflict checks occur in apply.
+Before first readiness, B1 passes only the address recovered from exact O to its fixed-scope publication control for dedicated current schema-authority authorization, verifies the frozen capture provenance, persists the exact O and all parts, retains provisional ownership and then uses the control's separately authenticated publisher identity to submit readiness. C1 fetches O independently, repeats byte/digest/signature/S/projection checks, authorizes the current schema-authority role for first commitment, separately authenticates the publisher, and only then proposes readiness. Fetch, crypto, capture and role work remain outside Raft apply; deterministic identity/conflict checks occur in apply.
 
 C1 commits at most one immutable `ArtifactSetRoot` for `(network_id, keeper_shard_id, snapshot_id, manifest_root)`. An identical retry succeeds; a conflicting root refuses before or after publication. Signing the same A again into different JWS/O bytes cannot replace the committed root. A location change may serve only the identical O. This unique authenticated committed readiness/publication association lets A1's signed exact S bind the semantic artifact without adding an A1 field.
 
@@ -137,6 +137,38 @@ Trust-map rotation first pauses new issuance while leaving the old fixed authori
 
 A5, D1, D2, B4 and B5 build RP catalogs only from the authenticated object's complete columns, revalidate exact S/projection/publication policy before final signing, host intake, source execution and verifier execution, and transport `generation` plus `default_expression` unchanged. Engine `SUCCESS` validates supplied metadata/profile behavior but never proves publication. B4 still supplies only the validated legacy projection to shared row/state assembly and preserves U in the complete ledger.
 
+### Publication control injection
+
+AC dataplane owns these local dependency types; they are not wire or canonical records and add no hash or RPC:
+
+```go
+type ArtifactPublisher struct {
+    PublisherID string
+    RetentionPolicyID string
+}
+type CommittedArtifactReady struct {
+    Pin replay.SnapshotPin
+    Ready replay.SnapshotArtifactReady
+    Evidence []byte
+}
+type ArtifactPublicationControl interface {
+    AuthorizeCurrentSchemaAuthority(context.Context, replay.SnapshotPin, string) error
+    LookupCommittedArtifactReady(context.Context, replay.SnapshotPin) (*CommittedArtifactReady, error)
+    AuthenticatePublisher(context.Context, replay.SnapshotPin) (ArtifactPublisher, error)
+    RecordSnapshotArtifactReady(context.Context, replay.SnapshotPin, replay.SnapshotArtifactReady) (CommittedArtifactReady, error)
+}
+```
+
+`Evidence` is C1's existing authenticated committed-proof encoding. The control is immutably bound to trusted configured network/shard, endpoint, trust map and publisher identity; an out-of-scope pin refuses, and no manifest/caller selects an endpoint or role. `AuthorizeCurrentSchemaAuthority` accepts only the address B1 recovered cryptographically from exact O and checks the dedicated current fixed map. `AuthenticatePublisher` independently derives the configured publisher and retention policy after authentication; Publish input carries neither publisher credentials nor a schema private key.
+
+`LookupCommittedArtifactReady` performs authenticated authority, fresh leader-Barrier and C1-proof validation and can return ready-but-unpublished state. Only authenticated fresh absence returns `(nil, nil)`; transport, auth, proof, scope, timeout, follower, stale or unavailable failures stop Publish. A conflict returns the original complete committed association for exact comparison, never absence. An identical root enables only the existing committed retry exception after B1 rechecks exact O, both digests, complete root, S/projection and publisher authorization; the independently authenticated publisher ID and retention policy must equal the committed readiness fields.
+
+`RecordSnapshotArtifactReady` internally signs only the existing readiness record/domain with the separately configured publisher credential, submits through the existing `SourceClaims.RecordSnapshotArtifactReady`, and verifies the returned committed association. It exposes no arbitrary-byte signer; a lost response is reconciled through lookup. The initial implementation is an AR in-process C1 adapter, so no new issuer/readiness RPC is introduced.
+
+The exact constructor is `NewSnapshotArtifacts(backend ArtifactBackend, exporter PartExporter, published PublishedSnapshotSource, publication ArtifactPublicationControl, journalDir string, verifyTerminal func(context.Context, []byte) error) (SnapshotArtifacts, error)`. Both modes require backend, published source, journal directory and terminal-proof verification. `publication == nil` deliberately selects read-only mode; exporter may also be nil, and Publish returns `ErrArtifactPublicationUnavailable` before exporter, journal or readiness work. A failed control call never falls back to this mode. Publishing mode requires both nonnil publication control and exporter. The concrete control constructor, not AC reflection or a generic `Validate` method, verifies complete authority, publisher credential/authorization, fixed-scope, reader and submitter wiring.
+
+Only the trusted AR publication worker receives publishing mode and the schema/publisher secrets. Source and verifier roles receive read-only mode and retain published-safe read/retention dependencies without publication secrets. B1 may lookup immutable committed state before heavy export, but it cannot expose readiness until full bytes/root checks and provisional fsync complete; first and identical-committed branches both authenticate the publisher.
+
 ## 5. Automatic trusted issuance
 
 D3 configures a dedicated schema issuer library inside the trusted AR leader/publication runtime, with separate schema-authority key material, trusted authenticated read-only full-semantic capture access and a durable candidate journal. The concrete boundary is `orchestrator/promotion.go`'s `publishManifest` after the complete candidate is sealed and before `PublishSafeSnapshot`; genesis/bootstrap, executor-profile transition, empty/zero-output, every v2 successor and every query successor use the same readiness-aware path. The source never receives the authority key or chooses the capture endpoint.
@@ -149,7 +181,7 @@ pin immutable candidate manifest, schema capture and part-export view
 trusted issuer independently captures complete name/type/position/generation/expression metadata
 build A -> sign certificate -> atomically fsync exact O in the candidate journal
 B1 validates O, exports/verifies/fsyncs parts and retains provisional ownership
-publisher submits existing RecordSnapshotArtifactReady for O's committed outer digest
+B1 publication control authenticates publisher and submits existing RecordSnapshotArtifactReady
 C1 independently verifies O and commits the unique readiness association for M
 publication worker proposes PublishSafeSnapshot(M); FSM requires matching readiness
 ```
@@ -158,7 +190,7 @@ The issuer independently verifies metadata against trusted configured access und
 
 A query successor uses the consumed/resolving operation's publication authority and must not wait for its own barrier to become idle or acquire a new query reservation. A v2 successor uses its publication/schema exclusion rather than a synthetic query. Failures keep recoverable work and provisional artifacts; restoring healthy dependencies resumes automatically. Manual/CLI certificate creation may aid diagnostics but cannot satisfy D3 or D4.
 
-No new issuer RPC is required for the initial topology. AR composes the injected issuer and B1 publisher in process through the shared artifact namespace; C1 consumes the existing readiness transport. `GetPublishedSnapshot` is published-only and cannot feed pre-publication issuance, partition ACK is not a certificate, and `RecordSnapshotArtifactReady` is not a sign request. A remote issuer, general schema registry, supervisor and production activation remain outside this correction.
+No new issuer RPC is required for the initial topology. AR composes the injected issuer and publishing-mode B1 in process through the shared artifact namespace and C1's local publication-control adapter; the adapter consumes the existing readiness transport. `GetPublishedSnapshot` is published-only and cannot feed pre-publication issuance, partition ACK is not a certificate, and `RecordSnapshotArtifactReady` is neither a sign request nor sufficient as B1's only dependency. A remote issuer, general schema registry, supervisor and production activation remain outside this correction.
 
 ## 6. Required evidence and compatibility
 
