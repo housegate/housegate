@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "hash.go",
         "roots.go",
+        "snapshot_query_build_identity.go",
         "snapshot_query_decode.go",
         "snapshot_query_hash.go",
         "snapshot_query_manifest.go",
@@ -20,10 +21,14 @@ go_test(
     name = "replay_test",
     srcs = [
         "hash_test.go",
+        "snapshot_query_build_identity_test.go",
         "snapshot_query_hash_test.go",
         "types_test.go",
         "verifier_test.go",
     ],
-    data = ["testdata/snapshot_query_v1.json"],
+    data = [
+        "testdata/snapshot_query_build_identity_v1.json",
+        "testdata/snapshot_query_v1.json",
+    ],
     embed = [":replay"],
 )
