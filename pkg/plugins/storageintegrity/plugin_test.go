@@ -340,12 +340,20 @@ func TestIngressAcceptsQuotedTargetIdentifiers(t *testing.T) {
 	}
 }
 
+// TestIngressRejectsInlineInsertSources covers the forms that send no payload
+// packet at all: the rows are in the SQL text, or are produced by the server's
+// own execution, so there is nothing to sign and nothing to replay from.
+//
+// FORMAT CSV used to be listed here and is deliberately gone: the official
+// client parses it locally and streams Native blocks, so it carries a real
+// payload. Formats the client does NOT convert are still refused --
+// TestInsertPayloadEncodingRejectsInlineAndUnsupportedFormats keeps that half.
 func TestIngressRejectsInlineInsertSources(t *testing.T) {
 	tests := []string{
 		"INSERT INTO tenant.events VALUES (1)",
 		"INSERT INTO tenant.events SELECT * FROM tenant.source",
 		"INSERT INTO tenant.events WITH 1 AS id SELECT id",
-		"INSERT INTO tenant.events FORMAT CSV",
+		"INSERT INTO tenant.events FORMAT Parquet",
 	}
 	for i, sql := range tests {
 		t.Run(sql, func(t *testing.T) {

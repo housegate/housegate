@@ -27,6 +27,29 @@ func TestInsertPayloadEncodingAcceptsStreamingPayloadFormats(t *testing.T) {
 			sql:  "INSERT INTO events FORMAT CSVWithNames",
 			want: PayloadEncodingClickHouseNativeData,
 		},
+		// Every other format the official client parses locally rides the same
+		// wire; the byte identity itself is measured in
+		// TestCLI_SignableInsertFormatsShareOneWirePayload.
+		{
+			name: "CSV without names",
+			sql:  "INSERT INTO events FORMAT CSV",
+			want: PayloadEncodingClickHouseNativeData,
+		},
+		{
+			name: "streamed Values is not an inline VALUES list",
+			sql:  "INSERT INTO events FORMAT Values",
+			want: PayloadEncodingClickHouseNativeData,
+		},
+		{
+			name: "JSONEachRow",
+			sql:  "INSERT INTO events FORMAT JSONEachRow",
+			want: PayloadEncodingClickHouseNativeData,
+		},
+		{
+			name: "TSV and TabSeparated are one format under two names",
+			sql:  "INSERT INTO events FORMAT TabSeparatedWithNames",
+			want: PayloadEncodingClickHouseNativeData,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -41,17 +64,32 @@ func TestInsertPayloadEncodingAcceptsStreamingPayloadFormats(t *testing.T) {
 	}
 }
 
+// TestInsertPayloadEncodingRejectsInlineAndUnsupportedFormats covers the two
+// classes that stay out, and asserts the message names the cause: an operator
+// who wrote one of these needs to be told which form to use instead.
+//
+// They are excluded for different reasons. An inline VALUES list, a SELECT or a
+// WITH sends no payload packet at all -- the rows live in the SQL text or in
+// the server's own execution, so there is nothing to hash and nothing for a
+// verifier to replay from. A binary or columnar FORMAT does stream, but nothing
+// has measured that the official client converts it to Native, and an
+// unmeasured entry is what would put foreign bytes under a Native signature.
 func TestInsertPayloadEncodingRejectsInlineAndUnsupportedFormats(t *testing.T) {
-	for _, sql := range []string{
-		"INSERT INTO events VALUES (1)",
-		"INSERT INTO events SELECT * FROM source",
-		"INSERT INTO events WITH 1 AS id SELECT id",
-		"INSERT INTO events FORMAT CSV",
-		"INSERT INTO events FORMAT JSONEachRow",
+	for _, tc := range []struct{ sql, wantCause string }{
+		{"INSERT INTO events VALUES (1)", "INSERT ... VALUES is not supported"},
+		{"INSERT INTO events SELECT * FROM source", "INSERT ... SELECT is not supported"},
+		{"INSERT INTO events WITH 1 AS id SELECT id", "INSERT ... WITH is not supported"},
+		{"INSERT INTO events FORMAT Parquet", "FORMAT PARQUET is not supported"},
+		{"INSERT INTO events FORMAT RowBinary", "FORMAT ROWBINARY is not supported"},
+		{"INSERT INTO events FORMAT JSON", "FORMAT JSON is not supported"},
 	} {
-		t.Run(sql, func(t *testing.T) {
-			if _, err := InsertPayloadEncoding(sql); err == nil {
+		t.Run(tc.sql, func(t *testing.T) {
+			_, err := InsertPayloadEncoding(tc.sql)
+			if err == nil {
 				t.Fatal("InsertPayloadEncoding accepted unsupported INSERT payload form")
+			}
+			if !strings.Contains(err.Error(), tc.wantCause) {
+				t.Fatalf("error %q does not name the cause %q", err, tc.wantCause)
 			}
 		})
 	}

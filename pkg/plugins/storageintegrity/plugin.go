@@ -188,10 +188,23 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 			return fmt.Errorf("storage_integrity rewritten SQL: %w", err)
 		}
 	}
-	stmtID, err := statementID(qctx)
-	if err != nil {
-		return err
-	}
+	// These three rejections are independent and all fail closed, so their
+	// order decides only which cause the caller is told about. It is chosen,
+	// not incidental:
+	//
+	// Nondeterminism stays first because it is the only one of the three whose
+	// coverage depends on running early. The sole way to write a function into
+	// an INSERT is VALUES or SELECT, and both are unsignable shapes -- so
+	// checking shape first would make this guard unreachable by construction
+	// and quietly retire its tests.
+	//
+	// Shape then goes ahead of the statement id. An unsupported INSERT form
+	// never carries an id, because the agent's signer claims only forms it can
+	// sign and leaves the rest on the ordinary path. Asking for the id first
+	// answered every plain `INSERT ... VALUES` into an SI table with "requires
+	// structured statement id <client_account>:<client_seq>:<client_nonce>",
+	// which reads as a malformed id the caller never had, while the real and
+	// fixable cause was computed a few lines later and discarded.
 	if fn, ok := containsUnmaterializedNondeterminism(signedSQL); ok {
 		return fmt.Errorf("storage_integrity rejects unmaterialized nondeterministic function %s", fn)
 	}
@@ -201,6 +214,10 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 		}
 	}
 	payloadEncoding, err := requirePayloadLocalInsert(signedSQL)
+	if err != nil {
+		return err
+	}
+	stmtID, err := statementID(qctx)
 	if err != nil {
 		return err
 	}

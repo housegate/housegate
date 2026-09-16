@@ -5,10 +5,49 @@ import (
 	"strings"
 )
 
+// clientParsedInsertFormats is the set of INSERT FORMATs the ClickHouse native
+// TCP client parses locally, serializing the rows into Native ClientData blocks
+// before they reach the wire. For every entry here the captured payload is
+// byte-identical to what `FORMAT Native` produces, which is what makes them
+// interchangeable for a signed statement: the SQL text differs (and is covered
+// by sql_hash), while payload_hash commits to the same bytes and replay decodes
+// them through the one Native decoder.
+//
+// This is deliberately an allowlist of MEASURED formats, not "any FORMAT". A
+// client that shipped raw bytes for some format would produce a payload the
+// Native decoder cannot read; intake fails closed on that (it decodes the
+// payload to derive touched partitions), so the failure is a refusal at the
+// door rather than anything reaching replay -- but the refusal would be
+// confusing, and non-native clients are outside what these measurements cover.
+// Extend it only alongside the byte-identity case in
+// TestCLI_SignableInsertFormatsShareOneWirePayload.
+//
+// Alias pairs are listed together on purpose: ClickHouse treats TSV and
+// TabSeparated (and their WithNames variants) as the same format, so admitting
+// one spelling and refusing the other would reject a statement for how it was
+// written rather than for what it does.
+var clientParsedInsertFormats = map[string]bool{
+	"NATIVE":                true,
+	"VALUES":                true,
+	"CSV":                   true,
+	"CSVWITHNAMES":          true,
+	"TSV":                   true,
+	"TABSEPARATED":          true,
+	"TSVWITHNAMES":          true,
+	"TABSEPARATEDWITHNAMES": true,
+	"JSONEACHROW":           true,
+}
+
 // InsertPayloadEncoding returns the replay payload encoding selected by an
 // admitted payload-local INSERT. Server-side ingress captures ClickHouse
-// native TCP ClientData packets: SQL FORMAT controls client-side parsing, so
-// both Native and CSVWithNames SQL arrive and are stored as Native blocks.
+// native TCP ClientData packets: SQL FORMAT controls client-side parsing only,
+// so every format in clientParsedInsertFormats arrives as Native blocks and is
+// stored as the same wire capture.
+//
+// Note the asymmetry with `INSERT ... VALUES (1)`: written inline, the rows are
+// part of the SQL text and no ClientData packet is sent at all, so there is no
+// payload to sign. The same statement written as `FORMAT Values` with the rows
+// on stdin is signable, because then the client streams them.
 func InsertPayloadEncoding(sql string) (string, error) {
 	if _, err := ParseInsertTarget(sql); err != nil {
 		return "", err
@@ -21,10 +60,7 @@ func InsertPayloadEncoding(sql string) (string, error) {
 	case "":
 		return PayloadEncodingClickHouseNativeData, nil
 	case "FORMAT":
-		switch format {
-		case "NATIVE", "CSVWITHNAMES":
-			// The native TCP client parses CSVWithNames locally and sends
-			// Native blocks; the stored payload is the wire capture either way.
+		if clientParsedInsertFormats[format] {
 			return PayloadEncodingClickHouseNativeData, nil
 		}
 		if format == "" {
@@ -40,13 +76,18 @@ func InsertPayloadEncoding(sql string) (string, error) {
 
 // RequireStreamingNativeInsert accepts only INSERT forms whose replay payload
 // remains the captured Native protocol Data packets.
+//
+// InsertPayloadEncoding returns exactly one encoding today, so the check below
+// is unreachable; it is kept as the guard that a second encoding must not slip
+// into this lane silently, and names the encoding it actually saw rather than a
+// hardcoded format that had drifted from the reason for rejecting.
 func RequireStreamingNativeInsert(sql string) error {
 	encoding, err := InsertPayloadEncoding(sql)
 	if err != nil {
 		return err
 	}
 	if encoding != PayloadEncodingClickHouseNativeData {
-		return fmt.Errorf("requires streaming Native INSERT input; FORMAT CSVWITHNAMES is not supported")
+		return fmt.Errorf("requires streaming Native INSERT input; payload encoding %s is not supported", encoding)
 	}
 	return nil
 }

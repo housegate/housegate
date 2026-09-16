@@ -139,6 +139,17 @@ func RunCLIMultiqueryIgnoreError(t *testing.T, bin, proxyAddr, database, query s
 	return runCLIContext(ctx, t, bin, proxyAddr, database, query, "--multiquery", "--ignore-error")
 }
 
+// RunCLIStdin runs one streaming INSERT whose rows arrive on the client's
+// stdin, which is how every INSERT form other than a bare VALUES list is
+// spelled. Compression stays off because the storage-integrity lanes capture
+// raw Native blocks and refuse compressed payloads.
+func RunCLIStdin(t *testing.T, bin, proxyAddr, database, query, input string) (string, error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return runCLIQueriesContext(ctx, t, bin, proxyAddr, database, []string{query}, input)
+}
+
 // RunCLIContext is RunCLI with a caller-supplied context for tests
 // (large streams, cancellation) that need to control the timeout.
 func RunCLIContext(ctx context.Context, t *testing.T, bin, proxyAddr, database, query string) (string, error) {
