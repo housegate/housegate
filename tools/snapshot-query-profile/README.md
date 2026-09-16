@@ -25,6 +25,6 @@ For every artifact the tool opens the supplied path, verifies the opened object 
 
 The profile file contains no paths. The provenance manifest contains the exact input paths, explicit platforms, byte lengths, raw digests, N, Q, and profile output path/length/digest. Provenance, its paths, and the generator binary hash never enter Q. Identical bytes relocated to other paths therefore keep the same Q while changing provenance.
 
-Both outputs are fully generated and validated before writing. Each is staged in its destination directory and renamed into place, so a profile path is never exposed with partial bytes.
+Both outputs are fully generated and validated before writing. The CLI resolves relative, cleaned, symlinked, and existing-file identities and refuses output paths that alias each other, the recipe, or any measured artifact. Each output is staged in its destination directory and renamed into place, so a profile path is never exposed with partial bytes.
 
 Artifact immutability, semantic dependency closure, analyzer role membership, native/gRPC parity, and unchanged direct execution after measurement remain obligations of the later A4, A5, B, and D qualification gates. This tool's path-based input does not eliminate arbitrary concurrent file replacement or production TOCTOU; runtime loaders independently measure and retain the artifacts they actually load.

@@ -10,7 +10,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/housegate/housegate/pkg/replay"
 )
@@ -267,7 +269,6 @@ func TestDecodeRecipeRejectsMalformedInput(t *testing.T) {
 		"unknown":          bytes.Replace(raw, []byte(`{"version":1,`), []byte(`{"version":1,"unknown":true,`), 1),
 		"duplicate":        bytes.Replace(raw, []byte(`{"version":1,`), []byte(`{"version":1,"version":1,`), 1),
 		"missing":          bytes.Replace(raw, []byte(`,"tzdata_artifact_path":"`+base.TZDataArtifactPath+`"`), nil, 1),
-		"null":             bytes.Replace(raw, []byte(`"native_members":[`), []byte(`"native_members":null,"ignored":[`), 1),
 		"nested_unknown":   bytes.Replace(raw, []byte(`"platform":"linux/amd64",`), []byte(`"platform":"linux/amd64","unknown":true,`), 1),
 		"nested_duplicate": bytes.Replace(raw, []byte(`"platform":"linux/amd64",`), []byte(`"platform":"linux/amd64","platform":"linux/amd64",`), 1),
 		"trailing":         append(append([]byte(nil), raw...), []byte(" trailing")...),
@@ -282,6 +283,23 @@ func TestDecodeRecipeRejectsMalformedInput(t *testing.T) {
 				t.Fatal("malformed recipe accepted")
 			}
 		})
+	}
+}
+
+func TestDecodeRecipeRejectsNullIndependently(t *testing.T) {
+	base := validRecipe(t, t.TempDir())
+	raw := marshalRecipe(t, base)
+	members, err := json.Marshal(base.NativeMembers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutated := bytes.Replace(raw, append([]byte(`"native_members":`), members...), []byte(`"native_members":null`), 1)
+	if bytes.Equal(mutated, raw) {
+		t.Fatal("null mutation did not match")
+	}
+	_, err = DecodeRecipe(mutated)
+	if err == nil || !strings.Contains(err.Error(), "recipe.native_members: null is forbidden") {
+		t.Fatalf("null rejection=%v", err)
 	}
 }
 
@@ -362,6 +380,146 @@ func TestRunWritesValidatedOutputsAndReportsWriteErrors(t *testing.T) {
 	if _, err := os.Stat(deferredProfilePath); !os.IsNotExist(err) {
 		t.Fatalf("profile was committed before provenance staging completed: %v", err)
 	}
+}
+
+func TestRunRejectsOutputAliasesWithoutChangingFiles(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*testing.T, string, RecipeV1, string) (string, string, map[string][]byte)
+	}{
+		{
+			name: "cleaned_output_alias",
+			setup: func(t *testing.T, dir string, _ RecipeV1, _ string) (string, string, map[string][]byte) {
+				profile := writeArtifact(t, dir, "profile.json", "existing-profile")
+				return profile, dir + string(os.PathSeparator) + "." + string(os.PathSeparator) + "profile.json", map[string][]byte{profile: []byte("existing-profile")}
+			},
+		},
+		{
+			name: "relative_absolute_output_alias",
+			setup: func(t *testing.T, dir string, _ RecipeV1, _ string) (string, string, map[string][]byte) {
+				profile := writeArtifact(t, dir, "profile.json", "existing-profile")
+				workingDirectory, err := os.Getwd()
+				if err != nil {
+					t.Fatal(err)
+				}
+				relative, err := filepath.Rel(workingDirectory, profile)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return profile, relative, map[string][]byte{profile: []byte("existing-profile")}
+			},
+		},
+		{
+			name: "symlink_output_alias",
+			setup: func(t *testing.T, dir string, _ RecipeV1, _ string) (string, string, map[string][]byte) {
+				profile := writeArtifact(t, dir, "profile.json", "existing-profile")
+				provenance := filepath.Join(dir, "provenance.json")
+				if err := os.Symlink(profile, provenance); err != nil {
+					t.Fatal(err)
+				}
+				return profile, provenance, map[string][]byte{profile: []byte("existing-profile"), provenance: []byte("existing-profile")}
+			},
+		},
+		{
+			name: "hardlink_output_alias",
+			setup: func(t *testing.T, dir string, _ RecipeV1, _ string) (string, string, map[string][]byte) {
+				profile := writeArtifact(t, dir, "profile.json", "existing-profile")
+				provenance := filepath.Join(dir, "provenance.json")
+				if err := os.Link(profile, provenance); err != nil {
+					t.Fatal(err)
+				}
+				return profile, provenance, map[string][]byte{profile: []byte("existing-profile"), provenance: []byte("existing-profile")}
+			},
+		},
+		{
+			name: "profile_aliases_recipe",
+			setup: func(t *testing.T, dir string, _ RecipeV1, recipePath string) (string, string, map[string][]byte) {
+				provenance := writeArtifact(t, dir, "provenance.json", "existing-provenance")
+				recipeBytes, err := os.ReadFile(recipePath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return filepath.Join(dir, ".", "recipe.json"), provenance, map[string][]byte{recipePath: recipeBytes, provenance: []byte("existing-provenance")}
+			},
+		},
+		{
+			name: "provenance_hardlink_aliases_artifact",
+			setup: func(t *testing.T, dir string, recipe RecipeV1, _ string) (string, string, map[string][]byte) {
+				profile := writeArtifact(t, dir, "profile.json", "existing-profile")
+				provenance := filepath.Join(dir, "provenance.json")
+				if err := os.Link(recipe.GRPCExecutablePath, provenance); err != nil {
+					t.Fatal(err)
+				}
+				artifactBytes, err := os.ReadFile(recipe.GRPCExecutablePath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return profile, provenance, map[string][]byte{profile: []byte("existing-profile"), recipe.GRPCExecutablePath: artifactBytes, provenance: artifactBytes}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			recipe := validRecipe(t, dir)
+			recipePath := filepath.Join(dir, "recipe.json")
+			if err := os.WriteFile(recipePath, marshalRecipe(t, recipe), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			profile, provenance, protected := test.setup(t, dir, recipe, recipePath)
+			if err := run([]string{"-recipe", recipePath, "-profile-out", profile, "-provenance-out", provenance}, &bytes.Buffer{}, &bytes.Buffer{}); err == nil {
+				t.Fatal("aliased output paths accepted")
+			}
+			for path, want := range protected {
+				got, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatalf("protected path %q: %v", path, err)
+				}
+				if !bytes.Equal(got, want) {
+					t.Fatalf("protected path %q changed: got %q want %q", path, got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestFIFOInputsAreRejectedWithoutBlocking(t *testing.T) {
+	assertBoundedError := func(t *testing.T, call func() error) {
+		t.Helper()
+		result := make(chan error, 1)
+		go func() { result <- call() }()
+		select {
+		case err := <-result:
+			if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+				t.Fatalf("FIFO rejection=%v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("FIFO input blocked instead of being rejected")
+		}
+	}
+	t.Run("recipe", func(t *testing.T) {
+		dir := t.TempDir()
+		fifo := filepath.Join(dir, "recipe.fifo")
+		if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		assertBoundedError(t, func() error {
+			return run([]string{"-recipe", fifo, "-profile-out", filepath.Join(dir, "profile.json"), "-provenance-out", filepath.Join(dir, "provenance.json")}, &bytes.Buffer{}, &bytes.Buffer{})
+		})
+	})
+	t.Run("artifact", func(t *testing.T) {
+		dir := t.TempDir()
+		recipe := validRecipe(t, dir)
+		fifo := filepath.Join(dir, "artifact.fifo")
+		if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		recipe.ClickHouseExecutablePath = fifo
+		assertBoundedError(t, func() error {
+			_, err := GenerateProfile(recipe, filepath.Join(dir, "profile.json"))
+			return err
+		})
+	})
 }
 
 func TestCanonicalizationIsDeterministic(t *testing.T) {

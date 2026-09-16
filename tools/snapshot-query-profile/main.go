@@ -16,6 +16,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/housegate/housegate/pkg/replay"
 )
@@ -307,18 +308,9 @@ func GenerateProfile(recipe RecipeV1, profileOutputPath string) (Generation, err
 }
 
 func measureArtifact(path string) (ArtifactMeasurement, error) {
-	file, err := os.Open(path)
+	file, err := openRegularFile(path)
 	if err != nil {
 		return ArtifactMeasurement{}, err
-	}
-	info, err := file.Stat()
-	if err != nil {
-		_ = file.Close()
-		return ArtifactMeasurement{}, err
-	}
-	if !info.Mode().IsRegular() {
-		_ = file.Close()
-		return ArtifactMeasurement{}, fmt.Errorf("%q is not a regular file", path)
 	}
 	hash := sha256.New()
 	length, err := io.Copy(hash, file)
@@ -330,6 +322,50 @@ func measureArtifact(path string) (ArtifactMeasurement, error) {
 		return ArtifactMeasurement{}, closeErr
 	}
 	return ArtifactMeasurement{Path: path, Bytes: uint64(length), Digest: "0x" + hex.EncodeToString(hash.Sum(nil))}, nil
+}
+
+// openRegularFile checks the pathname before opening so an ordinary FIFO is
+// rejected without waiting for a writer, then opens nonblocking so a path swap
+// to a FIFO cannot introduce that wait. The descriptor Stat remains the
+// authority for the object that will actually be read and measured.
+func openRegularFile(path string) (*os.File, error) {
+	pathInfo, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !pathInfo.Mode().IsRegular() {
+		return nil, fmt.Errorf("%q is not a regular file", path)
+	}
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	openedInfo, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	if !openedInfo.Mode().IsRegular() {
+		_ = file.Close()
+		return nil, fmt.Errorf("%q is not a regular file", path)
+	}
+	return file, nil
+}
+
+func readRegularFile(path string) ([]byte, error) {
+	file, err := openRegularFile(path)
+	if err != nil {
+		return nil, err
+	}
+	data, err := io.ReadAll(file)
+	if err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	if err := file.Close(); err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
 func digestBytes(data []byte) string {
@@ -352,15 +388,27 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if *recipePath == "" || *profilePath == "" || *provenancePath == "" {
 		return fmt.Errorf("-recipe, -profile-out and -provenance-out are required")
 	}
-	if *profilePath == *provenancePath {
-		return fmt.Errorf("profile and provenance output paths must differ")
-	}
-	raw, err := os.ReadFile(*recipePath)
+	raw, err := readRegularFile(*recipePath)
 	if err != nil {
 		return fmt.Errorf("read recipe: %w", err)
 	}
 	recipe, err := DecodeRecipe(raw)
 	if err != nil {
+		return err
+	}
+	inputs := []namedPath{
+		{name: "recipe", path: *recipePath},
+		{name: "clickhouse executable", path: recipe.ClickHouseExecutablePath},
+		{name: "gRPC analyzer executable", path: recipe.GRPCExecutablePath},
+		{name: "tzdata artifact", path: recipe.TZDataArtifactPath},
+	}
+	for index, member := range recipe.NativeMembers {
+		inputs = append(inputs,
+			namedPath{name: fmt.Sprintf("native member %d executable", index), path: member.ExecutablePath},
+			namedPath{name: fmt.Sprintf("native member %d FFI", index), path: member.FFIPath},
+		)
+	}
+	if err := validateOutputPaths(*profilePath, *provenancePath, inputs); err != nil {
 		return err
 	}
 	result, err := GenerateProfile(recipe, *profilePath)
@@ -372,6 +420,92 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	_, err = fmt.Fprintf(stdout, "query_profile_id=%s\nnative_analyzer_build_digest=%s\n", result.QueryProfileID, result.NativeAnalyzerBuildDigest)
 	return err
+}
+
+type namedPath struct {
+	name string
+	path string
+}
+
+type pathIdentity struct {
+	canonical string
+	info      os.FileInfo
+}
+
+func inspectPathIdentity(path string) (pathIdentity, error) {
+	canonical, err := resolvePathIdentity(path)
+	if err != nil {
+		return pathIdentity{}, err
+	}
+	info, err := os.Stat(path)
+	if err != nil && !os.IsNotExist(err) {
+		return pathIdentity{}, err
+	}
+	return pathIdentity{canonical: canonical, info: info}, nil
+}
+
+// resolvePathIdentity resolves all symlinks in the existing portion of a path
+// and then rejoins any nonexistent suffix. This makes relative, cleaned, and
+// symlinked-parent spellings comparable before output files are created.
+func resolvePathIdentity(path string) (string, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	current := filepath.Clean(absolute)
+	var suffix []string
+	for {
+		resolved, resolveErr := filepath.EvalSymlinks(current)
+		if resolveErr == nil {
+			for index := len(suffix) - 1; index >= 0; index-- {
+				resolved = filepath.Join(resolved, suffix[index])
+			}
+			return filepath.Clean(resolved), nil
+		}
+		if !os.IsNotExist(resolveErr) {
+			return "", resolveErr
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return filepath.Clean(absolute), nil
+		}
+		suffix = append(suffix, filepath.Base(current))
+		current = parent
+	}
+}
+
+func identitiesAlias(left, right pathIdentity) bool {
+	if left.canonical == right.canonical {
+		return true
+	}
+	return left.info != nil && right.info != nil && os.SameFile(left.info, right.info)
+}
+
+func validateOutputPaths(profilePath, provenancePath string, inputs []namedPath) error {
+	profile, err := inspectPathIdentity(profilePath)
+	if err != nil {
+		return fmt.Errorf("inspect profile output path: %w", err)
+	}
+	provenance, err := inspectPathIdentity(provenancePath)
+	if err != nil {
+		return fmt.Errorf("inspect provenance output path: %w", err)
+	}
+	if identitiesAlias(profile, provenance) {
+		return fmt.Errorf("profile and provenance output paths must identify distinct files")
+	}
+	for _, input := range inputs {
+		identity, err := inspectPathIdentity(input.path)
+		if err != nil {
+			return fmt.Errorf("inspect %s path: %w", input.name, err)
+		}
+		if identitiesAlias(profile, identity) {
+			return fmt.Errorf("profile output path aliases %s input", input.name)
+		}
+		if identitiesAlias(provenance, identity) {
+			return fmt.Errorf("provenance output path aliases %s input", input.name)
+		}
+	}
+	return nil
 }
 
 type stagedFile struct {
