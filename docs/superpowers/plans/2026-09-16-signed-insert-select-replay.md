@@ -65,10 +65,12 @@ Publish C1's signed `SnapshotArtifactReady` record through `RecordSnapshotArtifa
 
 Make the first storage backend concrete: AC adds `ArtifactBackend` with `Put(ctx context.Context, key string, input io.Reader) (digest string, length uint64, err error)`, `Open(ctx context.Context, key string) (io.ReadCloser, error)` and `Delete(ctx context.Context, key string) error`, plus `NewFilesystemArtifactBackend(rootDir string) (ArtifactBackend, error)`. It uses immutable content keys, atomic/fsynced writes and bounded streaming; validate keys and refuse symlink/path escape. `PartExporter.Export(ctx context.Context, part replay.PartManifestEntry) (io.ReadCloser, error)` supplies an immutable frozen part archive using source data-plane access. `NewSnapshotArtifacts(backend ArtifactBackend, exporter PartExporter, published PublishedSnapshotSource, journalDir string, verifyTerminal func(context.Context, []byte) error) (SnapshotArtifacts, error)` supplies B1's public port. Source and verifier see the same durable artifact namespace through a shared mounted store in the first deployment/test profile; local ephemeral caches alone fail readiness. Remote object-store adapters can implement this port later without changing roots.
 
-- [ ] **Step 1: Write publication/retention tests with a temporary object directory and journal.** Test a manifest whose hash is internally valid but which is absent from `PublishedSnapshotSource`, a declared empty table, missing schema, renamed location serving identical bytes, and reference retention across process reconstruction. Tests must inspect storage after a failed operation, not just a return code:
+- [ ] **Step 1: Write publication/retention tests with a temporary object directory and journal.** Publish and verify candidate artifacts before safe publication, including durable provisional retention; upload must not require prior membership in `PublishedSnapshotSource`. Then test query consumption of an internally valid staged-but-unpublished manifest and require `Retain`/`Open`/`FetchPart` refusal despite artifact readiness. Also test a declared empty table, missing schema, renamed location serving identical bytes, and reference retention across process reconstruction. Tests must inspect storage after a failed operation, not just a return code:
 
 ```text
 publish S with complete schemas and two parts -> durable commit marker exists only after both parts verify
+before safe publication: provisional reference survives restart; query consumption of S refuses
+authenticated safe publication after readiness -> query Retain/Open/FetchPart may consume exact S
 retain S using reference "reservation/r1/7" -> restart store -> GC cannot delete either part
 retain same reference twice -> one durable reference; different pin under same reference -> reject
 release without authenticated terminal proof -> reject and keep both parts
@@ -78,13 +80,14 @@ corrupt or omit one upload -> no publication-ready acknowledgement
 
 - [ ] **Step 2: Run `bazel test //dataplane:dataplane_test` in AC and the new `bazel test //pkg/replay/snapshotquery:snapshotquery_test` in HG.** Expect missing ports/store or failed retention/publication assertions before implementing them. Add both BUILD declarations in this task.
 
-- [ ] **Step 3: Implement publish-before-safe readiness and idempotent durable references.** Export exact selected parts under content-addressed keys, with the authenticated schema and physical-hash definition. Validate complete upload before acknowledging availability to the safe publisher; AR's final publication gate consumes that acknowledgement. Never delete old parts merely because a MergeTree merge made them inactive locally. Use atomic write/fsync/rename and a durable reference journal; account for reserve, accepted block, replay and challenge references independently.
+- [ ] **Step 3: Implement publish-before-safe readiness and idempotent durable references.** Export exact selected candidate parts under content-addressed keys, with the authenticated schema and physical-hash definition. `Publish` validates candidate manifest/content and durably retains provisional publication ownership before readiness, without requiring published-safe membership; this breaks the readiness/publication dependency cycle. Validate complete upload before acknowledging availability to the safe publisher; AR's final publication gate consumes that acknowledgement. Only a separately authenticated published-safe pin authorizes query `Retain`, `Open` and `FetchPart`; readiness alone does not. Never delete old parts merely because a MergeTree merge made them inactive locally. Use atomic write/fsync/rename and a durable reference journal; account for provisional publication, reserve, accepted block, replay and challenge references independently. Reconcile abandoned provisional uploads against control-plane publication/cancellation authority before GC; do not free them merely on uploader disconnect.
 
 ```text
 Publish(manifest, schemas):
   validate full table/schema ledger and canonical roots
   export each selected part from a stable frozen source view
   hash/check every artifact; fsync artifact and schema objects
+  persist provisional publication reference before exposing readiness
   write/fsync readiness record binding snapshot_id, manifest_root and all artifact hashes
   acknowledge readiness; only the control plane may publish the safe snapshot
 
@@ -211,6 +214,8 @@ fsync completed output; return handle only after all streams and counters valida
 
 New `snapshotquery.Executor` receives `NetworkID string`, `Snapshots SnapshotReadStore`, `Analyzer rewriter.SnapshotQueryAnalyzer`, `Profiles ProfileRegistry`, and `Appender *payloadexec.Executor`; it implements `Replay(context.Context, replay.ExecutionRequest) (replay.ExecutionResult, error)`. `ProfileRegistry.Lookup(executorID, queryID string) (Profile, bool)` returns `Profile{ExecutorProfileID string, QueryProfileID string, Record replay.QueryProfileRecord}`. Bounds are `profile.Record.Limits`; the remaining record fields pin engines/settings/types/operators as specified in A4. It does not decide admission authorization; C1 does. The executor receives B5's `HistoricalPolicy` port too, so direct source invocation must prove accepted reservation provenance rather than trusting a caller-populated job.
 
+Add proposed in-process `PreparedQueryExecution{Result replay.ExecutionResult, Output CanonicalOutput}` with `Close() error`, and `(*Executor).Prepare(ctx context.Context, req replay.ExecutionRequest) (*PreparedQueryExecution, error)`. A successful Prepare transfers ownership of the complete canonical output handle to the caller; it closes temporary restore handles but must not close that output. `Replay` wraps Prepare with deferred Close and returns Result, preserving the existing `replay.Executor` interface. C5 uses Prepare and `Output.OpenRows()` to durably copy/reopen the exact canonical rows before closing the handle. This is no wire result expansion, no source-row input to the verifier, and no second SELECT. Caller-owned cache durability/retention remains C5's responsibility.
+
 - [ ] **Step 1: Add whole-ledger regression tests before extracting code.** Use the existing payload executor fixtures with tables R, W and U; after appending to W, assert exact preserved R/U table/partition/part entries and parent linkage. Add query cases with R=W, zero output and two sequential safe self-inserts. Drop a table, duplicate a statement ID or mismatch a schema in direct `ApplyRows` input and require refusal.
 
 ```text
@@ -226,7 +231,7 @@ constant SELECT with zero rows: all data/partition roots unchanged, new manifest
 - [ ] **Step 3: Extract the smallest common append core, then orchestrate query execution.** Move existing ledger verification, deterministic part/delta assembly and complete table preservation into `ApplyRows`. It validates unique statement IDs, known targets and complete predecessor/schema coverage. It must not impose payload-ref requirements on already validated row batches; those remain at the v2 caller. Preserve existing v2 part grouping and byte/accounting formulas, proven by its old vectors.
 
 ```text
-snapshotquery.Executor.Replay(req):
+snapshotquery.Executor.Prepare(req):
   require exactly one req.SnapshotQuery; require supported exact executor/query profiles
   verify job/pin/descriptor/schema identity and accepted reservation provenance
   open retained S using statement/block reference; independently analyze signed materialized SQL
@@ -234,12 +239,15 @@ snapshotquery.Executor.Replay(req):
   stream target-typed rows; Canonicalize through complete EOF
   pass globally ordered rows to Appender.ApplyRows using the job's assigned sequence
   require complete predecessor table set; attach applied output count/root evidence
-  return execution result; close scratch/output handles without dropping durable retention
+  close scratch handles; return PreparedQueryExecution transferring canonical output ownership
+snapshotquery.Executor.Replay(req): Prepare -> defer prepared.Close -> return prepared.Result
 ```
 
 The executor is independently reusable by source and verifier; it never calls `prepareAndSubmit`, writes production unsafe tables or re-materializes volatility. A missing `SnapshotQuery` is not inferred from empty payload. The composite dispatcher in B5 invokes the legacy executor explicitly for legacy requests.
 
 - [ ] **Step 4: Run payload regression, query state and separate-instance tests.** HG targeted replay/payloadexec/chexec/snapshotquery tests must pass. D4 supplies two real ClickHouse instances with different local live data and part order; compare canonical output, global IDs, LtHash and complete post-state. Do not claim physical part byte equality across instances is required for equal logical data roots.
+
+Test Prepare ownership with an output handle that detects premature Close: C5 can read all rows through EOF after Prepare, durably reopen its copied cache after Close/restart and obtain identical global IDs/root/count. Replay closes its output exactly once on success/error; Prepare errors release temporary resources and return no partial handle. A failed cache fsync prevents unsafe writes. Preserve independent verifier Prepare/Replay execution and reject any attempt to feed the source cache as replay input.
 
 - [ ] **Step 5: Commit `feat(replay): execute snapshot queries with shared state assembly`.** Include the full v2 vector-preservation result in the PR; any changed legacy digest blocks the task.
 

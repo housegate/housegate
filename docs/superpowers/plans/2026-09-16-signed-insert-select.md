@@ -24,6 +24,9 @@
 - Historical executable profiles grant replay capability only. New admissions cannot choose an older installed profile, even with a valid user signature.
 - Source execution starts after durable singleton sequencing. Exact touched-partition capacity is reserved before unsafe writes. Accepted work survives client disconnects and reservation timers.
 - Query-only execution creates no `DeferredInsertPlan`, emits no sample block, and does not wait for a row terminator. An empty external-table marker is protocol input to drain, not an execution trigger.
+- Agent `OnQuery` installs an asynchronous preparation plan and returns promptly; the sole client codec reader must observe Cancel/EOF while acquire is drain-blocked and while finalization runs. Only the relay's serialized generation/forward gate may transfer a completed preparation to one upstream Query. A late grant or worker cannot forward a canceled generation; suspended query-auth hooks resume in order exactly once.
+- Agent preparation and host `QueryOnlyPlan` have distinct ownership and are mutually exclusive with each other and all payload/local-abort execution plans. Host Submit uses the same cancellation generation through the actual submit-launch gate. Before forwarding/Submit wins, cancellation forbids those side effects and reconciles only proven-unconsumed request/grant state; after an indeterminate or accepted attempt, durable reconciliation remains mandatory.
+- Acquisition recovery uses authenticated request-identity status for draining/granted/consumed/released records, including lost responses and durable cancellation tombstones. Neither a canceled RPC nor one negative lookup proves an in-flight acquire cannot commit. Released identities cannot be silently reacquired; only C3's terminal authority can resolve consumed reservations.
 - `ResolveColumnProfile`, `lthash.EncodeRow`, `payloadexec.RowID`, `PartitionIDForRow`, and `RowElementHash` remain the shared authorities. No Nullable, UUID or Decimal support, floating arithmetic, inline VALUES, or arbitrary SQL is added.
 - SQL parsing/transformation stays in rewriter backends. Neither agent nor ingress gets a SELECT regex parser; peer/trust markers do not waive the new executing-host validation.
 - Every runtime gate defaults off until the release gate passes. Keep readers/executors and authenticated artifacts for accepted historical operations during rollback.
@@ -56,7 +59,7 @@ Paths in the component plans are repository-relative and prefixed by the aliases
 | AP | `sentioxyz/arbiter-proto` | Protobuf statement, replay, reservation, profile, source and verifier RPC records; generated bindings |
 | RP | `housegate/rewriter-proto` | AST analysis/materialization/prepare contract and capability acknowledgement |
 | RG | `housegate/rewriter-go` | Native AST analysis, restricted profile and exact logical-to-scratch relation binding |
-| RC | `housegate/rewriter-grpc` | gRPC implementation with the same corpus and rejection semantics |
+| RC | `housegate/rewriter` (local checkout `rewriter-grpc`) | gRPC implementation with the same corpus and rejection semantics |
 | AC | `sentioxyz/arbiter-core` | Artifact publication/restoration/retention, source candidates, verifier and wire adapters |
 | AR | `sentioxyz/arbiter` | Deterministic admission, barrier/reservation log, singleton block, abort, activation and restart |
 | SN | `sentioxyz/sentio-node` | `storageintegrityadapter`, embedded Housegate/core wiring and dependency pins |
@@ -87,8 +90,8 @@ The IDs below map to the spec's full acceptance matrix, which remains the accept
 | A7 closed SQL/materialization/type failures | A4–A5, B3–B4 | D4 nested operators, pool exhaustion and overflow |
 | A8 whole ledger and empty applied output | B4–B5, C3 | D4 read/write/unrelated tables and zero-row advancement |
 | A9 source fraud and candidate bytes | B5, C5 | D4 independent replay plus delta plus exact byte scan |
-| A10 native packet lifecycle | D1–D2 | D4 fragmentation/coalescing, marker, cancel and next-query races |
-| A11 crash/lost-response recovery | B1, C2–C5 | D4 fault injection at each durable boundary |
+| A10 native packet lifecycle | D1–D2, C4 | D4 fragmentation/coalescing, marker, drain-blocked acquire Cancel/EOF, late worker/grant, finalization/forward/Submit races, one-shot auth hooks and next-query races; no upstream Query/no Submit when cancellation wins |
+| A11 crash/lost-response recovery | B1, C2–C5, D1–D2 | D4 fault injection at every durable boundary, including lost acquire/release responses and restart with cancel/tombstone state; release only proven-unconsumed identities and retain unknown/accepted Submit ownership |
 | A12 failure/abort/liveness/retention | C3–C5 | D4 committed no-op, late-generation refusal and next-block progress |
 | A13 versions/migration/activation/rollback | A1–A2, C1–C3, D3 | D4 legacy vectors, restart and historical replay |
 | A14 limits/performance | B2–B3, C4, D3 | D4 measured restore/sort/spill/latency/barrier occupancy |
