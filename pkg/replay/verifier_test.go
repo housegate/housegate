@@ -396,6 +396,126 @@ func TestSnapshotManifestSealAndValidateAreOrderIndependent(t *testing.T) {
 	}
 }
 
+// TestVerifierReplaysGenesisBlockWithoutAPreviousSnapshot is the fresh-network
+// case: nothing has been promoted yet, so the job names no previous safe
+// snapshot and the base is derived from the executor's own table set. Without
+// this the first block of every network is unattestable and the safe lane never
+// starts. The snapshot store is deliberately empty — a fresh network's is.
+func TestVerifierReplaysGenesisBlockWithoutAPreviousSnapshot(t *testing.T) {
+	ctx := context.Background()
+	gen := testGenesisSnapshot(t, "schema-1", "executor-1")
+	payload := []byte("name,balance\nalice,10\n")
+	root := DigestString("root-after-block-1")
+	job := genesisJob(gen, payload, root)
+	exec := &fakeGenesisExecutor{fakeExecutor: fakeExecutor{result: resultForJob(job, root)}, snapshot: gen}
+
+	got, err := (&Verifier{
+		Snapshots:    fakeSnapshotStore{},
+		Payloads:     fakePayloadStore{"payload-1": payload},
+		Executor:     exec,
+		Signer:       &fakeSigner{replicaID: "replica-a", signature: "sig-a"},
+		SchemaHashes: fakeSchemaHashes{"table-1": job.Statements[0].SchemaHash},
+	}).Verify(ctx, job)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if !got.MatchSourceRoot {
+		t.Fatal("expected source root to match")
+	}
+	if got.Receipt.PrevSafeSnapshotID != "" || got.Receipt.PrevStateRoot != "" {
+		t.Fatalf("genesis receipt must commit to an empty prev: %#v", got.Receipt)
+	}
+	if exec.seenSafeBlockSeq != 0 || exec.seenSchemaSnapshotID != "schema-1" || exec.seenExecutorProfileID != "executor-1" {
+		t.Fatalf("genesis base derived with wrong identity: seq=%d schema=%q profile=%q",
+			exec.seenSafeBlockSeq, exec.seenSchemaSnapshotID, exec.seenExecutorProfileID)
+	}
+	if exec.seen.Snapshot.SnapshotID != gen.SnapshotID {
+		t.Fatalf("executor replayed against %q, want the derived genesis %q", exec.seen.Snapshot.SnapshotID, gen.SnapshotID)
+	}
+}
+
+// TestVerifierRefusesGenesisWhenExecutorCannotDeriveTheBase keeps the omission
+// fail-closed: an executor that cannot produce its own empty base must refuse
+// to attest rather than replay against a zero-valued snapshot.
+func TestVerifierRefusesGenesisWhenExecutorCannotDeriveTheBase(t *testing.T) {
+	gen := testGenesisSnapshot(t, "schema-1", "executor-1")
+	payload := []byte("name,balance\nalice,10\n")
+	job := genesisJob(gen, payload, DigestString("root-after-block-1"))
+	exec := &fakeExecutor{result: resultForJob(job, DigestString("unused"))}
+
+	_, err := (&Verifier{
+		Snapshots:    fakeSnapshotStore{},
+		Payloads:     fakePayloadStore{"payload-1": payload},
+		Executor:     exec,
+		Signer:       &fakeSigner{replicaID: "replica-a", signature: "sig-a"},
+		SchemaHashes: fakeSchemaHashes{"table-1": job.Statements[0].SchemaHash},
+	}).Verify(context.Background(), job)
+	if err == nil || !strings.Contains(err.Error(), "cannot derive the genesis base") {
+		t.Fatalf("expected a genesis-base refusal, got %v", err)
+	}
+	if exec.called {
+		t.Fatal("executor ran despite an underivable base")
+	}
+}
+
+// TestVerifierRejectsNonEmptyGenesisBase closes the smuggling path: a "genesis"
+// carrying data would let state enter a network without ever being replayed.
+func TestVerifierRejectsNonEmptyGenesisBase(t *testing.T) {
+	populated := testSnapshot(t) // SafeBlockSeq 10, and not the empty table set
+	payload := []byte("name,balance\nalice,10\n")
+	job := genesisJob(testGenesisSnapshot(t, "schema-1", "executor-1"), payload, DigestString("root"))
+	exec := &fakeGenesisExecutor{
+		fakeExecutor: fakeExecutor{result: resultForJob(job, DigestString("unused"))},
+		snapshot:     populated,
+	}
+
+	_, err := (&Verifier{
+		Snapshots:    fakeSnapshotStore{},
+		Payloads:     fakePayloadStore{"payload-1": payload},
+		Executor:     exec,
+		Signer:       &fakeSigner{replicaID: "replica-a", signature: "sig-a"},
+		SchemaHashes: fakeSchemaHashes{"table-1": job.Statements[0].SchemaHash},
+	}).Verify(context.Background(), job)
+	if err == nil || !strings.Contains(err.Error(), "safe_block_seq 0") {
+		t.Fatalf("expected a non-empty genesis refusal, got %v", err)
+	}
+	if exec.called {
+		t.Fatal("executor ran against a non-empty genesis base")
+	}
+}
+
+// TestVerifierRejectsHalfDeclaredPrevSnapshot keeps genesis unambiguous: the
+// two prev fields describe one fact, so only both-set or both-empty is a job.
+func TestVerifierRejectsHalfDeclaredPrevSnapshot(t *testing.T) {
+	snap := testSnapshot(t)
+	payload := []byte("name,balance\nalice,10\n")
+
+	for name, mutate := range map[string]func(*ReplayJob){
+		"id without state root": func(j *ReplayJob) { j.PrevStateRoot = "" },
+		"state root without id": func(j *ReplayJob) { j.PrevSafeSnapshotID = "" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			job := testJob(snap, payload, DigestString("source-claim"))
+			mutate(&job)
+			exec := &fakeExecutor{result: resultForJob(job, DigestString("unused"))}
+
+			_, err := (&Verifier{
+				Snapshots:    fakeSnapshotStore{snap.SnapshotID: snap},
+				Payloads:     fakePayloadStore{"payload-1": payload},
+				Executor:     exec,
+				Signer:       &fakeSigner{replicaID: "replica-a", signature: "sig-a"},
+				SchemaHashes: fakeSchemaHashes{"table-1": job.Statements[0].SchemaHash},
+			}).Verify(context.Background(), job)
+			if err == nil || !strings.Contains(err.Error(), "must be set together or both be empty") {
+				t.Fatalf("expected a half-declared prev refusal, got %v", err)
+			}
+			if exec.called {
+				t.Fatal("executor ran on a malformed job")
+			}
+		})
+	}
+}
+
 func testSnapshot(t *testing.T) SafeSnapshotManifest {
 	t.Helper()
 	snap, err := (SafeSnapshotManifest{
@@ -446,6 +566,37 @@ func testJob(snap SafeSnapshotManifest, payload []byte, sourceRoot string) Repla
 	}
 }
 
+// testGenesisSnapshot is the empty base an executor derives for a network that
+// has promoted nothing: block 0, every table present, no data anywhere.
+func testGenesisSnapshot(t *testing.T, schemaSnapshotID, executorProfileID string) SafeSnapshotManifest {
+	t.Helper()
+	snap, err := (SafeSnapshotManifest{
+		SafeBlockSeq:      0,
+		SchemaSnapshotID:  schemaSnapshotID,
+		SchemaRoot:        DigestString("schema-root"),
+		ExecutorProfileID: executorProfileID,
+		Tables: []TableManifest{
+			{
+				TableID:    "table-1",
+				SchemaHash: DigestString("table-schema"),
+			},
+		},
+	}).Seal()
+	if err != nil {
+		t.Fatalf("Seal genesis snapshot: %v", err)
+	}
+	return snap
+}
+
+// genesisJob is the first block of a fresh network: it declares no previous
+// safe snapshot, because there is none to name.
+func genesisJob(gen SafeSnapshotManifest, payload []byte, sourceRoot string) ReplayJob {
+	job := testJob(gen, payload, sourceRoot)
+	job.PrevSafeSnapshotID = ""
+	job.PrevStateRoot = ""
+	return job
+}
+
 func resultForJob(job ReplayJob, root string) ExecutionResult {
 	return ExecutionResult{
 		BlockSeq:           job.BlockSeq,
@@ -488,6 +639,28 @@ func (e *fakeExecutor) Replay(_ context.Context, req ExecutionRequest) (Executio
 	e.called = true
 	e.seen = req
 	return e.result, nil
+}
+
+// fakeGenesisExecutor is an executor that can derive its own empty base, like
+// payloadexec.Executor does in production.
+type fakeGenesisExecutor struct {
+	fakeExecutor
+	snapshot SafeSnapshotManifest
+	err      error
+
+	seenSafeBlockSeq      uint64
+	seenSchemaSnapshotID  string
+	seenExecutorProfileID string
+}
+
+func (e *fakeGenesisExecutor) GenesisSnapshot(safeBlockSeq uint64, schemaSnapshotID, executorProfileID string) (SafeSnapshotManifest, error) {
+	e.seenSafeBlockSeq = safeBlockSeq
+	e.seenSchemaSnapshotID = schemaSnapshotID
+	e.seenExecutorProfileID = executorProfileID
+	if e.err != nil {
+		return SafeSnapshotManifest{}, e.err
+	}
+	return e.snapshot, nil
 }
 
 type fakeSigner struct {

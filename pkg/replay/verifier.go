@@ -35,6 +35,23 @@ type SchemaHashSource interface {
 	TableSchemaHash(tableID string) (string, bool)
 }
 
+// GenesisSnapshotSource derives the empty pre-genesis safe snapshot from an
+// executor's own pinned table set. A network that has promoted nothing yet has
+// no manifest to chain from, so its first replayed block declares no previous
+// safe snapshot and is replayed against this locally derived base instead of a
+// stored one. Without it block 1 is unattestable and no network can ever reach
+// its first safe state.
+//
+// The base is derived, never transported: each verifier computes it from the
+// same configured tables and network id it already uses for TableSchemaHash, so
+// a sequencer cannot choose it. Declaring genesis on a network that has already
+// promoted blocks therefore cannot forge a match — the replay would omit every
+// previously promoted row and yield a non-matching (but still signed) receipt,
+// which is challenge evidence like any other mismatch.
+type GenesisSnapshotSource interface {
+	GenesisSnapshot(safeBlockSeq uint64, schemaSnapshotID, executorProfileID string) (SafeSnapshotManifest, error)
+}
+
 // Verifier validates replay inputs, delegates execution to a pinned executor,
 // and signs the resulting receipt.
 type Verifier struct {
@@ -68,24 +85,9 @@ func (v *Verifier) Verify(ctx context.Context, job ReplayJob) (ReplayAttestation
 		return ReplayAttestation{}, err
 	}
 
-	snap, err := v.Snapshots.GetSafeSnapshot(ctx, job.PrevSafeSnapshotID)
+	snap, err := v.prevSafeSnapshot(ctx, job)
 	if err != nil {
-		return ReplayAttestation{}, fmt.Errorf("load safe snapshot %q: %w", job.PrevSafeSnapshotID, err)
-	}
-	if err := snap.Validate(); err != nil {
-		return ReplayAttestation{}, fmt.Errorf("invalid safe snapshot %q: %w", job.PrevSafeSnapshotID, err)
-	}
-	if snap.SnapshotID != job.PrevSafeSnapshotID {
-		return ReplayAttestation{}, fmt.Errorf("snapshot id mismatch: store returned %q for %q", snap.SnapshotID, job.PrevSafeSnapshotID)
-	}
-	if snap.StateRoot != job.PrevStateRoot {
-		return ReplayAttestation{}, fmt.Errorf("prev_state_root mismatch: job %s snapshot %s", job.PrevStateRoot, snap.StateRoot)
-	}
-	if snap.SchemaSnapshotID != job.SchemaSnapshotID {
-		return ReplayAttestation{}, fmt.Errorf("schema_snapshot_id mismatch: job %s snapshot %s", job.SchemaSnapshotID, snap.SchemaSnapshotID)
-	}
-	if snap.ExecutorProfileID != job.ExecutorProfileID {
-		return ReplayAttestation{}, fmt.Errorf("executor_profile_id mismatch: job %s snapshot %s", job.ExecutorProfileID, snap.ExecutorProfileID)
+		return ReplayAttestation{}, err
 	}
 	if job.BlockSeq <= snap.SafeBlockSeq {
 		return ReplayAttestation{}, fmt.Errorf("block_seq %d must be greater than safe snapshot block %d", job.BlockSeq, snap.SafeBlockSeq)
@@ -214,15 +216,84 @@ func (v *Verifier) signSchemaMismatch(ctx context.Context, job ReplayJob, prepar
 	return ReplayAttestation{ReplicaID: replicaID, Receipt: receipt, ReceiptHash: receiptHash, Signature: sig, MatchSourceRoot: false}, nil
 }
 
+// prevSafeSnapshot resolves the base state a job replays against: the stored
+// manifest it names, or the locally derived genesis base when it names none.
+// Either way the returned snapshot must carry the job's own schema and executor
+// identity, so the receipt commits to one consistent pinning.
+func (v *Verifier) prevSafeSnapshot(ctx context.Context, job ReplayJob) (SafeSnapshotManifest, error) {
+	snap, err := v.resolvePrevSafeSnapshot(ctx, job)
+	if err != nil {
+		return SafeSnapshotManifest{}, err
+	}
+	if snap.SchemaSnapshotID != job.SchemaSnapshotID {
+		return SafeSnapshotManifest{}, fmt.Errorf("schema_snapshot_id mismatch: job %s snapshot %s", job.SchemaSnapshotID, snap.SchemaSnapshotID)
+	}
+	if snap.ExecutorProfileID != job.ExecutorProfileID {
+		return SafeSnapshotManifest{}, fmt.Errorf("executor_profile_id mismatch: job %s snapshot %s", job.ExecutorProfileID, snap.ExecutorProfileID)
+	}
+	return snap, nil
+}
+
+func (v *Verifier) resolvePrevSafeSnapshot(ctx context.Context, job ReplayJob) (SafeSnapshotManifest, error) {
+	if job.PrevSafeSnapshotID == "" {
+		return v.genesisSnapshot(job)
+	}
+	snap, err := v.Snapshots.GetSafeSnapshot(ctx, job.PrevSafeSnapshotID)
+	if err != nil {
+		return SafeSnapshotManifest{}, fmt.Errorf("load safe snapshot %q: %w", job.PrevSafeSnapshotID, err)
+	}
+	if err := snap.Validate(); err != nil {
+		return SafeSnapshotManifest{}, fmt.Errorf("invalid safe snapshot %q: %w", job.PrevSafeSnapshotID, err)
+	}
+	if snap.SnapshotID != job.PrevSafeSnapshotID {
+		return SafeSnapshotManifest{}, fmt.Errorf("snapshot id mismatch: store returned %q for %q", snap.SnapshotID, job.PrevSafeSnapshotID)
+	}
+	if snap.StateRoot != job.PrevStateRoot {
+		return SafeSnapshotManifest{}, fmt.Errorf("prev_state_root mismatch: job %s snapshot %s", job.PrevStateRoot, snap.StateRoot)
+	}
+	return snap, nil
+}
+
+// genesisSnapshot derives the base for a job that declares no previous safe
+// snapshot. The job supplies only the schema/executor identity it already
+// commits to in its receipt; the table set and every root come from this
+// verifier's own executor, so the base cannot be chosen by the sequencer. The
+// derived base must be genuinely empty — a "genesis" carrying data would let
+// state enter a network without ever having been replayed.
+func (v *Verifier) genesisSnapshot(job ReplayJob) (SafeSnapshotManifest, error) {
+	src, ok := v.Executor.(GenesisSnapshotSource)
+	if !ok {
+		return SafeSnapshotManifest{}, fmt.Errorf("block %d declares no previous safe snapshot, but executor %T cannot derive the genesis base", job.BlockSeq, v.Executor)
+	}
+	snap, err := src.GenesisSnapshot(0, job.SchemaSnapshotID, job.ExecutorProfileID)
+	if err != nil {
+		return SafeSnapshotManifest{}, fmt.Errorf("derive genesis snapshot: %w", err)
+	}
+	if err := snap.Validate(); err != nil {
+		return SafeSnapshotManifest{}, fmt.Errorf("invalid genesis snapshot: %w", err)
+	}
+	if snap.SafeBlockSeq != 0 {
+		return SafeSnapshotManifest{}, fmt.Errorf("genesis snapshot must have safe_block_seq 0, got %d", snap.SafeBlockSeq)
+	}
+	for _, t := range snap.Tables {
+		if len(t.PartitionRoots) != 0 || len(t.ActiveParts) != 0 {
+			return SafeSnapshotManifest{}, fmt.Errorf("genesis snapshot table %q is not empty: %d partition roots, %d active parts", t.TableID, len(t.PartitionRoots), len(t.ActiveParts))
+		}
+	}
+	return snap, nil
+}
+
 func validateJobShape(job ReplayJob) error {
 	if job.BlockSeq == 0 {
 		return fmt.Errorf("block_seq is required")
 	}
-	if job.PrevSafeSnapshotID == "" {
-		return fmt.Errorf("prev_safe_snapshot_id is required")
-	}
-	if job.PrevStateRoot == "" {
-		return fmt.Errorf("prev_state_root is required")
+	// Both prev fields empty is the genesis case: nothing has been promoted on
+	// this network yet, so there is no manifest to chain from and the base is
+	// derived locally (see GenesisSnapshotSource). They describe one fact and
+	// must move together — naming a snapshot without its state root, or the
+	// reverse, is a malformed job rather than genesis.
+	if (job.PrevSafeSnapshotID == "") != (job.PrevStateRoot == "") {
+		return fmt.Errorf("prev_safe_snapshot_id and prev_state_root must be set together or both be empty (genesis): prev_safe_snapshot_id=%q prev_state_root=%q", job.PrevSafeSnapshotID, job.PrevStateRoot)
 	}
 	if job.SchemaSnapshotID == "" {
 		return fmt.Errorf("schema_snapshot_id is required")
