@@ -178,6 +178,54 @@ func TestIntegrationHonestInsertProducesMatchingSignedAttestation(t *testing.T) 
 	assertSignatureValid(t, h.signer, att)
 }
 
+// TestIntegrationGenesisBlockNeedsNoStoredSnapshot is the fresh-network case a
+// pilot actually hits: the very first block has no promoted predecessor, so the
+// job names no previous safe snapshot and the snapshot store is still empty.
+// The verifier derives the base from the executor's own pinned table set, and
+// the state root it computes must be *identical* to the one it computes when
+// the same block explicitly chains from the sealed genesis manifest — declaring
+// genesis by omission and by name are the same state, so a network can start
+// without anyone hand-authoring a manifest whose roots cannot be hand-computed.
+func TestIntegrationGenesisBlockNeedsNoStoredSnapshot(t *testing.T) {
+	h := newHarness(t)
+	payload := nativeBalancePayload(t, balanceRow{userID: "0x123", balance: 10})
+	h.payloads.Put("payload-1", payload)
+	claim := rootFor(t, h.exec, h.genesis, "stmt-1", payload)
+
+	chained, err := h.verifier.Verify(context.Background(), buildJob(h.genesis, "stmt-1", "payload-1", payload, claim))
+	if err != nil {
+		t.Fatalf("Verify (chained from the sealed genesis): %v", err)
+	}
+
+	job := buildJob(h.genesis, "stmt-1", "payload-1", payload, claim)
+	job.PrevSafeSnapshotID = ""
+	job.PrevStateRoot = ""
+
+	// A fresh network's snapshot store is empty — that is the whole point.
+	fresh := &replay.Verifier{
+		Snapshots:    payloadexec.NewMemSnapshotStore(),
+		Payloads:     h.payloads,
+		Executor:     h.exec,
+		Signer:       h.signer,
+		SchemaHashes: schemaHashes{table: payloadexec.TableSchemaHash(network, integrationSchema())},
+	}
+	att, err := fresh.Verify(context.Background(), job)
+	if err != nil {
+		t.Fatalf("Verify (genesis by omission): %v", err)
+	}
+	if !att.MatchSourceRoot {
+		t.Fatal("the first block of a network must be attestable against the source root")
+	}
+	if att.Receipt.ComputedStateRoot != chained.Receipt.ComputedStateRoot {
+		t.Fatalf("derived-genesis root %s != chained-genesis root %s",
+			att.Receipt.ComputedStateRoot, chained.Receipt.ComputedStateRoot)
+	}
+	if att.Receipt.PrevSafeSnapshotID != "" || att.Receipt.PrevStateRoot != "" {
+		t.Fatalf("genesis receipt must commit to an empty prev: %#v", att.Receipt)
+	}
+	assertSignatureValid(t, h.signer, att)
+}
+
 // TestIntegrationFraudulentSourceProducesSignedMismatch is design walkthrough #2
 // + Appendix C.4: the user signs balance=10 but a malicious source executes
 // balance=0 and registers that root. The verifier replays the *signed* payload,
