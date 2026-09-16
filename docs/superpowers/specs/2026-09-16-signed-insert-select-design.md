@@ -30,11 +30,11 @@ The [June integrated design](2026-06-22-storage-integrity-design.md) explicitly 
 
 ### D1. Exactly one authenticated base
 
-Let `S` be the complete safe snapshot selected by the Arbiter after all previously admitted work in the network/shard has reached a terminal state. The pin contains `network_id`, `keeper_shard_id`, `snapshot_id`, `safe_block_seq`, `manifest_root`, `state_root`, `schema_snapshot_id`, and `schema_root`. Selection is from the Arbiter's published safe chain, not from a source-provided manifest or local table listing.
+Let `S` be the complete safe snapshot selected by the Arbiter after all previously admitted SI work in the network/shard has been published safe or resolved by a committed protocol abort. An intake's terminal ACK2 is not sufficient to satisfy this drain. The pin contains `network_id`, `keeper_shard_id`, `snapshot_id`, `safe_block_seq`, `manifest_root`, `state_root`, `schema_snapshot_id`, and `schema_root`. Selection is from the Arbiter's published safe chain, not from a source-provided manifest or local table listing.
 
 For the new block, the signed snapshot identity must equal the block's `prev_safe_snapshot_id` and `prev_state_root`. The publisher's authenticated record must bind the remaining pin fields to that identity. A manifest passing `Validate()` is internally consistent; that alone does not prove that the Arbiter published it or that it is the selected predecessor. Verifiers check both properties.
 
-The proposed `AcquireSnapshotQuery` control-plane operation drains prior work, installs a network/shard admission and schema barrier, and returns a fenced reservation for `S` and the active execution profile. No new ordinary writes, snapshot-query writes, schema transitions, or safe publications can overtake this reservation. After signature verification, submission consumes that reservation atomically into a singleton block. A different snapshot, schema, profile, account, statement id or fencing generation rejects the submission before source execution. No implicit rebase or automatic re-signing of the same statement id is allowed.
+The proposed `AcquireSnapshotQuery` control-plane operation fences new SI admissions and schema transitions, drains earlier work, and returns a fenced reservation for `S` and the active execution profile. No new SI payload writes, snapshot-query writes, schema transitions, or safe publications can overtake this reservation. Read-only traffic can continue. After signature verification, submission consumes that reservation atomically into a singleton block. A different snapshot, schema, profile, account, statement id or fencing generation rejects the submission before source execution. No implicit rebase or automatic re-signing of the same statement id is allowed.
 
 Reservation expiry is a committed Arbiter transition with a new fencing generation, not a wall-clock decision inside deterministic FSM application. Before submission it releases the barrier. After submission, resolution follows the accepted block's recovery/abort protocol; a lost client connection cannot expire an accepted operation into a second execution.
 
@@ -173,7 +173,7 @@ sequenceDiagram
     H->>H: Reserve touched partitions, stage exact candidates
     H->>K: Register result claim and candidate commitments
     K-->>H: Durable claim acceptance
-    H-->>A: Terminal response at configured ACK level
+    H-->>A: ACK2 response when configured
     A-->>C: EndOfStream or Exception
     K->>V: Replay signed program from S
     V->>V: Restore, execute, canonicalize independently
@@ -181,6 +181,8 @@ sequenceDiagram
     K->>K: Validate replay, delta and byte checks
     K->>K: Publish safe or commit fenced abort
 ```
+
+The diagram illustrates an ACK2 client response. Any stronger safe acknowledgement must wait for applied safe publication; claim acceptance alone cannot satisfy it.
 
 ### D8. Query-only native protocol path
 
