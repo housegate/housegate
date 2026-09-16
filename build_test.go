@@ -842,6 +842,92 @@ func TestBuildServer_StorageIntegrityIngressEnabledWiresRuntimeHooks(t *testing.
 	}
 }
 
+func TestBuildServer_StorageIntegrityIngressAdmitsTheCoLocatedDriver(t *testing.T) {
+	// The agent sidecar in front of a co-located indexer runs with
+	// -agent-driver, so every query it signs carries SQL_sentio_driver. That
+	// traffic is what the ingress exists to admit: the driver writes the
+	// logical table names the rewriter translates. An ingress validator built
+	// without the indexer address refuses the marker outright and the signed
+	// INSERT never reaches the lane.
+	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatalf("NewRelaySigner: %v", err)
+	}
+	cfg := minimalRouterOnlyCfg(t)
+	cfg.StorageIntegrity.Ingress.Enabled = true
+	cfg.StorageIntegrity.Ingress.NetworkID = "testnet-v2"
+	cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{signer.Address()}
+	cfg.StorageIntegrity.Ingress.MaxTokenAge.Duration = time.Minute
+	cfg.StorageIntegrity.Ingress.RequestTimeout.Duration = 50 * time.Millisecond
+	cfg.StorageIntegrity.Ingress.MaxPayloadBytes = 7
+
+	bs, err := buildServer(Options{
+		Config:                            cfg,
+		NetworkState:                      buildTestStorageIntegrityNetworkState(),
+		StorageIntegrityAdmissionConsumer: &recordingAdmissionConsumer{},
+		Signer:                            signer,
+	}, nil)
+	if err != nil {
+		t.Fatalf("buildServer: %v", err)
+	}
+	defer bs.teardown()
+
+	chain := requireExternalChain(t, bs)
+	qctx := signedStorageIntegrityQuery(t, signer)
+	qctx.Query.Settings = append(qctx.Query.Settings, chproto.Setting{
+		Key: auth.DriverSettingKey, Value: "1", Custom: true,
+	})
+	if err := chain.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("ingress refused the co-located indexer's driver traffic: %v", err)
+	}
+}
+
+func TestBuildServer_StorageIntegrityIngressRefusesTheDriverMarkerFromAnotherSigner(t *testing.T) {
+	// The marker stays a claim only the co-located indexer may make. Being on
+	// the ingress allow-list is not enough: that list carries every signer the
+	// lane accepts statements from, while the driver bypass is tied to one
+	// host-attested identity.
+	indexer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatalf("NewRelaySigner: %v", err)
+	}
+	other, err := auth.NewRelaySigner("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	if err != nil {
+		t.Fatalf("NewRelaySigner: %v", err)
+	}
+	cfg := minimalRouterOnlyCfg(t)
+	cfg.StorageIntegrity.Ingress.Enabled = true
+	cfg.StorageIntegrity.Ingress.NetworkID = "testnet-v2"
+	cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{indexer.Address(), other.Address()}
+	cfg.StorageIntegrity.Ingress.MaxTokenAge.Duration = time.Minute
+	cfg.StorageIntegrity.Ingress.RequestTimeout.Duration = 50 * time.Millisecond
+	cfg.StorageIntegrity.Ingress.MaxPayloadBytes = 7
+
+	bs, err := buildServer(Options{
+		Config:                            cfg,
+		NetworkState:                      buildTestStorageIntegrityNetworkState(),
+		StorageIntegrityAdmissionConsumer: &recordingAdmissionConsumer{},
+		Signer:                            indexer,
+	}, nil)
+	if err != nil {
+		t.Fatalf("buildServer: %v", err)
+	}
+	defer bs.teardown()
+
+	chain := requireExternalChain(t, bs)
+	qctx := signedStorageIntegrityQuery(t, other)
+	qctx.Query.Settings = append(qctx.Query.Settings, chproto.Setting{
+		Key: auth.DriverSettingKey, Value: "1", Custom: true,
+	})
+	err = chain.OnQuery(context.Background(), qctx)
+	if err == nil {
+		t.Fatal("ingress admitted a driver marker from a signer that is not the co-located indexer")
+	}
+	if !strings.Contains(err.Error(), "reserved for the co-located indexer") {
+		t.Fatalf("rejection did not name the rule: %v", err)
+	}
+}
+
 func TestBuildServer_StorageIntegrityIngressRequiresAdmissionConsumer(t *testing.T) {
 	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	if err != nil {
