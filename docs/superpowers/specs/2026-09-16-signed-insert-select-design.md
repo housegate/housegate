@@ -2,6 +2,8 @@
 
 **Date:** 2026-09-16. **Status:** Proposed; design only, no runtime capability is enabled. **Scope:** Tier 3 of [issue #153](https://github.com/housegate/housegate/issues/153). **Implementation baseline:** Housegate `2e6633c`, including [#152](https://github.com/housegate/housegate/pull/152). **Source of truth:** English.
 
+**Implementation plan:** [Dependency-ordered component plans and acceptance ownership](../plans/2026-09-16-signed-insert-select.md). The plans are unexecuted and preserve this document's proposed status.
+
 ## 1. Problem and decision
 
 The signed INSERT lane currently commits to client-supplied Native Data bytes. `INSERT ... SELECT` and both placements of `WITH` have no row payload to sign: their rows depend on executing a query. Admitting their spelling through `InsertPayloadEncoding` would not provide a verifier with that execution's inputs. The required evidence is the signed program, an authenticated and recoverable pre-state containing every relation it reads, and independent execution of that program.
