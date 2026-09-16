@@ -478,6 +478,11 @@ func identitiesAlias(left, right pathIdentity) bool {
 	if left.canonical == right.canonical {
 		return true
 	}
+	sameParent := filepath.Dir(left.canonical) == filepath.Dir(right.canonical)
+	caseFoldedBasename := strings.EqualFold(filepath.Base(left.canonical), filepath.Base(right.canonical))
+	if sameParent && caseFoldedBasename {
+		return true
+	}
 	return left.info != nil && right.info != nil && os.SameFile(left.info, right.info)
 }
 

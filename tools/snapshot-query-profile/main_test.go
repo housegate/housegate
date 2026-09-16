@@ -483,6 +483,68 @@ func TestRunRejectsOutputAliasesWithoutChangingFiles(t *testing.T) {
 	}
 }
 
+func TestRunRejectsMissingCaseVariantOutputs(t *testing.T) {
+	dir := t.TempDir()
+	probeLower := filepath.Join(dir, "case-probe")
+	probeUpper := filepath.Join(dir, "CASE-PROBE")
+	if err := os.WriteFile(probeLower, []byte("probe"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, probeErr := os.Stat(probeUpper)
+	caseInsensitive := probeErr == nil
+	if probeErr != nil && !os.IsNotExist(probeErr) {
+		t.Fatal(probeErr)
+	}
+	if err := os.Remove(probeLower); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("case_insensitive_test_filesystem=%t", caseInsensitive)
+
+	recipe := validRecipe(t, dir)
+	recipePath := filepath.Join(dir, "recipe.json")
+	if err := os.WriteFile(recipePath, marshalRecipe(t, recipe), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	protected := append([]string{recipePath, recipe.ClickHouseExecutablePath, recipe.GRPCExecutablePath, recipe.TZDataArtifactPath},
+		recipe.NativeMembers[0].ExecutablePath, recipe.NativeMembers[0].FFIPath,
+		recipe.NativeMembers[1].ExecutablePath, recipe.NativeMembers[1].FFIPath,
+	)
+	before := make(map[string][]byte, len(protected))
+	for _, path := range protected {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before[path] = data
+	}
+	profile := filepath.Join(dir, "profile-case.json")
+	provenance := filepath.Join(dir, "PROFILE-CASE.JSON")
+	if _, err := os.Stat(profile); !os.IsNotExist(err) {
+		t.Fatalf("profile must initially be missing: %v", err)
+	}
+	if _, err := os.Stat(provenance); !os.IsNotExist(err) {
+		t.Fatalf("provenance must initially be missing: %v", err)
+	}
+	if err := run([]string{"-recipe", recipePath, "-profile-out", profile, "-provenance-out", provenance}, &bytes.Buffer{}, &bytes.Buffer{}); err == nil {
+		t.Fatal("case-fold-equivalent missing output paths accepted")
+	}
+	if _, err := os.Stat(profile); !os.IsNotExist(err) {
+		t.Fatalf("profile created after alias rejection: %v", err)
+	}
+	if _, err := os.Stat(provenance); !os.IsNotExist(err) {
+		t.Fatalf("provenance created after alias rejection: %v", err)
+	}
+	for path, want := range before {
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("protected path %q: %v", path, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("protected path %q changed", path)
+		}
+	}
+}
+
 func TestFIFOInputsAreRejectedWithoutBlocking(t *testing.T) {
 	assertBoundedError := func(t *testing.T, call func() error) {
 		t.Helper()
