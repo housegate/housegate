@@ -368,20 +368,21 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		log.Infow("relay JWS signer enabled", "address", s.Address())
 	}
 
+	// Host-attested identity of the co-located indexer, shared by every
+	// validator this build constructs. It gates the SQL_sentio_maintenance and
+	// SQL_sentio_driver markers, so it comes from the host-injected
+	// Options.Signer only: the cfg.RelayPrivateKeyHex fallback (used by the
+	// standalone binary) is operator-supplied and does NOT grant them. When
+	// opts.Signer is unset this stays empty and both markers are rejected.
+	var indexerAddr string
+	if opts.Signer != nil {
+		indexerAddr = opts.Signer.Address()
+	}
+
 	var validator auth.Validator
 	if opts.Validator != nil {
 		validator = opts.Validator
 	} else if cfg.Auth.Enabled {
-		// Gate SQL_sentio_maintenance on the host-injected Options.Signer
-		// only. The cfg.RelayPrivateKeyHex fallback (used by the standalone
-		// binary) is operator-supplied and does NOT grant maintenance —
-		// that bypass requires explicit host attestation. When opts.Signer
-		// is unset, indexerAddr stays empty and every maintenance request
-		// is rejected.
-		var indexerAddr string
-		if opts.Signer != nil {
-			indexerAddr = opts.Signer.Address()
-		}
 		validator = auth.NewEthValidator(cfg.Auth.AllowedAddresses, cfg.Auth.MaxTokenAge.Duration, true, cfg.Auth.AllowNoAuth, indexerAddr, cfg.Auth.PlatformOperatorAddresses)
 		log.Infow("Ethereum signature auth enabled",
 			"allowed_addresses", len(cfg.Auth.AllowedAddresses),
@@ -752,12 +753,23 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		if err != nil {
 			return nil, err
 		}
+		// The indexer address belongs here as much as it does on the
+		// ordinary auth path. The agent sidecar in front of a co-located
+		// indexer runs with -agent-driver and marks every query it signs
+		// with SQL_sentio_driver, and that traffic is exactly what this
+		// ingress admits. Built with an empty address, the validator
+		// refuses the marker outright and the signed INSERT never reaches
+		// the lane.
+		//
+		// Platform operators stay unset deliberately: the ingress is not an
+		// operator surface, so an operator-marked statement is refused
+		// rather than admitted on an allow-list this config does not carry.
 		ingressValidator := auth.NewEthValidator(
 			ingressCfg.AllowedAddresses,
 			ingressCfg.MaxTokenAge.Duration,
 			true,
 			false,
-			"",
+			indexerAddr,
 			nil,
 		)
 		storageIntegrityIngress = storageintegrity.New(storageintegrity.Config{
