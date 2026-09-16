@@ -1,0 +1,66 @@
+{
+  "note": "Offline fixture using public test key 0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, existing Housegate compact-JWS profile (Keccak256, recoverable secp256k1, V=27/28), and fixed iat values. Complete ordered payload: purpose, iat, binding, input_root. Cryptographic validity only; A2 owns production v3 verification, C3/C4 own conflict/retry decisions.",
+  "account": "0x8fd379246834eac74b8419ffda202cf8051f7a03",
+  "input": {
+    "binding": {
+      "envelope_version": 3,
+      "input_kind": "snapshot_query",
+      "client_account": "0x8fd379246834eac74b8419ffda202cf8051f7a03",
+      "statement_id": "0x8fd379246834eac74b8419ffda202cf8051f7a03:1:fixture",
+      "statement_kind": 2,
+      "network_id": "fixture-network",
+      "keeper_shard_id": 7,
+      "sql_hash": "0xb1f653302fcda81e547ed02b95dd93629f5b63fa1d2b5ffcce5435235af9159a",
+      "settings_hash": "0x213f12b28bb47c05d226c4b86dad5b91e11d61040568a87dffe2ee87113ec006",
+      "target_table_id": "archive",
+      "schema_hash": "0x8a4acda6e7f5166a2b9810037c337369e87d3c308e0bbd603c50f9c319af6036",
+      "row_id_profile_id": "housegate-row-id-v1",
+      "client_revision": 54470,
+      "read_snapshot": {
+        "network_id": "fixture-network",
+        "keeper_shard_id": 7,
+        "snapshot_id": "0x64a57e1f2ff5ed22b6d994f46c0310f7f0a258b87da39efe711b1b52b4489f02",
+        "safe_block_seq": 12,
+        "manifest_root": "0x64a57e1f2ff5ed22b6d994f46c0310f7f0a258b87da39efe711b1b52b4489f02",
+        "state_root": "0x636a2ddcd0c22cb562db7b0b3a514b56556e6ec3d9d1c49295675a517838e1c2",
+        "schema_snapshot_id": "schema-fixture-1",
+        "schema_root": "0x4c313146756eb267b8a37ccd36c1ab688d2a740f25bbe24cd9afc8a6fed84309"
+      },
+      "read_set_root": "0xd59733d11c2aef59edc21fb21da699c11fca64b6a5be89add143837db9fe20ef",
+      "schema_snapshot_id": "schema-fixture-1",
+      "schema_root": "0x4c313146756eb267b8a37ccd36c1ab688d2a740f25bbe24cd9afc8a6fed84309",
+      "logical_database": "app",
+      "query_profile_id": "0x5a86ff737586dd90a4c02fa99014f034fbc45ac585f7cb40c18c3eae9dd96964",
+      "executor_profile_id": "executor-fixture-1",
+      "reservation_id": "reservation-1",
+      "fencing_generation": 9
+    },
+    "sql": "INSERT INTO archive SELECT 1, 'constant'",
+    "read_set": {
+      "read_snapshot": {
+        "network_id": "fixture-network",
+        "keeper_shard_id": 7,
+        "snapshot_id": "0x64a57e1f2ff5ed22b6d994f46c0310f7f0a258b87da39efe711b1b52b4489f02",
+        "safe_block_seq": 12,
+        "manifest_root": "0x64a57e1f2ff5ed22b6d994f46c0310f7f0a258b87da39efe711b1b52b4489f02",
+        "state_root": "0x636a2ddcd0c22cb562db7b0b3a514b56556e6ec3d9d1c49295675a517838e1c2",
+        "schema_snapshot_id": "schema-fixture-1",
+        "schema_root": "0x4c313146756eb267b8a37ccd36c1ab688d2a740f25bbe24cd9afc8a6fed84309"
+      },
+      "tables": []
+    }
+  },
+  "input_root": "0x948f4f4894320b6d31c5aedcd33ae42ae813cb177834afc7da667dfaeb68d7bd",
+  "identities": [
+    {
+      "iat": 1789550000,
+      "user_jws": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MyIsImlhdCI6MTc4OTU1MDAwMCwiYmluZGluZyI6eyJlbnZlbG9wZV92ZXJzaW9uIjozLCJpbnB1dF9raW5kIjoic25hcHNob3RfcXVlcnkiLCJjbGllbnRfYWNjb3VudCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMyIsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOmZpeHR1cmUiLCJzdGF0ZW1lbnRfa2luZCI6MiwibmV0d29ya19pZCI6ImZpeHR1cmUtbmV0d29yayIsImtlZXBlcl9zaGFyZF9pZCI6Nywic3FsX2hhc2giOiIweGIxZjY1MzMwMmZjZGE4MWU1NDdlZDAyYjk1ZGQ5MzYyOWY1YjYzZmExZDJiNWZmY2NlNTQzNTIzNWFmOTE1OWEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMTNmMTJiMjhiYjQ3YzA1ZDIyNmM0Yjg2ZGFkNWI5MWUxMWQ2MTA0MDU2OGE4N2RmZmUyZWU4NzExM2VjMDA2IiwidGFyZ2V0X3RhYmxlX2lkIjoiYXJjaGl2ZSIsInNjaGVtYV9oYXNoIjoiMHg4YTRhY2RhNmU3ZjUxNjZhMmI5ODEwMDM3YzMzNzM2OWU4N2QzYzMwOGUwYmJkNjAzYzUwZjljMzE5YWY2MDM2Iiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIiwiY2xpZW50X3JldmlzaW9uIjo1NDQ3MCwicmVhZF9zbmFwc2hvdCI6eyJuZXR3b3JrX2lkIjoiZml4dHVyZS1uZXR3b3JrIiwia2VlcGVyX3NoYXJkX2lkIjo3LCJzbmFwc2hvdF9pZCI6IjB4NjRhNTdlMWYyZmY1ZWQyMmI2ZDk5NGY0NmMwMzEwZjdmMGEyNThiODdkYTM5ZWZlNzExYjFiNTJiNDQ4OWYwMiIsInNhZmVfYmxvY2tfc2VxIjoxMiwibWFuaWZlc3Rfcm9vdCI6IjB4NjRhNTdlMWYyZmY1ZWQyMmI2ZDk5NGY0NmMwMzEwZjdmMGEyNThiODdkYTM5ZWZlNzExYjFiNTJiNDQ4OWYwMiIsInN0YXRlX3Jvb3QiOiIweDYzNmEyZGRjZDBjMjJjYjU2MmRiN2IwYjNhNTE0YjU2NTU2ZTZlYzNkOWQxYzQ5Mjk1Njc1YTUxNzgzOGUxYzIiLCJzY2hlbWFfc25hcHNob3RfaWQiOiJzY2hlbWEtZml4dHVyZS0xIiwic2NoZW1hX3Jvb3QiOiIweDRjMzEzMTQ2NzU2ZWIyNjdiOGEzN2NjZDM2YzFhYjY4OGQyYTc0MGYyNWJiZTI0Y2Q5YWZjOGE2ZmVkODQzMDkifSwicmVhZF9zZXRfcm9vdCI6IjB4ZDU5NzMzZDExYzJhZWY1OWVkYzIxZmIyMWRhNjk5YzExZmNhNjRiNmE1YmU4OWFkZDE0MzgzN2RiOWZlMjBlZiIsInNjaGVtYV9zbmFwc2hvdF9pZCI6InNjaGVtYS1maXh0dXJlLTEiLCJzY2hlbWFfcm9vdCI6IjB4NGMzMTMxNDY3NTZlYjI2N2I4YTM3Y2NkMzZjMWFiNjg4ZDJhNzQwZjI1YmJlMjRjZDlhZmM4YTZmZWQ4NDMwOSIsImxvZ2ljYWxfZGF0YWJhc2UiOiJhcHAiLCJxdWVyeV9wcm9maWxlX2lkIjoiMHg1YTg2ZmY3Mzc1ODZkZDkwYTRjMDJmYTk5MDE0ZjAzNGZiYzQ1YWM1ODVmN2NiNDBjMThjM2VhZTlkZDk2OTY0IiwiZXhlY3V0b3JfcHJvZmlsZV9pZCI6ImV4ZWN1dG9yLWZpeHR1cmUtMSIsInJlc2VydmF0aW9uX2lkIjoicmVzZXJ2YXRpb24tMSIsImZlbmNpbmdfZ2VuZXJhdGlvbiI6OX0sImlucHV0X3Jvb3QiOiIweDk0OGY0ZjQ4OTQzMjBiNmQzMWM1YWVkY2QzM2FlNDJhZTgxM2NiMTc3ODM0YWZjN2RhNjY3ZGZhZWI2OGQ3YmQifQ.CHBKHqf7eoz0ypQKfTlfXGQadoVV8bMPYROzYjhSdQw6ajGvn3_cDZdDeyOahXqTeYRr2DO0lsu2gw_-U-P8fBs",
+      "user_jws_hash": "0xc63ab1dd20b8070784f783b70ee526da4c98892fe4a286a31e9ca3d42e1e2ff4"
+    },
+    {
+      "iat": 1789550001,
+      "user_jws": "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJwdXJwb3NlIjoiaG91c2VnYXRlLXN0YXRlbWVudC12MyIsImlhdCI6MTc4OTU1MDAwMSwiYmluZGluZyI6eyJlbnZlbG9wZV92ZXJzaW9uIjozLCJpbnB1dF9raW5kIjoic25hcHNob3RfcXVlcnkiLCJjbGllbnRfYWNjb3VudCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMyIsInN0YXRlbWVudF9pZCI6IjB4OGZkMzc5MjQ2ODM0ZWFjNzRiODQxOWZmZGEyMDJjZjgwNTFmN2EwMzoxOmZpeHR1cmUiLCJzdGF0ZW1lbnRfa2luZCI6MiwibmV0d29ya19pZCI6ImZpeHR1cmUtbmV0d29yayIsImtlZXBlcl9zaGFyZF9pZCI6Nywic3FsX2hhc2giOiIweGIxZjY1MzMwMmZjZGE4MWU1NDdlZDAyYjk1ZGQ5MzYyOWY1YjYzZmExZDJiNWZmY2NlNTQzNTIzNWFmOTE1OWEiLCJzZXR0aW5nc19oYXNoIjoiMHgyMTNmMTJiMjhiYjQ3YzA1ZDIyNmM0Yjg2ZGFkNWI5MWUxMWQ2MTA0MDU2OGE4N2RmZmUyZWU4NzExM2VjMDA2IiwidGFyZ2V0X3RhYmxlX2lkIjoiYXJjaGl2ZSIsInNjaGVtYV9oYXNoIjoiMHg4YTRhY2RhNmU3ZjUxNjZhMmI5ODEwMDM3YzMzNzM2OWU4N2QzYzMwOGUwYmJkNjAzYzUwZjljMzE5YWY2MDM2Iiwicm93X2lkX3Byb2ZpbGVfaWQiOiJob3VzZWdhdGUtcm93LWlkLXYxIiwiY2xpZW50X3JldmlzaW9uIjo1NDQ3MCwicmVhZF9zbmFwc2hvdCI6eyJuZXR3b3JrX2lkIjoiZml4dHVyZS1uZXR3b3JrIiwia2VlcGVyX3NoYXJkX2lkIjo3LCJzbmFwc2hvdF9pZCI6IjB4NjRhNTdlMWYyZmY1ZWQyMmI2ZDk5NGY0NmMwMzEwZjdmMGEyNThiODdkYTM5ZWZlNzExYjFiNTJiNDQ4OWYwMiIsInNhZmVfYmxvY2tfc2VxIjoxMiwibWFuaWZlc3Rfcm9vdCI6IjB4NjRhNTdlMWYyZmY1ZWQyMmI2ZDk5NGY0NmMwMzEwZjdmMGEyNThiODdkYTM5ZWZlNzExYjFiNTJiNDQ4OWYwMiIsInN0YXRlX3Jvb3QiOiIweDYzNmEyZGRjZDBjMjJjYjU2MmRiN2IwYjNhNTE0YjU2NTU2ZTZlYzNkOWQxYzQ5Mjk1Njc1YTUxNzgzOGUxYzIiLCJzY2hlbWFfc25hcHNob3RfaWQiOiJzY2hlbWEtZml4dHVyZS0xIiwic2NoZW1hX3Jvb3QiOiIweDRjMzEzMTQ2NzU2ZWIyNjdiOGEzN2NjZDM2YzFhYjY4OGQyYTc0MGYyNWJiZTI0Y2Q5YWZjOGE2ZmVkODQzMDkifSwicmVhZF9zZXRfcm9vdCI6IjB4ZDU5NzMzZDExYzJhZWY1OWVkYzIxZmIyMWRhNjk5YzExZmNhNjRiNmE1YmU4OWFkZDE0MzgzN2RiOWZlMjBlZiIsInNjaGVtYV9zbmFwc2hvdF9pZCI6InNjaGVtYS1maXh0dXJlLTEiLCJzY2hlbWFfcm9vdCI6IjB4NGMzMTMxNDY3NTZlYjI2N2I4YTM3Y2NkMzZjMWFiNjg4ZDJhNzQwZjI1YmJlMjRjZDlhZmM4YTZmZWQ4NDMwOSIsImxvZ2ljYWxfZGF0YWJhc2UiOiJhcHAiLCJxdWVyeV9wcm9maWxlX2lkIjoiMHg1YTg2ZmY3Mzc1ODZkZDkwYTRjMDJmYTk5MDE0ZjAzNGZiYzQ1YWM1ODVmN2NiNDBjMThjM2VhZTlkZDk2OTY0IiwiZXhlY3V0b3JfcHJvZmlsZV9pZCI6ImV4ZWN1dG9yLWZpeHR1cmUtMSIsInJlc2VydmF0aW9uX2lkIjoicmVzZXJ2YXRpb24tMSIsImZlbmNpbmdfZ2VuZXJhdGlvbiI6OX0sImlucHV0X3Jvb3QiOiIweDk0OGY0ZjQ4OTQzMjBiNmQzMWM1YWVkY2QzM2FlNDJhZTgxM2NiMTc3ODM0YWZjN2RhNjY3ZGZhZWI2OGQ3YmQifQ.0PwKmjKjWr6MngwZ1qjBPgJxAme1OuC-rg-2eshWNkNVYBHX3GXjEP53ggQNPDPDAWPX5q0o6_WjxYer6pUoSxs",
+      "user_jws_hash": "0x7fccb5e775b21d6c036b82c2f7b3f0ff47b8c8d79c37946d50dd2d4e4c5e664e"
+    }
+  ]
+}
