@@ -192,6 +192,8 @@ The rewriter is the canonical owner of physical/logical database mapping. Every 
 - `SELECT *` and DESCRIBE hide the protocol-owned `_hg_row_id`; addressing that identifier directly is rejected. Non-INSERT writes, DDL, and DCL touching an SI table are rejected. INSERT is admitted only through the signed statement lane.
 - SI requests require the rewriter's exact contract-v1 acknowledgement. Missing/old backends, unavailable classification, read-state failures, and SI-classified rewriter errors all fail closed; ordinary tables retain the legacy fail-open behavior when the SI list is empty.
 
+Signed INSERT currently requires client-streamed rows; inline `VALUES` and `INSERT ... SELECT` / `WITH` remain unsupported. The [snapshot-query design proposal](docs/superpowers/specs/2026-09-16-signed-insert-select-design.md) describes the future SELECT lane's authenticated read snapshot, deterministic replay and coordinated rollout. It does not enable that capability.
+
 ```yaml
 storage_integrity:
   tables: ["tenant.events"]        # logical <db>.<table> ids; hg_unsafe/hg_safe.tenant__events are derived
