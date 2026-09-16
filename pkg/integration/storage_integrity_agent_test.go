@@ -67,7 +67,14 @@ func withDeclaredSchema(t *testing.T, networkID string) testenv.ProxyOption {
 // envelope-v2 end-to-end tests share, and returns the agent proxy plus the
 // consumer that captures what the ingress admitted. Both tests use exactly one
 // fixture so a drift in one cannot silently diverge from the other.
-func startSIAgentPair(t *testing.T, networkID string) (*testenv.TestProxy, *capturingConsumer) {
+//
+// serverOpts are appended to the server proxy's options, for the one axis the
+// two callers genuinely differ on: a Go-driver client carries its database on
+// the connection, while a CLI client must leave ClientHello.Database empty (the
+// 25.8 client otherwise copies --database into Query settings, and that
+// unsigned setting is correctly refused) and so needs a physical-database
+// context configured instead.
+func startSIAgentPair(t *testing.T, networkID string, serverOpts ...testenv.ProxyOption) (*testenv.TestProxy, *capturingConsumer) {
 	t.Helper()
 	signer, err := auth.NewRelaySigner(authTestKey1)
 	if err != nil {
@@ -86,7 +93,7 @@ func startSIAgentPair(t *testing.T, networkID string) (*testenv.TestProxy, *capt
 		PhysicalDatabase:   chEnv.Database,
 		IsStorageIntegrity: true,
 	}})
-	server := testenv.StartServerProxy(t, chEnv.Addr,
+	opts := []testenv.ProxyOption{
 		rewriterOpt,
 		authProxyConfig([]string{signer.Address()}, false),
 		testenv.WithDatabasePermission(signer.Address(), chEnv.Database, registry.DbAuthWrite),
@@ -99,7 +106,8 @@ func startSIAgentPair(t *testing.T, networkID string) (*testenv.TestProxy, *capt
 		func(_ *config.Config, opts *housegate.Options) {
 			opts.StorageIntegrityAdmissionConsumer = consumer
 		},
-	)
+	}
+	server := testenv.StartServerProxy(t, chEnv.Addr, append(opts, serverOpts...)...)
 	agentProxy := testenv.StartAgentProxy(t, authTestKey1, server.Addr,
 		withDeclaredSchema(t, networkID),
 		testenv.WithConfigMutator(func(cfg *config.Config) {
