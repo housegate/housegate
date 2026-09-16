@@ -1,0 +1,22 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+go_library(
+    name = "snapshot-query-profile_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/housegate/housegate/tools/snapshot-query-profile",
+    visibility = ["//visibility:private"],
+    deps = ["//pkg/replay"],
+)
+
+go_binary(
+    name = "snapshot-query-profile",
+    embed = [":snapshot-query-profile_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "snapshot-query-profile_test",
+    srcs = ["main_test.go"],
+    embed = [":snapshot-query-profile_lib"],
+    deps = ["//pkg/replay"],
+)
