@@ -3,16 +3,43 @@ package rewriter
 import (
 	"context"
 	"errors"
+	"net"
 	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	pb "github.com/housegate/rewriter-proto/gen/pb"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const snapshotTestProfile = "0x1111111111111111111111111111111111111111111111111111111111111111"
+
+type blockedSnapshotQueryServer struct {
+	pb.UnimplementedRewriterServiceServer
+	entered  chan struct{}
+	returned chan struct{}
+	once     sync.Once
+}
+
+func (s *blockedSnapshotQueryServer) block(ctx context.Context) error {
+	s.once.Do(func() { close(s.entered) })
+	<-ctx.Done()
+	close(s.returned)
+	return ctx.Err()
+}
+
+func (s *blockedSnapshotQueryServer) AnalyzeSnapshotQuery(ctx context.Context, _ *pb.AnalyzeSnapshotQueryRequest) (*pb.AnalyzeSnapshotQueryResponse, error) {
+	return nil, s.block(ctx)
+}
+
+func (s *blockedSnapshotQueryServer) PrepareSnapshotQuery(ctx context.Context, _ *pb.PrepareSnapshotQueryRequest) (*pb.PrepareSnapshotQueryResponse, error) {
+	return nil, s.block(ctx)
+}
 
 func snapshotTestCatalog() []*pb.SnapshotQueryCatalogTable {
 	return []*pb.SnapshotQueryCatalogTable{
@@ -366,6 +393,73 @@ func TestSnapshotQueryCloseIsIdempotentConcurrentAndRejectsLaterCalls(t *testing
 	}
 }
 
+func TestSnapshotQueryDeadlineReleasesBlockedCallForClose(t *testing.T) {
+	for name, invoke := range map[string]func(context.Context, SnapshotQueryAnalyzer) error{
+		"analyze": func(ctx context.Context, analyzer SnapshotQueryAnalyzer) error {
+			_, err := analyzer.AnalyzeSnapshotQuery(ctx, snapshotTestRequest("INSERT INTO tenant.copy SELECT 7"))
+			return err
+		},
+		"prepare": func(ctx context.Context, analyzer SnapshotQueryAnalyzer) error {
+			analysis := snapshotTestRequest("INSERT INTO tenant.copy SELECT value FROM tenant.events")
+			_, err := analyzer.PrepareSnapshotQuery(ctx, &pb.PrepareSnapshotQueryRequest{
+				Analysis: analysis,
+				Bindings: []*pb.SnapshotScratchBinding{{
+					TableId: analysis.Catalog[1].TableId, ScratchDatabase: "scratch", ScratchTable: "events",
+				}},
+			})
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := grpc.NewServer()
+			blocked := &blockedSnapshotQueryServer{entered: make(chan struct{}), returned: make(chan struct{})}
+			pb.RegisterRewriterServiceServer(server, blocked)
+			go func() { _ = server.Serve(listener) }()
+			t.Cleanup(server.Stop)
+
+			analyzer, err := NewSnapshotQueryAnalyzer(Options{
+				Engine: EngineGRPC, ServiceAddr: listener.Addr().String(), Timeout: 80 * time.Millisecond,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			callDone := make(chan error, 1)
+			go func() { callDone <- invoke(context.Background(), analyzer) }()
+			<-blocked.entered
+			closeDone := make(chan error, 1)
+			go func() { closeDone <- analyzer.Close() }()
+			select {
+			case err := <-callDone:
+				var typed *SnapshotQueryError
+				if !errors.As(err, &typed) || status.Code(typed.Cause) != codes.DeadlineExceeded {
+					t.Fatalf("call error = %v, want typed gRPC deadline", err)
+				}
+			case <-time.After(time.Second):
+				server.Stop()
+				t.Fatal("blocked call ignored configured timeout")
+			}
+			select {
+			case err := <-closeDone:
+				if err != nil {
+					t.Fatalf("Close: %v", err)
+				}
+			case <-time.After(time.Second):
+				server.Stop()
+				t.Fatal("Close remained blocked after call deadline")
+			}
+			select {
+			case <-blocked.returned:
+			default:
+				t.Fatal("backend closed while call still used its handle")
+			}
+		})
+	}
+}
+
 func TestSnapshotQueryUnknownEngineRejected(t *testing.T) {
 	if _, err := NewSnapshotQueryAnalyzer(Options{Engine: "carrier-pigeon"}); err == nil {
 		t.Fatal("accepted unknown engine")
@@ -442,6 +536,53 @@ func TestSnapshotQueryProbeRejectsResidualSuccessAndMalformedOrdinary(t *testing
 			}}
 			if err := ProbeSnapshotQuery(context.Background(), newSnapshotQueryAnalyzer(be), snapshotTestProfile, snapshotTestCatalog()); err == nil {
 				t.Fatal("probe accepted incorrect backend behavior")
+			}
+		})
+	}
+}
+
+func TestSnapshotQueryProbeRequiresExactOrdinaryClassificationAndFinalRefusal(t *testing.T) {
+	for name, analyze := range map[string]func(int, *pb.AnalyzeSnapshotQueryRequest) (*pb.AnalyzeSnapshotQueryResponse, error){
+		"success classification": func(call int, req *pb.AnalyzeSnapshotQueryRequest) (*pb.AnalyzeSnapshotQueryResponse, error) {
+			if strings.HasPrefix(req.Sql, "SELECT ") && call == 1 {
+				return snapshotSuccess(req), nil
+			}
+			return nil, errors.New("transport after misclassification")
+		},
+		"final transport": func(call int, req *pb.AnalyzeSnapshotQueryRequest) (*pb.AnalyzeSnapshotQueryResponse, error) {
+			if strings.HasPrefix(req.Sql, "SELECT ") && call == 1 {
+				return &pb.AnalyzeSnapshotQueryResponse{ContractVersion: 1, QueryProfileId: req.QueryProfileId, Code: pb.SnapshotQueryCode_NOT_SNAPSHOT_QUERY}, nil
+			}
+			return nil, errors.New("transport on final call")
+		},
+		"final wrong profile": func(call int, req *pb.AnalyzeSnapshotQueryRequest) (*pb.AnalyzeSnapshotQueryResponse, error) {
+			resp := &pb.AnalyzeSnapshotQueryResponse{ContractVersion: 1, QueryProfileId: req.QueryProfileId, Code: pb.SnapshotQueryCode_NOT_SNAPSHOT_QUERY}
+			if strings.HasPrefix(req.Sql, "SELECT ") && call == 2 {
+				resp.QueryProfileId = strings.Repeat("0", 66)
+			}
+			return resp, nil
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var ordinaryCalls int
+			backend := &fakeBackend{analyzeFn: func(_ context.Context, req *pb.AnalyzeSnapshotQueryRequest) (*pb.AnalyzeSnapshotQueryResponse, error) {
+				if strings.HasPrefix(req.Sql, "SELECT ") {
+					ordinaryCalls++
+					return analyze(ordinaryCalls, req)
+				}
+				switch {
+				case strings.Contains(req.Sql, "ordinary.secret"), strings.Contains(req.Sql, "LIMIT 1"):
+					return &pb.AnalyzeSnapshotQueryResponse{ContractVersion: 1, QueryProfileId: req.QueryProfileId, Code: pb.SnapshotQueryCode_UNSUPPORTED}, nil
+				case strings.Contains(req.Sql, "rand()"):
+					return &pb.AnalyzeSnapshotQueryResponse{ContractVersion: 1, QueryProfileId: req.QueryProfileId, Code: pb.SnapshotQueryCode_MATERIALIZATION_FAILED}, nil
+				case req.Catalog[0].Columns[0].Generation == pb.SnapshotQueryColumnGeneration_SNAPSHOT_QUERY_COLUMN_GENERATION_DEFAULT:
+					return &pb.AnalyzeSnapshotQueryResponse{ContractVersion: 1, QueryProfileId: req.QueryProfileId, Code: pb.SnapshotQueryCode_UNSUPPORTED}, nil
+				default:
+					return snapshotSuccess(req), nil
+				}
+			}}
+			if err := ProbeSnapshotQuery(context.Background(), newSnapshotQueryAnalyzer(backend), snapshotTestProfile, snapshotTestCatalog()); err == nil {
+				t.Fatal("probe credited an inexact ordinary contract")
 			}
 		})
 	}

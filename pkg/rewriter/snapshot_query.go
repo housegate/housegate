@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	rewritergo "github.com/housegate/rewriter-go"
 	pb "github.com/housegate/rewriter-proto/gen/pb"
@@ -16,6 +17,7 @@ const (
 	snapshotQueryContractVersion    = 1
 	snapshotQueryMaxSQLBytes        = 65536
 	snapshotQueryMaxDescriptorBytes = 65536
+	snapshotQueryDefaultTimeout     = 5 * time.Second
 )
 
 var ErrSnapshotQueryAnalyzerClosed = errors.New("snapshot query analyzer is closed")
@@ -53,14 +55,24 @@ type SnapshotQueryAnalyzer interface {
 }
 
 type snapshotQueryAnalyzer struct {
-	mu       sync.RWMutex
-	backend  backend
+	mu      sync.RWMutex
+	backend backend
+	// timeout bounds every RPC. Native FFI observes the deadline only after
+	// returning; the read lock deliberately preserves its handle until then.
+	timeout  time.Duration
 	closed   bool
 	closeErr error
 }
 
 func newSnapshotQueryAnalyzer(be backend) *snapshotQueryAnalyzer {
-	return &snapshotQueryAnalyzer{backend: be}
+	return newSnapshotQueryAnalyzerWithTimeout(be, 0)
+}
+
+func newSnapshotQueryAnalyzerWithTimeout(be backend, timeout time.Duration) *snapshotQueryAnalyzer {
+	if timeout == 0 {
+		timeout = snapshotQueryDefaultTimeout
+	}
+	return &snapshotQueryAnalyzer{backend: be, timeout: timeout}
 }
 
 // NewSnapshotQueryAnalyzer constructs a separate snapshot-query backend. Native
@@ -87,7 +99,7 @@ func NewSnapshotQueryAnalyzer(opts Options) (SnapshotQueryAnalyzer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create snapshot query analyzer: %w", err)
 	}
-	return newSnapshotQueryAnalyzer(be), nil
+	return newSnapshotQueryAnalyzerWithTimeout(be, opts.Timeout), nil
 }
 
 func (a *snapshotQueryAnalyzer) AnalyzeSnapshotQuery(ctx context.Context, req *pb.AnalyzeSnapshotQueryRequest) (*pb.AnalyzeSnapshotQueryResponse, error) {
@@ -124,7 +136,9 @@ func (a *snapshotQueryAnalyzer) callAnalyze(ctx context.Context, req *pb.Analyze
 	if a.closed {
 		return nil, &SnapshotQueryError{Operation: "analyze snapshot query", Cause: ErrSnapshotQueryAnalyzerClosed, Message: ErrSnapshotQueryAnalyzerClosed.Error()}
 	}
-	resp, err := a.backend.AnalyzeSnapshotQuery(ctx, req)
+	callCtx, cancel := context.WithTimeout(ctx, a.timeout)
+	defer cancel()
+	resp, err := a.backend.AnalyzeSnapshotQuery(callCtx, req)
 	if err != nil {
 		return nil, &SnapshotQueryError{Operation: "analyze snapshot query", Cause: err, Message: "backend call failed"}
 	}
@@ -140,7 +154,9 @@ func (a *snapshotQueryAnalyzer) PrepareSnapshotQuery(ctx context.Context, req *p
 	if a.closed {
 		return nil, &SnapshotQueryError{Operation: "prepare snapshot query", Cause: ErrSnapshotQueryAnalyzerClosed, Message: ErrSnapshotQueryAnalyzerClosed.Error()}
 	}
-	resp, err := a.backend.PrepareSnapshotQuery(ctx, req)
+	callCtx, cancel := context.WithTimeout(ctx, a.timeout)
+	defer cancel()
+	resp, err := a.backend.PrepareSnapshotQuery(callCtx, req)
 	if err != nil {
 		return nil, &SnapshotQueryError{Operation: "prepare snapshot query", Cause: err, Message: "backend call failed"}
 	}
@@ -401,11 +417,20 @@ func ProbeSnapshotQuery(ctx context.Context, analyzer SnapshotQueryAnalyzer, pro
 		return fmt.Errorf("snapshot query capability probe: default target: %w", err)
 	}
 	ordinary := request("SELECT value FROM tenant.events")
-	if _, err := analyzer.ClassifySnapshotQuery(ctx, ordinary); err != nil {
+	classification, err := analyzer.ClassifySnapshotQuery(ctx, ordinary)
+	if err != nil {
 		return fmt.Errorf("snapshot query capability probe: ordinary classification: %w", err)
 	}
-	if _, err := analyzer.AnalyzeSnapshotQuery(ctx, ordinary); err == nil {
-		return fmt.Errorf("snapshot query capability probe: final analysis accepted NOT_SNAPSHOT_QUERY")
+	if classification.GetCode() != pb.SnapshotQueryCode_NOT_SNAPSHOT_QUERY {
+		return fmt.Errorf("snapshot query capability probe: ordinary classification code=%s, want %s", classification.GetCode(), pb.SnapshotQueryCode_NOT_SNAPSHOT_QUERY)
+	}
+	final, err := analyzer.AnalyzeSnapshotQuery(ctx, ordinary)
+	if final != nil {
+		return fmt.Errorf("snapshot query capability probe: final ordinary analysis returned a payload")
+	}
+	var typed *SnapshotQueryError
+	if !errors.As(err, &typed) || typed.Code != pb.SnapshotQueryCode_NOT_SNAPSHOT_QUERY {
+		return fmt.Errorf("snapshot query capability probe: final ordinary analysis got %v, want typed %s refusal", err, pb.SnapshotQueryCode_NOT_SNAPSHOT_QUERY)
 	}
 	return nil
 }
