@@ -47,13 +47,13 @@ func snapshotTestCatalog() []*pb.SnapshotQueryCatalogTable {
 	return []*pb.SnapshotQueryCatalogTable{
 		{
 			Database: "tenant", Table: "copy",
-			TableId:    "0x0000000000000000000000000000000000000000000000000000000000000001",
+			TableId:    "copy",
 			SchemaHash: "0x0000000000000000000000000000000000000000000000000000000000000065",
 			Columns:    []*pb.SnapshotQueryColumn{{Name: "value", Type: "Int64", Generation: pb.SnapshotQueryColumnGeneration_SNAPSHOT_QUERY_COLUMN_GENERATION_ORDINARY}},
 		},
 		{
 			Database: "tenant", Table: "events",
-			TableId:    "0x0000000000000000000000000000000000000000000000000000000000000003",
+			TableId:    "events",
 			SchemaHash: "0x0000000000000000000000000000000000000000000000000000000000000067",
 			Columns:    []*pb.SnapshotQueryColumn{{Name: "value", Type: "Int64", Generation: pb.SnapshotQueryColumnGeneration_SNAPSHOT_QUERY_COLUMN_GENERATION_ORDINARY}},
 		},
@@ -147,16 +147,6 @@ func TestSnapshotQueryAnalyzeValidatesInputBoundsAndMetadata(t *testing.T) {
 		"nil column": func() *pb.AnalyzeSnapshotQueryRequest {
 			r := snapshotTestRequest("SELECT 1")
 			r.Catalog[0].Columns[0] = nil
-			return r
-		}(),
-		"missing generation": func() *pb.AnalyzeSnapshotQueryRequest {
-			r := snapshotTestRequest("SELECT 1")
-			r.Catalog[0].Columns[0].Generation = pb.SnapshotQueryColumnGeneration_SNAPSHOT_QUERY_COLUMN_GENERATION_UNSPECIFIED
-			return r
-		}(),
-		"unknown generation": func() *pb.AnalyzeSnapshotQueryRequest {
-			r := snapshotTestRequest("SELECT 1")
-			r.Catalog[0].Columns[0].Generation = pb.SnapshotQueryColumnGeneration(99)
 			return r
 		}(),
 	}
@@ -325,6 +315,9 @@ func TestSnapshotQueryAnalyzeRejectsFabricatedOutputIdentity(t *testing.T) {
 		"unknown target": func(r *pb.AnalyzeSnapshotQueryResponse) { r.TargetTableId = strings.Repeat("f", 66) },
 		"unknown column": func(r *pb.AnalyzeSnapshotQueryResponse) { r.TargetColumns = []string{"secret"} },
 		"unknown read":   func(r *pb.AnalyzeSnapshotQueryResponse) { r.ReadTableIds = []string{strings.Repeat("f", 66)} },
+		"unsorted read": func(r *pb.AnalyzeSnapshotQueryResponse) {
+			r.ReadTableIds = []string{req.Catalog[1].TableId, req.Catalog[0].TableId}
+		},
 		"duplicate read": func(r *pb.AnalyzeSnapshotQueryResponse) {
 			r.ReadTableIds = []string{req.Catalog[1].TableId, req.Catalog[1].TableId}
 		},
@@ -491,7 +484,7 @@ func TestSnapshotQueryNativeRequiresExplicitMeasuredPaths(t *testing.T) {
 }
 
 func TestSnapshotQueryProbeChecksBehaviorAndFinalCall(t *testing.T) {
-	var ordinaryCalls int
+	var ordinaryCalls, missingCalls int
 	be := &fakeBackend{analyzeFn: func(_ context.Context, req *pb.AnalyzeSnapshotQueryRequest) (*pb.AnalyzeSnapshotQueryResponse, error) {
 		ack := &pb.AnalyzeSnapshotQueryResponse{ContractVersion: 1, QueryProfileId: req.QueryProfileId}
 		switch {
@@ -502,7 +495,10 @@ func TestSnapshotQueryProbeChecksBehaviorAndFinalCall(t *testing.T) {
 			ack.Code = pb.SnapshotQueryCode_UNSUPPORTED
 		case strings.Contains(req.Sql, "rand()"):
 			ack.Code = pb.SnapshotQueryCode_MATERIALIZATION_FAILED
-		case req.Catalog[0].Columns[0].Generation == pb.SnapshotQueryColumnGeneration_SNAPSHOT_QUERY_COLUMN_GENERATION_DEFAULT:
+		case req.Catalog[0].Columns[0].Generation == pb.SnapshotQueryColumnGeneration_SNAPSHOT_QUERY_COLUMN_GENERATION_UNSPECIFIED:
+			missingCalls++
+			ack.Code = pb.SnapshotQueryCode_UNSUPPORTED
+		case req.Catalog[0].Columns[0].Generation == pb.SnapshotQueryColumnGeneration_SNAPSHOT_QUERY_COLUMN_GENERATION_DEFAULT || req.Catalog[0].Columns[0].Generation == pb.SnapshotQueryColumnGeneration_SNAPSHOT_QUERY_COLUMN_GENERATION_UNSPECIFIED:
 			ack.Code = pb.SnapshotQueryCode_UNSUPPORTED
 		default:
 			return snapshotSuccess(req), nil
@@ -512,6 +508,9 @@ func TestSnapshotQueryProbeChecksBehaviorAndFinalCall(t *testing.T) {
 	a := newSnapshotQueryAnalyzer(be)
 	if err := ProbeSnapshotQuery(context.Background(), a, snapshotTestProfile, snapshotTestCatalog()); err != nil {
 		t.Fatalf("ProbeSnapshotQuery: %v", err)
+	}
+	if missingCalls != 1 {
+		t.Fatalf("missing-generation backend calls=%d, want 1", missingCalls)
 	}
 	if ordinaryCalls != 2 {
 		t.Fatalf("ordinary backend calls = %d, want classification plus explicit final call", ordinaryCalls)
@@ -544,7 +543,7 @@ func TestSnapshotQueryProbeRejectsResidualSuccessAndMalformedOrdinary(t *testing
 					resp.Code = pb.SnapshotQueryCode_UNSUPPORTED
 				case strings.Contains(req.Sql, "rand()"):
 					resp.Code = pb.SnapshotQueryCode_MATERIALIZATION_FAILED
-				case req.Catalog[0].Columns[0].Generation == pb.SnapshotQueryColumnGeneration_SNAPSHOT_QUERY_COLUMN_GENERATION_DEFAULT:
+				case req.Catalog[0].Columns[0].Generation == pb.SnapshotQueryColumnGeneration_SNAPSHOT_QUERY_COLUMN_GENERATION_DEFAULT || req.Catalog[0].Columns[0].Generation == pb.SnapshotQueryColumnGeneration_SNAPSHOT_QUERY_COLUMN_GENERATION_UNSPECIFIED:
 					resp.Code = pb.SnapshotQueryCode_UNSUPPORTED
 				default:
 					resp = snapshotSuccess(req)
@@ -593,7 +592,7 @@ func TestSnapshotQueryProbeRequiresExactOrdinaryClassificationAndFinalRefusal(t 
 					return &pb.AnalyzeSnapshotQueryResponse{ContractVersion: 1, QueryProfileId: req.QueryProfileId, Code: pb.SnapshotQueryCode_UNSUPPORTED}, nil
 				case strings.Contains(req.Sql, "rand()"):
 					return &pb.AnalyzeSnapshotQueryResponse{ContractVersion: 1, QueryProfileId: req.QueryProfileId, Code: pb.SnapshotQueryCode_MATERIALIZATION_FAILED}, nil
-				case req.Catalog[0].Columns[0].Generation == pb.SnapshotQueryColumnGeneration_SNAPSHOT_QUERY_COLUMN_GENERATION_DEFAULT:
+				case req.Catalog[0].Columns[0].Generation == pb.SnapshotQueryColumnGeneration_SNAPSHOT_QUERY_COLUMN_GENERATION_DEFAULT || req.Catalog[0].Columns[0].Generation == pb.SnapshotQueryColumnGeneration_SNAPSHOT_QUERY_COLUMN_GENERATION_UNSPECIFIED:
 					return &pb.AnalyzeSnapshotQueryResponse{ContractVersion: 1, QueryProfileId: req.QueryProfileId, Code: pb.SnapshotQueryCode_UNSUPPORTED}, nil
 				default:
 					return snapshotSuccess(req), nil
@@ -628,6 +627,7 @@ func TestSnapshotQueryMeasuredNativeAndGRPC(t *testing.T) {
 					t.Errorf("Close: %v", err)
 				}
 			})
+			checkSnapshotMeasuredCatalogSemantics(t, analyzer, profileID)
 			catalog := snapshotTestCatalog()
 			if err := ProbeSnapshotQuery(context.Background(), analyzer, profileID, catalog); err != nil {
 				t.Fatalf("ProbeSnapshotQuery: %v", err)
@@ -684,5 +684,299 @@ func TestSnapshotQueryMeasuredNativeRefusesOldProfile(t *testing.T) {
 	var typed *SnapshotQueryError
 	if !errors.As(err, &typed) || typed.Code != pb.SnapshotQueryCode_UNSPECIFIED || !strings.Contains(err.Error(), "did not acknowledge") {
 		t.Fatalf("old profile error = %v, want unacknowledged refusal for nonmember HG executable", err)
+	}
+}
+
+func TestSnapshotQueryCatalogSemantics(t *testing.T) {
+	for _, semantic := range []bool{false, true} {
+		for _, self := range []bool{false, true} {
+			name := "digest"
+			if semantic {
+				name = "semantic"
+			}
+			if self {
+				name += " self insert"
+			}
+			t.Run(name, func(t *testing.T) {
+				req := snapshotTestRequest("INSERT INTO tenant.copy SELECT value FROM tenant.events")
+				if !semantic {
+					req.Catalog[0].TableId = "0x" + strings.Repeat("1", 64)
+					req.Catalog[1].TableId = "0x" + strings.Repeat("3", 64)
+				}
+				if semantic {
+					req.Catalog[0].TableId = "copy"
+					req.Catalog[1].TableId = "events"
+				}
+				readID := req.Catalog[1].TableId
+				if self {
+					req.Sql = "INSERT INTO tenant.copy SELECT value FROM tenant.copy"
+					readID = req.Catalog[0].TableId
+				}
+				a := newSnapshotQueryAnalyzer(&fakeBackend{
+					analyzeFn: func(_ context.Context, r *pb.AnalyzeSnapshotQueryRequest) (*pb.AnalyzeSnapshotQueryResponse, error) {
+						out := snapshotSuccess(r)
+						out.ReadTableIds = []string{readID}
+						return out, nil
+					},
+					prepareFn: func(_ context.Context, r *pb.PrepareSnapshotQueryRequest) (*pb.PrepareSnapshotQueryResponse, error) {
+						return &pb.PrepareSnapshotQueryResponse{ContractVersion: 1, QueryProfileId: r.Analysis.QueryProfileId, Code: pb.SnapshotQueryCode_SUCCESS, TargetTableId: req.Catalog[0].TableId, TargetColumns: []string{"value"}, ReadTableIds: []string{readID}, SelectSql: "SELECT value FROM scratch.source"}, nil
+					},
+				})
+				for _, call := range []func(context.Context, *pb.AnalyzeSnapshotQueryRequest) (*pb.AnalyzeSnapshotQueryResponse, error){a.AnalyzeSnapshotQuery, a.ClassifySnapshotQuery} {
+					out, err := call(context.Background(), req)
+					if err != nil {
+						t.Errorf("analysis: %v", err)
+					} else if len(out.ReadTableIds) != 1 || out.ReadTableIds[0] != readID {
+						t.Errorf("lost read closure: %v", out.ReadTableIds)
+					}
+				}
+				out, err := a.PrepareSnapshotQuery(context.Background(), &pb.PrepareSnapshotQueryRequest{Analysis: req, Bindings: []*pb.SnapshotScratchBinding{{TableId: readID, ScratchDatabase: "scratch", ScratchTable: "source"}}})
+				if err != nil {
+					t.Errorf("prepare: %v", err)
+				} else if len(out.ReadTableIds) != 1 || out.ReadTableIds[0] != readID {
+					t.Errorf("lost prepared read closure: %v", out.ReadTableIds)
+				}
+			})
+		}
+	}
+}
+
+func TestSnapshotQueryGenerationEligibilityBelongsToBackend(t *testing.T) {
+	for name, column := range map[string]*pb.SnapshotQueryColumn{
+		"missing":     {Name: "value", Type: "Int64"},
+		"unspecified": {Name: "value", Type: "Int64", Generation: pb.SnapshotQueryColumnGeneration_SNAPSHOT_QUERY_COLUMN_GENERATION_UNSPECIFIED},
+		"unknown":     {Name: "value", Type: "Int64", Generation: pb.SnapshotQueryColumnGeneration(99)},
+	} {
+		for _, touched := range []bool{false, true} {
+			scope := " untouched"
+			if touched {
+				scope = " touched"
+			}
+			t.Run(name+scope, func(t *testing.T) {
+				req := snapshotTestRequest("INSERT INTO tenant.copy SELECT 7")
+				index := 1
+				if touched {
+					index = 0
+				}
+				req.Catalog[index].Columns[0] = column
+				calls := 0
+				a := newSnapshotQueryAnalyzer(&fakeBackend{
+					analyzeFn: func(_ context.Context, r *pb.AnalyzeSnapshotQueryRequest) (*pb.AnalyzeSnapshotQueryResponse, error) {
+						calls++
+						if len(r.Catalog) != 2 || r.Catalog[index].Columns[0].Generation != column.Generation {
+							t.Fatal("catalog changed before backend")
+						}
+						if touched {
+							return &pb.AnalyzeSnapshotQueryResponse{ContractVersion: 1, QueryProfileId: r.QueryProfileId, Code: pb.SnapshotQueryCode_UNSUPPORTED}, nil
+						}
+						return snapshotSuccess(r), nil
+					},
+					prepareFn: func(_ context.Context, r *pb.PrepareSnapshotQueryRequest) (*pb.PrepareSnapshotQueryResponse, error) {
+						calls++
+						if len(r.Analysis.Catalog) != 2 || r.Analysis.Catalog[index].Columns[0].Generation != column.Generation {
+							t.Fatal("prepare catalog changed before backend")
+						}
+						out := &pb.PrepareSnapshotQueryResponse{ContractVersion: 1, QueryProfileId: r.Analysis.QueryProfileId, Code: pb.SnapshotQueryCode_UNSUPPORTED}
+						if !touched {
+							out.Code = pb.SnapshotQueryCode_SUCCESS
+							out.SelectSql = "SELECT 7"
+							out.TargetTableId = req.Catalog[0].TableId
+							out.TargetColumns = []string{"value"}
+						}
+						return out, nil
+					},
+				})
+				check := func(err error) {
+					t.Helper()
+					var typed *SnapshotQueryError
+					if touched {
+						if !errors.As(err, &typed) || typed.Code != pb.SnapshotQueryCode_UNSUPPORTED {
+							t.Errorf("want acknowledged UNSUPPORTED: %v", err)
+						}
+					} else if err != nil {
+						t.Errorf("untouched U rejected: %v", err)
+					}
+				}
+				_, err := a.AnalyzeSnapshotQuery(context.Background(), req)
+				check(err)
+				_, err = a.ClassifySnapshotQuery(context.Background(), req)
+				check(err)
+				_, err = a.PrepareSnapshotQuery(context.Background(), &pb.PrepareSnapshotQueryRequest{Analysis: req})
+				check(err)
+				if calls != 3 {
+					t.Errorf("backend calls=%d, want 3", calls)
+				}
+			})
+		}
+	}
+}
+
+func TestSnapshotQueryStructuralIdentityGuards(t *testing.T) {
+	for name, mutate := range map[string]func(*pb.AnalyzeSnapshotQueryRequest){
+		"empty ID":          func(r *pb.AnalyzeSnapshotQueryRequest) { r.Catalog[0].TableId = "" },
+		"blank ID":          func(r *pb.AnalyzeSnapshotQueryRequest) { r.Catalog[0].TableId = " " },
+		"duplicate ID":      func(r *pb.AnalyzeSnapshotQueryRequest) { r.Catalog[1].TableId = r.Catalog[0].TableId },
+		"bad schema digest": func(r *pb.AnalyzeSnapshotQueryRequest) { r.Catalog[0].SchemaHash = "schema" },
+		"bad Q digest":      func(r *pb.AnalyzeSnapshotQueryRequest) { r.QueryProfileId = "profile" },
+		"missing name":      func(r *pb.AnalyzeSnapshotQueryRequest) { r.Catalog[0].Columns[0].Name = "" },
+		"missing type":      func(r *pb.AnalyzeSnapshotQueryRequest) { r.Catalog[0].Columns[0].Type = "" },
+		"duplicate column": func(r *pb.AnalyzeSnapshotQueryRequest) {
+			r.Catalog[0].Columns = append(r.Catalog[0].Columns, r.Catalog[0].Columns[0])
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			req := snapshotTestRequest("INSERT INTO tenant.copy SELECT 7")
+			mutate(req)
+			a := newSnapshotQueryAnalyzer(&fakeBackend{analyzeFn: func(context.Context, *pb.AnalyzeSnapshotQueryRequest) (*pb.AnalyzeSnapshotQueryResponse, error) {
+				t.Fatal("backend called on invalid structure")
+				return nil, nil
+			}})
+			if _, err := a.AnalyzeSnapshotQuery(context.Background(), req); err == nil {
+				t.Fatal("accepted invalid structure")
+			}
+		})
+	}
+	for name, ids := range map[string][]string{"empty": {""}, "unknown": {"absent"}, "duplicate": {"copy", "copy"}, "unsorted": {"events", "copy"}, "missing": {"copy"}, "extra": {"copy", "events", "other"}} {
+		t.Run("bindings "+name, func(t *testing.T) {
+			req := snapshotTestRequest("INSERT INTO tenant.copy SELECT value FROM tenant.copy UNION ALL SELECT value FROM tenant.events")
+			prepare := &pb.PrepareSnapshotQueryRequest{Analysis: req}
+			for i, id := range ids {
+				prepare.Bindings = append(prepare.Bindings, &pb.SnapshotScratchBinding{TableId: id, ScratchDatabase: "scratch", ScratchTable: strings.Repeat("x", i+1)})
+			}
+			a := newSnapshotQueryAnalyzer(&fakeBackend{prepareFn: func(context.Context, *pb.PrepareSnapshotQueryRequest) (*pb.PrepareSnapshotQueryResponse, error) {
+				return &pb.PrepareSnapshotQueryResponse{ContractVersion: 1, QueryProfileId: req.QueryProfileId, Code: pb.SnapshotQueryCode_SUCCESS, SelectSql: "SELECT 7", TargetTableId: "copy", TargetColumns: []string{"value"}, ReadTableIds: []string{"copy", "events"}}, nil
+			}})
+			if _, err := a.PrepareSnapshotQuery(context.Background(), prepare); err == nil {
+				t.Fatal("accepted invalid bindings")
+			}
+		})
+	}
+}
+
+func TestSnapshotQueryProbeRejectsIncorrectMissingGenerationBackend(t *testing.T) {
+	for name, mutate := range map[string]func(*pb.AnalyzeSnapshotQueryRequest, *pb.AnalyzeSnapshotQueryResponse){
+		"success": func(r *pb.AnalyzeSnapshotQueryRequest, out *pb.AnalyzeSnapshotQueryResponse) {
+			*out = *snapshotSuccess(r)
+		},
+		"wrong code": func(_ *pb.AnalyzeSnapshotQueryRequest, out *pb.AnalyzeSnapshotQueryResponse) {
+			out.Code = pb.SnapshotQueryCode_INVALID_INPUT
+		},
+		"wrong version": func(_ *pb.AnalyzeSnapshotQueryRequest, out *pb.AnalyzeSnapshotQueryResponse) { out.ContractVersion = 2 },
+		"wrong Q": func(_ *pb.AnalyzeSnapshotQueryRequest, out *pb.AnalyzeSnapshotQueryResponse) {
+			out.QueryProfileId = "other"
+		},
+		"SQL output": func(_ *pb.AnalyzeSnapshotQueryRequest, out *pb.AnalyzeSnapshotQueryResponse) {
+			out.SqlAfterMaterialization = "SELECT 7"
+		},
+		"target output": func(_ *pb.AnalyzeSnapshotQueryRequest, out *pb.AnalyzeSnapshotQueryResponse) {
+			out.TargetTableId = "copy"
+		},
+		"columns output": func(_ *pb.AnalyzeSnapshotQueryRequest, out *pb.AnalyzeSnapshotQueryResponse) {
+			out.TargetColumns = []string{"value"}
+		},
+		"reads output": func(_ *pb.AnalyzeSnapshotQueryRequest, out *pb.AnalyzeSnapshotQueryResponse) {
+			out.ReadTableIds = []string{"events"}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			missingCalls := 0
+			a := newSnapshotQueryAnalyzer(&fakeBackend{analyzeFn: func(_ context.Context, r *pb.AnalyzeSnapshotQueryRequest) (*pb.AnalyzeSnapshotQueryResponse, error) {
+				out := &pb.AnalyzeSnapshotQueryResponse{ContractVersion: 1, QueryProfileId: r.QueryProfileId, Code: pb.SnapshotQueryCode_UNSUPPORTED}
+				switch {
+				case r.Catalog[0].Columns[0].Generation == pb.SnapshotQueryColumnGeneration_SNAPSHOT_QUERY_COLUMN_GENERATION_UNSPECIFIED:
+					missingCalls++
+					mutate(r, out)
+				case strings.Contains(r.Sql, "rand()"):
+					out.Code = pb.SnapshotQueryCode_MATERIALIZATION_FAILED
+				case strings.Contains(r.Sql, "ordinary.secret"), strings.Contains(r.Sql, "LIMIT 1"):
+				default:
+					out = snapshotSuccess(r)
+				}
+				return out, nil
+			}})
+			err := ProbeSnapshotQuery(context.Background(), a, snapshotTestProfile, snapshotTestCatalog())
+			if err == nil || !strings.Contains(err.Error(), "missing generation") || missingCalls != 1 {
+				t.Fatalf("err=%v missing calls=%d", err, missingCalls)
+			}
+		})
+	}
+}
+
+type localSnapshotRefusal struct{ SnapshotQueryAnalyzer }
+
+func (localSnapshotRefusal) AnalyzeSnapshotQuery(context.Context, *pb.AnalyzeSnapshotQueryRequest) (*pb.AnalyzeSnapshotQueryResponse, error) {
+	return nil, &SnapshotQueryError{Code: pb.SnapshotQueryCode_UNSUPPORTED}
+}
+func TestSnapshotQueryProbeDoesNotCreditLocalTypedError(t *testing.T) {
+	if err := expectSnapshotProbeRejection(context.Background(), localSnapshotRefusal{}, snapshotTestRequest("INSERT INTO tenant.copy SELECT 7"), pb.SnapshotQueryCode_UNSUPPORTED); err == nil {
+		t.Fatal("credited a local typed error as a backend acknowledgement")
+	}
+}
+
+// These assertions run against both freshly measured native and actual gRPC engines.
+func checkSnapshotMeasuredCatalogSemantics(t *testing.T, analyzer SnapshotQueryAnalyzer, profileID string) {
+	t.Helper()
+	t.Run("self_insert", func(t *testing.T) {
+		req := snapshotTestRequest("INSERT INTO tenant.copy SELECT value FROM tenant.copy")
+		req.QueryProfileId = profileID
+		analyzed, err := analyzer.AnalyzeSnapshotQuery(context.Background(), req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if analyzed.TargetTableId != "copy" || len(analyzed.ReadTableIds) != 1 || analyzed.ReadTableIds[0] != "copy" {
+			t.Fatalf("self-insert closure: %v", analyzed)
+		}
+		prepared, err := analyzer.PrepareSnapshotQuery(context.Background(), &pb.PrepareSnapshotQueryRequest{Analysis: req, Bindings: []*pb.SnapshotScratchBinding{{TableId: "copy", ScratchDatabase: "scratch", ScratchTable: "old_copy"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if prepared.TargetTableId != "copy" || len(prepared.ReadTableIds) != 1 || prepared.ReadTableIds[0] != "copy" || !strings.Contains(prepared.SelectSql, "old_copy") {
+			t.Fatalf("self-insert preparation: %v", prepared)
+		}
+	})
+	for name, generation := range map[string]pb.SnapshotQueryColumnGeneration{"missing": 0, "unknown": 99} {
+		for _, scope := range []string{"target", "read", "untouched"} {
+			t.Run(name+"_"+scope, func(t *testing.T) {
+				req := snapshotTestRequest("INSERT INTO tenant.copy SELECT 7")
+				req.QueryProfileId = profileID
+				index := 1
+				if scope == "target" {
+					index = 0
+				}
+				if scope == "read" {
+					req.Sql = "INSERT INTO tenant.copy SELECT value FROM tenant.events"
+				}
+				req.Catalog[index].Columns[0].Generation = generation
+				analyzed, err := analyzer.AnalyzeSnapshotQuery(context.Background(), req)
+				if scope == "untouched" {
+					if err != nil {
+						t.Fatal(err)
+					}
+					if len(analyzed.ReadTableIds) != 0 {
+						t.Fatalf("unexpected reads %v", analyzed.ReadTableIds)
+					}
+				} else {
+					var typed *SnapshotQueryError
+					if analyzed != nil || !errors.As(err, &typed) || !typed.acknowledged || typed.Code != pb.SnapshotQueryCode_UNSUPPORTED {
+						t.Fatalf("touched generation: %v, %v", analyzed, err)
+					}
+				}
+				bindings := []*pb.SnapshotScratchBinding(nil)
+				if scope == "read" {
+					bindings = []*pb.SnapshotScratchBinding{{TableId: "events", ScratchDatabase: "scratch", ScratchTable: "events"}}
+				}
+				prepared, err := analyzer.PrepareSnapshotQuery(context.Background(), &pb.PrepareSnapshotQueryRequest{Analysis: req, Bindings: bindings})
+				if scope == "untouched" {
+					if err != nil || prepared.SelectSql == "" {
+						t.Fatalf("untouched prepare: %v, %v", prepared, err)
+					}
+				} else {
+					var typed *SnapshotQueryError
+					if prepared != nil || !errors.As(err, &typed) || typed.Code != pb.SnapshotQueryCode_UNSUPPORTED {
+						t.Fatalf("touched prepare: %v, %v", prepared, err)
+					}
+				}
+			})
+		}
 	}
 }

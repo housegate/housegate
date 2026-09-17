@@ -30,6 +30,8 @@ type SnapshotQueryError struct {
 	Code      pb.SnapshotQueryCode
 	Message   string
 	Cause     error
+	// acknowledged is set only after validating a backend rejection and its empty outputs.
+	acknowledged bool
 }
 
 func (e *SnapshotQueryError) Error() string {
@@ -202,16 +204,18 @@ func validateSnapshotAnalyzeRequest(req *pb.AnalyzeSnapshotQueryRequest) error {
 	}
 	seenTables := make(map[string]struct{}, len(req.GetCatalog()))
 	for _, table := range req.GetCatalog() {
-		if table == nil || strings.TrimSpace(table.GetDatabase()) == "" || strings.TrimSpace(table.GetTable()) == "" || !snapshotQueryDigest(table.GetTableId()) || !snapshotQueryDigest(table.GetSchemaHash()) || len(table.GetColumns()) == 0 {
+		if table == nil || strings.TrimSpace(table.GetDatabase()) == "" || strings.TrimSpace(table.GetTable()) == "" || strings.TrimSpace(table.GetTableId()) == "" || !snapshotQueryDigest(table.GetSchemaHash()) || len(table.GetColumns()) == 0 {
 			return fmt.Errorf("catalog table metadata is incomplete")
 		}
 		if _, duplicate := seenTables[table.GetTableId()]; duplicate {
 			return fmt.Errorf("catalog table identity is duplicated")
 		}
 		seenTables[table.GetTableId()] = struct{}{}
+		// Only the exact-Q backend knows which tables the AST touches; generation
+		// eligibility must not exclude untouched tables from the complete catalog.
 		seenColumns := make(map[string]struct{}, len(table.GetColumns()))
 		for _, column := range table.GetColumns() {
-			if column == nil || strings.TrimSpace(column.GetName()) == "" || strings.TrimSpace(column.GetType()) == "" || !snapshotQueryKnownGeneration(column.GetGeneration()) {
+			if column == nil || strings.TrimSpace(column.GetName()) == "" || strings.TrimSpace(column.GetType()) == "" {
 				return fmt.Errorf("catalog column metadata is incomplete")
 			}
 			if _, duplicate := seenColumns[column.GetName()]; duplicate {
@@ -239,7 +243,7 @@ func validateSnapshotPrepareRequest(req *pb.PrepareSnapshotQueryRequest) error {
 	seenTables := make(map[string]struct{}, len(req.GetBindings()))
 	seenScratch := make(map[string]struct{}, len(req.GetBindings()))
 	for _, binding := range req.GetBindings() {
-		if binding == nil || !snapshotQueryDigest(binding.GetTableId()) || strings.TrimSpace(binding.GetScratchDatabase()) == "" || strings.TrimSpace(binding.GetScratchTable()) == "" {
+		if binding == nil || strings.TrimSpace(binding.GetTableId()) == "" || strings.TrimSpace(binding.GetScratchDatabase()) == "" || strings.TrimSpace(binding.GetScratchTable()) == "" {
 			return fmt.Errorf("scratch binding is incomplete")
 		}
 		if _, duplicate := seenTables[binding.GetTableId()]; duplicate {
@@ -269,7 +273,10 @@ func validateAnalyzeResponse(req *pb.AnalyzeSnapshotQueryRequest, resp *pb.Analy
 		return nil
 	}
 	if resp.GetCode() != pb.SnapshotQueryCode_SUCCESS {
-		return &SnapshotQueryError{Operation: "analyze snapshot query", Code: resp.GetCode(), Message: responseMessage(resp.GetMessage(), "snapshot query analysis did not acknowledge the reserved profile")}
+		if resp.GetSqlAfterMaterialization() != "" || resp.GetTargetTableId() != "" || len(resp.GetTargetColumns()) != 0 || len(resp.GetReadTableIds()) != 0 {
+			return &SnapshotQueryError{Operation: "analyze snapshot query", Message: "rejected analysis returned executable output"}
+		}
+		return &SnapshotQueryError{Operation: "analyze snapshot query", acknowledged: true, Code: resp.GetCode(), Message: responseMessage(resp.GetMessage(), "snapshot query analysis did not acknowledge the reserved profile")}
 	}
 	if err := validateSnapshotOutputIdentity(req.GetCatalog(), resp.GetTargetTableId(), resp.GetTargetColumns(), resp.GetReadTableIds()); err != nil {
 		return snapshotInputError("analyze snapshot query response", err)
@@ -348,16 +355,12 @@ func validateSnapshotOutputIdentity(catalog []*pb.SnapshotQueryCatalogTable, tar
 	}
 	previous := ""
 	for _, tableID := range readIDs {
-		if _, ok := tables[tableID]; !ok || tableID == targetID || previous >= tableID {
+		if _, ok := tables[tableID]; !ok || previous >= tableID {
 			return fmt.Errorf("response read identity is invalid")
 		}
 		previous = tableID
 	}
 	return nil
-}
-
-func snapshotQueryKnownGeneration(generation pb.SnapshotQueryColumnGeneration) bool {
-	return generation >= pb.SnapshotQueryColumnGeneration_SNAPSHOT_QUERY_COLUMN_GENERATION_ORDINARY && generation <= pb.SnapshotQueryColumnGeneration_SNAPSHOT_QUERY_COLUMN_GENERATION_OTHER
 }
 
 func snapshotQueryDigest(value string) bool {
@@ -407,7 +410,7 @@ func ProbeSnapshotQuery(ctx context.Context, analyzer SnapshotQueryAnalyzer, pro
 	}
 	missing := request("INSERT INTO tenant.copy SELECT 7")
 	missing.Catalog[0].Columns[0].Generation = pb.SnapshotQueryColumnGeneration_SNAPSHOT_QUERY_COLUMN_GENERATION_UNSPECIFIED
-	if err := expectSnapshotProbeRejection(ctx, analyzer, missing, pb.SnapshotQueryCode_INVALID_INPUT); err != nil {
+	if err := expectSnapshotProbeRejection(ctx, analyzer, missing, pb.SnapshotQueryCode_UNSUPPORTED); err != nil {
 		return fmt.Errorf("snapshot query capability probe: missing generation: %w", err)
 	}
 	defaultTarget := request("INSERT INTO tenant.copy SELECT 7")
@@ -429,7 +432,7 @@ func ProbeSnapshotQuery(ctx context.Context, analyzer SnapshotQueryAnalyzer, pro
 		return fmt.Errorf("snapshot query capability probe: final ordinary analysis returned a payload")
 	}
 	var typed *SnapshotQueryError
-	if !errors.As(err, &typed) || typed.Code != pb.SnapshotQueryCode_NOT_SNAPSHOT_QUERY {
+	if !errors.As(err, &typed) || !typed.acknowledged || typed.Code != pb.SnapshotQueryCode_NOT_SNAPSHOT_QUERY {
 		return fmt.Errorf("snapshot query capability probe: final ordinary analysis got %v, want typed %s refusal", err, pb.SnapshotQueryCode_NOT_SNAPSHOT_QUERY)
 	}
 	return nil
@@ -441,7 +444,7 @@ func expectSnapshotProbeRejection(ctx context.Context, analyzer SnapshotQueryAna
 		return fmt.Errorf("unexpected success")
 	}
 	var typed *SnapshotQueryError
-	if !errors.As(err, &typed) || typed.Code != code {
+	if !errors.As(err, &typed) || !typed.acknowledged || typed.Code != code {
 		return fmt.Errorf("got %v, want code %s", err, code)
 	}
 	return nil
