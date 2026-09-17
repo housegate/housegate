@@ -22,6 +22,7 @@ const snapshotTestProfile = "0x1111111111111111111111111111111111111111111111111
 type blockedSnapshotQueryServer struct {
 	pb.UnimplementedRewriterServiceServer
 	entered  chan struct{}
+	release  chan struct{}
 	returned chan struct{}
 	once     sync.Once
 }
@@ -29,6 +30,7 @@ type blockedSnapshotQueryServer struct {
 func (s *blockedSnapshotQueryServer) block(ctx context.Context) error {
 	s.once.Do(func() { close(s.entered) })
 	<-ctx.Done()
+	<-s.release
 	close(s.returned)
 	return ctx.Err()
 }
@@ -416,20 +418,37 @@ func TestSnapshotQueryDeadlineReleasesBlockedCallForClose(t *testing.T) {
 				t.Fatal(err)
 			}
 			server := grpc.NewServer()
-			blocked := &blockedSnapshotQueryServer{entered: make(chan struct{}), returned: make(chan struct{})}
+			blocked := &blockedSnapshotQueryServer{entered: make(chan struct{}), release: make(chan struct{}), returned: make(chan struct{})}
+			var releaseOnce sync.Once
+			releaseHandler := func() { releaseOnce.Do(func() { close(blocked.release) }) }
 			pb.RegisterRewriterServiceServer(server, blocked)
 			go func() { _ = server.Serve(listener) }()
-			t.Cleanup(server.Stop)
+			callCtx, callCancel := context.WithCancel(context.Background())
+			var analyzer SnapshotQueryAnalyzer
+			t.Cleanup(func() {
+				callCancel()
+				releaseHandler()
+				server.Stop()
+				if analyzer != nil {
+					_ = analyzer.Close()
+				}
+			})
 
-			analyzer, err := NewSnapshotQueryAnalyzer(Options{
+			analyzer, err = NewSnapshotQueryAnalyzer(Options{
 				Engine: EngineGRPC, ServiceAddr: listener.Addr().String(), Timeout: 80 * time.Millisecond,
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
 			callDone := make(chan error, 1)
-			go func() { callDone <- invoke(context.Background(), analyzer) }()
-			<-blocked.entered
+			go func() { callDone <- invoke(callCtx, analyzer) }()
+			select {
+			case <-blocked.entered:
+			case err := <-callDone:
+				t.Fatalf("call completed before server handler entered: %v", err)
+			case <-time.After(time.Second):
+				t.Fatal("server handler did not enter before timeout")
+			}
 			closeDone := make(chan error, 1)
 			go func() { closeDone <- analyzer.Close() }()
 			select {
@@ -439,7 +458,6 @@ func TestSnapshotQueryDeadlineReleasesBlockedCallForClose(t *testing.T) {
 					t.Fatalf("call error = %v, want typed gRPC deadline", err)
 				}
 			case <-time.After(time.Second):
-				server.Stop()
 				t.Fatal("blocked call ignored configured timeout")
 			}
 			select {
@@ -448,13 +466,13 @@ func TestSnapshotQueryDeadlineReleasesBlockedCallForClose(t *testing.T) {
 					t.Fatalf("Close: %v", err)
 				}
 			case <-time.After(time.Second):
-				server.Stop()
 				t.Fatal("Close remained blocked after call deadline")
 			}
+			releaseHandler()
 			select {
 			case <-blocked.returned:
-			default:
-				t.Fatal("backend closed while call still used its handle")
+			case <-time.After(time.Second):
+				t.Fatal("server handler did not return after release")
 			}
 		})
 	}
