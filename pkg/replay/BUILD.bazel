@@ -9,6 +9,7 @@ go_library(
         "snapshot_query_decode.go",
         "snapshot_query_hash.go",
         "snapshot_query_manifest.go",
+        "snapshot_query_schema.go",
         "snapshot_query_types.go",
         "types.go",
         "verifier.go",
@@ -23,12 +24,14 @@ go_test(
         "hash_test.go",
         "snapshot_query_build_identity_test.go",
         "snapshot_query_hash_test.go",
+        "snapshot_query_schema_test.go",
         "types_test.go",
         "verifier_test.go",
     ],
     data = [
         "testdata/snapshot_query_build_identity_v1.json",
         "testdata/snapshot_query_v1.json",
+        "testdata/snapshot_query_schema_v1.json",
     ],
     embed = [":replay"],
 )
