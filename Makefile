@@ -13,7 +13,7 @@ test:
 	bazel test //pkg/proxy:proxy_test
 
 docker:
-	bazel build --platforms=@rules_go//go/toolchain:linux_amd64 --@rules_go//go/config:static=true //cmd:housegate
+	bazel build --extra_toolchains=@zig_sdk//toolchain:linux_amd64_gnu.2.31 --platforms=@rules_go//go/toolchain:linux_amd64 --@rules_go//go/config:static=true //cmd:housegate
 	cp -f bazel-bin/cmd/housegate_/housegate housegate
 	docker build -f deploy/Dockerfile -t $(IMAGE) .
 	rm -f housegate

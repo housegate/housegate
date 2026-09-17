@@ -47,11 +47,11 @@ bazel_dep(name = "hermetic_cc_toolchain", version = "4.2.0")
 toolchains = use_extension("@hermetic_cc_toolchain//toolchain:ext.bzl", "toolchains")
 use_repo(toolchains, "zig_sdk")
 
-# Zig is available for release builds but is not registered globally. Each
-# release command opts into its target toolchain with --extra_toolchains so
-# ordinary builds use the detected host C++ toolchain. The darwin_arm64 Zig
-# toolchain cross-compiles from Linux only: hermetic_cc_toolchain does not
-# support Darwin as a build host because zig's lld rejects Apple's `-Wl,-x`.
+# Zig is available for explicit Linux CI, static, and release builds but is not
+# registered globally. The ci profile and release/static commands opt in with
+# --extra_toolchains, while ordinary local builds use the detected host C++
+# toolchain. darwin_arm64 cross-compiles from Linux only: hermetic_cc_toolchain
+# does not support Darwin as a build host because zig's lld rejects `-Wl,-x`.
 
 pull = use_repo_rule("@rules_img//img:pull.bzl", "pull")
 
