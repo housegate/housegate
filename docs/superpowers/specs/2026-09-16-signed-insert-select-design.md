@@ -52,7 +52,7 @@ Every logical source table, including tables referenced through nested subquerie
 
 Reads observe only `S`. They never observe `unsafe_latest`, live `hg_safe`, source-local session state, or partially produced output. A self-insert reads the old target from `S` and appends new row instances to it; it does not recursively read its own output. With singleton blocks there are no intra-block read-after-write semantics to infer. A later statement sees an earlier statement's rows only after that earlier block becomes safe and a new pin is acquired.
 
-For example, with two safe rows in `tenant.events`, `INSERT INTO tenant.events SELECT * FROM tenant.events` appends exactly two new rows with new `_hg_row_id` values, even if unsafe rows exist locally. A second such operation, after promotion and a fresh pin, sees four rows. If the first operation is aborted, the second still sees two.
+For example, with two safe rows in `tenant.events`, `INSERT INTO tenant.events (value) SELECT value FROM tenant.events` appends exactly two new rows with new `_hg_row_id` values, even if unsafe rows exist locally. A second such operation, after promotion and a fresh pin, sees four rows. If the first operation is aborted, the second still sees two.
 
 ### D3. The supported SQL surface is explicit
 

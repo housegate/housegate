@@ -205,7 +205,7 @@ AC `integration/snapshotquery/verifier/main.go` is a test-only role host that co
 {
   "id": "A4-self-insert",
   "setup_rows": [1, 2],
-  "sql": "INSERT INTO tenant.events SELECT * FROM tenant.events",
+  "sql": "INSERT INTO tenant.events (value) SELECT value FROM tenant.events",
   "local_unsafe_extra_rows": [99],
   "first_safe_row_count": 4,
   "second_safe_row_count": 8,
