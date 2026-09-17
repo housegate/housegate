@@ -42,44 +42,68 @@ func TestUseDatabaseSwitch(t *testing.T) {
 	// values, directly on the container so test setup does not
 	// depend on the path we are about to verify.
 	seedDB := openConnNoDB(t, chEnv.Addr)
+	t.Cleanup(func() {
+		if err := seedDB.Close(); err != nil {
+			t.Errorf("close seed connection: %v", err)
+		}
+	})
 	for _, db := range []string{dbA, dbB} {
 		mustExec(t, seedDB, fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", db))
 		t.Cleanup(func() {
-			_ = seedDB.Exec(context.Background(),
-				fmt.Sprintf("DROP DATABASE IF EXISTS %s", db))
+			if err := seedDB.Exec(context.Background(),
+				fmt.Sprintf("DROP DATABASE IF EXISTS %s", db)); err != nil {
+				t.Errorf("drop database %s: %v", db, err)
+			}
 		})
 		mustExec(t, seedDB, fmt.Sprintf(
 			"CREATE TABLE %s.marker (v UInt64) ENGINE=Memory", db))
 	}
 	mustExec(t, seedDB, fmt.Sprintf("INSERT INTO %s.marker VALUES (1)", dbA))
 	mustExec(t, seedDB, fmt.Sprintf("INSERT INTO %s.marker VALUES (2)", dbB))
-	_ = seedDB.Close()
 
-	// Now drive the proxy. clickhouse-go's Exec works for both DDL
-	// and USE; the session lives for the lifetime of the underlying
-	// conn, which the driver pools, so we must run everything on the
-	// same conn. We achieve that by issuing all statements on one
-	// `conn` instance and trusting the driver's pool to keep them
-	// on the same backing connection within a single request batch.
-	//
-	// In practice the simplest way to guarantee single-conn affinity
-	// is to open with MaxOpenConns=1: the driver then has only one
-	// conn to choose from.
-	conn := openConnPinned(t, proxy.Addr)
 	ctx := context.Background()
+	// Keep one database/sql connection lease for the complete sequence;
+	// USE changes session state on the leased physical connection.
+	db := clickhouse.OpenDB(&clickhouse.Options{
+		Addr: []string{proxy.Addr},
+		Auth: clickhouse.Auth{
+			Database: chEnv.Database,
+			Username: chEnv.User,
+			Password: chEnv.Password,
+		},
+		Protocol: clickhouse.Native,
+	})
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close proxy database handle: %v", err)
+		}
+	})
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		t.Fatalf("lease proxy connection: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := conn.Close(); err != nil {
+			t.Errorf("close proxy connection lease: %v", err)
+		}
+	})
 
-	mustExec(t, conn, fmt.Sprintf("USE %s", dbA))
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf("USE %s", dbA)); err != nil {
+		t.Fatalf("Exec %q: %v", fmt.Sprintf("USE %s", dbA), err)
+	}
 	var vA uint64
-	if err := conn.QueryRow(ctx, "SELECT v FROM marker").Scan(&vA); err != nil {
+	if err := conn.QueryRowContext(ctx, "SELECT v FROM marker").Scan(&vA); err != nil {
 		t.Fatalf("SELECT v FROM marker after USE %s: %v", dbA, err)
 	}
 	if vA != 1 {
 		t.Errorf("after USE %s: v = %d, want 1", dbA, vA)
 	}
 
-	mustExec(t, conn, fmt.Sprintf("USE %s", dbB))
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf("USE %s", dbB)); err != nil {
+		t.Fatalf("Exec %q: %v", fmt.Sprintf("USE %s", dbB), err)
+	}
 	var vB uint64
-	if err := conn.QueryRow(ctx, "SELECT v FROM marker").Scan(&vB); err != nil {
+	if err := conn.QueryRowContext(ctx, "SELECT v FROM marker").Scan(&vB); err != nil {
 		t.Fatalf("SELECT v FROM marker after USE %s: %v", dbB, err)
 	}
 	if vB != 2 {
@@ -103,29 +127,6 @@ func openConnNoDB(t *testing.T, chAddr string) clickhouse.Conn {
 	if err != nil {
 		t.Fatalf("clickhouse.Open (no DB): %v", err)
 	}
-	return conn
-}
-
-// openConnPinned opens a clickhouse-go connection with MaxOpenConns=1,
-// pinning the test to a single backing TCP connection. Necessary when
-// the test relies on session state that lives on one connection —
-// USE/SET only affect the conn that issued them.
-func openConnPinned(t *testing.T, proxyAddr string) clickhouse.Conn {
-	t.Helper()
-	conn, err := clickhouse.Open(&clickhouse.Options{
-		Addr: []string{proxyAddr},
-		Auth: clickhouse.Auth{
-			Database: chEnv.Database,
-			Username: chEnv.User,
-			Password: chEnv.Password,
-		},
-		Protocol:     clickhouse.Native,
-		MaxOpenConns: 1,
-	})
-	if err != nil {
-		t.Fatalf("clickhouse.Open (pinned): %v", err)
-	}
-	t.Cleanup(func() { _ = conn.Close() })
 	return conn
 }
 
