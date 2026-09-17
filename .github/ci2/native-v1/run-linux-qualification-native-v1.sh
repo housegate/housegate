@@ -36,7 +36,7 @@ case "$mode" in
     /usr/bin/python3 "$ROOT/ci2-watchdog-v16.py" --soft-seconds 5 --hard-seconds 10 -- /bin/bash "$0" owner-return "$owner_rc"
     exit "$owner_rc"
     ;;
-  entry|host-admit|container-admit|live-init-admit|terminal-metrics|identity-check|phase-disk|retirement|owner-return|internal-prepare|internal-observe|internal-archive) ;;
+  entry|host-admit|container-admit|live-init-admit|terminal-metrics|identity-check|phase-disk|retirement|owner-return|internal-checkout|internal-prepare|internal-observe|internal-archive) ;;
   *) echo 'Refused: unknown native carrier entry point' >&2; exit 64 ;;
 esac
 
@@ -211,6 +211,49 @@ def inventory(root, limit=536870912, source_links=False):
     return sorted(rows), total
 
 
+def staging_inventory(components, limit=536870912):
+    """Charge carrier/history, source and runtime together, never evidence.
+
+    Root aliases/overlap are canonicalized and inode-deduplicated; distinct
+    files on the same device still consume distinct bytes. Child symlinks are
+    charged as Git stores them and never followed. This is a measured bound.
+    """
+    require(set(components)=={'carrier','source','runtime'},'staging components')
+    seen=set(); total=0; count=0; roots={}; devices={}
+    for label,path in components.items():
+        path=Path(path).resolve(strict=True)
+        require(path.is_dir(),'staging root must be a directory')
+        rootstat=path.stat(); charged=0; pending=[path]
+        while pending:
+            directory=pending.pop(); ds=directory.stat()
+            identity=(ds.st_dev,ds.st_ino)
+            if identity in seen:continue
+            seen.add(identity)
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    s=entry.stat(follow_symlinks=False); key=(s.st_dev,s.st_ino)
+                    if key in seen:continue
+                    count+=1; require(count<=MAX_FILES,'combined staging entry bound')
+                    if stat.S_ISDIR(s.st_mode):
+                        pending.append(Path(entry.path));continue
+                    require(stat.S_ISREG(s.st_mode) or stat.S_ISLNK(s.st_mode),'unsafe staging entry')
+                    if stat.S_ISREG(s.st_mode):require(s.st_nlink==1,'staging hard link refused')
+                    else:require(s.st_size<=4096,'staging symlink bound')
+                    seen.add(key);total+=s.st_size;charged+=s.st_size
+                    devices[str(s.st_dev)]=devices.get(str(s.st_dev),0)+s.st_size
+                    require(total<=limit,'combined source/carrier staging bound: observed_bytes='+str(total)+' limit_bytes='+str(limit))
+        roots[label]=dict(path=str(path),device=rootstat.st_dev,charged_bytes=charged)
+    return dict(total_bytes=total,entries=count,roots=roots,device_bytes=devices,limit_bytes=limit)
+
+
+def staging_components(root,checkout):
+    runtime=root/'execution'/'runtime'
+    # Before runtime installation its owned parent exists and contains evidence;
+    # use a separately created empty staging directory, never that parent.
+    if not runtime.exists():runtime.mkdir()
+    return dict(carrier=Path(checkout),source=root/'input',runtime=runtime)
+
+
 def owned_root(create=False):
     temp=Path(os.environ['RUNNER_TEMP'])
     require(temp.is_absolute() and temp.resolve() == temp and temp.is_dir(), 'runner temp path')
@@ -234,10 +277,11 @@ def owned_root(create=False):
 
 class Commands:
     """Fixed preparation probes under the unchanged watchdog/capture contracts."""
-    def __init__(self, root, owner, deadline):
+    def __init__(self, root, owner, deadline, carrier_root=None):
         self.root,self.owner,self.deadline=root,owner,deadline
         self.count=0
         self.disk_watch=None
+        self.carrier_root=Path(carrier_root) if carrier_root is not None else Path(os.environ['GITHUB_WORKSPACE'])
         self.env={k:os.environ[k] for k in ('PATH','LANG','LC_ALL') if k in os.environ}
         self.env.update(PATH='/usr/bin:/bin:/usr/sbin:/sbin',HOME=str(root/'input'),GIT_CONFIG_NOSYSTEM='1',GIT_CONFIG_GLOBAL='/dev/null',GIT_TERMINAL_PROMPT='0',GIT_CONFIG_COUNT='0',DOCKER_CONFIG=str(root/'docker-config'),PYTHONDONTWRITEBYTECODE='1')
 
@@ -246,22 +290,29 @@ class Commands:
         remaining=min(seconds,self.deadline-time.monotonic())
         require(remaining>2, 'preparation/transport deadline')
         self.count+=1; name='native-'+str(os.getpid())+'-'+str(self.count)
+        before=staging_inventory(staging_components(self.root,self.carrier_root));peak=before
         command=['/usr/bin/python3',str(HERE/'ci2-watchdog-v16.py'),'--soft-seconds',str(remaining-1),'--hard-seconds',str(remaining),'--kill-descendant-tree','--','/usr/bin/python3',str(HERE/'ci2-host-diagnostics-v16.py'),'capture','--output-root',str(self.root/'execution'),'--owner',self.owner,'--name',name,'--']+argv
         proc=subprocess.Popen(command,env=self.env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         # The existing watchdog owns cleanup; this adapter only measures staging.
         overage=False
+        staging_error=''
         while proc.poll() is None:
             try:
-                inventory(self.root/'input',512*MIB,source_links=True)
+                current=staging_inventory(staging_components(self.root,self.carrier_root))
+                if current['total_bytes']>peak['total_bytes']:peak=current
                 inventory(self.root/'execution',512*MIB)
                 if self.disk_watch is not None:
-                    for path,before in self.disk_watch.items():
+                    for path,disk_before in self.disk_watch.items():
                         v=os.statvfs(path)
-                        require(Path(path).stat().st_dev==before['device'] and before['free']-v.f_bavail*v.f_frsize<=3*1024*MIB,'image allocation monitor')
-            except ValueError:
-                overage=True; proc.terminate()
+                        require(Path(path).stat().st_dev==disk_before['device'] and disk_before['free']-v.f_bavail*v.f_frsize<=3*1024*MIB,'image allocation monitor')
+            except (ValueError,OSError) as error:
+                overage=True;staging_error=str(error)[:512];proc.terminate()
             time.sleep(.05)
         rc=proc.wait()
+        try:after=staging_inventory(staging_components(self.root,self.carrier_root))
+        except (ValueError,OSError) as error:
+            after=None;overage=True;staging_error=str(error)[:512]
+        write_json(self.root/'execution'/'host'/(name+'-staging.json'),dict(before=before,peak_observed=peak,after=after,refused=overage,error=staging_error,owned_child_exit=rc,owned_child_reaped=True,monitored_not_kernel_quota=True))
         require(not overage and rc in ok, 'bounded command failed: '+argv[0])
         directory=self.root/'execution'/'host'/'unsealed-diagnostics'
         status=load_json(directory/(name+'.status.json'))
@@ -296,7 +347,7 @@ def host_observation(run, root):
     endpoint=dict(socket_device=st.st_dev,socket_inode=st.st_ino,socket_uid=st.st_uid,daemon_id=info['ID'],docker_root=info['DockerRootDir'],endpoint='unix:///var/run/docker.sock')
     identity=dict(runner_image=os.environ.get('ImageOS',''),runner_version=os.environ.get('ImageVersion',''),client_version=version['Client']['Version'],server_version=version['Server']['Version'],architecture=info['Architecture'],storage_driver=info['Driver'],cgroup_driver=info['CgroupDriver'],cgroup_version=info['CgroupVersion'],init_path=str(init),init_sha256=sha(init,8*MIB),init_version=init_version)
     disks={}
-    for path in (root,Path(info['DockerRootDir'])):
+    for path in (root,run.carrier_root,Path(info['DockerRootDir'])):
         require(path.is_dir() and path.is_absolute() and not path.is_symlink(), 'disk path')
         s=path.stat(); v=os.statvfs(path)
         disks[str(path)]=dict(device=s.st_dev,free=v.f_bavail*v.f_frsize)
@@ -313,6 +364,18 @@ def admit_host(observed,p,precreate=False):
     floor=r['precreate_disk_min'] if precreate else r['prepull_disk_min']
     require(all(x['free']>=floor for x in observed['disks'].values()), 'disk capacity')
     require(not observed['running'], 'unrelated running container')
+
+
+def prepull_disks(observed,p):
+    """Fresh admission at the actual pull boundary, after source preparation."""
+    measured={}
+    for path,before in observed['disks'].items():
+        actual=Path(path).stat();space=os.statvfs(path)
+        free=space.f_bavail*space.f_frsize
+        require(actual.st_dev==before['device'],'pre-pull backing device changed')
+        require(free>=p['resources']['prepull_disk_min'],'pre-pull disk capacity')
+        measured[path]=dict(device=actual.st_dev,free=free)
+    return measured
 
 
 def image_admit(image,p):
@@ -375,14 +438,50 @@ def prepare_source(run,root,p):
 
 def bind_carrier(run,receipt):
     checkout=Path(os.environ['GITHUB_WORKSPACE'])
+    require((checkout/'.git').is_dir() and not (checkout/'.git').is_symlink(),'carrier must have in-checkout Git history')
+    receipt['staging']=staging_inventory(staging_components(run.root,checkout))
     require(git(run,checkout,['rev-parse','HEAD']).decode().strip()==receipt['head'], 'not the PR head checkout')
     require(not git(run,checkout,['status','--porcelain','--untracked-files=all']), 'carrier overlay')
-    require(git(run,checkout,['rev-parse','--is-shallow-repository']).decode().strip()=='false', 'shallow carrier')
+    require(git(run,checkout,['rev-list','--count','HEAD']).decode().strip()=='1','carrier must contain exactly one reachable commit')
     require(not git(run,checkout,['for-each-ref','refs/replace']), 'carrier replacements')
+    require(not (checkout/'.git/objects/info/alternates').exists() and not (checkout/'.git/info/grafts').exists(),'carrier alternate/graft')
     receipt['carrier_tree']=git(run,checkout,['rev-parse','HEAD^{tree}']).decode().strip()
     receipt['runtime_manifest_sha256']=manifest()
     require(receipt['runtime_manifest_sha256']==os.environ.get('CI2_NATIVE_MANIFEST_SHA256') and PROFILE_SHA==os.environ.get('CI2_PROFILE_SHA256'), 'workflow binding mismatch')
     receipt['workflow_sha256']=sha(checkout/'.github/workflows/ci2-native.yml',MIB)
+    checked=load_json(run.root/'input'/'checkout.json')
+    for key,expected in [('head',receipt['head']),('profile_sha256',PROFILE_SHA),('runtime_manifest_sha256',receipt['runtime_manifest_sha256']),('run_id',receipt['run_id']),('attempt',1)]:
+        require(checked[key]==expected,'checkout receipt binding')
+    require(checked['tree']==receipt['carrier_tree'],'checkout tree binding')
+    receipt['checkout']=checked
+
+
+def carrier_checkout(run,root,head):
+    """One exact-head depth-one sparse checkout under existing command owners."""
+    checkout=run.carrier_root
+    require(checkout.is_dir() and not checkout.is_symlink() and not any(checkout.iterdir()),'checkout destination must be empty')
+    staging_inventory(staging_components(root,checkout))
+    git(run,checkout,['init','--template='])
+    git(run,checkout,['config','core.sparseCheckout','true'])
+    sparse=checkout/'.git/info/sparse-checkout';sparse.parent.mkdir(exist_ok=True)
+    with sparse.open('x') as stream:
+        stream.write('/.github/ci2/native-v1/\n/.github/workflows/ci2-native.yml\n')
+    git(run,checkout,['remote','add','origin','https://github.com/housegate/housegate.git'])
+    git(run,checkout,['-c','protocol.version=2','fetch','--depth=1','--filter=blob:none','--no-tags','--no-recurse-submodules','origin',head],40)
+    git(run,checkout,['-c','protocol.version=2','checkout','--detach',head],30)
+    require(git(run,checkout,['rev-parse','HEAD']).decode().strip()==head,'checkout wrong head')
+    require(git(run,checkout,['rev-list','--count','HEAD']).decode().strip()=='1','checkout history depth')
+    require(not git(run,checkout,['status','--porcelain','--untracked-files=all']),'checkout overlay')
+    tree=git(run,checkout,['rev-parse','HEAD^{tree}']).decode().strip()
+    require(re.fullmatch('[0-9a-f]{40}',tree),'checkout tree')
+    require(manifest(checkout/'.github/ci2/native-v1')==os.environ['CI2_NATIVE_MANIFEST_SHA256'],'checked-out runtime binding')
+    require(sha(checkout/'.github/ci2/native-v1/profile.json',MIB)==PROFILE_SHA,'checked-out profile binding')
+    measured=staging_inventory(staging_components(root,checkout))
+    initial=load_json(root/'input'/'bootstrap.json')
+    require(initial['head']==head and initial['run_id']==os.environ['GITHUB_RUN_ID'] and initial['attempt']==1,'initial bootstrap identity')
+    receipt=dict(head=head,tree=tree,run_id=os.environ['GITHUB_RUN_ID'],attempt=1,profile_sha256=PROFILE_SHA,runtime_manifest_sha256=os.environ['CI2_NATIVE_MANIFEST_SHA256'],staging=measured,bootstrap=initial)
+    write_json(root/'input'/'checkout.json',receipt)
+    write_json(root/'execution'/'host'/'checkout-staging.json',receipt)
 
 
 def container_admit(x,receipt,p,bundle):
@@ -444,10 +543,18 @@ def cleanup_receipts(execution,owner,prepared):
 
 def main():
     mode=sys.argv[2]; p=profile(); manifest()
-    if mode in ('internal-prepare','internal-observe'):
+    if mode=='internal-checkout':
+        head=os.environ['CI2_CARRIER_HEAD']
+        require(re.fullmatch('[0-9a-f]{40}',head),'checkout head')
+        root,owner=owned_root()
+        remain=min(90-(time.time()-int(os.environ['CI2_PREPARATION_STARTED'])),300-(time.time()-int(os.environ['CI2_PREPARATION_STARTED'])))
+        require(remain>5,'checkout preparation reserve exhausted')
+        run=Commands(root,owner,time.monotonic()+remain-5)
+        carrier_checkout(run,root,head)
+    elif mode in ('internal-prepare','internal-observe'):
         lane='observe' if mode=='internal-observe' else 'qualify'
         receipt=admission(load_json(os.environ['GITHUB_EVENT_PATH']),os.environ,p,lane)
-        root,owner=owned_root(True); run=Commands(root,owner,time.monotonic()+int(os.environ['CI2_PREPARATION_REMAINING'])-10)
+        root,owner=owned_root(); run=Commands(root,owner,time.monotonic()+int(os.environ['CI2_PREPARATION_REMAINING'])-10)
         bind_carrier(run,receipt)
         write_json(root/'input'/'admission.json',receipt)
         observed=host_observation(run,root)
@@ -457,10 +564,10 @@ def main():
             print('Read-only host observation; no qualification authority')
             return
         admit_host(observed,p)
+        staging_inventory(staging_components(root,run.carrier_root),p['resources']['staging_max'])
         source=prepare_source(run,root,p)
-        before_pull={}
-        for path,old in observed['disks'].items():
-            v=os.statvfs(path);before_pull[path]=dict(device=old['device'],free=v.f_bavail*v.f_frsize)
+        staging_inventory(staging_components(root,run.carrier_root),p['resources']['staging_max'])
+        before_pull=prepull_disks(observed,p)
         run.disk_watch=before_pull
         run(docker(['pull',p['image']['reference']]),90)
         run.disk_watch=None
@@ -471,14 +578,18 @@ def main():
             require(before['free']-after['disks'][path]['free']<=p['resources']['image_allocation_max']+p['resources']['staging_max'],'image/preparation allocation bound')
             require(before_pull[path]['free']-after['disks'][path]['free']<=p['resources']['image_allocation_max'],'image allocation bound')
         write_json(root/'execution'/'host'/'disk-preparation.json',dict(before_source=observed['disks'],before_pull=before_pull,after_pull=after['disks'],same_device_reserves_are_not_summed=True,monitored_not_kernel_quota=True))
-        runtime=root/'execution'/'runtime'; runtime.mkdir()
+        runtime=root/'execution'/'runtime'
         for name in sorted(RUNTIME_NAMES|{'ci2-runtime-v16.sha256','profile.json'}):
+            measured=staging_inventory(staging_components(root,run.carrier_root),p['resources']['staging_max'])
+            require(measured['total_bytes']+(HERE/name).stat().st_size<=p['resources']['staging_max'],'runtime copy exceeds combined staging')
             shutil.copyfile(HERE/name,runtime/name); (runtime/name).chmod(0o444)
+            staging_inventory(staging_components(root,run.carrier_root),p['resources']['staging_max'])
         (runtime/'.ci2-owner').write_text(owner+'\n'); (runtime/'.ci2-owner').chmod(0o400)
         runtime.chmod(0o555)
         source.update(admission=receipt,host=after,prepared_epoch=int(time.time()))
         write_json(root/'input'/'prepared.json',source)
-        inventory(root/'input',p['resources']['staging_max'],source_links=True)
+        source_staging=staging_inventory(staging_components(root,run.carrier_root),p['resources']['staging_max'])
+        write_json(root/'execution'/'host'/'combined-staging.json',source_staging)
         inventory(root/'execution',p['resources']['host_evidence_max'])
     elif mode=='entry':
         current=admission(load_json(os.environ['GITHUB_EVENT_PATH']),os.environ,p,'qualify')
@@ -609,14 +720,15 @@ if __name__=='__main__':
     try: main()
     except Exception as error:
         print('Native carrier refused: '+str(error),file=sys.stderr)
-        if sys.argv[2] in ('internal-prepare','internal-observe'):
+        if sys.argv[2] in ('internal-checkout','internal-prepare','internal-observe'):
             try:
                 try: refusal_root,_=owned_root()
                 except FileNotFoundError: refusal_root,_=owned_root(True)
                 except ValueError:
                     # A new path may be created, but an existing path is never adopted.
                     refusal_root,_=owned_root(True)
-                write_json(refusal_root/'export'/'refusal.json',dict(schema='ci2-native-refusal-v1',mode=sys.argv[2],error=str(error)[:512],workload_created=False,profile_sha256=PROFILE_SHA,run_id=os.environ.get('GITHUB_RUN_ID'),attempt=os.environ.get('GITHUB_RUN_ATTEMPT')))
+                filename='bootstrap-refusal.json' if sys.argv[2]=='internal-checkout' else 'refusal.json'
+                write_json(refusal_root/'export'/filename,dict(schema='ci2-native-refusal-v1',mode=sys.argv[2],error=str(error)[:512],workload_created=False,profile_sha256=PROFILE_SHA,run_id=os.environ.get('GITHUB_RUN_ID'),attempt=os.environ.get('GITHUB_RUN_ATTEMPT')))
             except Exception:
                 print('Refusal artifact unavailable; no ownership was assumed',file=sys.stderr)
         raise SystemExit(74)

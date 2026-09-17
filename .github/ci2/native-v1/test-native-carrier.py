@@ -7,12 +7,14 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 ROOT=Path(__file__).resolve().parent
 BOOT=ROOT/'run-linux-qualification-native-v1.sh'
@@ -218,6 +220,192 @@ class CarrierTests(unittest.TestCase):
             bad=copy.deepcopy(returned);bad[key]=value;(host/'owner-return.json').write_text(json.dumps(bad))
             self.refused(carrier['cleanup_receipts'],self.root,owner,prepared)
 
+    def test_combined_staging_inventory(self):
+        components={name:self.root/name for name in ('carrier','source','runtime')}
+        for path in components.values():path.mkdir()
+        for name,size in [('carrier',40),('source',40),('runtime',21)]:
+            (components[name]/'data').write_bytes(b'x'*size)
+        self.refused(carrier['staging_inventory'],components,100)
+        (components['runtime']/'data').write_bytes(b'x'*20)
+        measured=call('staging_inventory',components,100)
+        self.assertEqual(measured['total_bytes'],100)
+        self.assertEqual(sum(measured['device_bytes'].values()),100)
+        evidence=self.root/'execution'/'host';evidence.mkdir(parents=True)
+        (evidence/'large.log').write_bytes(b'e'*101)
+        self.assertEqual(call('staging_inventory',components,100)['total_bytes'],100)
+        (components['carrier']/'data').write_bytes(b'c'*101)
+        self.refused(carrier['staging_inventory'],components,100)
+
+    def test_staging_aliases_and_overlap(self):
+        whole=self.root/'whole';whole.mkdir();nested=whole/'nested';nested.mkdir()
+        (whole/'a').write_bytes(b'x'*40);(nested/'b').write_bytes(b'x'*60)
+        alias=self.root/'alias';alias.symlink_to(whole,target_is_directory=True)
+        components=dict(carrier=whole,source=alias,runtime=nested)
+        measured=call('staging_inventory',components,100)
+        self.assertEqual(measured['total_bytes'],100)
+        self.assertEqual(measured['roots']['source']['charged_bytes'],0)
+        self.assertEqual(measured['roots']['runtime']['charged_bytes'],0)
+        # A second real file on the same backing device is still charged.
+        other=self.root/'other';other.mkdir();(other/'same-content').write_bytes(b'x')
+        components['source']=other
+        self.refused(carrier['staging_inventory'],components,100)
+
+    def test_prepull_production_boundary(self):
+        # Execute production main(), stopping at the first pull call. The
+        # source-preparation callback changes the observed filesystem sample.
+        class PullReached(Exception):pass
+        for scenario in ('source-consumed-space','device-changed','exact-boundary'):
+            with self.subTest(scenario=scenario):
+                root=self.root/scenario;root.mkdir()
+                for name in ('input','execution','execution/host','docker-config'):(root/name).mkdir(exist_ok=True)
+                checkout=root/'carrier';checkout.mkdir()
+                device=root.stat().st_dev
+                state={'free':110,'device':device,'pulls':0,'source':False}
+                p=copy.deepcopy(self.p);p['resources']['prepull_disk_min']=100
+                observed={'disks':{str(root):{'device':device,'free':110}}}
+                class FakeRun:
+                    def __init__(self,*_):self.root=root;self.carrier_root=checkout;self.disk_watch=None
+                    def __call__(self,argv,*_):
+                        if 'pull' in argv:state['pulls']+=1;raise PullReached()
+                        raise AssertionError('unexpected runtime command')
+                def prepared(*_):
+                    state['source']=True;(root/'input'/'source-fixture').write_bytes(b'new source')
+                    state['free']=99 if scenario=='source-consumed-space' else 100
+                    if scenario=='device-changed':state['device']=device+1
+                    return {}
+                original_stat=Path.stat
+                def disk_stat(path,*args,**kwargs):
+                    result=original_stat(path,*args,**kwargs)
+                    if str(path)==str(root):
+                        result=list(result);result[2]=state['device'];return os.stat_result(result)
+                    return result
+                replacements=dict(profile=lambda:p,manifest=lambda:'f'*64,admission=lambda *_:{'head':'a'*40},owned_root=lambda *_:(root,'a'*64),Commands=FakeRun,bind_carrier=lambda *_:None,host_observation=lambda *_:observed,admit_host=lambda *_:None,prepare_source=prepared)
+                event=root/'event.json';event.write_text('{}')
+                with mock.patch.dict(carrier,replacements),mock.patch.dict(os.environ,{'GITHUB_EVENT_PATH':str(event),'CI2_PREPARATION_REMAINING':'300'}),mock.patch.object(Path,'stat',disk_stat),mock.patch.object(os,'statvfs',lambda _:type('Space',(),{'f_bavail':state['free'],'f_frsize':1})()),mock.patch.object(sys,'argv',[str(BOOT),str(ROOT),'internal-prepare']):
+                    if scenario=='exact-boundary':
+                        with self.assertRaises(PullReached):carrier['main']()
+                    else:
+                        with self.assertRaises(ValueError):carrier['main']()
+                self.assertTrue(state['source'])
+                self.assertEqual(state['pulls'],1 if scenario=='exact-boundary' else 0)
+
+    def bootstrap_module(self):
+        workflow=(ROOT.parent.parent/'workflows/ci2-native.yml').read_text()
+        body=workflow.split('  CI2_CHECKOUT_BOOTSTRAP: |\n',1)[1].split('\njobs:',1)[0]
+        code='\n'.join(line[4:] if line.startswith('    ') else line for line in body.splitlines())
+        module={'__name__':'bootstrap_fixture'}
+        exec(compile(code,'workflow-bootstrap','exec'),module)
+        return module
+
+    def test_bootstrap_download_refusals(self):
+        module=self.bootstrap_module();head='a'*40;name='ci2-watchdog-v16.py'
+        data=b'finite helper';digest=hashlib.sha256(data).hexdigest()
+        url=module['ORIGIN']+module['PREFIX']+head+'/.github/ci2/native-v1/'+name
+        class Response(io.BytesIO):
+            status=200;headers={}
+            def geturl(self):return url
+        def download(response=None,**changes):
+            opener=mock.Mock()
+            opener.open.return_value=response or Response(data)
+            args=dict(opener=opener,directory=self.root,head=head,name=name,digest=digest,limit=len(data),deadline=time.monotonic()+2)
+            args.update(changes)
+            return module['fetch'](**args)
+        for response in (Response(data+b'x'),Response(b'wrong')):
+            self.refused(download,response)
+        for status in (404,302):
+            response=Response(data);response.status=status;self.refused(download,response)
+        response=Response(data);response.headers={'Content-Length':str(len(data)+1)};self.refused(download,response)
+        response=Response(data);response.geturl=lambda:'https://other.invalid/helper';self.refused(download,response)
+        for changes in ({'head':'main'},{'digest':'x'*64},{'name':'../helper'},{'deadline':time.monotonic()-1}):
+            self.refused(download,**changes)
+        with mock.patch.dict(module,ORIGIN='https://other.invalid'):
+            self.refused(download)
+        self.refused(module['NoRedirect']().redirect_request,None,None,None,None,None,None)
+        self.assertFalse((self.root/name).exists())
+        result=download();self.assertEqual(result['bytes'],len(data))
+        self.assertEqual((self.root/name).read_bytes(),data)
+        self.refused(download)  # Existing destinations cannot be overwritten.
+
+    def test_bootstrap_event_identity_refused_before_download(self):
+        module=self.bootstrap_module();event,env=self.admission_input()
+        env.update(CI2_PROFILE_SHA256='b'*64,CI2_NATIVE_MANIFEST_SHA256='c'*64)
+        path=self.root/'event.json';env['GITHUB_EVENT_PATH']=str(path)
+        event['pull_request']['head']['repo']['full_name']='fork/housegate'
+        path.write_text(json.dumps(event))
+        with mock.patch.dict(os.environ,env),mock.patch.object(module['urllib'].request,'build_opener') as opener:
+            self.refused(module['main'])
+            opener.assert_not_called()
+        event['pull_request']['head']['repo']['full_name']='housegate/housegate'
+        event['pull_request']['head']['sha']='b'*40;path.write_text(json.dumps(event))
+        with mock.patch.dict(os.environ,env),mock.patch.object(module['urllib'].request,'build_opener') as opener:
+            self.refused(module['main']);opener.assert_not_called()
+
+    def command_fixture(self):
+        owner='a'*64
+        for path in (self.root,self.root/'input',self.root/'execution',self.root/'execution'/'host',self.root/'docker-config'):
+            path.mkdir(exist_ok=True);(path/'.ci2-owner').write_text(owner+'\n')
+        checkout=self.root/'carrier';checkout.mkdir()
+        return carrier['Commands'](self.root,owner,time.monotonic()+40,carrier_root=checkout)
+
+    def test_owned_checkout_failure_stops_before_source(self):
+        run=self.command_fixture();commands=[]
+        class FailedCheckout:
+            carrier_root=run.carrier_root
+            def __call__(self,argv,seconds=20):
+                commands.append(argv)
+                if 'fetch' in argv:
+                    # An actual owned failing Git process, without any network.
+                    return run(['/usr/bin/git','--ci2-invalid-fixture'],seconds)
+                return run(argv,seconds)
+        self.refused(carrier['carrier_checkout'],FailedCheckout(),self.root,'a'*40)
+        fetch=next(argv for argv in commands if 'fetch' in argv)
+        for flag in ('--depth=1','--filter=blob:none','--no-tags','--no-recurse-submodules'):
+            self.assertIn(flag,fetch)
+        self.assertFalse(any('checkout' in argv for argv in commands))
+        self.assertFalse((self.root/'input/checkout.json').exists())
+        receipts=[json.loads(p.read_text()) for p in (self.root/'execution/host').glob('*-staging.json')]
+        self.assertTrue(receipts and all(row['owned_child_reaped'] for row in receipts))
+        self.assertEqual(sum(row['owned_child_exit']!=0 for row in receipts),1)
+
+    def test_real_shallow_sparse_checkout_and_binding(self):
+        run=self.command_fixture();repo=self.root/'input/local-origin';repo.mkdir()
+        runtime=repo/'.github/ci2/native-v1';runtime.parent.mkdir(parents=True)
+        shutil.copytree(ROOT,runtime)
+        workflow=repo/'.github/workflows/ci2-native.yml';workflow.parent.mkdir()
+        shutil.copyfile(ROOT.parent.parent/'workflows/ci2-native.yml',workflow)
+        (repo/'not-in-sparse-checkout').write_text('must remain outside carrier worktree')
+        def local(args):return call('git',run,repo,args).decode().strip()
+        local(['init']);local(['add','.'])
+        local(['-c','user.name=CI2 Fixture','-c','user.email=fixture@example.invalid','commit','-m','carrier fixture'])
+        head=local(['rev-parse','HEAD']);tree=local(['rev-parse','HEAD^{tree}'])
+        digest=call('manifest');environment=dict(GITHUB_RUN_ID='123',CI2_NATIVE_MANIFEST_SHA256=digest,CI2_PROFILE_SHA256=carrier['PROFILE_SHA'],GITHUB_WORKSPACE=str(run.carrier_root))
+        call('write_json',self.root/'input/bootstrap.json',dict(head=head,run_id='123',attempt=1))
+        class LocalOrigin:
+            carrier_root=run.carrier_root
+            def __call__(self,argv,seconds=20):
+                argv=[repo.as_uri() if value=='https://github.com/housegate/housegate.git' else value for value in argv]
+                return run(argv,seconds)
+        with mock.patch.dict(os.environ,environment):
+            call('carrier_checkout',LocalOrigin(),self.root,head)
+            receipt=dict(head=head,run_id='123')
+            call('bind_carrier',run,receipt)
+        self.assertEqual(receipt['carrier_tree'],tree)
+        self.assertFalse((run.carrier_root/'not-in-sparse-checkout').exists())
+        self.assertTrue((run.carrier_root/'.git/shallow').is_file())
+        self.assertEqual(receipt['checkout']['head'],head)
+
+    def test_owned_checkout_growth_refuses_and_records_overshoot(self):
+        run=self.command_fixture();measure=carrier['staging_inventory']
+        def scaled(components,limit=10000):return measure(components,min(limit,10000))
+        with mock.patch.dict(carrier,staging_inventory=scaled):
+            self.refused(run,['/usr/bin/python3','-c','import pathlib,time; pathlib.Path('+repr(str(run.carrier_root/'growth'))+').write_bytes(b"x"*10001); time.sleep(1)'],5)
+        receipts=[json.loads(p.read_text()) for p in (self.root/'execution/host').glob('*-staging.json')]
+        self.assertEqual(len(receipts),1)
+        receipt=receipts[0];self.assertTrue(receipt['refused'] and receipt['owned_child_reaped'])
+        self.assertIn('observed_bytes=',receipt['error'])
+        self.assertIn('limit_bytes=10000',receipt['error'])
+        self.assertTrue(receipt['monitored_not_kernel_quota'])
+
     def test_frozen_phase_clocks_and_single_finalizer(self):
         worker=(ROOT/'run-linux-qualification-native-v1-worker.sh').read_text()
         for name,seconds in zip(('setup','homebrew','ci-build','ci-test-ffi','release-linux','release-darwin'),self.p['clocks']['phases']):
@@ -236,7 +424,8 @@ class CarrierTests(unittest.TestCase):
         owner='a'*64
         for path in (self.root,self.root/'input',self.root/'execution',self.root/'execution'/'host',self.root/'docker-config'):
             path.mkdir(exist_ok=True);(path/'.ci2-owner').write_text(owner+'\n')
-        run=carrier['Commands'](self.root,owner,time.monotonic()+70)
+        checkout=self.root/'carrier';checkout.mkdir()
+        run=carrier['Commands'](self.root,owner,time.monotonic()+70,carrier_root=checkout)
         repo=self.root/'input'/'repo';repo.mkdir()
         def git(args): return call('git',run,repo,args).decode().strip()
         git(['init'])
