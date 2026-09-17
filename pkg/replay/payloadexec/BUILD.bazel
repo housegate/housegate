@@ -7,6 +7,7 @@ go_library(
         "column_types.go",
         "executor.go",
         "exports.go",
+        "row_source.go",
         "signer.go",
         "stores.go",
     ],

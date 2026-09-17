@@ -165,7 +165,12 @@ func validateCanonicalQueryProfileRecord(record QueryProfileRecord) error {
 			return fmt.Errorf("query profile scalar operators must be unique and sorted")
 		}
 	}
-	limits := record.Limits
+	return ValidateQueryLimits(record.Limits)
+}
+
+// ValidateQueryLimits validates the shared canonical profile bounds. Consumers
+// separately check arithmetic and account for the resources they own.
+func ValidateQueryLimits(limits QueryLimits) error {
 	if limits.MaxSQLBytes == 0 || limits.MaxDescriptorBytes == 0 || limits.MaxOutputRows == 0 || limits.MaxOutputBytes == 0 || limits.MaxRestoreBytes == 0 || limits.MaxSortMemoryBytes == 0 || limits.MaxSpillBytes == 0 || limits.MaxExecutionMS == 0 {
 		return fmt.Errorf("query profile limits must be nonzero")
 	}

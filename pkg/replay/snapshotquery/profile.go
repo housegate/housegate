@@ -9,6 +9,9 @@ import (
 	"github.com/housegate/housegate/pkg/replay/payloadexec"
 )
 
+// Limits is the exact authenticated query-profile resource contract.
+type Limits = replay.QueryLimits
+
 // ValidatedSchemaProfile is an immutable-by-copy result of complete schema,
 // certificate, manifest and legacy-projection validation. It is not proof of
 // current authority, publication, freshness, retention, or query eligibility.
