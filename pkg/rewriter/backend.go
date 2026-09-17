@@ -34,6 +34,8 @@ type backend interface {
 	Rewrite(ctx context.Context, req *pb.RewriteSQLRequest) (*pb.RewriteSQLResponse, error)
 	RewriteErrorMessage(ctx context.Context, req *pb.RewriteErrorMessageRequest) (*pb.RewriteErrorMessageResponse, error)
 	MaterializeSQL(ctx context.Context, req *pb.MaterializeSQLRequest) (*pb.MaterializeSQLResponse, error)
+	AnalyzeSnapshotQuery(ctx context.Context, req *pb.AnalyzeSnapshotQueryRequest) (*pb.AnalyzeSnapshotQueryResponse, error)
+	PrepareSnapshotQuery(ctx context.Context, req *pb.PrepareSnapshotQueryRequest) (*pb.PrepareSnapshotQueryResponse, error)
 	Close() error
 }
 
@@ -85,6 +87,14 @@ func (b *grpcBackend) RewriteErrorMessage(ctx context.Context, req *pb.RewriteEr
 
 func (b *grpcBackend) MaterializeSQL(ctx context.Context, req *pb.MaterializeSQLRequest) (*pb.MaterializeSQLResponse, error) {
 	return b.client.MaterializeSQL(ctx, req)
+}
+
+func (b *grpcBackend) AnalyzeSnapshotQuery(ctx context.Context, req *pb.AnalyzeSnapshotQueryRequest) (*pb.AnalyzeSnapshotQueryResponse, error) {
+	return b.client.AnalyzeSnapshotQuery(ctx, req)
+}
+
+func (b *grpcBackend) PrepareSnapshotQuery(ctx context.Context, req *pb.PrepareSnapshotQueryRequest) (*pb.PrepareSnapshotQueryResponse, error) {
+	return b.client.PrepareSnapshotQuery(ctx, req)
 }
 
 func (b *grpcBackend) Close() error { return b.conn.Close() }
