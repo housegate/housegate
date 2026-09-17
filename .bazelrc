@@ -41,6 +41,9 @@ build:ci --build_metadata=ROLE=CI
 build:ci --experimental_disk_cache_gc_idle_delay=3s
 build:ci --show_loading_progress=no
 build:ci --curses=no --color=yes
+# The Linux CI runners intentionally have no host compiler. Select Zig here so
+# compiling CI commands do not rely on local_config_cc or global registration.
+build:ci --extra_toolchains=@zig_sdk//toolchain:linux_amd64_gnu.2.31
 build:ci --platforms=//:linux_amd64
 test:ci --test_output=all
 

@@ -55,10 +55,10 @@ jobs:
       #     key: bazel
 
       - name: Build All
-        run: bazel build //...
+        run: bazel build --config=ci //...
 
       # Spec J D1: the unit suite is a merge gate. `--config=ci` pins
-      # --platforms=//:linux_amd64 (.bazelrc:46), which only resolves a test
+      # --platforms=//:linux_amd64 (.bazelrc:47), which only resolves a test
       # toolchain on this linux/x64 self-hosted runner — do not try to
       # reproduce this invocation on darwin, use plain `bazel test //...`.
       # Integration targets are tagged `manual` and stay in their own job.
@@ -108,7 +108,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ffi_path="$(bazel run //cmd:housegate -- fetch-rewriter-lib --tag v0.11.0 | tail -n 1)"
+          ffi_path="$(bazel run --config=ci //cmd:housegate -- fetch-rewriter-lib --tag v0.11.0 | tail -n 1)"
           test -n "$ffi_path"
           test -s "$ffi_path"
           echo "POLYGLOT_SQL_FFI_PATH=$ffi_path" >> "$GITHUB_ENV"
@@ -120,6 +120,7 @@ jobs:
       - name: Integration Tests
         run: |
           bazel test \
+            --config=ci \
             //pkg/integration:integration_test \
             //pkg/integration/testenv:testenv_test \
             //pkg/integration/sipressurescale:sipressurescale_test \

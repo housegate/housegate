@@ -153,8 +153,8 @@ jobs:
           set -euo pipefail
           # Cross-compile via zig. Both release targets opt into their Zig
           # toolchain at the command boundary. darwin_arm64 can't be the host
-          # toolchain on macOS (zig's lld rejects Apple's `-Wl,-x`); on this
-          # Linux CI runner, Zig is used only for these release builds.
+          # toolchain on macOS (zig's lld rejects Apple's `-Wl,-x`); each
+          # release command selects Zig explicitly on this Linux runner.
           # static=true is linux-only — macOS has no static libc, and
           # pure-Go code is effectively static for the Go portion anyway;
           # cgo bits (secp256k1) link against the platform's stub
