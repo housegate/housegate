@@ -213,6 +213,7 @@ The restartable worker follows this order:
 derive and seal candidate M -> verify leader and publication/schema fence
 pin immutable candidate manifest, schema capture and part-export view
 create protected publication reference and persist exact disposition operation key/root
+bind and fsync the exact prepaid principal/namespace/ordinal slot before local registration
 RegisterCandidate -> authenticate returned C -> append set-once C phase fact and candidate obligation
 trusted issuer independently captures complete name/type/position/generation/expression metadata
 build A -> sign certificate -> atomically fsync exact O in the candidate journal
@@ -223,6 +224,8 @@ publication worker submits candidate-bound PublishCandidate(M); FSM requires mat
 ```
 
 The issuer independently verifies metadata against trusted configured access under the actual candidate/fence; unsigned source JSON and arbitrary endpoints are not certifiable evidence. Work uses bounded attempts, persists progress by candidate identity and holds no Go mutex or Raft apply across capture, signing, artifact I/O or readiness transport. Recheck fence ownership before readiness and publication. Retry, restart, leader rescan and the pre-removal rotation drain reuse an existing candidate's exact fsynced O rather than re-signing a conflicting outer object; an authenticated identical committed-readiness result resumes publication through the committed-root branch above.
+
+The protected slot binding is the artifact-lifecycle capacity profile's private allowance, not a schema certificate, public command field or signing claim. The trusted allocator binds immutable owner/core/reference/A before registration; the first private validation carries positive ordinal field 8 until replicated installation, then later actions derive the installed binding with zero. A recovery coordinator is a caller, not the protected owner. Invalid requests consume only the bounded rejection pool and cannot spend the candidate's ready/cancel/publish/cleanup or eventual retirement completion routes.
 
 A query successor uses the consumed/resolving operation's publication authority and must not wait for its own barrier to become idle or acquire a new query reservation. A v2 successor uses its publication/schema exclusion rather than a synthetic query. Failures keep recoverable work and provisional artifacts; restoring healthy dependencies resumes automatically. Manual/CLI certificate creation may aid diagnostics but cannot satisfy D3 or D4.
 
@@ -235,5 +238,7 @@ Freeze public vectors for A bytes/digest, certificate payload/header/signing inp
 Test K1 first commitment, the full-stage drained K1-to-K2 rotation, K1 historical replay after restart and refusal of a new uncommitted K1 object. Combine crash after K1 O fsync with rotation, and K1 readiness commit plus lost response with rotation: both retain exact O, finish under the still-fixed K1 map or the identical committed-root recovery branch, and only then permit key removal. D4 uses distinct disposable authority, publisher and source keys and runs automatic v2 S1, query S2 and v2 S3 publication plus genesis, transition and zero-output successors without manual certificate injection. Crash after signing, O fsync, readiness and before publication must retain/reuse exact O and finish after restart. Missing/fake capture, wrong leader/fence, missing store and unavailable authority capture refuse progress while unhealthy and resume automatically after restoration.
 
 Also test a late old candidate future after cancellation, same-`S` replacement candidate separation, absent-use close racing admission, original AdmitUse result with current closed state, pre-cut work and replay-to-challenge continuation after a cut, current-tip retirement refusal, cancelled-unpublished cleanup, published-retired deletion and shared-object protection. These lifecycle tests use actual authenticated registry/process evidence and never promote absence, `AckCleanup` or a boolean to proof.
+
+Also test allowance binding before the first candidate/use registration, exact retry across lost response/restart, ordinal owner versus recovery caller, one-over bounded attempts and permanent spent slots. Run the complete candidate/manifest at the disposition command/request/Raft limits and prove exact raw-manifest interning reconstructs the original canonical root without changing A, O, manifest, readiness or certificate bytes. Capacity success supplies no missing schema, publication or physical authority.
 
 Old name/type-only schemas continue to support v2 unchanged but never opt into snapshot queries. Do not modify legacy hashes/manifests, infer metadata, certify an unprovable retained snapshot, or claim current code supplies these guarantees. All implementation remains future work behind the existing default-off gate.

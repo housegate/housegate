@@ -241,6 +241,10 @@ Barrier release requires durable publication of the applied or aborted outcome, 
 
 Artifact publication and historical consumption additionally follow the [artifact-lifecycle addendum](2026-09-17-signed-insert-select-artifact-lifecycle-design.md): every publication operation is bound to one monotone candidate incarnation, every published-data read has a committed use admission, and C2/C3 admission creates its exact obligation/debt atomically. Candidate cancellation, successful cancelled-unpublished reclamation, explicit noncurrent historical-window closure and published-snapshot retirement are separate monotone facts. Unknown outcomes retain protection until fresh authenticated authority and the actual protected registry prove the applicable terminal predicate.
 
+The same addendum's finite-capacity amendment is part of admission, not an optional operations limit. Before any local registration or execution, the exact family/phase must own a fsynced prepaid principal/namespace/ordinal slot whose compiled vector covers every legal completion, result, list and byte growth; C2 transfers that credit from grant to accepted query atomically. Exact retries resolve before capacity checks, while unaffordable fresh requests are non-admitted and cannot create an unbounded rejection history. Credit never supplies SQL, lifecycle or physical-settlement authority. The fixed first profile is finite, retains permanent history within a scope and refuses new independent work when its root allowances are spent.
+
+This guarantee is limited to deterministic logical metadata capacity. Existing Raft stores and consensus remain in place; disk/I/O/quorum/snapshot/compaction or missing host-closure failure may stall completion while ownership stays protected and fresh admission pauses. The design adds no every-voter physical-reservation topology or unconditional deletion promise. D3 records actual deployment headroom/pressure behavior, and D4 qualifies the full logical watermark, transport copies, existing storage path, restart and recovery before enablement.
+
 ## 7. Ownership, compatibility and release order
 
 | Owner | Work required before activation |
