@@ -8,7 +8,7 @@
 
 **Tech Stack:** Go, protobuf/gRPC, ClickHouse native TCP, rewriter-go's polyglot AST, rewriter-grpc's ClickHouse C++ AST, Raft FSM, Bazel 9.1.0/Bzlmod, Docker integration tests.
 
-**Spec:** [Signed INSERT ... SELECT over an authenticated safe snapshot](../specs/2026-09-16-signed-insert-select-design.md).
+**Specs:** [Signed INSERT ... SELECT over an authenticated safe snapshot](../specs/2026-09-16-signed-insert-select-design.md), [authenticated schema semantics](../specs/2026-09-16-signed-insert-select-schema-semantics-design.md), and the [artifact lifecycle](../specs/2026-09-17-signed-insert-select-artifact-lifecycle-design.md).
 
 ## Global Constraints
 
@@ -24,6 +24,7 @@
 - Historical executable profiles grant replay capability only. New admissions cannot choose an older installed profile, even with a valid user signature.
 - Analyzer build identity, the strict external profile witness and executable historical routing follow the [normative build-identity addendum](../specs/2026-09-16-signed-insert-select-build-identity-design.md). Profile JSON alone never proves local executable support.
 - Column eligibility, exact-S schema certification, two-layer object digests and automatic trusted issuance follow the [normative schema-semantics addendum](../specs/2026-09-16-signed-insert-select-schema-semantics-design.md). Legacy name/type hashes and live metadata alone never authorize this lane.
+- Complete HGPART v1 preservation, finite archive/capacity limits and candidate/use/obligation/retirement control follow the [normative artifact-lifecycle addendum](../specs/2026-09-17-signed-insert-select-artifact-lifecycle-design.md). Keep the disposition capability disabled by default; preserve all old wire/canonical bytes and never apply `R` eligibility or the 1 GiB selected-read restore bound to whole `S`.
 - B1 publication uses the addendum's fixed-scope AC-local control injected only into the trusted AR worker. Source/verifier construction is explicitly read-only and carries no publisher or schema-authority publication secret; published-safe reads and retention remain available.
 - Source execution starts after durable singleton sequencing. Exact touched-partition capacity is reserved before unsafe writes. Accepted work survives client disconnects and reservation timers.
 - Query-only execution creates no `DeferredInsertPlan`, emits no sample block, and does not wait for a row terminator. An empty external-table marker is protocol input to drain, not an execution trigger.
@@ -56,17 +57,17 @@ Land shared contracts before consumers and cut real dependency releases only aft
 
 ## Repository and file ownership
 
-Paths in the component plans are repository-relative and prefixed by the aliases below. Existing paths were inspected while preparing the plan; files marked **Create** are proposed. Use the repository's own AGENTS/CLAUDE instructions and an isolated worktree when executing. The current documentation worktree is `/Users/uranuswch/src/remotesrc/codex/housegate/issue-153`; this does not make the other repositories writable as part of this documentation task.
+Paths in the component plans are repository-relative and prefixed by the aliases below. Existing paths were inspected while preparing the plan; files marked **Create** are proposed. Use the repository's own AGENTS/CLAUDE instructions and an isolated worktree when executing.
 
 | Alias | Repository | Responsibilities and principal files |
 |---|---|---|
 | HG | `housegate/housegate` | `pkg/replay`, `pkg/replay/payloadexec`, `pkg/replay/chexec`, proposed `pkg/replay/snapshotquery`; `pkg/auth`; `pkg/rewriter`; `pkg/storageintegrity`; agent/ingress plugins; `pkg/proxy/relay.go`; `build.go` |
-| AP | `sentioxyz/arbiter-proto` | Protobuf statement, replay, reservation, profile, source and verifier RPC records; generated bindings |
+| AP | `sentioxyz/arbiter-proto` | Protobuf statement, replay, reservation, profile, source, verifier and artifact-disposition RPC records; generated bindings |
 | RP | `housegate/rewriter-proto` | AST analysis/materialization/prepare contract and capability acknowledgement |
 | RG | `housegate/rewriter-go` | Native AST analysis, restricted profile and exact logical-to-scratch relation binding |
 | RC | `housegate/rewriter` (local checkout `rewriter-grpc`) | gRPC implementation with the same corpus and rejection semantics |
-| AC | `sentioxyz/arbiter-core` | Typed schema/part artifact publication, restoration and retention; local publication-control port/read-only mode; source candidates, verifier and wire adapters |
-| AR | `sentioxyz/arbiter` | Deterministic admission, barrier/reservation log, singleton block, abort, activation, trusted automatic schema issuance/publication, concrete publication-control adapter and restart |
+| AC | `sentioxyz/arbiter-core` | Typed complete-tree artifact publication, restoration and retention; protected local registry; disposition client/conversion; local publication-control port/read-only mode; source candidates, verifier and wire adapters |
+| AR | `sentioxyz/arbiter` | Deterministic admission, barrier/reservation log, singleton block, abort, activation, candidate/use/obligation/retirement disposition, trusted automatic schema issuance/publication, concrete publication-control adapter and restart |
 | SN | `sentioxyz/sentio-node` | `storageintegrityadapter`, embedded Housegate/core wiring and dependency pins |
 | PD | `sentioxyz/production` | Deployment manifests and durable artifact/profile wiring, after separate rollout authorization |
 
@@ -88,18 +89,18 @@ The IDs below map to the spec's full acceptance matrix, which remains the accept
 |---|---|---|
 | A1 grammar/CTEs/joins/clients | A3–A5, D1–D2 | D4 native and gRPC, official CLI and Go driver |
 | A2 hidden sources and escape refusal | A4, B2, D2 | D4 forged descriptors and isolated executor |
-| A3 signatures/pins/genesis/profile downgrade | A1–A2, B1, C1–C3, D3 | D4 signed historical-profile rejection, exact original-JWS status identity, schema certificate/digest/unique-S association, unauthorized/wrong-role/spoofed identity and invalid-proof/fresh-read failures |
+| A3 signatures/pins/genesis/profile downgrade | A1–A2, B1, C1–C3, D3 | D4 signed historical-profile rejection, exact original-JWS status identity, schema certificate/digest/unique-S/candidate association, unauthorized/wrong-role/spoofed identity and fixed-endpoint/nonce/full-identity/fresh-read proof failures |
 | A4 exact S and serialized self-insert | B2, C2–C5 | D4 two sequential self-inserts with unsafe interference |
-| A5 complete authentic restore | B1–B2 | D4 cold/warm corruption, schema-object substitution and availability cases |
+| A5 complete authentic restore | B1–B2 | D4 complete-tree/auxiliary/projection preservation, checksum qualification, cold/warm corruption, schema-object substitution and availability cases |
 | A6 canonical order and duplicate multiplicity | B3–B5 | D4 separate ClickHouse instances and at least `2^16` duplicates |
 | A7 closed SQL/materialization/type failures | A3–A5, B3–B4 | D4 nested operators, column-generation refusal, pool exhaustion and overflow |
 | A8 whole ledger and empty applied output | B4–B5, C3 | D4 read/write/unrelated tables and zero-row advancement |
 | A9 source fraud and candidate bytes | B5, C5 | D4 independent replay plus delta plus exact byte scan |
 | A10 native packet lifecycle | D1–D2, C4 | D4 fragmentation/coalescing, marker, drain-blocked acquire Cancel/EOF, late worker/grant, finalization/forward/Submit races, one-shot auth hooks and next-query races; no upstream Query/no Submit when cancellation wins |
-| A11 crash/lost-response recovery | B1, C1–C5, D1–D3 | D4 fault injection at every durable boundary, including issuer O fsync/readiness/publication, lost acquire/release responses, four agent/host launch-authorization crash windows and restart with cancel/tombstone state; release only proven-unconsumed identities and retain unknown/accepted Submit ownership for the exact original-JWS hash; wrong-signature lookup after lost rejection cannot reuse another accepted result |
-| A12 failure/abort/liveness/retention | C3–C5 | D4 committed no-op, late-generation refusal and next-block progress |
-| A13 versions/migration/activation/rollback | A1–A2, B1, C1–C3, D3 | D4 legacy vectors, schema-authority rotation, restart and historical replay |
-| A14 limits/performance | B2–B3, C4, D3 | D4 measured restore/sort/spill/latency/barrier occupancy |
+| A11 crash/lost-response recovery | B1, C1–C5, D1–D3 | D4 fault injection at every durable boundary, including issuer O fsync/candidate/readiness/publication, late old candidate futures, absent-use close race, lost acquire/release responses, four agent/host launch-authorization crash windows and restart with cancel/use/tombstone state; unknown outcomes remain protected |
+| A12 failure/abort/liveness/retention | C3–C5 | D4 committed no-op, late-generation refusal, exact obligation/debt settlement and next-block progress; no absence/AckCleanup/boolean proof |
+| A13 versions/migration/activation/rollback | A1–A2, B1, C1–C3, D3 | D4 legacy vectors, capability-off and old-unscoped guards, schema-authority rotation, disposition snapshot migration, restart and historical replay |
+| A14 limits/performance | B1–B3, C4, D3 | D4 measured archive/checksum/capacity/cancellation plus restore/sort/spill/latency/barrier occupancy |
 
 ## Completion boundary
 
