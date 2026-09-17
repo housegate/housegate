@@ -1,0 +1,55 @@
+# CI2 native hosted carrier
+
+This is preparation for a new measured `native-hosted-v1` qualification. It does not establish native CI2 PASS. The admitted Docker/init tuple list is deliberately empty, so qualification refuses before image/source preparation or any workload. Native init adoption, strict Linux process cleanup, hosted cancellation fixtures, the historical four Minors and CV13 remain open.
+
+The carrier runs on a fresh public GitHub-hosted `ubuntu-24.04` x64 VM. Product source remains commit `ab9ec0a1c27e257f7d96be1e3011f6e5f274a609`, tree `3219ed991de31ada4e20ebd720aa192b15c04ca6`, base `50f0a6d9f95aa50e7b19af7efbb836a1b16b9c6f`; neither the PR merge ref nor carrier HEAD is product source. A fresh complete-history bundle is generated once, verified through an isolated clone, and bound by its new size/hash in `prepared.json`. The historical packing hash in the profile is provenance, not the new bundle acceptance hash. Source/carrier preparations never mount credentials, host home, cache, or Docker socket into the workload.
+
+Exactly eleven historical runtime files are copied byte for byte. `ci2-runtime-v16.sha256` is a **new native 13-entry manifest**; its retained basename serves the unchanged transfer helper. The historical manifest digest is `d5c0a01bc0286cdf044e13eca40843ca9fae0562ea61d9b7a3f7792f44853036`. The workflow pins the separate profile and native manifest digests, while the profile avoids a self-referential new-manifest hash. Bootstrap/worker are the only runtime derivatives. No existing workflow, product source, build flag or Bazel target is changed.
+
+## Exact event protocol
+
+Initial `opened`, `synchronize` and `reopened` events run preparation checks only. After independent exact-head review, root may add `ci2-env-<full40hexhead>` for a bounded **read-only observation**. Only that exact `labeled` event is admitted. Observation reads the fixed local Docker endpoint, fixed host files, and version outputs; it never pulls, creates, starts or execs a container, installs a package or changes daemon state. The bounded observation artifact contains a candidate identity tuple and measured capacity; root must separately review and commit an admitted tuple/profile revision. Observed values never populate the allowlist automatically.
+
+Qualification requires its own exact `labeled` event `ci2-ok-<full40hexhead>`, same `housegate/housegate` base/head repository, exact `urwt/codex/issue-153-ci2-native` branch, non-draft PR, `run_attempt == 1`, reviewed profile/manifest/source binding, nonempty tuple allowlist, fresh capacity admission and one local immutable attempt lease. An observation label never authorizes qualification. An old label remaining in the PR label list, unrelated label, changed head, reopened event or workflow rerun is insufficient. Root owns the external one-attempt record and must not remove/reapply a label as a retry; there is no remote state store or token write. There is no `workflow_dispatch` or default-branch dependency.
+
+## New measured resource contract
+
+| Item | Native hosted contract |
+| --- | --- |
+| Native platform | Linux x86_64 host, Linux x86_64/amd64 daemon, Linux/amd64 image; finite admitted runner/Docker/cgroup/init tuple |
+| CPU | At least 4 host/daemon CPUs; 3 workload CPUs |
+| Memory | Host/daemon total at least 15,000,000,000 bytes; available at least 13,958,643,712 bytes immediately before create; workload memory and memory-swap both 12 GiB |
+| PIDs/init | 1024; explicit `--init`, observed `HostConfig.Init=true`, injected PID1 executable hash and effective cgroup v2 limits |
+| Tmpfs | `/ci2` exec 6 GiB; `/tmp` noexec 128 MiB; shm 64 MiB, charged within workload memory |
+| Disk | At least 10 GiB before pull and 8 GiB before create; same-device paths are recorded together rather than counted as independent reserves |
+| Monitored disk budgets | Image allocation/transient unpack 3 GiB; source/carrier 512 MiB; layer 512 MiB; Docker logs 40 MiB; host evidence 512 MiB; archive 1 GiB; other scratch 1 GiB |
+| Evidence/cache | Container evidence 500 MiB; host evidence 512 MiB with 2 MiB tail reserve; cold disk-cache GC target 1 GiB |
+
+Phase-observed layer/image/cache bounds are acceptance checks, not hard kernel quotas. No pruning, host package installation, quota reconfiguration, resource escalation, host compiler fallback or automatic clean/retry is permitted. The unchanged six phases retain setup300/Homebrew300/CI-build540/CI-tests-and-FFI840/Linux-release420/Darwin-release420 clocks, exact commands, private pipes, actual joins and one host-selected finalizer. The invalid CC remains `/ci2/forbidden-host-cc`; Homebrew still proves no Zig selection, and CI/Linux/Darwin retain their explicit Zig selections. The CI test phase fetches frozen v0.10.0 FFI and runs the existing full non-manual CI test surface; it does not prove separately listed Docker integration targets ran.
+
+## Clocks and cancellation
+
+The 65-minute job accounts for 300 seconds checkout/preparation, 3300 seconds owner (3060 work plus 240 cleanup), 180 seconds archive/upload and 120 seconds transitions. Preparation shares one clock across checkout and adapter work. The qualification step is 56 minutes. Existing shutdown20/22/24, termination20/5/30, stop10, remote50/80 and host60/90 transport budgets remain unchanged. Early failure cleanup is bounded by the earlier original deadline or failure+240, preserving the final 60-second teardown reserve.
+
+The explicit owner admission boundary is the short `owner-entry` step, whose condition evaluates `!cancelled()`. It emits a timestamped entry grant; bootstrap refuses a missing grant or one older than 15 seconds. Cancellation known before that step refuses the owner. Cancellation after that grant may allow the original bounded owner to start/finish under `always()`, including the at-most-15-second grant-to-bootstrap window. This is an explicit pending cancellation contract, not an assertion that `job.status` is equivalent to `cancelled()`. The running qualification step never reevaluates `!cancelled()` as its own cancellation condition. Root must review this boundary and obtain the separately authorized live GitHub cancellation fixture before depending on it. Forced cancellation, runner disappearance and hard timeout may kill it; these remain unsealed with cleanup unproved unless terminal receipts survived. VM disposal does not prove strict observed server/container absence. No detached daemon or second finalizer is introduced. The separately gated `--native-fixture init_adoption` and `--native-fixture github_cancellation` entries explicitly refuse without future fixture authority; their tests do not substitute local simulation for native evidence.
+
+## Receipts and independent acceptance
+
+`admission.json` binds PR head/ref, repository, event merge SHA, PR, run/attempt, carrier tree, workflow hash, runtime-manifest hash and profile hash. `observation.json` records host/daemon/socket/init identity, capacity and filesystem devices/free bytes. `prepared.json` adds source raw commit objects/hashes, five-file delta hashes, new bundle packing identity and preparation time. `attempt-lease.json` consumes the run's workload attempt before the owner starts. Every capture retains bounded stdout/stderr/status; interrupted captures remain started/unsealed. No successful container evidence manifest is rewritten.
+
+After the exact owned container is retired, `container-absence.json` records successful exact-ID and exact-name empty listings against the admitted endpoint. `owner-return.json` records the outer watchdog's return; a timeout/orphan/signal result cannot prove cleanup. Only after those records, complete host command boundaries and received container seal does archival write `terminal.json` and `HOST-MANIFEST.sha256`. Unsealed cases retain bounded diagnostics and truthful terminal fields. `ci2-native.tar` contains only execution files plus four named input receipts, including hidden owner files. The sidecar `archive.json` binds its checksum, byte count, inventory, run/head/profile and terminal outcome. Upload uses a unique run/attempt/head name, no overwrite, missing-file error, and 14-day retention. GitHub artifact digest is an additional transport layer.
+
+Root must download the exact artifact, verify the outer checksum and bounded path/type/count inventory, all host/container manifests, source/carrier/profile/image/run binding and raw terminal predicates. A green job or successful upload does not independently establish CI2 PASS.
+
+| Outcome | Acceptance |
+| --- | --- |
+| All six phases, strict shutdown/server absence, actual joins, seals, transfer, exact container absence and downloaded artifact verified | Exact native-profile CI2 PASS only, after independent review |
+| Original phase failure retained, single fail finalizer and strict cleanup/seals verified | Sealed FAIL; attempt consumed |
+| Lost identity, incomplete handoff, truncation, timeout, forced cancellation or missing seal/absence/join | Unsealed FAIL or cleanup-unproved; never PASS |
+| Empty tuple/low capacity/drift/cancellation before create | Admission refused; no workload result |
+
+## Exact-owned cleanup boundary
+
+The worker alone retires its full 64-hex container ID after matching exact name, task, run, frozen commit and owner labels and rechecking the fixed endpoint. It retains stop10 and bounded remove operations, then separately proves exact-ID and exact-name absence. A lost daemon/ownership identity refuses destructive cleanup. There is no glob/name-prefix cleanup, daemon prune or host-tree cleanup. If an owner is forcibly lost, root must inspect the saved full ID and endpoint/labels and separately authorize any remaining cleanup; VM disappearance is not a cleanup receipt.
+
+Run `python3 -B .github/ci2/native-v1/test-native-carrier.py` for finite parser, serialization, clock, source-Git, resource, image, init-field and archive cases. Native init adoption, process/cgroup behavior and hosted cancellation require separately authorized future native fixture evidence. Reviewers should compare both host derivatives against the pinned historical bytes and independently recheck the new manifest/profile identities before any label operation.

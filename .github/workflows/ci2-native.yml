@@ -1,0 +1,168 @@
+name: CI2 native carrier
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci2-native-carrier
+  cancel-in-progress: false
+
+env:
+  CI2_PROFILE_SHA256: b80ffe1b59ac78da1dfb72cbcdbc21dc1a49966159cbfb07ff9e57162d161b82
+  CI2_NATIVE_MANIFEST_SHA256: 6a07ec0ef93115496d06ddad149194fe0680d3ae41cd0cd4873890024deb5708
+
+jobs:
+  preparation-checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Static and finite carrier fixtures
+        timeout-minutes: 2
+        run: python3 -B .github/ci2/native-v1/test-native-carrier.py
+
+  observe-host:
+    if: >-
+      always() && github.event_name == 'pull_request' && github.event.action == 'labeled' &&
+      github.repository == 'housegate/housegate' &&
+      github.event.pull_request.head.repo.full_name == 'housegate/housegate' &&
+      github.event.pull_request.base.repo.full_name == 'housegate/housegate' &&
+      github.event.pull_request.head.ref == 'urwt/codex/issue-153-ci2-native' &&
+      !github.event.pull_request.draft && github.run_attempt == 1 &&
+      github.event.label.name == format('ci2-env-{0}', github.event.pull_request.head.sha) &&
+      contains(github.event.pull_request.labels.*.name, format('ci2-env-{0}', github.event.pull_request.head.sha))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      CI2_CARRIER_HEAD: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Start the preparation clock
+        run: echo "CI2_PREPARATION_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        timeout-minutes: 1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Read-only host observation
+        id: observation
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        env:
+          CI2_CANCELLED_AT_ENTRY: 'false'
+        run: bash .github/ci2/native-v1/run-linux-qualification-native-v1.sh observe
+      - name: Upload bounded observation
+        if: ${{ always() && (steps.observation.outcome == 'success' || steps.observation.outcome == 'failure') }}
+        timeout-minutes: 1
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci2-observation-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.event.pull_request.head.sha }}
+          path: |
+            ${{ runner.temp }}/ci2-native-${{ github.run_id }}-${{ github.run_attempt }}/export/observation.json
+            ${{ runner.temp }}/ci2-native-${{ github.run_id }}-${{ github.run_attempt }}/export/refusal.json
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 14
+
+  qualification:
+    needs: preparation-checks
+    if: >-
+      always() && needs.preparation-checks.result == 'success' &&
+      github.event_name == 'pull_request' && github.event.action == 'labeled' && github.repository == 'housegate/housegate' &&
+      github.event.pull_request.head.repo.full_name == 'housegate/housegate' &&
+      github.event.pull_request.base.repo.full_name == 'housegate/housegate' &&
+      github.event.pull_request.head.ref == 'urwt/codex/issue-153-ci2-native' &&
+      !github.event.pull_request.draft && github.run_attempt == 1 &&
+      github.event.label.name == format('ci2-ok-{0}', github.event.pull_request.head.sha) &&
+      contains(github.event.pull_request.labels.*.name, format('ci2-ok-{0}', github.event.pull_request.head.sha))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    env:
+      CI2_CARRIER_HEAD: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Start the preparation clock
+        run: echo "CI2_PREPARATION_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        timeout-minutes: 1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Prepare exact source, image and host admission
+        id: preparation
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        env:
+          CI2_CANCELLED_AT_ENTRY: 'false'
+        run: bash .github/ci2/native-v1/run-linux-qualification-native-v1.sh prepare
+      - name: Admit the bounded owner only before cancellation
+        id: owner-entry
+        if: ${{ always() && steps.preparation.outcome == 'success' && !cancelled() }}
+        timeout-minutes: 1
+        run: |
+          echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+          echo "head=$CI2_CARRIER_HEAD" >> "$GITHUB_OUTPUT"
+          echo "profile=$CI2_PROFILE_SHA256" >> "$GITHUB_OUTPUT"
+          echo "run=$GITHUB_RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+          echo 'admitted=true' >> "$GITHUB_OUTPUT"
+      - name: One bounded qualification owner
+        id: qualification
+        if: ${{ always() && steps.preparation.outcome == 'success' && steps.owner-entry.outputs.admitted == 'true' }}
+        timeout-minutes: 56
+        env:
+          CI2_CANCELLED_AT_ENTRY: 'false'
+          CI2_OWNER_ENTRY_EPOCH: ${{ steps.owner-entry.outputs.epoch }}
+          CI2_OWNER_ENTRY_HEAD: ${{ steps.owner-entry.outputs.head }}
+          CI2_OWNER_ENTRY_PROFILE: ${{ steps.owner-entry.outputs.profile }}
+          CI2_OWNER_ENTRY_RUN: ${{ steps.owner-entry.outputs.run }}
+          CI2_OWNER_ENTRY_ATTEMPT: ${{ steps.owner-entry.outputs.attempt }}
+        run: bash .github/ci2/native-v1/run-linux-qualification-native-v1.sh qualify
+      - name: Transport preparation refusal
+        if: ${{ always() && steps.preparation.outcome == 'failure' }}
+        timeout-minutes: 1
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci2-refusal-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/ci2-native-${{ github.run_id }}-${{ github.run_attempt }}/export/refusal.json
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 14
+      - name: Seal terminal host evidence and create allowlisted archive
+        id: archive
+        if: ${{ always() && steps.preparation.outcome == 'success' }}
+        timeout-minutes: 2
+        env:
+          CI2_QUALIFICATION_OUTCOME: ${{ steps.qualification.outcome }}
+        run: bash .github/ci2/native-v1/run-linux-qualification-native-v1.sh archive
+      - name: Transport archive and checksum receipt
+        id: upload
+        if: ${{ always() && steps.archive.outcome == 'success' }}
+        timeout-minutes: 1
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci2-native-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.event.pull_request.head.sha }}
+          path: |
+            ${{ runner.temp }}/ci2-native-${{ github.run_id }}-${{ github.run_attempt }}/export/ci2-native.tar
+            ${{ runner.temp }}/ci2-native-${{ github.run_id }}-${{ github.run_attempt }}/export/archive.json
+          if-no-files-found: error
+          overwrite: false
+          compression-level: 0
+          retention-days: 14
+      - name: Evidence delivery summary
+        if: ${{ always() }}
+        env:
+          PREPARATION: ${{ steps.preparation.outcome }}
+          QUALIFICATION: ${{ steps.qualification.outcome }}
+          ARCHIVE: ${{ steps.archive.outcome }}
+          UPLOAD: ${{ steps.upload.outcome }}
+        run: |
+          printf 'Preparation: %s\nOwner: %s\nArchive: %s\nUpload: %s\n' "$PREPARATION" "$QUALIFICATION" "$ARCHIVE" "$UPLOAD" >> "$GITHUB_STEP_SUMMARY"
+          echo 'GitHub green/upload is not CI2 PASS. Independent downloaded-evidence verification is required.' >> "$GITHUB_STEP_SUMMARY"
