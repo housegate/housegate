@@ -37,6 +37,19 @@ class CarrierTests(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory(prefix='ci2-native-fixture-')
         self.root=Path(self.temp.name)
         self.p=json.loads((ROOT/'profile.json').read_text())
+        self.identity={
+            'architecture':'x86_64',
+            'cgroup_driver':'systemd',
+            'cgroup_version':'2',
+            'client_version':'28.0.4',
+            'init_path':'/usr/libexec/docker/docker-init',
+            'init_sha256':'5fb35102eb8606dfe20aa755229becc81e6fdf3ba587d64b58dca51b79c0b36a',
+            'init_version':'tini version 0.19.0 - git.de40ad0',
+            'runner_image':'ubuntu24',
+            'runner_version':'20260907.300.1',
+            'server_version':'28.0.4',
+            'storage_driver':'overlay2',
+        }
 
     def tearDown(self):
         self.temp.cleanup()
@@ -59,11 +72,12 @@ class CarrierTests(unittest.TestCase):
         self.assertIn(digest,workflow)
         self.assertIn(carrier['PROFILE_SHA'],workflow)
         self.assertEqual(len(carrier['RUNTIME_NAMES']),13)
-        self.assertEqual(self.p['admitted_host_tuples'],[])
+        self.assertEqual(self.p['admitted_host_tuples'],[self.identity])
 
-    def test_initial_qualification_is_disabled(self):
+    def test_empty_allowlist_disables_qualification(self):
         event,env=self.admission_input()
-        self.refused(carrier['admission'],event,env,self.p,'qualify')
+        detached=copy.deepcopy(self.p);detached['admitted_host_tuples']=[]
+        self.refused(carrier['admission'],event,env,detached,'qualify')
 
     def test_exact_event_and_lane_admission(self):
         for lane in ('qualify','observe'):
@@ -114,17 +128,20 @@ class CarrierTests(unittest.TestCase):
             self.refused(carrier['entry_grant'],bad,admitted,1800000000)
 
     def test_capacity_tuple_and_disk_refusals(self):
-        p=copy.deepcopy(self.p);identity={'cgroup_version':'2','architecture':'amd64','init_sha256':'a'*64};p['admitted_host_tuples']=[identity]
-        observed=dict(identity=identity,host_cpu=4,daemon_cpu=4,host_memory=16000000000,daemon_memory=16000000000,available_memory=13958643712,memory_limit=True,swap_limit=True,disks={'a':{'device':1,'free':10737418240}},running=[])
-        call('admit_host',observed,p)
+        observed=dict(identity=copy.deepcopy(self.identity),host_cpu=4,daemon_cpu=4,host_memory=16765378560,daemon_memory=16765378560,available_memory=15724810240,memory_limit=True,swap_limit=True,disks={'root':{'device':2049,'free':92407201792},'carrier':{'device':2049,'free':92407201792},'docker':{'device':2049,'free':92407201792}},running=[])
+        call('admit_host',observed,self.p)
+        for field,value in self.identity.items():
+            bad=copy.deepcopy(observed)
+            bad['identity'][field]=('0'*64 if field=='init_sha256' else value+'-mismatch')
+            self.refused(carrier['admit_host'],bad,self.p)
         for key,value in [('host_cpu',3),('daemon_cpu',3),('host_memory',14999999999),('daemon_memory',14999999999),('available_memory',13958643711),('memory_limit',False),('swap_limit',False),('running',['a'*64]),('identity',{'architecture':'arm64'})]:
             bad=copy.deepcopy(observed);bad[key]=value
-            self.refused(carrier['admit_host'],bad,p)
-        bad=copy.deepcopy(observed);bad['disks']['a']['free']=10737418239
-        self.refused(carrier['admit_host'],bad,p)
-        call('admit_host',bad,p,True)
-        bad['disks']['a']['free']=8589934591
-        self.refused(carrier['admit_host'],bad,p,True)
+            self.refused(carrier['admit_host'],bad,self.p)
+        bad=copy.deepcopy(observed);bad['disks']['root']['free']=10737418239
+        self.refused(carrier['admit_host'],bad,self.p)
+        call('admit_host',bad,self.p,True)
+        bad['disks']['root']['free']=8589934591
+        self.refused(carrier['admit_host'],bad,self.p,True)
 
     def test_image_id_digest_architecture(self):
         e=self.p['image']; good=[dict(Id=e['id'],RepoDigests=[e['reference']],Os=e['os'],Architecture=e['architecture'],Size=e['size'],Config={'User':e['user'],'Entrypoint':e['entrypoint'],'WorkingDir':e['workdir']})]

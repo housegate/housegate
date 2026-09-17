@@ -12,8 +12,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  CI2_PROFILE_SHA256: b80ffe1b59ac78da1dfb72cbcdbc21dc1a49966159cbfb07ff9e57162d161b82
-  CI2_NATIVE_MANIFEST_SHA256: 7108fa69ae575dc00840b404bbaff895c175f2afdec5eaa1dedf81b7fe427233
+  CI2_PROFILE_SHA256: c093eb6f3ba201717e2d5398d282e1a5f044bf4d681de9e696bc2dd229de4a75
+  CI2_NATIVE_MANIFEST_SHA256: 844b2460520c5f276ddeeb461d5479733da86acda7488aa1f1de50a17febd5b8
 
   CI2_CARRIER_HEAD: ${{ github.event.pull_request.head.sha }}
   CI2_CHECKOUT_BOOTSTRAP: |

@@ -73,7 +73,7 @@ REUSE = {
     'run-linux-qualification-v16-container.sh': '755466a1b5e6b1eec47b147ebda64169f6f0e809b9457c0740318e884f4abe00',
 }
 RUNTIME_NAMES = set(REUSE) | {'run-linux-qualification-native-v1.sh', 'run-linux-qualification-native-v1-worker.sh'}
-PROFILE_SHA = 'b80ffe1b59ac78da1dfb72cbcdbc21dc1a49966159cbfb07ff9e57162d161b82'
+PROFILE_SHA = 'c093eb6f3ba201717e2d5398d282e1a5f044bf4d681de9e696bc2dd229de4a75'
 
 
 def require(ok, message):
