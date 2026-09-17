@@ -3,7 +3,7 @@ name: Release
 # Manually-triggered end-to-end release: compute the next version,
 # push an annotated tag, build binaries for linux/amd64 and
 # darwin/arm64 via Bazel (cross-compiled from linux using the zig
-# hermetic_cc_toolchain registered in MODULE.bazel), publish a GitHub
+# hermetic_cc_toolchain selected by each release build command), publish a GitHub
 # Release with both binaries + a combined SHA256SUMS attached, and
 # push a container image to ghcr.io tagged with the version + latest,
 # then update the matching formula in housegate/homebrew-housegate.
@@ -151,16 +151,16 @@ jobs:
       - name: Build binaries (linux/amd64, darwin/arm64)
         run: |
           set -euo pipefail
-          # Cross-compile via zig. linux_amd64_gnu.2.31 is registered in
-          # MODULE.bazel; darwin_arm64 is registered on-demand via
-          # --extra_toolchains because it can't be the host toolchain on
-          # macOS (zig's lld rejects Apple's `-Wl,-x`). On the Linux CI
-          # runner this is fine — zig is only used as a cross-compiler.
+          # Cross-compile via zig. Both release targets opt into their Zig
+          # toolchain at the command boundary. darwin_arm64 can't be the host
+          # toolchain on macOS (zig's lld rejects Apple's `-Wl,-x`); on this
+          # Linux CI runner, Zig is used only for these release builds.
           # static=true is linux-only — macOS has no static libc, and
           # pure-Go code is effectively static for the Go portion anyway;
           # cgo bits (secp256k1) link against the platform's stub
           # frameworks via zig.
           bazel build \
+            --extra_toolchains=@zig_sdk//toolchain:linux_amd64_gnu.2.31 \
             --platforms=@rules_go//go/toolchain:linux_amd64 \
             --@rules_go//go/config:static=true \
             //cmd:housegate
