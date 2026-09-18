@@ -23,6 +23,7 @@ go_test(
     srcs = [
         "hash_test.go",
         "snapshot_query_build_identity_test.go",
+        "snapshot_query_execution_test.go",
         "snapshot_query_hash_test.go",
         "snapshot_query_schema_test.go",
         "types_test.go",

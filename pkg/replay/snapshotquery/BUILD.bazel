@@ -4,10 +4,15 @@ go_library(
     name = "snapshotquery",
     srcs = [
         "canonical.go",
+        "executor.go",
+        "historical_policy.go",
+        "logical_names.go",
         "output.go",
         "ports.go",
         "profile.go",
+        "profile_registry.go",
         "sort.go",
+        "use_admission.go",
     ],
     importpath = "github.com/housegate/housegate/pkg/replay/snapshotquery",
     visibility = ["//visibility:public"],
@@ -16,6 +21,9 @@ go_library(
         "//pkg/lthash",
         "//pkg/replay",
         "//pkg/replay/payloadexec",
+        "//pkg/rewriter",
+        "@com_github_housegate_rewriter_proto//gen/pb",
+        "@org_golang_google_protobuf//proto",
     ],
 )
 
@@ -23,7 +31,11 @@ go_test(
     name = "snapshotquery_test",
     srcs = [
         "canonical_test.go",
+        "executor_test.go",
+        "historical_policy_test.go",
+        "logical_names_test.go",
         "ports_test.go",
+        "profile_registry_test.go",
         "profile_test.go",
         "sort_test.go",
     ],
@@ -33,5 +45,7 @@ go_test(
         "//pkg/lthash",
         "//pkg/replay",
         "//pkg/replay/payloadexec",
+        "//pkg/rewriter",
+        "@com_github_housegate_rewriter_proto//gen/pb",
     ],
 )
