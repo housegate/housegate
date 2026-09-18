@@ -73,6 +73,10 @@ class CarrierTests(unittest.TestCase):
         self.assertIn(carrier['PROFILE_SHA'],workflow)
         self.assertEqual(len(carrier['RUNTIME_NAMES']),13)
         self.assertEqual(self.p['admitted_host_tuples'],[self.identity])
+        self.assertEqual(hashlib.sha256((ROOT/'run-linux-qualification-native-v1-worker.sh').read_bytes()).hexdigest(),'d0cb7d407ba4fcb31195d5faddb6f60ea7b163220de482b949cc8cb6bd2907e3')
+        self.assertIn('types: [opened, synchronize, reopened, labeled]',workflow)
+        self.assertIn("github.event.label.name == format('ci2-ok-{0}', github.event.pull_request.head.sha)",workflow)
+        self.assertIn("steps.preparation.outcome == 'success' && !cancelled()",workflow)
 
     def test_empty_allowlist_disables_qualification(self):
         event,env=self.admission_input()
@@ -143,12 +147,108 @@ class CarrierTests(unittest.TestCase):
         bad['disks']['root']['free']=8589934591
         self.refused(carrier['admit_host'],bad,self.p,True)
 
-    def test_image_id_digest_architecture(self):
-        e=self.p['image']; good=[dict(Id=e['id'],RepoDigests=[e['reference']],Os=e['os'],Architecture=e['architecture'],Size=e['size'],Config={'User':e['user'],'Entrypoint':e['entrypoint'],'WorkingDir':e['workdir']})]
+    def image_fixture(self):
+        e=self.p['image']
+        return [dict(Id=e['id'],RepoDigests=[e['reference']],Os=e['os'],Architecture=e['architecture'],Size=e['size'],Config={'User':e['user'],'Entrypoint':e['entrypoint'],'WorkingDir':e['workdir']})]
+
+    def refusal_env(self):
+        return dict(CI2_CARRIER_HEAD='a'*40,GITHUB_RUN_ID='123',GITHUB_RUN_ATTEMPT='1')
+
+    def export_image_refusal(self,image,directory):
+        try:
+            call('image_admit',image,self.p)
+        except Exception as error:
+            path=directory/'export'/'refusal.json';path.parent.mkdir(parents=True)
+            call('export_refusal',directory,'internal-prepare',error,self.refusal_env())
+            self.assertEqual(path, directory/'export'/'refusal.json')
+            return path.read_bytes(),json.loads(path.read_text())
+        self.fail('image fixture unexpectedly admitted')
+
+    def test_image_configuration_diagnostic_reaches_exact_refusal_export(self):
+        good=self.image_fixture()
         call('image_admit',good,self.p)
-        for key,value in [('Id','sha256:'+'0'*64),('RepoDigests',[]),('Architecture','arm64'),('Size',0)]:
-            bad=copy.deepcopy(good);bad[0][key]=value
-            self.refused(carrier['image_admit'],bad,self.p)
+        self.assertFalse((self.root/'export'/'refusal.json').exists())
+        mutations=(
+            ('os',lambda x:x.__setitem__('Os','other')),
+            ('architecture',lambda x:x.__setitem__('Architecture','arm64')),
+            ('size',lambda x:x.__setitem__('Size',0)),
+            ('user',lambda x:x['Config'].__setitem__('User','root')),
+            ('entrypoint',lambda x:x['Config'].__setitem__('Entrypoint',['/other'])),
+            ('workdir',lambda x:x['Config'].__setitem__('WorkingDir','/tmp')),
+        )
+        for index,(name,mutate) in enumerate(mutations):
+            with self.subTest(name=name):
+                bad=copy.deepcopy(good);mutate(bad[0]);directory=self.root/str(index);directory.mkdir()
+                data,record=self.export_image_refusal(bad,directory)
+                diagnostic=record['image_admission']
+                self.assertEqual(diagnostic['mismatch_names'],[name])
+                self.assertEqual(diagnostic['actual'],dict(os=bad[0]['Os'],architecture=bad[0]['Architecture'],size=bad[0]['Size'],user=bad[0]['Config']['User'],entrypoint=bad[0]['Config']['Entrypoint'],workdir=bad[0]['Config']['WorkingDir']))
+                self.assertEqual(diagnostic['expected'],dict(os=self.p['image']['os'],architecture=self.p['image']['architecture'],size=self.p['image']['size'],user=self.p['image']['user'],entrypoint=self.p['image']['entrypoint'],workdir=self.p['image']['workdir']))
+                self.assertTrue(diagnostic['id_matches_expected'])
+                self.assertTrue(diagnostic['reference_in_repo_digests'])
+                self.assertEqual(record['head'],'a'*40)
+                self.assertEqual(record['profile_sha256'],carrier['PROFILE_SHA'])
+                self.assertEqual((record['run_id'],record['attempt'],record['mode'],record['workload_created']),('123','1','internal-prepare',False))
+                self.assertLessEqual(len(data),carrier['IMAGE_REFUSAL_MAX_BYTES'])
+        all_bad=copy.deepcopy(good)
+        for _,mutate in mutations: mutate(all_bad[0])
+        _,record=self.export_image_refusal(all_bad,self.root/'all')
+        self.assertEqual(record['image_admission']['mismatch_names'],list(carrier['IMAGE_FIELD_NAMES']))
+
+    def test_image_diagnostic_input_bounds_and_generic_refusals(self):
+        good=self.image_fixture()
+        for mutate in (
+            lambda x:x.__setitem__('Os',7),
+            lambda x:x.__setitem__('Architecture','x'*(carrier['IMAGE_STRING_MAX']+1)),
+            lambda x:x.__setitem__('Architecture','é'*(carrier['IMAGE_STRING_MAX']//2+1)),
+            lambda x:x.__setitem__('Size',-1),
+            lambda x:x.__setitem__('Size',carrier['IMAGE_SIZE_MAX']+1),
+            lambda x:x.__setitem__('Size',True),
+            lambda x:x['Config'].__setitem__('Entrypoint',['x']*(carrier['IMAGE_LIST_MAX']+1)),
+            lambda x:x['Config'].__setitem__('Entrypoint',[7]),
+            lambda x:x.__setitem__('RepoDigests',['x']*(carrier['IMAGE_LIST_MAX']+1)),
+            lambda x:x.__setitem__('RepoDigests','not-a-list'),
+        ):
+            bad=copy.deepcopy(good);mutate(bad[0])
+            with self.assertRaises(Exception) as raised: call('image_admit',bad,self.p)
+            self.assertFalse(isinstance(raised.exception,carrier['ImageConfigurationRefusal']))
+        for missing in ('Os','Architecture','Size'):
+            bad=copy.deepcopy(good);del bad[0][missing]
+            with self.assertRaises(Exception) as raised: call('image_admit',bad,self.p)
+            self.assertFalse(isinstance(raised.exception,carrier['ImageConfigurationRefusal']))
+        bad=copy.deepcopy(good);del bad[0]['Config']['User']
+        with self.assertRaises(Exception) as raised: call('image_admit',bad,self.p)
+        self.assertFalse(isinstance(raised.exception,carrier['ImageConfigurationRefusal']))
+        bad=copy.deepcopy(good);del bad[0]['Config']['Entrypoint']
+        with self.assertRaises(Exception) as raised: call('image_admit',bad,self.p)
+        self.assertFalse(isinstance(raised.exception,carrier['ImageConfigurationRefusal']))
+        bad=copy.deepcopy(good);bad[0]['Id']='sha256:'+'0'*64
+        with self.assertRaisesRegex(ValueError,'image digest/id') as raised: call('image_admit',bad,self.p)
+        self.assertFalse(isinstance(raised.exception,carrier['ImageConfigurationRefusal']))
+        del bad[0]['Config']
+        with self.assertRaisesRegex(ValueError,'image digest/id'): call('image_admit',bad,self.p)
+        bad=copy.deepcopy(good);bad[0]['RepoDigests']=[];del bad[0]['Config']
+        with self.assertRaisesRegex(ValueError,'image digest/id'): call('image_admit',bad,self.p)
+
+        first=self.root/'generic-1';second=self.root/'generic-2'
+        for directory in (first,second):
+            (directory/'export').mkdir(parents=True)
+            call('export_refusal',directory,'internal-prepare',ValueError('unexpected failure'),self.refusal_env())
+        self.assertEqual((first/'export/refusal.json').read_bytes(),(second/'export/refusal.json').read_bytes())
+        generic=json.loads((first/'export/refusal.json').read_text())
+        self.assertNotIn('image_admission',generic)
+        self.assertEqual(generic['error'],'unexpected failure')
+
+    def test_image_diagnostic_serialization_is_bounded_and_deterministic(self):
+        bad=self.image_fixture();bad[0]['Config']['Entrypoint']=['x'*carrier['IMAGE_STRING_MAX']]*carrier['IMAGE_LIST_MAX']
+        records=[]
+        for name in ('one','two'):
+            directory=self.root/name;directory.mkdir()
+            data,record=self.export_image_refusal(copy.deepcopy(bad),directory)
+            records.append((data,record))
+        self.assertEqual(records[0][0],records[1][0])
+        self.assertLessEqual(len(records[0][0]),carrier['IMAGE_REFUSAL_MAX_BYTES'])
+        self.assertEqual(records[0][1]['image_admission']['mismatch_names'],['entrypoint'])
 
     def test_container_init_resources_and_mounts(self):
         r=self.p['resources'];bundle=self.root/'source.bundle'

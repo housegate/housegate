@@ -74,6 +74,17 @@ REUSE = {
 }
 RUNTIME_NAMES = set(REUSE) | {'run-linux-qualification-native-v1.sh', 'run-linux-qualification-native-v1-worker.sh'}
 PROFILE_SHA = 'c093eb6f3ba201717e2d5398d282e1a5f044bf4d681de9e696bc2dd229de4a75'
+IMAGE_FIELD_NAMES = ('os', 'architecture', 'size', 'user', 'entrypoint', 'workdir')
+IMAGE_STRING_MAX = 512
+IMAGE_LIST_MAX = 16
+IMAGE_SIZE_MAX = (1 << 63) - 1
+IMAGE_REFUSAL_MAX_BYTES = 16 * 1024
+
+
+class ImageConfigurationRefusal(ValueError):
+    def __init__(self, diagnostic):
+        self.diagnostic = diagnostic
+        super().__init__('image configuration')
 
 
 def require(ok, message):
@@ -124,6 +135,40 @@ def write_json(path, record):
     with Path(path).open('xb') as stream:
         stream.write(data)
     Path(path).chmod(0o444)
+
+
+def canonical_json(record):
+    return (json.dumps(record, sort_keys=True, separators=(',', ':')) + '\n').encode()
+
+
+def bounded_image_string(value, name):
+    require(isinstance(value, str) and len(value.encode()) <= IMAGE_STRING_MAX, name+' type/size')
+    return value
+
+
+def bounded_image_list(value, name):
+    require(isinstance(value, list) and len(value) <= IMAGE_LIST_MAX, name+' type/count')
+    return [bounded_image_string(item, name+' member') for item in value]
+
+
+def bounded_image_size(value, name):
+    require(type(value) is int and 0<=value<=IMAGE_SIZE_MAX,name+' type/range')
+    return value
+
+
+def export_refusal(root, mode, error, env=os.environ):
+    record=dict(schema='ci2-native-refusal-v1',mode=mode,error=str(error)[:512],workload_created=False,profile_sha256=PROFILE_SHA,run_id=env.get('GITHUB_RUN_ID'),attempt=env.get('GITHUB_RUN_ATTEMPT'))
+    if isinstance(error, ImageConfigurationRefusal):
+        head=env.get('CI2_CARRIER_HEAD','')
+        require(mode=='internal-prepare' and re.fullmatch('[0-9a-f]{40}',head) is not None,'image refusal head/mode binding')
+        require(re.fullmatch('[1-9][0-9]{0,19}',env.get('GITHUB_RUN_ID','')) is not None and env.get('GITHUB_RUN_ATTEMPT')=='1','image refusal run/attempt binding')
+        record['head']=head
+        record['image_admission']=error.diagnostic
+        require(len(canonical_json(record))<=IMAGE_REFUSAL_MAX_BYTES,'image refusal receipt too large')
+    filename='bootstrap-refusal.json' if mode=='internal-checkout' else 'refusal.json'
+    path=Path(root)/'export'/filename
+    write_json(path,record)
+    return path
 
 
 def profile(directory=HERE):
@@ -380,10 +425,41 @@ def prepull_disks(observed,p):
 
 def image_admit(image,p):
     e=p['image']
-    require(len(image)==1, 'image count')
+    require(isinstance(image,list) and len(image)==1, 'image count')
     x=image[0]
-    require(x['Id']==e['id'] and e['reference'] in x['RepoDigests'], 'image digest/id')
-    require((x['Os'],x['Architecture'],x['Size'],x['Config']['User'],x['Config']['Entrypoint'],x['Config']['WorkingDir'])==(e['os'],e['architecture'],e['size'],e['user'],e['entrypoint'],e['workdir']), 'image configuration')
+    require(isinstance(x,dict),'image object type')
+    image_id=bounded_image_string(x['Id'],'image id')
+    expected_id=bounded_image_string(e['id'],'expected image id')
+    id_matches=image_id==expected_id
+    require(id_matches, 'image digest/id')
+    repo_digests=bounded_image_list(x['RepoDigests'],'image repo digests')
+    expected_reference=bounded_image_string(e['reference'],'expected image reference')
+    reference_matches=expected_reference in repo_digests
+    require(reference_matches, 'image digest/id')
+
+    actual_os=bounded_image_string(x['Os'],'image os')
+    actual_architecture=bounded_image_string(x['Architecture'],'image architecture')
+    actual_size=bounded_image_size(x['Size'],'image size')
+    config=x['Config'];require(isinstance(config,dict),'image config type')
+    actual_user=bounded_image_string(config['User'],'image user')
+    actual_entrypoint=bounded_image_list(config['Entrypoint'],'image entrypoint')
+    actual_workdir=bounded_image_string(config['WorkingDir'],'image working directory')
+    actual=dict(os=actual_os,architecture=actual_architecture,size=actual_size,user=actual_user,entrypoint=actual_entrypoint,workdir=actual_workdir)
+    expected={
+        'os': bounded_image_string(e['os'],'expected image os'),
+        'architecture': bounded_image_string(e['architecture'],'expected image architecture'),
+        'size': bounded_image_size(e['size'],'expected image size'),
+        'user': bounded_image_string(e['user'],'expected image user'),
+        'entrypoint': bounded_image_list(e['entrypoint'],'expected image entrypoint'),
+        'workdir': bounded_image_string(e['workdir'],'expected image working directory'),
+    }
+    actual_tuple=tuple(actual[name] for name in IMAGE_FIELD_NAMES)
+    expected_tuple=tuple(expected[name] for name in IMAGE_FIELD_NAMES)
+    if actual_tuple!=expected_tuple:
+        mismatch_names=[name for name,actual_value,expected_value in zip(IMAGE_FIELD_NAMES,actual_tuple,expected_tuple) if actual_value!=expected_value]
+        diagnostic=dict(actual=actual,expected=expected,mismatch_names=mismatch_names,id_matches_expected=id_matches,reference_in_repo_digests=reference_matches)
+        require(len(canonical_json(diagnostic))<=IMAGE_REFUSAL_MAX_BYTES,'image diagnostic too large')
+        raise ImageConfigurationRefusal(diagnostic)
 
 
 def git(run, repo, args, seconds=20):
@@ -727,8 +803,7 @@ if __name__=='__main__':
                 except ValueError:
                     # A new path may be created, but an existing path is never adopted.
                     refusal_root,_=owned_root(True)
-                filename='bootstrap-refusal.json' if sys.argv[2]=='internal-checkout' else 'refusal.json'
-                write_json(refusal_root/'export'/filename,dict(schema='ci2-native-refusal-v1',mode=sys.argv[2],error=str(error)[:512],workload_created=False,profile_sha256=PROFILE_SHA,run_id=os.environ.get('GITHUB_RUN_ID'),attempt=os.environ.get('GITHUB_RUN_ATTEMPT')))
+                export_refusal(refusal_root,sys.argv[2],error)
             except Exception:
                 print('Refusal artifact unavailable; no ownership was assumed',file=sys.stderr)
         raise SystemExit(74)
