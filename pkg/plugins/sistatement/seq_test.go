@@ -180,8 +180,11 @@ func TestSeqCounter_RequiresAccountAndDir(t *testing.T) {
 		t.Fatal("empty account must be rejected")
 	}
 	missing := filepath.Join(t.TempDir(), "not-created")
-	if _, err := OpenSeqCounter(missing, "0xabc"); err == nil || !strings.Contains(err.Error(), "must already exist") {
+	if _, err := OpenSeqCounter(missing, "0xabc"); !errors.Is(err, os.ErrNotExist) || !strings.Contains(err.Error(), "must already exist") {
 		t.Fatalf("missing state dir = %v, want pre-existing-directory error", err)
+	}
+	if _, err := os.Stat(missing); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing state dir was created: %v", err)
 	}
 	notDir := filepath.Join(t.TempDir(), "file")
 	if err := os.WriteFile(notDir, []byte("x"), 0o600); err != nil {
@@ -189,6 +192,58 @@ func TestSeqCounter_RequiresAccountAndDir(t *testing.T) {
 	}
 	if _, err := OpenSeqCounter(notDir, "0xabc"); err == nil || !strings.Contains(err.Error(), "not a directory") {
 		t.Fatalf("file state dir = %v, want not-a-directory error", err)
+	}
+}
+
+func TestSeqCounter_StateDirPermissionErrorPreservesSequence(t *testing.T) {
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "agent")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	seqPath := filepath.Join(dir, "0xabc.seq")
+	if err := os.WriteFile(seqPath, []byte("41\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Reproduce a nonroot sidecar unable to traverse its root-owned parent.
+	if err := os.Chmod(parent, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(parent, 0o700); err != nil {
+			t.Errorf("restore parent permissions: %v", err)
+		}
+	})
+	if _, err := os.Stat(dir); err == nil {
+		t.Skip("process can bypass directory search permissions")
+	} else if !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("stat inaccessible state dir: %v", err)
+	}
+	counter, err := OpenSeqCounter(dir, "0xabc")
+	if counter != nil || !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("OpenSeqCounter = %v, %v; want no counter and permission error", counter, err)
+	}
+	for _, want := range []string{dir, "ownership", "search permissions", "parent"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("permission error %q must contain %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "must already exist") {
+		t.Errorf("permission error misdiagnosed as missing directory: %v", err)
+	}
+	var pathErr *os.PathError
+	if !errors.As(err, &pathErr) || pathErr.Path != dir {
+		t.Errorf("permission error lost underlying path error: %v", err)
+	}
+	if err := os.Chmod(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenSeqCounter(dir, "0xabc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened.Last() != 41 {
+		t.Fatalf("permission failure changed durable high watermark to %d", reopened.Last())
 	}
 }
 

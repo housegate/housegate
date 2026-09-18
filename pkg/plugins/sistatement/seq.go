@@ -57,7 +57,16 @@ func OpenSeqCounter(stateDir, account string) (*SeqCounter, error) {
 	}
 	info, err := os.Stat(stateDir)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, fmt.Errorf("sistatement: state dir %s must already exist", stateDir)
+		return nil, fmt.Errorf(
+			"sistatement: state dir %s must already exist; deployment must provision it durably before startup: %w",
+			stateDir, err,
+		)
+	}
+	if errors.Is(err, fs.ErrPermission) {
+		return nil, fmt.Errorf(
+			"sistatement: cannot access state dir %s; check ownership and search permissions on parent directories for the agent user: %w",
+			stateDir, err,
+		)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("sistatement: stat state dir %s: %w", stateDir, err)
