@@ -33,10 +33,17 @@ func (testReadStore) Open(context.Context, replay.SnapshotPin, replay.SnapshotRe
 	return testReadSnapshot{}, nil
 }
 
+type testScratchRestorer struct{}
+
+func (testScratchRestorer) Restore(context.Context, replay.SafeSnapshotManifest, replay.AuthenticatedSnapshotQuerySchemaV1, []payloadexec.TableSchema, replay.SnapshotReadSet, []VerifiedPart) (ReadSnapshot, error) {
+	return testReadSnapshot{}, nil
+}
+
 func TestLeafPortSignatures(t *testing.T) {
 	var _ RowStream = testRowStream{}
 	var _ ReadSnapshot = testReadSnapshot{}
 	var _ SnapshotReadStore = testReadStore{}
+	var _ ScratchRestorer = testScratchRestorer{}
 	relation := Relation{TableID: "db.t", Database: "db", Table: "t"}
 	if relation.TableID != "db.t" || relation.Database != "db" || relation.Table != "t" {
 		t.Fatal("relation fields changed")

@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "materializer.go",
         "scan.go",
+        "snapshot.go",
     ],
     importpath = "github.com/housegate/housegate/pkg/replay/chexec",
     visibility = ["//visibility:public"],
@@ -13,6 +14,7 @@ go_library(
         "//pkg/replay",
         "//pkg/replay/nativepayload",
         "//pkg/replay/payloadexec",
+        "//pkg/replay/snapshotquery",
         "@com_github_clickhouse_clickhouse_go_v2//:clickhouse-go",
     ],
 )
@@ -23,13 +25,18 @@ go_test(
         "column_profile_authority_test.go",
         "materializer_format_test.go",
         "materializer_time_test.go",
+        "snapshot_test.go",
     ],
     embed = [":chexec"],
     deps = [
+        "//pkg/auth",
         "//pkg/lthash",
         "//pkg/replay",
         "//pkg/replay/nativepayload",
         "//pkg/replay/payloadexec",
+        "//pkg/replay/snapshotquery",
         "@com_github_clickhouse_ch_go//proto",
+        "@com_github_clickhouse_clickhouse_go_v2//:clickhouse-go",
+        "@com_github_clickhouse_clickhouse_go_v2//lib/driver",
     ],
 )
