@@ -4,6 +4,9 @@ go_library(
     name = "snapshotquery",
     srcs = [
         "canonical.go",
+        "composite_executor.go",
+        "verification_copy.go",
+        "verifier.go",
         "executor.go",
         "historical_policy.go",
         "logical_names.go",
@@ -31,6 +34,8 @@ go_test(
     name = "snapshotquery_test",
     srcs = [
         "canonical_test.go",
+        "composite_executor_test.go",
+        "verifier_test.go",
         "executor_test.go",
         "historical_policy_test.go",
         "logical_names_test.go",
