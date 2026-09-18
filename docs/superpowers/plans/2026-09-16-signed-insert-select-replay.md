@@ -1,0 +1,412 @@
+# Signed INSERT ... SELECT Snapshot Replay Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Restore an authenticated read snapshot and independently derive deterministic query output, complete post-state and versioned replay evidence.
+
+**Architecture:** Housegate defines injected snapshot/row-stream ports and owns canonical execution. Arbiter-core publishes and retains immutable artifacts and supplies a verified scratch handle. A new query executor implements `replay.Executor`; shared append helpers preserve the v2 payload executor and the full predecessor ledger.
+
+**Tech Stack:** Go, ClickHouse native client, immutable part artifacts, canonical row encoding, bounded external merge sort, Bazel and Docker.
+
+**Specs:** [Signed INSERT ... SELECT design](../specs/2026-09-16-signed-insert-select-design.md), D2 and D5–D7; [artifact lifecycle](../specs/2026-09-17-signed-insert-select-artifact-lifecycle-design.md); [plan index](2026-09-16-signed-insert-select.md); [contracts plan](2026-09-16-signed-insert-select-contracts.md).
+
+## Global Constraints
+
+- All [index constraints](2026-09-16-signed-insert-select.md#global-constraints) apply; A's wire/analysis interfaces are dependencies, not existing APIs.
+- Use exactly the pinned S, complete read tables, all active parts and the entire predecessor ledger. A self-consistent manifest alone is not authenticated publication.
+- Sort **full** `lthash.EncodeRow` user-row bytes; preserve duplicates and global ordinals `0..N-1`; keep `housegate-row-id-v1` unchanged.
+- Reuse `ResolveColumnProfile`, `PartitionIDForRow` and `RowElementHash`. No new type or expression-evaluation authority is introduced.
+- Local inability to validate/restore/execute is a pre-receipt refusal. Valid independent replay that disagrees with a source produces signed mismatch evidence.
+- Canonical algorithms belong to HG; artifact I/O and retention implementations belong to AC. Neither package may restore from a live `hg_safe` table by assumption.
+
+---
+
+## File map
+
+| Owner | Create | Modify |
+|---|---|---|
+| HG schema | `pkg/replay/snapshot_query_schema.go`, `snapshot_query_schema_test.go`, `pkg/replay/testdata/snapshot_query_schema_v1.json` | `pkg/replay/BUILD.bazel` |
+| HG schema certificate | `pkg/auth/snapshot_schema_certificate.go`, `snapshot_schema_certificate_test.go` | `pkg/auth/BUILD.bazel` |
+| HG ports | `pkg/replay/snapshotquery/ports.go`, `profile.go`, `profile_test.go`, `BUILD.bazel` | None outside build registration |
+| AC artifacts | `dataplane/snapshot_artifacts.go`, `snapshot_artifacts_test.go`, `snapshot_archive.go`, `snapshot_archive_test.go`, `snapshot_checksums.go`, `snapshot_checksums_test.go`, `snapshot_retention.go`, `snapshot_retention_test.go`, `snapshot_owners.go`, `snapshot_owners_test.go` | `dataplane/manifests.go`, `dataplane/BUILD.bazel`; source publication wiring in `snode/promote.go`, `snode/promote_replace.go`, `snode/BUILD.bazel` |
+| AC checksum ZSTD leaf | `dataplane/internal/checksumzstd/{bits.go,block.go,fse.go,huff.go,literals.go,window.go,xxhash.go,zstd.go,fixed_decoder.go,fixed_decoder_test.go,BUILD.bazel,LICENSE,PROVENANCE.json}` | AC-only `dataplane/snapshot_checksums.go`, `snapshot_checksums_test.go`, `dataplane/BUILD.bazel` |
+| HG scratch | `pkg/replay/chexec/snapshot.go`, `snapshot_test.go` | `pkg/replay/chexec/BUILD.bazel` |
+| AC restore | `dataplane/snapshot_restore.go`, `snapshot_restore_test.go` | `dataplane/BUILD.bazel` |
+| HG canonical output | `pkg/replay/snapshotquery/canonical.go`, `canonical_test.go`, `sort.go`, `sort_test.go`, `output.go` | `pkg/replay/snapshotquery/BUILD.bazel` |
+| HG shared append | `pkg/replay/payloadexec/row_source.go`, `apply_rows.go`, `apply_rows_test.go` | `pkg/replay/payloadexec/executor.go`, `exports.go`, `BUILD.bazel` |
+| HG query replay | `pkg/replay/snapshotquery/executor.go`, `executor_test.go`, `verifier.go`, `verifier_test.go`, `dispatch.go`, `dispatch_test.go` | `pkg/replay/types.go` for in-process extension pointers only, respective BUILD files |
+| AC verifier | `verifier/snapshot_query_test.go` | `verifier/backends.go`, `verifier/verifier.go`, `verifier/config.go`, `verifier/BUILD.bazel`, `wire/snapshot_query.go` |
+
+### Task B1: Publish immutable artifacts with durable retention references
+
+**Files:** HG schema, HG schema certificate, HG ports and AC artifacts rows. AC currently has a cached `ManifestStore.GetSafeSnapshot` over `SafeState.GetManifest`; it has no complete artifact publication/retention implementation. Build that missing component explicitly.
+
+**Interfaces:** HG `snapshotquery` defines `SnapshotReadStore.Open(ctx context.Context, pin replay.SnapshotPin, reads replay.SnapshotReadSet, referenceID string) (ReadSnapshot, error)`. It also defines:
+
+```go
+type Relation struct { TableID, Database, Table string }
+
+type RowStream interface {
+    Next(context.Context) ([]any, error) // io.EOF is the only successful end.
+    Close() error
+}
+
+type ReadSnapshot interface {
+    Manifest() replay.SafeSnapshotManifest
+    SchemaArtifact() replay.AuthenticatedSnapshotQuerySchemaV1
+    Schemas() []payloadexec.TableSchema
+    Relations() []Relation
+    QueryRows(context.Context, string, payloadexec.TableSchema) (RowStream, error)
+    Close() error
+}
+```
+
+`QueryRows` is implemented by HG's restricted scratch connection in B2; it returns target-typed values and cannot mutate source relations. Closing the local scratch handle does not drop the durable replay/challenge reference. AC adds `SnapshotArtifacts` with `Publish(ctx context.Context, manifest replay.SafeSnapshotManifest, schema replay.AuthenticatedSnapshotQuerySchemaV1) error`, `Retain(ctx, referenceID, pin) error`, `Release(ctx, referenceID, terminalProof) error`, and `FetchPart(ctx, pin, part) (io.ReadCloser, error)`. `SchemaArtifact()` returns the verified typed object while `Schemas()` returns its validated unchanged `[]payloadexec.TableSchema` projection. Here `pin` is `replay.SnapshotPin`, `part` is `replay.PartManifestEntry`, and `terminalProof` is the authenticated outcome/retention authorization returned by C3, represented as `[]byte` and verified by an injected control-plane verifier. Release must never trust a caller's boolean.
+
+AC owns an injected `PublishedSnapshotSource.GetPublishedSnapshot(ctx context.Context, pin replay.SnapshotPin) (replay.SafeSnapshotManifest, replay.AuthenticatedSnapshotQuerySchemaV1, error)`. Its implementation checks the authenticated SafeState publication/activation/readiness association added in C1–C3, not an arbitrary artifact server. It remains published-only and cannot supply current authority admission, ready-but-unpublished/lost-response lookup, publisher authentication or readiness submission; B1 receives those through the addendum's separate local `ArtifactPublicationControl`. Network authentication plus the committed published record is required; `Manifest.Validate()` remains an additional integrity check.
+
+HG root replay owns the strict canonical artifact/outer records and projection validation; auth owns the pure schema-certificate payload plus the existing compact ES256K signing/verification convention. B1 fetches bounded exact outer bytes, requires byte-identical strict re-encoding, verifies inner and outer digests, the [exact A1 artifact-set commitment](../specs/2026-09-16-signed-insert-select-schema-semantics-design.md#artifact-set-commitment), exact S/projection, certificate purpose/signature and dedicated network/shard-scoped schema-authority role before readiness. The authoritative fields, digest order and no-cycle rule are in the same schema-semantics addendum. Publisher authorization remains separate and occurs only after certificate/object/part validation.
+
+Publish C1's signed `SnapshotArtifactReady` record through `RecordSnapshotArtifactReady` after complete durable upload. Source promotion/publication wiring must export and retain eligible snapshots produced by both payload and query writers. Bootstrap the existing predecessor's artifacts before its executor transition can activate queries. Rewriting a fetch hint means trying another location for the same pinned object; it never mutates the selected manifest or its root.
+
+Make the first storage backend concrete: AC adds `ArtifactBackend` with `Put(ctx context.Context, key string, input io.Reader) (digest string, length uint64, err error)`, `Open(ctx context.Context, key string) (io.ReadCloser, error)` and `Delete(ctx context.Context, key string) error`, plus `NewFilesystemArtifactBackend(rootDir string) (ArtifactBackend, error)`. It uses immutable content keys, atomic/fsynced writes and bounded streaming; validate keys and refuse symlink/path escape. `PartExporter.Export(ctx context.Context, part replay.PartManifestEntry) (io.ReadCloser, error)` supplies an immutable frozen part archive using source data-plane access. AC also owns the addendum's exact local `ArtifactPublisher`, `CommittedArtifactReady`, `ArtifactPublicationControl` and protected `ArtifactOwnerRegistry` implementation. `NewSnapshotArtifacts(backend ArtifactBackend, exporter PartExporter, published PublishedSnapshotSource, publication ArtifactPublicationControl, journalDir string, owners ArtifactOwnerRegistry, verifyTerminal func(context.Context, string, replay.SnapshotPin, []byte) error) (SnapshotArtifacts, error)` supplies B1's public port. `owners` is the required explicit dependency immediately before the existing callback; it implements the exact five-class grammar, immutable owner/pin binding, protected acquisition allocation, tracked use/close lifecycle, transfer edges, spent state and conservative recovery defined by the addendum's [local reference ownership](../specs/2026-09-16-signed-insert-select-schema-semantics-design.md#local-reference-ownership). The verifier arguments are `(ctx, expectedReferenceID, expectedPin, terminalProof)`: B1 reads the immutable expected binding from its durable journal and passes it explicitly; no wrapper may discard either expected value or obtain it from mutable closure/context state. Source and verifier share immutable artifact objects but use protected constructor-bound per-principal ownership partitions in the first profile; shared unrestricted writable storage and local ephemeral caches fail enablement. Remote object-store adapters can implement the artifact backend later without changing roots or owner identity.
+
+The part archive is exactly HGPART v1 from the [artifact-lifecycle addendum](../specs/2026-09-17-signed-insert-select-artifact-lifecycle-design.md), produced from D3's fenced complete-tree view. B1 preserves all selected `S`, including untouched `U`, auxiliaries, projections and empty directories; it does not apply `ResolveColumnProfile` or the 1 GiB selected-`R` restore bound to whole `S`. Implement the exact checksum support/qualification boundary, P/F/T accounting, per-object and whole-`S` ceilings, 256 MiB owned-memory budget, actual-inventory block/inode reservation formula and two-phase descriptor-relative no-follow extraction. Unsupported physical proof refuses by name; no generic tar extractor, partial object exposure, dedup admission bypass or mandatory 193 GiB free-space check is allowed.
+
+For v4/ZSTD, AC copies only upstream Go 1.26.3 `src/internal/zstd`'s eight production files from commit `2dc996f71b0ebafb77e64433e58333e049488a3c` into the private checksum leaf and records original paths/hashes, BSD license and every fixed-storage/error/bounds delta in `PROVENANCE.json`. Adapt one non-copyable owner with fixed typed arrays, no pools/growth/generic reader/exported options/dictionaries/concurrency API, no per-frame worker or formatted-error allocation and no references retained into borrowed input/output. Only `snapshot_checksums.go` constructs it on B1's single retained worker. There is no HG source or module/pin change.
+
+The wrapper verifies CH128 and the exact encoded boundary before synchronous one-frame decode, and exposes output only after declared length, optional inner checksum and exact EOF pass. The decoder refuses window above 8 MiB, concatenated/skippable/trailing input and checks every literal/match/final-literal/block extension before reslicing fixed storage. Keep one worker/decoder reservation across idle, cancel and failure; cancellation joins the current call before reuse and never launches a replacement concurrently. The 9 MiB whole-state compile-time guard is an internal check only; the existing 8 MiB window, 32 MiB workspace and 256 MiB whole-B1 budgets remain the public contract.
+
+Both modes require backend, authenticated published source, journal directory, a bound owner registry and terminal-proof verifier. With `publication == nil`, construction is explicitly read-only, exporter may be nil and Publish returns `ErrArtifactPublicationUnavailable` before any exporter/owner-registry/journal/readiness call; Retain/FetchPart/Release remain published-safe operations through the bound registry. Publishing mode requires nonnil publication and exporter. AC does not introspect an opaque control or invent a generic health method: C1/D3's concrete control constructor validates its authority verifier, separately configured publisher credential/authorization, fixed scope, committed reader and ready submitter. A control error fails Publish and never selects read-only behavior.
+
+- [ ] **Step 1: Write publication/retention tests with a temporary object directory and journal.** Freeze A bytes/digest, certificate bytes/recovered address, O bytes/digest, the addendum's exact populated/empty artifact-set canonical bytes/roots and ready association. Exercise unsorted parts, duplicate structured identity, empty `parts:[]`, distinct physical/object digests and the exact tuple sort without inventing local fields, logical database/table names or a hash domain; explicitly prove O authenticates complete IDs/columns but cannot authenticate a caller's logical labels. Test read-only construction and immediate Publish refusal with zero exporter, owner-registry, journal, authority, publisher or submit calls; published-safe reads/retention still work without publication secrets. Both modes refuse a missing/unbound owner registry. Test all five exact reference grammars/tails, canonical UTF-8 hex/decimal round-trip, exact segment count, unknown class, malformed namespace/serial/literal enum, noncanonical alternate spelling and use-as-path refusal. Test publishing construction refusing a missing exporter and the concrete control refusing missing authority/publisher/scope/reader/submitter wiring. For lookup, out-of-scope, follower, stale, invalid-proof, timeout and unavailable failures never become absence; cover fresh authenticated absence, identical committed-ready-unpublished retry, conflicting root, lost-response exact-root reconciliation and an old-authority committed retry with independent publisher auth. Publish and independently verify candidate artifacts before safe publication, including durable provisional retention registered after candidate seal and before object exposure; upload must not require prior membership in `PublishedSnapshotSource`. Reject unknown/duplicate/missing/noncanonical object fields, wrong purpose/key/role/network/shard/S, inner/outer digest confusion, high-S/bad-V, equal legacy hashes with different generation metadata and byte substitution before C1. Then test query consumption of an internally valid staged-but-unpublished manifest and require `Retain`/`Open`/`FetchPart` refusal despite artifact readiness. Also test a declared empty table, missing schema object, renamed location serving identical bytes, and reference retention across process reconstruction. Tests must inspect storage after a failed operation, not just a return code:
+
+In this same step, independently freeze literal HGPART v1 vectors for explicit/empty directories and files, UTF-8 and greater-than-100-byte paths, parent/file collision, truncated scalar/body, overflow, unknown tag/version, duplicates, trailing/concatenated bytes and actual complete Wide/Compact/projection trees. Reuse existing v4/LZ4 physical qualification; add source-derived strict v2/v3 vectors and independent v4 NONE/ZSTD/multiframe qualification before claiming those handlers, including the v2 LF/TAB name restriction and deliberate literal-`0`/`1` boolean subset. Cover every boundary and one-over value, whole-`S` counters, auxiliary/empty-entry inflation, 2 MiB encoded plus separate 16-byte checksum, 1 MiB decoded, 8 MiB ZSTD window, 32 MiB workspace, dynamic per-volume block/inode reservation and cancellation. Capacity cases compute Aset length from exact identities/lengths and fixed-length noncommitted digest placeholders, charge an unavailable exact metadata length at its existing finite maximum, enforce at most 32 index/journal spool files plus directories and refuse an oversized encoded record or allocation growth before exceeding the allowance. Qualify `mu` and the name debit against actual supported-mount metadata overhead. A tiny fixture must reserve its conservative actual footprint. Exercise body substitution between passes, writable descriptors, symlink/parent replacement, same-key races and object invisibility before fsync.
+
+For the private decoder, record the actual AC Bazel action/toolchain/source digests and prove whole-state size, heap-span rounding, escape/callgraph/stack-growth/static-data and synchronous lifetime bounds on `linux/amd64`, `darwin/arm64` and the actual AC host target. Require zero allocations in decode/reset/error paths across alternating valid and hostile frames, stable backing addresses after reset/cancel/error and no previous buffer/workspace reference escaping. Exercise raw/RLE/compressed blocks, one/four-stream Huffman, FSE/repeat modes, known/unknown content size, maximum-window tiny output, multiblock history, truncation at every boundary, last-sequence/final-literal overrun, malformed tables, zero offset, checksum failure, reserved/skippable/concatenated/trailing input and output+1; carry upstream tests and compare the adapted bytes/errors with pinned independent implementations and ClickHouse. This proof plus complete archive/restore tests is required before B1.2; a 9 MiB struct assertion or old 96-vector corpus is insufficient.
+
+```text
+publish S with complete schemas and two parts -> durable commit marker exists only after both parts verify
+before safe publication: provisional reference survives restart; query consumption of S refuses
+authenticated safe publication after readiness -> query Retain/Open/FetchPart may consume exact S
+registry admits canonical reservation reference -> Retain attaches exact live registration -> restart store -> GC cannot delete either part
+retain same reference twice -> one durable reference; different pin under same reference -> reject
+same live natural-owner retry -> same acquisition A; new authorized historical replay -> new A; spent A never reopens
+publication/reservation/accepted/replay/challenge disposition mismatch -> reject without weakening another class
+tracked handle remains open or old process/fence is unproved -> close/release refuses and keeps objects
+release without authenticated terminal proof -> reject and keep both parts
+two references share one pin; proof for A presented to B -> reject and keep both bindings/parts
+release with wrong reference, pin, reservation/generation, assigned block, statement/input/original JWS or predecessor/child -> reject
+release verification races a mutation -> recheck the same binding before durable mutation and reject stale authorization
+release then restart -> reference identity remains durably spent and cannot be rebound or resurrected
+release after scheduling barrier ends but challenge retention remains -> keep both parts
+corrupt or omit one upload -> no publication-ready acknowledgement
+```
+
+- [ ] **Step 2: Run HG `bazel test //pkg/replay:replay_test //pkg/auth:auth_test //pkg/replay/snapshotquery:snapshotquery_test` and AC `bazel test //dataplane:dataplane_test //snode:snode_test`.** Expect missing schema/certificate/ports/store APIs or failed retention/publication assertions before implementing them. Add the root replay, auth, snapshotquery, dataplane and snode BUILD registrations in this task.
+
+- [ ] **Step 3: Implement the HG schema/certificate prerequisite first, then publish-before-safe readiness and durable references.** In HG root `replay`, implement and freeze A, O, both digest layers, complete legacy projection validation and the exact strict vectors in the [normative schema addendum](../specs/2026-09-16-signed-insert-select-schema-semantics-design.md); do not duplicate or alter its fields and do not add logical names. In `auth`, implement the pure exact compact ES256K certificate payload/signing/verification and recovered-address primitive. These root packages must not import `snapshotquery` or `payloadexec` or create an auth/replay cycle; the leaf `snapshotquery` ports adapter maps an independently validated object to the unchanged `payloadexec.TableSchema` projection, while B4 separately joins protected historical names. Current schema-authority admission, publisher identity and historical-association rules remain in their existing B1/C1 controls, not these pure primitives. Implement AC's protected owner registry and five constructor-selected lifecycle capabilities exactly as the addendum specifies: immutable authenticated registration, fsynced namespace/serial allocation and retry key, tracked use leases, close/release authorization, durable successor handoff, spent tombstones/high-water marks and conservative recovery. Its B4 admission view must validate the exact accepted/replay principal, role, job/JWS/roots/fence/pin/O/pair/claim before Open and preserve a live/uncertain lease when any S-dependent handle cannot prove quiescence. Do not freeze the proposal's illustrative method names or expose arbitrary registration/`closed` inputs. Only after those HG contracts and AC ownership prerequisite pass may AC export exact selected candidate parts and O under content-addressed keys. `Publish` locally validates O/signature/digest layers/S/projection, then requires the constructor-bound issuer lifecycle's existing live `publication` registration for the exact sealed candidate before any export or object write; it computes the complete actual part/artifact root and uses `LookupCommittedArtifactReady` to distinguish authenticated fresh absence from an existing association, and every lookup error stops. For fresh absence, call `AuthorizeCurrentSchemaAuthority` with only the address recovered from O, finish complete byte/root checks and provisional object/readiness fsync under that already-live registration, call `AuthenticatePublisher`, construct the existing readiness record with that returned publisher/policy, call `RecordSnapshotArtifactReady`, and verify its returned pin/record/evidence. If lookup or lost-response reconciliation returns an association, compare every pin/readiness field and reject conflicts; only an identical root may skip current authority admission, after the same exact O/root/S/projection checks and an `AuthenticatePublisher` result whose publisher ID and retention policy match the committed readiness fields. Readiness cannot be exposed before complete bytes/root validation and provisional ownership, even if lookup precedes heavy export. This flow does not require published-safe membership and breaks the readiness/publication dependency cycle. Publication registration is derived from the sealed candidate and constructor-bound issuer lifecycle, before object exposure; it neither trusts Publish input identity nor calls publisher authentication early. Only a separately authenticated published-safe pin, its committed exact readiness association and an existing exact owner registration authorize query `Retain`, `Open` and `FetchPart`; readiness, a certificate or a well-formed reference string alone does not. Never delete old parts or O merely because a MergeTree merge made them inactive locally. Use atomic write/fsync/rename and a durable reference/owner journal; account for publication, reservation, accepted, replay and challenge ownership independently. Reconcile abandoned provisional uploads against the real control-plane publication/cancellation authority before GC; absent a proven submission-exclusion seam, retain/resume/quarantine rather than free on uploader disconnect or fresh absence.
+
+Implement the archive/local-lifecycle portion of this step before C1 consumption: exact HGPART v1 streaming, full checksum/physical verifier, dynamic capacity reservation, immutable spool, descriptor-relative extraction and common-lock owner/object accounting. C1's later candidate-bound control supplies authenticated set-once `C`; when disposition is enabled, every readiness/publication call in the preceding paragraph is wrapped by that exact `C`, lost registration/readiness responses reconcile the original operation, and cancellation never becomes fresh absence or retargets an old command. Successful cancelled-unpublished GC and published-retired GC use different terminal predicates from the artifact-lifecycle addendum. Until the real control is available, B1 fakes remain consumer mechanics and cannot claim finite authority.
+
+```text
+Publish(manifest, authenticatedSchema):
+  validate exact O, both digest layers, certificate role/S and full legacy projection
+  require/recover the constructor-bound issuer lifecycle's existing live publication registration for the exact sealed candidate
+  export each selected part from a stable frozen source view
+  hash/check every artifact; fsync artifact and schema objects
+  write/fsync readiness record binding snapshot_id, manifest_root and all artifact hashes
+  acknowledge readiness; only the control plane may publish the safe snapshot
+
+Retain(referenceID, pin):
+  require existing live authenticated owner registration and verify exact published pin
+  atomically attach referenceID -> exact pin and acquire tracked use leases
+  reject rebinding an existing or spent referenceID; repeated identical retain succeeds only while live
+
+Release(referenceID, terminalProof):
+  load immutable referenceID -> exact pin binding from the durable journal
+  require this acquisition closed/quiescent
+  verify terminalProof against that expected referenceID, exact pin and exact class disposition outside long-held journal/GC locks
+  only after successful exact terminal evaluation persist release authorization for that binding
+  immediately before mutation recheck the same live binding/registry state and persist a spent identity atomically
+  release only this ownership; never treat verifier success as object-delete authority
+
+GC(candidate):
+  require no live/provisional/uncertain references, active leases, handoffs or authorized-not-spent entries
+  require exact cancelled-never-published or published-RETIRED disposition and settled obligations/debts
+  recheck under the GC/reference lock, then delete the immutable object
+```
+
+Repeated Release is idempotent only for the already-spent binding and cannot authorize a recreated owner. Failure, timeout, cancellation, mismatch or a concurrent binding change leaves the live ownership, O and all parts intact. A scheduling/query terminal proof cannot release provisional publication ownership without its own authenticated publication/cancellation disposition, and a scheduling reference cannot be released while it is the only durable protection for an unresolved challenge or cleanup obligation. Object GC remains a separate decision requiring zero durable ownerships plus the exact cancelled-candidate or published-retirement predicate; the current tip and every object shared with another candidate, published snapshot or acquisition remain protected.
+
+Use the artifact-lifecycle addendum's exact complete physical/checksum authority and evidence boundaries. The content-addressed object key is separate from `part_phys_hash`: verify object SHA-256 and `T`, covered `P`, physical hashes and sealed complete inventory without confusing archive bytes, checksum wrappers or ClickHouse data codecs. Interrupted uploads are protected private temporaries, never readable parts.
+
+- [ ] **Step 4: Run retention fault injection, cold fetch and the complete local consumer gate.** Run HG `bazel test //pkg/replay:replay_test //pkg/auth:auth_test //pkg/replay/snapshotquery:snapshotquery_test` and AC `bazel test //dataplane:dataplane_test //snode:snode_test`. Exercise every HGPART/checksum/resource boundary, disk/inode reservation, cold immutable revalidation, body substitution, writable-descriptor/symlink/parent replacement, same-key race and all five owner classes. Crash during allocation/C registration, O/part upload, fsync, readiness, Retain, handoff, tracked-use close, external verification, release authorization, spent-marker persistence and object GC; reconstruct from disk and preserve every protected object, certificate, namespace/serial/tombstone. Cover exact callback arguments, verifier refusal/mismatch/offline authority, A/B references sharing one pin, parallel same-job acquisitions, natural-owner retry versus new historical replay, wrong full identity, active handles, challenge transfer and shared-object races. Local fake evaluation closes only B1 archive/parser/registry/lease/journal mechanics; real candidate/use/obligation/retirement authority and actual process fencing remain C1/C2/C3/B5/C5/D3/D4 gates. Preserve capability-off behavior.
+
+- [ ] **Step 5: Commit HG `feat(snapshot): define authenticated snapshot schema` before AC `feat(snapshot): retain authenticated replay artifacts`.** The HG commit contains schema, certificate and ports prerequisites; pin that commit before AC implementation. No live network is made artifact-capable merely by adding the manifest reader or by passing B1's local fake-verifier gate.
+
+### Task B2: Restore and verify read-only scratch relations
+
+**Files:** HG scratch and AC restore rows; use B1's ports and A3/A5 scratch-binding contract.
+
+**Interfaces:** AC `NewSnapshotReadStore(published PublishedSnapshotSource, artifacts SnapshotArtifacts, restorer snapshotquery.ScratchRestorer) snapshotquery.SnapshotReadStore` returns the implementation of HG's interface. It verifies the selected published manifest's exact authenticated schema object, then calls `ScratchRestorer.Restore(ctx context.Context, manifest replay.SafeSnapshotManifest, schemaArtifact replay.AuthenticatedSnapshotQuerySchemaV1, schemas []payloadexec.TableSchema, reads replay.SnapshotReadSet, parts []VerifiedPart) (snapshotquery.ReadSnapshot, error)` with that exact object and its validated legacy projection. The restorer independently derives/checks the supplied projection, retains an immutable copy of `schemaArtifact` for `ReadSnapshot.SchemaArtifact()`, and never reconstructs O from `schemas`; `Schemas()` returns only the validated unchanged projection. `VerifiedPart{Entry replay.PartManifestEntry, LocalPath string}` follows download verification; HG `chexec.NewSnapshotRestorer(admin clickhouse.Conn, readerFactory func(context.Context, []snapshotquery.Relation) (clickhouse.Conn, error)) snapshotquery.ScratchRestorer` supplies the port. The factory must provision/read with grants restricted to the restored relations, not return `admin`. Place the `ScratchRestorer`/`VerifiedPart` port types in HG `snapshotquery/ports.go` so HG does not import AC.
+
+- [ ] **Step 1: Add complete-ledger adversarial tests.** Construct S with read table R, target W and unrelated U. Require exact relation membership; remove/duplicate/add a part, change table/partition/schema/row count/bytes, corrupt physical bytes or row LtHash, and require refusal before `QueryRows`. Pass two authenticated objects with the same legacy projection but different semantic bytes and prove the returned handle retains only the exact supplied object; projection-only reconstruction or object substitution refuses. The empty R case must create an authenticated empty relation; removing R from the manifest must fail. Prove restored random scratch names remain transport-only and cannot supply or override B4's constructor-fixed logical names. Inject Open/reader/scratch/stream Close errors and require either completed cleanup or an explicit live/uncertain tracked owner; no adapter may return an escaping unowned reader or report release after unknown quiescence.
+
+```text
+Open(S, {R}, ref): published proof -> retain -> complete descriptor equality -> fetch all R parts
+verify physical hashes -> attach isolated parts -> scan imported rows including _hg_row_id
+sum RowElementHash per part -> part LtHash -> complete partition roots -> expose read-only R
+QueryRows("SELECT value FROM R_scratch", W_schema): return coerced user values only
+attempt production table/catalog/remote read on that reader: permission/profile refusal
+Close(): close reader, remove only this operation's scratch relations, retain durable ref
+```
+
+- [ ] **Step 2: Run HG `bazel test //pkg/replay/chexec:chexec_test` and AC `bazel test //dataplane:dataplane_test`.** Unit fakes must prove the denial order. Register a Docker case for actual grants/ATTACH/readback in D4; do not claim fake connections prove SQL isolation.
+
+- [ ] **Step 3: Implement authenticated restore and the restricted handle.** Verify the D1 publication record, committed exact O/readiness association, schema/root/profile identity, complete legacy projection and all descriptor entries before trusting bytes. Copy the supplied typed object immutably onto the handle for B4, derive/check `Schemas()` from it and never reconstruct or choose O through the lossy projection; current live metadata never substitutes. O and the restorer do not supply trusted logical names; B4 joins those separately and checks the signed R descriptors. Download all active parts of R, not predicate-selected partitions. Validate per-part physical hash, rows, schema and partition; scan with the existing shared row authority and fold every part into its partition commitment. Use an immutable imported copy or a proven immutable hardlink/reflink; do not attach mutable live part paths. Scratch names are random operation-local transport names excluded from commitments. The store receives B4's exact already-admitted reference unchanged, tracks every opened reader/scratch handle against that acquisition and defines Open failure so cleanup completes before return or the lifecycle owner remains uncertain for recovery.
+
+Use A5's prepare API to rewrite every bound read relation to the handle's exact relations. Return only user columns; `_hg_row_id` is accessible to the internal validator and hidden from user SQL. Target coercion runs on the pinned engine with profile-admitted conversions and is read back via `ResolveColumnProfile`. Unknown types, coercion overflow, multi-row scalar subquery errors and incomplete streams fail the operation. If an output scratch table is needed, a separate internal writer owns it; the user's read connection has no INSERT/DDL privilege.
+
+```go
+stream, err := handle.QueryRows(ctx, prepared.GetSelectSql(), targetSchema)
+if err != nil { return nil, err }
+// A caller must read through io.EOF; error/cancel before EOF cannot publish output.
+defer stream.Close()
+```
+
+No `remote()` or live catalog is used to find a missing source. A missing artifact produces a typed retryable restore error. Conflicting identities/corrupt bytes produce a typed integrity refusal. Both are pre-receipt failures.
+
+- [ ] **Step 4: Verify cold/warm equivalence and retention cleanup.** Run AC dataplane and HG chexec tests with the same S but different local unsafe rows, physical download locations and cache layouts. The restored user rows must match. Fail a read midstream and confirm that no applied result or unsafe write exists, while durable pin retention remains recoverable.
+
+- [ ] **Step 5: Commit `feat(replay): restore authenticated query snapshots`.** Include the actual grants/ATTACH integration case in the same implementation branch and its CI registration before marking this task done.
+
+### Task B3: Canonicalize and externally sort the complete output
+
+**Files:** HG canonical output row and `pkg/replay/snapshotquery/profile.go`; add `payloadexec.RowSource` in `row_source.go` as the minimal iterator type used by B4.
+
+**Interfaces:** `type Limits = replay.QueryLimits` uses A4's exact canonical profile bounds (`MaxSQLBytes`, `MaxDescriptorBytes`, `MaxOutputRows`, `MaxOutputBytes`, `MaxRestoreBytes`, `MaxSortMemoryBytes`, `MaxSpillBytes`, `MaxExecutionMS`), all `uint64`. Add `Canonicalize(ctx context.Context, networkID, statementID string, schema payloadexec.TableSchema, input RowStream, limits Limits, tempDir string) (CanonicalOutput, error)` and `NormalizeRow(schema payloadexec.TableSchema, values []any) ([]any, error)`.
+
+```go
+// package payloadexec
+type RowSource interface {
+    Next(context.Context) (Row, error)
+    Close() error
+}
+
+// package snapshotquery
+type CanonicalOutput interface {
+    RowCount() uint64
+    OutputRowsRoot() string
+    TouchedPartitionIDs() []string
+    OpenRows() (payloadexec.RowSource, error)
+    Close() error
+}
+```
+
+- [ ] **Step 1: Add ordering, multiplicity and limit tests.** Feed the same typed rows in reversed, shuffled and differently chunked orders, including `65536` identical rows and at least two partitions. Independently compute each expected key with `lthash.EncodeRow`, sort via `bytes.Compare`, and assert every assigned `RowID(network, table, statement, ordinal)` without resetting ordinal. Include canonical NaNs, negative/positive zero and equal instants with different timezone representations. Do not use output-root equality alone as proof of multiplicity.
+
+```go
+func TestCanonicalKeyOrdersBytesNotDigest(t *testing.T) {
+    cols := []lthash.Column{{Name: "value", Type: "UInt64"}}
+    var keys [][]byte
+    for _, v := range []uint64{256, 1, 0, 65536} {
+        b, err := lthash.EncodeRow("tenant.copy", cols, []any{v})
+        if err != nil { t.Fatal(err) }
+        keys = append(keys, b)
+    }
+    sort.Slice(keys, func(i, j int) bool { return bytes.Compare(keys[i], keys[j]) < 0 })
+    // Little-endian canonical bytes intentionally differ from numeric ordering.
+    b, err := lthash.EncodeRow("tenant.copy", cols, []any{uint64(65536)})
+    if err != nil { t.Fatal(err) }
+    if !bytes.Equal(keys[1], b) { t.Fatal("canonical byte order changed") }
+}
+```
+
+Add a production-path test that reads `CanonicalOutput.OpenRows()` and compares its keys and IDs to this independent ordering; the snippet above alone tests only the encoding convention. Test zero rows, a canceled stream, `io.ErrUnexpectedEOF`, exact-boundary success and one-over-limit failure for every resource. A partial stream cannot produce `CanonicalOutput`.
+
+- [ ] **Step 2: Run `bazel test //pkg/replay/snapshotquery:snapshotquery_test --test_filter='TestCanonical|TestSort'`.** Expect missing APIs or a wrong order/count on shuffled and spill paths.
+
+- [ ] **Step 3: Implement normalization, sorted runs and a bounded merge.** Use `ResolveColumnProfile` to validate and normalize each value to its exact Go representation; reuse the canonical encoder's NaN/zero/time semantics. Store normalized typed values alongside the full canonical key so the stored output and hashed values agree. Count row bytes, key memory, sort-run overhead, output hashes and spill bytes against the profile budgets. Reject oversized single rows and integer-overflowing counters before allocating.
+
+```text
+read typed rows through EOF -> normalize -> encode full user-row key
+sort memory-bounded runs by bytes.Compare(key); spill framed key + typed value records
+merge runs by full key; preserve every duplicate
+for global ordinal in [0,N): derive RowID; derive PartitionIDForRow; append normalized output
+collect ordered DigestBytes(key), including duplicates
+CanonicalDigest("snapshot-query-output-v1", {target_table_id,schema_hash,row_count,row_hashes})
+fsync completed output; return handle only after all streams and counters validate
+```
+
+`row_hashes` is an explicit empty array for N=0. Bound its memory as well as row buffers; the profile's row cap prevents an unbounded digest list. If a streaming canonical hash implementation is introduced for larger profiles, prove its bytes against `CanonicalDigest` golden vectors before use. Spill framing has length checks and content checks so corrupt local caches cannot silently alter rows. `Canonicalize` receives only the typed stream and the exact network/statement/schema context in its prescribed signature; it receives neither `SnapshotQueryInput` nor the signed full input root and must not invent either. Its private ephemeral runs/output bind that context plus their integrity, row count and output identity, and every `OpenRows` validates those local bindings before exposing affected rows. The composed [B3/B4/C5 input and output ownership contract](../specs/2026-09-16-signed-insert-select-schema-semantics-design.md#historical-policy-and-output-ownership) requires B4 to authenticate the full signed input and C5 to copy and durably reopen the canonical output under that full input root plus output count/root before unsafe writes or restart reuse. Cache files are untrusted derived artifacts; neither an ephemeral context hash nor a source cache replaces authenticated input or independent verifier execution.
+
+- [ ] **Step 4: Run sort-spill and interruption tests.** Force multiple runs with a small test memory budget, truncate/corrupt one run, alter worker/chunk ordering, and verify identical final output on valid cases and atomic refusal on invalid cases. Confirm scratch/run cleanup after cancellation and restart discovery for durable outputs retained by C5; do not release snapshot retention here.
+
+- [ ] **Step 5: Commit `feat(replay): canonicalize snapshot query output`.** Keep every v2 row-order and row-ID vector unchanged.
+
+### Task B4: Share append/state assembly and build the snapshot-query executor
+
+**Files:** HG shared append row and `snapshotquery/executor.go`, `executor_test.go`, logical-name and use-admission rows/tests; in-process extensions in `pkg/replay/types.go`.
+
+**Interfaces:** Add `payloadexec.StatementRows{StatementID string, StatementSeq uint64, TargetTableID string, Rows RowSource}` and `(*payloadexec.Executor).ApplyRows(ctx context.Context, prev replay.SafeSnapshotManifest, job replay.ReplayJob, batches []StatementRows) (replay.SafeSnapshotManifest, replay.ExecutionResult, error)`. Existing `ApplyContext` decodes/materializes v2 and delegates to the same append core without changing ordering. Add `SnapshotQuery *SnapshotQueryJob` to `replay.ExecutionRequest` and `SnapshotQuery *SnapshotQueryEvidence` to `replay.ExecutionResult`; these are in-process optional extensions, not changes to frozen v2 wire records or hashes.
+
+New `snapshotquery.Executor` implements `Replay(context.Context, replay.ExecutionRequest) (replay.ExecutionResult, error)` and is constructed only through the exact public surface below. `ProfileRegistry.Lookup(executorID, queryID string) (Profile, bool)` returns `Profile{ExecutorProfileID string, QueryProfileID string, Record replay.QueryProfileRecord}`. The shared HG-local [`HistoricalPolicy` and immutable-by-copy `HistoricalDecision`](../specs/2026-09-16-signed-insert-select-schema-semantics-design.md#historical-policy-and-output-ownership) are consumed by both B4 and B5; C1 supplies the fixed-trust authenticated production adapter.
+
+```go
+type ExecutorOptions struct {
+    NetworkID         string
+    ExecutorProfileID string
+    QueryProfileID    string
+    Snapshots         SnapshotReadStore
+    Analyzer          rewriter.SnapshotQueryAnalyzer
+    Profiles          ProfileRegistry
+    Appender          *payloadexec.Executor
+    HistoricalPolicy  HistoricalPolicy
+    LogicalNames      SnapshotLogicalNames
+    Uses              QueryUseAdmission
+    TempDir           string
+}
+
+func NewExecutor(ctx context.Context, opts ExecutorOptions) (*Executor, error) {
+    return newExecutor(ctx, opts, rewriter.ProbeSnapshotQuery)
+}
+
+type snapshotQueryProbe func(
+    context.Context,
+    rewriter.SnapshotQueryAnalyzer,
+    string,
+    []*pb.SnapshotQueryCatalogTable,
+) error
+
+func newExecutor(
+    ctx context.Context,
+    opts ExecutorOptions,
+    probe snapshotQueryProbe,
+) (*Executor, error)
+
+func snapshotQueryProbeCatalog() []*pb.SnapshotQueryCatalogTable
+```
+
+The private `newExecutor` accepts a nonnil private `snapshotQueryProbe` function argument only for same-package orchestration tests; public options expose no probe, skip, acknowledgement, mutable callback or fixture switch. Construction resolves, deeply copies and freezes one exact profile and the complete [`SnapshotLogicalNames`](../specs/2026-09-16-signed-insert-select-schema-semantics-design.md#historical-policy-and-output-ownership) for one exact full pin and independently committed outer O digest, then invokes the supplied probe with the same analyzer and Q. The public constructor always calls `rewriter.ProbeSnapshotQuery`. Its freshly allocated synthetic catalog is capability data only and never a published/authenticated snapshot or historical-name source; public code-only unacknowledged negative fixtures must fail, and public positive construction with a real measured engine remains a D3/D4 gate. Borrowed analyzers, stores, appender, policy and admission ports remain owned by the trusted creator and fixed in meaning for the executor lifetime.
+
+O supplies complete ordered opaque table IDs and column semantics but no logical names. Constructor validation copies exact TableID and `(Database, Table)` indexes, rejects duplicate IDs/pairs, malformed names and a table count above the existing schema bound, and performs no artifact open/fetch or O-dependent completeness check. Invocation requires exact configured pin/O equality with the job and historical decision before acquisition/Open; after history, current-use acquisition/Open and authenticated O validation, complete W/R/U set equality with no missing or extra configured ID and exact signed R name triples are required before analysis. Names are preserved without normalization and never inferred from dotted IDs, default database, SQL, current metadata or scratch coordinates. The protected historical-name producer/journal/recovery and independent source/verifier agreement are explicit C1/D3/D4 prerequisites; arbitrary labels sharing O are not proof. One executor serves one retained pin/O/name scope and one profile pair.
+
+Add in-process-only `SnapshotQueryReferenceID string` beside `SnapshotQuery *SnapshotQueryJob` in `replay.ExecutionRequest`, with `json:"-"` on both fields. The exact reference is supplied per invocation and is neither a wire/hash field nor authority. `QueryUseAdmission.AcquireQueryUse(ctx, referenceID, ownedJob)` returns a tracked invocation `QueryUseLease`; the concrete port fixes registry, scope, principal, role and accepted/replay owner class, validates the complete current job/JWS/roots/fence/pin/O/pair and phase-appropriate claim predicate atomically against closing and phase advancement, and refuses reservation/publication/challenge-only/unknown/spent references. Initial execution of the exact accepted source assignment requires absent claim and claim root; same-operation accepted recovery preserves any existing committed exact claim/root as a monotone binding; every verifier or separately admitted later source replay requires the complete exact committed applied claim/root. The trusted lifecycle state and protected recovery journal select that predicate, never caller nil, reference spelling, a request flag or context; an unknown claim outcome permits reconciliation only. The historical policy call and decision check precede acquisition, and acquisition precedes `SnapshotReadStore.Open`, which keeps its existing signature and receives the same exact reference. B4 never mints a reference or closes/releases the durable acquisition.
+
+Add proposed in-process `PreparedQueryExecution{Result replay.ExecutionResult, Output CanonicalOutput}` with `Close() error`, and `(*Executor).Prepare(ctx context.Context, req replay.ExecutionRequest) (*PreparedQueryExecution, error)`. A successful Prepare transfers ownership of the complete canonical output handle to the caller; it closes temporary restore handles but must not close that output. `Replay` wraps Prepare with deferred Close and returns Result, preserving the existing `replay.Executor` interface. C5 uses Prepare and `Output.OpenRows()` to durably copy/reopen the exact canonical rows before closing the handle. This is no wire result expansion, no source-row input to the verifier, and no second SELECT. Caller-owned cache durability/retention remains C5's responsibility.
+
+- [ ] **Step 1: Add whole-ledger regression tests before extracting code.** Use the existing payload executor fixtures with tables R, W and U; after appending to W, assert exact preserved R/U table/partition/part entries and parent linkage. Add query cases with R=W, zero output and two sequential safe self-inserts. Require an ineligible target or referenced R to refuse before analysis while an ineligible untouched U is preserved unchanged. Direct `ApplyRows` tests cover missing/extra predecessor or configured tables, schema hash/root or legacy-projection inconsistency, duplicate statement identity/sequence, unknown targets including zero-row targets, partial/non-EOF/cancellation refusal and complete R/W/U preservation. `ApplyRows` has no O input: O1/O2 equal-projection or certificate substitution belongs to direct B4 Prepare/Replay tests under the [shared policy contract](../specs/2026-09-16-signed-insert-select-schema-semantics-design.md#historical-policy-and-output-ownership). Add opaque/dotted ID cases, W-only and untouched-U name coverage, missing/extra/duplicate ID or logical pair, pin/O mismatch, signed-R name swap, caller mutation and exact column order/generation/expression preservation; same O with arbitrary alternative labels must not be described as O-authenticated. Add absent/wrong/current-use reference, class/role/principal mismatch and identical reference handoff to admission/Open. Exercise initial authenticated accepted source with both claim fields absent reaching history, admission and Open; accepted recovery with an already committed claim rejects omission, one-sided input, wrong root, wrong assignment or swapped claim before Open; verifier and separately admitted source replay reject either or both claim fields absent. A fixture proves orchestration only and caller nil never proves phase; real B1/B2/C1/C3 authority, serialized phase advancement and recovery remain open.
+
+```text
+S: R has 2 rows, W has 1 row, U has 3 rows
+query W <- SELECT R: post rows R=2,W=3,U=3; unchanged R/U ledger byte-equal
+self-insert R <- SELECT R: new R=4 with two new IDs; old IDs unchanged
+next safe self-insert at S2: R=8; an aborted first operation would instead leave R=2
+constant SELECT with zero rows: all data/partition roots unchanged, new manifest/block identity
+```
+
+- [ ] **Step 2: Run `bazel test //pkg/replay/payloadexec:payloadexec_test //pkg/replay/snapshotquery:snapshotquery_test`.** The new direct append/query tests fail before extraction; old payload vectors establish the baseline.
+
+- [ ] **Step 3: Extract the smallest common append core, then orchestrate query execution.** Move existing ledger verification, deterministic part/delta assembly and complete table preservation into `ApplyRows`. It validates unique statement IDs, known targets and complete predecessor/schema coverage. It must not impose payload-ref requirements on already validated row batches; those remain at the v2 caller. Preserve existing v2 part grouping and byte/accounting formulas, proven by its old vectors.
+
+```text
+snapshotquery.Executor.Prepare(req):
+  require exactly one req.SnapshotQuery and a nonblank exact SnapshotQueryReferenceID
+  copy the complete job/reference; verify shape, signed roots, descriptor, pair and configured pin/O/name scope
+  call HistoricalPolicy.VerifyReservation and decision.CheckJob on owned copies
+  call fixed Uses.AcquireQueryUse with the exact job/reference and require a nonnil lease
+  open retained S with the same exact reference; compare O against the decision's independent expectation
+  validate complete ordered O IDs/columns and join the complete constructor-fixed historical names
+  independently analyze signed materialized SQL
+  build catalog from O-derived semantics plus trusted names; require touched-table eligibility
+  compare full read closure/descriptor; prepare SELECT bound only to restored relations
+  stream target-typed rows; Canonicalize through complete EOF
+  pass globally ordered rows to Appender.ApplyRows using the job's assigned sequence
+  require complete predecessor table set; attach applied count/output/full-state evidence
+  close cursor/stream/scratch/read handles successfully, then close the invocation lease successfully
+  only then return PreparedQueryExecution transferring independent canonical output ownership
+snapshotquery.Executor.Replay(req): Prepare -> defer prepared.Close -> return prepared.Result
+```
+
+The expected O digest comes from the complete artifact-set preimage checked against independently authenticated original committed readiness/publication; a digest computed from the returned `ReadSnapshot.SchemaArtifact()` is not an independent expectation. A missing/stale/unauthenticated authority, zero/invalid decision, job mismatch or object substitution refuses before scratch query execution. The exported structural decision constructor binds already-authenticated records and is not an authentication primitive: production construction is only through fixed trusted C1 wiring, while deterministic test fixtures remain explicitly non-authoritative. Profile files, caller-selected endpoints, current policy, allow-all/nil fallbacks and invented proof bytes grant no historical authority.
+
+The executor is independently reusable by source and verifier; it never calls `prepareAndSubmit`, writes production unsafe tables or re-materializes volatility. A missing `SnapshotQuery` is not inferred from empty payload. The composite dispatcher in B5 invokes the legacy executor explicitly for legacy requests. `ApplyRows` borrows each `RowSource` and never closes caller-owned streams. The legacy adapter closes every stream it creates. B4 treats every S-reading handle's Close as a quiescence proof: an error, failed join or unknown state returns no partial/successful output, joins cleanup with the original error and leaves the tracked lease live/uncertain under the lifecycle owner instead of calling a release that claims completed use. A lease Close error likewise prevents success and retains uncertainty. Open-error adapters must finish cleanup before return or keep the owner uncertain even when Open returns no handle. B4 may close the lease immediately only when no artifact work started and no handle exists. After successful S-handle and lease closure, Prepare transfers an independent output and Replay closes it exactly once; an output Close failure returns no attestation and leaves that output plus any unsettled outer lifecycle ownership tracked, but never reopens or resurrects the already-closed invocation lease. GC, timeout or fixtures never settle uncertain ownership.
+
+- [ ] **Step 4: Run payload regression, query state and separate-instance tests.** HG targeted replay/payloadexec/chexec/snapshotquery tests must pass. Include old adapters that drop metadata, current live semantics differing from committed O, equal legacy hash with different generation, and original O restoration after restart. D4 supplies two real ClickHouse instances with different local live data and part order; compare canonical output, global IDs, LtHash and complete post-state. Do not claim physical part byte equality across instances is required for equal logical data roots.
+
+Test Prepare ownership with an output handle that detects premature Close: C5 can read all rows through EOF after Prepare, durably reopen its copied cache after Close/restart and obtain identical global IDs/root/count. Replay closes its output exactly once on success/error; Prepare errors release temporary resources and return no partial handle. Owning legacy/B4 tests inject cursor/stream/scratch/read and invocation-lease Close failures, assert no success and prove the lease remains unclosed/uncertain for lifecycle recovery; an Open failure that returns no handle after starting artifact work has the same cleanup-or-uncertain requirement. Inject transferred-output Close failure separately and prove zero attestation plus tracked output/outer ownership without reviving a successfully closed invocation lease. Also have policy return committed O1 while restore returns valid O2 with the same legacy projection, then substitute certificates/semantic metadata and require refusal before analyzer/query/appender. A failed cache fsync prevents unsafe writes. Preserve independent verifier Prepare/Replay execution and reject any attempt to feed the source cache as replay input. B1/B2 must prove exact retained restore/read handles and Open cleanup, C1/C3 must prove authenticated historical/current admission plus uncertain-use recovery, B5 must preserve zero-attestation on B4 failure, C5 must preserve source handle/cache ownership, and D3/D4 must exercise protected historical-name recovery, real public constructor probing and separate real source/verifier processes.
+
+B4a (shared streaming append/state assembly with unchanged v2 vectors) and B4b (the neutral decision port plus profile/request/result plumbing and single-pair Prepare/Replay orchestration) are independent milestones within this original task. B4a need not wait for B1/B2/C1 or a decoder repair. Full B4 completion still requires real B1/B2/C1 wiring and D4 independent execution; fixtures do not establish publication, retention or live acceptance.
+
+- [ ] **Step 5: Commit `feat(replay): execute snapshot queries with shared state assembly`.** Include the full v2 vector-preservation result in the PR; any changed legacy digest blocks the task.
+
+### Task B5: Sign versioned query receipts and wire historical dispatch
+
+**Files:** HG query verifier/dispatch row; AC verifier/wire row. Depends on A2, B4 and C1's authenticated production adapter for the shared historical-policy port; deterministic fixtures can test orchestration before AR is implemented but supply no production authority.
+
+**Interfaces:** `snapshotquery.Verifier` receives only `VerifierOptions{Dispatcher *CompositeExecutor, Signer replay.Signer, HistoricalPolicy HistoricalPolicy}`. Public `NewVerifier` hardwires `auth.VerifyStatementV3Signature`; a private constructor-function argument may record ordering/failure in same-package tests, but there is no exported validator option or mutable global hook. The shared [`HistoricalPolicy`](../specs/2026-09-16-signed-insert-select-schema-semantics-design.md#historical-policy-and-output-ownership) returns the immutable authenticated original decision. `Verify(ctx context.Context, req VerifyRequest) (replay.SnapshotQueryAttestation, error)` accepts only `VerifyRequest{Job replay.SnapshotQueryJob, ReferenceID string}`, with `json:"-"` on both fields; there is no job-only overload, constructor-held reference, context authority, synthesis or `ReservationID` alias. Blank/whitespace-only references refuse and valid bytes remain exact. AC `NewSnapshotQueryReplayCore` constructs the query verifier beside the existing `NewReplayCore`, and verifier dispatch gets a separate AP query-job variant and query-attestation reply. Its trusted outer wrapper authenticates and durably registers/funds the exact invocation before handing the protected reference to B5; B4 still independently authenticates current use through its fixed admission port before Open. Historical facts and string possession supply no current use, retention or release authority.
+
+```go
+type VerifyRequest struct {
+    Job         replay.SnapshotQueryJob `json:"-"`
+    ReferenceID string                  `json:"-"`
+}
+
+type QueryProfileKey struct {
+    ExecutorProfileID string
+    QueryProfileID    string
+}
+
+type QueryRoute struct {
+    Key      QueryProfileKey
+    Executor replay.Executor
+}
+
+type VerifierOptions struct {
+    Dispatcher       *CompositeExecutor
+    Signer           replay.Signer
+    HistoricalPolicy HistoricalPolicy
+}
+
+func NewCompositeExecutor(payload replay.Executor, routes []QueryRoute) (*CompositeExecutor, error)
+func NewVerifier(opts VerifierOptions) (*Verifier, error)
+func (v *Verifier) Verify(context.Context, VerifyRequest) (replay.SnapshotQueryAttestation, error)
+```
+
+`NewCompositeExecutor(payload replay.Executor, routes []QueryRoute)` consumes duplicate-preserving `QueryRoute{Key QueryProfileKey, Executor replay.Executor}` entries, rejects invalid/nil/typed-nil executors, duplicate exact keys, blank or surrounding-whitespace executor IDs and noncanonical Q digests, then copies them into a private immutable map while keeping payload private. Query-only and legacy-only composite construction are allowed; an entirely empty dispatcher refuses. Query `NewVerifier` separately requires a dispatcher containing at least one valid query route, while a legacy-only composite remains valid for its lane. Query and legacy variants are mutually exclusive, query requires its reference, legacy rejects a stray reference, and a missing route never falls back. One exact pair maps to at most one retained B4 pin/O/name scope; AC/C1 selects the correct immutable core after authenticated historical scope resolution rather than installing a mutable resolver or job-selected endpoint. B5 verifies the original A2 signature and roots, then history, then complete applied C5 claim, and only then looks up the requested route. B4 repeats history, current-use admission and retained-object validation. Borrowed dependency lifetimes remain fixed trusted configuration.
+
+The wrapper follows the [artifact-lifecycle use protocol](../specs/2026-09-17-signed-insert-select-artifact-lifecycle-design.md): exact local registration, committed `AdmitUse`, local `Retain`, then read/execute. Independent historical admission is allowed only while the snapshot retirement state is OPEN. A new U admitted after a committed cut must resolve and name its exact still-open pre-cut ancestor through `obligation_owner` and prove the bounded assignment link; sharing a pin or old job label is insufficient. An independent replay U already admitted before the cut may directly commit its exact original mismatch challenge while still admitted: OpenChallenge records parent 0, retains the exact originating UseV1 and commits the challenge before replay close/release; it does not invent an ancestor. Later I/O under that challenge uses a separately admitted continuation U linked to the committed challenge obligation. After all handles/children close, commit `CloseUse` with the actual registry revision, then call the unchanged local `Release`. An old AdmitUse operation result whose current use record is closed never authorizes new I/O, while that exact closed state remains required terminal evidence for Release.
+
+Before verifier registration, the protected allocator binds and fsyncs one exact prepaid verifier principal/namespace/ordinal slot for this immutable core/A. The first AdmitUse and conditional absent CloseUse carry that same positive private validation ordinal until AR installs the binding; later actions carry zero and derive it. The fixed Q profile gives V1/V2/V3 two distinct attempt slots each plus bounded challenge continuations, while H1/H2 each have at most four uses, four obligations and 24 results. Same-live retries reuse A and allocate no result; a one-over attempt refuses before work. Available credit never authorizes a post-cut independent replay or lets a recovery coordinator become the immutable verifier owner.
+
+- [ ] **Step 1: Write receipt/refusal and dispatch tests.** Assert a valid applied result with any independently varied full-state root, output count, output root or canonical affected-partition-after commitment returns a signed `match_source_root=false` receipt; invalid signature/unpublished pin/missing part/schema object/unsupported profile/stream/close failure returns zero attestation. Require real A2 original-signature verification, including old Iat and invalid purpose/signature/recovered account, followed by authenticated historical policy and complete applied C5 claim validation before route lookup. Historical replay uses its retained executor and original O/certificate/name scope after current activation or schema-authority changes; old profile JSON without an executable route, a substituted backend/endpoint/object, an unknown pair or a missing route refuses without calling any executor or signer. Test zero/invalid decisions, wrong original assignment/activation/pin/set root, malformed/duplicate claim commitments and policy failure before route lookup. Pass two distinct references for one verifier/job and prove each exact value reaches the selected B4 admission/Open once; blank, constructor state, context values and `ReservationID` never substitute. Test duplicate route entries before map insertion, caller mutation isolation, query-only/legacy-only/empty composites, successful legacy-only composite construction, query `NewVerifier` refusal of that zero-query-route dispatcher, mixed variants and stray legacy reference. After the one permitted signing call, test nil-error blank replica ID and nil-error blank signature independently and require zero attestation; signer error also returns zero, and receipt replica identity never substitutes for WORKER/current-use identity. Test two verifier attempts for one job as distinct funded A/use identities, same-live-operation retry recovering A/use without another result, active A refusing old terminal/close evidence from another acquisition, exact first-Admit/absent-Close races with the same ordinal in both orders, owner versus recovery caller, restart/failover and a one-over attempt refusing before registration/work. A newly authorized historical replay obtains a new A only while retirement is OPEN. Cover old AdmitUse result with current closed state, post-cut independent-admission refusal even with unused credit, pre-cut independent replay mismatch after cut producing a parent-0 challenge from its still-admitted exact U, challenge-before-close ordering, bounded child/depth/family totals and a distinct post-cut continuation U requiring its exact still-open pre-cut ancestor/assignment link. A legacy request invokes only the private legacy executor.
+
+```text
+func (d *CompositeExecutor) Replay(ctx context.Context, req replay.ExecutionRequest) (replay.ExecutionResult, error) {
+    require exactly one query or legacy variant
+    if req.SnapshotQuery != nil {
+        require nonblank req.SnapshotQueryReferenceID and no legacy fields
+        key := QueryProfileKey{req.SnapshotQuery.ExecutorProfileID, req.SnapshotQuery.QueryProfileID}
+        executor, ok := d.queryByProfile[key]
+        if !ok { return replay.ExecutionResult{}, fmt.Errorf("snapshot query profile route unavailable") }
+        return executor.Replay(ctx, deepCopyQueryRequest(req))
+    }
+    require empty SnapshotQueryReferenceID and configured private payload
+    return d.payload.Replay(ctx, deepCopyLegacyRequest(req))
+}
+```
+
+The dispatcher code is intentionally small; its constructor copies the entry slice into private routes and its Replay method deep-copies requests and returned evidence, including all nested query/claim/read/manifest/part/storage-hint and legacy payload slices. The verifier takes another owned copy before signing so dependency mutation cannot alter its roots or receipt. The selected B4 executor validates its exact profile, pin/O/name scope and shape. Add zero-row applied receipt and abort separation tests: this HG consumer signs only successful `applied` replay results, while abort evidence comes from C3's separately authenticated control transition and never from an execution error.
+
+- [ ] **Step 2: Run HG `bazel test //pkg/replay/snapshotquery:snapshotquery_test` and AC `bazel test //verifier:verifier_test //conformance:conformance_test //wire:wire_test`.** Require missing query dispatch/new receipt support to fail visibly.
+
+- [ ] **Step 3: Implement independent signature/input/descriptor/policy validation before replay and new receipt hashing after replay.** Own and validate the complete request first, recompute A1 read/input/statement roots from exact SQL/read descriptors and the original unmodified compact JWS, construct the expected v3 payload and call public-hardwired `auth.VerifyStatementV3Signature`; require the recovered account and never call today's ingress freshness/allowlist validator. Then authenticate the original reservation/activation/readiness/set/O association, call `decision.CheckJob`, and validate C5's complete committed applied claim, its hash, source assignment, sequences, input/fence identity, digests and duplicate-free canonical commitments before route lookup. Call the exact route once with a separate owned job/reference; B4 repeats history, current use, retained O/name scope, restore and independent SELECT. Any cancellation, malformed result, result-plus-error, EOF/stream/required-close uncertainty or signer failure returns zero with no fallback, retry, release or abort conversion. On success require exact applied result identities, copy it, and compare B4's full W/R/U `ComputedStateRoot`, output count, output root and corresponding canonical affected-partition-after commitments with the claim; malformed evidence refuses while coherent difference signs mismatch. Do not compare computed state to the compound claim digest or claim that affected commitments are a full manifest. Build all receipt identity/roots from the owned job and execution fields from the owned result, leave applied `AbortRecordRoot` empty, context-check again and call `replay.Signer.SignReplayReceipt` exactly once on `snapshot-query-receipt-v1`; an error or nil-error blank replica ID/signature returns the zero attestation, and that replica ID is never WORKER/current-use identity. Preserve old `ExecutionReceipt.Hash()` and the v2 verifier path.
+
+AC's verifier handler dispatches new query jobs separately, signs/returns the new attestation and retains its exact evidence. Its lifecycle wrapper derives WORKER from verified/configured credentials, never `ReplicaID` or a process label, and closes its own replay acquisition only after all execution/submission handles join; terminal history cannot close an active acquisition. Keep byte-side scans of exact candidate parts through `chexec.ScanParts` and `RowElementHash`. A correct output hash with different candidate bytes must still fail the AR three-way gate in C5. Source and verifier caches cannot substitute for independent execution.
+
+Implement use admission and close around this wrapper without changing verifier job or receipt bytes. Lost AdmitUse/CloseUse responses reconcile by exact operation key and selector; conditional absent close commits its tombstone only from an actual closed registry observation. A CLOSING snapshot admits only a deterministic necessary continuation of a live pre-cut obligation, and RETIRED returns explicit failed-precondition rather than fallback/not-found. The verifier cannot resolve its own challenge/cleanup debt or infer release from absence.
+
+- [ ] **Step 4: Run differential fraud tests and legacy conformance.** Source executes using altered unsafe/live rows, substitutes one normalized output row, swaps an output cache or candidate part, changes untouched U or drops U from the assembled state. Require a signed applied mismatch only when valid independent replay completes and disagrees; malformed/failed replay yields no attestation, and no case promotes. The real B4 composition must expose full-state divergence when output still matches, not merely return a fake root. Keep local restore/unproven quiescence distinct from malicious-source mismatch and prove the tracked B4 lease stays live/uncertain with signer uncalled. Candidate physical-byte and partition-delta consistency remain AC/AR/C5 promotion checks. Real A5 public construction, B1/B2 restore, C1 history/current-use adapters, C3 abort authority, C5 durable claim, AC wrapper/multi-pin lifecycle and D4 separate-process fraud/restart evidence remain open until their owning steps pass.
+
+- [ ] **Step 5: Commit `feat(verifier): attest snapshot query execution evidence`.** Release HG before AC updates its import pins; SN does not instantiate this verifier and must not gain a fictitious verifier constructor in D3.
