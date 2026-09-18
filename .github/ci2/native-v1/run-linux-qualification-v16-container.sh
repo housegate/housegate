@@ -67,7 +67,7 @@ bazel_u() {
   local command=$1
   shift
   as_ubuntu /bin/bash -c 'cd /ci2/src && exec bazel --output_user_root=/ci2/cache/output-root "$@"' \
-    bash "$command" --disk_cache=/ci2/cache/disk --experimental_disk_cache_gc_max_size=1G "$@"
+    bash "$command" --disk_cache= "$@"
 }
 
 write_status() {
@@ -211,14 +211,29 @@ finish_finalizer() {
   rm -rf "$CONTROL/finalizer.lock"
 }
 
+assert_disabled_disk_cache() {
+  local content
+  [[ -d "$DISK_CACHE" && ! -L "$DISK_CACHE" ]] || {
+    echo 'disabled disk-cache sentinel is missing or unsafe' >&2; return 78;
+  }
+  content=$(find "$DISK_CACHE" -mindepth 1 -print -quit) || return 78
+  [[ -z "$content" ]] || {
+    echo 'disabled disk-cache sentinel is not empty' >&2; return 78;
+  }
+}
+
 record_usage() {
-  local label=$1
+  local label=$1 usage_path
   {
     echo "label=$label"
     date -u +utc=%Y-%m-%dT%H:%M:%SZ
     df -Pk /ci2 /tmp
-    du -sk "$CACHE" "$EVIDENCE" 2>/dev/null || true
+    # Fixed phase/final samples, not a continuous peak; nested rows are not additive.
+    for usage_path in "$CACHE" "$EVIDENCE" "$CACHE/output-root" "$DISK_CACHE" "$CACHE/xdg" /ci2/tmp; do
+      du -sk "$usage_path" 2>/dev/null || true
+    done
   } >>"$EVIDENCE/usage.log"
+  assert_disabled_disk_cache
 }
 
 evidence_bytes() {
@@ -552,8 +567,10 @@ finalize_evidence() {
     echo "owner_token=$OWNER_TOKEN"
     echo "cc=$INVALID_CC"
     echo 'bazel_version=9.1.0'
-    echo 'disk_cache=/ci2/cache/disk'
-    echo 'disk_cache_gc_max_size=1G'
+    echo 'disk_cache=disabled'
+    echo 'disk_cache_flag=--disk_cache='
+    echo 'disk_cache_gc_max_size=not-applicable'
+    echo "disk_cache_sentinel=$DISK_CACHE"
     date -u +finalized_utc=%Y-%m-%dT%H:%M:%SZ
   } >"$EVIDENCE/MANIFEST.meta"
   record_usage final
@@ -587,7 +604,7 @@ setup() {
   [[ "$(stat -c '%u:%g:%a' "$CONTROL")" == 0:0:700 && "$(stat -c '%u:%g:%a' "$EVIDENCE")" == 0:0:755 ]] || {
     echo 'CI2_ACCOUNT_OWNERSHIP_REFUSED: root control/evidence boundary differs' >&2; return 78;
   }
-  [[ -z "$(find "$DISK_CACHE" -mindepth 1 -print -quit)" ]]
+  assert_disabled_disk_cache
   [[ "$(/usr/local/bin/bazel --version)" == 'bazel 9.1.0' ]]
   [[ "$(sha256sum /usr/local/bin/bazel | awk '{print $1}')" == "$BAZEL_BINARY_SHA" ]]
   [[ "$(sha256sum /ci2/run-linux-qualification-v16-container.sh | awk '{print $1}')" == "$RUNNER_SHA" ]]
@@ -642,7 +659,7 @@ setup() {
     sha256sum /input/source.bundle /ci2/run-linux-qualification-v16-container.sh "$LOGGER" "$TOOLCHAIN_CHECK" "$STALL_HELPER" "$HOMEBREW_CHECK" "$TERMINATOR"
     sha256sum "$SRC/.bazelrc" "$SRC/.github/workflows/ci.yml" "$SRC/.github/workflows/release.yml" "$SRC/MODULE.bazel" "$SRC/Makefile"
   } >"$EVIDENCE/tool-source-identity.txt"
-  [[ -z "$(find "$DISK_CACHE" -mindepth 1 -print -quit)" ]]
+  assert_disabled_disk_cache
   record_usage setup
   end_phase SETUP_DONE
 }
@@ -761,7 +778,7 @@ homebrew() {
   local output_base
   output_base=$(cat "$EVIDENCE/diagnostics/output-base.stdout")
   homebrew_step output-base-validation test "${output_base#/ci2/}" != "$output_base"
-  printf 'output_base=%s\ndisk_cache=%s\n' "$output_base" "$DISK_CACHE" >"$EVIDENCE/cache-paths.txt"
+  printf 'output_base=%s\ndisk_cache=disabled\ndisk_cache_flag=--disk_cache=\ndisk_cache_gc_max_size=not-applicable\ndisk_cache_sentinel=%s\n' "$output_base" "$DISK_CACHE" >"$EVIDENCE/cache-paths.txt"
   homebrew_step usage record_usage homebrew
   end_phase HOMEBREW_DONE
 }

@@ -70,10 +70,9 @@ REUSE = {
     'ci2-toolchain-evidence-v16.py': '6e6fa83aeca059af92bc6ca90206cd98fa63310688161013129abadb36569195',
     'ci2-transfer-v16.py': 'a802ca56bc8e340c1d147474d6d32544f5ad32673ee36b554967023655c67fdd',
     'ci2-watchdog-v16.py': '17ef41289b1a164ad978446649f0446527f388cc99ec6f342ba18ad748b622f9',
-    'run-linux-qualification-v16-container.sh': '755466a1b5e6b1eec47b147ebda64169f6f0e809b9457c0740318e884f4abe00',
 }
-RUNTIME_NAMES = set(REUSE) | {'run-linux-qualification-native-v1.sh', 'run-linux-qualification-native-v1-worker.sh'}
-PROFILE_SHA = '25716dd6b4343da707d19e7af7e8a4c2957d5b3ca42d7ad19a3af8983bacef5d'
+RUNTIME_NAMES = set(REUSE) | {'run-linux-qualification-v16-container.sh', 'run-linux-qualification-native-v1.sh', 'run-linux-qualification-native-v1-worker.sh'}
+PROFILE_SHA = '9b5d015b91dbbaec0b3b332b6309a8b1b1a3fa39fdb7c9b3a45d94e800283d74'
 IMAGE_FIELD_NAMES = ('os', 'architecture', 'size', 'user', 'entrypoint', 'workdir')
 IMAGE_STRING_MAX = 512
 IMAGE_LIST_MAX = 16
@@ -174,13 +173,16 @@ def export_refusal(root, mode, error, env=os.environ):
 def profile(directory=HERE):
     p = load_json(directory / 'profile.json')
     require(sha(directory / 'profile.json', MIB) == PROFILE_SHA, 'profile digest mismatch')
-    require(set(p) == {'schema','repository','head_branch','source','image','resources','clocks','docker_endpoint','admitted_host_tuples','historical_runtime_manifest_sha256','native_manifest_policy','native_fixture_authority'}, 'profile schema fields')
+    require(set(p) == {'schema','repository','head_branch','source','image','resources','clocks','docker_endpoint','admitted_host_tuples','historical_runtime_manifest_sha256','native_manifest_policy','native_fixture_authority','workload_storage'}, 'profile schema fields')
     require(p['schema'] == 'housegate-ci2-native-hosted-v1', 'profile schema')
     require(isinstance(p['admitted_host_tuples'], list) and len(p['admitted_host_tuples']) <= 8, 'finite tuple list required')
     for item in p['admitted_host_tuples']:
         require(set(item) == {'runner_image','runner_version','client_version','server_version','architecture','storage_driver','cgroup_driver','cgroup_version','init_path','init_sha256','init_version'}, 'tuple schema')
         require(all(isinstance(v, str) and 0 < len(v) <= 512 for v in item.values()), 'tuple value')
         require(re.fullmatch('[0-9a-f]{64}', item['init_sha256']), 'init hash')
+    require(p['workload_storage'] == dict(layout='tmpfs-single-output-v1',output_user_root='/ci2/cache/output-root',disk_cache='disabled',disk_cache_sentinel='/ci2/cache/disk',disk_cache_gc='not-applicable'), 'workload storage policy')
+    gc=p['resources']['cold_cache_gc_target']
+    require(type(gc) is int and gc == 0, 'disabled disk cache has no GC target')
     c=p['clocks']
     require(c['preparation']+c['owner']+c['archive']+c['transitions']==c['job'] and c['work']+c['cleanup']==c['owner'], 'clock arithmetic')
     return p
@@ -462,6 +464,19 @@ def image_admit(image,p):
         raise ImageConfigurationRefusal(diagnostic)
 
 
+def admitted_image_summary(image, p, prepared):
+    # p came from profile(): exact bytes/schema, then the prepared admission binding.
+    require(prepared['admission']['profile_sha256'] == PROFILE_SHA, 'image summary profile binding')
+    e=p['image']
+    require(set(e) == {'reference','id','os','architecture','size','user','entrypoint','workdir'}, 'image summary schema')
+    image_admit(image,p)
+    fields=[e['id'],e['os'],e['architecture'],str(e['size']),e['user'],json.dumps(e['entrypoint'],separators=(',',':')),e['workdir']]
+    require(all('|' not in field and '\n' not in field and '\r' not in field for field in fields), 'image summary delimiter')
+    summary='|'.join(fields)
+    require(len(summary.encode()) <= IMAGE_REFUSAL_MAX_BYTES, 'image summary bound')
+    return summary
+
+
 def git(run, repo, args, seconds=20):
     return run(['/usr/bin/git','--no-replace-objects','-C',str(repo)]+args,seconds)
 
@@ -685,8 +700,10 @@ def main():
         observed=host_observation(run,root); admit_host(observed,p,True)
         require(observed['endpoint']==prepared['host']['endpoint'] and observed['identity']==prepared['host']['identity'],'daemon identity drift')
         require(sha(root/'input'/'source.bundle',8*MIB)==prepared['bundle_sha256'],'bundle changed before mount')
-        image_admit(json.loads(run(docker(['image','inspect',p['image']['reference']]))),p)
+        summary=admitted_image_summary(json.loads(run(docker(['image','inspect',p['image']['reference']]))),p,prepared)
+        observed.update(profile_sha256=PROFILE_SHA,image_summary=summary)
         write_json(root/'execution'/'host'/'native-admission.json',observed)
+        print(summary)
     elif mode=='container-admit':
         root,owner=owned_root(); cid=sys.argv[3]
         require(re.fullmatch('[0-9a-f]{64}',cid),'container id')

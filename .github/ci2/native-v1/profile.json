@@ -43,7 +43,14 @@
     "host_evidence_max": 536870912,
     "archive_max": 1073741824,
     "scratch_max": 1073741824,
-    "cold_cache_gc_target": 1073741824
+    "cold_cache_gc_target": 0
+  },
+  "workload_storage": {
+    "layout": "tmpfs-single-output-v1",
+    "output_user_root": "/ci2/cache/output-root",
+    "disk_cache": "disabled",
+    "disk_cache_sentinel": "/ci2/cache/disk",
+    "disk_cache_gc": "not-applicable"
   },
   "clocks": {
     "job": 3900,
@@ -78,6 +85,6 @@
     }
   ],
   "historical_runtime_manifest_sha256": "d5c0a01bc0286cdf044e13eca40843ca9fae0562ea61d9b7a3f7792f44853036",
-  "native_manifest_policy": "Separate 13-entry native runtime manifest; bound alongside this profile in the workflow and immutable per-run receipts. Historical helper bytes are unchanged.",
+  "native_manifest_policy": "Separate 13-entry native runtime manifest; bound alongside this profile in the workflow and immutable per-run receipts. Ten historical helpers are unchanged; native bootstrap, worker and container runner are derivatives.",
   "native_fixture_authority": {"init_adoption": false, "github_cancellation": false}
 }

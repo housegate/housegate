@@ -378,9 +378,8 @@ for file in "$BUNDLE" "$CONTAINER_RUNNER" "$LOGGER_HELPER" "$WATCHDOG_HELPER" "$
 assert_output_owned
 [[ "$(sha256sum "$BUNDLE" | awk '{print $1}')" == "$BUNDLE_SHA" ]]
 [[ "$(stat -c '%a' "$BUNDLE")" == 444 ]]
-run_work 60 /bin/bash "$NATIVE_BOOTSTRAP" host-admit
+image_line=$(run_work 60 /bin/bash "$NATIVE_BOOTSTRAP" host-admit)
 daemon_line='native-hosted-v1; see native-admission.json'
-image_line="$IMAGE_ID|linux|amd64|1065765003|ubuntu|[\"/usr/local/bin/bazel\"]|/home/ubuntu"
 [[ -z "$(docker_work 15 ps -aq --filter "name=^/${CONTAINER}$")" ]]
 
 assert_owned_subdir "$OUTPUT_DIR/host"

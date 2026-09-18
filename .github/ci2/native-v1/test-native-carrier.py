@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -67,18 +68,147 @@ class CarrierTests(unittest.TestCase):
 
     def test_manifest_and_profile_binding(self):
         self.assertEqual(call('profile'),self.p)
-        self.assertEqual(hashlib.sha256((ROOT/'profile.json').read_bytes()).hexdigest(),'25716dd6b4343da707d19e7af7e8a4c2957d5b3ca42d7ad19a3af8983bacef5d')
+        self.assertEqual(hashlib.sha256((ROOT/'profile.json').read_bytes()).hexdigest(),'9b5d015b91dbbaec0b3b332b6309a8b1b1a3fa39fdb7c9b3a45d94e800283d74')
         digest=call('manifest')
-        self.assertEqual(digest,'8717afef3e544e09b7fc635689f900a45e983331fcb638a6792301cfea690af9')
+        self.assertEqual(digest,'c42d537ab8956df31910967fba2eefcd5b683f28ffc92dfcd7d9b07ec615023c')
         workflow=(ROOT.parent.parent/'workflows/ci2-native.yml').read_text()
         self.assertIn(digest,workflow)
         self.assertIn(carrier['PROFILE_SHA'],workflow)
         self.assertEqual(len(carrier['RUNTIME_NAMES']),13)
         self.assertEqual(self.p['admitted_host_tuples'],[self.identity])
-        self.assertEqual(hashlib.sha256((ROOT/'run-linux-qualification-native-v1-worker.sh').read_bytes()).hexdigest(),'d0cb7d407ba4fcb31195d5faddb6f60ea7b163220de482b949cc8cb6bd2907e3')
+        self.assertEqual(hashlib.sha256((ROOT/'run-linux-qualification-native-v1-worker.sh').read_bytes()).hexdigest(),'2534849557ad9a76840ba7914025848b876fc5a01c82da37cefff42d6908a4a8')
         self.assertIn('types: [opened, synchronize, reopened, labeled]',workflow)
         self.assertIn("github.event.label.name == format('ci2-ok-{0}', github.event.pull_request.head.sha)",workflow)
         self.assertIn("steps.preparation.outcome == 'success' && !cancelled()",workflow)
+
+    def container_function(self,name):
+        text=(ROOT/'run-linux-qualification-v16-container.sh').read_text()
+        return re.search(r'^'+name+r'\(\) \{\n.*?^\}',text,re.M|re.S).group(0)
+
+    def test_single_output_wrapper_actual_argv(self):
+        wrapper=self.container_function('bazel_u')
+        # Execute the real wrapper with an argv-only account stub: no Bazel/host setup.
+        for argv in (['build','--config=ci','//...'],['test','--config=ci','//...'],
+                     ['info','--disk_cache=','server_pid'],
+                     ['run','--config=ci','//cmd:housegate','--','fetch-rewriter-lib','--tag','v0.10.0']):
+            script='as_ubuntu() { printf "%s\\0" "$@"; }\n'+wrapper+'\nbazel_u "$@"'
+            run=subprocess.run(['/bin/bash','-c',script,'fixture',*argv],capture_output=True,check=True)
+            args=run.stdout.decode().rstrip('\0').split('\0')
+            self.assertEqual(args[:4],['/bin/bash','-c','cd /ci2/src && exec bazel --output_user_root=/ci2/cache/output-root "$@"','bash'])
+            self.assertEqual(args[4:],[argv[0],'--disk_cache=',*argv[1:]])
+        text=(ROOT/'run-linux-qualification-v16-container.sh').read_text()
+        # Fixed private invocations have no later nonempty override, including after --.
+        self.assertEqual(set(re.findall(r'--disk_cache=([^\s\\"\']*)',text)),{''})
+        self.assertNotIn('--experimental_disk_cache_gc_max_size',text)
+
+    def test_storage_profile_exact_schema_and_digest(self):
+        expected=dict(layout='tmpfs-single-output-v1',output_user_root='/ci2/cache/output-root',disk_cache='disabled',disk_cache_sentinel='/ci2/cache/disk',disk_cache_gc='not-applicable')
+        self.assertEqual(self.p.get('workload_storage'),expected)
+        self.assertEqual(self.p['resources']['cold_cache_gc_target'],0)
+        path=self.root/'profile.json'
+        def verify(p):
+            path.write_text(json.dumps(p))
+            # Deliberately rebind the fixture digest to exercise schema, not just SHA refusal.
+            with mock.patch.dict(carrier,PROFILE_SHA=hashlib.sha256(path.read_bytes()).hexdigest()):
+                return call('profile',self.root)
+        self.assertEqual(verify(self.p),self.p)
+        for key in expected:
+            for value in (None,7,'drift','/tmp/alternate'):
+                bad=copy.deepcopy(self.p);bad['workload_storage'][key]=value
+                self.refused(verify,bad)
+            bad=copy.deepcopy(self.p);del bad['workload_storage'][key];self.refused(verify,bad)
+        for value in (None,[],{},dict(expected,extra='unapproved')):
+            bad=copy.deepcopy(self.p);bad['workload_storage']=value;self.refused(verify,bad)
+        bad=copy.deepcopy(self.p);del bad['workload_storage'];self.refused(verify,bad)
+        for value in (1073741824,1,False,0.0,None):
+            bad=copy.deepcopy(self.p);bad['resources']['cold_cache_gc_target']=value;self.refused(verify,bad)
+        path.write_text(json.dumps(self.p))
+        self.refused(carrier['profile'],self.root)
+
+    def test_disabled_sentinel_and_fixed_usage_receipts(self):
+        check=self.container_function('assert_disabled_disk_cache')
+        sentinel=self.root/'disk';sentinel.mkdir()
+        def run():
+            return subprocess.run(['/bin/bash','-c','set -e\nDISK_CACHE=$1\n'+check+'\nassert_disabled_disk_cache','fixture',str(sentinel)],capture_output=True)
+        self.assertEqual(run().returncode,0)
+        (sentinel/'unexpected').write_text('retain me')
+        self.assertNotEqual(run().returncode,0)
+        self.assertEqual((sentinel/'unexpected').read_text(),'retain me')
+        (sentinel/'unexpected').unlink();sentinel.rmdir()
+        self.assertNotEqual(run().returncode,0)
+        target=self.root/'empty';target.mkdir();sentinel.symlink_to(target,target_is_directory=True)
+        self.assertNotEqual(run().returncode,0)
+        usage=self.container_function('record_usage')
+        self.assertIn('for usage_path in "$CACHE" "$EVIDENCE" "$CACHE/output-root" "$DISK_CACHE" "$CACHE/xdg" /ci2/tmp; do',usage)
+        self.assertIn('assert_disabled_disk_cache',usage)
+        # Execute the fixed sample loop with filesystem-observation stubs only.
+        sentinel.unlink();sentinel.mkdir()
+        script='set -e\nCACHE=$1; EVIDENCE=$2; DISK_CACHE=$3\n'+check+'\n'+usage+"\n"+'df() { :; }; date() { :; }; du() { printf "1\\t%s\\n" "$2"; }\nrecord_usage fixture'
+        subprocess.run(['/bin/bash','-c',script,'fixture',str(self.root/'cache'),str(self.root),str(sentinel)],check=True,capture_output=True)
+        self.assertEqual((self.root/'usage.log').read_text().splitlines(),['label=fixture',*[f'1\t{x}' for x in (self.root/'cache',self.root,self.root/'cache/output-root',sentinel,self.root/'cache/xdg','/ci2/tmp')]])
+        for name in ('finalize_evidence','homebrew'):
+            body=self.container_function(name)
+            for field in ('disk_cache=disabled','disk_cache_flag=--disk_cache=','disk_cache_gc_max_size=not-applicable','disk_cache_sentinel='):
+                self.assertIn(field,body)
+
+    def test_host_admit_returns_only_bound_image_summary(self):
+        root=self.root
+        (root/'input').mkdir();(root/'execution'/'host').mkdir(parents=True)
+        prepared=dict(admission={'profile_sha256':carrier['PROFILE_SHA']},host={'endpoint':'fixture','identity':{}},bundle_sha256='b'*64)
+        (root/'input'/'prepared.json').write_text(json.dumps(prepared))
+        observed=dict(endpoint='fixture',identity={})
+        image=self.image_fixture()
+        class FakeRun:
+            def __init__(self,*args):pass
+            def __call__(self,*args):return json.dumps(image).encode()
+        replacements=dict(owned_root=lambda:(root,'owner'),Commands=FakeRun,host_observation=lambda *_:copy.deepcopy(observed),admit_host=lambda *_:None,sha=lambda *_:'b'*64,manifest=lambda:None)
+        expected='|'.join([self.p['image']['id'],self.p['image']['os'],self.p['image']['architecture'],str(self.p['image']['size']),self.p['image']['user'],json.dumps(self.p['image']['entrypoint'],separators=(',',':')),self.p['image']['workdir']])
+        # Use real profile() (including digest) before the host fixture and real image_admit().
+        real_sha=carrier['sha']
+        replacements['sha']=lambda path,*args:real_sha(path,*args) if Path(path).name=='profile.json' else 'b'*64
+        receipt=root/'execution'/'host'/'native-admission.json'
+        with mock.patch.dict(carrier,replacements),mock.patch.object(sys,'argv',[str(BOOT),str(ROOT),'host-admit']):
+            output=io.StringIO()
+            with mock.patch('sys.stdout',output):call('main')
+            self.assertEqual(output.getvalue(),expected+'\n')
+            admitted=json.loads(receipt.read_text())
+            self.assertEqual(admitted['profile_sha256'],carrier['PROFILE_SHA'])
+            self.assertEqual(admitted['image_summary'],expected)
+            receipt.unlink()
+            for mutate in (lambda:prepared['admission'].__setitem__('profile_sha256','0'*64),
+                           lambda:image[0].__setitem__('Id','sha256:'+'0'*64),
+                           lambda:image[0]['Config'].__setitem__('Entrypoint',['x'*513]),
+                           lambda:image[0].__setitem__('Size',False)):
+                saved_prepared=copy.deepcopy(prepared);saved_image=copy.deepcopy(image)
+                mutate();(root/'input'/'prepared.json').write_text(json.dumps(prepared))
+                output=io.StringIO()
+                with mock.patch('sys.stdout',output):self.refused(carrier['main'])
+                self.assertEqual(output.getvalue(),'');self.assertFalse(receipt.exists())
+                prepared.clear();prepared.update(saved_prepared);image[:]=saved_image
+        worker=(ROOT/'run-linux-qualification-native-v1-worker.sh').read_text()
+        self.assertIn('image_line=$(run_work 60 /bin/bash "$NATIVE_BOOTSTRAP" host-admit)',worker)
+        self.assertNotIn('1065765003',worker)
+
+    def test_frozen_product_and_strict_cleanup_functions(self):
+        # Historical source fingerprints, not a claim of native runtime success.
+        frozen={
+            'as_ubuntu': '1cdadd4713222445b404f52266413e4a3a51eed90c015dec57daafb937e0c3fb',
+            'collect_toolchain_evidence': '2d3883597698bc3188629f772564cde8653a90134fea51a768bc22b8a3aff051',
+            'homebrew_cold_cache': '83693dbba73444311cb66a8933d35373c468bbbf6106f0dc35a41ca836c9c346',
+            'homebrew_server_identity': 'a583eb7d2cf6e77e0443d73faf1e23b2562de083a1ce84cbea1f58eb13d2b779',
+            'ci_build': '13f11f130a555029be6ad9bd55cdaabfe7cb13d4c0bdf224420bcf6b30374e71',
+            'ci_test_ffi': 'c8ff30862971d263f71ba1e728e50f0d9970e1a51c2456c1c8318ca0fb8a6927',
+            'release_linux': 'c54eacf14c8c9a3d5737d774374ae9a3d41dbf47a3481b31db46859fcfadbab1',
+            'release_darwin': '952bc2123a49ddc6da2fb5360bf7c598345ea1b380e8a54ef730b760c0ef5a4c',
+            'freeze_workloads': 'ef8ca87c03e66c0ac6a90d1eaf55191cd34b360d8416050280d2871ff9287e15',
+            'bounded_shutdown': '779e09947484c5127e6b396591aaa1a142d601cbf251f8e1b81aec4c3843893e',
+            'run_pass_finalizer': 'd52450dd7c008ab64557ef15bb43ab42af12fc19e3e8253b16f6f07a2b6e8ceb',
+            'abort_finalize': '8e05c9090ebfff5f4c7950648e096c17ae48276bfa9a28e93b171ff5d0c84b50',
+        }
+        for name,digest in frozen.items():
+            self.assertEqual(hashlib.sha256(self.container_function(name).encode()).hexdigest(),digest,name)
+        self.assertEqual(len(carrier['REUSE']),10)
+        self.assertNotIn('run-linux-qualification-v16-container.sh',carrier['REUSE'])
 
     def test_empty_allowlist_disables_qualification(self):
         event,env=self.admission_input()
