@@ -307,6 +307,12 @@ def split_quoted(text):
 
 def safe_flags(tokens):
     for token in tokens:
+        # The supported driver path needs no phase passthrough. Its operands
+        # use a different grammar (e.g. -Xclang -triple), so checking only the
+        # driver's target flags cannot establish the selected target.
+        require(not token.startswith(('-Wp,', '-Wa,')) and not any(
+            part.startswith(('-X', '-cc1')) or part == '-mllvm' or part.startswith('-mllvm=')
+            for part in token.split(',')), 'unsupported compiler phase passthrough')
         require(not any(x.startswith('@') for x in token.split(',')), 'unexpanded compiler response file')
         require(not re.search(r'(^|,)(?:--?target(?:=|$)|-arch(?:=|$)|-m32$|-m64$|-march(?:=|$)|-mcpu(?:=|$)|-B|--gcc-toolchain(?:=|$)|--sysroot(?:=|$)|-isysroot(?:=|$)|-extld(?:=|$))', token), 'unexpected compiler target/tool override')
         require('local_config_cc' not in token and 'external/zig_sdk/' not in token, 'forbidden host/legacy tool')

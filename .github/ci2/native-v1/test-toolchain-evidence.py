@@ -222,6 +222,36 @@ class ToolchainFixtures(unittest.TestCase):
         with self.assertRaises(ValueError):f.run()
         f=self.fixture();f.link['arguments'][-2:]=['-extldflags=-static'];f.run()
 
+    def test_cgo_frontend_target_passthrough_refused(self):
+        f=self.fixture()
+        f.compile['arguments'][-1]='-Xclang -triple -Xclang aarch64-unknown-linux-gnu'
+        with self.assertRaises(ValueError):f.run()
+        self.assertFalse((f.root/'result').exists())
+
+    def test_cpp_frontend_target_passthrough_refused(self):
+        f=self.fixture(direct=True)
+        f.compile['arguments'].extend(['-Xclang','-triple','-Xclang','aarch64-unknown-linux-gnu'])
+        with self.assertRaises(ValueError):f.run()
+        self.assertFalse((f.root/'result').exists())
+
+    def test_link_frontend_target_passthrough_refused(self):
+        f=self.fixture()
+        f.link['arguments'][-1]='-Xclang -triple -Xclang aarch64-unknown-linux-gnu'
+        with self.assertRaises(ValueError):f.run()
+        self.assertFalse((f.root/'result').exists())
+
+    def test_unsupported_frontend_selector_grammar(self):
+        # The supported proof never needs driver-to-frontend/backend passthrough.
+        for value in ('"-Xclang" -triple', '-Xclang=-triple', '-Xarch_x86_64 -m32',
+                      '-Xarch_host -m32', '-mllvm -mtriple=aarch64-linux-gnu',
+                      '-cc1 -triple aarch64-linux-gnu', '-cc1as -triple aarch64-linux-gnu',
+                      '-Xpreprocessor -triple', '-Xassembler -triple', '-Xlinker -arch',
+                      '-Xopenmp-target=aarch64-linux-gnu -triple', '-Wp,-triple,aarch64-linux-gnu',
+                      '-Wa,-triple,aarch64-linux-gnu'):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                v.safe_flags(v.split_quoted(value))
+        v.safe_flags(v.split_quoted('-D__DATE__="redacted" -I "a b" -fno-lto -Wl,-O1'))
+
     def test_receipt_truncation_and_output_immutability(self):
         f=self.fixture();(f.root/'sources.truncated').touch()
         with self.assertRaisesRegex(ValueError,'truncated'):f.run()
