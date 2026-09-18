@@ -2,6 +2,7 @@ package rewriter
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"os"
@@ -47,13 +48,13 @@ func snapshotTestCatalog() []*pb.SnapshotQueryCatalogTable {
 	return []*pb.SnapshotQueryCatalogTable{
 		{
 			Database: "tenant", Table: "copy",
-			TableId:    "copy",
+			TableId:    "0x0000000000000000000000000000000000000000000000000000000000000001",
 			SchemaHash: "0x0000000000000000000000000000000000000000000000000000000000000065",
 			Columns:    []*pb.SnapshotQueryColumn{{Name: "value", Type: "Int64", Generation: pb.SnapshotQueryColumnGeneration_SNAPSHOT_QUERY_COLUMN_GENERATION_ORDINARY}},
 		},
 		{
 			Database: "tenant", Table: "events",
-			TableId:    "events",
+			TableId:    "0x0000000000000000000000000000000000000000000000000000000000000003",
 			SchemaHash: "0x0000000000000000000000000000000000000000000000000000000000000067",
 			Columns:    []*pb.SnapshotQueryColumn{{Name: "value", Type: "Int64", Generation: pb.SnapshotQueryColumnGeneration_SNAPSHOT_QUERY_COLUMN_GENERATION_ORDINARY}},
 		},
@@ -836,7 +837,9 @@ func TestSnapshotQueryStructuralIdentityGuards(t *testing.T) {
 			}
 		})
 	}
-	for name, ids := range map[string][]string{"empty": {""}, "unknown": {"absent"}, "duplicate": {"copy", "copy"}, "unsorted": {"events", "copy"}, "missing": {"copy"}, "extra": {"copy", "events", "other"}} {
+	catalog := snapshotTestCatalog()
+	copyID, eventsID := catalog[0].TableId, catalog[1].TableId
+	for name, ids := range map[string][]string{"empty": {""}, "unknown": {"absent"}, "duplicate": {copyID, copyID}, "unsorted": {eventsID, copyID}, "missing": {copyID}, "extra": {copyID, eventsID, "other"}} {
 		t.Run("bindings "+name, func(t *testing.T) {
 			req := snapshotTestRequest("INSERT INTO tenant.copy SELECT value FROM tenant.copy UNION ALL SELECT value FROM tenant.events")
 			prepare := &pb.PrepareSnapshotQueryRequest{Analysis: req}
@@ -844,7 +847,7 @@ func TestSnapshotQueryStructuralIdentityGuards(t *testing.T) {
 				prepare.Bindings = append(prepare.Bindings, &pb.SnapshotScratchBinding{TableId: id, ScratchDatabase: "scratch", ScratchTable: strings.Repeat("x", i+1)})
 			}
 			a := newSnapshotQueryAnalyzer(&fakeBackend{prepareFn: func(context.Context, *pb.PrepareSnapshotQueryRequest) (*pb.PrepareSnapshotQueryResponse, error) {
-				return &pb.PrepareSnapshotQueryResponse{ContractVersion: 1, QueryProfileId: req.QueryProfileId, Code: pb.SnapshotQueryCode_SUCCESS, SelectSql: "SELECT 7", TargetTableId: "copy", TargetColumns: []string{"value"}, ReadTableIds: []string{"copy", "events"}}, nil
+				return &pb.PrepareSnapshotQueryResponse{ContractVersion: 1, QueryProfileId: req.QueryProfileId, Code: pb.SnapshotQueryCode_SUCCESS, SelectSql: "SELECT 7", TargetTableId: copyID, TargetColumns: []string{"value"}, ReadTableIds: []string{copyID, eventsID}}, nil
 			}})
 			if _, err := a.PrepareSnapshotQuery(context.Background(), prepare); err == nil {
 				t.Fatal("accepted invalid bindings")
@@ -923,14 +926,14 @@ func checkSnapshotMeasuredCatalogSemantics(t *testing.T, analyzer SnapshotQueryA
 		if err != nil {
 			t.Fatal(err)
 		}
-		if analyzed.TargetTableId != "copy" || len(analyzed.ReadTableIds) != 1 || analyzed.ReadTableIds[0] != "copy" {
+		if analyzed.TargetTableId != req.Catalog[0].TableId || len(analyzed.ReadTableIds) != 1 || analyzed.ReadTableIds[0] != req.Catalog[0].TableId {
 			t.Fatalf("self-insert closure: %v", analyzed)
 		}
-		prepared, err := analyzer.PrepareSnapshotQuery(context.Background(), &pb.PrepareSnapshotQueryRequest{Analysis: req, Bindings: []*pb.SnapshotScratchBinding{{TableId: "copy", ScratchDatabase: "scratch", ScratchTable: "old_copy"}}})
+		prepared, err := analyzer.PrepareSnapshotQuery(context.Background(), &pb.PrepareSnapshotQueryRequest{Analysis: req, Bindings: []*pb.SnapshotScratchBinding{{TableId: req.Catalog[0].TableId, ScratchDatabase: "scratch", ScratchTable: "old_copy"}}})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if prepared.TargetTableId != "copy" || len(prepared.ReadTableIds) != 1 || prepared.ReadTableIds[0] != "copy" || !strings.Contains(prepared.SelectSql, "old_copy") {
+		if prepared.TargetTableId != req.Catalog[0].TableId || len(prepared.ReadTableIds) != 1 || prepared.ReadTableIds[0] != req.Catalog[0].TableId || !strings.Contains(prepared.SelectSql, "old_copy") {
 			t.Fatalf("self-insert preparation: %v", prepared)
 		}
 	})
@@ -952,8 +955,8 @@ func checkSnapshotMeasuredCatalogSemantics(t *testing.T, analyzer SnapshotQueryA
 					if err != nil {
 						t.Fatal(err)
 					}
-					if len(analyzed.ReadTableIds) != 0 {
-						t.Fatalf("unexpected reads %v", analyzed.ReadTableIds)
+					if analyzed.TargetTableId != req.Catalog[0].TableId || len(analyzed.ReadTableIds) != 0 {
+						t.Fatalf("untouched analysis: %v", analyzed)
 					}
 				} else {
 					var typed *SnapshotQueryError
@@ -963,11 +966,11 @@ func checkSnapshotMeasuredCatalogSemantics(t *testing.T, analyzer SnapshotQueryA
 				}
 				bindings := []*pb.SnapshotScratchBinding(nil)
 				if scope == "read" {
-					bindings = []*pb.SnapshotScratchBinding{{TableId: "events", ScratchDatabase: "scratch", ScratchTable: "events"}}
+					bindings = []*pb.SnapshotScratchBinding{{TableId: req.Catalog[1].TableId, ScratchDatabase: "scratch", ScratchTable: "events"}}
 				}
 				prepared, err := analyzer.PrepareSnapshotQuery(context.Background(), &pb.PrepareSnapshotQueryRequest{Analysis: req, Bindings: bindings})
 				if scope == "untouched" {
-					if err != nil || prepared.SelectSql == "" {
+					if err != nil || prepared.SelectSql == "" || prepared.TargetTableId != req.Catalog[0].TableId || len(prepared.ReadTableIds) != 0 {
 						t.Fatalf("untouched prepare: %v, %v", prepared, err)
 					}
 				} else {
@@ -978,5 +981,88 @@ func checkSnapshotMeasuredCatalogSemantics(t *testing.T, analyzer SnapshotQueryA
 				}
 			})
 		}
+	}
+}
+
+// Exercise the actual measured-case driver without crediting a fake as engine qualification.
+func TestSnapshotMeasuredFixtureContract(t *testing.T) {
+	catalog := snapshotTestCatalog()
+	seen := map[string]bool{}
+	for _, table := range catalog {
+		if !snapshotQueryDigest(table.TableId) || !snapshotQueryDigest(table.SchemaHash) {
+			t.Errorf("measured catalog identity must be a lowercase digest: %s.%s ID=%q schema=%q", table.Database, table.Table, table.TableId, table.SchemaHash)
+		}
+		if seen[table.TableId] {
+			t.Errorf("duplicate measured table ID: %q", table.TableId)
+		}
+		seen[table.TableId] = true
+	}
+	// JSON compares exported contract fields, excluding protobuf runtime caches.
+	equal := func(a, b any) bool {
+		left, err := json.Marshal(a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		right, err := json.Marshal(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(left) == string(right)
+	}
+	calls := 0
+	check := func(req *pb.AnalyzeSnapshotQueryRequest) *pb.AnalyzeSnapshotQueryResponse {
+		calls++
+		want := snapshotTestRequest(req.Sql)
+		mutations := 0
+		touched := false
+		for i, table := range req.Catalog {
+			generation := table.Columns[0].Generation
+			if generation != pb.SnapshotQueryColumnGeneration_SNAPSHOT_QUERY_COLUMN_GENERATION_ORDINARY {
+				if generation != 0 && generation != 99 {
+					t.Errorf("unexpected generation: %v", generation)
+				}
+				mutations++
+				want.Catalog[i].Columns[0].Generation = generation
+				touched = i == 0 || strings.Contains(req.Sql, "FROM tenant.events")
+			}
+		}
+		self := req.Sql == "INSERT INTO tenant.copy SELECT value FROM tenant.copy"
+		if (self && mutations != 0) || (!self && mutations != 1) || !equal(req, want) {
+			t.Errorf("measured generation control changed more than generation: %v", req)
+		}
+		out := snapshotSuccess(req)
+		if touched {
+			return &pb.AnalyzeSnapshotQueryResponse{ContractVersion: 1, QueryProfileId: req.QueryProfileId, Code: pb.SnapshotQueryCode_UNSUPPORTED}
+		}
+		if self {
+			out.ReadTableIds = []string{catalog[0].TableId}
+		}
+		return out
+	}
+	analyzer := newSnapshotQueryAnalyzer(&fakeBackend{
+		analyzeFn: func(_ context.Context, req *pb.AnalyzeSnapshotQueryRequest) (*pb.AnalyzeSnapshotQueryResponse, error) {
+			return check(req), nil
+		},
+		prepareFn: func(_ context.Context, req *pb.PrepareSnapshotQueryRequest) (*pb.PrepareSnapshotQueryResponse, error) {
+			var want []*pb.SnapshotScratchBinding
+			if strings.Contains(req.Analysis.Sql, "FROM tenant.copy") {
+				want = []*pb.SnapshotScratchBinding{{TableId: catalog[0].TableId, ScratchDatabase: "scratch", ScratchTable: "old_copy"}}
+			} else if strings.Contains(req.Analysis.Sql, "FROM tenant.events") {
+				want = []*pb.SnapshotScratchBinding{{TableId: catalog[1].TableId, ScratchDatabase: "scratch", ScratchTable: "events"}}
+			}
+			if !equal(req.Bindings, want) {
+				t.Errorf("measured bindings do not match catalog: got %v, want %v", req.Bindings, want)
+			}
+			out := check(req.Analysis)
+			prepared := &pb.PrepareSnapshotQueryResponse{ContractVersion: out.ContractVersion, QueryProfileId: out.QueryProfileId, Code: out.Code, TargetTableId: out.TargetTableId, TargetColumns: out.TargetColumns, ReadTableIds: out.ReadTableIds}
+			if out.Code == pb.SnapshotQueryCode_SUCCESS {
+				prepared.SelectSql = "SELECT value FROM scratch.old_copy"
+			}
+			return prepared, nil
+		},
+	})
+	checkSnapshotMeasuredCatalogSemantics(t, analyzer, snapshotTestProfile)
+	if calls != 14 {
+		t.Fatalf("measured fixture calls=%d, want 7 cases x analyze/prepare", calls)
 	}
 }
