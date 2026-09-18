@@ -20,7 +20,14 @@ MODES = {
 
 # Reviewed local source authority; future owned bytes must independently match.
 SECP_SOURCE = "external/gazelle++go_deps+com_github_ethereum_go_ethereum/crypto/secp256k1/secp256.go"
-SOURCE_PINS = {'MODULE.bazel': '7371615e46f69d9c3773c73c91034e919b1c538ac4acca724490782778d1d3b2',
+# Repository authorities come from this immutable product, not the carrier.
+FROZEN_PRODUCT_COMMIT = "ab9ec0a1c27e257f7d96be1e3011f6e5f274a609"
+REPOSITORY_SOURCE_PINS = {'MODULE.bazel': '2651e4832f77ccfcabc1623bc897eb2045928fa3aa98299be6ce41d93ad34673',
+ 'go.mod': '3732c3e9151c3f738a94f191b89ed45d60b9841d394615699351a5693036af61',
+ 'go.sum': 'f7dba9e858ff4710343d56a1118fe5a668dd775957b2a2afbc1d7d19c765058d',
+ 'third_party/com_github_ethereum_go_ethereum_secp256k1.patch': '5e4de698a8e72764c44f52104b1b9fdbf5351950b5d6e95d39aed698d1b09ad6'}
+# External authorities retain the separately reviewed R145 local-source pins.
+SOURCE_PINS = {**REPOSITORY_SOURCE_PINS,
  'external/gazelle++go_deps+com_github_ethereum_go_ethereum/crypto/secp256k1/BUILD.bazel': '0eff1a4cb1ac2b652959e2de122f56bb9d3bff74381ea01c4e387a756e07a84c',
  'external/gazelle++go_deps+com_github_ethereum_go_ethereum/crypto/secp256k1/secp256.go': 'ea84abcaaae8dc04137cb110c10280e844f14c55a518388e79faed04964c9fec',
  'external/gazelle++go_deps+com_github_ethereum_go_ethereum/go.mod': '82ed3bdb0efc7392f913361c306af3cd11089fa9c9815815ee6dbcc99966fe06',
@@ -56,10 +63,7 @@ SOURCE_PINS = {'MODULE.bazel': '7371615e46f69d9c3773c73c91034e919b1c538ac4acca72
  'external/rules_go+/go/tools/builders/read.go': '586e8426c9385ec703ab87261db452b9ee50b3e01a329fe6debcd4cc32a1487d',
  'external/rules_go+/go/tools/builders/replicate.go': 'd1ebba9df7bb792bfd43683fe0a8843a241b947e82aac6da0ce220770b3eb64c',
  'external/rules_go+/go/tools/builders/stdlib.go': '68630884785d0c091a682a6ac53cd4dd4ed7aacddd6fb51b0384e62f0241f2f7',
- 'external/rules_go+/go/tools/builders/stdliblist.go': '4f0afbc3c23d94ea6a25de6fb2d4aa9879c00511af303f49f51ec1544a1d0dcc',
- 'go.mod': '3732c3e9151c3f738a94f191b89ed45d60b9841d394615699351a5693036af61',
- 'go.sum': 'f7dba9e858ff4710343d56a1118fe5a668dd775957b2a2afbc1d7d19c765058d',
- 'third_party/com_github_ethereum_go_ethereum_secp256k1.patch': '5e4de698a8e72764c44f52104b1b9fdbf5351950b5d6e95d39aed698d1b09ad6'}
+ 'external/rules_go+/go/tools/builders/stdliblist.go': '4f0afbc3c23d94ea6a25de6fb2d4aa9879c00511af303f49f51ec1544a1d0dcc'}
 
 def require(condition, message):
     if not condition:

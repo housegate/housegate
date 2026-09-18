@@ -312,6 +312,43 @@ class ToolchainFixtures(unittest.TestCase):
                 f=self.fixture();mutate(f)
                 with self.assertRaises(ValueError):f.run()
 
+    def frozen_fixture(self):
+        # Only external witnesses are synthetic here. Repository witnesses and
+        # their production pins remain the immutable frozen Git bytes/values.
+        f=self.fixture()
+        root=ROOT/'testdata/toolchain/frozen-product'
+        metadata=json.loads((root/'provenance.json').read_text())
+        for name in metadata['sources']:
+            f.write(name, (root/name).read_bytes())
+            f.pins[name]=v.SOURCE_PINS[name]
+        return f
+
+    def test_frozen_repository_authority(self):
+        root=ROOT/'testdata/toolchain/frozen-product'
+        metadata=json.loads((root/'provenance.json').read_text())
+        self.assertEqual(metadata['commit'], 'ab9ec0a1c27e257f7d96be1e3011f6e5f274a609')
+        self.assertEqual(metadata['tree'], '3219ed991de31ada4e20ebd720aa192b15c04ca6')
+        for name, source in metadata['sources'].items():
+            data=(root/name).read_bytes()
+            self.assertEqual(len(data), source['bytes'])
+            self.assertEqual(hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest(), source['blob'])
+            self.assertEqual(hashlib.sha256(data).hexdigest(), source['sha256'])
+            self.assertEqual(v.SOURCE_PINS[name], source['sha256'])
+        self.assertEqual(v.FROZEN_PRODUCT_COMMIT, metadata['commit'])
+        self.assertEqual(v.REPOSITORY_SOURCE_PINS, {k:s['sha256'] for k,s in metadata['sources'].items()})
+        self.assertEqual(set(v.REPOSITORY_SOURCE_PINS), {k for k in v.SOURCE_PINS if not k.startswith('external/')})
+
+    def test_frozen_repository_collection(self):
+        self.frozen_fixture().run()
+
+    def test_frozen_repository_changed_bytes_refused(self):
+        root=ROOT/'testdata/toolchain/frozen-product'
+        for name in json.loads((root/'provenance.json').read_text())['sources']:
+            with self.subTest(name=name):
+                f=self.frozen_fixture();f.write(name, (root/name).read_bytes()+b'\n')
+                with self.assertRaisesRegex(ValueError, 'unsupported source bytes'):f.run()
+                self.assertFalse((f.root/'result').exists())
+
     def test_canonical_labels(self):
         self.assertEqual(v.label('@@//:linux_amd64'), '//:linux_amd64')
         self.assertEqual(v.external('@@platforms//cpu:x86_64'), ('platforms', 'cpu:x86_64'))
