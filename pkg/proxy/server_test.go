@@ -218,6 +218,7 @@ func (h testHooks) OnHello(ctx context.Context, sess chsession.Session, hello *c
 
 func (testHooks) OnHandshakeComplete(context.Context, chsession.Session, time.Duration) {}
 func (testHooks) OnQuery(context.Context, *plugin.QueryContext) error                   { return nil }
+func (testHooks) ResumeQuery(context.Context, *plugin.QueryContext) error               { return nil }
 func (testHooks) RejectUndecodableQuery(chsession.Session) bool                         { return false }
 func (testHooks) ClientDataReadLimit(*plugin.QueryContext) (uint64, bool)               { return 0, false }
 func (testHooks) OnClientDataStrict(context.Context, *plugin.QueryContext, []byte) error {

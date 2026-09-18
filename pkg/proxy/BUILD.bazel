@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "observer.go",
         "packet_names.go",
+		"relay_agent_prepare.go",
         "relay.go",
         "server.go",
     ],
@@ -25,6 +26,7 @@ go_test(
     srcs = [
         "commitgate_e2e_test.go",
         "relay_deferred_test.go",
+		"relay_agent_prepare_test.go",
         "relay_exception_test.go",
         "relay_helpers_test.go",
         "relay_reject_test.go",

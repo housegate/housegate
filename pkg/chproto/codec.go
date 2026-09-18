@@ -214,17 +214,24 @@ func (c *Codec) WaitForPacketStart(timeout time.Duration) (bool, error) {
 //	                   falls back to Splice(Raw) — this function populates
 //	                   both Raw and the Decode error.
 func (c *Codec) ReadPacket(decodeTypes ...uint64) (*Packet, error) {
-	return c.readPacket(0, false, decodeTypes...)
+	return c.readPacket(0, false, false, decodeTypes...)
+}
+
+// ReadPacketWithLimit bounds every packet (including Query and
+// TablesStatus), before its body is decoded or skipped. It is for control
+// lanes; payload lanes should continue to use ReadPacketWithDataLimit.
+func (c *Codec) ReadPacketWithLimit(maxBytes uint64, decodeTypes ...uint64) (*Packet, error) {
+	return c.readPacket(maxBytes, false, true, decodeTypes...)
 }
 
 // ReadPacketWithDataLimit is ReadPacket with an on-wire byte limit applied to
 // ClientData packets while they are being captured. Other packet types are not
 // limited by this method.
 func (c *Codec) ReadPacketWithDataLimit(maxDataBytes uint64, decodeTypes ...uint64) (*Packet, error) {
-	return c.readPacket(maxDataBytes, true, decodeTypes...)
+	return c.readPacket(maxDataBytes, true, false, decodeTypes...)
 }
 
-func (c *Codec) readPacket(maxDataBytes uint64, enforceDataLimit bool, decodeTypes ...uint64) (*Packet, error) {
+func (c *Codec) readPacket(maxBytes uint64, enforceDataLimit, enforcePacketLimit bool, decodeTypes ...uint64) (*Packet, error) {
 	// ClickHouse's server calls finishChunk after each emitted packet. Once the
 	// upstream addendum selects chunking, that transport boundary is stronger
 	// than any value decoder: even opaque AggregateFunction states can be
@@ -242,8 +249,14 @@ func (c *Codec) readPacket(maxDataBytes uint64, enforceDataLimit bool, decodeTyp
 	if err != nil {
 		return nil, err // includes io.EOF
 	}
+	if enforcePacketLimit {
+		if err := c.cap.setLimit(maxBytes); err != nil {
+			raw := c.cap.snapshot()
+			return &Packet{Type: typeVar, RawLen: len(raw), Raw: raw}, err
+		}
+	}
 	if c.dir == DirFromClient && typeVar == uint64(proto.ClientCodeData) && enforceDataLimit {
-		if err := c.cap.setLimit(maxDataBytes); err != nil {
+		if err := c.cap.setLimit(maxBytes); err != nil {
 			raw := c.cap.snapshot()
 			return &Packet{Type: typeVar, RawLen: len(raw), Raw: raw}, err
 		}
