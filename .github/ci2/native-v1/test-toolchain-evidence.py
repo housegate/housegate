@@ -240,6 +240,42 @@ class ToolchainFixtures(unittest.TestCase):
         with self.assertRaises(ValueError):f.run()
         self.assertFalse((f.root/'result').exists())
 
+    def test_cgo_config_indirection_refused(self):
+        f=self.fixture()
+        f.compile['arguments'][-1]='--config /tmp/ci2-untrusted.cfg'
+        with self.assertRaisesRegex(ValueError, 'compiler configuration indirection'):f.run()
+        self.assertFalse((f.root/'result').exists())
+
+    def test_cpp_config_indirection_refused(self):
+        f=self.fixture(direct=True)
+        f.compile['arguments'].extend(['--config','/tmp/ci2-untrusted.cfg'])
+        with self.assertRaisesRegex(ValueError, 'compiler configuration indirection'):f.run()
+        self.assertFalse((f.root/'result').exists())
+
+    def test_link_config_indirection_refused(self):
+        f=self.fixture()
+        f.link['arguments'][-1]='--config /tmp/ci2-untrusted.cfg'
+        with self.assertRaisesRegex(ValueError, 'missing/ambiguous configured root GoLink'):f.run()
+        self.assertFalse((f.root/'result').exists())
+
+    def test_unsupported_config_selector_grammar(self):
+        # Configuration files and search paths are outside this bounded proof.
+        # No named file is opened or executed by these synthetic fixtures.
+        for option in ('--config', '--config-system-dir', '--config-user-dir',
+                       '-config', '-config-system-dir', '-config-user-dir'):
+            for value in (option+' /tmp/ci2-untrusted.cfg',
+                          option+'=/tmp/ci2-untrusted.cfg',
+                          '"'+option+'" "a b.cfg"',
+                          option+'="a b.cfg"', '-Wl,'+option+',a.cfg'):
+                with self.subTest(value=value), self.assertRaisesRegex(
+                        ValueError, 'compiler configuration indirection'):
+                    v.safe_flags(v.split_quoted(value))
+        for value in ('--config-extra=future.cfg', '--no-default-config'):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                    ValueError, 'compiler configuration indirection'):
+                v.safe_flags(v.split_quoted(value))
+        v.safe_flags(v.split_quoted('-Dconfig="valid" -I "config files" -fno-lto -Wl,-O1'))
+
     def test_unsupported_frontend_selector_grammar(self):
         # The supported proof never needs driver-to-frontend/backend passthrough.
         for value in ('"-Xclang" -triple', '-Xclang=-triple', '-Xarch_x86_64 -m32',

@@ -307,6 +307,11 @@ def split_quoted(text):
 
 def safe_flags(tokens):
     for token in tokens:
+        # Config files and search directories can inject flags outside this
+        # evidence. Reject the entire configuration option family, including
+        # future suffixes, instead of trusting individual visible operands.
+        require(not re.search(r'(^|,)--?(?:config|no-default-config)', token),
+                'unsupported compiler configuration indirection')
         # The supported driver path needs no phase passthrough. Its operands
         # use a different grammar (e.g. -Xclang -triple), so checking only the
         # driver's target flags cannot establish the selected target.
