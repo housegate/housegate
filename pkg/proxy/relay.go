@@ -1139,6 +1139,12 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 			}
 			if agentPrepared != nil {
 				if err := r.authorizeAgentForward(ctx, agentPrepared); err != nil {
+					if errors.Is(err, errAgentPrepareForwardUnknown) {
+						// The gate and durable authorization won before delivery was
+						// canceled.  The journal now owns reconciliation; never
+						// misclassify this as an ordinary abort/release.
+						return err
+					}
 					r.takeActiveQuery()
 					if errors.Is(err, errAgentPrepareCanceled) {
 						r.reconcileAgentPrepareCancel(agentPrepared.plan)

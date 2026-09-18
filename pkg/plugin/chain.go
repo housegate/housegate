@@ -210,7 +210,7 @@ func (c *PluginChain) runQueryFrom(ctx context.Context, qctx *QueryContext, star
 			if qctx.DeferredInsert != nil || qctx.SuppressUpstreamExecution || qctx.AbortWithSuccess {
 				return fmt.Errorf("agent prepare conflicts with another query ownership plan")
 			}
-			if qctx.AgentPrepare.Prepare == nil || qctx.AgentPrepare.PersistForwardIntent == nil || qctx.AgentPrepare.AuthorizeForward == nil || qctx.AgentPrepare.MaxControlBytes == 0 {
+			if qctx.AgentPrepare.Prepare == nil || qctx.AgentPrepare.PersistForwardIntent == nil || qctx.AgentPrepare.AuthorizeForward == nil || qctx.AgentPrepare.PersistForwardUnknown == nil || qctx.AgentPrepare.MaxControlBytes == 0 {
 				return fmt.Errorf("agent prepare requires worker, forward intent, and forward authorization")
 			}
 			return qctx.installContinuation(c, i+1)

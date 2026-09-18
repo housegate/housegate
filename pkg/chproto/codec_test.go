@@ -19,6 +19,22 @@ func putServerHelloTail54470(buf *proto.Buffer, sendChunked, recvChunked string)
 	buf.PutUInt64(0x0102030405060708) // interserver nonce
 }
 
+func TestReadPacketWithLimitStopsTablesStatusBeforeFullControlDecode(t *testing.T) {
+	var wire proto.Buffer
+	wire.PutUVarInt(uint64(proto.ClientTablesStatusRequest))
+	wire.PutUVarInt(1)
+	wire.PutString("database")
+	wire.PutString(string(bytes.Repeat([]byte("x"), 1024)))
+	c := NewCodec(&readerWriter{r: bytes.NewBuffer(wire.Buf), w: &bytes.Buffer{}}, DirFromClient)
+	pkt, err := c.ReadPacketWithLimit(16)
+	if !errors.Is(err, ErrPacketTooLarge) {
+		t.Fatalf("ReadPacketWithLimit err=%v, want ErrPacketTooLarge", err)
+	}
+	if pkt == nil || pkt.RawLen > 16 {
+		t.Fatalf("packet=%+v exceeds control limit", pkt)
+	}
+}
+
 // readerWriter bundles a read side and a write side into a single io.ReadWriter
 // so a Codec can drive a synthetic byte stream in tests.
 type readerWriter struct {

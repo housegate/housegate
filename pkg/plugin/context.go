@@ -176,6 +176,9 @@ type AgentPreparePlan struct {
 	// envelope/generation authorization before Relay writes any Query bytes.
 	PersistForwardIntent func(context.Context, PreparedAgentQuery) error
 	AuthorizeForward     func(context.Context, PreparedAgentQuery) error
+	// PersistForwardUnknown records service-owned reconciliation when the
+	// forward gate already won but client delivery was canceled before launch.
+	PersistForwardUnknown func(context.Context, PreparedAgentQuery) error
 }
 
 // queryContinuation records the first plugin that has not run.  It is opaque

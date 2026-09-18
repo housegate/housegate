@@ -26,13 +26,14 @@ type relayPrepareHooks struct {
 	prepare   func(context.Context) (plugin.PreparedAgentQuery, error)
 	intent    func(context.Context, plugin.PreparedAgentQuery) error
 	authorize func(context.Context, plugin.PreparedAgentQuery) error
+	unknown   func(context.Context, plugin.PreparedAgentQuery) error
 }
 
 func (h relayPrepareHooks) SupportsQueryContinuation() bool { return true }
 
 func (h relayPrepareHooks) OnQuery(_ context.Context, qctx *plugin.QueryContext) error {
 	qctx.AgentPrepare = &plugin.AgentPreparePlan{
-		Prepare: h.prepare, PersistForwardIntent: h.intent, AuthorizeForward: h.authorize,
+		Prepare: h.prepare, PersistForwardIntent: h.intent, AuthorizeForward: h.authorize, PersistForwardUnknown: h.unknown,
 		MaxControlBytes: 1024,
 	}
 	return nil
@@ -61,6 +62,7 @@ func TestRelayAgentPrepare_CancelWinsOverLateWorker(t *testing.T) {
 			return plugin.PreparedAgentQuery{Query: &chproto.Query{ID: "late"}, Claimed: true}, nil
 		},
 		ReconcileCancel: func(context.Context) error { reconciled.Add(1); return nil },
+		MaxControlBytes: 1024,
 	}
 	if !r.beginActiveQuery(qctx.Query.ID) {
 		t.Fatal("begin active query")
@@ -113,7 +115,7 @@ func TestRelayAgentPrepare_AuthorizationFailureForbidsLaunch(t *testing.T) {
 		queryID:    "authorize",
 		generation: generation,
 		prepared:   plugin.PreparedAgentQuery{Query: &chproto.Query{ID: "authorize"}},
-		plan: &plugin.AgentPreparePlan{AuthorizeForward: func(context.Context, plugin.PreparedAgentQuery) error {
+		plan: &plugin.AgentPreparePlan{MaxControlBytes: 1024, AuthorizeForward: func(context.Context, plugin.PreparedAgentQuery) error {
 			attempted.Add(1)
 			return errors.New("fsync outcome unknown")
 		}},
@@ -145,7 +147,7 @@ func TestRelayAgentPrepare_CancelDuringContinuationOrAuthorizationStage(t *testi
 			result := &agentPrepareResult{
 				queryID: stage, generation: generation,
 				prepared: plugin.PreparedAgentQuery{Query: &chproto.Query{ID: stage}},
-				plan:     &plugin.AgentPreparePlan{},
+				plan:     &plugin.AgentPreparePlan{MaxControlBytes: 1024},
 			}
 			done := make(chan error, 1)
 			go func() {
@@ -196,7 +198,7 @@ func TestRelayAgentPrepare_EOFInvalidatesGeneration(t *testing.T) {
 		close(started)
 		<-release
 		return plugin.PreparedAgentQuery{}, context.Canceled
-	}}
+	}, MaxControlBytes: 1024}
 	if !r.beginActiveQuery(qctx.Query.ID) {
 		t.Fatal("begin active query")
 	}
@@ -241,6 +243,7 @@ func TestRelayAgentPrepare_NonCooperativeContinuationCancelHasZeroForward(t *tes
 		queryID: "continuation-cancel", generation: generation,
 		prepared: plugin.PreparedAgentQuery{Query: &chproto.Query{ID: "continuation-cancel"}},
 		plan: &plugin.AgentPreparePlan{
+			MaxControlBytes:      1024,
 			PersistForwardIntent: func(context.Context, plugin.PreparedAgentQuery) error { intents.Add(1); return nil },
 			AuthorizeForward:     func(context.Context, plugin.PreparedAgentQuery) error { authorizations.Add(1); return nil },
 		},
@@ -296,6 +299,7 @@ func TestRelayAgentPrepare_RelayCancelNeverWritesUpstreamQuery(t *testing.T) {
 		},
 		intent:    func(context.Context, plugin.PreparedAgentQuery) error { return nil },
 		authorize: func(context.Context, plugin.PreparedAgentQuery) error { return nil },
+		unknown:   func(context.Context, plugin.PreparedAgentQuery) error { return nil },
 	}
 	r := NewRelay(sess, hooks, nil, nil)
 	client := chproto.NewCodec(clientPeer, chproto.DirToUpstream)
@@ -345,6 +349,7 @@ func TestRelayAgentPrepare_RelayAuthorizationFailureNeverWritesUpstreamQuery(t *
 		authorize: func(context.Context, plugin.PreparedAgentQuery) error {
 			return errors.New("authorization fsync unknown")
 		},
+		unknown: func(context.Context, plugin.PreparedAgentQuery) error { return nil },
 	}
 	r := NewRelay(sess, hooks, nil, nil)
 	client := chproto.NewCodec(clientPeer, chproto.DirToUpstream)
@@ -367,5 +372,54 @@ func TestRelayAgentPrepare_RelayAuthorizationFailureNeverWritesUpstreamQuery(t *
 	buf := make([]byte, 1)
 	if n, err := upstreamPeer.Read(buf); n != 0 || err == nil {
 		t.Fatalf("upstream received Query bytes n=%d err=%v", n, err)
+	}
+}
+
+func TestRelayAgentPrepare_GateWonCancelPersistsForwardUnknown(t *testing.T) {
+	clientPeer, clientProxy := net.Pipe()
+	defer clientPeer.Close()
+	defer clientProxy.Close()
+	sess := chsession.New(1, clientProxy)
+	r := NewRelay(sess, plugin.NoopHooks{}, nil, nil)
+	if !r.beginActiveQuery("gate-won") {
+		t.Fatal("begin active query")
+	}
+	generation := r.nextAgentPrepareGeneration()
+	entered, release := make(chan struct{}), make(chan struct{})
+	var authorized, unknown atomic.Int32
+	result := &agentPrepareResult{
+		queryID: "gate-won", generation: generation,
+		prepared: plugin.PreparedAgentQuery{Query: &chproto.Query{ID: "gate-won"}},
+		plan: &plugin.AgentPreparePlan{
+			MaxControlBytes: 1024,
+			AuthorizeForward: func(context.Context, plugin.PreparedAgentQuery) error {
+				authorized.Add(1)
+				close(entered)
+				<-release
+				return nil
+			},
+			PersistForwardUnknown: func(context.Context, plugin.PreparedAgentQuery) error {
+				unknown.Add(1)
+				return nil
+			},
+		},
+	}
+	done := make(chan error, 1)
+	go func() { done <- r.authorizeAgentForward(context.Background(), result) }()
+	<-entered
+	if err := clientPeer.Close(); err != nil {
+		t.Fatalf("close client: %v", err)
+	}
+	close(release)
+	select {
+	case err := <-done:
+		if !errors.Is(err, errAgentPrepareForwardUnknown) {
+			t.Fatalf("authorize result=%v, want forward unknown", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("authorized stage did not settle")
+	}
+	if authorized.Load() != 1 || unknown.Load() != 1 {
+		t.Fatalf("authorized=%d unknown=%d, want 1/1", authorized.Load(), unknown.Load())
 	}
 }

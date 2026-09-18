@@ -97,7 +97,7 @@ func (r *Relay) waitAgentPrepare(ctx context.Context, qctx *plugin.QueryContext,
 		if !ready {
 			continue
 		}
-		pkt, err := client.ReadPacketWithDataLimit(plan.MaxControlBytes, uint64(chproto.ClientQueryCode))
+		pkt, err := client.ReadPacketWithLimit(plan.MaxControlBytes, uint64(chproto.ClientQueryCode))
 		if err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrClosedPipe) {
 				r.cancelAgentPrepare(qctx.Query.ID, generation, plan)
@@ -115,6 +115,7 @@ func (r *Relay) waitAgentPrepare(ctx context.Context, qctx *plugin.QueryContext,
 }
 
 var errAgentPrepareCanceled = errors.New("agent preparation canceled")
+var errAgentPrepareForwardUnknown = errors.New("agent forwarding requires reconciliation")
 
 func (r *Relay) cancelAgentPrepare(queryID string, generation uint64, plan *plugin.AgentPreparePlan) {
 	r.queryMu.Lock()
@@ -159,10 +160,17 @@ func (r *Relay) runAgentPrepareStage(ctx context.Context, result *agentPrepareRe
 	go func() { done <- action(stageCtx) }()
 	client := r.sess.Client()
 	canceled := false
+	forwardWon := r.agentForwardGeneration == result.generation
 	for {
 		select {
 		case err := <-done:
-			if canceled || !r.agentPrepareLive(result.queryID, result.generation) {
+			if canceled {
+				if forwardWon {
+					return errAgentPrepareForwardUnknown
+				}
+				return errAgentPrepareCanceled
+			}
+			if !r.agentPrepareLive(result.queryID, result.generation) {
 				r.reconcileAgentPrepareCancel(result.plan)
 				return errAgentPrepareCanceled
 			}
@@ -178,6 +186,9 @@ func (r *Relay) runAgentPrepareStage(ctx context.Context, result *agentPrepareRe
 				// Do not let a callback outlive Relay cleanup.  The closed session
 				// is the fence for a non-cooperative callback.
 				<-done
+				if forwardWon {
+					return errAgentPrepareForwardUnknown
+				}
 				return io.EOF
 			}
 			return fmt.Errorf("wait for agent preparation stage control packet: %w", err)
@@ -185,7 +196,7 @@ func (r *Relay) runAgentPrepareStage(ctx context.Context, result *agentPrepareRe
 		if !ready {
 			continue
 		}
-		pkt, err := client.ReadPacketWithDataLimit(result.plan.MaxControlBytes, uint64(chproto.ClientQueryCode))
+		pkt, err := client.ReadPacketWithLimit(result.plan.MaxControlBytes, uint64(chproto.ClientQueryCode))
 		if err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrClosedPipe) {
 				r.cancelAgentPrepare(result.queryID, result.generation, result.plan)
@@ -197,6 +208,9 @@ func (r *Relay) runAgentPrepareStage(ctx context.Context, result *agentPrepareRe
 			canceled = true
 			stop()
 			<-done
+			if forwardWon {
+				return errAgentPrepareForwardUnknown
+			}
 			return errAgentPrepareCanceled
 		}
 		return fmt.Errorf("client packet %s during agent preparation stage", clientPacketName(pkt.Type))
@@ -246,6 +260,12 @@ func (r *Relay) authorizeAgentForward(ctx context.Context, result *agentPrepareR
 	if err := r.runAgentPrepareStage(ctx, result, func(stageCtx context.Context) error {
 		return result.plan.AuthorizeForward(stageCtx, result.prepared)
 	}); err != nil {
+		if errors.Is(err, errAgentPrepareForwardUnknown) {
+			if reconcileErr := result.plan.PersistForwardUnknown(context.Background(), result.prepared); reconcileErr != nil {
+				return fmt.Errorf("persist forward unknown after authorized gate: %w", reconcileErr)
+			}
+			return errAgentPrepareForwardUnknown
+		}
 		return fmt.Errorf("persist forward authorization: %w", err)
 	}
 	return nil
