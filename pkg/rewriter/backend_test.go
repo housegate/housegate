@@ -29,6 +29,12 @@ type fakeBackend struct {
 	// recent MaterializeSQL call carried a deadline — used to assert
 	// that sentioMaterializer applies its per-call timeout.
 	lastMatCtxHadDeadline bool
+
+	analyzeFn       func(context.Context, *pb.AnalyzeSnapshotQueryRequest) (*pb.AnalyzeSnapshotQueryResponse, error)
+	prepareFn       func(context.Context, *pb.PrepareSnapshotQueryRequest) (*pb.PrepareSnapshotQueryResponse, error)
+	analyzeRequests []*pb.AnalyzeSnapshotQueryRequest
+	prepareRequests []*pb.PrepareSnapshotQueryRequest
+	closeFn         func() error
 }
 
 func (f *fakeBackend) Rewrite(_ context.Context, req *pb.RewriteSQLRequest) (*pb.RewriteSQLResponse, error) {
@@ -48,7 +54,28 @@ func (f *fakeBackend) MaterializeSQL(ctx context.Context, req *pb.MaterializeSQL
 	return f.matResp, f.matErr
 }
 
-func (f *fakeBackend) Close() error { return nil }
+func (f *fakeBackend) AnalyzeSnapshotQuery(ctx context.Context, req *pb.AnalyzeSnapshotQueryRequest) (*pb.AnalyzeSnapshotQueryResponse, error) {
+	f.analyzeRequests = append(f.analyzeRequests, req)
+	if f.analyzeFn == nil {
+		return nil, nil
+	}
+	return f.analyzeFn(ctx, req)
+}
+
+func (f *fakeBackend) PrepareSnapshotQuery(ctx context.Context, req *pb.PrepareSnapshotQueryRequest) (*pb.PrepareSnapshotQueryResponse, error) {
+	f.prepareRequests = append(f.prepareRequests, req)
+	if f.prepareFn == nil {
+		return nil, nil
+	}
+	return f.prepareFn(ctx, req)
+}
+
+func (f *fakeBackend) Close() error {
+	if f.closeFn != nil {
+		return f.closeFn()
+	}
+	return nil
+}
 
 type fakeSession struct {
 	account, logical, physical string

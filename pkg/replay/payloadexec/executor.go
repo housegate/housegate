@@ -144,179 +144,14 @@ func (e *Executor) ApplyContext(ctx context.Context, prev replay.SafeSnapshotMan
 	if e.materializer == nil {
 		return replay.SafeSnapshotManifest{}, replay.ExecutionResult{}, fmt.Errorf("executor has no materializer")
 	}
-	if err := verifyLedger(prev); err != nil {
-		return replay.SafeSnapshotManifest{}, replay.ExecutionResult{}, fmt.Errorf("prev snapshot ledger: %w", err)
-	}
-	// Defense-in-depth: statement_id uniqueness is safety-critical (a reused id
-	// collides _hg_row_id and resurrects the duplicate-row LtHash cancellation
-	// attack, §5.2). Re-enforce it here so the executor fails closed even when
-	// driven directly (e.g. snapshot promotion) rather than via the Verifier.
-	if err := validateBlockStatements(stmts); err != nil {
-		return replay.SafeSnapshotManifest{}, replay.ExecutionResult{}, err
-	}
-
-	// parts[tableID][partitionID] = active parts (carried forward + new).
-	parts := map[string]map[string][]replay.PartManifestEntry{}
-	schemaHashes := map[string]string{}
-	for _, tm := range prev.Tables {
-		schemaHashes[tm.TableID] = tm.SchemaHash
-		byPartition := map[string][]replay.PartManifestEntry{}
-		for _, p := range tm.ActiveParts {
-			byPartition[p.PartitionID] = append(byPartition[p.PartitionID], p)
-		}
-		parts[tm.TableID] = byPartition
-	}
-
-	touchedSet := map[tablePartition]struct{}{}
-	var affected []replay.PartManifestEntry
-
+	batches := make([]StatementRows, len(stmts))
 	for i, st := range stmts {
-		if st.PayloadRef == "" {
-			return replay.SafeSnapshotManifest{}, replay.ExecutionResult{}, fmt.Errorf("statement %d (%s): MVP executor only replays payload-local INSERTs; statement has no payload (mutation/DDL class)", i, st.StatementID)
-		}
-		schema, ok := e.tables[st.TargetTableID]
-		if !ok {
-			return replay.SafeSnapshotManifest{}, replay.ExecutionResult{}, fmt.Errorf("statement %d (%s): unknown target table %q", i, st.StatementID, st.TargetTableID)
-		}
-		rows, err := e.materializer.Materialize(ctx, schema, st)
-		if err != nil {
-			return replay.SafeSnapshotManifest{}, replay.ExecutionResult{}, fmt.Errorf("statement %d (%s): %w", i, st.StatementID, err)
-		}
-		newParts, err := buildParts(schema, job.BlockSeq, st.StatementSeq, rows)
-		if err != nil {
-			return replay.SafeSnapshotManifest{}, replay.ExecutionResult{}, fmt.Errorf("statement %d (%s): %w", i, st.StatementID, err)
-		}
-		for _, np := range newParts {
-			if parts[np.TableID] == nil {
-				return replay.SafeSnapshotManifest{}, replay.ExecutionResult{}, fmt.Errorf("statement %d: table %q not in snapshot", i, np.TableID)
-			}
-			parts[np.TableID][np.PartitionID] = append(parts[np.TableID][np.PartitionID], np)
-			touchedSet[tablePartition{np.TableID, np.PartitionID}] = struct{}{}
-			affected = append(affected, np)
+		batches[i] = StatementRows{
+			StatementID: st.StatementID, StatementSeq: st.StatementSeq, TargetTableID: st.TargetTableID,
+			Rows: &materializedRows{materializer: e.materializer, schema: e.tables[st.TargetTableID], statement: st},
 		}
 	}
-
-	// Rebuild table manifests, recomputing each partition root from its parts.
-	tables := make([]replay.TableManifest, 0, len(parts))
-	for tableID, byPartition := range parts {
-		var partitionRoots []replay.PartitionCommitment
-		var active []replay.PartManifestEntry
-		for partitionID, entries := range byPartition {
-			acc := lthash.New()
-			for _, p := range entries {
-				h, err := lthashFromHex(p.PartRowLtHash)
-				if err != nil {
-					return replay.SafeSnapshotManifest{}, replay.ExecutionResult{}, fmt.Errorf("table %s part %s: %w", tableID, p.PartName, err)
-				}
-				acc.AddHash(h)
-				active = append(active, p)
-			}
-			partitionRoots = append(partitionRoots, replay.PartitionCommitment{
-				TableID:     tableID,
-				PartitionID: partitionID,
-				Root:        lthashHex(acc),
-			})
-		}
-		tables = append(tables, replay.TableManifest{
-			TableID:        tableID,
-			SchemaHash:     schemaHashes[tableID],
-			PartitionRoots: partitionRoots,
-			ActiveParts:    active,
-		})
-	}
-
-	next, err := (replay.SafeSnapshotManifest{
-		ParentSnapshotID:  prev.SnapshotID,
-		SafeBlockSeq:      job.BlockSeq,
-		SchemaSnapshotID:  prev.SchemaSnapshotID,
-		SchemaRoot:        prev.SchemaRoot,
-		ExecutorProfileID: prev.ExecutorProfileID,
-		Tables:            tables,
-	}).Seal()
-	if err != nil {
-		return replay.SafeSnapshotManifest{}, replay.ExecutionResult{}, fmt.Errorf("seal post-state manifest: %w", err)
-	}
-
-	result := replay.ExecutionResult{
-		BlockSeq:                  job.BlockSeq,
-		PrevSafeSnapshotID:        job.PrevSafeSnapshotID,
-		PrevStateRoot:             job.PrevStateRoot,
-		SchemaSnapshotID:          job.SchemaSnapshotID,
-		ExecutorProfileID:         job.ExecutorProfileID,
-		ComputedStateRoot:         next.StateRoot,
-		PartitionCommitmentsAfter: affectedPartitionCommitments(next, touchedSet2slice(touchedSet)),
-		AffectedParts:             sortedParts(affected),
-		ReplayLogHash:             replayLogHash(stmts, affected),
-	}
-	return next, result, nil
-}
-
-// validateBlockStatements rejects duplicate statement_id and non-strictly-
-// increasing statement_seq within a block.
-func validateBlockStatements(stmts []replay.PreparedStatement) error {
-	seen := make(map[string]struct{}, len(stmts))
-	var lastSeq uint64
-	for i, st := range stmts {
-		if st.StatementID == "" {
-			return fmt.Errorf("statement %d: statement_id is required", i)
-		}
-		if _, dup := seen[st.StatementID]; dup {
-			return fmt.Errorf("statement %d: duplicate statement_id %q", i, st.StatementID)
-		}
-		seen[st.StatementID] = struct{}{}
-		if st.StatementSeq <= lastSeq {
-			return fmt.Errorf("statement %d: statement_seq %d must exceed previous %d", i, st.StatementSeq, lastSeq)
-		}
-		lastSeq = st.StatementSeq
-	}
-	return nil
-}
-
-// buildParts groups materialized rows into per-partition parts, computing each
-// part's LtHash from the canonical row elements. One part is emitted per
-// (statement, partition).
-func buildParts(schema TableSchema, blockSeq, statementSeq uint64, rows []Row) ([]replay.PartManifestEntry, error) {
-	type partAgg struct {
-		acc      *lthash.Hash
-		rowCount uint64
-		bytes    uint64
-	}
-	byPartition := map[string]*partAgg{}
-	var partitionOrder []string
-
-	for _, r := range rows {
-		h, err := rowElementHash(schema, r.RowID, r.Values)
-		if err != nil {
-			return nil, err
-		}
-		agg := byPartition[r.PartitionID]
-		if agg == nil {
-			agg = &partAgg{acc: lthash.New()}
-			byPartition[r.PartitionID] = agg
-			partitionOrder = append(partitionOrder, r.PartitionID)
-		}
-		agg.acc.AddHash(h)
-		agg.rowCount++
-		agg.bytes += r.RawBytes
-	}
-
-	sort.Strings(partitionOrder)
-	out := make([]replay.PartManifestEntry, 0, len(partitionOrder))
-	for _, partitionID := range partitionOrder {
-		agg := byPartition[partitionID]
-		partName := fmt.Sprintf("%s-b%d-s%d", partitionID, blockSeq, statementSeq)
-		rowLtHash := lthashHex(agg.acc)
-		out = append(out, replay.PartManifestEntry{
-			TableID:       schema.TableID,
-			PartitionID:   partitionID,
-			PartName:      partName,
-			PartPhysHash:  mvpPartPhysHash(partName, rowLtHash),
-			PartRowLtHash: rowLtHash,
-			RowCount:      agg.rowCount,
-			Bytes:         agg.bytes,
-		})
-	}
-	return out, nil
+	return e.applyOwnedRows(ctx, prev, job, batches)
 }
 
 // csvMaterializer is the default in-process materializer: it decodes the CSV
@@ -790,7 +625,7 @@ func sortedParts(parts []replay.PartManifestEntry) []replay.PartManifestEntry {
 	return out
 }
 
-func replayLogHash(stmts []replay.PreparedStatement, affected []replay.PartManifestEntry) string {
+func replayLogHash(stmts []StatementRows, affected []replay.PartManifestEntry) string {
 	var b strings.Builder
 	for _, st := range stmts {
 		b.WriteString(st.StatementID)

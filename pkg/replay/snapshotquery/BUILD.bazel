@@ -1,0 +1,37 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "snapshotquery",
+    srcs = [
+        "canonical.go",
+        "output.go",
+        "ports.go",
+        "profile.go",
+        "sort.go",
+    ],
+    importpath = "github.com/housegate/housegate/pkg/replay/snapshotquery",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/auth",
+        "//pkg/lthash",
+        "//pkg/replay",
+        "//pkg/replay/payloadexec",
+    ],
+)
+
+go_test(
+    name = "snapshotquery_test",
+    srcs = [
+        "canonical_test.go",
+        "ports_test.go",
+        "profile_test.go",
+        "sort_test.go",
+    ],
+    embed = [":snapshotquery"],
+    deps = [
+        "//pkg/auth",
+        "//pkg/lthash",
+        "//pkg/replay",
+        "//pkg/replay/payloadexec",
+    ],
+)

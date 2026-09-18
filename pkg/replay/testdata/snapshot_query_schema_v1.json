@@ -1,0 +1,15 @@
+{
+  "artifact_json": "{\"kind\":\"snapshot-query-schema-artifact-v1\",\"version\":1,\"network_id\":\"network-fixture-1\",\"keeper_shard_id\":7,\"snapshot_id\":\"0x1111111111111111111111111111111111111111111111111111111111111111\",\"manifest_root\":\"0x2222222222222222222222222222222222222222222222222222222222222222\",\"schema_snapshot_id\":\"schema-fixture-1\",\"schema_root\":\"0x451c60bc73e301eedde3631323b94919a2a86978aa86937d3aa3763222794843\",\"tables\":[{\"table_id\":\"orders\",\"schema_hash\":\"0xbbd0cccd92452abe10fc7e54bf915302a70981b29cf725038d65f3cea707c672\",\"partition_by\":\"day\",\"columns\":[{\"name\":\"id\",\"type\":\"UInt64\",\"generation\":1,\"default_expression\":\"\"},{\"name\":\"day\",\"type\":\"Date\",\"generation\":1,\"default_expression\":\"\"},{\"name\":\"amount\",\"type\":\"Int64\",\"generation\":1,\"default_expression\":\"\"}]},{\"table_id\":\"untouched\",\"schema_hash\":\"0x1f01ac1b699cb9920fe40edddc2c46f31f26afad8530d5997e3e4ddf3667f4cf\",\"partition_by\":\"\",\"columns\":[{\"name\":\"id\",\"type\":\"UInt64\",\"generation\":1,\"default_expression\":\"\"},{\"name\":\"created_at\",\"type\":\"DateTime\",\"generation\":2,\"default_expression\":\"now()\"}]}]}",
+  "artifact_digest": "0x98823680bbaef323efe77b75a673c0eafed787934877a5622a8556d7c38e35ce",
+  "authority_jws_segments": [
+    "eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ",
+    "eyJwdXJwb3NlIjoiaG91c2VnYXRlLXNuYXBzaG90LXF1ZXJ5LXNjaGVtYS12MSIsInZlcnNpb24iOjEsImFydGlmYWN0X2RpZ2VzdCI6IjB4OTg4MjM2ODBiYmFlZjMyM2VmZTc3Yjc1YTY3M2MwZWFmZWQ3ODc5MzQ4NzdhNTYyMmE4NTU2ZDdjMzhlMzVjZSJ9",
+    "x-DUMn_fv8b_-7zCbzkDCjtVG5XsvWhOJJBUt_AuFJoEXX5llf7gRTXNvgddrUDLzqvEpumQ7V34m-KHrXWCcxw"
+  ],
+  "authority_address": "0x8fd379246834eac74b8419ffda202cf8051f7a03",
+  "authenticated_json_prefix": "{\"artifact\":",
+  "authenticated_json_infix": ",\"authority_jws\":\"",
+  "authenticated_json_suffix": "\"}",
+  "authenticated_digest":
+    "0x89183ebc41e3cca9a962de056df4acc9812f8e978bd80bb2d3d8c4c798742bce"
+}

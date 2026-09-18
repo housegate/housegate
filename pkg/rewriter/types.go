@@ -234,6 +234,11 @@ type Options struct {
 	// var, then polyglot's standard install locations. Unused by grpc.
 	NativeLibraryPath string
 
+	// SnapshotQueryProfilePath identifies the explicit canonical measured-profile
+	// file used only by NewSnapshotQueryAnalyzer in native mode. Ordinary native
+	// rewriting never reads it.
+	SnapshotQueryProfilePath string
+
 	Upstream     string        // upstream ClickHouse address (drives local/remote detection)
 	CallbackAddr string        // address to render in remote() calls (defaults to Listen when empty)
 	Listen       string        // proxy listen address (used for remote() callback)

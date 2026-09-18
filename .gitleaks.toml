@@ -65,3 +65,12 @@ description = "Deterministic statement-v2 interoperability vectors"
 paths = [
     '''^pkg/auth/testdata/statement_jws_v2\.json$''',
 ]
+
+[[allowlists]]
+description = "Frozen snapshot-query v3 interoperability identities"
+# This byte-frozen A1 fixture contains two public, fixed test-key JWS tokens.
+# They prove interoperability with Arbiter Core/Proto, never production access.
+# Its public-test provenance and exact SHA-256 are asserted by the auth tests.
+paths = [
+    '''^pkg/auth/testdata/snapshot_query_identity_v1\.json$''',
+]
