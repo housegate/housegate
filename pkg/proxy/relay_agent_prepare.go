@@ -116,6 +116,7 @@ func (r *Relay) waitAgentPrepare(ctx context.Context, qctx *plugin.QueryContext,
 
 var errAgentPrepareCanceled = errors.New("agent preparation canceled")
 var errAgentPrepareForwardUnknown = errors.New("agent forwarding requires reconciliation")
+var errAgentPrepareForwardReconcileFailed = errors.New("agent forwarding reconciliation persistence failed")
 
 func (r *Relay) cancelAgentPrepare(queryID string, generation uint64, plan *plugin.AgentPreparePlan) {
 	r.queryMu.Lock()
@@ -268,7 +269,10 @@ func (r *Relay) authorizeAgentForward(ctx context.Context, result *agentPrepareR
 	}); err != nil {
 		if errors.Is(err, errAgentPrepareForwardUnknown) {
 			if reconcileErr := result.plan.PersistForwardUnknown(context.Background(), result.prepared); reconcileErr != nil {
-				return fmt.Errorf("persist forward unknown after authorized gate: %w", reconcileErr)
+				// Authorization is already durable.  A failed attempt to record its
+				// ambiguous delivery is service-owned recovery, never a normal
+				// query abort/release.
+				return fmt.Errorf("%w: %v", errAgentPrepareForwardReconcileFailed, reconcileErr)
 			}
 			return errAgentPrepareForwardUnknown
 		}

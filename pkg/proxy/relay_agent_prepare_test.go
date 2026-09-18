@@ -442,10 +442,14 @@ func TestRelayAgentPrepare_RelayGateWonCancelReconcilesOnlyAfterAuthorizationSuc
 	for _, tc := range []struct {
 		name         string
 		authorizeErr error
+		unknownErr   error
 		wantUnknown  int32
+		cancelPacket bool
 	}{
 		{name: "success", wantUnknown: 1},
+		{name: "success_cancel_packet", wantUnknown: 1, cancelPacket: true},
 		{name: "failure", authorizeErr: errors.New("durable authorization unknown"), wantUnknown: 0},
+		{name: "unknown_persistence_failure", unknownErr: errors.New("unknown fsync failed"), wantUnknown: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			clientPeer, clientProxy := net.Pipe()
@@ -473,7 +477,7 @@ func TestRelayAgentPrepare_RelayGateWonCancelReconcilesOnlyAfterAuthorizationSuc
 					<-release
 					return tc.authorizeErr
 				},
-				unknown: func(context.Context, plugin.PreparedAgentQuery) error { unknown.Add(1); return nil },
+				unknown: func(context.Context, plugin.PreparedAgentQuery) error { unknown.Add(1); return tc.unknownErr },
 				aborts:  &aborts, completes: &completes,
 			}
 			r := NewRelay(sess, hooks, nil, nil)
@@ -485,7 +489,13 @@ func TestRelayAgentPrepare_RelayGateWonCancelReconcilesOnlyAfterAuthorizationSuc
 				t.Fatal(err)
 			}
 			<-entered
-			_ = clientPeer.Close() // EOF after the forward gate has won.
+			if tc.cancelPacket {
+				if err := client.WriteRawPacket([]byte{byte(chproto.ClientCancelCode)}); err != nil {
+					t.Fatalf("write Cancel: %v", err)
+				}
+			} else {
+				_ = clientPeer.Close() // EOF after the forward gate has won.
+			}
 			close(release)
 			var err error
 			select {
@@ -496,7 +506,11 @@ func TestRelayAgentPrepare_RelayGateWonCancelReconcilesOnlyAfterAuthorizationSuc
 			if authorized.Load() != 1 || unknown.Load() != tc.wantUnknown {
 				t.Fatalf("authorized=%d unknown=%d", authorized.Load(), unknown.Load())
 			}
-			if tc.authorizeErr == nil {
+			if tc.unknownErr != nil {
+				if !errors.Is(err, errAgentPrepareForwardReconcileFailed) || aborts.Load() != 0 || completes.Load() != 0 {
+					t.Fatalf("unknown failure err=%v aborts=%d completes=%d", err, aborts.Load(), completes.Load())
+				}
+			} else if tc.authorizeErr == nil {
 				if !errors.Is(err, errAgentPrepareForwardUnknown) || aborts.Load() != 0 || completes.Load() != 0 {
 					t.Fatalf("success err=%v aborts=%d completes=%d", err, aborts.Load(), completes.Load())
 				}
