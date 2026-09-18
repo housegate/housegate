@@ -50,6 +50,10 @@ type Relay struct {
 	activeQuery   bool
 	activeQueryID string
 	queryCanceled bool
+	// agentGeneration is allocated before an AgentPrepare worker starts.  It
+	// distinguishes a late result from a subsequent query which reused a client
+	// query ID.
+	agentGeneration uint64
 	// pendingRejection replaces the terminal packet of a query that Housegate
 	// rejected locally after its input was complete. The staged payload was
 	// withheld, but upstream still has to finish its zero-row INSERT before the
@@ -1008,6 +1012,57 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 				rejectedQctx = qctx
 				continue
 			}
+			var agentPrepared *agentPrepareResult
+			if qctx.AgentPrepare != nil {
+				if qctx.DeferredInsert != nil || qctx.SuppressUpstreamExecution || qctx.AbortWithSuccess {
+					err := fmt.Errorf("query %q: AgentPrepare conflicts with another ownership plan", q.ID)
+					r.writeExceptionToClient(ctx, err)
+					r.hooks.OnQueryAbort(ctx, qctx)
+					r.hooks.OnQueryComplete(ctx, r.sess)
+					rejectedQctx = qctx
+					continue
+				}
+				if !r.beginActiveQuery(q.ID) {
+					err := fmt.Errorf("query %q raced with another active query", q.ID)
+					r.writeExceptionToClient(ctx, err)
+					r.hooks.OnQueryAbort(ctx, qctx)
+					r.hooks.OnQueryComplete(ctx, r.sess)
+					return err
+				}
+				generation := r.nextAgentPrepareGeneration()
+				var prepareErr error
+				agentPrepared, prepareErr = r.waitAgentPrepare(ctx, qctx, generation)
+				if prepareErr != nil {
+					r.takeActiveQuery()
+					if errors.Is(prepareErr, errAgentPrepareCanceled) {
+						r.hooks.OnQueryAbort(ctx, qctx)
+						r.hooks.OnQueryComplete(ctx, r.sess)
+						continue
+					}
+					if errors.Is(prepareErr, io.EOF) {
+						return io.EOF
+					}
+					r.writeExceptionToClient(ctx, prepareErr)
+					r.hooks.OnQueryAbort(ctx, qctx)
+					r.hooks.OnQueryComplete(ctx, r.sess)
+					rejectedQctx = qctx
+					continue
+				}
+				if err := r.applyAgentPrepare(ctx, qctx, agentPrepared); err != nil {
+					r.takeActiveQuery()
+					if errors.Is(err, errAgentPrepareCanceled) {
+						r.reconcileAgentPrepareCancel(agentPrepared.plan)
+						r.hooks.OnQueryAbort(ctx, qctx)
+						r.hooks.OnQueryComplete(ctx, r.sess)
+						continue
+					}
+					r.writeExceptionToClient(ctx, err)
+					r.hooks.OnQueryAbort(ctx, qctx)
+					r.hooks.OnQueryComplete(ctx, r.sess)
+					rejectedQctx = qctx
+					continue
+				}
+			}
 			// AbortWithSuccess: a plugin (commitgate via ErrAbortWithSuccess)
 			// handled the statement out-of-band and signalled the relay to
 			// reply success without contacting upstream. Synthesize a
@@ -1061,12 +1116,28 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 			// compression mode declared by the client Query.
 			qctx.Query.Compression = clientCompression
 			up.SetCompression(clientCompression)
-			if !r.beginActiveQuery(q.ID) {
+			if agentPrepared == nil && !r.beginActiveQuery(q.ID) {
 				err := fmt.Errorf("query %q raced with another active upstream query", q.ID)
 				r.writeExceptionToClient(ctx, err)
 				r.hooks.OnQueryAbort(ctx, qctx)
 				r.hooks.OnQueryComplete(ctx, r.sess)
 				return err
+			}
+			if agentPrepared != nil {
+				if err := r.authorizeAgentForward(ctx, agentPrepared); err != nil {
+					r.takeActiveQuery()
+					if errors.Is(err, errAgentPrepareCanceled) {
+						r.reconcileAgentPrepareCancel(agentPrepared.plan)
+						r.hooks.OnQueryAbort(ctx, qctx)
+						r.hooks.OnQueryComplete(ctx, r.sess)
+						continue
+					}
+					r.writeExceptionToClient(ctx, err)
+					r.hooks.OnQueryAbort(ctx, qctx)
+					r.hooks.OnQueryComplete(ctx, r.sess)
+					rejectedQctx = qctx
+					continue
+				}
 			}
 			if err := up.WriteQuery(qctx.Query); err != nil {
 				r.takeActiveQuery()

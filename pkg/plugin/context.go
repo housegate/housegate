@@ -8,6 +8,11 @@
 package plugin
 
 import (
+	"context"
+	"fmt"
+	"sync"
+	"sync/atomic"
+
 	"github.com/housegate/housegate/pkg/chproto"
 	"github.com/housegate/housegate/pkg/chsession"
 	"github.com/housegate/housegate/pkg/sqlmeta"
@@ -134,7 +139,62 @@ type QueryContext struct {
 	// SuppressUpstreamExecution; Relay rejects a query that sets both.
 	DeferredInsert *DeferredInsertPlan
 
+	// AgentPrepare is the query-only agent lane.  It deliberately has no
+	// relationship to DeferredInsert: preparation happens off the client reader
+	// and the resulting Query is forwarded only after Relay wins its generation
+	// gate.  A plugin installs it to suspend the rest of the OnQuery chain.
+	AgentPrepare *AgentPreparePlan
+
 	Values map[string]any
+
+	continuation *queryContinuation
+}
+
+// SnapshotQueryAgentKey is a process-local handoff marker.  It is never read
+// from a client setting; Relay sets it only after a live preparation result has
+// been accepted.
+const SnapshotQueryAgentKey = "snapshot_query_agent_owned"
+
+// PreparedAgentQuery is deliberately detached from the live connection.  In
+// particular it contains no Session, QueryContext, or socket.  Relay is the
+// only component allowed to copy Query into the live context and forward it.
+type PreparedAgentQuery struct {
+	Query   *chproto.Query
+	Claimed bool
+}
+
+// AgentPreparePlan is installed by an agent QueryPlugin.  Prepare must not
+// read the client socket or mutate qctx/session state.  ReconcileCancel is run
+// by Relay after cancellation has won and owns durable cleanup independently
+// of the client context.
+type AgentPreparePlan struct {
+	Prepare         func(context.Context) (PreparedAgentQuery, error)
+	ReconcileCancel func(context.Context) error
+	MaxControlBytes uint64
+	// PersistForwardIntent records an intent which deliberately does not grant
+	// permission to write. AuthorizeForward must durably record the exact
+	// envelope/generation authorization before Relay writes any Query bytes.
+	PersistForwardIntent func(context.Context, PreparedAgentQuery) error
+	AuthorizeForward     func(context.Context, PreparedAgentQuery) error
+}
+
+// queryContinuation records the first plugin that has not run.  It is opaque
+// outside this package and single-use so a side-effecting QueryPlugin cannot
+// be invoked twice when preparation finishes late.
+type queryContinuation struct {
+	chain *PluginChain
+	next  int
+	once  sync.Once
+	used  atomic.Bool
+	err   error
+}
+
+func (q *QueryContext) installContinuation(c *PluginChain, next int) error {
+	if q.continuation != nil {
+		return fmt.Errorf("query continuation already installed")
+	}
+	q.continuation = &queryContinuation{chain: c, next: next}
+	return nil
 }
 
 // DeferredInsertPlan tells Relay how to run the deferred-INSERT protocol.

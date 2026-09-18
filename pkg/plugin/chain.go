@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/housegate/housegate/pkg/chproto"
@@ -153,6 +154,30 @@ func (c *PluginChain) OnHandshakeComplete(ctx context.Context, sess chsession.Se
 }
 
 func (c *PluginChain) OnQuery(ctx context.Context, qctx *QueryContext) error {
+	return c.runQueryFrom(ctx, qctx, 0, true)
+}
+
+// ResumeQuery continues a suspended AgentPrepare chain from exactly the first
+// hook that did not run.  It is deliberately not OnQuery again: restarting the
+// chain would repeat authentication, accounting, and other side effects.
+func (c *PluginChain) ResumeQuery(ctx context.Context, qctx *QueryContext) error {
+	if qctx == nil || qctx.continuation == nil || qctx.continuation.chain != c {
+		return fmt.Errorf("no query continuation for this chain")
+	}
+	continuation := qctx.continuation
+	if continuation.used.Swap(true) {
+		return fmt.Errorf("query continuation already consumed")
+	}
+	// The plan is consumed by Relay before it asks us to continue.  Clearing it
+	// makes a stale ownership marker unable to suspend the remaining hooks.
+	qctx.AgentPrepare = nil
+	continuation.once.Do(func() {
+		continuation.err = c.runQueryFrom(ctx, qctx, continuation.next, false)
+	})
+	return continuation.err
+}
+
+func (c *PluginChain) runQueryFrom(ctx context.Context, qctx *QueryContext, start int, allowSuspend bool) error {
 	// State is re-read on every iteration. forward.Plugin's OnQuery
 	// detects USE statements and may flip IsForwarding mid-loop;
 	// downstream plugins (rewrite, commitgate, dbrewriter) implement
@@ -161,7 +186,8 @@ func (c *PluginChain) OnQuery(ctx context.Context, qctx *QueryContext) error {
 	// a remote upstream and tries to rewrite SQL the entry proxy is
 	// no longer responsible for.
 	state := qctx.Session.State()
-	for _, p := range c.QueryPlugins {
+	for i := start; i < len(c.QueryPlugins); i++ {
+		p := c.QueryPlugins[i]
 		if state.IsRouted() && !runsOnRouted(p) {
 			continue
 		}
@@ -174,6 +200,18 @@ func (c *PluginChain) OnQuery(ctx context.Context, qctx *QueryContext) error {
 		}
 		if err := p.OnQuery(ctx, qctx); err != nil {
 			return err
+		}
+		if qctx.AgentPrepare != nil {
+			if !allowSuspend {
+				return fmt.Errorf("agent prepare installed during query continuation")
+			}
+			if qctx.DeferredInsert != nil || qctx.SuppressUpstreamExecution || qctx.AbortWithSuccess {
+				return fmt.Errorf("agent prepare conflicts with another query ownership plan")
+			}
+			if qctx.AgentPrepare.Prepare == nil || qctx.AgentPrepare.PersistForwardIntent == nil || qctx.AgentPrepare.AuthorizeForward == nil {
+				return fmt.Errorf("agent prepare requires worker, forward intent, and forward authorization")
+			}
+			return qctx.installContinuation(c, i+1)
 		}
 	}
 	return nil

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -63,6 +64,19 @@ type fakeQueryPlugin struct {
 	called     *[]string
 	returnErr  error
 	sqlMutator func(*chproto.Query)
+}
+
+type prepareQueryPlugin struct {
+	name   string
+	called *[]string
+}
+
+func (p *prepareQueryPlugin) OnQuery(_ context.Context, qctx *QueryContext) error {
+	*p.called = append(*p.called, p.name)
+	qctx.AgentPrepare = &AgentPreparePlan{Prepare: func(context.Context) (PreparedAgentQuery, error) {
+		return PreparedAgentQuery{Query: &chproto.Query{}}, nil
+	}, PersistForwardIntent: func(context.Context, PreparedAgentQuery) error { return nil }, AuthorizeForward: func(context.Context, PreparedAgentQuery) error { return nil }}
+	return nil
 }
 
 func (f *fakeQueryPlugin) OnQuery(_ context.Context, qctx *QueryContext) error {
@@ -140,6 +154,34 @@ func TestPluginChain_OnQuery_RunsInOrder(t *testing.T) {
 	}
 	if qctx.Query.Body != "mutated" {
 		t.Fatalf("Body=%q, want mutated", qctx.Query.Body)
+	}
+}
+
+func TestPluginChain_AgentPrepareContinuationResumesOnlyRemainingHooksOnce(t *testing.T) {
+	var called []string
+	chain := &PluginChain{QueryPlugins: []QueryPlugin{
+		&fakeQueryPlugin{name: "before", called: &called},
+		&prepareQueryPlugin{name: "prepare", called: &called},
+		&fakeQueryPlugin{name: "after", called: &called},
+	}}
+	qctx := &QueryContext{Session: newFakeSession(), Query: &chproto.Query{Body: "SELECT 1"}}
+	if err := chain.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	if got := strings.Join(called, ","); got != "before,prepare" {
+		t.Fatalf("before resume=%q", got)
+	}
+	if err := chain.ResumeQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("ResumeQuery: %v", err)
+	}
+	if got := strings.Join(called, ","); got != "before,prepare,after" {
+		t.Fatalf("after resume=%q", got)
+	}
+	if err := chain.ResumeQuery(context.Background(), qctx); err == nil {
+		t.Fatal("second ResumeQuery succeeded")
+	}
+	if got := strings.Join(called, ","); got != "before,prepare,after" {
+		t.Fatalf("second resume reran hooks: %q", got)
 	}
 }
 

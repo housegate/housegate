@@ -42,6 +42,10 @@ type Hooks interface {
 	OnHello(ctx context.Context, sess chsession.Session, hello *chproto.ClientHello) error
 	OnHandshakeComplete(ctx context.Context, sess chsession.Session, duration time.Duration)
 	OnQuery(ctx context.Context, qctx *QueryContext) error
+	// ResumeQuery consumes a suspended AgentPrepare continuation.  Only Relay
+	// calls it after it has accepted a detached worker result for the current
+	// generation.
+	ResumeQuery(ctx context.Context, qctx *QueryContext) error
 	RejectUndecodableQuery(sess chsession.Session) bool
 	ClientDataReadLimit(qctx *QueryContext) (maxBytes uint64, enforce bool)
 	OnClientDataStrict(ctx context.Context, qctx *QueryContext, raw []byte) error
@@ -68,6 +72,8 @@ func (NoopHooks) OnHello(context.Context, chsession.Session, *chproto.ClientHell
 func (NoopHooks) OnHandshakeComplete(context.Context, chsession.Session, time.Duration) {}
 
 func (NoopHooks) OnQuery(context.Context, *QueryContext) error { return nil }
+
+func (NoopHooks) ResumeQuery(context.Context, *QueryContext) error { return nil }
 
 func (NoopHooks) RejectUndecodableQuery(chsession.Session) bool { return false }
 
