@@ -66,9 +66,10 @@ class Fixture:
         os_name,cpu=('osx','aarch64') if mode=='release-darwin' else ('linux','x86_64')
         self.node(self.platform,'platform',[],attrs=[dict(name='constraint_values',type='LABEL_LIST',stringListValue=['@@platforms//os:'+os_name,'@@platforms//cpu:'+cpu])])
         base=[self.builder,'compilepkg','-sdk',self.sdk,'-installsuffix',self.spec[1],'-src',v.SECP_SOURCE,'-p','github.com/ethereum/go-ethereum/crypto/secp256k1','-cgo_go_srcs',self.marker,'-cflags','-D__DATE__="redacted" -I "a b"']
-        env=dict(CC=self.cc,CGO_ENABLED='1',GOOS='darwin' if mode=='release-darwin' else 'linux',GOARCH='arm64' if mode=='release-darwin' else 'amd64',GOTOOLCHAIN='local')
-        self.compile=self.action(self.target,'CppCompile' if direct else 'GoCompilePkg',[self.cc,'-c','x.c'] if direct else base,[self.cc,self.zig,self.builder,v.SECP_SOURCE],[self.marker,self.archive],env)
-        self.link=self.action('//cmd:housegate','GoLink',[self.builder,'link','-sdk',self.sdk,'-installsuffix',self.spec[1],'-arc',self.target+'=github.com/ethereum/go-ethereum/crypto/secp256k1='+self.archive,'-o',self.output,'--','-extld',self.cc,'-extldflags','-fno-lto'],[self.cc,self.zig,self.builder,self.archive],[self.output],env)
+        env=dict(CC=self.cc,CGO_ENABLED='1',GOOS='darwin' if mode=='release-darwin' else 'linux',GOARCH='arm64' if mode=='release-darwin' else 'amd64',GOTOOLCHAIN='local',GOEXPERIMENT='',GOROOT=self.sdk,GOROOT_FINAL='GOROOT',GOPATH='',GODEBUG='winsymlink=0',PATH=str(Path(self.cc).parent)+':'+str(Path(self.cc).parent.parent)+':/bin:/usr/bin')
+        cpp_env=dict(PATH='/bin:/usr/bin:/usr/local/bin',PWD='/proc/self/cwd',PUPPETEER_SKIP_CHROMIUM_DOWNLOAD='true')
+        self.compile=self.action(self.target,'CppCompile' if direct else 'GoCompilePkg',[self.cc,'-c','x.c'] if direct else base,[self.cc,self.zig,self.builder,v.SECP_SOURCE],[self.marker,self.archive],cpp_env if direct else env)
+        self.link=self.action('//cmd:housegate','GoLink',[self.builder,'link','-sdk',self.sdk,'-installsuffix',self.spec[1],'-arc',self.target+'=github.com/ethereum/go-ethereum/crypto/secp256k1='+self.archive,'-o',self.output,'--','-extld',self.cc,'-extldflags','-fno-lto'],[self.cc,self.zig,self.builder,self.archive],[self.output],{k:value for k,value in env.items() if k!='CC'})
         self.reset=self.action(self.reset_label,'ExecutableSymlink',[],[self.built],[self.builder],{},cfg=2)
         sources=sorted(p for p in self.pins if '/go/tools/builders/' in p and p.endswith('.go'))
         wrapper='external/rules_go+/go/private/rules/binary_wrapper.sh'
@@ -136,6 +137,92 @@ class ToolchainFixtures(unittest.TestCase):
     def test_direct_cpp_each_mode(self):
         for mode in v.MODES:
             with self.subTest(mode=mode): self.assertEqual(self.fixture(mode,True).run()['matching_compiler_actions'][0]['proof_type'],'CppCompile')
+
+    def test_action_environment_supported_values(self):
+        # Generated stdlib and SDK roots are the two context.bzl authorities.
+        # JSON protobuf omits empty string values; preserve that valid spelling.
+        for mode in v.MODES:
+            for direct in (False,True):
+                with self.subTest(mode=mode,direct=direct):
+                    f=self.fixture(mode,direct)
+                    goroot='bazel-out/k8-fastbuild-ST-fixture/bin/external/rules_go+/stdlib_'
+                    for action in (f.link,) if direct else (f.compile,f.link):
+                        action['arguments'][4:4]=['-goroot',goroot]
+                        ds=next(d for d in f.aq['depSetOfFiles'] if d['id']==action['inputDepSetIds'][0])
+                        ds['directArtifactIds'].append(f.artifact(goroot+'/pkg'))
+                        for row in action['environmentVariables']:
+                            if row['key']=='GOROOT':row['value']=goroot
+                            if row.get('value')=='':row.pop('value')
+                    if direct:
+                        f.compile['environmentVariables']=[r for r in f.compile['environmentVariables'] if r['key']!='PUPPETEER_SKIP_CHROMIUM_DOWNLOAD']
+                    self.assertTrue(f.run()['matching_compiler_actions'])
+
+    def test_cpp_environment_overrides_refused(self):
+        self.environment_overrides_refused('compile',True)
+
+    def test_link_environment_overrides_refused(self):
+        self.environment_overrides_refused('link',False)
+
+    def test_cgo_environment_overrides_refused(self):
+        self.environment_overrides_refused('compile',False)
+
+    def environment_overrides_refused(self,slot,direct):
+        for key,value in [('CCC_OVERRIDE_OPTIONS','+--target=x86_64-unknown-linux-musl'),('CPATH','/untrusted/include'),('LIBRARY_PATH','/untrusted/lib'),('LD_PRELOAD','/untrusted/tool.so'),('GOFLAGS','-overlay=/untrusted/map'),('CI2_UNSUPPORTED_ENV','')]:
+            for mode in v.MODES:
+                with self.subTest(slot=slot,direct=direct,key=key,mode=mode):
+                    f=self.fixture(mode,direct);getattr(f,slot)['environmentVariables'].append(dict(key=key,value=value))
+                    with self.assertRaises(ValueError):f.run()
+                    self.assertFalse((f.root/'result').exists())
+
+    def test_action_environment_bad_values_refused(self):
+        cases=[('compile',True,{'PATH':'/untrusted:/bin:/usr/bin:/usr/local/bin','PWD':'/tmp','PUPPETEER_SKIP_CHROMIUM_DOWNLOAD':'false'})]
+        go={'GOTOOLCHAIN':'auto','GOEXPERIMENT':'cgocheck2','GOROOT':'/untrusted/sdk','GOROOT_FINAL':'/untrusted','GOPATH':'/untrusted','GODEBUG':'winsymlink=0,invalidptr=0','PATH':'/untrusted:/bin:/usr/bin','GOOS':'windows','GOARCH':'386','CGO_ENABLED':'0'}
+        cases.extend((slot,False,go) for slot in ('compile','link'))
+        for slot,direct,changes in cases:
+            for key,value in changes.items():
+                with self.subTest(slot=slot,direct=direct,key=key):
+                    f=self.fixture(direct=direct)
+                    next(r for r in getattr(f,slot)['environmentVariables'] if r['key']==key)['value']=value
+                    with self.assertRaises(ValueError):f.run()
+                    self.assertFalse((f.root/'result').exists())
+
+    def test_action_environment_malformed_refused(self):
+        for slot,direct in [('compile',True),('compile',False),('link',False),('producer',False)]:
+            for kind in ('duplicate','null-list','object-list','non-object','missing-key','non-string-key','null-value','number-value','extra-field','nul-value'):
+                with self.subTest(slot=slot,direct=direct,kind=kind):
+                    f=self.fixture(direct=direct);action=getattr(f,slot);rows=action['environmentVariables']
+                    if kind=='duplicate':rows.append(dict(rows[0]))
+                    elif kind=='null-list':action['environmentVariables']=None
+                    elif kind=='object-list':action['environmentVariables']={}
+                    elif kind=='non-object':rows.append('PATH')
+                    elif kind=='missing-key':rows.append(dict(value=''))
+                    elif kind=='non-string-key':rows[0]['key']=1
+                    elif kind=='null-value':rows[0]['value']=None
+                    elif kind=='number-value':rows[0]['value']=1
+                    elif kind=='extra-field':rows[0]['unexpected']='ignored'
+                    elif kind=='nul-value':rows[0]['value']+='\0'
+                    with self.assertRaises(ValueError):f.run()
+                    self.assertFalse((f.root/'result').exists())
+
+    def test_action_environment_missing_required_refused(self):
+        for slot,direct,key in [('compile',True,'PATH'),('compile',True,'PWD'),('compile',False,'CC'),('link',False,'GOTOOLCHAIN'),('link',False,'GOROOT'),('link',False,'PATH')]:
+            with self.subTest(slot=slot,direct=direct,key=key):
+                f=self.fixture(direct=direct);action=getattr(f,slot)
+                action['environmentVariables']=[r for r in action['environmentVariables'] if r['key']!=key]
+                with self.assertRaises(ValueError):f.run()
+                self.assertFalse((f.root/'result').exists())
+
+    def test_action_environment_goroot_authority_refused(self):
+        for slot in ('compile','link'):
+            for kind in ('flag-disagreement','unbound-stdlib','traversal'):
+                with self.subTest(slot=slot,kind=kind):
+                    f=self.fixture();action=getattr(f,slot)
+                    goroot='bazel-out/k8-fastbuild/bin/external/rules_go+/stdlib_'
+                    if kind=='traversal':goroot='bazel-out/../bin/external/rules_go+/stdlib_'
+                    next(r for r in action['environmentVariables'] if r['key']=='GOROOT')['value']=goroot
+                    action['arguments'][4:4]=['-goroot',f.sdk if kind=='flag-disagreement' else goroot]
+                    with self.assertRaises(ValueError):f.run()
+                    self.assertFalse((f.root/'result').exists())
 
     def test_graph_refusals(self):
         mutations=[

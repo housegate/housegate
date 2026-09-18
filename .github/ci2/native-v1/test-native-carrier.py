@@ -70,7 +70,7 @@ class CarrierTests(unittest.TestCase):
         self.assertEqual(call('profile'),self.p)
         self.assertEqual(hashlib.sha256((ROOT/'profile.json').read_bytes()).hexdigest(),'b627e07010f1489d0a6c0250245c28eff7d787289b88f42dca89dab3452f96a0')
         digest=call('manifest')
-        self.assertEqual(digest,'92f16b7f3243b46bdb48a92296deec3154235d66e7ef82f7b485c432b3914c75')
+        self.assertEqual(digest,'23bf899f12f6d0cca80532e49ec654c6bace739bab7f54be3dc878d9b24d0b94')
         workflow=(ROOT.parent.parent/'workflows/ci2-native.yml').read_text()
         self.assertIn(digest,workflow)
         self.assertIn(carrier['PROFILE_SHA'],workflow)

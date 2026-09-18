@@ -409,6 +409,45 @@ def outputs(action, paths):
     return {paths[str(i)] for i in action.get('outputIds', [])}
 
 
+def action_environment(action):
+    rows = action.get('environmentVariables', [])
+    require(isinstance(rows, list), 'malformed action environment')
+    result = {}
+    for row in rows:
+        require(isinstance(row, dict) and set(row) <= {'key', 'value'}, 'malformed environment entry')
+        key, value = row.get('key'), row.get('value', '')
+        # JSON protobuf omits the value field for the empty string.
+        require(isinstance(key, str) and re.fullmatch('[A-Z_][A-Z_0-9]*', key)
+                and isinstance(value, str) and '\0' not in value, 'malformed environment key/value')
+        require(key not in result, 'duplicate action environment key')
+        result[key] = value
+    return result
+
+
+def go_environment(action, flags, compiler_token, spec, inputs, cgo):
+    env = action_environment(action)
+    goos, goarch = ('darwin', 'arm64') if spec[1] == 'darwin_arm64' else ('linux', 'amd64')
+    # rules_go 0.62 context.bzl:615-658,961-987; compilepkg alone adds CC.
+    # Hermetic 4.2 has no environment features; its c++ and ar tool directories
+    # precede the fixed Unix fallback. No arbitrary PATH or compiler overrides.
+    compiler_dir = compiler_token.rsplit('/', 1)[0]
+    expected = dict(CGO_ENABLED='1', GOOS=goos, GOARCH=goarch, GOTOOLCHAIN='local',
+                    GOEXPERIMENT='', GOROOT_FINAL='GOROOT', GOPATH='', GODEBUG='winsymlink=0',
+                    PATH=compiler_dir + ':' + compiler_dir.rsplit('/', 1)[0] + ':/bin:/usr/bin')
+    if cgo:
+        expected['CC'] = compiler_token
+    require(set(env) == set(expected) | {'GOROOT'}, 'unsupported Go action environment keys')
+    require(all(env[k] == value for k, value in expected.items()), 'unsupported Go action environment values')
+    require(one(flags, 'installsuffix') == goos + '_' + goarch, 'wrong Go action install suffix')
+    # context.bzl uses the SDK or generated stdlib root; env.go allows -goroot
+    # to override it, so both channels must agree with the same input authority.
+    goroot = env['GOROOT']
+    require(goroot == one(flags, 'sdk') or
+            (re.fullmatch(r'bazel-out/[A-Za-z0-9_-]+/bin/external/rules_go\+/stdlib_', goroot)
+             and goroot + '/pkg' in inputs), 'unsupported Go action GOROOT')
+    require(flags.get('goroot', []) in ([], [goroot]), 'Go action GOROOT/flag disagreement')
+
+
 def builder_identity(action, aq, graph, paths, flags, exec_root, owned_root):
     token = action['arguments'][0]
     sdk = one(flags, 'sdk')
@@ -459,24 +498,17 @@ def builder_identity(action, aq, graph, paths, flags, exec_root, owned_root):
     require(len(argv) == len(source_tokens) + 3 and set(argv[3:]) == source_tokens and argv[2] == built
             and argv[0] == 'external/rules_go+/go/private/rules/binary_wrapper.sh', 'unsupported builder source argv')
     require(source_tokens | {argv[0], sdk + '/bin/go'} <= producer_inputs, 'builder source/SDK action inputs missing')
-    env = unique(producer.get('environmentVariables', []), 'key', 'builder environment')
+    env = action_environment(producer)
     expected_env = dict(GOMAXPROCS='1', GOTOOLCHAIN='local', GO111MODULE='off', GOTELEMETRY='off', GOENV='off',
                         GO_BINARY=sdk + '/bin/go', LD_FLAGS='-X main.rulesGoStdlibPrefix=@@rules_go+//stdlib:')
-    require({k: item.get('value', '') for k, item in env.items()} == expected_env, 'unsupported builder generation environment')
+    require(env == expected_env, 'unsupported builder generation environment')
     identity = executable(token, exec_root, owned_root)
     require(identity['sha256'] == executable(built, exec_root, owned_root)['sha256'], 'reset builder differs from built executable')
     return dict(executable=identity, sdk_go=executable(sdk + '/bin/go', exec_root, owned_root), producer=producer, reset=reset)
 
 
 def cgo_proof(action, aq, graph, paths, flags, compiler_token, spec, inputs, exec_root, owned_root):
-    env = unique(action.get('environmentVariables', []), 'key', 'action environment')
-    require(set(env) <= {'CC','CGO_ENABLED','GOOS','GOARCH','GOTOOLCHAIN','GOEXPERIMENT','GOROOT','GOROOT_FINAL','GOPATH','GODEBUG','PATH'}, 'unsupported cgo environment key')
-    expected_os, expected_arch = ('darwin','arm64') if spec[1] == 'darwin_arm64' else ('linux','amd64')
-    for key, value in [('CC',compiler_token),('CGO_ENABLED','1'),('GOOS',expected_os),('GOARCH',expected_arch),('GOTOOLCHAIN','local')]:
-        require(env.get(key, {}).get('value') == value, 'wrong cgo environment ' + key)
-    require(one(flags, 'installsuffix') == expected_os + '_' + expected_arch, 'wrong cgo install suffix')
-    require(not any(key in env for key in ('CGO_CFLAGS','CGO_CPPFLAGS','CGO_CXXFLAGS','CGO_LDFLAGS','GOFLAGS','GOENV'))
-            and not env.get('GOEXPERIMENT', {}).get('value'), 'unsupported compiler environment override')
+    go_environment(action, flags, compiler_token, spec, inputs, cgo=True)
     require(flags.get('tags', []) in ([], ['']), 'unsupported source build tags')
     require(flags.get('testfilter', []) in ([], ['off']) and not flags.get('cover'), 'unsupported active source filtering')
     require(flags.get('p') == ['github.com/ethereum/go-ethereum/crypto/secp256k1'], 'unsupported cgo package')
@@ -530,6 +562,13 @@ def prove(action, aq, graph, paths, context, spec, exec_root, owned_root):
     proof_type, builder = 'CppCompile', None
     if action['mnemonic'] == 'CppCompile':
         require(args[0] == compiler_token, 'actual compiler position is not selected provider gcc')
+        # Bazel 9.1 strict Unix action env + CppCompileAction's Linux PWD.
+        # The frozen .bazelrc adds only this download flag to target actions.
+        env = action_environment(action)
+        expected = dict(PATH='/bin:/usr/bin:/usr/local/bin', PWD='/proc/self/cwd',
+                        PUPPETEER_SKIP_CHROMIUM_DOWNLOAD='true')
+        require({'PATH', 'PWD'} <= set(env) <= set(expected)
+                and all(value == expected[key] for key, value in env.items()), 'unsupported CppCompile environment')
         safe_flags(args[1:])
     elif action['mnemonic'] == 'GoCompilePkg':
         flags, _ = builder_flags(args, 'compilepkg')
@@ -540,10 +579,7 @@ def prove(action, aq, graph, paths, context, spec, exec_root, owned_root):
     elif action['mnemonic'] == 'GoLink':
         require((label(target), checksum) == root, 'GoLink is not exact configured root')
         flags, tail = builder_flags(args, 'link')
-        env = unique(action.get('environmentVariables', []), 'key', 'link environment')
-        goos, goarch = ('darwin','arm64') if spec[1] == 'darwin_arm64' else ('linux','amd64')
-        require(one(flags, 'installsuffix') == goos + '_' + goarch and env.get('GOOS', {}).get('value') == goos
-                and env.get('GOARCH', {}).get('value') == goarch and env.get('CGO_ENABLED', {}).get('value') == '1', 'wrong configured linker platform/cgo')
+        go_environment(action, flags, compiler_token, spec, inputs, cgo=False)
         link_flags = linker_flags(tail)
         require(one(link_flags, 'extld') == compiler_token, 'wrong configured extld')
         require(link_flags.get('linkmode', []) in ([], ['external'], ['auto']), 'unsupported configured linkmode')
