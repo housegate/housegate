@@ -163,10 +163,10 @@ github.com/holiman/bloomfilter/v2 v2.0.3 h1:73e0e/V0tCydx14a0SCYS/EWCxgwLZ18CZcZ
 github.com/holiman/bloomfilter/v2 v2.0.3/go.mod h1:zpoh+gs7qcpqrHr3dB55AMiJwo0iURXE7ZOP9L9hSkA=
 github.com/holiman/uint256 v1.3.2 h1:a9EgMPSC1AAaj1SZL5zIQD3WbwTuHrMGOerLjGmM/TA=
 github.com/holiman/uint256 v1.3.2/go.mod h1:EOMSn4q6Nyt9P6efbI3bueV4e1b3dGlUCXeiRV4ng7E=
-github.com/housegate/rewriter-go v0.11.1-0.20260917041414-896e4344a91b h1:RWk/SaLwFgYB3IFrsm9Q+CLmorVHvgEhQOcnT8ONzos=
-github.com/housegate/rewriter-go v0.11.1-0.20260917041414-896e4344a91b/go.mod h1:EohnsnfefkvyGkNx7oRgxEoekAHFmMdZIIPwi10o2XY=
-github.com/housegate/rewriter-proto v0.2.1-0.20260916180039-a86e62230aaf h1:UpVgTiXAaKJQbn7aQX7dDom1FeiornKR/K1iEy01qUI=
-github.com/housegate/rewriter-proto v0.2.1-0.20260916180039-a86e62230aaf/go.mod h1:37lVQ0Qz3nK5vDZ6jspyIAvCR0dOFLHKsGv6d03Ifxk=
+github.com/housegate/rewriter-go v0.11.1-0.20260918115403-a25c526eefc8 h1:FGlAIjCPGrFGzb0KB3bGnl64nmOCi77eTs2JhAqNiE4=
+github.com/housegate/rewriter-go v0.11.1-0.20260918115403-a25c526eefc8/go.mod h1:EohnsnfefkvyGkNx7oRgxEoekAHFmMdZIIPwi10o2XY=
+github.com/housegate/rewriter-proto v0.2.1-0.20260918115349-d3844a56d7b4 h1:alaoX/4YLKvy51Dx58H9LksJO66bVqQ6RahGxE0K9AQ=
+github.com/housegate/rewriter-proto v0.2.1-0.20260918115349-d3844a56d7b4/go.mod h1:37lVQ0Qz3nK5vDZ6jspyIAvCR0dOFLHKsGv6d03Ifxk=
 github.com/huin/goupnp v1.3.0 h1:UvLUlWDNpoUdYzb2TCn+MuTWtcjXKSza2n6CBdQ0xXc=
 github.com/huin/goupnp v1.3.0/go.mod h1:gnGPsThkYa7bFi/KWmEysQRf48l2dvR5bxr2OFckNX8=
 github.com/influxdata/influxdb-client-go/v2 v2.4.0 h1:HGBfZYStlx3Kqvsv1h2pJixbCl/jhnFtxpKFAv9Tu5k=
