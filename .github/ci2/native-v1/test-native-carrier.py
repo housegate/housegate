@@ -67,7 +67,9 @@ class CarrierTests(unittest.TestCase):
 
     def test_manifest_and_profile_binding(self):
         self.assertEqual(call('profile'),self.p)
+        self.assertEqual(hashlib.sha256((ROOT/'profile.json').read_bytes()).hexdigest(),'25716dd6b4343da707d19e7af7e8a4c2957d5b3ca42d7ad19a3af8983bacef5d')
         digest=call('manifest')
+        self.assertEqual(digest,'8717afef3e544e09b7fc635689f900a45e983331fcb638a6792301cfea690af9')
         workflow=(ROOT.parent.parent/'workflows/ci2-native.yml').read_text()
         self.assertIn(digest,workflow)
         self.assertIn(carrier['PROFILE_SHA'],workflow)

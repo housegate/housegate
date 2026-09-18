@@ -73,7 +73,7 @@ REUSE = {
     'run-linux-qualification-v16-container.sh': '755466a1b5e6b1eec47b147ebda64169f6f0e809b9457c0740318e884f4abe00',
 }
 RUNTIME_NAMES = set(REUSE) | {'run-linux-qualification-native-v1.sh', 'run-linux-qualification-native-v1-worker.sh'}
-PROFILE_SHA = 'c093eb6f3ba201717e2d5398d282e1a5f044bf4d681de9e696bc2dd229de4a75'
+PROFILE_SHA = '25716dd6b4343da707d19e7af7e8a4c2957d5b3ca42d7ad19a3af8983bacef5d'
 IMAGE_FIELD_NAMES = ('os', 'architecture', 'size', 'user', 'entrypoint', 'workdir')
 IMAGE_STRING_MAX = 512
 IMAGE_LIST_MAX = 16

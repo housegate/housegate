@@ -15,7 +15,7 @@
   "image": {
     "reference": "gcr.io/bazel-public/bazel@sha256:4476bca3b2d6f49f30f4ab4dae5d11224db1a484cab2120b054fe6c2de5ccd12",
     "id": "sha256:88d299f855cf04a627b9e37ef57e285f6dab29eea93ac9cdad115cb6fdce3644",
-    "size": 1065765003,
+    "size": 1065590879,
     "os": "linux",
     "architecture": "amd64",
     "user": "ubuntu",
