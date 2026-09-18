@@ -196,19 +196,23 @@ type ExecutionRequest struct {
 	Job        ReplayJob
 	Snapshot   SafeSnapshotManifest
 	Statements []PreparedStatement
+	// Snapshot query extensions are in-process only; never frozen wire/hash fields.
+	SnapshotQuery            *SnapshotQueryJob `json:"-"`
+	SnapshotQueryReferenceID string            `json:"-"`
 }
 
 // ExecutionResult is the pinned executor's result over the scratch state.
 type ExecutionResult struct {
-	BlockSeq                  uint64                `json:"block_seq"`
-	PrevSafeSnapshotID        string                `json:"prev_safe_snapshot_id"`
-	PrevStateRoot             string                `json:"prev_state_root"`
-	SchemaSnapshotID          string                `json:"schema_snapshot_id"`
-	ExecutorProfileID         string                `json:"executor_profile_id"`
-	ComputedStateRoot         string                `json:"computed_state_root"`
-	PartitionCommitmentsAfter []PartitionCommitment `json:"partition_commitments_after,omitempty"`
-	AffectedParts             []PartManifestEntry   `json:"affected_parts,omitempty"`
-	ReplayLogHash             string                `json:"replay_log_hash,omitempty"`
+	SnapshotQuery             *SnapshotQueryEvidence `json:"-"`
+	BlockSeq                  uint64                 `json:"block_seq"`
+	PrevSafeSnapshotID        string                 `json:"prev_safe_snapshot_id"`
+	PrevStateRoot             string                 `json:"prev_state_root"`
+	SchemaSnapshotID          string                 `json:"schema_snapshot_id"`
+	ExecutorProfileID         string                 `json:"executor_profile_id"`
+	ComputedStateRoot         string                 `json:"computed_state_root"`
+	PartitionCommitmentsAfter []PartitionCommitment  `json:"partition_commitments_after,omitempty"`
+	AffectedParts             []PartManifestEntry    `json:"affected_parts,omitempty"`
+	ReplayLogHash             string                 `json:"replay_log_hash,omitempty"`
 }
 
 // ExecutionReceipt is what a verifier signs. Mismatches are signed too, so
