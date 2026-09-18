@@ -283,7 +283,7 @@ import json, sys
 flags = sys.argv[2:]
 value = dict(target="//cmd:housegate", flags=flags,
              aquery=["aquery", *flags, "--include_commandline", "--output=jsonproto", "deps(//cmd:housegate)"],
-             cquery=["cquery", *flags, "--output=jsonproto", "--transitions=lite", "--proto:include_configurations", "deps(//cmd:housegate)"])
+             cquery=["cquery", *flags, "--consistent_labels", "--output=jsonproto", "--transitions=lite", "--proto:include_configurations", "deps(//cmd:housegate)"])
 with open(sys.argv[1], "w") as f:
     json.dump(value, f, indent=2)
     f.write("\n")
@@ -298,7 +298,7 @@ PYARGS
   ci_note aquery success
   ci_note cquery active
   run_split_bounded "$cquery" "$AQUERY_LIMIT" "$EVIDENCE/toolchains/$prefix-cquery.stderr" "$LOG_LIMIT" \
-    bazel_u cquery "${flags[@]}" --output=jsonproto --transitions=lite --proto:include_configurations 'deps(//cmd:housegate)'
+    bazel_u cquery "${flags[@]}" --consistent_labels --output=jsonproto --transitions=lite --proto:include_configurations 'deps(//cmd:housegate)'
   ci_note cquery success
   ci_note execution-root active
   if [[ "$mode" == ci-linux ]]; then
@@ -310,14 +310,22 @@ PYARGS
   ci_note execution-root-value active
   [[ "$exec_root" == /ci2/* && -d "$exec_root" ]]
   ci_note execution-root-value success
+  ci_note sources active
+  # Evidence-only source capture: fixed files, 128 KiB each / 1 MiB aggregate.
+  run_split_bounded "$EVIDENCE/toolchains/$prefix-sources.stdout" 1048576 "$EVIDENCE/toolchains/$prefix-sources.stderr" 1048576 \
+    /usr/bin/python3 "$TOOLCHAIN_CHECK" --collect-sources --exec-root "$exec_root" --owned-root /ci2 --source-root "$SRC" \
+      --output "$EVIDENCE/toolchains/$prefix-sources.json"
+  ci_note sources success
   ci_note verifier active
   if [[ "$mode" == ci-linux ]]; then
     /usr/bin/python3 "$TOOLCHAIN_CHECK" --mode "$mode" --resolution "$resolution" --aquery "$aquery" --cquery "$cquery" \
-      --invocation "$invocation" --exec-root "$exec_root" --owned-root /ci2 \
+      --invocation "$invocation" --exec-root "$exec_root" --owned-root /ci2 --source-root "$SRC" \
+      --sources "$EVIDENCE/toolchains/$prefix-sources.json" \
       --output "$EVIDENCE/toolchains/$prefix-verified.json" >"$EVIDENCE/toolchains/$prefix-verifier.stdout" 2>"$EVIDENCE/toolchains/$prefix-verifier.stderr"
   else
     /usr/bin/python3 "$TOOLCHAIN_CHECK" --mode "$mode" --resolution "$resolution" --aquery "$aquery" --cquery "$cquery" \
-      --invocation "$invocation" --exec-root "$exec_root" --owned-root /ci2 \
+      --invocation "$invocation" --exec-root "$exec_root" --owned-root /ci2 --source-root "$SRC" \
+      --sources "$EVIDENCE/toolchains/$prefix-sources.json" \
       --output "$EVIDENCE/toolchains/$prefix-verified.json"
   fi
   ci_note verifier success
@@ -787,7 +795,7 @@ homebrew() {
 # A missing/failed write is a diagnostic gap; it cannot change the producer rc.
 ci_note() {
   [[ "${CI_BUILD_OBSERVING:-0}" == 1 ]] || return 0
-  case "$1" in state|begin|first-build|success-text|toolchain-setup|toolchain-invocation|resolution|aquery|cquery|execution-root|execution-root-value|verifier|usage|end) ;; *) return 0 ;; esac
+  case "$1" in state|begin|first-build|success-text|toolchain-setup|toolchain-invocation|resolution|aquery|cquery|execution-root|execution-root-value|sources|verifier|usage|end) ;; *) return 0 ;; esac
   case "$2" in active|success|failure) ;; *) return 0 ;; esac
   [[ "${3:-0}" =~ ^[0-9]{1,3}$ ]] || return 0
   CI_BUILD_ACTIVE=$1

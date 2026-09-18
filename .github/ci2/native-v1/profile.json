@@ -85,6 +85,6 @@
     }
   ],
   "historical_runtime_manifest_sha256": "d5c0a01bc0286cdf044e13eca40843ca9fae0562ea61d9b7a3f7792f44853036",
-  "native_manifest_policy": "Separate 13-entry native runtime manifest; bound alongside this profile in the workflow and immutable per-run receipts. Ten historical helpers are unchanged; native bootstrap, worker and container runner are derivatives.",
+  "native_manifest_policy": "Separate 13-entry native runtime manifest; bound alongside this profile in the workflow and immutable per-run receipts. Nine historical helpers are unchanged; native bootstrap, worker, container runner and toolchain verifier are explicitly reviewed derivatives.",
   "native_fixture_authority": {"init_adoption": false, "github_cancellation": false}
 }

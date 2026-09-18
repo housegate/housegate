@@ -68,9 +68,9 @@ class CarrierTests(unittest.TestCase):
 
     def test_manifest_and_profile_binding(self):
         self.assertEqual(call('profile'),self.p)
-        self.assertEqual(hashlib.sha256((ROOT/'profile.json').read_bytes()).hexdigest(),'9b5d015b91dbbaec0b3b332b6309a8b1b1a3fa39fdb7c9b3a45d94e800283d74')
+        self.assertEqual(hashlib.sha256((ROOT/'profile.json').read_bytes()).hexdigest(),'b627e07010f1489d0a6c0250245c28eff7d787289b88f42dca89dab3452f96a0')
         digest=call('manifest')
-        self.assertEqual(digest,'c42d537ab8956df31910967fba2eefcd5b683f28ffc92dfcd7d9b07ec615023c')
+        self.assertEqual(digest,'5fbba7e9c6b545931cbf42c5f718ab29abc015705c4501d8f08bb0fd499144f2')
         workflow=(ROOT.parent.parent/'workflows/ci2-native.yml').read_text()
         self.assertIn(digest,workflow)
         self.assertIn(carrier['PROFILE_SHA'],workflow)
@@ -193,7 +193,7 @@ class CarrierTests(unittest.TestCase):
         # Historical source fingerprints, not a claim of native runtime success.
         frozen={
             'as_ubuntu': '1cdadd4713222445b404f52266413e4a3a51eed90c015dec57daafb937e0c3fb',
-            'collect_toolchain_evidence': '2d3883597698bc3188629f772564cde8653a90134fea51a768bc22b8a3aff051',
+            'collect_toolchain_evidence': '109daf2dec887e3a534d689339762bcd1bd0cebcfb3b59d6580053e278beb2b4',
             'homebrew_cold_cache': '83693dbba73444311cb66a8933d35373c468bbbf6106f0dc35a41ca836c9c346',
             'homebrew_server_identity': 'a583eb7d2cf6e77e0443d73faf1e23b2562de083a1ce84cbea1f58eb13d2b779',
             'ci_build': '13f11f130a555029be6ad9bd55cdaabfe7cb13d4c0bdf224420bcf6b30374e71',
@@ -207,7 +207,7 @@ class CarrierTests(unittest.TestCase):
         }
         for name,digest in frozen.items():
             self.assertEqual(hashlib.sha256(self.container_function(name).encode()).hexdigest(),digest,name)
-        self.assertEqual(len(carrier['REUSE']),10)
+        self.assertEqual(len(carrier['REUSE']),9)
         self.assertNotIn('run-linux-qualification-v16-container.sh',carrier['REUSE'])
 
     def test_empty_allowlist_disables_qualification(self):
@@ -804,6 +804,16 @@ def bounded_suite():
     print('Bounded preparation evidence: '+str(root),flush=True)
     raise SystemExit(rc if complete else 125)
 
+
+
+def load_tests(loader, standard_tests, pattern):
+    # Same bounded suite owner and clocks cover the focused proof fixtures.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('toolchain_fixtures', ROOT/'test-toolchain-evidence.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    standard_tests.addTests(loader.loadTestsFromModule(module))
+    return standard_tests
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser()

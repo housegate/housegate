@@ -67,12 +67,11 @@ REUSE = {
     'ci2-host-diagnostics-v16.py': 'e57393b408949214f4afebeb555227b47c7fc7f73374a7208312528360ce4944',
     'ci2-phase-owner-v16.py': '8b6cc74dd0a54d5f9d0e9e2826726683d66b48cc366ee2a4da23c0659630d4c6',
     'ci2-terminate-owned-v16.py': 'b3501559e84dcbcd01bc6b600b0aeee4a79c4990facb0a04fd57ce2491f3f6fa',
-    'ci2-toolchain-evidence-v16.py': '6e6fa83aeca059af92bc6ca90206cd98fa63310688161013129abadb36569195',
     'ci2-transfer-v16.py': 'a802ca56bc8e340c1d147474d6d32544f5ad32673ee36b554967023655c67fdd',
     'ci2-watchdog-v16.py': '17ef41289b1a164ad978446649f0446527f388cc99ec6f342ba18ad748b622f9',
 }
-RUNTIME_NAMES = set(REUSE) | {'run-linux-qualification-v16-container.sh', 'run-linux-qualification-native-v1.sh', 'run-linux-qualification-native-v1-worker.sh'}
-PROFILE_SHA = '9b5d015b91dbbaec0b3b332b6309a8b1b1a3fa39fdb7c9b3a45d94e800283d74'
+RUNTIME_NAMES = set(REUSE) | {'ci2-toolchain-evidence-v16.py', 'run-linux-qualification-v16-container.sh', 'run-linux-qualification-native-v1.sh', 'run-linux-qualification-native-v1-worker.sh'}
+PROFILE_SHA = 'b627e07010f1489d0a6c0250245c28eff7d787289b88f42dca89dab3452f96a0'
 IMAGE_FIELD_NAMES = ('os', 'architecture', 'size', 'user', 'entrypoint', 'workdir')
 IMAGE_STRING_MAX = 512
 IMAGE_LIST_MAX = 16
