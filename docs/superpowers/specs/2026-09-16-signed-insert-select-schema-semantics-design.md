@@ -137,6 +137,64 @@ Trust-map rotation first pauses new issuance while leaving the old fixed authori
 
 A5, D1, D2, B4 and B5 build RP catalogs only from the authenticated object's complete columns, revalidate exact S/projection/publication policy before final signing, host intake, source execution and verifier execution, and transport `generation` plus `default_expression` unchanged. Engine `SUCCESS` validates supplied metadata/profile behavior but never proves publication. B4 still supplies only the validated legacy projection to shared row/state assembly and preserves U in the complete ledger.
 
+### Historical policy and output ownership
+
+HG defines one neutral `snapshotquery` decision port shared by B4 and B5. C1 supplies its authenticated production adapter from fixed network/shard scope, trusted endpoint identity and committed-history proof validation. The port is an in-process contract only: it adds no wire field, proof encoding, certificate, proto tag, hash domain or admission mechanism.
+
+```go
+type HistoricalPolicy interface {
+    // Success means original accepted assignment, historical activation and
+    // exact committed published-ready association have been authenticated.
+    // This does not admit an artifact use or release any retained reference.
+    VerifyReservation(context.Context, replay.SnapshotQueryJob) (HistoricalDecision, error)
+}
+
+// All stored fields contain values only, with no caller-owned slices/pointers.
+// The zero value is invalid. The type has no wire representation or hash.
+type HistoricalDecision struct {
+    reservation          replay.SnapshotQueryReservation
+    activation           replay.ActiveQueryPolicy
+    blockSeq             uint64
+    statementRoot        string
+    ready                replay.SnapshotArtifactReady
+    schemaArtifactDigest string
+}
+
+func (d HistoricalDecision) CheckJob(replay.SnapshotQueryJob) error
+func (d HistoricalDecision) Reservation() replay.SnapshotQueryReservation
+func (d HistoricalDecision) Activation() replay.ActiveQueryPolicy
+func (d HistoricalDecision) Ready() replay.SnapshotArtifactReady
+func (d HistoricalDecision) SchemaArtifactDigest() string
+
+// Constructor input for the trusted C1 adapter; not an RPC request or proof.
+// The name does not assert that arbitrary caller records are authenticated.
+type HistoricalDecisionRecords struct {
+    Reservation   replay.SnapshotQueryReservation
+    Activation    replay.ActiveQueryPolicy
+    BlockSeq      uint64
+    StatementRoot string
+    Ready         replay.SnapshotArtifactReady
+    Artifacts     replay.SnapshotArtifactSet
+}
+
+func NewHistoricalDecisionFromVerifiedRecords(
+    job replay.SnapshotQueryJob,
+    records HistoricalDecisionRecords,
+) (HistoricalDecision, error)
+```
+
+The constructor is a structural binder after authentication, not an authentication primitive. It rejects incomplete identities, invalid digests, invalid original activation, network/shard/job/reservation/pin/assignment mismatches, readiness identity mismatches and an artifact-set root different from the independently authenticated committed readiness. The decision binds the original reservation ID, fence generation, client and statement; original activation and executor/query pair; exact pin; committed assigned block sequence and statement root; and readiness/artifact-set root, publisher and retention-policy identity. It recomputes the input, read-set and statement roots, binds the original JWS through the statement root, validates the exact predecessor/schema/profile pair and retains immutable scalar copies only. Its accessors return value copies, it owns no resources, and any error returns a zero decision. Its expected outer O digest is `records.Artifacts.SchemaArtifactDigest` only after the complete artifact-set preimage hashes to `records.Ready.ArtifactSetRoot` and C1 has authenticated the original committed readiness/publication association. Computing an expected digest from the returned read object's O would be self-comparison, not independent authority. The decision excludes `SourceClaim` and `SourceClaimRoot`, which do not exist before source execution.
+
+Production code may construct a decision only through the fixed trusted C1 adapter. Explicit deterministic fixtures may exercise consumers, but a fake, structural constructor, profile file, caller-selected endpoint, context value, nonempty proof bytes, current policy, permissive nil or allow-all implementation supplies no authority. Missing, stale, follower, unauthenticated, absent, invalid or out-of-scope evidence refuses. Historical original facts likewise do not admit current use or authorize retention, retirement, challenge or release.
+
+B5 copies and validates the complete job, verifies the original user signature under the existing historical rules, then calls `HistoricalPolicy.VerifyReservation`, calls `decision.CheckJob`, and only afterward selects the immutable executor/query pair. B4 independently repeats the policy call and job check before `SnapshotReadStore.Open`, including direct source invocation. Duplicate authenticated reads are accepted for the first version; no caller-supplied decision bypass exists. B4 compares the returned exact O with `decision.SchemaArtifactDigest()` through the existing authenticated-profile validator before analyzer, query or appender work. B4/B5 use the retained original activation and certificate without substituting today's active policy or allowlist.
+
+B3's prescribed `Canonicalize(ctx, networkID, statementID, schema, input, limits, tempDir)` receives no signed input object or full input root. Its ephemeral runs and output bind the exact network/statement/schema context plus local integrity, count and output identities; each `OpenRows` validates those bindings. B4 authenticates the selected pin/schema/descriptor/signed statement and full input root before supplying the stream. C5 durably copies and reopens the exact canonical output under that authenticated full input root plus output count/root before unsafe writes or restart reuse. Neither B3's internal context hash nor a source cache replaces this composed binding or independent verifier execution.
+
+`ApplyRows` borrows `RowSource`; its caller owns and closes the stream even after errors. The legacy adapter closes streams it creates, B4 closes canonical cursors it opens, and any required owner close failure prevents successful adapter/orchestration completion. Direct `ApplyRows` tests cover complete predecessor/configured-schema/legacy-projection consistency and ledger preservation. O1/O2 equal-projection and certificate substitution tests belong to B4 Prepare/Replay, which receives O. No O, policy argument or synthetic payload reference is added to legacy append APIs.
+
+B4a (shared streaming append/state assembly and unchanged v2 vectors) and B4b (the neutral decision port, request/result plumbing and single-pair Prepare/Replay orchestration) are independent milestones of the existing B4 task. Full B4 still requires real B1/B2/C1 integration and D4 independent execution. These contracts describe pending work and do not establish implementation, deployment or live acceptance.
+
 ### Publication control injection
 
 AC dataplane owns these local dependency types; their public Go shape remains local and adds no field or hash. When the disposition capability is enabled, the concrete implementation is bound to one exact candidate and uses the new disposition control service defined by the artifact-lifecycle addendum rather than an unscoped old mutation path:
