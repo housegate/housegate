@@ -42,3 +42,16 @@ type ReadSnapshot interface {
 	// replay/challenge reference owned by the caller's referenceID.
 	Close() error
 }
+
+// VerifiedPart is one download-verified immutable part. LocalPath is a regular
+// file already checked by the caller against PartPhysHash; Restore rechecks.
+type VerifiedPart struct {
+	Entry     replay.PartManifestEntry
+	LocalPath string
+}
+
+// ScratchRestorer materializes authenticated read relations onto restricted
+// scratch handles. It does not publish artifacts or mint current-use references.
+type ScratchRestorer interface {
+	Restore(ctx context.Context, manifest replay.SafeSnapshotManifest, schemaArtifact replay.AuthenticatedSnapshotQuerySchemaV1, schemas []payloadexec.TableSchema, reads replay.SnapshotReadSet, parts []VerifiedPart) (ReadSnapshot, error)
+}
