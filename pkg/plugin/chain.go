@@ -157,6 +157,8 @@ func (c *PluginChain) OnQuery(ctx context.Context, qctx *QueryContext) error {
 	return c.runQueryFrom(ctx, qctx, 0, true)
 }
 
+func (*PluginChain) SupportsQueryContinuation() bool { return true }
+
 // ResumeQuery continues a suspended AgentPrepare chain from exactly the first
 // hook that did not run.  It is deliberately not OnQuery again: restarting the
 // chain would repeat authentication, accounting, and other side effects.
@@ -208,7 +210,7 @@ func (c *PluginChain) runQueryFrom(ctx context.Context, qctx *QueryContext, star
 			if qctx.DeferredInsert != nil || qctx.SuppressUpstreamExecution || qctx.AbortWithSuccess {
 				return fmt.Errorf("agent prepare conflicts with another query ownership plan")
 			}
-			if qctx.AgentPrepare.Prepare == nil || qctx.AgentPrepare.PersistForwardIntent == nil || qctx.AgentPrepare.AuthorizeForward == nil {
+			if qctx.AgentPrepare.Prepare == nil || qctx.AgentPrepare.PersistForwardIntent == nil || qctx.AgentPrepare.AuthorizeForward == nil || qctx.AgentPrepare.MaxControlBytes == 0 {
 				return fmt.Errorf("agent prepare requires worker, forward intent, and forward authorization")
 			}
 			return qctx.installContinuation(c, i+1)

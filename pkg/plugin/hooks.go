@@ -60,6 +60,14 @@ type Hooks interface {
 	OnDisconnect(sess chsession.Session)
 }
 
+// QueryContinuationSupport is an explicit opt-in for the suspended query
+// chain.  AgentPrepare is rejected unless Hooks advertises it; a plain Hooks
+// implementation returning a no-op ResumeQuery cannot accidentally skip the
+// remainder of a side-effecting chain.
+type QueryContinuationSupport interface {
+	SupportsQueryContinuation() bool
+}
+
 // NoopHooks satisfies Hooks without doing anything.
 type NoopHooks struct{}
 
@@ -74,6 +82,8 @@ func (NoopHooks) OnHandshakeComplete(context.Context, chsession.Session, time.Du
 func (NoopHooks) OnQuery(context.Context, *QueryContext) error { return nil }
 
 func (NoopHooks) ResumeQuery(context.Context, *QueryContext) error { return nil }
+
+func (NoopHooks) SupportsQueryContinuation() bool { return false }
 
 func (NoopHooks) RejectUndecodableQuery(chsession.Session) bool { return false }
 

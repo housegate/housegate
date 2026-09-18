@@ -21,6 +21,23 @@ type blockingResumeHooks struct {
 	release chan struct{}
 }
 
+type relayPrepareHooks struct {
+	plugin.NoopHooks
+	prepare   func(context.Context) (plugin.PreparedAgentQuery, error)
+	intent    func(context.Context, plugin.PreparedAgentQuery) error
+	authorize func(context.Context, plugin.PreparedAgentQuery) error
+}
+
+func (h relayPrepareHooks) SupportsQueryContinuation() bool { return true }
+
+func (h relayPrepareHooks) OnQuery(_ context.Context, qctx *plugin.QueryContext) error {
+	qctx.AgentPrepare = &plugin.AgentPreparePlan{
+		Prepare: h.prepare, PersistForwardIntent: h.intent, AuthorizeForward: h.authorize,
+		MaxControlBytes: 1024,
+	}
+	return nil
+}
+
 func (h blockingResumeHooks) ResumeQuery(context.Context, *plugin.QueryContext) error {
 	close(h.entered)
 	<-h.release // deliberately ignores the cancellation context
@@ -144,6 +161,15 @@ func TestRelayAgentPrepare_CancelDuringContinuationOrAuthorizationStage(t *testi
 			if _, err := clientPeer.Write(raw.Buf); err != nil {
 				t.Fatalf("write Cancel: %v", err)
 			}
+			// Cancellation closes/quarantines the session and joins the stage
+			// before lifecycle cleanup, so an intentionally non-cooperative
+			// callback keeps this call pending until released.
+			select {
+			case err := <-done:
+				t.Fatalf("stage returned before blocked callback released: %v", err)
+			case <-time.After(20 * time.Millisecond):
+			}
+			close(release)
 			select {
 			case err := <-done:
 				if !errors.Is(err, errAgentPrepareCanceled) {
@@ -152,7 +178,6 @@ func TestRelayAgentPrepare_CancelDuringContinuationOrAuthorizationStage(t *testi
 			case <-time.After(time.Second):
 				t.Fatal("Cancel was not observed while stage blocked")
 			}
-			close(release)
 			if r.agentPrepareLive(stage, generation) {
 				t.Fatal("canceled stage remained eligible to forward")
 			}
@@ -231,6 +256,12 @@ func TestRelayAgentPrepare_NonCooperativeContinuationCancelHasZeroForward(t *tes
 	}
 	select {
 	case err := <-done:
+		t.Fatalf("apply returned before non-cooperative continuation released: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case err := <-done:
 		if !errors.Is(err, errAgentPrepareCanceled) {
 			t.Fatalf("apply result=%v, want cancellation", err)
 		}
@@ -240,5 +271,101 @@ func TestRelayAgentPrepare_NonCooperativeContinuationCancelHasZeroForward(t *tes
 	if intents.Load() != 0 || authorizations.Load() != 0 {
 		t.Fatalf("cancelled continuation persisted forward intent=%d authorization=%d", intents.Load(), authorizations.Load())
 	}
+}
+
+func TestRelayAgentPrepare_RelayCancelNeverWritesUpstreamQuery(t *testing.T) {
+	clientPeer, clientProxy := net.Pipe()
+	upstreamPeer, upstreamProxy := net.Pipe()
+	defer clientPeer.Close()
+	defer upstreamPeer.Close()
+	const rev = chproto.MaxSupportedRevision
+	sess := chsession.New(1, clientProxy)
+	sess.Client().SetRevision(rev)
+	up := chproto.NewCodec(upstreamProxy, chproto.DirToUpstream)
+	up.SetRevision(rev)
+	if err := sess.BindUpstream(context.Background(), up); err != nil {
+		t.Fatalf("BindUpstream: %v", err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	hooks := relayPrepareHooks{
+		prepare: func(context.Context) (plugin.PreparedAgentQuery, error) {
+			close(started)
+			<-release
+			return plugin.PreparedAgentQuery{Query: &chproto.Query{ID: "prepared", Body: "SELECT 1"}}, nil
+		},
+		intent:    func(context.Context, plugin.PreparedAgentQuery) error { return nil },
+		authorize: func(context.Context, plugin.PreparedAgentQuery) error { return nil },
+	}
+	r := NewRelay(sess, hooks, nil, nil)
+	client := chproto.NewCodec(clientPeer, chproto.DirToUpstream)
+	client.SetRevision(rev)
+	run := make(chan error, 1)
+	go func() { run <- r.clientToUpstream(context.Background()) }()
+	writeQuery := make(chan error, 1)
+	go func() { writeQuery <- client.WriteQuery(&chproto.Query{ID: "cancel-no-write", Body: "SELECT 1"}) }()
+	<-started
+	if err := <-writeQuery; err != nil {
+		t.Fatalf("write query: %v", err)
+	}
+	if err := client.WriteRawPacket([]byte{byte(chproto.ClientCancelCode)}); err != nil {
+		t.Fatalf("write cancel: %v", err)
+	}
 	close(release)
+	select {
+	case <-run:
+	case <-time.After(time.Second):
+		t.Fatal("relay did not finish after canceled preparation")
+	}
+	_ = upstreamPeer.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+	buf := make([]byte, 1)
+	if n, err := upstreamPeer.Read(buf); n != 0 || err == nil {
+		t.Fatalf("upstream received Query bytes n=%d err=%v", n, err)
+	}
+}
+
+func TestRelayAgentPrepare_RelayAuthorizationFailureNeverWritesUpstreamQuery(t *testing.T) {
+	clientPeer, clientProxy := net.Pipe()
+	upstreamPeer, upstreamProxy := net.Pipe()
+	defer clientPeer.Close()
+	defer upstreamPeer.Close()
+	const rev = chproto.MaxSupportedRevision
+	sess := chsession.New(1, clientProxy)
+	sess.Client().SetRevision(rev)
+	up := chproto.NewCodec(upstreamProxy, chproto.DirToUpstream)
+	up.SetRevision(rev)
+	if err := sess.BindUpstream(context.Background(), up); err != nil {
+		t.Fatalf("BindUpstream: %v", err)
+	}
+	hooks := relayPrepareHooks{
+		prepare: func(context.Context) (plugin.PreparedAgentQuery, error) {
+			return plugin.PreparedAgentQuery{Query: &chproto.Query{ID: "prepared", Body: "SELECT 1"}}, nil
+		},
+		intent: func(context.Context, plugin.PreparedAgentQuery) error { return nil },
+		authorize: func(context.Context, plugin.PreparedAgentQuery) error {
+			return errors.New("authorization fsync unknown")
+		},
+	}
+	r := NewRelay(sess, hooks, nil, nil)
+	client := chproto.NewCodec(clientPeer, chproto.DirToUpstream)
+	client.SetRevision(rev)
+	run := make(chan error, 1)
+	go func() { run <- r.clientToUpstream(context.Background()) }()
+	if err := client.WriteQuery(&chproto.Query{ID: "authorize-no-write", Body: "SELECT 1"}); err != nil {
+		t.Fatalf("write query: %v", err)
+	}
+	if _, err := client.ReadPacket(uint64(chproto.ServerExceptionCode)); err != nil {
+		t.Fatalf("read authorization exception: %v", err)
+	}
+	_ = clientPeer.Close()
+	select {
+	case <-run:
+	case <-time.After(time.Second):
+		t.Fatal("relay did not finish after authorization failure")
+	}
+	_ = upstreamPeer.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+	buf := make([]byte, 1)
+	if n, err := upstreamPeer.Read(buf); n != 0 || err == nil {
+		t.Fatalf("upstream received Query bytes n=%d err=%v", n, err)
+	}
 }

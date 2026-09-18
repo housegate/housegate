@@ -54,6 +54,11 @@ type Relay struct {
 	// distinguishes a late result from a subsequent query which reused a client
 	// query ID.
 	agentGeneration uint64
+	// agentForwardGeneration is non-zero only after the serialized forward gate
+	// has won.  Cancellation before this transition wins permanently; a later
+	// cancellation closes delivery but cannot retroactively revoke a durable
+	// authorization which the gate already permitted.
+	agentForwardGeneration uint64
 	// pendingRejection replaces the terminal packet of a query that Housegate
 	// rejected locally after its input was complete. The staged payload was
 	// withheld, but upstream still has to finish its zero-row INSERT before the
@@ -1014,6 +1019,15 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 			}
 			var agentPrepared *agentPrepareResult
 			if qctx.AgentPrepare != nil {
+				continuationHooks, supported := r.hooks.(plugin.QueryContinuationSupport)
+				if !supported || !continuationHooks.SupportsQueryContinuation() {
+					err := fmt.Errorf("query %q: hooks do not support agent preparation continuation", q.ID)
+					r.writeExceptionToClient(ctx, err)
+					r.hooks.OnQueryAbort(ctx, qctx)
+					r.hooks.OnQueryComplete(ctx, r.sess)
+					rejectedQctx = qctx
+					continue
+				}
 				if qctx.DeferredInsert != nil || qctx.SuppressUpstreamExecution || qctx.AbortWithSuccess {
 					err := fmt.Errorf("query %q: AgentPrepare conflicts with another ownership plan", q.ID)
 					r.writeExceptionToClient(ctx, err)

@@ -36,6 +36,16 @@ func (r *Relay) agentPrepareLive(queryID string, generation uint64) bool {
 	return r.activeQuery && !r.queryCanceled && r.activeQueryID == queryID && r.agentGeneration == generation
 }
 
+func (r *Relay) winAgentForwardGate(queryID string, generation uint64) bool {
+	r.queryMu.Lock()
+	defer r.queryMu.Unlock()
+	if !r.activeQuery || r.queryCanceled || r.activeQueryID != queryID || r.agentGeneration != generation {
+		return false
+	}
+	r.agentForwardGeneration = generation
+	return true
+}
+
 // waitAgentPrepare keeps the existing clientToUpstream goroutine as the only
 // framed reader while the worker is blocked in acquire/finalize.  Packet-start
 // polling never consumes a partial packet, so a worker result can be applied
@@ -87,7 +97,7 @@ func (r *Relay) waitAgentPrepare(ctx context.Context, qctx *plugin.QueryContext,
 		if !ready {
 			continue
 		}
-		pkt, err := client.ReadPacket(uint64(chproto.ClientQueryCode))
+		pkt, err := client.ReadPacketWithDataLimit(plan.MaxControlBytes, uint64(chproto.ClientQueryCode))
 		if err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrClosedPipe) {
 				r.cancelAgentPrepare(qctx.Query.ID, generation, plan)
@@ -108,11 +118,18 @@ var errAgentPrepareCanceled = errors.New("agent preparation canceled")
 
 func (r *Relay) cancelAgentPrepare(queryID string, generation uint64, plan *plugin.AgentPreparePlan) {
 	r.queryMu.Lock()
-	if r.activeQuery && r.activeQueryID == queryID && r.agentGeneration == generation {
+	forwardWon := r.agentForwardGeneration == generation
+	if r.activeQuery && r.activeQueryID == queryID && r.agentGeneration == generation && !forwardWon {
 		r.queryCanceled = true
 	}
 	r.queryMu.Unlock()
-	r.reconcileAgentPrepareCancel(plan)
+	if !forwardWon {
+		r.reconcileAgentPrepareCancel(plan)
+	}
+	// A stage callback can be non-cooperative.  It may not share the session
+	// with another query after cancellation, so quarantine the connection until
+	// the stage join below has completed (or forever, if it never returns).
+	_ = r.sess.Close()
 }
 
 func (r *Relay) reconcileAgentPrepareCancel(plan *plugin.AgentPreparePlan) {
@@ -141,10 +158,11 @@ func (r *Relay) runAgentPrepareStage(ctx context.Context, result *agentPrepareRe
 	done := make(chan error, 1)
 	go func() { done <- action(stageCtx) }()
 	client := r.sess.Client()
+	canceled := false
 	for {
 		select {
 		case err := <-done:
-			if !r.agentPrepareLive(result.queryID, result.generation) {
+			if canceled || !r.agentPrepareLive(result.queryID, result.generation) {
 				r.reconcileAgentPrepareCancel(result.plan)
 				return errAgentPrepareCanceled
 			}
@@ -155,6 +173,11 @@ func (r *Relay) runAgentPrepareStage(ctx context.Context, result *agentPrepareRe
 		if err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrClosedPipe) {
 				r.cancelAgentPrepare(result.queryID, result.generation, result.plan)
+				canceled = true
+				stop()
+				// Do not let a callback outlive Relay cleanup.  The closed session
+				// is the fence for a non-cooperative callback.
+				<-done
 				return io.EOF
 			}
 			return fmt.Errorf("wait for agent preparation stage control packet: %w", err)
@@ -162,7 +185,7 @@ func (r *Relay) runAgentPrepareStage(ctx context.Context, result *agentPrepareRe
 		if !ready {
 			continue
 		}
-		pkt, err := client.ReadPacket(uint64(chproto.ClientQueryCode))
+		pkt, err := client.ReadPacketWithDataLimit(result.plan.MaxControlBytes, uint64(chproto.ClientQueryCode))
 		if err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrClosedPipe) {
 				r.cancelAgentPrepare(result.queryID, result.generation, result.plan)
@@ -171,6 +194,9 @@ func (r *Relay) runAgentPrepareStage(ctx context.Context, result *agentPrepareRe
 		}
 		if pkt.Type == uint64(chproto.ClientCancelCode) {
 			r.cancelAgentPrepare(result.queryID, result.generation, result.plan)
+			canceled = true
+			stop()
+			<-done
 			return errAgentPrepareCanceled
 		}
 		return fmt.Errorf("client packet %s during agent preparation stage", clientPacketName(pkt.Type))
@@ -214,7 +240,7 @@ func (r *Relay) applyAgentPrepare(ctx context.Context, qctx *plugin.QueryContext
 // not reverse a winner, but it still prevents client delivery via the ordinary
 // active-query cancellation path.
 func (r *Relay) authorizeAgentForward(ctx context.Context, result *agentPrepareResult) error {
-	if result == nil || !r.agentPrepareLive(result.queryID, result.generation) {
+	if result == nil || !r.winAgentForwardGate(result.queryID, result.generation) {
 		return errAgentPrepareCanceled
 	}
 	if err := r.runAgentPrepareStage(ctx, result, func(stageCtx context.Context) error {

@@ -75,7 +75,7 @@ func (p *prepareQueryPlugin) OnQuery(_ context.Context, qctx *QueryContext) erro
 	*p.called = append(*p.called, p.name)
 	qctx.AgentPrepare = &AgentPreparePlan{Prepare: func(context.Context) (PreparedAgentQuery, error) {
 		return PreparedAgentQuery{Query: &chproto.Query{}}, nil
-	}, PersistForwardIntent: func(context.Context, PreparedAgentQuery) error { return nil }, AuthorizeForward: func(context.Context, PreparedAgentQuery) error { return nil }}
+	}, PersistForwardIntent: func(context.Context, PreparedAgentQuery) error { return nil }, AuthorizeForward: func(context.Context, PreparedAgentQuery) error { return nil }, MaxControlBytes: 1024}
 	return nil
 }
 
