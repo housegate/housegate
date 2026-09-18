@@ -185,7 +185,10 @@ func (r *Relay) runAgentPrepareStage(ctx context.Context, result *agentPrepareRe
 				stop()
 				// Do not let a callback outlive Relay cleanup.  The closed session
 				// is the fence for a non-cooperative callback.
-				<-done
+				stageErr := <-done
+				if forwardWon && stageErr != nil {
+					return stageErr
+				}
 				if forwardWon {
 					return errAgentPrepareForwardUnknown
 				}
@@ -207,7 +210,10 @@ func (r *Relay) runAgentPrepareStage(ctx context.Context, result *agentPrepareRe
 			r.cancelAgentPrepare(result.queryID, result.generation, result.plan)
 			canceled = true
 			stop()
-			<-done
+			stageErr := <-done
+			if forwardWon && stageErr != nil {
+				return stageErr
+			}
 			if forwardWon {
 				return errAgentPrepareForwardUnknown
 			}

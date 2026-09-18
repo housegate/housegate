@@ -1025,8 +1025,7 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 					r.writeExceptionToClient(ctx, err)
 					r.hooks.OnQueryAbort(ctx, qctx)
 					r.hooks.OnQueryComplete(ctx, r.sess)
-					rejectedQctx = qctx
-					continue
+					return err
 				}
 				if qctx.DeferredInsert != nil || qctx.SuppressUpstreamExecution || qctx.AbortWithSuccess {
 					err := fmt.Errorf("query %q: AgentPrepare conflicts with another ownership plan", q.ID)
@@ -1073,8 +1072,7 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 					r.writeExceptionToClient(ctx, err)
 					r.hooks.OnQueryAbort(ctx, qctx)
 					r.hooks.OnQueryComplete(ctx, r.sess)
-					rejectedQctx = qctx
-					continue
+					return err
 				}
 			}
 			// AbortWithSuccess: a plugin (commitgate via ErrAbortWithSuccess)
@@ -1155,8 +1153,7 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 					r.writeExceptionToClient(ctx, err)
 					r.hooks.OnQueryAbort(ctx, qctx)
 					r.hooks.OnQueryComplete(ctx, r.sess)
-					rejectedQctx = qctx
-					continue
+					return err
 				}
 			}
 			if err := up.WriteQuery(qctx.Query); err != nil {

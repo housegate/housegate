@@ -27,6 +27,20 @@ type relayPrepareHooks struct {
 	intent    func(context.Context, plugin.PreparedAgentQuery) error
 	authorize func(context.Context, plugin.PreparedAgentQuery) error
 	unknown   func(context.Context, plugin.PreparedAgentQuery) error
+	aborts    *atomic.Int32
+	completes *atomic.Int32
+}
+
+func (h relayPrepareHooks) OnQueryAbort(context.Context, *plugin.QueryContext) {
+	if h.aborts != nil {
+		h.aborts.Add(1)
+	}
+}
+
+func (h relayPrepareHooks) OnQueryComplete(context.Context, chsession.Session) {
+	if h.completes != nil {
+		h.completes.Add(1)
+	}
 }
 
 func (h relayPrepareHooks) SupportsQueryContinuation() bool { return true }
@@ -421,5 +435,79 @@ func TestRelayAgentPrepare_GateWonCancelPersistsForwardUnknown(t *testing.T) {
 	}
 	if authorized.Load() != 1 || unknown.Load() != 1 {
 		t.Fatalf("authorized=%d unknown=%d, want 1/1", authorized.Load(), unknown.Load())
+	}
+}
+
+func TestRelayAgentPrepare_RelayGateWonCancelReconcilesOnlyAfterAuthorizationSuccess(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		authorizeErr error
+		wantUnknown  int32
+	}{
+		{name: "success", wantUnknown: 1},
+		{name: "failure", authorizeErr: errors.New("durable authorization unknown"), wantUnknown: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clientPeer, clientProxy := net.Pipe()
+			upstreamPeer, upstreamProxy := net.Pipe()
+			defer clientPeer.Close()
+			defer upstreamPeer.Close()
+			const rev = chproto.MaxSupportedRevision
+			sess := chsession.New(1, clientProxy)
+			sess.Client().SetRevision(rev)
+			up := chproto.NewCodec(upstreamProxy, chproto.DirToUpstream)
+			up.SetRevision(rev)
+			if err := sess.BindUpstream(context.Background(), up); err != nil {
+				t.Fatal(err)
+			}
+			entered, release := make(chan struct{}), make(chan struct{})
+			var authorized, unknown, aborts, completes atomic.Int32
+			hooks := relayPrepareHooks{
+				prepare: func(context.Context) (plugin.PreparedAgentQuery, error) {
+					return plugin.PreparedAgentQuery{Query: &chproto.Query{ID: "prepared", Body: "SELECT 1"}}, nil
+				},
+				intent: func(context.Context, plugin.PreparedAgentQuery) error { return nil },
+				authorize: func(context.Context, plugin.PreparedAgentQuery) error {
+					authorized.Add(1)
+					close(entered)
+					<-release
+					return tc.authorizeErr
+				},
+				unknown: func(context.Context, plugin.PreparedAgentQuery) error { unknown.Add(1); return nil },
+				aborts:  &aborts, completes: &completes,
+			}
+			r := NewRelay(sess, hooks, nil, nil)
+			client := chproto.NewCodec(clientPeer, chproto.DirToUpstream)
+			client.SetRevision(rev)
+			run := make(chan error, 1)
+			go func() { run <- r.clientToUpstream(context.Background()) }()
+			if err := client.WriteQuery(&chproto.Query{ID: "gate-won", Body: "SELECT 1"}); err != nil {
+				t.Fatal(err)
+			}
+			<-entered
+			_ = clientPeer.Close() // EOF after the forward gate has won.
+			close(release)
+			var err error
+			select {
+			case err = <-run:
+			case <-time.After(time.Second):
+				t.Fatal("relay did not settle")
+			}
+			if authorized.Load() != 1 || unknown.Load() != tc.wantUnknown {
+				t.Fatalf("authorized=%d unknown=%d", authorized.Load(), unknown.Load())
+			}
+			if tc.authorizeErr == nil {
+				if !errors.Is(err, errAgentPrepareForwardUnknown) || aborts.Load() != 0 || completes.Load() != 0 {
+					t.Fatalf("success err=%v aborts=%d completes=%d", err, aborts.Load(), completes.Load())
+				}
+			} else if !errors.Is(err, tc.authorizeErr) {
+				t.Fatalf("failure err=%v want %v", err, tc.authorizeErr)
+			}
+			_ = upstreamPeer.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+			b := make([]byte, 1)
+			if n, e := upstreamPeer.Read(b); n != 0 || e == nil {
+				t.Fatalf("upstream bytes n=%d err=%v", n, e)
+			}
+		})
 	}
 }
