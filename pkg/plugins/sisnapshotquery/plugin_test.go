@@ -2,6 +2,7 @@ package sisnapshotquery
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -76,6 +77,29 @@ func (f *fakeClassifier) ClassifySnapshotQuery(_, _ string) (Candidate, error) {
 type fakeJournal struct {
 	calls                                        []string
 	begun, canceled, intent, authorized, unknown []Operation
+}
+
+// fakePhasePort deliberately has no submission method.  It proves the bridge
+// can only invoke the four C4 durable/reconciliation callbacks.
+type fakePhasePort struct {
+	events []string
+	errs   map[string]error
+}
+
+func (p *fakePhasePort) call(name string) error {
+	p.events = append(p.events, name)
+	return p.errs[name]
+}
+func (p *fakePhasePort) Prepare(context.Context) error { return p.call("prepare") }
+func (p *fakePhasePort) PersistSubmitIntent(context.Context) error {
+	return p.call("intent")
+}
+func (p *fakePhasePort) AuthorizeSubmit(context.Context) error { return p.call("authorize") }
+func (p *fakePhasePort) CancelAndReconcile(context.Context) error {
+	return p.call("cancel")
+}
+func (p *fakePhasePort) PersistAuthorizationUnknownAndReconcile(context.Context) error {
+	return p.call("unknown")
 }
 
 func (f *fakeJournal) BeginSnapshotQuery(_ context.Context, op Operation) error {
@@ -198,6 +222,160 @@ func TestPrepareBuildsDetachedSignedOperationAndForwardOrder(t *testing.T) {
 	}
 	if got := strings.Join(f.journal.calls, ","); got != "begin,intent,authorize,unknown" {
 		t.Fatalf("order=%q", got)
+	}
+}
+
+func TestPrepareBridgesSignedEnvelopeToC4PhasePort(t *testing.T) {
+	f := newFixture(t)
+	phase := &fakePhasePort{}
+	var got replay.SnapshotQueryEnvelope
+	f.p.opts.PhasePortFactory = func(_ context.Context, env replay.SnapshotQueryEnvelope) (SnapshotQueryIntakePhasePort, error) {
+		got = env
+		return phase, nil
+	}
+	plan := f.install()
+	prepared, err := plan.Prepare(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.InputRoot == "" || got.UserJWS == "" || got.Input.Binding.StatementID != prepared.Query.ID {
+		t.Fatalf("phase port received incomplete envelope: %#v", got)
+	}
+	if err := plan.PersistForwardIntent(context.Background(), prepared); err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.AuthorizeForward(context.Background(), prepared); err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.PersistForwardUnknown(context.Background(), prepared); err != nil {
+		t.Fatal(err)
+	}
+	if order := strings.Join(phase.events, ","); order != "prepare,intent,authorize,unknown" {
+		t.Fatalf("phase order=%q", order)
+	}
+	// Begin remains D1's pre-envelope reservation journal. Once C4 is present,
+	// all four relay phases belong to the port, not the old forward journal.
+	if order := strings.Join(f.journal.calls, ","); order != "begin" {
+		t.Fatalf("journal order=%q", order)
+	}
+}
+
+func TestC4PhaseBridgeCancelBeforePortAndAfterIntent(t *testing.T) {
+	t.Run("before port", func(t *testing.T) {
+		f := newFixture(t)
+		f.p.opts.PhasePortFactory = func(context.Context, replay.SnapshotQueryEnvelope) (SnapshotQueryIntakePhasePort, error) {
+			return nil, errors.New("port unavailable")
+		}
+		plan := f.install()
+		if _, err := plan.Prepare(context.Background()); err == nil {
+			t.Fatal("port construction failure prepared query")
+		}
+		if err := plan.ReconcileCancel(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if order := strings.Join(f.journal.calls, ","); order != "begin,cancel" {
+			t.Fatalf("journal order=%q", order)
+		}
+	})
+	t.Run("after port before intent", func(t *testing.T) {
+		f := newFixture(t)
+		phase := &fakePhasePort{}
+		f.p.opts.PhasePortFactory = func(context.Context, replay.SnapshotQueryEnvelope) (SnapshotQueryIntakePhasePort, error) {
+			return phase, nil
+		}
+		plan := f.install()
+		if _, err := plan.Prepare(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if err := plan.ReconcileCancel(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if order := strings.Join(phase.events, ","); order != "prepare" {
+			t.Fatalf("phase order=%q", order)
+		}
+		if order := strings.Join(f.journal.calls, ","); order != "begin,cancel" {
+			t.Fatalf("journal order=%q", order)
+		}
+	})
+	t.Run("after intent", func(t *testing.T) {
+		f := newFixture(t)
+		phase := &fakePhasePort{}
+		f.p.opts.PhasePortFactory = func(context.Context, replay.SnapshotQueryEnvelope) (SnapshotQueryIntakePhasePort, error) {
+			return phase, nil
+		}
+		plan := f.install()
+		prepared, err := plan.Prepare(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := plan.PersistForwardIntent(context.Background(), prepared); err != nil {
+			t.Fatal(err)
+		}
+		if err := plan.ReconcileCancel(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if order := strings.Join(phase.events, ","); order != "prepare,intent,cancel" {
+			t.Fatalf("phase order=%q", order)
+		}
+		if order := strings.Join(f.journal.calls, ","); order != "begin" {
+			t.Fatalf("journal order=%q", order)
+		}
+	})
+}
+
+func TestC4PhaseBridgeRejectsCallbackTamperAndPhaseErrors(t *testing.T) {
+	for name, phaseErr := range map[string]error{
+		"intent":    errors.New("intent durable failure"),
+		"authorize": errors.New("authorization durable failure"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			phase := &fakePhasePort{errs: map[string]error{name: phaseErr}}
+			f.p.opts.PhasePortFactory = func(context.Context, replay.SnapshotQueryEnvelope) (SnapshotQueryIntakePhasePort, error) {
+				return phase, nil
+			}
+			plan := f.install()
+			prepared, err := plan.Prepare(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if name == "intent" {
+				if err := plan.PersistForwardIntent(context.Background(), prepared); !errors.Is(err, phaseErr) {
+					t.Fatalf("intent err=%v", err)
+				}
+			} else {
+				if err := plan.PersistForwardIntent(context.Background(), prepared); err != nil {
+					t.Fatal(err)
+				}
+				if err := plan.AuthorizeForward(context.Background(), prepared); !errors.Is(err, phaseErr) {
+					t.Fatalf("authorize err=%v", err)
+				}
+			}
+			// The bridge has no submit surface, and a phase error never falls
+			// back to the legacy forward journal where a later relay write could
+			// be authorized.
+			if order := strings.Join(f.journal.calls, ","); order != "begin" {
+				t.Fatalf("journal order=%q", order)
+			}
+		})
+	}
+
+	f := newFixture(t)
+	phase := &fakePhasePort{}
+	f.p.opts.PhasePortFactory = func(context.Context, replay.SnapshotQueryEnvelope) (SnapshotQueryIntakePhasePort, error) {
+		return phase, nil
+	}
+	plan := f.install()
+	prepared, err := plan.Prepare(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared.Query.Body = "tampered"
+	if err := plan.PersistForwardIntent(context.Background(), prepared); err == nil {
+		t.Fatal("tampered callback reached phase port")
+	}
+	if order := strings.Join(phase.events, ","); order != "prepare" {
+		t.Fatalf("phase order=%q", order)
 	}
 }
 

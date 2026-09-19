@@ -79,13 +79,48 @@ type Operation struct {
 	Grant         Grant
 	Envelope      replay.SnapshotQueryEnvelope
 }
-type operationState struct {
-	mu    sync.RWMutex
-	value Operation
+
+// SnapshotQueryIntakePhasePort is the narrow C4 surface the detached D1
+// worker may retain after it has built the complete signed envelope.  It does
+// not include SubmitAfterAuthorization: relay callbacks must never submit or
+// arrange a submit as a side effect of preparing a client query.
+type SnapshotQueryIntakePhasePort interface {
+	Prepare(context.Context) error
+	PersistSubmitIntent(context.Context) error
+	AuthorizeSubmit(context.Context) error
+	CancelAndReconcile(context.Context) error
+	PersistAuthorizationUnknownAndReconcile(context.Context) error
 }
 
-func (s *operationState) snapshot() Operation { s.mu.RLock(); defer s.mu.RUnlock(); return s.value }
+// SnapshotQueryIntakePhasePortFactory is an injection-only adapter around
+// storageintegrity.SnapshotQueryIntake.NewSnapshotQueryIntakePhasePort.  The
+// default runtime does not supply one, so this does not wire an intake, a
+// sequencer, or any submission path into Housegate.
+type SnapshotQueryIntakePhasePortFactory func(context.Context, replay.SnapshotQueryEnvelope) (SnapshotQueryIntakePhasePort, error)
+
+type operationState struct {
+	mu          sync.RWMutex
+	value       Operation
+	phasePort   SnapshotQueryIntakePhasePort
+	phaseIntent bool
+}
+
+func (s *operationState) snapshot() (Operation, SnapshotQueryIntakePhasePort, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.value, s.phasePort, s.phaseIntent
+}
 func (s *operationState) replace(v Operation) { s.mu.Lock(); s.value = v; s.mu.Unlock() }
+func (s *operationState) installPhasePort(port SnapshotQueryIntakePhasePort) {
+	s.mu.Lock()
+	s.phasePort = port
+	s.mu.Unlock()
+}
+func (s *operationState) markPhaseIntent() {
+	s.mu.Lock()
+	s.phaseIntent = true
+	s.mu.Unlock()
+}
 
 type Options struct {
 	Classifier      Classifier
@@ -96,9 +131,13 @@ type Options struct {
 	StatementSigner StatementSigner
 	Sequence        Sequence
 	Journal         Journal
-	NetworkID       string
-	KeeperShardID   uint32
-	MaxControlBytes uint64
+	// PhasePortFactory is optional.  When injected, D1's four relay callbacks
+	// delegate exactly to the C4 phase port after the worker has constructed and
+	// signed the complete envelope.  It is deliberately not build/config wired.
+	PhasePortFactory SnapshotQueryIntakePhasePortFactory
+	NetworkID        string
+	KeeperShardID    uint32
+	MaxControlBytes  uint64
 }
 
 type Plugin struct{ opts Options }
@@ -145,27 +184,64 @@ func (p *Plugin) OnQuery(_ context.Context, qctx *plugin.QueryContext) error {
 		MaxControlBytes: p.opts.MaxControlBytes,
 		Prepare:         func(ctx context.Context) (plugin.PreparedAgentQuery, error) { return p.prepare(ctx, state) },
 		ReconcileCancel: func(ctx context.Context) error {
-			op := state.snapshot()
+			op, phasePort, phaseIntent := state.snapshot()
 			if op.RequestID == "" {
 				return nil
+			}
+			// C4 cancellation starts only after its durable SubmitIntent exists.
+			// Before that the D1 journal remains the exact-reservation cleanup
+			// owner, including a cancel racing envelope/port construction.
+			if phasePort != nil && phaseIntent {
+				return phasePort.CancelAndReconcile(ctx)
 			}
 			return p.opts.Journal.ReconcileCanceledSnapshotQuery(ctx, op)
 		},
 		PersistForwardIntent: func(ctx context.Context, prepared plugin.PreparedAgentQuery) error {
-			return p.persistIntent(ctx, state.snapshot(), prepared)
+			op, phasePort, _ := state.snapshot()
+			if !matches(op, prepared) {
+				return errors.New("sisnapshotquery: forward intent identity mismatch")
+			}
+			if phasePort == nil {
+				return p.opts.Journal.PersistSnapshotQueryForwardIntent(ctx, op)
+			}
+			if err := phasePort.PersistSubmitIntent(ctx); err != nil {
+				return err
+			}
+			state.markPhaseIntent()
+			return nil
 		},
 		AuthorizeForward: func(ctx context.Context, prepared plugin.PreparedAgentQuery) error {
-			return p.authorize(ctx, state.snapshot(), prepared)
+			op, phasePort, phaseIntent := state.snapshot()
+			if !matches(op, prepared) {
+				return errors.New("sisnapshotquery: forward authorization identity mismatch")
+			}
+			if phasePort == nil {
+				return p.opts.Journal.AuthorizeSnapshotQueryForward(ctx, op)
+			}
+			if !phaseIntent {
+				return errors.New("sisnapshotquery: phase port authorization without submit intent")
+			}
+			return phasePort.AuthorizeSubmit(ctx)
 		},
 		PersistForwardUnknown: func(ctx context.Context, prepared plugin.PreparedAgentQuery) error {
-			return p.unknown(ctx, state.snapshot(), prepared)
+			op, phasePort, phaseIntent := state.snapshot()
+			if !matches(op, prepared) {
+				return errors.New("sisnapshotquery: forward unknown identity mismatch")
+			}
+			if phasePort == nil {
+				return p.opts.Journal.PersistSnapshotQueryForwardUnknown(ctx, op)
+			}
+			if !phaseIntent {
+				return errors.New("sisnapshotquery: phase port unknown authorization without submit intent")
+			}
+			return phasePort.PersistAuthorizationUnknownAndReconcile(ctx)
 		},
 	}
 	return nil
 }
 
 func (p *Plugin) prepare(ctx context.Context, state *operationState) (plugin.PreparedAgentQuery, error) {
-	op := state.snapshot()
+	op, _, _ := state.snapshot()
 	requestID, err := p.opts.Sequence.NextSnapshotQueryStatementID(ctx, op.RequestSeed)
 	if err != nil {
 		return plugin.PreparedAgentQuery{}, fmt.Errorf("sisnapshotquery: allocate request identity: %w", err)
@@ -221,6 +297,22 @@ func (p *Plugin) prepare(ctx context.Context, state *operationState) (plugin.Pre
 	}
 	op.Envelope = replay.SnapshotQueryEnvelope{Input: input, InputRoot: root, UserJWS: userJWS}
 	state.replace(op)
+	if p.opts.PhasePortFactory != nil {
+		// The port sees only a fully computed and signed immutable envelope.  It
+		// is retained in operation state before Prepare so a cancellation racing
+		// the C4 durable setup still has an exact operation identity to reconcile.
+		phasePort, err := p.opts.PhasePortFactory(ctx, op.Envelope)
+		if err != nil {
+			return plugin.PreparedAgentQuery{}, fmt.Errorf("sisnapshotquery: create intake phase port: %w", err)
+		}
+		if phasePort == nil {
+			return plugin.PreparedAgentQuery{}, errors.New("sisnapshotquery: nil intake phase port")
+		}
+		state.installPhasePort(phasePort)
+		if err := phasePort.Prepare(ctx); err != nil {
+			return plugin.PreparedAgentQuery{}, fmt.Errorf("sisnapshotquery: prepare intake phase port: %w", err)
+		}
+	}
 	prepared := cloneQuery(op.OriginalQuery)
 	prepared.ID = op.RequestID
 	prepared.Body = analysis.SQL
