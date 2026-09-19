@@ -12,4 +12,5 @@ go_test(
     name = "sisnapshotquery_test",
     srcs = ["plugin_test.go"],
     embed = [":sisnapshotquery"],
+    deps = ["//pkg/auth", "//pkg/chproto", "//pkg/chsession", "//pkg/plugin", "//pkg/replay"],
 )

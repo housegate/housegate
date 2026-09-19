@@ -127,7 +127,14 @@ func (p *Plugin) OnQuery(_ context.Context, qctx *plugin.QueryContext) error {
 	if !candidate.Recognized {
 		return nil
 	}
-	if len(qctx.Query.Settings) != 0 {
+	// Query parameters are a second executable input channel. The v3 envelope
+	// binds only the analyzed SQL and the explicitly empty user-settings set,
+	// so forwarding parameters here would make the prepared statement differ
+	// from what the user signed.
+	if len(qctx.Query.Parameters) != 0 {
+		return errors.New("sisnapshotquery: snapshot query does not permit query parameters")
+	}
+	if len(qctx.Query.Settings) != 0 || len(qctx.Query.OldSettings) != 0 {
 		return errors.New("sisnapshotquery: snapshot query requires an empty user settings set")
 	}
 	query := cloneQuery(*qctx.Query)
@@ -241,6 +248,13 @@ func (p *Plugin) unknown(ctx context.Context, op Operation, prepared plugin.Prep
 }
 func matches(op Operation, p plugin.PreparedAgentQuery) bool {
 	if p.Query == nil || op.RequestID == "" || op.Envelope.UserJWS == "" || p.Query.ID != op.RequestID || p.Query.Body != op.Envelope.Input.SQL || op.Envelope.InputRoot == "" || op.Envelope.Input.Binding.StatementID != op.RequestID || op.Envelope.Input.Binding.ReservationID != op.Grant.Reservation.ReservationID || op.Envelope.Input.Binding.FencingGeneration != op.Grant.Reservation.FencingGeneration {
+		return false
+	}
+	// Callbacks may authorize a socket write. Recompute the canonical root
+	// rather than treating the cached input_root as an opaque marker, so an
+	// in-memory mutation cannot switch the signed statement it refers to.
+	root, err := replay.SnapshotQueryInputRoot(op.Envelope.Input)
+	if err != nil || root != op.Envelope.InputRoot {
 		return false
 	}
 	var token string
