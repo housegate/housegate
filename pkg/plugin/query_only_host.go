@@ -58,6 +58,15 @@ func (p *SnapshotQueryHostPlugin) OnQuery(_ context.Context, qctx *QueryContext)
 	query := cloneHostQuery(qctx.Query)
 	var cancelMu sync.Mutex
 	var admissionCancel func()
+	var admissionCancelOnce sync.Once
+	cancelAdmission := func() {
+		cancelMu.Lock()
+		cancel := admissionCancel
+		cancelMu.Unlock()
+		if cancel != nil {
+			admissionCancelOnce.Do(cancel)
+		}
+	}
 	qctx.QueryOnly = newHostQueryOnlyPlan(func(ctx context.Context) error {
 		admission, err := p.source.AdmitSnapshotQueryAtHost(ctx, query)
 		if err != nil {
@@ -70,19 +79,14 @@ func (p *SnapshotQueryHostPlugin) OnQuery(_ context.Context, qctx *QueryContext)
 		admissionCancel = admission.CancelClient
 		cancelMu.Unlock()
 		if err := ctx.Err(); err != nil {
-			admission.CancelClient()
+			cancelAdmission()
 			return err
 		}
 		return admission.Run(ctx)
 	}, func() {
 		// A cancellation before admission returns is carried by ctx. Once it
 		// returns, the independent admission supplies its durable cancellation.
-		cancelMu.Lock()
-		cancel := admissionCancel
-		cancelMu.Unlock()
-		if cancel != nil {
-			cancel()
-		}
+		cancelAdmission()
 	}, 1024)
 	return nil
 }

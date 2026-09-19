@@ -479,10 +479,52 @@ func TestRelayQueryOnly_RunErrorClearsActiveQuery(t *testing.T) {
 	if _, active := r.currentActiveQuery(); active {
 		t.Fatal("Run error left active query")
 	}
+	if !r.queryOnlySessionIsTerminal() {
+		t.Fatal("Run error did not mark query-only session terminal")
+	}
 	if !r.beginActiveQuery("next") {
 		t.Fatal("Run error blocked next query")
 	}
 	r.takeActiveQuery()
+}
+
+func TestRelayQueryOnly_RunErrorMakesPipelinedMarkerTerminal(t *testing.T) {
+	clientProxy, clientPeer := net.Pipe()
+	upstreamProxy, upstreamPeer := net.Pipe()
+	defer clientProxy.Close()
+	defer clientPeer.Close()
+	defer upstreamProxy.Close()
+	defer upstreamPeer.Close()
+	sess := chsession.New(18, clientProxy)
+	sess.Client().SetRevision(deferredTestRev)
+	upstream := chproto.NewCodec(upstreamPeer, chproto.DirToUpstream)
+	upstream.SetRevision(deferredTestRev)
+	if err := sess.BindUpstream(context.Background(), upstream); err != nil {
+		t.Fatalf("bind upstream: %v", err)
+	}
+	h := &queryOnlyHooks{host: newQueryOnlyHost(t, func(context.Context, *chproto.Query) (plugin.SnapshotQueryHostAdmission, error) {
+		return plugin.SnapshotQueryHostAdmission{Run: func(context.Context) error { return errors.New("durable host failure") }, CancelClient: func() {}, MaxControlBytes: 1024}, nil
+	})}
+	r := NewRelay(sess, h, nil, nil)
+	done := make(chan error, 1)
+	go func() { done <- r.clientToUpstream(context.Background()) }()
+	if _, err := clientPeer.Write(encodeInsertQuery(t, "run-error-terminal", "INSERT INTO target SELECT 1")); err != nil {
+		t.Fatalf("write local Query: %v", err)
+	}
+	if exc := readServerException(t, clientPeer); exc.Message == "" {
+		t.Fatal("query-only failure returned an empty Exception")
+	}
+	writeFragmented(t, clientPeer, encodeEmptyClientData(t))
+	if err := <-done; err == nil || errors.Is(err, io.EOF) {
+		t.Fatalf("client loop=%v, want terminal fail-closed error", err)
+	}
+	_ = upstreamProxy.SetReadDeadline(time.Now().Add(25 * time.Millisecond))
+	if _, err := upstreamProxy.Read(make([]byte, 1)); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("pipelined marker after Run error reached upstream: %v", err)
+	}
+	if !r.queryOnlySessionIsTerminal() {
+		t.Fatal("Run error did not mark query-only session terminal")
+	}
 }
 
 func TestRelayQueryOnly_CancelThenNextQueryClosesSession(t *testing.T) {

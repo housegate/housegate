@@ -110,6 +110,15 @@ func (r *Relay) runQueryOnly(ctx context.Context, qctx *plugin.QueryContext) err
 		// reader but never reuse this connection after this local success.
 		return nil
 	}
+	fail := func(err error) error {
+		// Once the host execution lane has claimed this query, a local failure
+		// has the same packet-attribution ambiguity as local success. A client
+		// may already have pipelined a terminator or Cancel, so never hand a
+		// later packet back to the ordinary relay path.
+		r.takeActiveQuery()
+		r.markQueryOnlySessionTerminal()
+		return err
+	}
 	for {
 		if cancelled {
 			return finishCanceled(false)
@@ -117,10 +126,9 @@ func (r *Relay) runQueryOnly(ctx context.Context, qctx *plugin.QueryContext) err
 		select {
 		case err := <-done:
 			if err != nil {
-				r.takeActiveQuery()
 				// The caller owns the single client Exception and the matching
 				// abort/complete hooks for a failed local execution.
-				return fmt.Errorf("query-only execution: %w", err)
+				return fail(fmt.Errorf("query-only execution: %w", err))
 			}
 			return finishSuccess()
 		default:
@@ -129,18 +137,17 @@ func (r *Relay) runQueryOnly(ctx context.Context, qctx *plugin.QueryContext) err
 		ready, err := r.sess.Client().WaitForPacketStart(queryOnlyControlPoll)
 		if err != nil {
 			cancelClient()
-			r.takeActiveQuery()
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrClosedPipe) {
-				return io.EOF
+				return fail(io.EOF)
 			}
-			return fmt.Errorf("wait for query-only control packet: %w", err)
+			return fail(fmt.Errorf("wait for query-only control packet: %w", err))
 		}
 		if !ready {
 			continue
 		}
 		pkt, err := readControl()
 		if err != nil {
-			return err
+			return fail(err)
 		}
 		if pkt.Type == uint64(chproto.ClientCancelCode) {
 			cancelClient()
@@ -148,14 +155,12 @@ func (r *Relay) runQueryOnly(ctx context.Context, qctx *plugin.QueryContext) err
 		}
 		if consumed, err := consumeQueryOnlyMarker(pkt, r.sess.Client().Compression(), &markerSeen); err != nil {
 			cancelClient()
-			r.takeActiveQuery()
-			return err
+			return fail(err)
 		} else if consumed {
 			continue
 		}
 		cancelClient()
-		r.takeActiveQuery()
-		return fmt.Errorf("client packet %s during query-only execution", clientPacketName(pkt.Type))
+		return fail(fmt.Errorf("client packet %s during query-only execution", clientPacketName(pkt.Type)))
 	}
 }
 
