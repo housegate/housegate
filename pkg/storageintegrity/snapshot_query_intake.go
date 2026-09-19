@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/housegate/housegate/pkg/auth"
 	"github.com/housegate/housegate/pkg/replay"
@@ -34,21 +36,37 @@ type SnapshotQueryIntentReconciler interface {
 }
 
 type SnapshotQueryIntakeOptions struct {
-	Journal    SnapshotQueryJournal
-	Sequencer  QuerySequencer
-	Validator  SnapshotQueryEnvelopeValidator
-	Reconciler SnapshotQueryIntentReconciler
+	Journal                SnapshotQueryJournal
+	Sequencer              QuerySequencer
+	Validator              SnapshotQueryEnvelopeValidator
+	Reconciler             SnapshotQueryIntentReconciler
+	RecoveryAttemptTimeout time.Duration
 }
 
 // SnapshotQueryIntake is intentionally inert until explicitly constructed and
 // injected. Production wiring is out of scope for this core.
-type SnapshotQueryIntake struct{ opts SnapshotQueryIntakeOptions }
+type SnapshotQueryIntake struct {
+	opts SnapshotQueryIntakeOptions
+
+	statementLocksMu sync.Mutex
+	statementLocks   map[string]*snapshotQueryStatementLock
+}
+
+type snapshotQueryStatementLock struct {
+	gate chan struct{}
+	refs int
+}
+
+const defaultSnapshotQueryRecoveryAttemptTimeout = 30 * time.Second
 
 func NewSnapshotQueryIntake(opts SnapshotQueryIntakeOptions) (*SnapshotQueryIntake, error) {
 	if opts.Journal == nil || opts.Sequencer == nil || opts.Validator == nil || opts.Reconciler == nil {
 		return nil, errors.New("storageintegrity: snapshot query intake requires journal, sequencer, validator and reconciler")
 	}
-	return &SnapshotQueryIntake{opts: opts}, nil
+	if opts.RecoveryAttemptTimeout <= 0 {
+		opts.RecoveryAttemptTimeout = defaultSnapshotQueryRecoveryAttemptTimeout
+	}
+	return &SnapshotQueryIntake{opts: opts, statementLocks: make(map[string]*snapshotQueryStatementLock)}, nil
 }
 
 type SnapshotQueryIntakeResult struct {
@@ -68,13 +86,25 @@ func (s *SnapshotQueryIntake) Submit(ctx context.Context, env replay.SnapshotQue
 		return SnapshotQueryIntakeResult{}, err
 	}
 	statementID := env.Input.Binding.StatementID
+	release, err := s.lockStatement(ctx, statementID)
+	if err != nil {
+		return SnapshotQueryIntakeResult{}, err
+	}
+	defer release()
+	return s.submitLocked(ctx, env, gate)
+}
+
+func (s *SnapshotQueryIntake) submitLocked(ctx context.Context, env replay.SnapshotQueryEnvelope, gate SnapshotQuerySubmitGate) (SnapshotQueryIntakeResult, error) {
+	statementID := env.Input.Binding.StatementID
 	if old, found, err := s.opts.Journal.Load(ctx, statementID); err != nil {
 		return SnapshotQueryIntakeResult{}, err
 	} else if found {
 		if err := matchSnapshotQueryIdentity(old, env); err != nil {
 			return SnapshotQueryIntakeResult{}, err
 		}
-		return s.recoverRecord(ctx, old)
+		serviceCtx, cancel := s.recoveryAttemptContext()
+		defer cancel()
+		return s.recoverRecord(serviceCtx, old)
 	}
 	rec := newSnapshotQueryRecord(env)
 	if err := s.opts.Journal.Save(ctx, rec); err != nil {
@@ -91,14 +121,19 @@ func (s *SnapshotQueryIntake) Submit(ctx context.Context, env replay.SnapshotQue
 		}
 		return SnapshotQueryIntakeResult{}, s.reconcileIntent(ctx, rec)
 	}
+	// A gate win transfers ownership from the caller/relay to intake. Do not
+	// inherit a later client cancellation while persisting authorization or
+	// reconciling the sequencer result.
+	serviceCtx, cancel := s.recoveryAttemptContext()
+	defer cancel()
 	rec.Stage = SnapshotQueryStageSubmitAuthorized
 	rec.LaunchAuthorization = &SnapshotQueryLaunchAuthorization{InputRoot: env.InputRoot, OriginalJWSHash: replay.DigestString(env.UserJWS), ReservationID: env.Input.Binding.ReservationID, FencingGeneration: env.Input.Binding.FencingGeneration}
-	if err := s.opts.Journal.Save(ctx, rec); err != nil {
+	if err := s.opts.Journal.Save(serviceCtx, rec); err != nil {
 		// Persistence may be uncertain. Never issue Submit in this process; only
 		// reconcile the last definitely durable intent boundary.
-		return SnapshotQueryIntakeResult{}, errors.Join(err, s.reconcileIntent(ctx, newSnapshotQueryRecordAtIntent(env)))
+		return SnapshotQueryIntakeResult{}, errors.Join(err, s.reconcileIntent(serviceCtx, newSnapshotQueryRecordAtIntent(env)))
 	}
-	return s.submitAuthorized(ctx, rec)
+	return s.submitAuthorized(serviceCtx, rec)
 }
 
 // Recover never promotes intent-only work into submission. A NotFound result is
@@ -109,10 +144,31 @@ func (s *SnapshotQueryIntake) Recover(ctx context.Context) error {
 		return err
 	}
 	for _, rec := range records {
-		if err := validateSnapshotQueryEnvelope(ctx, s.opts.Validator, rec.Envelope); err != nil {
+		release, err := s.lockStatement(ctx, rec.StatementID)
+		if err != nil {
+			return err
+		}
+		// List is only discovery. Reload under the statement lock so a Submit
+		// that completed while Recover was waiting cannot be replayed from a
+		// stale pre-sequenced record.
+		rec, found, err := s.opts.Journal.Load(ctx, rec.StatementID)
+		if err != nil {
+			release()
+			return err
+		}
+		if !found {
+			release()
+			continue
+		}
+		if err := validateSnapshotQueryEnvelopeHistorical(ctx, rec.Envelope); err != nil {
+			release()
 			return fmt.Errorf("storageintegrity: recover snapshot query %s: %w", rec.StatementID, err)
 		}
-		if _, err := s.recoverRecord(ctx, rec); err != nil {
+		attemptCtx, cancel := s.recoveryAttemptContext()
+		_, err = s.recoverRecord(attemptCtx, rec)
+		cancel()
+		release()
+		if err != nil {
 			return fmt.Errorf("storageintegrity: recover snapshot query %s: %w", rec.StatementID, err)
 		}
 	}
@@ -125,6 +181,8 @@ func (s *SnapshotQueryIntake) recoverRecord(ctx context.Context, rec SnapshotQue
 		return SnapshotQueryIntakeResult{}, s.reconcileIntent(ctx, rec)
 	case SnapshotQueryStageSequenced:
 		return resultFromSubmit(rec.StatementID, rec.Envelope.InputRoot, rec.Submit), nil
+	case SnapshotQueryStageRejected:
+		return SnapshotQueryIntakeResult{}, snapshotQueryAdmissionError(rec.Submit)
 	case SnapshotQueryStageSubmitAuthorized, SnapshotQueryStageSubmitUnknown:
 		if err := verifyLaunchAuthorization(rec); err != nil {
 			return SnapshotQueryIntakeResult{}, err
@@ -134,6 +192,9 @@ func (s *SnapshotQueryIntake) recoverRecord(ctx context.Context, rec SnapshotQue
 			return SnapshotQueryIntakeResult{}, err
 		}
 		if status.Found {
+			if err := validateSnapshotQueryAccepted(rec.Envelope, status.Accepted); err != nil {
+				return SnapshotQueryIntakeResult{}, err
+			}
 			rec.Stage, rec.Submit, rec.HasSubmit, rec.SubmitUnknown = SnapshotQueryStageSequenced, status.Accepted, true, false
 			if err := s.opts.Journal.Save(ctx, rec); err != nil {
 				return SnapshotQueryIntakeResult{}, err
@@ -155,9 +216,13 @@ func (s *SnapshotQueryIntake) submitAuthorized(ctx context.Context, rec Snapshot
 		}
 		return SnapshotQueryIntakeResult{}, err
 	}
-	if result.InputRoot != rec.Envelope.InputRoot {
-		err := errors.New("storageintegrity: sequencer submit result input root mismatch")
-		rec.Stage, rec.SubmitUnknown = SnapshotQueryStageSubmitUnknown, true
+	if err := validateSnapshotQueryAccepted(rec.Envelope, result); err != nil {
+		rec.Submit = result
+		if isSnapshotQueryTerminalRejection(result.AdmissionCode) {
+			rec.Stage, rec.HasSubmit, rec.SubmitUnknown = SnapshotQueryStageRejected, true, false
+		} else {
+			rec.Stage, rec.HasSubmit, rec.SubmitUnknown = SnapshotQueryStageSubmitUnknown, true, true
+		}
 		if saveErr := s.opts.Journal.Save(ctx, rec); saveErr != nil {
 			return SnapshotQueryIntakeResult{}, errors.Join(err, saveErr)
 		}
@@ -168,6 +233,41 @@ func (s *SnapshotQueryIntake) submitAuthorized(ctx context.Context, rec Snapshot
 		return SnapshotQueryIntakeResult{}, err
 	}
 	return resultFromSubmit(rec.StatementID, rec.Envelope.InputRoot, result), nil
+}
+
+func (s *SnapshotQueryIntake) recoveryAttemptContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), s.opts.RecoveryAttemptTimeout)
+}
+
+func (s *SnapshotQueryIntake) lockStatement(ctx context.Context, statementID string) (func(), error) {
+	s.statementLocksMu.Lock()
+	lock := s.statementLocks[statementID]
+	if lock == nil {
+		lock = &snapshotQueryStatementLock{gate: make(chan struct{}, 1)}
+		s.statementLocks[statementID] = lock
+	}
+	lock.refs++
+	s.statementLocksMu.Unlock()
+
+	select {
+	case lock.gate <- struct{}{}:
+	case <-ctx.Done():
+		s.releaseStatementLock(statementID, lock, false)
+		return nil, ctx.Err()
+	}
+	return func() { s.releaseStatementLock(statementID, lock, true) }, nil
+}
+
+func (s *SnapshotQueryIntake) releaseStatementLock(statementID string, lock *snapshotQueryStatementLock, held bool) {
+	if held {
+		<-lock.gate
+	}
+	s.statementLocksMu.Lock()
+	lock.refs--
+	if lock.refs == 0 && s.statementLocks[statementID] == lock {
+		delete(s.statementLocks, statementID)
+	}
+	s.statementLocksMu.Unlock()
 }
 
 func (s *SnapshotQueryIntake) reconcileIntent(ctx context.Context, rec SnapshotQueryJournalRecord) error {
@@ -212,6 +312,31 @@ func validateSnapshotQueryEnvelope(ctx context.Context, validator SnapshotQueryE
 	return nil
 }
 
+// validateSnapshotQueryEnvelopeHistorical deliberately does not apply ingress
+// freshness or today's signer allowlist. A durable accepted/authorized record
+// must remain cryptographically verifiable after the original JWS has aged out
+// or policy has changed.
+func validateSnapshotQueryEnvelopeHistorical(ctx context.Context, env replay.SnapshotQueryEnvelope) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	root, err := replay.SnapshotQueryInputRoot(env.Input)
+	if err != nil {
+		return fmt.Errorf("storageintegrity: invalid snapshot query input: %w", err)
+	}
+	if root != env.InputRoot {
+		return errors.New("storageintegrity: snapshot query input root mismatch")
+	}
+	if env.UserJWS == "" {
+		return errors.New("storageintegrity: snapshot query original user JWS is required")
+	}
+	_, err = auth.VerifyStatementV3Signature(env.UserJWS, auth.JWSStatementPayloadV3{Purpose: auth.StatementPurposeV3, Binding: env.Input.Binding, InputRoot: root})
+	if err != nil {
+		return fmt.Errorf("storageintegrity: verify historical snapshot query JWS: %w", err)
+	}
+	return nil
+}
+
 func matchSnapshotQueryIdentity(rec SnapshotQueryJournalRecord, env replay.SnapshotQueryEnvelope) error {
 	if rec.Envelope.InputRoot != env.InputRoot || rec.Envelope.UserJWS != env.UserJWS {
 		return errors.New("storageintegrity: snapshot query identity conflicts with durable record")
@@ -225,6 +350,35 @@ func verifyLaunchAuthorization(rec SnapshotQueryJournalRecord) error {
 		return errors.New("storageintegrity: snapshot query durable launch authorization does not bind the original envelope")
 	}
 	return nil
+}
+
+const snapshotQueryAdmissionAccepted uint32 = 1
+
+func validateSnapshotQueryAccepted(env replay.SnapshotQueryEnvelope, result replay.SnapshotQuerySubmitResult) error {
+	if result.AdmissionCode != snapshotQueryAdmissionAccepted {
+		return snapshotQueryAdmissionError(result)
+	}
+	binding := env.Input.Binding
+	reservation := result.Reservation
+	if result.InputRoot != env.InputRoot || result.StatementSeq == 0 || result.BlockSeq == 0 || result.SourceNode == "" ||
+		reservation.ReservationID != binding.ReservationID || reservation.FencingGeneration != binding.FencingGeneration ||
+		reservation.ClientAccount != binding.ClientAccount || reservation.StatementID != binding.StatementID ||
+		reservation.ReadSnapshot != binding.ReadSnapshot || reservation.ExecutorProfileID != binding.ExecutorProfileID ||
+		reservation.QueryProfileID != binding.QueryProfileID {
+		return errors.New("storageintegrity: sequencer accepted result identity mismatch")
+	}
+	return nil
+}
+
+func isSnapshotQueryTerminalRejection(code uint32) bool {
+	return code >= 2 && code <= 8
+}
+
+func snapshotQueryAdmissionError(result replay.SnapshotQuerySubmitResult) error {
+	if isSnapshotQueryTerminalRejection(result.AdmissionCode) {
+		return fmt.Errorf("storageintegrity: sequencer rejected snapshot query admission code %d: %s", result.AdmissionCode, result.Message)
+	}
+	return fmt.Errorf("storageintegrity: sequencer returned unknown snapshot query admission code %d", result.AdmissionCode)
 }
 
 func resultFromSubmit(statementID, inputRoot string, submit replay.SnapshotQuerySubmitResult) SnapshotQueryIntakeResult {

@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/housegate/housegate/pkg/auth"
 	"github.com/housegate/housegate/pkg/replay"
@@ -28,7 +30,9 @@ func (j *snapshotQueryMemoryJournal) List(_ context.Context) ([]SnapshotQueryJou
 	return out, nil
 }
 func (j *snapshotQueryMemoryJournal) Save(_ context.Context, r SnapshotQueryJournalRecord) error {
-	*j.events = append(*j.events, "persist_"+string(r.Stage))
+	if j.events != nil {
+		*j.events = append(*j.events, "persist_"+string(r.Stage))
+	}
 	if r.Stage == j.failStage {
 		return errors.New("injected fsync failure")
 	}
@@ -42,7 +46,9 @@ type snapshotQueryFakeGate struct {
 }
 
 func (g snapshotQueryFakeGate) TryStart() bool {
-	*g.events = append(*g.events, "TryStart")
+	if g.events != nil {
+		*g.events = append(*g.events, "TryStart")
+	}
 	return g.win
 }
 
@@ -52,7 +58,9 @@ type snapshotQueryFakeValidator struct {
 }
 
 func (v snapshotQueryFakeValidator) ValidateStatementV3(_ string, want auth.JWSStatementPayloadV3) (string, error) {
-	*v.events = append(*v.events, "validate")
+	if v.events != nil {
+		*v.events = append(*v.events, "validate")
+	}
 	if want.Purpose != auth.StatementPurposeV3 {
 		return "", errors.New("missing snapshot query statement purpose")
 	}
@@ -68,18 +76,26 @@ type snapshotQueryFakeSequencer struct {
 	lookup    int
 	status    replay.SnapshotQueryStatus
 	submitErr error
+	result    *replay.SnapshotQuerySubmitResult
 }
 
 func (s *snapshotQueryFakeSequencer) SubmitSnapshotQuery(_ context.Context, env replay.SnapshotQueryEnvelope) (replay.SnapshotQuerySubmitResult, error) {
-	*s.events = append(*s.events, "submit")
+	if s.events != nil {
+		*s.events = append(*s.events, "submit")
+	}
 	s.submit++
 	if s.submitErr != nil {
 		return replay.SnapshotQuerySubmitResult{}, s.submitErr
 	}
-	return replay.SnapshotQuerySubmitResult{InputRoot: env.InputRoot, BlockSeq: 7}, nil
+	if s.result != nil {
+		return *s.result, nil
+	}
+	return snapshotQueryAcceptedResult(env), nil
 }
 func (s *snapshotQueryFakeSequencer) LookupSnapshotQuery(_ context.Context, _, _, _ string) (replay.SnapshotQueryStatus, error) {
-	*s.events = append(*s.events, "lookup_submit")
+	if s.events != nil {
+		*s.events = append(*s.events, "lookup_submit")
+	}
 	s.lookup++
 	return s.status, nil
 }
@@ -90,7 +106,9 @@ type snapshotQueryFakeReconciler struct {
 }
 
 func (r *snapshotQueryFakeReconciler) ReconcileSnapshotQueryIntent(_ context.Context, _ SnapshotQueryJournalRecord, _ replay.SnapshotQueryStatus) error {
-	*r.events = append(*r.events, "reconcile")
+	if r.events != nil {
+		*r.events = append(*r.events, "reconcile")
+	}
 	r.calls++
 	return nil
 }
@@ -101,11 +119,202 @@ func newSnapshotQueryIntakeFixture(t *testing.T) (*SnapshotQueryIntake, replay.S
 	journal := &snapshotQueryMemoryJournal{records: map[string]SnapshotQueryJournalRecord{}, events: &events}
 	sequencer := &snapshotQueryFakeSequencer{events: &events}
 	reconciler := &snapshotQueryFakeReconciler{events: &events}
+	env := snapshotQueryEnvelopeFixture(t)
+	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.Input.Binding.ClientAccount = signer.Address()
+	env.Input.Binding.StatementID = signer.Address() + ":1:nonce"
+	root, err := replay.SnapshotQueryInputRoot(env.Input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.InputRoot = root
+	env.UserJWS, err = signer.SignStatementV3(auth.JWSStatementPayloadV3{Purpose: auth.StatementPurposeV3, Binding: env.Input.Binding, InputRoot: env.InputRoot})
+	if err != nil {
+		t.Fatal(err)
+	}
 	intake, err := NewSnapshotQueryIntake(SnapshotQueryIntakeOptions{Journal: journal, Sequencer: sequencer, Validator: snapshotQueryFakeValidator{events: &events}, Reconciler: reconciler})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return intake, snapshotQueryEnvelopeFixture(t), &events, journal, sequencer, reconciler
+	return intake, env, &events, journal, sequencer, reconciler
+}
+
+func snapshotQueryAcceptedResult(env replay.SnapshotQueryEnvelope) replay.SnapshotQuerySubmitResult {
+	b := env.Input.Binding
+	return replay.SnapshotQuerySubmitResult{
+		AdmissionCode: snapshotQueryAdmissionAccepted,
+		StatementSeq:  1,
+		BlockSeq:      7,
+		SourceNode:    "source",
+		InputRoot:     env.InputRoot,
+		Reservation: replay.SnapshotQueryReservation{
+			ReservationID: b.ReservationID, FencingGeneration: b.FencingGeneration,
+			ClientAccount: b.ClientAccount, StatementID: b.StatementID,
+			ReadSnapshot: b.ReadSnapshot, ExecutorProfileID: b.ExecutorProfileID,
+			QueryProfileID: b.QueryProfileID,
+		},
+	}
+}
+
+type snapshotQueryBlockingAuthorizedJournal struct {
+	*snapshotQueryMemoryJournal
+	entered chan struct{}
+	release <-chan struct{}
+}
+
+func (j *snapshotQueryBlockingAuthorizedJournal) Save(ctx context.Context, rec SnapshotQueryJournalRecord) error {
+	if rec.Stage == SnapshotQueryStageSubmitAuthorized {
+		select {
+		case j.entered <- struct{}{}:
+		default:
+		}
+		<-j.release
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	return j.snapshotQueryMemoryJournal.Save(ctx, rec)
+}
+
+func TestSnapshotQueryIntakeSerializesSubmitAndCleansStatementLock(t *testing.T) {
+	intake, env, _, journal, sequencer, reconciler := newSnapshotQueryIntakeFixture(t)
+	intake.opts.Validator = snapshotQueryFakeValidator{}
+	journal.events = nil
+	sequencer.events = nil
+	reconciler.events = nil
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := intake.Submit(context.Background(), env, snapshotQueryFakeGate{win: true})
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if sequencer.submit != 1 {
+		t.Fatalf("submit=%d, want one serialized submission", sequencer.submit)
+	}
+	intake.statementLocksMu.Lock()
+	locks := len(intake.statementLocks)
+	intake.statementLocksMu.Unlock()
+	if locks != 0 {
+		t.Fatalf("statement locks retained after calls: %d", locks)
+	}
+}
+
+func TestSnapshotQueryIntakeGateWinUsesIntakeOwnedContext(t *testing.T) {
+	intake, env, events, baseJournal, sequencer, reconciler := newSnapshotQueryIntakeFixture(t)
+	release := make(chan struct{})
+	journal := &snapshotQueryBlockingAuthorizedJournal{snapshotQueryMemoryJournal: baseJournal, entered: make(chan struct{}, 1), release: release}
+	intake.opts.Journal = journal
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := intake.Submit(ctx, env, snapshotQueryFakeGate{events: events, win: true})
+		done <- err
+	}()
+	select {
+	case <-journal.entered:
+	case <-time.After(time.Second):
+		t.Fatal("Submit did not reach durable authorization")
+	}
+	cancel()
+	close(release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("caller cancellation reversed gate winner: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Submit did not complete")
+	}
+	if sequencer.submit != 1 || reconciler.calls != 0 {
+		t.Fatalf("submit=%d reconcile=%d", sequencer.submit, reconciler.calls)
+	}
+}
+
+func TestSnapshotQueryIntakeRecoverAcceptsExpiredHistoricalJWS(t *testing.T) {
+	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := snapshotQueryEnvelopeForAccount(t, signer.Address())
+	env.UserJWS, err = signer.SignStatementV3(auth.JWSStatementPayloadV3{Purpose: auth.StatementPurposeV3, Iat: 1, Binding: env.Input.Binding, InputRoot: env.InputRoot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := []string{}
+	journal := &snapshotQueryMemoryJournal{records: map[string]SnapshotQueryJournalRecord{}, events: &events}
+	rec := newSnapshotQueryRecord(env)
+	rec.Stage = SnapshotQueryStageSubmitUnknown
+	rec.LaunchAuthorization = snapshotQueryLaunchAuthorization(env)
+	journal.records[rec.StatementID] = rec
+	sequencer := &snapshotQueryFakeSequencer{events: &events, status: replay.SnapshotQueryStatus{Found: true, Accepted: snapshotQueryAcceptedResult(env)}}
+	// This validator would reject the old token for both freshness and policy;
+	// recovery intentionally uses only the pure historical verifier.
+	validator := auth.NewEthValidator([]string{"0x0000000000000000000000000000000000000001"}, time.Second, true, false, "", nil)
+	intake, err := NewSnapshotQueryIntake(SnapshotQueryIntakeOptions{Journal: journal, Sequencer: sequencer, Validator: validator, Reconciler: &snapshotQueryFakeReconciler{events: &events}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := intake.Recover(context.Background()); err != nil {
+		t.Fatalf("historical recovery rejected cryptographically valid JWS: %v", err)
+	}
+	if got := journal.records[rec.StatementID].Stage; got != SnapshotQueryStageSequenced {
+		t.Fatalf("stage=%q, want Sequenced", got)
+	}
+}
+
+func TestSnapshotQueryIntakeRecoverFoundRequiresAcceptedIdentity(t *testing.T) {
+	intake, env, _, journal, sequencer, _ := newSnapshotQueryIntakeFixture(t)
+	rec := newSnapshotQueryRecord(env)
+	rec.Stage = SnapshotQueryStageSubmitUnknown
+	rec.LaunchAuthorization = snapshotQueryLaunchAuthorization(env)
+	journal.records[rec.StatementID] = rec
+	bad := snapshotQueryAcceptedResult(env)
+	bad.Reservation.FencingGeneration++
+	sequencer.status = replay.SnapshotQueryStatus{Found: true, Accepted: bad}
+	if err := intake.Recover(context.Background()); err == nil {
+		t.Fatal("mismatched Found accepted identity was sequenced")
+	}
+	if got := journal.records[rec.StatementID].Stage; got != SnapshotQueryStageSubmitUnknown {
+		t.Fatalf("stage=%q, want unchanged SubmitUnknown", got)
+	}
+}
+
+func TestSnapshotQueryIntakeNeverSequencesRejectedOrUnknownAdmission(t *testing.T) {
+	for _, code := range []uint32{2, 99} {
+		t.Run(string(rune(code)), func(t *testing.T) {
+			intake, env, _, journal, sequencer, _ := newSnapshotQueryIntakeFixture(t)
+			result := snapshotQueryAcceptedResult(env)
+			result.AdmissionCode = code
+			sequencer.result = &result
+			if _, err := intake.Submit(context.Background(), env, snapshotQueryFakeGate{events: &[]string{}, win: true}); err == nil {
+				t.Fatalf("admission code %d accepted", code)
+			}
+			got := journal.records[env.Input.Binding.StatementID]
+			if got.Stage == SnapshotQueryStageSequenced {
+				t.Fatalf("admission code %d persisted as Sequenced", code)
+			}
+			if code == 2 && got.Stage != SnapshotQueryStageRejected {
+				t.Fatalf("rejection stage=%q, want Rejected", got.Stage)
+			}
+			if code == 99 && got.Stage != SnapshotQueryStageSubmitUnknown {
+				t.Fatalf("unknown stage=%q, want SubmitUnknown", got.Stage)
+			}
+		})
+	}
 }
 
 func TestSnapshotQueryIntakeSubmitPersistsAuthorizationBeforeSubmit(t *testing.T) {
@@ -150,7 +359,7 @@ func TestSnapshotQueryIntakeIntentOnlyRecoveryDoesNotSubmitAfterNotFound(t *test
 	if sequencer.submit != 0 || sequencer.lookup != 1 || reconciler.calls != 1 {
 		t.Fatalf("submit=%d lookup=%d reconcile=%d, want 0/1/1", sequencer.submit, sequencer.lookup, reconciler.calls)
 	}
-	if !reflect.DeepEqual(*events, []string{"validate", "lookup_submit", "reconcile"}) {
+	if !reflect.DeepEqual(*events, []string{"lookup_submit", "reconcile"}) {
 		t.Fatalf("events = %v", *events)
 	}
 }
@@ -296,7 +505,7 @@ func TestSnapshotQueryIntakePhasePortAuthorizationPersistenceFailureRecoversWith
 	if sequencer.submit != 0 || sequencer.lookup != 2 || reconciler.calls != 2 {
 		t.Fatalf("after restart submit=%d lookup=%d reconcile=%d, want 0/2/2", sequencer.submit, sequencer.lookup, reconciler.calls)
 	}
-	want := []string{"validate", "persist_Signed", "persist_SubmitIntent", "persist_SubmitAuthorized", "persist_SubmitAuthorizationUnknown", "lookup_submit", "reconcile", "validate", "lookup_submit", "reconcile"}
+	want := []string{"validate", "persist_Signed", "persist_SubmitIntent", "persist_SubmitAuthorized", "persist_SubmitAuthorizationUnknown", "lookup_submit", "reconcile", "lookup_submit", "reconcile"}
 	if !reflect.DeepEqual(*events, want) {
 		t.Fatalf("events = %v, want %v", *events, want)
 	}
@@ -377,7 +586,7 @@ func TestSnapshotQueryIntakePhasePortRecoveredIntentNeverSubmits(t *testing.T) {
 	if sequencer.submit != 0 || sequencer.lookup != 1 || reconciler.calls != 1 {
 		t.Fatalf("submit=%d lookup=%d reconcile=%d, want 0/1/1", sequencer.submit, sequencer.lookup, reconciler.calls)
 	}
-	want := []string{"validate", "validate", "lookup_submit", "reconcile"}
+	want := []string{"validate", "lookup_submit", "reconcile"}
 	if !reflect.DeepEqual(*events, want) {
 		t.Fatalf("events = %v, want %v", *events, want)
 	}

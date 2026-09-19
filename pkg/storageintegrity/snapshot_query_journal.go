@@ -39,8 +39,12 @@ const (
 	SnapshotQueryStageSubmitAuthorizationUnknown SnapshotQueryJournalStage = "SubmitAuthorizationUnknown"
 	SnapshotQueryStageSubmitUnknown              SnapshotQueryJournalStage = "SubmitUnknown"
 	SnapshotQueryStageSequenced                  SnapshotQueryJournalStage = "Sequenced"
-	SnapshotQueryStageCancelPending              SnapshotQueryJournalStage = "CancelPending"
-	SnapshotQueryStageReleased                   SnapshotQueryJournalStage = "Released"
+	// SnapshotQueryStageRejected records a deterministic remote refusal. It is
+	// terminal for submission: recovery must never mistake a refusal for an
+	// accepted sequence or retry it.
+	SnapshotQueryStageRejected      SnapshotQueryJournalStage = "Rejected"
+	SnapshotQueryStageCancelPending SnapshotQueryJournalStage = "CancelPending"
+	SnapshotQueryStageReleased      SnapshotQueryJournalStage = "Released"
 )
 
 // SnapshotQueryLaunchAuthorization records the exact durable right to issue a
