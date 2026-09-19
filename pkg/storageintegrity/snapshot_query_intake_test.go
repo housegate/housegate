@@ -470,6 +470,89 @@ func TestSnapshotQueryIntakePhasePortGateLostPersistsCancelBeforeReconcile(t *te
 	}
 }
 
+func TestSnapshotQueryIntakePhasePortPreparedCancelBeforeIntentIsDurableAndRecoverable(t *testing.T) {
+	events := []string{}
+	journal, err := NewFileSnapshotQueryJournal(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sequencer := &snapshotQueryFakeSequencer{events: &events}
+	reconciler := &snapshotQueryFakeReconciler{events: &events}
+	intake, err := NewSnapshotQueryIntake(SnapshotQueryIntakeOptions{
+		Journal: journal, Sequencer: sequencer, Validator: snapshotQueryFakeValidator{events: &events}, Reconciler: reconciler,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := snapshotQueryEnvelopeFixture(t)
+	signer, err := auth.NewRelaySigner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.Input.Binding.ClientAccount = signer.Address()
+	env.Input.Binding.StatementID = signer.Address() + ":1:prepared-cancel"
+	env.InputRoot, err = replay.SnapshotQueryInputRoot(env.Input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.UserJWS, err = signer.SignStatementV3(auth.JWSStatementPayloadV3{Purpose: auth.StatementPurposeV3, Binding: env.Input.Binding, InputRoot: env.InputRoot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := intake.NewSnapshotQueryIntakePhasePort(context.Background(), env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := port.Prepare(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// The D1 bridge can publish C4 ownership after Prepare but before the
+	// relay invokes PersistForwardIntent.  This must durably cancel the Signed
+	// record; it must not invent submit intent or issue a submit.
+	if err := port.CancelAndReconcile(context.Background()); err != nil {
+		t.Fatalf("cancel prepared record: %v", err)
+	}
+	if sequencer.submit != 0 || sequencer.lookup != 1 || reconciler.calls != 1 {
+		t.Fatalf("after cancel submit=%d lookup=%d reconcile=%d, want 0/1/1", sequencer.submit, sequencer.lookup, reconciler.calls)
+	}
+	rec, found, err := journal.Load(context.Background(), env.Input.Binding.StatementID)
+	if err != nil || !found {
+		t.Fatalf("load durable cancellation record found=%t err=%v", found, err)
+	}
+	if rec.Stage != SnapshotQueryStageCancelPending || !rec.PreSubmitCancelIntent || !rec.ReleaseReconciliationDebt {
+		t.Fatalf("prepared cancel record = %+v, want durable CancelPending reconciliation debt", rec)
+	}
+	if rec.LaunchAuthorization != nil || rec.SubmitUnknown || rec.HasSubmit {
+		t.Fatalf("prepared cancel fabricated submit state: %+v", rec)
+	}
+
+	// A new intake observes the durable cancellation boundary and can only
+	// repeat authoritative reconciliation.  It cannot turn Signed work into an
+	// intent or a submission, so there is no orphaned pre-intent C4 record.
+	restarted, err := NewSnapshotQueryIntake(intake.opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.Recover(context.Background()); err != nil {
+		t.Fatalf("recover prepared cancellation: %v", err)
+	}
+	if sequencer.submit != 0 || sequencer.lookup != 2 || reconciler.calls != 2 {
+		t.Fatalf("after restart submit=%d lookup=%d reconcile=%d, want 0/2/2", sequencer.submit, sequencer.lookup, reconciler.calls)
+	}
+	if rec, found, err = journal.Load(context.Background(), env.Input.Binding.StatementID); err != nil || !found {
+		t.Fatalf("reload cancellation record after restart found=%t err=%v", found, err)
+	}
+	if rec.Stage != SnapshotQueryStageCancelPending || !rec.PreSubmitCancelIntent || !rec.ReleaseReconciliationDebt {
+		t.Fatalf("restart changed cancellation boundary: %+v", rec)
+	}
+	// FileSnapshotQueryJournal deliberately has no test event stream; the Load
+	// assertions above prove its Signed-to-CancelPending writes were durable.
+	want := []string{"validate", "lookup_submit", "reconcile", "lookup_submit", "reconcile"}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %v, want %v", events, want)
+	}
+}
+
 func TestSnapshotQueryIntakePhasePortAuthorizationPersistenceFailureRecoversWithoutSubmit(t *testing.T) {
 	intake, env, events, journal, sequencer, reconciler := newSnapshotQueryIntakeFixture(t)
 	journal.failStage = SnapshotQueryStageSubmitAuthorized
