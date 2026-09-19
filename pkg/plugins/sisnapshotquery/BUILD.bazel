@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "sisnapshotquery",
+    srcs = ["plugin.go"],
+    importpath = "github.com/housegate/housegate/pkg/plugins/sisnapshotquery",
+    visibility = ["//visibility:public"],
+    deps = ["//pkg/auth", "//pkg/chproto", "//pkg/plugin", "//pkg/replay", "//pkg/storageintegrity", "@com_github_clickhouse_ch_go//proto"],
+)
+
+go_test(
+    name = "sisnapshotquery_test",
+    srcs = ["plugin_test.go"],
+    embed = [":sisnapshotquery"],
+)
