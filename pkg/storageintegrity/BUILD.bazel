@@ -22,6 +22,7 @@ go_library(
         "physical_table.go",
         "settings.go",
 		"snapshot_query_intake.go",
+		"snapshot_query_intake_phases.go",
 		"snapshot_query_journal.go",
         "sql.go",
     ],

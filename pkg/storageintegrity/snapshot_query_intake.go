@@ -121,7 +121,7 @@ func (s *SnapshotQueryIntake) Recover(ctx context.Context) error {
 
 func (s *SnapshotQueryIntake) recoverRecord(ctx context.Context, rec SnapshotQueryJournalRecord) (SnapshotQueryIntakeResult, error) {
 	switch rec.Stage {
-	case SnapshotQueryStageSigned, SnapshotQueryStageSubmitIntent, SnapshotQueryStageCancelPending, SnapshotQueryStageReleased:
+	case SnapshotQueryStageSigned, SnapshotQueryStageSubmitIntent, SnapshotQueryStageSubmitAuthorizationUnknown, SnapshotQueryStageCancelPending, SnapshotQueryStageReleased:
 		return SnapshotQueryIntakeResult{}, s.reconcileIntent(ctx, rec)
 	case SnapshotQueryStageSequenced:
 		return resultFromSubmit(rec.StatementID, rec.Envelope.InputRoot, rec.Submit), nil

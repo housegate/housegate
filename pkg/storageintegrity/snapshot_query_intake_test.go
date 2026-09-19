@@ -201,6 +201,199 @@ func TestSnapshotQueryIntakeUsesPurposeWithRealValidator(t *testing.T) {
 	}
 }
 
+func TestSnapshotQueryIntakePhasePortMapsAgentPrepareCallbacks(t *testing.T) {
+	intake, env, events, journal, sequencer, _ := newSnapshotQueryIntakeFixture(t)
+	port, err := intake.NewSnapshotQueryIntakePhasePort(context.Background(), env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callbacks := port.AgentPrepareCallbacks()
+	if err := callbacks.Prepare(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := callbacks.PersistForwardIntent(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := callbacks.AuthorizeForward(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := callbacks.SubmitAfterAuthorization(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.BlockSeq != 7 || sequencer.submit != 1 {
+		t.Fatalf("result=%+v submit=%d", got, sequencer.submit)
+	}
+	if rec := journal.records[env.Input.Binding.StatementID]; rec.Stage != SnapshotQueryStageSequenced {
+		t.Fatalf("stage = %q, want Sequenced", rec.Stage)
+	}
+	want := []string{"validate", "persist_Signed", "persist_SubmitIntent", "persist_SubmitAuthorized", "submit", "persist_Sequenced"}
+	if !reflect.DeepEqual(*events, want) {
+		t.Fatalf("events = %v, want %v", *events, want)
+	}
+}
+
+func TestSnapshotQueryIntakePhasePortGateLostPersistsCancelBeforeReconcile(t *testing.T) {
+	intake, env, events, journal, sequencer, reconciler := newSnapshotQueryIntakeFixture(t)
+	port, err := intake.NewSnapshotQueryIntakePhasePort(context.Background(), env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callbacks := port.AgentPrepareCallbacks()
+	if err := callbacks.Prepare(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := callbacks.PersistForwardIntent(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := callbacks.ReconcileCancel(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if sequencer.submit != 0 || reconciler.calls != 1 {
+		t.Fatalf("submit=%d reconcile=%d, want 0/1", sequencer.submit, reconciler.calls)
+	}
+	if rec := journal.records[env.Input.Binding.StatementID]; rec.Stage != SnapshotQueryStageCancelPending || !rec.PreSubmitCancelIntent || !rec.ReleaseReconciliationDebt {
+		t.Fatalf("cancel record = %+v", rec)
+	}
+	want := []string{"validate", "persist_Signed", "persist_SubmitIntent", "persist_CancelPending", "lookup_submit", "reconcile"}
+	if !reflect.DeepEqual(*events, want) {
+		t.Fatalf("events = %v, want %v", *events, want)
+	}
+}
+
+func TestSnapshotQueryIntakePhasePortAuthorizationPersistenceFailureRecoversWithoutSubmit(t *testing.T) {
+	intake, env, events, journal, sequencer, reconciler := newSnapshotQueryIntakeFixture(t)
+	journal.failStage = SnapshotQueryStageSubmitAuthorized
+	port, err := intake.NewSnapshotQueryIntakePhasePort(context.Background(), env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := port.Prepare(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := port.PersistSubmitIntent(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := port.AuthorizeSubmit(context.Background()); err == nil {
+		t.Fatal("authorization persistence failure accepted")
+	}
+	if sequencer.submit != 0 || reconciler.calls != 1 {
+		t.Fatalf("submit=%d reconcile=%d, want 0/1", sequencer.submit, reconciler.calls)
+	}
+	if rec := journal.records[env.Input.Binding.StatementID]; rec.Stage != SnapshotQueryStageSubmitAuthorizationUnknown || rec.SubmitUnknown {
+		t.Fatalf("record = %+v, want durable submit-authorization unknown", rec)
+	}
+
+	// A process restart with an authoritative NotFound must retain the
+	// ambiguity for reconciliation and must never turn it into a Submit retry.
+	restarted, err := NewSnapshotQueryIntake(intake.opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.Recover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if sequencer.submit != 0 || sequencer.lookup != 2 || reconciler.calls != 2 {
+		t.Fatalf("after restart submit=%d lookup=%d reconcile=%d, want 0/2/2", sequencer.submit, sequencer.lookup, reconciler.calls)
+	}
+	want := []string{"validate", "persist_Signed", "persist_SubmitIntent", "persist_SubmitAuthorized", "persist_SubmitAuthorizationUnknown", "lookup_submit", "reconcile", "validate", "lookup_submit", "reconcile"}
+	if !reflect.DeepEqual(*events, want) {
+		t.Fatalf("events = %v, want %v", *events, want)
+	}
+}
+
+func TestSnapshotQueryIntakePhasePortUnknownAuthorizationNeverSubmits(t *testing.T) {
+	intake, env, _, journal, sequencer, reconciler := newSnapshotQueryIntakeFixture(t)
+	port, err := intake.NewSnapshotQueryIntakePhasePort(context.Background(), env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := port.Prepare(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := port.PersistSubmitIntent(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := port.AuthorizeSubmit(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := port.PersistAuthorizationUnknownAndReconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if sequencer.submit != 0 || reconciler.calls != 1 {
+		t.Fatalf("submit=%d reconcile=%d, want 0/1", sequencer.submit, reconciler.calls)
+	}
+	if rec := journal.records[env.Input.Binding.StatementID]; rec.Stage != SnapshotQueryStageSubmitUnknown || !rec.SubmitUnknown {
+		t.Fatalf("record = %+v, want durable SubmitUnknown", rec)
+	}
+	if _, err := port.SubmitAfterAuthorization(context.Background()); err == nil {
+		t.Fatal("unknown authorization allowed submit")
+	}
+}
+
+func TestSnapshotQueryIntakePhasePortPhaseCallsAreIdempotent(t *testing.T) {
+	intake, env, events, _, sequencer, _ := newSnapshotQueryIntakeFixture(t)
+	port, err := intake.NewSnapshotQueryIntakePhasePort(context.Background(), env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, phase := range []func(context.Context) error{port.Prepare, port.Prepare, port.PersistSubmitIntent, port.PersistSubmitIntent, port.AuthorizeSubmit, port.AuthorizeSubmit} {
+		if err := phase(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := port.SubmitAfterAuthorization(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := port.SubmitAfterAuthorization(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if sequencer.submit != 1 {
+		t.Fatalf("submit = %d, want 1", sequencer.submit)
+	}
+	want := []string{"validate", "persist_Signed", "persist_SubmitIntent", "persist_SubmitAuthorized", "submit", "persist_Sequenced"}
+	if !reflect.DeepEqual(*events, want) {
+		t.Fatalf("events = %v, want %v", *events, want)
+	}
+}
+
+func TestSnapshotQueryIntakePhasePortRecoveredIntentNeverSubmits(t *testing.T) {
+	intake, env, events, journal, sequencer, reconciler := newSnapshotQueryIntakeFixture(t)
+	rec := newSnapshotQueryRecordAtIntent(env)
+	journal.records[rec.StatementID] = rec
+	port, err := intake.NewSnapshotQueryIntakePhasePort(context.Background(), env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := port.Prepare(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := port.SubmitAfterAuthorization(context.Background()); err == nil {
+		t.Fatal("recovered intent unexpectedly allowed submit")
+	}
+	if err := intake.Recover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if sequencer.submit != 0 || sequencer.lookup != 1 || reconciler.calls != 1 {
+		t.Fatalf("submit=%d lookup=%d reconcile=%d, want 0/1/1", sequencer.submit, sequencer.lookup, reconciler.calls)
+	}
+	want := []string{"validate", "validate", "lookup_submit", "reconcile"}
+	if !reflect.DeepEqual(*events, want) {
+		t.Fatalf("events = %v, want %v", *events, want)
+	}
+}
+
+func TestSnapshotQueryIntakePhasePortValidatesBeforeEffects(t *testing.T) {
+	intake, env, events, journal, sequencer, _ := newSnapshotQueryIntakeFixture(t)
+	env.InputRoot = "0xchanged"
+	if _, err := intake.NewSnapshotQueryIntakePhasePort(context.Background(), env); err == nil {
+		t.Fatal("invalid phase input accepted")
+	}
+	if sequencer.submit != 0 || len(journal.records) != 0 || len(*events) != 0 {
+		t.Fatalf("effects after invalid phase input: events=%v records=%v submit=%d", *events, journal.records, sequencer.submit)
+	}
+}
+
 func snapshotQueryEnvelopeFixture(t *testing.T) replay.SnapshotQueryEnvelope {
 	return snapshotQueryEnvelopeForAccount(t, "0xabc")
 }

@@ -33,10 +33,14 @@ const (
 	SnapshotQueryStageSigned           SnapshotQueryJournalStage = "Signed"
 	SnapshotQueryStageSubmitIntent     SnapshotQueryJournalStage = "SubmitIntent"
 	SnapshotQueryStageSubmitAuthorized SnapshotQueryJournalStage = "SubmitAuthorized"
-	SnapshotQueryStageSubmitUnknown    SnapshotQueryJournalStage = "SubmitUnknown"
-	SnapshotQueryStageSequenced        SnapshotQueryJournalStage = "Sequenced"
-	SnapshotQueryStageCancelPending    SnapshotQueryJournalStage = "CancelPending"
-	SnapshotQueryStageReleased         SnapshotQueryJournalStage = "Released"
+	// SnapshotQueryStageSubmitAuthorizationUnknown means the authorization
+	// durability result is indeterminate. Unlike SubmitUnknown, it never grants
+	// recovery authority to issue Submit: recovery may only lookup/reconcile.
+	SnapshotQueryStageSubmitAuthorizationUnknown SnapshotQueryJournalStage = "SubmitAuthorizationUnknown"
+	SnapshotQueryStageSubmitUnknown              SnapshotQueryJournalStage = "SubmitUnknown"
+	SnapshotQueryStageSequenced                  SnapshotQueryJournalStage = "Sequenced"
+	SnapshotQueryStageCancelPending              SnapshotQueryJournalStage = "CancelPending"
+	SnapshotQueryStageReleased                   SnapshotQueryJournalStage = "Released"
 )
 
 // SnapshotQueryLaunchAuthorization records the exact durable right to issue a
