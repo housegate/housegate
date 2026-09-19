@@ -1,0 +1,90 @@
+{
+  "schema": "housegate-ci2-native-hosted-v1",
+  "repository": "housegate/housegate",
+  "head_branch": "urwt/codex/issue-153-ci2-native",
+  "source": {
+    "commit": "ab9ec0a1c27e257f7d96be1e3011f6e5f274a609",
+    "tree": "3219ed991de31ada4e20ebd720aa192b15c04ca6",
+    "base": "50f0a6d9f95aa50e7b19af7efbb836a1b16b9c6f",
+    "ref": "refs/heads/urwt/codex/issue-153",
+    "delta": [".bazelrc", ".github/workflows/ci.yml", ".github/workflows/release.yml", "MODULE.bazel", "Makefile"],
+    "historical_bundle_sha256": "ce28c02652bc61fa3a35c0d2c99ae2032acf79de827e44b0016d10c4b930bc10",
+    "historical_bundle_bytes": 3709081,
+    "bundle_max_bytes": 8388608
+  },
+  "image": {
+    "reference": "gcr.io/bazel-public/bazel@sha256:4476bca3b2d6f49f30f4ab4dae5d11224db1a484cab2120b054fe6c2de5ccd12",
+    "id": "sha256:88d299f855cf04a627b9e37ef57e285f6dab29eea93ac9cdad115cb6fdce3644",
+    "size": 1065590879,
+    "os": "linux",
+    "architecture": "amd64",
+    "user": "ubuntu",
+    "entrypoint": ["/usr/local/bin/bazel"],
+    "workdir": "/home/ubuntu"
+  },
+  "resources": {
+    "host_cpu_min": 4,
+    "host_memory_min": 15000000000,
+    "available_memory_min": 13958643712,
+    "container_nano_cpus": 3000000000,
+    "container_memory": 12884901888,
+    "container_memory_swap": 12884901888,
+    "pids": 1024,
+    "shm": 67108864,
+    "ci2_tmpfs": 6442450944,
+    "tmp_tmpfs": 134217728,
+    "prepull_disk_min": 10737418240,
+    "precreate_disk_min": 8589934592,
+    "image_allocation_max": 3221225472,
+    "staging_max": 536870912,
+    "layer_max": 536870912,
+    "docker_logs_max": 41943040,
+    "container_evidence_max": 524288000,
+    "host_evidence_max": 536870912,
+    "archive_max": 1073741824,
+    "scratch_max": 1073741824,
+    "cold_cache_gc_target": 0
+  },
+  "workload_storage": {
+    "layout": "tmpfs-single-output-v1",
+    "output_user_root": "/ci2/cache/output-root",
+    "disk_cache": "disabled",
+    "disk_cache_sentinel": "/ci2/cache/disk",
+    "disk_cache_gc": "not-applicable"
+  },
+  "clocks": {
+    "job": 3900,
+    "preparation": 300,
+    "work": 3060,
+    "cleanup": 240,
+    "owner": 3300,
+    "qualification_step": 3360,
+    "archive": 180,
+    "transitions": 120,
+    "phases": [300, 300, 540, 840, 420, 420],
+    "termination": [20, 5, 30],
+    "shutdown": [20, 22, 24],
+    "stop": 10,
+    "remote_transport": [50, 80],
+    "host_transport": [60, 90]
+  },
+  "docker_endpoint": "unix:///var/run/docker.sock",
+  "admitted_host_tuples": [
+    {
+      "architecture": "x86_64",
+      "cgroup_driver": "systemd",
+      "cgroup_version": "2",
+      "client_version": "28.0.4",
+      "init_path": "/usr/libexec/docker/docker-init",
+      "init_sha256": "5fb35102eb8606dfe20aa755229becc81e6fdf3ba587d64b58dca51b79c0b36a",
+      "init_version": "tini version 0.19.0 - git.de40ad0",
+      "runner_image": "ubuntu24",
+      "runner_version": "20260907.300.1",
+      "server_version": "28.0.4",
+      "storage_driver": "overlay2"
+    }
+  ],
+  "historical_runtime_manifest_sha256": "d5c0a01bc0286cdf044e13eca40843ca9fae0562ea61d9b7a3f7792f44853036",
+  "native_manifest_policy": "Separate 13-entry native runtime manifest; bound alongside this profile in the workflow and immutable per-run receipts. Nine historical helpers are unchanged; native bootstrap, worker, container runner and toolchain verifier are explicitly reviewed derivatives.",
+  "native_fixture_authority": {"init_adoption": false, "github_cancellation": false}
+}

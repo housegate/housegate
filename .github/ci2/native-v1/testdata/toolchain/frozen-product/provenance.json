@@ -1,0 +1,26 @@
+{
+  "commit": "ab9ec0a1c27e257f7d96be1e3011f6e5f274a609",
+  "tree": "3219ed991de31ada4e20ebd720aa192b15c04ca6",
+  "sources": {
+    "MODULE.bazel": {
+      "blob": "f111b8dce7706d84fc64412e96956a296fb88fb5",
+      "bytes": 4218,
+      "sha256": "2651e4832f77ccfcabc1623bc897eb2045928fa3aa98299be6ce41d93ad34673"
+    },
+    "go.mod": {
+      "blob": "9413911a450c9a505e7db5d6e41c825d354e11d7",
+      "bytes": 5972,
+      "sha256": "3732c3e9151c3f738a94f191b89ed45d60b9841d394615699351a5693036af61"
+    },
+    "go.sum": {
+      "blob": "7e992ac6f585061d61975c44a92a130bef1e4899",
+      "bytes": 40257,
+      "sha256": "f7dba9e858ff4710343d56a1118fe5a668dd775957b2a2afbc1d7d19c765058d"
+    },
+    "third_party/com_github_ethereum_go_ethereum_secp256k1.patch": {
+      "blob": "f22dd3d7fb9e23372e048797f134a93e13af80d1",
+      "bytes": 1663,
+      "sha256": "5e4de698a8e72764c44f52104b1b9fdbf5351950b5d6e95d39aed698d1b09ad6"
+    }
+  }
+}

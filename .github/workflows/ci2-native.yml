@@ -1,0 +1,279 @@
+name: CI2 native carrier
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci2-native-carrier
+  cancel-in-progress: false
+
+env:
+  CI2_PROFILE_SHA256: b627e07010f1489d0a6c0250245c28eff7d787289b88f42dca89dab3452f96a0
+  CI2_NATIVE_MANIFEST_SHA256: 23bf899f12f6d0cca80532e49ec654c6bace739bab7f54be3dc878d9b24d0b94
+
+  CI2_CARRIER_HEAD: ${{ github.event.pull_request.head.sha }}
+  CI2_CHECKOUT_BOOTSTRAP: |
+    import hashlib,json,os,re,signal,stat,sys,time,urllib.parse,urllib.request
+    from pathlib import Path
+
+    OWNERS={
+        'ci2-watchdog-v16.py':'17ef41289b1a164ad978446649f0446527f388cc99ec6f342ba18ad748b622f9',
+        'ci2-host-diagnostics-v16.py':'e57393b408949214f4afebeb555227b47c7fc7f73374a7208312528360ce4944',
+    }
+    RUNTIME_NAMES=set(OWNERS)|{
+        'ci2-bazel-stall-v16.py','ci2-bounded-log-v16.py','ci2-enforce-output-bound-v16.py',
+        'ci2-homebrew-isolation-v16.py','ci2-phase-owner-v16.py','ci2-terminate-owned-v16.py',
+        'ci2-toolchain-evidence-v16.py','ci2-transfer-v16.py','run-linux-qualification-v16-container.sh',
+        'run-linux-qualification-native-v1.sh','run-linux-qualification-native-v1-worker.sh',
+    }
+    ORIGIN='https://raw.githubusercontent.com'
+    PREFIX='/housegate/housegate/'
+
+    def require(value,message):
+        if not value:raise ValueError(message)
+
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self,*args,**kwargs):raise ValueError('bootstrap redirect refused')
+
+    def read_regular(path,limit):
+        fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+        try:
+            s=os.fstat(fd);require(stat.S_ISREG(s.st_mode) and s.st_nlink==1 and s.st_size<=limit,'bootstrap input type/size')
+            data=os.read(fd,limit+1);require(len(data)==s.st_size,'bootstrap input changed')
+            return data
+        finally:os.close(fd)
+
+    def put(path,data):
+        fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o400)
+        with os.fdopen(fd,'wb') as stream:stream.write(data)
+
+    def fetch(opener,directory,head,name,digest,limit,deadline):
+        require(re.fullmatch('[0-9a-f]{40}',head) and re.fullmatch('[0-9a-f]{64}',digest),'bootstrap identity')
+        require(name in RUNTIME_NAMES|{'profile.json','ci2-runtime-v16.sha256'},'bootstrap path')
+        url=ORIGIN+PREFIX+head+'/.github/ci2/native-v1/'+name
+        require(urllib.parse.urlsplit(url).netloc=='raw.githubusercontent.com' and url.startswith(ORIGIN+PREFIX),'bootstrap origin')
+        remaining=deadline-time.monotonic();require(remaining>0,'bootstrap download deadline')
+        request=urllib.request.Request(url,headers={'User-Agent':'housegate-ci2-native'})
+        with opener.open(request,timeout=min(3,remaining)) as response:
+            require(response.status==200 and response.geturl()==url,'bootstrap response identity')
+            declared=response.headers.get('Content-Length')
+            if declared is not None:require(declared.isdigit() and int(declared)<=limit,'bootstrap declared size')
+            chunks=[];size=0
+            while True:
+                require(time.monotonic()<deadline,'bootstrap download deadline')
+                data=response.read(min(65536,limit-size+1))
+                if not data:break
+                size+=len(data);require(size<=limit,'bootstrap byte limit');chunks.append(data)
+        data=b''.join(chunks)
+        require(hashlib.sha256(data).hexdigest()==digest,'bootstrap hash mismatch')
+        put(directory/name,data)
+        return dict(bytes=len(data),sha256=digest)
+
+    def main():
+        head=os.environ['CI2_CARRIER_HEAD'];run=os.environ['GITHUB_RUN_ID']
+        require(re.fullmatch('[0-9a-f]{40}',head) and re.fullmatch('[1-9][0-9]{0,19}',run),'bootstrap head/run')
+        require(os.environ['GITHUB_RUN_ATTEMPT']=='1' and os.environ['GITHUB_EVENT_NAME']=='pull_request','bootstrap event/attempt')
+        event=json.loads(read_regular(Path(os.environ['GITHUB_EVENT_PATH']),1048576));pr=event['pull_request']
+        require(pr['head']['sha']==head and pr['head']['repo']['full_name']==pr['base']['repo']['full_name']==os.environ['GITHUB_REPOSITORY']=='housegate/housegate','bootstrap repository/head')
+        profile=os.environ['CI2_PROFILE_SHA256'];manifest=os.environ['CI2_NATIVE_MANIFEST_SHA256']
+        require(re.fullmatch('[0-9a-f]{64}',profile) and re.fullmatch('[0-9a-f]{64}',manifest),'bootstrap reviewed digests')
+        temp=Path(os.environ['RUNNER_TEMP']);workspace=Path(os.environ['GITHUB_WORKSPACE'])
+        require(temp.is_absolute() and temp.resolve()==temp and workspace.is_absolute() and workspace.resolve()==workspace,'bootstrap path identity')
+        root=temp/('ci2-native-'+run+'-1');directory=root/'input'/'bootstrap'
+        elapsed=time.time()-int(os.environ['CI2_PREPARATION_STARTED'])
+        require(0<=elapsed<85,'checkout startup budget')
+        owned=len(sys.argv)==2 and sys.argv[1]=='owned'
+        seconds=min(90-elapsed,300-elapsed,60 if owned else 20)
+        deadline=time.monotonic()+seconds
+        signal.signal(signal.SIGALRM,lambda *_: (_ for _ in ()).throw(TimeoutError('bootstrap absolute deadline')))
+        signal.setitimer(signal.ITIMER_REAL,seconds)
+        opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect())
+        if not owned:
+            require(workspace.is_dir() and not any(workspace.iterdir()),'bootstrap workspace not empty')
+            root.mkdir(mode=0o700);owner=os.urandom(32).hex();put(root/'.ci2-owner',(owner+'\n').encode())
+            for name in ('input','execution','execution/host','docker-config','export'):
+                path=root/name;path.mkdir(mode=0o700);put(path/'.ci2-owner',(owner+'\n').encode())
+            directory.mkdir(mode=0o700)
+            code=os.environ['CI2_CHECKOUT_BOOTSTRAP'].encode();require(len(code)<=32768,'bootstrap control size')
+            put(directory/'control.py',code)
+            copied={name:fetch(opener,directory,head,name,digest,65536,deadline) for name,digest in OWNERS.items()}
+            receipt=dict(head=head,run_id=run,attempt=1,profile_sha256=profile,runtime_manifest_sha256=manifest,owners=copied,control_sha256=hashlib.sha256(code).hexdigest(),origin=ORIGIN,initial_download_owned_by_child=False)
+            put(root/'input'/'bootstrap.json',(json.dumps(receipt,sort_keys=True)+'\n').encode())
+            remaining=90-(time.time()-int(os.environ['CI2_PREPARATION_STARTED']))
+            require(remaining>5,'checkout owner budget exhausted')
+            signal.setitimer(signal.ITIMER_REAL,0)
+            os.execv('/usr/bin/python3',['/usr/bin/python3',str(directory/'ci2-watchdog-v16.py'),'--soft-seconds',str(remaining-2),'--hard-seconds',str(remaining),'--kill-descendant-tree','--','/usr/bin/python3',str(directory/'ci2-host-diagnostics-v16.py'),'capture','--output-root',str(root/'execution'),'--owner',owner,'--name','checkout-owner','--','/usr/bin/python3',str(directory/'control.py'),'owned'])
+        require(root.is_dir() and not root.is_symlink() and directory.is_dir() and not directory.is_symlink(),'bootstrap ownership path')
+        owner=read_regular(root/'.ci2-owner',65).decode().strip();require(re.fullmatch('[0-9a-f]{64}',owner),'bootstrap owner')
+        for name,digest in OWNERS.items():require(hashlib.sha256(read_regular(directory/name,65536)).hexdigest()==digest,'bootstrap owner changed')
+        fetch(opener,directory,head,'ci2-runtime-v16.sha256',manifest,4096,deadline)
+        entries={}
+        for line in read_regular(directory/'ci2-runtime-v16.sha256',4096).decode().splitlines():
+            match=re.fullmatch(r'([0-9a-f]{64})  ([A-Za-z0-9.-]+)',line);require(match is not None,'bootstrap manifest syntax')
+            digest,name=match.groups();require(name not in entries,'bootstrap manifest duplicate');entries[name]=digest
+        require(set(entries)==RUNTIME_NAMES and all(entries[name]==digest for name,digest in OWNERS.items()),'bootstrap manifest inventory/owners')
+        for name,digest in entries.items():
+            if name not in OWNERS:fetch(opener,directory,head,name,digest,1048576,deadline)
+        fetch(opener,directory,head,'profile.json',profile,65536,deadline)
+        require(sum(path.stat().st_size for path in directory.iterdir())<=16*1048576,'bootstrap aggregate download bound')
+        signal.setitimer(signal.ITIMER_REAL,0)
+        os.execv('/bin/bash',['/bin/bash',str(directory/'run-linux-qualification-native-v1.sh'),'internal-checkout'])
+
+    if __name__=='__main__':
+        try:main()
+        except Exception as error:
+            # Before the verified owner starts, only this finite diagnostic exists.
+            print('Checkout bootstrap refused: '+str(error)[:512],file=sys.stderr)
+            raise SystemExit(74)
+
+jobs:
+  preparation-checks:
+    if: ${{ github.event.pull_request.head.repo.full_name == 'housegate/housegate' && github.event.pull_request.base.repo.full_name == 'housegate/housegate' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Start the preparation clock
+        run: echo "CI2_PREPARATION_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+      - name: Bounded exact-head carrier checkout
+        timeout-minutes: 2
+        run: python3 -c "$CI2_CHECKOUT_BOOTSTRAP"
+      - name: Static and finite carrier fixtures
+        timeout-minutes: 2
+        run: python3 -B .github/ci2/native-v1/test-native-carrier.py
+
+  observe-host:
+    if: >-
+      always() && github.event_name == 'pull_request' && github.event.action == 'labeled' &&
+      github.repository == 'housegate/housegate' &&
+      github.event.pull_request.head.repo.full_name == 'housegate/housegate' &&
+      github.event.pull_request.base.repo.full_name == 'housegate/housegate' &&
+      github.event.pull_request.head.ref == 'urwt/codex/issue-153-ci2-native' &&
+      !github.event.pull_request.draft && github.run_attempt == 1 &&
+      github.event.label.name == format('ci2-env-{0}', github.event.pull_request.head.sha) &&
+      contains(github.event.pull_request.labels.*.name, format('ci2-env-{0}', github.event.pull_request.head.sha))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      CI2_CARRIER_HEAD: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Start the preparation clock
+        run: echo "CI2_PREPARATION_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+      - name: Bounded exact-head carrier checkout
+        timeout-minutes: 2
+        run: python3 -c "$CI2_CHECKOUT_BOOTSTRAP"
+      - name: Read-only host observation
+        id: observation
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        env:
+          CI2_CANCELLED_AT_ENTRY: 'false'
+        run: bash .github/ci2/native-v1/run-linux-qualification-native-v1.sh observe
+      - name: Upload bounded observation
+        if: ${{ always() && (steps.observation.outcome == 'success' || steps.observation.outcome == 'failure') }}
+        timeout-minutes: 1
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci2-observation-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.event.pull_request.head.sha }}
+          path: |
+            ${{ runner.temp }}/ci2-native-${{ github.run_id }}-${{ github.run_attempt }}/export/observation.json
+            ${{ runner.temp }}/ci2-native-${{ github.run_id }}-${{ github.run_attempt }}/export/refusal.json
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 14
+
+  qualification:
+    needs: preparation-checks
+    if: >-
+      always() && needs.preparation-checks.result == 'success' &&
+      github.event_name == 'pull_request' && github.event.action == 'labeled' && github.repository == 'housegate/housegate' &&
+      github.event.pull_request.head.repo.full_name == 'housegate/housegate' &&
+      github.event.pull_request.base.repo.full_name == 'housegate/housegate' &&
+      github.event.pull_request.head.ref == 'urwt/codex/issue-153-ci2-native' &&
+      !github.event.pull_request.draft && github.run_attempt == 1 &&
+      github.event.label.name == format('ci2-ok-{0}', github.event.pull_request.head.sha) &&
+      contains(github.event.pull_request.labels.*.name, format('ci2-ok-{0}', github.event.pull_request.head.sha))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    env:
+      CI2_CARRIER_HEAD: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Start the preparation clock
+        run: echo "CI2_PREPARATION_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+      - name: Bounded exact-head carrier checkout
+        timeout-minutes: 2
+        run: python3 -c "$CI2_CHECKOUT_BOOTSTRAP"
+      - name: Prepare exact source, image and host admission
+        id: preparation
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        env:
+          CI2_CANCELLED_AT_ENTRY: 'false'
+        run: bash .github/ci2/native-v1/run-linux-qualification-native-v1.sh prepare
+      - name: Admit the bounded owner only before cancellation
+        id: owner-entry
+        if: ${{ always() && steps.preparation.outcome == 'success' && !cancelled() }}
+        timeout-minutes: 1
+        run: |
+          echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+          echo "head=$CI2_CARRIER_HEAD" >> "$GITHUB_OUTPUT"
+          echo "profile=$CI2_PROFILE_SHA256" >> "$GITHUB_OUTPUT"
+          echo "run=$GITHUB_RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+          echo 'admitted=true' >> "$GITHUB_OUTPUT"
+      - name: One bounded qualification owner
+        id: qualification
+        if: ${{ always() && steps.preparation.outcome == 'success' && steps.owner-entry.outputs.admitted == 'true' }}
+        timeout-minutes: 56
+        env:
+          CI2_CANCELLED_AT_ENTRY: 'false'
+          CI2_OWNER_ENTRY_EPOCH: ${{ steps.owner-entry.outputs.epoch }}
+          CI2_OWNER_ENTRY_HEAD: ${{ steps.owner-entry.outputs.head }}
+          CI2_OWNER_ENTRY_PROFILE: ${{ steps.owner-entry.outputs.profile }}
+          CI2_OWNER_ENTRY_RUN: ${{ steps.owner-entry.outputs.run }}
+          CI2_OWNER_ENTRY_ATTEMPT: ${{ steps.owner-entry.outputs.attempt }}
+        run: bash .github/ci2/native-v1/run-linux-qualification-native-v1.sh qualify
+      - name: Transport preparation refusal
+        if: ${{ always() && steps.preparation.outcome == 'failure' }}
+        timeout-minutes: 1
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci2-refusal-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/ci2-native-${{ github.run_id }}-${{ github.run_attempt }}/export/refusal.json
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 14
+      - name: Seal terminal host evidence and create allowlisted archive
+        id: archive
+        if: ${{ always() && steps.preparation.outcome == 'success' }}
+        timeout-minutes: 2
+        env:
+          CI2_QUALIFICATION_OUTCOME: ${{ steps.qualification.outcome }}
+        run: bash .github/ci2/native-v1/run-linux-qualification-native-v1.sh archive
+      - name: Transport archive and checksum receipt
+        id: upload
+        if: ${{ always() && steps.archive.outcome == 'success' }}
+        timeout-minutes: 1
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ci2-native-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.event.pull_request.head.sha }}
+          path: |
+            ${{ runner.temp }}/ci2-native-${{ github.run_id }}-${{ github.run_attempt }}/export/ci2-native.tar
+            ${{ runner.temp }}/ci2-native-${{ github.run_id }}-${{ github.run_attempt }}/export/archive.json
+          if-no-files-found: error
+          overwrite: false
+          compression-level: 0
+          retention-days: 14
+      - name: Evidence delivery summary
+        if: ${{ always() }}
+        env:
+          PREPARATION: ${{ steps.preparation.outcome }}
+          QUALIFICATION: ${{ steps.qualification.outcome }}
+          ARCHIVE: ${{ steps.archive.outcome }}
+          UPLOAD: ${{ steps.upload.outcome }}
+        run: |
+          printf 'Preparation: %s\nOwner: %s\nArchive: %s\nUpload: %s\n' "$PREPARATION" "$QUALIFICATION" "$ARCHIVE" "$UPLOAD" >> "$GITHUB_STEP_SUMMARY"
+          echo 'GitHub green/upload is not CI2 PASS. Independent downloaded-evidence verification is required.' >> "$GITHUB_STEP_SUMMARY"
