@@ -220,6 +220,9 @@ func validateSnapshotQueryJournalRecord(rec SnapshotQueryJournalRecord) error {
 	if rec.Stage == "" {
 		return errors.New("storageintegrity: snapshot query journal stage is required")
 	}
+	if rec.Stage == SnapshotQueryStagePreparedOutput && rec.PreparedOutput == nil {
+		return errors.New("storageintegrity: prepared output journal stage requires projection")
+	}
 	if rec.PreparedOutput != nil {
 		if rec.Stage != SnapshotQueryStagePreparedOutput {
 			return errors.New("storageintegrity: prepared output has wrong journal stage")

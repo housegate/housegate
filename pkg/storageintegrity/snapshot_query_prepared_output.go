@@ -52,6 +52,25 @@ type PreparedOutputStager struct {
 	dir     string
 }
 
+// preparedOutput is the minimal owned boundary Stage needs. Keeping it private
+// lets tests exercise the real staging lifecycle without manufacturing an
+// executor-owned PreparedQueryExecution.
+type preparedOutput interface {
+	Job() replay.SnapshotQueryJob
+	PreparedResult() replay.ExecutionResult
+	CanonicalOutput() snapshotquery.CanonicalOutput
+	Close() error
+}
+
+type preparedQueryOutput struct {
+	p *snapshotquery.PreparedQueryExecution
+}
+
+func (p preparedQueryOutput) Job() replay.SnapshotQueryJob                   { return p.p.Job() }
+func (p preparedQueryOutput) PreparedResult() replay.ExecutionResult         { return p.p.Result }
+func (p preparedQueryOutput) CanonicalOutput() snapshotquery.CanonicalOutput { return p.p.Output }
+func (p preparedQueryOutput) Close() error                                   { return p.p.Close() }
+
 func NewPreparedOutputStager(j SnapshotQueryJournal, dir string) (*PreparedOutputStager, error) {
 	if j == nil || dir == "" {
 		return nil, errors.New("storageintegrity: prepared output journal and dir are required")
@@ -68,6 +87,27 @@ func (s *PreparedOutputStager) Stage(ctx context.Context, req SnapshotQueryPrepa
 	if s == nil || p == nil {
 		return SnapshotQueryPrepared{}, errors.New("storageintegrity: prepared output stager is uninitialized")
 	}
+	return s.stage(ctx, req, preparedQueryOutput{p})
+}
+
+func (s *PreparedOutputStager) stage(ctx context.Context, req SnapshotQueryPrepareRequest, p preparedOutput) (prepared SnapshotQueryPrepared, err error) {
+	if s == nil || p == nil {
+		return SnapshotQueryPrepared{}, errors.New("storageintegrity: prepared output stager is uninitialized")
+	}
+	closed := false
+	defer func() {
+		if closed {
+			return
+		}
+		if closeErr := p.Close(); closeErr != nil {
+			closeErr = fmt.Errorf("storageintegrity: close prepared output: %w", closeErr)
+			if err == nil {
+				err = closeErr
+			} else {
+				err = errors.Join(err, closeErr)
+			}
+		}
+	}()
 	if err := ctx.Err(); err != nil {
 		return SnapshotQueryPrepared{}, err
 	}
@@ -79,20 +119,24 @@ func (s *PreparedOutputStager) Stage(ctx context.Context, req SnapshotQueryPrepa
 	if job.Statement.StatementSeq != req.Accepted.StatementSeq || job.BlockSeq != req.Accepted.BlockSeq || job.Statement.Envelope.InputRoot != req.Envelope.InputRoot || job.Reservation.ReservationID != b.ReservationID || job.Reservation.FencingGeneration != b.FencingGeneration {
 		return SnapshotQueryPrepared{}, errors.New("storageintegrity: prepared output identity mismatch")
 	}
-	if p.Result.SnapshotQuery == nil || p.Result.SnapshotQuery.ExecutionOutcome != "applied" || p.Output == nil || p.Result.SnapshotQuery.OutputRowsRoot != p.Output.OutputRowsRoot() || p.Result.SnapshotQuery.OutputRowCount != p.Output.RowCount() || p.Result.ComputedStateRoot == "" {
+	result := p.PreparedResult()
+	out := p.CanonicalOutput()
+	if result.SnapshotQuery == nil || result.SnapshotQuery.ExecutionOutcome != "applied" || out == nil || result.SnapshotQuery.OutputRowsRoot != out.OutputRowsRoot() || result.SnapshotQuery.OutputRowCount != out.RowCount() || result.ComputedStateRoot == "" {
 		return SnapshotQueryPrepared{}, errors.New("storageintegrity: invalid prepared output")
 	}
 	path := filepath.Join(s.dir, preparedCacheName(b.StatementID, req.Envelope.InputRoot, b.ReservationID, b.FencingGeneration, req.Accepted.BlockSeq))
-	digest, err := copyAndVerifyPreparedOutput(ctx, path, req, p.Output, p.Result.ComputedStateRoot)
+	digest, err := copyAndVerifyPreparedOutput(ctx, path, req, out, result.ComputedStateRoot)
 	if err != nil {
 		return SnapshotQueryPrepared{}, err
 	}
 	if err = p.Close(); err != nil {
+		closed = true
 		return SnapshotQueryPrepared{}, fmt.Errorf("storageintegrity: close prepared output: %w", err)
 	}
-	touched := p.Output.TouchedPartitionIDs()
+	closed = true
+	touched := out.TouchedPartitionIDs()
 	sort.Strings(touched)
-	prepared := SnapshotQueryPrepared{StatementID: b.StatementID, InputRoot: req.Envelope.InputRoot, BlockSeq: req.Accepted.BlockSeq, FencingGeneration: b.FencingGeneration, OutputRowsRoot: p.Output.OutputRowsRoot(), OutputRowCount: p.Output.RowCount(), TouchedPartitionIDs: touched, Status: "PendingUnsubmitted", CapacityReservationID: "", Candidates: []replay.SnapshotReadPart{}, SourceClaimRoot: "", Stage: string(SnapshotQueryStagePreparedOutput), ComputedStateRoot: p.Result.ComputedStateRoot, CachePath: path, CacheDigest: digest}
+	prepared = SnapshotQueryPrepared{StatementID: b.StatementID, InputRoot: req.Envelope.InputRoot, BlockSeq: req.Accepted.BlockSeq, FencingGeneration: b.FencingGeneration, OutputRowsRoot: out.OutputRowsRoot(), OutputRowCount: out.RowCount(), TouchedPartitionIDs: touched, Status: "PendingUnsubmitted", CapacityReservationID: "", Candidates: []replay.SnapshotReadPart{}, SourceClaimRoot: "", Stage: string(SnapshotQueryStagePreparedOutput), ComputedStateRoot: result.ComputedStateRoot, CachePath: path, CacheDigest: digest}
 	if err := validateSnapshotQueryPrepared(req.Envelope, req.Accepted, prepared); err != nil {
 		return SnapshotQueryPrepared{}, err
 	}
