@@ -145,6 +145,13 @@ type QueryContext struct {
 	// gate.  A plugin installs it to suspend the rest of the OnQuery chain.
 	AgentPrepare *AgentPreparePlan
 
+	// QueryOnly is installed only by an independently authenticated executing
+	// host. Relay completes it locally and never writes its Query or client Data
+	// to ordinary upstream. It is intentionally distinct from AgentPrepare:
+	// the latter produces a signed Query for a host, while this plan owns the
+	// host-side intake acknowledgement.
+	QueryOnly *QueryOnlyPlan
+
 	Values map[string]any
 
 	continuation *queryContinuation
@@ -154,6 +161,44 @@ type QueryContext struct {
 // from a client setting; Relay sets it only after a live preparation result has
 // been accepted.
 const SnapshotQueryAgentKey = "snapshot_query_agent_owned"
+
+// QueryOnlyPlan is the local host execution lane. Run must honor ctx and
+// return only after the configured durable acknowledgement boundary. It must
+// never write to a client codec; Relay remains the sole client reader and
+// writer. CancelClient stops client delivery and performs the plan's durable
+// cancellation/reconciliation rules without assuming source work rolled back.
+//
+// Only the package-private executing-host adapter constructs this type after
+// it has selected a trusted source. Its fields are deliberately private, so an
+// ordinary plugin, client setting, or decoded protocol value cannot fabricate
+// host execution authority.
+type QueryOnlyPlan struct {
+	run             func(context.Context) error
+	cancelClient    func()
+	maxControlBytes uint64
+	hostProvenance  *queryOnlyHostProvenance
+}
+
+type queryOnlyHostProvenance struct{}
+
+func newHostQueryOnlyPlan(run func(context.Context) error, cancelClient func(), maxControlBytes uint64) *QueryOnlyPlan {
+	return &QueryOnlyPlan{
+		run:             run,
+		cancelClient:    cancelClient,
+		maxControlBytes: maxControlBytes,
+		hostProvenance:  &queryOnlyHostProvenance{},
+	}
+}
+
+// ValidHostPlan reports whether Relay may accept this plan. It intentionally
+// checks private provenance in addition to exported callback fields.
+func (p *QueryOnlyPlan) ValidHostPlan() bool {
+	return p != nil && p.run != nil && p.cancelClient != nil && p.maxControlBytes != 0 && p.hostProvenance != nil
+}
+
+func (p *QueryOnlyPlan) Run(ctx context.Context) error { return p.run(ctx) }
+func (p *QueryOnlyPlan) CancelClient()                 { p.cancelClient() }
+func (p *QueryOnlyPlan) MaxControlBytes() uint64       { return p.maxControlBytes }
 
 // PreparedAgentQuery is deliberately detached from the live connection.  In
 // particular it contains no Session, QueryContext, or socket.  Relay is the

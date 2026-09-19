@@ -8,6 +8,7 @@ go_library(
         "forward_aware.go",
         "hooks.go",
         "plugin.go",
+        "query_only_host.go",
     ],
     importpath = "github.com/housegate/housegate/pkg/plugin",
     visibility = ["//visibility:public"],
@@ -16,6 +17,7 @@ go_library(
         "//pkg/chsession",
         "//pkg/log",
         "//pkg/sqlmeta",
+        "@com_github_clickhouse_ch_go//proto",
     ],
 )
 
@@ -24,6 +26,7 @@ go_test(
     srcs = [
         "chain_test.go",
         "hooks_test.go",
+        "query_only_host_test.go",
     ],
     embed = [":plugin"],
     deps = [

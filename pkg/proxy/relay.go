@@ -50,6 +50,11 @@ type Relay struct {
 	activeQuery   bool
 	activeQueryID string
 	queryCanceled bool
+	// queryOnlySessionTerminal is set after a successful local query-only
+	// completion. INSERT ... SELECT has no client payload terminator, so this
+	// connection cannot safely identify a subsequent packet as a new query.
+	// Guarded by queryMu with the other per-connection query ownership state.
+	queryOnlySessionTerminal bool
 	// agentGeneration is allocated before an AgentPrepare worker starts.  It
 	// distinguishes a late result from a subsequent query which reused a client
 	// query ID.
@@ -961,6 +966,10 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 
 		_, logger := log.FromContext(ctx)
 
+		if r.queryOnlySessionIsTerminal() {
+			return fmt.Errorf("client packet %s after query-only local success; connection is not reusable", clientPacketName(pkt.Type))
+		}
+
 		if decErr == nil && pkt.Decoded != nil && pkt.Type == uint64(chproto.ClientQueryCode) {
 			q := pkt.Decoded.(*chproto.Query)
 			if q.ID == "" {
@@ -1027,7 +1036,7 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 					r.hooks.OnQueryComplete(ctx, r.sess)
 					return err
 				}
-				if qctx.DeferredInsert != nil || qctx.SuppressUpstreamExecution || qctx.AbortWithSuccess {
+				if qctx.QueryOnly != nil || qctx.DeferredInsert != nil || qctx.SuppressUpstreamExecution || qctx.AbortWithSuccess {
 					err := fmt.Errorf("query %q: AgentPrepare conflicts with another ownership plan", q.ID)
 					r.writeExceptionToClient(ctx, err)
 					r.hooks.OnQueryAbort(ctx, qctx)
@@ -1074,6 +1083,33 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 					r.hooks.OnQueryComplete(ctx, r.sess)
 					return err
 				}
+			}
+			if qctx.QueryOnly != nil {
+				if agentPrepared != nil || qctx.DeferredInsert != nil || qctx.SuppressUpstreamExecution || qctx.AbortWithSuccess {
+					err := fmt.Errorf("query %q: query-only conflicts with another ownership plan", q.ID)
+					if agentPrepared != nil {
+						r.takeActiveQuery()
+					}
+					r.writeExceptionToClient(ctx, err)
+					r.hooks.OnQueryAbort(ctx, qctx)
+					r.hooks.OnQueryComplete(ctx, r.sess)
+					continue
+				}
+				if err := r.runQueryOnly(ctx, qctx); err != nil {
+					if errors.Is(err, io.EOF) {
+						return io.EOF
+					}
+					if errors.Is(err, errQueryOnlyLifecycleFinalized) {
+						// runQueryOnly already fired the terminal lifecycle hooks.
+						// The client write failed, so an Exception cannot be delivered
+						// either; close without repeating durable cleanup.
+						return err
+					}
+					r.writeExceptionToClient(ctx, err)
+					r.hooks.OnQueryAbort(ctx, qctx)
+					r.hooks.OnQueryComplete(ctx, r.sess)
+				}
+				continue
 			}
 			// AbortWithSuccess: a plugin (commitgate via ErrAbortWithSuccess)
 			// handled the statement out-of-band and signalled the relay to

@@ -207,13 +207,16 @@ func (c *PluginChain) runQueryFrom(ctx context.Context, qctx *QueryContext, star
 			if !allowSuspend {
 				return fmt.Errorf("agent prepare installed during query continuation")
 			}
-			if qctx.DeferredInsert != nil || qctx.SuppressUpstreamExecution || qctx.AbortWithSuccess {
+			if qctx.QueryOnly != nil || qctx.DeferredInsert != nil || qctx.SuppressUpstreamExecution || qctx.AbortWithSuccess {
 				return fmt.Errorf("agent prepare conflicts with another query ownership plan")
 			}
 			if qctx.AgentPrepare.Prepare == nil || qctx.AgentPrepare.PersistForwardIntent == nil || qctx.AgentPrepare.AuthorizeForward == nil || qctx.AgentPrepare.PersistForwardUnknown == nil || qctx.AgentPrepare.MaxControlBytes == 0 {
 				return fmt.Errorf("agent prepare requires worker, forward intent, and forward authorization")
 			}
 			return qctx.installContinuation(c, i+1)
+		}
+		if qctx.QueryOnly != nil && (qctx.DeferredInsert != nil || qctx.SuppressUpstreamExecution || qctx.AbortWithSuccess) {
+			return fmt.Errorf("query-only conflicts with another query ownership plan")
 		}
 	}
 	return nil
