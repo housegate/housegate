@@ -97,6 +97,72 @@ type blockingPhasePort struct {
 	releaseIntent chan struct{}
 }
 
+// cancelGatePhasePort lets a test hold C4 reconciliation while it attempts a
+// forward authorization.  No method is called while its mutex is held.
+type cancelGatePhasePort struct {
+	mu            sync.Mutex
+	events        []string
+	cancelStarted chan struct{}
+	releaseCancel chan struct{}
+}
+
+func (p *cancelGatePhasePort) record(name string) {
+	p.mu.Lock()
+	p.events = append(p.events, name)
+	p.mu.Unlock()
+}
+func (p *cancelGatePhasePort) snapshotEvents() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.events...)
+}
+func (p *cancelGatePhasePort) Prepare(context.Context) error { p.record("prepare"); return nil }
+func (p *cancelGatePhasePort) PersistSubmitIntent(context.Context) error {
+	p.record("intent")
+	return nil
+}
+func (p *cancelGatePhasePort) AuthorizeSubmit(context.Context) error {
+	p.record("authorize")
+	return nil
+}
+func (p *cancelGatePhasePort) CancelAndReconcile(context.Context) error {
+	p.record("cancel")
+	close(p.cancelStarted)
+	<-p.releaseCancel
+	return nil
+}
+func (p *cancelGatePhasePort) PersistAuthorizationUnknownAndReconcile(context.Context) error {
+	p.record("unknown")
+	return nil
+}
+
+type blockingCancelJournal struct {
+	mu      sync.Mutex
+	calls   int
+	started chan struct{}
+	release chan struct{}
+}
+
+func (j *blockingCancelJournal) BeginSnapshotQuery(context.Context, Operation) error { return nil }
+func (j *blockingCancelJournal) ReconcileCanceledSnapshotQuery(context.Context, Operation) error {
+	j.mu.Lock()
+	j.calls++
+	j.mu.Unlock()
+	close(j.started)
+	<-j.release
+	return nil
+}
+func (j *blockingCancelJournal) PersistSnapshotQueryForwardIntent(context.Context, Operation) error {
+	return nil
+}
+func (j *blockingCancelJournal) AuthorizeSnapshotQueryForward(context.Context, Operation) error {
+	return nil
+}
+func (j *blockingCancelJournal) PersistSnapshotQueryForwardUnknown(context.Context, Operation) error {
+	return nil
+}
+func (j *blockingCancelJournal) count() int { j.mu.Lock(); defer j.mu.Unlock(); return j.calls }
+
 func (p *blockingPhasePort) record(name string) {
 	p.mu.Lock()
 	p.events = append(p.events, name)
@@ -395,7 +461,7 @@ func TestC4PhaseBridgeLinearizesIntentAndCancel(t *testing.T) {
 	}
 }
 
-func TestC4PhaseBridgeReconcilesLaterIntentAfterEarlierCancel(t *testing.T) {
+func TestC4PhaseBridgePreIntentCancelOwnsLegacyAndRejectsLaterIntent(t *testing.T) {
 	f := newFixture(t)
 	phase := &fakePhasePort{}
 	f.p.opts.PhasePortFactory = func(context.Context, replay.SnapshotQueryEnvelope) (SnapshotQueryIntakePhasePort, error) {
@@ -409,14 +475,119 @@ func TestC4PhaseBridgeReconcilesLaterIntentAfterEarlierCancel(t *testing.T) {
 	if err := plan.ReconcileCancel(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	if err := plan.PersistForwardIntent(context.Background(), prepared); !errors.Is(err, errSnapshotQueryCanceled) {
+		t.Fatalf("later intent err=%v", err)
+	}
+	if got := strings.Join(phase.events, ","); got != "prepare" {
+		t.Fatalf("legacy cancel allowed C4 intent: %q", got)
+	}
+	if got := strings.Join(f.journal.calls, ","); got != "begin,cancel" {
+		t.Fatalf("legacy ownership changed: %q", got)
+	}
+}
+
+func TestC4PhaseBridgeCancelLatchRejectsAuthorizeDuringPhaseCancel(t *testing.T) {
+	f := newFixture(t)
+	phase := &cancelGatePhasePort{cancelStarted: make(chan struct{}), releaseCancel: make(chan struct{})}
+	f.p.opts.PhasePortFactory = func(context.Context, replay.SnapshotQueryEnvelope) (SnapshotQueryIntakePhasePort, error) {
+		return phase, nil
+	}
+	plan := f.install()
+	prepared, err := plan.Prepare(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := plan.PersistForwardIntent(context.Background(), prepared); err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(phase.events, ","); got != "prepare,intent,cancel" {
-		t.Fatalf("later intent was not immediately reconciled: %q", got)
+	canceled := make(chan error, 1)
+	go func() { canceled <- plan.ReconcileCancel(context.Background()) }()
+	<-phase.cancelStarted
+	if err := plan.AuthorizeForward(context.Background(), prepared); !errors.Is(err, errSnapshotQueryCanceled) {
+		t.Fatalf("authorize while cancellation is in flight: %v", err)
 	}
-	if got := strings.Join(f.journal.calls, ","); got != "begin,cancel" {
-		t.Fatalf("legacy ownership changed before C4 intent: %q", got)
+	if got := strings.Join(phase.snapshotEvents(), ","); got != "prepare,intent,cancel" {
+		t.Fatalf("authorize reached C4 while cancel was latched: %q", got)
+	}
+	close(phase.releaseCancel)
+	if err := <-canceled; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestC4PhaseBridgeDoublePreIntentCancelHasOneLegacyOwner(t *testing.T) {
+	f := newFixture(t)
+	phase := &fakePhasePort{}
+	f.p.opts.PhasePortFactory = func(context.Context, replay.SnapshotQueryEnvelope) (SnapshotQueryIntakePhasePort, error) {
+		return phase, nil
+	}
+	plan := f.install()
+	prepared, err := plan.Prepare(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal := &blockingCancelJournal{started: make(chan struct{}), release: make(chan struct{})}
+	f.p.opts.Journal = journal
+	first := make(chan error, 1)
+	second := make(chan error, 1)
+	go func() { first <- plan.ReconcileCancel(context.Background()) }()
+	<-journal.started
+	go func() { second <- plan.ReconcileCancel(context.Background()) }()
+	if got := journal.count(); got != 1 {
+		t.Fatalf("legacy cancel calls=%d", got)
+	}
+	close(journal.release)
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-second; err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.PersistForwardIntent(context.Background(), prepared); !errors.Is(err, errSnapshotQueryCanceled) {
+		t.Fatalf("intent after legacy cancellation: %v", err)
+	}
+	if got := strings.Join(phase.events, ","); got != "prepare" {
+		t.Fatalf("legacy cancellation crossed into C4: %q", got)
+	}
+}
+
+func TestC4PhaseBridgeIntentCancelRaceHasNoDuplicateOrForward(t *testing.T) {
+	for i := 0; i != 20; i++ {
+		f := newFixture(t)
+		phase := &blockingPhasePort{intentStarted: make(chan struct{}), releaseIntent: make(chan struct{})}
+		f.p.opts.PhasePortFactory = func(context.Context, replay.SnapshotQueryEnvelope) (SnapshotQueryIntakePhasePort, error) {
+			return phase, nil
+		}
+		plan := f.install()
+		prepared, err := plan.Prepare(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		intent := make(chan error, 1)
+		go func() { intent <- plan.PersistForwardIntent(context.Background(), prepared) }()
+		<-phase.intentStarted
+		one, two := make(chan error, 1), make(chan error, 1)
+		go func() { one <- plan.ReconcileCancel(context.Background()) }()
+		go func() { two <- plan.ReconcileCancel(context.Background()) }()
+		if err := plan.AuthorizeForward(context.Background(), prepared); err == nil {
+			t.Fatalf("iteration %d: authorize unexpectedly reached C4", i)
+		}
+		close(phase.releaseIntent)
+		if err := <-intent; err != nil && !errors.Is(err, errSnapshotQueryCanceled) {
+			t.Fatalf("iteration %d: intent=%v", i, err)
+		}
+		if err := <-one; err != nil {
+			t.Fatalf("iteration %d: cancel one=%v", i, err)
+		}
+		if err := <-two; err != nil {
+			t.Fatalf("iteration %d: cancel two=%v", i, err)
+		}
+		if got := strings.Join(phase.snapshotEvents(), ","); got != "prepare,intent,cancel" {
+			t.Fatalf("iteration %d: phase events=%q", i, got)
+		}
+		if got := strings.Join(f.journal.calls, ","); got != "begin" {
+			t.Fatalf("iteration %d: legacy journal=%q", i, got)
+		}
 	}
 }
 

@@ -100,24 +100,31 @@ type SnapshotQueryIntakePhasePort interface {
 type SnapshotQueryIntakePhasePortFactory func(context.Context, replay.SnapshotQueryEnvelope) (SnapshotQueryIntakePhasePort, error)
 
 type operationState struct {
-	mu sync.RWMutex
+	mu sync.Mutex
 	// The in-flight/done pairs coordinate phase decisions without holding a
 	// state lock across an external C4 or journal call.
-	value                 Operation
-	phasePort             SnapshotQueryIntakePhasePort
-	phaseIntent           bool
-	cancelPending         bool
-	intentInFlight        bool
-	intentDone            chan struct{}
-	phaseCancelInFlight   bool
-	phaseCancelDone       chan struct{}
-	phaseCancelReconciled bool
+	value       Operation
+	phasePort   SnapshotQueryIntakePhasePort
+	phaseIntent bool
+	// cancelRequested is the linearization point shared by all four relay
+	// callbacks.  Once it is set, no callback may begin a forward-side effect.
+	// The two durable cancellation domains are mutually exclusive: legacy owns
+	// every pre-intent cancellation; C4 owns every successful intent.
+	cancelRequested        bool
+	legacyCancelInFlight   bool
+	legacyCancelDone       chan struct{}
+	legacyCancelReconciled bool
+	intentInFlight         bool
+	intentDone             chan struct{}
+	phaseCancelInFlight    bool
+	phaseCancelDone        chan struct{}
+	phaseCancelReconciled  bool
 }
 
-func (s *operationState) snapshot() (Operation, SnapshotQueryIntakePhasePort, bool, bool, bool, bool, chan struct{}, bool, chan struct{}) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.value, s.phasePort, s.phaseIntent, s.cancelPending, s.phaseCancelReconciled, s.intentInFlight, s.intentDone, s.phaseCancelInFlight, s.phaseCancelDone
+func (s *operationState) snapshot() (Operation, SnapshotQueryIntakePhasePort, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.value, s.phasePort, s.phaseIntent
 }
 func (s *operationState) replace(v Operation) { s.mu.Lock(); s.value = v; s.mu.Unlock() }
 func (s *operationState) installPhasePort(port SnapshotQueryIntakePhasePort) {
@@ -192,9 +199,12 @@ func (p *Plugin) OnQuery(_ context.Context, qctx *plugin.QueryContext) error {
 			return p.persistForwardIntent(ctx, state, prepared)
 		},
 		AuthorizeForward: func(ctx context.Context, prepared plugin.PreparedAgentQuery) error {
-			op, phasePort, phaseIntent, _, _, _, _, _, _ := state.snapshot()
+			op, phasePort, phaseIntent := state.snapshot()
 			if !matches(op, prepared) {
 				return errors.New("sisnapshotquery: forward authorization identity mismatch")
+			}
+			if state.isCanceled() {
+				return errSnapshotQueryCanceled
 			}
 			if phasePort == nil {
 				return p.opts.Journal.AuthorizeSnapshotQueryForward(ctx, op)
@@ -205,9 +215,12 @@ func (p *Plugin) OnQuery(_ context.Context, qctx *plugin.QueryContext) error {
 			return phasePort.AuthorizeSubmit(ctx)
 		},
 		PersistForwardUnknown: func(ctx context.Context, prepared plugin.PreparedAgentQuery) error {
-			op, phasePort, phaseIntent, _, _, _, _, _, _ := state.snapshot()
+			op, phasePort, phaseIntent := state.snapshot()
 			if !matches(op, prepared) {
 				return errors.New("sisnapshotquery: forward unknown identity mismatch")
+			}
+			if state.isCanceled() {
+				return errSnapshotQueryCanceled
 			}
 			if phasePort == nil {
 				return p.opts.Journal.PersistSnapshotQueryForwardUnknown(ctx, op)
@@ -221,55 +234,74 @@ func (p *Plugin) OnQuery(_ context.Context, qctx *plugin.QueryContext) error {
 	return nil
 }
 
-// persistForwardIntent establishes C4 ownership.  Its in-flight marker is
-// installed before the port call, so a concurrent cancel waits for the
-// durable result instead of guessing that D1's legacy cancellation is still
-// the owner.
+var errSnapshotQueryCanceled = errors.New("sisnapshotquery: snapshot query cancellation is already latched")
+
+func (s *operationState) isCanceled() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cancelRequested
+}
+
+// persistForwardIntent establishes C4 ownership only if cancellation has not
+// already selected the legacy owner.  All I/O is deliberately outside the
+// mutex; concurrent retries wait on the same durable attempt.
 func (p *Plugin) persistForwardIntent(ctx context.Context, state *operationState, prepared plugin.PreparedAgentQuery) error {
-	op, phasePort, _, _, _, intentInFlight, _, _, _ := state.snapshot()
+	op, phasePort, _ := state.snapshot()
 	if !matches(op, prepared) {
 		return errors.New("sisnapshotquery: forward intent identity mismatch")
 	}
 	if phasePort == nil {
+		if state.isCanceled() {
+			return errSnapshotQueryCanceled
+		}
 		return p.opts.Journal.PersistSnapshotQueryForwardIntent(ctx, op)
 	}
-	if intentInFlight {
-		return errors.New("sisnapshotquery: concurrent submit intent")
-	}
-
-	state.mu.Lock()
-	if state.intentInFlight {
+	for {
+		state.mu.Lock()
+		if state.cancelRequested {
+			state.mu.Unlock()
+			return errSnapshotQueryCanceled
+		}
+		if state.phaseIntent {
+			state.mu.Unlock()
+			return nil
+		}
+		if state.intentInFlight {
+			done := state.intentDone
+			state.mu.Unlock()
+			select {
+			case <-done:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		state.intentInFlight = true
+		state.intentDone = make(chan struct{})
+		done := state.intentDone
 		state.mu.Unlock()
-		return errors.New("sisnapshotquery: concurrent submit intent")
-	}
-	state.intentInFlight = true
-	state.intentDone = make(chan struct{})
-	intentDone := state.intentDone
-	state.mu.Unlock()
 
-	err := phasePort.PersistSubmitIntent(ctx)
-	state.mu.Lock()
-	state.intentInFlight = false
-	if err == nil {
-		state.phaseIntent = true
+		err := phasePort.PersistSubmitIntent(ctx)
+		state.mu.Lock()
+		state.intentInFlight = false
+		if err == nil {
+			state.phaseIntent = true
+		}
+		close(done)
+		canceled := state.cancelRequested
+		state.mu.Unlock()
+		if err != nil {
+			return err
+		}
+		if canceled {
+			// The durable intent won the race, so C4, and only C4, reconciles it.
+			if err := p.reconcileCancel(ctx, state); err != nil {
+				return err
+			}
+			return errSnapshotQueryCanceled
+		}
+		return nil
 	}
-	close(intentDone)
-	cancelPending := state.cancelPending
-	needCancel := err == nil && cancelPending && !state.phaseCancelReconciled && !state.phaseCancelInFlight
-	var cancelDone chan struct{}
-	if needCancel {
-		state.phaseCancelInFlight = true
-		state.phaseCancelDone = make(chan struct{})
-		cancelDone = state.phaseCancelDone
-	}
-	state.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	if needCancel {
-		return finishPhaseCancel(ctx, state, phasePort, cancelDone)
-	}
-	return nil
 }
 
 // reconcileCancel latches cancellation before it selects an owner.  If C4's
@@ -283,7 +315,7 @@ func (p *Plugin) reconcileCancel(ctx context.Context, state *operationState) err
 			state.mu.Unlock()
 			return nil
 		}
-		state.cancelPending = true
+		state.cancelRequested = true
 		if state.intentInFlight {
 			done := state.intentDone
 			state.mu.Unlock()
@@ -295,8 +327,25 @@ func (p *Plugin) reconcileCancel(ctx context.Context, state *operationState) err
 			}
 		}
 		if phasePort == nil || !state.phaseIntent {
+			if state.legacyCancelReconciled {
+				state.mu.Unlock()
+				return nil
+			}
+			if state.legacyCancelInFlight {
+				done := state.legacyCancelDone
+				state.mu.Unlock()
+				select {
+				case <-done:
+					continue
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+			state.legacyCancelInFlight = true
+			state.legacyCancelDone = make(chan struct{})
+			done := state.legacyCancelDone
 			state.mu.Unlock()
-			return p.opts.Journal.ReconcileCanceledSnapshotQuery(ctx, op)
+			return finishLegacyCancel(ctx, state, p.opts.Journal, op, done)
 		}
 		if state.phaseCancelReconciled {
 			state.mu.Unlock()
@@ -320,6 +369,18 @@ func (p *Plugin) reconcileCancel(ctx context.Context, state *operationState) err
 	}
 }
 
+func finishLegacyCancel(ctx context.Context, state *operationState, journal Journal, op Operation, done chan struct{}) error {
+	err := journal.ReconcileCanceledSnapshotQuery(ctx, op)
+	state.mu.Lock()
+	state.legacyCancelInFlight = false
+	if err == nil {
+		state.legacyCancelReconciled = true
+	}
+	close(done)
+	state.mu.Unlock()
+	return err
+}
+
 func finishPhaseCancel(ctx context.Context, state *operationState, phasePort SnapshotQueryIntakePhasePort, done chan struct{}) error {
 	err := phasePort.CancelAndReconcile(ctx)
 	state.mu.Lock()
@@ -333,7 +394,7 @@ func finishPhaseCancel(ctx context.Context, state *operationState, phasePort Sna
 }
 
 func (p *Plugin) prepare(ctx context.Context, state *operationState) (plugin.PreparedAgentQuery, error) {
-	op, _, _, _, _, _, _, _, _ := state.snapshot()
+	op, _, _ := state.snapshot()
 	requestID, err := p.opts.Sequence.NextSnapshotQueryStatementID(ctx, op.RequestSeed)
 	if err != nil {
 		return plugin.PreparedAgentQuery{}, fmt.Errorf("sisnapshotquery: allocate request identity: %w", err)
