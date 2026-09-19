@@ -39,6 +39,9 @@ const (
 	SnapshotQueryStageSubmitAuthorizationUnknown SnapshotQueryJournalStage = "SubmitAuthorizationUnknown"
 	SnapshotQueryStageSubmitUnknown              SnapshotQueryJournalStage = "SubmitUnknown"
 	SnapshotQueryStageSequenced                  SnapshotQueryJournalStage = "Sequenced"
+	// PreparedOutput is a pre-write boundary: the one-shot source output has
+	// been copied, fsynced, reopened, and its owner closed.
+	SnapshotQueryStagePreparedOutput SnapshotQueryJournalStage = "PreparedOutput"
 	// SnapshotQueryStageRejected records a deterministic remote refusal. It is
 	// terminal for submission: recovery must never mistake a refusal for an
 	// accepted sequence or retry it.
@@ -73,6 +76,7 @@ type SnapshotQueryJournalRecord struct {
 	PreSubmitCancelIntent     bool                              `json:"pre_submit_cancel_intent"`
 	ReleaseReconciliationDebt bool                              `json:"release_reconciliation_debt"`
 	LaunchAuthorization       *SnapshotQueryLaunchAuthorization `json:"launch_authorization,omitempty"`
+	PreparedOutput            *SnapshotQueryPrepared            `json:"prepared_output,omitempty"`
 	UpdatedAtUnixMS           int64                             `json:"updated_at_unix_ms"`
 }
 
@@ -215,6 +219,14 @@ func validateSnapshotQueryJournalRecord(rec SnapshotQueryJournalRecord) error {
 	}
 	if rec.Stage == "" {
 		return errors.New("storageintegrity: snapshot query journal stage is required")
+	}
+	if rec.PreparedOutput != nil {
+		if rec.Stage != SnapshotQueryStagePreparedOutput {
+			return errors.New("storageintegrity: prepared output has wrong journal stage")
+		}
+		if err := validateSnapshotQueryPrepared(rec.Envelope, rec.Submit, *rec.PreparedOutput); err != nil {
+			return err
+		}
 	}
 	return nil
 }
