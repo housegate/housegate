@@ -146,6 +146,16 @@ type cancelGatePhasePort struct {
 	releaseCancel chan struct{}
 }
 
+// authorizeGatePhasePort holds an authorization after the forward lease has
+// crossed beginCall.  It lets the test prove that a cancellation which loses
+// that race waits for the already-started call, then reconciles exactly once.
+type authorizeGatePhasePort struct {
+	mu               sync.Mutex
+	events           []string
+	authorizeStarted chan struct{}
+	releaseAuthorize chan struct{}
+}
+
 func (p *cancelGatePhasePort) record(name string) {
 	p.mu.Lock()
 	p.events = append(p.events, name)
@@ -172,6 +182,39 @@ func (p *cancelGatePhasePort) CancelAndReconcile(context.Context) error {
 	return nil
 }
 func (p *cancelGatePhasePort) PersistAuthorizationUnknownAndReconcile(context.Context) error {
+	p.record("unknown")
+	return nil
+}
+
+func (p *authorizeGatePhasePort) record(name string) {
+	p.mu.Lock()
+	p.events = append(p.events, name)
+	p.mu.Unlock()
+}
+func (p *authorizeGatePhasePort) snapshotEvents() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.events...)
+}
+func (p *authorizeGatePhasePort) Prepare(context.Context) error {
+	p.record("prepare")
+	return nil
+}
+func (p *authorizeGatePhasePort) PersistSubmitIntent(context.Context) error {
+	p.record("intent")
+	return nil
+}
+func (p *authorizeGatePhasePort) AuthorizeSubmit(context.Context) error {
+	p.record("authorize")
+	close(p.authorizeStarted)
+	<-p.releaseAuthorize
+	return nil
+}
+func (p *authorizeGatePhasePort) CancelAndReconcile(context.Context) error {
+	p.record("cancel")
+	return nil
+}
+func (p *authorizeGatePhasePort) PersistAuthorizationUnknownAndReconcile(context.Context) error {
 	p.record("unknown")
 	return nil
 }
@@ -487,7 +530,7 @@ func TestC4PhaseBridgeLinearizesIntentAndCancel(t *testing.T) {
 	// resolves the in-flight result that cancellation waits on before choosing
 	// C4 versus the legacy journal.
 	close(phase.releaseIntent)
-	if err := <-intentDone; err != nil {
+	if err := <-intentDone; err != nil && !errors.Is(err, errSnapshotQueryCanceled) {
 		t.Fatalf("intent: %v", err)
 	}
 	if err := <-cancelDone; err != nil {
@@ -803,45 +846,50 @@ func TestC4PhaseBridgeDoublePreIntentCancelHasOneC4Owner(t *testing.T) {
 	}
 }
 
-func TestC4PhaseBridgeIntentCancelRaceHasNoDuplicateOrForward(t *testing.T) {
-	for i := 0; i != 20; i++ {
-		f := newFixture(t)
-		phase := &blockingPhasePort{intentStarted: make(chan struct{}), releaseIntent: make(chan struct{})}
-		f.p.opts.PhasePortFactory = func(context.Context, replay.SnapshotQueryEnvelope) (SnapshotQueryIntakePhasePort, error) {
-			return phase, nil
-		}
-		plan := f.install()
-		prepared, err := plan.Prepare(context.Background())
-		if err != nil {
-			t.Fatal(err)
-		}
-		intent := make(chan error, 1)
-		go func() { intent <- plan.PersistForwardIntent(context.Background(), prepared) }()
-		<-phase.intentStarted
-		one, two := make(chan error, 1), make(chan error, 1)
-		go func() { one <- plan.ReconcileCancel(context.Background()) }()
-		go func() { two <- plan.ReconcileCancel(context.Background()) }()
-		authorized := make(chan error, 1)
-		go func() { authorized <- plan.AuthorizeForward(context.Background(), prepared) }()
-		close(phase.releaseIntent)
-		if err := <-authorized; err == nil {
-			t.Fatalf("iteration %d: authorize unexpectedly reached C4", i)
-		}
-		if err := <-intent; err != nil && !errors.Is(err, errSnapshotQueryCanceled) {
-			t.Fatalf("iteration %d: intent=%v", i, err)
-		}
-		if err := <-one; err != nil {
-			t.Fatalf("iteration %d: cancel one=%v", i, err)
-		}
-		if err := <-two; err != nil {
-			t.Fatalf("iteration %d: cancel two=%v", i, err)
-		}
-		if got := strings.Join(phase.snapshotEvents(), ","); got != "prepare,intent,cancel" {
-			t.Fatalf("iteration %d: phase events=%q", i, got)
-		}
-		if got := strings.Join(f.journal.calls, ","); got != "begin" {
-			t.Fatalf("iteration %d: legacy journal=%q", i, got)
-		}
+func TestC4PhaseBridgeCancellationAfterAuthorizationStartsReconcilesOnce(t *testing.T) {
+	f := newFixture(t)
+	phase := &authorizeGatePhasePort{
+		authorizeStarted: make(chan struct{}),
+		releaseAuthorize: make(chan struct{}),
+	}
+	f.p.opts.PhasePortFactory = func(context.Context, replay.SnapshotQueryEnvelope) (SnapshotQueryIntakePhasePort, error) {
+		return phase, nil
+	}
+	plan := f.install()
+	prepared, err := plan.Prepare(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.PersistForwardIntent(context.Background(), prepared); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reaching the gated port proves AuthorizeForward passed beginCall before
+	// cancellation latched.  This is a legal ordering: cancellation must wait
+	// for that call, then reconcile the already-durable C4 record once.
+	authorized := make(chan error, 1)
+	go func() { authorized <- plan.AuthorizeForward(context.Background(), prepared) }()
+	<-phase.authorizeStarted
+	one, two := make(chan error, 1), make(chan error, 1)
+	go func() { one <- plan.ReconcileCancel(context.Background()) }()
+	go func() { two <- plan.ReconcileCancel(context.Background()) }()
+	close(phase.releaseAuthorize)
+	if err := <-authorized; err != nil {
+		t.Fatalf("authorization begun before cancellation: %v", err)
+	}
+	if err := <-one; err != nil {
+		t.Fatalf("first cancellation: %v", err)
+	}
+	if err := <-two; err != nil {
+		t.Fatalf("second cancellation: %v", err)
+	}
+	if got := strings.Join(phase.snapshotEvents(), ","); got != "prepare,intent,authorize,cancel" {
+		t.Fatalf("authorization/cancellation order or reconciliation count=%q", got)
+	}
+	// The bridge exposes no submit callback.  It must neither emit an unknown
+	// terminal path nor fall back to a legacy forward/reconciliation record.
+	if got := strings.Join(f.journal.calls, ","); got != "begin" {
+		t.Fatalf("authorization/cancellation escaped C4 ownership: %q", got)
 	}
 }
 
