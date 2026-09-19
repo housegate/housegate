@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ClickHouse/ch-go/proto"
@@ -84,6 +85,43 @@ type fakeJournal struct {
 type fakePhasePort struct {
 	events []string
 	errs   map[string]error
+}
+
+// blockingPhasePort makes the intent/cancel hand-off deterministic.  It is
+// intentionally separate from fakePhasePort because the concurrent test is
+// also run under -race.
+type blockingPhasePort struct {
+	mu            sync.Mutex
+	events        []string
+	intentStarted chan struct{}
+	releaseIntent chan struct{}
+}
+
+func (p *blockingPhasePort) record(name string) {
+	p.mu.Lock()
+	p.events = append(p.events, name)
+	p.mu.Unlock()
+}
+func (p *blockingPhasePort) snapshotEvents() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.events...)
+}
+func (p *blockingPhasePort) Prepare(context.Context) error { p.record("prepare"); return nil }
+func (p *blockingPhasePort) PersistSubmitIntent(context.Context) error {
+	p.record("intent")
+	close(p.intentStarted)
+	<-p.releaseIntent
+	return nil
+}
+func (p *blockingPhasePort) AuthorizeSubmit(context.Context) error { p.record("authorize"); return nil }
+func (p *blockingPhasePort) CancelAndReconcile(context.Context) error {
+	p.record("cancel")
+	return nil
+}
+func (p *blockingPhasePort) PersistAuthorizationUnknownAndReconcile(context.Context) error {
+	p.record("unknown")
+	return nil
 }
 
 func (p *fakePhasePort) call(name string) error {
@@ -323,6 +361,65 @@ func TestC4PhaseBridgeCancelBeforePortAndAfterIntent(t *testing.T) {
 	})
 }
 
+func TestC4PhaseBridgeLinearizesIntentAndCancel(t *testing.T) {
+	f := newFixture(t)
+	phase := &blockingPhasePort{intentStarted: make(chan struct{}), releaseIntent: make(chan struct{})}
+	f.p.opts.PhasePortFactory = func(context.Context, replay.SnapshotQueryEnvelope) (SnapshotQueryIntakePhasePort, error) {
+		return phase, nil
+	}
+	plan := f.install()
+	prepared, err := plan.Prepare(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	intentDone := make(chan error, 1)
+	go func() { intentDone <- plan.PersistForwardIntent(context.Background(), prepared) }()
+	<-phase.intentStarted
+	cancelDone := make(chan error, 1)
+	go func() { cancelDone <- plan.ReconcileCancel(context.Background()) }()
+	// PersistSubmitIntent has entered C4 but has not returned. Releasing it
+	// resolves the in-flight result that cancellation waits on before choosing
+	// C4 versus the legacy journal.
+	close(phase.releaseIntent)
+	if err := <-intentDone; err != nil {
+		t.Fatalf("intent: %v", err)
+	}
+	if err := <-cancelDone; err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	if got := strings.Join(phase.snapshotEvents(), ","); got != "prepare,intent,cancel" {
+		t.Fatalf("phase order=%q", got)
+	}
+	if got := strings.Join(f.journal.calls, ","); got != "begin" {
+		t.Fatalf("cancel escaped to legacy journal: %q", got)
+	}
+}
+
+func TestC4PhaseBridgeReconcilesLaterIntentAfterEarlierCancel(t *testing.T) {
+	f := newFixture(t)
+	phase := &fakePhasePort{}
+	f.p.opts.PhasePortFactory = func(context.Context, replay.SnapshotQueryEnvelope) (SnapshotQueryIntakePhasePort, error) {
+		return phase, nil
+	}
+	plan := f.install()
+	prepared, err := plan.Prepare(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.ReconcileCancel(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.PersistForwardIntent(context.Background(), prepared); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(phase.events, ","); got != "prepare,intent,cancel" {
+		t.Fatalf("later intent was not immediately reconciled: %q", got)
+	}
+	if got := strings.Join(f.journal.calls, ","); got != "begin,cancel" {
+		t.Fatalf("legacy ownership changed before C4 intent: %q", got)
+	}
+}
+
 func TestC4PhaseBridgeRejectsCallbackTamperAndPhaseErrors(t *testing.T) {
 	for name, phaseErr := range map[string]error{
 		"intent":    errors.New("intent durable failure"),
@@ -376,6 +473,61 @@ func TestC4PhaseBridgeRejectsCallbackTamperAndPhaseErrors(t *testing.T) {
 	}
 	if order := strings.Join(phase.events, ","); order != "prepare" {
 		t.Fatalf("phase order=%q", order)
+	}
+}
+
+func TestC4PhaseBridgeRejectsNonCanonicalCallbackInputsWithoutC4Effects(t *testing.T) {
+	callbacks := map[string]func(*plugin.AgentPreparePlan, plugin.PreparedAgentQuery) error{
+		"intent": func(p *plugin.AgentPreparePlan, q plugin.PreparedAgentQuery) error {
+			return p.PersistForwardIntent(context.Background(), q)
+		},
+		"authorize": func(p *plugin.AgentPreparePlan, q plugin.PreparedAgentQuery) error {
+			return p.AuthorizeForward(context.Background(), q)
+		},
+		"unknown": func(p *plugin.AgentPreparePlan, q plugin.PreparedAgentQuery) error {
+			return p.PersistForwardUnknown(context.Background(), q)
+		},
+	}
+	mutations := map[string]func(*plugin.PreparedAgentQuery){
+		"extra setting": func(q *plugin.PreparedAgentQuery) {
+			q.Query.Settings = append(q.Query.Settings, chproto.Setting{Key: "max_threads", Value: "1"})
+		},
+		"legacy setting": func(q *plugin.PreparedAgentQuery) {
+			q.Query.OldSettings = append(q.Query.OldSettings, chproto.OldSetting{Key: "max_threads", Value: 1})
+		},
+		"parameter": func(q *plugin.PreparedAgentQuery) {
+			q.Query.Parameters = append(q.Query.Parameters, proto.Parameter{Key: "value", Value: "1"})
+		},
+		"duplicate token": func(q *plugin.PreparedAgentQuery) {
+			q.Query.Settings = append(q.Query.Settings, q.Query.Settings[0])
+		},
+		"non-custom token": func(q *plugin.PreparedAgentQuery) { q.Query.Settings[0].Custom = false },
+		"important token":  func(q *plugin.PreparedAgentQuery) { q.Query.Settings[0].Important = true },
+		"obsolete token":   func(q *plugin.PreparedAgentQuery) { q.Query.Settings[0].Obsolete = true },
+	}
+	for callbackName, callback := range callbacks {
+		for mutationName, mutate := range mutations {
+			t.Run(callbackName+"/"+mutationName, func(t *testing.T) {
+				f := newFixture(t)
+				phase := &fakePhasePort{}
+				f.p.opts.PhasePortFactory = func(context.Context, replay.SnapshotQueryEnvelope) (SnapshotQueryIntakePhasePort, error) {
+					return phase, nil
+				}
+				plan := f.install()
+				prepared, err := plan.Prepare(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				prepared.Query = ptr(cloneQuery(*prepared.Query))
+				mutate(&prepared)
+				if err := callback(plan, prepared); err == nil {
+					t.Fatal("tampered execution input reached C4")
+				}
+				if got := strings.Join(phase.events, ","); got != "prepare" {
+					t.Fatalf("C4 side effect=%q", got)
+				}
+			})
+		}
 	}
 }
 
