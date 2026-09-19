@@ -14,7 +14,7 @@ import (
 	"sort"
 
 	"github.com/housegate/housegate/pkg/replay"
-	"github.com/housegate/housegate/pkg/replay/snapshotquery"
+	"github.com/housegate/housegate/pkg/replay/payloadexec"
 )
 
 // SnapshotQueryPrepareRequest identifies one sequenced source attempt.
@@ -52,24 +52,48 @@ type PreparedOutputStager struct {
 	dir     string
 }
 
-// preparedOutput is the minimal owned boundary Stage needs. Keeping it private
-// lets tests exercise the real staging lifecycle without manufacturing an
-// executor-owned PreparedQueryExecution.
-type preparedOutput interface {
+// PreparedOutput is the public, injected input boundary for Stage. The owner
+// of a one-shot executor adapts its prepared handle here; storage-integrity
+// deliberately does not import that executor package. Stage consumes this
+// handle exactly once and always calls Close before it persists a projection.
+type PreparedOutput interface {
 	Job() replay.SnapshotQueryJob
 	PreparedResult() replay.ExecutionResult
-	CanonicalOutput() snapshotquery.CanonicalOutput
+	OutputRows() PreparedOutputRows
 	Close() error
 }
 
-type preparedQueryOutput struct {
-	p *snapshotquery.PreparedQueryExecution
+// PreparedOutputRows is the narrow canonical-output capability that the
+// durable cache owns. It admits no replay, publication, claim, or executor
+// authority, so an adapter can be supplied at a composition boundary without
+// creating a storage-integrity-to-executor dependency.
+type PreparedOutputRows interface {
+	RowCount() uint64
+	OutputRowsRoot() string
+	TouchedPartitionIDs() []string
+	OpenRows() (payloadexec.RowSource, error)
 }
 
-func (p preparedQueryOutput) Job() replay.SnapshotQueryJob                   { return p.p.Job() }
-func (p preparedQueryOutput) PreparedResult() replay.ExecutionResult         { return p.p.Result }
-func (p preparedQueryOutput) CanonicalOutput() snapshotquery.CanonicalOutput { return p.p.Output }
-func (p preparedQueryOutput) Close() error                                   { return p.p.Close() }
+// PreparedOutputAdapter adapts an executor-owned prepared handle at the
+// composition boundary. It intentionally stores only the four capabilities
+// Stage needs, so callers can bridge a concrete execution type without adding
+// its package to storage-integrity's production dependency graph.
+type PreparedOutputAdapter struct {
+	JobValue    replay.SnapshotQueryJob
+	ResultValue replay.ExecutionResult
+	Rows        PreparedOutputRows
+	CloseFunc   func() error
+}
+
+func (a PreparedOutputAdapter) Job() replay.SnapshotQueryJob           { return a.JobValue }
+func (a PreparedOutputAdapter) PreparedResult() replay.ExecutionResult { return a.ResultValue }
+func (a PreparedOutputAdapter) OutputRows() PreparedOutputRows         { return a.Rows }
+func (a PreparedOutputAdapter) Close() error {
+	if a.CloseFunc == nil {
+		return nil
+	}
+	return a.CloseFunc()
+}
 
 func NewPreparedOutputStager(j SnapshotQueryJournal, dir string) (*PreparedOutputStager, error) {
 	if j == nil || dir == "" {
@@ -81,16 +105,11 @@ func NewPreparedOutputStager(j SnapshotQueryJournal, dir string) (*PreparedOutpu
 	return &PreparedOutputStager{j, dir}, nil
 }
 
-// Stage consumes a PreparedQueryExecution exactly once. It does not call
-// Replay, so the SELECT cannot be repeated to recreate rows.
-func (s *PreparedOutputStager) Stage(ctx context.Context, req SnapshotQueryPrepareRequest, p *snapshotquery.PreparedQueryExecution) (SnapshotQueryPrepared, error) {
-	if s == nil || p == nil {
-		return SnapshotQueryPrepared{}, errors.New("storageintegrity: prepared output stager is uninitialized")
-	}
-	return s.stage(ctx, req, preparedQueryOutput{p})
-}
-
-func (s *PreparedOutputStager) stage(ctx context.Context, req SnapshotQueryPrepareRequest, p preparedOutput) (prepared SnapshotQueryPrepared, err error) {
+// Stage consumes a PreparedOutput exactly once. It does not call Replay, so
+// the SELECT cannot be repeated to recreate rows. PreparedOutput is the
+// callable lifecycle boundary; concrete executor adapters belong to their
+// composition owner, not this injection-only package.
+func (s *PreparedOutputStager) Stage(ctx context.Context, req SnapshotQueryPrepareRequest, p PreparedOutput) (prepared SnapshotQueryPrepared, err error) {
 	if s == nil || p == nil {
 		return SnapshotQueryPrepared{}, errors.New("storageintegrity: prepared output stager is uninitialized")
 	}
@@ -120,7 +139,7 @@ func (s *PreparedOutputStager) stage(ctx context.Context, req SnapshotQueryPrepa
 		return SnapshotQueryPrepared{}, errors.New("storageintegrity: prepared output identity mismatch")
 	}
 	result := p.PreparedResult()
-	out := p.CanonicalOutput()
+	out := p.OutputRows()
 	if result.SnapshotQuery == nil || result.SnapshotQuery.ExecutionOutcome != "applied" || out == nil || result.SnapshotQuery.OutputRowsRoot != out.OutputRowsRoot() || result.SnapshotQuery.OutputRowCount != out.RowCount() || result.ComputedStateRoot == "" {
 		return SnapshotQueryPrepared{}, errors.New("storageintegrity: invalid prepared output")
 	}
@@ -195,7 +214,7 @@ type preparedRow struct {
 	Row any `json:"row"`
 }
 
-func copyAndVerifyPreparedOutput(ctx context.Context, path string, req SnapshotQueryPrepareRequest, out snapshotquery.CanonicalOutput, state string) (string, error) {
+func copyAndVerifyPreparedOutput(ctx context.Context, path string, req SnapshotQueryPrepareRequest, out PreparedOutputRows, state string) (string, error) {
 	rows, err := out.OpenRows()
 	if err != nil {
 		return "", err

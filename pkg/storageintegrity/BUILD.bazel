@@ -34,7 +34,6 @@ go_library(
         "//pkg/replay",
         "//pkg/replay/nativepayload",
         "//pkg/replay/payloadexec",
-		"//pkg/replay/snapshotquery",
         "//pkg/sqlident",
         "@com_github_sentioxyz_arbiter_proto//gen/pb",
         "@org_golang_google_grpc//codes",

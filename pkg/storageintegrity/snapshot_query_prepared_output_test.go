@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"testing"
 
 	"github.com/housegate/housegate/pkg/replay"
 	"github.com/housegate/housegate/pkg/replay/payloadexec"
-	"github.com/housegate/housegate/pkg/replay/snapshotquery"
 )
 
 func TestPreparedOutputProjectionCannotBeClaim(t *testing.T) {
@@ -42,9 +42,9 @@ type preparedOutputFake struct {
 	events *[]string
 }
 
-func (p *preparedOutputFake) Job() replay.SnapshotQueryJob                   { return p.job }
-func (p *preparedOutputFake) PreparedResult() replay.ExecutionResult         { return p.result }
-func (p *preparedOutputFake) CanonicalOutput() snapshotquery.CanonicalOutput { return p.out }
+func (p *preparedOutputFake) Job() replay.SnapshotQueryJob           { return p.job }
+func (p *preparedOutputFake) PreparedResult() replay.ExecutionResult { return p.result }
+func (p *preparedOutputFake) OutputRows() PreparedOutputRows         { return p.out }
 func (p *preparedOutputFake) Close() error {
 	p.closed++
 	*p.events = append(*p.events, "close")
@@ -52,29 +52,47 @@ func (p *preparedOutputFake) Close() error {
 }
 
 type canonicalOutputFake struct {
-	opens    int
-	failOpen error
-	failNext error
-	events   *[]string
+	opens      int
+	failOpen   error
+	failNext   error
+	events     *[]string
+	rows       []payloadexec.Row
+	root       string
+	partitions []string
 }
 
-func (o *canonicalOutputFake) RowCount() uint64              { return 0 }
-func (o *canonicalOutputFake) OutputRowsRoot() string        { return replay.DigestString("output") }
-func (o *canonicalOutputFake) TouchedPartitionIDs() []string { return nil }
+func (o *canonicalOutputFake) RowCount() uint64 { return uint64(len(o.rows)) }
+func (o *canonicalOutputFake) OutputRowsRoot() string {
+	if o.root != "" {
+		return o.root
+	}
+	return replay.DigestString("output")
+}
+func (o *canonicalOutputFake) TouchedPartitionIDs() []string {
+	return append([]string{}, o.partitions...)
+}
 func (o *canonicalOutputFake) OpenRows() (payloadexec.RowSource, error) {
 	o.opens++
 	if o.failOpen != nil {
 		return nil, o.failOpen
 	}
-	return &rowSourceFake{err: o.failNext}, nil
+	return &rowSourceFake{err: o.failNext, rows: append([]payloadexec.Row{}, o.rows...)}, nil
 }
-func (o *canonicalOutputFake) Close() error { return nil }
 
-type rowSourceFake struct{ err error }
+type rowSourceFake struct {
+	err  error
+	rows []payloadexec.Row
+	next int
+}
 
 func (r *rowSourceFake) Next(context.Context) (payloadexec.Row, error) {
 	if r.err != nil {
 		return payloadexec.Row{}, r.err
+	}
+	if r.next < len(r.rows) {
+		row := r.rows[r.next]
+		r.next++
+		return row, nil
 	}
 	return payloadexec.Row{}, io.EOF
 }
@@ -85,6 +103,49 @@ type stageJournalFake struct {
 	saveErr error
 	saved   int
 	events  *[]string
+}
+
+func TestPreparedOutputStagerStagePublicLifecycleReopensDurableCache(t *testing.T) {
+	env := snapshotQueryEnvelopeFixture(t)
+	accepted := snapshotQueryAcceptedResult(env)
+	rows := []payloadexec.Row{{RowID: []byte{1, 2}, Values: []any{"value", int64(7)}, PartitionID: "p2", RawBytes: 9}}
+	out := &canonicalOutputFake{rows: rows, root: replay.DigestString("canonical-output"), partitions: []string{"p2"}}
+	events := []string{}
+	closeCount := 0
+	result := replay.ExecutionResult{SnapshotQuery: &replay.SnapshotQueryEvidence{ExecutionOutcome: "applied", OutputRowsRoot: out.OutputRowsRoot(), OutputRowCount: out.RowCount()}, ComputedStateRoot: replay.DigestString("state")}
+	p := PreparedOutputAdapter{
+		JobValue:    replay.SnapshotQueryJob{BlockSeq: accepted.BlockSeq, Reservation: accepted.Reservation, Statement: replay.SnapshotQueryStatement{StatementSeq: accepted.StatementSeq, Envelope: env}},
+		ResultValue: result,
+		Rows:        out,
+		CloseFunc: func() error {
+			closeCount++
+			events = append(events, "close")
+			return nil
+		},
+	}
+	j := &stageJournalFake{rec: SnapshotQueryJournalRecord{Version: SnapshotQueryJournalVersion, StatementID: env.Input.Binding.StatementID, Envelope: env, Stage: SnapshotQueryStageSequenced, Submit: accepted, HasSubmit: true}, events: &events}
+	s, err := NewPreparedOutputStager(j, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := s.Stage(context.Background(), SnapshotQueryPrepareRequest{Envelope: env, Accepted: accepted}, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closeCount != 1 || out.opens != 1 || j.saved != 1 || j.rec.PreparedOutput == nil {
+		t.Fatalf("lifecycle close=%d opens=%d saves=%d prepared=%v", closeCount, out.opens, j.saved, j.rec.PreparedOutput != nil)
+	}
+	f, err := os.Open(prepared.CachePath)
+	if err != nil {
+		t.Fatalf("reopen durable cache: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close reopened cache: %v", err)
+	}
+	want := preparedHeader{env.Input.Binding.StatementID, env.InputRoot, env.Input.Binding.ReservationID, env.Input.Binding.FencingGeneration, accepted.BlockSeq, out.OutputRowsRoot(), out.RowCount(), result.ComputedStateRoot}
+	if err := verifyPreparedOutput(prepared.CachePath, want, prepared.CacheDigest); err != nil {
+		t.Fatalf("reopened cache digest: %v", err)
+	}
 }
 
 func (j *stageJournalFake) Load(context.Context, string) (SnapshotQueryJournalRecord, bool, error) {
@@ -133,7 +194,7 @@ func TestPreparedOutputStagerStageClosesBeforePersistenceAndOnFailures(t *testin
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = s.stage(ctx, SnapshotQueryPrepareRequest{Envelope: env, Accepted: accepted}, p)
+			_, err = s.Stage(ctx, SnapshotQueryPrepareRequest{Envelope: env, Accepted: accepted}, p)
 			if tc.saveErr == nil && !tc.cancel && tc.openErr == nil && tc.nextErr == nil {
 				if err != nil {
 					t.Fatal(err)
