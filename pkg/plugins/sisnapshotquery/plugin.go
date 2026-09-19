@@ -106,6 +106,15 @@ type operationState struct {
 	value       Operation
 	phasePort   SnapshotQueryIntakePhasePort
 	phaseIntent bool
+	// A forward lease has two stages.  An admitted callback may be parked
+	// between its identity check and the external port call; cancellation wins
+	// that stage immediately and activation then fails.  Once activation has
+	// linearized an actual port call, cancellation waits for it to return before
+	// reconciling.  This keeps no mutex across I/O while leaving no unlocked
+	// check-to-call window.
+	forwardAdmission bool
+	forwardIO        bool
+	forwardDone      chan struct{}
 	// cancelRequested is the linearization point shared by all four relay
 	// callbacks.  Once it is set, no callback may begin a forward-side effect.
 	// The two durable cancellation domains are mutually exclusive: legacy owns
@@ -114,11 +123,75 @@ type operationState struct {
 	legacyCancelInFlight   bool
 	legacyCancelDone       chan struct{}
 	legacyCancelReconciled bool
-	intentInFlight         bool
-	intentDone             chan struct{}
 	phaseCancelInFlight    bool
 	phaseCancelDone        chan struct{}
 	phaseCancelReconciled  bool
+}
+
+type forwardLease struct{ state *operationState }
+
+// acquireForward reserves the pre-call stage.  It serializes the three relay
+// forward callbacks, so an unknown/reconciliation callback cannot overlap an
+// authorization callback for the same prepared operation.
+func (s *operationState) acquireForward(ctx context.Context) (*forwardLease, error) {
+	for {
+		s.mu.Lock()
+		if s.cancelRequested {
+			s.mu.Unlock()
+			return nil, errSnapshotQueryCanceled
+		}
+		if !s.forwardAdmission && !s.forwardIO {
+			s.forwardAdmission = true
+			s.forwardDone = make(chan struct{})
+			s.mu.Unlock()
+			return &forwardLease{state: s}, nil
+		}
+		done := s.forwardDone
+		s.mu.Unlock()
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+}
+
+// activate is the final check immediately before a forward-side-effect call.
+// Cancellation may latch while a lease is admitted, but never after this
+// method returns nil without waiting for the I/O lease to finish.
+func (l *forwardLease) activate() error {
+	s := l.state
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.forwardAdmission {
+		return errors.New("sisnapshotquery: invalid forward lease")
+	}
+	if s.cancelRequested {
+		s.forwardAdmission = false
+		close(s.forwardDone)
+		return errSnapshotQueryCanceled
+	}
+	s.forwardAdmission = false
+	s.forwardIO = true
+	return nil
+}
+
+// finish releases an activated lease.  A successful unknown callback has
+// already reconciled its selected durable domain, so a later cancellation is
+// idempotently complete rather than issuing a second reconciliation.
+func (l *forwardLease) finish(unknownReconciled bool, phaseDomain bool) {
+	s := l.state
+	s.mu.Lock()
+	if unknownReconciled {
+		if phaseDomain {
+			s.phaseCancelReconciled = true
+		} else {
+			s.legacyCancelReconciled = true
+		}
+	}
+	s.forwardIO = false
+	close(s.forwardDone)
+	s.mu.Unlock()
 }
 
 func (s *operationState) snapshot() (Operation, SnapshotQueryIntakePhasePort, bool) {
@@ -146,12 +219,22 @@ type Options struct {
 	// delegate exactly to the C4 phase port after the worker has constructed and
 	// signed the complete envelope.  It is deliberately not build/config wired.
 	PhasePortFactory SnapshotQueryIntakePhasePortFactory
-	NetworkID        string
-	KeeperShardID    uint32
-	MaxControlBytes  uint64
+	// beforeForwardActivation is package-private test instrumentation for the
+	// admitted-to-activated lease boundary.  Production callers cannot set it.
+	beforeForwardActivation func()
+	NetworkID               string
+	KeeperShardID           uint32
+	MaxControlBytes         uint64
 }
 
 type Plugin struct{ opts Options }
+
+func (p *Plugin) activateForward(lease *forwardLease) error {
+	if p.opts.beforeForwardActivation != nil {
+		p.opts.beforeForwardActivation()
+	}
+	return lease.activate()
+}
 
 func New(opts Options) (*Plugin, error) {
 	if opts.Classifier == nil || opts.Reservations == nil || opts.Catalog == nil || opts.Analyzer == nil || opts.ControlSigner == nil || opts.StatementSigner == nil || opts.Sequence == nil || opts.Journal == nil || strings.TrimSpace(opts.NetworkID) == "" || opts.MaxControlBytes == 0 {
@@ -199,36 +282,58 @@ func (p *Plugin) OnQuery(_ context.Context, qctx *plugin.QueryContext) error {
 			return p.persistForwardIntent(ctx, state, prepared)
 		},
 		AuthorizeForward: func(ctx context.Context, prepared plugin.PreparedAgentQuery) error {
-			op, phasePort, phaseIntent := state.snapshot()
+			op, _, _ := state.snapshot()
 			if !matches(op, prepared) {
 				return errors.New("sisnapshotquery: forward authorization identity mismatch")
 			}
-			if state.isCanceled() {
-				return errSnapshotQueryCanceled
+			lease, err := state.acquireForward(ctx)
+			if err != nil {
+				return err
 			}
+			if err := p.activateForward(lease); err != nil {
+				return err
+			}
+			op, phasePort, phaseIntent := state.snapshot()
 			if phasePort == nil {
-				return p.opts.Journal.AuthorizeSnapshotQueryForward(ctx, op)
+				err := p.opts.Journal.AuthorizeSnapshotQueryForward(ctx, op)
+				lease.finish(false, false)
+				return err
 			}
 			if !phaseIntent {
+				lease.finish(false, true)
 				return errors.New("sisnapshotquery: phase port authorization without submit intent")
 			}
-			return phasePort.AuthorizeSubmit(ctx)
+			err = phasePort.AuthorizeSubmit(ctx)
+			lease.finish(false, true)
+			return err
 		},
 		PersistForwardUnknown: func(ctx context.Context, prepared plugin.PreparedAgentQuery) error {
-			op, phasePort, phaseIntent := state.snapshot()
+			op, _, _ := state.snapshot()
 			if !matches(op, prepared) {
 				return errors.New("sisnapshotquery: forward unknown identity mismatch")
 			}
-			if state.isCanceled() {
-				return errSnapshotQueryCanceled
+			lease, err := state.acquireForward(ctx)
+			if err != nil {
+				return err
 			}
+			if err := p.activateForward(lease); err != nil {
+				return err
+			}
+			op, phasePort, phaseIntent := state.snapshot()
 			if phasePort == nil {
-				return p.opts.Journal.PersistSnapshotQueryForwardUnknown(ctx, op)
+				err := p.opts.Journal.PersistSnapshotQueryForwardUnknown(ctx, op)
+				// The legacy record only persists uncertainty; its corresponding
+				// cancellation reconciliation is still the legacy cancel record.
+				lease.finish(false, false)
+				return err
 			}
 			if !phaseIntent {
+				lease.finish(false, true)
 				return errors.New("sisnapshotquery: phase port unknown authorization without submit intent")
 			}
-			return phasePort.PersistAuthorizationUnknownAndReconcile(ctx)
+			err = phasePort.PersistAuthorizationUnknownAndReconcile(ctx)
+			lease.finish(err == nil, true)
+			return err
 		},
 	}
 	return nil
@@ -236,77 +341,60 @@ func (p *Plugin) OnQuery(_ context.Context, qctx *plugin.QueryContext) error {
 
 var errSnapshotQueryCanceled = errors.New("sisnapshotquery: snapshot query cancellation is already latched")
 
-func (s *operationState) isCanceled() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.cancelRequested
-}
-
 // persistForwardIntent establishes C4 ownership only if cancellation has not
 // already selected the legacy owner.  All I/O is deliberately outside the
 // mutex; concurrent retries wait on the same durable attempt.
 func (p *Plugin) persistForwardIntent(ctx context.Context, state *operationState, prepared plugin.PreparedAgentQuery) error {
-	op, phasePort, _ := state.snapshot()
+	op, _, _ := state.snapshot()
 	if !matches(op, prepared) {
 		return errors.New("sisnapshotquery: forward intent identity mismatch")
 	}
-	if phasePort == nil {
-		if state.isCanceled() {
-			return errSnapshotQueryCanceled
-		}
-		return p.opts.Journal.PersistSnapshotQueryForwardIntent(ctx, op)
+	lease, err := state.acquireForward(ctx)
+	if err != nil {
+		return err
 	}
-	for {
-		state.mu.Lock()
-		if state.cancelRequested {
-			state.mu.Unlock()
-			return errSnapshotQueryCanceled
-		}
-		if state.phaseIntent {
-			state.mu.Unlock()
-			return nil
-		}
-		if state.intentInFlight {
-			done := state.intentDone
-			state.mu.Unlock()
-			select {
-			case <-done:
-				continue
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
-		state.intentInFlight = true
-		state.intentDone = make(chan struct{})
-		done := state.intentDone
+	if err := p.activateForward(lease); err != nil {
+		return err
+	}
+	op, phasePort, _ := state.snapshot()
+	if phasePort == nil {
+		err := p.opts.Journal.PersistSnapshotQueryForwardIntent(ctx, op)
+		lease.finish(false, false)
+		return err
+	}
+	state.mu.Lock()
+	if state.phaseIntent {
 		state.mu.Unlock()
-
-		err := phasePort.PersistSubmitIntent(ctx)
-		state.mu.Lock()
-		state.intentInFlight = false
-		if err == nil {
-			state.phaseIntent = true
-		}
-		close(done)
-		canceled := state.cancelRequested
-		state.mu.Unlock()
-		if err != nil {
-			return err
-		}
-		if canceled {
-			// The durable intent won the race, so C4, and only C4, reconciles it.
-			if err := p.reconcileCancel(ctx, state); err != nil {
-				return err
-			}
-			return errSnapshotQueryCanceled
-		}
+		lease.finish(false, true)
 		return nil
 	}
+	state.mu.Unlock()
+	err = phasePort.PersistSubmitIntent(ctx)
+	state.mu.Lock()
+	if err == nil {
+		state.phaseIntent = true
+	}
+	state.mu.Unlock()
+	lease.finish(false, true)
+	if err != nil {
+		return err
+	}
+	if state.canceled() {
+		// The durable intent won before cancellation latched; only C4 may
+		// reconcile it.
+		if err := p.reconcileCancel(ctx, state); err != nil {
+			return err
+		}
+		return errSnapshotQueryCanceled
+	}
+	return nil
 }
 
-// reconcileCancel latches cancellation before it selects an owner.  If C4's
-// intent call is in progress, it waits for that call without retaining the
-// mutex; success routes to C4, failure routes to the exact D1 legacy record.
+func (s *operationState) canceled() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.cancelRequested }
+
+// reconcileCancel latches cancellation before it selects an owner.  An
+// activated forward lease is allowed to finish first; an admitted-but-not-yet
+// activated lease observes the latch and never calls its external port.
 func (p *Plugin) reconcileCancel(ctx context.Context, state *operationState) error {
 	for {
 		state.mu.Lock()
@@ -316,8 +404,8 @@ func (p *Plugin) reconcileCancel(ctx context.Context, state *operationState) err
 			return nil
 		}
 		state.cancelRequested = true
-		if state.intentInFlight {
-			done := state.intentDone
+		if state.forwardIO {
+			done := state.forwardDone
 			state.mu.Unlock()
 			select {
 			case <-done:

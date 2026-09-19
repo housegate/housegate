@@ -515,6 +515,75 @@ func TestC4PhaseBridgeCancelLatchRejectsAuthorizeDuringPhaseCancel(t *testing.T)
 	}
 }
 
+func TestC4PhaseBridgeLeaseGateLetsCancellationWinBeforeExternalForwardCall(t *testing.T) {
+	for name, callback := range map[string]func(*plugin.AgentPreparePlan, plugin.PreparedAgentQuery) error{
+		"authorize": func(plan *plugin.AgentPreparePlan, prepared plugin.PreparedAgentQuery) error {
+			return plan.AuthorizeForward(context.Background(), prepared)
+		},
+		"unknown": func(plan *plugin.AgentPreparePlan, prepared plugin.PreparedAgentQuery) error {
+			return plan.PersistForwardUnknown(context.Background(), prepared)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			phase := &fakePhasePort{}
+			f.p.opts.PhasePortFactory = func(context.Context, replay.SnapshotQueryEnvelope) (SnapshotQueryIntakePhasePort, error) {
+				return phase, nil
+			}
+			plan := f.install()
+			prepared, err := plan.Prepare(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := plan.PersistForwardIntent(context.Background(), prepared); err != nil {
+				t.Fatal(err)
+			}
+			entered, release := make(chan struct{}), make(chan struct{})
+			f.p.opts.beforeForwardActivation = func() { close(entered); <-release }
+			result := make(chan error, 1)
+			go func() { result <- callback(plan, prepared) }()
+			<-entered
+			// The callback has passed identity validation but has not activated its
+			// I/O lease. Cancellation latches and reconciles first; releasing the
+			// gate must therefore not invoke the phase forward method.
+			if err := plan.ReconcileCancel(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			close(release)
+			if err := <-result; !errors.Is(err, errSnapshotQueryCanceled) {
+				t.Fatalf("callback err=%v", err)
+			}
+			if got := strings.Join(phase.events, ","); got != "prepare,intent,cancel" {
+				t.Fatalf("cancellation leaked a %s call: %q", name, got)
+			}
+		})
+	}
+
+	t.Run("legacy intent", func(t *testing.T) {
+		f := newFixture(t)
+		plan := f.install()
+		prepared, err := plan.Prepare(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		entered, release := make(chan struct{}), make(chan struct{})
+		f.p.opts.beforeForwardActivation = func() { close(entered); <-release }
+		result := make(chan error, 1)
+		go func() { result <- plan.PersistForwardIntent(context.Background(), prepared) }()
+		<-entered
+		if err := plan.ReconcileCancel(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		close(release)
+		if err := <-result; !errors.Is(err, errSnapshotQueryCanceled) {
+			t.Fatalf("intent err=%v", err)
+		}
+		if got := strings.Join(f.journal.calls, ","); got != "begin,cancel" {
+			t.Fatalf("cancellation leaked a legacy intent: %q", got)
+		}
+	})
+}
+
 func TestC4PhaseBridgeDoublePreIntentCancelHasOneLegacyOwner(t *testing.T) {
 	f := newFixture(t)
 	phase := &fakePhasePort{}
@@ -569,10 +638,12 @@ func TestC4PhaseBridgeIntentCancelRaceHasNoDuplicateOrForward(t *testing.T) {
 		one, two := make(chan error, 1), make(chan error, 1)
 		go func() { one <- plan.ReconcileCancel(context.Background()) }()
 		go func() { two <- plan.ReconcileCancel(context.Background()) }()
-		if err := plan.AuthorizeForward(context.Background(), prepared); err == nil {
+		authorized := make(chan error, 1)
+		go func() { authorized <- plan.AuthorizeForward(context.Background(), prepared) }()
+		close(phase.releaseIntent)
+		if err := <-authorized; err == nil {
 			t.Fatalf("iteration %d: authorize unexpectedly reached C4", i)
 		}
-		close(phase.releaseIntent)
 		if err := <-intent; err != nil && !errors.Is(err, errSnapshotQueryCanceled) {
 			t.Fatalf("iteration %d: intent=%v", i, err)
 		}
