@@ -1099,6 +1099,12 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 					if errors.Is(err, io.EOF) {
 						return io.EOF
 					}
+					if errors.Is(err, errQueryOnlyLifecycleFinalized) {
+						// runQueryOnly already fired the terminal lifecycle hooks.
+						// The client write failed, so an Exception cannot be delivered
+						// either; close without repeating durable cleanup.
+						return err
+					}
 					r.writeExceptionToClient(ctx, err)
 					r.hooks.OnQueryAbort(ctx, qctx)
 					r.hooks.OnQueryComplete(ctx, r.sess)

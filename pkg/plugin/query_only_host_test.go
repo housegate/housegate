@@ -22,7 +22,9 @@ type cancelOnceSnapshotQueryHostSource struct {
 	canceled atomic.Int32
 }
 
-func (*cancelOnceSnapshotQueryHostSource) IsSnapshotQuery(*chproto.Query) (bool, error) { return true, nil }
+func (*cancelOnceSnapshotQueryHostSource) IsSnapshotQuery(*chproto.Query) (bool, error) {
+	return true, nil
+}
 func (s *cancelOnceSnapshotQueryHostSource) AdmitSnapshotQueryAtHost(context.Context, *chproto.Query) (SnapshotQueryHostAdmission, error) {
 	return SnapshotQueryHostAdmission{
 		Run: func(ctx context.Context) error {
@@ -80,5 +82,21 @@ func TestSnapshotQueryHostPlugin_CancelClientAndContextCancelInvokeAdmissionCanc
 	}
 	if got := source.canceled.Load(); got != 1 {
 		t.Fatalf("CancelClient calls=%d, want 1", got)
+	}
+}
+
+func TestSnapshotQueryHostPlugin_OnlyRunsOnOwningHost(t *testing.T) {
+	host, err := NewSnapshotQueryHostPlugin(&testSnapshotQueryHostSource{})
+	if err != nil {
+		t.Fatalf("NewSnapshotQueryHostPlugin: %v", err)
+	}
+	if host.RunOnRouted() {
+		t.Fatal("host plugin must not claim routed source sessions")
+	}
+	if host.RunOnForward() {
+		t.Fatal("host plugin must not claim origin forwarding sessions")
+	}
+	if !host.RunOnPeerTrust() {
+		t.Fatal("host plugin must run on the peer-trusted owning session")
 	}
 }

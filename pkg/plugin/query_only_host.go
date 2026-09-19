@@ -99,9 +99,9 @@ func cloneHostQuery(q *chproto.Query) *chproto.Query {
 	return &cpy
 }
 
-func (*SnapshotQueryHostPlugin) RunOnRouted() bool    { return true }
+func (*SnapshotQueryHostPlugin) RunOnRouted() bool    { return false }
 func (*SnapshotQueryHostPlugin) RunOnPeerTrust() bool { return true }
-func (*SnapshotQueryHostPlugin) RunOnForward() bool   { return true }
+func (*SnapshotQueryHostPlugin) RunOnForward() bool   { return false }
 
 var _ QueryPlugin = (*SnapshotQueryHostPlugin)(nil)
 var _ RouteAware = (*SnapshotQueryHostPlugin)(nil)

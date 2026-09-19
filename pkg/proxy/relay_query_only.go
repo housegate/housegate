@@ -12,7 +12,10 @@ import (
 	"github.com/housegate/housegate/pkg/plugin"
 )
 
-var errQueryOnlyCanceled = errors.New("query-only execution canceled")
+var (
+	errQueryOnlyCanceled           = errors.New("query-only execution canceled")
+	errQueryOnlyLifecycleFinalized = errors.New("query-only lifecycle already finalized")
+)
 
 // This is only the reader's liveness poll while Run is outstanding. It is
 // never used to decide whether local success may be exposed.
@@ -75,7 +78,7 @@ func (r *Relay) runQueryOnly(ctx context.Context, qctx *plugin.QueryContext) err
 		r.hooks.OnQueryComplete(ctx, r.sess)
 		r.markQueryOnlySessionTerminal()
 		if err := r.sess.Client().WriteRawPacket([]byte{byte(chproto.ServerEndOfStreamCode)}); err != nil {
-			return fmt.Errorf("write query-only cancellation end-of-stream: %w", err)
+			return fmt.Errorf("%w: write query-only cancellation end-of-stream: %w", errQueryOnlyLifecycleFinalized, err)
 		}
 		return nil
 	}
@@ -102,7 +105,7 @@ func (r *Relay) runQueryOnly(ctx context.Context, qctx *plugin.QueryContext) err
 		r.hooks.OnQueryComplete(ctx, r.sess)
 		r.markQueryOnlySessionTerminal()
 		if err := r.sess.Client().WriteRawPacket([]byte{byte(chproto.ServerEndOfStreamCode)}); err != nil {
-			return fmt.Errorf("write query-only end-of-stream: %w", err)
+			return fmt.Errorf("%w: write query-only end-of-stream: %w", errQueryOnlyLifecycleFinalized, err)
 		}
 		// INSERT ... SELECT has no ClientData terminator. There is therefore no
 		// wire boundary that can distinguish a delayed control packet for this
