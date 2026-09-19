@@ -140,11 +140,15 @@ func (s *PreparedOutputStager) Stage(ctx context.Context, req SnapshotQueryPrepa
 	}
 	result := p.PreparedResult()
 	out := p.OutputRows()
-	if result.SnapshotQuery == nil || result.SnapshotQuery.ExecutionOutcome != "applied" || out == nil || result.SnapshotQuery.OutputRowsRoot != out.OutputRowsRoot() || result.SnapshotQuery.OutputRowCount != out.RowCount() || result.ComputedStateRoot == "" {
+	metadata, err := snapshotPreparedOutputMetadata(out)
+	if err != nil {
+		return SnapshotQueryPrepared{}, err
+	}
+	if result.SnapshotQuery == nil || result.SnapshotQuery.ExecutionOutcome != "applied" || result.SnapshotQuery.OutputRowsRoot != metadata.rowsRoot || result.SnapshotQuery.OutputRowCount != metadata.rowCount || result.ComputedStateRoot == "" {
 		return SnapshotQueryPrepared{}, errors.New("storageintegrity: invalid prepared output")
 	}
 	path := filepath.Join(s.dir, preparedCacheName(b.StatementID, req.Envelope.InputRoot, b.ReservationID, b.FencingGeneration, req.Accepted.BlockSeq))
-	digest, err := copyAndVerifyPreparedOutput(ctx, path, req, out, result.ComputedStateRoot)
+	digest, err := copyAndVerifyPreparedOutput(ctx, path, req, out, metadata, result.ComputedStateRoot)
 	if err != nil {
 		return SnapshotQueryPrepared{}, err
 	}
@@ -153,9 +157,7 @@ func (s *PreparedOutputStager) Stage(ctx context.Context, req SnapshotQueryPrepa
 		return SnapshotQueryPrepared{}, fmt.Errorf("storageintegrity: close prepared output: %w", err)
 	}
 	closed = true
-	touched := out.TouchedPartitionIDs()
-	sort.Strings(touched)
-	prepared = SnapshotQueryPrepared{StatementID: b.StatementID, InputRoot: req.Envelope.InputRoot, BlockSeq: req.Accepted.BlockSeq, FencingGeneration: b.FencingGeneration, OutputRowsRoot: out.OutputRowsRoot(), OutputRowCount: out.RowCount(), TouchedPartitionIDs: touched, Status: "PendingUnsubmitted", CapacityReservationID: "", Candidates: []replay.SnapshotReadPart{}, SourceClaimRoot: "", Stage: string(SnapshotQueryStagePreparedOutput), ComputedStateRoot: result.ComputedStateRoot, CachePath: path, CacheDigest: digest}
+	prepared = SnapshotQueryPrepared{StatementID: b.StatementID, InputRoot: req.Envelope.InputRoot, BlockSeq: req.Accepted.BlockSeq, FencingGeneration: b.FencingGeneration, OutputRowsRoot: metadata.rowsRoot, OutputRowCount: metadata.rowCount, TouchedPartitionIDs: metadata.partitions, Status: "PendingUnsubmitted", CapacityReservationID: "", Candidates: []replay.SnapshotReadPart{}, SourceClaimRoot: "", Stage: string(SnapshotQueryStagePreparedOutput), ComputedStateRoot: result.ComputedStateRoot, CachePath: path, CacheDigest: digest}
 	if err := validateSnapshotQueryPrepared(req.Envelope, req.Accepted, prepared); err != nil {
 		return SnapshotQueryPrepared{}, err
 	}
@@ -200,9 +202,36 @@ type preparedHeader struct {
 	OutputRowCount    uint64 `json:"output_row_count"`
 	ComputedStateRoot string `json:"computed_state_root"`
 }
+
+// preparedOutputMetadata is the immutable observation of an executor-owned
+// output. OpenRows may release or mutate an adapter, so Stage observes this
+// once before opening the stream and only uses this snapshot afterwards.
+type preparedOutputMetadata struct {
+	rowsRoot   string
+	rowCount   uint64
+	partitions []string
+}
 type preparedTrailer struct {
 	Rows   uint64 `json:"rows"`
 	Digest string `json:"digest"`
+}
+
+func snapshotPreparedOutputMetadata(out PreparedOutputRows) (preparedOutputMetadata, error) {
+	if out == nil {
+		return preparedOutputMetadata{}, errors.New("storageintegrity: invalid prepared output")
+	}
+	metadata := preparedOutputMetadata{
+		rowsRoot:   out.OutputRowsRoot(),
+		rowCount:   out.RowCount(),
+		partitions: append([]string{}, out.TouchedPartitionIDs()...),
+	}
+	sort.Strings(metadata.partitions)
+	for i, partition := range metadata.partitions {
+		if partition == "" || i > 0 && metadata.partitions[i-1] >= partition {
+			return preparedOutputMetadata{}, errors.New("storageintegrity: noncanonical touched partitions")
+		}
+	}
+	return metadata, nil
 }
 
 func preparedCacheName(a, b, c string, d, e uint64) string {
@@ -214,7 +243,7 @@ type preparedRow struct {
 	Row any `json:"row"`
 }
 
-func copyAndVerifyPreparedOutput(ctx context.Context, path string, req SnapshotQueryPrepareRequest, out PreparedOutputRows, state string) (string, error) {
+func copyAndVerifyPreparedOutput(ctx context.Context, path string, req SnapshotQueryPrepareRequest, out PreparedOutputRows, metadata preparedOutputMetadata, state string) (string, error) {
 	rows, err := out.OpenRows()
 	if err != nil {
 		return "", err
@@ -227,7 +256,7 @@ func copyAndVerifyPreparedOutput(ctx context.Context, path string, req SnapshotQ
 	tmp := f.Name()
 	defer os.Remove(tmp)
 	w := bufio.NewWriter(f)
-	h := preparedHeader{req.Envelope.Input.Binding.StatementID, req.Envelope.InputRoot, req.Envelope.Input.Binding.ReservationID, req.Envelope.Input.Binding.FencingGeneration, req.Accepted.BlockSeq, out.OutputRowsRoot(), out.RowCount(), state}
+	h := preparedHeader{req.Envelope.Input.Binding.StatementID, req.Envelope.InputRoot, req.Envelope.Input.Binding.ReservationID, req.Envelope.Input.Binding.FencingGeneration, req.Accepted.BlockSeq, metadata.rowsRoot, metadata.rowCount, state}
 	if err = writeLine(w, h); err != nil {
 		return "", err
 	}
@@ -255,7 +284,7 @@ func copyAndVerifyPreparedOutput(ctx context.Context, path string, req SnapshotQ
 		sum.Write(line)
 		n++
 	}
-	if n != out.RowCount() {
+	if n != metadata.rowCount {
 		return "", errors.New("storageintegrity: output row count changed")
 	}
 	digest := hex.EncodeToString(sum.Sum(nil))

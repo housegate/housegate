@@ -98,6 +98,60 @@ func (r *rowSourceFake) Next(context.Context) (payloadexec.Row, error) {
 }
 func (r *rowSourceFake) Close() error { return nil }
 
+// mutatingPreparedOutputRows models an adapter whose metadata becomes invalid
+// once its one-shot row stream is opened. Stage must use the pre-open snapshot
+// throughout; the changed stream then fails its snapshot row-count check before
+// a PreparedOutput projection can be saved.
+type mutatingPreparedOutputRows struct {
+	rows              []payloadexec.Row
+	root              string
+	partitions        []string
+	metadataAfterOpen bool
+	rootCalls         int
+	countCalls        int
+	partitionCalls    int
+	rowSourceCloses   int
+}
+
+func (o *mutatingPreparedOutputRows) RowCount() uint64 {
+	o.countCalls++
+	return uint64(len(o.rows))
+}
+func (o *mutatingPreparedOutputRows) OutputRowsRoot() string {
+	o.rootCalls++
+	return o.root
+}
+func (o *mutatingPreparedOutputRows) TouchedPartitionIDs() []string {
+	o.partitionCalls++
+	return append([]string{}, o.partitions...)
+}
+func (o *mutatingPreparedOutputRows) OpenRows() (payloadexec.RowSource, error) {
+	o.metadataAfterOpen = true
+	o.root = replay.DigestString("mutated-output")
+	o.partitions = []string{"changed"}
+	o.rows = append(o.rows, payloadexec.Row{RowID: []byte{2}, Values: []any{"changed"}, PartitionID: "changed", RawBytes: 7})
+	return &trackedRowSource{rows: append([]payloadexec.Row{}, o.rows...), closes: &o.rowSourceCloses}, nil
+}
+
+type trackedRowSource struct {
+	rows   []payloadexec.Row
+	next   int
+	closes *int
+}
+
+func (r *trackedRowSource) Next(context.Context) (payloadexec.Row, error) {
+	if r.next < len(r.rows) {
+		row := r.rows[r.next]
+		r.next++
+		return row, nil
+	}
+	return payloadexec.Row{}, io.EOF
+}
+func (r *trackedRowSource) Close() error {
+	*r.closes++
+	return nil
+}
+
 type stageJournalFake struct {
 	rec     SnapshotQueryJournalRecord
 	saveErr error
@@ -215,6 +269,43 @@ func TestPreparedOutputStagerStageClosesBeforePersistenceAndOnFailures(t *testin
 				t.Fatalf("events=%v, close must precede Save", events)
 			}
 		})
+	}
+}
+
+func TestPreparedOutputStagerSnapshotsMetadataBeforeOpeningRows(t *testing.T) {
+	env := snapshotQueryEnvelopeFixture(t)
+	accepted := snapshotQueryAcceptedResult(env)
+	out := &mutatingPreparedOutputRows{
+		rows:       []payloadexec.Row{{RowID: []byte{1}, Values: []any{"before"}, PartitionID: "before", RawBytes: 6}},
+		root:       replay.DigestString("before-output"),
+		partitions: []string{"before"},
+	}
+	result := replay.ExecutionResult{SnapshotQuery: &replay.SnapshotQueryEvidence{ExecutionOutcome: "applied", OutputRowsRoot: out.OutputRowsRoot(), OutputRowCount: out.RowCount()}, ComputedStateRoot: replay.DigestString("state")}
+	// Reset evidence-construction calls so the assertion only covers Stage.
+	out.rootCalls, out.countCalls = 0, 0
+	closeCount := 0
+	p := PreparedOutputAdapter{
+		JobValue:    replay.SnapshotQueryJob{BlockSeq: accepted.BlockSeq, Reservation: accepted.Reservation, Statement: replay.SnapshotQueryStatement{StatementSeq: accepted.StatementSeq, Envelope: env}},
+		ResultValue: result,
+		Rows:        out,
+		CloseFunc: func() error {
+			closeCount++
+			return nil
+		},
+	}
+	j := &stageJournalFake{rec: SnapshotQueryJournalRecord{Version: SnapshotQueryJournalVersion, StatementID: env.Input.Binding.StatementID, Envelope: env, Stage: SnapshotQueryStageSequenced, Submit: accepted, HasSubmit: true}, events: &[]string{}}
+	s, err := NewPreparedOutputStager(j, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Stage(context.Background(), SnapshotQueryPrepareRequest{Envelope: env, Accepted: accepted}, p); err == nil {
+		t.Fatal("Stage accepted a row stream whose metadata changed after OpenRows")
+	}
+	if !out.metadataAfterOpen || out.rootCalls != 1 || out.countCalls != 1 || out.partitionCalls != 1 {
+		t.Fatalf("metadata calls after OpenRows root=%d count=%d partitions=%d opened=%v", out.rootCalls, out.countCalls, out.partitionCalls, out.metadataAfterOpen)
+	}
+	if j.saved != 0 || closeCount != 1 || out.rowSourceCloses != 1 {
+		t.Fatalf("save=%d prepared-close=%d rows-close=%d, want 0/1/1", j.saved, closeCount, out.rowSourceCloses)
 	}
 }
 
