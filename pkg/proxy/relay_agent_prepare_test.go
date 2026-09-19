@@ -29,6 +29,8 @@ type relayPrepareHooks struct {
 	unknown   func(context.Context, plugin.PreparedAgentQuery) error
 	aborts    *atomic.Int32
 	completes *atomic.Int32
+	onQuery   func(*plugin.QueryContext)
+	onResume  func(*plugin.QueryContext) error
 }
 
 func (h relayPrepareHooks) OnQueryAbort(context.Context, *plugin.QueryContext) {
@@ -46,9 +48,19 @@ func (h relayPrepareHooks) OnQueryComplete(context.Context, chsession.Session) {
 func (h relayPrepareHooks) SupportsQueryContinuation() bool { return true }
 
 func (h relayPrepareHooks) OnQuery(_ context.Context, qctx *plugin.QueryContext) error {
+	if h.onQuery != nil {
+		h.onQuery(qctx)
+	}
 	qctx.AgentPrepare = &plugin.AgentPreparePlan{
 		Prepare: h.prepare, PersistForwardIntent: h.intent, AuthorizeForward: h.authorize, PersistForwardUnknown: h.unknown,
 		MaxControlBytes: 1024,
+	}
+	return nil
+}
+
+func (h relayPrepareHooks) ResumeQuery(_ context.Context, qctx *plugin.QueryContext) error {
+	if h.onResume != nil {
+		return h.onResume(qctx)
 	}
 	return nil
 }
@@ -305,6 +317,7 @@ func TestRelayAgentPrepare_RelayCancelNeverWritesUpstreamQuery(t *testing.T) {
 	}
 	started := make(chan struct{})
 	release := make(chan struct{})
+	seenQctx := make(chan *plugin.QueryContext, 1)
 	hooks := relayPrepareHooks{
 		prepare: func(context.Context) (plugin.PreparedAgentQuery, error) {
 			close(started)
@@ -314,6 +327,7 @@ func TestRelayAgentPrepare_RelayCancelNeverWritesUpstreamQuery(t *testing.T) {
 		intent:    func(context.Context, plugin.PreparedAgentQuery) error { return nil },
 		authorize: func(context.Context, plugin.PreparedAgentQuery) error { return nil },
 		unknown:   func(context.Context, plugin.PreparedAgentQuery) error { return nil },
+		onQuery:   func(qctx *plugin.QueryContext) { seenQctx <- qctx },
 	}
 	r := NewRelay(sess, hooks, nil, nil)
 	client := chproto.NewCodec(clientPeer, chproto.DirToUpstream)
@@ -323,6 +337,7 @@ func TestRelayAgentPrepare_RelayCancelNeverWritesUpstreamQuery(t *testing.T) {
 	writeQuery := make(chan error, 1)
 	go func() { writeQuery <- client.WriteQuery(&chproto.Query{ID: "cancel-no-write", Body: "SELECT 1"}) }()
 	<-started
+	qctx := <-seenQctx
 	if err := <-writeQuery; err != nil {
 		t.Fatalf("write query: %v", err)
 	}
@@ -335,10 +350,92 @@ func TestRelayAgentPrepare_RelayCancelNeverWritesUpstreamQuery(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("relay did not finish after canceled preparation")
 	}
+	if _, ok := qctx.Values[plugin.SnapshotQueryAgentKey]; ok {
+		t.Fatal("late canceled preparation installed snapshot-query ownership marker")
+	}
 	_ = upstreamPeer.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
 	buf := make([]byte, 1)
 	if n, err := upstreamPeer.Read(buf); n != 0 || err == nil {
 		t.Fatalf("upstream received Query bytes n=%d err=%v", n, err)
+	}
+}
+
+func TestRelayAgentPrepare_RelayAcceptedResultSetsMarkerAndResumesOnce(t *testing.T) {
+	clientPeer, clientProxy := net.Pipe()
+	upstreamPeer, upstreamProxy := net.Pipe()
+	defer upstreamPeer.Close()
+	const rev = chproto.MaxSupportedRevision
+	sess := chsession.New(1, clientProxy)
+	sess.Client().SetRevision(rev)
+	up := chproto.NewCodec(upstreamProxy, chproto.DirToUpstream)
+	up.SetRevision(rev)
+	if err := sess.BindUpstream(context.Background(), up); err != nil {
+		t.Fatalf("BindUpstream: %v", err)
+	}
+	var resumes atomic.Int32
+	seenQctx := make(chan *plugin.QueryContext, 1)
+	hooks := relayPrepareHooks{
+		prepare: func(context.Context) (plugin.PreparedAgentQuery, error) {
+			return plugin.PreparedAgentQuery{Query: &chproto.Query{ID: "prepared", Body: "SELECT 42"}, Claimed: true}, nil
+		},
+		intent:    func(context.Context, plugin.PreparedAgentQuery) error { return nil },
+		authorize: func(context.Context, plugin.PreparedAgentQuery) error { return nil },
+		unknown:   func(context.Context, plugin.PreparedAgentQuery) error { return nil },
+		onQuery:   func(qctx *plugin.QueryContext) { seenQctx <- qctx },
+		onResume: func(qctx *plugin.QueryContext) error {
+			if _, ok := qctx.Values[plugin.SnapshotQueryAgentKey]; !ok {
+				t.Fatal("accepted preparation resumed before ownership marker")
+			}
+			resumes.Add(1)
+			return nil
+		},
+	}
+	r := NewRelay(sess, hooks, nil, nil)
+	client := chproto.NewCodec(clientPeer, chproto.DirToUpstream)
+	client.SetRevision(rev)
+	run := make(chan error, 1)
+	go func() { run <- r.clientToUpstream(context.Background()) }()
+	gotQuery := make(chan *chproto.Query, 1)
+	upstreamReader := chproto.NewCodec(upstreamPeer, chproto.DirFromClient)
+	upstreamReader.SetRevision(rev)
+	go func() {
+		pkt, err := upstreamReader.ReadPacket(uint64(chproto.ClientQueryCode))
+		if err != nil {
+			gotQuery <- nil
+			return
+		}
+		q, ok := pkt.Decoded.(*chproto.Query)
+		if !ok {
+			gotQuery <- nil
+			return
+		}
+		gotQuery <- q
+	}()
+	if err := client.WriteQuery(&chproto.Query{ID: "client", Body: "SELECT 1"}); err != nil {
+		t.Fatalf("write query: %v", err)
+	}
+	qctx := <-seenQctx
+	select {
+	case got := <-gotQuery:
+		if got == nil || got.ID != "prepared" || got.Body != "SELECT 42" {
+			t.Fatalf("upstream query = %#v", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("accepted preparation did not forward")
+	}
+	if resumes.Load() != 1 {
+		t.Fatalf("continuation resumes = %d, want 1", resumes.Load())
+	}
+	if _, ok := qctx.Values[plugin.SnapshotQueryAgentKey]; !ok {
+		t.Fatal("accepted preparation did not install marker")
+	}
+	if err := clientPeer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-run:
+	case <-time.After(time.Second):
+		t.Fatal("relay did not stop after client EOF")
 	}
 }
 
