@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 
@@ -79,13 +80,204 @@ type Operation struct {
 	Grant         Grant
 	Envelope      replay.SnapshotQueryEnvelope
 }
-type operationState struct {
-	mu    sync.RWMutex
-	value Operation
+
+// SnapshotQueryIntakePhasePort is the narrow C4 surface the detached D1
+// worker may retain after it has built the complete signed envelope.  It does
+// not include SubmitAfterAuthorization: relay callbacks must never submit or
+// arrange a submit as a side effect of preparing a client query.
+type SnapshotQueryIntakePhasePort interface {
+	Prepare(context.Context) error
+	PersistSubmitIntent(context.Context) error
+	AuthorizeSubmit(context.Context) error
+	CancelAndReconcile(context.Context) error
+	PersistAuthorizationUnknownAndReconcile(context.Context) error
 }
 
-func (s *operationState) snapshot() Operation { s.mu.RLock(); defer s.mu.RUnlock(); return s.value }
+// SnapshotQueryIntakePhasePortFactory is an injection-only adapter around
+// storageintegrity.SnapshotQueryIntake.NewSnapshotQueryIntakePhasePort.  The
+// default runtime does not supply one, so this does not wire an intake, a
+// sequencer, or any submission path into Housegate.
+type SnapshotQueryIntakePhasePortFactory func(context.Context, replay.SnapshotQueryEnvelope) (SnapshotQueryIntakePhasePort, error)
+
+type operationState struct {
+	mu sync.Mutex
+	// The in-flight/done pairs coordinate phase decisions without holding a
+	// state lock across an external C4 or journal call.
+	value       Operation
+	phasePort   SnapshotQueryIntakePhasePort
+	phaseIntent bool
+	// A forward lease has two stages.  An admitted callback may be parked
+	// between its identity check and the external port call; cancellation wins
+	// that stage immediately and call start then fails.  Once beginCall has
+	// linearized an actual port call, cancellation waits for it to return before
+	// reconciling.  This keeps no mutex across I/O while leaving no unlocked
+	// check-to-call window.
+	forwardAdmission bool
+	forwardIO        bool
+	forwardDone      chan struct{}
+	// phasePrepare* is deliberately separate from phasePort.  phasePort is
+	// published only after C4 Prepare succeeds, so it is also the durable-owner
+	// marker observed by cancellation.
+	phasePrepareAdmission bool
+	phasePrepareIO        bool
+	phasePrepareDone      chan struct{}
+	// cancelRequested is the linearization point shared by all four relay
+	// callbacks.  Once it is set, no callback may begin a forward-side effect.
+	// The two durable cancellation domains are mutually exclusive: legacy owns
+	// every pre-C4 cancellation; C4 owns every successful durable Prepare.
+	cancelRequested        bool
+	legacyCancelInFlight   bool
+	legacyCancelDone       chan struct{}
+	legacyCancelReconciled bool
+	phaseCancelInFlight    bool
+	phaseCancelDone        chan struct{}
+	phaseCancelReconciled  bool
+}
+
+type forwardLease struct{ state *operationState }
+
+// acquireForward reserves the pre-call stage.  It serializes the three relay
+// forward callbacks, so an unknown/reconciliation callback cannot overlap an
+// authorization callback for the same prepared operation.
+func (s *operationState) acquireForward(ctx context.Context) (*forwardLease, error) {
+	for {
+		s.mu.Lock()
+		if s.cancelRequested {
+			s.mu.Unlock()
+			return nil, errSnapshotQueryCanceled
+		}
+		if !s.forwardAdmission && !s.forwardIO {
+			s.forwardAdmission = true
+			s.forwardDone = make(chan struct{})
+			s.mu.Unlock()
+			return &forwardLease{state: s}, nil
+		}
+		done := s.forwardDone
+		s.mu.Unlock()
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+}
+
+// activate retains the historical pre-call checkpoint. beginCall below is the
+// actual external-side-effect linearization point.
+func (l *forwardLease) activate() error {
+	s := l.state
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.forwardAdmission {
+		return errors.New("sisnapshotquery: invalid forward lease")
+	}
+	if s.cancelRequested {
+		s.forwardAdmission = false
+		close(s.forwardDone)
+		return errSnapshotQueryCanceled
+	}
+	return nil
+}
+
+// beginCall is the callback-to-port linearization point.  An admitted lease
+// is still cancellable; only this final check grants the callback the right to
+// begin an external call.  The call itself runs without state.mu held.
+func (l *forwardLease) beginCall() error {
+	s := l.state
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.forwardAdmission {
+		return errors.New("sisnapshotquery: invalid forward lease")
+	}
+	if s.cancelRequested {
+		s.forwardAdmission = false
+		close(s.forwardDone)
+		return errSnapshotQueryCanceled
+	}
+	s.forwardAdmission = false
+	s.forwardIO = true
+	return nil
+}
+
+// finish releases a started lease.  A successful unknown callback has
+// already reconciled its selected durable domain, so a later cancellation is
+// idempotently complete rather than issuing a second reconciliation.
+func (l *forwardLease) finish(unknownReconciled bool, phaseDomain bool) {
+	s := l.state
+	s.mu.Lock()
+	if unknownReconciled {
+		if phaseDomain {
+			s.phaseCancelReconciled = true
+		} else {
+			s.legacyCancelReconciled = true
+		}
+	}
+	s.forwardIO = false
+	close(s.forwardDone)
+	s.mu.Unlock()
+}
+
+func (s *operationState) snapshot() (Operation, SnapshotQueryIntakePhasePort, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.value, s.phasePort, s.phaseIntent
+}
 func (s *operationState) replace(v Operation) { s.mu.Lock(); s.value = v; s.mu.Unlock() }
+
+type phasePrepareLease struct{ state *operationState }
+
+func (s *operationState) acquirePhasePrepare(ctx context.Context) (*phasePrepareLease, error) {
+	for {
+		s.mu.Lock()
+		if s.cancelRequested {
+			s.mu.Unlock()
+			return nil, errSnapshotQueryCanceled
+		}
+		if !s.phasePrepareAdmission && !s.phasePrepareIO {
+			s.phasePrepareAdmission = true
+			s.phasePrepareDone = make(chan struct{})
+			s.mu.Unlock()
+			return &phasePrepareLease{state: s}, nil
+		}
+		done := s.phasePrepareDone
+		s.mu.Unlock()
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+}
+
+func (l *phasePrepareLease) beginCall() error {
+	s := l.state
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.phasePrepareAdmission {
+		return errors.New("sisnapshotquery: invalid phase prepare lease")
+	}
+	if s.cancelRequested {
+		s.phasePrepareAdmission = false
+		close(s.phasePrepareDone)
+		return errSnapshotQueryCanceled
+	}
+	s.phasePrepareAdmission = false
+	s.phasePrepareIO = true
+	return nil
+}
+
+func (l *phasePrepareLease) finish(port SnapshotQueryIntakePhasePort, prepared bool) {
+	s := l.state
+	s.mu.Lock()
+	if prepared {
+		// A cancellation that races the I/O waits for this publication, and will
+		// therefore select C4 exactly when durable Prepare succeeded.
+		s.phasePort = port
+	}
+	s.phasePrepareIO = false
+	close(s.phasePrepareDone)
+	s.mu.Unlock()
+}
 
 type Options struct {
 	Classifier      Classifier
@@ -96,12 +288,32 @@ type Options struct {
 	StatementSigner StatementSigner
 	Sequence        Sequence
 	Journal         Journal
-	NetworkID       string
-	KeeperShardID   uint32
-	MaxControlBytes uint64
+	// PhasePortFactory is optional.  When injected, D1's four relay callbacks
+	// delegate exactly to the C4 phase port after the worker has constructed and
+	// signed the complete envelope.  It is deliberately not build/config wired.
+	PhasePortFactory SnapshotQueryIntakePhasePortFactory
+	// beforeForwardActivation is package-private test instrumentation for the
+	// admitted-to-activated lease boundary.  Production callers cannot set it.
+	beforeForwardActivation func()
+	// The following are package-private deterministic test seams.  They sit
+	// after admission and before beginCall, precisely where cancellation must
+	// still prevent an external side effect.
+	beforeForwardCall      func()
+	beforePhaseFactoryCall func()
+	beforePhasePrepareCall func()
+	NetworkID              string
+	KeeperShardID          uint32
+	MaxControlBytes        uint64
 }
 
 type Plugin struct{ opts Options }
+
+func (p *Plugin) activateForward(lease *forwardLease) error {
+	if p.opts.beforeForwardActivation != nil {
+		p.opts.beforeForwardActivation()
+	}
+	return lease.activate()
+}
 
 func New(opts Options) (*Plugin, error) {
 	if opts.Classifier == nil || opts.Reservations == nil || opts.Catalog == nil || opts.Analyzer == nil || opts.ControlSigner == nil || opts.StatementSigner == nil || opts.Sequence == nil || opts.Journal == nil || strings.TrimSpace(opts.NetworkID) == "" || opts.MaxControlBytes == 0 {
@@ -144,28 +356,243 @@ func (p *Plugin) OnQuery(_ context.Context, qctx *plugin.QueryContext) error {
 	qctx.AgentPrepare = &plugin.AgentPreparePlan{
 		MaxControlBytes: p.opts.MaxControlBytes,
 		Prepare:         func(ctx context.Context) (plugin.PreparedAgentQuery, error) { return p.prepare(ctx, state) },
-		ReconcileCancel: func(ctx context.Context) error {
-			op := state.snapshot()
-			if op.RequestID == "" {
-				return nil
-			}
-			return p.opts.Journal.ReconcileCanceledSnapshotQuery(ctx, op)
-		},
+		ReconcileCancel: func(ctx context.Context) error { return p.reconcileCancel(ctx, state) },
 		PersistForwardIntent: func(ctx context.Context, prepared plugin.PreparedAgentQuery) error {
-			return p.persistIntent(ctx, state.snapshot(), prepared)
+			return p.persistForwardIntent(ctx, state, prepared)
 		},
 		AuthorizeForward: func(ctx context.Context, prepared plugin.PreparedAgentQuery) error {
-			return p.authorize(ctx, state.snapshot(), prepared)
+			op, _, _ := state.snapshot()
+			if !matches(op, prepared) {
+				return errors.New("sisnapshotquery: forward authorization identity mismatch")
+			}
+			lease, err := state.acquireForward(ctx)
+			if err != nil {
+				return err
+			}
+			if err := p.activateForward(lease); err != nil {
+				return err
+			}
+			if p.opts.beforeForwardCall != nil {
+				p.opts.beforeForwardCall()
+			}
+			if err := lease.beginCall(); err != nil {
+				return err
+			}
+			op, phasePort, phaseIntent := state.snapshot()
+			if phasePort == nil {
+				err := p.opts.Journal.AuthorizeSnapshotQueryForward(ctx, op)
+				lease.finish(false, false)
+				return err
+			}
+			if !phaseIntent {
+				lease.finish(false, true)
+				return errors.New("sisnapshotquery: phase port authorization without submit intent")
+			}
+			err = phasePort.AuthorizeSubmit(ctx)
+			lease.finish(false, true)
+			return err
 		},
 		PersistForwardUnknown: func(ctx context.Context, prepared plugin.PreparedAgentQuery) error {
-			return p.unknown(ctx, state.snapshot(), prepared)
+			op, _, _ := state.snapshot()
+			if !matches(op, prepared) {
+				return errors.New("sisnapshotquery: forward unknown identity mismatch")
+			}
+			lease, err := state.acquireForward(ctx)
+			if err != nil {
+				return err
+			}
+			if err := p.activateForward(lease); err != nil {
+				return err
+			}
+			if p.opts.beforeForwardCall != nil {
+				p.opts.beforeForwardCall()
+			}
+			if err := lease.beginCall(); err != nil {
+				return err
+			}
+			op, phasePort, phaseIntent := state.snapshot()
+			if phasePort == nil {
+				err := p.opts.Journal.PersistSnapshotQueryForwardUnknown(ctx, op)
+				// The legacy record only persists uncertainty; its corresponding
+				// cancellation reconciliation is still the legacy cancel record.
+				lease.finish(false, false)
+				return err
+			}
+			if !phaseIntent {
+				lease.finish(false, true)
+				return errors.New("sisnapshotquery: phase port unknown authorization without submit intent")
+			}
+			err = phasePort.PersistAuthorizationUnknownAndReconcile(ctx)
+			lease.finish(err == nil, true)
+			return err
 		},
 	}
 	return nil
 }
 
+var errSnapshotQueryCanceled = errors.New("sisnapshotquery: snapshot query cancellation is already latched")
+
+// persistForwardIntent establishes C4 ownership only if cancellation has not
+// already selected the legacy owner.  All I/O is deliberately outside the
+// mutex; concurrent retries wait on the same durable attempt.
+func (p *Plugin) persistForwardIntent(ctx context.Context, state *operationState, prepared plugin.PreparedAgentQuery) error {
+	op, _, _ := state.snapshot()
+	if !matches(op, prepared) {
+		return errors.New("sisnapshotquery: forward intent identity mismatch")
+	}
+	lease, err := state.acquireForward(ctx)
+	if err != nil {
+		return err
+	}
+	if err := p.activateForward(lease); err != nil {
+		return err
+	}
+	if p.opts.beforeForwardCall != nil {
+		p.opts.beforeForwardCall()
+	}
+	if err := lease.beginCall(); err != nil {
+		return err
+	}
+	op, phasePort, _ := state.snapshot()
+	if phasePort == nil {
+		err := p.opts.Journal.PersistSnapshotQueryForwardIntent(ctx, op)
+		lease.finish(false, false)
+		return err
+	}
+	state.mu.Lock()
+	if state.phaseIntent {
+		state.mu.Unlock()
+		lease.finish(false, true)
+		return nil
+	}
+	state.mu.Unlock()
+	err = phasePort.PersistSubmitIntent(ctx)
+	state.mu.Lock()
+	if err == nil {
+		state.phaseIntent = true
+	}
+	state.mu.Unlock()
+	lease.finish(false, true)
+	if err != nil {
+		return err
+	}
+	if state.canceled() {
+		// The durable intent won before cancellation latched; only C4 may
+		// reconcile it.
+		if err := p.reconcileCancel(ctx, state); err != nil {
+			return err
+		}
+		return errSnapshotQueryCanceled
+	}
+	return nil
+}
+
+func (s *operationState) canceled() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.cancelRequested }
+
+// reconcileCancel latches cancellation before it selects an owner.  An
+// activated forward lease is allowed to finish first; an admitted-but-not-yet
+// activated lease observes the latch and never calls its external port.
+func (p *Plugin) reconcileCancel(ctx context.Context, state *operationState) error {
+	for {
+		state.mu.Lock()
+		op, phasePort := state.value, state.phasePort
+		if op.RequestID == "" {
+			state.mu.Unlock()
+			return nil
+		}
+		state.cancelRequested = true
+		if state.forwardIO {
+			done := state.forwardDone
+			state.mu.Unlock()
+			select {
+			case <-done:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		if state.phasePrepareIO {
+			done := state.phasePrepareDone
+			state.mu.Unlock()
+			select {
+			case <-done:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		// A successful C4 Prepare has made a durable C4 record.  It owns every
+		// later cancellation even before submit intent; falling back to legacy in
+		// that state would leave the C4 record unreconciled.
+		if phasePort == nil {
+			if state.legacyCancelReconciled {
+				state.mu.Unlock()
+				return nil
+			}
+			if state.legacyCancelInFlight {
+				done := state.legacyCancelDone
+				state.mu.Unlock()
+				select {
+				case <-done:
+					continue
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+			state.legacyCancelInFlight = true
+			state.legacyCancelDone = make(chan struct{})
+			done := state.legacyCancelDone
+			state.mu.Unlock()
+			return finishLegacyCancel(ctx, state, p.opts.Journal, op, done)
+		}
+		if state.phaseCancelReconciled {
+			state.mu.Unlock()
+			return nil
+		}
+		if state.phaseCancelInFlight {
+			done := state.phaseCancelDone
+			state.mu.Unlock()
+			select {
+			case <-done:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		state.phaseCancelInFlight = true
+		state.phaseCancelDone = make(chan struct{})
+		done := state.phaseCancelDone
+		state.mu.Unlock()
+		return finishPhaseCancel(ctx, state, phasePort, done)
+	}
+}
+
+func finishLegacyCancel(ctx context.Context, state *operationState, journal Journal, op Operation, done chan struct{}) error {
+	err := journal.ReconcileCanceledSnapshotQuery(ctx, op)
+	state.mu.Lock()
+	state.legacyCancelInFlight = false
+	if err == nil {
+		state.legacyCancelReconciled = true
+	}
+	close(done)
+	state.mu.Unlock()
+	return err
+}
+
+func finishPhaseCancel(ctx context.Context, state *operationState, phasePort SnapshotQueryIntakePhasePort, done chan struct{}) error {
+	err := phasePort.CancelAndReconcile(ctx)
+	state.mu.Lock()
+	state.phaseCancelInFlight = false
+	if err == nil {
+		state.phaseCancelReconciled = true
+	}
+	close(done)
+	state.mu.Unlock()
+	return err
+}
+
 func (p *Plugin) prepare(ctx context.Context, state *operationState) (plugin.PreparedAgentQuery, error) {
-	op := state.snapshot()
+	op, _, _ := state.snapshot()
 	requestID, err := p.opts.Sequence.NextSnapshotQueryStatementID(ctx, op.RequestSeed)
 	if err != nil {
 		return plugin.PreparedAgentQuery{}, fmt.Errorf("sisnapshotquery: allocate request identity: %w", err)
@@ -221,6 +648,45 @@ func (p *Plugin) prepare(ctx context.Context, state *operationState) (plugin.Pre
 	}
 	op.Envelope = replay.SnapshotQueryEnvelope{Input: input, InputRoot: root, UserJWS: userJWS}
 	state.replace(op)
+	if p.opts.PhasePortFactory != nil {
+		// The port sees only a fully computed and signed immutable envelope.  A
+		// cancellation that wins before either C4 call remains legacy-owned and
+		// prevents even factory creation.  phasePort is published only after the
+		// durable Prepare call succeeds.
+		factoryLease, err := state.acquirePhasePrepare(ctx)
+		if err != nil {
+			return plugin.PreparedAgentQuery{}, err
+		}
+		if p.opts.beforePhaseFactoryCall != nil {
+			p.opts.beforePhaseFactoryCall()
+		}
+		if err := factoryLease.beginCall(); err != nil {
+			return plugin.PreparedAgentQuery{}, err
+		}
+		phasePort, err := p.opts.PhasePortFactory(ctx, op.Envelope)
+		factoryLease.finish(nil, false)
+		if err != nil {
+			return plugin.PreparedAgentQuery{}, fmt.Errorf("sisnapshotquery: create intake phase port: %w", err)
+		}
+		if phasePort == nil {
+			return plugin.PreparedAgentQuery{}, errors.New("sisnapshotquery: nil intake phase port")
+		}
+		prepareLease, err := state.acquirePhasePrepare(ctx)
+		if err != nil {
+			return plugin.PreparedAgentQuery{}, err
+		}
+		if p.opts.beforePhasePrepareCall != nil {
+			p.opts.beforePhasePrepareCall()
+		}
+		if err := prepareLease.beginCall(); err != nil {
+			return plugin.PreparedAgentQuery{}, err
+		}
+		err = phasePort.Prepare(ctx)
+		prepareLease.finish(phasePort, err == nil)
+		if err != nil {
+			return plugin.PreparedAgentQuery{}, fmt.Errorf("sisnapshotquery: prepare intake phase port: %w", err)
+		}
+	}
 	prepared := cloneQuery(op.OriginalQuery)
 	prepared.ID = op.RequestID
 	prepared.Body = analysis.SQL
@@ -247,7 +713,7 @@ func (p *Plugin) unknown(ctx context.Context, op Operation, prepared plugin.Prep
 	return p.opts.Journal.PersistSnapshotQueryForwardUnknown(ctx, op)
 }
 func matches(op Operation, p plugin.PreparedAgentQuery) bool {
-	if p.Query == nil || op.RequestID == "" || op.Envelope.UserJWS == "" || p.Query.ID != op.RequestID || p.Query.Body != op.Envelope.Input.SQL || op.Envelope.InputRoot == "" || op.Envelope.Input.Binding.StatementID != op.RequestID || op.Envelope.Input.Binding.ReservationID != op.Grant.Reservation.ReservationID || op.Envelope.Input.Binding.FencingGeneration != op.Grant.Reservation.FencingGeneration {
+	if !p.Claimed || p.Query == nil || op.RequestID == "" || op.Envelope.UserJWS == "" || op.Envelope.InputRoot == "" || op.Envelope.Input.Binding.StatementID != op.RequestID || op.Envelope.Input.Binding.ReservationID != op.Grant.Reservation.ReservationID || op.Envelope.Input.Binding.FencingGeneration != op.Grant.Reservation.FencingGeneration {
 		return false
 	}
 	// Callbacks may authorize a socket write. Recompute the canonical root
@@ -257,13 +723,15 @@ func matches(op Operation, p plugin.PreparedAgentQuery) bool {
 	if err != nil || root != op.Envelope.InputRoot {
 		return false
 	}
-	var token string
-	for _, setting := range p.Query.Settings {
-		if setting.Key == auth.StatementTokenSettingKey {
-			token = setting.Value
-		}
-	}
-	return token == "'"+op.Envelope.UserJWS+"'"
+	// Every callback may authorize a socket write.  Its query must therefore be
+	// byte-for-byte equivalent at the Query-object level to the only prepared
+	// canonical execution input.  This rejects injected Parameters, legacy
+	// settings, duplicate tokens, and any altered setting flags.
+	canonical := cloneQuery(op.OriginalQuery)
+	canonical.ID = op.RequestID
+	canonical.Body = op.Envelope.Input.SQL
+	canonical.Settings = append(canonical.Settings, chproto.Setting{Key: auth.StatementTokenSettingKey, Value: "'" + op.Envelope.UserJWS + "'", Custom: true})
+	return reflect.DeepEqual(*p.Query, canonical)
 }
 func logicalDatabase(q *plugin.QueryContext) string {
 	if s := q.Session.State(); s != nil {

@@ -150,9 +150,13 @@ func (p *SnapshotQueryIntakePhasePort) persistAuthorizationPersistenceUnknownAnd
 }
 
 // CancelAndReconcile is the AgentPrepare ReconcileCancel counterpart. It is
-// valid only before a submit authorization is durable. It first records the
-// cancellation boundary and only then performs the authoritative lookup/C2
-// reconciliation.
+// valid only before a submit authorization is durable.  Prepare deliberately
+// persists Signed before the relay has a reason to persist SubmitIntent, so a
+// cancellation at that boundary must be a first-class durable transition too:
+// it records CancelPending directly from Signed rather than manufacturing an
+// intent which could be mistaken for submission work after a restart.  The
+// cancellation boundary is durable before the authoritative lookup/C2
+// reconciliation begins.
 func (p *SnapshotQueryIntakePhasePort) CancelAndReconcile(ctx context.Context) error {
 	return p.withStatementLock(ctx, func() error {
 		p.mu.Lock()
@@ -161,7 +165,7 @@ func (p *SnapshotQueryIntakePhasePort) CancelAndReconcile(ctx context.Context) e
 			return err
 		}
 		switch p.record.Stage {
-		case SnapshotQueryStageSubmitIntent:
+		case SnapshotQueryStageSigned, SnapshotQueryStageSubmitIntent:
 			p.record.Stage = SnapshotQueryStageCancelPending
 			p.record.PreSubmitCancelIntent = true
 			p.record.ReleaseReconciliationDebt = true
