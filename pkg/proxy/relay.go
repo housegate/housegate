@@ -50,11 +50,11 @@ type Relay struct {
 	activeQuery   bool
 	activeQueryID string
 	queryCanceled bool
-	// queryOnlySessionTerminal is set after a successful local query-only
-	// completion. INSERT ... SELECT has no client payload terminator, so this
-	// connection cannot safely identify a subsequent packet as a new query.
-	// Guarded by queryMu with the other per-connection query ownership state.
-	queryOnlySessionTerminal bool
+	// queryOnlyLateMarkerAllowed is set by a local query-only completion. The
+	// client may still deliver this operation's empty external-table marker;
+	// exactly one such marker is drained before the next Query packet, and any
+	// Query packet clears the allowance (plan D2). Guarded by queryMu.
+	queryOnlyLateMarkerAllowed bool
 	// agentGeneration is allocated before an AgentPrepare worker starts.  It
 	// distinguishes a late result from a subsequent query which reused a client
 	// query ID.
@@ -966,8 +966,10 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 
 		_, logger := log.FromContext(ctx)
 
-		if r.queryOnlySessionIsTerminal() {
-			return fmt.Errorf("client packet %s after query-only local success; connection is not reusable", clientPacketName(pkt.Type))
+		if drained, err := r.consumeQueryOnlyLateMarker(pkt); err != nil {
+			return err
+		} else if drained {
+			continue
 		}
 
 		if decErr == nil && pkt.Decoded != nil && pkt.Type == uint64(chproto.ClientQueryCode) {

@@ -76,7 +76,9 @@ func (r *Relay) runQueryOnly(ctx context.Context, qctx *plugin.QueryContext) err
 		r.takeActiveQuery()
 		r.hooks.OnQueryAbort(ctx, qctx)
 		r.hooks.OnQueryComplete(ctx, r.sess)
-		r.markQueryOnlySessionTerminal()
+		// Cancellation ends at the same supported terminal boundary as local
+		// success, so it carries plan D2's one late-marker allowance too.
+		r.markQueryOnlyLateMarkerAllowed()
 		if err := r.sess.Client().WriteRawPacket([]byte{byte(chproto.ServerEndOfStreamCode)}); err != nil {
 			return fmt.Errorf("%w: write query-only cancellation end-of-stream: %w", errQueryOnlyLifecycleFinalized, err)
 		}
@@ -103,23 +105,24 @@ func (r *Relay) runQueryOnly(ctx context.Context, qctx *plugin.QueryContext) err
 		// Local completion is not a framed upstream success: do not invoke
 		// OnQuerySuccess, which may commit unrelated session state.
 		r.hooks.OnQueryComplete(ctx, r.sess)
-		r.markQueryOnlySessionTerminal()
+		r.markQueryOnlyLateMarkerAllowed()
 		if err := r.sess.Client().WriteRawPacket([]byte{byte(chproto.ServerEndOfStreamCode)}); err != nil {
 			return fmt.Errorf("%w: write query-only end-of-stream: %w", errQueryOnlyLifecycleFinalized, err)
 		}
-		// INSERT ... SELECT has no ClientData terminator. There is therefore no
-		// wire boundary that can distinguish a delayed control packet for this
-		// local operation from the next query. The caller must retain the sole
-		// reader but never reuse this connection after this local success.
+		// INSERT ... SELECT has no mandatory ClientData terminator, but a client
+		// may still deliver this operation's empty external-table marker after
+		// the local terminal. Plan D2 allows the caller to drain exactly one
+		// such marker before the next Query packet; the caller retains the sole
+		// reader throughout.
 		return nil
 	}
 	fail := func(err error) error {
 		// Once the host execution lane has claimed this query, a local failure
-		// has the same packet-attribution ambiguity as local success. A client
-		// may already have pipelined a terminator or Cancel, so never hand a
-		// later packet back to the ordinary relay path.
+		// reaches the same wire boundary as local success: the client may have
+		// pipelined this operation's empty marker. Plan D2's one-marker
+		// allowance therefore also applies after the caller's Exception.
 		r.takeActiveQuery()
-		r.markQueryOnlySessionTerminal()
+		r.markQueryOnlyLateMarkerAllowed()
 		return err
 	}
 	for {
@@ -167,14 +170,39 @@ func (r *Relay) runQueryOnly(ctx context.Context, qctx *plugin.QueryContext) err
 	}
 }
 
-func (r *Relay) markQueryOnlySessionTerminal() {
+func (r *Relay) markQueryOnlyLateMarkerAllowed() {
 	r.queryMu.Lock()
-	r.queryOnlySessionTerminal = true
+	r.queryOnlyLateMarkerAllowed = true
 	r.queryMu.Unlock()
 }
 
-func (r *Relay) queryOnlySessionIsTerminal() bool {
+// consumeQueryOnlyLateMarker applies the plan-D2 allowance. It returns
+// drained=true for the one permitted late empty marker. A Query packet clears
+// the allowance and is handled by the caller. Anything else while the
+// allowance is set is a protocol violation and closes the connection.
+func (r *Relay) consumeQueryOnlyLateMarker(pkt *chproto.Packet) (bool, error) {
 	r.queryMu.Lock()
-	defer r.queryMu.Unlock()
-	return r.queryOnlySessionTerminal
+	allowed := r.queryOnlyLateMarkerAllowed
+	if allowed {
+		r.queryOnlyLateMarkerAllowed = false
+	}
+	r.queryMu.Unlock()
+	if !allowed {
+		return false, nil
+	}
+	switch pkt.Type {
+	case uint64(chproto.ClientQueryCode):
+		return false, nil
+	case uint64(chproto.ClientDataCode):
+		info, err := chproto.InspectClientDataPacket(pkt.Raw, r.sess.Client().Compression())
+		if err != nil {
+			return false, fmt.Errorf("classify late query-only marker: %w", err)
+		}
+		if info.BlockName != "" || !info.Empty {
+			return false, errors.New("nonempty or external-table client Data after query-only local completion")
+		}
+		return true, nil
+	default:
+		return false, fmt.Errorf("client packet %s after query-only local completion; connection is not reusable", clientPacketName(pkt.Type))
+	}
 }
