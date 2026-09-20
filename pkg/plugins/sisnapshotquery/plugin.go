@@ -120,6 +120,11 @@ type Operation struct {
 type SnapshotQueryIntakePhasePort interface {
 	Prepare(context.Context) error
 	PersistSubmitIntent(context.Context) error
+	// AuthorizeForward persists the relay's forward gate win. It is the only
+	// authorization this bridge may reach: AuthorizeSubmit is the host submit
+	// gate's boundary, so a crash after forwarding can never be recovered as
+	// submit authority.
+	AuthorizeForward(context.Context) error
 	AuthorizeSubmit(context.Context) error
 	CancelAndReconcile(context.Context) error
 	PersistAuthorizationUnknownAndReconcile(context.Context) error
@@ -420,7 +425,7 @@ func (p *Plugin) OnQuery(_ context.Context, qctx *plugin.QueryContext) error {
 				lease.finish(false, true)
 				return errors.New("sisnapshotquery: phase port authorization without submit intent")
 			}
-			err = phasePort.AuthorizeSubmit(ctx)
+			err = phasePort.AuthorizeForward(ctx)
 			lease.finish(false, true)
 			return err
 		},

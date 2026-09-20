@@ -30,9 +30,13 @@ type SnapshotQueryJournal interface {
 type SnapshotQueryJournalStage string
 
 const (
-	SnapshotQueryStageSigned           SnapshotQueryJournalStage = "Signed"
-	SnapshotQueryStageSubmitIntent     SnapshotQueryJournalStage = "SubmitIntent"
-	SnapshotQueryStageSubmitAuthorized SnapshotQueryJournalStage = "SubmitAuthorized"
+	SnapshotQueryStageSigned       SnapshotQueryJournalStage = "Signed"
+	SnapshotQueryStageSubmitIntent SnapshotQueryJournalStage = "SubmitIntent"
+	// ForwardAuthorized records the agent-side forward gate win. It is not
+	// submit authority: recovery may only look up and fence, and only a host
+	// submit gate may advance it to SubmitAuthorized.
+	SnapshotQueryStageForwardAuthorized SnapshotQueryJournalStage = "ForwardAuthorized"
+	SnapshotQueryStageSubmitAuthorized  SnapshotQueryJournalStage = "SubmitAuthorized"
 	// SnapshotQueryStageSubmitAuthorizationUnknown means the authorization
 	// durability result is indeterminate. Unlike SubmitUnknown, it never grants
 	// recovery authority to issue Submit: recovery may only lookup/reconcile.
@@ -51,7 +55,9 @@ const (
 )
 
 // SnapshotQueryLaunchAuthorization records the exact durable right to issue a
-// sequencer Submit. Intent alone deliberately contains no such right.
+// sequencer Submit. Intent alone deliberately contains no such right, and the
+// same shape records the separate forward authorization, which binds the same
+// envelope identity without carrying any Submit right.
 type SnapshotQueryLaunchAuthorization struct {
 	InputRoot         string `json:"input_root"`
 	OriginalJWSHash   string `json:"original_jws_hash"`
@@ -76,6 +82,7 @@ type SnapshotQueryJournalRecord struct {
 	PreSubmitCancelIntent     bool                              `json:"pre_submit_cancel_intent"`
 	ReleaseReconciliationDebt bool                              `json:"release_reconciliation_debt"`
 	LaunchAuthorization       *SnapshotQueryLaunchAuthorization `json:"launch_authorization,omitempty"`
+	ForwardAuthorization      *SnapshotQueryLaunchAuthorization `json:"forward_authorization,omitempty"`
 	PreparedOutput            *SnapshotQueryPrepared            `json:"prepared_output,omitempty"`
 	UpdatedAtUnixMS           int64                             `json:"updated_at_unix_ms"`
 }
