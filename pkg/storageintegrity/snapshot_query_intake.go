@@ -127,7 +127,8 @@ func (s *SnapshotQueryIntake) submitLocked(ctx context.Context, env replay.Snaps
 	serviceCtx, cancel := s.recoveryAttemptContext()
 	defer cancel()
 	rec.Stage = SnapshotQueryStageSubmitAuthorized
-	rec.LaunchAuthorization = &SnapshotQueryLaunchAuthorization{InputRoot: env.InputRoot, OriginalJWSHash: replay.DigestString(env.UserJWS), ReservationID: env.Input.Binding.ReservationID, FencingGeneration: env.Input.Binding.FencingGeneration}
+	rec.ForwardAuthorization = snapshotQueryLaunchAuthorization(env)
+	rec.LaunchAuthorization = snapshotQueryLaunchAuthorization(env)
 	if err := s.opts.Journal.Save(serviceCtx, rec); err != nil {
 		// Persistence may be uncertain. Never issue Submit in this process; only
 		// reconcile the last definitely durable intent boundary.
@@ -177,7 +178,7 @@ func (s *SnapshotQueryIntake) Recover(ctx context.Context) error {
 
 func (s *SnapshotQueryIntake) recoverRecord(ctx context.Context, rec SnapshotQueryJournalRecord) (SnapshotQueryIntakeResult, error) {
 	switch rec.Stage {
-	case SnapshotQueryStageSigned, SnapshotQueryStageSubmitIntent, SnapshotQueryStageSubmitAuthorizationUnknown, SnapshotQueryStageCancelPending, SnapshotQueryStageReleased:
+	case SnapshotQueryStageSigned, SnapshotQueryStageSubmitIntent, SnapshotQueryStageForwardAuthorized, SnapshotQueryStageSubmitAuthorizationUnknown, SnapshotQueryStageCancelPending, SnapshotQueryStageReleased:
 		return SnapshotQueryIntakeResult{}, s.reconcileIntent(ctx, rec)
 	case SnapshotQueryStageSequenced:
 		return resultFromSubmit(rec.StatementID, rec.Envelope.InputRoot, rec.Submit), nil
@@ -348,6 +349,14 @@ func verifyLaunchAuthorization(rec SnapshotQueryJournalRecord) error {
 	a := rec.LaunchAuthorization
 	if a == nil || a.InputRoot != rec.Envelope.InputRoot || a.OriginalJWSHash != replay.DigestString(rec.Envelope.UserJWS) || a.ReservationID != rec.Envelope.Input.Binding.ReservationID || a.FencingGeneration != rec.Envelope.Input.Binding.FencingGeneration {
 		return errors.New("storageintegrity: snapshot query durable launch authorization does not bind the original envelope")
+	}
+	return nil
+}
+
+func verifyForwardAuthorization(rec SnapshotQueryJournalRecord) error {
+	a := rec.ForwardAuthorization
+	if a == nil || a.InputRoot != rec.Envelope.InputRoot || a.OriginalJWSHash != replay.DigestString(rec.Envelope.UserJWS) || a.ReservationID != rec.Envelope.Input.Binding.ReservationID || a.FencingGeneration != rec.Envelope.Input.Binding.FencingGeneration {
+		return errors.New("storageintegrity: snapshot query durable forward authorization does not bind the original envelope")
 	}
 	return nil
 }

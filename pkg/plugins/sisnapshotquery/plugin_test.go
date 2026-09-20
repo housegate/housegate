@@ -13,7 +13,13 @@ import (
 	"github.com/housegate/housegate/pkg/chsession"
 	"github.com/housegate/housegate/pkg/plugin"
 	"github.com/housegate/housegate/pkg/replay"
+	sicore "github.com/housegate/housegate/pkg/storageintegrity"
 )
+
+// The injected C4 port is the concrete intake phase port. It keeps
+// AuthorizeSubmit for the future host submit gate; this proves the narrowed
+// agent-side interface it must satisfy no longer asks for it.
+var _ SnapshotQueryIntakePhasePort = (*sicore.SnapshotQueryIntakePhasePort)(nil)
 
 const testKey = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
@@ -85,6 +91,9 @@ type fakeJournal struct {
 type fakePhasePort struct {
 	events []string
 	errs   map[string]error
+	// The counter is the exact-once check for the forward authorization
+	// boundary; the event stream alone only proves ordering.
+	authorizeForwardCalls int
 }
 
 type countingPhasePort struct {
@@ -107,7 +116,10 @@ func (p *countingPhasePort) PersistSubmitIntent(context.Context) error {
 	p.record("intent")
 	return nil
 }
-func (p *countingPhasePort) AuthorizeSubmit(context.Context) error    { p.record("authorize"); return nil }
+func (p *countingPhasePort) AuthorizeForward(context.Context) error {
+	p.record("authorize")
+	return nil
+}
 func (p *countingPhasePort) CancelAndReconcile(context.Context) error { p.record("cancel"); return nil }
 func (p *countingPhasePort) PersistAuthorizationUnknownAndReconcile(context.Context) error {
 	p.record("unknown")
@@ -171,7 +183,7 @@ func (p *cancelGatePhasePort) PersistSubmitIntent(context.Context) error {
 	p.record("intent")
 	return nil
 }
-func (p *cancelGatePhasePort) AuthorizeSubmit(context.Context) error {
+func (p *cancelGatePhasePort) AuthorizeForward(context.Context) error {
 	p.record("authorize")
 	return nil
 }
@@ -204,7 +216,7 @@ func (p *authorizeGatePhasePort) PersistSubmitIntent(context.Context) error {
 	p.record("intent")
 	return nil
 }
-func (p *authorizeGatePhasePort) AuthorizeSubmit(context.Context) error {
+func (p *authorizeGatePhasePort) AuthorizeForward(context.Context) error {
 	p.record("authorize")
 	close(p.authorizeStarted)
 	<-p.releaseAuthorize
@@ -263,7 +275,10 @@ func (p *blockingPhasePort) PersistSubmitIntent(context.Context) error {
 	<-p.releaseIntent
 	return nil
 }
-func (p *blockingPhasePort) AuthorizeSubmit(context.Context) error { p.record("authorize"); return nil }
+func (p *blockingPhasePort) AuthorizeForward(context.Context) error {
+	p.record("authorize")
+	return nil
+}
 func (p *blockingPhasePort) CancelAndReconcile(context.Context) error {
 	p.record("cancel")
 	return nil
@@ -281,7 +296,10 @@ func (p *fakePhasePort) Prepare(context.Context) error { return p.call("prepare"
 func (p *fakePhasePort) PersistSubmitIntent(context.Context) error {
 	return p.call("intent")
 }
-func (p *fakePhasePort) AuthorizeSubmit(context.Context) error { return p.call("authorize") }
+func (p *fakePhasePort) AuthorizeForward(context.Context) error {
+	p.authorizeForwardCalls++
+	return p.call("authorize")
+}
 func (p *fakePhasePort) CancelAndReconcile(context.Context) error {
 	return p.call("cancel")
 }
@@ -446,6 +464,36 @@ func TestPrepareBridgesSignedEnvelopeToC4PhasePort(t *testing.T) {
 	// all four relay phases belong to the port, not the old forward journal.
 	if order := strings.Join(f.journal.calls, ","); order != "begin" {
 		t.Fatalf("journal order=%q", order)
+	}
+}
+
+// The relay's forward gate win is not host submit authority. The bridge must
+// persist it through AuthorizeForward; authorizing a submit here would let a
+// crash after forwarding submit on recovery without a host submit gate. The
+// narrowed phase port makes that unrepresentable, so this covers the positive
+// half: the forward authorization is reached exactly once, in order.
+func TestC4PhaseBridgeAuthorizeForwardDoesNotAuthorizeSubmit(t *testing.T) {
+	f := newFixture(t)
+	phase := &fakePhasePort{}
+	f.p.opts.PhasePortFactory = func(context.Context, replay.SnapshotQueryEnvelope) (SnapshotQueryIntakePhasePort, error) {
+		return phase, nil
+	}
+	plan := f.install()
+	prepared, err := plan.Prepare(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.PersistForwardIntent(context.Background(), prepared); err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.AuthorizeForward(context.Background(), prepared); err != nil {
+		t.Fatal(err)
+	}
+	if phase.authorizeForwardCalls != 1 {
+		t.Fatalf("forward callback authorized forward %d times, want 1", phase.authorizeForwardCalls)
+	}
+	if got := strings.Join(phase.events, ","); got != "prepare,intent,authorize" {
+		t.Fatalf("phase order=%q", got)
 	}
 }
 
