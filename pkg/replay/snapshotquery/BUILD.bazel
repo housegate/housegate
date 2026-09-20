@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "canonical.go",
         "composite_executor.go",
+        "envelope.go",
         "executor.go",
         "historical_policy.go",
         "historical_policy_source.go",
@@ -36,6 +37,7 @@ go_test(
     srcs = [
         "canonical_test.go",
         "composite_executor_test.go",
+        "envelope_test.go",
         "executor_test.go",
         "historical_policy_source_test.go",
         "historical_policy_test.go",
@@ -46,6 +48,7 @@ go_test(
         "sort_test.go",
         "verifier_test.go",
     ],
+    data = ["//pkg/auth:snapshot_query_identity_fixture"],
     embed = [":snapshotquery"],
     deps = [
         "//pkg/auth",

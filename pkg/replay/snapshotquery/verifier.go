@@ -73,21 +73,15 @@ func (v *Verifier) Verify(ctx context.Context, req VerifyRequest) (replay.Snapsh
 	in := job.Statement.Envelope.Input
 	// validateJob recomputes the complete read/input/statement bindings. Retain
 	// independently computed roots, never token-decoded or caller-asserted roots.
-	inputRoot, err := replay.SnapshotQueryInputRoot(in)
+	// verifyEnvelope threads v.verifySignature through so the injectable test
+	// seam (see newVerifier) still observes every signature-verification call.
+	_, inputRoot, err := verifyEnvelope(job.Statement.Envelope, v.verifySignature)
 	if err != nil {
 		return replay.SnapshotQueryAttestation{}, err
 	}
 	statementRoot, err := replay.SnapshotQueryStatementRoot(job.Statement)
 	if err != nil {
 		return replay.SnapshotQueryAttestation{}, err
-	}
-	want := auth.JWSStatementPayloadV3{Purpose: auth.StatementPurposeV3, Binding: in.Binding, InputRoot: inputRoot}
-	account, err := v.verifySignature(job.Statement.Envelope.UserJWS, want)
-	if err != nil {
-		return replay.SnapshotQueryAttestation{}, fmt.Errorf("original query signature: %w", err)
-	}
-	if account != in.Binding.ClientAccount {
-		return replay.SnapshotQueryAttestation{}, fmt.Errorf("query signer account mismatch")
 	}
 	if err = ctx.Err(); err != nil {
 		return replay.SnapshotQueryAttestation{}, err
