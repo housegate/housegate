@@ -17,7 +17,11 @@ import (
 
 // SnapshotQueryJournalVersion is deliberately independent from the v2 payload
 // intake journal. Snapshot-query records must never be decoded as payload work.
-const SnapshotQueryJournalVersion uint32 = 1
+// It also versions the durable stage set below: version 2 is the first to carry
+// ForwardAuthorized, so a binary that predates that stage refuses the whole
+// record where it reads it, naming both versions, instead of decoding it and
+// failing later on a stage its recovery switch does not model.
+const SnapshotQueryJournalVersion uint32 = 2
 
 // SnapshotQueryJournal persists only snapshot-query intake state.
 type SnapshotQueryJournal interface {
@@ -53,6 +57,26 @@ const (
 	SnapshotQueryStageCancelPending SnapshotQueryJournalStage = "CancelPending"
 	SnapshotQueryStageReleased      SnapshotQueryJournalStage = "Released"
 )
+
+// snapshotQueryJournalStages is the complete durable stage set this binary can
+// decode. Enumerating it means a corrupt or foreign stage is refused where the
+// record is read, naming the stage, instead of surviving into recovery and
+// failing there as an unexplained default-branch abort.
+// Adding a stage changes the durable shape: bump SnapshotQueryJournalVersion
+// with it.
+var snapshotQueryJournalStages = map[SnapshotQueryJournalStage]struct{}{
+	SnapshotQueryStageSigned:                     {},
+	SnapshotQueryStageSubmitIntent:               {},
+	SnapshotQueryStageForwardAuthorized:          {},
+	SnapshotQueryStageSubmitAuthorized:           {},
+	SnapshotQueryStageSubmitAuthorizationUnknown: {},
+	SnapshotQueryStageSubmitUnknown:              {},
+	SnapshotQueryStageSequenced:                  {},
+	SnapshotQueryStagePreparedOutput:             {},
+	SnapshotQueryStageRejected:                   {},
+	SnapshotQueryStageCancelPending:              {},
+	SnapshotQueryStageReleased:                   {},
+}
 
 // SnapshotQueryLaunchAuthorization records the exact durable right to issue a
 // sequencer Submit. Intent alone deliberately contains no such right, and the
@@ -219,13 +243,16 @@ func isSnapshotQueryRecordFile(name string) bool {
 
 func validateSnapshotQueryJournalRecord(rec SnapshotQueryJournalRecord) error {
 	if rec.Version != SnapshotQueryJournalVersion {
-		return fmt.Errorf("storageintegrity: unsupported snapshot query journal version %d", rec.Version)
+		return fmt.Errorf("storageintegrity: snapshot query journal record version %d unsupported by this binary (supports %d)", rec.Version, SnapshotQueryJournalVersion)
 	}
 	if rec.StatementID == "" || rec.StatementID != rec.Envelope.Input.Binding.StatementID {
 		return errors.New("storageintegrity: snapshot query journal statement identity is required")
 	}
 	if rec.Stage == "" {
 		return errors.New("storageintegrity: snapshot query journal stage is required")
+	}
+	if _, ok := snapshotQueryJournalStages[rec.Stage]; !ok {
+		return fmt.Errorf("storageintegrity: snapshot query journal record stage %q unsupported by this binary", rec.Stage)
 	}
 	if rec.Stage == SnapshotQueryStagePreparedOutput && rec.PreparedOutput == nil {
 		return errors.New("storageintegrity: prepared output journal stage requires projection")

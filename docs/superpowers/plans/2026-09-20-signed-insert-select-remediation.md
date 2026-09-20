@@ -557,7 +557,7 @@ git commit -m "fix(sisnapshotquery): sign the analyzer's read closure instead of
 
 **Interfaces:**
 - Produces: `SnapshotQueryStageForwardAuthorized SnapshotQueryJournalStage = "ForwardAuthorized"`; `SnapshotQueryJournalRecord.ForwardAuthorization *SnapshotQueryLaunchAuthorization`; `func (p *SnapshotQueryIntakePhasePort) AuthorizeForward(ctx context.Context) error`; the plugin-side `SnapshotQueryIntakePhasePort` interface gains `AuthorizeForward(context.Context) error`.
-- Contract: `AuthorizeSubmit` now requires stage `ForwardAuthorized` (or is idempotent at `SubmitAuthorized`); `Recover` treats `ForwardAuthorized` like `SubmitIntent` (lookup/fence only, never Submit); `SubmitAfterAuthorization` still requires `SubmitAuthorized`.
+- Contract: `AuthorizeSubmit` now requires stage `ForwardAuthorized` (or is idempotent at `SubmitAuthorized`); `Recover` treats `ForwardAuthorized` like `SubmitIntent` (lookup/fence only, never Submit); `SubmitAfterAuthorization` still requires `SubmitAuthorized`. Superseded by follow-up F4 (final-review finding): `AuthorizeSubmit` admits both `SubmitIntent` (host lane, D8 `SubmitIntent → SubmitAuthorized`) and `ForwardAuthorized` (agent lane); the agent lane stays type-enforced because the plugin-side port interface omits `AuthorizeSubmit`.
 
 - [ ] **Step 1: Write the failing tests**
 

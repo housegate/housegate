@@ -664,3 +664,120 @@ func TestRelayQueryOnly_CancelThenNextQueryIsServed(t *testing.T) {
 	upstreamProxy.Close()
 	<-done
 }
+
+// queryOnlyInFlightMarkerRelay drives one query-only operation that drains its
+// empty marker while Run is still outstanding, and returns the bound relay
+// with the client loop still running.
+func queryOnlyInFlightMarkerRelay(t *testing.T, id int64, queryID string, run func(context.Context) error) (*Relay, net.Conn, net.Conn, chan error, *queryOnlyHooks) {
+	t.Helper()
+	clientProxy, clientPeer := net.Pipe()
+	upstreamProxy, upstreamPeer := net.Pipe()
+	t.Cleanup(func() {
+		clientProxy.Close()
+		clientPeer.Close()
+		upstreamProxy.Close()
+		upstreamPeer.Close()
+	})
+	sess := chsession.New(id, clientProxy)
+	sess.Client().SetRevision(deferredTestRev)
+	upstream := chproto.NewCodec(upstreamPeer, chproto.DirToUpstream)
+	upstream.SetRevision(deferredTestRev)
+	if err := sess.BindUpstream(context.Background(), upstream); err != nil {
+		t.Fatalf("bind upstream: %v", err)
+	}
+	started := make(chan struct{})
+	h := &queryOnlyHooks{host: newQueryOnlyHost(t, func(context.Context, *chproto.Query) (plugin.SnapshotQueryHostAdmission, error) {
+		return plugin.SnapshotQueryHostAdmission{Run: func(ctx context.Context) error {
+			close(started)
+			return run(ctx)
+		}, CancelClient: func() {}, MaxControlBytes: 1024}, nil
+	})}
+	r := NewRelay(sess, h, nil, nil)
+	done := make(chan error, 1)
+	go func() { done <- r.clientToUpstream(context.Background()) }()
+	writeAllConn(t, clientPeer, encodeInsertQuery(t, queryID, "INSERT INTO target SELECT 1"))
+	<-started
+	// The operation consumes its one empty marker while Run is outstanding.
+	writeAllConn(t, clientPeer, encodeEmptyClientData(t))
+	_ = clientPeer.SetReadDeadline(time.Now().Add(40 * time.Millisecond))
+	if _, err := clientPeer.Read(make([]byte, 1)); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("in-flight marker completed or failed query-only Run: %v", err)
+	}
+	_ = clientPeer.SetReadDeadline(time.Time{})
+	return r, clientPeer, upstreamProxy, done, h
+}
+
+// expectQueryOnlySecondMarkerClosesSession asserts the terminal boundary left
+// no allowance behind: a following empty marker belongs to no query, closes
+// the connection, and never reaches upstream or a ClientData hook.
+func expectQueryOnlySecondMarkerClosesSession(t *testing.T, clientPeer, upstreamProxy net.Conn, done chan error, h *queryOnlyHooks) {
+	t.Helper()
+	writeFragmented(t, clientPeer, encodeEmptyClientData(t))
+	if err := <-done; err == nil || errors.Is(err, io.EOF) {
+		t.Fatalf("client loop=%v, want terminal fail-closed error", err)
+	}
+	_ = upstreamProxy.SetReadDeadline(time.Now().Add(25 * time.Millisecond))
+	if _, err := upstreamProxy.Read(make([]byte, 1)); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("marker after a consumed marker reached upstream: %v", err)
+	}
+	if h.clientData.Load() != 0 {
+		t.Fatalf("query-only markers fired %d ClientData hooks, want 0", h.clientData.Load())
+	}
+}
+
+// Plan D2 allows exactly one empty marker per operation. An operation that
+// already drained its marker in flight must not be granted a second one at its
+// local terminal boundary, which is what failAtBoundary's !markerSeen predicate
+// already expresses for a refused packet.
+func TestRelayQueryOnly_SuccessAfterInFlightMarkerDeniesLateMarkerAllowance(t *testing.T) {
+	release := make(chan struct{})
+	r, clientPeer, upstreamProxy, done, h := queryOnlyInFlightMarkerRelay(t, 20, "in-flight-marker-success", func(context.Context) error {
+		<-release
+		return nil
+	})
+	close(release)
+	if got := readExact(t, clientPeer, 1); got[0] != byte(chproto.ServerEndOfStreamCode) {
+		t.Fatalf("local terminal=%d, want EOS", got[0])
+	}
+	if r.queryOnlyLateMarkerAllowed {
+		t.Fatal("local success after a consumed marker granted a second late-marker allowance")
+	}
+	expectQueryOnlySecondMarkerClosesSession(t, clientPeer, upstreamProxy, done, h)
+}
+
+// The cancellation twin: cancelling ends at the same wire boundary as success,
+// so it carries the same one-marker-per-operation limit.
+func TestRelayQueryOnly_CancelAfterInFlightMarkerDeniesLateMarkerAllowance(t *testing.T) {
+	r, clientPeer, upstreamProxy, done, h := queryOnlyInFlightMarkerRelay(t, 21, "in-flight-marker-cancel", func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	var cancel proto.Buffer
+	cancel.PutUVarInt(uint64(chproto.ClientCancelCode))
+	writeAllConn(t, clientPeer, cancel.Buf)
+	if got := readExact(t, clientPeer, 1); got[0] != byte(chproto.ServerEndOfStreamCode) {
+		t.Fatalf("cancel terminal=%d, want EOS", got[0])
+	}
+	if r.queryOnlyLateMarkerAllowed {
+		t.Fatal("cancellation after a consumed marker granted a second late-marker allowance")
+	}
+	expectQueryOnlySecondMarkerClosesSession(t, clientPeer, upstreamProxy, done, h)
+}
+
+// A local failure reaches the same wire boundary as local success, so the
+// one-marker-per-operation limit binds it identically.
+func TestRelayQueryOnly_RunErrorAfterInFlightMarkerDeniesLateMarkerAllowance(t *testing.T) {
+	release := make(chan struct{})
+	r, clientPeer, upstreamProxy, done, h := queryOnlyInFlightMarkerRelay(t, 22, "in-flight-marker-run-error", func(context.Context) error {
+		<-release
+		return errors.New("durable host failure")
+	})
+	close(release)
+	if exc := readServerException(t, clientPeer); exc.Message == "" {
+		t.Fatal("query-only failure returned an empty Exception")
+	}
+	if r.queryOnlyLateMarkerAllowed {
+		t.Fatal("local failure after a consumed marker granted a second late-marker allowance")
+	}
+	expectQueryOnlySecondMarkerClosesSession(t, clientPeer, upstreamProxy, done, h)
+}
