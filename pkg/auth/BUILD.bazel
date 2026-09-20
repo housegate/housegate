@@ -1,5 +1,14 @@
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
+# Exposes the frozen v3 identity fixture to other packages' tests (currently
+# pkg/replay/snapshotquery) without granting them the whole testdata glob.
+# Do not modify the fixture itself; see statement_v3_vectors_test.go.
+filegroup(
+    name = "snapshot_query_identity_fixture",
+    srcs = ["testdata/snapshot_query_identity_v1.json"],
+    visibility = ["//pkg/replay/snapshotquery:__pkg__"],
+)
+
 go_library(
     name = "auth",
     srcs = [
