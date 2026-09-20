@@ -21,6 +21,7 @@ pkg/plugins/
 |-- sessionstate/   # OnHello capture of the logical ClientHello database
 |-- sireserved/     # privileged SI namespace/placeholder/object-carrier guard
 |-- sistatement/    # agent-side signed SI INSERT lane and successful-USE tracking
+|-- sisnapshotquery/ # agent-side signed INSERT ... SELECT preparation (default-off, injection-only ports)
 |-- storageintegrity/ # server-side signed SI ingress and admission
 `-- usage/          # query billing usage reporting
 ```
@@ -34,6 +35,7 @@ pkg/plugins/
 | SQL metadata source | `rewrite/`, `../../pkg/rewriter/` | Ordinary policy consumes `QueryContext`; the narrow text-inspection exceptions are listed below. |
 | SI INSERT identity | `sistatement/`, `storageintegrity/`, `../storageintegrity/` | Agent and ingress share INSERT-target helpers; the agent also parses column lists, and only payload-local Native INSERTs are statement-signed. |
 | Agent USE state | `sistatement/` | Strictly parses standalone USE candidates and commits the database only after upstream success; USE is not statement-signed and server ingress does not use this parser. |
+| Snapshot-query agent lane | `sisnapshotquery/` | OnQuery installs an async AgentPrepare plan; classification is local, analysis/reservation/catalog/journal are injected ports; nothing wires it in build.go. |
 | Other USE routing/state | `forward/`, `rewrite/`, `../../pkg/rewriter/` | `forward.matchUse` delegates to shared fail-open `ParseUseDatabase`; `sentioRewriter` uses backend classification plus a known-physical fallback to mirror state. |
 | SI metadata cross-check | `storageintegrity/plugin.go` | Enabled ingress independently classifies INSERT/UPDATE/DELETE/ALTER/read-like text shapes and rejects backend metadata mismatches. |
 | SI operator-bypass guard | `sireserved/` | Parser-free, fail-closed scan for reserved tokens, Identifier placeholders, and local-catalog/foreign-connector object carriers on maintenance/platform-operator sessions. Its lexical model covers every span a name can hide in — `'…'`, `` `…` ``, `"…"`, `--`, `#`, `#!`, `//`, nested `/* */` and ClickHouse heredocs (`$$…$$` / `$tag$…$tag$`) — and refuses a `$` that opens no well-formed heredoc. |

@@ -10,6 +10,8 @@
 | Handshake flow | `relay.go` | ClientHello, OnHello chain, upstream hello, addendum, forward-pivot special case. |
 | Client to upstream packets | `relay.go` | Query hook chain, typed query writes, non-query `WriteRawPacket` forwarding, and ClientData hooks. |
 | Upstream to client packets | `relay.go` | Packet-framed forwarding, decoded terminal lifecycle, and the legacy opaque-result fallback. |
+| Agent async preparation | `relay_agent_prepare.go` | AgentPrepare plan: sole-reader Cancel/EOF polling while a worker prepares, serialized forward gate, durable ForwardAuthorized before the Query is written. |
+| Query-only host execution | `relay_query_only.go` | Local completion without an upstream Query: drains the empty external-table marker, never fires OnQuerySuccess, see the plan for session reuse after local completion. |
 | Metrics observer | `observer.go` | Prometheus globals and wire-level packet/byte counters. |
 
 ## CONVENTIONS
