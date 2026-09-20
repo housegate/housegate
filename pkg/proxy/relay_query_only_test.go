@@ -330,6 +330,45 @@ func TestRelayQueryOnly_RejectsNamedEmptyMarker(t *testing.T) {
 	if _, active := r.currentActiveQuery(); active {
 		t.Fatal("named marker left active query")
 	}
+	// The refused packet was fully framed and this operation had not consumed
+	// its marker yet, so plan D2's allowance still applies.
+	if !r.queryOnlyLateMarkerAllowed {
+		t.Fatal("first marker violation at a packet boundary denied the late-marker allowance")
+	}
+}
+
+func TestRelayQueryOnly_SecondMarkerViolationDeniesLateMarkerAllowance(t *testing.T) {
+	clientProxy, clientPeer := net.Pipe()
+	defer clientProxy.Close()
+	defer clientPeer.Close()
+	sess := chsession.New(19, clientProxy)
+	sess.Client().SetRevision(deferredTestRev)
+	r := NewRelay(sess, plugin.NoopHooks{}, nil, nil)
+	started := make(chan struct{})
+	host := newQueryOnlyHost(t, func(_ context.Context, _ *chproto.Query) (plugin.SnapshotQueryHostAdmission, error) {
+		return plugin.SnapshotQueryHostAdmission{Run: func(ctx context.Context) error {
+			close(started)
+			<-ctx.Done()
+			return ctx.Err()
+		}, CancelClient: func() {}, MaxControlBytes: 1024}, nil
+	})
+	qctx := &plugin.QueryContext{Session: sess, Query: &chproto.Query{ID: "duplicate-marker"}, Values: map[string]any{}}
+	if err := host.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("host OnQuery: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- r.runQueryOnly(context.Background(), qctx) }()
+	<-started
+	// The first marker is drained in flight; the second one is the violation.
+	writeAllConn(t, clientPeer, append(encodeEmptyClientData(t), encodeEmptyClientData(t)...))
+	if err := <-done; err == nil {
+		t.Fatal("duplicate empty marker was accepted")
+	}
+	// This operation already consumed its one marker, so no further marker may
+	// be drained after it ends.
+	if r.queryOnlyLateMarkerAllowed {
+		t.Fatal("duplicate marker violation granted a second late-marker allowance")
+	}
 }
 
 func TestRelayQueryOnly_RunBlockingDrainsEmptyMarker(t *testing.T) {
@@ -448,30 +487,53 @@ func TestRelayQueryOnly_ControlReadFailureClearsActiveQuery(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			clientProxy, clientPeer := net.Pipe()
+			upstreamProxy, upstreamPeer := net.Pipe()
 			defer clientProxy.Close()
 			defer clientPeer.Close()
+			defer upstreamProxy.Close()
+			defer upstreamPeer.Close()
 			sess := chsession.New(11, clientProxy)
-			r := NewRelay(sess, plugin.NoopHooks{}, nil, nil)
+			sess.Client().SetRevision(deferredTestRev)
+			upstream := chproto.NewCodec(upstreamPeer, chproto.DirToUpstream)
+			upstream.SetRevision(deferredTestRev)
+			if err := sess.BindUpstream(context.Background(), upstream); err != nil {
+				t.Fatalf("bind upstream: %v", err)
+			}
 			started := make(chan struct{})
-			host := newQueryOnlyHost(t, func(_ context.Context, _ *chproto.Query) (plugin.SnapshotQueryHostAdmission, error) {
+			h := &firstQueryOnlyHooks{queryOnlyHooks: queryOnlyHooks{host: newQueryOnlyHost(t, func(_ context.Context, _ *chproto.Query) (plugin.SnapshotQueryHostAdmission, error) {
 				return plugin.SnapshotQueryHostAdmission{Run: func(ctx context.Context) error {
 					close(started)
 					<-ctx.Done()
 					return ctx.Err()
 				}, CancelClient: func() {}, MaxControlBytes: 1024}, nil
-			})
-			qctx := &plugin.QueryContext{Session: sess, Query: &chproto.Query{ID: "control-error"}, Values: map[string]any{}}
-			if err := host.OnQuery(context.Background(), qctx); err != nil {
-				t.Fatalf("host OnQuery: %v", err)
-			}
+			})}}
+			r := NewRelay(sess, h, nil, nil)
 			done := make(chan error, 1)
-			go func() { done <- r.runQueryOnly(context.Background(), qctx) }()
+			go func() { done <- r.clientToUpstream(context.Background()) }()
+			writeAllConn(t, clientPeer, encodeInsertQuery(t, "control-error", "INSERT INTO target SELECT 1"))
 			<-started
-			if _, err := clientPeer.Write(tc.raw); err != nil {
-				t.Fatalf("write %s control: %v", tc.name, err)
+			// The bad control packet is pipelined ahead of an ordinary Query. A
+			// control read that stops mid-body leaves the client codec off a
+			// packet boundary, so that pipelined Query must never be served.
+			pipelined := append(append([]byte(nil), tc.raw...), encodeInsertQuery(t, "after-control-error", "SELECT 2")...)
+			writeAllConn(t, clientPeer, pipelined)
+			if exc := readServerException(t, clientPeer); exc.Message == "" {
+				t.Fatalf("%s control failure returned an empty Exception", tc.name)
 			}
-			if err := <-done; err == nil || errors.Is(err, io.EOF) {
-				t.Fatalf("run query-only error=%v, want non-EOF control error", err)
+			if r.queryOnlyLateMarkerAllowed {
+				t.Fatalf("%s control failure granted the late-marker allowance", tc.name)
+			}
+			select {
+			case err := <-done:
+				if err == nil || errors.Is(err, io.EOF) {
+					t.Fatalf("client loop=%v, want terminal control error", err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatalf("%s control failure left the session reusable", tc.name)
+			}
+			_ = upstreamProxy.SetReadDeadline(time.Now().Add(25 * time.Millisecond))
+			if _, err := upstreamProxy.Read(make([]byte, 1)); !errors.Is(err, os.ErrDeadlineExceeded) {
+				t.Fatalf("%s control failure served a later query upstream: %v", tc.name, err)
 			}
 			if _, active := r.currentActiveQuery(); active {
 				t.Fatalf("%s control error left active query", tc.name)

@@ -1110,6 +1110,12 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 					r.writeExceptionToClient(ctx, err)
 					r.hooks.OnQueryAbort(ctx, qctx)
 					r.hooks.OnQueryComplete(ctx, r.sess)
+					if errors.Is(err, errQueryOnlySessionDesynchronized) {
+						// The control read stopped inside a packet body, so the
+						// client codec is no longer on a packet boundary. The
+						// Exception above is the last thing this session emits.
+						return err
+					}
 				}
 				continue
 			}

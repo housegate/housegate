@@ -15,6 +15,12 @@ import (
 var (
 	errQueryOnlyCanceled           = errors.New("query-only execution canceled")
 	errQueryOnlyLifecycleFinalized = errors.New("query-only lifecycle already finalized")
+	// errQueryOnlySessionDesynchronized marks a local failure whose control
+	// read stopped inside a packet body. The unread remainder is not a packet,
+	// so no later byte can be attributed to anything and the session must
+	// close. Unlike errQueryOnlyLifecycleFinalized the terminal hooks have not
+	// run yet, so the caller still delivers its Exception and fires them.
+	errQueryOnlySessionDesynchronized = errors.New("query-only control read left the client codec off a packet boundary")
 )
 
 // This is only the reader's liveness poll while Run is outstanding. It is
@@ -116,14 +122,27 @@ func (r *Relay) runQueryOnly(ctx context.Context, qctx *plugin.QueryContext) err
 		// reader throughout.
 		return nil
 	}
-	fail := func(err error) error {
-		// Once the host execution lane has claimed this query, a local failure
-		// reaches the same wire boundary as local success: the client may have
-		// pipelined this operation's empty marker. Plan D2's one-marker
-		// allowance therefore also applies after the caller's Exception.
+	// failAtBoundary ends the local operation with the client codec parked on a
+	// framed packet boundary, so the caller may keep serving the session.
+	// allowLateMarker grants plan D2's one-marker allowance: a local failure
+	// reaches the same wire boundary as local success, so the client may still
+	// have pipelined this operation's empty marker. It is false once this
+	// operation has already consumed that marker.
+	failAtBoundary := func(err error, allowLateMarker bool) error {
 		r.takeActiveQuery()
-		r.markQueryOnlyLateMarkerAllowed()
+		if allowLateMarker {
+			r.markQueryOnlyLateMarkerAllowed()
+		}
 		return err
+	}
+	// failDesynchronized ends the local operation when a control read stopped
+	// inside a packet body — an oversized control packet, a malformed length,
+	// or a short read. The remaining bytes are not a packet, so nothing later
+	// can be classified: never grant the marker allowance, and tell the caller
+	// to close instead of continuing its loop.
+	failDesynchronized := func(err error) error {
+		r.takeActiveQuery()
+		return fmt.Errorf("%w: %w", errQueryOnlySessionDesynchronized, err)
 	}
 	for {
 		if cancelled {
@@ -133,8 +152,9 @@ func (r *Relay) runQueryOnly(ctx context.Context, qctx *plugin.QueryContext) err
 		case err := <-done:
 			if err != nil {
 				// The caller owns the single client Exception and the matching
-				// abort/complete hooks for a failed local execution.
-				return fail(fmt.Errorf("query-only execution: %w", err))
+				// abort/complete hooks for a failed local execution. The reader
+				// is idle between packets, so the marker allowance applies.
+				return failAtBoundary(fmt.Errorf("query-only execution: %w", err), true)
 			}
 			return finishSuccess()
 		default:
@@ -144,16 +164,18 @@ func (r *Relay) runQueryOnly(ctx context.Context, qctx *plugin.QueryContext) err
 		if err != nil {
 			cancelClient()
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrClosedPipe) {
-				return fail(io.EOF)
+				return failDesynchronized(io.EOF)
 			}
-			return fail(fmt.Errorf("wait for query-only control packet: %w", err))
+			return failDesynchronized(fmt.Errorf("wait for query-only control packet: %w", err))
 		}
 		if !ready {
 			continue
 		}
 		pkt, err := readControl()
 		if err != nil {
-			return fail(err)
+			// readControl can stop inside a packet body (oversized control
+			// packet, malformed length), so this is never a reusable boundary.
+			return failDesynchronized(err)
 		}
 		if pkt.Type == uint64(chproto.ClientCancelCode) {
 			cancelClient()
@@ -161,12 +183,16 @@ func (r *Relay) runQueryOnly(ctx context.Context, qctx *plugin.QueryContext) err
 		}
 		if consumed, err := consumeQueryOnlyMarker(pkt, r.sess.Client().Compression(), &markerSeen); err != nil {
 			cancelClient()
-			return fail(err)
+			// The refused packet was fully framed. Only an operation that has
+			// not already consumed its marker may still be handed a late one.
+			return failAtBoundary(err, !markerSeen)
 		} else if consumed {
 			continue
 		}
 		cancelClient()
-		return fail(fmt.Errorf("client packet %s during query-only execution", clientPacketName(pkt.Type)))
+		// A fully framed packet of an unexpected type: the boundary is intact,
+		// but nothing here is a marker, so no allowance is granted.
+		return failAtBoundary(fmt.Errorf("client packet %s during query-only execution", clientPacketName(pkt.Type)), false)
 	}
 }
 
