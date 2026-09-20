@@ -14,13 +14,14 @@ import (
 // relay generation can map its callbacks as follows:
 //
 //	AgentPrepare.PersistForwardIntent -> PersistSubmitIntent
-//	AgentPrepare.AuthorizeForward     -> AuthorizeSubmit
+//	AgentPrepare.AuthorizeForward     -> AuthorizeForward
 //	AgentPrepare.ReconcileCancel      -> CancelAndReconcile
 //	AgentPrepare.PersistForwardUnknown -> PersistAuthorizationUnknownAndReconcile
 //
-// SubmitAfterAuthorization remains deliberately separate. The relay owner
-// calls it only after its authorization callback returned successfully; an
-// intent or a gate win alone never gives this port authority to submit.
+// SubmitAfterAuthorization remains deliberately separate, and so does
+// AuthorizeSubmit: a relay callback can only reach ForwardAuthorized. An
+// intent or a forward gate win alone never gives this port authority to
+// submit; only a host submit gate may call AuthorizeSubmit.
 //
 // The port is single-operation and serializes its own phase calls. It does not
 // replace SnapshotQueryIntake.Submit or Recover, which remain the synchronous
@@ -40,8 +41,8 @@ type SnapshotQueryIntakePhasePort struct {
 // storageintegrity deliberately does not import plugin or Relay.
 //
 // SubmitAfterAuthorization is intentionally separate from the four relay
-// callbacks. The generation owner invokes it only after AuthorizeForward has
-// returned nil.
+// callbacks. The generation owner invokes it only after the host submit gate
+// has advanced the durable record past AuthorizeForward with AuthorizeSubmit.
 type SnapshotQueryAgentPreparePhaseCallbacks struct {
 	Prepare                  func(context.Context) error
 	PersistForwardIntent     func(context.Context) error
@@ -69,7 +70,7 @@ func (p *SnapshotQueryIntakePhasePort) AgentPrepareCallbacks() SnapshotQueryAgen
 	return SnapshotQueryAgentPreparePhaseCallbacks{
 		Prepare:                  p.Prepare,
 		PersistForwardIntent:     p.PersistSubmitIntent,
-		AuthorizeForward:         p.AuthorizeSubmit,
+		AuthorizeForward:         p.AuthorizeForward,
 		ReconcileCancel:          p.CancelAndReconcile,
 		PersistForwardUnknown:    p.PersistAuthorizationUnknownAndReconcile,
 		SubmitAfterAuthorization: p.SubmitAfterAuthorization,
@@ -107,10 +108,45 @@ func (p *SnapshotQueryIntakePhasePort) PersistSubmitIntent(ctx context.Context) 
 	})
 }
 
-// AuthorizeSubmit is the AgentPrepare AuthorizeForward counterpart. It must be
-// called only by the winner of the generation gate. Its successful return means
-// the exact original envelope is durably bound to SubmitAuthorized; it does not
-// itself contact the sequencer.
+// AuthorizeForward is the AgentPrepare AuthorizeForward counterpart. It must be
+// called only by the winner of the generation gate and durably records that
+// gate win. It is a distinct boundary from SubmitAuthorized: forwarding a Query
+// to the host never authorizes anyone to Submit, so a crash after forwarding
+// leaves recovery with lookup/fence authority only.
+func (p *SnapshotQueryIntakePhasePort) AuthorizeForward(ctx context.Context) error {
+	return p.withStatementLock(ctx, func() error {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		serviceCtx, cancel := p.intake.recoveryAttemptContext()
+		defer cancel()
+		if err := p.prepareLocked(serviceCtx); err != nil {
+			return err
+		}
+		switch p.record.Stage {
+		case SnapshotQueryStageForwardAuthorized, SnapshotQueryStageSubmitAuthorized:
+			return verifyForwardAuthorization(p.record)
+		case SnapshotQueryStageSubmitIntent:
+			p.record.Stage = SnapshotQueryStageForwardAuthorized
+			p.record.ForwardAuthorization = snapshotQueryLaunchAuthorization(p.env)
+			if err := p.saveLocked(serviceCtx); err != nil {
+				// The write may have reached durable storage despite its returned
+				// error. Record an ambiguity which recovery can only lookup and
+				// reconcile; it deliberately has no Submit retry authority.
+				unknownErr := p.persistAuthorizationPersistenceUnknownAndReconcileLocked(serviceCtx)
+				return errors.Join(err, unknownErr)
+			}
+			return nil
+		default:
+			return fmt.Errorf("storageintegrity: cannot authorize snapshot query forward from stage %q", p.record.Stage)
+		}
+	})
+}
+
+// AuthorizeSubmit is the host submit gate's boundary, not a relay callback. It
+// requires a durable ForwardAuthorized record, so the forward gate win and the
+// submit authorization can never be the same durable fact. Its successful
+// return means the exact original envelope is durably bound to
+// SubmitAuthorized; it does not itself contact the sequencer.
 func (p *SnapshotQueryIntakePhasePort) AuthorizeSubmit(ctx context.Context) error {
 	return p.withStatementLock(ctx, func() error {
 		p.mu.Lock()
@@ -123,7 +159,10 @@ func (p *SnapshotQueryIntakePhasePort) AuthorizeSubmit(ctx context.Context) erro
 		switch p.record.Stage {
 		case SnapshotQueryStageSubmitAuthorized:
 			return verifyLaunchAuthorization(p.record)
-		case SnapshotQueryStageSubmitIntent:
+		case SnapshotQueryStageForwardAuthorized:
+			if err := verifyForwardAuthorization(p.record); err != nil {
+				return err
+			}
 			p.record.Stage = SnapshotQueryStageSubmitAuthorized
 			p.record.LaunchAuthorization = snapshotQueryLaunchAuthorization(p.env)
 			if err := p.saveLocked(serviceCtx); err != nil {
@@ -201,6 +240,19 @@ func (p *SnapshotQueryIntakePhasePort) PersistAuthorizationUnknownAndReconcile(c
 
 func (p *SnapshotQueryIntakePhasePort) persistAuthorizationUnknownAndReconcileLocked(ctx context.Context) error {
 	switch p.record.Stage {
+	case SnapshotQueryStageForwardAuthorized:
+		// The forward authorization is durable but the client delivery became
+		// indeterminate. No Submit was ever authorized, so this must not become
+		// SubmitUnknown, whose recovery may retry a Submit; recovery of this
+		// stage may only look up and fence.
+		p.record.Stage = SnapshotQueryStageSubmitAuthorizationUnknown
+		p.record.SubmitUnknown = false
+		if err := p.saveLocked(ctx); err != nil {
+			return errors.Join(err, p.intake.reconcileIntent(ctx, p.record))
+		}
+		return p.intake.reconcileIntent(ctx, p.record)
+	case SnapshotQueryStageSubmitAuthorizationUnknown:
+		return p.intake.reconcileIntent(ctx, p.record)
 	case SnapshotQueryStageSubmitAuthorized:
 		p.record.Stage = SnapshotQueryStageSubmitUnknown
 		p.record.SubmitUnknown = true

@@ -25,6 +25,7 @@ go_test(
         "//pkg/chsession",
         "//pkg/plugin",
         "//pkg/replay",
+        "//pkg/storageintegrity",
         "@com_github_clickhouse_ch_go//proto",
     ],
 )
