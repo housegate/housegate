@@ -60,8 +60,8 @@ const (
 
 // snapshotQueryJournalStages is the complete durable stage set this binary can
 // decode. Enumerating it means a corrupt or foreign stage is refused where the
-// record is read, naming the stage, rather than reaching a recovery switch's
-// default branch and aborting every other pending statement listed with it.
+// record is read, naming the stage, instead of surviving into recovery and
+// failing there as an unexplained default-branch abort.
 // Adding a stage changes the durable shape: bump SnapshotQueryJournalVersion
 // with it.
 var snapshotQueryJournalStages = map[SnapshotQueryJournalStage]struct{}{
