@@ -114,18 +114,17 @@ type Operation struct {
 }
 
 // SnapshotQueryIntakePhasePort is the narrow C4 surface the detached D1
-// worker may retain after it has built the complete signed envelope.  It does
-// not include SubmitAfterAuthorization: relay callbacks must never submit or
-// arrange a submit as a side effect of preparing a client query.
+// worker may retain after it has built the complete signed envelope.  The
+// worker can persist ForwardAuthorized, but it can never authorize or arrange
+// a Submit: this interface deliberately omits both SubmitAfterAuthorization
+// and AuthorizeSubmit, so neither a relay callback nor any later edit of this
+// bridge can submit, or make a submit possible, as a side effect of preparing
+// a client query.  Authorizing a submit is the host submit gate's boundary and
+// stays on the concrete intake phase port.
 type SnapshotQueryIntakePhasePort interface {
 	Prepare(context.Context) error
 	PersistSubmitIntent(context.Context) error
-	// AuthorizeForward persists the relay's forward gate win. It is the only
-	// authorization this bridge may reach: AuthorizeSubmit is the host submit
-	// gate's boundary, so a crash after forwarding can never be recovered as
-	// submit authority.
 	AuthorizeForward(context.Context) error
-	AuthorizeSubmit(context.Context) error
 	CancelAndReconcile(context.Context) error
 	PersistAuthorizationUnknownAndReconcile(context.Context) error
 }
