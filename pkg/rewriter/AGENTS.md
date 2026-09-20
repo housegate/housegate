@@ -14,6 +14,7 @@
 | SI contract adapter | `storage_integrity.go`, `sentio.go` | Builds contract-v1 args, validates acknowledgements, and turns SI uncertainty into `RejectedError`. |
 | SI startup conformance | `probe.go` | Bounded DESCRIBE/catch-all/protected-target suite; every concrete or injected SI factory must implement and pass it. |
 | Agent materializer | `materialize.go`, `../plugins/materialize/` | Separate SQL materialization seam; startup and per-call failure policies differ. |
+| Snapshot-query analysis | `snapshot_query.go` | Fail-closed AnalyzeSnapshotQuery/PrepareSnapshotQuery wrapper and startup capability probe over the rewriter-proto snapshot contract; measured native/gRPC parity test is env-gated. |
 | Exception reverse mapping | `backend.go`, `sentio.go`, `../plugins/rewrite/` | With an active rewrite, `OnException` delegates through the per-connection rewriter to the selected backend's `RewriteErrorMessage`. |
 
 ## CONVENTIONS

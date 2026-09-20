@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -364,6 +365,34 @@ func TestSnapshotQueryIntakeIntentOnlyRecoveryDoesNotSubmitAfterNotFound(t *test
 	}
 }
 
+func TestSnapshotQueryIntakeRecoverForwardAuthorizedNeverSubmits(t *testing.T) {
+	intake, env, events, journal, sequencer, reconciler := newSnapshotQueryIntakeFixture(t)
+	rec := newSnapshotQueryRecordAtIntent(env)
+	rec.Stage = SnapshotQueryStageForwardAuthorized
+	rec.ForwardAuthorization = &SnapshotQueryLaunchAuthorization{
+		InputRoot:         env.InputRoot,
+		OriginalJWSHash:   replay.DigestString(env.UserJWS),
+		ReservationID:     env.Input.Binding.ReservationID,
+		FencingGeneration: env.Input.Binding.FencingGeneration,
+	}
+	journal.records[rec.StatementID] = rec
+	if err := intake.Recover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if sequencer.submit != 0 {
+		t.Fatalf("ForwardAuthorized recovery submitted %d times; forward authorization is not submit authority", sequencer.submit)
+	}
+	if sequencer.lookup == 0 {
+		t.Fatal("ForwardAuthorized recovery must look up and fence the request identity")
+	}
+	if reconciler.calls != 1 {
+		t.Fatalf("reconcile=%d, want 1", reconciler.calls)
+	}
+	if !reflect.DeepEqual(*events, []string{"lookup_submit", "reconcile"}) {
+		t.Fatalf("events = %v", *events)
+	}
+}
+
 func TestSnapshotQueryIntakeRejectsChangedIdentityBeforeEffects(t *testing.T) {
 	intake, env, events, _, sequencer, _ := newSnapshotQueryIntakeFixture(t)
 	env.InputRoot = "0xchanged"
@@ -426,6 +455,11 @@ func TestSnapshotQueryIntakePhasePortMapsAgentPrepareCallbacks(t *testing.T) {
 	if err := callbacks.AuthorizeForward(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	// The relay's four callbacks can only reach ForwardAuthorized. Submitting
+	// needs the host submit gate, which is deliberately not one of them.
+	if err := port.AuthorizeSubmit(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	got, err := callbacks.SubmitAfterAuthorization(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -436,7 +470,50 @@ func TestSnapshotQueryIntakePhasePortMapsAgentPrepareCallbacks(t *testing.T) {
 	if rec := journal.records[env.Input.Binding.StatementID]; rec.Stage != SnapshotQueryStageSequenced {
 		t.Fatalf("stage = %q, want Sequenced", rec.Stage)
 	}
-	want := []string{"validate", "persist_Signed", "persist_SubmitIntent", "persist_SubmitAuthorized", "submit", "persist_Sequenced"}
+	want := []string{"validate", "persist_Signed", "persist_SubmitIntent", "persist_ForwardAuthorized", "persist_SubmitAuthorized", "submit", "persist_Sequenced"}
+	if !reflect.DeepEqual(*events, want) {
+		t.Fatalf("events = %v, want %v", *events, want)
+	}
+}
+
+func TestSnapshotQueryIntakePhasePortAuthorizeSubmitRequiresForwardAuthorization(t *testing.T) {
+	intake, env, events, journal, sequencer, _ := newSnapshotQueryIntakeFixture(t)
+	port, err := intake.NewSnapshotQueryIntakePhasePort(context.Background(), env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := port.Prepare(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := port.PersistSubmitIntent(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := port.AuthorizeSubmit(ctx); err == nil || !strings.Contains(err.Error(), `cannot authorize snapshot query submit from stage "SubmitIntent"`) {
+		t.Fatalf("submit authorized without forward authorization: %v", err)
+	}
+	if err := port.AuthorizeForward(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if rec := journal.records[env.Input.Binding.StatementID]; rec.Stage != SnapshotQueryStageForwardAuthorized || rec.ForwardAuthorization == nil || rec.LaunchAuthorization != nil {
+		t.Fatalf("forward authorization record = %+v, want durable ForwardAuthorized without submit authority", rec)
+	}
+	if _, err := port.SubmitAfterAuthorization(ctx); err == nil || !strings.Contains(err.Error(), "requires durable authorization") {
+		t.Fatalf("ForwardAuthorized alone allowed Submit: %v", err)
+	}
+	if sequencer.submit != 0 {
+		t.Fatalf("submit=%d before submit authorization, want 0", sequencer.submit)
+	}
+	if err := port.AuthorizeSubmit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := port.SubmitAfterAuthorization(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if sequencer.submit != 1 {
+		t.Fatalf("submit = %d, want 1", sequencer.submit)
+	}
+	want := []string{"validate", "persist_Signed", "persist_SubmitIntent", "persist_ForwardAuthorized", "persist_SubmitAuthorized", "submit", "persist_Sequenced"}
 	if !reflect.DeepEqual(*events, want) {
 		t.Fatalf("events = %v, want %v", *events, want)
 	}
@@ -553,6 +630,47 @@ func TestSnapshotQueryIntakePhasePortPreparedCancelBeforeIntentIsDurableAndRecov
 	}
 }
 
+func TestSnapshotQueryIntakePhasePortForwardAuthorizationPersistenceFailureRecoversWithoutSubmit(t *testing.T) {
+	intake, env, events, journal, sequencer, reconciler := newSnapshotQueryIntakeFixture(t)
+	journal.failStage = SnapshotQueryStageForwardAuthorized
+	port, err := intake.NewSnapshotQueryIntakePhasePort(context.Background(), env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := port.Prepare(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := port.PersistSubmitIntent(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := port.AuthorizeForward(context.Background()); err == nil {
+		t.Fatal("forward authorization persistence failure accepted")
+	}
+	if sequencer.submit != 0 || reconciler.calls != 1 {
+		t.Fatalf("submit=%d reconcile=%d, want 0/1", sequencer.submit, reconciler.calls)
+	}
+	if rec := journal.records[env.Input.Binding.StatementID]; rec.Stage != SnapshotQueryStageSubmitAuthorizationUnknown || rec.SubmitUnknown || rec.LaunchAuthorization != nil {
+		t.Fatalf("record = %+v, want durable submit-authorization unknown without submit authority", rec)
+	}
+
+	// An indeterminate forward authorization write is never submit authority,
+	// so a restart may only look up and reconcile it.
+	restarted, err := NewSnapshotQueryIntake(intake.opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.Recover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if sequencer.submit != 0 || sequencer.lookup != 2 || reconciler.calls != 2 {
+		t.Fatalf("after restart submit=%d lookup=%d reconcile=%d, want 0/2/2", sequencer.submit, sequencer.lookup, reconciler.calls)
+	}
+	want := []string{"validate", "persist_Signed", "persist_SubmitIntent", "persist_ForwardAuthorized", "persist_SubmitAuthorizationUnknown", "lookup_submit", "reconcile", "lookup_submit", "reconcile"}
+	if !reflect.DeepEqual(*events, want) {
+		t.Fatalf("events = %v, want %v", *events, want)
+	}
+}
+
 func TestSnapshotQueryIntakePhasePortAuthorizationPersistenceFailureRecoversWithoutSubmit(t *testing.T) {
 	intake, env, events, journal, sequencer, reconciler := newSnapshotQueryIntakeFixture(t)
 	journal.failStage = SnapshotQueryStageSubmitAuthorized
@@ -564,6 +682,9 @@ func TestSnapshotQueryIntakePhasePortAuthorizationPersistenceFailureRecoversWith
 		t.Fatal(err)
 	}
 	if err := port.PersistSubmitIntent(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := port.AuthorizeForward(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if err := port.AuthorizeSubmit(context.Background()); err == nil {
@@ -588,39 +709,91 @@ func TestSnapshotQueryIntakePhasePortAuthorizationPersistenceFailureRecoversWith
 	if sequencer.submit != 0 || sequencer.lookup != 2 || reconciler.calls != 2 {
 		t.Fatalf("after restart submit=%d lookup=%d reconcile=%d, want 0/2/2", sequencer.submit, sequencer.lookup, reconciler.calls)
 	}
-	want := []string{"validate", "persist_Signed", "persist_SubmitIntent", "persist_SubmitAuthorized", "persist_SubmitAuthorizationUnknown", "lookup_submit", "reconcile", "lookup_submit", "reconcile"}
+	want := []string{"validate", "persist_Signed", "persist_SubmitIntent", "persist_ForwardAuthorized", "persist_SubmitAuthorized", "persist_SubmitAuthorizationUnknown", "lookup_submit", "reconcile", "lookup_submit", "reconcile"}
 	if !reflect.DeepEqual(*events, want) {
 		t.Fatalf("events = %v, want %v", *events, want)
 	}
 }
 
 func TestSnapshotQueryIntakePhasePortUnknownAuthorizationNeverSubmits(t *testing.T) {
-	intake, env, _, journal, sequencer, reconciler := newSnapshotQueryIntakeFixture(t)
-	port, err := intake.NewSnapshotQueryIntakePhasePort(context.Background(), env)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := port.Prepare(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := port.PersistSubmitIntent(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := port.AuthorizeSubmit(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := port.PersistAuthorizationUnknownAndReconcile(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if sequencer.submit != 0 || reconciler.calls != 1 {
-		t.Fatalf("submit=%d reconcile=%d, want 0/1", sequencer.submit, reconciler.calls)
-	}
-	if rec := journal.records[env.Input.Binding.StatementID]; rec.Stage != SnapshotQueryStageSubmitUnknown || !rec.SubmitUnknown {
-		t.Fatalf("record = %+v, want durable SubmitUnknown", rec)
-	}
-	if _, err := port.SubmitAfterAuthorization(context.Background()); err == nil {
-		t.Fatal("unknown authorization allowed submit")
-	}
+	// The relay's PersistForwardUnknown fires after its own forward gate win,
+	// where no Submit was ever authorized. Recording SubmitUnknown there would
+	// hand recovery a Submit retry, so that boundary must stay lookup-only.
+	t.Run("after forward authorization", func(t *testing.T) {
+		intake, env, _, journal, sequencer, reconciler := newSnapshotQueryIntakeFixture(t)
+		port, err := intake.NewSnapshotQueryIntakePhasePort(context.Background(), env)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := port.Prepare(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if err := port.PersistSubmitIntent(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if err := port.AuthorizeForward(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if err := port.PersistAuthorizationUnknownAndReconcile(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		// Repeating the indeterminate boundary stays reconciliation-only.
+		if err := port.PersistAuthorizationUnknownAndReconcile(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if sequencer.submit != 0 || reconciler.calls != 2 {
+			t.Fatalf("submit=%d reconcile=%d, want 0/2", sequencer.submit, reconciler.calls)
+		}
+		if rec := journal.records[env.Input.Binding.StatementID]; rec.Stage != SnapshotQueryStageSubmitAuthorizationUnknown || rec.SubmitUnknown || rec.LaunchAuthorization != nil {
+			t.Fatalf("record = %+v, want durable SubmitAuthorizationUnknown without submit authority", rec)
+		}
+		if _, err := port.SubmitAfterAuthorization(context.Background()); err == nil {
+			t.Fatal("unknown forward authorization allowed submit")
+		}
+		// A restart may only look up and fence it; it is never a Submit retry.
+		restarted, err := NewSnapshotQueryIntake(intake.opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := restarted.Recover(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if sequencer.submit != 0 || reconciler.calls != 3 {
+			t.Fatalf("after restart submit=%d reconcile=%d, want 0/3", sequencer.submit, reconciler.calls)
+		}
+	})
+
+	t.Run("after submit authorization", func(t *testing.T) {
+		intake, env, _, journal, sequencer, reconciler := newSnapshotQueryIntakeFixture(t)
+		port, err := intake.NewSnapshotQueryIntakePhasePort(context.Background(), env)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := port.Prepare(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if err := port.PersistSubmitIntent(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if err := port.AuthorizeForward(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if err := port.AuthorizeSubmit(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if err := port.PersistAuthorizationUnknownAndReconcile(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if sequencer.submit != 0 || reconciler.calls != 1 {
+			t.Fatalf("submit=%d reconcile=%d, want 0/1", sequencer.submit, reconciler.calls)
+		}
+		if rec := journal.records[env.Input.Binding.StatementID]; rec.Stage != SnapshotQueryStageSubmitUnknown || !rec.SubmitUnknown {
+			t.Fatalf("record = %+v, want durable SubmitUnknown", rec)
+		}
+		if _, err := port.SubmitAfterAuthorization(context.Background()); err == nil {
+			t.Fatal("unknown authorization allowed submit")
+		}
+	})
 }
 
 func TestSnapshotQueryIntakePhasePortPhaseCallsAreIdempotent(t *testing.T) {
@@ -629,7 +802,7 @@ func TestSnapshotQueryIntakePhasePortPhaseCallsAreIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, phase := range []func(context.Context) error{port.Prepare, port.Prepare, port.PersistSubmitIntent, port.PersistSubmitIntent, port.AuthorizeSubmit, port.AuthorizeSubmit} {
+	for _, phase := range []func(context.Context) error{port.Prepare, port.Prepare, port.PersistSubmitIntent, port.PersistSubmitIntent, port.AuthorizeForward, port.AuthorizeForward, port.AuthorizeSubmit, port.AuthorizeSubmit} {
 		if err := phase(context.Background()); err != nil {
 			t.Fatal(err)
 		}
@@ -643,7 +816,7 @@ func TestSnapshotQueryIntakePhasePortPhaseCallsAreIdempotent(t *testing.T) {
 	if sequencer.submit != 1 {
 		t.Fatalf("submit = %d, want 1", sequencer.submit)
 	}
-	want := []string{"validate", "persist_Signed", "persist_SubmitIntent", "persist_SubmitAuthorized", "submit", "persist_Sequenced"}
+	want := []string{"validate", "persist_Signed", "persist_SubmitIntent", "persist_ForwardAuthorized", "persist_SubmitAuthorized", "submit", "persist_Sequenced"}
 	if !reflect.DeepEqual(*events, want) {
 		t.Fatalf("events = %v, want %v", *events, want)
 	}

@@ -1066,3 +1066,24 @@ func TestSnapshotMeasuredFixtureContract(t *testing.T) {
 		t.Fatalf("measured fixture calls=%d, want 7 cases x analyze/prepare", calls)
 	}
 }
+
+type probeFailingAnalyzer struct{ err error }
+
+func (a *probeFailingAnalyzer) AnalyzeSnapshotQuery(context.Context, *pb.AnalyzeSnapshotQueryRequest) (*pb.AnalyzeSnapshotQueryResponse, error) {
+	return nil, a.err
+}
+func (a *probeFailingAnalyzer) ClassifySnapshotQuery(context.Context, *pb.AnalyzeSnapshotQueryRequest) (*pb.AnalyzeSnapshotQueryResponse, error) {
+	return nil, a.err
+}
+func (a *probeFailingAnalyzer) PrepareSnapshotQuery(context.Context, *pb.PrepareSnapshotQueryRequest) (*pb.PrepareSnapshotQueryResponse, error) {
+	return nil, a.err
+}
+func (a *probeFailingAnalyzer) Close() error { return nil }
+
+func TestExpectSnapshotProbeRejectionWrapsCause(t *testing.T) {
+	sentinel := errors.New("transport down")
+	err := expectSnapshotProbeRejection(context.Background(), &probeFailingAnalyzer{err: sentinel}, &pb.AnalyzeSnapshotQueryRequest{}, pb.SnapshotQueryCode_INVALID_INPUT)
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("probe error does not wrap its cause: %v", err)
+	}
+}

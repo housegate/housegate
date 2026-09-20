@@ -23,3 +23,5 @@ bazel test //pkg/replay/nativepayload:nativepayload_test
 bazel test //pkg/replay/chexec:chexec_test
 bazel test //pkg/integration:integration_test --test_filter='TestCHReplay|Test.*Replay' --test_output=errors
 ```
+
+`pkg/replay/snapshotquery` is the issue #153 snapshot-query executor/verifier (design D1–D7). It reuses `ResolveColumnProfile`, `lthash.EncodeRow`, `payloadexec.RowID`, `PartitionIDForRow` and `RowElementHash` and adds the frozen v3 records in `snapshot_query_types.go`, the canonical hashes in `snapshot_query_hash.go`, and the executor-profile transition validator. Its `SnapshotReadStore`, `ProfileRegistry` and `QueryUseAdmission` ports have no production implementation yet; arbiter-core supplies them.

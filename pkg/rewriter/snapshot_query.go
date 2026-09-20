@@ -433,7 +433,7 @@ func ProbeSnapshotQuery(ctx context.Context, analyzer SnapshotQueryAnalyzer, pro
 	}
 	var typed *SnapshotQueryError
 	if !errors.As(err, &typed) || !typed.acknowledged || typed.Code != pb.SnapshotQueryCode_NOT_SNAPSHOT_QUERY {
-		return fmt.Errorf("snapshot query capability probe: final ordinary analysis got %v, want typed %s refusal", err, pb.SnapshotQueryCode_NOT_SNAPSHOT_QUERY)
+		return fmt.Errorf("snapshot query capability probe: final ordinary analysis got %w, want typed %s refusal", err, pb.SnapshotQueryCode_NOT_SNAPSHOT_QUERY)
 	}
 	return nil
 }
@@ -441,11 +441,11 @@ func ProbeSnapshotQuery(ctx context.Context, analyzer SnapshotQueryAnalyzer, pro
 func expectSnapshotProbeRejection(ctx context.Context, analyzer SnapshotQueryAnalyzer, req *pb.AnalyzeSnapshotQueryRequest, code pb.SnapshotQueryCode) error {
 	_, err := analyzer.AnalyzeSnapshotQuery(ctx, req)
 	if err == nil {
-		return fmt.Errorf("unexpected success")
+		return errors.New("unexpected success")
 	}
 	var typed *SnapshotQueryError
 	if !errors.As(err, &typed) || !typed.acknowledged || typed.Code != code {
-		return fmt.Errorf("got %v, want code %s", err, code)
+		return fmt.Errorf("got %w, want code %s", err, code)
 	}
 	return nil
 }
