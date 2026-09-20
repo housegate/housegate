@@ -333,9 +333,11 @@ func newFixture(t *testing.T) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pin := replay.SnapshotPin{NetworkID: "net", KeeperShardID: 7, SnapshotID: "snapshot", SafeBlockSeq: 8, ManifestRoot: "manifest", StateRoot: "state", SchemaSnapshotID: "schema-snapshot", SchemaRoot: "schema-root"}
+	pin := fixturePin()
 	r := replay.SnapshotQueryReservation{ReservationID: "reservation", FencingGeneration: 4, ClientAccount: signer.Address(), StatementID: signer.Address() + ":1:nonce", ReadSnapshot: pin, ExecutorProfileID: "executor", QueryProfileID: "query", ActivationID: "activation"}
-	f := &fixture{t: t, signer: signer, classifier: &fakeClassifier{candidate: Candidate{Recognized: true, LogicalDatabase: "logical"}}, reservations: &fakeReservations{grant: Grant{RequestID: r.StatementID, BlockSeq: 9, Reservation: r}}, catalog: &fakeCatalog{value: Catalog{ReadSet: replay.SnapshotReadSet{ReadSnapshot: pin}}}, analyzer: &fakeAnalyzer{value: Analysis{SQL: "INSERT INTO physical SELECT 1", TargetTableID: "target", SchemaHash: "schema-hash", RowIDProfileID: "row-profile", ClientRevision: 54470}}, sequence: &fakeSequence{id: r.StatementID}, journal: &fakeJournal{}}
+	// The base fixture catalog pins no tables, so the analyzer's complete read
+	// closure over it is explicitly empty.
+	f := &fixture{t: t, signer: signer, classifier: &fakeClassifier{candidate: Candidate{Recognized: true, LogicalDatabase: "logical"}}, reservations: &fakeReservations{grant: Grant{RequestID: r.StatementID, BlockSeq: 9, Reservation: r}}, catalog: &fakeCatalog{value: Catalog{ReadSet: replay.SnapshotReadSet{ReadSnapshot: pin}}}, analyzer: &fakeAnalyzer{value: Analysis{SQL: "INSERT INTO physical SELECT 1", TargetTableID: "target", SchemaHash: "schema-hash", RowIDProfileID: "row-profile", ClientRevision: 54470, ReadTableIDs: []string{}}}, sequence: &fakeSequence{id: r.StatementID}, journal: &fakeJournal{}}
 	f.p, err = New(Options{Classifier: f.classifier, Reservations: f.reservations, Catalog: f.catalog, Analyzer: f.analyzer, ControlSigner: signer, StatementSigner: signer, Sequence: f.sequence, Journal: f.journal, NetworkID: "net", KeeperShardID: 7, MaxControlBytes: 4096})
 	if err != nil {
 		t.Fatal(err)
@@ -1118,3 +1120,119 @@ func setting(q *chproto.Query, key string) string {
 	return ""
 }
 func ptr(q chproto.Query) *chproto.Query { return &q }
+
+// fixturePin is the pin every fixture reservation and catalog share; prepare
+// refuses a catalog that is pinned to anything else.
+func fixturePin() replay.SnapshotPin {
+	return replay.SnapshotPin{NetworkID: "net", KeeperShardID: 7, SnapshotID: "snapshot", SafeBlockSeq: 8, ManifestRoot: "manifest", StateRoot: "state", SchemaSnapshotID: "schema-snapshot", SchemaRoot: "schema-root"}
+}
+
+// fakeSigner counts statement signatures so a refusal test can prove the
+// refused statement never reached the signer. It delegates to the real relay
+// signer, so the signer identities New compares stay equal.
+type fakeSigner struct {
+	*auth.RelaySigner
+	calls int
+}
+
+func (s *fakeSigner) SignStatementV3(p auth.JWSStatementPayloadV3) (string, error) {
+	s.calls++
+	return s.RelaySigner.SignStatementV3(p)
+}
+
+// newPreparedPlugin returns a plugin whose catalog serves the given pinned read
+// set and whose analyzer serves the given analysis, plus the detached operation
+// state prepare works on. The state mirrors the one OnQuery installs.
+func newPreparedPlugin(t *testing.T, catalog replay.SnapshotReadSet, analyzer *fakeAnalyzer) (*Plugin, *operationState) {
+	t.Helper()
+	f := newFixture(t)
+	f.catalog.value = Catalog{ReadSet: catalog}
+	f.p.opts.Analyzer = analyzer
+	f.p.opts.StatementSigner = &fakeSigner{RelaySigner: f.signer}
+	query := cloneQuery(chproto.Query{ID: "client-id", Body: "INSERT INTO logical SELECT 1"})
+	return f.p, &operationState{value: Operation{RequestSeed: query.ID, OriginalQuery: query, Candidate: f.classifier.candidate}}
+}
+
+func TestPrepareSignsOnlyTheAnalyzedReadClosure(t *testing.T) {
+	catalog := replay.SnapshotReadSet{ReadSnapshot: fixturePin(), Tables: []replay.SnapshotReadTable{
+		{TableID: "0x01", Database: "tenant", Table: "a", SchemaHash: "0xaa"},
+		{TableID: "0x02", Database: "tenant", Table: "b", SchemaHash: "0xbb"},
+		{TableID: "0x03", Database: "tenant", Table: "c", SchemaHash: "0xcc"},
+	}}
+	analyzer := &fakeAnalyzer{value: Analysis{SQL: "INSERT INTO tenant.a SELECT value FROM tenant.c JOIN tenant.a USING value", TargetTableID: "0x01", SchemaHash: "0xaa", RowIDProfileID: "row-v1", ClientRevision: 54470, ReadTableIDs: []string{"0x03", "0x01"}}}
+	p, state := newPreparedPlugin(t, catalog, analyzer)
+	prepared, err := p.prepare(context.Background(), state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, _, _ := state.snapshot()
+	got := op.Envelope.Input.ReadSet
+	if len(got.Tables) != 2 || got.Tables[0].TableID != "0x03" || got.Tables[1].TableID != "0x01" {
+		t.Fatalf("signed read set = %+v, want exactly the closure [0x03 0x01]", got.Tables)
+	}
+	root, err := replay.SnapshotQueryReadSetRoot(got)
+	if err != nil || root != op.Envelope.Input.Binding.ReadSetRoot {
+		t.Fatalf("read_set_root %s does not commit the signed tables (%v)", op.Envelope.Input.Binding.ReadSetRoot, err)
+	}
+	if !prepared.Claimed || prepared.Query == nil {
+		t.Fatal("closure projection did not claim the detached query")
+	}
+}
+
+func TestPrepareRefusesDuplicateClosureAndCatalogTables(t *testing.T) {
+	for name, tc := range map[string]struct {
+		tables  []replay.SnapshotReadTable
+		closure []string
+		want    string
+	}{
+		"duplicate closure entry": {
+			tables:  []replay.SnapshotReadTable{{TableID: "0x01", Database: "tenant", Table: "a", SchemaHash: "0xaa"}},
+			closure: []string{"0x01", "0x01"},
+			want:    `read closure table "0x01" is duplicated`,
+		},
+		"ambiguous catalog entry": {
+			tables:  []replay.SnapshotReadTable{{TableID: "0x01", Database: "tenant", Table: "a", SchemaHash: "0xaa"}, {TableID: "0x01", Database: "tenant", Table: "b", SchemaHash: "0xbb"}},
+			closure: []string{"0x01"},
+			want:    `catalog table "0x01" is duplicated`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			catalog := replay.SnapshotReadSet{ReadSnapshot: fixturePin(), Tables: tc.tables}
+			analyzer := &fakeAnalyzer{value: Analysis{SQL: "INSERT INTO tenant.a SELECT value FROM tenant.a", TargetTableID: "0x01", SchemaHash: "0xaa", RowIDProfileID: "row-v1", ClientRevision: 54470, ReadTableIDs: tc.closure}}
+			p, state := newPreparedPlugin(t, catalog, analyzer)
+			_, err := p.prepare(context.Background(), state)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("prepare = %v, want refusal containing %q", err, tc.want)
+			}
+			if signer := p.opts.StatementSigner.(*fakeSigner); signer.calls != 0 {
+				t.Fatal("refused statement was signed")
+			}
+		})
+	}
+}
+
+func TestPrepareRefusesClosureOutsideCatalog(t *testing.T) {
+	catalog := replay.SnapshotReadSet{ReadSnapshot: fixturePin(), Tables: []replay.SnapshotReadTable{{TableID: "0x01"}}}
+	analyzer := &fakeAnalyzer{value: Analysis{SQL: "INSERT INTO tenant.a SELECT 1", TargetTableID: "0x01", ReadTableIDs: []string{"0x09"}}}
+	p, state := newPreparedPlugin(t, catalog, analyzer)
+	_, err := p.prepare(context.Background(), state)
+	if err == nil || !strings.Contains(err.Error(), "not in the pinned catalog") {
+		t.Fatalf("closure outside catalog = %v, want refusal", err)
+	}
+	if signer := p.opts.StatementSigner.(*fakeSigner); signer.calls != 0 {
+		t.Fatal("refused statement was signed")
+	}
+}
+
+func TestPrepareConstantSelectSignsEmptyReadSet(t *testing.T) {
+	catalog := replay.SnapshotReadSet{ReadSnapshot: fixturePin(), Tables: []replay.SnapshotReadTable{{TableID: "0x01"}}}
+	analyzer := &fakeAnalyzer{value: Analysis{SQL: "INSERT INTO tenant.a SELECT 1", TargetTableID: "0x01", SchemaHash: "0xaa", RowIDProfileID: "row-v1", ClientRevision: 54470, ReadTableIDs: nil}}
+	p, state := newPreparedPlugin(t, catalog, analyzer)
+	if _, err := p.prepare(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	op, _, _ := state.snapshot()
+	if op.Envelope.Input.ReadSet.Tables == nil || len(op.Envelope.Input.ReadSet.Tables) != 0 {
+		t.Fatalf("constant SELECT read set = %#v, want non-nil empty", op.Envelope.Input.ReadSet.Tables)
+	}
+}

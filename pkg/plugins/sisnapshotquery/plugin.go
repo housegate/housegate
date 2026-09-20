@@ -48,10 +48,42 @@ type CatalogPort interface {
 type Analysis struct {
 	SQL, TargetTableID, SchemaHash, RowIDProfileID string
 	ClientRevision                                 uint32
+	// ReadTableIDs is the analyzer's complete base-table closure (design D5).
+	// The signed read set is exactly these pinned-catalog tables; an id
+	// outside the catalog or a duplicate refuses the statement. An empty
+	// closure (constant SELECT) signs an explicit empty table list.
+	ReadTableIDs []string
 }
 type Analyzer interface {
 	PrepareSnapshotQuery(context.Context, Candidate, Catalog, Grant) (Analysis, error)
 }
+
+// signedReadSet projects the pinned catalog onto the analyzer's closure. It
+// never infers tables from SQL text, from the target, or from the catalog size.
+func signedReadSet(catalog replay.SnapshotReadSet, closure []string) (replay.SnapshotReadSet, error) {
+	byID := make(map[string]replay.SnapshotReadTable, len(catalog.Tables))
+	for _, t := range catalog.Tables {
+		if _, dup := byID[t.TableID]; dup {
+			return replay.SnapshotReadSet{}, fmt.Errorf("sisnapshotquery: catalog table %q is duplicated", t.TableID)
+		}
+		byID[t.TableID] = t
+	}
+	out := replay.SnapshotReadSet{ReadSnapshot: catalog.ReadSnapshot, Tables: []replay.SnapshotReadTable{}}
+	seen := make(map[string]bool, len(closure))
+	for _, id := range closure {
+		if seen[id] {
+			return replay.SnapshotReadSet{}, fmt.Errorf("sisnapshotquery: read closure table %q is duplicated", id)
+		}
+		seen[id] = true
+		t, ok := byID[id]
+		if !ok {
+			return replay.SnapshotReadSet{}, fmt.Errorf("sisnapshotquery: read closure table %q is not in the pinned catalog", id)
+		}
+		out.Tables = append(out.Tables, t)
+	}
+	return out, nil
+}
+
 type Sequence interface {
 	NextSnapshotQueryStatementID(context.Context, string) (string, error)
 }
@@ -633,7 +665,14 @@ func (p *Plugin) prepare(ctx context.Context, state *operationState) (plugin.Pre
 	if err != nil {
 		return plugin.PreparedAgentQuery{}, err
 	}
-	input := replay.SnapshotQueryInput{Binding: replay.SnapshotQueryBinding{EnvelopeVersion: replay.SnapshotQueryEnvelopeVersion, InputKind: replay.SnapshotQueryInputKind, ClientAccount: p.opts.StatementSigner.Address(), StatementID: op.RequestID, StatementKind: replay.SnapshotQueryStatementKind, NetworkID: p.opts.NetworkID, KeeperShardID: p.opts.KeeperShardID, SQLHash: replay.DigestString(analysis.SQL), SettingsHash: sicore.EmptySettingsHash, TargetTableID: analysis.TargetTableID, SchemaHash: analysis.SchemaHash, RowIDProfileID: analysis.RowIDProfileID, ClientRevision: analysis.ClientRevision, ReadSnapshot: grant.Reservation.ReadSnapshot, SchemaSnapshotID: grant.Reservation.ReadSnapshot.SchemaSnapshotID, SchemaRoot: grant.Reservation.ReadSnapshot.SchemaRoot, LogicalDatabase: op.Candidate.LogicalDatabase, QueryProfileID: grant.Reservation.QueryProfileID, ExecutorProfileID: grant.Reservation.ExecutorProfileID, ReservationID: grant.Reservation.ReservationID, FencingGeneration: grant.Reservation.FencingGeneration}, SQL: analysis.SQL, ReadSet: catalog.ReadSet}
+	// Design D5: the statement commits the analyzer's complete relation
+	// closure, never the whole pinned catalog. The catalog is only the pinned
+	// source of each table's authenticated descriptor.
+	readSet, err := signedReadSet(catalog.ReadSet, analysis.ReadTableIDs)
+	if err != nil {
+		return plugin.PreparedAgentQuery{}, err
+	}
+	input := replay.SnapshotQueryInput{Binding: replay.SnapshotQueryBinding{EnvelopeVersion: replay.SnapshotQueryEnvelopeVersion, InputKind: replay.SnapshotQueryInputKind, ClientAccount: p.opts.StatementSigner.Address(), StatementID: op.RequestID, StatementKind: replay.SnapshotQueryStatementKind, NetworkID: p.opts.NetworkID, KeeperShardID: p.opts.KeeperShardID, SQLHash: replay.DigestString(analysis.SQL), SettingsHash: sicore.EmptySettingsHash, TargetTableID: analysis.TargetTableID, SchemaHash: analysis.SchemaHash, RowIDProfileID: analysis.RowIDProfileID, ClientRevision: analysis.ClientRevision, ReadSnapshot: grant.Reservation.ReadSnapshot, SchemaSnapshotID: grant.Reservation.ReadSnapshot.SchemaSnapshotID, SchemaRoot: grant.Reservation.ReadSnapshot.SchemaRoot, LogicalDatabase: op.Candidate.LogicalDatabase, QueryProfileID: grant.Reservation.QueryProfileID, ExecutorProfileID: grant.Reservation.ExecutorProfileID, ReservationID: grant.Reservation.ReservationID, FencingGeneration: grant.Reservation.FencingGeneration}, SQL: analysis.SQL, ReadSet: readSet}
 	input.Binding.ReadSetRoot, err = replay.SnapshotQueryReadSetRoot(input.ReadSet)
 	if err != nil {
 		return plugin.PreparedAgentQuery{}, err
