@@ -65,6 +65,11 @@ func (r *Relay) runQueryOnly(ctx context.Context, qctx *plugin.QueryContext) err
 	done := make(chan error, 1)
 	go func() { done <- plan.Run(runCtx) }()
 
+	// markerSeen records whether this operation already drained its one empty
+	// ClientData marker while Run was outstanding. Plan D2's allowance is one
+	// marker per operation, so every terminal boundary below consults it before
+	// handing the caller another one.
+	markerSeen := false
 	cancelled := false
 	cancelClient := func() {
 		if cancelled {
@@ -83,14 +88,16 @@ func (r *Relay) runQueryOnly(ctx context.Context, qctx *plugin.QueryContext) err
 		r.hooks.OnQueryAbort(ctx, qctx)
 		r.hooks.OnQueryComplete(ctx, r.sess)
 		// Cancellation ends at the same supported terminal boundary as local
-		// success, so it carries plan D2's one late-marker allowance too.
-		r.markQueryOnlyLateMarkerAllowed()
+		// success, so it carries plan D2's one late-marker allowance too — unless
+		// this operation already consumed that marker in flight.
+		if !markerSeen {
+			r.markQueryOnlyLateMarkerAllowed()
+		}
 		if err := r.sess.Client().WriteRawPacket([]byte{byte(chproto.ServerEndOfStreamCode)}); err != nil {
 			return fmt.Errorf("%w: write query-only cancellation end-of-stream: %w", errQueryOnlyLifecycleFinalized, err)
 		}
 		return nil
 	}
-	markerSeen := false
 	readControl := func() (*chproto.Packet, error) {
 		pkt, err := r.sess.Client().ReadPacketWithLimit(plan.MaxControlBytes(), uint64(chproto.ClientQueryCode))
 		if err != nil {
@@ -111,15 +118,18 @@ func (r *Relay) runQueryOnly(ctx context.Context, qctx *plugin.QueryContext) err
 		// Local completion is not a framed upstream success: do not invoke
 		// OnQuerySuccess, which may commit unrelated session state.
 		r.hooks.OnQueryComplete(ctx, r.sess)
-		r.markQueryOnlyLateMarkerAllowed()
-		if err := r.sess.Client().WriteRawPacket([]byte{byte(chproto.ServerEndOfStreamCode)}); err != nil {
-			return fmt.Errorf("%w: write query-only end-of-stream: %w", errQueryOnlyLifecycleFinalized, err)
-		}
 		// INSERT ... SELECT has no mandatory ClientData terminator, but a client
 		// may still deliver this operation's empty external-table marker after
 		// the local terminal. Plan D2 allows the caller to drain exactly one
 		// such marker before the next Query packet; the caller retains the sole
-		// reader throughout.
+		// reader throughout. An operation that already drained its marker in
+		// flight has none left to deliver.
+		if !markerSeen {
+			r.markQueryOnlyLateMarkerAllowed()
+		}
+		if err := r.sess.Client().WriteRawPacket([]byte{byte(chproto.ServerEndOfStreamCode)}); err != nil {
+			return fmt.Errorf("%w: write query-only end-of-stream: %w", errQueryOnlyLifecycleFinalized, err)
+		}
 		return nil
 	}
 	// failAtBoundary ends the local operation with the client codec parked on a
@@ -153,8 +163,9 @@ func (r *Relay) runQueryOnly(ctx context.Context, qctx *plugin.QueryContext) err
 			if err != nil {
 				// The caller owns the single client Exception and the matching
 				// abort/complete hooks for a failed local execution. The reader
-				// is idle between packets, so the marker allowance applies.
-				return failAtBoundary(fmt.Errorf("query-only execution: %w", err), true)
+				// is idle between packets, so the marker allowance applies to an
+				// operation that has not already consumed its marker.
+				return failAtBoundary(fmt.Errorf("query-only execution: %w", err), !markerSeen)
 			}
 			return finishSuccess()
 		default:
