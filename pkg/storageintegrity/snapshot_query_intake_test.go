@@ -476,7 +476,7 @@ func TestSnapshotQueryIntakePhasePortMapsAgentPrepareCallbacks(t *testing.T) {
 	}
 }
 
-func TestSnapshotQueryIntakePhasePortAuthorizeSubmitRequiresForwardAuthorization(t *testing.T) {
+func TestSnapshotQueryIntakePhasePortAuthorizeSubmitVerifiesForwardAuthorization(t *testing.T) {
 	intake, env, events, journal, sequencer, _ := newSnapshotQueryIntakeFixture(t)
 	port, err := intake.NewSnapshotQueryIntakePhasePort(context.Background(), env)
 	if err != nil {
@@ -486,11 +486,13 @@ func TestSnapshotQueryIntakePhasePortAuthorizeSubmitRequiresForwardAuthorization
 	if err := port.Prepare(ctx); err != nil {
 		t.Fatal(err)
 	}
+	// A durable intent is the earliest predecessor either lane may authorize
+	// from; the Signed record alone is never enough.
+	if err := port.AuthorizeSubmit(ctx); err == nil || !strings.Contains(err.Error(), `cannot authorize snapshot query submit from stage "Signed"`) {
+		t.Fatalf("submit authorized without a durable intent: %v", err)
+	}
 	if err := port.PersistSubmitIntent(ctx); err != nil {
 		t.Fatal(err)
-	}
-	if err := port.AuthorizeSubmit(ctx); err == nil || !strings.Contains(err.Error(), `cannot authorize snapshot query submit from stage "SubmitIntent"`) {
-		t.Fatalf("submit authorized without forward authorization: %v", err)
 	}
 	if err := port.AuthorizeForward(ctx); err != nil {
 		t.Fatal(err)
@@ -878,4 +880,73 @@ func snapshotQueryEnvelopeForAccount(t *testing.T, account string) replay.Snapsh
 		t.Fatal(err)
 	}
 	return replay.SnapshotQueryEnvelope{Input: input, InputRoot: root, UserJWS: "original-compact-jws"}
+}
+
+// The host query-only lane never forwards a Query, so it can never produce a
+// durable ForwardAuthorized record. Its durable predecessor is SubmitIntent,
+// and AuthorizeSubmit is still the separate gate win it must persist before
+// any sequencer effect.
+func TestSnapshotQueryIntakePhasePortAuthorizeSubmitFromSubmitIntentForHostLane(t *testing.T) {
+	intake, env, events, journal, sequencer, _ := newSnapshotQueryIntakeFixture(t)
+	port, err := intake.NewSnapshotQueryIntakePhasePort(context.Background(), env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := port.Prepare(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := port.PersistSubmitIntent(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := port.AuthorizeSubmit(ctx); err != nil {
+		t.Fatalf("host lane could not authorize submit from SubmitIntent: %v", err)
+	}
+	rec := journal.records[env.Input.Binding.StatementID]
+	if rec.Stage != SnapshotQueryStageSubmitAuthorized || rec.LaunchAuthorization == nil || rec.ForwardAuthorization != nil {
+		t.Fatalf("record = %+v, want SubmitAuthorized bound by a launch authorization and no forward authorization", rec)
+	}
+	got, err := port.SubmitAfterAuthorization(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.BlockSeq != 7 || sequencer.submit != 1 {
+		t.Fatalf("result=%+v submit=%d", got, sequencer.submit)
+	}
+	want := []string{"validate", "persist_Signed", "persist_SubmitIntent", "persist_SubmitAuthorized", "submit", "persist_Sequenced"}
+	if !reflect.DeepEqual(*events, want) {
+		t.Fatalf("events = %v, want %v", *events, want)
+	}
+}
+
+// Admitting SubmitIntent as a predecessor must not weaken the forward
+// predecessor: a record that did forward still has to bind the original
+// envelope before any submit authorization can become durable.
+func TestSnapshotQueryIntakePhasePortAuthorizeSubmitRejectsUnboundForwardAuthorization(t *testing.T) {
+	intake, env, _, journal, sequencer, _ := newSnapshotQueryIntakeFixture(t)
+	rec := newSnapshotQueryRecordAtIntent(env)
+	rec.Stage = SnapshotQueryStageForwardAuthorized
+	rec.ForwardAuthorization = &SnapshotQueryLaunchAuthorization{
+		InputRoot:         env.InputRoot,
+		OriginalJWSHash:   replay.DigestString("a different original request"),
+		ReservationID:     env.Input.Binding.ReservationID,
+		FencingGeneration: env.Input.Binding.FencingGeneration,
+	}
+	journal.records[rec.StatementID] = rec
+	port, err := intake.NewSnapshotQueryIntakePhasePort(context.Background(), env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := port.AuthorizeSubmit(context.Background()); err == nil || !strings.Contains(err.Error(), "forward authorization does not bind the original envelope") {
+		t.Fatalf("unbound forward authorization authorized submit: %v", err)
+	}
+	if got := journal.records[rec.StatementID]; got.Stage != SnapshotQueryStageForwardAuthorized || got.LaunchAuthorization != nil {
+		t.Fatalf("record = %+v, want an unchanged ForwardAuthorized record", got)
+	}
+	if _, err := port.SubmitAfterAuthorization(context.Background()); err == nil {
+		t.Fatal("unbound forward authorization allowed submit")
+	}
+	if sequencer.submit != 0 {
+		t.Fatalf("submit = %d, want 0", sequencer.submit)
+	}
 }

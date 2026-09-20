@@ -21,7 +21,9 @@ import (
 // SubmitAfterAuthorization remains deliberately separate, and so does
 // AuthorizeSubmit: a relay callback can only reach ForwardAuthorized. An
 // intent or a forward gate win alone never gives this port authority to
-// submit; only a host submit gate may call AuthorizeSubmit.
+// submit; only a submit gate may call AuthorizeSubmit. The agent lane reaches
+// that gate from ForwardAuthorized, the host query-only lane from
+// SubmitIntent, and neither predecessor is itself the authorization.
 //
 // The port is single-operation and serializes its own phase calls. It does not
 // replace SnapshotQueryIntake.Submit or Recover, which remain the synchronous
@@ -142,10 +144,19 @@ func (p *SnapshotQueryIntakePhasePort) AuthorizeForward(ctx context.Context) err
 	})
 }
 
-// AuthorizeSubmit is the host submit gate's boundary, not a relay callback. It
-// requires a durable ForwardAuthorized record, so the forward gate win and the
-// submit authorization can never be the same durable fact. Its successful
-// return means the exact original envelope is durably bound to
+// AuthorizeSubmit is the submit gate's boundary, never a relay callback. It
+// advances a durable SubmitIntent or ForwardAuthorized record, so a submit
+// authorization is always a separate durable fact from the intent that
+// preceded it and from any forward gate win.
+//
+// The two lanes reach it from different predecessors. The agent lane can only
+// ever reach ForwardAuthorized: the plugin's phase-port interface omits this
+// method, so no relay callback can call it. A forward authorization is
+// verified whenever it is the predecessor. The host query-only lane never
+// forwards a Query, so it has no forward authorization to record and
+// transitions SubmitIntent -> SubmitAuthorized directly.
+//
+// A successful return means the exact original envelope is durably bound to
 // SubmitAuthorized; it does not itself contact the sequencer.
 func (p *SnapshotQueryIntakePhasePort) AuthorizeSubmit(ctx context.Context) error {
 	return p.withStatementLock(ctx, func() error {
@@ -160,23 +171,31 @@ func (p *SnapshotQueryIntakePhasePort) AuthorizeSubmit(ctx context.Context) erro
 		case SnapshotQueryStageSubmitAuthorized:
 			return verifyLaunchAuthorization(p.record)
 		case SnapshotQueryStageForwardAuthorized:
+			// A record that already forwarded must still bind the original
+			// envelope through its forward authorization before it may submit.
 			if err := verifyForwardAuthorization(p.record); err != nil {
 				return err
 			}
-			p.record.Stage = SnapshotQueryStageSubmitAuthorized
-			p.record.LaunchAuthorization = snapshotQueryLaunchAuthorization(p.env)
-			if err := p.saveLocked(serviceCtx); err != nil {
-				// The write may have reached durable storage despite its returned
-				// error. Record an ambiguity which recovery can only lookup and
-				// reconcile; it deliberately has no Submit retry authority.
-				unknownErr := p.persistAuthorizationPersistenceUnknownAndReconcileLocked(serviceCtx)
-				return errors.Join(err, unknownErr)
-			}
-			return nil
+			return p.authorizeSubmitLocked(serviceCtx)
+		case SnapshotQueryStageSubmitIntent:
+			return p.authorizeSubmitLocked(serviceCtx)
 		default:
 			return fmt.Errorf("storageintegrity: cannot authorize snapshot query submit from stage %q", p.record.Stage)
 		}
 	})
+}
+
+func (p *SnapshotQueryIntakePhasePort) authorizeSubmitLocked(ctx context.Context) error {
+	p.record.Stage = SnapshotQueryStageSubmitAuthorized
+	p.record.LaunchAuthorization = snapshotQueryLaunchAuthorization(p.env)
+	if err := p.saveLocked(ctx); err != nil {
+		// The write may have reached durable storage despite its returned
+		// error. Record an ambiguity which recovery can only lookup and
+		// reconcile; it deliberately has no Submit retry authority.
+		unknownErr := p.persistAuthorizationPersistenceUnknownAndReconcileLocked(ctx)
+		return errors.Join(err, unknownErr)
+	}
+	return nil
 }
 
 func (p *SnapshotQueryIntakePhasePort) persistAuthorizationPersistenceUnknownAndReconcileLocked(ctx context.Context) error {
