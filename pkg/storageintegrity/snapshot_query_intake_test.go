@@ -1038,3 +1038,54 @@ func TestSnapshotQueryIntakeRecoverRefusesTamperedPreparedOutputCache(t *testing
 		t.Fatalf("stage=%q, want unchanged PreparedOutput", journal.records[rec.StatementID].Stage)
 	}
 }
+
+// TestSnapshotQueryIntakeRecoverRefusesInconsistentPreparedOutputRecord covers
+// the individual guards inside recoverPreparedOutput beyond the cache-tamper
+// case above: a durably staged record whose own fields have gone inconsistent
+// (SubmitUnknown, a projection that no longer looks like a pending claim, a
+// projection whose BlockSeq no longer matches the accepted submit, or a submit
+// that is no longer durably marked) must fail closed and must never rewrite
+// the journal record while doing so.
+func TestSnapshotQueryIntakeRecoverRefusesInconsistentPreparedOutputRecord(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*SnapshotQueryJournalRecord)
+	}{
+		{"submit unknown", func(r *SnapshotQueryJournalRecord) {
+			r.SubmitUnknown = true
+		}},
+		{"projection carries a capacity reservation", func(r *SnapshotQueryJournalRecord) {
+			p := *r.PreparedOutput
+			p.CapacityReservationID = "capacity"
+			r.PreparedOutput = &p
+		}},
+		{"projection block seq no longer matches the accepted submit", func(r *SnapshotQueryJournalRecord) {
+			p := *r.PreparedOutput
+			p.BlockSeq++
+			r.PreparedOutput = &p
+		}},
+		{"submit no longer durable", func(r *SnapshotQueryJournalRecord) {
+			r.HasSubmit = false
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			intake, env, _, journal, _, _ := newSnapshotQueryIntakeFixture(t)
+			accepted := snapshotQueryAcceptedResult(env)
+			rec := newSnapshotQueryRecord(env)
+			rec.Stage, rec.Submit, rec.HasSubmit = SnapshotQueryStageSequenced, accepted, true
+			journal.records[rec.StatementID] = rec
+			stageDurablePreparedOutput(t, journal, env, accepted)
+
+			mutated := journal.records[rec.StatementID]
+			tc.mutate(&mutated)
+			journal.records[rec.StatementID] = mutated
+
+			if err := intake.Recover(context.Background()); err == nil {
+				t.Fatal("inconsistent prepared output record recovered without error")
+			}
+			if got := journal.records[rec.StatementID]; got.Stage != SnapshotQueryStagePreparedOutput || !reflect.DeepEqual(got, mutated) {
+				t.Fatalf("record changed during a refused recovery: got %+v, want %+v", got, mutated)
+			}
+		})
+	}
+}
