@@ -105,7 +105,7 @@ require (
 	github.com/go-faster/errors v0.7.1 // indirect
 	github.com/google/uuid v1.6.0
 	github.com/holiman/uint256 v1.3.2 // indirect
-	github.com/housegate/rewriter-go v0.11.1-0.20260918115403-a25c526eefc8
+	github.com/housegate/rewriter-go v0.11.1-0.20260920014131-4e4a14a70841
 	github.com/housegate/rewriter-proto v0.2.1-0.20260918115349-d3844a56d7b4
 	github.com/klauspost/compress v1.18.6 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.9 // indirect
