@@ -3,6 +3,7 @@ package storageintegrity
 import (
 	"context"
 	"errors"
+	"os"
 	"reflect"
 	"strings"
 	"sync"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/housegate/housegate/pkg/auth"
 	"github.com/housegate/housegate/pkg/replay"
+	"github.com/housegate/housegate/pkg/replay/payloadexec"
 )
 
 type snapshotQueryMemoryJournal struct {
@@ -948,5 +950,142 @@ func TestSnapshotQueryIntakePhasePortAuthorizeSubmitRejectsUnboundForwardAuthori
 	}
 	if sequencer.submit != 0 {
 		t.Fatalf("submit = %d, want 0", sequencer.submit)
+	}
+}
+
+// stageDurablePreparedOutput stages one real one-shot output through the public
+// stager so the journal record and cache file are exactly what production
+// writes; the journal must already hold the Sequenced record for env.
+func stageDurablePreparedOutput(t *testing.T, journal SnapshotQueryJournal, env replay.SnapshotQueryEnvelope, accepted replay.SnapshotQuerySubmitResult) SnapshotQueryPrepared {
+	t.Helper()
+	out := &canonicalOutputFake{rows: []payloadexec.Row{{RowID: []byte{1, 2}, Values: []any{"value", int64(7)}, PartitionID: "p2", RawBytes: 9}}, root: replay.DigestString("canonical-output"), partitions: []string{"p2"}}
+	result := replay.ExecutionResult{SnapshotQuery: &replay.SnapshotQueryEvidence{ExecutionOutcome: "applied", OutputRowsRoot: out.OutputRowsRoot(), OutputRowCount: out.RowCount()}, ComputedStateRoot: replay.DigestString("state")}
+	p := PreparedOutputAdapter{
+		JobValue:    replay.SnapshotQueryJob{BlockSeq: accepted.BlockSeq, Reservation: accepted.Reservation, Statement: replay.SnapshotQueryStatement{StatementSeq: accepted.StatementSeq, Envelope: env}},
+		ResultValue: result,
+		Rows:        out,
+		CloseFunc:   func() error { return nil },
+	}
+	s, err := NewPreparedOutputStager(journal, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := s.Stage(context.Background(), SnapshotQueryPrepareRequest{Envelope: env, Accepted: accepted}, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return prepared
+}
+
+func TestSnapshotQueryIntakeRecoverAcceptsDurablyPreparedOutput(t *testing.T) {
+	intake, env, _, journal, _, _ := newSnapshotQueryIntakeFixture(t)
+	accepted := snapshotQueryAcceptedResult(env)
+	rec := newSnapshotQueryRecord(env)
+	rec.Stage, rec.Submit, rec.HasSubmit = SnapshotQueryStageSequenced, accepted, true
+	journal.records[rec.StatementID] = rec
+	stageDurablePreparedOutput(t, journal, env, accepted)
+	if got := journal.records[rec.StatementID].Stage; got != SnapshotQueryStagePreparedOutput {
+		t.Fatalf("fixture stage=%q, want PreparedOutput", got)
+	}
+	if err := intake.Recover(context.Background()); err != nil {
+		t.Fatalf("recovery aborted on a durably staged output: %v", err)
+	}
+	if got := journal.records[rec.StatementID]; got.Stage != SnapshotQueryStagePreparedOutput || got.PreparedOutput == nil {
+		t.Fatalf("recovery altered the staged record: %+v", got)
+	}
+}
+
+func TestSnapshotQueryIntakeResubmitOfPreparedOutputReturnsAcceptedWithoutSequencer(t *testing.T) {
+	intake, env, events, journal, _, _ := newSnapshotQueryIntakeFixture(t)
+	accepted := snapshotQueryAcceptedResult(env)
+	rec := newSnapshotQueryRecord(env)
+	rec.Stage, rec.Submit, rec.HasSubmit = SnapshotQueryStageSequenced, accepted, true
+	journal.records[rec.StatementID] = rec
+	stageDurablePreparedOutput(t, journal, env, accepted)
+	before := len(*events)
+	got, err := intake.Submit(context.Background(), env, snapshotQueryFakeGate{events: events, win: true})
+	if err != nil {
+		t.Fatalf("re-submit of a staged statement: %v", err)
+	}
+	if got.StatementID != rec.StatementID || got.InputRoot != env.InputRoot || got.BlockSeq != accepted.BlockSeq {
+		t.Fatalf("result=%+v, want the accepted sequence for %s", got, rec.StatementID)
+	}
+	for _, e := range (*events)[before:] {
+		if strings.Contains(e, "submit") {
+			t.Fatalf("re-submit reached the sequencer: %v", (*events)[before:])
+		}
+	}
+	if journal.records[rec.StatementID].Stage != SnapshotQueryStagePreparedOutput {
+		t.Fatalf("stage=%q, want unchanged PreparedOutput", journal.records[rec.StatementID].Stage)
+	}
+}
+
+func TestSnapshotQueryIntakeRecoverRefusesTamperedPreparedOutputCache(t *testing.T) {
+	intake, env, _, journal, _, _ := newSnapshotQueryIntakeFixture(t)
+	accepted := snapshotQueryAcceptedResult(env)
+	rec := newSnapshotQueryRecord(env)
+	rec.Stage, rec.Submit, rec.HasSubmit = SnapshotQueryStageSequenced, accepted, true
+	journal.records[rec.StatementID] = rec
+	prepared := stageDurablePreparedOutput(t, journal, env, accepted)
+	if err := os.WriteFile(prepared.CachePath, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := intake.Recover(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "prepared output cache") {
+		t.Fatalf("tampered cache recovered: %v", err)
+	}
+	if journal.records[rec.StatementID].Stage != SnapshotQueryStagePreparedOutput {
+		t.Fatalf("stage=%q, want unchanged PreparedOutput", journal.records[rec.StatementID].Stage)
+	}
+}
+
+// TestSnapshotQueryIntakeRecoverRefusesInconsistentPreparedOutputRecord covers
+// the individual guards inside recoverPreparedOutput beyond the cache-tamper
+// case above: a durably staged record whose own fields have gone inconsistent
+// (SubmitUnknown, a projection that no longer looks like a pending claim, a
+// projection whose BlockSeq no longer matches the accepted submit, or a submit
+// that is no longer durably marked) must fail closed and must never rewrite
+// the journal record while doing so.
+func TestSnapshotQueryIntakeRecoverRefusesInconsistentPreparedOutputRecord(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*SnapshotQueryJournalRecord)
+	}{
+		{"submit unknown", func(r *SnapshotQueryJournalRecord) {
+			r.SubmitUnknown = true
+		}},
+		{"projection carries a capacity reservation", func(r *SnapshotQueryJournalRecord) {
+			p := *r.PreparedOutput
+			p.CapacityReservationID = "capacity"
+			r.PreparedOutput = &p
+		}},
+		{"projection block seq no longer matches the accepted submit", func(r *SnapshotQueryJournalRecord) {
+			p := *r.PreparedOutput
+			p.BlockSeq++
+			r.PreparedOutput = &p
+		}},
+		{"submit no longer durable", func(r *SnapshotQueryJournalRecord) {
+			r.HasSubmit = false
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			intake, env, _, journal, _, _ := newSnapshotQueryIntakeFixture(t)
+			accepted := snapshotQueryAcceptedResult(env)
+			rec := newSnapshotQueryRecord(env)
+			rec.Stage, rec.Submit, rec.HasSubmit = SnapshotQueryStageSequenced, accepted, true
+			journal.records[rec.StatementID] = rec
+			stageDurablePreparedOutput(t, journal, env, accepted)
+
+			mutated := journal.records[rec.StatementID]
+			tc.mutate(&mutated)
+			journal.records[rec.StatementID] = mutated
+
+			if err := intake.Recover(context.Background()); err == nil {
+				t.Fatal("inconsistent prepared output record recovered without error")
+			}
+			if got := journal.records[rec.StatementID]; got.Stage != SnapshotQueryStagePreparedOutput || !reflect.DeepEqual(got, mutated) {
+				t.Fatalf("record changed during a refused recovery: got %+v, want %+v", got, mutated)
+			}
+		})
 	}
 }
