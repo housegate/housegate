@@ -203,9 +203,36 @@ func (s *SnapshotQueryIntake) recoverRecord(ctx context.Context, rec SnapshotQue
 			return resultFromSubmit(rec.StatementID, rec.Envelope.InputRoot, rec.Submit), nil
 		}
 		return s.submitAuthorized(ctx, rec)
+	case SnapshotQueryStagePreparedOutput:
+		return s.recoverPreparedOutput(rec)
 	default:
 		return SnapshotQueryIntakeResult{}, fmt.Errorf("storageintegrity: unsupported snapshot query journal stage %q", rec.Stage)
 	}
+}
+
+// recoverPreparedOutput re-admits a durably staged one-shot output. The stage
+// sits after Sequenced, so the accepted submit result is the recovered result.
+// The projection and the cache bytes must still match the record exactly; any
+// mismatch fails closed and leaves the record untouched, because the SELECT
+// can never be repeated to recreate the rows. Later C4 stages (claim, terminal)
+// extend this function rather than replacing its checks.
+func (s *SnapshotQueryIntake) recoverPreparedOutput(rec SnapshotQueryJournalRecord) (SnapshotQueryIntakeResult, error) {
+	if !rec.HasSubmit || rec.SubmitUnknown || rec.PreparedOutput == nil {
+		return SnapshotQueryIntakeResult{}, errors.New("storageintegrity: prepared output record is not durably sequenced")
+	}
+	if err := validateSnapshotQueryAccepted(rec.Envelope, rec.Submit); err != nil {
+		return SnapshotQueryIntakeResult{}, err
+	}
+	p := *rec.PreparedOutput
+	if err := validateSnapshotQueryPrepared(rec.Envelope, rec.Submit, p); err != nil {
+		return SnapshotQueryIntakeResult{}, err
+	}
+	b := rec.Envelope.Input.Binding
+	want := preparedHeader{b.StatementID, rec.Envelope.InputRoot, b.ReservationID, b.FencingGeneration, rec.Submit.BlockSeq, p.OutputRowsRoot, p.OutputRowCount, p.ComputedStateRoot}
+	if err := verifyPreparedOutput(p.CachePath, want, p.CacheDigest); err != nil {
+		return SnapshotQueryIntakeResult{}, fmt.Errorf("storageintegrity: prepared output cache: %w", err)
+	}
+	return resultFromSubmit(rec.StatementID, rec.Envelope.InputRoot, rec.Submit), nil
 }
 
 func (s *SnapshotQueryIntake) submitAuthorized(ctx context.Context, rec SnapshotQueryJournalRecord) (SnapshotQueryIntakeResult, error) {
