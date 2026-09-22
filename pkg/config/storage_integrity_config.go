@@ -10,7 +10,9 @@ import (
 )
 
 const (
-	defaultStorageIntegrityMaxPayloadBytes uint64 = 64 << 20
+	defaultStorageIntegrityMaxPayloadBytes     uint64 = 64 << 20
+	defaultStorageIntegrityInlineValuesTimeout        = 10 * time.Second
+	defaultStorageIntegrityInlineValuesMaxRows uint64 = 65536
 
 	// Physical homes of storage-integrity tables (Spec C D2 naming freeze).
 	StorageIntegrityUnsafeDatabase  = "hg_unsafe"
@@ -90,6 +92,21 @@ type StorageIntegrityAgentConfig struct {
 	// RequireNetworkState (default true) makes Validate insist on
 	// network_state.source; hosts that inject Options.NetworkState set false.
 	RequireNetworkState bool `json:"require_network_state" yaml:"require_network_state"`
+	// InlineValues turns on the signed inline INSERT ... VALUES lane
+	// (spec 2026-09-23). Default off; it requires materialize.enabled.
+	InlineValues StorageIntegrityInlineValuesConfig `json:"inline_values" yaml:"inline_values"`
+}
+
+// StorageIntegrityInlineValuesConfig is the agent-mode signed inline
+// INSERT ... VALUES lane: the agent closes the rows lexically, evaluates them
+// once through its own ClickHouse, encodes Native blocks and signs them.
+// storage_integrity.agent.max_payload_bytes bounds the encoded payload.
+type StorageIntegrityInlineValuesConfig struct {
+	Enabled bool `json:"enabled" yaml:"enabled"`
+	// EvaluationTimeout caps the helper evaluation query (default 10s, min 1s).
+	EvaluationTimeout Duration `json:"evaluation_timeout" yaml:"evaluation_timeout"`
+	// MaxRows bounds the evaluated row count (default 65536, must be > 0).
+	MaxRows uint64 `json:"max_rows" yaml:"max_rows"`
 }
 
 // StorageIntegritySafeMergesConfig governs the P1e runtime's merge guard, which
@@ -193,6 +210,10 @@ func defaultStorageIntegrityConfig() StorageIntegrityConfig {
 		Agent: StorageIntegrityAgentConfig{
 			MaxPayloadBytes:     defaultStorageIntegrityMaxPayloadBytes,
 			RequireNetworkState: true,
+			InlineValues: StorageIntegrityInlineValuesConfig{
+				EvaluationTimeout: Duration{Duration: defaultStorageIntegrityInlineValuesTimeout},
+				MaxRows:           defaultStorageIntegrityInlineValuesMaxRows,
+			},
 		},
 	}
 }
@@ -350,10 +371,30 @@ func joinStorageIntegrityErrs(errs []error) error {
 // Config.Validate in ModeAgent only.
 func (c StorageIntegrityConfig) validateAgent(root *Config) error {
 	a := c.Agent
+	var errs []error
+	if iv := a.InlineValues; iv.Enabled {
+		// Spec D2: the lane is fail-closed on materialization, so a disabled
+		// materialize block would reject every inline statement at query time
+		// instead of at startup.
+		if !root.Materialize.Enabled {
+			errs = append(errs, errors.New("storage_integrity.agent.inline_values requires materialize.enabled"))
+		}
+		if !a.Enabled {
+			errs = append(errs, errors.New("storage_integrity.agent.inline_values requires storage_integrity.agent.enabled"))
+		}
+		if iv.EvaluationTimeout.Duration < time.Second {
+			errs = append(errs, fmt.Errorf("storage_integrity.agent.inline_values.evaluation_timeout must be at least 1s, got %s", iv.EvaluationTimeout.Duration))
+		}
+		if iv.MaxRows == 0 {
+			errs = append(errs, errors.New("storage_integrity.agent.inline_values.max_rows must be > 0"))
+		}
+	}
 	if !a.Enabled {
+		if joined := errors.Join(errs...); joined != nil {
+			return fmt.Errorf("storage_integrity.agent: %w", joined)
+		}
 		return nil
 	}
-	var errs []error
 	if strings.TrimSpace(a.NetworkID) == "" {
 		errs = append(errs, errors.New("storage_integrity.agent.network_id is required when storage_integrity.agent.enabled"))
 	}

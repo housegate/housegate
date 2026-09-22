@@ -13,6 +13,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/ClickHouse/ch-go/proto"
+
 	"github.com/housegate/housegate/pkg/chproto"
 	"github.com/housegate/housegate/pkg/chsession"
 	"github.com/housegate/housegate/pkg/sqlmeta"
@@ -139,6 +141,16 @@ type QueryContext struct {
 	// SuppressUpstreamExecution; Relay rejects a query that sets both.
 	DeferredInsert *DeferredInsertPlan
 
+	// SynthesizedInsert, when set by a QueryPlugin during OnQuery, switches
+	// Relay into synthesized-INSERT mode (spec 2026-09-23 D8): the agent
+	// evaluated the rows, so Relay encodes the plan's blocks into client Data
+	// packets with the upstream codec, hashes them through the strict
+	// input-complete hook, and only then writes Query + packets + terminator
+	// upstream. Mutually exclusive with DeferredInsert,
+	// SuppressUpstreamExecution, AgentPrepare, QueryOnly and AbortWithSuccess;
+	// Relay rejects a query that sets more than one of them.
+	SynthesizedInsert *SynthesizedInsertPlan
+
 	// AgentPrepare is the query-only agent lane.  It deliberately has no
 	// relationship to DeferredInsert: preparation happens off the client reader
 	// and the resulting Query is forwarded only after Relay wins its generation
@@ -161,6 +173,13 @@ type QueryContext struct {
 // from a client setting; Relay sets it only after a live preparation result has
 // been accepted.
 const SnapshotQueryAgentKey = "snapshot_query_agent_owned"
+
+// ValuesKeyMaterialized is the Values key under which the agent-mode
+// materialize plugin records its outcome: "applied", "noop" or
+// "error:<reason>". The ordinary path ignores it and keeps failing open; the
+// signed inline VALUES lane is fail-closed (spec 2026-09-23 D2) and refuses a
+// statement whose key is absent or starts with "error:".
+const ValuesKeyMaterialized = "materialize.outcome"
 
 // QueryOnlyPlan is the local host execution lane. Run must honor ctx and
 // return only after the configured durable acknowledgement boundary. It must
@@ -253,4 +272,32 @@ type DeferredInsertPlan struct {
 	// MaxPayloadBytes bounds the buffered on-wire payload; exceeding it
 	// aborts the query with an Exception before any byte reaches upstream.
 	MaxPayloadBytes uint64
+}
+
+// SynthesizedInsertPlan tells Relay how to run the synthesized-INSERT protocol
+// for a statement whose rows the agent evaluated instead of the client
+// streaming them. Blocks carry typed columns rather than bytes because the Data
+// packet header depends on the upstream codec's negotiated revision; Packets
+// and PayloadBytes are filled by the relay lane before
+// OnQueryInputCompleteStrict, so the signed payload is exactly what goes on
+// the wire. A SampleColumns mismatch against upstream is schema drift.
+type SynthesizedInsertPlan struct {
+	Blocks        [][]proto.InputColumn
+	SampleColumns []chproto.SampleColumn
+	Rows          uint64
+	PayloadBytes  uint64
+	Packets       [][]byte
+}
+
+// Payload returns the concatenation of Packets: the exact bytes the statement
+// token hashes and the relay lane writes upstream.
+func (p *SynthesizedInsertPlan) Payload() []byte {
+	if p == nil || len(p.Packets) == 0 {
+		return nil
+	}
+	out := make([]byte, 0, p.PayloadBytes)
+	for _, packet := range p.Packets {
+		out = append(out, packet...)
+	}
+	return out
 }

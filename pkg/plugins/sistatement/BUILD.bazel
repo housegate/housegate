@@ -4,6 +4,7 @@ go_library(
     name = "sistatement",
     srcs = [
         "doc.go",
+        "observer.go",
         "plugin.go",
         "seq.go",
         "sqlparse.go",
