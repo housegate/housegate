@@ -47,6 +47,7 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 		if p.Observer != nil {
 			p.Observer.MaterializeCallError()
 		}
+		recordOutcome(qctx, "error:"+err.Error())
 		logger.Warnw("materialize: call failed, forwarding original SQL", "err", err)
 		return nil // fail-open
 	}
@@ -54,6 +55,7 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 		if p.Observer != nil {
 			p.Observer.MaterializeNonSuccess(out.Code.String())
 		}
+		recordOutcome(qctx, "error:"+out.Code.String()+": "+out.Message)
 		logger.Warnw("materialize: engine non-success, forwarding original SQL",
 			"code", out.Code.String(), "message", out.Message)
 		return nil // fail-open
@@ -63,13 +65,25 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 		if p.Observer != nil {
 			p.Observer.MaterializeApplied()
 		}
+		recordOutcome(qctx, "applied")
 		logger.Debugw("materialize: applied", "sql", out.SQL)
 		return nil
 	}
 	if p.Observer != nil {
 		p.Observer.MaterializeNoop()
 	}
+	recordOutcome(qctx, "noop")
 	return nil
+}
+
+// recordOutcome publishes this call's result for plugins that must fail closed
+// on it (spec 2026-09-23 D2: the signed inline VALUES lane). The ordinary path
+// never reads the key and keeps falling open.
+func recordOutcome(qctx *plugin.QueryContext, outcome string) {
+	if qctx.Values == nil {
+		qctx.Values = make(map[string]any)
+	}
+	qctx.Values[plugin.ValuesKeyMaterialized] = outcome
 }
 
 var _ plugin.QueryPlugin = (*Plugin)(nil)

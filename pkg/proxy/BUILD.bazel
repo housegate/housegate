@@ -26,6 +26,7 @@ go_test(
     name = "proxy_test",
     srcs = [
         "commitgate_e2e_test.go",
+        "observer_inline_values_test.go",
         "relay_agent_prepare_test.go",
         "relay_deferred_test.go",
         "relay_exception_test.go",
@@ -42,8 +43,10 @@ go_test(
         "//pkg/plugin",
         "//pkg/plugins/commitgate",
         "//pkg/plugins/concurrency",
+        "//pkg/plugins/sistatement",
         "//pkg/sqlmeta",
         "@com_github_clickhouse_ch_go//compress",
         "@com_github_clickhouse_ch_go//proto",
+        "@com_github_prometheus_client_golang//prometheus/testutil",
     ],
 )

@@ -3,6 +3,9 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
+
+	materializeplugin "github.com/housegate/housegate/pkg/plugins/materialize"
 )
 
 func agentSIBase() *Config {
@@ -57,6 +60,57 @@ func TestStorageIntegrityAgentConfig_Validate(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			c := agentSIBase()
+			tc.mutate(c)
+			err := c.Validate()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("err = %v, want containing %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func inlineValuesBase() *Config {
+	c := agentSIBase() // agent SI on, materialize off
+	c.Materialize.Enabled = true
+	c.Materialize.Engine = "native"
+	c.StorageIntegrity.Agent.InlineValues.Enabled = true
+	return c
+}
+
+func TestStorageIntegrityInlineValuesConfig(t *testing.T) {
+	iv := Default().StorageIntegrity.Agent.InlineValues
+	if iv.Enabled || iv.EvaluationTimeout.Duration != 10*time.Second || iv.MaxRows != 65536 {
+		t.Fatalf("defaults = %+v, want disabled with 10s / 65536", iv)
+	}
+	cases := []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr string
+	}{
+		{"valid", func(*Config) {}, ""},
+		{"materialize disabled", func(c *Config) { c.Materialize = materializeplugin.Config{} }, "requires materialize.enabled"},
+		{"agent SI disabled", func(c *Config) { c.StorageIntegrity.Agent.Enabled = false }, "requires storage_integrity.agent.enabled"},
+		{"sub-second timeout", func(c *Config) {
+			c.StorageIntegrity.Agent.InlineValues.EvaluationTimeout = Duration{Duration: 900 * time.Millisecond}
+		}, "evaluation_timeout must be at least 1s"},
+		{"zero timeout", func(c *Config) {
+			c.StorageIntegrity.Agent.InlineValues.EvaluationTimeout = Duration{}
+		}, "evaluation_timeout must be at least 1s"},
+		{"zero max_rows", func(c *Config) { c.StorageIntegrity.Agent.InlineValues.MaxRows = 0 }, "max_rows must be > 0"},
+		{"disabled block ignores its own limits", func(c *Config) {
+			c.StorageIntegrity.Agent.InlineValues = StorageIntegrityInlineValuesConfig{}
+			c.Materialize = materializeplugin.Config{}
+		}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := inlineValuesBase()
 			tc.mutate(c)
 			err := c.Validate()
 			if tc.wantErr == "" {

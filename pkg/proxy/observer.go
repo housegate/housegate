@@ -65,6 +65,10 @@ var (
 		Name: "clickhouse_proxy_agent_materialize_total",
 		Help: "Agent-mode Phase-1 materialization outcomes",
 	}, []string{"result", "code"})
+	agentInlineValuesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "clickhouse_proxy_agent_inline_values_total",
+		Help: "Agent-mode signed inline INSERT ... VALUES outcomes",
+	}, []string{"result"})
 )
 
 func init() {
@@ -81,6 +85,7 @@ func init() {
 	prometheus.MustRegister(agentTokenErrors)
 	prometheus.MustRegister(agentBootstrapFallbackTotal)
 	prometheus.MustRegister(agentMaterializeTotal)
+	prometheus.MustRegister(agentInlineValuesTotal)
 }
 
 type MetricsObserver struct{}
@@ -154,4 +159,14 @@ func (m *MetricsObserver) MaterializeNonSuccess(code string) {
 }
 func (m *MetricsObserver) MaterializeCallError() {
 	agentMaterializeTotal.WithLabelValues("call_error", "").Inc()
+}
+
+func (m *MetricsObserver) InlineValuesSynthesized() {
+	agentInlineValuesTotal.WithLabelValues("synthesized").Inc()
+}
+func (m *MetricsObserver) InlineValuesEvaluationFailed() {
+	agentInlineValuesTotal.WithLabelValues("evaluation_failed").Inc()
+}
+func (m *MetricsObserver) InlineValuesClosureRefused() {
+	agentInlineValuesTotal.WithLabelValues("closure_refused").Inc()
 }

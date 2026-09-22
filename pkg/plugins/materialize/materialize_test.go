@@ -101,3 +101,29 @@ func TestOnQuery_NilMaterializerNoop(t *testing.T) {
 		t.Fatalf("nil materializer must be a clean no-op")
 	}
 }
+
+func TestOnQuery_RecordsOutcomeForTheInlineLane(t *testing.T) {
+	cases := []struct {
+		name string
+		mat  *fakeMat
+		want string
+	}{
+		{"applied", &fakeMat{out: rewriter.MaterializeOutcome{SQL: "INSERT INTO t VALUES (toDateTime(1))", Changed: true, Code: pb.MaterializeCode_MaterializeSuccess}}, "applied"},
+		{"noop", &fakeMat{out: rewriter.MaterializeOutcome{SQL: "INSERT INTO t VALUES (1)", Code: pb.MaterializeCode_MaterializeSuccess}}, "noop"},
+		{"call error", &fakeMat{err: errors.New("dial tcp: refused")}, "error:dial tcp: refused"},
+		{"non success", &fakeMat{out: rewriter.MaterializeOutcome{SQL: "INSERT INTO t VALUES (1)", Code: pb.MaterializeCode_MaterializeSyntaxError, Message: "boom"}}, "error:MaterializeSyntaxError: boom"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			qctx := runOnQuery(t, &Plugin{Materializer: tc.mat}, "INSERT INTO t VALUES (1)")
+			if got, ok := qctx.Values[plugin.ValuesKeyMaterialized].(string); !ok || got != tc.want {
+				t.Fatalf("Values[%q] = %v, want %q", plugin.ValuesKeyMaterialized, qctx.Values[plugin.ValuesKeyMaterialized], tc.want)
+			}
+		})
+	}
+	// A disabled materializer must leave the key absent so the inline lane
+	// refuses with "materialization did not run".
+	if qctx := runOnQuery(t, &Plugin{}, "INSERT INTO t VALUES (1)"); qctx.Values[plugin.ValuesKeyMaterialized] != nil {
+		t.Fatal("a nil Materializer must record nothing")
+	}
+}

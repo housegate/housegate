@@ -27,10 +27,12 @@ go_test(
         "chain_test.go",
         "hooks_test.go",
         "query_only_host_test.go",
+        "synthesized_insert_test.go",
     ],
     embed = [":plugin"],
     deps = [
         "//pkg/chproto",
         "//pkg/chsession",
+        "@com_github_clickhouse_ch_go//proto",
     ],
 )
