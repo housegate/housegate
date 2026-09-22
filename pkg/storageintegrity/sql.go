@@ -48,8 +48,9 @@ var clientParsedInsertFormats = map[string]bool{
 // client truncates the SQL after VALUES and streams row blocks, but this
 // function still classifies that truncated VALUES form as unsupported (spec
 // 2026-09-23 D1). A 26.3+ client and the pinned clickhouse-go fork send the full
-// statement text and no ClientData packet at all, so this function likewise
-// reports no payload encoding for that shape. An agent running
+// statement text plus only an empty external-tables marker, with no row-bearing
+// ClientData, so this function likewise reports no payload encoding for that
+// shape. An agent running
 // storage_integrity.agent.inline_values evaluates those inline rows and
 // rewrites the statement to FORMAT Native before it reaches this gate (spec
 // 2026-09-23 D1). The same statement written as `FORMAT Values` with the rows
