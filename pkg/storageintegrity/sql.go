@@ -44,10 +44,16 @@ var clientParsedInsertFormats = map[string]bool{
 // so every format in clientParsedInsertFormats arrives as Native blocks and is
 // stored as the same wire capture.
 //
-// Note the asymmetry with `INSERT ... VALUES (1)`: written inline, the rows are
-// part of the SQL text and no ClientData packet is sent at all, so there is no
-// payload to sign. The same statement written as `FORMAT Values` with the rows
-// on stdin is signable, because then the client streams them.
+// Note the version-qualified asymmetry with `INSERT ... VALUES (1)`: a 25.8
+// client truncates the SQL after VALUES and streams row blocks, but this
+// function still classifies that truncated VALUES form as unsupported (spec
+// 2026-09-23 D1). A 26.3+ client and the pinned clickhouse-go fork send the full
+// statement text and no ClientData packet at all, so this function likewise
+// reports no payload encoding for that shape. An agent running
+// storage_integrity.agent.inline_values evaluates those inline rows and
+// rewrites the statement to FORMAT Native before it reaches this gate (spec
+// 2026-09-23 D1). The same statement written as `FORMAT Values` with the rows
+// on stdin is the supported payload-local path and has always been signable.
 func InsertPayloadEncoding(sql string) (string, error) {
 	if _, err := ParseInsertTarget(sql); err != nil {
 		return "", err
@@ -93,16 +99,23 @@ func RequireStreamingNativeInsert(sql string) error {
 }
 
 func insertDataSource(sql string) (source, format string, ok bool) {
+	source, format, _, ok = insertDataSourceAt(sql)
+	return source, format, ok
+}
+
+// insertDataSourceAt is insertDataSource plus the byte offset just past the
+// payload-source keyword, which is where an inline VALUES row list starts.
+func insertDataSourceAt(sql string) (source, format string, end int, ok bool) {
 	tok, pos, ok := nextStorageSQLToken(sql, 0)
 	if !ok || tok.kind != storageSQLTokenWord || tok.text != "INSERT" {
-		return "", "", false
+		return "", "", 0, false
 	}
 
 	depth := 0
 	for {
 		tok, next, ok := nextStorageSQLToken(sql, pos)
 		if !ok {
-			return "", "", true
+			return "", "", pos, true
 		}
 		pos = next
 		switch tok.kind {
@@ -118,13 +131,13 @@ func insertDataSource(sql string) (source, format string, ok bool) {
 			}
 			switch tok.text {
 			case "FORMAT":
-				formatTok, _, formatOK := nextStorageSQLToken(sql, pos)
+				formatTok, formatEnd, formatOK := nextStorageSQLToken(sql, pos)
 				if !formatOK || formatTok.kind != storageSQLTokenWord {
-					return "FORMAT", "", true
+					return "FORMAT", "", pos, true
 				}
-				return "FORMAT", formatTok.text, true
+				return "FORMAT", formatTok.text, formatEnd, true
 			case "VALUES", "SELECT", "WITH":
-				return tok.text, "", true
+				return tok.text, "", pos, true
 			}
 		}
 	}

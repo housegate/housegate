@@ -193,10 +193,15 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	// not incidental:
 	//
 	// Nondeterminism stays first because it is the only one of the three whose
-	// coverage depends on running early. The sole way to write a function into
-	// an INSERT is VALUES or SELECT, and both are unsignable shapes -- so
-	// checking shape first would make this guard unreachable by construction
-	// and quietly retire its tests.
+	// coverage depends on running early. A function is written into an INSERT
+	// through VALUES or SELECT, and none of those reaches this guard carrying a
+	// payload: a 25.8 client truncates the SQL after VALUES and streams the
+	// rows, a 26.3+ client sends the full statement text with no payload at
+	// all, and an agent running storage_integrity.agent.inline_values evaluates
+	// those inline rows and rewrites the statement to FORMAT Native before
+	// signing it. Checking shape first would therefore make this guard
+	// unreachable by construction and quietly retire its tests; it stays ahead
+	// of the shape gate as the defence that holds if any of those facts change.
 	//
 	// Shape then goes ahead of the statement id. An unsupported INSERT form
 	// never carries an id, because the agent's signer claims only forms it can
@@ -889,7 +894,7 @@ func containsUnmaterializedNondeterminism(sql string) (string, bool) {
 			continue
 		}
 		name := stripped[loc[2]:loc[3]]
-		if isKnownNondeterministicName(strings.ToLower(name)) {
+		if sicore.IsKnownNondeterministicName(strings.ToLower(name)) {
 			return name, true
 		}
 	}
@@ -898,75 +903,11 @@ func containsUnmaterializedNondeterminism(sql string) (string, bool) {
 			continue
 		}
 		name := stripped[loc[2]:loc[3]]
-		if isKnownNondeterministicName(strings.ToLower(name)) {
+		if sicore.IsKnownNondeterministicName(strings.ToLower(name)) {
 			return name, true
 		}
 	}
 	return "", false
-}
-
-func isKnownNondeterministicName(name string) bool {
-	switch name {
-	case "any",
-		"anylast",
-		"blocknumber",
-		"blocksize",
-		"curdate",
-		"current_date",
-		"current_timestamp",
-		"datetimetouuidv7",
-		"fuzzbits",
-		"fuzzquery",
-		"generaterandomstructure",
-		"generateserialid",
-		"generatesnowflakeid",
-		"generateuuidv4",
-		"generateuuidv7",
-		"localtime",
-		"localtimestamp",
-		"now",
-		"now64",
-		"nowinblock",
-		"nowinblock64",
-		"obfuscatequery",
-		"quantile",
-		"quantiles",
-		"rand",
-		"rand32",
-		"rand64",
-		"randbernoulli",
-		"randbinomial",
-		"randcanonical",
-		"randchisquared",
-		"randconstant",
-		"randexponential",
-		"randfisherf",
-		"randlognormal",
-		"randnegativebinomial",
-		"randnormal",
-		"randpoisson",
-		"randstudentt",
-		"randuniform",
-		"random",
-		"randomfixedstring",
-		"randomprintableascii",
-		"randomstring",
-		"randomstringutf8",
-		"rownumberinallblocks",
-		"rownumberinblock",
-		"runningaccumulate",
-		"runningconcurrency",
-		"runningdifference",
-		"runningdifferencestartingwithfirstvalue",
-		"today",
-		"utc_timestamp",
-		"utctimestamp",
-		"uuidv4",
-		"yesterday":
-		return true
-	default:
-		return false
-	}
 }
 
 func stripSQLLiteralsAndComments(sql string) string {
