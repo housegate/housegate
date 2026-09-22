@@ -285,3 +285,36 @@ func keccak256Hex(data []byte) string {
 	h.Write(data)
 	return "0x" + hex.EncodeToString(h.Sum(nil))
 }
+
+func TestPlugin_RefreshesSynthesizedAuthTokenOverTheRewrittenBody(t *testing.T) {
+	clock := &clockTokenSigner{now: time.Unix(100, 0)}
+	p := &Plugin{Signer: clock}
+	qctx := newTestQueryContext(newTestSession(t, 52), "INSERT INTO t VALUES (1)")
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatal(err)
+	}
+	// sistatement rewrites the body and installs the plan in its own OnQuery,
+	// which runs before this plugin's; the relay then fires the strict hook.
+	qctx.Query.Body = "INSERT INTO t (x) FORMAT Native"
+	qctx.SynthesizedInsert = &plugin.SynthesizedInsertPlan{Rows: 1}
+	clock.mu.Lock()
+	clock.now = time.Unix(220, 0) // beyond the default one-minute max token age
+	clock.mu.Unlock()
+	if err := p.OnQueryInputCompleteStrict(context.Background(), qctx); err != nil {
+		t.Fatal(err)
+	}
+	var tokens []string
+	for _, setting := range qctx.Query.Settings {
+		if setting.Key == auth.AuthTokenSettingKey {
+			tokens = append(tokens, setting.Value)
+		}
+	}
+	if len(tokens) != 1 || tokens[0] != "'token-at-220'" {
+		t.Fatalf("auth settings = %v, want one refreshed token", tokens)
+	}
+	clock.mu.Lock()
+	defer clock.mu.Unlock()
+	if len(clock.calls) != 2 || clock.calls[1] != "INSERT INTO t (x) FORMAT Native" {
+		t.Fatalf("signed SQL calls = %v, want the rewritten body last", clock.calls)
+	}
+}

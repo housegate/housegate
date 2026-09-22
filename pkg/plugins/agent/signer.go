@@ -94,11 +94,11 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 }
 
 // OnQueryInputCompleteStrict refreshes the legacy query JWS after a deferred
-// payload has been collected. Collection can outlive MaxTokenAge; replacing the
+// or synthesized payload has been collected. Collection can outlive MaxTokenAge; replacing the
 // setting here keeps the forwarded Query fresh while binding the same final SQL
-// that OnQuery signed. Non-deferred queries keep the ordinary single-sign path.
+// that OnQuery signed. Other queries keep the ordinary single-sign path.
 func (p *Plugin) OnQueryInputCompleteStrict(ctx context.Context, qctx *plugin.QueryContext) error {
-	if qctx == nil || qctx.DeferredInsert == nil || qctx.Query == nil || p.Signer == nil {
+	if qctx == nil || (qctx.DeferredInsert == nil && qctx.SynthesizedInsert == nil) || qctx.Query == nil || p.Signer == nil {
 		return nil
 	}
 	return p.refreshAuthToken(ctx, qctx)

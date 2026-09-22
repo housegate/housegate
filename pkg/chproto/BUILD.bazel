@@ -12,6 +12,7 @@ go_library(
         "hello.go",
         "packet.go",
         "query.go",
+        "server_data.go",
     ],
     importpath = "github.com/housegate/housegate/pkg/chproto",
     visibility = ["//visibility:public"],
@@ -34,6 +35,7 @@ go_test(
         "compress_test.go",
         "query_codec_test.go",
         "sample_block_test.go",
+        "server_data_test.go",
     ],
     embed = [":chproto"],
     deps = [

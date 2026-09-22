@@ -29,14 +29,15 @@ const (
 )
 
 type fakeSession struct {
-	id    int64
-	state *chsession.SessionState
+	upstream *chproto.Codec
+	id       int64
+	state    *chsession.SessionState
 }
 
 func (s *fakeSession) ID() int64                                          { return s.id }
 func (s *fakeSession) State() *chsession.SessionState                     { return s.state }
 func (s *fakeSession) Client() *chproto.Codec                             { return nil }
-func (s *fakeSession) Upstream() *chproto.Codec                           { return nil }
+func (s *fakeSession) Upstream() *chproto.Codec                           { return s.upstream }
 func (s *fakeSession) RemoteAddr() net.Addr                               { return nil }
 func (s *fakeSession) Close() error                                       { return nil }
 func (s *fakeSession) BindUpstream(context.Context, *chproto.Codec) error { return nil }

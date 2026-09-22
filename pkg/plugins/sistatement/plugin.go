@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ClickHouse/ch-go/proto"
 
@@ -25,8 +26,8 @@ import (
 	sicore "github.com/housegate/housegate/pkg/storageintegrity"
 )
 
-// Options wires the plugin. All fields are required except KeeperShardID
-// (must be 0 in v1).
+// Options wires the plugin. KeeperShardID must be zero in v1; InlineValues
+// defaults off and Observer is optional.
 type Options struct {
 	Signer          auth.StatementSignerV2
 	Schemas         registry.TableSchemas
@@ -34,6 +35,12 @@ type Options struct {
 	KeeperShardID   uint32
 	Seq             *SeqCounter
 	MaxPayloadBytes uint64
+	// InlineValues configures the signed inline VALUES lane (spec D10).
+	InlineValues InlineValuesOptions
+	// Evaluator is required when InlineValues.Enabled.
+	Evaluator ValuesEvaluator
+	// Observer is the narrow metrics surface; nil disables it.
+	Observer Observer
 }
 
 // Plugin is the agent-mode storage-integrity statement plugin. See doc.go.
@@ -45,6 +52,9 @@ type Plugin struct {
 	keeperShardID uint32
 	seq           *SeqCounter
 	maxPayload    uint64
+	inline        InlineValuesOptions
+	evaluator     ValuesEvaluator
+	observer      Observer
 
 	mu      sync.Mutex
 	pending map[int64]*pendingStatement // by session id; at most one per session
@@ -86,6 +96,17 @@ func New(opts Options) (*Plugin, error) {
 	if opts.MaxPayloadBytes == 0 {
 		errs = append(errs, errors.New("max payload bytes must be > 0"))
 	}
+	if opts.InlineValues.Enabled {
+		if opts.Evaluator == nil {
+			errs = append(errs, errors.New("values evaluator is required when inline_values is enabled"))
+		}
+		if opts.InlineValues.EvaluationTimeout < time.Second {
+			errs = append(errs, fmt.Errorf("inline values evaluation timeout must be >= 1s, got %s", opts.InlineValues.EvaluationTimeout))
+		}
+		if opts.InlineValues.MaxRows == 0 {
+			errs = append(errs, errors.New("inline values max rows must be > 0"))
+		}
+	}
 	if joined := errors.Join(errs...); joined != nil {
 		return nil, fmt.Errorf("sistatement: %w", joined)
 	}
@@ -97,6 +118,9 @@ func New(opts Options) (*Plugin, error) {
 		keeperShardID: opts.KeeperShardID,
 		seq:           opts.Seq,
 		maxPayload:    opts.MaxPayloadBytes,
+		inline:        opts.InlineValues,
+		evaluator:     opts.Evaluator,
+		observer:      opts.Observer,
 		pending:       map[int64]*pendingStatement{},
 		useDB:         map[int64]string{},
 		useNext:       map[int64]pendingUse{},
@@ -105,7 +129,7 @@ func New(opts Options) (*Plugin, error) {
 
 // OnQuery classifies the statement; payload-local Native INSERTs enter the SI
 // lane (deferred plan + statement id), everything else passes through.
-func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
+func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) (resultErr error) {
 	if p == nil || qctx == nil || qctx.Query == nil || qctx.Session == nil {
 		return nil
 	}
@@ -121,12 +145,25 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 		p.mu.Unlock()
 		return nil
 	}
+	// Spec D1/D6: InsertPayloadEncoding refuses the 26.x inline VALUES shape
+	// because no payload arrives on the wire. With the lane enabled the statement is claimed here and its rows are evaluated below; every other shape keeps falling through exactly as before.
+	var inline *sicore.InlineValuesInsert
 	if _, err := sicore.InsertPayloadEncoding(sql); err != nil {
-		if errors.Is(err, sicore.ErrInsertIntoFunction) || errors.Is(err, sicore.ErrBackslashEscapedIdentifier) {
-			return fmt.Errorf("storage_integrity agent: %w", err)
+		parsed, claimed, perr := p.inlineValuesCandidate(sql)
+		if perr != nil {
+			return perr
 		}
-		// VALUES / SELECT / non-INSERT: ordinary path.
-		return nil
+		if !claimed {
+			if errors.Is(err, sicore.ErrInsertIntoFunction) || errors.Is(err, sicore.ErrBackslashEscapedIdentifier) {
+				return fmt.Errorf("storage_integrity agent: %w", err)
+			}
+			// VALUES / SELECT / non-INSERT: ordinary path.
+			return nil
+		}
+		inline = &parsed
+	}
+	if inline != nil {
+		defer func() { resultErr = inlineWrap(resultErr) }()
 	}
 	if qctx.Query.Compression == proto.CompressionEnabled {
 		return errors.New("storage_integrity agent rejects compressed INSERT payloads; retry with ClickHouse query compression disabled")
@@ -167,20 +204,60 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	if !proto.FeatureSettingsSerializedAsStrings.In(revision) {
 		return fmt.Errorf("storage_integrity agent: client protocol revision %d cannot carry required string settings; revision >= %d is required", revision, proto.FeatureSettingsSerializedAsStrings.Version())
 	}
-	statementID, err := p.statementIDFor(qctx.Query.ID)
-	if err != nil {
-		return err
+	if inline != nil {
+		if len(qctx.Query.Parameters) != 0 {
+			return inlineErrorf("query parameters are unsupported")
+		}
+		if qctx.Session.Upstream() == nil {
+			return inlineErrorf("session has no current upstream")
+		}
+		revision = qctx.Session.Upstream().Revision()
+		if !proto.FeatureSettingsSerializedAsStrings.In(revision) {
+			return inlineErrorf("upstream revision %d cannot carry required string settings", revision)
+		}
+	}
+	var synthesized *plugin.SynthesizedInsertPlan
+	if inline != nil {
+		synthesized, err = p.evaluateInlineValues(ctx, qctx, *inline, schema, cols)
+		if err != nil {
+			return err
+		}
+	}
+	// Preserve the existing deferred-lane sequence timing. The inline lane
+	// must reject an overlapping pending statement before reserving its ID.
+	var statementID string
+	if inline == nil {
+		statementID, err = p.statementIDFor(qctx.Query.ID)
+		if err != nil {
+			return err
+		}
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if existing := p.pending[sessID]; existing != nil {
 		return fmt.Errorf("storage_integrity agent: previous SI INSERT %s on this session has not completed", existing.statementID)
 	}
+	if inline != nil {
+		statementID, err = p.statementIDFor(qctx.Query.ID)
+		if err != nil {
+			return err
+		}
+	}
 	p.pending[sessID] = &pendingStatement{statementID: statementID, tableID: tableID, schemaHash: schemaHash, clientRevision: uint32(revision)}
 	qctx.Query.ID = statementID
-	qctx.DeferredInsert = &plugin.DeferredInsertPlan{SampleColumns: cols, MaxPayloadBytes: p.maxPayload}
 	_, logger := log.FromContext(ctx)
-	logger.Debugw("sistatement: SI INSERT admitted for deferred signing", "statement_id", statementID, "table_id", tableID, "columns", len(cols))
+	if synthesized != nil {
+		qctx.Query.Body = inlineInsertBody(target, cols)
+		qctx.SynthesizedInsert = synthesized
+		// D11: the original statement text is debug-only, never info or above.
+		logger.Debugw("sistatement: inline VALUES synthesized", "statement_id", statementID, "original_sql", sql)
+	} else {
+		qctx.DeferredInsert = &plugin.DeferredInsertPlan{SampleColumns: cols, MaxPayloadBytes: p.maxPayload}
+	}
+	if synthesized != nil {
+		p.observeInline(func(o Observer) { o.InlineValuesSynthesized() })
+	}
+	logger.Debugw("sistatement: SI INSERT admitted for signing", "statement_id", statementID, "table_id", tableID, "columns", len(cols))
 	return nil
 }
 
@@ -298,7 +375,10 @@ func (p *Plugin) ClientDataReadLimit(qctx *plugin.QueryContext) (uint64, bool) {
 
 // OnQueryInputCompleteStrict signs the v2 statement token over the buffered
 // payload and appends SQL_x_statement_token; the pending state is released.
-func (p *Plugin) OnQueryInputCompleteStrict(ctx context.Context, qctx *plugin.QueryContext) error {
+func (p *Plugin) OnQueryInputCompleteStrict(ctx context.Context, qctx *plugin.QueryContext) (resultErr error) {
+	if qctx != nil && qctx.SynthesizedInsert != nil {
+		defer func() { resultErr = inlineWrap(resultErr) }()
+	}
 	if p == nil || qctx == nil || qctx.Session == nil || qctx.Query == nil {
 		return nil
 	}
@@ -310,10 +390,27 @@ func (p *Plugin) OnQueryInputCompleteStrict(ctx context.Context, qctx *plugin.Qu
 	}
 	delete(p.pending, qctx.Session.ID())
 	p.mu.Unlock()
-	if st.payload.Len() == 0 {
+	payload := st.payload.Bytes()
+	if plan := qctx.SynthesizedInsert; plan != nil {
+		up := qctx.Session.Upstream()
+		if up == nil || uint32(up.Revision()) != st.clientRevision {
+			return inlineErrorf("upstream revision changed before signing")
+		}
+		var size uint64
+		for _, packet := range plan.Packets {
+			if uint64(len(packet)) > p.maxPayload-size {
+				return inlineErrorf("encoded payload exceeds max_payload_bytes (%d)", p.maxPayload)
+			}
+			size += uint64(len(packet))
+		}
+		if size != plan.PayloadBytes {
+			return inlineErrorf("encoded payload byte count is inconsistent")
+		}
+		payload = plan.Payload()
+	}
+	if len(payload) == 0 {
 		return fmt.Errorf("storage_integrity agent: SI INSERT %s carried no payload", st.statementID)
 	}
-	payload := st.payload.Bytes()
 	token, err := p.signer.SignStatementV2(auth.JWSStatementPayloadV2{
 		NetworkID:      p.networkID,
 		KeeperShardID:  p.keeperShardID,
