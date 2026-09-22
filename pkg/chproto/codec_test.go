@@ -3,11 +3,16 @@ package chproto
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"net"
 	"testing"
 	"time"
 
 	"github.com/ClickHouse/ch-go/proto"
+
+	"github.com/housegate/housegate/pkg/lthash"
+	"github.com/housegate/housegate/pkg/replay/nativepayload"
+	"github.com/housegate/housegate/pkg/replay/payloadexec"
 )
 
 func putServerHelloTail54470(buf *proto.Buffer, sendChunked, recvChunked string) {
@@ -913,5 +918,52 @@ func TestSplice_DecodedPacket_Errors(t *testing.T) {
 	err := c.Splice(dst, pkt)
 	if err == nil {
 		t.Fatal("Splice on decoded packet: expected error, got nil")
+	}
+}
+
+func TestCodec_EncodeClientDataPacket(t *testing.T) {
+	cols := []proto.InputColumn{{Name: "v", Data: &proto.ColUInt64{1, 2, 3}}}
+	rw := &readerWriter{r: &bytes.Buffer{}, w: &bytes.Buffer{}}
+	c := NewCodec(rw, DirToUpstream)
+	if raw, err := c.EncodeClientDataPacket(cols); !errors.Is(err, ErrMalformed) || raw != nil {
+		t.Fatalf("without revision raw=%x err=%v", raw, err)
+	}
+	for _, rev := range []int{51802, 51902, 51903, 54058, 54453, 54454, MaxSupportedRevision} {
+		t.Run(fmt.Sprint(rev), func(t *testing.T) {
+			c.SetRevision(rev)
+			c.SetCompression(proto.CompressionDisabled)
+			raw, err := c.EncodeClientDataPacket(cols)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, err := nativepayload.EncodeClientDataPacket(rev, cols)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(raw, want) {
+				t.Fatalf("got %x want %x", raw, want)
+			}
+			schema := payloadexec.TableSchema{TableID: "db.t", Columns: []lthash.Column{{Name: "v", Type: "UInt64"}}}
+			rows, err := nativepayload.Decode(schema, rev, raw)
+			if err != nil || len(rows) != 3 {
+				t.Fatalf("rows=%v err=%v", rows, err)
+			}
+			for i, row := range rows {
+				if row.Values[0] != uint64(i+1) {
+					t.Fatalf("row %d=%v", i, row)
+				}
+			}
+			c.SetCompression(proto.CompressionEnabled)
+			if raw, err := c.EncodeClientDataPacket(cols); !errors.Is(err, ErrMalformed) || raw != nil {
+				t.Fatalf("compression on raw=%x err=%v", raw, err)
+			}
+		})
+	}
+	c.SetCompression(proto.CompressionDisabled)
+	if raw, err := c.EncodeClientDataPacket(nil); !errors.Is(err, nativepayload.ErrUnsupported) || raw != nil {
+		t.Fatalf("nil columns raw=%x err=%v", raw, err)
+	}
+	if rw.w.Len() != 0 || rw.r.Len() != 0 {
+		t.Fatal("encoding performed connection I/O")
 	}
 }

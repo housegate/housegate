@@ -11,6 +11,8 @@ import (
 
 	"github.com/ClickHouse/ch-go/compress"
 	"github.com/ClickHouse/ch-go/proto"
+
+	"github.com/housegate/housegate/pkg/replay/nativepayload"
 )
 
 // Codec wraps one side of a ClickHouse TCP connection.
@@ -764,6 +766,30 @@ func (c *Codec) WriteSampleBlock(cols []SampleColumn) error {
 		return fmt.Errorf("write sample block: %w", io.ErrShortWrite)
 	}
 	return nil
+}
+
+// EncodeClientDataPacket frames one non-empty client Data packet carrying cols
+// at the codec's negotiated revision and returns the bytes instead of writing
+// them. It is the rows-bearing counterpart of WriteEmptyDataBlock and
+// WriteSampleBlock: the signed INSERT lanes hash exactly these bytes into
+// payload_hash and then forward them with WriteRawPacket, so the ingress
+// captures byte for byte what was signed.
+//
+// Compression is refused. The storage-integrity signed lane never negotiates
+// it, and a compressed frame would not be the payload the ingress stores.
+func (c *Codec) EncodeClientDataPacket(cols []proto.InputColumn) ([]byte, error) {
+	rev := c.Revision()
+	if rev == 0 {
+		return nil, fmt.Errorf("%w: EncodeClientDataPacket requires SetRevision first", ErrMalformed)
+	}
+	if c.Compression() == proto.CompressionEnabled {
+		return nil, fmt.Errorf("%w: EncodeClientDataPacket cannot compress a signed client Data packet", ErrMalformed)
+	}
+	raw, err := nativepayload.EncodeClientDataPacket(rev, cols)
+	if err != nil {
+		return nil, fmt.Errorf("encode client data packet: %w", err)
+	}
+	return raw, nil
 }
 
 // readFullRaw reads exactly n bytes directly from c.br — bypassing the

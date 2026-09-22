@@ -2,7 +2,10 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "nativepayload",
-    srcs = ["native.go"],
+    srcs = [
+        "encode.go",
+        "native.go",
+    ],
     importpath = "github.com/housegate/housegate/pkg/replay/nativepayload",
     visibility = ["//visibility:public"],
     deps = [
@@ -17,8 +20,10 @@ go_test(
     name = "nativepayload_test",
     srcs = [
         "chgo_capability_test.go",
+        "encode_test.go",
         "native_test.go",
     ],
+    data = ["testdata/insert_one_string_row_54470.hex"],
     embed = [":nativepayload"],
     deps = [
         "//pkg/lthash",
