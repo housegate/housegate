@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -26,14 +27,15 @@ func TestMetricsObserver_InlineValuesCounters(t *testing.T) {
 			t.Fatalf("result=%q counter moved by %v, want 1", result, delta)
 		}
 	}
-	const want = `
+	beforeProbe := testutil.ToFloat64(agentInlineValuesTotal.WithLabelValues("metric_name_probe"))
+	want := fmt.Sprintf(`
 # HELP clickhouse_proxy_agent_inline_values_total Agent-mode signed inline INSERT ... VALUES outcomes
 # TYPE clickhouse_proxy_agent_inline_values_total counter
-clickhouse_proxy_agent_inline_values_total{result="closure_refused"} 1
-clickhouse_proxy_agent_inline_values_total{result="evaluation_failed"} 1
-clickhouse_proxy_agent_inline_values_total{result="metric_name_probe"} 1
-clickhouse_proxy_agent_inline_values_total{result="synthesized"} 1
-`
+clickhouse_proxy_agent_inline_values_total{result="closure_refused"} %g
+clickhouse_proxy_agent_inline_values_total{result="evaluation_failed"} %g
+clickhouse_proxy_agent_inline_values_total{result="metric_name_probe"} %g
+clickhouse_proxy_agent_inline_values_total{result="synthesized"} %g
+`, before["closure_refused"]+1, before["evaluation_failed"]+1, beforeProbe+1, before["synthesized"]+1)
 	agentInlineValuesTotal.WithLabelValues("metric_name_probe").Inc()
 	if err := testutil.CollectAndCompare(agentInlineValuesTotal, strings.NewReader(want)); err != nil {
 		t.Fatal(err)
