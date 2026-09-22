@@ -131,6 +131,7 @@ type deferredSampleGate struct {
 }
 
 type deferredSampleResult struct {
+	sampleRaw []byte             // Captured sample bytes; validation never changes forwarding bytes.
 	exception *chproto.Exception // upstream rejected the Query at the sample step
 	err       error              // transport / protocol failure; session closes
 }
@@ -146,6 +147,11 @@ type clientPacketResult struct {
 // delivered keeps runDeferredInsert alive until upstreamToClient has exposed
 // or rejected the terminal and completed the query lifecycle.
 type deferredInputGate struct {
+	cancelMu        sync.Mutex
+	terminalDecoded bool
+	cancelDone      chan struct{}
+	cancelErr       error
+
 	done           chan struct{}
 	terminal       chan struct{}
 	exposed        chan struct{}
@@ -1028,6 +1034,14 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 				rejectedQctx = qctx
 				continue
 			}
+			if qctx.SynthesizedInsert != nil && (qctx.AgentPrepare != nil || qctx.QueryOnly != nil || qctx.DeferredInsert != nil || qctx.SuppressUpstreamExecution || qctx.AbortWithSuccess) {
+				err := fmt.Errorf("query %q: SynthesizedInsert conflicts with another ownership plan", q.ID)
+				r.hooks.OnQueryAbort(ctx, qctx)
+				r.hooks.OnQueryComplete(ctx, r.sess)
+				r.writeExceptionToClient(ctx, err)
+				rejectedQctx = qctx
+				continue
+			}
 			var agentPrepared *agentPrepareResult
 			if qctx.AgentPrepare != nil {
 				continuationHooks, supported := r.hooks.(plugin.QueryContinuationSupport)
@@ -1038,7 +1052,7 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 					r.hooks.OnQueryComplete(ctx, r.sess)
 					return err
 				}
-				if qctx.QueryOnly != nil || qctx.DeferredInsert != nil || qctx.SuppressUpstreamExecution || qctx.AbortWithSuccess {
+				if qctx.QueryOnly != nil || qctx.DeferredInsert != nil || qctx.SynthesizedInsert != nil || qctx.SuppressUpstreamExecution || qctx.AbortWithSuccess {
 					err := fmt.Errorf("query %q: AgentPrepare conflicts with another ownership plan", q.ID)
 					r.writeExceptionToClient(ctx, err)
 					r.hooks.OnQueryAbort(ctx, qctx)
@@ -1087,7 +1101,7 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 				}
 			}
 			if qctx.QueryOnly != nil {
-				if agentPrepared != nil || qctx.DeferredInsert != nil || qctx.SuppressUpstreamExecution || qctx.AbortWithSuccess {
+				if agentPrepared != nil || qctx.DeferredInsert != nil || qctx.SynthesizedInsert != nil || qctx.SuppressUpstreamExecution || qctx.AbortWithSuccess {
 					err := fmt.Errorf("query %q: query-only conflicts with another ownership plan", q.ID)
 					if agentPrepared != nil {
 						r.takeActiveQuery()
@@ -1116,6 +1130,26 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 						// Exception above is the last thing this session emits.
 						return err
 					}
+				}
+				continue
+			}
+			if qctx.SynthesizedInsert != nil {
+				// A preparation continuation can install a competing plan after OnQuery.
+				if agentPrepared != nil || qctx.AgentPrepare != nil || qctx.DeferredInsert != nil || qctx.SuppressUpstreamExecution || qctx.AbortWithSuccess {
+					err := fmt.Errorf("query %q: SynthesizedInsert conflicts with another ownership plan", q.ID)
+					if agentPrepared != nil {
+						r.takeActiveQuery()
+					}
+					r.hooks.OnQueryAbort(ctx, qctx)
+					r.hooks.OnQueryComplete(ctx, r.sess)
+					r.writeExceptionToClient(ctx, err)
+					return err
+				}
+				if err := r.runSynthesizedInsert(ctx, qctx, clientCompression); err != nil {
+					if errors.Is(err, errQueryRejectedResume) {
+						continue
+					}
+					return err
 				}
 				continue
 			}
@@ -1514,283 +1548,14 @@ func (r *Relay) runDeferredInsert(ctx context.Context, qctx *plugin.QueryContext
 			return rejectClose(fmt.Errorf("client sent packet type %d (%s) while deferred INSERT %q was collecting its payload", pkt.Type, clientPacketName(pkt.Type), q.ID))
 		}
 	}
-	if err := r.hooks.OnQueryInputCompleteStrict(ctx, qctx); err != nil {
-		if chproto.KeepsSession(err) {
-			return rejectResume(fmt.Errorf("query input complete strict hook: %w", err))
-		}
-		return rejectClose(fmt.Errorf("query input complete strict hook: %w", err))
-	}
-
-	up := r.sess.Upstream()
-	if up == nil {
-		r.hooks.OnQueryAbort(ctx, qctx)
-		r.hooks.OnQueryComplete(ctx, r.sess)
-		return chsession.ErrNoUpstream
-	}
-	up.SetCompression(compression)
-	if !r.beginActiveQuery(q.ID) {
-		return rejectClose(fmt.Errorf("query %q raced with another active upstream query", q.ID))
-	}
-	inputGate := r.armDeferredInput(qctx)
-	defer r.finishDeferredInput(inputGate)
-	gate := r.armDeferredSample(q.ID)
-	abortFromWriter := func(stage string, cause error) error {
-		r.disarmDeferredSample()
-		if !inputGate.claimWriterLifecycle() {
-			// The upstream reader won the single lifecycle owner CAS. Close the
-			// downstream so a pending terminal write cannot block, release writer
-			// ownership, and wait for that owner to settle exactly once.
-			closeCodec(client)
-			r.finishDeferredInput(inputGate)
-			select {
-			case <-inputGate.delivered:
-				return fmt.Errorf("deferred INSERT %q %s after upstream lifecycle ownership: %w", q.ID, stage, cause)
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
-		inputGate.stopWriter()
-		closeCodec(up)
-		inputGate.abort(ctx, r.hooks)
-		r.finishDeferredInput(inputGate)
-		r.sess.State().ClearActiveRewrite()
-		r.takeActiveQuery()
-		inputGate.complete(ctx, r.hooks, r.sess)
-		// Retain the writer-owned tombstone until the upstream reader exits so
-		// an already-decoded packet cannot be mistaken for a fresh lifecycle.
-		inputGate.markDelivered()
-		return fmt.Errorf("deferred INSERT %q %s: %w", q.ID, stage, cause)
-	}
-	forwardFail := func(stage string, err error) error {
-		return abortFromWriter(fmt.Sprintf("%s to %s", stage, upstreamAddr(up)), err)
-	}
-	abortAfterTerminal := func(stage string) error {
-		r.finishDeferredInput(inputGate)
-		select {
-		case <-inputGate.delivered:
-			return fmt.Errorf("deferred INSERT %q terminated while %s", q.ID, stage)
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	abortFromClient := func(cause error) error {
-		return abortFromWriter("client terminated while awaiting upstream", cause)
-	}
-	// Raw buffered Data uses the client's original framing regardless of any
-	// QueryPlugin mutation, exactly like the ordinary relay path.
-	q.Compression = compression
-	if err := up.WriteQuery(q); err != nil {
-		return forwardFail("forward query", err)
-	}
 	markerRaw := initialEmptyRaw
 	if markerRaw == nil {
 		markerRaw = terminatorRaw
 	}
-	if err := up.WriteRawPacket(markerRaw); err != nil {
-		if inputGate.terminalObserved() {
-			return abortAfterTerminal("writing external-tables marker")
-		}
-		return forwardFail("forward external-tables marker", err)
-	}
-	inputGate.markMarkerWritten()
-	var sampleResult deferredSampleResult
-	for {
-		select {
-		case sampleResult = <-gate:
-			goto sampleSettled
-		case <-ctx.Done():
-			return abortFromClient(ctx.Err())
-		default:
-		}
-
-		// The same sole client reader that collected the body continues to
-		// arbitrate liveness while ClickHouse prepares its sample. Otherwise a
-		// client EOF/Cancel plus an upstream that never answers the sample leaks
-		// both relay loops for the server-lifetime context.
-		available, err := client.WaitForPacketStart(25 * time.Millisecond)
-		if err != nil {
-			return abortFromClient(err)
-		}
-		if !available {
-			continue
-		}
-		pkt, decErr := client.ReadPacket(uint64(chproto.ClientQueryCode))
-		switch {
-		case decErr != nil && pkt == nil:
-			return abortFromClient(decErr)
-		case pkt == nil:
-			return abortFromClient(io.EOF)
-		case pkt.Type == uint64(chproto.ClientCancelCode):
-			return abortFromClient(errors.New("client cancelled deferred INSERT while awaiting upstream sample"))
-		case decErr != nil:
-			return abortFromClient(decErr)
-		default:
-			return abortFromClient(fmt.Errorf("client sent packet type %d (%s) before deferred INSERT sample", pkt.Type, clientPacketName(pkt.Type)))
-		}
-	}
-
-sampleSettled:
-	if sampleResult.err != nil {
-		r.finishDeferredInput(inputGate)
-		select {
-		case <-inputGate.delivered:
-			return fmt.Errorf("deferred INSERT %q sample negotiation: %w", q.ID, sampleResult.err)
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	if sampleResult.exception != nil {
-		// upstreamToClient already forwarded the Exception and ran the
-		// terminal hooks (takeActiveQuery + OnQueryComplete); only the
-		// plugin-side buffer state is left to drop.
-		logger.Debugw("deferred INSERT rejected by upstream at sample step", "query_id", q.ID, "code", sampleResult.exception.Code, "message", sampleResult.exception.Message)
-		r.finishDeferredInput(inputGate)
-		select {
-		case <-inputGate.delivered:
-			return nil
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	for _, raw := range buffered {
-		if inputGate.terminalObserved() {
-			return abortAfterTerminal("forwarding payload")
-		}
-		if err := up.WriteRawPacket(raw); err != nil {
-			if inputGate.terminalObserved() {
-				return abortAfterTerminal("forwarding payload")
-			}
-			return forwardFail("forward payload", err)
-		}
-		if inputGate.terminalObserved() {
-			return abortAfterTerminal("forwarding payload")
-		}
-	}
-	if err := up.WriteRawPacket(terminatorRaw); err != nil {
-		if inputGate.terminalObserved() {
-			return abortAfterTerminal("writing terminator")
-		}
-		return forwardFail("forward terminator", err)
-	}
-	inputGate.markTerminatorWritten()
-	if inputGate.terminalObserved() {
-		return abortAfterTerminal("completing input")
-	}
-	r.hooks.OnQueryInputComplete(ctx, qctx)
-	r.finishDeferredInput(inputGate)
-	logger.Debugw("deferred INSERT forwarded", "query_id", q.ID, "packets", len(buffered), "payload_bytes", bufferedBytes)
-	awaitTerminalExposure := func(prefetched *clientPacketResult) (bool, error) {
-		if !inputGate.terminalExposed() && !inputGate.terminalClaimed() {
-			return false, nil
-		}
-		if !inputGate.terminalExposed() {
-			select {
-			case <-inputGate.exposureDone:
-			case <-inputGate.terminal:
-				return true, abortAfterTerminal("awaiting terminal exposure")
-			case <-ctx.Done():
-				return true, ctx.Err()
-			}
-		}
-		if inputGate.terminalObserved() {
-			return true, abortAfterTerminal("awaiting terminal exposure")
-		}
-		if !inputGate.terminalExposed() {
-			// The client-facing terminal write failed after it began. The
-			// upstream loop owns the already-decided query lifecycle, but this
-			// side must still stop instead of reading another packet forever.
-			select {
-			case <-inputGate.delivered:
-				return true, errors.New("deferred INSERT terminal could not be exposed to client")
-			case <-ctx.Done():
-				return true, ctx.Err()
-			}
-		}
-		if prefetched != nil {
-			r.prefetchedClient = prefetched
-		}
-		select {
-		case <-inputGate.terminal:
-			return true, abortAfterTerminal("awaiting upstream terminal")
-		case <-inputGate.delivered:
-			if inputGate.terminalObserved() {
-				return true, abortAfterTerminal("awaiting upstream terminal")
-			}
-			return true, nil
-		case <-ctx.Done():
-			return true, ctx.Err()
-		}
-	}
-	for {
-		if inputGate.terminalObserved() {
-			return abortAfterTerminal("awaiting upstream terminal")
-		}
-		select {
-		case <-inputGate.terminal:
-			return abortAfterTerminal("awaiting upstream terminal")
-		case <-inputGate.delivered:
-			if inputGate.terminalObserved() {
-				return abortAfterTerminal("awaiting upstream terminal")
-			}
-			return nil
-		case <-ctx.Done():
-			return abortFromClient(ctx.Err())
-		default:
-		}
-
-		// Do not leave the client side parked once its payload terminator has
-		// been written. A pending INSERT may otherwise outlive a disconnected
-		// client forever. The bounded wait is only a cancellation polling
-		// mechanism; unlike payload classification, it never changes protocol
-		// meaning.
-		available, err := client.WaitForPacketStart(25 * time.Millisecond)
-		if err != nil {
-			if handled, exposureErr := awaitTerminalExposure(nil); handled {
-				return exposureErr
-			}
-			select {
-			case <-inputGate.delivered:
-				if inputGate.terminalObserved() {
-					return abortAfterTerminal("awaiting upstream terminal")
-				}
-				return nil
-			default:
-				return abortFromClient(err)
-			}
-		}
-		if !available {
-			continue
-		}
-		pkt, decErr := client.ReadPacket(uint64(chproto.ClientQueryCode))
-		if handled, exposureErr := awaitTerminalExposure(&clientPacketResult{pkt: pkt, err: decErr}); handled {
-			return exposureErr
-		}
-		select {
-		case <-inputGate.delivered:
-			if inputGate.terminalObserved() {
-				return abortAfterTerminal("awaiting upstream terminal")
-			}
-			// The upstream terminal became visible while this packet was being
-			// framed. Preserve it for the ordinary client loop; it belongs to
-			// the now-reusable session rather than the completed INSERT.
-			r.prefetchedClient = &clientPacketResult{pkt: pkt, err: decErr}
-			return nil
-		default:
-		}
-		if decErr != nil && pkt == nil {
-			return abortFromClient(decErr)
-		}
-		if pkt != nil && pkt.Type == uint64(chproto.ClientCancelCode) {
-			return abortFromClient(errors.New("client cancelled deferred INSERT"))
-		}
-		if decErr != nil {
-			return abortFromClient(decErr)
-		}
-		if pkt == nil {
-			return abortFromClient(io.EOF)
-		}
-		return abortFromClient(fmt.Errorf("client sent packet type %d (%s) before deferred INSERT terminal", pkt.Type, clientPacketName(pkt.Type)))
-	}
+	return r.forwardSignedInsert(ctx, qctx, signedInsertForward{
+		lane: "deferred INSERT", compression: compression, markerRaw: markerRaw, terminatorRaw: terminatorRaw,
+		payload: buffered, payloadBytes: bufferedBytes, rejectClose: rejectClose, rejectResume: rejectResume,
+	})
 }
 
 func queryMayStreamClientData(qctx *plugin.QueryContext) bool {
@@ -2029,11 +1794,25 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 		deferredTerminatorAtDecode := inputGateAtPacket != nil && inputGateAtPacket.terminatorWritten()
 		isEndOfStream := pkt.Type == uint64(chproto.ServerEndOfStreamCode)
 		isException := pkt.Type == uint64(chproto.ServerExceptionCode)
+		var deferredCanceledAtDecode bool
 		if inputGateAtPacket != nil && (isEndOfStream || isException) {
+			var cancelErr error
+			deferredCanceledAtDecode, cancelErr = inputGateAtPacket.terminalCancel(ctx)
 			if !inputGateAtPacket.claimUpstreamLifecycle() {
 				return fmt.Errorf("deferred writer owned lifecycle before upstream %s decode", serverPacketName(pkt.Type))
 			}
-			if isException || isEndOfStream && !waitingDeferredSample && deferredTerminatorAtDecode {
+			if cancelErr != nil {
+				r.settleDeferredSample(deferredSampleResult{err: cancelErr})
+				if err := r.stopDeferredInput(ctx, up, inputGateAtPacket); err != nil {
+					return err
+				}
+				r.sess.State().ClearActiveRewrite()
+				r.takeActiveQuery()
+				inputGateAtPacket.complete(ctx, r.hooks, r.sess)
+				r.deliverDeferredInput(inputGateAtPacket)
+				return fmt.Errorf("signed INSERT cancel write failed: %w", cancelErr)
+			}
+			if isException || isEndOfStream && (deferredCanceledAtDecode || !waitingDeferredSample && deferredTerminatorAtDecode) {
 				inputGateAtPacket.publishUpstreamTerminal()
 			}
 		}
@@ -2052,10 +1831,10 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 		if waitingDeferredSample {
 			switch pkt.Type {
 			case uint64(chproto.ServerDataCode):
-				// The upstream's INSERT sample block for a deferred INSERT: the
-				// client already received housegate's locally synthesized sample
-				// and is past its data phase, so this one is consumed here.
-				r.settleDeferredSample(deferredSampleResult{})
+				// Consume the upstream sample for either signed INSERT lane. The
+				// deferred client already saw a local sample; synthesized clients
+				// have no data phase. Keep captured bytes for schema validation.
+				r.settleDeferredSample(deferredSampleResult{sampleRaw: append([]byte(nil), pkt.Raw...)})
 				logger.Debugw("deferred INSERT upstream sample block consumed")
 				continue
 			case uint64(chproto.ServerTableColumnsCode):
@@ -2064,6 +1843,10 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 				// would treat it as an unexpected packet after its data phase.
 				continue
 			case uint64(chproto.ServerEndOfStreamCode):
+				if deferredCanceledAtDecode {
+					r.settleDeferredSample(deferredSampleResult{})
+					break
+				}
 				err := fmt.Errorf("%w: upstream ended a deferred INSERT before its sample block", chproto.ErrMalformed)
 				r.settleDeferredSample(deferredSampleResult{err: err})
 				if inputGateAtPacket != nil {
@@ -2092,7 +1875,15 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 		deferredTerminal := inputGateAtPacket
 		deferredTerminalFatal := false
 		if isException && deferredTerminal != nil {
-			if waitingDeferredSample && deferredTerminal.markerWritten() {
+			if deferredCanceledAtDecode {
+				// A successfully forwarded Cancel owns no abort hook. Its genuine
+				// framed terminal completes the canceled query, as on the ordinary lane.
+				select {
+				case <-deferredTerminal.done:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			} else if waitingDeferredSample && deferredTerminal.markerWritten() {
 				// A sample-step rejection is recoverable: no payload write began.
 				// The complete marker write proves no client→upstream write is
 				// still blocked behind the Exception. Abort before completion,
@@ -2134,7 +1925,7 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 			}
 		}
 		if isEndOfStream && deferredTerminal != nil {
-			if !deferredTerminatorAtDecode {
+			if !deferredTerminatorAtDecode && !deferredCanceledAtDecode {
 				// The decode-time snapshot is authoritative. A write that happens
 				// to finish later cannot turn an already-observed premature EOS
 				// into success.
