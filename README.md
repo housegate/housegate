@@ -192,7 +192,7 @@ The rewriter is the canonical owner of physical/logical database mapping. Every 
 - `SELECT *` and DESCRIBE hide the protocol-owned `_hg_row_id`; addressing that identifier directly is rejected. Non-INSERT writes, DDL, and DCL touching an SI table are rejected. INSERT is admitted only through the signed statement lane.
 - SI requests require the rewriter's exact contract-v1 acknowledgement. Missing/old backends, unavailable classification, read-state failures, and SI-classified rewriter errors all fail closed; ordinary tables retain the legacy fail-open behavior when the SI list is empty.
 
-Signed INSERT currently requires client-streamed rows; inline `VALUES` and `INSERT ... SELECT` / `WITH` remain unsupported. The [snapshot-query design proposal](docs/superpowers/specs/2026-09-16-signed-insert-select-design.md) describes the future SELECT lane's authenticated read snapshot, deterministic replay and coordinated rollout. Its [implementation plans](docs/superpowers/plans/2026-09-16-signed-insert-select.md) cover cross-repository contracts, snapshot replay, coordination/recovery and native integration. These documents do not enable that capability.
+Signed INSERT accepts the measured client-streamed `FORMAT` forms, including `FORMAT Values` with rows on stdin. When `storage_integrity.agent.inline_values.enabled` is set on the agent, it also accepts a complete inline `INSERT ... VALUES` whose rows travel inside the query text, as sent by `clickhouse-client` 26.3 and later and the pinned clickhouse-go `Exec`. A 25.x client instead truncates the query after `VALUES` and streams row blocks, but that truncated shape remains unsupported. `INSERT ... SELECT` / `WITH` remain unsupported; the [snapshot-query design proposal](docs/superpowers/specs/2026-09-16-signed-insert-select-design.md) and its [implementation plans](docs/superpowers/plans/2026-09-16-signed-insert-select.md) describe that future lane but do not enable it.
 
 ```yaml
 storage_integrity:
@@ -203,6 +203,32 @@ storage_integrity:
     merge_guard:
       reassert_interval: 30s
 ```
+
+The inline lane is agent-only and default-off. This example shows the required feature blocks; retain the normal signing key and selected-upstream configuration, provide the NetworkState schema source required by the SI agent (unless the embedding host injects it), and configure the corresponding server-side [`auth`](#auth--jws--ethereum-signature) and signed-ingress settings for the existing signed INSERT lane.
+
+```yaml
+network_state:
+  source: /etc/housegate/network-state.yaml
+agent:
+  mode: true
+  upstream: "housegate-server.internal:9001" # omit to auto-discover through network_state.source
+  private_key_hex: "0x..."                   # prefer HOUSEGATE_AGENT_KEY or an encrypted config
+materialize:
+  enabled: true
+  engine: native
+  native_library_path: "/opt/housegate/libpolyglot_sql_ffi.so"
+storage_integrity:
+  agent:
+    enabled: true
+    network_id: mainnet-1
+    state_dir: /var/lib/housegate/si
+    inline_values:
+      enabled: true                # default false
+      evaluation_timeout: 10s      # default 10s; must be >= 1s
+      max_rows: 65536              # default 65536; must be > 0
+```
+
+The agent materializes the statement, applies a closed lexical policy, evaluates the rows once through the session's currently selected server-mode endpoint without retrying, encodes Native blocks at the negotiated upstream revision, and re-signs `INSERT INTO <db>.<table> (<individually quoted columns>) FORMAT Native`. The helper query preserves the configured `agent.owner` payer and `agent.driver` request marker for the server to authorize; because it is a table-free SELECT, it does not emit an `indexing_usage` INSERT report, while ordinary query-usage handling still follows that payer/driver context. Admission refusals raised during `OnQuery` start with `storage_integrity inline VALUES: ` and consume no `client_seq`; after admission, later marker, encoding, strict-hook, sample or upstream failures may consume the durably reserved sequence and may use a different exception prefix. Full flow, limits and metrics: [docs/agent-inline-values.md](docs/agent-inline-values.md).
 
 ### `agent` — Agent-Mode Settings
 
