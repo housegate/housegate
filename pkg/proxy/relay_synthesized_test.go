@@ -667,12 +667,53 @@ func TestRelay_SynthesizedInsert_LocalRejectionReuse(t *testing.T) {
 	}
 }
 
+// synthesizedMarkerHooks makes upstream-first shutdown deterministic: the
+// local marker owner cannot publish lifecycle hooks until the test releases it.
+type synthesizedMarkerHooks struct {
+	*synthesizedInsertHooks
+	admitted     chan struct{}
+	abortEntered chan struct{}
+	releaseAbort chan struct{}
+}
+
+func (h *synthesizedMarkerHooks) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
+	err := h.synthesizedInsertHooks.OnQuery(ctx, qctx)
+	close(h.admitted)
+	return err
+}
+
+func (h *synthesizedMarkerHooks) OnQueryAbort(ctx context.Context, qctx *plugin.QueryContext) {
+	if h.releaseAbort != nil {
+		close(h.abortEntered)
+		<-h.releaseAbort
+	}
+	h.synthesizedInsertHooks.OnQueryAbort(ctx, qctx)
+}
+
 func TestRelay_SynthesizedInsert_MissingOrNamedMarker(t *testing.T) {
 	for _, kind := range []string{"missing live", "fragment live", "named empty"} {
 		t.Run(kind, func(t *testing.T) {
-			hooks := newSynthesizedHooks()
+			hooks := &synthesizedMarkerHooks{
+				synthesizedInsertHooks: newSynthesizedHooks(), admitted: make(chan struct{}),
+			}
+			var release sync.Once
+			releaseAbort := func() {
+				if hooks.releaseAbort != nil {
+					release.Do(func() { close(hooks.releaseAbort) })
+				}
+			}
+			t.Cleanup(releaseAbort)
+			if kind != "named empty" {
+				hooks.abortEntered = make(chan struct{})
+				hooks.releaseAbort = make(chan struct{})
+			}
 			h := newSynthesizedHarness(t, hooks, deferredTestRev, false, false)
 			writeAllConn(t, h.clientProxy, encodeInsertQuery(t, "qid", synthesizedBody))
+			select {
+			case <-hooks.admitted:
+			case <-time.After(time.Second):
+				t.Fatal("query was not admitted before marker cancellation")
+			}
 			if kind == "named empty" {
 				marker := encodeEmptyClientData(t)
 				// Replace the empty name's zero-length string, retaining BlockInfo/body.
@@ -685,9 +726,16 @@ func TestRelay_SynthesizedInsert_MissingOrNamedMarker(t *testing.T) {
 				}
 			} else {
 				if kind == "fragment live" {
+					// net.Pipe acknowledges this write only after the lane's sole
+					// reader consumes the packet type; the rest of the frame is absent.
 					writeAllConn(t, h.clientProxy, []byte{byte(chproto.ClientDataCode)})
 				}
 				h.cancel()
+				select {
+				case <-hooks.abortEntered:
+				case <-time.After(time.Second):
+					t.Fatal("marker reader did not enter its abort hook")
+				}
 			}
 			select {
 			case err := <-h.loopErr:
@@ -696,6 +744,23 @@ func TestRelay_SynthesizedInsert_MissingOrNamedMarker(t *testing.T) {
 				}
 			case <-time.After(time.Second):
 				t.Fatal("live marker wait did not end")
+			}
+			// For canceled marker reads the barrier forces the upstream loop
+			// to return first, before the local owner can publish abort/complete.
+			// For a named block the client loop returns first; emulate production
+			// runPostHandshake closing the transport to release the other reader.
+			if kind == "named empty" {
+				_ = h.proxyUpstream.Close()
+			} else {
+				releaseAbort()
+			}
+			select {
+			case err := <-h.loopErr:
+				if err == nil {
+					t.Fatal("second marker relay loop returned nil")
+				}
+			case <-time.After(time.Second):
+				t.Fatal("marker shutdown did not join both relay loops")
 			}
 			assertNoUpstreamBytes(t, h.upstreamProxy)
 			strict, _, complete, abort, success := hooks.counts()
