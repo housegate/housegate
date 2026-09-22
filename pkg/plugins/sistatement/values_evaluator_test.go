@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -14,6 +15,8 @@ import (
 	"github.com/housegate/housegate/pkg/auth"
 	"github.com/housegate/housegate/pkg/chproto"
 	"github.com/housegate/housegate/pkg/lthash"
+	"github.com/housegate/housegate/pkg/plugin"
+	"github.com/housegate/housegate/pkg/plugins/agent"
 	"github.com/housegate/housegate/pkg/replay/payloadexec"
 )
 
@@ -200,6 +203,98 @@ func TestUpstreamValuesEvaluator_HelperQuery(t *testing.T) {
 	validator := auth.NewEthValidator([]string{signer.Address()}, time.Minute, true, false, "", nil)
 	if _, err := validator.ValidateQuery(context.Background(), auth.QueryMeta{Settings: map[string]string{auth.AuthTokenSettingKey: strings.Trim(tok.Value, "'")}, SQL: q.Body}); err != nil {
 		t.Fatalf("helper query is not signed by the agent key: %v", err)
+	}
+}
+
+func TestUpstreamValuesEvaluator_PreservesAgentAccountContext(t *testing.T) {
+	for _, tc := range []struct {
+		name, owner string
+		driver      bool
+	}{
+		{"default", "", false},
+		{"owner", "0xABCDEFabcdefABCDEFabcdefABCDEFabcdefABCD", false},
+		{"driver", "", true},
+		{"owner and driver", "0xABCDEFabcdefABCDEFabcdefABCDEFabcdefABCD", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ev, up, signer := newTestEvaluator(t, func(s *chproto.Codec, r int) error {
+				if err := writeServerBlock(s, r, evalRow(1, false)); err != nil {
+					return err
+				}
+				return writeEndOfStream(s)
+			})
+			req := evalRequest()
+			req.Owner, req.IsDriver = tc.owner, tc.driver
+			if _, err := ev.Evaluate(context.Background(), req); err != nil {
+				t.Fatal(err)
+			}
+			q := <-up.seen
+			settings := make(map[string]string)
+			var contextSettings []chproto.Setting
+			for _, s := range q.Settings {
+				if _, exists := settings[s.Key]; exists {
+					t.Fatalf("duplicate setting %q", s.Key)
+				}
+				settings[s.Key] = s.Value
+				if s.Key == auth.PayerSettingKey || s.Key == auth.DriverSettingKey {
+					contextSettings = append(contextSettings, s)
+				}
+			}
+			// Compare the decoded helper settings against the ordinary agent
+			// signer, including original owner casing and Custom quote wrapping.
+			ordinary := &plugin.QueryContext{Query: &chproto.Query{Body: q.Body}}
+			p := &agent.Plugin{Signer: signer, Owner: tc.owner, IsDriver: tc.driver}
+			if err := p.OnQuery(context.Background(), ordinary); err != nil {
+				t.Fatal(err)
+			}
+			var want []chproto.Setting
+			for _, s := range ordinary.Query.Settings {
+				if s.Key != auth.AuthTokenSettingKey {
+					want = append(want, s)
+				}
+			}
+			if !reflect.DeepEqual(contextSettings, want) {
+				t.Fatalf("helper context=%+v, ordinary agent=%+v", contextSettings, want)
+			}
+			if len(settings) != 5+len(want) {
+				t.Fatalf("unexpected helper settings: %+v", q.Settings)
+			}
+			validator := auth.NewEthValidator([]string{signer.Address()}, time.Minute, true, false, signer.Address(), nil)
+			got, err := validator.ValidateQuery(context.Background(), auth.QueryMeta{Settings: settings, SQL: q.Body})
+			if err != nil || got.IsDriver != tc.driver {
+				t.Fatalf("helper JWS/context validation=%+v error=%v", got, err)
+			}
+			if _, err := validator.ValidateQuery(context.Background(), auth.QueryMeta{Settings: settings, SQL: q.Body + " "}); err == nil {
+				t.Fatal("helper token did not bind the exact helper SQL")
+			}
+		})
+	}
+}
+
+func TestUpstreamValuesEvaluator_PoolSeparatesAccountContext(t *testing.T) {
+	ev, up, _ := newTestEvaluator(t, func(s *chproto.Codec, r int) error {
+		if err := writeServerBlock(s, r, evalRow(1, false)); err != nil {
+			return err
+		}
+		return writeEndOfStream(s)
+	})
+	req := evalRequest()
+	for i, accountContext := range []struct {
+		owner  string
+		driver bool
+	}{
+		{"", false}, {"owner-a", false}, {"owner-b", false}, {"owner-b", true},
+	} {
+		req.Owner, req.IsDriver = accountContext.owner, accountContext.driver
+		for repeat := 0; repeat < 2; repeat++ {
+			if _, err := ev.Evaluate(context.Background(), req); err != nil {
+				t.Fatal(err)
+			}
+			<-up.seen
+			if got := up.handshakes.Load(); got != int32(i+1) {
+				t.Fatalf("owner=%q driver=%v repeat=%d handshakes=%d, want %d", req.Owner, req.IsDriver, repeat, got, i+1)
+			}
+		}
 	}
 }
 
