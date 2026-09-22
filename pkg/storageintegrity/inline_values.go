@@ -30,21 +30,18 @@ type InlineValuesInsert struct {
 
 // ParseInlineValuesInsert decodes a complete inline
 // INSERT INTO [db.]t [(cols)] VALUES <rows> statement (spec 2026-09-23 D1),
-// reusing ParseInsertTarget, the payload-source keyword scan and
-// InsertColumnList so the target and column rules stay the SI lane's existing
-// ones. ErrNotInlineValues means "leave this statement on the ordinary path";
-// every other error is a named refusal carrying InlineValuesErrorPrefix.
+// reusing the SI lane's target scanner and identifier rules. The inline-only
+// prefix parser requires VALUES to follow the target or optional column list
+// directly, so a later statement or arbitrary token cannot supply the rows.
+// ErrNotInlineValues means "leave this statement on the ordinary path"; every
+// other error is a named refusal carrying InlineValuesErrorPrefix.
 func ParseInlineValuesInsert(sql string) (InlineValuesInsert, error) {
-	target, err := ParseInsertTarget(sql)
+	parsed, err := parseInsertTarget(sql)
 	if err != nil {
 		if errors.Is(err, ErrNotInsert) {
 			return InlineValuesInsert{}, ErrNotInlineValues
 		}
 		return InlineValuesInsert{}, fmt.Errorf("%s%w", InlineValuesErrorPrefix, err)
-	}
-	source, _, end, ok := insertDataSourceAt(sql)
-	if !ok || source != "VALUES" {
-		return InlineValuesInsert{}, ErrNotInlineValues
 	}
 	keys, err := InlineInsertSettingKeys(sql)
 	if err != nil {
@@ -53,9 +50,9 @@ func ParseInlineValuesInsert(sql string) (InlineValuesInsert, error) {
 	if len(keys) > 0 {
 		return InlineValuesInsert{}, fmt.Errorf("%sINSERT ... VALUES ... SETTINGS is not supported on the signed inline lane (setting %q)", InlineValuesErrorPrefix, keys[0])
 	}
-	cols, _, err := InsertColumnList(sql)
+	cols, end, err := parseInlineValuesPrefix(sql, parsed.end)
 	if err != nil {
-		return InlineValuesInsert{}, fmt.Errorf("%s%w", InlineValuesErrorPrefix, err)
+		return InlineValuesInsert{}, err
 	}
 	rows, err := trimTrailingStatement(strings.TrimSpace(sql[end:]))
 	if err != nil {
@@ -65,7 +62,72 @@ func ParseInlineValuesInsert(sql string) (InlineValuesInsert, error) {
 		// The 25.x truncated shape: the client streams the rows instead.
 		return InlineValuesInsert{}, ErrNotInlineValues
 	}
-	return InlineValuesInsert{Target: target, Columns: cols, Rows: rows}, nil
+	return InlineValuesInsert{Target: parsed.target, Columns: cols, Rows: rows}, nil
+}
+
+// parseInlineValuesPrefix starts immediately after a parsed INSERT target and
+// consumes only an optional column list followed by VALUES. It deliberately
+// does not use insertDataSourceAt: that shared classifier scans the whole SQL
+// for legacy callers, while this admission boundary must reject intervening
+// statements and arbitrary syntax.
+func parseInlineValuesPrefix(sql string, pos int) ([]string, int, error) {
+	s := storageScanner{sql: sql, pos: pos}
+	if err := s.skip(); err != nil {
+		return nil, 0, fmt.Errorf("%s%w", InlineValuesErrorPrefix, err)
+	}
+	var cols []string
+	if s.take('(') {
+		for {
+			name, _, ok, err := s.identifier()
+			if err != nil {
+				return nil, 0, fmt.Errorf("%s%w", InlineValuesErrorPrefix, err)
+			}
+			if !ok {
+				return nil, 0, fmt.Errorf("%sempty column name in INSERT column list", InlineValuesErrorPrefix)
+			}
+			cols = append(cols, name)
+			if err := s.skip(); err != nil {
+				return nil, 0, fmt.Errorf("%s%w", InlineValuesErrorPrefix, err)
+			}
+			switch {
+			case s.take(','):
+				continue
+			case s.take(')'):
+				goto source
+			default:
+				return nil, 0, fmt.Errorf("%sexpected ',' or ')' in INSERT column list", InlineValuesErrorPrefix)
+			}
+		}
+	}
+
+source:
+	if err := s.skip(); err != nil {
+		return nil, 0, fmt.Errorf("%s%w", InlineValuesErrorPrefix, err)
+	}
+	if s.pos >= len(sql) {
+		return nil, 0, ErrNotInlineValues
+	}
+	if sql[s.pos] == ';' {
+		return nil, 0, inlinePrefixErr("multi-statement input is not supported; ';' appears before VALUES", s.pos)
+	}
+	word, ok, err := s.bareWord()
+	if err != nil {
+		return nil, 0, fmt.Errorf("%s%w", InlineValuesErrorPrefix, err)
+	}
+	if !ok {
+		return nil, 0, inlinePrefixErr(fmt.Sprintf("token %q is not accepted between the INSERT target and VALUES", string(sql[s.pos])), s.pos)
+	}
+	if strings.EqualFold(word, "VALUES") {
+		return cols, s.pos, nil
+	}
+	if isInsertPayloadSourceKeyword(word) {
+		return nil, 0, ErrNotInlineValues
+	}
+	return nil, 0, inlinePrefixErr(fmt.Sprintf("token %q is not accepted between the INSERT target and VALUES", word), s.pos-len(word))
+}
+
+func inlinePrefixErr(reason string, offset int) error {
+	return fmt.Errorf("%s%s at SQL byte offset %d", InlineValuesErrorPrefix, reason, offset)
 }
 
 // trimTrailingStatement removes at most one terminating ';' and refuses text

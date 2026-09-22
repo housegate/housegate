@@ -17,6 +17,8 @@ func TestParseInlineValuesInsert(t *testing.T) {
 		{name: "lowercase keywords", sql: "insert into db.t values (1)", wantDB: "db", wantRows: "(1)"},
 		{name: "session database", sql: "INSERT INTO t (a) VALUES (1)", wantRows: "(1)", wantCols: []string{"a"}},
 		{name: "quoted identifiers", sql: "INSERT INTO `db`.`t` (`a`) VALUES (1)", wantDB: "db", wantRows: "(1)", wantCols: []string{"a"}},
+		{name: "quoted identifiers and comments", sql: "/*lead*/ INSERT /*a*/ INTO /*b*/ `db` /*c*/ . /*d*/ `t` /*e*/ (/*f*/ `a`, /*g*/ \"b\") /*h*/ VALUES (1, 'x')", wantDB: "db", wantRows: "(1, 'x')", wantCols: []string{"a", "b"}},
+		{name: "comments without column list", sql: "INSERT INTO db.t /*before values*/ VALUES /*before rows*/ (1)", wantDB: "db", wantRows: "/*before rows*/ (1)"},
 		{name: "expression rows", sql: "INSERT INTO db.t VALUES (1 + 2, unhex('4142'))", wantDB: "db", wantRows: "(1 + 2, unhex('4142'))"},
 		{name: "trailing semicolon", sql: "INSERT INTO db.t VALUES (1);", wantDB: "db", wantRows: "(1)"},
 		{name: "semicolon inside literal", sql: "INSERT INTO db.t VALUES ('a;b')", wantDB: "db", wantRows: "('a;b')"},
@@ -31,6 +33,10 @@ func TestParseInlineValuesInsert(t *testing.T) {
 		{name: "trailing settings", sql: "INSERT INTO db.t VALUES (1) SETTINGS async_insert = 1", wantErr: "async_insert"},
 		{name: "leading settings", sql: "INSERT INTO db.t SETTINGS async_insert = 1 VALUES (1)", wantErr: "async_insert"},
 		{name: "second statement", sql: "INSERT INTO db.t VALUES (1); INSERT INTO db.t VALUES (2)", wantErr: "multi-statement"},
+		{name: "second statement supplies values", sql: "INSERT INTO db.t; INSERT INTO db.u VALUES (1)", wantErr: "multi-statement"},
+		{name: "second statement after column list supplies values", sql: "INSERT INTO db.t (a) ; INSERT INTO db.u VALUES (1)", wantErr: "multi-statement"},
+		{name: "garbage before values", sql: "INSERT INTO db.t nonsense VALUES (1)", wantErr: "nonsense"},
+		{name: "garbage after column list before values", sql: "INSERT INTO db.t (a) nonsense VALUES (1)", wantErr: "nonsense"},
 		{name: "insert into function", sql: "INSERT INTO FUNCTION remote('h', db.t) VALUES (1)", wantErr: "INSERT INTO FUNCTION"},
 	}
 	for _, tc := range cases {

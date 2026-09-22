@@ -45,14 +45,15 @@ var clientParsedInsertFormats = map[string]bool{
 // stored as the same wire capture.
 //
 // Note the version-qualified asymmetry with `INSERT ... VALUES (1)`: a 25.8
-// client truncates the SQL after VALUES and streams the rows, the ordinary
-// payload-local path; a 26.3+ client and the pinned clickhouse-go fork send the
-// full statement text and no ClientData packet at all, so this function reports
-// no payload encoding for that shape. An agent running
+// client truncates the SQL after VALUES and streams row blocks, but this
+// function still classifies that truncated VALUES form as unsupported (spec
+// 2026-09-23 D1). A 26.3+ client and the pinned clickhouse-go fork send the full
+// statement text and no ClientData packet at all, so this function likewise
+// reports no payload encoding for that shape. An agent running
 // storage_integrity.agent.inline_values evaluates those inline rows and
 // rewrites the statement to FORMAT Native before it reaches this gate (spec
 // 2026-09-23 D1). The same statement written as `FORMAT Values` with the rows
-// on stdin has always been signable, because then the client streams them.
+// on stdin is the supported payload-local path and has always been signable.
 func InsertPayloadEncoding(sql string) (string, error) {
 	if _, err := ParseInsertTarget(sql); err != nil {
 		return "", err
