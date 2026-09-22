@@ -43,15 +43,11 @@ func ParseInlineValuesInsert(sql string) (InlineValuesInsert, error) {
 		}
 		return InlineValuesInsert{}, fmt.Errorf("%s%w", InlineValuesErrorPrefix, err)
 	}
-	keys, err := InlineInsertSettingKeys(sql)
-	if err != nil {
-		return InlineValuesInsert{}, fmt.Errorf("%sinspect inline SETTINGS: %w", InlineValuesErrorPrefix, err)
-	}
-	if len(keys) > 0 {
-		return InlineValuesInsert{}, fmt.Errorf("%sINSERT ... VALUES ... SETTINGS is not supported on the signed inline lane (setting %q)", InlineValuesErrorPrefix, keys[0])
-	}
 	cols, end, err := parseInlineValuesPrefix(sql, parsed.end)
 	if err != nil {
+		return InlineValuesInsert{}, err
+	}
+	if err := rejectInlineValuesSettings(sql); err != nil {
 		return InlineValuesInsert{}, err
 	}
 	rows, err := trimTrailingStatement(strings.TrimSpace(sql[end:]))
@@ -67,9 +63,11 @@ func ParseInlineValuesInsert(sql string) (InlineValuesInsert, error) {
 
 // parseInlineValuesPrefix starts immediately after a parsed INSERT target and
 // consumes only an optional column list followed by VALUES. It deliberately
-// does not use insertDataSourceAt: that shared classifier scans the whole SQL
-// for legacy callers, while this admission boundary must reject intervening
-// statements and arbitrary syntax.
+// never uses insertDataSourceAt to accept rows: that shared classifier scans
+// the whole SQL for legacy callers, while this admission boundary must reject
+// intervening statements and arbitrary syntax. It consults that classifier
+// only after leading SETTINGS to preserve non-inline FORMAT/SELECT/WITH
+// fallthrough before applying the inline-only SETTINGS rejection.
 func parseInlineValuesPrefix(sql string, pos int) ([]string, int, error) {
 	s := storageScanner{sql: sql, pos: pos}
 	if err := s.skip(); err != nil {
@@ -123,7 +121,29 @@ source:
 	if isInsertPayloadSourceKeyword(word) {
 		return nil, 0, ErrNotInlineValues
 	}
+	if strings.EqualFold(word, "SETTINGS") {
+		source, _, _, ok := insertDataSourceAt(sql)
+		if ok && source != "VALUES" && isInsertPayloadSourceKeyword(source) {
+			return nil, 0, ErrNotInlineValues
+		}
+		if ok && source == "VALUES" {
+			if err := rejectInlineValuesSettings(sql); err != nil {
+				return nil, 0, err
+			}
+		}
+	}
 	return nil, 0, inlinePrefixErr(fmt.Sprintf("token %q is not accepted between the INSERT target and VALUES", word), s.pos-len(word))
+}
+
+func rejectInlineValuesSettings(sql string) error {
+	keys, err := InlineInsertSettingKeys(sql)
+	if err != nil {
+		return fmt.Errorf("%sinspect inline SETTINGS: %w", InlineValuesErrorPrefix, err)
+	}
+	if len(keys) > 0 {
+		return fmt.Errorf("%sINSERT ... VALUES ... SETTINGS is not supported on the signed inline lane (setting %q)", InlineValuesErrorPrefix, keys[0])
+	}
+	return nil
 }
 
 func inlinePrefixErr(reason string, offset int) error {
