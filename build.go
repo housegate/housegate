@@ -1210,6 +1210,8 @@ func buildAgentWithBuilders(
 			KeeperShardID:   cfg.StorageIntegrity.Agent.KeeperShardID,
 			Seq:             seq,
 			MaxPayloadBytes: cfg.StorageIntegrity.Agent.MaxPayloadBytes,
+			Owner:           cfg.Agent.Owner,
+			IsDriver:        cfg.Agent.Driver,
 			Evaluator:       evaluator,
 			Observer:        obs,
 			InlineValues: sistatement.InlineValuesOptions{

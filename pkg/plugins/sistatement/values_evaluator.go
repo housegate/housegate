@@ -27,9 +27,10 @@ const maxTotalIdleEvaluatorConns = 16
 const evaluatorControlLimit = 64 << 10
 
 type evaluatorPoolKey struct {
-	address, account, user, database string
-	password                         [32]byte
-	revision                         uint64
+	address, account, owner, user, database string
+	isDriver                                bool
+	password                                [32]byte
+	revision                                uint64
 }
 
 // UpstreamValuesEvaluator opens a dedicated connection to the current session's
@@ -174,7 +175,7 @@ func quoteValuesColumn(name string) string {
 }
 
 func poolKey(req ValuesEvaluation) evaluatorPoolKey {
-	return evaluatorPoolKey{address: req.UpstreamAddress, account: req.Account, user: req.Hello.User, database: req.Hello.Database, password: sha256.Sum256([]byte(req.Hello.Password)), revision: uint64(req.Hello.ProtocolVersion)}
+	return evaluatorPoolKey{address: req.UpstreamAddress, account: req.Account, owner: req.Owner, isDriver: req.IsDriver, user: req.Hello.User, database: req.Hello.Database, password: sha256.Sum256([]byte(req.Hello.Password)), revision: uint64(req.Hello.ProtocolVersion)}
 }
 
 func declaredTypes(req ValuesEvaluation) map[string]string {
@@ -201,6 +202,15 @@ func runEvaluation(ec *evaluatorConn, req ValuesEvaluation, sql, token string) (
 			{Key: "max_block_size", Value: strconv.FormatUint(req.MaxRows, 10)},
 			{Key: auth.AuthTokenSettingKey, Value: "'" + token + "'", Custom: true},
 		},
+	}
+	// Match agent.Plugin's configured account context, including its Custom
+	// string wire format. The signer remains the operator/indexer key; the
+	// server still authorizes the owner relationship and driver privilege.
+	if req.Owner != "" {
+		q.Settings = append(q.Settings, chproto.Setting{Key: auth.PayerSettingKey, Value: "'" + req.Owner + "'", Custom: true})
+	}
+	if req.IsDriver {
+		q.Settings = append(q.Settings, chproto.Setting{Key: auth.DriverSettingKey, Value: "'1'", Custom: true})
 	}
 	if err := up.WriteQuery(q); err != nil {
 		return nil, fmt.Errorf("write evaluation query: %w", err)

@@ -25,6 +25,8 @@ type ValuesEvaluation struct {
 	UpstreamAddress string
 	Hello           *chproto.ClientHello
 	Account         string
+	Owner           string
+	IsDriver        bool
 	Schema          payloadexec.TableSchema
 	Columns         []string
 	Rows            string
@@ -134,6 +136,7 @@ func (p *Plugin) evaluateInlineValues(ctx context.Context, qctx *plugin.QueryCon
 	}()
 	blocks, err := p.evaluator.Evaluate(evalCtx, ValuesEvaluation{
 		UpstreamAddress: address, Hello: hello, Account: p.account, Schema: schema, Columns: names, Rows: parsed.Rows,
+		Owner: p.owner, IsDriver: p.isDriver,
 		Timeout: p.inline.EvaluationTimeout, MaxRows: p.inline.MaxRows, MaxBytes: p.maxPayload,
 	})
 	if err != nil {

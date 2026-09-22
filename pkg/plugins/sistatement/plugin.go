@@ -35,6 +35,10 @@ type Options struct {
 	KeeperShardID   uint32
 	Seq             *SeqCounter
 	MaxPayloadBytes uint64
+	// Owner and IsDriver preserve the configured agent's ordinary helper-query
+	// authorization and billing context; they do not change statement identity.
+	Owner    string
+	IsDriver bool
 	// InlineValues configures the signed inline VALUES lane (spec D10).
 	InlineValues InlineValuesOptions
 	// Evaluator is required when InlineValues.Enabled.
@@ -47,6 +51,8 @@ type Options struct {
 type Plugin struct {
 	signer        auth.StatementSignerV2
 	account       string // lowercase 0x
+	owner         string
+	isDriver      bool
 	loader        *schemaregistry.NetworkStateLoader
 	networkID     string
 	keeperShardID uint32
@@ -113,6 +119,8 @@ func New(opts Options) (*Plugin, error) {
 	return &Plugin{
 		signer:        opts.Signer,
 		account:       strings.ToLower(opts.Signer.Address()),
+		owner:         opts.Owner,
+		isDriver:      opts.IsDriver,
 		loader:        schemaregistry.NewNetworkStateLoader(opts.Schemas, opts.NetworkID),
 		networkID:     opts.NetworkID,
 		keeperShardID: opts.KeeperShardID,
