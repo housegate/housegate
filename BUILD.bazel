@@ -73,6 +73,7 @@ go_test(
     srcs = [
         "agent_auto_discover_integration_test.go",
         "build_collector_test.go",
+        "build_inline_values_test.go",
         "build_replication_proxy_test.go",
         "build_test.go",
         "internal_port_integration_test.go",

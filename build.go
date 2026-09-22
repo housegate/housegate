@@ -1059,7 +1059,32 @@ func buildAgentWithMaterializerBuilder(
 	rf *redisFactory,
 	materializerBuilder func(*config.Config) (rewriter.Materializer, error),
 ) (*builtServer, error) {
+	return buildAgentWithBuilders(opts, rf, materializerBuilder,
+		func(dial func(context.Context, string) (net.Conn, error), signer auth.Signer) inlineValuesEvaluator {
+			return sistatement.NewUpstreamValuesEvaluator(dial, signer)
+		})
+}
+
+type inlineValuesEvaluator interface {
+	sistatement.ValuesEvaluator
+	Close() error
+}
+
+func buildAgentWithBuilders(
+	opts Options,
+	rf *redisFactory,
+	materializerBuilder func(*config.Config) (rewriter.Materializer, error),
+	evaluatorBuilder func(func(context.Context, string) (net.Conn, error), auth.Signer) inlineValuesEvaluator,
+) (*builtServer, error) {
 	cfg := opts.Config
+	if cfg.StorageIntegrity.Agent.InlineValues.Enabled {
+		if !cfg.StorageIntegrity.Agent.Enabled {
+			return nil, fmt.Errorf("storage_integrity.agent.inline_values requires storage_integrity.agent.enabled")
+		}
+		if !cfg.Materialize.Enabled {
+			return nil, fmt.Errorf("storage_integrity.agent.inline_values requires materialize.enabled")
+		}
+	}
 
 	var signer auth.Signer
 	if opts.Signer != nil {
@@ -1089,10 +1114,17 @@ func buildAgentWithMaterializerBuilder(
 	var completePlugins []plugin.QueryCompletePlugin
 	var closePlugins []plugin.ClosePlugin
 	var materializerClose func()
+	var evaluatorClose func()
 	buildSucceeded := false
 	defer func() {
-		if !buildSucceeded && materializerClose != nil {
+		if buildSucceeded {
+			return
+		}
+		if materializerClose != nil {
 			materializerClose()
+		}
+		if evaluatorClose != nil {
+			evaluatorClose()
 		}
 	}()
 	if cfg.Materialize.Enabled {
@@ -1111,6 +1143,17 @@ func buildAgentWithMaterializerBuilder(
 		log.Infow("agent materialize enabled", "engine", cfg.Materialize.Engine)
 	}
 	agentPlug := &agent.Plugin{Signer: signer, Observer: obs, Owner: cfg.Agent.Owner, IsDriver: cfg.Agent.Driver}
+
+	// Construct the session selector once, before constructing inline evaluation.
+	// Selection remains per session; a helper reconnects to that selected endpoint.
+	routingAccount := strings.ToLower(cfg.Agent.Owner)
+	if routingAccount == "" {
+		routingAccount = signer.Address()
+	}
+	dialer, err := buildAgentDialer(opts, rf, signer.Address(), routingAccount, obs)
+	if err != nil {
+		return nil, err
+	}
 
 	// The SI statement plugin runs after materialization so it signs the final
 	// SQL, and before agentPlug so both tokens bind the same body and the
@@ -1138,6 +1181,28 @@ func buildAgentWithMaterializerBuilder(
 		if err != nil {
 			return nil, fmt.Errorf("storage_integrity.agent: %w", err)
 		}
+		inlineCfg := cfg.StorageIntegrity.Agent.InlineValues
+		var evaluator sistatement.ValuesEvaluator
+		if inlineCfg.Enabled {
+			if dialer == nil {
+				return nil, fmt.Errorf("storage_integrity.agent.inline_values requires an upstream dialer")
+			}
+			up := evaluatorBuilder(func(ctx context.Context, address string) (net.Conn, error) {
+				// Never invoke the per-session selector here: the request carries
+				// the exact endpoint selected by this query's current session.
+				codec, err := dialRaw(ctx, address, cfg.DialTimeout.Duration)
+				if err != nil {
+					return nil, err
+				}
+				return codec.Conn().(net.Conn), nil
+			}, signer)
+			if up != nil {
+				evaluator = up
+				evaluatorClose = func() { _ = up.Close() }
+			}
+			log.Infow("storage_integrity agent inline VALUES enabled",
+				"evaluation_timeout", inlineCfg.EvaluationTimeout.Duration, "max_rows", inlineCfg.MaxRows)
+		}
 		siPlug, err := sistatement.New(sistatement.Options{
 			Signer:          stmtSigner,
 			Schemas:         schemas,
@@ -1145,6 +1210,13 @@ func buildAgentWithMaterializerBuilder(
 			KeeperShardID:   cfg.StorageIntegrity.Agent.KeeperShardID,
 			Seq:             seq,
 			MaxPayloadBytes: cfg.StorageIntegrity.Agent.MaxPayloadBytes,
+			Evaluator:       evaluator,
+			Observer:        obs,
+			InlineValues: sistatement.InlineValuesOptions{
+				Enabled:           inlineCfg.Enabled,
+				EvaluationTimeout: inlineCfg.EvaluationTimeout.Duration,
+				MaxRows:           inlineCfg.MaxRows,
+			},
 		})
 		if err != nil {
 			return nil, fmt.Errorf("storage_integrity.agent: %w", err)
@@ -1182,23 +1254,6 @@ func buildAgentWithMaterializerBuilder(
 		ClosePlugins:                    closePlugins,
 	}
 
-	// Two ways to choose an upstream:
-	//   1. Explicit cfg.Agent.Upstream — pinned target, no NetworkState
-	//      lookup. Useful for hermetic deployments and integration tests.
-	//   2. Auto-discovery via Selector — read NetworkState (yaml or
-	//      redis-backed) and pick a random permissioned peer per session.
-	//      Validation in pkg/config guarantees one of the two is set.
-	// Auto-discovery follows the on-behalf-of owner when configured. The
-	// agent plugin above still signs JWS tokens with the operator signer.
-	routingAccount := strings.ToLower(cfg.Agent.Owner)
-	if routingAccount == "" {
-		routingAccount = signer.Address()
-	}
-	dialer, err := buildAgentDialer(opts, rf, signer.Address(), routingAccount, obs)
-	if err != nil {
-		return nil, err
-	}
-
 	srv := proxy.NewServerWithObserver(chain, dialer, obs)
 	srv.ShutdownTimeout = cfg.ShutdownTimeout.Duration
 
@@ -1210,6 +1265,9 @@ func buildAgentWithMaterializerBuilder(
 		teardown: func() {
 			if materializerClose != nil {
 				materializerClose()
+			}
+			if evaluatorClose != nil {
+				evaluatorClose()
 			}
 		},
 	}

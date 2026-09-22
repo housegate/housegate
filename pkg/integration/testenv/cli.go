@@ -8,7 +8,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +27,35 @@ import (
 //
 // CI does the same in a workflow step. The binary itself is gitignored.
 var cliBinaryRelPath = filepath.Join("tests", "bin", "clickhouse")
+
+// CLIVersion reports the installed client's actual major/minor version. The
+// server image is pinned separately; an unpinned CLI installer says nothing
+// about whether the client uses the 26.3+ inline VALUES wire shape.
+func CLIVersion(t *testing.T) (major, minor int) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, ClickHouseCLI(t), "client", "--version").CombinedOutput()
+	if err != nil {
+		t.Skipf("clickhouse client --version failed: %v (%s)", err, strings.TrimSpace(string(out)))
+	}
+	major, minor, ok := parseCLIVersion(string(out))
+	if !ok {
+		t.Skipf("cannot parse clickhouse version %q", strings.TrimSpace(string(out)))
+	}
+	t.Logf("installed CLI: %s", strings.TrimSpace(string(out)))
+	return major, minor
+}
+
+func parseCLIVersion(output string) (major, minor int, ok bool) {
+	m := regexp.MustCompile(`\b(\d+)\.(\d+)\.`).FindStringSubmatch(output)
+	if m == nil {
+		return 0, 0, false
+	}
+	major, majorErr := strconv.Atoi(m[1])
+	minor, minorErr := strconv.Atoi(m[2])
+	return major, minor, majorErr == nil && minorErr == nil
+}
 
 // ClickHouseCLI returns the absolute path to the clickhouse fat binary
 // under tests/bin/. If the binary is not installed the test is
