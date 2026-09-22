@@ -524,3 +524,99 @@ func TestUpstreamValuesEvaluator_RejectsDeclaredShapeBeforeSecondDecode(t *testi
 		}
 	}
 }
+
+// writeEvaluationControlBlock emits either the schema-only leading Data block
+// or the protocol's zero-column, zero-row end-of-data marker.
+func writeEvaluationControlBlock(srv *chproto.Codec, rev int, columns proto.Input) error {
+	var buf proto.Buffer
+	buf.PutUVarInt(uint64(proto.ServerCodeData))
+	buf.PutString("")
+	if err := (proto.Block{Columns: len(columns)}).EncodeBlock(&buf, rev, columns); err != nil {
+		return err
+	}
+	return srv.WriteRawPacket(buf.Buf)
+}
+
+func TestUpstreamValuesEvaluator_CompleteSelectResponseReusesConnection(t *testing.T) {
+	for _, progress := range []bool{false, true} {
+		t.Run(fmt.Sprintf("progress=%v", progress), func(t *testing.T) {
+			ev, up, _ := newTestEvaluator(t, func(srv *chproto.Codec, rev int) error {
+				header := proto.Input{{Name: "id", Data: &proto.ColUInt64{}}, {Name: "ts", Data: &proto.ColDateTime{Location: time.UTC}}}
+				if err := writeEvaluationControlBlock(srv, rev, header); err != nil {
+					return err
+				}
+				for _, id := range []uint64{11, 22} {
+					if err := writeServerBlock(srv, rev, evalRow(id, false)); err != nil {
+						return err
+					}
+				}
+				if err := writeEvaluationControlBlock(srv, rev, nil); err != nil {
+					return err
+				}
+				if progress {
+					var buf proto.Buffer
+					buf.PutUVarInt(uint64(proto.ServerCodeProgress))
+					// At testRevision (54460): three read counters, two write
+					// counters, then elapsed nanoseconds.
+					for i := 0; i < 6; i++ {
+						buf.PutUVarInt(0)
+					}
+					if err := srv.WriteRawPacket(buf.Buf); err != nil {
+						return err
+					}
+				}
+				return writeEndOfStream(srv)
+			})
+			for query := 0; query < 2; query++ {
+				blocks, err := ev.Evaluate(context.Background(), evalRequest())
+				if err != nil {
+					t.Fatalf("evaluation %d: %v", query, err)
+				}
+				if len(blocks) != 2 {
+					t.Fatalf("evaluation %d returned %d blocks", query, len(blocks))
+				}
+				for i, want := range []uint64{11, 22} {
+					if got := blocks[i][0].Data.(*proto.ColUInt64).Row(0); got != want {
+						t.Fatalf("block %d id=%d want=%d", i, got, want)
+					}
+				}
+			}
+			if got := up.handshakes.Load(); got != 1 {
+				t.Fatalf("two complete evaluations used %d handshakes", got)
+			}
+			if ev.idleCount != 1 {
+				t.Fatalf("idle=%d", ev.idleCount)
+			}
+		})
+	}
+}
+
+func TestUpstreamValuesEvaluator_EmptyDataMarkerIsNotEndOfStream(t *testing.T) {
+	ev, _, _ := newTestEvaluator(t, func(srv *chproto.Codec, rev int) error {
+		if err := writeServerBlock(srv, rev, evalRow(1, false)); err != nil {
+			return err
+		}
+		if err := writeEvaluationControlBlock(srv, rev, nil); err != nil {
+			return err
+		}
+		return srv.WriteException(&chproto.Exception{Code: 36, Name: "BAD_ARGUMENTS", Message: "failed after data marker"})
+	})
+	if _, err := ev.Evaluate(context.Background(), evalRequest()); err == nil || !strings.Contains(err.Error(), "failed after data marker") {
+		t.Fatalf("err=%v", err)
+	}
+	if ev.idleCount != 0 {
+		t.Fatal("connection reused without successful EndOfStream")
+	}
+}
+
+func TestUpstreamValuesEvaluator_EmptyDataMarkerWithoutRowsIsRefused(t *testing.T) {
+	ev, _, _ := newTestEvaluator(t, func(srv *chproto.Codec, rev int) error {
+		if err := writeEvaluationControlBlock(srv, rev, nil); err != nil {
+			return err
+		}
+		return writeEndOfStream(srv)
+	})
+	if _, err := ev.Evaluate(context.Background(), evalRequest()); err == nil || !strings.Contains(err.Error(), "no rows") {
+		t.Fatalf("err=%v", err)
+	}
+}

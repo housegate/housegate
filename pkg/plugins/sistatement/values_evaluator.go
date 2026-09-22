@@ -295,6 +295,12 @@ func decodeServerDataColumns(raw []byte, revision int, req ValuesEvaluation) ([]
 	if err := block.DecodeBlock(pr, revision, boundedEvaluationResult{target: results.Auto(), columns: len(req.Columns), maxRows: req.MaxRows}); err != nil {
 		return nil, fmt.Errorf("decode evaluation block: %w", err)
 	}
+	// A zero-column, zero-row Data block ends the result data, not the
+	// query. The caller must keep reading until genuine EndOfStream. A
+	// schema-bearing zero-row block still goes through all checks below.
+	if block.End() {
+		return nil, nil
+	}
 	if len(results) != len(req.Columns) {
 		return nil, fmt.Errorf("evaluation block has %d columns, the INSERT lists %d", len(results), len(req.Columns))
 	}
