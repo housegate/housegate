@@ -22,7 +22,10 @@ go_library(
 
 go_test(
     name = "storageintegrity_test",
-    srcs = ["plugin_test.go"],
+    srcs = [
+        "nondeterminism_pin_test.go",
+        "plugin_test.go",
+    ],
     embed = [":storageintegrity"],
     deps = [
         "//pkg/auth",
