@@ -125,13 +125,15 @@ func decodeBlockInfoCompat(r *proto.Reader) (*blockInfoCompat, int, error) {
 				return nil, consumed, fmt.Errorf("BlockInfo out_of_order_buckets count: %w", err)
 			}
 			consumed += uvarintEncLen(count)
-			buckets := make([]int32, count)
+			// Grow only after successfully reading each entry. A hostile count
+			// must not allocate before the capture reader enforces its byte limit.
+			var buckets []int32
 			for i := uint64(0); i < count; i++ {
 				v, err := r.Int32()
 				if err != nil {
 					return nil, consumed, fmt.Errorf("BlockInfo out_of_order_buckets[%d]: %w", i, err)
 				}
-				buckets[i] = v
+				buckets = append(buckets, v)
 				consumed += 4
 			}
 			info.OutOfOrderBuckets = buckets

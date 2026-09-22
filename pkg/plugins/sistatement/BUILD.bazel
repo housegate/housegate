@@ -4,10 +4,12 @@ go_library(
     name = "sistatement",
     srcs = [
         "doc.go",
+        "inline_values.go",
         "observer.go",
         "plugin.go",
         "seq.go",
         "sqlparse.go",
+        "values_evaluator.go",
     ],
     importpath = "github.com/housegate/housegate/pkg/plugins/sistatement",
     visibility = ["//visibility:public"],
@@ -19,8 +21,10 @@ go_library(
         "//pkg/plugin",
         "//pkg/registry",
         "//pkg/replay",
+        "//pkg/replay/nativepayload",
         "//pkg/replay/payloadexec",
         "//pkg/schemaregistry",
+        "//pkg/sqlident",
         "//pkg/storageintegrity",
         "@com_github_clickhouse_ch_go//proto",
     ],
@@ -29,9 +33,11 @@ go_library(
 go_test(
     name = "sistatement_test",
     srcs = [
+        "inline_values_test.go",
         "plugin_test.go",
         "seq_test.go",
         "sqlparse_test.go",
+        "values_evaluator_test.go",
     ],
     embed = [":sistatement"],
     deps = [
