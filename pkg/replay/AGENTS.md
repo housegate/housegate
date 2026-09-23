@@ -14,6 +14,7 @@ The wire form is mirrored in `arbiter-proto`'s `proto/replay.proto`. That mirror
 - Root digests are domain-versioned (`safe-snapshot-data-v2`); changing what enters a root requires a new domain string, never a silent redefinition.
 - A source-root mismatch is **signed, not errored** — it is non-repudiable challenge evidence. Only a pre-receipt failure is a local refusal to attest.
 - `Verifier` orchestration has no proxy plugins or embedded ClickHouse daemon; execution, snapshot/payload reads, signing, and schema lookup go through its injected `Executor`, `SnapshotStore`, `PayloadStore`, `Signer`, and `SchemaHashSource`. `payloadexec.Executor` is the `replay.Executor` implementation. `pkg/replay/chexec` provides a ClickHouse-backed `payloadexec.Materializer` and `ScanParts`, both through a caller-injected `clickhouse.Conn`; the materializer is wired into `payloadexec.Executor` through `NewWithMaterializer`.
+- A `ReplayJob` may carry a `TableSetTransition` (a zero-statement dynamic-SI transition block: retires leave the state root, adds enter it empty, `NewSchemaRoot` is `payloadexec.SchemaRootFromHashes` over the resulting set) and `TableSchemas` for chain-origin tables its statements target. Only `payloadexec.NewDynamic` executors apply them, resolving schemas per job with `ResolveJobSchemas`; `New` / `NewWithMaterializer` stay static and refuse both. A verifier pairs `NewDynamic` with `payloadexec.SchemaHashes`, the `replay.JobSchemaHashSource` that resolves statement schema hashes the same way.
 
 ## COMMANDS
 ```bash

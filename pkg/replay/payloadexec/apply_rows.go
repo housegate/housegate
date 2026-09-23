@@ -25,28 +25,37 @@ type StatementRows struct {
 
 // validateAppendInputs checks the complete legacy projection, not query column
 // eligibility or the authenticated schema object (which are caller concerns).
-func (e *Executor) validateAppendInputs(prev replay.SafeSnapshotManifest, batches []StatementRows) error {
+// A static executor requires prev to hold exactly its configured tables; a
+// dynamic one (NewDynamic) accepts any table set whose SchemaRoot matches the
+// hashes it commits to, and still requires every table whose schema resolves
+// to match its committed hash.
+func (e *Executor) validateAppendInputs(prev replay.SafeSnapshotManifest, batches []StatementRows, schemas map[string]TableSchema) error {
 	if err := prev.Validate(); err != nil {
 		return fmt.Errorf("prev snapshot: %w", err)
 	}
-	if len(prev.Tables) != len(e.tables) {
+	if !e.dynamic && len(prev.Tables) != len(e.tables) {
 		return fmt.Errorf("prev snapshot table set does not match configured schemas")
 	}
 	seen := make(map[string]bool, len(prev.Tables))
-	schemas := make([]TableSchema, 0, len(prev.Tables))
+	hashes := make(map[string]string, len(prev.Tables))
 	for _, tm := range prev.Tables {
 		if tm.TableID == "" || seen[tm.TableID] {
 			return fmt.Errorf("empty or duplicate prev snapshot table %q", tm.TableID)
 		}
 		seen[tm.TableID] = true
-		schema, ok := e.tables[tm.TableID]
-		if !ok || schema.TableID != tm.TableID {
-			return fmt.Errorf("prev snapshot table %q has no configured schema", tm.TableID)
+		schema, ok := schemas[tm.TableID]
+		switch {
+		case ok || !e.dynamic:
+			if !ok || schema.TableID != tm.TableID {
+				return fmt.Errorf("prev snapshot table %q has no configured schema", tm.TableID)
+			}
+			if tm.SchemaHash != tableSchemaHash(e.NetworkID, schema) {
+				return fmt.Errorf("table %q schema_hash mismatch", tm.TableID)
+			}
+		case tm.SchemaHash == "":
+			return fmt.Errorf("prev snapshot table %q has no schema_hash", tm.TableID)
 		}
-		if tm.SchemaHash != tableSchemaHash(e.NetworkID, schema) {
-			return fmt.Errorf("table %q schema_hash mismatch", tm.TableID)
-		}
-		schemas = append(schemas, schema)
+		hashes[tm.TableID] = tm.SchemaHash
 		partitions := map[string]bool{}
 		for _, pc := range tm.PartitionRoots {
 			if pc.TableID != tm.TableID || pc.PartitionID == "" || partitions[pc.PartitionID] {
@@ -62,11 +71,11 @@ func (e *Executor) validateAppendInputs(prev replay.SafeSnapshotManifest, batche
 			parts[p.PartName] = true
 		}
 	}
-	if prev.SchemaRoot != schemaRoot(e.NetworkID, schemas) {
+	if prev.SchemaRoot != schemaRootFromHashes(hashes) {
 		return fmt.Errorf("complete schema_root mismatch")
 	}
 	for i, b := range batches {
-		if _, ok := e.tables[b.TargetTableID]; !ok {
+		if _, ok := schemas[b.TargetTableID]; !ok {
 			return fmt.Errorf("statement %d (%s): unknown target table %q", i, b.StatementID, b.TargetTableID)
 		}
 		if nilRowSource(b.Rows) {
@@ -179,8 +188,20 @@ func (e *Executor) ApplyRows(ctx context.Context, prev replay.SafeSnapshotManife
 	if err := validateBlockStatements(batches); err != nil {
 		return replay.SafeSnapshotManifest{}, replay.ExecutionResult{}, err
 	}
-
-	if err := e.validateAppendInputs(prev, batches); err != nil {
+	transition := job.TableSetTransition
+	if transition != nil {
+		if len(batches) != 0 {
+			return replay.SafeSnapshotManifest{}, replay.ExecutionResult{}, fmt.Errorf("table_set_transition job must carry no statements, got %d", len(batches))
+		}
+		if err := transition.Validate(); err != nil {
+			return replay.SafeSnapshotManifest{}, replay.ExecutionResult{}, err
+		}
+	}
+	schemas, err := e.schemasForJob(job)
+	if err != nil {
+		return replay.SafeSnapshotManifest{}, replay.ExecutionResult{}, err
+	}
+	if err := e.validateAppendInputs(prev, batches, schemas); err != nil {
 		return replay.SafeSnapshotManifest{}, replay.ExecutionResult{}, err
 	}
 
@@ -198,12 +219,18 @@ func (e *Executor) ApplyRows(ctx context.Context, prev replay.SafeSnapshotManife
 		}
 		parts[tm.TableID] = byPartition
 	}
+	nextSchemaRoot := prev.SchemaRoot
+	if transition != nil {
+		if nextSchemaRoot, err = e.applyTableSetTransition(*transition, schemas, parts, schemaHashes); err != nil {
+			return replay.SafeSnapshotManifest{}, replay.ExecutionResult{}, err
+		}
+	}
 
 	touchedSet := map[tablePartition]struct{}{}
 	var affected []replay.PartManifestEntry
 
 	for i, st := range batches {
-		newParts, err := buildParts(ctx, e.tables[st.TargetTableID], job.BlockSeq, st.StatementSeq, st.Rows)
+		newParts, err := buildParts(ctx, schemas[st.TargetTableID], job.BlockSeq, st.StatementSeq, st.Rows)
 		if err != nil {
 			return replay.SafeSnapshotManifest{}, replay.ExecutionResult{}, fmt.Errorf("statement %d (%s): %w", i, st.StatementID, err)
 		}
@@ -250,7 +277,7 @@ func (e *Executor) ApplyRows(ctx context.Context, prev replay.SafeSnapshotManife
 		ParentSnapshotID:  prev.SnapshotID,
 		SafeBlockSeq:      job.BlockSeq,
 		SchemaSnapshotID:  prev.SchemaSnapshotID,
-		SchemaRoot:        prev.SchemaRoot,
+		SchemaRoot:        nextSchemaRoot,
 		ExecutorProfileID: prev.ExecutorProfileID,
 		Tables:            tables,
 	}).Seal()
@@ -273,6 +300,34 @@ func (e *Executor) ApplyRows(ctx context.Context, prev replay.SafeSnapshotManife
 		return replay.SafeSnapshotManifest{}, replay.ExecutionResult{}, err
 	}
 	return next, result, nil
+}
+
+// applyTableSetTransition removes retired tables from, and adds empty added
+// tables to, the ledger being rebuilt, and returns the resulting schema root.
+// It refuses a transition that does not fit prev (a retire of an absent table,
+// an add of a present one) or whose declared new_schema_root differs from the
+// root this executor derives: either means the job does not describe the
+// block the arbiter sealed, which is a local refusal to attest.
+func (e *Executor) applyTableSetTransition(t replay.ReplayTableSetTransition, schemas map[string]TableSchema, parts map[string]map[string][]replay.PartManifestEntry, schemaHashes map[string]string) (string, error) {
+	for _, id := range t.Retires {
+		if parts[id] == nil {
+			return "", fmt.Errorf("table_set_transition retires table %q, which is not in the previous safe snapshot", id)
+		}
+		delete(parts, id)
+		delete(schemaHashes, id)
+	}
+	for _, add := range t.Adds {
+		if parts[add.TableID] != nil {
+			return "", fmt.Errorf("table_set_transition adds table %q, which is already in the previous safe snapshot", add.TableID)
+		}
+		parts[add.TableID] = map[string][]replay.PartManifestEntry{}
+		schemaHashes[add.TableID] = tableSchemaHash(e.NetworkID, schemas[add.TableID])
+	}
+	root := schemaRootFromHashes(schemaHashes)
+	if root != t.NewSchemaRoot {
+		return "", fmt.Errorf("table_set_transition new_schema_root mismatch: job %s, derived %s", t.NewSchemaRoot, root)
+	}
+	return root, nil
 }
 
 // validateBlockStatements rejects duplicate statement_id and non-strictly-
