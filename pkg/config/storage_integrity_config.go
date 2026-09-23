@@ -376,12 +376,7 @@ func (c StorageIntegrityConfig) validateAgent(root *Config) error {
 		// Spec D2: the lane is fail-closed on materialization, so a disabled
 		// materialize block would reject every inline statement at query time
 		// instead of at startup.
-		if !root.Materialize.Enabled {
-			errs = append(errs, errors.New("storage_integrity.agent.inline_values requires materialize.enabled"))
-		}
-		if !a.Enabled {
-			errs = append(errs, errors.New("storage_integrity.agent.inline_values requires storage_integrity.agent.enabled"))
-		}
+		errs = append(errs, a.InlineValuesPrerequisiteErrors(root.Materialize.Enabled)...)
 		if iv.EvaluationTimeout.Duration < time.Second {
 			errs = append(errs, fmt.Errorf("storage_integrity.agent.inline_values.evaluation_timeout must be at least 1s, got %s", iv.EvaluationTimeout.Duration))
 		}
@@ -420,4 +415,22 @@ func (c StorageIntegrityConfig) validateAgent(root *Config) error {
 		return fmt.Errorf("storage_integrity.agent: %w", joined)
 	}
 	return nil
+}
+
+// InlineValuesPrerequisiteErrors returns the startup rules the signed inline
+// VALUES lane shares between Config.Validate and buildAgent: the lane needs
+// the agent statement lane and materialization (spec 2026-09-23 D2, D10).
+// It returns nil when the lane is disabled.
+func (a StorageIntegrityAgentConfig) InlineValuesPrerequisiteErrors(materializeEnabled bool) []error {
+	if !a.InlineValues.Enabled {
+		return nil
+	}
+	var errs []error
+	if !materializeEnabled {
+		errs = append(errs, errors.New("storage_integrity.agent.inline_values requires materialize.enabled"))
+	}
+	if !a.Enabled {
+		errs = append(errs, errors.New("storage_integrity.agent.inline_values requires storage_integrity.agent.enabled"))
+	}
+	return errs
 }

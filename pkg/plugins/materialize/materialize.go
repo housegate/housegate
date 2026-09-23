@@ -47,7 +47,7 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 		if p.Observer != nil {
 			p.Observer.MaterializeCallError()
 		}
-		recordOutcome(qctx, "error:"+err.Error())
+		recordOutcome(qctx, plugin.MaterializeOutcomeErrorPrefix+err.Error())
 		logger.Warnw("materialize: call failed, forwarding original SQL", "err", err)
 		return nil // fail-open
 	}
@@ -55,7 +55,7 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 		if p.Observer != nil {
 			p.Observer.MaterializeNonSuccess(out.Code.String())
 		}
-		recordOutcome(qctx, "error:"+out.Code.String()+": "+out.Message)
+		recordOutcome(qctx, plugin.MaterializeOutcomeErrorPrefix+out.Code.String()+": "+out.Message)
 		logger.Warnw("materialize: engine non-success, forwarding original SQL",
 			"code", out.Code.String(), "message", out.Message)
 		return nil // fail-open
@@ -65,14 +65,14 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 		if p.Observer != nil {
 			p.Observer.MaterializeApplied()
 		}
-		recordOutcome(qctx, "applied")
+		recordOutcome(qctx, plugin.MaterializeOutcomeApplied)
 		logger.Debugw("materialize: applied", "sql", out.SQL)
 		return nil
 	}
 	if p.Observer != nil {
 		p.Observer.MaterializeNoop()
 	}
-	recordOutcome(qctx, "noop")
+	recordOutcome(qctx, plugin.MaterializeOutcomeNoop)
 	return nil
 }
 
