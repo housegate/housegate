@@ -35,6 +35,15 @@ type SchemaHashSource interface {
 	TableSchemaHash(tableID string) (string, bool)
 }
 
+// JobSchemaHashSource is a SchemaHashSource whose table set follows the
+// replayed chain: ForJob returns the source to use for one job, including the
+// schemas the job itself carries (ReplayJob.TableSchemas). An error is a local
+// refusal to attest.
+type JobSchemaHashSource interface {
+	SchemaHashSource
+	ForJob(job ReplayJob) (SchemaHashSource, error)
+}
+
 // GenesisSnapshotSource derives the empty pre-genesis safe snapshot from an
 // executor's own pinned table set. A network that has promoted nothing yet has
 // no manifest to chain from, so its first replayed block declares no previous
@@ -97,8 +106,14 @@ func (v *Verifier) Verify(ctx context.Context, job ReplayJob) (ReplayAttestation
 	if err != nil {
 		return ReplayAttestation{}, err
 	}
+	hashes := v.SchemaHashes
+	if scoped, ok := hashes.(JobSchemaHashSource); ok {
+		if hashes, err = scoped.ForJob(job); err != nil {
+			return ReplayAttestation{}, fmt.Errorf("resolve job %d schemas: %w", job.BlockSeq, err)
+		}
+	}
 	for i, st := range job.Statements {
-		local, ok := v.SchemaHashes.TableSchemaHash(st.TargetTableID)
+		local, ok := hashes.TableSchemaHash(st.TargetTableID)
 		if !ok {
 			return ReplayAttestation{}, fmt.Errorf("statement %d: no local schema for table %q", i, st.TargetTableID)
 		}
@@ -301,11 +316,20 @@ func validateJobShape(job ReplayJob) error {
 	if job.ExecutorProfileID == "" {
 		return fmt.Errorf("executor_profile_id is required")
 	}
+	// A table-set transition block has no statements and so no source claim:
+	// its expected root is derived by the arbiter from the pinned base and the
+	// transition alone.
+	if job.TableSetTransition != nil {
+		return validateTransitionJobShape(job)
+	}
 	if job.SourceClaimRoot == "" {
 		return fmt.Errorf("source_claim_root is required")
 	}
 	if len(job.Statements) == 0 {
 		return fmt.Errorf("at least one statement is required")
+	}
+	if err := ValidateReplayTableSchemas("table_schemas", job.TableSchemas); err != nil {
+		return err
 	}
 	var lastSeq uint64
 	seenIDs := map[string]struct{}{}
@@ -362,6 +386,18 @@ func validateJobShape(job ReplayJob) error {
 		}
 	}
 	return nil
+}
+
+// validateTransitionJobShape accepts a transition job: no statements, no
+// carried table schemas (the adds carry their own), and a canonical transition.
+func validateTransitionJobShape(job ReplayJob) error {
+	if len(job.Statements) != 0 {
+		return fmt.Errorf("table_set_transition job must carry no statements, got %d", len(job.Statements))
+	}
+	if len(job.TableSchemas) != 0 {
+		return fmt.Errorf("table_set_transition job must carry no table_schemas")
+	}
+	return job.TableSetTransition.Validate()
 }
 
 func (v *Verifier) prepareStatements(ctx context.Context, statements []Statement) ([]PreparedStatement, error) {

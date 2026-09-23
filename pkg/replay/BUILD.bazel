@@ -28,6 +28,7 @@ go_test(
         "snapshot_query_hash_test.go",
         "snapshot_query_schema_test.go",
         "snapshot_query_transition_test.go",
+        "table_set_transition_test.go",
         "types_test.go",
         "verifier_test.go",
     ],
