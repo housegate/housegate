@@ -294,6 +294,35 @@ func TestStorageIntegrity_InlineValuesSignedEndToEnd(t *testing.T) {
 	t.Logf("independent CLI byte parity and in-process replay root: %s", root)
 }
 
+// TestStorageIntegrity_InlineValuesFormatValuesTextLands covers the body
+// rewriter-grpc's materialization produces: `FORMAT Values(<rows>)` with the
+// rows in the query text. It must take the inline lane; the deferred lane
+// would wait for client data that never comes, so a regression shows up as the
+// deadline below instead of a hang.
+func TestStorageIntegrity_InlineValuesFormatValuesTextLands(t *testing.T) {
+	agent, c := startInlineValuesPair(t, "itest-inline-format-values", []lthash.Column{{Name: "id", Type: "UInt64"}, {Name: "region", Type: "String"}})
+	conn := openConnNoCompression(t, agent.Addr)
+	// A deadline context would make clickhouse-go add max_execution_time,
+	// which the SI lane refuses; bound the call from outside instead.
+	sql := "INSERT INTO " + c.schema.TableID + " (id, region) FORMAT Values(7, 'eu'), (1 + 7, upper('us'))"
+	done := make(chan error, 1)
+	go func() { done <- conn.Exec(context.Background(), sql) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("inline FORMAT Values INSERT: %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("inline FORMAT Values INSERT did not complete within 30s: the statement is waiting for client data")
+	}
+	adm := requireInlineAdmissions(t, c, 1)[0]
+	if want := "INSERT INTO " + c.schema.TableID + " (`id`, `region`) FORMAT Native"; adm.SQL != want {
+		t.Fatalf("signed SQL=%q, want %q", adm.SQL, want)
+	}
+	verifyInlineSignature(t, "itest-inline-format-values", c.schema, adm)
+	requireInlineStoredRows(t, c, []inlineStoredRow{{7, "eu"}, {8, "US"}})
+}
+
 func TestStorageIntegrity_InlineValuesClosureRefused(t *testing.T) {
 	agent, c := startInlineValuesPair(t, "itest-inline-closure", []lthash.Column{{Name: "id", Type: "UInt64"}, {Name: "region", Type: "String"}})
 	conn := openConnNoCompression(t, agent.Addr)

@@ -82,6 +82,12 @@ func TestInsertPayloadEncodingRejectsInlineAndUnsupportedFormats(t *testing.T) {
 		{"INSERT INTO events FORMAT Parquet", "FORMAT PARQUET is not supported"},
 		{"INSERT INTO events FORMAT RowBinary", "FORMAT ROWBINARY is not supported"},
 		{"INSERT INTO events FORMAT JSON", "FORMAT JSON is not supported"},
+		// Rows in the query text after the format name stream no payload; the
+		// deferred lane would wait for data the client never sends.
+		{"INSERT INTO events FORMAT Values (1), (2)", "inline data after FORMAT VALUES is not supported"},
+		{"INSERT INTO events (x) FORMAT Values(40 + 2)", "inline data after FORMAT VALUES is not supported"},
+		{"INSERT INTO events FORMAT CSV 1,2", "inline data after FORMAT CSV is not supported"},
+		{"INSERT INTO events FORMAT Native SETTINGS async_insert = 1", "inline data after FORMAT NATIVE is not supported"},
 	} {
 		t.Run(tc.sql, func(t *testing.T) {
 			_, err := InsertPayloadEncoding(tc.sql)
@@ -206,5 +212,25 @@ func TestResolveInsertTargetPreservesExactQuotedSessionDatabase(t *testing.T) {
 	}
 	if got, want := target.CanonicalID(), "` shop `.orders"; got != want {
 		t.Fatalf("CanonicalID = %q, want %q", got, want)
+	}
+}
+
+func TestInsertFormatHasInlineData(t *testing.T) {
+	for sql, want := range map[string]bool{
+		"INSERT INTO events FORMAT Values":                false,
+		"INSERT INTO events FORMAT Values ;":              false,
+		"INSERT INTO events FORMAT Values\n":              false,
+		"INSERT INTO events FORMAT Values (1)":            true,
+		"INSERT INTO events (x) FORMAT Values(40 + 2)":    true,
+		"INSERT INTO events FORMAT CSV 1,2":               true,
+		"INSERT INTO events VALUES (1)":                   false,
+		"INSERT INTO events FORMAT":                       false,
+		"INSERT INTO events SELECT 1 FORMAT Values":       false,
+		"SELECT 1 FORMAT Values":                          false,
+		"INSERT INTO events FORMAT Native SETTINGS a = 1": true,
+	} {
+		if got := InsertFormatHasInlineData(sql); got != want {
+			t.Errorf("InsertFormatHasInlineData(%q) = %v, want %v", sql, got, want)
+		}
 	}
 }

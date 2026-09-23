@@ -1328,3 +1328,25 @@ func TestRelay_SynthesizedInsert_JoinsStartedCancellationCallback(t *testing.T) 
 		t.Fatal("lane did not return after callback completed")
 	}
 }
+
+// TestQueryMayStreamClientDataTreatsInlineFormatDataAsNoPayload pins the relay
+// half of the FORMAT-with-inline-data fix: rows after the format name ride in
+// the query text, so the relay must not expect a ClientData payload for them.
+func TestQueryMayStreamClientDataTreatsInlineFormatDataAsNoPayload(t *testing.T) {
+	for sql, want := range map[string]bool{
+		"INSERT INTO t FORMAT Native":             true,
+		"INSERT INTO t FORMAT Values":             true,
+		"INSERT INTO t FORMAT Values ;":           true,
+		"INSERT INTO t":                           true,
+		"INSERT INTO t VALUES (1)":                false,
+		"INSERT INTO t FORMAT Values (1)":         false,
+		"INSERT INTO t (x) FORMAT Values(40 + 2)": false,
+		"INSERT INTO t FORMAT CSV 1,2":            false,
+		"INSERT INTO t SELECT 1":                  false,
+	} {
+		qctx := &plugin.QueryContext{Query: &chproto.Query{Body: sql}}
+		if got := queryMayStreamClientData(qctx); got != want {
+			t.Errorf("queryMayStreamClientData(%q) = %v, want %v", sql, got, want)
+		}
+	}
+}

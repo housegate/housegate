@@ -1567,7 +1567,7 @@ func queryMayStreamClientData(qctx *plugin.QueryContext) bool {
 		return false
 	}
 	switch source {
-	case "VALUES", "SELECT", "WITH":
+	case "VALUES", "SELECT", "WITH", "FORMAT_INLINE":
 		return false
 	default:
 		return true
@@ -1599,7 +1599,17 @@ func insertSourceKeyword(sql string) (string, bool) {
 				continue
 			}
 			switch tok.text {
-			case "FORMAT", "VALUES", "SELECT", "WITH":
+			case "FORMAT":
+				// `FORMAT <name> <data>` carries its rows in the query
+				// text; such a query streams no ClientData.
+				if nameTok, nameEnd, ok := nextSQLToken(sql, pos); ok && nameTok.kind == sqlTokenWord {
+					rest := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(sql[nameEnd:]), ";"))
+					if rest != "" {
+						return "FORMAT_INLINE", true
+					}
+				}
+				return tok.text, true
+			case "VALUES", "SELECT", "WITH":
 				return tok.text, true
 			}
 		}

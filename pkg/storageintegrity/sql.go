@@ -67,6 +67,12 @@ func InsertPayloadEncoding(sql string) (string, error) {
 	case "":
 		return PayloadEncodingClickHouseNativeData, nil
 	case "FORMAT":
+		if InsertFormatHasInlineData(sql) {
+			// The rows ride in the query text after the format name, so no
+			// ClientData payload follows. rewriter-grpc's materialization
+			// renders an inline VALUES statement this way.
+			return "", fmt.Errorf("requires streaming Native INSERT input; inline data after FORMAT %s is not supported", format)
+		}
 		if clientParsedInsertFormats[format] {
 			return PayloadEncodingClickHouseNativeData, nil
 		}
@@ -97,6 +103,20 @@ func RequireStreamingNativeInsert(sql string) error {
 		return fmt.Errorf("requires streaming Native INSERT input; payload encoding %s is not supported", encoding)
 	}
 	return nil
+}
+
+// InsertFormatHasInlineData reports whether an INSERT's FORMAT clause is
+// followed by data in the query text itself (`INSERT ... FORMAT Values (1)`),
+// ignoring whitespace and one trailing ';'. Such a statement carries no
+// ClientData payload: a client that sends the full text streams nothing.
+func InsertFormatHasInlineData(sql string) bool {
+	source, format, end, ok := insertDataSourceAt(sql)
+	if !ok || source != "FORMAT" || format == "" {
+		return false
+	}
+	rest := strings.TrimSpace(sql[end:])
+	rest = strings.TrimSpace(strings.TrimSuffix(rest, ";"))
+	return rest != ""
 }
 
 func insertDataSource(sql string) (source, format string, ok bool) {

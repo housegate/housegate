@@ -118,6 +118,22 @@ source:
 	if strings.EqualFold(word, "VALUES") {
 		return cols, s.pos, nil
 	}
+	if strings.EqualFold(word, "FORMAT") && InsertFormatHasInlineData(sql) {
+		// `FORMAT Values <rows>` means the same as `VALUES <rows>`; it is how
+		// rewriter-grpc's materialization re-renders an inline VALUES
+		// statement. Other formats with inline data are not supported.
+		if err := s.skip(); err != nil {
+			return nil, 0, fmt.Errorf("%s%w", InlineValuesErrorPrefix, err)
+		}
+		format, ok, err := s.bareWord()
+		if err != nil {
+			return nil, 0, fmt.Errorf("%s%w", InlineValuesErrorPrefix, err)
+		}
+		if ok && strings.EqualFold(format, "Values") {
+			return cols, s.pos, nil
+		}
+		return nil, 0, inlinePrefixErr(fmt.Sprintf("inline data after FORMAT %s is not supported; only FORMAT Values may carry rows in the query text", format), s.pos-len(format))
+	}
 	if isInsertPayloadSourceKeyword(word) {
 		return nil, 0, ErrNotInlineValues
 	}
