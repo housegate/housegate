@@ -162,6 +162,80 @@ type ReplayJob struct {
 	ExecutorProfileID  string      `json:"executor_profile_id"`
 	SourceClaimRoot    string      `json:"source_claim_root"`
 	Statements         []Statement `json:"statements"`
+	// TableSetTransition is set only for a table-set transition block (dynamic
+	// SI table set, spec D7). Such a job carries no statements and no
+	// source_claim_root. JSON tags are frozen against arbiter-proto
+	// replay.proto ReplayJob fields 8-9; omitempty keeps every job without a
+	// transition byte-identical to its pre-transition encoding.
+	TableSetTransition *ReplayTableSetTransition `json:"table_set_transition,omitempty"`
+	// TableSchemas carries the schemas of the chain-origin tables the job's
+	// statements target, so a verifier needs no registry access. Sorted by
+	// table id; tables configured locally (genesis) are not repeated here.
+	TableSchemas []ReplayTableSchema `json:"table_schemas,omitempty"`
+}
+
+// ReplayTableSchema is one table's declared schema as the arbiter registry
+// committed it: the payloadexec.TableSchema JSON, verbatim. The verifier
+// decodes it and recomputes the schema hash itself; it never trusts a hash
+// carried next to the JSON.
+type ReplayTableSchema struct {
+	TableID    string `json:"table_id"`
+	SchemaJSON string `json:"schema_json"`
+}
+
+// ReplayTableSetTransition is the table-set change of a zero-statement
+// transition block: Retires leave the state root, Adds enter it with no data,
+// and NewSchemaRoot is the schema root of the resulting table set. Adds are
+// sorted by table id, Retires ascending, and the two are disjoint.
+type ReplayTableSetTransition struct {
+	Adds          []ReplayTableSchema `json:"adds,omitempty"`
+	Retires       []string            `json:"retires,omitempty"`
+	NewSchemaRoot string              `json:"new_schema_root"`
+}
+
+// Validate checks the transition's canonical shape. It does not decode the
+// added schemas or check them against a base; the executor does that.
+func (t ReplayTableSetTransition) Validate() error {
+	if t.NewSchemaRoot == "" {
+		return fmt.Errorf("table_set_transition.new_schema_root is required")
+	}
+	if len(t.Adds) == 0 && len(t.Retires) == 0 {
+		return fmt.Errorf("table_set_transition must add or retire at least one table")
+	}
+	if err := ValidateReplayTableSchemas("table_set_transition.adds", t.Adds); err != nil {
+		return err
+	}
+	added := make(map[string]bool, len(t.Adds))
+	for _, add := range t.Adds {
+		added[add.TableID] = true
+	}
+	previous := ""
+	for i, id := range t.Retires {
+		if id == "" || id <= previous {
+			return fmt.Errorf("table_set_transition.retires[%d]: table ids must be sorted, unique and non-empty", i)
+		}
+		if added[id] {
+			return fmt.Errorf("table_set_transition: table %q is both added and retired", id)
+		}
+		previous = id
+	}
+	return nil
+}
+
+// ValidateReplayTableSchemas checks that schemas are sorted by table id,
+// unique, and each carries its JSON.
+func ValidateReplayTableSchemas(field string, schemas []ReplayTableSchema) error {
+	previous := ""
+	for i, s := range schemas {
+		if s.TableID == "" || s.TableID <= previous {
+			return fmt.Errorf("%s[%d]: table ids must be sorted, unique and non-empty", field, i)
+		}
+		if s.SchemaJSON == "" {
+			return fmt.Errorf("%s[%d] (%s): schema_json is required", field, i, s.TableID)
+		}
+		previous = s.TableID
+	}
+	return nil
 }
 
 // Statement is the replay-relevant projection of a signed statement envelope.

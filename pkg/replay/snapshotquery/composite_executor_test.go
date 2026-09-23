@@ -177,3 +177,31 @@ func TestCompositeOwnsNestedQuery(t *testing.T) {
 		t.Fatal("nested query input aliased")
 	}
 }
+
+func TestCompositeOwnsTableSetJobFields(t *testing.T) {
+	fresh := func() replay.ExecutionRequest {
+		return replay.ExecutionRequest{Job: replay.ReplayJob{
+			BlockSeq:           5,
+			TableSchemas:       []replay.ReplayTableSchema{{TableID: "db.a", SchemaJSON: "a"}},
+			TableSetTransition: &replay.ReplayTableSetTransition{Adds: []replay.ReplayTableSchema{{TableID: "db.b", SchemaJSON: "b"}}, Retires: []string{"db.c"}, NewSchemaRoot: "root"},
+		}}
+	}
+	req, original := fresh(), fresh()
+	ex := consumerExecutor(func(_ context.Context, r replay.ExecutionRequest) (replay.ExecutionResult, error) {
+		if !reflect.DeepEqual(r, original) {
+			t.Fatal("table-set job fields changed in transit")
+		}
+		r.Job.TableSchemas[0].SchemaJSON = "changed"
+		r.Job.TableSetTransition.Adds[0].SchemaJSON = "changed"
+		r.Job.TableSetTransition.Retires[0] = "changed"
+		r.Job.TableSetTransition.NewSchemaRoot = "changed"
+		return replay.ExecutionResult{}, nil
+	})
+	d, _ := NewCompositeExecutor(ex, nil)
+	if _, err := d.Replay(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(req, original) {
+		t.Fatal("caller table-set job fields aliased")
+	}
+}
