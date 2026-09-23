@@ -9,8 +9,8 @@ import (
 
 func TestParseInlineValuesInsert(t *testing.T) {
 	cases := []struct {
-		name, sql, wantDB, wantRows, wantErr string // wantErr "" = accept, "!" = ErrNotInlineValues
-		wantCols                             []string
+		name, sql, wantDB, wantTable, wantRows, wantErr string // wantErr "" = accept, "!" = ErrNotInlineValues; wantTable "" = "t"
+		wantCols                                        []string
 	}{
 		{name: "no column list", sql: "INSERT INTO db.t VALUES (1), (2)", wantDB: "db", wantRows: "(1), (2)"},
 		{name: "column list", sql: "INSERT INTO db.t (a, b) VALUES (1, 'x')", wantDB: "db", wantRows: "(1, 'x')", wantCols: []string{"a", "b"}},
@@ -26,7 +26,14 @@ func TestParseInlineValuesInsert(t *testing.T) {
 		{name: "25.x truncated no space", sql: "INSERT INTO db.t VALUES", wantErr: "!"},
 		{name: "format native", sql: "INSERT INTO db.t FORMAT Native", wantErr: "!"},
 		{name: "format values", sql: "INSERT INTO db.t FORMAT Values", wantErr: "!"},
-		{name: "format with trailing settings", sql: "INSERT INTO db.t FORMAT Native SETTINGS async_insert = 1", wantErr: "!"},
+		// ClickHouse reads everything after the format name as data, SETTINGS included.
+		{name: "format with trailing settings is inline data", sql: "INSERT INTO db.t FORMAT Native SETTINGS async_insert = 1", wantErr: "inline data after FORMAT Native"},
+		// rewriter-grpc's materialization re-renders VALUES this way.
+		{name: "materialized format values", sql: "INSERT INTO devnet101.swap_new2 (value) FORMAT Values(40 + 2), (toInt64(toUnixTimestamp(toDateTime(1790126697))))", wantDB: "devnet101", wantTable: "swap_new2", wantRows: "(40 + 2), (toInt64(toUnixTimestamp(toDateTime(1790126697))))", wantCols: []string{"value"}},
+		{name: "format values with space", sql: "INSERT INTO db.t FORMAT Values (1), (2);", wantDB: "db", wantRows: "(1), (2)"},
+		{name: "format values lowercase", sql: "insert into db.t format values (1)", wantDB: "db", wantRows: "(1)"},
+		{name: "format values trailing semicolon only", sql: "INSERT INTO db.t FORMAT Values ;", wantErr: "!"},
+		{name: "other format with inline data", sql: "INSERT INTO db.t FORMAT CSV 1,2", wantErr: "inline data after FORMAT CSV"},
 		{name: "format with leading settings", sql: "INSERT INTO db.t SETTINGS async_insert = 1 FORMAT Native", wantErr: "!"},
 		{name: "insert select", sql: "INSERT INTO db.t SELECT * FROM s", wantErr: "!"},
 		{name: "insert select with trailing settings", sql: "INSERT INTO db.t SELECT 1 SETTINGS max_threads = 1", wantErr: "!"},
@@ -63,9 +70,13 @@ func TestParseInlineValuesInsert(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if got.Target.Database != tc.wantDB || got.Target.Table != "t" || got.Rows != tc.wantRows ||
+			wantTable := tc.wantTable
+			if wantTable == "" {
+				wantTable = "t"
+			}
+			if got.Target.Database != tc.wantDB || got.Target.Table != wantTable || got.Rows != tc.wantRows ||
 				strings.Join(got.Columns, ",") != strings.Join(tc.wantCols, ",") {
-				t.Fatalf("got %+v, want database %q table \"t\" rows %q columns %v", got, tc.wantDB, tc.wantRows, tc.wantCols)
+				t.Fatalf("got %+v, want database %q table %q rows %q columns %v", got, tc.wantDB, wantTable, tc.wantRows, tc.wantCols)
 			}
 		})
 	}

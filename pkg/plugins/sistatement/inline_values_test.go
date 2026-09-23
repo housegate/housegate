@@ -148,6 +148,51 @@ func TestPlugin_InlineValuesInstallsSynthesizedPlan(t *testing.T) {
 	}
 }
 
+// TestPlugin_InlineValuesClaimsMaterializedFormatValues pins the body the
+// grpc materializer produces: rewriter-grpc re-renders an inline VALUES
+// statement as `FORMAT Values(<rows>)`. The lane must claim it exactly like
+// VALUES instead of handing it to the deferred lane, which would wait for
+// client data a 26.x client never sends.
+func TestPlugin_InlineValuesClaimsMaterializedFormatValues(t *testing.T) {
+	ev := &fakeEvaluator{blocks: [][]proto.InputColumn{evaluatedBlock(1, "eu", 1.5)}}
+	p, _ := newInlinePlugin(t, ev)
+	sql := "INSERT INTO shop.orders (id, region, amount) FORMAT Values(1, 'eu', toFloat64(toDateTime(1790126697)) - 1790126695.5)"
+	qctx := inlineQctx(newSession(7, ""), sql)
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	if qctx.DeferredInsert != nil || qctx.SynthesizedInsert == nil {
+		t.Fatalf("deferred=%v synthesized=%v, want only the synthesized plan", qctx.DeferredInsert != nil, qctx.SynthesizedInsert != nil)
+	}
+	if want := "INSERT INTO shop.orders (`id`, `region`, `amount`) FORMAT Native"; qctx.Query.Body != want {
+		t.Fatalf("rewritten body = %q, want %q", qctx.Query.Body, want)
+	}
+	if ev.seen.Rows != "(1, 'eu', toFloat64(toDateTime(1790126697)) - 1790126695.5)" {
+		t.Fatalf("evaluated rows = %q", ev.seen.Rows)
+	}
+}
+
+// TestPlugin_FormatWithInlineDataNeverEntersTheDeferredLane covers the lane
+// being off: rows after the format name carry no payload, so the statement
+// must stay on the ordinary path rather than install a deferred plan.
+func TestPlugin_FormatWithInlineDataNeverEntersTheDeferredLane(t *testing.T) {
+	ns := network.NewInMemoryNetworkState()
+	declareSchema(t, ns, testSchema())
+	p, _ := newTestPlugin(t, ns, t.TempDir())
+	for _, sql := range []string{
+		"INSERT INTO shop.orders (id, region, amount) FORMAT Values (1, 'eu', 1.5)",
+		"INSERT INTO shop.orders FORMAT CSV 1,eu,1.5",
+	} {
+		qctx := insertQctx(newSession(7, ""), sql)
+		if err := p.OnQuery(context.Background(), qctx); err != nil {
+			t.Fatalf("%q: OnQuery: %v", sql, err)
+		}
+		if qctx.DeferredInsert != nil || qctx.SynthesizedInsert != nil || qctx.Query.Body != sql {
+			t.Fatalf("%q: deferred=%v synthesized=%v body=%q, want the ordinary path", sql, qctx.DeferredInsert != nil, qctx.SynthesizedInsert != nil, qctx.Query.Body)
+		}
+	}
+}
+
 // TestPlugin_InlineValuesClaimsOnlyTheInlineShape is the feature-on mirror
 // of TestPlugin_NonSILaneStatementsPassThrough: with the flag on the inline VALUES statement of that list is claimed and the others still fall through (D1).
 func TestPlugin_InlineValuesClaimsOnlyTheInlineShape(t *testing.T) {
