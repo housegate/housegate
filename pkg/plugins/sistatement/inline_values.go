@@ -82,10 +82,10 @@ func requireMaterialized(qctx *plugin.QueryContext) error {
 	if !ok {
 		return inlineErrorf("materialization did not run")
 	}
-	if reason, isErr := strings.CutPrefix(outcome, "error:"); isErr {
+	if reason, isErr := strings.CutPrefix(outcome, plugin.MaterializeOutcomeErrorPrefix); isErr {
 		return inlineErrorf("materialization failed: %s", reason)
 	}
-	if outcome != "applied" && outcome != "noop" {
+	if outcome != plugin.MaterializeOutcomeApplied && outcome != plugin.MaterializeOutcomeNoop {
 		return inlineErrorf("unknown materialization outcome %q", outcome)
 	}
 	return nil

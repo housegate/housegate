@@ -12,9 +12,11 @@
 | Upstream to client packets | `relay.go` | Packet-framed forwarding, decoded terminal lifecycle, and the legacy opaque-result fallback. |
 | Agent async preparation | `relay_agent_prepare.go` | AgentPrepare plan: sole-reader Cancel/EOF polling while a worker prepares, serialized forward gate, durable ForwardAuthorized before the Query is written. |
 | Query-only host execution | `relay_query_only.go` | Local completion without an upstream Query: drains the empty external-table marker, never fires OnQuerySuccess, see the plan for session reuse after local completion. |
+| Synthesized INSERT (agent inline VALUES) | `relay_synthesized.go` | SynthesizedInsert plan: reads the client's marker, encodes the evaluated blocks at the upstream revision, runs the strict hook, then hands off to `forwardSignedInsert`, the post-input half shared with the deferred lane (Query, one marker, sample validation, payload, one terminator). Cancel after the Query is forwarded and drained without success. |
 | Metrics observer | `observer.go` | Prometheus globals and wire-level packet/byte counters. |
 
 ## CONVENTIONS
+- Both signed INSERT lanes (`runDeferredInsert`, `runSynthesizedInsert`) end their input phase by calling `forwardSignedInsert`; keep terminal arbitration there rather than duplicating it, and never write a second empty Data terminator.
 - The dialer runs after `OnHello`, so route and credential plugins can mutate session state before upstream selection.
 - Forwarded sessions use `PeerServerHelloRaw` from `RebindToPeer`; do not repeat the upstream hello exchange.
 - Both directions stay packet-by-packet with `ReadPacket`; cross-leg raw packets go through the destination codec's `WriteRawPacket` so independently negotiated chunked framing is preserved.

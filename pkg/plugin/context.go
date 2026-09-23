@@ -175,11 +175,20 @@ type QueryContext struct {
 const SnapshotQueryAgentKey = "snapshot_query_agent_owned"
 
 // ValuesKeyMaterialized is the Values key under which the agent-mode
-// materialize plugin records its outcome: "applied", "noop" or
-// "error:<reason>". The ordinary path ignores it and keeps failing open; the
+// materialize plugin records its outcome as one of the MaterializeOutcome*
+// values below. The ordinary path ignores it and keeps failing open; the
 // signed inline VALUES lane is fail-closed (spec 2026-09-23 D2) and refuses a
-// statement whose key is absent or starts with "error:".
+// statement whose key is absent or whose value starts with
+// MaterializeOutcomeErrorPrefix.
 const ValuesKeyMaterialized = "materialize.outcome"
+
+// Materialize outcome vocabulary stored under ValuesKeyMaterialized. An error
+// outcome is MaterializeOutcomeErrorPrefix followed by the reason text.
+const (
+	MaterializeOutcomeApplied     = "applied"
+	MaterializeOutcomeNoop        = "noop"
+	MaterializeOutcomeErrorPrefix = "error:"
+)
 
 // QueryOnlyPlan is the local host execution lane. Run must honor ctx and
 // return only after the configured durable acknowledgement boundary. It must

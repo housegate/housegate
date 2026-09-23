@@ -2,6 +2,7 @@ package housegate
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"net"
@@ -1077,13 +1078,10 @@ func buildAgentWithBuilders(
 	evaluatorBuilder func(func(context.Context, string) (net.Conn, error), auth.Signer) inlineValuesEvaluator,
 ) (*builtServer, error) {
 	cfg := opts.Config
-	if cfg.StorageIntegrity.Agent.InlineValues.Enabled {
-		if !cfg.StorageIntegrity.Agent.Enabled {
-			return nil, fmt.Errorf("storage_integrity.agent.inline_values requires storage_integrity.agent.enabled")
-		}
-		if !cfg.Materialize.Enabled {
-			return nil, fmt.Errorf("storage_integrity.agent.inline_values requires materialize.enabled")
-		}
+	// Config.Validate already enforces these; the same rule runs here so a host
+	// that constructs the agent directly gets the identical startup refusal.
+	if prereq := errors.Join(cfg.StorageIntegrity.Agent.InlineValuesPrerequisiteErrors(cfg.Materialize.Enabled)...); prereq != nil {
+		return nil, prereq
 	}
 
 	var signer auth.Signer
