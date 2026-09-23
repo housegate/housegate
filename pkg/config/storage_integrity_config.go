@@ -110,8 +110,10 @@ type StorageIntegrityInlineValuesConfig struct {
 }
 
 // StorageIntegritySafeMergesConfig governs the P1e runtime's merge guard, which
-// re-asserts SYSTEM STOP MERGES on the guarded tables at startup so the
-// integrity layer owns the active part inventory. AllowNativeBackgroundMerges is
+// keeps native merges off the guarded tables through the pinned
+// max_bytes_to_merge_at_max_space_in_pool = 0 setting (and no longer through
+// SYSTEM STOP MERGES, which also blocks outdated-part cleanup) so the integrity
+// layer owns the active part inventory. AllowNativeBackgroundMerges is
 // a fail-closed escape hatch: it defaults false, and enabling it is rejected in
 // v1 because native background merges would mutate the guarded inventory out
 // from under the integrity layer.
@@ -147,8 +149,8 @@ type StorageIntegrityRuntimePayloadLeaseConfig struct {
 	RefreshBefore   Duration `json:"refresh_before"   yaml:"refresh_before"`
 }
 
-// StorageIntegrityRuntimeMergeGuardConfig tunes the startup SYSTEM STOP
-// MERGES guard; the guarded table set is StorageIntegrityConfig.Tables.
+// StorageIntegrityRuntimeMergeGuardConfig tunes the merge guard's reassert
+// cadence; the guarded table set is StorageIntegrityConfig.Tables.
 type StorageIntegrityRuntimeMergeGuardConfig struct {
 	ReassertInterval Duration `json:"reassert_interval" yaml:"reassert_interval"`
 	// LegacyTables only exists to catch the pre-Spec-G key and turn it into
