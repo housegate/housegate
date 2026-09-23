@@ -1476,11 +1476,14 @@ func TestBuildStorageIntegrityRuntimeBuildsMergeGuardFromConnAndConfig(t *testin
 		t.Fatalf("startStorageIntegrityRuntime: %v", err)
 	}
 	wantExecs := []string{
-		"SYSTEM STOP MERGES `hg_safe`.`net1__events`",
-		"SYSTEM STOP MERGES `hg_unsafe`.`net1__events`",
+		"SYSTEM START MERGES `hg_safe`.`net1__events`",
+		"SYSTEM START MERGES `hg_unsafe`.`net1__events`",
 	}
 	if strings.Join(mergeConn.execs, "\n") != strings.Join(wantExecs, "\n") {
-		t.Fatalf("STOP MERGES execs = %v, want %v", mergeConn.execs, wantExecs)
+		t.Fatalf("merge guard execs = %v, want %v", mergeConn.execs, wantExecs)
+	}
+	if !mergeConn.settingsProbed {
+		t.Fatal("merge guard did not verify the pinned merge setting")
 	}
 	if !mergeConn.queryRan {
 		t.Fatal("merge guard did not run verify query")
@@ -2013,9 +2016,10 @@ func (g *recordingBuildMergeGuard) AssertStopMerges(context.Context) error {
 }
 
 type recordingBuildMergeConn struct {
-	execs     []string
-	queryRan  bool
-	queriedAt int
+	execs          []string
+	queryRan       bool
+	queriedAt      int
+	settingsProbed bool
 }
 
 func (c *recordingBuildMergeConn) Exec(_ context.Context, query string, _ ...any) error {
@@ -2023,15 +2027,35 @@ func (c *recordingBuildMergeConn) Exec(_ context.Context, query string, _ ...any
 	return nil
 }
 
-func (c *recordingBuildMergeConn) Query(_ context.Context, _ string, _ ...any) (sicore.MergeRows, error) {
+// Query answers the merge guard's engine settings probe with pinned engines
+// for the runtime test tables and every other probe with no rows.
+func (c *recordingBuildMergeConn) Query(_ context.Context, query string, _ ...any) (sicore.MergeRows, error) {
+	if strings.Contains(query, "system.tables") {
+		c.settingsProbed = true
+		const engine = "MergeTree ORDER BY _hg_row_id SETTINGS max_bytes_to_merge_at_max_space_in_pool = 0"
+		return &recordingBuildMergeRows{rows: [][]string{
+			{"hg_safe", "net1__events", engine},
+			{"hg_unsafe", "net1__events", engine},
+		}}, nil
+	}
 	c.queryRan = true
 	c.queriedAt = len(c.execs)
-	return recordingBuildMergeRows{}, nil
+	return &recordingBuildMergeRows{}, nil
 }
 
-type recordingBuildMergeRows struct{}
+type recordingBuildMergeRows struct {
+	rows [][]string
+	i    int
+}
 
-func (recordingBuildMergeRows) Next() bool        { return false }
-func (recordingBuildMergeRows) Scan(...any) error { return nil }
-func (recordingBuildMergeRows) Err() error        { return nil }
-func (recordingBuildMergeRows) Close() error      { return nil }
+func (r *recordingBuildMergeRows) Next() bool { return r.i < len(r.rows) }
+func (r *recordingBuildMergeRows) Scan(dest ...any) error {
+	row := r.rows[r.i]
+	r.i++
+	for i := range dest {
+		*(dest[i].(*string)) = row[i]
+	}
+	return nil
+}
+func (r *recordingBuildMergeRows) Err() error   { return nil }
+func (r *recordingBuildMergeRows) Close() error { return nil }
