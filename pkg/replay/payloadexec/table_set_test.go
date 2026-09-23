@@ -222,6 +222,121 @@ func TestDynamicExecutorBindsUnresolvedPrevTablesThroughSchemaRoot(t *testing.T)
 	}
 }
 
+// recreatedTableDynamic builds a dynamic executor whose static set names
+// testTable under schema S1 (via testExecutor) plus an unrelated "table-2",
+// and a prev snapshot that instead commits testTable under a DIFFERENT
+// schema S2 (as if testTable were retired and recreated per spec D9, with
+// table-2 untouched). The static schema is stale for testTable; the returned
+// snapshot's SchemaRoot is consistent with the committed (S2) hashes.
+func recreatedTableDynamic(t *testing.T) (e *Executor, s2 TableSchema, prev replay.SafeSnapshotManifest) {
+	t.Helper()
+	s1 := testExecutor().tables[testTable]
+	other := TableSchema{TableID: "table-2", Columns: []lthash.Column{{Name: "v", Type: "UInt64"}}}
+	e = NewDynamic(testNetwork, csvMaterializer{networkID: testNetwork}, s1, other)
+	s2 = TableSchema{TableID: testTable, Columns: []lthash.Column{
+		{Name: "name", Type: "String"}, {Name: "balance", Type: "UInt64"}, {Name: "extra", Type: "String"},
+	}}
+	hashes := map[string]string{
+		testTable: TableSchemaHash(testNetwork, s2),
+		"table-2": TableSchemaHash(testNetwork, other),
+	}
+	prev, err := (replay.SafeSnapshotManifest{
+		SafeBlockSeq:      5,
+		SchemaSnapshotID:  testSchema,
+		SchemaRoot:        SchemaRootFromHashes(hashes),
+		ExecutorProfileID: testProfile,
+		Tables: []replay.TableManifest{
+			{TableID: testTable, SchemaHash: hashes[testTable]},
+			{TableID: "table-2", SchemaHash: hashes["table-2"]},
+		},
+	}).Seal()
+	if err != nil {
+		t.Fatalf("seal recreated-table prev: %v", err)
+	}
+	return e, s2, prev
+}
+
+// A table retired and recreated under the same name with a different schema
+// (spec D9) is committed in prev under its NEW schema hash, while the
+// executor's static configuration still names the OLD (genesis) schema. A
+// static schema is a fallback, not authoritative: it must not stall every
+// block that does not target the recreated table, but a block that DOES
+// target it without carrying the new schema must still refuse.
+func TestApplyRowsRecreatedTableStaleStaticFallsBackWhenUntargeted(t *testing.T) {
+	e, s2, prev := recreatedTableDynamic(t)
+
+	t.Run("untargeted insert succeeds", func(t *testing.T) {
+		insert, prepared := insertJob(prev, "into-other", "payload-other", []byte("v\n5\n"), "")
+		insert.Statements[0].TargetTableID, prepared[0].TargetTableID = "table-2", "table-2"
+		if _, _, err := e.Apply(prev, insert, prepared); err != nil {
+			t.Fatalf("insert targeting an unrelated table must not stall on the stale static fallback: %v", err)
+		}
+	})
+
+	t.Run("untargeted transition succeeds", func(t *testing.T) {
+		const thirdTable = "table-3"
+		third := TableSchema{TableID: thirdTable, Columns: []lthash.Column{{Name: "v", Type: "UInt64"}}}
+		thirdJSON, err := json.Marshal(third)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hashes := map[string]string{
+			testTable:  TableSchemaHash(testNetwork, s2),
+			"table-2":  TableSchemaHash(testNetwork, TableSchema{TableID: "table-2", Columns: []lthash.Column{{Name: "v", Type: "UInt64"}}}),
+			thirdTable: TableSchemaHash(testNetwork, third),
+		}
+		job := blockJob(prev)
+		job.TableSetTransition = &replay.ReplayTableSetTransition{
+			Adds:          []replay.ReplayTableSchema{{TableID: thirdTable, SchemaJSON: string(thirdJSON)}},
+			NewSchemaRoot: SchemaRootFromHashes(hashes),
+		}
+		if _, _, err := e.ApplyRows(context.Background(), prev, job, nil); err != nil {
+			t.Fatalf("a transition block that does not target the recreated table must not stall: %v", err)
+		}
+	})
+
+	t.Run("targeted insert without the new schema refuses", func(t *testing.T) {
+		insert, prepared := insertJob(prev, "into-recreated-stale", "payload-stale", []byte("name,balance\nalice,10\n"), "")
+		if _, _, err := e.Apply(prev, insert, prepared); err == nil || !strings.Contains(err.Error(), "schema_hash mismatch") {
+			t.Fatalf("targeting the recreated table without its new schema = %v, want schema_hash mismatch", err)
+		}
+	})
+
+	t.Run("targeted insert carrying the new schema succeeds", func(t *testing.T) {
+		s2JSON, err := json.Marshal(s2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		insert, prepared := insertJob(prev, "into-recreated-fresh", "payload-fresh", []byte("name,balance,extra\nalice,10,x\n"), "")
+		insert.TableSchemas = []replay.ReplayTableSchema{{TableID: testTable, SchemaJSON: string(s2JSON)}}
+		if _, _, err := e.Apply(prev, insert, prepared); err != nil {
+			t.Fatalf("targeting the recreated table with its carried new schema must succeed: %v", err)
+		}
+	})
+}
+
+// A job-carried schema (TableSchemas or a transition add) is always
+// authoritative and checked strictly: it never falls back the way an
+// unrelated static schema does.
+func TestApplyRowsJobCarriedSchemaMismatchRefuses(t *testing.T) {
+	e, prev := twoTableDynamic(t)
+	next, _, err := e.ApplyRows(context.Background(), prev, transitionFor(t, e, prev), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	insert, prepared := insertJob(next, "into-added-wrong", "payload-wrong", []byte("name\nbob\n"), "")
+	insert.Statements[0].TargetTableID, prepared[0].TargetTableID = addedTable, addedTable
+	wrong := TableSchema{TableID: addedTable, Columns: []lthash.Column{{Name: "name", Type: "String"}}}
+	wrongJSON, err := json.Marshal(wrong)
+	if err != nil {
+		t.Fatal(err)
+	}
+	insert.TableSchemas = []replay.ReplayTableSchema{{TableID: addedTable, SchemaJSON: string(wrongJSON)}}
+	if _, _, err := e.Apply(next, insert, prepared); err == nil || !strings.Contains(err.Error(), "schema_hash mismatch") {
+		t.Fatalf("a job-carried schema that disagrees with the committed hash must refuse: %v", err)
+	}
+}
+
 func TestSchemaHashesForJob(t *testing.T) {
 	static := testExecutor().tables[testTable]
 	src := SchemaHashes{NetworkID: testNetwork, Tables: []TableSchema{static}}

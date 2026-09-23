@@ -28,11 +28,18 @@ func DecodeTableSchemaJSON(tableID, schemaJSON string) (TableSchema, error) {
 
 // ResolveJobSchemas returns every schema a job may use: static first, then
 // the job's TableSchemas, then its TableSetTransition.Adds. A job-carried
-// schema replaces a static one with the same table id, which is how a table
-// that was retired and recreated under the same name gets its new schema; the
-// executor still requires every resolved schema to match the hash the
-// previous safe snapshot commits to, so a carried schema can only make a
-// verifier refuse, never change what it accepts.
+// schema replaces a static one with the same table id and is authoritative:
+// the executor (validateAppendInputs) always requires it to match the hash
+// the previous safe snapshot commits to, so a carried schema can only make a
+// verifier refuse, never change what it accepts. A table that was retired and
+// recreated under the same name with a different schema (spec D9) only gets
+// its new schema this way for a block whose TableSchemas or
+// TableSetTransition.Adds actually carries it — typically the block(s) that
+// target it. A block that neither targets the table nor carries its schema
+// still resolves the STALE static entry here; the executor treats that
+// specific case (static-only, mismatched, untargeted) as unresolved rather
+// than refusing, so an untargeted table's recreation does not stall every
+// other block on the chain.
 func ResolveJobSchemas(static []TableSchema, job replay.ReplayJob) (map[string]TableSchema, error) {
 	out := make(map[string]TableSchema, len(static)+len(job.TableSchemas))
 	for _, s := range static {
@@ -50,6 +57,24 @@ func ResolveJobSchemas(static []TableSchema, job replay.ReplayJob) (map[string]T
 		out[ts.TableID] = schema
 	}
 	return out, nil
+}
+
+// carriedTableIDs returns the table ids a job resolves authoritatively itself
+// (TableSchemas or TableSetTransition.Adds), as opposed to a dynamic
+// executor's static fallback. validateAppendInputs uses it to tell the two
+// apart: a carried schema is always checked strictly against the committed
+// hash, while a static-only resolution is a fallback that may be stale.
+func carriedTableIDs(job replay.ReplayJob) map[string]bool {
+	ids := make(map[string]bool, len(job.TableSchemas))
+	for _, ts := range job.TableSchemas {
+		ids[ts.TableID] = true
+	}
+	if job.TableSetTransition != nil {
+		for _, add := range job.TableSetTransition.Adds {
+			ids[add.TableID] = true
+		}
+	}
+	return ids
 }
 
 // schemasForJob is the executor's schema view for one job. A static

@@ -27,14 +27,26 @@ type StatementRows struct {
 // eligibility or the authenticated schema object (which are caller concerns).
 // A static executor requires prev to hold exactly its configured tables; a
 // dynamic one (NewDynamic) accepts any table set whose SchemaRoot matches the
-// hashes it commits to, and still requires every table whose schema resolves
-// to match its committed hash.
-func (e *Executor) validateAppendInputs(prev replay.SafeSnapshotManifest, batches []StatementRows, schemas map[string]TableSchema) error {
+// hashes it commits to. A job-carried schema (TableSchemas or a transition
+// add) is authoritative and always checked strictly against the committed
+// hash. The executor's own static configuration, by contrast, is only a
+// FALLBACK for a dynamic executor: a table retired and recreated under the
+// same name with a different schema (spec D9) is committed in prev under its
+// new hash while the static entry still names the old one, and a block that
+// does not target that table has no way to carry the new schema. Such a
+// mismatch is refused only when the job targets the table (materialization
+// needs the right schema); otherwise the table is treated as unresolved for
+// this block and bound only by the schema_root check below.
+func (e *Executor) validateAppendInputs(prev replay.SafeSnapshotManifest, batches []StatementRows, schemas map[string]TableSchema, carried map[string]bool) error {
 	if err := prev.Validate(); err != nil {
 		return fmt.Errorf("prev snapshot: %w", err)
 	}
 	if !e.dynamic && len(prev.Tables) != len(e.tables) {
 		return fmt.Errorf("prev snapshot table set does not match configured schemas")
+	}
+	targeted := make(map[string]bool, len(batches))
+	for _, b := range batches {
+		targeted[b.TargetTableID] = true
 	}
 	seen := make(map[string]bool, len(prev.Tables))
 	hashes := make(map[string]string, len(prev.Tables))
@@ -45,12 +57,21 @@ func (e *Executor) validateAppendInputs(prev replay.SafeSnapshotManifest, batche
 		seen[tm.TableID] = true
 		schema, ok := schemas[tm.TableID]
 		switch {
-		case ok || !e.dynamic:
+		case !e.dynamic, ok && carried[tm.TableID]:
 			if !ok || schema.TableID != tm.TableID {
 				return fmt.Errorf("prev snapshot table %q has no configured schema", tm.TableID)
 			}
 			if tm.SchemaHash != tableSchemaHash(e.NetworkID, schema) {
 				return fmt.Errorf("table %q schema_hash mismatch", tm.TableID)
+			}
+		case ok:
+			// Resolved only from the static fallback (not job-carried): a
+			// mismatch is stale-schema evidence, not an error, unless this
+			// block actually targets the table.
+			if schema.TableID != tm.TableID || tm.SchemaHash != tableSchemaHash(e.NetworkID, schema) {
+				if targeted[tm.TableID] {
+					return fmt.Errorf("table %q schema_hash mismatch", tm.TableID)
+				}
 			}
 		case tm.SchemaHash == "":
 			return fmt.Errorf("prev snapshot table %q has no schema_hash", tm.TableID)
@@ -201,7 +222,7 @@ func (e *Executor) ApplyRows(ctx context.Context, prev replay.SafeSnapshotManife
 	if err != nil {
 		return replay.SafeSnapshotManifest{}, replay.ExecutionResult{}, err
 	}
-	if err := e.validateAppendInputs(prev, batches, schemas); err != nil {
+	if err := e.validateAppendInputs(prev, batches, schemas, carriedTableIDs(job)); err != nil {
 		return replay.SafeSnapshotManifest{}, replay.ExecutionResult{}, err
 	}
 

@@ -112,8 +112,13 @@ func NewWithMaterializer(networkID string, m Materializer, tables ...TableSchema
 // ReplayJob.TableSetTransition.Adds (see ResolveJobSchemas). Unlike New and
 // NewWithMaterializer, a previous safe snapshot need not hold exactly the
 // static set: its SchemaRoot is checked against the schema hashes it commits
-// to, and every table whose schema resolves must match its committed hash.
-// GenesisSnapshot still derives the base from the static set.
+// to, and every table whose schema resolves from a job-carried source
+// (TableSchemas or a transition add) must match its committed hash. A table
+// resolved only from the static set is a fallback, which may be stale for a
+// table retired and recreated under the same name (spec D9); such a mismatch
+// only refuses when the job actually targets that table (see
+// validateAppendInputs). GenesisSnapshot still derives the base from the
+// static set.
 func NewDynamic(networkID string, m Materializer, static ...TableSchema) *Executor {
 	e := NewWithMaterializer(networkID, m, static...)
 	e.dynamic = true
