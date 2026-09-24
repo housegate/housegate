@@ -20,12 +20,14 @@ import (
 	"github.com/ClickHouse/ch-go/proto"
 
 	"github.com/housegate/housegate/pkg/auth"
+	"github.com/housegate/housegate/pkg/chproto"
 	"github.com/housegate/housegate/pkg/chsession"
 	"github.com/housegate/housegate/pkg/plugin"
 	"github.com/housegate/housegate/pkg/registry"
 	"github.com/housegate/housegate/pkg/replay"
 	"github.com/housegate/housegate/pkg/replay/payloadexec"
 	"github.com/housegate/housegate/pkg/schemaregistry"
+	"github.com/housegate/housegate/pkg/sitable"
 	"github.com/housegate/housegate/pkg/sqlident"
 	"github.com/housegate/housegate/pkg/sqlmeta"
 	sicore "github.com/housegate/housegate/pkg/storageintegrity"
@@ -58,6 +60,12 @@ type Config struct {
 	// every statement token must carry.
 	TableSchemas registry.TableSchemas
 	NetworkID    string
+
+	// RequireTableSnapshot is set when storage integrity is enabled: every
+	// query must then carry its table-state snapshot, and one that arrives
+	// without it is refused rather than resolved through TableSchemas (spec
+	// 2026-09-24 §9.1: the registry's schema wins over the latest declaration).
+	RequireTableSnapshot bool
 }
 
 type AdmissionConsumer interface {
@@ -73,6 +81,7 @@ type Plugin struct {
 	admissionConsumer AdmissionConsumer
 	schemaLoader      *schemaregistry.NetworkStateLoader
 	networkID         string
+	requireSnapshot   bool
 
 	mu      sync.Mutex
 	active  map[int64]*admissionState
@@ -97,6 +106,10 @@ type Admission struct {
 	SchemaHash      string
 	RowIDProfileID  string
 	Payload         CapturedPayload
+	// TableSchema is the target's schema from the query's table-state
+	// snapshot (spec 2026-09-24 §9.1). Nil when storage integrity is disabled
+	// and the schema came from the declared network-state loader.
+	TableSchema *payloadexec.TableSchema
 }
 
 type CapturedPayload struct {
@@ -115,6 +128,7 @@ type admissionState struct {
 	revision        int
 	statementToken  string
 	schemaHash      string
+	tableSchema     *payloadexec.TableSchema
 	complete        bool
 }
 
@@ -143,6 +157,7 @@ func New(cfg Config) *Plugin {
 		maxPayload:        maxPayload,
 		admissionConsumer: cfg.AdmissionConsumer,
 		networkID:         cfg.NetworkID,
+		requireSnapshot:   cfg.RequireTableSnapshot,
 		active:            map[int64]*admissionState{},
 		pending:           map[int64]*admissionState{},
 	}
@@ -222,6 +237,26 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	if err != nil {
 		return err
 	}
+	target, err := resolveTargetTable(qctx, signedSQL)
+	if err != nil {
+		return err
+	}
+	// Spec 2026-09-24 §9.1: with storage integrity enabled the registry's
+	// schema must win, so a query without its snapshot is refused rather than
+	// resolved against the latest declaration. sitablestate refuses such a
+	// query first; this is the ingress's own fail-closed backstop.
+	if qctx.TableSnapshot == nil && p.requireSnapshot {
+		return &chproto.ClientError{Code: chproto.CodeQueryIsProhibited,
+			Message: "storage_integrity: table state is unavailable for this query"}
+	}
+	// Spec 2026-09-24 §10.3: an agent whose view is stale passes an INSERT
+	// into an Active table through unsigned. Name that cause, retryable,
+	// before the statement-id check reports a malformed id the client never
+	// had. Only the snapshot path knows the table is Active.
+	if qctx.TableSnapshot != nil && !hasStatementToken(qctx) {
+		return &chproto.ClientError{Code: chproto.CodeTableIsBeingRestarted,
+			Message: fmt.Sprintf("storage_integrity: table %s requires a signed INSERT; the client's table state is stale (retryable)", target.id)}
+	}
 	stmtID, err := statementID(qctx)
 	if err != nil {
 		return err
@@ -235,10 +270,6 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 			return fmt.Errorf("storage_integrity rewritten INSERT payload encoding mismatch: signed %s forwarded %s", payloadEncoding, forwardEncoding)
 		}
 	}
-	target, err := resolveTargetTable(qctx, signedSQL)
-	if err != nil {
-		return err
-	}
 	tableID := target.id
 	userJWS, err := queryAuthToken(qctx)
 	if err != nil {
@@ -251,7 +282,7 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	if err := requireStatementIDSigner(stmtID, signer); err != nil {
 		return err
 	}
-	if p.schemaLoader == nil || strings.TrimSpace(p.networkID) == "" {
+	if (qctx.TableSnapshot == nil && p.schemaLoader == nil) || strings.TrimSpace(p.networkID) == "" {
 		return errors.New("storage_integrity ingress requires a network-state TableSchemas source and network_id to verify envelope v2 statements")
 	}
 	statementToken, err := statementTokenFromSettings(querySettings(qctx))
@@ -261,7 +292,15 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	if err := sicore.RejectUserSettings(settingKeys(qctx)); err != nil {
 		return err
 	}
-	schemaHash, err := p.resolveSchemaHash(ctx, target)
+	var (
+		schemaHash  string
+		tableSchema *payloadexec.TableSchema
+	)
+	if qctx.TableSnapshot != nil {
+		tableSchema, schemaHash, err = snapshotSchema(qctx.TableSnapshot, target)
+	} else {
+		schemaHash, err = p.resolveSchemaHash(ctx, target)
+	}
 	if err != nil {
 		return err
 	}
@@ -279,6 +318,7 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 		payloadEncoding: payloadEncoding,
 		statementToken:  statementToken,
 		schemaHash:      schemaHash,
+		tableSchema:     tableSchema,
 	}
 	if qctx.Session.State() != nil {
 		state.revision = qctx.Session.State().ClientRevision
@@ -520,6 +560,7 @@ func (p *Plugin) admissionFromState(_ context.Context, state *admissionState) (A
 	admission.KeeperShardID = 0
 	admission.SettingsHash = sicore.EmptySettingsHash
 	admission.SchemaHash = state.schemaHash
+	admission.TableSchema = state.tableSchema
 	admission.RowIDProfileID = payloadexec.RowIDProfileID
 	if p != nil && p.maxPayload > 0 && uint64(len(payload)) > p.maxPayload {
 		return Admission{}, fmt.Errorf("storage_integrity payload exceeds max_payload_bytes (%d > %d)", len(payload), p.maxPayload)
@@ -870,6 +911,30 @@ func (p *Plugin) resolveSchemaHash(ctx context.Context, target resolvedTableTarg
 		return "", fmt.Errorf("storage_integrity schema source returned %d schemas for %s, want 1", len(schemas), target.id)
 	}
 	return payloadexec.TableSchemaHash(p.networkID, schemas[0]), nil
+}
+
+func hasStatementToken(qctx *plugin.QueryContext) bool {
+	for _, setting := range qctx.Query.Settings {
+		if setting.Key == auth.StatementTokenSettingKey {
+			return true
+		}
+	}
+	return false
+}
+
+// snapshotSchema is spec 2026-09-24 §9.1: the ingress admits only an Active
+// table and binds the schema and hash the query's snapshot carries, the
+// registry's schema rather than the latest chain declaration.
+func snapshotSchema(snap sitable.Snapshot, target resolvedTableTarget) (*payloadexec.TableSchema, string, error) {
+	table := snap.Lookup(target.database, target.table)
+	if table.Status != sitable.Active {
+		return nil, "", fmt.Errorf("storage_integrity table %s is not active (status %s); the signed lane admits only active tables", target.id, table.Status)
+	}
+	if table.SchemaHash == "" || table.Schema.TableID == "" {
+		return nil, "", fmt.Errorf("storage_integrity cannot resolve the schema of active table %s", target.id)
+	}
+	schema := table.Schema
+	return &schema, table.SchemaHash, nil
 }
 
 func normalizeStructuredTablePath(db, table string) (string, error) {

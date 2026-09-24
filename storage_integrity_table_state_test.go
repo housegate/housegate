@@ -10,6 +10,7 @@ import (
 	"github.com/housegate/housegate/pkg/plugins/sireserved"
 	"github.com/housegate/housegate/pkg/plugins/sitablestate"
 	"github.com/housegate/housegate/pkg/plugins/storageintegrity"
+	"github.com/housegate/housegate/pkg/registry"
 	"github.com/housegate/housegate/pkg/rewriter"
 	"github.com/housegate/housegate/pkg/sitable"
 )
@@ -172,5 +173,43 @@ func TestBuildServer_DisabledWiresNoTableStateGate(t *testing.T) {
 		if p, ok := candidate.(*rewrite.Plugin); ok && p.TableState != nil {
 			t.Fatal("a disabled deployment must not give the rewrite plugin a table state")
 		}
+	}
+}
+
+// registryOnly exposes only registry.Registry, hiding the declared-schema
+// view the in-memory state also implements.
+type registryOnly struct{ registry.Registry }
+
+// TestBuildServer_EnabledIngressNeedsNoDeclaredSchemaSource pins spec
+// 2026-09-24 §9.1: with storage integrity enabled the ingress binds the
+// query snapshot's schema, so it needs no registry.TableSchemas source; the
+// disabled ingress still does.
+func TestBuildServer_EnabledIngressNeedsNoDeclaredSchemaSource(t *testing.T) {
+	cfg := minimalServerCfg(t)
+	cfg.StorageIntegrity.Enabled = boolPtr(true)
+	cfg.StorageIntegrity.Ingress.Enabled = true
+	cfg.StorageIntegrity.Ingress.NetworkID = "testnet-v2"
+	cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{"0x1111111111111111111111111111111111111111"}
+	bs, err := buildServer(Options{
+		Config:                            cfg,
+		NetworkState:                      registryOnly{network.NewInMemoryNetworkState()},
+		Rewriter:                          siProbeStubRewriterFactory{},
+		StorageIntegrityTableState:        sitable.NewFake(sitable.Pending),
+		StorageIntegrityAdmissionConsumer: &recordingAdmissionConsumer{},
+	}, nil)
+	if err != nil {
+		t.Fatalf("an enabled ingress must build without a declared-schema source: %v", err)
+	}
+	bs.teardown()
+
+	cfg.StorageIntegrity.Enabled = nil
+	_, err = buildServer(Options{
+		Config:                            cfg,
+		NetworkState:                      registryOnly{network.NewInMemoryNetworkState()},
+		Rewriter:                          stubRewriterFactory{},
+		StorageIntegrityAdmissionConsumer: &recordingAdmissionConsumer{},
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "implements registry.TableSchemas") {
+		t.Fatalf("err = %v, want the disabled ingress to require a declared-schema source", err)
 	}
 }

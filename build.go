@@ -757,9 +757,15 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			return nil, fmt.Errorf("storage_integrity.ingress admission consumer is required when enabled")
 		}
 		ingressCfg := cfg.StorageIntegrity.Ingress
-		ingressSchemas, err := resolveTableSchemas(opts, reg, "storage_integrity.ingress")
-		if err != nil {
-			return nil, err
+		// With storage integrity enabled the ingress reads each query's
+		// snapshot; the declared-schema loader serves only the disabled case,
+		// where a rewriter marks the table SI on its own.
+		var ingressSchemas registry.TableSchemas
+		if !siOptions.Enabled {
+			ingressSchemas, err = resolveTableSchemas(opts, reg, "storage_integrity.ingress")
+			if err != nil {
+				return nil, err
+			}
 		}
 		// The indexer address belongs here as much as it does on the
 		// ordinary auth path. The agent sidecar in front of a co-located
@@ -789,6 +795,9 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			AdmissionConsumer: admissionConsumer,
 			TableSchemas:      ingressSchemas,
 			NetworkID:         ingressCfg.NetworkID,
+			// Enabled: sitablestate already refuses a query without its
+			// snapshot; the ingress refuses too rather than trust the order.
+			RequireTableSnapshot: siOptions.Enabled,
 		})
 		queryPlugins = append(queryPlugins, storageIntegrityIngress)
 		strictDataPlugins = append(strictDataPlugins, storageIntegrityIngress)
