@@ -203,9 +203,9 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 			return fmt.Errorf("storage_integrity rewritten SQL: %w", err)
 		}
 	}
-	// These three rejections are independent and all fail closed, so their
-	// order decides only which cause the caller is told about. It is chosen,
-	// not incidental:
+	// These rejections are independent and all fail closed, so their order
+	// decides only which cause the caller is told about. It is chosen, not
+	// incidental:
 	//
 	// Nondeterminism stays first because it is the only one of the three whose
 	// coverage depends on running early. A function is written into an INSERT
@@ -225,6 +225,19 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	// structured statement id <client_account>:<client_seq>:<client_nonce>",
 	// which reads as a malformed id the caller never had, while the real and
 	// fixable cause was computed a few lines later and discarded.
+	//
+	// On the snapshot path (storage integrity enabled, spec 2026-09-24) the
+	// target's table state also goes between shape and the statement id, for
+	// the same reason: an unsigned INSERT carries no id, and its real cause is
+	// the table's status. The target is resolved first, then a missing
+	// snapshot is refused (392, fail closed), then the status is decided: a
+	// non-Active table is refused non-retryably (392; Gone as sitablestate's
+	// unknown table, 60), and only an Active table with no statement token is
+	// told its agent's view is stale (733, retryable). Checking Active first
+	// keeps an unsigned INSERT into an Ordinary table the rewriter flagged SI
+	// from being told to retry forever. A disabled deployment has no snapshot
+	// and keeps its original order, the statement id before the target (plan
+	// decision R8).
 	if fn, ok := containsUnmaterializedNondeterminism(signedSQL); ok {
 		return fmt.Errorf("storage_integrity rejects unmaterialized nondeterministic function %s", fn)
 	}
@@ -237,25 +250,37 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	if err != nil {
 		return err
 	}
-	target, err := resolveTargetTable(qctx, signedSQL)
-	if err != nil {
-		return err
-	}
-	// Spec 2026-09-24 §9.1: with storage integrity enabled the registry's
-	// schema must win, so a query without its snapshot is refused rather than
-	// resolved against the latest declaration. sitablestate refuses such a
-	// query first; this is the ingress's own fail-closed backstop.
-	if qctx.TableSnapshot == nil && p.requireSnapshot {
-		return &chproto.ClientError{Code: chproto.CodeQueryIsProhibited,
-			Message: "storage_integrity: table state is unavailable for this query"}
-	}
-	// Spec 2026-09-24 §10.3: an agent whose view is stale passes an INSERT
-	// into an Active table through unsigned. Name that cause, retryable,
-	// before the statement-id check reports a malformed id the client never
-	// had. Only the snapshot path knows the table is Active.
-	if qctx.TableSnapshot != nil && !hasStatementToken(qctx) {
-		return &chproto.ClientError{Code: chproto.CodeTableIsBeingRestarted,
-			Message: fmt.Sprintf("storage_integrity: table %s requires a signed INSERT; the client's table state is stale (retryable)", target.id)}
+	var (
+		target      resolvedTableTarget
+		schemaHash  string
+		tableSchema *payloadexec.TableSchema
+	)
+	snapshotPath := qctx.TableSnapshot != nil || p.requireSnapshot
+	if snapshotPath {
+		target, err = resolveTargetTable(qctx, signedSQL)
+		if err != nil {
+			return err
+		}
+		// Spec 2026-09-24 §9.1: with storage integrity enabled the registry's
+		// schema must win, so a query without its snapshot is refused rather
+		// than resolved against the latest declaration. sitablestate refuses
+		// such a query first; this is the ingress's own fail-closed backstop.
+		if qctx.TableSnapshot == nil {
+			return &chproto.ClientError{Code: chproto.CodeQueryIsProhibited,
+				Message: "storage_integrity: table state is unavailable for this query"}
+		}
+		tableSchema, schemaHash, err = snapshotSchema(qctx.TableSnapshot, target)
+		if err != nil {
+			return err
+		}
+		// Spec 2026-09-24 §10.3: an agent whose view is stale passes an INSERT
+		// into an Active table through unsigned. Name that cause, retryable,
+		// before the statement-id check reports a malformed id the client
+		// never had.
+		if !hasStatementToken(qctx) {
+			return &chproto.ClientError{Code: chproto.CodeTableIsBeingRestarted,
+				Message: fmt.Sprintf("storage_integrity: table %s requires a signed INSERT; the client's table state is stale (retryable)", target.id)}
+		}
 	}
 	stmtID, err := statementID(qctx)
 	if err != nil {
@@ -270,6 +295,12 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 			return fmt.Errorf("storage_integrity rewritten INSERT payload encoding mismatch: signed %s forwarded %s", payloadEncoding, forwardEncoding)
 		}
 	}
+	if !snapshotPath {
+		target, err = resolveTargetTable(qctx, signedSQL)
+		if err != nil {
+			return err
+		}
+	}
 	tableID := target.id
 	userJWS, err := queryAuthToken(qctx)
 	if err != nil {
@@ -282,7 +313,7 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	if err := requireStatementIDSigner(stmtID, signer); err != nil {
 		return err
 	}
-	if (qctx.TableSnapshot == nil && p.schemaLoader == nil) || strings.TrimSpace(p.networkID) == "" {
+	if (!snapshotPath && p.schemaLoader == nil) || strings.TrimSpace(p.networkID) == "" {
 		return errors.New("storage_integrity ingress requires a network-state TableSchemas source and network_id to verify envelope v2 statements")
 	}
 	statementToken, err := statementTokenFromSettings(querySettings(qctx))
@@ -292,17 +323,11 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	if err := sicore.RejectUserSettings(settingKeys(qctx)); err != nil {
 		return err
 	}
-	var (
-		schemaHash  string
-		tableSchema *payloadexec.TableSchema
-	)
-	if qctx.TableSnapshot != nil {
-		tableSchema, schemaHash, err = snapshotSchema(qctx.TableSnapshot, target)
-	} else {
+	if !snapshotPath {
 		schemaHash, err = p.resolveSchemaHash(ctx, target)
-	}
-	if err != nil {
-		return err
+		if err != nil {
+			return err
+		}
 	}
 	state := &admissionState{
 		admission: Admission{
@@ -924,14 +949,25 @@ func hasStatementToken(qctx *plugin.QueryContext) bool {
 
 // snapshotSchema is spec 2026-09-24 §9.1: the ingress admits only an Active
 // table and binds the schema and hash the query's snapshot carries, the
-// registry's schema rather than the latest chain declaration.
+// registry's schema rather than the latest chain declaration. Every refusal
+// is a stable ClientError: Gone answers as the unknown table sitablestate
+// reports, which does not reveal that the table exists; any other non-Active
+// status, and an Active entry whose schema is missing or names a different
+// table, is non-retryable.
 func snapshotSchema(snap sitable.Snapshot, target resolvedTableTarget) (*payloadexec.TableSchema, string, error) {
 	table := snap.Lookup(target.database, target.table)
-	if table.Status != sitable.Active {
-		return nil, "", fmt.Errorf("storage_integrity table %s is not active (status %s); the signed lane admits only active tables", target.id, table.Status)
+	switch table.Status {
+	case sitable.Active:
+	case sitable.Gone:
+		return nil, "", &chproto.ClientError{Code: chproto.CodeUnknownTable,
+			Message: fmt.Sprintf("Table %s does not exist", target.id)}
+	default:
+		return nil, "", &chproto.ClientError{Code: chproto.CodeQueryIsProhibited,
+			Message: fmt.Sprintf("storage_integrity: table %s is not active; the signed lane admits only active tables", target.id)}
 	}
-	if table.SchemaHash == "" || table.Schema.TableID == "" {
-		return nil, "", fmt.Errorf("storage_integrity cannot resolve the schema of active table %s", target.id)
+	if table.SchemaHash == "" || table.Schema.TableID != target.id {
+		return nil, "", &chproto.ClientError{Code: chproto.CodeQueryIsProhibited,
+			Message: fmt.Sprintf("storage_integrity: table %s has no schema bound to it in the table state (schema table %q)", target.id, table.Schema.TableID)}
 	}
 	schema := table.Schema
 	return &schema, table.SchemaHash, nil
@@ -1067,6 +1103,14 @@ func (p *Plugin) RunOnPeerTrust() bool { return false }
 func (p *Plugin) RunOnForward() bool { return false }
 
 func (p *Plugin) RejectUndecodableQuery() bool { return p != nil && p.enabled }
+
+// RequiresTableSnapshot reports whether every query must carry its
+// table-state snapshot (storage integrity enabled).
+func (p *Plugin) RequiresTableSnapshot() bool { return p != nil && p.requireSnapshot }
+
+// ResolvesDeclaredSchemas reports whether the ingress holds a declared
+// network-state schema loader, the disabled deployment's schema source.
+func (p *Plugin) ResolvesDeclaredSchemas() bool { return p != nil && p.schemaLoader != nil }
 
 var (
 	_ plugin.QueryPlugin              = (*Plugin)(nil)

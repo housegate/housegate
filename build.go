@@ -807,6 +807,8 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		closePlugins = append(closePlugins, storageIntegrityIngress)
 		log.Infow("storage_integrity ingress enabled",
 			"network_id", ingressCfg.NetworkID,
+			"requires_table_snapshot", storageIntegrityIngress.RequiresTableSnapshot(),
+			"declared_schema_source", storageIntegrityIngress.ResolvesDeclaredSchemas(),
 			"allowed_addresses", len(ingressCfg.AllowedAddresses),
 			"max_token_age", ingressCfg.MaxTokenAge.Duration,
 			"request_timeout", ingressCfg.RequestTimeout.Duration,

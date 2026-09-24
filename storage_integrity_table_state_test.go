@@ -213,3 +213,42 @@ func TestBuildServer_EnabledIngressNeedsNoDeclaredSchemaSource(t *testing.T) {
 		t.Fatalf("err = %v, want the disabled ingress to require a declared-schema source", err)
 	}
 }
+
+// TestBuildServer_EnabledIngressRequiresSnapshotAndIgnoresDeclaredSchemas pins
+// that an enabled build hands the ingress no declared-schema source even when
+// the NetworkState offers one, and requires every query's snapshot.
+func TestBuildServer_EnabledIngressRequiresSnapshotAndIgnoresDeclaredSchemas(t *testing.T) {
+	cfg := minimalServerCfg(t)
+	cfg.StorageIntegrity.Enabled = boolPtr(true)
+	cfg.StorageIntegrity.Ingress.Enabled = true
+	cfg.StorageIntegrity.Ingress.NetworkID = "testnet-v2"
+	cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{"0x1111111111111111111111111111111111111111"}
+	ns := network.NewInMemoryNetworkState()
+	var _ registry.TableSchemas = ns // the declared source is available
+	bs, err := buildServer(Options{
+		Config:                            cfg,
+		NetworkState:                      ns,
+		Rewriter:                          siProbeStubRewriterFactory{},
+		StorageIntegrityTableState:        sitable.NewFake(sitable.Pending),
+		StorageIntegrityAdmissionConsumer: &recordingAdmissionConsumer{},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bs.teardown()
+	var ingress *storageintegrity.Plugin
+	for _, candidate := range requireExternalChain(t, bs).QueryPlugins {
+		if p, ok := candidate.(*storageintegrity.Plugin); ok {
+			ingress = p
+		}
+	}
+	if ingress == nil {
+		t.Fatal("the enabled build did not wire the ingress")
+	}
+	if !ingress.RequiresTableSnapshot() {
+		t.Fatal("an enabled build must require the table-state snapshot")
+	}
+	if ingress.ResolvesDeclaredSchemas() {
+		t.Fatal("an enabled build must not give the ingress a declared-schema source")
+	}
+}
