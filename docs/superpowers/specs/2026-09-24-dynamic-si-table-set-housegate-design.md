@@ -196,7 +196,7 @@ Every accessed table is looked up with `Snapshot.Lookup`. If any table refuses, 
 - Add `STORAGE_INTEGRITY_CONTRACT_V2 = 2`.
 - Update the enum comment, which today says every non-INSERT DDL on an SI table is rejected.
 
-### 8.2 V2 differs from V1 in exactly two ways
+### 8.2 V2 differs from V1 in exactly three ways
 
 1. **DROP of SI tables.**
    - `DROP TABLE [IF EXISTS] <logical SI table>` returns Success. `SYNC` and several targets in one statement are allowed, including a mix of SI and ordinary tables.
@@ -204,6 +204,7 @@ Every accessed table is looked up with `Snapshot.Lookup`. If any table refuses, 
    - The target stays in `AccessedTables` with `IsStorageIntegrity`, so commitgate and the host Observer still see a `DROP TABLE` and call the chain's `deleteTable`.
    - These stay rejected: a physical target such as `DROP TABLE hg_safe.x`; `TRUNCATE`, `DROP VIEW` and `DROP DICTIONARY` of an SI table; and `ON CLUSTER`.
 2. **Version-based activation (H6).** A request carrying V2 activates the catch-all even when the table map is empty.
+3. **Reserved databases are carried explicitly.** `StorageIntegrityArgs` gains `repeated string reserved_databases`. Housegate always sends `hg_safe`, `hg_unsafe` and `hg_promote`. Under V2 the protected physical namespace is the union of the databases derived from the table map and `reserved_databases`, so direct addressing, DDL, DCL and `SYSTEM` targets, and table-function carriers of those databases are rejected even when the Active set is empty. Without this, an empty Active set would let `INSERT INTO hg_unsafe.<db>__<table>` bypass the signed lane, as measured during planning. V1 ignores the field.
 
 ### 8.3 Unchanged
 
@@ -219,12 +220,14 @@ Every accessed table is looked up with `Snapshot.Lookup`. If any table refuses, 
   - `IF EXISTS` and `SYNC`;
   - `TRUNCATE`, a physical target and `ON CLUSTER`, all still rejected;
   - `SET` and `SYSTEM` rejected under an empty table map.
+  - direct access to a reserved database rejected under an empty table map.
 
   The rewriter-go and rewriter-grpc copies stay byte-identical.
 - **The housegate startup probe moves to V2.**
   - It keeps its five cases.
   - It adds the exact rewritten SQL for `DROP TABLE db1.t`.
   - It adds `SYSTEM RELOAD CONFIG` rejected under an empty table map. That case distinguishes V1-only builds.
+  - It adds `SELECT * FROM hg_safe.db1__t` rejected under an empty table map with the reserved databases set.
 - **Version floors.** The probe's minimum builds, the `ffifetch` native library pin and the CLAUDE.md pin paragraph move to the new releases (rewriter-go v0.13.0 and rewriter-grpc v0.15.0 as planned; the tags actually cut are authoritative).
 - **Release order.**
   1. rewriter-proto tag.

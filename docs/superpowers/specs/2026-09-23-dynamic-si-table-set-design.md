@@ -206,7 +206,7 @@ Sub-project 2a shipped as sentioxyz/arbiter-proto#13, sentioxyz/arbiter-core#39 
   - Retiring and Purging tables are answered as unknown by housegate itself, because `DROP DATABASE` leaves the shared physical database to garbage collection.
   - Same-name `CREATE` refusal (D9) moves from the sentio-node Observer to housegate's `sitablestate`.
   - Data-carrying creation into a governed table (`CREATE ... AS SELECT`, materialized views with `POPULATE` or `TO` a governed table) is refused.
-- **Rewriter contract.** V2 allows `DROP TABLE` of SI tables by dropping only the ordinary physical table. The contract is activated by version, not by table count, so session `SET` stays refused while the Active set is empty. The engines keep V1 unchanged, and housegate requires V2.
+- **Rewriter contract.** V2 allows `DROP TABLE` of SI tables by dropping only the ordinary physical table. The contract is activated by version, not by table count, so session `SET` stays refused while the Active set is empty. The reserved physical databases travel explicitly in `reserved_databases` and stay protected with an empty Active set. The engines keep V1 unchanged, and housegate requires V2.
 - **Agent and JSON-RPC (§8, §9).**
   - The agent signs only Active tables and passes every other INSERT through unsigned; the server stays the authority.
   - sentio-node exposes one method, `sentio_getStorageIntegrityTableStatus`. `sentio_getTableSchema` and `sentio_getLatestTableSchema` are dropped.
