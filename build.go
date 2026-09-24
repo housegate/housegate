@@ -736,7 +736,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	}
 
 	var storageIntegrityIngress *storageintegrity.Plugin
-	var storageIntegrityMergeGuard StorageIntegrityMergeGuard
+	var storageIntegrityMergeGuard *StorageIntegrityMergeSupervisor
 	var storageIntegrityRuntime *StorageIntegrityIngress
 	if cfg.StorageIntegrity.Ingress.Enabled {
 		admissionConsumer := opts.StorageIntegrityAdmissionConsumer
@@ -744,7 +744,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			if admissionConsumer != nil {
 				return nil, fmt.Errorf("storage_integrity.runtime.enabled cannot be combined with StorageIntegrityAdmissionConsumer")
 			}
-			consumer, guard, err := buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, cfg.StorageIntegrity.Tables, opts.StorageIntegrityRuntime)
+			consumer, guard, err := buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, siState, siStatic, opts.StorageIntegrityRuntime)
 			if err != nil {
 				return nil, err
 			}
@@ -1003,7 +1003,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		listeners:       listeners,
 		metricsRegistry: metricsRegistry,
 		preServe: func(ctx context.Context) error {
-			if err := startStorageIntegrityRuntime(ctx, storageIntegrityRuntime, storageIntegrityMergeGuard); err != nil {
+			if err := startStorageIntegrityRuntime(ctx, storageIntegrityRuntime, storageIntegrityMergeGuard, siStatic != nil); err != nil {
 				return err
 			}
 			if storageIntegrityMergeGuard != nil {

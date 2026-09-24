@@ -47,7 +47,7 @@ func (fn StorageIntegrityTableSchemaResolverFunc) StorageIntegrityTableSchema(ta
 // PreparedStatementLookup adapter.
 type StorageIntegrityIngress struct {
 	orch           *sicore.Orchestrator
-	guard          StorageIntegrityMergeGuard
+	guard          StorageIntegrityMergeHealth
 	matKind        sicore.MaterializerKind
 	payloadWriter  sicore.PayloadWriter
 	leaseManager   sicore.PayloadLeaseManager
@@ -79,7 +79,7 @@ type trackedPartsReservation struct {
 // NewStorageIntegrityIngress constructs the ingress runtime over an orchestrator
 // and the selected materializer kind. The merge guard is optional (nil when no
 // ClickHouse connection is wired). A nil orchestrator is a wiring error.
-func NewStorageIntegrityIngress(orch *sicore.Orchestrator, guard StorageIntegrityMergeGuard, matKind sicore.MaterializerKind) (*StorageIntegrityIngress, error) {
+func NewStorageIntegrityIngress(orch *sicore.Orchestrator, guard StorageIntegrityMergeHealth, matKind sicore.MaterializerKind) (*StorageIntegrityIngress, error) {
 	return NewStorageIntegrityIngressWithPayloadWriter(orch, guard, matKind, nil)
 }
 
@@ -88,7 +88,7 @@ func NewStorageIntegrityIngress(orch *sicore.Orchestrator, guard StorageIntegrit
 // previous local content-addressed payload_ref fallback; production P1 wiring
 // should pass a real PayloadWriter so SubmitStatement carries an opaque
 // PayloadStore ref.
-func NewStorageIntegrityIngressWithPayloadWriter(orch *sicore.Orchestrator, guard StorageIntegrityMergeGuard, matKind sicore.MaterializerKind, writer sicore.PayloadWriter) (*StorageIntegrityIngress, error) {
+func NewStorageIntegrityIngressWithPayloadWriter(orch *sicore.Orchestrator, guard StorageIntegrityMergeHealth, matKind sicore.MaterializerKind, writer sicore.PayloadWriter) (*StorageIntegrityIngress, error) {
 	if orch == nil {
 		return nil, fmt.Errorf("storage_integrity ingress: orchestrator is required")
 	}
@@ -504,8 +504,9 @@ func backpressureClientError(table string, err error) error {
 // success; only a bound ACK2 returns nil. This is the production staged-intake
 // path.
 func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.Context, adm siplugin.Admission) error {
-	if health, ok := i.guard.(StorageIntegrityMergeHealth); ok {
-		if err := health.CheckMergeHealth(); err != nil {
+	if i.guard != nil {
+		// Only the target's latch: one unready table blocks only itself.
+		if err := i.guard.CheckMergeHealth(adm.TableID); err != nil {
 			return fmt.Errorf("storage_integrity ingress: merge health: %w", err)
 		}
 	}
