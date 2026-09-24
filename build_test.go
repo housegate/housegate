@@ -51,7 +51,7 @@ func (stubRewriterFactory) Close() error { return nil }
 type siCapableStubRewriterFactory struct{ stubRewriterFactory }
 
 func (siCapableStubRewriterFactory) StorageIntegrityContractVersion() rewriterpb.StorageIntegrityContractVersion {
-	return rewriter.StorageIntegrityContractV1
+	return rewriter.StorageIntegrityContractV2
 }
 
 type siProbeStubRewriterFactory struct {
@@ -242,7 +242,7 @@ func TestBuildServer_UnsafeLatestDefaultRequiresReadState(t *testing.T) {
 	if rewritePlugin == nil {
 		t.Fatal("configured SI surface did not wire rewrite plugin")
 	}
-	if !rewritePlugin.FailClosedOnError || rewritePlugin.RequiredStorageIntegrityContractVersion != rewriter.StorageIntegrityContractV1 {
+	if !rewritePlugin.FailClosedOnError || rewritePlugin.RequiredStorageIntegrityContractVersion != rewriter.StorageIntegrityContractV2 {
 		t.Fatalf("SI rewrite plugin safety fields = fail_closed:%v contract:%s",
 			rewritePlugin.FailClosedOnError, rewritePlugin.RequiredStorageIntegrityContractVersion)
 	}
@@ -277,7 +277,7 @@ func TestBuildServer_ConfiguredSISurfaceRejectsUnawareInjectedFactory(t *testing
 		NetworkState: network.NewInMemoryNetworkState(),
 		Rewriter:     stubRewriterFactory{},
 	}, nil)
-	if err == nil || !strings.Contains(err.Error(), "storage-integrity contract v1") {
+	if err == nil || !strings.Contains(err.Error(), "storage-integrity contract V2") {
 		t.Fatalf("err = %v, want unaware injected factory rejection", err)
 	}
 }

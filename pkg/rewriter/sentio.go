@@ -218,9 +218,9 @@ func (f *SentioNetworkFactory) NewRewriter(sess Session) Rewriter {
 
 // StorageIntegrityContractVersion implements StorageIntegrityCapableFactory.
 // The marker is truthful because sentioRewriter requires the exact backend
-// acknowledgement whenever SI membership is configured.
+// acknowledgement whenever storage integrity is enabled.
 func (*SentioNetworkFactory) StorageIntegrityContractVersion() pb.StorageIntegrityContractVersion {
-	return StorageIntegrityContractV1
+	return StorageIntegrityContractV2
 }
 
 // Close tears down the shared rewrite backend. Per-connection
@@ -317,10 +317,10 @@ func (r *sentioRewriter) Rewrite(ctx context.Context, sql, effectiveAccount stri
 	// understood SI. An old server can ignore the request and still return
 	// Success, so require an exact positive acknowledgement first.
 	if len(r.factory.options.StorageIntegrity.Tables) > 0 &&
-		resp.GetStorageIntegrityContractVersion() != StorageIntegrityContractV1 {
+		resp.GetStorageIntegrityContractVersion() != StorageIntegrityContractV2 {
 		return RewriteResult{}, &RejectedError{Code: pb.RewriteCode_RewriteError,
 			Message: fmt.Sprintf("storage-integrity rewriter contract acknowledgement unavailable: got %s, want %s",
-				resp.GetStorageIntegrityContractVersion(), StorageIntegrityContractV1)}
+				resp.GetStorageIntegrityContractVersion(), StorageIntegrityContractV2)}
 	}
 	// Spec G fail-closed rule (plan D-2): a non-Success answer that involves
 	// a storage-integrity table must reach the client as an Exception.

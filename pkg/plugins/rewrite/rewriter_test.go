@@ -31,7 +31,7 @@ func TestPeerTrustedSessionBypassesStorageIntegrityRewrite(t *testing.T) {
 	p := &Plugin{
 		Factory:                                 &fakeFactory{rw: rw},
 		FailClosedOnError:                       true,
-		RequiredStorageIntegrityContractVersion: pb.StorageIntegrityContractVersion_STORAGE_INTEGRITY_CONTRACT_V1,
+		RequiredStorageIntegrityContractVersion: rewriter.StorageIntegrityContractV2,
 	}
 	chain := &plugin.PluginChain{QueryPlugins: []plugin.QueryPlugin{p}}
 
@@ -294,7 +294,7 @@ func TestOnQuery_OrdinaryErrorFailsClosedWhenSISurfaceIsConfigured(t *testing.T)
 func TestOnQuery_MissingContractAcknowledgementFromCustomRewriterFailsClosed(t *testing.T) {
 	rw := &fakeRewriter{out: "SELECT 1"} // nil error, zero acknowledgement
 	p := &Plugin{Factory: &fakeFactory{rw: rw},
-		RequiredStorageIntegrityContractVersion: rewriter.StorageIntegrityContractV1}
+		RequiredStorageIntegrityContractVersion: rewriter.StorageIntegrityContractV2}
 	sess := newSessionForTest(t, 45)
 	qctx := &plugin.QueryContext{Session: sess, OriginalSQL: "SELECT 1", Query: &chproto.Query{Body: "SELECT 1"}}
 	err := p.OnQuery(context.Background(), qctx)
@@ -306,7 +306,7 @@ func TestOnQuery_MissingContractAcknowledgementFromCustomRewriterFailsClosed(t *
 func TestOnQuery_WrongContractAcknowledgementFromCustomRewriterFailsClosed(t *testing.T) {
 	rw := &fakeRewriter{out: "SELECT 1", storageIntegrityContractVersion: pb.StorageIntegrityContractVersion(99)}
 	p := &Plugin{Factory: &fakeFactory{rw: rw},
-		RequiredStorageIntegrityContractVersion: rewriter.StorageIntegrityContractV1}
+		RequiredStorageIntegrityContractVersion: rewriter.StorageIntegrityContractV2}
 	sess := newSessionForTest(t, 46)
 	qctx := &plugin.QueryContext{Session: sess, OriginalSQL: "SELECT 1", Query: &chproto.Query{Body: "SELECT 1"}}
 	err := p.OnQuery(context.Background(), qctx)
@@ -316,9 +316,9 @@ func TestOnQuery_WrongContractAcknowledgementFromCustomRewriterFailsClosed(t *te
 }
 
 func TestOnQuery_AcknowledgedCustomRewriterAllowsNormalQuery(t *testing.T) {
-	rw := &fakeRewriter{out: "SELECT 1", storageIntegrityContractVersion: rewriter.StorageIntegrityContractV1}
+	rw := &fakeRewriter{out: "SELECT 1", storageIntegrityContractVersion: rewriter.StorageIntegrityContractV2}
 	p := &Plugin{Factory: &fakeFactory{rw: rw},
-		RequiredStorageIntegrityContractVersion: rewriter.StorageIntegrityContractV1}
+		RequiredStorageIntegrityContractVersion: rewriter.StorageIntegrityContractV2}
 	sess := newSessionForTest(t, 47)
 	qctx := &plugin.QueryContext{Session: sess, OriginalSQL: "SELECT 1", Query: &chproto.Query{Body: "SELECT 1"}}
 	if err := p.OnQuery(context.Background(), qctx); err != nil {

@@ -113,7 +113,7 @@ func buildStorageIntegrityArgs(opts StorageIntegrityOptions, mode ReadMode) (*pb
 		Tables:              make(map[string]*pb.StorageIntegrityArgs_Table, len(opts.Tables)),
 		ReadMode:            pb.StorageIntegrityArgs_READ_MODE_SAFE,
 		ReservedRowIdColumn: DefaultReservedRowIDColumn,
-		ContractVersion:     StorageIntegrityContractV1,
+		ContractVersion:     StorageIntegrityContractV2,
 	}
 	if mode == ReadModeUnsafeLatest {
 		if opts.ReadState == nil {

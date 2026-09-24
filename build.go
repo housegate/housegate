@@ -473,10 +473,10 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	}
 	if len(siOptions.Tables) > 0 {
 		capable, ok := rwFactory.(rewriter.StorageIntegrityCapableFactory)
-		if !ok || capable.StorageIntegrityContractVersion() != rewriter.StorageIntegrityContractV1 {
-			return nil, fmt.Errorf("storage_integrity.tables requires a storage-integrity contract v1 capable SQL rewriter; refusing fail-open startup")
+		if !ok || capable.StorageIntegrityContractVersion() != rewriter.StorageIntegrityContractV2 {
+			return nil, fmt.Errorf("storage_integrity.tables requires a storage-integrity contract V2 capable SQL rewriter; refusing fail-open startup")
 		}
-		// Contract v1 proves only that the backend understood the request; old
+		// Contract V2 proves only that the backend understood the request; old
 		// engines can acknowledge it while missing the Spec I fail-closed
 		// behavior. Every concrete or injected factory must expose and pass the
 		// same behavioral conformance probe before an SI surface can start.
@@ -719,7 +719,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			FailClosedOnError: len(siOptions.Tables) > 0,
 		}
 		if len(siOptions.Tables) > 0 {
-			rewritePlug.RequiredStorageIntegrityContractVersion = rewriter.StorageIntegrityContractV1
+			rewritePlug.RequiredStorageIntegrityContractVersion = rewriter.StorageIntegrityContractV2
 			rewritePlug.StorageIntegrityScrubber = rewriter.NewStorageIntegrityScrubber(siOptions)
 		}
 	}

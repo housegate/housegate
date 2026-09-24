@@ -28,6 +28,22 @@ const (
 	// rewriter-go build before v0.10.0 answers Success here.
 	storageIntegrityProbeHeredocSQL     = "SELECT * FROM merge($tag$hg_safe$tag$, 'db1__t')"
 	storageIntegrityProbeHeredocMessage = "storage-integrity physical table hg_safe.db1__t is not directly addressable"
+
+	// Contract V2 (spec 2026-09-24 §8.2). DROP of an SI table succeeds and
+	// drops only the ordinary physical table; the catch-all is activated by
+	// the contract version even when the table map is empty. Both values are
+	// copied from plan A's "Handoff to plan B" section.
+	storageIntegrityProbeDropSQL         = "DROP TABLE db1.t"
+	storageIntegrityProbeEmptyMapMessage = "storage-integrity is configured; statement class is not modelled by the rewriter and cannot be forwarded"
+)
+
+// The exact V2 rewrite of storageIntegrityProbeDropSQL under the fixed probe
+// arguments: the ordinary physical table only, hg_safe / hg_unsafe untouched.
+// The engines differ in identifier quoting only (plan A handoff item 3), so
+// the probe pins one exact string per engine.
+const (
+	StorageIntegrityProbeDropExpectedSQLNative = `DROP TABLE phys."db1.t"`
+	StorageIntegrityProbeDropExpectedSQLGRPC   = "DROP TABLE phys.`db1.t`"
 )
 
 // StorageIntegrityProbeExpectedSQL is the exact output a compatible Spec I
@@ -38,7 +54,7 @@ const StorageIntegrityProbeExpectedSQL = "SELECT name, type, default_kind AS def
 // The final release tags are pinned separately when the fixed Go and C++
 // engines are published. The probe itself identifies the required behavior
 // without guessing an unreleased version.
-const storageIntegrityProbeRequiredBuild = "rewriter-go >= v0.10.0 or rewriter-grpc >= v0.13.1 (storage-integrity Specs I and N)"
+const storageIntegrityProbeRequiredBuild = "rewriter-go >= v0.13.0 or rewriter-grpc >= v0.15.0 (storage-integrity contract V2)"
 
 // StorageIntegrityProbeFactory is a Factory whose concrete engine behavior can
 // be verified at startup. Contract v1 alone cannot distinguish patch builds.
@@ -47,29 +63,39 @@ type StorageIntegrityProbeFactory interface {
 	ProbeStorageIntegrityBuild(ctx context.Context) error
 }
 
-func storageIntegrityProbeArgs() *pb.RewriteTableDynamicArgs {
+// storageIntegrityProbeArgs returns the fixed probe arguments; emptyTables
+// sends the V2 contract with an empty table map.
+func storageIntegrityProbeArgs(emptyTables bool) *pb.RewriteTableDynamicArgs {
+	tables := map[string]*pb.StorageIntegrityArgs_Table{
+		"db1.t": {SafeTable: "hg_safe.db1__t", UnsafeTable: "hg_unsafe.db1__t"},
+	}
+	if emptyTables {
+		tables = map[string]*pb.StorageIntegrityArgs_Table{}
+	}
 	return &pb.RewriteTableDynamicArgs{
 		DatabaseMap:            map[string]string{"db1": "phys"},
 		KnownPhysicalDatabases: []string{"phys"},
 		Delim:                  "_",
 		StorageIntegrity: &pb.StorageIntegrityArgs{
-			Tables: map[string]*pb.StorageIntegrityArgs_Table{
-				"db1.t": {SafeTable: "hg_safe.db1__t", UnsafeTable: "hg_unsafe.db1__t"},
-			},
+			Tables:              tables,
 			ReadMode:            pb.StorageIntegrityArgs_READ_MODE_SAFE,
 			ReservedRowIdColumn: DefaultReservedRowIDColumn,
-			ContractVersion:     StorageIntegrityContractV1,
+			ContractVersion:     StorageIntegrityContractV2,
 		},
 	}
 }
 
 type storageIntegrityBuildProbe struct {
 	name          string
+	emptyTables   bool
 	sql           string
 	code          pb.RewriteCode
 	statementType pb.StatementType
 	sqlAfter      string
-	message       string
+	// sqlAfterByEngine, when set, replaces sqlAfter with the engine's own
+	// exact output (keyed by EngineGRPC / EngineNative).
+	sqlAfterByEngine map[string]string
+	message          string
 }
 
 var storageIntegrityBuildProbes = []storageIntegrityBuildProbe{
@@ -123,6 +149,30 @@ var storageIntegrityBuildProbes = []storageIntegrityBuildProbe{
 		sqlAfter:      storageIntegrityProbeHeredocSQL,
 		message:       storageIntegrityProbeHeredocMessage,
 	},
+	{
+		// V2 D1: the DROP succeeds, rewritten to the ordinary physical table.
+		// Every V1-only build rejects it.
+		name:          "v2-si-drop-ordinary-physical",
+		sql:           storageIntegrityProbeDropSQL,
+		code:          pb.RewriteCode_Success,
+		statementType: pb.StatementType_STATEMENT_TYPE_DROP_TABLE,
+		sqlAfterByEngine: map[string]string{
+			EngineNative: StorageIntegrityProbeDropExpectedSQLNative,
+			EngineGRPC:   StorageIntegrityProbeDropExpectedSQLGRPC,
+		},
+		message: "success",
+	},
+	{
+		// V2 D2 (H6): the catch-all fires under an empty table map. A V1-only
+		// build activates it by table count and answers Success here.
+		name:          "v2-empty-map-catch-all",
+		emptyTables:   true,
+		sql:           storageIntegrityProbeUnmodelledSQL,
+		code:          pb.RewriteCode_UnsupportedStatement,
+		statementType: pb.StatementType_STATEMENT_TYPE_UNSPECIFIED,
+		sqlAfter:      storageIntegrityProbeUnmodelledSQL,
+		message:       storageIntegrityProbeEmptyMapMessage,
+	},
 }
 
 // ProbeStorageIntegrityBuild issues a bounded suite of fixed SI rewrites. The
@@ -147,7 +197,7 @@ func (f *SentioNetworkFactory) ProbeStorageIntegrityBuild(ctx context.Context) e
 	for _, probe := range storageIntegrityBuildProbes {
 		resp, err := f.backend.Rewrite(probeCtx, &pb.RewriteSQLRequest{
 			Sql:     probe.sql,
-			Options: []*pb.RewriteOption{rewriteOption(storageIntegrityProbeArgs())},
+			Options: []*pb.RewriteOption{rewriteOption(storageIntegrityProbeArgs(probe.emptyTables))},
 		})
 		if err != nil {
 			return fmt.Errorf("storage-integrity engine probe (engine=%s probe=%s): %w; deploy %s",
@@ -157,9 +207,9 @@ func (f *SentioNetworkFactory) ProbeStorageIntegrityBuild(ctx context.Context) e
 			return fmt.Errorf("storage-integrity engine probe (engine=%s probe=%s): nil response; deploy %s",
 				engine, probe.name, storageIntegrityProbeRequiredBuild)
 		}
-		if resp.GetStorageIntegrityContractVersion() != StorageIntegrityContractV1 {
+		if resp.GetStorageIntegrityContractVersion() != StorageIntegrityContractV2 {
 			return fmt.Errorf("storage-integrity engine probe (engine=%s probe=%s): contract acknowledgement %s, want %s; deploy %s",
-				engine, probe.name, resp.GetStorageIntegrityContractVersion(), StorageIntegrityContractV1, storageIntegrityProbeRequiredBuild)
+				engine, probe.name, resp.GetStorageIntegrityContractVersion(), StorageIntegrityContractV2, storageIntegrityProbeRequiredBuild)
 		}
 		if resp.GetCode() != probe.code {
 			return fmt.Errorf("storage-integrity engine probe (engine=%s probe=%s): code=%s, want %s; deploy %s",
@@ -169,7 +219,11 @@ func (f *SentioNetworkFactory) ProbeStorageIntegrityBuild(ctx context.Context) e
 			return fmt.Errorf("storage-integrity engine probe (engine=%s probe=%s): statement type=%s, want %s; deploy %s",
 				engine, probe.name, resp.GetStatementType(), probe.statementType, storageIntegrityProbeRequiredBuild)
 		}
-		if resp.GetSqlAfterRewrite() != probe.sqlAfter {
+		sqlAfter := probe.sqlAfter
+		if probe.sqlAfterByEngine != nil {
+			sqlAfter = probe.sqlAfterByEngine[engine]
+		}
+		if resp.GetSqlAfterRewrite() != sqlAfter {
 			return fmt.Errorf("storage-integrity engine probe (engine=%s probe=%s): SQL fingerprint mismatch; deploy %s",
 				engine, probe.name, storageIntegrityProbeRequiredBuild)
 		}

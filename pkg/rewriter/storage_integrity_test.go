@@ -55,7 +55,7 @@ func TestBuildStorageIntegrityArgs(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.GetReadMode() != pb.StorageIntegrityArgs_READ_MODE_SAFE || got.GetReservedRowIdColumn() != "_hg_row_id" ||
-		got.GetContractVersion() != StorageIntegrityContractV1 {
+		got.GetContractVersion() != StorageIntegrityContractV2 {
 		t.Fatalf("args = %v", got)
 	}
 	tbl := got.GetTables()["db1.t"]

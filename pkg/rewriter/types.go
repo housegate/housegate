@@ -43,6 +43,12 @@ import (
 
 const StorageIntegrityContractV1 = pb.StorageIntegrityContractVersion_STORAGE_INTEGRITY_CONTRACT_V1
 
+// StorageIntegrityContractV2 is the only contract HouseGate sends and accepts
+// (spec 2026-09-24 §8): V1 plus the SI DROP TABLE rewrite, activated by the
+// contract version rather than by the table count. HouseGate never falls back
+// to V1.
+const StorageIntegrityContractV2 = pb.StorageIntegrityContractVersion_STORAGE_INTEGRITY_CONTRACT_V2
+
 // RewriteResult bundles everything the rewriter learned about one SQL
 // statement. All fields are best-effort: when Rewrite short-circuits
 // before calling the gRPC service — no mappings configured, no session

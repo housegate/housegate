@@ -279,7 +279,7 @@ func TestSentioRewriter_RewriteErrorMessage(t *testing.T) {
 }
 
 func acknowledgedSIResponse(resp *pb.RewriteSQLResponse) *pb.RewriteSQLResponse {
-	resp.StorageIntegrityContractVersion = StorageIntegrityContractV1
+	resp.StorageIntegrityContractVersion = StorageIntegrityContractV2
 	return resp
 }
 
@@ -298,7 +298,7 @@ func TestSentioRewriter_ShipsStorageIntegrityArgs(t *testing.T) {
 		t.Fatal(err)
 	}
 	si := be.lastReq.GetOptions()[0].GetTableNameArgs().GetDynamicArgs().GetStorageIntegrity()
-	if si.GetReadMode() != pb.StorageIntegrityArgs_READ_MODE_SAFE || si.GetContractVersion() != StorageIntegrityContractV1 || si.GetTables()["db1.t"].GetSafeTable() != "hg_safe.db1__t" {
+	if si.GetReadMode() != pb.StorageIntegrityArgs_READ_MODE_SAFE || si.GetContractVersion() != StorageIntegrityContractV2 || si.GetTables()["db1.t"].GetSafeTable() != "hg_safe.db1__t" {
 		t.Fatalf("default-mode args = %v", si)
 	}
 	ctx := WithReadMode(context.Background(), ReadModeUnsafeLatest)
@@ -429,7 +429,7 @@ func TestSentioRewriter_AcknowledgedBackendAllowsNonSITableQuery(t *testing.T) {
 		OriginalAccessedTables: []*pb.AccessedTable{{OriginalDatabase: "system", OriginalTable: "one"}},
 	})}
 	res, err := newSIFactory(be, nil, true).NewRewriter(&fakeSession{}).Rewrite(context.Background(), "SELECT 1", "")
-	if err != nil || res.StorageIntegrityContractVersion != StorageIntegrityContractV1 {
+	if err != nil || res.StorageIntegrityContractVersion != StorageIntegrityContractV2 {
 		t.Fatalf("acknowledged non-SI query = %+v, %v", res, err)
 	}
 }
