@@ -18,6 +18,7 @@ import (
 	"github.com/housegate/housegate/pkg/peer"
 	"github.com/housegate/housegate/pkg/registry"
 	"github.com/housegate/housegate/pkg/route"
+	"github.com/housegate/housegate/pkg/sitable"
 	"github.com/housegate/housegate/pkg/sqlmeta"
 	pb "github.com/housegate/rewriter-proto/gen/pb"
 )
@@ -248,6 +249,7 @@ type sentioRewriter struct {
 	mu                   sync.Mutex
 	lastSQL              string
 	lastEffectiveAccount string
+	lastSnapshot         sitable.Snapshot
 
 	closed atomic.Bool
 }
@@ -266,18 +268,21 @@ func (r *sentioRewriter) Close() error {
 //     context.
 //
 // Error handling: ordinary failures retain the legacy fail-open contract when
-// no SI membership is configured. With SI membership, pre-classification
+// storage integrity is disabled. When it is enabled, pre-classification
 // failures and SI-specific rejections return *RejectedError and MUST reach the
 // client as an Exception. UnsupportedStatement remains a passthrough only when
-// the configured SI table set is empty.
+// storage integrity is disabled.
 func (r *sentioRewriter) Rewrite(ctx context.Context, sql, effectiveAccount string) (RewriteResult, error) {
 	if r.closed.Load() {
 		return RewriteResult{}, r.rewriteFailure(fmt.Errorf("rewriter closed"))
 	}
 
+	si := r.factory.options.StorageIntegrity
+	snap := si.snapshotFor(ctx)
 	r.mu.Lock()
 	r.lastSQL = sql
 	r.lastEffectiveAccount = effectiveAccount
+	r.lastSnapshot = snap
 	r.mu.Unlock()
 
 	dbMap, knownPhys, err := r.factory.buildDatabaseMap(effectiveAccount)
@@ -285,11 +290,11 @@ func (r *sentioRewriter) Rewrite(ctx context.Context, sql, effectiveAccount stri
 		return RewriteResult{}, r.rewriteFailure(fmt.Errorf("build database map: %w", err))
 	}
 	logicalToRemote, remoteUpstreams := r.factory.buildRemoteUpstreams(dbMap)
-	mode := r.factory.options.StorageIntegrity.DefaultReadMode
+	mode := si.DefaultReadMode
 	if m, ok := ReadModeFromContext(ctx); ok {
 		mode = m
 	}
-	siArgs, err := buildStorageIntegrityArgs(r.factory.options.StorageIntegrity, mode)
+	siArgs, err := buildStorageIntegrityArgs(si, snap, mode, nil)
 	if err != nil {
 		return RewriteResult{}, err
 	}
@@ -302,29 +307,41 @@ func (r *sentioRewriter) Rewrite(ctx context.Context, sql, effectiveAccount stri
 		return RewriteResult{SQL: sql}, nil
 	}
 
-	req := &pb.RewriteSQLRequest{
-		Sql:     sql,
-		Options: []*pb.RewriteOption{rewriteOption(dynArgs)},
-	}
-	resp, err := r.callWithTimeout(ctx, req)
+	resp, err := r.rewriteOnce(ctx, sql, dynArgs)
 	if err != nil {
-		return RewriteResult{}, r.rewriteFailure(fmt.Errorf("rewrite: %w", err))
+		return RewriteResult{}, err
 	}
-	if resp == nil {
-		return RewriteResult{}, r.rewriteFailure(fmt.Errorf("rewrite: nil response"))
-	}
-	// Spec G D-8: additive protobuf fields are not proof that the backend
-	// understood SI. An old server can ignore the request and still return
-	// Success, so require an exact positive acknowledgement first.
-	if len(r.factory.options.StorageIntegrity.Tables) > 0 &&
-		resp.GetStorageIntegrityContractVersion() != StorageIntegrityContractV2 {
-		return RewriteResult{}, &RejectedError{Code: pb.RewriteCode_RewriteError,
-			Message: fmt.Sprintf("storage-integrity rewriter contract acknowledgement unavailable: got %s, want %s",
-				resp.GetStorageIntegrityContractVersion(), StorageIntegrityContractV2)}
+	// unsafe_latest needs the promoted-not-yet-cleaned parts of the Active
+	// tables this query reads, and only the rewriter knows which those are.
+	// The first pass classifies with no exclusions; when an accessed table
+	// has promoted parts, the second pass rewrites with exactly those
+	// (spec 2026-09-24 §6.2). The accessed SI set must not move between the
+	// two passes, since the parts were chosen from the first.
+	if si.Enabled && mode == ReadModeUnsafeLatest && resp.GetCode() == pb.RewriteCode_Success {
+		accessed := storageIntegrityAccessedIDs(resp.GetOriginalAccessedTables())
+		parts, err := promotedPartsFor(si.ReadState, accessed)
+		if err != nil {
+			return RewriteResult{}, err
+		}
+		if len(parts) > 0 {
+			partsArgs, err := buildStorageIntegrityArgs(si, snap, mode, parts)
+			if err != nil {
+				return RewriteResult{}, err
+			}
+			second, err := r.rewriteOnce(ctx, sql, buildDynamicArgs(dbMap, knownPhys, r.sess.LogicalDatabaseName(), r.sess.PhysicalDatabaseName(), r.factory.options.Delim, logicalToRemote, remoteUpstreams, partsArgs))
+			if err != nil {
+				return RewriteResult{}, err
+			}
+			if got := storageIntegrityAccessedIDs(second.GetOriginalAccessedTables()); strings.Join(got, ",") != strings.Join(accessed, ",") {
+				return RewriteResult{}, &RejectedError{Code: pb.RewriteCode_RewriteError,
+					Message: fmt.Sprintf("storage-integrity unsafe_latest rewrite accessed %v after classifying %v", got, accessed)}
+			}
+			resp = second
+		}
 	}
 	// Spec G fail-closed rule (plan D-2): a non-Success answer that involves
 	// a storage-integrity table must reach the client as an Exception.
-	if key, si := storageIntegrityAccess(resp.GetOriginalAccessedTables()); si {
+	if key, isSI := storageIntegrityAccess(resp.GetOriginalAccessedTables()); isSI {
 		if resp.GetCode() != pb.RewriteCode_Success {
 			return RewriteResult{}, &RejectedError{Code: resp.GetCode(), Message: resp.GetMessage()}
 		}
@@ -339,7 +356,7 @@ func (r *sentioRewriter) Rewrite(ctx context.Context, sql, effectiveAccount stri
 	// allowing those responses into the legacy Unsupported pass-through would
 	// forward unexamined SQL into protocol-owned namespaces. The SI-specific
 	// branch above stays first because it also owns the INSERT-lane decision.
-	if len(r.factory.options.StorageIntegrity.Tables) > 0 && resp.GetCode() != pb.RewriteCode_Success {
+	if si.Enabled && resp.GetCode() != pb.RewriteCode_Success {
 		return RewriteResult{}, &RejectedError{Code: resp.GetCode(), Message: resp.GetMessage()}
 	}
 	switch resp.Code {
@@ -378,8 +395,34 @@ func (r *sentioRewriter) Rewrite(ctx context.Context, sql, effectiveAccount stri
 	}
 }
 
+// rewriteOnce performs one backend call and applies the transport and
+// acknowledgement checks every pass must satisfy.
+func (r *sentioRewriter) rewriteOnce(ctx context.Context, sql string, dynArgs *pb.RewriteTableDynamicArgs) (*pb.RewriteSQLResponse, error) {
+	req := &pb.RewriteSQLRequest{
+		Sql:     sql,
+		Options: []*pb.RewriteOption{rewriteOption(dynArgs)},
+	}
+	resp, err := r.callWithTimeout(ctx, req)
+	if err != nil {
+		return nil, r.rewriteFailure(fmt.Errorf("rewrite: %w", err))
+	}
+	if resp == nil {
+		return nil, r.rewriteFailure(fmt.Errorf("rewrite: nil response"))
+	}
+	// Spec G D-8: additive protobuf fields are not proof that the backend
+	// understood SI. An old server can ignore the request and still return
+	// Success, so require an exact positive acknowledgement first.
+	if r.factory.options.StorageIntegrity.Enabled &&
+		resp.GetStorageIntegrityContractVersion() != StorageIntegrityContractV2 {
+		return nil, &RejectedError{Code: pb.RewriteCode_RewriteError,
+			Message: fmt.Sprintf("storage-integrity rewriter contract acknowledgement unavailable: got %s, want %s",
+				resp.GetStorageIntegrityContractVersion(), StorageIntegrityContractV2)}
+	}
+	return resp, nil
+}
+
 func (r *sentioRewriter) rewriteFailure(err error) error {
-	if len(r.factory.options.StorageIntegrity.Tables) == 0 {
+	if !r.factory.options.StorageIntegrity.Enabled {
 		return err
 	}
 	return &RejectedError{Code: pb.RewriteCode_RewriteError,
@@ -442,6 +485,7 @@ func (r *sentioRewriter) RewriteErrorMessage(ctx context.Context, message string
 	r.mu.Lock()
 	sql := r.lastSQL
 	effectiveAccount := r.lastEffectiveAccount
+	snap := r.lastSnapshot
 	r.mu.Unlock()
 	if sql == "" {
 		return message, nil
@@ -462,7 +506,10 @@ func (r *sentioRewriter) RewriteErrorMessage(ctx context.Context, message string
 		return message, fmt.Errorf("build database map: %w", err)
 	}
 	logicalToRemote, remoteUpstreams := r.factory.buildRemoteUpstreams(dbMap)
-	siArgs, _ := buildStorageIntegrityArgs(r.factory.options.StorageIntegrity, r.factory.options.StorageIntegrity.DefaultReadMode)
+	if snap == nil {
+		snap = r.factory.options.StorageIntegrity.snapshotFor(ctx)
+	}
+	siArgs, _ := buildStorageIntegrityArgs(r.factory.options.StorageIntegrity, snap, r.factory.options.StorageIntegrity.DefaultReadMode, nil)
 	dynArgs := buildDynamicArgs(dbMap, knownPhys, r.sess.LogicalDatabaseName(), r.sess.PhysicalDatabaseName(), r.factory.options.Delim, logicalToRemote, remoteUpstreams, siArgs)
 
 	req := &pb.RewriteErrorMessageRequest{

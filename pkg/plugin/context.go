@@ -17,6 +17,7 @@ import (
 
 	"github.com/housegate/housegate/pkg/chproto"
 	"github.com/housegate/housegate/pkg/chsession"
+	"github.com/housegate/housegate/pkg/sitable"
 	"github.com/housegate/housegate/pkg/sqlmeta"
 )
 
@@ -111,6 +112,15 @@ type QueryContext struct {
 	// classifying. Downstream observers (commitgate) read it to tell an
 	// idempotent CREATE / DROP from one that should fail on a conflict.
 	ExistenceClause sqlmeta.ExistenceClause
+
+	// TableSnapshot is the storage-integrity table-state snapshot this query
+	// runs under (spec 2026-09-24 H1). The rewrite plugin takes exactly one at
+	// the start of OnQuery when storage integrity is enabled; the rewriter
+	// arguments, sitablestate, the ingress, parts-pressure resolution and the
+	// exception scrubber all read this value, never TableState.Current(), so
+	// one query never observes two versions. Nil when storage integrity is
+	// disabled or the rewrite plugin did not run.
+	TableSnapshot sitable.Snapshot
 
 	// AbortWithSuccess, when set by a plugin (currently only
 	// commitgate via ErrAbortWithSuccess), instructs the relay to

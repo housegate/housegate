@@ -46,6 +46,7 @@ func TestProbeStorageIntegrityBuild(t *testing.T) {
 			storageIntegrityProbeHeredocSQL,
 			"DROP TABLE db1.t",
 			"SYSTEM RELOAD CONFIG (empty table map)",
+			"SELECT * FROM hg_safe.db1__t (empty table map)",
 		}, " | ") {
 			t.Fatalf("probe SQLs = %s", got)
 		}
@@ -56,6 +57,12 @@ func TestProbeStorageIntegrityBuild(t *testing.T) {
 		empty := be.requests[6].GetOptions()[0].GetTableNameArgs().GetDynamicArgs().GetStorageIntegrity()
 		if empty.GetContractVersion() != StorageIntegrityContractV2 || empty.GetTables() == nil || len(empty.GetTables()) != 0 {
 			t.Fatalf("empty-map probe args = %v, want V2 with an empty table map", empty)
+		}
+		for i, req := range be.requests {
+			si := req.GetOptions()[0].GetTableNameArgs().GetDynamicArgs().GetStorageIntegrity()
+			if strings.Join(si.GetReservedDatabases(), ",") != "hg_safe,hg_unsafe,hg_promote" {
+				t.Fatalf("probe request %d reserved databases = %v, want the production list", i, si.GetReservedDatabases())
+			}
 		}
 		for i, hasDeadline := range be.deadlines {
 			if !hasDeadline {
@@ -112,6 +119,22 @@ func TestProbeStorageIntegrityBuild(t *testing.T) {
 		err := newSIFactory(&scriptedProbeBackend{responses: responses}, nil, true).ProbeStorageIntegrityBuild(context.Background())
 		if err == nil || !strings.Contains(err.Error(), "probe=v2-si-drop-ordinary-physical") {
 			t.Fatalf("err = %v, want the V2 DROP probe named", err)
+		}
+	})
+
+	// A build that ignores reserved_databases forwards a direct hg_safe read
+	// while no table map entry names hg_safe.
+	t.Run("ignored reserved databases are refused", func(t *testing.T) {
+		responses := conformingProbeResponses()
+		responses["SELECT * FROM hg_safe.db1__t (empty table map)"] = acknowledgedSIResponse(&pb.RewriteSQLResponse{
+			Code:            pb.RewriteCode_Success,
+			StatementType:   pb.StatementType_STATEMENT_TYPE_SELECT,
+			SqlAfterRewrite: "SELECT * FROM hg_safe.db1__t",
+			Message:         "success",
+		})
+		err := newSIFactory(&scriptedProbeBackend{responses: responses}, nil, true).ProbeStorageIntegrityBuild(context.Background())
+		if err == nil || !strings.Contains(err.Error(), "probe=v2-empty-map-reserved-database") {
+			t.Fatalf("err = %v, want the reserved-database probe named", err)
 		}
 	})
 
@@ -304,6 +327,12 @@ func conformingProbeResponses() map[string]*pb.RewriteSQLResponse {
 			Code:            pb.RewriteCode_UnsupportedStatement,
 			SqlAfterRewrite: "SYSTEM RELOAD CONFIG",
 			Message:         storageIntegrityProbeEmptyMapMessage,
+		}),
+		"SELECT * FROM hg_safe.db1__t (empty table map)": acknowledgedSIResponse(&pb.RewriteSQLResponse{
+			Code:            pb.RewriteCode_RewriteError,
+			StatementType:   pb.StatementType_STATEMENT_TYPE_UNSPECIFIED,
+			SqlAfterRewrite: "SELECT * FROM hg_safe.db1__t",
+			Message:         storageIntegrityProbeReservedMessage,
 		}),
 	}
 }

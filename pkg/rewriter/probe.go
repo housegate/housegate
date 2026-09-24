@@ -6,6 +6,8 @@ import (
 	"time"
 
 	pb "github.com/housegate/rewriter-proto/gen/pb"
+
+	"github.com/housegate/housegate/pkg/sitable"
 )
 
 const (
@@ -35,6 +37,11 @@ const (
 	// copied from plan A's "Handoff to plan B" section.
 	storageIntegrityProbeDropSQL         = "DROP TABLE db1.t"
 	storageIntegrityProbeEmptyMapMessage = "storage-integrity is configured; statement class is not modelled by the rewriter and cannot be forwarded"
+
+	// reserved_databases under an empty table map: the engine must protect
+	// hg_safe although no table map entry names it (plan A handoff item 6).
+	storageIntegrityProbeReservedSQL     = "SELECT * FROM hg_safe.db1__t"
+	storageIntegrityProbeReservedMessage = "storage-integrity physical table hg_safe.db1__t is not directly addressable"
 )
 
 // The exact V2 rewrite of storageIntegrityProbeDropSQL under the fixed probe
@@ -65,7 +72,8 @@ type StorageIntegrityProbeFactory interface {
 }
 
 // storageIntegrityProbeArgs returns the fixed probe arguments; emptyTables
-// sends the V2 contract with an empty table map.
+// sends the V2 contract with an empty table map. Every request names the
+// reserved databases, as every production request does.
 func storageIntegrityProbeArgs(emptyTables bool) *pb.RewriteTableDynamicArgs {
 	tables := map[string]*pb.StorageIntegrityArgs_Table{
 		"db1.t": {SafeTable: "hg_safe.db1__t", UnsafeTable: "hg_unsafe.db1__t"},
@@ -82,6 +90,7 @@ func storageIntegrityProbeArgs(emptyTables bool) *pb.RewriteTableDynamicArgs {
 			ReadMode:            pb.StorageIntegrityArgs_READ_MODE_SAFE,
 			ReservedRowIdColumn: DefaultReservedRowIDColumn,
 			ContractVersion:     StorageIntegrityContractV2,
+			ReservedDatabases:   sitable.ReservedDatabases(),
 		},
 	}
 }
@@ -173,6 +182,17 @@ var storageIntegrityBuildProbes = []storageIntegrityBuildProbe{
 		statementType: pb.StatementType_STATEMENT_TYPE_UNSPECIFIED,
 		sqlAfter:      storageIntegrityProbeUnmodelledSQL,
 		message:       storageIntegrityProbeEmptyMapMessage,
+	},
+	{
+		// reserved_databases: with no table map entry the engine still
+		// protects hg_safe. A build that ignores the field forwards this read.
+		name:          "v2-empty-map-reserved-database",
+		emptyTables:   true,
+		sql:           storageIntegrityProbeReservedSQL,
+		code:          pb.RewriteCode_RewriteError,
+		statementType: pb.StatementType_STATEMENT_TYPE_UNSPECIFIED,
+		sqlAfter:      storageIntegrityProbeReservedSQL,
+		message:       storageIntegrityProbeReservedMessage,
 	},
 }
 

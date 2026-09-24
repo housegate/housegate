@@ -291,7 +291,8 @@ func newSIFactory(be backend, rs StorageIntegrityReadState, insertLane bool) *Se
 }
 
 func TestSentioRewriter_ShipsStorageIntegrityArgs(t *testing.T) {
-	be := &fakeBackend{resp: acknowledgedSIResponse(&pb.RewriteSQLResponse{Code: pb.RewriteCode_Success, SqlAfterRewrite: "x", StatementType: pb.StatementType_STATEMENT_TYPE_SELECT})}
+	be := &fakeBackend{resp: acknowledgedSIResponse(&pb.RewriteSQLResponse{Code: pb.RewriteCode_Success, SqlAfterRewrite: "x", StatementType: pb.StatementType_STATEMENT_TYPE_SELECT,
+		OriginalAccessedTables: []*pb.AccessedTable{{OriginalDatabase: "db1", OriginalTable: "t", LogicalDatabase: "db1", IsStorageIntegrity: true}}})}
 	rs := &fakeReadState{parts: map[string][]string{"db1.t": {"all_1_1_0"}}}
 	rw := newSIFactory(be, rs, true).NewRewriter(&fakeSession{})
 	if _, err := rw.Rewrite(context.Background(), "SELECT a FROM db1.t", ""); err != nil {

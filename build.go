@@ -45,6 +45,7 @@ import (
 	"github.com/housegate/housegate/pkg/registry"
 	"github.com/housegate/housegate/pkg/replicationproxy"
 	"github.com/housegate/housegate/pkg/rewriter"
+	"github.com/housegate/housegate/pkg/sitable"
 	"github.com/housegate/housegate/pkg/sqlmeta"
 
 	"github.com/redis/go-redis/v9"
@@ -108,24 +109,18 @@ func resolveNativeLibraryPath(engine, explicitPath, release, sha256, baseURL str
 	return p, nil
 }
 
-// storageIntegrityRewriterOptions derives the rewriter's SI read-surface
-// options from config: physical names per Spec C D2, the default read mode,
-// the host port, and whether the signed INSERT lane (ingress) is on.
-func storageIntegrityRewriterOptions(cfg *config.Config, rs rewriter.StorageIntegrityReadState) rewriter.StorageIntegrityOptions {
-	out := rewriter.StorageIntegrityOptions{
+// storageIntegrityRewriterOptions derives the rewriter's SI options: the
+// table-state port (nil when storage integrity is disabled), the default read
+// mode, the host read-state port, and whether the signed INSERT lane
+// (ingress) is on.
+func storageIntegrityRewriterOptions(cfg *config.Config, rs rewriter.StorageIntegrityReadState, state sitable.TableState) rewriter.StorageIntegrityOptions {
+	return rewriter.StorageIntegrityOptions{
+		Enabled:           state != nil,
+		TableState:        state,
 		DefaultReadMode:   rewriter.ReadMode(cfg.StorageIntegrity.Read.DefaultMode),
 		ReadState:         rs,
 		InsertLaneEnabled: cfg.StorageIntegrity.Ingress.Enabled,
 	}
-	for _, id := range cfg.StorageIntegrity.Tables {
-		phys := config.StorageIntegrityPhysicalTable(id)
-		out.Tables = append(out.Tables, rewriter.StorageIntegrityTable{
-			TableID:     id,
-			SafeTable:   config.StorageIntegritySafeDatabase + "." + phys,
-			UnsafeTable: config.StorageIntegrityUnsafeDatabase + "." + phys,
-		})
-	}
-	return out
 }
 
 // storageIntegrityInternalListenWarning returns the operator warnings for the
@@ -137,7 +132,7 @@ func storageIntegrityRewriterOptions(cfg *config.Config, rs rewriter.StorageInte
 // therefore deliberate, and network isolation of the internal port is the
 // corresponding control.
 func storageIntegrityInternalListenWarning(cfg *config.Config) string {
-	if len(cfg.StorageIntegrity.Tables) == 0 {
+	if !cfg.StorageIntegrity.IsEnabled() {
 		return ""
 	}
 	var warnings []string
@@ -145,8 +140,8 @@ func storageIntegrityInternalListenWarning(cfg *config.Config) string {
 		warnings = append(warnings, "storage_integrity: peer-trusted sessions arriving on internal_listen bypass storage-integrity rewrite and can address the hg_safe / hg_unsafe namespaces directly; internal_listen MUST be reachable only from trusted peer subnets")
 	}
 	if count := len(cfg.Auth.PlatformOperatorAddresses); count > 0 {
-		warnings = append(warnings, fmt.Sprintf("storage_integrity: %d platform-operator addresses use the raw-SQL bypass for SI tables [%s]; the operator guard conservatively rejects every hg_safe / hg_unsafe / _hg_row_id mention (including ordinary columns and string literals), Identifier placeholders, any backslash-bearing literal or quoted identifier, and local-catalog object-carrier callables regardless of arguments; use a direct ClickHouse connection for physical access",
-			count, strings.Join(cfg.StorageIntegrity.Tables, ", ")))
+		warnings = append(warnings, fmt.Sprintf("storage_integrity: %d platform-operator addresses use the raw-SQL bypass for SI tables; the operator guard conservatively rejects every hg_safe / hg_unsafe / _hg_row_id mention (including ordinary columns and string literals), Identifier placeholders, any backslash-bearing literal or quoted identifier, and local-catalog object-carrier callables regardless of arguments; use a direct ClickHouse connection for physical access",
+			count))
 	}
 	return strings.Join(warnings, "; ")
 }
@@ -444,15 +439,19 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	if isNilInterface(siReadState) {
 		siReadState = nil
 	}
-	siOptions := storageIntegrityRewriterOptions(cfg, siReadState)
+	siState, siStatic, err := resolveStorageIntegrityTableState(opts, reg)
+	if err != nil {
+		return nil, err
+	}
+	siOptions := storageIntegrityRewriterOptions(cfg, siReadState, siState)
 	if siOptions.DefaultReadMode == rewriter.ReadModeUnsafeLatest && siReadState == nil {
 		return nil, fmt.Errorf("storage_integrity.read.default_mode unsafe_latest requires Options.StorageIntegrityReadState (co-located SNode promotion journal); reference binaries can only serve safe reads")
 	}
-	if len(cfg.StorageIntegrity.Tables) > 0 && siReadState == nil {
-		log.Warnw("storage_integrity: no read-state port wired; unsafe_latest reads will be refused", "tables", len(cfg.StorageIntegrity.Tables))
+	if siOptions.Enabled && siReadState == nil {
+		log.Warn("storage_integrity: no read-state port wired; unsafe_latest reads will be refused")
 	}
 	if warning := storageIntegrityInternalListenWarning(cfg); warning != "" {
-		log.Warnw(warning, "internal_listen", cfg.InternalListen, "tables", len(cfg.StorageIntegrity.Tables))
+		log.Warnw(warning, "internal_listen", cfg.InternalListen)
 	}
 
 	var rwFactory rewriter.Factory
@@ -468,13 +467,13 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	if isNilRewriterFactory(rwFactory) {
 		rwFactory = nil
 	}
-	if len(siOptions.Tables) > 0 && rwFactory == nil {
-		return nil, fmt.Errorf("storage_integrity.tables requires an available SQL rewriter; refusing fail-open startup")
+	if siOptions.Enabled && rwFactory == nil {
+		return nil, fmt.Errorf("storage_integrity.enabled requires an available SQL rewriter; refusing fail-open startup")
 	}
-	if len(siOptions.Tables) > 0 {
+	if siOptions.Enabled {
 		capable, ok := rwFactory.(rewriter.StorageIntegrityCapableFactory)
 		if !ok || capable.StorageIntegrityContractVersion() != rewriter.StorageIntegrityContractV2 {
-			return nil, fmt.Errorf("storage_integrity.tables requires a storage-integrity contract V2 capable SQL rewriter; refusing fail-open startup")
+			return nil, fmt.Errorf("storage_integrity.enabled requires a storage-integrity contract V2 capable SQL rewriter; refusing fail-open startup")
 		}
 		// Contract V2 proves only that the backend understood the request; old
 		// engines can acknowledge it while missing the Spec I fail-closed
@@ -482,7 +481,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		// same behavioral conformance probe before an SI surface can start.
 		prober, ok := rwFactory.(rewriter.StorageIntegrityProbeFactory)
 		if !ok {
-			return nil, fmt.Errorf("storage_integrity.tables requires a SQL rewriter implementing rewriter.StorageIntegrityProbeFactory; refusing unverified startup")
+			return nil, fmt.Errorf("storage_integrity.enabled requires a SQL rewriter implementing rewriter.StorageIntegrityProbeFactory; refusing unverified startup")
 		}
 		probeTimeout := cfg.Rewriter.Timeout.Duration
 		if probeTimeout <= 0 {
@@ -494,7 +493,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		if err != nil {
 			return nil, err
 		}
-		log.Infow("storage-integrity rewriter build verified", "tables", len(siOptions.Tables))
+		log.Infow("storage-integrity rewriter build verified", "table_state", storageIntegrityTableStateLabel(siStatic))
 	}
 
 	// Cluster: lib-built path constructs and registers Close+Start;
@@ -601,7 +600,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		&authplugin.Plugin{Validator: validator, Access: reg},
 		&usage.Plugin{Client: usageClient},
 	}
-	if len(siOptions.Tables) > 0 {
+	if siOptions.Enabled {
 		queryPlugins = append(queryPlugins, &sireserved.Plugin{
 			ReservedDatabases: []string{
 				config.StorageIntegritySafeDatabase,
@@ -609,7 +608,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			},
 			ReservedRowIDColumn: rewriter.DefaultReservedRowIDColumn,
 		})
-		log.Infow("storage-integrity reserved-name guard enabled", "tables", len(siOptions.Tables))
+		log.Info("storage-integrity reserved-name guard enabled")
 	}
 	querySuccessPlugins := []plugin.QuerySuccessPlugin{}
 	queryCompletePlugins := []plugin.QueryCompletePlugin{}
@@ -716,11 +715,11 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			Factory:           rwFactory,
 			PhysicalDatabase:  physicalDB,
 			Observer:          obs,
-			FailClosedOnError: len(siOptions.Tables) > 0,
+			FailClosedOnError: siOptions.Enabled,
 		}
-		if len(siOptions.Tables) > 0 {
+		if siOptions.Enabled {
 			rewritePlug.RequiredStorageIntegrityContractVersion = rewriter.StorageIntegrityContractV2
-			rewritePlug.StorageIntegrityScrubber = rewriter.NewStorageIntegrityScrubber(siOptions)
+			rewritePlug.TableState = siState
 		}
 	}
 

@@ -31,6 +31,7 @@ import (
 	"github.com/housegate/housegate/pkg/replay"
 	"github.com/housegate/housegate/pkg/replay/payloadexec"
 	"github.com/housegate/housegate/pkg/rewriter"
+	"github.com/housegate/housegate/pkg/sitable"
 	"github.com/housegate/housegate/pkg/sqlmeta"
 	sicore "github.com/housegate/housegate/pkg/storageintegrity"
 	rewriterpb "github.com/housegate/rewriter-proto/gen/pb"
@@ -113,27 +114,27 @@ type buildFakeReadState struct{}
 
 func (buildFakeReadState) PromotedUnsafeParts(string) ([]string, error) { return nil, nil }
 
-func TestStorageIntegrityRewriterOptions_DerivesPhysicalNames(t *testing.T) {
+func TestStorageIntegrityRewriterOptions_CarriesTheTableState(t *testing.T) {
 	cfg := minimalServerCfg(t)
 	cfg.StorageIntegrity.Tables = []string{"tenant.events", "db1.t"}
 	cfg.StorageIntegrity.Read.DefaultMode = "unsafe_latest"
 	cfg.StorageIntegrity.Ingress.Enabled = false
 	rs := &buildFakeReadState{}
+	state := sitable.NewStatic(cfg.StorageIntegrity.Tables, nil, "")
 
-	got := storageIntegrityRewriterOptions(cfg, rs)
-	if len(got.Tables) != 2 || got.Tables[0] != (rewriter.StorageIntegrityTable{
-		TableID:     "tenant.events",
-		SafeTable:   "hg_safe.tenant__events",
-		UnsafeTable: "hg_unsafe.tenant__events",
-	}) {
-		t.Fatalf("tables = %+v", got.Tables)
+	got := storageIntegrityRewriterOptions(cfg, rs, state)
+	if !got.Enabled || got.TableState != state {
+		t.Fatalf("opts = %+v, want enabled over the given state", got)
 	}
 	if got.DefaultReadMode != rewriter.ReadModeUnsafeLatest || got.ReadState != rs || got.InsertLaneEnabled {
 		t.Fatalf("opts = %+v", got)
 	}
+	if storageIntegrityRewriterOptions(cfg, rs, nil).Enabled {
+		t.Fatal("no table state means storage integrity is disabled")
+	}
 
 	cfg.StorageIntegrity.Ingress.Enabled = true
-	if !storageIntegrityRewriterOptions(cfg, nil).InsertLaneEnabled {
+	if !storageIntegrityRewriterOptions(cfg, nil, state).InsertLaneEnabled {
 		t.Fatal("ingress enabled must enable the insert lane")
 	}
 }
@@ -158,7 +159,7 @@ func TestStorageIntegrityInternalListenWarning(t *testing.T) {
 	cfg.InternalListen = ""
 	cfg.Auth.PlatformOperatorAddresses = []string{"0x1", "0x2"}
 	got = storageIntegrityInternalListenWarning(cfg)
-	for _, want := range []string{"2 platform-operator", "tenant.events", "ordinary columns", "string literals", "Identifier placeholders", "backslash-bearing", "object-carrier", "regardless of arguments", "direct ClickHouse"} {
+	for _, want := range []string{"2 platform-operator", "ordinary columns", "string literals", "Identifier placeholders", "backslash-bearing", "object-carrier", "regardless of arguments", "direct ClickHouse"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("operator warning = %q, want %q from the conservative false-positive boundary", got, want)
 		}
@@ -252,7 +253,7 @@ func TestBuildServer_UnsafeLatestDefaultRequiresReadState(t *testing.T) {
 	if rewritePlugin == nil {
 		t.Fatal("configured SI surface did not wire rewrite plugin")
 	}
-	if !rewritePlugin.FailClosedOnError || rewritePlugin.RequiredStorageIntegrityContractVersion != rewriter.StorageIntegrityContractV2 {
+	if !rewritePlugin.FailClosedOnError || rewritePlugin.RequiredStorageIntegrityContractVersion != rewriter.StorageIntegrityContractV2 || rewritePlugin.TableState == nil {
 		t.Fatalf("SI rewrite plugin safety fields = fail_closed:%v contract:%s",
 			rewritePlugin.FailClosedOnError, rewritePlugin.RequiredStorageIntegrityContractVersion)
 	}
@@ -369,7 +370,7 @@ func TestBuildServer_ConfiguredSISurfaceRejectsTypedNilInjectedFactory(t *testin
 		NetworkState: network.NewInMemoryNetworkState(),
 		Rewriter:     typedNil,
 	}, nil)
-	if err == nil || !strings.Contains(err.Error(), "storage_integrity.tables requires an available SQL rewriter") {
+	if err == nil || !strings.Contains(err.Error(), "storage_integrity.enabled requires an available SQL rewriter") {
 		t.Fatalf("err = %v, want typed-nil factory rejection", err)
 	}
 }
@@ -384,7 +385,7 @@ func TestBuildServer_ConfiguredSISurfaceRequiresAvailableRewriter(t *testing.T) 
 		Config:       cfg,
 		NetworkState: network.NewInMemoryNetworkState(),
 	}, nil)
-	if err == nil || !strings.Contains(err.Error(), "storage_integrity.tables requires an available SQL rewriter") {
+	if err == nil || !strings.Contains(err.Error(), "storage_integrity.enabled requires an available SQL rewriter") {
 		t.Fatalf("err = %v", err)
 	}
 }
