@@ -4,7 +4,7 @@
 
 **Parent spec:** [2026-09-23-dynamic-si-table-set-design.md](2026-09-23-dynamic-si-table-set-design.md) (the umbrella). This document refines its §5, §8, §9 and §11 for housegate; §14 of the umbrella records the resulting amendments. Where the two disagree, this document wins for housegate and the rewriter engines.
 
-**Repositories:** rewriter-proto, rewriter-go, rewriter-grpc, housegate. sentio-node is not changed here (see §9).
+**Repositories:** rewriter-proto, rewriter-go, rewriter-grpc, housegate. sentio-node is not changed here (see §13).
 
 ## 1. Goal
 
