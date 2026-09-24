@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/housegate/housegate/pkg/lthash"
 	"github.com/housegate/housegate/pkg/replay/payloadexec"
 )
 
@@ -72,6 +73,26 @@ type Table struct {
 	RefusedReason string
 	Schema        payloadexec.TableSchema // set for Active and Gone
 	SchemaHash    string
+}
+
+// cloneSchema returns a TableSchema whose Columns slice is a fresh copy, so
+// the result shares no backing array with the argument. TableSchema currently
+// has no other slice or map field.
+func cloneSchema(schema payloadexec.TableSchema) payloadexec.TableSchema {
+	if schema.Columns != nil {
+		schema.Columns = append([]lthash.Column(nil), schema.Columns...)
+	}
+	return schema
+}
+
+// cloneTable returns a Table whose Schema owns its own Columns backing
+// array, independent of both the argument and any other clone taken from the
+// same source. A snapshot must not reach data it does not own (in), and a
+// caller must not be able to reach into a snapshot's internals through a
+// value the snapshot handed back (out).
+func cloneTable(t Table) Table {
+	t.Schema = cloneSchema(t.Schema)
+	return t
 }
 
 // Snapshot is immutable; every method is in-memory and performs no I/O.
@@ -142,11 +163,14 @@ func NewSnapshot(version uint64, fallback Status, tables []Table) Snapshot {
 		byID:     make(map[string]Table, len(tables)),
 	}
 	for _, t := range tables {
-		database, table, _ := strings.Cut(t.ID, ".")
-		s.byKey[tableKey{database: database, table: table}] = t
-		s.byID[t.ID] = t
-		if t.Status == Active {
-			s.active = append(s.active, t)
+		// Clone on the way in: the snapshot must not keep aliasing the
+		// caller's Columns backing array after this constructor returns.
+		ct := cloneTable(t)
+		database, table, _ := strings.Cut(ct.ID, ".")
+		s.byKey[tableKey{database: database, table: table}] = ct
+		s.byID[ct.ID] = ct
+		if ct.Status == Active {
+			s.active = append(s.active, ct)
 		}
 	}
 	sort.Slice(s.active, func(i, j int) bool { return s.active[i].ID < s.active[j].ID })
@@ -157,13 +181,19 @@ func (s *snapshot) Version() uint64 { return s.version }
 
 func (s *snapshot) Lookup(database, table string) Table {
 	if t, ok := s.byKey[tableKey{database: database, table: table}]; ok {
-		return t
+		// Clone on the way out: the caller must not be able to reach the
+		// snapshot's stored Columns array through the returned value.
+		return cloneTable(t)
 	}
 	return Table{ID: TableID(database, table), Status: s.fallback}
 }
 
 func (s *snapshot) Active() []Table {
-	return append([]Table(nil), s.active...)
+	out := make([]Table, len(s.active))
+	for i, t := range s.active {
+		out[i] = cloneTable(t)
+	}
+	return out
 }
 
 func (s *snapshot) Schema(id string) (Table, bool) {
@@ -171,7 +201,7 @@ func (s *snapshot) Schema(id string) (Table, bool) {
 	if !ok || (t.Status != Active && t.Status != Gone) {
 		return Table{}, false
 	}
-	return t, true
+	return cloneTable(t), true
 }
 
 // neverChanged is shared by every state whose version never moves.

@@ -9,7 +9,10 @@ go_library(
     ],
     importpath = "github.com/housegate/housegate/pkg/sitable",
     visibility = ["//visibility:public"],
-    deps = ["//pkg/replay/payloadexec"],
+    deps = [
+        "//pkg/lthash",
+        "//pkg/replay/payloadexec",
+    ],
 )
 
 go_test(

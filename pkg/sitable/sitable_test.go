@@ -104,3 +104,58 @@ func TestReservedDatabasesIsACopy(t *testing.T) {
 		t.Fatal("ReservedDatabases must return a fresh slice")
 	}
 }
+
+// TestSnapshotSchemaColumnsAreNotAliased is the reviewer's reproduction: a
+// caller-owned Columns slice passed into a Table must not be visible through
+// the snapshot after the caller mutates it (the "in" direction).
+func TestSnapshotSchemaColumnsAreNotAliased(t *testing.T) {
+	cols := []lthash.Column{{Name: "a", Type: "UInt32"}}
+	f := NewFake(Ordinary, Table{ID: "db1.t", Status: Active, Schema: payloadexec.TableSchema{TableID: "db1.t", Columns: cols}})
+	snap := f.Current()
+	cols[0].Name = "mutated"
+	table, ok := snap.Schema("db1.t")
+	if !ok || table.Schema.Columns[0].Name != "a" {
+		t.Fatalf("Schema must not alias the caller's Columns slice, got %+v", table.Schema.Columns)
+	}
+}
+
+// TestSnapshotReturnedTableColumnsAreFreshCopies covers the "out" direction:
+// mutating Columns on a Table returned by Lookup/Active/Schema must not leak
+// into the snapshot's internals or into another accessor for the same table.
+func TestSnapshotReturnedTableColumnsAreFreshCopies(t *testing.T) {
+	f := NewFake(Ordinary, Table{ID: "db1.t", Status: Active, Schema: testSchema("db1.t")})
+	snap := f.Current()
+
+	got := snap.Lookup("db1", "t")
+	got.Schema.Columns[0].Name = "mutated-lookup"
+	again := snap.Lookup("db1", "t")
+	if again.Schema.Columns[0].Name != "a" {
+		t.Fatalf("mutating a Lookup-returned Table's Columns must not affect a later Lookup, got %+v", again.Schema.Columns)
+	}
+
+	activeList := snap.Active()
+	activeList[0].Schema.Columns[0].Name = "mutated-active"
+	viaSchema, ok := snap.Schema("db1.t")
+	if !ok || viaSchema.Schema.Columns[0].Name != "a" {
+		t.Fatalf("mutating an Active()-returned Table's Columns must not affect Schema(), got %+v", viaSchema.Schema.Columns)
+	}
+
+	viaSchema.Schema.Columns[0].Name = "mutated-schema"
+	viaLookup := snap.Lookup("db1", "t")
+	if viaLookup.Schema.Columns[0].Name != "a" {
+		t.Fatalf("mutating a Schema()-returned Table's Columns must not affect Lookup, got %+v", viaLookup.Schema.Columns)
+	}
+}
+
+// TestStaticSchemaColumnsAreNotAliased is the "in" direction for NewStatic:
+// the caller's schemas map holds slices Static must not alias.
+func TestStaticSchemaColumnsAreNotAliased(t *testing.T) {
+	cols := []lthash.Column{{Name: "a", Type: "UInt32"}}
+	schemas := map[string]payloadexec.TableSchema{"db1.t": {TableID: "db1.t", Columns: cols}}
+	st := NewStatic([]string{"db1.t"}, schemas, "net")
+	cols[0].Name = "mutated"
+	table, ok := st.Current().Schema("db1.t")
+	if !ok || table.Schema.Columns[0].Name != "a" {
+		t.Fatalf("NewStatic must not alias the caller's schemas map slices, got %+v", table.Schema.Columns)
+	}
+}
