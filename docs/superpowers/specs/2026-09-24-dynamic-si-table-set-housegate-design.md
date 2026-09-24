@@ -176,13 +176,14 @@ Every accessed table is looked up with `Snapshot.Lookup`. If any table refuses, 
 
 ### 7.4 Error contract
 
-- Errors are raised at `OnQuery`, so the relay ends the query and keeps the session. `KeepSession` is not needed.
+- Errors raised at `OnQuery` end the query and keep the session without `KeepSession`. Refusals raised after the INSERT input (at admission: the activation refusal and `no longer accepts writes`) carry `KeepSession` and are recognised by exact message on the relay, like the 252 back-pressure, so they also keep the session.
 - Clients match on these message prefixes, which are a stable contract:
   - `storage_integrity: table <id> is pending activation (retryable)`
   - `storage_integrity: table <id> was refused: <code>: <reason>`
   - `storage_integrity: table <id> is still being purged; retry CREATE later (retryable)`
   - `storage_integrity: table <id> no longer accepts writes` (§9.6)
   - `storage_integrity: table <id> requires a signed INSERT; the client's table state is stale (retryable)` (§10.3)
+  - `storage_integrity: table <id> is being activated; retry shortly (retryable)` (an Active table whose merge guard has not been asserted yet; code 733 with the session kept)
 - The implementation plan fixes the ClickHouse codes for the retryable and non-retryable classes. Two constraints apply:
   - neither may make clickhouse-go or clickhouse-client drop the connection;
   - neither may reuse a code with existing Housegate meaning (252 back-pressure, 403 plugin rejection).
