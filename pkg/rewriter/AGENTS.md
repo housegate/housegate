@@ -12,7 +12,7 @@
 | Native smoke | `native_smoke_test.go` | Skips unless `POLYGLOT_SQL_FFI_PATH` is set. |
 | Plugin entry | `../plugins/rewrite/` | Query hook owns one `Rewriter` per connection and applies ordinary versus SI failure policy. |
 | SI contract adapter | `storage_integrity.go`, `sentio.go` | Builds contract-V2 args, validates acknowledgements, and turns SI uncertainty into `RejectedError`. |
-| SI startup conformance | `probe.go` | Bounded DESCRIBE/catch-all/protected-target suite; every concrete or injected SI factory must implement and pass it. |
+| SI startup conformance | `probe.go` | Bounded seven-case DESCRIBE/catch-all/protected-target suite plus the two contract-V2 cases (the per-engine SI `DROP TABLE` fingerprint, and the empty-table-map catch-all); every concrete or injected SI factory must implement and pass it. |
 | Agent materializer | `materialize.go`, `../plugins/materialize/` | Separate SQL materialization seam; startup and per-call failure policies differ. |
 | Snapshot-query analysis | `snapshot_query.go` | Fail-closed AnalyzeSnapshotQuery/PrepareSnapshotQuery wrapper and startup capability probe over the rewriter-proto snapshot contract; measured native/gRPC parity test is env-gated. |
 | Exception reverse mapping | `backend.go`, `sentio.go`, `../plugins/rewrite/` | With an active rewrite, `OnException` delegates through the per-connection rewriter to the selected backend's `RewriteErrorMessage`. |

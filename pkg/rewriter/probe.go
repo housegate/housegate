@@ -51,13 +51,14 @@ const (
 // It must stay identical to the shared si_describe_metadata_select corpus case.
 const StorageIntegrityProbeExpectedSQL = "SELECT name, type, default_kind AS default_type, default_expression, comment, '' AS codec_expression, '' AS ttl_expression FROM system.columns WHERE database = 'hg_safe' AND table = 'db1__t' AND name != '_hg_row_id' ORDER BY position"
 
-// The final release tags are pinned separately when the fixed Go and C++
-// engines are published. The probe itself identifies the required behavior
-// without guessing an unreleased version.
+// The released Go and gRPC build floors that carry storage-integrity
+// contract V2. The probe itself identifies the required behavior rather than
+// trusting a version string alone — this text is only what a startup
+// refusal tells the operator to deploy.
 const storageIntegrityProbeRequiredBuild = "rewriter-go >= v0.13.0 or rewriter-grpc >= v0.15.0 (storage-integrity contract V2)"
 
 // StorageIntegrityProbeFactory is a Factory whose concrete engine behavior can
-// be verified at startup. Contract v1 alone cannot distinguish patch builds.
+// be verified at startup. Contract V2 alone cannot distinguish patch builds.
 type StorageIntegrityProbeFactory interface {
 	Factory
 	ProbeStorageIntegrityBuild(ctx context.Context) error

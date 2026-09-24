@@ -178,7 +178,7 @@ type Factory interface {
 	Close() error
 }
 
-// StorageIntegrityCapableFactory is a Factory that can enforce the v1
+// StorageIntegrityCapableFactory is a Factory that can enforce the V2
 // storage-integrity request/response contract on every rewrite call.
 type StorageIntegrityCapableFactory interface {
 	Factory

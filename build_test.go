@@ -54,6 +54,16 @@ func (siCapableStubRewriterFactory) StorageIntegrityContractVersion() rewriterpb
 	return rewriter.StorageIntegrityContractV2
 }
 
+// siV1OnlyStubRewriterFactory implements rewriter.StorageIntegrityCapableFactory
+// but reports the retired V1 contract. HouseGate never falls back to V1, so
+// buildServer must refuse startup for it exactly as it does for a factory
+// that doesn't implement the capability marker at all.
+type siV1OnlyStubRewriterFactory struct{ stubRewriterFactory }
+
+func (siV1OnlyStubRewriterFactory) StorageIntegrityContractVersion() rewriterpb.StorageIntegrityContractVersion {
+	return rewriter.StorageIntegrityContractV1
+}
+
 type siProbeStubRewriterFactory struct {
 	siCapableStubRewriterFactory
 	err              error
@@ -279,6 +289,26 @@ func TestBuildServer_ConfiguredSISurfaceRejectsUnawareInjectedFactory(t *testing
 	}, nil)
 	if err == nil || !strings.Contains(err.Error(), "storage-integrity contract V2") {
 		t.Fatalf("err = %v, want unaware injected factory rejection", err)
+	}
+}
+
+// TestBuildServer_ConfiguredSISurfaceRejectsV1OnlyFactory pins the "V1-only
+// rewriter refuses startup" rule (spec 2026-09-24 §14 "Mixed rewriter
+// versions") at the buildServer gate itself, not just in the rewriter
+// package's own probe tests. A factory that implements
+// rewriter.StorageIntegrityCapableFactory but reports the retired V1
+// contract must be refused exactly like a factory unaware of the marker.
+func TestBuildServer_ConfiguredSISurfaceRejectsV1OnlyFactory(t *testing.T) {
+	cfg := minimalServerCfg(t)
+	cfg.StorageIntegrity.Tables = []string{"tenant.events"}
+
+	_, err := buildServer(Options{
+		Config:       cfg,
+		NetworkState: network.NewInMemoryNetworkState(),
+		Rewriter:     siV1OnlyStubRewriterFactory{},
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "storage-integrity contract V2") {
+		t.Fatalf("err = %v, want V1-only factory refused for lacking contract V2", err)
 	}
 }
 
