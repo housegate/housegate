@@ -158,9 +158,20 @@ func TestRelay_StagedRejection_KeepsSessionAndServesNextQuery(t *testing.T) {
 // not asserted yet (a newly Active table) is the retryable 733 with
 // KeepSession: the staged lane keeps the session exactly as for 252.
 func TestRelay_StagedTableActivatingRejection_KeepsSessionAndServesNextQuery(t *testing.T) {
+	testStagedSessionPreservingRejection(t, chproto.CodeTableIsBeingRestarted, chproto.TableActivatingMessage("db1.t"))
+}
+
+// Spec §9.6/§7.4: a statement whose table retired before the arbiter
+// sequenced it is refused non-retryably, but the session survives.
+func TestRelay_StagedNoLongerAcceptsWritesRejection_KeepsSessionAndServesNextQuery(t *testing.T) {
+	testStagedSessionPreservingRejection(t, chproto.CodeQueryIsProhibited, chproto.TableNoLongerAcceptsWritesMessage("db1.t"))
+}
+
+func testStagedSessionPreservingRejection(t *testing.T, code int32, message string) {
+	t.Helper()
 	hooks := &stagedRejectHooks{rejectOne: true, rejectErr: &chproto.ClientError{
-		Code:        chproto.CodeTableIsBeingRestarted,
-		Message:     chproto.TableActivatingMessage("db1.t"),
+		Code:        code,
+		Message:     message,
 		KeepSession: true,
 	}}
 	h := newDeferredHarness(t, hooks)
@@ -179,8 +190,8 @@ func TestRelay_StagedTableActivatingRejection_KeepsSessionAndServesNextQuery(t *
 	writeAllConn(t, h.clientProxy, empty)
 
 	exc := readServerException(t, h.clientProxy)
-	if exc.Code != proto.Error(chproto.CodeTableIsBeingRestarted) || exc.Message != "storage_integrity: table db1.t is being activated; retry shortly (retryable)" {
-		t.Fatalf("exception = %d %q, want the 733 activation refusal", exc.Code, exc.Message)
+	if exc.Code != proto.Error(code) || exc.Message != message {
+		t.Fatalf("exception = %d %q, want %d %q", exc.Code, exc.Message, code, message)
 	}
 	waitForRejectCounts(t, hooks)
 
@@ -373,6 +384,17 @@ func TestRelay_DeferredUpstreamTableActivating_KeepsSessionAndServesNextQuery(t 
 	})
 }
 
+// The server-mode Housegate answers a statement whose table retired before
+// sequencing with the session-preserving §9.6 refusal after it consumed the
+// complete staged input; the agent must keep its session too.
+func TestRelay_DeferredUpstreamNoLongerAcceptsWrites_KeepsSessionAndServesNextQuery(t *testing.T) {
+	testDeferredUpstreamSessionPreservingRejection(t, &chproto.Exception{
+		Code:    proto.Error(chproto.CodeQueryIsProhibited),
+		Name:    "DB::Exception",
+		Message: chproto.TableNoLongerAcceptsWritesMessage("db1.t"),
+	})
+}
+
 func testDeferredUpstreamSessionPreservingRejection(t *testing.T, rejection *chproto.Exception) {
 	t.Helper()
 	baseHooks := &deferredInsertHooks{}
@@ -469,6 +491,14 @@ func TestSessionPreservingIngressException(t *testing.T) {
 		{"pending activation", chproto.CodeTableIsBeingRestarted, "storage_integrity: table net1.events is pending activation (retryable)", false},
 		{"native table restarting", chproto.CodeTableIsBeingRestarted, "Table db.t is being restarted", false},
 		{"no table id", chproto.CodeTableIsBeingRestarted, chproto.TableActivatingMessage(""), false},
+		{"activation id with whitespace", chproto.CodeTableIsBeingRestarted, chproto.TableActivatingMessage("net1 events"), false},
+		{"no longer accepts writes", chproto.CodeQueryIsProhibited, chproto.TableNoLongerAcceptsWritesMessage("net1.events"), true},
+		{"no longer accepts writes under 733", chproto.CodeTableIsBeingRestarted, chproto.TableNoLongerAcceptsWritesMessage("net1.events"), false},
+		{"activation under 392", chproto.CodeQueryIsProhibited, chproto.TableActivatingMessage("net1.events"), false},
+		{"refused", chproto.CodeQueryIsProhibited, "storage_integrity: table net1.events was refused: SCHEMA_INVALID: bad column", false},
+		{"table state unavailable", chproto.CodeQueryIsProhibited, "storage_integrity: table state is unavailable for this query", false},
+		{"governed create", chproto.CodeQueryIsProhibited, "storage_integrity: table net1.events is governed by storage integrity and cannot be created with data; create the table first, then INSERT", false},
+		{"no longer accepts writes id with whitespace", chproto.CodeQueryIsProhibited, chproto.TableNoLongerAcceptsWritesMessage("net1 events"), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			exc := &chproto.Exception{Code: proto.Error(tc.code), Name: "DB::Exception", Message: tc.msg}

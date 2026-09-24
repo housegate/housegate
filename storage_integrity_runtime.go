@@ -168,6 +168,7 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 	ingress.mergeRunner = mergeGuard
 	schemaResolver := tableStateSchemaResolver(state)
 	ingress.WithTableSchemas(schemaResolver)
+	ingress.requireAdmissionSchema = true
 	if backpressure := runtimeCfg.Backpressure; backpressure.Enabled {
 		unsafeDatabase := strings.TrimSpace(backpressure.UnsafeDatabase)
 		safeDatabase := strings.TrimSpace(backpressure.SafeDatabase)

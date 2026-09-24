@@ -2183,12 +2183,14 @@ func exceptionForPluginError(pluginErr error) *chproto.Exception {
 // of a KeepSession ClientError. The ClickHouse Exception frame has no metadata
 // bit for this property, so the contract is deliberately narrower than the
 // codes alone: only Housegate's storage-integrity ingress refusals qualify —
-// code 252 with the back-pressure prefix, and code 733 with the exact
+// code 252 with the back-pressure prefix, code 733 with the exact
 // table-activation message (a newly Active table whose merge latch is not
-// asserted yet). Both are raised only after the server consumed the complete
-// staged input. A native ClickHouse TOO_MANY_PARTS, the other 733 lifecycle
-// refusals, or any other late payload exception stays fail-closed because it
-// does not prove the INSERT stream was fully consumed.
+// asserted yet), and code 392 with the exact spec §9.6 "no longer accepts
+// writes" message (the table retired before the arbiter sequenced the
+// statement). All are raised only after the server consumed the complete
+// staged input. A native ClickHouse TOO_MANY_PARTS, the other 733/392
+// lifecycle refusals, or any other late payload exception stays fail-closed
+// because it does not prove the INSERT stream was fully consumed.
 func isSessionPreservingIngressException(decoded any) bool {
 	exc, ok := decoded.(*chproto.Exception)
 	if !ok || exc == nil {
@@ -2200,6 +2202,8 @@ func isSessionPreservingIngressException(decoded any) bool {
 		return strings.HasPrefix(message, "storage_integrity: back-pressure:")
 	case chproto.CodeTableIsBeingRestarted:
 		return chproto.IsTableActivatingMessage(message)
+	case chproto.CodeQueryIsProhibited:
+		return chproto.IsTableNoLongerAcceptsWritesMessage(message)
 	default:
 		return false
 	}

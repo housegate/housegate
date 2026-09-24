@@ -61,6 +61,9 @@ type StorageIntegrityIngress struct {
 	// addressable by statement until ACK2 finalizes them or a required source
 	// lookup / exact cleanup proves that no candidate part remains.
 	pressureReservations map[string]trackedPartsReservation
+	// requireAdmissionSchema is set for the table-state-backed runtime: every
+	// new admission must carry its query snapshot's schema.
+	requireAdmissionSchema bool
 
 	cleanupProofTimeout time.Duration
 
@@ -445,7 +448,9 @@ func (i *StorageIntegrityIngress) cleanupProofContext(ctx context.Context) (cont
 // (spec 2026-09-24 §9.1); journal recovery passes nil and resolves through the
 // table-state resolver, which answers Active and Gone tables.
 func (i *StorageIntegrityIngress) partsPressureTarget(rec sicore.AdmissionRecord, snapshotSchema *payloadexec.TableSchema) (string, []string, error) {
-	if i.schemas == nil && i.pressure == nil {
+	if snapshotSchema == nil && i.schemas == nil && i.pressure == nil {
+		// Legacy ingress with no schema source at all. A supplied snapshot
+		// schema always drives the hash check and the touched partitions.
 		return "", nil, nil
 	}
 	var schema payloadexec.TableSchema
@@ -548,6 +553,13 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 			rec.PayloadEncoding,
 			storageIntegrityMaterializerName(actualMaterializer),
 		)
+	}
+	if i.requireAdmissionSchema && adm.TableSchema == nil {
+		// Defence in depth: the table-state-backed runtime derives a new
+		// admission only from its query snapshot, never from the recovery
+		// resolver. The ingress plugin refuses the same way before this point.
+		return &chproto.ClientError{Code: chproto.CodeQueryIsProhibited,
+			Message: "storage_integrity: table state is unavailable for this query"}
 	}
 	unlockStatement := i.lockStatement(rec.StatementID)
 	defer unlockStatement()
@@ -673,9 +685,13 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 		if res.Submit.AdmissionCode == sicore.AdmissionCodeSchemaNotAllowed {
 			// The table retired between this statement's snapshot and the
 			// arbiter's sequencing (spec 2026-09-24 §9.6). The arbiter code is
-			// internal; the client sees the stable non-retryable prefix.
+			// internal; the client sees the stable non-retryable prefix. The
+			// statement terminated at a clean boundary, so the session survives
+			// (spec §7.4) and the relay recognises the exact message on the wire.
 			return &chproto.ClientError{Code: chproto.CodeQueryIsProhibited,
-				Message: fmt.Sprintf("storage_integrity: table %s no longer accepts writes", rec.TableID)}
+				Message:     chproto.TableNoLongerAcceptsWritesMessage(rec.TableID),
+				Err:         fmt.Errorf("arbiter %s: %s", res.Submit.AdmissionCode, res.Submit.Reason),
+				KeepSession: true}
 		}
 		return fmt.Errorf("storage_integrity ingress: statement %s did not reach ACK2 (lifecycle %s, reason %q)", rec.StatementID, res.Lifecycle, res.Reason)
 	}

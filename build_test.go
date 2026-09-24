@@ -1196,6 +1196,10 @@ func TestBuildStorageIntegrityRuntimeBackpressureDisabledStillBindsTouchedPartit
 		t.Fatalf("startStorageIntegrityRuntime: %v", err)
 	}
 	adm := bpAdmission()
+	// The table-state-backed runtime requires the query snapshot's schema,
+	// which the ingress plugin binds in production.
+	schema := bpSchemas()[0]
+	adm.TableSchema = &schema
 	if err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), adm); err != nil {
 		t.Fatalf("ConsumeStorageIntegrityAdmission: %v", err)
 	}
@@ -1421,6 +1425,7 @@ func TestBuildStorageIntegrityRuntimeBuildsConsumerAndRunsMergeGuard(t *testing.
 		SettingsHash:    sicore.EmptySettingsHash,
 		SchemaHash:      payloadexec.TableSchemaHash("testnet-v2", bpSchemas()[0]),
 		RowIDProfileID:  payloadexec.RowIDProfileID,
+		TableSchema:     &bpSchemas()[0],
 		Payload: storageintegrity.CapturedPayload{
 			Bytes:    payload,
 			Length:   uint64(len(payload)),

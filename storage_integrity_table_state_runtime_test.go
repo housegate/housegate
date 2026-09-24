@@ -98,6 +98,10 @@ func TestRecoveryNeedingAPurgedSchemaFailsWithTheNamedError(t *testing.T) {
 	if !errors.Is(err, ErrStorageIntegrityRecoverySchemaPurged) {
 		t.Fatalf("err = %v, want ErrStorageIntegrityRecoverySchemaPurged", err)
 	}
+	// The operator needs both names to resolve the statement by hand.
+	if msg := err.Error(); !strings.Contains(msg, "statement "+bpEUAdmission().StatementID) || !strings.Contains(msg, "net1.events") {
+		t.Fatalf("err = %q, want it to name the statement id and the table", msg)
+	}
 }
 
 // TestSchemaNotAllowedReachesTheClientAsNoLongerAcceptsWrites is spec
@@ -109,6 +113,14 @@ func TestSchemaNotAllowedReachesTheClientAsNoLongerAcceptsWrites(t *testing.T) {
 	var ce *chproto.ClientError
 	if !errors.As(err, &ce) || ce.Code != chproto.CodeQueryIsProhibited || ce.Message != "storage_integrity: table net1.events no longer accepts writes" {
 		t.Fatalf("err = %v, want the non-retryable no-longer-accepts-writes refusal", err)
+	}
+	// Spec §7.4: the refusal ends the query, not the session.
+	if !ce.KeepSession || !chproto.KeepsSession(fmt.Errorf("wrapped by the plugin: %w", err)) {
+		t.Fatalf("err = %+v, want KeepSession through the plugin's wrapping", ce)
+	}
+	// The arbiter's code and reason stay server-side, in Err only.
+	if ce.Err == nil || ce.Err.Error() != "arbiter ADMISSION_CODE_SCHEMA_NOT_ALLOWED: table retired" {
+		t.Fatalf("Err = %v, want the arbiter code and reason", ce.Err)
 	}
 }
 
@@ -173,4 +185,72 @@ func TestAdmissionWithAnUnhealthyMergeLatchKeepsTheNonRetryableRefusal(t *testin
 	if errors.As(err, &ce) || chproto.KeepsSession(err) {
 		t.Fatalf("err = %v, an unhealthy latch must keep the generic session-closing refusal", err)
 	}
+}
+
+// TestTableStateBackedAdmissionWithoutASnapshotSchemaIsRefused is defence in
+// depth: the table-state-backed runtime never falls back to the recovery
+// resolver for a new admission.
+func TestTableStateBackedAdmissionWithoutASnapshotSchemaIsRefused(t *testing.T) {
+	ingress, writer, submitter, _ := newBackpressureIngress(t, &fakePartsPressure{})
+	ingress.requireAdmissionSchema = true
+	adm := bpAdmission()
+	adm.TableSchema = nil
+	err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), adm)
+	var ce *chproto.ClientError
+	if !errors.As(err, &ce) || ce.Code != chproto.CodeQueryIsProhibited || ce.Message != "storage_integrity: table state is unavailable for this query" {
+		t.Fatalf("err = %v, want the non-retryable table-state-unavailable refusal", err)
+	}
+	if writer.calls != 0 || submitter.calls != 0 {
+		t.Fatalf("payload/submit calls = %d/%d, want 0/0", writer.calls, submitter.calls)
+	}
+}
+
+// TestSnapshotSchemaIsCheckedWithoutResolverOrPressure pins that a supplied
+// snapshot schema drives the hash check and the touched partitions even when
+// the ingress has neither a resolver nor parts pressure.
+func TestSnapshotSchemaIsCheckedWithoutResolverOrPressure(t *testing.T) {
+	newBare := func(t *testing.T) (*StorageIntegrityIngress, sicore.IntakeJournal) {
+		t.Helper()
+		journal, err := sicore.NewFileIntakeJournal(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		orch := sicore.NewOrchestrator(
+			&rootRecordingSubmitter{outcome: sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}},
+			&rootRecordingPreparer{source: "snode-A", claim: sicore.ClaimOutcome{Category: sicore.OutcomeAccepted, BoundSource: "snode-A"}, candidates: bpPreparedCandidates()},
+			sicore.OrchestratorConfig{ExpectedSource: "snode-A", Journal: journal},
+		)
+		ingress, err := NewStorageIntegrityIngress(orch, nil, sicore.MaterializerNative)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ingress, journal
+	}
+	schema := bpSchemas()[0]
+
+	t.Run("hash mismatch refused", func(t *testing.T) {
+		ingress, _ := newBare(t)
+		adm := bpAdmission()
+		adm.TableSchema = &schema
+		adm.SchemaHash = "not-the-snapshot-hash"
+		err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), adm)
+		if err == nil || !strings.Contains(err.Error(), "does not match authoritative table schema") {
+			t.Fatalf("err = %v, want the schema_hash mismatch refusal", err)
+		}
+	})
+	t.Run("touched partitions journaled", func(t *testing.T) {
+		ingress, journal := newBare(t)
+		adm := bpAdmission()
+		adm.TableSchema = &schema
+		if err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), adm); err != nil {
+			t.Fatalf("Consume: %v", err)
+		}
+		rec, ok, err := journal.LoadIntakeRecord(context.Background(), adm.StatementID)
+		if err != nil || !ok {
+			t.Fatalf("load record: ok=%v err=%v", ok, err)
+		}
+		if got := rec.Admission.TouchedPartitionIDs; len(got) != 2 || got[0] != "p_eu" || got[1] != "p_us" {
+			t.Fatalf("touched partitions = %v, want [p_eu p_us] from the snapshot schema", got)
+		}
+	})
 }
