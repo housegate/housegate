@@ -1,0 +1,36 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "sitablestate",
+    srcs = [
+        "lexer.go",
+        "plugin.go",
+    ],
+    importpath = "github.com/housegate/housegate/pkg/plugins/sitablestate",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/chproto",
+        "//pkg/plugin",
+        "//pkg/sitable",
+        "//pkg/sqlmeta",
+    ],
+)
+
+go_test(
+    name = "sitablestate_test",
+    srcs = [
+        "lexer_test.go",
+        "plugin_test.go",
+        "snapshot_test.go",
+    ],
+    embed = [":sitablestate"],
+    deps = [
+        "//pkg/chproto",
+        "//pkg/chsession",
+        "//pkg/plugin",
+        "//pkg/plugins/rewrite",
+        "//pkg/rewriter",
+        "//pkg/sitable",
+        "//pkg/sqlmeta",
+    ],
+)

@@ -39,6 +39,7 @@ import (
 	"github.com/housegate/housegate/pkg/plugins/sessionstate"
 	"github.com/housegate/housegate/pkg/plugins/sireserved"
 	"github.com/housegate/housegate/pkg/plugins/sistatement"
+	"github.com/housegate/housegate/pkg/plugins/sitablestate"
 	"github.com/housegate/housegate/pkg/plugins/storageintegrity"
 	"github.com/housegate/housegate/pkg/plugins/usage"
 	"github.com/housegate/housegate/pkg/proxy"
@@ -725,6 +726,13 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 
 	if rewritePlug != nil {
 		queryPlugins = append(queryPlugins, rewritePlug)
+	}
+	// sitablestate reads the rewriter's classification and the query's
+	// snapshot, so it runs right after rewrite and before the SI ingress and
+	// commitgate (spec 2026-09-24 §7.1).
+	if siOptions.Enabled {
+		queryPlugins = append(queryPlugins, &sitablestate.Plugin{})
+		log.Infow("storage-integrity table-state gate enabled", "table_state", storageIntegrityTableStateLabel(siStatic))
 	}
 
 	var storageIntegrityIngress *storageintegrity.Plugin

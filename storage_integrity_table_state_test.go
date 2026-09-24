@@ -5,8 +5,11 @@ import (
 	"testing"
 
 	"github.com/housegate/housegate/pkg/network"
+	"github.com/housegate/housegate/pkg/plugins/commitgate"
 	"github.com/housegate/housegate/pkg/plugins/rewrite"
 	"github.com/housegate/housegate/pkg/plugins/sireserved"
+	"github.com/housegate/housegate/pkg/plugins/sitablestate"
+	"github.com/housegate/housegate/pkg/plugins/storageintegrity"
 	"github.com/housegate/housegate/pkg/rewriter"
 	"github.com/housegate/housegate/pkg/sitable"
 )
@@ -111,5 +114,63 @@ func TestBuildServer_InjectedTableStateEnablesTheSurface(t *testing.T) {
 	}
 	if !guarded {
 		t.Fatal("an enabled deployment must wire the reserved-name guard")
+	}
+}
+
+// TestBuildServer_TableStateGateWiring is spec 2026-09-24 §7.1: sitablestate
+// runs after rewrite and before the SI ingress and commitgate.
+func TestBuildServer_TableStateGateWiring(t *testing.T) {
+	cfg := minimalServerCfg(t)
+	cfg.StorageIntegrity.Enabled = boolPtr(true)
+	cfg.StorageIntegrity.Ingress.Enabled = true
+	cfg.StorageIntegrity.Ingress.NetworkID = "testnet-v2"
+	cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{"0x1111111111111111111111111111111111111111"}
+	fake := sitable.NewFake(sitable.Pending)
+	bs, err := buildServer(Options{
+		Config:                            cfg,
+		NetworkState:                      network.NewInMemoryNetworkState(),
+		Rewriter:                          siProbeStubRewriterFactory{},
+		StorageIntegrityTableState:        fake,
+		StorageIntegrityAdmissionConsumer: &recordingAdmissionConsumer{},
+	}, nil)
+	if err != nil {
+		t.Fatalf("build with an injected table state: %v", err)
+	}
+	defer bs.teardown()
+	rewriteAt, gateAt, ingressAt, commitAt := -1, -1, -1, -1
+	for i, candidate := range requireExternalChain(t, bs).QueryPlugins {
+		switch candidate.(type) {
+		case *rewrite.Plugin:
+			rewriteAt = i
+		case *sitablestate.Plugin:
+			gateAt = i
+		case *storageintegrity.Plugin:
+			ingressAt = i
+		case *commitgate.Plugin:
+			commitAt = i
+		}
+	}
+	if !(rewriteAt >= 0 && rewriteAt < gateAt && gateAt < ingressAt && ingressAt < commitAt) {
+		t.Fatalf("plugin order rewrite=%d sitablestate=%d ingress=%d commitgate=%d, want strictly increasing", rewriteAt, gateAt, ingressAt, commitAt)
+	}
+}
+
+func TestBuildServer_DisabledWiresNoTableStateGate(t *testing.T) {
+	bs, err := buildServer(Options{
+		Config:       minimalServerCfg(t),
+		NetworkState: network.NewInMemoryNetworkState(),
+		Rewriter:     stubRewriterFactory{},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bs.teardown()
+	for _, candidate := range requireExternalChain(t, bs).QueryPlugins {
+		if _, ok := candidate.(*sitablestate.Plugin); ok {
+			t.Fatal("a disabled deployment must not wire sitablestate")
+		}
+		if p, ok := candidate.(*rewrite.Plugin); ok && p.TableState != nil {
+			t.Fatal("a disabled deployment must not give the rewrite plugin a table state")
+		}
 	}
 }
