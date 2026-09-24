@@ -48,6 +48,7 @@ go_test(
     name = "storageintegrity_test",
     srcs = [
         "ack2_gate_test.go",
+        "admission_code_test.go",
         "arbiter_proto_test.go",
         "ingress_drive_test.go",
         "inline_values_test.go",

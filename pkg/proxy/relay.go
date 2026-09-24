@@ -1908,7 +1908,7 @@ func (r *Relay) upstreamToClient(ctx context.Context) error {
 					deferredTerminal.abort(ctx, r.hooks)
 					return ctx.Err()
 				}
-			} else if isSessionPreservingBackpressureException(pkt.Decoded) {
+			} else if isSessionPreservingIngressException(pkt.Decoded) {
 				// A server-mode Housegate emits this narrow wire class only after
 				// it consumed the complete staged input and returned its own upstream
 				// connection to a framed terminal boundary. Wait for our writer-side
@@ -2179,16 +2179,30 @@ func exceptionForPluginError(pluginErr error) *chproto.Exception {
 	}
 }
 
-// isSessionPreservingBackpressureException recognises the on-wire projection
+// isSessionPreservingIngressException recognises the on-wire projection
 // of a KeepSession ClientError. The ClickHouse Exception frame has no metadata
-// bit for this property, so the contract is deliberately narrower than code
-// 252 alone: only Housegate's storage-integrity back-pressure prefix qualifies.
-// A native ClickHouse TOO_MANY_PARTS or any other late payload exception stays
-// fail-closed because it does not prove the INSERT stream was fully consumed.
-func isSessionPreservingBackpressureException(decoded any) bool {
+// bit for this property, so the contract is deliberately narrower than the
+// codes alone: only Housegate's storage-integrity ingress refusals qualify —
+// code 252 with the back-pressure prefix, and code 733 with the exact
+// table-activation message (a newly Active table whose merge latch is not
+// asserted yet). Both are raised only after the server consumed the complete
+// staged input. A native ClickHouse TOO_MANY_PARTS, the other 733 lifecycle
+// refusals, or any other late payload exception stays fail-closed because it
+// does not prove the INSERT stream was fully consumed.
+func isSessionPreservingIngressException(decoded any) bool {
 	exc, ok := decoded.(*chproto.Exception)
-	return ok && exc != nil && int32(exc.Code) == chproto.CodeTooManyParts &&
-		strings.HasPrefix(strings.TrimSpace(exc.Message), "storage_integrity: back-pressure:")
+	if !ok || exc == nil {
+		return false
+	}
+	message := strings.TrimSpace(exc.Message)
+	switch int32(exc.Code) {
+	case chproto.CodeTooManyParts:
+		return strings.HasPrefix(message, "storage_integrity: back-pressure:")
+	case chproto.CodeTableIsBeingRestarted:
+		return chproto.IsTableActivatingMessage(message)
+	default:
+		return false
+	}
 }
 
 // writeExceptionToClient converts a plugin error into a synthetic ClickHouse

@@ -40,3 +40,24 @@ func TestKeepsSession(t *testing.T) {
 		t.Fatal("nil must not keep the session")
 	}
 }
+
+// TestTableActivatingMessage pins the exact client-facing text; the relay's
+// session-preserving recognition depends on it byte for byte.
+func TestTableActivatingMessage(t *testing.T) {
+	if got := TableActivatingMessage("net1.events"); got != "storage_integrity: table net1.events is being activated; retry shortly (retryable)" {
+		t.Fatalf("TableActivatingMessage = %q", got)
+	}
+	if !IsTableActivatingMessage(TableActivatingMessage("net1.events")) {
+		t.Fatal("IsTableActivatingMessage rejected its own message")
+	}
+	for _, msg := range []string{
+		TableActivatingMessage(""),
+		"storage_integrity: table net1.events is pending activation (retryable)",
+		"storage_integrity: back-pressure: retry later",
+		"Table net1.events is being activated; retry shortly (retryable)",
+	} {
+		if IsTableActivatingMessage(msg) {
+			t.Fatalf("IsTableActivatingMessage(%q) = true, want false", msg)
+		}
+	}
+}

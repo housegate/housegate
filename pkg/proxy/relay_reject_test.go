@@ -23,6 +23,8 @@ type stagedRejectHooks struct {
 	mu        sync.Mutex
 	queries   []string
 	rejectOne bool
+	// rejectErr overrides the default 252 back-pressure refusal.
+	rejectErr error
 	aborts    int
 	completes int
 	successes int
@@ -43,6 +45,9 @@ func (h *stagedRejectHooks) OnQueryInputCompleteStrict(context.Context, *plugin.
 		return nil
 	}
 	h.rejectOne = false
+	if h.rejectErr != nil {
+		return h.rejectErr
+	}
 	return &chproto.ClientError{
 		Code:        chproto.CodeTooManyParts,
 		Message:     "storage_integrity: back-pressure: hg_unsafe.db__t partition p_p0 has 2400 active parts (soft limit 2400); retry later",
@@ -131,6 +136,51 @@ func TestRelay_StagedRejection_KeepsSessionAndServesNextQuery(t *testing.T) {
 	}
 	if !bytes.Contains([]byte(exc.Message), []byte("back-pressure")) {
 		t.Fatalf("exception message = %q", exc.Message)
+	}
+	waitForRejectCounts(t, hooks)
+
+	writeAllConn(t, h.clientProxy, encodeInsertQuery(t, "q2", "SELECT 1"))
+	writeAllConn(t, h.clientProxy, empty)
+	if got := readExact(t, h.clientProxy, 1); got[0] != byte(chproto.ServerEndOfStreamCode) {
+		t.Fatalf("second query terminal = %d, want EndOfStream", got[0])
+	}
+	select {
+	case err := <-h.loopErr:
+		t.Fatalf("a relay loop exited after the rejection: %v", err)
+	default:
+	}
+	if err := <-upDone; err != nil {
+		t.Fatalf("upstream flow: %v", err)
+	}
+}
+
+// A storage-integrity admission refused because its table's merge latch is
+// not asserted yet (a newly Active table) is the retryable 733 with
+// KeepSession: the staged lane keeps the session exactly as for 252.
+func TestRelay_StagedTableActivatingRejection_KeepsSessionAndServesNextQuery(t *testing.T) {
+	hooks := &stagedRejectHooks{rejectOne: true, rejectErr: &chproto.ClientError{
+		Code:        chproto.CodeTableIsBeingRestarted,
+		Message:     chproto.TableActivatingMessage("db1.t"),
+		KeepSession: true,
+	}}
+	h := newDeferredHarness(t, hooks)
+	empty := encodeEmptyClientData(t)
+	sample := encodeServerSampleDataPacket(t, deferredTestRev)
+
+	upDone := make(chan error, 1)
+	go func() { upDone <- serveStagedRejectUpstream(t, h.upstreamProxy) }()
+
+	writeAllConn(t, h.clientProxy, encodeInsertQuery(t, "q1", "INSERT INTO db.t FORMAT Native"))
+	writeAllConn(t, h.clientProxy, empty)
+	if got := readExact(t, h.clientProxy, len(sample)); !bytes.Equal(got, sample) {
+		t.Fatalf("client sample block = %x, want %x", got, sample)
+	}
+	writeAllConn(t, h.clientProxy, encodeNonEmptyClientDataPacket(t, deferredTestRev))
+	writeAllConn(t, h.clientProxy, empty)
+
+	exc := readServerException(t, h.clientProxy)
+	if exc.Code != proto.Error(chproto.CodeTableIsBeingRestarted) || exc.Message != "storage_integrity: table db1.t is being activated; retry shortly (retryable)" {
+		t.Fatalf("exception = %d %q, want the 733 activation refusal", exc.Code, exc.Message)
 	}
 	waitForRejectCounts(t, hooks)
 
@@ -305,6 +355,26 @@ func serveSecondQueryOnlyUpstream(t *testing.T, conn net.Conn) error {
 // when a server-mode Housegate returns the session-preserving back-pressure
 // Exception. That terminal must not force the agent to reconnect either.
 func TestRelay_DeferredUpstreamBackpressure_KeepsSessionAndServesNextQuery(t *testing.T) {
+	testDeferredUpstreamSessionPreservingRejection(t, &chproto.Exception{
+		Code:    proto.Error(chproto.CodeTooManyParts),
+		Name:    "DB::Exception",
+		Message: "storage_integrity: back-pressure: retry later",
+	})
+}
+
+// The server-mode Housegate refuses an admission whose table's merge latch is
+// not asserted yet with the session-preserving 733 activation refusal, after
+// it consumed the complete staged input; the agent must keep its session too.
+func TestRelay_DeferredUpstreamTableActivating_KeepsSessionAndServesNextQuery(t *testing.T) {
+	testDeferredUpstreamSessionPreservingRejection(t, &chproto.Exception{
+		Code:    proto.Error(chproto.CodeTableIsBeingRestarted),
+		Name:    "DB::Exception",
+		Message: chproto.TableActivatingMessage("db1.t"),
+	})
+}
+
+func testDeferredUpstreamSessionPreservingRejection(t *testing.T, rejection *chproto.Exception) {
+	t.Helper()
 	baseHooks := &deferredInsertHooks{}
 	hooks := &firstDeferredInsertHooks{deferredInsertHooks: baseHooks}
 	h := newDeferredHarness(t, hooks)
@@ -313,7 +383,7 @@ func TestRelay_DeferredUpstreamBackpressure_KeepsSessionAndServesNextQuery(t *te
 	payload := encodeNonEmptyClientDataPacket(t, deferredTestRev)
 
 	upDone := make(chan error, 1)
-	go func() { upDone <- serveDeferredBackpressureThenSelect(t, h.upstreamProxy) }()
+	go func() { upDone <- serveDeferredRejectionThenSelect(t, h.upstreamProxy, rejection) }()
 
 	writeAllConn(t, h.clientProxy, encodeInsertQuery(t, "q1", "INSERT INTO db.t FORMAT Native"))
 	if got := readExact(t, h.clientProxy, len(sample)); !bytes.Equal(got, sample) {
@@ -322,8 +392,8 @@ func TestRelay_DeferredUpstreamBackpressure_KeepsSessionAndServesNextQuery(t *te
 	writeAllConn(t, h.clientProxy, empty)
 	writeAllConn(t, h.clientProxy, payload)
 	writeAllConn(t, h.clientProxy, empty)
-	if exc := readServerException(t, h.clientProxy); exc.Code != proto.Error(chproto.CodeTooManyParts) {
-		t.Fatalf("exception code = %d, want 252", exc.Code)
+	if exc := readServerException(t, h.clientProxy); exc.Code != rejection.Code || exc.Message != rejection.Message {
+		t.Fatalf("exception = %d %q, want %d %q", exc.Code, exc.Message, rejection.Code, rejection.Message)
 	}
 
 	writeAllConn(t, h.clientProxy, encodeInsertQuery(t, "q2", "SELECT 1"))
@@ -344,7 +414,7 @@ func TestRelay_DeferredUpstreamBackpressure_KeepsSessionAndServesNextQuery(t *te
 	}
 }
 
-func serveDeferredBackpressureThenSelect(t *testing.T, conn net.Conn) error {
+func serveDeferredRejectionThenSelect(t *testing.T, conn net.Conn, rejection *chproto.Exception) error {
 	t.Helper()
 	codec := chproto.NewCodec(conn, chproto.DirFromClient)
 	codec.SetRevision(deferredTestRev)
@@ -364,11 +434,7 @@ func serveDeferredBackpressureThenSelect(t *testing.T, conn net.Conn) error {
 	if _, err := codec.ReadPacket(); err != nil { // terminator
 		return err
 	}
-	if err := codec.WriteException(&chproto.Exception{
-		Code:    proto.Error(chproto.CodeTooManyParts),
-		Name:    "DB::Exception",
-		Message: "storage_integrity: back-pressure: retry later",
-	}); err != nil {
+	if err := codec.WriteException(rejection); err != nil {
 		return err
 	}
 	pkt, err := codec.ReadPacket(uint64(chproto.ClientQueryCode))
@@ -383,4 +449,35 @@ func serveDeferredBackpressureThenSelect(t *testing.T, conn net.Conn) error {
 	}
 	_, err = conn.Write([]byte{byte(chproto.ServerEndOfStreamCode)})
 	return err
+}
+
+// TestSessionPreservingIngressException pins the narrow wire contract: only
+// Housegate's own storage-integrity back-pressure and table-activation
+// refusals preserve the session; every other late payload exception, including
+// the other 733 lifecycle refusals and a native TOO_MANY_PARTS, stays fatal.
+func TestSessionPreservingIngressException(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		code int32
+		msg  string
+		want bool
+	}{
+		{"back-pressure", chproto.CodeTooManyParts, "storage_integrity: back-pressure: retry later", true},
+		{"table activating", chproto.CodeTableIsBeingRestarted, chproto.TableActivatingMessage("net1.events"), true},
+		{"native too many parts", chproto.CodeTooManyParts, "Too many parts (300)", false},
+		{"activation text under 252", chproto.CodeTooManyParts, chproto.TableActivatingMessage("net1.events"), false},
+		{"pending activation", chproto.CodeTableIsBeingRestarted, "storage_integrity: table net1.events is pending activation (retryable)", false},
+		{"native table restarting", chproto.CodeTableIsBeingRestarted, "Table db.t is being restarted", false},
+		{"no table id", chproto.CodeTableIsBeingRestarted, chproto.TableActivatingMessage(""), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			exc := &chproto.Exception{Code: proto.Error(tc.code), Name: "DB::Exception", Message: tc.msg}
+			if got := isSessionPreservingIngressException(exc); got != tc.want {
+				t.Fatalf("isSessionPreservingIngressException(%d, %q) = %v, want %v", tc.code, tc.msg, got, tc.want)
+			}
+		})
+	}
+	if isSessionPreservingIngressException(nil) || isSessionPreservingIngressException("not an exception") {
+		t.Fatal("a non-Exception packet must not preserve the session")
+	}
 }

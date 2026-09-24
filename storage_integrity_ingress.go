@@ -315,8 +315,17 @@ func (i *StorageIntegrityIngress) restorePressureReservations(ctx context.Contex
 				// provide the proof enforced by RestoreBatch below.
 				partitions = candidatePartitionIDs(candidates)
 			}
+		} else if record.Admission.TouchedPartitionIDs != nil {
+			// The payload-derived set was journaled at admission, so recovery
+			// needs no schema and no longer requires the table to be Active
+			// (spec 2026-09-24 §9.2).
+			table = sicore.PhysicalTableName(record.Admission.TableID)
+			partitions = clonePartitionIDs(record.Admission.TouchedPartitionIDs)
 		} else {
-			table, partitions, err = i.partsPressureTarget(record.Admission)
+			table, partitions, err = i.partsPressureTarget(record.Admission, nil)
+			if errors.Is(err, errStorageIntegritySchemaUnavailable) {
+				return fmt.Errorf("%w: statement %s needs the schema of %s to rebuild its touched partitions, and the table state no longer holds it (the table was purged); resolve the statement with the operator runbook before restarting", ErrStorageIntegrityRecoverySchemaPurged, record.StatementID, record.Admission.TableID)
+			}
 			if err != nil {
 				return fmt.Errorf("storage_integrity ingress: restore pressure target for %s: %w", record.StatementID, err)
 			}
@@ -431,16 +440,26 @@ func (i *StorageIntegrityIngress) cleanupProofContext(ctx context.Context) (cont
 	return context.WithTimeout(context.WithoutCancel(ctx), i.cleanupProofTimeout)
 }
 
-func (i *StorageIntegrityIngress) partsPressureTarget(rec sicore.AdmissionRecord) (string, []string, error) {
+// partsPressureTarget derives the physical table and the payload-touched
+// partitions. A new admission passes the schema of the query's snapshot
+// (spec 2026-09-24 §9.1); journal recovery passes nil and resolves through the
+// table-state resolver, which answers Active and Gone tables.
+func (i *StorageIntegrityIngress) partsPressureTarget(rec sicore.AdmissionRecord, snapshotSchema *payloadexec.TableSchema) (string, []string, error) {
 	if i.schemas == nil && i.pressure == nil {
 		return "", nil, nil
 	}
-	if i.schemas == nil {
-		return "", nil, fmt.Errorf("storage_integrity ingress: back-pressure requires a table schema resolver")
-	}
-	schema, ok := i.schemas.StorageIntegrityTableSchema(rec.TableID)
-	if !ok {
-		return "", nil, fmt.Errorf("storage_integrity ingress: no pinned schema for table %q", rec.TableID)
+	var schema payloadexec.TableSchema
+	if snapshotSchema != nil {
+		schema = *snapshotSchema
+	} else {
+		if i.schemas == nil {
+			return "", nil, fmt.Errorf("storage_integrity ingress: back-pressure requires a table schema resolver")
+		}
+		var ok bool
+		schema, ok = i.schemas.StorageIntegrityTableSchema(rec.TableID)
+		if !ok {
+			return "", nil, fmt.Errorf("%w: no pinned schema for table %q", errStorageIntegritySchemaUnavailable, rec.TableID)
+		}
 	}
 	if schema.TableID != rec.TableID {
 		return "", nil, fmt.Errorf("storage_integrity ingress: schema table_id %q does not match admission table_id %q", schema.TableID, rec.TableID)
@@ -507,6 +526,13 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 	if i.guard != nil {
 		// Only the target's latch: one unready table blocks only itself.
 		if err := i.guard.CheckMergeHealth(adm.TableID); err != nil {
+			if errors.Is(err, errStorageIntegrityMergeGuardNotAsserted) {
+				// A newly Active table is unasserted until the change-triggered
+				// pass completes: retryable, and the session survives exactly
+				// like 252 back-pressure. A real per-table error stays fatal.
+				return &chproto.ClientError{Code: chproto.CodeTableIsBeingRestarted,
+					Message: chproto.TableActivatingMessage(adm.TableID), Err: err, KeepSession: true}
+			}
 			return fmt.Errorf("storage_integrity ingress: merge health: %w", err)
 		}
 	}
@@ -526,7 +552,7 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 	unlockStatement := i.lockStatement(rec.StatementID)
 	defer unlockStatement()
 
-	table, partitions, err := i.partsPressureTarget(rec)
+	table, partitions, err := i.partsPressureTarget(rec, adm.TableSchema)
 	if err != nil {
 		return err
 	}
@@ -644,10 +670,28 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 		return fmt.Errorf("storage_integrity ingress: orchestrate %s: %w", rec.StatementID, err)
 	}
 	if !res.Ack2 {
+		if res.Submit.AdmissionCode == sicore.AdmissionCodeSchemaNotAllowed {
+			// The table retired between this statement's snapshot and the
+			// arbiter's sequencing (spec 2026-09-24 §9.6). The arbiter code is
+			// internal; the client sees the stable non-retryable prefix.
+			return &chproto.ClientError{Code: chproto.CodeQueryIsProhibited,
+				Message: fmt.Sprintf("storage_integrity: table %s no longer accepts writes", rec.TableID)}
+		}
 		return fmt.Errorf("storage_integrity ingress: statement %s did not reach ACK2 (lifecycle %s, reason %q)", rec.StatementID, res.Lifecycle, res.Reason)
 	}
 	return nil
 }
+
+// errStorageIntegritySchemaUnavailable marks a schema the resolver cannot
+// answer; recovery turns it into ErrStorageIntegrityRecoverySchemaPurged.
+var errStorageIntegritySchemaUnavailable = errors.New("storage_integrity ingress: table schema unavailable")
+
+// ErrStorageIntegrityRecoverySchemaPurged is returned by startup recovery when
+// a non-terminal journal record has no journaled touched-partition set and
+// its table's schema is no longer in the table state because the table was
+// purged (spec 2026-09-24 §9.2). Recovery fails closed; the operator resolves
+// the statement before restarting.
+var ErrStorageIntegrityRecoverySchemaPurged = errors.New("storage_integrity recovery: table schema purged")
 
 func commitPressureReservation(reservation sicore.PartsReservation, candidates []sicore.CandidatePart, sourceWriteMayExist bool) error {
 	if sourceWriteMayExist && len(candidates) == 0 {
