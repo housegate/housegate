@@ -25,6 +25,13 @@ func cloneExecutionRequest(r replay.ExecutionRequest) replay.ExecutionRequest {
 		r.SnapshotQuery = &j
 	}
 	r.Job.Statements = copySlice(r.Job.Statements)
+	r.Job.TableSchemas = copySlice(r.Job.TableSchemas)
+	if t := r.Job.TableSetTransition; t != nil {
+		c := *t
+		c.Adds = copySlice(t.Adds)
+		c.Retires = copySlice(t.Retires)
+		r.Job.TableSetTransition = &c
+	}
 	r.Statements = copySlice(r.Statements)
 	for i := range r.Statements {
 		r.Statements[i].Payload = copySlice(r.Statements[i].Payload)

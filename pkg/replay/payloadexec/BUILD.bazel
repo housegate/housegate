@@ -8,6 +8,7 @@ go_library(
         "column_types.go",
         "executor.go",
         "exports.go",
+        "job_schemas.go",
         "row_source.go",
         "signer.go",
         "stores.go",
@@ -32,6 +33,7 @@ go_test(
         "integration_test.go",
         "signer_test.go",
         "stores_test.go",
+        "table_set_test.go",
     ],
     embed = [":payloadexec"],
     deps = [

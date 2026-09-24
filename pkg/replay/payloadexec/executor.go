@@ -84,6 +84,9 @@ type Executor struct {
 	NetworkID    string
 	tables       map[string]TableSchema
 	materializer Materializer
+	// dynamic marks an executor built by NewDynamic: its table set follows
+	// the replayed chain instead of being exactly tables.
+	dynamic bool
 }
 
 // New builds an in-process executor (CSV wire-payload materializer).
@@ -100,6 +103,26 @@ func NewWithMaterializer(networkID string, m Materializer, tables ...TableSchema
 		tbl[t.TableID] = t
 	}
 	return &Executor{NetworkID: networkID, tables: tbl, materializer: m}
+}
+
+// NewDynamic builds an executor whose table set follows the replayed chain
+// (dynamic SI table set, spec §7 "Replay executor"). static holds the schemas
+// this verifier configures locally (the genesis tables); every other table's
+// schema is resolved per job from ReplayJob.TableSchemas and
+// ReplayJob.TableSetTransition.Adds (see ResolveJobSchemas). Unlike New and
+// NewWithMaterializer, a previous safe snapshot need not hold exactly the
+// static set: its SchemaRoot is checked against the schema hashes it commits
+// to, and every table whose schema resolves from a job-carried source
+// (TableSchemas or a transition add) must match its committed hash. A table
+// resolved only from the static set is a fallback, which may be stale for a
+// table retired and recreated under the same name (spec D9); such a mismatch
+// only refuses when the job actually targets that table (see
+// validateAppendInputs). GenesisSnapshot still derives the base from the
+// static set.
+func NewDynamic(networkID string, m Materializer, static ...TableSchema) *Executor {
+	e := NewWithMaterializer(networkID, m, static...)
+	e.dynamic = true
+	return e
 }
 
 // Replay satisfies replay.Executor.
@@ -144,11 +167,15 @@ func (e *Executor) ApplyContext(ctx context.Context, prev replay.SafeSnapshotMan
 	if e.materializer == nil {
 		return replay.SafeSnapshotManifest{}, replay.ExecutionResult{}, fmt.Errorf("executor has no materializer")
 	}
+	schemas, err := e.schemasForJob(job)
+	if err != nil {
+		return replay.SafeSnapshotManifest{}, replay.ExecutionResult{}, err
+	}
 	batches := make([]StatementRows, len(stmts))
 	for i, st := range stmts {
 		batches[i] = StatementRows{
 			StatementID: st.StatementID, StatementSeq: st.StatementSeq, TargetTableID: st.TargetTableID,
-			Rows: &materializedRows{materializer: e.materializer, schema: e.tables[st.TargetTableID], statement: st},
+			Rows: &materializedRows{materializer: e.materializer, schema: schemas[st.TargetTableID], statement: st},
 		}
 	}
 	return e.applyOwnedRows(ctx, prev, job, batches)
@@ -686,9 +713,34 @@ func tableSchemaHash(networkID string, t TableSchema) string {
 func schemaRoot(networkID string, schemas []TableSchema) string {
 	sorted := append([]TableSchema(nil), schemas...)
 	sort.Slice(sorted, func(a, b int) bool { return sorted[a].TableID < sorted[b].TableID })
+	hashes := make([]string, len(sorted))
+	for i, s := range sorted {
+		hashes[i] = tableSchemaHash(networkID, s)
+	}
+	return schemaRootOfOrderedHashes(hashes)
+}
+
+// schemaRootFromHashes is schemaRoot over already computed table schema
+// hashes, keyed by table id.
+func schemaRootFromHashes(schemaHashes map[string]string) string {
+	ids := make([]string, 0, len(schemaHashes))
+	for id := range schemaHashes {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	hashes := make([]string, len(ids))
+	for i, id := range ids {
+		hashes[i] = schemaHashes[id]
+	}
+	return schemaRootOfOrderedHashes(hashes)
+}
+
+// schemaRootOfOrderedHashes is the one schema-root preimage: every table
+// schema hash in table-id order, each NUL-terminated.
+func schemaRootOfOrderedHashes(hashes []string) string {
 	var b strings.Builder
-	for _, s := range sorted {
-		b.WriteString(tableSchemaHash(networkID, s))
+	for _, h := range hashes {
+		b.WriteString(h)
 		b.WriteByte(0)
 	}
 	return replay.DigestString("schema-root\x00" + b.String())

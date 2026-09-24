@@ -28,3 +28,12 @@ func SchemaRoot(networkID string, schemas []TableSchema) string {
 func TableSchemaHash(networkID string, t TableSchema) string {
 	return tableSchemaHash(networkID, t)
 }
+
+// SchemaRootFromHashes derives the schema root from table ids and their
+// TableSchemaHash values. It is byte-identical to SchemaRoot over the schemas
+// those hashes were computed from, so a party that holds only committed hashes
+// (the arbiter FSM, a manifest) derives the root a verifier derives from full
+// schemas.
+func SchemaRootFromHashes(schemaHashes map[string]string) string {
+	return schemaRootFromHashes(schemaHashes)
+}
