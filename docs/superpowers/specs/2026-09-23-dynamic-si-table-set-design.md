@@ -193,3 +193,20 @@ Sub-project 2a shipped as sentioxyz/arbiter-proto#13, sentioxyz/arbiter-core#39 
 - **Snapshots.** Format v15 carries the registry; while the registry is disabled the writer keeps producing v14, so the disabled rollout window (§11 step 5) stays rollback-safe and not-yet-upgraded followers can install snapshots.
 - **Mixed-version prerequisite (§11 step 5).** An older voter drops field 9 and diverges, and `arbiter-admin consensus capability` still reports protocol version 1 for both binaries. Every voter's version must be verified out of band before enabling; the devnet2 rollout plan adds a distinguishing capability signal.
 - **Prerequisites for 2c before anything proposes `AddTable`.** (1) The Refused/Pending decision currently depends on the housegate and ddl validator versions compiled into the arbiter, so a dependency bump could replay an old `AddTable` differently; freeze the rules (golden test or a governed profile version) and store stable refusal codes instead of library error text; refuse non-canonical type spellings. (2) Persist the retire reason and a per-incarnation last-changed registry version (for `WatchTableRegistry(sinceVersion)`). (3) The watcher must omit already-registered keys from `SeedLegacyTables` (one registered key rejects the whole seed). (4) Roles treat a late `RecordTablePurged` rejection ("not purging") as success, and a re-registered node reconciles stale `hg_*` tables against the registry at startup.
+
+## 14. Amendments from the sub-project 3 design (housegate and the rewriter V2 contract, 2026-09-24)
+
+[2026-09-24-dynamic-si-table-set-housegate-design.md](2026-09-24-dynamic-si-table-set-housegate-design.md) refines §5, §8, §9 and §11. It is authoritative for housegate and the rewriter engines.
+
+- **Sub-project split (§11).** Sub-project 1 (the rewriter DROP contract, now `STORAGE_INTEGRITY_CONTRACT_V2`) is folded into sub-project 3. Sub-project 3 now covers the rewriter engines and housegate only. The sentio-node `TableState` implementation, its JSON-RPC server and its MergeGuard adapter move to sub-project 4, together with the data plane, because a table may be reported Active only after the local `hg_*` tables exist.
+- **Host port (§8).** The per-call `TableState{Status, ActiveSet, Schema}` interface is replaced by a versioned, immutable `Snapshot` taken once per query. The statuses are `Ordinary` (Legacy or ungoverned), `Pending`, `Refused`, `Active` and `Gone` (Retiring/Purging). Every membership judgement belongs to the host, including default deny and incarnation selection.
+- **Activation window.** Before the seed commits, a host reports a table whose latest `TableCreated` precedes `activation_block` as Ordinary, so existing tables see no interruption.
+- **Behaviour table (§5).**
+  - Metadata statements (`DESCRIBE`, `SHOW`, `EXISTS`) are allowed on Pending and Refused tables; only data reads and writes are refused.
+  - Retiring and Purging tables are answered as unknown by housegate itself, because `DROP DATABASE` leaves the shared physical database to garbage collection.
+  - Same-name `CREATE` refusal (D9) moves from the sentio-node Observer to housegate's `sitablestate`.
+  - Data-carrying creation into a governed table (`CREATE ... AS SELECT`, materialized views with `POPULATE` or `TO` a governed table) is refused.
+- **Rewriter contract.** V2 allows `DROP TABLE` of SI tables by dropping only the ordinary physical table. The contract is activated by version, not by table count, so session `SET` stays refused while the Active set is empty. The engines keep V1 unchanged, and housegate requires V2.
+- **Agent and JSON-RPC (§8, §9).**
+  - The agent signs only Active tables and passes every other INSERT through unsigned; the server stays the authority.
+  - sentio-node exposes one method, `sentio_getStorageIntegrityTableStatus`. `sentio_getTableSchema` and `sentio_getLatestTableSchema` are dropped.
