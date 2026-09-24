@@ -37,6 +37,7 @@ go_test(
         "sitable_names_test.go",
         "storage_integrity_agent_config_test.go",
         "storage_integrity_config_test.go",
+        "storage_integrity_enabled_test.go",
     ],
     embed = [":config"],
     deps = [
@@ -44,5 +45,6 @@ go_test(
         "//pkg/plugins/agent",
         "//pkg/plugins/materialize",
         "//pkg/sitable",
+        "@in_yaml_go_yaml_v3//:yaml",
     ],
 )

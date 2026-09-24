@@ -279,7 +279,7 @@ func TestConfigValidateStorageIntegrityIngress(t *testing.T) {
 		for _, want := range []string{
 			"storage_integrity.runtime.journal_dir",
 			"storage_integrity.runtime.payload_spool_dir",
-			"storage_integrity.tables",
+			"storage_integrity.enabled",
 		} {
 			if !strings.Contains(err.Error(), want) {
 				t.Fatalf("Validate err = %v, missing %q", err, want)
@@ -287,11 +287,11 @@ func TestConfigValidateStorageIntegrityIngress(t *testing.T) {
 		}
 	})
 
-	t.Run("runtime enabled requires storage_integrity.tables", func(t *testing.T) {
+	t.Run("runtime enabled requires storage_integrity.enabled", func(t *testing.T) {
 		cfg := storageIntegrityRuntimeConfigFixture(t)
 		cfg.StorageIntegrity.Tables = nil
 		err := cfg.Validate()
-		if err == nil || !strings.Contains(err.Error(), "storage_integrity.tables is required when storage_integrity.runtime.enabled") {
+		if err == nil || !strings.Contains(err.Error(), "storage_integrity.enabled is required when storage_integrity.runtime.enabled") {
 			t.Fatalf("Validate err = %v", err)
 		}
 	})
@@ -363,7 +363,7 @@ func TestConfigValidateStorageIntegrityIngress(t *testing.T) {
 		}
 		cfg.StorageIntegrity.Read.DefaultMode = "safe"
 		cfg.StorageIntegrity.Tables = nil
-		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "storage_integrity.read.default_mode requires storage_integrity.tables") {
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "storage_integrity.read.default_mode requires storage_integrity.enabled") {
 			t.Fatalf("Validate err = %v", err)
 		}
 	})

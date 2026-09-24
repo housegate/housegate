@@ -184,7 +184,9 @@ The rewriter is the canonical owner of physical/logical database mapping. Every 
 
 ### `storage_integrity` — Protected Table Read Policy
 
-`storage_integrity.tables` is the shared logical membership list. HouseGate derives both guarded physical homes from each `<database>.<table>` id; operators must not configure `runtime.merge_guard.tables` separately. An empty `read.default_mode` has the same safe behavior as `safe`.
+`storage_integrity.enabled` switches storage integrity on. It defaults to true exactly when `storage_integrity.tables` is non-empty, so existing configs keep their meaning. An enabled server needs exactly one table-set source: the static `storage_integrity.tables` list, or a table-state port injected by the embedding host through `Options.StorageIntegrityTableState` (then set `enabled: true` explicitly and leave `tables` empty). `read.default_mode` and `runtime` require `enabled`.
+
+`storage_integrity.tables` is the static logical membership list: every listed table is Active and every other table is ordinary. HouseGate derives both guarded physical homes from each `<database>.<table>` id; operators must not configure `runtime.merge_guard.tables` separately. An empty `read.default_mode` has the same safe behavior as `safe`.
 
 - `safe` reads only `hg_safe.<database>__<table>`.
 - `unsafe_latest` unions safe rows with staged `hg_unsafe` rows, excluding unsafe parts already copied into safe but not yet cleanup-acknowledged. It requires a co-located promotion journal through `Options.StorageIntegrityReadState`; HouseGate never silently degrades it to `safe`.
@@ -196,6 +198,7 @@ Signed INSERT accepts the measured client-streamed `FORMAT` forms, including `FO
 
 ```yaml
 storage_integrity:
+  # enabled: true                  # default: true when tables is non-empty; set it with an injected TableState and no tables
   tables: ["tenant.events"]        # logical <db>.<table> ids; hg_unsafe/hg_safe.tenant__events are derived
   read:
     default_mode: safe             # safe | unsafe_latest; per query: SETTINGS SQL_x_read_mode = 'unsafe_latest'
