@@ -3,8 +3,10 @@
 // the query's single table-state snapshot, the rewriter's StatementType and
 // AccessedTables, and refuses what a table's status does not allow:
 // Pending data access is retryable, Refused is not, a Gone table is answered
-// as an unknown table, and data-carrying creation into a governed table is
-// refused. Everything the matrix allows passes through untouched.
+// as an unknown table, and data-carrying creation into a governed table (a
+// CREATE TABLE the header lexer cannot prove schema-only, a materialized view
+// writing TO it, or a materialized view named like it) is refused. Everything
+// the matrix allows passes through untouched.
 package sitablestate
 
 import (
@@ -37,10 +39,11 @@ const (
 	classWrite            // data write
 	classMetadata         // DESCRIBE, SHOW, EXISTS
 	classCreate           // CREATE of this name, no data
-	classCreateData       // CREATE ... AS SELECT, or MATERIALIZED VIEW ... POPULATE
+	classCreateData       // CREATE that may carry data, or any MATERIALIZED VIEW's own name
 	classDrop             // DROP TABLE / DROP VIEW
 	classOtherDDL         // ALTER, RENAME
 	classViewTarget       // the TO target of a MATERIALIZED VIEW
+	classUnreadable       // a MATERIALIZED VIEW whose header (and so its target) cannot be read
 )
 
 type severity uint8
@@ -91,6 +94,11 @@ func (p *Plugin) OnQuery(_ context.Context, qctx *plugin.QueryContext) error {
 
 // decide is the §7.2 matrix plus the §7.3 rules for one accessed table.
 func decide(t sitable.Table, c class) (severity, error) {
+	if c == classUnreadable {
+		// The view's target is unknown, so it may be governed: fail closed
+		// whatever the view's own status.
+		return nonRetryable, dataCarrying(t.ID)
+	}
 	switch t.Status {
 	case sitable.Pending:
 		switch c {
@@ -113,7 +121,6 @@ func decide(t sitable.Table, c class) (severity, error) {
 		}
 	case sitable.Gone:
 		switch c {
-		case classNone:
 		case classCreate, classCreateData:
 			return retryable, refuse(CodeRetryable, "storage_integrity: table %s is still being purged; retry CREATE later (retryable)", t.ID)
 		default:
@@ -137,7 +144,7 @@ func refuse(code int32, format string, args ...any) error {
 func accessesOf(qctx *plugin.QueryContext, sessionDB string) []access {
 	tables := qctx.AccessedTables
 	out := make([]access, 0, len(tables))
-	add := func(t sqlmeta.AccessedTable, c class) {
+	databaseOf := func(t sqlmeta.AccessedTable) string {
 		db := t.LogicalDatabase
 		if db == "" {
 			db = t.OriginalDatabase
@@ -145,9 +152,11 @@ func accessesOf(qctx *plugin.QueryContext, sessionDB string) []access {
 		if db == "" {
 			db = sessionDB
 		}
-		out = append(out, access{database: db, table: t.OriginalTable, class: c})
+		return db
 	}
-	sql := qctx.OriginalSQL
+	add := func(t sqlmeta.AccessedTable, c class) {
+		out = append(out, access{database: databaseOf(t), table: t.OriginalTable, class: c})
+	}
 	switch qctx.StatementType {
 	case sqlmeta.StatementTypeCreateDatabase, sqlmeta.StatementTypeDropDatabase,
 		sqlmeta.StatementTypeGrant, sqlmeta.StatementTypeRevoke:
@@ -166,6 +175,14 @@ func accessesOf(qctx *plugin.QueryContext, sessionDB string) []access {
 			add(t, classMetadata)
 		}
 	case sqlmeta.StatementTypeCreateTable:
+		// Lex what ClickHouse will execute: after rewrite, Query.Body is the
+		// engine-normalised forwarded SQL (comments and heredocs normalised, an
+		// EMPTY AS SELECT body dropped). OriginalSQL is the fallback only when
+		// there is no query packet.
+		sql := qctx.OriginalSQL
+		if qctx.Query != nil && qctx.Query.Body != "" {
+			sql = qctx.Query.Body
+		}
 		withData := createTableCarriesData(sql)
 		for i, t := range tables {
 			switch {
@@ -180,16 +197,30 @@ func accessesOf(qctx *plugin.QueryContext, sessionDB string) []access {
 			add(t, pick(i == 0, classCreate, classRead))
 		}
 	case sqlmeta.StatementTypeCreateMaterializedView:
-		populate, toDB, toTable, hasTo := materializedViewHeader(sql)
+		// The TO target comes from the parsed header of the original SQL, with
+		// logical names and the session database as the default: the engine
+		// omits a REFRESH ... TO target from AccessedTables. Any view whose own
+		// name is governed is refused in any form, because its inner storage
+		// ingests rows under that name.
+		toDB, toTable, hasTo, readable := materializedViewTarget(qctx.OriginalSQL)
+		if toDB == "" {
+			toDB = sessionDB
+		}
 		for i, t := range tables {
 			switch {
 			case i == 0:
-				add(t, pick(populate, classCreateData, classCreate))
-			case hasTo && t.OriginalTable == toTable && t.OriginalDatabase == toDB:
-				add(t, classViewTarget)
+				add(t, classCreateData)
+				if !readable {
+					add(t, classUnreadable)
+				}
+			case hasTo && t.OriginalTable == toTable && databaseOf(t) == toDB:
+				// Decided once, below, as the view target.
 			default:
 				add(t, classRead)
 			}
+		}
+		if hasTo {
+			out = append(out, access{database: toDB, table: toTable, class: classViewTarget})
 		}
 	case sqlmeta.StatementTypeDropTable, sqlmeta.StatementTypeDropView:
 		for _, t := range tables {

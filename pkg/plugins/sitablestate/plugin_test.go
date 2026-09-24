@@ -149,8 +149,24 @@ func TestDataCarryingCreationIntoGovernedTables(t *testing.T) {
 		{"CTAS into an active name", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db1.a ENGINE = MergeTree ORDER BY a AS SELECT a FROM db1.o", accessed("db1.a"), withDataErr("db1.a")},
 		{"CTAS into an ordinary name", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db1.o ENGINE = MergeTree ORDER BY a AS SELECT 1 AS a", accessed("db1.o"), ok},
 		{"CTAS into a refused name", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db1.r ENGINE = MergeTree ORDER BY a AS SELECT 1 AS a", accessed("db1.r"), ok},
-		{"CTAS EMPTY into a pending name", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db1.p ENGINE = MergeTree ORDER BY a EMPTY AS SELECT 1 AS a", accessed("db1.p"), ok},
-		{"CTAS reading a pending table", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db1.o ENGINE = Memory AS SELECT * FROM db1.p", accessed("db1.o", "db1.p"), pendingErr("db1.p")},
+		// Conservative false positive (ruled): unnormalised EMPTY AS SELECT is
+		// refused. The engine's forwarded body drops an EMPTY body, see
+		// TestCreateTableLexesTheForwardedBody.
+		{"CTAS EMPTY into a pending name", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db1.p ENGINE = MergeTree ORDER BY a EMPTY AS SELECT 1 AS a", accessed("db1.p"), withDataErr("db1.p")},
+		// Engine-shaped: rewriter-go v0.13.0 reports only the CTAS target
+		// ([db1.o]), not its SELECT sources, so the gate cannot see db1.p here.
+		// That source-reporting gap is routed to a separate security follow-up.
+		{"CTAS reading a pending table (engine-shaped)", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db1.o ENGINE = Memory AS SELECT * FROM db1.p", accessed("db1.o"), ok},
+		// Contract-dependent: IF the engine reported the source, it is a data
+		// read and the Pending refusal applies.
+		{"CTAS reading a pending table (contract-dependent: source reported)", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db1.o ENGINE = Memory AS SELECT * FROM db1.p", accessed("db1.o", "db1.p"), pendingErr("db1.p")},
+		{"CTAS into a pending name, extra parens", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db1.p ENGINE = Memory AS ((SELECT 1 AS a))", accessed("db1.p"), withDataErr("db1.p")},
+		{"CTAS into a pending name, FROM-first", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db1.p ENGINE = Memory AS FROM numbers(3) SELECT number AS a", accessed("db1.p"), withDataErr("db1.p")},
+		{"CTAS into a pending name, heredoc comment", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db1.p ENGINE = Memory COMMENT $$'$$ AS SELECT 1 AS a", accessed("db1.p"), withDataErr("db1.p")},
+		{"schema copy into a pending name", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db1.p AS db1.o ENGINE = Memory", accessed("db1.p", "db1.o"), ok},
+		{"plain CREATE of a pending name", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db1.p (a UInt8) ENGINE = Memory", accessed("db1.p"), ok},
+		{"unlexable CREATE of a pending name", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db1.p (a UInt8) ENGINE = Memory COMMENT 'x", accessed("db1.p"), withDataErr("db1.p")},
+		{"unlexable CREATE of an ordinary name", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db1.o (a UInt8) ENGINE = Memory COMMENT 'x", accessed("db1.o"), ok},
 		{"schema clone of a pending table", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db1.o AS db1.p", accessed("db1.o", "db1.p"), ok},
 		{"MV POPULATE into a pending name", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.p ENGINE = Memory POPULATE AS SELECT a FROM db1.o", accessed("db1.p", "db1.o"), withDataErr("db1.p")},
 		{"MV TO a pending table", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.mv TO db1.p AS SELECT a FROM db1.o", accessed("db1.mv", "db1.p", "db1.o"), withDataErr("db1.p")},
@@ -158,11 +174,64 @@ func TestDataCarryingCreationIntoGovernedTables(t *testing.T) {
 		{"MV TO a refused table", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.mv TO db1.r AS SELECT a FROM db1.o", accessed("db1.mv", "db1.r", "db1.o"), refusedErr("db1.r")},
 		{"MV TO an ordinary table", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.mv TO db1.o AS SELECT a FROM db1.o", accessed("db1.mv", "db1.o"), ok},
 		{"MV reading a pending source", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.mv ENGINE = Memory AS SELECT a FROM db1.p", accessed("db1.mv", "db1.p"), pendingErr("db1.p")},
+		// The engine omits a REFRESH ... TO target from AccessedTables (and from
+		// its forwarded body); the gate takes it from the parsed header.
+		{"refreshable MV TO a pending table, target not reported", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.mv REFRESH EVERY 1 HOUR TO db1.p AS SELECT a FROM db1.o", accessed("db1.mv", "db1.o"), withDataErr("db1.p")},
+		{"MV TO an active table, target not reported", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.mv TO db1.a AS SELECT a FROM db1.o", accessed("db1.mv", "db1.o"), withDataErr("db1.a")},
+		// Spec gap (ruled): an MV whose own name is governed is refused in any
+		// form, because its inner storage ingests rows under that name.
+		{"plain MV named like a pending table", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.p ENGINE = Memory AS SELECT a FROM db1.o", accessed("db1.p", "db1.o"), withDataErr("db1.p")},
+		{"plain MV named like an active table", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.a ENGINE = Memory AS SELECT a FROM db1.o", accessed("db1.a", "db1.o"), withDataErr("db1.a")},
+		{"MV named like a pending table TO an ordinary one", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.p TO db1.o AS SELECT a FROM db1.o", accessed("db1.p", "db1.o"), withDataErr("db1.p")},
+		{"plain MV named like a refused table", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.r ENGINE = Memory AS SELECT a FROM db1.o", accessed("db1.r", "db1.o"), ok},
+		{"plain MV with an ordinary name", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.mv ENGINE = Memory AS SELECT a FROM db1.o", accessed("db1.mv", "db1.o"), ok},
+		{"MV with an unreadable header", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.mv /* TO db1.p AS SELECT a FROM db1.o", accessed("db1.mv", "db1.o"), withDataErr("db1.mv")},
 		{"view over a gone table", sqlmeta.StatementTypeCreateView, "CREATE VIEW db1.v AS SELECT a FROM db1.g", accessed("db1.v", "db1.g"), unknownErr("db1.g")},
 		{"CTAS into a gone name", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db1.g ENGINE = Memory AS SELECT 1 AS a", accessed("db1.g"), purgingErr("db1.g")},
 	} {
 		check(t, tc.name, run(t, tc.typ, tc.sql, tc.tables), tc.want)
 	}
+}
+
+// TestCreateTableLexesTheForwardedBody: the data-carrying check reads the
+// post-rewrite Query.Body, which is what ClickHouse executes, and falls back to
+// OriginalSQL only without a query packet. The engine normalises comments and
+// heredocs and drops an EMPTY AS SELECT body.
+func TestCreateTableLexesTheForwardedBody(t *testing.T) {
+	for _, tc := range []struct {
+		name, original, body string
+		want                 outcome
+	}{
+		{"EMPTY body dropped by the engine", "CREATE TABLE db1.p ENGINE = Memory EMPTY AS SELECT 1 AS a", `CREATE TABLE phys."db1.p" ENGINE=Memory`, ok},
+		{"forwarded body carries data", "CREATE TABLE db1.p (a UInt8) ENGINE = Memory", `CREATE TABLE phys."db1.p" ENGINE=Memory AS (SELECT 1 AS a)`, withDataErr("db1.p")},
+		{"no query packet falls back to the original", "CREATE TABLE db1.p ENGINE = Memory AS SELECT 1 AS a", "", withDataErr("db1.p")},
+	} {
+		qctx := &plugin.QueryContext{
+			Session:        newSession(t, 4),
+			OriginalSQL:    tc.original,
+			StatementType:  sqlmeta.StatementTypeCreateTable,
+			AccessedTables: accessed("db1.p"),
+			TableSnapshot:  statusSnapshot(),
+		}
+		if tc.body != "" {
+			qctx.Query = &chproto.Query{Body: tc.body}
+		}
+		check(t, tc.name, (&Plugin{}).OnQuery(context.Background(), qctx), tc.want)
+	}
+}
+
+// TestMaterializedViewTargetUsesTheSessionDatabase: an unqualified TO target
+// resolves against the session's logical database.
+func TestMaterializedViewTargetUsesTheSessionDatabase(t *testing.T) {
+	sess := newSession(t, 5)
+	sess.State().SetLogicalDatabase("db1")
+	qctx := &plugin.QueryContext{
+		Session: sess, OriginalSQL: "CREATE MATERIALIZED VIEW mv TO p AS SELECT a FROM o",
+		StatementType:  sqlmeta.StatementTypeCreateMaterializedView,
+		AccessedTables: []sqlmeta.AccessedTable{{OriginalTable: "mv"}, {OriginalTable: "o"}},
+		TableSnapshot:  statusSnapshot(),
+	}
+	check(t, "unqualified TO pending", (&Plugin{}).OnQuery(context.Background(), qctx), withDataErr("db1.p"))
 }
 
 // TestRefusalPrecedence: unknown table, then non-retryable, then retryable;
