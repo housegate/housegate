@@ -657,6 +657,39 @@ func TestIngressRejectsUnsupportedStorageIntegrityKind(t *testing.T) {
 	}
 }
 
+// TestIngressPassesStorageIntegrityDropTable pins spec 2026-09-24 §8 rule 1:
+// under contract V2 the rewriter answers DROP TABLE of an SI table with
+// Success, rewrites it to drop only the ordinary physical table and keeps the
+// target in AccessedTables with IsStorageIntegrity, so commitgate and the host
+// Observer still see it. The ingress owns only INSERT admission and must let
+// that DROP through instead of refusing it as an unsupported kind, while a
+// DROP_TABLE classification whose text is not a DROP TABLE stays a mismatch.
+func TestIngressPassesStorageIntegrityDropTable(t *testing.T) {
+	for _, sql := range []string{
+		`DROP TABLE phys."tenant.events"`,
+		"  drop table if exists phys.`tenant.events` SYNC",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			p, signer := newSignedIngress(t)
+			qctx := signedQueryContext(t, 17, signer, "DROP TABLE tenant.events", sql, sqlmeta.StatementTypeDropTable)
+			qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
+			if err := p.OnQuery(context.Background(), qctx); err != nil {
+				t.Fatalf("OnQuery(%q) = %v, want the SI DROP TABLE to pass the ingress", sql, err)
+			}
+		})
+	}
+	for _, sql := range []string{"DROP VIEW phys.`tenant.events`", "DROP TEMPORARY TABLE t", "TRUNCATE TABLE phys.`tenant.events`", "SELECT 1"} {
+		t.Run("mismatch "+sql, func(t *testing.T) {
+			p, signer := newSignedIngress(t)
+			qctx := signedQueryContext(t, 18, signer, sql, sql, sqlmeta.StatementTypeDropTable)
+			qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
+			if err := p.OnQuery(context.Background(), qctx); err == nil || !strings.Contains(err.Error(), "storage_integrity statement type mismatch") {
+				t.Fatalf("OnQuery(%q) = %v, want a type mismatch", sql, err)
+			}
+		})
+	}
+}
+
 func TestIngressRejectsWriteWhilePriorAdmissionPending(t *testing.T) {
 	p, signer := newSignedIngress(t)
 	sql := "INSERT INTO tenant.events FORMAT Native"

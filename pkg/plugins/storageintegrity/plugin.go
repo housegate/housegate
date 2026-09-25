@@ -791,6 +791,16 @@ func classifyStorageIntegrityKind(typ sqlmeta.StatementType, sql string) (Kind, 
 			return "", false, fmt.Errorf("unsupported storage-integrity statement kind %s", firstKeyword(sql))
 		}
 		return textKind, true, nil
+	case sqlmeta.StatementTypeDropTable:
+		// Contract V2 (spec 2026-09-24 §8 rule 1): the rewriter answers DROP
+		// TABLE of an SI table with Success, dropping only the ordinary
+		// physical table and keeping the SI target in AccessedTables for
+		// commitgate and the host Observer. It carries no rows, so the ingress
+		// passes it; the text must still be a DROP TABLE.
+		if !dropTablePattern.MatchString(sql) {
+			return "", false, fmt.Errorf("storage_integrity statement type mismatch: %s classified as %s", firstKeyword(sql), typ)
+		}
+		return "", false, nil
 	case sqlmeta.StatementTypeSelect, sqlmeta.StatementTypeUse, sqlmeta.StatementTypeShowTables,
 		sqlmeta.StatementTypeShowCreateTable, sqlmeta.StatementTypeExistsTable,
 		sqlmeta.StatementTypeShowDatabases, sqlmeta.StatementTypeDescribe,
@@ -1093,6 +1103,7 @@ var (
 	alterUpdateTargetPattern = regexp.MustCompile(`(?is)^\s*ALTER\s+TABLE\s+(` + identifierPath + `)\s+UPDATE\b`)
 	alterDeleteTargetPattern = regexp.MustCompile(`(?is)^\s*ALTER\s+TABLE\s+(` + identifierPath + `)\s+DELETE\b`)
 	readLikePattern          = regexp.MustCompile(`(?is)^\s*(SELECT|SHOW|EXISTS|DESCRIBE|DESC|USE)\b`)
+	dropTablePattern         = regexp.MustCompile(`(?is)^\s*DROP\s+TABLE\b`)
 	unsupportedWritePattern  = regexp.MustCompile(`(?is)^\s*(CREATE|DROP|ALTER|RENAME|TRUNCATE|GRANT|REVOKE|ATTACH|DETACH|OPTIMIZE)\b`)
 	functionPattern          = regexp.MustCompile(`(?is)([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
 	identifierTokenPattern   = regexp.MustCompile(`(?is)\b([A-Za-z_][A-Za-z0-9_]*)\b`)
