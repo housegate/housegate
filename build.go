@@ -1189,7 +1189,7 @@ func buildAgentWithBuilders(
 				return nil, fmt.Errorf("storage_integrity.agent: %w", err)
 			}
 		}
-		schemas, err := resolveTableSchemas(opts, reg, "storage_integrity.agent")
+		statuses, err := resolveAgentTableStatuses(opts, reg)
 		if err != nil {
 			return nil, err
 		}
@@ -1221,7 +1221,7 @@ func buildAgentWithBuilders(
 		}
 		siPlug, err := sistatement.New(sistatement.Options{
 			Signer:          stmtSigner,
-			Schemas:         schemas,
+			Statuses:        statuses,
 			NetworkID:       cfg.StorageIntegrity.Agent.NetworkID,
 			KeeperShardID:   cfg.StorageIntegrity.Agent.KeeperShardID,
 			Seq:             seq,
@@ -1313,6 +1313,25 @@ func resolveTableSchemas(opts Options, reg registry.Registry, feature string) (r
 		return schemas, nil
 	}
 	return nil, fmt.Errorf("%s requires a NetworkState that implements registry.TableSchemas (YAML source or host-injected state); set Options.StorageIntegrityTableSchemas explicitly otherwise", feature)
+}
+
+// resolveAgentTableStatuses selects the agent's per-INSERT table status source
+// (spec 2026-09-24 §10.2): a host-injected declared-schema source, then a
+// registry that answers sentio_getStorageIntegrityTableStatus (RpcNetworkState),
+// then a registry with declared schemas (the YAML table_schemas fixture). A
+// declared-schema source reports its declared tables Active and every other
+// table Ordinary.
+func resolveAgentTableStatuses(opts Options, reg registry.Registry) (registry.TableStatuses, error) {
+	if opts.StorageIntegrityTableSchemas != nil {
+		return registry.TableStatusesFromSchemas(opts.StorageIntegrityTableSchemas), nil
+	}
+	if statuses, ok := reg.(registry.TableStatuses); ok && statuses != nil {
+		return statuses, nil
+	}
+	if schemas, ok := reg.(registry.TableSchemas); ok && schemas != nil {
+		return registry.TableStatusesFromSchemas(schemas), nil
+	}
+	return nil, fmt.Errorf("storage_integrity.agent requires a table status source: an RPC network state (sentio_getStorageIntegrityTableStatus), a YAML table_schemas fixture, or Options.StorageIntegrityTableSchemas")
 }
 
 // buildAgentDialer returns the per-session upstream dialer for agent

@@ -76,6 +76,7 @@ go_test(
     name = "housegate_test",
     srcs = [
         "agent_auto_discover_integration_test.go",
+        "agent_table_status_test.go",
         "build_collector_test.go",
         "build_inline_values_test.go",
         "build_replication_proxy_test.go",

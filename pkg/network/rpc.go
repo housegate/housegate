@@ -258,5 +258,31 @@ func (r *RpcNetworkState) IsOperator(owner, signer string) bool {
 	return owner != "" && owner == signer
 }
 
+// --- registry.TableStatuses
+
+// StorageIntegrityTableStatus calls sentio_getStorageIntegrityTableStatus
+// (spec 2026-09-24 §10.2). A transport error, a JSON-null result, or an
+// unknown status name is an error: the agent then passes the INSERT through
+// unsigned and counts the failure.
+func (r *RpcNetworkState) StorageIntegrityTableStatus(ctx context.Context, database, table string) (registry.TableStatus, error) {
+	var status registry.TableStatus
+	ok, err := r.call(ctx, "sentio_getStorageIntegrityTableStatus", []interface{}{database, table}, &status)
+	if err != nil {
+		return registry.TableStatus{}, fmt.Errorf("rpc: getStorageIntegrityTableStatus %s.%s: %w", database, table, err)
+	}
+	if !ok {
+		return registry.TableStatus{}, fmt.Errorf("rpc: getStorageIntegrityTableStatus %s.%s returned null", database, table)
+	}
+	switch status.Status {
+	case registry.TableStatusOrdinary, registry.TableStatusPending, registry.TableStatusRefused,
+		registry.TableStatusActive, registry.TableStatusGone:
+		return status, nil
+	default:
+		return registry.TableStatus{}, fmt.Errorf("rpc: getStorageIntegrityTableStatus %s.%s: unknown status %q", database, table, status.Status)
+	}
+}
+
+var _ registry.TableStatuses = (*RpcNetworkState)(nil)
+
 // Compile-time check the rpc backend satisfies registry.Registry.
 var _ registry.Registry = (*RpcNetworkState)(nil)

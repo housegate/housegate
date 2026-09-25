@@ -331,9 +331,6 @@ func TestPlugin_InlineValuesAdmissionBoundaries(t *testing.T) {
 		{"parameters", func(_ *Plugin, q *plugin.QueryContext, _ *fakeEvaluator) {
 			q.Query.Parameters = []proto.Parameter{{Key: "x", Value: "1"}}
 		}, false, false},
-		{"schema missing", func(_ *Plugin, q *plugin.QueryContext, _ *fakeEvaluator) {
-			q.Query.Body = "INSERT INTO shop.missing VALUES (1)"
-		}, false, false},
 		{"parse", func(_ *Plugin, q *plugin.QueryContext, _ *fakeEvaluator) {
 			q.Query.Body = "INSERT INTO shop.orders VALUES (1); SELECT 1"
 		}, false, false},

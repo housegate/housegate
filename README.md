@@ -207,7 +207,7 @@ storage_integrity:
       reassert_interval: 30s
 ```
 
-The inline lane is agent-only and default-off. This example shows the required feature blocks; retain the normal signing key and selected-upstream configuration, provide the NetworkState schema source required by the SI agent (unless the embedding host injects it), and configure the corresponding server-side [`auth`](#auth--jws--ethereum-signature) and signed-ingress settings for the existing signed INSERT lane.
+The inline lane is agent-only and default-off. This example shows the required feature blocks; retain the normal signing key and selected-upstream configuration, provide the table status source the SI agent needs — an RPC `network_state.source` that serves `sentio_getStorageIntegrityTableStatus`, or a YAML `table_schemas` fixture whose declared tables count as Active (unless the embedding host injects one); the agent signs only Active tables and passes every other INSERT through unsigned, and configure the corresponding server-side [`auth`](#auth--jws--ethereum-signature) and signed-ingress settings for the existing signed INSERT lane.
 
 ```yaml
 network_state:

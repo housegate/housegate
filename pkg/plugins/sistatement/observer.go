@@ -11,3 +11,10 @@ type Observer interface {
 	InlineValuesEvaluationFailed()
 	InlineValuesClosureRefused()
 }
+
+// StatusObserver counts status lookups that failed, after which the INSERT
+// passed through unsigned (spec 2026-09-24 §10.3). *proxy.MetricsObserver
+// satisfies it; an Observer that does not is simply not counted.
+type StatusObserver interface {
+	TableStatusLookupFailed()
+}

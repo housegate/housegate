@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "registry",
@@ -7,8 +7,15 @@ go_library(
         "databases.go",
         "metadata.go",
         "schemas.go",
+        "table_status.go",
         "topology.go",
     ],
     importpath = "github.com/housegate/housegate/pkg/registry",
     visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "registry_test",
+    srcs = ["table_status_test.go"],
+    embed = [":registry"],
 )

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -22,14 +23,17 @@ import (
 	"github.com/housegate/housegate/pkg/registry"
 	"github.com/housegate/housegate/pkg/replay"
 	"github.com/housegate/housegate/pkg/replay/payloadexec"
-	"github.com/housegate/housegate/pkg/schemaregistry"
 	sicore "github.com/housegate/housegate/pkg/storageintegrity"
 )
 
 // Options wires the plugin. KeeperShardID must be zero in v1; InlineValues
 // defaults off and Observer is optional.
 type Options struct {
-	Signer          auth.StatementSignerV2
+	Signer auth.StatementSignerV2
+	// Statuses answers each INSERT target's storage-integrity status (spec
+	// 2026-09-24 §10.2): RpcNetworkState in production. When nil, Schemas is
+	// adapted: a declared table is Active, every other table Ordinary.
+	Statuses        registry.TableStatuses
 	Schemas         registry.TableSchemas
 	NetworkID       string
 	KeeperShardID   uint32
@@ -53,7 +57,7 @@ type Plugin struct {
 	account       string // lowercase 0x
 	owner         string
 	isDriver      bool
-	loader        *schemaregistry.NetworkStateLoader
+	statuses      registry.TableStatuses
 	networkID     string
 	keeperShardID uint32
 	seq           *SeqCounter
@@ -87,8 +91,12 @@ func New(opts Options) (*Plugin, error) {
 	if opts.Signer == nil {
 		errs = append(errs, errors.New("signer is required"))
 	}
-	if opts.Schemas == nil {
-		errs = append(errs, errors.New("network-state TableSchemas source is required"))
+	statuses := opts.Statuses
+	if statuses == nil && opts.Schemas != nil {
+		statuses = registry.TableStatusesFromSchemas(opts.Schemas)
+	}
+	if statuses == nil {
+		errs = append(errs, errors.New("a table status source (Statuses or Schemas) is required"))
 	}
 	if strings.TrimSpace(opts.NetworkID) == "" {
 		errs = append(errs, errors.New("network id is required"))
@@ -121,7 +129,7 @@ func New(opts Options) (*Plugin, error) {
 		account:       strings.ToLower(opts.Signer.Address()),
 		owner:         opts.Owner,
 		isDriver:      opts.IsDriver,
-		loader:        schemaregistry.NewNetworkStateLoader(opts.Schemas, opts.NetworkID),
+		statuses:      statuses,
 		networkID:     opts.NetworkID,
 		keeperShardID: opts.KeeperShardID,
 		seq:           opts.Seq,
@@ -152,6 +160,25 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) (result
 		p.useNext[sessID] = pendingUse{queryID: qctx.Query.ID, db: db}
 		p.mu.Unlock()
 		return nil
+	}
+	// Spec 2026-09-24 §10.1: the target's status comes first. Only an Active
+	// table is signed; every other INSERT passes through unchanged and the
+	// server decides. A target this parser cannot resolve keeps today's
+	// classification below.
+	target, targetErr := sicore.ResolveInsertTarget(sql, p.sessionDatabase(qctx.Session))
+	var (
+		schema     payloadexec.TableSchema
+		schemaHash string
+	)
+	if targetErr == nil {
+		var active bool
+		schema, schemaHash, active, err = p.activeTarget(ctx, target)
+		if err != nil {
+			return err
+		}
+		if !active {
+			return nil
+		}
 	}
 	// Spec D1/D6: InsertPayloadEncoding refuses the 26.x inline VALUES shape
 	// because no payload arrives on the wire. With the lane enabled the statement is claimed here and its rows are evaluated below; every other shape keeps falling through exactly as before.
@@ -188,15 +215,10 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) (result
 	if err := sicore.RejectUserSettings(keys); err != nil {
 		return err
 	}
-	target, err := sicore.ResolveInsertTarget(sql, p.sessionDatabase(qctx.Session))
-	if err != nil {
-		return fmt.Errorf("storage_integrity agent: %w", err)
+	if targetErr != nil {
+		return fmt.Errorf("storage_integrity agent: %w", targetErr)
 	}
 	tableID := target.CanonicalID()
-	schema, schemaHash, err := p.loadSchema(ctx, target)
-	if err != nil {
-		return err
-	}
 	listed, _, err := insertColumnList(sql)
 	if err != nil {
 		return fmt.Errorf("storage_integrity agent: %w", err)
@@ -285,25 +307,46 @@ func (p *Plugin) sessionDatabase(sess chsession.Session) string {
 	return ""
 }
 
-func (p *Plugin) loadSchema(ctx context.Context, target sicore.InsertTarget) (payloadexec.TableSchema, string, error) {
+// activeTarget asks the status source about the INSERT target. It returns
+// active=false, and no error, for every status but Active and when the status
+// lookup itself fails: the INSERT then passes through unsigned, which is safe
+// because the server rejects an unsigned INSERT into an Active table (spec
+// 2026-09-24 H7). For an Active table it decodes the registry schema and
+// refuses the INSERT when the recomputed hash differs from the declared one.
+func (p *Plugin) activeTarget(ctx context.Context, target sicore.InsertTarget) (payloadexec.TableSchema, string, bool, error) {
 	tableID := target.CanonicalID()
 	if tableID == "" || target.Database == "" || target.Table == "" {
-		return payloadexec.TableSchema{}, "", fmt.Errorf("storage_integrity agent: invalid structured table target %#v", target)
+		return payloadexec.TableSchema{}, "", false, nil
 	}
-	schemas, err := p.loader.Load(ctx, []schemaregistry.TableRef{
-		{
-			TableID:         tableID,
-			Database:        target.Database,
-			Table:           target.Table,
-			LogicalDatabase: target.Database,
-			LogicalTable:    target.Table,
-		},
-	})
+	_, logger := log.FromContext(ctx)
+	status, err := p.statuses.StorageIntegrityTableStatus(ctx, target.Database, target.Table)
 	if err != nil {
-		return payloadexec.TableSchema{}, "", fmt.Errorf("storage_integrity agent: table %s is not declared in network state (SI INSERT requires a declared, hash-verified schema): %w", tableID, err)
+		p.observeStatus(func(o StatusObserver) { o.TableStatusLookupFailed() })
+		logger.Warnw("sistatement: table status unavailable; passing the INSERT through unsigned", "table_id", tableID, "error", err)
+		return payloadexec.TableSchema{}, "", false, nil
 	}
-	schema := schemas[0]
-	return schema, payloadexec.TableSchemaHash(p.networkID, schema), nil
+	if status.Status != registry.TableStatusActive {
+		logger.Debugw("sistatement: target is not active; passing the INSERT through unsigned", "table_id", tableID, "status", status.Status)
+		return payloadexec.TableSchema{}, "", false, nil
+	}
+	var schema payloadexec.TableSchema
+	if err := json.Unmarshal([]byte(status.SchemaJSON), &schema); err != nil {
+		return payloadexec.TableSchema{}, "", false, fmt.Errorf("storage_integrity agent: active table %s has an undecodable schema_json: %w", tableID, err)
+	}
+	if schema.TableID != tableID {
+		return payloadexec.TableSchema{}, "", false, fmt.Errorf("storage_integrity agent: active table %s carries a schema for %q", tableID, schema.TableID)
+	}
+	hash := payloadexec.TableSchemaHash(p.networkID, schema)
+	if hash != status.SchemaHash {
+		return payloadexec.TableSchema{}, "", false, fmt.Errorf("storage_integrity agent: active table %s schema_hash %s does not match the recomputed %s for network %s; refusing to sign", tableID, status.SchemaHash, hash, p.networkID)
+	}
+	return schema, hash, true, nil
+}
+
+func (p *Plugin) observeStatus(fn func(StatusObserver)) {
+	if o, ok := p.observer.(StatusObserver); ok && o != nil {
+		fn(o)
+	}
 }
 
 // statementIDFor keeps a client-supplied flat id for this agent's own
