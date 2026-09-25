@@ -194,7 +194,7 @@ Umbrella D9 guarantees at most one non-Purged storage-integrity incarnation per 
 
   An add transition therefore cannot reach quorum before verifiers have their tables. The wait bound and the re-dispatch behaviour are fixed in the plan after measuring the dispatch path.
 - **Executor.** Unchanged. It is `payloadexec.NewDynamic` over the job's carried schemas.
-- **Scanner.** `CHScanner.schemaFor` checks the configured genesis tables first, then the key's non-Purged storage-integrity incarnation in the registry.
+- **Scanner.** While the registry is enabled, `CHScanner.schemaFor` (and the SNode's schema lookup) let the key's live registry incarnation decide: a genesis-origin incarnation uses the configured genesis schema, a chain-origin one its registry schema. Only while the registry is disabled do they fall back to the configured genesis tables. Checking the genesis tables first would scan a same-name chain recreation of a retired genesis table with the stale genesis schema (plan A ruling P12).
 - **Reconciler identity.** The reconciler uses the verifier replica id. It needs no quiescence hook.
 
 ### Snapshot-query lane
