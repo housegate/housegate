@@ -363,6 +363,11 @@ func ArbiterStatementEnvelopeToProto(env StatementEnvelope) (*pb.StatementEnvelo
 	}, nil
 }
 
+// AdmissionCodeSchemaNotAllowed is the arbiter's refusal of a statement whose
+// target table is not in its admitted schema set, for example a table retired
+// after the statement was admitted (spec 2026-09-24 §9.6).
+var AdmissionCodeSchemaNotAllowed = pb.AdmissionCode_ADMISSION_CODE_SCHEMA_NOT_ALLOWED.String()
+
 // SubmitOutcomeFromSequencedAck maps Arbiter's application-level admission
 // result into the existing staged-intake outcome categories.
 func SubmitOutcomeFromSequencedAck(ack *pb.SequencedAck) SubmitOutcome {
@@ -383,7 +388,7 @@ func SubmitOutcomeFromSequencedAck(ack *pb.SequencedAck) SubmitOutcome {
 		pb.AdmissionCode_ADMISSION_CODE_INVALID_PROOF,
 		pb.AdmissionCode_ADMISSION_CODE_MALFORMED,
 		pb.AdmissionCode_ADMISSION_CODE_GAP_BUDGET_EXCEEDED:
-		return SubmitOutcome{Category: OutcomeTerminalReject, Reason: firstNonEmpty(reason, ack.GetCode().String())}
+		return SubmitOutcome{Category: OutcomeTerminalReject, Reason: firstNonEmpty(reason, ack.GetCode().String()), AdmissionCode: ack.GetCode().String()}
 	default:
 		return SubmitOutcome{Category: OutcomeUnknown, Reason: firstNonEmpty(reason, ack.GetCode().String())}
 	}

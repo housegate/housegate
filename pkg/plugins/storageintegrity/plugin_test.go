@@ -657,6 +657,83 @@ func TestIngressRejectsUnsupportedStorageIntegrityKind(t *testing.T) {
 	}
 }
 
+// TestIngressPassesStorageIntegrityDropTable pins spec 2026-09-24 §8 rule 1:
+// under contract V2 the rewriter answers DROP TABLE of an SI table with
+// Success, rewrites it to drop only the ordinary physical table and keeps the
+// target in AccessedTables with IsStorageIntegrity, so commitgate and the host
+// Observer still see it. The ingress owns only INSERT admission and must let
+// that DROP through instead of refusing it as an unsupported kind, while a
+// DROP_TABLE classification whose text is not a DROP TABLE stays a mismatch.
+func TestIngressPassesStorageIntegrityDropTable(t *testing.T) {
+	for _, sql := range []string{
+		`DROP TABLE phys."tenant.events"`,
+		"  drop table if exists phys.`tenant.events` SYNC",
+		"DROP TABLE phys.`tenant.events`, other.plain ON CLUSTER c NO DELAY",
+		"DROP TABLE events;",
+		`DROP TABLE phys."a\"b", phys."c""d" SETTINGS x = 1`,
+	} {
+		t.Run(sql, func(t *testing.T) {
+			p, signer := newSignedIngress(t)
+			qctx := signedQueryContext(t, 17, signer, "DROP TABLE tenant.events", sql, sqlmeta.StatementTypeDropTable)
+			qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
+			if err := p.OnQuery(context.Background(), qctx); err != nil {
+				t.Fatalf("OnQuery(%q) = %v, want the SI DROP TABLE to pass the ingress", sql, err)
+			}
+		})
+	}
+	for _, sql := range []string{"DROP VIEW phys.`tenant.events`", "DROP TEMPORARY TABLE t", "TRUNCATE TABLE phys.`tenant.events`", "SELECT 1"} {
+		t.Run("mismatch "+sql, func(t *testing.T) {
+			p, signer := newSignedIngress(t)
+			qctx := signedQueryContext(t, 18, signer, sql, sql, sqlmeta.StatementTypeDropTable)
+			qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
+			if err := p.OnQuery(context.Background(), qctx); err == nil || !strings.Contains(err.Error(), "storage_integrity statement type mismatch") {
+				t.Fatalf("OnQuery(%q) = %v, want a type mismatch", sql, err)
+			}
+		})
+	}
+}
+
+// TestIngressRefusesReservedDatabaseDropTable: a DROP_TABLE classification
+// with an SI target passes the ingress only while no dropped target names a
+// reserved database (sitable.ReservedDatabases); a hg_* target is refused as
+// a physical target, whatever the engine answered.
+func TestIngressRefusesReservedDatabaseDropTable(t *testing.T) {
+	for _, tc := range []struct{ sql, target string }{
+		{"DROP TABLE hg_safe.x", "hg_safe.x"},
+		{"DROP TABLE a.b, hg_unsafe.y", "hg_unsafe.y"},
+		{"DROP TABLE IF EXISTS phys.`db1.t`, `hg_promote`.`z` SYNC", "hg_promote.z"},
+		{`DROP TABLE phys."db1.t", "hg_safe"."db1__t"`, "hg_safe.db1__t"},
+		{"drop table HG_SAFE . x", "HG_SAFE.x"},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			p, signer := newSignedIngress(t)
+			qctx := signedQueryContext(t, 19, signer, tc.sql, tc.sql, sqlmeta.StatementTypeDropTable)
+			qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
+			want := "storage-integrity physical table " + tc.target + " is not directly addressable"
+			if err := p.OnQuery(context.Background(), qctx); err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("OnQuery(%q) = %v, want %q", tc.sql, err, want)
+			}
+		})
+	}
+	// A DROP TABLE whose target list cannot be parsed, or is followed by
+	// anything but a known trailing clause, fails closed.
+	for _, sql := range []string{
+		"DROP TABLE (SELECT 1)",
+		"DROP TABLE a.b, 9x.c, hg_safe.y",
+		"DROP TABLE a.b /* c */, hg_safe.y",
+		"DROP TABLE a.b,",
+	} {
+		t.Run("unparsed "+sql, func(t *testing.T) {
+			p, signer := newSignedIngress(t)
+			qctx := signedQueryContext(t, 20, signer, sql, sql, sqlmeta.StatementTypeDropTable)
+			qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
+			if err := p.OnQuery(context.Background(), qctx); err == nil || !strings.Contains(err.Error(), "storage_integrity statement type mismatch") {
+				t.Fatalf("OnQuery(%q) = %v, want a type mismatch", sql, err)
+			}
+		})
+	}
+}
+
 func TestIngressRejectsWriteWhilePriorAdmissionPending(t *testing.T) {
 	p, signer := newSignedIngress(t)
 	sql := "INSERT INTO tenant.events FORMAT Native"

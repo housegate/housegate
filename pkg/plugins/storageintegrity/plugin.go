@@ -20,12 +20,14 @@ import (
 	"github.com/ClickHouse/ch-go/proto"
 
 	"github.com/housegate/housegate/pkg/auth"
+	"github.com/housegate/housegate/pkg/chproto"
 	"github.com/housegate/housegate/pkg/chsession"
 	"github.com/housegate/housegate/pkg/plugin"
 	"github.com/housegate/housegate/pkg/registry"
 	"github.com/housegate/housegate/pkg/replay"
 	"github.com/housegate/housegate/pkg/replay/payloadexec"
 	"github.com/housegate/housegate/pkg/schemaregistry"
+	"github.com/housegate/housegate/pkg/sitable"
 	"github.com/housegate/housegate/pkg/sqlident"
 	"github.com/housegate/housegate/pkg/sqlmeta"
 	sicore "github.com/housegate/housegate/pkg/storageintegrity"
@@ -58,6 +60,12 @@ type Config struct {
 	// every statement token must carry.
 	TableSchemas registry.TableSchemas
 	NetworkID    string
+
+	// RequireTableSnapshot is set when storage integrity is enabled: every
+	// query must then carry its table-state snapshot, and one that arrives
+	// without it is refused rather than resolved through TableSchemas (spec
+	// 2026-09-24 §9.1: the registry's schema wins over the latest declaration).
+	RequireTableSnapshot bool
 }
 
 type AdmissionConsumer interface {
@@ -73,6 +81,7 @@ type Plugin struct {
 	admissionConsumer AdmissionConsumer
 	schemaLoader      *schemaregistry.NetworkStateLoader
 	networkID         string
+	requireSnapshot   bool
 
 	mu      sync.Mutex
 	active  map[int64]*admissionState
@@ -97,6 +106,10 @@ type Admission struct {
 	SchemaHash      string
 	RowIDProfileID  string
 	Payload         CapturedPayload
+	// TableSchema is the target's schema from the query's table-state
+	// snapshot (spec 2026-09-24 §9.1). Nil when storage integrity is disabled
+	// and the schema came from the declared network-state loader.
+	TableSchema *payloadexec.TableSchema
 }
 
 type CapturedPayload struct {
@@ -115,6 +128,7 @@ type admissionState struct {
 	revision        int
 	statementToken  string
 	schemaHash      string
+	tableSchema     *payloadexec.TableSchema
 	complete        bool
 }
 
@@ -143,6 +157,7 @@ func New(cfg Config) *Plugin {
 		maxPayload:        maxPayload,
 		admissionConsumer: cfg.AdmissionConsumer,
 		networkID:         cfg.NetworkID,
+		requireSnapshot:   cfg.RequireTableSnapshot,
 		active:            map[int64]*admissionState{},
 		pending:           map[int64]*admissionState{},
 	}
@@ -188,9 +203,9 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 			return fmt.Errorf("storage_integrity rewritten SQL: %w", err)
 		}
 	}
-	// These three rejections are independent and all fail closed, so their
-	// order decides only which cause the caller is told about. It is chosen,
-	// not incidental:
+	// These rejections are independent and all fail closed, so their order
+	// decides only which cause the caller is told about. It is chosen, not
+	// incidental:
 	//
 	// Nondeterminism stays first because it is the only one of the three whose
 	// coverage depends on running early. A function is written into an INSERT
@@ -210,6 +225,19 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	// structured statement id <client_account>:<client_seq>:<client_nonce>",
 	// which reads as a malformed id the caller never had, while the real and
 	// fixable cause was computed a few lines later and discarded.
+	//
+	// On the snapshot path (storage integrity enabled, spec 2026-09-24) the
+	// target's table state also goes between shape and the statement id, for
+	// the same reason: an unsigned INSERT carries no id, and its real cause is
+	// the table's status. The target is resolved first, then a missing
+	// snapshot is refused (392, fail closed), then the status is decided: a
+	// non-Active table is refused non-retryably (392; Gone as sitablestate's
+	// unknown table, 60), and only an Active table with no statement token is
+	// told its agent's view is stale (733, retryable). Checking Active first
+	// keeps an unsigned INSERT into an Ordinary table the rewriter flagged SI
+	// from being told to retry forever. A disabled deployment has no snapshot
+	// and keeps its original order, the statement id before the target (plan
+	// decision R8).
 	if fn, ok := containsUnmaterializedNondeterminism(signedSQL); ok {
 		return fmt.Errorf("storage_integrity rejects unmaterialized nondeterministic function %s", fn)
 	}
@@ -221,6 +249,38 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	payloadEncoding, err := requirePayloadLocalInsert(signedSQL)
 	if err != nil {
 		return err
+	}
+	var (
+		target      resolvedTableTarget
+		schemaHash  string
+		tableSchema *payloadexec.TableSchema
+	)
+	snapshotPath := qctx.TableSnapshot != nil || p.requireSnapshot
+	if snapshotPath {
+		target, err = resolveTargetTable(qctx, signedSQL)
+		if err != nil {
+			return err
+		}
+		// Spec 2026-09-24 §9.1: with storage integrity enabled the registry's
+		// schema must win, so a query without its snapshot is refused rather
+		// than resolved against the latest declaration. sitablestate refuses
+		// such a query first; this is the ingress's own fail-closed backstop.
+		if qctx.TableSnapshot == nil {
+			return &chproto.ClientError{Code: chproto.CodeQueryIsProhibited,
+				Message: "storage_integrity: table state is unavailable for this query"}
+		}
+		tableSchema, schemaHash, err = snapshotSchema(qctx.TableSnapshot, target)
+		if err != nil {
+			return err
+		}
+		// Spec 2026-09-24 §10.3: an agent whose view is stale passes an INSERT
+		// into an Active table through unsigned. Name that cause, retryable,
+		// before the statement-id check reports a malformed id the client
+		// never had.
+		if !hasStatementToken(qctx) {
+			return &chproto.ClientError{Code: chproto.CodeTableIsBeingRestarted,
+				Message: fmt.Sprintf("storage_integrity: table %s requires a signed INSERT; the client's table state is stale (retryable)", target.id)}
+		}
 	}
 	stmtID, err := statementID(qctx)
 	if err != nil {
@@ -235,9 +295,11 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 			return fmt.Errorf("storage_integrity rewritten INSERT payload encoding mismatch: signed %s forwarded %s", payloadEncoding, forwardEncoding)
 		}
 	}
-	target, err := resolveTargetTable(qctx, signedSQL)
-	if err != nil {
-		return err
+	if !snapshotPath {
+		target, err = resolveTargetTable(qctx, signedSQL)
+		if err != nil {
+			return err
+		}
 	}
 	tableID := target.id
 	userJWS, err := queryAuthToken(qctx)
@@ -251,7 +313,7 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	if err := requireStatementIDSigner(stmtID, signer); err != nil {
 		return err
 	}
-	if p.schemaLoader == nil || strings.TrimSpace(p.networkID) == "" {
+	if (!snapshotPath && p.schemaLoader == nil) || strings.TrimSpace(p.networkID) == "" {
 		return errors.New("storage_integrity ingress requires a network-state TableSchemas source and network_id to verify envelope v2 statements")
 	}
 	statementToken, err := statementTokenFromSettings(querySettings(qctx))
@@ -261,9 +323,11 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	if err := sicore.RejectUserSettings(settingKeys(qctx)); err != nil {
 		return err
 	}
-	schemaHash, err := p.resolveSchemaHash(ctx, target)
-	if err != nil {
-		return err
+	if !snapshotPath {
+		schemaHash, err = p.resolveSchemaHash(ctx, target)
+		if err != nil {
+			return err
+		}
 	}
 	state := &admissionState{
 		admission: Admission{
@@ -279,6 +343,7 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 		payloadEncoding: payloadEncoding,
 		statementToken:  statementToken,
 		schemaHash:      schemaHash,
+		tableSchema:     tableSchema,
 	}
 	if qctx.Session.State() != nil {
 		state.revision = qctx.Session.State().ClientRevision
@@ -520,6 +585,7 @@ func (p *Plugin) admissionFromState(_ context.Context, state *admissionState) (A
 	admission.KeeperShardID = 0
 	admission.SettingsHash = sicore.EmptySettingsHash
 	admission.SchemaHash = state.schemaHash
+	admission.TableSchema = state.tableSchema
 	admission.RowIDProfileID = payloadexec.RowIDProfileID
 	if p != nil && p.maxPayload > 0 && uint64(len(payload)) > p.maxPayload {
 		return Admission{}, fmt.Errorf("storage_integrity payload exceeds max_payload_bytes (%d > %d)", len(payload), p.maxPayload)
@@ -725,6 +791,29 @@ func classifyStorageIntegrityKind(typ sqlmeta.StatementType, sql string) (Kind, 
 			return "", false, fmt.Errorf("unsupported storage-integrity statement kind %s", firstKeyword(sql))
 		}
 		return textKind, true, nil
+	case sqlmeta.StatementTypeDropTable:
+		// Contract V2 (spec 2026-09-24 §8 rule 1): the rewriter answers DROP
+		// TABLE of an SI table with Success, dropping only the ordinary
+		// physical table and keeping the SI target in AccessedTables for
+		// commitgate and the host Observer. It carries no rows, so the ingress
+		// passes it; the text must still be a DROP TABLE whose target list
+		// parses and names no reserved database (hg_*), which only the data
+		// plane may drop.
+		targets, ok := dropTableTargets(sql)
+		if !ok {
+			return "", false, fmt.Errorf("storage_integrity statement type mismatch: %s classified as %s", firstKeyword(sql), typ)
+		}
+		for _, target := range targets {
+			if len(target) < 2 {
+				continue
+			}
+			for _, reserved := range sitable.ReservedDatabases() {
+				if strings.EqualFold(target[0], reserved) {
+					return "", false, fmt.Errorf("storage-integrity physical table %s is not directly addressable", strings.Join(target, "."))
+				}
+			}
+		}
+		return "", false, nil
 	case sqlmeta.StatementTypeSelect, sqlmeta.StatementTypeUse, sqlmeta.StatementTypeShowTables,
 		sqlmeta.StatementTypeShowCreateTable, sqlmeta.StatementTypeExistsTable,
 		sqlmeta.StatementTypeShowDatabases, sqlmeta.StatementTypeDescribe,
@@ -754,6 +843,65 @@ func storageIntegrityKindFromSQL(sql string) (Kind, bool, bool) {
 		return "", false, true
 	default:
 		return "", false, false
+	}
+}
+
+// dropTableTargets parses the comma-separated target list of a DROP TABLE
+// [IF EXISTS] statement into unquoted identifier segments per target. Only a
+// known trailing clause (ON CLUSTER, SYNC, NO DELAY, PERMANENTLY, SETTINGS,
+// FORMAT) or a final semicolon may follow the list. It reports false, so the
+// caller fails closed, when the text is not a DROP TABLE, a target does not
+// parse, or anything else follows the list.
+func dropTableTargets(sql string) ([][]string, bool) {
+	head := dropTableHeadPattern.FindStringIndex(sql)
+	if head == nil {
+		return nil, false
+	}
+	rest := sql[head[1]:]
+	var targets [][]string
+	for {
+		m := dropTableTargetPattern.FindStringSubmatchIndex(rest)
+		if m == nil {
+			return nil, false
+		}
+		var segments []string
+		for _, raw := range dropTableSegmentPattern.FindAllString(rest[m[2]:m[3]], -1) {
+			segments = append(segments, unquoteDropIdentifier(raw))
+		}
+		targets = append(targets, segments)
+		rest = rest[m[1]:]
+		comma := dropTableCommaPattern.FindStringIndex(rest)
+		if comma == nil {
+			break
+		}
+		rest = rest[comma[1]:]
+	}
+	if !dropTableTailPattern.MatchString(rest) {
+		return nil, false
+	}
+	return targets, true
+}
+
+func unquoteDropIdentifier(raw string) string {
+	if len(raw) < 2 {
+		return raw
+	}
+	switch quote := raw[0]; quote {
+	case '`', '"':
+		body := raw[1 : len(raw)-1]
+		var b strings.Builder
+		for i := 0; i < len(body); i++ {
+			switch {
+			case body[i] == quote && i+1 < len(body) && body[i+1] == quote:
+				i++
+			case quote == '"' && body[i] == '\\' && i+1 < len(body):
+				i++
+			}
+			b.WriteByte(body[i])
+		}
+		return b.String()
+	default:
+		return raw
 	}
 }
 
@@ -872,6 +1020,41 @@ func (p *Plugin) resolveSchemaHash(ctx context.Context, target resolvedTableTarg
 	return payloadexec.TableSchemaHash(p.networkID, schemas[0]), nil
 }
 
+func hasStatementToken(qctx *plugin.QueryContext) bool {
+	for _, setting := range qctx.Query.Settings {
+		if setting.Key == auth.StatementTokenSettingKey {
+			return true
+		}
+	}
+	return false
+}
+
+// snapshotSchema is spec 2026-09-24 §9.1: the ingress admits only an Active
+// table and binds the schema and hash the query's snapshot carries, the
+// registry's schema rather than the latest chain declaration. Every refusal
+// is a stable ClientError: Gone answers as the unknown table sitablestate
+// reports, which does not reveal that the table exists; any other non-Active
+// status, and an Active entry whose schema is missing or names a different
+// table, is non-retryable.
+func snapshotSchema(snap sitable.Snapshot, target resolvedTableTarget) (*payloadexec.TableSchema, string, error) {
+	table := snap.Lookup(target.database, target.table)
+	switch table.Status {
+	case sitable.Active:
+	case sitable.Gone:
+		return nil, "", &chproto.ClientError{Code: chproto.CodeUnknownTable,
+			Message: fmt.Sprintf("Table %s does not exist", target.id)}
+	default:
+		return nil, "", &chproto.ClientError{Code: chproto.CodeQueryIsProhibited,
+			Message: fmt.Sprintf("storage_integrity: table %s is not active; the signed lane admits only active tables", target.id)}
+	}
+	if table.SchemaHash == "" || table.Schema.TableID != target.id {
+		return nil, "", &chproto.ClientError{Code: chproto.CodeQueryIsProhibited,
+			Message: fmt.Sprintf("storage_integrity: table %s has no schema bound to it in the table state (schema table %q)", target.id, table.Schema.TableID)}
+	}
+	schema := table.Schema
+	return &schema, table.SchemaHash, nil
+}
+
 func normalizeStructuredTablePath(db, table string) (string, error) {
 	if db == "" {
 		return normalizeTablePath(sqlident.Quote(table))
@@ -984,6 +1167,11 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+// dropIdentifierSegment is one identifierPath segment, widened to the
+// double-quoted form the native engine emits in a rewritten DROP TABLE
+// (phys."db1.t").
+const dropIdentifierSegment = "(?:`(?:``|[^`])+`|\"(?:\"\"|\\\\.|[^\"\\\\])+\"|[A-Za-z_][A-Za-z0-9_]*)"
+
 const identifierPath = "(?:`(?:``|[^`])+`|[A-Za-z_][A-Za-z0-9_]*)(?:\\s*\\.\\s*(?:`(?:``|[^`])+`|[A-Za-z_][A-Za-z0-9_]*))*"
 
 var (
@@ -992,6 +1180,11 @@ var (
 	alterUpdateTargetPattern = regexp.MustCompile(`(?is)^\s*ALTER\s+TABLE\s+(` + identifierPath + `)\s+UPDATE\b`)
 	alterDeleteTargetPattern = regexp.MustCompile(`(?is)^\s*ALTER\s+TABLE\s+(` + identifierPath + `)\s+DELETE\b`)
 	readLikePattern          = regexp.MustCompile(`(?is)^\s*(SELECT|SHOW|EXISTS|DESCRIBE|DESC|USE)\b`)
+	dropTableHeadPattern     = regexp.MustCompile(`(?is)^\s*DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?`)
+	dropTableTargetPattern   = regexp.MustCompile(`(?s)^\s*(` + dropIdentifierSegment + `(?:\s*\.\s*` + dropIdentifierSegment + `)*)`)
+	dropTableCommaPattern    = regexp.MustCompile(`(?s)^\s*,`)
+	dropTableTailPattern     = regexp.MustCompile(`(?is)^\s*(?:(?:ON\s+CLUSTER|SYNC|NO\s+DELAY|PERMANENTLY|SETTINGS|FORMAT)\b.*|;\s*)?$`)
+	dropTableSegmentPattern  = regexp.MustCompile(dropIdentifierSegment)
 	unsupportedWritePattern  = regexp.MustCompile(`(?is)^\s*(CREATE|DROP|ALTER|RENAME|TRUNCATE|GRANT|REVOKE|ATTACH|DETACH|OPTIMIZE)\b`)
 	functionPattern          = regexp.MustCompile(`(?is)([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
 	identifierTokenPattern   = regexp.MustCompile(`(?is)\b([A-Za-z_][A-Za-z0-9_]*)\b`)
@@ -1002,6 +1195,14 @@ func (p *Plugin) RunOnPeerTrust() bool { return false }
 func (p *Plugin) RunOnForward() bool { return false }
 
 func (p *Plugin) RejectUndecodableQuery() bool { return p != nil && p.enabled }
+
+// RequiresTableSnapshot reports whether every query must carry its
+// table-state snapshot (storage integrity enabled).
+func (p *Plugin) RequiresTableSnapshot() bool { return p != nil && p.requireSnapshot }
+
+// ResolvesDeclaredSchemas reports whether the ingress holds a declared
+// network-state schema loader, the disabled deployment's schema source.
+func (p *Plugin) ResolvesDeclaredSchemas() bool { return p != nil && p.schemaLoader != nil }
 
 var (
 	_ plugin.QueryPlugin              = (*Plugin)(nil)

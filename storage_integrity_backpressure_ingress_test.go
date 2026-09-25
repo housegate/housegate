@@ -806,7 +806,7 @@ func TestIngress_PreparedCandidateClaimedBeforeSourceFrontierRelease(t *testing.
 
 	ownerAdmission := bpEUAdmission()
 	ownerRecord := AdmissionRecordFromPlugin(ownerAdmission)
-	table, partitions, err := ingress.partsPressureTarget(ownerRecord)
+	table, partitions, err := ingress.partsPressureTarget(ownerRecord, nil)
 	if err != nil {
 		t.Fatalf("owner pressure target: %v", err)
 	}

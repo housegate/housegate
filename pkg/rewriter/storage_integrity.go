@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	pb "github.com/housegate/rewriter-proto/gen/pb"
+
+	"github.com/housegate/housegate/pkg/sitable"
 )
 
 // ReadModeSettingKey is the per-query ClickHouse custom setting that selects
@@ -48,23 +51,46 @@ type StorageIntegrityReadState interface {
 	PromotedUnsafeParts(tableID string) ([]string, error)
 }
 
-// StorageIntegrityTable is one SI table as housegate knows it: the logical
-// id (== the rewriter's lookup key) and its two physical homes.
-type StorageIntegrityTable struct {
-	TableID     string // logical "<db>.<table>"
-	SafeTable   string // "hg_safe.<phys>"
-	UnsafeTable string // "hg_unsafe.<phys>"
-}
-
 // StorageIntegrityOptions is the read-surface slice of rewriter.Options.
 type StorageIntegrityOptions struct {
-	Tables          []StorageIntegrityTable
+	// Enabled is storage_integrity.enabled. It activates the V2 contract on
+	// every request, fail-closed handling and the acknowledgement gate,
+	// independent of how many tables are Active (spec 2026-09-24 H6).
+	Enabled bool
+	// TableState supplies the per-query snapshot when the caller did not
+	// attach one to the context (WithTableSnapshot). Required when Enabled.
+	TableState      sitable.TableState
 	DefaultReadMode ReadMode                  // "" → safe
 	ReadState       StorageIntegrityReadState // nil → unsafe_latest refused
 	// InsertLaneEnabled is true when the SI ingress plugin is wired (it then
 	// owns INSERT admission). When false, an INSERT whose accessed tables
 	// include an SI table is rejected here (plan deviation D-1).
 	InsertLaneEnabled bool
+}
+
+type tableSnapshotCtxKey struct{}
+
+// WithTableSnapshot attaches the query's table-state snapshot. The rewrite
+// plugin takes exactly one snapshot per query and every stage reads it.
+func WithTableSnapshot(ctx context.Context, snap sitable.Snapshot) context.Context {
+	return context.WithValue(ctx, tableSnapshotCtxKey{}, snap)
+}
+
+// TableSnapshotFromContext returns the snapshot attached by WithTableSnapshot.
+func TableSnapshotFromContext(ctx context.Context) (sitable.Snapshot, bool) {
+	snap, ok := ctx.Value(tableSnapshotCtxKey{}).(sitable.Snapshot)
+	return snap, ok && snap != nil
+}
+
+// snapshotFor returns the query's snapshot, falling back to the current one.
+func (o StorageIntegrityOptions) snapshotFor(ctx context.Context) sitable.Snapshot {
+	if snap, ok := TableSnapshotFromContext(ctx); ok {
+		return snap
+	}
+	if o.TableState != nil {
+		return o.TableState.Current()
+	}
+	return sitable.NewSnapshot(0, sitable.Ordinary, nil)
 }
 
 type readModeCtxKey struct{}
@@ -99,21 +125,28 @@ func (e *RejectedError) Unwrap() error {
 	return e.Cause
 }
 
-// buildStorageIntegrityArgs renders the proto block for one call. Safe mode
-// never consults the port; unsafe_latest requires it and surfaces every
-// port error as a RejectedError (fail closed, D2).
-func buildStorageIntegrityArgs(opts StorageIntegrityOptions, mode ReadMode) (*pb.StorageIntegrityArgs, error) {
-	if len(opts.Tables) == 0 {
+// buildStorageIntegrityArgs renders the proto block for one call. It returns
+// nil only when storage integrity is disabled; when enabled the block is sent
+// even with an empty table map, because the V2 contract is activated by
+// version (spec 2026-09-24 H6), and it always names the reserved databases. Every Active table of the snapshot is listed;
+// parts carries the promoted-but-not-yet-cleaned unsafe parts of the Active
+// tables the query accesses, and is consulted only in unsafe_latest mode.
+func buildStorageIntegrityArgs(opts StorageIntegrityOptions, snap sitable.Snapshot, mode ReadMode, parts map[string][]string) (*pb.StorageIntegrityArgs, error) {
+	if !opts.Enabled {
 		return nil, nil
 	}
 	if mode == "" {
 		mode = ReadModeSafe
 	}
+	active := snap.Active()
 	out := &pb.StorageIntegrityArgs{
-		Tables:              make(map[string]*pb.StorageIntegrityArgs_Table, len(opts.Tables)),
+		Tables:              make(map[string]*pb.StorageIntegrityArgs_Table, len(active)),
 		ReadMode:            pb.StorageIntegrityArgs_READ_MODE_SAFE,
 		ReservedRowIdColumn: DefaultReservedRowIDColumn,
-		ContractVersion:     StorageIntegrityContractV1,
+		ContractVersion:     StorageIntegrityContractV2,
+		// Sent on every enabled request: under V2 the engines protect these
+		// databases even when no table is Active (plan A handoff).
+		ReservedDatabases: sitable.ReservedDatabases(),
 	}
 	if mode == ReadModeUnsafeLatest {
 		if opts.ReadState == nil {
@@ -122,20 +155,81 @@ func buildStorageIntegrityArgs(opts StorageIntegrityOptions, mode ReadMode) (*pb
 		}
 		out.ReadMode = pb.StorageIntegrityArgs_READ_MODE_UNSAFE_LATEST
 	}
-	for _, t := range opts.Tables {
-		entry := &pb.StorageIntegrityArgs_Table{SafeTable: t.SafeTable, UnsafeTable: t.UnsafeTable}
-		if mode == ReadModeUnsafeLatest {
-			parts, err := opts.ReadState.PromotedUnsafeParts(t.TableID)
-			if err != nil {
-				return nil, &RejectedError{Code: pb.RewriteCode_RewriteError,
-					Message: fmt.Sprintf("storage_integrity read mode unsafe_latest: cannot resolve promoted unsafe parts for %s: %v", t.TableID, err),
-					Cause:   err}
-			}
-			entry.ExcludedUnsafeParts = parts
+	for _, t := range active {
+		phys := sitable.PhysicalTable(t.ID)
+		entry := &pb.StorageIntegrityArgs_Table{
+			SafeTable:   sitable.SafeDatabase + "." + phys,
+			UnsafeTable: sitable.UnsafeDatabase + "." + phys,
 		}
-		out.Tables[t.TableID] = entry
+		if mode == ReadModeUnsafeLatest {
+			entry.ExcludedUnsafeParts = parts[t.ID]
+		}
+		out.Tables[t.ID] = entry
 	}
 	return out, nil
+}
+
+// promotedPartsFor fetches the promoted-but-not-yet-cleaned unsafe parts of
+// exactly the given Active tables (spec 2026-09-24 §6.2). Every port error is a
+// RejectedError: unsafe_latest fails closed, never degrades (Spec G D2).
+func promotedPartsFor(rs StorageIntegrityReadState, tableIDs []string) (map[string][]string, error) {
+	out := make(map[string][]string, len(tableIDs))
+	for _, id := range tableIDs {
+		parts, err := rs.PromotedUnsafeParts(id)
+		if err != nil {
+			return nil, &RejectedError{Code: pb.RewriteCode_RewriteError,
+				Message: fmt.Sprintf("storage_integrity read mode unsafe_latest: cannot resolve promoted unsafe parts for %s: %v", id, err),
+				Cause:   err}
+		}
+		if len(parts) > 0 {
+			out[id] = parts
+		}
+	}
+	return out, nil
+}
+
+// requireActiveAccessedIDs refuses an SI-flagged accessed id that is not an
+// Active table of the query's snapshot. unsafe_latest keys its exclusions by
+// Active id, so such an id would lose its exclusions without a trace
+// (final ruling I2): an engine reporting ids differently fails loudly instead.
+func requireActiveAccessedIDs(snap sitable.Snapshot, ids []string) error {
+	active := map[string]bool{}
+	for _, t := range snap.Active() {
+		active[t.ID] = true
+	}
+	for _, id := range ids {
+		if !active[id] {
+			return &RejectedError{Code: pb.RewriteCode_RewriteError,
+				Message: fmt.Sprintf("storage-integrity unsafe_latest rewrite accessed %q, which is not an Active storage-integrity table of this query's snapshot", id)}
+		}
+	}
+	return nil
+}
+
+// storageIntegrityAccessedIDs returns the sorted, de-duplicated logical ids of
+// the SI-flagged accessed tables.
+func storageIntegrityAccessedIDs(tables []*pb.AccessedTable) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, t := range tables {
+		if !t.GetIsStorageIntegrity() {
+			continue
+		}
+		db := t.GetLogicalDatabase()
+		if db == "" {
+			db = t.GetOriginalDatabase()
+		}
+		id := t.GetOriginalTable()
+		if db != "" {
+			id = db + "." + id
+		}
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // storageIntegrityAccess returns the first SI-flagged accessed table's
@@ -170,37 +264,62 @@ type StorageIntegrityScrubber struct {
 	replacer *strings.Replacer
 }
 
-// NewStorageIntegrityScrubber returns nil when no SI table is configured, so
-// non-SI deployments pay no scrubbing cost.
-func NewStorageIntegrityScrubber(opts StorageIntegrityOptions) *StorageIntegrityScrubber {
-	if len(opts.Tables) == 0 {
+// NewStorageIntegrityScrubber builds the scrubber for one snapshot: every
+// Active table's qualified physical names map back to its logical id, and the
+// two reserved databases and the row-id column are always redacted, even when
+// no table is Active.
+func NewStorageIntegrityScrubber(snap sitable.Snapshot) *StorageIntegrityScrubber {
+	active := snap.Active()
+	// Qualified names must precede their bare database prefixes.
+	pairs := make([]string, 0, len(active)*4+6)
+	for _, table := range active {
+		phys := sitable.PhysicalTable(table.ID)
+		pairs = append(pairs,
+			sitable.SafeDatabase+"."+phys, table.ID,
+			sitable.UnsafeDatabase+"."+phys, table.ID,
+		)
+	}
+	pairs = append(pairs,
+		sitable.SafeDatabase, storageIntegrityRedaction,
+		sitable.UnsafeDatabase, storageIntegrityRedaction,
+		DefaultReservedRowIDColumn, storageIntegrityRedaction,
+	)
+	return &StorageIntegrityScrubber{replacer: strings.NewReplacer(pairs...)}
+}
+
+// StorageIntegrityScrubberCache keeps the scrubber of the newest snapshot
+// version it was asked for, so a scrubber is built once per version rather
+// than once per exception.
+type StorageIntegrityScrubberCache struct {
+	mu      sync.Mutex
+	version uint64
+	built   bool
+	current *StorageIntegrityScrubber
+	builds  int
+}
+
+// For returns the scrubber for snap's version, building it on a version change.
+func (c *StorageIntegrityScrubberCache) For(snap sitable.Snapshot) *StorageIntegrityScrubber {
+	if c == nil || snap == nil {
 		return nil
 	}
-	// Qualified names must precede their bare database prefixes.
-	pairs := make([]string, 0, len(opts.Tables)*4+6)
-	databases := make(map[string]bool)
-	for _, table := range opts.Tables {
-		pairs = append(pairs,
-			table.SafeTable, table.TableID,
-			table.UnsafeTable, table.TableID,
-		)
-		if db, _, ok := strings.Cut(table.SafeTable, "."); ok {
-			databases[db] = true
-		}
-		if db, _, ok := strings.Cut(table.UnsafeTable, "."); ok {
-			databases[db] = true
-		}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.built && c.version == snap.Version() {
+		return c.current
 	}
-	databaseNames := make([]string, 0, len(databases))
-	for db := range databases {
-		databaseNames = append(databaseNames, db)
-	}
-	sort.Strings(databaseNames)
-	for _, db := range databaseNames {
-		pairs = append(pairs, db, storageIntegrityRedaction)
-	}
-	pairs = append(pairs, DefaultReservedRowIDColumn, storageIntegrityRedaction)
-	return &StorageIntegrityScrubber{replacer: strings.NewReplacer(pairs...)}
+	c.current = NewStorageIntegrityScrubber(snap)
+	c.version = snap.Version()
+	c.built = true
+	c.builds++
+	return c.current
+}
+
+// Builds reports how many scrubbers the cache has built (test observability).
+func (c *StorageIntegrityScrubberCache) Builds() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.builds
 }
 
 // Scrub is safe on a nil receiver and an empty message.

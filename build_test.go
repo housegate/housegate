@@ -31,6 +31,7 @@ import (
 	"github.com/housegate/housegate/pkg/replay"
 	"github.com/housegate/housegate/pkg/replay/payloadexec"
 	"github.com/housegate/housegate/pkg/rewriter"
+	"github.com/housegate/housegate/pkg/sitable"
 	"github.com/housegate/housegate/pkg/sqlmeta"
 	sicore "github.com/housegate/housegate/pkg/storageintegrity"
 	rewriterpb "github.com/housegate/rewriter-proto/gen/pb"
@@ -51,6 +52,16 @@ func (stubRewriterFactory) Close() error { return nil }
 type siCapableStubRewriterFactory struct{ stubRewriterFactory }
 
 func (siCapableStubRewriterFactory) StorageIntegrityContractVersion() rewriterpb.StorageIntegrityContractVersion {
+	return rewriter.StorageIntegrityContractV2
+}
+
+// siV1OnlyStubRewriterFactory implements rewriter.StorageIntegrityCapableFactory
+// but reports the retired V1 contract. HouseGate never falls back to V1, so
+// buildServer must refuse startup for it exactly as it does for a factory
+// that doesn't implement the capability marker at all.
+type siV1OnlyStubRewriterFactory struct{ stubRewriterFactory }
+
+func (siV1OnlyStubRewriterFactory) StorageIntegrityContractVersion() rewriterpb.StorageIntegrityContractVersion {
 	return rewriter.StorageIntegrityContractV1
 }
 
@@ -103,27 +114,27 @@ type buildFakeReadState struct{}
 
 func (buildFakeReadState) PromotedUnsafeParts(string) ([]string, error) { return nil, nil }
 
-func TestStorageIntegrityRewriterOptions_DerivesPhysicalNames(t *testing.T) {
+func TestStorageIntegrityRewriterOptions_CarriesTheTableState(t *testing.T) {
 	cfg := minimalServerCfg(t)
 	cfg.StorageIntegrity.Tables = []string{"tenant.events", "db1.t"}
 	cfg.StorageIntegrity.Read.DefaultMode = "unsafe_latest"
 	cfg.StorageIntegrity.Ingress.Enabled = false
 	rs := &buildFakeReadState{}
+	state := sitable.NewStatic(cfg.StorageIntegrity.Tables, nil, "")
 
-	got := storageIntegrityRewriterOptions(cfg, rs)
-	if len(got.Tables) != 2 || got.Tables[0] != (rewriter.StorageIntegrityTable{
-		TableID:     "tenant.events",
-		SafeTable:   "hg_safe.tenant__events",
-		UnsafeTable: "hg_unsafe.tenant__events",
-	}) {
-		t.Fatalf("tables = %+v", got.Tables)
+	got := storageIntegrityRewriterOptions(cfg, rs, state)
+	if !got.Enabled || got.TableState != state {
+		t.Fatalf("opts = %+v, want enabled over the given state", got)
 	}
 	if got.DefaultReadMode != rewriter.ReadModeUnsafeLatest || got.ReadState != rs || got.InsertLaneEnabled {
 		t.Fatalf("opts = %+v", got)
 	}
+	if storageIntegrityRewriterOptions(cfg, rs, nil).Enabled {
+		t.Fatal("no table state means storage integrity is disabled")
+	}
 
 	cfg.StorageIntegrity.Ingress.Enabled = true
-	if !storageIntegrityRewriterOptions(cfg, nil).InsertLaneEnabled {
+	if !storageIntegrityRewriterOptions(cfg, nil, state).InsertLaneEnabled {
 		t.Fatal("ingress enabled must enable the insert lane")
 	}
 }
@@ -148,7 +159,7 @@ func TestStorageIntegrityInternalListenWarning(t *testing.T) {
 	cfg.InternalListen = ""
 	cfg.Auth.PlatformOperatorAddresses = []string{"0x1", "0x2"}
 	got = storageIntegrityInternalListenWarning(cfg)
-	for _, want := range []string{"2 platform-operator", "tenant.events", "ordinary columns", "string literals", "Identifier placeholders", "backslash-bearing", "object-carrier", "regardless of arguments", "direct ClickHouse"} {
+	for _, want := range []string{"2 platform-operator", "ordinary columns", "string literals", "Identifier placeholders", "backslash-bearing", "object-carrier", "regardless of arguments", "direct ClickHouse"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("operator warning = %q, want %q from the conservative false-positive boundary", got, want)
 		}
@@ -242,7 +253,7 @@ func TestBuildServer_UnsafeLatestDefaultRequiresReadState(t *testing.T) {
 	if rewritePlugin == nil {
 		t.Fatal("configured SI surface did not wire rewrite plugin")
 	}
-	if !rewritePlugin.FailClosedOnError || rewritePlugin.RequiredStorageIntegrityContractVersion != rewriter.StorageIntegrityContractV1 {
+	if !rewritePlugin.FailClosedOnError || rewritePlugin.RequiredStorageIntegrityContractVersion != rewriter.StorageIntegrityContractV2 || rewritePlugin.TableState == nil {
 		t.Fatalf("SI rewrite plugin safety fields = fail_closed:%v contract:%s",
 			rewritePlugin.FailClosedOnError, rewritePlugin.RequiredStorageIntegrityContractVersion)
 	}
@@ -277,8 +288,28 @@ func TestBuildServer_ConfiguredSISurfaceRejectsUnawareInjectedFactory(t *testing
 		NetworkState: network.NewInMemoryNetworkState(),
 		Rewriter:     stubRewriterFactory{},
 	}, nil)
-	if err == nil || !strings.Contains(err.Error(), "storage-integrity contract v1") {
+	if err == nil || !strings.Contains(err.Error(), "storage-integrity contract V2") {
 		t.Fatalf("err = %v, want unaware injected factory rejection", err)
+	}
+}
+
+// TestBuildServer_ConfiguredSISurfaceRejectsV1OnlyFactory pins the "V1-only
+// rewriter refuses startup" rule (spec 2026-09-24 §14 "Mixed rewriter
+// versions") at the buildServer gate itself, not just in the rewriter
+// package's own probe tests. A factory that implements
+// rewriter.StorageIntegrityCapableFactory but reports the retired V1
+// contract must be refused exactly like a factory unaware of the marker.
+func TestBuildServer_ConfiguredSISurfaceRejectsV1OnlyFactory(t *testing.T) {
+	cfg := minimalServerCfg(t)
+	cfg.StorageIntegrity.Tables = []string{"tenant.events"}
+
+	_, err := buildServer(Options{
+		Config:       cfg,
+		NetworkState: network.NewInMemoryNetworkState(),
+		Rewriter:     siV1OnlyStubRewriterFactory{},
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "storage-integrity contract V2") {
+		t.Fatalf("err = %v, want V1-only factory refused for lacking contract V2", err)
 	}
 }
 
@@ -339,7 +370,7 @@ func TestBuildServer_ConfiguredSISurfaceRejectsTypedNilInjectedFactory(t *testin
 		NetworkState: network.NewInMemoryNetworkState(),
 		Rewriter:     typedNil,
 	}, nil)
-	if err == nil || !strings.Contains(err.Error(), "storage_integrity.tables requires an available SQL rewriter") {
+	if err == nil || !strings.Contains(err.Error(), "storage_integrity.enabled requires an available SQL rewriter") {
 		t.Fatalf("err = %v, want typed-nil factory rejection", err)
 	}
 }
@@ -354,7 +385,7 @@ func TestBuildServer_ConfiguredSISurfaceRequiresAvailableRewriter(t *testing.T) 
 		Config:       cfg,
 		NetworkState: network.NewInMemoryNetworkState(),
 	}, nil)
-	if err == nil || !strings.Contains(err.Error(), "storage_integrity.tables requires an available SQL rewriter") {
+	if err == nil || !strings.Contains(err.Error(), "storage_integrity.enabled requires an available SQL rewriter") {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -988,7 +1019,7 @@ func TestBuildStorageIntegrityRuntimeRequiresPorts(t *testing.T) {
 	cfg := minimalRouterOnlyCfg(t)
 	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
 
-	_, _, err = buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, cfg.StorageIntegrity.Tables, StorageIntegrityRuntimeOptions{})
+	_, _, err = buildStaticRuntimeConsumer(cfg.StorageIntegrity.Runtime, cfg.StorageIntegrity.Tables, StorageIntegrityRuntimeOptions{})
 	if err == nil {
 		t.Fatal("runtime assembly succeeded without storage-integrity runtime ports")
 	}
@@ -1019,12 +1050,12 @@ func TestBuildStorageIntegrityRuntimeBackpressureRequiresConnAndUsesValidatedSch
 		MergeGuard:   &recordingBuildMergeGuard{},
 		TableSchemas: bpSchemas(),
 	}
-	if _, _, err := buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, cfg.StorageIntegrity.Tables, base); err == nil || !strings.Contains(err.Error(), "backpressure") {
+	if _, _, err := buildStaticRuntimeConsumer(cfg.StorageIntegrity.Runtime, cfg.StorageIntegrity.Tables, base); err == nil || !strings.Contains(err.Error(), "backpressure") {
 		t.Fatalf("enabled backpressure without merge_conn must fail: %v", err)
 	}
 	withPorts := base
 	withPorts.MergeConn = &recordingBuildMergeConn{}
-	ingress, _, err := buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, cfg.StorageIntegrity.Tables, withPorts)
+	ingress, _, err := buildStaticRuntimeConsumer(cfg.StorageIntegrity.Runtime, cfg.StorageIntegrity.Tables, withPorts)
 	if err != nil {
 		t.Fatalf("buildStorageIntegrityRuntimeConsumer: %v", err)
 	}
@@ -1041,7 +1072,7 @@ func TestBuildStorageIntegrityRuntimeInjectedPressureRequiresLifecycle(t *testin
 	cfg := minimalRouterOnlyCfg(t)
 	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
 	cfg.StorageIntegrity.Runtime.Backpressure.Enabled = true
-	_, _, err = buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, cfg.StorageIntegrity.Tables, StorageIntegrityRuntimeOptions{
+	_, _, err = buildStaticRuntimeConsumer(cfg.StorageIntegrity.Runtime, cfg.StorageIntegrity.Tables, StorageIntegrityRuntimeOptions{
 		StatementSubmitter: &rootRecordingSubmitter{},
 		SourcePreparer:     &rootRecordingPreparer{},
 		StatusQuerier:      rootRecordingStatusQuerier{},
@@ -1063,7 +1094,7 @@ func TestBuildStorageIntegrityRuntimeRejectsPhysicalTableNameCollision(t *testin
 	cfg := minimalRouterOnlyCfg(t)
 	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
 	cfg.StorageIntegrity.Runtime.Backpressure.Enabled = true
-	_, _, err = buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, cfg.StorageIntegrity.Tables, StorageIntegrityRuntimeOptions{
+	_, _, err = buildStaticRuntimeConsumer(cfg.StorageIntegrity.Runtime, cfg.StorageIntegrity.Tables, StorageIntegrityRuntimeOptions{
 		StatementSubmitter: &rootRecordingSubmitter{},
 		SourcePreparer:     &rootRecordingPreparer{},
 		StatusQuerier:      rootRecordingStatusQuerier{},
@@ -1088,7 +1119,7 @@ func TestBuildStorageIntegrityRuntimeRejectsPhysicalTableNameCollisionWhenBackpr
 	cfg := minimalRouterOnlyCfg(t)
 	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
 	cfg.StorageIntegrity.Runtime.Backpressure.Enabled = false
-	_, _, err = buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, cfg.StorageIntegrity.Tables, StorageIntegrityRuntimeOptions{
+	_, _, err = buildStaticRuntimeConsumer(cfg.StorageIntegrity.Runtime, cfg.StorageIntegrity.Tables, StorageIntegrityRuntimeOptions{
 		StatementSubmitter: &rootRecordingSubmitter{},
 		SourcePreparer:     &rootRecordingPreparer{},
 		StatusQuerier:      rootRecordingStatusQuerier{},
@@ -1112,7 +1143,7 @@ func TestBuildStorageIntegrityRuntimeRejectsTableSchemaMembershipMismatch(t *tes
 	cfg := minimalRouterOnlyCfg(t)
 	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
 	cfg.StorageIntegrity.Runtime.Backpressure.Enabled = false
-	_, _, err = buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, []string{"tenant.events"}, StorageIntegrityRuntimeOptions{
+	_, _, err = buildStaticRuntimeConsumer(cfg.StorageIntegrity.Runtime, []string{"tenant.events"}, StorageIntegrityRuntimeOptions{
 		StatementSubmitter: &rootRecordingSubmitter{},
 		SourcePreparer:     &rootRecordingPreparer{},
 		StatusQuerier:      rootRecordingStatusQuerier{},
@@ -1139,7 +1170,7 @@ func TestBuildStorageIntegrityRuntimeBackpressureDisabledStillBindsTouchedPartit
 	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
 	cfg.StorageIntegrity.Runtime.Backpressure.Enabled = false
 	journal := &countingIntakeJournal{}
-	ingress, mergeGuard, err := buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, cfg.StorageIntegrity.Tables, StorageIntegrityRuntimeOptions{
+	ingress, mergeGuard, err := buildStaticRuntimeConsumer(cfg.StorageIntegrity.Runtime, cfg.StorageIntegrity.Tables, StorageIntegrityRuntimeOptions{
 		StatementSubmitter: &rootRecordingSubmitter{outcome: sicore.SubmitOutcome{Category: sicore.OutcomeAccepted}},
 		SourcePreparer: &rootRecordingPreparer{
 			source:     "snode-A",
@@ -1161,10 +1192,14 @@ func TestBuildStorageIntegrityRuntimeBackpressureDisabledStillBindsTouchedPartit
 	if ingress.pressure != nil {
 		t.Fatal("disabled backpressure unexpectedly installed a pressure guard")
 	}
-	if err := startStorageIntegrityRuntime(context.Background(), ingress, mergeGuard); err != nil {
+	if err := startStorageIntegrityRuntime(context.Background(), ingress, mergeGuard, true); err != nil {
 		t.Fatalf("startStorageIntegrityRuntime: %v", err)
 	}
 	adm := bpAdmission()
+	// The table-state-backed runtime requires the query snapshot's schema,
+	// which the ingress plugin binds in production.
+	schema := bpSchemas()[0]
+	adm.TableSchema = &schema
 	if err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), adm); err != nil {
 		t.Fatalf("ConsumeStorageIntegrityAdmission: %v", err)
 	}
@@ -1192,7 +1227,7 @@ func TestBuildStorageIntegrityRuntimeInjectedPressureRefreshesAndPolls(t *testin
 	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
 	cfg.StorageIntegrity.Runtime.Backpressure.Enabled = true
 	runner := newBlockingPressureLifecycle()
-	ingress, mergeGuard, err := buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, cfg.StorageIntegrity.Tables, StorageIntegrityRuntimeOptions{
+	ingress, mergeGuard, err := buildStaticRuntimeConsumer(cfg.StorageIntegrity.Runtime, cfg.StorageIntegrity.Tables, StorageIntegrityRuntimeOptions{
 		StatementSubmitter: &rootRecordingSubmitter{},
 		SourcePreparer:     &rootRecordingPreparer{},
 		StatusQuerier:      rootRecordingStatusQuerier{},
@@ -1207,7 +1242,7 @@ func TestBuildStorageIntegrityRuntimeInjectedPressureRefreshesAndPolls(t *testin
 	if ingress.pressureRunner != runner {
 		t.Fatalf("pressure runner = %T, want injected lifecycle", ingress.pressureRunner)
 	}
-	if err := startStorageIntegrityRuntime(context.Background(), ingress, mergeGuard); err != nil {
+	if err := startStorageIntegrityRuntime(context.Background(), ingress, mergeGuard, true); err != nil {
 		t.Fatalf("startStorageIntegrityRuntime: %v", err)
 	}
 	select {
@@ -1230,7 +1265,7 @@ func TestBuildStorageIntegrityRuntimeRequiresPreparedLookup(t *testing.T) {
 	cfg := minimalRouterOnlyCfg(t)
 	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
 
-	_, _, err = buildStorageIntegrityRuntimeConsumer(
+	_, _, err = buildStaticRuntimeConsumer(
 		cfg.StorageIntegrity.Runtime,
 		cfg.StorageIntegrity.Tables,
 		StorageIntegrityRuntimeOptions{
@@ -1254,7 +1289,7 @@ func TestBuildStorageIntegrityRuntimeRequiresStatusQuerier(t *testing.T) {
 	cfg := minimalRouterOnlyCfg(t)
 	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
 
-	_, _, err = buildStorageIntegrityRuntimeConsumer(
+	_, _, err = buildStaticRuntimeConsumer(
 		cfg.StorageIntegrity.Runtime,
 		cfg.StorageIntegrity.Tables,
 		StorageIntegrityRuntimeOptions{
@@ -1348,7 +1383,7 @@ func TestBuildStorageIntegrityRuntimeBuildsConsumerAndRunsMergeGuard(t *testing.
 		}},
 	}
 
-	ingress, mergeGuard, err := buildStorageIntegrityRuntimeConsumer(
+	ingress, mergeGuard, err := buildStaticRuntimeConsumer(
 		cfg.StorageIntegrity.Runtime,
 		cfg.StorageIntegrity.Tables,
 		StorageIntegrityRuntimeOptions{
@@ -1369,7 +1404,7 @@ func TestBuildStorageIntegrityRuntimeBuildsConsumerAndRunsMergeGuard(t *testing.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	defer ingress.Close()
-	if err := startStorageIntegrityRuntime(ctx, ingress, mergeGuard); err != nil {
+	if err := startStorageIntegrityRuntime(ctx, ingress, mergeGuard, true); err != nil {
 		t.Fatalf("startStorageIntegrityRuntime: %v", err)
 	}
 	if guard.calls != 1 {
@@ -1390,6 +1425,7 @@ func TestBuildStorageIntegrityRuntimeBuildsConsumerAndRunsMergeGuard(t *testing.
 		SettingsHash:    sicore.EmptySettingsHash,
 		SchemaHash:      payloadexec.TableSchemaHash("testnet-v2", bpSchemas()[0]),
 		RowIDProfileID:  payloadexec.RowIDProfileID,
+		TableSchema:     &bpSchemas()[0],
 		Payload: storageintegrity.CapturedPayload{
 			Bytes:    payload,
 			Length:   uint64(len(payload)),
@@ -1424,7 +1460,7 @@ func TestBuildStorageIntegrityRuntimePinsNativeMaterializer(t *testing.T) {
 	}
 	cfg := minimalRouterOnlyCfg(t)
 	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
-	ingress, _, err := buildStorageIntegrityRuntimeConsumer(
+	ingress, _, err := buildStaticRuntimeConsumer(
 		cfg.StorageIntegrity.Runtime,
 		cfg.StorageIntegrity.Tables,
 		StorageIntegrityRuntimeOptions{
@@ -1454,7 +1490,7 @@ func TestBuildStorageIntegrityRuntimeBuildsMergeGuardFromConnAndConfig(t *testin
 	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
 
 	mergeConn := &recordingBuildMergeConn{}
-	ingress, guard, err := buildStorageIntegrityRuntimeConsumer(
+	ingress, guard, err := buildStaticRuntimeConsumer(
 		cfg.StorageIntegrity.Runtime,
 		cfg.StorageIntegrity.Tables,
 		StorageIntegrityRuntimeOptions{
@@ -1472,7 +1508,7 @@ func TestBuildStorageIntegrityRuntimeBuildsMergeGuardFromConnAndConfig(t *testin
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	defer ingress.Close()
-	if err := startStorageIntegrityRuntime(ctx, ingress, guard); err != nil {
+	if err := startStorageIntegrityRuntime(ctx, ingress, guard, true); err != nil {
 		t.Fatalf("startStorageIntegrityRuntime: %v", err)
 	}
 	wantExecs := []string{
@@ -1502,7 +1538,7 @@ func TestBuildStorageIntegrityRuntimeWrapsMergeSupervisor(t *testing.T) {
 	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
 	rawGuard := &recordingBuildMergeGuard{}
 
-	ingress, guard, err := buildStorageIntegrityRuntimeConsumer(
+	ingress, guard, err := buildStaticRuntimeConsumer(
 		cfg.StorageIntegrity.Runtime,
 		cfg.StorageIntegrity.Tables,
 		StorageIntegrityRuntimeOptions{
@@ -1524,9 +1560,9 @@ func TestBuildStorageIntegrityRuntimeWrapsMergeSupervisor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildStorageIntegrityRuntimeConsumer: %v", err)
 	}
-	supervisor, ok := guard.(*StorageIntegrityMergeSupervisor)
-	if !ok {
-		t.Fatalf("runtime merge guard type = %T, want *StorageIntegrityMergeSupervisor", guard)
+	supervisor := guard
+	if supervisor == nil {
+		t.Fatal("runtime must return its merge supervisor")
 	}
 	if ingress.guard != supervisor {
 		t.Fatal("ingress and preServe must share the same merge supervisor")
@@ -1542,7 +1578,7 @@ func TestStartStorageIntegrityRuntimeFailsClosedOnMergeGuardError(t *testing.T) 
 	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
 
 	guard := &recordingBuildMergeGuard{err: errors.New("native merge still active")}
-	ingress, mergeGuard, err := buildStorageIntegrityRuntimeConsumer(
+	ingress, mergeGuard, err := buildStaticRuntimeConsumer(
 		cfg.StorageIntegrity.Runtime,
 		cfg.StorageIntegrity.Tables,
 		StorageIntegrityRuntimeOptions{
@@ -1559,7 +1595,7 @@ func TestStartStorageIntegrityRuntimeFailsClosedOnMergeGuardError(t *testing.T) 
 	}
 	defer ingress.Close()
 
-	err = startStorageIntegrityRuntime(context.Background(), ingress, mergeGuard)
+	err = startStorageIntegrityRuntime(context.Background(), ingress, mergeGuard, true)
 	if err == nil || !strings.Contains(err.Error(), "storage_integrity.merge_guard") {
 		t.Fatalf("startStorageIntegrityRuntime err = %v, want merge guard failure", err)
 	}
@@ -1574,7 +1610,7 @@ func TestStartStorageIntegrityRuntimeFailsClosedOnInitialPartsSnapshot(t *testin
 	enableStorageIntegrityRuntimeTestConfig(t, cfg, signer)
 	cfg.StorageIntegrity.Runtime.Backpressure.Enabled = true
 	partsErr := errors.New("system.parts unavailable")
-	ingress, mergeGuard, err := buildStorageIntegrityRuntimeConsumer(
+	ingress, mergeGuard, err := buildStaticRuntimeConsumer(
 		cfg.StorageIntegrity.Runtime,
 		cfg.StorageIntegrity.Tables,
 		StorageIntegrityRuntimeOptions{
@@ -1592,7 +1628,7 @@ func TestStartStorageIntegrityRuntimeFailsClosedOnInitialPartsSnapshot(t *testin
 	}
 	defer ingress.Close()
 
-	err = startStorageIntegrityRuntime(context.Background(), ingress, mergeGuard)
+	err = startStorageIntegrityRuntime(context.Background(), ingress, mergeGuard, true)
 	if err == nil || !errors.Is(err, partsErr) || !strings.Contains(err.Error(), "initial parts snapshot") {
 		t.Fatalf("startStorageIntegrityRuntime err = %v, want initial parts snapshot failure", err)
 	}
@@ -1619,9 +1655,13 @@ type orderedBuildMergeGuard struct {
 	order *preServeOrderRecorder
 }
 
-func (g *orderedBuildMergeGuard) AssertStopMerges(context.Context) error {
+func (g *orderedBuildMergeGuard) AssertTables(_ context.Context, ids []string) (sicore.MergeGuardReport, error) {
 	g.order.add("merge")
-	return nil
+	report := sicore.MergeGuardReport{Tables: map[string]error{}}
+	for _, id := range ids {
+		report.Tables[id] = nil
+	}
+	return report, nil
 }
 
 type orderedBuildSubmitter struct {
@@ -1737,7 +1777,7 @@ func TestStartStorageIntegrityRuntimeRecoversAfterInitialMergeAssert(t *testing.
 			LeaseExpiresUnixMS: uint64(time.Now().Add(time.Hour).UnixMilli()),
 		},
 	}
-	ingress, mergeGuard, err := buildStorageIntegrityRuntimeConsumer(
+	ingress, mergeGuard, err := buildStaticRuntimeConsumer(
 		cfg.StorageIntegrity.Runtime,
 		cfg.StorageIntegrity.Tables,
 		StorageIntegrityRuntimeOptions{
@@ -1759,7 +1799,7 @@ func TestStartStorageIntegrityRuntimeRecoversAfterInitialMergeAssert(t *testing.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	defer ingress.Close()
-	if err := startStorageIntegrityRuntime(ctx, ingress, mergeGuard); err != nil {
+	if err := startStorageIntegrityRuntime(ctx, ingress, mergeGuard, true); err != nil {
 		t.Fatalf("startStorageIntegrityRuntime: %v", err)
 	}
 	events := order.snapshot()
@@ -2010,9 +2050,24 @@ type recordingBuildMergeGuard struct {
 	err   error
 }
 
-func (g *recordingBuildMergeGuard) AssertStopMerges(context.Context) error {
+func (g *recordingBuildMergeGuard) AssertTables(_ context.Context, ids []string) (sicore.MergeGuardReport, error) {
 	g.calls++
-	return g.err
+	report := sicore.MergeGuardReport{Tables: map[string]error{}}
+	for _, id := range ids {
+		report.Tables[id] = g.err
+	}
+	return report, nil
+}
+
+// buildStaticRuntimeConsumer builds the runtime over the configured table set,
+// the way buildServer does for storage_integrity.tables.
+func buildStaticRuntimeConsumer(runtimeCfg config.StorageIntegrityRuntimeConfig, tables []string, opts StorageIntegrityRuntimeOptions) (*StorageIntegrityIngress, *StorageIntegrityMergeSupervisor, error) {
+	schemas := map[string]payloadexec.TableSchema{}
+	for _, schema := range opts.TableSchemas {
+		schemas[schema.TableID] = schema
+	}
+	static := sitable.NewStatic(tables, schemas, "")
+	return buildStorageIntegrityRuntimeConsumer(runtimeCfg, static, static, opts)
 }
 
 type recordingBuildMergeConn struct {

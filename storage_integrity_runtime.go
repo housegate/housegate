@@ -9,15 +9,20 @@ import (
 	pb "github.com/sentioxyz/arbiter-proto/gen/pb"
 
 	"github.com/housegate/housegate/pkg/config"
+	"github.com/housegate/housegate/pkg/log"
 	"github.com/housegate/housegate/pkg/replay/payloadexec"
+	"github.com/housegate/housegate/pkg/sitable"
 	sicore "github.com/housegate/housegate/pkg/storageintegrity"
 )
 
-// StorageIntegrityMergeGuard is the startup fail-closed guard for storage
-// integrity tables. *storageintegrity.MergeGuard satisfies it; tests and hosts may
-// inject narrower implementations at the library boundary.
+// StorageIntegrityMergeGuard keeps native merges off the hg_* tables and
+// reports per logical table (spec 2026-09-24 §9.4): activeTableIDs are
+// required to exist, every other present hg_* table is checked when present.
+// *storageintegrity.MergeGuard satisfies it; hosts may inject their own
+// implementation at the library boundary. The error return is reserved for a
+// failure that applies to every table.
 type StorageIntegrityMergeGuard interface {
-	AssertStopMerges(context.Context) error
+	AssertTables(ctx context.Context, activeTableIDs []string) (sicore.MergeGuardReport, error)
 }
 
 // StorageIntegrityRuntimeOptions supplies the host-owned C1/P1e runtime ports.
@@ -45,7 +50,13 @@ type StorageIntegrityRuntimeOptions struct {
 	PartsPressure StorageIntegrityPartsPressure
 }
 
-func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRuntimeConfig, tables []string, opts StorageIntegrityRuntimeOptions) (*StorageIntegrityIngress, StorageIntegrityMergeGuard, error) {
+// buildStorageIntegrityRuntimeConsumer builds the runtime over the table-state
+// port. state is always non-nil (the runtime requires storage_integrity.enabled);
+// static is non-nil exactly when the table set is the configured
+// storage_integrity.tables, and only then are the startup schema set, the
+// physical-name injectivity and the config-to-schema bijection checked
+// (dynamic hosts rely on the arbiter's physical_name_collision admission rule).
+func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRuntimeConfig, state sitable.TableState, static *sitable.Static, opts StorageIntegrityRuntimeOptions) (*StorageIntegrityIngress, *StorageIntegrityMergeSupervisor, error) {
 	expectedSource := strings.TrimSpace(runtimeCfg.ExpectedSource)
 
 	submitter := opts.StatementSubmitter
@@ -92,10 +103,7 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 		)
 	}
 
-	rawMergeGuard, err := buildStorageIntegrityMergeGuard(tables, opts)
-	if err != nil {
-		return nil, nil, err
-	}
+	rawMergeGuard := buildStorageIntegrityMergeGuard(opts)
 
 	var errs []error
 	if submitter == nil {
@@ -121,14 +129,19 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 	if rawMergeGuard == nil {
 		errs = append(errs, errors.New("storage_integrity.runtime.merge_guard or merge_conn is required"))
 	}
-	if len(opts.TableSchemas) == 0 {
-		errs = append(errs, errors.New("storage_integrity.runtime requires the authoritative table schema set (StorageIntegrityRuntimeOptions.TableSchemas)"))
-	} else {
-		if err := sicore.ValidatePhysicalTableNames(opts.TableSchemas); err != nil {
-			errs = append(errs, fmt.Errorf("storage_integrity.runtime schema set: %w", err))
-		}
-		if err := validateStorageIntegrityRuntimeTableSchemas(tables, opts.TableSchemas); err != nil {
-			errs = append(errs, err)
+	if state == nil {
+		errs = append(errs, errors.New("storage_integrity.runtime requires storage_integrity.enabled and a table-state source"))
+	}
+	if static != nil {
+		if len(opts.TableSchemas) == 0 {
+			errs = append(errs, errors.New("storage_integrity.runtime requires the authoritative table schema set (StorageIntegrityRuntimeOptions.TableSchemas)"))
+		} else {
+			if err := sicore.ValidatePhysicalTableNames(opts.TableSchemas); err != nil {
+				errs = append(errs, fmt.Errorf("storage_integrity.runtime schema set: %w", err))
+			}
+			if err := validateStorageIntegrityRuntimeTableSchemas(static.TableIDs(), opts.TableSchemas); err != nil {
+				errs = append(errs, err)
+			}
 		}
 	}
 	if joined := errors.Join(errs...); joined != nil {
@@ -136,6 +149,7 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 	}
 	mergeGuard := NewStorageIntegrityMergeSupervisor(
 		rawMergeGuard,
+		state,
 		runtimeCfg.MergeGuard.ReassertInterval.Duration,
 	)
 
@@ -152,8 +166,9 @@ func buildStorageIntegrityRuntimeConsumer(runtimeCfg config.StorageIntegrityRunt
 	}
 	ingress.leaseManager = leaseManager
 	ingress.mergeRunner = mergeGuard
-	schemaResolver := runtimeTableSchemaResolver(opts.TableSchemas)
+	schemaResolver := tableStateSchemaResolver(state)
 	ingress.WithTableSchemas(schemaResolver)
+	ingress.requireAdmissionSchema = true
 	if backpressure := runtimeCfg.Backpressure; backpressure.Enabled {
 		unsafeDatabase := strings.TrimSpace(backpressure.UnsafeDatabase)
 		safeDatabase := strings.TrimSpace(backpressure.SafeDatabase)
@@ -216,21 +231,31 @@ func validateStorageIntegrityRuntimeTableSchemas(tables []string, schemas []payl
 	return errors.Join(errs...)
 }
 
-func runtimeTableSchemaResolver(schemas []payloadexec.TableSchema) StorageIntegrityTableSchemaResolver {
-	byID := make(map[string]payloadexec.TableSchema, len(schemas))
-	for _, schema := range schemas {
-		byID[schema.TableID] = schema
-	}
+// tableStateSchemaResolver resolves journal-recovery and cleanup schemas from
+// the current snapshot, which answers Active and Gone tables (spec 2026-09-24
+// §9.2), so statements admitted before a retirement still finish. Under
+// sitable.Static it answers the startup schema set, exactly as before.
+func tableStateSchemaResolver(state sitable.TableState) StorageIntegrityTableSchemaResolver {
 	return StorageIntegrityTableSchemaResolverFunc(func(tableID string) (payloadexec.TableSchema, bool) {
-		schema, ok := byID[tableID]
-		return schema, ok
+		table, ok := state.Current().Schema(tableID)
+		if !ok || table.Schema.TableID == "" {
+			return payloadexec.TableSchema{}, false
+		}
+		return table.Schema, true
 	})
 }
 
-func startStorageIntegrityRuntime(ctx context.Context, runtime *StorageIntegrityIngress, guard StorageIntegrityMergeGuard) error {
+// startStorageIntegrityRuntime asserts the merge guard once before recovery.
+// failOnTableError keeps the static table set's startup fail-fast; a dynamic
+// host starts with the failing tables' latches closed, so one unready table
+// blocks only its own admissions (spec 2026-09-24 §9.4).
+func startStorageIntegrityRuntime(ctx context.Context, runtime *StorageIntegrityIngress, guard *StorageIntegrityMergeSupervisor, failOnTableError bool) error {
 	if guard != nil {
-		if err := guard.AssertStopMerges(ctx); err != nil {
-			return fmt.Errorf("storage_integrity.merge_guard: %w", err)
+		if err := guard.Assert(ctx); err != nil {
+			if failOnTableError {
+				return fmt.Errorf("storage_integrity.merge_guard: %w", err)
+			}
+			log.Warnw("storage_integrity: merge guard unhealthy at startup; affected tables refuse admission until a reassert succeeds", "error", err)
 		}
 	}
 	if runtime == nil {
@@ -254,36 +279,12 @@ func startStorageIntegrityRuntime(ctx context.Context, runtime *StorageIntegrity
 	return nil
 }
 
-func buildStorageIntegrityMergeGuard(tables []string, opts StorageIntegrityRuntimeOptions) (StorageIntegrityMergeGuard, error) {
+func buildStorageIntegrityMergeGuard(opts StorageIntegrityRuntimeOptions) StorageIntegrityMergeGuard {
 	if opts.MergeGuard != nil {
-		return opts.MergeGuard, nil
+		return opts.MergeGuard
 	}
 	if opts.MergeConn == nil {
-		return nil, nil
+		return nil
 	}
-	mergeTables, err := storageIntegrityMergeTables(tables)
-	if err != nil {
-		return nil, err
-	}
-	return sicore.NewMergeGuard(opts.MergeConn, mergeTables), nil
-}
-
-// storageIntegrityMergeTables derives the guarded physical set from the
-// logical ids: hg_safe.<phys> then hg_unsafe.<phys> per id.
-func storageIntegrityMergeTables(tableIDs []string) ([]sicore.MergeTable, error) {
-	if len(tableIDs) == 0 {
-		return nil, errors.New("storage_integrity.tables is required when using merge_conn")
-	}
-	out := make([]sicore.MergeTable, 0, 2*len(tableIDs))
-	for i, id := range tableIDs {
-		if _, _, ok := config.SplitStorageIntegrityTableID(id); !ok {
-			return nil, fmt.Errorf("storage_integrity.tables[%d] %q must be a logical <database>.<table> id", i, id)
-		}
-		phys := config.StorageIntegrityPhysicalTable(id)
-		out = append(out,
-			sicore.MergeTable{Database: config.StorageIntegritySafeDatabase, Table: phys},
-			sicore.MergeTable{Database: config.StorageIntegrityUnsafeDatabase, Table: phys},
-		)
-	}
-	return out, nil
+	return sicore.NewMergeGuard(opts.MergeConn, nil)
 }

@@ -167,7 +167,7 @@ The rewriter is the canonical owner of physical/logical database mapping. Every 
 
 - **Two-phase Rewrite.** Phase 1 calls the rewriter backend with empty options to get back the AST-parsed accessed table names. Phase 2 builds `RewriteTableForSelectStmtArgs` (sentio-network table-name resolution via `SentioNetworkTableMapper`) and `RewriteTableForDynamicArgs` (auth-filtered `database_map`, plus `remote_upstreams` for logicals bound to other indexers) and re-calls the rewriter.
 - **Permission-aware `database_map`.** Only databases the connection's account has read/write/admin permission on appear; tables in inaccessible databases are not addressable.
-- **Fail-open only without an SI surface.** With no `storage_integrity.tables`, a backend error or `UnsupportedStatement` falls back to the original SQL. Configured SI membership requires a contract-v1-capable backend at startup and fails closed on every untrustworthy response.
+- **Fail-open only with storage integrity disabled.** With storage integrity disabled (`storage_integrity.enabled` false, the default when `storage_integrity.tables` is empty), a backend error or `UnsupportedStatement` falls back to the original SQL. Enabled storage integrity requires a contract-V2-capable backend (rewriter-go v0.13.0+ native, rewriter-grpc v0.15.0+) at startup and fails closed on every untrustworthy response.
 - **Error reverse-mapping.** When upstream returns an `Exception` referring to rewritten table/database names, the same per-connection Rewriter re-maps the message back via `RewriteErrorMessage`.
 - **wire-level `hello.Database` rewrite.** `OnHello` substitutes `hello.Database` with `rewriter.physical_database`; the user-typed value is preserved in `SessionState.LogicalDatabase`.
 
@@ -184,18 +184,23 @@ The rewriter is the canonical owner of physical/logical database mapping. Every 
 
 ### `storage_integrity` — Protected Table Read Policy
 
-`storage_integrity.tables` is the shared logical membership list. HouseGate derives both guarded physical homes from each `<database>.<table>` id; operators must not configure `runtime.merge_guard.tables` separately. An empty `read.default_mode` has the same safe behavior as `safe`.
+`storage_integrity.enabled` switches storage integrity on. It defaults to true exactly when `storage_integrity.tables` is non-empty, so existing configs keep their meaning. An enabled server needs exactly one table-set source: the static `storage_integrity.tables` list, or a table-state port injected by the embedding host through `Options.StorageIntegrityTableState` (then set `enabled: true` explicitly and leave `tables` empty). `read.default_mode` and `runtime` require `enabled`.
+
+`storage_integrity.tables` is the static logical membership list: every listed table is Active and every other table is ordinary. HouseGate derives both guarded physical homes from each `<database>.<table>` id; operators must not configure `runtime.merge_guard.tables` separately. An empty `read.default_mode` has the same safe behavior as `safe`.
+
+**Dynamic table state.** With an injected table state, every table has one status per query snapshot: `Ordinary` (not governed; plain ClickHouse behavior), `Pending` (governed but not yet active, including every unrecorded name), `Refused` (the registry refused the table), `Active` (reads served from `hg_safe` / `hg_unsafe`, writes only through the signed lane) and `Gone` (retiring or being purged). Refusals end the query and keep the client's connection. Retryable, code 733 (`TABLE_IS_BEING_RESTARTED`): `storage_integrity: table <id> is pending activation (retryable)`, `storage_integrity: table <id> is being activated; retry shortly (retryable)`, `storage_integrity: table <id> is still being purged; retry CREATE later (retryable)` and `storage_integrity: table <id> requires a signed INSERT; the client's table state is stale (retryable)`. Non-retryable, code 392 (`QUERY_IS_PROHIBITED`): `storage_integrity: table <id> was refused: <code>: <reason>`, `storage_integrity: table <id> is not active; the signed lane admits only active tables`, `storage_integrity: table <id> no longer accepts writes`, `storage_integrity: table <id> is governed by storage integrity and cannot be created with data; create the table first, then INSERT` and `storage_integrity: table <id> is governed by storage integrity; ALTER and RENAME are not supported`. A Gone table is answered with code 60 (`UNKNOWN_TABLE`), `Table <id> does not exist`. Clients may match these prefixes; the full contract is §7.4 of the dynamic storage-integrity table-set design (spec 2026-09-24, `docs/superpowers/specs/2026-09-24-dynamic-si-table-set-housegate-design.md`).
 
 - `safe` reads only `hg_safe.<database>__<table>`.
 - `unsafe_latest` unions safe rows with staged `hg_unsafe` rows, excluding unsafe parts already copied into safe but not yet cleanup-acknowledged. It requires a co-located promotion journal through `Options.StorageIntegrityReadState`; HouseGate never silently degrades it to `safe`.
 - `SETTINGS SQL_x_read_mode = 'safe'|'unsafe_latest'` overrides the default for one query. The custom setting is forwarded unchanged; an unknown value is rejected.
-- `SELECT *` and DESCRIBE hide the protocol-owned `_hg_row_id`; addressing that identifier directly is rejected. Non-INSERT writes, DDL, and DCL touching an SI table are rejected. INSERT is admitted only through the signed statement lane.
-- SI requests require the rewriter's exact contract-v1 acknowledgement. Missing/old backends, unavailable classification, read-state failures, and SI-classified rewriter errors all fail closed; ordinary tables retain the legacy fail-open behavior when the SI list is empty.
+- `SELECT *` and DESCRIBE hide the protocol-owned `_hg_row_id`; addressing that identifier directly is rejected. Non-INSERT writes, DDL, and DCL touching an SI table are rejected except `DROP TABLE`, which contract V2 rewrites to drop only the ordinary physical table (`hg_*` untouched; the data plane purges them). INSERT is admitted only through the signed statement lane.
+- SI requests require the rewriter's exact contract-V2 acknowledgement. Missing/old backends, unavailable classification, read-state failures, and SI-classified rewriter errors all fail closed; ordinary tables retain the legacy fail-open behavior only when storage integrity is disabled. With it enabled, the arguments are sent even when no table is Active and always name `hg_safe`, `hg_unsafe` and `hg_promote` as reserved databases, so session `SET`, `SYSTEM` and direct access to those databases stay refused.
 
 Signed INSERT accepts the measured client-streamed `FORMAT` forms, including `FORMAT Values` with rows on stdin. When `storage_integrity.agent.inline_values.enabled` is set on the agent, it also accepts a complete inline `INSERT ... VALUES` whose rows travel inside the query text, as sent by `clickhouse-client` 26.3 and later and the pinned clickhouse-go `Exec`. A 25.x client instead truncates the query after `VALUES` and streams row blocks, but that truncated shape remains unsupported. `INSERT ... SELECT` / `WITH` remain unsupported; the [snapshot-query design proposal](docs/superpowers/specs/2026-09-16-signed-insert-select-design.md) and its [implementation plans](docs/superpowers/plans/2026-09-16-signed-insert-select.md) describe that future lane but do not enable it.
 
 ```yaml
 storage_integrity:
+  # enabled: true                  # default: true when tables is non-empty; set it with an injected TableState and no tables
   tables: ["tenant.events"]        # logical <db>.<table> ids; hg_unsafe/hg_safe.tenant__events are derived
   read:
     default_mode: safe             # safe | unsafe_latest; per query: SETTINGS SQL_x_read_mode = 'unsafe_latest'
@@ -204,7 +209,7 @@ storage_integrity:
       reassert_interval: 30s
 ```
 
-The inline lane is agent-only and default-off. This example shows the required feature blocks; retain the normal signing key and selected-upstream configuration, provide the NetworkState schema source required by the SI agent (unless the embedding host injects it), and configure the corresponding server-side [`auth`](#auth--jws--ethereum-signature) and signed-ingress settings for the existing signed INSERT lane.
+The inline lane is agent-only and default-off. This example shows the required feature blocks; retain the normal signing key and selected-upstream configuration, provide the table status source the SI agent needs — an RPC `network_state.source` that serves `sentio_getStorageIntegrityTableStatus`, or a YAML `table_schemas` fixture whose declared tables count as Active (unless the embedding host injects one); the agent signs only Active tables and passes every other INSERT through unsigned, and configure the corresponding server-side [`auth`](#auth--jws--ethereum-signature) and signed-ingress settings for the existing signed INSERT lane.
 
 ```yaml
 network_state:

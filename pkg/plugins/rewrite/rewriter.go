@@ -14,8 +14,8 @@
 //     the exception message.
 //   - OnClose — evicts and Close()s the per-conn Rewriter.
 //
-// Ordinary rewrite errors retain the legacy fail-open posture only when no
-// storage-integrity surface is configured. RejectedError and configured-SI
+// Ordinary rewrite errors retain the legacy fail-open posture only when
+// storage integrity is disabled. RejectedError and enabled-SI
 // classification/acknowledgement failures are returned to the client.
 package rewrite
 
@@ -34,6 +34,7 @@ import (
 	"github.com/housegate/housegate/pkg/chsession"
 	"github.com/housegate/housegate/pkg/plugin"
 	"github.com/housegate/housegate/pkg/rewriter"
+	"github.com/housegate/housegate/pkg/sitable"
 )
 
 // Observer is the narrow metrics surface this plugin depends on.
@@ -71,13 +72,21 @@ type Plugin struct {
 	// echo gate for every Rewriter implementation, including custom factories.
 	RequiredStorageIntegrityContractVersion pb.StorageIntegrityContractVersion
 
-	// StorageIntegrityScrubber removes protocol-owned SI names from Exception
-	// text before it reaches the client. Nil disables scrubbing.
-	StorageIntegrityScrubber *rewriter.StorageIntegrityScrubber
+	// TableState is the storage-integrity table-state port. Non-nil exactly
+	// when storage_integrity.enabled: OnQuery then takes one snapshot per
+	// query into QueryContext.TableSnapshot and the rewriter context, and
+	// OnException scrubs protocol-owned names with the scrubber of the
+	// session's last snapshot.
+	TableState sitable.TableState
 
 	// rewriters caches one Rewriter per session id (int64). Lifetime
 	// is OnQuery-first-touch through OnClose.
 	rewriters sync.Map // map[int64]rewriter.Rewriter
+
+	// snapshots keeps each session's last query snapshot for OnException.
+	snapshots sync.Map // map[int64]sitable.Snapshot
+
+	scrubbers rewriter.StorageIntegrityScrubberCache
 }
 
 // OnHello mirrors hello.Database into SessionState.Database when
@@ -117,6 +126,16 @@ func (p *Plugin) rewriterFor(sess chsession.Session) rewriter.Rewriter {
 // OnQuery routes the query through the rewriter. Ordinary errors fail open only
 // when FailClosedOnError is false; RejectedError always fails closed.
 func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
+	if p.TableState != nil {
+		// Spec 2026-09-24 H1: exactly one snapshot per query, taken here and
+		// read by every later stage.
+		tableSnap := p.TableState.Current()
+		qctx.TableSnapshot = tableSnap
+		ctx = rewriter.WithTableSnapshot(ctx, tableSnap)
+		if qctx.Session != nil {
+			p.snapshots.Store(qctx.Session.ID(), tableSnap)
+		}
+	}
 	if qctx.Session != nil {
 		snap := qctx.Session.State().Snapshot()
 		// Maintenance sessions (indexer-signed) and platform-operator
@@ -243,7 +262,7 @@ func (p *Plugin) OnException(ctx context.Context, sess chsession.Session, exc *c
 	// Scrubbing is independent of the general reverse-map gate: a ClickHouse
 	// Exception can expose the physical SI namespace even when this session did
 	// not record a successful active rewrite.
-	if scrubbed := p.StorageIntegrityScrubber.Scrub(exc.Message); scrubbed != exc.Message {
+	if scrubbed := p.scrubberFor(sess).Scrub(exc.Message); scrubbed != exc.Message {
 		exc.Message = scrubbed
 	}
 	if !sess.State().Snapshot().HasActiveRewrite {
@@ -265,6 +284,19 @@ func (p *Plugin) OnException(ctx context.Context, sess chsession.Session, exc *c
 	return nil
 }
 
+// scrubberFor returns the scrubber of the session's last query snapshot, or
+// of the current snapshot when the session has not run a query yet. It is nil
+// (a no-op) when storage integrity is disabled.
+func (p *Plugin) scrubberFor(sess chsession.Session) *rewriter.StorageIntegrityScrubber {
+	if p.TableState == nil {
+		return nil
+	}
+	if v, ok := p.snapshots.Load(sess.ID()); ok {
+		return p.scrubbers.For(v.(sitable.Snapshot))
+	}
+	return p.scrubbers.For(p.TableState.Current())
+}
+
 // OnConnect satisfies ConnLifecyclePlugin. We can't build the
 // Rewriter here because Identity is set later (by the auth plugin on
 // OnQuery), so we defer to lazy init.
@@ -283,15 +315,17 @@ func (p *Plugin) OnClose(sess chsession.Session) {
 }
 
 func (p *Plugin) evict(id int64) {
+	p.snapshots.Delete(id)
 	if v, ok := p.rewriters.LoadAndDelete(id); ok {
 		_ = v.(rewriter.Rewriter).Close()
 	}
 }
 
-// RejectUndecodableQuery implements plugin.StrictQueryDecodePlugin. When SI
-// membership is configured, an undecodable Query has no trustworthy
-// classification or v1 acknowledgement and must not take Relay's raw-splice
-// fallback. Empty-SI deployments retain the legacy decode fallback.
+// RejectUndecodableQuery implements plugin.StrictQueryDecodePlugin. When
+// storage integrity is enabled, an undecodable Query has no trustworthy
+// classification or contract-V2 acknowledgement and must not take Relay's
+// raw-splice fallback. Deployments with storage integrity disabled retain the
+// legacy decode fallback.
 func (p *Plugin) RejectUndecodableQuery() bool {
 	return p != nil && p.FailClosedOnError
 }

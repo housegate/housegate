@@ -385,6 +385,10 @@ func (c OutcomeCategory) RequiresAbort() bool {
 type SubmitOutcome struct {
 	Category OutcomeCategory
 	Reason   string
+	// AdmissionCode is the arbiter's application-level code name on a
+	// terminal reject (for example AdmissionCodeSchemaNotAllowed), empty
+	// otherwise. omitempty keeps journal records without it byte-identical.
+	AdmissionCode string `json:",omitempty"`
 }
 
 // ClaimOutcome is the SNode RegisterResultClaim (RC-binding) result. BoundSource

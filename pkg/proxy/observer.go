@@ -69,6 +69,10 @@ var (
 		Name: "clickhouse_proxy_agent_inline_values_total",
 		Help: "Agent-mode signed inline INSERT ... VALUES outcomes",
 	}, []string{"result"})
+	agentSITableStatusFailuresTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "clickhouse_proxy_agent_si_table_status_failures_total",
+		Help: "Agent-mode storage-integrity table status lookups that failed; the INSERT passed through unsigned",
+	})
 )
 
 func init() {
@@ -86,6 +90,7 @@ func init() {
 	prometheus.MustRegister(agentBootstrapFallbackTotal)
 	prometheus.MustRegister(agentMaterializeTotal)
 	prometheus.MustRegister(agentInlineValuesTotal)
+	prometheus.MustRegister(agentSITableStatusFailuresTotal)
 }
 
 type MetricsObserver struct{}
@@ -160,6 +165,8 @@ func (m *MetricsObserver) MaterializeNonSuccess(code string) {
 func (m *MetricsObserver) MaterializeCallError() {
 	agentMaterializeTotal.WithLabelValues("call_error", "").Inc()
 }
+
+func (m *MetricsObserver) TableStatusLookupFailed() { agentSITableStatusFailuresTotal.Inc() }
 
 func (m *MetricsObserver) InlineValuesSynthesized() {
 	agentInlineValuesTotal.WithLabelValues("synthesized").Inc()

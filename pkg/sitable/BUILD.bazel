@@ -1,0 +1,26 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "sitable",
+    srcs = [
+        "fake.go",
+        "sitable.go",
+        "static.go",
+    ],
+    importpath = "github.com/housegate/housegate/pkg/sitable",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/lthash",
+        "//pkg/replay/payloadexec",
+    ],
+)
+
+go_test(
+    name = "sitable_test",
+    srcs = ["sitable_test.go"],
+    embed = [":sitable"],
+    deps = [
+        "//pkg/lthash",
+        "//pkg/replay/payloadexec",
+    ],
+)

@@ -371,7 +371,6 @@ func TestPlugin_Rejections(t *testing.T) {
 		mutate  func(*plugin.QueryContext)
 		wantErr string
 	}{
-		{"schema missing", func(q *plugin.QueryContext) { q.Query.Body = "INSERT INTO shop.unknown FORMAT Native" }, "not declared"},
 		{"compressed", func(q *plugin.QueryContext) { q.Query.Compression = proto.CompressionEnabled }, "compressed"},
 		{"user setting", func(q *plugin.QueryContext) {
 			q.Query.Settings = []chproto.Setting{{Key: "SQL_x_payer", Value: "'0xabc'", Custom: true}, {Key: "async_insert", Value: "1"}}
@@ -416,9 +415,12 @@ func TestPlugin_UseTrackingCommitsOnlyAfterUpstreamSuccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	p.OnQueryComplete(context.Background(), sess)
+	// The rejected USE leaves the signing database at "other", so the
+	// unqualified INSERT resolves to the undeclared (Ordinary) other.orders
+	// and passes through unsigned.
 	rejectedInsert := insertQctx(sess, "INSERT INTO orders FORMAT Native")
-	if err := p.OnQuery(context.Background(), rejectedInsert); err == nil || !strings.Contains(err.Error(), "other.orders") {
-		t.Fatalf("rejected USE must preserve the prior database: %v", err)
+	if err := p.OnQuery(context.Background(), rejectedInsert); err != nil || rejectedInsert.DeferredInsert != nil {
+		t.Fatalf("rejected USE must preserve the prior database: err=%v deferred=%v", err, rejectedInsert.DeferredInsert)
 	}
 
 	successfulUse := insertQctx(sess, "USE shop")

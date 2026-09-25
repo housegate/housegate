@@ -13,6 +13,7 @@ import (
 	"github.com/housegate/housegate/pkg/chsession"
 	"github.com/housegate/housegate/pkg/plugin"
 	"github.com/housegate/housegate/pkg/rewriter"
+	"github.com/housegate/housegate/pkg/sitable"
 )
 
 func TestPlugin_RunOnForward_False(t *testing.T) {
@@ -31,7 +32,7 @@ func TestPeerTrustedSessionBypassesStorageIntegrityRewrite(t *testing.T) {
 	p := &Plugin{
 		Factory:                                 &fakeFactory{rw: rw},
 		FailClosedOnError:                       true,
-		RequiredStorageIntegrityContractVersion: pb.StorageIntegrityContractVersion_STORAGE_INTEGRITY_CONTRACT_V1,
+		RequiredStorageIntegrityContractVersion: rewriter.StorageIntegrityContractV2,
 	}
 	chain := &plugin.PluginChain{QueryPlugins: []plugin.QueryPlugin{p}}
 
@@ -294,7 +295,7 @@ func TestOnQuery_OrdinaryErrorFailsClosedWhenSISurfaceIsConfigured(t *testing.T)
 func TestOnQuery_MissingContractAcknowledgementFromCustomRewriterFailsClosed(t *testing.T) {
 	rw := &fakeRewriter{out: "SELECT 1"} // nil error, zero acknowledgement
 	p := &Plugin{Factory: &fakeFactory{rw: rw},
-		RequiredStorageIntegrityContractVersion: rewriter.StorageIntegrityContractV1}
+		RequiredStorageIntegrityContractVersion: rewriter.StorageIntegrityContractV2}
 	sess := newSessionForTest(t, 45)
 	qctx := &plugin.QueryContext{Session: sess, OriginalSQL: "SELECT 1", Query: &chproto.Query{Body: "SELECT 1"}}
 	err := p.OnQuery(context.Background(), qctx)
@@ -306,7 +307,7 @@ func TestOnQuery_MissingContractAcknowledgementFromCustomRewriterFailsClosed(t *
 func TestOnQuery_WrongContractAcknowledgementFromCustomRewriterFailsClosed(t *testing.T) {
 	rw := &fakeRewriter{out: "SELECT 1", storageIntegrityContractVersion: pb.StorageIntegrityContractVersion(99)}
 	p := &Plugin{Factory: &fakeFactory{rw: rw},
-		RequiredStorageIntegrityContractVersion: rewriter.StorageIntegrityContractV1}
+		RequiredStorageIntegrityContractVersion: rewriter.StorageIntegrityContractV2}
 	sess := newSessionForTest(t, 46)
 	qctx := &plugin.QueryContext{Session: sess, OriginalSQL: "SELECT 1", Query: &chproto.Query{Body: "SELECT 1"}}
 	err := p.OnQuery(context.Background(), qctx)
@@ -316,9 +317,9 @@ func TestOnQuery_WrongContractAcknowledgementFromCustomRewriterFailsClosed(t *te
 }
 
 func TestOnQuery_AcknowledgedCustomRewriterAllowsNormalQuery(t *testing.T) {
-	rw := &fakeRewriter{out: "SELECT 1", storageIntegrityContractVersion: rewriter.StorageIntegrityContractV1}
+	rw := &fakeRewriter{out: "SELECT 1", storageIntegrityContractVersion: rewriter.StorageIntegrityContractV2}
 	p := &Plugin{Factory: &fakeFactory{rw: rw},
-		RequiredStorageIntegrityContractVersion: rewriter.StorageIntegrityContractV1}
+		RequiredStorageIntegrityContractVersion: rewriter.StorageIntegrityContractV2}
 	sess := newSessionForTest(t, 47)
 	qctx := &plugin.QueryContext{Session: sess, OriginalSQL: "SELECT 1", Query: &chproto.Query{Body: "SELECT 1"}}
 	if err := p.OnQuery(context.Background(), qctx); err != nil {
@@ -329,11 +330,8 @@ func TestOnQuery_AcknowledgedCustomRewriterAllowsNormalQuery(t *testing.T) {
 func TestOnException_ScrubsStorageIntegrityNames(t *testing.T) {
 	rw := &fakeRewriter{out: "REWRITTEN-SQL"}
 	p := &Plugin{
-		Factory: &fakeFactory{rw: rw},
-		StorageIntegrityScrubber: rewriter.NewStorageIntegrityScrubber(rewriter.StorageIntegrityOptions{
-			Tables: []rewriter.StorageIntegrityTable{
-				{TableID: "db1.t", SafeTable: "hg_safe.db1__t", UnsafeTable: "hg_unsafe.db1__t"},
-			}}),
+		Factory:    &fakeFactory{rw: rw},
+		TableState: sitable.NewStatic([]string{"db1.t"}, nil, "net"),
 	}
 	sess := newSessionForTest(t, 48)
 
@@ -346,5 +344,67 @@ func TestOnException_ScrubsStorageIntegrityNames(t *testing.T) {
 	}
 	if !strings.Contains(exc.Message, "db1.t") {
 		t.Fatalf("the logical name must survive scrubbing: %q", exc.Message)
+	}
+}
+
+func TestOnQuery_TakesOneSnapshotIntoContextAndQueryContext(t *testing.T) {
+	fake := sitable.NewFake(sitable.Ordinary, sitable.Table{ID: "db1.t", Status: sitable.Active})
+	rw := &fakeRewriter{out: "SELECT 1", storageIntegrityContractVersion: rewriter.StorageIntegrityContractV2}
+	p := &Plugin{Factory: &fakeFactory{rw: rw}, TableState: fake}
+	sess := newSessionForTest(t, 50)
+	qctx := &plugin.QueryContext{Session: sess, OriginalSQL: "SELECT a FROM db1.t", Query: &chproto.Query{Body: "SELECT a FROM db1.t"}}
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatal(err)
+	}
+	if qctx.TableSnapshot == nil || qctx.TableSnapshot.Version() != 1 {
+		t.Fatalf("QueryContext.TableSnapshot = %v, want version 1", qctx.TableSnapshot)
+	}
+	ctxSnap, ok := rewriter.TableSnapshotFromContext(rw.lastCtx)
+	if !ok || ctxSnap != qctx.TableSnapshot {
+		t.Fatal("the rewriter must receive the same snapshot the query context carries")
+	}
+}
+
+func TestOnQuery_DisabledTakesNoSnapshot(t *testing.T) {
+	rw := &fakeRewriter{out: "SELECT 1"}
+	p := &Plugin{Factory: &fakeFactory{rw: rw}}
+	qctx := &plugin.QueryContext{Session: newSessionForTest(t, 51), OriginalSQL: "SELECT 1", Query: &chproto.Query{Body: "SELECT 1"}}
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatal(err)
+	}
+	if qctx.TableSnapshot != nil {
+		t.Fatal("a disabled deployment must not take a snapshot")
+	}
+	if _, ok := rewriter.TableSnapshotFromContext(rw.lastCtx); ok {
+		t.Fatal("a disabled deployment must not attach a snapshot to the rewriter context")
+	}
+}
+
+// TestOnException_ScrubsWithTheSessionsQuerySnapshot pins that the scrubber
+// follows the snapshot the failing query ran under, not a later version.
+func TestOnException_ScrubsWithTheSessionsQuerySnapshot(t *testing.T) {
+	fake := sitable.NewFake(sitable.Ordinary, sitable.Table{ID: "db1.t", Status: sitable.Active})
+	rw := &fakeRewriter{out: "SELECT 1", storageIntegrityContractVersion: rewriter.StorageIntegrityContractV2}
+	p := &Plugin{Factory: &fakeFactory{rw: rw}, TableState: fake}
+	sess := newSessionForTest(t, 52)
+	qctx := &plugin.QueryContext{Session: sess, OriginalSQL: "SELECT a FROM db1.t", Query: &chproto.Query{Body: "SELECT a FROM db1.t"}}
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatal(err)
+	}
+	fake.Set() // db1.t leaves the Active set while the query runs
+	exc := &chproto.Exception{Message: "Table hg_safe.db1__t does not exist"}
+	if err := p.OnException(context.Background(), sess, exc); err != nil {
+		t.Fatal(err)
+	}
+	if exc.Message != "Table db1.t does not exist" {
+		t.Fatalf("scrubbed = %q, want the query snapshot's logical name", exc.Message)
+	}
+	p.OnClose(sess)
+	exc = &chproto.Exception{Message: "Table hg_safe.db1__t does not exist"}
+	if err := p.OnException(context.Background(), sess, exc); err != nil {
+		t.Fatal(err)
+	}
+	if exc.Message != "Table <storage-integrity>.db1__t does not exist" {
+		t.Fatalf("after close the current snapshot applies and still redacts the database, got %q", exc.Message)
 	}
 }

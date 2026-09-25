@@ -40,3 +40,52 @@ func TestKeepsSession(t *testing.T) {
 		t.Fatal("nil must not keep the session")
 	}
 }
+
+// TestTableActivatingMessage pins the exact client-facing text; the relay's
+// session-preserving recognition depends on it byte for byte.
+func TestTableActivatingMessage(t *testing.T) {
+	if got := TableActivatingMessage("net1.events"); got != "storage_integrity: table net1.events is being activated; retry shortly (retryable)" {
+		t.Fatalf("TableActivatingMessage = %q", got)
+	}
+	if !IsTableActivatingMessage(TableActivatingMessage("net1.events")) {
+		t.Fatal("IsTableActivatingMessage rejected its own message")
+	}
+	for _, msg := range []string{
+		TableActivatingMessage(""),
+		"storage_integrity: table net1.events is pending activation (retryable)",
+		"storage_integrity: back-pressure: retry later",
+		"Table net1.events is being activated; retry shortly (retryable)",
+		TableActivatingMessage("net1 events"),
+		TableActivatingMessage(" net1.events"),
+		TableActivatingMessage("net1.events\t"),
+		TableActivatingMessage("a is being activated; retry shortly (retryable) b"),
+	} {
+		if IsTableActivatingMessage(msg) {
+			t.Fatalf("IsTableActivatingMessage(%q) = true, want false", msg)
+		}
+	}
+}
+
+// TestTableNoLongerAcceptsWritesMessage pins the exact spec §9.6 text; the
+// relay's session-preserving recognition depends on it byte for byte.
+func TestTableNoLongerAcceptsWritesMessage(t *testing.T) {
+	if got := TableNoLongerAcceptsWritesMessage("net1.events"); got != "storage_integrity: table net1.events no longer accepts writes" {
+		t.Fatalf("TableNoLongerAcceptsWritesMessage = %q", got)
+	}
+	if !IsTableNoLongerAcceptsWritesMessage(TableNoLongerAcceptsWritesMessage("net1.events")) {
+		t.Fatal("IsTableNoLongerAcceptsWritesMessage rejected its own message")
+	}
+	for _, msg := range []string{
+		TableNoLongerAcceptsWritesMessage(""),
+		TableNoLongerAcceptsWritesMessage("net1 events"),
+		TableNoLongerAcceptsWritesMessage("net1.events\n"),
+		"storage_integrity: table net1.events was refused: CODE: reason",
+		"storage_integrity: table state is unavailable for this query",
+		TableActivatingMessage("net1.events"),
+		"storage_integrity: table net1.events no longer accepts writes: extra",
+	} {
+		if IsTableNoLongerAcceptsWritesMessage(msg) {
+			t.Fatalf("IsTableNoLongerAcceptsWritesMessage(%q) = true, want false", msg)
+		}
+	}
+}

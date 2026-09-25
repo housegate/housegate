@@ -30,6 +30,7 @@ import (
 	"github.com/housegate/housegate/pkg/plugins/storageintegrity"
 	"github.com/housegate/housegate/pkg/registry"
 	"github.com/housegate/housegate/pkg/rewriter"
+	"github.com/housegate/housegate/pkg/sitable"
 )
 
 // Proxy is a started, ready-to-Serve proxy. Run/RunWith blocks until
@@ -115,6 +116,12 @@ type Options struct {
 	// state and sentio-node's adapter implement it, while the agent RPC backend
 	// does not.
 	StorageIntegrityTableSchemas registry.TableSchemas
+	// StorageIntegrityTableState is the host's storage-integrity table-state
+	// port (spec 2026-09-24 §5): versioned snapshots of every table's status.
+	// It requires storage_integrity.enabled: true and excludes
+	// storage_integrity.tables; when nil, an enabled server serves the
+	// configured tables through sitable.Static.
+	StorageIntegrityTableState sitable.TableState
 
 	// CommitGateObservers gate DDL statements (CREATE / DROP TABLE,
 	// CREATE / DROP DATABASE) on host-supplied external commits.

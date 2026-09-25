@@ -56,6 +56,11 @@ func storageIntegritySimpleIdentifier(s string) bool {
 
 // StorageIntegrityConfig owns HouseGate-local storage-integrity toggles.
 type StorageIntegrityConfig struct {
+	// Enabled is the explicit storage-integrity switch (spec 2026-09-24 §6).
+	// Nil defaults to len(Tables) > 0, so every existing config keeps its
+	// meaning. A host that injects Options.StorageIntegrityTableState sets it
+	// to true explicitly. Read it through IsEnabled.
+	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
 	// Tables is the explicit SI membership (Spec G D4): logical
 	// "<database>.<table>" ids. Shared by the merge guard (which guards
 	// hg_safe.<phys> and hg_unsafe.<phys>), the ingress, and the read
@@ -220,8 +225,23 @@ func defaultStorageIntegrityConfig() StorageIntegrityConfig {
 	}
 }
 
+// IsEnabled reports the effective storage-integrity switch: the explicit
+// value when set, otherwise len(Tables) > 0.
+func (c StorageIntegrityConfig) IsEnabled() bool {
+	if c.Enabled != nil {
+		return *c.Enabled
+	}
+	return len(c.Tables) > 0
+}
+
 func (c StorageIntegrityConfig) validate(mode Mode) error {
 	var errs []error
+	if c.Enabled != nil && !*c.Enabled && len(c.Tables) > 0 {
+		errs = append(errs, errors.New("storage_integrity.tables requires storage_integrity.enabled (it is explicitly false)"))
+	}
+	if c.IsEnabled() && len(c.Tables) == 0 && mode != ModeServer {
+		errs = append(errs, errors.New("storage_integrity.enabled is server mode only"))
+	}
 	if c.Agent.Enabled && mode != ModeAgent {
 		errs = append(errs, errors.New("storage_integrity.agent is agent mode only"))
 	}
@@ -258,8 +278,8 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 			errs = append(errs, fmt.Errorf("storage_integrity.read.default_mode %q must be safe or unsafe_latest", c.Read.DefaultMode))
 		}
 	}
-	if c.Read.DefaultMode != "" && len(c.Tables) == 0 {
-		errs = append(errs, errors.New("storage_integrity.read.default_mode requires storage_integrity.tables"))
+	if c.Read.DefaultMode != "" && !c.IsEnabled() {
+		errs = append(errs, errors.New("storage_integrity.read.default_mode requires storage_integrity.enabled"))
 	}
 	if !c.Ingress.Enabled {
 		if c.Runtime.Enabled {
@@ -307,8 +327,8 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 		if c.Runtime.MergeGuard.ReassertInterval.Duration <= 0 {
 			errs = append(errs, errors.New("storage_integrity.runtime.merge_guard.reassert_interval must be > 0 when storage_integrity.runtime.enabled"))
 		}
-		if len(c.Tables) == 0 {
-			errs = append(errs, errors.New("storage_integrity.tables is required when storage_integrity.runtime.enabled"))
+		if !c.IsEnabled() {
+			errs = append(errs, errors.New("storage_integrity.enabled is required when storage_integrity.runtime.enabled"))
 		}
 		if bp := c.Runtime.Backpressure; bp.Enabled {
 			if bp.PollInterval.Duration <= 0 {

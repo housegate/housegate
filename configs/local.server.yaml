@@ -45,7 +45,7 @@ rewriter:
   engine: native
 #  service_addr: "localhost:50051"
 #  native_library_path: /path/to/libpolyglot_sql_ffi.dylib  # native only; empty → POLYGLOT_SQL_FFI_PATH env, then system paths
-  native_library_release: v0.11.0   # native only: auto-fetch the FFI lib from rewriter-go releases (cached; native_library_path wins)
+  native_library_release: v0.13.0   # native only: auto-fetch the FFI lib from rewriter-go releases (cached; native_library_path wins)
   native_library_sha256: ""        # empty uses the release's platform-specific SHA256SUMS entry; see CLAUDE.md for the current hashes
   timeout: "5s"
   physical_database: testnet
@@ -54,6 +54,7 @@ rewriter:
 # Storage-integrity table membership and read policy. The merge guard derives
 # both physical homes from each logical <database>.<table> id.
 # storage_integrity:
+#   enabled: true                    # default: true when tables is non-empty; an embedding host that injects a TableState sets it and omits tables
 #   tables: ["tenant.events"]        # logical <db>.<table> ids; hg_unsafe/hg_safe.tenant__events are derived
 #   read:
 #     default_mode: safe             # safe | unsafe_latest; per query: SETTINGS SQL_x_read_mode = 'unsafe_latest'

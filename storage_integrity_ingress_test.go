@@ -280,11 +280,7 @@ type unhealthyMergeGuard struct {
 	err error
 }
 
-func (g *unhealthyMergeGuard) AssertStopMerges(context.Context) error {
-	return g.err
-}
-
-func (g *unhealthyMergeGuard) CheckMergeHealth() error {
+func (g *unhealthyMergeGuard) CheckMergeHealth(string) error {
 	return g.err
 }
 
