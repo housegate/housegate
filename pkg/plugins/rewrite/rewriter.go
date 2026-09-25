@@ -321,10 +321,11 @@ func (p *Plugin) evict(id int64) {
 	}
 }
 
-// RejectUndecodableQuery implements plugin.StrictQueryDecodePlugin. When SI
-// membership is configured, an undecodable Query has no trustworthy
-// classification or v1 acknowledgement and must not take Relay's raw-splice
-// fallback. Empty-SI deployments retain the legacy decode fallback.
+// RejectUndecodableQuery implements plugin.StrictQueryDecodePlugin. When
+// storage integrity is enabled, an undecodable Query has no trustworthy
+// classification or contract-V2 acknowledgement and must not take Relay's
+// raw-splice fallback. Deployments with storage integrity disabled retain the
+// legacy decode fallback.
 func (p *Plugin) RejectUndecodableQuery() bool {
 	return p != nil && p.FailClosedOnError
 }
