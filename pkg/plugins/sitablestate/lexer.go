@@ -206,8 +206,8 @@ func qualifiedName(toks []token, i int) (database, table string, next int, ok bo
 	if i >= len(toks) || !toks[i].isName() {
 		return "", "", i, false
 	}
-	if i+2 < len(toks) && toks[i+1].isPunct(".") {
-		if !toks[i+2].isName() {
+	if i+1 < len(toks) && toks[i+1].isPunct(".") {
+		if i+2 >= len(toks) || !toks[i+2].isName() {
 			return "", "", i, false
 		}
 		return toks[i].text, toks[i+2].text, i + 3, true
@@ -260,30 +260,72 @@ func createTableCarriesData(sql string) bool {
 	return true
 }
 
-// materializedViewTarget reads the TO target of a CREATE MATERIALIZED VIEW
-// header (the part before the first top-level AS), including a refreshable
-// view's APPEND TO. TTL's TO DISK / TO VOLUME are not targets. ok is false when
-// the header cannot be read with certainty: an uncertain scan, no top-level
-// AS, more than one target, or a TO not followed by a [db.]table name.
-func materializedViewTarget(sql string) (toDatabase, toTable string, hasTo, ok bool) {
+// mvHeader is what the gate reads from a CREATE MATERIALIZED VIEW header: the
+// view's own [db.]name and its TO target, if any.
+type mvHeader struct {
+	viewDatabase, view  string
+	toDatabase, toTable string
+	hasTo               bool
+}
+
+// materializedViewHeader reads the view name and the TO target of a
+// CREATE [OR REPLACE] MATERIALIZED VIEW [IF NOT EXISTS] [db.]name header (the
+// part before the first top-level AS), including a refreshable view's
+// APPEND TO. TTL's TO DISK / TO VOLUME are not targets, and only words after
+// the view name are target keywords. ok is false when the header cannot be
+// read with certainty: an uncertain scan, no top-level AS, a statement that
+// does not open with that grammar, more than one target, or a TO not followed
+// by a [db.]table name.
+func materializedViewHeader(sql string) (h mvHeader, ok bool) {
 	toks, scanned := tokenize(sql)
 	if !scanned {
-		return "", "", false, false
+		return mvHeader{}, false
 	}
 	as := topLevelWords(toks, "AS")
 	if len(as) == 0 {
-		return "", "", false, false
+		return mvHeader{}, false
 	}
 	header := toks[:as[0]]
-	for _, i := range topLevelWords(header, "TO") {
-		if i+1 < len(header) && (header[i+1].isWord("DISK") || header[i+1].isWord("VOLUME")) {
+	i, opened := wordsAt(header, 0, "CREATE")
+	if !opened {
+		return mvHeader{}, false
+	}
+	if next, found := wordsAt(header, i, "OR", "REPLACE"); found {
+		i = next
+	}
+	if i, opened = wordsAt(header, i, "MATERIALIZED", "VIEW"); !opened {
+		return mvHeader{}, false
+	}
+	if next, found := wordsAt(header, i, "IF", "NOT", "EXISTS"); found {
+		i = next
+	}
+	db, view, next, named := qualifiedName(header, i)
+	if !named {
+		return mvHeader{}, false
+	}
+	h.viewDatabase, h.view = db, view
+	rest := header[next:]
+	for _, at := range topLevelWords(rest, "TO") {
+		if at+1 < len(rest) && (rest[at+1].isWord("DISK") || rest[at+1].isWord("VOLUME")) {
 			continue
 		}
-		db, table, _, named := qualifiedName(header, i+1)
-		if !named || hasTo {
-			return "", "", false, false
+		db, table, _, named := qualifiedName(rest, at+1)
+		if !named || h.hasTo {
+			return mvHeader{}, false
 		}
-		toDatabase, toTable, hasTo = db, table, true
+		h.toDatabase, h.toTable, h.hasTo = db, table, true
 	}
-	return toDatabase, toTable, hasTo, true
+	return h, true
+}
+
+// wordsAt reports whether toks[i:] opens with the given bare words and returns
+// the index after them.
+func wordsAt(toks []token, i int, words ...string) (int, bool) {
+	for _, w := range words {
+		if i >= len(toks) || !toks[i].isWord(w) {
+			return i, false
+		}
+		i++
+	}
+	return i, true
 }

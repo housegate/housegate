@@ -73,32 +73,39 @@ func TestCreateTableCarriesData(t *testing.T) {
 	}
 }
 
-func TestMaterializedViewTarget(t *testing.T) {
+func TestMaterializedViewHeader(t *testing.T) {
 	for _, tc := range []struct {
-		sql                 string
-		toDatabase, toTable string
-		hasTo, ok           bool
+		sql  string
+		want mvHeader
+		ok   bool
 	}{
-		{"CREATE MATERIALIZED VIEW db1.mv TO db1.t AS SELECT a FROM db1.src", "db1", "t", true, true},
-		{"CREATE MATERIALIZED VIEW mv TO `t x` AS SELECT a FROM src", "", "t x", true, true},
-		{"CREATE MATERIALIZED VIEW db1.mv ENGINE = MergeTree ORDER BY a POPULATE AS SELECT a FROM db1.t", "", "", false, true},
-		{"CREATE MATERIALIZED VIEW db1.mv ENGINE = MergeTree ORDER BY a AS SELECT a FROM db1.t", "", "", false, true},
-		{"CREATE MATERIALIZED VIEW db1.mv REFRESH EVERY 1 HOUR APPEND TO db1.t AS SELECT a FROM db1.src", "db1", "t", true, true},
-		{"CREATE MATERIALIZED VIEW db1.mv REFRESH EVERY 1 HOUR TO db1.p AS SELECT a FROM db1.o", "db1", "p", true, true},
-		{"CREATE MATERIALIZED VIEW db1.mv ENGINE = MergeTree ORDER BY a TTL d + INTERVAL 1 DAY TO DISK 'cold' AS SELECT a FROM db1.src", "", "", false, true},
-		{"CREATE MATERIALIZED VIEW db1.mv ENGINE = Memory AS SELECT a FROM db1.src WHERE x = 'POPULATE' AND b TO c", "", "", false, true},
-		{"CREATE MATERIALIZED VIEW db1.mv /* TO db1.x */ TO db1.t AS SELECT a FROM db1.src", "db1", "t", true, true},
-		{"CREATE MATERIALIZED VIEW db1.mv TO db1.t (a UInt8) AS SELECT a FROM db1.src", "db1", "t", true, true},
-		// Uncertainty: the header cannot be read, so the target is unknown.
-		{"CREATE MATERIALIZED VIEW db1.mv /* TO db1.t AS SELECT a FROM db1.src", "", "", false, false},
-		{"CREATE MATERIALIZED VIEW db1.mv TO db1.t", "", "", false, false},
-		{"CREATE MATERIALIZED VIEW db1.mv TO db1.t TO db1.u AS SELECT 1", "", "", false, false},
-		{"CREATE MATERIALIZED VIEW db1.mv TO (SELECT 1) AS SELECT 1", "", "", false, false},
-		{"CREATE MATERIALIZED VIEW db1.mv TO $x AS SELECT 1", "", "", false, false},
+		{"CREATE MATERIALIZED VIEW db1.mv TO db1.t AS SELECT a FROM db1.src", mvHeader{"db1", "mv", "db1", "t", true}, true},
+		{"CREATE MATERIALIZED VIEW mv TO `t x` AS SELECT a FROM src", mvHeader{"", "mv", "", "t x", true}, true},
+		{"CREATE MATERIALIZED VIEW db1.mv ENGINE = MergeTree ORDER BY a POPULATE AS SELECT a FROM db1.t", mvHeader{"db1", "mv", "", "", false}, true},
+		{"CREATE MATERIALIZED VIEW db1.mv ENGINE = MergeTree ORDER BY a AS SELECT a FROM db1.t", mvHeader{"db1", "mv", "", "", false}, true},
+		{"CREATE MATERIALIZED VIEW db1.mv REFRESH EVERY 1 HOUR APPEND TO db1.t AS SELECT a FROM db1.src", mvHeader{"db1", "mv", "db1", "t", true}, true},
+		{"CREATE MATERIALIZED VIEW db1.mv REFRESH EVERY 1 HOUR TO db1.p AS SELECT a FROM db1.o", mvHeader{"db1", "mv", "db1", "p", true}, true},
+		{"CREATE MATERIALIZED VIEW db1.mv ENGINE = MergeTree ORDER BY a TTL d + INTERVAL 1 DAY TO DISK 'cold' AS SELECT a FROM db1.src", mvHeader{"db1", "mv", "", "", false}, true},
+		{"CREATE MATERIALIZED VIEW db1.mv ENGINE = Memory AS SELECT a FROM db1.src WHERE x = 'POPULATE' AND b TO c", mvHeader{"db1", "mv", "", "", false}, true},
+		{"CREATE MATERIALIZED VIEW db1.mv /* TO db1.x */ TO db1.t AS SELECT a FROM db1.src", mvHeader{"db1", "mv", "db1", "t", true}, true},
+		{"CREATE MATERIALIZED VIEW db1.mv TO db1.t (a UInt8) AS SELECT a FROM db1.src", mvHeader{"db1", "mv", "db1", "t", true}, true},
+		{"create or replace materialized view if not exists `db 1`.\"m v\" on cluster c TO db1.t AS SELECT 1", mvHeader{"db 1", "m v", "db1", "t", true}, true},
+		// A view named TO is the view's name, not a target keyword.
+		{"CREATE MATERIALIZED VIEW db1.to ENGINE = Memory AS SELECT 1", mvHeader{"db1", "to", "", "", false}, true},
+		// Uncertainty: the header cannot be read, so the view and target are unknown.
+		{"CREATE MATERIALIZED VIEW db1.mv /* TO db1.t AS SELECT a FROM db1.src", mvHeader{}, false},
+		{"CREATE MATERIALIZED VIEW db1.mv TO db1.t", mvHeader{}, false},
+		{"CREATE MATERIALIZED VIEW db1.mv TO db1.t TO db1.u AS SELECT 1", mvHeader{}, false},
+		{"CREATE MATERIALIZED VIEW db1.mv TO (SELECT 1) AS SELECT 1", mvHeader{}, false},
+		{"CREATE MATERIALIZED VIEW db1.mv TO $x AS SELECT 1", mvHeader{}, false},
+		{"CREATE MATERIALIZED VIEW (x) AS SELECT 1", mvHeader{}, false},
+		{"ATTACH MATERIALIZED VIEW db1.mv TO db1.t AS SELECT 1", mvHeader{}, false},
+		{"CREATE VIEW db1.v AS SELECT 1", mvHeader{}, false},
+		{"CREATE MATERIALIZED VIEW db1. AS SELECT 1", mvHeader{}, false},
 	} {
-		db, table, hasTo, ok := materializedViewTarget(tc.sql)
-		if db != tc.toDatabase || table != tc.toTable || hasTo != tc.hasTo || ok != tc.ok {
-			t.Errorf("materializedViewTarget(%q) = %q %q %v %v, want %q %q %v %v", tc.sql, db, table, hasTo, ok, tc.toDatabase, tc.toTable, tc.hasTo, tc.ok)
+		got, ok := materializedViewHeader(tc.sql)
+		if ok != tc.ok || (ok && got != tc.want) {
+			t.Errorf("materializedViewHeader(%q) = %+v %v, want %+v %v", tc.sql, got, ok, tc.want, tc.ok)
 		}
 	}
 }

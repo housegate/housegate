@@ -3,10 +3,12 @@
 // the query's single table-state snapshot, the rewriter's StatementType and
 // AccessedTables, and refuses what a table's status does not allow:
 // Pending data access is retryable, Refused is not, a Gone table is answered
-// as an unknown table, and data-carrying creation into a governed table (a
-// CREATE TABLE the header lexer cannot prove schema-only, a materialized view
-// writing TO it, or a materialized view named like it) is refused. Everything
-// the matrix allows passes through untouched.
+// as an unknown table, and data-carrying creation into a governed table
+// (Pending or Active, and Refused too for creation with data: a CREATE TABLE
+// the header lexer cannot prove schema-only, a materialized view writing TO
+// it, or a materialized view named like it) is refused, as is a materialized
+// view whose header cannot be read. Everything the matrix allows passes
+// through untouched.
 package sitablestate
 
 import (
@@ -43,7 +45,7 @@ const (
 	classDrop             // DROP TABLE / DROP VIEW
 	classOtherDDL         // ALTER, RENAME
 	classViewTarget       // the TO target of a MATERIALIZED VIEW
-	classUnreadable       // a MATERIALIZED VIEW whose header (and so its target) cannot be read
+	classUnreadable       // a MATERIALIZED VIEW whose header (and so its name and target) cannot be read
 )
 
 type severity uint8
@@ -95,9 +97,9 @@ func (p *Plugin) OnQuery(_ context.Context, qctx *plugin.QueryContext) error {
 // decide is the §7.2 matrix plus the §7.3 rules for one accessed table.
 func decide(t sitable.Table, c class) (severity, error) {
 	if c == classUnreadable {
-		// The view's target is unknown, so it may be governed: fail closed
-		// whatever the view's own status.
-		return nonRetryable, dataCarrying(t.ID)
+		// The view's name and target are unknown, so either may be governed:
+		// fail closed whatever the engine reported.
+		return nonRetryable, refuse(CodeNonRetryable, "storage_integrity: the materialized view header cannot be read, so its view name and target may be governed by storage integrity; create the table first, then INSERT")
 	}
 	switch t.Status {
 	case sitable.Pending:
@@ -113,6 +115,11 @@ func decide(t sitable.Table, c class) (severity, error) {
 		switch c {
 		case classRead, classWrite, classOtherDDL, classViewTarget:
 			return nonRetryable, refuse(CodeNonRetryable, "storage_integrity: table %s was refused: %s: %s", t.ID, t.RefusedCode, t.RefusedReason)
+		case classCreateData:
+			// For data-carrying creation a Refused name is governed too
+			// (spec §7.3 rule 2), so it cannot be dropped and refilled by
+			// CREATE ... AS SELECT while it is still Refused.
+			return nonRetryable, dataCarrying(t.ID)
 		}
 	case sitable.Active:
 		switch c {
@@ -197,30 +204,40 @@ func accessesOf(qctx *plugin.QueryContext, sessionDB string) []access {
 			add(t, pick(i == 0, classCreate, classRead))
 		}
 	case sqlmeta.StatementTypeCreateMaterializedView:
-		// The TO target comes from the parsed header of the original SQL, with
-		// logical names and the session database as the default: the engine
-		// omits a REFRESH ... TO target from AccessedTables. Any view whose own
-		// name is governed is refused in any form, because its inner storage
-		// ingests rows under that name.
-		toDB, toTable, hasTo, readable := materializedViewTarget(qctx.OriginalSQL)
-		if toDB == "" {
-			toDB = sessionDB
+		// The view's own name and its TO target come from the parsed header of
+		// the original SQL, with logical names and the session database as the
+		// default, never from AccessedTables: the engine omits a REFRESH ... TO
+		// target from AccessedTables, and its ordering is not a contract. Any
+		// view whose own name is governed is refused in any form, because its
+		// inner storage ingests rows under that name. An unreadable header is
+		// refused whatever the engine reported.
+		h, readable := materializedViewHeader(qctx.OriginalSQL)
+		if !readable {
+			out = append(out, access{class: classUnreadable})
+			for _, t := range tables {
+				add(t, classRead)
+			}
+			return out
 		}
-		for i, t := range tables {
-			switch {
-			case i == 0:
-				add(t, classCreateData)
-				if !readable {
-					add(t, classUnreadable)
-				}
-			case hasTo && t.OriginalTable == toTable && databaseOf(t) == toDB:
+		if h.viewDatabase == "" {
+			h.viewDatabase = sessionDB
+		}
+		if h.toDatabase == "" {
+			h.toDatabase = sessionDB
+		}
+		out = append(out, access{database: h.viewDatabase, table: h.view, class: classCreateData})
+		for _, t := range tables {
+			switch db := databaseOf(t); {
+			case t.OriginalTable == h.view && db == h.viewDatabase:
+				// The view itself, decided above.
+			case h.hasTo && t.OriginalTable == h.toTable && db == h.toDatabase:
 				// Decided once, below, as the view target.
 			default:
 				add(t, classRead)
 			}
 		}
-		if hasTo {
-			out = append(out, access{database: toDB, table: toTable, class: classViewTarget})
+		if h.hasTo {
+			out = append(out, access{database: h.toDatabase, table: h.toTable, class: classViewTarget})
 		}
 	case sqlmeta.StatementTypeDropTable, sqlmeta.StatementTypeDropView:
 		for _, t := range tables {

@@ -95,7 +95,8 @@ var (
 	withDataErr = func(id string) outcome {
 		return outcome{392, "storage_integrity: table " + id + " is governed by storage integrity and cannot be created with data; create the table first, then INSERT"}
 	}
-	alterErr = func(id string) outcome {
+	unreadableErr = outcome{392, "storage_integrity: the materialized view header cannot be read, so its view name and target may be governed by storage integrity; create the table first, then INSERT"}
+	alterErr      = func(id string) outcome {
 		return outcome{392, "storage_integrity: table " + id + " is governed by storage integrity; ALTER and RENAME are not supported"}
 	}
 )
@@ -148,7 +149,14 @@ func TestDataCarryingCreationIntoGovernedTables(t *testing.T) {
 		{"CTAS into a pending name", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db1.p ENGINE = MergeTree ORDER BY a AS SELECT a FROM db1.o", accessed("db1.p"), withDataErr("db1.p")},
 		{"CTAS into an active name", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db1.a ENGINE = MergeTree ORDER BY a AS SELECT a FROM db1.o", accessed("db1.a"), withDataErr("db1.a")},
 		{"CTAS into an ordinary name", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db1.o ENGINE = MergeTree ORDER BY a AS SELECT 1 AS a", accessed("db1.o"), ok},
-		{"CTAS into a refused name", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db1.r ENGINE = MergeTree ORDER BY a AS SELECT 1 AS a", accessed("db1.r"), ok},
+		// Final ruling I1: for data-carrying creation a Refused name is
+		// governed too, so it cannot be dropped and refilled by CTAS while it
+		// is still Refused. Plain CREATE and a schema copy still pass.
+		{"CTAS into a refused name", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db1.r ENGINE = MergeTree ORDER BY a AS SELECT 1 AS a", accessed("db1.r"), withDataErr("db1.r")},
+		{"CREATE OR REPLACE AS SELECT into a refused name", sqlmeta.StatementTypeCreateTable, "CREATE OR REPLACE TABLE db1.r ENGINE = MergeTree ORDER BY a AS SELECT 1 AS a", accessed("db1.r"), withDataErr("db1.r")},
+		{"CREATE OR REPLACE AS SELECT into a pending name", sqlmeta.StatementTypeCreateTable, "CREATE OR REPLACE TABLE db1.p ENGINE = MergeTree ORDER BY a AS SELECT 1 AS a", accessed("db1.p"), withDataErr("db1.p")},
+		{"unlexable CREATE of a refused name", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db1.r (a UInt8) ENGINE = Memory COMMENT 'x", accessed("db1.r"), withDataErr("db1.r")},
+		{"schema copy into a refused name", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db1.r AS db1.o ENGINE = Memory", accessed("db1.r", "db1.o"), ok},
 		// Conservative false positive (ruled): unnormalised EMPTY AS SELECT is
 		// refused. The engine's forwarded body drops an EMPTY body, see
 		// TestCreateTableLexesTheForwardedBody.
@@ -183,9 +191,16 @@ func TestDataCarryingCreationIntoGovernedTables(t *testing.T) {
 		{"plain MV named like a pending table", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.p ENGINE = Memory AS SELECT a FROM db1.o", accessed("db1.p", "db1.o"), withDataErr("db1.p")},
 		{"plain MV named like an active table", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.a ENGINE = Memory AS SELECT a FROM db1.o", accessed("db1.a", "db1.o"), withDataErr("db1.a")},
 		{"MV named like a pending table TO an ordinary one", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.p TO db1.o AS SELECT a FROM db1.o", accessed("db1.p", "db1.o"), withDataErr("db1.p")},
-		{"plain MV named like a refused table", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.r ENGINE = Memory AS SELECT a FROM db1.o", accessed("db1.r", "db1.o"), ok},
+		{"plain MV named like a refused table", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.r ENGINE = Memory AS SELECT a FROM db1.o", accessed("db1.r", "db1.o"), withDataErr("db1.r")},
+		{"MV named like a refused table TO an ordinary one", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.r TO db1.o AS SELECT a FROM db1.o", accessed("db1.r", "db1.o"), withDataErr("db1.r")},
+		// The view's own name comes from the header, not AccessedTables[0].
+		{"MV named like a pending table, view not reported first", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.p ENGINE = Memory AS SELECT a FROM db1.o", accessed("db1.o", "db1.p"), withDataErr("db1.p")},
+		{"MV named like a pending table, view not reported", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW IF NOT EXISTS db1.p ENGINE = Memory AS SELECT a FROM db1.o", accessed("db1.o"), withDataErr("db1.p")},
 		{"plain MV with an ordinary name", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.mv ENGINE = Memory AS SELECT a FROM db1.o", accessed("db1.mv", "db1.o"), ok},
-		{"MV with an unreadable header", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.mv /* TO db1.p AS SELECT a FROM db1.o", accessed("db1.mv", "db1.o"), withDataErr("db1.mv")},
+		// An unreadable header is refused whatever the engine reported.
+		{"MV with an unreadable header", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.mv /* TO db1.p AS SELECT a FROM db1.o", accessed("db1.mv", "db1.o"), unreadableErr},
+		{"MV with an unreadable header, nothing accessed", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.mv /* TO db1.p AS SELECT a FROM db1.o", nil, unreadableErr},
+		{"MV with no view name, nothing accessed", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW AS SELECT 1", nil, unreadableErr},
 		{"view over a gone table", sqlmeta.StatementTypeCreateView, "CREATE VIEW db1.v AS SELECT a FROM db1.g", accessed("db1.v", "db1.g"), unknownErr("db1.g")},
 		{"CTAS into a gone name", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db1.g ENGINE = Memory AS SELECT 1 AS a", accessed("db1.g"), purgingErr("db1.g")},
 	} {
