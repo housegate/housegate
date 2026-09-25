@@ -252,3 +252,56 @@ func TestBuildServer_EnabledIngressRequiresSnapshotAndIgnoresDeclaredSchemas(t *
 		t.Fatal("an enabled build must not give the ingress a declared-schema source")
 	}
 }
+
+// TestStaticIngressRequiresADeclaredSchemaSource pins final ruling I3: static
+// tables with the ingress enabled and no runtime schema set refuse startup
+// when no declared-schema source can be resolved, as before the dynamic table
+// set; a single table missing its declaration only warns.
+func TestStaticIngressRequiresADeclaredSchemaSource(t *testing.T) {
+	cfg := minimalServerCfg(t)
+	cfg.StorageIntegrity.Tables = []string{"db1.t"}
+	cfg.StorageIntegrity.Ingress.Enabled = true
+	cfg.StorageIntegrity.Ingress.NetworkID = "testnet-v2"
+
+	_, _, err := resolveStorageIntegrityTableState(Options{Config: cfg}, registryOnly{network.NewInMemoryNetworkState()})
+	if err == nil || !strings.Contains(err.Error(), "implements registry.TableSchemas") {
+		t.Fatalf("err = %v, want startup refused without a declared-schema source", err)
+	}
+
+	_, static, err := resolveStorageIntegrityTableState(Options{Config: cfg}, network.NewInMemoryNetworkState())
+	if err != nil {
+		t.Fatalf("a resolvable source with an undeclared table must only warn: %v", err)
+	}
+	if table, _ := static.Current().Schema("db1.t"); table.SchemaHash != "" {
+		t.Fatalf("an undeclared table must stay schema-less, got %+v", table)
+	}
+
+	cfg.StorageIntegrity.Ingress.Enabled = false
+	if _, _, err := resolveStorageIntegrityTableState(Options{Config: cfg}, registryOnly{network.NewInMemoryNetworkState()}); err != nil {
+		t.Fatalf("without the ingress no declared-schema source is needed: %v", err)
+	}
+}
+
+// TestBuildServer_StaticIngressWithoutDeclaredSchemasFailsFast is the same
+// rule through buildServer: startup fails instead of refusing every signed
+// INSERT later.
+func TestBuildServer_StaticIngressWithoutDeclaredSchemasFailsFast(t *testing.T) {
+	cfg := minimalServerCfg(t)
+	cfg.StorageIntegrity.Tables = []string{"db1.t"}
+	cfg.StorageIntegrity.Ingress.Enabled = true
+	cfg.StorageIntegrity.Ingress.NetworkID = "testnet-v2"
+	cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{"0x1111111111111111111111111111111111111111"}
+	bs, err := buildServer(Options{
+		Config:                            cfg,
+		NetworkState:                      registryOnly{network.NewInMemoryNetworkState()},
+		Rewriter:                          siProbeStubRewriterFactory{},
+		StorageIntegrityAdmissionConsumer: &recordingAdmissionConsumer{},
+	}, nil)
+	if err == nil {
+		bs.teardown()
+		t.Fatal("buildServer succeeded, want startup refused without a declared-schema source")
+	}
+	if !strings.Contains(err.Error(), "implements registry.TableSchemas") {
+		t.Fatalf("err = %v, want the declared-schema source error", err)
+	}
+}
