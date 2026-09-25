@@ -162,7 +162,7 @@ func TestStorageIntegrityTableStateLifecycle(t *testing.T) {
 	}
 	mustRefuse("SELECT count() FROM tsdb.t", "733", "storage_integrity: table tsdb.t is pending activation (retryable)")
 	out, err := testenv.RunCLIStdin(t, bin, agentProxy.Addr, "", "INSERT INTO tsdb.t FORMAT CSV", "1,eu\n")
-	if err == nil || !strings.Contains(out, "storage_integrity: table tsdb.t is pending activation (retryable)") {
+	if err == nil || !strings.Contains(out, "Code: 733.") || !strings.Contains(out, "storage_integrity: table tsdb.t is pending activation (retryable)") {
 		t.Fatalf("a Pending INSERT must pass the agent unsigned and be refused retryably: err=%v\nout: %s", err, out)
 	}
 	// No table is Active, so the engine knows the protected databases only
@@ -183,7 +183,7 @@ func TestStorageIntegrityTableStateLifecycle(t *testing.T) {
 	// across a 733 and a 392 (plan ruling R3).
 	out, _ = testenv.RunCLIMultiqueryIgnoreError(t, bin, agentProxy.Addr, "",
 		"SELECT connectionId(); SELECT count() FROM tsdb.t; ALTER TABLE tsdb.t ADD COLUMN x UInt8; SELECT connectionId()")
-	if !strings.Contains(out, "Code: 733.") || !strings.Contains(out, "Code: 392.") {
+	if !strings.Contains(out, "Code: 733.") || !strings.Contains(out, "Code: 392.") || !strings.Contains(out, "ALTER and RENAME are not supported") {
 		t.Fatalf("multiquery must show both refusals\nout: %s", out)
 	}
 	requireSameConnection(t, out)
@@ -233,10 +233,16 @@ func TestStorageIntegrityTableStateLifecycle(t *testing.T) {
 	mustRefuse(create, "733", "storage_integrity: table tsdb.t is still being purged; retry CREATE later (retryable)")
 	out, _ = testenv.RunCLIMultiqueryIgnoreError(t, bin, agentProxy.Addr, "",
 		"SELECT connectionId(); SELECT count() FROM tsdb.t; SELECT connectionId()")
+	if !strings.Contains(out, "Code: 60.") {
+		t.Fatalf("multiquery must show the Gone refusal\nout: %s", out)
+	}
 	requireSameConnection(t, out)
 
 	// 4. Purged: the name is unrecorded again (default deny: Pending), and
 	// the same-name CREATE succeeds.
 	state.Set(sitable.Table{ID: "tsdb.t", Status: sitable.Pending})
 	mustRun(create)
+	if err := seed.QueryRow(ctx, "SELECT count() FROM system.tables WHERE database = '"+phys+"' AND name = 'tsdb.t'").Scan(&ordinary); err != nil || ordinary != 1 {
+		t.Fatalf("the Purged CREATE must create the ordinary physical table %s.\"tsdb.t\" again: n=%d err=%v", phys, ordinary, err)
+	}
 }

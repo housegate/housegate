@@ -796,9 +796,22 @@ func classifyStorageIntegrityKind(typ sqlmeta.StatementType, sql string) (Kind, 
 		// TABLE of an SI table with Success, dropping only the ordinary
 		// physical table and keeping the SI target in AccessedTables for
 		// commitgate and the host Observer. It carries no rows, so the ingress
-		// passes it; the text must still be a DROP TABLE.
-		if !dropTablePattern.MatchString(sql) {
+		// passes it; the text must still be a DROP TABLE whose target list
+		// parses and names no reserved database (hg_*), which only the data
+		// plane may drop.
+		targets, ok := dropTableTargets(sql)
+		if !ok {
 			return "", false, fmt.Errorf("storage_integrity statement type mismatch: %s classified as %s", firstKeyword(sql), typ)
+		}
+		for _, target := range targets {
+			if len(target) < 2 {
+				continue
+			}
+			for _, reserved := range sitable.ReservedDatabases() {
+				if strings.EqualFold(target[0], reserved) {
+					return "", false, fmt.Errorf("storage-integrity physical table %s is not directly addressable", strings.Join(target, "."))
+				}
+			}
 		}
 		return "", false, nil
 	case sqlmeta.StatementTypeSelect, sqlmeta.StatementTypeUse, sqlmeta.StatementTypeShowTables,
@@ -830,6 +843,65 @@ func storageIntegrityKindFromSQL(sql string) (Kind, bool, bool) {
 		return "", false, true
 	default:
 		return "", false, false
+	}
+}
+
+// dropTableTargets parses the comma-separated target list of a DROP TABLE
+// [IF EXISTS] statement into unquoted identifier segments per target. Only a
+// known trailing clause (ON CLUSTER, SYNC, NO DELAY, PERMANENTLY, SETTINGS,
+// FORMAT) or a final semicolon may follow the list. It reports false, so the
+// caller fails closed, when the text is not a DROP TABLE, a target does not
+// parse, or anything else follows the list.
+func dropTableTargets(sql string) ([][]string, bool) {
+	head := dropTableHeadPattern.FindStringIndex(sql)
+	if head == nil {
+		return nil, false
+	}
+	rest := sql[head[1]:]
+	var targets [][]string
+	for {
+		m := dropTableTargetPattern.FindStringSubmatchIndex(rest)
+		if m == nil {
+			return nil, false
+		}
+		var segments []string
+		for _, raw := range dropTableSegmentPattern.FindAllString(rest[m[2]:m[3]], -1) {
+			segments = append(segments, unquoteDropIdentifier(raw))
+		}
+		targets = append(targets, segments)
+		rest = rest[m[1]:]
+		comma := dropTableCommaPattern.FindStringIndex(rest)
+		if comma == nil {
+			break
+		}
+		rest = rest[comma[1]:]
+	}
+	if !dropTableTailPattern.MatchString(rest) {
+		return nil, false
+	}
+	return targets, true
+}
+
+func unquoteDropIdentifier(raw string) string {
+	if len(raw) < 2 {
+		return raw
+	}
+	switch quote := raw[0]; quote {
+	case '`', '"':
+		body := raw[1 : len(raw)-1]
+		var b strings.Builder
+		for i := 0; i < len(body); i++ {
+			switch {
+			case body[i] == quote && i+1 < len(body) && body[i+1] == quote:
+				i++
+			case quote == '"' && body[i] == '\\' && i+1 < len(body):
+				i++
+			}
+			b.WriteByte(body[i])
+		}
+		return b.String()
+	default:
+		return raw
 	}
 }
 
@@ -1095,6 +1167,11 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+// dropIdentifierSegment is one identifierPath segment, widened to the
+// double-quoted form the native engine emits in a rewritten DROP TABLE
+// (phys."db1.t").
+const dropIdentifierSegment = "(?:`(?:``|[^`])+`|\"(?:\"\"|\\\\.|[^\"\\\\])+\"|[A-Za-z_][A-Za-z0-9_]*)"
+
 const identifierPath = "(?:`(?:``|[^`])+`|[A-Za-z_][A-Za-z0-9_]*)(?:\\s*\\.\\s*(?:`(?:``|[^`])+`|[A-Za-z_][A-Za-z0-9_]*))*"
 
 var (
@@ -1103,7 +1180,11 @@ var (
 	alterUpdateTargetPattern = regexp.MustCompile(`(?is)^\s*ALTER\s+TABLE\s+(` + identifierPath + `)\s+UPDATE\b`)
 	alterDeleteTargetPattern = regexp.MustCompile(`(?is)^\s*ALTER\s+TABLE\s+(` + identifierPath + `)\s+DELETE\b`)
 	readLikePattern          = regexp.MustCompile(`(?is)^\s*(SELECT|SHOW|EXISTS|DESCRIBE|DESC|USE)\b`)
-	dropTablePattern         = regexp.MustCompile(`(?is)^\s*DROP\s+TABLE\b`)
+	dropTableHeadPattern     = regexp.MustCompile(`(?is)^\s*DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?`)
+	dropTableTargetPattern   = regexp.MustCompile(`(?s)^\s*(` + dropIdentifierSegment + `(?:\s*\.\s*` + dropIdentifierSegment + `)*)`)
+	dropTableCommaPattern    = regexp.MustCompile(`(?s)^\s*,`)
+	dropTableTailPattern     = regexp.MustCompile(`(?is)^\s*(?:(?:ON\s+CLUSTER|SYNC|NO\s+DELAY|PERMANENTLY|SETTINGS|FORMAT)\b.*|;\s*)?$`)
+	dropTableSegmentPattern  = regexp.MustCompile(dropIdentifierSegment)
 	unsupportedWritePattern  = regexp.MustCompile(`(?is)^\s*(CREATE|DROP|ALTER|RENAME|TRUNCATE|GRANT|REVOKE|ATTACH|DETACH|OPTIMIZE)\b`)
 	functionPattern          = regexp.MustCompile(`(?is)([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
 	identifierTokenPattern   = regexp.MustCompile(`(?is)\b([A-Za-z_][A-Za-z0-9_]*)\b`)
