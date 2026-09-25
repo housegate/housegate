@@ -188,6 +188,24 @@ func promotedPartsFor(rs StorageIntegrityReadState, tableIDs []string) (map[stri
 	return out, nil
 }
 
+// requireActiveAccessedIDs refuses an SI-flagged accessed id that is not an
+// Active table of the query's snapshot. unsafe_latest keys its exclusions by
+// Active id, so such an id would lose its exclusions without a trace
+// (final ruling I2): an engine reporting ids differently fails loudly instead.
+func requireActiveAccessedIDs(snap sitable.Snapshot, ids []string) error {
+	active := map[string]bool{}
+	for _, t := range snap.Active() {
+		active[t.ID] = true
+	}
+	for _, id := range ids {
+		if !active[id] {
+			return &RejectedError{Code: pb.RewriteCode_RewriteError,
+				Message: fmt.Sprintf("storage-integrity unsafe_latest rewrite accessed %q, which is not an Active storage-integrity table of this query's snapshot", id)}
+		}
+	}
+	return nil
+}
+
 // storageIntegrityAccessedIDs returns the sorted, de-duplicated logical ids of
 // the SI-flagged accessed tables.
 func storageIntegrityAccessedIDs(tables []*pb.AccessedTable) []string {

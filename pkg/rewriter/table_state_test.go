@@ -144,3 +144,91 @@ func TestSentioRewriter_RequiresV2Acknowledgement(t *testing.T) {
 		t.Fatalf("a V1 acknowledgement must fail closed, got %v", err)
 	}
 }
+
+// unsafeLatestRewrite runs one unsafe_latest query against a scripted backend
+// over db1.t (Active, with a promoted part).
+func unsafeLatestRewrite(t *testing.T, active []sitable.Table, script ...*pb.RewriteSQLResponse) (*sequenceBackend, *fakeReadState, error) {
+	t.Helper()
+	fake := sitable.NewFake(sitable.Ordinary, active...)
+	rs := &fakeReadState{parts: map[string][]string{"db1.t": {"all_1_1_0"}, "db1.x": {"all_7_7_0"}, "db1.t,db1.u": {"all_8_8_0"}}}
+	be := &sequenceBackend{script: script}
+	_, err := dynamicSIFactory(be, fake, rs).NewRewriter(&fakeSession{}).Rewrite(WithReadMode(context.Background(), ReadModeUnsafeLatest), "SELECT a FROM db1.t", "")
+	return be, rs, err
+}
+
+// TestSentioRewriter_UnsafeLatestRejectsAnAccessedIDOutsideTheActiveSet pins
+// final ruling I2: the exclusions are keyed by the snapshot's Active ids, so an
+// SI-flagged accessed id that is not one of them would have its promoted parts
+// silently dropped from the second pass. It is refused instead, before the
+// promotion port is consulted.
+func TestSentioRewriter_UnsafeLatestRejectsAnAccessedIDOutsideTheActiveSet(t *testing.T) {
+	for name, accessed := range map[string][]*pb.AccessedTable{
+		"not active":        siAccessed("db1.x"),
+		"no database":       {{OriginalTable: "t", IsStorageIntegrity: true}},
+		"one of two absent": siAccessed("db1.t", "db1.x"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			be, rs, err := unsafeLatestRewrite(t, []sitable.Table{{ID: "db1.t", Status: sitable.Active}},
+				acknowledgedSIResponse(&pb.RewriteSQLResponse{Code: pb.RewriteCode_Success, SqlAfterRewrite: "pass1", OriginalAccessedTables: accessed}),
+				acknowledgedSIResponse(&pb.RewriteSQLResponse{Code: pb.RewriteCode_Success, SqlAfterRewrite: "pass2", OriginalAccessedTables: accessed}),
+			)
+			var rej *RejectedError
+			if !errors.As(err, &rej) || !strings.Contains(rej.Message, "not an Active storage-integrity table") {
+				t.Fatalf("err = %v, want a RejectedError for the unknown accessed id", err)
+			}
+			if len(be.requests) != 1 || len(rs.calls) != 0 {
+				t.Fatalf("passes = %d port calls = %v, want the refusal before the port and the second pass", len(be.requests), rs.calls)
+			}
+		})
+	}
+}
+
+// TestSentioRewriter_UnsafeLatestComparesAccessedSetsExactly: the accessed-set
+// comparison is element-wise, so ids that join to the same string still differ.
+func TestSentioRewriter_UnsafeLatestComparesAccessedSetsExactly(t *testing.T) {
+	active := []sitable.Table{{ID: "db1.t,db1.u", Status: sitable.Active}, {ID: "db1.t", Status: sitable.Active}, {ID: "db1.u", Status: sitable.Active}}
+	be, _, err := unsafeLatestRewrite(t, active,
+		acknowledgedSIResponse(&pb.RewriteSQLResponse{Code: pb.RewriteCode_Success, SqlAfterRewrite: "pass1", OriginalAccessedTables: siAccessed("db1.t,db1.u")}),
+		acknowledgedSIResponse(&pb.RewriteSQLResponse{Code: pb.RewriteCode_Success, SqlAfterRewrite: "pass2", OriginalAccessedTables: siAccessed("db1.t", "db1.u")}),
+	)
+	if len(be.requests) != 2 {
+		t.Fatalf("passes = %d, want the comparison to run after the second pass", len(be.requests))
+	}
+	var rej *RejectedError
+	if !errors.As(err, &rej) || !strings.Contains(rej.Message, "unsafe_latest rewrite accessed") {
+		t.Fatalf("err = %v, want a RejectedError for the moved accessed set", err)
+	}
+}
+
+// TestSentioRewriter_UnsafeLatestSecondPassFailsClosed: the second pass is held
+// to the same acknowledgement and code rules as the first.
+func TestSentioRewriter_UnsafeLatestSecondPassFailsClosed(t *testing.T) {
+	active := []sitable.Table{{ID: "db1.t", Status: sitable.Active}}
+	first := func() *pb.RewriteSQLResponse {
+		return acknowledgedSIResponse(&pb.RewriteSQLResponse{Code: pb.RewriteCode_Success, SqlAfterRewrite: "pass1", OriginalAccessedTables: siAccessed("db1.t")})
+	}
+	for name, tc := range map[string]struct {
+		second *pb.RewriteSQLResponse
+		want   string
+	}{
+		"V1 acknowledgement": {
+			&pb.RewriteSQLResponse{Code: pb.RewriteCode_Success, SqlAfterRewrite: "pass2", OriginalAccessedTables: siAccessed("db1.t"), StorageIntegrityContractVersion: StorageIntegrityContractV1},
+			"contract acknowledgement unavailable",
+		},
+		"non-Success code": {
+			acknowledgedSIResponse(&pb.RewriteSQLResponse{Code: pb.RewriteCode_RewriteError, Message: "engine refused the exclusions", OriginalAccessedTables: siAccessed("db1.t")}),
+			"engine refused the exclusions",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			be, _, err := unsafeLatestRewrite(t, active, first(), tc.second)
+			var rej *RejectedError
+			if !errors.As(err, &rej) || !strings.Contains(rej.Message, tc.want) {
+				t.Fatalf("err = %v, want a RejectedError containing %q", err, tc.want)
+			}
+			if len(be.requests) != 2 {
+				t.Fatalf("passes = %d, want the second pass to have run", len(be.requests))
+			}
+		})
+	}
+}

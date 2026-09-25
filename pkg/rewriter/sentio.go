@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -315,10 +316,15 @@ func (r *sentioRewriter) Rewrite(ctx context.Context, sql, effectiveAccount stri
 	// tables this query reads, and only the rewriter knows which those are.
 	// The first pass classifies with no exclusions; when an accessed table
 	// has promoted parts, the second pass rewrites with exactly those
-	// (spec 2026-09-24 §6.2). The accessed SI set must not move between the
-	// two passes, since the parts were chosen from the first.
+	// (spec 2026-09-24 §6.2). The exclusions are keyed by the snapshot's
+	// Active ids, so every SI-flagged accessed id must be one of them, or its
+	// parts would be dropped silently; and the accessed SI set must not move
+	// between the two passes, since the parts were chosen from the first.
 	if si.Enabled && mode == ReadModeUnsafeLatest && resp.GetCode() == pb.RewriteCode_Success {
 		accessed := storageIntegrityAccessedIDs(resp.GetOriginalAccessedTables())
+		if err := requireActiveAccessedIDs(snap, accessed); err != nil {
+			return RewriteResult{}, err
+		}
 		parts, err := promotedPartsFor(si.ReadState, accessed)
 		if err != nil {
 			return RewriteResult{}, err
@@ -332,7 +338,7 @@ func (r *sentioRewriter) Rewrite(ctx context.Context, sql, effectiveAccount stri
 			if err != nil {
 				return RewriteResult{}, err
 			}
-			if got := storageIntegrityAccessedIDs(second.GetOriginalAccessedTables()); strings.Join(got, ",") != strings.Join(accessed, ",") {
+			if got := storageIntegrityAccessedIDs(second.GetOriginalAccessedTables()); !slices.Equal(got, accessed) {
 				return RewriteResult{}, &RejectedError{Code: pb.RewriteCode_RewriteError,
 					Message: fmt.Sprintf("storage-integrity unsafe_latest rewrite accessed %v after classifying %v", got, accessed)}
 			}
