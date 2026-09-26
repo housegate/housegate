@@ -210,3 +210,18 @@ Sub-project 2a shipped as sentioxyz/arbiter-proto#13, sentioxyz/arbiter-core#39 
 - **Agent and JSON-RPC (§8, §9).**
   - The agent signs only Active tables and passes every other INSERT through unsigned; the server stays the authority.
   - sentio-node exposes one method, `sentio_getStorageIntegrityTableStatus`. `sentio_getTableSchema` and `sentio_getLatestTableSchema` are dropped.
+
+## 15. Amendments from the sub-project 4 design (data plane and sentio-node host, 2026-09-25)
+
+[2026-09-25-dynamic-si-table-set-data-plane-design.md](2026-09-25-dynamic-si-table-set-data-plane-design.md) refines §7 and §9. It is authoritative for arbiter-core, arbiter, sentio-core and sentio-node.
+
+- **Verifiers follow the registry.** SNode and verifier share one arbiter-core registry follower (`GetTableRegistry`, then a resumable `WatchTableRegistry` stream) and one level-triggered table-set reconciler. The reconciler replaces the verify-only reconcile loop. It creates the tables of Pending, Active and Retiring incarnations; drops the tables of Purging incarnations, together with their Keeper paths and any decommissioned replicas; and only reports unknown `hg_*` tables. The verifier refuses to attest an add transition until its own tables are Ready.
+- **Purge reports.** `RecordTablePurged` reaches the arbiter through a new idempotent data-plane RPC, `SubmitTablePurged`:
+  - an already-recorded node, or an already-Purged incarnation, succeeds;
+  - `FailedPrecondition` means "not purging yet" and is retried, never read as success.
+
+  This replaces the earlier "treat a late not-purging rejection as success" rule.
+- **Activation window.** The window uses the table creation block recorded by sentio-core (`TableInfo.CreatedBlock`). A zero value is pre-upgrade, and therefore Legacy by construction, so `activation_block` must follow the upgrade of every storage-integrity indexer node. These chain facts are syncer state already trusted for routing. D4 governs membership, which still comes only from the registry.
+- **Active.** A table is Active to housegate only when the registry says Active and the local reconciler reports it Ready.
+- **Snapshot queries.** The snapshot-query lane keeps a static table set until it is enabled.
+- **Observer.** The sentio-node Observer needs no D9 check. Declaration compensation re-declares tables without a schema, using canonical type spellings.
