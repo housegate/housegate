@@ -1923,7 +1923,7 @@ for i in 0 1 2; do
       echo "$d $(wc -c < "$d/state.bin") bytes, version byte $(head -c 5 "$d/state.bin" | od -An -tu1 | awk "{print \$5}")"
       cat "$d/meta.json"; echo; done'
   si_kubectl logs "storage-integrity-si-v2-arbiter-$i" -c arbiter |
-    grep -E 'starting restore|restored from snapshot|election won|entering (leader|follower) state' | head -6
+    grep -E 'starting restore|restored from snapshot|election won|entering (leader|follower) state' | head -6 || true
   /usr/bin/time -p sh -c "kubectl --context sentio-sea -n sentio-network-devnet2 exec storage-integrity-si-v2-arbiter-$i -c arbiter -- tar -C /data -czf - raft | wc -c"
 done
 for el in sentio-node-op-reth-0 sentio-node-op-reth-1; do
@@ -2035,18 +2035,18 @@ for i in 0 1 2; do
   for v in old new; do
     "$R/bin/$v/statedigest" -data-dir "$work/raft" -network-id devnet2 -schema-snapshot-id devnet2-si-v2 \
       -executor-profile-id housegate-replay-mvp-v0 -max-writers 1 \
-      -authority 0x9ef3a259d1d87c864431cab5ed5f6578ad5ad705 > "$si_backup/digest-$i-$v.txt" 2>/dev/null
+      -authority 0x9ef3a259d1d87c864431cab5ed5f6578ad5ad705 > "$si_backup/digest-$i-$v.txt" 2> "$si_backup/digest-$i-$v.err" || { echo "statedigest $v failed for arbiter-$i:"; cat "$si_backup/digest-$i-$v.err"; exit 1; }
     echo "arbiter-$i $v $(grep -E '^(snapshot_index|last_index|written_version)' "$si_backup/digest-$i-$v.txt" | tr '\n' ' ')state=$(grep -E '^(key|spent_ids)' "$si_backup/digest-$i-$v.txt" | grep -v '^key artifact_disposition ' | shasum -a 256 | cut -c1-16)"
   done
   rm -rf "$work"
 done
 ```
 
-For each voter the `old` and `new` lines must show the same `state=` (the release adds only the empty `artifact_disposition` key, which the hash excludes); `written_version` is 4 for `old` and 14 for `new`. The three voters normally agree as well because §2.2 drained them. Stop on any `old`/`new` difference: the release would not replay this voter to the same state.
+For each voter the `old` and `new` lines must show the same `state=` (the release adds only the empty `artifact_disposition` key, which the hash excludes); `written_version` is 4 for `old` and 14 for `new`. The three voters normally agree as well because §2.2 drained them. Stop on any `old`/`new` difference, or on any statedigest error (it prints its stderr and ends the session): the release would not replay this voter to the same state. Either way, scale back to 3 on v0.7.1 and end the window.
 
 ### 2.7 Pin the release and start
 
-Push the values change (one commit: `arbiter.image.digest` in `k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml` and its mirror `DEVNET2_ARBITER_DIGEST` in `charts/storage-integrity/tests/test_render.py`, both `$ARBITER_RELEASE_DIGEST`), after `python -B charts/storage-integrity/tests/test_render.py` passes. Then:
+Push the values change (one commit: `arbiter.image.digest` in `k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml` and its mirror `DEVNET2_ARBITER_DIGEST` in `charts/storage-integrity/tests/test_render.py`, both `$ARBITER_RELEASE_DIGEST`), after `python3 -B charts/storage-integrity/tests/test_render.py` passes. Then:
 
 ```bash
 stage1_commit="$(git rev-parse HEAD)"
@@ -2144,7 +2144,7 @@ done
 si_kubectl delete pod si-arbiter-restore-0 si-arbiter-restore-1 si-arbiter-restore-2 --wait
 git show --stat "$stage1_commit"   # must be the stage 1 digest commit
 git revert --no-edit "$stage1_commit"
-python -B charts/storage-integrity/tests/test_render.py
+python3 -B charts/storage-integrity/tests/test_render.py
 git push origin HEAD:main
 helmfile -f k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.helmfile.yaml sync --selector name=storage-integrity-si-v2
 si_kubectl scale statefulset/storage-integrity-si-v2-arbiter --replicas=3
@@ -2175,7 +2175,7 @@ One commit moves sentio-node, the in-pod rewriter and the sidecar together: the 
 
 ### 3.2 Values commit
 
-One commit, pushed to `main` after `python -B charts/storage-integrity/tests/test_render.py` passes:
+One commit, pushed to `main` after `python3 -B charts/storage-integrity/tests/test_render.py` passes:
 
 - `sentio-node-indexer-a-storage-integrity-si-v2-source-image.yaml` and its mirrors `docs/examples/storage-integrity-fresh-source-image.yaml` and `FRESH_SOURCE_IMAGE` in `test_render.py`: sentio-node `sha-2af43bd9906e76c91e892579ec687463ef6cfdb7@$SENTIO_NODE_DIGEST`.
 - `sentio-node-indexer-a-storage-integrity-si-v2.yaml`: rewriter `0.15.0@sha256:57812c8c…`; no `housegate.storageIntegrity.tables` (the table set comes from the embedded SNode); sidecar `v0.15.0@sha256:1b51de76…`; `networkStateSource: http://localhost:32003`; no `tableSchemas`. `DEVNET2_SIDECAR_VERSION` in `test_render.py` becomes `v0.15.0`.
@@ -2253,7 +2253,7 @@ Valid until stage 3: no genesis table can be dropped while the registry is disab
 ```bash
 git show --stat "$stage2_commit"   # must be the stage 2 commit
 git revert --no-edit "$stage2_commit"
-python -B charts/storage-integrity/tests/test_render.py
+python3 -B charts/storage-integrity/tests/test_render.py
 git push origin HEAD:main
 helmfile -f k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.helmfile.yaml sync --selector name=sentio-node-devnet2-indexer-a
 si_kubectl rollout status statefulset/sentio-node-devnet2-indexer-a --timeout=15m
@@ -2488,7 +2488,7 @@ for i in 0 1 2; do
       echo "$d $(wc -c < "$d/state.bin") bytes, version byte $(head -c 5 "$d/state.bin" | od -An -tu1 | awk "{print \$5}")"
       cat "$d/meta.json"; echo; done'
   si_kubectl logs "storage-integrity-si-v2-arbiter-$i" -c arbiter |
-    grep -E 'starting restore|restored from snapshot|election won|entering (leader|follower) state' | head -6
+    grep -E 'starting restore|restored from snapshot|election won|entering (leader|follower) state' | head -6 || true
   /usr/bin/time -p sh -c "kubectl --context sentio-sea -n sentio-network-devnet2 exec storage-integrity-si-v2-arbiter-$i -c arbiter -- tar -C /data -czf - raft | wc -c"
 done
 for el in sentio-node-op-reth-0 sentio-node-op-reth-1; do
@@ -2594,14 +2594,14 @@ for i in 0 1 2; do
   for v in old new; do
     "$R/bin/$v/statedigest" -data-dir "$work/raft" -network-id devnet2 -schema-snapshot-id devnet2-si-v2 \
       -executor-profile-id housegate-replay-mvp-v0 -max-writers 1 \
-      -authority 0x9ef3a259d1d87c864431cab5ed5f6578ad5ad705 > "$si_backup/digest-$i-$v.txt" 2>/dev/null
+      -authority 0x9ef3a259d1d87c864431cab5ed5f6578ad5ad705 > "$si_backup/digest-$i-$v.txt" 2> "$si_backup/digest-$i-$v.err" || { echo "statedigest $v failed for arbiter-$i:"; cat "$si_backup/digest-$i-$v.err"; exit 1; }
     echo "arbiter-$i $v $(grep -E '^(snapshot_index|last_index|written_version)' "$si_backup/digest-$i-$v.txt" | tr '\n' ' ')state=$(grep -E '^(key|spent_ids)' "$si_backup/digest-$i-$v.txt" | grep -v '^key artifact_disposition ' | shasum -a 256 | cut -c1-16)"
   done
   rm -rf "$work"
 done
 ```
 
-Expected: six lines; per voter the `old` and `new` `state=` values are equal, `written_version 4` / `14`. **Stop line:** any per-voter difference → scale back to 3 on v0.7.1 as in Step 5 and end the window.
+Expected: six lines; per voter the `old` and `new` `state=` values are equal, `written_version 4` / `14`. **Stop line:** any per-voter difference, or any statedigest error (printed from `digest-<i>-<build>.err`) → scale back to 3 on v0.7.1 as in Step 5 and end the window.
 
 - [ ] **Step 7: Pin the release and start.** In `k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.yaml`, replace:
 
@@ -2726,7 +2726,7 @@ done
 si_kubectl delete pod si-arbiter-restore-0 si-arbiter-restore-1 si-arbiter-restore-2 --wait
 git show --stat "$stage1_commit"   # must be the stage 1 digest commit
 git revert --no-edit "$stage1_commit"
-python -B charts/storage-integrity/tests/test_render.py
+python3 -B charts/storage-integrity/tests/test_render.py
 git push origin HEAD:main
 helmfile -f k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.helmfile.yaml sync --selector name=storage-integrity-si-v2
 si_kubectl scale statefulset/storage-integrity-si-v2-arbiter --replicas=3
@@ -2983,7 +2983,7 @@ Expected: one JSON object for `sp5b_created_block_probe` with a non-zero `create
 ```bash
 git show --stat "$stage2_commit"   # must be the stage 2 commit
 git revert --no-edit "$stage2_commit"
-python -B charts/storage-integrity/tests/test_render.py
+python3 -B charts/storage-integrity/tests/test_render.py
 git push origin HEAD:main
 helmfile -f k8s-sea/sentio-network-devnet2/storage-integrity-si-v2.helmfile.yaml sync --selector name=sentio-node-devnet2-indexer-a
 si_kubectl rollout status statefulset/sentio-node-devnet2-indexer-a --timeout=15m
