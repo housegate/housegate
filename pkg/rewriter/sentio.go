@@ -2,6 +2,7 @@ package rewriter
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"regexp"
@@ -11,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/housegate/housegate/pkg/log"
 
@@ -106,8 +108,9 @@ func privilegesDeltasFromProto(in []*pb.PrivilegeDelta) []sqlmeta.PrivilegeDelta
 //
 // Construction builds the configured backend synchronously — dialing
 // the gRPC service or loading the native FFI library — and fails fast
-// either way; the proxy treats a missing rewriter as "rewriting
-// disabled" rather than continuing to retry forever.
+// either way rather than retrying forever; buildServer then refuses
+// startup unless rewriter.fail_open_on_unavailable allows running without
+// the rewriter.
 type SentioNetworkFactory struct {
 	options      Options
 	registry     registry.Registry
@@ -228,9 +231,10 @@ func (*SentioNetworkFactory) StorageIntegrityContractVersion() pb.StorageIntegri
 // Close tears down the shared rewrite backend. Per-connection
 // Rewriters share that backend, so Close on the factory ends rewriting
 // for all of them. Safe to call multiple times.
-// In-flight calls racing Close surface as Rewrite errors that the
-// rewrite plugin's fail-open path absorbs (under native they appear as
-// Code=SyntaxError rejections — see rewriter-go's Service.Close).
+// In-flight calls racing Close surface as Rewrite failures: a transport
+// error follows rewriter.fail_open_on_unavailable, while under native they
+// appear as Code=SyntaxError answers (see rewriter-go's Service.Close), which
+// are rejections and always fail closed.
 func (f *SentioNetworkFactory) Close() error {
 	if f.backend == nil {
 		return nil
@@ -268,14 +272,23 @@ func (r *sentioRewriter) Close() error {
 //  3. Stash the input SQL so RewriteErrorMessage can use it as
 //     context.
 //
-// Error handling: ordinary failures retain the legacy fail-open contract when
-// storage integrity is disabled. When it is enabled, pre-classification
-// failures and SI-specific rejections return *RejectedError and MUST reach the
-// client as an Exception. UnsupportedStatement remains a passthrough only when
-// storage integrity is disabled.
+// Error handling (spec 2026-09-26 T8): every non-Success engine answer,
+// UnsupportedStatement included, and every failure after the request reached
+// the engine returns *RejectedError and MUST reach the client as an
+// Exception, with or without storage integrity. A failure before the request
+// reached the engine is a *RejectedError too, unless
+// Options.FailOpenOnUnavailable is set and storage integrity is disabled; only
+// then is it an *UnavailableError the plugin may log and forward past.
 func (r *sentioRewriter) Rewrite(ctx context.Context, sql, effectiveAccount string) (RewriteResult, error) {
 	if r.closed.Load() {
-		return RewriteResult{}, r.rewriteFailure(fmt.Errorf("rewriter closed"))
+		return RewriteResult{}, r.rewriteFailure(&UnavailableError{Cause: errors.New("rewriter closed")})
+	}
+	// Re-review R1: the gRPC contract carries the statement in a proto3
+	// string, which cannot hold invalid UTF-8, and a statement the engines
+	// cannot even receive must not reach ClickHouse unexamined. Refused here,
+	// above the backend seam, for every engine.
+	if !utf8.ValidString(sql) {
+		return RewriteResult{}, &RejectedError{Code: pb.RewriteCode_InvalidRewriteRequest, Message: invalidUTF8Message}
 	}
 
 	si := r.factory.options.StorageIntegrity
@@ -288,7 +301,7 @@ func (r *sentioRewriter) Rewrite(ctx context.Context, sql, effectiveAccount stri
 
 	dbMap, knownPhys, err := r.factory.buildDatabaseMap(effectiveAccount)
 	if err != nil {
-		return RewriteResult{}, r.rewriteFailure(fmt.Errorf("build database map: %w", err))
+		return RewriteResult{}, r.engineFailure(fmt.Errorf("build database map: %w", err))
 	}
 	logicalToRemote, remoteUpstreams := r.factory.buildRemoteUpstreams(dbMap)
 	mode := si.DefaultReadMode
@@ -301,12 +314,9 @@ func (r *sentioRewriter) Rewrite(ctx context.Context, sql, effectiveAccount stri
 	}
 	dynArgs := buildDynamicArgs(dbMap, knownPhys, r.sess.LogicalDatabaseName(), r.sess.PhysicalDatabaseName(), r.factory.options.Delim, logicalToRemote, remoteUpstreams, siArgs)
 
-	if len(dbMap) == 0 && len(knownPhys) == 0 && r.sess.LogicalDatabaseName() == "" && siArgs == nil {
-		// Nothing to do — no mappings, no session context. No gRPC
-		// call, so classification / accessed-tables / rewrite maps
-		// are unknown.
-		return RewriteResult{SQL: sql}, nil
-	}
+	// Every statement reaches the engine, even with no mappings and no
+	// session context (review L2): skipping it would forward the original
+	// SQL unexamined, which is the pass-through spec 2026-09-26 T8 removed.
 
 	resp, err := r.rewriteOnce(ctx, sql, dynArgs)
 	if err != nil {
@@ -356,49 +366,35 @@ func (r *sentioRewriter) Rewrite(ctx context.Context, sql, effectiveAccount stri
 				Message: "storage-integrity table " + key + " accepts writes only through the signed statement lane"}
 		}
 	}
-	// Spec I D3: with a configured SI surface, every non-Success answer is
-	// a rejection, even when the engine recorded no accessed table or only an
-	// ordinary table. Several engine paths reject before target collection;
-	// allowing those responses into the legacy Unsupported pass-through would
-	// forward unexamined SQL into protocol-owned namespaces. The SI-specific
-	// branch above stays first because it also owns the INSERT-lane decision.
-	if si.Enabled && resp.GetCode() != pb.RewriteCode_Success {
+	// Spec 2026-09-26 T8 (and Spec I D3 before it, for the SI surface only):
+	// every non-Success answer is a rejection, with or without storage
+	// integrity, even when the engine recorded no accessed table or only an
+	// ordinary table. There is no way to tell a harmless unmodelled statement
+	// from DETACH TABLE of another tenant's physical table, and several engine
+	// paths reject before target collection, so forwarding the original SQL
+	// would hand unexamined text to ClickHouse. The SI-specific branch above
+	// stays first because it also owns the INSERT-lane decision.
+	if resp.GetCode() != pb.RewriteCode_Success {
 		return RewriteResult{}, &RejectedError{Code: resp.GetCode(), Message: resp.GetMessage()}
 	}
-	switch resp.Code {
-	case pb.RewriteCode_Success:
-		r.maybeUpdateLogicalDatabase(sql, resp)
-		return RewriteResult{
-			SQL:                             resp.GetSqlAfterRewrite(),
-			StatementType:                   statementTypeFromProto(resp.GetStatementType()),
-			AccessedTables:                  accessedTablesFromProto(resp.GetOriginalAccessedTables()),
-			TableRewrites:                   resp.GetTableRewrites(),
-			DatabaseRewrites:                resp.GetDatabaseRewrites(),
-			PrivilegesDeltas:                privilegesDeltasFromProto(resp.GetPrivilegesDeltas()),
-			ExistenceClause:                 existenceClauseFromProto(resp.GetExistenceClause()),
-			StorageIntegrityContractVersion: resp.GetStorageIntegrityContractVersion(),
-		}, nil
-	case pb.RewriteCode_UnsupportedStatement:
-		log.Debugw("rewriter unsupported statement, forwarding original SQL", "message", resp.Message)
-		// Per the proto contract, statement_type / table_rewrites /
-		// database_rewrites are UNSPECIFIED-or-empty on non-Success;
-		// original_accessed_tables may still be populated when
-		// classification ran far enough to enumerate them, and
-		// existence_clause is accurate once the SQL parses. Propagate
-		// whatever the rewriter set.
-		return RewriteResult{
-			SQL:                             sql,
-			StatementType:                   statementTypeFromProto(resp.GetStatementType()),
-			AccessedTables:                  accessedTablesFromProto(resp.GetOriginalAccessedTables()),
-			TableRewrites:                   resp.GetTableRewrites(),
-			DatabaseRewrites:                resp.GetDatabaseRewrites(),
-			PrivilegesDeltas:                privilegesDeltasFromProto(resp.GetPrivilegesDeltas()),
-			ExistenceClause:                 existenceClauseFromProto(resp.GetExistenceClause()),
-			StorageIntegrityContractVersion: resp.GetStorageIntegrityContractVersion(),
-		}, nil
-	default:
-		return RewriteResult{}, fmt.Errorf("rewriter rejected SQL (code=%s): %s", resp.Code, resp.Message)
+	// A Success answer must carry the statement to execute (review L3);
+	// forwarding an empty body would still let its classification drive
+	// downstream policy.
+	if resp.GetSqlAfterRewrite() == "" {
+		return RewriteResult{}, &RejectedError{Code: pb.RewriteCode_RewriteError,
+			Message: "rewriter returned an empty statement"}
 	}
+	r.maybeUpdateLogicalDatabase(sql, resp)
+	return RewriteResult{
+		SQL:                             resp.GetSqlAfterRewrite(),
+		StatementType:                   statementTypeFromProto(resp.GetStatementType()),
+		AccessedTables:                  accessedTablesFromProto(resp.GetOriginalAccessedTables()),
+		TableRewrites:                   resp.GetTableRewrites(),
+		DatabaseRewrites:                resp.GetDatabaseRewrites(),
+		PrivilegesDeltas:                privilegesDeltasFromProto(resp.GetPrivilegesDeltas()),
+		ExistenceClause:                 existenceClauseFromProto(resp.GetExistenceClause()),
+		StorageIntegrityContractVersion: resp.GetStorageIntegrityContractVersion(),
+	}, nil
 }
 
 // rewriteOnce performs one backend call and applies the transport and
@@ -410,10 +406,14 @@ func (r *sentioRewriter) rewriteOnce(ctx context.Context, sql string, dynArgs *p
 	}
 	resp, err := r.callWithTimeout(ctx, req)
 	if err != nil {
-		return nil, r.rewriteFailure(fmt.Errorf("rewrite: %w", err))
+		var unavailable *UnavailableError
+		if errors.As(err, &unavailable) {
+			return nil, r.rewriteFailure(unavailable)
+		}
+		return nil, r.engineFailure(fmt.Errorf("rewrite: %w", err))
 	}
 	if resp == nil {
-		return nil, r.rewriteFailure(fmt.Errorf("rewrite: nil response"))
+		return nil, r.engineFailure(errors.New("rewrite: nil response"))
 	}
 	// Spec G D-8: additive protobuf fields are not proof that the backend
 	// understood SI. An old server can ignore the request and still return
@@ -427,13 +427,43 @@ func (r *sentioRewriter) rewriteOnce(ctx context.Context, sql string, dynArgs *p
 	return resp, nil
 }
 
-func (r *sentioRewriter) rewriteFailure(err error) error {
-	if !r.factory.options.StorageIntegrity.Enabled {
+// Client-facing messages for rewrite failures (review L4). The cause, which
+// can name the rewriter address or engine internals, stays on
+// RejectedError.Cause for the server log and never reaches the client.
+const (
+	invalidUTF8Message          = "statement is not valid UTF-8"
+	rewriteUnavailableMessage   = "rewriter unavailable"
+	rewriteEngineFailureMessage = "rewriter failed to process the statement"
+	siClassificationMessage     = "storage-integrity rewrite classification unavailable"
+)
+
+// rewriteFailure handles a failure before the request reached the engine
+// (spec 2026-09-26 T8, review M1): a connect failure, a closed rewriter, or a
+// deadline that expired before the request was sent. It returns the
+// *UnavailableError itself, which the plugin may forward past, only when
+// fail_open_on_unavailable is set and storage integrity is disabled; every
+// other case is a *RejectedError that reaches the client as an Exception.
+func (r *sentioRewriter) rewriteFailure(err *UnavailableError) error {
+	opts := r.factory.options
+	if opts.StorageIntegrity.Enabled {
+		return &RejectedError{Code: pb.RewriteCode_RewriteError, Message: siClassificationMessage, Cause: err}
+	}
+	if opts.FailOpenOnUnavailable {
 		return err
 	}
-	return &RejectedError{Code: pb.RewriteCode_RewriteError,
-		Message: "storage-integrity rewrite classification unavailable: " + err.Error(),
-		Cause:   err}
+	return &RejectedError{Code: pb.RewriteCode_RewriteError, Message: rewriteUnavailableMessage, Cause: err}
+}
+
+// engineFailure handles every other failure: an error after the request was
+// sent (an engine status error, a crash mid-call, a deadline that expired
+// while the engine worked, a native handler error, a nil response), or a
+// failure building the request. Any of these can depend on the statement, so
+// it is always a rejection, whatever fail_open_on_unavailable says.
+func (r *sentioRewriter) engineFailure(err error) error {
+	if r.factory.options.StorageIntegrity.Enabled {
+		return &RejectedError{Code: pb.RewriteCode_RewriteError, Message: siClassificationMessage, Cause: err}
+	}
+	return &RejectedError{Code: pb.RewriteCode_RewriteError, Message: rewriteEngineFailureMessage, Cause: err}
 }
 
 // maybeUpdateLogicalDatabase mirrors a `USE` observation back into

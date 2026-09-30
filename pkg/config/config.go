@@ -378,6 +378,12 @@ func (c *Config) Validate() error {
 			c.Rewriter.Engine, rewriter.EngineGRPC, rewriter.EngineNative))
 	}
 
+	// Spec 2026-09-26 T8: storage integrity fails closed on every rewriter
+	// outage; the transport fail-open switch cannot weaken that.
+	if c.Rewriter.FailOpenOnUnavailable && c.StorageIntegrity.IsEnabled() {
+		errs = append(errs, errors.New("rewriter.fail_open_on_unavailable cannot be combined with storage_integrity.enabled"))
+	}
+
 	if s := c.Rewriter.NativeLibrarySHA256; s != "" {
 		if raw, err := hex.DecodeString(s); err != nil || len(raw) != 32 {
 			errs = append(errs, fmt.Errorf("rewriter.native_library_sha256 must be 64 hex chars, got %q", s))

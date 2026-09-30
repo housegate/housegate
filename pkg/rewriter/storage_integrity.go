@@ -108,9 +108,11 @@ func ReadModeFromContext(ctx context.Context) (ReadMode, bool) {
 
 // RejectedError is a rewrite outcome that MUST reach the client as an
 // Exception (the plugin fails closed on it) instead of falling open to
-// the original SQL. Used for every storage-integrity rejection (reserved
-// column, non-lane write, unavailable read mode) and for any failure before
-// a trustworthy classification when SI membership is configured.
+// the original SQL. Used for every non-Success engine answer (spec
+// 2026-09-26 T8), every storage-integrity rejection (reserved column,
+// non-lane write, unavailable read mode), and every transport or
+// availability failure except under rewriter.fail_open_on_unavailable with
+// storage integrity disabled.
 type RejectedError struct {
 	Code    pb.RewriteCode
 	Message string
@@ -124,6 +126,30 @@ func (e *RejectedError) Error() string {
 func (e *RejectedError) Unwrap() error {
 	return e.Cause
 }
+
+// UnavailableError marks a rewrite failure classified as the rewriter being
+// unreachable: a connect failure, a closed rewriter, or a deadline or
+// cancellation that fired before the request was sent (spec 2026-09-26 T8,
+// review M1). It is the only failure rewriter.fail_open_on_unavailable may
+// forward past. The classification is a bounded heuristic, not a proof: the
+// gRPC backend requires both that the request message never reached the
+// transport and that the status is a transport code (Unavailable,
+// DeadlineExceeded, Canceled). A request queued into a transport that then
+// dies counts as sent (a rejection); a deadline that expires while a very
+// large request is still being serialised or flow-controlled counts as
+// unavailable. Every other backend error is treated as a rejection.
+type UnavailableError struct {
+	Cause error
+}
+
+func (e *UnavailableError) Error() string {
+	if e.Cause == nil {
+		return "rewriter unavailable"
+	}
+	return "rewriter unavailable: " + e.Cause.Error()
+}
+
+func (e *UnavailableError) Unwrap() error { return e.Cause }
 
 // buildStorageIntegrityArgs renders the proto block for one call. It returns
 // nil only when storage integrity is disabled; when enabled the block is sent

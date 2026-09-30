@@ -27,6 +27,7 @@ go_test(
     deps = [
         "//pkg/chproto",
         "//pkg/chsession",
+        "//pkg/log",
         "//pkg/plugin",
         "//pkg/rewriter",
         "//pkg/sitable",

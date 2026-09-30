@@ -110,7 +110,7 @@ func TestBuildServer_InjectedTableStateEnablesTheSurface(t *testing.T) {
 			guarded = true
 		}
 	}
-	if rw == nil || rw.TableState != sitable.TableState(fake) || !rw.FailClosedOnError || rw.RequiredStorageIntegrityContractVersion != rewriter.StorageIntegrityContractV2 {
+	if rw == nil || rw.TableState != sitable.TableState(fake) || rw.FailOpenOnUnavailable || rw.RequiredStorageIntegrityContractVersion != rewriter.StorageIntegrityContractV2 {
 		t.Fatalf("rewrite plugin = %+v, want fail-closed V2 over the injected state", rw)
 	}
 	if !guarded {

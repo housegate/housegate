@@ -169,28 +169,36 @@ func isNilRewriterFactory(factory rewriter.Factory) bool {
 
 // buildRewriterFactory constructs the SQL rewriter factory for the
 // configured engine — dialing the external sql-rewriter gRPC service or
-// loading the in-process rewriter-go engine. Returns nil (and logs a
-// warning) when the backend is unavailable at startup — the relay path
-// tolerates a nil factory by skipping rewriting entirely.
-func buildRewriterFactory(cfg *config.Config, reg registry.Registry, si rewriter.StorageIntegrityOptions) rewriter.Factory {
-	// Router-only deployments (no shard, no upstream) never invoke the
-	// rewriter — every session gets forwarded to a peer instead.
-	if cfg.Shard == nil && cfg.Upstream == "" {
+// loading the in-process rewriter-go engine.
+//
+// A router-only server (no shard, no upstream and no injected cluster) never
+// rewrites and gets (nil, nil); hostCluster reports whether the host injected
+// Options.Cluster, which forwards sessions to ClickHouse like an upstream
+// (review M2). Otherwise a backend that cannot be built at startup is fatal
+// (spec 2026-09-26 T8): a server that forwards to ClickHouse without its
+// rewriter would pass every query through verbatim. Only with
+// rewriter.fail_open_on_unavailable set and storage integrity disabled does
+// it log a warning and return (nil, nil), so the server runs without the
+// rewrite plugin.
+func buildRewriterFactory(cfg *config.Config, reg registry.Registry, si rewriter.StorageIntegrityOptions, hostCluster bool) (rewriter.Factory, error) {
+	// Router-only deployments (no shard, no upstream, no injected cluster)
+	// never invoke the rewriter — every session gets forwarded to a peer
+	// instead.
+	if cfg.Shard == nil && cfg.Upstream == "" && !hostCluster {
 		log.Info("router-only mode: SQL rewriter disabled")
-		return nil
+		return nil, nil
 	}
 
 	// native_library_release: resolve the FFI library from a rewriter-go
 	// release before constructing the factory. Explicit NativeLibraryPath
-	// wins; fetch failure keeps the warn-and-disable fail-open posture.
+	// wins; a fetch failure is a startup failure like any other.
 	nativeLibPath, err := resolveNativeLibraryPath(
 		cfg.Rewriter.Engine, cfg.Rewriter.NativeLibraryPath,
 		cfg.Rewriter.NativeLibraryRelease, cfg.Rewriter.NativeLibrarySHA256,
 		cfg.Rewriter.NativeLibraryReleaseBaseURL,
 	)
 	if err != nil {
-		log.Warne(err, "failed to fetch native rewriter library, rewriting disabled")
-		return nil
+		return nil, rewriterStartupFailure(cfg, si, fmt.Errorf("fetch native rewriter library: %w", err))
 	}
 
 	rwConfig := rewriter.Options{
@@ -205,12 +213,14 @@ func buildRewriterFactory(cfg *config.Config, reg registry.Registry, si rewriter
 		PhysicalDatabase:  cfg.Rewriter.PhysicalDatabase,
 		AuthEnabled:       cfg.Auth.Enabled,
 		Delim:             cfg.Rewriter.Delimiter,
-		StorageIntegrity:  si,
+		// Config.Validate refuses the switch together with storage
+		// integrity; the guard here also covers hosts that skip it.
+		FailOpenOnUnavailable: cfg.Rewriter.FailOpenOnUnavailable && !si.Enabled,
+		StorageIntegrity:      si,
 	}
 	rwf, err := rewriter.NewSentioNetworkFactory(rwConfig, reg)
 	if err != nil {
-		log.Warne(err, "failed to create rewriter factory, rewriting disabled")
-		return nil
+		return nil, rewriterStartupFailure(cfg, si, fmt.Errorf("create rewriter factory: %w", err))
 	}
 	log.Infow("SQL rewriter enabled",
 		"engine", cfg.Rewriter.Engine,
@@ -218,7 +228,22 @@ func buildRewriterFactory(cfg *config.Config, reg registry.Registry, si rewriter
 		"upstream", cfg.Upstream,
 		"physical_database", cfg.Rewriter.PhysicalDatabase,
 	)
-	return rwf
+	return rwf, nil
+}
+
+// rewriterStartupFailure decides what an unbuildable rewriter means at
+// startup. It returns nil (run without the rewrite plugin, with a warning)
+// only under rewriter.fail_open_on_unavailable with storage integrity
+// disabled; every other case is a startup error.
+func rewriterStartupFailure(cfg *config.Config, si rewriter.StorageIntegrityOptions, err error) error {
+	if si.Enabled {
+		return fmt.Errorf("storage_integrity.enabled requires an available SQL rewriter; refusing fail-open startup: %w", err)
+	}
+	if cfg.Rewriter.FailOpenOnUnavailable {
+		log.Warne(err, "SQL rewriter unavailable at startup; running without the rewrite plugin, every query is forwarded unrewritten (rewriter.fail_open_on_unavailable)")
+		return nil
+	}
+	return fmt.Errorf("SQL rewriter unavailable at startup: %w; refusing to forward queries without it (set rewriter.fail_open_on_unavailable: true to run without the rewriter)", err)
 }
 
 // buildMaterializer constructs the agent-mode Phase-1 materializer from the
@@ -455,11 +480,18 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		log.Warnw(warning, "internal_listen", cfg.InternalListen)
 	}
 
+	// A typed-nil injected factory counts as no injection (review L6), so the
+	// configured rewriter is built and the startup gate applies.
 	var rwFactory rewriter.Factory
-	if opts.Rewriter != nil {
+	injectedRewriter := !isNilRewriterFactory(opts.Rewriter)
+	if injectedRewriter {
 		rwFactory = opts.Rewriter
 	} else {
-		rwFactory = buildRewriterFactory(cfg, reg, siOptions)
+		built, err := buildRewriterFactory(cfg, reg, siOptions, !isNilInterface(opts.Cluster))
+		if err != nil {
+			return nil, err
+		}
+		rwFactory = built
 		if rwf, ok := rwFactory.(*rewriter.SentioNetworkFactory); ok && rwf != nil {
 			rwf.SetGetIndexerId(opts.GetIndexerId)
 			pushTeardown(func() { rwf.Close() })
@@ -467,6 +499,12 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	}
 	if isNilRewriterFactory(rwFactory) {
 		rwFactory = nil
+	}
+	// Re-review R3: every statement reaches the engine, and without a
+	// physical database the engine has no database map, so it refuses every
+	// write, USE and EXISTS that names a logical database.
+	if rwf, ok := rwFactory.(*rewriter.SentioNetworkFactory); ok && rwf.PhysicalDatabase() == "" {
+		log.Warn("rewriter.physical_database is empty: the SQL rewriter has no database map, so it refuses every write, DDL, USE and EXISTS that names a logical database (reads and SET still pass); set rewriter.physical_database to the ClickHouse database that hosts the logical databases")
 	}
 	if siOptions.Enabled && rwFactory == nil {
 		return nil, fmt.Errorf("storage_integrity.enabled requires an available SQL rewriter; refusing fail-open startup")
@@ -501,7 +539,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	// caller-injected path is used as-is (no Start, no Close).
 	var clusterIface cluster.Cluster
 	var libCluster *cluster.Manager
-	if opts.Cluster != nil {
+	if !isNilInterface(opts.Cluster) {
 		clusterIface = opts.Cluster
 	} else {
 		m, err := buildClusterManager(cfg)
@@ -520,7 +558,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	// contract; mutating it here would silently rewrite shared state.
 	// Library callers who want this wiring must Set it themselves before
 	// passing the factory in.
-	if opts.Rewriter == nil && clusterIface != nil {
+	if !injectedRewriter && clusterIface != nil {
 		if rwf, ok := rwFactory.(*rewriter.SentioNetworkFactory); ok && rwf != nil {
 			rwf.SetClusterManager(clusterIface)
 		}
@@ -537,8 +575,9 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		credProvider = cp
 		// Same caller-injected guard as SetClusterManager above: only wire
 		// the credential provider into the rewriter factory when the lib
-		// built it. Caller-injected factories are used as-is.
-		if opts.Rewriter == nil {
+		// built it (a typed-nil injection counts as none). Caller-injected
+		// factories are used as-is.
+		if !injectedRewriter {
 			if rwf, ok := rwFactory.(*rewriter.SentioNetworkFactory); ok && rwf != nil {
 				rwf.SetCredentialProvider(cp)
 			}
@@ -560,7 +599,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	// clauses carry a peer-relay envelope (user / password). Same
 	// caller-injected guard as SetClusterManager / SetCredentialProvider:
 	// only mutate when the lib built the factory.
-	if opts.Rewriter == nil && peerSigner != nil {
+	if !injectedRewriter && peerSigner != nil {
 		if rwf, ok := rwFactory.(*rewriter.SentioNetworkFactory); ok && rwf != nil {
 			rwf.SetPeerSigner(peerSigner)
 			if cfg.PeerTokenTTL.Duration > 0 {
@@ -712,11 +751,13 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		if rwf, ok := rwFactory.(*rewriter.SentioNetworkFactory); ok && rwf != nil {
 			physicalDB = rwf.PhysicalDatabase()
 		}
+		// Every rewriter rejection fails closed (spec 2026-09-26 T8); only a
+		// transport failure may fail open, and only without storage integrity.
 		rewritePlug = &rewrite.Plugin{
-			Factory:           rwFactory,
-			PhysicalDatabase:  physicalDB,
-			Observer:          obs,
-			FailClosedOnError: siOptions.Enabled,
+			Factory:               rwFactory,
+			PhysicalDatabase:      physicalDB,
+			Observer:              obs,
+			FailOpenOnUnavailable: cfg.Rewriter.FailOpenOnUnavailable && !siOptions.Enabled,
 		}
 		if siOptions.Enabled {
 			rewritePlug.RequiredStorageIntegrityContractVersion = rewriter.StorageIntegrityContractV2

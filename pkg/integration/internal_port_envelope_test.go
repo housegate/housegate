@@ -73,6 +73,9 @@ shards:
 	}
 	cfg.Rewriter.ServiceAddr = ""
 	cfg.Rewriter.PhysicalDatabase = ""
+	// No rewriter in this test: opt into running without one (spec
+	// 2026-09-26 T8 makes an unbuildable rewriter fatal otherwise).
+	cfg.Rewriter.FailOpenOnUnavailable = true
 
 	ns := network.NewInMemoryNetworkState()
 	ns.DatabaseInfos[network.Database("system")] = network.DatabaseInfo{IndexerId: 0}

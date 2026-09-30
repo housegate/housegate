@@ -100,6 +100,18 @@ func minimalServerCfg(t *testing.T) *config.Config {
 	return &cfg
 }
 
+// withoutRewriter makes cfg a server that runs without a SQL rewriter: no
+// backend is configured, so its factory cannot be built, and
+// rewriter.fail_open_on_unavailable lets startup continue without the rewrite
+// plugin (spec 2026-09-26 T8). For tests that exercise wiring unrelated to
+// rewriting; it also avoids a 5s dial to the default service address.
+func withoutRewriter(cfg *config.Config) *config.Config {
+	cfg.Rewriter.Engine = rewriter.EngineGRPC
+	cfg.Rewriter.ServiceAddr = ""
+	cfg.Rewriter.FailOpenOnUnavailable = true
+	return cfg
+}
+
 // minimalRouterOnlyCfg returns a server-mode Config with neither shard
 // nor upstream — the router-only deployment that Phase 5 collapses
 // forwarding-only into.
@@ -253,9 +265,58 @@ func TestBuildServer_UnsafeLatestDefaultRequiresReadState(t *testing.T) {
 	if rewritePlugin == nil {
 		t.Fatal("configured SI surface did not wire rewrite plugin")
 	}
-	if !rewritePlugin.FailClosedOnError || rewritePlugin.RequiredStorageIntegrityContractVersion != rewriter.StorageIntegrityContractV2 || rewritePlugin.TableState == nil {
-		t.Fatalf("SI rewrite plugin safety fields = fail_closed:%v contract:%s",
-			rewritePlugin.FailClosedOnError, rewritePlugin.RequiredStorageIntegrityContractVersion)
+	if rewritePlugin.FailOpenOnUnavailable || !rewritePlugin.RejectUndecodableQuery() || rewritePlugin.RequiredStorageIntegrityContractVersion != rewriter.StorageIntegrityContractV2 || rewritePlugin.TableState == nil {
+		t.Fatalf("SI rewrite plugin safety fields = fail_open_on_unavailable:%v contract:%s",
+			rewritePlugin.FailOpenOnUnavailable, rewritePlugin.RequiredStorageIntegrityContractVersion)
+	}
+}
+
+// TestBuildServer_RewriteFailOpenOnUnavailableWiring pins spec 2026-09-26 T8's
+// wiring: rejections are always closed, the transport switch reaches the
+// rewrite plugin only without storage integrity, and an undecodable Query is
+// refused whenever the rewrite plugin runs.
+func TestBuildServer_RewriteFailOpenOnUnavailableWiring(t *testing.T) {
+	rewritePluginOf := func(t *testing.T, bs *builtServer) *rewrite.Plugin {
+		t.Helper()
+		for _, candidate := range requireExternalChain(t, bs).QueryPlugins {
+			if p, ok := candidate.(*rewrite.Plugin); ok {
+				return p
+			}
+		}
+		t.Fatal("rewrite plugin not wired")
+		return nil
+	}
+	for _, tc := range []struct {
+		name     string
+		switchOn bool
+		si       bool
+		want     bool
+	}{
+		{"default without storage integrity", false, false, false},
+		{"switch without storage integrity", true, false, true},
+		{"switch with storage integrity is ignored", true, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := minimalServerCfg(t)
+			cfg.Rewriter.FailOpenOnUnavailable = tc.switchOn
+			var factory rewriter.Factory = stubRewriterFactory{}
+			if tc.si {
+				cfg.StorageIntegrity.Tables = []string{"tenant.events"}
+				factory = siProbeStubRewriterFactory{}
+			}
+			bs, err := buildServer(Options{Config: cfg, NetworkState: network.NewInMemoryNetworkState(), Rewriter: factory}, nil)
+			if err != nil {
+				t.Fatalf("buildServer: %v", err)
+			}
+			defer bs.teardown()
+			p := rewritePluginOf(t, bs)
+			if p.FailOpenOnUnavailable != tc.want {
+				t.Fatalf("FailOpenOnUnavailable = %v, want %v", p.FailOpenOnUnavailable, tc.want)
+			}
+			if !p.RejectUndecodableQuery() {
+				t.Fatal("the rewrite plugin must refuse undecodable Query packets")
+			}
+		})
 	}
 }
 
@@ -363,6 +424,9 @@ func TestBuildServer_RefusesStartupOnStorageIntegrityProbeMismatch(t *testing.T)
 func TestBuildServer_ConfiguredSISurfaceRejectsTypedNilInjectedFactory(t *testing.T) {
 	cfg := minimalServerCfg(t)
 	cfg.StorageIntegrity.Tables = []string{"tenant.events"}
+	// A typed-nil injection builds the configured rewriter instead; an empty
+	// address makes that build fail fast.
+	cfg.Rewriter.ServiceAddr = ""
 	var typedNil *rewriter.SentioNetworkFactory
 
 	_, err := buildServer(Options{
@@ -625,7 +689,7 @@ func (m *recordingAgentMaterializer) Close() error {
 }
 
 func TestBuildServer_TwoListenersWhenInternalListenSet(t *testing.T) {
-	cfg := minimalServerCfg(t)
+	cfg := withoutRewriter(minimalServerCfg(t))
 	cfg.Listen = "127.0.0.1:0"
 	cfg.InternalListen = "127.0.0.1:0"
 
@@ -672,7 +736,7 @@ func TestBuildServer_TwoListenersWhenInternalListenSet(t *testing.T) {
 }
 
 func TestBuildServer_OneListenerWhenInternalListenEmpty(t *testing.T) {
-	cfg := minimalServerCfg(t)
+	cfg := withoutRewriter(minimalServerCfg(t))
 	cfg.Listen = "127.0.0.1:0"
 	cfg.InternalListen = ""
 

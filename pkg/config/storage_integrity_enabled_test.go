@@ -90,3 +90,44 @@ func TestStorageIntegrityEnabledValidation(t *testing.T) {
 		}
 	})
 }
+
+// TestValidate_FailOpenOnUnavailableRejectedWithStorageIntegrity pins spec
+// 2026-09-26 T8: the transport fail-open switch is a configuration error
+// together with storage integrity, which must fail closed on every outage.
+func TestValidate_FailOpenOnUnavailableRejectedWithStorageIntegrity(t *testing.T) {
+	const want = "rewriter.fail_open_on_unavailable cannot be combined with storage_integrity.enabled"
+	for name, enable := range map[string]func(*Config){
+		"tables":          func(c *Config) { c.StorageIntegrity.Tables = []string{"db1.t"} },
+		"explicit switch": func(c *Config) { c.StorageIntegrity.Enabled = boolPtr(true) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := minimalServerConfig(t)
+			c.Rewriter.FailOpenOnUnavailable = true
+			enable(&c)
+			if err := c.Validate(); err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("err = %v, want %q", err, want)
+			}
+		})
+	}
+	t.Run("switch alone is valid", func(t *testing.T) {
+		c := minimalServerConfig(t)
+		c.Rewriter.FailOpenOnUnavailable = true
+		if err := c.Validate(); err != nil {
+			t.Fatalf("err = %v", err)
+		}
+	})
+	t.Run("default is off", func(t *testing.T) {
+		if Default().Rewriter.FailOpenOnUnavailable {
+			t.Fatal("rewriter.fail_open_on_unavailable must default to false")
+		}
+	})
+	t.Run("yaml key", func(t *testing.T) {
+		var c Config
+		if err := yaml.Unmarshal([]byte("rewriter:\n  fail_open_on_unavailable: true\n"), &c); err != nil {
+			t.Fatal(err)
+		}
+		if !c.Rewriter.FailOpenOnUnavailable {
+			t.Fatal("rewriter.fail_open_on_unavailable did not decode")
+		}
+	})
+}

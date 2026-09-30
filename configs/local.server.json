@@ -26,12 +26,13 @@
   },
 
   "rewriter": {
-    "engine": "grpc",
+    "engine": "native",
     "service_addr": "",
     "native_library_path": "",
-    "native_library_release": "",
+    "native_library_release": "v0.13.0",
     "timeout": "5s",
-    "physical_database": "testnet"
+    "physical_database": "testnet",
+    "fail_open_on_unavailable": false
   },
 
   "agent": {

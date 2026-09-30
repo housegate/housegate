@@ -50,7 +50,7 @@ func minimalServerCfgWithRelayKey(t *testing.T, fakeUpstreamAddr string) (*confi
 		t.Fatalf("NewRelaySigner: %v", err)
 	}
 
-	cfg := minimalServerCfg(t)
+	cfg := withoutRewriter(minimalServerCfg(t))
 	cfg.Listen = "127.0.0.1:0"
 	cfg.InternalListen = "127.0.0.1:0"
 	cfg.Upstream = fakeUpstreamAddr

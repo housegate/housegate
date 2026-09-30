@@ -3,13 +3,17 @@ package rewriter
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	rewritergo "github.com/housegate/rewriter-go"
 	pb "github.com/housegate/rewriter-proto/gen/pb"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/stats"
+	"google.golang.org/grpc/status"
 
 	"github.com/housegate/housegate/pkg/log"
 )
@@ -24,8 +28,11 @@ const (
 // backend abstracts the rewrite transport: the remote sql-rewriter gRPC
 // service or the in-process rewriter-go engine. Both speak the same proto
 // contract; sentioRewriter cannot tell them apart. All per-session logic
-// (dynamic args, USE mirroring, the fail-open code trichotomy) lives
-// above this seam and is shared by both implementations.
+// (dynamic args, USE mirroring, the fail-closed rejection policy) lives
+// above this seam and is shared by both implementations. Rewrite returns an
+// *UnavailableError only for a transport-level failure before the request
+// was sent (see grpcBackend.Rewrite); the native engine is in-process, so
+// every error it returns came from the engine and is unmarked.
 // The ctx deadline is fully honored by the grpc implementation; under
 // the native engine it is advisory — an FFI call cannot be interrupted
 // mid-flight, but calls are local and fast, so deadlines effectively
@@ -47,8 +54,9 @@ type grpcBackend struct {
 }
 
 // newGRPCBackend dials the sql-rewriter service synchronously and fails
-// fast if it cannot connect — the proxy treats a missing rewriter as
-// "rewriting disabled" rather than retrying forever.
+// fast if it cannot connect rather than retrying forever; buildServer then
+// refuses startup unless rewriter.fail_open_on_unavailable allows running
+// without the rewriter.
 func newGRPCBackend(opts Options) (*grpcBackend, error) {
 	if opts.ServiceAddr == "" {
 		return nil, fmt.Errorf("rewriter service_addr is required when rewriter engine is %q", EngineGRPC)
@@ -68,6 +76,7 @@ func newGRPCBackend(opts Options) (*grpcBackend, error) {
 	conn, err := grpc.DialContext(connectCtx, opts.ServiceAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithKeepaliveParams(kaParams),
+		grpc.WithStatsHandler(requestSentTracker{}),
 		grpc.WithBlock(),
 	)
 	if err != nil {
@@ -77,9 +86,63 @@ func newGRPCBackend(opts Options) (*grpcBackend, error) {
 	return &grpcBackend{conn: conn, client: pb.NewRewriterServiceClient(conn)}, nil
 }
 
+// Rewrite classifies a failure at the transport boundary (spec 2026-09-26
+// T8, review M1, re-review R1). A failure is returned as an *UnavailableError
+// only when both hold: the request message was never handed to the transport,
+// and the gRPC status is one of the transport codes (Unavailable,
+// DeadlineExceeded, Canceled) — a connect failure, or a deadline or
+// cancellation that fired before sending. Every other failure is returned
+// unmarked and the caller treats it as a rejection: a pre-send failure with
+// another code (a marshalling error such as invalid UTF-8, reported as
+// Internal, or a client-side ResourceExhausted) depends on the statement, and
+// so does any failure after sending (an engine status, a crash that drops the
+// connection mid-call, a deadline that expired while the engine worked).
 func (b *grpcBackend) Rewrite(ctx context.Context, req *pb.RewriteSQLRequest) (*pb.RewriteSQLResponse, error) {
-	return b.client.Rewrite(ctx, req)
+	sent := new(atomic.Bool)
+	resp, err := b.client.Rewrite(context.WithValue(ctx, requestSentKey{}, sent), req)
+	if err != nil && !sent.Load() && isTransportStatus(err) {
+		return nil, &UnavailableError{Cause: err}
+	}
+	return resp, err
 }
+
+// isTransportStatus reports whether err carries a gRPC status that describes
+// the connection or the call's own deadline rather than the request content.
+func isTransportStatus(err error) bool {
+	switch status.Code(err) {
+	case codes.Unavailable, codes.DeadlineExceeded, codes.Canceled:
+		return true
+	default:
+		return false
+	}
+}
+
+// requestSentKey carries the per-call flag requestSentTracker sets.
+type requestSentKey struct{}
+
+// requestSentTracker is a client stats handler that records, per call,
+// whether the request message reached the transport. gRPC reports
+// OutPayload only after the message was written, so a call that failed with
+// the flag unset never delivered the statement to the engine.
+type requestSentTracker struct{}
+
+func (requestSentTracker) TagRPC(ctx context.Context, _ *stats.RPCTagInfo) context.Context {
+	return ctx
+}
+
+func (requestSentTracker) HandleRPC(ctx context.Context, s stats.RPCStats) {
+	if out, ok := s.(*stats.OutPayload); ok && out.IsClient() {
+		if sent, ok := ctx.Value(requestSentKey{}).(*atomic.Bool); ok {
+			sent.Store(true)
+		}
+	}
+}
+
+func (requestSentTracker) TagConn(ctx context.Context, _ *stats.ConnTagInfo) context.Context {
+	return ctx
+}
+
+func (requestSentTracker) HandleConn(context.Context, stats.ConnStats) {}
 
 func (b *grpcBackend) RewriteErrorMessage(ctx context.Context, req *pb.RewriteErrorMessageRequest) (*pb.RewriteErrorMessageResponse, error) {
 	return b.client.RewriteErrorMessage(ctx, req)

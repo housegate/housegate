@@ -3,14 +3,17 @@ package rewrite
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 
 	pb "github.com/housegate/rewriter-proto/gen/pb"
 
 	"github.com/housegate/housegate/pkg/chproto"
 	"github.com/housegate/housegate/pkg/chsession"
+	"github.com/housegate/housegate/pkg/log"
 	"github.com/housegate/housegate/pkg/plugin"
 	"github.com/housegate/housegate/pkg/rewriter"
 	"github.com/housegate/housegate/pkg/sitable"
@@ -31,7 +34,6 @@ func TestPeerTrustedSessionBypassesStorageIntegrityRewrite(t *testing.T) {
 	rw := &fakeRewriter{out: "REWRITTEN-SQL"}
 	p := &Plugin{
 		Factory:                                 &fakeFactory{rw: rw},
-		FailClosedOnError:                       true,
 		RequiredStorageIntegrityContractVersion: rewriter.StorageIntegrityContractV2,
 	}
 	chain := &plugin.PluginChain{QueryPlugins: []plugin.QueryPlugin{p}}
@@ -55,15 +57,16 @@ func TestPeerTrustedSessionBypassesStorageIntegrityRewrite(t *testing.T) {
 	}
 }
 
-func TestPlugin_RejectUndecodableQueryFollowsConfiguredSIPolicy(t *testing.T) {
-	p := &Plugin{}
-	var strict plugin.StrictQueryDecodePlugin = p
-	if strict.RejectUndecodableQuery() {
-		t.Fatal("empty-SI rewrite plugin must retain the legacy decode fallback")
-	}
-	p.FailClosedOnError = true
+// TestPlugin_RejectUndecodableQueryAlwaysFailsClosed: an undecodable Query
+// cannot be rewritten, so Relay's raw-splice fallback would forward it
+// unexamined exactly like the retired pass-through (spec 2026-09-26 T8).
+func TestPlugin_RejectUndecodableQueryAlwaysFailsClosed(t *testing.T) {
+	var strict plugin.StrictQueryDecodePlugin = &Plugin{}
 	if !strict.RejectUndecodableQuery() {
-		t.Fatal("configured-SI rewrite plugin must reject undecodable Query packets")
+		t.Fatal("rewrite plugin must reject undecodable Query packets with or without storage integrity")
+	}
+	if (*Plugin)(nil).RejectUndecodableQuery() {
+		t.Fatal("a nil plugin is not wired and must not claim the policy")
 	}
 }
 
@@ -268,28 +271,139 @@ func TestOnQuery_RejectedErrorFailsClosed(t *testing.T) {
 	}
 }
 
-func TestOnQuery_OrdinaryErrorStaysFailOpenWhenNoSISurfaceIsConfigured(t *testing.T) {
-	rw := &fakeRewriter{err: errors.New("transport down")}
-	p := &Plugin{Factory: &fakeFactory{rw: rw}}
-	sess := newSessionForTest(t, 43)
-	qctx := &plugin.QueryContext{Session: sess, OriginalSQL: "SELECT 1", Query: &chproto.Query{Body: "SELECT 1"}}
-	if err := p.OnQuery(context.Background(), qctx); err != nil {
-		t.Fatalf("ordinary rewriter errors must stay fail-open: %v", err)
+// TestOnQuery_TransportErrorIsForwardedOnlyWhenFailOpen is Plan C Review
+// Focus 5 at the plugin: a rewriter outage with fail_open_on_unavailable
+// forwards the original SQL and logs a warning; without the switch the client
+// gets an Exception.
+func TestOnQuery_TransportErrorIsForwardedOnlyWhenFailOpen(t *testing.T) {
+	for _, failOpen := range []bool{false, true} {
+		rw := &fakeRewriter{err: &rewriter.UnavailableError{Cause: errors.New("dial tcp 10.1.2.3:50051: connection refused")}}
+		p := &Plugin{Factory: &fakeFactory{rw: rw}, FailOpenOnUnavailable: failOpen}
+		sess := newSessionForTest(t, 43)
+		qctx := &plugin.QueryContext{Session: sess, OriginalSQL: "SELECT 1", Query: &chproto.Query{Body: "SELECT 1"}}
+		logs := &captureHandler{}
+		ctx := log.WithContext(context.Background(), log.New(logs))
+		err := p.OnQuery(ctx, qctx)
+		if failOpen {
+			if err != nil {
+				t.Fatalf("fail-open: err = %v, want nil", err)
+			}
+			if qctx.Query.Body != "SELECT 1" || qctx.RewrittenSQL != "" {
+				t.Fatalf("fail-open: body = %q rewritten = %q, want the original SQL untouched", qctx.Query.Body, qctx.RewrittenSQL)
+			}
+			if !logs.has(slog.LevelWarn, "fail_open_on_unavailable") {
+				t.Fatalf("fail-open: want a warning naming the switch, got %v", logs.records())
+			}
+			continue
+		}
+		if err == nil || !strings.Contains(err.Error(), "rewriter unavailable") {
+			t.Fatalf("fail-closed: err = %v, want the outage to reach the client", err)
+		}
+		if strings.Contains(err.Error(), "10.1.2.3") {
+			t.Fatalf("fail-closed: client message %q leaks the rewriter address", err.Error())
+		}
+		if !logs.hasAny("10.1.2.3") {
+			t.Fatalf("fail-closed: the server log must keep the cause, got %v", logs.records())
+		}
 	}
-	if qctx.Query.Body != "SELECT 1" {
-		t.Fatalf("body = %q", qctx.Query.Body)
+}
+
+// TestOnQuery_RejectionIgnoresFailOpenSwitch: the switch covers transport
+// failures only; an engine rejection always fails closed.
+func TestOnQuery_RejectionIgnoresFailOpenSwitch(t *testing.T) {
+	rw := &fakeRewriter{err: &rewriter.RejectedError{Code: pb.RewriteCode_SyntaxError, Message: "syntax error at position 14"}}
+	p := &Plugin{Factory: &fakeFactory{rw: rw}, FailOpenOnUnavailable: true}
+	sess := newSessionForTest(t, 48)
+	qctx := &plugin.QueryContext{Session: sess, OriginalSQL: "SELECT * FROM\vdb1.t", Query: &chproto.Query{Body: "SELECT * FROM\vdb1.t"}}
+	err := p.OnQuery(context.Background(), qctx)
+	var rej *rewriter.RejectedError
+	if !errors.As(err, &rej) || rej.Code != pb.RewriteCode_SyntaxError {
+		t.Fatalf("err = %v, want the SyntaxError rejection", err)
+	}
+}
+
+// TestOnQuery_UnclassifiedErrorIsClosedEvenUnderTheSwitch pins review M1 for
+// custom factories: only an explicit *rewriter.UnavailableError may fail
+// open; any other error may have come from an engine that received the
+// statement.
+func TestOnQuery_UnclassifiedErrorIsClosedEvenUnderTheSwitch(t *testing.T) {
+	rw := &fakeRewriter{err: errors.New("engine: generate failed")}
+	p := &Plugin{Factory: &fakeFactory{rw: rw}, FailOpenOnUnavailable: true}
+	sess := newSessionForTest(t, 50)
+	qctx := &plugin.QueryContext{Session: sess, OriginalSQL: "SELECT 1", Query: &chproto.Query{Body: "SELECT 1"}}
+	err := p.OnQuery(context.Background(), qctx)
+	var rej *rewriter.RejectedError
+	if !errors.As(err, &rej) || strings.Contains(err.Error(), "generate failed") {
+		t.Fatalf("err = %v, want a generic rejection", err)
 	}
 }
 
 func TestOnQuery_OrdinaryErrorFailsClosedWhenSISurfaceIsConfigured(t *testing.T) {
 	rw := &fakeRewriter{err: errors.New("transport down")}
-	p := &Plugin{Factory: &fakeFactory{rw: rw}, FailClosedOnError: true}
+	p := &Plugin{Factory: &fakeFactory{rw: rw}}
 	sess := newSessionForTest(t, 44)
 	qctx := &plugin.QueryContext{Session: sess, OriginalSQL: "INSERT INTO db1.t FORMAT Native", Query: &chproto.Query{Body: "INSERT INTO db1.t FORMAT Native"}}
 	err := p.OnQuery(context.Background(), qctx)
-	if err == nil || !strings.Contains(err.Error(), "classification unavailable") {
-		t.Fatalf("err = %v, want configured-SI fail-closed error", err)
+	var rej *rewriter.RejectedError
+	if !errors.As(err, &rej) {
+		t.Fatalf("err = %v, want fail-closed rejection", err)
 	}
+}
+
+// captureHandler records slog records for assertions.
+type captureHandler struct {
+	mu   sync.Mutex
+	recs []slog.Record
+}
+
+func (h *captureHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.recs = append(h.recs, r.Clone())
+	return nil
+}
+func (h *captureHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *captureHandler) WithGroup(string) slog.Handler      { return h }
+
+func (h *captureHandler) records() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]string, len(h.recs))
+	for i, r := range h.recs {
+		out[i] = r.Level.String() + " " + r.Message
+	}
+	return out
+}
+
+// hasAny reports whether any record's message or attributes mention substr.
+func (h *captureHandler) hasAny(substr string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, r := range h.recs {
+		found := strings.Contains(r.Message, substr)
+		r.Attrs(func(a slog.Attr) bool {
+			if strings.Contains(a.Value.String(), substr) {
+				found = true
+			}
+			return !found
+		})
+		if found {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *captureHandler) has(level slog.Level, substr string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, r := range h.recs {
+		if r.Level == level && strings.Contains(r.Message, substr) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestOnQuery_MissingContractAcknowledgementFromCustomRewriterFailsClosed(t *testing.T) {
