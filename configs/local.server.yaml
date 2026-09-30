@@ -50,6 +50,9 @@ rewriter:
   timeout: "5s"
   physical_database: testnet
   delimiter: "."
+  # Every rewriter rejection fails closed. This switch only forwards the original SQL when the
+  # rewriter is unreachable (dial, timeout); invalid with storage_integrity. See docs/rewriter-fail-closed.md.
+  # fail_open_on_unavailable: false
 
 # Storage-integrity table membership and read policy. The merge guard derives
 # both physical homes from each logical <database>.<table> id.

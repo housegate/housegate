@@ -108,9 +108,11 @@ func ReadModeFromContext(ctx context.Context) (ReadMode, bool) {
 
 // RejectedError is a rewrite outcome that MUST reach the client as an
 // Exception (the plugin fails closed on it) instead of falling open to
-// the original SQL. Used for every storage-integrity rejection (reserved
-// column, non-lane write, unavailable read mode) and for any failure before
-// a trustworthy classification when SI membership is configured.
+// the original SQL. Used for every non-Success engine answer (spec
+// 2026-09-26 T8), every storage-integrity rejection (reserved column,
+// non-lane write, unavailable read mode), and every transport or
+// availability failure except under rewriter.fail_open_on_unavailable with
+// storage integrity disabled.
 type RejectedError struct {
 	Code    pb.RewriteCode
 	Message string

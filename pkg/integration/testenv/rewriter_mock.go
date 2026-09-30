@@ -116,14 +116,19 @@ func (m *RewriterMock) SeenSQL() []string {
 
 // FailNext arms the mock to fail the next n Rewrite calls with a
 // non-Success RewriteCode. The proxy's rewriter wrapper translates
-// that into a Go error and OnQuery fails-open by forwarding the
-// original SQL. SeenSQL still records the requests — failing is a
-// post-receipt response.
+// that into a RejectedError and the client receives an Exception; the
+// original SQL is never forwarded (spec 2026-09-26 T8). SeenSQL still
+// records the requests — failing is a post-receipt response.
 func (m *RewriterMock) FailNext(n int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.failNext = n
 }
+
+// Stop shuts the mock's gRPC server down immediately, simulating a
+// rewriter outage for a proxy that already connected to it. Safe to call
+// before the test's cleanup, which stops the server again.
+func (m *RewriterMock) Stop() { m.server.Stop() }
 
 // SetAccessedTables attaches a list of AccessedTable to every Rewrite
 // response whose SQL starts (case-insensitive) with prefix. Required

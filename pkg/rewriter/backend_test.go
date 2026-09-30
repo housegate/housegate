@@ -140,18 +140,115 @@ func TestSentioRewriter_AccessedTablesCarryStorageIntegrityFlag(t *testing.T) {
 	}
 }
 
-func TestSentioRewriter_UnsupportedForwardsOriginal(t *testing.T) {
-	be := &fakeBackend{resp: &pb.RewriteSQLResponse{
-		Code:    pb.RewriteCode_UnsupportedStatement,
-		Message: "nope",
-	}}
-	rw := newFakeFactory(be).NewRewriter(&fakeSession{})
-	res, err := rw.Rewrite(context.Background(), "OPTIMIZE TABLE x", "")
-	if err != nil {
-		t.Fatalf("Rewrite: %v", err)
+// TestSentioRewriter_UnsupportedIsRejected pins spec 2026-09-26 T8: with
+// storage integrity disabled an UnsupportedStatement answer is a rejection,
+// not a pass-through. There is no way to tell a harmless unmodelled statement
+// from DETACH TABLE of another tenant's physical table.
+func TestSentioRewriter_UnsupportedIsRejected(t *testing.T) {
+	be := &fakeBackend{resp: &pb.RewriteSQLResponse{Code: pb.RewriteCode_UnsupportedStatement, Message: "statement is not supported"}}
+	res, err := newFakeFactory(be).NewRewriter(&fakeSession{}).Rewrite(context.Background(), "DETACH TABLE phys.`db2.x`", "")
+	var rej *RejectedError
+	if !errors.As(err, &rej) || rej.Code != pb.RewriteCode_UnsupportedStatement || rej.Message != "statement is not supported" {
+		t.Fatalf("err = %v, want RejectedError(UnsupportedStatement)", err)
 	}
-	if res.SQL != "OPTIMIZE TABLE x" {
-		t.Errorf("SQL = %q, want original", res.SQL)
+	if res.SQL != "" {
+		t.Fatalf("SQL = %q, want the zero result on rejection", res.SQL)
+	}
+}
+
+// TestSentioRewriter_EveryNonSuccessCodeIsRejectedWithoutSI covers each
+// non-Success code with storage integrity disabled: the answer is a
+// RejectedError carrying the engine's code and message verbatim.
+func TestSentioRewriter_EveryNonSuccessCodeIsRejectedWithoutSI(t *testing.T) {
+	for _, code := range []pb.RewriteCode{
+		pb.RewriteCode_UnsupportedStatement,
+		pb.RewriteCode_SyntaxError,
+		pb.RewriteCode_InvalidRewriteRequest,
+		pb.RewriteCode_RewriteError,
+		pb.RewriteCode(99), // a future code
+	} {
+		be := &fakeBackend{resp: &pb.RewriteSQLResponse{Code: code, Message: "engine says no"}}
+		_, err := newFakeFactory(be).NewRewriter(&fakeSession{}).Rewrite(context.Background(), "SELECT 1", "")
+		var rej *RejectedError
+		if !errors.As(err, &rej) || rej.Code != code || rej.Message != "engine says no" {
+			t.Fatalf("code %s: err = %v, want RejectedError carrying the engine answer", code, err)
+		}
+	}
+}
+
+func TestSentioRewriter_InvalidRequestIsRejectedWithoutSI(t *testing.T) {
+	be := &fakeBackend{resp: &pb.RewriteSQLResponse{Code: pb.RewriteCode_InvalidRewriteRequest, Message: "protected database phys is not addressable"}}
+	_, err := newFakeFactory(be).NewRewriter(&fakeSession{}).Rewrite(context.Background(), "USE phys", "")
+	var rej *RejectedError
+	if !errors.As(err, &rej) || rej.Message != "protected database phys is not addressable" {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// TestSentioRewriter_TransportFailureFollowsTheSwitch pins the only remaining
+// fail-open (spec 2026-09-26 T8): a transport or availability failure returns
+// a plain error, which the plugin forwards, only when
+// fail_open_on_unavailable is set and storage integrity is disabled.
+func TestSentioRewriter_TransportFailureFollowsTheSwitch(t *testing.T) {
+	outages := map[string]func() (*SentioNetworkFactory, Rewriter){
+		"dial": func() (*SentioNetworkFactory, Rewriter) {
+			f := newFakeFactory(&fakeBackend{err: errors.New("dial tcp: connection refused")})
+			return f, nil
+		},
+		"nil response": func() (*SentioNetworkFactory, Rewriter) {
+			return newFakeFactory(&fakeBackend{}), nil
+		},
+		"closed rewriter": func() (*SentioNetworkFactory, Rewriter) {
+			f := newFakeFactory(&fakeBackend{})
+			rw := f.NewRewriter(&fakeSession{})
+			_ = rw.Close()
+			return f, rw
+		},
+	}
+	for name, mk := range outages {
+		for _, tc := range []struct {
+			name     string
+			failOpen bool
+			si       bool
+			wantRej  bool
+		}{
+			{"default fails closed", false, false, true},
+			{"switch on fails open", true, false, false},
+			{"switch on with SI still fails closed", true, true, true},
+		} {
+			t.Run(name+"/"+tc.name, func(t *testing.T) {
+				f, rw := mk()
+				f.options.FailOpenOnUnavailable = tc.failOpen
+				if tc.si {
+					f.options.StorageIntegrity = siOpts(nil)
+				}
+				if rw == nil {
+					rw = f.NewRewriter(&fakeSession{})
+				}
+				_, err := rw.Rewrite(context.Background(), "SELECT 1", "")
+				if err == nil {
+					t.Fatal("an outage must always return an error")
+				}
+				var rej *RejectedError
+				if got := errors.As(err, &rej); got != tc.wantRej {
+					t.Fatalf("RejectedError = %v, want %v (err=%v)", got, tc.wantRej, err)
+				}
+				if tc.wantRej && rej.Code != pb.RewriteCode_RewriteError {
+					t.Fatalf("code = %s, want RewriteError", rej.Code)
+				}
+			})
+		}
+	}
+}
+
+// TestSentioRewriter_TransportFailurePreservesCauseWithoutSI keeps the
+// backend error reachable through errors.Is on the fail-closed path.
+func TestSentioRewriter_TransportFailurePreservesCauseWithoutSI(t *testing.T) {
+	backendErr := errors.New("backend unavailable")
+	_, err := newFakeFactory(&fakeBackend{err: backendErr}).NewRewriter(&fakeSession{}).Rewrite(context.Background(), "SELECT 1", "")
+	var rej *RejectedError
+	if !errors.As(err, &rej) || !errors.Is(err, backendErr) || !strings.Contains(rej.Message, "rewrite unavailable") {
+		t.Fatalf("err = %v, want RejectedError naming the outage and wrapping the cause", err)
 	}
 }
 
@@ -161,8 +258,10 @@ func TestSentioRewriter_RejectIsAnError(t *testing.T) {
 		Message: "parse failed",
 	}}
 	rw := newFakeFactory(be).NewRewriter(&fakeSession{})
-	if _, err := rw.Rewrite(context.Background(), "garbage((", ""); err == nil || !strings.Contains(err.Error(), "parse failed") {
-		t.Fatalf("err = %v, want rewriter rejection", err)
+	_, err := rw.Rewrite(context.Background(), "garbage((", "")
+	var rej *RejectedError
+	if !errors.As(err, &rej) || !strings.Contains(err.Error(), "parse failed") {
+		t.Fatalf("err = %v, want RejectedError", err)
 	}
 }
 
@@ -170,7 +269,7 @@ func TestSentioRewriter_BackendErrorPropagates(t *testing.T) {
 	be := &fakeBackend{err: errors.New("transport down")}
 	rw := newFakeFactory(be).NewRewriter(&fakeSession{})
 	if _, err := rw.Rewrite(context.Background(), "SELECT 1", ""); err == nil {
-		t.Fatal("want error when backend fails (caller is fail-open)")
+		t.Fatal("want error when backend fails")
 	}
 }
 
@@ -198,11 +297,11 @@ func TestNewSentioNetworkFactory_UnknownEngine(t *testing.T) {
 	}
 }
 
-// TestSentioRewriter_UnsupportedPropagatesBestEffortFields: the
-// Unsupported branch must forward the rewriter's best-effort
-// classification fields (accessed tables, existence clause) — commitgate
-// reads them even when the SQL passes through unrewritten.
-func TestSentioRewriter_UnsupportedPropagatesBestEffortFields(t *testing.T) {
+// TestSentioRewriter_UnsupportedDoesNotLeakBestEffortFields: an
+// UnsupportedStatement answer used to forward the original SQL with the
+// engine's best-effort classification. It is now a rejection, so the result
+// is the zero value and nothing downstream reads a partial classification.
+func TestSentioRewriter_UnsupportedDoesNotLeakBestEffortFields(t *testing.T) {
 	be := &fakeBackend{resp: &pb.RewriteSQLResponse{
 		Code:    pb.RewriteCode_UnsupportedStatement,
 		Message: "nope",
@@ -213,14 +312,12 @@ func TestSentioRewriter_UnsupportedPropagatesBestEffortFields(t *testing.T) {
 	}}
 	rw := newFakeFactory(be).NewRewriter(&fakeSession{})
 	res, err := rw.Rewrite(context.Background(), "DROP TABLE IF EXISTS db1.t SYNC", "")
-	if err != nil {
-		t.Fatalf("Rewrite: %v", err)
+	var rej *RejectedError
+	if !errors.As(err, &rej) {
+		t.Fatalf("err = %v, want RejectedError", err)
 	}
-	if len(res.AccessedTables) != 1 || res.AccessedTables[0].OriginalTable != "t" {
-		t.Errorf("AccessedTables = %v, want the best-effort table", res.AccessedTables)
-	}
-	if res.ExistenceClause != sqlmeta.ExistenceClause(pb.ExistenceClause_EXISTENCE_CLAUSE_IF_EXISTS) {
-		t.Errorf("ExistenceClause = %v, want IF_EXISTS", res.ExistenceClause)
+	if res.AccessedTables != nil || res.ExistenceClause != sqlmeta.ExistenceClause(pb.ExistenceClause_EXISTENCE_CLAUSE_UNSPECIFIED) {
+		t.Fatalf("result = %+v, want the zero value", res)
 	}
 }
 
@@ -387,17 +484,18 @@ func TestSentioRewriter_FailsClosedOnAnyNonSuccessWhenSIConfigured(t *testing.T)
 	}
 }
 
-func TestSentioRewriter_EmptySIKeepsUnsupportedPassthrough(t *testing.T) {
+// TestSentioRewriter_EmptySIRejectsUnsupported flips the former empty-SI
+// pass-through pin (spec 2026-09-26 T8): OPTIMIZE TABLE of another tenant's
+// table is no longer forwarded when storage integrity is disabled.
+func TestSentioRewriter_EmptySIRejectsUnsupported(t *testing.T) {
 	be := &fakeBackend{resp: &pb.RewriteSQLResponse{
 		Code: pb.RewriteCode_UnsupportedStatement, Message: "nope",
 		OriginalAccessedTables: []*pb.AccessedTable{{OriginalDatabase: "other", OriginalTable: "u"}}}}
-	res, err := newFakeFactory(be).NewRewriter(&fakeSession{}).
+	_, err := newFakeFactory(be).NewRewriter(&fakeSession{}).
 		Rewrite(context.Background(), "OPTIMIZE TABLE other.u", "")
-	if err != nil {
-		t.Fatalf("empty-SI deployments keep the legacy pass-through: %v", err)
-	}
-	if res.SQL != "OPTIMIZE TABLE other.u" {
-		t.Fatalf("SQL = %q, want the original statement", res.SQL)
+	var rej *RejectedError
+	if !errors.As(err, &rej) || rej.Code != pb.RewriteCode_UnsupportedStatement {
+		t.Fatalf("err = %v, want RejectedError(UnsupportedStatement)", err)
 	}
 }
 
@@ -448,13 +546,15 @@ func TestSentioRewriter_ConfiguredSISurfaceUnavailableFailsClosed(t *testing.T) 
 			}
 		}
 	}
-	// The identical outage retains an ordinary error only when no SI
-	// membership is configured; the plugin will fail open on that error.
+	// Without storage integrity the identical outage retains an ordinary
+	// error only under fail_open_on_unavailable; the plugin then forwards.
 	be := &fakeBackend{err: errors.New("transport down")}
-	_, err := newFakeFactory(be).NewRewriter(&fakeSession{}).Rewrite(context.Background(), "SELECT 1", "")
+	openFactory := newFakeFactory(be)
+	openFactory.options.FailOpenOnUnavailable = true
+	_, err := openFactory.NewRewriter(&fakeSession{}).Rewrite(context.Background(), "SELECT 1", "")
 	var rej *RejectedError
 	if err == nil || errors.As(err, &rej) {
-		t.Fatalf("empty-SI backend error = %v, want ordinary error", err)
+		t.Fatalf("empty-SI backend error under the switch = %v, want ordinary error", err)
 	}
 
 	siClosed := newSIFactory(&fakeBackend{}, nil, false).NewRewriter(&fakeSession{})
@@ -465,7 +565,9 @@ func TestSentioRewriter_ConfiguredSISurfaceUnavailableFailsClosed(t *testing.T) 
 	if !errors.As(err, &rej) || !strings.Contains(rej.Message, "classification unavailable") {
 		t.Fatalf("configured-SI closed rewriter = %v, want RejectedError", err)
 	}
-	emptyClosed := newFakeFactory(&fakeBackend{}).NewRewriter(&fakeSession{})
+	openClosedFactory := newFakeFactory(&fakeBackend{})
+	openClosedFactory.options.FailOpenOnUnavailable = true
+	emptyClosed := openClosedFactory.NewRewriter(&fakeSession{})
 	if err := emptyClosed.Close(); err != nil {
 		t.Fatal(err)
 	}

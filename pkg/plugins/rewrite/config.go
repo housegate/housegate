@@ -50,4 +50,11 @@ type Config struct {
 	// rewriter-go's GitHub releases) for mirrors / internal artifact
 	// servers. URL shape: <base>/<tag>/<asset>.
 	NativeLibraryReleaseBaseURL string `json:"native_library_release_base_url" yaml:"native_library_release_base_url"`
+
+	// FailOpenOnUnavailable forwards the original SQL, with a warning,
+	// when the rewriter is unreachable (dial, timeout, nil response, closed
+	// rewriter). Default false: the client gets an Exception. Engine
+	// rejections are never fail-open. Invalid together with
+	// storage_integrity.enabled (spec 2026-09-26 T8).
+	FailOpenOnUnavailable bool `json:"fail_open_on_unavailable" yaml:"fail_open_on_unavailable"`
 }

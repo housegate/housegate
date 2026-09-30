@@ -14,9 +14,16 @@
 //     the exception message.
 //   - OnClose — evicts and Close()s the per-conn Rewriter.
 //
-// Ordinary rewrite errors retain the legacy fail-open posture only when
-// storage integrity is disabled. RejectedError and enabled-SI
-// classification/acknowledgement failures are returned to the client.
+// Every rewriter rejection (a *rewriter.RejectedError, which the production
+// rewriter returns for every non-Success engine answer) is returned to the
+// client as an Exception, with or without storage integrity (spec 2026-09-26
+// T8). Any other error is a transport or availability failure; it is returned
+// to the client too, unless FailOpenOnUnavailable is set, in which case the
+// original SQL is forwarded with a warning.
+//
+// Maintenance, platform-operator and peer-trusted sessions never reach the
+// rewriter (see OnQuery and RunOnPeerTrust), so this policy does not apply to
+// them; forwarded sessions are rewritten by the receiving host instead.
 package rewrite
 
 import (
@@ -63,10 +70,14 @@ type Plugin struct {
 	// can see fail-open latency on the same histogram.
 	Observer Observer
 
-	// FailClosedOnError turns otherwise ordinary rewriter failures into client
-	// Exceptions. It is enabled whenever SI membership is configured, including
-	// for caller-injected factories that do not return RejectedError themselves.
-	FailClosedOnError bool
+	// FailOpenOnUnavailable is rewriter.fail_open_on_unavailable (spec
+	// 2026-09-26 T8): a Rewrite error that is not a *rewriter.RejectedError
+	// (a transport or availability failure, including from a caller-injected
+	// factory) forwards the original SQL with a warning instead of failing the
+	// query. It never applies to a RejectedError. buildServer sets it only
+	// when storage integrity is disabled; Config.Validate refuses the switch
+	// together with storage_integrity.enabled.
+	FailOpenOnUnavailable bool
 
 	// RequiredStorageIntegrityContractVersion is the defense-in-depth response
 	// echo gate for every Rewriter implementation, including custom factories.
@@ -123,8 +134,8 @@ func (p *Plugin) rewriterFor(sess chsession.Session) rewriter.Rewriter {
 	return actual.(rewriter.Rewriter)
 }
 
-// OnQuery routes the query through the rewriter. Ordinary errors fail open only
-// when FailClosedOnError is false; RejectedError always fails closed.
+// OnQuery routes the query through the rewriter. A RejectedError always fails
+// closed; any other error fails closed unless FailOpenOnUnavailable is set.
 func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	if p.TableState != nil {
 		// Spec 2026-09-24 H1: exactly one snapshot per query, taken here and
@@ -142,7 +153,10 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 		// sessions bypass rewrite — Query.Body is forwarded verbatim by
 		// the relay. RewrittenSQL mirrors OriginalSQL so downstream
 		// plugins / observers (commitgate Event, audit logs) that read
-		// it see a coherent value rather than empty.
+		// it see a coherent value rather than empty. The rewriter is
+		// never consulted, so the fail-closed rejection policy (spec
+		// 2026-09-26 T8) does not apply to these sessions; the bypass
+		// is deliberate and T8 leaves it unchanged.
 		//
 		// Driver sessions (snap.IsDriver) deliberately do NOT bypass
 		// rewrite — that's the whole reason IsDriver exists as a
@@ -190,12 +204,12 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 			logger.Infow("rewriter: statement rejected (fail-closed)", "code", rej.Code.String(), "message", rej.Message)
 			return rej
 		}
-		if p.FailClosedOnError {
-			logger.Errorw("rewriter: classification unavailable with storage-integrity configured (fail-closed)", "error", err)
-			return fmt.Errorf("storage-integrity rewrite classification unavailable: %w", err)
+		if p.FailOpenOnUnavailable {
+			logger.Warne(err, "rewriter: rewriter unavailable; forwarding original SQL (rewriter.fail_open_on_unavailable)")
+			return nil
 		}
-		logger.Warne(err, "rewriter: rewrite failed, forwarding original SQL")
-		return nil
+		logger.Errorw("rewriter: rewriter unavailable (fail-closed)", "error", err)
+		return fmt.Errorf("rewrite unavailable: %w", err)
 	}
 	if p.RequiredStorageIntegrityContractVersion != pb.StorageIntegrityContractVersion_STORAGE_INTEGRITY_CONTRACT_UNSPECIFIED &&
 		res.StorageIntegrityContractVersion != p.RequiredStorageIntegrityContractVersion {
@@ -321,13 +335,14 @@ func (p *Plugin) evict(id int64) {
 	}
 }
 
-// RejectUndecodableQuery implements plugin.StrictQueryDecodePlugin. When
-// storage integrity is enabled, an undecodable Query has no trustworthy
-// classification or contract-V2 acknowledgement and must not take Relay's
-// raw-splice fallback. Deployments with storage integrity disabled retain the
-// legacy decode fallback.
+// RejectUndecodableQuery implements plugin.StrictQueryDecodePlugin. An
+// undecodable Query cannot be rewritten, and Relay's raw-splice fallback would
+// forward it to ClickHouse unexamined, which is the pass-through spec
+// 2026-09-26 T8 removed. The rewrite plugin therefore fails it closed with or
+// without storage integrity. Sessions the plugin skips (peer-trusted, routed,
+// origin-side forwarding) keep the fallback through the chain's filters.
 func (p *Plugin) RejectUndecodableQuery() bool {
-	return p != nil && p.FailClosedOnError
+	return p != nil
 }
 
 // RunOnPeerTrust opts the rewrite plugin out of peer-trusted sessions.

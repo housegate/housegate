@@ -205,7 +205,10 @@ func buildRewriterFactory(cfg *config.Config, reg registry.Registry, si rewriter
 		PhysicalDatabase:  cfg.Rewriter.PhysicalDatabase,
 		AuthEnabled:       cfg.Auth.Enabled,
 		Delim:             cfg.Rewriter.Delimiter,
-		StorageIntegrity:  si,
+		// Config.Validate refuses the switch together with storage
+		// integrity; the guard here also covers hosts that skip it.
+		FailOpenOnUnavailable: cfg.Rewriter.FailOpenOnUnavailable && !si.Enabled,
+		StorageIntegrity:      si,
 	}
 	rwf, err := rewriter.NewSentioNetworkFactory(rwConfig, reg)
 	if err != nil {
@@ -712,11 +715,13 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		if rwf, ok := rwFactory.(*rewriter.SentioNetworkFactory); ok && rwf != nil {
 			physicalDB = rwf.PhysicalDatabase()
 		}
+		// Every rewriter rejection fails closed (spec 2026-09-26 T8); only a
+		// transport failure may fail open, and only without storage integrity.
 		rewritePlug = &rewrite.Plugin{
-			Factory:           rwFactory,
-			PhysicalDatabase:  physicalDB,
-			Observer:          obs,
-			FailClosedOnError: siOptions.Enabled,
+			Factory:               rwFactory,
+			PhysicalDatabase:      physicalDB,
+			Observer:              obs,
+			FailOpenOnUnavailable: cfg.Rewriter.FailOpenOnUnavailable && !siOptions.Enabled,
 		}
 		if siOptions.Enabled {
 			rewritePlug.RequiredStorageIntegrityContractVersion = rewriter.StorageIntegrityContractV2

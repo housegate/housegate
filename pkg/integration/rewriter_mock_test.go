@@ -3,8 +3,10 @@ package integration
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
+	"github.com/housegate/housegate/pkg/config"
 	"github.com/housegate/housegate/pkg/integration/testenv"
 )
 
@@ -39,34 +41,63 @@ func TestRewriterMock_RoundTrips(t *testing.T) {
 	t.Logf("rewriter mock saw %d statement(s); first = %q", len(seen), seen[0])
 }
 
-// TestRewriter_FailOpen verifies the rewriter plugin's fail-open
-// contract: when the rewriter returns a non-Success code, the proxy
-// logs the failure and forwards the ORIGINAL SQL to ClickHouse so the
-// session stays usable.
-//
-// Constraint: auth stays off here. With auth on the commitgate
-// PermissionObserver wakes up and rejects every Unspecified statement
-// (which is exactly what fail-open produces — qctx.StatementType is
-// never set on the failed path). The fail-open contract is meaningful
-// only for the auth-off / no-permission-gating deployment.
-func TestRewriter_FailOpen(t *testing.T) {
+// TestRewriter_RejectionFailsClosed verifies the rewrite plugin's
+// fail-closed contract with storage integrity disabled (spec 2026-09-26
+// T8): when the rewriter returns a non-Success code, the client receives
+// an Exception carrying the engine message and the ORIGINAL SQL is not
+// forwarded to ClickHouse. The rejection ends only that query; the
+// session serves the next one.
+func TestRewriter_RejectionFailsClosed(t *testing.T) {
 	rewriterOpt, mock := testenv.WithRewriterMock(t)
 	proxy := testenv.StartServerProxy(t, chEnv.Addr, rewriterOpt)
 
 	mock.FailNext(1)
 	conn := openConn(t, proxy.Addr)
 	var v uint8
-	if err := conn.QueryRow(context.Background(), "SELECT 7").Scan(&v); err != nil {
-		t.Fatalf("SELECT 7 with rewriter forced to fail: %v", err)
+	err := conn.QueryRow(context.Background(), "SELECT 7").Scan(&v)
+	if err == nil || !strings.Contains(err.Error(), "rewriter mock: forced failure via FailNext") {
+		t.Fatalf("SELECT 7 with rewriter forced to fail: err = %v, want the rewriter's rejection", err)
 	}
-	if v != 7 {
-		t.Errorf("SELECT 7 = %d, want 7 (original SQL must reach CH unchanged)", v)
-	}
-
-	// One Rewrite call was attempted (and failed); the mock still
-	// recorded it.
 	if got := len(mock.SeenSQL()); got != 1 {
 		t.Errorf("mock saw %d SQLs, want exactly 1", got)
+	}
+
+	if err := conn.QueryRow(context.Background(), "SELECT 8").Scan(&v); err != nil {
+		t.Fatalf("SELECT 8 after the rejection: %v", err)
+	}
+	if v != 8 {
+		t.Errorf("SELECT 8 = %d, want 8", v)
+	}
+}
+
+// TestRewriter_OutageFollowsFailOpenOnUnavailable pins the only remaining
+// fail-open: with storage integrity disabled and the rewriter down, the
+// original SQL reaches ClickHouse only under
+// rewriter.fail_open_on_unavailable; otherwise the client gets an Exception.
+func TestRewriter_OutageFollowsFailOpenOnUnavailable(t *testing.T) {
+	for _, failOpen := range []bool{false, true} {
+		t.Run(fmt.Sprintf("fail_open_on_unavailable=%v", failOpen), func(t *testing.T) {
+			rewriterOpt, mock := testenv.WithRewriterMock(t)
+			proxy := testenv.StartServerProxy(t, chEnv.Addr, rewriterOpt,
+				testenv.WithConfigMutator(func(c *config.Config) { c.Rewriter.FailOpenOnUnavailable = failOpen }))
+			mock.Stop()
+
+			conn := openConn(t, proxy.Addr)
+			var v uint8
+			err := conn.QueryRow(context.Background(), "SELECT 7").Scan(&v)
+			if failOpen {
+				if err != nil {
+					t.Fatalf("SELECT 7 with the rewriter down and the switch on: %v", err)
+				}
+				if v != 7 {
+					t.Errorf("SELECT 7 = %d, want 7 (original SQL must reach CH unchanged)", v)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "rewrite unavailable") {
+				t.Fatalf("SELECT 7 with the rewriter down: err = %v, want a rewrite-unavailable Exception", err)
+			}
+		})
 	}
 }
 
