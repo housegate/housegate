@@ -171,17 +171,20 @@ func isNilRewriterFactory(factory rewriter.Factory) bool {
 // configured engine — dialing the external sql-rewriter gRPC service or
 // loading the in-process rewriter-go engine.
 //
-// A router-only server (no shard, no upstream) never rewrites and gets
-// (nil, nil). Otherwise a backend that cannot be built at startup is fatal
+// A router-only server (no shard, no upstream and no injected cluster) never
+// rewrites and gets (nil, nil); hostCluster reports whether the host injected
+// Options.Cluster, which forwards sessions to ClickHouse like an upstream
+// (review M2). Otherwise a backend that cannot be built at startup is fatal
 // (spec 2026-09-26 T8): a server that forwards to ClickHouse without its
 // rewriter would pass every query through verbatim. Only with
 // rewriter.fail_open_on_unavailable set and storage integrity disabled does
 // it log a warning and return (nil, nil), so the server runs without the
 // rewrite plugin.
-func buildRewriterFactory(cfg *config.Config, reg registry.Registry, si rewriter.StorageIntegrityOptions) (rewriter.Factory, error) {
-	// Router-only deployments (no shard, no upstream) never invoke the
-	// rewriter — every session gets forwarded to a peer instead.
-	if cfg.Shard == nil && cfg.Upstream == "" {
+func buildRewriterFactory(cfg *config.Config, reg registry.Registry, si rewriter.StorageIntegrityOptions, hostCluster bool) (rewriter.Factory, error) {
+	// Router-only deployments (no shard, no upstream, no injected cluster)
+	// never invoke the rewriter — every session gets forwarded to a peer
+	// instead.
+	if cfg.Shard == nil && cfg.Upstream == "" && !hostCluster {
 		log.Info("router-only mode: SQL rewriter disabled")
 		return nil, nil
 	}
@@ -477,11 +480,14 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		log.Warnw(warning, "internal_listen", cfg.InternalListen)
 	}
 
+	// A typed-nil injected factory counts as no injection (review L6), so the
+	// configured rewriter is built and the startup gate applies.
 	var rwFactory rewriter.Factory
-	if opts.Rewriter != nil {
+	injectedRewriter := !isNilRewriterFactory(opts.Rewriter)
+	if injectedRewriter {
 		rwFactory = opts.Rewriter
 	} else {
-		built, err := buildRewriterFactory(cfg, reg, siOptions)
+		built, err := buildRewriterFactory(cfg, reg, siOptions, !isNilInterface(opts.Cluster))
 		if err != nil {
 			return nil, err
 		}
@@ -527,7 +533,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	// caller-injected path is used as-is (no Start, no Close).
 	var clusterIface cluster.Cluster
 	var libCluster *cluster.Manager
-	if opts.Cluster != nil {
+	if !isNilInterface(opts.Cluster) {
 		clusterIface = opts.Cluster
 	} else {
 		m, err := buildClusterManager(cfg)
@@ -546,7 +552,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	// contract; mutating it here would silently rewrite shared state.
 	// Library callers who want this wiring must Set it themselves before
 	// passing the factory in.
-	if opts.Rewriter == nil && clusterIface != nil {
+	if !injectedRewriter && clusterIface != nil {
 		if rwf, ok := rwFactory.(*rewriter.SentioNetworkFactory); ok && rwf != nil {
 			rwf.SetClusterManager(clusterIface)
 		}

@@ -50,25 +50,24 @@ const StorageIntegrityContractV1 = pb.StorageIntegrityContractVersion_STORAGE_IN
 const StorageIntegrityContractV2 = pb.StorageIntegrityContractVersion_STORAGE_INTEGRITY_CONTRACT_V2
 
 // RewriteResult bundles everything the rewriter learned about one SQL
-// statement. All fields are best-effort: when Rewrite short-circuits
-// before calling the gRPC service — no mappings configured, no session
-// context — the classification and discovery fields are zero-valued
-// and SQL equals the input.
+// statement. It is produced only from a Success engine answer: every
+// statement reaches the engine (there is no short-circuit), and every
+// failure is an error instead. The discovery fields are best-effort
+// within that answer.
 //
 // Fields mirror the corresponding RewriteSQLResponse fields in
 // protos/rewriter.proto. See that file for the authoritative shape
 // (which key formats, which statement kinds populate which map, etc.).
 type RewriteResult struct {
-	// SQL is the post-rewrite SQL. Equals the input SQL when nothing
-	// was changed (no mappings hit, or the short-circuit path). A
-	// non-Success engine answer is never a RewriteResult: it is a
-	// *RejectedError.
+	// SQL is the post-rewrite SQL, never empty. Equals the input SQL when
+	// nothing was changed. A non-Success engine answer, or a Success answer
+	// without SQL, is never a RewriteResult: it is a *RejectedError.
 	SQL string
 
 	// StatementType is the rewriter's classification of the INPUT SQL
 	// (SELECT / CREATE_TABLE / CREATE_DATABASE / ...). Stays at
-	// sqlmeta.StatementTypeUnspecified when classification didn't run
-	// (parse error, short-circuit, closed rewriter); callers must
+	// sqlmeta.StatementTypeUnspecified when the engine left it
+	// unclassified; callers must
 	// treat Unspecified as "unknown", not "definitely not a DDL".
 	StatementType sqlmeta.StatementType
 
@@ -80,23 +79,23 @@ type RewriteResult struct {
 	// TableNameRewrite mode. For SELECT/DML this includes tables
 	// reached via CTEs. Tables that were rewritten (TableNameRewrite
 	// hits) appear here under their original names; cross-reference
-	// TableRewrites for the post-rewrite form. Nil when no gRPC
-	// call happened (short-circuit path).
+	// TableRewrites for the post-rewrite form. Nil when the engine
+	// reported none.
 	AccessedTables []sqlmeta.AccessedTable
 
 	// TableRewrites maps original "db.table" (or bare "table" when
 	// no db was present in the SQL) to the post-rewrite "db.table"
 	// form — proto field `table_rewrites`. Only entries whose
 	// original differs from the rewritten form appear; untouched
-	// tables are listed in AccessedTables instead. Nil when no
-	// gRPC call happened.
+	// tables are listed in AccessedTables instead. Nil when the engine
+	// reported none.
 	TableRewrites map[string]string
 
 	// DatabaseRewrites maps original logical DB name to post-rewrite
 	// physical DB name — proto field `database_rewrites`. Populated
 	// only by USE / SHOW TABLES / SHOW DATABASES. Only entries whose
-	// original differs from the rewritten form appear. Nil when no
-	// gRPC call happened.
+	// original differs from the rewritten form appear. Nil when the
+	// engine reported none.
 	DatabaseRewrites map[string]string
 
 	// PrivilegesDeltas carries the structured GRANT/REVOKE output —
@@ -111,8 +110,7 @@ type RewriteResult struct {
 	// ExistenceClause records the statement's existence-check clause —
 	// proto field `existence_clause` (tag 14): IfNotExists for a CREATE
 	// that carried IF NOT EXISTS, IfExists for a DROP / TRUNCATE that
-	// carried IF EXISTS, Unspecified otherwise. Only the short-circuit
-	// path leaves it Unspecified on a successful rewrite.
+	// carried IF EXISTS, Unspecified otherwise.
 	ExistenceClause sqlmeta.ExistenceClause
 
 	// StorageIntegrityContractVersion is the exact positive acknowledgement
@@ -285,12 +283,13 @@ type Options struct {
 
 	// FailOpenOnUnavailable is rewriter.fail_open_on_unavailable (spec
 	// 2026-09-26 T8); the startup half is enforced by buildServer. Here it
-	// covers per-query transport and availability failures only
-	// (dial, timeout, nil response, closed rewriter, network-state lookup):
-	// with it set and storage integrity disabled, Rewrite returns a plain
-	// error so the plugin can log and forward the original SQL. Default
-	// false: the failure is a RejectedError. An engine answer other than
-	// Success is always a RejectedError, whatever this says.
+	// covers only per-query failures before the request reached the engine
+	// (connect failure, closed rewriter, a deadline that expired before the
+	// request was sent): with it set and storage integrity disabled, Rewrite
+	// returns that *UnavailableError so the plugin can log and forward the
+	// original SQL. Default false: the failure is a RejectedError. An engine
+	// answer other than Success, and any failure after the request was sent,
+	// is always a RejectedError, whatever this says.
 	FailOpenOnUnavailable bool
 
 	StorageIntegrity StorageIntegrityOptions

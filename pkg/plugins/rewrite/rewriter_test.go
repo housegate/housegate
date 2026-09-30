@@ -277,7 +277,7 @@ func TestOnQuery_RejectedErrorFailsClosed(t *testing.T) {
 // gets an Exception.
 func TestOnQuery_TransportErrorIsForwardedOnlyWhenFailOpen(t *testing.T) {
 	for _, failOpen := range []bool{false, true} {
-		rw := &fakeRewriter{err: errors.New("dial tcp: connection refused")}
+		rw := &fakeRewriter{err: &rewriter.UnavailableError{Cause: errors.New("dial tcp 10.1.2.3:50051: connection refused")}}
 		p := &Plugin{Factory: &fakeFactory{rw: rw}, FailOpenOnUnavailable: failOpen}
 		sess := newSessionForTest(t, 43)
 		qctx := &plugin.QueryContext{Session: sess, OriginalSQL: "SELECT 1", Query: &chproto.Query{Body: "SELECT 1"}}
@@ -296,8 +296,14 @@ func TestOnQuery_TransportErrorIsForwardedOnlyWhenFailOpen(t *testing.T) {
 			}
 			continue
 		}
-		if err == nil || !strings.Contains(err.Error(), "rewrite unavailable") || !strings.Contains(err.Error(), "connection refused") {
+		if err == nil || !strings.Contains(err.Error(), "rewriter unavailable") {
 			t.Fatalf("fail-closed: err = %v, want the outage to reach the client", err)
+		}
+		if strings.Contains(err.Error(), "10.1.2.3") {
+			t.Fatalf("fail-closed: client message %q leaks the rewriter address", err.Error())
+		}
+		if !logs.hasAny("10.1.2.3") {
+			t.Fatalf("fail-closed: the server log must keep the cause, got %v", logs.records())
 		}
 	}
 }
@@ -316,14 +322,31 @@ func TestOnQuery_RejectionIgnoresFailOpenSwitch(t *testing.T) {
 	}
 }
 
+// TestOnQuery_UnclassifiedErrorIsClosedEvenUnderTheSwitch pins review M1 for
+// custom factories: only an explicit *rewriter.UnavailableError may fail
+// open; any other error may have come from an engine that received the
+// statement.
+func TestOnQuery_UnclassifiedErrorIsClosedEvenUnderTheSwitch(t *testing.T) {
+	rw := &fakeRewriter{err: errors.New("engine: generate failed")}
+	p := &Plugin{Factory: &fakeFactory{rw: rw}, FailOpenOnUnavailable: true}
+	sess := newSessionForTest(t, 50)
+	qctx := &plugin.QueryContext{Session: sess, OriginalSQL: "SELECT 1", Query: &chproto.Query{Body: "SELECT 1"}}
+	err := p.OnQuery(context.Background(), qctx)
+	var rej *rewriter.RejectedError
+	if !errors.As(err, &rej) || strings.Contains(err.Error(), "generate failed") {
+		t.Fatalf("err = %v, want a generic rejection", err)
+	}
+}
+
 func TestOnQuery_OrdinaryErrorFailsClosedWhenSISurfaceIsConfigured(t *testing.T) {
 	rw := &fakeRewriter{err: errors.New("transport down")}
 	p := &Plugin{Factory: &fakeFactory{rw: rw}}
 	sess := newSessionForTest(t, 44)
 	qctx := &plugin.QueryContext{Session: sess, OriginalSQL: "INSERT INTO db1.t FORMAT Native", Query: &chproto.Query{Body: "INSERT INTO db1.t FORMAT Native"}}
 	err := p.OnQuery(context.Background(), qctx)
-	if err == nil || !strings.Contains(err.Error(), "rewrite unavailable") {
-		t.Fatalf("err = %v, want fail-closed error", err)
+	var rej *rewriter.RejectedError
+	if !errors.As(err, &rej) {
+		t.Fatalf("err = %v, want fail-closed rejection", err)
 	}
 }
 
@@ -351,6 +374,25 @@ func (h *captureHandler) records() []string {
 		out[i] = r.Level.String() + " " + r.Message
 	}
 	return out
+}
+
+// hasAny reports whether any record's message or attributes mention substr.
+func (h *captureHandler) hasAny(substr string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, r := range h.recs {
+		found := strings.Contains(r.Message, substr)
+		r.Attrs(func(a slog.Attr) bool {
+			if strings.Contains(a.Value.String(), substr) {
+				found = true
+			}
+			return !found
+		})
+		if found {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *captureHandler) has(level slog.Level, substr string) bool {

@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net"
 	"strings"
@@ -12,6 +13,8 @@ import (
 	"github.com/ClickHouse/ch-go/proto"
 	pb "github.com/housegate/rewriter-proto/gen/pb"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/housegate/housegate/pkg/chproto"
 	"github.com/housegate/housegate/pkg/chsession"
@@ -33,6 +36,7 @@ import (
 type scriptedRewriterServer struct {
 	pb.UnimplementedRewriterServiceServer
 	resp *pb.RewriteSQLResponse
+	err  error
 
 	mu   sync.Mutex
 	seen []string
@@ -42,6 +46,9 @@ func (s *scriptedRewriterServer) Rewrite(_ context.Context, req *pb.RewriteSQLRe
 	s.mu.Lock()
 	s.seen = append(s.seen, req.GetSql())
 	s.mu.Unlock()
+	if s.err != nil {
+		return nil, s.err
+	}
 	return s.resp, nil
 }
 
@@ -55,6 +62,12 @@ func (s *scriptedRewriterServer) calls() []string {
 // server, the grpc.Server (so a test can stop it to simulate an outage) and
 // the rewrite plugin wired over a real SentioNetworkFactory.
 func startScriptedRewriter(t *testing.T, resp *pb.RewriteSQLResponse, failOpen bool) (*scriptedRewriterServer, *grpc.Server, *rewriteplugin.Plugin) {
+	t.Helper()
+	srv, gs, plug, _ := startScriptedRewriterWithFactory(t, resp, failOpen)
+	return srv, gs, plug
+}
+
+func startScriptedRewriterWithFactory(t *testing.T, resp *pb.RewriteSQLResponse, failOpen bool) (*scriptedRewriterServer, *grpc.Server, *rewriteplugin.Plugin, *rewriter.SentioNetworkFactory) {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -84,7 +97,35 @@ func startScriptedRewriter(t *testing.T, resp *pb.RewriteSQLResponse, failOpen b
 		Factory:               factory,
 		PhysicalDatabase:      "phys",
 		FailOpenOnUnavailable: failOpen,
+	}, factory
+}
+
+// probeSession is a minimal rewriter.Session for outage probes.
+type probeSession struct{}
+
+func (probeSession) Account() string              { return "" }
+func (probeSession) LogicalDatabaseName() string  { return "" }
+func (probeSession) PhysicalDatabaseName() string { return "" }
+func (probeSession) SetLogicalDatabase(string)    {}
+
+// waitForRewriterOutage blocks until the factory's client has noticed the
+// stopped server, i.e. a call fails before the request is sent. A call in
+// the instant before that is written to a dying transport, which counts as
+// sent and is therefore a rejection; the outage these tests model is the
+// steady state after the service went away.
+func waitForRewriterOutage(t *testing.T, factory *rewriter.SentioNetworkFactory) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		_, err := factory.NewRewriter(probeSession{}).Rewrite(context.Background(), "SELECT 1", "")
+		var unavailable *rewriter.UnavailableError
+		var rej *rewriter.RejectedError
+		if errors.As(err, &unavailable) || (errors.As(err, &rej) && rej.Message == "rewriter unavailable") {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
+	t.Fatal("rewriter client did not notice the stopped server")
 }
 
 // relayRunResult is what one client Query produced on both legs.
@@ -235,8 +276,9 @@ func TestRelay_RewriterOutageFollowsFailOpenOnUnavailable(t *testing.T) {
 	const sql = "SELECT a FROM db1.t"
 	for _, failOpen := range []bool{false, true} {
 		t.Run(map[bool]string{false: "switch off", true: "switch on"}[failOpen], func(t *testing.T) {
-			srv, gs, plug := startScriptedRewriter(t, &pb.RewriteSQLResponse{Code: pb.RewriteCode_Success, SqlAfterRewrite: "never"}, failOpen)
+			srv, gs, plug, factory := startScriptedRewriterWithFactory(t, &pb.RewriteSQLResponse{Code: pb.RewriteCode_Success, SqlAfterRewrite: "never"}, failOpen)
 			gs.Stop() // the outage
+			waitForRewriterOutage(t, factory)
 			chain := &plugin.PluginChain{QueryPlugins: []plugin.QueryPlugin{plug}}
 			logs := &relayCaptureHandler{}
 			ctx := log.WithContext(context.Background(), log.New(logs))
@@ -257,8 +299,11 @@ func TestRelay_RewriterOutageFollowsFailOpenOnUnavailable(t *testing.T) {
 				}
 				return
 			}
-			if res.exception == nil || !strings.Contains(res.exception.Message, "rewrite unavailable") {
-				t.Fatalf("exception = %+v, want a rewrite-unavailable Exception", res.exception)
+			if res.exception == nil || !strings.Contains(res.exception.Message, "rewriter unavailable") {
+				t.Fatalf("exception = %+v, want a rewriter-unavailable Exception", res.exception)
+			}
+			if strings.Contains(res.exception.Message, "127.0.0.1") || strings.Contains(res.exception.Message, "rpc error") {
+				t.Fatalf("exception %q leaks transport detail to the client", res.exception.Message)
 			}
 			if len(res.upstream) != 0 {
 				t.Fatalf("upstream received %d Query packet(s), want nothing forwarded", len(res.upstream))
@@ -302,4 +347,25 @@ func (h *relayCaptureHandler) messages() []string {
 		out[i] = r.Level.String() + " " + r.Message
 	}
 	return out
+}
+
+// TestRelay_EngineFailureAfterReceiptIsRefusedEvenUnderTheSwitch pins review
+// M1 at the relay: an engine that fails on a statement it received (gRPC
+// UNKNOWN from an unexpected C++ exception) must not turn into a
+// fail_open_on_unavailable pass-through.
+func TestRelay_EngineFailureAfterReceiptIsRefusedEvenUnderTheSwitch(t *testing.T) {
+	const sql = "SELECT * FROM phys.`db2.secret`"
+	srv, _, plug := startScriptedRewriter(t, nil, true)
+	srv.err = status.Error(codes.Unknown, "unexpected exception in handler")
+	chain := &plugin.PluginChain{QueryPlugins: []plugin.QueryPlugin{plug}}
+	res := runQueryThroughRelay(t, context.Background(), chain, sql)
+	if got := srv.calls(); len(got) != 1 {
+		t.Fatalf("rewriter saw %q, want the statement once", got)
+	}
+	if res.exception == nil {
+		t.Fatal("client received no Exception")
+	}
+	if len(res.upstream) != 0 {
+		t.Fatalf("upstream received %d Query packet(s); an engine failure after receipt must not fail open", len(res.upstream))
+	}
 }

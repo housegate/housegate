@@ -31,6 +31,7 @@ go_library(
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//credentials/insecure",
         "@org_golang_google_grpc//keepalive",
+        "@org_golang_google_grpc//stats",
         "@org_golang_google_protobuf//proto",
     ],
 )
@@ -39,6 +40,7 @@ go_test(
     name = "rewriter_test",
     srcs = [
         "backend_test.go",
+        "grpc_failure_test.go",
         "materialize_smoke_test.go",
         "materialize_test.go",
         "native_smoke_test.go",
@@ -59,6 +61,7 @@ go_test(
         "@com_github_housegate_rewriter_proto//gen/pb",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//connectivity",
         "@org_golang_google_grpc//status",
     ],
 )

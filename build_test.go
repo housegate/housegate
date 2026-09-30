@@ -424,6 +424,9 @@ func TestBuildServer_RefusesStartupOnStorageIntegrityProbeMismatch(t *testing.T)
 func TestBuildServer_ConfiguredSISurfaceRejectsTypedNilInjectedFactory(t *testing.T) {
 	cfg := minimalServerCfg(t)
 	cfg.StorageIntegrity.Tables = []string{"tenant.events"}
+	// A typed-nil injection builds the configured rewriter instead; an empty
+	// address makes that build fail fast.
+	cfg.Rewriter.ServiceAddr = ""
 	var typedNil *rewriter.SentioNetworkFactory
 
 	_, err := buildServer(Options{

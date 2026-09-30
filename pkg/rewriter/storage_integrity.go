@@ -127,6 +127,25 @@ func (e *RejectedError) Unwrap() error {
 	return e.Cause
 }
 
+// UnavailableError marks a rewrite failure that happened before the request
+// reached the engine: a connect failure, a closed rewriter, or a deadline that
+// expired before the request was sent (spec 2026-09-26 T8, review M1). It is
+// the only failure rewriter.fail_open_on_unavailable may forward past. A
+// backend returns it only when it can prove the engine never received the
+// statement; every other backend error is treated as a rejection.
+type UnavailableError struct {
+	Cause error
+}
+
+func (e *UnavailableError) Error() string {
+	if e.Cause == nil {
+		return "rewriter unavailable"
+	}
+	return "rewriter unavailable: " + e.Cause.Error()
+}
+
+func (e *UnavailableError) Unwrap() error { return e.Cause }
+
 // buildStorageIntegrityArgs renders the proto block for one call. It returns
 // nil only when storage integrity is disabled; when enabled the block is sent
 // even with an empty table map, because the V2 contract is activated by
