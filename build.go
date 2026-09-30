@@ -575,8 +575,9 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		credProvider = cp
 		// Same caller-injected guard as SetClusterManager above: only wire
 		// the credential provider into the rewriter factory when the lib
-		// built it. Caller-injected factories are used as-is.
-		if opts.Rewriter == nil {
+		// built it (a typed-nil injection counts as none). Caller-injected
+		// factories are used as-is.
+		if !injectedRewriter {
 			if rwf, ok := rwFactory.(*rewriter.SentioNetworkFactory); ok && rwf != nil {
 				rwf.SetCredentialProvider(cp)
 			}
@@ -598,7 +599,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	// clauses carry a peer-relay envelope (user / password). Same
 	// caller-injected guard as SetClusterManager / SetCredentialProvider:
 	// only mutate when the lib built the factory.
-	if opts.Rewriter == nil && peerSigner != nil {
+	if !injectedRewriter && peerSigner != nil {
 		if rwf, ok := rwFactory.(*rewriter.SentioNetworkFactory); ok && rwf != nil {
 			rwf.SetPeerSigner(peerSigner)
 			if cfg.PeerTokenTTL.Duration > 0 {

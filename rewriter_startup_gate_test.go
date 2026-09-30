@@ -264,3 +264,55 @@ func TestBuildServer_WarnsWhenRewriterHasNoPhysicalDatabase(t *testing.T) {
 		}
 	}
 }
+
+// infoCapture records messages at every level.
+type infoCapture struct{ warnCapture }
+
+func (h *infoCapture) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	h.msgs = append(h.msgs, r.Message)
+	h.mu.Unlock()
+	return nil
+}
+func (h *infoCapture) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *infoCapture) WithGroup(string) slog.Handler      { return h }
+
+// TestBuildServer_TypedNilInjectedRewriterGetsLibraryWiring pins that a
+// typed-nil Options.Rewriter, which review L6 turned into "no injection",
+// also gets the wiring a library-built factory gets. The credential-provider
+// and peer-signer guards used to test opts.Rewriter == nil, which a typed-nil
+// interface fails, so the factory built in its place carried no peer-relay
+// signer and cross-indexer remote() clauses went out without their JWS.
+func TestBuildServer_TypedNilInjectedRewriterGetsLibraryWiring(t *testing.T) {
+	addr := startStubRewriterService(t)
+	var typedNil *rewriter.SentioNetworkFactory
+	for _, tc := range []struct {
+		name      string
+		injected  rewriter.Factory
+		wantWired bool
+	}{
+		{"no injection", nil, true},
+		{"typed-nil injection", typedNil, true},
+		{"real injection", stubRewriterFactory{}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			capture := &infoCapture{}
+			previous := log.Default()
+			log.SetDefault(log.New(capture))
+			cfg := minimalServerCfg(t)
+			cfg.Rewriter.Engine = "grpc"
+			cfg.Rewriter.ServiceAddr = addr
+			cfg.Rewriter.PhysicalDatabase = "phys"
+			cfg.RelayPrivateKeyHex = testRelayKeyHex
+			bs, err := buildServer(Options{Config: cfg, NetworkState: network.NewInMemoryNetworkState(), Rewriter: tc.injected}, nil)
+			log.SetDefault(previous)
+			if err != nil {
+				t.Fatalf("buildServer: %v", err)
+			}
+			bs.teardown()
+			if got := capture.has("rewriter peer-relay signer wired"); got != tc.wantWired {
+				t.Fatalf("peer-relay signer wired = %v, want %v", got, tc.wantWired)
+			}
+		})
+	}
+}
