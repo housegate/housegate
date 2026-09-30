@@ -18,8 +18,8 @@
 // without storage integrity (spec 2026-09-26 T8): a *rewriter.RejectedError
 // (every non-Success engine answer, every failure after the engine received
 // the statement) and any unclassified error alike. The one exception is a
-// *rewriter.UnavailableError (the engine provably never saw the statement)
-// with FailOpenOnUnavailable set: the original SQL is then forwarded with a
+// *rewriter.UnavailableError (a transport-level failure before the request
+// was sent) with FailOpenOnUnavailable set: the original SQL is then forwarded with a
 // warning.
 //
 // Maintenance, platform-operator and peer-trusted sessions never reach the
@@ -75,9 +75,9 @@ type Plugin struct {
 
 	// FailOpenOnUnavailable is rewriter.fail_open_on_unavailable (spec
 	// 2026-09-26 T8): a Rewrite error that is a *rewriter.UnavailableError
-	// (the engine never received the statement) forwards the original SQL
-	// with a warning instead of failing the query. It never applies to a
-	// RejectedError or to any other error. buildServer sets it only
+	// (a transport-level failure before the request was sent) forwards the
+	// original SQL with a warning instead of failing the query. It never
+	// applies to a RejectedError or to any other error. buildServer sets it only
 	// when storage integrity is disabled; Config.Validate refuses the switch
 	// together with storage_integrity.enabled.
 	FailOpenOnUnavailable bool

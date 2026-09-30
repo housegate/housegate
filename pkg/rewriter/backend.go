@@ -9,9 +9,11 @@ import (
 	rewritergo "github.com/housegate/rewriter-go"
 	pb "github.com/housegate/rewriter-proto/gen/pb"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/stats"
+	"google.golang.org/grpc/status"
 
 	"github.com/housegate/housegate/pkg/log"
 )
@@ -28,9 +30,9 @@ const (
 // contract; sentioRewriter cannot tell them apart. All per-session logic
 // (dynamic args, USE mirroring, the fail-closed rejection policy) lives
 // above this seam and is shared by both implementations. Rewrite returns an
-// *UnavailableError only when the engine provably never received the
-// request; the native engine is in-process, so every error it returns came
-// from the engine and is unmarked.
+// *UnavailableError only for a transport-level failure before the request
+// was sent (see grpcBackend.Rewrite); the native engine is in-process, so
+// every error it returns came from the engine and is unmarked.
 // The ctx deadline is fully honored by the grpc implementation; under
 // the native engine it is advisory — an FFI call cannot be interrupted
 // mid-flight, but calls are local and fast, so deadlines effectively
@@ -85,20 +87,34 @@ func newGRPCBackend(opts Options) (*grpcBackend, error) {
 }
 
 // Rewrite classifies a failure at the transport boundary (spec 2026-09-26
-// T8, review M1). A failure before the request message was handed to the
-// transport (connect failure, a deadline or cancellation that fired first)
-// means the engine never saw the statement and is returned as an
-// *UnavailableError. Any failure after that (an engine status such as
-// UNKNOWN or INTERNAL, a crash that drops the connection mid-call, a deadline
-// that expired while the engine worked) may depend on the statement, so it
-// is returned unmarked and the caller treats it as a rejection.
+// T8, review M1, re-review R1). A failure is returned as an *UnavailableError
+// only when both hold: the request message was never handed to the transport,
+// and the gRPC status is one of the transport codes (Unavailable,
+// DeadlineExceeded, Canceled) — a connect failure, or a deadline or
+// cancellation that fired before sending. Every other failure is returned
+// unmarked and the caller treats it as a rejection: a pre-send failure with
+// another code (a marshalling error such as invalid UTF-8, reported as
+// Internal, or a client-side ResourceExhausted) depends on the statement, and
+// so does any failure after sending (an engine status, a crash that drops the
+// connection mid-call, a deadline that expired while the engine worked).
 func (b *grpcBackend) Rewrite(ctx context.Context, req *pb.RewriteSQLRequest) (*pb.RewriteSQLResponse, error) {
 	sent := new(atomic.Bool)
 	resp, err := b.client.Rewrite(context.WithValue(ctx, requestSentKey{}, sent), req)
-	if err != nil && !sent.Load() {
+	if err != nil && !sent.Load() && isTransportStatus(err) {
 		return nil, &UnavailableError{Cause: err}
 	}
 	return resp, err
+}
+
+// isTransportStatus reports whether err carries a gRPC status that describes
+// the connection or the call's own deadline rather than the request content.
+func isTransportStatus(err error) bool {
+	switch status.Code(err) {
+	case codes.Unavailable, codes.DeadlineExceeded, codes.Canceled:
+		return true
+	default:
+		return false
+	}
 }
 
 // requestSentKey carries the per-call flag requestSentTracker sets.

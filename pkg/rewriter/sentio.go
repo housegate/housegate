@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/housegate/housegate/pkg/log"
 
@@ -282,6 +283,13 @@ func (r *sentioRewriter) Rewrite(ctx context.Context, sql, effectiveAccount stri
 	if r.closed.Load() {
 		return RewriteResult{}, r.rewriteFailure(&UnavailableError{Cause: errors.New("rewriter closed")})
 	}
+	// Re-review R1: the gRPC contract carries the statement in a proto3
+	// string, which cannot hold invalid UTF-8, and a statement the engines
+	// cannot even receive must not reach ClickHouse unexamined. Refused here,
+	// above the backend seam, for every engine.
+	if !utf8.ValidString(sql) {
+		return RewriteResult{}, &RejectedError{Code: pb.RewriteCode_InvalidRewriteRequest, Message: invalidUTF8Message}
+	}
 
 	si := r.factory.options.StorageIntegrity
 	snap := si.snapshotFor(ctx)
@@ -423,6 +431,7 @@ func (r *sentioRewriter) rewriteOnce(ctx context.Context, sql string, dynArgs *p
 // can name the rewriter address or engine internals, stays on
 // RejectedError.Cause for the server log and never reaches the client.
 const (
+	invalidUTF8Message          = "statement is not valid UTF-8"
 	rewriteUnavailableMessage   = "rewriter unavailable"
 	rewriteEngineFailureMessage = "rewriter failed to process the statement"
 	siClassificationMessage     = "storage-integrity rewrite classification unavailable"

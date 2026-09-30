@@ -500,6 +500,12 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	if isNilRewriterFactory(rwFactory) {
 		rwFactory = nil
 	}
+	// Re-review R3: every statement reaches the engine, and without a
+	// physical database the engine has no database map, so it refuses every
+	// write, USE and EXISTS that names a logical database.
+	if rwf, ok := rwFactory.(*rewriter.SentioNetworkFactory); ok && rwf.PhysicalDatabase() == "" {
+		log.Warn("rewriter.physical_database is empty: the SQL rewriter has no database map, so it refuses every write, DDL, USE and EXISTS that names a logical database (reads and SET still pass); set rewriter.physical_database to the ClickHouse database that hosts the logical databases")
+	}
 	if siOptions.Enabled && rwFactory == nil {
 		return nil, fmt.Errorf("storage_integrity.enabled requires an available SQL rewriter; refusing fail-open startup")
 	}

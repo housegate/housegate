@@ -369,3 +369,22 @@ func TestRelay_EngineFailureAfterReceiptIsRefusedEvenUnderTheSwitch(t *testing.T
 		t.Fatalf("upstream received %d Query packet(s); an engine failure after receipt must not fail open", len(res.upstream))
 	}
 }
+
+// TestRelay_InvalidUTF8IsRefusedEvenUnderTheSwitch pins re-review R1 at the
+// relay: invalid UTF-8 used to fail proto marshalling before send, which was
+// classified as unavailable and forwarded under fail_open_on_unavailable.
+func TestRelay_InvalidUTF8IsRefusedEvenUnderTheSwitch(t *testing.T) {
+	const sql = "SELECT '\xff\xfe' FROM phys.`db2.secret`"
+	srv, _, plug := startScriptedRewriter(t, &pb.RewriteSQLResponse{Code: pb.RewriteCode_Success, SqlAfterRewrite: "never"}, true)
+	chain := &plugin.PluginChain{QueryPlugins: []plugin.QueryPlugin{plug}}
+	res := runQueryThroughRelay(t, context.Background(), chain, sql)
+	if got := srv.calls(); len(got) != 0 {
+		t.Fatalf("rewriter saw %d statement(s), want none", len(got))
+	}
+	if res.exception == nil || !strings.Contains(res.exception.Message, "not valid UTF-8") {
+		t.Fatalf("exception = %+v, want a refusal naming invalid UTF-8", res.exception)
+	}
+	if len(res.upstream) != 0 {
+		t.Fatalf("upstream received %d Query packet(s); invalid UTF-8 must not fail open", len(res.upstream))
+	}
+}

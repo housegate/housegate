@@ -127,12 +127,17 @@ func (e *RejectedError) Unwrap() error {
 	return e.Cause
 }
 
-// UnavailableError marks a rewrite failure that happened before the request
-// reached the engine: a connect failure, a closed rewriter, or a deadline that
-// expired before the request was sent (spec 2026-09-26 T8, review M1). It is
-// the only failure rewriter.fail_open_on_unavailable may forward past. A
-// backend returns it only when it can prove the engine never received the
-// statement; every other backend error is treated as a rejection.
+// UnavailableError marks a rewrite failure classified as the rewriter being
+// unreachable: a connect failure, a closed rewriter, or a deadline or
+// cancellation that fired before the request was sent (spec 2026-09-26 T8,
+// review M1). It is the only failure rewriter.fail_open_on_unavailable may
+// forward past. The classification is a bounded heuristic, not a proof: the
+// gRPC backend requires both that the request message never reached the
+// transport and that the status is a transport code (Unavailable,
+// DeadlineExceeded, Canceled). A request queued into a transport that then
+// dies counts as sent (a rejection); a deadline that expires while a very
+// large request is still being serialised or flow-controlled counts as
+// unavailable. Every other backend error is treated as a rejection.
 type UnavailableError struct {
 	Cause error
 }

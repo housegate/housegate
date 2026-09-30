@@ -169,3 +169,51 @@ func waitUntilNotReady(t *testing.T, f *SentioNetworkFactory) {
 		}
 	}
 }
+
+// invalidUTF8SQL carries a lone 0xff/0xfe inside a string literal: ClickHouse
+// accepts the bytes, but a proto3 string field cannot carry them.
+const invalidUTF8SQL = "SELECT '\xff\xfe' FROM phys.`db2.secret`"
+
+// TestGRPCBackend_PreSendMarshalFailureIsNotUnavailable pins re-review R1 at
+// the backend seam: grpc-go refuses to marshal invalid UTF-8 with Internal
+// before anything is sent. That failure depends on the statement, so it must
+// not be classified as unavailable even though the request was never sent.
+func TestGRPCBackend_PreSendMarshalFailureIsNotUnavailable(t *testing.T) {
+	calls := 0
+	_, addr := startGRPCFailureServer(t, func(context.Context) (*pb.RewriteSQLResponse, error) {
+		calls++
+		return &pb.RewriteSQLResponse{Code: pb.RewriteCode_Success, SqlAfterRewrite: "SELECT 1"}, nil
+	})
+	f := newGRPCFailureFactory(t, addr, true, 2*time.Second)
+	_, err := f.backend.Rewrite(context.Background(), &pb.RewriteSQLRequest{Sql: invalidUTF8SQL})
+	if err == nil {
+		t.Fatal("marshalling invalid UTF-8 unexpectedly succeeded")
+	}
+	var unavailable *UnavailableError
+	if errors.As(err, &unavailable) {
+		t.Fatalf("err = %v classified as unavailable; a marshalling failure depends on the statement", err)
+	}
+	if calls != 0 {
+		t.Fatalf("engine calls = %d, want 0", calls)
+	}
+}
+
+// TestGRPCBackend_InvalidUTF8IsRefusedEvenUnderTheSwitch pins re-review R1
+// end to end through the rewriter: the statement is refused up front with a
+// clear message and never reaches the engine.
+func TestGRPCBackend_InvalidUTF8IsRefusedEvenUnderTheSwitch(t *testing.T) {
+	calls := 0
+	_, addr := startGRPCFailureServer(t, func(context.Context) (*pb.RewriteSQLResponse, error) {
+		calls++
+		return &pb.RewriteSQLResponse{Code: pb.RewriteCode_Success, SqlAfterRewrite: "SELECT 1"}, nil
+	})
+	f := newGRPCFailureFactory(t, addr, true, 2*time.Second)
+	_, err := f.NewRewriter(&fakeSession{}).Rewrite(context.Background(), invalidUTF8SQL, "")
+	var rej *RejectedError
+	if !errors.As(err, &rej) || !strings.Contains(rej.Message, "not valid UTF-8") {
+		t.Fatalf("err = %v, want a RejectedError naming invalid UTF-8", err)
+	}
+	if calls != 0 {
+		t.Fatalf("engine calls = %d, want 0", calls)
+	}
+}

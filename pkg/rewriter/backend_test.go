@@ -305,6 +305,33 @@ func TestSentioRewriter_TransportFailurePreservesCauseWithoutSI(t *testing.T) {
 	}
 }
 
+// TestSentioRewriter_InvalidUTF8IsRefusedBeforeTheBackend pins re-review R1
+// for every engine: the check sits above the backend seam, so neither the
+// gRPC nor the native backend sees the statement.
+func TestSentioRewriter_InvalidUTF8IsRefusedBeforeTheBackend(t *testing.T) {
+	for _, si := range []bool{false, true} {
+		for _, failOpen := range []bool{false, true} {
+			if si && failOpen {
+				continue
+			}
+			be := &fakeBackend{resp: &pb.RewriteSQLResponse{Code: pb.RewriteCode_Success, SqlAfterRewrite: "SELECT 1"}}
+			f := newFakeFactory(be)
+			f.options.FailOpenOnUnavailable = failOpen
+			if si {
+				f.options.StorageIntegrity = siOpts(nil)
+			}
+			_, err := f.NewRewriter(&fakeSession{}).Rewrite(context.Background(), "SELECT '\xff' FROM db1.t", "")
+			var rej *RejectedError
+			if !errors.As(err, &rej) || rej.Message != "statement is not valid UTF-8" {
+				t.Fatalf("si=%v switch=%v: err = %v, want RejectedError(statement is not valid UTF-8)", si, failOpen, err)
+			}
+			if be.lastReq != nil {
+				t.Fatalf("si=%v switch=%v: the backend saw the statement", si, failOpen)
+			}
+		}
+	}
+}
+
 // TestSentioRewriter_SuccessWithEmptySQLIsRejected pins review L3: a
 // Success answer without SQL would forward an empty statement while the
 // classification drives downstream policy; it is a rejection.

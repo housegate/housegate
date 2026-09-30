@@ -8,13 +8,16 @@ HouseGate refuses the query when the rewriter:
 
 - answers with anything other than `Success` (`UnsupportedStatement`, `SyntaxError`, `InvalidRewriteRequest`, `RewriteError`, or a code a newer engine adds);
 - answers `Success` without a statement;
-- fails after it received the statement: a gRPC status error such as `UNKNOWN` or `INTERNAL`, a crash that drops the connection mid-call, a deadline that expires while the engine works on the statement, or an internal error of the native engine.
+- fails after it received the statement: a gRPC status error such as `UNKNOWN` or `INTERNAL`, a crash that drops the connection mid-call, a deadline that expires while the engine works on the statement, or an internal error of the native engine;
+- cannot be sent the statement for a reason that depends on the statement, such as a request that fails to serialise.
+
+A statement that is not valid UTF-8 (raw bytes such as `0xFF` in a literal or comment; escape sequences like `'\xFF'` are plain ASCII and unaffected) is refused before the rewriter is called, with `statement is not valid UTF-8`, for both engines. The gRPC contract carries the statement in a proto3 string, which cannot hold such bytes.
 
 The client receives a ClickHouse Exception and nothing is sent to ClickHouse. For an engine answer the message carries the engine's reason; for a failure it is generic (`rewriter failed to process the statement`, `rewriter unavailable`), and the details, including the rewriter address, go to the server log only. This holds with and without `storage_integrity.enabled`, and no configuration restores a pass-through.
 
 Before this change, deployments with storage integrity disabled forwarded the original SQL verbatim on such an answer. That neutralised every engine refusal: a statement the engine could not parse or did not model (for example one containing a vertical tab, or a `#` glued to a keyword) reached ClickHouse unrewritten, where it could read or rename another tenant's physical tables.
 
-Every statement reaches the engine, including on a session with no current database when `rewriter.physical_database` is empty; HouseGate no longer skips the rewriter because there is nothing to map. With an empty `physical_database` the engine has no database map, so it refuses every statement that names a logical database (for example `CREATE TABLE db1.t …`, `INSERT INTO db1.t …`, `USE db1`); set `physical_database` on any server that runs a rewriter.
+Every statement reaches the engine, including on a session with no current database when `rewriter.physical_database` is empty; HouseGate no longer skips the rewriter because there is nothing to map. With an empty `physical_database` the engine has no database map, so it refuses every write, DDL, `USE` and `EXISTS` that names a logical database (for example `CREATE TABLE db1.t …`, `INSERT INTO db1.t …`, `USE db1`), while reads and `SET` still pass. HouseGate logs a startup warning (`rewriter.physical_database is empty: …`) in that configuration; set `physical_database` on any server that runs a rewriter.
 
 An undecodable client Query packet is refused for the same reason: it cannot be rewritten, and forwarding its raw bytes would bypass the rewriter. This refusal happens before HouseGate knows who sent the query, so it also applies to maintenance and platform-operator sessions, whose decoded queries otherwise bypass the rewriter.
 
@@ -62,19 +65,19 @@ rewriter:
   fail_open_on_unavailable: false   # default
 ```
 
-This switch covers only a rewriter that never received the statement: at startup, when the rewriter cannot be built, and per query, when the request cannot be delivered.
+This switch covers only a rewriter that cannot be reached: at startup, when the rewriter cannot be built, and per query, when the request cannot be delivered because of the connection or the query's deadline.
 
 **At startup.** A server that forwards to ClickHouse (a `shard`, an `upstream`, or a cluster injected by an embedding host) builds its rewriter before it listens: it dials the gRPC service, or fetches and loads the native library.
 
 - `false` (default): if that fails (service unreachable, empty `service_addr` with the gRPC engine, library fetch or load failure), startup is refused with an error such as `SQL rewriter unavailable at startup: …; refusing to forward queries without it (set rewriter.fail_open_on_unavailable: true to run without the rewriter)`.
 - `true`: HouseGate logs `SQL rewriter unavailable at startup; running without the rewrite plugin, every query is forwarded unrewritten (rewriter.fail_open_on_unavailable)` and runs for the life of the process with no rewriting at all: no logical-to-physical mapping and no engine policy. Restart once the rewriter is back.
 
-**Per query.** Only a failure before the request left HouseGate counts: the connection to the rewriter is down, the rewriter was closed during shutdown, or the query's deadline expired before the request was sent. HouseGate tells this apart by whether the request message was handed to the transport.
+**Per query.** Only a transport failure before the request left HouseGate counts: the connection to the rewriter is down, the rewriter was closed during shutdown, or the query's deadline or cancellation fired before the request was sent. HouseGate classifies a failure this way only when both hold: the request message was never handed to the transport, and the gRPC status is `Unavailable`, `DeadlineExceeded` or `Canceled`. This is a bounded heuristic, not a proof that the engine never saw the statement: a request queued into a transport that then dies counts as sent (and is refused), and a deadline that expires while a very large request is still being serialised or flow-controlled counts as unavailable.
 
 - `false` (default): the client receives the Exception `rewriter unavailable` and nothing is sent to ClickHouse.
 - `true`: HouseGate logs a warning (`rewriter unavailable; forwarding original SQL (rewriter.fail_open_on_unavailable)`) and forwards the original SQL unrewritten.
 
-Every other failure is a rejection even with the switch on, because it can depend on the statement: an engine status error, a crash mid-call, a deadline that expires after the request was sent, or a native engine error.
+Every other failure is a rejection even with the switch on, because it can depend on the statement: a pre-send failure with any other status (for example a request that fails to serialise), an engine status error, a crash mid-call, a deadline that expires after the request was sent, or a native engine error.
 
 Residual risk with `true`: a statement that crashes the rewriter is itself refused, but while the service restarts every query finds the connection down and is forwarded unrewritten. Anyone who can crash or stall the engine therefore gets a pass-through window. Use `true` only where availability outweighs isolation, for example a single-tenant deployment or local development without a rewriter.
 

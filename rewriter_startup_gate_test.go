@@ -3,11 +3,18 @@ package housegate
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"net"
 	"strings"
+	"sync"
 	"testing"
+
+	pb "github.com/housegate/rewriter-proto/gen/pb"
+	"google.golang.org/grpc"
 
 	"github.com/housegate/housegate/pkg/cluster"
 	"github.com/housegate/housegate/pkg/config"
+	"github.com/housegate/housegate/pkg/log"
 	"github.com/housegate/housegate/pkg/network"
 	"github.com/housegate/housegate/pkg/plugins/rewrite"
 	"github.com/housegate/housegate/pkg/rewriter"
@@ -175,5 +182,85 @@ func TestBuildServer_TypedNilInjectedRewriterIsGated(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "rewriter.fail_open_on_unavailable") {
 		t.Fatalf("err = %v, want it to name rewriter.fail_open_on_unavailable", err)
+	}
+}
+
+// warnCapture records warn-level messages.
+type warnCapture struct {
+	mu   sync.Mutex
+	msgs []string
+}
+
+func (h *warnCapture) Enabled(context.Context, slog.Level) bool { return true }
+func (h *warnCapture) Handle(_ context.Context, r slog.Record) error {
+	if r.Level >= slog.LevelWarn {
+		h.mu.Lock()
+		h.msgs = append(h.msgs, r.Message)
+		h.mu.Unlock()
+	}
+	return nil
+}
+func (h *warnCapture) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *warnCapture) WithGroup(string) slog.Handler      { return h }
+
+func (h *warnCapture) has(substr string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, m := range h.msgs {
+		if strings.Contains(m, substr) {
+			return true
+		}
+	}
+	return false
+}
+
+// startStubRewriterService serves a gRPC rewriter that accepts everything.
+type stubRewriterService struct {
+	pb.UnimplementedRewriterServiceServer
+}
+
+func (stubRewriterService) Rewrite(_ context.Context, req *pb.RewriteSQLRequest) (*pb.RewriteSQLResponse, error) {
+	return &pb.RewriteSQLResponse{Code: pb.RewriteCode_Success, SqlAfterRewrite: req.GetSql()}, nil
+}
+
+func startStubRewriterService(t *testing.T) string {
+	t.Helper()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gs := grpc.NewServer()
+	pb.RegisterRewriterServiceServer(gs, stubRewriterService{})
+	go func() { _ = gs.Serve(lis) }()
+	t.Cleanup(gs.Stop)
+	return lis.Addr().String()
+}
+
+// TestBuildServer_WarnsWhenRewriterHasNoPhysicalDatabase pins re-review R3:
+// with a rewriter and an empty rewriter.physical_database the engine has no
+// database map, so every write, USE or EXISTS naming a logical database is
+// refused; startup says so.
+func TestBuildServer_WarnsWhenRewriterHasNoPhysicalDatabase(t *testing.T) {
+	addr := startStubRewriterService(t)
+	for _, tc := range []struct {
+		physical string
+		wantWarn bool
+	}{{"", true}, {"phys", false}} {
+		capture := &warnCapture{}
+		previous := log.Default()
+		log.SetDefault(log.New(capture))
+		cfg := minimalServerCfg(t)
+		cfg.Rewriter.Engine = "grpc"
+		cfg.Rewriter.ServiceAddr = addr
+		cfg.Rewriter.PhysicalDatabase = tc.physical
+		bs, err := buildServer(Options{Config: cfg, NetworkState: network.NewInMemoryNetworkState()}, nil)
+		log.SetDefault(previous)
+		if err != nil {
+			t.Fatalf("physical=%q: buildServer: %v", tc.physical, err)
+		}
+		bs.teardown()
+		if got := capture.has("rewriter.physical_database is empty"); got != tc.wantWarn {
+			t.Fatalf("physical=%q: warning = %v, want %v (warnings %v)", tc.physical, got, tc.wantWarn, capture.msgs)
+		}
 	}
 }
