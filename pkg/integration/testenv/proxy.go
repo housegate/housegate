@@ -194,6 +194,7 @@ func startProxy(t *testing.T, cfg *config.Config, proxyOpts ...ProxyOption) *Tes
 	for _, o := range proxyOpts {
 		o(cfg, &hgOpts)
 	}
+	allowRunningWithoutRewriter(cfg, hgOpts)
 
 	proxy, err := housegate.New(hgOpts)
 	if err != nil {
@@ -278,9 +279,9 @@ shards:
 	cfg.CkhManagerConfigPath = ckhManagerPath
 	cfg.Auth.Enabled = false
 	cfg.Auth.AllowNoAuth = true
-	// Empty ServiceAddr → no rewriter gRPC dial; OnQuery becomes a
-	// no-op for SQL rewriting. The rewrite plugin still loads and is
-	// fail-open at the Factory layer.
+	// Empty ServiceAddr → no rewriter: the factory cannot be built and
+	// startProxy sets rewriter.fail_open_on_unavailable, so the proxy runs
+	// without the rewrite plugin (see allowRunningWithoutRewriter).
 	cfg.Rewriter.ServiceAddr = ""
 	cfg.Rewriter.PhysicalDatabase = ""
 	return cfg
@@ -327,6 +328,22 @@ func buildRouterOnlyServerConfig(t *testing.T) *config.Config {
 	cfg.Rewriter.ServiceAddr = ""
 	cfg.Rewriter.PhysicalDatabase = ""
 	return cfg
+}
+
+// allowRunningWithoutRewriter maps testenv's "no rewriter" convention (a
+// gRPC engine with an empty service address, the default config posture)
+// onto rewriter.fail_open_on_unavailable. Since spec 2026-09-26 T8 an
+// unbuildable rewriter is fatal at startup unless that switch is set, and a
+// real deployment must set it explicitly; tests that configure a rewriter
+// (the mock, the native engine, an injected factory) are unaffected, and
+// storage integrity never gets the switch.
+func allowRunningWithoutRewriter(cfg *config.Config, opts housegate.Options) {
+	if opts.Rewriter != nil || cfg.StorageIntegrity.IsEnabled() {
+		return
+	}
+	if cfg.Rewriter.Engine != rewriter.EngineNative && cfg.Rewriter.ServiceAddr == "" {
+		cfg.Rewriter.FailOpenOnUnavailable = true
+	}
 }
 
 func mustReplica(t *testing.T, addr string) cluster.ReplicaConfig {

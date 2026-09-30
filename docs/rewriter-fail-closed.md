@@ -37,10 +37,23 @@ rewriter:
   fail_open_on_unavailable: false   # default
 ```
 
-This switch covers only a rewriter that cannot answer: a dial failure, a call timeout, a nil response, a rewriter closed during shutdown, or a failed network-state lookup while building the request.
+This switch covers only a rewriter that cannot answer, at startup or per query.
+
+**At startup.** A server with a `shard` or `upstream` builds its rewriter before it listens: it dials the gRPC service, or fetches and loads the native library.
+
+- `false` (default): if that fails (service unreachable, empty `service_addr` with the gRPC engine, library fetch or load failure), startup is refused with an error such as `SQL rewriter unavailable at startup: …; refusing to forward queries without it (set rewriter.fail_open_on_unavailable: true to run without the rewriter)`.
+- `true`: HouseGate logs `SQL rewriter unavailable at startup; running without the rewrite plugin, every query is forwarded unrewritten (rewriter.fail_open_on_unavailable)` and runs for the life of the process with no rewriting at all: no logical-to-physical mapping and no engine policy. Restart once the rewriter is back.
+
+**Per query.** Once running, a dial failure, a call timeout, a nil response, a rewriter closed during shutdown, or a failed network-state lookup while building the request:
 
 - `false` (default): the client receives an Exception `rewrite unavailable: …` and nothing is sent to ClickHouse.
-- `true`: HouseGate logs a warning (`rewriter unavailable; forwarding original SQL (rewriter.fail_open_on_unavailable)`) and forwards the original SQL unrewritten. Use it only where availability outweighs isolation, for example a single-tenant deployment. While the rewriter is down every query runs against ClickHouse without logical-to-physical mapping or any engine policy.
+- `true`: HouseGate logs a warning (`rewriter unavailable; forwarding original SQL (rewriter.fail_open_on_unavailable)`) and forwards the original SQL unrewritten.
+
+Use `true` only where availability outweighs isolation, for example a single-tenant deployment or local development without a rewriter.
+
+**Servers that never rewrite.** A router-only server (no `shard`, no `upstream`) forwards whole connections to peers and never builds a rewriter, so it starts regardless of the rewriter settings and this switch. An embedding host that injects its own rewriter factory is not subject to the startup check either.
+
+**Upgrading.** A server with an `upstream` that has been running without a working rewriter (the old warn-and-continue startup) now refuses to start. Either point it at a rewriter (`engine: native` with `native_library_release`, or `engine: grpc` with a reachable `service_addr`), or set `fail_open_on_unavailable: true` deliberately.
 
 It never applies to a rejection: an engine answer is always enforced.
 
@@ -48,6 +61,5 @@ It never applies to a rejection: an engine answer is always enforced.
 
 ## What the switch does not cover
 
-- **Startup.** With storage integrity disabled, a rewriter backend that cannot be built at startup (gRPC service unreachable, native library missing) still logs a warning and runs without the rewriter for the life of the process. Watch for `failed to create rewriter factory, rewriting disabled` and `failed to fetch native rewriter library, rewriting disabled` in the startup log. With storage integrity enabled, startup is refused instead.
 - **Sessions that bypass the rewriter.** Maintenance sessions (indexer-signed), platform-operator sessions and peer-trusted sessions arriving from another HouseGate never call the rewriter, so neither rejections nor the switch apply to them. On an origin HouseGate that forwards a whole session to a peer, the receiving HouseGate runs the rewriter and enforces its answer. Keep `internal_listen` reachable only from trusted peer subnets.
 - **The agent's `materialize` step.** The agent-side `MaterializeSQL` call is a determinism aid, not an isolation boundary: on failure it leaves the statement unchanged, and the server-side HouseGate still rewrites and enforces the result. The signed inline-VALUES lane already refuses a statement whose materialization failed.

@@ -106,8 +106,9 @@ func privilegesDeltasFromProto(in []*pb.PrivilegeDelta) []sqlmeta.PrivilegeDelta
 //
 // Construction builds the configured backend synchronously — dialing
 // the gRPC service or loading the native FFI library — and fails fast
-// either way; the proxy treats a missing rewriter as "rewriting
-// disabled" rather than continuing to retry forever.
+// either way rather than retrying forever; buildServer then refuses
+// startup unless rewriter.fail_open_on_unavailable allows running without
+// the rewriter.
 type SentioNetworkFactory struct {
 	options      Options
 	registry     registry.Registry

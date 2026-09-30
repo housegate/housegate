@@ -10,7 +10,7 @@ import (
 )
 
 func TestBuildServer_ReplicationProxyKeeperAddsListenerRunner(t *testing.T) {
-	cfg := minimalServerCfg(t)
+	cfg := withoutRewriter(minimalServerCfg(t))
 	cfg.Listen = "127.0.0.1:9000"
 	cfg.ReplicationProxy.Keeper.Enabled = true
 	cfg.ReplicationProxy.Keeper.Listen = "127.0.0.1:9181"
@@ -42,7 +42,7 @@ func TestBuildServer_ReplicationProxyKeeperAddsListenerRunner(t *testing.T) {
 }
 
 func TestBuildServer_ReplicationProxyInterserverAddsListenerRunner(t *testing.T) {
-	cfg := minimalServerCfg(t)
+	cfg := withoutRewriter(minimalServerCfg(t))
 	cfg.Listen = "127.0.0.1:9000"
 	cfg.IndexerID = 1000
 	cfg.RelayPrivateKeyHex = "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"

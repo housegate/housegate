@@ -36,8 +36,9 @@ type Config struct {
 	// NativeLibraryRelease names a rewriter-go release tag (e.g. "v0.2.0")
 	// to fetch the FFI library from when the native engine is selected and
 	// NativeLibraryPath is empty. The library is cached under the user
-	// cache dir and downloaded only on miss; fetch failure disables
-	// rewriting (fail-open), like any other backend-unavailable case.
+	// cache dir and downloaded only on miss; a fetch failure is a startup
+	// failure like any other unbuildable backend (fatal unless
+	// FailOpenOnUnavailable with storage integrity disabled).
 	NativeLibraryRelease string `json:"native_library_release" yaml:"native_library_release"`
 
 	// NativeLibrarySHA256 optionally pins the library's sha256 (64 hex
@@ -53,8 +54,10 @@ type Config struct {
 
 	// FailOpenOnUnavailable forwards the original SQL, with a warning,
 	// when the rewriter is unreachable (dial, timeout, nil response, closed
-	// rewriter). Default false: the client gets an Exception. Engine
-	// rejections are never fail-open. Invalid together with
+	// rewriter), and lets a server whose rewriter cannot be built at
+	// startup run without the rewrite plugin. Default false: the client
+	// gets an Exception, and an unbuildable rewriter is fatal at startup.
+	// Engine rejections are never fail-open. Invalid together with
 	// storage_integrity.enabled (spec 2026-09-26 T8).
 	FailOpenOnUnavailable bool `json:"fail_open_on_unavailable" yaml:"fail_open_on_unavailable"`
 }

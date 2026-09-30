@@ -100,6 +100,18 @@ func minimalServerCfg(t *testing.T) *config.Config {
 	return &cfg
 }
 
+// withoutRewriter makes cfg a server that runs without a SQL rewriter: no
+// backend is configured, so its factory cannot be built, and
+// rewriter.fail_open_on_unavailable lets startup continue without the rewrite
+// plugin (spec 2026-09-26 T8). For tests that exercise wiring unrelated to
+// rewriting; it also avoids a 5s dial to the default service address.
+func withoutRewriter(cfg *config.Config) *config.Config {
+	cfg.Rewriter.Engine = rewriter.EngineGRPC
+	cfg.Rewriter.ServiceAddr = ""
+	cfg.Rewriter.FailOpenOnUnavailable = true
+	return cfg
+}
+
 // minimalRouterOnlyCfg returns a server-mode Config with neither shard
 // nor upstream — the router-only deployment that Phase 5 collapses
 // forwarding-only into.
@@ -674,7 +686,7 @@ func (m *recordingAgentMaterializer) Close() error {
 }
 
 func TestBuildServer_TwoListenersWhenInternalListenSet(t *testing.T) {
-	cfg := minimalServerCfg(t)
+	cfg := withoutRewriter(minimalServerCfg(t))
 	cfg.Listen = "127.0.0.1:0"
 	cfg.InternalListen = "127.0.0.1:0"
 
@@ -721,7 +733,7 @@ func TestBuildServer_TwoListenersWhenInternalListenSet(t *testing.T) {
 }
 
 func TestBuildServer_OneListenerWhenInternalListenEmpty(t *testing.T) {
-	cfg := minimalServerCfg(t)
+	cfg := withoutRewriter(minimalServerCfg(t))
 	cfg.Listen = "127.0.0.1:0"
 	cfg.InternalListen = ""
 

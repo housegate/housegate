@@ -47,8 +47,9 @@ type grpcBackend struct {
 }
 
 // newGRPCBackend dials the sql-rewriter service synchronously and fails
-// fast if it cannot connect — the proxy treats a missing rewriter as
-// "rewriting disabled" rather than retrying forever.
+// fast if it cannot connect rather than retrying forever; buildServer then
+// refuses startup unless rewriter.fail_open_on_unavailable allows running
+// without the rewriter.
 func newGRPCBackend(opts Options) (*grpcBackend, error) {
 	if opts.ServiceAddr == "" {
 		return nil, fmt.Errorf("rewriter service_addr is required when rewriter engine is %q", EngineGRPC)

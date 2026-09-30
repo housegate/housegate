@@ -50,8 +50,8 @@ rewriter:
   timeout: "5s"
   physical_database: testnet
   delimiter: "."
-  # Every rewriter rejection fails closed. This switch only forwards the original SQL when the
-  # rewriter is unreachable (dial, timeout); invalid with storage_integrity. See docs/rewriter-fail-closed.md.
+  # Every rewriter rejection fails closed. An unreachable rewriter refuses startup (and fails each
+  # query) unless this switch is on; invalid with storage_integrity. See docs/rewriter-fail-closed.md.
   # fail_open_on_unavailable: false
 
 agent:

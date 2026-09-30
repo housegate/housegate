@@ -284,7 +284,8 @@ type Options struct {
 	AuthEnabled bool
 
 	// FailOpenOnUnavailable is rewriter.fail_open_on_unavailable (spec
-	// 2026-09-26 T8). It covers transport and availability failures only
+	// 2026-09-26 T8); the startup half is enforced by buildServer. Here it
+	// covers per-query transport and availability failures only
 	// (dial, timeout, nil response, closed rewriter, network-state lookup):
 	// with it set and storage integrity disabled, Rewrite returns a plain
 	// error so the plugin can log and forward the original SQL. Default
