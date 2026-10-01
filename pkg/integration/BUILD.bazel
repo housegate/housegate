@@ -43,6 +43,7 @@ go_test(
         "storage_integrity_read_test.go",
         "storage_integrity_table_state_test.go",
         "storage_promotion_mvp_test.go",
+        "table_reference_driver_test.go",
         "table_reference_hardening_test.go",
         "upstream_dies_test.go",
         "usage_test.go",

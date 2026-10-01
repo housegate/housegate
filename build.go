@@ -775,7 +775,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		log.Infow("lthash commitment plugin enabled (MVP)")
 	}
 
-	sessstatePlug := &sessionstate.Plugin{Config: cfg.State}
+	sessstatePlug := &sessionstate.Plugin{Config: cfg.State, PhysicalDatabase: cfg.Rewriter.PhysicalDatabase}
 
 	var selfIndexerID uint64
 	if opts.GetIndexerId != nil {

@@ -44,6 +44,21 @@ tableref_guard:
 
 Every hit, refused or observed, increments `clickhouse_proxy_tableref_guard_rejections_total{rule="…"}` (`rule` is one of the six names above); `observe` also logs a warning naming the rule. Rollout (spec §11): run one release cycle with `mode: observe` on devnet2 and require `rule="identifier_placeholder"` and `rule="escaped_identifier"` to stay at zero for driver and processor traffic before switching production to `enforce`.
 
+## Sessions that connect to the physical database
+
+The Sentio indexer driver connects through its agent sidecar with the ClientHello database set to `rewriter.physical_database` (production `charts/sentio-node` sets `housegate_dsn` to `clickhouse://default@<sidecar>/<physicalDatabase>`), and other internal services do the same. That name is not a logical database, so HouseGate gives such a session no logical context: every rewriter request carries an empty `upstream_logical_database_in_context`. The engines then rewrite qualified logical names (`` `p1_0`.`events` `` reads ``phys.`p1_0.events` ``), pass the allowlisted `system` reads that bind the physical name as a string literal (`system.tables WHERE database = 'phys'`), and refuse an unqualified table name (`unqualified table "<t>" does not resolve through the session's logical database`). Before this was fixed the session's logical context was the physical database itself, which is in `protected_databases`, and the v0.16.0 engines refused every statement on it. The guard and the Query-packet check run on these sessions as on any driver session; the guard still refuses the physical database as a qualifier.
+
+Measured on the native engine (rewriter-go v0.16.0) with the driver's own statement shapes (sentio-core `common/chx` and `common/clickhousemanager`), through a real sidecar and relay (`TestTableReference_SentioDriverPhysicalHelloDatabase`): `CREATE DATABASE IF NOT EXISTS`, `CREATE TABLE … ENGINE = MergeTree()`, the `ALTER TABLE` column, comment and setting changes, batch `INSERT`, `INSERT … SELECT`, lightweight `DELETE`, `ALTER TABLE … DELETE`, `DROP VIEW` and the `system.tables`, `columns`, `data_skipping_indices`, `projections`, `parts` and `mutations` reads all pass. Four driver shapes are refused by the native engine with `UnsupportedStatement` whatever the session context; these are engine parse gaps, not the table-reference policy:
+
+- the cluster probe (`SELECT cluster FROM (… WHERE cluster not like 'all-%' …)`); the driver logs the failure and runs without a cluster;
+- `CREATE OR REPLACE VIEW … AS (…) COMMENT '…'`;
+- `CREATE MATERIALIZED VIEW … TO … AS (…) COMMENT '…'`;
+- the patch-part probe before a lightweight delete (`… AND startsWith(name, 'patch-')`).
+
+These shapes have not been measured on rewriter-grpc 0.16.0, the engine the HouseGate deployments run; measure them against the released image together with the startup probe smoke before the rollout.
+
+A cluster-aware driver is not supported. When the ClickHouse behind HouseGate reports a cluster with more than one replica and a local one (`system.clusters`, names starting with `all-` excluded), the driver adds `ON CLUSTER` to its DDL, issues `SYSTEM SYNC REPLICA ON CLUSTER`, and creates `ReplicatedMergeTree('/clickhouse/tables/…', '{replica}')` tables; the engines and the guard refuse a `Replicated*` engine with arguments, and the engines refuse `SYSTEM`. As of `sentioxyz/production` `218c3b43a` no HouseGate-fronted ClickHouse has such a cluster: devnet2 and testnet-v2 run Altinity installations whose `node-a` / `node-b` clusters are one shard of one replica each, and so are the storage-integrity `source` / `verifier-*` clusters. Keep it that way, or extend the policy first.
+
 ## Settings in the native Query packet
 
 ClickHouse clients can send per-query settings in the native Query packet, outside the SQL text, where the rewriter never sees them; `clickhouse-client` copies a `SETTINGS` clause and command-line settings there, and expands `--compatibility=21.1` into `compatibility`, `enable_global_with_statement = 0`, `legacy_column_name_of_tuple_literal = 1` and `allow_experimental_analyzer = 0`. HouseGate refuses, before forwarding, the settings the rewriter refuses in SQL:

@@ -44,6 +44,30 @@ func TestOnHello_EmptyDatabase_NoOp(t *testing.T) {
 	}
 }
 
+// TestOnHello_PhysicalDatabaseIsNoLogicalContext: a hello database equal to
+// rewriter.physical_database (the Sentio driver's DSN database) leaves the
+// session without a logical context; any other name is still recorded.
+func TestOnHello_PhysicalDatabaseIsNoLogicalContext(t *testing.T) {
+	p := &Plugin{PhysicalDatabase: "phys"}
+	for _, tc := range []struct{ hello, want string }{
+		{"phys", ""},
+		{"db1", "db1"},
+		{"PHYS", "PHYS"}, // ClickHouse database names are case-sensitive
+	} {
+		s := chsession.NewSessionState()
+		hello := &chproto.ClientHello{Database: tc.hello}
+		if err := p.OnHello(context.Background(), sessionWithState(s), hello); err != nil {
+			t.Fatalf("OnHello(%q): %v", tc.hello, err)
+		}
+		if got := s.Snapshot().LogicalDatabase; got != tc.want {
+			t.Errorf("hello %q: LogicalDatabase=%q, want %q", tc.hello, got, tc.want)
+		}
+		if hello.Database != tc.hello {
+			t.Errorf("hello.Database=%q was mutated; want %q", hello.Database, tc.hello)
+		}
+	}
+}
+
 // sessionWithState returns a minimal Session backed by the given state.
 func sessionWithState(s *chsession.SessionState) chsession.Session {
 	return &stateOnlySession{state: s}
