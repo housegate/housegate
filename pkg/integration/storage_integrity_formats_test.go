@@ -4,7 +4,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/housegate/housegate/pkg/config"
 	"github.com/housegate/housegate/pkg/integration/testenv"
 	sicore "github.com/housegate/housegate/pkg/storageintegrity"
 )
@@ -47,16 +46,12 @@ var signableInsertFormats = []struct {
 func TestCLI_SignableInsertFormatsShareOneWirePayload(t *testing.T) {
 	bin := testenv.ClickHouseCLI(t)
 	const networkID = "itest-net"
-	// The SQL is fully qualified and ClientHello.Database stays empty, because
-	// the 25.8 client copies --database into Query settings and that unsigned
-	// setting is correctly refused. One physical context keeps the rewriter mock
-	// classifying those fully-qualified INSERTs.
-	agentProxy, consumer := startSIAgentPair(t, networkID,
-		testenv.WithConfigMutator(func(cfg *config.Config) {
-			cfg.Rewriter.PhysicalDatabase = chEnv.Database
-		}),
-	)
-	insert := "INSERT INTO " + chEnv.Database + ".si_events FORMAT "
+	// The SQL is fully qualified with the logical database and
+	// ClientHello.Database stays empty, because the 25.8 client copies
+	// --database into Query settings and that unsigned setting is correctly
+	// refused.
+	agentProxy, consumer := startSIAgentPair(t, networkID)
+	insert := "INSERT INTO " + siTenantDB + ".si_events FORMAT "
 
 	for _, tc := range signableInsertFormats {
 		out, err := testenv.RunCLIStdin(t, bin, agentProxy.Addr, "", insert+tc.format, tc.stdin)

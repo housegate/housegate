@@ -194,7 +194,8 @@ func TestStorageIntegrityRead_SafeAndUnsafeLatest(t *testing.T) {
 // test for the two Critical Spec I findings: SYSTEM START MERGES could mutate
 // the candidate-part boundary, and TRUNCATE DATABASE could empty authoritative
 // committed state after a target-less engine rejection. Both statements must
-// be Exceptions and both physical tables must remain untouched.
+// be Exceptions and both physical tables must remain untouched, whether the
+// table-reference guard (enforcing) or the engine (guard observing) refuses.
 func TestStorageIntegrityRead_CriticalStatementsAreRefused(t *testing.T) {
 	lib := os.Getenv("POLYGLOT_SQL_FFI_PATH")
 	if lib == "" {
@@ -255,43 +256,64 @@ func TestStorageIntegrityRead_CriticalStatementsAreRefused(t *testing.T) {
 			unsafePartsBefore, unsafeRowsBefore, safePartsBefore, safeRowsBefore)
 	}
 
+	// Each statement runs twice. With the table-reference guard observing,
+	// the engine's storage-integrity refusal answers (the original proof,
+	// still the engine's own line of defence); with it enforcing (the
+	// default), the guard's reserved-name rule answers first (spec 2026-09-26
+	// G1) wherever a reserved database is named. Either way the statement is
+	// an Exception and the physical tables stay untouched.
 	port := &siReadStateStub{parts: map[string][]string{}}
-	proxy := testenv.StartServerProxy(t, chEnv.Addr,
-		testenv.WithExtraDatabases("db1"),
-		testenv.WithStorageIntegrityReadState(port),
-		testenv.WithConfigMutator(func(cfg *config.Config) {
-			cfg.Rewriter.Engine = "native"
-			cfg.Rewriter.NativeLibraryPath = lib
-			cfg.Rewriter.PhysicalDatabase = phys
-			cfg.StorageIntegrity.Tables = []string{"db1.guard"}
-			cfg.StorageIntegrity.Read.DefaultMode = string(rewriter.ReadModeSafe)
-		}),
-	)
-	conn := openConn(t, proxy.Addr)
+	conns := map[string]clickhouse.Conn{}
+	for _, mode := range []string{"observe", "enforce"} {
+		proxy := testenv.StartServerProxy(t, chEnv.Addr,
+			testenv.WithExtraDatabases("db1"),
+			testenv.WithStorageIntegrityReadState(port),
+			testenv.WithConfigMutator(func(cfg *config.Config) {
+				cfg.Rewriter.Engine = "native"
+				cfg.Rewriter.NativeLibraryPath = lib
+				cfg.Rewriter.PhysicalDatabase = phys
+				cfg.StorageIntegrity.Tables = []string{"db1.guard"}
+				cfg.StorageIntegrity.Read.DefaultMode = string(rewriter.ReadModeSafe)
+				cfg.TableRefGuard.Mode = mode
+			}),
+		)
+		conns[mode] = openConn(t, proxy.Addr)
+	}
 
 	for _, tc := range []struct {
-		name        string
-		sql         string
-		wantMessage string
+		name          string
+		sql           string
+		engineMessage string
+		guardMessage  string
 	}{
 		{"system start merges on the unsafe namespace", "SYSTEM START MERGES hg_unsafe.db1__guard",
-			"storage-integrity physical table hg_unsafe.db1__guard is not directly addressable"},
+			"storage-integrity physical table hg_unsafe.db1__guard is not directly addressable",
+			"table-reference guard: reserved_name: reserved database hg_unsafe is not addressable"},
 		{"system stop merges on the safe namespace", "SYSTEM STOP MERGES hg_safe.db1__guard",
-			"storage-integrity physical table hg_safe.db1__guard is not directly addressable"},
+			"storage-integrity physical table hg_safe.db1__guard is not directly addressable",
+			"table-reference guard: reserved_name: reserved database hg_safe is not addressable"},
 		{"truncate the safe database", "TRUNCATE DATABASE hg_safe",
-			"storage-integrity physical database hg_safe is not directly addressable"},
+			"storage-integrity physical database hg_safe is not directly addressable",
+			"table-reference guard: reserved_name: reserved database hg_safe is not addressable"},
 		{"unmodelled statement naming nothing storage-integrity", "SYSTEM RELOAD CONFIG",
+			"statement class is not modelled by the rewriter",
 			"statement class is not modelled by the rewriter"},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			err := conn.Exec(ctx, tc.sql)
-			if err == nil {
-				t.Fatalf("%q must be refused with an Exception", tc.sql)
-			}
-			if !strings.Contains(err.Error(), tc.wantMessage) {
-				t.Fatalf("%q error = %v, want it to contain %q", tc.sql, err, tc.wantMessage)
-			}
-		})
+		for _, mode := range []string{"observe", "enforce"} {
+			t.Run(mode+"/"+tc.name, func(t *testing.T) {
+				want := tc.engineMessage
+				if mode == "enforce" {
+					want = tc.guardMessage
+				}
+				err := conns[mode].Exec(ctx, tc.sql)
+				if err == nil {
+					t.Fatalf("%q must be refused with an Exception", tc.sql)
+				}
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("%q error = %v, want it to contain %q", tc.sql, err, want)
+				}
+			})
+		}
 	}
 
 	if got := activeParts("hg_unsafe", "db1__guard"); got != unsafePartsBefore {
@@ -307,12 +329,14 @@ func TestStorageIntegrityRead_CriticalStatementsAreRefused(t *testing.T) {
 		t.Fatalf("hg_safe rows = %d, want %d; TRUNCATE DATABASE must never reach ClickHouse", got, safeRowsBefore)
 	}
 
-	var count uint64
-	if err := conn.QueryRow(ctx, "SELECT count() FROM db1.guard").Scan(&count); err != nil {
-		t.Fatalf("SELECT after refusals: %v", err)
-	}
-	if count != safeRowsBefore {
-		t.Fatalf("safe-mode count = %d, want %d", count, safeRowsBefore)
+	for mode, conn := range conns {
+		var count uint64
+		if err := conn.QueryRow(ctx, "SELECT count() FROM db1.guard").Scan(&count); err != nil {
+			t.Fatalf("%s: SELECT after refusals: %v", mode, err)
+		}
+		if count != safeRowsBefore {
+			t.Fatalf("%s: safe-mode count = %d, want %d", mode, count, safeRowsBefore)
+		}
 	}
 }
 

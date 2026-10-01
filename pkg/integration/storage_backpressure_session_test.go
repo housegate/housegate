@@ -14,7 +14,6 @@ import (
 	siplugin "github.com/housegate/housegate/pkg/plugins/storageintegrity"
 	"github.com/housegate/housegate/pkg/registry"
 	sicore "github.com/housegate/housegate/pkg/storageintegrity"
-	pb "github.com/housegate/rewriter-proto/gen/pb"
 )
 
 // throttlingConsumer refuses the first admission the way the real ingress does
@@ -53,26 +52,21 @@ func TestStorageIntegrity_BackpressureKeepsTheClientSession(t *testing.T) {
 	}
 	ch := openConn(t, chEnv.Addr)
 	if err := ch.Exec(context.Background(),
-		"CREATE TABLE IF NOT EXISTS "+chEnv.Database+".si_events (id UInt64, region String) ENGINE = MergeTree ORDER BY id"); err != nil {
+		"CREATE TABLE IF NOT EXISTS "+siEventsPhysical()+" (id UInt64, region String) ENGINE = MergeTree ORDER BY id"); err != nil {
 		t.Fatalf("create table: %v", err)
 	}
 	consumer := &throttlingConsumer{}
-	rewriterOpt, rewriterMock := testenv.WithRewriterMock(t)
-	rewriterMock.SetAccessedTables("INSERT INTO "+chEnv.Database+".si_events", []*pb.AccessedTable{{
-		OriginalDatabase:   chEnv.Database,
-		OriginalTable:      "si_events",
-		LogicalDatabase:    chEnv.Database,
-		PhysicalDatabase:   chEnv.Database,
-		IsStorageIntegrity: true,
-	}})
+	rewriterOpt := siTenantMock(t)
 	server := testenv.StartServerProxy(t, chEnv.Addr,
 		rewriterOpt,
+		testenv.WithExtraDatabases(siTenantDB),
 		authProxyConfig([]string{signer.Address()}, false),
-		testenv.WithDatabasePermission(signer.Address(), chEnv.Database, registry.DbAuthWrite),
+		testenv.WithDatabasePermission(signer.Address(), siTenantDB, registry.DbAuthWrite),
 		withDeclaredSchema(t, networkID),
 		testenv.WithConfigMutator(func(cfg *config.Config) {
-			// Keep one physical context so the rewriter mock still classifies
-			// fully-qualified queries when ClientHello.Database is empty.
+			// The physical database is configured, so the table-reference
+			// guard's physical-database rule is live; the client writes the
+			// logical siTenantDB and the mock maps it (spec 2026-09-26 G2).
 			cfg.Rewriter.PhysicalDatabase = chEnv.Database
 			cfg.StorageIntegrity.Ingress.Enabled = true
 			cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{signer.Address()}
@@ -92,11 +86,12 @@ func TestStorageIntegrity_BackpressureKeepsTheClientSession(t *testing.T) {
 		}),
 	)
 
-	// The SQL is fully qualified, so leave ClientHello.Database unset. The
-	// 25.8 client used by CI otherwise copies --database into Query settings;
-	// that unsigned setting is correctly refused before pressure admission.
+	// The SQL is fully qualified with the logical database, so leave
+	// ClientHello.Database unset. The 25.8 client used by CI otherwise copies
+	// --database into Query settings; that unsigned setting is correctly
+	// refused before pressure admission.
 	out, err := testenv.RunCLIMultiqueryIgnoreError(t, bin, agentProxy.Addr, "",
-		"INSERT INTO "+chEnv.Database+".si_events FORMAT CSVWithNames; SELECT 42", "id,region\n1,eu\n")
+		"INSERT INTO "+siTenantDB+".si_events FORMAT CSVWithNames; SELECT 42", "id,region\n1,eu\n")
 	if !strings.Contains(out, "252") && !strings.Contains(out, "TOO_MANY_PARTS") {
 		t.Fatalf("client did not see exception 252 (exec err %v):\n%s", err, out)
 	}

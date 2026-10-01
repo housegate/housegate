@@ -51,3 +51,24 @@ func TestRewriterMock_AnswersTheStartupProbeWithoutRecordingIt(t *testing.T) {
 		t.Fatalf("SeenSQL = %q, want the session query recorded", seen)
 	}
 }
+
+// TestRewriterMock_MapDatabase pins the textual qualifier swap: only an
+// unquoted `<logical>.` at an identifier boundary is replaced, and the
+// AccessedTables prefix still matches the SQL as received.
+func TestRewriterMock_MapDatabase(t *testing.T) {
+	m := StartRewriterMock(t)
+	m.MapDatabase("tenant", "phys")
+	m.SetAccessedTables("INSERT INTO tenant.t", []*pb.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "t"}})
+	resp, err := m.Rewrite(context.Background(), &pb.RewriteSQLRequest{
+		Sql: "INSERT INTO tenant.t SELECT * FROM tenant.u, xtenant.v, tenant_2.w WHERE tenant = 1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "INSERT INTO phys.t SELECT * FROM phys.u, xtenant.v, tenant_2.w WHERE tenant = 1"; resp.GetSqlAfterRewrite() != want {
+		t.Fatalf("SqlAfterRewrite = %q, want %q", resp.GetSqlAfterRewrite(), want)
+	}
+	if got := resp.GetOriginalAccessedTables(); len(got) != 1 || got[0].GetOriginalDatabase() != "tenant" {
+		t.Fatalf("OriginalAccessedTables = %v, want the prefix matched on the received SQL", got)
+	}
+}

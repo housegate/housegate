@@ -21,7 +21,8 @@ import (
 // dozen other transformations; the mock parses NOTHING.
 //
 // What it does:
-//   - Returns the input SQL unchanged in `sql_after_rewrite`.
+//   - Returns the input SQL unchanged in `sql_after_rewrite`, except
+//     for the database qualifiers a test maps with MapDatabase.
 //   - Classifies the statement by case-insensitive keyword prefix.
 //     That single byte of metadata is what unblocks commitgate's
 //     PermissionObserver (which rejects every Unspecified statement)
@@ -36,10 +37,11 @@ import (
 //
 // What it does NOT do:
 //   - No AST parsing, no table-name prefix injection, no
-//     `database_map` consumption, no `remote()` cross-indexer
-//     routing — those features are part of the closed-source
-//     production rewriter and are out of scope for the open-source
-//     integration suite.
+//     `database_map` consumption (MapDatabase is a test-declared
+//     textual qualifier swap, not the engine's mapping), no
+//     `remote()` cross-indexer routing — those features are part of
+//     the closed-source production rewriter and are out of scope for
+//     the open-source integration suite.
 //
 // Forward-compat: embeds UnimplementedRewriterServiceServer so a new
 // RPC added to the proto file fails to compile here rather than
@@ -66,6 +68,10 @@ type RewriterMock struct {
 	// avoid matching unrelated statements (e.g. "CREATE TABLE " not
 	// "CREATE").
 	accessed map[string][]*pb.AccessedTable
+
+	// databases maps a logical database qualifier to the physical
+	// database the mock substitutes in sql_after_rewrite (MapDatabase).
+	databases map[string]string
 }
 
 // StartRewriterMock binds 127.0.0.1:0, starts a gRPC server with the
@@ -153,6 +159,51 @@ func (m *RewriterMock) SetAccessedTables(prefix string, tables []*pb.AccessedTab
 	m.accessed[strings.ToUpper(prefix)] = tables
 }
 
+// MapDatabase makes the mock rewrite every `<logical>.` qualifier in the
+// SQL it returns to `<physical>.`, the way a real engine resolves a
+// tenant's logical database to the deployment's physical one. Tenant SQL
+// must name logical databases only (the table-reference guard refuses the
+// physical database, spec 2026-09-26 G2), so a test whose statements must
+// still reach a real ClickHouse table maps the logical name here. The swap
+// is textual: an unquoted logical name at an identifier boundary followed
+// by '.'. SetAccessedTables prefixes still match the SQL as received.
+func (m *RewriterMock) MapDatabase(logical, physical string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.databases == nil {
+		m.databases = make(map[string]string)
+	}
+	m.databases[logical] = physical
+}
+
+// mapDatabases applies the MapDatabase substitutions to sql.
+func mapDatabases(sql string, databases map[string]string) string {
+	for logical, physical := range databases {
+		var b strings.Builder
+		rest := sql
+		for {
+			i := strings.Index(rest, logical+".")
+			if i < 0 {
+				b.WriteString(rest)
+				break
+			}
+			b.WriteString(rest[:i])
+			if i > 0 && isIdentByte(rest[i-1]) {
+				b.WriteString(logical)
+			} else {
+				b.WriteString(physical)
+			}
+			rest = rest[i+len(logical):]
+		}
+		sql = b.String()
+	}
+	return sql
+}
+
+func isIdentByte(c byte) bool {
+	return c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+}
+
 // SeenDynamicArgs returns a copy of the dynamic_args payload the proxy
 // shipped to the mock for each Rewrite call, in receive order. Index
 // parallel to SeenSQL.
@@ -187,6 +238,7 @@ func (m *RewriterMock) Rewrite(ctx context.Context, req *pb.RewriteSQLRequest) (
 			break
 		}
 	}
+	rewritten := mapDatabases(sql, m.databases)
 	m.mu.Unlock()
 
 	if shouldFail {
@@ -201,7 +253,7 @@ func (m *RewriterMock) Rewrite(ctx context.Context, req *pb.RewriteSQLRequest) (
 
 	return &pb.RewriteSQLResponse{
 		Code:                   pb.RewriteCode_Success,
-		SqlAfterRewrite:        sql,
+		SqlAfterRewrite:        rewritten,
 		StatementType:          classify(sql),
 		OriginalAccessedTables: tables,
 	}, nil
