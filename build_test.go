@@ -21,7 +21,9 @@ import (
 	"github.com/housegate/housegate/pkg/network"
 	"github.com/housegate/housegate/pkg/plugin"
 	"github.com/housegate/housegate/pkg/plugins/agent"
+	authplugin "github.com/housegate/housegate/pkg/plugins/auth"
 	"github.com/housegate/housegate/pkg/plugins/forward"
+	"github.com/housegate/housegate/pkg/plugins/querysettings"
 	"github.com/housegate/housegate/pkg/plugins/rewrite"
 	"github.com/housegate/housegate/pkg/plugins/sessionstate"
 	"github.com/housegate/housegate/pkg/plugins/sireserved"
@@ -2337,5 +2339,86 @@ func TestTableRefGuardPhysicalDatabaseWarning(t *testing.T) {
 	cfg.Rewriter.PhysicalDatabase = "phys"
 	if got := tableRefGuardPhysicalDatabaseWarning(cfg); got != "" {
 		t.Fatalf("warning with a physical database = %q", got)
+	}
+}
+
+func querySettingsIndex(t *testing.T, chain *plugin.PluginChain) int {
+	t.Helper()
+	index := -1
+	for i, candidate := range chain.QueryPlugins {
+		if _, ok := candidate.(*querysettings.Plugin); ok {
+			if index >= 0 {
+				t.Fatalf("querysettings wired twice (%d, %d)", index, i)
+			}
+			index = i
+		}
+	}
+	return index
+}
+
+// Spec 2026-09-26 §9.7: the Query-packet settings check runs after auth (which
+// sets the maintenance / operator flags it reads) and before forward and
+// rewrite, with or without storage integrity.
+func TestBuildServer_QuerySettingsWiring(t *testing.T) {
+	for _, si := range []bool{false, true} {
+		cfg := minimalServerCfg(t)
+		var factory rewriter.Factory = stubRewriterFactory{}
+		if si {
+			cfg.StorageIntegrity.Tables = []string{"tenant.events"}
+			factory = siProbeStubRewriterFactory{}
+		}
+		bs, err := buildServer(Options{Config: cfg, NetworkState: network.NewInMemoryNetworkState(), Rewriter: factory}, nil)
+		if err != nil {
+			t.Fatalf("si=%v: buildServer: %v", si, err)
+		}
+		chain := requireExternalChain(t, bs)
+		authIndex, forwardIndex, rewriteIndex := -1, -1, -1
+		for i, candidate := range chain.QueryPlugins {
+			switch candidate.(type) {
+			case *authplugin.Plugin:
+				authIndex = i
+			case *forward.Plugin:
+				forwardIndex = i
+			case *rewrite.Plugin:
+				rewriteIndex = i
+			}
+		}
+		settingsIndex := querySettingsIndex(t, chain)
+		bs.teardown()
+		if authIndex < 0 || settingsIndex < 0 || settingsIndex <= authIndex || settingsIndex >= forwardIndex || settingsIndex >= rewriteIndex {
+			t.Fatalf("si=%v: auth=%d querysettings=%d forward=%d rewrite=%d", si, authIndex, settingsIndex, forwardIndex, rewriteIndex)
+		}
+	}
+}
+
+// Like the table-reference guard, the check is wired on every server that
+// forwards to ClickHouse, also when rewriter.fail_open_on_unavailable left it
+// without a rewriter; a router-only server and an agent never wire it.
+func TestBuildServer_QuerySettingsWiredWithoutARewriter(t *testing.T) {
+	bs, err := buildServer(Options{Config: withoutRewriter(minimalServerCfg(t)), NetworkState: network.NewInMemoryNetworkState()}, nil)
+	if err != nil {
+		t.Fatalf("upstream, fail-open: %v", err)
+	}
+	if querySettingsIndex(t, requireExternalChain(t, bs)) < 0 {
+		t.Fatal("upstream server without a rewriter: querysettings not wired")
+	}
+	bs.teardown()
+
+	routerOnly, err := buildServer(Options{Config: withoutRewriter(minimalRouterOnlyCfg(t)), NetworkState: network.NewInMemoryNetworkState()}, nil)
+	if err != nil {
+		t.Fatalf("router-only: %v", err)
+	}
+	defer routerOnly.teardown()
+	if querySettingsIndex(t, requireExternalChain(t, routerOnly)) >= 0 {
+		t.Fatal("router-only server must not wire querysettings")
+	}
+
+	agentBS, err := buildAgent(Options{Config: agentSICfg(t), NetworkState: network.NewInMemoryNetworkState()}, nil)
+	if err != nil {
+		t.Fatalf("buildAgent: %v", err)
+	}
+	defer agentBS.teardown()
+	if querySettingsIndex(t, requireProxyServer(t, agentBS.listeners[0]).Hooks.(*plugin.PluginChain)) >= 0 {
+		t.Fatal("agent mode must not wire querysettings")
 	}
 }

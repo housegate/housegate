@@ -1,0 +1,291 @@
+package querysettings
+
+import (
+	"context"
+	"fmt"
+	"net"
+	"os"
+	"sort"
+	"strings"
+	"testing"
+
+	rewritergo "github.com/housegate/rewriter-go"
+	pb "github.com/housegate/rewriter-proto/gen/pb"
+
+	"github.com/housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/chsession"
+	"github.com/housegate/housegate/pkg/plugin"
+)
+
+func TestRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name, value string
+		want        bool
+	}{
+		{"additional_table_filters", "{'db1.o': 'a = 1'}", true},
+		{"additional_result_filter", "a = 1", true},
+		{"parallel_replicas_custom_key", "a", true},
+		{"dialect", "kusto", true},
+		{"polyglot_dialect", "x", true},
+		{"allow_experimental_polyglot_dialect", "1", true},
+		{"allow_experimental_prql_dialect", "1", true},
+		{"allow_experimental_kusto_dialect", "1", true},
+		{"some_future_dialect", "1", true},
+		{"Some_Future_DIALECT", "0", true},
+		{"enable_global_with_statement", "1", true},
+		{"enable_global_with_statement", "0", true},
+		{"compatibility", "21.1", true},
+		{"implicit_table_at_top_level", "x", true},
+		{"promql_table", "x", true},
+		{"promql_database", "x", true},
+		{"legacy_column_name_of_tuple_literal", "0", true},
+		{"profile", "default", true},
+		{"PROFILE", "default", true},
+		{"enable_analyzer", "1", false},
+		{"enable_analyzer", "true", false},
+		{"enable_analyzer", "TRUE", false},
+		{"enable_analyzer", "True", false},
+		{"enable_analyzer", "'1'", false},
+		{"enable_analyzer", "'true'", false},
+		{"enable_analyzer", "'TRUE'", false},
+		{"Enable_Analyzer", "1", false},
+		{"enable_analyzer", "0", true},
+		{"enable_analyzer", "false", true},
+		{"enable_analyzer", "'0'", true},
+		{"enable_analyzer", " 1", true},
+		{"enable_analyzer", "1 ", true},
+		{"enable_analyzer", "+1", true},
+		{"enable_analyzer", "1.0", true},
+		{"enable_analyzer", "0x1", true},
+		{"enable_analyzer", "1e0", true},
+		{"enable_analyzer", "yes", true},
+		{"enable_analyzer", "on", true},
+		{"enable_analyzer", "UInt64_1", true},
+		{"enable_analyzer", "Bool_1", true},
+		{"enable_analyzer", "", true},
+		{"allow_experimental_analyzer", "1", false},
+		{"allow_experimental_analyzer", "true", false},
+		{"allow_experimental_analyzer", "0", true},
+		{"max_threads", "4", false},
+		{"SQL_x_auth_token", "x", false},
+		{"enable_scopes_for_with_statement", "0", false},
+		{"allow_deprecated_syntax_for_merge_tree", "1", false}, // spec §13: deliberately not R5
+		{"", "", false},
+	} {
+		if got := Refused(tc.name, tc.value); got != tc.want {
+			t.Errorf("Refused(%q, %q) = %v, want %v", tc.name, tc.value, got, tc.want)
+		}
+	}
+}
+
+func TestRefusedOld(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value uint64
+		want  bool
+	}{
+		{"enable_analyzer", 1, false},
+		{"allow_experimental_analyzer", 1, false},
+		{"enable_analyzer", 0, true},
+		{"enable_analyzer", 2, true},
+		{"enable_analyzer", 1 << 32, true},
+		{"enable_analyzer", ^uint64(0), true},
+		{"enable_global_with_statement", 1, true},
+		{"compatibility", 0, true},
+		{"max_threads", 0, false},
+	} {
+		if got := refusedOld(tc.name, tc.value); got != tc.want {
+			t.Errorf("refusedOld(%q, %d) = %v, want %v", tc.name, tc.value, got, tc.want)
+		}
+	}
+}
+
+// The fixed names are exactly rewriter-go v0.16.0's sqlBearingSettings and
+// analyzerSettings (internal/engine/settings.go:46-74), sorted.
+func TestRefusedNames(t *testing.T) {
+	want := []string{
+		"additional_result_filter",
+		"additional_table_filters",
+		"allow_experimental_analyzer",
+		"allow_experimental_kusto_dialect",
+		"allow_experimental_polyglot_dialect",
+		"allow_experimental_prql_dialect",
+		"compatibility",
+		"dialect",
+		"enable_analyzer",
+		"enable_global_with_statement",
+		"implicit_table_at_top_level",
+		"legacy_column_name_of_tuple_literal",
+		"parallel_replicas_custom_key",
+		"polyglot_dialect",
+		"profile",
+		"promql_database",
+		"promql_table",
+	}
+	got := RefusedNames()
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("RefusedNames() = %v\nwant %v", got, want)
+	}
+	if !sort.StringsAreSorted(got) {
+		t.Fatal("RefusedNames must be sorted")
+	}
+	got[0] = "mutated"
+	if RefusedNames()[0] != want[0] {
+		t.Fatal("RefusedNames must return a fresh slice")
+	}
+}
+
+func newSession(t *testing.T) chsession.Session {
+	t.Helper()
+	client, server := net.Pipe()
+	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
+	return chsession.New(1, client)
+}
+
+func queryWith(sess chsession.Session, settings ...chproto.Setting) *plugin.QueryContext {
+	return &plugin.QueryContext{Session: sess, OriginalSQL: "SELECT 1", Query: &chproto.Query{Body: "SELECT 1", Settings: settings}}
+}
+
+func TestOnQuery(t *testing.T) {
+	p := &Plugin{}
+	ctx := context.Background()
+	err := p.OnQuery(ctx, queryWith(newSession(t), chproto.Setting{Key: "SQL_x_auth_token", Value: "'t'", Custom: true}, chproto.Setting{Key: "enable_analyzer", Value: "0", Important: true}))
+	if err == nil || err.Error() != "table setting enable_analyzer is not accepted (native-protocol query setting)" {
+		t.Fatalf("err = %v", err)
+	}
+	// The first refused setting is named, whatever follows it.
+	err = p.OnQuery(ctx, queryWith(newSession(t), chproto.Setting{Key: "max_threads", Value: "2"}, chproto.Setting{Key: "profile", Value: "default"}, chproto.Setting{Key: "dialect", Value: "kusto"}))
+	if err == nil || err.Error() != "table setting profile is not accepted (native-protocol query setting)" {
+		t.Fatalf("err = %v", err)
+	}
+	for _, accepted := range []chproto.Setting{
+		{Key: "enable_analyzer", Value: "1", Important: true},
+		{Key: "enable_analyzer", Value: "true", Important: true},
+		// A custom-flagged value arrives as a Field dump: '1' is the string 1.
+		{Key: "enable_analyzer", Value: "'1'", Custom: true},
+		{Key: "max_threads", Value: "4"},
+	} {
+		if err := p.OnQuery(ctx, queryWith(newSession(t), accepted)); err != nil {
+			t.Fatalf("%+v: %v", accepted, err)
+		}
+	}
+	if err := p.OnQuery(ctx, queryWith(newSession(t), chproto.Setting{Key: "enable_analyzer", Value: "'0'", Custom: true})); err == nil {
+		t.Fatal("a custom-flagged analyzer-off setting must be refused")
+	}
+	old := &plugin.QueryContext{Session: newSession(t), OriginalSQL: "SELECT 1", Query: &chproto.Query{Body: "SELECT 1", OldSettings: []chproto.OldSetting{{Key: "enable_analyzer", Value: 0}}}}
+	if err := p.OnQuery(ctx, old); err == nil || err.Error() != "table setting enable_analyzer is not accepted (native-protocol query setting)" {
+		t.Fatalf("an old-format analyzer-off setting must be refused: %v", err)
+	}
+	oldOn := &plugin.QueryContext{Session: newSession(t), OriginalSQL: "SELECT 1", Query: &chproto.Query{Body: "SELECT 1", OldSettings: []chproto.OldSetting{{Key: "enable_analyzer", Value: 1}, {Key: "max_threads", Value: 8}}}}
+	if err := p.OnQuery(ctx, oldOn); err != nil {
+		t.Fatalf("an old-format analyzer-on setting: %v", err)
+	}
+	if err := p.OnQuery(ctx, &plugin.QueryContext{Session: newSession(t)}); err != nil {
+		t.Fatalf("no Query packet: %v", err)
+	}
+	if err := p.OnQuery(ctx, nil); err != nil {
+		t.Fatalf("nil query context: %v", err)
+	}
+	// Without a session the check still applies: there is no flag to skip it.
+	if err := p.OnQuery(ctx, &plugin.QueryContext{Query: &chproto.Query{Settings: []chproto.Setting{{Key: "compatibility", Value: "21.1"}}}}); err == nil {
+		t.Fatal("a refused setting without a session must be refused")
+	}
+}
+
+func TestPolicyMarkers(t *testing.T) {
+	p := &Plugin{}
+	if p.RunOnPeerTrust() {
+		t.Fatal("RunOnPeerTrust must be false: remote() loopback sessions carry the origin's SQL")
+	}
+	if !p.RunOnForward() {
+		t.Fatal("RunOnForward must be true: the origin checks before pivoting")
+	}
+	if !p.RejectUndecodableQuery() {
+		t.Fatal("RejectUndecodableQuery must be true: undecodable settings cannot be checked")
+	}
+}
+
+func TestChainSessionKinds(t *testing.T) {
+	chain := &plugin.PluginChain{QueryPlugins: []plugin.QueryPlugin{&Plugin{}}}
+	for _, tc := range []struct {
+		name string
+		set  func(*chsession.SessionState)
+		want bool // refused?
+		// strict: the chain fails an undecodable Query closed. The chain
+		// filters only peer-trust and forwarding, so a maintenance or
+		// platform-operator Query that cannot be decoded is refused too, as
+		// the rewrite plugin already refuses it.
+		strict bool
+	}{
+		{"ordinary", func(*chsession.SessionState) {}, true, true},
+		{"driver", func(s *chsession.SessionState) { s.SetIsDriver(true) }, true, true},
+		{"origin-side forwarding", func(s *chsession.SessionState) { s.SetForwarding(true) }, true, true},
+		{"forwarded from peer", func(s *chsession.SessionState) { s.SetPeerTrustForwarded("peer:9001", true) }, true, true},
+		{"peer-trusted remote() loopback", func(s *chsession.SessionState) { s.SetPeerTrust("peer:9001") }, false, false},
+		{"maintenance", func(s *chsession.SessionState) { s.SetMaintenance(true) }, false, true},
+		{"platform operator", func(s *chsession.SessionState) { s.SetPlatformOperator(true) }, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sess := newSession(t)
+			tc.set(sess.State())
+			err := chain.OnQuery(context.Background(), queryWith(sess, chproto.Setting{Key: "compatibility", Value: "21.1", Important: true}))
+			if (err != nil) != tc.want {
+				t.Fatalf("refused = %v, want %v (%v)", err != nil, tc.want, err)
+			}
+			if got := chain.RejectUndecodableQuery(sess); got != tc.strict {
+				t.Fatalf("RejectUndecodableQuery = %v, want %v", got, tc.strict)
+			}
+		})
+	}
+}
+
+// TestRefusedMatchesTheNativeEngine pins the copied lists against the pinned
+// rewriter-go engine: every name housegate refuses in the Query packet is one
+// the engine refuses in SQL, with the same value rule. Opt-in (needs the FFI
+// library); the integration suite repeats it for every system.settings name.
+func TestRefusedMatchesTheNativeEngine(t *testing.T) {
+	lib := os.Getenv("POLYGLOT_SQL_FFI_PATH")
+	if lib == "" {
+		t.Skip("POLYGLOT_SQL_FFI_PATH not set; native engine FFI lib unavailable")
+	}
+	svc, err := rewritergo.NewService(lib)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Close()
+	args := &pb.RewriteTableDynamicArgs{
+		DatabaseMap: map[string]string{"db1": "phys"}, KnownPhysicalDatabases: []string{"phys"},
+		UpstreamLogicalDatabaseInContext: "db1", Delim: "_",
+		ProtectedDatabases: []string{"phys", "hg_safe", "hg_unsafe", "hg_promote"},
+	}
+	names := append(RefusedNames(), "some_future_dialect", "Enable_Analyzer", "max_threads", "enable_scopes_for_with_statement", "allow_deprecated_syntax_for_merge_tree")
+	// Values the Query packet can carry for a Bool setting, spelled as SQL
+	// literals: clickhouse-go's fmt.Sprint forms and Field dumps. (+1 is left
+	// out: the native engine answers `max_threads = +1` with
+	// "statement is not supported", not Success; Refused covers it in
+	// TestRefused.)
+	values := []string{"0", "1", "true", "false", "TRUE", "'1'", "'true'", "'0'", "'false'", "1.0", "0x1", "2"}
+	for _, name := range names {
+		for _, value := range values {
+			resp, err := svc.Rewrite(context.Background(), &pb.RewriteSQLRequest{
+				Sql: fmt.Sprintf("SELECT 1 SETTINGS `%s` = %s", name, value),
+				Options: []*pb.RewriteOption{{Op: pb.RewriteOp_TableNameRewrite,
+					Value: &pb.RewriteOption_TableNameArgs{TableNameArgs: &pb.RewriteTableNameArgs{DynamicArgs: args}}}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			engineRefuses := resp.GetMessage() == "table setting "+name+" is not accepted"
+			if !engineRefuses && resp.GetCode() != pb.RewriteCode_Success {
+				t.Errorf("%s = %s: unexpected engine answer %s %q", name, value, resp.GetCode(), resp.GetMessage())
+				continue
+			}
+			if got := Refused(name, value); got != engineRefuses {
+				t.Errorf("%s = %s: querysettings refuses %v, engine refuses %v", name, value, got, engineRefuses)
+			}
+		}
+	}
+	if !strings.Contains(strings.Join(RefusedNames(), ","), "enable_analyzer") {
+		t.Fatal("RefusedNames must list the analyzer switches")
+	}
+}

@@ -34,6 +34,7 @@ import (
 	lthashplugin "github.com/housegate/housegate/pkg/plugins/lthash"
 	"github.com/housegate/housegate/pkg/plugins/materialize"
 	metricsplugin "github.com/housegate/housegate/pkg/plugins/metrics"
+	"github.com/housegate/housegate/pkg/plugins/querysettings"
 	"github.com/housegate/housegate/pkg/plugins/rewrite"
 	routeplugin "github.com/housegate/housegate/pkg/plugins/route"
 	"github.com/housegate/housegate/pkg/plugins/sessionstate"
@@ -690,6 +691,12 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		log.Infow("table-reference guard enabled",
 			"mode", guardModeLabel(cfg.TableRefGuard.Mode),
 			"rewriter_configured", rwFactory != nil)
+		// Spec 2026-09-26 §9.7: R5 settings in the native Query packet never
+		// reach the rewriter; refuse them here, after auth sets the session
+		// flags and before forward and rewrite. Wired with the guard, so a
+		// fail-open server without a rewriter keeps the check too. No observe
+		// mode (plan D6).
+		queryPlugins = append(queryPlugins, &querysettings.Plugin{})
 	}
 	querySuccessPlugins := []plugin.QuerySuccessPlugin{}
 	queryCompletePlugins := []plugin.QueryCompletePlugin{}

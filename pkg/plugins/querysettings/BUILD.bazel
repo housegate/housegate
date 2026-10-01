@@ -1,0 +1,22 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_test(
+    name = "querysettings_test",
+    srcs = ["plugin_test.go"],
+    embed = [":querysettings"],
+    deps = [
+        "//pkg/chproto",
+        "//pkg/chsession",
+        "//pkg/plugin",
+        "@com_github_housegate_rewriter_go//:rewriter-go",
+        "@com_github_housegate_rewriter_proto//gen/pb",
+    ],
+)
+
+go_library(
+    name = "querysettings",
+    srcs = ["plugin.go"],
+    importpath = "github.com/housegate/housegate/pkg/plugins/querysettings",
+    visibility = ["//visibility:public"],
+    deps = ["//pkg/plugin"],
+)
