@@ -20,14 +20,17 @@ var (
 	// ErrBareHash reports a # that opens no comment: ClickHouse reads only
 	// "# " and "#!" as comment markers and rejects any other #.
 	ErrBareHash = errors.New("# that is not followed by a space or ! opens no ClickHouse comment and is not accepted by the storage-integrity guard")
+	// ErrNonASCII reports a byte >= 0x80 outside quoted identifiers, string
+	// literals, comments and heredoc bodies. ClickHouse reads such a byte
+	// either as Unicode whitespace or as a syntax error.
+	ErrNonASCII = errors.New("non-ASCII byte outside a quoted identifier, string literal, comment or heredoc is not accepted by the storage-integrity guard")
 )
 
 // TokenKind classifies a Token.
 type TokenKind uint8
 
 const (
-	// TokenWord is a bare word, keyword or number: a run of [A-Za-z0-9_] and
-	// non-ASCII bytes.
+	// TokenWord is a bare word, keyword or number: a run of [A-Za-z0-9_].
 	TokenWord TokenKind = iota
 	// TokenQuoted is a backtick or double-quoted identifier, delimiters
 	// removed and doubled delimiters collapsed.
@@ -169,12 +172,21 @@ func ScanWith(sql string, opts Options) (Surfaces, error) {
 			tokens = append(tokens, Token{Kind: TokenString, Text: body})
 			i = next
 
+		case sql[i] >= 0x80:
+			// Measured on ClickHouse 26.8: outside every span a non-ASCII
+			// byte is either Unicode whitespace (U+00A0, U+0085, U+200B,
+			// U+2028, U+3000, U+FEFF separate tokens, so system<U+00A0>.one
+			// reads system.one and merge<U+00A0>(...) calls merge) or a syntax
+			// error. Refusing it is never less safe than either outcome, and
+			// it keeps Tokens and the surfaces' word boundaries exact.
+			return Surfaces{}, ErrNonASCII
+
 		default:
 			b := sql[i]
 			outside.WriteByte(b)
 			withLiterals.WriteByte(b)
 			switch {
-			case isTokenWordByte(b):
+			case IsIdentifierByte(b):
 				if word < 0 {
 					word = i
 				}
@@ -373,10 +385,6 @@ func IsIdentifierByte(value byte) bool {
 func hasPrefixAt(value string, offset int, prefix string) bool {
 	return offset >= 0 && offset+len(prefix) <= len(value) && value[offset:offset+len(prefix)] == prefix
 }
-
-// isTokenWordByte reports a byte of a bare word in the token stream: an ASCII
-// identifier byte or any byte of a multi-byte UTF-8 sequence.
-func isTokenWordByte(b byte) bool { return IsIdentifierByte(b) || b >= 0x80 }
 
 func isSpace(b byte) bool {
 	return b == ' ' || b == '\t' || b == '\n' || b == '\r' || b == '\f' || b == '\v'

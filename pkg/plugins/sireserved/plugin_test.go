@@ -823,3 +823,26 @@ func TestOnQuery_DollarInsideAnIdentifierCannotOpenAHeredoc(t *testing.T) {
 		})
 	}
 }
+
+// TestOnQuery_UnicodeWhitespaceCannotHideACarrier closes a privileged-session
+// bypass measured on ClickHouse 26.8: Unicode whitespace separates tokens
+// there, so "merge<U+00A0>(...)" calls merge(), while the carrier scan only
+// skipped ASCII whitespace before "(". Every non-ASCII byte outside quotes,
+// literals, comments and heredoc bodies is now refused by the scanner.
+func TestOnQuery_UnicodeWhitespaceCannotHideACarrier(t *testing.T) {
+	p := &Plugin{ReservedDatabases: []string{"hg_safe", "hg_unsafe"}, ReservedRowIDColumn: "_hg_row_id"}
+	for _, sql := range []string{
+		"SELECT count() FROM merge (currentDatabase(), '^t$')",
+		"SELECT count() FROM merge​(currentDatabase(), '^t$')",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			sess := newSessionForTest(t, 33)
+			sess.State().SetMaintenance(true)
+			qctx := &plugin.QueryContext{Session: sess, OriginalSQL: sql, Query: &chproto.Query{Body: sql}}
+			chain := &plugin.PluginChain{QueryPlugins: []plugin.QueryPlugin{p}}
+			if err := chain.OnQuery(context.Background(), qctx); err == nil {
+				t.Fatalf("a carrier behind Unicode whitespace must be refused: %q", sql)
+			}
+		})
+	}
+}

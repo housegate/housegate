@@ -30,7 +30,7 @@ func TestScanSurfaces(t *testing.T) {
 }
 
 func TestScanTokens(t *testing.T) {
-	s, err := Scan("SELECT a.b, `x.y`, 'it''s', $t$body$t$ FROM phys/* c */.t -- tail\nWHERE f (1) AND physé = 2")
+	s, err := Scan("SELECT a.b, `x.y`, 'it''s', $t$body$t$ FROM phys/* c */.t -- tail\nWHERE f (1) AND `physé` = 2")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +39,7 @@ func TestScanTokens(t *testing.T) {
 		{TokenQuoted, "x.y"}, {TokenPunct, ","}, {TokenString, "it s"}, {TokenPunct, ","}, {TokenString, "body"},
 		{TokenWord, "FROM"}, {TokenWord, "phys"}, {TokenPunct, "."}, {TokenWord, "t"},
 		{TokenWord, "WHERE"}, {TokenWord, "f"}, {TokenPunct, "("}, {TokenWord, "1"}, {TokenPunct, ")"},
-		{TokenWord, "AND"}, {TokenWord, "physé"}, {TokenPunct, "="}, {TokenWord, "2"},
+		{TokenWord, "AND"}, {TokenQuoted, "physé"}, {TokenPunct, "="}, {TokenWord, "2"},
 	}
 	if !reflect.DeepEqual(s.Tokens, want) {
 		t.Fatalf("tokens =\n%v\nwant\n%v", s.Tokens, want)
@@ -169,6 +169,40 @@ func TestScanDollarAfterIdentifierByteIsRefused(t *testing.T) {
 	}
 	// A heredoc after a delimiter is still a heredoc.
 	for _, sql := range []string{"SELECT $$x$$", "SELECT ($$x$$)", "SELECT f($t$x$t$,$$y$$)", "SELECT 1\n$$x$$"} {
+		if _, err := Scan(sql); err != nil {
+			t.Errorf("Scan(%q): %v", sql, err)
+		}
+	}
+}
+
+// TestScanNonASCIIOutsideQuotesIsRefused pins the rule measured on ClickHouse
+// 26.8: outside quotes, literals, comments and heredoc bodies a non-ASCII
+// byte is either Unicode whitespace (U+00A0, U+0085, U+200B, U+2028, U+3000,
+// U+FEFF all separate tokens: "system<U+00A0>.one" reads system.one) or a
+// syntax error ("SELECT 1 AS physé" fails on é). Gluing it into a word hid
+// the qualifier in "phys<U+00A0>.t"; refusing it is never less safe than
+// either ClickHouse outcome.
+func TestScanNonASCIIOutsideQuotesIsRefused(t *testing.T) {
+	for _, sql := range []string{
+		"SELECT * FROM phys\u00a0.t",
+		"SELECT * FROM phys\u3000.t",
+		"SELECT * FROM phys\u200b.t",
+		"SELECT * FROM phys\u0085.t",
+		"SELECT * FROM phys\ufeff.t",
+		"SELECT * FROM phys\u2028.t",
+		"SELECT * FROM merge\u00a0(currentDatabase(), 't')",
+		"SELECT 1 AS physé",
+		"SELECT 1 \xff",
+	} {
+		if _, err := ScanWith(sql, Options{AllowStringEscapes: true}); !errors.Is(err, ErrNonASCII) {
+			t.Errorf("ScanWith(%q) err = %v, want ErrNonASCII", sql, err)
+		}
+	}
+	// Inside a span the bytes are content, exactly as ClickHouse reads them.
+	for _, sql := range []string{
+		"SELECT 'é\u00a0' AS `é`, \"é\" -- é\u00a0\nFROM t /* \u3000 */ # é\n",
+		"SELECT $$é\u00a0$$, $t$é$t$",
+	} {
 		if _, err := Scan(sql); err != nil {
 			t.Errorf("Scan(%q): %v", sql, err)
 		}
