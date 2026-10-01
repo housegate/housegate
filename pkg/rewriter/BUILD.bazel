@@ -41,6 +41,7 @@ go_library(
 go_test(
     name = "rewriter_test",
     srcs = [
+        "args_test.go",
         "backend_test.go",
         "grpc_failure_test.go",
         "materialize_smoke_test.go",
