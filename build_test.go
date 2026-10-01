@@ -27,6 +27,7 @@ import (
 	"github.com/housegate/housegate/pkg/plugins/sireserved"
 	"github.com/housegate/housegate/pkg/plugins/sistatement"
 	"github.com/housegate/housegate/pkg/plugins/storageintegrity"
+	"github.com/housegate/housegate/pkg/plugins/tablerefguard"
 	"github.com/housegate/housegate/pkg/proxy"
 	"github.com/housegate/housegate/pkg/replay"
 	"github.com/housegate/housegate/pkg/replay/payloadexec"
@@ -2178,3 +2179,74 @@ func (r *recordingBuildMergeRows) Scan(dest ...any) error {
 }
 func (r *recordingBuildMergeRows) Err() error   { return nil }
 func (r *recordingBuildMergeRows) Close() error { return nil }
+
+func TestBuildServer_TableRefGuardWiring(t *testing.T) {
+	for _, si := range []bool{false, true} {
+		cfg := minimalServerCfg(t)
+		cfg.Rewriter.PhysicalDatabase = "phys"
+		cfg.TableRefGuard.Mode = "observe"
+		var factory rewriter.Factory = stubRewriterFactory{}
+		if si {
+			cfg.StorageIntegrity.Tables = []string{"tenant.events"}
+			factory = siProbeStubRewriterFactory{}
+		}
+		bs, err := buildServer(Options{Config: cfg, NetworkState: network.NewInMemoryNetworkState(), Rewriter: factory}, nil)
+		if err != nil {
+			t.Fatalf("si=%v: buildServer: %v", si, err)
+		}
+		guardIndex, reservedIndex, forwardIndex, rewriteIndex := -1, -1, -1, -1
+		var guard *tablerefguard.Plugin
+		for i, candidate := range requireExternalChain(t, bs).QueryPlugins {
+			switch typed := candidate.(type) {
+			case *tablerefguard.Plugin:
+				guard, guardIndex = typed, i
+			case *sireserved.Plugin:
+				reservedIndex = i
+			case *forward.Plugin:
+				forwardIndex = i
+			case *rewrite.Plugin:
+				rewriteIndex = i
+			}
+		}
+		bs.teardown()
+		if guard == nil {
+			t.Fatalf("si=%v: tablerefguard not wired", si)
+		}
+		if guardIndex >= forwardIndex || guardIndex >= rewriteIndex || (si && guardIndex <= reservedIndex) {
+			t.Fatalf("si=%v: guard=%d sireserved=%d forward=%d rewrite=%d", si, guardIndex, reservedIndex, forwardIndex, rewriteIndex)
+		}
+		if guard.PhysicalDatabase != "phys" || guard.Mode != tablerefguard.ModeObserve || !reflect.DeepEqual(guard.ReservedDatabases, sitable.ReservedDatabases()) {
+			t.Fatalf("si=%v: guard = %+v", si, guard)
+		}
+	}
+
+	defaultMode := minimalServerCfg(t)
+	bs, err := buildServer(Options{Config: defaultMode, NetworkState: network.NewInMemoryNetworkState(), Rewriter: stubRewriterFactory{}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, candidate := range requireExternalChain(t, bs).QueryPlugins {
+		if g, ok := candidate.(*tablerefguard.Plugin); ok {
+			found = true
+			if g.Mode != tablerefguard.ModeEnforce {
+				t.Fatalf("default mode = %q, want enforce", g.Mode)
+			}
+		}
+	}
+	bs.teardown()
+	if !found {
+		t.Fatal("default-mode server must wire the guard")
+	}
+
+	routerOnly, err := buildServer(Options{Config: minimalRouterOnlyCfg(t), NetworkState: network.NewInMemoryNetworkState()}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer routerOnly.teardown()
+	for _, candidate := range requireExternalChain(t, routerOnly).QueryPlugins {
+		if _, ok := candidate.(*tablerefguard.Plugin); ok {
+			t.Fatal("a router-only server has no rewriter and must not wire the guard")
+		}
+	}
+}

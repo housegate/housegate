@@ -38,6 +38,7 @@ import (
 	materializeplugin "github.com/housegate/housegate/pkg/plugins/materialize"
 	"github.com/housegate/housegate/pkg/plugins/rewrite"
 	"github.com/housegate/housegate/pkg/plugins/sessionstate"
+	"github.com/housegate/housegate/pkg/plugins/tablerefguard"
 	"github.com/housegate/housegate/pkg/plugins/usage"
 	"github.com/housegate/housegate/pkg/rewriter"
 )
@@ -135,6 +136,7 @@ type Config struct {
 
 	Auth             authplugin.Config        `json:"auth"              yaml:"auth"`
 	Rewriter         rewrite.Config           `json:"rewriter"          yaml:"rewriter"`
+	TableRefGuard    tablerefguard.Config     `json:"tableref_guard"    yaml:"tableref_guard"`
 	Materialize      materializeplugin.Config `json:"materialize"       yaml:"materialize"`
 	Agent            agent.Config             `json:"agent"             yaml:"agent"`
 	Usage            usage.Config             `json:"usage"             yaml:"usage"`
@@ -376,6 +378,12 @@ func (c *Config) Validate() error {
 	default:
 		errs = append(errs, fmt.Errorf("rewriter.engine %q is invalid (want %q or %q)",
 			c.Rewriter.Engine, rewriter.EngineGRPC, rewriter.EngineNative))
+	}
+
+	// Mode validity is mode-independent like the engine check: the guard is
+	// wired on any server that has a rewriter.
+	if err := c.TableRefGuard.Validate(); err != nil {
+		errs = append(errs, err)
 	}
 
 	// Spec 2026-09-26 T8: storage integrity fails closed on every rewriter

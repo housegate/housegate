@@ -41,6 +41,7 @@ import (
 	"github.com/housegate/housegate/pkg/plugins/sistatement"
 	"github.com/housegate/housegate/pkg/plugins/sitablestate"
 	"github.com/housegate/housegate/pkg/plugins/storageintegrity"
+	"github.com/housegate/housegate/pkg/plugins/tablerefguard"
 	"github.com/housegate/housegate/pkg/plugins/usage"
 	"github.com/housegate/housegate/pkg/proxy"
 	"github.com/housegate/housegate/pkg/registry"
@@ -649,6 +650,23 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			ReservedRowIDColumn: rewriter.DefaultReservedRowIDColumn,
 		})
 		log.Info("storage-integrity reserved-name guard enabled")
+	}
+	// Spec 2026-09-26 T9: the lexical table-reference guard runs on ordinary
+	// sessions before forward and rewrite whenever a rewriter is configured.
+	// Router-only servers have no rewriter and so no guard. The internal
+	// listener shares this chain, but its sessions are peer-trusted and the
+	// guard skips those.
+	if rwFactory != nil {
+		guardMode := tablerefguard.Mode(cfg.TableRefGuard.Mode)
+		if guardMode == "" {
+			guardMode = tablerefguard.ModeEnforce
+		}
+		queryPlugins = append(queryPlugins, &tablerefguard.Plugin{
+			PhysicalDatabase:  cfg.Rewriter.PhysicalDatabase,
+			ReservedDatabases: sitable.ReservedDatabases(),
+			Mode:              guardMode,
+		})
+		log.Infow("table-reference guard enabled", "mode", string(guardMode))
 	}
 	querySuccessPlugins := []plugin.QuerySuccessPlugin{}
 	queryCompletePlugins := []plugin.QueryCompletePlugin{}
