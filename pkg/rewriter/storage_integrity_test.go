@@ -205,3 +205,11 @@ func TestStorageIntegrityScrubberCacheBuildsOncePerVersion(t *testing.T) {
 		t.Fatalf("rebuilt scrubber = %q, want db1.u", got)
 	}
 }
+
+// TestStorageIntegrityScrubber_RedactsPromoteDatabase is spec 2026-09-26 T11.
+func TestStorageIntegrityScrubber_RedactsPromoteDatabase(t *testing.T) {
+	s := NewStorageIntegrityScrubber(sitable.NewFake(sitable.Pending).Current())
+	if got := s.Scrub("Table hg_promote.db1__t does not exist"); strings.Contains(got, "hg_promote") {
+		t.Fatalf("Scrub = %q, want hg_promote redacted", got)
+	}
+}

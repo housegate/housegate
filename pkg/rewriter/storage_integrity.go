@@ -291,13 +291,14 @@ type StorageIntegrityScrubber struct {
 }
 
 // NewStorageIntegrityScrubber builds the scrubber for one snapshot: every
-// Active table's qualified physical names map back to its logical id, and the
-// two reserved databases and the row-id column are always redacted, even when
-// no table is Active.
+// Active table's qualified physical names map back to its logical id, and
+// every reserved database (sitable.ReservedDatabases) and the row-id column
+// are always redacted, even when no table is Active.
 func NewStorageIntegrityScrubber(snap sitable.Snapshot) *StorageIntegrityScrubber {
 	active := snap.Active()
+	reserved := sitable.ReservedDatabases()
 	// Qualified names must precede their bare database prefixes.
-	pairs := make([]string, 0, len(active)*4+6)
+	pairs := make([]string, 0, len(active)*4+2*len(reserved)+2)
 	for _, table := range active {
 		phys := sitable.PhysicalTable(table.ID)
 		pairs = append(pairs,
@@ -305,11 +306,10 @@ func NewStorageIntegrityScrubber(snap sitable.Snapshot) *StorageIntegrityScrubbe
 			sitable.UnsafeDatabase+"."+phys, table.ID,
 		)
 	}
-	pairs = append(pairs,
-		sitable.SafeDatabase, storageIntegrityRedaction,
-		sitable.UnsafeDatabase, storageIntegrityRedaction,
-		DefaultReservedRowIDColumn, storageIntegrityRedaction,
-	)
+	for _, db := range reserved {
+		pairs = append(pairs, db, storageIntegrityRedaction)
+	}
+	pairs = append(pairs, DefaultReservedRowIDColumn, storageIntegrityRedaction)
 	return &StorageIntegrityScrubber{replacer: strings.NewReplacer(pairs...)}
 }
 

@@ -227,7 +227,7 @@ func TestBuildServer_StorageIntegrityReservedGuardWiring(t *testing.T) {
 	if guardIndex >= forwardIndex || forwardIndex < 0 {
 		t.Fatalf("guard index=%d forward index=%d, want guard before forward", guardIndex, forwardIndex)
 	}
-	if !reflect.DeepEqual(guard.ReservedDatabases, []string{config.StorageIntegritySafeDatabase, config.StorageIntegrityUnsafeDatabase}) ||
+	if !reflect.DeepEqual(guard.ReservedDatabases, sitable.ReservedDatabases()) ||
 		guard.ReservedRowIDColumn != rewriter.DefaultReservedRowIDColumn {
 		t.Fatalf("guard config = %+v", guard)
 	}

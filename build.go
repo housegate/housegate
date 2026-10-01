@@ -664,10 +664,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	}
 	if siOptions.Enabled {
 		queryPlugins = append(queryPlugins, &sireserved.Plugin{
-			ReservedDatabases: []string{
-				config.StorageIntegritySafeDatabase,
-				config.StorageIntegrityUnsafeDatabase,
-			},
+			ReservedDatabases:   sitable.ReservedDatabases(),
 			ReservedRowIDColumn: rewriter.DefaultReservedRowIDColumn,
 		})
 		log.Info("storage-integrity reserved-name guard enabled")
