@@ -179,7 +179,8 @@ func TestStorageIntegrityScrubber(t *testing.T) {
 }
 
 // TestStorageIntegrityScrubber_EmptySnapshotStillRedactsReservedNames is spec
-// 2026-09-24 §6.2: bare hg_safe, hg_unsafe and _hg_row_id are always scrubbed.
+// 2026-09-24 §6.2: the bare reserved databases (hg_safe, hg_unsafe, hg_promote)
+// and _hg_row_id are always scrubbed.
 func TestStorageIntegrityScrubber_EmptySnapshotStillRedactsReservedNames(t *testing.T) {
 	s := NewStorageIntegrityScrubber(sitable.NewFake(sitable.Pending).Current())
 	got := s.Scrub("Table hg_unsafe.db9__x does not exist in hg_safe (column _hg_row_id)")

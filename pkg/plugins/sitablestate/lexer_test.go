@@ -90,6 +90,9 @@ func TestMaterializedViewHeader(t *testing.T) {
 		{"CREATE MATERIALIZED VIEW db1.mv /* TO db1.x */ TO db1.t AS SELECT a FROM db1.src", mvHeader{"db1", "mv", "db1", "t", true}, true},
 		{"CREATE MATERIALIZED VIEW db1.mv TO db1.t (a UInt8) AS SELECT a FROM db1.src", mvHeader{"db1", "mv", "db1", "t", true}, true},
 		{"create or replace materialized view if not exists `db 1`.\"m v\" on cluster c TO db1.t AS SELECT 1", mvHeader{"db 1", "m v", "db1", "t", true}, true},
+		// A doubled delimiter is one literal delimiter in both identifier quotings.
+		{"CREATE MATERIALIZED VIEW db1.mv TO db1.`a``b` AS SELECT 1", mvHeader{"db1", "mv", "db1", "a`b", true}, true},
+		{`CREATE MATERIALIZED VIEW db1.mv TO db1."a""b" AS SELECT 1`, mvHeader{"db1", "mv", "db1", `a"b`, true}, true},
 		// A view named TO is the view's name, not a target keyword.
 		{"CREATE MATERIALIZED VIEW db1.to ENGINE = Memory AS SELECT 1", mvHeader{"db1", "to", "", "", false}, true},
 		// Uncertainty: the header cannot be read, so the view and target are unknown.

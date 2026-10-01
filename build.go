@@ -160,11 +160,11 @@ func storageIntegrityInternalListenWarning(cfg *config.Config) string {
 	}
 	var warnings []string
 	if cfg.InternalListen != "" {
-		warnings = append(warnings, "storage_integrity: peer-trusted sessions arriving on internal_listen bypass storage-integrity rewrite and can address the hg_safe / hg_unsafe namespaces directly; internal_listen MUST be reachable only from trusted peer subnets")
+		warnings = append(warnings, "storage_integrity: peer-trusted sessions arriving on internal_listen bypass storage-integrity rewrite and can address the "+reservedDatabaseNames()+" namespaces directly; internal_listen MUST be reachable only from trusted peer subnets")
 	}
 	if count := len(cfg.Auth.PlatformOperatorAddresses); count > 0 {
-		warnings = append(warnings, fmt.Sprintf("storage_integrity: %d platform-operator addresses use the raw-SQL bypass for SI tables; the operator guard conservatively rejects every hg_safe / hg_unsafe / _hg_row_id mention (including ordinary columns and string literals), Identifier placeholders, any backslash-bearing literal or quoted identifier, and local-catalog object-carrier callables regardless of arguments; use a direct ClickHouse connection for physical access",
-			count))
+		warnings = append(warnings, fmt.Sprintf("storage_integrity: %d platform-operator addresses use the raw-SQL bypass for SI tables; the operator guard conservatively rejects every %s / _hg_row_id mention (including ordinary columns and string literals), Identifier placeholders, any backslash-bearing literal or quoted identifier, and local-catalog object-carrier callables regardless of arguments; use a direct ClickHouse connection for physical access",
+			count, reservedDatabaseNames()))
 	}
 	return strings.Join(warnings, "; ")
 }
@@ -1551,4 +1551,10 @@ func isLocalAddress(host string) bool {
 		}
 	}
 	return false
+}
+
+// reservedDatabaseNames renders the storage-integrity reserved databases for
+// operator-facing messages, so they cannot drift from sitable.ReservedDatabases.
+func reservedDatabaseNames() string {
+	return strings.Join(sitable.ReservedDatabases(), " / ")
 }

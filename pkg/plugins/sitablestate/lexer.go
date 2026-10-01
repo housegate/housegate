@@ -168,7 +168,10 @@ func readQuoted(sql string, start int) (string, int, bool) {
 			if quote != '\'' {
 				// ClickHouse decodes escapes inside quoted identifiers; this
 				// lexer does not model that table, so the header is unreadable
-				// and the caller fails closed (spec 2026-09-26 T10).
+				// and the caller fails closed (spec 2026-09-26 T10). tokenize
+				// lexes the whole statement, so a backslash identifier anywhere
+				// (even in a materialized view's SELECT body) refuses it; T10
+				// accepts that false positive.
 				return "", len(sql), false
 			}
 			if i+1 >= len(sql) {

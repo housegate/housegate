@@ -11,6 +11,7 @@ import (
 	"github.com/housegate/housegate/pkg/chproto"
 	"github.com/housegate/housegate/pkg/chsession"
 	"github.com/housegate/housegate/pkg/plugin"
+	"github.com/housegate/housegate/pkg/sitable"
 )
 
 func newSessionForTest(t *testing.T, id int64) chsession.Session {
@@ -844,5 +845,25 @@ func TestOnQuery_UnicodeWhitespaceCannotHideACarrier(t *testing.T) {
 				t.Fatalf("a carrier behind Unicode whitespace must be refused: %q", sql)
 			}
 		})
+	}
+}
+
+// TestOnQuery_RefusesEveryReservedDatabase is spec 2026-09-26 T11: the guard,
+// built from sitable.ReservedDatabases() as build.go does, refuses each
+// reserved database including hg_promote.
+func TestOnQuery_RefusesEveryReservedDatabase(t *testing.T) {
+	p := &Plugin{ReservedDatabases: sitable.ReservedDatabases(), ReservedRowIDColumn: "_hg_row_id"}
+	for _, db := range sitable.ReservedDatabases() {
+		sql := "SELECT * FROM " + db + ".db1__t"
+		sess := newSessionForTest(t, 3)
+		sess.State().SetPlatformOperator(true)
+		err := p.OnQuery(context.Background(), &plugin.QueryContext{
+			Session:     sess,
+			OriginalSQL: sql,
+			Query:       &chproto.Query{Body: sql},
+		})
+		if err == nil || !strings.Contains(err.Error(), db) {
+			t.Errorf("%s: err = %v, want a refusal naming the database", sql, err)
+		}
 	}
 }
