@@ -1,0 +1,29 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_test(
+    name = "tablerefguard_test",
+    srcs = ["plugin_test.go"],
+    embed = [":tablerefguard"],
+    deps = [
+        "//pkg/chproto",
+        "//pkg/chsession",
+        "//pkg/plugin",
+        "@com_github_prometheus_client_golang//prometheus/testutil",
+    ],
+)
+
+go_library(
+    name = "tablerefguard",
+    srcs = [
+        "config.go",
+        "plugin.go",
+    ],
+    importpath = "github.com/housegate/housegate/pkg/plugins/tablerefguard",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/log",
+        "//pkg/plugin",
+        "//pkg/sqlsurface",
+        "@com_github_prometheus_client_golang//prometheus",
+    ],
+)
