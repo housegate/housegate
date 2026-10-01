@@ -147,6 +147,16 @@ func ScanWith(sql string, opts Options) (Surfaces, error) {
 			// A `$` that opens no well-formed heredoc is refused: copying it
 			// through is what let a comment marker inside a heredoc blank the
 			// rest of a statement from both surfaces (Spec N D1).
+			//
+			// A `$` directly after an identifier byte is refused too: measured
+			// on ClickHouse 26.8, x$$ and a$b are single identifiers there, so
+			// reading the `$` as an opener would blank SQL ClickHouse executes
+			// ("SELECT 1 AS x$$, * FROM t AS y$$" reads t). After a number
+			// ClickHouse does start a new token, but distinguishing the two
+			// word kinds is not worth the risk, so both are refused.
+			if i > 0 && IsIdentifierByte(sql[i-1]) {
+				return Surfaces{}, ErrStrayDollar
+			}
 			flushWord(i)
 			outside.WriteByte(' ')
 			withLiterals.WriteByte(' ')

@@ -799,3 +799,27 @@ func TestOnQuery_CarrierCannotHideBehindACarriageReturnComment(t *testing.T) {
 		t.Fatalf("carrier hidden behind a CR-terminated comment must be refused, err=%v", err)
 	}
 }
+
+// TestOnQuery_DollarInsideAnIdentifierCannotOpenAHeredoc closes a
+// privileged-session bypass measured on ClickHouse 26.8: x$$ and y$$ are
+// identifiers there, so "SELECT 1 AS x$$, * FROM merge(...) AS y$$" executes
+// the merge() call, while the scanner read $$, * FROM merge(...) AS y$$ as a
+// heredoc and saw no carrier, no placeholder and no complete reserved name.
+func TestOnQuery_DollarInsideAnIdentifierCannotOpenAHeredoc(t *testing.T) {
+	p := &Plugin{ReservedDatabases: []string{"hg_safe", "hg_unsafe"}, ReservedRowIDColumn: "_hg_row_id"}
+	for _, sql := range []string{
+		"SELECT 1 AS x$$, * FROM merge(concat('hg_','safe'), '^t$') AS y$$",
+		"SELECT 1 AS x$t$, * FROM {p:Identifier} AS y$t$",
+		"SELECT 1 AS x$$, * FROM hg_safe.t AS y$$",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			sess := newSessionForTest(t, 32)
+			sess.State().SetMaintenance(true)
+			qctx := &plugin.QueryContext{Session: sess, OriginalSQL: sql, Query: &chproto.Query{Body: sql}}
+			chain := &plugin.PluginChain{QueryPlugins: []plugin.QueryPlugin{p}}
+			if err := chain.OnQuery(context.Background(), qctx); err == nil {
+				t.Fatalf("a $ inside an identifier must not hide %q", sql)
+			}
+		})
+	}
+}

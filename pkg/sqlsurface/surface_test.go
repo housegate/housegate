@@ -148,3 +148,29 @@ func TestScanBareHashIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// TestScanDollarAfterIdentifierByteIsRefused pins the ClickHouse rule measured
+// on 26.8: a $ directly after an identifier byte stays inside that word
+// ("SELECT 1 AS x$$, * FROM system.one AS y$$" reads system.one; a$b is one
+// identifier), so it must never open a heredoc here. Modelling which words
+// keep the $ (identifiers) and which do not (numbers: 1$$x$$ starts a
+// heredoc) is not worth the risk; every such $ is refused.
+func TestScanDollarAfterIdentifierByteIsRefused(t *testing.T) {
+	for _, sql := range []string{
+		"SELECT 1 AS x$$, * FROM phys.t AS y$$",
+		"SELECT 1 AS x$t$, * FROM phys.t AS y$t$",
+		"SELECT 1 AS _$$, 3",
+		"SELECT 1$$x$$",
+		"SELECT 1 AS a$b",
+	} {
+		if _, err := Scan(sql); !errors.Is(err, ErrStrayDollar) {
+			t.Errorf("Scan(%q) err = %v, want ErrStrayDollar", sql, err)
+		}
+	}
+	// A heredoc after a delimiter is still a heredoc.
+	for _, sql := range []string{"SELECT $$x$$", "SELECT ($$x$$)", "SELECT f($t$x$t$,$$y$$)", "SELECT 1\n$$x$$"} {
+		if _, err := Scan(sql); err != nil {
+			t.Errorf("Scan(%q): %v", sql, err)
+		}
+	}
+}
