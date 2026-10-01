@@ -3,7 +3,6 @@ package integration
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -59,10 +58,7 @@ func requireSameConnection(t *testing.T, out string) {
 // TableState drives one table through Pending, Active, Gone and Purged with
 // real ClickHouse, the native rewriter, the signed agent lane and the CLI.
 func TestStorageIntegrityTableStateLifecycle(t *testing.T) {
-	lib := os.Getenv("POLYGLOT_SQL_FFI_PATH")
-	if lib == "" {
-		t.Skip("POLYGLOT_SQL_FFI_PATH not set; fetch the contract-V2 library with `go run ./cmd fetch-rewriter-lib --tag` at the tag .github/workflows/ci.yml fetches, and pass --test_env")
-	}
+	lib := requireNativeLib(t)
 	bin := testenv.ClickHouseCLI(t)
 	ctx := context.Background()
 	const (

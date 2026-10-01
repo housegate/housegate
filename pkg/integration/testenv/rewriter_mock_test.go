@@ -52,9 +52,10 @@ func TestRewriterMock_AnswersTheStartupProbeWithoutRecordingIt(t *testing.T) {
 	}
 }
 
-// TestRewriterMock_MapDatabase pins the textual qualifier swap: only an
-// unquoted `<logical>.` at an identifier boundary is replaced, and the
-// AccessedTables prefix still matches the SQL as received.
+// TestRewriterMock_MapDatabase pins the textual qualifier swap: only a bare
+// `<logical>.` that is a whole identifier is replaced, never inside a string
+// literal or a quoted identifier, and the AccessedTables prefix still matches
+// the SQL as received.
 func TestRewriterMock_MapDatabase(t *testing.T) {
 	m := StartRewriterMock(t)
 	m.MapDatabase("tenant", "phys")
@@ -71,4 +72,22 @@ func TestRewriterMock_MapDatabase(t *testing.T) {
 	if got := resp.GetOriginalAccessedTables(); len(got) != 1 || got[0].GetOriginalDatabase() != "tenant" {
 		t.Fatalf("OriginalAccessedTables = %v, want the prefix matched on the received SQL", got)
 	}
+
+	for _, tc := range []struct{ in, want string }{
+		{`SELECT 'tenant.x', 'it''s tenant.x', 'a\'tenant.x' FROM tenant.t`, `SELECT 'tenant.x', 'it''s tenant.x', 'a\'tenant.x' FROM phys.t`},
+		{"SELECT * FROM `tenant.x`, \"tenant.y\", `tenant`.z, x.tenant.y", "SELECT * FROM `tenant.x`, \"tenant.y\", `tenant`.z, x.tenant.y"},
+		{"SELECT 'unterminated tenant.x", "SELECT 'unterminated tenant.x"},
+		{"SELECT tenant.a+tenant.b FROM tenant.t", "SELECT phys.a+phys.b FROM phys.t"},
+	} {
+		if got := mapDatabases(tc.in, map[string]string{"tenant": "phys"}); got != tc.want {
+			t.Errorf("mapDatabases(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+
+	defer func() {
+		if recover() == nil {
+			t.Fatal("MapDatabase with an empty logical name must panic, not loop")
+		}
+	}()
+	m.MapDatabase("", "phys")
 }

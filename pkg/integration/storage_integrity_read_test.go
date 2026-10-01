@@ -197,10 +197,7 @@ func TestStorageIntegrityRead_SafeAndUnsafeLatest(t *testing.T) {
 // be Exceptions and both physical tables must remain untouched, whether the
 // table-reference guard (enforcing) or the engine (guard observing) refuses.
 func TestStorageIntegrityRead_CriticalStatementsAreRefused(t *testing.T) {
-	lib := os.Getenv("POLYGLOT_SQL_FFI_PATH")
-	if lib == "" {
-		t.Skip("POLYGLOT_SQL_FFI_PATH not set; run `go run ./cmd fetch-rewriter-lib --tag v0.16.0` and pass --test_env")
-	}
+	lib := requireNativeLib(t)
 	ctx := context.Background()
 	const phys = "phys_si_guard"
 	seed := openConnNoDB(t, chEnv.Addr)

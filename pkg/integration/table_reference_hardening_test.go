@@ -85,17 +85,28 @@ func TestTableReference_TenantSourcesResolveEndToEnd(t *testing.T) {
 	}
 }
 
+// guardRefusal is the full client-facing text of a table-reference guard
+// refusal (pkg/plugins/tablerefguard).
+func guardRefusal(rule, detail string) string {
+	return "table-reference guard: " + rule + ": " + detail + "; the rewriter applies the same policy"
+}
+
 // TestTableReference_RefusalsReachTheClientAsExceptions runs each refusal with
 // the guard observing (the engine answers) and enforcing (the guard answers
 // first where a rule applies); the connection survives every refusal.
 func TestTableReference_RefusalsReachTheClientAsExceptions(t *testing.T) {
 	const phys = "phys_tr2"
 	cases := []struct{ sql, engine, guard string }{
-		{"SELECT * FROM {p:Identifier}", "query parameters are not supported in a database or table position", "table-reference guard: identifier_placeholder:"},
-		{"SELECT * FROM db1.o WHERE a IN " + phys + ".`db2.x`", "protected database " + phys + " is not addressable", "table-reference guard: physical_database:"},
-		{"SELECT * FROM merge('" + phys + "', '.*')", "protected database " + phys + " is not addressable", "table-reference guard: carrier_callable:"},
-		{"USE " + phys, "protected database " + phys + " is not addressable", "table-reference guard: physical_database:"},
-		{"SELECT * FROM hg_promote.`db2.x`", "protected database hg_promote is not addressable", "table-reference guard: reserved_name:"},
+		{"SELECT * FROM {p:Identifier}", "query parameters are not supported in a database or table position",
+			guardRefusal("identifier_placeholder", "ClickHouse Identifier query parameters are not accepted")},
+		{"SELECT * FROM db1.o WHERE a IN " + phys + ".`db2.x`", "protected database " + phys + " is not addressable",
+			guardRefusal("physical_database", "protected database "+phys+" is not addressable")},
+		{"SELECT * FROM merge('" + phys + "', '.*')", "protected database " + phys + " is not addressable",
+			guardRefusal("carrier_callable", "table function merge is not accepted")},
+		{"USE " + phys, "protected database " + phys + " is not addressable",
+			guardRefusal("physical_database", "protected database "+phys+" is not addressable")},
+		{"SELECT * FROM hg_promote.`db2.x`", "protected database hg_promote is not addressable",
+			guardRefusal("reserved_name", "reserved database hg_promote is not addressable")},
 		{"DETACH TABLE db1.o", "statement is not supported", "statement is not supported"},
 		{"SELECT 1 SETTINGS enable_analyzer = 0", "table setting enable_analyzer is not accepted", "table setting enable_analyzer is not accepted"},
 	}
@@ -139,6 +150,8 @@ func TestTableReference_StorageIntegrity(t *testing.T) {
 			t.Fatalf("seed %q: %v", q, err)
 		}
 	}
+	// seed is the package's own testcontainers ClickHouse (chEnv), so the
+	// whole-database drops touch nothing outside this test run.
 	t.Cleanup(func() {
 		_ = seed.Exec(ctx, "DROP DATABASE IF EXISTS hg_safe")
 		_ = seed.Exec(ctx, "DROP DATABASE IF EXISTS hg_unsafe")
@@ -179,7 +192,8 @@ func TestTableReference_StorageIntegrity(t *testing.T) {
 // TestTableReference_DriverTrafficIsUnaffected: an indexer-signed driver
 // session (SQL_sentio_driver) is ordinary for the guard and the engine; its
 // DDL, INSERT … SELECT, IN-operand reads and physical-name metadata reads
-// (housegate#218) pass with the guard enforcing.
+// (housegate#218) pass with the guard enforcing, and the guard still refuses
+// the driver a physical-database qualifier.
 func TestTableReference_DriverTrafficIsUnaffected(t *testing.T) {
 	const phys = "phys_trd"
 	signer, err := auth.NewRelaySigner(authTestKey1)
@@ -199,11 +213,21 @@ func TestTableReference_DriverTrafficIsUnaffected(t *testing.T) {
 	for _, q := range []string{
 		"CREATE TABLE drv1.d (a UInt64) ENGINE = MergeTree ORDER BY a",
 		"INSERT INTO drv1.d SELECT number FROM numbers(3)",
-		"SELECT name FROM system.tables WHERE database = '" + phys + "' AND name LIKE 'drv1.%'",
 	} {
 		if err := conn.Exec(ctx, q); err != nil {
 			t.Fatalf("driver %s: %v", q, err)
 		}
+	}
+	var name string
+	if err := conn.QueryRow(ctx, "SELECT name FROM system.tables WHERE database = '"+phys+"' AND name LIKE 'drv1.%'").Scan(&name); err != nil {
+		t.Fatalf("driver physical-name metadata read: %v", err)
+	}
+	if name != "drv1.d" {
+		t.Fatalf("metadata read name = %q, want drv1.d (the physical table of drv1.d)", name)
+	}
+	want := guardRefusal("physical_database", "protected database "+phys+" is not addressable")
+	if err := conn.Exec(ctx, "SELECT * FROM "+phys+".`drv1.d`"); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("driver physical qualifier: err = %v, want it to contain %q (the guard runs on driver sessions)", err, want)
 	}
 	var n uint64
 	if err := conn.QueryRow(ctx, "SELECT count() FROM drv1.d WHERE a IN drv1.d").Scan(&n); err != nil {

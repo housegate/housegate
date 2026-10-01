@@ -113,7 +113,8 @@ func TestUseDatabaseSwitch(t *testing.T) {
 
 // openConnNoDB connects directly to a CH address (not through the proxy)
 // without binding a database — used for test setup that creates the
-// databases the proxy then routes against.
+// databases the proxy then routes against. The connection closes at test
+// cleanup; cleanups registered after this call (e.g. DROPs on it) run first.
 func openConnNoDB(t *testing.T, chAddr string) clickhouse.Conn {
 	t.Helper()
 	conn, err := clickhouse.Open(&clickhouse.Options{
@@ -127,6 +128,7 @@ func openConnNoDB(t *testing.T, chAddr string) clickhouse.Conn {
 	if err != nil {
 		t.Fatalf("clickhouse.Open (no DB): %v", err)
 	}
+	t.Cleanup(func() { _ = conn.Close() })
 	return conn
 }
 

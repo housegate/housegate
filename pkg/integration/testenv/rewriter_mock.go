@@ -165,9 +165,15 @@ func (m *RewriterMock) SetAccessedTables(prefix string, tables []*pb.AccessedTab
 // must name logical databases only (the table-reference guard refuses the
 // physical database, spec 2026-09-26 G2), so a test whose statements must
 // still reach a real ClickHouse table maps the logical name here. The swap
-// is textual: an unquoted logical name at an identifier boundary followed
-// by '.'. SetAccessedTables prefixes still match the SQL as received.
+// is textual: a bare (unquoted) logical name that is a whole identifier,
+// not itself after a '.', and directly followed by '.'. Names inside
+// '…' string literals and "…" / `…` quoted identifiers are left alone, and
+// so is a quoted `logical`.t. SetAccessedTables prefixes still match the
+// SQL as received. An empty logical name panics: it names nothing.
 func (m *RewriterMock) MapDatabase(logical, physical string) {
+	if logical == "" {
+		panic("testenv: RewriterMock.MapDatabase needs a non-empty logical database")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.databases == nil {
@@ -176,28 +182,59 @@ func (m *RewriterMock) MapDatabase(logical, physical string) {
 	m.databases[logical] = physical
 }
 
-// mapDatabases applies the MapDatabase substitutions to sql.
+// mapDatabases applies the MapDatabase substitutions to sql in one pass over
+// its words, copying quoted spans verbatim.
 func mapDatabases(sql string, databases map[string]string) string {
-	for logical, physical := range databases {
-		var b strings.Builder
-		rest := sql
-		for {
-			i := strings.Index(rest, logical+".")
-			if i < 0 {
-				b.WriteString(rest)
-				break
-			}
-			b.WriteString(rest[:i])
-			if i > 0 && isIdentByte(rest[i-1]) {
-				b.WriteString(logical)
-			} else {
-				b.WriteString(physical)
-			}
-			rest = rest[i+len(logical):]
-		}
-		sql = b.String()
+	if len(databases) == 0 {
+		return sql
 	}
-	return sql
+	var b strings.Builder
+	for i := 0; i < len(sql); {
+		c := sql[i]
+		switch {
+		case c == '\'' || c == '"' || c == '`':
+			j := quotedSpanEnd(sql, i)
+			b.WriteString(sql[i:j])
+			i = j
+		case isIdentByte(c):
+			j := i
+			for j < len(sql) && isIdentByte(sql[j]) {
+				j++
+			}
+			word := sql[i:j]
+			physical, ok := databases[word]
+			if ok && j < len(sql) && sql[j] == '.' && (i == 0 || sql[i-1] != '.') {
+				b.WriteString(physical)
+			} else {
+				b.WriteString(word)
+			}
+			i = j
+		default:
+			b.WriteByte(c)
+			i++
+		}
+	}
+	return b.String()
+}
+
+// quotedSpanEnd returns the index just past the quoted span opening at
+// sql[start], honouring backslash escapes and doubled quotes; an
+// unterminated span runs to the end.
+func quotedSpanEnd(sql string, start int) int {
+	quote := sql[start]
+	for k := start + 1; k < len(sql); k++ {
+		switch sql[k] {
+		case '\\':
+			k++
+		case quote:
+			if k+1 < len(sql) && sql[k+1] == quote {
+				k++
+				continue
+			}
+			return k + 1
+		}
+	}
+	return len(sql)
 }
 
 func isIdentByte(c byte) bool {
