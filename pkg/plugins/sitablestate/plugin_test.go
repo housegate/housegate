@@ -198,6 +198,8 @@ func TestDataCarryingCreationIntoGovernedTables(t *testing.T) {
 		{"MV named like a pending table, view not reported", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW IF NOT EXISTS db1.p ENGINE = Memory AS SELECT a FROM db1.o", accessed("db1.o"), withDataErr("db1.p")},
 		{"plain MV with an ordinary name", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.mv ENGINE = Memory AS SELECT a FROM db1.o", accessed("db1.mv", "db1.o"), ok},
 		// An unreadable header is refused whatever the engine reported.
+		// Spec 2026-09-26 T10: ClickHouse reads `\x70` as p, the lexer cannot; refused whatever the engine reported.
+		{"MV TO an escaped pending name", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.mv TO db1.`\\x70` AS SELECT a FROM db1.o", accessed("db1.mv", "db1.o"), unreadableErr},
 		{"MV with an unreadable header", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.mv /* TO db1.p AS SELECT a FROM db1.o", accessed("db1.mv", "db1.o"), unreadableErr},
 		{"MV with an unreadable header, nothing accessed", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.mv /* TO db1.p AS SELECT a FROM db1.o", nil, unreadableErr},
 		{"MV with no view name, nothing accessed", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW AS SELECT 1", nil, unreadableErr},

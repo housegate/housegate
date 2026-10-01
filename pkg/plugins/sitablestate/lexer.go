@@ -50,7 +50,9 @@ func (t token) isName() bool {
 
 // tokenize splits sql into tokens, skipping whitespace and comments. ok is
 // false when any span cannot be modelled with certainty; the caller must then
-// fail closed.
+// fail closed. A backslash inside a backtick or double-quoted identifier is
+// such a span (spec 2026-09-26 T10); inside a single-quoted literal it still
+// escapes the next byte.
 func tokenize(sql string) (out []token, ok bool) {
 	depth := 0
 	for i := 0; i < len(sql); {
@@ -163,6 +165,12 @@ func readQuoted(sql string, start int) (string, int, bool) {
 	for i := start + 1; i < len(sql); i++ {
 		switch sql[i] {
 		case '\\':
+			if quote != '\'' {
+				// ClickHouse decodes escapes inside quoted identifiers; this
+				// lexer does not model that table, so the header is unreadable
+				// and the caller fails closed (spec 2026-09-26 T10).
+				return "", len(sql), false
+			}
 			if i+1 >= len(sql) {
 				return "", len(sql), false
 			}
