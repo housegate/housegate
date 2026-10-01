@@ -531,6 +531,17 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	if siOptions.Enabled && rwFactory == nil {
 		return nil, fmt.Errorf("storage_integrity.enabled requires an available SQL rewriter; refusing fail-open startup")
 	}
+	// refuseRewriter refuses startup over the rewriter itself and closes what
+	// has been built so far — at this point the rewriter factory built from
+	// config (an injected factory is never in the stack: the host owns it) —
+	// so a library host that retries New does not accumulate gRPC connections
+	// or loaded engines.
+	refuseRewriter := func(err error) (*builtServer, error) {
+		for i := len(teardownStack) - 1; i >= 0; i-- {
+			teardownStack[i]()
+		}
+		return nil, err
+	}
 	probeTimeout := cfg.Rewriter.Timeout.Duration
 	if probeTimeout <= 0 {
 		probeTimeout = 5 * time.Second
@@ -542,20 +553,20 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	if rwFactory != nil {
 		prober, ok := rwFactory.(rewriter.TableReferenceProbeFactory)
 		if !ok {
-			return nil, fmt.Errorf("the SQL rewriter must implement rewriter.TableReferenceProbeFactory; refusing unverified startup (spec 2026-09-26 T13)")
+			return refuseRewriter(fmt.Errorf("the SQL rewriter must implement rewriter.TableReferenceProbeFactory; refusing unverified startup (spec 2026-09-26 T13)"))
 		}
 		probeCtx, cancelProbe := context.WithTimeout(context.Background(), probeTimeout)
 		err := prober.ProbeTableReferencePolicy(probeCtx)
 		cancelProbe()
 		if err != nil {
-			return nil, err
+			return refuseRewriter(err)
 		}
 		log.Info("rewriter table-reference policy verified")
 	}
 	if siOptions.Enabled {
 		capable, ok := rwFactory.(rewriter.StorageIntegrityCapableFactory)
 		if !ok || capable.StorageIntegrityContractVersion() != rewriter.StorageIntegrityContractV2 {
-			return nil, fmt.Errorf("storage_integrity.enabled requires a storage-integrity contract V2 capable SQL rewriter; refusing fail-open startup")
+			return refuseRewriter(fmt.Errorf("storage_integrity.enabled requires a storage-integrity contract V2 capable SQL rewriter; refusing fail-open startup"))
 		}
 		// Contract V2 proves only that the backend understood the request; old
 		// engines can acknowledge it while missing the Spec I fail-closed
@@ -563,13 +574,13 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		// same behavioral conformance probe before an SI surface can start.
 		prober, ok := rwFactory.(rewriter.StorageIntegrityProbeFactory)
 		if !ok {
-			return nil, fmt.Errorf("storage_integrity.enabled requires a SQL rewriter implementing rewriter.StorageIntegrityProbeFactory; refusing unverified startup")
+			return refuseRewriter(fmt.Errorf("storage_integrity.enabled requires a SQL rewriter implementing rewriter.StorageIntegrityProbeFactory; refusing unverified startup"))
 		}
 		probeCtx, cancelProbe := context.WithTimeout(context.Background(), probeTimeout)
 		err := prober.ProbeStorageIntegrityBuild(probeCtx)
 		cancelProbe()
 		if err != nil {
-			return nil, err
+			return refuseRewriter(err)
 		}
 		log.Infow("storage-integrity rewriter build verified", "table_state", storageIntegrityTableStateLabel(siStatic))
 	}

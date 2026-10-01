@@ -8,9 +8,13 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	pb "github.com/housegate/rewriter-proto/gen/pb"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/stats"
+	"google.golang.org/grpc/status"
 
 	"github.com/housegate/housegate/pkg/cluster"
 	"github.com/housegate/housegate/pkg/config"
@@ -317,6 +321,93 @@ func TestBuildServer_TypedNilInjectedRewriterGetsLibraryWiring(t *testing.T) {
 			bs.teardown()
 			if got := capture.has("rewriter peer-relay signer wired"); got != tc.wantWired {
 				t.Fatalf("peer-relay signer wired = %v, want %v", got, tc.wantWired)
+			}
+		})
+	}
+}
+
+// nonConformingRewriterService answers every request with answer, which no
+// conforming engine gives to every startup probe.
+type nonConformingRewriterService struct {
+	pb.UnimplementedRewriterServiceServer
+	answer func(*pb.RewriteSQLRequest) (*pb.RewriteSQLResponse, error)
+}
+
+func (s nonConformingRewriterService) Rewrite(_ context.Context, req *pb.RewriteSQLRequest) (*pb.RewriteSQLResponse, error) {
+	return s.answer(req)
+}
+
+// connEndCounter is a server stats.Handler that counts ended transports, so
+// a test can observe the client closing its gRPC connection.
+type connEndCounter struct {
+	mu    sync.Mutex
+	ended int
+}
+
+func (c *connEndCounter) TagRPC(ctx context.Context, _ *stats.RPCTagInfo) context.Context { return ctx }
+func (c *connEndCounter) HandleRPC(context.Context, stats.RPCStats)                       {}
+func (c *connEndCounter) TagConn(ctx context.Context, _ *stats.ConnTagInfo) context.Context {
+	return ctx
+}
+func (c *connEndCounter) HandleConn(_ context.Context, s stats.ConnStats) {
+	if _, ok := s.(*stats.ConnEnd); ok {
+		c.mu.Lock()
+		c.ended++
+		c.mu.Unlock()
+	}
+}
+
+func (c *connEndCounter) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.ended
+}
+
+// TestBuildServer_BuiltRewriterFailingTheProbeRefusesStartupUnderFailOpen
+// pins spec 2026-09-26 T13 for a library-built factory: the probe runs on it
+// too, rewriter.fail_open_on_unavailable (which covers only an unbuildable
+// rewriter) does not turn a failed probe into a fail-open start, whether the
+// engine answers wrongly or its transport fails, and the factory built for
+// the refused start is closed.
+func TestBuildServer_BuiltRewriterFailingTheProbeRefusesStartupUnderFailOpen(t *testing.T) {
+	for name, answer := range map[string]func(*pb.RewriteSQLRequest) (*pb.RewriteSQLResponse, error){
+		"success for everything": func(req *pb.RewriteSQLRequest) (*pb.RewriteSQLResponse, error) {
+			return &pb.RewriteSQLResponse{Code: pb.RewriteCode_Success, SqlAfterRewrite: req.GetSql()}, nil
+		},
+		"transport unavailable": func(*pb.RewriteSQLRequest) (*pb.RewriteSQLResponse, error) {
+			return nil, status.Error(codes.Unavailable, "rewriter going away")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			lis, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			ends := &connEndCounter{}
+			gs := grpc.NewServer(grpc.StatsHandler(ends))
+			pb.RegisterRewriterServiceServer(gs, nonConformingRewriterService{answer: answer})
+			go func() { _ = gs.Serve(lis) }()
+			t.Cleanup(gs.Stop)
+
+			cfg := minimalServerCfg(t)
+			cfg.Rewriter.Engine = "grpc"
+			cfg.Rewriter.ServiceAddr = lis.Addr().String()
+			cfg.Rewriter.PhysicalDatabase = "phys"
+			cfg.Rewriter.FailOpenOnUnavailable = true
+			bs, err := buildServer(Options{Config: cfg, NetworkState: network.NewInMemoryNetworkState()}, nil)
+			if err == nil {
+				bs.teardown()
+				t.Fatal("a built rewriter that fails the table-reference probe started the server")
+			}
+			if !strings.Contains(err.Error(), "rewriter table-reference probe") || !strings.Contains(err.Error(), rewriter.TableReferenceProbeRequiredBuild) {
+				t.Fatalf("err = %v, want the table-reference probe refusal", err)
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			for ends.count() == 0 {
+				if time.Now().After(deadline) {
+					t.Fatal("the rewriter factory built for the refused start was not closed")
+				}
+				time.Sleep(10 * time.Millisecond)
 			}
 		})
 	}

@@ -102,7 +102,10 @@ func storageIntegrityProbeArgs(emptyTables bool) *pb.RewriteTableDynamicArgs {
 	}
 }
 
-type storageIntegrityBuildProbe struct {
+// buildProbe is one fixed startup probe case and its exact expected answer.
+// Both the storage-integrity probe and the table-reference policy probe are
+// built from it.
+type buildProbe struct {
 	name          string
 	emptyTables   bool
 	sql           string
@@ -115,7 +118,7 @@ type storageIntegrityBuildProbe struct {
 	message          string
 }
 
-var storageIntegrityBuildProbes = []storageIntegrityBuildProbe{
+var storageIntegrityProbes = []buildProbe{
 	{
 		name:          "describe-fingerprint",
 		sql:           storageIntegrityProbeSQL,
@@ -215,7 +218,7 @@ func (f *SentioNetworkFactory) ProbeStorageIntegrityBuild(ctx context.Context) e
 	probeCtx, cancel := context.WithTimeout(ctx, f.probeTimeout())
 	defer cancel()
 
-	for _, probe := range storageIntegrityBuildProbes {
+	for _, probe := range storageIntegrityProbes {
 		resp, err := f.backend.Rewrite(probeCtx, &pb.RewriteSQLRequest{
 			Sql:     probe.sql,
 			Options: []*pb.RewriteOption{rewriteOption(storageIntegrityProbeArgs(probe.emptyTables))},
@@ -231,7 +234,7 @@ func (f *SentioNetworkFactory) ProbeStorageIntegrityBuild(ctx context.Context) e
 var _ StorageIntegrityProbeFactory = (*SentioNetworkFactory)(nil)
 
 // expectedSQL is the probe's exact output for the given engine.
-func (p storageIntegrityBuildProbe) expectedSQL(engine string) string {
+func (p buildProbe) expectedSQL(engine string) string {
 	if p.sqlAfterByEngine != nil {
 		return p.sqlAfterByEngine[engine]
 	}
@@ -252,9 +255,13 @@ func (f *SentioNetworkFactory) probeTimeout() time.Duration {
 	return f.options.Timeout
 }
 
-// checkProbeAnswer compares one probe answer field by field. The error never
-// quotes SQL or engine messages, so it cannot leak protocol-owned names.
-func checkProbeAnswer(label, engine string, probe storageIntegrityBuildProbe, wantAck pb.StorageIntegrityContractVersion, requiredBuild string, resp *pb.RewriteSQLResponse, err error) error {
+// checkProbeAnswer compares one probe answer field by field. An answer
+// mismatch is reported by field name only — never the probe SQL, the
+// rewritten SQL or the engine message — so it cannot leak protocol-owned
+// names. A transport error is the exception: it is wrapped verbatim (%w),
+// because the operator needs the backend's own reason (unreachable,
+// deadline, status message) to act on it.
+func checkProbeAnswer(label, engine string, probe buildProbe, wantAck pb.StorageIntegrityContractVersion, requiredBuild string, resp *pb.RewriteSQLResponse, err error) error {
 	prefix := fmt.Sprintf("%s (engine=%s probe=%s)", label, engine, probe.name)
 	switch {
 	case err != nil:
@@ -304,8 +311,8 @@ func tableReferenceProbeArgs() *pb.RewriteTableDynamicArgs {
 
 // rejectedProbe is a policy case both engines refuse: the input SQL echoed,
 // no statement type.
-func rejectedProbe(name, sql string, code pb.RewriteCode, message string) storageIntegrityBuildProbe {
-	return storageIntegrityBuildProbe{name: name, sql: sql, code: code,
+func rejectedProbe(name, sql string, code pb.RewriteCode, message string) buildProbe {
+	return buildProbe{name: name, sql: sql, code: code,
 		statementType: pb.StatementType_STATEMENT_TYPE_UNSPECIFIED, sqlAfter: sql, message: message}
 }
 
@@ -316,7 +323,7 @@ func rejectedProbe(name, sql string, code pb.RewriteCode, message string) storag
 // engines echo the input SQL on a rejection and acknowledge no contract
 // without StorageIntegrityArgs. Changing a pin needs a re-measurement against
 // both engines; never loosen the comparison to make one pass.
-var tableReferenceProbes = []storageIntegrityBuildProbe{
+var tableReferenceProbes = []buildProbe{
 	rejectedProbe("param-table-position", "SELECT * FROM {p:Identifier}",
 		pb.RewriteCode_InvalidRewriteRequest, "query parameters are not supported in a database or table position"),
 	rejectedProbe("protected-in-operand", "SELECT * FROM db1.o WHERE a IN phys.`db2.x`",

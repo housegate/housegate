@@ -82,8 +82,16 @@ type Options struct {
 	// AND the source value itself are bypassed; the injected registry is
 	// used verbatim. The operator-visible source field is irrelevant in
 	// that path even if non-empty.
-	NetworkState          registry.Registry
-	Validator             auth.Validator
+	NetworkState registry.Registry
+	Validator    auth.Validator
+	// Rewriter, if non-nil, replaces the SQL rewriter factory built from
+	// Config.Rewriter. A server-mode New probes it at startup (spec
+	// 2026-09-26 T13): it must implement rewriter.TableReferenceProbeFactory
+	// and pass ProbeTableReferencePolicy, and with storage integrity enabled
+	// it must also implement rewriter.StorageIntegrityCapableFactory (contract
+	// V2) and rewriter.StorageIntegrityProbeFactory and pass
+	// ProbeStorageIntegrityBuild; otherwise New refuses to start. The host
+	// owns the factory: New never closes it.
 	Rewriter              rewriter.Factory
 	CredProvider          credentials.CredentialProvider
 	Signer                auth.Signer

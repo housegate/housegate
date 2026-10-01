@@ -136,6 +136,9 @@ go_test(
         "@com_github_prometheus_client_golang//prometheus/testutil",
         "@com_github_sentioxyz_arbiter_proto//gen/pb",
         "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//stats",
+        "@org_golang_google_grpc//status",
     ],
 )
 
