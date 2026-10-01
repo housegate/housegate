@@ -265,3 +265,59 @@ func TestScanTokenStream(t *testing.T) {
 		}
 	}
 }
+
+// TestScanDecodeStringEscapes pins Options.DecodeStringEscapes against
+// ClickHouse 26.8.1, measured with SELECT hex('a\<b>z') for every byte b:
+// \0 \N \a \b \e \f \n \r \t \v decode to their control byte (\N to
+// nothing); a control byte (0x00-0x1F), " ' / = \ and ` after a backslash
+// decode to themselves; \x takes exactly two hex digits; every other byte
+// keeps its backslash. Heredoc bodies are never decoded.
+func TestScanDecodeStringEscapes(t *testing.T) {
+	for _, tc := range []struct{ sql, want string }{
+		{`'ph\x79s.j'`, "phys.j"},
+		{`'hg\x5Fsafe'`, "hg_safe"},
+		{`'\xAb\xff'`, "\xab\xff"},
+		{`'hg_\Nsafe'`, "hg_safe"},
+		{`'a\0b'`, "a\x00b"},
+		{`'a\01b'`, "a\x001b"},
+		{`'\a\b\e\f\n\r\t\v'`, "\a\b\x1b\f\n\r\t\v"},
+		{`'\"\'\/\=\\` + "\\`'", "\"'/=\\`"},
+		{"'a\\\nb'", "a\nb"},
+		{"'a\\\x01b'", "a\x01b"},
+		{`'\X41A\_\%\ \c\101\$'`, `\X41A\_\%\ \c\101\$`},
+		{"'a\\\xc3\xa9'", "a\\\xc3\xa9"},
+		{`'it''s'`, "it's"},
+		{`$$ph\x79s$$`, `ph\x79s`},
+		{`$t$a\'b$t$`, `a\'b`},
+	} {
+		s, err := ScanWith(tc.sql, Options{DecodeStringEscapes: true})
+		if err != nil {
+			t.Errorf("ScanWith(%q): %v", tc.sql, err)
+			continue
+		}
+		if len(s.Tokens) != 1 || s.Tokens[0].Kind != TokenString || s.Tokens[0].Text != tc.want {
+			t.Errorf("ScanWith(%q) tokens = %q, want one string %q", tc.sql, s.Tokens, tc.want)
+		}
+		if !strings.Contains(s.WithLiterals, tc.want) {
+			t.Errorf("ScanWith(%q) literal surface %q lacks %q", tc.sql, s.WithLiterals, tc.want)
+		}
+	}
+	// Literal boundaries are the lexer's: a backslash always escapes exactly
+	// the next byte, so decoding never moves a quote.
+	s, err := ScanWith(`'a\'', phys.t, '\x41'`, Options{DecodeStringEscapes: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Token{{TokenString, "a'"}, {TokenPunct, ","}, {TokenWord, "phys"}, {TokenPunct, "."}, {TokenWord, "t"}, {TokenPunct, ","}, {TokenString, "A"}}
+	if !reflect.DeepEqual(s.Tokens, want) {
+		t.Fatalf("tokens = %q, want %q", s.Tokens, want)
+	}
+	// ClickHouse's \x reads the next two bytes whatever they are: a non-hex
+	// pair becomes an unpredictable byte and a closing quote inside the pair
+	// is a syntax error. The scanner refuses rather than guess.
+	for _, sql := range []string{`'\x4g'`, `'\xzz'`, `'\x4'`, `'\x'`, `'\x\'`, `'a\x4\'b'`} {
+		if _, err := ScanWith(sql, Options{DecodeStringEscapes: true}); !errors.Is(err, ErrUndecodableStringEscape) {
+			t.Errorf("ScanWith(%q) err = %v, want %v", sql, err, ErrUndecodableStringEscape)
+		}
+	}
+}

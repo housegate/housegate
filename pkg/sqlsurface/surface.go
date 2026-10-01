@@ -24,6 +24,12 @@ var (
 	// literals, comments and heredoc bodies. ClickHouse reads such a byte
 	// either as Unicode whitespace or as a syntax error.
 	ErrNonASCII = errors.New("non-ASCII byte outside a quoted identifier, string literal, comment or heredoc is not accepted by the storage-integrity guard")
+	// ErrUndecodableStringEscape reports a \x escape that is not followed by
+	// two hex digits inside a single-quoted literal scanned with
+	// Options.DecodeStringEscapes. ClickHouse reads the next two bytes
+	// whatever they are (\x4g is 0x3F, a quote inside the pair is a syntax
+	// error), so the scanner refuses rather than guess.
+	ErrUndecodableStringEscape = errors.New("\\x escape without two hex digits is not accepted by the table-reference guard")
 )
 
 // TokenKind classifies a Token.
@@ -35,10 +41,12 @@ const (
 	// TokenQuoted is a backtick or double-quoted identifier, delimiters
 	// removed and doubled delimiters collapsed.
 	TokenQuoted
-	// TokenString is a single-quoted literal or a heredoc body. Escapes are
-	// never decoded: with Options.AllowStringEscapes a backslash and the byte
-	// it escapes are kept as written. A doubled '' inside a single-quoted
-	// literal is blanked to one space, so 'a b' and 'a''b' yield the same text.
+	// TokenString is a single-quoted literal or a heredoc body. By default
+	// escapes are not decoded: with Options.AllowStringEscapes a backslash and
+	// the byte it escapes are kept as written, and a doubled '' inside a
+	// single-quoted literal is blanked to one space, so 'a b' and 'a''b' yield
+	// the same text. With Options.DecodeStringEscapes a single-quoted literal
+	// is the value ClickHouse reads instead. Heredoc bodies are always raw.
 	TokenString
 	// TokenPunct is any other single non-space byte.
 	TokenPunct
@@ -70,11 +78,24 @@ type Surfaces struct {
 type Options struct {
 	// AllowStringEscapes keeps a backslash inside a single-quoted literal,
 	// raw, and lets it escape the next byte (so \' does not close the
-	// literal), instead of refusing the statement. Ordinary-session guards
-	// set it: tenants legitimately write 'a\nb'. Privileged-session guards
-	// leave it off, because decoding escapes is where an encoded name such
-	// as hg\x5Fsafe would hide.
+	// literal), instead of refusing the statement. Tenants legitimately
+	// write 'a\nb'; the ordinary-session guard sets DecodeStringEscapes,
+	// which implies this. Privileged-session guards leave both off, because
+	// decoding escapes is where an encoded name such as hg\x5Fsafe would
+	// hide.
 	AllowStringEscapes bool
+	// DecodeStringEscapes implies AllowStringEscapes and decodes each
+	// single-quoted literal into the value ClickHouse reads, on WithLiterals
+	// and in its TokenString. Measured on ClickHouse 26.8.1 for every byte
+	// after a backslash: \0 \a \b \e \f \n \r \t \v are control bytes, \N is
+	// nothing, a control byte (0x00-0x1F) and " ' / = \ ` are themselves,
+	// \xHH is the byte HH, and any other byte keeps its backslash (\u0041
+	// and \_ stay as written). A doubled '' is one quote. A \x without two
+	// hex digits is ErrUndecodableStringEscape. A backslash still escapes
+	// exactly one byte for the literal's extent, as in ClickHouse's lexer, so
+	// decoding never moves a literal boundary. Guards that compare literal
+	// contents with names set it: '\x70hys' is phys to ClickHouse.
+	DecodeStringEscapes bool
 }
 
 // Scan is ScanWith with default options.
@@ -104,7 +125,7 @@ func ScanWith(sql string, opts Options) (Surfaces, error) {
 			flushWord(i)
 			outside.WriteByte(' ')
 			withLiterals.WriteByte(' ')
-			next, literal, err := consumeStringLiteral(sql, i, opts.AllowStringEscapes)
+			next, literal, err := consumeStringLiteral(sql, i, opts)
 			if err != nil {
 				return Surfaces{}, err
 			}
@@ -208,22 +229,39 @@ func ScanWith(sql string, opts Options) (Surfaces, error) {
 	return Surfaces{OutsideLiterals: outside.String(), WithLiterals: withLiterals.String(), Tokens: tokens}, nil
 }
 
-func consumeStringLiteral(sql string, start int, allowEscapes bool) (int, string, error) {
+func consumeStringLiteral(sql string, start int, opts Options) (int, string, error) {
 	var literal strings.Builder
 	for i := start + 1; i < len(sql); {
 		switch sql[i] {
 		case '\\':
-			if !allowEscapes {
+			if !opts.AllowStringEscapes && !opts.DecodeStringEscapes {
 				return 0, "", ErrStringLiteralBackslash
 			}
 			if i+1 >= len(sql) {
 				return 0, "", fmt.Errorf("unterminated single-quoted string literal")
 			}
-			literal.WriteString(sql[i : i+2])
+			if !opts.DecodeStringEscapes {
+				literal.WriteString(sql[i : i+2])
+				i += 2
+				continue
+			}
+			if sql[i+1] == 'x' {
+				if i+3 >= len(sql) || !isHexDigit(sql[i+2]) || !isHexDigit(sql[i+3]) {
+					return 0, "", ErrUndecodableStringEscape
+				}
+				literal.WriteByte(hexValue(sql[i+2])<<4 | hexValue(sql[i+3]))
+				i += 4
+				continue
+			}
+			decodeEscape(&literal, sql[i+1])
 			i += 2
 		case '\'':
 			if i+1 < len(sql) && sql[i+1] == '\'' {
-				literal.WriteByte(' ')
+				if opts.DecodeStringEscapes {
+					literal.WriteByte('\'')
+				} else {
+					literal.WriteByte(' ')
+				}
 				i += 2
 				continue
 			}
@@ -234,6 +272,57 @@ func consumeStringLiteral(sql string, start int, allowEscapes bool) (int, string
 		}
 	}
 	return 0, "", fmt.Errorf("unterminated single-quoted string literal")
+}
+
+// decodeEscape writes what ClickHouse 26.8.1 reads for a backslash followed
+// by b (other than x), measured for every byte b (see
+// Options.DecodeStringEscapes).
+func decodeEscape(literal *strings.Builder, b byte) {
+	switch b {
+	case '0':
+		literal.WriteByte(0)
+	case 'N':
+	case 'a':
+		literal.WriteByte('\a')
+	case 'b':
+		literal.WriteByte('\b')
+	case 'e':
+		literal.WriteByte(0x1b)
+	case 'f':
+		literal.WriteByte('\f')
+	case 'n':
+		literal.WriteByte('\n')
+	case 'r':
+		literal.WriteByte('\r')
+	case 't':
+		literal.WriteByte('\t')
+	case 'v':
+		literal.WriteByte('\v')
+	case '"', '\'', '/', '=', '\\', '`':
+		literal.WriteByte(b)
+	default:
+		if b < 0x20 {
+			literal.WriteByte(b)
+			return
+		}
+		literal.WriteByte('\\')
+		literal.WriteByte(b)
+	}
+}
+
+func isHexDigit(b byte) bool {
+	return b >= '0' && b <= '9' || b >= 'a' && b <= 'f' || b >= 'A' && b <= 'F'
+}
+
+func hexValue(b byte) byte {
+	switch {
+	case b >= 'a':
+		return b - 'a' + 10
+	case b >= 'A':
+		return b - 'A' + 10
+	default:
+		return b - '0'
+	}
 }
 
 // consumeHeredoc reads a ClickHouse heredoc string literal ($$body$$ or
