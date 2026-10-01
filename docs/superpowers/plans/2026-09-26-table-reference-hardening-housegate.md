@@ -4,11 +4,13 @@
 
 **Goal:** Make housegate send the protected namespace to the engines, fail closed on every engine rejection, guard ordinary sessions lexically, refuse escaped identifiers in `sitablestate`, know `hg_promote` everywhere, and refuse to start against an engine that does not prove the policy.
 
-**Architecture:** `pkg/rewriter` sends `protected_databases` on every request and turns every non-`Success` answer into a `RejectedError`; a new `rewriter.fail_open_on_unavailable` switch (default off) is the only remaining fail-open, for transport failures with storage integrity disabled. `sireserved`'s lexical scanner moves to `pkg/sqlsurface`; a new `pkg/plugins/tablerefguard` plugin runs before `forward` and `rewrite` on ordinary sessions with the spec's five lexical rules and an `observe` mode. The startup probe runs for every rewriter factory and gains the policy cases. Engine pins move to rewriter-go v0.14.0 / rewriter-proto v0.4.0.
+**Architecture:** `pkg/rewriter` sends `protected_databases` on every request and turns every non-`Success` answer into a `RejectedError`; a new `rewriter.fail_open_on_unavailable` switch (default off) is the only remaining fail-open, for transport failures with storage integrity disabled. `sireserved`'s lexical scanner moves to `pkg/sqlsurface`; a new `pkg/plugins/tablerefguard` plugin runs before `forward` and `rewrite` on ordinary sessions with the spec's five lexical rules and an `observe` mode. The startup probe runs for every rewriter factory and gains the policy cases. Engine pins move to rewriter-go v0.16.0 / rewriter-proto v0.4.0.
 
 **Tech Stack:** Go 1.25, Bazel 9.1.0 + Bzlmod (`bazel test //...`, `bazel run //:gazelle`), Prometheus client, the docker-bound integration suite.
 
-**Spec:** [docs/superpowers/specs/2026-09-26-table-reference-hardening-design.md](../specs/2026-09-26-table-reference-hardening-design.md), §9 and §10.3–10.5. Depends on Plan A (`rewriter-proto` v0.4.0, `rewriter-go` v0.14.0 with the new FFI asset) and Plan B (`rewriter-grpc` v0.16.0) being released; Task 1 pins them.
+**Spec:** [docs/superpowers/specs/2026-09-26-table-reference-hardening-design.md](../specs/2026-09-26-table-reference-hardening-design.md), §9 and §10.3–10.5. Depends on Plan A (`rewriter-proto` v0.4.0, `rewriter-go` v0.16.0 with the new FFI asset) and Plan B (`rewriter-grpc` v0.16.0) being released; Task 1 pins them.
+
+**Pending amendment (2026-10-01):** add a task for spec §9.7 (Query-packet settings): refuse the R5 setting names (incl. name-binding settings, `legacy_column_name_of_tuple_literal`, `profile`) and the analyzer-off values of `enable_analyzer` / `allow_experimental_analyzer` carried in the native Query packet, with unit and integration tests; and a deployment check/runbook note that every ClickHouse settings profile keeps the analyzer on. Write the task before executing this plan.
 
 **Working copy:** `/Users/uranuswch/Dev/housegate/housegate`, branch `feat/table-reference-hardening` from `origin/main` (`git fetch origin && git checkout -b feat/table-reference-hardening origin/main`). Bazel is the ground truth: after adding files or deps run `bazel mod tidy && bazel run //:gazelle`. Unit targets: `bazel test //pkg/rewriter:rewriter_test //pkg/plugins/...`; the integration target is tagged `manual` and needs docker plus `--test_env=POLYGLOT_SQL_FFI_PATH=…`.
 
@@ -18,7 +20,7 @@
 - The guard's five rules and their names are exactly `reserved_name`, `physical_database`, `carrier_callable`, `identifier_placeholder`, `escaped_identifier` (spec §9.2); the error message shape is `table-reference guard: <rule>: <detail>; the rewriter applies the same policy`.
 - The guard never runs on maintenance, platform-operator, peer-trusted or forwarded-from-peer sessions; it runs on driver sessions.
 - The protected list sent to the engine is `[rewriter.physical_database] ∪ sitable.ReservedDatabases()`; nothing lists `hg_*` names by hand.
-- Minimum engine builds: rewriter-go v0.14.0 (native), rewriter-grpc v0.16.0; the probe's failure text names them.
+- Minimum engine builds: rewriter-go v0.16.0 (native), rewriter-grpc v0.16.0; the probe's failure text names them.
 - Follow CLAUDE.md conventions: `pkg/log` structured logging, `fmt.Errorf("…: %w")`, English comments, no hard-wrapped Markdown, gazelle-managed `BUILD.bazel`.
 
 ## Review Focus
@@ -34,14 +36,14 @@
 ### Task 1: pin the released engines and the proto
 
 **Files:**
-- Modify: `go.mod`, `go.sum` (`rewriter-go` v0.14.0, `rewriter-proto` v0.4.0), `MODULE.bazel.lock` if Bazel rewrites it
-- Modify: `CLAUDE.md` "Current ordinary native FFI release pin" paragraph (v0.14.0 assets and hashes), sample configs' `native_library_release` if they name a tag
+- Modify: `go.mod`, `go.sum` (`rewriter-go` v0.16.0, `rewriter-proto` v0.4.0), `MODULE.bazel.lock` if Bazel rewrites it
+- Modify: `CLAUDE.md` "Current ordinary native FFI release pin" paragraph (v0.16.0 assets and hashes, identical to v0.15.0's: linux/amd64 `sha256:0a2bfaef183441885a1462a3381401f7b191dab25d1fab1364193effa72d2745`, darwin/arm64 `sha256:f3a8b3f512ea93553d25b978532152912249733a717718e87c888171b0a73fac`, built from Polyglot v0.13.0), sample configs' `native_library_release` if they name a tag
 - Modify: `pkg/ffifetch` tests or constants that pin v0.13.0 (grep `v0.13.0`)
 
 - [ ] **Step 1: Bump and re-sync**
 
-Run: `go get github.com/housegate/rewriter-go@v0.14.0 github.com/housegate/rewriter-proto@v0.4.0 && go mod tidy && bazel mod tidy && bazel run //:gazelle && bazel build //cmd:housegate`
-Expected: builds. `grep -rn 'v0.13.0' --include=*.go --include=*.md --include=*.yaml . | grep -v docs/superpowers` lists every remaining pin; update each to v0.14.0 with the new asset hashes from the rewriter-go release page (`SHA256SUMS`).
+Run: `go get github.com/housegate/rewriter-go@v0.16.0 github.com/housegate/rewriter-proto@v0.4.0 && go mod tidy && bazel mod tidy && bazel run //:gazelle && bazel build //cmd:housegate`
+Expected: builds. `grep -rn 'v0.13.0' --include=*.go --include=*.md --include=*.yaml . | grep -v docs/superpowers` lists every remaining pin; update each to v0.16.0 with the new asset hashes from the rewriter-go release page (`SHA256SUMS`).
 
 - [ ] **Step 2: Baseline test run**
 
@@ -52,7 +54,7 @@ Expected: the probe-related tests pass unchanged (the probe still sends the old 
 
 ```bash
 git add go.mod go.sum MODULE.bazel.lock CLAUDE.md $(git ls-files -m)
-git commit -m "chore(deps): rewriter-go v0.14.0, rewriter-proto v0.4.0 (table-reference hardening)"
+git commit -m "chore(deps): rewriter-go v0.16.0, rewriter-proto v0.4.0 (table-reference hardening)"
 ```
 
 ---
@@ -936,7 +938,7 @@ git commit -m "fix(storage-integrity): hg_promote joins the sireserved and scrub
 - Test: `pkg/rewriter/probe_test.go`, `build_test.go:282-392`
 
 **Interfaces:**
-- Produces: `type RewriterProbeFactory interface { Factory; ProbeRewriterBuild(ctx context.Context, storageIntegrity bool) error }`; `StorageIntegrityProbeFactory` stays as an alias whose method calls `ProbeRewriterBuild(ctx, true)`. Constants: `TableReferenceProbeRequiredBuild = "rewriter-go >= v0.14.0 or rewriter-grpc >= v0.16.0 (table-reference policy, spec 2026-09-26)"`.
+- Produces: `type RewriterProbeFactory interface { Factory; ProbeRewriterBuild(ctx context.Context, storageIntegrity bool) error }`; `StorageIntegrityProbeFactory` stays as an alias whose method calls `ProbeRewriterBuild(ctx, true)`. Constants: `TableReferenceProbeRequiredBuild = "rewriter-go >= v0.16.0 or rewriter-grpc >= v0.16.0 (table-reference policy, spec 2026-09-26)"`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -957,7 +959,7 @@ func TestProbeRewriterBuild_EngineIgnoringProtectedDatabasesIsRefused(t *testing
 	be := &fakeBackend{script: policyProbeScriptWithout("protected-in-operand")} // returns Success for the phys IN operand
 	f := newTestFactory(t, be, Options{PhysicalDatabase: "phys"})
 	err := f.ProbeRewriterBuild(context.Background(), false)
-	if err == nil || !strings.Contains(err.Error(), "probe=protected-in-operand") || !strings.Contains(err.Error(), "rewriter-go >= v0.14.0") {
+	if err == nil || !strings.Contains(err.Error(), "probe=protected-in-operand") || !strings.Contains(err.Error(), "rewriter-go >= v0.16.0") {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -1071,7 +1073,7 @@ func TestTableReference_DriverTrafficIsUnaffected(t *testing.T) {
 
 Add an SI-enabled variant (`testenv.WithStorageIntegrity("db1.t")`): `SELECT * FROM db1.o WHERE a IN db1.t` returns the safe read's rows; `CREATE MATERIALIZED VIEW db1.mv TO db1.`\x74` AS SELECT * FROM db1.o` against a Pending `db1.t` is refused with the `sitablestate` unreadable-header message. Read `pkg/integration/storage_integrity_table_state_test.go` for the table-state fixture (`sitable.Fake`) and reuse it.
 
-- [ ] **Step 2: Run** — `bazel test //pkg/integration:integration_test --test_filter='TestTableReference_' --test_env=POLYGLOT_SQL_FFI_PATH=$HOME/Library/Caches/housegate/rewriter-ffi/v0.14.0/libpolyglot_sql_ffi.dylib --test_output=errors`
+- [ ] **Step 2: Run** — `bazel test //pkg/integration:integration_test --test_filter='TestTableReference_' --test_env=POLYGLOT_SQL_FFI_PATH=$HOME/Library/Caches/housegate/rewriter-ffi/v0.16.0/libpolyglot_sql_ffi.dylib --test_output=errors`
 Expected: PASS. This is also where the T6 `joinGet` emitted form is exercised end to end: add `SELECT joinGet('db1.j', 'v', 1)` against a `Join` table if Plan A shipped the rewrite path.
 
 - [ ] **Step 3: Commit**
@@ -1103,7 +1105,7 @@ git add CLAUDE.md docs
 git commit -m "docs: table-reference hardening operator notes and differential record"
 git push -u origin feat/table-reference-hardening
 gh pr create --title "feat: table-reference hardening (spec 2026-09-26)" --body "$(cat <<'EOF'
-Housegate half of the table-reference hardening: protected_databases on every request, fail-closed rewrite with rewriter.fail_open_on_unavailable, the tablerefguard plugin, sitablestate escape refusal, hg_promote everywhere, and the always-on engine probe. Pins rewriter-go v0.14.0 / rewriter-proto v0.4.0; requires rewriter-grpc v0.16.0.
+Housegate half of the table-reference hardening: protected_databases on every request, fail-closed rewrite with rewriter.fail_open_on_unavailable, the tablerefguard plugin, sitablestate escape refusal, hg_promote everywhere, and the always-on engine probe. Pins rewriter-go v0.16.0 / rewriter-proto v0.4.0; requires rewriter-grpc v0.16.0.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 EOF

@@ -102,9 +102,11 @@ func TestProbeStorageIntegrityBuild(t *testing.T) {
 		}
 	})
 
-	// A V1-only build (rewriter-go < v0.13.0) acknowledges V1, never V2; and a
-	// build that acknowledges V2 but still rejects the SI DROP or activates the
-	// catch-all by table count is refused on the matching V2 probe.
+	// A V1-only build (rewriter-go < v0.13.0, the release that shipped
+	// contract V2; the floor is now v0.16.0 through the table-reference
+	// probe) acknowledges V1, never V2; and a build that acknowledges V2 but
+	// still rejects the SI DROP or activates the catch-all by table count is
+	// refused on the matching V2 probe.
 	t.Run("V1 acknowledgement is refused", func(t *testing.T) {
 		responses := conformingProbeResponses()
 		for _, resp := range responses {

@@ -58,6 +58,8 @@ Notes on shapes that are accepted but still do not work:
 
 The client sees an Exception such as `rewriter rejected SQL (code=UnsupportedStatement): statement is not supported`. Re-check this list whenever the engine or its pin moves; the exact set differs by engine and build.
 
+This list is a dated record of the fail-closed change against native v0.13.0 and C++ 0.11.0. HouseGate now requires rewriter-go v0.16.0 / rewriter-grpc v0.16.0, whose table-reference policy refuses more of the shapes listed as accepted above (for example `system` tables outside the allowlist such as `system.processes` and `SHOW PROCESSLIST`, table functions on a tenant's own tables such as `merge('db1', …)`, and engines such as `Buffer` or `Distributed`), and the table-reference guard and Query-packet settings check refuse some statements before the rewriter sees them. See [table-reference-hardening.md](table-reference-hardening.md) and spec 2026-09-26 §12.
+
 ## `rewriter.fail_open_on_unavailable`
 
 ```yaml
@@ -70,7 +72,9 @@ This switch covers only a rewriter that cannot be reached: at startup, when the 
 **At startup.** A server that forwards to ClickHouse (a `shard`, an `upstream`, or a cluster injected by an embedding host) builds its rewriter before it listens: it dials the gRPC service, or fetches and loads the native library.
 
 - `false` (default): if that fails (service unreachable, empty `service_addr` with the gRPC engine, library fetch or load failure), startup is refused with an error such as `SQL rewriter unavailable at startup: …; refusing to forward queries without it (set rewriter.fail_open_on_unavailable: true to run without the rewriter)`.
-- `true`: HouseGate logs `SQL rewriter unavailable at startup; running without the rewrite plugin, every query is forwarded unrewritten (rewriter.fail_open_on_unavailable)` and runs for the life of the process with no rewriting at all: no logical-to-physical mapping and no engine policy. Restart once the rewriter is back.
+- `true`: HouseGate logs `SQL rewriter unavailable at startup; running without the rewrite plugin, every query is forwarded unrewritten (rewriter.fail_open_on_unavailable)` and runs for the life of the process with no rewriting at all: no logical-to-physical mapping and no engine policy. Only the lexical table-reference guard and the Query-packet settings check ([table-reference-hardening.md](table-reference-hardening.md)) still run. Restart once the rewriter is back.
+
+The switch covers only a rewriter that cannot be built. A rewriter that is built, from config or injected by an embedding host, must also pass the table-reference probe (and, with storage integrity, the storage-integrity probe) before HouseGate listens; a probe failure refuses startup whatever the switch says, naming the failed case and the required engine builds.
 
 **Per query.** Only a transport failure before the request left HouseGate counts: the connection to the rewriter is down, the rewriter was closed during shutdown, or the query's deadline or cancellation fired before the request was sent. HouseGate classifies a failure this way only when both hold: the request message was never handed to the transport, and the gRPC status is `Unavailable`, `DeadlineExceeded` or `Canceled`. This is a bounded heuristic, not a proof that the engine never saw the statement: a request queued into a transport that then dies counts as sent (and is refused), and a deadline that expires while a very large request is still being serialised or flow-controlled counts as unavailable.
 
@@ -83,7 +87,7 @@ Residual risk with `true`: a statement that crashes the rewriter is itself refus
 
 `fail_open_on_unavailable: true` together with `storage_integrity.enabled` is a configuration error (`rewriter.fail_open_on_unavailable cannot be combined with storage_integrity.enabled`); storage integrity always fails closed.
 
-**Servers that never rewrite.** A router-only server (no `shard`, no `upstream`, and no cluster injected by the host) forwards whole connections to peers and never builds a rewriter, so it starts regardless of the rewriter settings and this switch. An embedding host that injects its own rewriter factory is not subject to the startup check either; a nil factory, including a typed-nil one, counts as not injected.
+**Servers that never rewrite.** A router-only server (no `shard`, no `upstream`, and no cluster injected by the host) forwards whole connections to peers and never builds a rewriter, so it starts regardless of the rewriter settings and this switch. An embedding host that injects its own rewriter factory is not built at startup, so the build check does not apply, but the factory must still pass the table-reference probe; a nil factory, including a typed-nil one, counts as not injected.
 
 **Upgrading.** A server with an `upstream` that has been running without a working rewriter (the old warn-and-continue startup) now refuses to start. Either point it at a rewriter (`engine: native` with `native_library_release`, or `engine: grpc` with a reachable `service_addr`), or set `fail_open_on_unavailable: true` deliberately.
 

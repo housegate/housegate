@@ -7,10 +7,13 @@ import "strings"
 // CREATE ... AS SELECT, and CREATE_MATERIALIZED_VIEW with or without POPULATE
 // or TO (measured against rewriter-go v0.11.0, 2026-09-24). This file reads
 // only the top-level clause keywords of a CREATE header; it never rewrites.
-// Against rewriter-go v0.13.0 the forwarded CREATE TABLE body normalises
-// comments and heredocs and drops EMPTY AS SELECT bodies and CLONE, but it
-// also drops a refreshable view's REFRESH ... TO clause, so the plugin lexes
+// Against rewriter-go v0.13.0 the forwarded CREATE TABLE body normalised
+// comments and heredocs and dropped EMPTY AS SELECT bodies and CLONE, but it
+// also dropped a refreshable view's REFRESH ... TO clause, so the plugin lexes
 // the forwarded body for CREATE TABLE and the original SQL for a view's TO.
+// The v0.16.0 floor keeps an EMPTY AS (SELECT ...) body (shared corpus case
+// si_tr_ctas_empty_own_source_rewritten), so such a CREATE into a governed
+// name now reads as data-carrying: a conservative false refusal.
 //
 // It is an allow-list, not a deny-list: a CREATE TABLE counts as schema-only
 // only when the header proves it, and every span the scanner cannot model with
