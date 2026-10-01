@@ -117,6 +117,80 @@ func TestCheck(t *testing.T) {
 		{"leading UTF-8 BOM (known false refusal)", "\ufeffSELECT 1", "phys", RuleScan},
 		{"non-ASCII inside a quoted identifier", "SELECT 1 AS `phys\u00e9`", "phys", ""},
 		{"empty statement", "", "phys", ""},
+		// Fix round 1, I1: string literals are compared as ClickHouse decodes
+		// them (measured on 26.8.1: joinGet('ph\x79s.j', ...) reads phys.j).
+		{"escaped lookup literal", `SELECT joinGet('ph\x79s.j', 'v', 1)`, "phys", RulePhysicalDatabase},
+		{"escaped lookup database argument", `SELECT hasColumnInTable('ph\x79s', 't', 'c')`, "phys", RulePhysicalDatabase},
+		{"\\N-split lookup literal", `SELECT dictGet('ph\Nys.d', 'v', 1)`, "phys", RulePhysicalDatabase},
+		{"escaped reserved name", `SELECT dictGet('hg\x5fsafe.d', 'v', 1)`, "phys", RuleReservedName},
+		{"\\N-split reserved name", `SELECT * FROM db1.o WHERE s = 'hg_\Nsafe'`, "phys", RuleReservedName},
+		{"kept backslash is not a reserved name", `SELECT * FROM db1.o WHERE s LIKE 'hg\_safe'`, "phys", ""},
+		{"heredoc lookup is not decoded", `SELECT joinGet($$ph\x79s.j$$, 'v', 1)`, "phys", ""},
+		{"undecodable \\x escape", `SELECT * FROM db1.o WHERE s = '\x4g'`, "phys", RuleScan},
+		// Fix round 1, I2: a table named after a carrier or lookup, followed
+		// by its column list, is not a call (measured on 26.8.1: none of
+		// these positions accepts a table function).
+		{"qualified table named cluster with a column list", "INSERT INTO db1.cluster (a) VALUES (1)", "phys", ""},
+		{"unqualified table named cluster with a column list", "INSERT INTO cluster (a) VALUES (1)", "phys", ""},
+		{"INSERT INTO TABLE a table named Loop", "INSERT INTO TABLE Loop (a) VALUES (1)", "phys", ""},
+		{"CREATE TABLE named Merge", "CREATE TABLE db1.`Merge` (a UInt8) ENGINE = MergeTree ORDER BY a", "phys", ""},
+		{"CREATE TABLE IF NOT EXISTS named remote", "CREATE TABLE IF NOT EXISTS remote (a UInt8) ENGINE = Memory", "phys", ""},
+		{"CREATE OR REPLACE TABLE named dictionary", "CREATE OR REPLACE TABLE dictionary (a UInt8) ENGINE = Memory", "phys", ""},
+		{"CREATE TEMPORARY TABLE named executable", "CREATE TEMPORARY TABLE executable (a UInt8)", "phys", ""},
+		{"CREATE VIEW named mysql with columns", "CREATE VIEW mysql (a UInt8) AS SELECT 1 AS a", "phys", ""},
+		{"materialized view TO a table named cluster", "CREATE MATERIALIZED VIEW db1.mv TO db1.cluster (a UInt8) AS SELECT a FROM db1.o", "phys", ""},
+		{"index and projection named after carriers", "CREATE TABLE db1.n (a UInt8, INDEX merge (a) TYPE minmax, PROJECTION remote (SELECT a ORDER BY a)) ENGINE = MergeTree ORDER BY a", "phys", ""},
+		{"ADD INDEX named cluster", "ALTER TABLE db1.n ADD INDEX cluster (a) TYPE minmax", "phys", ""},
+		{"CREATE DICTIONARY named jdbc", "CREATE DICTIONARY db1.jdbc (a UInt64) PRIMARY KEY a SOURCE(NULL()) LAYOUT(FLAT()) LIFETIME(0)", "phys", ""},
+		{"table named dictGetter with a phys column", "INSERT INTO db1.dictGetter (phys) VALUES (1)", "phys", ""},
+		{"qualified callee is no table function", "SELECT * FROM db1.merge('db1', 'o')", "phys", ""},
+		{"INSERT INTO FUNCTION remote", "INSERT INTO FUNCTION remote('h', db1.o) VALUES (1)", "phys", RuleCarrierCallable},
+		{"INSERT INTO TABLE FUNCTION remote", "INSERT INTO TABLE FUNCTION remote('h', db1.o) VALUES (1)", "phys", RuleCarrierCallable},
+		{"DESCRIBE TABLE merge", "DESCRIBE TABLE merge('db1', 'o')", "phys", RuleCarrierCallable},
+		{"DESC remote", "DESC remote('h', db1.o)", "phys", RuleCarrierCallable},
+		{"CREATE TABLE AS merge", "CREATE TABLE db1.n AS merge('db1', 'o')", "phys", RuleCarrierCallable},
+		{"JOIN cluster", "SELECT * FROM db1.o JOIN cluster('c', db1.p) USING a", "phys", RuleCarrierCallable},
+		// Fix round 1, M1: G3 mirrors the engines' T5 refusals.
+		{"table function the engines do not recognise", "SELECT * FROM timeSeriesSamples('db1', 'o')", "phys", RuleCarrierCallable},
+		{"icebergS3", "SELECT * FROM icebergS3('http://x')", "phys", RuleCarrierCallable},
+		{"primes", "SELECT * FROM primes(10)", "phys", RuleCarrierCallable},
+		{"viewIfPermitted", "SELECT * FROM viewIfPermitted(SELECT 1 ELSE null('a UInt8'))", "phys", RuleCarrierCallable},
+		{"mergeTree table function", "SELECT * FROM mergeTree('db1', 'o')", "phys", RuleCarrierCallable},
+		{"mergeTreePartInfo is a scalar function", "SELECT mergeTreePartInfo('all_1_1_0')", "phys", ""},
+		{"timeSeries aggregate functions are not table functions", "SELECT timeSeriesRateToGrid(1, 2, 3, 4)(t, v) FROM db1.o", "phys", ""},
+		{"Buffer engine", "CREATE TABLE db1.b (a UInt8) ENGINE = Buffer(db1, o, 1, 10, 100, 10000, 1000000, 10000000, 100000000)", "phys", RuleCarrierCallable},
+		{"Distributed engine", "CREATE TABLE db1.d (a UInt8) ENGINE = Distributed(c, db1, o)", "phys", RuleCarrierCallable},
+		{"Merge engine", "CREATE TABLE db1.m (a UInt8) ENGINE = Merge('db1', 'o')", "phys", RuleCarrierCallable},
+		{"Kafka engine without =", "CREATE TABLE db1.k (a UInt8) ENGINE Kafka", "phys", RuleCarrierCallable},
+		{"quoted URL engine", "CREATE TABLE db1.u (a UInt8) ENGINE = `URL`('http://x', CSV)", "phys", RuleCarrierCallable},
+		{"engine name in the wrong case", "CREATE TABLE db1.n (a UInt8) ENGINE = memory", "phys", RuleCarrierCallable},
+		{"Replicated engine with arguments", "CREATE TABLE db1.n (a UInt8) ENGINE = ReplicatedMergeTree('/p', 'r') ORDER BY a", "phys", RuleCarrierCallable},
+		{"materialized view engine", "CREATE MATERIALIZED VIEW db1.mv ENGINE = Buffer(db1, o, 1, 1, 1, 1, 1, 1, 1) AS SELECT a FROM db1.o", "phys", RuleCarrierCallable},
+		{"Replicated engine without arguments", "CREATE TABLE db1.n (a UInt8) ENGINE = ReplicatedMergeTree ORDER BY a", "phys", ""},
+		{"Replicated engine with empty arguments", "CREATE TABLE db1.n (a UInt8) ENGINE = ReplicatedReplacingMergeTree() ORDER BY a", "phys", ""},
+		{"Memory engine without =", "CREATE TABLE db1.n (a UInt8) ENGINE Memory", "phys", ""},
+		{"quoted Memory engine", "CREATE TABLE db1.n (a UInt8) engine=`Memory`", "phys", ""},
+		{"a column named engine", "CREATE TABLE db1.n (engine String) ENGINE = Log", "phys", ""},
+		{"engine in a view body", "CREATE VIEW db1.v AS SELECT engine FROM system.tables", "phys", ""},
+		{"engine alias after AS SELECT", "CREATE TABLE db1.n ENGINE = Memory AS SELECT 1 AS engine", "phys", ""},
+		{"engine after a CREATE ... AS table", "CREATE TABLE db1.n AS db1.o ENGINE = Memory", "phys", ""},
+		{"engine read outside CREATE", "SELECT engine FROM system.tables WHERE engine = 'Buffer'", "phys", ""},
+		{"database engine", "CREATE DATABASE db1 ENGINE = Atomic", "phys", ""},
+		{"database engine named after a carrier", "CREATE DATABASE db2 ENGINE = MySQL('h:9004', 'phys', 'u', 'p')", "phys", RuleCarrierCallable},
+		// Fix round 1: the physical database as a DATABASE object.
+		{"drop database phys", "DROP DATABASE phys", "phys", RulePhysicalDatabase},
+		{"drop database if exists phys", "DROP DATABASE IF EXISTS `phys`", "phys", RulePhysicalDatabase},
+		{"create database if not exists phys", `CREATE DATABASE IF NOT EXISTS "phys"`, "phys", RulePhysicalDatabase},
+		{"attach database phys", "ATTACH DATABASE phys", "phys", RulePhysicalDatabase},
+		{"detach database phys", "DETACH DATABASE phys", "phys", RulePhysicalDatabase},
+		{"show create database phys", "SHOW CREATE DATABASE phys", "phys", RulePhysicalDatabase},
+		{"exists database phys", "EXISTS DATABASE phys", "phys", RulePhysicalDatabase},
+		{"alter database phys", "ALTER DATABASE phys MODIFY COMMENT 'x'", "phys", RulePhysicalDatabase},
+		{"truncate database phys", "TRUNCATE DATABASE phys", "phys", RulePhysicalDatabase},
+		{"rename database to phys", "RENAME DATABASE db1 TO phys", "phys", RulePhysicalDatabase},
+		{"rename database phys", "rename database `phys` to db9", "phys", RulePhysicalDatabase},
+		{"drop a tenant database", "DROP DATABASE db1", "phys", ""},
+		{"a column named database", "SELECT database, name FROM system.tables WHERE database = 'phys'", "phys", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rule, detail := Check(tc.sql, tc.phys, reserved)
@@ -187,6 +261,21 @@ func TestOnQuery_SessionGate(t *testing.T) {
 				t.Fatalf("message = %q", err.Error())
 			}
 		})
+	}
+}
+
+// TestOnQuery_ForwardedFromPeerAloneSkips pins the IsForwardedFromPeer branch
+// on its own: SetPeerTrustForwarded also sets IsPeerTrusted, so the session
+// gate test cannot tell the two checks apart.
+func TestOnQuery_ForwardedFromPeerAloneSkips(t *testing.T) {
+	p := &Plugin{PhysicalDatabase: "phys", ReservedDatabases: reserved}
+	sess := newSessionForTest(t)
+	sess.State().IsForwardedFromPeer = true
+	if snap := sess.State().Snapshot(); snap.IsPeerTrusted || !snap.IsForwardedFromPeer {
+		t.Fatalf("snapshot = %+v, want only IsForwardedFromPeer", snap)
+	}
+	if err := p.OnQuery(context.Background(), queryFor(sess, "USE phys")); err != nil {
+		t.Fatalf("a forwarded-from-peer session must skip the guard: %v", err)
 	}
 }
 
