@@ -3,6 +3,7 @@ package housegate
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -80,6 +81,35 @@ func (f siProbeStubRewriterFactory) ProbeStorageIntegrityBuild(ctx context.Conte
 		*f.deadlineObserved = ok
 	}
 	return f.err
+}
+
+func (stubRewriterFactory) ProbeTableReferencePolicy(context.Context) error { return nil }
+
+// unprobedRewriterFactory is a Factory that cannot prove the table-reference
+// policy; buildServer must refuse it with or without storage integrity.
+type unprobedRewriterFactory struct{}
+
+func (unprobedRewriterFactory) NewRewriter(rewriter.Session) rewriter.Rewriter { return stubRewriter{} }
+func (unprobedRewriterFactory) Close() error                                   { return nil }
+
+// policyProbeStubRewriterFactory overrides the policy probe of the SI-capable
+// stub so tests can fail it or observe its context.
+type policyProbeStubRewriterFactory struct {
+	siProbeStubRewriterFactory
+	policyErr        error
+	calls            *int
+	deadlineObserved *bool
+}
+
+func (f policyProbeStubRewriterFactory) ProbeTableReferencePolicy(ctx context.Context) error {
+	if f.calls != nil {
+		*f.calls++
+	}
+	if f.deadlineObserved != nil {
+		_, ok := ctx.Deadline()
+		*f.deadlineObserved = ok
+	}
+	return f.policyErr
 }
 
 type stubRewriter struct{}
@@ -2421,4 +2451,38 @@ func TestBuildServer_QuerySettingsWiredWithoutARewriter(t *testing.T) {
 	if querySettingsIndex(t, requireProxyServer(t, agentBS.listeners[0]).Hooks.(*plugin.PluginChain)) >= 0 {
 		t.Fatal("agent mode must not wire querysettings")
 	}
+}
+
+func TestBuildServer_TableReferenceProbeRunsForEveryRewriter(t *testing.T) {
+	t.Run("an unprobed factory is refused without storage integrity", func(t *testing.T) {
+		_, err := buildServer(Options{Config: minimalServerCfg(t), NetworkState: network.NewInMemoryNetworkState(), Rewriter: unprobedRewriterFactory{}}, nil)
+		if err == nil || !strings.Contains(err.Error(), "TableReferenceProbeFactory") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+	for _, si := range []bool{false, true} {
+		t.Run(fmt.Sprintf("a failing probe refuses startup (si=%v)", si), func(t *testing.T) {
+			cfg := minimalServerCfg(t)
+			if si {
+				cfg.StorageIntegrity.Tables = []string{"tenant.events"}
+			}
+			_, err := buildServer(Options{Config: cfg, NetworkState: network.NewInMemoryNetworkState(),
+				Rewriter: policyProbeStubRewriterFactory{policyErr: errors.New("rewriter table-reference probe (engine=grpc probe=x): code=Success")}}, nil)
+			if err == nil || !strings.Contains(err.Error(), "rewriter table-reference probe") {
+				t.Fatalf("err = %v", err)
+			}
+		})
+	}
+	t.Run("a passing probe runs once with a bounded context", func(t *testing.T) {
+		calls, deadline := 0, false
+		bs, err := buildServer(Options{Config: minimalServerCfg(t), NetworkState: network.NewInMemoryNetworkState(),
+			Rewriter: policyProbeStubRewriterFactory{calls: &calls, deadlineObserved: &deadline}}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bs.teardown()
+		if calls != 1 || !deadline {
+			t.Fatalf("calls = %d, deadline = %v", calls, deadline)
+		}
+	})
 }

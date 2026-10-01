@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/housegate/housegate/pkg/config"
+	"github.com/housegate/housegate/pkg/rewriter"
 	pb "github.com/housegate/rewriter-proto/gen/pb"
 )
 
@@ -28,6 +29,10 @@ import (
 //     fires on STATEMENT_TYPE_USE.
 //   - Captures every received SQL string for tests that want to
 //     assert on what the proxy actually shipped to the rewriter.
+//   - Answers the startup table-reference probe exactly
+//     (rewriter.TableReferenceProbeAnswer, as a conforming gRPC engine)
+//     and does not record it, so SeenSQL / SeenDynamicArgs hold only
+//     session traffic and FailNext is not consumed by startup.
 //
 // What it does NOT do:
 //   - No AST parsing, no table-name prefix injection, no
@@ -160,6 +165,11 @@ func (m *RewriterMock) SeenDynamicArgs() []*pb.RewriteTableDynamicArgs {
 }
 
 func (m *RewriterMock) Rewrite(ctx context.Context, req *pb.RewriteSQLRequest) (*pb.RewriteSQLResponse, error) {
+	// The startup policy probe (spec 2026-09-26 T13) is answered as a
+	// conforming gRPC engine would and kept out of SeenSQL / SeenDynamicArgs.
+	if resp, ok := rewriter.TableReferenceProbeAnswer(req, rewriter.EngineGRPC); ok {
+		return resp, nil
+	}
 	sql := req.GetSql()
 	upper := strings.ToUpper(stripLeadingWhitespace(sql))
 

@@ -59,9 +59,16 @@ func TestProbeStorageIntegrityBuild(t *testing.T) {
 			t.Fatalf("empty-map probe args = %v, want V2 with an empty table map", empty)
 		}
 		for i, req := range be.requests {
-			si := req.GetOptions()[0].GetTableNameArgs().GetDynamicArgs().GetStorageIntegrity()
+			dyn := req.GetOptions()[0].GetTableNameArgs().GetDynamicArgs()
+			si := dyn.GetStorageIntegrity()
 			if strings.Join(si.GetReservedDatabases(), ",") != "hg_safe,hg_unsafe,hg_promote" {
 				t.Fatalf("probe request %d reserved databases = %v, want the production list", i, si.GetReservedDatabases())
+			}
+			// Production requests carry the protected namespace whatever
+			// storage_integrity.enabled says; the probe must prove the
+			// engine's answers under that same request shape.
+			if got := strings.Join(dyn.GetProtectedDatabases(), ","); got != "phys,hg_safe,hg_unsafe,hg_promote" {
+				t.Fatalf("probe request %d protected_databases = %s, want the production list", i, got)
 			}
 		}
 		for i, hasDeadline := range be.deadlines {
@@ -287,6 +294,9 @@ func TestReleasedGRPCStorageIntegrityProbeSmoke(t *testing.T) {
 	if err := f.ProbeStorageIntegrityBuild(context.Background()); err != nil {
 		t.Fatalf("released gRPC storage-integrity probe: %v", err)
 	}
+	if err := f.ProbeTableReferencePolicy(context.Background()); err != nil {
+		t.Fatalf("released gRPC table-reference probe: %v", err)
+	}
 }
 
 func conformingProbeResponses() map[string]*pb.RewriteSQLResponse {
@@ -353,4 +363,166 @@ func probeSQLs(reqs []*pb.RewriteSQLRequest) []string {
 		sqls = append(sqls, probeKey(req))
 	}
 	return sqls
+}
+
+// policyProbeBackend answers every table-reference probe as a conforming
+// engine of its kind, except the SQL in override.
+type policyProbeBackend struct {
+	fakeBackend
+	engine    string
+	override  map[string]*pb.RewriteSQLResponse
+	requests  []*pb.RewriteSQLRequest
+	deadlines []bool
+}
+
+func (b *policyProbeBackend) Rewrite(ctx context.Context, req *pb.RewriteSQLRequest) (*pb.RewriteSQLResponse, error) {
+	b.requests = append(b.requests, req)
+	_, hasDeadline := ctx.Deadline()
+	b.deadlines = append(b.deadlines, hasDeadline)
+	if resp, ok := b.override[req.GetSql()]; ok {
+		return resp, nil
+	}
+	resp, ok := TableReferenceProbeAnswer(req, b.engine)
+	if !ok {
+		return nil, fmt.Errorf("unexpected table-reference probe request %q", req.GetSql())
+	}
+	return resp, nil
+}
+
+func newPolicyProbeFactory(be *policyProbeBackend) *SentioNetworkFactory {
+	f := newFakeFactory(be)
+	f.options.Engine = be.engine
+	return f
+}
+
+func TestProbeTableReferencePolicy(t *testing.T) {
+	for _, engine := range []string{EngineGRPC, EngineNative} {
+		t.Run("conforming "+engine+" build passes", func(t *testing.T) {
+			be := &policyProbeBackend{engine: engine}
+			if err := newPolicyProbeFactory(be).ProbeTableReferencePolicy(context.Background()); err != nil {
+				t.Fatalf("probe: %v", err)
+			}
+			if len(be.requests) != len(tableReferenceProbes) {
+				t.Fatalf("requests = %d, want %d", len(be.requests), len(tableReferenceProbes))
+			}
+			for i, req := range be.requests {
+				dyn := req.GetOptions()[0].GetTableNameArgs().GetDynamicArgs()
+				if got := strings.Join(dyn.GetProtectedDatabases(), ","); got != "phys,hg_safe,hg_unsafe,hg_promote" {
+					t.Fatalf("request %d protected_databases = %s", i, got)
+				}
+				if dyn.GetStorageIntegrity() != nil {
+					t.Fatalf("request %d carries StorageIntegrityArgs; the policy probe models storage integrity disabled", i)
+				}
+				if dyn.GetUpstreamLogicalDatabaseInContext() != "db1" || dyn.UpstreamPhysicalDatabaseInContext != nil {
+					t.Fatalf("request %d context = %q / %v, want logical db1 and no physical context", i,
+						dyn.GetUpstreamLogicalDatabaseInContext(), dyn.UpstreamPhysicalDatabaseInContext)
+				}
+				if !be.deadlines[i] {
+					t.Fatalf("request %d had no deadline", i)
+				}
+			}
+		})
+	}
+
+	refused := func(t *testing.T, be *policyProbeBackend, probeName string, extra ...string) {
+		t.Helper()
+		err := newPolicyProbeFactory(be).ProbeTableReferencePolicy(context.Background())
+		if err == nil {
+			t.Fatalf("probe passed, want probe=%s refused", probeName)
+		}
+		for _, want := range append([]string{"rewriter table-reference probe", "probe=" + probeName, TableReferenceProbeRequiredBuild}, extra...) {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("err = %q, want %q", err, want)
+			}
+		}
+		for _, protectedName := range []string{"hg_promote", "db2.x", "phys."} {
+			if strings.Contains(err.Error(), protectedName) {
+				t.Fatalf("err leaked probe SQL or engine output %q: %v", protectedName, err)
+			}
+		}
+	}
+	success := func(sql string) *pb.RewriteSQLResponse {
+		return &pb.RewriteSQLResponse{Code: pb.RewriteCode_Success, StatementType: pb.StatementType_STATEMENT_TYPE_SELECT, SqlAfterRewrite: sql, Message: "success"}
+	}
+	// Measured: rewriter-go v0.16.0 answers exactly this when the request
+	// omits protected_databases.
+	t.Run("an engine that ignores protected_databases is refused", func(t *testing.T) {
+		refused(t, &policyProbeBackend{engine: EngineNative, override: map[string]*pb.RewriteSQLResponse{
+			"SELECT * FROM hg_promote.`db2.x`": success(`SELECT * FROM hg_promote."db2.x"`),
+		}}, "protected-reserved-database")
+	})
+	// Measured: rewriter-go v0.15.0 answers both §13 discriminators Success.
+	t.Run("rewriter-go v0.15.0 is refused", func(t *testing.T) {
+		refused(t, &policyProbeBackend{engine: EngineNative, override: map[string]*pb.RewriteSQLResponse{
+			"SELECT * FROM db1.o SETTINGS allow_experimental_analyzer = 0": success(`SELECT * FROM phys."db1.o" "db1.o" SETTINGS allow_experimental_analyzer = 0`),
+			"CREATE TABLE db1.n (d Date, n UInt8) ENGINE = MergeTree(d, (SELECT max(n) FROM db1.o), 8192)": {Code: pb.RewriteCode_Success,
+				StatementType: pb.StatementType_STATEMENT_TYPE_CREATE_TABLE, Message: "success",
+				SqlAfterRewrite: `CREATE TABLE phys."db1.n" (d DATE, n UInt8) ENGINE=MergeTree(d, (SELECT max(n) FROM db1.o), 8192)`},
+		}}, "analyzer-off-refused")
+	})
+	t.Run("an engine-argument read is refused", func(t *testing.T) {
+		refused(t, &policyProbeBackend{engine: EngineNative, override: map[string]*pb.RewriteSQLResponse{
+			"CREATE TABLE db1.n (d Date, n UInt8) ENGINE = MergeTree(d, (SELECT max(n) FROM db1.o), 8192)": {Code: pb.RewriteCode_Success,
+				StatementType: pb.StatementType_STATEMENT_TYPE_CREATE_TABLE, Message: "success",
+				SqlAfterRewrite: `CREATE TABLE phys."db1.n" (d DATE, n UInt8) ENGINE=MergeTree(d, (SELECT max(n) FROM db1.o), 8192)`},
+		}}, "engine-argument-read-refused")
+	})
+	t.Run("an unmodelled-class pass-through is refused", func(t *testing.T) {
+		refused(t, &policyProbeBackend{engine: EngineGRPC, override: map[string]*pb.RewriteSQLResponse{
+			"SYSTEM RELOAD CONFIG": success("SYSTEM RELOAD CONFIG"),
+		}}, "unmodelled-class-refused")
+	})
+	t.Run("T5 answered before T3 is refused", func(t *testing.T) {
+		refused(t, &policyProbeBackend{engine: EngineGRPC, override: map[string]*pb.RewriteSQLResponse{
+			"SELECT * FROM merge('phys', 'db2')": {Code: pb.RewriteCode_UnsupportedStatement, SqlAfterRewrite: "SELECT * FROM merge('phys', 'db2')", Message: "table function merge is not accepted"},
+		}}, "protected-carrier-argument", "code=UnsupportedStatement")
+	})
+	t.Run("the other engine's quoting is refused", func(t *testing.T) {
+		refused(t, &policyProbeBackend{engine: EngineGRPC, override: map[string]*pb.RewriteSQLResponse{
+			"SELECT * FROM db1.o WHERE a IN db1.p": success(`SELECT * FROM phys."db1.o" "db1.o" WHERE a IN phys."db1.p"`),
+		}}, "in-operand-rewritten", "SQL fingerprint mismatch")
+	})
+	t.Run("a storage-integrity acknowledgement is refused", func(t *testing.T) {
+		refused(t, &policyProbeBackend{engine: EngineGRPC, override: map[string]*pb.RewriteSQLResponse{
+			"SELECT * FROM {p:Identifier}": {Code: pb.RewriteCode_InvalidRewriteRequest, SqlAfterRewrite: "SELECT * FROM {p:Identifier}",
+				Message: "query parameters are not supported in a database or table position", StorageIntegrityContractVersion: StorageIntegrityContractV2},
+		}}, "param-table-position", "acknowledgement")
+	})
+	t.Run("a transport error is refused", func(t *testing.T) {
+		be := &scriptedProbeBackend{}
+		err := newFakeFactory(be).ProbeTableReferencePolicy(context.Background())
+		if err == nil || !strings.Contains(err.Error(), "probe=param-table-position") || !strings.Contains(err.Error(), TableReferenceProbeRequiredBuild) {
+			t.Fatalf("err = %v", err)
+		}
+	})
+	t.Run("no backend", func(t *testing.T) {
+		if err := newFakeFactory(nil).ProbeTableReferencePolicy(context.Background()); err == nil || !strings.Contains(err.Error(), "no rewrite backend") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+}
+
+func TestTableReferenceProbeAnswer(t *testing.T) {
+	probe := &pb.RewriteSQLRequest{Sql: "USE phys", Options: []*pb.RewriteOption{rewriteOption(tableReferenceProbeArgs())}}
+	resp, ok := TableReferenceProbeAnswer(probe, EngineGRPC)
+	if !ok || resp.GetCode() != pb.RewriteCode_InvalidRewriteRequest || resp.GetSqlAfterRewrite() != "USE phys" ||
+		resp.GetMessage() != "protected database phys is not addressable" {
+		t.Fatalf("answer = %v, %v", resp, ok)
+	}
+	native, ok := TableReferenceProbeAnswer(&pb.RewriteSQLRequest{Sql: "INSERT INTO db1.o SELECT * FROM db1.p", Options: probe.GetOptions()}, EngineNative)
+	if !ok || native.GetSqlAfterRewrite() != `INSERT INTO phys."db1.o" SELECT * FROM phys."db1.p" "db1.p"` {
+		t.Fatalf("native answer = %v, %v", native, ok)
+	}
+	production := &pb.RewriteSQLRequest{Sql: "USE phys", Options: []*pb.RewriteOption{rewriteOption(
+		buildDynamicArgs(map[string]string{"db1": "phys"}, []string{"phys"}, protectedDatabases("phys"), "db1", "phys", "_", nil, nil, nil))}}
+	if _, ok := TableReferenceProbeAnswer(production, EngineGRPC); ok {
+		t.Fatal("a production request (physical context set) must not be taken for a probe")
+	}
+	if _, ok := TableReferenceProbeAnswer(&pb.RewriteSQLRequest{Sql: "SELECT 1", Options: probe.GetOptions()}, EngineGRPC); ok {
+		t.Fatal("SQL outside the probe table must not be answered")
+	}
+	si := &pb.RewriteSQLRequest{Sql: "SYSTEM RELOAD CONFIG", Options: []*pb.RewriteOption{rewriteOption(storageIntegrityProbeArgs(true))}}
+	if _, ok := TableReferenceProbeAnswer(si, EngineGRPC); ok {
+		t.Fatal("a storage-integrity probe request must not be answered as a policy probe")
+	}
 }

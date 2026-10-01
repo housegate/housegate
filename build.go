@@ -531,6 +531,27 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	if siOptions.Enabled && rwFactory == nil {
 		return nil, fmt.Errorf("storage_integrity.enabled requires an available SQL rewriter; refusing fail-open startup")
 	}
+	probeTimeout := cfg.Rewriter.Timeout.Duration
+	if probeTimeout <= 0 {
+		probeTimeout = 5 * time.Second
+	}
+	// Spec 2026-09-26 T13: every rewriter, with or without storage integrity,
+	// proves the table-reference policy before the server starts. A built
+	// rewriter that fails it refuses startup even under
+	// rewriter.fail_open_on_unavailable, which covers only an unbuildable one.
+	if rwFactory != nil {
+		prober, ok := rwFactory.(rewriter.TableReferenceProbeFactory)
+		if !ok {
+			return nil, fmt.Errorf("the SQL rewriter must implement rewriter.TableReferenceProbeFactory; refusing unverified startup (spec 2026-09-26 T13)")
+		}
+		probeCtx, cancelProbe := context.WithTimeout(context.Background(), probeTimeout)
+		err := prober.ProbeTableReferencePolicy(probeCtx)
+		cancelProbe()
+		if err != nil {
+			return nil, err
+		}
+		log.Info("rewriter table-reference policy verified")
+	}
 	if siOptions.Enabled {
 		capable, ok := rwFactory.(rewriter.StorageIntegrityCapableFactory)
 		if !ok || capable.StorageIntegrityContractVersion() != rewriter.StorageIntegrityContractV2 {
@@ -543,10 +564,6 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		prober, ok := rwFactory.(rewriter.StorageIntegrityProbeFactory)
 		if !ok {
 			return nil, fmt.Errorf("storage_integrity.enabled requires a SQL rewriter implementing rewriter.StorageIntegrityProbeFactory; refusing unverified startup")
-		}
-		probeTimeout := cfg.Rewriter.Timeout.Duration
-		if probeTimeout <= 0 {
-			probeTimeout = 5 * time.Second
 		}
 		probeCtx, cancelProbe := context.WithTimeout(context.Background(), probeTimeout)
 		err := prober.ProbeStorageIntegrityBuild(probeCtx)

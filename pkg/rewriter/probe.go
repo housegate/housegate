@@ -6,6 +6,7 @@ import (
 	"time"
 
 	pb "github.com/housegate/rewriter-proto/gen/pb"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/housegate/housegate/pkg/sitable"
 )
@@ -58,11 +59,14 @@ const (
 // It must stay identical to the shared si_describe_metadata_select corpus case.
 const StorageIntegrityProbeExpectedSQL = "SELECT name, type, default_kind AS default_type, default_expression, comment, '' AS codec_expression, '' AS ttl_expression FROM system.columns WHERE database = 'hg_safe' AND table = 'db1__t' AND name != '_hg_row_id' ORDER BY position"
 
-// The released Go and gRPC build floors that carry storage-integrity
-// contract V2. The probe itself identifies the required behavior rather than
-// trusting a version string alone — this text is only what a startup
-// refusal tells the operator to deploy.
-const storageIntegrityProbeRequiredBuild = "rewriter-go >= v0.13.0 or rewriter-grpc >= v0.15.0 (storage-integrity contract V2)"
+// The released Go and gRPC build floors HouseGate requires. The probe itself
+// identifies the required behavior rather than trusting a version string
+// alone — this text is only what a startup refusal tells the operator to
+// deploy. Contract V2 shipped in rewriter-go v0.13.0 / rewriter-grpc v0.15.0,
+// but every server now also runs the table-reference probe, whose floor is
+// rewriter-go v0.16.0 / rewriter-grpc v0.16.0; naming the older floor here
+// would send an operator to a build the next startup refuses.
+const storageIntegrityProbeRequiredBuild = "rewriter-go >= v0.16.0 or rewriter-grpc >= v0.16.0 (storage-integrity contract V2)"
 
 // StorageIntegrityProbeFactory is a Factory whose concrete engine behavior can
 // be verified at startup. Contract V2 alone cannot distinguish patch builds.
@@ -73,7 +77,9 @@ type StorageIntegrityProbeFactory interface {
 
 // storageIntegrityProbeArgs returns the fixed probe arguments; emptyTables
 // sends the V2 contract with an empty table map. Every request names the
-// reserved databases, as every production request does.
+// reserved databases and carries the protected namespace
+// (protectedDatabases), as every production request does: the probe proves
+// the engine's answers under the request shape production sends.
 func storageIntegrityProbeArgs(emptyTables bool) *pb.RewriteTableDynamicArgs {
 	tables := map[string]*pb.StorageIntegrityArgs_Table{
 		"db1.t": {SafeTable: "hg_safe.db1__t", UnsafeTable: "hg_unsafe.db1__t"},
@@ -84,6 +90,7 @@ func storageIntegrityProbeArgs(emptyTables bool) *pb.RewriteTableDynamicArgs {
 	return &pb.RewriteTableDynamicArgs{
 		DatabaseMap:            map[string]string{"db1": "phys"},
 		KnownPhysicalDatabases: []string{"phys"},
+		ProtectedDatabases:     protectedDatabases("phys"),
 		Delim:                  "_",
 		StorageIntegrity: &pb.StorageIntegrityArgs{
 			Tables:              tables,
@@ -201,18 +208,11 @@ var storageIntegrityBuildProbes = []storageIntegrityBuildProbe{
 // the Spec I fail-closed surface that older engines could acknowledge as v1
 // without implementing.
 func (f *SentioNetworkFactory) ProbeStorageIntegrityBuild(ctx context.Context) error {
-	engine := f.options.Engine
-	if engine == "" {
-		engine = EngineGRPC
-	}
+	engine := f.engineName()
 	if f.backend == nil {
 		return fmt.Errorf("storage-integrity engine probe (engine=%s): no rewrite backend", engine)
 	}
-	timeout := f.options.Timeout
-	if timeout == 0 {
-		timeout = 5 * time.Second
-	}
-	probeCtx, cancel := context.WithTimeout(ctx, timeout)
+	probeCtx, cancel := context.WithTimeout(ctx, f.probeTimeout())
 	defer cancel()
 
 	for _, probe := range storageIntegrityBuildProbes {
@@ -220,40 +220,186 @@ func (f *SentioNetworkFactory) ProbeStorageIntegrityBuild(ctx context.Context) e
 			Sql:     probe.sql,
 			Options: []*pb.RewriteOption{rewriteOption(storageIntegrityProbeArgs(probe.emptyTables))},
 		})
-		if err != nil {
-			return fmt.Errorf("storage-integrity engine probe (engine=%s probe=%s): %w; deploy %s",
-				engine, probe.name, err, storageIntegrityProbeRequiredBuild)
-		}
-		if resp == nil {
-			return fmt.Errorf("storage-integrity engine probe (engine=%s probe=%s): nil response; deploy %s",
-				engine, probe.name, storageIntegrityProbeRequiredBuild)
-		}
-		if resp.GetStorageIntegrityContractVersion() != StorageIntegrityContractV2 {
-			return fmt.Errorf("storage-integrity engine probe (engine=%s probe=%s): contract acknowledgement %s, want %s; deploy %s",
-				engine, probe.name, resp.GetStorageIntegrityContractVersion(), StorageIntegrityContractV2, storageIntegrityProbeRequiredBuild)
-		}
-		if resp.GetCode() != probe.code {
-			return fmt.Errorf("storage-integrity engine probe (engine=%s probe=%s): code=%s, want %s; deploy %s",
-				engine, probe.name, resp.GetCode(), probe.code, storageIntegrityProbeRequiredBuild)
-		}
-		if resp.GetStatementType() != probe.statementType {
-			return fmt.Errorf("storage-integrity engine probe (engine=%s probe=%s): statement type=%s, want %s; deploy %s",
-				engine, probe.name, resp.GetStatementType(), probe.statementType, storageIntegrityProbeRequiredBuild)
-		}
-		sqlAfter := probe.sqlAfter
-		if probe.sqlAfterByEngine != nil {
-			sqlAfter = probe.sqlAfterByEngine[engine]
-		}
-		if resp.GetSqlAfterRewrite() != sqlAfter {
-			return fmt.Errorf("storage-integrity engine probe (engine=%s probe=%s): SQL fingerprint mismatch; deploy %s",
-				engine, probe.name, storageIntegrityProbeRequiredBuild)
-		}
-		if resp.GetMessage() != probe.message {
-			return fmt.Errorf("storage-integrity engine probe (engine=%s probe=%s): message fingerprint mismatch; deploy %s",
-				engine, probe.name, storageIntegrityProbeRequiredBuild)
+		if err := checkProbeAnswer("storage-integrity engine probe", engine, probe,
+			StorageIntegrityContractV2, storageIntegrityProbeRequiredBuild, resp, err); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
 var _ StorageIntegrityProbeFactory = (*SentioNetworkFactory)(nil)
+
+// expectedSQL is the probe's exact output for the given engine.
+func (p storageIntegrityBuildProbe) expectedSQL(engine string) string {
+	if p.sqlAfterByEngine != nil {
+		return p.sqlAfterByEngine[engine]
+	}
+	return p.sqlAfter
+}
+
+func (f *SentioNetworkFactory) engineName() string {
+	if f.options.Engine == "" {
+		return EngineGRPC
+	}
+	return f.options.Engine
+}
+
+func (f *SentioNetworkFactory) probeTimeout() time.Duration {
+	if f.options.Timeout == 0 {
+		return 5 * time.Second
+	}
+	return f.options.Timeout
+}
+
+// checkProbeAnswer compares one probe answer field by field. The error never
+// quotes SQL or engine messages, so it cannot leak protocol-owned names.
+func checkProbeAnswer(label, engine string, probe storageIntegrityBuildProbe, wantAck pb.StorageIntegrityContractVersion, requiredBuild string, resp *pb.RewriteSQLResponse, err error) error {
+	prefix := fmt.Sprintf("%s (engine=%s probe=%s)", label, engine, probe.name)
+	switch {
+	case err != nil:
+		return fmt.Errorf("%s: %w; deploy %s", prefix, err, requiredBuild)
+	case resp == nil:
+		return fmt.Errorf("%s: nil response; deploy %s", prefix, requiredBuild)
+	case resp.GetStorageIntegrityContractVersion() != wantAck:
+		return fmt.Errorf("%s: contract acknowledgement %s, want %s; deploy %s", prefix, resp.GetStorageIntegrityContractVersion(), wantAck, requiredBuild)
+	case resp.GetCode() != probe.code:
+		return fmt.Errorf("%s: code=%s, want %s; deploy %s", prefix, resp.GetCode(), probe.code, requiredBuild)
+	case resp.GetStatementType() != probe.statementType:
+		return fmt.Errorf("%s: statement type=%s, want %s; deploy %s", prefix, resp.GetStatementType(), probe.statementType, requiredBuild)
+	case resp.GetSqlAfterRewrite() != probe.expectedSQL(engine):
+		return fmt.Errorf("%s: SQL fingerprint mismatch; deploy %s", prefix, requiredBuild)
+	case resp.GetMessage() != probe.message:
+		return fmt.Errorf("%s: message fingerprint mismatch; deploy %s", prefix, requiredBuild)
+	}
+	return nil
+}
+
+// TableReferenceProbeRequiredBuild is what a failed table-reference probe tells
+// the operator to deploy. rewriter-go v0.15.0 fails the analyzer-off and
+// engine-argument cases.
+const TableReferenceProbeRequiredBuild = "rewriter-go >= v0.16.0 or rewriter-grpc >= v0.16.0 (table-reference policy, spec 2026-09-26)"
+
+// TableReferenceProbeFactory is a Factory whose engine can prove the spec
+// 2026-09-26 table-reference policy at startup. buildServer requires it of
+// every concrete or injected factory, with or without storage integrity (T13).
+type TableReferenceProbeFactory interface {
+	Factory
+	ProbeTableReferencePolicy(ctx context.Context) error
+}
+
+// tableReferenceProbeArgs is the request an ordinary session of logical
+// database db1 sends with storage integrity disabled: no StorageIntegrityArgs,
+// no physical context, and the protected namespace every production request
+// carries.
+func tableReferenceProbeArgs() *pb.RewriteTableDynamicArgs {
+	return &pb.RewriteTableDynamicArgs{
+		DatabaseMap:                      map[string]string{"db1": "phys"},
+		KnownPhysicalDatabases:           []string{"phys"},
+		UpstreamLogicalDatabaseInContext: "db1",
+		Delim:                            "_",
+		ProtectedDatabases:               protectedDatabases("phys"),
+	}
+}
+
+// rejectedProbe is a policy case both engines refuse: the input SQL echoed,
+// no statement type.
+func rejectedProbe(name, sql string, code pb.RewriteCode, message string) storageIntegrityBuildProbe {
+	return storageIntegrityBuildProbe{name: name, sql: sql, code: code,
+		statementType: pb.StatementType_STATEMENT_TYPE_UNSPECIFIED, sqlAfter: sql, message: message}
+}
+
+// tableReferenceProbes are the policy cases (spec 2026-09-26 §9.5 with plan
+// deviations D1–D3). Every answer was measured on 2026-10-01 for this exact
+// request: rewriter-go v0.16.0 through the native FFI, and rewriter-grpc
+// v0.16.0 (source c24ed33) through RewriterServiceImpl::Rewrite. Both
+// engines echo the input SQL on a rejection and acknowledge no contract
+// without StorageIntegrityArgs. Changing a pin needs a re-measurement against
+// both engines; never loosen the comparison to make one pass.
+var tableReferenceProbes = []storageIntegrityBuildProbe{
+	rejectedProbe("param-table-position", "SELECT * FROM {p:Identifier}",
+		pb.RewriteCode_InvalidRewriteRequest, "query parameters are not supported in a database or table position"),
+	rejectedProbe("protected-in-operand", "SELECT * FROM db1.o WHERE a IN phys.`db2.x`",
+		pb.RewriteCode_InvalidRewriteRequest, "protected database phys is not addressable"),
+	// phys is protected as a database_map value anyway; only a name outside
+	// the map proves the engine reads protected_databases. rewriter-go
+	// v0.16.0 answers Success for this SQL when the field is omitted.
+	rejectedProbe("protected-reserved-database", "SELECT * FROM hg_promote.`db2.x`",
+		pb.RewriteCode_InvalidRewriteRequest, "protected database hg_promote is not addressable"),
+	{
+		name: "in-operand-rewritten", sql: "SELECT * FROM db1.o WHERE a IN db1.p",
+		code: pb.RewriteCode_Success, statementType: pb.StatementType_STATEMENT_TYPE_SELECT, message: "success",
+		sqlAfterByEngine: map[string]string{
+			EngineNative: `SELECT * FROM phys."db1.o" "db1.o" WHERE a IN phys."db1.p"`,
+			EngineGRPC:   "SELECT * FROM phys.`db1.o` AS `db1.o` WHERE a IN (phys.`db1.p`)",
+		},
+	},
+	{
+		name: "insert-select-source-rewritten", sql: "INSERT INTO db1.o SELECT * FROM db1.p",
+		code: pb.RewriteCode_Success, statementType: pb.StatementType_STATEMENT_TYPE_INSERT, message: "success",
+		sqlAfterByEngine: map[string]string{
+			EngineNative: `INSERT INTO phys."db1.o" SELECT * FROM phys."db1.p" "db1.p"`,
+			EngineGRPC:   "INSERT INTO phys.`db1.o` SELECT * FROM phys.`db1.p` AS `db1.p`",
+		},
+	},
+	// D1: T3 precedes T5, so a protected carrier argument names the database.
+	rejectedProbe("protected-carrier-argument", "SELECT * FROM merge('phys', 'db2')",
+		pb.RewriteCode_InvalidRewriteRequest, "protected database phys is not addressable"),
+	rejectedProbe("table-function-refused", "SELECT * FROM merge('db1', 'o')",
+		pb.RewriteCode_UnsupportedStatement, "table function merge is not accepted"),
+	rejectedProbe("use-protected", "USE phys",
+		pb.RewriteCode_InvalidRewriteRequest, "protected database phys is not addressable"),
+	rejectedProbe("unmodelled-class-refused", "SYSTEM RELOAD CONFIG",
+		pb.RewriteCode_UnsupportedStatement, "statement is not supported"),
+	rejectedProbe("system-table-refused", "SELECT * FROM system.processes",
+		pb.RewriteCode_UnsupportedStatement, "system table system.processes is not accessible"),
+	// Spec §13 round 2; rewriter-go v0.15.0 answers Success.
+	rejectedProbe("analyzer-off-refused", "SELECT * FROM db1.o SETTINGS allow_experimental_analyzer = 0",
+		pb.RewriteCode_UnsupportedStatement, "table setting allow_experimental_analyzer is not accepted"),
+	// Spec §13; rewriter-go v0.15.0 answers Success.
+	rejectedProbe("engine-argument-read-refused", "CREATE TABLE db1.n (d Date, n UInt8) ENGINE = MergeTree(d, (SELECT max(n) FROM db1.o), 8192)",
+		pb.RewriteCode_UnsupportedStatement, "statement is not supported"),
+}
+
+// ProbeTableReferencePolicy issues the fixed policy cases (spec 2026-09-26
+// §9.5, T13) and requires each exact answer.
+func (f *SentioNetworkFactory) ProbeTableReferencePolicy(ctx context.Context) error {
+	engine := f.engineName()
+	if f.backend == nil {
+		return fmt.Errorf("rewriter table-reference probe (engine=%s): no rewrite backend; deploy %s", engine, TableReferenceProbeRequiredBuild)
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, f.probeTimeout())
+	defer cancel()
+	for _, probe := range tableReferenceProbes {
+		resp, err := f.backend.Rewrite(probeCtx, &pb.RewriteSQLRequest{
+			Sql:     probe.sql,
+			Options: []*pb.RewriteOption{rewriteOption(tableReferenceProbeArgs())},
+		})
+		if err := checkProbeAnswer("rewriter table-reference probe", engine, probe,
+			pb.StorageIntegrityContractVersion_STORAGE_INTEGRITY_CONTRACT_UNSPECIFIED, TableReferenceProbeRequiredBuild, resp, err); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// TableReferenceProbeAnswer returns the answer a conforming engine of the
+// given kind (EngineGRPC or EngineNative) gives to req when req is one of the
+// startup policy probes, and false for any other request. Test doubles that
+// stand in for an engine use it to pass the startup probe and to keep probe
+// traffic out of what they record.
+func TableReferenceProbeAnswer(req *pb.RewriteSQLRequest, engine string) (*pb.RewriteSQLResponse, bool) {
+	opts := req.GetOptions()
+	if len(opts) != 1 || !proto.Equal(opts[0], rewriteOption(tableReferenceProbeArgs())) {
+		return nil, false
+	}
+	for _, probe := range tableReferenceProbes {
+		if probe.sql == req.GetSql() {
+			return &pb.RewriteSQLResponse{Code: probe.code, StatementType: probe.statementType,
+				SqlAfterRewrite: probe.expectedSQL(engine), Message: probe.message}, true
+		}
+	}
+	return nil, false
+}
+
+var _ TableReferenceProbeFactory = (*SentioNetworkFactory)(nil)

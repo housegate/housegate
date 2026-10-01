@@ -34,11 +34,17 @@ go_test(
     srcs = [
         "cli_test.go",
         "clickhouse_test.go",
+        "rewriter_mock_test.go",
     ],
     embed = [":testenv"],
     local = True,
     tags = [
         "manual",
         "requires-docker",
+    ],
+    deps = [
+        "//pkg/network",
+        "//pkg/rewriter",
+        "@com_github_housegate_rewriter_proto//gen/pb",
     ],
 )

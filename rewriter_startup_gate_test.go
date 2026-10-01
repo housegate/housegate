@@ -214,12 +214,17 @@ func (h *warnCapture) has(substr string) bool {
 	return false
 }
 
-// startStubRewriterService serves a gRPC rewriter that accepts everything.
+// startStubRewriterService serves a gRPC rewriter that accepts everything
+// and answers the startup table-reference probe (spec 2026-09-26 T13) as a
+// conforming gRPC engine would.
 type stubRewriterService struct {
 	pb.UnimplementedRewriterServiceServer
 }
 
 func (stubRewriterService) Rewrite(_ context.Context, req *pb.RewriteSQLRequest) (*pb.RewriteSQLResponse, error) {
+	if resp, ok := rewriter.TableReferenceProbeAnswer(req, rewriter.EngineGRPC); ok {
+		return resp, nil
+	}
 	return &pb.RewriteSQLResponse{Code: pb.RewriteCode_Success, SqlAfterRewrite: req.GetSql()}, nil
 }
 
