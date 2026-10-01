@@ -3,6 +3,7 @@ package rewriter
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -107,6 +108,14 @@ func TestSentioRewriter_UnsafeLatestFetchesPartsForAccessedTablesOnly(t *testing
 	}
 	if got := tables["db1.u"].GetExcludedUnsafeParts(); len(got) != 0 {
 		t.Fatalf("an unaccessed Active table must carry no parts, got %v", got)
+	}
+	// Spec 2026-09-26 T1/T3: the protected namespace rides on every pass,
+	// the unsafe_latest rewrite pass included.
+	wantProtected := []string{"phys", "hg_safe", "hg_unsafe", "hg_promote"}
+	for i, req := range be.requests {
+		if got := req.GetOptions()[0].GetTableNameArgs().GetDynamicArgs().GetProtectedDatabases(); !slices.Equal(got, wantProtected) {
+			t.Fatalf("pass %d protected_databases = %v, want %v", i+1, got, wantProtected)
+		}
 	}
 }
 
