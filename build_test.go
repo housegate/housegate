@@ -2229,7 +2229,8 @@ func TestBuildServer_TableRefGuardWiring(t *testing.T) {
 	for _, candidate := range requireExternalChain(t, bs).QueryPlugins {
 		if g, ok := candidate.(*tablerefguard.Plugin); ok {
 			found = true
-			if g.Mode != tablerefguard.ModeEnforce {
+			// The plugin treats the empty mode as enforce.
+			if g.Mode != "" && g.Mode != tablerefguard.ModeEnforce {
 				t.Fatalf("default mode = %q, want enforce", g.Mode)
 			}
 		}
@@ -2248,5 +2249,93 @@ func TestBuildServer_TableRefGuardWiring(t *testing.T) {
 		if _, ok := candidate.(*tablerefguard.Plugin); ok {
 			t.Fatal("a router-only server has no rewriter and must not wire the guard")
 		}
+	}
+}
+
+// With rewriter.fail_open_on_unavailable no rewriter is built at startup, and
+// the guard is then the only policy layer, so it must still be wired on every
+// server that forwards to ClickHouse (shard, upstream or host-injected
+// cluster) while a router-only server keeps none.
+func TestBuildServer_TableRefGuardWiredWithoutARewriter(t *testing.T) {
+	guardOf := func(t *testing.T, bs *builtServer) *tablerefguard.Plugin {
+		t.Helper()
+		for _, candidate := range requireExternalChain(t, bs).QueryPlugins {
+			if g, ok := candidate.(*tablerefguard.Plugin); ok {
+				return g
+			}
+		}
+		return nil
+	}
+
+	cfg := withoutRewriter(minimalServerCfg(t))
+	cfg.Rewriter.PhysicalDatabase = "phys"
+	bs, err := buildServer(Options{Config: cfg, NetworkState: network.NewInMemoryNetworkState()}, nil)
+	if err != nil {
+		t.Fatalf("upstream, fail-open: %v", err)
+	}
+	for _, candidate := range requireExternalChain(t, bs).QueryPlugins {
+		if _, ok := candidate.(*rewrite.Plugin); ok {
+			t.Fatal("test premise broken: a rewrite plugin was wired")
+		}
+	}
+	if g := guardOf(t, bs); g == nil || g.PhysicalDatabase != "phys" {
+		t.Fatalf("upstream server without a rewriter: guard = %+v", g)
+	}
+	bs.teardown()
+
+	hostCluster := withoutRewriter(minimalRouterOnlyCfg(t))
+	bs, err = buildServer(Options{Config: hostCluster, NetworkState: network.NewInMemoryNetworkState(), Cluster: &fakeCluster{}}, nil)
+	if err != nil {
+		t.Fatalf("host cluster, fail-open: %v", err)
+	}
+	if g := guardOf(t, bs); g == nil {
+		t.Fatal("host-injected cluster without a rewriter: guard not wired")
+	}
+	bs.teardown()
+
+	routerOnly := withoutRewriter(minimalRouterOnlyCfg(t))
+	bs, err = buildServer(Options{Config: routerOnly, NetworkState: network.NewInMemoryNetworkState()}, nil)
+	if err != nil {
+		t.Fatalf("router-only: %v", err)
+	}
+	defer bs.teardown()
+	if g := guardOf(t, bs); g != nil {
+		t.Fatal("router-only server must not wire the guard")
+	}
+}
+
+func TestBuildAgent_NeverWiresTableRefGuard(t *testing.T) {
+	cfg := agentSICfg(t)
+	bs, err := buildAgent(Options{Config: cfg, NetworkState: network.NewInMemoryNetworkState()}, nil)
+	if err != nil {
+		t.Fatalf("buildAgent: %v", err)
+	}
+	defer bs.teardown()
+	chain := requireProxyServer(t, bs.listeners[0]).Hooks.(*plugin.PluginChain)
+	for _, candidate := range chain.QueryPlugins {
+		if _, ok := candidate.(*tablerefguard.Plugin); ok {
+			t.Fatal("agent mode must not wire the table-reference guard")
+		}
+	}
+}
+
+func TestNew_RejectsAnInvalidTableRefGuardMode(t *testing.T) {
+	cfg := minimalServerCfg(t)
+	cfg.TableRefGuard.Mode = "audit"
+	_, err := New(Options{Config: cfg, NetworkState: network.NewInMemoryNetworkState(), Rewriter: stubRewriterFactory{}})
+	if err == nil || !strings.Contains(err.Error(), `tableref_guard.mode "audit" is invalid`) {
+		t.Fatalf("New err = %v", err)
+	}
+}
+
+func TestTableRefGuardPhysicalDatabaseWarning(t *testing.T) {
+	cfg := minimalServerCfg(t)
+	cfg.Rewriter.PhysicalDatabase = ""
+	if got := tableRefGuardPhysicalDatabaseWarning(cfg); !strings.Contains(got, "G2") || !strings.Contains(got, "rewriter.physical_database") {
+		t.Fatalf("warning = %q", got)
+	}
+	cfg.Rewriter.PhysicalDatabase = "phys"
+	if got := tableRefGuardPhysicalDatabaseWarning(cfg); got != "" {
+		t.Fatalf("warning with a physical database = %q", got)
 	}
 }

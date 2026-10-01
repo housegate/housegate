@@ -125,6 +125,26 @@ func storageIntegrityRewriterOptions(cfg *config.Config, rs rewriter.StorageInte
 	}
 }
 
+// guardModeLabel names the effective guard mode for logs; the plugin treats
+// the empty mode as enforce.
+func guardModeLabel(mode string) string {
+	if mode == "" {
+		return string(tablerefguard.ModeEnforce)
+	}
+	return mode
+}
+
+// tableRefGuardPhysicalDatabaseWarning returns the operator warning for an
+// empty rewriter.physical_database, which leaves the guard's physical-database
+// rule (G2) inactive, or an empty string when it is set. A host-injected
+// rewriter may keep its own database map, but the guard only reads the config.
+func tableRefGuardPhysicalDatabaseWarning(cfg *config.Config) string {
+	if cfg.Rewriter.PhysicalDatabase != "" {
+		return ""
+	}
+	return "tableref_guard: rewriter.physical_database is empty, so the guard's physical-database rule (G2) is inactive; reserved-name, carrier-callable, identifier-placeholder and scan rules still apply"
+}
+
 // storageIntegrityInternalListenWarning returns the operator warnings for the
 // Spec I D6 peer and privileged-operator boundaries, or an empty string when
 // neither applies.
@@ -652,21 +672,24 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		log.Info("storage-integrity reserved-name guard enabled")
 	}
 	// Spec 2026-09-26 T9: the lexical table-reference guard runs on ordinary
-	// sessions before forward and rewrite whenever a rewriter is configured.
-	// Router-only servers have no rewriter and so no guard. The internal
-	// listener shares this chain, but its sessions are peer-trusted and the
-	// guard skips those.
-	if rwFactory != nil {
-		guardMode := tablerefguard.Mode(cfg.TableRefGuard.Mode)
-		if guardMode == "" {
-			guardMode = tablerefguard.ModeEnforce
-		}
+	// sessions before forward and rewrite on every server that forwards to
+	// ClickHouse, whether or not a rewriter was built: under
+	// rewriter.fail_open_on_unavailable it is the only policy layer left.
+	// Router-only servers (no shard, upstream or cluster) forward to peers
+	// and get none. The internal listener shares this chain, but its sessions
+	// are peer-trusted and the guard skips those. The empty mode enforces.
+	if cfg.Shard != nil || cfg.Upstream != "" || clusterIface != nil {
 		queryPlugins = append(queryPlugins, &tablerefguard.Plugin{
 			PhysicalDatabase:  cfg.Rewriter.PhysicalDatabase,
 			ReservedDatabases: sitable.ReservedDatabases(),
-			Mode:              guardMode,
+			Mode:              tablerefguard.Mode(cfg.TableRefGuard.Mode),
 		})
-		log.Infow("table-reference guard enabled", "mode", string(guardMode))
+		if warning := tableRefGuardPhysicalDatabaseWarning(cfg); warning != "" {
+			log.Warnw(warning)
+		}
+		log.Infow("table-reference guard enabled",
+			"mode", guardModeLabel(cfg.TableRefGuard.Mode),
+			"rewriter_configured", rwFactory != nil)
 	}
 	querySuccessPlugins := []plugin.QuerySuccessPlugin{}
 	queryCompletePlugins := []plugin.QueryCompletePlugin{}

@@ -54,10 +54,11 @@ rewriter:
   # query) unless this switch is on; invalid with storage_integrity. See docs/rewriter-fail-closed.md.
   # fail_open_on_unavailable: false
 # Lexical table-reference guard on ordinary sessions (spec 2026-09-26 T9),
-# wired whenever a rewriter is configured. observe logs and counts
+# wired on every server that forwards to ClickHouse (shard or upstream),
+# also when no rewriter is running. observe logs and counts
 # clickhouse_proxy_tableref_guard_rejections_total instead of refusing.
 # tableref_guard:
-#   mode: enforce                    # enforce (default) | observe
+#   mode: enforce                    # enforce (default) | observe; case-sensitive
 
 # Storage-integrity table membership and read policy. The merge guard derives
 # both physical homes from each logical <database>.<table> id.
