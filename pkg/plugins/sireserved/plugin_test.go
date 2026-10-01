@@ -832,8 +832,8 @@ func TestOnQuery_DollarInsideAnIdentifierCannotOpenAHeredoc(t *testing.T) {
 func TestOnQuery_UnicodeWhitespaceCannotHideACarrier(t *testing.T) {
 	p := &Plugin{ReservedDatabases: []string{"hg_safe", "hg_unsafe"}, ReservedRowIDColumn: "_hg_row_id"}
 	for _, sql := range []string{
-		"SELECT count() FROM merge (currentDatabase(), '^t$')",
-		"SELECT count() FROM merge​(currentDatabase(), '^t$')",
+		"SELECT count() FROM merge\u00a0(currentDatabase(), '^t$')",
+		"SELECT count() FROM merge\u200b(currentDatabase(), '^t$')",
 	} {
 		t.Run(sql, func(t *testing.T) {
 			sess := newSessionForTest(t, 33)

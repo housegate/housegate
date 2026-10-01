@@ -257,7 +257,7 @@ func TestScanTokenStream(t *testing.T) {
 	}{
 		{"SELECT $1", ErrStrayDollar},
 		{"SELECT 1 AS x$$, * FROM phys.t AS y$$", ErrStrayDollar},
-		{"SELECT * FROM phys .t", ErrNonASCII},
+		{"SELECT * FROM phys\u00a0.t", ErrNonASCII},
 		{"SELECT 1 #x\n", ErrBareHash},
 	} {
 		if _, err := ScanWith(tc.sql, Options{AllowStringEscapes: true}); !errors.Is(err, tc.want) {
