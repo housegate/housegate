@@ -66,15 +66,18 @@ type Plugin struct {
 	Mode Mode
 }
 
-// OnQuery applies Check to every ordinary session, driver sessions included.
-// Maintenance and platform-operator sessions are sireserved's; peer-trusted
-// and forwarded-from-peer sessions carry SQL the origin already checked.
+// OnQuery applies Check to every ordinary session, driver sessions included,
+// and to sessions forwarded from a peer: this host owns their original client
+// SQL, as it does for rewrite and the Query-packet check, and the origin may
+// be a router-only server that runs no guard. Maintenance and
+// platform-operator sessions are sireserved's; a peer-trusted remote()
+// loopback carries SQL its origin already rewrote.
 func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	if qctx == nil || qctx.Session == nil {
 		return nil
 	}
 	snap := qctx.Session.State().Snapshot()
-	if snap.Maintenance || snap.PlatformOperator || snap.IsPeerTrusted || snap.IsForwardedFromPeer {
+	if snap.Maintenance || snap.PlatformOperator || (snap.IsPeerTrusted && !snap.IsForwardedFromPeer) {
 		return nil
 	}
 	sql := qctx.OriginalSQL
@@ -98,7 +101,8 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 // client is ordinary even after its session pivots to a peer.
 func (*Plugin) RunOnForward() bool { return true }
 
-// RunOnPeerTrust lets OnQuery decide; it skips peer-trusted sessions itself.
+// RunOnPeerTrust lets OnQuery decide; it skips remote() loopbacks itself and
+// checks sessions forwarded from a peer.
 func (*Plugin) RunOnPeerTrust() bool { return true }
 
 // RejectUndecodableQuery fails closed: an undecodable Query cannot be scanned.

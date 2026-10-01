@@ -264,7 +264,8 @@ func TestOnQuery_SessionGate(t *testing.T) {
 		{"maintenance", func(s *chsession.SessionState) { s.SetMaintenance(true) }, false},
 		{"platform operator", func(s *chsession.SessionState) { s.SetPlatformOperator(true) }, false},
 		{"peer trusted", func(s *chsession.SessionState) { s.SetPeerTrust("peer:9001") }, false},
-		{"forwarded from peer", func(s *chsession.SessionState) { s.SetPeerTrustForwarded("peer:9001", true) }, false},
+		{"forwarded from peer", func(s *chsession.SessionState) { s.SetPeerTrustForwarded("peer:9001", true) }, true},
+		{"peer trusted, not forwarded", func(s *chsession.SessionState) { s.SetPeerTrustForwarded("peer:9001", false) }, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sess := newSessionForTest(t)
@@ -284,18 +285,19 @@ func TestOnQuery_SessionGate(t *testing.T) {
 	}
 }
 
-// TestOnQuery_ForwardedFromPeerAloneSkips pins the IsForwardedFromPeer branch
-// on its own: SetPeerTrustForwarded also sets IsPeerTrusted, so the session
-// gate test cannot tell the two checks apart.
-func TestOnQuery_ForwardedFromPeerAloneSkips(t *testing.T) {
+// TestOnQuery_ForwardedFromPeerAloneIsChecked pins the IsForwardedFromPeer
+// branch on its own: SetPeerTrustForwarded also sets IsPeerTrusted, so the
+// session gate test cannot tell the two checks apart. The receiving host owns
+// a forwarded session's original client SQL (final review I1).
+func TestOnQuery_ForwardedFromPeerAloneIsChecked(t *testing.T) {
 	p := &Plugin{PhysicalDatabase: "phys", ReservedDatabases: reserved}
 	sess := newSessionForTest(t)
 	sess.State().IsForwardedFromPeer = true
 	if snap := sess.State().Snapshot(); snap.IsPeerTrusted || !snap.IsForwardedFromPeer {
 		t.Fatalf("snapshot = %+v, want only IsForwardedFromPeer", snap)
 	}
-	if err := p.OnQuery(context.Background(), queryFor(sess, "USE phys")); err != nil {
-		t.Fatalf("a forwarded-from-peer session must skip the guard: %v", err)
+	if err := p.OnQuery(context.Background(), queryFor(sess, "USE phys")); err == nil {
+		t.Fatal("a forwarded-from-peer session must be checked by the guard")
 	}
 }
 

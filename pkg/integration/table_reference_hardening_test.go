@@ -237,3 +237,61 @@ func TestTableReference_DriverTrafficIsUnaffected(t *testing.T) {
 		t.Fatalf("count = %d, want 3", n)
 	}
 }
+
+// TestTableReference_GuardRunsOnForwardedFromPeerSessions (final review I1):
+// the host that receives a forward-pivoted session owns its original client
+// SQL, so its guard checks it against the host's own physical database. The
+// origin here has no physical_database (G2 inactive there, as on a
+// router-only origin that runs no guard at all), so only the host can refuse
+// a qualifier naming the host's physical database.
+func TestTableReference_GuardRunsOnForwardedFromPeerSessions(t *testing.T) {
+	signer, err := auth.NewRelaySigner(authTestKey1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		indexerA uint64 = 1
+		indexerB uint64 = 2
+		dbB             = "tr_fwd_db"
+		physB           = "phys_tr_fwd_b"
+	)
+	ctx := context.Background()
+	seed := openConnNoDB(t, chEnv.Addr)
+	for _, db := range []string{dbB, physB} {
+		if err := seed.Exec(ctx, "CREATE DATABASE IF NOT EXISTS "+db); err != nil {
+			t.Fatalf("seed %s: %v", db, err)
+		}
+	}
+	t.Cleanup(func() {
+		_ = seed.Exec(ctx, "DROP DATABASE IF EXISTS "+dbB)
+		_ = seed.Exec(ctx, "DROP DATABASE IF EXISTS "+physB)
+	})
+	rewriterB, _ := testenv.WithRewriterMock(t)
+	hostB := testenv.StartServerProxy(t, chEnv.Addr,
+		rewriterB,
+		authProxyConfig([]string{signer.Address()}, false),
+		testenv.WithRelayKey(authTestKey1),
+		testenv.WithIndexerID(indexerB),
+		testenv.WithCredentialReplace(),
+		testenv.WithExtraDatabases(dbB),
+		testenv.WithLogicalDatabaseAt(dbB, indexerB),
+		testenv.WithDatabasePermission(signer.Address(), dbB, registry.DbAuthOwner),
+		testenv.WithConfigMutator(func(cfg *config.Config) { cfg.Rewriter.PhysicalDatabase = physB }),
+	)
+	originA := testenv.StartServerProxy(t, chEnv.Addr,
+		testenv.WithRelayKey(authTestKey1),
+		testenv.WithIndexerID(indexerA),
+		testenv.WithPeerAt(indexerB, hostB),
+		testenv.WithExtraDatabases(dbB),
+		testenv.WithLogicalDatabaseAt(dbB, indexerB),
+	)
+	conn := openSignedConnPinnedDB(t, originA.Addr, signer, dbB)
+	var one uint8
+	if err := conn.QueryRow(ctx, "SELECT 1").Scan(&one); err != nil || one != 1 {
+		t.Fatalf("SELECT 1 through the forward pivot: %v", err)
+	}
+	want := guardRefusal("physical_database", "protected database "+physB+" is not addressable")
+	if err := conn.Exec(ctx, "SELECT * FROM "+physB+".`"+dbB+".x`"); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("err = %v, want the receiving host's guard refusal %q", err, want)
+	}
+}
