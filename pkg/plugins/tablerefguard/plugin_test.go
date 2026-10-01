@@ -191,6 +191,26 @@ func TestCheck(t *testing.T) {
 		{"rename database phys", "rename database `phys` to db9", "phys", RulePhysicalDatabase},
 		{"drop a tenant database", "DROP DATABASE db1", "phys", ""},
 		{"a column named database", "SELECT database, name FROM system.tables WHERE database = 'phys'", "phys", ""},
+		// Fix round 2: every database-object position ClickHouse 26.8.1
+		// parses (measured with clickhouse format).
+		{"truncate all tables from phys", "TRUNCATE ALL TABLES FROM phys", "phys", RulePhysicalDatabase},
+		{"truncate tables from quoted phys like", "TRUNCATE TABLES FROM `phys` LIKE '%'", "phys", RulePhysicalDatabase},
+		{"truncate all tables from if exists phys", `truncate all tables from if exists "phys" NOT LIKE 'x'`, "phys", RulePhysicalDatabase},
+		{"truncate all tables from a tenant database", "TRUNCATE ALL TABLES FROM db1", "phys", ""},
+		{"show temporary tables from phys", "SHOW TEMPORARY TABLES FROM phys", "phys", RulePhysicalDatabase},
+		{"show dictionaries in phys", "SHOW DICTIONARIES IN phys", "phys", RulePhysicalDatabase},
+		{"show index from t in phys", "SHOW EXTENDED INDEXES FROM t IN `phys`", "phys", RulePhysicalDatabase},
+		{"system sync database replica phys", "SYSTEM SYNC DATABASE REPLICA phys", "phys", RulePhysicalDatabase},
+		{"system drop replica from database phys", "SYSTEM DROP DATABASE REPLICA 'r' FROM DATABASE phys", "phys", RulePhysicalDatabase},
+		{"backup database phys", "BACKUP DATABASE phys TO Disk('b', '1.zip')", "phys", RulePhysicalDatabase},
+		{"backup database as phys", "BACKUP DATABASE db1 AS phys TO Disk('b', '1.zip')", "phys", RulePhysicalDatabase},
+		{"restore database as phys", "RESTORE DATABASE db1 AS `phys` FROM Disk('b', '1.zip')", "phys", RulePhysicalDatabase},
+		{"restore all except database phys", "RESTORE ALL EXCEPT DATABASE phys FROM Disk('b', '1.zip')", "phys", RulePhysicalDatabase},
+		{"use database phys", "USE DATABASE phys", "phys", RulePhysicalDatabase},
+		{"detach database phys permanently", "DETACH DATABASE phys PERMANENTLY", "phys", RulePhysicalDatabase},
+		{"alter database phys modify setting", "ALTER DATABASE phys MODIFY SETTING x = 1", "phys", RulePhysicalDatabase},
+		{"describe database phys", "DESCRIBE DATABASE phys", "phys", RulePhysicalDatabase},
+		{"a column named tables", "SELECT tables FROM db1.o WHERE tables IN (1)", "phys", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rule, detail := Check(tc.sql, tc.phys, reserved)

@@ -431,11 +431,23 @@ func isLookupFunction(name string) bool {
 //   - any name in a statement that starts with USE;
 //   - the name after FROM or IN in a statement that starts with SHOW;
 //   - the object of DATABASE (CREATE, DROP, ATTACH, DETACH, ALTER, TRUNCATE,
-//     EXISTS, SHOW CREATE … DATABASE [IF [NOT] EXISTS] phys), and any name in
-//     a RENAME or EXCHANGE statement that renames a database;
+//     EXISTS, DESCRIBE, SHOW CREATE … DATABASE [IF [NOT] EXISTS] phys,
+//     SYSTEM … DATABASE [REPLICA] phys), and any name in a RENAME, EXCHANGE,
+//     BACKUP or RESTORE statement that names a database (RESTORE DATABASE x
+//     AS phys);
+//   - the object of TABLES FROM / IN [IF EXISTS] in any statement
+//     (TRUNCATE [ALL] TABLES FROM phys empties the database; SHOW
+//     [TEMPORARY] TABLES FROM phys);
 //   - inside the argument list of a carrier (G3) or lookup (T6) call, a name
 //     or a string literal (decoded; a heredoc body raw) equal to the
 //     physical database or starting with it followed by a dot.
+//
+// The positions were checked with clickhouse format on 26.8.1 against a
+// list of database-object statements (the others name a database only as a
+// qualifier, e.g. GRANT … ON phys.* or SYSTEM FLUSH DISTRIBUTED phys.t;
+// CHECK / DROP ALL TABLES FROM and SHOW TABLE STATUS / MERGES FROM do not
+// parse). The list is not a proof of completeness; the engines remain the
+// authority.
 //
 // Elsewhere the name is allowed: a column, alias, unqualified table or tenant
 // string literal may share it, and DEFAULT is a keyword when the physical
@@ -469,11 +481,23 @@ func physicalDatabaseAddressed(tokens []sqlsurface.Token, engine engineClause, p
 		if !wordAt(tokens, i, "DATABASE") {
 			continue
 		}
-		if wordAt(tokens, 0, "RENAME", "EXCHANGE") && anyNamed() {
+		if wordAt(tokens, 0, "RENAME", "EXCHANGE", "BACKUP", "RESTORE") && anyNamed() {
 			return true
 		}
 		j := i + 1
 		for wordAt(tokens, j, "IF", "NOT", "EXISTS", "REPLICA") {
+			j++
+		}
+		if j < len(tokens) && named(tokens[j]) {
+			return true
+		}
+	}
+	for i := range tokens {
+		if !wordAt(tokens, i, "TABLES") || !wordAt(tokens, i+1, "FROM", "IN") {
+			continue
+		}
+		j := i + 2
+		for wordAt(tokens, j, "IF", "EXISTS") {
 			j++
 		}
 		if j < len(tokens) && named(tokens[j]) {
