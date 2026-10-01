@@ -7,9 +7,11 @@ go_test(
     deps = [
         "//pkg/chproto",
         "//pkg/chsession",
+        "//pkg/log",
         "//pkg/plugin",
         "@com_github_housegate_rewriter_go//:rewriter-go",
         "@com_github_housegate_rewriter_proto//gen/pb",
+        "@com_github_prometheus_client_golang//prometheus/testutil",
     ],
 )
 
@@ -18,5 +20,9 @@ go_library(
     srcs = ["plugin.go"],
     importpath = "github.com/housegate/housegate/pkg/plugins/querysettings",
     visibility = ["//visibility:public"],
-    deps = ["//pkg/plugin"],
+    deps = [
+        "//pkg/log",
+        "//pkg/plugin",
+        "@com_github_prometheus_client_golang//prometheus",
+    ],
 )

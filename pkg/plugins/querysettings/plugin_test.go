@@ -1,8 +1,11 @@
 package querysettings
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"sort"
@@ -12,8 +15,11 @@ import (
 	rewritergo "github.com/housegate/rewriter-go"
 	pb "github.com/housegate/rewriter-proto/gen/pb"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
 	"github.com/housegate/housegate/pkg/chproto"
 	"github.com/housegate/housegate/pkg/chsession"
+	"github.com/housegate/housegate/pkg/log"
 	"github.com/housegate/housegate/pkg/plugin"
 )
 
@@ -74,28 +80,6 @@ func TestRefused(t *testing.T) {
 	} {
 		if got := Refused(tc.name, tc.value); got != tc.want {
 			t.Errorf("Refused(%q, %q) = %v, want %v", tc.name, tc.value, got, tc.want)
-		}
-	}
-}
-
-func TestRefusedOld(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		value uint64
-		want  bool
-	}{
-		{"enable_analyzer", 1, false},
-		{"allow_experimental_analyzer", 1, false},
-		{"enable_analyzer", 0, true},
-		{"enable_analyzer", 2, true},
-		{"enable_analyzer", 1 << 32, true},
-		{"enable_analyzer", ^uint64(0), true},
-		{"enable_global_with_statement", 1, true},
-		{"compatibility", 0, true},
-		{"max_threads", 0, false},
-	} {
-		if got := refusedOld(tc.name, tc.value); got != tc.want {
-			t.Errorf("refusedOld(%q, %d) = %v, want %v", tc.name, tc.value, got, tc.want)
 		}
 	}
 }
@@ -171,14 +155,6 @@ func TestOnQuery(t *testing.T) {
 	}
 	if err := p.OnQuery(ctx, queryWith(newSession(t), chproto.Setting{Key: "enable_analyzer", Value: "'0'", Custom: true})); err == nil {
 		t.Fatal("a custom-flagged analyzer-off setting must be refused")
-	}
-	old := &plugin.QueryContext{Session: newSession(t), OriginalSQL: "SELECT 1", Query: &chproto.Query{Body: "SELECT 1", OldSettings: []chproto.OldSetting{{Key: "enable_analyzer", Value: 0}}}}
-	if err := p.OnQuery(ctx, old); err == nil || err.Error() != "table setting enable_analyzer is not accepted (native-protocol query setting)" {
-		t.Fatalf("an old-format analyzer-off setting must be refused: %v", err)
-	}
-	oldOn := &plugin.QueryContext{Session: newSession(t), OriginalSQL: "SELECT 1", Query: &chproto.Query{Body: "SELECT 1", OldSettings: []chproto.OldSetting{{Key: "enable_analyzer", Value: 1}, {Key: "max_threads", Value: 8}}}}
-	if err := p.OnQuery(ctx, oldOn); err != nil {
-		t.Fatalf("an old-format analyzer-on setting: %v", err)
 	}
 	if err := p.OnQuery(ctx, &plugin.QueryContext{Session: newSession(t)}); err != nil {
 		t.Fatalf("no Query packet: %v", err)
@@ -287,5 +263,141 @@ func TestRefusedMatchesTheNativeEngine(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(RefusedNames(), ","), "enable_analyzer") {
 		t.Fatal("RefusedNames must list the analyzer switches")
+	}
+}
+
+func oldFormatQuery(sess chsession.Session, settings ...chproto.OldSetting) *plugin.QueryContext {
+	return &plugin.QueryContext{Session: sess, OriginalSQL: "SELECT 1", Query: &chproto.Query{Body: "SELECT 1", OldSettings: settings}}
+}
+
+// A pre-54429 Query packet carries its settings in the old UInt64 format,
+// whose decoding is not proven against a hostile client: any old-format
+// setting is refused on a governed session, whatever its name and value,
+// with the ordinary refusal naming the first one.
+func TestOldFormatSettingsAreRefused(t *testing.T) {
+	p := &Plugin{}
+	ctx := context.Background()
+	for _, settings := range [][]chproto.OldSetting{
+		{{Key: "enable_analyzer", Value: 0}},
+		{{Key: "enable_analyzer", Value: 1}},
+		{{Key: "max_threads", Value: 8}, {Key: "enable_analyzer", Value: 0}},
+	} {
+		err := p.OnQuery(ctx, oldFormatQuery(newSession(t), settings...))
+		want := "table setting " + settings[0].Key + " is not accepted (native-protocol query setting)"
+		if err == nil || err.Error() != want {
+			t.Fatalf("%+v: err = %v, want %q", settings, err, want)
+		}
+	}
+	if err := p.OnQuery(ctx, oldFormatQuery(newSession(t))); err != nil {
+		t.Fatalf("a Query packet without settings: %v", err)
+	}
+	for _, privileged := range []func(*chsession.SessionState){
+		func(s *chsession.SessionState) { s.SetMaintenance(true) },
+		func(s *chsession.SessionState) { s.SetPlatformOperator(true) },
+	} {
+		sess := newSession(t)
+		privileged(sess.State())
+		if err := p.OnQuery(ctx, oldFormatQuery(sess, chproto.OldSetting{Key: "max_threads", Value: 8})); err != nil {
+			t.Fatalf("maintenance / operator sessions are not governed: %v", err)
+		}
+	}
+	chain := &plugin.PluginChain{QueryPlugins: []plugin.QueryPlugin{p}}
+	loopback := newSession(t)
+	loopback.State().SetPeerTrust("peer:9001")
+	if err := chain.OnQuery(ctx, oldFormatQuery(loopback, chproto.OldSetting{Key: "max_threads", Value: 8})); err != nil {
+		t.Fatalf("remote() loopback sessions are not governed: %v", err)
+	}
+	forwarded := newSession(t)
+	forwarded.State().SetPeerTrustForwarded("peer:9001", true)
+	if err := chain.OnQuery(ctx, oldFormatQuery(forwarded, chproto.OldSetting{Key: "max_threads", Value: 8})); err == nil {
+		t.Fatal("a forwarded-from-peer session must be governed")
+	}
+}
+
+func TestRejectionLabel(t *testing.T) {
+	for _, tc := range []struct{ name, want string }{
+		{"enable_analyzer", "enable_analyzer"},
+		{"Enable_Analyzer", "enable_analyzer"},
+		{"PROFILE", "profile"},
+		{"allow_experimental_kusto_dialect", "allow_experimental_kusto_dialect"},
+		{"some_future_dialect", labelOtherDialect},
+		{"X_DIALECT", labelOtherDialect},
+	} {
+		if got := rejectionLabel(tc.name); got != tc.want {
+			t.Errorf("rejectionLabel(%q) = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// A refusal logs a structured warning naming the setting, the connection and
+// the session's account and user, and increments
+// clickhouse_proxy_query_settings_rejections_total under a bounded label.
+func TestRejectionTelemetry(t *testing.T) {
+	var buf bytes.Buffer
+	ctx := log.WithContext(context.Background(), log.New(slog.NewJSONHandler(&buf, nil)))
+	p := &Plugin{}
+
+	sess := newSession(t)
+	sess.State().AuthenticatedUser = "alice"
+	sess.State().Identity.UserID = "0xabc"
+	before := testutil.ToFloat64(rejections.WithLabelValues("compatibility"))
+	qctx := queryWith(sess, chproto.Setting{Key: "compatibility", Value: "21.1", Important: true})
+	qctx.Query.ID = "q-1"
+	if err := p.OnQuery(ctx, qctx); err == nil {
+		t.Fatal("compatibility must be refused")
+	}
+	if got := testutil.ToFloat64(rejections.WithLabelValues("compatibility")); got != before+1 {
+		t.Fatalf("compatibility counter = %v, want %v", got, before+1)
+	}
+	var record map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &record); err != nil {
+		t.Fatalf("log record %q: %v", buf.String(), err)
+	}
+	for key, want := range map[string]any{
+		"level":    "WARN",
+		"msg":      "query refused: native-protocol query setting is not accepted",
+		"setting":  "compatibility",
+		"reason":   reasonRefusedSetting,
+		"conn":     float64(1),
+		"account":  "0xabc",
+		"user":     "alice",
+		"query_id": "q-1",
+	} {
+		if record[key] != want {
+			t.Errorf("log %s = %v, want %v (record %v)", key, record[key], want, record)
+		}
+	}
+
+	buf.Reset()
+	beforeDialect := testutil.ToFloat64(rejections.WithLabelValues(labelOtherDialect))
+	if err := p.OnQuery(ctx, queryWith(newSession(t), chproto.Setting{Key: "some_future_dialect", Value: "x"})); err == nil {
+		t.Fatal("a _dialect setting must be refused")
+	}
+	if got := testutil.ToFloat64(rejections.WithLabelValues(labelOtherDialect)); got != beforeDialect+1 {
+		t.Fatalf("other-dialect counter = %v, want %v", got, beforeDialect+1)
+	}
+	if !strings.Contains(buf.String(), `"setting":"some_future_dialect"`) {
+		t.Fatalf("log must name the setting: %s", buf.String())
+	}
+
+	buf.Reset()
+	beforeOld := testutil.ToFloat64(rejections.WithLabelValues(labelOldFormat))
+	if err := p.OnQuery(ctx, oldFormatQuery(newSession(t), chproto.OldSetting{Key: "made_up_name", Value: 1})); err == nil {
+		t.Fatal("an old-format setting must be refused")
+	}
+	if got := testutil.ToFloat64(rejections.WithLabelValues(labelOldFormat)); got != beforeOld+1 {
+		t.Fatalf("old-format counter = %v, want %v", got, beforeOld+1)
+	}
+	if !strings.Contains(buf.String(), `"reason":"`+reasonOldFormat+`"`) || !strings.Contains(buf.String(), `"setting":"made_up_name"`) {
+		t.Fatalf("old-format log: %s", buf.String())
+	}
+
+	// An accepted query neither logs nor counts.
+	buf.Reset()
+	if err := p.OnQuery(ctx, queryWith(newSession(t), chproto.Setting{Key: "enable_analyzer", Value: "1"})); err != nil {
+		t.Fatal(err)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("an accepted query logged: %s", buf.String())
 	}
 }

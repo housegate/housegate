@@ -8,6 +8,18 @@
 // The check has no observe mode (plan D6). A refusal is an ordinary plugin
 // error: the relay answers it with an Exception (code 403) and drains the
 // rejected query's input, so the session stays usable for the next query.
+// Every refusal is logged at warn level with the setting, connection, account
+// and user, and counted in clickhouse_proxy_query_settings_rejections_total.
+//
+// A pre-54429 Query packet carries its settings in the old UInt64 format.
+// Its decoding is not proven against a hostile client, so any old-format
+// setting is refused on a governed session, whatever its name or value; only
+// very old clients use that format.
+//
+// The plugin is wired with the table-reference guard on every server that
+// forwards to ClickHouse, rewriter or not. A router-only server given a
+// host-injected rewriter wires neither: its sessions are forwarded to a peer
+// whose own chain runs this check (accepted gap).
 package querysettings
 
 import (
@@ -16,8 +28,43 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/housegate/housegate/pkg/log"
 	"github.com/housegate/housegate/pkg/plugin"
 )
+
+// Counter labels beyond the fixed refused names, which keep the label set
+// bounded: a refused name outside the fixed list can only be a _dialect
+// suffix match, and an old-format setting can carry any name.
+const (
+	labelOtherDialect = "other_dialect"
+	labelOldFormat    = "old_format"
+)
+
+// Log reasons.
+const (
+	reasonRefusedSetting = "refused_setting"
+	reasonOldFormat      = "old_format_settings"
+)
+
+var rejections = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: "clickhouse_proxy_query_settings_rejections_total",
+	Help: "Queries refused for a setting in the native-protocol Query packet, by setting (fixed refused names, other_dialect, old_format).",
+}, []string{"setting"})
+
+func init() { prometheus.MustRegister(rejections) }
+
+// rejectionLabel maps a refused setting name to its bounded counter label:
+// the lowercased name when it is a fixed refused name, otherwise
+// other_dialect (the only other way a name is refused).
+func rejectionLabel(name string) string {
+	lower := strings.ToLower(name)
+	if refusedWhateverTheValue[lower] || analyzerSettings[lower] {
+		return lower
+	}
+	return labelOtherDialect
+}
 
 // refusedWhateverTheValue mirrors rewriter-go v0.16.0
 // internal/engine/settings.go:46-66 (sqlBearingSettings) and rewriter-grpc
@@ -90,16 +137,6 @@ func trueSpelling(value string) bool {
 	return false
 }
 
-// refusedOld applies Refused to a pre-54429 setting, whose value is a UInt64:
-// only exactly 1 keeps the analyzer on.
-func refusedOld(name string, value uint64) bool {
-	spelling := "0"
-	if value == 1 {
-		spelling = "1"
-	}
-	return Refused(name, spelling)
-}
-
 // RefusedNames returns the fixed refused names, analyzer switches included,
 // sorted. The _dialect suffix rule is not enumerable and is not listed.
 func RefusedNames() []string {
@@ -117,12 +154,12 @@ func RefusedNames() []string {
 // Plugin refuses a query whose Query packet carries a refused setting.
 type Plugin struct{}
 
-// OnQuery checks every Query-packet setting, in both the current and the
-// pre-54429 format, and names the first refused one. Maintenance and
+// OnQuery checks every Query-packet setting and names the first refused one;
+// any pre-54429 (old-format) setting is refused. Maintenance and
 // platform-operator sessions bypass the rewriter and therefore this check;
 // every other session the chain hands it (ordinary, driver, origin-side
 // forwarding, forwarded-from-peer) is checked.
-func (*Plugin) OnQuery(_ context.Context, qctx *plugin.QueryContext) error {
+func (*Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	if qctx == nil || qctx.Query == nil {
 		return nil
 	}
@@ -134,18 +171,25 @@ func (*Plugin) OnQuery(_ context.Context, qctx *plugin.QueryContext) error {
 	}
 	for _, s := range qctx.Query.Settings {
 		if Refused(s.Key, s.Value) {
-			return refusal(s.Key)
+			return refuse(ctx, qctx, s.Key, rejectionLabel(s.Key), reasonRefusedSetting)
 		}
 	}
-	for _, s := range qctx.Query.OldSettings {
-		if refusedOld(s.Key, s.Value) {
-			return refusal(s.Key)
-		}
+	if len(qctx.Query.OldSettings) > 0 {
+		return refuse(ctx, qctx, qctx.Query.OldSettings[0].Key, labelOldFormat, reasonOldFormat)
 	}
 	return nil
 }
 
-func refusal(name string) error {
+// refuse counts and logs a refusal and returns the client-facing error.
+func refuse(ctx context.Context, qctx *plugin.QueryContext, name, label, reason string) error {
+	rejections.WithLabelValues(label).Inc()
+	kv := []any{"setting", name, "reason", reason, "query_id", qctx.Query.ID}
+	if qctx.Session != nil {
+		snap := qctx.Session.State().Snapshot()
+		kv = append(kv, "conn", qctx.Session.ID(), "account", snap.Identity.UserID, "user", snap.AuthenticatedUser)
+	}
+	_, logger := log.FromContext(ctx)
+	logger.Warnw("query refused: native-protocol query setting is not accepted", kv...)
 	return fmt.Errorf("table setting %s is not accepted (native-protocol query setting)", name)
 }
 
