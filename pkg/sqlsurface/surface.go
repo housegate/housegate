@@ -35,8 +35,10 @@ const (
 	// TokenQuoted is a backtick or double-quoted identifier, delimiters
 	// removed and doubled delimiters collapsed.
 	TokenQuoted
-	// TokenString is a single-quoted literal or a heredoc body, raw: escapes
-	// are never decoded.
+	// TokenString is a single-quoted literal or a heredoc body. Escapes are
+	// never decoded: with Options.AllowStringEscapes a backslash and the byte
+	// it escapes are kept as written. A doubled '' inside a single-quoted
+	// literal is blanked to one space, so 'a b' and 'a''b' yield the same text.
 	TokenString
 	// TokenPunct is any other single non-space byte.
 	TokenPunct
@@ -58,6 +60,9 @@ type Surfaces struct {
 	WithLiterals string
 	// Tokens is the statement's token stream; comments and whitespace are
 	// dropped, so adjacency in Tokens is adjacency in ClickHouse's lexer.
+	// Numbers are not modelled: 1.e5 yields 1 . e5 and phys.1 (tuple-element
+	// access) yields phys . 1, so a consumer may see a qualifier-shaped
+	// sequence that ClickHouse reads otherwise, but never misses one.
 	Tokens []Token
 }
 
@@ -253,8 +258,8 @@ func consumeStringLiteral(sql string, start int, allowEscapes bool) (int, string
 // ClickHouse performs no escape processing inside a heredoc: merge($$hg\x5Fsafe$$,
 // ...) is Success on the live engine and re-emits as merge('hg\\x5Fsafe', ...),
 // so the body is the literal text hg\x5Fsafe and is not hg_safe. Heredoc bodies
-// therefore do not inherit consumeStringLiteral's backslash refusal and are
-// returned verbatim.
+// are therefore returned verbatim whatever Options.AllowStringEscapes says: a
+// backslash in a body is neither refused nor treated as an escape.
 func consumeHeredoc(sql string, start int) (int, string, error) {
 	tag := start + 1
 	for tag < len(sql) && isHeredocTagByte(sql[tag], tag == start+1) {
@@ -358,18 +363,18 @@ func consumeQuotedIdentifier(sql string, start int, delimiter byte) (int, string
 	return 0, "", fmt.Errorf("unterminated quoted identifier")
 }
 
-// Identifiers returns the maximal runs of ASCII identifier bytes in sql, in order.
-func Identifiers(sql string) []string {
+// Identifiers returns the maximal runs of ASCII identifier bytes in surface, in order.
+func Identifiers(surface string) []string {
 	var result []string
-	for start, i := -1, 0; i <= len(sql); i++ {
-		if i < len(sql) && IsIdentifierByte(sql[i]) {
+	for start, i := -1, 0; i <= len(surface); i++ {
+		if i < len(surface) && IsIdentifierByte(surface[i]) {
 			if start < 0 {
 				start = i
 			}
 			continue
 		}
 		if start >= 0 {
-			result = append(result, sql[start:i])
+			result = append(result, surface[start:i])
 			start = -1
 		}
 	}

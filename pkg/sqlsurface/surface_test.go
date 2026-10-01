@@ -208,3 +208,60 @@ func TestScanNonASCIIOutsideQuotesIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// TestScanTokenStream pins the token stream Task 4's table-reference guard
+// reads. Number forms are deliberately over-split (1.e5, phys.1): ClickHouse
+// lexes them as a number and tuple-element access (measured on 26.8), and a
+// consumer must tolerate a qualifier-shaped sequence it does not need.
+func TestScanTokenStream(t *testing.T) {
+	w := func(s string) Token { return Token{TokenWord, s} }
+	q := func(s string) Token { return Token{TokenQuoted, s} }
+	str := func(s string) Token { return Token{TokenString, s} }
+	p := func(s string) Token { return Token{TokenPunct, s} }
+	for _, tc := range []struct {
+		sql  string
+		opts Options
+		want []Token
+	}{
+		{"`a``b`", Options{}, []Token{q("a`b")}},
+		{`"a""b"`, Options{}, []Token{q(`a"b`)}},
+		{`"x"."y"`, Options{}, []Token{q("x"), p("."), q("y")}},
+		{"`phys`.`t`", Options{}, []Token{q("phys"), p("."), q("t")}},
+		{"phys\n.x", Options{}, []Token{w("phys"), p("."), w("x")}},
+		{"phys /* c */ . x", Options{}, []Token{w("phys"), p("."), w("x")}},
+		{"phys/* /* nested */ */.x", Options{}, []Token{w("phys"), p("."), w("x")}},
+		{"phys -- c\r\n.x", Options{}, []Token{w("phys"), p("."), w("x")}},
+		{"phys # c\n.x #! d", Options{}, []Token{w("phys"), p("."), w("x")}},
+		{"phys\t\v\f\r.x", Options{}, []Token{w("phys"), p("."), w("x")}},
+		{"SELECT 1.e5", Options{}, []Token{w("SELECT"), w("1"), p("."), w("e5")}},
+		{"SELECT phys.1", Options{}, []Token{w("SELECT"), w("phys"), p("."), w("1")}},
+		{"FROM {p:Identifier}", Options{}, []Token{w("FROM"), p("{"), w("p"), p(":"), w("Identifier"), p("}")}},
+		{"'a''b'", Options{}, []Token{str("a b")}},
+		{"$$a'b$$,$t$--$t$", Options{}, []Token{str("a'b"), p(","), str("--")}},
+		{`'a\\', phys.t`, Options{AllowStringEscapes: true}, []Token{str(`a\\`), p(","), w("phys"), p("."), w("t")}},
+		{`'a\'b', phys.t`, Options{AllowStringEscapes: true}, []Token{str(`a\'b`), p(","), w("phys"), p("."), w("t")}},
+		{"a<=b", Options{}, []Token{w("a"), p("<"), p("="), w("b")}},
+	} {
+		s, err := ScanWith(tc.sql, tc.opts)
+		if err != nil {
+			t.Errorf("ScanWith(%q): %v", tc.sql, err)
+			continue
+		}
+		if !reflect.DeepEqual(s.Tokens, tc.want) {
+			t.Errorf("ScanWith(%q) tokens =\n%v\nwant\n%v", tc.sql, s.Tokens, tc.want)
+		}
+	}
+	for _, tc := range []struct {
+		sql  string
+		want error
+	}{
+		{"SELECT $1", ErrStrayDollar},
+		{"SELECT 1 AS x$$, * FROM phys.t AS y$$", ErrStrayDollar},
+		{"SELECT * FROM phys .t", ErrNonASCII},
+		{"SELECT 1 #x\n", ErrBareHash},
+	} {
+		if _, err := ScanWith(tc.sql, Options{AllowStringEscapes: true}); !errors.Is(err, tc.want) {
+			t.Errorf("ScanWith(%q) err = %v, want %v", tc.sql, err, tc.want)
+		}
+	}
+}
