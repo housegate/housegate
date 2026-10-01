@@ -295,3 +295,24 @@ func TestTableReference_GuardRunsOnForwardedFromPeerSessions(t *testing.T) {
 		t.Fatalf("err = %v, want the receiving host's guard refusal %q", err, want)
 	}
 }
+
+// TestTableReference_SystemReadsWithAuthOff: with auth disabled every
+// registered database is mapped to the physical database, so the integration
+// environment must not register `system` as a logical database (final review
+// M5): it made `system.tables` read `phys.system.tables`.
+func TestTableReference_SystemReadsWithAuthOff(t *testing.T) {
+	const phys = "phys_tr_sys"
+	proxy := startTableRefProxy(t, phys, "enforce")
+	conn := openConn(t, proxy.Addr)
+	ctx := context.Background()
+	if err := conn.Exec(ctx, "CREATE TABLE db1.s (a UInt64) ENGINE = MergeTree ORDER BY a"); err != nil {
+		t.Fatal(err)
+	}
+	var n uint64
+	if err := conn.QueryRow(ctx, "SELECT count() FROM system.tables WHERE database = '"+phys+"' AND name = 'db1.s'").Scan(&n); err != nil {
+		t.Fatalf("system.tables read with auth off: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("system.tables rows = %d, want 1 (the physical table of db1.s)", n)
+	}
+}

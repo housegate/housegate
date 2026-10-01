@@ -180,10 +180,11 @@ func startProxy(t *testing.T, cfg *config.Config, proxyOpts ...ProxyOption) *Tes
 
 	ns := network.NewInMemoryNetworkState()
 	// forward.Plugin rejects unknown databases at hello time with
-	// "Database X doesn't exist". Register the bootstrap set so the
-	// default clickhouse-go connection (which sends hello.Database
-	// equal to whatever testenv created) gets through.
-	ns.DatabaseInfos[network.Database("system")] = network.DatabaseInfo{IndexerId: 0}
+	// "Database X doesn't exist". Register the database the default
+	// clickhouse-go connection sends as hello.Database. `system` is not a
+	// logical database: with auth off every registered database maps to
+	// rewriter.physical_database, so registering it would turn
+	// system.tables into <phys>.system.tables.
 	ns.DatabaseInfos[network.Database(chDatabase)] = network.DatabaseInfo{IndexerId: 0}
 
 	hgOpts := housegate.Options{
