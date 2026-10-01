@@ -17,5 +17,8 @@ go_library(
     srcs = ["plugin.go"],
     importpath = "github.com/housegate/housegate/pkg/plugins/sireserved",
     visibility = ["//visibility:public"],
-    deps = ["//pkg/plugin"],
+    deps = [
+        "//pkg/plugin",
+        "//pkg/sqlsurface",
+    ],
 )
