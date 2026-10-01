@@ -757,3 +757,45 @@ func TestOnQuery_OperatorSessionRefusesHeredocHiddenReservedName(t *testing.T) {
 		})
 	}
 }
+
+// TestReservedNamespaceViolation_LineCommentEndsOnlyAtLineFeed closes a
+// privileged-session bypass measured on ClickHouse 26.8: a line comment ends
+// only at \n, so in "SELECT * -- c\r/*\nFROM hg_safe.t -- */" ClickHouse
+// executes FROM hg_safe.t. The scanner used to end the comment at \r, open a
+// block comment on the /* that ClickHouse treats as comment text, and blank
+// the reserved name from both surfaces.
+func TestReservedNamespaceViolation_LineCommentEndsOnlyAtLineFeed(t *testing.T) {
+	for _, sql := range []string{
+		"SELECT * -- c\r/*\nFROM hg_safe.t -- */",
+		"SELECT * # c\r'\nFROM hg_safe.t # '",
+		"SELECT * #! c\r`\nFROM hg_safe.t #! `",
+		"SELECT * // c\r$$\nFROM hg_safe.t // $$",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			got, err := ReservedNamespaceViolation(sql, []string{"hg_safe"}, "_hg_row_id")
+			if err != nil || got != "hg_safe" {
+				t.Fatalf("ReservedNamespaceViolation(%q) = %q, %v; want hg_safe", sql, got, err)
+			}
+		})
+	}
+	// A # that opens no comment is a ClickHouse syntax error; the guard
+	// refuses it instead of blanking the rest of the line.
+	if _, err := ReservedNamespaceViolation("SELECT 1 #x\n", []string{"hg_safe"}, "_hg_row_id"); err == nil {
+		t.Fatal("a bare # must be refused")
+	}
+}
+
+// TestOnQuery_CarrierCannotHideBehindACarriageReturnComment is the
+// executable-surface half of the line-comment bypass: a quote ClickHouse
+// reads as comment text used to blank a carrier call from OutsideLiterals.
+func TestOnQuery_CarrierCannotHideBehindACarriageReturnComment(t *testing.T) {
+	p := &Plugin{ReservedDatabases: []string{"hg_safe", "hg_unsafe"}, ReservedRowIDColumn: "_hg_row_id"}
+	sql := "SELECT * -- c\r'\nFROM merge(currentDatabase(), 't') -- '"
+	sess := newSessionForTest(t, 31)
+	sess.State().SetMaintenance(true)
+	qctx := &plugin.QueryContext{Session: sess, OriginalSQL: sql, Query: &chproto.Query{Body: sql}}
+	chain := &plugin.PluginChain{QueryPlugins: []plugin.QueryPlugin{p}}
+	if err := chain.OnQuery(context.Background(), qctx); err == nil || !strings.Contains(err.Error(), "merge") {
+		t.Fatalf("carrier hidden behind a CR-terminated comment must be refused, err=%v", err)
+	}
+}

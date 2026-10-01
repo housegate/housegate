@@ -91,3 +91,60 @@ func TestContainsIdentifierPlaceholder(t *testing.T) {
 		}
 	}
 }
+
+func tokenTexts(tokens []Token) []string {
+	texts := make([]string, len(tokens))
+	for i, token := range tokens {
+		texts[i] = token.Text
+	}
+	return texts
+}
+
+// TestScanLineCommentEndsOnlyAtLineFeed pins ClickHouse's measured rule
+// (26.8, every byte 0x00-0xFF tried after "--x", "#!x", "# x" and "//x"):
+// a line comment ends at \n and nowhere else. A scanner that also stopped at
+// \r resumed lexing inside text ClickHouse treats as comment, so an opener
+// there (/*, ', `, ", $$) could blank real SQL that ClickHouse executes.
+func TestScanLineCommentEndsOnlyAtLineFeed(t *testing.T) {
+	want := []string{"SELECT", "*", "FROM", "phys", ".", "t"}
+	for _, marker := range []string{"--", "#!", "# ", "//"} {
+		for _, opener := range []string{"/*", "'", "`", `"`, "$$"} {
+			closer := opener
+			if opener == "/*" {
+				closer = "*/"
+			}
+			sql := "SELECT * " + marker + " c\r" + opener + "\nFROM phys.t " + marker + " " + closer
+			s, err := Scan(sql)
+			if err != nil {
+				t.Fatalf("Scan(%q): %v", sql, err)
+			}
+			if got := tokenTexts(s.Tokens); !reflect.DeepEqual(got, want) {
+				t.Fatalf("Scan(%q) tokens = %q, want %q", sql, got, want)
+			}
+			if !strings.Contains(s.OutsideLiterals, "phys.t") {
+				t.Fatalf("Scan(%q) blanked executed SQL: %q", sql, s.OutsideLiterals)
+			}
+		}
+	}
+	for _, sql := range []string{"SELECT 1 -- c\r+ 1", "SELECT 1 # c\r+ 1", "SELECT 1 #! c\r+ 1", "SELECT 1 // c\r+ 1", "SELECT 1 -- c\x00\v\f+ 1"} {
+		s, err := Scan(sql)
+		if err != nil {
+			t.Fatalf("Scan(%q): %v", sql, err)
+		}
+		if got := tokenTexts(s.Tokens); !reflect.DeepEqual(got, []string{"SELECT", "1"}) {
+			t.Fatalf("Scan(%q) tokens = %q, want [SELECT 1]", sql, got)
+		}
+	}
+}
+
+// TestScanBareHashIsRefused pins the other half of the measured comment
+// grammar: # opens a comment only when followed by a space or !. Any other
+// # (including one at the end of input) is a ClickHouse syntax error, so the
+// scanner refuses it rather than inventing a comment.
+func TestScanBareHashIsRefused(t *testing.T) {
+	for _, sql := range []string{"SELECT 1 #x\n+ 1", "SELECT 1 #\tx\n+ 1", "SELECT 1 #", "SELECT 1 ##\n"} {
+		if _, err := Scan(sql); !errors.Is(err, ErrBareHash) {
+			t.Errorf("Scan(%q) err = %v, want ErrBareHash", sql, err)
+		}
+	}
+}

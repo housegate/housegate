@@ -17,6 +17,9 @@ var (
 	ErrStringLiteralBackslash  = errors.New("backslash-bearing single-quoted string literal is not accepted by the storage-integrity guard")
 	ErrEscapedQuotedIdentifier = errors.New("escaped quoted identifier is not accepted by the storage-integrity guard")
 	ErrStrayDollar             = errors.New("stray $ is not a heredoc opener and is not accepted by the storage-integrity guard")
+	// ErrBareHash reports a # that opens no comment: ClickHouse reads only
+	// "# " and "#!" as comment markers and rejects any other #.
+	ErrBareHash = errors.New("# that is not followed by a space or ! opens no ClickHouse comment and is not accepted by the storage-integrity guard")
 )
 
 // TokenKind classifies a Token.
@@ -101,6 +104,9 @@ func ScanWith(sql string, opts Options) (Surfaces, error) {
 			withLiterals.WriteByte(' ')
 			tokens = append(tokens, Token{Kind: TokenString, Text: literal})
 			i = next
+
+		case sql[i] == '#' && !hasPrefixAt(sql, i, "# ") && !hasPrefixAt(sql, i, "#!"):
+			return Surfaces{}, ErrBareHash
 
 		case hasPrefixAt(sql, i, "--") || hasPrefixAt(sql, i, "//") || sql[i] == '#':
 			flushWord(i)
@@ -276,9 +282,14 @@ func ContainsIdentifierPlaceholder(sql string) bool {
 	return false
 }
 
+// consumeLineComment returns the offset of the \n that ends a --, //, "# " or
+// "#!" comment, or the end of input. Measured on ClickHouse 26.8 with every
+// byte 0x00-0xFF after each marker, \n is the only terminator: \r, \v, \f,
+// NUL and Unicode line separators are all comment text. Ending a comment
+// anywhere else would resume lexing inside text ClickHouse ignores.
 func consumeLineComment(sql string, start int) int {
 	i := start
-	for i < len(sql) && sql[i] != '\n' && sql[i] != '\r' {
+	for i < len(sql) && sql[i] != '\n' {
 		i++
 	}
 	return i
