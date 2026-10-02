@@ -44,7 +44,7 @@ func (s *siReadStateStub) set(tableID string, parts ...string) {
 func TestStorageIntegrityRead_SafeAndUnsafeLatest(t *testing.T) {
 	lib := os.Getenv("POLYGLOT_SQL_FFI_PATH")
 	if lib == "" {
-		t.Skip("POLYGLOT_SQL_FFI_PATH not set; run `go run ./cmd fetch-rewriter-lib --tag v0.16.0` and pass --test_env")
+		t.Skip("POLYGLOT_SQL_FFI_PATH not set; run `go run ./cmd fetch-rewriter-lib --tag v0.17.0` and pass --test_env")
 	}
 	ctx := context.Background()
 	const phys = "phys_si"
@@ -361,7 +361,7 @@ const operatorGuardMessage = "is not addressable through the proxy"
 func TestStorageIntegrityRead_HeredocCannotHideAReservedName(t *testing.T) {
 	lib := os.Getenv("POLYGLOT_SQL_FFI_PATH")
 	if lib == "" {
-		t.Skip("POLYGLOT_SQL_FFI_PATH not set; run `go run ./cmd fetch-rewriter-lib --tag v0.16.0` and pass --test_env")
+		t.Skip("POLYGLOT_SQL_FFI_PATH not set; run `go run ./cmd fetch-rewriter-lib --tag v0.17.0` and pass --test_env")
 	}
 	ctx := context.Background()
 	const phys = "phys_si_heredoc"
@@ -473,7 +473,7 @@ func TestStorageIntegrityRead_HeredocCannotHideAReservedName(t *testing.T) {
 func TestStorageIntegrityRead_SessionLevelSetIsRefused(t *testing.T) {
 	lib := os.Getenv("POLYGLOT_SQL_FFI_PATH")
 	if lib == "" {
-		t.Skip("POLYGLOT_SQL_FFI_PATH not set; run `go run ./cmd fetch-rewriter-lib --tag v0.16.0` and pass --test_env")
+		t.Skip("POLYGLOT_SQL_FFI_PATH not set; run `go run ./cmd fetch-rewriter-lib --tag v0.17.0` and pass --test_env")
 	}
 	ctx := context.Background()
 	const phys = "phys_si_set"
