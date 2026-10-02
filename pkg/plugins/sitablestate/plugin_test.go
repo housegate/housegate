@@ -161,9 +161,10 @@ func TestDataCarryingCreationIntoGovernedTables(t *testing.T) {
 		// refused. The engine's forwarded body drops an EMPTY body, see
 		// TestCreateTableLexesTheForwardedBody.
 		{"CTAS EMPTY into a pending name", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db1.p ENGINE = MergeTree ORDER BY a EMPTY AS SELECT 1 AS a", accessed("db1.p"), withDataErr("db1.p")},
-		// Engine-shaped: rewriter-go v0.13.0 reports only the CTAS target
+		// Engine-shaped: rewriter-go v0.13.0 reported only the CTAS target
 		// ([db1.o]), not its SELECT sources, so the gate cannot see db1.p here.
-		// That source-reporting gap is routed to a separate security follow-up.
+		// The v0.16.0 floor reports the source (spec 2026-09-26; shared corpus
+		// case si_tr_ctas_own_source_rewritten), which the next row pins.
 		{"CTAS reading a pending table (engine-shaped)", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db1.o ENGINE = Memory AS SELECT * FROM db1.p", accessed("db1.o"), ok},
 		// Contract-dependent: IF the engine reported the source, it is a data
 		// read and the Pending refusal applies.
@@ -201,6 +202,10 @@ func TestDataCarryingCreationIntoGovernedTables(t *testing.T) {
 		{"MV with an unreadable header", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.mv /* TO db1.p AS SELECT a FROM db1.o", accessed("db1.mv", "db1.o"), unreadableErr},
 		{"MV with an unreadable header, nothing accessed", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.mv /* TO db1.p AS SELECT a FROM db1.o", nil, unreadableErr},
 		{"MV with no view name, nothing accessed", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW AS SELECT 1", nil, unreadableErr},
+		// Spec 2026-09-26 T10: ClickHouse reads `\x70` as p but the lexer cannot, so
+		// the header is unreadable and the statement is refused.
+		{"MV TO an escaped pending name", sqlmeta.StatementTypeCreateMaterializedView, "CREATE MATERIALIZED VIEW db1.mv TO db1.`\\x70` AS SELECT a FROM db1.o", accessed("db1.mv", "db1.o"), unreadableErr},
+		{"schema copy into an escaped pending name", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db1.`\\x70` AS db1.o ENGINE = Memory", accessed("db1.p", "db1.o"), withDataErr("db1.p")},
 		{"view over a gone table", sqlmeta.StatementTypeCreateView, "CREATE VIEW db1.v AS SELECT a FROM db1.g", accessed("db1.v", "db1.g"), unknownErr("db1.g")},
 		{"CTAS into a gone name", sqlmeta.StatementTypeCreateTable, "CREATE TABLE db1.g ENGINE = Memory AS SELECT 1 AS a", accessed("db1.g"), purgingErr("db1.g")},
 	} {
@@ -211,7 +216,9 @@ func TestDataCarryingCreationIntoGovernedTables(t *testing.T) {
 // TestCreateTableLexesTheForwardedBody: the data-carrying check reads the
 // post-rewrite Query.Body, which is what ClickHouse executes, and falls back to
 // OriginalSQL only without a query packet. The engine normalises comments and
-// heredocs and drops an EMPTY AS SELECT body.
+// heredocs; rewriter-go v0.13.0 also dropped an EMPTY AS SELECT body, which
+// the v0.16.0 floor keeps (see lexer.go), so the first row pins the gate's
+// reading of a dropped body, not today's engine output.
 func TestCreateTableLexesTheForwardedBody(t *testing.T) {
 	for _, tc := range []struct {
 		name, original, body string

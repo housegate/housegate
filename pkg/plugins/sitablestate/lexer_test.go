@@ -90,6 +90,9 @@ func TestMaterializedViewHeader(t *testing.T) {
 		{"CREATE MATERIALIZED VIEW db1.mv /* TO db1.x */ TO db1.t AS SELECT a FROM db1.src", mvHeader{"db1", "mv", "db1", "t", true}, true},
 		{"CREATE MATERIALIZED VIEW db1.mv TO db1.t (a UInt8) AS SELECT a FROM db1.src", mvHeader{"db1", "mv", "db1", "t", true}, true},
 		{"create or replace materialized view if not exists `db 1`.\"m v\" on cluster c TO db1.t AS SELECT 1", mvHeader{"db 1", "m v", "db1", "t", true}, true},
+		// A doubled delimiter is one literal delimiter in both identifier quotings.
+		{"CREATE MATERIALIZED VIEW db1.mv TO db1.`a``b` AS SELECT 1", mvHeader{"db1", "mv", "db1", "a`b", true}, true},
+		{`CREATE MATERIALIZED VIEW db1.mv TO db1."a""b" AS SELECT 1`, mvHeader{"db1", "mv", "db1", `a"b`, true}, true},
 		// A view named TO is the view's name, not a target keyword.
 		{"CREATE MATERIALIZED VIEW db1.to ENGINE = Memory AS SELECT 1", mvHeader{"db1", "to", "", "", false}, true},
 		// Uncertainty: the header cannot be read, so the view and target are unknown.
@@ -107,5 +110,26 @@ func TestMaterializedViewHeader(t *testing.T) {
 		if ok != tc.ok || (ok && got != tc.want) {
 			t.Errorf("materializedViewHeader(%q) = %+v %v, want %+v %v", tc.sql, got, ok, tc.want, tc.ok)
 		}
+	}
+}
+
+func TestQuotedIdentifierBackslashIsUnreadable(t *testing.T) {
+	for sql, wantReadable := range map[string]bool{
+		"CREATE MATERIALIZED VIEW db1.mv TO db1.`\\x74` AS SELECT a FROM db1.o":       false,
+		"CREATE MATERIALIZED VIEW db1.`\\x74` ENGINE = Memory AS SELECT a FROM db1.o": false,
+		`CREATE MATERIALIZED VIEW db1.mv TO db1."\x74" AS SELECT a FROM db1.o`:        false,
+		"CREATE MATERIALIZED VIEW db1.mv TO db1.t AS SELECT a FROM db1.o":             true,
+	} {
+		if _, ok := materializedViewHeader(sql); ok != wantReadable {
+			t.Errorf("%s: readable = %v, want %v", sql, ok, wantReadable)
+		}
+	}
+	// A string literal keeps decoding escapes: the CREATE stays schema-only.
+	if createTableCarriesData(`CREATE TABLE db1.n (a String DEFAULT 'a\nb') ENGINE = Memory`) {
+		t.Fatal("a backslash in a string literal must not make the CREATE data-carrying")
+	}
+	// A schema copy is schema-only today; an escaped name makes it uncertain.
+	if !createTableCarriesData("CREATE TABLE db1.`\\x74` AS db1.o ENGINE = Memory") {
+		t.Fatal("an escaped target name must fail closed as data-carrying")
 	}
 }

@@ -3,7 +3,6 @@ package integration
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -59,10 +58,7 @@ func requireSameConnection(t *testing.T, out string) {
 // TableState drives one table through Pending, Active, Gone and Purged with
 // real ClickHouse, the native rewriter, the signed agent lane and the CLI.
 func TestStorageIntegrityTableStateLifecycle(t *testing.T) {
-	lib := os.Getenv("POLYGLOT_SQL_FFI_PATH")
-	if lib == "" {
-		t.Skip("POLYGLOT_SQL_FFI_PATH not set; fetch the contract-V2 library with `go run ./cmd fetch-rewriter-lib --tag` at the tag .github/workflows/ci.yml fetches, and pass --test_env")
-	}
+	lib := requireNativeLib(t)
 	bin := testenv.ClickHouseCLI(t)
 	ctx := context.Background()
 	const (
@@ -97,36 +93,46 @@ func TestStorageIntegrityTableStateLifecycle(t *testing.T) {
 	state := sitable.NewFake(sitable.Ordinary, sitable.Table{ID: "tsdb.t", Status: sitable.Pending})
 	consumer := &capturingConsumer{}
 
-	server := testenv.StartServerProxy(t, chEnv.Addr,
-		testenv.WithExtraDatabases("tsdb"),
-		authProxyConfig([]string{signer.Address()}, false),
-		testenv.WithDatabasePermission(signer.Address(), "tsdb", registry.DbAuthOwner),
-		testenv.WithConfigMutator(func(cfg *config.Config) {
-			enabled := true
-			cfg.Rewriter.Engine = "native"
-			cfg.Rewriter.NativeLibraryPath = lib
-			cfg.Rewriter.PhysicalDatabase = phys
-			cfg.StorageIntegrity.Enabled = &enabled
-			cfg.StorageIntegrity.Ingress.Enabled = true
-			cfg.StorageIntegrity.Ingress.NetworkID = networkID
-			cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{signer.Address()}
-		}),
-		func(_ *config.Config, opts *housegate.Options) {
-			opts.StorageIntegrityTableState = state
-			opts.StorageIntegrityAdmissionConsumer = consumer
-		},
-	)
-	agentProxy := testenv.StartAgentProxy(t, authTestKey1, server.Addr,
-		testenv.WithConfigMutator(func(cfg *config.Config) {
-			cfg.StorageIntegrity.Agent.Enabled = true
-			cfg.StorageIntegrity.Agent.NetworkID = networkID
-			cfg.StorageIntegrity.Agent.StateDir = t.TempDir()
-			cfg.StorageIntegrity.Agent.RequireNetworkState = false
-		}),
-		func(_ *config.Config, opts *housegate.Options) {
-			opts.NetworkState = statusRegistry{InMemoryNetworkState: opts.NetworkState.(*network.InMemoryNetworkState), state: state}
-		},
-	)
+	// startPair starts the server and its agent with the table-reference
+	// guard in guardMode ("" is the default, enforce). The lifecycle runs on
+	// the default pair; an observing pair shows the engine's own refusal of
+	// a reserved database where the guard would answer first.
+	startPair := func(guardMode string) *testenv.TestProxy {
+		t.Helper()
+		server := testenv.StartServerProxy(t, chEnv.Addr,
+			testenv.WithExtraDatabases("tsdb"),
+			authProxyConfig([]string{signer.Address()}, false),
+			testenv.WithDatabasePermission(signer.Address(), "tsdb", registry.DbAuthOwner),
+			testenv.WithConfigMutator(func(cfg *config.Config) {
+				enabled := true
+				cfg.Rewriter.Engine = "native"
+				cfg.Rewriter.NativeLibraryPath = lib
+				cfg.Rewriter.PhysicalDatabase = phys
+				cfg.StorageIntegrity.Enabled = &enabled
+				cfg.StorageIntegrity.Ingress.Enabled = true
+				cfg.StorageIntegrity.Ingress.NetworkID = networkID
+				cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{signer.Address()}
+				cfg.TableRefGuard.Mode = guardMode
+			}),
+			func(_ *config.Config, opts *housegate.Options) {
+				opts.StorageIntegrityTableState = state
+				opts.StorageIntegrityAdmissionConsumer = consumer
+			},
+		)
+		return testenv.StartAgentProxy(t, authTestKey1, server.Addr,
+			testenv.WithConfigMutator(func(cfg *config.Config) {
+				cfg.StorageIntegrity.Agent.Enabled = true
+				cfg.StorageIntegrity.Agent.NetworkID = networkID
+				cfg.StorageIntegrity.Agent.StateDir = t.TempDir()
+				cfg.StorageIntegrity.Agent.RequireNetworkState = false
+			}),
+			func(_ *config.Config, opts *housegate.Options) {
+				opts.NetworkState = statusRegistry{InMemoryNetworkState: opts.NetworkState.(*network.InMemoryNetworkState), state: state}
+			},
+		)
+	}
+	agentProxy := startPair("")
+	observingAgent := startPair("observe")
 	run := func(query string) (string, error) {
 		t.Helper()
 		return testenv.RunCLI(t, bin, agentProxy.Addr, "", query)
@@ -165,12 +171,19 @@ func TestStorageIntegrityTableStateLifecycle(t *testing.T) {
 	if err == nil || !strings.Contains(out, "Code: 733.") || !strings.Contains(out, "storage_integrity: table tsdb.t is pending activation (retryable)") {
 		t.Fatalf("a Pending INSERT must pass the agent unsigned and be refused retryably: err=%v\nout: %s", err, out)
 	}
-	// No table is Active, so the engine knows the protected databases only
-	// from reserved_databases: a direct write into hg_unsafe is refused by the
-	// rewriter (a RejectedError, code 403) and lands no row.
-	out, err = testenv.RunCLIStdin(t, bin, agentProxy.Addr, "", "INSERT INTO hg_unsafe.tsdb__t FORMAT CSV", "0123456789abcdef0123456789abcdef,1,eu\n")
+	// No table is Active. A direct write into hg_unsafe is refused and lands
+	// no row: the table-reference guard's reserved-name rule answers first
+	// (spec 2026-09-26 G1), and with the guard observing the engine, which
+	// knows the protected databases only from reserved_databases, refuses it
+	// itself (a RejectedError). Both are code 403.
+	const directUnsafeInsert = "INSERT INTO hg_unsafe.tsdb__t FORMAT CSV"
+	out, err = testenv.RunCLIStdin(t, bin, agentProxy.Addr, "", directUnsafeInsert, "0123456789abcdef0123456789abcdef,1,eu\n")
+	if err == nil || !strings.Contains(out, "Code: 403.") || !strings.Contains(out, "table-reference guard: reserved_name: reserved database hg_unsafe is not addressable") {
+		t.Fatalf("the guard must refuse a direct hg_unsafe INSERT: err=%v\nout: %s", err, out)
+	}
+	out, err = testenv.RunCLIStdin(t, bin, observingAgent.Addr, "", directUnsafeInsert, "0123456789abcdef0123456789abcdef,1,eu\n")
 	if err == nil || !strings.Contains(out, "Code: 403.") || !strings.Contains(out, "storage-integrity physical table hg_unsafe.tsdb__t is not directly addressable") {
-		t.Fatalf("a direct hg_unsafe INSERT must be refused while the Active set is empty: err=%v\nout: %s", err, out)
+		t.Fatalf("a direct hg_unsafe INSERT must be refused by the engine while the Active set is empty: err=%v\nout: %s", err, out)
 	}
 	var unsafeRows uint64
 	if err := seed.QueryRow(ctx, "SELECT count() FROM hg_unsafe.tsdb__t").Scan(&unsafeRows); err != nil || unsafeRows != 0 {

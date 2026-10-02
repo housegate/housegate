@@ -78,7 +78,6 @@ shards:
 	cfg.Rewriter.FailOpenOnUnavailable = true
 
 	ns := network.NewInMemoryNetworkState()
-	ns.DatabaseInfos[network.Database("system")] = network.DatabaseInfo{IndexerId: 0}
 	ns.DatabaseInfos[network.Database(chEnv.Database)] = network.DatabaseInfo{IndexerId: 0}
 
 	hgOpts := housegate.Options{

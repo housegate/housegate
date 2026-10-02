@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make the C++ engine implement the same table-reference policy as rewriter-go v0.14.0 (Plan A), pass the shared corpus byte-for-byte, close the `SHOW CREATE` / `EXISTS` parameter crash and the `CREATE MATERIALIZED VIEW … TO <Active table>` parity gap, and release rewriter-grpc v0.16.0.
+**Goal:** Make the C++ engine implement the same table-reference policy as rewriter-go v0.16.0 (Plan A), pass the shared corpus byte-for-byte, close the `SHOW CREATE` / `EXISTS` parameter crash and the `CREATE MATERIALIZED VIEW … TO <Active table>` parity gap, and release rewriter-grpc v0.16.0.
 
 **Architecture:** A pre-handler `preflightTableReferences` in `rewriter-server.cc` mirrors Plan A's preflight (parameters, protected databases, allowlists); `dynamicRewriteWalk` and `collectAccessedTablePairsFromAST` learn IN operands; `rewriteEmbeddedViewBody` becomes `rewriteEmbeddedBody` and serves INSERT … SELECT and CTAS; the SELECT fallback refuses non-SELECT classes; the SI preflight reads `create->targets`. Nothing builds locally: every test cycle runs on the build box.
 

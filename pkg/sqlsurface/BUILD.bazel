@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_test(
+    name = "sqlsurface_test",
+    srcs = ["surface_test.go"],
+    embed = [":sqlsurface"],
+)
+
+go_library(
+    name = "sqlsurface",
+    srcs = ["surface.go"],
+    importpath = "github.com/housegate/housegate/pkg/sqlsurface",
+    visibility = ["//visibility:public"],
+)

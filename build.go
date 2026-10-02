@@ -34,6 +34,7 @@ import (
 	lthashplugin "github.com/housegate/housegate/pkg/plugins/lthash"
 	"github.com/housegate/housegate/pkg/plugins/materialize"
 	metricsplugin "github.com/housegate/housegate/pkg/plugins/metrics"
+	"github.com/housegate/housegate/pkg/plugins/querysettings"
 	"github.com/housegate/housegate/pkg/plugins/rewrite"
 	routeplugin "github.com/housegate/housegate/pkg/plugins/route"
 	"github.com/housegate/housegate/pkg/plugins/sessionstate"
@@ -41,6 +42,7 @@ import (
 	"github.com/housegate/housegate/pkg/plugins/sistatement"
 	"github.com/housegate/housegate/pkg/plugins/sitablestate"
 	"github.com/housegate/housegate/pkg/plugins/storageintegrity"
+	"github.com/housegate/housegate/pkg/plugins/tablerefguard"
 	"github.com/housegate/housegate/pkg/plugins/usage"
 	"github.com/housegate/housegate/pkg/proxy"
 	"github.com/housegate/housegate/pkg/registry"
@@ -124,6 +126,26 @@ func storageIntegrityRewriterOptions(cfg *config.Config, rs rewriter.StorageInte
 	}
 }
 
+// guardModeLabel names the effective guard mode for logs; the plugin treats
+// the empty mode as enforce.
+func guardModeLabel(mode string) string {
+	if mode == "" {
+		return string(tablerefguard.ModeEnforce)
+	}
+	return mode
+}
+
+// tableRefGuardPhysicalDatabaseWarning returns the operator warning for an
+// empty rewriter.physical_database, which leaves the guard's physical-database
+// rule (G2) inactive, or an empty string when it is set. A host-injected
+// rewriter may keep its own database map, but the guard only reads the config.
+func tableRefGuardPhysicalDatabaseWarning(cfg *config.Config) string {
+	if cfg.Rewriter.PhysicalDatabase != "" {
+		return ""
+	}
+	return "tableref_guard: rewriter.physical_database is empty, so the guard's physical-database rule (G2) is inactive; reserved-name, carrier-callable, identifier-placeholder and scan rules still apply"
+}
+
 // storageIntegrityInternalListenWarning returns the operator warnings for the
 // Spec I D6 peer and privileged-operator boundaries, or an empty string when
 // neither applies.
@@ -138,11 +160,11 @@ func storageIntegrityInternalListenWarning(cfg *config.Config) string {
 	}
 	var warnings []string
 	if cfg.InternalListen != "" {
-		warnings = append(warnings, "storage_integrity: peer-trusted sessions arriving on internal_listen bypass storage-integrity rewrite and can address the hg_safe / hg_unsafe namespaces directly; internal_listen MUST be reachable only from trusted peer subnets")
+		warnings = append(warnings, "storage_integrity: peer-trusted sessions arriving on internal_listen bypass storage-integrity rewrite and can address the "+reservedDatabaseNames()+" namespaces directly; internal_listen MUST be reachable only from trusted peer subnets")
 	}
 	if count := len(cfg.Auth.PlatformOperatorAddresses); count > 0 {
-		warnings = append(warnings, fmt.Sprintf("storage_integrity: %d platform-operator addresses use the raw-SQL bypass for SI tables; the operator guard conservatively rejects every hg_safe / hg_unsafe / _hg_row_id mention (including ordinary columns and string literals), Identifier placeholders, any backslash-bearing literal or quoted identifier, and local-catalog object-carrier callables regardless of arguments; use a direct ClickHouse connection for physical access",
-			count))
+		warnings = append(warnings, fmt.Sprintf("storage_integrity: %d platform-operator addresses use the raw-SQL bypass for SI tables; the operator guard conservatively rejects every %s / _hg_row_id mention (including ordinary columns and string literals), Identifier placeholders, any backslash-bearing literal or quoted identifier, and local-catalog object-carrier callables regardless of arguments; use a direct ClickHouse connection for physical access",
+			count, reservedDatabaseNames()))
 	}
 	return strings.Join(warnings, "; ")
 }
@@ -509,10 +531,42 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	if siOptions.Enabled && rwFactory == nil {
 		return nil, fmt.Errorf("storage_integrity.enabled requires an available SQL rewriter; refusing fail-open startup")
 	}
+	// refuseRewriter refuses startup over the rewriter itself and closes what
+	// has been built so far — at this point the rewriter factory built from
+	// config (an injected factory is never in the stack: the host owns it) —
+	// so a library host that retries New does not accumulate gRPC connections
+	// or loaded engines.
+	refuseRewriter := func(err error) (*builtServer, error) {
+		for i := len(teardownStack) - 1; i >= 0; i-- {
+			teardownStack[i]()
+		}
+		return nil, err
+	}
+	probeTimeout := cfg.Rewriter.Timeout.Duration
+	if probeTimeout <= 0 {
+		probeTimeout = 5 * time.Second
+	}
+	// Spec 2026-09-26 T13: every rewriter, with or without storage integrity,
+	// proves the table-reference policy before the server starts. A built
+	// rewriter that fails it refuses startup even under
+	// rewriter.fail_open_on_unavailable, which covers only an unbuildable one.
+	if rwFactory != nil {
+		prober, ok := rwFactory.(rewriter.TableReferenceProbeFactory)
+		if !ok {
+			return refuseRewriter(fmt.Errorf("the SQL rewriter must implement rewriter.TableReferenceProbeFactory; refusing unverified startup (spec 2026-09-26 T13)"))
+		}
+		probeCtx, cancelProbe := context.WithTimeout(context.Background(), probeTimeout)
+		err := prober.ProbeTableReferencePolicy(probeCtx)
+		cancelProbe()
+		if err != nil {
+			return refuseRewriter(err)
+		}
+		log.Info("rewriter table-reference policy verified")
+	}
 	if siOptions.Enabled {
 		capable, ok := rwFactory.(rewriter.StorageIntegrityCapableFactory)
 		if !ok || capable.StorageIntegrityContractVersion() != rewriter.StorageIntegrityContractV2 {
-			return nil, fmt.Errorf("storage_integrity.enabled requires a storage-integrity contract V2 capable SQL rewriter; refusing fail-open startup")
+			return refuseRewriter(fmt.Errorf("storage_integrity.enabled requires a storage-integrity contract V2 capable SQL rewriter; refusing fail-open startup"))
 		}
 		// Contract V2 proves only that the backend understood the request; old
 		// engines can acknowledge it while missing the Spec I fail-closed
@@ -520,17 +574,13 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		// same behavioral conformance probe before an SI surface can start.
 		prober, ok := rwFactory.(rewriter.StorageIntegrityProbeFactory)
 		if !ok {
-			return nil, fmt.Errorf("storage_integrity.enabled requires a SQL rewriter implementing rewriter.StorageIntegrityProbeFactory; refusing unverified startup")
-		}
-		probeTimeout := cfg.Rewriter.Timeout.Duration
-		if probeTimeout <= 0 {
-			probeTimeout = 5 * time.Second
+			return refuseRewriter(fmt.Errorf("storage_integrity.enabled requires a SQL rewriter implementing rewriter.StorageIntegrityProbeFactory; refusing unverified startup"))
 		}
 		probeCtx, cancelProbe := context.WithTimeout(context.Background(), probeTimeout)
 		err := prober.ProbeStorageIntegrityBuild(probeCtx)
 		cancelProbe()
 		if err != nil {
-			return nil, err
+			return refuseRewriter(err)
 		}
 		log.Infow("storage-integrity rewriter build verified", "table_state", storageIntegrityTableStateLabel(siStatic))
 	}
@@ -642,13 +692,36 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	}
 	if siOptions.Enabled {
 		queryPlugins = append(queryPlugins, &sireserved.Plugin{
-			ReservedDatabases: []string{
-				config.StorageIntegritySafeDatabase,
-				config.StorageIntegrityUnsafeDatabase,
-			},
+			ReservedDatabases:   sitable.ReservedDatabases(),
 			ReservedRowIDColumn: rewriter.DefaultReservedRowIDColumn,
 		})
 		log.Info("storage-integrity reserved-name guard enabled")
+	}
+	// Spec 2026-09-26 T9: the lexical table-reference guard runs on ordinary
+	// sessions before forward and rewrite on every server that forwards to
+	// ClickHouse, whether or not a rewriter was built: under
+	// rewriter.fail_open_on_unavailable it is the only policy layer left.
+	// Router-only servers (no shard, upstream or cluster) forward to peers
+	// and get none. The internal listener shares this chain, but its sessions
+	// are peer-trusted and the guard skips those. The empty mode enforces.
+	if cfg.Shard != nil || cfg.Upstream != "" || clusterIface != nil {
+		queryPlugins = append(queryPlugins, &tablerefguard.Plugin{
+			PhysicalDatabase:  cfg.Rewriter.PhysicalDatabase,
+			ReservedDatabases: sitable.ReservedDatabases(),
+			Mode:              tablerefguard.Mode(cfg.TableRefGuard.Mode),
+		})
+		if warning := tableRefGuardPhysicalDatabaseWarning(cfg); warning != "" {
+			log.Warnw(warning)
+		}
+		log.Infow("table-reference guard enabled",
+			"mode", guardModeLabel(cfg.TableRefGuard.Mode),
+			"rewriter_configured", rwFactory != nil)
+		// Spec 2026-09-26 §9.7: R5 settings in the native Query packet never
+		// reach the rewriter; refuse them here, after auth sets the session
+		// flags and before forward and rewrite. Wired with the guard, so a
+		// fail-open server without a rewriter keeps the check too. No observe
+		// mode (plan D6).
+		queryPlugins = append(queryPlugins, &querysettings.Plugin{})
 	}
 	querySuccessPlugins := []plugin.QuerySuccessPlugin{}
 	queryCompletePlugins := []plugin.QueryCompletePlugin{}
@@ -702,7 +775,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		log.Infow("lthash commitment plugin enabled (MVP)")
 	}
 
-	sessstatePlug := &sessionstate.Plugin{Config: cfg.State}
+	sessstatePlug := &sessionstate.Plugin{Config: cfg.State, PhysicalDatabase: cfg.Rewriter.PhysicalDatabase}
 
 	var selfIndexerID uint64
 	if opts.GetIndexerId != nil {
@@ -1506,4 +1579,10 @@ func isLocalAddress(host string) bool {
 		}
 	}
 	return false
+}
+
+// reservedDatabaseNames renders the storage-integrity reserved databases for
+// operator-facing messages, so they cannot drift from sitable.ReservedDatabases.
+func reservedDatabaseNames() string {
+	return strings.Join(sitable.ReservedDatabases(), " / ")
 }

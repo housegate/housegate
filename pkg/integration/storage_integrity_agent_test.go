@@ -37,9 +37,37 @@ func (c *capturingConsumer) ConsumeStorageIntegrityAdmission(_ context.Context, 
 	return nil
 }
 
+// siTenantDB is the logical database the signed-lane fixtures write through.
+// Tenant SQL names logical databases only: the table-reference guard refuses
+// the physical database (rewriter.physical_database, chEnv.Database here;
+// spec 2026-09-26 G2), so the rewriter mock maps this qualifier onto the
+// physical database where the fixture's ClickHouse table lives.
+const siTenantDB = "si_tenant"
+
+// siEventsPhysical is the ClickHouse table behind siTenantDB.si_events; only
+// setup and verification done directly against ClickHouse name it.
+func siEventsPhysical() string { return chEnv.Database + ".si_events" }
+
+// siTenantMock wires a rewriter mock that maps siTenantDB onto the physical
+// database and reports `INSERT INTO siTenantDB.si_events` as a
+// storage-integrity access, as a real engine would.
+func siTenantMock(t *testing.T) testenv.ProxyOption {
+	t.Helper()
+	rewriterOpt, rewriterMock := testenv.WithRewriterMock(t)
+	rewriterMock.MapDatabase(siTenantDB, chEnv.Database)
+	rewriterMock.SetAccessedTables("INSERT INTO "+siTenantDB+".si_events", []*pb.AccessedTable{{
+		OriginalDatabase:   siTenantDB,
+		OriginalTable:      "si_events",
+		LogicalDatabase:    siTenantDB,
+		PhysicalDatabase:   chEnv.Database,
+		IsStorageIntegrity: true,
+	}})
+	return rewriterOpt
+}
+
 func siAgentSchema() payloadexec.TableSchema {
 	return payloadexec.TableSchema{
-		TableID: chEnv.Database + ".si_events",
+		TableID: siTenantDB + ".si_events",
 		Columns: []lthash.Column{{Name: "id", Type: "UInt64"}, {Name: "region", Type: "String"}},
 	}
 }
@@ -53,8 +81,8 @@ func withDeclaredSchema(t *testing.T, networkID string) testenv.ProxyOption {
 	}
 	return func(_ *config.Config, opts *housegate.Options) {
 		ns := opts.NetworkState.(*network.InMemoryNetworkState)
-		ns.TableSchemas[chEnv.Database+"/si_events@1"] = network.TableSchemaInfo{
-			DatabaseId: chEnv.Database,
+		ns.TableSchemas[siTenantDB+"/si_events@1"] = network.TableSchemaInfo{
+			DatabaseId: siTenantDB,
 			TableId:    "si_events",
 			Version:    1,
 			SchemaHash: payloadexec.TableSchemaHash(networkID, schema),
@@ -65,40 +93,35 @@ func withDeclaredSchema(t *testing.T, networkID string) testenv.ProxyOption {
 
 // startSIAgentPair brings up the server (ingress) + agent (signer) pair the
 // envelope-v2 end-to-end tests share, and returns the agent proxy plus the
-// consumer that captures what the ingress admitted. Both tests use exactly one
-// fixture so a drift in one cannot silently diverge from the other.
+// consumer that captures what the ingress admitted. Every test uses exactly
+// one fixture so a drift in one cannot silently diverge from the others.
 //
-// serverOpts are appended to the server proxy's options, for the one axis the
-// two callers genuinely differ on: a Go-driver client carries its database on
-// the connection, while a CLI client must leave ClientHello.Database empty (the
-// 25.8 client otherwise copies --database into Query settings, and that
-// unsigned setting is correctly refused) and so needs a physical-database
-// context configured instead.
-func startSIAgentPair(t *testing.T, networkID string, serverOpts ...testenv.ProxyOption) (*testenv.TestProxy, *capturingConsumer) {
+// The server runs with rewriter.physical_database = chEnv.Database, so the
+// table-reference guard's physical-database rule is live: the clients write
+// siTenantDB.si_events and the mock maps it onto the physical table. A CLI
+// client leaves ClientHello.Database empty (the 25.8 client otherwise copies
+// --database into Query settings, and that unsigned setting is correctly
+// refused); every statement still reaches the rewriter (spec 2026-09-26 T8).
+func startSIAgentPair(t *testing.T, networkID string) (*testenv.TestProxy, *capturingConsumer) {
 	t.Helper()
 	signer, err := auth.NewRelaySigner(authTestKey1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ch := openConn(t, chEnv.Addr)
-	if err := ch.Exec(context.Background(), "CREATE TABLE IF NOT EXISTS "+chEnv.Database+".si_events (id UInt64, region String) ENGINE = MergeTree ORDER BY id"); err != nil {
+	if err := ch.Exec(context.Background(), "CREATE TABLE IF NOT EXISTS "+siEventsPhysical()+" (id UInt64, region String) ENGINE = MergeTree ORDER BY id"); err != nil {
 		t.Fatalf("create table: %v", err)
 	}
 	consumer := &capturingConsumer{}
-	rewriterOpt, rewriterMock := testenv.WithRewriterMock(t)
-	rewriterMock.SetAccessedTables("INSERT INTO "+chEnv.Database+".si_events", []*pb.AccessedTable{{
-		OriginalDatabase:   chEnv.Database,
-		OriginalTable:      "si_events",
-		LogicalDatabase:    chEnv.Database,
-		PhysicalDatabase:   chEnv.Database,
-		IsStorageIntegrity: true,
-	}})
+	rewriterOpt := siTenantMock(t)
 	opts := []testenv.ProxyOption{
 		rewriterOpt,
+		testenv.WithExtraDatabases(siTenantDB),
 		authProxyConfig([]string{signer.Address()}, false),
-		testenv.WithDatabasePermission(signer.Address(), chEnv.Database, registry.DbAuthWrite),
+		testenv.WithDatabasePermission(signer.Address(), siTenantDB, registry.DbAuthWrite),
 		withDeclaredSchema(t, networkID),
 		testenv.WithConfigMutator(func(cfg *config.Config) {
+			cfg.Rewriter.PhysicalDatabase = chEnv.Database
 			cfg.StorageIntegrity.Ingress.Enabled = true
 			cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{signer.Address()}
 			cfg.StorageIntegrity.Ingress.NetworkID = networkID
@@ -107,7 +130,7 @@ func startSIAgentPair(t *testing.T, networkID string, serverOpts ...testenv.Prox
 			opts.StorageIntegrityAdmissionConsumer = consumer
 		},
 	}
-	server := testenv.StartServerProxy(t, chEnv.Addr, append(opts, serverOpts...)...)
+	server := testenv.StartServerProxy(t, chEnv.Addr, opts...)
 	agentProxy := testenv.StartAgentProxy(t, authTestKey1, server.Addr,
 		withDeclaredSchema(t, networkID),
 		testenv.WithConfigMutator(func(cfg *config.Config) {
@@ -137,7 +160,7 @@ func TestStorageIntegrity_AgentSignsEnvelopeV2EndToEnd(t *testing.T) {
 	}
 
 	conn := openConnNoCompression(t, agentProxy.Addr)
-	batch, err := conn.PrepareBatch(context.Background(), "INSERT INTO "+chEnv.Database+".si_events")
+	batch, err := conn.PrepareBatch(context.Background(), "INSERT INTO "+siTenantDB+".si_events")
 	if err != nil {
 		t.Fatalf("PrepareBatch through agent: %v", err)
 	}
@@ -186,7 +209,7 @@ func TestStorageIntegrity_AgentSignsEnvelopeV2EndToEnd(t *testing.T) {
 		PayloadLength:  uint64(len(adm.Payload.Bytes)),
 		PayloadFormat:  sicore.PayloadEncodingClickHouseNativeData,
 		ClientRevision: uint32(adm.Payload.Revision),
-		TargetTableID:  chEnv.Database + ".si_events",
+		TargetTableID:  siTenantDB + ".si_events",
 		RowIDProfileID: payloadexec.RowIDProfileID,
 		StatementKind:  sicore.StatementKindCodeInsert,
 	}
@@ -203,7 +226,7 @@ func TestStorageIntegrity_AgentSignsEnvelopeV2EndToEnd(t *testing.T) {
 	if len(rows) != 2 || rows[0].Values[0] != uint64(1) || rows[0].Values[1] != "eu" || rows[1].Values[0] != uint64(2) || rows[1].Values[1] != "us" {
 		t.Fatalf("decoded rows = %+v", rows)
 	}
-	if !strings.HasPrefix(adm.SQL, "INSERT INTO "+chEnv.Database+".si_events") {
+	if !strings.HasPrefix(adm.SQL, "INSERT INTO "+siTenantDB+".si_events") {
 		t.Fatalf("signed SQL = %q", adm.SQL)
 	}
 }
@@ -224,7 +247,7 @@ func TestStorageIntegrity_OwnedSettingKeysEndToEnd(t *testing.T) {
 	ownedCtx := clickhouse.Context(context.Background(), clickhouse.WithSettings(clickhouse.Settings{
 		sicore.ReadModeSettingKey: clickhouse.CustomSetting{Value: "safe"},
 	}))
-	batch, err := conn.PrepareBatch(ownedCtx, "INSERT INTO "+chEnv.Database+".si_events")
+	batch, err := conn.PrepareBatch(ownedCtx, "INSERT INTO "+siTenantDB+".si_events")
 	if err != nil {
 		t.Fatalf("PrepareBatch with %s: %v", sicore.ReadModeSettingKey, err)
 	}
@@ -259,7 +282,7 @@ func TestStorageIntegrity_OwnedSettingKeysEndToEnd(t *testing.T) {
 	userCtx := clickhouse.Context(context.Background(), clickhouse.WithSettings(clickhouse.Settings{
 		"async_insert": 1,
 	}))
-	batch, err = conn.PrepareBatch(userCtx, "INSERT INTO "+chEnv.Database+".si_events")
+	batch, err = conn.PrepareBatch(userCtx, "INSERT INTO "+siTenantDB+".si_events")
 	if err == nil {
 		err = batch.Append(uint64(11), "us")
 		if err == nil {

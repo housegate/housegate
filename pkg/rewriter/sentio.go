@@ -312,7 +312,7 @@ func (r *sentioRewriter) Rewrite(ctx context.Context, sql, effectiveAccount stri
 	if err != nil {
 		return RewriteResult{}, err
 	}
-	dynArgs := buildDynamicArgs(dbMap, knownPhys, r.sess.LogicalDatabaseName(), r.sess.PhysicalDatabaseName(), r.factory.options.Delim, logicalToRemote, remoteUpstreams, siArgs)
+	dynArgs := buildDynamicArgs(dbMap, knownPhys, protectedDatabases(r.factory.options.PhysicalDatabase), r.sess.LogicalDatabaseName(), r.sess.PhysicalDatabaseName(), r.factory.options.Delim, logicalToRemote, remoteUpstreams, siArgs)
 
 	// Every statement reaches the engine, even with no mappings and no
 	// session context (review L2): skipping it would forward the original
@@ -344,7 +344,7 @@ func (r *sentioRewriter) Rewrite(ctx context.Context, sql, effectiveAccount stri
 			if err != nil {
 				return RewriteResult{}, err
 			}
-			second, err := r.rewriteOnce(ctx, sql, buildDynamicArgs(dbMap, knownPhys, r.sess.LogicalDatabaseName(), r.sess.PhysicalDatabaseName(), r.factory.options.Delim, logicalToRemote, remoteUpstreams, partsArgs))
+			second, err := r.rewriteOnce(ctx, sql, buildDynamicArgs(dbMap, knownPhys, protectedDatabases(r.factory.options.PhysicalDatabase), r.sess.LogicalDatabaseName(), r.sess.PhysicalDatabaseName(), r.factory.options.Delim, logicalToRemote, remoteUpstreams, partsArgs))
 			if err != nil {
 				return RewriteResult{}, err
 			}
@@ -546,7 +546,7 @@ func (r *sentioRewriter) RewriteErrorMessage(ctx context.Context, message string
 		snap = r.factory.options.StorageIntegrity.snapshotFor(ctx)
 	}
 	siArgs, _ := buildStorageIntegrityArgs(r.factory.options.StorageIntegrity, snap, r.factory.options.StorageIntegrity.DefaultReadMode, nil)
-	dynArgs := buildDynamicArgs(dbMap, knownPhys, r.sess.LogicalDatabaseName(), r.sess.PhysicalDatabaseName(), r.factory.options.Delim, logicalToRemote, remoteUpstreams, siArgs)
+	dynArgs := buildDynamicArgs(dbMap, knownPhys, protectedDatabases(r.factory.options.PhysicalDatabase), r.sess.LogicalDatabaseName(), r.sess.PhysicalDatabaseName(), r.factory.options.Delim, logicalToRemote, remoteUpstreams, siArgs)
 
 	req := &pb.RewriteErrorMessageRequest{
 		Sql:          sql,

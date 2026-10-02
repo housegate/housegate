@@ -8,6 +8,7 @@ go_test(
         "//pkg/chproto",
         "//pkg/chsession",
         "//pkg/plugin",
+        "//pkg/sitable",
         "@com_github_clickhouse_ch_go//proto",
     ],
 )
@@ -17,5 +18,8 @@ go_library(
     srcs = ["plugin.go"],
     importpath = "github.com/housegate/housegate/pkg/plugins/sireserved",
     visibility = ["//visibility:public"],
-    deps = ["//pkg/plugin"],
+    deps = [
+        "//pkg/plugin",
+        "//pkg/sqlsurface",
+    ],
 )

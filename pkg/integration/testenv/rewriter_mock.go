@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/housegate/housegate/pkg/config"
+	"github.com/housegate/housegate/pkg/rewriter"
 	pb "github.com/housegate/rewriter-proto/gen/pb"
 )
 
@@ -20,7 +21,8 @@ import (
 // dozen other transformations; the mock parses NOTHING.
 //
 // What it does:
-//   - Returns the input SQL unchanged in `sql_after_rewrite`.
+//   - Returns the input SQL unchanged in `sql_after_rewrite`, except
+//     for the database qualifiers a test maps with MapDatabase.
 //   - Classifies the statement by case-insensitive keyword prefix.
 //     That single byte of metadata is what unblocks commitgate's
 //     PermissionObserver (which rejects every Unspecified statement)
@@ -28,13 +30,18 @@ import (
 //     fires on STATEMENT_TYPE_USE.
 //   - Captures every received SQL string for tests that want to
 //     assert on what the proxy actually shipped to the rewriter.
+//   - Answers the startup table-reference probe exactly
+//     (rewriter.TableReferenceProbeAnswer, as a conforming gRPC engine)
+//     and does not record it, so SeenSQL / SeenDynamicArgs hold only
+//     session traffic and FailNext is not consumed by startup.
 //
 // What it does NOT do:
 //   - No AST parsing, no table-name prefix injection, no
-//     `database_map` consumption, no `remote()` cross-indexer
-//     routing — those features are part of the closed-source
-//     production rewriter and are out of scope for the open-source
-//     integration suite.
+//     `database_map` consumption (MapDatabase is a test-declared
+//     textual qualifier swap, not the engine's mapping), no
+//     `remote()` cross-indexer routing — those features are part of
+//     the closed-source production rewriter and are out of scope for
+//     the open-source integration suite.
 //
 // Forward-compat: embeds UnimplementedRewriterServiceServer so a new
 // RPC added to the proto file fails to compile here rather than
@@ -61,6 +68,10 @@ type RewriterMock struct {
 	// avoid matching unrelated statements (e.g. "CREATE TABLE " not
 	// "CREATE").
 	accessed map[string][]*pb.AccessedTable
+
+	// databases maps a logical database qualifier to the physical
+	// database the mock substitutes in sql_after_rewrite (MapDatabase).
+	databases map[string]string
 }
 
 // StartRewriterMock binds 127.0.0.1:0, starts a gRPC server with the
@@ -148,6 +159,88 @@ func (m *RewriterMock) SetAccessedTables(prefix string, tables []*pb.AccessedTab
 	m.accessed[strings.ToUpper(prefix)] = tables
 }
 
+// MapDatabase makes the mock rewrite every `<logical>.` qualifier in the
+// SQL it returns to `<physical>.`, the way a real engine resolves a
+// tenant's logical database to the deployment's physical one. Tenant SQL
+// must name logical databases only (the table-reference guard refuses the
+// physical database, spec 2026-09-26 G2), so a test whose statements must
+// still reach a real ClickHouse table maps the logical name here. The swap
+// is textual: a bare (unquoted) logical name that is a whole identifier,
+// not itself after a '.', and directly followed by '.'. Names inside
+// '…' string literals and "…" / `…` quoted identifiers are left alone, and
+// so is a quoted `logical`.t. SetAccessedTables prefixes still match the
+// SQL as received. An empty logical name panics: it names nothing.
+func (m *RewriterMock) MapDatabase(logical, physical string) {
+	if logical == "" {
+		panic("testenv: RewriterMock.MapDatabase needs a non-empty logical database")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.databases == nil {
+		m.databases = make(map[string]string)
+	}
+	m.databases[logical] = physical
+}
+
+// mapDatabases applies the MapDatabase substitutions to sql in one pass over
+// its words, copying quoted spans verbatim.
+func mapDatabases(sql string, databases map[string]string) string {
+	if len(databases) == 0 {
+		return sql
+	}
+	var b strings.Builder
+	for i := 0; i < len(sql); {
+		c := sql[i]
+		switch {
+		case c == '\'' || c == '"' || c == '`':
+			j := quotedSpanEnd(sql, i)
+			b.WriteString(sql[i:j])
+			i = j
+		case isIdentByte(c):
+			j := i
+			for j < len(sql) && isIdentByte(sql[j]) {
+				j++
+			}
+			word := sql[i:j]
+			physical, ok := databases[word]
+			if ok && j < len(sql) && sql[j] == '.' && (i == 0 || sql[i-1] != '.') {
+				b.WriteString(physical)
+			} else {
+				b.WriteString(word)
+			}
+			i = j
+		default:
+			b.WriteByte(c)
+			i++
+		}
+	}
+	return b.String()
+}
+
+// quotedSpanEnd returns the index just past the quoted span opening at
+// sql[start], honouring backslash escapes and doubled quotes; an
+// unterminated span runs to the end.
+func quotedSpanEnd(sql string, start int) int {
+	quote := sql[start]
+	for k := start + 1; k < len(sql); k++ {
+		switch sql[k] {
+		case '\\':
+			k++
+		case quote:
+			if k+1 < len(sql) && sql[k+1] == quote {
+				k++
+				continue
+			}
+			return k + 1
+		}
+	}
+	return len(sql)
+}
+
+func isIdentByte(c byte) bool {
+	return c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+}
+
 // SeenDynamicArgs returns a copy of the dynamic_args payload the proxy
 // shipped to the mock for each Rewrite call, in receive order. Index
 // parallel to SeenSQL.
@@ -160,6 +253,11 @@ func (m *RewriterMock) SeenDynamicArgs() []*pb.RewriteTableDynamicArgs {
 }
 
 func (m *RewriterMock) Rewrite(ctx context.Context, req *pb.RewriteSQLRequest) (*pb.RewriteSQLResponse, error) {
+	// The startup policy probe (spec 2026-09-26 T13) is answered as a
+	// conforming gRPC engine would and kept out of SeenSQL / SeenDynamicArgs.
+	if resp, ok := rewriter.TableReferenceProbeAnswer(req, rewriter.EngineGRPC); ok {
+		return resp, nil
+	}
 	sql := req.GetSql()
 	upper := strings.ToUpper(stripLeadingWhitespace(sql))
 
@@ -177,6 +275,7 @@ func (m *RewriterMock) Rewrite(ctx context.Context, req *pb.RewriteSQLRequest) (
 			break
 		}
 	}
+	rewritten := mapDatabases(sql, m.databases)
 	m.mu.Unlock()
 
 	if shouldFail {
@@ -191,7 +290,7 @@ func (m *RewriterMock) Rewrite(ctx context.Context, req *pb.RewriteSQLRequest) (
 
 	return &pb.RewriteSQLResponse{
 		Code:                   pb.RewriteCode_Success,
-		SqlAfterRewrite:        sql,
+		SqlAfterRewrite:        rewritten,
 		StatementType:          classify(sql),
 		OriginalAccessedTables: tables,
 	}, nil

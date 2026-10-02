@@ -37,7 +37,8 @@ import (
 // deliberately does not model production ACK2, hg_unsafe, or SourcePreparer.
 type inlineLandingConsumer struct {
 	conn   clickhouse.Conn
-	schema payloadexec.TableSchema
+	schema payloadexec.TableSchema // logical: the identity the agent signs
+	dest   string                  // the physical ClickHouse table the rows land in
 	mu     sync.Mutex
 	seen   []siplugin.Admission
 }
@@ -47,7 +48,7 @@ func (c *inlineLandingConsumer) ConsumeStorageIntegrityAdmission(ctx context.Con
 	if err != nil {
 		return fmt.Errorf("decode admitted rows: %w", err)
 	}
-	batch, err := c.conn.PrepareBatch(ctx, "INSERT INTO "+c.schema.TableID)
+	batch, err := c.conn.PrepareBatch(ctx, "INSERT INTO "+c.dest)
 	if err != nil {
 		return fmt.Errorf("prepare admission landing: %w", err)
 	}
@@ -83,22 +84,26 @@ func startInlineValuesPair(t *testing.T, networkID string, columns []lthash.Colu
 		t.Fatal(err)
 	}
 	// Each test owns its table, schema, sequence state and connections. The
-	// destination is exactly the proxied target, so row counts catch doubles.
+	// client writes the logical siTenantDB table; the mock maps it onto the
+	// physical destination, which is exactly the proxied target, so row
+	// counts catch doubles. Only direct ClickHouse setup and verification
+	// name the physical table (the guard refuses it in tenant SQL).
 	table := "inline_" + strings.ReplaceAll(networkID, "-", "_")
-	schema := payloadexec.TableSchema{TableID: chEnv.Database + "." + table, Columns: columns}
+	schema := payloadexec.TableSchema{TableID: siTenantDB + "." + table, Columns: columns}
+	dest := chEnv.Database + "." + table
 	ch := openConn(t, chEnv.Addr)
 	var defs []string
 	for _, c := range columns {
 		defs = append(defs, "`"+c.Name+"` "+c.Type)
 	}
-	if err := ch.Exec(context.Background(), "DROP TABLE IF EXISTS "+schema.TableID); err != nil {
+	if err := ch.Exec(context.Background(), "DROP TABLE IF EXISTS "+dest); err != nil {
 		t.Fatal(err)
 	}
-	if err := ch.Exec(context.Background(), "CREATE TABLE "+schema.TableID+" ("+strings.Join(defs, ", ")+") ENGINE = MergeTree ORDER BY tuple()"); err != nil {
+	if err := ch.Exec(context.Background(), "CREATE TABLE "+dest+" ("+strings.Join(defs, ", ")+") ENGINE = MergeTree ORDER BY tuple()"); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := ch.Exec(context.Background(), "DROP TABLE IF EXISTS "+schema.TableID); err != nil {
+		if err := ch.Exec(context.Background(), "DROP TABLE IF EXISTS "+dest); err != nil {
 			t.Errorf("drop fixture table: %v", err)
 		}
 	})
@@ -106,27 +111,28 @@ func startInlineValuesPair(t *testing.T, networkID string, columns []lthash.Colu
 	if err := ch.QueryRow(context.Background(), "SELECT version()").Scan(&serverVersion); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("ClickHouse server=%s target=%s FFI=%s", serverVersion, schema.TableID, ffi)
-	consumer := &inlineLandingConsumer{conn: ch, schema: schema}
+	t.Logf("ClickHouse server=%s target=%s physical=%s FFI=%s", serverVersion, schema.TableID, dest, ffi)
+	consumer := &inlineLandingConsumer{conn: ch, schema: schema, dest: dest}
 	schemaJSON, err := json.Marshal(schema)
 	if err != nil {
 		t.Fatal(err)
 	}
 	declared := func(_ *config.Config, opts *housegate.Options) {
 		ns := opts.NetworkState.(*network.InMemoryNetworkState)
-		ns.TableSchemas[chEnv.Database+"/"+table+"@1"] = network.TableSchemaInfo{
-			DatabaseId: chEnv.Database, TableId: table, Version: 1,
+		ns.TableSchemas[siTenantDB+"/"+table+"@1"] = network.TableSchemaInfo{
+			DatabaseId: siTenantDB, TableId: table, Version: 1,
 			SchemaHash: payloadexec.TableSchemaHash(networkID, schema), SchemaJson: string(schemaJSON),
 		}
 	}
 	rewriterOpt, mock := testenv.WithRewriterMock(t)
+	mock.MapDatabase(siTenantDB, chEnv.Database)
 	mock.SetAccessedTables("INSERT INTO "+schema.TableID, []*pb.AccessedTable{{
-		OriginalDatabase: chEnv.Database, OriginalTable: table, LogicalDatabase: chEnv.Database,
+		OriginalDatabase: siTenantDB, OriginalTable: table, LogicalDatabase: siTenantDB,
 		PhysicalDatabase: chEnv.Database, IsStorageIntegrity: true,
 	}})
 	server := testenv.StartServerProxy(t, chEnv.Addr,
-		rewriterOpt, authProxyConfig([]string{signer.Address()}, false),
-		testenv.WithDatabasePermission(signer.Address(), chEnv.Database, registry.DbAuthWrite), declared,
+		rewriterOpt, testenv.WithExtraDatabases(siTenantDB), authProxyConfig([]string{signer.Address()}, false),
+		testenv.WithDatabasePermission(signer.Address(), siTenantDB, registry.DbAuthWrite), declared,
 		testenv.WithConfigMutator(func(cfg *config.Config) {
 			cfg.Rewriter.PhysicalDatabase = chEnv.Database
 			cfg.StorageIntegrity.Ingress.Enabled = true
@@ -215,7 +221,7 @@ type inlineStoredRow struct {
 
 func requireInlineStoredRows(t *testing.T, c *inlineLandingConsumer, want []inlineStoredRow) {
 	t.Helper()
-	rows, err := c.conn.Query(context.Background(), "SELECT id, region FROM "+c.schema.TableID+" ORDER BY id, region")
+	rows, err := c.conn.Query(context.Background(), "SELECT id, region FROM "+c.dest+" ORDER BY id, region")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -392,7 +398,7 @@ func TestStorageIntegrity_InlineValuesOneStringCapture(t *testing.T) {
 		t.Fatalf("one String row differs: inline=%x CLI=%x", inline.Payload.Bytes, ref.Payload.Bytes)
 	}
 	var count uint64
-	if err := c.conn.QueryRow(context.Background(), "SELECT count() FROM "+c.schema.TableID+" WHERE s = 'hello'").Scan(&count); err != nil || count != 2 {
+	if err := c.conn.QueryRow(context.Background(), "SELECT count() FROM "+c.dest+" WHERE s = 'hello'").Scan(&count); err != nil || count != 2 {
 		t.Fatalf("String physical landing count=%d error=%v, want 2", count, err)
 	}
 	t.Logf("independent one-row String CLI capture: revision=%d length=%d raw=%x landed=%d", ref.Payload.Revision, len(ref.Payload.Bytes), ref.Payload.Bytes, count)

@@ -11,6 +11,7 @@ import (
 	"github.com/housegate/housegate/pkg/chproto"
 	"github.com/housegate/housegate/pkg/chsession"
 	"github.com/housegate/housegate/pkg/plugin"
+	"github.com/housegate/housegate/pkg/sitable"
 )
 
 func newSessionForTest(t *testing.T, id int64) chsession.Session {
@@ -755,5 +756,114 @@ func TestOnQuery_OperatorSessionRefusesHeredocHiddenReservedName(t *testing.T) {
 				t.Fatalf("heredoc-hidden reserved name must be refused with %q, err=%v", tc.want, err)
 			}
 		})
+	}
+}
+
+// TestReservedNamespaceViolation_LineCommentEndsOnlyAtLineFeed closes a
+// privileged-session bypass measured on ClickHouse 26.8: a line comment ends
+// only at \n, so in "SELECT * -- c\r/*\nFROM hg_safe.t -- */" ClickHouse
+// executes FROM hg_safe.t. The scanner used to end the comment at \r, open a
+// block comment on the /* that ClickHouse treats as comment text, and blank
+// the reserved name from both surfaces.
+func TestReservedNamespaceViolation_LineCommentEndsOnlyAtLineFeed(t *testing.T) {
+	for _, sql := range []string{
+		"SELECT * -- c\r/*\nFROM hg_safe.t -- */",
+		"SELECT * # c\r'\nFROM hg_safe.t # '",
+		"SELECT * #! c\r`\nFROM hg_safe.t #! `",
+		"SELECT * // c\r$$\nFROM hg_safe.t // $$",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			got, err := ReservedNamespaceViolation(sql, []string{"hg_safe"}, "_hg_row_id")
+			if err != nil || got != "hg_safe" {
+				t.Fatalf("ReservedNamespaceViolation(%q) = %q, %v; want hg_safe", sql, got, err)
+			}
+		})
+	}
+	// A # that opens no comment is a ClickHouse syntax error; the guard
+	// refuses it instead of blanking the rest of the line.
+	if _, err := ReservedNamespaceViolation("SELECT 1 #x\n", []string{"hg_safe"}, "_hg_row_id"); err == nil {
+		t.Fatal("a bare # must be refused")
+	}
+}
+
+// TestOnQuery_CarrierCannotHideBehindACarriageReturnComment is the
+// executable-surface half of the line-comment bypass: a quote ClickHouse
+// reads as comment text used to blank a carrier call from OutsideLiterals.
+func TestOnQuery_CarrierCannotHideBehindACarriageReturnComment(t *testing.T) {
+	p := &Plugin{ReservedDatabases: []string{"hg_safe", "hg_unsafe"}, ReservedRowIDColumn: "_hg_row_id"}
+	sql := "SELECT * -- c\r'\nFROM merge(currentDatabase(), 't') -- '"
+	sess := newSessionForTest(t, 31)
+	sess.State().SetMaintenance(true)
+	qctx := &plugin.QueryContext{Session: sess, OriginalSQL: sql, Query: &chproto.Query{Body: sql}}
+	chain := &plugin.PluginChain{QueryPlugins: []plugin.QueryPlugin{p}}
+	if err := chain.OnQuery(context.Background(), qctx); err == nil || !strings.Contains(err.Error(), "merge") {
+		t.Fatalf("carrier hidden behind a CR-terminated comment must be refused, err=%v", err)
+	}
+}
+
+// TestOnQuery_DollarInsideAnIdentifierCannotOpenAHeredoc closes a
+// privileged-session bypass measured on ClickHouse 26.8: x$$ and y$$ are
+// identifiers there, so "SELECT 1 AS x$$, * FROM merge(...) AS y$$" executes
+// the merge() call, while the scanner read $$, * FROM merge(...) AS y$$ as a
+// heredoc and saw no carrier, no placeholder and no complete reserved name.
+func TestOnQuery_DollarInsideAnIdentifierCannotOpenAHeredoc(t *testing.T) {
+	p := &Plugin{ReservedDatabases: []string{"hg_safe", "hg_unsafe"}, ReservedRowIDColumn: "_hg_row_id"}
+	for _, sql := range []string{
+		"SELECT 1 AS x$$, * FROM merge(concat('hg_','safe'), '^t$') AS y$$",
+		"SELECT 1 AS x$t$, * FROM {p:Identifier} AS y$t$",
+		"SELECT 1 AS x$$, * FROM hg_safe.t AS y$$",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			sess := newSessionForTest(t, 32)
+			sess.State().SetMaintenance(true)
+			qctx := &plugin.QueryContext{Session: sess, OriginalSQL: sql, Query: &chproto.Query{Body: sql}}
+			chain := &plugin.PluginChain{QueryPlugins: []plugin.QueryPlugin{p}}
+			if err := chain.OnQuery(context.Background(), qctx); err == nil {
+				t.Fatalf("a $ inside an identifier must not hide %q", sql)
+			}
+		})
+	}
+}
+
+// TestOnQuery_UnicodeWhitespaceCannotHideACarrier closes a privileged-session
+// bypass measured on ClickHouse 26.8: Unicode whitespace separates tokens
+// there, so "merge<U+00A0>(...)" calls merge(), while the carrier scan only
+// skipped ASCII whitespace before "(". Every non-ASCII byte outside quotes,
+// literals, comments and heredoc bodies is now refused by the scanner.
+func TestOnQuery_UnicodeWhitespaceCannotHideACarrier(t *testing.T) {
+	p := &Plugin{ReservedDatabases: []string{"hg_safe", "hg_unsafe"}, ReservedRowIDColumn: "_hg_row_id"}
+	for _, sql := range []string{
+		"SELECT count() FROM merge\u00a0(currentDatabase(), '^t$')",
+		"SELECT count() FROM merge\u200b(currentDatabase(), '^t$')",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			sess := newSessionForTest(t, 33)
+			sess.State().SetMaintenance(true)
+			qctx := &plugin.QueryContext{Session: sess, OriginalSQL: sql, Query: &chproto.Query{Body: sql}}
+			chain := &plugin.PluginChain{QueryPlugins: []plugin.QueryPlugin{p}}
+			if err := chain.OnQuery(context.Background(), qctx); err == nil {
+				t.Fatalf("a carrier behind Unicode whitespace must be refused: %q", sql)
+			}
+		})
+	}
+}
+
+// TestOnQuery_RefusesEveryReservedDatabase is spec 2026-09-26 T11: the guard,
+// built from sitable.ReservedDatabases() as build.go does, refuses each
+// reserved database including hg_promote.
+func TestOnQuery_RefusesEveryReservedDatabase(t *testing.T) {
+	p := &Plugin{ReservedDatabases: sitable.ReservedDatabases(), ReservedRowIDColumn: "_hg_row_id"}
+	for _, db := range sitable.ReservedDatabases() {
+		sql := "SELECT * FROM " + db + ".db1__t"
+		sess := newSessionForTest(t, 3)
+		sess.State().SetPlatformOperator(true)
+		err := p.OnQuery(context.Background(), &plugin.QueryContext{
+			Session:     sess,
+			OriginalSQL: sql,
+			Query:       &chproto.Query{Body: sql},
+		})
+		if err == nil || !strings.Contains(err.Error(), db) {
+			t.Errorf("%s: err = %v, want a refusal naming the database", sql, err)
+		}
 	}
 }

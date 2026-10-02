@@ -3,6 +3,7 @@ package housegate
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -21,12 +22,15 @@ import (
 	"github.com/housegate/housegate/pkg/network"
 	"github.com/housegate/housegate/pkg/plugin"
 	"github.com/housegate/housegate/pkg/plugins/agent"
+	authplugin "github.com/housegate/housegate/pkg/plugins/auth"
 	"github.com/housegate/housegate/pkg/plugins/forward"
+	"github.com/housegate/housegate/pkg/plugins/querysettings"
 	"github.com/housegate/housegate/pkg/plugins/rewrite"
 	"github.com/housegate/housegate/pkg/plugins/sessionstate"
 	"github.com/housegate/housegate/pkg/plugins/sireserved"
 	"github.com/housegate/housegate/pkg/plugins/sistatement"
 	"github.com/housegate/housegate/pkg/plugins/storageintegrity"
+	"github.com/housegate/housegate/pkg/plugins/tablerefguard"
 	"github.com/housegate/housegate/pkg/proxy"
 	"github.com/housegate/housegate/pkg/replay"
 	"github.com/housegate/housegate/pkg/replay/payloadexec"
@@ -77,6 +81,35 @@ func (f siProbeStubRewriterFactory) ProbeStorageIntegrityBuild(ctx context.Conte
 		*f.deadlineObserved = ok
 	}
 	return f.err
+}
+
+func (stubRewriterFactory) ProbeTableReferencePolicy(context.Context) error { return nil }
+
+// unprobedRewriterFactory is a Factory that cannot prove the table-reference
+// policy; buildServer must refuse it with or without storage integrity.
+type unprobedRewriterFactory struct{}
+
+func (unprobedRewriterFactory) NewRewriter(rewriter.Session) rewriter.Rewriter { return stubRewriter{} }
+func (unprobedRewriterFactory) Close() error                                   { return nil }
+
+// policyProbeStubRewriterFactory overrides the policy probe of the SI-capable
+// stub so tests can fail it or observe its context.
+type policyProbeStubRewriterFactory struct {
+	siProbeStubRewriterFactory
+	policyErr        error
+	calls            *int
+	deadlineObserved *bool
+}
+
+func (f policyProbeStubRewriterFactory) ProbeTableReferencePolicy(ctx context.Context) error {
+	if f.calls != nil {
+		*f.calls++
+	}
+	if f.deadlineObserved != nil {
+		_, ok := ctx.Deadline()
+		*f.deadlineObserved = ok
+	}
+	return f.policyErr
 }
 
 type stubRewriter struct{}
@@ -224,7 +257,7 @@ func TestBuildServer_StorageIntegrityReservedGuardWiring(t *testing.T) {
 	if guardIndex >= forwardIndex || forwardIndex < 0 {
 		t.Fatalf("guard index=%d forward index=%d, want guard before forward", guardIndex, forwardIndex)
 	}
-	if !reflect.DeepEqual(guard.ReservedDatabases, []string{config.StorageIntegritySafeDatabase, config.StorageIntegrityUnsafeDatabase}) ||
+	if !reflect.DeepEqual(guard.ReservedDatabases, sitable.ReservedDatabases()) ||
 		guard.ReservedRowIDColumn != rewriter.DefaultReservedRowIDColumn {
 		t.Fatalf("guard config = %+v", guard)
 	}
@@ -2178,3 +2211,278 @@ func (r *recordingBuildMergeRows) Scan(dest ...any) error {
 }
 func (r *recordingBuildMergeRows) Err() error   { return nil }
 func (r *recordingBuildMergeRows) Close() error { return nil }
+
+func TestBuildServer_TableRefGuardWiring(t *testing.T) {
+	for _, si := range []bool{false, true} {
+		cfg := minimalServerCfg(t)
+		cfg.Rewriter.PhysicalDatabase = "phys"
+		cfg.TableRefGuard.Mode = "observe"
+		var factory rewriter.Factory = stubRewriterFactory{}
+		if si {
+			cfg.StorageIntegrity.Tables = []string{"tenant.events"}
+			factory = siProbeStubRewriterFactory{}
+		}
+		bs, err := buildServer(Options{Config: cfg, NetworkState: network.NewInMemoryNetworkState(), Rewriter: factory}, nil)
+		if err != nil {
+			t.Fatalf("si=%v: buildServer: %v", si, err)
+		}
+		guardIndex, reservedIndex, forwardIndex, rewriteIndex := -1, -1, -1, -1
+		var guard *tablerefguard.Plugin
+		for i, candidate := range requireExternalChain(t, bs).QueryPlugins {
+			switch typed := candidate.(type) {
+			case *tablerefguard.Plugin:
+				guard, guardIndex = typed, i
+			case *sireserved.Plugin:
+				reservedIndex = i
+			case *forward.Plugin:
+				forwardIndex = i
+			case *rewrite.Plugin:
+				rewriteIndex = i
+			}
+		}
+		bs.teardown()
+		if guard == nil {
+			t.Fatalf("si=%v: tablerefguard not wired", si)
+		}
+		if guardIndex >= forwardIndex || guardIndex >= rewriteIndex || (si && guardIndex <= reservedIndex) {
+			t.Fatalf("si=%v: guard=%d sireserved=%d forward=%d rewrite=%d", si, guardIndex, reservedIndex, forwardIndex, rewriteIndex)
+		}
+		if guard.PhysicalDatabase != "phys" || guard.Mode != tablerefguard.ModeObserve || !reflect.DeepEqual(guard.ReservedDatabases, sitable.ReservedDatabases()) {
+			t.Fatalf("si=%v: guard = %+v", si, guard)
+		}
+	}
+
+	defaultMode := minimalServerCfg(t)
+	bs, err := buildServer(Options{Config: defaultMode, NetworkState: network.NewInMemoryNetworkState(), Rewriter: stubRewriterFactory{}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, candidate := range requireExternalChain(t, bs).QueryPlugins {
+		if g, ok := candidate.(*tablerefguard.Plugin); ok {
+			found = true
+			// The plugin treats the empty mode as enforce.
+			if g.Mode != "" && g.Mode != tablerefguard.ModeEnforce {
+				t.Fatalf("default mode = %q, want enforce", g.Mode)
+			}
+		}
+	}
+	bs.teardown()
+	if !found {
+		t.Fatal("default-mode server must wire the guard")
+	}
+
+	routerOnly, err := buildServer(Options{Config: minimalRouterOnlyCfg(t), NetworkState: network.NewInMemoryNetworkState()}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer routerOnly.teardown()
+	for _, candidate := range requireExternalChain(t, routerOnly).QueryPlugins {
+		if _, ok := candidate.(*tablerefguard.Plugin); ok {
+			t.Fatal("a router-only server has no rewriter and must not wire the guard")
+		}
+	}
+}
+
+// With rewriter.fail_open_on_unavailable no rewriter is built at startup, and
+// the guard is then the only policy layer, so it must still be wired on every
+// server that forwards to ClickHouse (shard, upstream or host-injected
+// cluster) while a router-only server keeps none.
+func TestBuildServer_TableRefGuardWiredWithoutARewriter(t *testing.T) {
+	guardOf := func(t *testing.T, bs *builtServer) *tablerefguard.Plugin {
+		t.Helper()
+		for _, candidate := range requireExternalChain(t, bs).QueryPlugins {
+			if g, ok := candidate.(*tablerefguard.Plugin); ok {
+				return g
+			}
+		}
+		return nil
+	}
+
+	cfg := withoutRewriter(minimalServerCfg(t))
+	cfg.Rewriter.PhysicalDatabase = "phys"
+	bs, err := buildServer(Options{Config: cfg, NetworkState: network.NewInMemoryNetworkState()}, nil)
+	if err != nil {
+		t.Fatalf("upstream, fail-open: %v", err)
+	}
+	for _, candidate := range requireExternalChain(t, bs).QueryPlugins {
+		if _, ok := candidate.(*rewrite.Plugin); ok {
+			t.Fatal("test premise broken: a rewrite plugin was wired")
+		}
+	}
+	if g := guardOf(t, bs); g == nil || g.PhysicalDatabase != "phys" {
+		t.Fatalf("upstream server without a rewriter: guard = %+v", g)
+	}
+	bs.teardown()
+
+	hostCluster := withoutRewriter(minimalRouterOnlyCfg(t))
+	bs, err = buildServer(Options{Config: hostCluster, NetworkState: network.NewInMemoryNetworkState(), Cluster: &fakeCluster{}}, nil)
+	if err != nil {
+		t.Fatalf("host cluster, fail-open: %v", err)
+	}
+	if g := guardOf(t, bs); g == nil {
+		t.Fatal("host-injected cluster without a rewriter: guard not wired")
+	}
+	bs.teardown()
+
+	routerOnly := withoutRewriter(minimalRouterOnlyCfg(t))
+	bs, err = buildServer(Options{Config: routerOnly, NetworkState: network.NewInMemoryNetworkState()}, nil)
+	if err != nil {
+		t.Fatalf("router-only: %v", err)
+	}
+	defer bs.teardown()
+	if g := guardOf(t, bs); g != nil {
+		t.Fatal("router-only server must not wire the guard")
+	}
+}
+
+func TestBuildAgent_NeverWiresTableRefGuard(t *testing.T) {
+	cfg := agentSICfg(t)
+	bs, err := buildAgent(Options{Config: cfg, NetworkState: network.NewInMemoryNetworkState()}, nil)
+	if err != nil {
+		t.Fatalf("buildAgent: %v", err)
+	}
+	defer bs.teardown()
+	chain := requireProxyServer(t, bs.listeners[0]).Hooks.(*plugin.PluginChain)
+	for _, candidate := range chain.QueryPlugins {
+		if _, ok := candidate.(*tablerefguard.Plugin); ok {
+			t.Fatal("agent mode must not wire the table-reference guard")
+		}
+	}
+}
+
+func TestNew_RejectsAnInvalidTableRefGuardMode(t *testing.T) {
+	cfg := minimalServerCfg(t)
+	cfg.TableRefGuard.Mode = "audit"
+	_, err := New(Options{Config: cfg, NetworkState: network.NewInMemoryNetworkState(), Rewriter: stubRewriterFactory{}})
+	if err == nil || !strings.Contains(err.Error(), `tableref_guard.mode "audit" is invalid`) {
+		t.Fatalf("New err = %v", err)
+	}
+}
+
+func TestTableRefGuardPhysicalDatabaseWarning(t *testing.T) {
+	cfg := minimalServerCfg(t)
+	cfg.Rewriter.PhysicalDatabase = ""
+	if got := tableRefGuardPhysicalDatabaseWarning(cfg); !strings.Contains(got, "G2") || !strings.Contains(got, "rewriter.physical_database") {
+		t.Fatalf("warning = %q", got)
+	}
+	cfg.Rewriter.PhysicalDatabase = "phys"
+	if got := tableRefGuardPhysicalDatabaseWarning(cfg); got != "" {
+		t.Fatalf("warning with a physical database = %q", got)
+	}
+}
+
+func querySettingsIndex(t *testing.T, chain *plugin.PluginChain) int {
+	t.Helper()
+	index := -1
+	for i, candidate := range chain.QueryPlugins {
+		if _, ok := candidate.(*querysettings.Plugin); ok {
+			if index >= 0 {
+				t.Fatalf("querysettings wired twice (%d, %d)", index, i)
+			}
+			index = i
+		}
+	}
+	return index
+}
+
+// Spec 2026-09-26 §9.7: the Query-packet settings check runs after auth (which
+// sets the maintenance / operator flags it reads) and before forward and
+// rewrite, with or without storage integrity.
+func TestBuildServer_QuerySettingsWiring(t *testing.T) {
+	for _, si := range []bool{false, true} {
+		cfg := minimalServerCfg(t)
+		var factory rewriter.Factory = stubRewriterFactory{}
+		if si {
+			cfg.StorageIntegrity.Tables = []string{"tenant.events"}
+			factory = siProbeStubRewriterFactory{}
+		}
+		bs, err := buildServer(Options{Config: cfg, NetworkState: network.NewInMemoryNetworkState(), Rewriter: factory}, nil)
+		if err != nil {
+			t.Fatalf("si=%v: buildServer: %v", si, err)
+		}
+		chain := requireExternalChain(t, bs)
+		authIndex, forwardIndex, rewriteIndex := -1, -1, -1
+		for i, candidate := range chain.QueryPlugins {
+			switch candidate.(type) {
+			case *authplugin.Plugin:
+				authIndex = i
+			case *forward.Plugin:
+				forwardIndex = i
+			case *rewrite.Plugin:
+				rewriteIndex = i
+			}
+		}
+		settingsIndex := querySettingsIndex(t, chain)
+		bs.teardown()
+		if authIndex < 0 || settingsIndex < 0 || settingsIndex <= authIndex || settingsIndex >= forwardIndex || settingsIndex >= rewriteIndex {
+			t.Fatalf("si=%v: auth=%d querysettings=%d forward=%d rewrite=%d", si, authIndex, settingsIndex, forwardIndex, rewriteIndex)
+		}
+	}
+}
+
+// Like the table-reference guard, the check is wired on every server that
+// forwards to ClickHouse, also when rewriter.fail_open_on_unavailable left it
+// without a rewriter; a router-only server and an agent never wire it.
+func TestBuildServer_QuerySettingsWiredWithoutARewriter(t *testing.T) {
+	bs, err := buildServer(Options{Config: withoutRewriter(minimalServerCfg(t)), NetworkState: network.NewInMemoryNetworkState()}, nil)
+	if err != nil {
+		t.Fatalf("upstream, fail-open: %v", err)
+	}
+	if querySettingsIndex(t, requireExternalChain(t, bs)) < 0 {
+		t.Fatal("upstream server without a rewriter: querysettings not wired")
+	}
+	bs.teardown()
+
+	routerOnly, err := buildServer(Options{Config: withoutRewriter(minimalRouterOnlyCfg(t)), NetworkState: network.NewInMemoryNetworkState()}, nil)
+	if err != nil {
+		t.Fatalf("router-only: %v", err)
+	}
+	defer routerOnly.teardown()
+	if querySettingsIndex(t, requireExternalChain(t, routerOnly)) >= 0 {
+		t.Fatal("router-only server must not wire querysettings")
+	}
+
+	agentBS, err := buildAgent(Options{Config: agentSICfg(t), NetworkState: network.NewInMemoryNetworkState()}, nil)
+	if err != nil {
+		t.Fatalf("buildAgent: %v", err)
+	}
+	defer agentBS.teardown()
+	if querySettingsIndex(t, requireProxyServer(t, agentBS.listeners[0]).Hooks.(*plugin.PluginChain)) >= 0 {
+		t.Fatal("agent mode must not wire querysettings")
+	}
+}
+
+func TestBuildServer_TableReferenceProbeRunsForEveryRewriter(t *testing.T) {
+	t.Run("an unprobed factory is refused without storage integrity", func(t *testing.T) {
+		_, err := buildServer(Options{Config: minimalServerCfg(t), NetworkState: network.NewInMemoryNetworkState(), Rewriter: unprobedRewriterFactory{}}, nil)
+		if err == nil || !strings.Contains(err.Error(), "TableReferenceProbeFactory") {
+			t.Fatalf("err = %v", err)
+		}
+	})
+	for _, si := range []bool{false, true} {
+		t.Run(fmt.Sprintf("a failing probe refuses startup (si=%v)", si), func(t *testing.T) {
+			cfg := minimalServerCfg(t)
+			if si {
+				cfg.StorageIntegrity.Tables = []string{"tenant.events"}
+			}
+			_, err := buildServer(Options{Config: cfg, NetworkState: network.NewInMemoryNetworkState(),
+				Rewriter: policyProbeStubRewriterFactory{policyErr: errors.New("rewriter table-reference probe (engine=grpc probe=x): code=Success")}}, nil)
+			if err == nil || !strings.Contains(err.Error(), "rewriter table-reference probe") {
+				t.Fatalf("err = %v", err)
+			}
+		})
+	}
+	t.Run("a passing probe runs once with a bounded context", func(t *testing.T) {
+		calls, deadline := 0, false
+		bs, err := buildServer(Options{Config: minimalServerCfg(t), NetworkState: network.NewInMemoryNetworkState(),
+			Rewriter: policyProbeStubRewriterFactory{calls: &calls, deadlineObserved: &deadline}}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bs.teardown()
+		if calls != 1 || !deadline {
+			t.Fatalf("calls = %d, deadline = %v", calls, deadline)
+		}
+	})
+}

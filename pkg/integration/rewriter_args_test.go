@@ -112,3 +112,48 @@ func TestRewriter_PassesDynamicArgs(t *testing.T) {
 			ctx, chEnv.Database)
 	}
 }
+
+// TestRewriter_PhysicalHelloDatabaseSendsNoLogicalContext pins the request
+// side of the C1 fix independent of the engine: a session whose ClientHello
+// database is rewriter.physical_database (the Sentio driver's DSN database)
+// sends an empty upstream_logical_database_in_context while the physical
+// database stays in protected_databases and the session's physical context.
+func TestRewriter_PhysicalHelloDatabaseSendsNoLogicalContext(t *testing.T) {
+	signer, err := auth.NewRelaySigner(authTestKey1)
+	if err != nil {
+		t.Fatalf("NewRelaySigner: %v", err)
+	}
+	const phys = "phys_hello"
+	seedDB := openConnNoDB(t, chEnv.Addr)
+	if err := seedDB.Exec(context.Background(), "CREATE DATABASE IF NOT EXISTS "+phys); err != nil {
+		t.Fatalf("seed physical database %s: %v", phys, err)
+	}
+	t.Cleanup(func() { _ = seedDB.Exec(context.Background(), "DROP DATABASE IF EXISTS "+phys) })
+
+	rewriterOpt, mock := testenv.WithRewriterMock(t)
+	proxy := testenv.StartServerProxy(t, chEnv.Addr,
+		rewriterOpt,
+		authProxyConfig([]string{signer.Address()}, false),
+		testenv.WithConfigMutator(func(cfg *config.Config) { cfg.Rewriter.PhysicalDatabase = phys }),
+		testenv.WithDatabasePermission(signer.Address(), chEnv.Database, registry.DbAuthOwner),
+	)
+	conn := openSignedConnPinnedDB(t, proxy.Addr, signer, phys)
+	var v uint8
+	if err := conn.QueryRow(context.Background(), "SELECT 1").Scan(&v); err != nil {
+		t.Fatalf("signed SELECT 1: %v", err)
+	}
+	args := mock.SeenDynamicArgs()
+	if len(args) == 0 || args[0] == nil {
+		t.Fatal("rewriter mock received no dynamic_args")
+	}
+	got := args[0]
+	if ctx := got.GetUpstreamLogicalDatabaseInContext(); ctx != "" {
+		t.Errorf("upstream_logical_database_in_context = %q, want empty (the physical database is no logical context)", ctx)
+	}
+	if ctx := got.GetUpstreamPhysicalDatabaseInContext(); ctx != phys {
+		t.Errorf("upstream_physical_database_in_context = %q, want %q", ctx, phys)
+	}
+	if p := got.GetProtectedDatabases(); len(p) == 0 || p[0] != phys {
+		t.Errorf("protected_databases = %v, want %q first", p, phys)
+	}
+}
