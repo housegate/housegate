@@ -19,7 +19,7 @@ var ErrNotInlineValues = errors.New("not an inline VALUES insert")
 
 // InlineValuesInsert is a decoded inline INSERT ... VALUES statement. Columns
 // is nil when the statement has no column list. Rows is the verbatim text
-// after the VALUES keyword with surrounding whitespace and at most one
+// after the VALUES keyword with surrounding ASCII whitespace and at most one
 // trailing ';' removed; the evaluator sends it byte for byte, so it must never
 // be normalized here.
 type InlineValuesInsert struct {
@@ -50,7 +50,7 @@ func ParseInlineValuesInsert(sql string) (InlineValuesInsert, error) {
 	if err := rejectInlineValuesSettings(sql); err != nil {
 		return InlineValuesInsert{}, err
 	}
-	rows, err := trimTrailingStatement(strings.TrimSpace(sql[end:]))
+	rows, err := trimTrailingStatement(trimInlineSpace(sql[end:]))
 	if err != nil {
 		return InlineValuesInsert{}, err
 	}
@@ -166,6 +166,18 @@ func inlinePrefixErr(reason string, offset int) error {
 	return fmt.Errorf("%s%s at SQL byte offset %d", InlineValuesErrorPrefix, reason, offset)
 }
 
+// inlineASCIISpace is the whitespace trimmed around the rows text and after
+// its ';'. It is ASCII only on purpose: measured on ClickHouse 26.8, U+1680
+// after VALUES is a syntax error and the Values input format refuses every
+// non-ASCII space after the last row, so strings.TrimSpace would accept
+// statements ClickHouse rejects. Untrimmed non-ASCII bytes reach
+// ValuesClosure, which refuses them outside string literals.
+const inlineASCIISpace = " \t\n\r\f\v"
+
+func trimInlineSpace(s string) string {
+	return strings.Trim(s, inlineASCIISpace)
+}
+
 // trimTrailingStatement removes at most one terminating ';' and refuses text
 // after it (D1: multi-statement input is out of scope). Single-quoted spans are
 // skipped permissively so a ';' inside a literal stays data; the literal's own
@@ -192,10 +204,10 @@ func trimTrailingStatement(rows string) (string, error) {
 			}
 			i = j
 		case ';':
-			if strings.TrimSpace(rows[i+1:]) != "" {
+			if trimInlineSpace(rows[i+1:]) != "" {
 				return "", fmt.Errorf("%smulti-statement input is not supported; text follows the ';' at byte offset %d", InlineValuesErrorPrefix, i)
 			}
-			return strings.TrimSpace(rows[:i]), nil
+			return trimInlineSpace(rows[:i]), nil
 		default:
 			i++
 		}
@@ -237,16 +249,21 @@ var refusedValuesKeywords = map[string]bool{
 //
 // Refused with a named error and its byte offset in rows: comments ('--', '#',
 // '/*' and '//', which ClickHouse also reads as a line comment), quoted
-// identifiers ('`' and '"'), heredocs ('$'), query parameters ('{'), every name
-// in refusedValuesKeywords, a word not immediately followed by '(' that is
-// neither true nor false, a call whose lowercased name
-// IsKnownNondeterministicName or IsServerStateFunctionName accepts, and any
-// other byte, including ';', '[', ']', '?', '@' and ':'.
+// identifiers ('`' and '"'), heredocs ('$'), query parameters ('{'), any byte
+// >= 0x80 outside a string literal, every name in refusedValuesKeywords, a word
+// not immediately followed by '(' that is neither true nor false, a call whose
+// lowercased name IsKnownNondeterministicName or IsServerStateFunctionName
+// accepts, and any other byte, including ';', '[', ']', '?', '@' and ':'.
 //
-// The one scanner here that models heredocs and {name:Type} parameters is
-// package-private in pkg/plugins/sireserved, and a core package cannot import a
-// plugin package, so this lexer recognises both itself: it refuses on the first
-// '$' or '{' outside a string literal rather than delimiting their bodies.
+// pkg/sqlsurface models heredocs, {name:Type} parameters and ClickHouse's
+// comment forms for the proxy-side guards, but this gate never needs their
+// extents: refusing the opener outright is never less safe than delimiting the
+// span. That is also why it agrees with ClickHouse 26.8's lexer on the cases
+// sqlsurface refuses: every '#' is refused, not only the "# " and "#!"
+// comment openers; every '$' is refused, including one directly after an
+// identifier byte, where ClickHouse continues the identifier (x$$, a$b)
+// instead of opening a heredoc; and every non-ASCII byte outside a literal is
+// refused, whether ClickHouse would read it as Unicode whitespace or reject it.
 func ValuesClosure(rows string) error {
 	if strings.TrimSpace(rows) == "" {
 		return fmt.Errorf("%sthe VALUES row list is empty", InlineValuesErrorPrefix)
@@ -271,6 +288,8 @@ func ValuesClosure(rows string) error {
 			return closureErr("heredoc string literals are not accepted", i)
 		case c == '{':
 			return closureErr("query parameters are not accepted", i)
+		case c >= 0x80:
+			return closureErr("non-ASCII byte outside a string literal is not accepted", i)
 		}
 
 		if depth == 0 {
