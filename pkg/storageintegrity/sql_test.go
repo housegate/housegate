@@ -118,6 +118,42 @@ func TestParseInsertTargetHandlesTableCommentsAndStructuredQuotedNames(t *testin
 	}
 }
 
+// ClickHouse nests block comments, so it reads the first statement's target as
+// db.b; a first-"*/" scanner would bind db.a. Only "# " and "#!" open a
+// comment; ClickHouse refuses any other #.
+func TestParseInsertTargetRefusesCommentsClickHouseLexesDifferently(t *testing.T) {
+	for _, tc := range []struct {
+		sql  string
+		want error
+	}{
+		{"INSERT INTO /* /* */ db.a */ db.b FORMAT Native", ErrNestedBlockComment},
+		{"INSERT INTO db.b /* x /*/ FORMAT Native", ErrNestedBlockComment},
+		{"INSERT INTO #x\n db.a FORMAT Native", ErrBareHash},
+		{"USE #x\n db", ErrBareHash},
+	} {
+		var err error
+		if strings.HasPrefix(tc.sql, "USE") {
+			_, _, err = ParseUseDatabaseStrict(tc.sql)
+		} else {
+			_, err = ParseInsertTarget(tc.sql)
+		}
+		if !errors.Is(err, tc.want) {
+			t.Fatalf("%q: %v, want %v", tc.sql, err, tc.want)
+		}
+	}
+	for _, sql := range []string{
+		"INSERT INTO # c\n db.b FORMAT Native",
+		"INSERT INTO #!c\n db.b FORMAT Native",
+		"INSERT INTO /* / * */ db.b FORMAT Native",
+		"INSERT INTO -- /*\n db.b FORMAT Native",
+	} {
+		target, err := ParseInsertTarget(sql)
+		if err != nil || target.Database != "db" || target.Table != "b" {
+			t.Fatalf("%q: %#v, %v, want db.b", sql, target, err)
+		}
+	}
+}
+
 func TestParseInsertTargetRejectsTableFunction(t *testing.T) {
 	for _, sql := range []string{
 		"INSERT INTO FUNCTION file('x', Native) FORMAT Native",

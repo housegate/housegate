@@ -19,6 +19,15 @@ var (
 	// doubled quote escaping and fails closed rather than risk signing a
 	// different structured target from the table ClickHouse executes against.
 	ErrBackslashEscapedIdentifier = errors.New("storage_integrity: backslash-escaped quoted identifiers are not supported on the SI lane")
+	// ErrNestedBlockComment rejects a block comment that opens another one.
+	// ClickHouse nests block comments, so "/* /* */ x */" is one comment there
+	// while a first-"*/" scanner resumes at x; measured on 26.8, that let
+	// INSERT INTO t /* /* */ (a) -- */ (b) VALUES (7) write b while the
+	// scanner read a. The SI lane refuses rather than model nesting.
+	ErrNestedBlockComment = errors.New("storage_integrity: nested block comments are not supported on the SI lane")
+	// ErrBareHash rejects a # that opens no ClickHouse comment: only "# " and
+	// "#!" do, and ClickHouse refuses any other # as a syntax error.
+	ErrBareHash = errors.New("storage_integrity: # that is not followed by a space or ! opens no ClickHouse comment")
 )
 
 // InsertTarget is the decoded, structured target of an INSERT. Database and
@@ -356,15 +365,16 @@ func (s *storageScanner) skip() error {
 		case isStorageSpace(s.sql[s.pos]):
 			s.pos++
 		case s.sql[s.pos] == '#':
-			s.skipLineComment(1)
+			if !strings.HasPrefix(s.sql[s.pos:], "# ") && !strings.HasPrefix(s.sql[s.pos:], "#!") {
+				return fmt.Errorf("%w at SQL byte %d", ErrBareHash, s.pos)
+			}
+			s.skipLineComment(2)
 		case s.pos+1 < len(s.sql) && s.sql[s.pos] == '-' && s.sql[s.pos+1] == '-':
 			s.skipLineComment(2)
 		case s.pos+1 < len(s.sql) && s.sql[s.pos] == '/' && s.sql[s.pos+1] == '*':
-			end := strings.Index(s.sql[s.pos+2:], "*/")
-			if end < 0 {
-				return fmt.Errorf("storage_integrity: unterminated SQL block comment")
+			if err := s.skipBlockComment(); err != nil {
+				return err
 			}
-			s.pos += 2 + end + 2
 		default:
 			return nil
 		}
@@ -372,6 +382,26 @@ func (s *storageScanner) skip() error {
 	return nil
 }
 
+// skipBlockComment consumes the block comment at s.pos in ClickHouse's own
+// scan order -- an opener is matched before a closer, so "/*/" opens -- and
+// refuses the first nested opener instead of tracking depth.
+func (s *storageScanner) skipBlockComment() error {
+	start := s.pos
+	for i := s.pos + 2; i+1 < len(s.sql); i++ {
+		switch {
+		case s.sql[i] == '/' && s.sql[i+1] == '*':
+			return fmt.Errorf("%w at SQL byte %d", ErrNestedBlockComment, i)
+		case s.sql[i] == '*' && s.sql[i+1] == '/':
+			s.pos = i + 2
+			return nil
+		}
+	}
+	return fmt.Errorf("storage_integrity: unterminated SQL block comment at SQL byte %d", start)
+}
+
+// skipLineComment consumes a line comment through, not including, its \n.
+// Measured on ClickHouse 26.8, \n is the only terminator: \r, \v, \f, NUL
+// and Unicode line separators are comment text.
 func (s *storageScanner) skipLineComment(prefix int) {
 	s.pos += prefix
 	for s.pos < len(s.sql) && s.sql[s.pos] != '\n' {

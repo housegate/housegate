@@ -195,3 +195,106 @@ func TestValuesClosurePinsFunctionNamePoliciesCaseInsensitively(t *testing.T) {
 		}
 	}
 }
+
+// inlineLaneVerdict is everything the agent checks lexically before the rows
+// text reaches ClickHouse: the statement parse, then the closure gate.
+func inlineLaneVerdict(sql string) (InlineValuesInsert, error) {
+	parsed, err := ParseInlineValuesInsert(sql)
+	if err != nil {
+		return parsed, err
+	}
+	return parsed, ValuesClosure(parsed.Rows)
+}
+
+// TestInlineValuesLaneAgreesWithClickHouseLexer pins the lane against
+// ClickHouse 26.8's lexer, measured with clickhouse local on
+// "CREATE TABLE t (a Int32, b Int32) ENGINE=Memory" and each statement below.
+// The agent re-renders the target and column list it parsed, so any statement
+// it reads differently from ClickHouse must be refused: accepting it would sign
+// and insert into a target or columns the client's text does not name.
+func TestInlineValuesLaneAgreesWithClickHouseLexer(t *testing.T) {
+	refuse := []struct{ name, sql, want string }{
+		// ClickHouse nests block comments: it reads this statement as
+		// INSERT INTO t (b) VALUES (7) and writes b = 7.
+		{"nested block comment hides a column list", "INSERT INTO db.t /* /* */ (a) -- */ (b)\n VALUES (7)", "nested block comment"},
+		// "/*/" opens a nested comment in ClickHouse, which then never closes.
+		{"nested opener overlapping the close", "INSERT INTO db.t /* x /*/ (a) VALUES (1)", "nested block comment"},
+		{"nested block comment before the target", "INSERT INTO /* /* */ db.a */ db.b VALUES (1)", "nested block comment"},
+		// ClickHouse reads only "# " and "#!" as comments; any other # is a
+		// syntax error ("Unrecognized token ... (#)").
+		{"bare hash", "INSERT INTO db.t #x\n (a) VALUES (7)", "#"},
+		{"hash before tab", "INSERT INTO db.t #\t\n(a) VALUES (1)", "#"},
+		{"hash at end of input", "INSERT INTO db.t (a) VALUES (1) #", "#"},
+		// U+1680 is whitespace to Go's strings.TrimSpace but a syntax error
+		// to ClickHouse ("expected '(' before: ' (7)'").
+		{"U+1680 after VALUES", "INSERT INTO db.t VALUES (1)", "non-ASCII byte"},
+		// ClickHouse's Values input format skips only ASCII whitespace after
+		// the last row: every trailing non-ASCII space fails to parse.
+		{"trailing U+00A0", "INSERT INTO db.t VALUES (1) ", "non-ASCII byte"},
+		{"trailing U+3000", "INSERT INTO db.t VALUES (1)　", "non-ASCII byte"},
+		{"trailing U+1680 before semicolon", "INSERT INTO db.t VALUES (1) ;", "non-ASCII byte"},
+		{"U+1680 after semicolon", "INSERT INTO db.t VALUES (1); ", "multi-statement"},
+		// "//" is a ClickHouse line comment; the lane does not model it.
+		{"double-slash comment before column list", "INSERT INTO db.t // x\n(b) VALUES (1)", "not accepted"},
+		// A $ after an identifier byte is part of that identifier in
+		// ClickHouse (t$x, Values$$), never a heredoc opener.
+		{"dollar after table name", "INSERT INTO db.t$x VALUES (1)", "not accepted"},
+		{"dollar after database name", "INSERT INTO db$x.t VALUES (1)", "not accepted"},
+		{"dollar inside column name", "INSERT INTO db.t (a$b) VALUES (1)", "expected ',' or ')'"},
+		{"dollar after VALUES", "INSERT INTO db.t VALUES$$ (1) $$", "heredoc"},
+		{"dollar after FORMAT Values", "INSERT INTO db.t FORMAT Values$t$ (1)", "heredoc"},
+		// Non-ASCII outside quotes is Unicode whitespace or a syntax error
+		// in ClickHouse; the prefix scanner models neither.
+		{"U+00A0 in the prefix", "INSERT INTO db.t VALUES (1)", "table target"},
+		{"U+3000 before column list", "INSERT INTO db.t　(a) VALUES (1)", "not accepted"},
+		{"non-ASCII identifier byte", "INSERT INTO db.tä VALUES (1)", "not accepted"},
+		{"U+00A0 inside a row", "INSERT INTO db.t VALUES (1, 2)", "non-ASCII byte"},
+	}
+	for _, tc := range refuse {
+		t.Run("refuse "+tc.name, func(t *testing.T) {
+			parsed, err := inlineLaneVerdict(tc.sql)
+			if err == nil {
+				t.Fatalf("lane accepted %q as target %+v columns %v rows %q; ClickHouse reads it differently", tc.sql, parsed.Target, parsed.Columns, parsed.Rows)
+			}
+			if errors.Is(err, ErrNotInlineValues) || !strings.HasPrefix(err.Error(), InlineValuesErrorPrefix) || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want a named %q-prefixed refusal containing %q", err, InlineValuesErrorPrefix, tc.want)
+			}
+		})
+	}
+
+	// Line comments end only at \n: \r, \v, \f, NUL, U+0085 and U+2028 are
+	// comment text, so ClickHouse reads column b in every case.
+	for _, sep := range []string{"\r", "\v", "\f", "\x00", "\u0085", " "} {
+		for _, marker := range []string{"--", "# ", "#!"} {
+			sql := "INSERT INTO db.t " + marker + " x" + sep + "(a)\n(b) VALUES (1)"
+			t.Run(fmt.Sprintf("line comment %q ends only at newline after %q", marker, sep), func(t *testing.T) {
+				parsed, err := inlineLaneVerdict(sql)
+				if err != nil {
+					t.Fatalf("lane refused %q: %v", sql, err)
+				}
+				if strings.Join(parsed.Columns, ",") != "b" || parsed.Rows != "(1)" {
+					t.Fatalf("parsed %+v, want columns [b] rows (1)", parsed)
+				}
+			})
+		}
+	}
+
+	accept := []struct{ name, sql, wantRows string }{
+		{"single block comment", "INSERT INTO db.t /* a */ VALUES (1)", "(1)"},
+		{"block comment with a lone slash and star", "INSERT INTO db.t /* / * */ VALUES (1)", "(1)"},
+		{"empty block comment", "INSERT INTO db.t /**/ VALUES (1)", "(1)"},
+		{"ASCII whitespace around rows", "INSERT INTO db.t VALUES\t\v(1)\v\f;\r\n", "(1)"},
+		{"non-ASCII inside a string literal", "INSERT INTO db.t VALUES ('  #x/*$$')", "('  #x/*$$')"},
+	}
+	for _, tc := range accept {
+		t.Run("accept "+tc.name, func(t *testing.T) {
+			parsed, err := inlineLaneVerdict(tc.sql)
+			if err != nil {
+				t.Fatalf("lane refused %q: %v", tc.sql, err)
+			}
+			if parsed.Rows != tc.wantRows {
+				t.Fatalf("rows = %q, want %q", parsed.Rows, tc.wantRows)
+			}
+		})
+	}
+}
