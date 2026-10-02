@@ -64,9 +64,9 @@ const StorageIntegrityProbeExpectedSQL = "SELECT name, type, default_kind AS def
 // alone — this text is only what a startup refusal tells the operator to
 // deploy. Contract V2 shipped in rewriter-go v0.13.0 / rewriter-grpc v0.15.0,
 // but every server now also runs the table-reference probe, whose floor is
-// rewriter-go v0.16.0 / rewriter-grpc v0.16.0; naming the older floor here
+// rewriter-go v0.17.0 / rewriter-grpc v0.17.0; naming the older floor here
 // would send an operator to a build the next startup refuses.
-const storageIntegrityProbeRequiredBuild = "rewriter-go >= v0.16.0 or rewriter-grpc >= v0.16.0 (storage-integrity contract V2)"
+const storageIntegrityProbeRequiredBuild = "rewriter-go >= v0.17.0 or rewriter-grpc >= v0.17.0 (storage-integrity contract V2)"
 
 // StorageIntegrityProbeFactory is a Factory whose concrete engine behavior can
 // be verified at startup. Contract V2 alone cannot distinguish patch builds.
@@ -284,8 +284,10 @@ func checkProbeAnswer(label, engine string, probe buildProbe, wantAck pb.Storage
 
 // TableReferenceProbeRequiredBuild is what a failed table-reference probe tells
 // the operator to deploy. rewriter-go v0.15.0 fails the analyzer-off and
-// engine-argument cases.
-const TableReferenceProbeRequiredBuild = "rewriter-go >= v0.16.0 or rewriter-grpc >= v0.16.0 (table-reference policy, spec 2026-09-26)"
+// engine-argument cases; rewriter-go v0.16.0 fails driver-function-spelling
+// and driver-view-comment; rewriter-grpc v0.16.0 fails
+// driver-grouped-literal-tuple.
+const TableReferenceProbeRequiredBuild = "rewriter-go >= v0.17.0 or rewriter-grpc >= v0.17.0 (table-reference policy, spec 2026-09-26, and Sentio-driver compatibility)"
 
 // TableReferenceProbeFactory is a Factory whose engine can prove the spec
 // 2026-09-26 table-reference policy at startup. buildServer requires it of
@@ -317,9 +319,11 @@ func rejectedProbe(name, sql string, code pb.RewriteCode, message string) buildP
 }
 
 // tableReferenceProbes are the policy cases (spec 2026-09-26 §9.5 with plan
-// deviations D1–D3). Every answer was measured on 2026-10-01 for this exact
-// request: rewriter-go v0.16.0 through the native FFI, and rewriter-grpc
-// v0.16.0 (source c24ed33) through RewriterServiceImpl::Rewrite. Both
+// deviations D1–D3) and the Sentio-driver compatibility cases. Every answer
+// was re-measured on 2026-10-02 for this exact request: rewriter-go v0.17.0
+// through the native FFI (library v0.17.0), and rewriter-grpc v0.17.0
+// (source b56ae37) through its gRPC RewriterService; the first twelve
+// answers are unchanged from the 2026-10-01 v0.16.0 measurement. Both
 // engines echo the input SQL on a rejection and acknowledge no contract
 // without StorageIntegrityArgs. Changing a pin needs a re-measurement against
 // both engines; never loosen the comparison to make one pass.
@@ -366,6 +370,41 @@ var tableReferenceProbes = []buildProbe{
 	// Spec §13; rewriter-go v0.15.0 answers Success.
 	rejectedProbe("engine-argument-read-refused", "CREATE TABLE db1.n (d Date, n UInt8) ENGINE = MergeTree(d, (SELECT max(n) FROM db1.o), 8192)",
 		pb.RewriteCode_UnsupportedStatement, "statement is not supported"),
+	// Sentio-driver compatibility (measured 2026-10-02). The indexer driver
+	// sends startsWith(...) before every lightweight delete; rewriter-go
+	// v0.16.0 refuses it (Polyglot respells it STARTS_WITH and the drop gate
+	// refuses the change: UnsupportedStatement "statement is not supported").
+	{
+		name: "driver-function-spelling", sql: "SELECT a FROM db1.o WHERE startsWith(a, 'x')",
+		code: pb.RewriteCode_Success, statementType: pb.StatementType_STATEMENT_TYPE_SELECT, message: "success",
+		sqlAfterByEngine: map[string]string{
+			EngineNative: `SELECT a FROM phys."db1.o" "db1.o" WHERE startsWith(a, 'x')`,
+			EngineGRPC:   "SELECT a FROM phys.`db1.o` AS `db1.o` WHERE startsWith(a, 'x')",
+		},
+	},
+	// Every driver entity schema is a parenthesised view with column comments
+	// and a trailing COMMENT; rewriter-go v0.16.0 refuses it (Polyglot drops
+	// both comments: UnsupportedStatement "statement is not supported").
+	{
+		name: "driver-view-comment", sql: "CREATE VIEW db1.v (`a` String COMMENT 'c') AS (SELECT a FROM db1.o) COMMENT 'v'",
+		code: pb.RewriteCode_Success, statementType: pb.StatementType_STATEMENT_TYPE_CREATE_VIEW, message: "success",
+		sqlAfterByEngine: map[string]string{
+			EngineNative: `CREATE VIEW phys."db1.v" ("a" String COMMENT 'c') AS (SELECT a FROM phys."db1.o" "db1.o") COMMENT 'v'`,
+			EngineGRPC:   "CREATE VIEW phys.`db1.v` (`a` String COMMENT 'c') COMMENT 'v' AS SELECT a FROM phys.`db1.o` AS `db1.o`",
+		},
+	},
+	// The driver filters a Tuple column with a single grouped literal tuple
+	// (x IN ((1, 0, '0'))); rewriter-grpc v0.16.0 refuses every such fold
+	// (its TableRefFidelity.MeaningChangingLiteralFoldsAreRefused pins this
+	// exact SQL as UnsupportedStatement "statement is not supported").
+	{
+		name: "driver-grouped-literal-tuple", sql: "SELECT a FROM db1.o WHERE a IN ((1, 2))",
+		code: pb.RewriteCode_Success, statementType: pb.StatementType_STATEMENT_TYPE_SELECT, message: "success",
+		sqlAfterByEngine: map[string]string{
+			EngineNative: `SELECT a FROM phys."db1.o" "db1.o" WHERE a IN ((1, 2))`,
+			EngineGRPC:   "SELECT a FROM phys.`db1.o` AS `db1.o` WHERE a IN ((1, 2))",
+		},
+	},
 }
 
 // ProbeTableReferencePolicy issues the fixed policy cases (spec 2026-09-26

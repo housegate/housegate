@@ -65,7 +65,7 @@ func TestNativeEngineSmoke(t *testing.T) {
 // table-reference policy probe against the pinned native engine. The scripted
 // probe tests prove the probes' logic; this proves the engine the pin actually
 // resolves to answers every case, including the Spec N tagged-heredoc and the
-// v0.16.0 table-reference discriminators. Without it the floor in go.mod and
+// v0.16.0 / v0.17.0 table-reference discriminators. Without it the floor in go.mod and
 // ci.yml would be asserted only against a fake.
 func TestNativeEngineProbeSmoke(t *testing.T) {
 	if os.Getenv("POLYGLOT_SQL_FFI_PATH") == "" {

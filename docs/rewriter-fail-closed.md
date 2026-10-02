@@ -58,7 +58,7 @@ Notes on shapes that are accepted but still do not work:
 
 The client sees an Exception such as `rewriter rejected SQL (code=UnsupportedStatement): statement is not supported`. Re-check this list whenever the engine or its pin moves; the exact set differs by engine and build.
 
-This list is a dated record of the fail-closed change against native v0.13.0 and C++ 0.11.0. HouseGate now requires rewriter-go v0.16.0 / rewriter-grpc v0.16.0, whose table-reference policy refuses more of the shapes listed as accepted above (for example `system` tables outside the allowlist such as `system.processes` and `SHOW PROCESSLIST`, table functions on a tenant's own tables such as `merge('db1', …)`, and engines such as `Buffer` or `Distributed`), and the table-reference guard and Query-packet settings check refuse some statements before the rewriter sees them. See [table-reference-hardening.md](table-reference-hardening.md) and spec 2026-09-26 §12.
+This list is a dated record of the fail-closed change against native v0.13.0 and C++ 0.11.0. HouseGate now requires rewriter-go v0.17.0 / rewriter-grpc v0.17.0, whose table-reference policy refuses more of the shapes listed as accepted above (for example `system` tables outside the allowlist such as `system.processes` and `SHOW PROCESSLIST`, table functions on a tenant's own tables such as `merge('db1', …)`, and engines such as `Buffer` or `Distributed`), and the table-reference guard and Query-packet settings check refuse some statements before the rewriter sees them. See [table-reference-hardening.md](table-reference-hardening.md) and spec 2026-09-26 §12.
 
 ## `rewriter.fail_open_on_unavailable`
 

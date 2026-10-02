@@ -20,7 +20,7 @@
 - The guard's five rules and their names are exactly `reserved_name`, `physical_database`, `carrier_callable`, `identifier_placeholder`, `escaped_identifier` (spec §9.2); the error message shape is `table-reference guard: <rule>: <detail>; the rewriter applies the same policy`.
 - The guard never runs on maintenance, platform-operator, peer-trusted or forwarded-from-peer sessions; it runs on driver sessions.
 - The protected list sent to the engine is `[rewriter.physical_database] ∪ sitable.ReservedDatabases()`; nothing lists `hg_*` names by hand.
-- Minimum engine builds: rewriter-go v0.16.0 (native), rewriter-grpc v0.16.0; the probe's failure text names them.
+- Minimum engine builds: rewriter-go v0.16.0 (native), rewriter-grpc v0.16.0; the probe's failure text names them. (Amended 2026-10-02, spec §14 D9: now rewriter-go v0.17.0 / rewriter-grpc v0.17.0.)
 - Follow CLAUDE.md conventions: `pkg/log` structured logging, `fmt.Errorf("…: %w")`, English comments, no hard-wrapped Markdown, gazelle-managed `BUILD.bazel`.
 
 ## Review Focus
