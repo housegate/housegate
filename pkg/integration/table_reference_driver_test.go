@@ -89,27 +89,17 @@ func TestTableReference_SentioDriverPhysicalHelloDatabase(t *testing.T) {
 	withSettings := func(s clickhouse.Settings) context.Context {
 		return clickhouse.Context(ctx, clickhouse.WithSettings(s))
 	}
-	// run executes one driver statement. A statement the native engine
-	// v0.16.0 cannot parse (nativeGap) may be refused, but only with
-	// UnsupportedStatement: never by the protected-database context of C1,
-	// never by the guard and never by querysettings.
-	run := func(ctx context.Context, nativeGap bool, sql string, args ...any) error {
-		t.Helper()
-		err := driver.Exec(ctx, sql, args...)
-		switch {
-		case err == nil:
-		case !nativeGap:
-			t.Fatalf("driver %s: %v", sql, err)
-		case !strings.Contains(err.Error(), "code=UnsupportedStatement"):
-			t.Fatalf("driver %s: %v (only an engine parse gap may refuse this shape)", sql, err)
-		default:
-			t.Logf("native v0.16.0 parse gap: %s: %v", sql, err)
-		}
-		return err
-	}
+	// exec runs one driver statement, which must succeed. The native engine
+	// v0.16.0 refused four of these shapes as UnsupportedStatement (the
+	// cluster probe's keyword column under NOT LIKE, the view and
+	// materialized-view trailing COMMENT, and startsWith); rewriter-go
+	// v0.17.0 answers every one Success, and the startup probe now refuses an
+	// engine that does not.
 	exec := func(ctx context.Context, sql string, args ...any) {
 		t.Helper()
-		_ = run(ctx, false, sql, args...)
+		if err := driver.Exec(ctx, sql, args...); err != nil {
+			t.Fatalf("driver %s: %v", sql, err)
+		}
 	}
 	count := func(ctx context.Context, sql string, args ...any) uint64 {
 		t.Helper()
@@ -125,8 +115,9 @@ func TestTableReference_SentioDriverPhysicalHelloDatabase(t *testing.T) {
 	agg := "`" + logic + "`.`agg`"
 
 	// clickhousemanager helper.GetClusterStmt (chx.New → conn.GetCluster).
-	// The driver swallows a failure here and runs without a cluster.
-	_ = run(ctx, true, "SELECT cluster FROM ("+
+	// The driver swallows a failure here and would silently run without a
+	// cluster, so the test requires it to succeed.
+	exec(ctx, "SELECT cluster FROM ("+
 		"SELECT cluster, count(*) AS rs, SUM(host_address = '127.0.0.1') AS cl "+
 		"FROM system.clusters "+
 		"WHERE cluster not like 'all-%' "+
@@ -143,15 +134,18 @@ func TestTableReference_SentioDriverPhysicalHelloDatabase(t *testing.T) {
 		"PARTITION BY `chain` ORDER BY (`chain`,`id`) "+
 		"SETTINGS enable_block_number_column=1,enable_block_offset_column=1 COMMENT 'events'")
 	exec(ctx, "CREATE TABLE "+agg+" (`chain` String, `n` UInt64) ENGINE = MergeTree() ORDER BY (`chain`) COMMENT 'agg'")
-	// chx.buildCreateViewSQL / buildCreateMaterializedViewSQL end in COMMENT,
-	// which the native engine does not model; the same views without it must
-	// pass.
-	if run(ctx, true, "CREATE OR REPLACE VIEW `"+logic+"`.`v_events` AS (SELECT `id`, `v` FROM "+full+") COMMENT 'view'") != nil {
-		exec(ctx, "CREATE OR REPLACE VIEW `"+logic+"`.`v_events` AS (SELECT `id`, `v` FROM "+full+")")
+	// chx.buildCreateViewSQL / buildCreateMaterializedViewSQL: parenthesised
+	// bodies, a COMMENT on every column and a trailing COMMENT.
+	exec(ctx, "CREATE OR REPLACE VIEW `"+logic+"`.`v_events` (`id` UInt64 COMMENT 'id', `v` UInt64 COMMENT 'v') "+
+		"AS (SELECT `id`, `v` FROM "+full+") COMMENT 'view'")
+	exec(ctx, "CREATE MATERIALIZED VIEW `"+logic+"`.`mv_agg` TO "+agg+" AS (SELECT `chain`, count() AS `n` FROM "+full+" GROUP BY `chain`) COMMENT 'mv'")
+	var viewComment string
+	if err := driver.QueryRow(ctx, "SELECT comment FROM system.tables WHERE database = ? AND name = ?", phys, prefix+"v_events").Scan(&viewComment); err != nil || viewComment != "view" {
+		t.Fatalf("view comment = %q, %v; want the trailing COMMENT kept", viewComment, err)
 	}
-	mv := "CREATE MATERIALIZED VIEW `" + logic + "`.`mv_agg` TO " + agg + " AS (SELECT `chain`, count() AS `n` FROM " + full + " GROUP BY `chain`)"
-	if run(ctx, true, mv+" COMMENT 'mv'") != nil {
-		exec(ctx, mv)
+	var columnComment string
+	if err := driver.QueryRow(ctx, "SELECT comment FROM system.columns WHERE database = ? AND table = ? AND name = 'v'", phys, prefix+"v_events").Scan(&columnComment); err != nil || columnComment != "v" {
+		t.Fatalf("view column comment = %q, %v; want the column COMMENT kept", columnComment, err)
 	}
 	exec(ctx, "ALTER TABLE "+full+" ADD COLUMN `note` String DEFAULT ''")
 	exec(ctx, "ALTER TABLE "+full+" COMMENT COLUMN `note` 'note'")
@@ -160,15 +154,15 @@ func TestTableReference_SentioDriverPhysicalHelloDatabase(t *testing.T) {
 	exec(ctx, "ALTER TABLE "+full+" MODIFY COMMENT 'events v2'")
 
 	// chx metadata reads (operator.go load / loadSimple), the physical name
-	// bound as a string literal: LIKE for a prefix (its escaped '_' is a
-	// native parse gap), '=' for one table (LoadOne).
+	// bound as a string literal: LIKE for a prefix (its '_' escaped), '=' for
+	// one table (LoadOne).
 	for _, q := range []string{
 		"SELECT name, engine, comment FROM system.tables WHERE database = ? AND name LIKE ? AND is_temporary = 0",
 		"SELECT table, name, type, default_expression, comment, compression_codec FROM system.columns WHERE database = ? AND table LIKE ? ORDER BY table, position",
 		"SELECT table, name, type_full, expr, granularity FROM system.data_skipping_indices WHERE database = ? AND table LIKE ? ORDER BY table, name",
 		"SELECT table, name, query FROM system.projections WHERE database = ? AND table LIKE ? ORDER BY table, name",
 	} {
-		_ = run(ctx, true, q, phys, likeArg)
+		exec(ctx, q, phys, likeArg)
 		exec(ctx, strings.Replace(q, " LIKE ", " = ", 1), phys, prefix+"events")
 	}
 	var name, engineFull string
@@ -199,10 +193,9 @@ func TestTableReference_SentioDriverPhysicalHelloDatabase(t *testing.T) {
 		t.Fatalf("agg sum = %d, want 8 (4 from the materialized view + 4 from INSERT … SELECT)", n)
 	}
 
-	// chx deleteRows: the patch-part probe (startsWith is a native parse gap),
-	// count, lightweight DELETE (LightDeleteCtx), heavyweight ALTER … DELETE
+	// chx deleteRows: the patch-part probe (startsWith), count, lightweight DELETE (LightDeleteCtx), heavyweight ALTER … DELETE
 	// (AsyncMutationCtx) and the system.mutations poll, then ListPartitions.
-	_ = run(ctx, true, "SELECT count(), sum(data_uncompressed_bytes) FROM system.parts WHERE database = ? AND table = ? AND active AND startsWith(name, 'patch-')", phys, prefix+"events")
+	exec(ctx, "SELECT count(), sum(data_uncompressed_bytes) FROM system.parts WHERE database = ? AND table = ? AND active AND startsWith(name, 'patch-')", phys, prefix+"events")
 	if n := count(withSettings(clickhouse.Settings{"allow_experimental_projection_optimization": "0"}), "SELECT COUNT(*) FROM "+full+" WHERE `id` = 1"); n != 1 {
 		t.Fatalf("count before delete = %d, want 1", n)
 	}

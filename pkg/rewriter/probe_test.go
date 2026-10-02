@@ -103,7 +103,7 @@ func TestProbeStorageIntegrityBuild(t *testing.T) {
 	})
 
 	// A V1-only build (rewriter-go < v0.13.0, the release that shipped
-	// contract V2; the floor is now v0.16.0 through the table-reference
+	// contract V2; the floor is now v0.17.0 through the table-reference
 	// probe) acknowledges V1, never V2; and a build that acknowledges V2 but
 	// still rejects the SI DROP or activates the catch-all by table count is
 	// refused on the matching V2 probe.
@@ -468,6 +468,31 @@ func TestProbeTableReferencePolicy(t *testing.T) {
 				StatementType: pb.StatementType_STATEMENT_TYPE_CREATE_TABLE, Message: "success",
 				SqlAfterRewrite: `CREATE TABLE phys."db1.n" (d DATE, n UInt8) ENGINE=MergeTree(d, (SELECT max(n) FROM db1.o), 8192)`},
 		}}, "engine-argument-read-refused")
+	})
+	notSupported := func(sql string) *pb.RewriteSQLResponse {
+		return &pb.RewriteSQLResponse{Code: pb.RewriteCode_UnsupportedStatement, SqlAfterRewrite: sql, Message: "statement is not supported"}
+	}
+	// Measured 2026-10-02 (native, FFI v0.16.0): rewriter-go v0.16.0 refuses
+	// both Sentio-driver shapes it cannot regenerate faithfully.
+	t.Run("rewriter-go v0.16.0 is refused", func(t *testing.T) {
+		refused(t, &policyProbeBackend{engine: EngineNative, override: map[string]*pb.RewriteSQLResponse{
+			"SELECT a FROM db1.o WHERE startsWith(a, 'x')": notSupported("SELECT a FROM db1.o WHERE startsWith(a, 'x')"),
+			"CREATE VIEW db1.v (`a` String COMMENT 'c') AS (SELECT a FROM db1.o) COMMENT 'v'": notSupported(
+				"CREATE VIEW db1.v (`a` String COMMENT 'c') AS (SELECT a FROM db1.o) COMMENT 'v'"),
+		}}, "driver-function-spelling", "code=UnsupportedStatement")
+	})
+	t.Run("a refused driver view is refused", func(t *testing.T) {
+		refused(t, &policyProbeBackend{engine: EngineNative, override: map[string]*pb.RewriteSQLResponse{
+			"CREATE VIEW db1.v (`a` String COMMENT 'c') AS (SELECT a FROM db1.o) COMMENT 'v'": notSupported(
+				"CREATE VIEW db1.v (`a` String COMMENT 'c') AS (SELECT a FROM db1.o) COMMENT 'v'"),
+		}}, "driver-view-comment", "code=UnsupportedStatement")
+	})
+	// rewriter-grpc v0.16.0 (c24ed33) pins this exact SQL and request as
+	// UnsupportedStatement in TableRefFidelity.MeaningChangingLiteralFoldsAreRefused.
+	t.Run("rewriter-grpc v0.16.0 is refused", func(t *testing.T) {
+		refused(t, &policyProbeBackend{engine: EngineGRPC, override: map[string]*pb.RewriteSQLResponse{
+			"SELECT a FROM db1.o WHERE a IN ((1, 2))": notSupported("SELECT a FROM db1.o WHERE a IN ((1, 2))"),
+		}}, "driver-grouped-literal-tuple", "code=UnsupportedStatement")
 	})
 	t.Run("an unmodelled-class pass-through is refused", func(t *testing.T) {
 		refused(t, &policyProbeBackend{engine: EngineGRPC, override: map[string]*pb.RewriteSQLResponse{
