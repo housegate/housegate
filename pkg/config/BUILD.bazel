@@ -50,6 +50,7 @@ go_test(
     embed = [":config"],
     deps = [
         "//pkg/cluster",
+        "//pkg/log",
         "//pkg/plugins/agent",
         "//pkg/plugins/materialize",
         "//pkg/rewriter",

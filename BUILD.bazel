@@ -120,6 +120,7 @@ go_test(
         "//pkg/plugins/auth",
         "//pkg/plugins/commitgate",
         "//pkg/plugins/forward",
+        "//pkg/plugins/materialize",
         "//pkg/plugins/querysettings",
         "//pkg/plugins/rewrite",
         "//pkg/plugins/sessionstate",
