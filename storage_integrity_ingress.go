@@ -614,6 +614,17 @@ func (i *StorageIntegrityIngress) lockStatement(statementID string) func() {
 	return lock.Unlock
 }
 
+// markUnspentBeforePrepare marks a refusal raised before Orchestrate only when
+// the orchestrator still requires a genuinely new prepare for the statement:
+// a statement that already prepared may also have been submitted, so its
+// coordinate is not provably unspent.
+func markUnspentBeforePrepare(requiresPrepare bool, err error) error {
+	if !requiresPrepare {
+		return err
+	}
+	return chproto.MarkSeqUnspent(err)
+}
+
 func backpressureClientError(table string, err error) error {
 	storageIntegrityBackpressureTotal.WithLabelValues(table).Inc()
 	var backpressure *sicore.BackpressureError
@@ -630,12 +641,24 @@ func backpressureClientError(table string, err error) error {
 // success; only a bound ACK2 returns nil. This is the production staged-intake
 // path.
 //
-// Every refusal before Orchestrate is marked chproto.MarkSeqUnspent: nothing
-// of the statement has reached the arbiter, so its client_seq coordinate is
-// provably unspent (spec 2026-10-09 §6.6 (2)). After Orchestrate only a coded
-// terminal reject other than DUPLICATE_CLIENT_SEQ is marked; a prepare, RC or
-// submit may have happened on every other path. The flag is sticky through
-// wrapping, so no post-Orchestrate refusal may wrap a pre-Orchestrate one.
+// Refusals before Orchestrate are marked chproto.MarkSeqUnspent: nothing of
+// the statement has reached the arbiter, so its client_seq coordinate is
+// provably unspent (spec 2026-10-09 §6.6 (2)). That proof assumes the first
+// presentation of the statement id (§6.6 "First presentation only"): the
+// agent never presents an id twice, so on the agent lane this call is the
+// statement's only attempt, and a third-party signer that re-presents ids
+// must ignore the marker. A re-presented id may already have been prepared
+// and submitted by an earlier attempt, so the marks are hardened where this
+// function can tell: the preflight refusal is never marked (its
+// "reused with a different envelope" class only arises on re-presentation),
+// and the payload-store refusals are marked only when the orchestrator still
+// requires a genuinely new prepare (requiresPrepare). The merge-health,
+// materializer and snapshot-schema refusals run before the record is
+// consulted and rely on the first-presentation assumption alone. After
+// Orchestrate only a coded terminal reject other than DUPLICATE_CLIENT_SEQ is
+// marked; a prepare, RC or submit may have happened on every other path. The
+// flag is sticky through wrapping, so no post-Orchestrate refusal may wrap a
+// pre-Orchestrate one.
 func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.Context, adm siplugin.Admission) error {
 	if i.guard != nil {
 		// Only the target's latch: one unready table blocks only itself.
@@ -682,7 +705,9 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 	}
 	requiresPrepare, err := i.orch.AdmissionRequiresPrepare(ctx, rec)
 	if err != nil {
-		return chproto.MarkSeqUnspent(fmt.Errorf("storage_integrity ingress: preflight %s: %w", rec.StatementID, err))
+		// Not marked: a preflight failure (a re-presented id with a different
+		// envelope, journal recovery) says nothing about earlier attempts.
+		return fmt.Errorf("storage_integrity ingress: preflight %s: %w", rec.StatementID, err)
 	}
 	tracked, _ := i.trackedPressureReservation(rec.StatementID)
 	trackedReservation := tracked.reservation
@@ -711,13 +736,13 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 			if !reusedTrackedReservation {
 				i.cancelAttemptReservation(rec.StatementID, attemptReservation)
 			}
-			return chproto.MarkSeqUnspent(fmt.Errorf("storage_integrity ingress: put payload for %s: %w", rec.StatementID, err))
+			return markUnspentBeforePrepare(requiresPrepare, fmt.Errorf("storage_integrity ingress: put payload for %s: %w", rec.StatementID, err))
 		}
 		if put.PayloadRef == "" {
 			if !reusedTrackedReservation {
 				i.cancelAttemptReservation(rec.StatementID, attemptReservation)
 			}
-			return chproto.MarkSeqUnspent(fmt.Errorf("storage_integrity ingress: payload store returned empty payload_ref for %s", rec.StatementID))
+			return markUnspentBeforePrepare(requiresPrepare, fmt.Errorf("storage_integrity ingress: payload store returned empty payload_ref for %s", rec.StatementID))
 		}
 		rec.PayloadRef = put.PayloadRef
 	}

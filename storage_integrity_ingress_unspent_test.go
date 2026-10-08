@@ -161,3 +161,56 @@ func TestConsumeAdmission_PostSubmissionRefusalAfterUnspentRefusalIsUnmarked(t *
 		})
 	}
 }
+
+// Spec 2026-10-09 §6.6 marks the payload-store refusals only on the first
+// presentation of a statement id. A statement that already prepared (its
+// orchestrator record no longer requires a prepare) may have been submitted,
+// so a payload-store refusal on its retry is unmarked (final review M2).
+func TestConsumeAdmission_PayloadRefusalOfAResumedStatementIsUnmarked(t *testing.T) {
+	for name, fail := range map[string]func(*rootRecordingPayloadWriter){
+		"put payload":       func(w *rootRecordingPayloadWriter) { w.err = errors.New("store down") },
+		"empty payload_ref": func(w *rootRecordingPayloadWriter) { w.result.PayloadRef = "" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			ingress, writer, submitter, preparer := newBackpressureIngress(t, &fakePartsPressure{})
+			adm := bpAdmission()
+			submitter.outcome = sicore.SubmitOutcome{Category: sicore.OutcomeUnknown, Reason: "deadline"}
+			if err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), adm); err == nil || chproto.IsSeqUnspent(err) {
+				t.Fatalf("first attempt err = %v, want an unmarked post-submission refusal", err)
+			}
+			if preparer.prepareCalls != 1 || submitter.calls != 1 {
+				t.Fatalf("prepare/submit calls = %d/%d, want 1/1", preparer.prepareCalls, submitter.calls)
+			}
+			fail(writer)
+			err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), adm)
+			if err == nil {
+				t.Fatal("the retry must refuse")
+			}
+			if writer.calls != 2 {
+				t.Fatalf("payload writer calls = %d, want 2: the retry must reach the payload store", writer.calls)
+			}
+			if chproto.IsSeqUnspent(err) {
+				t.Fatalf("retry err = %v carries the unspent flag although the statement was submitted", err)
+			}
+		})
+	}
+}
+
+// A preflight failure is never marked: its "reused with a different envelope"
+// class only arises when a statement id is presented again (final review M2).
+func TestConsumeAdmission_PreflightRefusalIsUnmarked(t *testing.T) {
+	ingress, _, submitter, _ := newBackpressureIngress(t, &fakePartsPressure{})
+	adm := bpAdmission()
+	submitter.outcome = sicore.SubmitOutcome{Category: sicore.OutcomeUnknown, Reason: "deadline"}
+	if err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), adm); err == nil {
+		t.Fatal("first attempt must refuse")
+	}
+	changed := bpEUAdmission() // same statement id, different payload
+	err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), changed)
+	if err == nil || !strings.Contains(err.Error(), "preflight") {
+		t.Fatalf("err = %v, want a preflight refusal", err)
+	}
+	if chproto.IsSeqUnspent(err) {
+		t.Fatalf("preflight err = %v carries the unspent flag", err)
+	}
+}
