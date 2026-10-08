@@ -298,12 +298,12 @@ func payloadStateFromProto(state pb.PayloadState) (PayloadState, error) {
 // ArbiterStatementEnvelopeToProto converts the HouseGate-core envelope to the
 // frozen arbiter-proto StatementEnvelopeV2 wire shape.
 func ArbiterStatementEnvelopeToProto(env StatementEnvelope) (*pb.StatementEnvelopeV2, error) {
-	id, err := parseFlatStatementID(env.StatementID)
+	id, err := ParseLegacyStatementID(env.StatementID)
 	if err != nil {
 		return nil, fmt.Errorf("storageintegrity: invalid statement id %q: %w", env.StatementID, err)
 	}
-	if env.Signer != "" && id.ClientAccount != strings.ToLower(env.Signer) {
-		return nil, fmt.Errorf("storageintegrity: statement id account %s does not match signer %s", id.ClientAccount, strings.ToLower(env.Signer))
+	if env.Signer != "" && id.Account != strings.ToLower(env.Signer) {
+		return nil, fmt.Errorf("storageintegrity: statement id account %s does not match signer %s", id.Account, strings.ToLower(env.Signer))
 	}
 	if env.StatementKind != KindInsert {
 		return nil, fmt.Errorf("storageintegrity: unsupported statement kind %q for arbiter SubmitStatement", env.StatementKind)
@@ -340,9 +340,9 @@ func ArbiterStatementEnvelopeToProto(env StatementEnvelope) (*pb.StatementEnvelo
 	}
 	return &pb.StatementEnvelopeV2{
 		StatementId: &pb.StatementID{
-			ClientAccount: id.ClientAccount,
-			ClientSeq:     id.ClientSeq,
-			ClientNonce:   id.ClientNonce,
+			ClientAccount: id.Account,
+			ClientSeq:     id.Seq,
+			ClientNonce:   id.Nonce,
 		},
 		StatementKind:   pb.StatementKind_STATEMENT_KIND_INSERT,
 		Sql:             env.SQL,

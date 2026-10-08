@@ -115,6 +115,21 @@ func TestIngressRejectsMalformedStatementID(t *testing.T) {
 	}
 }
 
+// Spec 2026-10-09 §6.1: before lane activation the ingress itself refuses a
+// laned id with the stable message, instead of forwarding it to the arbiter.
+func TestIngressRefusesLanedStatementIDBeforeActivation(t *testing.T) {
+	p, signer := newSignedIngress(t)
+	sql := "INSERT INTO tenant.events FORMAT Native"
+	qctx := signedQueryContext(t, 14, signer, sql, sql, sqlmeta.StatementTypeInsert)
+	qctx.Query.ID = strings.ToLower(signer.Address()) + ":5e1f0a2b7c9d3e4f:1:n1"
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
+
+	err := p.OnQuery(context.Background(), qctx)
+	if !errors.Is(err, sicore.ErrClientLanesNotEnabled) {
+		t.Fatalf("OnQuery err = %v, want ErrClientLanesNotEnabled", err)
+	}
+}
+
 func TestIngressRejectsStatementIDSignerMismatch(t *testing.T) {
 	p, signer := newSignedIngress(t)
 	sql := "INSERT INTO tenant.events FORMAT Native"

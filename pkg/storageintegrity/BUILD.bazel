@@ -29,6 +29,7 @@ go_library(
         "snapshot_query_journal.go",
         "snapshot_query_prepared_output.go",
         "sql.go",
+        "statementid.go",
     ],
     importpath = "github.com/housegate/housegate/pkg/storageintegrity",
     visibility = ["//visibility:public"],
@@ -72,6 +73,7 @@ go_test(
         "snapshot_query_journal_test.go",
         "snapshot_query_prepared_output_test.go",
         "sql_test.go",
+        "statementid_test.go",
     ],
     embed = [":storageintegrity"],
     deps = [

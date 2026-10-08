@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -690,7 +689,7 @@ func querySettings(qctx *plugin.QueryContext) map[string]string {
 func statementID(qctx *plugin.QueryContext) (string, error) {
 	if qctx != nil && qctx.Query != nil {
 		if id := strings.TrimSpace(qctx.Query.ID); id != "" {
-			if _, err := parseFlatStatementID(id); err != nil {
+			if _, err := parseIngressStatementID(id); err != nil {
 				return "", err
 			}
 			return id, nil
@@ -699,73 +698,29 @@ func statementID(qctx *plugin.QueryContext) (string, error) {
 	return "", errors.New("storage_integrity query id is required")
 }
 
-type flatStatementID struct {
-	ClientAccount string
-	ClientSeq     uint64
-	ClientNonce   string
-}
-
-func parseFlatStatementID(id string) (flatStatementID, error) {
-	parts := strings.Split(id, ":")
-	if len(parts) != 3 {
-		return flatStatementID{}, fmt.Errorf("storage_integrity requires structured statement id <client_account>:<client_seq>:<client_nonce>")
+// parseIngressStatementID applies the shared grammar. Release A1 refuses a
+// laned id locally (spec 2026-10-09 §6.1) instead of letting the arbiter
+// answer MALFORMED.
+func parseIngressStatementID(id string) (sicore.StatementID, error) {
+	parsed, err := sicore.ParseLegacyStatementID(id)
+	if errors.Is(err, sicore.ErrClientLanesNotEnabled) {
+		return sicore.StatementID{}, sicore.ErrClientLanesNotEnabled
 	}
-	account, seqText, nonce := parts[0], parts[1], parts[2]
-	if account == "" || seqText == "" || nonce == "" {
-		return flatStatementID{}, fmt.Errorf("storage_integrity requires structured statement id <client_account>:<client_seq>:<client_nonce>")
+	if err != nil {
+		return sicore.StatementID{}, fmt.Errorf("storage_integrity requires structured statement id: %w", err)
 	}
-	if account != strings.ToLower(account) || !strings.HasPrefix(account, "0x") || !isLowerHex(account[2:]) {
-		return flatStatementID{}, fmt.Errorf("storage_integrity requires structured statement id with lowercase 0x client_account")
-	}
-	if len(seqText) > 1 && seqText[0] == '0' {
-		return flatStatementID{}, fmt.Errorf("storage_integrity requires canonical decimal client_seq")
-	}
-	if !isDecimalDigits(seqText) {
-		return flatStatementID{}, fmt.Errorf("storage_integrity requires canonical decimal client_seq")
-	}
-	seq, err := strconv.ParseUint(seqText, 10, 64)
-	if err != nil || seq == 0 {
-		return flatStatementID{}, fmt.Errorf("storage_integrity requires non-zero decimal client_seq")
-	}
-	if strings.TrimSpace(nonce) != nonce {
-		return flatStatementID{}, fmt.Errorf("storage_integrity requires structured statement id with non-empty client_nonce")
-	}
-	return flatStatementID{ClientAccount: account, ClientSeq: seq, ClientNonce: nonce}, nil
+	return parsed, nil
 }
 
 func requireStatementIDSigner(id, signer string) error {
-	stmt, err := parseFlatStatementID(id)
+	stmt, err := parseIngressStatementID(id)
 	if err != nil {
 		return err
 	}
-	if stmt.ClientAccount != strings.ToLower(signer) {
-		return fmt.Errorf("storage_integrity statement id client_account %s does not match authenticated signer %s", stmt.ClientAccount, strings.ToLower(signer))
+	if stmt.Account != strings.ToLower(signer) {
+		return fmt.Errorf("storage_integrity statement id client_account %s does not match authenticated signer %s", stmt.Account, strings.ToLower(signer))
 	}
 	return nil
-}
-
-func isLowerHex(s string) bool {
-	if s == "" {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		if !((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f')) {
-			return false
-		}
-	}
-	return true
-}
-
-func isDecimalDigits(s string) bool {
-	if s == "" {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		if s[i] < '0' || s[i] > '9' {
-			return false
-		}
-	}
-	return true
 }
 
 func classifyStorageIntegrityKind(typ sqlmeta.StatementType, sql string) (Kind, bool, error) {
