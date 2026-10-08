@@ -853,6 +853,14 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	var storageIntegrityMergeGuard *StorageIntegrityMergeSupervisor
 	var storageIntegrityRuntime *StorageIntegrityIngress
 	if cfg.StorageIntegrity.Ingress.Enabled {
+		// Spec 2026-10-09 D17: writes are open to every database writer, so the
+		// ingress cannot start without the host's contract predicate — whether
+		// or not an allowlist is configured. It is resolved before the runtime
+		// consumer is built, so a refusal tears nothing down.
+		ingressWriters, ok := reg.(registry.WriterAccess)
+		if !ok || isNilInterface(ingressWriters) {
+			return nil, errors.New("storage_integrity.ingress requires a registry that implements WriterAccess (contract isDatabaseWriter)")
+		}
 		admissionConsumer := opts.StorageIntegrityAdmissionConsumer
 		if cfg.StorageIntegrity.Runtime.Enabled {
 			if admissionConsumer != nil {
@@ -912,6 +920,10 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			// Enabled: sitablestate already refuses a query without its
 			// snapshot; the ingress refuses too rather than trust the order.
 			RequireTableSnapshot: siOptions.Enabled,
+			Writers:              ingressWriters,
+			Operators:            reg,
+			DeniedAddresses:      ingressCfg.DeniedAddresses,
+			AllowedAddresses:     ingressCfg.AllowedAddresses,
 		})
 		queryPlugins = append(queryPlugins, storageIntegrityIngress)
 		strictDataPlugins = append(strictDataPlugins, storageIntegrityIngress)
@@ -924,6 +936,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			"requires_table_snapshot", storageIntegrityIngress.RequiresTableSnapshot(),
 			"declared_schema_source", storageIntegrityIngress.ResolvesDeclaredSchemas(),
 			"allowed_addresses", len(ingressCfg.AllowedAddresses),
+			"denied_addresses", len(ingressCfg.DeniedAddresses),
 			"max_token_age", ingressCfg.MaxTokenAge.Duration,
 			"request_timeout", ingressCfg.RequestTimeout.Duration,
 			"max_payload_bytes", ingressCfg.MaxPayloadBytes,

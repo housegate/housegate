@@ -21,6 +21,10 @@ const (
 	// CodeTableIsBeingRestarted is TABLE_IS_BEING_RESTARTED: the table exists
 	// but is temporarily unavailable, so the refusal is retryable.
 	CodeTableIsBeingRestarted int32 = 733
+	// CodeAccessDenied is ACCESS_DENIED: the storage-integrity ingress refuses
+	// a write by a denylisted signer or owner, an invalid operator relation, or
+	// a principal that is not a writer of the database (spec 2026-10-09 R6).
+	CodeAccessDenied int32 = 497
 )
 
 // Session-preserving storage-integrity table refusals. The ClickHouse

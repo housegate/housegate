@@ -21,6 +21,7 @@ import (
 	"github.com/housegate/housegate/pkg/auth"
 	"github.com/housegate/housegate/pkg/chproto"
 	"github.com/housegate/housegate/pkg/chsession"
+	"github.com/housegate/housegate/pkg/log"
 	"github.com/housegate/housegate/pkg/plugin"
 	"github.com/housegate/housegate/pkg/registry"
 	"github.com/housegate/housegate/pkg/replay"
@@ -65,6 +66,14 @@ type Config struct {
 	// without it is refused rather than resolved through TableSchemas (spec
 	// 2026-09-24 §9.1: the registry's schema wins over the latest declaration).
 	RequireTableSnapshot bool
+
+	// Writers, Operators, DeniedAddresses and AllowedAddresses authorize every
+	// signed write (spec 2026-10-09 §6.2). Writers and Operators are required;
+	// a plugin built without them refuses every storage-integrity write.
+	Writers          registry.WriterAccess
+	Operators        registry.OperatorChecker
+	DeniedAddresses  []string
+	AllowedAddresses []string
 }
 
 type AdmissionConsumer interface {
@@ -81,6 +90,7 @@ type Plugin struct {
 	schemaLoader      *schemaregistry.NetworkStateLoader
 	networkID         string
 	requireSnapshot   bool
+	authorizer        *writeAuthorizer
 
 	mu      sync.Mutex
 	active  map[int64]*admissionState
@@ -94,7 +104,13 @@ type Admission struct {
 	SQL         string
 	SQLHash     string
 	Signer      string
-	UserJWS     string
+	// Owner is the SQL_x_payer account the signer validly operates for, empty
+	// when the signer writes for itself; Principal is Owner, else Signer. Both
+	// are authorization and audit data only: the signed statement binds the
+	// signer (spec 2026-10-09 D3).
+	Owner     string
+	Principal string
+	UserJWS   string
 	// AuthToken is the SQL_x_auth_token query JWS (audit only). UserJWS is
 	// the SQL_x_statement_token envelope-v2 token that is sequenced.
 	AuthToken       string
@@ -129,6 +145,10 @@ type admissionState struct {
 	schemaHash      string
 	tableSchema     *payloadexec.TableSchema
 	complete        bool
+	// payer and database are re-authorized before the admission reaches the
+	// consumer (spec 2026-10-09 §6.2).
+	payer    string
+	database string
 }
 
 type purposeValidator interface {
@@ -157,6 +177,7 @@ func New(cfg Config) *Plugin {
 		admissionConsumer: cfg.AdmissionConsumer,
 		networkID:         cfg.NetworkID,
 		requireSnapshot:   cfg.RequireTableSnapshot,
+		authorizer:        newWriteAuthorizer(cfg.DeniedAddresses, cfg.AllowedAddresses, cfg.Writers, cfg.Operators),
 		active:            map[int64]*admissionState{},
 		pending:           map[int64]*admissionState{},
 	}
@@ -312,6 +333,17 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	if err := requireStatementIDSigner(stmtID, signer); err != nil {
 		return err
 	}
+	payer := querySettings(qctx)[auth.PayerSettingKey]
+	authz, result, err := p.authorizer.authorize(signer, payer, target.database)
+	countAuthz(result)
+	if err != nil {
+		_, logger := log.FromContext(ctx)
+		logger.Warnw("storage_integrity write refused",
+			"statement_id", stmtID, "signer", signer, "owner", normalizeOwner(payer),
+			"principal", claimedPrincipal(signer, payer), "table_id", target.id,
+			"result", result, "err", err)
+		return err
+	}
 	if (!snapshotPath && p.schemaLoader == nil) || strings.TrimSpace(p.networkID) == "" {
 		return errors.New("storage_integrity ingress requires a network-state TableSchemas source and network_id to verify envelope v2 statements")
 	}
@@ -336,6 +368,8 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 			SQL:         signedSQL,
 			SQLHash:     replay.DigestString(signedSQL),
 			Signer:      signer,
+			Owner:       authz.owner,
+			Principal:   authz.principal,
 			UserJWS:     statementToken,
 			AuthToken:   userJWS,
 		},
@@ -343,6 +377,8 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 		statementToken:  statementToken,
 		schemaHash:      schemaHash,
 		tableSchema:     tableSchema,
+		payer:           payer,
+		database:        target.database,
 	}
 	if qctx.Session.State() != nil {
 		state.revision = qctx.Session.State().ClientRevision
@@ -536,7 +572,7 @@ func (p *Plugin) ConsumeAdmission(sessionID int64) (Admission, error) {
 	return p.admissionFromState(context.Background(), state)
 }
 
-func (p *Plugin) admissionFromState(_ context.Context, state *admissionState) (Admission, error) {
+func (p *Plugin) admissionFromState(ctx context.Context, state *admissionState) (Admission, error) {
 	admission := state.admission
 	if admission.Kind == KindInsert && state.payload.Len() == 0 {
 		return Admission{}, fmt.Errorf("storage_integrity incomplete payload capture for statement %s", admission.StatementID)
@@ -579,6 +615,19 @@ func (p *Plugin) admissionFromState(_ context.Context, state *admissionState) (A
 	if err := requireStatementIDSigner(admission.StatementID, recovered); err != nil {
 		return Admission{}, err
 	}
+	// Spec 2026-10-09 §6.2: re-check before the admission reaches the consumer,
+	// so a revocation the registry saw during the upload stops the write.
+	authz, result, err := p.authorizer.authorize(admission.Signer, state.payer, state.database)
+	if err != nil {
+		countAuthz(result)
+		_, logger := log.FromContext(ctx)
+		logger.Warnw("storage_integrity write refused at admission",
+			"statement_id", admission.StatementID, "signer", admission.Signer,
+			"owner", normalizeOwner(state.payer), "principal", claimedPrincipal(admission.Signer, state.payer),
+			"table_id", admission.TableID, "result", result, "err", err)
+		return Admission{}, err
+	}
+	admission.Owner, admission.Principal = authz.owner, authz.principal
 	admission.EnvelopeVersion = sicore.EnvelopeVersionV2
 	admission.NetworkID = p.networkID
 	admission.KeeperShardID = 0
@@ -601,6 +650,10 @@ func (p *Plugin) admissionFromState(_ context.Context, state *admissionState) (A
 	if !admission.Payload.Complete {
 		return Admission{}, fmt.Errorf("storage_integrity admission %s is not complete", admission.StatementID)
 	}
+	_, logger := log.FromContext(ctx)
+	logger.Infow("storage_integrity statement admitted",
+		"statement_id", admission.StatementID, "signer", admission.Signer,
+		"owner", admission.Owner, "principal", admission.Principal, "table_id", admission.TableID)
 	return admission, nil
 }
 

@@ -32,6 +32,7 @@ import (
 	"github.com/housegate/housegate/pkg/plugins/storageintegrity"
 	"github.com/housegate/housegate/pkg/plugins/tablerefguard"
 	"github.com/housegate/housegate/pkg/proxy"
+	"github.com/housegate/housegate/pkg/registry"
 	"github.com/housegate/housegate/pkg/replay"
 	"github.com/housegate/housegate/pkg/replay/payloadexec"
 	"github.com/housegate/housegate/pkg/rewriter"
@@ -2054,6 +2055,9 @@ func buildTestStorageIntegritySchema() payloadexec.TableSchema {
 	}
 }
 
+// buildTestStorageIntegrityKey is the key the root SI ingress tests sign with.
+const buildTestStorageIntegrityKey = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
 func buildTestStorageIntegrityNetworkState() *network.InMemoryNetworkState {
 	ns := network.NewInMemoryNetworkState()
 	schema := buildTestStorageIntegritySchema()
@@ -2064,7 +2068,34 @@ func buildTestStorageIntegrityNetworkState() *network.InMemoryNetworkState {
 		SchemaHash: payloadexec.TableSchemaHash("testnet-v2", schema),
 		SchemaJson: `{"table_id":"tenant.events","columns":[{"name":"id","type":"UInt64"},{"name":"region","type":"String"}]}`,
 	}
+	// Spec 2026-10-09 D2: the ingress admits only database writers.
+	ns.DatabaseInfos["tenant"] = network.DatabaseInfo{DatabaseId: "tenant"}
+	signer, err := auth.NewRelaySigner(buildTestStorageIntegrityKey)
+	if err != nil {
+		panic(err)
+	}
+	ns.DatabasePermissions[network.AccountAddress(strings.ToLower(signer.Address()))] = network.DatabasePermissions{"tenant": registry.DbAuthWrite}
 	return ns
+}
+
+// registryWithoutWriters hides InMemoryNetworkState's WriterAccess.
+type registryWithoutWriters struct{ registry.Registry }
+
+func TestBuildServer_StorageIntegrityIngressRequiresWriterAccess(t *testing.T) {
+	cfg := minimalRouterOnlyCfg(t)
+	cfg.StorageIntegrity.Ingress.Enabled = true
+	cfg.StorageIntegrity.Ingress.NetworkID = "testnet-v2"
+	cfg.StorageIntegrity.Ingress.MaxTokenAge.Duration = time.Minute
+	cfg.StorageIntegrity.Ingress.RequestTimeout.Duration = 50 * time.Millisecond
+	cfg.StorageIntegrity.Ingress.MaxPayloadBytes = 7
+	_, err := buildServer(Options{
+		Config:                            cfg,
+		NetworkState:                      registryWithoutWriters{Registry: buildTestStorageIntegrityNetworkState()},
+		StorageIntegrityAdmissionConsumer: &recordingAdmissionConsumer{},
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "storage_integrity.ingress requires a registry that implements WriterAccess (contract isDatabaseWriter)") {
+		t.Fatalf("buildServer err = %v, want the WriterAccess startup refusal", err)
+	}
 }
 
 func buildTestStatementID(signer *auth.RelaySigner, seq uint64) string {

@@ -1339,6 +1339,8 @@ func TestIngressV2_RequiresStatementValidatorV2(t *testing.T) {
 		Purpose:       auth.QueryPurpose,
 		TableSchemas:  ns,
 		NetworkID:     "testnet-v2",
+		Writers:       allowAllWriters{},
+		Operators:     allowAllWriters{},
 	})
 	sql := "INSERT INTO tenant.events FORMAT Native"
 	qctx := signedQueryContext(t, 43, signer, sql, sql, sqlmeta.StatementTypeInsert)
@@ -1379,8 +1381,21 @@ func newSignedIngressWithoutV2Config(t *testing.T, cfg Config) (*Plugin, *auth.R
 	cfg.Enabled = true
 	cfg.AuthValidator = validator
 	cfg.Purpose = auth.QueryPurpose
+	if cfg.Writers == nil {
+		cfg.Writers = allowAllWriters{}
+	}
+	if cfg.Operators == nil {
+		cfg.Operators = allowAllWriters{}
+	}
 	return New(cfg), signer
 }
+
+// allowAllWriters admits every account as a writer of every database. The
+// authorizer's own tests use the in-memory network state instead.
+type allowAllWriters struct{}
+
+func (allowAllWriters) IsDatabaseWriter(string, string) (bool, error) { return true, nil }
+func (allowAllWriters) IsOperator(owner, signer string) bool          { return owner == signer }
 
 func signedQueryContext(t *testing.T, sessionID int64, signer *auth.RelaySigner, signedSQL, finalSQL string, typ sqlmeta.StatementType) *plugin.QueryContext {
 	t.Helper()
