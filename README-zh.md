@@ -384,7 +384,7 @@ housegate                                # agent 模式，devnet2，127.0.0.1:90
 clickhouse-client --host 127.0.0.1 --port 9000
 ```
 
-只给私钥、不带配置文件时，agent 会加入 `devnet2`，从承载各数据库的 indexer 发现 network id 与表状态；`client_seq` 计数器保存在 `<base>/si/<network_id>/<signer>/` 下，其中 `<base>` 在 Linux 上是 `$XDG_STATE_HOME/housegate`（`XDG_STATE_HOME` 为绝对路径时），否则是 `~/.local/state/housegate`，在 macOS 上是 `~/Library/Application Support/housegate`；在 linux/amd64 和 darwin/arm64 上自动拉取 inline `VALUES` 所需的 native 引擎；SI INSERT 会把 session 切换到承载该库的 indexer。读取不会被切换：读 SI 表请用 `--database <db>` 连接。计费：每条 INSERT 计 1 个 query 单位（inline `VALUES` 计 2 个），被拒绝时同样计费。自动 native materializer（`-si-inline-values auto`）会把 agent 上**每一条** query（包括 SELECT）里的 `now()`、`rand()`、`generateUUIDv4()` 替换为字面量，因此经 agent 执行的 `SELECT now()` 返回的是 agent 替换进去的常量；传 `-si-inline-values off` 可让 query 保持原样。
+只给私钥、不带配置文件时，agent 会加入 `devnet2`，从承载各数据库的 indexer 发现 network id 与表状态；`client_seq` 计数器保存在 `<base>/si/<network_id>/<signer>/` 下，其中 `<base>` 在 Linux 上是 `$XDG_STATE_HOME/housegate`（`XDG_STATE_HOME` 为绝对路径时），否则是 `~/.local/state/housegate`，在 macOS 上是 `~/Library/Application Support/housegate`；在 linux/amd64 和 darwin/arm64 上自动拉取 inline `VALUES` 所需的 native 引擎；SI INSERT 会把 session 切换到承载该库的 indexer。读取不会被切换：读 SI 表请用 `--database <db>` 连接。计费：每条 INSERT 计 1 个 query 单位（inline `VALUES` 计 2 个），被拒绝时同样计费。自动 native materializer（`-si-inline-values auto` 或 `on`）只在 inline `INSERT ... VALUES` 语句（即签名 inline `VALUES` 通道认领的形状）里把 `now()`、`rand()`、`generateUUIDv4()` 替换为字面常量；其他 query（包括 `SELECT` 和 `INSERT ... SELECT`）原样发往服务端，保留逐行不同的取值。配置文件里显式写 `materialize.enabled: true` 时会改写 agent 上的每一条 query，此时 `SELECT rand() FROM numbers(10)` 会返回十个相同的值。
 
 #### 配置式 agent
 

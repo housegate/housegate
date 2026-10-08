@@ -122,12 +122,15 @@ func ApplyAgentQuickstart(cfg *Config, q AgentQuickstart) error {
 }
 
 // enableNativeMaterializer turns on the in-process native materializer at the
-// release matching this binary, unless the operator configured one.
+// release matching this binary, unless the operator configured one. It is
+// marked Implicit: it serves the inline VALUES lane only, so it rewrites only
+// the statements that lane claims (final review I3).
 func enableNativeMaterializer(cfg *Config, optional bool) {
 	if cfg.Materialize.Enabled {
 		return
 	}
 	cfg.Materialize.Enabled = true
+	cfg.Materialize.Implicit = true
 	cfg.Materialize.Engine = rewriter.EngineNative
 	if cfg.Materialize.NativeLibraryPath == "" && cfg.Materialize.NativeLibraryRelease == "" {
 		cfg.Materialize.NativeLibraryRelease = ffifetch.DefaultRelease

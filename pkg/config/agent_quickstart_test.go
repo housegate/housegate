@@ -187,7 +187,7 @@ func TestApplyAgentQuickstart_InlineValuesAuto(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := supported.Materialize
-	if !supported.StorageIntegrity.Agent.InlineValues.Enabled || !m.Enabled || m.Engine != "native" || m.NativeLibraryRelease != "v0.17.0" || !m.Optional {
+	if !supported.StorageIntegrity.Agent.InlineValues.Enabled || !m.Enabled || m.Engine != "native" || m.NativeLibraryRelease != "v0.17.0" || !m.Optional || !m.Implicit {
 		t.Fatalf("inline=%v materialize=%+v; want the optional native default", supported.StorageIntegrity.Agent.InlineValues.Enabled, m)
 	}
 	if err := supported.Validate(); err != nil {
@@ -209,7 +209,7 @@ func TestApplyAgentQuickstart_InlineValuesAuto(t *testing.T) {
 	if err := ApplyAgentQuickstart(explicit, AgentQuickstart{GOOS: "linux", GOARCH: "amd64"}); err != nil {
 		t.Fatal(err)
 	}
-	if explicit.Materialize.Engine != "grpc" || explicit.Materialize.Optional {
+	if explicit.Materialize.Engine != "grpc" || explicit.Materialize.Optional || explicit.Materialize.Implicit {
 		t.Fatalf("an explicit materializer must be kept and stay fail-fast: %+v", explicit.Materialize)
 	}
 
@@ -217,7 +217,7 @@ func TestApplyAgentQuickstart_InlineValuesAuto(t *testing.T) {
 	if err := ApplyAgentQuickstart(forced, AgentQuickstart{GOOS: "linux", GOARCH: "arm64", SIInlineValues: "on"}); err != nil {
 		t.Fatal(err)
 	}
-	if !forced.StorageIntegrity.Agent.InlineValues.Enabled || !forced.Materialize.Enabled || forced.Materialize.Optional {
+	if !forced.StorageIntegrity.Agent.InlineValues.Enabled || !forced.Materialize.Enabled || forced.Materialize.Optional || !forced.Materialize.Implicit {
 		t.Fatalf("-si-inline-values on must enable a fail-fast materializer: %+v", forced.Materialize)
 	}
 }

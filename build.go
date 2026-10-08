@@ -1326,11 +1326,21 @@ func buildAgentWithBuilders(
 			// Random-pool size (cfg.Materialize.RandomPoolSize) is applied
 			// materializer-side in buildMaterializer, not on the plugin —
 			// don't re-add a PoolSize field here.
-			queryPlugins = append(queryPlugins, &materialize.Plugin{
-				Materializer: m,
-				Observer:     obs,
-			})
-			log.Infow("agent materialize enabled", "engine", cfg.Materialize.Engine, "implicit", cfg.Materialize.Optional)
+			mp := &materialize.Plugin{Materializer: m, Observer: obs}
+			if cfg.Materialize.Implicit {
+				// The quickstart enabled it for the inline VALUES lane only:
+				// leave every other statement, SELECT and INSERT ... SELECT
+				// included, with its per-row non-deterministic values (final
+				// review I3). An explicit materialize.enabled rewrites all.
+				mp.Scope = sistatement.IsInlineValuesCandidate
+			}
+			queryPlugins = append(queryPlugins, mp)
+			scope := "every query"
+			if cfg.Materialize.Implicit {
+				scope = "inline VALUES INSERTs"
+			}
+			log.Infow("agent materialize enabled", "engine", cfg.Materialize.Engine,
+				"implicit", cfg.Materialize.Implicit, "scope", scope)
 		}
 	}
 	// Read-mode injection is independent of the SI statement lane (F20): it

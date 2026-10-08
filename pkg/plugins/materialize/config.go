@@ -45,6 +45,14 @@ type Config struct {
 	// disables materialization and inline VALUES with a warning. An explicit
 	// materialize.enabled keeps the startup fail-fast. Never read from files.
 	Optional bool `json:"-" yaml:"-"`
+
+	// Implicit is set only when the agent quickstart turned the materializer
+	// on for the signed inline VALUES lane (-si-inline-values auto|on) rather
+	// than the operator setting materialize.enabled. The implicit
+	// materializer then rewrites only statements the inline VALUES lane
+	// would claim, so ordinary queries keep their per-row
+	// now()/rand()/generateUUIDv4() values. Never read from files.
+	Implicit bool `json:"-" yaml:"-"`
 }
 
 // Validate is a no-op when disabled. When enabled it requires an explicit
