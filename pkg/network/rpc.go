@@ -2,13 +2,20 @@ package network
 
 // rpc.go — JSON-RPC-backed read-only registry.Registry for agent
 // mode. Hits a sentio storage-node JSON-RPC endpoint (e.g.
-// http://node.example.com:10003) and translates four sentio_* methods
-// to the registry.Registry methods agent.Selector consults:
+// http://node.example.com:10003) and translates sentio_* methods to the
+// registry.Registry methods agent.Selector consults:
 //
 //   sentio_getIndexerInfos          -> AllIndexers
 //   sentio_getIndexerInfoById       -> ProxyByIndexerId
 //   sentio_getDatabaseInfoById      -> Get
 //   sentio_getDatabaseInfoByAccount -> PermissionsFor
+//
+// plus the storage-integrity discovery methods, answered by the indexer that
+// hosts the database (registry.TableStatuses, registry.StorageIntegrityDiscovery):
+//
+//   sentio_getStorageIntegrityTableStatus -> StorageIntegrityTableStatus
+//   sentio_getStorageIntegrityInfo        -> StorageIntegrityInfo
+//   sentio_isDatabaseWriter               -> StorageIntegrityWriterCheck
 //
 // Methods that have no JSON-RPC counterpart (All, HasPermission)
 // return zero-value/error responses. This backend is intentionally
@@ -21,7 +28,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -100,6 +110,12 @@ func (e *jsonrpcError) Error() string {
 // Returns ok=false when the response.result is JSON null — distinguishes
 // "method succeeded but returned no record" from a transport error.
 func (r *RpcNetworkState) call(ctx context.Context, method string, params []interface{}, result interface{}) (bool, error) {
+	return r.callAt(ctx, r.endpoint, method, params, result)
+}
+
+// callAt is call against an explicit endpoint (the indexer hosting a
+// database, for the storage-integrity discovery methods).
+func (r *RpcNetworkState) callAt(ctx context.Context, endpoint, method string, params []interface{}, result interface{}) (bool, error) {
 	if params == nil {
 		params = []interface{}{}
 	}
@@ -112,7 +128,7 @@ func (r *RpcNetworkState) call(ctx context.Context, method string, params []inte
 	if err != nil {
 		return false, fmt.Errorf("marshal request: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.endpoint, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return false, fmt.Errorf("new request: %w", err)
 	}
@@ -163,8 +179,9 @@ func (r *RpcNetworkState) AllIndexers() map[uint64]registry.ProxyAddress {
 	}
 	for _, info := range infos {
 		out[info.IndexerId] = registry.ProxyAddress{
-			Url:           info.IndexerUrl,
-			HousegatePort: info.ClickhouseProxyPort,
+			Url:            info.IndexerUrl,
+			HousegatePort:  info.ClickhouseProxyPort,
+			StorageRPCPort: info.StorageNodeRpcPort,
 		}
 	}
 	return out
@@ -183,8 +200,9 @@ func (r *RpcNetworkState) ProxyByIndexerId(indexerId uint64) (registry.ProxyAddr
 		return registry.ProxyAddress{}, false
 	}
 	return registry.ProxyAddress{
-		Url:           info.IndexerUrl,
-		HousegatePort: info.ClickhouseProxyPort,
+		Url:            info.IndexerUrl,
+		HousegatePort:  info.ClickhouseProxyPort,
+		StorageRPCPort: info.StorageNodeRpcPort,
 	}, true
 }
 
@@ -260,13 +278,51 @@ func (r *RpcNetworkState) IsOperator(owner, signer string) bool {
 
 // --- registry.TableStatuses
 
+// storageEndpointFor returns the storage RPC endpoint of the indexer hosting
+// database, falling back to the bootstrap endpoint only when the database is
+// unknown (spec 2026-10-09 §6.4 step 2).
+func (r *RpcNetworkState) storageEndpointFor(ctx context.Context, database string) (string, error) {
+	var db DatabaseInfo
+	ok, err := r.call(ctx, "sentio_getDatabaseInfoById", []interface{}{database}, &db)
+	if err != nil {
+		// Not "unknown": the bootstrap may not host the database, so its
+		// answer could be wrong. The caller treats the error as a failed
+		// lookup (status: unsigned pass-through, the server answers 733).
+		return "", fmt.Errorf("rpc: database %s lookup: %w", database, err)
+	}
+	if !ok {
+		return r.endpoint, nil
+	}
+	var info IndexerInfo
+	ok, err = r.call(ctx, "sentio_getIndexerInfoById", []interface{}{db.IndexerId}, &info)
+	if err != nil {
+		return "", fmt.Errorf("rpc: indexer %d hosting %s: %w", db.IndexerId, database, err)
+	}
+	if !ok || info.IndexerUrl == "" || info.StorageNodeRpcPort == 0 {
+		return "", fmt.Errorf("rpc: indexer %d hosting %s advertises no storage RPC endpoint", db.IndexerId, database)
+	}
+	scheme := "http"
+	if u, err := url.Parse(r.endpoint); err == nil && u.Scheme != "" {
+		scheme = u.Scheme
+	}
+	host := info.IndexerUrl
+	if u, err := url.Parse(host); err == nil && u.Host != "" {
+		host = u.Hostname() // tolerate a full URL in indexerUrl
+	}
+	return scheme + "://" + net.JoinHostPort(host, strconv.Itoa(int(info.StorageNodeRpcPort))), nil
+}
+
 // StorageIntegrityTableStatus calls sentio_getStorageIntegrityTableStatus
 // (spec 2026-09-24 §10.2). A transport error, a JSON-null result, or an
 // unknown status name is an error: the agent then passes the INSERT through
 // unsigned and counts the failure.
 func (r *RpcNetworkState) StorageIntegrityTableStatus(ctx context.Context, database, table string) (registry.TableStatus, error) {
+	endpoint, err := r.storageEndpointFor(ctx, database)
+	if err != nil {
+		return registry.TableStatus{}, fmt.Errorf("rpc: getStorageIntegrityTableStatus %s.%s: %w", database, table, err)
+	}
 	var status registry.TableStatus
-	ok, err := r.call(ctx, "sentio_getStorageIntegrityTableStatus", []interface{}{database, table}, &status)
+	ok, err := r.callAt(ctx, endpoint, "sentio_getStorageIntegrityTableStatus", []interface{}{database, table}, &status)
 	if err != nil {
 		return registry.TableStatus{}, fmt.Errorf("rpc: getStorageIntegrityTableStatus %s.%s: %w", database, table, err)
 	}
@@ -283,6 +339,44 @@ func (r *RpcNetworkState) StorageIntegrityTableStatus(ctx context.Context, datab
 }
 
 var _ registry.TableStatuses = (*RpcNetworkState)(nil)
+
+// StorageIntegrityInfo calls sentio_getStorageIntegrityInfo (no params) on the
+// indexer hosting database (spec 2026-10-09 §6.7).
+func (r *RpcNetworkState) StorageIntegrityInfo(ctx context.Context, database string) (registry.StorageIntegrityInfo, error) {
+	endpoint, err := r.storageEndpointFor(ctx, database)
+	if err != nil {
+		return registry.StorageIntegrityInfo{}, err
+	}
+	var info registry.StorageIntegrityInfo
+	ok, err := r.callAt(ctx, endpoint, "sentio_getStorageIntegrityInfo", nil, &info)
+	if err != nil {
+		return registry.StorageIntegrityInfo{}, fmt.Errorf("rpc: getStorageIntegrityInfo at %s: %w", endpoint, err)
+	}
+	if !ok {
+		return registry.StorageIntegrityInfo{}, fmt.Errorf("rpc: getStorageIntegrityInfo at %s returned null", endpoint)
+	}
+	return info, nil
+}
+
+// StorageIntegrityWriterCheck calls sentio_isDatabaseWriter(database,
+// account) on the hosting indexer (Plan A2). Errors mean "unknown".
+func (r *RpcNetworkState) StorageIntegrityWriterCheck(ctx context.Context, database, account string) (bool, error) {
+	endpoint, err := r.storageEndpointFor(ctx, database)
+	if err != nil {
+		return false, err
+	}
+	var writer bool
+	ok, err := r.callAt(ctx, endpoint, "sentio_isDatabaseWriter", []interface{}{database, account}, &writer)
+	if err != nil {
+		return false, fmt.Errorf("rpc: isDatabaseWriter at %s: %w", endpoint, err)
+	}
+	if !ok {
+		return false, fmt.Errorf("rpc: isDatabaseWriter at %s returned null", endpoint)
+	}
+	return writer, nil
+}
+
+var _ registry.StorageIntegrityDiscovery = (*RpcNetworkState)(nil)
 
 // Compile-time check the rpc backend satisfies registry.Registry.
 var _ registry.Registry = (*RpcNetworkState)(nil)

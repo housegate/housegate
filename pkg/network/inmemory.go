@@ -51,8 +51,9 @@ func (s *InMemoryNetworkState) ProxyByIndexerId(indexerId uint64) (registry.Prox
 		return registry.ProxyAddress{}, false
 	}
 	return registry.ProxyAddress{
-		Url:           info.IndexerUrl,
-		HousegatePort: info.ClickhouseProxyPort,
+		Url:            info.IndexerUrl,
+		HousegatePort:  info.ClickhouseProxyPort,
+		StorageRPCPort: info.StorageNodeRpcPort,
 	}, true
 }
 
@@ -62,8 +63,9 @@ func (s *InMemoryNetworkState) AllIndexers() map[uint64]registry.ProxyAddress {
 	out := make(map[uint64]registry.ProxyAddress, len(s.IndexerInfos))
 	for id, info := range s.IndexerInfos {
 		out[id] = registry.ProxyAddress{
-			Url:           info.IndexerUrl,
-			HousegatePort: info.ClickhouseProxyPort,
+			Url:            info.IndexerUrl,
+			HousegatePort:  info.ClickhouseProxyPort,
+			StorageRPCPort: info.StorageNodeRpcPort,
 		}
 	}
 	return out
