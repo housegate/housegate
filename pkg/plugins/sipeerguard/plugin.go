@@ -22,7 +22,7 @@ import (
 
 var refusals = prometheus.NewCounter(prometheus.CounterOpts{
 	Name: "storage_integrity_peer_guard_refusals_total",
-	Help: "Peer-trusted statements refused because they name the ordinary physical table of a governed storage-integrity table.",
+	Help: "Peer-trusted statements refused because they name the ordinary physical table of a governed storage-integrity table or cannot be scanned for one.",
 })
 
 func init() { prometheus.MustRegister(refusals) }
@@ -43,7 +43,7 @@ func (p *Plugin) OnQuery(_ context.Context, qctx *plugin.QueryContext) error {
 	if !snap.IsPeerTrusted || snap.IsForwardedFromPeer {
 		return nil
 	}
-	surfaces, err := sqlsurface.ScanWith(qctx.Query.Body, sqlsurface.Options{DecodeStringEscapes: true})
+	surfaces, err := sqlsurface.ScanWith(qctx.Query.Body, sqlsurface.Options{DecodeStringEscapes: true, DecodeIdentifierEscapes: true})
 	if err != nil {
 		refusals.Inc()
 		return &chproto.ClientError{Code: chproto.CodeQueryIsProhibited,
@@ -65,12 +65,20 @@ func (p *Plugin) OnQuery(_ context.Context, qctx *plugin.QueryContext) error {
 
 // candidates returns every table text the statement may read as an ordinary
 // physical table: (1) <physical>.<quoted> in any quoting of the database;
-// (2) a standalone quoted identifier containing '.'; (3) a string literal
+// (2) a standalone quoted identifier containing '.' directly after FROM or
+// JOIN, the unqualified table reference that resolves against the peer
+// session's physical default database (anywhere else a dotted quoted
+// identifier is an alias or a Nested column, which ClickHouse's secondary
+// queries emit, e.g. AS `avg(multiply(x, 1.5))`); (3) a string literal
 // containing '.' among a carrier's arguments, skipping the first (an address
 // or cluster name, plan decision P9).
 func candidates(tokens []sqlsurface.Token, physical string) []string {
 	isPunct := func(i int, text string) bool {
 		return i >= 0 && i < len(tokens) && tokens[i].Kind == sqlsurface.TokenPunct && tokens[i].Text == text
+	}
+	afterTableKeyword := func(i int) bool {
+		return i > 0 && tokens[i-1].Kind == sqlsurface.TokenWord &&
+			(strings.EqualFold(tokens[i-1].Text, "FROM") || strings.EqualFold(tokens[i-1].Text, "JOIN"))
 	}
 	var out []string
 	for i, tok := range tokens {
@@ -78,7 +86,7 @@ func candidates(tokens []sqlsurface.Token, physical string) []string {
 			isPunct(i+1, ".") && i+2 < len(tokens) && tokens[i+2].Kind == sqlsurface.TokenQuoted {
 			out = append(out, tokens[i+2].Text)
 		}
-		if tok.Kind == sqlsurface.TokenQuoted && strings.Contains(tok.Text, ".") && !isPunct(i-1, ".") && !isPunct(i+1, ".") {
+		if tok.Kind == sqlsurface.TokenQuoted && strings.Contains(tok.Text, ".") && afterTableKeyword(i) && !isPunct(i+1, ".") {
 			out = append(out, tok.Text)
 		}
 		if tok.Kind == sqlsurface.TokenWord && sireserved.IsObjectCarrierName(tok.Text) && isPunct(i+1, "(") {

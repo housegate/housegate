@@ -94,11 +94,86 @@ func TestGuardIgnoresNonCandidates(t *testing.T) {
 	}
 }
 
-func TestGuardRefusesUndecodableQuotedIdentifier(t *testing.T) {
-	err := newGuard(sitable.Ordinary).OnQuery(context.Background(), guardQuery(guardSession(t, true, false), "SELECT * FROM `devnet2`.`devnet101\\x2eswap_new106`"))
+const governedMessage = "storage_integrity: table devnet101.swap_new106 is governed by storage integrity and must be read through its host indexer; connect with --database devnet101 or USE devnet101"
+
+// TestGuardDecodesEscapedQuotedIdentifiers: ClickHouse decodes a quoted
+// identifier's escapes, so `devnet101\x2eswap_new106` names the governed
+// table and is checked like its plain spelling; only an escape ClickHouse
+// cannot be predicted to read (\x without two hex digits) is refused.
+func TestGuardDecodesEscapedQuotedIdentifiers(t *testing.T) {
+	escaped := "SELECT * FROM `devnet2`.`devnet101\\x2eswap_new106`"
+	err := newGuard(sitable.Active).OnQuery(context.Background(), guardQuery(guardSession(t, true, false), escaped))
 	var clientErr *chproto.ClientError
+	if !errors.As(err, &clientErr) || clientErr.Code != chproto.CodeQueryIsProhibited || clientErr.Message != governedMessage {
+		t.Fatalf("governed escaped identifier: err = %v, want the canonical 392", err)
+	}
+	if err := newGuard(sitable.Ordinary).OnQuery(context.Background(), guardQuery(guardSession(t, true, false), escaped)); err != nil {
+		t.Fatalf("Ordinary escaped identifier refused: %v", err)
+	}
+
+	err = newGuard(sitable.Ordinary).OnQuery(context.Background(), guardQuery(guardSession(t, true, false), "SELECT * FROM `devnet2`.`devnet101\\x4gswap_new106`"))
+	clientErr = nil
 	if !errors.As(err, &clientErr) || clientErr.Code != chproto.CodeQueryIsProhibited || !strings.Contains(clientErr.Message, "storage_integrity") {
 		t.Fatalf("err = %v, want a 392 refusal of an undecodable identifier", err)
+	}
+}
+
+// governedDatabaseState mirrors the SI host: an unrecorded table defaults to
+// Pending only inside the governed database devnet101 and is Ordinary
+// elsewhere. It is both the TableState and its one Snapshot.
+type governedDatabaseState map[string]sitable.Status
+
+func (s governedDatabaseState) Current() sitable.Snapshot { return s }
+func (governedDatabaseState) Changed() <-chan struct{}    { return nil }
+func (governedDatabaseState) Version() uint64             { return 1 }
+func (governedDatabaseState) Active() []sitable.Table     { return nil }
+func (governedDatabaseState) Schema(string) (sitable.Table, bool) {
+	return sitable.Table{}, false
+}
+
+func (s governedDatabaseState) Lookup(database, table string) sitable.Table {
+	id := database + "." + table
+	if status, ok := s[id]; ok {
+		return sitable.Table{ID: id, Status: status}
+	}
+	if database == "devnet101" {
+		return sitable.Table{ID: id, Status: sitable.Pending}
+	}
+	return sitable.Table{ID: id, Status: sitable.Ordinary}
+}
+
+// TestGuardPassesMeasuredSecondaryQueryAliases runs projection aliases that
+// ClickHouse 26.8.1 emitted in remote() secondary queries against an Ordinary
+// table inside a governed database. Aliases are never table references, even
+// when they contain '.' or escapes.
+func TestGuardPassesMeasuredSecondaryQueryAliases(t *testing.T) {
+	g := &Plugin{PhysicalDatabase: "phys", TableState: governedDatabaseState{"devnet101.t": sitable.Ordinary}}
+	sess := guardSession(t, true, false)
+	for _, sql := range []string{
+		"SELECT extract(`__table1`.`s`, '\\\\d+') AS `extract(s, '\\\\\\\\d+')` FROM `phys`.`devnet101.t` AS `__table1`",
+		"SELECT concat(`__table1`.`s`, '\\n') AS `concat(s, '\\\\n')` FROM `phys`.`devnet101.t` AS `__table1`",
+		"SELECT concat(`__table1`.`s`, 'it\\'s') AS `concat(s, 'it\\\\'s')` FROM `phys`.`devnet101.t` AS `__table1`",
+		"SELECT avg(`__table1`.`x` * 1.5) AS `avg(multiply(x, 1.5))` FROM `phys`.`devnet101.t` AS `__table1`",
+		"SELECT countIf(`__table1`.`x` > 0.5) AS `countIf(greater(x, 0.5))` FROM `phys`.`devnet101.t` AS `__table1`",
+		"SELECT `__table1`.`n.a` AS `n.a` FROM `phys`.`devnet101.t` AS `__table1`",
+		"SELECT `__table1`.`s` AS `devnet101.alias` FROM `phys`.`devnet101.t` AS `__table1`",
+	} {
+		if err := g.OnQuery(context.Background(), guardQuery(sess, sql)); err != nil {
+			t.Errorf("%q refused: %v", sql, err)
+		}
+	}
+	// The same state still refuses the governed (unrecorded, Pending) table
+	// in every candidate form.
+	for _, sql := range []string{
+		"SELECT count() FROM `phys`.`devnet101.swap_new106` AS `__table1`",
+		"SELECT * FROM `devnet101.swap_new106`",
+		"SELECT * FROM `phys`.`devnet101.t` AS a JOIN `devnet101.swap_new106` AS b ON 1",
+		"SELECT count() FROM remote('10.0.0.1:9000', 'phys', 'devnet101.swap_new106')",
+	} {
+		var clientErr *chproto.ClientError
+		if err := g.OnQuery(context.Background(), guardQuery(sess, sql)); !errors.As(err, &clientErr) || clientErr.Message != governedMessage {
+			t.Errorf("%q: err = %v, want the canonical 392", sql, err)
+		}
 	}
 }
 
