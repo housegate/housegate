@@ -314,7 +314,7 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) (result
 		defer func() { resultErr = inlineWrap(resultErr) }()
 	}
 	if qctx.Query.Compression == proto.CompressionEnabled {
-		return errors.New("storage_integrity agent rejects compressed INSERT payloads; retry with ClickHouse query compression disabled")
+		return errors.New("storage_integrity agent rejects compressed INSERT payloads; retry with ClickHouse query compression disabled; clickhouse-client compresses by default only for non-local hosts — connect to 127.0.0.1 or pass --compression 0")
 	}
 	keys := make([]string, 0, len(qctx.Query.Settings))
 	for _, s := range qctx.Query.Settings {
@@ -326,7 +326,7 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) (result
 	}
 	keys = append(keys, inlineKeys...)
 	if err := sicore.RejectUserSettings(keys); err != nil {
-		return err
+		return fmt.Errorf("%w (clickhouse-client also sends settings from ~/.clickhouse-client/config.xml)", err)
 	}
 	if targetErr != nil {
 		return fmt.Errorf("storage_integrity agent: %w", targetErr)

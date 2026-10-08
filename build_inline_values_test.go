@@ -321,3 +321,21 @@ func serveInlineAccountContext(conn net.Conn, seen chan<- *chproto.Query) error 
 	end.PutUVarInt(uint64(proto.ServerCodeEndOfStream))
 	return srv.WriteRawPacket(end.Buf)
 }
+
+func TestBuildAgent_OptionalMaterializerFailureDisablesInlineValues(t *testing.T) {
+	cfg := agentSICfg(t)
+	cfg.Materialize.Enabled, cfg.Materialize.Engine, cfg.Materialize.Optional = true, "native", true
+	cfg.StorageIntegrity.Agent.InlineValues.Enabled = true
+	failing := func(*config.Config) (rewriter.Materializer, error) { return nil, errors.New("fetch failed") }
+	bs, err := buildAgentWithMaterializerBuilder(Options{Config: cfg, StorageIntegrityTableSchemas: network.NewInMemoryNetworkState()}, nil, failing)
+	if err != nil {
+		t.Fatalf("an optional materializer must not fail startup: %v", err)
+	}
+	bs.teardown()
+
+	cfg.Materialize.Optional = false
+	if bs, err := buildAgentWithMaterializerBuilder(Options{Config: cfg, StorageIntegrityTableSchemas: network.NewInMemoryNetworkState()}, nil, failing); err == nil {
+		bs.teardown()
+		t.Fatal("an explicit materializer must stay fail-fast")
+	}
+}

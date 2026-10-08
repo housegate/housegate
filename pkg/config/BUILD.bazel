@@ -14,6 +14,7 @@ go_library(
     deps = [
         "//pkg/cfgtypes",
         "//pkg/cluster",
+        "//pkg/ffifetch",
         "//pkg/log",
         "//pkg/plugins/agent",
         "//pkg/plugins/auth",

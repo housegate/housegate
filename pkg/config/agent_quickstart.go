@@ -3,8 +3,12 @@ package config
 import (
 	"errors"
 	"fmt"
+	"runtime"
 	"sort"
 	"strings"
+
+	"github.com/housegate/housegate/pkg/ffifetch"
+	"github.com/housegate/housegate/pkg/rewriter"
 )
 
 // DefaultAgentNetwork is the preset an -agent-key-only agent joins (spec
@@ -33,6 +37,10 @@ type AgentQuickstart struct {
 	SILanes          string
 	SIReadMode       string
 	SIInlineValues   string
+	// GOOS and GOARCH name the platform whose native engine "auto" inline
+	// values depends on; empty means the running platform.
+	GOOS   string
+	GOARCH string
 }
 
 // ApplyAgentQuickstart applies the agent defaults. Without a config file an
@@ -87,14 +95,44 @@ func ApplyAgentQuickstart(cfg *Config, q AgentQuickstart) error {
 	if q.SIReadMode != "" {
 		cfg.StorageIntegrity.Agent.ReadMode = q.SIReadMode
 	}
-	switch q.SIInlineValues {
+	inline := q.SIInlineValues
+	if inline == "" && quick {
+		inline = "auto"
+	}
+	goos, goarch := q.GOOS, q.GOARCH
+	if goos == "" {
+		goos = runtime.GOOS
+	}
+	if goarch == "" {
+		goarch = runtime.GOARCH
+	}
+	switch inline {
+	case "auto":
+		if cfg.StorageIntegrity.Agent.Enabled && ffifetch.Supported(goos, goarch) {
+			cfg.StorageIntegrity.Agent.InlineValues.Enabled = true
+			enableNativeMaterializer(cfg, true)
+		}
 	case "on":
 		cfg.StorageIntegrity.Agent.InlineValues.Enabled = true
+		enableNativeMaterializer(cfg, false)
 	case "off":
 		cfg.StorageIntegrity.Agent.InlineValues.Enabled = false
 	}
-	// "auto" (the quickstart default) leaves inline_values as configured.
 	return nil
+}
+
+// enableNativeMaterializer turns on the in-process native materializer at the
+// release matching this binary, unless the operator configured one.
+func enableNativeMaterializer(cfg *Config, optional bool) {
+	if cfg.Materialize.Enabled {
+		return
+	}
+	cfg.Materialize.Enabled = true
+	cfg.Materialize.Engine = rewriter.EngineNative
+	if cfg.Materialize.NativeLibraryPath == "" && cfg.Materialize.NativeLibraryRelease == "" {
+		cfg.Materialize.NativeLibraryRelease = ffifetch.DefaultRelease
+	}
+	cfg.Materialize.Optional = optional
 }
 
 func (q AgentQuickstart) validate() error {

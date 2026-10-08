@@ -180,3 +180,44 @@ func TestDefaultAgentStateBase(t *testing.T) {
 		t.Fatalf("AgentSIStateDir = %q", got)
 	}
 }
+
+func TestApplyAgentQuickstart_InlineValuesAuto(t *testing.T) {
+	supported := quickstartBase()
+	if err := ApplyAgentQuickstart(supported, AgentQuickstart{GOOS: "linux", GOARCH: "amd64"}); err != nil {
+		t.Fatal(err)
+	}
+	m := supported.Materialize
+	if !supported.StorageIntegrity.Agent.InlineValues.Enabled || !m.Enabled || m.Engine != "native" || m.NativeLibraryRelease != "v0.17.0" || !m.Optional {
+		t.Fatalf("inline=%v materialize=%+v; want the optional native default", supported.StorageIntegrity.Agent.InlineValues.Enabled, m)
+	}
+	if err := supported.Validate(); err != nil {
+		t.Fatalf("auto inline values must validate: %v", err)
+	}
+
+	unsupported := quickstartBase()
+	if err := ApplyAgentQuickstart(unsupported, AgentQuickstart{GOOS: "linux", GOARCH: "arm64"}); err != nil {
+		t.Fatal(err)
+	}
+	if unsupported.StorageIntegrity.Agent.InlineValues.Enabled || unsupported.Materialize.Enabled {
+		t.Fatal("without a prebuilt engine inline values stay off")
+	}
+
+	explicit := quickstartBase()
+	explicit.Materialize.Enabled = true
+	explicit.Materialize.Engine = "grpc"
+	explicit.Materialize.ServiceAddr = "127.0.0.1:50051"
+	if err := ApplyAgentQuickstart(explicit, AgentQuickstart{GOOS: "linux", GOARCH: "amd64"}); err != nil {
+		t.Fatal(err)
+	}
+	if explicit.Materialize.Engine != "grpc" || explicit.Materialize.Optional {
+		t.Fatalf("an explicit materializer must be kept and stay fail-fast: %+v", explicit.Materialize)
+	}
+
+	forced := quickstartBase()
+	if err := ApplyAgentQuickstart(forced, AgentQuickstart{GOOS: "linux", GOARCH: "arm64", SIInlineValues: "on"}); err != nil {
+		t.Fatal(err)
+	}
+	if !forced.StorageIntegrity.Agent.InlineValues.Enabled || !forced.Materialize.Enabled || forced.Materialize.Optional {
+		t.Fatalf("-si-inline-values on must enable a fail-fast materializer: %+v", forced.Materialize)
+	}
+}

@@ -430,10 +430,10 @@ func TestPlugin_Rejections(t *testing.T) {
 		mutate  func(*plugin.QueryContext)
 		wantErr string
 	}{
-		{"compressed", func(q *plugin.QueryContext) { q.Query.Compression = proto.CompressionEnabled }, "compressed"},
+		{"compressed", func(q *plugin.QueryContext) { q.Query.Compression = proto.CompressionEnabled }, "connect to 127.0.0.1 or pass --compression 0"},
 		{"user setting", func(q *plugin.QueryContext) {
 			q.Query.Settings = []chproto.Setting{{Key: "SQL_x_payer", Value: "'0xabc'", Custom: true}, {Key: "async_insert", Value: "1"}}
-		}, "async_insert"},
+		}, "~/.clickhouse-client/config.xml"},
 		{"unqualified without session db", func(q *plugin.QueryContext) { q.Query.Body = "INSERT INTO orders FORMAT Native" }, "database-qualified"},
 		{"column subset", func(q *plugin.QueryContext) { q.Query.Body = "INSERT INTO shop.orders (id, region) FORMAT Native" }, "amount"},
 		{"unknown revision", func(q *plugin.QueryContext) { q.Session.State().ClientRevision = 0 }, "revision"},

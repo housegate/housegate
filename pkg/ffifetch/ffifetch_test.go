@@ -215,3 +215,14 @@ func TestFetch_InvalidInputs(t *testing.T) {
 		}
 	}
 }
+
+func TestSupported(t *testing.T) {
+	for platform, want := range map[[2]string]bool{
+		{"linux", "amd64"}: true, {"darwin", "arm64"}: true,
+		{"linux", "arm64"}: false, {"windows", "amd64"}: false,
+	} {
+		if got := Supported(platform[0], platform[1]); got != want {
+			t.Errorf("Supported(%s/%s) = %v, want %v", platform[0], platform[1], got, want)
+		}
+	}
+}

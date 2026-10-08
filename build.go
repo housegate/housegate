@@ -1309,20 +1309,36 @@ func buildAgentWithBuilders(
 			siClose()
 		}
 	}()
+	inlineEnabled := cfg.StorageIntegrity.Agent.InlineValues.Enabled
 	if cfg.Materialize.Enabled {
 		m, err := materializerBuilder(cfg)
-		if err != nil {
+		switch {
+		case err != nil && cfg.Materialize.Optional:
+			// Spec 2026-10-09 §6.4: the implicit native default degrades to
+			// streaming FORMAT inserts only; inline VALUES then gets the
+			// server's actionable refusal.
+			log.Warnw("agent: native engine unavailable; inline INSERT ... VALUES is disabled (streaming FORMAT inserts keep working)",
+				"release", cfg.Materialize.NativeLibraryRelease, "err", err)
+			inlineEnabled = false
+		case err != nil:
 			return nil, fmt.Errorf("materialize: %w", err) // startup fail-fast
+		default:
+			materializerClose = func() { _ = m.Close() }
+			// Random-pool size (cfg.Materialize.RandomPoolSize) is applied
+			// materializer-side in buildMaterializer, not on the plugin —
+			// don't re-add a PoolSize field here.
+			queryPlugins = append(queryPlugins, &materialize.Plugin{
+				Materializer: m,
+				Observer:     obs,
+			})
+			log.Infow("agent materialize enabled", "engine", cfg.Materialize.Engine, "implicit", cfg.Materialize.Optional)
 		}
-		materializerClose = func() { _ = m.Close() }
-		// Random-pool size (cfg.Materialize.RandomPoolSize) is applied
-		// materializer-side in buildMaterializer, not on the plugin —
-		// don't re-add a PoolSize field here.
-		queryPlugins = append(queryPlugins, &materialize.Plugin{
-			Materializer: m,
-			Observer:     obs,
-		})
-		log.Infow("agent materialize enabled", "engine", cfg.Materialize.Engine)
+	}
+	// Read-mode injection is independent of the SI statement lane (F20): it
+	// only adds the owned setting to SELECT/WITH statements that lack one.
+	if mode := cfg.StorageIntegrity.Agent.ReadMode; mode != "" {
+		queryPlugins = append(queryPlugins, &sistatement.ReadModeInjector{Mode: mode})
+		log.Infow("agent read mode injected on SELECTs", "read_mode", mode)
 	}
 	agentPlug := &agent.Plugin{Signer: signer, Observer: obs, Owner: cfg.Agent.Owner, IsDriver: cfg.Agent.Driver}
 
@@ -1365,7 +1381,7 @@ func buildAgentWithBuilders(
 		}
 		inlineCfg := cfg.StorageIntegrity.Agent.InlineValues
 		var evaluator sistatement.ValuesEvaluator
-		if inlineCfg.Enabled {
+		if inlineEnabled {
 			if dialer == nil {
 				return nil, fmt.Errorf("storage_integrity.agent.inline_values requires an upstream dialer")
 			}
@@ -1387,6 +1403,7 @@ func buildAgentWithBuilders(
 		}
 		siOpts.Signer = stmtSigner
 		siOpts.Evaluator = evaluator
+		siOpts.InlineValues.Enabled = inlineEnabled
 		siOpts.Observer = obs
 		siPlug, err := sistatement.New(siOpts)
 		if err != nil {
