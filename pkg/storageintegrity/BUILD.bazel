@@ -54,6 +54,7 @@ go_test(
         "arbiter_proto_test.go",
         "ingress_drive_test.go",
         "inline_values_test.go",
+        "insert_parser_test.go",
         "intake_abort_test.go",
         "intake_journal_test.go",
         "intake_recovery_test.go",

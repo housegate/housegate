@@ -29,9 +29,11 @@ const (
 )
 
 type fakeSession struct {
-	upstream *chproto.Codec
-	id       int64
-	state    *chsession.SessionState
+	upstream  *chproto.Codec
+	id        int64
+	state     *chsession.SessionState
+	switched  []*chproto.ClientHello
+	switchErr error
 }
 
 func (s *fakeSession) ID() int64                                          { return s.id }
@@ -51,7 +53,16 @@ func (s *fakeSession) RebindToLocal(context.Context, *chproto.Codec, *chproto.Cl
 	return nil
 }
 
-func (s *fakeSession) SwitchUpstream(context.Context, *chproto.Codec, *chproto.ClientHello) error {
+func (s *fakeSession) SwitchUpstream(_ context.Context, newUp *chproto.Codec, hello *chproto.ClientHello) error {
+	if s.switchErr != nil {
+		return s.switchErr
+	}
+	cloned := *hello
+	s.switched = append(s.switched, &cloned)
+	// Production negotiates exactly the client leg's revision (Task 10); the
+	// fake fixes it to that value.
+	newUp.SetRevision(s.state.ClientRevision)
+	s.upstream = newUp
 	return nil
 }
 

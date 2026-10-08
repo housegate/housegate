@@ -35,3 +35,13 @@ type SeqObserver interface {
 type DiscoveryObserver interface {
 	SIDiscoveryFailed(step string)
 }
+
+// SwitchObserver counts the outcomes of the agent's upstream switch to the
+// indexer hosting an SI INSERT's database (spec 2026-10-09 §6.4, §10):
+// "switched", "refused_state", "refused_database", "refused_revision" (also a
+// differing server timezone) and "dial_failed" (dial, handshake or deadline).
+// *proxy.MetricsObserver satisfies it; an Observer that does not is not
+// counted.
+type SwitchObserver interface {
+	SIUpstreamSwitch(result string)
+}

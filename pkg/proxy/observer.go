@@ -85,6 +85,10 @@ var (
 		Name: "clickhouse_proxy_agent_si_discovery_failures_total",
 		Help: "Agent-mode storage-integrity discovery failures by step",
 	}, []string{"step"})
+	agentSIUpstreamSwitchesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "clickhouse_proxy_agent_si_upstream_switches_total",
+		Help: "Agent-mode upstream switches to the indexer hosting a storage-integrity INSERT's database, by result",
+	}, []string{"result"})
 )
 
 func init() {
@@ -106,6 +110,7 @@ func init() {
 	prometheus.MustRegister(agentSISeqRecycledTotal)
 	prometheus.MustRegister(agentSISeqBurnedTotal)
 	prometheus.MustRegister(agentSIDiscoveryFailuresTotal)
+	prometheus.MustRegister(agentSIUpstreamSwitchesTotal)
 }
 
 type MetricsObserver struct{}
@@ -194,6 +199,13 @@ func (m *MetricsObserver) SeqBurned(reason string) {
 // "network_id", "precheck"; spec 2026-10-09 §10).
 func (m *MetricsObserver) SIDiscoveryFailed(step string) {
 	agentSIDiscoveryFailuresTotal.WithLabelValues(step).Inc()
+}
+
+// SIUpstreamSwitch counts an agent upstream-switch outcome ("switched",
+// "refused_state", "refused_database", "refused_revision", "dial_failed";
+// spec 2026-10-09 §10).
+func (m *MetricsObserver) SIUpstreamSwitch(result string) {
+	agentSIUpstreamSwitchesTotal.WithLabelValues(result).Inc()
 }
 
 func (m *MetricsObserver) InlineValuesSynthesized() {

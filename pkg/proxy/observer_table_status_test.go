@@ -32,3 +32,14 @@ func TestMetricsObserver_SIDiscoveryFailures(t *testing.T) {
 		t.Fatalf("clickhouse_proxy_agent_si_discovery_failures_total{step=\"precheck\"} = %g, want %g", got, before+1)
 	}
 }
+
+func TestMetricsObserver_SIUpstreamSwitches(t *testing.T) {
+	var obs sistatement.SwitchObserver = NewMetricsObserver()
+	for _, result := range []string{"switched", "refused_state", "refused_database", "refused_revision", "dial_failed"} {
+		before := testutil.ToFloat64(agentSIUpstreamSwitchesTotal.WithLabelValues(result))
+		obs.SIUpstreamSwitch(result)
+		if got := testutil.ToFloat64(agentSIUpstreamSwitchesTotal.WithLabelValues(result)); got != before+1 {
+			t.Fatalf("clickhouse_proxy_agent_si_upstream_switches_total{result=%q} = %g, want %g", result, got, before+1)
+		}
+	}
+}

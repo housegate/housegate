@@ -66,6 +66,17 @@ type Options struct {
 	Evaluator ValuesEvaluator
 	// Observer is the narrow metrics surface; nil disables it.
 	Observer Observer
+	// Hosting and Dial enable the upstream switch to the indexer hosting an SI
+	// INSERT's database (spec 2026-10-09 §6.4, D19). Dial must return a codec
+	// whose conn reports the dialed address (build's dialRaw wrapper). A nil
+	// Hosting or Dial, or PinnedUpstream (agent.upstream is configured),
+	// disables the switch.
+	Hosting        HostingResolver
+	Dial           func(ctx context.Context, address string) (*chproto.Codec, error)
+	PinnedUpstream bool
+	// SwitchTimeout bounds the dial plus the replayed handshake of one
+	// switch; zero means 10s.
+	SwitchTimeout time.Duration
 }
 
 // Plugin is the agent-mode storage-integrity statement plugin. See doc.go.
@@ -86,6 +97,10 @@ type Plugin struct {
 	inline         InlineValuesOptions
 	evaluator      ValuesEvaluator
 	observer       Observer
+	hosting        HostingResolver
+	dial           func(ctx context.Context, address string) (*chproto.Codec, error)
+	pinnedUpstream bool
+	switchTimeout  time.Duration
 
 	// seqMu guards the lazily opened counters apart from mu, so a first open
 	// does not stall other sessions' hooks.
@@ -104,6 +119,11 @@ type Plugin struct {
 	reserved           map[int64]*reservedSeq      // by session id; at most one per session
 	useDB              map[int64]string            // last successful standalone USE per session
 	useNext            map[int64]pendingUse        // candidate USE awaiting upstream success
+	// nonSwitchable marks sessions holding server-side state the agent cannot
+	// replay (a successful SET, temporary table or transaction); statefulNext
+	// is the query id of such a statement awaiting upstream success.
+	nonSwitchable map[int64]bool
+	statefulNext  map[int64]string
 }
 
 // pendingStatement is a claimed SI INSERT whose input is still arriving. It
@@ -201,6 +221,10 @@ func New(opts Options) (*Plugin, error) {
 		inline:             opts.InlineValues,
 		evaluator:          opts.Evaluator,
 		observer:           opts.Observer,
+		hosting:            opts.Hosting,
+		dial:               opts.Dial,
+		pinnedUpstream:     opts.PinnedUpstream,
+		switchTimeout:      opts.SwitchTimeout,
 		seqs:               map[string]*SeqCounter{},
 		infos:              map[string]registry.StorageIntegrityInfo{},
 		infoFailures:       map[string]infoFailure{},
@@ -210,6 +234,8 @@ func New(opts Options) (*Plugin, error) {
 		reserved:           map[int64]*reservedSeq{},
 		useDB:              map[int64]string{},
 		useNext:            map[int64]pendingUse{},
+		nonSwitchable:      map[int64]bool{},
+		statefulNext:       map[int64]string{},
 	}, nil
 }
 
@@ -233,6 +259,13 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) (result
 		p.useNext[sessID] = pendingUse{queryID: qctx.Query.ID, db: db}
 		p.mu.Unlock()
 		return nil
+	}
+	// Spec 2026-10-09 §6.4 step 1: state the agent cannot replay on another
+	// server pins the session once the statement succeeds.
+	if holdsServerState(sql) {
+		p.mu.Lock()
+		p.statefulNext[sessID] = qctx.Query.ID
+		p.mu.Unlock()
 	}
 	// Spec 2026-09-24 §10.1: the target's status comes first. Only an Active
 	// table is signed; every other INSERT passes through unchanged and the
@@ -315,6 +348,13 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) (result
 	}
 	if !proto.FeatureSettingsSerializedAsStrings.In(revision) {
 		return fmt.Errorf("storage_integrity agent: client protocol revision %d cannot carry required string settings; revision >= %d is required", revision, proto.FeatureSettingsSerializedAsStrings.Version())
+	}
+	// Spec 2026-10-09 §6.4 (D19): after every local check that needs no
+	// upstream and before the statement is claimed, move the session to the
+	// indexer hosting the target. The inline checks below read the (possibly
+	// new) upstream.
+	if err := p.maybeSwitch(ctx, qctx.Session, target.Database); err != nil {
+		return err
 	}
 	if inline != nil {
 		if len(qctx.Query.Parameters) != 0 {
@@ -674,13 +714,18 @@ func (p *Plugin) OnQueryAbort(_ context.Context, qctx *plugin.QueryContext) {
 // OnQuerySuccess commits a standalone USE only after Relay observes the
 // upstream EndOfStream for that exact query. An Exception or local rejection
 // reaches completion without this hook and therefore cannot change the signing
-// database for later unqualified INSERTs.
+// database for later unqualified INSERTs. A succeeded statement that holds
+// server-side state likewise marks the session non-switchable only here.
 func (p *Plugin) OnQuerySuccess(_ context.Context, sess chsession.Session, queryID string) {
 	if p == nil || sess == nil {
 		return
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if id, ok := p.statefulNext[sess.ID()]; ok && id == queryID {
+		p.nonSwitchable[sess.ID()] = true
+		delete(p.statefulNext, sess.ID())
+	}
 	if r := p.reserved[sess.ID()]; r != nil && r.statementID == queryID {
 		// Sequenced: the seq is spent, which is neither recycled nor burned.
 		r.resolved = true
@@ -693,17 +738,18 @@ func (p *Plugin) OnQuerySuccess(_ context.Context, sess chsession.Session, query
 	delete(p.useNext, sess.ID())
 }
 
-// OnQueryComplete drops any candidate USE that did not reach the success
-// boundary, and the outstanding seq: one that was neither sequenced nor proven
-// unspent is counted burned (unknown outcome, spec 2026-10-09 D16 (c)). Relay
-// permits only one query in flight per session, so the session id is
-// sufficient at this terminal hook.
+// OnQueryComplete drops any candidate USE or stateful statement that did not
+// reach the success boundary, and the outstanding seq: one that was neither
+// sequenced nor proven unspent is counted burned (unknown outcome, spec
+// 2026-10-09 D16 (c)). Relay permits only one query in flight per session, so
+// the session id is sufficient at this terminal hook.
 func (p *Plugin) OnQueryComplete(_ context.Context, sess chsession.Session) {
 	if p == nil || sess == nil {
 		return
 	}
 	p.mu.Lock()
 	delete(p.useNext, sess.ID())
+	delete(p.statefulNext, sess.ID())
 	burned := p.dropReservedLocked(sess.ID())
 	p.mu.Unlock()
 	if burned {
@@ -721,6 +767,8 @@ func (p *Plugin) OnClose(sess chsession.Session) {
 	delete(p.pending, sess.ID())
 	delete(p.useDB, sess.ID())
 	delete(p.useNext, sess.ID())
+	delete(p.nonSwitchable, sess.ID())
+	delete(p.statefulNext, sess.ID())
 	burned := p.dropReservedLocked(sess.ID())
 	p.mu.Unlock()
 	if burned {
