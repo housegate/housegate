@@ -2190,7 +2190,8 @@ func compressionMode(c proto.Compression) string {
 // exceptionForPluginError maps a plugin error to the synthetic Exception the
 // client sees. ClientError selects an explicit code and message; all other
 // plugin rejections keep the generic 403 behavior. A refusal flagged unspent
-// gets chproto.SeqUnspentSuffix exactly once — the only place it is rendered.
+// gets chproto.SeqUnspentSuffix exactly once — the only place it is rendered;
+// an unflagged refusal is rendered without it even when its text ends with it.
 func exceptionForPluginError(pluginErr error) *chproto.Exception {
 	exception := &chproto.Exception{Code: 403, Name: "DB::Exception", Message: pluginErr.Error()} // 403 = AUTHENTICATION_FAILED; generic plugin-reject
 	var clientErr *chproto.ClientError
@@ -2198,8 +2199,17 @@ func exceptionForPluginError(pluginErr error) *chproto.Exception {
 		exception.Code = proto.Error(clientErr.Code)
 		exception.Message = clientErr.Message
 	}
-	if chproto.IsSeqUnspent(pluginErr) && !chproto.HasSeqUnspentSuffix(exception.Message) {
-		exception.Message += chproto.SeqUnspentSuffix
+	if chproto.IsSeqUnspent(pluginErr) {
+		if !chproto.HasSeqUnspentSuffix(exception.Message) {
+			exception.Message += chproto.SeqUnspentSuffix
+		}
+		return exception
+	}
+	// Only the typed flag may produce the marker: an unflagged message that
+	// already ends with it (user-controlled text quoted last) loses it, so a
+	// refusal that may follow a submission never tells the agent to recycle.
+	for chproto.HasSeqUnspentSuffix(exception.Message) {
+		exception.Message = chproto.TrimSeqUnspentSuffix(exception.Message)
 	}
 	return exception
 }

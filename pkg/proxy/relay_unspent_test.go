@@ -38,6 +38,30 @@ func TestExceptionForPluginError_RendersUnspentMarkerOnce(t *testing.T) {
 	}
 }
 
+// Only the typed flag may produce the marker: an unflagged refusal whose text
+// happens to end with it (for example user-controlled text quoted at the end
+// of a message) is rendered without it, so the agent never recycles a seq a
+// post-submission refusal may have spent (final review M9).
+func TestExceptionForPluginError_StripsAnUnflaggedMarker(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err  error
+		want string
+	}{
+		"plain":        {errors.New(`storage_integrity: rejected "x [client_seq unspent]"` + chproto.SeqUnspentSuffix), `storage_integrity: rejected "x [client_seq unspent]"`},
+		"client error": {&chproto.ClientError{Code: 392, Message: "storage_integrity: refused" + chproto.SeqUnspentSuffix}, "storage_integrity: refused"},
+		"repeated":     {errors.New("x" + chproto.SeqUnspentSuffix + chproto.SeqUnspentSuffix + " "), "x"},
+		"flagged":      {chproto.MarkSeqUnspent(errors.New("x" + chproto.SeqUnspentSuffix)), "x" + chproto.SeqUnspentSuffix},
+	} {
+		got := exceptionForPluginError(tc.err).Message
+		if got != tc.want {
+			t.Errorf("%s: message = %q, want %q", name, got, tc.want)
+		}
+		if !chproto.IsSeqUnspent(tc.err) && chproto.HasSeqUnspentSuffix(got) {
+			t.Errorf("%s: an unflagged refusal rendered the marker: %q", name, got)
+		}
+	}
+}
+
 func TestSessionPreservingIngressException_AcceptsMarker(t *testing.T) {
 	for _, exc := range []*chproto.Exception{
 		{Code: proto.Error(chproto.CodeTooManyParts), Message: "storage_integrity: back-pressure: retry later" + chproto.SeqUnspentSuffix},
