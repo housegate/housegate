@@ -27,6 +27,7 @@ go_test(
     name = "network_test",
     srcs = [
         "inmemory_commitgate_observer_test.go",
+        "inmemory_writer_test.go",
         "permission_commitgate_observer_test.go",
         "rpc_table_status_test.go",
         "rpc_test.go",

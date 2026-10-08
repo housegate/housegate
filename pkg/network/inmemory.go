@@ -154,6 +154,31 @@ func (s *InMemoryNetworkState) IsOperator(owner, signer string) bool {
 	return ops[AccountAddress(signer)]
 }
 
+// IsDatabaseWriter implements registry.WriterAccess with the contract's
+// semantics (spec 2026-10-09 D2): the hosting indexer's signer, or the
+// account's own Owner or Write bit. Unlike HasPermission it neither unions the
+// wildcard address's grants nor promotes Admin.
+func (s *InMemoryNetworkState) IsDatabaseWriter(database, account string) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	info, ok := s.DatabaseInfos[Database(database)]
+	if !ok || info.PendingDelete {
+		return false, fmt.Errorf("database not found: %s", database)
+	}
+	account = strings.ToLower(strings.TrimSpace(account))
+	if account == "" || AccountAddress(account) == WildcardAddress {
+		return false, nil
+	}
+	if indexer, ok := s.IndexerInfos[info.IndexerId]; ok {
+		signer := strings.ToLower(strings.TrimSpace(indexer.Signer))
+		if signer != "" && AccountAddress(signer) != WildcardAddress && signer == account {
+			return true, nil
+		}
+	}
+	bits := s.DatabasePermissions[AccountAddress(account)][Database(database)]
+	return bits&(registry.DbAuthOwner|registry.DbAuthWrite) != 0, nil
+}
+
 // --- registry.TableSchemas
 
 func (s *InMemoryNetworkState) TableSchema(databaseId, tableId string, version uint32) (registry.TableSchema, bool) {
@@ -280,3 +305,4 @@ func convertTableSchema(info TableSchemaInfo) registry.TableSchema {
 // consumer-side contract housegate's proxy chain depends on.
 var _ registry.Registry = (*InMemoryNetworkState)(nil)
 var _ registry.TableSchemas = (*InMemoryNetworkState)(nil)
+var _ registry.WriterAccess = (*InMemoryNetworkState)(nil)
