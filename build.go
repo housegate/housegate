@@ -38,6 +38,7 @@ import (
 	"github.com/housegate/housegate/pkg/plugins/rewrite"
 	routeplugin "github.com/housegate/housegate/pkg/plugins/route"
 	"github.com/housegate/housegate/pkg/plugins/sessionstate"
+	"github.com/housegate/housegate/pkg/plugins/sipeerguard"
 	"github.com/housegate/housegate/pkg/plugins/sireserved"
 	"github.com/housegate/housegate/pkg/plugins/sistatement"
 	"github.com/housegate/housegate/pkg/plugins/sitablestate"
@@ -707,6 +708,19 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			ReservedRowIDColumn: rewriter.DefaultReservedRowIDColumn,
 		})
 		log.Info("storage-integrity reserved-name guard enabled")
+	}
+	// Spec 2026-10-09 §6.3: on the SI host, a peer-trusted read that names the
+	// ordinary physical table of a governed table fails loudly instead of
+	// reading the empty table. Without a physical database no such table can
+	// exist.
+	if siOptions.Enabled {
+		if physical := cfg.Rewriter.PhysicalDatabase; physical != "" {
+			queryPlugins = append(queryPlugins, &sipeerguard.Plugin{PhysicalDatabase: physical, TableState: siState})
+			log.Infow("storage-integrity peer guard enabled", "physical_database", physical)
+		} else {
+			log.Infow("storage-integrity peer guard off: rewriter.physical_database is empty, so no ordinary physical SI table can exist",
+				"physical_database", physical)
+		}
 	}
 	// Spec 2026-09-26 T9: the lexical table-reference guard runs on ordinary
 	// sessions before forward and rewrite on every server that forwards to

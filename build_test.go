@@ -27,6 +27,7 @@ import (
 	"github.com/housegate/housegate/pkg/plugins/querysettings"
 	"github.com/housegate/housegate/pkg/plugins/rewrite"
 	"github.com/housegate/housegate/pkg/plugins/sessionstate"
+	"github.com/housegate/housegate/pkg/plugins/sipeerguard"
 	"github.com/housegate/housegate/pkg/plugins/sireserved"
 	"github.com/housegate/housegate/pkg/plugins/sistatement"
 	"github.com/housegate/housegate/pkg/plugins/storageintegrity"
@@ -2531,4 +2532,51 @@ func TestBuildServer_WriterPredicateRequiresWriterAccess(t *testing.T) {
 		t.Fatalf("bitmap escape hatch must start without WriterAccess: %v", err)
 	}
 	bs.teardown()
+}
+
+func TestBuildServer_StorageIntegrityPeerGuardWiring(t *testing.T) {
+	peerGuards := func(bs *builtServer) (count, guardIndex, reservedIndex int) {
+		guardIndex, reservedIndex = -1, -1
+		for i, candidate := range requireExternalChain(t, bs).QueryPlugins {
+			switch candidate.(type) {
+			case *sipeerguard.Plugin:
+				count++
+				guardIndex = i
+			case *sireserved.Plugin:
+				reservedIndex = i
+			}
+		}
+		return count, guardIndex, reservedIndex
+	}
+	for name, tc := range map[string]struct {
+		tables   []string
+		physical string
+		want     int
+	}{
+		"SI with physical database": {tables: []string{"tenant.events"}, physical: "phys", want: 1},
+		"SI without physical":       {tables: []string{"tenant.events"}, physical: "", want: 0},
+		"no SI":                     {physical: "phys", want: 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := minimalServerCfg(t)
+			cfg.StorageIntegrity.Tables = tc.tables
+			cfg.Rewriter.PhysicalDatabase = tc.physical
+			var factory rewriter.Factory = stubRewriterFactory{}
+			if len(tc.tables) > 0 {
+				factory = siProbeStubRewriterFactory{}
+			}
+			bs, err := buildServer(Options{Config: cfg, NetworkState: network.NewInMemoryNetworkState(), Rewriter: factory}, nil)
+			if err != nil {
+				t.Fatalf("buildServer: %v", err)
+			}
+			defer bs.teardown()
+			count, guardIndex, reservedIndex := peerGuards(bs)
+			if count != tc.want {
+				t.Fatalf("peer guards = %d, want %d", count, tc.want)
+			}
+			if tc.want == 1 && guardIndex < reservedIndex {
+				t.Fatalf("peer guard index %d before reserved guard %d", guardIndex, reservedIndex)
+			}
+		})
+	}
 }
