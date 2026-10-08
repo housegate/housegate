@@ -50,3 +50,15 @@ type StorageIntegrityDiscovery interface {
 // way the status and info lookups do; the agent treats it as "unknown" and
 // the server decides.
 var ErrDatabaseNotHosted = errors.New("database is not hosted by any known indexer")
+
+// DatabaseHosting resolves the indexer hosting a database and that indexer's
+// housegate address, for the agent's upstream switch (spec 2026-10-09 §6.4,
+// D19). hosted=false with a nil error means the registry genuinely does not
+// host the database (unknown, or PendingDelete): the agent then leaves the
+// INSERT to the server. A non-nil error means the lookup failed, including a
+// hosting indexer that is unknown or advertises no housegate address; the
+// caller must not treat it as "not hosted". RpcNetworkState and
+// InMemoryNetworkState implement it.
+type DatabaseHosting interface {
+	DatabaseHosting(ctx context.Context, database string) (addr ProxyAddress, indexerID uint64, hosted bool, err error)
+}

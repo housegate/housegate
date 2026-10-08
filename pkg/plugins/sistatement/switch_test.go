@@ -15,6 +15,7 @@ import (
 	"github.com/housegate/housegate/pkg/chsession"
 	"github.com/housegate/housegate/pkg/network"
 	"github.com/housegate/housegate/pkg/plugin"
+	"github.com/housegate/housegate/pkg/registry"
 )
 
 type switchMetrics struct {
@@ -30,6 +31,28 @@ func (m *switchMetrics) SIUpstreamSwitch(result string) {
 	}
 	m.results[result]++
 }
+
+// testHosting is the registry.DatabaseHosting the switch tests use: the
+// in-memory registry plus injected lookup failures and a call count.
+type testHosting struct {
+	t     *testing.T
+	ns    *network.InMemoryNetworkState
+	fail  map[string]error
+	calls map[string]int
+}
+
+func (h *testHosting) DatabaseHosting(ctx context.Context, database string) (registry.ProxyAddress, uint64, bool, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		h.t.Errorf("hosting lookup for %s without a bounded deadline", database)
+	}
+	h.calls[database]++
+	if err := h.fail[database]; err != nil {
+		return registry.ProxyAddress{}, 0, false, err
+	}
+	return h.ns.DatabaseHosting(ctx, database)
+}
+
+func hostingOf(p *Plugin) *testHosting { return p.hosting.(*testHosting) }
 
 func addressedCodec(t *testing.T, address string) *chproto.Codec {
 	t.Helper()
@@ -54,7 +77,7 @@ func switchFixture(t *testing.T, pinned bool) (*Plugin, *fakeSession, *switchMet
 	opts.Schemas = ns
 	opts.InlineValues = InlineValuesOptions{}
 	opts.Evaluator = nil
-	opts.Hosting = ns
+	opts.Hosting = &testHosting{t: t, ns: ns, fail: map[string]error{}, calls: map[string]int{}}
 	opts.PinnedUpstream = pinned
 	metrics := &switchMetrics{}
 	opts.Observer = metrics
@@ -139,25 +162,93 @@ func TestSwitch_NoSwitchWithoutHostingOrDial(t *testing.T) {
 	}
 }
 
-func TestSwitch_UnknownOrDepartingTargetIsLeftToTheServer(t *testing.T) {
+func TestSwitch_NotHostedTargetIsLeftToTheServer(t *testing.T) {
 	for name, edit := range map[string]func(*network.InMemoryNetworkState){
 		"unknown database": func(ns *network.InMemoryNetworkState) { delete(ns.DatabaseInfos, "shop") },
 		"pending delete": func(ns *network.InMemoryNetworkState) {
 			ns.DatabaseInfos["shop"] = network.DatabaseInfo{DatabaseId: "shop", IndexerId: 2, PendingDelete: true}
 		},
-		"unknown indexer": func(ns *network.InMemoryNetworkState) { delete(ns.IndexerInfos, 2) },
-		"no housegate port": func(ns *network.InMemoryNetworkState) {
-			ns.IndexerInfos[2] = network.IndexerInfo{IndexerId: 2, IndexerUrl: "10.0.0.2"}
-		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			p, sess, metrics, dialed := switchFixture(t, false)
-			edit(p.hosting.(*network.InMemoryNetworkState))
+			edit(hostingOf(p).ns)
 			q := insertQctx(sess, "INSERT INTO shop.orders FORMAT Native")
 			if err := p.OnQuery(context.Background(), q); err != nil || len(*dialed) != 0 || len(metrics.results) != 0 || q.DeferredInsert == nil {
 				t.Fatalf("err=%v dialed=%v results=%v deferred=%v", err, *dialed, metrics.results, q.DeferredInsert)
 			}
 		})
+	}
+}
+
+// Fix round 1 (Important): a failed target lookup must not be mistaken for
+// "not hosted", which would send the signed INSERT to an indexer that does
+// not host the database.
+func TestSwitch_TargetLookupFailureRefusesLocally(t *testing.T) {
+	for name, edit := range map[string]func(*testHosting){
+		"rpc error":         func(h *testHosting) { h.fail["shop"] = errors.New("rpc: database shop lookup: post: connection reset") },
+		"unknown indexer":   func(h *testHosting) { delete(h.ns.IndexerInfos, 2) },
+		"no housegate port": func(h *testHosting) { h.ns.IndexerInfos[2] = network.IndexerInfo{IndexerId: 2, IndexerUrl: "10.0.0.2"} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			p, sess, metrics, dialed := switchFixture(t, false)
+			edit(hostingOf(p))
+			q := insertQctx(sess, "INSERT INTO shop.orders FORMAT Native")
+			err := p.OnQuery(context.Background(), q)
+			if err == nil || !strings.HasPrefix(err.Error(), "storage_integrity agent: cannot resolve the indexer hosting shop: ") ||
+				len(*dialed) != 0 || metrics.results["dial_failed"] != 1 || len(metrics.results) != 1 {
+				t.Fatalf("err=%v dialed=%v results=%v", err, *dialed, metrics.results)
+			}
+			assertRefusedLocally(t, sess, q, err)
+			// Errors are not cached: the next INSERT asks again.
+			before := hostingOf(p).calls["shop"]
+			_ = p.OnQuery(context.Background(), insertQctx(sess, "INSERT INTO shop.orders FORMAT Native"))
+			if hostingOf(p).calls["shop"] != before+1 {
+				t.Fatalf("a failed lookup was cached: calls %d -> %d", before, hostingOf(p).calls["shop"])
+			}
+		})
+	}
+}
+
+// Fix round 1 (Important): a failed session-database lookup must not replay
+// that database in the hello, where the target's forward plugin could pivot
+// the session away.
+func TestSwitch_SessionDatabaseLookupFailureRefusesLocally(t *testing.T) {
+	p, sess, metrics, dialed := switchFixture(t, false)
+	sess.state.SetLogicalDatabase("elsewhere")
+	hostingOf(p).fail["elsewhere"] = errors.New("rpc: database elsewhere lookup: post: timeout")
+	q := insertQctx(sess, "INSERT INTO shop.orders FORMAT Native")
+	err := p.OnQuery(context.Background(), q)
+	want := "storage_integrity agent: INSERT into shop must run on indexer 2, but resolving the indexer hosting the session database elsewhere failed: rpc: database elsewhere lookup: post: timeout; reconnect with --database shop"
+	if err == nil || err.Error() != want || len(*dialed) != 0 || metrics.results["dial_failed"] != 1 || len(metrics.results) != 1 {
+		t.Fatalf("err=%v dialed=%v results=%v", err, *dialed, metrics.results)
+	}
+	assertRefusedLocally(t, sess, q, err)
+}
+
+// Fix round 1 (minor): hosting answers are cached for 5 s, so an INSERT on an
+// already-switched session costs no lookup; the cache expires.
+func TestSwitch_HostingAnswersAreCached(t *testing.T) {
+	p, sess, _, dialed := switchFixture(t, false)
+	now := time.Unix(1_760_000_000, 0)
+	p.now = func() time.Time { return now }
+	insert := func() {
+		t.Helper()
+		q := insertQctx(sess, "INSERT INTO shop.orders FORMAT Native")
+		if err := p.OnQuery(context.Background(), q); err != nil {
+			t.Fatal(err)
+		}
+		p.OnQueryAbort(context.Background(), q)
+		p.OnQueryComplete(context.Background(), sess)
+	}
+	insert()
+	insert()
+	if calls := hostingOf(p).calls["shop"]; calls != 1 || len(*dialed) != 1 {
+		t.Fatalf("calls=%d dialed=%v; want one lookup and one dial", calls, *dialed)
+	}
+	now = now.Add(hostingCacheTTL)
+	insert()
+	if calls := hostingOf(p).calls["shop"]; calls != 2 || len(*dialed) != 1 {
+		t.Fatalf("after expiry calls=%d dialed=%v; want a second lookup and no new dial", calls, *dialed)
 	}
 }
 
@@ -170,6 +261,7 @@ func TestSwitch_ServerSideStateRefusesLocally(t *testing.T) {
 		"BEGIN TRANSACTION",
 		"START TRANSACTION",
 		"/* c */ set max_threads = 1",
+		"USE DATABASE shop", // a USE the agent cannot track
 	} {
 		t.Run(stmt, func(t *testing.T) {
 			p, sess, metrics, dialed := switchFixture(t, false)
@@ -252,6 +344,19 @@ func TestSwitch_SessionDatabaseRules(t *testing.T) {
 		t.Fatalf("err=%v hello=%+v", err, sess3.switched)
 	}
 
+	// A committed USE of a database hosted by the target is replayed in the
+	// hello (spec 2026-10-09 §6.4 step 2).
+	p5, sess5, _, _ := switchFixture(t, false)
+	useShop := insertQctx(sess5, "USE shop")
+	if err := p5.OnQuery(context.Background(), useShop); err != nil {
+		t.Fatal(err)
+	}
+	p5.OnQuerySuccess(context.Background(), sess5, useShop.Query.ID)
+	p5.OnQueryComplete(context.Background(), sess5)
+	if err := p5.OnQuery(context.Background(), insertQctx(sess5, "INSERT INTO orders FORMAT Native")); err != nil || len(sess5.switched) != 1 || sess5.switched[0].Database != "shop" {
+		t.Fatalf("committed USE shop: err=%v hello=%+v", err, sess5.switched)
+	}
+
 	// The committed USE wins over the hello database.
 	p4, sess4, metrics4, _ := switchFixture(t, false)
 	sess4.state.SetLogicalDatabase("shop")
@@ -328,6 +433,8 @@ func TestHoldsServerState(t *testing.T) {
 		"CREATE OR REPLACE TEMPORARY TABLE t (x)": true,
 		"REPLACE TEMPORARY TABLE t (x UInt8)":     true,
 		"/* unterminated":                         true, // unreadable: refusing a later switch is safe
+		"USE DATABASE shop":                       true, // a USE form the agent does not track
+		"use shop x":                              true,
 		"SELECT 1":                                false,
 		"START MERGES":                            false,
 		"CREATE TABLE t (x UInt8)":                false,

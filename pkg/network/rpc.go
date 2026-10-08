@@ -326,6 +326,30 @@ func (r *RpcNetworkState) hostingStorageEndpoint(ctx context.Context, database s
 	return scheme + "://" + net.JoinHostPort(host, strconv.Itoa(int(info.StorageNodeRpcPort))), true, nil
 }
 
+// DatabaseHosting implements registry.DatabaseHosting with the separation
+// hostingStorageEndpoint uses: an RPC error is an error, never "not hosted";
+// a JSON-null or PendingDelete database is not hosted; a hosted database
+// whose indexer is unknown or advertises no housegate address is an error.
+func (r *RpcNetworkState) DatabaseHosting(ctx context.Context, database string) (registry.ProxyAddress, uint64, bool, error) {
+	var db DatabaseInfo
+	ok, err := r.call(ctx, "sentio_getDatabaseInfoById", []interface{}{database}, &db)
+	if err != nil {
+		return registry.ProxyAddress{}, 0, false, fmt.Errorf("rpc: database %s lookup: %w", database, err)
+	}
+	if !ok || db.PendingDelete {
+		return registry.ProxyAddress{}, 0, false, nil
+	}
+	var info IndexerInfo
+	ok, err = r.call(ctx, "sentio_getIndexerInfoById", []interface{}{db.IndexerId}, &info)
+	if err != nil {
+		return registry.ProxyAddress{}, 0, false, fmt.Errorf("rpc: indexer %d hosting %s: %w", db.IndexerId, database, err)
+	}
+	if !ok {
+		return registry.ProxyAddress{}, 0, false, fmt.Errorf("rpc: indexer %d hosting %s is unknown", db.IndexerId, database)
+	}
+	return hostingProxyAddress(database, db.IndexerId, info)
+}
+
 // StorageIntegrityTableStatus calls sentio_getStorageIntegrityTableStatus
 // (spec 2026-09-24 §10.2). A transport error, a JSON-null result, or an
 // unknown status name is an error: the agent then passes the INSERT through

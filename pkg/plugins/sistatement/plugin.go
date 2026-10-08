@@ -71,11 +71,11 @@ type Options struct {
 	// whose conn reports the dialed address (build's dialRaw wrapper). A nil
 	// Hosting or Dial, or PinnedUpstream (agent.upstream is configured),
 	// disables the switch.
-	Hosting        HostingResolver
+	Hosting        registry.DatabaseHosting
 	Dial           func(ctx context.Context, address string) (*chproto.Codec, error)
 	PinnedUpstream bool
-	// SwitchTimeout bounds the dial plus the replayed handshake of one
-	// switch; zero means 10s.
+	// SwitchTimeout bounds the hosting lookups, the dial and the replayed
+	// handshake of one switch; zero means 10s.
 	SwitchTimeout time.Duration
 }
 
@@ -97,7 +97,7 @@ type Plugin struct {
 	inline         InlineValuesOptions
 	evaluator      ValuesEvaluator
 	observer       Observer
-	hosting        HostingResolver
+	hosting        registry.DatabaseHosting
 	dial           func(ctx context.Context, address string) (*chproto.Codec, error)
 	pinnedUpstream bool
 	switchTimeout  time.Duration
@@ -124,6 +124,7 @@ type Plugin struct {
 	// is the query id of such a statement awaiting upstream success.
 	nonSwitchable map[int64]bool
 	statefulNext  map[int64]string
+	hostingCache  map[string]hostingEntry // by database; successes only
 }
 
 // pendingStatement is a claimed SI INSERT whose input is still arriving. It
@@ -236,6 +237,7 @@ func New(opts Options) (*Plugin, error) {
 		useNext:            map[int64]pendingUse{},
 		nonSwitchable:      map[int64]bool{},
 		statefulNext:       map[int64]string{},
+		hostingCache:       map[string]hostingEntry{},
 	}, nil
 }
 

@@ -13,9 +13,21 @@ import (
 	sicore "github.com/housegate/housegate/pkg/storageintegrity"
 )
 
-// defaultSwitchTimeout bounds the dial plus the replayed handshake of an
-// upstream switch when Options.SwitchTimeout is zero.
+// defaultSwitchTimeout bounds the hosting lookups, the dial and the replayed
+// handshake of an upstream switch when Options.SwitchTimeout is zero.
 const defaultSwitchTimeout = 10 * time.Second
+
+// hostingCacheTTL bounds how long a successful hosting answer is reused, like
+// the 5 s table-status cache: an INSERT on an already-switched session costs
+// no lookup within it. Failed lookups are never cached.
+const hostingCacheTTL = 5 * time.Second
+
+// hostingCacheSweepSize is the cache size above which expired entries are
+// swept on insert.
+const hostingCacheSweepSize = 256
+
+// switchRefusalLogEvery throttles the refusal log per reason.
+const switchRefusalLogEvery = time.Minute
 
 // Upstream-switch outcomes, the result label of
 // clickhouse_proxy_agent_si_upstream_switches_total (spec 2026-10-09 §10).
@@ -27,19 +39,23 @@ const (
 	switchResultDialFailed      = "dial_failed"
 )
 
-// HostingResolver answers which indexer hosts a database and where its
-// housegate listens. registry.Registry satisfies it.
-type HostingResolver interface {
-	Get(id string) (registry.Database, bool)
-	ProxyByIndexerId(indexerId uint64) (registry.ProxyAddress, bool)
+// hostingEntry is a cached successful registry.DatabaseHosting answer.
+type hostingEntry struct {
+	addr      registry.ProxyAddress
+	indexerID uint64
+	hosted    bool
+	until     time.Time
 }
 
 // holdsServerState reports whether sql changes server-side session state the
 // agent cannot replay on another server (spec 2026-10-09 §6.4 step 1): a
 // session SET, a temporary table, or a transaction. CREATE OR REPLACE
 // TEMPORARY and REPLACE TEMPORARY (both accepted by ClickHouse 26.8) create a
-// temporary table too. An unreadable statement counts as stateful: refusing a
-// later switch is safe.
+// temporary table too. OnQuery tracks a standalone USE that
+// ParseUseDatabaseStrict matches before calling this, so a leading USE here is
+// a form the agent cannot track (e.g. USE DATABASE x) and counts as stateful.
+// An unreadable statement counts as stateful too: refusing a later switch is
+// safe.
 func holdsServerState(sql string) bool {
 	words, err := sicore.LeadingKeywords(sql, 4)
 	if err != nil {
@@ -52,7 +68,7 @@ func holdsServerState(sql string) bool {
 		return ""
 	}
 	switch at(0) {
-	case "SET", "BEGIN":
+	case "SET", "BEGIN", "USE":
 		return true
 	case "START":
 		return at(1) == "TRANSACTION"
@@ -99,23 +115,63 @@ func switchFailureResult(err error) string {
 	return switchResultDialFailed
 }
 
+// lookupHosting answers registry.DatabaseHosting for database through a
+// hostingCacheTTL cache of successful answers; errors are not cached.
+func (p *Plugin) lookupHosting(ctx context.Context, database string) (registry.ProxyAddress, uint64, bool, error) {
+	now := p.now()
+	p.mu.Lock()
+	if e, ok := p.hostingCache[database]; ok && now.Before(e.until) {
+		p.mu.Unlock()
+		return e.addr, e.indexerID, e.hosted, nil
+	}
+	p.mu.Unlock()
+	addr, indexerID, hosted, err := p.hosting.DatabaseHosting(ctx, database)
+	if err != nil {
+		return registry.ProxyAddress{}, 0, false, err
+	}
+	if hosted && (addr.Url == "" || addr.HousegatePort == 0) {
+		return registry.ProxyAddress{}, 0, false, fmt.Errorf("indexer %d hosting %s advertises no housegate address", indexerID, database)
+	}
+	p.mu.Lock()
+	if len(p.hostingCache) >= hostingCacheSweepSize {
+		for db, e := range p.hostingCache {
+			if !now.Before(e.until) {
+				delete(p.hostingCache, db)
+			}
+		}
+	}
+	p.hostingCache[database] = hostingEntry{addr: addr, indexerID: indexerID, hosted: hosted, until: now.Add(hostingCacheTTL)}
+	p.mu.Unlock()
+	return addr, indexerID, hosted, nil
+}
+
 // maybeSwitch moves the session to the indexer hosting database before the
 // statement is claimed (spec 2026-10-09 §6.4, D19): no client_seq is reserved
 // and nothing is signed or forwarded yet. Every refusal is local and
 // session-preserving (an OnQuery error ends only the query) and leaves the
 // session on its current upstream. It runs inside OnQuery, where Relay has no
-// query in flight.
+// query in flight. Only a database the registry genuinely does not host is
+// left to the server; a failed hosting lookup refuses, because guessing would
+// send the INSERT to an indexer that does not host it or replay a session
+// database the target pivots away from.
 func (p *Plugin) maybeSwitch(ctx context.Context, sess chsession.Session, database string) error {
 	if p.hosting == nil || p.dial == nil || p.pinnedUpstream || sess == nil {
 		return nil
 	}
-	db, ok := p.hosting.Get(database)
-	if !ok || db.PendingDelete {
-		return nil // unknown (or departing) database: the server decides
+	timeout := p.switchTimeout
+	if timeout <= 0 {
+		timeout = defaultSwitchTimeout
 	}
-	target, ok := p.hosting.ProxyByIndexerId(db.IndexerId)
-	if !ok || target.Url == "" || target.HousegatePort == 0 {
-		return nil // no reachable housegate advertised: the server decides
+	switchCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	target, indexerID, hosted, err := p.lookupHosting(switchCtx, database)
+	if err != nil {
+		return p.refuseSwitch(ctx, switchResultDialFailed, database,
+			fmt.Errorf("storage_integrity agent: cannot resolve the indexer hosting %s: %w; reconnect with --database %s", database, err, database))
+	}
+	if !hosted {
+		return nil // not hosted by any indexer: the server decides
 	}
 	targetAddr := target.Addr()
 	if currentUpstreamAddress(sess.Upstream()) == targetAddr {
@@ -125,17 +181,22 @@ func (p *Plugin) maybeSwitch(ctx context.Context, sess chsession.Session, databa
 	stateful := p.nonSwitchable[sess.ID()]
 	p.mu.Unlock()
 	if stateful {
-		return p.refuseSwitch(ctx, switchResultRefusedState, database, db.IndexerId,
-			fmt.Errorf("storage_integrity agent: INSERT into %s must run on indexer %d, but this session holds server-side state; reconnect with --database %s", database, db.IndexerId, database))
+		return p.refuseSwitch(ctx, switchResultRefusedState, database,
+			fmt.Errorf("storage_integrity agent: INSERT into %s must run on indexer %d, but this session holds server-side state; reconnect with --database %s", database, indexerID, database))
 	}
 	// Step 2: the replayed hello keeps the session database when it is empty,
-	// unknown to the registry (plan P10; a departing database counts as
-	// unknown, as in routing) or hosted by the target.
+	// not hosted by any indexer (plan P10; PendingDelete counts as not
+	// hosted, as in routing) or hosted by the target.
 	cur := p.sessionDatabase(sess)
 	if cur != "" {
-		if curInfo, ok := p.hosting.Get(cur); ok && !curInfo.PendingDelete && curInfo.IndexerId != db.IndexerId {
-			return p.refuseSwitch(ctx, switchResultRefusedDatabase, database, db.IndexerId,
-				fmt.Errorf("storage_integrity agent: INSERT into %s must run on indexer %d, but the session database %s lives on indexer %d; use a separate connection with --database %s or USE %s first", database, db.IndexerId, cur, curInfo.IndexerId, database, database))
+		_, curIndexer, curHosted, err := p.lookupHosting(switchCtx, cur)
+		if err != nil {
+			return p.refuseSwitch(ctx, switchResultDialFailed, database,
+				fmt.Errorf("storage_integrity agent: INSERT into %s must run on indexer %d, but resolving the indexer hosting the session database %s failed: %w; reconnect with --database %s", database, indexerID, cur, err, database))
+		}
+		if curHosted && curIndexer != indexerID {
+			return p.refuseSwitch(ctx, switchResultRefusedDatabase, database,
+				fmt.Errorf("storage_integrity agent: INSERT into %s must run on indexer %d, but the session database %s lives on indexer %d; use a separate connection with --database %s or USE %s first", database, indexerID, cur, curIndexer, database, database))
 		}
 	}
 	var hello *chproto.ClientHello
@@ -143,20 +204,14 @@ func (p *Plugin) maybeSwitch(ctx context.Context, sess chsession.Session, databa
 		hello = state.UpstreamHello() // a clone
 	}
 	if hello == nil {
-		return p.refuseSwitch(ctx, switchResultRefusedState, database, db.IndexerId,
-			fmt.Errorf("storage_integrity agent: INSERT into %s must run on indexer %d, but this session has no replayable hello; reconnect with --database %s", database, db.IndexerId, database))
+		return p.refuseSwitch(ctx, switchResultRefusedState, database,
+			fmt.Errorf("storage_integrity agent: INSERT into %s must run on indexer %d, but this session has no replayable hello; reconnect with --database %s", database, indexerID, database))
 	}
 	// Step 3: SwitchUpstream clamps ProtocolVersion to the client leg's
 	// revision as well; setting it here keeps the spec's hello explicit.
 	hello.ProtocolVersion = sess.State().Snapshot().ClientRevision
 	hello.Database = cur
 
-	timeout := p.switchTimeout
-	if timeout <= 0 {
-		timeout = defaultSwitchTimeout
-	}
-	switchCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 	newUp, err := p.dial(switchCtx, targetAddr)
 	if err == nil && newUp == nil {
 		err = errors.New("dial returned no connection")
@@ -165,19 +220,21 @@ func (p *Plugin) maybeSwitch(ctx context.Context, sess chsession.Session, databa
 		err = sess.SwitchUpstream(switchCtx, newUp, hello)
 	}
 	if err != nil {
-		return p.refuseSwitch(ctx, switchFailureResult(err), database, db.IndexerId,
-			fmt.Errorf("storage_integrity agent: INSERT into %s must run on indexer %d (%s), but switching this session there failed: %w; reconnect with --database %s", database, db.IndexerId, targetAddr, err, database))
+		return p.refuseSwitch(ctx, switchFailureResult(err), database,
+			fmt.Errorf("storage_integrity agent: INSERT into %s must run on indexer %d (%s), but switching this session there failed: %w; reconnect with --database %s", database, indexerID, targetAddr, err, database))
 	}
 	p.observeSwitch(switchResultSwitched)
 	_, logger := log.FromContext(ctx)
-	logger.Infow("sistatement: session switched to the hosting indexer", "database", database, "indexer_id", db.IndexerId, "upstream", targetAddr, "session_database", cur)
+	logger.Infow("sistatement: session switched to the hosting indexer", "database", database, "indexer_id", indexerID, "upstream", targetAddr, "session_database", cur)
 	return nil
 }
 
-// refuseSwitch counts and logs a refused switch and returns refusal.
-func (p *Plugin) refuseSwitch(ctx context.Context, result, database string, indexerID uint64, refusal error) error {
+// refuseSwitch counts a refused switch, logs it at most once per minute per
+// reason, and returns refusal.
+func (p *Plugin) refuseSwitch(ctx context.Context, result, database string, refusal error) error {
 	p.observeSwitch(result)
 	_, logger := log.FromContext(ctx)
-	logger.Infow("sistatement: upstream switch refused locally; the session keeps its upstream", "database", database, "indexer_id", indexerID, "result", result, "err", refusal)
+	logger.InfoEvery(fmt.Sprintf("sistatement-switch-refused-%p-%s", p, result), switchRefusalLogEvery,
+		"sistatement: upstream switch refused locally; the session keeps its upstream", "database", database, "result", result, "err", refusal)
 	return refusal
 }

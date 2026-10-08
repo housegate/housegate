@@ -2,7 +2,10 @@ package proxy
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net"
+	"os"
 	"testing"
 	"time"
 
@@ -69,9 +72,14 @@ func TestRelay_SwitchUpstreamInOnQueryServesTheQueryOnTheNewUpstream(t *testing.
 	if h.relay.sess.Upstream() != hooks.newUp {
 		t.Fatal("the session does not keep the new upstream")
 	}
-	// The old upstream connection was closed by the switch.
+	// The old upstream connection was closed by the switch: its peer reads
+	// EOF, not a deadline.
 	_ = h.upstreamProxy.SetReadDeadline(time.Now().Add(2 * time.Second))
-	if _, err := h.upstreamProxy.Read(make([]byte, 1)); err == nil {
+	_, err := h.upstreamProxy.Read(make([]byte, 1))
+	if errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Fatal("the old upstream connection is still open")
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("old upstream read = %v, want io.EOF", err)
 	}
 }

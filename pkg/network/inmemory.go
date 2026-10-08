@@ -1,6 +1,7 @@
 package network
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -69,6 +70,36 @@ func (s *InMemoryNetworkState) AllIndexers() map[uint64]registry.ProxyAddress {
 		}
 	}
 	return out
+}
+
+// DatabaseHosting implements registry.DatabaseHosting over the in-memory
+// maps: an unknown or PendingDelete database is not hosted; a hosted database
+// whose indexer is unknown or advertises no housegate address is an error.
+func (s *InMemoryNetworkState) DatabaseHosting(_ context.Context, database string) (registry.ProxyAddress, uint64, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	db, ok := s.DatabaseInfos[Database(database)]
+	if !ok || db.PendingDelete {
+		return registry.ProxyAddress{}, 0, false, nil
+	}
+	info, ok := s.IndexerInfos[db.IndexerId]
+	if !ok {
+		return registry.ProxyAddress{}, 0, false, fmt.Errorf("indexer %d hosting %s is unknown", db.IndexerId, database)
+	}
+	return hostingProxyAddress(database, db.IndexerId, info)
+}
+
+// hostingProxyAddress is the housegate address of the indexer hosting
+// database, or an error when it advertises none.
+func hostingProxyAddress(database string, indexerID uint64, info IndexerInfo) (registry.ProxyAddress, uint64, bool, error) {
+	if info.IndexerUrl == "" || info.ClickhouseProxyPort == 0 {
+		return registry.ProxyAddress{}, 0, false, fmt.Errorf("indexer %d hosting %s advertises no housegate address", indexerID, database)
+	}
+	return registry.ProxyAddress{
+		Url:            info.IndexerUrl,
+		HousegatePort:  info.ClickhouseProxyPort,
+		StorageRPCPort: info.StorageNodeRpcPort,
+	}, indexerID, true, nil
 }
 
 // --- registry.Databases

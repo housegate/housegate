@@ -157,3 +157,70 @@ func TestRpcNetworkState_ProxyAddressCarriesStorageRPCPort(t *testing.T) {
 		t.Fatalf("addr = %+v ok=%v", addr, ok)
 	}
 }
+
+// Spec 2026-10-09 §6.4 (D19): the agent's switch lookup separates "not
+// hosted" (null or PendingDelete database) from a failed lookup.
+func TestRpcNetworkState_DatabaseHosting(t *testing.T) {
+	var _ registry.DatabaseHosting = (*network.RpcNetworkState)(nil)
+	indexer := network.IndexerInfo{IndexerId: 2, IndexerUrl: "10.0.0.2", ClickhouseProxyPort: 9000}
+	db := network.DatabaseInfo{DatabaseId: "shop", IndexerId: 2}
+	dbErr, indexerErr := false, false
+	rpc, _ := newFakeRpc(t, map[string]rpcMethod{
+		"sentio_getDatabaseInfoById": func(params []interface{}) (interface{}, *rpcErrEnvelope) {
+			if dbErr {
+				return nil, &rpcErrEnvelope{Code: -32000, Message: "boom"}
+			}
+			if params[0] == "shop" {
+				return db, nil
+			}
+			return nil, nil
+		},
+		"sentio_getIndexerInfoById": func([]interface{}) (interface{}, *rpcErrEnvelope) {
+			if indexerErr {
+				return nil, &rpcErrEnvelope{Code: -32000, Message: "boom"}
+			}
+			if indexer.IndexerId == 0 {
+				return nil, nil
+			}
+			return indexer, nil
+		},
+	})
+	ctx := context.Background()
+	addr, id, hosted, err := rpc.DatabaseHosting(ctx, "shop")
+	if err != nil || !hosted || id != 2 || addr.Addr() != "10.0.0.2:9000" {
+		t.Fatalf("hosted = %+v %d %v %v", addr, id, hosted, err)
+	}
+	if _, _, hosted, err := rpc.DatabaseHosting(ctx, "nope"); err != nil || hosted {
+		t.Fatalf("unknown database: hosted=%v err=%v; want not hosted, no error", hosted, err)
+	}
+	db.PendingDelete = true
+	if _, _, hosted, err := rpc.DatabaseHosting(ctx, "shop"); err != nil || hosted {
+		t.Fatalf("pending delete: hosted=%v err=%v; want not hosted, no error", hosted, err)
+	}
+	db.PendingDelete = false
+
+	dbErr = true
+	if _, _, hosted, err := rpc.DatabaseHosting(ctx, "shop"); err == nil || hosted {
+		t.Fatalf("database RPC error: hosted=%v err=%v; want an error", hosted, err)
+	}
+	dbErr = false
+	indexerErr = true
+	if _, _, hosted, err := rpc.DatabaseHosting(ctx, "shop"); err == nil || hosted {
+		t.Fatalf("indexer RPC error: hosted=%v err=%v; want an error", hosted, err)
+	}
+	indexerErr = false
+	indexer.ClickhouseProxyPort = 0
+	if _, _, hosted, err := rpc.DatabaseHosting(ctx, "shop"); err == nil || hosted {
+		t.Fatalf("no housegate port: hosted=%v err=%v; want an error", hosted, err)
+	}
+	indexer = network.IndexerInfo{}
+	if _, _, hosted, err := rpc.DatabaseHosting(ctx, "shop"); err == nil || hosted {
+		t.Fatalf("unknown indexer: hosted=%v err=%v; want an error", hosted, err)
+	}
+
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, _, _, err := rpc.DatabaseHosting(canceled, "nope"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled ctx: err=%v; want context.Canceled", err)
+	}
+}
