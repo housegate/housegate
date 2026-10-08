@@ -511,3 +511,21 @@ func TestValidate_Materialize(t *testing.T) {
 		}
 	})
 }
+
+func TestConfigValidateWriterPredicate(t *testing.T) {
+	for _, value := range []string{"", "contract", "bitmap"} {
+		cfg := minimalServerConfig(t)
+		cfg.Auth.WriterPredicate = value
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("writer_predicate %q must validate: %v", value, err)
+		}
+	}
+	cfg := minimalServerConfig(t)
+	cfg.Auth.WriterPredicate = "Contract"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "auth.writer_predicate") {
+		t.Fatalf("Validate err = %v, want auth.writer_predicate rejection", err)
+	}
+	if got := (Config{}).Auth.EffectiveWriterPredicate(); got != "contract" {
+		t.Fatalf("default writer predicate = %q, want contract", got)
+	}
+}

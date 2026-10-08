@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -127,10 +128,15 @@ type StorageIntegritySafeMergesConfig struct {
 }
 
 // StorageIntegrityIngressConfig is the server-side signed admission surface.
+// Writes are open to every database writer (spec 2026-10-09 D1/D2):
+// AllowedAddresses is optional (empty admits any signer the writer predicate
+// admits) and DeniedAddresses refuses a statement whose signer or resolved
+// owner is listed. Both are static; a change needs a restart.
 type StorageIntegrityIngressConfig struct {
 	Enabled          bool     `json:"enabled"           yaml:"enabled"`
 	NetworkID        string   `json:"network_id"        yaml:"network_id"`
 	AllowedAddresses []string `json:"allowed_addresses" yaml:"allowed_addresses"`
+	DeniedAddresses  []string `json:"denied_addresses"  yaml:"denied_addresses"`
 	MaxTokenAge      Duration `json:"max_token_age"     yaml:"max_token_age"`
 	RequestTimeout   Duration `json:"request_timeout"  yaml:"request_timeout"`
 	MaxPayloadBytes  uint64   `json:"max_payload_bytes" yaml:"max_payload_bytes"`
@@ -293,9 +299,7 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 	if c.SafeMerges.AllowNativeBackgroundMerges {
 		errs = append(errs, errors.New("storage_integrity.safe_merges.allow_native_background_merges is not supported in v1: native background merges would mutate the guarded part inventory"))
 	}
-	if len(c.Ingress.AllowedAddresses) == 0 {
-		errs = append(errs, errors.New("storage_integrity.ingress.allowed_addresses is required when storage_integrity.ingress.enabled"))
-	}
+	errs = append(errs, validateDeniedAddresses(c.Ingress.DeniedAddresses)...)
 	if strings.TrimSpace(c.Ingress.NetworkID) == "" {
 		errs = append(errs, errors.New("storage_integrity.ingress.network_id is required when storage_integrity.ingress.enabled"))
 	}
@@ -453,6 +457,27 @@ func (a StorageIntegrityAgentConfig) InlineValuesPrerequisiteErrors(materializeE
 	}
 	if !a.Enabled {
 		errs = append(errs, errors.New("storage_integrity.agent.inline_values requires storage_integrity.agent.enabled"))
+	}
+	return errs
+}
+
+var lowercaseAddressPattern = regexp.MustCompile(`^0x[0-9a-f]{40}$`)
+
+// validateDeniedAddresses requires canonical lowercase addresses: the
+// ingress compares them byte-for-byte with recovered signers and normalized
+// owners, so a checksum-cased entry would silently never match.
+func validateDeniedAddresses(addresses []string) []error {
+	var errs []error
+	seen := make(map[string]bool, len(addresses))
+	for _, address := range addresses {
+		if !lowercaseAddressPattern.MatchString(address) {
+			errs = append(errs, fmt.Errorf("storage_integrity.ingress.denied_addresses entry %q must be a lowercase 0x-prefixed 20-byte hex address", address))
+			continue
+		}
+		if seen[address] {
+			errs = append(errs, fmt.Errorf("storage_integrity.ingress.denied_addresses lists %s twice (duplicate)", address))
+		}
+		seen[address] = true
 	}
 	return errs
 }

@@ -386,6 +386,13 @@ func (c *Config) Validate() error {
 		errs = append(errs, err)
 	}
 
+	switch c.Auth.WriterPredicate {
+	case "", authplugin.WriterPredicateContract, authplugin.WriterPredicateBitmap:
+	default:
+		errs = append(errs, fmt.Errorf("auth.writer_predicate %q is invalid (want %q or %q)",
+			c.Auth.WriterPredicate, authplugin.WriterPredicateContract, authplugin.WriterPredicateBitmap))
+	}
+
 	// Spec 2026-09-26 T8: storage integrity fails closed on every rewriter
 	// outage; the transport fail-open switch cannot weaken that.
 	if c.Rewriter.FailOpenOnUnavailable && c.StorageIntegrity.IsEnabled() {
