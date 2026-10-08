@@ -524,21 +524,31 @@ func Default() Config {
 	}
 }
 
+// Load returns the defaults (with env overrides) overlaid by the config file
+// at path, or by ./config.json when path is empty; see LoadFile.
 func Load(path string) Config {
+	cfg, _ := LoadFile(path)
+	return cfg
+}
+
+// LoadFile is Load that also reports whether a config file was actually
+// read: false when path is empty and ./config.json does not exist, or when
+// path does not exist (both fall back to the defaults).
+func LoadFile(path string) (Config, bool) {
 	cfg := Default()
 	if path == "" {
 		if _, err := os.Stat("config.json"); err == nil {
 			path = "config.json"
 		} else {
 			log.Info("no config file provided, using defaults and env overrides")
-			return cfg
+			return cfg, false
 		}
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			log.Infow("config file not found, using defaults", "path", path)
-			return cfg
+			return cfg, false
 		}
 		log.Fatalw("read config file", "path", path, "err", err)
 	}
@@ -549,7 +559,7 @@ func Load(path string) Config {
 		"path", path,
 		"listen", cfg.Listen,
 		"upstream", cfg.Upstream)
-	return cfg
+	return cfg, true
 }
 
 // unmarshalByExt decodes raw into cfg using a codec selected from the

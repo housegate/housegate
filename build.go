@@ -6,9 +6,13 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+	"os"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -1355,15 +1359,10 @@ func buildAgentWithBuilders(
 				return nil, fmt.Errorf("storage_integrity.agent: %w", err)
 			}
 		}
-		statuses, err := resolveAgentTableStatuses(opts, reg)
+		siOpts, stateLabel, err := agentStatementOptions(cfg, opts, reg, signer.Address())
 		if err != nil {
 			return nil, err
 		}
-		seq, err := sistatement.OpenSeqCounter(cfg.StorageIntegrity.Agent.StateDir, signer.Address())
-		if err != nil {
-			return nil, fmt.Errorf("storage_integrity.agent: %w", err)
-		}
-		siClose = func() { _ = seq.Close() }
 		inlineCfg := cfg.StorageIntegrity.Agent.InlineValues
 		var evaluator sistatement.ValuesEvaluator
 		if inlineCfg.Enabled {
@@ -1386,27 +1385,15 @@ func buildAgentWithBuilders(
 			log.Infow("storage_integrity agent inline VALUES enabled",
 				"evaluation_timeout", inlineCfg.EvaluationTimeout.Duration, "max_rows", inlineCfg.MaxRows)
 		}
-		siPlug, err := sistatement.New(sistatement.Options{
-			Signer:          stmtSigner,
-			Statuses:        statuses,
-			NetworkID:       cfg.StorageIntegrity.Agent.NetworkID,
-			KeeperShardID:   cfg.StorageIntegrity.Agent.KeeperShardID,
-			Seq:             seq,
-			MaxPayloadBytes: cfg.StorageIntegrity.Agent.MaxPayloadBytes,
-			Owner:           cfg.Agent.Owner,
-			IsDriver:        cfg.Agent.Driver,
-			Evaluator:       evaluator,
-			Observer:        obs,
-			InlineValues: sistatement.InlineValuesOptions{
-				Enabled:           inlineCfg.Enabled,
-				EvaluationTimeout: inlineCfg.EvaluationTimeout.Duration,
-				MaxRows:           inlineCfg.MaxRows,
-			},
-		})
+		siOpts.Signer = stmtSigner
+		siOpts.Evaluator = evaluator
+		siOpts.Observer = obs
+		siPlug, err := sistatement.New(siOpts)
 		if err != nil {
 			return nil, fmt.Errorf("storage_integrity.agent: %w", err)
 		}
-		siClose = func() { _ = siPlug.Close() } // owns seq from here on
+		// The plugin owns every counter its lazy opener hands out.
+		siClose = func() { _ = siPlug.Close() }
 		helloPlugins = append(helloPlugins, &sessionstate.Plugin{})
 		queryPlugins = append(queryPlugins, siPlug)
 		strictDataPlugins = append(strictDataPlugins, siPlug)
@@ -1418,8 +1405,11 @@ func buildAgentWithBuilders(
 		exceptionPlugins = append([]plugin.ExceptionPlugin{siPlug}, exceptionPlugins...)
 		log.Infow("storage_integrity agent statement plugin enabled",
 			"network_id", cfg.StorageIntegrity.Agent.NetworkID,
-			"state_dir", cfg.StorageIntegrity.Agent.StateDir,
-			"seq_last", seq.Last(),
+			"discovery", siOpts.Discovery != nil,
+			"state_dir", stateLabel,
+			"lanes", agentLanesLabel(cfg.StorageIntegrity.Agent.Lanes),
+			"writer_precheck", siOpts.WriterPrecheck,
+			"upstream_switch", siOpts.Hosting != nil && !siOpts.PinnedUpstream,
 			"max_payload_bytes", cfg.StorageIntegrity.Agent.MaxPayloadBytes)
 	}
 	queryPlugins = append(queryPlugins,
@@ -1492,18 +1482,146 @@ func resolveTableSchemas(opts Options, reg registry.Registry, feature string) (r
 // registry that answers sentio_getStorageIntegrityTableStatus (RpcNetworkState),
 // then a registry with declared schemas (the YAML table_schemas fixture). A
 // declared-schema source reports its declared tables Active and every other
-// table Ordinary.
-func resolveAgentTableStatuses(opts Options, reg registry.Registry) (registry.TableStatuses, error) {
+// table Ordinary. fromRegistry reports the second case, where every answer
+// is a lookup worth caching; callers must not compare interfaces to find it
+// out, since a host registry's dynamic type may not be comparable.
+func resolveAgentTableStatuses(opts Options, reg registry.Registry) (statuses registry.TableStatuses, fromRegistry bool, err error) {
 	if opts.StorageIntegrityTableSchemas != nil {
-		return registry.TableStatusesFromSchemas(opts.StorageIntegrityTableSchemas), nil
+		return registry.TableStatusesFromSchemas(opts.StorageIntegrityTableSchemas), false, nil
 	}
-	if statuses, ok := reg.(registry.TableStatuses); ok && statuses != nil {
-		return statuses, nil
+	if statuses, ok := reg.(registry.TableStatuses); ok && !isNilInterface(statuses) {
+		return statuses, true, nil
 	}
-	if schemas, ok := reg.(registry.TableSchemas); ok && schemas != nil {
-		return registry.TableStatusesFromSchemas(schemas), nil
+	if schemas, ok := reg.(registry.TableSchemas); ok && !isNilInterface(schemas) {
+		return registry.TableStatusesFromSchemas(schemas), false, nil
 	}
-	return nil, fmt.Errorf("storage_integrity.agent requires a table status source: an RPC network state (sentio_getStorageIntegrityTableStatus), a YAML table_schemas fixture, or Options.StorageIntegrityTableSchemas")
+	return nil, false, fmt.Errorf("storage_integrity.agent requires a table status source: an RPC network state (sentio_getStorageIntegrityTableStatus), a YAML table_schemas fixture, or Options.StorageIntegrityTableSchemas")
+}
+
+// agentTableStatusCacheTTL bounds how long the agent reuses a table status
+// answer: a burst of INSERTs costs one lookup (spec 2026-10-09 §6.4).
+const agentTableStatusCacheTTL = 5 * time.Second
+
+// agentStatementOptions resolves the agent's SI statement plugin options from
+// the config and the agent registry (spec 2026-10-09 §6.4): the status source
+// (cached when the registry both answers it and supports discovery, i.e.
+// RpcNetworkState), network-id discovery,
+// the lazily opened client_seq store, the advisory writer pre-check (off for
+// the driver sidecar), and the upstream switch to the hosting indexer. reg is
+// nil when the host injects the declared schemas; discovery and the switch
+// then stay off. The caller sets Signer, Evaluator and Observer.
+func agentStatementOptions(cfg *config.Config, opts Options, reg registry.Registry, signerAddress string) (sistatement.Options, string, error) {
+	agentCfg := cfg.StorageIntegrity.Agent
+	statuses, fromRegistry, err := resolveAgentTableStatuses(opts, reg)
+	if err != nil {
+		return sistatement.Options{}, "", err
+	}
+	var discovery registry.StorageIntegrityDiscovery
+	if d, ok := reg.(registry.StorageIntegrityDiscovery); ok && !isNilInterface(d) {
+		discovery = d
+		if fromRegistry {
+			statuses = registry.NewCachedTableStatuses(statuses, agentTableStatusCacheTTL, nil)
+		}
+	}
+	pinned := cfg.Agent.Upstream != ""
+	var hosting registry.DatabaseHosting
+	if h, ok := reg.(registry.DatabaseHosting); ok && !isNilInterface(h) {
+		hosting = h
+	} else if !pinned {
+		log.Warnw("storage_integrity agent: the network state does not resolve database hosting (registry.DatabaseHosting), so the upstream switch to the indexer hosting an SI INSERT's database is disabled; such an INSERT runs on the session's upstream and the server decides",
+			"network_state", fmt.Sprintf("%T", reg))
+	}
+	openSeq, stateLabel, err := agentSeqOpener(agentCfg.StateDir, signerAddress, defaultAgentStateBase)
+	if err != nil {
+		return sistatement.Options{}, "", fmt.Errorf("storage_integrity.agent: %w", err)
+	}
+	dialTimeout := cfg.DialTimeout.Duration
+	return sistatement.Options{
+		Statuses:        statuses,
+		Discovery:       discovery,
+		NetworkID:       agentCfg.NetworkID,
+		KeeperShardID:   agentCfg.KeeperShardID,
+		OpenSeq:         openSeq,
+		WriterPrecheck:  !cfg.Agent.Driver,
+		MaxPayloadBytes: agentCfg.MaxPayloadBytes,
+		Owner:           cfg.Agent.Owner,
+		IsDriver:        cfg.Agent.Driver,
+		InlineValues: sistatement.InlineValuesOptions{
+			Enabled:           agentCfg.InlineValues.Enabled,
+			EvaluationTimeout: agentCfg.InlineValues.EvaluationTimeout.Duration,
+			MaxRows:           agentCfg.InlineValues.MaxRows,
+		},
+		Hosting: hosting,
+		// dialRaw wraps the conn in configuredAddressConn: the plugin compares
+		// its UpstreamAddress with the hosting indexer's address, so without it
+		// every INSERT would switch again.
+		Dial: func(ctx context.Context, address string) (*chproto.Codec, error) {
+			return dialRaw(ctx, address, dialTimeout)
+		},
+		PinnedUpstream: pinned,
+		SwitchTimeout:  agentSwitchTimeout(dialTimeout),
+	}, stateLabel, nil
+}
+
+// agentSwitchTimeout bounds one upstream switch: the hosting lookups, the
+// dial and the replayed handshake. It is 10s, or the dial timeout plus 5s
+// when that is longer.
+func agentSwitchTimeout(dialTimeout time.Duration) time.Duration {
+	return max(10*time.Second, dialTimeout+5*time.Second)
+}
+
+// defaultAgentStateBase is the running platform's default agent state base.
+func defaultAgentStateBase() (string, bool) {
+	home, _ := os.UserHomeDir()
+	return config.DefaultAgentStateBase(runtime.GOOS, os.Getenv, home)
+}
+
+// agentSeqOpener returns the legacy client_seq opener and a label for logs
+// (plan decision P4). An explicit state_dir keeps one <state_dir>/<signer>.seq
+// for every network: the counter's flock admits a single opener, so the
+// opener hands out one shared instance. Without one the counter lives in
+// <base>/si/<network_id>/<signer>/, opened at the first SI write for that
+// network because the network id is part of the path. A failed open is not
+// remembered, so a later INSERT retries it. The plugin closes what it opened.
+func agentSeqOpener(stateDir, signer string, defaultBase func() (string, bool)) (func(string) (*sistatement.SeqCounter, error), string, error) {
+	if strings.TrimSpace(stateDir) != "" {
+		var (
+			mu     sync.Mutex
+			shared *sistatement.SeqCounter
+		)
+		return func(string) (*sistatement.SeqCounter, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			if shared == nil {
+				c, err := sistatement.OpenSeqCounter(stateDir, signer)
+				if err != nil {
+					return nil, err
+				}
+				shared = c
+			}
+			return shared, nil
+		}, stateDir, nil
+	}
+	base, ok := defaultBase()
+	if !ok {
+		return nil, "", fmt.Errorf("state_dir is required on %s (no default state directory)", runtime.GOOS)
+	}
+	return func(networkID string) (*sistatement.SeqCounter, error) {
+		// The id comes from the hosting indexer; it must name exactly one
+		// directory below <base>/si.
+		if networkID == "" || networkID == "." || networkID == ".." || strings.ContainsAny(networkID, `/\`) {
+			return nil, fmt.Errorf("network id %q cannot name a state directory", networkID)
+		}
+		return sistatement.OpenSeqCounter(config.AgentSIStateDir(base, networkID, signer), signer)
+	}, filepath.Join(base, "si"), nil
+}
+
+// agentLanesLabel describes storage_integrity.agent.lanes for the startup log.
+func agentLanesLabel(lanes string) string {
+	if lanes == "off" {
+		return "off"
+	}
+	return "auto (legacy until the hosting indexer reports client lanes)"
 }
 
 // buildAgentDialer returns the per-session upstream dialer for agent

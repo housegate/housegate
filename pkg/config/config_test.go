@@ -529,3 +529,31 @@ func TestConfigValidateWriterPredicate(t *testing.T) {
 		t.Fatalf("default writer predicate = %q, want contract", got)
 	}
 }
+
+// LoadFile reports whether a config file was actually read, so the
+// standalone binary can apply the agent quickstart defaults only without one
+// (plan decision P5, ruling F14).
+func TestLoadFileReportsWhetherAFileWasRead(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cfg.yaml")
+	if err := os.WriteFile(path, []byte("listen: \":9555\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, loaded := LoadFile(path); !loaded || cfg.Listen != ":9555" {
+		t.Fatalf("explicit file: loaded=%v listen=%q", loaded, cfg.Listen)
+	}
+	if _, loaded := LoadFile(filepath.Join(dir, "missing.yaml")); loaded {
+		t.Fatal("a missing explicit file must report not loaded")
+	}
+
+	t.Chdir(dir)
+	if _, loaded := LoadFile(""); loaded {
+		t.Fatal("no path and no ./config.json must report not loaded")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"listen": ":9556"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, loaded := LoadFile(""); !loaded || cfg.Listen != ":9556" {
+		t.Fatalf("./config.json fallback: loaded=%v listen=%q", loaded, cfg.Listen)
+	}
+}
