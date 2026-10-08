@@ -38,10 +38,12 @@ go_test(
         "relay_rewrite_fail_closed_test.go",
         "relay_synthesized_test.go",
         "relay_test.go",
+        "relay_unspent_test.go",
         "server_test.go",
     ],
     embed = [":proxy"],
     deps = [
+        "//pkg/auth",
         "//pkg/chproto",
         "//pkg/chsession",
         "//pkg/log",

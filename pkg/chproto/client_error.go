@@ -69,6 +69,7 @@ func IsTableNoLongerAcceptsWritesMessage(message string) bool {
 }
 
 func isTableRefusalMessage(message, suffix string) bool {
+	message = TrimSeqUnspentSuffix(message)
 	if !strings.HasPrefix(message, tableRefusalPrefix) || !strings.HasSuffix(message, suffix) ||
 		len(message) <= len(tableRefusalPrefix)+len(suffix) {
 		return false
@@ -86,6 +87,10 @@ type ClientError struct {
 	// KeepSession marks a rejection that ends the current query at a clean
 	// packet boundary without tearing down the client connection.
 	KeepSession bool
+	// SeqUnspent marks a refusal that provably leaves the statement's
+	// client_seq coordinate unspent (spec 2026-10-09 §6.6). Relay renders it
+	// as SeqUnspentSuffix; the agent returns the seq to its free list.
+	SeqUnspent bool
 }
 
 func (e *ClientError) Error() string {
@@ -101,4 +106,47 @@ func (e *ClientError) Unwrap() error { return e.Err }
 func KeepsSession(err error) bool {
 	var clientErr *ClientError
 	return errors.As(err, &clientErr) && clientErr.KeepSession
+}
+
+// SeqUnspentSuffix is appended, once, to the client message of every refusal
+// that provably left the client_seq coordinate unspent (spec 2026-10-09 D16).
+// The agent matches it to recycle the seq; nothing else may emit it.
+const SeqUnspentSuffix = " [client_seq unspent]"
+
+type seqUnspentError struct{ err error }
+
+func (e *seqUnspentError) Error() string { return e.err.Error() }
+func (e *seqUnspentError) Unwrap() error { return e.err }
+
+// MarkSeqUnspent flags err as a provably-unspent refusal. It wraps without
+// changing the text, so the flag survives further %w wrapping and every
+// errors.As on the wrapped chain still works.
+func MarkSeqUnspent(err error) error {
+	if err == nil || IsSeqUnspent(err) {
+		return err
+	}
+	return &seqUnspentError{err: err}
+}
+
+// IsSeqUnspent reports whether err carries the unspent flag, either through
+// MarkSeqUnspent or a ClientError with SeqUnspent set.
+func IsSeqUnspent(err error) bool {
+	var marked *seqUnspentError
+	if errors.As(err, &marked) {
+		return true
+	}
+	var clientErr *ClientError
+	return errors.As(err, &clientErr) && clientErr.SeqUnspent
+}
+
+// HasSeqUnspentSuffix reports whether a rendered Exception message carries
+// the marker.
+func HasSeqUnspentSuffix(message string) bool {
+	return strings.HasSuffix(strings.TrimSpace(message), SeqUnspentSuffix)
+}
+
+// TrimSeqUnspentSuffix removes one trailing marker; message matchers compare
+// the text before it.
+func TrimSeqUnspentSuffix(message string) string {
+	return strings.TrimSuffix(strings.TrimSpace(message), SeqUnspentSuffix)
 }
