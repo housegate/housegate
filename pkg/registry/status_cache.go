@@ -6,6 +6,10 @@ import (
 	"time"
 )
 
+// statusCacheSweepSize is the cache size at which an insert first drops the
+// expired entries, as the agent's hosting cache does.
+const statusCacheSweepSize = 256
+
 // NewCachedTableStatuses caches successful status answers per table for ttl
 // (spec 2026-10-09 §6.4: a burst of INSERTs costs one lookup). Errors are
 // never cached, so a failed lookup is retried on the next INSERT.
@@ -42,7 +46,22 @@ func (c *cachedTableStatuses) StorageIntegrityTableStatus(ctx context.Context, d
 		return TableStatus{}, err
 	}
 	c.mu.Lock()
-	c.entries[key] = cachedStatus{status: status, expires: c.now().Add(c.ttl)}
+	c.insertLocked(key, cachedStatus{status: status, expires: c.now().Add(c.ttl)})
 	c.mu.Unlock()
 	return status, nil
+}
+
+// insertLocked stores entry, first dropping every expired entry when the cache
+// already holds statusCacheSweepSize tables, so the cache stays bounded by the
+// tables written within one TTL rather than every table ever written.
+func (c *cachedTableStatuses) insertLocked(key [2]string, entry cachedStatus) {
+	if len(c.entries) >= statusCacheSweepSize {
+		now := c.now()
+		for k, e := range c.entries {
+			if !now.Before(e.expires) {
+				delete(c.entries, k)
+			}
+		}
+	}
+	c.entries[key] = entry
 }
