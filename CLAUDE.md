@@ -80,7 +80,8 @@ Server.handle → Relay.Run
             negotiate call is READ-ONLY; forwarding upstream is explicit.
   └─ Relay.clientToUpstream  (goroutine, packet-by-packet)
        client.ReadPacket(ClientQueryCode) → OnQuery chain (auth, usage,
-         tablerefguard, querysettings, concurrency, sipeerguard, forward, rewrite,
+         sireserved, sipeerguard, tablerefguard, querysettings, concurrency,
+         lthash, forward, rewrite, sitablestate, SI ingress, indexing_usage,
          commitgate, route signer, metrics)
          → up.WriteQuery / up.WriteRawPacket for non-decoded packets
          (Data/Ping/Cancel/...). HelloPlugins (route stripper, credential,

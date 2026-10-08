@@ -467,7 +467,7 @@ housegate                                # agent mode, devnet2, 127.0.0.1:9000
 clickhouse-client --host 127.0.0.1 --port 9000
 ```
 
-With only a key and no config file the agent joins `devnet2`, discovers the network id and table status from the indexer hosting each database, keeps its `client_seq` state under `~/.local/state/housegate` (Linux, or `$XDG_STATE_HOME/housegate`) or `~/Library/Application Support/housegate` (macOS), fetches the native engine for inline `VALUES` on linux/amd64 and darwin/arm64, and moves the session to the hosting indexer for SI INSERTs. Reads are not moved: connect with `--database <db>` to read an SI table. Billing: each INSERT is one query unit (two for inline `VALUES`), charged also when refused. The automatic native materializer (`-si-inline-values auto`) literalises `now()`, `rand()` and `generateUUIDv4()` in every agent query, SELECT included, so a `SELECT now()` through the agent returns the constant the agent substituted; pass `-si-inline-values off` to keep queries untouched.
+With only a key and no config file the agent joins `devnet2`, discovers the network id and table status from the indexer hosting each database, keeps its `client_seq` counter under `<base>/si/<network_id>/<signer>/`, where `<base>` is `$XDG_STATE_HOME/housegate` when `XDG_STATE_HOME` is an absolute path and `~/.local/state/housegate` otherwise on Linux, or `~/Library/Application Support/housegate` on macOS, fetches the native engine for inline `VALUES` on linux/amd64 and darwin/arm64, and moves the session to the hosting indexer for SI INSERTs. Reads are not moved: connect with `--database <db>` to read an SI table. Billing: each INSERT is one query unit (two for inline `VALUES`), charged also when refused. The automatic native materializer (`-si-inline-values auto`) literalises `now()`, `rand()` and `generateUUIDv4()` in every agent query, SELECT included, so a `SELECT now()` through the agent returns the constant the agent substituted; pass `-si-inline-values off` to keep queries untouched.
 
 #### Configured agent
 
@@ -525,7 +525,7 @@ All CLI flags:
 | `-network` | `devnet2` (no config file) | Agent network preset; `devnet2` = `http://64.38.144.158:32003` (also `HOUSEGATE_NETWORK`). `-state` / `HOUSEGATE_NETWORK_STATE_SOURCE` and a pinned upstream win over it |
 | `-si` | `auto` (no config file) | Storage-integrity signing: `auto` enables it when the network state is an RPC source, `on`, `off` (also `HOUSEGATE_SI`) |
 | `-si-state-dir` | per OS | Directory for the `client_seq` state (also `HOUSEGATE_SI_STATE_DIR`) |
-| `-si-lanes` | (empty) | `client_seq` lanes: `auto` or `off` (also `HOUSEGATE_SI_LANES`); laned ids stay refused until Plan B |
+| `-si-lanes` | (empty) | `client_seq` lanes: `auto` or `off` (also `HOUSEGATE_SI_LANES`); client lanes are not enabled on the network yet; laned statement ids are refused |
 | `-si-read-mode` | (empty) | Inject `SQL_x_read_mode` on SELECTs: `safe` or `unsafe_latest` (also `HOUSEGATE_SI_READ_MODE`) |
 | `-si-inline-values` | `auto` (no config file) | Signed inline `INSERT ... VALUES`: `auto`, `on`, `off` (also `HOUSEGATE_SI_INLINE_VALUES`) |
 | `-listen` | `127.0.0.1:9000` in agent mode without a config file, else `:9001` | Proxy listen address |
