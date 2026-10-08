@@ -1493,3 +1493,46 @@ func TestStatementKindCodeMatchesGeneratedEnum(t *testing.T) {
 		t.Fatalf("sicore kind code %d does not match pb.StatementKind_STATEMENT_KIND_INSERT %d", code, pb.StatementKind_STATEMENT_KIND_INSERT)
 	}
 }
+
+type failingConsumer struct{ err error }
+
+func (c failingConsumer) ConsumeStorageIntegrityAdmission(context.Context, Admission) error {
+	return c.err
+}
+
+// Spec 2026-10-09 §6.6 (2): an admissionFromState failure (here a statement
+// token that does not bind the captured payload) is marked by the ingress;
+// a consumer error is passed through unchanged, because the consumer marks
+// only what it can prove.
+func TestIngressStrictHookMarksAdmissionFailuresOnly(t *testing.T) {
+	for name, tc := range map[string]struct {
+		payload    []byte
+		consumer   error
+		wantMarked bool
+	}{
+		"token mismatch":        {payload: []byte{byte(chproto.ClientDataCode), 0, 0xff}, wantMarked: true},
+		"consumer error":        {payload: []byte{byte(chproto.ClientDataCode), 0, 0xab, 0xcd}, consumer: errors.New("orchestrate: transport")},
+		"consumer marked error": {payload: []byte{byte(chproto.ClientDataCode), 0, 0xab, 0xcd}, consumer: chproto.MarkSeqUnspent(errors.New("put payload: store down")), wantMarked: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ns, _ := ingressNetworkState(t)
+			p, signer := newSignedIngressWithConfig(t, Config{TableSchemas: ns, NetworkID: "testnet-v2", AdmissionConsumer: failingConsumer{err: tc.consumer}})
+			sql := "INSERT INTO tenant.events FORMAT Native"
+			qctx := signedQueryContext(t, 63, signer, sql, sql, sqlmeta.StatementTypeInsert) // token binds {0xab, 0xcd}
+			qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
+			if err := p.OnQuery(context.Background(), qctx); err != nil {
+				t.Fatal(err)
+			}
+			if err := p.OnClientDataStrict(context.Background(), qctx, tc.payload); err != nil {
+				t.Fatal(err)
+			}
+			err := p.OnQueryInputCompleteStrict(context.Background(), qctx)
+			if err == nil || chproto.IsSeqUnspent(err) != tc.wantMarked {
+				t.Fatalf("err = %v marked=%v, want marked=%v", err, chproto.IsSeqUnspent(err), tc.wantMarked)
+			}
+			if tc.consumer != nil && !errors.Is(err, tc.consumer) {
+				t.Fatalf("err = %v, want the consumer error passed through", err)
+			}
+		})
+	}
+}

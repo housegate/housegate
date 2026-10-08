@@ -29,3 +29,13 @@ func TestSubmitOutcomeJournalShapeIsUnchangedWithoutACode(t *testing.T) {
 		t.Fatalf("journal shape = %s", b)
 	}
 }
+
+func TestSubmitOutcomeCarriesTheStatementSeq(t *testing.T) {
+	got := SubmitOutcomeFromSequencedAck(&pb.SequencedAck{Code: pb.AdmissionCode_ADMISSION_CODE_ACCEPTED, StatementSeq: 77})
+	if got.Category != OutcomeAccepted || got.StatementSeq != 77 {
+		t.Fatalf("outcome = %+v, want accepted with statement_seq 77", got)
+	}
+	if AdmissionCodeDuplicateClientSeq != "ADMISSION_CODE_DUPLICATE_CLIENT_SEQ" {
+		t.Fatalf("AdmissionCodeDuplicateClientSeq = %q", AdmissionCodeDuplicateClientSeq)
+	}
+}

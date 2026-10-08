@@ -330,6 +330,10 @@ type SubmitOutcome struct {
 	// terminal reject (for example AdmissionCodeSchemaNotAllowed), empty
 	// otherwise. omitempty keeps journal records without it byte-identical.
 	AdmissionCode string `json:",omitempty"`
+	// StatementSeq is the arbiter's statement_seq on an accepted submission
+	// (the WriteMeter event carries it); zero otherwise and on status-path
+	// outcomes. omitempty keeps older journal records byte-identical.
+	StatementSeq uint64 `json:",omitempty"`
 }
 
 // ClaimOutcome is the SNode RegisterResultClaim (RC-binding) result. BoundSource

@@ -368,6 +368,11 @@ func ArbiterStatementEnvelopeToProto(env StatementEnvelope) (*pb.StatementEnvelo
 // after the statement was admitted (spec 2026-09-24 §9.6).
 var AdmissionCodeSchemaNotAllowed = pb.AdmissionCode_ADMISSION_CODE_SCHEMA_NOT_ALLOWED.String()
 
+// AdmissionCodeDuplicateClientSeq is the arbiter's refusal of a coordinate
+// that is already spent; it is the one coded terminal reject that is never
+// marked unspent (spec 2026-10-09 §6.6).
+var AdmissionCodeDuplicateClientSeq = pb.AdmissionCode_ADMISSION_CODE_DUPLICATE_CLIENT_SEQ.String()
+
 // SubmitOutcomeFromSequencedAck maps Arbiter's application-level admission
 // result into the existing staged-intake outcome categories.
 func SubmitOutcomeFromSequencedAck(ack *pb.SequencedAck) SubmitOutcome {
@@ -380,7 +385,7 @@ func SubmitOutcomeFromSequencedAck(ack *pb.SequencedAck) SubmitOutcome {
 		if ack.GetStatementSeq() == 0 {
 			return SubmitOutcome{Category: OutcomeUnknown, Reason: "arbiter accepted without statement_seq"}
 		}
-		return SubmitOutcome{Category: OutcomeAccepted, Reason: reason}
+		return SubmitOutcome{Category: OutcomeAccepted, Reason: reason, StatementSeq: ack.GetStatementSeq()}
 	case pb.AdmissionCode_ADMISSION_CODE_DUPLICATE_CLIENT_SEQ,
 		pb.AdmissionCode_ADMISSION_CODE_SCHEMA_NOT_ALLOWED,
 		pb.AdmissionCode_ADMISSION_CODE_KIND_NOT_ADMITTED,

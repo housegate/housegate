@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/log"
 	siplugin "github.com/housegate/housegate/pkg/plugins/storageintegrity"
 	"github.com/housegate/housegate/pkg/replay"
 	"github.com/housegate/housegate/pkg/replay/payloadexec"
@@ -527,6 +528,13 @@ func backpressureClientError(table string, err error) error {
 // an error so the plugin reports failure to the client rather than a false
 // success; only a bound ACK2 returns nil. This is the production staged-intake
 // path.
+//
+// Every refusal before Orchestrate is marked chproto.MarkSeqUnspent: nothing
+// of the statement has reached the arbiter, so its client_seq coordinate is
+// provably unspent (spec 2026-10-09 §6.6 (2)). After Orchestrate only a coded
+// terminal reject other than DUPLICATE_CLIENT_SEQ is marked; a prepare, RC or
+// submit may have happened on every other path. The flag is sticky through
+// wrapping, so no post-Orchestrate refusal may wrap a pre-Orchestrate one.
 func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.Context, adm siplugin.Admission) error {
 	if i.guard != nil {
 		// Only the target's latch: one unready table blocks only itself.
@@ -536,44 +544,44 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 				// pass completes: retryable, and the session survives exactly
 				// like 252 back-pressure. A real per-table error stays fatal.
 				return &chproto.ClientError{Code: chproto.CodeTableIsBeingRestarted,
-					Message: chproto.TableActivatingMessage(adm.TableID), Err: err, KeepSession: true}
+					Message: chproto.TableActivatingMessage(adm.TableID), Err: err, KeepSession: true, SeqUnspent: true}
 			}
-			return fmt.Errorf("storage_integrity ingress: merge health: %w", err)
+			return chproto.MarkSeqUnspent(fmt.Errorf("storage_integrity ingress: merge health: %w", err))
 		}
 	}
 	rec := AdmissionRecordFromPlugin(adm)
 	actualMaterializer, err := sicore.SelectMaterializerKind(rec.PayloadEncoding)
 	if err != nil {
-		return fmt.Errorf("storage_integrity ingress: %w", err)
+		return chproto.MarkSeqUnspent(fmt.Errorf("storage_integrity ingress: %w", err))
 	}
 	if actualMaterializer != i.matKind {
-		return fmt.Errorf(
+		return chproto.MarkSeqUnspent(fmt.Errorf(
 			"storage_integrity ingress: runtime requires %s materializer, payload encoding %q selects %s",
 			storageIntegrityMaterializerName(i.matKind),
 			rec.PayloadEncoding,
 			storageIntegrityMaterializerName(actualMaterializer),
-		)
+		))
 	}
 	if i.requireAdmissionSchema && adm.TableSchema == nil {
 		// Defence in depth: the table-state-backed runtime derives a new
 		// admission only from its query snapshot, never from the recovery
 		// resolver. The ingress plugin refuses the same way before this point.
 		return &chproto.ClientError{Code: chproto.CodeQueryIsProhibited,
-			Message: "storage_integrity: table state is unavailable for this query"}
+			Message: "storage_integrity: table state is unavailable for this query", SeqUnspent: true}
 	}
 	unlockStatement := i.lockStatement(rec.StatementID)
 	defer unlockStatement()
 
 	table, partitions, err := i.partsPressureTarget(rec, adm.TableSchema)
 	if err != nil {
-		return err
+		return chproto.MarkSeqUnspent(err)
 	}
 	if partitions != nil {
 		rec.TouchedPartitionIDs = clonePartitionIDs(partitions)
 	}
 	requiresPrepare, err := i.orch.AdmissionRequiresPrepare(ctx, rec)
 	if err != nil {
-		return fmt.Errorf("storage_integrity ingress: preflight %s: %w", rec.StatementID, err)
+		return chproto.MarkSeqUnspent(fmt.Errorf("storage_integrity ingress: preflight %s: %w", rec.StatementID, err))
 	}
 	tracked, _ := i.trackedPressureReservation(rec.StatementID)
 	trackedReservation := tracked.reservation
@@ -591,7 +599,7 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 	if i.pressure != nil && requiresPrepare && attemptReservation == nil {
 		attemptReservation, err = i.reservePartsPressure(ctx, rec.StatementID, table, partitions)
 		if err != nil {
-			return err
+			return chproto.MarkSeqUnspent(err)
 		}
 		trackedReservation = attemptReservation
 		i.setPressureReservation(rec.StatementID, rec.TableID, partitions, attemptReservation)
@@ -602,13 +610,13 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 			if !reusedTrackedReservation {
 				i.cancelAttemptReservation(rec.StatementID, attemptReservation)
 			}
-			return fmt.Errorf("storage_integrity ingress: put payload for %s: %w", rec.StatementID, err)
+			return chproto.MarkSeqUnspent(fmt.Errorf("storage_integrity ingress: put payload for %s: %w", rec.StatementID, err))
 		}
 		if put.PayloadRef == "" {
 			if !reusedTrackedReservation {
 				i.cancelAttemptReservation(rec.StatementID, attemptReservation)
 			}
-			return fmt.Errorf("storage_integrity ingress: payload store returned empty payload_ref for %s", rec.StatementID)
+			return chproto.MarkSeqUnspent(fmt.Errorf("storage_integrity ingress: payload store returned empty payload_ref for %s", rec.StatementID))
 		}
 		rec.PayloadRef = put.PayloadRef
 	}
@@ -675,6 +683,8 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 		// such transition; local preflight refusals return above without mutation.
 		i.pressure.Invalidate()
 	}
+	// Nothing below is marked unspent unless the arbiter's own code proves it:
+	// a prepare, RC or submit may already have happened.
 	if err != nil {
 		if errors.Is(err, sicore.ErrBackpressure) {
 			return backpressureClientError(sicore.PhysicalTableName(rec.TableID), err)
@@ -691,7 +701,18 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 			return &chproto.ClientError{Code: chproto.CodeQueryIsProhibited,
 				Message:     chproto.TableNoLongerAcceptsWritesMessage(rec.TableID),
 				Err:         fmt.Errorf("arbiter %s: %s", res.Submit.AdmissionCode, res.Submit.Reason),
-				KeepSession: true}
+				KeepSession: true,
+				SeqUnspent:  true}
+		}
+		// Spec 2026-10-09 §6.6: a coded terminal reject other than
+		// DUPLICATE_CLIENT_SEQ left the coordinate unspent; name the code so the
+		// agent can act on it. A code-less terminal reject (a gRPC status) or
+		// any other outcome stays unmarked.
+		if res.Submit.Category == sicore.OutcomeTerminalReject && res.Submit.AdmissionCode != "" &&
+			res.Submit.AdmissionCode != sicore.AdmissionCodeDuplicateClientSeq {
+			log.Warnw("storage_integrity statement rejected by the arbiter",
+				"statement_id", rec.StatementID, "code", res.Submit.AdmissionCode, "reason", res.Submit.Reason)
+			return chproto.MarkSeqUnspent(fmt.Errorf("storage_integrity: statement %s rejected by the arbiter: %s", rec.StatementID, res.Submit.AdmissionCode))
 		}
 		return fmt.Errorf("storage_integrity ingress: statement %s did not reach ACK2 (lifecycle %s, reason %q)", rec.StatementID, res.Lifecycle, res.Reason)
 	}

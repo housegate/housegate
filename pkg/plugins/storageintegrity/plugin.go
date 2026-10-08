@@ -492,8 +492,14 @@ func (p *Plugin) OnQueryInputCompleteStrict(ctx context.Context, qctx *plugin.Qu
 
 	admission, err := p.admissionFromState(ctx, state)
 	if err != nil {
-		return fmt.Errorf("storage_integrity admission incomplete for %s: %w", state.admission.StatementID, err)
+		// Nothing has been submitted yet: every admissionFromState refusal
+		// (JWS, signer, hashes, the authorizer re-check) leaves the coordinate
+		// unspent (spec 2026-10-09 §6.6 (2)).
+		return chproto.MarkSeqUnspent(fmt.Errorf("storage_integrity admission incomplete for %s: %w", state.admission.StatementID, err))
 	}
+	// The consumer may have submitted the statement, so its error is passed
+	// through unmarked; the consumer marks only the refusals it can prove
+	// left the coordinate unspent.
 	if err := p.admissionConsumer.ConsumeStorageIntegrityAdmission(ctx, admission); err != nil {
 		return fmt.Errorf("storage_integrity admission rejected for %s: %w", state.admission.StatementID, err)
 	}

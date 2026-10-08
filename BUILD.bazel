@@ -91,6 +91,7 @@ go_test(
         "storage_integrity_backpressure_ingress_test.go",
         "storage_integrity_backpressure_test.go",
         "storage_integrity_ingress_test.go",
+        "storage_integrity_ingress_unspent_test.go",
         "storage_integrity_merge_supervisor_test.go",
         "storage_integrity_runtime_dynamic_test.go",
         "storage_integrity_table_state_runtime_test.go",

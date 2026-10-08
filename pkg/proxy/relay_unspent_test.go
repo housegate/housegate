@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -201,5 +202,54 @@ func TestRelay_QueryBeforeRejectedInputCompletedCarriesMarker(t *testing.T) {
 	exc := readServerException(t, h.clientProxy)
 	if !strings.Contains(exc.Message, "before completing rejected input") || !chproto.HasSeqUnspentSuffix(exc.Message) {
 		t.Fatalf("message = %q, want the protocol refusal with the unspent marker", exc.Message)
+	}
+}
+
+// Spec 2026-10-09 §6.6: Relay never marks an OnQueryInputCompleteStrict
+// refusal itself, because the ingress may already have submitted the
+// statement there. A signed statement refused at that hook carries the marker
+// only when the hook's error is flagged, so a post-submission refusal (here the
+// back-pressure conversion after Orchestrate) reaches the agent unmarked.
+func TestRelay_StrictInputCompleteRefusalOfSignedQueryRendersOnlyTheHooksFlag(t *testing.T) {
+	const message = "storage_integrity: back-pressure: retry later"
+	for name, tc := range map[string]struct {
+		err  error
+		want string
+	}{
+		"unmarked": {&chproto.ClientError{Code: chproto.CodeTooManyParts, Message: message, KeepSession: true}, message},
+		"marked":   {chproto.MarkSeqUnspent(&chproto.ClientError{Code: chproto.CodeTooManyParts, Message: message, KeepSession: true}), message + chproto.SeqUnspentSuffix},
+	} {
+		t.Run(name, func(t *testing.T) {
+			hooks := &stagedRejectHooks{rejectOne: true, rejectErr: tc.err}
+			h := newDeferredHarness(t, hooks)
+			empty := encodeEmptyClientData(t)
+			sample := encodeServerSampleDataPacket(t, deferredTestRev)
+
+			upDone := make(chan error, 1)
+			go func() { upDone <- serveStagedRejectUpstream(t, h.upstreamProxy) }()
+
+			writeAllConn(t, h.clientProxy, encodeQueryWithSettings(t, "q1", "INSERT INTO db.t FORMAT Native", signedSettings()))
+			writeAllConn(t, h.clientProxy, empty)
+			if got := readExact(t, h.clientProxy, len(sample)); !bytes.Equal(got, sample) {
+				t.Fatalf("client sample block = %x, want %x", got, sample)
+			}
+			writeAllConn(t, h.clientProxy, encodeNonEmptyClientDataPacket(t, deferredTestRev))
+			writeAllConn(t, h.clientProxy, empty)
+
+			exc := readServerException(t, h.clientProxy)
+			if exc.Code != proto.Error(chproto.CodeTooManyParts) || exc.Message != tc.want {
+				t.Fatalf("exception = %d %q, want 252 %q", exc.Code, exc.Message, tc.want)
+			}
+			waitForRejectCounts(t, hooks)
+
+			writeAllConn(t, h.clientProxy, encodeInsertQuery(t, "q2", "SELECT 1"))
+			writeAllConn(t, h.clientProxy, empty)
+			if got := readExact(t, h.clientProxy, 1); got[0] != byte(chproto.ServerEndOfStreamCode) {
+				t.Fatalf("second query terminal = %d, want EndOfStream", got[0])
+			}
+			if err := <-upDone; err != nil {
+				t.Fatalf("upstream flow: %v", err)
+			}
+		})
 	}
 }
