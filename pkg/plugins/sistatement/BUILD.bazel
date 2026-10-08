@@ -52,6 +52,7 @@ go_test(
         "//pkg/auth",
         "//pkg/chproto",
         "//pkg/chsession",
+        "//pkg/log",
         "//pkg/lthash",
         "//pkg/network",
         "//pkg/plugin",

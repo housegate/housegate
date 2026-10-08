@@ -93,13 +93,17 @@ type Plugin struct {
 	seqs      map[string]*SeqCounter // by network id
 	seqClosed bool
 
-	mu         sync.Mutex
-	infos      map[string]registry.StorageIntegrityInfo // by database
-	skewWarned map[string]bool                          // by database
-	pending    map[int64]*pendingStatement              // by session id; at most one per session
-	reserved   map[int64]*reservedSeq                   // by session id; at most one per session
-	useDB      map[int64]string                         // last successful standalone USE per session
-	useNext    map[int64]pendingUse                     // candidate USE awaiting upstream success
+	mu    sync.Mutex
+	infos map[string]registry.StorageIntegrityInfo // by database
+	// infoFailures remembers a failed info lookup per database for
+	// infoFailureTTL; discoveryWarnEvery throttles the P7 fallback warning.
+	infoFailures       map[string]infoFailure
+	discoveryWarnEvery time.Duration
+	skewWarned         map[string]bool             // by database
+	pending            map[int64]*pendingStatement // by session id; at most one per session
+	reserved           map[int64]*reservedSeq      // by session id; at most one per session
+	useDB              map[int64]string            // last successful standalone USE per session
+	useNext            map[int64]pendingUse        // candidate USE awaiting upstream success
 }
 
 // pendingStatement is a claimed SI INSERT whose input is still arriving. It
@@ -181,29 +185,31 @@ func New(opts Options) (*Plugin, error) {
 		networkID = "" // only discovery supplies it
 	}
 	return &Plugin{
-		signer:         opts.Signer,
-		account:        strings.ToLower(opts.Signer.Address()),
-		owner:          opts.Owner,
-		isDriver:       opts.IsDriver,
-		statuses:       statuses,
-		discovery:      opts.Discovery,
-		networkID:      networkID,
-		keeperShardID:  opts.KeeperShardID,
-		seq:            opts.Seq,
-		openSeq:        opts.OpenSeq,
-		writerPrecheck: opts.WriterPrecheck,
-		now:            now,
-		maxPayload:     opts.MaxPayloadBytes,
-		inline:         opts.InlineValues,
-		evaluator:      opts.Evaluator,
-		observer:       opts.Observer,
-		seqs:           map[string]*SeqCounter{},
-		infos:          map[string]registry.StorageIntegrityInfo{},
-		skewWarned:     map[string]bool{},
-		pending:        map[int64]*pendingStatement{},
-		reserved:       map[int64]*reservedSeq{},
-		useDB:          map[int64]string{},
-		useNext:        map[int64]pendingUse{},
+		signer:             opts.Signer,
+		account:            strings.ToLower(opts.Signer.Address()),
+		owner:              opts.Owner,
+		isDriver:           opts.IsDriver,
+		statuses:           statuses,
+		discovery:          opts.Discovery,
+		networkID:          networkID,
+		keeperShardID:      opts.KeeperShardID,
+		seq:                opts.Seq,
+		openSeq:            opts.OpenSeq,
+		writerPrecheck:     opts.WriterPrecheck,
+		now:                now,
+		maxPayload:         opts.MaxPayloadBytes,
+		inline:             opts.InlineValues,
+		evaluator:          opts.Evaluator,
+		observer:           opts.Observer,
+		seqs:               map[string]*SeqCounter{},
+		infos:              map[string]registry.StorageIntegrityInfo{},
+		infoFailures:       map[string]infoFailure{},
+		discoveryWarnEvery: discoveryWarnInterval,
+		skewWarned:         map[string]bool{},
+		pending:            map[int64]*pendingStatement{},
+		reserved:           map[int64]*reservedSeq{},
+		useDB:              map[int64]string{},
+		useNext:            map[int64]pendingUse{},
 	}, nil
 }
 

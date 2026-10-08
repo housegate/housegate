@@ -1,9 +1,11 @@
 package sistatement
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/housegate/housegate/pkg/auth"
 	"github.com/housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/log"
 	"github.com/housegate/housegate/pkg/network"
 	"github.com/housegate/housegate/pkg/registry"
 )
@@ -153,12 +156,128 @@ func TestDiscovery_ClockSkewIsReportedOnce(t *testing.T) {
 	info := goodInfo()
 	info.ServerUnixTime = 1_760_000_000 + 30
 	p, _, _ := discoveryPlugin(t, &fakeDiscovery{info: info, writer: true}, "", true)
-	if !p.checkSkew("shop", info) || p.checkSkew("shop", info) {
+	var buf bytes.Buffer
+	ctx := log.WithContext(context.Background(), log.New(slog.NewTextHandler(&buf, nil)))
+	if !p.checkSkew(ctx, "shop", info) || p.checkSkew(ctx, "shop", info) {
 		t.Fatal("a 30 s skew must be reported once per database")
 	}
+	// The local clock is 30 s behind: tokens fail only past max_token_age.
+	if !strings.Contains(buf.String(), "local clock is behind") || !strings.Contains(buf.String(), "skew=-30s") || !strings.Contains(buf.String(), "direction=behind") {
+		t.Fatalf("log = %q; want the signed skew and the behind wording", buf.String())
+	}
+	ahead := goodInfo()
+	ahead.ServerUnixTime = 1_760_000_000 - 30
+	buf.Reset()
+	if !p.checkSkew(ctx, "ahead", ahead) || !strings.Contains(buf.String(), "local clock is ahead") || !strings.Contains(buf.String(), "skew=30s") {
+		t.Fatalf("log = %q; want the ahead wording", buf.String())
+	}
 	ok := goodInfo()
-	if p.checkSkew("other", ok) {
+	if p.checkSkew(ctx, "other", ok) {
 		t.Fatal("no skew must not be reported")
+	}
+}
+
+// The first successful info lookup runs the skew check itself.
+func TestDiscovery_FirstInfoLookupChecksTheSkew(t *testing.T) {
+	info := goodInfo()
+	info.ServerUnixTime = 1_760_000_000 - 30
+	p, _, _ := discoveryPlugin(t, &fakeDiscovery{info: info, writer: true}, "", true)
+	var buf bytes.Buffer
+	ctx := log.WithContext(context.Background(), log.New(slog.NewTextHandler(&buf, nil)))
+	if err := p.OnQuery(ctx, insertQctx(newSession(1, ""), lateSQL)); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	if !p.skewWarned["shop"] || strings.Count(buf.String(), "local clock is ahead") != 1 {
+		t.Fatalf("warned=%v log=%q; the first lookup must check the skew", p.skewWarned["shop"], buf.String())
+	}
+}
+
+// A failed info lookup is remembered for infoFailureTTL: a burst costs one
+// lookup (and one metric count), and the lookup is retried after the TTL.
+func TestDiscovery_FailedInfoLookupIsRememberedForTheTTL(t *testing.T) {
+	for _, configured := range []string{testNetworkID, ""} {
+		t.Run("configured="+configured, func(t *testing.T) {
+			d := &fakeDiscovery{infoErr: errors.New("method not found"), writer: true}
+			p, metrics, _ := discoveryPlugin(t, d, configured, true)
+			clock := time.Unix(1_760_000_000, 0)
+			p.now = func() time.Time { return clock }
+			insert := func(id int64) error {
+				return p.OnQuery(context.Background(), insertQctx(newSession(id, ""), lateSQL))
+			}
+			for i := int64(1); i <= 5; i++ {
+				err := insert(i)
+				if configured != "" && err != nil {
+					t.Fatalf("insert %d: %v", i, err)
+				}
+				if configured == "" && (err == nil || !strings.Contains(err.Error(), "cannot discover network id") || !strings.Contains(err.Error(), "method not found")) {
+					t.Fatalf("insert %d: err = %v; want the remembered cause", i, err)
+				}
+			}
+			if d.infoCalls != 1 || metrics.failed["info"] != 1 {
+				t.Fatalf("info calls=%d failures=%v; want one lookup within the TTL", d.infoCalls, metrics.failed)
+			}
+			clock = clock.Add(infoFailureTTL - time.Second)
+			_ = insert(10)
+			if d.infoCalls != 1 {
+				t.Fatalf("info calls=%d; still inside the TTL", d.infoCalls)
+			}
+			clock = clock.Add(2 * time.Second)
+			_ = insert(11)
+			if d.infoCalls != 2 || metrics.failed["info"] != 2 {
+				t.Fatalf("info calls=%d failures=%v; want a retry after the TTL", d.infoCalls, metrics.failed)
+			}
+			// Recovery: the next lookup after the TTL succeeds and is cached.
+			d.mu.Lock()
+			d.info, d.infoErr = goodInfo(), nil
+			d.mu.Unlock()
+			clock = clock.Add(infoFailureTTL + time.Second)
+			if err := insert(12); err != nil {
+				t.Fatalf("after recovery: %v", err)
+			}
+			_ = insert(13)
+			if d.infoCalls != 3 || len(p.infoFailures) != 0 {
+				t.Fatalf("info calls=%d failures=%v; a success is cached and clears the failure", d.infoCalls, p.infoFailures)
+			}
+		})
+	}
+}
+
+// The P7 fallback warning is throttled per database.
+func TestDiscovery_FallbackWarningIsThrottled(t *testing.T) {
+	d := &fakeDiscovery{infoErr: errors.New("method not found"), writer: true}
+	p, _, _ := discoveryPlugin(t, d, testNetworkID, true)
+	p.discoveryWarnEvery = 50 * time.Millisecond
+	var buf bytes.Buffer
+	ctx := log.WithContext(context.Background(), log.New(slog.NewTextHandler(&buf, nil)))
+	const msg = "network discovery failed; signing for the configured"
+	for i := int64(1); i <= 3; i++ {
+		if err := p.OnQuery(ctx, insertQctx(newSession(i, ""), lateSQL)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := strings.Count(buf.String(), msg); got != 1 {
+		t.Fatalf("warnings = %d, want 1 within the interval: %q", got, buf.String())
+	}
+	time.Sleep(60 * time.Millisecond)
+	if err := p.OnQuery(ctx, insertQctx(newSession(4, ""), lateSQL)); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(buf.String(), msg); got != 2 {
+		t.Fatalf("warnings = %d, want 2 after the interval", got)
+	}
+}
+
+func TestDiscovery_NetworkIDsAreComparedTrimmed(t *testing.T) {
+	info := goodInfo()
+	info.NetworkID = " " + testNetworkID + "\n"
+	p, _, opened := discoveryPlugin(t, &fakeDiscovery{info: info, writer: true}, testNetworkID+" ", true)
+	q := insertQctx(newSession(1, ""), lateSQL)
+	if err := p.OnQuery(context.Background(), q); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	signDeferred(t, p, q)
+	if (*opened)[0] != testNetworkID {
+		t.Fatalf("opened %q, want the trimmed discovered id", *opened)
 	}
 }
 
