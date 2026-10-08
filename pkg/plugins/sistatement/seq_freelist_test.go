@@ -208,13 +208,15 @@ func TestSeqCounter_CorruptFreeListFailsClosedWithDistinctMessages(t *testing.T)
 	}{
 		{"undecodable", "{not json", "decode", "version"},
 		{"wrong version", `{"version":2,"free":[1]}`, "version 2", "decode"},
-		{"entry above last", `{"version":1,"free":[9]}`, "ascending issued", ""},
+		{"entry above last", `{"version":1,"free":[101]}`, "ascending issued", ""},
 		{"not ascending", `{"version":1,"free":[2,2]}`, "ascending issued", ""},
+		{"zero entry", `{"version":1,"free":[0]}`, "seq 0 at index 0", ""},
+		{"over the cap", `{"version":1,"free":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65]}`, "exceed the cap", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			if err := os.WriteFile(filepath.Join(dir, freeAccount+".seq"), []byte("3\n"), 0o600); err != nil {
+			if err := os.WriteFile(filepath.Join(dir, freeAccount+".seq"), []byte("100\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.WriteFile(filepath.Join(dir, freeAccount+".seq.free"), []byte(tc.body), 0o600); err != nil {
@@ -238,5 +240,73 @@ func TestSeqCounter_CorruptFreeListFailsClosedWithDistinctMessages(t *testing.T)
 			}
 			_ = c.Close()
 		})
+	}
+}
+
+func readSeqFiles(t *testing.T, dir string) (seq, free []byte) {
+	t.Helper()
+	seq, err := os.ReadFile(filepath.Join(dir, freeAccount+".seq"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	free, err = os.ReadFile(filepath.Join(dir, freeAccount+".seq.free"))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+	return seq, free
+}
+
+// A closed counter has dropped the flock; a successor may own the files, so
+// no mutator may touch them (spec 2026-10-09 D15).
+func TestSeqCounter_MutatorsRefuseAfterClose(t *testing.T) {
+	dir := t.TempDir()
+	c, err := OpenSeqCounter(dir, freeAccount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reserveN(t, c, 3)
+	if _, err := c.Release(2); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	seqBefore, freeBefore := readSeqFiles(t, dir)
+	if _, err := c.Reserve(); !errors.Is(err, ErrSeqClosed) {
+		t.Fatalf("Reserve after Close = %v, want ErrSeqClosed", err)
+	}
+	if _, err := c.Next(); !errors.Is(err, ErrSeqClosed) {
+		t.Fatalf("Next after Close = %v, want ErrSeqClosed", err)
+	}
+	if overflow, err := c.Release(1); !errors.Is(err, ErrSeqClosed) || overflow {
+		t.Fatalf("Release after Close = %v, %v, want ErrSeqClosed", overflow, err)
+	}
+	if err := c.ReserveSupplied(99); !errors.Is(err, ErrSeqClosed) {
+		t.Fatalf("ReserveSupplied after Close = %v, want ErrSeqClosed", err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("second Close = %v, want idempotent nil", err)
+	}
+	seqAfter, freeAfter := readSeqFiles(t, dir)
+	if string(seqBefore) != string(seqAfter) || string(freeBefore) != string(freeAfter) {
+		t.Fatalf("closed counter changed files: seq %q->%q free %q->%q", seqBefore, seqAfter, freeBefore, freeAfter)
+	}
+	successor := openFree(t, dir)
+	if got, err := successor.Reserve(); err != nil || got != 2 {
+		t.Fatalf("successor Reserve = %d, %v, want the freed 2", got, err)
+	}
+}
+
+func TestSeqCounter_EmptiedFreeListPersistsAsEmptyArray(t *testing.T) {
+	dir := t.TempDir()
+	c := openFree(t, dir)
+	reserveN(t, c, 1)
+	if _, err := c.Release(1); err != nil {
+		t.Fatal(err)
+	}
+	reserveN(t, c, 1)
+	_, free := readSeqFiles(t, dir)
+	if strings.Contains(string(free), "null") || !strings.Contains(string(free), `"free":[]`) {
+		t.Fatalf("free list = %q, want an empty array", free)
 	}
 }

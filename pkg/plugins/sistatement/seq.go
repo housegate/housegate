@@ -23,6 +23,11 @@ var ErrClientSeqExhausted = errors.New("sistatement: client_seq exhausted")
 // reuse possible after restart.
 var ErrClientSeqReused = errors.New("sistatement: client_seq was already reserved")
 
+// ErrSeqClosed means the counter was closed and no longer holds the flock, so
+// it must not touch the seq files: a successor may already own them (spec
+// 2026-10-09 D15).
+var ErrSeqClosed = errors.New("sistatement: client_seq counter is closed")
+
 // SeqCounter is the durable per-account client_seq source (spec §5.1 /
 // D6). Reserve and AdvanceTo write and fsync a newly reserved value BEFORE
 // returning, so neither an agent-generated nor an SDK-supplied seq can be
@@ -35,6 +40,7 @@ type SeqCounter struct {
 	freePath string
 	openDir  func(string) (seqDir, error)
 	unlock   func() error
+	closed   bool
 	mu       sync.Mutex
 	last     uint64
 	free     []uint64 // ascending, each <= last
@@ -116,7 +122,7 @@ func (c *SeqCounter) load() error {
 	}
 	for i, seq := range file.Free {
 		if seq == 0 || seq > c.last || (i > 0 && seq <= file.Free[i-1]) {
-			return fmt.Errorf("sistatement: corrupt free list %s: entry %d is not an ascending issued seq", c.freePath, seq)
+			return fmt.Errorf("sistatement: corrupt free list %s: seq %d at index %d is not an ascending issued seq", c.freePath, seq, i)
 		}
 	}
 	c.free = file.Free
@@ -127,9 +133,10 @@ func (c *SeqCounter) load() error {
 func (c *SeqCounter) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.unlock == nil {
+	if c.closed {
 		return nil
 	}
+	c.closed = true
 	err := c.unlock()
 	c.unlock = nil
 	return err
@@ -138,7 +145,7 @@ func (c *SeqCounter) Close() error {
 // Path returns the backing file (for logs/tests).
 func (c *SeqCounter) Path() string { return c.path }
 
-// Last returns the last issued seq (0 before the first Next).
+// Last returns the last issued seq (0 before the first Reserve).
 func (c *SeqCounter) Last() uint64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -158,6 +165,9 @@ func (c *SeqCounter) persistLocked(next uint64) error {
 }
 
 func (c *SeqCounter) persistFreeLocked(free []uint64) error {
+	if free == nil {
+		free = []uint64{} // marshal an empty list as [], never null
+	}
 	data, err := json.Marshal(freeListFile{Version: 1, Free: free})
 	if err != nil {
 		return err
@@ -177,6 +187,9 @@ func (c *SeqCounter) persistFreeLocked(free []uint64) error {
 func (c *SeqCounter) ReserveSupplied(seq uint64) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.closed {
+		return ErrSeqClosed
+	}
 	if seq == ^uint64(0) {
 		return ErrClientSeqExhausted
 	}
@@ -196,6 +209,9 @@ func (c *SeqCounter) AdvanceTo(seq uint64) error { return c.ReserveSupplied(seq)
 func (c *SeqCounter) Reserve() (uint64, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.closed {
+		return 0, ErrSeqClosed
+	}
 	if len(c.free) > 0 {
 		seq := c.free[0]
 		if err := c.persistFreeLocked(append([]uint64(nil), c.free[1:]...)); err != nil {
@@ -220,10 +236,15 @@ func (c *SeqCounter) Next() (uint64, error) { return c.Reserve() }
 // D16). It may only make a seq reusable for a NEW statement id: the agent never
 // re-presents a statement id, and ReserveSupplied keeps refusing seq <= last.
 // The list is capped at MaxFreeSeqs; past it the largest entry is dropped and
-// stays burned (overflow = true).
+// stays burned (overflow = true; always false when err != nil). The store
+// only checks the high watermark: it cannot tell a skipped gap from a seq that
+// was actually reserved, so callers must pass only seqs they reserved.
 func (c *SeqCounter) Release(seq uint64) (overflow bool, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.closed {
+		return false, ErrSeqClosed
+	}
 	if seq == 0 || seq > c.last {
 		return false, fmt.Errorf("sistatement: release of never-issued client_seq %d (last %d)", seq, c.last)
 	}
@@ -239,5 +260,8 @@ func (c *SeqCounter) Release(seq uint64) (overflow bool, err error) {
 		next = next[:MaxFreeSeqs]
 		overflow = true
 	}
-	return overflow, c.persistFreeLocked(next)
+	if err := c.persistFreeLocked(next); err != nil {
+		return false, err
+	}
+	return overflow, nil
 }
