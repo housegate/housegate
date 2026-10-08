@@ -29,6 +29,7 @@ go_test(
         "inmemory_commitgate_observer_test.go",
         "inmemory_writer_test.go",
         "permission_commitgate_observer_test.go",
+        "permission_writer_predicate_test.go",
         "rpc_table_status_test.go",
         "rpc_test.go",
         "yaml_test.go",
@@ -37,6 +38,8 @@ go_test(
     embed = [":network"],
     deps = [
         "//pkg/chproto",
+        "//pkg/chsession",
+        "//pkg/plugin",
         "//pkg/plugins/agent",
         "//pkg/plugins/commitgate",
         "//pkg/registry",

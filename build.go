@@ -468,8 +468,19 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	// account". Stay aligned with rewriter.Options.AuthEnabled by
 	// gating on the same flag.
 	if cfg.Auth.Enabled {
+		permissionObserver := network.NewPermissionCommitGateObserver(reg)
+		if cfg.Auth.EffectiveWriterPredicate() == authplugin.WriterPredicateContract {
+			// Spec 2026-10-09 R3: ordinary writes use the contract predicate, the
+			// same one the SI ingress uses, so INSERT agrees with CREATE/DROP.
+			writers, ok := reg.(registry.WriterAccess)
+			if !ok || isNilInterface(writers) {
+				return nil, errors.New("auth.writer_predicate: contract (the default) requires a registry that implements WriterAccess (contract isDatabaseWriter); set auth.writer_predicate: bitmap to keep the stored-bitmap check")
+			}
+			permissionObserver = network.NewPermissionCommitGateObserverWithWriters(reg, writers)
+		}
+		log.Infow("permission gate enabled", "writer_predicate", cfg.Auth.EffectiveWriterPredicate())
 		opts.CommitGateObservers = append(
-			[]commitgate.Observer{network.NewPermissionCommitGateObserver(reg)},
+			[]commitgate.Observer{permissionObserver},
 			opts.CommitGateObservers...,
 		)
 	}

@@ -2517,3 +2517,18 @@ func TestBuildServer_TableReferenceProbeRunsForEveryRewriter(t *testing.T) {
 		}
 	})
 }
+
+func TestBuildServer_WriterPredicateRequiresWriterAccess(t *testing.T) {
+	cfg := withoutRewriter(minimalServerCfg(t))
+	cfg.Auth.Enabled = true
+	_, err := buildServer(Options{Config: cfg, NetworkState: registryWithoutWriters{Registry: network.NewInMemoryNetworkState()}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "auth.writer_predicate: bitmap") {
+		t.Fatalf("buildServer err = %v, want the writer-predicate startup refusal naming the escape hatch", err)
+	}
+	cfg.Auth.WriterPredicate = "bitmap"
+	bs, err := buildServer(Options{Config: cfg, NetworkState: registryWithoutWriters{Registry: network.NewInMemoryNetworkState()}}, nil)
+	if err != nil {
+		t.Fatalf("bitmap escape hatch must start without WriterAccess: %v", err)
+	}
+	bs.teardown()
+}
