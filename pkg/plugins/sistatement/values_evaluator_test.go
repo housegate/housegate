@@ -2,11 +2,16 @@ package sistatement
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net"
+	"os"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -28,15 +33,67 @@ type fakeUpstream struct {
 	handshakes atomic.Int32
 	chunkMode  string
 	negotiated chan chproto.AddendumResult
+	// transport selects the client/server connection pair: "" is net.Pipe,
+	// "tcp" a loopback socket, "pipe-tcp-deadline" a pipe whose client end
+	// accepts deadlines after the peer closed, as a TCP socket does.
+	transport string
+	exited    atomic.Int32
+	mu        sync.Mutex
+	servers   []net.Conn
+}
+
+// tcpDeadlinePipe lets SetDeadline succeed on a peer-closed pipe, as on TCP,
+// so the failure surfaces on the first write instead.
+type tcpDeadlinePipe struct{ net.Conn }
+
+func (c tcpDeadlinePipe) SetDeadline(t time.Time) error {
+	if err := c.Conn.SetDeadline(t); err != nil && !errors.Is(err, io.ErrClosedPipe) {
+		return err
+	}
+	return nil
 }
 
 func (f *fakeUpstream) dial(_ context.Context, _ string) (net.Conn, error) {
-	client, server := net.Pipe()
+	var client, server net.Conn
+	switch f.transport {
+	case "tcp":
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return nil, err
+		}
+		defer ln.Close()
+		if client, err = net.Dial("tcp", ln.Addr().String()); err != nil {
+			return nil, err
+		}
+		if server, err = ln.Accept(); err != nil {
+			client.Close()
+			return nil, err
+		}
+	case "pipe-tcp-deadline":
+		client, server = net.Pipe()
+		client = tcpDeadlinePipe{client}
+	default:
+		client, server = net.Pipe()
+	}
+	f.mu.Lock()
+	f.servers = append(f.servers, server)
+	f.mu.Unlock()
 	go f.serve(server)
 	return client, nil
 }
 
+// closeServers closes the server end of every connection dialled so far, the
+// way an upstream's idle_timeout drops a session the evaluator still pools.
+func (f *fakeUpstream) closeServers() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, c := range f.servers {
+		_ = c.Close()
+	}
+}
+
 func (f *fakeUpstream) serve(conn net.Conn) {
+	defer f.exited.Add(1)
 	defer conn.Close()
 	srv := chproto.NewCodec(conn, chproto.DirFromClient)
 	pkt, err := srv.ReadPacket(uint64(chproto.ClientHelloCode))
@@ -713,5 +770,208 @@ func TestUpstreamValuesEvaluator_EmptyDataMarkerWithoutRowsIsRefused(t *testing.
 	})
 	if _, err := ev.Evaluate(context.Background(), evalRequest()); err == nil || !strings.Contains(err.Error(), "no rows") {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func okReply(s *chproto.Codec, r int) error {
+	if err := writeServerBlock(s, r, evalRow(1, false)); err != nil {
+		return err
+	}
+	return writeEndOfStream(s)
+}
+
+// scriptedReply answers the n-th helper query (1-based, across connections)
+// with script(n); a non-nil error closes that server connection.
+func scriptedReply(script func(n int32, s *chproto.Codec, r int) error) func(*chproto.Codec, int) error {
+	var calls atomic.Int32
+	return func(s *chproto.Codec, r int) error { return script(calls.Add(1), s, r) }
+}
+
+var errDropConnection = fmt.Errorf("fake upstream drops the connection")
+
+func TestUpstreamValuesEvaluator_IdleConnOlderThanBoundIsNotReused(t *testing.T) {
+	ev, up, _ := newTestEvaluator(t, okReply)
+	var mu sync.Mutex
+	clock := time.Unix(1758000000, 0)
+	ev.now = func() time.Time { mu.Lock(); defer mu.Unlock(); return clock }
+	advance := func(d time.Duration) { mu.Lock(); clock = clock.Add(d); mu.Unlock() }
+	evaluate := func() {
+		t.Helper()
+		if _, err := ev.Evaluate(context.Background(), evalRequest()); err != nil {
+			t.Fatal(err)
+		}
+		<-up.seen
+	}
+	evaluate()
+	advance(ev.maxIdleAge - time.Second)
+	evaluate()
+	if got := up.handshakes.Load(); got != 1 {
+		t.Fatalf("connection idle below the bound was not reused: handshakes=%d", got)
+	}
+	advance(ev.maxIdleAge)
+	evaluate()
+	if got := up.handshakes.Load(); got != 2 {
+		t.Fatalf("connection idle past the bound was reused: handshakes=%d", got)
+	}
+	// The aged connection was closed, not merely skipped.
+	deadline := time.Now().Add(time.Second)
+	for up.exited.Load() != 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("the aged idle connection was not closed")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	ev.mu.Lock()
+	defer ev.mu.Unlock()
+	if ev.idleCount != 1 {
+		t.Fatalf("idle=%d, want only the fresh connection", ev.idleCount)
+	}
+}
+
+func TestUpstreamValuesEvaluator_PooledConnClosedByPeerRetriesOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name, transport string
+		reply           func(*chproto.Codec, int) error
+		// drop runs after the first evaluation pooled its connection.
+		drop     func(*fakeUpstream)
+		wantSeen int
+	}{
+		{
+			// The devnet2 incident: the upstream closed the idle session, so
+			// the first write on the pooled connection fails (broken pipe).
+			name: "write after peer close", transport: "pipe-tcp-deadline", reply: okReply,
+			drop: (*fakeUpstream).closeServers, wantSeen: 2,
+		},
+		{
+			// A real socket: depending on whether the peer's RST has arrived,
+			// the write fails with EPIPE/ECONNRESET or the read sees EOF.
+			name: "tcp peer close", transport: "tcp", reply: okReply,
+			drop: (*fakeUpstream).closeServers, wantSeen: 2,
+		},
+		{
+			// net.Pipe refuses the deadline itself once the peer closed.
+			name: "deadline after peer close", reply: okReply,
+			drop: (*fakeUpstream).closeServers, wantSeen: 2,
+		},
+		{
+			// The write was accepted but the peer closed before answering.
+			name: "EOF before any response", drop: func(*fakeUpstream) {},
+			reply: scriptedReply(func(n int32, s *chproto.Codec, r int) error {
+				if n == 2 {
+					return errDropConnection
+				}
+				return okReply(s, r)
+			}),
+			wantSeen: 3,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ev, up, signer := newTestEvaluator(t, tc.reply)
+			up.transport = tc.transport
+			if _, err := ev.Evaluate(context.Background(), evalRequest()); err != nil {
+				t.Fatal(err)
+			}
+			tc.drop(up)
+			if tc.transport == "tcp" {
+				// Let the FIN reach the client socket before it is reused.
+				time.Sleep(20 * time.Millisecond)
+			}
+			blocks, err := ev.Evaluate(context.Background(), evalRequest())
+			if err != nil || len(blocks) != 1 {
+				t.Fatalf("stale pooled connection was not transparently retried: blocks=%v err=%v", blocks, err)
+			}
+			if got := up.handshakes.Load(); got != 2 {
+				t.Fatalf("handshakes=%d, want the original plus one fresh retry", got)
+			}
+			var last *chproto.Query
+			for i := 0; i < tc.wantSeen; i++ {
+				last = <-up.seen
+			}
+			select {
+			case q := <-up.seen:
+				t.Fatalf("unexpected extra helper query %q", q.Body)
+			default:
+			}
+			settings := map[string]string{}
+			for _, s := range last.Settings {
+				settings[s.Key] = strings.Trim(s.Value, "'")
+			}
+			validator := auth.NewEthValidator([]string{signer.Address()}, time.Minute, true, false, "", nil)
+			if _, err := validator.ValidateQuery(context.Background(), auth.QueryMeta{Settings: settings, SQL: last.Body}); err != nil {
+				t.Fatalf("retried helper query is not validly signed: %v", err)
+			}
+			ev.mu.Lock()
+			defer ev.mu.Unlock()
+			if ev.idleCount != 1 {
+				t.Fatalf("idle=%d, want only the fresh connection", ev.idleCount)
+			}
+		})
+	}
+}
+
+func TestUpstreamValuesEvaluator_FreshConnFailureIsNotRetried(t *testing.T) {
+	ev, up, _ := newTestEvaluator(t, func(*chproto.Codec, int) error { return errDropConnection })
+	if _, err := ev.Evaluate(context.Background(), evalRequest()); err == nil || !strings.Contains(err.Error(), "read evaluation result") {
+		t.Fatalf("err=%v", err)
+	}
+	<-up.seen
+	if got := up.handshakes.Load(); got != 1 {
+		t.Fatalf("a failure on a freshly dialled connection was retried: handshakes=%d", got)
+	}
+}
+
+func TestUpstreamValuesEvaluator_FailureAfterResponseIsNotRetried(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		partial func(*chproto.Codec, int) error
+	}{
+		{"after a complete packet", func(s *chproto.Codec, r int) error { return writeServerBlock(s, r, evalRow(1, false)) }},
+		{"after a partial packet", func(s *chproto.Codec, _ int) error {
+			var b proto.Buffer
+			b.PutUVarInt(uint64(proto.ServerCodeData))
+			return s.WriteRawPacket(b.Buf)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ev, up, _ := newTestEvaluator(t, scriptedReply(func(n int32, s *chproto.Codec, r int) error {
+				if n == 2 {
+					if err := tc.partial(s, r); err != nil {
+						return err
+					}
+					return errDropConnection
+				}
+				return okReply(s, r)
+			}))
+			if _, err := ev.Evaluate(context.Background(), evalRequest()); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := ev.Evaluate(context.Background(), evalRequest()); err == nil {
+				t.Fatal("a pooled connection that failed mid-response must refuse, not retry")
+			}
+			<-up.seen
+			<-up.seen
+			if got := up.handshakes.Load(); got != 1 {
+				t.Fatalf("retried after the upstream started answering: handshakes=%d", got)
+			}
+		})
+	}
+}
+
+func TestIsStaleConnError(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want bool
+	}{
+		{fmt.Errorf("read evaluation result: %w", io.EOF), true},
+		{fmt.Errorf("write evaluation query: %w", &net.OpError{Op: "write", Err: os.NewSyscallError("write", syscall.EPIPE)}), true},
+		{fmt.Errorf("read evaluation result: %w", &net.OpError{Op: "read", Err: os.NewSyscallError("read", syscall.ECONNRESET)}), true},
+		{fmt.Errorf("write evaluation query: %w", io.ErrClosedPipe), true},
+		{fmt.Errorf("read evaluation result: %w", net.ErrClosed), false},
+		{fmt.Errorf("read evaluation result: %w", os.ErrDeadlineExceeded), false},
+		{fmt.Errorf("read evaluation result: %w", io.ErrUnexpectedEOF), false},
+	} {
+		if got := isStaleConnError(tc.err); got != tc.want {
+			t.Errorf("isStaleConnError(%v)=%v want %v", tc.err, got, tc.want)
+		}
 	}
 }

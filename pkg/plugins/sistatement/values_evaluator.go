@@ -6,16 +6,19 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/ClickHouse/ch-go/proto"
 
 	"github.com/housegate/housegate/pkg/auth"
 	"github.com/housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/log"
 	"github.com/housegate/housegate/pkg/replay/nativepayload"
 	"github.com/housegate/housegate/pkg/replay/payloadexec"
 	"github.com/housegate/housegate/pkg/sqlident"
@@ -26,6 +29,15 @@ const maxIdleEvaluatorConns = 4
 const maxTotalIdleEvaluatorConns = 16
 const evaluatorControlLimit = 64 << 10
 
+// defaultEvaluatorMaxIdleAge bounds how long an evaluation connection may sit
+// in the idle pool. The upstream HouseGate closes a session after its
+// idle_timeout (5m by default in pkg/config, possibly shorter in a deployment),
+// and a connection reused after that point fails on its first write or read.
+// The bound must stay safely below every upstream's idle_timeout; one minute
+// leaves room for operators who shorten it while still letting a burst of
+// inline VALUES INSERTs share one handshake.
+const defaultEvaluatorMaxIdleAge = time.Minute
+
 type evaluatorPoolKey struct {
 	address, account, owner, user, database string
 	isDriver                                bool
@@ -35,24 +47,37 @@ type evaluatorPoolKey struct {
 
 // UpstreamValuesEvaluator opens a dedicated connection to the current session's
 // endpoint. Dial must honor ctx and dial address exactly, without selecting a
-// different peer. A failed attempt is closed, never retried or returned to idle.
+// different peer. A failed attempt is closed and never returned to idle. The
+// only retry is the stale-pool case: a pooled connection that fails with a
+// transport error before any response byte arrived is replaced by exactly
+// one freshly dialled attempt (see evaluateOnce).
 type UpstreamValuesEvaluator struct {
-	dial      func(context.Context, string) (net.Conn, error)
-	signer    auth.Signer
-	mu        sync.Mutex
-	idle      map[evaluatorPoolKey][]*evaluatorConn
-	active    map[*evaluatorConn]struct{}
-	idleCount int
-	closed    bool
+	dial   func(context.Context, string) (net.Conn, error)
+	signer auth.Signer
+	// maxIdleAge is the longest a connection may sit idle and still be reused;
+	// see defaultEvaluatorMaxIdleAge for why it must stay below the upstream's
+	// idle_timeout. now is the clock that ages idle connections.
+	maxIdleAge time.Duration
+	now        func() time.Time
+	mu         sync.Mutex
+	idle       map[evaluatorPoolKey][]*evaluatorConn
+	active     map[*evaluatorConn]struct{}
+	idleCount  int
+	closed     bool
 }
 
 type evaluatorConn struct {
-	conn  net.Conn
+	conn  *countingConn
 	codec *chproto.Codec
+	// idleSince is when the connection last entered the idle pool.
+	idleSince time.Time
 }
 
 func NewUpstreamValuesEvaluator(dial func(context.Context, string) (net.Conn, error), signer auth.Signer) *UpstreamValuesEvaluator {
-	return &UpstreamValuesEvaluator{dial: dial, signer: signer, idle: make(map[evaluatorPoolKey][]*evaluatorConn), active: make(map[*evaluatorConn]struct{})}
+	return &UpstreamValuesEvaluator{
+		dial: dial, signer: signer, maxIdleAge: defaultEvaluatorMaxIdleAge, now: time.Now,
+		idle: make(map[evaluatorPoolKey][]*evaluatorConn), active: make(map[*evaluatorConn]struct{}),
+	}
 }
 
 func (e *UpstreamValuesEvaluator) Evaluate(ctx context.Context, req ValuesEvaluation) ([][]proto.InputColumn, error) {
@@ -74,19 +99,51 @@ func (e *UpstreamValuesEvaluator) Evaluate(ctx context.Context, req ValuesEvalua
 	if err != nil {
 		return nil, err
 	}
+	blocks, stale, err := e.evaluateOnce(ctx, req, sql, true)
+	if stale {
+		// The helper is a read-only SELECT and the upstream sent nothing back,
+		// so one more attempt on a freshly dialled connection cannot duplicate
+		// any effect.
+		_, logger := log.FromContext(ctx)
+		logger.Infow("inline VALUES evaluation hit a stale pooled connection; retrying once on a fresh connection",
+			"upstream", req.UpstreamAddress, "err", err)
+		blocks, _, err = e.evaluateOnce(ctx, req, sql, false)
+	}
+	return blocks, err
+}
+
+// evaluateOnce runs one attempt. stale reports that the attempt used a pooled
+// connection that failed with a transport error before any response byte
+// was read and before ctx ended -- the signature of a socket the upstream
+// closed while it sat idle -- so the caller may retry once with allowIdle
+// false. A freshly dialled connection is never reported stale.
+func (e *UpstreamValuesEvaluator) evaluateOnce(ctx context.Context, req ValuesEvaluation, sql string, allowIdle bool) (_ [][]proto.InputColumn, stale bool, _ error) {
+	// Sign per attempt so a retry carries a token with a fresh iat.
 	token, err := e.signer.SignToken(sql)
 	if err != nil {
-		return nil, fmt.Errorf("sign evaluation query: %w", err)
+		return nil, false, fmt.Errorf("sign evaluation query: %w", err)
 	}
-	ec, fresh, err := e.acquire(ctx, req)
+	ec, fresh, err := e.acquire(ctx, req, allowIdle)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	reusable := false
 	defer func() { e.release(poolKey(req), ec, reusable) }()
+	// markStale reports whether a failure before any response byte arrived
+	// came from a dead pooled socket. Idle siblings entered the pool around
+	// the same time and are likely dead too; the retry dials fresh regardless.
+	markStale := func() bool {
+		if fresh || ctx.Err() != nil {
+			return false
+		}
+		e.dropIdle(poolKey(req))
+		return true
+	}
 	deadline, _ := ctx.Deadline()
 	if err := ec.conn.SetDeadline(deadline); err != nil {
-		return nil, fmt.Errorf("set evaluation deadline: %w", err)
+		// Nothing has been sent yet. TCP accepts a deadline on a peer-closed
+		// socket, net.Pipe does not; either way the connection is unusable.
+		return nil, markStale(), fmt.Errorf("set evaluation deadline: %w", err)
 	}
 	done := make(chan struct{})
 	stop := context.AfterFunc(ctx, func() { ec.close(); close(done) })
@@ -101,24 +158,35 @@ func (e *UpstreamValuesEvaluator) Evaluate(ctx context.Context, req ValuesEvalua
 	defer stopCancellation()
 	if fresh {
 		if err := ec.handshake(req.Hello); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
+	readBefore := ec.conn.bytesRead
 	blocks, err := runEvaluation(ec, req, sql, token)
+	responded := ec.conn.bytesRead != readBefore
 	// Fence the cancellation callback before clearing deadlines or returning to
 	// the pool, otherwise cancellation can close the next borrower's connection.
 	stopCancellation()
 	if err != nil {
-		return nil, err
+		return nil, !responded && isStaleConnError(err) && markStale(), err
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if err := ec.conn.SetDeadline(time.Time{}); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	reusable = true
-	return blocks, nil
+	return blocks, false, nil
+}
+
+// isStaleConnError reports a transport failure caused by the peer having
+// closed the connection: a clean EOF, a reset or a broken pipe
+// (io.ErrClosedPipe is net.Pipe's broken pipe). A local close surfaces as
+// net.ErrClosed and is not included; cancellation is excluded by the caller.
+func isStaleConnError(err error) bool {
+	return errors.Is(err, io.EOF) || errors.Is(err, syscall.EPIPE) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, io.ErrClosedPipe)
 }
 
 // Close fences new acquisitions and late releases, including in-flight dials.
@@ -345,14 +413,18 @@ func decodeServerDataColumns(raw []byte, revision int, req ValuesEvaluation) ([]
 	return out, nil
 }
 
-func (e *UpstreamValuesEvaluator) acquire(ctx context.Context, req ValuesEvaluation) (*evaluatorConn, bool, error) {
+// acquire pops the newest idle connection for req's identity when allowIdle is
+// set, and otherwise dials. Idle connections older than maxIdleAge are closed
+// rather than reused.
+func (e *UpstreamValuesEvaluator) acquire(ctx context.Context, req ValuesEvaluation, allowIdle bool) (*evaluatorConn, bool, error) {
 	key := poolKey(req)
 	e.mu.Lock()
 	if e.closed {
 		e.mu.Unlock()
 		return nil, false, errors.New("values evaluator is closed")
 	}
-	if pool := e.idle[key]; len(pool) > 0 {
+	e.pruneIdleLocked()
+	if pool := e.idle[key]; allowIdle && len(pool) > 0 {
 		ec := pool[len(pool)-1]
 		if len(pool) == 1 {
 			delete(e.idle, key)
@@ -372,7 +444,8 @@ func (e *UpstreamValuesEvaluator) acquire(ctx context.Context, req ValuesEvaluat
 	if conn == nil {
 		return nil, false, errors.New("evaluation dialer returned a nil connection")
 	}
-	ec := &evaluatorConn{conn: conn, codec: chproto.NewCodec(conn, chproto.DirToUpstream)}
+	counted := &countingConn{Conn: conn}
+	ec := &evaluatorConn{conn: counted, codec: chproto.NewCodec(counted, chproto.DirToUpstream)}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed || ctx.Err() != nil {
@@ -390,15 +463,67 @@ func (e *UpstreamValuesEvaluator) release(key evaluatorPoolKey, ec *evaluatorCon
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	delete(e.active, ec)
-	if !reusable || e.closed || len(e.idle[key]) >= maxIdleEvaluatorConns || e.idleCount >= maxTotalIdleEvaluatorConns {
+	if !reusable || e.closed {
 		ec.close()
 		return
 	}
+	e.pruneIdleLocked()
+	if len(e.idle[key]) >= maxIdleEvaluatorConns || e.idleCount >= maxTotalIdleEvaluatorConns {
+		ec.close()
+		return
+	}
+	ec.idleSince = e.now()
 	e.idle[key] = append(e.idle[key], ec)
 	e.idleCount++
 }
 
+// pruneIdleLocked closes every idle connection older than maxIdleAge. Each
+// pool is appended in release order, so its stale entries form a prefix.
+func (e *UpstreamValuesEvaluator) pruneIdleLocked() {
+	cutoff := e.now().Add(-e.maxIdleAge)
+	for key, pool := range e.idle {
+		n := 0
+		for n < len(pool) && !pool[n].idleSince.After(cutoff) {
+			pool[n].close()
+			n++
+		}
+		if n == 0 {
+			continue
+		}
+		e.idleCount -= n
+		if n == len(pool) {
+			delete(e.idle, key)
+		} else {
+			e.idle[key] = pool[n:]
+		}
+	}
+}
+
+// dropIdle closes every idle connection for key.
+func (e *UpstreamValuesEvaluator) dropIdle(key evaluatorPoolKey) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, ec := range e.idle[key] {
+		ec.close()
+	}
+	e.idleCount -= len(e.idle[key])
+	delete(e.idle, key)
+}
+
 func (ec *evaluatorConn) close() { _ = ec.conn.Close() }
+
+// countingConn counts bytes read so an attempt can tell whether any part of a
+// response arrived. Only the borrowing goroutine reads, so no locking.
+type countingConn struct {
+	net.Conn
+	bytesRead uint64
+}
+
+func (c *countingConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	c.bytesRead += uint64(n)
+	return n, err
+}
 
 // handshake mirrors Relay.handshakeFreshUpstream: the stored hello capped by
 // ClientHelloForUpstream, the ServerHello revision floor, compression pinned off, and the one-way client addendum.
