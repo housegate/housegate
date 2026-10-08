@@ -532,28 +532,39 @@ func TestConfigValidateWriterPredicate(t *testing.T) {
 
 // LoadFile reports whether a config file was actually read, so the
 // standalone binary can apply the agent quickstart defaults only without one
-// (plan decision P5, ruling F14).
+// (plan decision P5, ruling F14). Only the implicit ./config.json probe may
+// fall back to the defaults: a path named explicitly (-config,
+// HOUSEGATE_CONFIG) that does not exist is an error naming it, so a mistyped
+// path never starts the quickstart instead of the operator's config.
 func TestLoadFileReportsWhetherAFileWasRead(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "cfg.yaml")
 	if err := os.WriteFile(path, []byte("listen: \":9555\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if cfg, loaded := LoadFile(path); !loaded || cfg.Listen != ":9555" {
-		t.Fatalf("explicit file: loaded=%v listen=%q", loaded, cfg.Listen)
+	if cfg, loaded, err := LoadFile(path); err != nil || !loaded || cfg.Listen != ":9555" {
+		t.Fatalf("explicit file: loaded=%v listen=%q err=%v", loaded, cfg.Listen, err)
 	}
-	if _, loaded := LoadFile(filepath.Join(dir, "missing.yaml")); loaded {
-		t.Fatal("a missing explicit file must report not loaded")
+	missing := filepath.Join(dir, "prod-agnet.yaml")
+	if _, loaded, err := LoadFile(missing); err == nil || loaded || !strings.Contains(err.Error(), missing) {
+		t.Fatalf("a missing explicit file: loaded=%v err=%v; want an error naming %s", loaded, err, missing)
+	}
+	bad := filepath.Join(dir, "bad.yaml")
+	if err := os.WriteFile(bad, []byte("listen: [\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, loaded, err := LoadFile(bad); err == nil || loaded || !strings.Contains(err.Error(), bad) {
+		t.Fatalf("an unparsable file: loaded=%v err=%v; want an error naming %s", loaded, err, bad)
 	}
 
 	t.Chdir(dir)
-	if _, loaded := LoadFile(""); loaded {
-		t.Fatal("no path and no ./config.json must report not loaded")
+	if _, loaded, err := LoadFile(""); err != nil || loaded {
+		t.Fatalf("no path and no ./config.json: loaded=%v err=%v; want the defaults", loaded, err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"listen": ":9556"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if cfg, loaded := LoadFile(""); !loaded || cfg.Listen != ":9556" {
-		t.Fatalf("./config.json fallback: loaded=%v listen=%q", loaded, cfg.Listen)
+	if cfg, loaded, err := LoadFile(""); err != nil || !loaded || cfg.Listen != ":9556" {
+		t.Fatalf("./config.json fallback: loaded=%v listen=%q err=%v", loaded, cfg.Listen, err)
 	}
 }

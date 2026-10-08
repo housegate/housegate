@@ -525,41 +525,47 @@ func Default() Config {
 }
 
 // Load returns the defaults (with env overrides) overlaid by the config file
-// at path, or by ./config.json when path is empty; see LoadFile.
+// at path, or by ./config.json when path is empty; see LoadFile. A load
+// error is fatal.
 func Load(path string) Config {
-	cfg, _ := LoadFile(path)
+	cfg, _, err := LoadFile(path)
+	if err != nil {
+		log.Fatale(err, "load config file")
+	}
 	return cfg
 }
 
 // LoadFile is Load that also reports whether a config file was actually
-// read: false when path is empty and ./config.json does not exist, or when
-// path does not exist (both fall back to the defaults).
-func LoadFile(path string) (Config, bool) {
+// read. Only the implicit ./config.json probe (empty path) may fall back to
+// the defaults, reporting false. A path named explicitly (-config,
+// HOUSEGATE_CONFIG) that cannot be read or parsed is an error naming it: a
+// mistyped path must stop startup, not run the agent quickstart defaults in
+// place of the operator's config.
+func LoadFile(path string) (Config, bool, error) {
 	cfg := Default()
 	if path == "" {
 		if _, err := os.Stat("config.json"); err == nil {
 			path = "config.json"
 		} else {
 			log.Info("no config file provided, using defaults and env overrides")
-			return cfg, false
+			return cfg, false, nil
 		}
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			log.Infow("config file not found, using defaults", "path", path)
-			return cfg, false
+			return Config{}, false, fmt.Errorf("config file %s does not exist: %w", path, err)
 		}
-		log.Fatalw("read config file", "path", path, "err", err)
+		return Config{}, false, fmt.Errorf("read config file %s: %w", path, err)
 	}
 	if err := unmarshalByExt(path, raw, &cfg); err != nil {
-		log.Fatalw("parse config file", "path", path, "err", err)
+		return Config{}, false, fmt.Errorf("parse config file %s: %w", path, err)
 	}
 	log.Infow("config loaded",
 		"path", path,
 		"listen", cfg.Listen,
 		"upstream", cfg.Upstream)
-	return cfg, true
+	return cfg, true, nil
 }
 
 // unmarshalByExt decodes raw into cfg using a codec selected from the

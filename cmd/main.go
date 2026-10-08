@@ -116,8 +116,11 @@ func loadConfigWithOverrides() config.Config {
 		cfgPath = resolved.Path
 		cfgCleanup = resolved.Cleanup
 	}
-	cfg, cfgLoaded := config.LoadFile(cfgPath)
+	cfg, cfgLoaded, err := config.LoadFile(cfgPath)
 	cfgCleanup()
+	if err != nil {
+		log.Fatale(err, "load config file")
+	}
 
 	if explicitFlags["agent"] {
 		cfg.Agent.Mode = *agentMode
