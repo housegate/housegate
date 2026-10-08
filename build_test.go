@@ -2125,6 +2125,10 @@ func (s *buildTestSession) RebindToLocal(context.Context, *chproto.Codec, *chpro
 	return nil
 }
 
+func (s *buildTestSession) SwitchUpstream(context.Context, *chproto.Codec, *chproto.ClientHello) error {
+	return nil
+}
+
 type recordingAdmissionConsumer struct {
 	mu        sync.Mutex
 	admission []storageintegrity.Admission

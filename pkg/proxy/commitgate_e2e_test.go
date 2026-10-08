@@ -77,6 +77,10 @@ func (s *commitgateTestSession) RebindToLocal(context.Context, *chproto.Codec, *
 	return nil
 }
 
+func (s *commitgateTestSession) SwitchUpstream(context.Context, *chproto.Codec, *chproto.ClientHello) error {
+	return nil
+}
+
 func newCommitgateSession(user string) chsession.Session {
 	st := chsession.NewSessionState()
 	st.Identity.UserID = user

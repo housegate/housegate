@@ -88,6 +88,10 @@ func (s *stateOnlySession) RebindToLocal(context.Context, *chproto.Codec, *chpro
 	return nil
 }
 
+func (s *stateOnlySession) SwitchUpstream(context.Context, *chproto.Codec, *chproto.ClientHello) error {
+	return nil
+}
+
 func newSession(user string) chsession.Session {
 	st := chsession.NewSessionState()
 	st.Identity.UserID = user

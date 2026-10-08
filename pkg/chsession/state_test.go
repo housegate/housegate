@@ -3,6 +3,7 @@ package chsession
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"sync"
@@ -452,5 +453,108 @@ func TestSession_RebindToLocal(t *testing.T) {
 	}
 	if !bytes.Contains(got, []byte("SET max_execution_time=30")) {
 		t.Errorf("Replay missing SET max_execution_time; captured=%q", got)
+	}
+}
+
+// switchServer answers one ClientHello with a ServerHello at rev and then
+// drains everything else; it reports the hello it saw.
+func switchServer(t *testing.T, conn net.Conn, rev int, hellos chan<- *chproto.ClientHello) {
+	t.Helper()
+	go func() {
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+		codec := chproto.NewCodec(conn, chproto.DirFromClient)
+		pkt, err := codec.ReadPacket(uint64(chproto.ClientHelloCode))
+		if err != nil {
+			hellos <- nil
+			return
+		}
+		hellos <- pkt.Decoded.(*chproto.ClientHello)
+		srv := &proto.ServerHello{Name: "switch-target", Major: 24, Minor: 1, Revision: rev}
+		var buf proto.Buffer
+		srv.EncodeAware(&buf, rev)
+		if _, err := conn.Write(buf.Buf); err != nil {
+			return
+		}
+		_, _ = io.Copy(io.Discard, conn)
+	}()
+}
+
+func boundSession(t *testing.T) (Session, *chproto.Codec) {
+	t.Helper()
+	clientConn, _ := net.Pipe()
+	t.Cleanup(func() { clientConn.Close() })
+	sess := New(1, clientConn)
+	placeholder, _ := net.Pipe()
+	t.Cleanup(func() { placeholder.Close() })
+	old := chproto.NewCodec(placeholder, chproto.DirToUpstream)
+	if err := sess.BindUpstream(context.Background(), old); err != nil {
+		t.Fatal(err)
+	}
+	return sess, old
+}
+
+func TestSession_SwitchUpstreamReplaysHelloVerbatim(t *testing.T) {
+	const rev = chproto.RevisionMinAddendum
+	sess, _ := boundSession(t)
+	sess.State().ClientRevision = rev
+	sess.State().SetForwarding(false)
+	serverConn, clientConn := net.Pipe()
+	hellos := make(chan *chproto.ClientHello, 1)
+	switchServer(t, serverConn, rev, hellos)
+	newUp := chproto.NewCodec(clientConn, chproto.DirToUpstream)
+	hello := &chproto.ClientHello{Name: "clickhouse-client", Major: 26, Minor: 3, ProtocolVersion: rev, User: "default", Password: "pw", Database: "devuser1"}
+
+	if err := sess.SwitchUpstream(context.Background(), newUp, hello); err != nil {
+		t.Fatalf("SwitchUpstream: %v", err)
+	}
+	got := <-hellos
+	if got == nil || got.User != "default" || got.Password != "pw" || got.Database != "devuser1" || got.Name != "clickhouse-client" {
+		t.Fatalf("upstream saw hello %+v, want the verbatim replay", got)
+	}
+	if sess.Upstream() != newUp || newUp.Revision() != rev {
+		t.Fatalf("upstream not swapped (rev=%d)", newUp.Revision())
+	}
+	if stored := sess.State().UpstreamHello(); stored == nil || stored.Database != "devuser1" {
+		t.Fatalf("stored upstream hello = %+v", stored)
+	}
+	snap := sess.State().Snapshot()
+	if snap.IsForwarding || snap.IsPeerTrusted || snap.RouteTarget != "" || len(sess.State().PeerServerHelloRaw) != 0 {
+		t.Fatalf("SwitchUpstream must not write peer/forward state: %+v", snap)
+	}
+}
+
+func TestSession_SwitchUpstreamRefusesALowerRevision(t *testing.T) {
+	const clientRev = chproto.RevisionMinAddendum
+	sess, old := boundSession(t)
+	sess.State().ClientRevision = clientRev
+	sess.State().SetUpstreamHello(&chproto.ClientHello{Database: "before"})
+	serverConn, clientConn := net.Pipe()
+	hellos := make(chan *chproto.ClientHello, 1)
+	switchServer(t, serverConn, clientRev-1, hellos)
+	newUp := chproto.NewCodec(clientConn, chproto.DirToUpstream)
+
+	err := sess.SwitchUpstream(context.Background(), newUp, &chproto.ClientHello{ProtocolVersion: clientRev, Database: "after"})
+	if !errors.Is(err, ErrUpstreamRevisionTooLow) {
+		t.Fatalf("err = %v, want ErrUpstreamRevisionTooLow", err)
+	}
+	if sess.Upstream() != old {
+		t.Fatal("the old upstream must stay bound after a refusal")
+	}
+	if stored := sess.State().UpstreamHello(); stored == nil || stored.Database != "before" {
+		t.Fatalf("stored hello changed to %+v on refusal", stored)
+	}
+	if _, err := clientConn.Write([]byte{0}); err == nil {
+		t.Fatal("the refused connection must be closed")
+	}
+}
+
+func TestSession_SwitchUpstreamClosesNewConnOnHandshakeFailure(t *testing.T) {
+	sess, old := boundSession(t)
+	serverConn, clientConn := net.Pipe()
+	serverConn.Close() // the handshake write fails
+	err := sess.SwitchUpstream(context.Background(), chproto.NewCodec(clientConn, chproto.DirToUpstream), &chproto.ClientHello{ProtocolVersion: chproto.RevisionMinAddendum})
+	if err == nil || sess.Upstream() != old {
+		t.Fatalf("err = %v upstream swapped = %v", err, sess.Upstream() != old)
 	}
 }

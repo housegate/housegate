@@ -39,6 +39,9 @@ func (f *fakeSession) RebindUpstream(context.Context, *chproto.Codec, bool) erro
 func (f *fakeSession) RebindToLocal(context.Context, *chproto.Codec, *chproto.ClientHello) error {
 	return nil
 }
+func (f *fakeSession) SwitchUpstream(context.Context, *chproto.Codec, *chproto.ClientHello) error {
+	return nil
+}
 func (f *fakeSession) RebindToPeer(context.Context, *chproto.Codec, *chproto.ClientHello) error {
 	return nil
 }

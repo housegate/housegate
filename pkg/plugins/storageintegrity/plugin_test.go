@@ -1455,6 +1455,10 @@ func (s *fakeSession) RebindToLocal(context.Context, *chproto.Codec, *chproto.Cl
 	return nil
 }
 
+func (s *fakeSession) SwitchUpstream(context.Context, *chproto.Codec, *chproto.ClientHello) error {
+	return nil
+}
+
 // TestIngressV2_BindsTheKindItClassifiedItself proves the ingress derives
 // statement_kind from its OWN classification of the SQL — a token signed with
 // any other kind is refused before the payload is uploaded.

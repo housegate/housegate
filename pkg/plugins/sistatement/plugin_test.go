@@ -51,6 +51,10 @@ func (s *fakeSession) RebindToLocal(context.Context, *chproto.Codec, *chproto.Cl
 	return nil
 }
 
+func (s *fakeSession) SwitchUpstream(context.Context, *chproto.Codec, *chproto.ClientHello) error {
+	return nil
+}
+
 func newSession(id int64, logicalDB string) *fakeSession {
 	st := chsession.NewSessionState()
 	st.ClientRevision = testRevision

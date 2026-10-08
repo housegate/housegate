@@ -65,6 +65,15 @@ type Session interface {
 	// Same ownership rule as RebindToPeer: newUp is taken on nil-return,
 	// retained by the caller on error.
 	RebindToLocal(ctx context.Context, newUp *chproto.Codec, hello *chproto.ClientHello) error
+
+	// SwitchUpstream moves the session to another server for the agent's
+	// storage-integrity upstream switch (spec 2026-10-09 §6.4, D19). hello is
+	// replayed as given — the caller sets ProtocolVersion and Database — then
+	// the new leg must negotiate a revision at least SessionState.ClientRevision.
+	// It writes no peer or forward state and replays nothing. It owns newUp in
+	// every case: on error newUp is closed and the old upstream stays bound.
+	// Call it only from OnQuery, where no query is active.
+	SwitchUpstream(ctx context.Context, newUp *chproto.Codec, hello *chproto.ClientHello) error
 }
 
 type sessionImpl struct {
@@ -131,10 +140,11 @@ func (s *sessionImpl) RebindUpstream(ctx context.Context, newUp *chproto.Codec, 
 
 // RebindToPeer implements Session.RebindToPeer.
 func (s *sessionImpl) RebindToPeer(ctx context.Context, newUp *chproto.Codec, peerHello *chproto.ClientHello) error {
-	rev, srvHelloRaw, err := s.handshakeNewUpstream(newUp, peerHello, "rebind-to-peer")
+	rev, srvHelloRaw, upstreamHello, err := s.handshakeNewUpstream(newUp, peerHello, "rebind-to-peer")
 	if err != nil {
 		return err
 	}
+	s.state.SetUpstreamHello(upstreamHello)
 	// Store the raw ServerHello bytes and negotiated revision so that
 	// relay.handshake can echo them to the client without re-running the
 	// upstream hello exchange (RebindToPeer already completed it).
@@ -148,9 +158,11 @@ func (s *sessionImpl) RebindToPeer(ctx context.Context, newUp *chproto.Codec, pe
 
 // RebindToLocal implements Session.RebindToLocal.
 func (s *sessionImpl) RebindToLocal(ctx context.Context, newUp *chproto.Codec, hello *chproto.ClientHello) error {
-	if _, _, err := s.handshakeNewUpstream(newUp, hello, "rebind-to-local"); err != nil {
+	_, _, upstreamHello, err := s.handshakeNewUpstream(newUp, hello, "rebind-to-local")
+	if err != nil {
 		return err
 	}
+	s.state.SetUpstreamHello(upstreamHello)
 	// Clear forward state — the session is back home. Done BEFORE the
 	// upstream swap so the chain's filter sees the reset state by the
 	// time clientToUpstream re-fetches the upstream and continues with
@@ -169,34 +181,64 @@ func (s *sessionImpl) RebindToLocal(ctx context.Context, newUp *chproto.Codec, h
 	return s.state.ReplaySettings(ctx, newUp)
 }
 
+// SwitchUpstream implements Session.SwitchUpstream.
+func (s *sessionImpl) SwitchUpstream(_ context.Context, newUp *chproto.Codec, hello *chproto.ClientHello) error {
+	closeNew := func() {
+		if newUp == nil {
+			return
+		}
+		if closer, ok := newUp.Conn().(interface{ Close() error }); ok {
+			_ = closer.Close()
+		}
+	}
+	if hello == nil {
+		closeNew()
+		return fmt.Errorf("%w: switch-upstream: nil hello", ErrRebindDenied)
+	}
+	rev, _, upstreamHello, err := s.handshakeNewUpstream(newUp, hello, "switch-upstream")
+	if err != nil {
+		closeNew()
+		return err
+	}
+	if clientRev := s.state.Snapshot().ClientRevision; rev < clientRev {
+		closeNew()
+		return fmt.Errorf("%w: switch-upstream negotiated %d, client leg uses %d", ErrUpstreamRevisionTooLow, rev, clientRev)
+	}
+	s.state.SetUpstreamHello(upstreamHello)
+	s.swapAndCloseOld(newUp)
+	return nil
+}
+
 // handshakeNewUpstream runs the standard ClientHello → ServerHello →
 // addendum exchange on a fresh upstream codec without touching session
-// state. Shared between RebindToPeer and RebindToLocal so the two
-// rebind paths agree on protocol-revision negotiation and addendum
-// semantics. errPrefix is used in error messages so callers stay
-// distinguishable in logs.
-func (s *sessionImpl) handshakeNewUpstream(newUp *chproto.Codec, hello *chproto.ClientHello, errPrefix string) (int, []byte, error) {
+// state. Shared between RebindToPeer, RebindToLocal and SwitchUpstream so
+// the three paths agree on protocol-revision negotiation and addendum
+// semantics. It returns the hello it actually sent (revision-capped by
+// ClientHelloForUpstream); each caller stores it with SetUpstreamHello only
+// once it commits to the switch. errPrefix is used in error messages so
+// callers stay distinguishable in logs.
+func (s *sessionImpl) handshakeNewUpstream(newUp *chproto.Codec, hello *chproto.ClientHello, errPrefix string) (rev int, serverHelloRaw []byte, upstreamHello *chproto.ClientHello, err error) {
 	if newUp == nil {
-		return 0, nil, fmt.Errorf("%w: nil upstream", ErrRebindDenied)
+		return 0, nil, nil, fmt.Errorf("%w: nil upstream", ErrRebindDenied)
 	}
-	upstreamHello := chproto.ClientHelloForUpstream(hello)
+	upstreamHello = chproto.ClientHelloForUpstream(hello)
 	if err := newUp.WriteClientHello(upstreamHello); err != nil {
-		return 0, nil, fmt.Errorf("%s write hello: %w", errPrefix, err)
+		return 0, nil, nil, fmt.Errorf("%s write hello: %w", errPrefix, err)
 	}
 	newUp.SetServerHelloRevisionHint(int(upstreamHello.ProtocolVersion))
 	srvPkt, err := newUp.ReadPacket(uint64(chproto.ServerHelloCode), uint64(chproto.ServerExceptionCode))
 	if err != nil {
-		return 0, nil, fmt.Errorf("%s read server-hello: %w", errPrefix, err)
+		return 0, nil, nil, fmt.Errorf("%s read server-hello: %w", errPrefix, err)
 	}
 	if exc, ok := srvPkt.Decoded.(*chproto.Exception); ok {
-		return 0, nil, fmt.Errorf("%s: upstream rejected handshake: code=%d %s: %s", errPrefix, exc.Code, exc.Name, exc.Message)
+		return 0, nil, nil, fmt.Errorf("%s: upstream rejected handshake: code=%d %s: %s", errPrefix, exc.Code, exc.Name, exc.Message)
 	}
 	srv, ok := srvPkt.Decoded.(*chproto.ServerHello)
 	if !ok {
-		return 0, nil, fmt.Errorf("%s: unexpected packet type=%d (want ServerHello=%d): %w",
+		return 0, nil, nil, fmt.Errorf("%s: unexpected packet type=%d (want ServerHello=%d): %w",
 			errPrefix, srvPkt.Type, chproto.ServerHelloCode, chproto.ErrDecode)
 	}
-	rev := int(upstreamHello.ProtocolVersion)
+	rev = int(upstreamHello.ProtocolVersion)
 	if int(srv.Revision) < rev {
 		rev = int(srv.Revision)
 	}
@@ -207,11 +249,10 @@ func (s *sessionImpl) handshakeNewUpstream(newUp *chproto.Codec, hello *chproto.
 			ProposedSend: "chunked_optional",
 		})
 		if err := newUp.SendAddendum(res); err != nil {
-			return 0, nil, fmt.Errorf("%s send addendum: %w", errPrefix, err)
+			return 0, nil, nil, fmt.Errorf("%s send addendum: %w", errPrefix, err)
 		}
 	}
-	s.state.SetUpstreamHello(upstreamHello)
-	return rev, srvPkt.Raw, nil
+	return rev, srvPkt.Raw, upstreamHello, nil
 }
 
 // swapAndCloseOld atomically replaces the bound upstream with newUp
