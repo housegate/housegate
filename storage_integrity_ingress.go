@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/housegate/housegate/pkg/chproto"
 	"github.com/housegate/housegate/pkg/log"
 	siplugin "github.com/housegate/housegate/pkg/plugins/storageintegrity"
@@ -70,6 +72,11 @@ type StorageIntegrityIngress struct {
 
 	// meter is the optional billing hook; nil disables it.
 	meter sicore.WriteMeter
+	// meterSem bounds in-flight meter calls; meterCtx/meterCancel (guarded by
+	// backgroundMu) scope them to the ingress lifetime.
+	meterSem    chan struct{}
+	meterCtx    context.Context
+	meterCancel context.CancelFunc
 
 	backgroundMu     sync.Mutex
 	backgroundCancel context.CancelFunc
@@ -78,11 +85,44 @@ type StorageIntegrityIngress struct {
 }
 
 // SetWriteMeter installs the optional billing hook (spec 2026-10-09 §6.9).
+// It is unsynchronised: call it once, before the ingress serves.
 func (i *StorageIntegrityIngress) SetWriteMeter(m sicore.WriteMeter) {
 	i.meter = m
+	if m != nil {
+		i.meterSem = make(chan struct{}, writeMeterMaxInFlight)
+	}
 }
 
-func (i *StorageIntegrityIngress) meterSequenced(ctx context.Context, adm siplugin.Admission, statementSeq uint64) {
+// writeMeterMaxInFlight bounds concurrent OnStatementSequenced calls; beyond
+// it events are dropped and counted rather than queued or blocking the write.
+const writeMeterMaxInFlight = 256
+
+// writeMeterCallTimeout bounds one OnStatementSequenced call's context.
+const writeMeterCallTimeout = 10 * time.Second
+
+var storageIntegrityWriteMeterDroppedTotal = prometheus.NewCounter(prometheus.CounterOpts{
+	Name: "storage_integrity_write_meter_dropped_total",
+	Help: "OnStatementSequenced events dropped because the write meter was saturated or the ingress was closed.",
+})
+
+func init() {
+	prometheus.MustRegister(storageIntegrityWriteMeterDroppedTotal)
+}
+
+// meterContextLocked returns the context every meter call derives from. It is
+// cancelled by Close. ok is false once the ingress is closed. The caller must
+// hold backgroundMu.
+func (i *StorageIntegrityIngress) meterContextLocked() (context.Context, bool) {
+	if i.backgroundClosed {
+		return nil, false
+	}
+	if i.meterCtx == nil {
+		i.meterCtx, i.meterCancel = context.WithCancel(context.Background())
+	}
+	return i.meterCtx, true
+}
+
+func (i *StorageIntegrityIngress) meterSequenced(adm siplugin.Admission, statementSeq uint64) {
 	meter := i.meter
 	if meter == nil {
 		return
@@ -96,13 +136,37 @@ func (i *StorageIntegrityIngress) meterSequenced(ctx context.Context, adm siplug
 		PayloadBytes: uint64(len(adm.Payload.Bytes)),
 		StatementSeq: statementSeq,
 	}
-	ctx = context.WithoutCancel(ctx)
+	select {
+	case i.meterSem <- struct{}{}:
+	default:
+		storageIntegrityWriteMeterDroppedTotal.Inc()
+		log.WarnEvery("storage_integrity_write_meter_saturated", time.Minute,
+			"storage_integrity write meter saturated; dropping event", "statement_id", ev.StatementID, "max_in_flight", writeMeterMaxInFlight)
+		return
+	}
+	// Add happens under backgroundMu and is skipped once Close ran, so Close's
+	// Wait never races an Add.
+	i.backgroundMu.Lock()
+	base, ok := i.meterContextLocked()
+	if ok {
+		i.backgroundWG.Add(1)
+	}
+	i.backgroundMu.Unlock()
+	if !ok {
+		<-i.meterSem
+		storageIntegrityWriteMeterDroppedTotal.Inc()
+		return
+	}
 	go func() {
+		defer i.backgroundWG.Done()
+		defer func() { <-i.meterSem }()
 		defer func() {
 			if r := recover(); r != nil {
 				log.Warnw("storage_integrity write meter panicked", "statement_id", ev.StatementID, "panic", r)
 			}
 		}()
+		ctx, cancel := context.WithTimeout(base, writeMeterCallTimeout)
+		defer cancel()
 		meter.OnStatementSequenced(ctx, ev)
 	}()
 }
@@ -206,9 +270,13 @@ func (i *StorageIntegrityIngress) Close() {
 	cancel := i.backgroundCancel
 	i.backgroundCancel = nil
 	i.backgroundClosed = true
+	meterCancel := i.meterCancel
 	i.backgroundMu.Unlock()
 	if cancel != nil {
 		cancel()
+	}
+	if meterCancel != nil {
+		meterCancel()
 	}
 	i.backgroundWG.Wait()
 }
@@ -656,7 +724,7 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 	res, err := i.orch.Orchestrate(ctx, rec)
 	if res.Submit.Category == sicore.OutcomeAccepted {
 		// Sequenced means spent; metering follows the arbiter, not ACK2.
-		i.meterSequenced(ctx, adm, res.Submit.StatementSeq)
+		i.meterSequenced(adm, res.Submit.StatementSeq)
 	}
 	switch {
 	case errors.Is(err, sicore.ErrCleanupProofPending):
