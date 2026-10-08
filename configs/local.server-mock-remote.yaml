@@ -60,6 +60,17 @@ rewriter:
 # tableref_guard:
 #   mode: enforce                    # enforce (default) | observe; case-sensitive
 
+# Storage-integrity signed ingress (uncomment together with a storage_integrity.tables
+# list or an injected table state; the other keys are described in README.md).
+# storage_integrity:
+#   ingress:
+#     enabled: true
+#     network_id: devnet2-si
+#     allowed_addresses: []        # optional; empty admits every database writer
+#     denied_addresses: []         # lowercase signer/owner addresses refused on the SI lane
+# auth:                            # merge writer_predicate into the auth block above
+#   writer_predicate: contract     # contract (default) | bitmap (address(0) Write wildcard escape hatch)
+
 agent:
   mode: false
 

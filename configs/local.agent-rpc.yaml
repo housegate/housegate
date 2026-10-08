@@ -15,6 +15,9 @@
 # Provide the signing key via env var (do NOT commit a real key here):
 #   export HOUSEGATE_AGENT_KEY=0xYOUR_PRIVATE_KEY_HEX
 #   ./housegate -config ./configs/local.agent-rpc.yaml
+#
+# Without a config file, `HOUSEGATE_AGENT_KEY=… housegate` gives the same agent against the
+# devnet2 preset; see README §1.2.
 
 listen: "0.0.0.0:10005"
 metrics_listen: "0.0.0.0:10095"

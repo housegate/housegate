@@ -13,6 +13,8 @@ This agent-only feature is default-off. It signs a complete inline `INSERT ... V
 
 The example is additive to the normal agent configuration. Keep `agent.private_key_hex` and either a pinned `agent.upstream` or `network_state.source`; the storage-integrity agent also needs its schema-providing NetworkState unless the embedding host injects one. Configure the receiving server's normal [`auth`](../README.md#auth--jws--ethereum-signature), storage-integrity ingress and upstream ClickHouse credentials separately.
 
+Without a config file the agent enables this lane automatically on linux/amd64 and darwin/arm64 (`-si-inline-values auto`) with an implicit native materializer at the rewriter-go release matching the binary; if that library cannot be fetched the agent starts without inline `VALUES` and logs a warning. An explicit `materialize.enabled: true` keeps the startup fail-fast. In agent mode the materializer rewrites `now()`, `rand()` and `generateUUIDv4()` to literal constants in every agent query, SELECT included, not only in INSERT statements; `-si-inline-values off` keeps queries untouched.
+
 ```yaml
 network_state:
   source: /etc/housegate/network-state.yaml
@@ -58,7 +60,7 @@ The original expression text is not part of the signed record. HouseGate logs it
 
 ## Errors, sequence allocation and metrics
 
-Every refusal raised during `OnQuery` after the lane claims a complete inline VALUES statement reaches the client with the prefix `storage_integrity inline VALUES: `. These admission checks include materialization, lexical closure, schema and column validation, the single helper evaluation, and its aggregate row and byte limits. They run before a statement id is minted, so they consume no `client_seq`.
+Every refusal raised during `OnQuery` after the lane claims a complete inline VALUES statement reaches the client with the prefix `storage_integrity inline VALUES: `. These admission checks include materialization, lexical closure, schema and column validation, the single helper evaluation, and its aggregate row and byte limits. They run before a statement id is minted, so they consume no `client_seq`; since release A1 no refusal before the strict input-complete hook consumes one (the seq is reserved there), and a server refusal marked ` [client_seq unspent]` returns the seq to the agent's free list.
 
 `OnQuery` admission reserves no sequence. The agent durably reserves the `client_seq` only at the strict input-complete boundary, immediately before signing, after the client's marker has been read and the evaluated blocks have been encoded and accounted; a client-marker, packet-encoding, payload-accounting, upstream-revision or cancellation failure before that boundary therefore consumes no sequence. After the reservation, a signing failure returns the sequence to the agent's durable free list, and so does a server refusal whose message ends with ` [client_seq unspent]`; both count in `clickhouse_proxy_agent_si_seq_recycled_total`, and a recycled sequence is reused only under a new statement id. Every other outcome after the reservation (a later strict-hook or upstream-write failure, an upstream-sample, transport or upstream-execution failure, an unmarked Exception, a closed connection) burns the sequence and counts in `clickhouse_proxy_agent_si_seq_burned_total{reason="unknown_outcome"}`; a release that would overflow the 64-entry free list counts as `reason="free_list_overflow"`. Exceptions after admission follow their owning stage and are not guaranteed to use the inline admission prefix.
 

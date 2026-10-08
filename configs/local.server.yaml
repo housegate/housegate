@@ -70,6 +70,13 @@ rewriter:
 #   runtime:
 #     merge_guard:
 #       reassert_interval: 30s
+#   ingress:
+#     enabled: true
+#     network_id: devnet2-si
+#     allowed_addresses: []        # optional; empty admits every database writer
+#     denied_addresses: []         # lowercase signer/owner addresses refused on the SI lane
+# auth:                            # merge writer_predicate into the auth block above
+#   writer_predicate: contract     # contract (default) | bitmap (address(0) Write wildcard escape hatch)
 
 # Optional replication-plane forwarding. Disabled here by default; uncomment in
 # deployments where ClickHouse should open replication-plane TCP only to its
