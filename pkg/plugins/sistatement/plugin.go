@@ -85,7 +85,12 @@ type pendingStatement struct {
 }
 
 // reservedSeq is the statement whose client_seq was reserved and whose
-// outcome is not known yet; at most one per session.
+// outcome is not known yet; at most one per session. OnException attributes an
+// upstream Exception to this reservation by session alone: the ExceptionPlugin
+// hook carries no query id, and Relay allows one query in flight per
+// connection, so the only Exception that can arrive while it is outstanding is
+// the reserved statement's own. Plan B lanes (several in-flight statements per
+// lane) must revisit this attribution.
 type reservedSeq struct {
 	statementID string
 	seq         uint64
@@ -511,11 +516,12 @@ func (p *Plugin) OnQueryInputCompleteStrict(ctx context.Context, qctx *plugin.Qu
 		StatementKind:  sicore.StatementKindCodeInsert,
 	})
 	if err != nil {
-		// No statement id or token exists, so nothing has left the agent: the
-		// seq is provably unspent. This is the only local failure after Reserve
-		// that releases; any later local failure (another strict hook, the
-		// upstream write) burns the seq at OnQueryComplete, because a partial
-		// write cannot be proven unspent.
+		// No token exists, so nothing has left the agent: the seq is provably
+		// unspent. This is the only failure after a statement id exists that
+		// releases locally (the nonce failure in reserveStatementID releases
+		// before any id exists); any later local failure (another strict hook,
+		// the upstream write) burns the seq at OnQueryComplete, because a
+		// partial write cannot be proven unspent.
 		p.releaseSeq(seq)
 		return fmt.Errorf("storage_integrity agent: sign statement %s: %w", statementID, err)
 	}
@@ -559,7 +565,9 @@ func (p *Plugin) dropReservedLocked(sessID int64) (burned bool) {
 // (spec 2026-10-09 D16 (b)): the marker is matched as a suffix of the trimmed
 // message, never by prefix or equality, because the server composes it after
 // arbitrary refusal text. Any other Exception leaves the seq to
-// OnQueryComplete, which counts it burned.
+// OnQueryComplete, which counts it burned. The Exception is attributed to the
+// session's outstanding reservation without a query id (see reservedSeq):
+// sound only while Relay keeps one query in flight per connection.
 func (p *Plugin) OnException(_ context.Context, sess chsession.Session, exc *chproto.Exception) error {
 	if p == nil || sess == nil || exc == nil || !chproto.HasSeqUnspentSuffix(exc.Message) {
 		return nil
