@@ -54,7 +54,7 @@ The declared NetworkState schema remains authoritative. Every helper result and 
 
 The inline lane also refuses `INSERT ... SELECT` / `WITH`, `INSERT ... VALUES ... SETTINGS`, query parameters, `async_insert`, multi-statement input, inline data after any format name other than `Values`, and query compression. `INSERT ... FORMAT Values <rows>` with the rows in the query text is the same statement as `INSERT ... VALUES <rows>` and takes the inline lane; rewriter-grpc's materialization renders inline VALUES that way, so without this a statement containing `now()` or another materialized function would wait for client data that never comes. It does not deduplicate client retries. A 25.x truncated `INSERT ... VALUES ` remains unsupported, while `INSERT ... FORMAT Values` with rows on stdin remains supported by the existing streaming path.
 
-The original expression text is not part of the signed record. HouseGate logs it only at debug level with the statement id; info-level signing logs carry the statement id, table id and payload size instead.
+The original expression text is not part of the signed record. HouseGate logs it only at debug level with the client's query id; info-level signing logs carry the statement id, that query id, table id and payload size instead. The statement id, and with it the `client_seq`, is assigned only at the strict input-complete boundary, immediately before signing.
 
 ## Errors, sequence allocation and metrics
 

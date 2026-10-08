@@ -66,18 +66,30 @@ type Plugin struct {
 	evaluator     ValuesEvaluator
 	observer      Observer
 
-	mu      sync.Mutex
-	pending map[int64]*pendingStatement // by session id; at most one per session
-	useDB   map[int64]string            // last successful standalone USE per session
-	useNext map[int64]pendingUse        // candidate USE awaiting upstream success
+	mu       sync.Mutex
+	pending  map[int64]*pendingStatement // by session id; at most one per session
+	reserved map[int64]*reservedSeq      // by session id; at most one per session
+	useDB    map[int64]string            // last successful standalone USE per session
+	useNext  map[int64]pendingUse        // candidate USE awaiting upstream success
 }
 
+// pendingStatement is a claimed SI INSERT whose input is still arriving. It
+// holds no client_seq: the seq is reserved at the strict input boundary
+// (spec 2026-10-09 D16 (a)).
 type pendingStatement struct {
-	statementID    string
+	queryID        string // the client's query id until the strict hook replaces it
 	tableID        string
 	schemaHash     string
 	clientRevision uint32
 	payload        bytes.Buffer
+}
+
+// reservedSeq is the statement whose client_seq was reserved and whose
+// outcome is not known yet; at most one per session.
+type reservedSeq struct {
+	statementID string
+	seq         uint64
+	resolved    bool // released as unspent, or sequenced (success)
 }
 
 type pendingUse struct {
@@ -138,13 +150,17 @@ func New(opts Options) (*Plugin, error) {
 		evaluator:     opts.Evaluator,
 		observer:      opts.Observer,
 		pending:       map[int64]*pendingStatement{},
+		reserved:      map[int64]*reservedSeq{},
 		useDB:         map[int64]string{},
 		useNext:       map[int64]pendingUse{},
 	}, nil
 }
 
 // OnQuery classifies the statement; payload-local Native INSERTs enter the SI
-// lane (deferred plan + statement id), everything else passes through.
+// lane (deferred or synthesized plan), everything else passes through. It
+// leaves the client's query id in place and reserves no client_seq: nothing
+// reaches the server before OnQueryInputCompleteStrict, which reserves the seq
+// and writes the final statement id (spec 2026-10-09 §6.5).
 func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) (resultErr error) {
 	if p == nil || qctx == nil || qctx.Query == nil || qctx.Session == nil {
 		return nil
@@ -253,41 +269,25 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) (result
 			return err
 		}
 	}
-	// Preserve the existing deferred-lane sequence timing. The inline lane
-	// must reject an overlapping pending statement before reserving its ID.
-	var statementID string
-	if inline == nil {
-		statementID, err = p.statementIDFor(qctx.Query.ID)
-		if err != nil {
-			return err
-		}
-	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if existing := p.pending[sessID]; existing != nil {
-		return fmt.Errorf("storage_integrity agent: previous SI INSERT %s on this session has not completed", existing.statementID)
+		return fmt.Errorf("storage_integrity agent: previous SI INSERT %s on this session has not completed", existing.queryID)
 	}
-	if inline != nil {
-		statementID, err = p.statementIDFor(qctx.Query.ID)
-		if err != nil {
-			return err
-		}
-	}
-	p.pending[sessID] = &pendingStatement{statementID: statementID, tableID: tableID, schemaHash: schemaHash, clientRevision: uint32(revision)}
-	qctx.Query.ID = statementID
+	p.pending[sessID] = &pendingStatement{queryID: qctx.Query.ID, tableID: tableID, schemaHash: schemaHash, clientRevision: uint32(revision)}
 	_, logger := log.FromContext(ctx)
 	if synthesized != nil {
 		qctx.Query.Body = inlineInsertBody(target, cols)
 		qctx.SynthesizedInsert = synthesized
 		// D11: the original statement text is debug-only, never info or above.
-		logger.Debugw("sistatement: inline VALUES synthesized", "statement_id", statementID, "original_sql", sql)
+		logger.Debugw("sistatement: inline VALUES synthesized", "query_id", qctx.Query.ID, "original_sql", sql)
 	} else {
 		qctx.DeferredInsert = &plugin.DeferredInsertPlan{SampleColumns: cols, MaxPayloadBytes: p.maxPayload}
 	}
 	if synthesized != nil {
 		p.observeInline(func(o Observer) { o.InlineValuesSynthesized() })
 	}
-	logger.Debugw("sistatement: SI INSERT admitted for signing", "statement_id", statementID, "table_id", tableID, "columns", len(cols))
+	logger.Debugw("sistatement: SI INSERT admitted for signing", "query_id", qctx.Query.ID, "table_id", tableID, "columns", len(cols))
 	return nil
 }
 
@@ -349,25 +349,50 @@ func (p *Plugin) observeStatus(fn func(StatusObserver)) {
 	}
 }
 
-// statementIDFor keeps a client-supplied flat id for this agent's own
-// account (SDK path, D6), after durably reserving its seq and canonicalizing
-// the account; otherwise it mints <account>:<seq>:<nonce>.
-func (p *Plugin) statementIDFor(queryID string) (string, error) {
+// reserveStatementID durably reserves a client_seq at the strict input
+// boundary (spec 2026-10-09 D16 (a)): an SDK-supplied flat id for this
+// agent's own account keeps its seq; otherwise the smallest free seq or the
+// next one is used with a fresh nonce. A recycled seq therefore only ever
+// appears under a NEW statement id; the agent never re-presents an id it sent.
+func (p *Plugin) reserveStatementID(queryID string) (string, uint64, error) {
 	if canonical, seq, ok := ownSuppliedStatementID(queryID, p.account); ok {
 		if err := p.seq.ReserveSupplied(seq); err != nil {
-			return "", fmt.Errorf("storage_integrity agent: reserve supplied client_seq: %w", err)
+			return "", 0, fmt.Errorf("storage_integrity agent: reserve supplied client_seq: %w", err)
 		}
-		return canonical, nil
+		return canonical, seq, nil
 	}
-	seq, err := p.seq.Next()
+	seq, err := p.seq.Reserve()
 	if err != nil {
-		return "", fmt.Errorf("storage_integrity agent: issue client_seq: %w", err)
+		return "", 0, fmt.Errorf("storage_integrity agent: issue client_seq: %w", err)
 	}
 	var nonce [16]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
-		return "", fmt.Errorf("storage_integrity agent: nonce: %w", err)
+		// No statement id exists yet, so nothing can have left the agent.
+		p.releaseSeq(seq)
+		return "", 0, fmt.Errorf("storage_integrity agent: nonce: %w", err)
 	}
-	return p.account + ":" + strconv.FormatUint(seq, 10) + ":" + hex.EncodeToString(nonce[:]), nil
+	return p.account + ":" + strconv.FormatUint(seq, 10) + ":" + hex.EncodeToString(nonce[:]), seq, nil
+}
+
+// releaseSeq returns a provably unspent seq to the free list.
+func (p *Plugin) releaseSeq(seq uint64) {
+	overflow, err := p.seq.Release(seq)
+	if err != nil {
+		log.Warnw("sistatement: could not release client_seq; it stays burned", "client_seq", seq, "err", err)
+		p.observeSeq(func(o SeqObserver) { o.SeqBurned("unknown_outcome") })
+		return
+	}
+	if overflow {
+		p.observeSeq(func(o SeqObserver) { o.SeqBurned("free_list_overflow") })
+		return
+	}
+	p.observeSeq(func(o SeqObserver) { o.SeqRecycled() })
+}
+
+func (p *Plugin) observeSeq(fn func(SeqObserver)) {
+	if o, ok := p.observer.(SeqObserver); ok && o != nil {
+		fn(o)
+	}
 }
 
 // ownSuppliedStatementID accepts account casing from SDK query ids, but keeps
@@ -394,12 +419,12 @@ func (p *Plugin) OnClientDataStrict(_ context.Context, qctx *plugin.QueryContext
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	st := p.pending[qctx.Session.ID()]
-	if st == nil || st.statementID != qctx.Query.ID {
+	if st == nil || st.queryID != qctx.Query.ID {
 		return nil
 	}
 	if next := uint64(st.payload.Len()) + uint64(len(raw)); next > p.maxPayload {
 		delete(p.pending, qctx.Session.ID())
-		return fmt.Errorf("storage_integrity agent: payload for %s exceeds max_payload_bytes (%d > %d)", st.statementID, next, p.maxPayload)
+		return fmt.Errorf("storage_integrity agent: payload for %s exceeds max_payload_bytes (%d > %d)", st.queryID, next, p.maxPayload)
 	}
 	_, _ = st.payload.Write(raw)
 	return nil
@@ -414,7 +439,7 @@ func (p *Plugin) ClientDataReadLimit(qctx *plugin.QueryContext) (uint64, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	st := p.pending[qctx.Session.ID()]
-	if st == nil || st.statementID != qctx.Query.ID {
+	if st == nil || st.queryID != qctx.Query.ID {
 		return 0, false
 	}
 	used := uint64(st.payload.Len())
@@ -424,8 +449,12 @@ func (p *Plugin) ClientDataReadLimit(qctx *plugin.QueryContext) (uint64, bool) {
 	return p.maxPayload - used, true
 }
 
-// OnQueryInputCompleteStrict signs the v2 statement token over the buffered
-// payload and appends SQL_x_statement_token; the pending state is released.
+// OnQueryInputCompleteStrict reserves the client_seq, writes the final
+// statement id into qctx.Query.ID (which Relay records as the active query and
+// forwards, spec 2026-10-09 §3.1), signs the v2 statement token over the
+// buffered payload and appends SQL_x_statement_token; the pending state is
+// released. Every payload check runs before the reservation, so a refusal
+// there consumes no seq.
 func (p *Plugin) OnQueryInputCompleteStrict(ctx context.Context, qctx *plugin.QueryContext) (resultErr error) {
 	if qctx != nil && qctx.SynthesizedInsert != nil {
 		defer func() { resultErr = inlineWrap(resultErr) }()
@@ -435,7 +464,7 @@ func (p *Plugin) OnQueryInputCompleteStrict(ctx context.Context, qctx *plugin.Qu
 	}
 	p.mu.Lock()
 	st := p.pending[qctx.Session.ID()]
-	if st == nil || st.statementID != qctx.Query.ID {
+	if st == nil || st.queryID != qctx.Query.ID {
 		p.mu.Unlock()
 		return nil
 	}
@@ -460,12 +489,16 @@ func (p *Plugin) OnQueryInputCompleteStrict(ctx context.Context, qctx *plugin.Qu
 		payload = plan.Payload()
 	}
 	if len(payload) == 0 {
-		return fmt.Errorf("storage_integrity agent: SI INSERT %s carried no payload", st.statementID)
+		return fmt.Errorf("storage_integrity agent: SI INSERT %s carried no payload", st.queryID)
+	}
+	statementID, seq, err := p.reserveStatementID(st.queryID)
+	if err != nil {
+		return err
 	}
 	token, err := p.signer.SignStatementV2(auth.JWSStatementPayloadV2{
 		NetworkID:      p.networkID,
 		KeeperShardID:  p.keeperShardID,
-		StatementID:    st.statementID,
+		StatementID:    statementID,
 		SQLHash:        replay.DigestString(qctx.Query.Body),
 		SettingsHash:   sicore.EmptySettingsHash,
 		SchemaHash:     st.schemaHash,
@@ -478,12 +511,69 @@ func (p *Plugin) OnQueryInputCompleteStrict(ctx context.Context, qctx *plugin.Qu
 		StatementKind:  sicore.StatementKindCodeInsert,
 	})
 	if err != nil {
-		return fmt.Errorf("storage_integrity agent: sign statement %s: %w", st.statementID, err)
+		// No statement id or token exists, so nothing has left the agent: the
+		// seq is provably unspent. This is the only local failure after Reserve
+		// that releases; any later local failure (another strict hook, the
+		// upstream write) burns the seq at OnQueryComplete, because a partial
+		// write cannot be proven unspent.
+		p.releaseSeq(seq)
+		return fmt.Errorf("storage_integrity agent: sign statement %s: %w", statementID, err)
 	}
+	qctx.Query.ID = statementID
 	// Same Custom + single-quote wrapping as the auth token (see agent.Plugin).
 	qctx.Query.Settings = append(qctx.Query.Settings, chproto.Setting{Key: auth.StatementTokenSettingKey, Value: "'" + token + "'", Custom: true})
+	p.mu.Lock()
+	burned := p.trackReservedLocked(qctx.Session.ID(), &reservedSeq{statementID: statementID, seq: seq})
+	p.mu.Unlock()
+	if burned {
+		p.observeSeq(func(o SeqObserver) { o.SeqBurned("unknown_outcome") })
+	}
 	_, logger := log.FromContext(ctx)
-	logger.Infow("sistatement: statement token signed", "statement_id", st.statementID, "table_id", st.tableID, "payload_bytes", len(payload))
+	logger.Infow("sistatement: statement token signed", "statement_id", statementID, "query_id", st.queryID, "table_id", st.tableID, "payload_bytes", len(payload))
+	return nil
+}
+
+// trackReservedLocked records r as the session's outstanding seq. Relay
+// completes every query before the next one starts, so a predecessor should
+// already be gone; one that is still unresolved is reported as burned.
+func (p *Plugin) trackReservedLocked(sessID int64, r *reservedSeq) (burnedPrevious bool) {
+	if prev := p.reserved[sessID]; prev != nil && !prev.resolved {
+		burnedPrevious = true
+	}
+	p.reserved[sessID] = r
+	return burnedPrevious
+}
+
+// dropReservedLocked forgets the session's outstanding seq and reports whether
+// it was still unresolved, i.e. burned with an unknown outcome.
+func (p *Plugin) dropReservedLocked(sessID int64) (burned bool) {
+	r := p.reserved[sessID]
+	if r == nil {
+		return false
+	}
+	delete(p.reserved, sessID)
+	return !r.resolved
+}
+
+// OnException recycles the outstanding seq when the server proved it unspent
+// (spec 2026-10-09 D16 (b)): the marker is matched as a suffix of the trimmed
+// message, never by prefix or equality, because the server composes it after
+// arbitrary refusal text. Any other Exception leaves the seq to
+// OnQueryComplete, which counts it burned.
+func (p *Plugin) OnException(_ context.Context, sess chsession.Session, exc *chproto.Exception) error {
+	if p == nil || sess == nil || exc == nil || !chproto.HasSeqUnspentSuffix(exc.Message) {
+		return nil
+	}
+	p.mu.Lock()
+	r := p.reserved[sess.ID()]
+	if r == nil || r.resolved {
+		p.mu.Unlock()
+		return nil
+	}
+	r.resolved = true
+	seq := r.seq
+	p.mu.Unlock()
+	p.releaseSeq(seq)
 	return nil
 }
 
@@ -493,7 +583,7 @@ func (p *Plugin) OnQueryAbort(_ context.Context, qctx *plugin.QueryContext) {
 		return
 	}
 	p.mu.Lock()
-	if st := p.pending[qctx.Session.ID()]; st != nil && st.statementID == qctx.Query.ID {
+	if st := p.pending[qctx.Session.ID()]; st != nil && st.queryID == qctx.Query.ID {
 		delete(p.pending, qctx.Session.ID())
 	}
 	if use, ok := p.useNext[qctx.Session.ID()]; ok && use.queryID == qctx.Query.ID {
@@ -512,6 +602,10 @@ func (p *Plugin) OnQuerySuccess(_ context.Context, sess chsession.Session, query
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if r := p.reserved[sess.ID()]; r != nil && r.statementID == queryID {
+		// Sequenced: the seq is spent, which is neither recycled nor burned.
+		r.resolved = true
+	}
 	use, ok := p.useNext[sess.ID()]
 	if !ok || use.queryID != queryID {
 		return
@@ -521,18 +615,25 @@ func (p *Plugin) OnQuerySuccess(_ context.Context, sess chsession.Session, query
 }
 
 // OnQueryComplete drops any candidate USE that did not reach the success
-// boundary. Relay permits only one query in flight per session, so the session
-// id is sufficient at this terminal hook.
+// boundary, and the outstanding seq: one that was neither sequenced nor proven
+// unspent is counted burned (unknown outcome, spec 2026-10-09 D16 (c)). Relay
+// permits only one query in flight per session, so the session id is
+// sufficient at this terminal hook.
 func (p *Plugin) OnQueryComplete(_ context.Context, sess chsession.Session) {
 	if p == nil || sess == nil {
 		return
 	}
 	p.mu.Lock()
 	delete(p.useNext, sess.ID())
+	burned := p.dropReservedLocked(sess.ID())
 	p.mu.Unlock()
+	if burned {
+		p.observeSeq(func(o SeqObserver) { o.SeqBurned("unknown_outcome") })
+	}
 }
 
-// OnClose drops all per-session state.
+// OnClose drops all per-session state; an outstanding unresolved seq is
+// counted burned.
 func (p *Plugin) OnClose(sess chsession.Session) {
 	if p == nil || sess == nil {
 		return
@@ -541,7 +642,11 @@ func (p *Plugin) OnClose(sess chsession.Session) {
 	delete(p.pending, sess.ID())
 	delete(p.useDB, sess.ID())
 	delete(p.useNext, sess.ID())
+	burned := p.dropReservedLocked(sess.ID())
 	p.mu.Unlock()
+	if burned {
+		p.observeSeq(func(o SeqObserver) { o.SeqBurned("unknown_outcome") })
+	}
 }
 
 var (
@@ -553,4 +658,5 @@ var (
 	_ plugin.QuerySuccessPlugin             = (*Plugin)(nil)
 	_ plugin.QueryCompletePlugin            = (*Plugin)(nil)
 	_ plugin.ClosePlugin                    = (*Plugin)(nil)
+	_ plugin.ExceptionPlugin                = (*Plugin)(nil)
 )

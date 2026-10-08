@@ -33,6 +33,7 @@ go_test(
         "relay_deferred_test.go",
         "relay_exception_test.go",
         "relay_helpers_test.go",
+        "relay_late_id_test.go",
         "relay_query_only_test.go",
         "relay_reject_test.go",
         "relay_rewrite_fail_closed_test.go",

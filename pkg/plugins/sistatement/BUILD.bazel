@@ -37,6 +37,7 @@ go_test(
     name = "sistatement_test",
     srcs = [
         "inline_values_test.go",
+        "late_reservation_test.go",
         "plugin_test.go",
         "seq_freelist_test.go",
         "seq_test.go",

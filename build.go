@@ -1284,6 +1284,7 @@ func buildAgentWithBuilders(
 	var successPlugins []plugin.QuerySuccessPlugin
 	var completePlugins []plugin.QueryCompletePlugin
 	var closePlugins []plugin.ClosePlugin
+	exceptionPlugins := []plugin.ExceptionPlugin{metrics}
 	var materializerClose func()
 	var evaluatorClose func()
 	buildSucceeded := false
@@ -1327,10 +1328,14 @@ func buildAgentWithBuilders(
 	}
 
 	// The SI statement plugin runs after materialization so it signs the final
-	// SQL, and before agentPlug so both tokens bind the same body and the
-	// statement id is final when SQL_x_auth_token is minted. Deferred payload
-	// collection can outlive the auth token's max age, so the same agentPlug
-	// instance also refreshes that token at the strict input-complete boundary.
+	// SQL, and before agentPlug so both tokens bind the same body. The
+	// statement id is not final when OnQuery mints SQL_x_auth_token: the SI
+	// plugin reserves client_seq and writes the statement id only at the
+	// strict input-complete boundary (spec 2026-10-09 D16), and the auth token
+	// does not bind the query id. Deferred payload collection can outlive the
+	// auth token's max age, so the same agentPlug instance also refreshes that
+	// token at the strict input-complete boundary, after the SI plugin. siPlug
+	// also joins the exception chain to recycle a seq the server proved unspent.
 	if cfg.StorageIntegrity.Agent.Enabled {
 		stmtSigner, ok := signer.(auth.StatementSignerV2)
 		if !ok {
@@ -1402,6 +1407,7 @@ func buildAgentWithBuilders(
 		successPlugins = append(successPlugins, siPlug)
 		completePlugins = append(completePlugins, siPlug)
 		closePlugins = append(closePlugins, siPlug)
+		exceptionPlugins = append([]plugin.ExceptionPlugin{siPlug}, exceptionPlugins...)
 		log.Infow("storage_integrity agent statement plugin enabled",
 			"network_id", cfg.StorageIntegrity.Agent.NetworkID,
 			"state_dir", cfg.StorageIntegrity.Agent.StateDir,
@@ -1423,7 +1429,7 @@ func buildAgentWithBuilders(
 		QueryAbortPlugins:               abortPlugins,
 		QuerySuccessPlugins:             successPlugins,
 		QueryCompletePlugins:            completePlugins,
-		ExceptionPlugins:                []plugin.ExceptionPlugin{metrics},
+		ExceptionPlugins:                exceptionPlugins,
 		ClosePlugins:                    closePlugins,
 	}
 

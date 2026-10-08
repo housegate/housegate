@@ -18,3 +18,11 @@ type Observer interface {
 type StatusObserver interface {
 	TableStatusLookupFailed()
 }
+
+// SeqObserver counts recycled and burned client_seq values (spec 2026-10-09
+// §10). *proxy.MetricsObserver satisfies it; an Observer that does not is not
+// counted.
+type SeqObserver interface {
+	SeqRecycled()
+	SeqBurned(reason string)
+}

@@ -95,8 +95,12 @@ func TestPlugin_SignsActiveTablesOnly(t *testing.T) {
 	if err := p.OnQuery(context.Background(), q); err != nil {
 		t.Fatal(err)
 	}
-	if q.DeferredInsert == nil || seq.Last() != 1 {
-		t.Fatalf("an Active table must be claimed for signing (deferred=%v seq=%d)", q.DeferredInsert, seq.Last())
+	if q.DeferredInsert == nil || seq.Last() != 0 {
+		t.Fatalf("an Active table must be claimed for signing without reserving a seq (deferred=%v seq=%d)", q.DeferredInsert, seq.Last())
+	}
+	signDeferred(t, p, q)
+	if seq.Last() != 1 {
+		t.Fatalf("the strict hook must reserve seq 1, last=%d", seq.Last())
 	}
 }
 

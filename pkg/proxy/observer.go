@@ -73,6 +73,14 @@ var (
 		Name: "clickhouse_proxy_agent_si_table_status_failures_total",
 		Help: "Agent-mode storage-integrity table status lookups that failed; the INSERT passed through unsigned",
 	})
+	agentSISeqRecycledTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "clickhouse_proxy_agent_si_seq_recycled_total",
+		Help: "Agent-mode client_seq values returned to the free list after a provably-unspent refusal",
+	})
+	agentSISeqBurnedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "clickhouse_proxy_agent_si_seq_burned_total",
+		Help: "Agent-mode client_seq values that may have been spent or could not be recycled, by reason",
+	}, []string{"reason"})
 )
 
 func init() {
@@ -91,6 +99,8 @@ func init() {
 	prometheus.MustRegister(agentMaterializeTotal)
 	prometheus.MustRegister(agentInlineValuesTotal)
 	prometheus.MustRegister(agentSITableStatusFailuresTotal)
+	prometheus.MustRegister(agentSISeqRecycledTotal)
+	prometheus.MustRegister(agentSISeqBurnedTotal)
 }
 
 type MetricsObserver struct{}
@@ -167,6 +177,13 @@ func (m *MetricsObserver) MaterializeCallError() {
 }
 
 func (m *MetricsObserver) TableStatusLookupFailed() { agentSITableStatusFailuresTotal.Inc() }
+
+// SeqRecycled and SeqBurned implement sistatement.SeqObserver (spec 2026-10-09
+// §10). reason is unknown_outcome or free_list_overflow.
+func (m *MetricsObserver) SeqRecycled() { agentSISeqRecycledTotal.Inc() }
+func (m *MetricsObserver) SeqBurned(reason string) {
+	agentSISeqBurnedTotal.WithLabelValues(reason).Inc()
+}
 
 func (m *MetricsObserver) InlineValuesSynthesized() {
 	agentInlineValuesTotal.WithLabelValues("synthesized").Inc()

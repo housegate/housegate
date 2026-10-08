@@ -144,9 +144,8 @@ func TestPlugin_HappyPathSignsStatementTokenAfterPayload(t *testing.T) {
 	if qctx.DeferredInsert.MaxPayloadBytes != 1<<20 {
 		t.Fatalf("MaxPayloadBytes = %d", qctx.DeferredInsert.MaxPayloadBytes)
 	}
-	account, seq, nonce, err := sicore.ParseFlatStatementID(qctx.Query.ID)
-	if err != nil || account != signer.Address() || seq != 1 || len(nonce) != 32 {
-		t.Fatalf("statement id %q: account=%s seq=%d nonce=%q err=%v", qctx.Query.ID, account, seq, nonce, err)
+	if qctx.Query.ID != "client-uuid-1" {
+		t.Fatalf("OnQuery replaced the client query id: %q", qctx.Query.ID)
 	}
 	payload := encodeRows(t)
 	if err := p.OnClientDataStrict(context.Background(), qctx, payload); err != nil {
@@ -157,6 +156,10 @@ func TestPlugin_HappyPathSignsStatementTokenAfterPayload(t *testing.T) {
 	}
 	if err := p.OnQueryInputCompleteStrict(context.Background(), qctx); err != nil {
 		t.Fatalf("OnQueryInputCompleteStrict: %v", err)
+	}
+	account, seq, nonce, err := sicore.ParseFlatStatementID(qctx.Query.ID)
+	if err != nil || account != signer.Address() || seq != 1 || len(nonce) != 32 {
+		t.Fatalf("statement id %q: account=%s seq=%d nonce=%q err=%v", qctx.Query.ID, account, seq, nonce, err)
 	}
 	var token string
 	for _, s := range qctx.Query.Settings {
@@ -194,7 +197,7 @@ func TestPlugin_HappyPathSignsStatementTokenAfterPayload(t *testing.T) {
 	if err := p.OnQuery(context.Background(), next); err != nil {
 		t.Fatalf("second OnQuery: %v", err)
 	}
-	if _, seq, _, _ := sicore.ParseFlatStatementID(next.Query.ID); seq != 2 {
+	if _, seq, _, _ := sicore.ParseFlatStatementID(signDeferred(t, p, next)); seq != 2 {
 		t.Fatalf("second seq = %d, want 2", seq)
 	}
 }
@@ -208,6 +211,7 @@ func TestPlugin_SeqSurvivesRestart(t *testing.T) {
 	if err := p.OnQuery(context.Background(), q); err != nil {
 		t.Fatal(err)
 	}
+	signDeferred(t, p, q)
 	if err := p.seq.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +220,7 @@ func TestPlugin_SeqSurvivesRestart(t *testing.T) {
 	if err := p2.OnQuery(context.Background(), q2); err != nil {
 		t.Fatal(err)
 	}
-	if _, seq, _, _ := sicore.ParseFlatStatementID(q2.Query.ID); seq != 2 {
+	if _, seq, _, _ := sicore.ParseFlatStatementID(signDeferred(t, p2, q2)); seq != 2 {
 		t.Fatalf("seq after restart = %d, want 2", seq)
 	}
 }
@@ -259,13 +263,17 @@ func TestPlugin_ClientSuppliedStatementIDIsKeptOnlyForOwnAccount(t *testing.T) {
 	p, signer := newTestPlugin(t, ns, t.TempDir())
 	own := insertQctx(newSession(1, ""), "INSERT INTO shop.orders FORMAT Native")
 	own.Query.ID = "0x" + strings.ToUpper(strings.TrimPrefix(signer.Address(), "0x")) + ":41:sdk-nonce"
-	if err := p.OnQuery(context.Background(), own); err != nil || own.Query.ID != signer.Address()+":41:sdk-nonce" {
-		t.Fatalf("own-account id must be kept: id=%q err=%v", own.Query.ID, err)
+	if err := p.OnQuery(context.Background(), own); err != nil {
+		t.Fatal(err)
+	}
+	if id := signDeferred(t, p, own); id != signer.Address()+":41:sdk-nonce" {
+		t.Fatalf("own-account id must be kept: id=%q", id)
 	}
 	generated := insertQctx(newSession(2, ""), "INSERT INTO shop.orders FORMAT Native")
 	if err := p.OnQuery(context.Background(), generated); err != nil {
 		t.Fatal(err)
 	}
+	signDeferred(t, p, generated)
 	if account, seq, _, err := sicore.ParseFlatStatementID(generated.Query.ID); err != nil || account != signer.Address() || seq != 42 {
 		t.Fatalf("generated id after SDK reservation = %q account=%s seq=%d err=%v, want seq 42", generated.Query.ID, account, seq, err)
 	}
@@ -274,6 +282,7 @@ func TestPlugin_ClientSuppliedStatementIDIsKeptOnlyForOwnAccount(t *testing.T) {
 	if err := p.OnQuery(context.Background(), foreign); err != nil {
 		t.Fatal(err)
 	}
+	signDeferred(t, p, foreign)
 	if account, _, _, _ := sicore.ParseFlatStatementID(foreign.Query.ID); account != signer.Address() {
 		t.Fatalf("foreign-account id must be replaced, got %q", foreign.Query.ID)
 	}
@@ -287,17 +296,33 @@ func TestPlugin_ClientSuppliedSequenceCannotBeSignedTwice(t *testing.T) {
 	first := insertQctx(newSession(1, ""), "INSERT INTO shop.orders FORMAT Native")
 	first.Query.ID = signer.Address() + ":41:first-nonce"
 	if err := p.OnQuery(context.Background(), first); err != nil {
-		t.Fatalf("first reservation: %v", err)
+		t.Fatalf("first claim: %v", err)
 	}
+	signDeferred(t, p, first)
 
 	reused := insertQctx(newSession(2, ""), "INSERT INTO shop.orders FORMAT Native")
 	reused.Query.ID = signer.Address() + ":41:different-nonce"
-	if err := p.OnQuery(context.Background(), reused); !errors.Is(err, ErrClientSeqReused) {
+	if err := p.OnQuery(context.Background(), reused); err != nil {
+		t.Fatalf("second claim: %v", err)
+	}
+	if err := p.OnClientDataStrict(context.Background(), reused, encodeRows(t)); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.OnQueryInputCompleteStrict(context.Background(), reused); !errors.Is(err, ErrClientSeqReused) {
 		t.Fatalf("reused sequence = %v, want ErrClientSeqReused", err)
 	}
-	if reused.DeferredInsert != nil || reused.Query.ID != signer.Address()+":41:different-nonce" {
-		t.Fatalf("reused sequence admitted: deferred=%#v id=%q", reused.DeferredInsert, reused.Query.ID)
+	if reused.Query.ID != signer.Address()+":41:different-nonce" || hasStatementToken(reused) {
+		t.Fatalf("reused sequence signed: id=%q settings=%#v", reused.Query.ID, reused.Query.Settings)
 	}
+}
+
+func hasStatementToken(q *plugin.QueryContext) bool {
+	for _, s := range q.Query.Settings {
+		if s.Key == auth.StatementTokenSettingKey {
+			return true
+		}
+	}
+	return false
 }
 
 func TestPlugin_ConcurrentClientSuppliedSequenceAdmitsExactlyOne(t *testing.T) {
@@ -310,13 +335,21 @@ func TestPlugin_ConcurrentClientSuppliedSequenceAdmitsExactlyOne(t *testing.T) {
 	}
 	queries[0].Query.ID = signer.Address() + ":41:first-nonce"
 	queries[1].Query.ID = signer.Address() + ":41:second-nonce"
+	for _, q := range queries {
+		if err := p.OnQuery(context.Background(), q); err != nil {
+			t.Fatalf("claim: %v", err)
+		}
+		if err := p.OnClientDataStrict(context.Background(), q, encodeRows(t)); err != nil {
+			t.Fatal(err)
+		}
+	}
 	start := make(chan struct{})
 	results := make(chan error, len(queries))
 	for _, q := range queries {
 		q := q
 		go func() {
 			<-start
-			results <- p.OnQuery(context.Background(), q)
+			results <- p.OnQueryInputCompleteStrict(context.Background(), q)
 		}()
 	}
 	close(start)
@@ -358,13 +391,20 @@ func TestPlugin_ClientSuppliedMaxSequenceIsRejectedWithoutAdvancing(t *testing.T
 	p, signer := newTestPlugin(t, ns, t.TempDir())
 	terminal := insertQctx(newSession(1, ""), "INSERT INTO shop.orders FORMAT Native")
 	terminal.Query.ID = signer.Address() + ":18446744073709551615:sdk-nonce"
-	if err := p.OnQuery(context.Background(), terminal); !errors.Is(err, ErrClientSeqExhausted) {
+	if err := p.OnQuery(context.Background(), terminal); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if err := p.OnClientDataStrict(context.Background(), terminal, encodeRows(t)); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.OnQueryInputCompleteStrict(context.Background(), terminal); !errors.Is(err, ErrClientSeqExhausted) {
 		t.Fatalf("terminal supplied sequence = %v, want ErrClientSeqExhausted", err)
 	}
 	generated := insertQctx(newSession(2, ""), "INSERT INTO shop.orders FORMAT Native")
 	if err := p.OnQuery(context.Background(), generated); err != nil {
 		t.Fatal(err)
 	}
+	signDeferred(t, p, generated)
 	if _, seq, _, err := sicore.ParseFlatStatementID(generated.Query.ID); err != nil || seq != 1 {
 		t.Fatalf("generated id after rejected terminal reservation = %q seq=%d err=%v, want seq 1", generated.Query.ID, seq, err)
 	}
@@ -609,19 +649,20 @@ func TestPlugin_SequenceDirectoryDurabilityFailureDoesNotAdmitOrSign(t *testing.
 				t.Fatal(err)
 			}
 			q := insertQctx(newSession(100, ""), "INSERT INTO shop.orders FORMAT Native")
-			if err := p.OnQuery(context.Background(), q); !errors.Is(err, injected) {
-				t.Fatalf("OnQuery = %v, want injected durability error", err)
+			if err := p.OnQuery(context.Background(), q); err != nil {
+				t.Fatalf("OnQuery = %v; the claim reserves nothing", err)
 			}
-			if q.DeferredInsert != nil || q.Query.ID != "client-uuid-1" {
-				t.Fatalf("failed reservation admitted query: deferred=%#v id=%q", q.DeferredInsert, q.Query.ID)
+			if err := p.OnClientDataStrict(context.Background(), q, encodeRows(t)); err != nil {
+				t.Fatal(err)
 			}
-			if err := p.OnQueryInputCompleteStrict(context.Background(), q); err != nil {
-				t.Fatalf("failed reservation unexpectedly left signable state: %v", err)
+			if err := p.OnQueryInputCompleteStrict(context.Background(), q); !errors.Is(err, injected) {
+				t.Fatalf("OnQueryInputCompleteStrict = %v, want injected durability error", err)
 			}
-			for _, setting := range q.Query.Settings {
-				if setting.Key == auth.StatementTokenSettingKey {
-					t.Fatalf("failed reservation emitted statement token: %#v", setting)
-				}
+			if q.Query.ID != "client-uuid-1" || seq.Last() != 0 {
+				t.Fatalf("failed reservation changed the id or advanced the seq: id=%q last=%d", q.Query.ID, seq.Last())
+			}
+			if hasStatementToken(q) {
+				t.Fatalf("failed reservation emitted statement token: %#v", q.Query.Settings)
 			}
 		})
 	}

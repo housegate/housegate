@@ -628,6 +628,11 @@ func TestBuildAgent_StorageIntegrityAgentWiresPluginChain(t *testing.T) {
 	if len(chain.ClosePlugins) != 1 || chain.ClosePlugins[0] != siPlug {
 		t.Fatalf("close plugins = %#v, want sistatement instance", chain.ClosePlugins)
 	}
+	// sistatement recycles a seq the server proved unspent (spec 2026-10-09
+	// D16 (b)); metrics keeps observing the same Exceptions.
+	if len(chain.ExceptionPlugins) != 2 || chain.ExceptionPlugins[0] != siPlug {
+		t.Fatalf("exception plugins = %#v, want [sistatement metrics]", chain.ExceptionPlugins)
+	}
 }
 
 func TestBuildAgent_StorageIntegrityAgentRequiresTableSchemas(t *testing.T) {
