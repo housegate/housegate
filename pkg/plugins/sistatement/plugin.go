@@ -114,6 +114,7 @@ type Plugin struct {
 	// infoFailureTTL; discoveryWarnEvery throttles the P7 fallback warning.
 	infoFailures       map[string]infoFailure
 	discoveryWarnEvery time.Duration
+	statusWarnEvery    time.Duration               // throttles the status-lookup failure warning per table
 	skewWarned         map[string]bool             // by database
 	pending            map[int64]*pendingStatement // by session id; at most one per session
 	reserved           map[int64]*reservedSeq      // by session id; at most one per session
@@ -230,6 +231,7 @@ func New(opts Options) (*Plugin, error) {
 		infos:              map[string]registry.StorageIntegrityInfo{},
 		infoFailures:       map[string]infoFailure{},
 		discoveryWarnEvery: discoveryWarnInterval,
+		statusWarnEvery:    statusWarnInterval,
 		skewWarned:         map[string]bool{},
 		pending:            map[int64]*pendingStatement{},
 		reserved:           map[int64]*reservedSeq{},
@@ -428,7 +430,8 @@ func (p *Plugin) activeStatus(ctx context.Context, target sicore.InsertTarget) (
 	status, err := p.statuses.StorageIntegrityTableStatus(ctx, target.Database, target.Table)
 	if err != nil {
 		p.observeStatus(func(o StatusObserver) { o.TableStatusLookupFailed() })
-		logger.Warnw("sistatement: table status unavailable; passing the INSERT through unsigned", "table_id", tableID, "error", err)
+		logger.WarnEvery(fmt.Sprintf("sistatement-status-%p-%s", p, tableID), p.statusWarnEvery,
+			"sistatement: table status unavailable; passing the INSERT through unsigned", "table_id", tableID, "error", err)
 		return registry.TableStatus{}, false
 	}
 	if status.Status != registry.TableStatusActive {

@@ -27,6 +27,11 @@ const infoFailureTTL = time.Minute
 // discoveryWarnInterval throttles the P7 fallback warning per database.
 const discoveryWarnInterval = time.Minute
 
+// statusWarnInterval throttles the failed table-status lookup warning per
+// table: an indexer that does not answer the status method would otherwise
+// log once per INSERT.
+const statusWarnInterval = time.Minute
+
 // infoFailure is a remembered failed info lookup.
 type infoFailure struct {
 	step  string // "info" or "network_id"

@@ -1533,6 +1533,14 @@ func resolveAgentTableStatuses(opts Options, reg registry.Registry) (statuses re
 // answer: a burst of INSERTs costs one lookup (spec 2026-10-09 §6.4).
 const agentTableStatusCacheTTL = 5 * time.Second
 
+// agentTableStatusFailureTTL bounds how long a failed status lookup is
+// reused (final review M4): an indexer that does not answer the status method
+// costs three RPCs per INSERT without it. It is as short as the success TTL,
+// not infoFailureTTL's minute: a failed lookup sends an INSERT into an Active
+// table unsigned, which the server refuses as retryable, so a long negative
+// entry would turn one transient failure into a minute of refusals.
+const agentTableStatusFailureTTL = 5 * time.Second
+
 // agentStatementOptions resolves the agent's SI statement plugin options from
 // the config and the agent registry (spec 2026-10-09 §6.4): the status source
 // (cached when the registry both answers it and supports discovery, i.e.
@@ -1553,7 +1561,7 @@ func agentStatementOptions(cfg *config.Config, opts Options, reg registry.Regist
 	if d, ok := reg.(registry.StorageIntegrityDiscovery); ok && !isNilInterface(d) {
 		discovery = d
 		if fromRegistry {
-			statuses = registry.NewCachedTableStatuses(statuses, agentTableStatusCacheTTL, nil)
+			statuses = registry.NewCachedTableStatuses(statuses, agentTableStatusCacheTTL, agentTableStatusFailureTTL, nil)
 		}
 	}
 	pinned := cfg.Agent.Upstream != ""
