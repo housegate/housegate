@@ -1287,6 +1287,9 @@ func buildAgentWithBuilders(
 	exceptionPlugins := []plugin.ExceptionPlugin{metrics}
 	var materializerClose func()
 	var evaluatorClose func()
+	// siClose releases the client_seq counter's flock: on a failed build and
+	// at teardown, so a same-process rebuild can reopen it.
+	var siClose func()
 	buildSucceeded := false
 	defer func() {
 		if buildSucceeded {
@@ -1297,6 +1300,9 @@ func buildAgentWithBuilders(
 		}
 		if evaluatorClose != nil {
 			evaluatorClose()
+		}
+		if siClose != nil {
+			siClose()
 		}
 	}()
 	if cfg.Materialize.Enabled {
@@ -1357,6 +1363,7 @@ func buildAgentWithBuilders(
 		if err != nil {
 			return nil, fmt.Errorf("storage_integrity.agent: %w", err)
 		}
+		siClose = func() { _ = seq.Close() }
 		inlineCfg := cfg.StorageIntegrity.Agent.InlineValues
 		var evaluator sistatement.ValuesEvaluator
 		if inlineCfg.Enabled {
@@ -1399,6 +1406,7 @@ func buildAgentWithBuilders(
 		if err != nil {
 			return nil, fmt.Errorf("storage_integrity.agent: %w", err)
 		}
+		siClose = func() { _ = siPlug.Close() } // owns seq from here on
 		helloPlugins = append(helloPlugins, &sessionstate.Plugin{})
 		queryPlugins = append(queryPlugins, siPlug)
 		strictDataPlugins = append(strictDataPlugins, siPlug)
@@ -1447,6 +1455,9 @@ func buildAgentWithBuilders(
 			}
 			if evaluatorClose != nil {
 				evaluatorClose()
+			}
+			if siClose != nil {
+				siClose()
 			}
 		},
 	}

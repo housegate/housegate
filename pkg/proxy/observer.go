@@ -81,6 +81,10 @@ var (
 		Name: "clickhouse_proxy_agent_si_seq_burned_total",
 		Help: "Agent-mode client_seq values that may have been spent or could not be recycled, by reason",
 	}, []string{"reason"})
+	agentSIDiscoveryFailuresTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "clickhouse_proxy_agent_si_discovery_failures_total",
+		Help: "Agent-mode storage-integrity discovery failures by step",
+	}, []string{"step"})
 )
 
 func init() {
@@ -101,6 +105,7 @@ func init() {
 	prometheus.MustRegister(agentSITableStatusFailuresTotal)
 	prometheus.MustRegister(agentSISeqRecycledTotal)
 	prometheus.MustRegister(agentSISeqBurnedTotal)
+	prometheus.MustRegister(agentSIDiscoveryFailuresTotal)
 }
 
 type MetricsObserver struct{}
@@ -183,6 +188,12 @@ func (m *MetricsObserver) TableStatusLookupFailed() { agentSITableStatusFailures
 func (m *MetricsObserver) SeqRecycled() { agentSISeqRecycledTotal.Inc() }
 func (m *MetricsObserver) SeqBurned(reason string) {
 	agentSISeqBurnedTotal.WithLabelValues(reason).Inc()
+}
+
+// SIDiscoveryFailed counts an agent discovery failure by step ("info",
+// "network_id", "precheck"; spec 2026-10-09 §10).
+func (m *MetricsObserver) SIDiscoveryFailed(step string) {
+	agentSIDiscoveryFailuresTotal.WithLabelValues(step).Inc()
 }
 
 func (m *MetricsObserver) InlineValuesSynthesized() {

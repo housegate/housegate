@@ -3,6 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "sistatement",
     srcs = [
+        "discovery.go",
         "doc.go",
         "inline_values.go",
         "observer.go",
@@ -36,6 +37,7 @@ go_library(
 go_test(
     name = "sistatement_test",
     srcs = [
+        "discovery_test.go",
         "inline_values_test.go",
         "late_reservation_test.go",
         "plugin_test.go",

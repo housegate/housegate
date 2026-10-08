@@ -282,24 +282,38 @@ func (r *RpcNetworkState) IsOperator(owner, signer string) bool {
 // database, falling back to the bootstrap endpoint only when the database is
 // unknown (spec 2026-10-09 §6.4 step 2).
 func (r *RpcNetworkState) storageEndpointFor(ctx context.Context, database string) (string, error) {
+	endpoint, hosted, err := r.hostingStorageEndpoint(ctx, database)
+	if err != nil {
+		return "", err
+	}
+	if !hosted {
+		return r.endpoint, nil
+	}
+	return endpoint, nil
+}
+
+// hostingStorageEndpoint returns the storage RPC endpoint of the indexer
+// hosting database; hosted=false (and no error) means the database is
+// unknown to the registry.
+func (r *RpcNetworkState) hostingStorageEndpoint(ctx context.Context, database string) (endpoint string, hosted bool, err error) {
 	var db DatabaseInfo
 	ok, err := r.call(ctx, "sentio_getDatabaseInfoById", []interface{}{database}, &db)
 	if err != nil {
 		// Not "unknown": the bootstrap may not host the database, so its
 		// answer could be wrong. The caller treats the error as a failed
 		// lookup (status: unsigned pass-through, the server answers 733).
-		return "", fmt.Errorf("rpc: database %s lookup: %w", database, err)
+		return "", false, fmt.Errorf("rpc: database %s lookup: %w", database, err)
 	}
 	if !ok {
-		return r.endpoint, nil
+		return "", false, nil
 	}
 	var info IndexerInfo
 	ok, err = r.call(ctx, "sentio_getIndexerInfoById", []interface{}{db.IndexerId}, &info)
 	if err != nil {
-		return "", fmt.Errorf("rpc: indexer %d hosting %s: %w", db.IndexerId, database, err)
+		return "", false, fmt.Errorf("rpc: indexer %d hosting %s: %w", db.IndexerId, database, err)
 	}
 	if !ok || info.IndexerUrl == "" || info.StorageNodeRpcPort == 0 {
-		return "", fmt.Errorf("rpc: indexer %d hosting %s advertises no storage RPC endpoint", db.IndexerId, database)
+		return "", false, fmt.Errorf("rpc: indexer %d hosting %s advertises no storage RPC endpoint", db.IndexerId, database)
 	}
 	scheme := "http"
 	if u, err := url.Parse(r.endpoint); err == nil && u.Scheme != "" {
@@ -309,7 +323,7 @@ func (r *RpcNetworkState) storageEndpointFor(ctx context.Context, database strin
 	if u, err := url.Parse(host); err == nil && u.Host != "" {
 		host = u.Hostname() // tolerate a full URL in indexerUrl
 	}
-	return scheme + "://" + net.JoinHostPort(host, strconv.Itoa(int(info.StorageNodeRpcPort))), nil
+	return scheme + "://" + net.JoinHostPort(host, strconv.Itoa(int(info.StorageNodeRpcPort))), true, nil
 }
 
 // StorageIntegrityTableStatus calls sentio_getStorageIntegrityTableStatus
@@ -359,11 +373,17 @@ func (r *RpcNetworkState) StorageIntegrityInfo(ctx context.Context, database str
 }
 
 // StorageIntegrityWriterCheck calls sentio_isDatabaseWriter(database,
-// account) on the hosting indexer (Plan A2). Errors mean "unknown".
+// account) on the hosting indexer (Plan A2). Errors mean "unknown". Unlike
+// the status and info lookups it never asks the bootstrap: a database no
+// indexer hosts answers registry.ErrDatabaseNotHosted, because a node that
+// does not host the database cannot know its writers.
 func (r *RpcNetworkState) StorageIntegrityWriterCheck(ctx context.Context, database, account string) (bool, error) {
-	endpoint, err := r.storageEndpointFor(ctx, database)
+	endpoint, hosted, err := r.hostingStorageEndpoint(ctx, database)
 	if err != nil {
 		return false, err
+	}
+	if !hosted {
+		return false, fmt.Errorf("rpc: isDatabaseWriter %s: %w", database, registry.ErrDatabaseNotHosted)
 	}
 	var writer bool
 	ok, err := r.callAt(ctx, endpoint, "sentio_isDatabaseWriter", []interface{}{database, account}, &writer)

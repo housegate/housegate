@@ -23,3 +23,12 @@ clickhouse_proxy_agent_si_table_status_failures_total %g
 		t.Fatal(err)
 	}
 }
+
+func TestMetricsObserver_SIDiscoveryFailures(t *testing.T) {
+	var obs sistatement.DiscoveryObserver = NewMetricsObserver()
+	before := testutil.ToFloat64(agentSIDiscoveryFailuresTotal.WithLabelValues("precheck"))
+	obs.SIDiscoveryFailed("precheck")
+	if got := testutil.ToFloat64(agentSIDiscoveryFailuresTotal.WithLabelValues("precheck")); got != before+1 {
+		t.Fatalf("clickhouse_proxy_agent_si_discovery_failures_total{step=\"precheck\"} = %g, want %g", got, before+1)
+	}
+}

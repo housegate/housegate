@@ -708,6 +708,59 @@ func TestBuildAgentClosesMaterializerOnBuildFailureAndTeardown(t *testing.T) {
 	})
 }
 
+// The client_seq counter holds an flock for its lifetime: a failed build and
+// the agent's teardown must both release it, or a same-process rebuild gets
+// ErrSeqLocked (controller ruling on Task 11).
+func TestBuildAgentReleasesSeqCounterOnBuildFailureAndTeardown(t *testing.T) {
+	signerAddress := func(t *testing.T, cfg *config.Config) string {
+		t.Helper()
+		s, err := auth.NewRelaySigner(cfg.Agent.PrivateKeyHex)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s.Address()
+	}
+	reopen := func(t *testing.T, cfg *config.Config) {
+		t.Helper()
+		seq, err := sistatement.OpenSeqCounter(cfg.StorageIntegrity.Agent.StateDir, signerAddress(t, cfg))
+		if err != nil {
+			t.Fatalf("seq counter still locked: %v", err)
+		}
+		if err := seq.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("build failure", func(t *testing.T) {
+		cfg := agentSICfg(t)
+		cfg.StorageIntegrity.Agent.KeeperShardID = 1 // sistatement.New refuses it
+		_, err := buildAgent(Options{Config: cfg, NetworkState: network.NewInMemoryNetworkState()}, nil)
+		if err == nil || !strings.Contains(err.Error(), "keeper_shard_id") {
+			t.Fatalf("expected a sistatement.New failure, got %v", err)
+		}
+		reopen(t, cfg)
+	})
+
+	t.Run("successful teardown", func(t *testing.T) {
+		cfg := agentSICfg(t)
+		bs, err := buildAgent(Options{Config: cfg, NetworkState: network.NewInMemoryNetworkState()}, nil)
+		if err != nil {
+			t.Fatalf("buildAgent: %v", err)
+		}
+		if _, err := sistatement.OpenSeqCounter(cfg.StorageIntegrity.Agent.StateDir, signerAddress(t, cfg)); !errors.Is(err, sistatement.ErrSeqLocked) {
+			t.Fatalf("open while the agent runs: err = %v, want ErrSeqLocked", err)
+		}
+		bs.teardown()
+		reopen(t, cfg)
+		// The same process can build the agent again.
+		again, err := buildAgent(Options{Config: cfg, NetworkState: network.NewInMemoryNetworkState()}, nil)
+		if err != nil {
+			t.Fatalf("rebuild after teardown: %v", err)
+		}
+		again.teardown()
+	})
+}
+
 // registryWithoutSchemas preserves routing/permission Registry methods while
 // deliberately hiding the embedded state's TableSchemas method signatures.
 type registryWithoutSchemas struct{ *network.InMemoryNetworkState }

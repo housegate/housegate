@@ -2,6 +2,7 @@ package network_test
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -118,6 +119,26 @@ func TestRpcNetworkState_WriterCheck(t *testing.T) {
 	}
 	if ok, err := rpc.StorageIntegrityWriterCheck(context.Background(), "devuser1", "0x00000000000000000000000000000000000000b2"); err != nil || ok {
 		t.Fatalf("non-writer = %v, %v", ok, err)
+	}
+}
+
+// The bootstrap cannot know the writers of a database no indexer hosts, so the
+// writer check never asks it: an unhosted database is ErrDatabaseNotHosted
+// ("unknown" to the agent), unlike the status and info lookups, which fall
+// back to the bootstrap.
+func TestRpcNetworkState_WriterCheckUnhostedDatabaseIsUnknown(t *testing.T) {
+	_, port := hostingFake(t, nil)
+	rpc, bootstrap := bootstrapFor(t, port, map[string]rpcMethod{
+		"sentio_isDatabaseWriter": func([]interface{}) (interface{}, *rpcErrEnvelope) {
+			return false, nil
+		},
+	})
+	ok, err := rpc.StorageIntegrityWriterCheck(context.Background(), "nope", "0xb1")
+	if !errors.Is(err, registry.ErrDatabaseNotHosted) || ok {
+		t.Fatalf("writer check = %v, %v; want ErrDatabaseNotHosted", ok, err)
+	}
+	if strings.Contains(strings.Join(bootstrap.calls, ","), "sentio_isDatabaseWriter") {
+		t.Fatalf("the bootstrap answered a writer check for an unhosted database: %v", bootstrap.calls)
 	}
 }
 

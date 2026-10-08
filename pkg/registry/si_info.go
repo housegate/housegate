@@ -1,6 +1,9 @@
 package registry
 
-import "context"
+import (
+	"context"
+	"errors"
+)
 
 // StorageIntegrityInfo is one answer of sentio_getStorageIntegrityInfo
 // (spec 2026-10-09 §6.7) from the serving indexer. SIIndexerID is null while
@@ -36,6 +39,14 @@ func (i StorageIntegrityInfo) EffectiveDefaultReadMode() string {
 type StorageIntegrityDiscovery interface {
 	StorageIntegrityInfo(ctx context.Context, database string) (StorageIntegrityInfo, error)
 	// StorageIntegrityWriterCheck calls sentio_isDatabaseWriter (Plan A2). An
-	// error, including an indexer that predates the method, means "unknown".
+	// error, including an indexer that predates the method and
+	// ErrDatabaseNotHosted, means "unknown".
 	StorageIntegrityWriterCheck(ctx context.Context, database, account string) (bool, error)
 }
+
+// ErrDatabaseNotHosted is StorageIntegrityWriterCheck's answer for a database
+// that resolves to no hosting indexer. Only the hosting indexer knows a
+// database's writers, so the check does not fall back to the bootstrap the
+// way the status and info lookups do; the agent treats it as "unknown" and
+// the server decides.
+var ErrDatabaseNotHosted = errors.New("database is not hosted by any known indexer")

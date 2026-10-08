@@ -33,11 +33,28 @@ type Options struct {
 	// Statuses answers each INSERT target's storage-integrity status (spec
 	// 2026-09-24 §10.2): RpcNetworkState in production. When nil, Schemas is
 	// adapted: a declared table is Active, every other table Ordinary.
-	Statuses        registry.TableStatuses
-	Schemas         registry.TableSchemas
-	NetworkID       string
-	KeeperShardID   uint32
-	Seq             *SeqCounter
+	Statuses registry.TableStatuses
+	Schemas  registry.TableSchemas
+	// Discovery asks the indexer hosting each INSERT's database for its
+	// network id and runs the writer pre-check (spec 2026-10-09 D18). Nil
+	// keeps the static behaviour: NetworkID is required and nothing is
+	// pre-checked.
+	Discovery registry.StorageIntegrityDiscovery
+	// NetworkID is the configured network. With Discovery it is optional: a
+	// discovered id that differs refuses, and it is the fallback when the
+	// discovery fails (plan decision P7).
+	NetworkID     string
+	KeeperShardID uint32
+	// Seq, when set, serves every network (tests, an explicit state dir).
+	// Otherwise OpenSeq opens the counter for a network at its first SI write
+	// (plan decision P4). The plugin owns either: Close releases it.
+	Seq     *SeqCounter
+	OpenSeq func(networkID string) (*SeqCounter, error)
+	// WriterPrecheck enables the advisory sentio_isDatabaseWriter pre-check
+	// (spec 2026-10-09 §6.4); build leaves it off for drivers.
+	WriterPrecheck bool
+	// Now is the clock for the clock-skew warning; nil means time.Now.
+	Now             func() time.Time
 	MaxPayloadBytes uint64
 	// Owner and IsDriver preserve the configured agent's ordinary helper-query
 	// authorization and billing context; they do not change statement identity.
@@ -53,24 +70,36 @@ type Options struct {
 
 // Plugin is the agent-mode storage-integrity statement plugin. See doc.go.
 type Plugin struct {
-	signer        auth.StatementSignerV2
-	account       string // lowercase 0x
-	owner         string
-	isDriver      bool
-	statuses      registry.TableStatuses
-	networkID     string
-	keeperShardID uint32
-	seq           *SeqCounter
-	maxPayload    uint64
-	inline        InlineValuesOptions
-	evaluator     ValuesEvaluator
-	observer      Observer
+	signer         auth.StatementSignerV2
+	account        string // lowercase 0x
+	owner          string
+	isDriver       bool
+	statuses       registry.TableStatuses
+	discovery      registry.StorageIntegrityDiscovery
+	networkID      string // configured; empty when only discovery supplies it
+	keeperShardID  uint32
+	seq            *SeqCounter
+	openSeq        func(networkID string) (*SeqCounter, error)
+	writerPrecheck bool
+	now            func() time.Time
+	maxPayload     uint64
+	inline         InlineValuesOptions
+	evaluator      ValuesEvaluator
+	observer       Observer
 
-	mu       sync.Mutex
-	pending  map[int64]*pendingStatement // by session id; at most one per session
-	reserved map[int64]*reservedSeq      // by session id; at most one per session
-	useDB    map[int64]string            // last successful standalone USE per session
-	useNext  map[int64]pendingUse        // candidate USE awaiting upstream success
+	// seqMu guards the lazily opened counters apart from mu, so a first open
+	// does not stall other sessions' hooks.
+	seqMu     sync.Mutex
+	seqs      map[string]*SeqCounter // by network id
+	seqClosed bool
+
+	mu         sync.Mutex
+	infos      map[string]registry.StorageIntegrityInfo // by database
+	skewWarned map[string]bool                          // by database
+	pending    map[int64]*pendingStatement              // by session id; at most one per session
+	reserved   map[int64]*reservedSeq                   // by session id; at most one per session
+	useDB      map[int64]string                         // last successful standalone USE per session
+	useNext    map[int64]pendingUse                     // candidate USE awaiting upstream success
 }
 
 // pendingStatement is a claimed SI INSERT whose input is still arriving. It
@@ -78,6 +107,7 @@ type Plugin struct {
 // (spec 2026-10-09 D16 (a)).
 type pendingStatement struct {
 	queryID        string // the client's query id until the strict hook replaces it
+	networkID      string // resolved in OnQuery; selects the token field and the counter
 	tableID        string
 	schemaHash     string
 	clientRevision uint32
@@ -93,6 +123,7 @@ type pendingStatement struct {
 // lane) must revisit this attribution.
 type reservedSeq struct {
 	statementID string
+	counter     *SeqCounter // the network's counter that issued seq
 	seq         uint64
 	resolved    bool // released as unspent, or sequenced (success)
 }
@@ -115,14 +146,14 @@ func New(opts Options) (*Plugin, error) {
 	if statuses == nil {
 		errs = append(errs, errors.New("a table status source (Statuses or Schemas) is required"))
 	}
-	if strings.TrimSpace(opts.NetworkID) == "" {
+	if opts.Discovery == nil && strings.TrimSpace(opts.NetworkID) == "" {
 		errs = append(errs, errors.New("network id is required"))
 	}
 	if opts.KeeperShardID != 0 {
 		errs = append(errs, fmt.Errorf("keeper_shard_id must be 0 in v1, got %d", opts.KeeperShardID))
 	}
-	if opts.Seq == nil {
-		errs = append(errs, errors.New("seq counter is required"))
+	if opts.Seq == nil && opts.OpenSeq == nil {
+		errs = append(errs, errors.New("seq counter or opener is required"))
 	}
 	if opts.MaxPayloadBytes == 0 {
 		errs = append(errs, errors.New("max payload bytes must be > 0"))
@@ -141,23 +172,38 @@ func New(opts Options) (*Plugin, error) {
 	if joined := errors.Join(errs...); joined != nil {
 		return nil, fmt.Errorf("sistatement: %w", joined)
 	}
+	now := opts.Now
+	if now == nil {
+		now = time.Now
+	}
+	networkID := opts.NetworkID
+	if strings.TrimSpace(networkID) == "" {
+		networkID = "" // only discovery supplies it
+	}
 	return &Plugin{
-		signer:        opts.Signer,
-		account:       strings.ToLower(opts.Signer.Address()),
-		owner:         opts.Owner,
-		isDriver:      opts.IsDriver,
-		statuses:      statuses,
-		networkID:     opts.NetworkID,
-		keeperShardID: opts.KeeperShardID,
-		seq:           opts.Seq,
-		maxPayload:    opts.MaxPayloadBytes,
-		inline:        opts.InlineValues,
-		evaluator:     opts.Evaluator,
-		observer:      opts.Observer,
-		pending:       map[int64]*pendingStatement{},
-		reserved:      map[int64]*reservedSeq{},
-		useDB:         map[int64]string{},
-		useNext:       map[int64]pendingUse{},
+		signer:         opts.Signer,
+		account:        strings.ToLower(opts.Signer.Address()),
+		owner:          opts.Owner,
+		isDriver:       opts.IsDriver,
+		statuses:       statuses,
+		discovery:      opts.Discovery,
+		networkID:      networkID,
+		keeperShardID:  opts.KeeperShardID,
+		seq:            opts.Seq,
+		openSeq:        opts.OpenSeq,
+		writerPrecheck: opts.WriterPrecheck,
+		now:            now,
+		maxPayload:     opts.MaxPayloadBytes,
+		inline:         opts.InlineValues,
+		evaluator:      opts.Evaluator,
+		observer:       opts.Observer,
+		seqs:           map[string]*SeqCounter{},
+		infos:          map[string]registry.StorageIntegrityInfo{},
+		skewWarned:     map[string]bool{},
+		pending:        map[int64]*pendingStatement{},
+		reserved:       map[int64]*reservedSeq{},
+		useDB:          map[int64]string{},
+		useNext:        map[int64]pendingUse{},
 	}, nil
 }
 
@@ -190,15 +236,20 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) (result
 	var (
 		schema     payloadexec.TableSchema
 		schemaHash string
+		networkID  string
 	)
 	if targetErr == nil {
-		var active bool
-		schema, schemaHash, active, err = p.activeTarget(ctx, target)
-		if err != nil {
-			return err
-		}
+		status, active := p.activeStatus(ctx, target)
 		if !active {
 			return nil
+		}
+		// Spec 2026-10-09 §6.4: the schema hash binds the network the
+		// hosting indexer reports, so it is resolved before the hash check.
+		if networkID, err = p.resolveNetworkID(ctx, target.Database); err != nil {
+			return err
+		}
+		if schema, schemaHash, err = p.verifySchema(target, status, networkID); err != nil {
+			return err
 		}
 	}
 	// Spec D1/D6: InsertPayloadEncoding refuses the 26.x inline VALUES shape
@@ -238,6 +289,10 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) (result
 	}
 	if targetErr != nil {
 		return fmt.Errorf("storage_integrity agent: %w", targetErr)
+	}
+	// Advisory, before the statement is claimed (spec 2026-10-09 §6.4).
+	if err := p.precheckWriter(ctx, target.Database); err != nil {
+		return err
 	}
 	tableID := target.CanonicalID()
 	listed, _, err := insertColumnList(sql)
@@ -279,7 +334,7 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) (result
 	if existing := p.pending[sessID]; existing != nil {
 		return fmt.Errorf("storage_integrity agent: previous SI INSERT %s on this session has not completed", existing.queryID)
 	}
-	p.pending[sessID] = &pendingStatement{queryID: qctx.Query.ID, tableID: tableID, schemaHash: schemaHash, clientRevision: uint32(revision)}
+	p.pending[sessID] = &pendingStatement{queryID: qctx.Query.ID, networkID: networkID, tableID: tableID, schemaHash: schemaHash, clientRevision: uint32(revision)}
 	_, logger := log.FromContext(ctx)
 	if synthesized != nil {
 		qctx.Query.Body = inlineInsertBody(target, cols)
@@ -312,40 +367,45 @@ func (p *Plugin) sessionDatabase(sess chsession.Session) string {
 	return ""
 }
 
-// activeTarget asks the status source about the INSERT target. It returns
-// active=false, and no error, for every status but Active and when the status
-// lookup itself fails: the INSERT then passes through unsigned, which is safe
-// because the server rejects an unsigned INSERT into an Active table (spec
-// 2026-09-24 H7). For an Active table it decodes the registry schema and
-// refuses the INSERT when the recomputed hash differs from the declared one.
-func (p *Plugin) activeTarget(ctx context.Context, target sicore.InsertTarget) (payloadexec.TableSchema, string, bool, error) {
+// activeStatus asks the status source about the INSERT target. It reports
+// active=false for every status but Active and when the status lookup itself
+// fails: the INSERT then passes through unsigned, which is safe because the
+// server rejects an unsigned INSERT into an Active table (spec 2026-09-24 H7).
+func (p *Plugin) activeStatus(ctx context.Context, target sicore.InsertTarget) (registry.TableStatus, bool) {
 	tableID := target.CanonicalID()
 	if tableID == "" || target.Database == "" || target.Table == "" {
-		return payloadexec.TableSchema{}, "", false, nil
+		return registry.TableStatus{}, false
 	}
 	_, logger := log.FromContext(ctx)
 	status, err := p.statuses.StorageIntegrityTableStatus(ctx, target.Database, target.Table)
 	if err != nil {
 		p.observeStatus(func(o StatusObserver) { o.TableStatusLookupFailed() })
 		logger.Warnw("sistatement: table status unavailable; passing the INSERT through unsigned", "table_id", tableID, "error", err)
-		return payloadexec.TableSchema{}, "", false, nil
+		return registry.TableStatus{}, false
 	}
 	if status.Status != registry.TableStatusActive {
 		logger.Debugw("sistatement: target is not active; passing the INSERT through unsigned", "table_id", tableID, "status", status.Status)
-		return payloadexec.TableSchema{}, "", false, nil
+		return registry.TableStatus{}, false
 	}
+	return status, true
+}
+
+// verifySchema decodes an Active table's registry schema and refuses the
+// INSERT when the hash recomputed for networkID differs from the declared one.
+func (p *Plugin) verifySchema(target sicore.InsertTarget, status registry.TableStatus, networkID string) (payloadexec.TableSchema, string, error) {
+	tableID := target.CanonicalID()
 	var schema payloadexec.TableSchema
 	if err := json.Unmarshal([]byte(status.SchemaJSON), &schema); err != nil {
-		return payloadexec.TableSchema{}, "", false, fmt.Errorf("storage_integrity agent: active table %s has an undecodable schema_json: %w", tableID, err)
+		return payloadexec.TableSchema{}, "", fmt.Errorf("storage_integrity agent: active table %s has an undecodable schema_json: %w", tableID, err)
 	}
 	if schema.TableID != tableID {
-		return payloadexec.TableSchema{}, "", false, fmt.Errorf("storage_integrity agent: active table %s carries a schema for %q", tableID, schema.TableID)
+		return payloadexec.TableSchema{}, "", fmt.Errorf("storage_integrity agent: active table %s carries a schema for %q", tableID, schema.TableID)
 	}
-	hash := payloadexec.TableSchemaHash(p.networkID, schema)
+	hash := payloadexec.TableSchemaHash(networkID, schema)
 	if hash != status.SchemaHash {
-		return payloadexec.TableSchema{}, "", false, fmt.Errorf("storage_integrity agent: active table %s schema_hash %s does not match the recomputed %s for network %s; refusing to sign", tableID, status.SchemaHash, hash, p.networkID)
+		return payloadexec.TableSchema{}, "", fmt.Errorf("storage_integrity agent: active table %s schema_hash %s does not match the recomputed %s for network %s; refusing to sign", tableID, status.SchemaHash, hash, networkID)
 	}
-	return schema, hash, true, nil
+	return schema, hash, nil
 }
 
 func (p *Plugin) observeStatus(fn func(StatusObserver)) {
@@ -359,29 +419,30 @@ func (p *Plugin) observeStatus(fn func(StatusObserver)) {
 // agent's own account keeps its seq; otherwise the smallest free seq or the
 // next one is used with a fresh nonce. A recycled seq therefore only ever
 // appears under a NEW statement id; the agent never re-presents an id it sent.
-func (p *Plugin) reserveStatementID(queryID string) (string, uint64, error) {
+func (p *Plugin) reserveStatementID(counter *SeqCounter, queryID string) (string, uint64, error) {
 	if canonical, seq, ok := ownSuppliedStatementID(queryID, p.account); ok {
-		if err := p.seq.ReserveSupplied(seq); err != nil {
+		if err := counter.ReserveSupplied(seq); err != nil {
 			return "", 0, fmt.Errorf("storage_integrity agent: reserve supplied client_seq: %w", err)
 		}
 		return canonical, seq, nil
 	}
-	seq, err := p.seq.Reserve()
+	seq, err := counter.Reserve()
 	if err != nil {
 		return "", 0, fmt.Errorf("storage_integrity agent: issue client_seq: %w", err)
 	}
 	var nonce [16]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
 		// No statement id exists yet, so nothing can have left the agent.
-		p.releaseSeq(seq)
+		p.releaseSeq(counter, seq)
 		return "", 0, fmt.Errorf("storage_integrity agent: nonce: %w", err)
 	}
 	return p.account + ":" + strconv.FormatUint(seq, 10) + ":" + hex.EncodeToString(nonce[:]), seq, nil
 }
 
-// releaseSeq returns a provably unspent seq to the free list.
-func (p *Plugin) releaseSeq(seq uint64) {
-	overflow, err := p.seq.Release(seq)
+// releaseSeq returns a provably unspent seq to the free list of the counter
+// that issued it.
+func (p *Plugin) releaseSeq(counter *SeqCounter, seq uint64) {
+	overflow, err := counter.Release(seq)
 	if err != nil {
 		log.Warnw("sistatement: could not release client_seq; it stays burned", "client_seq", seq, "err", err)
 		p.observeSeq(func(o SeqObserver) { o.SeqBurned("unknown_outcome") })
@@ -496,12 +557,16 @@ func (p *Plugin) OnQueryInputCompleteStrict(ctx context.Context, qctx *plugin.Qu
 	if len(payload) == 0 {
 		return fmt.Errorf("storage_integrity agent: SI INSERT %s carried no payload", st.queryID)
 	}
-	statementID, seq, err := p.reserveStatementID(st.queryID)
+	counter, err := p.seqFor(st.networkID)
+	if err != nil {
+		return err
+	}
+	statementID, seq, err := p.reserveStatementID(counter, st.queryID)
 	if err != nil {
 		return err
 	}
 	token, err := p.signer.SignStatementV2(auth.JWSStatementPayloadV2{
-		NetworkID:      p.networkID,
+		NetworkID:      st.networkID,
 		KeeperShardID:  p.keeperShardID,
 		StatementID:    statementID,
 		SQLHash:        replay.DigestString(qctx.Query.Body),
@@ -522,14 +587,14 @@ func (p *Plugin) OnQueryInputCompleteStrict(ctx context.Context, qctx *plugin.Qu
 		// before any id exists); any later local failure (another strict hook,
 		// the upstream write) burns the seq at OnQueryComplete, because a
 		// partial write cannot be proven unspent.
-		p.releaseSeq(seq)
+		p.releaseSeq(counter, seq)
 		return fmt.Errorf("storage_integrity agent: sign statement %s: %w", statementID, err)
 	}
 	qctx.Query.ID = statementID
 	// Same Custom + single-quote wrapping as the auth token (see agent.Plugin).
 	qctx.Query.Settings = append(qctx.Query.Settings, chproto.Setting{Key: auth.StatementTokenSettingKey, Value: "'" + token + "'", Custom: true})
 	p.mu.Lock()
-	burned := p.trackReservedLocked(qctx.Session.ID(), &reservedSeq{statementID: statementID, seq: seq})
+	burned := p.trackReservedLocked(qctx.Session.ID(), &reservedSeq{statementID: statementID, counter: counter, seq: seq})
 	p.mu.Unlock()
 	if burned {
 		p.observeSeq(func(o SeqObserver) { o.SeqBurned("unknown_outcome") })
@@ -579,9 +644,9 @@ func (p *Plugin) OnException(_ context.Context, sess chsession.Session, exc *chp
 		return nil
 	}
 	r.resolved = true
-	seq := r.seq
+	counter, seq := r.counter, r.seq
 	p.mu.Unlock()
-	p.releaseSeq(seq)
+	p.releaseSeq(counter, seq)
 	return nil
 }
 

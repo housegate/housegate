@@ -26,3 +26,12 @@ type SeqObserver interface {
 	SeqRecycled()
 	SeqBurned(reason string)
 }
+
+// DiscoveryObserver counts agent discovery failures by step (spec 2026-10-09
+// §10): "info" (sentio_getStorageIntegrityInfo failed), "network_id" (it
+// answered no network id) and "precheck" (sentio_isDatabaseWriter failed, so
+// the advisory pre-check was skipped). *proxy.MetricsObserver satisfies it;
+// an Observer that does not is not counted.
+type DiscoveryObserver interface {
+	SIDiscoveryFailed(step string)
+}
