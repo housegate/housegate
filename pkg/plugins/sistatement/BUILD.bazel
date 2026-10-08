@@ -8,6 +8,10 @@ go_library(
         "observer.go",
         "plugin.go",
         "seq.go",
+        "seq_dir.go",
+        "seq_lock.go",
+        "seq_lock_other.go",
+        "seq_lock_unix.go",
         "sqlparse.go",
         "values_evaluator.go",
     ],
@@ -34,6 +38,7 @@ go_test(
     srcs = [
         "inline_values_test.go",
         "plugin_test.go",
+        "seq_freelist_test.go",
         "seq_test.go",
         "sqlparse_test.go",
         "table_status_test.go",

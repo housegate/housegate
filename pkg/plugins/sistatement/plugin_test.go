@@ -94,6 +94,7 @@ func newTestPlugin(t *testing.T, ns *network.InMemoryNetworkState, stateDir stri
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = seq.Close() })
 	p, err := New(Options{Signer: signer, Schemas: ns, NetworkID: testNetworkID, KeeperShardID: 0, Seq: seq, MaxPayloadBytes: 1 << 20})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -205,6 +206,9 @@ func TestPlugin_SeqSurvivesRestart(t *testing.T) {
 	p, _ := newTestPlugin(t, ns, dir)
 	q := insertQctx(newSession(1, ""), "INSERT INTO shop.orders FORMAT Native")
 	if err := p.OnQuery(context.Background(), q); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.seq.Close(); err != nil {
 		t.Fatal(err)
 	}
 	p2, _ := newTestPlugin(t, ns, dir)
