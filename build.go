@@ -881,6 +881,9 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			if err != nil {
 				return nil, err
 			}
+			if !isNilInterface(opts.StorageIntegrityWriteMeter) {
+				consumer.SetWriteMeter(opts.StorageIntegrityWriteMeter)
+			}
 			admissionConsumer = consumer
 			storageIntegrityMergeGuard = guard
 			storageIntegrityRuntime = consumer

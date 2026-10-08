@@ -96,6 +96,7 @@ go_test(
         "storage_integrity_runtime_dynamic_test.go",
         "storage_integrity_table_state_runtime_test.go",
         "storage_integrity_table_state_test.go",
+        "storage_integrity_write_meter_test.go",
         "use_pivot_integration_test.go",
     ],
     embed = [":housegate"],

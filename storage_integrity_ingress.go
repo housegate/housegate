@@ -68,10 +68,43 @@ type StorageIntegrityIngress struct {
 
 	cleanupProofTimeout time.Duration
 
+	// meter is the optional billing hook; nil disables it.
+	meter sicore.WriteMeter
+
 	backgroundMu     sync.Mutex
 	backgroundCancel context.CancelFunc
 	backgroundWG     sync.WaitGroup
 	backgroundClosed bool
+}
+
+// SetWriteMeter installs the optional billing hook (spec 2026-10-09 §6.9).
+func (i *StorageIntegrityIngress) SetWriteMeter(m sicore.WriteMeter) {
+	i.meter = m
+}
+
+func (i *StorageIntegrityIngress) meterSequenced(ctx context.Context, adm siplugin.Admission, statementSeq uint64) {
+	meter := i.meter
+	if meter == nil {
+		return
+	}
+	ev := sicore.SIWriteEvent{
+		StatementID:  adm.StatementID,
+		Signer:       adm.Signer,
+		Owner:        adm.Owner,
+		Principal:    adm.Principal,
+		TableID:      adm.TableID,
+		PayloadBytes: uint64(len(adm.Payload.Bytes)),
+		StatementSeq: statementSeq,
+	}
+	ctx = context.WithoutCancel(ctx)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Warnw("storage_integrity write meter panicked", "statement_id", ev.StatementID, "panic", r)
+			}
+		}()
+		meter.OnStatementSequenced(ctx, ev)
+	}()
 }
 
 type trackedPartsReservation struct {
@@ -621,6 +654,10 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 		rec.PayloadRef = put.PayloadRef
 	}
 	res, err := i.orch.Orchestrate(ctx, rec)
+	if res.Submit.Category == sicore.OutcomeAccepted {
+		// Sequenced means spent; metering follows the arbiter, not ACK2.
+		i.meterSequenced(ctx, adm, res.Submit.StatementSeq)
+	}
 	switch {
 	case errors.Is(err, sicore.ErrCleanupProofPending):
 		// Exact cleanup proof is pending (before or after the idempotent source

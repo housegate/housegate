@@ -30,6 +30,7 @@ go_library(
         "snapshot_query_prepared_output.go",
         "sql.go",
         "statementid.go",
+        "write_meter.go",
     ],
     importpath = "github.com/housegate/housegate/pkg/storageintegrity",
     visibility = ["//visibility:public"],
