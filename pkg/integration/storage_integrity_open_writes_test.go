@@ -93,7 +93,11 @@ func waitAdmissions(t *testing.T, c *capturingConsumer, n int) []siplugin.Admiss
 		c.mu.Unlock()
 		if len(seen) >= n || time.Now().After(deadline) {
 			if len(seen) != n {
-				t.Fatalf("consumer saw %d admissions, want %d", len(seen), n)
+				ids := make([]string, len(seen))
+				for i, adm := range seen {
+					ids[i] = adm.StatementID
+				}
+				t.Fatalf("consumer saw %d admissions %v, want %d", len(seen), ids, n)
 			}
 			return seen
 		}
@@ -296,10 +300,11 @@ func TestOpenWrites_OperatorForAWriterOwner(t *testing.T) {
 	requireAdmittedAuditLine(t, records, adm)
 }
 
-// refuseOnceConsumer answers the first admission with a marked 252, then
-// captures.
+// refuseOnceConsumer answers the first admission with refusal (a marked 252
+// when nil), then captures.
 type refuseOnceConsumer struct {
 	capturingConsumer
+	refusal  error
 	refuseMu sync.Mutex
 	refused  string // the refused statement id
 }
@@ -312,6 +317,9 @@ func (c *refuseOnceConsumer) ConsumeStorageIntegrityAdmission(ctx context.Contex
 	}
 	c.refuseMu.Unlock()
 	if first {
+		if c.refusal != nil {
+			return c.refusal
+		}
 		return &chproto.ClientError{Code: chproto.CodeTooManyParts, Message: "storage_integrity: back-pressure: retry later", KeepSession: true, SeqUnspent: true}
 	}
 	return c.capturingConsumer.ConsumeStorageIntegrityAdmission(ctx, adm)
@@ -344,6 +352,32 @@ func TestOpenWrites_BackpressureRecyclesTheSeq(t *testing.T) {
 	_, retrySeq, retryNonce, _ := sicore.ParseFlatStatementID(retried.StatementID)
 	if firstSeq != 1 || retrySeq != 1 || firstNonce == retryNonce {
 		t.Fatalf("first=%s retry=%s; want seq 1 reused under a new nonce", consumer.refusedID(), retried.StatementID)
+	}
+}
+
+// The negative of the test above: a refusal the server does not mark (here a
+// 252 raised after submission, where the coordinate may be spent) burns the
+// seq, so the retry signs the next seq instead of reusing it (final review
+// M3 (b)).
+func TestOpenWrites_UnmarkedRefusalBurnsTheSeq(t *testing.T) {
+	signer, err := auth.NewRelaySigner(authTestKey1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumer := &refuseOnceConsumer{refusal: &chproto.ClientError{Code: chproto.CodeTooManyParts, Message: "storage_integrity: back-pressure: retry later", KeepSession: true}}
+	agent := openWritesPair(t, authTestKey1, consumer, map[string]registry.DbAuth{signer.Address(): registry.DbAuthWrite}, nil, nil)
+	err = sendTwoRows(t, agent.Addr)
+	if err == nil || !strings.Contains(err.Error(), "code: 252") || strings.Contains(err.Error(), "[client_seq unspent]") {
+		t.Fatalf("first insert err = %v, want the unmarked 252", err)
+	}
+	if err := sendTwoRows(t, agent.Addr); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	retried := waitAdmissions(t, &consumer.capturingConsumer, 1)[0]
+	_, firstSeq, _, _ := sicore.ParseFlatStatementID(consumer.refusedID())
+	_, retrySeq, _, _ := sicore.ParseFlatStatementID(retried.StatementID)
+	if firstSeq != 1 || retrySeq != 2 {
+		t.Fatalf("first=%s retry=%s; want the burned seq 1 skipped and the retry signed with seq 2", consumer.refusedID(), retried.StatementID)
 	}
 }
 
@@ -418,6 +452,7 @@ func TestOpenWrites_AgentSwitchesToTheHostingIndexer(t *testing.T) {
 			cfg.StorageIntegrity.Agent.RequireNetworkState = false
 		}),
 	)
+	records := captureLogs(t) // before connecting: the session binds its logger at accept
 	conn := openConnDB(t, agent.Addr, siTenantDB)
 	batch, err := conn.PrepareBatch(context.Background(), "INSERT INTO "+siTenantDB+".si_events")
 	if err != nil {
@@ -428,6 +463,11 @@ func TestOpenWrites_AgentSwitchesToTheHostingIndexer(t *testing.T) {
 		t.Fatalf("INSERT through the switched session: %v", err)
 	}
 	waitAdmissions(t, hostingConsumer, 1)
+	// The switch itself, not only its end state (final review M3 (d)).
+	switched := records("sistatement: session switched to the hosting indexer")
+	if len(switched) != 1 || switched[0]["database"] != siTenantDB || switched[0]["indexer_id"] != float64(2) {
+		t.Fatalf("switch log records = %v, want exactly one switch of %s to indexer 2", switched, siTenantDB)
+	}
 	if err := conn.Exec(context.Background(), "SELECT count() FROM si_events"); err != nil {
 		t.Fatalf("unqualified SELECT after the switch: %v", err)
 	}

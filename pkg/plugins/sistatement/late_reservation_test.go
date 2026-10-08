@@ -143,6 +143,39 @@ func TestLateReservation_UnspentExceptionRecyclesTheSeq(t *testing.T) {
 	}
 }
 
+// A marked refusal delivered where the deferred lane expects the upstream
+// sample block reaches the plugin in Relay's order for that step: abort (the
+// deferred input stops), then the Exception, then completion
+// (TestRelay_DeferredInsert_MarkedSampleStepExceptionReachesOnException).
+// The abort must not drop the reservation, so the seq is recycled (final
+// review M3 (c)).
+func TestLateReservation_SampleStepHookOrderRecycles(t *testing.T) {
+	p, seq, metrics := lateFixture(t)
+	sess := newSession(1, "")
+	q := insertQctx(sess, lateSQL)
+	if err := p.OnQuery(context.Background(), q); err != nil {
+		t.Fatal(err)
+	}
+	first := signDeferred(t, p, q)
+	p.OnQueryAbort(context.Background(), q)
+	if err := p.OnException(context.Background(), sess, &chproto.Exception{Code: 497, Message: "storage_integrity: 0xa is not a writer of database shop" + chproto.SeqUnspentSuffix}); err != nil {
+		t.Fatal(err)
+	}
+	p.OnQueryComplete(context.Background(), sess)
+
+	next := insertQctx(sess, lateSQL)
+	if err := p.OnQuery(context.Background(), next); err != nil {
+		t.Fatal(err)
+	}
+	second := signDeferred(t, p, next)
+	if seqOf(t, first) != 1 || seqOf(t, second) != 1 || seq.Last() != 1 {
+		t.Fatalf("first=%q second=%q last=%d; want seq 1 recycled", first, second, seq.Last())
+	}
+	if metrics.recycled != 1 || len(metrics.burned) != 0 {
+		t.Fatalf("recycled=%d burned=%v; want one recycle and no burn", metrics.recycled, metrics.burned)
+	}
+}
+
 func TestLateReservation_OtherOutcomesBurn(t *testing.T) {
 	p, seq, metrics := lateFixture(t)
 	sess := newSession(1, "")

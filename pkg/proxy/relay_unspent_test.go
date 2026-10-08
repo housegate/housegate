@@ -5,13 +5,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ClickHouse/ch-go/proto"
 
 	"github.com/housegate/housegate/pkg/auth"
 	"github.com/housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/chsession"
 	"github.com/housegate/housegate/pkg/plugin"
 )
 
@@ -275,5 +278,153 @@ func TestRelay_StrictInputCompleteRefusalOfSignedQueryRendersOnlyTheHooksFlag(t 
 				t.Fatalf("upstream flow: %v", err)
 			}
 		})
+	}
+}
+
+// Spec 2026-10-09 §6.6 (1): once an AgentPrepare preparation has started,
+// the preparation and the forward authorization may sequence the statement
+// upstream, so Relay leaves every later refusal of a signed Query unmarked
+// (final review M3 (a)). The prepared Query carries the statement token too,
+// so marking at any of these sites would show.
+func TestRelay_AgentPreparePostPreparationRefusalIsUnmarked(t *testing.T) {
+	for name, hooks := range map[string]relayPrepareHooks{
+		"preparation fails": {
+			prepare: func(context.Context) (plugin.PreparedAgentQuery, error) {
+				return plugin.PreparedAgentQuery{}, errors.New("storage_integrity: preparation refused")
+			},
+		},
+		"authorization fails": {
+			prepare: func(context.Context) (plugin.PreparedAgentQuery, error) {
+				return plugin.PreparedAgentQuery{Query: &chproto.Query{ID: "prepared", Body: "INSERT INTO db.t FORMAT Native", Settings: signedSettings()}}, nil
+			},
+			authorize: func(context.Context, plugin.PreparedAgentQuery) error {
+				return errors.New("storage_integrity: forward authorization refused")
+			},
+		},
+		"continuation fails": {
+			prepare: func(context.Context) (plugin.PreparedAgentQuery, error) {
+				return plugin.PreparedAgentQuery{Query: &chproto.Query{ID: "prepared", Body: "INSERT INTO db.t FORMAT Native", Settings: signedSettings()}}, nil
+			},
+			onResume: func(*plugin.QueryContext) error { return errors.New("storage_integrity: continuation refused") },
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if hooks.intent == nil {
+				hooks.intent = func(context.Context, plugin.PreparedAgentQuery) error { return nil }
+			}
+			if hooks.authorize == nil {
+				hooks.authorize = func(context.Context, plugin.PreparedAgentQuery) error { return nil }
+			}
+			hooks.unknown = func(context.Context, plugin.PreparedAgentQuery) error { return nil }
+			clientPeer, clientProxy := net.Pipe()
+			upstreamPeer, upstreamProxy := net.Pipe()
+			defer clientPeer.Close()
+			defer upstreamPeer.Close()
+			const rev = chproto.MaxSupportedRevision
+			sess := chsession.New(1, clientProxy)
+			sess.Client().SetRevision(rev)
+			up := chproto.NewCodec(upstreamProxy, chproto.DirToUpstream)
+			up.SetRevision(rev)
+			if err := sess.BindUpstream(context.Background(), up); err != nil {
+				t.Fatalf("BindUpstream: %v", err)
+			}
+			r := NewRelay(sess, hooks, nil, nil)
+			client := chproto.NewCodec(clientPeer, chproto.DirToUpstream)
+			client.SetRevision(rev)
+			run := make(chan error, 1)
+			go func() { run <- r.clientToUpstream(context.Background()) }()
+			if err := client.WriteQuery(&chproto.Query{ID: "signed", Body: "INSERT INTO db.t FORMAT Native", Settings: signedSettings()}); err != nil {
+				t.Fatalf("write query: %v", err)
+			}
+			_ = clientPeer.SetReadDeadline(time.Now().Add(2 * time.Second))
+			pkt, err := client.ReadPacket(uint64(chproto.ServerExceptionCode))
+			if err != nil {
+				t.Fatalf("read exception: %v", err)
+			}
+			exc, ok := pkt.Decoded.(*chproto.Exception)
+			want := map[string]string{"preparation fails": "preparation refused", "authorization fails": "forward authorization refused", "continuation fails": "continuation refused"}[name]
+			if !ok || !strings.Contains(exc.Message, want) {
+				t.Fatalf("client got %#v, want the post-preparation refusal", pkt.Decoded)
+			}
+			if chproto.HasSeqUnspentSuffix(exc.Message) {
+				t.Fatalf("post-preparation refusal carries the unspent marker: %q", exc.Message)
+			}
+			_ = clientPeer.Close()
+			select {
+			case <-run:
+			case <-time.After(2 * time.Second):
+				t.Fatal("relay did not finish")
+			}
+		})
+	}
+}
+
+// exceptionRecordingDeferredHooks records each upstream Exception the chain
+// sees in the deferred hooks' lifecycle, next to abort/complete/success.
+type exceptionRecordingDeferredHooks struct {
+	*deferredInsertHooks
+}
+
+func (h exceptionRecordingDeferredHooks) OnException(_ context.Context, _ chsession.Session, exc *chproto.Exception) error {
+	h.mu.Lock()
+	h.lifecycle = append(h.lifecycle, "exception:"+exc.Message)
+	h.mu.Unlock()
+	return nil
+}
+
+// A server that refuses a signed INSERT in its OnQuery chain answers the
+// agent's forwarded Query with a marked Exception where the agent's deferred
+// lane expects the sample block. The agent reserved the seq at its strict
+// input-complete hook before forwarding, so that Exception must reach
+// OnException, which recycles the seq, before OnQueryComplete burns any seq
+// still outstanding (final review M3 (c)). Relay fires OnQueryAbort first,
+// when it stops the deferred input; sistatement's abort hook leaves the
+// reservation alone, which TestLateReservation_SampleStepHookOrderRecycles
+// pins with exactly the order asserted here.
+func TestRelay_DeferredInsert_MarkedSampleStepExceptionReachesOnException(t *testing.T) {
+	hooks := exceptionRecordingDeferredHooks{&deferredInsertHooks{}}
+	h := newDeferredHarness(t, hooks)
+	nonEmpty := encodeNonEmptyClientDataPacket(t, deferredTestRev)
+	sample := encodeServerSampleDataPacket(t, deferredTestRev)
+	empty := encodeEmptyClientData(t)
+	refusal := "storage_integrity: 0xa is not a writer of database db" + chproto.SeqUnspentSuffix
+
+	upDone := make(chan error, 1)
+	go func() {
+		codec := chproto.NewCodec(h.upstreamProxy, chproto.DirFromClient)
+		codec.SetRevision(deferredTestRev)
+		codec.SetCompression(proto.CompressionDisabled)
+		if _, err := codec.ReadPacket(uint64(chproto.ClientQueryCode)); err != nil {
+			upDone <- err
+			return
+		}
+		if _, err := codec.ReadPacket(); err != nil { // external-tables marker
+			upDone <- err
+			return
+		}
+		upDone <- codec.WriteException(&chproto.Exception{Code: 497, Name: "DB::Exception", Message: refusal})
+		_, _ = codec.ReadPacket()
+	}()
+
+	writeAllConn(t, h.clientProxy, encodeInsertQuery(t, "qid", "INSERT INTO t FORMAT Native"))
+	if got := readExact(t, h.clientProxy, len(sample)); !bytes.Equal(got, sample) {
+		t.Fatalf("client sample block mismatch")
+	}
+	writeAllConn(t, h.clientProxy, empty)
+	writeAllConn(t, h.clientProxy, nonEmpty)
+	writeAllConn(t, h.clientProxy, empty)
+	exc := readServerException(t, h.clientProxy)
+	if exc.Code != 497 || exc.Message != refusal {
+		t.Fatalf("client got %d %q, want the marked refusal unchanged", exc.Code, exc.Message)
+	}
+	if err := <-upDone; err != nil {
+		t.Fatalf("upstream flow: %v", err)
+	}
+	if _, strictComplete, _, _, _ := hooks.counts(); strictComplete != 1 {
+		t.Fatalf("strict input-complete hook ran %d times, want 1: the seq is reserved before forwarding", strictComplete)
+	}
+	_, lifecycle := hooks.terminalCounts()
+	if want := []string{"abort", "exception:" + refusal, "complete"}; strings.Join(lifecycle, "|") != strings.Join(want, "|") {
+		t.Fatalf("lifecycle = %q, want %q: the marked Exception reaches OnException before OnQueryComplete", lifecycle, want)
 	}
 }
