@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/housegate/housegate/pkg/ffifetch"
+	"github.com/housegate/housegate/pkg/log"
 	"github.com/housegate/housegate/pkg/rewriter"
 )
 
@@ -28,9 +29,10 @@ var AgentNetworkPresets = map[string]string{
 // 2026-10-09 §6.4 (flag over env; empty = not given) and what the binary
 // knows about its config file.
 type AgentQuickstart struct {
-	ConfigFileLoaded bool // a config file (-config / HOUSEGATE_CONFIG / ./config.json) was read
-	AgentModeSet     bool // -agent or HOUSEGATE_AGENT was given, either value
-	ListenSet        bool // -listen or HOUSEGATE_LISTEN was given
+	ConfigFileLoaded bool   // a config file (-config / HOUSEGATE_CONFIG / ./config.json) was read
+	ConfigFile       string // the path of that file, for the startup log
+	AgentModeSet     bool   // -agent or HOUSEGATE_AGENT was given, either value
+	ListenSet        bool   // -listen or HOUSEGATE_LISTEN was given
 	Network          string
 	SI               string
 	SIStateDir       string
@@ -52,6 +54,12 @@ func ApplyAgentQuickstart(cfg *Config, q AgentQuickstart) error {
 	if err := q.validate(); err != nil {
 		return err
 	}
+	if q.ConfigFileLoaded && (cfg.Agent.PrivateKeyHex != "" || cfg.Agent.Mode) {
+		// Final review M8: name the file, so a stray ./config.json that
+		// silently switched the quickstart off is visible.
+		log.Infow("agent quickstart defaults are off because a config file was loaded; only explicitly passed agent flags change it",
+			"config_file", q.ConfigFile)
+	}
 	if !q.ConfigFileLoaded && !q.AgentModeSet && cfg.Agent.PrivateKeyHex != "" {
 		cfg.Agent.Mode = true
 	}
@@ -66,8 +74,18 @@ func ApplyAgentQuickstart(cfg *Config, q AgentQuickstart) error {
 		}
 		// -state, a config value and a pinned upstream all win over the
 		// preset; a pinned agent needs no network state to route.
-		if cfg.Agent.Upstream == "" && cfg.NetworkState.Source == "" {
+		switch {
+		case cfg.Agent.Upstream == "" && cfg.NetworkState.Source == "":
 			cfg.NetworkState.Source = AgentNetworkPresets[name]
+		case q.Network != "" && cfg.NetworkState.Source != AgentNetworkPresets[name]:
+			// Final review M7: an explicitly given network that loses is
+			// reported rather than dropped silently.
+			winner, value := "network_state.source", cfg.NetworkState.Source
+			if cfg.Agent.Upstream != "" {
+				winner, value = "agent.upstream", cfg.Agent.Upstream
+			}
+			log.Warnw(fmt.Sprintf("agent: -network %s is ignored because %s is set (config file, -state, -agent-upstream or env); remove it to join the preset", name, winner),
+				"network", name, winner, value)
 		}
 	}
 	if quick && !q.ListenSet {
@@ -85,6 +103,12 @@ func ApplyAgentQuickstart(cfg *Config, q AgentQuickstart) error {
 	case "auto":
 		// Discovery needs an RPC network state (plan decision P6).
 		cfg.StorageIntegrity.Agent.Enabled = cfg.NetworkState.IsRpcSource()
+		if !cfg.StorageIntegrity.Agent.Enabled {
+			// Final review M6: say why, once. Unsigned INSERTs into Active
+			// tables are refused by the server as stale (retryable 733).
+			log.Warnw("agent: storage-integrity signing is off: -si auto needs an RPC network state to discover the network id, and this agent has none (a pinned agent.upstream or a non-RPC network_state.source); INSERTs into storage-integrity tables are sent unsigned and the server refuses them. Pass -si on and set storage_integrity.agent.network_id to sign them",
+				"network_state_source", cfg.NetworkState.Source, "agent_upstream", cfg.Agent.Upstream)
+		}
 	}
 	if q.SIStateDir != "" {
 		cfg.StorageIntegrity.Agent.StateDir = q.SIStateDir

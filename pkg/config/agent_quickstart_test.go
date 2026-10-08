@@ -1,9 +1,13 @@
 package config
 
 import (
+	"bytes"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/housegate/housegate/pkg/log"
 )
 
 func quickstartBase() *Config {
@@ -219,5 +223,111 @@ func TestApplyAgentQuickstart_InlineValuesAuto(t *testing.T) {
 	}
 	if !forced.StorageIntegrity.Agent.InlineValues.Enabled || !forced.Materialize.Enabled || forced.Materialize.Optional || !forced.Materialize.Implicit {
 		t.Fatalf("-si-inline-values on must enable a fail-fast materializer: %+v", forced.Materialize)
+	}
+}
+
+// captureQuickstartLogs swaps the package-default logger for one writing
+// text records into the returned buffer, restoring it on cleanup.
+func captureQuickstartLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := log.Default()
+	log.SetDefault(log.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { log.SetDefault(prev) })
+	return &buf
+}
+
+// -si auto turns signing on only with an RPC network state. When it resolves
+// to off, one warning says so and names the way to sign anyway (final review
+// M6): an unsigned INSERT into an Active table is refused by the server as a
+// retryable stale-state error the user would otherwise retry forever.
+func TestApplyAgentQuickstart_SIAutoOffWarns(t *testing.T) {
+	logs := captureQuickstartLogs(t)
+	pinned := quickstartBase()
+	pinned.Agent.Upstream = "10.0.0.8:9001"
+	if err := ApplyAgentQuickstart(pinned, AgentQuickstart{}); err != nil {
+		t.Fatal(err)
+	}
+	if pinned.StorageIntegrity.Agent.Enabled {
+		t.Fatal("-si auto without an RPC network state must stay off")
+	}
+	out := logs.String()
+	if strings.Count(out, "level=WARN") != 1 || !strings.Contains(out, "storage-integrity signing is off") || !strings.Contains(out, "-si on") || !strings.Contains(out, "network_id") {
+		t.Fatalf("want one warning naming why SI is off and the -si on + network_id escape, got:\n%s", out)
+	}
+
+	logs.Reset()
+	rpc := quickstartBase()
+	if err := ApplyAgentQuickstart(rpc, AgentQuickstart{}); err != nil || !rpc.StorageIntegrity.Agent.Enabled {
+		t.Fatalf("an RPC network state enables SI: enabled=%v err=%v", rpc.StorageIntegrity.Agent.Enabled, err)
+	}
+	off := quickstartBase()
+	off.Agent.Upstream = "10.0.0.8:9001"
+	if err := ApplyAgentQuickstart(off, AgentQuickstart{SI: "off"}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(logs.String(), "storage-integrity signing is off") {
+		t.Fatalf("no warning when SI is on, or off on purpose:\n%s", logs.String())
+	}
+}
+
+// An explicitly given -network (or HOUSEGATE_NETWORK) that a configured
+// network_state.source or agent.upstream overrides is reported, not silently
+// dropped (final review M7).
+func TestApplyAgentQuickstart_OverriddenNetworkWarns(t *testing.T) {
+	for name, tc := range map[string]struct {
+		mutate func(*Config)
+		q      AgentQuickstart
+		want   string
+	}{
+		"config source":   {func(c *Config) { c.Agent.Mode = true; c.NetworkState.Source = "http://node:10003" }, AgentQuickstart{ConfigFileLoaded: true, Network: "devnet2"}, "network_state.source"},
+		"config upstream": {func(c *Config) { c.Agent.Mode = true; c.Agent.Upstream = "10.0.0.8:9001" }, AgentQuickstart{ConfigFileLoaded: true, Network: "devnet2"}, "agent.upstream"},
+		"flag upstream":   {func(c *Config) { c.Agent.Upstream = "10.0.0.8:9001" }, AgentQuickstart{Network: "devnet2", SI: "off"}, "agent.upstream"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			logs := captureQuickstartLogs(t)
+			cfg := quickstartBase()
+			tc.mutate(cfg)
+			if err := ApplyAgentQuickstart(cfg, tc.q); err != nil {
+				t.Fatal(err)
+			}
+			out := logs.String()
+			if !strings.Contains(out, "level=WARN") || !strings.Contains(out, "-network devnet2 is ignored") || !strings.Contains(out, tc.want) {
+				t.Fatalf("want a warning that -network lost to %s, got:\n%s", tc.want, out)
+			}
+		})
+	}
+
+	logs := captureQuickstartLogs(t)
+	cfg := quickstartBase()
+	cfg.Agent.Mode = true
+	cfg.NetworkState.Source = "http://node:10003"
+	if err := ApplyAgentQuickstart(cfg, AgentQuickstart{ConfigFileLoaded: true}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(logs.String(), "is ignored") {
+		t.Fatalf("no -network given, no warning:\n%s", logs.String())
+	}
+}
+
+// A loaded config file disables the quickstart; the info log names that file,
+// so a stray ./config.json is visible (final review M8).
+func TestApplyAgentQuickstart_LogsTheConfigFileThatDisablesIt(t *testing.T) {
+	logs := captureQuickstartLogs(t)
+	cfg := quickstartBase()
+	if err := ApplyAgentQuickstart(cfg, AgentQuickstart{ConfigFileLoaded: true, ConfigFile: "config.json"}); err != nil {
+		t.Fatal(err)
+	}
+	out := logs.String()
+	if !strings.Contains(out, "level=INFO") || !strings.Contains(out, "agent quickstart defaults are off") || !strings.Contains(out, "config_file=config.json") {
+		t.Fatalf("want an info line naming config.json, got:\n%s", out)
+	}
+
+	logs.Reset()
+	if err := ApplyAgentQuickstart(quickstartBase(), AgentQuickstart{}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(logs.String(), "agent quickstart defaults are off") {
+		t.Fatalf("without a config file the quickstart applies:\n%s", logs.String())
 	}
 }

@@ -170,7 +170,15 @@ func loadConfigWithOverrides() config.Config {
 	}
 	// After every override: the quickstart reads the effective key,
 	// upstream, network source and listen address.
-	if err := config.ApplyAgentQuickstart(&cfg, agentQuickstartInputs(cfgLoaded, explicitFlags, quick, os.Getenv)); err != nil {
+	loadedFile := ""
+	if cfgLoaded {
+		// The operator's spelling, not a decrypted memfd path.
+		loadedFile = *configPath
+		if loadedFile == "" {
+			loadedFile = "config.json"
+		}
+	}
+	if err := config.ApplyAgentQuickstart(&cfg, agentQuickstartInputs(loadedFile, explicitFlags, quick, os.Getenv)); err != nil {
 		log.Fatale(err, "agent options")
 	}
 
@@ -196,11 +204,12 @@ type agentQuickstartFlags struct {
 }
 
 // agentQuickstartInputs resolves each agent-UX value as an explicitly passed
-// flag, else its env var (empty means not given), and records whether a
-// config file was read and whether the operator chose the mode or the listen
-// address, which the quickstart defaults must not override (plan decision
-// P5). An empty env var counts as unset, matching config.Default.
-func agentQuickstartInputs(configLoaded bool, explicit map[string]bool, f agentQuickstartFlags, getenv func(string) string) config.AgentQuickstart {
+// flag, else its env var (empty means not given), and records which config
+// file was read (configFile, empty for none) and whether the operator chose
+// the mode or the listen address, which the quickstart defaults must not
+// override (plan decision P5). An empty env var counts as unset, matching
+// config.Default.
+func agentQuickstartInputs(configFile string, explicit map[string]bool, f agentQuickstartFlags, getenv func(string) string) config.AgentQuickstart {
 	flagOrEnv := func(name, value, env string) string {
 		if explicit[name] {
 			return value
@@ -208,7 +217,8 @@ func agentQuickstartInputs(configLoaded bool, explicit map[string]bool, f agentQ
 		return getenv(env)
 	}
 	return config.AgentQuickstart{
-		ConfigFileLoaded: configLoaded,
+		ConfigFileLoaded: configFile != "",
+		ConfigFile:       configFile,
 		AgentModeSet:     explicit["agent"] || getenv("HOUSEGATE_AGENT") != "",
 		ListenSet:        explicit["listen"] || getenv("HOUSEGATE_LISTEN") != "",
 		Network:          flagOrEnv("network", f.network, "HOUSEGATE_NETWORK"),

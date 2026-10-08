@@ -50,10 +50,10 @@ func TestAgentQuickstartInputs(t *testing.T) {
 		siLanes: "auto", siReadMode: "unsafe_latest", siInlineValues: "on",
 	}
 
-	fromEnv := agentQuickstartInputs(true, map[string]bool{}, flags, getenv)
+	fromEnv := agentQuickstartInputs("agent.yaml", map[string]bool{}, flags, getenv)
 	want := config.AgentQuickstart{
-		ConfigFileLoaded: true,
-		Network:          "devnet2", SI: "on", SIStateDir: "/env/state",
+		ConfigFileLoaded: true, ConfigFile: "agent.yaml",
+		Network: "devnet2", SI: "on", SIStateDir: "/env/state",
 		SILanes: "off", SIReadMode: "safe", SIInlineValues: "off",
 	}
 	if fromEnv != want {
@@ -65,7 +65,7 @@ func TestAgentQuickstartInputs(t *testing.T) {
 		"si-lanes": true, "si-read-mode": true, "si-inline-values": true,
 		"agent": true, "listen": true,
 	}
-	fromFlags := agentQuickstartInputs(false, explicit, flags, getenv)
+	fromFlags := agentQuickstartInputs("", explicit, flags, getenv)
 	want = config.AgentQuickstart{
 		AgentModeSet: true, ListenSet: true,
 		Network: "flag-net", SI: "auto", SIStateDir: "/flag/state",
@@ -75,13 +75,13 @@ func TestAgentQuickstartInputs(t *testing.T) {
 		t.Fatalf("flags win:\n got %+v\nwant %+v", fromFlags, want)
 	}
 
-	none := agentQuickstartInputs(false, map[string]bool{}, flags, func(string) string { return "" })
+	none := agentQuickstartInputs("", map[string]bool{}, flags, func(string) string { return "" })
 	if none != (config.AgentQuickstart{}) {
 		t.Fatalf("nothing given: %+v", none)
 	}
 
 	env = map[string]string{"HOUSEGATE_AGENT": "false", "HOUSEGATE_LISTEN": ":9100"}
-	modeEnv := agentQuickstartInputs(false, map[string]bool{}, flags, getenv)
+	modeEnv := agentQuickstartInputs("", map[string]bool{}, flags, getenv)
 	if !modeEnv.AgentModeSet || !modeEnv.ListenSet {
 		t.Fatalf("HOUSEGATE_AGENT / HOUSEGATE_LISTEN must count as given: %+v", modeEnv)
 	}
