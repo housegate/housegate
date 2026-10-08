@@ -300,6 +300,92 @@ func TestBuildAgentReleasesSeqCounterOnBuildFailureAndTeardown(t *testing.T) {
 	})
 }
 
+// An explicit state_dir opens its counter when the agent is built, so a
+// misconfigured driver sidecar fails startup instead of reporting ready and
+// refusing every SI INSERT: a second process holding the counter and a state
+// directory that cannot be created both stop the build, and a successful
+// build already holds the counter before any INSERT (final review I2).
+func TestBuildAgent_ExplicitStateDirOpensTheCounterAtBuild(t *testing.T) {
+	newState := func(t *testing.T) *network.InMemoryNetworkState {
+		ns := network.NewInMemoryNetworkState()
+		declareOrders(t, ns, "testnet-v2")
+		return ns
+	}
+	newCfg := func(t *testing.T) *config.Config {
+		cfg := agentSIConfig(t)
+		cfg.StorageIntegrity.Agent.NetworkID = "testnet-v2"
+		return cfg
+	}
+
+	t.Run("held by another process", func(t *testing.T) {
+		cfg := newCfg(t)
+		held, err := sistatement.OpenSeqCounter(cfg.StorageIntegrity.Agent.StateDir, agentSignerAddress(t, cfg))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer held.Close()
+		bs, err := buildAgent(Options{Config: cfg, NetworkState: newState(t)}, nil)
+		if err == nil {
+			bs.teardown()
+			t.Fatal("buildAgent must fail while another process holds the counter")
+		}
+		if !errors.Is(err, sistatement.ErrSeqLocked) || !strings.Contains(err.Error(), "storage_integrity.agent") {
+			t.Fatalf("err = %v, want a storage_integrity.agent ErrSeqLocked refusal", err)
+		}
+	})
+
+	t.Run("uncreatable directory", func(t *testing.T) {
+		cfg := newCfg(t)
+		blocker := filepath.Join(t.TempDir(), "file")
+		if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg.StorageIntegrity.Agent.StateDir = filepath.Join(blocker, "state")
+		bs, err := buildAgent(Options{Config: cfg, NetworkState: newState(t)}, nil)
+		if err == nil {
+			bs.teardown()
+			t.Fatal("buildAgent must fail when the state directory cannot be created")
+		}
+		if !strings.Contains(err.Error(), "storage_integrity.agent") {
+			t.Fatalf("err = %v, want a storage_integrity.agent refusal", err)
+		}
+	})
+
+	t.Run("held from build until teardown", func(t *testing.T) {
+		cfg := newCfg(t)
+		bs, err := buildAgent(Options{Config: cfg, NetworkState: newState(t)}, nil)
+		if err != nil {
+			t.Fatalf("buildAgent: %v", err)
+		}
+		// No INSERT ran: the build itself holds the counter's lock.
+		dir, signer := cfg.StorageIntegrity.Agent.StateDir, agentSignerAddress(t, cfg)
+		if _, err := sistatement.OpenSeqCounter(dir, signer); !errors.Is(err, sistatement.ErrSeqLocked) {
+			bs.teardown()
+			t.Fatalf("open after build: err = %v, want ErrSeqLocked", err)
+		}
+		bs.teardown()
+		seq, err := sistatement.OpenSeqCounter(dir, signer)
+		if err != nil {
+			t.Fatalf("teardown did not release the counter: %v", err)
+		}
+		_ = seq.Close()
+	})
+}
+
+// wiringOptions is agentStatementOptions for wiring assertions: it closes the
+// eagerly opened counter at once, so a test may resolve the options again
+// with the same state_dir.
+func wiringOptions(t *testing.T, cfg *config.Config, reg registry.Registry, signer string) (sistatement.Options, string, error) {
+	t.Helper()
+	opts, label, err := agentStatementOptions(cfg, Options{Config: cfg}, reg, signer)
+	if err == nil && opts.Seq != nil {
+		if cerr := opts.Seq.Close(); cerr != nil {
+			t.Fatal(cerr)
+		}
+	}
+	return opts, label, err
+}
+
 func TestAgentStatementOptions_Wiring(t *testing.T) {
 	const signer = "0x00000000000000000000000000000000000000aa"
 
@@ -308,11 +394,13 @@ func TestAgentStatementOptions_Wiring(t *testing.T) {
 		cfg.Agent.Upstream = ""
 		ns := newDiscoveringState("itest-net")
 		declareOrders(t, ns.InMemoryNetworkState, "itest-net")
-		opts, _, err := agentStatementOptions(cfg, Options{Config: cfg}, ns, signer)
+		opts, _, err := wiringOptions(t, cfg, ns, signer)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if opts.Discovery == nil || opts.Hosting == nil || opts.OpenSeq == nil || opts.Seq != nil || opts.Dial == nil {
+		// agentSIConfig sets an explicit state_dir: its counter is opened
+		// eagerly and there is no lazy opener.
+		if opts.Discovery == nil || opts.Hosting == nil || opts.OpenSeq != nil || opts.Seq == nil || opts.Dial == nil {
 			t.Fatalf("discovery=%v hosting=%v openSeq=%v seq=%v dial=%v", opts.Discovery != nil, opts.Hosting != nil, opts.OpenSeq != nil, opts.Seq != nil, opts.Dial != nil)
 		}
 		if !opts.WriterPrecheck || opts.PinnedUpstream || opts.SwitchTimeout != 10*time.Second {
@@ -333,7 +421,7 @@ func TestAgentStatementOptions_Wiring(t *testing.T) {
 		cfg := agentSIConfig(t)
 		cfg.StorageIntegrity.Agent.NetworkID = "testnet-v2"
 		ns := &statusOnlyState{InMemoryNetworkState: network.NewInMemoryNetworkState()}
-		opts, _, err := agentStatementOptions(cfg, Options{Config: cfg}, ns, signer)
+		opts, _, err := wiringOptions(t, cfg, ns, signer)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -351,7 +439,7 @@ func TestAgentStatementOptions_Wiring(t *testing.T) {
 	t.Run("driver and pinned upstream", func(t *testing.T) {
 		cfg := agentSIConfig(t)
 		cfg.Agent.Driver = true
-		opts, _, err := agentStatementOptions(cfg, Options{Config: cfg}, newDiscoveringState("itest-net"), signer)
+		opts, _, err := wiringOptions(t, cfg, newDiscoveringState("itest-net"), signer)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -365,7 +453,7 @@ func TestAgentStatementOptions_Wiring(t *testing.T) {
 		cfg.Agent.Upstream = ""
 		cfg.StorageIntegrity.Agent.NetworkID = "testnet-v2"
 		logs := captureAgentBuildLogs(t)
-		opts, _, err := agentStatementOptions(cfg, Options{Config: cfg}, registryWithoutHosting{network.NewInMemoryNetworkState()}, signer)
+		opts, _, err := wiringOptions(t, cfg, registryWithoutHosting{network.NewInMemoryNetworkState()}, signer)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -378,7 +466,7 @@ func TestAgentStatementOptions_Wiring(t *testing.T) {
 
 		logs.Reset()
 		cfg.Agent.Upstream = "127.0.0.1:1"
-		if _, _, err := agentStatementOptions(cfg, Options{Config: cfg}, registryWithoutHosting{network.NewInMemoryNetworkState()}, signer); err != nil {
+		if _, _, err := wiringOptions(t, cfg, registryWithoutHosting{network.NewInMemoryNetworkState()}, signer); err != nil {
 			t.Fatal(err)
 		}
 		if strings.Contains(logs.String(), "upstream switch") {
@@ -399,7 +487,7 @@ func TestAgentStatementOptions_Wiring(t *testing.T) {
 			}
 		}()
 		cfg := agentSIConfig(t)
-		opts, _, err := agentStatementOptions(cfg, Options{Config: cfg}, newDiscoveringState("itest-net"), signer)
+		opts, _, err := wiringOptions(t, cfg, newDiscoveringState("itest-net"), signer)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -431,42 +519,36 @@ func TestAgentSeqOpener(t *testing.T) {
 	const signer = "0x00000000000000000000000000000000000000AA"
 	lower := strings.ToLower(signer)
 
-	t.Run("explicit state dir serves every network with one counter", func(t *testing.T) {
+	t.Run("explicit state dir opens one counter for every network at build", func(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "state")
-		// A file in the way fails the first open; the failure is not
-		// remembered, so a later INSERT retries.
+		// A file in the way fails the open at build.
 		if err := os.WriteFile(dir, nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		open, label, err := agentSeqOpener(dir, signer, func() (string, bool) { return "", false })
-		if err != nil || label != dir {
-			t.Fatalf("label=%q err=%v", label, err)
-		}
-		if _, err := open("net-a"); err == nil {
-			t.Fatal("open through a file must fail")
+		if _, _, _, err := agentSeqOpener(dir, signer, func() (string, bool) { return "", false }); err == nil || !strings.Contains(err.Error(), dir) {
+			t.Fatalf("open through a file: err = %v, want an error naming %s", err, dir)
 		}
 		if err := os.Remove(dir); err != nil {
 			t.Fatal(err)
 		}
-		a, err := open("net-a")
-		if err != nil {
-			t.Fatalf("retry after the failure: %v", err)
+		seq, open, label, err := agentSeqOpener(dir, signer, func() (string, bool) { return "", false })
+		if err != nil || label != dir || seq == nil || open != nil {
+			t.Fatalf("seq=%v open=%v label=%q err=%v; want an opened counter and no lazy opener", seq != nil, open != nil, label, err)
 		}
-		defer a.Close()
-		b, err := open("net-b")
-		if err != nil || a != b {
-			t.Fatalf("second network: %p %p %v; want the same counter", a, b, err)
+		defer seq.Close()
+		if seq.Path() != filepath.Join(dir, lower+".seq") {
+			t.Fatalf("path = %s", seq.Path())
 		}
-		if a.Path() != filepath.Join(dir, lower+".seq") {
-			t.Fatalf("path = %s", a.Path())
+		if _, _, _, err := agentSeqOpener(dir, signer, func() (string, bool) { return "", false }); !errors.Is(err, sistatement.ErrSeqLocked) {
+			t.Fatalf("second opener: err = %v, want ErrSeqLocked", err)
 		}
 	})
 
 	t.Run("default base keeps one counter per network", func(t *testing.T) {
 		base := t.TempDir()
-		open, label, err := agentSeqOpener("", signer, func() (string, bool) { return base, true })
-		if err != nil || label != filepath.Join(base, "si") {
-			t.Fatalf("label=%q err=%v", label, err)
+		seq, open, label, err := agentSeqOpener("", signer, func() (string, bool) { return base, true })
+		if err != nil || seq != nil || label != filepath.Join(base, "si") {
+			t.Fatalf("seq=%v label=%q err=%v", seq != nil, label, err)
 		}
 		a, err := open("net-a")
 		if err != nil {
@@ -496,7 +578,7 @@ func TestAgentSeqOpener(t *testing.T) {
 	})
 
 	t.Run("no default base needs state_dir", func(t *testing.T) {
-		_, _, err := agentSeqOpener("", signer, func() (string, bool) { return "", false })
+		_, _, _, err := agentSeqOpener("", signer, func() (string, bool) { return "", false })
 		if err == nil || !strings.Contains(err.Error(), "state_dir is required") {
 			t.Fatalf("err = %v", err)
 		}

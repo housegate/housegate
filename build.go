@@ -12,7 +12,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -1379,6 +1378,10 @@ func buildAgentWithBuilders(
 		if err != nil {
 			return nil, err
 		}
+		if seq := siOpts.Seq; seq != nil {
+			// Released on every build error until the plugin owns it.
+			siClose = func() { _ = seq.Close() }
+		}
 		inlineCfg := cfg.StorageIntegrity.Agent.InlineValues
 		var evaluator sistatement.ValuesEvaluator
 		if inlineEnabled {
@@ -1409,7 +1412,8 @@ func buildAgentWithBuilders(
 		if err != nil {
 			return nil, fmt.Errorf("storage_integrity.agent: %w", err)
 		}
-		// The plugin owns every counter its lazy opener hands out.
+		// The plugin owns the eager counter and every counter its lazy opener
+		// hands out.
 		siClose = func() { _ = siPlug.Close() }
 		helloPlugins = append(helloPlugins, &sessionstate.Plugin{})
 		queryPlugins = append(queryPlugins, siPlug)
@@ -1523,7 +1527,9 @@ const agentTableStatusCacheTTL = 5 * time.Second
 // the config and the agent registry (spec 2026-10-09 §6.4): the status source
 // (cached when the registry both answers it and supports discovery, i.e.
 // RpcNetworkState), network-id discovery,
-// the lazily opened client_seq store, the advisory writer pre-check (off for
+// the client_seq store (opened here for an explicit state_dir, lazily per
+// network otherwise; the caller owns an opened Options.Seq and must close it
+// if the plugin is never built), the advisory writer pre-check (off for
 // the driver sidecar), and the upstream switch to the hosting indexer. reg is
 // nil when the host injects the declared schemas; discovery and the switch
 // then stay off. The caller sets Signer, Evaluator and Observer.
@@ -1548,7 +1554,8 @@ func agentStatementOptions(cfg *config.Config, opts Options, reg registry.Regist
 		log.Warnw("storage_integrity agent: the network state does not resolve database hosting (registry.DatabaseHosting), so the upstream switch to the indexer hosting an SI INSERT's database is disabled; such an INSERT runs on the session's upstream and the server decides",
 			"network_state", fmt.Sprintf("%T", reg))
 	}
-	openSeq, stateLabel, err := agentSeqOpener(agentCfg.StateDir, signerAddress, defaultAgentStateBase)
+	// Last fallible step: on success the caller owns an eagerly opened Seq.
+	seq, openSeq, stateLabel, err := agentSeqOpener(agentCfg.StateDir, signerAddress, defaultAgentStateBase)
 	if err != nil {
 		return sistatement.Options{}, "", fmt.Errorf("storage_integrity.agent: %w", err)
 	}
@@ -1558,6 +1565,7 @@ func agentStatementOptions(cfg *config.Config, opts Options, reg registry.Regist
 		Discovery:       discovery,
 		NetworkID:       agentCfg.NetworkID,
 		KeeperShardID:   agentCfg.KeeperShardID,
+		Seq:             seq,
 		OpenSeq:         openSeq,
 		WriterPrecheck:  !cfg.Agent.Driver,
 		MaxPayloadBytes: agentCfg.MaxPayloadBytes,
@@ -1593,37 +1601,30 @@ func defaultAgentStateBase() (string, bool) {
 	return config.DefaultAgentStateBase(runtime.GOOS, os.Getenv, home)
 }
 
-// agentSeqOpener returns the legacy client_seq opener and a label for logs
+// agentSeqOpener resolves the legacy client_seq store and a label for logs
 // (plan decision P4). An explicit state_dir keeps one <state_dir>/<signer>.seq
-// for every network: the counter's flock admits a single opener, so the
-// opener hands out one shared instance. Without one the counter lives in
-// <base>/si/<network_id>/<signer>/, opened at the first SI write for that
-// network because the network id is part of the path. A failed open is not
-// remembered, so a later INSERT retries it. The plugin closes what it opened.
-func agentSeqOpener(stateDir, signer string, defaultBase func() (string, bool)) (func(string) (*sistatement.SeqCounter, error), string, error) {
+// for every network and is opened here, at build: a directory that cannot be
+// created or a counter another process holds (its flock admits a single
+// opener) stops startup instead of refusing every SI INSERT later (final
+// review I2). The caller owns the returned counter until the plugin takes it
+// as Options.Seq. Without a state_dir the counter lives in
+// <base>/si/<network_id>/<signer>/ and the returned opener opens it at the
+// first SI write for that network, because the network id is part of the
+// path. A failed lazy open is not remembered, so a later INSERT retries it.
+// The plugin closes what it opened.
+func agentSeqOpener(stateDir, signer string, defaultBase func() (string, bool)) (*sistatement.SeqCounter, func(string) (*sistatement.SeqCounter, error), string, error) {
 	if strings.TrimSpace(stateDir) != "" {
-		var (
-			mu     sync.Mutex
-			shared *sistatement.SeqCounter
-		)
-		return func(string) (*sistatement.SeqCounter, error) {
-			mu.Lock()
-			defer mu.Unlock()
-			if shared == nil {
-				c, err := sistatement.OpenSeqCounter(stateDir, signer)
-				if err != nil {
-					return nil, err
-				}
-				shared = c
-			}
-			return shared, nil
-		}, stateDir, nil
+		seq, err := sistatement.OpenSeqCounter(stateDir, signer)
+		if err != nil {
+			return nil, nil, "", fmt.Errorf("open client_seq counter in state_dir %s: %w", stateDir, err)
+		}
+		return seq, nil, stateDir, nil
 	}
 	base, ok := defaultBase()
 	if !ok {
-		return nil, "", fmt.Errorf("state_dir is required on %s (no default state directory)", runtime.GOOS)
+		return nil, nil, "", fmt.Errorf("state_dir is required on %s (no default state directory)", runtime.GOOS)
 	}
-	return func(networkID string) (*sistatement.SeqCounter, error) {
+	return nil, func(networkID string) (*sistatement.SeqCounter, error) {
 		// The id comes from the hosting indexer; it must name exactly one
 		// directory below <base>/si.
 		if networkID == "" || networkID == "." || networkID == ".." || strings.ContainsAny(networkID, `/\`) {
