@@ -64,6 +64,13 @@ type LanePool struct {
 	dir     string
 	opts    LanePoolOptions
 	openDir func(string) (seqDir, error) // A1's directory-fsync seam
+
+	// acquireMu serializes Acquire (and the Rand reads of mint) and guards
+	// excluded.
+	acquireMu sync.Mutex
+	// excluded names lanes this process must never hand out again: a lane
+	// whose Abandon could not be persisted is closed and excluded instead.
+	excluded map[string]bool
 }
 
 // OpenLanePool creates <siDir>/lanes (mode 0700, durably) when missing.
@@ -80,21 +87,34 @@ func OpenLanePool(siDir string, opts LanePoolOptions) (*LanePool, error) {
 	if err := mkdirAllDurable(dir, 0o700, openSeqDir); err != nil {
 		return nil, err
 	}
-	return &LanePool{dir: dir, opts: opts, openDir: openSeqDir}, nil
+	return &LanePool{dir: dir, opts: opts, openDir: openSeqDir, excluded: map[string]bool{}}, nil
+}
+
+// exclude keeps lane out of every later Acquire of this pool.
+func (p *LanePool) exclude(lane string) {
+	p.acquireMu.Lock()
+	defer p.acquireMu.Unlock()
+	p.excluded[lane] = true
 }
 
 // Acquire returns the first unlocked, intact, not-abandoned lane in sorted
 // order, or mints a new one. A file that cannot be trusted is reported and
 // skipped, never reused and never deleted.
 func (p *LanePool) Acquire() (*LanedStore, AcquireReason, error) {
+	p.acquireMu.Lock()
+	defer p.acquireMu.Unlock()
 	entries, err := os.ReadDir(p.dir)
 	if err != nil {
 		return nil, "", fmt.Errorf("sistatement: list %s: %w", p.dir, err)
 	}
 	var lanes []string
+	found := 0 // every lane file, excluded ones too: none at all means lost state
 	for _, e := range entries {
 		if lane, ok := strings.CutSuffix(e.Name(), ".json"); ok && sicore.ValidClientLane(lane) && !e.IsDir() {
-			lanes = append(lanes, lane)
+			found++
+			if !p.excluded[lane] {
+				lanes = append(lanes, lane)
+			}
 		}
 	}
 	slices.Sort(lanes)
@@ -121,7 +141,7 @@ func (p *LanePool) Acquire() (*LanedStore, AcquireReason, error) {
 		return &LanedStore{pool: p, lane: lane, lock: lock, state: st}, AcquireReused, nil
 	}
 	reason := AcquireNewProcess
-	if len(lanes) == 0 {
+	if found == 0 {
 		reason = AcquireLostState
 	}
 	s, err := p.mint()
@@ -212,12 +232,32 @@ type LanedStore struct {
 
 func (s *LanedStore) Lane() string { return s.lane }
 
+// Abandoned reports whether Abandon durably marked this lane abandoned.
+func (s *LanedStore) Abandoned() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.state.Abandoned
+}
+
+// laneError keeps a lane error's own text while wrapping A1's sentinel, so
+// callers match it with errors.Is (ErrSeqClosed, ErrClientSeqExhausted,
+// ErrClientSeqReused) exactly as they do for the legacy counter.
+type laneError struct {
+	msg string
+	err error
+}
+
+func (e *laneError) Error() string { return e.msg }
+func (e *laneError) Unwrap() error { return e.err }
+
 // errClosed refuses every mutation after Close or Abandon: the lock is gone,
 // so a successor may own the lane file and a write would corrupt its state.
-func (s *LanedStore) errClosed() error { return fmt.Errorf("sistatement: lane %s is closed", s.lane) }
+func (s *LanedStore) errClosed() error {
+	return &laneError{msg: fmt.Sprintf("sistatement: lane %s is closed", s.lane), err: ErrSeqClosed}
+}
 
 func (s *LanedStore) errExhausted() error {
-	return fmt.Errorf("sistatement: lane %s client_seq exhausted", s.lane)
+	return &laneError{msg: fmt.Sprintf("sistatement: lane %s client_seq exhausted", s.lane), err: ErrClientSeqExhausted}
 }
 
 // Reserve returns the smallest free seq, else next (then next+1 is
@@ -259,7 +299,7 @@ func (s *LanedStore) ReserveSupplied(seq uint64) error {
 		return s.errExhausted() // next would wrap to 0
 	}
 	if seq < s.state.Next {
-		return fmt.Errorf("sistatement: supplied client_seq %d is below lane %s next %d", seq, s.lane, s.state.Next)
+		return &laneError{msg: fmt.Sprintf("sistatement: supplied client_seq %d is below lane %s next %d", seq, s.lane, s.state.Next), err: ErrClientSeqReused}
 	}
 	next := s.state
 	next.Next = seq + 1

@@ -34,6 +34,7 @@ go_test(
         "relay_exception_test.go",
         "relay_helpers_test.go",
         "relay_late_id_test.go",
+        "relay_presend_lanes_test.go",
         "relay_presend_seq_test.go",
         "relay_query_only_test.go",
         "relay_reject_test.go",

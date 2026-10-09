@@ -349,9 +349,11 @@ func TestLaneStateSurvivesProcessKill(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
+	// Any t.Fatal below must not leave the helper running; a second Kill
+	// after the deliberate one is harmless.
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
 	line, err := bufio.NewReader(stdout).ReadString('\n')
 	if err != nil || !strings.HasPrefix(line, "LANE ") {
-		_ = cmd.Process.Kill()
 		t.Fatalf("helper: %q %v", line, err)
 	}
 	lane := strings.TrimSpace(strings.TrimPrefix(line, "LANE "))

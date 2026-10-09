@@ -89,6 +89,14 @@ var (
 		Name: "clickhouse_proxy_agent_si_upstream_switches_total",
 		Help: "Agent-mode upstream switches to the indexer hosting a storage-integrity INSERT's database, by result",
 	}, []string{"result"})
+	agentSILaneRotationsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "clickhouse_proxy_agent_si_lane_rotations_total",
+		Help: "Agent client_seq lane changes by reason: gap_budget (abandoned after GAP_BUDGET_EXCEEDED), lost_state (no lane files existed), new_process (every existing lane was held or abandoned)",
+	}, []string{"reason"})
+	agentSIInflight = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "clickhouse_proxy_agent_si_inflight",
+		Help: "Agent SI statements between client_seq reservation and outcome",
+	})
 )
 
 func init() {
@@ -111,6 +119,8 @@ func init() {
 	prometheus.MustRegister(agentSISeqBurnedTotal)
 	prometheus.MustRegister(agentSIDiscoveryFailuresTotal)
 	prometheus.MustRegister(agentSIUpstreamSwitchesTotal)
+	prometheus.MustRegister(agentSILaneRotationsTotal)
+	prometheus.MustRegister(agentSIInflight)
 }
 
 type MetricsObserver struct{}
@@ -207,6 +217,13 @@ func (m *MetricsObserver) SIDiscoveryFailed(step string) {
 func (m *MetricsObserver) SIUpstreamSwitch(result string) {
 	agentSIUpstreamSwitchesTotal.WithLabelValues(result).Inc()
 }
+
+// LaneRotated and SIInflight implement sistatement.LaneObserver (spec
+// 2026-10-09 §6.5, §10). reason is gap_budget, lost_state or new_process.
+func (m *MetricsObserver) LaneRotated(reason string) {
+	agentSILaneRotationsTotal.WithLabelValues(reason).Inc()
+}
+func (m *MetricsObserver) SIInflight(delta int) { agentSIInflight.Add(float64(delta)) }
 
 func (m *MetricsObserver) InlineValuesSynthesized() {
 	agentInlineValuesTotal.WithLabelValues("synthesized").Inc()

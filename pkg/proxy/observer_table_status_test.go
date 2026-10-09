@@ -43,3 +43,22 @@ func TestMetricsObserver_SIUpstreamSwitches(t *testing.T) {
 		}
 	}
 }
+
+func TestMetricsObserver_SILanes(t *testing.T) {
+	var obs sistatement.LaneObserver = NewMetricsObserver()
+	for _, reason := range []string{"gap_budget", "lost_state", "new_process"} {
+		before := testutil.ToFloat64(agentSILaneRotationsTotal.WithLabelValues(reason))
+		obs.LaneRotated(reason)
+		if got := testutil.ToFloat64(agentSILaneRotationsTotal.WithLabelValues(reason)); got != before+1 {
+			t.Fatalf("clickhouse_proxy_agent_si_lane_rotations_total{reason=%q} = %g, want %g", reason, got, before+1)
+		}
+	}
+	before := testutil.ToFloat64(agentSIInflight)
+	obs.SIInflight(1)
+	obs.SIInflight(1)
+	obs.SIInflight(-1)
+	if got := testutil.ToFloat64(agentSIInflight); got != before+1 {
+		t.Fatalf("clickhouse_proxy_agent_si_inflight = %g, want %g", got, before+1)
+	}
+	obs.SIInflight(-1)
+}

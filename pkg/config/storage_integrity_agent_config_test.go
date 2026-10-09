@@ -78,6 +78,7 @@ func TestStorageIntegrityAgentConfig_Validate(t *testing.T) {
 			c.StorageIntegrity.Agent.Lanes = "on"
 		}, "storage_integrity.agent.lanes"},
 		{"zero payload limit", func(c *Config) { c.StorageIntegrity.Agent.MaxPayloadBytes = 0 }, "max_payload_bytes"},
+		{"negative max_inflight_per_lane", func(c *Config) { c.StorageIntegrity.Agent.MaxInflightPerLane = -1 }, "storage_integrity.agent.max_inflight_per_lane"},
 		{"missing network_state.source", func(c *Config) { c.NetworkState.Source = "" }, "network_state.source"},
 		{"host-injected state allowed", func(c *Config) { c.NetworkState.Source = ""; c.StorageIntegrity.Agent.RequireNetworkState = false }, ""},
 		{"disabled block ignored", func(c *Config) { c.StorageIntegrity.Agent = StorageIntegrityAgentConfig{} }, ""},
@@ -148,5 +149,14 @@ func TestStorageIntegrityInlineValuesConfig(t *testing.T) {
 				t.Fatalf("err = %v, want containing %q", err, tc.wantErr)
 			}
 		})
+	}
+}
+
+func TestAgentMaxInflightPerLaneDefault(t *testing.T) {
+	if got := (StorageIntegrityAgentConfig{}).EffectiveMaxInflightPerLane(); got != 16 {
+		t.Fatalf("unset max_inflight_per_lane = %d, want 16", got)
+	}
+	if got := (StorageIntegrityAgentConfig{MaxInflightPerLane: 4}).EffectiveMaxInflightPerLane(); got != 4 {
+		t.Fatalf("explicit max_inflight_per_lane = %d, want 4", got)
 	}
 }

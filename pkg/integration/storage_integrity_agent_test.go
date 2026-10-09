@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -110,6 +111,27 @@ func withDeclaredSchema(t *testing.T, networkID string) testenv.ProxyOption {
 // refused); every statement still reaches the rewriter (spec 2026-09-26 T8).
 func startSIAgentPair(t *testing.T, networkID string) (*testenv.TestProxy, *capturingConsumer) {
 	t.Helper()
+	agentProxy, _, consumer := startSIAgentPairWith(t, networkID, siAgentPairOptions{})
+	return agentProxy, consumer
+}
+
+// siAgentPairOptions varies the shared fixture for the client-lane tests
+// (spec 2026-10-09 D15).
+type siAgentPairOptions struct {
+	// ClientLanes makes both proxies report client lanes active on the
+	// network (housegate.Options.StorageIntegrityClientLanes). The agent has
+	// no RPC discovery here, so that port is what it reads.
+	ClientLanes bool
+	// AgentStateDir replaces the agent's fresh state_dir when non-empty.
+	AgentStateDir string
+	// Lanes sets storage_integrity.agent.lanes.
+	Lanes string
+}
+
+// startSIAgentPairWith is startSIAgentPair with options; it also returns the
+// server proxy so a test can attach more agents to it.
+func startSIAgentPairWith(t *testing.T, networkID string, o siAgentPairOptions) (agent, server *testenv.TestProxy, consumer *capturingConsumer) {
+	t.Helper()
 	signer, err := auth.NewRelaySigner(authTestKey1)
 	if err != nil {
 		t.Fatal(err)
@@ -118,7 +140,7 @@ func startSIAgentPair(t *testing.T, networkID string) (*testenv.TestProxy, *capt
 	if err := ch.Exec(context.Background(), "CREATE TABLE IF NOT EXISTS "+siEventsPhysical()+" (id UInt64, region String) ENGINE = MergeTree ORDER BY id"); err != nil {
 		t.Fatalf("create table: %v", err)
 	}
-	consumer := &capturingConsumer{}
+	consumer = &capturingConsumer{}
 	rewriterOpt := siTenantMock(t)
 	opts := []testenv.ProxyOption{
 		rewriterOpt,
@@ -136,18 +158,50 @@ func startSIAgentPair(t *testing.T, networkID string) (*testenv.TestProxy, *capt
 			opts.StorageIntegrityAdmissionConsumer = consumer
 		},
 	}
-	server := testenv.StartServerProxy(t, chEnv.Addr, opts...)
-	agentProxy := testenv.StartAgentProxy(t, authTestKey1, server.Addr,
+	if o.ClientLanes {
+		opts = append(opts, withClientLanes())
+	}
+	server = testenv.StartServerProxy(t, chEnv.Addr, opts...)
+	stateDir := o.AgentStateDir
+	if stateDir == "" {
+		stateDir = t.TempDir()
+	}
+	agent = startSIAgent(t, server.Addr, networkID, stateDir, o.Lanes, o.ClientLanes)
+	return agent, server, consumer
+}
+
+// withClientLanes reports client lanes active on the proxy's network.
+func withClientLanes() testenv.ProxyOption {
+	return func(_ *config.Config, opts *housegate.Options) {
+		opts.StorageIntegrityClientLanes = func() bool { return true }
+	}
+}
+
+// startSIAgent starts one signing agent with authTestKey1 against serverAddr.
+func startSIAgent(t *testing.T, serverAddr, networkID, stateDir, lanes string, clientLanes bool) *testenv.TestProxy {
+	t.Helper()
+	opts := []testenv.ProxyOption{
 		withDeclaredSchema(t, networkID),
 		testenv.WithConfigMutator(func(cfg *config.Config) {
 			cfg.StorageIntegrity.Agent.Enabled = true
 			cfg.StorageIntegrity.Agent.NetworkID = networkID
-			cfg.StorageIntegrity.Agent.StateDir = t.TempDir()
+			cfg.StorageIntegrity.Agent.StateDir = stateDir
 			cfg.StorageIntegrity.Agent.RequireNetworkState = false
+			cfg.StorageIntegrity.Agent.Lanes = lanes
 		}),
-	)
+	}
+	if clientLanes {
+		opts = append(opts, withClientLanes())
+	}
+	return testenv.StartAgentProxy(t, authTestKey1, serverAddr, opts...)
+}
 
-	return agentProxy, consumer
+// startSecondAgent starts another agent with the same key and the identical
+// agent options against the same server, on a network with client lanes
+// active.
+func startSecondAgent(t *testing.T, serverAddr, networkID, stateDir, lanes string) *testenv.TestProxy {
+	t.Helper()
+	return startSIAgent(t, serverAddr, networkID, stateDir, lanes, true)
 }
 
 // TestStorageIntegrity_AgentSignsEnvelopeV2EndToEnd runs client -> agent
@@ -306,5 +360,105 @@ func TestStorageIntegrity_OwnedSettingKeysEndToEnd(t *testing.T) {
 	consumer.mu.Unlock()
 	if n != 1 {
 		t.Fatalf("the refused statement must not be admitted; consumer saw %d", n)
+	}
+}
+
+func insertOneRow(t *testing.T, addr string, id uint64) {
+	t.Helper()
+	conn := openConnNoCompression(t, addr)
+	batch, err := conn.PrepareBatch(context.Background(), "INSERT INTO "+siTenantDB+".si_events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.Append(id, "eu"); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.Send(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func admittedIDs(t *testing.T, c *capturingConsumer, want int) []sicore.StatementID {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		c.mu.Lock()
+		n := len(c.seen)
+		c.mu.Unlock()
+		if n >= want || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.seen) != want {
+		t.Fatalf("admissions = %d, want %d", len(c.seen), want)
+	}
+	var out []sicore.StatementID
+	for _, adm := range c.seen {
+		id, err := sicore.ParseStatementID(adm.StatementID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, id)
+	}
+	return out
+}
+
+func TestStorageIntegrity_TwoAgentsOneKeySeparateStateDirsUseDistinctLanes(t *testing.T) {
+	first, server, consumer := startSIAgentPairWith(t, "itest-net", siAgentPairOptions{ClientLanes: true})
+	second := startSecondAgent(t, server.Addr, "itest-net", t.TempDir(), "auto")
+	insertOneRow(t, first.Addr, 1)
+	insertOneRow(t, second.Addr, 2)
+	ids := admittedIDs(t, consumer, 2)
+	if !ids[0].IsLaned() || !ids[1].IsLaned() || ids[0].Lane == ids[1].Lane || ids[0].Seq != 1 || ids[1].Seq != 1 {
+		t.Fatalf("ids = %+v: one key, two agents must use two lanes, each starting at seq 1", ids)
+	}
+}
+
+func TestStorageIntegrity_TwoAgentsSharingAStateDirUseDistinctLanes(t *testing.T) {
+	dir := t.TempDir()
+	first, server, consumer := startSIAgentPairWith(t, "itest-net", siAgentPairOptions{ClientLanes: true, AgentStateDir: dir})
+	second := startSecondAgent(t, server.Addr, "itest-net", dir, "auto")
+	insertOneRow(t, first.Addr, 1)
+	insertOneRow(t, second.Addr, 2)
+	ids := admittedIDs(t, consumer, 2)
+	if ids[0].Lane == ids[1].Lane {
+		t.Fatalf("two processes on one state dir shared lane %s", ids[0].Lane)
+	}
+}
+
+func TestStorageIntegrity_LostStateDirStartsANewLane(t *testing.T) {
+	dir := t.TempDir()
+	first, server, consumer := startSIAgentPairWith(t, "itest-net", siAgentPairOptions{ClientLanes: true, AgentStateDir: dir})
+	insertOneRow(t, first.Addr, 1)
+	first.Close()
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	second := startSecondAgent(t, server.Addr, "itest-net", dir, "auto")
+	insertOneRow(t, second.Addr, 2)
+	ids := admittedIDs(t, consumer, 2)
+	if ids[0].Lane == ids[1].Lane || ids[1].Seq != 1 {
+		t.Fatalf("ids = %+v: a lost state dir must mint a new lane rather than collide", ids)
+	}
+}
+
+func TestStorageIntegrity_LanesOffKeepsLegacyIDs(t *testing.T) {
+	agent, _, consumer := startSIAgentPairWith(t, "itest-net", siAgentPairOptions{ClientLanes: true, Lanes: "off"})
+	insertOneRow(t, agent.Addr, 1)
+	if ids := admittedIDs(t, consumer, 1); ids[0].IsLaned() {
+		t.Fatalf("lanes off produced %+v", ids[0])
+	}
+}
+
+// Before activation the network reports client lanes disabled, so the agent
+// emits a legacy id that the ingress admits (it would refuse a laned one).
+func TestStorageIntegrity_LanedIDRefusedBeforeActivation(t *testing.T) {
+	agent, _, consumer := startSIAgentPairWith(t, "itest-net", siAgentPairOptions{})
+	insertOneRow(t, agent.Addr, 1)
+	if ids := admittedIDs(t, consumer, 1); ids[0].IsLaned() {
+		t.Fatal("an agent must not emit a laned id while the indexer reports client lanes disabled")
 	}
 }

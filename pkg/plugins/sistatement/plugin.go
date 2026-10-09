@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -50,6 +49,27 @@ type Options struct {
 	// (plan decision P4). The plugin owns either: Close releases it.
 	Seq     *SeqCounter
 	OpenSeq func(networkID string) (*SeqCounter, error)
+	// Lanes selects client_seq lanes (spec 2026-10-09 D15): LaneModeAuto, and
+	// the zero value, use a client lane whenever the network reports client
+	// lanes enabled; LaneModeOff keeps legacy ids (the driver sidecar, R8).
+	Lanes LaneMode
+	// MaxInflightPerLane bounds the SI statements between client_seq
+	// reservation and outcome on one lane (spec §6.5); zero is unbounded,
+	// which only unit tests use (build passes the configured default 16).
+	MaxInflightPerLane int
+	// LaneDir returns the si directory of a network; its client lanes live in
+	// <dir>/lanes. Nil leaves client lanes unusable: a statement that would
+	// use one is refused.
+	LaneDir func(networkID string) (string, error)
+	// OpenLanePool opens the lane pool in an si directory; nil means
+	// OpenLanePool with a warning for an untrusted lane file and the
+	// free_list_overflow burn metric.
+	OpenLanePool func(siDir string) (*LanePool, error)
+	// ClientLanesEnabled reports whether client lanes are active on the
+	// network when Discovery is nil (a YAML or host-injected status source);
+	// with Discovery the hosting indexer's client_lanes_enabled decides. Nil
+	// means disabled.
+	ClientLanesEnabled func() bool
 	// WriterPrecheck enables the advisory sentio_isDatabaseWriter pre-check
 	// (spec 2026-10-09 §6.4); build leaves it off for drivers.
 	WriterPrecheck bool
@@ -81,16 +101,25 @@ type Options struct {
 
 // Plugin is the agent-mode storage-integrity statement plugin. See doc.go.
 type Plugin struct {
-	signer         auth.StatementSignerV2
-	account        string // lowercase 0x
-	owner          string
-	isDriver       bool
-	statuses       registry.TableStatuses
-	discovery      registry.StorageIntegrityDiscovery
-	networkID      string // configured; empty when only discovery supplies it
-	keeperShardID  uint32
-	seq            *SeqCounter
-	openSeq        func(networkID string) (*SeqCounter, error)
+	signer        auth.StatementSignerV2
+	account       string // lowercase 0x
+	owner         string
+	isDriver      bool
+	statuses      registry.TableStatuses
+	discovery     registry.StorageIntegrityDiscovery
+	networkID     string // configured; empty when only discovery supplies it
+	keeperShardID uint32
+	seq           *SeqCounter
+	openSeq       func(networkID string) (*SeqCounter, error)
+	lanes         LaneMode
+	maxInflight   int
+	laneDir       func(networkID string) (string, error)
+	openLanePool  func(siDir string) (*LanePool, error)
+	// clientLanesEnabled is Options.ClientLanesEnabled (no discovery).
+	clientLanesEnabled func() bool
+	// inflightWait bounds how long a statement waits for an in-flight slot on
+	// its lane before it is refused.
+	inflightWait   time.Duration
 	writerPrecheck bool
 	now            func() time.Time
 	maxPayload     uint64
@@ -102,14 +131,15 @@ type Plugin struct {
 	pinnedUpstream bool
 	switchTimeout  time.Duration
 
-	// seqMu guards the lazily opened counters apart from mu, so a first open
-	// does not stall other sessions' hooks.
+	// seqMu guards the lazily opened counters and the lane selectors apart
+	// from mu, so a first open does not stall other sessions' hooks.
 	seqMu     sync.Mutex
-	seqs      map[string]*SeqCounter // by network id
+	seqs      map[string]*SeqCounter   // by network id
+	selectors map[string]*laneSelector // by network id
 	seqClosed bool
 
 	mu    sync.Mutex
-	infos map[string]registry.StorageIntegrityInfo // by database
+	infos map[string]infoEntry // by database; successes only, for infoSuccessTTL
 	// infoFailures remembers a failed info lookup per database for
 	// infoFailureTTL; discoveryWarnEvery throttles the P7 fallback warning.
 	infoFailures       map[string]infoFailure
@@ -134,6 +164,8 @@ type Plugin struct {
 type pendingStatement struct {
 	queryID        string // the client's query id until the strict hook replaces it
 	networkID      string // resolved in OnQuery; selects the token field and the counter
+	database       string // the target's database: the key of its cached SI info
+	lanesEnabled   bool   // the network reported client lanes enabled (resolveNetworkID)
 	tableID        string
 	schemaHash     string
 	clientRevision uint32
@@ -145,13 +177,30 @@ type pendingStatement struct {
 // upstream Exception to this reservation by session alone: the ExceptionPlugin
 // hook carries no query id, and Relay allows one query in flight per
 // connection, so the only Exception that can arrive while it is outstanding is
-// the reserved statement's own. Plan B lanes (several in-flight statements per
-// lane) must revisit this attribution.
+// the reserved statement's own. Client lanes keep that attribution sound:
+// several statements may be in flight on one lane, but each is on its own
+// session, and the reservation is still found by session.
+//
+// lane and done live here, never on the pending statement, which is gone by
+// the time the seq is reserved. done frees the lane's in-flight slot; finish
+// calls it once the outcome is known (success, marked Exception, pre-send
+// abort) and again, as a no-op, when the reservation is dropped (ambiguous
+// completion, close).
 type reservedSeq struct {
 	statementID string
-	counter     *SeqCounter // the network's counter that issued seq
+	lane        seqLane // the lane that issued seq: every release goes there
 	seq         uint64
-	resolved    bool // released as unspent, or sequenced (success)
+	networkID   string
+	database    string
+	done        func() // idempotent; nil only in tests that build one by hand
+	resolved    bool   // released as unspent, or sequenced (success)
+}
+
+// finish frees the reservation's in-flight slot; it is idempotent.
+func (r *reservedSeq) finish() {
+	if r != nil && r.done != nil {
+		r.done()
+	}
 }
 
 type pendingUse struct {
@@ -184,6 +233,13 @@ func New(opts Options) (*Plugin, error) {
 	if opts.MaxPayloadBytes == 0 {
 		errs = append(errs, errors.New("max payload bytes must be > 0"))
 	}
+	lanes, err := ParseLaneMode(string(opts.Lanes))
+	if err != nil {
+		errs = append(errs, err)
+	}
+	if opts.MaxInflightPerLane < 0 {
+		errs = append(errs, fmt.Errorf("max in-flight statements per lane must not be negative, got %d", opts.MaxInflightPerLane))
+	}
 	if opts.InlineValues.Enabled {
 		if opts.Evaluator == nil {
 			errs = append(errs, errors.New("values evaluator is required when inline_values is enabled"))
@@ -206,7 +262,7 @@ func New(opts Options) (*Plugin, error) {
 	if strings.TrimSpace(networkID) == "" {
 		networkID = "" // only discovery supplies it
 	}
-	return &Plugin{
+	p := &Plugin{
 		signer:             opts.Signer,
 		account:            strings.ToLower(opts.Signer.Address()),
 		owner:              opts.Owner,
@@ -217,6 +273,12 @@ func New(opts Options) (*Plugin, error) {
 		keeperShardID:      opts.KeeperShardID,
 		seq:                opts.Seq,
 		openSeq:            opts.OpenSeq,
+		lanes:              lanes,
+		maxInflight:        opts.MaxInflightPerLane,
+		laneDir:            opts.LaneDir,
+		openLanePool:       opts.OpenLanePool,
+		clientLanesEnabled: opts.ClientLanesEnabled,
+		inflightWait:       laneInflightWait,
 		writerPrecheck:     opts.WriterPrecheck,
 		now:                now,
 		maxPayload:         opts.MaxPayloadBytes,
@@ -228,7 +290,8 @@ func New(opts Options) (*Plugin, error) {
 		pinnedUpstream:     opts.PinnedUpstream,
 		switchTimeout:      opts.SwitchTimeout,
 		seqs:               map[string]*SeqCounter{},
-		infos:              map[string]registry.StorageIntegrityInfo{},
+		selectors:          map[string]*laneSelector{},
+		infos:              map[string]infoEntry{},
 		infoFailures:       map[string]infoFailure{},
 		discoveryWarnEvery: discoveryWarnInterval,
 		statusWarnEvery:    statusWarnInterval,
@@ -240,8 +303,25 @@ func New(opts Options) (*Plugin, error) {
 		nonSwitchable:      map[int64]bool{},
 		statefulNext:       map[int64]string{},
 		hostingCache:       map[string]hostingEntry{},
-	}, nil
+	}
+	if p.openLanePool == nil {
+		p.openLanePool = func(siDir string) (*LanePool, error) {
+			return OpenLanePool(siDir, LanePoolOptions{
+				OnCorrupt: func(lane string, err error) {
+					log.Warnw("sistatement: ignoring an untrusted client lane file", "lane", lane, "err", err)
+				},
+				OnBurn: p.burnSeq,
+			})
+		}
+	}
+	return p, nil
 }
+
+// laneInflightWait bounds how long a statement waits for an in-flight slot on
+// its lane (max_inflight_per_lane) before it is refused with a retry message.
+// Slots free as soon as an outcome is known, so the wait is short unless the
+// lane's statements are stuck upstream.
+const laneInflightWait = 30 * time.Second
 
 // OnQuery classifies the statement; payload-local Native INSERTs enter the SI
 // lane (deferred or synthesized plan), everything else passes through. It
@@ -277,9 +357,10 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) (result
 	// classification below.
 	target, targetErr := sicore.ResolveInsertTarget(sql, p.sessionDatabase(qctx.Session))
 	var (
-		schema     payloadexec.TableSchema
-		schemaHash string
-		networkID  string
+		schema       payloadexec.TableSchema
+		schemaHash   string
+		networkID    string
+		lanesEnabled bool
 	)
 	if targetErr == nil {
 		status, active := p.activeStatus(ctx, target)
@@ -288,7 +369,7 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) (result
 		}
 		// Spec 2026-10-09 §6.4: the schema hash binds the network the
 		// hosting indexer reports, so it is resolved before the hash check.
-		if networkID, err = p.resolveNetworkID(ctx, target.Database); err != nil {
+		if networkID, lanesEnabled, err = p.resolveNetworkID(ctx, target.Database); err != nil {
 			return err
 		}
 		if schema, schemaHash, err = p.verifySchema(target, status, networkID); err != nil {
@@ -384,7 +465,7 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) (result
 	if existing := p.pending[sessID]; existing != nil {
 		return fmt.Errorf("storage_integrity agent: previous SI INSERT %s on this session has not completed", existing.queryID)
 	}
-	p.pending[sessID] = &pendingStatement{queryID: qctx.Query.ID, networkID: networkID, tableID: tableID, schemaHash: schemaHash, clientRevision: uint32(revision)}
+	p.pending[sessID] = &pendingStatement{queryID: qctx.Query.ID, networkID: networkID, database: target.Database, lanesEnabled: lanesEnabled, tableID: tableID, schemaHash: schemaHash, clientRevision: uint32(revision)}
 	_, logger := log.FromContext(ctx)
 	if synthesized != nil {
 		qctx.Query.Body = inlineInsertBody(target, cols)
@@ -465,67 +546,63 @@ func (p *Plugin) observeStatus(fn func(StatusObserver)) {
 	}
 }
 
-// reserveStatementID durably reserves a client_seq at the strict input
-// boundary (spec 2026-10-09 D16 (a)): an SDK-supplied flat id for this
-// agent's own account keeps its seq; otherwise the smallest free seq or the
-// next one is used with a fresh nonce. A recycled seq therefore only ever
+// reserveStatementID durably reserves a client_seq on lane at the strict
+// input boundary (spec 2026-10-09 D16 (a)): an SDK-supplied id for this
+// agent's own account keeps its seq when it is in the lane's form (R9, refused
+// otherwise); a foreign or malformed id is minted over with the smallest free
+// seq or the next one and a fresh nonce. A recycled seq therefore only ever
 // appears under a NEW statement id; the agent never re-presents an id it sent.
-func (p *Plugin) reserveStatementID(counter *SeqCounter, queryID string) (string, uint64, error) {
-	if canonical, seq, ok := ownSuppliedStatementID(queryID, p.account); ok {
-		if err := counter.ReserveSupplied(seq); err != nil {
+func (p *Plugin) reserveStatementID(lane seqLane, queryID string) (string, uint64, error) {
+	id, ok, err := ownLanedStatementID(queryID, p.account, lane.Lane())
+	if err != nil {
+		return "", 0, fmt.Errorf("storage_integrity agent: %w", err)
+	}
+	if ok {
+		if err := lane.ReserveSupplied(id.Seq); err != nil {
 			return "", 0, fmt.Errorf("storage_integrity agent: reserve supplied client_seq: %w", err)
 		}
-		return canonical, seq, nil
+		return id.Flat(), id.Seq, nil
 	}
-	seq, err := counter.Reserve()
+	seq, err := lane.Reserve()
 	if err != nil {
 		return "", 0, fmt.Errorf("storage_integrity agent: issue client_seq: %w", err)
 	}
 	var nonce [16]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
 		// No statement id exists yet, so nothing can have left the agent.
-		p.releaseSeq(counter, seq)
+		p.releaseSeq(lane, seq)
 		return "", 0, fmt.Errorf("storage_integrity agent: nonce: %w", err)
 	}
-	return p.account + ":" + strconv.FormatUint(seq, 10) + ":" + hex.EncodeToString(nonce[:]), seq, nil
+	return sicore.StatementID{Account: p.account, Lane: lane.Lane(), Seq: seq, Nonce: hex.EncodeToString(nonce[:])}.Flat(), seq, nil
 }
 
-// releaseSeq returns a provably unspent seq to the free list of the counter
-// that issued it.
-func (p *Plugin) releaseSeq(counter *SeqCounter, seq uint64) {
-	overflow, err := counter.Release(seq)
-	if err != nil {
-		log.Warnw("sistatement: could not release client_seq; it stays burned", "client_seq", seq, "err", err)
-		p.observeSeq(func(o SeqObserver) { o.SeqBurned("unknown_outcome") })
-		return
-	}
-	if overflow {
-		p.observeSeq(func(o SeqObserver) { o.SeqBurned("free_list_overflow") })
+// releaseSeq returns a provably unspent seq to the lane that issued it. A
+// failure counts the seq burned, except on a client lane that was abandoned
+// after GAP_BUDGET_EXCEEDED: no later statement can use that lane, so the
+// release is dropped. A free-list overflow is counted by the lane itself
+// (legacyLane, LanePoolOptions.OnBurn): the entry it drops is the largest free
+// seq, not necessarily this one.
+func (p *Plugin) releaseSeq(lane seqLane, seq uint64) {
+	if err := lane.Release(seq); err != nil {
+		if store, ok := lane.(*LanedStore); ok && store.Abandoned() && errors.Is(err, ErrSeqClosed) {
+			log.Infow("sistatement: client lane was abandoned; dropping the release of its unspent client_seq", "lane", store.Lane(), "client_seq", seq)
+			return
+		}
+		log.Warnw("sistatement: could not release client_seq; it stays burned", "lane", lane.Lane(), "client_seq", seq, "err", err)
+		p.burnSeq("unknown_outcome")
 		return
 	}
 	p.observeSeq(func(o SeqObserver) { o.SeqRecycled() })
+}
+
+func (p *Plugin) burnSeq(reason string) {
+	p.observeSeq(func(o SeqObserver) { o.SeqBurned(reason) })
 }
 
 func (p *Plugin) observeSeq(fn func(SeqObserver)) {
 	if o, ok := p.observer.(SeqObserver); ok && o != nil {
 		fn(o)
 	}
-}
-
-// ownSuppliedStatementID accepts account casing from SDK query ids, but keeps
-// the shared parser strict for the sequence and nonce. Only the account segment
-// is normalized; the client nonce is preserved byte-for-byte.
-func ownSuppliedStatementID(queryID, ownAccount string) (canonical string, seq uint64, ok bool) {
-	account, tail, found := strings.Cut(strings.TrimSpace(queryID), ":")
-	if !found || !strings.EqualFold(account, ownAccount) {
-		return "", 0, false
-	}
-	account = strings.ToLower(account)
-	parsedAccount, parsedSeq, nonce, err := sicore.ParseFlatStatementID(account + ":" + tail)
-	if err != nil || parsedAccount != strings.ToLower(ownAccount) {
-		return "", 0, false
-	}
-	return parsedAccount + ":" + strconv.FormatUint(parsedSeq, 10) + ":" + nonce, parsedSeq, true
 }
 
 // OnClientDataStrict buffers one raw non-empty Data packet under the budget.
@@ -608,11 +685,7 @@ func (p *Plugin) OnQueryInputCompleteStrict(ctx context.Context, qctx *plugin.Qu
 	if len(payload) == 0 {
 		return fmt.Errorf("storage_integrity agent: SI INSERT %s carried no payload", st.queryID)
 	}
-	counter, err := p.seqFor(st.networkID)
-	if err != nil {
-		return err
-	}
-	statementID, seq, err := p.reserveStatementID(counter, st.queryID)
+	lane, done, statementID, seq, err := p.reserve(ctx, st)
 	if err != nil {
 		return err
 	}
@@ -639,44 +712,90 @@ func (p *Plugin) OnQueryInputCompleteStrict(ctx context.Context, qctx *plugin.Qu
 		// upstream, a lost active-query race) is released by OnQueryAbort on
 		// Relay's UpstreamQueryUnsent proof; a failure once the upstream write
 		// began burns the seq at OnQueryComplete, because a partial write
-		// cannot be proven unspent.
-		p.releaseSeq(counter, seq)
+		// cannot be proven unspent. The reservation is not tracked yet, so the
+		// lane's in-flight slot is freed here too.
+		p.releaseSeq(lane, seq)
+		done()
 		return fmt.Errorf("storage_integrity agent: sign statement %s: %w", statementID, err)
 	}
 	qctx.Query.ID = statementID
 	// Same Custom + single-quote wrapping as the auth token (see agent.Plugin).
 	qctx.Query.Settings = append(qctx.Query.Settings, chproto.Setting{Key: auth.StatementTokenSettingKey, Value: "'" + token + "'", Custom: true})
 	p.mu.Lock()
-	burned := p.trackReservedLocked(qctx.Session.ID(), &reservedSeq{statementID: statementID, counter: counter, seq: seq})
+	prev, burned := p.trackReservedLocked(qctx.Session.ID(), &reservedSeq{statementID: statementID, lane: lane, seq: seq, networkID: st.networkID, database: st.database, done: done})
 	p.mu.Unlock()
+	prev.finish()
 	if burned {
-		p.observeSeq(func(o SeqObserver) { o.SeqBurned("unknown_outcome") })
+		p.burnSeq("unknown_outcome")
 	}
 	_, logger := log.FromContext(ctx)
-	logger.Infow("sistatement: statement token signed", "statement_id", statementID, "query_id", st.queryID, "table_id", st.tableID, "payload_bytes", len(payload))
+	logger.Infow("sistatement: statement token signed", "statement_id", statementID, "lane", lane.Lane(), "query_id", st.queryID, "table_id", st.tableID, "payload_bytes", len(payload))
 	return nil
 }
 
+// reserve picks the statement's lane (waiting at most inflightWait for an
+// in-flight slot) and reserves its client_seq there. On success the caller
+// owns done; on every error the slot is already freed and no seq is held. A
+// laned pick that loses a race with a concurrent GAP_BUDGET rotation (its
+// lane was abandoned between pick and Reserve) is retried once on the new
+// lane.
+func (p *Plugin) reserve(ctx context.Context, st *pendingStatement) (seqLane, func(), string, uint64, error) {
+	sel, err := p.selectorFor(st.networkID)
+	if err != nil {
+		return nil, nil, "", 0, err
+	}
+	legacy := legacyLane{open: func() (*SeqCounter, error) { return p.seqFor(st.networkID) }, onBurn: p.burnSeq}
+	for attempt := 0; ; attempt++ {
+		waitCtx, cancel := context.WithTimeout(ctx, p.inflightWait)
+		lane, done, err := sel.pick(waitCtx, st.lanesEnabled, legacy)
+		cancel()
+		if err != nil {
+			return nil, nil, "", 0, err
+		}
+		statementID, seq, err := p.reserveStatementID(lane, st.queryID)
+		if err == nil {
+			return lane, done, statementID, seq, nil
+		}
+		done()
+		if store, ok := lane.(*LanedStore); ok && attempt == 0 && store.Abandoned() && errors.Is(err, ErrSeqClosed) {
+			continue
+		}
+		if lane.Lane() == "" && sel.legacyPinned() && errors.Is(err, ErrSeqLocked) {
+			_, logger := log.FromContext(ctx)
+			logger.Warnw("sistatement: the legacy client_seq lane is held by another process", "err", err)
+			return nil, nil, "", 0, errLegacyPinnedButHeld
+		}
+		return nil, nil, "", 0, err
+	}
+}
+
+var errLegacyPinnedButHeld = errors.New("storage_integrity agent: client lane budget exhausted and the legacy client_seq lane is held by another process")
+
 // trackReservedLocked records r as the session's outstanding seq. Relay
 // completes every query before the next one starts, so a predecessor should
-// already be gone; one that is still unresolved is reported as burned.
-func (p *Plugin) trackReservedLocked(sessID int64, r *reservedSeq) (burnedPrevious bool) {
-	if prev := p.reserved[sessID]; prev != nil && !prev.resolved {
+// already be gone; one that is still unresolved is reported as burned. The
+// caller finishes the returned predecessor after unlocking.
+func (p *Plugin) trackReservedLocked(sessID int64, r *reservedSeq) (prev *reservedSeq, burnedPrevious bool) {
+	prev = p.reserved[sessID]
+	if prev != nil && !prev.resolved {
 		burnedPrevious = true
 	}
 	p.reserved[sessID] = r
-	return burnedPrevious
+	return prev, burnedPrevious
 }
 
 // dropReservedLocked forgets the session's outstanding seq and reports whether
-// it was still unresolved, i.e. burned with an unknown outcome.
-func (p *Plugin) dropReservedLocked(sessID int64) (burned bool) {
-	r := p.reserved[sessID]
+// it was still unresolved, i.e. burned with an unknown outcome. The caller
+// finishes the returned reservation after unlocking: this is the one place
+// every reservation ends, so its in-flight slot is always freed here at the
+// latest.
+func (p *Plugin) dropReservedLocked(sessID int64) (r *reservedSeq, burned bool) {
+	r = p.reserved[sessID]
 	if r == nil {
-		return false
+		return nil, false
 	}
 	delete(p.reserved, sessID)
-	return !r.resolved
+	return r, !r.resolved
 }
 
 // OnException recycles the outstanding seq when the server proved it unspent
@@ -686,21 +805,66 @@ func (p *Plugin) dropReservedLocked(sessID int64) (burned bool) {
 // OnQueryComplete, which counts it burned. The Exception is attributed to the
 // session's outstanding reservation without a query id (see reservedSeq):
 // sound only while Relay keeps one query in flight per connection.
-func (p *Plugin) OnException(_ context.Context, sess chsession.Session, exc *chproto.Exception) error {
-	if p == nil || sess == nil || exc == nil || !chproto.HasSeqUnspentSuffix(exc.Message) {
+//
+// After the release, a refusal that concerns the reservation's client lane is
+// acted on (spec §6.5): GAP_BUDGET_EXCEEDED abandons the lane, which the next
+// statement replaces; LANE_BUDGET_EXCEEDED pins this process to the legacy
+// lane; and the ingress's pre-activation refusal drops the cached SI info so
+// the next statement re-reads client_lanes_enabled. The first two tell the
+// client to retry. A legacy-lane GAP_BUDGET_EXCEEDED changes nothing.
+func (p *Plugin) OnException(ctx context.Context, sess chsession.Session, exc *chproto.Exception) error {
+	if p == nil || sess == nil || exc == nil {
+		return nil
+	}
+	marked := chproto.HasSeqUnspentSuffix(exc.Message)
+	rotation := laneRotationFor(exc.Message)
+	if !marked && rotation == rotationNone {
 		return nil
 	}
 	p.mu.Lock()
 	r := p.reserved[sess.ID()]
-	if r == nil || r.resolved {
+	if r == nil {
 		p.mu.Unlock()
 		return nil
 	}
-	r.resolved = true
-	counter, seq := r.counter, r.seq
+	release := marked && !r.resolved
+	if release {
+		r.resolved = true
+	}
 	p.mu.Unlock()
-	p.releaseSeq(counter, seq)
+	if release {
+		p.releaseSeq(r.lane, r.seq)
+		r.finish()
+	}
+	p.applyLaneRotation(ctx, r, rotation, exc)
 	return nil
+}
+
+func (p *Plugin) applyLaneRotation(ctx context.Context, r *reservedSeq, rotation laneRotation, exc *chproto.Exception) {
+	lane := r.lane.Lane()
+	_, logger := log.FromContext(ctx)
+	switch rotation {
+	case rotationGapBudget:
+		sel := p.existingSelector(r.networkID)
+		if lane == "" || sel == nil {
+			return
+		}
+		logger.Warnw("sistatement: GAP_BUDGET_EXCEEDED on a client lane; abandoning it for a new one", "lane", lane, "statement_id", r.statementID)
+		if err := sel.rotate(lane); err != nil {
+			logger.Warnw("sistatement: could not persist the abandoned client lane; it is closed and not reused by this process", "lane", lane, "err", err)
+		}
+		exc.Message = withRetryHint(exc.Message, "retry: the agent moved to a new client_seq lane")
+	case rotationLaneBudget:
+		sel := p.existingSelector(r.networkID)
+		if lane == "" || sel == nil {
+			return
+		}
+		sel.pinLegacy(sicore.AdmissionCodeLaneBudgetExceeded)
+		logger.Errorw("sistatement: client lane budget exhausted for "+p.account+"; this process stays on the legacy client_seq lane", "lane", lane, "statement_id", r.statementID, "network_id", r.networkID)
+		exc.Message = withRetryHint(exc.Message, "retry: the agent switched to its legacy client_seq lane")
+	case rotationLanesDisabled:
+		p.forgetInfo(r.database)
+	}
 }
 
 // OnQueryAbort drops the buffer for the exact query. When Relay proves the
@@ -731,8 +895,9 @@ func (p *Plugin) OnQueryAbort(ctx context.Context, qctx *plugin.QueryContext) {
 	p.mu.Unlock()
 	if release != nil {
 		_, logger := log.FromContext(ctx)
-		logger.Infow("sistatement: statement never reached upstream; releasing client_seq", "statement_id", release.statementID, "client_seq", release.seq)
-		p.releaseSeq(release.counter, release.seq)
+		logger.Infow("sistatement: statement never reached upstream; releasing client_seq", "statement_id", release.statementID, "lane", release.lane.Lane(), "client_seq", release.seq)
+		p.releaseSeq(release.lane, release.seq)
+		release.finish()
 	}
 }
 
@@ -745,15 +910,17 @@ func (p *Plugin) OnQuerySuccess(_ context.Context, sess chsession.Session, query
 	if p == nil || sess == nil {
 		return
 	}
+	var sequenced *reservedSeq
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	defer func() { p.mu.Unlock(); sequenced.finish() }()
 	if id, ok := p.statefulNext[sess.ID()]; ok && id == queryID {
 		p.nonSwitchable[sess.ID()] = true
 		delete(p.statefulNext, sess.ID())
 	}
-	if r := p.reserved[sess.ID()]; r != nil && r.statementID == queryID {
+	if r := p.reserved[sess.ID()]; r != nil && r.statementID == queryID && !r.resolved {
 		// Sequenced: the seq is spent, which is neither recycled nor burned.
 		r.resolved = true
+		sequenced = r
 	}
 	use, ok := p.useNext[sess.ID()]
 	if !ok || use.queryID != queryID {
@@ -775,10 +942,11 @@ func (p *Plugin) OnQueryComplete(_ context.Context, sess chsession.Session) {
 	p.mu.Lock()
 	delete(p.useNext, sess.ID())
 	delete(p.statefulNext, sess.ID())
-	burned := p.dropReservedLocked(sess.ID())
+	r, burned := p.dropReservedLocked(sess.ID())
 	p.mu.Unlock()
+	r.finish()
 	if burned {
-		p.observeSeq(func(o SeqObserver) { o.SeqBurned("unknown_outcome") })
+		p.burnSeq("unknown_outcome")
 	}
 }
 
@@ -794,10 +962,11 @@ func (p *Plugin) OnClose(sess chsession.Session) {
 	delete(p.useNext, sess.ID())
 	delete(p.nonSwitchable, sess.ID())
 	delete(p.statefulNext, sess.ID())
-	burned := p.dropReservedLocked(sess.ID())
+	r, burned := p.dropReservedLocked(sess.ID())
 	p.mu.Unlock()
+	r.finish()
 	if burned {
-		p.observeSeq(func(o SeqObserver) { o.SeqBurned("unknown_outcome") })
+		p.burnSeq("unknown_outcome")
 	}
 }
 

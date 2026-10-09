@@ -45,3 +45,17 @@ type DiscoveryObserver interface {
 type SwitchObserver interface {
 	SIUpstreamSwitch(result string)
 }
+
+// LaneObserver is the metrics surface of client_seq lane selection (spec
+// 2026-10-09 §6.5, §10). LaneRotated counts every change of client lane by
+// reason: "gap_budget" (the lane was abandoned after GAP_BUDGET_EXCEEDED),
+// "lost_state" (no lane file existed, so a new lane was minted) and
+// "new_process" (every existing lane was held by another process or
+// abandoned); a rotation and the acquire that completes it count once.
+// SIInflight moves the gauge of SI statements between client_seq reservation
+// and outcome. *proxy.MetricsObserver satisfies it; an Observer that does not
+// is not counted.
+type LaneObserver interface {
+	LaneRotated(reason string)
+	SIInflight(delta int)
+}

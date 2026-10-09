@@ -442,7 +442,7 @@ bazel-bin/cmd/housegate_/housegate -agent -agent-upstream 10.0.0.8:9001
 | `-network` | `devnet2`（无配置文件时） | agent 网络预设；`devnet2` = `http://64.38.144.158:32003`（也可用 `HOUSEGATE_NETWORK`）。`-state` / `HOUSEGATE_NETWORK_STATE_SOURCE` 与固定的 upstream 优先于它 |
 | `-si` | `auto`（无配置文件时） | storage-integrity 签名：`auto` 在 network state 为 RPC source 时启用，另有 `on`、`off`（也可用 `HOUSEGATE_SI`） |
 | `-si-state-dir` | 按操作系统 | `client_seq` 状态目录（也可用 `HOUSEGATE_SI_STATE_DIR`） |
-| `-si-lanes` | (空) | `client_seq` lane：`auto` 或 `off`（也可用 `HOUSEGATE_SI_LANES`）；网络尚未启用 client lane，带 lane 的 statement id 会被拒绝 |
+| `-si-lanes` | (空) | `client_seq` lane（也可用 `HOUSEGATE_SI_LANES`，配置项 `storage_integrity.agent.lanes`）：`auto`（默认）在网络报告已启用 client lane 后改用 client lane 签名，`off` 保持旧式 statement id（driver sidecar）。`storage_integrity.agent.max_inflight_per_lane`（默认 16）限制单个 lane 上同时在途的 SI 语句数 |
 | `-si-read-mode` | (空) | 在 SELECT 上注入 `SQL_x_read_mode`：`safe` 或 `unsafe_latest`（也可用 `HOUSEGATE_SI_READ_MODE`） |
 | `-si-inline-values` | `auto`（无配置文件时） | 带签名的 inline `INSERT ... VALUES`：`auto`、`on`、`off`（也可用 `HOUSEGATE_SI_INLINE_VALUES`） |
 | `-listen` | agent 模式且无配置文件时为 `127.0.0.1:9000`，否则 `:9001` | proxy 监听地址 |
