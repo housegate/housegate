@@ -491,6 +491,10 @@ func arbiterProtoEnvelopeFixture() StatementEnvelope {
 }
 
 type recordingArbiterIngressClient struct {
+	// The nil embed supplies the snapshot-query RPCs the statement submitter
+	// never calls; reaching one panics the test.
+	pb.ArbiterIngressClient
+
 	calls           int
 	last            *pb.StatementEnvelopeV2
 	ack             *pb.SequencedAck
