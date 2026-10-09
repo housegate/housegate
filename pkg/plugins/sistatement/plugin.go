@@ -633,11 +633,13 @@ func (p *Plugin) OnQueryInputCompleteStrict(ctx context.Context, qctx *plugin.Qu
 	})
 	if err != nil {
 		// No token exists, so nothing has left the agent: the seq is provably
-		// unspent. This is the only failure after a statement id exists that
-		// releases locally (the nonce failure in reserveStatementID releases
-		// before any id exists); any later local failure (another strict hook,
-		// the upstream write) burns the seq at OnQueryComplete, because a
-		// partial write cannot be proven unspent.
+		// unspent and is released here (the nonce failure in
+		// reserveStatementID releases before any id exists). A later local
+		// failure before the Query is written (another strict hook, a missing
+		// upstream, a lost active-query race) is released by OnQueryAbort on
+		// Relay's UpstreamQueryUnsent proof; a failure once the upstream write
+		// began burns the seq at OnQueryComplete, because a partial write
+		// cannot be proven unspent.
 		p.releaseSeq(counter, seq)
 		return fmt.Errorf("storage_integrity agent: sign statement %s: %w", statementID, err)
 	}
@@ -701,19 +703,37 @@ func (p *Plugin) OnException(_ context.Context, sess chsession.Session, exc *chp
 	return nil
 }
 
-// OnQueryAbort drops the buffer for the exact query.
-func (p *Plugin) OnQueryAbort(_ context.Context, qctx *plugin.QueryContext) {
+// OnQueryAbort drops the buffer for the exact query. When Relay proves the
+// statement's Query never reached the upstream writer (UpstreamQueryUnsent:
+// a later strict hook refused, the upstream was gone, the active-query race
+// was lost), the seq reserved for that statement is provably unspent and is
+// released (spec 2026-10-09 §6.5). Without that proof an abort leaves the
+// reservation to OnQueryComplete, which burns it: Relay also aborts after the
+// Query was sent, for example at the sample step, where only a marked
+// Exception may still recycle the seq.
+func (p *Plugin) OnQueryAbort(ctx context.Context, qctx *plugin.QueryContext) {
 	if p == nil || qctx == nil || qctx.Session == nil || qctx.Query == nil {
 		return
 	}
+	sessID := qctx.Session.ID()
+	var release *reservedSeq
 	p.mu.Lock()
-	if st := p.pending[qctx.Session.ID()]; st != nil && st.queryID == qctx.Query.ID {
-		delete(p.pending, qctx.Session.ID())
+	if st := p.pending[sessID]; st != nil && st.queryID == qctx.Query.ID {
+		delete(p.pending, sessID)
 	}
-	if use, ok := p.useNext[qctx.Session.ID()]; ok && use.queryID == qctx.Query.ID {
-		delete(p.useNext, qctx.Session.ID())
+	if use, ok := p.useNext[sessID]; ok && use.queryID == qctx.Query.ID {
+		delete(p.useNext, sessID)
+	}
+	if r := p.reserved[sessID]; qctx.UpstreamQueryUnsent && r != nil && !r.resolved && r.statementID == qctx.Query.ID {
+		r.resolved = true
+		release = r
 	}
 	p.mu.Unlock()
+	if release != nil {
+		_, logger := log.FromContext(ctx)
+		logger.Infow("sistatement: statement never reached upstream; releasing client_seq", "statement_id", release.statementID, "client_seq", release.seq)
+		p.releaseSeq(release.counter, release.seq)
+	}
 }
 
 // OnQuerySuccess commits a standalone USE only after Relay observes the
