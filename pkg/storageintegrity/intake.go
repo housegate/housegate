@@ -176,7 +176,7 @@ func EnvelopeFromAdmission(adm AdmissionRecord) (StatementEnvelope, error) {
 	if adm.RowIDProfileID != payloadexec.RowIDProfileID {
 		return StatementEnvelope{}, fmt.Errorf("intake: admission %s row_id_profile_id %q, want %q", adm.StatementID, adm.RowIDProfileID, payloadexec.RowIDProfileID)
 	}
-	stmtID, err := ParseLegacyStatementID(adm.StatementID)
+	stmtID, err := ParseStatementID(adm.StatementID)
 	if err != nil {
 		return StatementEnvelope{}, fmt.Errorf("intake: admission %s invalid statement id: %w", adm.StatementID, err)
 	}

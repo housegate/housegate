@@ -9,6 +9,10 @@ filegroup(
     visibility = ["//pkg/replay/snapshotquery:__pkg__"],
 )
 
+# The client-lane statement JWS vectors are read by pkg/storageintegrity's
+# lane-grammar test (spec 2026-10-09 D10).
+exports_files(["testdata/statement_jws_v2_lanes.json"])
+
 go_library(
     name = "auth",
     srcs = [
@@ -40,6 +44,7 @@ go_test(
         "relay_signer_test.go",
         "snapshot_query_control_test.go",
         "snapshot_schema_certificate_test.go",
+        "statement_v2_lane_vectors_test.go",
         "statement_v2_test.go",
         "statement_v2_vectors_test.go",
         "statement_v3_test.go",

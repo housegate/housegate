@@ -6,6 +6,8 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -178,9 +180,17 @@ type presendFixture struct {
 	metrics *presendSeqMetrics
 	h       *deferredHarness
 	site    *presendSiteHook
+	laneDir string // non-empty: the plugin reserves on a client lane here
 }
 
 func newPresendFixture(t *testing.T, site presendSite, inline bool) *presendFixture {
+	t.Helper()
+	return newPresendFixtureWith(t, site, inline, false)
+}
+
+// newPresendFixtureWith builds the fixture; laned makes the network report
+// client lanes enabled, so every statement reserves on a client lane.
+func newPresendFixtureWith(t *testing.T, site presendSite, inline, laned bool) *presendFixture {
 	t.Helper()
 	ns := network.NewInMemoryNetworkState()
 	schema := presendSchema()
@@ -203,6 +213,13 @@ func newPresendFixture(t *testing.T, site presendSite, inline bool) *presendFixt
 	t.Cleanup(func() { _ = seq.Close() })
 	metrics := &presendSeqMetrics{}
 	opts := sistatement.Options{Signer: signer, Schemas: ns, NetworkID: presendNetworkID, Seq: seq, MaxPayloadBytes: 1 << 20, Observer: metrics}
+	var laneDir string
+	if laned {
+		laneDir = t.TempDir()
+		opts.Lanes = sistatement.LaneModeAuto
+		opts.ClientLanesEnabled = func() bool { return true }
+		opts.LaneDir = func(string) (string, error) { return laneDir, nil }
+	}
 	if inline {
 		opts.Evaluator = presendEvaluator{}
 		opts.InlineValues = sistatement.InlineValuesOptions{Enabled: true, EvaluationTimeout: 5 * time.Second, MaxRows: 1000}
@@ -211,6 +228,7 @@ func newPresendFixture(t *testing.T, site presendSite, inline bool) *presendFixt
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = si.Close() })
 	siteHook := &presendSiteHook{site: site, input: make(chan struct{}, 1)}
 	chain := &plugin.PluginChain{
 		QueryPlugins:                    []plugin.QueryPlugin{materializedMarker{}, si},
@@ -224,7 +242,7 @@ func newPresendFixture(t *testing.T, site presendSite, inline bool) *presendFixt
 		ClosePlugins:                    []plugin.ClosePlugin{si},
 	}
 	h := newPresendHarness(t, chain, siteHook)
-	return &presendFixture{si: si, seq: seq, metrics: metrics, h: h, site: siteHook}
+	return &presendFixture{si: si, seq: seq, metrics: metrics, h: h, site: siteHook, laneDir: laneDir}
 }
 
 // newPresendHarness is newDeferredHarness with the session wrapped so a site
@@ -284,9 +302,41 @@ func (f *presendFixture) run(t *testing.T, inline bool) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	f.h.close(t)
+	if f.laneDir != "" {
+		if lane := f.onlyLane(t); f.seq.Last() != 0 || lane.Next != 2 {
+			t.Fatalf("legacy high watermark = %d, lane %s next = %d; want exactly one reservation, on the client lane", f.seq.Last(), lane.Lane, lane.Next)
+		}
+		return
+	}
 	if f.seq.Last() != 1 {
 		t.Fatalf("client_seq high watermark = %d, want exactly one reservation", f.seq.Last())
 	}
+}
+
+// presendLaneFile is the on-disk state of a client lane.
+type presendLaneFile struct {
+	Lane      string   `json:"lane"`
+	Next      uint64   `json:"next"`
+	Free      []uint64 `json:"free"`
+	Abandoned bool     `json:"abandoned"`
+}
+
+// onlyLane reads the single client lane the laned fixture's plugin acquired.
+func (f *presendFixture) onlyLane(t *testing.T) presendLaneFile {
+	t.Helper()
+	paths, err := filepath.Glob(filepath.Join(f.laneDir, "lanes", "*.json"))
+	if err != nil || len(paths) != 1 {
+		t.Fatalf("lane files = %v (%v), want exactly one", paths, err)
+	}
+	raw, err := os.ReadFile(paths[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lane presendLaneFile
+	if err := json.Unmarshal(raw, &lane); err != nil {
+		t.Fatal(err)
+	}
+	return lane
 }
 
 func TestRelay_SignedInsertPreSendTerminationReleasesClientSeq(t *testing.T) {

@@ -298,7 +298,7 @@ func payloadStateFromProto(state pb.PayloadState) (PayloadState, error) {
 // ArbiterStatementEnvelopeToProto converts the HouseGate-core envelope to the
 // frozen arbiter-proto StatementEnvelopeV2 wire shape.
 func ArbiterStatementEnvelopeToProto(env StatementEnvelope) (*pb.StatementEnvelopeV2, error) {
-	id, err := ParseLegacyStatementID(env.StatementID)
+	id, err := ParseStatementID(env.StatementID)
 	if err != nil {
 		return nil, fmt.Errorf("storageintegrity: invalid statement id %q: %w", env.StatementID, err)
 	}
@@ -341,6 +341,7 @@ func ArbiterStatementEnvelopeToProto(env StatementEnvelope) (*pb.StatementEnvelo
 	return &pb.StatementEnvelopeV2{
 		StatementId: &pb.StatementID{
 			ClientAccount: id.Account,
+			ClientLane:    id.Lane,
 			ClientSeq:     id.Seq,
 			ClientNonce:   id.Nonce,
 		},
@@ -373,6 +374,16 @@ var AdmissionCodeSchemaNotAllowed = pb.AdmissionCode_ADMISSION_CODE_SCHEMA_NOT_A
 // marked unspent (spec 2026-10-09 §6.6).
 var AdmissionCodeDuplicateClientSeq = pb.AdmissionCode_ADMISSION_CODE_DUPLICATE_CLIENT_SEQ.String()
 
+// AdmissionCodeLaneBudgetExceeded is the arbiter's refusal of a statement that
+// would open one client lane too many for its account (spec 2026-10-09 D13).
+// The coordinate is unspent; the agent switches to its legacy lane.
+var AdmissionCodeLaneBudgetExceeded = pb.AdmissionCode_ADMISSION_CODE_LANE_BUDGET_EXCEEDED.String()
+
+// AdmissionCodeGapBudgetExceeded is the arbiter's refusal of a statement that
+// would open more than the subject's budget of gap ranges (spec 2026-10-09
+// §6.5). The coordinate is unspent; the agent abandons a client lane.
+var AdmissionCodeGapBudgetExceeded = pb.AdmissionCode_ADMISSION_CODE_GAP_BUDGET_EXCEEDED.String()
+
 // SubmitOutcomeFromSequencedAck maps Arbiter's application-level admission
 // result into the existing staged-intake outcome categories.
 func SubmitOutcomeFromSequencedAck(ack *pb.SequencedAck) SubmitOutcome {
@@ -392,7 +403,8 @@ func SubmitOutcomeFromSequencedAck(ack *pb.SequencedAck) SubmitOutcome {
 		pb.AdmissionCode_ADMISSION_CODE_INVALID_SIGNATURE,
 		pb.AdmissionCode_ADMISSION_CODE_INVALID_PROOF,
 		pb.AdmissionCode_ADMISSION_CODE_MALFORMED,
-		pb.AdmissionCode_ADMISSION_CODE_GAP_BUDGET_EXCEEDED:
+		pb.AdmissionCode_ADMISSION_CODE_GAP_BUDGET_EXCEEDED,
+		pb.AdmissionCode_ADMISSION_CODE_LANE_BUDGET_EXCEEDED:
 		return SubmitOutcome{Category: OutcomeTerminalReject, Reason: firstNonEmpty(reason, ack.GetCode().String()), AdmissionCode: ack.GetCode().String()}
 	default:
 		return SubmitOutcome{Category: OutcomeUnknown, Reason: firstNonEmpty(reason, ack.GetCode().String())}

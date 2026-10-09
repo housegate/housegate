@@ -1540,3 +1540,58 @@ func TestIngressStrictHookMarksAdmissionFailuresOnly(t *testing.T) {
 		})
 	}
 }
+
+func TestIngressRefusesLanedIDsUntilClientLanesAreEnabled(t *testing.T) {
+	const lanedID = "5e1f0a2b7c9d3e4f"
+	for _, enabled := range []bool{false, true} {
+		p, signer := newSignedIngressWithConfig(t, Config{ClientLanesEnabled: func() bool { return enabled }})
+		sql := "INSERT INTO tenant.events FORMAT Native"
+		qctx := signedQueryContext(t, 1, signer, sql, sql, sqlmeta.StatementTypeInsert)
+		qctx.Query.ID = strings.ToLower(signer.Address()) + ":" + lanedID + ":1:n1" // the grammar requires a lowercase account
+		defaultPayload := []byte{byte(chproto.ClientDataCode), 0, 0xab, 0xcd}
+		withStatementToken(t, qctx, signer, v2Statement(signer, qctx.Query.ID, sql, payloadexec.TableSchemaHash("testnet-v2", ingressSchema()), defaultPayload, uint32(qctx.Session.State().ClientRevision)))
+		err := p.OnQuery(context.Background(), qctx)
+		lanesRefusal := err != nil && err.Error() == "storage_integrity: client lanes are not enabled on this network"
+		if enabled == lanesRefusal {
+			t.Fatalf("enabled=%v: OnQuery = %v", enabled, err)
+		}
+	}
+}
+
+// TestIngressAdmitsALanedIDOnceClientLanesAreEnabled closes the loose
+// enabled=true branch above: with lanes on, a laned id signed by its own
+// account goes through capture to an admission that carries it verbatim,
+// and a laned id naming another account is still refused by the signer bind.
+func TestIngressAdmitsALanedIDOnceClientLanesAreEnabled(t *testing.T) {
+	p, signer := newSignedIngressWithConfig(t, Config{ClientLanesEnabled: func() bool { return true }})
+	sql := "INSERT INTO tenant.events FORMAT Native"
+	qctx := signedQueryContext(t, 31, signer, sql, sql, sqlmeta.StatementTypeInsert)
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{OriginalDatabase: "tenant", OriginalTable: "events", LogicalDatabase: "tenant", PhysicalDatabase: "tenant", IsStorageIntegrity: true}}
+	lanedID := strings.ToLower(signer.Address()) + ":5e1f0a2b7c9d3e4f:1:n1"
+	qctx.Query.ID = lanedID
+	payload := []byte{byte(chproto.ClientDataCode), 0, 1, 2, 3}
+	withDefaultCaptureToken(t, qctx, signer, payload)
+
+	if err := p.OnQuery(context.Background(), qctx); err != nil {
+		t.Fatalf("OnQuery: %v", err)
+	}
+	if err := p.OnClientDataStrict(context.Background(), qctx, payload); err != nil {
+		t.Fatalf("OnClientDataStrict: %v", err)
+	}
+	p.OnQueryInputComplete(context.Background(), qctx)
+	admission, err := p.ConsumeAdmission(qctx.Session.ID())
+	if err != nil {
+		t.Fatalf("ConsumeAdmission: %v", err)
+	}
+	if admission.StatementID != lanedID {
+		t.Fatalf("admission statement id = %q, want %q", admission.StatementID, lanedID)
+	}
+
+	other := signedQueryContext(t, 32, signer, sql, sql, sqlmeta.StatementTypeInsert)
+	other.AccessedTables = qctx.AccessedTables
+	other.Query.ID = "0x0000000000000000000000000000000000000001:5e1f0a2b7c9d3e4f:1:n1"
+	withDefaultCaptureToken(t, other, signer, payload)
+	if err := p.OnQuery(context.Background(), other); err == nil || !strings.Contains(err.Error(), "does not match authenticated signer") {
+		t.Fatalf("laned id naming another account: OnQuery = %v", err)
+	}
+}

@@ -24,6 +24,29 @@ const maxClockSkew = 5 * time.Second
 // on the P7 fallback path.
 const infoFailureTTL = time.Minute
 
+// infoSuccessTTL bounds how long a successful info answer is reused per
+// database. An agent that cached client_lanes_enabled=false before the
+// network activated client lanes picks the activation up within it, without a
+// restart (spec 2026-10-09 §6.4, preflight F21). One info RPC per database per
+// TTL is the cost.
+const infoSuccessTTL = time.Minute
+
+// infoRefreshRetry is the minimum interval between refresh attempts of an
+// expired info answer whose last refresh failed; the stale answer is served
+// meanwhile (stale-while-error).
+const infoRefreshRetry = 5 * time.Second
+
+// infoEntry is a cached successful info answer and when it was fetched.
+type infoEntry struct {
+	info registry.StorageIntegrityInfo
+	at   time.Time
+	// retryAt is the earliest next refresh after a failed one; refreshing
+	// marks the one refresh in flight (single-flight). Both apply only to an
+	// expired entry, which is served meanwhile.
+	retryAt    time.Time
+	refreshing bool
+}
+
 // discoveryWarnInterval throttles the P7 fallback warning per database.
 const discoveryWarnInterval = time.Minute
 
@@ -46,20 +69,31 @@ func (p *Plugin) observeDiscovery(step string) {
 }
 
 // siInfo returns the hosting indexer's SI info for database (spec 2026-10-09
-// §6.4 step 3). A success is cached for the process lifetime and runs the
-// clock-skew check once. A failure, including an answer without a
-// network_id, is remembered for infoFailureTTL and returned with its step;
-// only an actual lookup counts toward the discovery-failure metric.
+// §6.4 step 3). A success is cached for infoSuccessTTL; an older entry
+// triggers one refresh at a time (single-flight; concurrent statements are
+// served the stale answer), and when that refresh fails the last good answer
+// is still served (stale-while-error, with a throttled warning) and retried
+// no sooner than infoRefreshRetry later: expiry never turns a good answer into
+// the configured fallback or a refusal. Every successful lookup runs the clock-skew check,
+// which warns once per database. A failure with no good answer, including an
+// answer without a network_id, is remembered for infoFailureTTL and returned
+// with its step; only an actual lookup counts toward the discovery-failure
+// metric.
 func (p *Plugin) siInfo(ctx context.Context, database string) (registry.StorageIntegrityInfo, string, error) {
 	now := p.now()
 	p.mu.Lock()
-	if info, ok := p.infos[database]; ok {
+	stale, haveStale := p.infos[database]
+	if haveStale && (now.Sub(stale.at) < infoSuccessTTL || stale.refreshing || now.Before(stale.retryAt)) {
 		p.mu.Unlock()
-		return info, "", nil
+		return stale.info, "", nil
 	}
-	if f, ok := p.infoFailures[database]; ok && now.Before(f.until) {
+	if f, ok := p.infoFailures[database]; ok && !haveStale && now.Before(f.until) {
 		p.mu.Unlock()
 		return registry.StorageIntegrityInfo{}, f.step, f.err
+	}
+	if haveStale {
+		stale.refreshing = true
+		p.infos[database] = stale
 	}
 	p.mu.Unlock()
 	info, err := p.discovery.StorageIntegrityInfo(ctx, database)
@@ -69,13 +103,29 @@ func (p *Plugin) siInfo(ctx context.Context, database string) (registry.StorageI
 	}
 	if err != nil {
 		p.observeDiscovery(step)
+		if haveStale {
+			p.mu.Lock()
+			if e, ok := p.infos[database]; ok {
+				e.refreshing = false
+				// Stamp the backoff from the failure, not the lookup start: a slow
+				// failure would otherwise leave a retryAt that has already passed.
+				e.retryAt = p.now().Add(infoRefreshRetry)
+				p.infos[database] = e
+			}
+			p.mu.Unlock()
+			_, logger := log.FromContext(ctx)
+			logger.WarnEvery(fmt.Sprintf("sistatement-info-refresh-%p-%s", p, database), p.discoveryWarnEvery,
+				"sistatement: refreshing the hosting indexer's SI info failed; serving the last good answer",
+				"database", database, "age", now.Sub(stale.at), "step", step, "err", err)
+			return stale.info, "", nil
+		}
 		p.mu.Lock()
 		p.infoFailures[database] = infoFailure{step: step, err: err, until: now.Add(infoFailureTTL)}
 		p.mu.Unlock()
 		return registry.StorageIntegrityInfo{}, step, err
 	}
 	p.mu.Lock()
-	p.infos[database] = info
+	p.infos[database] = infoEntry{info: info, at: now}
 	delete(p.infoFailures, database)
 	p.mu.Unlock()
 	p.checkSkew(ctx, database, info)
@@ -88,9 +138,14 @@ func (p *Plugin) siInfo(ctx context.Context, database string) (registry.StorageI
 // used with a throttled warning; without one the INSERT is refused. A
 // discovered id that differs from a configured one is refused: the agent never
 // signs for the wrong network.
-func (p *Plugin) resolveNetworkID(ctx context.Context, database string) (string, error) {
+//
+// lanesEnabled is whether that network uses client lanes: the hosting
+// indexer's client_lanes_enabled with discovery (false when the lookup failed,
+// which keeps the always-valid legacy lane), and Options.ClientLanesEnabled
+// without it.
+func (p *Plugin) resolveNetworkID(ctx context.Context, database string) (networkID string, lanesEnabled bool, err error) {
 	if p.discovery == nil {
-		return p.networkID, nil
+		return p.networkID, p.clientLanesEnabled != nil && p.clientLanesEnabled(), nil
 	}
 	info, step, err := p.siInfo(ctx, database)
 	if err != nil {
@@ -99,15 +154,31 @@ func (p *Plugin) resolveNetworkID(ctx context.Context, database string) (string,
 			logger.WarnEvery(fmt.Sprintf("sistatement-discovery-%p-%s", p, database), p.discoveryWarnEvery,
 				"sistatement: network discovery failed; signing for the configured storage_integrity.agent.network_id",
 				"database", database, "network_id", p.networkID, "step", step, "err", err)
-			return p.networkID, nil
+			return p.networkID, false, nil
 		}
-		return "", fmt.Errorf("storage_integrity agent: cannot discover network id from the indexer hosting %s: %w", database, err)
+		return "", false, fmt.Errorf("storage_integrity agent: cannot discover network id from the indexer hosting %s: %w", database, err)
 	}
 	discovered := strings.TrimSpace(info.NetworkID)
 	if p.networkID != "" && discovered != strings.TrimSpace(p.networkID) {
-		return "", fmt.Errorf("storage_integrity agent: the indexer hosting %s reports network %s but storage_integrity.agent.network_id is %s; refusing to sign for the wrong network", database, discovered, p.networkID)
+		return "", false, fmt.Errorf("storage_integrity agent: the indexer hosting %s reports network %s but storage_integrity.agent.network_id is %s; refusing to sign for the wrong network", database, discovered, p.networkID)
 	}
-	return discovered, nil
+	return discovered, info.ClientLanesEnabled, nil
+}
+
+// expireLanesInfo marks the cached info for database expired and clears its
+// client_lanes_enabled, after the ingress refused a laned id as not enabled:
+// the next statement re-reads the hosting indexer, and if that refresh fails
+// the stale answer it falls back to (stale-while-error) keeps the network id
+// but signs on the legacy lane instead of repeating the refused laned id.
+func (p *Plugin) expireLanesInfo(database string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if e, ok := p.infos[database]; ok {
+		e.info.ClientLanesEnabled = false
+		e.at = time.Time{}
+		e.retryAt = time.Time{}
+		p.infos[database] = e
+	}
 }
 
 // checkSkew warns once per database when the local clock is more than
@@ -199,9 +270,50 @@ func (p *Plugin) seqFor(networkID string) (*SeqCounter, error) {
 	return c, nil
 }
 
-// Close releases every counter this plugin holds, Options.Seq included, so
-// their locks are free for the next agent; later INSERTs fail with
-// ErrSeqClosed. It is idempotent.
+// selectorFor returns the network's lane selector, creating it at the
+// network's first SI write. It opens nothing: the lane pool is opened when a
+// statement first uses a client lane.
+func (p *Plugin) selectorFor(networkID string) (*laneSelector, error) {
+	p.seqMu.Lock()
+	defer p.seqMu.Unlock()
+	if p.seqClosed {
+		return nil, fmt.Errorf("storage_integrity agent: client_seq store for network %s: %w", networkID, ErrSeqClosed)
+	}
+	if s, ok := p.selectors[networkID]; ok {
+		return s, nil
+	}
+	var observer LaneObserver
+	if o, ok := p.observer.(LaneObserver); ok && o != nil {
+		observer = o
+	}
+	s := newLaneSelector(p.lanes, func() (*LanePool, error) { return p.openLanesFor(networkID) }, p.maxInflight, observer)
+	p.selectors[networkID] = s
+	return s, nil
+}
+
+// existingSelector is the network's selector, or nil before its first SI
+// write and after Close.
+func (p *Plugin) existingSelector(networkID string) *laneSelector {
+	p.seqMu.Lock()
+	defer p.seqMu.Unlock()
+	return p.selectors[networkID]
+}
+
+// openLanesFor opens the lane pool under the network's si directory.
+func (p *Plugin) openLanesFor(networkID string) (*LanePool, error) {
+	if p.laneDir == nil {
+		return nil, errors.New("no client lane directory is configured")
+	}
+	dir, err := p.laneDir(networkID)
+	if err != nil {
+		return nil, fmt.Errorf("client lane directory for network %s: %w", networkID, err)
+	}
+	return p.openLanePool(dir)
+}
+
+// Close releases every counter and client lane this plugin holds,
+// Options.Seq included, so their locks are free for the next agent; later
+// INSERTs fail with ErrSeqClosed. It is idempotent.
 func (p *Plugin) Close() error {
 	if p == nil {
 		return nil
@@ -210,6 +322,9 @@ func (p *Plugin) Close() error {
 	defer p.seqMu.Unlock()
 	p.seqClosed = true
 	var errs []error
+	for _, s := range p.selectors {
+		errs = append(errs, s.close())
+	}
 	for _, c := range p.seqs {
 		errs = append(errs, c.Close())
 	}

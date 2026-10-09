@@ -491,6 +491,10 @@ func arbiterProtoEnvelopeFixture() StatementEnvelope {
 }
 
 type recordingArbiterIngressClient struct {
+	// The nil embed supplies the snapshot-query RPCs the statement submitter
+	// never calls; reaching one panics the test.
+	pb.ArbiterIngressClient
+
 	calls           int
 	last            *pb.StatementEnvelopeV2
 	ack             *pb.SequencedAck
@@ -571,4 +575,44 @@ func (s *recordingPutPayloadStream) Send(frame *pb.PutPayloadFrame) error {
 func (s *recordingPutPayloadStream) CloseAndRecv() (*pb.PutPayloadResult, error) {
 	s.closed = true
 	return s.result, s.closeErr
+}
+
+func TestArbiterStatementEnvelopeToProtoCarriesTheLane(t *testing.T) {
+	env := arbiterProtoEnvelopeFixture()
+	got, err := ArbiterStatementEnvelopeToProto(env)
+	if err != nil || got.GetStatementId().GetClientLane() != "" {
+		t.Fatalf("legacy: %v, %v", got.GetStatementId(), err)
+	}
+	env.StatementID = "0xabc:5e1f0a2b7c9d3e4f:7:nonce-7"
+	got, err = ArbiterStatementEnvelopeToProto(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := got.GetStatementId()
+	if id.GetClientAccount() != "0xabc" || id.GetClientLane() != "5e1f0a2b7c9d3e4f" || id.GetClientSeq() != 7 || id.GetClientNonce() != "nonce-7" {
+		t.Fatalf("laned: %v", id)
+	}
+}
+
+// TestEnvelopeFromAdmissionAcceptsALanedID pins the intake half of the laned
+// path: once the ingress admits a laned id the intake must turn it into the
+// envelope unchanged, still binding its account to the signer.
+func TestEnvelopeFromAdmissionAcceptsALanedID(t *testing.T) {
+	adm := validNativeAdmissionV2(t)
+	adm.StatementID = adm.Signer + ":5e1f0a2b7c9d3e4f:1:n1"
+	env, err := EnvelopeFromAdmission(adm)
+	if err != nil {
+		t.Fatalf("EnvelopeFromAdmission(laned): %v", err)
+	}
+	if env.StatementID != adm.StatementID {
+		t.Fatalf("envelope statement id = %q, want %q", env.StatementID, adm.StatementID)
+	}
+	msg, err := ArbiterStatementEnvelopeToProto(env)
+	if err != nil || msg.GetStatementId().GetClientLane() != "5e1f0a2b7c9d3e4f" {
+		t.Fatalf("proto statement id = %v, err = %v", msg.GetStatementId(), err)
+	}
+	adm.StatementID = "0x0000000000000000000000000000000000000001:5e1f0a2b7c9d3e4f:1:n1"
+	if _, err := EnvelopeFromAdmission(adm); err == nil || !strings.Contains(err.Error(), "client_account does not match signer") {
+		t.Fatalf("laned id naming another account: err = %v", err)
+	}
 }

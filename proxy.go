@@ -131,6 +131,16 @@ type Options struct {
 	// storage_integrity.tables; when nil, an enabled server serves the
 	// configured tables through sitable.Static.
 	StorageIntegrityTableState sitable.TableState
+	// StorageIntegrityClientLanes reports whether the arbiter committed client
+	// lanes (spec 2026-10-09 D13); sentio-node reads it from its table-registry
+	// follower. Nil means disabled: the SI ingress refuses laned statement ids.
+	// It is called on the query path once per laned SI INSERT. It receives no
+	// context, so it must be cheap and non-blocking, for example an atomic read
+	// of a follower snapshot, and never an RPC. In agent mode the same port
+	// says "client lanes are active on this host's network": an agent without
+	// RPC discovery (a host-injected or YAML status source) signs on a client
+	// lane only while it reports true, and reads it once per SI INSERT.
+	StorageIntegrityClientLanes func() bool
 	// StorageIntegrityWriteMeter optionally receives an OnStatementSequenced
 	// event for every storage-integrity statement the built-in runtime got
 	// accepted by the arbiter (spec 2026-10-09 §6.9). Best-effort and

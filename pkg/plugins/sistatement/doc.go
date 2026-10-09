@@ -8,6 +8,8 @@
 // housegate-statement-v2 token into SQL_x_statement_token before the Query is
 // forwarded. Before claiming the INSERT it moves the session to the indexer
 // hosting the target database when that differs from the current upstream
-// (spec 2026-10-09 §6.4, D19; switch.go). It runs after materialize and before
-// the agent auth signer.
+// (spec 2026-10-09 §6.4, D19; switch.go). The client_seq is reserved on the
+// legacy lane or, once the network reports client lanes enabled, on a client
+// lane of this process (spec 2026-10-09 D15; lanes.go, lanepool.go). It runs
+// after materialize and before the agent auth signer.
 package sistatement

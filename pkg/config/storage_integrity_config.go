@@ -100,13 +100,18 @@ type StorageIntegrityAgentConfig struct {
 	// StateDir holds <account>.seq, the durable client_seq counter, for every
 	// network. Optional: empty uses the per-OS default base
 	// (DefaultAgentStateBase) with one counter per network under
-	// <base>/si/<network_id>/<account>/ (plan decision P4).
+	// <base>/si/<network_id>/<account>/ (plan decision P4). Client lanes
+	// live in <state_dir>/<network_id>/<account>/lanes/, or in the
+	// per-network default directory's lanes/.
 	StateDir string `json:"state_dir" yaml:"state_dir"`
-	// Lanes selects client_seq lanes: "auto" (default) uses lanes when the
-	// hosting indexer reports them enabled, "off" keeps legacy lane-less ids
-	// (the driver sidecar, HOUSEGATE_SI_LANES=off). No indexer reports lanes
-	// yet, so both use the legacy lane today.
+	// Lanes selects client_seq lanes (spec 2026-10-09 D15): "auto" (default)
+	// uses a client lane whenever the hosting indexer reports
+	// client_lanes_enabled, "off" keeps legacy lane-less ids (the driver
+	// sidecar, HOUSEGATE_SI_LANES=off).
 	Lanes string `json:"lanes" yaml:"lanes"`
+	// MaxInflightPerLane bounds SI statements between reservation and
+	// outcome on one client lane (default 16); the legacy lane is unbounded.
+	MaxInflightPerLane int `json:"max_inflight_per_lane" yaml:"max_inflight_per_lane"`
 	// ReadMode, when set, injects SQL_x_read_mode on SELECTs ("safe" or
 	// "unsafe_latest"); empty keeps the server default.
 	ReadMode string `json:"read_mode" yaml:"read_mode"`
@@ -434,6 +439,9 @@ func (c StorageIntegrityConfig) validateAgent(root *Config) error {
 	default:
 		errs = append(errs, fmt.Errorf("storage_integrity.agent.lanes %q is invalid (want auto or off)", a.Lanes))
 	}
+	if a.MaxInflightPerLane < 0 {
+		errs = append(errs, fmt.Errorf("storage_integrity.agent.max_inflight_per_lane %d must not be negative", a.MaxInflightPerLane))
+	}
 	switch a.ReadMode {
 	case "", "safe", "unsafe_latest":
 	default:
@@ -475,6 +483,19 @@ func (c StorageIntegrityConfig) validateAgent(root *Config) error {
 		return fmt.Errorf("storage_integrity.agent: %w", joined)
 	}
 	return nil
+}
+
+// DefaultMaxInflightPerLane is storage_integrity.agent.max_inflight_per_lane
+// when unset (spec 2026-10-09 §6.5).
+const DefaultMaxInflightPerLane = 16
+
+// EffectiveMaxInflightPerLane is MaxInflightPerLane with 0 mapped to
+// DefaultMaxInflightPerLane.
+func (a StorageIntegrityAgentConfig) EffectiveMaxInflightPerLane() int {
+	if a.MaxInflightPerLane == 0 {
+		return DefaultMaxInflightPerLane
+	}
+	return a.MaxInflightPerLane
 }
 
 // InlineValuesPrerequisiteErrors returns the startup rules the signed inline
