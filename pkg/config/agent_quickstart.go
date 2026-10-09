@@ -72,20 +72,19 @@ func ApplyAgentQuickstart(cfg *Config, q AgentQuickstart) error {
 		if name == "" {
 			name = DefaultAgentNetwork
 		}
-		// -state, a config value and a pinned upstream all win over the
-		// preset; a pinned agent needs no network state to route.
+		// -state and a config value win over the preset. A pinned upstream
+		// does not: it only fixes where sessions go, while the preset's RPC
+		// still supplies the table status lookups and network-id discovery
+		// that -si auto signs with (the dialer stays pinned, so the preset is
+		// never used to choose an upstream).
 		switch {
-		case cfg.Agent.Upstream == "" && cfg.NetworkState.Source == "":
+		case cfg.NetworkState.Source == "":
 			cfg.NetworkState.Source = AgentNetworkPresets[name]
 		case q.Network != "" && cfg.NetworkState.Source != AgentNetworkPresets[name]:
 			// Final review M7: an explicitly given network that loses is
 			// reported rather than dropped silently.
-			winner, value := "network_state.source", cfg.NetworkState.Source
-			if cfg.Agent.Upstream != "" {
-				winner, value = "agent.upstream", cfg.Agent.Upstream
-			}
-			log.Warnw(fmt.Sprintf("agent: -network %s is ignored because %s is set (config file, -state, -agent-upstream or env); remove it to join the preset", name, winner),
-				"network", name, winner, value)
+			log.Warnw(fmt.Sprintf("agent: -network %s is ignored because network_state.source is set (config file, -state or env); remove it to join the preset", name),
+				"network", name, "network_state.source", cfg.NetworkState.Source)
 		}
 	}
 	if quick && !q.ListenSet {
@@ -104,9 +103,18 @@ func ApplyAgentQuickstart(cfg *Config, q AgentQuickstart) error {
 		// Discovery needs an RPC network state (plan decision P6).
 		cfg.StorageIntegrity.Agent.Enabled = cfg.NetworkState.IsRpcSource()
 		if !cfg.StorageIntegrity.Agent.Enabled {
-			// Final review M6: say why, once. Unsigned INSERTs into Active
-			// tables are refused by the server as stale (retryable 733).
-			log.Warnw("agent: storage-integrity signing is off: -si auto needs an RPC network state to discover the network id, and this agent has none (a pinned agent.upstream or a non-RPC network_state.source); INSERTs into storage-integrity tables are sent unsigned and the server refuses them. Pass -si on and set storage_integrity.agent.network_id to sign them",
+			// Final review M6: say why, once, and name the way out. Unsigned
+			// INSERTs into Active tables are refused by the server as stale
+			// (retryable 733).
+			why := "no network state source"
+			remedy := "pass -network <name> or -state <http(s)://rpc-url> to derive an RPC network state (a pinned -agent-upstream keeps routing)"
+			if cfg.NetworkState.Source != "" {
+				why = "a non-RPC network_state.source"
+				remedy = "point -state (network_state.source) at an RPC URL (http(s)://)"
+			}
+			log.Warnw("agent: storage-integrity signing is off: -si auto needs an RPC network state to look up table status and discover the network id, and this agent has "+why+
+				"; INSERTs into storage-integrity tables are sent unsigned and the server refuses them. To sign them, "+remedy+
+				", or pass -si on and set storage_integrity.agent.network_id to sign without discovery",
 				"network_state_source", cfg.NetworkState.Source, "agent_upstream", cfg.Agent.Upstream)
 		}
 	}

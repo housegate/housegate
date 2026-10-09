@@ -4,11 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -780,4 +785,144 @@ func TestAgentSeqOpener(t *testing.T) {
 			t.Fatalf("err = %v", err)
 		}
 	})
+}
+
+// Quickstart key + pinned -agent-upstream + network preset: routing stays on
+// the pinned address (the preset's RPC is never asked to choose an upstream)
+// while the preset's RPC supplies the table status lookups and network-id
+// discovery, so -si auto signs like a discovery agent does.
+func TestBuildAgent_PinnedQuickstartSignsThroughPresetRPC(t *testing.T) {
+	var mu sync.Mutex
+	var methods []string
+	rpc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Method string `json:"method"`
+			ID     uint64 `json:"id"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		mu.Lock()
+		methods = append(methods, req.Method)
+		mu.Unlock()
+		result := "null" // unknown database: the lookup falls back to this endpoint
+		if req.Method == "sentio_getStorageIntegrityTableStatus" {
+			result = `{"status":"active","schema_json":"{}","schema_hash":"0x1","registry_version":1}`
+		}
+		_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":%s}`, req.ID, result)
+	}))
+	t.Cleanup(rpc.Close)
+
+	pinnedLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pinnedLn.Close() })
+	accepted := make(chan struct{}, 1)
+	go func() {
+		if c, err := pinnedLn.Accept(); err == nil {
+			accepted <- struct{}{}
+			_ = c.Close()
+		}
+	}()
+
+	const preset = "devnet2"
+	prev := config.AgentNetworkPresets[preset]
+	config.AgentNetworkPresets[preset] = rpc.URL
+	t.Cleanup(func() { config.AgentNetworkPresets[preset] = prev })
+
+	cfg := config.Default()
+	cfg.Agent.PrivateKeyHex = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	cfg.Agent.Upstream = pinnedLn.Addr().String()
+	if err := config.ApplyAgentQuickstart(&cfg, config.AgentQuickstart{SIInlineValues: "off"}); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Listen = "127.0.0.1:0"
+	cfg.MetricsListen = ""
+	cfg.StorageIntegrity.Agent.StateDir = t.TempDir()
+	if !cfg.StorageIntegrity.Agent.Enabled || cfg.NetworkState.Source != rpc.URL || cfg.Agent.Upstream != pinnedLn.Addr().String() {
+		t.Fatalf("quickstart: si=%v source=%q upstream=%q", cfg.StorageIntegrity.Agent.Enabled, cfg.NetworkState.Source, cfg.Agent.Upstream)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+
+	bs, err := buildAgent(Options{Config: &cfg}, nil)
+	if err != nil {
+		t.Fatalf("buildAgent: %v", err)
+	}
+	t.Cleanup(bs.teardown)
+	chain := requireProxyServer(t, bs.listeners[0]).Hooks.(*plugin.PluginChain)
+	var si *sistatement.Plugin
+	for _, p := range chain.QueryPlugins {
+		if p, ok := p.(*sistatement.Plugin); ok {
+			si = p
+		}
+	}
+	if si == nil {
+		t.Fatal("a pinned quickstart agent must carry the SI statement plugin")
+	}
+
+	// Routing: every dial goes to the pinned address and asks the RPC nothing.
+	dialer, err := buildAgentDialer(Options{Config: &cfg}, nil, "0x00000000000000000000000000000000000000aa", "0x00000000000000000000000000000000000000aa", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	codec, err := dialer(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("pinned dial: %v", err)
+	}
+	_ = codec.Conn().(net.Conn).Close()
+	select {
+	case <-accepted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the pinned upstream was not dialed")
+	}
+	mu.Lock()
+	for _, m := range methods {
+		if m == "sentio_getIndexerInfos" || m == "sentio_getDatabaseInfoByAccount" {
+			t.Fatalf("a pinned agent must not run upstream discovery, RPC saw %v", methods)
+		}
+	}
+	mu.Unlock()
+
+	// Signing: statuses and discovery come from the preset RPC, the switch is off.
+	reg, err := agentNetworkState(Options{Config: &cfg}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts, _, err := wiringOptions(t, &cfg, reg, "0x00000000000000000000000000000000000000aa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opts.PinnedUpstream || opts.Discovery == nil || opts.Statuses == nil {
+		t.Fatalf("pinned=%v discovery=%v statuses=%v", opts.PinnedUpstream, opts.Discovery != nil, opts.Statuses != nil)
+	}
+	st, err := opts.Statuses.StorageIntegrityTableStatus(context.Background(), "shop", "orders")
+	if err != nil || st.Status != registry.TableStatusActive {
+		t.Fatalf("status = %+v, %v", st, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Contains(methods, "sentio_getStorageIntegrityTableStatus") {
+		t.Fatalf("the status lookup never reached the preset RPC: %v", methods)
+	}
+}
+
+// A pinned agent whose network_state.source is not RPC cannot discover: -si
+// auto stays off, there is no SI plugin, and the quickstart warning names the
+// remedy flags (final review M6).
+func TestBuildAgent_PinnedWithoutRPCStaysUnsigned(t *testing.T) {
+	cfg := config.Default()
+	cfg.Agent.PrivateKeyHex = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	cfg.Agent.Upstream = "127.0.0.1:1"
+	cfg.NetworkState.Source = filepath.Join(t.TempDir(), "network_state.yaml")
+	logs := captureAgentBuildLogs(t)
+	if err := config.ApplyAgentQuickstart(&cfg, config.AgentQuickstart{SIInlineValues: "off"}); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.StorageIntegrity.Agent.Enabled {
+		t.Fatal("-si auto must stay off without an RPC network state")
+	}
+	if out := logs.String(); !strings.Contains(out, "non-RPC network_state.source") || !strings.Contains(out, "-state") || !strings.Contains(out, "-si on") {
+		t.Fatalf("the warning must name the remedy flags:\n%s", out)
+	}
 }
