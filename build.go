@@ -955,6 +955,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			Operators:            reg,
 			DeniedAddresses:      ingressCfg.DeniedAddresses,
 			AllowedAddresses:     ingressCfg.AllowedAddresses,
+			ClientLanesEnabled:   opts.StorageIntegrityClientLanes,
 		})
 		queryPlugins = append(queryPlugins, storageIntegrityIngress)
 		strictDataPlugins = append(strictDataPlugins, storageIntegrityIngress)
@@ -972,6 +973,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			"request_timeout", ingressCfg.RequestTimeout.Duration,
 			"max_payload_bytes", ingressCfg.MaxPayloadBytes,
 			"runtime_enabled", cfg.StorageIntegrity.Runtime.Enabled,
+			"client_lanes_port", opts.StorageIntegrityClientLanes != nil,
 		)
 	}
 

@@ -85,3 +85,31 @@ func TestParseFlatStatementID_IsLegacyOnly(t *testing.T) {
 		t.Fatalf("laned id err = %v, want ErrClientLanesNotEnabled", err)
 	}
 }
+
+// TestValidClientLane pins the one lane rule (spec 2026-10-09 D9): exactly
+// ClientLaneHexLen lowercase hex characters. A1's parser tests already pin
+// both flat forms; this adds the lane predicate and the empty lane segment.
+func TestValidClientLane(t *testing.T) {
+	if ClientLaneHexLen != 16 {
+		t.Fatalf("ClientLaneHexLen = %d, want 16", ClientLaneHexLen)
+	}
+	if !ValidClientLane("5e1f0a2b7c9d3e4f") || !ValidClientLane("0000000000000000") || !ValidClientLane("ffffffffffffffff") {
+		t.Fatal("a 16-character lowercase hex lane must be valid")
+	}
+	for name, lane := range map[string]string{
+		"empty":     "",
+		"15 hex":    "5e1f0a2b7c9d3e4",
+		"17 hex":    "5e1f0a2b7c9d3e4f0",
+		"uppercase": "5E1F0A2B7C9D3E4F",
+		"not hex":   "5e1f0a2b7c9d3e4g",
+		"0x prefix": "0x1f0a2b7c9d3e4f",
+		"space":     "5e1f0a2b7c9d3e4 ",
+	} {
+		if ValidClientLane(lane) {
+			t.Errorf("%s: ValidClientLane(%q) = true", name, lane)
+		}
+	}
+	if _, err := ParseStatementID("0xabc::42:n"); err == nil {
+		t.Fatal("ParseStatementID accepted an empty lane segment")
+	}
+}

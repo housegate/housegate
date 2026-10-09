@@ -131,6 +131,10 @@ type Options struct {
 	// storage_integrity.tables; when nil, an enabled server serves the
 	// configured tables through sitable.Static.
 	StorageIntegrityTableState sitable.TableState
+	// StorageIntegrityClientLanes reports whether the arbiter committed client
+	// lanes (spec 2026-10-09 D13); sentio-node reads it from its table-registry
+	// follower. Nil means disabled: the SI ingress refuses laned statement ids.
+	StorageIntegrityClientLanes func() bool
 	// StorageIntegrityWriteMeter optionally receives an OnStatementSequenced
 	// event for every storage-integrity statement the built-in runtime got
 	// accepted by the arbiter (spec 2026-10-09 §6.9). Best-effort and

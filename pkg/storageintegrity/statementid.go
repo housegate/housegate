@@ -8,9 +8,9 @@ import (
 )
 
 // ErrClientLanesNotEnabled refuses a laned statement id on a network whose
-// arbiter has not activated client lanes (spec 2026-10-09 §6.1, D13). In
-// release A1 every laned id is refused with it; Plan B gates it on the
-// table-registry snapshot instead.
+// arbiter has not activated client lanes (spec 2026-10-09 §6.1, D13). The SI
+// ingress returns it while the host reports lanes disabled, and the
+// legacy-only parsers (ParseLegacyStatementID, ParseFlatStatementID) always.
 var ErrClientLanesNotEnabled = errors.New("storage_integrity: client lanes are not enabled on this network")
 
 // StatementID is the structured statement identity of spec 2026-10-09 §5.1.
@@ -40,7 +40,7 @@ func ParseStatementID(flat string) (StatementID, error) {
 		id.Account, seqText, id.Nonce = parts[0], parts[1], parts[2]
 	case 4:
 		id.Account, id.Lane, seqText, id.Nonce = parts[0], parts[1], parts[2], parts[3]
-		if !isLane(id.Lane) {
+		if !ValidClientLane(id.Lane) {
 			return StatementID{}, fmt.Errorf("requires a 16-character lowercase hex lane, got %q", id.Lane)
 		}
 	default:
@@ -66,8 +66,9 @@ func ParseStatementID(flat string) (StatementID, error) {
 	return id, nil
 }
 
-// ParseLegacyStatementID is ParseStatementID for components that do not
-// accept lanes yet: a laned id fails with ErrClientLanesNotEnabled.
+// ParseLegacyStatementID is ParseStatementID for callers that accept only the
+// legacy lane, such as the SDK's ParseFlatStatementID: a laned id fails with
+// ErrClientLanesNotEnabled.
 func ParseLegacyStatementID(flat string) (StatementID, error) {
 	id, err := ParseStatementID(flat)
 	if err != nil {
@@ -102,7 +103,14 @@ func (id StatementID) Subject() string {
 // IsLaned reports whether the id carries a lane segment.
 func (id StatementID) IsLaned() bool { return id.Lane != "" }
 
-func isLane(s string) bool { return len(s) == 16 && isLowerHex(s) }
+// ClientLaneHexLen is the length of a client lane: 8 random bytes in hex
+// (spec 2026-10-09 D9).
+const ClientLaneHexLen = 16
+
+// ValidClientLane reports whether lane is exactly 16 lowercase hex characters.
+// It is the grammar's only lane rule: ParseStatementID applies it to the lane
+// segment of a four-segment id.
+func ValidClientLane(lane string) bool { return len(lane) == ClientLaneHexLen && isLowerHex(lane) }
 
 func isLowerHex(s string) bool {
 	if s == "" {

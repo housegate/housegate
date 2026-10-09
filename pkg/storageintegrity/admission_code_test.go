@@ -39,3 +39,10 @@ func TestSubmitOutcomeCarriesTheStatementSeq(t *testing.T) {
 		t.Fatalf("AdmissionCodeDuplicateClientSeq = %q", AdmissionCodeDuplicateClientSeq)
 	}
 }
+
+func TestLaneBudgetIsATerminalRejectWithItsCode(t *testing.T) {
+	got := SubmitOutcomeFromSequencedAck(&pb.SequencedAck{Code: pb.AdmissionCode_ADMISSION_CODE_LANE_BUDGET_EXCEEDED, Message: "account holds 256 client lanes"})
+	if got.Category != OutcomeTerminalReject || got.AdmissionCode != AdmissionCodeLaneBudgetExceeded || got.AdmissionCode != "ADMISSION_CODE_LANE_BUDGET_EXCEEDED" {
+		t.Fatalf("outcome = %+v", got)
+	}
+}
