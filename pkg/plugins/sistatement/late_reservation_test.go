@@ -267,3 +267,119 @@ func TestLateReservation_CloseWithOutstandingSeqBurns(t *testing.T) {
 		t.Fatalf("burned=%v recycled=%d; want one unknown_outcome burn", metrics.burned, metrics.recycled)
 	}
 }
+
+// Spec 2026-10-09 §6.5: Relay proves a pre-send termination by setting
+// UpstreamQueryUnsent before OnQueryAbort (a later strict hook failing, a
+// missing upstream, a lost active-query race). The reservation is released
+// rather than burned, and the next statement reuses the seq under a fresh id.
+func TestLateReservation_UnsentAbortReleasesTheSeq(t *testing.T) {
+	p, seq, metrics := lateFixture(t)
+	sess := newSession(1, "")
+	q := insertQctx(sess, lateSQL)
+	if err := p.OnQuery(context.Background(), q); err != nil {
+		t.Fatal(err)
+	}
+	first := signDeferred(t, p, q)
+	q.UpstreamQueryUnsent = true
+	p.OnQueryAbort(context.Background(), q)
+	p.OnQueryComplete(context.Background(), sess)
+	p.OnClose(sess)
+
+	next := insertQctx(newSession(2, ""), lateSQL)
+	if err := p.OnQuery(context.Background(), next); err != nil {
+		t.Fatal(err)
+	}
+	second := signDeferred(t, p, next)
+	if seqOf(t, first) != 1 || seqOf(t, second) != 1 || second == first || seq.Last() != 1 {
+		t.Fatalf("first=%q second=%q last=%d; want seq 1 reused under a new statement id", first, second, seq.Last())
+	}
+	if metrics.recycled != 1 || len(metrics.burned) != 0 {
+		t.Fatalf("recycled=%d burned=%v; want one recycle and no burn", metrics.recycled, metrics.burned)
+	}
+}
+
+// Without Relay's proof an abort after the strict hook (the write began, the
+// client cancelled after send, the connection dropped) stays burned.
+func TestLateReservation_AbortWithoutUnsentProofBurns(t *testing.T) {
+	p, seq, metrics := lateFixture(t)
+	sess := newSession(1, "")
+	q := insertQctx(sess, lateSQL)
+	if err := p.OnQuery(context.Background(), q); err != nil {
+		t.Fatal(err)
+	}
+	signDeferred(t, p, q)
+	p.OnQueryAbort(context.Background(), q)
+	p.OnQueryComplete(context.Background(), sess)
+	if got, _ := seq.Reserve(); got != 2 || metrics.recycled != 0 || metrics.burned["unknown_outcome"] != 1 {
+		t.Fatalf("next Reserve=%d recycled=%d burned=%v; want seq 1 burned", got, metrics.recycled, metrics.burned)
+	}
+}
+
+// The proof is per query: an unsent abort for another query id, or one that
+// arrives before anything was reserved, releases nothing, and a second unsent
+// abort for the same statement does not release twice.
+func TestLateReservation_UnsentAbortIsBoundToTheReservedStatement(t *testing.T) {
+	p, seq, metrics := lateFixture(t)
+	sess := newSession(1, "")
+
+	early := insertQctx(sess, lateSQL)
+	if err := p.OnQuery(context.Background(), early); err != nil {
+		t.Fatal(err)
+	}
+	early.UpstreamQueryUnsent = true
+	p.OnQueryAbort(context.Background(), early)
+	p.OnQueryComplete(context.Background(), sess)
+	if seq.Last() != 0 || metrics.recycled != 0 || len(metrics.burned) != 0 {
+		t.Fatalf("abort before reservation: last=%d recycled=%d burned=%v", seq.Last(), metrics.recycled, metrics.burned)
+	}
+
+	q := insertQctx(sess, lateSQL)
+	if err := p.OnQuery(context.Background(), q); err != nil {
+		t.Fatal(err)
+	}
+	id := signDeferred(t, p, q)
+	other := insertQctx(sess, lateSQL)
+	other.Query.ID = "some-other-query"
+	other.UpstreamQueryUnsent = true
+	p.OnQueryAbort(context.Background(), other)
+	if metrics.recycled != 0 {
+		t.Fatalf("an unsent abort for another query released %q", id)
+	}
+	q.UpstreamQueryUnsent = true
+	p.OnQueryAbort(context.Background(), q)
+	p.OnQueryAbort(context.Background(), q)
+	p.OnQueryComplete(context.Background(), sess)
+	if metrics.recycled != 1 || len(metrics.burned) != 0 {
+		t.Fatalf("recycled=%d burned=%v; want exactly one recycle", metrics.recycled, metrics.burned)
+	}
+	if got, _ := seq.Reserve(); got != seqOf(t, id) {
+		t.Fatalf("next Reserve = %d, want the released seq %d", got, seqOf(t, id))
+	}
+}
+
+// A marked-unspent Exception and Relay's unsent proof can both name the same
+// statement; the seq is released exactly once and the free list holds it once.
+func TestLateReservation_UnspentExceptionThenUnsentAbortReleasesOnce(t *testing.T) {
+	p, seq, metrics := lateFixture(t)
+	sess := newSession(1, "")
+	q := insertQctx(sess, lateSQL)
+	if err := p.OnQuery(context.Background(), q); err != nil {
+		t.Fatal(err)
+	}
+	id := signDeferred(t, p, q)
+	if err := p.OnException(context.Background(), sess, &chproto.Exception{Code: 252, Message: "storage_integrity: back-pressure: retry later" + chproto.SeqUnspentSuffix}); err != nil {
+		t.Fatal(err)
+	}
+	q.UpstreamQueryUnsent = true
+	p.OnQueryAbort(context.Background(), q)
+	p.OnQueryComplete(context.Background(), sess)
+	if metrics.recycled != 1 || len(metrics.burned) != 0 {
+		t.Fatalf("recycled=%d burned=%v; want exactly one release", metrics.recycled, metrics.burned)
+	}
+	seq.mu.Lock()
+	free := append([]uint64(nil), seq.free...)
+	seq.mu.Unlock()
+	if len(free) != 1 || free[0] != seqOf(t, id) {
+		t.Fatalf("free list = %v, want exactly [%d]", free, seqOf(t, id))
+	}
+}

@@ -161,6 +161,20 @@ type QueryContext struct {
 	// Relay rejects a query that sets more than one of them.
 	SynthesizedInsert *SynthesizedInsertPlan
 
+	// UpstreamQueryUnsent is Relay's proof that this query's Query packet
+	// never reached the upstream writer. Relay sets it only on the signed
+	// INSERT lanes (DeferredInsert, SynthesizedInsert), immediately before it
+	// fires OnQueryAbort for a termination that happens before WriteQuery
+	// begins: a local refusal, a client cancel or read failure while the lane
+	// still owns the input, a strict input-complete hook error, a missing
+	// upstream, or a lost active-query race. It is never set once WriteQuery
+	// has started, because a failed or partial write may already have handed
+	// bytes to the upstream connection. False means "unknown or sent", never
+	// "sent"; a plugin may only rely on a true value, for example to recycle a
+	// client_seq it reserved in OnQueryInputCompleteStrict (spec 2026-10-09
+	// §6.5).
+	UpstreamQueryUnsent bool
+
 	// AgentPrepare is the query-only agent lane.  It deliberately has no
 	// relationship to DeferredInsert: preparation happens off the client reader
 	// and the resulting Query is forwarded only after Relay wins its generation
