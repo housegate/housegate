@@ -120,6 +120,7 @@ func (r *Relay) forwardSignedInsert(ctx context.Context, qctx *plugin.QueryConte
 	// From WriteQuery on, a failure may already have handed bytes to the
 	// upstream connection, so the abort paths below never set
 	// UpstreamQueryUnsent and a reserved client_seq stays burned.
+	r.markSignedQueryWriteBegun(qctx)
 	if err := up.WriteQuery(q); err != nil {
 		return forwardFail("forward query", err)
 	}

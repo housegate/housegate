@@ -356,3 +356,30 @@ func TestLateReservation_UnsentAbortIsBoundToTheReservedStatement(t *testing.T) 
 		t.Fatalf("next Reserve = %d, want the released seq %d", got, seqOf(t, id))
 	}
 }
+
+// A marked-unspent Exception and Relay's unsent proof can both name the same
+// statement; the seq is released exactly once and the free list holds it once.
+func TestLateReservation_UnspentExceptionThenUnsentAbortReleasesOnce(t *testing.T) {
+	p, seq, metrics := lateFixture(t)
+	sess := newSession(1, "")
+	q := insertQctx(sess, lateSQL)
+	if err := p.OnQuery(context.Background(), q); err != nil {
+		t.Fatal(err)
+	}
+	id := signDeferred(t, p, q)
+	if err := p.OnException(context.Background(), sess, &chproto.Exception{Code: 252, Message: "storage_integrity: back-pressure: retry later" + chproto.SeqUnspentSuffix}); err != nil {
+		t.Fatal(err)
+	}
+	q.UpstreamQueryUnsent = true
+	p.OnQueryAbort(context.Background(), q)
+	p.OnQueryComplete(context.Background(), sess)
+	if metrics.recycled != 1 || len(metrics.burned) != 0 {
+		t.Fatalf("recycled=%d burned=%v; want exactly one release", metrics.recycled, metrics.burned)
+	}
+	seq.mu.Lock()
+	free := append([]uint64(nil), seq.free...)
+	seq.mu.Unlock()
+	if len(free) != 1 || free[0] != seqOf(t, id) {
+		t.Fatalf("free list = %v, want exactly [%d]", free, seqOf(t, id))
+	}
+}

@@ -70,6 +70,10 @@ type Relay struct {
 	// connection is reusable. Guarded by queryMu.
 	pendingRejectionID  string
 	pendingRejectionExc *chproto.Exception
+	// signedQueryWritten is the signed-lane query whose upstream WriteQuery
+	// has begun. abortUnsentQuery refuses to vouch for it (spec 2026-10-09
+	// §6.5): from that point a failure may already have handed bytes upstream.
+	signedQueryWritten atomic.Pointer[plugin.QueryContext]
 
 	// completionProbe is replaceable in unit tests. Production uses
 	// probeQueryCompletion, which watches the exact upstream server's
@@ -1191,6 +1195,23 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 				continue
 			}
 			if qctx.DeferredInsert != nil {
+				// A preparation continuation can install a competing plan after
+				// OnQuery; the prepared query already holds the active slot and may
+				// have been sequenced, so it must not reach the deferred lane, whose
+				// pre-send refusals vouch that nothing left Relay.
+				if agentPrepared != nil || qctx.AgentPrepare != nil {
+					err := fmt.Errorf("query %q: DeferredInsert conflicts with another ownership plan", q.ID)
+					if agentPrepared != nil {
+						r.takeActiveQuery()
+					} else {
+						// Without a completed preparation nothing of q left Relay.
+						err = markUnspentIfSigned(qctx.Query, err)
+					}
+					r.hooks.OnQueryAbort(ctx, qctx)
+					r.hooks.OnQueryComplete(ctx, r.sess)
+					r.writeExceptionToClient(ctx, err)
+					return err
+				}
 				if qctx.SuppressUpstreamExecution {
 					err := markUnspentIfSigned(qctx.Query, fmt.Errorf("query %q: DeferredInsert and SuppressUpstreamExecution are mutually exclusive", q.ID))
 					r.hooks.OnQueryAbort(ctx, qctx)
@@ -1585,9 +1606,27 @@ func (r *Relay) runDeferredInsert(ctx context.Context, qctx *plugin.QueryContext
 // use it; once a write began, a failure is ambiguous and must take the
 // ordinary abort path, which leaves the flag unset.
 func (r *Relay) abortUnsentQuery(ctx context.Context, qctx *plugin.QueryContext) {
+	if r.signedQueryWritten.Load() == qctx {
+		// A caller broke the pre-send-only contract. Vouching here could let a
+		// plugin recycle a client_seq the upstream may already hold, so fall
+		// back to the ordinary abort, which leaves the reservation burned.
+		_, logger := log.FromContext(ctx)
+		logger.Errorw("relay: pre-send abort requested after the upstream Query write began; not marking the query unsent",
+			"query_id", qctx.Query.ID)
+		r.hooks.OnQueryAbort(ctx, qctx)
+		r.hooks.OnQueryComplete(ctx, r.sess)
+		return
+	}
 	qctx.UpstreamQueryUnsent = true
 	r.hooks.OnQueryAbort(ctx, qctx)
 	r.hooks.OnQueryComplete(ctx, r.sess)
+}
+
+// markSignedQueryWriteBegun records that qctx's upstream WriteQuery is about
+// to start. It must run before the first byte is handed to the upstream codec;
+// from then on abortUnsentQuery falls back to the ordinary abort.
+func (r *Relay) markSignedQueryWriteBegun(qctx *plugin.QueryContext) {
+	r.signedQueryWritten.Store(qctx)
 }
 
 func queryMayStreamClientData(qctx *plugin.QueryContext) bool {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -117,6 +118,7 @@ const (
 	siteNoUpstream
 	siteActiveQueryRace
 	siteWriteQueryFailed
+	siteNone // the strict hook succeeds; the outcome is decided upstream
 )
 
 // presendSiteHook runs after sistatement's strict hook, i.e. after the seq was
@@ -140,6 +142,11 @@ func (h *presendSiteHook) OnQueryInputCompleteStrict(_ context.Context, qctx *pl
 	case siteNoUpstream:
 		h.sess.drop.Store(true)
 	case siteActiveQueryRace:
+		// Unreachable in production: clientToUpstream refuses a new Query while
+		// currentActiveQuery reports one in flight (relay.go "client sent query
+		// ... before upstream completed query"), so nothing else can hold the
+		// active slot when forwardSignedInsert calls beginActiveQuery. The test
+		// forges the slot to cover that defensive branch.
 		r := h.relay.Load()
 		r.queryMu.Lock()
 		r.activeQuery, r.activeQueryID = true, "someone-else"
@@ -308,5 +315,173 @@ func TestRelay_SignedInsertFailedQueryWriteBurnsClientSeq(t *testing.T) {
 				t.Fatalf("next Reserve = %d (err %v), want a fresh seq 2", got, err)
 			}
 		})
+	}
+}
+
+// Spec 2026-10-09 §6.5: once WriteQuery succeeded, an abort before the
+// terminal (here the upstream refusing the INSERT where the lane expects the
+// sample block, without the unspent marker) carries no unsent proof, so the
+// seq stays burned.
+func TestRelay_SignedInsertAbortAfterQueryWriteBurnsClientSeq(t *testing.T) {
+	for _, lane := range []struct {
+		name   string
+		inline bool
+	}{{"deferred", false}, {"synthesized", true}} {
+		t.Run(lane.name, func(t *testing.T) {
+			f := newPresendFixture(t, siteNone, lane.inline)
+			upDone := make(chan error, 1)
+			go func() {
+				up := chproto.NewCodec(f.h.upstreamProxy, chproto.DirFromClient)
+				up.SetRevision(deferredTestRev)
+				up.SetCompression(proto.CompressionDisabled)
+				upDone <- func() error {
+					pkt, err := up.ReadPacket(uint64(chproto.ClientQueryCode))
+					if err != nil {
+						return err
+					}
+					if q, ok := pkt.Decoded.(*chproto.Query); !ok || !strings.Contains(q.ID, ":1:") {
+						return errors.New("upstream did not receive the signed statement")
+					}
+					if _, err := up.ReadPacket(); err != nil { // external-tables marker
+						return err
+					}
+					_, err = f.h.upstreamProxy.Write(encodeServerExceptionPacket(deferredTestRev, 60, "Table shop.orders does not exist"))
+					return err
+				}()
+			}()
+			f.run(t, lane.inline)
+			if err := <-upDone; err != nil {
+				t.Fatalf("upstream: %v", err)
+			}
+			recycled, burned := f.metrics.snapshot()
+			if recycled != 0 || burned["unknown_outcome"] != 1 {
+				t.Fatalf("recycled=%d burned=%v; want the seq burned after the Query was sent", recycled, burned)
+			}
+			if got, err := f.seq.Reserve(); err != nil || got != 2 {
+				t.Fatalf("next Reserve = %d (err %v), want a fresh seq 2", got, err)
+			}
+		})
+	}
+}
+
+// abortUnsentQuery enforces its pre-send-only contract: called for a query
+// whose upstream WriteQuery has begun (a reject closure reached after the
+// write), it must not vouch for the query, so the reserved seq is burned.
+func TestRelay_AbortUnsentAfterQueryWriteBeganBurnsClientSeq(t *testing.T) {
+	for _, written := range []bool{false, true} {
+		name := map[bool]string{false: "before write (released)", true: "after write began (burned)"}[written]
+		t.Run(name, func(t *testing.T) {
+			f := newPresendFixture(t, siteNone, false)
+			f.h.close(t) // drive the hooks directly on the stopped relay
+			r := f.h.relay
+			sess := r.sess
+			sess.State().ClientRevision = deferredTestRev
+			ctx := context.Background()
+			qctx := &plugin.QueryContext{
+				Session: sess, OriginalSQL: presendDeferred, Values: map[string]any{},
+				Query: &chproto.Query{ID: "client-id", Body: presendDeferred, Compression: proto.CompressionDisabled},
+			}
+			if err := r.hooks.OnQuery(ctx, qctx); err != nil || qctx.DeferredInsert == nil {
+				t.Fatalf("OnQuery: %v (deferred=%v)", err, qctx.DeferredInsert)
+			}
+			if err := r.hooks.OnClientDataStrict(ctx, qctx, encodeNonEmptyClientDataPacket(t, deferredTestRev)); err != nil {
+				t.Fatal(err)
+			}
+			if err := r.hooks.OnQueryInputCompleteStrict(ctx, qctx); err != nil {
+				t.Fatal(err)
+			}
+			if written {
+				r.markSignedQueryWriteBegun(qctx)
+			}
+			r.abortUnsentQuery(ctx, qctx)
+			recycled, burned := f.metrics.snapshot()
+			next, err := f.seq.Reserve()
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch {
+			case written && (qctx.UpstreamQueryUnsent || recycled != 0 || burned["unknown_outcome"] != 1 || next != 2):
+				t.Fatalf("after write: unsent=%v recycled=%d burned=%v next=%d; want no proof, seq 1 burned", qctx.UpstreamQueryUnsent, recycled, burned, next)
+			case !written && (!qctx.UpstreamQueryUnsent || recycled != 1 || len(burned) != 0 || next != 1):
+				t.Fatalf("before write: unsent=%v recycled=%d burned=%v next=%d; want seq 1 released", qctx.UpstreamQueryUnsent, recycled, burned, next)
+			}
+		})
+	}
+}
+
+// unsentRecordingPrepareHooks records the unsent proof every abort carries.
+type unsentRecordingPrepareHooks struct {
+	relayPrepareHooks
+	mu     sync.Mutex
+	aborts []bool
+}
+
+func (h *unsentRecordingPrepareHooks) OnQueryAbort(_ context.Context, qctx *plugin.QueryContext) {
+	h.mu.Lock()
+	h.aborts = append(h.aborts, qctx.UpstreamQueryUnsent)
+	h.mu.Unlock()
+}
+
+// A preparation continuation can install a DeferredInsert plan after the
+// AgentPrepare lane already began the active query and may have sequenced the
+// statement. Relay refuses that ownership conflict like the synthesized lane
+// does: unmarked, and without the unsent proof.
+func TestRelay_DeferredInsertAfterAgentPrepareIsAnOwnershipConflict(t *testing.T) {
+	signedPrepared := plugin.PreparedAgentQuery{Query: &chproto.Query{ID: "prepared", Body: "INSERT INTO db.t FORMAT Native", Settings: signedSettings()}}
+	hooks := &unsentRecordingPrepareHooks{relayPrepareHooks: relayPrepareHooks{
+		prepare:   func(context.Context) (plugin.PreparedAgentQuery, error) { return signedPrepared, nil },
+		intent:    func(context.Context, plugin.PreparedAgentQuery) error { return nil },
+		authorize: func(context.Context, plugin.PreparedAgentQuery) error { return nil },
+		unknown:   func(context.Context, plugin.PreparedAgentQuery) error { return nil },
+		onResume: func(qctx *plugin.QueryContext) error {
+			qctx.DeferredInsert = &plugin.DeferredInsertPlan{SampleColumns: []chproto.SampleColumn{{Name: "v", Type: "UInt64"}}, MaxPayloadBytes: 1 << 20}
+			return nil
+		},
+	}}
+	clientPeer, clientProxy := net.Pipe()
+	upstreamPeer, upstreamProxy := net.Pipe()
+	defer clientPeer.Close()
+	defer upstreamPeer.Close()
+	const rev = chproto.MaxSupportedRevision
+	sess := chsession.New(1, clientProxy)
+	sess.Client().SetRevision(rev)
+	up := chproto.NewCodec(upstreamProxy, chproto.DirToUpstream)
+	up.SetRevision(rev)
+	if err := sess.BindUpstream(context.Background(), up); err != nil {
+		t.Fatalf("BindUpstream: %v", err)
+	}
+	r := NewRelay(sess, hooks, nil, nil)
+	client := chproto.NewCodec(clientPeer, chproto.DirToUpstream)
+	client.SetRevision(rev)
+	run := make(chan error, 1)
+	go func() { run <- r.clientToUpstream(context.Background()) }()
+	if err := client.WriteQuery(&chproto.Query{ID: "signed", Body: "INSERT INTO db.t FORMAT Native", Settings: signedSettings()}); err != nil {
+		t.Fatalf("write query: %v", err)
+	}
+	_ = clientPeer.SetReadDeadline(time.Now().Add(2 * time.Second))
+	pkt, err := client.ReadPacket(uint64(chproto.ServerExceptionCode))
+	if err != nil {
+		t.Fatalf("read exception: %v", err)
+	}
+	exc, ok := pkt.Decoded.(*chproto.Exception)
+	if !ok || !strings.Contains(exc.Message, "DeferredInsert conflicts with another ownership plan") {
+		t.Fatalf("client got packet %d %#v, want the ownership-conflict Exception", pkt.Type, pkt.Decoded)
+	}
+	if chproto.HasSeqUnspentSuffix(exc.Message) {
+		t.Fatalf("post-preparation conflict carries the unspent marker: %q", exc.Message)
+	}
+	_ = clientPeer.Close()
+	select {
+	case <-run:
+	case <-time.After(2 * time.Second):
+		t.Fatal("relay did not finish")
+	}
+	hooks.mu.Lock()
+	defer hooks.mu.Unlock()
+	if len(hooks.aborts) != 1 || hooks.aborts[0] {
+		t.Fatalf("aborts (unsent proof) = %v, want exactly one abort without the proof", hooks.aborts)
+	}
+	if _, active := r.currentActiveQuery(); active {
+		t.Fatal("the prepared query's active slot was not released")
 	}
 }
