@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -955,6 +956,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			Operators:            reg,
 			DeniedAddresses:      ingressCfg.DeniedAddresses,
 			AllowedAddresses:     ingressCfg.AllowedAddresses,
+			ClientLanesEnabled:   opts.StorageIntegrityClientLanes,
 		})
 		queryPlugins = append(queryPlugins, storageIntegrityIngress)
 		strictDataPlugins = append(strictDataPlugins, storageIntegrityIngress)
@@ -972,6 +974,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			"request_timeout", ingressCfg.RequestTimeout.Duration,
 			"max_payload_bytes", ingressCfg.MaxPayloadBytes,
 			"runtime_enabled", cfg.StorageIntegrity.Runtime.Enabled,
+			"client_lanes_port", opts.StorageIntegrityClientLanes != nil,
 		)
 	}
 
@@ -1439,6 +1442,7 @@ func buildAgentWithBuilders(
 			"discovery", siOpts.Discovery != nil,
 			"state_dir", stateLabel,
 			"lanes", agentLanesLabel(cfg.StorageIntegrity.Agent.Lanes),
+			"max_inflight_per_lane", siOpts.MaxInflightPerLane,
 			"writer_precheck", siOpts.WriterPrecheck,
 			"upstream_switch", siOpts.Hosting != nil && !siOpts.PinnedUpstream,
 			"max_payload_bytes", cfg.StorageIntegrity.Agent.MaxPayloadBytes)
@@ -1572,23 +1576,37 @@ func agentStatementOptions(cfg *config.Config, opts Options, reg registry.Regist
 		log.Warnw("storage_integrity agent: the network state does not resolve database hosting (registry.DatabaseHosting), so the upstream switch to the indexer hosting an SI INSERT's database is disabled; such an INSERT runs on the session's upstream and the server decides",
 			"network_state", fmt.Sprintf("%T", reg))
 	}
+	lanes, err := sistatement.ParseLaneMode(agentCfg.Lanes)
+	if err != nil {
+		return sistatement.Options{}, "", fmt.Errorf("storage_integrity.agent: %w", err)
+	}
 	// Last fallible step: on success the caller owns an eagerly opened Seq.
-	seq, openSeq, stateLabel, err := agentSeqOpener(agentCfg.StateDir, signerAddress, defaultAgentStateBase)
+	seq, openSeq, laneDir, stateLabel, err := agentSeqOpener(agentCfg.StateDir, signerAddress, lanes, defaultAgentStateBase)
 	if err != nil {
 		return sistatement.Options{}, "", fmt.Errorf("storage_integrity.agent: %w", err)
 	}
 	dialTimeout := cfg.DialTimeout.Duration
 	return sistatement.Options{
-		Statuses:        statuses,
-		Discovery:       discovery,
-		NetworkID:       agentCfg.NetworkID,
-		KeeperShardID:   agentCfg.KeeperShardID,
-		Seq:             seq,
-		OpenSeq:         openSeq,
-		WriterPrecheck:  !cfg.Agent.Driver,
-		MaxPayloadBytes: agentCfg.MaxPayloadBytes,
-		Owner:           cfg.Agent.Owner,
-		IsDriver:        cfg.Agent.Driver,
+		Statuses:      statuses,
+		Discovery:     discovery,
+		NetworkID:     agentCfg.NetworkID,
+		KeeperShardID: agentCfg.KeeperShardID,
+		Seq:           seq,
+		OpenSeq:       openSeq,
+		Lanes:         lanes,
+		// Unset means the default 16; only a plugin built directly (unit
+		// tests) runs unbounded.
+		MaxInflightPerLane: agentCfg.EffectiveMaxInflightPerLane(),
+		LaneDir:            laneDir,
+		// Task 13's host port, reused in agent mode: "client lanes are active
+		// on this host's network". The plugin reads it only without RPC
+		// discovery; with discovery the hosting indexer's
+		// client_lanes_enabled decides.
+		ClientLanesEnabled: opts.StorageIntegrityClientLanes,
+		WriterPrecheck:     !cfg.Agent.Driver,
+		MaxPayloadBytes:    agentCfg.MaxPayloadBytes,
+		Owner:              cfg.Agent.Owner,
+		IsDriver:           cfg.Agent.Driver,
 		InlineValues: sistatement.InlineValuesOptions{
 			Enabled:           agentCfg.InlineValues.Enabled,
 			EvaluationTimeout: agentCfg.InlineValues.EvaluationTimeout.Duration,
@@ -1619,37 +1637,130 @@ func defaultAgentStateBase() (string, bool) {
 	return config.DefaultAgentStateBase(runtime.GOOS, os.Getenv, home)
 }
 
-// agentSeqOpener resolves the legacy client_seq store and a label for logs
-// (plan decision P4). An explicit state_dir keeps one <state_dir>/<signer>.seq
-// for every network and is opened here, at build: a directory that cannot be
-// created or a counter another process holds (its flock admits a single
-// opener) stops startup instead of refusing every SI INSERT later (final
-// review I2). The caller owns the returned counter until the plugin takes it
-// as Options.Seq. Without a state_dir the counter lives in
-// <base>/si/<network_id>/<signer>/ and the returned opener opens it at the
-// first SI write for that network, because the network id is part of the
-// path. A failed lazy open is not remembered, so a later INSERT retries it.
-// The plugin closes what it opened.
-func agentSeqOpener(stateDir, signer string, defaultBase func() (string, bool)) (*sistatement.SeqCounter, func(string) (*sistatement.SeqCounter, error), string, error) {
+// agentSeqOpener resolves the legacy client_seq store, the client lane
+// directory and a label for logs (plan decision P4).
+//
+// An explicit state_dir keeps one <state_dir>/<signer>.seq for every network
+// (unchanged from Plan A1) and each network's client lanes for each key in
+// <state_dir>/<network_id>/<signer>/lanes, mirroring the default base, so
+// neither two networks nor two keys ever share a lane directory (controller
+// ruling C3 as revised by final review m3: a shared pool lets a foreign key
+// drain a lane's free list into up to 64 gap ranges and abandon a lane other
+// keys use). With lanes off (the driver sidecar) the
+// counter is opened here, at build: a directory that cannot be created or a
+// counter another process holds (its flock admits a single opener) stops
+// startup instead of refusing every SI INSERT later (final review I2); the
+// caller owns the returned counter until the plugin takes it as Options.Seq.
+// With lanes auto the counter is opened lazily, at the first statement that
+// uses the legacy lane, and then shared by every network; at build the state
+// directory is only created and probed for writing (a temp file is created,
+// fsynced and removed), so a missing, uncreatable or read-only directory
+// still stops startup (final review m1). A process that
+// writes on a client lane must never take the legacy lock, or a second agent
+// sharing the state directory (spec 2026-10-09 §6.5, §9.2) could not start;
+// the per-lane flock is that mode's guard against two processes sharing a
+// sequence (preflight F1).
+//
+// Without a state_dir the counter and the lanes live in
+// <base>/si/<network_id>/<signer>/, already scoped by network, and are opened
+// at the first SI write for that network. A failed lazy open is not
+// remembered, so a later INSERT retries it. The plugin closes what it opened.
+func agentSeqOpener(stateDir, signer string, lanes sistatement.LaneMode, defaultBase func() (string, bool)) (*sistatement.SeqCounter, func(string) (*sistatement.SeqCounter, error), func(string) (string, error), string, error) {
 	if strings.TrimSpace(stateDir) != "" {
-		seq, err := sistatement.OpenSeqCounter(stateDir, signer)
-		if err != nil {
-			return nil, nil, "", fmt.Errorf("open client_seq counter in state_dir %s: %w", stateDir, err)
+		laneDir := func(networkID string) (string, error) {
+			if err := validNetworkDirName(networkID); err != nil {
+				return "", err
+			}
+			return filepath.Join(stateDir, networkID, strings.ToLower(signer)), nil
 		}
-		return seq, nil, stateDir, nil
+		if lanes == sistatement.LaneModeOff {
+			seq, err := sistatement.OpenSeqCounter(stateDir, signer)
+			if err != nil {
+				return nil, nil, nil, "", fmt.Errorf("open client_seq counter in state_dir %s: %w", stateDir, err)
+			}
+			return seq, nil, laneDir, stateDir, nil
+		}
+		// Nothing is locked at build, but a state directory that cannot be
+		// created or written still stops startup.
+		if err := probeWritableDir(stateDir); err != nil {
+			return nil, nil, nil, "", err
+		}
+		return nil, sharedSeqOpener(func() (*sistatement.SeqCounter, error) {
+			return sistatement.OpenSeqCounter(stateDir, signer)
+		}), laneDir, stateDir, nil
 	}
 	base, ok := defaultBase()
 	if !ok {
-		return nil, nil, "", fmt.Errorf("state_dir is required on %s (no default state directory)", runtime.GOOS)
+		return nil, nil, nil, "", fmt.Errorf("state_dir is required on %s (no default state directory)", runtime.GOOS)
+	}
+	siDir := func(networkID string) (string, error) {
+		if err := validNetworkDirName(networkID); err != nil {
+			return "", err
+		}
+		return config.AgentSIStateDir(base, networkID, signer), nil
 	}
 	return nil, func(networkID string) (*sistatement.SeqCounter, error) {
-		// The id comes from the hosting indexer; it must name exactly one
-		// directory below <base>/si.
-		if networkID == "" || networkID == "." || networkID == ".." || strings.ContainsAny(networkID, `/\`) {
-			return nil, fmt.Errorf("network id %q cannot name a state directory", networkID)
+		dir, err := siDir(networkID)
+		if err != nil {
+			return nil, err
 		}
-		return sistatement.OpenSeqCounter(config.AgentSIStateDir(base, networkID, signer), signer)
-	}, filepath.Join(base, "si"), nil
+		return sistatement.OpenSeqCounter(dir, signer)
+	}, siDir, filepath.Join(base, "si"), nil
+}
+
+// probeWritableDir creates dir when missing and proves the agent can write
+// there: MkdirAll alone accepts an existing read-only directory, after which
+// every SI INSERT would fail at its first lazy open. Every lane and seq file
+// lives below dir, so this is the startup check for all of them.
+func probeWritableDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create state_dir %s: %w", dir, err)
+	}
+	f, err := os.CreateTemp(dir, ".housegate-write-probe-*")
+	if err != nil {
+		return fmt.Errorf("state_dir %s is not writable by the agent: %w", dir, err)
+	}
+	name := f.Name()
+	syncErr := f.Sync()
+	closeErr := f.Close()
+	removeErr := os.Remove(name)
+	if err := errors.Join(syncErr, closeErr, removeErr); err != nil {
+		return fmt.Errorf("state_dir %s is not writable by the agent: %w", dir, err)
+	}
+	return nil
+}
+
+// validNetworkDirName refuses a network id that is not exactly one path
+// element: the id comes from the hosting indexer and names a state directory.
+func validNetworkDirName(networkID string) error {
+	if networkID == "" || networkID == "." || networkID == ".." || strings.ContainsAny(networkID, `/\`) {
+		return fmt.Errorf("network id %q cannot name a state directory", networkID)
+	}
+	return nil
+}
+
+// sharedSeqOpener opens one counter at its first successful call and returns
+// it for every network: an explicit state_dir has a single
+// <state_dir>/<signer>.seq, whose flock a second open in this process would
+// find held. A failed open is not remembered.
+func sharedSeqOpener(open func() (*sistatement.SeqCounter, error)) func(string) (*sistatement.SeqCounter, error) {
+	var (
+		mu     sync.Mutex
+		opened *sistatement.SeqCounter
+	)
+	return func(string) (*sistatement.SeqCounter, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if opened != nil {
+			return opened, nil
+		}
+		c, err := open()
+		if err != nil {
+			return nil, err
+		}
+		opened = c
+		return c, nil
+	}
 }
 
 // agentLanesLabel describes storage_integrity.agent.lanes for the startup log.
@@ -1657,7 +1768,7 @@ func agentLanesLabel(lanes string) string {
 	if lanes == "off" {
 		return "off"
 	}
-	return "auto (legacy until the hosting indexer reports client lanes)"
+	return "auto (a client lane once the hosting indexer reports client lanes enabled)"
 }
 
 // buildAgentDialer returns the per-session upstream dialer for agent

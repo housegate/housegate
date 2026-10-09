@@ -75,8 +75,10 @@ go_test(
         "snapshot_query_journal_test.go",
         "snapshot_query_prepared_output_test.go",
         "sql_test.go",
+        "statementid_lane_vectors_test.go",
         "statementid_test.go",
     ],
+    data = ["//pkg/auth:testdata/statement_jws_v2_lanes.json"],
     embed = [":storageintegrity"],
     deps = [
         "//pkg/auth",

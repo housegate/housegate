@@ -2156,7 +2156,11 @@ func (c *recordingAdmissionConsumer) requireOne(t *testing.T) storageintegrity.A
 	return c.admission[0]
 }
 
-type rootArbiterIngressClient struct{}
+type rootArbiterIngressClient struct {
+	// The nil embed supplies the snapshot-query RPCs the statement submitter
+	// never calls; reaching one panics the test.
+	pb.ArbiterIngressClient
+}
 
 func (c *rootArbiterIngressClient) SubmitStatement(context.Context, *pb.StatementEnvelopeV2, ...grpc.CallOption) (*pb.SequencedAck, error) {
 	return &pb.SequencedAck{Code: pb.AdmissionCode_ADMISSION_CODE_ACCEPTED, StatementSeq: 1}, nil

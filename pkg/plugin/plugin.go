@@ -97,7 +97,8 @@ type QueryInputCompleteStrictPlugin interface {
 // not forwarded. It is intentionally separate from OnQueryComplete: existing
 // plugins still use complete as the release point for per-query resources, while
 // correctness-sensitive plugins discard state that must not survive a partial
-// or rejected query lifecycle.
+// or rejected query lifecycle. QueryContext.UpstreamQueryUnsent, when true,
+// proves that no byte of this query's Query packet reached the upstream writer.
 type QueryAbortPlugin interface {
 	OnQueryAbort(ctx context.Context, qctx *QueryContext)
 }

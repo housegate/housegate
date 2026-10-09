@@ -74,6 +74,12 @@ type Config struct {
 	Operators        registry.OperatorChecker
 	DeniedAddresses  []string
 	AllowedAddresses []string
+
+	// ClientLanesEnabled reports whether the network committed client lanes
+	// (the arbiter's client_lanes parameter, delivered by the host's registry
+	// follower). Nil means disabled. Before activation a laned statement id is
+	// refused here instead of reaching the arbiter as MALFORMED.
+	ClientLanesEnabled func() bool
 }
 
 type AdmissionConsumer interface {
@@ -91,6 +97,8 @@ type Plugin struct {
 	networkID         string
 	requireSnapshot   bool
 	authorizer        *writeAuthorizer
+	// clientLanesEnabled is Config.ClientLanesEnabled; nil means disabled.
+	clientLanesEnabled func() bool
 
 	mu      sync.Mutex
 	active  map[int64]*admissionState
@@ -169,17 +177,18 @@ func New(cfg Config) *Plugin {
 		requestTimeout = DefaultRequestTimeout
 	}
 	p := &Plugin{
-		enabled:           cfg.Enabled,
-		authValidator:     cfg.AuthValidator,
-		purpose:           purpose,
-		requestTimeout:    requestTimeout,
-		maxPayload:        maxPayload,
-		admissionConsumer: cfg.AdmissionConsumer,
-		networkID:         cfg.NetworkID,
-		requireSnapshot:   cfg.RequireTableSnapshot,
-		authorizer:        newWriteAuthorizer(cfg.DeniedAddresses, cfg.AllowedAddresses, cfg.Writers, cfg.Operators),
-		active:            map[int64]*admissionState{},
-		pending:           map[int64]*admissionState{},
+		enabled:            cfg.Enabled,
+		authValidator:      cfg.AuthValidator,
+		purpose:            purpose,
+		requestTimeout:     requestTimeout,
+		maxPayload:         maxPayload,
+		admissionConsumer:  cfg.AdmissionConsumer,
+		networkID:          cfg.NetworkID,
+		requireSnapshot:    cfg.RequireTableSnapshot,
+		authorizer:         newWriteAuthorizer(cfg.DeniedAddresses, cfg.AllowedAddresses, cfg.Writers, cfg.Operators),
+		clientLanesEnabled: cfg.ClientLanesEnabled,
+		active:             map[int64]*admissionState{},
+		pending:            map[int64]*admissionState{},
 	}
 	if cfg.TableSchemas != nil {
 		p.schemaLoader = schemaregistry.NewNetworkStateLoader(cfg.TableSchemas, cfg.NetworkID)
@@ -331,6 +340,9 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 		return err
 	}
 	if err := requireStatementIDSigner(stmtID, signer); err != nil {
+		return err
+	}
+	if err := p.requireClientLanes(stmtID); err != nil {
 		return err
 	}
 	payer := querySettings(qctx)[auth.PayerSettingKey]
@@ -757,18 +769,31 @@ func statementID(qctx *plugin.QueryContext) (string, error) {
 	return "", errors.New("storage_integrity query id is required")
 }
 
-// parseIngressStatementID applies the shared grammar. Release A1 refuses a
-// laned id locally (spec 2026-10-09 §6.1) instead of letting the arbiter
-// answer MALFORMED.
+// parseIngressStatementID applies the shared grammar, both flat forms. It
+// reports grammar errors only; whether a laned id may pass is
+// requireClientLanes' decision.
 func parseIngressStatementID(id string) (sicore.StatementID, error) {
-	parsed, err := sicore.ParseLegacyStatementID(id)
-	if errors.Is(err, sicore.ErrClientLanesNotEnabled) {
-		return sicore.StatementID{}, sicore.ErrClientLanesNotEnabled
-	}
+	parsed, err := sicore.ParseStatementID(id)
 	if err != nil {
 		return sicore.StatementID{}, fmt.Errorf("storage_integrity requires structured statement id: %w", err)
 	}
 	return parsed, nil
+}
+
+// requireClientLanes refuses a laned statement id until the host reports that
+// the network committed client lanes (spec 2026-10-09 §6.1, D13), so the
+// client gets a stable message instead of the arbiter's MALFORMED. It runs
+// after the id's account is bound to the authenticated signer and before any
+// authorization, payload capture or intake side effect.
+func (p *Plugin) requireClientLanes(id string) error {
+	stmt, err := parseIngressStatementID(id)
+	if err != nil {
+		return err
+	}
+	if stmt.IsLaned() && !p.ClientLanesEnabled() {
+		return sicore.ErrClientLanesNotEnabled
+	}
+	return nil
 }
 
 func requireStatementIDSigner(id, signer string) error {
@@ -1213,6 +1238,13 @@ func (p *Plugin) RejectUndecodableQuery() bool { return p != nil && p.enabled }
 // RequiresTableSnapshot reports whether every query must carry its
 // table-state snapshot (storage integrity enabled).
 func (p *Plugin) RequiresTableSnapshot() bool { return p != nil && p.requireSnapshot }
+
+// ClientLanesEnabled reports whether the host's port currently says the
+// network committed client lanes; without a port it is false, and the
+// ingress refuses laned statement ids.
+func (p *Plugin) ClientLanesEnabled() bool {
+	return p != nil && p.clientLanesEnabled != nil && p.clientLanesEnabled()
+}
 
 // ResolvesDeclaredSchemas reports whether the ingress holds a declared
 // network-state schema loader, the disabled deployment's schema source.

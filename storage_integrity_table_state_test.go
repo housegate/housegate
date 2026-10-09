@@ -317,3 +317,50 @@ func TestBuildServer_StaticIngressWithoutDeclaredSchemasFailsFast(t *testing.T) 
 		t.Fatalf("err = %v, want the declared-schema source error", err)
 	}
 }
+
+// TestBuildServer_ThreadsTheClientLanesPortToTheIngress pins that the host's
+// Options.StorageIntegrityClientLanes reaches the SI ingress, and that a host
+// without the port leaves laned statement ids refused (spec 2026-10-09 §6.1).
+func TestBuildServer_ThreadsTheClientLanesPortToTheIngress(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		port func() bool
+		want bool
+	}{
+		{name: "no port", port: nil, want: false},
+		{name: "port reports disabled", port: func() bool { return false }, want: false},
+		{name: "port reports enabled", port: func() bool { return true }, want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := minimalServerCfg(t)
+			cfg.StorageIntegrity.Enabled = boolPtr(true)
+			cfg.StorageIntegrity.Ingress.Enabled = true
+			cfg.StorageIntegrity.Ingress.NetworkID = "testnet-v2"
+			cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{"0x1111111111111111111111111111111111111111"}
+			bs, err := buildServer(Options{
+				Config:                            cfg,
+				NetworkState:                      network.NewInMemoryNetworkState(),
+				Rewriter:                          siProbeStubRewriterFactory{},
+				StorageIntegrityTableState:        sitable.NewFake(sitable.Pending),
+				StorageIntegrityAdmissionConsumer: &recordingAdmissionConsumer{},
+				StorageIntegrityClientLanes:       tc.port,
+			}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer bs.teardown()
+			var ingress *storageintegrity.Plugin
+			for _, candidate := range requireExternalChain(t, bs).QueryPlugins {
+				if p, ok := candidate.(*storageintegrity.Plugin); ok {
+					ingress = p
+				}
+			}
+			if ingress == nil {
+				t.Fatal("the enabled build did not wire the ingress")
+			}
+			if got := ingress.ClientLanesEnabled(); got != tc.want {
+				t.Fatalf("ingress.ClientLanesEnabled() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

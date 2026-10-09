@@ -62,8 +62,12 @@ description = "Deterministic statement-v2 interoperability vectors"
 # The committed cross-repo fixture intentionally contains compact JWS tokens
 # plus the repeated-a throwaway key used to regenerate them. It is consumed by
 # both Housegate and Arbiter tests and is never accepted by production config.
+# The client-lane vectors (statement_jws_v2_lanes.json) follow the same contract:
+# the same repeated-a throwaway key and compact JWS tokens, consumed verbatim by
+# the Arbiter FSM.
 paths = [
     '''^pkg/auth/testdata/statement_jws_v2\.json$''',
+    '''^pkg/auth/testdata/statement_jws_v2_lanes\.json$''',
 ]
 
 [[allowlists]]
