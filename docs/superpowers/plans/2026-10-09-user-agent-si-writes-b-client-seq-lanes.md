@@ -3380,15 +3380,13 @@ func (s *Server) reportAdmission(code string) {
 }
 ```
 
-`server/server.go` `Deps`: `AdmissionMetrics AdmissionMetrics` with a comment. In `server/ingress.go` `SubmitStatement`: in the pre-activation branch call `svc.s.reportAdmission(pb.AdmissionCode_ADMISSION_CODE_MALFORMED.String())`; when `validateStatementFreshness` fails call `svc.s.reportAdmission("freshness")`; inside each fence mapping call `svc.s.reportAdmission("fence")`; right after `submit, ok := res.(fsm.SubmitResult)` succeeds:
+`server/server.go` `Deps`: `AdmissionMetrics AdmissionMetrics` with a comment. In `server/ingress.go` `SubmitStatement`: in the pre-activation branch call `svc.s.reportAdmission(pb.AdmissionCode_ADMISSION_CODE_MALFORMED.String())`; when `validateStatementFreshness` fails call `svc.s.reportAdmission("freshness")`; inside each fence mapping call `svc.s.reportAdmission("fence")`. After `submit, ok := res.(fsm.SubmitResult)` succeeds, count only the refusal the client actually receives (spec §6.8): an `ACCEPTED` result returns without counting; a `DUPLICATE_CLIENT_SEQ` that `reackDuplicate` answers as `ACCEPTED` (an idempotent retry) returns that ACK without counting, logging the re-ack at debug; every other outcome, including a duplicate whose re-ack fails, falls through to one call:
 
 ```go
-	if submit.Code != arbiter.AdmissionCodeAccepted {
-		svc.s.reportAdmission(pb.AdmissionCode(submit.Code).String())
-	}
+	svc.s.reportAdmission(pb.AdmissionCode(submit.Code).String())
 ```
 
-Also log duplicate and gap/lane-budget refusals with account, lane and seq at warn: `svc.s.d.Logger.Warn("statement admission refused", "code", pb.AdmissionCode(submit.Code).String(), "account", env.StatementID.ClientAccount, "lane", env.StatementID.ClientLane, "seq", env.StatementID.ClientSeq)` for codes `DUPLICATE_CLIENT_SEQ`, `GAP_BUDGET_EXCEEDED`, `LANE_BUDGET_EXCEEDED`.
+Add a regression test: an exact duplicate re-acknowledged by `reackDuplicate` leaves `arbiter_admission_rejects_total` unchanged, while a duplicate with a different envelope is counted once as `ADMISSION_CODE_DUPLICATE_CLIENT_SEQ`. Also log the refusals the client receives for duplicate and gap/lane-budget codes with account, lane and seq at warn: `svc.s.d.Logger.Warn("statement admission refused", "code", pb.AdmissionCode(submit.Code).String(), "account", env.StatementID.ClientAccount, "lane", env.StatementID.ClientLane, "seq", env.StatementID.ClientSeq)` for codes `DUPLICATE_CLIENT_SEQ`, `GAP_BUDGET_EXCEEDED`, `LANE_BUDGET_EXCEEDED`.
 
 `fsm/client_lanes.go`:
 
