@@ -86,8 +86,19 @@ func TestApplyAgentQuickstart_SourceAndUpstreamOverridesWin(t *testing.T) {
 	if err := ApplyAgentQuickstart(pinned, AgentQuickstart{}); err != nil {
 		t.Fatal(err)
 	}
-	if pinned.NetworkState.Source != "" || pinned.StorageIntegrity.Agent.Enabled {
-		t.Fatalf("a pinned upstream needs no preset and -si auto cannot discover: %+v", pinned.StorageIntegrity.Agent)
+	// A pinned upstream fixes routing only: the preset's RPC still supplies
+	// table status and network-id discovery, so -si auto signs.
+	if pinned.NetworkState.Source != AgentNetworkPresets["devnet2"] || !pinned.StorageIntegrity.Agent.Enabled || pinned.Agent.Upstream != "10.0.0.8:9001" {
+		t.Fatalf("a pinned quickstart agent keeps its upstream and derives the preset RPC: source=%q upstream=%q si=%+v",
+			pinned.NetworkState.Source, pinned.Agent.Upstream, pinned.StorageIntegrity.Agent)
+	}
+	if err := pinned.Validate(); err != nil {
+		t.Fatalf("a pinned quickstart agent with the preset RPC must validate: %v", err)
+	}
+	named := quickstartBase()
+	named.Agent.Upstream = "10.0.0.8:9001"
+	if err := ApplyAgentQuickstart(named, AgentQuickstart{Network: "devnet2"}); err != nil || named.NetworkState.Source != AgentNetworkPresets["devnet2"] || !named.StorageIntegrity.Agent.Enabled {
+		t.Fatalf("an explicit -network with a pinned upstream also derives the preset: source=%q err=%v", named.NetworkState.Source, err)
 	}
 }
 
@@ -243,8 +254,10 @@ func captureQuickstartLogs(t *testing.T) *bytes.Buffer {
 // retryable stale-state error the user would otherwise retry forever.
 func TestApplyAgentQuickstart_SIAutoOffWarns(t *testing.T) {
 	logs := captureQuickstartLogs(t)
+	// A pinned agent with an explicit non-RPC source cannot discover.
 	pinned := quickstartBase()
 	pinned.Agent.Upstream = "10.0.0.8:9001"
+	pinned.NetworkState.Source = "network_state.yaml"
 	if err := ApplyAgentQuickstart(pinned, AgentQuickstart{}); err != nil {
 		t.Fatal(err)
 	}
@@ -252,8 +265,23 @@ func TestApplyAgentQuickstart_SIAutoOffWarns(t *testing.T) {
 		t.Fatal("-si auto without an RPC network state must stay off")
 	}
 	out := logs.String()
-	if strings.Count(out, "level=WARN") != 1 || !strings.Contains(out, "storage-integrity signing is off") || !strings.Contains(out, "-si on") || !strings.Contains(out, "network_id") {
-		t.Fatalf("want one warning naming why SI is off and the -si on + network_id escape, got:\n%s", out)
+	if strings.Count(out, "level=WARN") != 1 || !strings.Contains(out, "storage-integrity signing is off") || !strings.Contains(out, "non-RPC network_state.source") ||
+		!strings.Contains(out, "-state") || !strings.Contains(out, "-si on") || !strings.Contains(out, "network_id") {
+		t.Fatalf("want one warning naming why SI is off and the -state / -si on + network_id remedies, got:\n%s", out)
+	}
+
+	// With a config file the preset is not derived unless -network is given;
+	// the warning then names -network as the remedy.
+	logs.Reset()
+	file := quickstartBase()
+	file.Agent.Mode = true
+	file.Agent.Upstream = "10.0.0.8:9001"
+	if err := ApplyAgentQuickstart(file, AgentQuickstart{ConfigFileLoaded: true, SI: "auto"}); err != nil {
+		t.Fatal(err)
+	}
+	out = logs.String()
+	if file.StorageIntegrity.Agent.Enabled || !strings.Contains(out, "no network state source") || !strings.Contains(out, "-network <name>") {
+		t.Fatalf("want SI off with a warning naming -network, got enabled=%v:\n%s", file.StorageIntegrity.Agent.Enabled, out)
 	}
 
 	logs.Reset()
@@ -263,6 +291,7 @@ func TestApplyAgentQuickstart_SIAutoOffWarns(t *testing.T) {
 	}
 	off := quickstartBase()
 	off.Agent.Upstream = "10.0.0.8:9001"
+	off.NetworkState.Source = "network_state.yaml"
 	if err := ApplyAgentQuickstart(off, AgentQuickstart{SI: "off"}); err != nil {
 		t.Fatal(err)
 	}
@@ -281,8 +310,7 @@ func TestApplyAgentQuickstart_OverriddenNetworkWarns(t *testing.T) {
 		want   string
 	}{
 		"config source":   {func(c *Config) { c.Agent.Mode = true; c.NetworkState.Source = "http://node:10003" }, AgentQuickstart{ConfigFileLoaded: true, Network: "devnet2"}, "network_state.source"},
-		"config upstream": {func(c *Config) { c.Agent.Mode = true; c.Agent.Upstream = "10.0.0.8:9001" }, AgentQuickstart{ConfigFileLoaded: true, Network: "devnet2"}, "agent.upstream"},
-		"flag upstream":   {func(c *Config) { c.Agent.Upstream = "10.0.0.8:9001" }, AgentQuickstart{Network: "devnet2", SI: "off"}, "agent.upstream"},
+		"flag source":     {func(c *Config) { c.Agent.Upstream = "10.0.0.8:9001"; c.NetworkState.Source = "network_state.yaml" }, AgentQuickstart{Network: "devnet2", SI: "off"}, "network_state.source"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			logs := captureQuickstartLogs(t)

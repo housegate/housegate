@@ -522,8 +522,8 @@ All CLI flags:
 | `-agent-upstream` | (empty) | Server-side proxy address |
 | `-agent-key` | (empty) | Ethereum private key for JWS signing |
 | `-agent-owner` | (empty) | Billed owner when `-agent-key` is an operator key (also `HOUSEGATE_AGENT_OWNER`) |
-| `-network` | `devnet2` (no config file) | Agent network preset; `devnet2` = `http://64.38.144.158:32003` (also `HOUSEGATE_NETWORK`). `-state` / `HOUSEGATE_NETWORK_STATE_SOURCE` and a pinned upstream win over it |
-| `-si` | `auto` (no config file) | Storage-integrity signing: `auto` enables it when the network state is an RPC source, `on`, `off` (also `HOUSEGATE_SI`) |
+| `-network` | `devnet2` (no config file) | Agent network preset; `devnet2` = `http://64.38.144.158:32003` (also `HOUSEGATE_NETWORK`). `-state` / `HOUSEGATE_NETWORK_STATE_SOURCE` win over it. With a pinned `-agent-upstream` the preset is still used for storage-integrity table status and network-id discovery (routing stays pinned) |
+| `-si` | `auto` (no config file) | Storage-integrity signing: `auto` enables it when the network state is an RPC source (the `-network` preset counts, also with a pinned `-agent-upstream`; with a non-RPC `-state` it stays off and logs a warning naming the remedy), `on` (needs `storage_integrity.agent.network_id` without an RPC source), `off` (also `HOUSEGATE_SI`) |
 | `-si-state-dir` | per OS | Directory for the `client_seq` state (also `HOUSEGATE_SI_STATE_DIR`) |
 | `-si-lanes` | (empty) | `client_seq` lanes (also `HOUSEGATE_SI_LANES`, config `storage_integrity.agent.lanes`): `auto` (the default) signs on a client lane once the network reports client lanes enabled, `off` keeps legacy statement ids (the driver sidecar). `storage_integrity.agent.max_inflight_per_lane` (default 16) bounds the SI statements in flight on one client lane; the legacy lane is unbounded. With an explicit `state_dir`, client lanes live in `<state_dir>/<network_id>/<signer>/lanes/` |
 | `-si-read-mode` | (empty) | Inject `SQL_x_read_mode` on SELECTs: `safe` or `unsafe_latest` (also `HOUSEGATE_SI_READ_MODE`) |
@@ -720,7 +720,7 @@ default:                     return error("no bound indexers")
 
 The owner/signer choice affects routing only: query JWS tokens are always signed by `agent.private_key_hex`, and `agent.owner` remains the billed payer carried on the wire. The bootstrap path emits a warn log and increments the `clickhouse_proxy_agent_bootstrap_fallback_total` Prometheus counter so operators can spot routing accounts that should not be in the bootstrap path.
 
-Random selection across the chosen tier balances load and gives free failover (the next session re-rolls). A pinned `agent.upstream` still works as an explicit override.
+Random selection across the chosen tier balances load and gives free failover (the next session re-rolls). A pinned `agent.upstream` still works as an explicit override: routing is then fixed to it and no upstream is discovered, but a quickstart agent (or any agent with an RPC `network_state.source`) keeps using that RPC for storage-integrity table status lookups and network-id discovery, so signing works the same as for a discovery agent.
 
 ## Cross-shard `remote()` envelopes
 
