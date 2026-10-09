@@ -134,6 +134,9 @@ type Options struct {
 	// StorageIntegrityClientLanes reports whether the arbiter committed client
 	// lanes (spec 2026-10-09 D13); sentio-node reads it from its table-registry
 	// follower. Nil means disabled: the SI ingress refuses laned statement ids.
+	// It is called on the query path once per laned SI INSERT. It receives no
+	// context, so it must be cheap and non-blocking, for example an atomic read
+	// of a follower snapshot, and never an RPC.
 	StorageIntegrityClientLanes func() bool
 	// StorageIntegrityWriteMeter optionally receives an OnStatementSequenced
 	// event for every storage-integrity statement the built-in runtime got
