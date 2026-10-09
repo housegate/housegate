@@ -10,10 +10,12 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/log"
 	"github.com/housegate/housegate/pkg/plugin"
 	"github.com/housegate/housegate/pkg/plugins/sireserved"
 	"github.com/housegate/housegate/pkg/sitable"
@@ -34,8 +36,39 @@ type Plugin struct {
 	TableState       sitable.TableState
 }
 
+// maxLoggedStatementBytes bounds the statement text carried by a refusal log.
+const maxLoggedStatementBytes = 512
+
+// truncatedMarker is appended to a statement cut by truncateStatement.
+const truncatedMarker = "…(truncated)"
+
+// truncateStatement returns sql cut to at most maxLoggedStatementBytes bytes on
+// a UTF-8 rune boundary, followed by truncatedMarker when anything was cut.
+func truncateStatement(sql string) string {
+	if len(sql) <= maxLoggedStatementBytes {
+		return sql
+	}
+	cut := maxLoggedStatementBytes
+	for cut > 0 && !utf8.RuneStart(sql[cut]) {
+		cut--
+	}
+	return sql[:cut] + truncatedMarker
+}
+
+// logRefusal emits one warn line naming the refused statement so operators can
+// see which peer query was blocked. It never logs settings or tokens.
+func logRefusal(ctx context.Context, peer, reason string, tableIDs []string, sql string) {
+	_, logger := log.FromContext(ctx, "plugin", "sipeerguard")
+	logger.Warnw("peer statement refused by storage-integrity host guard",
+		"code", int(chproto.CodeQueryIsProhibited),
+		"reason", reason,
+		"peer_address", peer,
+		"table_ids", tableIDs,
+		"statement", truncateStatement(sql))
+}
+
 // OnQuery acts only on peer-trusted, non-forwarded sessions.
-func (p *Plugin) OnQuery(_ context.Context, qctx *plugin.QueryContext) error {
+func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	if p == nil || p.TableState == nil || p.PhysicalDatabase == "" || qctx == nil || qctx.Session == nil || qctx.Query == nil {
 		return nil
 	}
@@ -46,6 +79,7 @@ func (p *Plugin) OnQuery(_ context.Context, qctx *plugin.QueryContext) error {
 	surfaces, err := sqlsurface.ScanWith(qctx.Query.Body, sqlsurface.Options{DecodeStringEscapes: true, DecodeIdentifierEscapes: true})
 	if err != nil {
 		refusals.Inc()
+		logRefusal(ctx, snap.PeerAddress, "statement_unscannable", nil, qctx.Query.Body)
 		return &chproto.ClientError{Code: chproto.CodeQueryIsProhibited,
 			Message: "storage_integrity: a peer statement that cannot be checked for governed tables is refused: " + err.Error()}
 	}
@@ -54,6 +88,7 @@ func (p *Plugin) OnQuery(_ context.Context, qctx *plugin.QueryContext) error {
 		for _, split := range splits(candidate) {
 			if table := tables.Lookup(split[0], split[1]); table.Status != sitable.Ordinary {
 				refusals.Inc()
+				logRefusal(ctx, snap.PeerAddress, "governed_table", []string{split[0] + "." + split[1]}, qctx.Query.Body)
 				return &chproto.ClientError{Code: chproto.CodeQueryIsProhibited, Message: fmt.Sprintf(
 					"storage_integrity: table %s.%s is governed by storage integrity and must be read through its host indexer; connect with --database %s or USE %s",
 					split[0], split[1], split[0], split[0])}
