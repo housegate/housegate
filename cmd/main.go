@@ -66,12 +66,19 @@ func loadConfigWithOverrides() config.Config {
 
 	agentMode := flag.Bool("agent", false, "enable agent mode (token-signing pass-through proxy)")
 	agentUpstream := flag.String("agent-upstream", "", "server-side proxy address, e.g. 10.0.0.8:9001 (required in agent mode)")
-	agentKey := flag.String("agent-key", "", "agent Ethereum private key hex for JWS signing (prefer env var HOUSEGATE_AGENT_KEY)")
+	agentKey := flag.String("agent-key", "", "agent Ethereum private key hex for JWS signing; implies agent mode without a config file unless -agent is given (prefer env var HOUSEGATE_AGENT_KEY)")
 	agentOwner := flag.String("agent-owner", "", "billed Ethereum address (owner) when -agent-key is an operator key (overrides config/env HOUSEGATE_AGENT_OWNER)")
 	agentDriver := flag.Bool("agent-driver", false, "mark outgoing queries as indexer-driver traffic (injects SQL_sentio_driver=1; upstream still gates on signer == indexer)")
+	var quick agentQuickstartFlags
+	flag.StringVar(&quick.network, "network", "", `agent network preset (default "devnet2" without a config file; also HOUSEGATE_NETWORK)`)
+	flag.StringVar(&quick.si, "si", "", "storage-integrity signing: auto|on|off (default auto without a config file; also HOUSEGATE_SI)")
+	flag.StringVar(&quick.siStateDir, "si-state-dir", "", "storage-integrity agent state directory (default per OS; also HOUSEGATE_SI_STATE_DIR)")
+	flag.StringVar(&quick.siLanes, "si-lanes", "", "client_seq lanes: auto|off (also HOUSEGATE_SI_LANES)")
+	flag.StringVar(&quick.siReadMode, "si-read-mode", "", "inject SQL_x_read_mode on SELECTs: safe|unsafe_latest (also HOUSEGATE_SI_READ_MODE)")
+	flag.StringVar(&quick.siInlineValues, "si-inline-values", "", "signed inline INSERT ... VALUES: auto|on|off (default auto without a config file; also HOUSEGATE_SI_INLINE_VALUES)")
 
 	stateSource := flag.String("state", "", "NetworkState source: yaml path, redis addr, or RPC URL e.g. http://node:10003 (overrides config/env HOUSEGATE_NETWORK_STATE_SOURCE)")
-	listenAddr := flag.String("listen", "", "proxy listen address, e.g. :9001 (overrides config/env)")
+	listenAddr := flag.String("listen", "", `proxy listen address, e.g. :9001 (overrides config/env; agent default "127.0.0.1:9000" without a config file)`)
 	metricsAddr := flag.String("metrics-listen", "", "Prometheus metrics listen address, e.g. :9091 (overrides config/env)")
 	dialTimeout := flag.String("dial-timeout", "", "upstream dial timeout, e.g. 5s (overrides config/env)")
 	idleTimeout := flag.String("idle-timeout", "", "connection idle timeout, e.g. 5m (overrides config/env)")
@@ -109,8 +116,11 @@ func loadConfigWithOverrides() config.Config {
 		cfgPath = resolved.Path
 		cfgCleanup = resolved.Cleanup
 	}
-	cfg := config.Load(cfgPath)
+	cfg, cfgLoaded, err := config.LoadFile(cfgPath)
 	cfgCleanup()
+	if err != nil {
+		log.Fatale(err, "load config file")
+	}
 
 	if explicitFlags["agent"] {
 		cfg.Agent.Mode = *agentMode
@@ -158,6 +168,19 @@ func loadConfigWithOverrides() config.Config {
 	} else if env := config.EnvOrDefault("HOUSEGATE_LOG_LEVEL", ""); env != "" && cfg.LogLevel == "" {
 		cfg.LogLevel = env
 	}
+	// After every override: the quickstart reads the effective key,
+	// upstream, network source and listen address.
+	loadedFile := ""
+	if cfgLoaded {
+		// The operator's spelling, not a decrypted memfd path.
+		loadedFile = *configPath
+		if loadedFile == "" {
+			loadedFile = "config.json"
+		}
+	}
+	if err := config.ApplyAgentQuickstart(&cfg, agentQuickstartInputs(loadedFile, explicitFlags, quick, os.Getenv)); err != nil {
+		log.Fatale(err, "agent options")
+	}
 
 	if err := cfg.Validate(); err != nil {
 		log.Fatale(err, "config validation failed")
@@ -173,6 +196,38 @@ func loadConfigWithOverrides() config.Config {
 	// flag, no env). If stage-1 already swapped, maybeSwapLogFile no-ops.
 	maybeSwapLogFile(cfg.LogFile)
 	return cfg
+}
+
+// agentQuickstartFlags holds the agent-UX value flags of spec 2026-10-09 §6.4.
+type agentQuickstartFlags struct {
+	network, si, siStateDir, siLanes, siReadMode, siInlineValues string
+}
+
+// agentQuickstartInputs resolves each agent-UX value as an explicitly passed
+// flag, else its env var (empty means not given), and records which config
+// file was read (configFile, empty for none) and whether the operator chose
+// the mode or the listen address, which the quickstart defaults must not
+// override (plan decision P5). An empty env var counts as unset, matching
+// config.Default.
+func agentQuickstartInputs(configFile string, explicit map[string]bool, f agentQuickstartFlags, getenv func(string) string) config.AgentQuickstart {
+	flagOrEnv := func(name, value, env string) string {
+		if explicit[name] {
+			return value
+		}
+		return getenv(env)
+	}
+	return config.AgentQuickstart{
+		ConfigFileLoaded: configFile != "",
+		ConfigFile:       configFile,
+		AgentModeSet:     explicit["agent"] || getenv("HOUSEGATE_AGENT") != "",
+		ListenSet:        explicit["listen"] || getenv("HOUSEGATE_LISTEN") != "",
+		Network:          flagOrEnv("network", f.network, "HOUSEGATE_NETWORK"),
+		SI:               flagOrEnv("si", f.si, "HOUSEGATE_SI"),
+		SIStateDir:       flagOrEnv("si-state-dir", f.siStateDir, "HOUSEGATE_SI_STATE_DIR"),
+		SILanes:          flagOrEnv("si-lanes", f.siLanes, "HOUSEGATE_SI_LANES"),
+		SIReadMode:       flagOrEnv("si-read-mode", f.siReadMode, "HOUSEGATE_SI_READ_MODE"),
+		SIInlineValues:   flagOrEnv("si-inline-values", f.siInlineValues, "HOUSEGATE_SI_INLINE_VALUES"),
+	}
 }
 
 func validateStandaloneRuntimeConfig(cfg *config.Config) error {

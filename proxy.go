@@ -31,6 +31,7 @@ import (
 	"github.com/housegate/housegate/pkg/registry"
 	"github.com/housegate/housegate/pkg/rewriter"
 	"github.com/housegate/housegate/pkg/sitable"
+	sicore "github.com/housegate/housegate/pkg/storageintegrity"
 )
 
 // Proxy is a started, ready-to-Serve proxy. Run/RunWith blocks until
@@ -130,6 +131,12 @@ type Options struct {
 	// storage_integrity.tables; when nil, an enabled server serves the
 	// configured tables through sitable.Static.
 	StorageIntegrityTableState sitable.TableState
+	// StorageIntegrityWriteMeter optionally receives an OnStatementSequenced
+	// event for every storage-integrity statement the built-in runtime got
+	// accepted by the arbiter (spec 2026-10-09 §6.9). Best-effort and
+	// asynchronous; nil disables it. An idempotent ACK2 replay of the same
+	// statement may fire again, so implementations dedupe on StatementID.
+	StorageIntegrityWriteMeter sicore.WriteMeter
 
 	// CommitGateObservers gate DDL statements (CREATE / DROP TABLE,
 	// CREATE / DROP DATABASE) on host-supplied external commits.

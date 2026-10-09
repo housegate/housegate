@@ -128,6 +128,9 @@ HOUSEGATE_AGE_IDENTITY_FILE=~/.housegate.age \
 | `auth.allowed_addresses` | []string | 否 | `[]` | 允许的小写 `0x…` 地址。空 = 任意通过签名校验的签名者都允许 |
 | `auth.max_token_age` | duration | 否 | `1m` | JWS `iat` claim 的最大年龄 |
 | `auth.allow_no_auth` | bool | 否 | `false` | 放行未签名的 query（用于灰度切换） |
+| `auth.writer_predicate` | string | 否 | `contract` | INSERT/CREATE/DROP 及其他 Write 位语句如何鉴权：`contract` 使用宿主的 `isDatabaseWriter`（没有 address(0) 的 Write 通配；indexer signer 算 writer）；`bitmap` 保留存储的 bitmap 检查，并带 address(0) 并集。对不支持 `WriterAccess` 的 registry，启动时会拒绝 `contract`。 |
+
+`auth.writer_predicate: contract` 需要 registry 能回答合约的 `isDatabaseWriter`：嵌入宿主的链状态 registry，或内存（YAML）network state。RPC network-state source（`network_state.source` 为 `http(s)://` URL）不实现它，因此 server 模式下 `auth.enabled: true` 且使用 RPC source 的配置，在默认值下会拒绝启动，并在错误里点名这个 key。此时请设置 `auth.writer_predicate: bitmap`，沿用存储 bitmap 检查（含 address(0) 并集）。
 
 ### `rewriter` — 外部 SQL Rewriter gRPC 服务
 
@@ -145,6 +148,21 @@ rewriter 是物理/逻辑数据库映射的唯一权威。连接上的每条 SQL
 | `rewriter.timeout` | duration | 否 | `5s` | 单次 gRPC 超时 |
 | `rewriter.physical_database` | string | 否 | `` | 本部署中承载所有 logical database 的那个唯一物理 ClickHouse 数据库。空 = 同时关闭 `database_map` 和 `hello.Database` 替换 |
 | `rewriter.delimiter` | string | 否 | `_` | `<logical>` 与 `<original_table>` 之间的分隔符 |
+
+### `storage_integrity` — 受保护表的读写策略
+
+完整参数、动态表状态与读模式见英文版 [README.md](README.md#storage_integrity--protected-table-read-policy)。这里只列出 SI 表写入权限的要点。
+
+**谁可以写。** 签名 ingress 接受目标数据库的所有 writer：indexer signer，或在该库上持有 Owner 或 Write 的账户（只有 Admin、以及 address(0) 的授权都不算）。`storage_integrity.ingress.denied_addresses`（小写地址；改动需重启）会拒绝列表中的 signer 或解析出的 owner；`allowed_addresses` 可选，设置后仍然限制 signer。拒绝使用 497 错误码（`ACCESS_DENIED`）：`storage_integrity: signer 0x… is not permitted to write storage-integrity tables`、`storage_integrity: owner 0x… is not permitted to write storage-integrity tables`、`storage_integrity: 0x… is not an operator of 0x…`、`storage_integrity: 0x… is not a writer of database <db>`。如果拒绝明确没有消耗该语句的 `client_seq`，错误消息以 ` [client_seq unspent]` 结尾，agent 随后会复用这个 seq。peer-trusted 的读取如果指向受治理表的普通物理表，会被拒绝，错误码 392：`storage_integrity: table <db>.<t> is governed by storage integrity and must be read through its host indexer; connect with --database <db> or USE <db>`。
+
+```yaml
+storage_integrity:
+  ingress:
+    enabled: true
+    network_id: devnet2-si
+    allowed_addresses: []          # 可选；为空则接受所有数据库 writer
+    denied_addresses: []           # 在 SI 通道上被拒绝的小写 signer/owner 地址
+```
 
 ### `agent` — Agent 模式设置
 
@@ -358,6 +376,18 @@ Shard 感知（每副本连接池 + 路由）：
 
 ### 1.2 Agent 模式
 
+#### 快速开始（用户 agent）
+
+```bash
+export HOUSEGATE_AGENT_KEY=0xYOUR_PRIVATE_KEY
+housegate                                # agent 模式，devnet2，127.0.0.1:9000
+clickhouse-client --host 127.0.0.1 --port 9000
+```
+
+只给私钥、不带配置文件时，agent 会加入 `devnet2`，从承载各数据库的 indexer 发现 network id 与表状态；`client_seq` 计数器保存在 `<base>/si/<network_id>/<signer>/` 下，其中 `<base>` 在 Linux 上是 `$XDG_STATE_HOME/housegate`（`XDG_STATE_HOME` 为绝对路径时），否则是 `~/.local/state/housegate`，在 macOS 上是 `~/Library/Application Support/housegate`；在 linux/amd64 和 darwin/arm64 上自动拉取 inline `VALUES` 所需的 native 引擎；SI INSERT 会把 session 切换到承载该库的 indexer。读取不会被切换：读 SI 表请用 `--database <db>` 连接。计费：每条 INSERT 计 1 个 query 单位（inline `VALUES` 计 2 个），被拒绝时同样计费。自动 native materializer（`-si-inline-values auto` 或 `on`）只在 inline `INSERT ... VALUES` 语句（即签名 inline `VALUES` 通道认领的形状）里把 `now()`、`rand()`、`generateUUIDv4()` 替换为字面常量；其他 query（包括 `SELECT` 和 `INSERT ... SELECT`）原样发往服务端，保留逐行不同的取值。配置文件里显式写 `materialize.enabled: true` 时会改写 agent 上的每一条 query，此时 `SELECT rand() FROM numbers(10)` 会返回十个相同的值。
+
+#### 配置式 agent
+
 无本地 ClickHouse — 每条 query 用 `agent.private_key_hex` 签名后转发给 `agent.upstream` 上的 relay-mode proxy。Server-side 的特性（重写、分片路由）都关闭。
 
 配置文件方式：
@@ -397,6 +427,8 @@ bazel-bin/cmd/housegate_/housegate -agent -agent-upstream 10.0.0.8:9001
 
 > **安全提示：** CLI flag 在进程列表（`ps`、`/proc`）中是可见的。请优先用 `HOUSEGATE_AGENT_KEY` 或配置文件传私钥。
 
+> **默认值变更。** 不带配置文件、只用 flag 或环境变量的 agent 现在默认监听 `127.0.0.1:9000`（此前是 `:9001`），这样 `clickhouse-client` 用默认端口和回环地址即可连接。上面的「混合」示例没有 `-listen`，因此监听 `127.0.0.1:9000`；如需保持旧地址，传 `-listen :9001`（或设置 `HOUSEGATE_LISTEN`）。使用配置文件时 `listen` 不变。
+
 覆盖优先级（高 → 低）：CLI flag → 环境变量 → 配置文件 → 内置默认值。
 
 所有 CLI flag：
@@ -406,7 +438,14 @@ bazel-bin/cmd/housegate_/housegate -agent -agent-upstream 10.0.0.8:9001
 | `-agent` | `false` | 启用 agent 模式（覆盖 `agent.mode`） |
 | `-agent-upstream` | (空) | server-side proxy 地址 |
 | `-agent-key` | (空) | JWS 签名用的以太坊私钥 |
-| `-listen` | `:9001` | proxy 监听地址 |
+| `-agent-owner` | (空) | `-agent-key` 是 operator key 时的计费 owner（也可用 `HOUSEGATE_AGENT_OWNER`） |
+| `-network` | `devnet2`（无配置文件时） | agent 网络预设；`devnet2` = `http://64.38.144.158:32003`（也可用 `HOUSEGATE_NETWORK`）。`-state` / `HOUSEGATE_NETWORK_STATE_SOURCE` 与固定的 upstream 优先于它 |
+| `-si` | `auto`（无配置文件时） | storage-integrity 签名：`auto` 在 network state 为 RPC source 时启用，另有 `on`、`off`（也可用 `HOUSEGATE_SI`） |
+| `-si-state-dir` | 按操作系统 | `client_seq` 状态目录（也可用 `HOUSEGATE_SI_STATE_DIR`） |
+| `-si-lanes` | (空) | `client_seq` lane：`auto` 或 `off`（也可用 `HOUSEGATE_SI_LANES`）；网络尚未启用 client lane，带 lane 的 statement id 会被拒绝 |
+| `-si-read-mode` | (空) | 在 SELECT 上注入 `SQL_x_read_mode`：`safe` 或 `unsafe_latest`（也可用 `HOUSEGATE_SI_READ_MODE`） |
+| `-si-inline-values` | `auto`（无配置文件时） | 带签名的 inline `INSERT ... VALUES`：`auto`、`on`、`off`（也可用 `HOUSEGATE_SI_INLINE_VALUES`） |
+| `-listen` | agent 模式且无配置文件时为 `127.0.0.1:9000`，否则 `:9001` | proxy 监听地址 |
 | `-metrics-listen` | `:9091` | Prometheus metrics 地址 |
 | `-dial-timeout` | `5s` | upstream dial 超时 |
 | `-idle-timeout` | `5m` | 连接空闲超时 |

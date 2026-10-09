@@ -298,12 +298,12 @@ func payloadStateFromProto(state pb.PayloadState) (PayloadState, error) {
 // ArbiterStatementEnvelopeToProto converts the HouseGate-core envelope to the
 // frozen arbiter-proto StatementEnvelopeV2 wire shape.
 func ArbiterStatementEnvelopeToProto(env StatementEnvelope) (*pb.StatementEnvelopeV2, error) {
-	id, err := parseFlatStatementID(env.StatementID)
+	id, err := ParseLegacyStatementID(env.StatementID)
 	if err != nil {
 		return nil, fmt.Errorf("storageintegrity: invalid statement id %q: %w", env.StatementID, err)
 	}
-	if env.Signer != "" && id.ClientAccount != strings.ToLower(env.Signer) {
-		return nil, fmt.Errorf("storageintegrity: statement id account %s does not match signer %s", id.ClientAccount, strings.ToLower(env.Signer))
+	if env.Signer != "" && id.Account != strings.ToLower(env.Signer) {
+		return nil, fmt.Errorf("storageintegrity: statement id account %s does not match signer %s", id.Account, strings.ToLower(env.Signer))
 	}
 	if env.StatementKind != KindInsert {
 		return nil, fmt.Errorf("storageintegrity: unsupported statement kind %q for arbiter SubmitStatement", env.StatementKind)
@@ -340,9 +340,9 @@ func ArbiterStatementEnvelopeToProto(env StatementEnvelope) (*pb.StatementEnvelo
 	}
 	return &pb.StatementEnvelopeV2{
 		StatementId: &pb.StatementID{
-			ClientAccount: id.ClientAccount,
-			ClientSeq:     id.ClientSeq,
-			ClientNonce:   id.ClientNonce,
+			ClientAccount: id.Account,
+			ClientSeq:     id.Seq,
+			ClientNonce:   id.Nonce,
 		},
 		StatementKind:   pb.StatementKind_STATEMENT_KIND_INSERT,
 		Sql:             env.SQL,
@@ -368,6 +368,11 @@ func ArbiterStatementEnvelopeToProto(env StatementEnvelope) (*pb.StatementEnvelo
 // after the statement was admitted (spec 2026-09-24 §9.6).
 var AdmissionCodeSchemaNotAllowed = pb.AdmissionCode_ADMISSION_CODE_SCHEMA_NOT_ALLOWED.String()
 
+// AdmissionCodeDuplicateClientSeq is the arbiter's refusal of a coordinate
+// that is already spent; it is the one coded terminal reject that is never
+// marked unspent (spec 2026-10-09 §6.6).
+var AdmissionCodeDuplicateClientSeq = pb.AdmissionCode_ADMISSION_CODE_DUPLICATE_CLIENT_SEQ.String()
+
 // SubmitOutcomeFromSequencedAck maps Arbiter's application-level admission
 // result into the existing staged-intake outcome categories.
 func SubmitOutcomeFromSequencedAck(ack *pb.SequencedAck) SubmitOutcome {
@@ -380,7 +385,7 @@ func SubmitOutcomeFromSequencedAck(ack *pb.SequencedAck) SubmitOutcome {
 		if ack.GetStatementSeq() == 0 {
 			return SubmitOutcome{Category: OutcomeUnknown, Reason: "arbiter accepted without statement_seq"}
 		}
-		return SubmitOutcome{Category: OutcomeAccepted, Reason: reason}
+		return SubmitOutcome{Category: OutcomeAccepted, Reason: reason, StatementSeq: ack.GetStatementSeq()}
 	case pb.AdmissionCode_ADMISSION_CODE_DUPLICATE_CLIENT_SEQ,
 		pb.AdmissionCode_ADMISSION_CODE_SCHEMA_NOT_ALLOWED,
 		pb.AdmissionCode_ADMISSION_CODE_KIND_NOT_ADMITTED,

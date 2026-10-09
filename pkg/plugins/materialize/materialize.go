@@ -35,10 +35,17 @@ type Observer interface {
 type Plugin struct {
 	Materializer Materializer
 	Observer     Observer
+	// Scope, when set, limits the plugin to the statements it accepts;
+	// every other statement is left untouched and records no outcome. Nil
+	// rewrites every query.
+	Scope func(sql string) bool
 }
 
 func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	if p.Materializer == nil || qctx.Query == nil || qctx.Query.Body == "" {
+		return nil
+	}
+	if p.Scope != nil && !p.Scope(qctx.Query.Body) {
 		return nil
 	}
 	_, logger := log.FromContext(ctx)

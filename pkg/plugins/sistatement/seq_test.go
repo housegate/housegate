@@ -50,6 +50,9 @@ func TestSeqCounter_StartsAtOneAndPersistsAcrossReopen(t *testing.T) {
 	if err != nil || string(b) != "3\n" {
 		t.Fatalf("seq file = %q err=%v, want \"3\\n\"", b, err)
 	}
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
 	reopened, err := OpenSeqCounter(dir, "0xabc0000000000000000000000000000000000001")
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
@@ -75,6 +78,9 @@ func TestSeqCounter_AdvanceToReservesSuppliedSequenceDurably(t *testing.T) {
 		if err := c.AdvanceTo(reused); !errors.Is(err, ErrClientSeqReused) || c.Last() != 41 {
 			t.Fatalf("AdvanceTo(%d) = %v, last=%d; want ErrClientSeqReused and last 41", reused, err, c.Last())
 		}
+	}
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
 	}
 	reopened, err := OpenSeqCounter(dir, "0xabc")
 	if err != nil {
@@ -180,11 +186,13 @@ func TestSeqCounter_RequiresAccountAndDir(t *testing.T) {
 		t.Fatal("empty account must be rejected")
 	}
 	missing := filepath.Join(t.TempDir(), "not-created")
-	if _, err := OpenSeqCounter(missing, "0xabc"); !errors.Is(err, os.ErrNotExist) || !strings.Contains(err.Error(), "must already exist") {
-		t.Fatalf("missing state dir = %v, want pre-existing-directory error", err)
+	created, err := OpenSeqCounter(missing, "0xabc")
+	if err != nil {
+		t.Fatalf("missing state dir must be created (spec 2026-10-09 §6.4): %v", err)
 	}
-	if _, err := os.Stat(missing); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("missing state dir was created: %v", err)
+	_ = created.Close()
+	if info, err := os.Stat(missing); err != nil || !info.IsDir() {
+		t.Fatalf("state dir not created: %v", err)
 	}
 	notDir := filepath.Join(t.TempDir(), "file")
 	if err := os.WriteFile(notDir, []byte("x"), 0o600); err != nil {
@@ -299,6 +307,9 @@ func TestSeqCounter_DirectoryDurabilityFailuresNeverIssueSequence(t *testing.T) 
 			// visible even when the directory operation reports failure; a restart
 			// must therefore advance from it, never move backwards or reissue it as
 			// though the failed call had succeeded.
+			if err := c.Close(); err != nil {
+				t.Fatal(err)
+			}
 			reopened, err := OpenSeqCounter(dir, "0xabc")
 			if err != nil {
 				t.Fatal(err)
@@ -332,6 +343,9 @@ func TestSeqCounter_DirectoryDurabilityFailuresRejectAdvanceTo(t *testing.T) {
 	}
 	if got := c.Last(); got != 0 {
 		t.Fatalf("failed AdvanceTo changed issued high watermark to %d", got)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
 	}
 	reopened, err := OpenSeqCounter(dir, "0xabc")
 	if err != nil {

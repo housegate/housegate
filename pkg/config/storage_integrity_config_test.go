@@ -198,14 +198,48 @@ func TestConfigValidateStorageIntegrityIngress(t *testing.T) {
 		}
 	})
 
-	t.Run("signer allowlist required", func(t *testing.T) {
-		cfg := minimalServerConfig(t)
-		cfg.StorageIntegrity.Ingress.Enabled = true
-		cfg.StorageIntegrity.Ingress.NetworkID = "testnet-v2"
-		cfg.StorageIntegrity.Ingress.MaxPayloadBytes = defaultStorageIntegrityMaxPayloadBytes
+	t.Run("empty allowlist is open (spec 2026-10-09 D1)", func(t *testing.T) {
+		cfg := base
+		cfg.StorageIntegrity.Ingress.AllowedAddresses = nil
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("an empty allowed_addresses must validate: %v", err)
+		}
+	})
+
+	t.Run("network_id still required", func(t *testing.T) {
+		cfg := base
+		cfg.StorageIntegrity.Ingress.NetworkID = ""
 		err := cfg.Validate()
-		if err == nil || !strings.Contains(err.Error(), "allowed_addresses") {
-			t.Fatalf("Validate err = %v, want allowlist rejection", err)
+		if err == nil || !strings.Contains(err.Error(), "storage_integrity.ingress.network_id is required") {
+			t.Fatalf("Validate err = %v, want network_id rejection", err)
+		}
+	})
+
+	t.Run("denied_addresses validated", func(t *testing.T) {
+		for name, tc := range map[string]struct {
+			denied []string
+			want   string
+		}{
+			"uppercase": {[]string{"0xABCDEF0000000000000000000000000000000001"}, "lowercase"},
+			"short":     {[]string{"0x1234"}, "lowercase"},
+			"no 0x":     {[]string{"1111111111111111111111111111111111111111"}, "lowercase"},
+			"duplicate": {[]string{"0x1111111111111111111111111111111111111111", "0x1111111111111111111111111111111111111111"}, "duplicate"},
+		} {
+			t.Run(name, func(t *testing.T) {
+				cfg := base
+				cfg.StorageIntegrity.Ingress.AllowedAddresses = nil
+				cfg.StorageIntegrity.Ingress.DeniedAddresses = tc.denied
+				err := cfg.Validate()
+				if err == nil || !strings.Contains(err.Error(), "storage_integrity.ingress.denied_addresses") || !strings.Contains(err.Error(), tc.want) {
+					t.Fatalf("Validate err = %v, want a denied_addresses %q rejection", err, tc.want)
+				}
+			})
+		}
+		cfg := base
+		cfg.StorageIntegrity.Ingress.AllowedAddresses = nil
+		cfg.StorageIntegrity.Ingress.DeniedAddresses = []string{"0x1111111111111111111111111111111111111111"}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("a valid denylist must validate: %v", err)
 		}
 	})
 

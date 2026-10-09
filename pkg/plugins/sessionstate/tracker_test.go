@@ -93,3 +93,7 @@ func (s *stateOnlySession) RebindToPeer(context.Context, *chproto.Codec, *chprot
 func (s *stateOnlySession) RebindToLocal(context.Context, *chproto.Codec, *chproto.ClientHello) error {
 	return nil
 }
+
+func (s *stateOnlySession) SwitchUpstream(context.Context, *chproto.Codec, *chproto.ClientHello) error {
+	return nil
+}

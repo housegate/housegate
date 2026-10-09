@@ -89,3 +89,44 @@ func TestTableNoLongerAcceptsWritesMessage(t *testing.T) {
 		}
 	}
 }
+
+func TestMarkSeqUnspent(t *testing.T) {
+	plain := errors.New("refused")
+	if IsSeqUnspent(plain) {
+		t.Fatal("unmarked error reported unspent")
+	}
+	marked := MarkSeqUnspent(plain)
+	if !IsSeqUnspent(marked) || marked.Error() != "refused" || !errors.Is(marked, plain) {
+		t.Fatalf("marked = %v (unspent=%v)", marked, IsSeqUnspent(marked))
+	}
+	if MarkSeqUnspent(marked) != marked {
+		t.Fatal("MarkSeqUnspent must be idempotent")
+	}
+	if MarkSeqUnspent(nil) != nil {
+		t.Fatal("MarkSeqUnspent(nil) must stay nil")
+	}
+	keep := &ClientError{Code: CodeTooManyParts, Message: "storage_integrity: back-pressure: retry later", KeepSession: true}
+	wrapped := fmt.Errorf("strict: %w", MarkSeqUnspent(keep))
+	if !IsSeqUnspent(wrapped) || !KeepsSession(wrapped) {
+		t.Fatal("marking must not hide the wrapped ClientError")
+	}
+	if !IsSeqUnspent(&ClientError{Code: 497, Message: "x", SeqUnspent: true}) {
+		t.Fatal("ClientError.SeqUnspent must count as marked")
+	}
+}
+
+func TestSeqUnspentSuffixHelpers(t *testing.T) {
+	msg := TableActivatingMessage("db1.t") + SeqUnspentSuffix
+	if !HasSeqUnspentSuffix(msg) || TrimSeqUnspentSuffix(msg) != TableActivatingMessage("db1.t") {
+		t.Fatalf("suffix helpers on %q", msg)
+	}
+	if !IsTableActivatingMessage(msg) {
+		t.Fatal("IsTableActivatingMessage must accept the marker suffix")
+	}
+	if !IsTableNoLongerAcceptsWritesMessage(TableNoLongerAcceptsWritesMessage("db1.t") + SeqUnspentSuffix) {
+		t.Fatal("IsTableNoLongerAcceptsWritesMessage must accept the marker suffix")
+	}
+	if HasSeqUnspentSuffix("storage_integrity: refused") {
+		t.Fatal("unsuffixed message reported the marker")
+	}
+}

@@ -79,6 +79,17 @@ import (
 // a no-op.
 type PermissionCommitGateObserver struct {
 	reg registry.Registry
+	// writers, when set, answers every Write-bit policy entry with the
+	// contract's isDatabaseWriter (spec 2026-10-09 R3, auth.writer_predicate:
+	// contract): no address(0) union, and the indexer signer counts. Nil keeps
+	// the stored-bitmap check with the wildcard union (writer_predicate: bitmap).
+	writers registry.WriterAccess
+}
+
+// NewPermissionCommitGateObserverWithWriters builds the observer with the
+// contract writer predicate. writers == nil is the bitmap behaviour.
+func NewPermissionCommitGateObserverWithWriters(reg registry.Registry, writers registry.WriterAccess) *PermissionCommitGateObserver {
+	return &PermissionCommitGateObserver{reg: reg, writers: writers}
 }
 
 // NewPermissionCommitGateObserver wires the observer against any
@@ -288,6 +299,17 @@ func (o *PermissionCommitGateObserver) checkAccess(account AccountAddress, db Da
 	// instead of racing with the deletion.
 	if info.PendingDelete {
 		return fmt.Errorf("permission: database %q is pending deletion", db)
+	}
+	if required == registry.DbAuthWrite && o.writers != nil {
+		ok, err := o.writers.IsDatabaseWriter(string(db), string(account))
+		if err != nil {
+			return fmt.Errorf("permission: database %q: %w", db, err)
+		}
+		if !ok {
+			return fmt.Errorf("permission: account %s lacks %s on database %q for %s",
+				account, prettyAuthBit(required), db, stmtType)
+		}
+		return nil
 	}
 	auth := registry.DbAuth(0)
 	dbKey := string(db)

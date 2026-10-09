@@ -447,6 +447,8 @@ func (r *Relay) runSynthesizedInsert(ctx context.Context, qctx *plugin.QueryCont
 	client := r.sess.Client()
 	plan := qctx.SynthesizedInsert
 	q := qctx.Query
+	// Refusals on this agent-side lane are not marked unspent: the marker is a
+	// server-to-agent signal, and the agent releases its own failures directly.
 	rejectClose := func(err error) error {
 		r.hooks.OnQueryAbort(ctx, qctx)
 		r.hooks.OnQueryComplete(ctx, r.sess)

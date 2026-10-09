@@ -3,6 +3,9 @@ package config
 import (
 	"errors"
 	"fmt"
+	"os"
+	"regexp"
+	"runtime"
 	"strings"
 	"time"
 
@@ -87,11 +90,26 @@ type StorageIntegrityReadConfig struct {
 type StorageIntegrityAgentConfig struct {
 	Enabled bool `json:"enabled" yaml:"enabled"`
 	// NetworkID is the Arbiter genesis network id signed into every token.
+	// Optional with an RPC network state (or a host-injected one): the agent
+	// then discovers it from the indexer hosting each INSERT's database, and a
+	// configured value is the fallback when that discovery fails (spec
+	// 2026-10-09 §6.4, plan decision P7).
 	NetworkID string `json:"network_id" yaml:"network_id"`
 	// KeeperShardID must be 0 in v1.
 	KeeperShardID uint32 `json:"keeper_shard_id" yaml:"keeper_shard_id"`
-	// StateDir holds <account>.seq, the durable client_seq counter.
+	// StateDir holds <account>.seq, the durable client_seq counter, for every
+	// network. Optional: empty uses the per-OS default base
+	// (DefaultAgentStateBase) with one counter per network under
+	// <base>/si/<network_id>/<account>/ (plan decision P4).
 	StateDir string `json:"state_dir" yaml:"state_dir"`
+	// Lanes selects client_seq lanes: "auto" (default) uses lanes when the
+	// hosting indexer reports them enabled, "off" keeps legacy lane-less ids
+	// (the driver sidecar, HOUSEGATE_SI_LANES=off). No indexer reports lanes
+	// yet, so both use the legacy lane today.
+	Lanes string `json:"lanes" yaml:"lanes"`
+	// ReadMode, when set, injects SQL_x_read_mode on SELECTs ("safe" or
+	// "unsafe_latest"); empty keeps the server default.
+	ReadMode string `json:"read_mode" yaml:"read_mode"`
 	// MaxPayloadBytes bounds one buffered INSERT payload (default 64 MiB).
 	MaxPayloadBytes uint64 `json:"max_payload_bytes" yaml:"max_payload_bytes"`
 	// RequireNetworkState (default true) makes Validate insist on
@@ -127,10 +145,15 @@ type StorageIntegritySafeMergesConfig struct {
 }
 
 // StorageIntegrityIngressConfig is the server-side signed admission surface.
+// Writes are open to every database writer (spec 2026-10-09 D1/D2):
+// AllowedAddresses is optional (empty admits any signer the writer predicate
+// admits) and DeniedAddresses refuses a statement whose signer or resolved
+// owner is listed. Both are static; a change needs a restart.
 type StorageIntegrityIngressConfig struct {
 	Enabled          bool     `json:"enabled"           yaml:"enabled"`
 	NetworkID        string   `json:"network_id"        yaml:"network_id"`
 	AllowedAddresses []string `json:"allowed_addresses" yaml:"allowed_addresses"`
+	DeniedAddresses  []string `json:"denied_addresses"  yaml:"denied_addresses"`
 	MaxTokenAge      Duration `json:"max_token_age"     yaml:"max_token_age"`
 	RequestTimeout   Duration `json:"request_timeout"  yaml:"request_timeout"`
 	MaxPayloadBytes  uint64   `json:"max_payload_bytes" yaml:"max_payload_bytes"`
@@ -293,9 +316,7 @@ func (c StorageIntegrityConfig) validate(mode Mode) error {
 	if c.SafeMerges.AllowNativeBackgroundMerges {
 		errs = append(errs, errors.New("storage_integrity.safe_merges.allow_native_background_merges is not supported in v1: native background merges would mutate the guarded part inventory"))
 	}
-	if len(c.Ingress.AllowedAddresses) == 0 {
-		errs = append(errs, errors.New("storage_integrity.ingress.allowed_addresses is required when storage_integrity.ingress.enabled"))
-	}
+	errs = append(errs, validateDeniedAddresses(c.Ingress.DeniedAddresses)...)
 	if strings.TrimSpace(c.Ingress.NetworkID) == "" {
 		errs = append(errs, errors.New("storage_integrity.ingress.network_id is required when storage_integrity.ingress.enabled"))
 	}
@@ -406,20 +427,37 @@ func (c StorageIntegrityConfig) validateAgent(root *Config) error {
 			errs = append(errs, errors.New("storage_integrity.agent.inline_values.max_rows must be > 0"))
 		}
 	}
+	// Checked before the enabled gate: the read-mode injector runs without
+	// the SI statement plugin.
+	switch a.Lanes {
+	case "", "auto", "off":
+	default:
+		errs = append(errs, fmt.Errorf("storage_integrity.agent.lanes %q is invalid (want auto or off)", a.Lanes))
+	}
+	switch a.ReadMode {
+	case "", "safe", "unsafe_latest":
+	default:
+		errs = append(errs, fmt.Errorf("storage_integrity.agent.read_mode %q is invalid (want safe or unsafe_latest)", a.ReadMode))
+	}
 	if !a.Enabled {
 		if joined := errors.Join(errs...); joined != nil {
 			return fmt.Errorf("storage_integrity.agent: %w", joined)
 		}
 		return nil
 	}
-	if strings.TrimSpace(a.NetworkID) == "" {
-		errs = append(errs, errors.New("storage_integrity.agent.network_id is required when storage_integrity.agent.enabled"))
+	// An RPC network state answers discovery; a host-injected one may.
+	discoverable := root.NetworkState.IsRpcSource() || !a.RequireNetworkState
+	if strings.TrimSpace(a.NetworkID) == "" && !discoverable {
+		errs = append(errs, errors.New("storage_integrity.agent.network_id is required unless network_state.source is an RPC URL (the agent then discovers it from the hosting indexer)"))
 	}
 	if a.KeeperShardID != 0 {
 		errs = append(errs, fmt.Errorf("storage_integrity.agent.keeper_shard_id must be 0 in v1, got %d", a.KeeperShardID))
 	}
 	if strings.TrimSpace(a.StateDir) == "" {
-		errs = append(errs, errors.New("storage_integrity.agent.state_dir is required when storage_integrity.agent.enabled"))
+		home, _ := os.UserHomeDir()
+		if _, ok := DefaultAgentStateBase(runtime.GOOS, os.Getenv, home); !ok {
+			errs = append(errs, fmt.Errorf("storage_integrity.agent.state_dir is required on %s (no default state directory)", runtime.GOOS))
+		}
 	}
 	if a.MaxPayloadBytes == 0 {
 		errs = append(errs, errors.New("storage_integrity.agent.max_payload_bytes must be > 0 when storage_integrity.agent.enabled"))
@@ -453,6 +491,27 @@ func (a StorageIntegrityAgentConfig) InlineValuesPrerequisiteErrors(materializeE
 	}
 	if !a.Enabled {
 		errs = append(errs, errors.New("storage_integrity.agent.inline_values requires storage_integrity.agent.enabled"))
+	}
+	return errs
+}
+
+var lowercaseAddressPattern = regexp.MustCompile(`^0x[0-9a-f]{40}$`)
+
+// validateDeniedAddresses requires canonical lowercase addresses: the
+// ingress compares them byte-for-byte with recovered signers and normalized
+// owners, so a checksum-cased entry would silently never match.
+func validateDeniedAddresses(addresses []string) []error {
+	var errs []error
+	seen := make(map[string]bool, len(addresses))
+	for _, address := range addresses {
+		if !lowercaseAddressPattern.MatchString(address) {
+			errs = append(errs, fmt.Errorf("storage_integrity.ingress.denied_addresses entry %q must be a lowercase 0x-prefixed 20-byte hex address", address))
+			continue
+		}
+		if seen[address] {
+			errs = append(errs, fmt.Errorf("storage_integrity.ingress.denied_addresses lists %s twice (duplicate)", address))
+		}
+		seen[address] = true
 	}
 	return errs
 }

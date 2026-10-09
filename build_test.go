@@ -27,11 +27,13 @@ import (
 	"github.com/housegate/housegate/pkg/plugins/querysettings"
 	"github.com/housegate/housegate/pkg/plugins/rewrite"
 	"github.com/housegate/housegate/pkg/plugins/sessionstate"
+	"github.com/housegate/housegate/pkg/plugins/sipeerguard"
 	"github.com/housegate/housegate/pkg/plugins/sireserved"
 	"github.com/housegate/housegate/pkg/plugins/sistatement"
 	"github.com/housegate/housegate/pkg/plugins/storageintegrity"
 	"github.com/housegate/housegate/pkg/plugins/tablerefguard"
 	"github.com/housegate/housegate/pkg/proxy"
+	"github.com/housegate/housegate/pkg/registry"
 	"github.com/housegate/housegate/pkg/replay"
 	"github.com/housegate/housegate/pkg/replay/payloadexec"
 	"github.com/housegate/housegate/pkg/rewriter"
@@ -625,6 +627,11 @@ func TestBuildAgent_StorageIntegrityAgentWiresPluginChain(t *testing.T) {
 	}
 	if len(chain.ClosePlugins) != 1 || chain.ClosePlugins[0] != siPlug {
 		t.Fatalf("close plugins = %#v, want sistatement instance", chain.ClosePlugins)
+	}
+	// sistatement recycles a seq the server proved unspent (spec 2026-10-09
+	// D16 (b)); metrics keeps observing the same Exceptions.
+	if len(chain.ExceptionPlugins) != 2 || chain.ExceptionPlugins[0] != siPlug {
+		t.Fatalf("exception plugins = %#v, want [sistatement metrics]", chain.ExceptionPlugins)
 	}
 }
 
@@ -2054,6 +2061,9 @@ func buildTestStorageIntegritySchema() payloadexec.TableSchema {
 	}
 }
 
+// buildTestStorageIntegrityKey is the key the root SI ingress tests sign with.
+const buildTestStorageIntegrityKey = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
 func buildTestStorageIntegrityNetworkState() *network.InMemoryNetworkState {
 	ns := network.NewInMemoryNetworkState()
 	schema := buildTestStorageIntegritySchema()
@@ -2064,7 +2074,34 @@ func buildTestStorageIntegrityNetworkState() *network.InMemoryNetworkState {
 		SchemaHash: payloadexec.TableSchemaHash("testnet-v2", schema),
 		SchemaJson: `{"table_id":"tenant.events","columns":[{"name":"id","type":"UInt64"},{"name":"region","type":"String"}]}`,
 	}
+	// Spec 2026-10-09 D2: the ingress admits only database writers.
+	ns.DatabaseInfos["tenant"] = network.DatabaseInfo{DatabaseId: "tenant"}
+	signer, err := auth.NewRelaySigner(buildTestStorageIntegrityKey)
+	if err != nil {
+		panic(err)
+	}
+	ns.DatabasePermissions[network.AccountAddress(strings.ToLower(signer.Address()))] = network.DatabasePermissions{"tenant": registry.DbAuthWrite}
 	return ns
+}
+
+// registryWithoutWriters hides InMemoryNetworkState's WriterAccess.
+type registryWithoutWriters struct{ registry.Registry }
+
+func TestBuildServer_StorageIntegrityIngressRequiresWriterAccess(t *testing.T) {
+	cfg := minimalRouterOnlyCfg(t)
+	cfg.StorageIntegrity.Ingress.Enabled = true
+	cfg.StorageIntegrity.Ingress.NetworkID = "testnet-v2"
+	cfg.StorageIntegrity.Ingress.MaxTokenAge.Duration = time.Minute
+	cfg.StorageIntegrity.Ingress.RequestTimeout.Duration = 50 * time.Millisecond
+	cfg.StorageIntegrity.Ingress.MaxPayloadBytes = 7
+	_, err := buildServer(Options{
+		Config:                            cfg,
+		NetworkState:                      registryWithoutWriters{Registry: buildTestStorageIntegrityNetworkState()},
+		StorageIntegrityAdmissionConsumer: &recordingAdmissionConsumer{},
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "storage_integrity.ingress requires a registry that implements WriterAccess (contract isDatabaseWriter)") {
+		t.Fatalf("buildServer err = %v, want the WriterAccess startup refusal", err)
+	}
 }
 
 func buildTestStatementID(signer *auth.RelaySigner, seq uint64) string {
@@ -2090,6 +2127,10 @@ func (s *buildTestSession) RebindToPeer(context.Context, *chproto.Codec, *chprot
 	return nil
 }
 func (s *buildTestSession) RebindToLocal(context.Context, *chproto.Codec, *chproto.ClientHello) error {
+	return nil
+}
+
+func (s *buildTestSession) SwitchUpstream(context.Context, *chproto.Codec, *chproto.ClientHello) error {
 	return nil
 }
 
@@ -2485,4 +2526,66 @@ func TestBuildServer_TableReferenceProbeRunsForEveryRewriter(t *testing.T) {
 			t.Fatalf("calls = %d, deadline = %v", calls, deadline)
 		}
 	})
+}
+
+func TestBuildServer_WriterPredicateRequiresWriterAccess(t *testing.T) {
+	cfg := withoutRewriter(minimalServerCfg(t))
+	cfg.Auth.Enabled = true
+	_, err := buildServer(Options{Config: cfg, NetworkState: registryWithoutWriters{Registry: network.NewInMemoryNetworkState()}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "auth.writer_predicate: bitmap") {
+		t.Fatalf("buildServer err = %v, want the writer-predicate startup refusal naming the escape hatch", err)
+	}
+	cfg.Auth.WriterPredicate = "bitmap"
+	bs, err := buildServer(Options{Config: cfg, NetworkState: registryWithoutWriters{Registry: network.NewInMemoryNetworkState()}}, nil)
+	if err != nil {
+		t.Fatalf("bitmap escape hatch must start without WriterAccess: %v", err)
+	}
+	bs.teardown()
+}
+
+func TestBuildServer_StorageIntegrityPeerGuardWiring(t *testing.T) {
+	peerGuards := func(bs *builtServer) (count, guardIndex, reservedIndex int) {
+		guardIndex, reservedIndex = -1, -1
+		for i, candidate := range requireExternalChain(t, bs).QueryPlugins {
+			switch candidate.(type) {
+			case *sipeerguard.Plugin:
+				count++
+				guardIndex = i
+			case *sireserved.Plugin:
+				reservedIndex = i
+			}
+		}
+		return count, guardIndex, reservedIndex
+	}
+	for name, tc := range map[string]struct {
+		tables   []string
+		physical string
+		want     int
+	}{
+		"SI with physical database": {tables: []string{"tenant.events"}, physical: "phys", want: 1},
+		"SI without physical":       {tables: []string{"tenant.events"}, physical: "", want: 0},
+		"no SI":                     {physical: "phys", want: 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := minimalServerCfg(t)
+			cfg.StorageIntegrity.Tables = tc.tables
+			cfg.Rewriter.PhysicalDatabase = tc.physical
+			var factory rewriter.Factory = stubRewriterFactory{}
+			if len(tc.tables) > 0 {
+				factory = siProbeStubRewriterFactory{}
+			}
+			bs, err := buildServer(Options{Config: cfg, NetworkState: network.NewInMemoryNetworkState(), Rewriter: factory}, nil)
+			if err != nil {
+				t.Fatalf("buildServer: %v", err)
+			}
+			defer bs.teardown()
+			count, guardIndex, reservedIndex := peerGuards(bs)
+			if count != tc.want {
+				t.Fatalf("peer guards = %d, want %d", count, tc.want)
+			}
+			if tc.want == 1 && guardIndex < reservedIndex {
+				t.Fatalf("peer guard index %d before reserved guard %d", guardIndex, reservedIndex)
+			}
+		})
+	}
 }

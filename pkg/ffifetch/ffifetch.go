@@ -26,6 +26,17 @@ import (
 // URL contract is <base>/<tag>/<asset>, so mirrors swap cleanly.
 const DefaultBaseURL = "https://github.com/housegate/rewriter-go/releases/download"
 
+// DefaultRelease is the rewriter-go release whose FFI library matches the Go
+// binding this binary was built with (the go.mod require; a root test pins
+// them together). The agent's implicit native materializer fetches it.
+const DefaultRelease = "v0.17.0"
+
+// Supported reports whether a prebuilt FFI library exists for the platform.
+func Supported(goos, goarch string) bool {
+	_, _, err := assetNameFor(goos, goarch)
+	return err == nil
+}
+
 // Options configure Fetch. Tag is required; everything else defaults.
 type Options struct {
 	// Tag is the rewriter-go release tag, e.g. "v0.2.0".

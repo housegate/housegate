@@ -2,7 +2,6 @@ package agent
 
 import (
 	"errors"
-	"fmt"
 	"math/rand"
 
 	"github.com/housegate/housegate/pkg/registry"
@@ -53,7 +52,7 @@ type Choice struct {
 
 // Addr returns "host:port" suitable for net.Dial.
 func (c Choice) Addr() string {
-	return fmt.Sprintf("%s:%d", c.Address.Url, c.Address.HousegatePort)
+	return c.Address.Addr()
 }
 
 // Pick chooses an indexer per the two-tier algorithm. The supplied

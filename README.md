@@ -160,6 +160,9 @@ replication_proxy:
 | `auth.allowed_addresses` | []string | No | `[]` | Lowercase `0x…` addresses whose signatures are accepted. Empty = any authenticated signer allowed |
 | `auth.max_token_age` | duration | No | `1m` | Maximum age of the JWS `iat` claim |
 | `auth.allow_no_auth` | bool | No | `false` | Let unsigned queries through (for soft rollouts) |
+| `auth.writer_predicate` | string | No | `contract` | How INSERT/CREATE/DROP and the other Write-bit statements are authorized: `contract` uses the host's `isDatabaseWriter` (no address(0) Write wildcard; the indexer signer counts); `bitmap` keeps the stored bitmap with the address(0) union. Startup refuses `contract` on a registry without `WriterAccess`. |
+
+`auth.writer_predicate: contract` needs a registry that answers the contract's `isDatabaseWriter`: the embedding host's chain-state registry or the in-memory (YAML) network state. The RPC network-state source (`network_state.source` set to an `http(s)://` URL) does not implement it, so a server-mode config with `auth.enabled: true` and an RPC source now refuses to start under the default and names the key in the error. Set `auth.writer_predicate: bitmap` there to keep the stored-bitmap check with the address(0) union.
 
 ### `rewriter` — SQL Rewriter (gRPC service or in-process engine)
 
@@ -197,11 +200,18 @@ The rewriter is the canonical owner of physical/logical database mapping. Every 
 - `SELECT *` and DESCRIBE hide the protocol-owned `_hg_row_id`; addressing that identifier directly is rejected. Non-INSERT writes, DDL, and DCL touching an SI table are rejected except `DROP TABLE`, which contract V2 rewrites to drop only the ordinary physical table (`hg_*` untouched; the data plane purges them). INSERT is admitted only through the signed statement lane.
 - SI requests require the rewriter's exact contract-V2 acknowledgement. Missing/old backends, unavailable classification, read-state failures, and SI-classified rewriter errors all fail closed; ordinary tables retain the legacy fail-open behavior only when storage integrity is disabled. With it enabled, the arguments are sent even when no table is Active and always name `hg_safe`, `hg_unsafe` and `hg_promote` as reserved databases, so session `SET`, `SYSTEM` and direct access to those databases stay refused.
 
+**Who may write.** The signed ingress admits every writer of the target database: the indexer signer, or an account holding Owner or Write on it (Admin alone and address(0) grants do not count). `storage_integrity.ingress.denied_addresses` (lowercase addresses; restart to change) refuses a signer or a resolved owner; `allowed_addresses` is optional and, when set, still limits signers. Refusals are code 497 (`ACCESS_DENIED`): `storage_integrity: signer 0x… is not permitted to write storage-integrity tables`, `storage_integrity: owner 0x… is not permitted to write storage-integrity tables`, `storage_integrity: 0x… is not an operator of 0x…`, `storage_integrity: 0x… is not a writer of database <db>`. A refusal that provably did not spend the statement's `client_seq` ends with ` [client_seq unspent]`; the agent then reuses that seq. A peer-trusted read that names the ordinary physical table of a governed table is refused with 392 `storage_integrity: table <db>.<t> is governed by storage integrity and must be read through its host indexer; connect with --database <db> or USE <db>`.
+
 Signed INSERT accepts the measured client-streamed `FORMAT` forms, including `FORMAT Values` with rows on stdin. When `storage_integrity.agent.inline_values.enabled` is set on the agent, it also accepts a complete inline `INSERT ... VALUES` whose rows travel inside the query text, as sent by `clickhouse-client` 26.3 and later and the pinned clickhouse-go `Exec`. A 25.x client instead truncates the query after `VALUES` and streams row blocks, but that truncated shape remains unsupported. `INSERT ... SELECT` / `WITH` remain unsupported; the [snapshot-query design proposal](docs/superpowers/specs/2026-09-16-signed-insert-select-design.md) and its [implementation plans](docs/superpowers/plans/2026-09-16-signed-insert-select.md) describe that future lane but do not enable it.
 
 ```yaml
 storage_integrity:
   # enabled: true                  # default: true when tables is non-empty; set it with an injected TableState and no tables
+  ingress:
+    enabled: true
+    network_id: devnet2-si
+    allowed_addresses: []          # optional; empty admits every database writer
+    denied_addresses: []           # lowercase signer/owner addresses refused on the SI lane
   tables: ["tenant.events"]        # logical <db>.<table> ids; hg_unsafe/hg_safe.tenant__events are derived
   read:
     default_mode: safe             # safe | unsafe_latest; per query: SETTINGS SQL_x_read_mode = 'unsafe_latest'
@@ -234,7 +244,7 @@ storage_integrity:
       max_rows: 65536              # default 65536; must be > 0
 ```
 
-The agent materializes the statement, applies a closed lexical policy, evaluates the rows once through the session's currently selected server-mode endpoint without retrying, encodes Native blocks at the negotiated upstream revision, and re-signs `INSERT INTO <db>.<table> (<individually quoted columns>) FORMAT Native`. The helper query preserves the configured `agent.owner` payer and `agent.driver` request marker for the server to authorize; because it is a table-free SELECT, it does not emit an `indexing_usage` INSERT report, while ordinary query-usage handling still follows that payer/driver context. Admission refusals raised during `OnQuery` start with `storage_integrity inline VALUES: ` and consume no `client_seq`; after admission, later marker, encoding, strict-hook, sample or upstream failures may consume the durably reserved sequence and may use a different exception prefix. Full flow, limits and metrics: [docs/agent-inline-values.md](docs/agent-inline-values.md).
+The agent materializes the statement, applies a closed lexical policy, evaluates the rows once through the session's currently selected server-mode endpoint without retrying, encodes Native blocks at the negotiated upstream revision, and re-signs `INSERT INTO <db>.<table> (<individually quoted columns>) FORMAT Native`. The helper query preserves the configured `agent.owner` payer and `agent.driver` request marker for the server to authorize; because it is a table-free SELECT, it does not emit an `indexing_usage` INSERT report, while ordinary query-usage handling still follows that payer/driver context. Admission refusals raised during `OnQuery` start with `storage_integrity inline VALUES: ` and consume no `client_seq`; the sequence is reserved only at the strict input-complete boundary, immediately before signing, so earlier marker, encoding and cancellation failures consume none either. After the reservation, a signing failure or a server refusal ending with ` [client_seq unspent]` recycles the sequence (`clickhouse_proxy_agent_si_seq_recycled_total`) and any other failure burns it (`clickhouse_proxy_agent_si_seq_burned_total{reason}`); post-admission failures may use a different exception prefix. Full flow, limits and metrics: [docs/agent-inline-values.md](docs/agent-inline-values.md).
 
 ### `agent` — Agent-Mode Settings
 
@@ -449,6 +459,18 @@ Shard-aware (per-replica pool + routing):
 
 ### 1.2 Agent Mode
 
+#### Quick start (user agent)
+
+```bash
+export HOUSEGATE_AGENT_KEY=0xYOUR_PRIVATE_KEY
+housegate                                # agent mode, devnet2, 127.0.0.1:9000
+clickhouse-client --host 127.0.0.1 --port 9000
+```
+
+With only a key and no config file the agent joins `devnet2`, discovers the network id and table status from the indexer hosting each database, keeps its `client_seq` counter under `<base>/si/<network_id>/<signer>/`, where `<base>` is `$XDG_STATE_HOME/housegate` when `XDG_STATE_HOME` is an absolute path and `~/.local/state/housegate` otherwise on Linux, or `~/Library/Application Support/housegate` on macOS, fetches the native engine for inline `VALUES` on linux/amd64 and darwin/arm64, and moves the session to the hosting indexer for SI INSERTs. Reads are not moved: connect with `--database <db>` to read an SI table. Billing: each INSERT is one query unit (two for inline `VALUES`), charged also when refused. The automatic native materializer (`-si-inline-values auto` or `on`) rewrites `now()`, `rand()` and `generateUUIDv4()` to literal constants only in inline `INSERT ... VALUES` statements, the shape the signed inline `VALUES` lane claims; every other query, including `SELECT` and `INSERT ... SELECT`, reaches the server untouched and keeps its per-row values. An explicit `materialize.enabled: true` in a config file rewrites every agent query, so there a `SELECT rand() FROM numbers(10)` returns ten identical values.
+
+#### Configured agent
+
 No local ClickHouse — every query is signed with `agent.private_key_hex` and forwarded to a relay-mode proxy at `agent.upstream`. Server-side features (rewriting, shard routing) are disabled.
 
 Config-file form:
@@ -486,6 +508,8 @@ HOUSEGATE_AGENT_KEY=0xYOUR_PRIVATE_KEY_HERE \
 bazel-bin/cmd/housegate_/housegate -agent -agent-upstream 10.0.0.8:9001
 ```
 
+> **Changed default.** A flag-only or env-only agent with no config file now listens on `127.0.0.1:9000` (it was `:9001`), because the quickstart keeps `clickhouse-client` on its default port and loopback. The "Mixed" example above therefore listens on `127.0.0.1:9000`; pass `-listen :9001` (or set `HOUSEGATE_LISTEN`) to keep the old address. With a config file, `listen` is unchanged.
+
 > **Security:** CLI flags are visible in process listings (`ps`, `/proc`). Always prefer `HOUSEGATE_AGENT_KEY` or a config file for the private key.
 
 Override priority (highest → lowest): CLI flags → env vars → config file → built-in defaults.
@@ -497,7 +521,14 @@ All CLI flags:
 | `-agent` | `false` | Enable agent mode (overrides `agent.mode`) |
 | `-agent-upstream` | (empty) | Server-side proxy address |
 | `-agent-key` | (empty) | Ethereum private key for JWS signing |
-| `-listen` | `:9001` | Proxy listen address |
+| `-agent-owner` | (empty) | Billed owner when `-agent-key` is an operator key (also `HOUSEGATE_AGENT_OWNER`) |
+| `-network` | `devnet2` (no config file) | Agent network preset; `devnet2` = `http://64.38.144.158:32003` (also `HOUSEGATE_NETWORK`). `-state` / `HOUSEGATE_NETWORK_STATE_SOURCE` and a pinned upstream win over it |
+| `-si` | `auto` (no config file) | Storage-integrity signing: `auto` enables it when the network state is an RPC source, `on`, `off` (also `HOUSEGATE_SI`) |
+| `-si-state-dir` | per OS | Directory for the `client_seq` state (also `HOUSEGATE_SI_STATE_DIR`) |
+| `-si-lanes` | (empty) | `client_seq` lanes: `auto` or `off` (also `HOUSEGATE_SI_LANES`); client lanes are not enabled on the network yet; laned statement ids are refused |
+| `-si-read-mode` | (empty) | Inject `SQL_x_read_mode` on SELECTs: `safe` or `unsafe_latest` (also `HOUSEGATE_SI_READ_MODE`) |
+| `-si-inline-values` | `auto` (no config file) | Signed inline `INSERT ... VALUES`: `auto`, `on`, `off` (also `HOUSEGATE_SI_INLINE_VALUES`) |
+| `-listen` | `127.0.0.1:9000` in agent mode without a config file, else `:9001` | Proxy listen address |
 | `-metrics-listen` | `:9091` | Prometheus metrics address |
 | `-dial-timeout` | `5s` | Upstream dial timeout |
 | `-idle-timeout` | `5m` | Connection idle timeout |

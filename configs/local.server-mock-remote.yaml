@@ -32,6 +32,7 @@ auth:
   allow_no_auth: false
   allowed_addresses:
   max_token_age: "1m"
+  # writer_predicate: contract   # contract (default) | bitmap (address(0) Write wildcard escape hatch)
 
 # Rewriter owns logical↔physical database mapping for this deployment.
 # physical_database is the single real ClickHouse DB that hosts every
@@ -59,6 +60,15 @@ rewriter:
 # clickhouse_proxy_tableref_guard_rejections_total instead of refusing.
 # tableref_guard:
 #   mode: enforce                    # enforce (default) | observe; case-sensitive
+
+# Storage-integrity signed ingress (uncomment together with a storage_integrity.tables
+# list or an injected table state; the other keys are described in README.md).
+# storage_integrity:
+#   ingress:
+#     enabled: true
+#     network_id: devnet2-si
+#     allowed_addresses: []        # optional; empty admits every database writer
+#     denied_addresses: []         # lowercase signer/owner addresses refused on the SI lane
 
 agent:
   mode: false

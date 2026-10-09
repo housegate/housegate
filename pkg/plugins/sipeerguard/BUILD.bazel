@@ -1,0 +1,28 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_test(
+    name = "sipeerguard_test",
+    srcs = ["plugin_test.go"],
+    embed = [":sipeerguard"],
+    deps = [
+        "//pkg/chproto",
+        "//pkg/chsession",
+        "//pkg/plugin",
+        "//pkg/sitable",
+    ],
+)
+
+go_library(
+    name = "sipeerguard",
+    srcs = ["plugin.go"],
+    importpath = "github.com/housegate/housegate/pkg/plugins/sipeerguard",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/chproto",
+        "//pkg/plugin",
+        "//pkg/plugins/sireserved",
+        "//pkg/sitable",
+        "//pkg/sqlsurface",
+        "@com_github_prometheus_client_golang//prometheus",
+    ],
+)

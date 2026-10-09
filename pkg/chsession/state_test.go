@@ -3,8 +3,10 @@ package chsession
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -452,5 +454,282 @@ func TestSession_RebindToLocal(t *testing.T) {
 	}
 	if !bytes.Contains(got, []byte("SET max_execution_time=30")) {
 		t.Errorf("Replay missing SET max_execution_time; captured=%q", got)
+	}
+}
+
+// switchServer answers one ClientHello with a ServerHello advertising rev and
+// then drains everything else; it reports the hello it saw.
+func switchServer(t *testing.T, conn net.Conn, rev int, hellos chan<- *chproto.ClientHello) {
+	t.Helper()
+	switchServerWith(t, conn, proto.ServerHello{Name: "switch-target", Major: 24, Minor: 1, Revision: rev}, hellos)
+}
+
+// switchServerWith answers one ClientHello with srv. Like ClickHouse, it
+// encodes the hello at min(advertised, client) revision.
+func switchServerWith(t *testing.T, conn net.Conn, srv proto.ServerHello, hellos chan<- *chproto.ClientHello) {
+	t.Helper()
+	go func() {
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+		codec := chproto.NewCodec(conn, chproto.DirFromClient)
+		pkt, err := codec.ReadPacket(uint64(chproto.ClientHelloCode))
+		if err != nil {
+			hellos <- nil
+			return
+		}
+		got := pkt.Decoded.(*chproto.ClientHello)
+		hellos <- got
+		var buf proto.Buffer
+		srv.EncodeAware(&buf, min(srv.Revision, int(got.ProtocolVersion)))
+		if _, err := conn.Write(buf.Buf); err != nil {
+			return
+		}
+		_, _ = io.Copy(io.Discard, conn)
+	}()
+}
+
+// assertConnClosed proves the client side of a pipe was closed by the session.
+// The peer keeps draining, so a write would succeed on an open conn.
+func assertConnClosed(t *testing.T, conn net.Conn) {
+	t.Helper()
+	if _, err := conn.Write([]byte{0}); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("write on the new conn: err = %v, want io.ErrClosedPipe (the switch must close it)", err)
+	}
+}
+
+// assertSwitchRefused checks a refused switch left the old upstream bound and
+// the session state untouched.
+func assertSwitchRefused(t *testing.T, sess Session, old *chproto.Codec, before SessionStateSnapshot, beforeHello *chproto.ClientHello) {
+	t.Helper()
+	if sess.Upstream() != old {
+		t.Fatal("the old upstream must stay bound after a refusal")
+	}
+	if after := sess.State().Snapshot(); !reflect.DeepEqual(after, before) {
+		t.Fatalf("state changed on refusal:\n before %+v\n after  %+v", before, after)
+	}
+	if after := sess.State().UpstreamHello(); !reflect.DeepEqual(after, beforeHello) {
+		t.Fatalf("stored hello changed on refusal: before %+v after %+v", beforeHello, after)
+	}
+}
+
+func boundSession(t *testing.T) (Session, *chproto.Codec) {
+	t.Helper()
+	clientConn, _ := net.Pipe()
+	t.Cleanup(func() { clientConn.Close() })
+	sess := New(1, clientConn)
+	placeholder, _ := net.Pipe()
+	t.Cleanup(func() { placeholder.Close() })
+	old := chproto.NewCodec(placeholder, chproto.DirToUpstream)
+	if err := sess.BindUpstream(context.Background(), old); err != nil {
+		t.Fatal(err)
+	}
+	return sess, old
+}
+
+func TestSession_SwitchUpstreamReplaysHelloVerbatim(t *testing.T) {
+	const rev = chproto.RevisionMinAddendum
+	sess, _ := boundSession(t)
+	sess.State().ClientRevision = rev
+	sess.State().SetForwarding(false)
+	serverConn, clientConn := net.Pipe()
+	hellos := make(chan *chproto.ClientHello, 1)
+	switchServer(t, serverConn, rev, hellos)
+	newUp := chproto.NewCodec(clientConn, chproto.DirToUpstream)
+	hello := &chproto.ClientHello{Name: "clickhouse-client", Major: 26, Minor: 3, ProtocolVersion: rev, User: "default", Password: "pw", Database: "devuser1"}
+
+	if err := sess.SwitchUpstream(context.Background(), newUp, hello); err != nil {
+		t.Fatalf("SwitchUpstream: %v", err)
+	}
+	got := <-hellos
+	if got == nil || got.User != "default" || got.Password != "pw" || got.Database != "devuser1" || got.Name != "clickhouse-client" {
+		t.Fatalf("upstream saw hello %+v, want the verbatim replay", got)
+	}
+	if sess.Upstream() != newUp || newUp.Revision() != rev {
+		t.Fatalf("upstream not swapped (rev=%d)", newUp.Revision())
+	}
+	if stored := sess.State().UpstreamHello(); stored == nil || stored.Database != "devuser1" {
+		t.Fatalf("stored upstream hello = %+v", stored)
+	}
+	snap := sess.State().Snapshot()
+	if snap.IsForwarding || snap.IsPeerTrusted || snap.RouteTarget != "" || len(sess.State().PeerServerHelloRaw) != 0 {
+		t.Fatalf("SwitchUpstream must not write peer/forward state: %+v", snap)
+	}
+}
+
+func TestSession_SwitchUpstreamRefusesALowerRevision(t *testing.T) {
+	const clientRev = chproto.RevisionMinAddendum
+	sess, old := boundSession(t)
+	sess.State().ClientRevision = clientRev
+	sess.State().SetUpstreamHello(&chproto.ClientHello{Database: "before"})
+	serverConn, clientConn := net.Pipe()
+	hellos := make(chan *chproto.ClientHello, 1)
+	switchServer(t, serverConn, clientRev-1, hellos)
+	newUp := chproto.NewCodec(clientConn, chproto.DirToUpstream)
+
+	before := sess.State().Snapshot()
+	err := sess.SwitchUpstream(context.Background(), newUp, &chproto.ClientHello{ProtocolVersion: clientRev, Database: "after"})
+	if !errors.Is(err, ErrUpstreamRevisionTooLow) {
+		t.Fatalf("err = %v, want ErrUpstreamRevisionTooLow", err)
+	}
+	if sess.Upstream() != old {
+		t.Fatal("the old upstream must stay bound after a refusal")
+	}
+	if stored := sess.State().UpstreamHello(); stored == nil || stored.Database != "before" {
+		t.Fatalf("stored hello changed to %+v on refusal", stored)
+	}
+	if after := sess.State().Snapshot(); !reflect.DeepEqual(after, before) {
+		t.Fatalf("state changed on refusal:\n before %+v\n after  %+v", before, after)
+	}
+	assertConnClosed(t, clientConn)
+}
+
+func TestSession_SwitchUpstreamClosesNewConnOnHandshakeFailure(t *testing.T) {
+	const rev = chproto.RevisionMinAddendum
+	sess, old := boundSession(t)
+	sess.State().ClientRevision = rev
+	sess.State().SetUpstreamHello(&chproto.ClientHello{Database: "before"})
+	before, beforeHello := sess.State().Snapshot(), sess.State().UpstreamHello()
+	serverConn, clientConn := net.Pipe()
+	go func() {
+		defer serverConn.Close()
+		_ = serverConn.SetDeadline(time.Now().Add(5 * time.Second))
+		codec := chproto.NewCodec(serverConn, chproto.DirFromClient)
+		if _, err := codec.ReadPacket(uint64(chproto.ClientHelloCode)); err != nil {
+			return
+		}
+		codec.SetRevision(rev)
+		if err := codec.WriteException(&chproto.Exception{Code: 516, Name: "DB::Exception", Message: "authentication failed"}); err != nil {
+			return
+		}
+		_, _ = io.Copy(io.Discard, serverConn)
+	}()
+
+	err := sess.SwitchUpstream(context.Background(), chproto.NewCodec(clientConn, chproto.DirToUpstream), &chproto.ClientHello{ProtocolVersion: rev})
+	if err == nil {
+		t.Fatal("SwitchUpstream succeeded against an upstream that rejected the handshake")
+	}
+	assertSwitchRefused(t, sess, old, before, beforeHello)
+	assertConnClosed(t, clientConn)
+}
+
+func TestSession_SwitchUpstreamRefusesNilHello(t *testing.T) {
+	sess, old := boundSession(t)
+	sess.State().ClientRevision = chproto.RevisionMinAddendum
+	before, beforeHello := sess.State().Snapshot(), sess.State().UpstreamHello()
+	serverConn, clientConn := net.Pipe()
+	go func() { _, _ = io.Copy(io.Discard, serverConn) }()
+	t.Cleanup(func() { serverConn.Close() })
+
+	err := sess.SwitchUpstream(context.Background(), chproto.NewCodec(clientConn, chproto.DirToUpstream), nil)
+	if !errors.Is(err, ErrRebindDenied) {
+		t.Fatalf("err = %v, want ErrRebindDenied", err)
+	}
+	assertSwitchRefused(t, sess, old, before, beforeHello)
+	assertConnClosed(t, clientConn)
+}
+
+func TestSession_SwitchUpstreamClampsHelloToClientRevision(t *testing.T) {
+	const clientRev = chproto.RevisionMinAddendum
+	sess, _ := boundSession(t)
+	sess.State().ClientRevision = clientRev
+	serverConn, clientConn := net.Pipe()
+	hellos := make(chan *chproto.ClientHello, 1)
+	switchServer(t, serverConn, chproto.MaxSupportedRevision, hellos)
+	newUp := chproto.NewCodec(clientConn, chproto.DirToUpstream)
+	hello := &chproto.ClientHello{Name: "clickhouse-client", ProtocolVersion: chproto.MaxSupportedRevision, User: "default", Database: "devuser1"}
+
+	if err := sess.SwitchUpstream(context.Background(), newUp, hello); err != nil {
+		t.Fatalf("SwitchUpstream: %v", err)
+	}
+	if got := <-hellos; got == nil || got.ProtocolVersion != clientRev {
+		t.Fatalf("upstream saw hello %+v, want ProtocolVersion clamped to %d", got, clientRev)
+	}
+	if sess.Upstream() != newUp || newUp.Revision() != clientRev {
+		t.Fatalf("upstream not switched at exactly the client revision (rev=%d)", newUp.Revision())
+	}
+	if stored := sess.State().UpstreamHello(); stored == nil || stored.ProtocolVersion != clientRev {
+		t.Fatalf("stored upstream hello = %+v, want the clamped hello", stored)
+	}
+	if hello.ProtocolVersion != chproto.MaxSupportedRevision {
+		t.Fatalf("caller's hello mutated: ProtocolVersion = %d", hello.ProtocolVersion)
+	}
+}
+
+func TestSession_SwitchUpstreamRefusesADifferentTimezone(t *testing.T) {
+	const rev = chproto.RevisionMinAddendum
+	sess, old := boundSession(t)
+	sess.State().ClientRevision = rev
+	sess.State().Timezone = "UTC"
+	sess.State().SetUpstreamHello(&chproto.ClientHello{Database: "before"})
+	before, beforeHello := sess.State().Snapshot(), sess.State().UpstreamHello()
+	serverConn, clientConn := net.Pipe()
+	hellos := make(chan *chproto.ClientHello, 1)
+	switchServerWith(t, serverConn, proto.ServerHello{Name: "switch-target", Major: 24, Minor: 1, Revision: rev, Timezone: "Asia/Tokyo"}, hellos)
+
+	err := sess.SwitchUpstream(context.Background(), chproto.NewCodec(clientConn, chproto.DirToUpstream), &chproto.ClientHello{ProtocolVersion: rev, Database: "after"})
+	if !errors.Is(err, ErrUpstreamTimezoneMismatch) {
+		t.Fatalf("err = %v, want ErrUpstreamTimezoneMismatch", err)
+	}
+	assertSwitchRefused(t, sess, old, before, beforeHello)
+	assertConnClosed(t, clientConn)
+}
+
+func TestSession_SwitchUpstreamAcceptsTheSameTimezone(t *testing.T) {
+	const rev = chproto.RevisionMinAddendum
+	sess, _ := boundSession(t)
+	sess.State().ClientRevision = rev
+	sess.State().Timezone = "UTC"
+	serverConn, clientConn := net.Pipe()
+	hellos := make(chan *chproto.ClientHello, 1)
+	switchServerWith(t, serverConn, proto.ServerHello{Name: "switch-target", Major: 24, Minor: 1, Revision: rev, Timezone: "UTC"}, hellos)
+	newUp := chproto.NewCodec(clientConn, chproto.DirToUpstream)
+
+	if err := sess.SwitchUpstream(context.Background(), newUp, &chproto.ClientHello{ProtocolVersion: rev}); err != nil {
+		t.Fatalf("SwitchUpstream: %v", err)
+	}
+	if sess.Upstream() != newUp {
+		t.Fatal("upstream not switched")
+	}
+}
+
+func TestSession_SwitchUpstreamHonoursContext(t *testing.T) {
+	const rev = chproto.RevisionMinAddendum
+	for _, tc := range []struct {
+		name string
+		ctx  func() (context.Context, context.CancelFunc)
+		want error
+	}{
+		{"deadline", func() (context.Context, context.CancelFunc) {
+			return context.WithTimeout(context.Background(), 100*time.Millisecond)
+		}, context.DeadlineExceeded},
+		{"cancel", func() (context.Context, context.CancelFunc) {
+			ctx, cancel := context.WithCancel(context.Background())
+			time.AfterFunc(100*time.Millisecond, cancel)
+			return ctx, cancel
+		}, context.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sess, old := boundSession(t)
+			sess.State().ClientRevision = rev
+			sess.State().SetUpstreamHello(&chproto.ClientHello{Database: "before"})
+			before, beforeHello := sess.State().Snapshot(), sess.State().UpstreamHello()
+			serverConn, clientConn := net.Pipe()
+			t.Cleanup(func() { serverConn.Close() })
+			// The upstream accepts the hello and never answers.
+			go func() { _, _ = io.Copy(io.Discard, serverConn) }()
+			ctx, cancel := tc.ctx()
+			defer cancel()
+
+			start := time.Now()
+			err := sess.SwitchUpstream(ctx, chproto.NewCodec(clientConn, chproto.DirToUpstream), &chproto.ClientHello{ProtocolVersion: rev})
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("err = %v, want %v", err, tc.want)
+			}
+			if elapsed := time.Since(start); elapsed > 3*time.Second {
+				t.Fatalf("SwitchUpstream took %v; the context should have ended it", elapsed)
+			}
+			assertSwitchRefused(t, sess, old, before, beforeHello)
+			assertConnClosed(t, clientConn)
+		})
 	}
 }

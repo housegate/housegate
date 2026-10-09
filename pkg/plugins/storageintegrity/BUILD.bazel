@@ -2,13 +2,17 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "storageintegrity",
-    srcs = ["plugin.go"],
+    srcs = [
+        "authorize.go",
+        "plugin.go",
+    ],
     importpath = "github.com/housegate/housegate/pkg/plugins/storageintegrity",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/auth",
         "//pkg/chproto",
         "//pkg/chsession",
+        "//pkg/log",
         "//pkg/plugin",
         "//pkg/registry",
         "//pkg/replay",
@@ -19,12 +23,14 @@ go_library(
         "//pkg/sqlmeta",
         "//pkg/storageintegrity",
         "@com_github_clickhouse_ch_go//proto",
+        "@com_github_prometheus_client_golang//prometheus",
     ],
 )
 
 go_test(
     name = "storageintegrity_test",
     srcs = [
+        "authorize_test.go",
         "nondeterminism_pin_test.go",
         "plugin_test.go",
         "table_state_test.go",
@@ -37,6 +43,7 @@ go_test(
         "//pkg/lthash",
         "//pkg/network",
         "//pkg/plugin",
+        "//pkg/registry",
         "//pkg/replay",
         "//pkg/replay/payloadexec",
         "//pkg/sitable",

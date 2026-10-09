@@ -51,7 +51,32 @@ func TestStorageIntegrityAgentConfig_Validate(t *testing.T) {
 		}, "agent mode only"},
 		{"missing network_id", func(c *Config) { c.StorageIntegrity.Agent.NetworkID = " " }, "network_id"},
 		{"non-zero shard", func(c *Config) { c.StorageIntegrity.Agent.KeeperShardID = 3 }, "keeper_shard_id"},
-		{"missing state_dir", func(c *Config) { c.StorageIntegrity.Agent.StateDir = "" }, "state_dir"},
+		{"missing state_dir uses the per-OS default", func(c *Config) { c.StorageIntegrity.Agent.StateDir = "" }, ""},
+		{"rpc source discovers the network id", func(c *Config) {
+			c.StorageIntegrity.Agent.NetworkID = ""
+			c.NetworkState.Source = "http://node:10003"
+		}, ""},
+		{"host-injected state may discover the network id", func(c *Config) {
+			c.StorageIntegrity.Agent.NetworkID = ""
+			c.NetworkState.Source = ""
+			c.StorageIntegrity.Agent.RequireNetworkState = false
+		}, ""},
+		{"bad lanes", func(c *Config) { c.StorageIntegrity.Agent.Lanes = "on" }, "storage_integrity.agent.lanes"},
+		{"bad read_mode", func(c *Config) { c.StorageIntegrity.Agent.ReadMode = "fast" }, "storage_integrity.agent.read_mode"},
+		{"lanes and read_mode", func(c *Config) {
+			c.StorageIntegrity.Agent.Lanes = "off"
+			c.StorageIntegrity.Agent.ReadMode = "unsafe_latest"
+		}, ""},
+		// The read-mode injector runs without the SI statement plugin, so the
+		// values are checked even when the block is disabled (F20).
+		{"bad read_mode with SI off", func(c *Config) {
+			c.StorageIntegrity.Agent.Enabled = false
+			c.StorageIntegrity.Agent.ReadMode = "fast"
+		}, "storage_integrity.agent.read_mode"},
+		{"bad lanes with SI off", func(c *Config) {
+			c.StorageIntegrity.Agent.Enabled = false
+			c.StorageIntegrity.Agent.Lanes = "on"
+		}, "storage_integrity.agent.lanes"},
 		{"zero payload limit", func(c *Config) { c.StorageIntegrity.Agent.MaxPayloadBytes = 0 }, "max_payload_bytes"},
 		{"missing network_state.source", func(c *Config) { c.NetworkState.Source = "" }, "network_state.source"},
 		{"host-injected state allowed", func(c *Config) { c.NetworkState.Source = ""; c.StorageIntegrity.Agent.RequireNetworkState = false }, ""},

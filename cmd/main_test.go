@@ -31,3 +31,58 @@ func TestValidateStandaloneRuntimeConfigAllowsDisabledStorageIntegrityIngress(t 
 		t.Fatalf("validateStandaloneRuntimeConfig returned %v, want nil", err)
 	}
 }
+
+// The agent-UX values resolve flag over env; an env var counts only when
+// set, and a config file read by config.LoadFile is passed through (spec
+// 2026-10-09 §6.4, plan decision P5).
+func TestAgentQuickstartInputs(t *testing.T) {
+	env := map[string]string{
+		"HOUSEGATE_NETWORK":          "devnet2",
+		"HOUSEGATE_SI":               "on",
+		"HOUSEGATE_SI_STATE_DIR":     "/env/state",
+		"HOUSEGATE_SI_LANES":         "off",
+		"HOUSEGATE_SI_READ_MODE":     "safe",
+		"HOUSEGATE_SI_INLINE_VALUES": "off",
+	}
+	getenv := func(k string) string { return env[k] }
+	flags := agentQuickstartFlags{
+		network: "flag-net", si: "auto", siStateDir: "/flag/state",
+		siLanes: "auto", siReadMode: "unsafe_latest", siInlineValues: "on",
+	}
+
+	fromEnv := agentQuickstartInputs("agent.yaml", map[string]bool{}, flags, getenv)
+	want := config.AgentQuickstart{
+		ConfigFileLoaded: true, ConfigFile: "agent.yaml",
+		Network: "devnet2", SI: "on", SIStateDir: "/env/state",
+		SILanes: "off", SIReadMode: "safe", SIInlineValues: "off",
+	}
+	if fromEnv != want {
+		t.Fatalf("env only:\n got %+v\nwant %+v", fromEnv, want)
+	}
+
+	explicit := map[string]bool{
+		"network": true, "si": true, "si-state-dir": true,
+		"si-lanes": true, "si-read-mode": true, "si-inline-values": true,
+		"agent": true, "listen": true,
+	}
+	fromFlags := agentQuickstartInputs("", explicit, flags, getenv)
+	want = config.AgentQuickstart{
+		AgentModeSet: true, ListenSet: true,
+		Network: "flag-net", SI: "auto", SIStateDir: "/flag/state",
+		SILanes: "auto", SIReadMode: "unsafe_latest", SIInlineValues: "on",
+	}
+	if fromFlags != want {
+		t.Fatalf("flags win:\n got %+v\nwant %+v", fromFlags, want)
+	}
+
+	none := agentQuickstartInputs("", map[string]bool{}, flags, func(string) string { return "" })
+	if none != (config.AgentQuickstart{}) {
+		t.Fatalf("nothing given: %+v", none)
+	}
+
+	env = map[string]string{"HOUSEGATE_AGENT": "false", "HOUSEGATE_LISTEN": ":9100"}
+	modeEnv := agentQuickstartInputs("", map[string]bool{}, flags, getenv)
+	if !modeEnv.AgentModeSet || !modeEnv.ListenSet {
+		t.Fatalf("HOUSEGATE_AGENT / HOUSEGATE_LISTEN must count as given: %+v", modeEnv)
+	}
+}

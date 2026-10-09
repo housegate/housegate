@@ -143,6 +143,13 @@ func TestPlugin_InlineValuesInstallsSynthesizedPlan(t *testing.T) {
 	if ev.seen.MaxRows != 1000 || ev.seen.MaxBytes != 1<<20 || ev.seen.Timeout != 5*time.Second {
 		t.Fatalf("evaluation limits = %+v", ev.seen)
 	}
+	if qctx.Query.ID != "client-uuid-1" || seq.Last() != 0 {
+		t.Fatalf("OnQuery reserved a seq: id=%q last=%d", qctx.Query.ID, seq.Last())
+	}
+	plan.Packets, plan.PayloadBytes = [][]byte{{0x02, 0x00, 0xaa}}, 3 // the relay lane fills Packets before the strict hook
+	if err := p.OnQueryInputCompleteStrict(context.Background(), qctx); err != nil {
+		t.Fatalf("strict hook: %v", err)
+	}
 	if _, s, _, err := sicore.ParseFlatStatementID(qctx.Query.ID); err != nil || s != 1 || seq.Last() != 1 {
 		t.Fatalf("statement id %q: seq=%d last=%d err=%v", qctx.Query.ID, s, seq.Last(), err)
 	}
@@ -434,8 +441,15 @@ func TestPlugin_InlineValuesColumnIdentityAndPendingSequence(t *testing.T) {
 	if err := p.OnQuery(context.Background(), second); err == nil {
 		t.Fatal("overlapping statement accepted")
 	}
-	if seq.Last() != 1 {
-		t.Fatalf("rejection consumed seq %d", seq.Last())
+	if seq.Last() != 0 {
+		t.Fatalf("claim or rejection consumed seq %d", seq.Last())
+	}
+	q.SynthesizedInsert.Packets, q.SynthesizedInsert.PayloadBytes = [][]byte{{0x02, 0x00, 0xaa}}, 3
+	if err := p.OnQueryInputCompleteStrict(context.Background(), q); err != nil {
+		t.Fatalf("strict hook: %v", err)
+	}
+	if _, s, _, err := sicore.ParseFlatStatementID(q.Query.ID); err != nil || s != 1 || seq.Last() != 1 {
+		t.Fatalf("statement id %q: seq=%d last=%d err=%v", q.Query.ID, s, seq.Last(), err)
 	}
 	p.OnQueryAbort(context.Background(), q)
 	if seq.Last() != 1 {
@@ -482,8 +496,8 @@ func TestPlugin_InlineValuesStrictHookRejectsInvalidPayloadAccounting(t *testing
 					t.Fatal("signed invalid payload")
 				}
 			}
-			if seq.Last() != 1 {
-				t.Fatal("rolled back allocated sequence")
+			if seq.Last() != 0 || q.Query.ID != "client-uuid-1" {
+				t.Fatalf("a strict-hook payload refusal reserved a seq: last=%d id=%q", seq.Last(), q.Query.ID)
 			}
 		})
 	}

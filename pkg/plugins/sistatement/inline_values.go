@@ -59,6 +59,16 @@ func inlineWrap(err error) error {
 	return fmt.Errorf("%s%w", sicore.InlineValuesErrorPrefix, err)
 }
 
+// IsInlineValuesCandidate reports whether sql has the inline INSERT ... VALUES
+// shape the signed inline VALUES lane claims, using the lane's own
+// classifier (sicore.ParseInlineValuesInsert). A shape the lane refuses, a
+// streaming FORMAT INSERT, INSERT ... SELECT and every non-INSERT statement
+// report false. The agent scopes its implicit materializer with it.
+func IsInlineValuesCandidate(sql string) bool {
+	_, err := sicore.ParseInlineValuesInsert(sql)
+	return err == nil
+}
+
 // inlineValuesCandidate reports whether sql is an inline VALUES INSERT this
 // lane claims. ok=false keeps today's fallthrough exactly (feature off, the 25.x truncated shape, FORMAT, SELECT, WITH, non-INSERT); an error is a prefixed refusal of an INSERT ... VALUES the lane will not sign.
 func (p *Plugin) inlineValuesCandidate(sql string) (sicore.InlineValuesInsert, bool, error) {
@@ -92,7 +102,7 @@ func requireMaterialized(qctx *plugin.QueryContext) error {
 }
 
 // evaluateInlineValues runs the closure gate and the single evaluation, then
-// validates the blocks against the INSERT column order and the declared wire types. It runs before statementIDFor, so nothing it refuses consumes a client_seq (spec D9).
+// validates the blocks against the INSERT column order and the declared wire types. It runs in OnQuery, before the strict input hook reserves a client_seq, so nothing it refuses consumes one (spec D9, spec 2026-10-09 D16).
 func (p *Plugin) evaluateInlineValues(ctx context.Context, qctx *plugin.QueryContext, parsed sicore.InlineValuesInsert,
 	schema payloadexec.TableSchema, cols []chproto.SampleColumn) (planOut *plugin.SynthesizedInsertPlan, resultErr error) {
 	if err := requireMaterialized(qctx); err != nil {
