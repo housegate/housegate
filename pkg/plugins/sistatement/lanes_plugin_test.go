@@ -3,8 +3,11 @@
 package sistatement
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -14,6 +17,7 @@ import (
 
 	"github.com/housegate/housegate/pkg/auth"
 	"github.com/housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/log"
 	"github.com/housegate/housegate/pkg/network"
 	"github.com/housegate/housegate/pkg/plugin"
 	"github.com/housegate/housegate/pkg/registry"
@@ -471,7 +475,7 @@ func TestLanes_InfoIsRefreshedAfterTheTTLSoActivationIsPickedUp(t *testing.T) {
 // next statement re-reads client_lanes_enabled from the hosting indexer.
 func TestLanes_LanesDisabledRefusalExpiresTheCachedInfo(t *testing.T) {
 	d := &switchingDiscovery{fakeDiscovery: fakeDiscovery{info: goodInfo(), writer: true}, lanes: true}
-	f, _ := discoveryLanedFixture(t, d)
+	f, clock := discoveryLanedFixture(t, d)
 	sess := newSession(1, "")
 	_, id := f.claim(t, sess)
 	if !id.IsLaned() {
@@ -502,6 +506,7 @@ func TestLanes_LanesDisabledRefusalExpiresTheCachedInfo(t *testing.T) {
 	d.infoErr = nil
 	d.mu.Unlock()
 	d.setLanes(false)
+	*clock = clock.Add(infoRefreshRetry) // the failed refresh backs off
 	_, third := f.claim(t, newSession(3, ""))
 	if third.IsLaned() || d.calls() != 3 {
 		t.Fatalf("third id = %+v calls=%d; want a re-read answer and a legacy id", third, d.calls())
@@ -567,17 +572,165 @@ func TestLanes_ExpiredInfoIsServedWhileTheRefreshFails(t *testing.T) {
 	if second := claimSettled(2); second.IsLaned() || d.count() != 2 {
 		t.Fatalf("refresh failed: id %+v calls %d; want the stale answer served", second, d.count())
 	}
-	if third := claimSettled(3); third.IsLaned() || d.count() != 3 {
-		t.Fatalf("next statement: id %+v calls %d; want another refresh attempt", third, d.count())
+	// Inside the retry interval the stale answer is served without a lookup.
+	*clock = clock.Add(infoRefreshRetry - time.Second)
+	if third := claimSettled(3); third.IsLaned() || d.count() != 2 {
+		t.Fatalf("inside the retry interval: id %+v calls %d; want no new refresh", third, d.count())
+	}
+	*clock = clock.Add(2 * time.Second)
+	if third := claimSettled(30); third.IsLaned() || d.count() != 3 {
+		t.Fatalf("after the retry interval: id %+v calls %d; want another refresh attempt", third, d.count())
 	}
 	if f.metrics.failedSteps()["info"] != 2 {
 		t.Fatalf("discovery failures = %v, want both failed refreshes counted", f.metrics.failedSteps())
 	}
+	*clock = clock.Add(infoRefreshRetry + time.Second)
 	d.set(true, nil)
 	if fourth := claimSettled(4); !fourth.IsLaned() || d.count() != 4 {
 		t.Fatalf("refresh recovered: id %+v calls %d; want lanes to engage", fourth, d.count())
 	}
 	if fifth := claimSettled(5); !fifth.IsLaned() || d.count() != 4 {
 		t.Fatalf("fresh answer: id %+v calls %d; want it cached", fifth, d.count())
+	}
+}
+
+// blockingDiscovery parks every lookup until release is closed.
+type blockingDiscovery struct {
+	scriptedDiscovery
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (d *blockingDiscovery) StorageIntegrityInfo(ctx context.Context, db string) (registry.StorageIntegrityInfo, error) {
+	d.entered <- struct{}{}
+	<-d.release
+	return d.scriptedDiscovery.StorageIntegrityInfo(ctx, db)
+}
+
+// Final review: a burst of statements after expiry triggers at most one
+// in-flight refresh; the others are served the stale answer at once.
+func TestLanes_ExpiredInfoRefreshIsSingleFlight(t *testing.T) {
+	d := &blockingDiscovery{entered: make(chan struct{}, 8), release: make(chan struct{})}
+	f, clock := discoveryLanedFixture(t, d)
+	first := make(chan error, 1)
+	go func() { first <- f.p.OnQuery(context.Background(), insertQctx(newSession(1, ""), lateSQL)) }()
+	<-d.entered
+	close(d.release)
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	f.p.OnQueryAbort(context.Background(), insertQctx(newSession(1, ""), lateSQL))
+	f.p.OnClose(newSession(1, ""))
+
+	d.release = make(chan struct{})
+	*clock = clock.Add(infoSuccessTTL + time.Second)
+	refresher := make(chan error, 1)
+	go func() { refresher <- f.p.OnQuery(context.Background(), insertQctx(newSession(2, ""), lateSQL)) }()
+	<-d.entered // the refresh is in flight and parked
+	for i := int64(3); i < 8; i++ {
+		done := make(chan error, 1)
+		go func() { done <- f.p.OnQuery(context.Background(), insertQctx(newSession(i, ""), lateSQL)) }()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("statement %d: %v", i, err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("statement %d waited for the in-flight refresh", i)
+		}
+	}
+	select {
+	case <-d.entered:
+		t.Fatal("a second refresh started while one was in flight")
+	default:
+	}
+	close(d.release)
+	if err := <-refresher; err != nil {
+		t.Fatal(err)
+	}
+	if d.count() != 2 {
+		t.Fatalf("lookups = %d, want the first and one refresh", d.count())
+	}
+}
+
+// Final review m7: after LANE_BUDGET_EXCEEDED pins the process, an own laned
+// SDK id is refused with wording that names the pin, not "lanes are off".
+func TestLanes_PinnedR9RefusalNamesThePin(t *testing.T) {
+	f := newLanedFixture(t, nil)
+	sess := newSession(1, "")
+	_, id := f.claim(t, sess)
+	_ = f.p.OnException(context.Background(), sess, markedException("storage_integrity: statement "+id.Flat()+" rejected by the arbiter: "+sicore.AdmissionCodeLaneBudgetExceeded))
+	f.p.OnQueryComplete(context.Background(), sess)
+	q := insertQctx(newSession(2, ""), lateSQL)
+	q.Query.ID = f.p.account + ":" + id.Lane + ":41:sdk"
+	if err := f.p.OnQuery(context.Background(), q); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.p.OnClientDataStrict(context.Background(), q, encodeRows(t))
+	err := f.p.OnQueryInputCompleteStrict(context.Background(), q)
+	if err == nil || !strings.Contains(err.Error(), "SDK statement ids must use the legacy form: this agent is pinned to its legacy client_seq lane") || strings.Contains(err.Error(), "lanes are off") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// Final review m8: when Abandon cannot be persisted the lane is still retired
+// in this process: a late release for it is dropped (not counted burned) and
+// the next statement moves to a new lane.
+func TestLanes_FailedAbandonRetiresTheLane(t *testing.T) {
+	f := newLanedFixture(t, nil)
+	s1, s2 := newSession(1, ""), newSession(2, "")
+	_, id1 := f.claim(t, s1)
+	_, id2 := f.claim(t, s2)
+	if err := os.Mkdir(filepath.Join(f.laneDir, lanesDirName, id1.Lane+".json.tmp"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.p.OnException(context.Background(), s1, gapBudgetRefusal(id1))
+	f.p.OnQueryComplete(context.Background(), s1)
+	if err := os.Remove(filepath.Join(f.laneDir, lanesDirName, id1.Lane+".json.tmp")); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.p.OnException(context.Background(), s2, markedException("storage_integrity: back-pressure: retry later"))
+	f.p.OnQueryComplete(context.Background(), s2)
+	// The obstruction also fails s1's own release (a lane-file write), which is
+	// burned; s2's later release on the retired lane is dropped, not burned.
+	if recycled, burned := f.metrics.seqSnapshot(); recycled != 0 || burned["unknown_outcome"] != 1 || len(burned) != 1 {
+		t.Fatalf("recycled=%d burned=%v; want only s1's failed release burned and the late release dropped", recycled, burned)
+	}
+	_, id3 := f.claim(t, newSession(3, ""))
+	if id3.Lane == id1.Lane || id2.Lane != id1.Lane {
+		t.Fatalf("ids %+v %+v %+v; want a new lane after the failed abandon", id1, id2, id3)
+	}
+}
+
+// Final review m4 (spec §6.5, §10): the lane is logged at info when it is
+// acquired and when a rotation replaces it.
+func TestLanes_AcquiredLaneIsLogged(t *testing.T) {
+	f := newLanedFixture(t, nil)
+	var buf bytes.Buffer
+	ctx := log.WithContext(context.Background(), log.New(slog.NewTextHandler(&buf, nil)))
+	claim := func(id int64) sicore.StatementID {
+		sess := newSession(id, "")
+		q := insertQctx(sess, lateSQL)
+		if err := f.p.OnQuery(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.p.OnClientDataStrict(ctx, q, encodeRows(t)); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.p.OnQueryInputCompleteStrict(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+		sid := idOf(t, q.Query.ID)
+		return sid
+	}
+	first := claim(1)
+	if !strings.Contains(buf.String(), "level=INFO") || !strings.Contains(buf.String(), "client lane acquired") || !strings.Contains(buf.String(), "lane="+first.Lane) || !strings.Contains(buf.String(), "reason=lost_state") {
+		t.Fatalf("log = %q; want the acquired lane at info", buf.String())
+	}
+	_ = f.p.OnException(ctx, newSession(1, ""), gapBudgetRefusal(first))
+	buf.Reset()
+	second := claim(2)
+	if !strings.Contains(buf.String(), "lane="+second.Lane) || !strings.Contains(buf.String(), "reason=gap_budget") {
+		t.Fatalf("log = %q; want the replacement lane with reason gap_budget", buf.String())
 	}
 }

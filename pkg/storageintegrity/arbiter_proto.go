@@ -379,6 +379,11 @@ var AdmissionCodeDuplicateClientSeq = pb.AdmissionCode_ADMISSION_CODE_DUPLICATE_
 // The coordinate is unspent; the agent switches to its legacy lane.
 var AdmissionCodeLaneBudgetExceeded = pb.AdmissionCode_ADMISSION_CODE_LANE_BUDGET_EXCEEDED.String()
 
+// AdmissionCodeGapBudgetExceeded is the arbiter's refusal of a statement that
+// would open more than the subject's budget of gap ranges (spec 2026-10-09
+// §6.5). The coordinate is unspent; the agent abandons a client lane.
+var AdmissionCodeGapBudgetExceeded = pb.AdmissionCode_ADMISSION_CODE_GAP_BUDGET_EXCEEDED.String()
+
 // SubmitOutcomeFromSequencedAck maps Arbiter's application-level admission
 // result into the existing staged-intake outcome categories.
 func SubmitOutcomeFromSequencedAck(ack *pb.SequencedAck) SubmitOutcome {

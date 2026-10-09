@@ -58,15 +58,26 @@ func TestOwnSuppliedStatementIDLaneRule(t *testing.T) {
 }
 
 func TestLaneRotationIsReadFromTheCodedRejection(t *testing.T) {
-	for msg, want := range map[string]laneRotation{
-		"storage_integrity: statement 0xaa:5e1f0a2b7c9d3e4f:9:n rejected by the arbiter: ADMISSION_CODE_GAP_BUDGET_EXCEEDED [client_seq unspent]":  rotationGapBudget,
-		"storage_integrity: statement 0xaa:5e1f0a2b7c9d3e4f:1:n rejected by the arbiter: ADMISSION_CODE_LANE_BUDGET_EXCEEDED [client_seq unspent]": rotationLaneBudget,
-		"storage_integrity: client lanes are not enabled on this network [client_seq unspent]":                                                     rotationLanesDisabled,
-		"storage_integrity: statement 0xaa:1:n rejected by the arbiter: ADMISSION_CODE_DUPLICATE_CLIENT_SEQ":                                       rotationNone,
-		"some other error": rotationNone,
+	const laned = "0xaa:5e1f0a2b7c9d3e4f:9:n"
+	const legacy = "0xaa:1:n"
+	for _, tc := range []struct {
+		name, msg, id string
+		want          laneRotation
+	}{
+		{"gap budget", "storage_integrity: statement " + laned + " rejected by the arbiter: ADMISSION_CODE_GAP_BUDGET_EXCEEDED [client_seq unspent]", laned, rotationGapBudget},
+		{"lane budget", "storage_integrity: statement " + laned + " rejected by the arbiter: ADMISSION_CODE_LANE_BUDGET_EXCEEDED [client_seq unspent]", laned, rotationLaneBudget},
+		{"composed prefix, trailing newline", "storage_integrity admission rejected for " + laned + ": storage_integrity: statement " + laned + " rejected by the arbiter: ADMISSION_CODE_GAP_BUDGET_EXCEEDED [client_seq unspent]\n", laned, rotationGapBudget},
+		{"lanes disabled", "storage_integrity: client lanes are not enabled on this network [client_seq unspent]", laned, rotationLanesDisabled},
+		{"duplicate", "storage_integrity: statement " + legacy + " rejected by the arbiter: ADMISSION_CODE_DUPLICATE_CLIENT_SEQ", legacy, rotationNone},
+		{"other error", "some other error", laned, rotationNone},
+		// Final review m6: the code name in user-controlled text never rotates.
+		{"code in user text", "Code: 60. DB::Exception: Table si_tenant.`rejected by the arbiter: ADMISSION_CODE_GAP_BUDGET_EXCEEDED` does not exist [client_seq unspent]", laned, rotationNone},
+		{"another statement's rejection", "storage_integrity: statement 0xaa:5e1f0a2b7c9d3e4f:8:x rejected by the arbiter: ADMISSION_CODE_GAP_BUDGET_EXCEEDED [client_seq unspent]", laned, rotationNone},
+		{"code not at the end", "storage_integrity: statement " + laned + " rejected by the arbiter: ADMISSION_CODE_LANE_BUDGET_EXCEEDED_SOMETHING_ELSE [client_seq unspent]", laned, rotationNone},
+		{"code then more text", "storage_integrity: statement " + laned + " rejected by the arbiter: ADMISSION_CODE_GAP_BUDGET_EXCEEDED; user said hi [client_seq unspent]", laned, rotationNone},
 	} {
-		if got := laneRotationFor(msg); got != want {
-			t.Errorf("laneRotationFor(%q) = %v, want %v", msg, got, want)
+		if got := laneRotationFor(tc.msg, tc.id); got != tc.want {
+			t.Errorf("%s: laneRotationFor(%q) = %v, want %v", tc.name, tc.msg, got, tc.want)
 		}
 	}
 }

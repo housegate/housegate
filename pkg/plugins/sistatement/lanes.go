@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/log"
 	sicore "github.com/housegate/housegate/pkg/storageintegrity"
 )
 
@@ -88,7 +89,7 @@ func (s *laneSelector) pick(ctx context.Context, lanesEnabled bool, legacy seqLa
 		var lane seqLane = legacy
 		if s.mode == LaneModeAuto && lanesEnabled && s.legacyPin == "" {
 			if s.current == nil {
-				if err := s.acquireLocked(); err != nil {
+				if err := s.acquireLocked(ctx); err != nil {
 					return nil, nil, err
 				}
 			}
@@ -129,7 +130,7 @@ func (s *laneSelector) doneFunc(key string) func() {
 	}
 }
 
-func (s *laneSelector) acquireLocked() error {
+func (s *laneSelector) acquireLocked(ctx context.Context) error {
 	if s.pool == nil {
 		pool, err := s.openPool()
 		if err != nil {
@@ -142,14 +143,20 @@ func (s *laneSelector) acquireLocked() error {
 		return fmt.Errorf("storage_integrity agent: acquire a client lane: %w", err)
 	}
 	s.current = store
+	logged := string(reason)
 	switch {
 	case s.rotated:
 		// Already counted as gap_budget; the new_process (or reused) acquire
 		// that completes the rotation is the same lane change.
 		s.rotated = false
+		logged = "gap_budget"
 	case reason != AcquireReused && s.observer != nil:
 		s.observer.LaneRotated(string(reason))
 	}
+	// Spec 2026-10-09 §6.5, §10: the lane is logged at info on start and on
+	// rotation; SDK users read their current lane (R9) here.
+	_, logger := log.FromContext(ctx)
+	logger.Infow("sistatement: client lane acquired", "lane", store.Lane(), "reason", logged, "acquire", string(reason))
 	return nil
 }
 
@@ -173,6 +180,7 @@ func (s *laneSelector) rotate(lane string) error {
 	s.cond.Broadcast() // waiters on the abandoned lane move to the next one
 	if err := store.Abandon(); err != nil {
 		s.pool.exclude(lane)
+		store.retire()
 		return errors.Join(fmt.Errorf("storage_integrity agent: abandon client lane %s: %w", lane, err), store.Close())
 	}
 	return nil
@@ -258,14 +266,24 @@ const (
 	rotationLanesDisabled
 )
 
-// laneRotationFor reads the coded terminal rejection the server renders
-// ("storage_integrity: statement <id> rejected by the arbiter: <CODE>") and
-// the ingress pre-activation refusal.
-func laneRotationFor(message string) laneRotation {
+// laneRotationFor reads the coded terminal rejection the ingress composes for
+// statementID ("storage_integrity: statement <id> rejected by the arbiter:
+// <CODE>", possibly after a prefix and before the unspent marker) and the
+// ingress pre-activation refusal. The budget codes are matched only as that
+// exact phrase for this statement at the end of the message, so a code name
+// inside user-controlled text, or another statement's rejection, never
+// rotates a lane. The lanes-disabled refusal only expires cached info, so it
+// is matched anywhere.
+func laneRotationFor(message, statementID string) laneRotation {
+	text := strings.TrimSpace(message)
+	if chproto.HasSeqUnspentSuffix(text) {
+		text = strings.TrimSpace(strings.TrimSuffix(text, chproto.SeqUnspentSuffix))
+	}
+	rejected := "statement " + statementID + " rejected by the arbiter: "
 	switch {
-	case strings.Contains(message, "rejected by the arbiter: ADMISSION_CODE_GAP_BUDGET_EXCEEDED"):
+	case statementID != "" && strings.HasSuffix(text, rejected+sicore.AdmissionCodeGapBudgetExceeded):
 		return rotationGapBudget
-	case strings.Contains(message, "rejected by the arbiter: "+sicore.AdmissionCodeLaneBudgetExceeded):
+	case statementID != "" && strings.HasSuffix(text, rejected+sicore.AdmissionCodeLaneBudgetExceeded):
 		return rotationLaneBudget
 	case strings.Contains(message, sicore.ErrClientLanesNotEnabled.Error()):
 		return rotationLanesDisabled
@@ -286,6 +304,10 @@ func withRetryHint(message, hint string) string {
 }
 
 var errSDKLegacyWhileLanesOff = errors.New("SDK statement ids must use the legacy form while client lanes are off")
+
+// errSDKLegacyWhilePinned replaces errSDKLegacyWhileLanesOff when lanes are on
+// but LANE_BUDGET_EXCEEDED pinned this process to its legacy lane.
+var errSDKLegacyWhilePinned = errors.New("SDK statement ids must use the legacy form: this agent is pinned to its legacy client_seq lane")
 
 // ownLanedStatementID applies spec 2026-10-09 R9 to a client-supplied query
 // id. ok is false (and err nil) when the id is not this account's statement

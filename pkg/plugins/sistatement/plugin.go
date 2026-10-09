@@ -585,7 +585,7 @@ func (p *Plugin) reserveStatementID(lane seqLane, queryID string) (string, uint6
 // seq, not necessarily this one.
 func (p *Plugin) releaseSeq(lane seqLane, seq uint64) {
 	if err := lane.Release(seq); err != nil {
-		if store, ok := lane.(*LanedStore); ok && store.Abandoned() && errors.Is(err, ErrSeqClosed) {
+		if store, ok := lane.(*LanedStore); ok && store.Retired() && errors.Is(err, ErrSeqClosed) {
 			log.Infow("sistatement: client lane was abandoned; dropping the release of its unspent client_seq", "lane", store.Lane(), "client_seq", seq)
 			return
 		}
@@ -758,8 +758,11 @@ func (p *Plugin) reserve(ctx context.Context, st *pendingStatement) (seqLane, fu
 			return lane, done, statementID, seq, nil
 		}
 		done()
-		if store, ok := lane.(*LanedStore); ok && attempt == 0 && store.Abandoned() && errors.Is(err, ErrSeqClosed) {
+		if store, ok := lane.(*LanedStore); ok && attempt == 0 && store.Retired() && errors.Is(err, ErrSeqClosed) {
 			continue
+		}
+		if lane.Lane() == "" && errors.Is(err, errSDKLegacyWhileLanesOff) && sel.legacyPinned() {
+			return nil, nil, "", 0, fmt.Errorf("storage_integrity agent: %w", errSDKLegacyWhilePinned)
 		}
 		if lane.Lane() == "" && sel.legacyPinned() && errors.Is(err, ErrSeqLocked) {
 			_, logger := log.FromContext(ctx)
@@ -818,13 +821,14 @@ func (p *Plugin) OnException(ctx context.Context, sess chsession.Session, exc *c
 		return nil
 	}
 	marked := chproto.HasSeqUnspentSuffix(exc.Message)
-	rotation := laneRotationFor(exc.Message)
-	if !marked && rotation == rotationNone {
-		return nil
-	}
 	p.mu.Lock()
 	r := p.reserved[sess.ID()]
 	if r == nil {
+		p.mu.Unlock()
+		return nil
+	}
+	rotation := laneRotationFor(exc.Message, r.statementID)
+	if !marked && rotation == rotationNone {
 		p.mu.Unlock()
 		return nil
 	}

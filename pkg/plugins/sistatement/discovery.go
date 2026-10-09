@@ -31,10 +31,20 @@ const infoFailureTTL = time.Minute
 // TTL is the cost.
 const infoSuccessTTL = time.Minute
 
+// infoRefreshRetry is the minimum interval between refresh attempts of an
+// expired info answer whose last refresh failed; the stale answer is served
+// meanwhile (stale-while-error).
+const infoRefreshRetry = 5 * time.Second
+
 // infoEntry is a cached successful info answer and when it was fetched.
 type infoEntry struct {
 	info registry.StorageIntegrityInfo
 	at   time.Time
+	// retryAt is the earliest next refresh after a failed one; refreshing
+	// marks the one refresh in flight (single-flight). Both apply only to an
+	// expired entry, which is served meanwhile.
+	retryAt    time.Time
+	refreshing bool
 }
 
 // discoveryWarnInterval throttles the P7 fallback warning per database.
@@ -60,10 +70,11 @@ func (p *Plugin) observeDiscovery(step string) {
 
 // siInfo returns the hosting indexer's SI info for database (spec 2026-10-09
 // §6.4 step 3). A success is cached for infoSuccessTTL; an older entry
-// triggers a refresh, and when that refresh fails the last good answer is
-// still served (stale-while-error, with a throttled warning) and the next
-// statement retries: expiry never turns a good answer into the configured
-// fallback or a refusal. Every successful lookup runs the clock-skew check,
+// triggers one refresh at a time (single-flight; concurrent statements are
+// served the stale answer), and when that refresh fails the last good answer
+// is still served (stale-while-error, with a throttled warning) and retried
+// no sooner than infoRefreshRetry later: expiry never turns a good answer into
+// the configured fallback or a refusal. Every successful lookup runs the clock-skew check,
 // which warns once per database. A failure with no good answer, including an
 // answer without a network_id, is remembered for infoFailureTTL and returned
 // with its step; only an actual lookup counts toward the discovery-failure
@@ -72,13 +83,17 @@ func (p *Plugin) siInfo(ctx context.Context, database string) (registry.StorageI
 	now := p.now()
 	p.mu.Lock()
 	stale, haveStale := p.infos[database]
-	if haveStale && now.Sub(stale.at) < infoSuccessTTL {
+	if haveStale && (now.Sub(stale.at) < infoSuccessTTL || stale.refreshing || now.Before(stale.retryAt)) {
 		p.mu.Unlock()
 		return stale.info, "", nil
 	}
 	if f, ok := p.infoFailures[database]; ok && !haveStale && now.Before(f.until) {
 		p.mu.Unlock()
 		return registry.StorageIntegrityInfo{}, f.step, f.err
+	}
+	if haveStale {
+		stale.refreshing = true
+		p.infos[database] = stale
 	}
 	p.mu.Unlock()
 	info, err := p.discovery.StorageIntegrityInfo(ctx, database)
@@ -89,6 +104,13 @@ func (p *Plugin) siInfo(ctx context.Context, database string) (registry.StorageI
 	if err != nil {
 		p.observeDiscovery(step)
 		if haveStale {
+			p.mu.Lock()
+			if e, ok := p.infos[database]; ok {
+				e.refreshing = false
+				e.retryAt = now.Add(infoRefreshRetry)
+				p.infos[database] = e
+			}
+			p.mu.Unlock()
 			_, logger := log.FromContext(ctx)
 			logger.WarnEvery(fmt.Sprintf("sistatement-info-refresh-%p-%s", p, database), p.discoveryWarnEvery,
 				"sistatement: refreshing the hosting indexer's SI info failed; serving the last good answer",
@@ -152,6 +174,7 @@ func (p *Plugin) expireLanesInfo(database string) {
 	if e, ok := p.infos[database]; ok {
 		e.info.ClientLanesEnabled = false
 		e.at = time.Time{}
+		e.retryAt = time.Time{}
 		p.infos[database] = e
 	}
 }

@@ -228,6 +228,9 @@ type LanedStore struct {
 	mu     sync.Mutex
 	state  laneFile
 	closed bool
+	// retired marks a lane this process gave up after an Abandon that could
+	// not be persisted: it is closed and excluded like an abandoned one.
+	retired bool
 }
 
 func (s *LanedStore) Lane() string { return s.lane }
@@ -237,6 +240,21 @@ func (s *LanedStore) Abandoned() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.state.Abandoned
+}
+
+// Retired reports whether this process gave the lane up: abandoned durably,
+// or after an Abandon that failed (see retire). No later statement of this
+// process uses a retired lane.
+func (s *LanedStore) Retired() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.state.Abandoned || s.retired
+}
+
+func (s *LanedStore) retire() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.retired = true
 }
 
 // laneError keeps a lane error's own text while wrapping A1's sentinel, so

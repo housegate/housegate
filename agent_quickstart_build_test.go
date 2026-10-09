@@ -372,6 +372,30 @@ func TestBuildAgent_ExplicitStateDirOpensTheCounterAtBuild(t *testing.T) {
 		})
 	}
 
+	for _, lanes := range []string{"off", "auto"} {
+		t.Run("unwritable directory with lanes "+lanes, func(t *testing.T) {
+			if os.Geteuid() == 0 {
+				t.Skip("root bypasses directory permissions")
+			}
+			cfg := newCfg(t)
+			cfg.StorageIntegrity.Agent.Lanes = lanes
+			dir := filepath.Join(t.TempDir(), "readonly")
+			if err := os.Mkdir(dir, 0o500); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+			cfg.StorageIntegrity.Agent.StateDir = dir
+			bs, err := buildAgent(Options{Config: cfg, NetworkState: newState(t)}, nil)
+			if err == nil {
+				bs.teardown()
+				t.Fatal("buildAgent must fail when the state directory is not writable")
+			}
+			if !strings.Contains(err.Error(), "storage_integrity.agent") || !strings.Contains(err.Error(), dir) {
+				t.Fatalf("err = %v, want a storage_integrity.agent refusal naming %s", err, dir)
+			}
+		})
+	}
+
 	t.Run("held from build until teardown", func(t *testing.T) {
 		cfg := newCfg(t)
 		bs, err := buildAgent(Options{Config: cfg, NetworkState: newState(t)}, nil)
@@ -421,11 +445,11 @@ func TestAgentStatementOptions_Wiring(t *testing.T) {
 		}
 		// agentSIConfig sets an explicit state_dir and leaves lanes auto: the
 		// legacy counter opens lazily (preflight F1) and each network's lanes
-		// live in <state_dir>/<network_id> (ruling C3).
+		// live in <state_dir>/<network_id>/<signer> (ruling C3, review m3).
 		if opts.Discovery == nil || opts.Hosting == nil || opts.OpenSeq == nil || opts.Seq != nil || opts.Dial == nil || opts.LaneDir == nil {
 			t.Fatalf("discovery=%v hosting=%v openSeq=%v seq=%v dial=%v laneDir=%v", opts.Discovery != nil, opts.Hosting != nil, opts.OpenSeq != nil, opts.Seq != nil, opts.Dial != nil, opts.LaneDir != nil)
 		}
-		if dir, err := opts.LaneDir("itest-net"); err != nil || dir != filepath.Join(cfg.StorageIntegrity.Agent.StateDir, "itest-net") {
+		if dir, err := opts.LaneDir("itest-net"); err != nil || dir != filepath.Join(cfg.StorageIntegrity.Agent.StateDir, "itest-net", signer) {
 			t.Fatalf("lane dir = %q, %v", dir, err)
 		}
 		if opts.Lanes != sistatement.LaneModeAuto || opts.MaxInflightPerLane != 16 || opts.ClientLanesEnabled != nil {
@@ -607,8 +631,8 @@ func TestAgentSeqOpener(t *testing.T) {
 			t.Fatalf("a second agent on the same state dir must start: %v", err)
 		}
 		for _, network := range []string{"net-a", "net-b"} {
-			if got, err := laneDir(network); err != nil || got != filepath.Join(dir, network) {
-				t.Fatalf("lane dir for %s = %q, %v; want %s", network, got, err, filepath.Join(dir, network))
+			if got, err := laneDir(network); err != nil || got != filepath.Join(dir, network, lower) {
+				t.Fatalf("lane dir for %s = %q, %v; want %s", network, got, err, filepath.Join(dir, network, lower))
 			}
 		}
 		for _, bad := range []string{"", ".", "..", "../escape", "a/b", `a\b`} {
@@ -669,21 +693,38 @@ func TestAgentSeqOpener(t *testing.T) {
 		}
 	})
 
-	// Ruling C3: two networks under one explicit state_dir never share a lane
-	// directory, and acquiring a lane on each lands in its own directory. The
-	// legacy <state_dir>/<signer>.seq stays where Plan A1 put it.
-	t.Run("explicit state dir scopes client lanes by network", func(t *testing.T) {
+	// Ruling C3 as revised by final review m3: under one explicit state_dir
+	// neither two networks nor two keys share a lane directory, and acquiring
+	// a lane on each lands in its own directory. The legacy
+	// <state_dir>/<signer>.seq stays where Plan A1 put it.
+	t.Run("explicit state dir scopes client lanes by network and key", func(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "state")
+		const other = "0x00000000000000000000000000000000000000BB"
 		_, open, laneDir, _, err := agentSeqOpener(dir, signer, sistatement.LaneModeAuto, func() (string, bool) { return "", false })
 		if err != nil {
 			t.Fatal(err)
 		}
-		lanesOf := map[string]string{}
-		for _, network := range []string{"net-a", "net-b"} {
-			siDir, err := laneDir(network)
+		_, _, otherLaneDir, _, err := agentSeqOpener(dir, other, sistatement.LaneModeAuto, func() (string, bool) { return "", false })
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen := map[string]string{}
+		for _, c := range []struct {
+			name, network, account string
+			dirOf                  func(string) (string, error)
+		}{
+			{"key A net-a", "net-a", lower, laneDir},
+			{"key A net-b", "net-b", lower, laneDir},
+			{"key B net-a", "net-a", strings.ToLower(other), otherLaneDir},
+		} {
+			siDir, err := c.dirOf(c.network)
 			if err != nil {
 				t.Fatal(err)
 			}
+			if prev, ok := seen[siDir]; ok {
+				t.Fatalf("%s and %s share lane directory %s", prev, c.name, siDir)
+			}
+			seen[siDir] = c.name
 			pool, err := sistatement.OpenLanePool(siDir, sistatement.LanePoolOptions{})
 			if err != nil {
 				t.Fatal(err)
@@ -693,13 +734,9 @@ func TestAgentSeqOpener(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer store.Close()
-			if _, err := os.Stat(filepath.Join(dir, network, "lanes", store.Lane()+".json")); err != nil {
-				t.Fatalf("network %s lane file: %v", network, err)
+			if _, err := os.Stat(filepath.Join(dir, c.network, c.account, "lanes", store.Lane()+".json")); err != nil {
+				t.Fatalf("%s lane file: %v", c.name, err)
 			}
-			lanesOf[network] = siDir
-		}
-		if lanesOf["net-a"] == lanesOf["net-b"] {
-			t.Fatalf("both networks use lane directory %s", lanesOf["net-a"])
 		}
 		legacy, err := open("net-a")
 		if err != nil {
@@ -708,6 +745,32 @@ func TestAgentSeqOpener(t *testing.T) {
 		defer legacy.Close()
 		if legacy.Path() != filepath.Join(dir, lower+".seq") {
 			t.Fatalf("legacy counter moved to %s", legacy.Path())
+		}
+	})
+
+	// Final review m1: an existing state_dir the agent cannot write must stop
+	// startup with lanes auto too; MkdirAll alone accepts it.
+	t.Run("unwritable explicit state dir fails at build with lanes auto", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root bypasses directory permissions")
+		}
+		dir := filepath.Join(t.TempDir(), "state")
+		if err := os.Mkdir(dir, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+		_, _, _, _, err := agentSeqOpener(dir, signer, sistatement.LaneModeAuto, func() (string, bool) { return "", false })
+		if err == nil || !strings.Contains(err.Error(), "is not writable by the agent") || !strings.Contains(err.Error(), dir) {
+			t.Fatalf("err = %v, want a not-writable refusal naming %s", err, dir)
+		}
+		if err := os.Chmod(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, _, _, err := agentSeqOpener(dir, signer, sistatement.LaneModeAuto, func() (string, bool) { return "", false }); err != nil {
+			t.Fatalf("writable again: %v", err)
+		}
+		if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+			t.Fatalf("the write probe left %v behind", entries)
 		}
 	})
 

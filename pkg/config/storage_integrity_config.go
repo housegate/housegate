@@ -101,8 +101,8 @@ type StorageIntegrityAgentConfig struct {
 	// network. Optional: empty uses the per-OS default base
 	// (DefaultAgentStateBase) with one counter per network under
 	// <base>/si/<network_id>/<account>/ (plan decision P4). Client lanes
-	// live in <state_dir>/<network_id>/lanes/, or in the per-network default
-	// directory's lanes/.
+	// live in <state_dir>/<network_id>/<account>/lanes/, or in the
+	// per-network default directory's lanes/.
 	StateDir string `json:"state_dir" yaml:"state_dir"`
 	// Lanes selects client_seq lanes (spec 2026-10-09 D15): "auto" (default)
 	// uses a client lane whenever the hosting indexer reports

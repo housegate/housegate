@@ -1641,16 +1641,21 @@ func defaultAgentStateBase() (string, bool) {
 // directory and a label for logs (plan decision P4).
 //
 // An explicit state_dir keeps one <state_dir>/<signer>.seq for every network
-// (unchanged from Plan A1) and each network's client lanes in
-// <state_dir>/<network_id>/lanes, so two networks never share a lane
-// directory (controller ruling C3). With lanes off (the driver sidecar) the
+// (unchanged from Plan A1) and each network's client lanes for each key in
+// <state_dir>/<network_id>/<signer>/lanes, mirroring the default base, so
+// neither two networks nor two keys ever share a lane directory (controller
+// ruling C3 as revised by final review m3: a shared pool lets a foreign key
+// drain a lane's free list into up to 64 gap ranges and abandon a lane other
+// keys use). With lanes off (the driver sidecar) the
 // counter is opened here, at build: a directory that cannot be created or a
 // counter another process holds (its flock admits a single opener) stops
 // startup instead of refusing every SI INSERT later (final review I2); the
 // caller owns the returned counter until the plugin takes it as Options.Seq.
 // With lanes auto the counter is opened lazily, at the first statement that
-// uses the legacy lane, and then shared by every network; only the state
-// directory is created at build, so it still fails fast. A process that
+// uses the legacy lane, and then shared by every network; at build the state
+// directory is only created and probed for writing (a temp file is created,
+// fsynced and removed), so a missing, uncreatable or read-only directory
+// still stops startup (final review m1). A process that
 // writes on a client lane must never take the legacy lock, or a second agent
 // sharing the state directory (spec 2026-10-09 §6.5, §9.2) could not start;
 // the per-lane flock is that mode's guard against two processes sharing a
@@ -1666,7 +1671,7 @@ func agentSeqOpener(stateDir, signer string, lanes sistatement.LaneMode, default
 			if err := validNetworkDirName(networkID); err != nil {
 				return "", err
 			}
-			return filepath.Join(stateDir, networkID), nil
+			return filepath.Join(stateDir, networkID, strings.ToLower(signer)), nil
 		}
 		if lanes == sistatement.LaneModeOff {
 			seq, err := sistatement.OpenSeqCounter(stateDir, signer)
@@ -1676,9 +1681,9 @@ func agentSeqOpener(stateDir, signer string, lanes sistatement.LaneMode, default
 			return seq, nil, laneDir, stateDir, nil
 		}
 		// Nothing is locked at build, but a state directory that cannot be
-		// created still stops startup.
-		if err := os.MkdirAll(stateDir, 0o700); err != nil {
-			return nil, nil, nil, "", fmt.Errorf("create state_dir %s: %w", stateDir, err)
+		// created or written still stops startup.
+		if err := probeWritableDir(stateDir); err != nil {
+			return nil, nil, nil, "", err
 		}
 		return nil, sharedSeqOpener(func() (*sistatement.SeqCounter, error) {
 			return sistatement.OpenSeqCounter(stateDir, signer)
@@ -1701,6 +1706,28 @@ func agentSeqOpener(stateDir, signer string, lanes sistatement.LaneMode, default
 		}
 		return sistatement.OpenSeqCounter(dir, signer)
 	}, siDir, filepath.Join(base, "si"), nil
+}
+
+// probeWritableDir creates dir when missing and proves the agent can write
+// there: MkdirAll alone accepts an existing read-only directory, after which
+// every SI INSERT would fail at its first lazy open. Every lane and seq file
+// lives below dir, so this is the startup check for all of them.
+func probeWritableDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create state_dir %s: %w", dir, err)
+	}
+	f, err := os.CreateTemp(dir, ".housegate-write-probe-*")
+	if err != nil {
+		return fmt.Errorf("state_dir %s is not writable by the agent: %w", dir, err)
+	}
+	name := f.Name()
+	syncErr := f.Sync()
+	closeErr := f.Close()
+	removeErr := os.Remove(name)
+	if err := errors.Join(syncErr, closeErr, removeErr); err != nil {
+		return fmt.Errorf("state_dir %s is not writable by the agent: %w", dir, err)
+	}
+	return nil
 }
 
 // validNetworkDirName refuses a network id that is not exactly one path
