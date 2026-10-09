@@ -5063,7 +5063,39 @@ func TestSelectorCapsInflightPerLane(t *testing.T) {
 	}
 	d2()
 }
+
+// The legacy lane is uncapped (spec §6.5): lanes off, lanes not yet enabled
+// and a legacy pin never wait for a slot, whatever max_inflight_per_lane says.
+func TestSelectorLegacyLaneIsUncapped(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		mode         LaneMode
+		lanesEnabled bool
+	}{
+		{"lanes off", LaneModeOff, true},
+		{"lanes not enabled", LaneModeAuto, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sel, legacy := newSelector(t, tc.mode, 1)
+			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			defer cancel()
+			var dones []func()
+			for i := 0; i < 3; i++ {
+				lane, done, err := sel.pick(ctx, tc.lanesEnabled, legacy)
+				if err != nil || lane.Lane() != "" {
+					t.Fatalf("pick %d = %v, %v; want the legacy lane without waiting", i, lane, err)
+				}
+				dones = append(dones, done)
+			}
+			for _, d := range dones {
+				d()
+			}
+		})
+	}
+}
 ```
+
+`TestSelectorRotatesOnGapBudgetAndPinsLegacyOnLaneBudget` already reaches the pinned-legacy state; extend it so that, once pinned, three concurrent picks on a selector built with `maxInflight` 1 all return the legacy lane without error.
 
 A1 Task 16 already validates `storage_integrity.agent.lanes` (`""`/`auto`/`off`) in `validateAgent` and tests it in `pkg/config/storage_integrity_agent_config_test.go`. Add to that file's table (the `func(c *Config)` mutator / expected-substring rows A1 extended):
 
@@ -5213,8 +5245,9 @@ func newLaneSelector(mode LaneMode, openPool func() (*LanePool, error), maxInfli
 
 // pick returns the lane for one statement and a done func that must be called
 // exactly once when the statement's outcome is known (success, Exception,
-// abort or session close). It blocks while the lane is at its in-flight cap,
-// until ctx ends; no seq is reserved by pick itself.
+// abort or session close). It blocks while a client lane is at its in-flight
+// cap, until ctx ends (the caller bounds ctx by laneInflightWait, 30 s); the
+// legacy lane is never capped. No seq is reserved by pick itself.
 func (s *laneSelector) pick(ctx context.Context, lanesEnabled bool, legacy seqLane) (seqLane, func(), error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -5230,7 +5263,10 @@ func (s *laneSelector) pick(ctx context.Context, lanesEnabled bool, legacy seqLa
 	key := lane.Lane()
 	stop := context.AfterFunc(ctx, func() { s.mu.Lock(); s.cond.Broadcast(); s.mu.Unlock() })
 	defer stop()
-	for s.maxInflight > 0 && s.inflight[key] >= s.maxInflight {
+	// Only client lanes are capped (spec §6.5): the legacy lane stays
+	// unbounded as in Plan A1, which keeps the driver sidecar and lanes-off
+	// agents unchanged. It is still counted for the gauge.
+	for key != "" && s.maxInflight > 0 && s.inflight[key] >= s.maxInflight {
 		if ctx.Err() != nil {
 			return nil, nil, fmt.Errorf("storage_integrity agent: lane %q has %d statements in flight; retry", key, s.inflight[key])
 		}
@@ -5354,7 +5390,7 @@ func ownSuppliedStatementID(queryID, ownAccount, lane string) (sicore.StatementI
 
 In `pkg/plugins/sistatement/plugin.go` (after Plan A):
 1. `Options`: add `Lanes LaneMode`, `MaxInflightPerLane int`, `OpenLanePool func(siDir string) (*LanePool, error)` (nil = `OpenLanePool(siDir, LanePoolOptions{OnCorrupt: func(lane string, err error) { log.Warnw("sistatement: ignoring an untrusted client lane file", "lane", lane, "err", err) }, OnBurn: func(reason string) { p.observeSeq(func(o SeqObserver) { o.SeqBurned(reason) }) }})`, using PA3's `observeSeq` / `SeqObserver`).
-2. Where PA3 lazily opens the legacy counter (`Options.OpenSeq(networkID)` / `p.seqFor`, A1 Task 14), create (once per network) `newLaneSelector(opts.Lanes, func() (*LanePool, error) { return open(siDir) }, opts.MaxInflightPerLane, laneObserver)` and keep it next to the counter; `laneObserver` is `opts.Observer` type-asserted to `LaneObserver`. `siDir` is `<base>/si/<network_id>/<signer>` when the agent uses the default state directory (A1 plan decision P4), and `<state_dir>/<signer>` when `storage_integrity.agent.state_dir` is explicit (A1 keeps the legacy `<state_dir>/<signer>.seq` there, and an explicit directory may be shared by several keys, whose lanes must never be shared: a lane file's `next` is per subject). Adapt A1's `*SeqCounter` to `seqLane` instead of changing its methods (its `Release` reports free-list overflow, which the adapter turns into the existing burn metric). The adapter opens the legacy counter lazily, on its first reservation: a process that uses a client lane must never take the legacy counter's lock, or a second agent sharing the state directory (spec §9.2) would fail on `ErrSeqLocked` before it could acquire its own lane:
+2. Where PA3 lazily opens the legacy counter (`Options.OpenSeq(networkID)` / `p.seqFor`, A1 Task 14), create (once per network) `newLaneSelector(opts.Lanes, func() (*LanePool, error) { return open(siDir) }, opts.MaxInflightPerLane, laneObserver)` and keep it next to the counter; `laneObserver` is `opts.Observer` type-asserted to `LaneObserver`. `siDir` is `<base>/si/<network_id>/<signer>` when the agent uses the default state directory (A1 plan decision P4), and `<state_dir>/<network_id>/<signer>` when `storage_integrity.agent.state_dir` is explicit (A1 keeps the legacy `<state_dir>/<signer>.seq` there unchanged, and an explicit directory may be shared by several keys and used on several networks, whose lanes must never be shared: a lane file's `next` is per subject). Validate `network_id` as a single path element before joining it. Add `TestAgentLaneDirLayout` (root package, next to A1's `agentSeqOpener` tests) pinning both layouts: an explicit `state_dir` gives lane directories `<state_dir>/net-a/<signer>` and `<state_dir>/net-b/<signer>` for two networks while the legacy counter stays at `<state_dir>/<signer>.seq`; the default base gives `<base>/si/<network_id>/<signer>`; a `network_id` containing `/` or `..` is refused. Adapt A1's `*SeqCounter` to `seqLane` instead of changing its methods (its `Release` reports free-list overflow, which the adapter turns into the existing burn metric). The adapter opens the legacy counter lazily, on its first reservation: a process that uses a client lane must never take the legacy counter's lock, or a second agent sharing the state directory (spec §9.2) would fail on `ErrSeqLocked` before it could acquire its own lane:
 
 ```go
 // legacyLane is the legacy (lane-less) client_seq counter of Plan A1 as a
@@ -5399,7 +5435,7 @@ func (l legacyLane) Release(seq uint64) error {
 Add a unit test `TestLegacyLaneOpensTheCounterOnlyWhenUsed` in `lanes_test.go`: a `legacyLane` whose `open` counts calls is passed to `pick` with lanes enabled (a temp-dir pool) and `open` is never called; with lanes disabled, `Reserve` calls it once.
 
 Change A1's `reservedSeq.counter *SeqCounter` (A1 Task 14) to `lane seqLane`, so `OnException`'s release-on-marker and every pre-send release go to the lane that reserved the seq. The pre-send release is the one housegate#225 shipped after A1 (in the housegate release that follows v0.17.0): Relay sets `QueryContext.UpstreamQueryUnsent` through `abortUnsentQuery` only before `WriteQuery` in `forwardSignedInsert` (later strict-hook refusal, nil upstream, lost `beginActiveQuery` race), refuses it once the write began, and `sistatement.OnQueryAbort` releases only when that flag is set and the reservation matches the statement id; this task routes that existing release to `lane` and adds, in `pkg/plugins/sistatement` and `pkg/proxy`, laned variants of #225's tests (each pre-send site releases to the reserving client lane; a failed `WriteQuery` stays burned on a client lane); A1's `releaseSeq(seq)` (A1 Task 12; A1 Task 14 routes it to the statement's counter) becomes `releaseSeq(lane seqLane, seq uint64)`: an error counts `SeqBurned("unknown_outcome")`, success counts `SeqRecycled()`; a free-list overflow is counted by the store itself (the adapter above, or `LanePoolOptions.OnBurn` for a client lane), because the entry an overflow drops is the largest free seq, not necessarily the one being released.
-3. At PA3's reservation point in `OnQueryInputCompleteStrict`, before reserving: `lane, done, err := sel.pick(ctx, lanesEnabled, legacyLane{open: func() (*SeqCounter, error) { return p.seqFor(st.networkID) }, onBurn: burn})` (`burn` the same `SeqBurned` callback as above; A1 Task 14 must no longer open the counter before this point) where `lanesEnabled` is `info.ClientLanesEnabled` from PA4's cached `registry.StorageIntegrityInfo` of the hosting indexer when `Options.Discovery` is set, and otherwise `opts.ClientLanesEnabled != nil && opts.ClientLanesEnabled()` (new `sistatement.Options.ClientLanesEnabled func() bool`; A1's agent without discovery — a YAML or host-injected status source, and every integration fixture — has no SI info to read); on error refuse locally (no seq reserved). Then apply `ownSuppliedStatementID(clientQueryID, p.account, lane.Lane())` (replacing PA3's legacy-only SDK check): `err` → `done()` and refuse with that message; `ok` → `lane.ReserveSupplied(id.Seq)` and keep the supplied id; otherwise `seq, err := lane.Reserve()` and mint `sicore.StatementID{Account: p.account, Lane: lane.Lane(), Seq: seq, Nonce: hex(16 random bytes)}.Flat()`. `OnQueryInputCompleteStrict` has already deleted `p.pending[sessID]` at this point, so store `lane` and `done` on the `reservedSeq` that PA3 tracks in `p.reserved[sessID]`, never on the pending statement. Any failure after `pick` but before that reservation is tracked (`Reserve`/`ReserveSupplied` error, SDK id refusal, signing failure) calls `done()` directly. Every PA3 path that releases a reserved seq before the Query is written (signing failure, and housegate#225's `UpstreamQueryUnsent` pre-send abort) calls `lane.Release(seq)`. Log the lane at info with the statement id.
+3. At PA3's reservation point in `OnQueryInputCompleteStrict`, before reserving, bound the slot wait: `waitCtx, cancel := context.WithTimeout(ctx, p.inflightWait); defer cancel()` with `const laneInflightWait = 30 * time.Second` and a `Plugin.inflightWait` field set to it in `New` (tests shorten it). Then `lane, done, err := sel.pick(waitCtx, lanesEnabled, legacyLane{open: func() (*SeqCounter, error) { return p.seqFor(st.networkID) }, onBurn: burn})` (`burn` the same `SeqBurned` callback as above; A1 Task 14 must no longer open the counter before this point) where `lanesEnabled` is `info.ClientLanesEnabled` from PA4's cached `registry.StorageIntegrityInfo` of the hosting indexer when `Options.Discovery` is set, and otherwise `opts.ClientLanesEnabled != nil && opts.ClientLanesEnabled()` (new `sistatement.Options.ClientLanesEnabled func() bool`; A1's agent without discovery — a YAML or host-injected status source, and every integration fixture — has no SI info to read); on error refuse locally (no seq reserved). Add `TestLaneSlotWaitIsBounded`: a plugin with `MaxInflightPerLane` 1, lanes enabled, and `inflightWait` set to 50 ms holds one client-lane slot; a second SI INSERT whose caller context has no deadline is refused with the "in flight" message within one second and reserves no seq, while the same INSERT on a lanes-off plugin proceeds. Then apply `ownSuppliedStatementID(clientQueryID, p.account, lane.Lane())` (replacing PA3's legacy-only SDK check): `err` → `done()` and refuse with that message; `ok` → `lane.ReserveSupplied(id.Seq)` and keep the supplied id; otherwise `seq, err := lane.Reserve()` and mint `sicore.StatementID{Account: p.account, Lane: lane.Lane(), Seq: seq, Nonce: hex(16 random bytes)}.Flat()`. `OnQueryInputCompleteStrict` has already deleted `p.pending[sessID]` at this point, so store `lane` and `done` on the `reservedSeq` that PA3 tracks in `p.reserved[sessID]`, never on the pending statement. Any failure after `pick` but before that reservation is tracked (`Reserve`/`ReserveSupplied` error, SDK id refusal, signing failure) calls `done()` directly. Every PA3 path that releases a reserved seq before the Query is written (signing failure, and housegate#225's `UpstreamQueryUnsent` pre-send abort) calls `lane.Release(seq)`. Log the lane at info with the statement id.
 4. In the shared reservation cleanup path where PA3 resolves or removes `p.reserved[sessID]` (success, marked Exception, pre-send abort, ambiguous abort/completion, close), call the reservation's `done()` exactly once (guard with the same `resolved` latch or a `sync.Once`). Add a plugin-level test with `max_inflight_per_lane: 1` that drives one statement on a single lane through each of success, marked-unspent Exception, pre-send abort (`UpstreamQueryUnsent`), ambiguous abort and connection close, and after each proves the next statement reserves on the same lane without waiting; the pre-send case also asserts its seq was released to that lane.
 5. In PA3's `OnException`, after PA3's release-on-marker handling for the active statement: `switch laneRotationFor(exc.Message)`: `rotationGapBudget` with a laned `st` → `sel.rotate(st.lane.Lane())` (log warn with old lane) and `exc.Message += "; retry: the agent moved to a new client_seq lane"`; `rotationLaneBudget` → `sel.pinLegacy(...)`, log error `"client lane budget exhausted for <account>; this process stays on the legacy client_seq lane"`, and append `"; retry: the agent switched to its legacy client_seq lane"`; `rotationLanesDisabled` → delete the statement's database from PA4's `p.infos` (under `p.mu`) so the next statement re-reads `client_lanes_enabled` from the hosting indexer. Independently of refusals, timestamp every successful `p.infos` entry and treat one older than 60 s as absent, so an agent that cached `client_lanes_enabled: false` before activation picks it up without a restart (spec §6.4); add a unit test with a fake clock and a `Discovery` that answers false then true, asserting the second statement after the expiry is laned. A legacy-lane GAP_BUDGET keeps PA3's behaviour.
 6. When `sel.pinLegacy` is active and the legacy store cannot be opened because another process holds its lock (PA3 returns its lock error), refuse SI writes with `"storage_integrity agent: client lane budget exhausted and the legacy client_seq lane is held by another process"`.
