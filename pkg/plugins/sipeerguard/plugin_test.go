@@ -1,14 +1,18 @@
 package sipeerguard
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/housegate/housegate/pkg/chproto"
 	"github.com/housegate/housegate/pkg/chsession"
+	"github.com/housegate/housegate/pkg/log"
 	"github.com/housegate/housegate/pkg/plugin"
 	"github.com/housegate/housegate/pkg/sitable"
 )
@@ -181,5 +185,97 @@ func TestGuardMarkers(t *testing.T) {
 	p := &Plugin{}
 	if !p.RunOnPeerTrust() || !p.RejectUndecodableQuery() {
 		t.Fatal("the guard must run on peer-trusted sessions and refuse undecodable queries")
+	}
+}
+
+func captureLogs(t *testing.T) (context.Context, *bytes.Buffer) {
+	t.Helper()
+	var buf bytes.Buffer
+	return log.WithContext(context.Background(), log.New(slog.NewTextHandler(&buf, nil))), &buf
+}
+
+func TestRefusalLogsTruncatedStatementAtWarn(t *testing.T) {
+	ctx, buf := captureLogs(t)
+	// "SELECT 'x" is 9 bytes, so the 512-byte cut lands inside a 3-byte CJK rune.
+	sql := "SELECT 'x" + strings.Repeat("数据", 400) + "' FROM `devnet2`.`devnet101.swap_new106`"
+	if len(sql) <= 512 {
+		t.Fatalf("test statement is only %d bytes", len(sql))
+	}
+	g := newGuard(sitable.Active)
+	var clientErr *chproto.ClientError
+	if err := g.OnQuery(ctx, guardQuery(guardSession(t, true, false), sql)); !errors.As(err, &clientErr) {
+		t.Fatalf("err = %v, want a ClientError", err)
+	}
+	out := buf.String()
+	if strings.Count(out, "\n") != 1 {
+		t.Fatalf("want exactly one log line, got %q", out)
+	}
+	for _, want := range []string{
+		"level=WARN",
+		"reason=governed_table",
+		"code=392",
+		"peer_address=10.0.0.9:9000",
+		"devnet101.swap_new106",
+		"…(truncated)",
+		"plugin=sipeerguard",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log line missing %q: %s", want, out)
+		}
+	}
+	if strings.Contains(out, "FROM `devnet2`") {
+		t.Errorf("statement tail was not truncated: %s", out)
+	}
+	if !utf8.ValidString(out) {
+		t.Errorf("log line is not valid UTF-8: %q", out)
+	}
+}
+
+func TestTruncateStatement(t *testing.T) {
+	if got := truncateStatement("SELECT 1"); got != "SELECT 1" {
+		t.Fatalf("short statement changed: %q", got)
+	}
+	exact := strings.Repeat("a", 512)
+	if got := truncateStatement(exact); got != exact {
+		t.Fatalf("512-byte statement must pass unchanged")
+	}
+	for pad := 0; pad < 3; pad++ {
+		sql := strings.Repeat("a", pad) + strings.Repeat("数", 400)
+		got := truncateStatement(sql)
+		body, ok := strings.CutSuffix(got, "…(truncated)")
+		if !ok {
+			t.Fatalf("pad %d: missing marker: %q", pad, got)
+		}
+		if !utf8.ValidString(body) || len(body) > 512 || len(body) < 510 {
+			t.Fatalf("pad %d: body len %d valid=%v", pad, len(body), utf8.ValidString(body))
+		}
+	}
+}
+
+func TestUnscannableRefusalLogsWarn(t *testing.T) {
+	ctx, buf := captureLogs(t)
+	sql := "SELECT * FROM `devnet2`.`devnet101\\x4gswap_new106`"
+	if err := newGuard(sitable.Ordinary).OnQuery(ctx, guardQuery(guardSession(t, true, false), sql)); err == nil {
+		t.Fatal("want a refusal")
+	}
+	out := buf.String()
+	for _, want := range []string{"level=WARN", "reason=statement_unscannable", "code=392", "peer_address=10.0.0.9:9000"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log line missing %q: %s", want, out)
+		}
+	}
+}
+
+func TestAdmittedQueryEmitsNoRefusalLog(t *testing.T) {
+	ctx, buf := captureLogs(t)
+	sql := governedForms["measured secondary query"]
+	if err := newGuard(sitable.Ordinary).OnQuery(ctx, guardQuery(guardSession(t, true, false), sql)); err != nil {
+		t.Fatalf("Ordinary table refused: %v", err)
+	}
+	if err := newGuard(sitable.Active).OnQuery(ctx, guardQuery(guardSession(t, false, false), sql)); err != nil {
+		t.Fatalf("non-peer session refused: %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("admitted queries logged: %s", buf.String())
 	}
 }
