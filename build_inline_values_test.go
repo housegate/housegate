@@ -16,8 +16,10 @@ import (
 	"github.com/housegate/housegate/pkg/config"
 	"github.com/housegate/housegate/pkg/network"
 	"github.com/housegate/housegate/pkg/plugin"
+	"github.com/housegate/housegate/pkg/plugins/materialize"
 	"github.com/housegate/housegate/pkg/plugins/sistatement"
 	"github.com/housegate/housegate/pkg/rewriter"
+	pb "github.com/housegate/rewriter-proto/gen/pb"
 )
 
 func TestBuildAgent_InlineValuesPrerequisites(t *testing.T) {
@@ -320,4 +322,114 @@ func serveInlineAccountContext(conn net.Conn, seen chan<- *chproto.Query) error 
 	var end proto.Buffer
 	end.PutUVarInt(uint64(proto.ServerCodeEndOfStream))
 	return srv.WriteRawPacket(end.Buf)
+}
+
+func TestBuildAgent_OptionalMaterializerFailureDisablesInlineValues(t *testing.T) {
+	cfg := agentSICfg(t)
+	cfg.Materialize.Enabled, cfg.Materialize.Engine, cfg.Materialize.Optional = true, "native", true
+	cfg.StorageIntegrity.Agent.InlineValues.Enabled = true
+	failing := func(*config.Config) (rewriter.Materializer, error) { return nil, errors.New("fetch failed") }
+	bs, err := buildAgentWithMaterializerBuilder(Options{Config: cfg, StorageIntegrityTableSchemas: network.NewInMemoryNetworkState()}, nil, failing)
+	if err != nil {
+		t.Fatalf("an optional materializer must not fail startup: %v", err)
+	}
+	bs.teardown()
+
+	cfg.Materialize.Optional = false
+	if bs, err := buildAgentWithMaterializerBuilder(Options{Config: cfg, StorageIntegrityTableSchemas: network.NewInMemoryNetworkState()}, nil, failing); err == nil {
+		bs.teardown()
+		t.Fatal("an explicit materializer must stay fail-fast")
+	}
+}
+
+// literalisingMaterializer stands in for the native engine: it replaces every
+// non-deterministic call with one literal and records each statement it saw.
+type literalisingMaterializer struct{ calls []string }
+
+func (m *literalisingMaterializer) Materialize(_ context.Context, sql string) (rewriter.MaterializeOutcome, error) {
+	m.calls = append(m.calls, sql)
+	out := strings.NewReplacer("now()", "'2026-10-09 00:00:00'", "rand()", "42", "generateUUIDv4()", "'00000000-0000-0000-0000-000000000001'").Replace(sql)
+	return rewriter.MaterializeOutcome{SQL: out, Changed: out != sql, Code: pb.MaterializeCode_MaterializeSuccess}, nil
+}
+
+func (*literalisingMaterializer) Close() error { return nil }
+
+// Final review I3 (ruling): the materializer the quickstart enables for the
+// inline VALUES lane rewrites only the statements that lane's classifier
+// recognises as an inline VALUES INSERT. A row-generating SELECT or
+// INSERT ... SELECT keeps its per-row values. An explicit
+// materialize.enabled keeps rewriting every agent query.
+func TestBuildAgent_ImplicitMaterializerRewritesOnlyInlineValues(t *testing.T) {
+	const (
+		selectRand   = "SELECT rand() FROM numbers(3)"
+		insertSelect = "INSERT INTO t SELECT generateUUIDv4() FROM src"
+		inlineValues = "INSERT INTO t VALUES (now())"
+	)
+	for _, tc := range []struct {
+		name      string
+		implicit  bool
+		untouched []string
+		rewritten map[string]string
+	}{
+		{"implicit", true, []string{selectRand, insertSelect}, map[string]string{
+			inlineValues: "INSERT INTO t VALUES ('2026-10-09 00:00:00')",
+		}},
+		{"explicit", false, nil, map[string]string{
+			selectRand:   "SELECT 42 FROM numbers(3)",
+			insertSelect: "INSERT INTO t SELECT '00000000-0000-0000-0000-000000000001' FROM src",
+			inlineValues: "INSERT INTO t VALUES ('2026-10-09 00:00:00')",
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := agentSICfg(t)
+			cfg.Materialize.Enabled, cfg.Materialize.Engine = true, rewriter.EngineNative
+			// The quickstart's -si-inline-values auto sets both.
+			cfg.Materialize.Optional, cfg.Materialize.Implicit = tc.implicit, tc.implicit
+			cfg.StorageIntegrity.Agent.InlineValues.Enabled = true
+			mat := &literalisingMaterializer{}
+			bs, err := buildAgentWithBuilders(Options{Config: cfg, StorageIntegrityTableSchemas: network.NewInMemoryNetworkState()}, nil,
+				func(*config.Config) (rewriter.Materializer, error) { return mat, nil },
+				func(func(context.Context, string) (net.Conn, error), auth.Signer) inlineValuesEvaluator {
+					return &recordingInlineEvaluator{}
+				})
+			if err != nil {
+				t.Fatalf("buildAgent: %v", err)
+			}
+			defer bs.teardown()
+			chain := requireProxyServer(t, bs.listeners[0]).Hooks.(*plugin.PluginChain)
+			var mp *materialize.Plugin
+			for _, p := range chain.QueryPlugins {
+				if p, ok := p.(*materialize.Plugin); ok {
+					mp = p
+				}
+			}
+			if mp == nil {
+				t.Fatal("materialize plugin missing from the agent chain")
+			}
+			run := func(sql string) string {
+				qctx := &plugin.QueryContext{Query: &chproto.Query{Body: sql}}
+				if err := mp.OnQuery(context.Background(), qctx); err != nil {
+					t.Fatalf("OnQuery(%q): %v", sql, err)
+				}
+				return qctx.Query.Body
+			}
+			for _, sql := range tc.untouched {
+				if got := run(sql); got != sql {
+					t.Errorf("%q rewritten to %q; the implicit materializer must leave it untouched", sql, got)
+				}
+			}
+			for sql, want := range tc.rewritten {
+				if got := run(sql); got != want {
+					t.Errorf("%q -> %q, want %q", sql, got, want)
+				}
+			}
+			for _, sql := range mat.calls {
+				for _, untouched := range tc.untouched {
+					if sql == untouched {
+						t.Errorf("materializer was called for %q", sql)
+					}
+				}
+			}
+		})
+	}
 }

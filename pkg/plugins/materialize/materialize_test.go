@@ -127,3 +127,34 @@ func TestOnQuery_RecordsOutcomeForTheInlineLane(t *testing.T) {
 		t.Fatal("a nil Materializer must record nothing")
 	}
 }
+
+type recordingMat struct{ calls []string }
+
+func (m *recordingMat) Materialize(_ context.Context, sql string) (rewriter.MaterializeOutcome, error) {
+	m.calls = append(m.calls, sql)
+	return rewriter.MaterializeOutcome{SQL: sql + " /* materialized */", Changed: true, Code: pb.MaterializeCode_MaterializeSuccess}, nil
+}
+
+// A Scope that refuses a statement leaves it exactly as the client sent it:
+// the materializer is not called and no outcome is recorded.
+func TestOnQuery_ScopeLimitsTheRewrite(t *testing.T) {
+	mat := &recordingMat{}
+	p := &Plugin{Materializer: mat, Scope: func(sql string) bool { return sql == "INSERT INTO t VALUES (now())" }}
+	out := runOnQuery(t, p, "SELECT rand() FROM numbers(3)")
+	if out.Query.Body != "SELECT rand() FROM numbers(3)" || len(mat.calls) != 0 {
+		t.Fatalf("out of scope: body=%q calls=%v; want untouched", out.Query.Body, mat.calls)
+	}
+	if _, ok := out.Values[plugin.ValuesKeyMaterialized]; ok {
+		t.Fatal("an out-of-scope statement must record no materialize outcome")
+	}
+	in := runOnQuery(t, p, "INSERT INTO t VALUES (now())")
+	if in.Query.Body != "INSERT INTO t VALUES (now()) /* materialized */" || len(mat.calls) != 1 {
+		t.Fatalf("in scope: body=%q calls=%v; want materialized", in.Query.Body, mat.calls)
+	}
+
+	// Without a Scope every query is rewritten.
+	all := &Plugin{Materializer: &recordingMat{}}
+	if got := runOnQuery(t, all, "SELECT rand() FROM numbers(3)").Query.Body; got != "SELECT rand() FROM numbers(3) /* materialized */" {
+		t.Fatalf("nil scope: body=%q; want materialized", got)
+	}
+}

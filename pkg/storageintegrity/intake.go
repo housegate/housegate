@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -177,14 +176,14 @@ func EnvelopeFromAdmission(adm AdmissionRecord) (StatementEnvelope, error) {
 	if adm.RowIDProfileID != payloadexec.RowIDProfileID {
 		return StatementEnvelope{}, fmt.Errorf("intake: admission %s row_id_profile_id %q, want %q", adm.StatementID, adm.RowIDProfileID, payloadexec.RowIDProfileID)
 	}
-	stmtID, err := parseFlatStatementID(adm.StatementID)
+	stmtID, err := ParseLegacyStatementID(adm.StatementID)
 	if err != nil {
 		return StatementEnvelope{}, fmt.Errorf("intake: admission %s invalid statement id: %w", adm.StatementID, err)
 	}
 	if adm.Signer == "" {
 		return StatementEnvelope{}, fmt.Errorf("intake: admission %s has no signer", adm.StatementID)
 	}
-	if stmtID.ClientAccount != strings.ToLower(adm.Signer) {
+	if stmtID.Account != strings.ToLower(adm.Signer) {
 		return StatementEnvelope{}, fmt.Errorf("intake: admission %s client_account does not match signer", adm.StatementID)
 	}
 	if adm.SQLHash == "" {
@@ -242,73 +241,15 @@ func EnvelopeFromAdmission(adm AdmissionRecord) (StatementEnvelope, error) {
 	}, nil
 }
 
-type flatStatementID struct {
-	ClientAccount string
-	ClientSeq     uint64
-	ClientNonce   string
-}
-
-func parseFlatStatementID(id string) (flatStatementID, error) {
-	parts := strings.Split(id, ":")
-	if len(parts) != 3 {
-		return flatStatementID{}, fmt.Errorf("requires <client_account>:<client_seq>:<client_nonce>")
-	}
-	account, seqText, nonce := parts[0], parts[1], parts[2]
-	if account == "" || seqText == "" || nonce == "" {
-		return flatStatementID{}, fmt.Errorf("requires <client_account>:<client_seq>:<client_nonce>")
-	}
-	if account != strings.ToLower(account) || !strings.HasPrefix(account, "0x") || !isLowerHex(account[2:]) {
-		return flatStatementID{}, fmt.Errorf("requires lowercase 0x client_account")
-	}
-	if len(seqText) > 1 && seqText[0] == '0' {
-		return flatStatementID{}, fmt.Errorf("requires canonical decimal client_seq")
-	}
-	if !isDecimalDigits(seqText) {
-		return flatStatementID{}, fmt.Errorf("requires canonical decimal client_seq")
-	}
-	seq, err := strconv.ParseUint(seqText, 10, 64)
-	if err != nil || seq == 0 {
-		return flatStatementID{}, fmt.Errorf("requires non-zero decimal client_seq")
-	}
-	if strings.TrimSpace(nonce) != nonce {
-		return flatStatementID{}, fmt.Errorf("requires non-empty client_nonce")
-	}
-	return flatStatementID{ClientAccount: account, ClientSeq: seq, ClientNonce: nonce}, nil
-}
-
-// ParseFlatStatementID validates the flat "<lowercase 0x account>:<seq>:<nonce>"
-// form and returns its parts. Exported for the agent-side plugin so both ends
-// apply identical rules.
+// ParseFlatStatementID validates the legacy flat "<lowercase 0x account>:<seq>:<nonce>"
+// form and returns its parts. Kept for SDK callers; a laned id is refused
+// with ErrClientLanesNotEnabled.
 func ParseFlatStatementID(id string) (account string, seq uint64, nonce string, err error) {
-	parsed, err := parseFlatStatementID(id)
+	parsed, err := ParseLegacyStatementID(id)
 	if err != nil {
 		return "", 0, "", err
 	}
-	return parsed.ClientAccount, parsed.ClientSeq, parsed.ClientNonce, nil
-}
-
-func isLowerHex(s string) bool {
-	if s == "" {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		if !((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f')) {
-			return false
-		}
-	}
-	return true
-}
-
-func isDecimalDigits(s string) bool {
-	if s == "" {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		if s[i] < '0' || s[i] > '9' {
-			return false
-		}
-	}
-	return true
+	return parsed.Account, parsed.Seq, parsed.Nonce, nil
 }
 
 // sameStatement reports whether a later call for an already-open statement id
@@ -389,6 +330,10 @@ type SubmitOutcome struct {
 	// terminal reject (for example AdmissionCodeSchemaNotAllowed), empty
 	// otherwise. omitempty keeps journal records without it byte-identical.
 	AdmissionCode string `json:",omitempty"`
+	// StatementSeq is the arbiter's statement_seq on an accepted submission
+	// (the WriteMeter event carries it); zero otherwise and on status-path
+	// outcomes. omitempty keeps older journal records byte-identical.
+	StatementSeq uint64 `json:",omitempty"`
 }
 
 // ClaimOutcome is the SNode RegisterResultClaim (RC-binding) result. BoundSource

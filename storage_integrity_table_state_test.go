@@ -180,6 +180,18 @@ func TestBuildServer_DisabledWiresNoTableStateGate(t *testing.T) {
 // view the in-memory state also implements.
 type registryOnly struct{ registry.Registry }
 
+// writerRegistryOnly is registryOnly plus registry.WriterAccess, which an
+// enabled ingress requires at startup (spec 2026-10-09 D17).
+type writerRegistryOnly struct {
+	registry.Registry
+	registry.WriterAccess
+}
+
+func newWriterRegistryOnly() writerRegistryOnly {
+	ns := network.NewInMemoryNetworkState()
+	return writerRegistryOnly{Registry: ns, WriterAccess: ns}
+}
+
 // TestBuildServer_EnabledIngressNeedsNoDeclaredSchemaSource pins spec
 // 2026-09-24 §9.1: with storage integrity enabled the ingress binds the
 // query snapshot's schema, so it needs no registry.TableSchemas source; the
@@ -192,7 +204,7 @@ func TestBuildServer_EnabledIngressNeedsNoDeclaredSchemaSource(t *testing.T) {
 	cfg.StorageIntegrity.Ingress.AllowedAddresses = []string{"0x1111111111111111111111111111111111111111"}
 	bs, err := buildServer(Options{
 		Config:                            cfg,
-		NetworkState:                      registryOnly{network.NewInMemoryNetworkState()},
+		NetworkState:                      newWriterRegistryOnly(),
 		Rewriter:                          siProbeStubRewriterFactory{},
 		StorageIntegrityTableState:        sitable.NewFake(sitable.Pending),
 		StorageIntegrityAdmissionConsumer: &recordingAdmissionConsumer{},
@@ -205,7 +217,7 @@ func TestBuildServer_EnabledIngressNeedsNoDeclaredSchemaSource(t *testing.T) {
 	cfg.StorageIntegrity.Enabled = nil
 	_, err = buildServer(Options{
 		Config:                            cfg,
-		NetworkState:                      registryOnly{network.NewInMemoryNetworkState()},
+		NetworkState:                      newWriterRegistryOnly(),
 		Rewriter:                          stubRewriterFactory{},
 		StorageIntegrityAdmissionConsumer: &recordingAdmissionConsumer{},
 	}, nil)

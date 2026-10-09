@@ -37,6 +37,12 @@ func (c *capturingConsumer) ConsumeStorageIntegrityAdmission(_ context.Context, 
 	return nil
 }
 
+func (c *capturingConsumer) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.seen)
+}
+
 // siTenantDB is the logical database the signed-lane fixtures write through.
 // Tenant SQL names logical databases only: the table-reference guard refuses
 // the physical database (rewriter.physical_database, chEnv.Database here;

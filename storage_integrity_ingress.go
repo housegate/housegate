@@ -8,7 +8,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/log"
 	siplugin "github.com/housegate/housegate/pkg/plugins/storageintegrity"
 	"github.com/housegate/housegate/pkg/replay"
 	"github.com/housegate/housegate/pkg/replay/payloadexec"
@@ -67,10 +70,105 @@ type StorageIntegrityIngress struct {
 
 	cleanupProofTimeout time.Duration
 
+	// meter is the optional billing hook; nil disables it.
+	meter sicore.WriteMeter
+	// meterSem bounds in-flight meter calls; meterCtx/meterCancel (guarded by
+	// backgroundMu) scope them to the ingress lifetime.
+	meterSem    chan struct{}
+	meterCtx    context.Context
+	meterCancel context.CancelFunc
+
 	backgroundMu     sync.Mutex
 	backgroundCancel context.CancelFunc
 	backgroundWG     sync.WaitGroup
 	backgroundClosed bool
+}
+
+// SetWriteMeter installs the optional billing hook (spec 2026-10-09 §6.9).
+// It is unsynchronised: call it once, before the ingress serves.
+func (i *StorageIntegrityIngress) SetWriteMeter(m sicore.WriteMeter) {
+	i.meter = m
+	if m != nil {
+		i.meterSem = make(chan struct{}, writeMeterMaxInFlight)
+	}
+}
+
+// writeMeterMaxInFlight bounds concurrent OnStatementSequenced calls; beyond
+// it events are dropped and counted rather than queued or blocking the write.
+const writeMeterMaxInFlight = 256
+
+// writeMeterCallTimeout bounds one OnStatementSequenced call's context.
+const writeMeterCallTimeout = 10 * time.Second
+
+var storageIntegrityWriteMeterDroppedTotal = prometheus.NewCounter(prometheus.CounterOpts{
+	Name: "storage_integrity_write_meter_dropped_total",
+	Help: "OnStatementSequenced events dropped because the write meter was saturated or the ingress was closed.",
+})
+
+func init() {
+	prometheus.MustRegister(storageIntegrityWriteMeterDroppedTotal)
+}
+
+// meterContextLocked returns the context every meter call derives from. It is
+// cancelled by Close. ok is false once the ingress is closed. The caller must
+// hold backgroundMu.
+func (i *StorageIntegrityIngress) meterContextLocked() (context.Context, bool) {
+	if i.backgroundClosed {
+		return nil, false
+	}
+	if i.meterCtx == nil {
+		i.meterCtx, i.meterCancel = context.WithCancel(context.Background())
+	}
+	return i.meterCtx, true
+}
+
+func (i *StorageIntegrityIngress) meterSequenced(adm siplugin.Admission, statementSeq uint64) {
+	meter := i.meter
+	if meter == nil {
+		return
+	}
+	ev := sicore.SIWriteEvent{
+		StatementID:  adm.StatementID,
+		Signer:       adm.Signer,
+		Owner:        adm.Owner,
+		Principal:    adm.Principal,
+		TableID:      adm.TableID,
+		PayloadBytes: uint64(len(adm.Payload.Bytes)),
+		StatementSeq: statementSeq,
+	}
+	select {
+	case i.meterSem <- struct{}{}:
+	default:
+		storageIntegrityWriteMeterDroppedTotal.Inc()
+		log.WarnEvery("storage_integrity_write_meter_saturated", time.Minute,
+			"storage_integrity write meter saturated; dropping event", "statement_id", ev.StatementID, "max_in_flight", writeMeterMaxInFlight)
+		return
+	}
+	// Add happens under backgroundMu and is skipped once Close ran, so Close's
+	// Wait never races an Add.
+	i.backgroundMu.Lock()
+	base, ok := i.meterContextLocked()
+	if ok {
+		i.backgroundWG.Add(1)
+	}
+	i.backgroundMu.Unlock()
+	if !ok {
+		<-i.meterSem
+		storageIntegrityWriteMeterDroppedTotal.Inc()
+		return
+	}
+	go func() {
+		defer i.backgroundWG.Done()
+		defer func() { <-i.meterSem }()
+		defer func() {
+			if r := recover(); r != nil {
+				log.Warnw("storage_integrity write meter panicked", "statement_id", ev.StatementID, "panic", r)
+			}
+		}()
+		ctx, cancel := context.WithTimeout(base, writeMeterCallTimeout)
+		defer cancel()
+		meter.OnStatementSequenced(ctx, ev)
+	}()
 }
 
 type trackedPartsReservation struct {
@@ -172,9 +270,13 @@ func (i *StorageIntegrityIngress) Close() {
 	cancel := i.backgroundCancel
 	i.backgroundCancel = nil
 	i.backgroundClosed = true
+	meterCancel := i.meterCancel
 	i.backgroundMu.Unlock()
 	if cancel != nil {
 		cancel()
+	}
+	if meterCancel != nil {
+		meterCancel()
 	}
 	i.backgroundWG.Wait()
 }
@@ -512,6 +614,17 @@ func (i *StorageIntegrityIngress) lockStatement(statementID string) func() {
 	return lock.Unlock
 }
 
+// markUnspentBeforePrepare marks a refusal raised before Orchestrate only when
+// the orchestrator still requires a genuinely new prepare for the statement:
+// a statement that already prepared may also have been submitted, so its
+// coordinate is not provably unspent.
+func markUnspentBeforePrepare(requiresPrepare bool, err error) error {
+	if !requiresPrepare {
+		return err
+	}
+	return chproto.MarkSeqUnspent(err)
+}
+
 func backpressureClientError(table string, err error) error {
 	storageIntegrityBackpressureTotal.WithLabelValues(table).Inc()
 	var backpressure *sicore.BackpressureError
@@ -527,6 +640,25 @@ func backpressureClientError(table string, err error) error {
 // an error so the plugin reports failure to the client rather than a false
 // success; only a bound ACK2 returns nil. This is the production staged-intake
 // path.
+//
+// Refusals before Orchestrate are marked chproto.MarkSeqUnspent: nothing of
+// the statement has reached the arbiter, so its client_seq coordinate is
+// provably unspent (spec 2026-10-09 §6.6 (2)). That proof assumes the first
+// presentation of the statement id (§6.6 "First presentation only"): the
+// agent never presents an id twice, so on the agent lane this call is the
+// statement's only attempt, and a third-party signer that re-presents ids
+// must ignore the marker. A re-presented id may already have been prepared
+// and submitted by an earlier attempt, so the marks are hardened where this
+// function can tell: the preflight refusal is never marked (its
+// "reused with a different envelope" class only arises on re-presentation),
+// and the payload-store refusals are marked only when the orchestrator still
+// requires a genuinely new prepare (requiresPrepare). The merge-health,
+// materializer and snapshot-schema refusals run before the record is
+// consulted and rely on the first-presentation assumption alone. After
+// Orchestrate only a coded terminal reject other than DUPLICATE_CLIENT_SEQ is
+// marked; a prepare, RC or submit may have happened on every other path. The
+// flag is sticky through wrapping, so no post-Orchestrate refusal may wrap a
+// pre-Orchestrate one.
 func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.Context, adm siplugin.Admission) error {
 	if i.guard != nil {
 		// Only the target's latch: one unready table blocks only itself.
@@ -536,43 +668,45 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 				// pass completes: retryable, and the session survives exactly
 				// like 252 back-pressure. A real per-table error stays fatal.
 				return &chproto.ClientError{Code: chproto.CodeTableIsBeingRestarted,
-					Message: chproto.TableActivatingMessage(adm.TableID), Err: err, KeepSession: true}
+					Message: chproto.TableActivatingMessage(adm.TableID), Err: err, KeepSession: true, SeqUnspent: true}
 			}
-			return fmt.Errorf("storage_integrity ingress: merge health: %w", err)
+			return chproto.MarkSeqUnspent(fmt.Errorf("storage_integrity ingress: merge health: %w", err))
 		}
 	}
 	rec := AdmissionRecordFromPlugin(adm)
 	actualMaterializer, err := sicore.SelectMaterializerKind(rec.PayloadEncoding)
 	if err != nil {
-		return fmt.Errorf("storage_integrity ingress: %w", err)
+		return chproto.MarkSeqUnspent(fmt.Errorf("storage_integrity ingress: %w", err))
 	}
 	if actualMaterializer != i.matKind {
-		return fmt.Errorf(
+		return chproto.MarkSeqUnspent(fmt.Errorf(
 			"storage_integrity ingress: runtime requires %s materializer, payload encoding %q selects %s",
 			storageIntegrityMaterializerName(i.matKind),
 			rec.PayloadEncoding,
 			storageIntegrityMaterializerName(actualMaterializer),
-		)
+		))
 	}
 	if i.requireAdmissionSchema && adm.TableSchema == nil {
 		// Defence in depth: the table-state-backed runtime derives a new
 		// admission only from its query snapshot, never from the recovery
 		// resolver. The ingress plugin refuses the same way before this point.
 		return &chproto.ClientError{Code: chproto.CodeQueryIsProhibited,
-			Message: "storage_integrity: table state is unavailable for this query"}
+			Message: "storage_integrity: table state is unavailable for this query", SeqUnspent: true}
 	}
 	unlockStatement := i.lockStatement(rec.StatementID)
 	defer unlockStatement()
 
 	table, partitions, err := i.partsPressureTarget(rec, adm.TableSchema)
 	if err != nil {
-		return err
+		return chproto.MarkSeqUnspent(err)
 	}
 	if partitions != nil {
 		rec.TouchedPartitionIDs = clonePartitionIDs(partitions)
 	}
 	requiresPrepare, err := i.orch.AdmissionRequiresPrepare(ctx, rec)
 	if err != nil {
+		// Not marked: a preflight failure (a re-presented id with a different
+		// envelope, journal recovery) says nothing about earlier attempts.
 		return fmt.Errorf("storage_integrity ingress: preflight %s: %w", rec.StatementID, err)
 	}
 	tracked, _ := i.trackedPressureReservation(rec.StatementID)
@@ -591,7 +725,7 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 	if i.pressure != nil && requiresPrepare && attemptReservation == nil {
 		attemptReservation, err = i.reservePartsPressure(ctx, rec.StatementID, table, partitions)
 		if err != nil {
-			return err
+			return chproto.MarkSeqUnspent(err)
 		}
 		trackedReservation = attemptReservation
 		i.setPressureReservation(rec.StatementID, rec.TableID, partitions, attemptReservation)
@@ -602,17 +736,21 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 			if !reusedTrackedReservation {
 				i.cancelAttemptReservation(rec.StatementID, attemptReservation)
 			}
-			return fmt.Errorf("storage_integrity ingress: put payload for %s: %w", rec.StatementID, err)
+			return markUnspentBeforePrepare(requiresPrepare, fmt.Errorf("storage_integrity ingress: put payload for %s: %w", rec.StatementID, err))
 		}
 		if put.PayloadRef == "" {
 			if !reusedTrackedReservation {
 				i.cancelAttemptReservation(rec.StatementID, attemptReservation)
 			}
-			return fmt.Errorf("storage_integrity ingress: payload store returned empty payload_ref for %s", rec.StatementID)
+			return markUnspentBeforePrepare(requiresPrepare, fmt.Errorf("storage_integrity ingress: payload store returned empty payload_ref for %s", rec.StatementID))
 		}
 		rec.PayloadRef = put.PayloadRef
 	}
 	res, err := i.orch.Orchestrate(ctx, rec)
+	if res.Submit.Category == sicore.OutcomeAccepted {
+		// Sequenced means spent; metering follows the arbiter, not ACK2.
+		i.meterSequenced(adm, res.Submit.StatementSeq)
+	}
 	switch {
 	case errors.Is(err, sicore.ErrCleanupProofPending):
 		// Exact cleanup proof is pending (before or after the idempotent source
@@ -675,6 +813,8 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 		// such transition; local preflight refusals return above without mutation.
 		i.pressure.Invalidate()
 	}
+	// Nothing below is marked unspent unless the arbiter's own code proves it:
+	// a prepare, RC or submit may already have happened.
 	if err != nil {
 		if errors.Is(err, sicore.ErrBackpressure) {
 			return backpressureClientError(sicore.PhysicalTableName(rec.TableID), err)
@@ -691,7 +831,18 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 			return &chproto.ClientError{Code: chproto.CodeQueryIsProhibited,
 				Message:     chproto.TableNoLongerAcceptsWritesMessage(rec.TableID),
 				Err:         fmt.Errorf("arbiter %s: %s", res.Submit.AdmissionCode, res.Submit.Reason),
-				KeepSession: true}
+				KeepSession: true,
+				SeqUnspent:  true}
+		}
+		// Spec 2026-10-09 §6.6: a coded terminal reject other than
+		// DUPLICATE_CLIENT_SEQ left the coordinate unspent; name the code so the
+		// agent can act on it. A code-less terminal reject (a gRPC status) or
+		// any other outcome stays unmarked.
+		if res.Submit.Category == sicore.OutcomeTerminalReject && res.Submit.AdmissionCode != "" &&
+			res.Submit.AdmissionCode != sicore.AdmissionCodeDuplicateClientSeq {
+			log.Warnw("storage_integrity statement rejected by the arbiter",
+				"statement_id", rec.StatementID, "code", res.Submit.AdmissionCode, "reason", res.Submit.Reason)
+			return chproto.MarkSeqUnspent(fmt.Errorf("storage_integrity: statement %s rejected by the arbiter: %s", rec.StatementID, res.Submit.AdmissionCode))
 		}
 		return fmt.Errorf("storage_integrity ingress: statement %s did not reach ACK2 (lifecycle %s, reason %q)", rec.StatementID, res.Lifecycle, res.Reason)
 	}

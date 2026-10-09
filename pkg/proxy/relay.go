@@ -934,6 +934,11 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 		}
 		if errors.Is(decErr, chproto.ErrPacketTooLarge) {
 			err := fmt.Errorf("client Data packet exceeds remaining payload limit %d: %w", limit, decErr)
+			if limitQctx != nil {
+				// limitQctx has not reached OnQueryInputCompleteStrict: curQctx
+				// is cleared at its terminator and rejectedQctx never runs it.
+				err = markUnspentIfSigned(limitQctx.Query, err)
+			}
 			r.writeExceptionToClient(ctx, err)
 			if limitQctx != nil {
 				r.hooks.OnQueryAbort(ctx, limitQctx)
@@ -951,6 +956,8 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 			return decErr
 		}
 		if errors.Is(decErr, chproto.ErrDecode) && pkt.Type == uint64(chproto.ClientQueryCode) && r.hooks.RejectUndecodableQuery(r.sess) {
+			// Not marked: an undecodable Query exposes no settings, so Relay
+			// cannot tell whether it was signed; its seq simply burns.
 			err := fmt.Errorf("strict query decode: %w", decErr)
 			r.writeExceptionToClient(ctx, err)
 			return err
@@ -999,14 +1006,16 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 				"settings", len(q.Settings),
 			)
 			if curQctx != nil {
-				err := fmt.Errorf("client sent query %q before completing input for query %q", q.ID, curQctx.Query.ID)
+				// Neither query reached OnQueryInputCompleteStrict and q was not
+				// forwarded, so a signed q is unspent.
+				err := markUnspentIfSigned(q, fmt.Errorf("client sent query %q before completing input for query %q", q.ID, curQctx.Query.ID))
 				r.writeExceptionToClient(ctx, err)
 				r.hooks.OnQueryAbort(ctx, curQctx)
 				r.hooks.OnQueryComplete(ctx, r.sess)
 				return err
 			}
 			if rejectedQctx != nil {
-				err := fmt.Errorf("client sent query %q before completing rejected input for query %q", q.ID, rejectedQctx.Query.ID)
+				err := markUnspentIfSigned(q, fmt.Errorf("client sent query %q before completing rejected input for query %q", q.ID, rejectedQctx.Query.ID))
 				r.writeExceptionToClient(ctx, err)
 				return err
 			}
@@ -1017,16 +1026,17 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 			// terminal packet to the new query.
 			if err := r.waitAndRejectOpaqueReuse(ctx); err != nil {
 				if !errors.Is(err, errOpaqueConnectionNotReusable) {
-					r.writeExceptionToClient(ctx, err)
+					r.writeExceptionToClient(ctx, markUnspentIfSigned(q, err))
 				}
 				return err
 			}
 			if previousQueryID, active := r.currentActiveQuery(); active {
-				err := fmt.Errorf("client sent query %q before upstream completed query %q", q.ID, previousQueryID)
+				err := markUnspentIfSigned(q, fmt.Errorf("client sent query %q before upstream completed query %q", q.ID, previousQueryID))
 				r.writeExceptionToClient(ctx, err)
 				return err
 			}
 			if err := r.hooks.OnQuery(ctx, qctx); err != nil {
+				err = markUnspentIfSigned(qctx.Query, err)
 				r.writeExceptionToClient(ctx, err)
 				// Chain rejected the query — its lifecycle ends here.
 				r.hooks.OnQueryAbort(ctx, qctx)
@@ -1035,7 +1045,7 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 				continue
 			}
 			if qctx.SynthesizedInsert != nil && (qctx.AgentPrepare != nil || qctx.QueryOnly != nil || qctx.DeferredInsert != nil || qctx.SuppressUpstreamExecution || qctx.AbortWithSuccess) {
-				err := fmt.Errorf("query %q: SynthesizedInsert conflicts with another ownership plan", q.ID)
+				err := markUnspentIfSigned(qctx.Query, fmt.Errorf("query %q: SynthesizedInsert conflicts with another ownership plan", q.ID))
 				r.hooks.OnQueryAbort(ctx, qctx)
 				r.hooks.OnQueryComplete(ctx, r.sess)
 				r.writeExceptionToClient(ctx, err)
@@ -1046,14 +1056,14 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 			if qctx.AgentPrepare != nil {
 				continuationHooks, supported := r.hooks.(plugin.QueryContinuationSupport)
 				if !supported || !continuationHooks.SupportsQueryContinuation() {
-					err := fmt.Errorf("query %q: hooks do not support agent preparation continuation", q.ID)
+					err := markUnspentIfSigned(qctx.Query, fmt.Errorf("query %q: hooks do not support agent preparation continuation", q.ID))
 					r.writeExceptionToClient(ctx, err)
 					r.hooks.OnQueryAbort(ctx, qctx)
 					r.hooks.OnQueryComplete(ctx, r.sess)
 					return err
 				}
 				if qctx.QueryOnly != nil || qctx.DeferredInsert != nil || qctx.SynthesizedInsert != nil || qctx.SuppressUpstreamExecution || qctx.AbortWithSuccess {
-					err := fmt.Errorf("query %q: AgentPrepare conflicts with another ownership plan", q.ID)
+					err := markUnspentIfSigned(qctx.Query, fmt.Errorf("query %q: AgentPrepare conflicts with another ownership plan", q.ID))
 					r.writeExceptionToClient(ctx, err)
 					r.hooks.OnQueryAbort(ctx, qctx)
 					r.hooks.OnQueryComplete(ctx, r.sess)
@@ -1061,12 +1071,14 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 					continue
 				}
 				if !r.beginActiveQuery(q.ID) {
-					err := fmt.Errorf("query %q raced with another active query", q.ID)
+					err := markUnspentIfSigned(qctx.Query, fmt.Errorf("query %q raced with another active query", q.ID))
 					r.writeExceptionToClient(ctx, err)
 					r.hooks.OnQueryAbort(ctx, qctx)
 					r.hooks.OnQueryComplete(ctx, r.sess)
 					return err
 				}
+				// Refusals from here on are not marked: the preparation and the
+				// forward authorization may sequence the statement upstream.
 				generation := r.nextAgentPrepareGeneration()
 				var prepareErr error
 				agentPrepared, prepareErr = r.waitAgentPrepare(ctx, qctx, generation)
@@ -1105,6 +1117,9 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 					err := fmt.Errorf("query %q: query-only conflicts with another ownership plan", q.ID)
 					if agentPrepared != nil {
 						r.takeActiveQuery()
+					} else {
+						// Without a completed preparation nothing of q left Relay.
+						err = markUnspentIfSigned(qctx.Query, err)
 					}
 					r.writeExceptionToClient(ctx, err)
 					r.hooks.OnQueryAbort(ctx, qctx)
@@ -1139,6 +1154,9 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 					err := fmt.Errorf("query %q: SynthesizedInsert conflicts with another ownership plan", q.ID)
 					if agentPrepared != nil {
 						r.takeActiveQuery()
+					} else {
+						// Without a completed preparation nothing of q left Relay.
+						err = markUnspentIfSigned(qctx.Query, err)
 					}
 					r.hooks.OnQueryAbort(ctx, qctx)
 					r.hooks.OnQueryComplete(ctx, r.sess)
@@ -1174,7 +1192,7 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 			}
 			if qctx.DeferredInsert != nil {
 				if qctx.SuppressUpstreamExecution {
-					err := fmt.Errorf("query %q: DeferredInsert and SuppressUpstreamExecution are mutually exclusive", q.ID)
+					err := markUnspentIfSigned(qctx.Query, fmt.Errorf("query %q: DeferredInsert and SuppressUpstreamExecution are mutually exclusive", q.ID))
 					r.hooks.OnQueryAbort(ctx, qctx)
 					r.hooks.OnQueryComplete(ctx, r.sess)
 					r.writeExceptionToClient(ctx, err)
@@ -1207,7 +1225,7 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 			qctx.Query.Compression = clientCompression
 			up.SetCompression(clientCompression)
 			if agentPrepared == nil && !r.beginActiveQuery(q.ID) {
-				err := fmt.Errorf("query %q raced with another active upstream query", q.ID)
+				err := markUnspentIfSigned(qctx.Query, fmt.Errorf("query %q raced with another active upstream query", q.ID))
 				r.writeExceptionToClient(ctx, err)
 				r.hooks.OnQueryAbort(ctx, qctx)
 				r.hooks.OnQueryComplete(ctx, r.sess)
@@ -1298,6 +1316,7 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 			} else if !inputComplete {
 				curQctxSawPayload = true
 				if err := r.hooks.OnClientDataStrict(ctx, curQctx, pkt.Raw); err != nil {
+					err = markUnspentIfSigned(curQctx.Query, err)
 					r.writeExceptionToClient(ctx, err)
 					r.hooks.OnQueryAbort(ctx, curQctx)
 					r.hooks.OnQueryComplete(ctx, r.sess)
@@ -1321,6 +1340,8 @@ func (r *Relay) clientToUpstream(ctx context.Context) error {
 		// ordinary rows, and the upstream EndOfStream remains the client-visible
 		// success.
 		if inputComplete && curQctx != nil {
+			// Not marked by Relay: this hook may have submitted the statement,
+			// so only the ingress can tell an unspent refusal (spec §6.6 (2)).
 			if err := r.hooks.OnQueryInputCompleteStrict(ctx, curQctx); err != nil {
 				if chproto.KeepsSession(err) && curQctx.SuppressUpstreamExecution &&
 					r.rejectActiveQueryTerminal(curQctx.Query.ID, exceptionForPluginError(err)) {
@@ -1426,6 +1447,8 @@ func (r *Relay) runDeferredInsert(ctx context.Context, qctx *plugin.QueryContext
 		r.writeExceptionToClient(ctx, err)
 		return err
 	}
+	// Refusals on this agent-side lane are not marked unspent: the marker is a
+	// server-to-agent signal, and the agent releases its own failures directly.
 	rejectClose := func(err error) error {
 		r.hooks.OnQueryAbort(ctx, qctx)
 		r.hooks.OnQueryComplete(ctx, r.sess)
@@ -2166,17 +2189,54 @@ func compressionMode(c proto.Compression) string {
 
 // exceptionForPluginError maps a plugin error to the synthetic Exception the
 // client sees. ClientError selects an explicit code and message; all other
-// plugin rejections keep the generic 403 behavior.
+// plugin rejections keep the generic 403 behavior. A refusal flagged unspent
+// gets chproto.SeqUnspentSuffix exactly once — the only place it is rendered;
+// an unflagged refusal is rendered without it even when its text ends with it.
 func exceptionForPluginError(pluginErr error) *chproto.Exception {
+	exception := &chproto.Exception{Code: 403, Name: "DB::Exception", Message: pluginErr.Error()} // 403 = AUTHENTICATION_FAILED; generic plugin-reject
 	var clientErr *chproto.ClientError
 	if errors.As(pluginErr, &clientErr) {
-		return &chproto.Exception{Code: proto.Error(clientErr.Code), Name: "DB::Exception", Message: clientErr.Message}
+		exception.Code = proto.Error(clientErr.Code)
+		exception.Message = clientErr.Message
 	}
-	return &chproto.Exception{
-		Code:    403, // ClickHouse AUTHENTICATION_FAILED; generic plugin-reject
-		Name:    "DB::Exception",
-		Message: pluginErr.Error(),
+	if chproto.IsSeqUnspent(pluginErr) {
+		if !chproto.HasSeqUnspentSuffix(exception.Message) {
+			exception.Message += chproto.SeqUnspentSuffix
+		}
+		return exception
 	}
+	// Only the typed flag may produce the marker: an unflagged message that
+	// already ends with it (user-controlled text quoted last) loses it, so a
+	// refusal that may follow a submission never tells the agent to recycle.
+	for chproto.HasSeqUnspentSuffix(exception.Message) {
+		exception.Message = chproto.TrimSeqUnspentSuffix(exception.Message)
+	}
+	return exception
+}
+
+// statementTokenSetting mirrors auth.StatementTokenSettingKey without the
+// import; TestStatementTokenSettingMatchesAuth keeps them equal.
+const statementTokenSetting = "SQL_x_statement_token"
+
+// markUnspentIfSigned flags a pre-submission refusal of a signed SI statement
+// as provably unspent (spec 2026-10-09 §6.6 (1)): submission to the arbiter
+// happens only inside OnQueryInputCompleteStrict, so no refusal raised before
+// it can have spent the coordinate. Callers use it only where nothing of the
+// refused statement has reached that hook. OnQueryInputCompleteStrict
+// refusals are not marked here, because they may follow a submission; the
+// ingress marks its own. The agent-side signed lanes (runDeferredInsert,
+// runSynthesizedInsert) are not marked either: the marker is a server-to-agent
+// signal, and the agent releases its own pre-forward failures directly.
+func markUnspentIfSigned(q *chproto.Query, err error) error {
+	if err == nil || q == nil {
+		return err
+	}
+	for _, setting := range q.Settings {
+		if setting.Key == statementTokenSetting {
+			return chproto.MarkSeqUnspent(err)
+		}
+	}
+	return err
 }
 
 // isSessionPreservingIngressException recognises the on-wire projection
@@ -2196,7 +2256,7 @@ func isSessionPreservingIngressException(decoded any) bool {
 	if !ok || exc == nil {
 		return false
 	}
-	message := strings.TrimSpace(exc.Message)
+	message := chproto.TrimSeqUnspentSuffix(exc.Message)
 	switch int32(exc.Code) {
 	case chproto.CodeTooManyParts:
 		return strings.HasPrefix(message, "storage_integrity: back-pressure:")

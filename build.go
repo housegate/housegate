@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+	"os"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -38,6 +41,7 @@ import (
 	"github.com/housegate/housegate/pkg/plugins/rewrite"
 	routeplugin "github.com/housegate/housegate/pkg/plugins/route"
 	"github.com/housegate/housegate/pkg/plugins/sessionstate"
+	"github.com/housegate/housegate/pkg/plugins/sipeerguard"
 	"github.com/housegate/housegate/pkg/plugins/sireserved"
 	"github.com/housegate/housegate/pkg/plugins/sistatement"
 	"github.com/housegate/housegate/pkg/plugins/sitablestate"
@@ -468,8 +472,19 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	// account". Stay aligned with rewriter.Options.AuthEnabled by
 	// gating on the same flag.
 	if cfg.Auth.Enabled {
+		permissionObserver := network.NewPermissionCommitGateObserver(reg)
+		if cfg.Auth.EffectiveWriterPredicate() == authplugin.WriterPredicateContract {
+			// Spec 2026-10-09 R3: ordinary writes use the contract predicate, the
+			// same one the SI ingress uses, so INSERT agrees with CREATE/DROP.
+			writers, ok := reg.(registry.WriterAccess)
+			if !ok || isNilInterface(writers) {
+				return nil, errors.New("auth.writer_predicate: contract (the default) requires a registry that implements WriterAccess (contract isDatabaseWriter); set auth.writer_predicate: bitmap to keep the stored-bitmap check")
+			}
+			permissionObserver = network.NewPermissionCommitGateObserverWithWriters(reg, writers)
+		}
+		log.Infow("permission gate enabled", "writer_predicate", cfg.Auth.EffectiveWriterPredicate())
 		opts.CommitGateObservers = append(
-			[]commitgate.Observer{network.NewPermissionCommitGateObserver(reg)},
+			[]commitgate.Observer{permissionObserver},
 			opts.CommitGateObservers...,
 		)
 	}
@@ -697,6 +712,19 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 		})
 		log.Info("storage-integrity reserved-name guard enabled")
 	}
+	// Spec 2026-10-09 §6.3: on the SI host, a peer-trusted read that names the
+	// ordinary physical table of a governed table fails loudly instead of
+	// reading the empty table. Without a physical database no such table can
+	// exist.
+	if siOptions.Enabled {
+		if physical := cfg.Rewriter.PhysicalDatabase; physical != "" {
+			queryPlugins = append(queryPlugins, &sipeerguard.Plugin{PhysicalDatabase: physical, TableState: siState})
+			log.Infow("storage-integrity peer guard enabled", "physical_database", physical)
+		} else {
+			log.Infow("storage-integrity peer guard off: rewriter.physical_database is empty, so no ordinary physical SI table can exist",
+				"physical_database", physical)
+		}
+	}
 	// Spec 2026-09-26 T9: the lexical table-reference guard runs on ordinary
 	// sessions before forward and rewrite on every server that forwards to
 	// ClickHouse, whether or not a rewriter was built: under
@@ -853,6 +881,14 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 	var storageIntegrityMergeGuard *StorageIntegrityMergeSupervisor
 	var storageIntegrityRuntime *StorageIntegrityIngress
 	if cfg.StorageIntegrity.Ingress.Enabled {
+		// Spec 2026-10-09 D17: writes are open to every database writer, so the
+		// ingress cannot start without the host's contract predicate — whether
+		// or not an allowlist is configured. It is resolved before the runtime
+		// consumer is built, so a refusal tears nothing down.
+		ingressWriters, ok := reg.(registry.WriterAccess)
+		if !ok || isNilInterface(ingressWriters) {
+			return nil, errors.New("storage_integrity.ingress requires a registry that implements WriterAccess (contract isDatabaseWriter)")
+		}
 		admissionConsumer := opts.StorageIntegrityAdmissionConsumer
 		if cfg.StorageIntegrity.Runtime.Enabled {
 			if admissionConsumer != nil {
@@ -861,6 +897,9 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			consumer, guard, err := buildStorageIntegrityRuntimeConsumer(cfg.StorageIntegrity.Runtime, siState, siStatic, opts.StorageIntegrityRuntime)
 			if err != nil {
 				return nil, err
+			}
+			if !isNilInterface(opts.StorageIntegrityWriteMeter) {
+				consumer.SetWriteMeter(opts.StorageIntegrityWriteMeter)
 			}
 			admissionConsumer = consumer
 			storageIntegrityMergeGuard = guard
@@ -912,6 +951,10 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			// Enabled: sitablestate already refuses a query without its
 			// snapshot; the ingress refuses too rather than trust the order.
 			RequireTableSnapshot: siOptions.Enabled,
+			Writers:              ingressWriters,
+			Operators:            reg,
+			DeniedAddresses:      ingressCfg.DeniedAddresses,
+			AllowedAddresses:     ingressCfg.AllowedAddresses,
 		})
 		queryPlugins = append(queryPlugins, storageIntegrityIngress)
 		strictDataPlugins = append(strictDataPlugins, storageIntegrityIngress)
@@ -924,6 +967,7 @@ func buildServer(opts Options, rf *redisFactory) (*builtServer, error) {
 			"requires_table_snapshot", storageIntegrityIngress.RequiresTableSnapshot(),
 			"declared_schema_source", storageIntegrityIngress.ResolvesDeclaredSchemas(),
 			"allowed_addresses", len(ingressCfg.AllowedAddresses),
+			"denied_addresses", len(ingressCfg.DeniedAddresses),
 			"max_token_age", ingressCfg.MaxTokenAge.Duration,
 			"request_timeout", ingressCfg.RequestTimeout.Duration,
 			"max_payload_bytes", ingressCfg.MaxPayloadBytes,
@@ -1243,8 +1287,12 @@ func buildAgentWithBuilders(
 	var successPlugins []plugin.QuerySuccessPlugin
 	var completePlugins []plugin.QueryCompletePlugin
 	var closePlugins []plugin.ClosePlugin
+	exceptionPlugins := []plugin.ExceptionPlugin{metrics}
 	var materializerClose func()
 	var evaluatorClose func()
+	// siClose releases the client_seq counter's flock: on a failed build and
+	// at teardown, so a same-process rebuild can reopen it.
+	var siClose func()
 	buildSucceeded := false
 	defer func() {
 		if buildSucceeded {
@@ -1256,21 +1304,50 @@ func buildAgentWithBuilders(
 		if evaluatorClose != nil {
 			evaluatorClose()
 		}
+		if siClose != nil {
+			siClose()
+		}
 	}()
+	inlineEnabled := cfg.StorageIntegrity.Agent.InlineValues.Enabled
 	if cfg.Materialize.Enabled {
 		m, err := materializerBuilder(cfg)
-		if err != nil {
+		switch {
+		case err != nil && cfg.Materialize.Optional:
+			// Spec 2026-10-09 §6.4: the implicit native default degrades to
+			// streaming FORMAT inserts only; inline VALUES then gets the
+			// server's actionable refusal.
+			log.Warnw("agent: native engine unavailable; inline INSERT ... VALUES is disabled (streaming FORMAT inserts keep working)",
+				"release", cfg.Materialize.NativeLibraryRelease, "err", err)
+			inlineEnabled = false
+		case err != nil:
 			return nil, fmt.Errorf("materialize: %w", err) // startup fail-fast
+		default:
+			materializerClose = func() { _ = m.Close() }
+			// Random-pool size (cfg.Materialize.RandomPoolSize) is applied
+			// materializer-side in buildMaterializer, not on the plugin —
+			// don't re-add a PoolSize field here.
+			mp := &materialize.Plugin{Materializer: m, Observer: obs}
+			if cfg.Materialize.Implicit {
+				// The quickstart enabled it for the inline VALUES lane only:
+				// leave every other statement, SELECT and INSERT ... SELECT
+				// included, with its per-row non-deterministic values (final
+				// review I3). An explicit materialize.enabled rewrites all.
+				mp.Scope = sistatement.IsInlineValuesCandidate
+			}
+			queryPlugins = append(queryPlugins, mp)
+			scope := "every query"
+			if cfg.Materialize.Implicit {
+				scope = "inline VALUES INSERTs"
+			}
+			log.Infow("agent materialize enabled", "engine", cfg.Materialize.Engine,
+				"implicit", cfg.Materialize.Implicit, "scope", scope)
 		}
-		materializerClose = func() { _ = m.Close() }
-		// Random-pool size (cfg.Materialize.RandomPoolSize) is applied
-		// materializer-side in buildMaterializer, not on the plugin —
-		// don't re-add a PoolSize field here.
-		queryPlugins = append(queryPlugins, &materialize.Plugin{
-			Materializer: m,
-			Observer:     obs,
-		})
-		log.Infow("agent materialize enabled", "engine", cfg.Materialize.Engine)
+	}
+	// Read-mode injection is independent of the SI statement lane (F20): it
+	// only adds the owned setting to SELECT/WITH statements that lack one.
+	if mode := cfg.StorageIntegrity.Agent.ReadMode; mode != "" {
+		queryPlugins = append(queryPlugins, &sistatement.ReadModeInjector{Mode: mode})
+		log.Infow("agent read mode injected on SELECTs", "read_mode", mode)
 	}
 	agentPlug := &agent.Plugin{Signer: signer, Observer: obs, Owner: cfg.Agent.Owner, IsDriver: cfg.Agent.Driver}
 
@@ -1286,10 +1363,14 @@ func buildAgentWithBuilders(
 	}
 
 	// The SI statement plugin runs after materialization so it signs the final
-	// SQL, and before agentPlug so both tokens bind the same body and the
-	// statement id is final when SQL_x_auth_token is minted. Deferred payload
-	// collection can outlive the auth token's max age, so the same agentPlug
-	// instance also refreshes that token at the strict input-complete boundary.
+	// SQL, and before agentPlug so both tokens bind the same body. The
+	// statement id is not final when OnQuery mints SQL_x_auth_token: the SI
+	// plugin reserves client_seq and writes the statement id only at the
+	// strict input-complete boundary (spec 2026-10-09 D16), and the auth token
+	// does not bind the query id. Deferred payload collection can outlive the
+	// auth token's max age, so the same agentPlug instance also refreshes that
+	// token at the strict input-complete boundary, after the SI plugin. siPlug
+	// also joins the exception chain to recycle a seq the server proved unspent.
 	if cfg.StorageIntegrity.Agent.Enabled {
 		stmtSigner, ok := signer.(auth.StatementSignerV2)
 		if !ok {
@@ -1303,17 +1384,17 @@ func buildAgentWithBuilders(
 				return nil, fmt.Errorf("storage_integrity.agent: %w", err)
 			}
 		}
-		statuses, err := resolveAgentTableStatuses(opts, reg)
+		siOpts, stateLabel, err := agentStatementOptions(cfg, opts, reg, signer.Address())
 		if err != nil {
 			return nil, err
 		}
-		seq, err := sistatement.OpenSeqCounter(cfg.StorageIntegrity.Agent.StateDir, signer.Address())
-		if err != nil {
-			return nil, fmt.Errorf("storage_integrity.agent: %w", err)
+		if seq := siOpts.Seq; seq != nil {
+			// Released on every build error until the plugin owns it.
+			siClose = func() { _ = seq.Close() }
 		}
 		inlineCfg := cfg.StorageIntegrity.Agent.InlineValues
 		var evaluator sistatement.ValuesEvaluator
-		if inlineCfg.Enabled {
+		if inlineEnabled {
 			if dialer == nil {
 				return nil, fmt.Errorf("storage_integrity.agent.inline_values requires an upstream dialer")
 			}
@@ -1333,26 +1414,17 @@ func buildAgentWithBuilders(
 			log.Infow("storage_integrity agent inline VALUES enabled",
 				"evaluation_timeout", inlineCfg.EvaluationTimeout.Duration, "max_rows", inlineCfg.MaxRows)
 		}
-		siPlug, err := sistatement.New(sistatement.Options{
-			Signer:          stmtSigner,
-			Statuses:        statuses,
-			NetworkID:       cfg.StorageIntegrity.Agent.NetworkID,
-			KeeperShardID:   cfg.StorageIntegrity.Agent.KeeperShardID,
-			Seq:             seq,
-			MaxPayloadBytes: cfg.StorageIntegrity.Agent.MaxPayloadBytes,
-			Owner:           cfg.Agent.Owner,
-			IsDriver:        cfg.Agent.Driver,
-			Evaluator:       evaluator,
-			Observer:        obs,
-			InlineValues: sistatement.InlineValuesOptions{
-				Enabled:           inlineCfg.Enabled,
-				EvaluationTimeout: inlineCfg.EvaluationTimeout.Duration,
-				MaxRows:           inlineCfg.MaxRows,
-			},
-		})
+		siOpts.Signer = stmtSigner
+		siOpts.Evaluator = evaluator
+		siOpts.InlineValues.Enabled = inlineEnabled
+		siOpts.Observer = obs
+		siPlug, err := sistatement.New(siOpts)
 		if err != nil {
 			return nil, fmt.Errorf("storage_integrity.agent: %w", err)
 		}
+		// The plugin owns the eager counter and every counter its lazy opener
+		// hands out.
+		siClose = func() { _ = siPlug.Close() }
 		helloPlugins = append(helloPlugins, &sessionstate.Plugin{})
 		queryPlugins = append(queryPlugins, siPlug)
 		strictDataPlugins = append(strictDataPlugins, siPlug)
@@ -1361,10 +1433,14 @@ func buildAgentWithBuilders(
 		successPlugins = append(successPlugins, siPlug)
 		completePlugins = append(completePlugins, siPlug)
 		closePlugins = append(closePlugins, siPlug)
+		exceptionPlugins = append([]plugin.ExceptionPlugin{siPlug}, exceptionPlugins...)
 		log.Infow("storage_integrity agent statement plugin enabled",
 			"network_id", cfg.StorageIntegrity.Agent.NetworkID,
-			"state_dir", cfg.StorageIntegrity.Agent.StateDir,
-			"seq_last", seq.Last(),
+			"discovery", siOpts.Discovery != nil,
+			"state_dir", stateLabel,
+			"lanes", agentLanesLabel(cfg.StorageIntegrity.Agent.Lanes),
+			"writer_precheck", siOpts.WriterPrecheck,
+			"upstream_switch", siOpts.Hosting != nil && !siOpts.PinnedUpstream,
 			"max_payload_bytes", cfg.StorageIntegrity.Agent.MaxPayloadBytes)
 	}
 	queryPlugins = append(queryPlugins,
@@ -1382,7 +1458,7 @@ func buildAgentWithBuilders(
 		QueryAbortPlugins:               abortPlugins,
 		QuerySuccessPlugins:             successPlugins,
 		QueryCompletePlugins:            completePlugins,
-		ExceptionPlugins:                []plugin.ExceptionPlugin{metrics},
+		ExceptionPlugins:                exceptionPlugins,
 		ClosePlugins:                    closePlugins,
 	}
 
@@ -1400,6 +1476,9 @@ func buildAgentWithBuilders(
 			}
 			if evaluatorClose != nil {
 				evaluatorClose()
+			}
+			if siClose != nil {
+				siClose()
 			}
 		},
 	}
@@ -1434,18 +1513,151 @@ func resolveTableSchemas(opts Options, reg registry.Registry, feature string) (r
 // registry that answers sentio_getStorageIntegrityTableStatus (RpcNetworkState),
 // then a registry with declared schemas (the YAML table_schemas fixture). A
 // declared-schema source reports its declared tables Active and every other
-// table Ordinary.
-func resolveAgentTableStatuses(opts Options, reg registry.Registry) (registry.TableStatuses, error) {
+// table Ordinary. fromRegistry reports the second case, where every answer
+// is a lookup worth caching; callers must not compare interfaces to find it
+// out, since a host registry's dynamic type may not be comparable.
+func resolveAgentTableStatuses(opts Options, reg registry.Registry) (statuses registry.TableStatuses, fromRegistry bool, err error) {
 	if opts.StorageIntegrityTableSchemas != nil {
-		return registry.TableStatusesFromSchemas(opts.StorageIntegrityTableSchemas), nil
+		return registry.TableStatusesFromSchemas(opts.StorageIntegrityTableSchemas), false, nil
 	}
-	if statuses, ok := reg.(registry.TableStatuses); ok && statuses != nil {
-		return statuses, nil
+	if statuses, ok := reg.(registry.TableStatuses); ok && !isNilInterface(statuses) {
+		return statuses, true, nil
 	}
-	if schemas, ok := reg.(registry.TableSchemas); ok && schemas != nil {
-		return registry.TableStatusesFromSchemas(schemas), nil
+	if schemas, ok := reg.(registry.TableSchemas); ok && !isNilInterface(schemas) {
+		return registry.TableStatusesFromSchemas(schemas), false, nil
 	}
-	return nil, fmt.Errorf("storage_integrity.agent requires a table status source: an RPC network state (sentio_getStorageIntegrityTableStatus), a YAML table_schemas fixture, or Options.StorageIntegrityTableSchemas")
+	return nil, false, fmt.Errorf("storage_integrity.agent requires a table status source: an RPC network state (sentio_getStorageIntegrityTableStatus), a YAML table_schemas fixture, or Options.StorageIntegrityTableSchemas")
+}
+
+// agentTableStatusCacheTTL bounds how long the agent reuses a table status
+// answer: a burst of INSERTs costs one lookup (spec 2026-10-09 §6.4).
+const agentTableStatusCacheTTL = 5 * time.Second
+
+// agentTableStatusFailureTTL bounds how long a failed status lookup is
+// reused (final review M4): an indexer that does not answer the status method
+// costs three RPCs per INSERT without it. It is as short as the success TTL,
+// not infoFailureTTL's minute: a failed lookup sends an INSERT into an Active
+// table unsigned, which the server refuses as retryable, so a long negative
+// entry would turn one transient failure into a minute of refusals.
+const agentTableStatusFailureTTL = 5 * time.Second
+
+// agentStatementOptions resolves the agent's SI statement plugin options from
+// the config and the agent registry (spec 2026-10-09 §6.4): the status source
+// (cached when the registry both answers it and supports discovery, i.e.
+// RpcNetworkState), network-id discovery,
+// the client_seq store (opened here for an explicit state_dir, lazily per
+// network otherwise; the caller owns an opened Options.Seq and must close it
+// if the plugin is never built), the advisory writer pre-check (off for
+// the driver sidecar), and the upstream switch to the hosting indexer. reg is
+// nil when the host injects the declared schemas; discovery and the switch
+// then stay off. The caller sets Signer, Evaluator and Observer.
+func agentStatementOptions(cfg *config.Config, opts Options, reg registry.Registry, signerAddress string) (sistatement.Options, string, error) {
+	agentCfg := cfg.StorageIntegrity.Agent
+	statuses, fromRegistry, err := resolveAgentTableStatuses(opts, reg)
+	if err != nil {
+		return sistatement.Options{}, "", err
+	}
+	var discovery registry.StorageIntegrityDiscovery
+	if d, ok := reg.(registry.StorageIntegrityDiscovery); ok && !isNilInterface(d) {
+		discovery = d
+		if fromRegistry {
+			statuses = registry.NewCachedTableStatuses(statuses, agentTableStatusCacheTTL, agentTableStatusFailureTTL, nil)
+		}
+	}
+	pinned := cfg.Agent.Upstream != ""
+	var hosting registry.DatabaseHosting
+	if h, ok := reg.(registry.DatabaseHosting); ok && !isNilInterface(h) {
+		hosting = h
+	} else if !pinned {
+		log.Warnw("storage_integrity agent: the network state does not resolve database hosting (registry.DatabaseHosting), so the upstream switch to the indexer hosting an SI INSERT's database is disabled; such an INSERT runs on the session's upstream and the server decides",
+			"network_state", fmt.Sprintf("%T", reg))
+	}
+	// Last fallible step: on success the caller owns an eagerly opened Seq.
+	seq, openSeq, stateLabel, err := agentSeqOpener(agentCfg.StateDir, signerAddress, defaultAgentStateBase)
+	if err != nil {
+		return sistatement.Options{}, "", fmt.Errorf("storage_integrity.agent: %w", err)
+	}
+	dialTimeout := cfg.DialTimeout.Duration
+	return sistatement.Options{
+		Statuses:        statuses,
+		Discovery:       discovery,
+		NetworkID:       agentCfg.NetworkID,
+		KeeperShardID:   agentCfg.KeeperShardID,
+		Seq:             seq,
+		OpenSeq:         openSeq,
+		WriterPrecheck:  !cfg.Agent.Driver,
+		MaxPayloadBytes: agentCfg.MaxPayloadBytes,
+		Owner:           cfg.Agent.Owner,
+		IsDriver:        cfg.Agent.Driver,
+		InlineValues: sistatement.InlineValuesOptions{
+			Enabled:           agentCfg.InlineValues.Enabled,
+			EvaluationTimeout: agentCfg.InlineValues.EvaluationTimeout.Duration,
+			MaxRows:           agentCfg.InlineValues.MaxRows,
+		},
+		Hosting: hosting,
+		// dialRaw wraps the conn in configuredAddressConn: the plugin compares
+		// its UpstreamAddress with the hosting indexer's address, so without it
+		// every INSERT would switch again.
+		Dial: func(ctx context.Context, address string) (*chproto.Codec, error) {
+			return dialRaw(ctx, address, dialTimeout)
+		},
+		PinnedUpstream: pinned,
+		SwitchTimeout:  agentSwitchTimeout(dialTimeout),
+	}, stateLabel, nil
+}
+
+// agentSwitchTimeout bounds one upstream switch: the hosting lookups, the
+// dial and the replayed handshake. It is 10s, or the dial timeout plus 5s
+// when that is longer.
+func agentSwitchTimeout(dialTimeout time.Duration) time.Duration {
+	return max(10*time.Second, dialTimeout+5*time.Second)
+}
+
+// defaultAgentStateBase is the running platform's default agent state base.
+func defaultAgentStateBase() (string, bool) {
+	home, _ := os.UserHomeDir()
+	return config.DefaultAgentStateBase(runtime.GOOS, os.Getenv, home)
+}
+
+// agentSeqOpener resolves the legacy client_seq store and a label for logs
+// (plan decision P4). An explicit state_dir keeps one <state_dir>/<signer>.seq
+// for every network and is opened here, at build: a directory that cannot be
+// created or a counter another process holds (its flock admits a single
+// opener) stops startup instead of refusing every SI INSERT later (final
+// review I2). The caller owns the returned counter until the plugin takes it
+// as Options.Seq. Without a state_dir the counter lives in
+// <base>/si/<network_id>/<signer>/ and the returned opener opens it at the
+// first SI write for that network, because the network id is part of the
+// path. A failed lazy open is not remembered, so a later INSERT retries it.
+// The plugin closes what it opened.
+func agentSeqOpener(stateDir, signer string, defaultBase func() (string, bool)) (*sistatement.SeqCounter, func(string) (*sistatement.SeqCounter, error), string, error) {
+	if strings.TrimSpace(stateDir) != "" {
+		seq, err := sistatement.OpenSeqCounter(stateDir, signer)
+		if err != nil {
+			return nil, nil, "", fmt.Errorf("open client_seq counter in state_dir %s: %w", stateDir, err)
+		}
+		return seq, nil, stateDir, nil
+	}
+	base, ok := defaultBase()
+	if !ok {
+		return nil, nil, "", fmt.Errorf("state_dir is required on %s (no default state directory)", runtime.GOOS)
+	}
+	return nil, func(networkID string) (*sistatement.SeqCounter, error) {
+		// The id comes from the hosting indexer; it must name exactly one
+		// directory below <base>/si.
+		if networkID == "" || networkID == "." || networkID == ".." || strings.ContainsAny(networkID, `/\`) {
+			return nil, fmt.Errorf("network id %q cannot name a state directory", networkID)
+		}
+		return sistatement.OpenSeqCounter(config.AgentSIStateDir(base, networkID, signer), signer)
+	}, filepath.Join(base, "si"), nil
+}
+
+// agentLanesLabel describes storage_integrity.agent.lanes for the startup log.
+func agentLanesLabel(lanes string) string {
+	if lanes == "off" {
+		return "off"
+	}
+	return "auto (legacy until the hosting indexer reports client lanes)"
 }
 
 // buildAgentDialer returns the per-session upstream dialer for agent

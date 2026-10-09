@@ -3,6 +3,8 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "config",
     srcs = [
+        "agent_quickstart.go",
+        "agent_state_dir.go",
         "config.go",
         "replication_proxy_config.go",
         "storage_integrity_config.go",
@@ -12,6 +14,7 @@ go_library(
     deps = [
         "//pkg/cfgtypes",
         "//pkg/cluster",
+        "//pkg/ffifetch",
         "//pkg/log",
         "//pkg/plugins/agent",
         "//pkg/plugins/auth",
@@ -31,6 +34,7 @@ go_library(
 go_test(
     name = "config_test",
     srcs = [
+        "agent_quickstart_test.go",
         "config_test.go",
         "observability_config_test.go",
         "replication_proxy_config_test.go",
@@ -46,6 +50,7 @@ go_test(
     embed = [":config"],
     deps = [
         "//pkg/cluster",
+        "//pkg/log",
         "//pkg/plugins/agent",
         "//pkg/plugins/materialize",
         "//pkg/rewriter",

@@ -321,3 +321,63 @@ func TestScanDecodeStringEscapes(t *testing.T) {
 		}
 	}
 }
+
+// TestScanDecodeIdentifierEscapes pins Options.DecodeIdentifierEscapes.
+// ClickHouse reads a backquoted or double-quoted identifier with the same
+// escape decoder as a single-quoted literal (readBackQuotedStringWithSQLStyle
+// and readDoubleQuotedStringWithSQLStyle share parseComplexEscapeSequence with
+// readQuotedStringWithSQLStyle), so the expectations mirror
+// TestScanDecodeStringEscapes, plus the doubled delimiter. The alias shapes
+// are the projection aliases ClickHouse 26.8.1 emitted in measured remote()
+// secondary queries for expressions whose literal holds \, a newline or '.
+func TestScanDecodeIdentifierEscapes(t *testing.T) {
+	for _, tc := range []struct{ sql, want string }{
+		{"`devnet101\\x2eswap_new106`", "devnet101.swap_new106"},
+		{"\"devnet101\\x2Eswap_new106\"", "devnet101.swap_new106"},
+		{"`hg_\\Nsafe`", "hg_safe"},
+		{"`a\\nb\\tc`", "a\nb\tc"},
+		{"`a\\\\b`", `a\b`},
+		{"`a\\`b`", "a`b"},
+		{"`a``b`", "a`b"},
+		{"\"a\\\"b\"", `a"b`},
+		{"\"a\"\"b\"", `a"b`},
+		{"`it\\'s`", "it's"},
+		{"`\\_\\%\\c`", `\_\%\c`},
+		{"`extract(s, '\\\\\\\\d+')`", `extract(s, '\\d+')`},
+		{"`concat(s, '\\\\n')`", `concat(s, '\n')`},
+		{"`concat(s, 'it\\\\'s')`", `concat(s, 'it\'s')`},
+	} {
+		s, err := ScanWith(tc.sql, Options{DecodeIdentifierEscapes: true})
+		if err != nil {
+			t.Errorf("ScanWith(%q): %v", tc.sql, err)
+			continue
+		}
+		if len(s.Tokens) != 1 || s.Tokens[0].Kind != TokenQuoted || s.Tokens[0].Text != tc.want {
+			t.Errorf("ScanWith(%q) tokens = %q, want one quoted %q", tc.sql, s.Tokens, tc.want)
+		}
+	}
+	// A backslash escapes exactly the next byte, so decoding never moves an
+	// identifier boundary.
+	s, err := ScanWith("`a\\``.`b`", Options{DecodeIdentifierEscapes: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []Token{{TokenQuoted, "a`"}, {TokenPunct, "."}, {TokenQuoted, "b"}}; !reflect.DeepEqual(s.Tokens, want) {
+		t.Fatalf("tokens = %q, want %q", s.Tokens, want)
+	}
+	for _, sql := range []string{"`\\x4g`", "`\\xzz`", "`\\x4`", "`\\x`", "\"a\\x4\\\"b\""} {
+		if _, err := ScanWith(sql, Options{DecodeIdentifierEscapes: true}); !errors.Is(err, ErrUndecodableIdentifierEscape) {
+			t.Errorf("ScanWith(%q) err = %v, want %v", sql, err, ErrUndecodableIdentifierEscape)
+		}
+	}
+	if _, err := ScanWith("`a\\", Options{DecodeIdentifierEscapes: true}); err == nil {
+		t.Error("an identifier ending in a backslash was accepted")
+	}
+	// Every other caller keeps refusing escaped identifiers, including the
+	// table-reference guard's DecodeStringEscapes scan.
+	for _, opts := range []Options{{}, {AllowStringEscapes: true}, {DecodeStringEscapes: true}} {
+		if _, err := ScanWith("`devnet101\\x2eswap`", opts); !errors.Is(err, ErrEscapedQuotedIdentifier) {
+			t.Errorf("ScanWith with %+v err = %v, want %v", opts, err, ErrEscapedQuotedIdentifier)
+		}
+	}
+}

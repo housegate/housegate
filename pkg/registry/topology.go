@@ -9,6 +9,8 @@
 // Producers that have richer data should adapt at the boundary.
 package registry
 
+import "fmt"
+
 // ProxyAddress is the dialing target for a peer housegate instance
 // fronting an indexer's ClickHouse. From housegate's perspective the
 // remote endpoint is another housegate (which itself proxies CH), hence
@@ -16,7 +18,14 @@ package registry
 type ProxyAddress struct {
 	Url           string
 	HousegatePort uint16
+	// StorageRPCPort is the indexer's storage-node JSON-RPC port
+	// (IndexerInfo.storageNodeRpcPort); zero when not advertised. The agent
+	// asks the hosting indexer for SI table status and info there.
+	StorageRPCPort uint16
 }
+
+// Addr is the housegate dialing target "<url>:<port>".
+func (a ProxyAddress) Addr() string { return fmt.Sprintf("%s:%d", a.Url, a.HousegatePort) }
 
 // Registry is the union of Topology, Databases, and Access — the
 // full read-only network view housegate consumes as a single

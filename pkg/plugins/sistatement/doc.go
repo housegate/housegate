@@ -6,5 +6,8 @@
 // asks Relay to answer the sample block locally (QueryContext.DeferredInsert),
 // buffers and hashes the client's Data packets, and signs the
 // housegate-statement-v2 token into SQL_x_statement_token before the Query is
-// forwarded. It runs after materialize and before the agent auth signer.
+// forwarded. Before claiming the INSERT it moves the session to the indexer
+// hosting the target database when that differs from the current upstream
+// (spec 2026-10-09 §6.4, D19; switch.go). It runs after materialize and before
+// the agent auth signer.
 package sistatement

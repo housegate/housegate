@@ -18,3 +18,30 @@ type Observer interface {
 type StatusObserver interface {
 	TableStatusLookupFailed()
 }
+
+// SeqObserver counts recycled and burned client_seq values (spec 2026-10-09
+// §10). *proxy.MetricsObserver satisfies it; an Observer that does not is not
+// counted.
+type SeqObserver interface {
+	SeqRecycled()
+	SeqBurned(reason string)
+}
+
+// DiscoveryObserver counts agent discovery failures by step (spec 2026-10-09
+// §10): "info" (sentio_getStorageIntegrityInfo failed), "network_id" (it
+// answered no network id) and "precheck" (sentio_isDatabaseWriter failed, so
+// the advisory pre-check was skipped). *proxy.MetricsObserver satisfies it;
+// an Observer that does not is not counted.
+type DiscoveryObserver interface {
+	SIDiscoveryFailed(step string)
+}
+
+// SwitchObserver counts the outcomes of the agent's upstream switch to the
+// indexer hosting an SI INSERT's database (spec 2026-10-09 §6.4, §10):
+// "switched", "refused_state", "refused_database", "refused_revision" (also a
+// differing server timezone) and "dial_failed" (dial, handshake or deadline).
+// *proxy.MetricsObserver satisfies it; an Observer that does not is not
+// counted.
+type SwitchObserver interface {
+	SIUpstreamSwitch(result string)
+}

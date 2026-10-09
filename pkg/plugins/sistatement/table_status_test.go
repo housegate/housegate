@@ -1,9 +1,11 @@
 package sistatement
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +14,7 @@ import (
 	"github.com/ClickHouse/ch-go/proto"
 
 	"github.com/housegate/housegate/pkg/auth"
+	"github.com/housegate/housegate/pkg/log"
 	"github.com/housegate/housegate/pkg/registry"
 	"github.com/housegate/housegate/pkg/replay/payloadexec"
 )
@@ -95,8 +98,12 @@ func TestPlugin_SignsActiveTablesOnly(t *testing.T) {
 	if err := p.OnQuery(context.Background(), q); err != nil {
 		t.Fatal(err)
 	}
-	if q.DeferredInsert == nil || seq.Last() != 1 {
-		t.Fatalf("an Active table must be claimed for signing (deferred=%v seq=%d)", q.DeferredInsert, seq.Last())
+	if q.DeferredInsert == nil || seq.Last() != 0 {
+		t.Fatalf("an Active table must be claimed for signing without reserving a seq (deferred=%v seq=%d)", q.DeferredInsert, seq.Last())
+	}
+	signDeferred(t, p, q)
+	if seq.Last() != 1 {
+		t.Fatalf("the strict hook must reserve seq 1, last=%d", seq.Last())
 	}
 }
 
@@ -148,5 +155,34 @@ func TestPlugin_InlineValuesEvaluatesOnlyActiveTables(t *testing.T) {
 	}
 	if ev.calls != 0 || q.SynthesizedInsert != nil || seq.Last() != 0 {
 		t.Fatalf("evaluations=%d synthesized=%v seq=%d, want none", ev.calls, q.SynthesizedInsert, seq.Last())
+	}
+}
+
+// A failing status source warns once per table per interval rather than once
+// per INSERT (final review M4).
+func TestPlugin_StatusFailureWarningIsThrottled(t *testing.T) {
+	statuses := &scriptedStatuses{err: errors.New("method not found")}
+	p, _, metrics := newStatusPlugin(t, statuses, false, nil)
+	p.statusWarnEvery = 50 * time.Millisecond
+	var buf bytes.Buffer
+	ctx := log.WithContext(context.Background(), log.New(slog.NewTextHandler(&buf, nil)))
+	const msg = "table status unavailable; passing the INSERT through unsigned"
+	for i := int64(1); i <= 3; i++ {
+		if err := p.OnQuery(ctx, insertQctx(newSession(i, ""), "INSERT INTO shop.orders FORMAT Native")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := strings.Count(buf.String(), msg); got != 1 {
+		t.Fatalf("warnings = %d, want 1 within the interval: %q", got, buf.String())
+	}
+	if metrics.failed != 3 {
+		t.Fatalf("failures counted = %d, want every lookup counted", metrics.failed)
+	}
+	time.Sleep(60 * time.Millisecond)
+	if err := p.OnQuery(ctx, insertQctx(newSession(4, ""), "INSERT INTO shop.orders FORMAT Native")); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(buf.String(), msg); got != 2 {
+		t.Fatalf("warnings = %d, want 2 after the interval", got)
 	}
 }

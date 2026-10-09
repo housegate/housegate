@@ -31,4 +31,27 @@ type Config struct {
 	// plugins forward verbatim. Empty list disables the bypass
 	// entirely; any query carrying the setting is rejected.
 	PlatformOperatorAddresses []string `json:"platform_operator_addresses" yaml:"platform_operator_addresses"`
+
+	// WriterPredicate selects how the ordinary write path answers the Write
+	// bit (spec 2026-10-09 R3): "contract" (default, also empty) uses the
+	// host's registry.WriterAccess — the contract's isDatabaseWriter, with no
+	// address(0) wildcard and with the indexer signer counted; "bitmap" keeps
+	// the stored bitmap with the address(0) union. "bitmap" is an escape hatch
+	// for a network that still relies on a wildcard Write grant.
+	WriterPredicate string `json:"writer_predicate" yaml:"writer_predicate"`
+}
+
+// Writer predicate values of auth.writer_predicate.
+const (
+	WriterPredicateContract = "contract"
+	WriterPredicateBitmap   = "bitmap"
+)
+
+// EffectiveWriterPredicate returns the configured predicate; empty means
+// contract.
+func (c Config) EffectiveWriterPredicate() string {
+	if c.WriterPredicate == "" {
+		return WriterPredicateContract
+	}
+	return c.WriterPredicate
 }

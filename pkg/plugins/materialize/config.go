@@ -39,6 +39,20 @@ type Config struct {
 
 	// ProfileID selects the materialization profile ("" → engine default).
 	ProfileID string `json:"profile_id" yaml:"profile_id"`
+
+	// Optional is set only by the agent quickstart's implicit native
+	// materializer (spec 2026-10-09 §6.4): if it cannot be built, the agent
+	// disables materialization and inline VALUES with a warning. An explicit
+	// materialize.enabled keeps the startup fail-fast. Never read from files.
+	Optional bool `json:"-" yaml:"-"`
+
+	// Implicit is set only when the agent quickstart turned the materializer
+	// on for the signed inline VALUES lane (-si-inline-values auto|on) rather
+	// than the operator setting materialize.enabled. The implicit
+	// materializer then rewrites only statements the inline VALUES lane
+	// would claim, so ordinary queries keep their per-row
+	// now()/rand()/generateUUIDv4() values. Never read from files.
+	Implicit bool `json:"-" yaml:"-"`
 }
 
 // Validate is a no-op when disabled. When enabled it requires an explicit

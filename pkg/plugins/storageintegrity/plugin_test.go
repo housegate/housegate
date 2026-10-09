@@ -115,6 +115,21 @@ func TestIngressRejectsMalformedStatementID(t *testing.T) {
 	}
 }
 
+// Spec 2026-10-09 §6.1: before lane activation the ingress itself refuses a
+// laned id with the stable message, instead of forwarding it to the arbiter.
+func TestIngressRefusesLanedStatementIDBeforeActivation(t *testing.T) {
+	p, signer := newSignedIngress(t)
+	sql := "INSERT INTO tenant.events FORMAT Native"
+	qctx := signedQueryContext(t, 14, signer, sql, sql, sqlmeta.StatementTypeInsert)
+	qctx.Query.ID = strings.ToLower(signer.Address()) + ":5e1f0a2b7c9d3e4f:1:n1"
+	qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
+
+	err := p.OnQuery(context.Background(), qctx)
+	if !errors.Is(err, sicore.ErrClientLanesNotEnabled) {
+		t.Fatalf("OnQuery err = %v, want ErrClientLanesNotEnabled", err)
+	}
+}
+
 func TestIngressRejectsStatementIDSignerMismatch(t *testing.T) {
 	p, signer := newSignedIngress(t)
 	sql := "INSERT INTO tenant.events FORMAT Native"
@@ -1324,6 +1339,8 @@ func TestIngressV2_RequiresStatementValidatorV2(t *testing.T) {
 		Purpose:       auth.QueryPurpose,
 		TableSchemas:  ns,
 		NetworkID:     "testnet-v2",
+		Writers:       allowAllWriters{},
+		Operators:     allowAllWriters{},
 	})
 	sql := "INSERT INTO tenant.events FORMAT Native"
 	qctx := signedQueryContext(t, 43, signer, sql, sql, sqlmeta.StatementTypeInsert)
@@ -1364,8 +1381,21 @@ func newSignedIngressWithoutV2Config(t *testing.T, cfg Config) (*Plugin, *auth.R
 	cfg.Enabled = true
 	cfg.AuthValidator = validator
 	cfg.Purpose = auth.QueryPurpose
+	if cfg.Writers == nil {
+		cfg.Writers = allowAllWriters{}
+	}
+	if cfg.Operators == nil {
+		cfg.Operators = allowAllWriters{}
+	}
 	return New(cfg), signer
 }
+
+// allowAllWriters admits every account as a writer of every database. The
+// authorizer's own tests use the in-memory network state instead.
+type allowAllWriters struct{}
+
+func (allowAllWriters) IsDatabaseWriter(string, string) (bool, error) { return true, nil }
+func (allowAllWriters) IsOperator(owner, signer string) bool          { return owner == signer }
 
 func signedQueryContext(t *testing.T, sessionID int64, signer *auth.RelaySigner, signedSQL, finalSQL string, typ sqlmeta.StatementType) *plugin.QueryContext {
 	t.Helper()
@@ -1425,6 +1455,10 @@ func (s *fakeSession) RebindToLocal(context.Context, *chproto.Codec, *chproto.Cl
 	return nil
 }
 
+func (s *fakeSession) SwitchUpstream(context.Context, *chproto.Codec, *chproto.ClientHello) error {
+	return nil
+}
+
 // TestIngressV2_BindsTheKindItClassifiedItself proves the ingress derives
 // statement_kind from its OWN classification of the SQL — a token signed with
 // any other kind is refused before the payload is uploaded.
@@ -1461,5 +1495,48 @@ func TestStatementKindCodeMatchesGeneratedEnum(t *testing.T) {
 	}
 	if code != uint32(pb.StatementKind_STATEMENT_KIND_INSERT) {
 		t.Fatalf("sicore kind code %d does not match pb.StatementKind_STATEMENT_KIND_INSERT %d", code, pb.StatementKind_STATEMENT_KIND_INSERT)
+	}
+}
+
+type failingConsumer struct{ err error }
+
+func (c failingConsumer) ConsumeStorageIntegrityAdmission(context.Context, Admission) error {
+	return c.err
+}
+
+// Spec 2026-10-09 §6.6 (2): an admissionFromState failure (here a statement
+// token that does not bind the captured payload) is marked by the ingress;
+// a consumer error is passed through unchanged, because the consumer marks
+// only what it can prove.
+func TestIngressStrictHookMarksAdmissionFailuresOnly(t *testing.T) {
+	for name, tc := range map[string]struct {
+		payload    []byte
+		consumer   error
+		wantMarked bool
+	}{
+		"token mismatch":        {payload: []byte{byte(chproto.ClientDataCode), 0, 0xff}, wantMarked: true},
+		"consumer error":        {payload: []byte{byte(chproto.ClientDataCode), 0, 0xab, 0xcd}, consumer: errors.New("orchestrate: transport")},
+		"consumer marked error": {payload: []byte{byte(chproto.ClientDataCode), 0, 0xab, 0xcd}, consumer: chproto.MarkSeqUnspent(errors.New("put payload: store down")), wantMarked: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ns, _ := ingressNetworkState(t)
+			p, signer := newSignedIngressWithConfig(t, Config{TableSchemas: ns, NetworkID: "testnet-v2", AdmissionConsumer: failingConsumer{err: tc.consumer}})
+			sql := "INSERT INTO tenant.events FORMAT Native"
+			qctx := signedQueryContext(t, 63, signer, sql, sql, sqlmeta.StatementTypeInsert) // token binds {0xab, 0xcd}
+			qctx.AccessedTables = []sqlmeta.AccessedTable{{IsStorageIntegrity: true, OriginalDatabase: "tenant", OriginalTable: "events"}}
+			if err := p.OnQuery(context.Background(), qctx); err != nil {
+				t.Fatal(err)
+			}
+			if err := p.OnClientDataStrict(context.Background(), qctx, tc.payload); err != nil {
+				t.Fatal(err)
+			}
+			err := p.OnQueryInputCompleteStrict(context.Background(), qctx)
+			if err == nil || chproto.IsSeqUnspent(err) != tc.wantMarked {
+				t.Fatalf("err = %v marked=%v, want marked=%v", err, chproto.IsSeqUnspent(err), tc.wantMarked)
+			}
+			if tc.consumer != nil && !errors.Is(err, tc.consumer) {
+				t.Fatalf("err = %v, want the consumer error passed through", err)
+			}
+		})
 	}
 }

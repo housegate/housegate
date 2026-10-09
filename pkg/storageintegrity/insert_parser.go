@@ -354,6 +354,26 @@ func ParseUseDatabaseStrict(sql string) (string, bool, error) {
 	return db, true, nil
 }
 
+// LeadingKeywords returns up to n leading bare words of sql, upper-cased,
+// skipping comments and whitespace with the lexer ParseUseDatabaseStrict
+// uses. It stops at the first token that is not a bare word; a lexer error
+// (an unterminated or nested block comment, a bare '#') is returned.
+func LeadingKeywords(sql string, n int) ([]string, error) {
+	s := storageScanner{sql: sql}
+	var out []string
+	for len(out) < n {
+		word, ok, err := s.bareWord()
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			break
+		}
+		out = append(out, strings.ToUpper(word))
+	}
+	return out, nil
+}
+
 type storageScanner struct {
 	sql string
 	pos int

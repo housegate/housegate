@@ -73,6 +73,22 @@ var (
 		Name: "clickhouse_proxy_agent_si_table_status_failures_total",
 		Help: "Agent-mode storage-integrity table status lookups that failed; the INSERT passed through unsigned",
 	})
+	agentSISeqRecycledTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "clickhouse_proxy_agent_si_seq_recycled_total",
+		Help: "Agent-mode client_seq values returned to the free list after a provably-unspent refusal",
+	})
+	agentSISeqBurnedTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "clickhouse_proxy_agent_si_seq_burned_total",
+		Help: "Agent-mode client_seq values that may have been spent or could not be recycled, by reason",
+	}, []string{"reason"})
+	agentSIDiscoveryFailuresTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "clickhouse_proxy_agent_si_discovery_failures_total",
+		Help: "Agent-mode storage-integrity discovery failures by step",
+	}, []string{"step"})
+	agentSIUpstreamSwitchesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "clickhouse_proxy_agent_si_upstream_switches_total",
+		Help: "Agent-mode upstream switches to the indexer hosting a storage-integrity INSERT's database, by result",
+	}, []string{"result"})
 )
 
 func init() {
@@ -91,6 +107,10 @@ func init() {
 	prometheus.MustRegister(agentMaterializeTotal)
 	prometheus.MustRegister(agentInlineValuesTotal)
 	prometheus.MustRegister(agentSITableStatusFailuresTotal)
+	prometheus.MustRegister(agentSISeqRecycledTotal)
+	prometheus.MustRegister(agentSISeqBurnedTotal)
+	prometheus.MustRegister(agentSIDiscoveryFailuresTotal)
+	prometheus.MustRegister(agentSIUpstreamSwitchesTotal)
 }
 
 type MetricsObserver struct{}
@@ -167,6 +187,26 @@ func (m *MetricsObserver) MaterializeCallError() {
 }
 
 func (m *MetricsObserver) TableStatusLookupFailed() { agentSITableStatusFailuresTotal.Inc() }
+
+// SeqRecycled and SeqBurned implement sistatement.SeqObserver (spec 2026-10-09
+// §10). reason is unknown_outcome or free_list_overflow.
+func (m *MetricsObserver) SeqRecycled() { agentSISeqRecycledTotal.Inc() }
+func (m *MetricsObserver) SeqBurned(reason string) {
+	agentSISeqBurnedTotal.WithLabelValues(reason).Inc()
+}
+
+// SIDiscoveryFailed counts an agent discovery failure by step ("info",
+// "network_id", "precheck"; spec 2026-10-09 §10).
+func (m *MetricsObserver) SIDiscoveryFailed(step string) {
+	agentSIDiscoveryFailuresTotal.WithLabelValues(step).Inc()
+}
+
+// SIUpstreamSwitch counts an agent upstream-switch outcome ("switched",
+// "refused_state", "refused_database", "refused_revision", "dial_failed";
+// spec 2026-10-09 §10).
+func (m *MetricsObserver) SIUpstreamSwitch(result string) {
+	agentSIUpstreamSwitchesTotal.WithLabelValues(result).Inc()
+}
 
 func (m *MetricsObserver) InlineValuesSynthesized() {
 	agentInlineValuesTotal.WithLabelValues("synthesized").Inc()

@@ -122,14 +122,17 @@ func objectCarrierCallable(sql string) string {
 		for call < len(sql) && (sql[call] == ' ' || sql[call] == '\t' || sql[call] == '\r' || sql[call] == '\n') {
 			call++
 		}
-		if call < len(sql) && sql[call] == '(' && isObjectCarrierName(name) {
+		if call < len(sql) && sql[call] == '(' && IsObjectCarrierName(name) {
 			return name
 		}
 	}
 	return ""
 }
 
-func isObjectCarrierName(name string) bool {
+// IsObjectCarrierName reports whether name is a table-function or table-engine
+// callable whose arguments can name a ClickHouse database or table. Shared
+// with sipeerguard.
+func IsObjectCarrierName(name string) bool {
 	lower := strings.ToLower(name)
 	switch lower {
 	case "remote", "remotesecure", "cluster", "clusterallreplicas",

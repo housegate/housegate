@@ -45,3 +45,19 @@ type Access interface {
 	// grant must exist. Empty strings always return false.
 	IsOperator(owner, signer string) bool
 }
+
+// WriterAccess answers the contract's Databases.isDatabaseWriter exactly:
+// indexer signer of the database's indexer, or the account's own Owner (0x08)
+// or Write (0x02) bit. Admin alone and address(0) grants do not count. An
+// unknown or pending-delete database is an error, which callers refuse.
+// Implemented by the host over raw chain state (sentio-node FromStatecore) and
+// by the in-memory network state; RpcNetworkState does not implement it.
+type WriterAccess interface {
+	IsDatabaseWriter(database, account string) (bool, error)
+}
+
+// OperatorChecker is the operator half of Access, for consumers that need
+// only IsOperator (the storage-integrity ingress authorizer).
+type OperatorChecker interface {
+	IsOperator(owner, signer string) bool
+}

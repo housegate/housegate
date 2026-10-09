@@ -1,6 +1,7 @@
 package network
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -51,8 +52,9 @@ func (s *InMemoryNetworkState) ProxyByIndexerId(indexerId uint64) (registry.Prox
 		return registry.ProxyAddress{}, false
 	}
 	return registry.ProxyAddress{
-		Url:           info.IndexerUrl,
-		HousegatePort: info.ClickhouseProxyPort,
+		Url:            info.IndexerUrl,
+		HousegatePort:  info.ClickhouseProxyPort,
+		StorageRPCPort: info.StorageNodeRpcPort,
 	}, true
 }
 
@@ -62,11 +64,42 @@ func (s *InMemoryNetworkState) AllIndexers() map[uint64]registry.ProxyAddress {
 	out := make(map[uint64]registry.ProxyAddress, len(s.IndexerInfos))
 	for id, info := range s.IndexerInfos {
 		out[id] = registry.ProxyAddress{
-			Url:           info.IndexerUrl,
-			HousegatePort: info.ClickhouseProxyPort,
+			Url:            info.IndexerUrl,
+			HousegatePort:  info.ClickhouseProxyPort,
+			StorageRPCPort: info.StorageNodeRpcPort,
 		}
 	}
 	return out
+}
+
+// DatabaseHosting implements registry.DatabaseHosting over the in-memory
+// maps: an unknown or PendingDelete database is not hosted; a hosted database
+// whose indexer is unknown or advertises no housegate address is an error.
+func (s *InMemoryNetworkState) DatabaseHosting(_ context.Context, database string) (registry.ProxyAddress, uint64, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	db, ok := s.DatabaseInfos[Database(database)]
+	if !ok || db.PendingDelete {
+		return registry.ProxyAddress{}, 0, false, nil
+	}
+	info, ok := s.IndexerInfos[db.IndexerId]
+	if !ok {
+		return registry.ProxyAddress{}, 0, false, fmt.Errorf("indexer %d hosting %s is unknown", db.IndexerId, database)
+	}
+	return hostingProxyAddress(database, db.IndexerId, info)
+}
+
+// hostingProxyAddress is the housegate address of the indexer hosting
+// database, or an error when it advertises none.
+func hostingProxyAddress(database string, indexerID uint64, info IndexerInfo) (registry.ProxyAddress, uint64, bool, error) {
+	if info.IndexerUrl == "" || info.ClickhouseProxyPort == 0 {
+		return registry.ProxyAddress{}, 0, false, fmt.Errorf("indexer %d hosting %s advertises no housegate address", indexerID, database)
+	}
+	return registry.ProxyAddress{
+		Url:            info.IndexerUrl,
+		HousegatePort:  info.ClickhouseProxyPort,
+		StorageRPCPort: info.StorageNodeRpcPort,
+	}, indexerID, true, nil
 }
 
 // --- registry.Databases
@@ -152,6 +185,31 @@ func (s *InMemoryNetworkState) IsOperator(owner, signer string) bool {
 		return false
 	}
 	return ops[AccountAddress(signer)]
+}
+
+// IsDatabaseWriter implements registry.WriterAccess with the contract's
+// semantics (spec 2026-10-09 D2): the hosting indexer's signer, or the
+// account's own Owner or Write bit. Unlike HasPermission it neither unions the
+// wildcard address's grants nor promotes Admin.
+func (s *InMemoryNetworkState) IsDatabaseWriter(database, account string) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	info, ok := s.DatabaseInfos[Database(database)]
+	if !ok || info.PendingDelete {
+		return false, fmt.Errorf("database not found: %s", database)
+	}
+	account = strings.ToLower(strings.TrimSpace(account))
+	if account == "" || AccountAddress(account) == WildcardAddress {
+		return false, nil
+	}
+	if indexer, ok := s.IndexerInfos[info.IndexerId]; ok {
+		signer := strings.ToLower(strings.TrimSpace(indexer.Signer))
+		if signer != "" && AccountAddress(signer) != WildcardAddress && signer == account {
+			return true, nil
+		}
+	}
+	bits := s.DatabasePermissions[AccountAddress(account)][Database(database)]
+	return bits&(registry.DbAuthOwner|registry.DbAuthWrite) != 0, nil
 }
 
 // --- registry.TableSchemas
@@ -280,3 +338,4 @@ func convertTableSchema(info TableSchemaInfo) registry.TableSchema {
 // consumer-side contract housegate's proxy chain depends on.
 var _ registry.Registry = (*InMemoryNetworkState)(nil)
 var _ registry.TableSchemas = (*InMemoryNetworkState)(nil)
+var _ registry.WriterAccess = (*InMemoryNetworkState)(nil)

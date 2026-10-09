@@ -30,6 +30,10 @@ var (
 	// whatever they are (\x4g is 0x3F, a quote inside the pair is a syntax
 	// error), so the scanner refuses rather than guess.
 	ErrUndecodableStringEscape = errors.New("\\x escape without two hex digits is not accepted by the table-reference guard")
+	// ErrUndecodableIdentifierEscape is ErrUndecodableStringEscape for a
+	// backquoted or double-quoted identifier scanned with
+	// Options.DecodeIdentifierEscapes.
+	ErrUndecodableIdentifierEscape = errors.New("\\x escape without two hex digits in a quoted identifier is not accepted by the storage-integrity guard")
 )
 
 // TokenKind classifies a Token.
@@ -96,6 +100,19 @@ type Options struct {
 	// decoding never moves a literal boundary. Guards that compare literal
 	// contents with names set it: '\x70hys' is phys to ClickHouse.
 	DecodeStringEscapes bool
+	// DecodeIdentifierEscapes accepts a backslash inside a backquoted or
+	// double-quoted identifier and decodes it into the name ClickHouse reads,
+	// in its TokenQuoted and on both surfaces, instead of refusing the
+	// statement with ErrEscapedQuotedIdentifier. ClickHouse decodes quoted
+	// identifiers with the same escape decoder as single-quoted literals
+	// (readBackQuotedStringWithSQLStyle and readDoubleQuotedStringWithSQLStyle
+	// share parseComplexEscapeSequence), so the decoding is exactly
+	// DecodeStringEscapes', and \x without two hex digits is
+	// ErrUndecodableIdentifierEscape. ClickHouse emits such identifiers as the
+	// projection aliases of expressions whose literal holds a backslash,
+	// control byte or quote. Independent of the string options: only a guard
+	// that compares identifiers with names after decoding sets it.
+	DecodeIdentifierEscapes bool
 }
 
 // Scan is ScanWith with default options.
@@ -157,7 +174,7 @@ func ScanWith(sql string, opts Options) (Surfaces, error) {
 			flushWord(i)
 			outside.WriteByte(' ')
 			withLiterals.WriteByte(' ')
-			next, identifier, err := consumeQuotedIdentifier(sql, i, sql[i])
+			next, identifier, err := consumeQuotedIdentifier(sql, i, sql[i], opts)
 			if err != nil {
 				return Surfaces{}, err
 			}
@@ -245,16 +262,11 @@ func consumeStringLiteral(sql string, start int, opts Options) (int, string, err
 				i += 2
 				continue
 			}
-			if sql[i+1] == 'x' {
-				if i+3 >= len(sql) || !isHexDigit(sql[i+2]) || !isHexDigit(sql[i+3]) {
-					return 0, "", ErrUndecodableStringEscape
-				}
-				literal.WriteByte(hexValue(sql[i+2])<<4 | hexValue(sql[i+3]))
-				i += 4
-				continue
+			next, err := decodeBackslash(sql, i, &literal, ErrUndecodableStringEscape)
+			if err != nil {
+				return 0, "", err
 			}
-			decodeEscape(&literal, sql[i+1])
-			i += 2
+			i = next
 		case '\'':
 			if i+1 < len(sql) && sql[i+1] == '\'' {
 				if opts.DecodeStringEscapes {
@@ -272,6 +284,21 @@ func consumeStringLiteral(sql string, start int, opts Options) (int, string, err
 		}
 	}
 	return 0, "", fmt.Errorf("unterminated single-quoted string literal")
+}
+
+// decodeBackslash decodes the escape sequence whose backslash is sql[i]
+// (the caller has checked that a byte follows it) into out and returns the
+// offset just past it. A \x without two hex digits is undecodable.
+func decodeBackslash(sql string, i int, out *strings.Builder, undecodable error) (int, error) {
+	if sql[i+1] == 'x' {
+		if i+3 >= len(sql) || !isHexDigit(sql[i+2]) || !isHexDigit(sql[i+3]) {
+			return 0, undecodable
+		}
+		out.WriteByte(hexValue(sql[i+2])<<4 | hexValue(sql[i+3]))
+		return i + 4, nil
+	}
+	decodeEscape(out, sql[i+1])
+	return i + 2, nil
 }
 
 // decodeEscape writes what ClickHouse 26.8.1 reads for a backslash followed
@@ -431,11 +458,22 @@ func consumeBlockComment(sql string, start int) (int, error) {
 	return 0, fmt.Errorf("unterminated block comment")
 }
 
-func consumeQuotedIdentifier(sql string, start int, delimiter byte) (int, string, error) {
+func consumeQuotedIdentifier(sql string, start int, delimiter byte, opts Options) (int, string, error) {
 	var identifier strings.Builder
 	for i := start + 1; i < len(sql); {
 		if sql[i] == '\\' {
-			return 0, "", ErrEscapedQuotedIdentifier
+			if !opts.DecodeIdentifierEscapes {
+				return 0, "", ErrEscapedQuotedIdentifier
+			}
+			if i+1 >= len(sql) {
+				break
+			}
+			next, err := decodeBackslash(sql, i, &identifier, ErrUndecodableIdentifierEscape)
+			if err != nil {
+				return 0, "", err
+			}
+			i = next
+			continue
 		}
 		if sql[i] != delimiter {
 			identifier.WriteByte(sql[i])
