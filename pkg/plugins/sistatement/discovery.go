@@ -107,7 +107,9 @@ func (p *Plugin) siInfo(ctx context.Context, database string) (registry.StorageI
 			p.mu.Lock()
 			if e, ok := p.infos[database]; ok {
 				e.refreshing = false
-				e.retryAt = now.Add(infoRefreshRetry)
+				// Stamp the backoff from the failure, not the lookup start: a slow
+				// failure would otherwise leave a retryAt that has already passed.
+				e.retryAt = p.now().Add(infoRefreshRetry)
 				p.infos[database] = e
 			}
 			p.mu.Unlock()
