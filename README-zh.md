@@ -138,7 +138,7 @@ rewriter 是物理/逻辑数据库映射的唯一权威。连接上的每条 SQL
 
 - **两阶段 Rewrite。** 阶段 1 用空 options 调一次 gRPC，拿到 AST 解析得到的 accessed table names。阶段 2 构造 `RewriteTableForSelectStmtArgs`（通过 `SentioNetworkTableMapper` 做 sentio-network 的 table 名解析）和 `RewriteTableForDynamicArgs`（鉴权过滤后的 `database_map`，再加上指向其它 indexer 的 logical 的 `remote_upstreams`），再调一次。
 - **权限敏感的 `database_map`。** 只包含连接 account 拥有读/写/admin 权限的数据库；不可访问的数据库下的表通过 rewriter 不可寻址。
-- **Fail-open。** gRPC 错误或 `UnsupportedStatement` 会回退到原始 SQL 并打 debug 级日志；rewriter 抖动不会阻塞 query。
+- **每次拒绝都 fail-closed。** rewriter 的任何非 `Success` 应答（包括 `UnsupportedStatement`），以及 rewriter 收到语句之后发生的任何失败，都会以 Exception 返回给客户端，不向 upstream 转发任何内容；是否开启 storage integrity 都一样。启动时无法构建 rewriter，或请求无法送达 rewriter，同样分别是启动失败 / 返回 Exception，除非在关闭 storage integrity 的前提下设置了 `rewriter.fail_open_on_unavailable: true`：此时启动会在没有 rewrite 插件的情况下继续，或把该 query 的原始 SQL 转发出去，并打 warn 日志。Router-only server（没有 `shard`、没有 `upstream`、也没有宿主注入的 cluster）从不构建 rewriter，不受影响。开启 storage integrity 时，启动要求后端支持 contract V2（native 需 rewriter-go v0.17.0+，gRPC 需 rewriter-grpc v0.17.0+）。详见 [docs/rewriter-fail-closed.md](docs/rewriter-fail-closed.md)。
 - **错误反向映射。** 当 upstream 返回的 `Exception` 引用了被重写的库表名时，同一个每连接 Rewriter 通过 `RewriteErrorMessage` 把消息映射回客户端实际使用的名字。
 - **wire-level `hello.Database` 重写。** `OnHello` 把 `hello.Database` 替换成 `rewriter.physical_database`；用户输入值保留在 `SessionState.LogicalDatabase`。
 
@@ -148,6 +148,7 @@ rewriter 是物理/逻辑数据库映射的唯一权威。连接上的每条 SQL
 | `rewriter.timeout` | duration | 否 | `5s` | 单次 gRPC 超时 |
 | `rewriter.physical_database` | string | 否 | `` | 本部署中承载所有 logical database 的那个唯一物理 ClickHouse 数据库。空 = 同时关闭 `database_map` 和 `hello.Database` 替换 |
 | `rewriter.delimiter` | string | 否 | `_` | `<logical>` 与 `<original_table>` 之间的分隔符 |
+| `rewriter.fail_open_on_unavailable` | bool | 否 | `false` | 启动时无法构建 rewriter，或某条 query 的请求无法送达 rewriter 时，不拒绝，而是在没有 rewriter 的情况下运行 / 转发原始 SQL，并打 warn 日志。对引擎的拒绝、以及引擎收到语句之后的失败一律不生效；与 `storage_integrity.enabled` 同时设置会被判为非法配置 |
 
 ### `storage_integrity` — 受保护表的读写策略
 
