@@ -6,11 +6,13 @@ import (
 	"errors"
 	"io"
 	"net"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"weak"
 
 	"github.com/ClickHouse/ch-go/proto"
 
@@ -125,6 +127,8 @@ const (
 // reserved and the statement signed, and induces one termination site.
 type presendSiteHook struct {
 	site     presendSite
+	signed   atomic.Pointer[weak.Pointer[plugin.QueryContext]] // never a strong reference
+	input    chan struct{}                                     // OnQueryInputComplete fired
 	sess     *presendSession
 	relay    atomic.Pointer[Relay]
 	upstream io.Closer // the peer end of the upstream connection
@@ -134,6 +138,8 @@ func (h *presendSiteHook) OnQueryInputCompleteStrict(_ context.Context, qctx *pl
 	if qctx.DeferredInsert == nil && qctx.SynthesizedInsert == nil {
 		return nil
 	}
+	wp := weak.Make(qctx)
+	h.signed.Store(&wp)
 	switch h.site {
 	case siteStrictHookClose:
 		return errors.New("agent-sign: key unavailable")
@@ -157,11 +163,21 @@ func (h *presendSiteHook) OnQueryInputCompleteStrict(_ context.Context, qctx *pl
 	return nil
 }
 
+// OnQueryInputComplete lets an upstream script answer EndOfStream only after
+// Relay finished writing the input, as a real server does.
+func (h *presendSiteHook) OnQueryInputComplete(context.Context, *plugin.QueryContext) {
+	select {
+	case h.input <- struct{}{}:
+	default:
+	}
+}
+
 type presendFixture struct {
 	si      *sistatement.Plugin
 	seq     *sistatement.SeqCounter
 	metrics *presendSeqMetrics
 	h       *deferredHarness
+	site    *presendSiteHook
 }
 
 func newPresendFixture(t *testing.T, site presendSite, inline bool) *presendFixture {
@@ -195,19 +211,20 @@ func newPresendFixture(t *testing.T, site presendSite, inline bool) *presendFixt
 	if err != nil {
 		t.Fatal(err)
 	}
-	siteHook := &presendSiteHook{site: site}
+	siteHook := &presendSiteHook{site: site, input: make(chan struct{}, 1)}
 	chain := &plugin.PluginChain{
 		QueryPlugins:                    []plugin.QueryPlugin{materializedMarker{}, si},
 		StrictDataPlugins:               []plugin.StrictDataPlugin{si},
 		ExceptionPlugins:                []plugin.ExceptionPlugin{si},
 		QueryInputCompleteStrictPlugins: []plugin.QueryInputCompleteStrictPlugin{si, siteHook},
+		QueryInputCompletePlugins:       []plugin.QueryInputCompletePlugin{siteHook},
 		QueryAbortPlugins:               []plugin.QueryAbortPlugin{si},
 		QuerySuccessPlugins:             []plugin.QuerySuccessPlugin{si},
 		QueryCompletePlugins:            []plugin.QueryCompletePlugin{si},
 		ClosePlugins:                    []plugin.ClosePlugin{si},
 	}
 	h := newPresendHarness(t, chain, siteHook)
-	return &presendFixture{si: si, seq: seq, metrics: metrics, h: h}
+	return &presendFixture{si: si, seq: seq, metrics: metrics, h: h, site: siteHook}
 }
 
 // newPresendHarness is newDeferredHarness with the session wrapped so a site
@@ -391,7 +408,7 @@ func TestRelay_AbortUnsentAfterQueryWriteBeganBurnsClientSeq(t *testing.T) {
 				t.Fatal(err)
 			}
 			if written {
-				r.markSignedQueryWriteBegun(qctx)
+				defer r.markSignedQueryWriteBegun(qctx.Query.ID)()
 			}
 			r.abortUnsentQuery(ctx, qctx)
 			recycled, burned := f.metrics.snapshot()
@@ -483,5 +500,107 @@ func TestRelay_DeferredInsertAfterAgentPrepareIsAnOwnershipConflict(t *testing.T
 	}
 	if _, active := r.currentActiveQuery(); active {
 		t.Fatal("the prepared query's active slot was not released")
+	}
+}
+
+// presendSample is the 0-row sample block ClickHouse answers for the signed
+// INSERT into presendSchema.
+func presendSample(t *testing.T) []byte {
+	t.Helper()
+	var buf proto.Buffer
+	buf.PutUVarInt(uint64(proto.ServerCodeData))
+	buf.PutString("")
+	input := proto.Input{{Name: "id", Data: &proto.ColUInt64{}}, {Name: "region", Data: &proto.ColStr{}}, {Name: "amount", Data: &proto.ColFloat64{}}}
+	if err := (proto.Block{Rows: 0, Columns: len(input)}).EncodeBlock(&buf, deferredTestRev, input); err != nil {
+		t.Fatalf("encode sample: %v", err)
+	}
+	return append([]byte(nil), buf.Buf...)
+}
+
+// The write-boundary guard must not keep a completed signed INSERT's
+// QueryContext reachable: on the synthesized lane it owns the typed blocks and
+// the encoded payload, which would otherwise stay pinned on every idle agent
+// session for the connection's lifetime.
+func TestRelay_SignedInsertQueryContextIsNotRetainedAfterCompletion(t *testing.T) {
+	for _, lane := range []struct {
+		name   string
+		inline bool
+	}{{"deferred", false}, {"synthesized", true}} {
+		t.Run(lane.name, func(t *testing.T) {
+			f := newPresendFixture(t, siteNone, lane.inline)
+			sample := presendSample(t)
+			upDone := make(chan error, 1)
+			go func() {
+				up := chproto.NewCodec(f.h.upstreamProxy, chproto.DirFromClient)
+				up.SetRevision(deferredTestRev)
+				up.SetCompression(proto.CompressionDisabled)
+				upDone <- func() error {
+					if _, err := up.ReadPacket(uint64(chproto.ClientQueryCode)); err != nil {
+						return err
+					}
+					if _, err := up.ReadPacket(); err != nil { // external-tables marker
+						return err
+					}
+					if _, err := f.h.upstreamProxy.Write(sample); err != nil {
+						return err
+					}
+					for i := 0; i < 2; i++ { // payload + terminator
+						if _, err := up.ReadPacket(); err != nil {
+							return err
+						}
+					}
+					select {
+					case <-f.site.input:
+					case <-time.After(2 * time.Second):
+						return errors.New("relay never completed the input")
+					}
+					_, err := f.h.upstreamProxy.Write([]byte{byte(chproto.ServerEndOfStreamCode)})
+					return err
+				}()
+			}()
+			if lane.inline {
+				writeAllConn(t, f.h.clientProxy, encodeInsertQuery(t, "client-id", presendInline))
+				writeAllConn(t, f.h.clientProxy, encodeEmptyClientData(t))
+			} else {
+				writeAllConn(t, f.h.clientProxy, encodeInsertQuery(t, "client-id", presendDeferred))
+				writeAllConn(t, f.h.clientProxy, encodeEmptyClientData(t))
+				writeAllConn(t, f.h.clientProxy, encodeNonEmptyClientDataPacket(t, deferredTestRev))
+				writeAllConn(t, f.h.clientProxy, encodeEmptyClientData(t))
+			}
+			if err := <-upDone; err != nil {
+				t.Fatalf("upstream: %v", err)
+			}
+			// The relay loops exit only after the success and completion hooks.
+			deadline := time.Now().Add(3 * time.Second)
+			for {
+				if _, active := f.h.relay.currentActiveQuery(); !active {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("the signed INSERT never completed")
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			f.h.close(t)
+			if recycled, burned := f.metrics.snapshot(); recycled != 0 || len(burned) != 0 {
+				t.Fatalf("recycled=%d burned=%v; want a sequenced (spent) seq", recycled, burned)
+			}
+			// The guard keeps only a statement ID, and only until the terminal.
+			var record *string = f.h.relay.signedQueryWriteID.Load()
+			if record != nil {
+				t.Fatalf("write-boundary record %q survived the completed query", *record)
+			}
+			wp := f.site.signed.Load()
+			if wp == nil {
+				t.Fatal("the strict hook never saw the signed query")
+			}
+			for i := 0; i < 5 && wp.Value() != nil; i++ {
+				runtime.GC()
+			}
+			if wp.Value() != nil {
+				t.Fatal("the completed signed INSERT's QueryContext is still reachable from the relay")
+			}
+			runtime.KeepAlive(f.h.relay)
+		})
 	}
 }

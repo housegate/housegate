@@ -70,10 +70,13 @@ type Relay struct {
 	// connection is reusable. Guarded by queryMu.
 	pendingRejectionID  string
 	pendingRejectionExc *chproto.Exception
-	// signedQueryWritten is the signed-lane query whose upstream WriteQuery
-	// has begun. abortUnsentQuery refuses to vouch for it (spec 2026-10-09
-	// §6.5): from that point a failure may already have handed bytes upstream.
-	signedQueryWritten atomic.Pointer[plugin.QueryContext]
+	// signedQueryWriteID is the ID of the signed-lane query whose upstream
+	// WriteQuery has begun; abortUnsentQuery refuses to vouch for it (spec
+	// 2026-10-09 §6.5): from that point a failure may already have handed
+	// bytes upstream. Only the ID is kept, never the QueryContext, whose
+	// synthesized plan owns the payload; forwardSignedInsert clears it when
+	// the query reaches its terminal state.
+	signedQueryWriteID atomic.Pointer[string]
 
 	// completionProbe is replaceable in unit tests. Production uses
 	// probeQueryCompletion, which watches the exact upstream server's
@@ -1606,7 +1609,7 @@ func (r *Relay) runDeferredInsert(ctx context.Context, qctx *plugin.QueryContext
 // use it; once a write began, a failure is ambiguous and must take the
 // ordinary abort path, which leaves the flag unset.
 func (r *Relay) abortUnsentQuery(ctx context.Context, qctx *plugin.QueryContext) {
-	if r.signedQueryWritten.Load() == qctx {
+	if id := r.signedQueryWriteID.Load(); id != nil && qctx.Query != nil && *id == qctx.Query.ID {
 		// A caller broke the pre-send-only contract. Vouching here could let a
 		// plugin recycle a client_seq the upstream may already hold, so fall
 		// back to the ordinary abort, which leaves the reservation burned.
@@ -1622,11 +1625,15 @@ func (r *Relay) abortUnsentQuery(ctx context.Context, qctx *plugin.QueryContext)
 	r.hooks.OnQueryComplete(ctx, r.sess)
 }
 
-// markSignedQueryWriteBegun records that qctx's upstream WriteQuery is about
-// to start. It must run before the first byte is handed to the upstream codec;
-// from then on abortUnsentQuery falls back to the ordinary abort.
-func (r *Relay) markSignedQueryWriteBegun(qctx *plugin.QueryContext) {
-	r.signedQueryWritten.Store(qctx)
+// markSignedQueryWriteBegun records that the upstream WriteQuery of queryID is
+// about to start. It must run before the first byte is handed to the upstream
+// codec; from then on abortUnsentQuery falls back to the ordinary abort for
+// that query. The returned done clears the record (only if it is still this
+// one) once the query is terminal, so nothing outlives the lifecycle.
+func (r *Relay) markSignedQueryWriteBegun(queryID string) (done func()) {
+	id := &queryID
+	r.signedQueryWriteID.Store(id)
+	return func() { r.signedQueryWriteID.CompareAndSwap(id, nil) }
 }
 
 func queryMayStreamClientData(qctx *plugin.QueryContext) bool {
