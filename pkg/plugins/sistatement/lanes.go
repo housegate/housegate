@@ -43,13 +43,14 @@ type seqLane interface {
 }
 
 // laneSelector picks the lane for each SI statement and bounds the number of
-// statements in flight per lane, which bounds the gap ranges out-of-order
-// arrival opens transiently at the arbiter (spec 2026-10-09 §6.5). One
+// statements in flight per client lane, which bounds the gap ranges
+// out-of-order arrival opens transiently at the arbiter (spec 2026-10-09
+// §6.5). The legacy lane is never capped. One
 // selector serves one network; it holds at most one client lane at a time.
 type laneSelector struct {
 	mode        LaneMode
 	openPool    func() (*LanePool, error)
-	maxInflight int // <= 0: unbounded
+	maxInflight int // per client lane; <= 0: unbounded
 	observer    LaneObserver
 
 	mu        sync.Mutex
@@ -72,7 +73,7 @@ func newLaneSelector(mode LaneMode, openPool func() (*LanePool, error), maxInfli
 
 // pick returns the lane for one statement and a done func that must be called
 // once the statement's outcome is known (success, Exception, abort or session
-// close); further calls are no-ops. It blocks while the lane is at its
+// close); further calls are no-ops. It blocks while a client lane is at its
 // in-flight cap, until ctx ends; a waiter whose lane rotates away moves to the
 // new lane. No seq is reserved by pick itself.
 func (s *laneSelector) pick(ctx context.Context, lanesEnabled bool, legacy seqLane) (seqLane, func(), error) {
@@ -94,7 +95,10 @@ func (s *laneSelector) pick(ctx context.Context, lanesEnabled bool, legacy seqLa
 			lane = s.current
 		}
 		key := lane.Lane()
-		if s.maxInflight <= 0 || s.inflight[key] < s.maxInflight {
+		// Only client lanes are capped (spec 2026-10-09 §6.5): the legacy lane
+		// stays unbounded as in Plan A1, which keeps the driver sidecar and
+		// lanes-off agents unchanged. It is still counted for the gauge.
+		if key == "" || s.maxInflight <= 0 || s.inflight[key] < s.maxInflight {
 			s.inflight[key]++
 			if s.observer != nil {
 				s.observer.SIInflight(1)

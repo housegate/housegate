@@ -100,7 +100,9 @@ type StorageIntegrityAgentConfig struct {
 	// StateDir holds <account>.seq, the durable client_seq counter, for every
 	// network. Optional: empty uses the per-OS default base
 	// (DefaultAgentStateBase) with one counter per network under
-	// <base>/si/<network_id>/<account>/ (plan decision P4).
+	// <base>/si/<network_id>/<account>/ (plan decision P4). Client lanes
+	// live in <state_dir>/<network_id>/lanes/, or in the per-network default
+	// directory's lanes/.
 	StateDir string `json:"state_dir" yaml:"state_dir"`
 	// Lanes selects client_seq lanes (spec 2026-10-09 D15): "auto" (default)
 	// uses a client lane whenever the hosting indexer reports
@@ -108,7 +110,7 @@ type StorageIntegrityAgentConfig struct {
 	// sidecar, HOUSEGATE_SI_LANES=off).
 	Lanes string `json:"lanes" yaml:"lanes"`
 	// MaxInflightPerLane bounds SI statements between reservation and
-	// outcome on one lane (default 16).
+	// outcome on one client lane (default 16); the legacy lane is unbounded.
 	MaxInflightPerLane int `json:"max_inflight_per_lane" yaml:"max_inflight_per_lane"`
 	// ReadMode, when set, injects SQL_x_read_mode on SELECTs ("safe" or
 	// "unsafe_latest"); empty keeps the server default.

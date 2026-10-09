@@ -525,7 +525,7 @@ All CLI flags:
 | `-network` | `devnet2` (no config file) | Agent network preset; `devnet2` = `http://64.38.144.158:32003` (also `HOUSEGATE_NETWORK`). `-state` / `HOUSEGATE_NETWORK_STATE_SOURCE` and a pinned upstream win over it |
 | `-si` | `auto` (no config file) | Storage-integrity signing: `auto` enables it when the network state is an RPC source, `on`, `off` (also `HOUSEGATE_SI`) |
 | `-si-state-dir` | per OS | Directory for the `client_seq` state (also `HOUSEGATE_SI_STATE_DIR`) |
-| `-si-lanes` | (empty) | `client_seq` lanes (also `HOUSEGATE_SI_LANES`, config `storage_integrity.agent.lanes`): `auto` (the default) signs on a client lane once the network reports client lanes enabled, `off` keeps legacy statement ids (the driver sidecar). `storage_integrity.agent.max_inflight_per_lane` (default 16) bounds the SI statements in flight on one lane |
+| `-si-lanes` | (empty) | `client_seq` lanes (also `HOUSEGATE_SI_LANES`, config `storage_integrity.agent.lanes`): `auto` (the default) signs on a client lane once the network reports client lanes enabled, `off` keeps legacy statement ids (the driver sidecar). `storage_integrity.agent.max_inflight_per_lane` (default 16) bounds the SI statements in flight on one client lane; the legacy lane is unbounded. With an explicit `state_dir`, client lanes live in `<state_dir>/<network_id>/lanes/` |
 | `-si-read-mode` | (empty) | Inject `SQL_x_read_mode` on SELECTs: `safe` or `unsafe_latest` (also `HOUSEGATE_SI_READ_MODE`) |
 | `-si-inline-values` | `auto` (no config file) | Signed inline `INSERT ... VALUES`: `auto`, `on`, `off` (also `HOUSEGATE_SI_INLINE_VALUES`) |
 | `-listen` | `127.0.0.1:9000` in agent mode without a config file, else `:9001` | Proxy listen address |

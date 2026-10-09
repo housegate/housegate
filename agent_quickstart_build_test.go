@@ -420,12 +420,12 @@ func TestAgentStatementOptions_Wiring(t *testing.T) {
 			t.Fatal(err)
 		}
 		// agentSIConfig sets an explicit state_dir and leaves lanes auto: the
-		// legacy counter opens lazily (preflight F1) and the lanes live in
-		// <state_dir>/<signer>.
+		// legacy counter opens lazily (preflight F1) and each network's lanes
+		// live in <state_dir>/<network_id> (ruling C3).
 		if opts.Discovery == nil || opts.Hosting == nil || opts.OpenSeq == nil || opts.Seq != nil || opts.Dial == nil || opts.LaneDir == nil {
 			t.Fatalf("discovery=%v hosting=%v openSeq=%v seq=%v dial=%v laneDir=%v", opts.Discovery != nil, opts.Hosting != nil, opts.OpenSeq != nil, opts.Seq != nil, opts.Dial != nil, opts.LaneDir != nil)
 		}
-		if dir, err := opts.LaneDir("itest-net"); err != nil || dir != filepath.Join(cfg.StorageIntegrity.Agent.StateDir, signer) {
+		if dir, err := opts.LaneDir("itest-net"); err != nil || dir != filepath.Join(cfg.StorageIntegrity.Agent.StateDir, "itest-net") {
 			t.Fatalf("lane dir = %q, %v", dir, err)
 		}
 		if opts.Lanes != sistatement.LaneModeAuto || opts.MaxInflightPerLane != 16 || opts.ClientLanesEnabled != nil {
@@ -607,8 +607,13 @@ func TestAgentSeqOpener(t *testing.T) {
 			t.Fatalf("a second agent on the same state dir must start: %v", err)
 		}
 		for _, network := range []string{"net-a", "net-b"} {
-			if got, err := laneDir(network); err != nil || got != filepath.Join(dir, lower) {
-				t.Fatalf("lane dir for %s = %q, %v; want %s", network, got, err, filepath.Join(dir, lower))
+			if got, err := laneDir(network); err != nil || got != filepath.Join(dir, network) {
+				t.Fatalf("lane dir for %s = %q, %v; want %s", network, got, err, filepath.Join(dir, network))
+			}
+		}
+		for _, bad := range []string{"", ".", "..", "../escape", "a/b", `a\b`} {
+			if _, err := laneDir(bad); err == nil {
+				t.Errorf("network id %q must be refused as a lane directory name", bad)
 			}
 		}
 		a, err := open("net-a")
@@ -661,6 +666,48 @@ func TestAgentSeqOpener(t *testing.T) {
 		}
 		if _, err := os.Stat(filepath.Join(base, "escape")); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("a refused id created a directory: %v", err)
+		}
+	})
+
+	// Ruling C3: two networks under one explicit state_dir never share a lane
+	// directory, and acquiring a lane on each lands in its own directory. The
+	// legacy <state_dir>/<signer>.seq stays where Plan A1 put it.
+	t.Run("explicit state dir scopes client lanes by network", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "state")
+		_, open, laneDir, _, err := agentSeqOpener(dir, signer, sistatement.LaneModeAuto, func() (string, bool) { return "", false })
+		if err != nil {
+			t.Fatal(err)
+		}
+		lanesOf := map[string]string{}
+		for _, network := range []string{"net-a", "net-b"} {
+			siDir, err := laneDir(network)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pool, err := sistatement.OpenLanePool(siDir, sistatement.LanePoolOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			store, _, err := pool.Acquire()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			if _, err := os.Stat(filepath.Join(dir, network, "lanes", store.Lane()+".json")); err != nil {
+				t.Fatalf("network %s lane file: %v", network, err)
+			}
+			lanesOf[network] = siDir
+		}
+		if lanesOf["net-a"] == lanesOf["net-b"] {
+			t.Fatalf("both networks use lane directory %s", lanesOf["net-a"])
+		}
+		legacy, err := open("net-a")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer legacy.Close()
+		if legacy.Path() != filepath.Join(dir, lower+".seq") {
+			t.Fatalf("legacy counter moved to %s", legacy.Path())
 		}
 	})
 

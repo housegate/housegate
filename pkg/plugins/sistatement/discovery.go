@@ -59,19 +59,24 @@ func (p *Plugin) observeDiscovery(step string) {
 }
 
 // siInfo returns the hosting indexer's SI info for database (spec 2026-10-09
-// §6.4 step 3). A success is cached for infoSuccessTTL; an entry that old is
-// treated as absent and re-read. Every successful lookup runs the clock-skew
-// check, which warns once per database. A failure, including an answer
-// without a network_id, is remembered for infoFailureTTL and returned with
-// its step; only an actual lookup counts toward the discovery-failure metric.
+// §6.4 step 3). A success is cached for infoSuccessTTL; an older entry
+// triggers a refresh, and when that refresh fails the last good answer is
+// still served (stale-while-error, with a throttled warning) and the next
+// statement retries: expiry never turns a good answer into the configured
+// fallback or a refusal. Every successful lookup runs the clock-skew check,
+// which warns once per database. A failure with no good answer, including an
+// answer without a network_id, is remembered for infoFailureTTL and returned
+// with its step; only an actual lookup counts toward the discovery-failure
+// metric.
 func (p *Plugin) siInfo(ctx context.Context, database string) (registry.StorageIntegrityInfo, string, error) {
 	now := p.now()
 	p.mu.Lock()
-	if e, ok := p.infos[database]; ok && now.Sub(e.at) < infoSuccessTTL {
+	stale, haveStale := p.infos[database]
+	if haveStale && now.Sub(stale.at) < infoSuccessTTL {
 		p.mu.Unlock()
-		return e.info, "", nil
+		return stale.info, "", nil
 	}
-	if f, ok := p.infoFailures[database]; ok && now.Before(f.until) {
+	if f, ok := p.infoFailures[database]; ok && !haveStale && now.Before(f.until) {
 		p.mu.Unlock()
 		return registry.StorageIntegrityInfo{}, f.step, f.err
 	}
@@ -83,6 +88,13 @@ func (p *Plugin) siInfo(ctx context.Context, database string) (registry.StorageI
 	}
 	if err != nil {
 		p.observeDiscovery(step)
+		if haveStale {
+			_, logger := log.FromContext(ctx)
+			logger.WarnEvery(fmt.Sprintf("sistatement-info-refresh-%p-%s", p, database), p.discoveryWarnEvery,
+				"sistatement: refreshing the hosting indexer's SI info failed; serving the last good answer",
+				"database", database, "age", now.Sub(stale.at), "step", step, "err", err)
+			return stale.info, "", nil
+		}
 		p.mu.Lock()
 		p.infoFailures[database] = infoFailure{step: step, err: err, until: now.Add(infoFailureTTL)}
 		p.mu.Unlock()
@@ -129,12 +141,19 @@ func (p *Plugin) resolveNetworkID(ctx context.Context, database string) (network
 	return discovered, info.ClientLanesEnabled, nil
 }
 
-// forgetInfo drops the cached info for database, so the next statement
-// re-reads client_lanes_enabled from the hosting indexer.
-func (p *Plugin) forgetInfo(database string) {
+// expireLanesInfo marks the cached info for database expired and clears its
+// client_lanes_enabled, after the ingress refused a laned id as not enabled:
+// the next statement re-reads the hosting indexer, and if that refresh fails
+// the stale answer it falls back to (stale-while-error) keeps the network id
+// but signs on the legacy lane instead of repeating the refused laned id.
+func (p *Plugin) expireLanesInfo(database string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	delete(p.infos, database)
+	if e, ok := p.infos[database]; ok {
+		e.info.ClientLanesEnabled = false
+		e.at = time.Time{}
+		p.infos[database] = e
+	}
 }
 
 // checkSkew warns once per database when the local clock is more than

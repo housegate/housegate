@@ -54,7 +54,8 @@ type Options struct {
 	// lanes enabled; LaneModeOff keeps legacy ids (the driver sidecar, R8).
 	Lanes LaneMode
 	// MaxInflightPerLane bounds the SI statements between client_seq
-	// reservation and outcome on one lane (spec §6.5); zero is unbounded,
+	// reservation and outcome on one client lane (spec §6.5); the legacy lane
+	// is never bounded. Zero is unbounded,
 	// which only unit tests use (build passes the configured default 16).
 	MaxInflightPerLane int
 	// LaneDir returns the si directory of a network; its client lanes live in
@@ -809,8 +810,8 @@ func (p *Plugin) dropReservedLocked(sessID int64) (r *reservedSeq, burned bool) 
 // After the release, a refusal that concerns the reservation's client lane is
 // acted on (spec §6.5): GAP_BUDGET_EXCEEDED abandons the lane, which the next
 // statement replaces; LANE_BUDGET_EXCEEDED pins this process to the legacy
-// lane; and the ingress's pre-activation refusal drops the cached SI info so
-// the next statement re-reads client_lanes_enabled. The first two tell the
+// lane; and the ingress's pre-activation refusal expires the cached SI info
+// (with client_lanes_enabled cleared) so the next statement re-reads it. The first two tell the
 // client to retry. A legacy-lane GAP_BUDGET_EXCEEDED changes nothing.
 func (p *Plugin) OnException(ctx context.Context, sess chsession.Session, exc *chproto.Exception) error {
 	if p == nil || sess == nil || exc == nil {
@@ -863,7 +864,7 @@ func (p *Plugin) applyLaneRotation(ctx context.Context, r *reservedSeq, rotation
 		logger.Errorw("sistatement: client lane budget exhausted for "+p.account+"; this process stays on the legacy client_seq lane", "lane", lane, "statement_id", r.statementID, "network_id", r.networkID)
 		exc.Message = withRetryHint(exc.Message, "retry: the agent switched to its legacy client_seq lane")
 	case rotationLanesDisabled:
-		p.forgetInfo(r.database)
+		p.expireLanesInfo(r.database)
 	}
 }
 

@@ -1641,26 +1641,33 @@ func defaultAgentStateBase() (string, bool) {
 // directory and a label for logs (plan decision P4).
 //
 // An explicit state_dir keeps one <state_dir>/<signer>.seq for every network
-// and the client lanes of every network in <state_dir>/<signer>/lanes. With
-// lanes off (the driver sidecar) the counter is opened here, at build: a
-// directory that cannot be created or a counter another process holds (its
-// flock admits a single opener) stops startup instead of refusing every SI
-// INSERT later (final review I2); the caller owns the returned counter until
-// the plugin takes it as Options.Seq. With lanes auto the counter is opened
-// lazily, at the first statement that uses the legacy lane, and then shared
-// by every network (only the directories are created at build): a process that writes on a client lane must never take
-// the legacy lock, or a second agent sharing the state directory (spec
-// 2026-10-09 §6.5, §9.2) could not start. The per-lane flock is that mode's
-// guard against two processes sharing a sequence (preflight F1).
+// (unchanged from Plan A1) and each network's client lanes in
+// <state_dir>/<network_id>/lanes, so two networks never share a lane
+// directory (controller ruling C3). With lanes off (the driver sidecar) the
+// counter is opened here, at build: a directory that cannot be created or a
+// counter another process holds (its flock admits a single opener) stops
+// startup instead of refusing every SI INSERT later (final review I2); the
+// caller owns the returned counter until the plugin takes it as Options.Seq.
+// With lanes auto the counter is opened lazily, at the first statement that
+// uses the legacy lane, and then shared by every network; only the state
+// directory is created at build, so it still fails fast. A process that
+// writes on a client lane must never take the legacy lock, or a second agent
+// sharing the state directory (spec 2026-10-09 §6.5, §9.2) could not start;
+// the per-lane flock is that mode's guard against two processes sharing a
+// sequence (preflight F1).
 //
 // Without a state_dir the counter and the lanes live in
-// <base>/si/<network_id>/<signer>/ and are opened at the first SI write for
-// that network, because the network id is part of the path. A failed lazy
-// open is not remembered, so a later INSERT retries it. The plugin closes
-// what it opened.
+// <base>/si/<network_id>/<signer>/, already scoped by network, and are opened
+// at the first SI write for that network. A failed lazy open is not
+// remembered, so a later INSERT retries it. The plugin closes what it opened.
 func agentSeqOpener(stateDir, signer string, lanes sistatement.LaneMode, defaultBase func() (string, bool)) (*sistatement.SeqCounter, func(string) (*sistatement.SeqCounter, error), func(string) (string, error), string, error) {
 	if strings.TrimSpace(stateDir) != "" {
-		laneDir := func(string) (string, error) { return filepath.Join(stateDir, strings.ToLower(signer)), nil }
+		laneDir := func(networkID string) (string, error) {
+			if err := validNetworkDirName(networkID); err != nil {
+				return "", err
+			}
+			return filepath.Join(stateDir, networkID), nil
+		}
 		if lanes == sistatement.LaneModeOff {
 			seq, err := sistatement.OpenSeqCounter(stateDir, signer)
 			if err != nil {
@@ -1669,10 +1676,9 @@ func agentSeqOpener(stateDir, signer string, lanes sistatement.LaneMode, default
 			return seq, nil, laneDir, stateDir, nil
 		}
 		// Nothing is locked at build, but a state directory that cannot be
-		// created still stops startup: the lane directory is created now.
-		siDir, _ := laneDir("")
-		if _, err := sistatement.OpenLanePool(siDir, sistatement.LanePoolOptions{}); err != nil && !errors.Is(err, sistatement.ErrLanesUnsupported) {
-			return nil, nil, nil, "", fmt.Errorf("create the client lane directory in state_dir %s: %w", stateDir, err)
+		// created still stops startup.
+		if err := os.MkdirAll(stateDir, 0o700); err != nil {
+			return nil, nil, nil, "", fmt.Errorf("create state_dir %s: %w", stateDir, err)
 		}
 		return nil, sharedSeqOpener(func() (*sistatement.SeqCounter, error) {
 			return sistatement.OpenSeqCounter(stateDir, signer)
@@ -1683,10 +1689,8 @@ func agentSeqOpener(stateDir, signer string, lanes sistatement.LaneMode, default
 		return nil, nil, nil, "", fmt.Errorf("state_dir is required on %s (no default state directory)", runtime.GOOS)
 	}
 	siDir := func(networkID string) (string, error) {
-		// The id comes from the hosting indexer; it must name exactly one
-		// directory below <base>/si.
-		if networkID == "" || networkID == "." || networkID == ".." || strings.ContainsAny(networkID, `/\`) {
-			return "", fmt.Errorf("network id %q cannot name a state directory", networkID)
+		if err := validNetworkDirName(networkID); err != nil {
+			return "", err
 		}
 		return config.AgentSIStateDir(base, networkID, signer), nil
 	}
@@ -1697,6 +1701,15 @@ func agentSeqOpener(stateDir, signer string, lanes sistatement.LaneMode, default
 		}
 		return sistatement.OpenSeqCounter(dir, signer)
 	}, siDir, filepath.Join(base, "si"), nil
+}
+
+// validNetworkDirName refuses a network id that is not exactly one path
+// element: the id comes from the hosting indexer and names a state directory.
+func validNetworkDirName(networkID string) error {
+	if networkID == "" || networkID == "." || networkID == ".." || strings.ContainsAny(networkID, `/\`) {
+		return fmt.Errorf("network id %q cannot name a state directory", networkID)
+	}
+	return nil
 }
 
 // sharedSeqOpener opens one counter at its first successful call and returns

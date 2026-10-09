@@ -414,3 +414,53 @@ func TestLaneStoreErrorsWrapTheSeqSentinels(t *testing.T) {
 		t.Fatal("a closed lane is not abandoned")
 	}
 }
+
+// Ruling C1: max_inflight_per_lane caps client lanes only. The legacy lane
+// (the driver sidecar, lanes off, a network without lanes) stays unbounded,
+// as in Plan A1.
+func TestSelectorNeverCapsTheLegacyLane(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		mode         LaneMode
+		lanesEnabled bool
+	}{{"lanes off", LaneModeOff, true}, {"lanes not enabled", LaneModeAuto, false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := &laneMetrics{}
+			sel, _ := newSelectorWith(t, tc.mode, 1, m)
+			legacy := &fakeLegacyLane{}
+			const n = 20
+			var (
+				wg    sync.WaitGroup
+				mu    sync.Mutex
+				dones []func()
+				errs  []error
+			)
+			for range n {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+					defer cancel()
+					lane, done, err := sel.pick(ctx, tc.lanesEnabled, legacy)
+					mu.Lock()
+					defer mu.Unlock()
+					if err != nil || lane.Lane() != "" {
+						errs = append(errs, err)
+						return
+					}
+					dones = append(dones, done)
+				}()
+			}
+			wg.Wait()
+			if len(errs) != 0 || len(dones) != n {
+				t.Fatalf("%d of %d concurrent legacy picks failed or waited: %v", len(errs), n, errs)
+			}
+			if _, inflight := m.snapshot(); inflight != n {
+				t.Fatalf("inflight gauge = %d, want %d (the legacy lane is still counted)", inflight, n)
+			}
+			for _, d := range dones {
+				d()
+			}
+		})
+	}
+}

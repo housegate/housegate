@@ -4,9 +4,11 @@ package sistatement
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,10 +20,31 @@ import (
 	sicore "github.com/housegate/housegate/pkg/storageintegrity"
 )
 
-// lanedMetrics observes both the seq and the lane surfaces.
+// lanedMetrics observes the seq, lane and discovery surfaces.
 type lanedMetrics struct {
 	seqMetrics
-	lanes laneMetrics
+	lanes  laneMetrics
+	failMu sync.Mutex
+	failed map[string]int
+}
+
+func (m *lanedMetrics) SIDiscoveryFailed(step string) {
+	m.failMu.Lock()
+	defer m.failMu.Unlock()
+	if m.failed == nil {
+		m.failed = map[string]int{}
+	}
+	m.failed[step]++
+}
+
+func (m *lanedMetrics) failedSteps() map[string]int {
+	m.failMu.Lock()
+	defer m.failMu.Unlock()
+	out := map[string]int{}
+	for k, v := range m.failed {
+		out[k] = v
+	}
+	return out
 }
 
 func (m *lanedMetrics) LaneRotated(reason string) { m.lanes.LaneRotated(reason) }
@@ -444,9 +467,9 @@ func TestLanes_InfoIsRefreshedAfterTheTTLSoActivationIsPickedUp(t *testing.T) {
 	}
 }
 
-// The ingress's pre-activation refusal drops the cached info at once, so the
+// The ingress's pre-activation refusal expires the cached info at once, so the
 // next statement re-reads client_lanes_enabled from the hosting indexer.
-func TestLanes_LanesDisabledRefusalDropsTheCachedInfo(t *testing.T) {
+func TestLanes_LanesDisabledRefusalExpiresTheCachedInfo(t *testing.T) {
 	d := &switchingDiscovery{fakeDiscovery: fakeDiscovery{info: goodInfo(), writer: true}, lanes: true}
 	f, _ := discoveryLanedFixture(t, d)
 	sess := newSession(1, "")
@@ -459,17 +482,102 @@ func TestLanes_LanesDisabledRefusalDropsTheCachedInfo(t *testing.T) {
 	}
 	f.p.OnQueryComplete(context.Background(), sess)
 	f.p.mu.Lock()
-	_, cached := f.p.infos["shop"]
+	entry, cached := f.p.infos["shop"]
 	f.p.mu.Unlock()
-	if cached {
-		t.Fatal("the lanes-disabled refusal left the cached info in place")
+	if !cached || !entry.at.IsZero() || entry.info.ClientLanesEnabled || entry.info.NetworkID != testNetworkID {
+		t.Fatalf("after the lanes-disabled refusal the cached info is %+v (present %v); want it expired with lanes cleared and the network id kept", entry, cached)
 	}
-	d.setLanes(false)
-	_, next := f.claim(t, newSession(2, ""))
+	// The re-read fails: the stale answer keeps the network id and the legacy lane.
+	d.mu.Lock()
+	d.infoErr = errors.New("indexer unreachable")
+	d.mu.Unlock()
+	s2 := newSession(2, "")
+	_, next := f.claim(t, s2)
+	f.p.OnQuerySuccess(context.Background(), s2, next.Flat())
+	f.p.OnQueryComplete(context.Background(), s2)
 	if next.IsLaned() || d.calls() != 2 {
-		t.Fatalf("next id = %+v calls=%d; want a re-read answer and a legacy id", next, d.calls())
+		t.Fatalf("next id = %+v calls=%d; want a refresh attempt and a legacy id", next, d.calls())
+	}
+	d.mu.Lock()
+	d.infoErr = nil
+	d.mu.Unlock()
+	d.setLanes(false)
+	_, third := f.claim(t, newSession(3, ""))
+	if third.IsLaned() || d.calls() != 3 {
+		t.Fatalf("third id = %+v calls=%d; want a re-read answer and a legacy id", third, d.calls())
 	}
 	if recycled, _ := f.metrics.seqSnapshot(); recycled != 1 {
 		t.Fatalf("recycled = %d; the refused laned seq is released to its lane", recycled)
+	}
+}
+
+// scriptedDiscovery answers from a script the test controls: an error,
+// or an answer with client_lanes_enabled.
+type scriptedDiscovery struct {
+	mu    sync.Mutex
+	lanes bool
+	err   error
+	calls int
+}
+
+func (d *scriptedDiscovery) StorageIntegrityInfo(context.Context, string) (registry.StorageIntegrityInfo, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.calls++
+	if d.err != nil {
+		return registry.StorageIntegrityInfo{}, d.err
+	}
+	info := goodInfo()
+	info.ClientLanesEnabled = d.lanes
+	return info, nil
+}
+
+func (d *scriptedDiscovery) StorageIntegrityWriterCheck(context.Context, string, string) (bool, error) {
+	return true, nil
+}
+
+func (d *scriptedDiscovery) set(lanes bool, err error) {
+	d.mu.Lock()
+	d.lanes, d.err = lanes, err
+	d.mu.Unlock()
+}
+
+func (d *scriptedDiscovery) count() int { d.mu.Lock(); defer d.mu.Unlock(); return d.calls }
+
+// Ruling C2 (stale-while-error): an expired answer triggers a refresh, but a
+// failed refresh keeps serving the last good answer (never the configured
+// network id or a refusal) and the next statement retries; a later
+// successful refresh replaces it.
+func TestLanes_ExpiredInfoIsServedWhileTheRefreshFails(t *testing.T) {
+	d := &scriptedDiscovery{}
+	f, clock := discoveryLanedFixture(t, d)
+	claimSettled := func(id int64) sicore.StatementID {
+		sess := newSession(id, "")
+		_, sid := f.claim(t, sess)
+		f.p.OnQuerySuccess(context.Background(), sess, sid.Flat())
+		f.p.OnQueryComplete(context.Background(), sess)
+		return sid
+	}
+	if first := claimSettled(1); first.IsLaned() || d.count() != 1 {
+		t.Fatalf("first id %+v calls %d", first, d.count())
+	}
+	*clock = clock.Add(infoSuccessTTL + time.Second)
+	d.set(true, errors.New("indexer unreachable"))
+	// No network id is configured: dropping the stale answer would refuse.
+	if second := claimSettled(2); second.IsLaned() || d.count() != 2 {
+		t.Fatalf("refresh failed: id %+v calls %d; want the stale answer served", second, d.count())
+	}
+	if third := claimSettled(3); third.IsLaned() || d.count() != 3 {
+		t.Fatalf("next statement: id %+v calls %d; want another refresh attempt", third, d.count())
+	}
+	if f.metrics.failedSteps()["info"] != 2 {
+		t.Fatalf("discovery failures = %v, want both failed refreshes counted", f.metrics.failedSteps())
+	}
+	d.set(true, nil)
+	if fourth := claimSettled(4); !fourth.IsLaned() || d.count() != 4 {
+		t.Fatalf("refresh recovered: id %+v calls %d; want lanes to engage", fourth, d.count())
+	}
+	if fifth := claimSettled(5); !fifth.IsLaned() || d.count() != 4 {
+		t.Fatalf("fresh answer: id %+v calls %d; want it cached", fifth, d.count())
 	}
 }
