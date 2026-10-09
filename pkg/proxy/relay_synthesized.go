@@ -41,8 +41,7 @@ func (r *Relay) forwardSignedInsert(ctx context.Context, qctx *plugin.QueryConte
 
 	up := r.sess.Upstream()
 	if up == nil {
-		r.hooks.OnQueryAbort(ctx, qctx)
-		r.hooks.OnQueryComplete(ctx, r.sess)
+		r.abortUnsentQuery(ctx, qctx)
 		return chsession.ErrNoUpstream
 	}
 	up.SetCompression(fw.compression)
@@ -116,6 +115,11 @@ func (r *Relay) forwardSignedInsert(ctx context.Context, qctx *plugin.QueryConte
 	// Raw buffered Data uses the client's original framing regardless of any
 	// QueryPlugin mutation, exactly like the ordinary relay path.
 	q.Compression = fw.compression
+	// Every termination above this line is pre-send and goes through
+	// abortUnsentQuery (directly or via fw.rejectClose / fw.rejectResume).
+	// From WriteQuery on, a failure may already have handed bytes to the
+	// upstream connection, so the abort paths below never set
+	// UpstreamQueryUnsent and a reserved client_seq stays burned.
 	if err := up.WriteQuery(q); err != nil {
 		return forwardFail("forward query", err)
 	}
@@ -449,9 +453,10 @@ func (r *Relay) runSynthesizedInsert(ctx context.Context, qctx *plugin.QueryCont
 	q := qctx.Query
 	// Refusals on this agent-side lane are not marked unspent: the marker is a
 	// server-to-agent signal, and the agent releases its own failures directly.
+	// Both closures run only before forwardSignedInsert starts WriteQuery, so
+	// they carry Relay's UpstreamQueryUnsent proof (spec 2026-10-09 §6.5).
 	rejectClose := func(err error) error {
-		r.hooks.OnQueryAbort(ctx, qctx)
-		r.hooks.OnQueryComplete(ctx, r.sess)
+		r.abortUnsentQuery(ctx, qctx)
 		r.writeExceptionToClient(ctx, err)
 		return err
 	}
@@ -459,8 +464,7 @@ func (r *Relay) runSynthesizedInsert(ctx context.Context, qctx *plugin.QueryCont
 	// retryable rejection ends only this query and leaves both packet streams on
 	// a clean boundary.
 	rejectResume := func(err error) error {
-		r.hooks.OnQueryAbort(ctx, qctx)
-		r.hooks.OnQueryComplete(ctx, r.sess)
+		r.abortUnsentQuery(ctx, qctx)
 		r.writeExceptionToClient(ctx, err)
 		return fmt.Errorf("%w: %w", errQueryRejectedResume, err)
 	}
@@ -495,8 +499,7 @@ func (r *Relay) runSynthesizedInsert(ctx context.Context, qctx *plugin.QueryCont
 			return rejectClose(fmt.Errorf("synthesized INSERT %q received an oversized client packet: %w", q.ID, decErr))
 		}
 		if pkt == nil || decErr != nil {
-			r.hooks.OnQueryAbort(ctx, qctx)
-			r.hooks.OnQueryComplete(ctx, r.sess)
+			r.abortUnsentQuery(ctx, qctx)
 			if pkt == nil && decErr == nil {
 				return io.EOF
 			}
@@ -510,8 +513,7 @@ func (r *Relay) runSynthesizedInsert(ctx context.Context, qctx *plugin.QueryCont
 		case uint64(chproto.ClientDataCode):
 			info, err := chproto.InspectClientDataPacket(pkt.Raw, compression)
 			if err != nil {
-				r.hooks.OnQueryAbort(ctx, qctx)
-				r.hooks.OnQueryComplete(ctx, r.sess)
+				r.abortUnsentQuery(ctx, qctx)
 				return fmt.Errorf("classify synthesized client data packet: %w", err)
 			}
 			if info.BlockName != "" {
@@ -529,8 +531,7 @@ func (r *Relay) runSynthesizedInsert(ctx context.Context, qctx *plugin.QueryCont
 		case uint64(chproto.ClientCancelCode):
 			// Nothing reached upstream. ClickHouse answers a cancelled query with
 			// EndOfStream; do the same locally and drop the plan.
-			r.hooks.OnQueryAbort(ctx, qctx)
-			r.hooks.OnQueryComplete(ctx, r.sess)
+			r.abortUnsentQuery(ctx, qctx)
 			logger.Debugw("synthesized INSERT cancelled by client before forwarding", "query_id", q.ID)
 			if err := client.WriteRawPacket([]byte{byte(chproto.ServerEndOfStreamCode)}); err != nil {
 				return fmt.Errorf("write end-of-stream after synthesized cancel: %w", err)
@@ -546,8 +547,7 @@ func (r *Relay) runSynthesizedInsert(ctx context.Context, qctx *plugin.QueryCont
 	// 2. Encode the payload at the upstream codec's negotiated revision.
 	up := r.sess.Upstream()
 	if up == nil {
-		r.hooks.OnQueryAbort(ctx, qctx)
-		r.hooks.OnQueryComplete(ctx, r.sess)
+		r.abortUnsentQuery(ctx, qctx)
 		return chsession.ErrNoUpstream
 	}
 	up.SetCompression(compression)

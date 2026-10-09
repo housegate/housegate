@@ -1442,16 +1442,16 @@ func (r *Relay) runDeferredInsert(ctx context.Context, qctx *plugin.QueryContext
 	q := qctx.Query
 	if plan.MaxPayloadBytes == 0 {
 		err := fmt.Errorf("query %q: deferred INSERT plan requires MaxPayloadBytes > 0", q.ID)
-		r.hooks.OnQueryAbort(ctx, qctx)
-		r.hooks.OnQueryComplete(ctx, r.sess)
+		r.abortUnsentQuery(ctx, qctx)
 		r.writeExceptionToClient(ctx, err)
 		return err
 	}
 	// Refusals on this agent-side lane are not marked unspent: the marker is a
 	// server-to-agent signal, and the agent releases its own failures directly.
+	// Both closures run only before forwardSignedInsert starts WriteQuery, so
+	// they carry Relay's UpstreamQueryUnsent proof (spec 2026-10-09 §6.5).
 	rejectClose := func(err error) error {
-		r.hooks.OnQueryAbort(ctx, qctx)
-		r.hooks.OnQueryComplete(ctx, r.sess)
+		r.abortUnsentQuery(ctx, qctx)
 		r.writeExceptionToClient(ctx, err)
 		return err
 	}
@@ -1459,14 +1459,12 @@ func (r *Relay) runDeferredInsert(ctx context.Context, qctx *plugin.QueryContext
 	// written upstream, so a retryable admission rejection can end only this
 	// query while leaving both packet streams on a clean boundary.
 	rejectResume := func(err error) error {
-		r.hooks.OnQueryAbort(ctx, qctx)
-		r.hooks.OnQueryComplete(ctx, r.sess)
+		r.abortUnsentQuery(ctx, qctx)
 		r.writeExceptionToClient(ctx, err)
 		return fmt.Errorf("%w: %w", errQueryRejectedResume, err)
 	}
 	if err := client.WriteSampleBlock(plan.SampleColumns); err != nil {
-		r.hooks.OnQueryAbort(ctx, qctx)
-		r.hooks.OnQueryComplete(ctx, r.sess)
+		r.abortUnsentQuery(ctx, qctx)
 		return fmt.Errorf("write deferred sample block: %w", err)
 	}
 
@@ -1499,8 +1497,7 @@ func (r *Relay) runDeferredInsert(ctx context.Context, qctx *plugin.QueryContext
 			return rejectClose(fmt.Errorf("deferred INSERT %q payload exceeds limit of %d bytes: %w", q.ID, plan.MaxPayloadBytes, decErr))
 		}
 		if pkt == nil || (decErr != nil && !errors.Is(decErr, chproto.ErrDecode)) {
-			r.hooks.OnQueryAbort(ctx, qctx)
-			r.hooks.OnQueryComplete(ctx, r.sess)
+			r.abortUnsentQuery(ctx, qctx)
 			if decErr == nil {
 				decErr = io.EOF
 			}
@@ -1516,8 +1513,7 @@ func (r *Relay) runDeferredInsert(ctx context.Context, qctx *plugin.QueryContext
 		case uint64(chproto.ClientDataCode):
 			info, err := chproto.InspectClientDataPacket(pkt.Raw, compression)
 			if err != nil {
-				r.hooks.OnQueryAbort(ctx, qctx)
-				r.hooks.OnQueryComplete(ctx, r.sess)
+				r.abortUnsentQuery(ctx, qctx)
 				return fmt.Errorf("classify deferred client data packet: %w", err)
 			}
 			if info.BlockName != "" {
@@ -1560,8 +1556,7 @@ func (r *Relay) runDeferredInsert(ctx context.Context, qctx *plugin.QueryContext
 		case uint64(chproto.ClientCancelCode):
 			// Nothing reached upstream. ClickHouse answers a cancelled query
 			// with EndOfStream; do the same locally and drop the buffer.
-			r.hooks.OnQueryAbort(ctx, qctx)
-			r.hooks.OnQueryComplete(ctx, r.sess)
+			r.abortUnsentQuery(ctx, qctx)
 			if err := client.WriteRawPacket([]byte{byte(chproto.ServerEndOfStreamCode)}); err != nil {
 				return fmt.Errorf("write end-of-stream after deferred cancel: %w", err)
 			}
@@ -1579,6 +1574,20 @@ func (r *Relay) runDeferredInsert(ctx context.Context, qctx *plugin.QueryContext
 		lane: "deferred INSERT", compression: compression, markerRaw: markerRaw, terminatorRaw: terminatorRaw,
 		payload: buffered, payloadBytes: bufferedBytes, rejectClose: rejectClose, rejectResume: rejectResume,
 	})
+}
+
+// abortUnsentQuery terminates a signed-INSERT-lane query that never reached
+// the upstream writer: it records UpstreamQueryUnsent before firing the abort
+// and completion hooks, so an abort hook may treat the termination as proof
+// that no byte of the Query left Housegate (spec 2026-10-09 §6.5: sistatement
+// releases the client_seq it reserved in the strict input-complete hook).
+// Only call sites that run before forwardSignedInsert starts WriteQuery may
+// use it; once a write began, a failure is ambiguous and must take the
+// ordinary abort path, which leaves the flag unset.
+func (r *Relay) abortUnsentQuery(ctx context.Context, qctx *plugin.QueryContext) {
+	qctx.UpstreamQueryUnsent = true
+	r.hooks.OnQueryAbort(ctx, qctx)
+	r.hooks.OnQueryComplete(ctx, r.sess)
 }
 
 func queryMayStreamClientData(qctx *plugin.QueryContext) bool {
