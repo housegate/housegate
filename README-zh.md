@@ -132,22 +132,27 @@ HOUSEGATE_AGE_IDENTITY_FILE=~/.housegate.age \
 
 `auth.writer_predicate: contract` 需要 registry 能回答合约的 `isDatabaseWriter`：嵌入宿主的链状态 registry，或内存（YAML）network state。RPC network-state source（`network_state.source` 为 `http(s)://` URL）不实现它，因此 server 模式下 `auth.enabled: true` 且使用 RPC source 的配置，在默认值下会拒绝启动，并在错误里点名这个 key。此时请设置 `auth.writer_predicate: bitmap`，沿用存储 bitmap 检查（含 address(0) 并集）。
 
-### `rewriter` — 外部 SQL Rewriter gRPC 服务
+### `rewriter` — SQL Rewriter（gRPC 服务或进程内引擎）
 
-rewriter 是物理/逻辑数据库映射的唯一权威。连接上的每条 SQL 都会过它一遍。要点：
+rewriter 是物理/逻辑数据库映射的唯一权威。连接上的每条 SQL 都会过它一遍。后端由 `rewriter.engine` 选择：`grpc`（默认）调用外部 `sql-rewriter` 服务；`native` 通过 FFI 在进程内运行 rewriter-go 引擎。要点：
 
-- **两阶段 Rewrite。** 阶段 1 用空 options 调一次 gRPC，拿到 AST 解析得到的 accessed table names。阶段 2 构造 `RewriteTableForSelectStmtArgs`（通过 `SentioNetworkTableMapper` 做 sentio-network 的 table 名解析）和 `RewriteTableForDynamicArgs`（鉴权过滤后的 `database_map`，再加上指向其它 indexer 的 logical 的 `remote_upstreams`），再调一次。
-- **权限敏感的 `database_map`。** 只包含连接 account 拥有读/写/admin 权限的数据库；不可访问的数据库下的表通过 rewriter 不可寻址。
-- **Fail-open。** gRPC 错误或 `UnsupportedStatement` 会回退到原始 SQL 并打 debug 级日志；rewriter 抖动不会阻塞 query。
+- **每条语句调一次引擎。** 每条语句只发给后端一次，附带一个由 network state 构造的 `RewriteTableDynamicArgs`（鉴权过滤后的 `database_map`、`known_physical_databases`，以及绑定到其它 indexer 的 logical 对应的 `remote_upstreams`）；由后端解析表名并对语句分类。开启 storage integrity 且读模式为 `unsafe_latest` 时，会再调第二次，带上已 promote 的 part 排除列表。
+- **权限敏感的 `database_map`。** 只包含连接 account 拥有读/写/admin 权限的数据库；不可访问的数据库下的表不可寻址。
+- **每次拒绝都 fail-closed。** rewriter 的任何非 `Success` 应答（包括 `UnsupportedStatement`），以及 rewriter 收到语句之后发生的任何失败，都会以 Exception 返回给客户端，不向 upstream 转发任何内容；是否开启 storage integrity 都一样。启动时无法构建 rewriter，或请求无法送达 rewriter，同样分别是启动失败 / 返回 Exception，除非在关闭 storage integrity 的前提下设置了 `rewriter.fail_open_on_unavailable: true`：此时启动会在没有 rewrite 插件的情况下继续，或把该 query 的原始 SQL 转发出去，并打 warn 日志。Router-only server（没有 `shard`、没有 `upstream`、也没有宿主注入的 cluster）从不构建 rewriter，不受影响。开启 storage integrity 时，启动要求后端支持 contract V2（native 需 rewriter-go v0.17.0+，gRPC 需 rewriter-grpc v0.17.0+）。详见 [docs/rewriter-fail-closed.md](docs/rewriter-fail-closed.md)。
 - **错误反向映射。** 当 upstream 返回的 `Exception` 引用了被重写的库表名时，同一个每连接 Rewriter 通过 `RewriteErrorMessage` 把消息映射回客户端实际使用的名字。
-- **wire-level `hello.Database` 重写。** `OnHello` 把 `hello.Database` 替换成 `rewriter.physical_database`；用户输入值保留在 `SessionState.LogicalDatabase`。
+- **wire-level `hello.Database` 重写。** `OnHello` 把 `hello.Database` 替换成 `rewriter.physical_database`；用户输入值保留在 `SessionState.LogicalDatabase`。如果 hello 中的数据库本身就等于 `rewriter.physical_database`（Sentio indexer driver 经由其 sidecar 就是这样连接的），它不算 logical database：该 session 没有 logical 上下文，因此语句必须用限定的 logical 名（`db1.t`）指明表，未限定的表名会被拒绝。详见 [docs/table-reference-hardening.md](docs/table-reference-hardening.md)。
 
 | Key | 类型 | 必填 | 默认值 | 说明 |
 |-----|------|------|--------|------|
 | `rewriter.service_addr` | string | 否 | `localhost:50051` | `sql-rewriter` gRPC 地址 |
+| `rewriter.engine` | string | 否 | `grpc` | `grpc` — 外部 sql-rewriter 服务（默认）；`native` — 进程内 rewriter-go 引擎（忽略 `service_addr`） |
+| `rewriter.native_library_path` | string | 否 | `` | `libpolyglot_sql_ffi.{so,dylib}` 的路径（仅 native 引擎；为空时依次取 `POLYGLOT_SQL_FFI_PATH` 环境变量、系统路径） |
+| `rewriter.native_library_release` | string | 否 | `` | 自动下载 FFI 库所用的 rewriter-go release tag（仅 native；缓存在用户 cache 目录下；`native_library_path` 优先；镜像可通过 `rewriter.native_library_release_base_url` 覆盖） |
+| `rewriter.native_library_sha256` | string | 否 | `` | 可选，对下载库的 sha256 固定（64 位 hex）；不设置时，若 release 带有 `SHA256SUMS` 资产则按它校验 |
 | `rewriter.timeout` | duration | 否 | `5s` | 单次 gRPC 超时 |
 | `rewriter.physical_database` | string | 否 | `` | 本部署中承载所有 logical database 的那个唯一物理 ClickHouse 数据库。空 = 同时关闭 `database_map` 和 `hello.Database` 替换 |
 | `rewriter.delimiter` | string | 否 | `_` | `<logical>` 与 `<original_table>` 之间的分隔符 |
+| `rewriter.fail_open_on_unavailable` | bool | 否 | `false` | 启动时无法构建 rewriter，或某条 query 的请求无法送达 rewriter 时，不拒绝，而是在没有 rewriter 的情况下运行 / 转发原始 SQL，并打 warn 日志。对引擎的拒绝、以及引擎收到语句之后的失败一律不生效；与 `storage_integrity.enabled` 同时设置会被判为非法配置 |
 
 ### `storage_integrity` — 受保护表的读写策略
 
