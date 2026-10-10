@@ -17,9 +17,14 @@ import (
 type Status uint8
 
 const (
-	// Ordinary is not governed: another indexer, Legacy, or registry not enabled.
+	// Ordinary is not governed on this host: a table another indexer hosts —
+	// including one another SI indexer of the network owns (spec 2026-10-10
+	// §9, §10) — a Legacy table, or any table while the registry is not
+	// enabled. Its reads and writes are plain ClickHouse here; the owning
+	// host, if any, governs it.
 	Ordinary Status = iota
-	// Pending includes default deny: on the SI indexer and not recorded.
+	// Pending includes default deny: a table of a database this host's
+	// enrolled SI indexer hosts that the registry has not recorded.
 	Pending
 	// Refused carries the arbiter's refused_code and refused_reason.
 	Refused

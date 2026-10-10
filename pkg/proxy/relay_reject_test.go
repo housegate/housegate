@@ -167,6 +167,12 @@ func TestRelay_StagedNoLongerAcceptsWritesRejection_KeepsSessionAndServesNextQue
 	testStagedSessionPreservingRejection(t, chproto.CodeQueryIsProhibited, chproto.TableNoLongerAcceptsWritesMessage("db1.t"))
 }
 
+// Spec 2026-10-10 §6.4, §9: a statement whose table's owning indexer has no
+// Active SNode yet is refused retryably with 733, and the session survives.
+func TestRelay_StagedSourceUnavailableRejection_KeepsSessionAndServesNextQuery(t *testing.T) {
+	testStagedSessionPreservingRejection(t, chproto.CodeTableIsBeingRestarted, chproto.SourceUnavailableMessage("db1.t"))
+}
+
 func testStagedSessionPreservingRejection(t *testing.T, code int32, message string) {
 	t.Helper()
 	hooks := &stagedRejectHooks{rejectOne: true, rejectErr: &chproto.ClientError{
@@ -395,6 +401,17 @@ func TestRelay_DeferredUpstreamNoLongerAcceptsWrites_KeepsSessionAndServesNextQu
 	})
 }
 
+// The server-mode Housegate answers a statement whose table's source is not
+// Active yet with the session-preserving 733 after it consumed the complete
+// staged input; the agent must keep its session too.
+func TestRelay_DeferredUpstreamSourceUnavailable_KeepsSessionAndServesNextQuery(t *testing.T) {
+	testDeferredUpstreamSessionPreservingRejection(t, &chproto.Exception{
+		Code:    proto.Error(chproto.CodeTableIsBeingRestarted),
+		Name:    "DB::Exception",
+		Message: chproto.SourceUnavailableMessage("db1.t"),
+	})
+}
+
 func testDeferredUpstreamSessionPreservingRejection(t *testing.T, rejection *chproto.Exception) {
 	t.Helper()
 	baseHooks := &deferredInsertHooks{}
@@ -495,6 +512,10 @@ func TestSessionPreservingIngressException(t *testing.T) {
 		{"no longer accepts writes", chproto.CodeQueryIsProhibited, chproto.TableNoLongerAcceptsWritesMessage("net1.events"), true},
 		{"no longer accepts writes under 733", chproto.CodeTableIsBeingRestarted, chproto.TableNoLongerAcceptsWritesMessage("net1.events"), false},
 		{"activation under 392", chproto.CodeQueryIsProhibited, chproto.TableActivatingMessage("net1.events"), false},
+		{"source unavailable", chproto.CodeTableIsBeingRestarted, chproto.SourceUnavailableMessage("net1.events"), true},
+		{"source unavailable under 392", chproto.CodeQueryIsProhibited, chproto.SourceUnavailableMessage("net1.events"), false},
+		{"source unavailable under 252", chproto.CodeTooManyParts, chproto.SourceUnavailableMessage("net1.events"), false},
+		{"source unavailable without a table id", chproto.CodeTableIsBeingRestarted, chproto.SourceUnavailableMessage(""), false},
 		{"refused", chproto.CodeQueryIsProhibited, "storage_integrity: table net1.events was refused: SCHEMA_INVALID: bad column", false},
 		{"table state unavailable", chproto.CodeQueryIsProhibited, "storage_integrity: table state is unavailable for this query", false},
 		{"governed create", chproto.CodeQueryIsProhibited, "storage_integrity: table net1.events is governed by storage integrity and cannot be created with data; create the table first, then INSERT", false},
