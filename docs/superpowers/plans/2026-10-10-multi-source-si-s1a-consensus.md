@@ -632,15 +632,21 @@ Append to `ConsensusParamsUpdate`, after `client_lanes = 10`:
   // it is the irreversible signed-claims activation (§6.7): it needs
   // table_registry (earlier or in the same update) and verifiers in the same
   // update, and its entry for table_registry.si_indexer_id restates the
-  // founding indexer with table_registry.activation_block. Afterwards every
-  // update resends the complete list: entries are only appended (an
-  // enrolment, §6.2), and an entry's signer changes only with a new
-  // enrollment_jws. max_writers must be at least its length. It joins the
-  // params digest only once set, so earlier digests are unchanged.
+  // founding indexer with table_registry.activation_block. In the same Apply
+  // that first sets it, every registered, non-evicted SNODE whose node id no
+  // entry names is evicted (reason "not named by the signed-claims
+  // activation"), and a named SNode registered with any role other than
+  // exactly SNODE refuses the update (contract §3c). Afterwards every update
+  // resends the complete list: entries are only appended (an enrolment,
+  // §6.2), and an entry's signer changes only with a new enrollment_jws.
+  // max_writers must be at least its length. It joins the params digest only
+  // once set, so earlier digests are unchanged.
   repeated SIIndexerEntry si_indexers = 11;
   // The governed verifier set (D7), sorted by node_id. Empty until the
-  // signed-claims activation, which lists at least three verifiers, among them
-  // every registered, non-evicted verifier with its registered key. Afterwards
+  // signed-claims activation, which lists at least three verifiers. In the same
+  // Apply, every registered, non-evicted VERIFIER it does not list is evicted
+  // (reason "not named by the signed-claims activation"), and a listed verifier
+  // registered under a different ed25519 key refuses the update. Afterwards
   // every update resends the complete list; entries may be added and removed,
   // a removed verifier is evicted, and no update may leave fewer than three
   // non-evicted listed verifiers. It joins the params digest only once set.
