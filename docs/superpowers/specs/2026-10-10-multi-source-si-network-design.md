@@ -143,7 +143,7 @@ Activation is one authority-signed update that sets `si_indexers` (on devnet2: `
 
 ### 7.2 Per-track progress
 
-- The safe prefix of track T is the last T block such that every T block up to it is safe; a statement block is safe when all its statements are Safe, a transition block when its own quorum, finality and last-mergeable are latched, and an acknowledged Rejected block (§7.5) counts as passed.
+- The safe prefix of track T is the last T block such that every T block up to it is safe. While T has no safe block after the activation cutover, its prefix is the cutover block (§7.6). A statement block is safe when all its statements are Safe, a transition block when its own quorum, finality and last-mergeable are latched, and an acknowledged Rejected block (§7.5) counts as passed.
 - The global `safe_block_seq` remains the contiguous prefix over all blocks and is a conservative value: everything up to it is safe, but tracks may be ahead of it.
 - The promotion frontier is per track: a statement is promotable only if its block is at most the first T block after T's prefix.
 - The manifest-debt gate is per track: while T's prefix is ahead of T's frontier in the latest published manifest, no new promotion is issued for T. Other tracks keep promoting.
@@ -152,12 +152,23 @@ Activation is one authority-signed update that sets `si_indexers` (on devnet2: `
 
 ### 7.3 Manifest
 
-- `replay.SafeSnapshotManifest` gains `track_frontiers: [{indexer_id, safe_block_seq, applied_promotion_seq}]`, sorted and unique. `ComputeManifestRoot` includes it only when non-empty, so the roots of existing manifests do not change. Validation requires each track's frontier to be at least that track's last block at or below `safe_block_seq`.
-- `applied_promotion_seq` is the last promotion of that track whose effects the manifest contains. It is exact because of the carry-over rule below: when a track's tables are replaced, every promotion the track has issued is acknowledged (the per-track debt gate), and when they are carried over, so is the parent's value. A track's represented promotions are therefore always a prefix of that track's own promotion sequence, even when one block needs several partition promotions. It is the resume cursor Spec D needs (§7.7).
+- `replay.SafeSnapshotManifest` gains `track_frontiers: [{indexer_id, safe_block_seq, applied_promotion_seq}]`, sorted and unique. `ComputeManifestRoot` includes it only when non-empty, so the roots of existing manifests do not change.
+- Every manifest published after activation is track-aware: it carries an entry for every SI indexer enrolled at publication time, including idle ones. Validation requires:
+  - an entry for each enrolled indexer and no other;
+  - each `safe_block_seq` at least the activation cutover block (§7.6), and at least that track's last block at or below the manifest's `safe_block_seq`;
+  - each entry's values never below the parent's for the same indexer.
+- Field meaning for an entry of track T:
+  - `safe_block_seq`: the manifest contains the effects of every block up to the activation cutover block and of every T block up to this value;
+  - `applied_promotion_seq` is a cutoff: every T promotion with a sequence at or below it is represented in the manifest, and no T promotion above it is.
 - A manifest contains exactly the effects of every block up to `safe_block_seq` and of every track's blocks up to its frontier.
-- The leader still publishes one manifest chain. A publication starts from the parent manifest and replaces the tables and frontier of every track whose prefix advanced since the parent with that track's current state. Every other track keeps its tables and frontier from the parent.
-  - The per-track debt gate (§7.2) guarantees that a track with a newly advanced prefix has no promotion beyond it, so its current state is exactly its new prefix.
-  - Carrying the other tracks over from the parent keeps the manifest exact even while one of them has a block partly promoted (some partitions acknowledged, others not). Taking the live state of such a track would publish its partial effects under the old frontier.
+- The leader still publishes one manifest chain. A publication starts from the parent manifest and sets each enrolled indexer's entry by the first of three rules that applies:
+  - **Advanced.** A track whose prefix advanced since the parent gets its current tables, its current prefix as `safe_block_seq`, and the global `PromotionSeq` at publication as `applied_promotion_seq`.
+    - The per-track debt gate (§7.2) guarantees the track has no promotion beyond its prefix, so its current state is exactly its new prefix and every promotion it has issued is acknowledged.
+    - No later promotion of the track exists yet, so the global sequence is a valid cutoff even when one block needed several partition promotions.
+  - **Carried.** Any other track that has a parent entry keeps that entry and its tables.
+    - This keeps the manifest exact even while the track has a block partly promoted (some partitions acknowledged, others not). Taking its live state would publish partial effects under the old cutoff.
+  - **Initialised.** A track that has not advanced and has no parent entry takes its initial values (§7.6). It keeps whatever tables the parent holds for it: its pre-activation tables if it was enrolled at activation, none if it was enrolled later.
+- Each track's represented promotions are therefore always exactly those at or below its cutoff. This is the resume cursor Spec D needs (§7.7).
 - The verifier's check that a job's block is above the base's `safe_block_seq` still holds, because a block is always sealed above the global prefix of the manifest it pins.
 - The manifest format change is a housegate `pkg/replay` change; every verifier and SNode must run it before activation (§7.6).
 
@@ -194,12 +205,19 @@ Snapshot v20 adds the open block's owner, the header track, `tracks_enabled`, th
 
 Every block sealed after it carries a track.
 
+**Cutover.** Applying the update records `track_cutover = {block_seq, promotion_seq}`: the sealed tip and the current `PromotionSeq`.
+- Drained means every statement up to the tip is Safe, so every promotion up to `promotion_seq` is acknowledged. The latest published manifest therefore contains the effects of all of them, whichever stage-1 owner each one belonged to.
+- Every indexer enrolled at activation gets the initial entry `{indexer_id, safe_block_seq: block_seq, applied_promotion_seq: promotion_seq}`. An owner that stays idle afterwards keeps this entry indefinitely through the carry rule.
+- An indexer enrolled after activation gets `{the global safe prefix, PromotionSeq}` as of its enrolment commit. It has no blocks and no promotions before that point, so both values are valid cut-offs.
+- v20 persists `track_cutover` and each indexer's initial entry.
+- The manifest published before activation has no `track_frontiers`. It is a global prefix, so Spec D's scalar cursor reads it exactly. The first publication after activation is the first track-aware one.
+
 ### 7.7 Compatibility with Spec D
 
 [Spec D](2026-08-18-storage-integrity-lag-replay-and-bootstrap-design.md) (Proposed, not implemented) resumes a safe replica from one scalar `applied_promotion_seq` and a `ManifestCheckpoint` carrying one such scalar. Once tracks are enabled, the promotions a manifest represents are no longer a prefix of the global promotion sequence: a track carried over from the parent can miss promotion 10, which belongs to its partly promoted block, while an advanced track's promotion 11 is included. A scalar cursor would then skip one or replay the other.
 
 Spec D, whenever it is implemented after stage 2, adopts per-track cursors:
-- `ManifestCheckpoint` returns the manifest with its `track_frontiers[].applied_promotion_seq` (§7.3);
+- `ManifestCheckpoint` returns the manifest with its `track_frontiers[].applied_promotion_seq` cut-offs (§7.3). A track-aware manifest has an entry for every enrolled indexer, idle ones included (initialised at the activation cutover or at enrolment, §7.6), so no track lacks a cursor;
 - a replica journals one cursor per track;
 - `SubscribePromotions` resumes each track strictly after its own cursor;
 - retention is judged per track.
@@ -321,6 +339,9 @@ Stage 2:
   - determinism of owner-switch sealing, including `spent_ids_root_after`;
   - manifest exactness under interleaved tracks, including a publication triggered by one track while another has a block partly promoted;
   - per-track `applied_promotion_seq` in that same interleaving: it covers every promotion of the advanced track and excludes the partly promoted track's newer promotions, including when one block needs several partition promotions;
+  - activation after multi-owner stage-1 history: v20 restore of `track_cutover` and the initial entries; the first track-aware publication carries an entry for every enrolled indexer, including an owner idle since activation, whose entry equals the cutover values;
+  - an indexer enrolled after activation: its initial entry, and its first publication when its first transition block is covered;
+  - for every case above, the promotions a replica must replay (each track's promotions above its cutoff) are exactly those not reflected in the manifest's tables;
   - per-track transition limits;
   - quarantine, automatic quarantine on Rejected, and release with acknowledgement;
   - replay of the quarantine commands:
