@@ -22,6 +22,7 @@ Every indexer of a Sentio network can join that network's storage-integrity (SI)
 - **Safe progress is one contiguous prefix.** It stops at the first block holding any non-Safe statement, and Rejected is not Safe (`arbiter:fsm/reads_work.go:42-75`). Promotions are issued only up to the prefix + 1 and never while a manifest is owed (`arbiter:fsm/apply.go:583-598`). At most one table-set transition block may be unpublished, because every block pins the published watermark (`arbiter:fsm/table_set_transition.go:232-249`). A consensus update needs every promotion acknowledged, no pending cleanup and no promoted unsafe part (`arbiter:fsm/consensus_updates.go:52-66`).
 - **Verification is already base-relative.** Every block pins the published manifest at seal time and is judged against it alone; claims are per (table, partition) and LtHash is additive (`arbiter:fsm/threeway.go:35-112`), so blocks of different tables do not interfere arithmetically.
 - **Promotion and membership trust every caller.** Promotions are sent to every connected SNode (`arbiter:orchestrator/promotion.go:168-191`). The FSM does not check which node acknowledged, and an `Applied:false` acknowledgement from any node consumes the promotion (`arbiter:fsm/apply.go:605-635`). The gRPC server is a plain `grpc.NewServer()` (`arbiter:cmd/arbiter/grpc.go:47`); RCs and acknowledgements are unsigned, and any caller may register a node or mark any node active (`arbiter:server/membership.go`).
+- **Authority work is re-signed at dispatch.** The FSM verifies a promotion's or cleanup's authority JWS against the current authority when the work is issued (`arbiter:fsm/apply.go:567`, `:738`) and records it. Every resend is signed again by the leader with the current {network id, genesis snapshot id, epoch} (`arbiter:orchestrator/promotion.go` `streamPromotion`, `arbiter:orchestrator/cleanup.go` `streamCleanup`, `arbiter:orchestrator/signer.go:25-39`). Acknowledgements are not epoch-checked.
 - **Every node holds every table.** The table-set reconciler materialises every registry incarnation on every node (`arbiter-core:dataplane/tableset/reconciler.go:383`) at Keeper path `/sentio/<keeper_shard_id>/unsafe/<db>__<table>`, replica name = node id (`arbiter-core:dataplane/ddl/naming.go:42-46`). The SNode attributes candidate parts by diffing the table's active parts before and after its own write (`arbiter-core:snode/staged.go:160-199, 319-326`), which is sound only while nothing else adds parts to that table. Verifiers byte-scan their own replica (`arbiter-core:verifier/backends.go:93-143`).
 - **The agent is already multi-host.** It resolves a database's hosting indexer and asks that indexer for table status and network id (`pkg/network/rpc.go:284-326`), keeps one seq/lane store per network and signer, and switches the session upstream to the hosting indexer (2026-10-09 spec D18/D19). The accumulator allows 64 open gap ranges per subject (`arbiter:accumulator/profile.go:22-26`), so statement-id uniqueness must stay network-wide in one accumulator.
 - **sentio-node governs one indexer.** A database is governed iff `IndexerID == SIIndexerID` and it is not a processor database, and a key the registry records is answered from the registry whatever its host (`sentio-node:storageintegrityadapter/tablestate/snapshot.go:64-92`); unrecorded tables of a governed database are Pending (`snapshot.go:149-154, 186-193`). Its config requires a non-empty genesis `table_ids` and `node_id == expected_source` (`sentio-node:config/config.go:100-120`), and an SNode registration failure rolls back the startup transaction (`sentio-node:standalone/standalone.go:1026-1028`).
@@ -159,17 +160,22 @@ Activation is one authority-signed update that sets `si_indexers` (on devnet2: `
 
 ### 7.4 Governance and quarantine
 
-- `QuarantineIndexer{indexer_id, reason}` and `ReleaseIndexer{indexer_id, acknowledged_rejected_blocks}` are authority-signed, epoch-bound commands outside `ConsensusParamsUpdate`, so the drain gate cannot block them.
+- `QuarantineIndexer{indexer_id, expected_generation, reason}` and `ReleaseIndexer{indexer_id, expected_generation, acknowledged_rejected_blocks}` are authority-signed commands outside `ConsensusParamsUpdate`, so the drain gate cannot block them. The authority JWS covers every field plus the current authority context (network id, genesis snapshot id, epoch).
+- Each SI indexer has a durable `quarantine_generation`, starting at 0. Every applied quarantine, release and automatic quarantine (§7.5) increments it.
+  - Apply refuses a command whose `expected_generation` differs from the current generation. A release must therefore name the generation of the quarantine it ends, and a quarantine the generation of the state it changes.
+  - Epoch binding alone is not enough: neither command advances the consensus epoch, so without the generation a signed command could be replayed within the same epoch — an old quarantine after a release, or an old release against a later quarantine.
 - While an indexer is quarantined:
   - admission refuses its tables with a new non-retryable code `INDEXER_QUARANTINED`;
   - its pending promotions and cleanups stay recorded but are not dispatched (cancelling them could leave the SNode's local base ahead of the FSM's if an acknowledgement was lost);
   - its track is excluded from the consensus-update drain gate.
 - The drain gate applies to every other track as today. In-flight promotions of healthy tracks last seconds, so updates go through between them.
-- On release the orchestrator re-dispatches the suspended work. A promotion signed under an earlier authority epoch is re-signed through a leader command that the FSM validates against the same promotion body; the SNode applies it idempotently through its per-partition watermark and last-acknowledgement record.
+- On release the orchestrator re-dispatches both kinds of suspended work, promotions and cleanups, through its existing resend paths. Those paths re-sign every dispatch with the current authority context (`arbiter:orchestrator/promotion.go` `streamPromotion`, `arbiter:orchestrator/cleanup.go` `streamCleanup`, context from `arbiter:orchestrator/signer.go:25-39`).
+  - The FSM records the authority JWS only when work is issued and does not check an epoch when it is acknowledged. Suspended work therefore survives an authority rotation without a new command.
+  - Re-sent work is idempotent. The SNode applies a re-sent promotion through its per-partition watermark and last-acknowledgement record. A re-sent cleanup only drops parts, and dropping an already-dropped part is tolerated (`arbiter-core:snode/cleanup.go:27-31`); the FSM accepts an acknowledgement for a cleanup it has already cleared as a no-op.
 
 ### 7.5 Rejected blocks
 
-When a challenge resolves a block of track T as Rejected, Apply quarantines T with the block as reason. The track cannot pass the block until a `ReleaseIndexer` lists it in `acknowledged_rejected_blocks`. Release then:
+When a challenge resolves a block of track T as Rejected, Apply quarantines T with the block as reason and increments T's `quarantine_generation`. A release signed before that point names an older generation and is refused, so the operator must review the new rejection before releasing. The track cannot pass the block until a `ReleaseIndexer` lists it in `acknowledged_rejected_blocks`. Release then:
 
 - counts the block as passed for T's prefix;
 - schedules cleanup of its statements' candidate parts on T's SNode.
@@ -178,7 +184,7 @@ Rejected data never reached safe, so passing it is sound. Today a single rejecte
 
 ### 7.6 Snapshot v20 and activation
 
-Snapshot v20 adds the open block's owner, the header track, `tracks_enabled`, the quarantine state and the acknowledged rejected blocks; it is written only once `tracks_enabled` is committed. `tracks_enabled` is a raise-only parameter set by one authority-signed update. The update requires:
+Snapshot v20 adds the open block's owner, the header track, `tracks_enabled`, the quarantine state with each indexer's `quarantine_generation`, and the acknowledged rejected blocks; it is written only once `tracks_enabled` is committed. `tracks_enabled` is a raise-only parameter set by one authority-signed update. The update requires:
 
 - a drained chain: the open block is empty and the global safe prefix equals the sealed tip;
 - every voter passing the capability probe and every verifier and SNode advertising `track_manifests_v1`.
@@ -278,7 +284,7 @@ Stage 1:
 
 Stage 2:
 7. **housegate** — `track_frontiers` with root vectors; the `INDEXER_QUARANTINED` mapping.
-8. **arbiter-proto / arbiter-core** — header `track`, the quarantine commands and the promotion re-sign command, and `track_manifests_v1`.
+8. **arbiter-proto / arbiter-core** — header `track`, the quarantine commands with their generation, and `track_manifests_v1`.
 9. **arbiter** — the FSM changes of §7, snapshot v20, the grouping window, and `arbiter-admin`.
 10. **sentio-node** — quarantine reporting.
 11. **production** — the stage-2 runbook.
@@ -301,6 +307,11 @@ Stage 2:
   - manifest exactness under interleaved tracks, including a publication triggered by one track while another has a block partly promoted;
   - per-track transition limits;
   - quarantine, automatic quarantine on Rejected, and release with acknowledgement;
+  - replay of the quarantine commands:
+    - an old `QuarantineIndexer` replayed after a release is refused;
+    - an old `ReleaseIndexer` replayed after a later quarantine is refused;
+    - a release signed before an automatic quarantine is refused;
+  - an authority rotation while a quarantined track holds both a pending promotion and a pending cleanup: after release both are re-dispatched under the new authority and acknowledged;
   - the drain gate with a quarantined track;
   - v20.
 - **housegate:** `track_frontiers` root vectors and manifest validation.
