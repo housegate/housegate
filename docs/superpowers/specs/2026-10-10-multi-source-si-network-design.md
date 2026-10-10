@@ -23,7 +23,8 @@ Every indexer of a Sentio network can join that network's storage-integrity (SI)
 - **Verification is already base-relative.** Every block pins the published manifest at seal time and is judged against it alone; claims are per (table, partition) and LtHash is additive (`arbiter:fsm/threeway.go:35-112`), so blocks of different tables do not interfere arithmetically.
 - **Promotion and membership trust every caller.** Promotions are sent to every connected SNode (`arbiter:orchestrator/promotion.go:168-191`). The FSM does not check which node acknowledged, and an `Applied:false` acknowledgement from any node consumes the promotion (`arbiter:fsm/apply.go:605-635`). The gRPC server is a plain `grpc.NewServer()` (`arbiter:cmd/arbiter/grpc.go:47`); RCs and acknowledgements are unsigned, and any caller may register a node or mark any node active (`arbiter:server/membership.go`).
 - **Authority work is re-signed at dispatch.** The FSM verifies a promotion's or cleanup's authority JWS against the current authority when the work is issued (`arbiter:fsm/apply.go:567`, `:738`) and records it. Every resend is signed again by the leader with the current {network id, genesis snapshot id, epoch} (`arbiter:orchestrator/promotion.go` `streamPromotion`, `arbiter:orchestrator/cleanup.go` `streamCleanup`, `arbiter:orchestrator/signer.go:25-39`). Acknowledgements are not epoch-checked.
-- **Every node holds every table.** The table-set reconciler materialises every registry incarnation on every node (`arbiter-core:dataplane/tableset/reconciler.go:383`) at Keeper path `/sentio/<keeper_shard_id>/unsafe/<db>__<table>`, replica name = node id (`arbiter-core:dataplane/ddl/naming.go:42-46`). The SNode attributes candidate parts by diffing the table's active parts before and after its own write (`arbiter-core:snode/staged.go:160-199, 319-326`), which is sound only while nothing else adds parts to that table. Verifiers byte-scan their own replica (`arbiter-core:verifier/backends.go:93-143`).
+- **Every node holds every table.** The table-set reconciler materialises every registry incarnation on every node (`arbiter-core:dataplane/tableset/reconciler.go:383`) at Keeper path `/sentio/<keeper_shard_id>/unsafe/<db>__<table>`, replica name = node id (`arbiter-core:dataplane/ddl/naming.go:42-46`). The SNode attributes candidate parts by diffing the table's active parts before and after its own write (`arbiter-core:snode/staged.go:160-199, 319-326`), which is sound only while nothing else adds parts to that table. Verifiers byte-scan their own `hg_unsafe` replica (`arbiter-core:verifier/backends.go:93-143`).
+- **There is one safe replica.** Promotions reach SNodes only, `PendingPromotion.Acked` is a single bool (`arbiter:fsm/state.go:278-285`), and verifiers hold `hg_unsafe` but an empty `hg_safe`. The multi-replica safe set of [Spec D](2026-08-18-storage-integrity-lag-replay-and-bootstrap-design.md) — verifiers as safe replicas, per-node acknowledgements, `ManifestCheckpoint.applied_promotion_seq` — has status Proposed and is not implemented in arbiter, arbiter-core or arbiter-proto `main`. This design must stay compatible with it (§6.6, §7.7).
 - **The agent is already multi-host.** It resolves a database's hosting indexer and asks that indexer for table status and network id (`pkg/network/rpc.go:284-326`), keeps one seq/lane store per network and signer, and switches the session upstream to the hosting indexer (2026-10-09 spec D18/D19). The accumulator allows 64 open gap ranges per subject (`arbiter:accumulator/profile.go:22-26`), so statement-id uniqueness must stay network-wide in one accumulator.
 - **sentio-node governs one indexer.** A database is governed iff `IndexerID == SIIndexerID` and it is not a processor database, and a key the registry records is answered from the registry whatever its host (`sentio-node:storageintegrityadapter/tablestate/snapshot.go:64-92`); unrecorded tables of a governed database are Pending (`snapshot.go:149-154, 186-193`). Its config requires a non-empty genesis `table_ids` and `node_id == expected_source` (`sentio-node:config/config.go:100-120`), and an SNode registration failure rolls back the startup transaction (`sentio-node:standalone/standalone.go:1026-1028`).
 - **Databases do not move.** `createUserDatabase` returns the indexer the contract chose and `systemCreateProcessorDatabase` takes one; the `IDatabases` interface has no call that moves a database (`sentio-node:bindings/bindings.go:1905`).
@@ -53,7 +54,7 @@ Out of scope, with the requirement recorded in §17: cross-operator Keeper and i
 
 **D7 — The verifier set is governed.** A consensus parameter `verifiers` lists `{node_id, ed25519_pubkey}`; only listed verifiers may register, and their registration and activation are signed.
 
-**D8 — The data plane is owner-scoped.** An SNode materialises, promotes and cleans only its own tables; promotions and cleanups go only to the owner's SNode and are acknowledged only by it. Verifiers keep a replica of every SI table (v1).
+**D8 — The data plane is owner-scoped.** An SNode materialises, promotes and cleans only its own tables. Among SNodes, only the owner's receives a table's promotions and cleanups, and only its acknowledgement is the *source acknowledgement* — the one that advances the FSM's state. Verifiers keep an `hg_unsafe` replica of every SI table (v1); their `hg_safe` stays empty until Spec D, whose replica fan-out this design leaves intact (§6.6).
 
 **D9 — Tracks isolate liveness (stage 2).** Every block belongs to exactly one owner's track, by sealing the open block when the next admitted statement has a different owner. The safe prefix, the promotion frontier and transition publication are computed per track, and the manifest records each track's frontier.
 
@@ -119,8 +120,9 @@ If the owner's SNode is not registered and Active in committed state, admission 
 
 ### 6.6 Promotion, cleanup and purge
 
-- The orchestrator sends a promotion or cleanup only to the owner's SNode.
-- Apply accepts a `RecordPromotionAck` or `RecordCleanupAck` only from the owner's SNode; an `Applied:false` from any other node no longer consumes the promotion.
+- Among SNodes, the orchestrator sends a table's promotions and cleanups only to the owner's SNode; other SNodes do not hold the table.
+- The source acknowledgement is accepted only from the owner's SNode, with a valid signature. It is the acknowledgement whose closure check advances the partition state and marks statements Safe, whose `Applied:false` consumes a promotion, and that clears a pending cleanup. Today it is the only acknowledgement there is.
+- Spec D's safe-replica fan-out is outside this restriction and unaffected by it. Verifiers are not safe replicas today, so nothing changes for them now. When Spec D lands, a verifier that holds the table receives its promotions and cleanups, and its acknowledgements are recorded as replica acknowledgements under Spec D's lag and cleanup-gating rules — never as the source acknowledgement.
 - A purge completes when the owner's SNode and every non-evicted verifier have reported, instead of every non-evicted SNode and verifier.
 - Promotion and manifest publication otherwise stay as they are in stage 1, including the global safe prefix.
 
@@ -150,7 +152,8 @@ Activation is one authority-signed update that sets `si_indexers` (on devnet2: `
 
 ### 7.3 Manifest
 
-- `replay.SafeSnapshotManifest` gains `track_frontiers: [{indexer_id, safe_block_seq}]`, sorted and unique. `ComputeManifestRoot` includes it only when non-empty, so the roots of existing manifests do not change. Validation requires each track's frontier to be at least that track's last block at or below `safe_block_seq`.
+- `replay.SafeSnapshotManifest` gains `track_frontiers: [{indexer_id, safe_block_seq, applied_promotion_seq}]`, sorted and unique. `ComputeManifestRoot` includes it only when non-empty, so the roots of existing manifests do not change. Validation requires each track's frontier to be at least that track's last block at or below `safe_block_seq`.
+- `applied_promotion_seq` is the last promotion of that track whose effects the manifest contains. It is exact because of the carry-over rule below: when a track's tables are replaced, every promotion the track has issued is acknowledged (the per-track debt gate), and when they are carried over, so is the parent's value. A track's represented promotions are therefore always a prefix of that track's own promotion sequence, even when one block needs several partition promotions. It is the resume cursor Spec D needs (§7.7).
 - A manifest contains exactly the effects of every block up to `safe_block_seq` and of every track's blocks up to its frontier.
 - The leader still publishes one manifest chain. A publication starts from the parent manifest and replaces the tables and frontier of every track whose prefix advanced since the parent with that track's current state. Every other track keeps its tables and frontier from the parent.
   - The per-track debt gate (§7.2) guarantees that a track with a newly advanced prefix has no promotion beyond it, so its current state is exactly its new prefix.
@@ -191,7 +194,19 @@ Snapshot v20 adds the open block's owner, the header track, `tracks_enabled`, th
 
 Every block sealed after it carries a track.
 
-### 7.7 What stays global
+### 7.7 Compatibility with Spec D
+
+[Spec D](2026-08-18-storage-integrity-lag-replay-and-bootstrap-design.md) (Proposed, not implemented) resumes a safe replica from one scalar `applied_promotion_seq` and a `ManifestCheckpoint` carrying one such scalar. Once tracks are enabled, the promotions a manifest represents are no longer a prefix of the global promotion sequence: a track carried over from the parent can miss promotion 10, which belongs to its partly promoted block, while an advanced track's promotion 11 is included. A scalar cursor would then skip one or replay the other.
+
+Spec D, whenever it is implemented after stage 2, adopts per-track cursors:
+- `ManifestCheckpoint` returns the manifest with its `track_frontiers[].applied_promotion_seq` (§7.3);
+- a replica journals one cursor per track;
+- `SubscribePromotions` resumes each track strictly after its own cursor;
+- retention is judged per track.
+
+Promotions of different tracks touch disjoint partitions, so a replica may apply them in any interleaving as long as each track stays in order. Before tracks are enabled, every published manifest is a prefix of the global promotion sequence and Spec D's scalar stays exact.
+
+### 7.8 What stays global
 
 - The table-set transition admission fence: it lasts only until the leader seals the transition.
 - The snapshot-query reservation barrier: default off and not wired; it keeps waiting on the global prefix and so on every track.
@@ -208,7 +223,7 @@ Every block sealed after it carries a track.
   - interserver (port 9009) reachable from every verifier ClickHouse;
   - the `hg_safe` / `hg_unsafe` / `hg_promote` databases with their DDL-pinned settings.
   The network chart no longer owns an indexer's ClickHouse (§12).
-- **Verifiers.** v1 keeps three verifiers holding a replica of every SI table, fetching parts from each owner's ClickHouse; storage grows with the network's SI data. Verifier sharding is recorded in §17.
+- **Verifiers.** v1 keeps three verifiers holding an `hg_unsafe` replica of every SI table, fetching parts from each owner's ClickHouse; storage grows with the network's SI data. Their `hg_safe` stays empty until Spec D makes them safe replicas (§6.6, §7.7). Verifier sharding is recorded in §17.
 - **DA.** It stays one network DA, written by each indexer's ingress and SNode and read by verifiers, with the current channel trust while all indexers are self-operated.
 
 ## 9. housegate
@@ -283,7 +298,7 @@ Stage 1:
 6. **production** — the chart split, the overlay generalisation, indexer-b's values, render tests, and the stage-1 runbook.
 
 Stage 2:
-7. **housegate** — `track_frontiers` with root vectors; the `INDEXER_QUARANTINED` mapping.
+7. **housegate** — `track_frontiers` (including the per-track `applied_promotion_seq`) with root vectors; the `INDEXER_QUARANTINED` mapping.
 8. **arbiter-proto / arbiter-core** — header `track`, the quarantine commands with their generation, and `track_manifests_v1`.
 9. **arbiter** — the FSM changes of §7, snapshot v20, the grouping window, and `arbiter-admin`.
 10. **sentio-node** — quarantine reporting.
@@ -295,7 +310,7 @@ Stage 2:
   - owner-bound selection and `SOURCE_UNAVAILABLE`;
   - signatures: wrong key, wrong network, replay, parked RC;
   - `registration_seq` replay;
-  - acknowledgement origin and `Applied:false` from a non-owner;
+  - acknowledgement origin: an acknowledgement (including `Applied:false`) from any node other than the owner's SNode is never taken as the source acknowledgement;
   - enrolment constraints: cursor, statement, uniqueness, signer rotation;
   - per-indexer seed ordering;
   - the owner-halt reason;
@@ -305,6 +320,7 @@ Stage 2:
   - track independence: a track with an RC-less block does not stop another track's promotions, manifests or transitions;
   - determinism of owner-switch sealing, including `spent_ids_root_after`;
   - manifest exactness under interleaved tracks, including a publication triggered by one track while another has a block partly promoted;
+  - per-track `applied_promotion_seq` in that same interleaving: it covers every promotion of the advanced track and excludes the partly promoted track's newer promotions, including when one block needs several partition promotions;
   - per-track transition limits;
   - quarantine, automatic quarantine on Rejected, and release with acknowledgement;
   - replay of the quarantine commands:
@@ -349,5 +365,6 @@ Each is a separate design.
 
 - Dynamic SI table set D1 and §3 ("one SI indexer per network", "more than one SI indexer per network" out of scope) are replaced by D3 here. Its D10 (default deny) applies per enrolled indexer after that indexer's activation block, and its Legacy seed becomes per indexer.
 - Arbiter design §5.4 (hash selection over the writer pool) applies only before `si_indexers` is set. The single-writer gate becomes "`max_writers` ≥ enrolled indexers".
-- The data-plane rule that every node holds every SI table now applies to verifiers only. Promotion broadcast becomes owner-only.
+- The data-plane rule that every node holds every SI table now applies to verifiers only (their `hg_unsafe`). Among SNodes, promotion delivery becomes owner-only and only the owner's acknowledgement is the source acknowledgement.
+- Spec D (Proposed) keeps its safe-replica fan-out (§6.6), but its resume model becomes per track once tracks are enabled (§7.7).
 - The contiguous network-wide safe prefix becomes per track in stage 2. The global `safe_block_seq` keeps its conservative meaning.
