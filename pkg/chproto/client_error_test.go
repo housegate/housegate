@@ -130,3 +130,32 @@ func TestSeqUnspentSuffixHelpers(t *testing.T) {
 		t.Fatal("unsuffixed message reported the marker")
 	}
 }
+
+// TestSourceUnavailableMessage pins the exact spec 2026-10-10 §6.4 / §9 text;
+// the relay's deferred-lane classifier depends on it.
+func TestSourceUnavailableMessage(t *testing.T) {
+	if got := SourceUnavailableMessage("net1.events"); got != "storage_integrity: the source of table net1.events is not active yet; retry shortly (retryable)" {
+		t.Fatalf("SourceUnavailableMessage = %q", got)
+	}
+	if !IsSourceUnavailableMessage(SourceUnavailableMessage("net1.events")) {
+		t.Fatal("IsSourceUnavailableMessage rejected its own message")
+	}
+	if !IsSourceUnavailableMessage(SourceUnavailableMessage("net1.events") + SeqUnspentSuffix) {
+		t.Fatal("IsSourceUnavailableMessage must accept the marker suffix")
+	}
+	for _, msg := range []string{
+		SourceUnavailableMessage(""),
+		SourceUnavailableMessage("net1 events"),
+		SourceUnavailableMessage("net1.events\t"),
+		TableActivatingMessage("net1.events"),
+		TableNoLongerAcceptsWritesMessage("net1.events"),
+		"storage_integrity: the source of table net1.events is not active yet",
+	} {
+		if IsSourceUnavailableMessage(msg) {
+			t.Fatalf("IsSourceUnavailableMessage(%q) = true, want false", msg)
+		}
+	}
+	if IsTableActivatingMessage(SourceUnavailableMessage("net1.events")) || IsTableNoLongerAcceptsWritesMessage(SourceUnavailableMessage("net1.events")) {
+		t.Fatal("the source-unavailable refusal must not match the table refusals")
+	}
+}
