@@ -5027,3 +5027,30 @@ Resolved by CONTRACT §3b and applied above: the SNode's genesis snapshot id (§
 - **CI:** `.github/workflows/storage-integrity-chart.yml` did not watch `sentio-node-indexer-b*.yaml`; Task 16 adds it to both path lists.
 - **Arbiter README (S1-A Task 12)** links `docs/storage-integrity-devnet2-multi-source.md`; the 1800-block preflight is the manual `si_safe_head` check of runbook §7 (no `cast` needed: the safe head is read through voter 0 from `sentio-node-op-reth-0`).
 - **Stage 2 later:** the runbook's §11 rules (no downgrade, `snode-3` next, byte-identical restated entries, verifier state) carry over; the snapshot-query lane must stay off while two indexers are enrolled.
+
+---
+
+## Appendix C: execution record
+
+Plan S1-B was executed subagent-driven on 2026-10-11. Release ledger: `HG_TAG` = housegate `v0.18.0` (`a6547cc`, housegate/housegate#232), `SN_COMMIT` = sentio-node `2db130e63b0c662feae1b225341921c404927fb7` / `SN_DIGEST` = `sha256:fbb1ef327212fa6ba0c779728dead77ed4506c0955508e2e8e6d0d25d4c8c185` (sentioxyz/sentio-node#195), production charts, overlays and runbook in sentioxyz/production#731, the rollout record and runbook fixes in sentioxyz/production#732.
+
+devnet2 outcome:
+- **Activation:** committed at epoch 3 (`ACTIVATION_EPOCH` 3); no node was evicted.
+- **Enrolment:** indexer-b enrolled at epoch 4 (`ENROLMENT_EPOCH` 4), with activation block 5883985 (`IB_ACTIVATION_BLOCK`) and `max_writers` 2.
+- **Seed:** the per-indexer seed was applied at the activation block, with no watcher halt and no audit mismatch.
+- **End to end:** the check through devuser1's agent passed.
+
+Behaviour decided or discovered during execution:
+- **Stale CH test fixtures.** sentio-node's CH acceptance fixtures had to set the host's own indexer id (`self`). With it left at its default of 0, the test host was indexer 0, which is not enrolled, so tables answered `ordinary`.
+- **Runbook hardening from review.** The runbook was hardened through review before the live run:
+  - indexer-b is quiesced (StatefulSet scaled to 0) from the metadata copy through the sync, with a fail-closed fingerprint check before switching;
+  - the replay baseline must match the voters' live image;
+  - the e2e agent runs under an EXIT trap;
+  - the snapshot directory must be fresh, and §6.3 creates only the objects `objects.txt` names.
+- **Gaps found live, now fixed in the runbook (#732):**
+  - **§2 statedigest:** it needs a throwaway `ARBITER_ANCHOR_EVM_PRIVATE_KEY_HEX` for `config.Load`.
+  - **§3.1 verifier recreation:** after the orphan delete, the recreated StatefulSet cannot add the `state` volumeClaimTemplate to the adopted pods, so the verifier pods are replaced one at a time, starting with 0. The sync is re-run afterwards so Helm records a deployed revision; until then the release is shown as failed.
+  - **§9 verifier check:** the verifiers' `hg_unsafe` is emptied by post-promotion cleanup, so the check reads this run's `DownloadPart` rows in `system.part_log`.
+- **Controller mistakes:**
+  - one extra acceptance INSERT (802) was made by re-running a block;
+  - one Codex finding on arbiter#129 was missed before merge (fixed in #130 before any release).
