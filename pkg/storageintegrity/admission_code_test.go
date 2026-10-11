@@ -46,3 +46,19 @@ func TestLaneBudgetIsATerminalRejectWithItsCode(t *testing.T) {
 		t.Fatalf("outcome = %+v", got)
 	}
 }
+
+// TestSourceUnavailableIsATerminalRejectWithItsCode pins spec 2026-10-10 §6.4:
+// the arbiter changed nothing, so the outcome is a coded terminal reject. Its
+// category removes the prepared parts through the terminal-submit path, and
+// its code tells the ingress which client refusal to send.
+func TestSourceUnavailableIsATerminalRejectWithItsCode(t *testing.T) {
+	const reason = "storage-integrity source snode-b of indexer 1 is not active"
+	got := SubmitOutcomeFromSequencedAck(&pb.SequencedAck{Code: pb.AdmissionCode_ADMISSION_CODE_SOURCE_UNAVAILABLE, Message: reason})
+	if got.Category != OutcomeTerminalReject || got.AdmissionCode != AdmissionCodeSourceUnavailable ||
+		got.AdmissionCode != "ADMISSION_CODE_SOURCE_UNAVAILABLE" || got.Reason != reason {
+		t.Fatalf("outcome = %+v", got)
+	}
+	if !got.Category.RequiresAbort() {
+		t.Fatal("a source-unavailable refusal must remove the prepared parts through the terminal-submit path")
+	}
+}

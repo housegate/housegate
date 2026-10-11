@@ -92,15 +92,16 @@ func TestConsumeAdmission_PostOrchestrateMarking(t *testing.T) {
 		wantMarked bool
 		wantText   string
 	}{
-		"gap budget":  {outcome: sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: "64 open ranges", AdmissionCode: "ADMISSION_CODE_GAP_BUDGET_EXCEEDED"}, wantMarked: true, wantText: "rejected by the arbiter: ADMISSION_CODE_GAP_BUDGET_EXCEEDED"},
-		"lane budget": {outcome: sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: "account holds 256 client lanes", AdmissionCode: sicore.AdmissionCodeLaneBudgetExceeded}, wantMarked: true, wantText: "rejected by the arbiter: ADMISSION_CODE_LANE_BUDGET_EXCEEDED"},
-		"malformed":   {outcome: sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: "bad", AdmissionCode: "ADMISSION_CODE_MALFORMED"}, wantMarked: true, wantText: "rejected by the arbiter: ADMISSION_CODE_MALFORMED"},
-		"schema":      {outcome: sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: "retired", AdmissionCode: sicore.AdmissionCodeSchemaNotAllowed}, wantMarked: true, wantText: "no longer accepts writes"},
-		"duplicate":   {outcome: sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: "dup", AdmissionCode: sicore.AdmissionCodeDuplicateClientSeq}},
-		"no code":     {outcome: sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: "permission denied"}},
-		"retryable":   {outcome: sicore.SubmitOutcome{Category: sicore.OutcomeRetryable, Reason: "fence"}},
-		"unknown":     {outcome: sicore.SubmitOutcome{Category: sicore.OutcomeUnknown, Reason: "deadline"}},
-		"submit err":  {submitErr: errors.New("transport reset")},
+		"gap budget":         {outcome: sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: "64 open ranges", AdmissionCode: "ADMISSION_CODE_GAP_BUDGET_EXCEEDED"}, wantMarked: true, wantText: "rejected by the arbiter: ADMISSION_CODE_GAP_BUDGET_EXCEEDED"},
+		"lane budget":        {outcome: sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: "account holds 256 client lanes", AdmissionCode: sicore.AdmissionCodeLaneBudgetExceeded}, wantMarked: true, wantText: "rejected by the arbiter: ADMISSION_CODE_LANE_BUDGET_EXCEEDED"},
+		"malformed":          {outcome: sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: "bad", AdmissionCode: "ADMISSION_CODE_MALFORMED"}, wantMarked: true, wantText: "rejected by the arbiter: ADMISSION_CODE_MALFORMED"},
+		"schema":             {outcome: sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: "retired", AdmissionCode: sicore.AdmissionCodeSchemaNotAllowed}, wantMarked: true, wantText: "no longer accepts writes"},
+		"source unavailable": {outcome: sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: "storage-integrity source snode-b of indexer 1 is not active", AdmissionCode: sicore.AdmissionCodeSourceUnavailable}, wantMarked: true, wantText: "the source of table net1.events is not active yet"},
+		"duplicate":          {outcome: sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: "dup", AdmissionCode: sicore.AdmissionCodeDuplicateClientSeq}},
+		"no code":            {outcome: sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: "permission denied"}},
+		"retryable":          {outcome: sicore.SubmitOutcome{Category: sicore.OutcomeRetryable, Reason: "fence"}},
+		"unknown":            {outcome: sicore.SubmitOutcome{Category: sicore.OutcomeUnknown, Reason: "deadline"}},
+		"submit err":         {submitErr: errors.New("transport reset")},
 	} {
 		t.Run(name, func(t *testing.T) {
 			ingress, _, submitter, _ := newBackpressureIngress(t, &fakePartsPressure{})

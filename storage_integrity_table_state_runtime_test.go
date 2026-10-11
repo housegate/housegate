@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -121,6 +122,37 @@ func TestSchemaNotAllowedReachesTheClientAsNoLongerAcceptsWrites(t *testing.T) {
 	// The arbiter's code and reason stay server-side, in Err only.
 	if ce.Err == nil || ce.Err.Error() != "arbiter ADMISSION_CODE_SCHEMA_NOT_ALLOWED: table retired" {
 		t.Fatalf("Err = %v, want the arbiter code and reason", ce.Err)
+	}
+}
+
+// TestSourceUnavailableReachesTheClientAsARetryableRefusal is spec 2026-10-10
+// §6.4 / §9: the arbiter refused admission because the owner's SNode of the
+// table is not registered and Active. The refusal is the retryable 733, ends
+// only the query, leaves the coordinate unspent, keeps the arbiter's code and
+// reason server-side, and the terminal-submit path removed the prepared parts.
+func TestSourceUnavailableReachesTheClientAsARetryableRefusal(t *testing.T) {
+	ingress, _, submitter, preparer := newBackpressureIngress(t, &fakePartsPressure{})
+	var aborted []sicore.CandidatePart
+	preparer.abortFn = func(parts []sicore.CandidatePart) { aborted = parts }
+	submitter.outcome = sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject,
+		Reason: "storage-integrity source snode-b of indexer 1 is not active", AdmissionCode: sicore.AdmissionCodeSourceUnavailable}
+	err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), bpAdmission())
+	var ce *chproto.ClientError
+	if !errors.As(err, &ce) || ce.Code != chproto.CodeTableIsBeingRestarted ||
+		ce.Message != "storage_integrity: the source of table net1.events is not active yet; retry shortly (retryable)" {
+		t.Fatalf("err = %v, want the retryable source-unavailable refusal", err)
+	}
+	if !ce.KeepSession || !chproto.KeepsSession(fmt.Errorf("wrapped by the plugin: %w", err)) {
+		t.Fatalf("err = %+v, want KeepSession through the plugin's wrapping", ce)
+	}
+	if !chproto.IsSeqUnspent(err) {
+		t.Fatalf("err = %v, want the coordinate marked unspent: the arbiter changed nothing", err)
+	}
+	if ce.Err == nil || ce.Err.Error() != "arbiter ADMISSION_CODE_SOURCE_UNAVAILABLE: storage-integrity source snode-b of indexer 1 is not active" {
+		t.Fatalf("Err = %v, want the arbiter code and reason", ce.Err)
+	}
+	if preparer.abortCalls != 1 || !slices.Equal(aborted, bpPreparedCandidates()) {
+		t.Fatalf("abort calls = %d with %v, want the prepared candidates removed exactly once", preparer.abortCalls, aborted)
 	}
 }
 

@@ -38,10 +38,15 @@ const (
 //   - No longer accepts writes (spec 2026-09-24 §9.6): the table retired before
 //     the arbiter sequenced the statement; refused non-retryably with
 //     CodeQueryIsProhibited.
+//   - Source unavailable (spec 2026-10-10 §6.4, §9): the arbiter refused the
+//     statement because its table's owning indexer has no registered, Active
+//     SNode yet; refused retryably with CodeTableIsBeingRestarted.
 const (
 	tableRefusalPrefix         = "storage_integrity: table "
 	tableActivatingSuffix      = " is being activated; retry shortly (retryable)"
 	tableNoLongerAcceptsSuffix = " no longer accepts writes"
+	sourceUnavailablePrefix    = "storage_integrity: the source of table "
+	sourceUnavailableSuffix    = " is not active yet; retry shortly (retryable)"
 )
 
 // TableActivatingMessage is the client-facing message of the retryable
@@ -68,13 +73,30 @@ func IsTableNoLongerAcceptsWritesMessage(message string) bool {
 	return isTableRefusalMessage(message, tableNoLongerAcceptsSuffix)
 }
 
+// SourceUnavailableMessage is the client-facing message of the retryable
+// refusal of a statement whose table's source SNode is not Active yet (the
+// arbiter's SOURCE_UNAVAILABLE, spec 2026-10-10 §6.4, §9).
+func SourceUnavailableMessage(tableID string) string {
+	return sourceUnavailablePrefix + tableID + sourceUnavailableSuffix
+}
+
+// IsSourceUnavailableMessage reports whether message is exactly a
+// source-unavailable refusal for a non-empty, whitespace-free table id.
+func IsSourceUnavailableMessage(message string) bool {
+	return isRefusalMessage(message, sourceUnavailablePrefix, sourceUnavailableSuffix)
+}
+
 func isTableRefusalMessage(message, suffix string) bool {
+	return isRefusalMessage(message, tableRefusalPrefix, suffix)
+}
+
+func isRefusalMessage(message, prefix, suffix string) bool {
 	message = TrimSeqUnspentSuffix(message)
-	if !strings.HasPrefix(message, tableRefusalPrefix) || !strings.HasSuffix(message, suffix) ||
-		len(message) <= len(tableRefusalPrefix)+len(suffix) {
+	if !strings.HasPrefix(message, prefix) || !strings.HasSuffix(message, suffix) ||
+		len(message) <= len(prefix)+len(suffix) {
 		return false
 	}
-	id := message[len(tableRefusalPrefix) : len(message)-len(suffix)]
+	id := message[len(prefix) : len(message)-len(suffix)]
 	return strings.IndexFunc(id, unicode.IsSpace) < 0
 }
 

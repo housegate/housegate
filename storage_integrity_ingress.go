@@ -834,6 +834,20 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 				KeepSession: true,
 				SeqUnspent:  true}
 		}
+		if res.Submit.AdmissionCode == sicore.AdmissionCodeSourceUnavailable {
+			// The table's owning indexer has no registered, Active SNode yet
+			// (spec 2026-10-10 §6.4, §9). The arbiter changed nothing, so the
+			// coordinate is unspent, and the terminal-submit path has already
+			// removed the prepared parts. The refusal is retryable and ends only
+			// the query; the relay recognises the exact message on the wire.
+			log.Warnw("storage_integrity statement refused: the table's source is not active",
+				"statement_id", rec.StatementID, "table", rec.TableID, "reason", res.Submit.Reason)
+			return &chproto.ClientError{Code: chproto.CodeTableIsBeingRestarted,
+				Message:     chproto.SourceUnavailableMessage(rec.TableID),
+				Err:         fmt.Errorf("arbiter %s: %s", res.Submit.AdmissionCode, res.Submit.Reason),
+				KeepSession: true,
+				SeqUnspent:  true}
+		}
 		// Spec 2026-10-09 §6.6: a coded terminal reject other than
 		// DUPLICATE_CLIENT_SEQ left the coordinate unspent; name the code so the
 		// agent can act on it. A code-less terminal reject (a gRPC status) or

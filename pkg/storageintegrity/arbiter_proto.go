@@ -384,6 +384,13 @@ var AdmissionCodeLaneBudgetExceeded = pb.AdmissionCode_ADMISSION_CODE_LANE_BUDGE
 // §6.5). The coordinate is unspent; the agent abandons a client lane.
 var AdmissionCodeGapBudgetExceeded = pb.AdmissionCode_ADMISSION_CODE_GAP_BUDGET_EXCEEDED.String()
 
+// AdmissionCodeSourceUnavailable is the arbiter's refusal of a statement whose
+// table's owning indexer has no registered, Active SNode yet (spec 2026-10-10
+// §6.4). The FSM changed nothing, so the coordinate is unspent; the ingress
+// removes the prepared parts through the terminal-submit path and answers the
+// client with a retryable, session-preserving refusal.
+var AdmissionCodeSourceUnavailable = pb.AdmissionCode_ADMISSION_CODE_SOURCE_UNAVAILABLE.String()
+
 // SubmitOutcomeFromSequencedAck maps Arbiter's application-level admission
 // result into the existing staged-intake outcome categories.
 func SubmitOutcomeFromSequencedAck(ack *pb.SequencedAck) SubmitOutcome {
@@ -404,7 +411,8 @@ func SubmitOutcomeFromSequencedAck(ack *pb.SequencedAck) SubmitOutcome {
 		pb.AdmissionCode_ADMISSION_CODE_INVALID_PROOF,
 		pb.AdmissionCode_ADMISSION_CODE_MALFORMED,
 		pb.AdmissionCode_ADMISSION_CODE_GAP_BUDGET_EXCEEDED,
-		pb.AdmissionCode_ADMISSION_CODE_LANE_BUDGET_EXCEEDED:
+		pb.AdmissionCode_ADMISSION_CODE_LANE_BUDGET_EXCEEDED,
+		pb.AdmissionCode_ADMISSION_CODE_SOURCE_UNAVAILABLE:
 		return SubmitOutcome{Category: OutcomeTerminalReject, Reason: firstNonEmpty(reason, ack.GetCode().String()), AdmissionCode: ack.GetCode().String()}
 	default:
 		return SubmitOutcome{Category: OutcomeUnknown, Reason: firstNonEmpty(reason, ack.GetCode().String())}
