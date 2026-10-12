@@ -19,6 +19,7 @@ go_library(
 go_test(
     name = "registry_test",
     srcs = [
+        "si_info_test.go",
         "status_cache_test.go",
         "table_status_test.go",
     ],
