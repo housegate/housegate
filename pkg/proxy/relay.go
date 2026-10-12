@@ -2304,10 +2304,13 @@ func markUnspentIfSigned(q *chproto.Query, err error) error {
 // SOURCE_UNAVAILABLE: the table's owning indexer has no registered, Active
 // SNode yet, spec 2026-10-10 §6.4), and code 392 with the exact spec §9.6 "no longer accepts
 // writes" message (the table retired before the arbiter sequenced the
-// statement). All are raised only after the server consumed the complete
+// statement) or the exact indexer-quarantined message (the arbiter's
+// INDEXER_QUARANTINED: the table's owning SI indexer is quarantined, spec
+// 2026-10-10 §7.4). All are raised only after the server consumed the complete
 // staged input. A native ClickHouse TOO_MANY_PARTS, the other 733/392
-// lifecycle refusals, or any other late payload exception stays fail-closed
-// because it does not prove the INSERT stream was fully consumed.
+// lifecycle refusals (392 is also sipeerguard's and sitablestate's code), or
+// any other late payload exception stays fail-closed because it does not
+// prove the INSERT stream was fully consumed.
 func isSessionPreservingIngressException(decoded any) bool {
 	exc, ok := decoded.(*chproto.Exception)
 	if !ok || exc == nil {
@@ -2320,7 +2323,7 @@ func isSessionPreservingIngressException(decoded any) bool {
 	case chproto.CodeTableIsBeingRestarted:
 		return chproto.IsTableActivatingMessage(message) || chproto.IsSourceUnavailableMessage(message)
 	case chproto.CodeQueryIsProhibited:
-		return chproto.IsTableNoLongerAcceptsWritesMessage(message)
+		return chproto.IsTableNoLongerAcceptsWritesMessage(message) || chproto.IsIndexerQuarantinedMessage(message)
 	default:
 		return false
 	}

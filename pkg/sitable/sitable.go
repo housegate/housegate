@@ -26,7 +26,14 @@ const (
 	// Pending includes default deny: a table of a database this host's
 	// enrolled SI indexer hosts that the registry has not recorded.
 	Pending
-	// Refused carries the arbiter's refused_code and refused_reason.
+	// Refused carries the arbiter's refused_code and refused_reason, or the
+	// host-synthesized code "indexer_quarantined" for each table the host would
+	// otherwise report Active while its SI indexer is quarantined, and after a
+	// release until its rejected parts are cleaned (spec 2026-10-10 §7.4, §7.5,
+	// §10). A Refused table is refused for reads as well as writes. Such a
+	// quarantined entry keeps the table's Schema and SchemaHash, so journal
+	// recovery and cleanup still resolve it; an admission-refused table carries
+	// none.
 	Refused
 	// Active is served from hg_safe / hg_unsafe and written through the signed lane.
 	Active
@@ -74,9 +81,9 @@ func ParseStatus(name string) (Status, bool) {
 type Table struct {
 	ID            string // "<database>.<table>", logical
 	Status        Status
-	RefusedCode   string // Refused only; the arbiter's refused_code vocabulary
+	RefusedCode   string // Refused only; the arbiter's refused_code vocabulary or the host's "indexer_quarantined"
 	RefusedReason string
-	Schema        payloadexec.TableSchema // set for Active and Gone
+	Schema        payloadexec.TableSchema // set for Active and Gone, and for a Refused table whose indexer is quarantined
 	SchemaHash    string
 }
 
@@ -105,7 +112,7 @@ type Snapshot interface {
 	Version() uint64
 	Lookup(database, table string) Table // answers for any table
 	Active() []Table                     // sorted by ID
-	Schema(id string) (Table, bool)      // Active or Gone
+	Schema(id string) (Table, bool)      // Active or Gone; a host may also answer a Refused table that carries a schema (an indexer quarantine)
 }
 
 // TableState hands out snapshots. Changed returns a channel that is closed at

@@ -41,12 +41,19 @@ const (
 //   - Source unavailable (spec 2026-10-10 §6.4, §9): the arbiter refused the
 //     statement because its table's owning indexer has no registered, Active
 //     SNode yet; refused retryably with CodeTableIsBeingRestarted.
+//   - Indexer quarantined (spec 2026-10-10 §7.4, §9): the arbiter refused the
+//     statement because its table's owning SI indexer is quarantined; refused
+//     non-retryably with CodeQueryIsProhibited until an authority releases
+//     the indexer. Other refusals share 392, so only this exact message keeps
+//     a session on the deferred lane.
 const (
 	tableRefusalPrefix         = "storage_integrity: table "
 	tableActivatingSuffix      = " is being activated; retry shortly (retryable)"
 	tableNoLongerAcceptsSuffix = " no longer accepts writes"
 	sourceUnavailablePrefix    = "storage_integrity: the source of table "
 	sourceUnavailableSuffix    = " is not active yet; retry shortly (retryable)"
+	indexerQuarantinedPrefix   = "storage_integrity: the indexer that owns table "
+	indexerQuarantinedSuffix   = " is quarantined; writes to it are refused until the indexer is released (not retryable)"
 )
 
 // TableActivatingMessage is the client-facing message of the retryable
@@ -84,6 +91,19 @@ func SourceUnavailableMessage(tableID string) string {
 // source-unavailable refusal for a non-empty, whitespace-free table id.
 func IsSourceUnavailableMessage(message string) bool {
 	return isRefusalMessage(message, sourceUnavailablePrefix, sourceUnavailableSuffix)
+}
+
+// IndexerQuarantinedMessage is the client-facing message of the non-retryable
+// refusal of a statement whose table's owning SI indexer is quarantined (the
+// arbiter's INDEXER_QUARANTINED, spec 2026-10-10 §7.4, §9).
+func IndexerQuarantinedMessage(tableID string) string {
+	return indexerQuarantinedPrefix + tableID + indexerQuarantinedSuffix
+}
+
+// IsIndexerQuarantinedMessage reports whether msg is exactly an
+// indexer-quarantined refusal for a non-empty, whitespace-free table id.
+func IsIndexerQuarantinedMessage(msg string) bool {
+	return isRefusalMessage(msg, indexerQuarantinedPrefix, indexerQuarantinedSuffix)
 }
 
 func isTableRefusalMessage(message, suffix string) bool {

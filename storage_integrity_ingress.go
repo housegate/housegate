@@ -848,6 +848,21 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 				KeepSession: true,
 				SeqUnspent:  true}
 		}
+		if res.Submit.AdmissionCode == sicore.AdmissionCodeIndexerQuarantined {
+			// The table's owning SI indexer is quarantined (spec 2026-10-10 §7.4,
+			// §9). The arbiter checks quarantine before the source and changed
+			// nothing, so the coordinate is unspent, and the terminal-submit path
+			// has already removed the prepared parts. The refusal is not retryable
+			// until an authority releases the indexer; it ends only the query, and
+			// the relay recognises the exact message on the wire.
+			log.Warnw("storage_integrity statement refused: the table's indexer is quarantined",
+				"statement_id", rec.StatementID, "table", rec.TableID, "reason", res.Submit.Reason)
+			return &chproto.ClientError{Code: chproto.CodeQueryIsProhibited,
+				Message:     chproto.IndexerQuarantinedMessage(rec.TableID),
+				Err:         fmt.Errorf("arbiter %s: %s", res.Submit.AdmissionCode, res.Submit.Reason),
+				KeepSession: true,
+				SeqUnspent:  true}
+		}
 		// Spec 2026-10-09 §6.6: a coded terminal reject other than
 		// DUPLICATE_CLIENT_SEQ left the coordinate unspent; name the code so the
 		// agent can act on it. A code-less terminal reject (a gRPC status) or

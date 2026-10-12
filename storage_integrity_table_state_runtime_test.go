@@ -156,6 +156,38 @@ func TestSourceUnavailableReachesTheClientAsARetryableRefusal(t *testing.T) {
 	}
 }
 
+// TestIndexerQuarantinedReachesTheClientAsANonRetryableRefusal is spec
+// 2026-10-10 §7.4 / §9: the arbiter refused admission because the table's
+// owning SI indexer is quarantined (checked before the source, clarification
+// C9). The refusal is the non-retryable 392, ends only the query, leaves the
+// coordinate unspent, keeps the arbiter's code and reason server-side, and the
+// terminal-submit path removed the prepared parts.
+func TestIndexerQuarantinedReachesTheClientAsANonRetryableRefusal(t *testing.T) {
+	ingress, _, submitter, preparer := newBackpressureIngress(t, &fakePartsPressure{})
+	var aborted []sicore.CandidatePart
+	preparer.abortFn = func(parts []sicore.CandidatePart) { aborted = parts }
+	submitter.outcome = sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject,
+		Reason: "storage-integrity indexer 1 is quarantined", AdmissionCode: sicore.AdmissionCodeIndexerQuarantined}
+	err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), bpAdmission())
+	var ce *chproto.ClientError
+	if !errors.As(err, &ce) || ce.Code != chproto.CodeQueryIsProhibited ||
+		ce.Message != "storage_integrity: the indexer that owns table net1.events is quarantined; writes to it are refused until the indexer is released (not retryable)" {
+		t.Fatalf("err = %v, want the non-retryable indexer-quarantined refusal", err)
+	}
+	if !ce.KeepSession || !chproto.KeepsSession(fmt.Errorf("wrapped by the plugin: %w", err)) {
+		t.Fatalf("err = %+v, want KeepSession through the plugin's wrapping", ce)
+	}
+	if !chproto.IsSeqUnspent(err) {
+		t.Fatalf("err = %v, want the coordinate marked unspent: the arbiter changed nothing", err)
+	}
+	if ce.Err == nil || ce.Err.Error() != "arbiter ADMISSION_CODE_INDEXER_QUARANTINED: storage-integrity indexer 1 is quarantined" {
+		t.Fatalf("Err = %v, want the arbiter code and reason", ce.Err)
+	}
+	if preparer.abortCalls != 1 || !slices.Equal(aborted, bpPreparedCandidates()) {
+		t.Fatalf("abort calls = %d with %v, want the prepared candidates removed exactly once", preparer.abortCalls, aborted)
+	}
+}
+
 func TestAdmissionUsesTheSnapshotSchemaNotTheResolver(t *testing.T) {
 	ingress, _, _, _ := newBackpressureIngress(t, &fakePartsPressure{})
 	ingress.schemas = StorageIntegrityTableSchemaResolverFunc(func(string) (payloadexec.TableSchema, bool) {
