@@ -6,21 +6,27 @@ import (
 )
 
 // StorageIntegrityInfo is one answer of sentio_getStorageIntegrityInfo
-// (spec 2026-10-09 §6.7) from the serving indexer. SIIndexerID is null while
-// the table registry is disabled; SelfIndexerID is null when the node cannot
-// resolve its own id.
+// (spec 2026-10-09 §6.7) from the serving indexer. SIIndexerID is null in two
+// cases: while the table registry is disabled, and while the serving host is
+// not enrolled in the arbiter's si_indexers (it is the host's own indexer id
+// exactly when Enrolled). SelfIndexerID is null when the node cannot resolve
+// its own id.
 type StorageIntegrityInfo struct {
-	Enabled                bool    `json:"enabled"`
-	NetworkID              string  `json:"network_id"`
-	KeeperShardID          uint32  `json:"keeper_shard_id"`
-	SIIndexerID            *uint64 `json:"si_indexer_id"`
-	SelfIndexerID          *uint64 `json:"self_indexer_id"`
-	ClientLanesEnabled     bool    `json:"client_lanes_enabled"`
-	IngressMaxPayloadBytes uint64  `json:"ingress_max_payload_bytes"`
-	MaxTokenAgeSeconds     uint64  `json:"max_token_age_seconds"`
-	DefaultReadMode        string  `json:"default_read_mode"`
-	RegistryVersion        uint64  `json:"registry_version"`
-	ServerUnixTime         int64   `json:"server_unix_time"`
+	Enabled       bool    `json:"enabled"`
+	NetworkID     string  `json:"network_id"`
+	KeeperShardID uint32  `json:"keeper_shard_id"`
+	SIIndexerID   *uint64 `json:"si_indexer_id"`
+	SelfIndexerID *uint64 `json:"self_indexer_id"`
+	// Enrolled reports whether the serving host has an entry in the arbiter's
+	// committed si_indexers. It is diagnostic only: no agent logic reads it.
+	// A server that predates the field omits it, which decodes as false.
+	Enrolled               bool   `json:"enrolled"`
+	ClientLanesEnabled     bool   `json:"client_lanes_enabled"`
+	IngressMaxPayloadBytes uint64 `json:"ingress_max_payload_bytes"`
+	MaxTokenAgeSeconds     uint64 `json:"max_token_age_seconds"`
+	DefaultReadMode        string `json:"default_read_mode"`
+	RegistryVersion        uint64 `json:"registry_version"`
+	ServerUnixTime         int64  `json:"server_unix_time"`
 }
 
 // EffectiveDefaultReadMode maps the empty mode to "safe", as the server does.
