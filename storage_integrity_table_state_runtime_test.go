@@ -67,6 +67,26 @@ func goneState() sitable.TableState {
 // is how a host reports a Purged table (spec 2026-09-24 §5).
 func purgedState() sitable.TableState { return sitable.NewFake(sitable.Pending) }
 
+// quarantinedState reports net1.events the way a host whose SI indexer is
+// quarantined does (spec 2026-10-10 §10, clarification C13): Refused with the
+// host-synthesized code "indexer_quarantined", its schema and hash kept.
+func quarantinedState() sitable.TableState {
+	schema := bpSchemas()[0]
+	return sitable.NewFake(sitable.Pending, sitable.Table{
+		ID: "net1.events", Status: sitable.Refused,
+		RefusedCode: "indexer_quarantined", RefusedReason: "storage-integrity indexer 1 is quarantined",
+		Schema: schema, SchemaHash: payloadexec.TableSchemaHash("testnet-v2", schema),
+	})
+}
+
+// refusedState reports net1.events as a table the arbiter refused at
+// admission: Refused, with no schema.
+func refusedState() sitable.TableState {
+	return sitable.NewFake(sitable.Pending, sitable.Table{
+		ID: "net1.events", Status: sitable.Refused, RefusedCode: "SCHEMA_INVALID", RefusedReason: "bad column",
+	})
+}
+
 func TestRecoveryUsesJournaledPartitionsWithoutASchema(t *testing.T) {
 	journal := leavePendingRecord(t, []string{"p_eu"})
 	pressure, err := recoverWith(t, journal, purgedState())
@@ -90,6 +110,50 @@ func TestRecoveryOfAGoneTableResolvesItsSchema(t *testing.T) {
 	defer pressure.mu.Unlock()
 	if pressure.restored != 1 {
 		t.Fatalf("restored = %d, want 1", pressure.restored)
+	}
+}
+
+// TestRecoveryOfAQuarantinedTableResolvesItsSchema is clarification C13: a
+// record admitted before its indexer was quarantined still recovers while the
+// host reports the table Refused, because the snapshot keeps the table's
+// schema. Without it recovery would call the table purged and fail closed.
+func TestRecoveryOfAQuarantinedTableResolvesItsSchema(t *testing.T) {
+	journal := leavePendingRecord(t, nil)
+	pressure, err := recoverWith(t, journal, quarantinedState())
+	if errors.Is(err, ErrStorageIntegrityRecoverySchemaPurged) {
+		t.Fatalf("a quarantined indexer's table keeps its schema in the table state: %v", err)
+	}
+	pressure.mu.Lock()
+	defer pressure.mu.Unlock()
+	if pressure.restored != 1 {
+		t.Fatalf("restored = %d, want 1", pressure.restored)
+	}
+}
+
+// A table the arbiter refused at admission carries no schema, so recovery that
+// needs one still fails closed with the named error.
+func TestRecoveryNeedingTheSchemaOfARefusedTableFailsWithTheNamedError(t *testing.T) {
+	journal := leavePendingRecord(t, nil)
+	_, err := recoverWith(t, journal, refusedState())
+	if !errors.Is(err, ErrStorageIntegrityRecoverySchemaPurged) {
+		t.Fatalf("err = %v, want ErrStorageIntegrityRecoverySchemaPurged", err)
+	}
+}
+
+// TestTableStateSchemaResolverAnswersAQuarantinedTable pins the resolver that
+// journal recovery and cleanup share: it answers a Refused table that carries a
+// schema (a quarantined indexer's), and nothing else that lacks one.
+func TestTableStateSchemaResolverAnswersAQuarantinedTable(t *testing.T) {
+	want := bpSchemas()[0]
+	got, ok := tableStateSchemaResolver(quarantinedState()).StorageIntegrityTableSchema("net1.events")
+	if !ok || got.TableID != want.TableID || got.PartitionBy != want.PartitionBy || !slices.Equal(got.Columns, want.Columns) {
+		t.Fatalf("resolver = %+v ok=%v, want the quarantined table's schema", got, ok)
+	}
+	if _, ok := tableStateSchemaResolver(quarantinedState()).StorageIntegrityTableSchema("net1.other"); ok {
+		t.Fatal("an unlisted table has no schema to resolve")
+	}
+	if _, ok := tableStateSchemaResolver(refusedState()).StorageIntegrityTableSchema("net1.events"); ok {
+		t.Fatal("a table refused at admission has no schema to resolve")
 	}
 }
 
@@ -149,6 +213,38 @@ func TestSourceUnavailableReachesTheClientAsARetryableRefusal(t *testing.T) {
 		t.Fatalf("err = %v, want the coordinate marked unspent: the arbiter changed nothing", err)
 	}
 	if ce.Err == nil || ce.Err.Error() != "arbiter ADMISSION_CODE_SOURCE_UNAVAILABLE: storage-integrity source snode-b of indexer 1 is not active" {
+		t.Fatalf("Err = %v, want the arbiter code and reason", ce.Err)
+	}
+	if preparer.abortCalls != 1 || !slices.Equal(aborted, bpPreparedCandidates()) {
+		t.Fatalf("abort calls = %d with %v, want the prepared candidates removed exactly once", preparer.abortCalls, aborted)
+	}
+}
+
+// TestIndexerQuarantinedReachesTheClientAsANonRetryableRefusal is spec
+// 2026-10-10 §7.4 / §9: the arbiter refused admission because the table's
+// owning SI indexer is quarantined (checked before the source, clarification
+// C9). The refusal is the non-retryable 392, ends only the query, leaves the
+// coordinate unspent, keeps the arbiter's code and reason server-side, and the
+// terminal-submit path removed the prepared parts.
+func TestIndexerQuarantinedReachesTheClientAsANonRetryableRefusal(t *testing.T) {
+	ingress, _, submitter, preparer := newBackpressureIngress(t, &fakePartsPressure{})
+	var aborted []sicore.CandidatePart
+	preparer.abortFn = func(parts []sicore.CandidatePart) { aborted = parts }
+	submitter.outcome = sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject,
+		Reason: "storage-integrity indexer 1 is quarantined", AdmissionCode: sicore.AdmissionCodeIndexerQuarantined}
+	err := ingress.ConsumeStorageIntegrityAdmission(context.Background(), bpAdmission())
+	var ce *chproto.ClientError
+	if !errors.As(err, &ce) || ce.Code != chproto.CodeQueryIsProhibited ||
+		ce.Message != "storage_integrity: the indexer that owns table net1.events is quarantined; writes to it are refused until the indexer is released (not retryable)" {
+		t.Fatalf("err = %v, want the non-retryable indexer-quarantined refusal", err)
+	}
+	if !ce.KeepSession || !chproto.KeepsSession(fmt.Errorf("wrapped by the plugin: %w", err)) {
+		t.Fatalf("err = %+v, want KeepSession through the plugin's wrapping", ce)
+	}
+	if !chproto.IsSeqUnspent(err) {
+		t.Fatalf("err = %v, want the coordinate marked unspent: the arbiter changed nothing", err)
+	}
+	if ce.Err == nil || ce.Err.Error() != "arbiter ADMISSION_CODE_INDEXER_QUARANTINED: storage-integrity indexer 1 is quarantined" {
 		t.Fatalf("Err = %v, want the arbiter code and reason", ce.Err)
 	}
 	if preparer.abortCalls != 1 || !slices.Equal(aborted, bpPreparedCandidates()) {

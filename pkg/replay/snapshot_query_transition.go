@@ -3,6 +3,7 @@ package replay
 import (
 	"fmt"
 	"reflect"
+	"slices"
 )
 
 // ValidateExecutorProfileTransition checks a control-plane executor change.
@@ -37,6 +38,11 @@ func ValidateExecutorProfileTransition(prev, next SafeSnapshotManifest, transiti
 	}
 	if err := sameTableLedger(prev.Tables, next.Tables); err != nil {
 		return err
+	}
+	// The executor transition changes no data, so every track frontier is
+	// carried unchanged (spec 2026-10-10 §7.3).
+	if !slices.Equal(prev.TrackFrontiers, next.TrackFrontiers) {
+		return fmt.Errorf("track frontiers changed across the executor transition")
 	}
 	dataRoot, stateRoot, err := AssembleStateRoot(next.SchemaSnapshotID, next.SchemaRoot, next.ExecutorProfileID, next.Tables)
 	if err != nil {

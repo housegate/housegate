@@ -24,6 +24,28 @@ type SafeSnapshotManifest struct {
 	DataRoot          string          `json:"data_root"`
 	ManifestRoot      string          `json:"manifest_root"`
 	Tables            []TableManifest `json:"tables"`
+	// TrackFrontiers is set only on a manifest the arbiter publishes after its
+	// tracks activation (spec 2026-10-10 §7.3): one entry per enrolled SI
+	// indexer, strictly ascending by IndexerID. It is the last field, and
+	// omitempty keeps it out of the JSON form and out of the manifest root of
+	// every manifest without frontiers, so those stay byte-identical. The JSON
+	// tag is frozen against arbiter-proto replay.proto SafeSnapshotManifest
+	// field 11.
+	TrackFrontiers []TrackFrontier `json:"track_frontiers,omitempty"`
+}
+
+// TrackFrontier is one SI indexer's entry in a track-aware manifest (spec
+// 2026-10-10 §7.3). No omitempty: indexer 0 and zero values serialize.
+// SafeBlockSeq: the manifest holds the effects of every block up to the
+// tracks-activation cutover block and of every block of this indexer's track
+// up to this value. AppliedPromotionSeq is a cutoff: every promotion of the
+// track at or below it is represented in the manifest's tables, and none
+// above it is. The JSON tags are frozen against arbiter-proto replay.proto
+// TrackFrontier.
+type TrackFrontier struct {
+	IndexerID           uint64 `json:"indexer_id"`
+	SafeBlockSeq        uint64 `json:"safe_block_seq"`
+	AppliedPromotionSeq uint64 `json:"applied_promotion_seq"`
 }
 
 // TableManifest records the data root for one verified table.
@@ -100,6 +122,9 @@ func (m SafeSnapshotManifest) Validate() error {
 	if m.ManifestRoot == "" {
 		return fmt.Errorf("manifest_root is required")
 	}
+	if err := validateTrackFrontiers(m.TrackFrontiers); err != nil {
+		return err
+	}
 
 	n := m.normalized()
 	dataRoot, err := n.ComputeDataRoot()
@@ -122,6 +147,19 @@ func (m SafeSnapshotManifest) Validate() error {
 	}
 	if m.ManifestRoot != manifestRoot {
 		return fmt.Errorf("manifest_root mismatch: got %s want %s", m.ManifestRoot, manifestRoot)
+	}
+	return nil
+}
+
+// validateTrackFrontiers enforces the canonical order of a manifest's track
+// frontiers (spec 2026-10-10 §7.3): strictly ascending by IndexerID, so every
+// indexer appears at most once. Seal does not sort them, so an out-of-order
+// list is refused here instead of being silently repaired.
+func validateTrackFrontiers(frontiers []TrackFrontier) error {
+	for i := 1; i < len(frontiers); i++ {
+		if frontiers[i].IndexerID <= frontiers[i-1].IndexerID {
+			return fmt.Errorf("track_frontiers must be sorted by indexer_id and unique")
+		}
 	}
 	return nil
 }
@@ -150,6 +188,9 @@ func (m SafeSnapshotManifest) normalized() SafeSnapshotManifest {
 		})
 	}
 	sort.Slice(n.Tables, func(a, b int) bool { return n.Tables[a].TableID < n.Tables[b].TableID })
+	// Track frontiers are copied, never sorted: their order is part of what
+	// Validate checks.
+	n.TrackFrontiers = append([]TrackFrontier(nil), m.TrackFrontiers...)
 	return n
 }
 

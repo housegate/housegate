@@ -173,6 +173,12 @@ func TestRelay_StagedSourceUnavailableRejection_KeepsSessionAndServesNextQuery(t
 	testStagedSessionPreservingRejection(t, chproto.CodeTableIsBeingRestarted, chproto.SourceUnavailableMessage("db1.t"))
 }
 
+// Spec 2026-10-10 §7.4, §9: a statement whose table's owning SI indexer is
+// quarantined is refused non-retryably with 392, and the session survives.
+func TestRelay_StagedIndexerQuarantinedRejection_KeepsSessionAndServesNextQuery(t *testing.T) {
+	testStagedSessionPreservingRejection(t, chproto.CodeQueryIsProhibited, chproto.IndexerQuarantinedMessage("db1.t"))
+}
+
 func testStagedSessionPreservingRejection(t *testing.T, code int32, message string) {
 	t.Helper()
 	hooks := &stagedRejectHooks{rejectOne: true, rejectErr: &chproto.ClientError{
@@ -412,6 +418,17 @@ func TestRelay_DeferredUpstreamSourceUnavailable_KeepsSessionAndServesNextQuery(
 	})
 }
 
+// The server-mode Housegate answers a statement whose table's owning SI
+// indexer is quarantined with the session-preserving 392 after it consumed the
+// complete staged input; the agent must keep its session too.
+func TestRelay_DeferredUpstreamIndexerQuarantined_KeepsSessionAndServesNextQuery(t *testing.T) {
+	testDeferredUpstreamSessionPreservingRejection(t, &chproto.Exception{
+		Code:    proto.Error(chproto.CodeQueryIsProhibited),
+		Name:    "DB::Exception",
+		Message: chproto.IndexerQuarantinedMessage("db1.t"),
+	})
+}
+
 func testDeferredUpstreamSessionPreservingRejection(t *testing.T, rejection *chproto.Exception) {
 	t.Helper()
 	baseHooks := &deferredInsertHooks{}
@@ -516,6 +533,13 @@ func TestSessionPreservingIngressException(t *testing.T) {
 		{"source unavailable under 392", chproto.CodeQueryIsProhibited, chproto.SourceUnavailableMessage("net1.events"), false},
 		{"source unavailable under 252", chproto.CodeTooManyParts, chproto.SourceUnavailableMessage("net1.events"), false},
 		{"source unavailable without a table id", chproto.CodeTableIsBeingRestarted, chproto.SourceUnavailableMessage(""), false},
+		{"indexer quarantined", chproto.CodeQueryIsProhibited, chproto.IndexerQuarantinedMessage("net1.events"), true},
+		{"indexer quarantined under 733", chproto.CodeTableIsBeingRestarted, chproto.IndexerQuarantinedMessage("net1.events"), false},
+		{"indexer quarantined under 252", chproto.CodeTooManyParts, chproto.IndexerQuarantinedMessage("net1.events"), false},
+		{"indexer quarantined without a table id", chproto.CodeQueryIsProhibited, chproto.IndexerQuarantinedMessage(""), false},
+		{"indexer quarantined id with whitespace", chproto.CodeQueryIsProhibited, chproto.IndexerQuarantinedMessage("net1 events"), false},
+		{"peer guard refusal", chproto.CodeQueryIsProhibited, "storage_integrity: table net1.events is governed by storage integrity and must be read through its host indexer; connect with --database net1 or USE net1", false},
+		{"quarantined host refused table", chproto.CodeQueryIsProhibited, "storage_integrity: table net1.events was refused: indexer_quarantined: storage-integrity indexer 1 is quarantined", false},
 		{"refused", chproto.CodeQueryIsProhibited, "storage_integrity: table net1.events was refused: SCHEMA_INVALID: bad column", false},
 		{"table state unavailable", chproto.CodeQueryIsProhibited, "storage_integrity: table state is unavailable for this query", false},
 		{"governed create", chproto.CodeQueryIsProhibited, "storage_integrity: table net1.events is governed by storage integrity and cannot be created with data; create the table first, then INSERT", false},

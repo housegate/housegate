@@ -62,6 +62,10 @@ func (m SafeSnapshotManifest) ComputeStateRoot() (string, error) {
 
 // ComputeManifestRoot returns the commitment over snapshot metadata and data
 // manifest, excluding ManifestRoot and SnapshotID to avoid self-reference.
+// TrackFrontiers is the preimage's last member and omitempty (spec 2026-10-10
+// §7.3), so a manifest without frontiers keeps its earlier root byte for byte
+// under the unchanged domain, and no preimage without the member can equal one
+// with it (pkg/replay/AGENTS.md: the one sanctioned extension of a domain).
 func (m SafeSnapshotManifest) ComputeManifestRoot() (string, error) {
 	n := m.normalized()
 	v := struct {
@@ -73,6 +77,7 @@ func (m SafeSnapshotManifest) ComputeManifestRoot() (string, error) {
 		ExecutorProfileID string          `json:"executor_profile_id"`
 		DataRoot          string          `json:"data_root"`
 		Tables            []TableManifest `json:"tables"`
+		TrackFrontiers    []TrackFrontier `json:"track_frontiers,omitempty"`
 	}{
 		ParentSnapshotID:  n.ParentSnapshotID,
 		SafeBlockSeq:      n.SafeBlockSeq,
@@ -82,6 +87,7 @@ func (m SafeSnapshotManifest) ComputeManifestRoot() (string, error) {
 		ExecutorProfileID: n.ExecutorProfileID,
 		DataRoot:          n.DataRoot,
 		Tables:            n.Tables,
+		TrackFrontiers:    n.TrackFrontiers,
 	}
 	return canonicalDigest("safe-snapshot-manifest", v)
 }

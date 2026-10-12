@@ -159,3 +159,36 @@ func TestSourceUnavailableMessage(t *testing.T) {
 		t.Fatal("the source-unavailable refusal must not match the table refusals")
 	}
 }
+
+// TestIndexerQuarantinedMessage pins the exact spec 2026-10-10 §7.4 / §9 text.
+// The relay's deferred-lane classifier depends on it, and 392 also carries
+// other refusals (sipeerguard, sitablestate), so only this exact message may
+// keep a session.
+func TestIndexerQuarantinedMessage(t *testing.T) {
+	if got := IndexerQuarantinedMessage("net1.events"); got != "storage_integrity: the indexer that owns table net1.events is quarantined; writes to it are refused until the indexer is released (not retryable)" {
+		t.Fatalf("IndexerQuarantinedMessage = %q", got)
+	}
+	if !IsIndexerQuarantinedMessage(IndexerQuarantinedMessage("net1.events")) {
+		t.Fatal("IsIndexerQuarantinedMessage rejected its own message")
+	}
+	if !IsIndexerQuarantinedMessage(IndexerQuarantinedMessage("net1.events") + SeqUnspentSuffix) {
+		t.Fatal("IsIndexerQuarantinedMessage must accept the marker suffix")
+	}
+	for _, msg := range []string{
+		IndexerQuarantinedMessage(""),
+		IndexerQuarantinedMessage("net1 events"),
+		IndexerQuarantinedMessage("net1.events\t"),
+		TableNoLongerAcceptsWritesMessage("net1.events"),
+		SourceUnavailableMessage("net1.events"),
+		"storage_integrity: the indexer that owns table net1.events is quarantined",
+		"storage_integrity: table net1.events was refused: indexer_quarantined: storage-integrity indexer 1 is quarantined",
+	} {
+		if IsIndexerQuarantinedMessage(msg) {
+			t.Fatalf("IsIndexerQuarantinedMessage(%q) = true, want false", msg)
+		}
+	}
+	quarantined := IndexerQuarantinedMessage("net1.events")
+	if IsTableNoLongerAcceptsWritesMessage(quarantined) || IsSourceUnavailableMessage(quarantined) || IsTableActivatingMessage(quarantined) {
+		t.Fatal("the indexer-quarantined refusal must not match the other refusals")
+	}
+}

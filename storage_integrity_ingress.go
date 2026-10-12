@@ -548,7 +548,8 @@ func (i *StorageIntegrityIngress) cleanupProofContext(ctx context.Context) (cont
 // partsPressureTarget derives the physical table and the payload-touched
 // partitions. A new admission passes the schema of the query's snapshot
 // (spec 2026-09-24 §9.1); journal recovery passes nil and resolves through the
-// table-state resolver, which answers Active and Gone tables.
+// table-state resolver, which answers Active and Gone tables and a Refused
+// table that carries a schema (a quarantined indexer's).
 func (i *StorageIntegrityIngress) partsPressureTarget(rec sicore.AdmissionRecord, snapshotSchema *payloadexec.TableSchema) (string, []string, error) {
 	if snapshotSchema == nil && i.schemas == nil && i.pressure == nil {
 		// Legacy ingress with no schema source at all. A supplied snapshot
@@ -844,6 +845,21 @@ func (i *StorageIntegrityIngress) ConsumeStorageIntegrityAdmission(ctx context.C
 				"statement_id", rec.StatementID, "table", rec.TableID, "reason", res.Submit.Reason)
 			return &chproto.ClientError{Code: chproto.CodeTableIsBeingRestarted,
 				Message:     chproto.SourceUnavailableMessage(rec.TableID),
+				Err:         fmt.Errorf("arbiter %s: %s", res.Submit.AdmissionCode, res.Submit.Reason),
+				KeepSession: true,
+				SeqUnspent:  true}
+		}
+		if res.Submit.AdmissionCode == sicore.AdmissionCodeIndexerQuarantined {
+			// The table's owning SI indexer is quarantined (spec 2026-10-10 §7.4,
+			// §9). The arbiter checks quarantine before the source and changed
+			// nothing, so the coordinate is unspent, and the terminal-submit path
+			// has already removed the prepared parts. The refusal is not retryable
+			// until an authority releases the indexer; it ends only the query, and
+			// the relay recognises the exact message on the wire.
+			log.Warnw("storage_integrity statement refused: the table's indexer is quarantined",
+				"statement_id", rec.StatementID, "table", rec.TableID, "reason", res.Submit.Reason)
+			return &chproto.ClientError{Code: chproto.CodeQueryIsProhibited,
+				Message:     chproto.IndexerQuarantinedMessage(rec.TableID),
 				Err:         fmt.Errorf("arbiter %s: %s", res.Submit.AdmissionCode, res.Submit.Reason),
 				KeepSession: true,
 				SeqUnspent:  true}

@@ -97,6 +97,7 @@ func TestConsumeAdmission_PostOrchestrateMarking(t *testing.T) {
 		"malformed":          {outcome: sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: "bad", AdmissionCode: "ADMISSION_CODE_MALFORMED"}, wantMarked: true, wantText: "rejected by the arbiter: ADMISSION_CODE_MALFORMED"},
 		"schema":             {outcome: sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: "retired", AdmissionCode: sicore.AdmissionCodeSchemaNotAllowed}, wantMarked: true, wantText: "no longer accepts writes"},
 		"source unavailable": {outcome: sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: "storage-integrity source snode-b of indexer 1 is not active", AdmissionCode: sicore.AdmissionCodeSourceUnavailable}, wantMarked: true, wantText: "the source of table net1.events is not active yet"},
+		"quarantined":        {outcome: sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: "storage-integrity indexer 1 is quarantined", AdmissionCode: sicore.AdmissionCodeIndexerQuarantined}, wantMarked: true, wantText: "the indexer that owns table net1.events is quarantined"},
 		"duplicate":          {outcome: sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: "dup", AdmissionCode: sicore.AdmissionCodeDuplicateClientSeq}},
 		"no code":            {outcome: sicore.SubmitOutcome{Category: sicore.OutcomeTerminalReject, Reason: "permission denied"}},
 		"retryable":          {outcome: sicore.SubmitOutcome{Category: sicore.OutcomeRetryable, Reason: "fence"}},
