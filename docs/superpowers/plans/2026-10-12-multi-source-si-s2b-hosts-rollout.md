@@ -110,6 +110,9 @@ Notes:
 - **The SNode feature needs no code.** `LocalNodeFeatures()` of `CORE_TAG` carries `track_manifests_v1`, and sentio-node always sets `snode.Deps.ClaimSigner`, so the SNode advertises all three features once the pins move; Task 18 checks it in the leader's feature book.
 - **No config, chart or CLI change.** Agents decode `sentio_getStorageIntegrityInfo` leniently (`housegate:pkg/network/rpc.go:156`, `pkg/registry/si_info.go:12-24` has no `quarantined`), so the new key changes nothing for them.
 
+**Amendment from the PR #234 review (binding):**
+- A32 (Plan S2-A Appendix A §7): `wire.TableRegistrySnapshot.QuarantinedIndexers` lists every indexer that is quarantined or released with rejected parts not yet cleaned, so `IndexerView.Quarantined` and the info RPC's `quarantined` mean "quarantined or draining"; the host keeps answering Refused until the arbiter drops it from the list. No code differs from the text below; the README paragraph and the `quarantined` field comment say so.
+
 - [ ] **Step 1: Worktree and contract check**
 
 ```bash
@@ -180,7 +183,7 @@ Edit `MODULE.bazel` (fill the tags without the leading `v` and the two commits p
 +    commit = "<HG_SHA>",
      remote = "https://github.com/housegate/housegate",
  )
- 
+@@
  git_override(
      module_name = "arbiter_core",
 -    # Resolved arbiter-core v0.13.0; source is pinned by the commit below.
@@ -2232,4 +2235,3 @@ Group G7 drafted Tasks 16–18 against the binding contract (Plan S2-A Appendix 
 ## Appendix C: execution record
 
 Empty until Plan S2-B is executed.
-
