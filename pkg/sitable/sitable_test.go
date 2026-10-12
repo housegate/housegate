@@ -147,6 +147,58 @@ func TestSnapshotReturnedTableColumnsAreFreshCopies(t *testing.T) {
 	}
 }
 
+// TestSnapshotSchemaAnswersARefusedTableOnlyWhenItCarriesOne is clarification
+// C13 (spec 2026-10-10 §10): a host reports each table of a quarantined indexer
+// as Refused with the code "indexer_quarantined" and keeps its schema, so
+// journal recovery and cleanup still resolve it through Schema. A table the
+// arbiter refused at admission carries no schema and stays unanswered, and
+// every other status behaves as before.
+func TestSnapshotSchemaAnswersARefusedTableOnlyWhenItCarriesOne(t *testing.T) {
+	quarantined := Table{
+		ID: "db1.quarantined", Status: Refused,
+		RefusedCode: "indexer_quarantined", RefusedReason: "storage-integrity indexer 1 is quarantined",
+		Schema: testSchema("db1.quarantined"), SchemaHash: payloadexec.TableSchemaHash("net", testSchema("db1.quarantined")),
+	}
+	snap := NewFake(Pending,
+		quarantined,
+		Table{ID: "db1.refused", Status: Refused, RefusedCode: "SCHEMA_INVALID", RefusedReason: "bad column"},
+		Table{ID: "db1.pending", Status: Pending, Schema: testSchema("db1.pending")},
+		Table{ID: "db1.ordinary", Status: Ordinary, Schema: testSchema("db1.ordinary")},
+		Table{ID: "db1.active", Status: Active, Schema: testSchema("db1.active")},
+		Table{ID: "db1.gone", Status: Gone, Schema: testSchema("db1.gone")},
+	).Current()
+
+	got, ok := snap.Schema("db1.quarantined")
+	if !ok || !reflect.DeepEqual(got, quarantined) {
+		t.Fatalf("Schema(db1.quarantined) = %+v ok=%v, want the Refused entry with its code, schema and hash", got, ok)
+	}
+	for _, id := range []string{"db1.active", "db1.gone"} {
+		if table, ok := snap.Schema(id); !ok || table.ID != id {
+			t.Fatalf("Schema(%s) = %+v ok=%v, want the entry", id, table, ok)
+		}
+	}
+	for _, id := range []string{"db1.refused", "db1.pending", "db1.ordinary", "db1.unlisted"} {
+		if table, ok := snap.Schema(id); ok {
+			t.Fatalf("Schema(%s) = %+v, want a miss", id, table)
+		}
+	}
+
+	// Answering Schema does not make the table usable: Lookup still reports it
+	// Refused, and only the Active table is listed as Active.
+	if lookup := snap.Lookup("db1", "quarantined"); lookup.Status != Refused || lookup.RefusedCode != "indexer_quarantined" {
+		t.Fatalf("Lookup(db1, quarantined) = %+v, want it still Refused", lookup)
+	}
+	if active := snap.Active(); len(active) != 1 || active[0].ID != "db1.active" {
+		t.Fatalf("Active() = %+v, want only db1.active", active)
+	}
+
+	// The answer is a fresh copy, like every other.
+	got.Schema.Columns[0].Name = "mutated"
+	if again, _ := snap.Schema("db1.quarantined"); again.Schema.Columns[0].Name != "a" {
+		t.Fatalf("mutating a Schema()-returned Refused Table's Columns leaked into the snapshot: %+v", again.Schema.Columns)
+	}
+}
+
 // TestStaticSchemaColumnsAreNotAliased is the "in" direction for NewStatic:
 // the caller's schemas map holds slices Static must not alias.
 func TestStaticSchemaColumnsAreNotAliased(t *testing.T) {

@@ -108,11 +108,17 @@ func cloneTable(t Table) Table {
 }
 
 // Snapshot is immutable; every method is in-memory and performs no I/O.
+//
+// Schema is how journal recovery and cleanup resolve a table's schema. It
+// answers an Active or Gone table and a Refused table that carries a schema (a
+// quarantined indexer's, code "indexer_quarantined"; NewSnapshot, Static and
+// Fake do), and misses for every other table, including a Refused one without
+// a schema.
 type Snapshot interface {
 	Version() uint64
 	Lookup(database, table string) Table // answers for any table
 	Active() []Table                     // sorted by ID
-	Schema(id string) (Table, bool)      // Active or Gone; a host may also answer a Refused table that carries a schema (an indexer quarantine)
+	Schema(id string) (Table, bool)      // Active or Gone, or Refused with a schema (an indexer quarantine)
 }
 
 // TableState hands out snapshots. Changed returns a channel that is closed at
@@ -208,9 +214,24 @@ func (s *snapshot) Active() []Table {
 	return out
 }
 
+// Schema answers an Active or Gone table, and a Refused table that carries a
+// schema: a host keeps the schema of each table it reports Refused because its
+// SI indexer is quarantined (code "indexer_quarantined", spec 2026-10-10 §10),
+// so journal recovery and cleanup still resolve it. A Refused table without a
+// schema (the arbiter's admission refusal), a Pending or Ordinary one and an
+// unlisted one all miss.
 func (s *snapshot) Schema(id string) (Table, bool) {
 	t, ok := s.byID[id]
-	if !ok || (t.Status != Active && t.Status != Gone) {
+	if !ok {
+		return Table{}, false
+	}
+	switch t.Status {
+	case Active, Gone:
+	case Refused:
+		if t.Schema.TableID == "" {
+			return Table{}, false
+		}
+	default:
 		return Table{}, false
 	}
 	return cloneTable(t), true

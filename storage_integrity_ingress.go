@@ -548,7 +548,8 @@ func (i *StorageIntegrityIngress) cleanupProofContext(ctx context.Context) (cont
 // partsPressureTarget derives the physical table and the payload-touched
 // partitions. A new admission passes the schema of the query's snapshot
 // (spec 2026-09-24 §9.1); journal recovery passes nil and resolves through the
-// table-state resolver, which answers Active and Gone tables.
+// table-state resolver, which answers Active and Gone tables and a Refused
+// table that carries a schema (a quarantined indexer's).
 func (i *StorageIntegrityIngress) partsPressureTarget(rec sicore.AdmissionRecord, snapshotSchema *payloadexec.TableSchema) (string, []string, error) {
 	if snapshotSchema == nil && i.schemas == nil && i.pressure == nil {
 		// Legacy ingress with no schema source at all. A supplied snapshot
