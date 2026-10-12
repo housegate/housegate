@@ -1,6 +1,6 @@
 # Multi-source storage-integrity network — Design
 
-**Status:** design, approved section by section on 2026-10-10; umbrella spec. Each sub-project (§14) gets its own implementation plan in the repository that owns it.
+**Status:** design, approved section by section on 2026-10-10; umbrella spec. Each sub-project (§14) gets its own implementation plan in the repository that owns it. Revised 2026-10-12: stage 1 is built and live on devnet2; the clarifications C1–C14 found while planning stage 2 against the stage-1 code (`docs/superpowers/plans/2026-10-12-multi-source-si-s2a-tracks-consensus.md`, section *Spec clarifications*) are folded into §7, §9, §10, §14, §15 and §18, each marked with its number; C15–C17 came from the review of the plans (housegate#234).
 
 **Repositories:** arbiter-proto, arbiter-core, arbiter (private), housegate, sentio-node, production.
 
@@ -136,17 +136,18 @@ Activation is one authority-signed update that sets `si_indexers` (on devnet2: `
 
 ### 7.1 One owner per block
 
-- The open block records the owner of its statements. When admission accepts a statement whose owner differs from a non-empty open block's, Apply first seals the open block exactly as `SealL3Block` would, then opens a new one for the new owner. The seal happens after every admission check has passed (including the gap-budget check) and before the statement's spent-id insert, so the sealed header's `spent_ids_root_after` excludes the new statement.
+- The open block records the owner of its statements. When admission accepts a statement whose owner differs from a non-empty open block's, Apply first seals the open block exactly as `SealL3Block` would, then opens a new one for the new owner. The seal happens after every admission check has passed (including the gap-budget check) and before the statement's spent-id insert, so the sealed header's `spent_ids_root_after` excludes the new statement. The gap-budget check is the insert itself (`SpentIDs.Insert` refuses with no state change), so Apply prepares the seal without mutating anything — the header carries the pre-insert `spent_ids_root` — then inserts, and commits the prepared seal only if the insert succeeded; a failed insert or a failed preparation leaves state unchanged (C10).
 - Blocks stay contiguous statement-seq ranges, so the verifier, `ReplayJob`, the L3 block views and the offline state-digest tool need no change.
-- The header gains `track: {indexer_id}`, a pointer so that indexer 0 is not dropped by `omitempty`; it is part of the chain-hash preimage for every block sealed after activation and absent from earlier ones. A table-set transition block carries the track of the tables it changes and contains changes of one owner only; the sealer seals one transition block per owner with pending changes.
+- The header gains `track: {indexer_id}`, a pointer so that indexer 0 is not dropped by `omitempty`; it is part of the chain-hash preimage for every block sealed after activation and absent from earlier ones. A table-set transition block carries the track of the tables it changes and contains changes of one owner only; the sealer seals one transition block per owner with pending changes. A transition header's `new_schema_root` keeps its meaning — `SchemaRootFromHashes` over its pinned base's table set with the change applied — and is judged against that base alone, as `pinnedBlockState` and the verifiers already do (C1).
 - Interleaved traffic from several indexers makes blocks smaller, and each block costs one anchor transaction plus three replays. The leader therefore groups submissions it receives within a short window (default 50 ms, configurable, not a consensus parameter) by owner before proposing them. If block count becomes the bottleneck, a later change may give each owner its own open block with an explicit statement list in the header; track semantics would not change.
 
 ### 7.2 Per-track progress
 
 - The safe prefix of track T is the last T block such that every T block up to it is safe. While T has no safe block after the activation cutover, its prefix is the cutover block (§7.6). A statement block is safe when all its statements are Safe, a transition block when its own quorum, finality and last-mergeable are latched, and an acknowledged Rejected block (§7.5) counts as passed.
-- The global `safe_block_seq` remains the contiguous prefix over all blocks and is a conservative value: everything up to it is safe, but tracks may be ahead of it.
+- The global `safe_block_seq` remains the contiguous prefix over all blocks and is a conservative value: everything up to it is safe, but tracks may be ahead of it. It uses the same passed predicate as the track prefixes, so it moves past an acknowledged Rejected block too; such a block contributes no effect to any manifest, because its parts were never promoted (C3).
 - The promotion frontier is per track: a statement is promotable only if its block is at most the first T block after T's prefix.
 - The manifest-debt gate is per track: while T's prefix is ahead of T's frontier in the latest published manifest, no new promotion is issued for T. Other tracks keep promoting.
+- A promotion's unsafe parts are scheduled for cleanup once the published frontier of its own track covers its block, not the global watermark. Otherwise a stuck track would keep every other track's promoted parts uncleaned, and the drain gate would refuse every consensus update even after the stuck indexer is quarantined (C5).
 - At most one transition block per track may be unpublished. Pending→Active and Retiring→Purging advance when the published manifest's frontier for the table's track covers the transition block.
 - Tables and partitions of different owners are disjoint, so tracks never contend for a partition.
 
@@ -156,7 +157,8 @@ Activation is one authority-signed update that sets `si_indexers` (on devnet2: `
 - Every manifest published after activation is track-aware: it carries an entry for every SI indexer enrolled at publication time, including idle ones. Validation requires:
   - an entry for each enrolled indexer and no other;
   - each `safe_block_seq` at least the activation cutover block (§7.6), and at least that track's last block at or below the manifest's `safe_block_seq`;
-  - each entry's values never below the parent's for the same indexer.
+  - each entry's values never below the parent's for the same indexer;
+  - `safe_block_seq` equal to the global prefix at publication and never below the parent's, and at least one entry advanced. A track-aware publication is triggered by one track and may leave the global prefix where it was (C6).
 - Field meaning for an entry of track T:
   - `safe_block_seq`: the manifest contains the effects of every block up to the activation cutover block and of every T block up to this value;
   - `applied_promotion_seq` is a cutoff: every T promotion with a sequence at or below it is represented in the manifest, and no T promotion above it is.
@@ -170,6 +172,8 @@ Activation is one authority-signed update that sets `si_indexers` (on devnet2: `
   - **Initialised.** A track that has not advanced and has no parent entry takes its initial values (§7.6). It keeps whatever tables the parent holds for it: its pre-activation tables if it was enrolled at activation, none if it was enrolled later.
 - Each track's represented promotions are therefore always exactly those at or below its cutoff. This is the resume cursor Spec D needs (§7.7).
 - The verifier's check that a job's block is above the base's `safe_block_seq` still holds, because a block is always sealed above the global prefix of the manifest it pins.
+- A track-aware manifest's `schema_root` is `SchemaRootFromHashes` over all of its own tables, which equals the root of every manifest published before the activation. Assembly and validation apply each track's transition blocks to that track's tables only and never compare a transition's root with a running union of earlier transitions: two tracks' unpublished transitions may be pinned to the same base, so neither root equals the union (C1).
+- `track_frontiers` is the last member of the manifest and of the manifest-root preimage, absent when empty; a manifest carrying it is refused before the activation.
 - The manifest format change is a housegate `pkg/replay` change; every verifier and SNode must run it before activation (§7.6).
 
 ### 7.4 Governance and quarantine
@@ -181,18 +185,23 @@ Activation is one authority-signed update that sets `si_indexers` (on devnet2: `
 - While an indexer is quarantined:
   - admission refuses its tables with a new non-retryable code `INDEXER_QUARANTINED`;
   - its pending promotions and cleanups stay recorded but are not dispatched (cancelling them could leave the SNode's local base ahead of the FSM's if an acknowledgement was lost);
+  - no new promotion or cleanup of its track is issued either; on release the suspended and the newly available work reappear together (C8);
   - its track is excluded from the consensus-update drain gate.
+- Admission checks quarantine immediately before the owner-source check, so a quarantined indexer's tables answer the non-retryable `INDEXER_QUARANTINED`, never the retryable `SOURCE_UNAVAILABLE`, even when its SNode is down too (C9).
 - The drain gate applies to every other track as today. In-flight promotions of healthy tracks last seconds, so updates go through between them.
 - On release the orchestrator re-dispatches both kinds of suspended work, promotions and cleanups, through its existing resend paths. Those paths re-sign every dispatch with the current authority context (`arbiter:orchestrator/promotion.go` `streamPromotion`, `arbiter:orchestrator/cleanup.go` `streamCleanup`, context from `arbiter:orchestrator/signer.go:25-39`).
   - The FSM records the authority JWS only when work is issued and does not check an epoch when it is acknowledged. Suspended work therefore survives an authority rotation without a new command.
+  - SNodes authorize promotions and cleanups against their configured authority allowlist, which carries no epoch (`arbiter-core:snode/snode.go`). Re-signed work is accepted after a rotation only if every SNode already lists the new authority, so an authority rotation requires updating every SNode's allowlist first (C12).
   - Re-sent work is idempotent. The SNode applies a re-sent promotion through its per-partition watermark and last-acknowledgement record. A re-sent cleanup only drops parts, and dropping an already-dropped part is tolerated (`arbiter-core:snode/cleanup.go:27-31`); the FSM accepts an acknowledgement for a cleanup it has already cleared as a no-op.
+- Excluding a quarantined track from the drain gate breaks stage 1's restore invariant that a consensus update happens only at a drained boundary (restore refused an unacknowledged promotion or a pending cleanup of an older epoch). Restore therefore accepts such work when it was issued at or after the tracks activation's epoch, and still verifies its authority proof against the parameters of its own epoch (C14).
+- Restore proves every track-aware manifest's cutoffs against its tables: a promotion of track T issued after the cutover is reflected in the tables exactly when its sequence is at or below T's `applied_promotion_seq`. After the activation the arbiter keeps each promotion's source-signed acknowledgement (an `Applied:false` acknowledgement also consumes a promotion), and restore verifies those signatures, so neither a rewritten cutoff nor a flipped outcome can pass (C17).
 
 ### 7.5 Rejected blocks
 
 When a challenge resolves a block of track T as Rejected, Apply quarantines T with the block as reason and increments T's `quarantine_generation`. A release signed before that point names an older generation and is refused, so the operator must review the new rejection before releasing. The track cannot pass the block until a `ReleaseIndexer` lists it in `acknowledged_rejected_blocks`. Release then:
 
 - counts the block as passed for T's prefix;
-- schedules cleanup of its statements' candidate parts on T's SNode.
+- schedules cleanup of its statements' candidate parts on T's SNode. A stage-1 cleanup is keyed by the promotion it follows, and these parts were never promoted, so the release records them per (block, table, partition) in the track state; their cleanup is an `UnsafeCleanup` with `promotion_seq` 0 and a new `rejected_block_seq`, which the block's source SNode echoes in its signed acknowledgement (C4). Until the last of them is acknowledged the indexer stays in the registry's quarantined list, so its host keeps refusing its tables and no rejected row is served by an unsafe read (C16).
 
 Rejected data never reached safe, so passing it is sound. Today a single rejected block stops the safe progress of the whole network.
 
@@ -200,10 +209,12 @@ Rejected data never reached safe, so passing it is sound. Today a single rejecte
 
 Snapshot v20 adds the open block's owner, the header track, `tracks_enabled`, the quarantine state with each indexer's `quarantine_generation`, and the acknowledged rejected blocks; it is written only once `tracks_enabled` is committed. `tracks_enabled` is a raise-only parameter set by one authority-signed update. The update requires:
 
-- a drained chain: the open block is empty and the global safe prefix equals the sealed tip;
-- every voter passing the capability probe and every verifier and SNode advertising `track_manifests_v1`.
+- a drained chain: the open block is empty, the global safe prefix equals the sealed tip, and the latest published manifest covers the sealed tip (no manifest is owed; without it the latest manifest would not hold every promotion up to `promotion_seq`) (C2);
+- `artifact_disposition_capability` 0 and an idle snapshot-query barrier (C2, C7);
+- `si_indexers` committed by an earlier update: the signed-claims activation and the tracks activation are never one update (C11);
+- every voter passing the capability probe and every verifier and SNode advertising `track_manifests_v1`. The leader runs the voter probe itself, against the voter admin addresses the request names, and requires the probed node ids to be exactly the raft voter set; an administration tool's own probe is only a preflight (C15).
 
-Every block sealed after it carries a track.
+Every block sealed after it carries a track. Once tracks are enabled, `artifact_disposition_capability` cannot be raised and `BeginSnapshotQuery` is refused (C7).
 
 **Cutover.** Applying the update records `track_cutover = {block_seq, promotion_seq}`: the sealed tip and the current `PromotionSeq`.
 - Drained means every statement up to the tip is Safe, so every promotion up to `promotion_seq` is acknowledged. The latest published manifest therefore contains the effects of all of them, whichever stage-1 owner each one belonged to.
@@ -227,7 +238,7 @@ Promotions of different tracks touch disjoint partitions, so a replica may apply
 ### 7.8 What stays global
 
 - The table-set transition admission fence: it lasts only until the leader seals the transition.
-- The snapshot-query reservation barrier: default off and not wired; it keeps waiting on the global prefix and so on every track.
+- The snapshot-query reservation barrier: default off and not wired; it keeps waiting on the global prefix and so on every track. The snapshot-query lane itself is refused while tracks are enabled, because a singleton query block has no owner and so no track (C7).
 - Verifier liveness: with two of three verifiers down nothing verifies.
 - Raft log, DA and verifier compute are shared, so per-indexer quotas are needed before third parties join (§17).
 
@@ -247,7 +258,7 @@ Promotions of different tracks touch disjoint partitions, so a replica may apply
 ## 9. housegate
 
 - Route A is unchanged: the ingress admits only the host's own Active tables, so the FSM's source is the co-located SNode and `expected_source` stays the local node id.
-- The ingress maps `SOURCE_UNAVAILABLE` to a retryable, session-preserving refusal (stage 1) and `INDEXER_QUARANTINED` to the non-retryable code 392 (stage 2).
+- The ingress maps `SOURCE_UNAVAILABLE` to a retryable, session-preserving refusal (stage 1) and `INDEXER_QUARANTINED` to the non-retryable code 392 (stage 2), keeping the session and the client_seq unspent; the deferred lane recognises it by its message, because `sipeerguard` also answers 392.
 - Every SI host runs `sipeerguard`, so a peer-trusted statement that names the ordinary physical table of a governed table is refused on every SI host alike. Cross-indexer per-clause reads and writes of SI tables stay refused; whole-session forwarding (`--database` / `USE`) remains the supported path.
 - `pkg/sitable` documentation: Ordinary means "not governed on this host", which now includes tables owned by another SI indexer.
 - `pkg/replay` gains `track_frontiers` (§7.3) with new root test vectors.
@@ -257,7 +268,7 @@ Promotions of different tracks touch disjoint partitions, so a replica may apply
 - **Configuration.** Per indexer: the SNode node id from its entry, state directory, its own source ClickHouse, and the indexer private key it already holds for signing. Network-wide: network id, schema snapshot id, executor profile, authority, arbiter peers and DA. `table_ids` becomes the genesis tables this indexer owns and may be empty.
 - **Governance predicate.** A database is governed iff it is hosted by this indexer, this indexer has an entry in `si_indexers`, and it is not a processor database. Before this indexer is seeded, a table created before its `activation_block` stays Ordinary, as the founding indexer's do today. A recorded registry key is answered from the registry only when its owner is this indexer; tables owned by another SI indexer are Ordinary here. Answering them from the registry would let this host's rewriter turn reads of a peer's SI table into reads of its own empty `hg_safe`. Default deny and the Legacy fallback read this indexer's own seeded flag and activation block.
 - **Enrolment.** A CLI subcommand signs and prints the SNode enrolment statement with the indexer key. A node configured for SI that starts before its enrolment commits keeps retrying registration instead of failing startup; until then its tables are Ordinary and writes take the ordinary path.
-- **RPC.** `sentio_getStorageIntegrityInfo` reports `si_indexer_id` as this indexer's id when it has an entry, else null, and adds `enrolled`. Stage 2 adds `quarantined`, and the host reports its own Active tables as Refused while quarantined.
+- **RPC.** `sentio_getStorageIntegrityInfo` reports `si_indexer_id` as this indexer's id when it has an entry, else null, and adds `enrolled`. Stage 2 adds `quarantined`, and the host reports its own Active tables as Refused while quarantined, and after a release until its rejected parts are cleaned (C16). The host learns quarantine from the registry follower (`TableRegistrySnapshot.quarantined_indexers`). Refused refuses reads as well as writes, which is intended: the default `unsafe_latest` reads would otherwise serve the quarantined indexer's unverified data. The Refused entry keeps the table's schema and carries the host-synthesized code `indexer_quarantined`, so journal recovery and cleanup still resolve the table (C13).
 - **Schema network id.** On a node of an SI network, the schema declarer's network id must equal the arbiter network id; startup refuses a mismatch instead of relying on `physical_database` happening to match.
 
 ## 11. Agent
@@ -322,6 +333,8 @@ Stage 2:
 10. **sentio-node** — quarantine reporting.
 11. **production** — the stage-2 runbook.
 
+Release order in stage 2 is arbiter-proto (8) first, then housegate (7), whose `INDEXER_QUARANTINED` mapping goes through arbiter-proto's enum and whose `track_frontiers` arbiter-core mirrors, then arbiter-core (8), arbiter (9), sentio-node (10) and production (11).
+
 ## 15. Testing
 
 - **FSM, stage 1:**
@@ -356,6 +369,7 @@ Stage 2:
   - two SNodes with two source ClickHouses and three verifiers sharing one Keeper;
   - concurrent writes to both owners' tables;
   - stopping one SNode stalls both (stage 1) or only its own track (stage 2).
+  - Stage 2 proves track isolation, quarantine and the Rejected path with a fake-data-plane integration harness (two signing SNodes, three listed verifiers, fault injection) and live on devnet2; the ClickHouse-backed two-source topology above is still to be built.
 - **sentio-node:** governance predicate, owner filtering of recorded keys, degraded start before enrolment.
 - **production:** render tests of §12.
 
@@ -389,3 +403,4 @@ Each is a separate design.
 - The data-plane rule that every node holds every SI table now applies to verifiers only (their `hg_unsafe`). Among SNodes, promotion delivery becomes owner-only and only the owner's acknowledgement is the source acknowledgement.
 - Spec D (Proposed) keeps its safe-replica fan-out (§6.6), but its resume model becomes per track once tracks are enabled (§7.7).
 - The contiguous network-wide safe prefix becomes per track in stage 2. The global `safe_block_seq` keeps its conservative meaning.
+- Stage 1's restore invariant that every unacknowledged promotion and pending cleanup belongs to the current authority epoch holds only for work issued before the tracks activation (C14).
