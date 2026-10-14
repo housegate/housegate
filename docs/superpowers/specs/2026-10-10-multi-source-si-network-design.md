@@ -1,6 +1,6 @@
 # Multi-source storage-integrity network — Design
 
-**Status:** design, approved section by section on 2026-10-10; umbrella spec. Each sub-project (§14) gets its own implementation plan in the repository that owns it. Revised 2026-10-12: stage 1 is built and live on devnet2; the clarifications C1–C14 found while planning stage 2 against the stage-1 code (`docs/superpowers/plans/2026-10-12-multi-source-si-s2a-tracks-consensus.md`, section *Spec clarifications*) are folded into §7, §9, §10, §14, §15 and §18, each marked with its number; C15–C17 came from the review of the plans (housegate#234).
+**Status:** design, approved section by section on 2026-10-10; umbrella spec. Each sub-project (§14) gets its own implementation plan in the repository that owns it. Revised 2026-10-12: stage 1 is built and live on devnet2; the clarifications C1–C14 found while planning stage 2 against the stage-1 code (`docs/superpowers/plans/2026-10-12-multi-source-si-s2a-tracks-consensus.md`, section *Spec clarifications*) are folded into §7, §9, §10, §14, §15 and §18, each marked with its number; C15–C17 came from the review of the plans (housegate#234). Revised 2026-10-14: stage 3, replicated database groups, is specified in [2026-10-14-multi-source-si-stage3-database-groups-design.md](2026-10-14-multi-source-si-stage3-database-groups-design.md); its §20 lists every decision here that it changes, and §6.6, §7.7, §8, §14, §16 and §18 point to it.
 
 **Repositories:** arbiter-proto, arbiter-core, arbiter (private), housegate, sentio-node, production.
 
@@ -122,7 +122,7 @@ If the owner's SNode is not registered and Active in committed state, admission 
 
 - Among SNodes, the orchestrator sends a table's promotions and cleanups only to the owner's SNode; other SNodes do not hold the table.
 - The source acknowledgement is accepted only from the owner's SNode, with a valid signature. It is the acknowledgement whose closure check advances the partition state and marks statements Safe, whose `Applied:false` consumes a promotion, and that clears a pending cleanup. Today it is the only acknowledgement there is.
-- Spec D's safe-replica fan-out is outside this restriction and unaffected by it. Verifiers are not safe replicas today, so nothing changes for them now. When Spec D lands, a verifier that holds the table receives its promotions and cleanups, and its acknowledgements are recorded as replica acknowledgements under Spec D's lag and cleanup-gating rules — never as the source acknowledgement.
+- Spec D's safe-replica fan-out is outside this restriction and unaffected by it. Verifiers are not safe replicas today, so nothing changes for them now. When Spec D lands, a verifier that holds the table receives its promotions and cleanups, and its acknowledgements are recorded as replica acknowledgements under Spec D's lag and cleanup-gating rules — never as the source acknowledgement. Stage 3 supersedes this fan-out: members of a database group hold manifest-gated copies outside the promotion and cleanup path, and their checkpoints are never source acknowledgements; it also replaces the purge rule below (stage-3 design §8.8, §20).
 - A purge completes when the owner's SNode and every non-evicted verifier have reported, instead of every non-evicted SNode and verifier.
 - Promotion and manifest publication otherwise stay as they are in stage 1, including the global safe prefix.
 
@@ -225,6 +225,8 @@ Every block sealed after it carries a track. Once tracks are enabled, `artifact_
 
 ### 7.7 Compatibility with Spec D
 
+Superseded by stage 3 (stage-3 design §20): replicas follow published manifests and keep no promotion cursor, so the obligation below does not arise. It is kept for the record.
+
 [Spec D](2026-08-18-storage-integrity-lag-replay-and-bootstrap-design.md) (Proposed, not implemented) resumes a safe replica from one scalar `applied_promotion_seq` and a `ManifestCheckpoint` carrying one such scalar. Once tracks are enabled, the promotions a manifest represents are no longer a prefix of the global promotion sequence: a track carried over from the parent can miss promotion 10, which belongs to its partly promoted block, while an advanced track's promotion 11 is included. A scalar cursor would then skip one or replay the other.
 
 Spec D, whenever it is implemented after stage 2, adopts per-track cursors:
@@ -252,7 +254,7 @@ Promotions of different tracks touch disjoint partitions, so a replica may apply
   - interserver (port 9009) reachable from every verifier ClickHouse;
   - the `hg_safe` / `hg_unsafe` / `hg_promote` databases with their DDL-pinned settings.
   The network chart no longer owns an indexer's ClickHouse (§12).
-- **Verifiers.** v1 keeps three verifiers holding an `hg_unsafe` replica of every SI table, fetching parts from each owner's ClickHouse; storage grows with the network's SI data. Their `hg_safe` stays empty until Spec D makes them safe replicas (§6.6, §7.7). Verifier sharding is recorded in §17.
+- **Verifiers.** v1 keeps three verifiers holding an `hg_unsafe` replica of every SI table, fetching parts from each owner's ClickHouse; storage grows with the network's SI data. Their `hg_safe` stays empty. Stage 3 supersedes Spec D's plan to make them safe replicas: the members of database groups verify and hold copies, the three verifiers become the network pool, and verifier sharding is met by groups (stage-3 design §20).
 - **DA.** It stays one network DA, written by each indexer's ingress and SNode and read by verifiers, with the current channel trust while all indexers are self-operated.
 
 ## 9. housegate
@@ -333,6 +335,8 @@ Stage 2:
 10. **sentio-node** — quarantine reporting.
 11. **production** — the stage-2 runbook.
 
+Stage 3: the sub-projects and phases are in the stage-3 design §15 and §16.
+
 Release order in stage 2 is arbiter-proto (8) first, then housegate (7), whose `INDEXER_QUARANTINED` mapping goes through arbiter-proto's enum and whose `track_frontiers` arbiter-core mirrors, then arbiter-core (8), arbiter (9), sentio-node (10) and production (11).
 
 ## 15. Testing
@@ -382,6 +386,7 @@ Release order in stage 2 is arbiter-proto (8) first, then housegate (7), whose `
 - Interleaved writes make smaller blocks and more anchor transactions (§7.1).
 - An indexer's hot key signs its SNode messages. A leaked key lets an attacker forge that indexer's claims and acknowledgements, but forged data still fails verification, and the damage stays within its track once stage 2 is live.
 - Immutable database ownership is an assumption about the contract; the watcher halts if it is ever violated (§6.3).
+- Stage 3 adds a third irreversible format (v21) and the irreversible enrolment of a third devnet2 indexer (stage-3 design §18).
 
 ## 17. Third-party enrolment gate
 
@@ -401,6 +406,7 @@ Each is a separate design.
 - Dynamic SI table set D1 and §3 ("one SI indexer per network", "more than one SI indexer per network" out of scope) are replaced by D3 here. Its D10 (default deny) applies per enrolled indexer after that indexer's activation block, and its Legacy seed becomes per indexer.
 - Arbiter design §5.4 (hash selection over the writer pool) applies only before `si_indexers` is set. The single-writer gate becomes "`max_writers` ≥ enrolled indexers".
 - The data-plane rule that every node holds every SI table now applies to verifiers only (their `hg_unsafe`). Among SNodes, promotion delivery becomes owner-only and only the owner's acknowledgement is the source acknowledgement.
-- Spec D (Proposed) keeps its safe-replica fan-out (§6.6), but its resume model becomes per track once tracks are enabled (§7.7).
+- Superseded by stage 3 (stage-3 design §20): Spec D (Proposed) keeps its safe-replica fan-out (§6.6), but its resume model becomes per track once tracks are enabled (§7.7).
 - The contiguous network-wide safe prefix becomes per track in stage 2. The global `safe_block_seq` keeps its conservative meaning.
 - Stage 1's restore invariant that every unacknowledged promotion and pending cleanup belongs to the current authority epoch holds only for work issued before the tracks activation (C14).
+- Stage 3 changes D2, D7, D8, D9, D11, §3, §6.1, §6.5, §6.6, §7.1, §7.4, §7.7, §7.8, §8, §9, §10, §11, C13, §16, §17, the every-node rule and the Spec D bullet above; the stage-3 design's §20 is authoritative for each.

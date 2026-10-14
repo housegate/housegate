@@ -1,0 +1,400 @@
+# Multi-source storage-integrity network — Stage 3: replicated database groups — Design
+
+**Status:** design, drafted 2026-10-14. Stage 3 of the umbrella spec [2026-10-10-multi-source-si-network-design.md](2026-10-10-multi-source-si-network-design.md), whose stages 1 and 2 are built and live on devnet2. The four shaping choices were taken with the project owner on 2026-10-14: groups are per (owner, database); tracks stay per owner; blocks are sealed on the group's verify-member set; groups are placed deterministically and rebalanced by governance. Each sub-project (§15) gets its own implementation plan in the repository that owns it.
+
+**Repositories:** arbiter-proto, arbiter-core, arbiter (private), housegate, sentio-node, production; rewriter-proto, rewriter-go and rewriter only for the optional read item of §11.
+
+**Related:** [2026-06-22-storage-integrity-design.md](2026-06-22-storage-integrity-design.md) (§5.4, §9, §10, §12.2, §12.5, §13: every attesting replica holds `hg_safe`), [2026-06-10-multi-replica-trust-design.md](2026-06-10-multi-replica-trust-design.md), [2026-06-30-sentio-arbiter-design.md](2026-06-30-sentio-arbiter-design.md) (§7.1 deterministic verifier selection, §7.4 quorum, §10.6 `Sharder`), [Spec D](2026-08-18-storage-integrity-lag-replay-and-bootstrap-design.md) (partly superseded here, §20), [2026-07-01 insert/update/delete design](2026-07-01-sentio-sequencer-storage-integrity-insert-bounded-update-delete-design.zh-CN.md) (mutation pre-state).
+
+**Revisions read:** arbiter `fb42260`, arbiter-core `8f0bc43`, arbiter-proto `1c6ae67`, housegate `66d4df7`, sentio-node `5d2f169`, production `cd5b2174c`. Cross-repository references are written `repo:path:line` at those refs; bare paths are housegate. Live facts come from the devnet2 rollout records of 2026-10-11 (stage 1) and 2026-10-14 (stage 2) and from a local copy of a v20 voter snapshot. ClickHouse mechanics marked *measured* were measured on upstream `clickhouse-server` 26.3.37.3 in Docker on 2026-10-12 and 2026-10-14; P0 re-pins every one of them on the deployed `26.3-lts-decimal512` image.
+
+**Terminology.**
+- *Owner*: the SI indexer hosting a database (umbrella D4). Its SNode is the single source.
+- *Group* G(O, d): the owner O plus the *members* that hold and verify the SI tables of database d.
+- *Member*: an `si-member` process on an SI indexer host other than O, with its own VERIFIER-role node identity. A member has a *verify* role (eligible for verify sets), a *replicate* role (holds a copy) and may *count* toward the copy floor.
+- *Network pool*: the `verifiers` entries that no indexer hosts, i.e. today's three network-operated verifiers.
+- *Copy*: a member's `hg_replica` tables of one group, holding exactly what one published manifest lists.
+- *Install*: adding verified parts to a copy. *Checkpoint*: a member's signed statement of the manifest its copies equal.
+- *Verify set*: the three verifiers selected for one block. *Eligible ring*: the verifiers a block's verify set may be drawn from.
+- *Ready*: a member is ready in a group once its `MemberReady` for that group is recorded at or after the generation it joined at.
+- *Physical incarnation*: a Pending, Active, Retiring or Purging incarnation (`hasPhysicalTables`); Legacy and Refused incarnations hold no `hg_*` state.
+- S1–S17 are this stage's decisions; they do not continue the umbrella's D-series.
+- "Keeper" in "parts are synced via Keeper" means the arbiter, as in 06-22 §5.2: the arbiter's published manifest authorises every install. ClickHouse Keeper only moves `hg_unsafe` bytes, as today.
+
+## 1. Goal
+
+Every SI table has verified copies on several indexers, and the indexers that hold the copies are the ones that verify its writes, as the 06-22 design intended: one source executes, its result is verified once, and the verified result reaches the other members. A table's safe data no longer depends on one disk. A quarantined or unreachable owner's verified data stays readable. Verification capacity grows with the number of indexers instead of resting on three global verifiers. The owner stays the single writer, liveness stays per track, and the stage costs one irreversible consensus format (snapshot v21) plus the irreversible enrolment of devnet2's third SI indexer.
+
+## 2. Measured facts this design rests on
+
+- **One queryable copy.** A table's only `hg_safe` copy is on its owner's source ClickHouse. The verifiers' `hg_unsafe` copies are erased by the owner's cleanup, a replicated `DROP PART` (`arbiter-core:snode/cleanup.go`; measured: a `DROP PART` on one RMT replica removes the part on every replica). Verifiers create `hg_safe` but receive no promotions; promotions go to the owner's SNode only and only its acknowledgement counts (umbrella §6.6).
+- **Dedicated verifiers are a deployment artifact.** 06-22 §9 promotes on the source and every attesting replica, §10 takes mutation pre-state from "every attesting replica's hg_safe", 06-30 draws a verifier beside each indexer node, and Spec D D1 says verifiers become safe replicas. No spec decides that verifiers must be separate nodes. The current shape follows from v1 being single-writer, from devnet2's indexer ClickHouses having no Keeper when the verifiers were added, and from Spec D never being built.
+- **Verifier selection is global and frozen.** `VerifierQuorum = 2` and `VerifierSelectN = 3` are frozen constants (`arbiter:fsm/state.go:21-27`). `selectVerifiers` takes the NodeID-sorted ring of every Active VERIFIER node minus the block's sources and picks three consecutive positions from a block-seeded start, returning nil below three (`arbiter:fsm/select.go:55-77`). It runs once per block in `applyMarkReplaying`, which refuses a nil set and never re-selects (`arbiter:fsm/apply.go:425-445`). A block whose complete evidence has fewer than two passes is QuorumFailed; the orchestrator opens and immediately resolves a challenge as Rejected (`arbiter:orchestrator/dispatch.go:32-79`), which quarantines the track.
+- **Verifier identity has no host.** `VerifierEntry` is `{node_id, ed25519_pubkey}` (`arbiter-core:consensus.go:79-85`); a post-activation registration carries exactly one role; every update must leave at least three listed non-evicted verifiers (`arbiter:fsm/signed_claims.go:284-299`). The FSM therefore cannot keep a verifier that an owner runs out of that owner's blocks.
+- **One owner per block, several tables per block.** After the tracks activation a statement of another owner seals the open block first (`arbiter:fsm/admission.go:159-187`), and the leader groups submissions by owner within a 50 ms window. A block may hold statements of several tables of its owner; each selected verifier replays the whole block and byte-scans every candidate part in it. Each track keeps at most one unpublished transition block.
+- **Verification inputs.** INSERT replay needs only the block's pinned manifest and the DA payloads; the byte scan reads the verifier's own `hg_unsafe` RMT replica of every table in the block. The Keeper path is `/sentio/<shard>/unsafe/<db__table>` with the node id as replica name (`arbiter-core:dataplane/ddl/naming.go:42-46`); it is neither owner- nor incarnation-scoped. Reconcilers treat a replica name that is not in `GetPurgeNodeSet` (every registered, non-evicted SNode and verifier, `arbiter:fsm/apply_table_registry.go:404-425`) as a decommissioned node: verifiers refuse to create an incarnation while one exists, and the owner tries `SYSTEM DROP REPLICA` on it (`arbiter-core:dataplane/tableset/reconciler.go:704-787`).
+- **Purge is the fence for name reuse.** A name can be re-declared once its incarnation is Purged (`arbiter:fsm/apply_table_registry.go:291-296`); purge requires the owner's SNode and every non-evicted verifier (`apply_table_registry.go:469-494`). Measured: when a stale replica of a purged incarnation stays on the unscoped path, the re-created table's `hg_unsafe` clones every row of the old incarnation.
+- **Mutations.** UPDATE and DELETE are not implemented (admission takes INSERT only). The 06-22 §10 and 07-01 designs need each attesting worker's local `hg_safe` pre-state, which today's verifiers do not have.
+- **Stage 2 as built.** Safe prefix, promotion frontier and manifest debt are per track; manifests carry `track_frontiers` whose `applied_promotion_seq` cutoffs restore proves exact against the retained source-signed acknowledgements (C17); a track that did not advance is Carried verbatim (`arbiter:fsm/reads_manifest.go:251-292`), and manifest assembly does not test quarantine, so a quarantined track can still Advance on a late acknowledgement. Cleanup coverage is a leader WorkSet rule (`arbiter:fsm/reads_work.go:317-364`); `applyScheduleUnsafeCleanup` checks quarantine but no coverage (`arbiter:fsm/apply.go:960-1020`). The drain gate skips quarantined tracks only (`arbiter:fsm/quarantine.go:205-256`). Every consensus update is bound to an exact `expected_promotion_seq` (`arbiter:fsm/consensus_updates.go:32-34`).
+- **Release refusals that never clear are latent.** The stage-2 runbook names two cases with "no way back inside the protocol": (a) a Rejected statement with promoted parts, and (b) a promotion issued before the verdict whose acknowledgement was lost. Statement challenges are opened only by the orchestrator and only for QuorumFailed blocks (`arbiter:orchestrator/dispatch.go:67-79`), while a promotion needs quorum, so case (a) cannot arise from the shipped orchestrator. The FSM nevertheless allows a challenge on a promotable or partly promoted statement; such rows would sit in the owner's `hg_safe` and reach no published manifest while the track cannot pass the block.
+- **Quarantine hides data.** A quarantined owner's host refuses every read and write of its tables (C13), and peers answer those tables Ordinary and route them back to the owner, so nothing serves them; on devnet2 this lasted 10.9 h.
+- **Consensus state grows quadratically.** A local copy of a devnet2 v20 voter snapshot at promotion 53 is 11,385,138 bytes, of which manifests take 6.86 MB (62 manifests; the last lists 39 parts in 190 KB, about 4.9 KB per part entry, mostly 4096-character LtHash hex). Every publication stores a full manifest of every table (`arbiter:fsm/apply.go:945`) and every post-cutover acknowledgement stores the complete partition inventory (`arbiter:fsm/apply.go:925-933`); nothing is pruned. The reader refuses a doc above 1 GiB (`arbiter:fsm/snapshot.go:282`) and the writer has no cap. Derived: the manifest term alone is about 4.9 KB × Σ(parts over publications), which reaches 1 GiB near 650 single-part promotions network-wide. The voters run with a 2Gi memory limit and a 2Gi PVC (`production:charts/storage-integrity/values.yaml:162-170`), so they fail earlier.
+- **Restart resurrection.** `REPLACE PARTITION` on a MergeTree leaves the replaced parts on disk as outdated until `old_parts_lifetime` (480 s); a ClickHouse restart inside that window reactivates them, because the replacement parts' block ranges do not cover them (measured: 3 rows became 5). The owner's next promotion of that partition then fails its closure check. No code repairs it (`arbiter-core:snode/promote_replace.go:349-356`; housegate `CLAUDE.md`, merge-guard note).
+- **Peer-trusted bypass.** `tablerefguard` returns early for peer-trusted, non-forwarded sessions (`pkg/plugins/tablerefguard/plugin.go:80`), `sireserved` acts only on maintenance and platform-operator sessions (`pkg/plugins/sireserved/plugin.go:24-33`), and the reserved databases are `hg_safe`, `hg_unsafe` and `hg_promote` only (`pkg/sitable/sitable.go:145-147`).
+- **Evicted nodes still sign some messages.** Result claims and promotion, cleanup and rejected-cleanup acknowledgements are admitted on the `si_indexers` signature alone (`arbiter:fsm/signed_claims.go:442-455`, `:788-800`), and verifier evidence on set membership and the ed25519 signature (`arbiter:fsm/apply.go:589-645`); MarkActive and purge reports already refuse an evicted node.
+- **Infrastructure.** Every SI ClickHouse shares the production `clickhouse-keeper-extra` ensemble, which also serves the production `clickhouse-extra` CHI, with no ACL; the namespace has no NetworkPolicy; interserver HTTP has no credentials; the `default` user has no password, is open to all networks and has access management; the SNode and the verifier connect with an address only (`sentio-node:standalone/standalone.go:212-214`, `arbiter:cmd/internal/startup/clickhouse.go:22`); indexer-a's source is bundled with the verifiers in the network CHI; `local-path` enforces no size and places volumes on a shared node SSD; no SI alert rules are deployed. DA payloads are retained indefinitely (AUDIT pins are never released).
+- **ClickHouse mechanics (measured).** RMT replicas hold byte-identical parts (same name and `hash_of_all_files`). `ATTACH PARTITION FROM` keeps `hash_of_all_files` and is not throttled by `parts_to_*`; across databases on one disk it hardlinks. `BACKUP ... PARTITIONS` with `base_backup` is incremental, and `RESTORE ... AS <staging> PARTITIONS` restores every part with its `hash_of_all_files`. Repairing a partition with `REPLACE PARTITION` and reloading within the outdated window brought a foreign part back (3 rows became 10); `DROP PARTITION` followed by `ATTACH PARTITION FROM` did not. `INSERT ... SELECT FROM remote(...)` with `min_insert_block_size_rows` at least the part's rows, `min_insert_block_size_bytes = 0`, `max_threads = 1` and `max_insert_threads = 1` produced one part for a 3M-row part. A user granted `REMOTE` can write through `remote()`; `READ ON REMOTE` refuses writes; a named collection's credentials are overridable unless `NOT OVERRIDABLE`. An `OPTIMIZE` issued on one RMT replica merged another replica's parts although that table pins merges off.
+
+## 3. Scope
+
+In scope: database groups; members that verify and hold copies; owner-aware verifier selection and re-selection; manifest-gated installs; the copy floor; a narrower drain gate; reads from members while the owner is quarantined or unreachable; consensus-state growth guards and a lossless encoding; the pre-existing hazards of §2; growing devnet2 to three SI indexers.
+
+Out of scope: multi-writer (S1); owner rebase and takeover, history pruning, O(1) acknowledgement records and the subtractive revert for case (a) of the release refusals (v22, §16); per-(owner, database) tracks (S2); UPDATE/DELETE beyond the pre-state contract (§8.9); members run by third parties verifying or counting (§12); DA rematerialisation (P8); moving SI to a dedicated Keeper ensemble, which needs its own design (§14).
+
+## 4. Decisions
+
+**S1 — The owner stays the single writer.** The owner's SNode remains the only source, the only promotion target and the only source acknowledgement. Members never write an owner-side object and never apply `PromoteSafePartition`. Rejected: multi-writer, because candidate attribution is a before/after part diff on a shared RMT table (a part inserted on another replica appears in the diff, measured), aborts are replicated `DROP PART`s, `replicated_deduplication_window` is 0, the FSM binds one source per statement and per promotion, and `REPLACE PARTITION` serialises a partition's promotions anyway.
+
+**S2 — The unit is the database group; tracks stay per owner.** A group G(O, d) exists for every database d that has a physical SI incarnation; every member of G holds every SI table of d. Tracks, quarantine and the manifest's `track_frontiers` stay per owner. Consequence: an owner's track is only as live as its weakest group, because its prefix is sequential. Rejected: per-table groups, because a block holds several tables of one owner and every selected verifier must hold all of them (with groups {B, C, D} for `dex.swaps` and {C, D, E} for `dex.pools`, a block holding both has two eligible verifiers and is refused), and splitting blocks per table multiplies anchors and replays without isolating tables. Rejected: per-(owner, database) tracks, because every manifest would carry one frontier per database.
+
+**S3 — Members verify and replicate.** A member entry carries `verify`, `replicate` and `counts` flags, all true by default. Verify members may enter eligible rings; replicate members hold copies; counting members count toward the copy floor. Verifying needs only the transient `hg_member_unsafe`; replicating adds the permanent `hg_replica`.
+
+**S4 — Groups are placed deterministically and rebalanced by governance.** Apply places a group by integer weighted rendezvous hashing (§6.3) when its database gains its first physical incarnation, and the update that turns placement on places every existing database. A placed group changes only through an authority-signed `RebalanceGroup` with a generation check (§6.4). Neither the user nor the owner chooses members (06-30 §7.1, 06-10 R6); the placement salt is chain data the user does not control.
+
+**S5 — Blocks are sealed on the group's verify-member set.** The open block records its owner and the group key: the sorted ready verify members and the network-fill flag of its statements' group. A statement with a different (owner, key) seals the open block first, and so does any command that changes the key of a group with a statement in the open block. Databases whose groups have the same key share blocks, so devnet2, where all of an owner's groups coincide, seals as today. The leader's grouping window groups by the same pair.
+
+**S6 — Verifier selection is per group, with deterministic re-selection.** A block's verify set is three verifiers picked by the existing block-seeded ring over its group's eligible members, plus the network pool while the group's fill is on or its members alone are fewer than three. The 2-of-3 rule is unchanged. An authority-signed `ReselectVerifiers` replaces dead, ineligible or timed-out verifiers in a stored ring order, with a timeout measured in committed L2 registry blocks so that it fires on a quiet track too.
+
+**S7 — Members are host-bound verifier identities.** A member is a VERIFIER-role node listed in the governed `verifiers` parameter with a new `host_indexer_id`, consented by that indexer's `si_indexers` signer; entries without a host form the network pool. A member signs checkpoints with a separate `replica_signer`, so a leaked evidence key cannot move the copy floor and a leaked replica key can only lower its owners' floor.
+
+**S8 — Copies are manifest-gated.** A member installs only parts that a validated published manifest lists for the group's tables at `track_frontiers[O]`, and a copy always equals the multiset of part row hashes of one such manifest. Promotion stays owner-only. Rejected: promotion fan-out (06-22 §9 taken literally, Spec D D2–D4), because members would inherit promoted-then-rejected rows, freeze together with the owner, and each need acknowledgements, base CAS and revert.
+
+**S9 — Every byte source passes one gate.** The gate (§8.5) accepts parts from the member's own `hg_member_unsafe` replica (hardlinked, the bytes it scanned), a no-split pull from the owner's `hg_safe` or a peer's unsafe replica, an object-store restore, and later DA rematerialisation. No transport is trusted.
+
+**S10 — The copy floor gates cleanup.** A promotion's unsafe parts are cleaned only when enough counting members' checkpoints reflect it (§9.3), so outside the escapes of §9.3 a verified row of an Active incarnation is on at least min(k, 1 + |E|) ClickHouse hosts at every instant, where k = `stage3.min_safe_copies` and E is defined in §9.3. Escapes are pure functions of committed state; strict mode requires k − 1 reflecting members and trades the owner's write liveness for the floor. The floor ships dormant (k = 1).
+
+**S11 — The drain gate is narrowed.** A consensus update waits only for the in-flight work of the tracks whose `si_indexers` entry it changes, and floor-held unsafe parts are not in-flight work; a short issuance hold gives the exact `expected_promotion_seq` every update needs (§10).
+
+**S12 — Members serve reads when the owner cannot.** A member host serves a database's SI tables from its copy, in safe mode and from the latest published state, only while the owner is quarantined or unreachable from the member host (§11).
+
+**S13 — The network pool fills in until groups are large enough.** The pool joins a group's eligible ring while the group's fill is on or its eligible members are fewer than three. The pool is retired per group once that group has three ready peer verify members on distinct hosts, which needs at least four self-operated SI indexers.
+
+**S14 — Peers count only while every SI indexer is self-operated.** A peer member is then as trustworthy as a network verifier. Before a third party's member verifies or counts, §12 must hold; until `operator_id` exists, listing a third party's member is refused.
+
+**S15 — One irreversible format.** Every consensus change of this stage ships in snapshot v21, each behind its own one-way switch, turned on in the order of §10.4; v22 is reserved for owner rebase and takeover, history pruning, O(1) acknowledgement records and the case (a) revert.
+
+**S16 — Purge stays a fence.** New incarnations use incarnation-scoped Keeper paths, and for every incarnation on the unscoped path the purge waits for every node that may hold a replica there; a dead member leaves that set only through eviction (§8.8).
+
+**S17 — Fix the known hazards first, and grow devnet2 to three indexers.** P0 closes the peer-trusted bypass and the restart resurrection, the ClickHouse lockdown precedes any member connection, eviction voiding ships in v21, and devnet2 enrols a third SI indexer so every owner has two peers (§14, §16).
+
+## 5. Concepts by example
+
+Indexers A–F are SI indexers. A hosts databases `dex` and `nft`. Placement gives G(A, dex) = A + {B, C, D} and G(A, nft) = A + {C, E, F}; the network pool is {v1, v2, v3}; both groups have fill on.
+
+Within one grouping window A's ingress submits `dex.swaps`, `dex.pools`, `nft.mints`, `dex.swaps`. The leader groups them by key: block 100 holds the three `dex` statements and its verify set is three of {B, C, D, v1, v2, v3}; block 101 holds `nft.mints` and its verify set is three of {C, E, F, v1, v2, v3}. Each selected member replays its block from DA and the pinned manifest and byte-scans the candidate parts its own `hg_member_unsafe` fetched; quorum, finality and the owner's promotion proceed as today. When the manifest that covers block 100 is published, B, C and D install the new `dex` parts into their `hg_replica` copies by hardlink, verify them against the manifest and sign checkpoints; the parts' `hg_unsafe` cleanup waits until k − 1 of them have.
+
+If A is quarantined, B can answer `SELECT ... FROM dex.swaps JOIN dex.pools` from its copy of `dex`. If B is down, A's `dex` blocks still verify from {C, D, v1, v2, v3}, and `nft` is unaffected. If two databases of A had the same key they would share blocks.
+
+On devnet2 with indexers a, b and c, every group of owner a is {b, c}, of owner b {a, c} and of owner c {a, b}; each block draws three of five eligible verifiers (two peers and the pool), and every table has three copies in steady state and at least two under k = 2.
+
+## 6. Groups and placement
+
+### 6.1 Parameters
+
+- `verifiers` entries gain `host_indexer_id` (pointer; nil for the network pool), `replica_signer` (secp256k1 address), `consent_jws`, `weight` (1–64, default 1), `failure_domain` (string), and the flags `verify`, `replicate`, `counts` and `shared_rmt` (all true by default). `failure_domain` is required and non-empty on every entry with a `host_indexer_id`; equal strings are one domain. Apply refuses an entry with `shared_rmt = false` and `verify = true` until the per-operator transport (P8) can feed check 3. The consent statement is an ES256K JWS with purpose `arbiter-group-member-v1` over `{network_id, genesis_snapshot_id, host_indexer_id, node_id, ed25519_pubkey, replica_signer}`, signed by the host's `si_indexers` signer; it is verified when an entry is added or its keys rotate, as enrolment statements are. A member's `node_id` must be unused by every SNode and verifier, and its host must be enrolled.
+- A new `stage3` parameter carries `group_size` (default 3), `network_fill_default` (default true), `min_safe_copies` (default 1), `strict_copies` (default false), `indexer_failure_domains` (indexer id → domain), `max_lag_publications` and `lag_low` (with 1 ≤ `lag_low` < `max_lag_publications`), `evidence_timeout_l2_blocks`, `max_uncleaned_parts_per_partition`, `max_uncleaned_parts_per_table`, `exclude_quarantined_hosts` (default false), and the switches of §10.4. Once set it is carried by every later update; its switches and `strict_copies` are one-way, `min_safe_copies` and `group_size` never decrease, and the other fields may change in any update. `indexer_failure_domains` must name every enrolled indexer; Apply refuses the placement switch-on, and any later update, that leaves a domain unset.
+- The existing floor "at least three listed non-evicted verifiers" stays. A *per-group verifier floor* is added and counts listed, non-evicted entries, as the global floor does: every group must have at least three, counting the network pool while its fill is on. It never refuses `EvictNode`.
+
+### 6.2 Group records
+
+The table registry gains `DatabaseGroup{owner, database, members, network_fill, generation, past_members}` keyed by (owner, database) and served in `GetTableRegistry` / `WatchTableRegistry`. `members` is the chosen list itself, so auditors compare against it instead of reconstructing node history. `past_members` lists every node that was a member at any earlier generation and has not yet reported the purge of every incarnation of d that was physical at any time while it was a member (§8.8); it leaves only by reporting or through `EvictNode`. Each (owner, database) keeps a durable `group_generation` that survives group removal; a re-placed group continues from it, so an old `RebalanceGroup` or `MemberReady` cannot be replayed. Once placement is on there is exactly one group per (owner, database) that has a physical incarnation; restore enforces this. A group is removed in the Apply that purges its database's last physical incarnation.
+
+### 6.3 Placement
+
+Apply places G(O, d) whenever the registry gains a physical incarnation of d and no G(O, d) exists; Legacy and Refused incarnations never create or keep a group. The update that turns the `placement` switch on (which also turns on the seal key) places, in (owner, database) order and over the then-committed entries, a group for every database that already has a physical incarnation, genesis-origin incarnations included, which never pass through `AddTable`.
+
+- Candidates are the listed, non-evicted member entries with `verify` or `replicate`, whose host is enrolled, is not O, and is not quarantined when `exclude_quarantined_hosts` is on.
+- A candidate c with weight w scores s_c = max over i in [0, w) of the 256-bit big-endian value of `CanonicalDigest("arbiter-group-placement-v1", {network_id, owner, database, salt, node_id, i})`. `salt` is the L2 block hash of the `TableCreated` event of d's first physical incarnation, or the genesis snapshot id for a genesis-origin database, so a user cannot grind database names toward chosen members. The maximum of w uniform draws orders candidates exactly as −ln(u)/w does, with integer arithmetic only.
+- Candidates are taken in descending score, ties by ascending `node_id`, skipping a candidate whose host indexer or failure domain is already used by a chosen member or by O, until `group_size` are chosen.
+- `network_fill` is `network_fill_default`, and is forced on when fewer than three verify members are chosen.
+
+A group may be smaller than `group_size`; the network pool then supplies the per-group verifier floor (S13). Members of a newly placed group, at `AddTable` or at the backfill, enter eligible rings only once ready; until then automatic fill supplies the pool.
+
+### 6.4 Rebalancing
+
+`RebalanceGroup{owner, database, expected_generation, add, remove, network_fill}` is authority-signed and kept outside `ConsensusParamsUpdate`, like `QuarantineIndexer`. Apply refuses a stale generation, a member hosted by the owner, two members on one host or failure domain, a result below the per-group verifier floor, and turning fill off while the group would need automatic fill. If the open block holds a statement of the group's database, Apply seals it first with the C10 discipline, and refuses with state unchanged if the seal cannot be prepared. An added member enters eligible rings only once ready, after it reports its replicas with `MemberReady{node_id, owner, database, generation}`, signed with its ed25519 node key under purpose `arbiter-member-ready-v1` (only `MemberCheckpoint` uses `replica_signer`); it counts toward the copy floor only from its first checkpoint. A removed member is Leaving: it keeps verifying until no unfinished block's verify set names it, and keeps its copies until at least min(k − 1, |E|) members of E — both evaluated as they were when the `RebalanceGroup` applied — have checkpoints at or past the entry that was latest then (the registry view publishes this release). It then drops its copies and `hg_member_unsafe` replicas, stays in `past_members`, and reports each incarnation's purge when that incarnation is Purging (§8.8). `RebalanceGroup`, `MarkMemberLagging` and `EvictNode` rerun `completePurgesLocked`.
+
+## 7. Blocks and verification
+
+### 7.1 Seal key and header
+
+- `GroupKey = CanonicalDigest("arbiter-group-key-v1", {sorted node ids of the group's ready verify members, network_fill})`. The open block records `Owner`, `GroupKey` and the member list and fill flag the key hashes; `commitSealLocked` copies them into the block's `BlockVerification`.
+- Admission seals the open block when the new statement's (owner, `GroupKey`) differs, preparing the seal before the spent-id insert and committing it only after the insert succeeds (C10). Any command that changes the ready verify members or fill of a group with a statement in the open block — `RebalanceGroup`, `MemberReady`, or a `ConsensusParamsUpdate` that flips an entry's `verify` flag or delists it — seals the open block first and is refused with state unchanged if the seal cannot be prepared.
+- A sealed header carries `group_key` (in the track pointer, omitempty) on every block, transition blocks included, sealed after the `placement` switch's recorded cutover block, and omits it on earlier blocks. Restore requires exactly that, and an open block whose `GroupKey` is present exactly when the switch is on and the block holds statements, equal to the current key of every statement's group. Golden chain-hash vectors pin a statement block and a transition block that carry `group_key`.
+- A database without a group (before placement is on) keeps the stage-2 behaviour: it seals by owner and draws from the network pool.
+- A transition block carries one key's changes. The per-track limit of one unpublished transition block stays, so an owner's transitions for different keys are sealed one after another, each after the previous one is published. Restore requires every change of a transition block to belong to a database whose group was recorded in the block's `BlockVerification` with the header's `group_key` at seal.
+
+### 7.2 Grouping window
+
+The leader's submission grouping window groups by (owner, `GroupKey`). Each extra block costs one anchor transaction and three replays; the metric `arbiter_block_seal_reason{reason="group_switch"}` is added and alerted on.
+
+### 7.3 Selection and admission
+
+- At `MarkReplaying` the eligible ring is: the members recorded with the block that are still listed with `verify`, non-evicted, Active, ready in the block's recorded group, not hosted by the block's owner and, when `exclude_quarantined_hosts` is on, not hosted by a quarantined indexer; plus the Active network pool when the recorded fill is on or the members alone are fewer than three. The block-seeded start and three consecutive positions are unchanged. `MarkReplaying` stores the eligible ring, a ring position (the last position used) and the committed L2 registry cursor block in `BlockVerification`.
+- Admission refuses, with a new retryable `VERIFIERS_UNAVAILABLE` and state unchanged (like `SOURCE_UNAVAILABLE`), a statement whose group's eligible ring computed with the same filter has fewer than three verifiers.
+- A block that still finds fewer than three at `MarkReplaying` stays unmarked, and the WorkSet stops listing it until the eligible count changes, so the orchestrator does not propose a refused command on every pass.
+- A member removed after seal is never selected; sets already selected change only through `ReselectVerifiers`.
+
+### 7.4 Re-selection
+
+`ReselectVerifiers{block_seq, expected_set}` is an authority command outside `ConsensusParamsUpdate`, signed by the orchestrator's authority signer and proposed by the leader for a block whose evidence is incomplete.
+- Apply replaces a verifier of the recorded set, member or pool, only if it has no complete evidence for the block and it is Evicted, no longer eligible, or the committed table-registry L2 cursor has advanced at least `evidence_timeout_l2_blocks` past the marking or the last re-selection. The cursor advances every `cursorAdvanceInterval` whatever the track's traffic. A verifier with complete evidence is replaced only if Evicted.
+- Replacements are the next positions of the stored ring after the stored ring position, skipping verifiers that are in the set, were removed from it, or are no longer eligible; each re-selection records the L2 registry cursor block; a block is re-selected at most ring size − 3 times, and the command is refused when no replacement exists.
+- Accepted evidence from remaining verifiers is kept; evidence from replaced verifiers is ignored.
+- The command's authority JWS and epoch are stored. Restore checks every stored re-selection structurally (replaced ids were in the set, replacements follow the cursor in the stored ring, the set is three sorted unique ids), runs the latched-quorum check over the new set, and verifies the proof under its epoch; it does not re-derive node status.
+
+### 7.5 What stays
+
+Evidence formats, the three checks, the 2-of-3 rule and the QuorumFailed handling stay as they are while every SI indexer is self-operated (§12 changes the last one for third parties).
+
+## 8. Member data plane
+
+### 8.1 The si-member process
+
+Each SI indexer host runs one `si-member` process per member identity, separate from the SNode, so its crash or memory cannot take down the SNode. It contains the verifier role (replay, byte scan, evidence) and the installer, and connects to the host's source ClickHouse with its own user and settings profile (`max_memory_usage`, `max_concurrent_queries_for_user`, threads, priority). Its tables live in its own databases — `hg_member_unsafe` (RMT replicas, replica name = member node id), `hg_replica` (copies) and `hg_rstage` (scratch) — on a dedicated disk through a member storage policy, so every member hardlink stays on that disk. The member disk uses a storage class that enforces capacity on a device separate from the source ClickHouse's (not `local-path`); until one exists, every disk of every SI ClickHouse sets `keep_free_space_bytes`, so ClickHouse refuses fetches and inserts before the node SSD fills, and P2 measures headroom on the node SSD, not on the PVC. The host's background fetch pool is sized for the extra replicas, and installs stop when the member disk crosses a free-space threshold. A host runs one member identity.
+
+### 8.2 Member user
+
+On the host ClickHouse the member user holds exactly: `SELECT`, `CREATE TABLE` and `DROP TABLE` on `hg_member_unsafe.*`, and its use as the source of `ATTACH PARTITION FROM`, with no `INSERT`, `ALTER`, `OPTIMIZE`, `TRUNCATE` or `SYSTEM` command there except `SYSTEM SYNC REPLICA`; `SELECT`, `CREATE TABLE`, `DROP TABLE`, `ALTER ATTACH PARTITION`, `ALTER DROP PARTITION` and `ALTER DROP PART` on `hg_replica.*`; everything on `hg_rstage.*`; `SELECT` on `system.parts`, `system.tables`, `system.detached_tables`, `system.replicas` and `system.zookeeper`; `NAMED COLLECTION` on its collections; `READ ON REMOTE`; `CREATE TEMPORARY TABLE`. It has no rights on the host's `hg_safe`, `hg_unsafe` or `hg_promote`. It has no `SYSTEM DROP REPLICA`: it removes its own replicas with `DROP TABLE` while it runs, and a stale replica left after its state is lost is removed by the owner's sweep once the member is evicted (§8.8). A Docker test proves the member user cannot change any replica on an owner's path.
+
+### 8.3 DDL and reconciliation
+
+- arbiter-core `ddl` gains a member intent set: `hg_member_unsafe.<db__table>` (ReplicatedMergeTree at the incarnation's Keeper path, replica = member node id, `ddl.UnsafeSettings` verbatim, checked like `hg_unsafe`) and `hg_replica.<db__table>__i<incarnation_seq>` (MergeTree, `ddl.SafeSettings`), with no promote table. A member pinned type lists and drops exactly these two kinds and never touches `hg_rstage`'s tables through the reconciler.
+- The member's reconciler takes the set of groups it belongs to (from the registry follower) instead of the stage-1 `Owner` filter. The si-member never creates or opens `hg_safe`, `hg_unsafe` or `hg_promote`, and startup refuses a member configuration whose databases intersect the host SNode's.
+- A member creates `hg_member_unsafe` replicas only while its node is registered and not evicted and only after the purge rule of §8.8 is on; otherwise every reconciler treats its replica as decommissioned. A member with `shared_rmt = false` creates none, has `verify = false`, and installs from the owner pull, the object store or DA.
+- Copies are incarnation-scoped, so a dropped and recreated name never adopts an old copy.
+
+### 8.4 Manifest feed
+
+The installer polls `GetSafeWatermark`, follows the `ParentSnapshotID` chain (never `GetManifestByBlock`, because consecutive manifests can share a `safe_block_seq`, C6), and fetches a full manifest only when `track_frontiers[O]` differs from its checkpoint. It accepts a manifest only if `SnapshotID` equals both the requested id and the recomputed `ManifestRoot`, the parent link holds, and every partition root equals the sum of its listed part row hashes. Tables are attributed to groups through the registry, by the rule `manifestTableOwnerLocked` uses. Manifests are cached in a bounded LRU.
+
+### 8.5 The install gate
+
+For owner O, target manifest S, table T, incarnation i and partition p:
+1. M is the multiset of `PartRowLtHash` that S lists for (T, p); R is its partition root; L is the multiset of row hashes of the local copy.
+2. If L is not a sub-multiset of M, p is Diverged: the table is not served, p is rebuilt in a fresh scratch, `DROP PARTITION` removes it from the copy and `ATTACH PARTITION FROM` brings the rebuilt partition back. `REPLACE PARTITION` is never used on a copy.
+3. Need = M − L. Each needed part is fetched into a fresh scratch table named `<node_id>_<boot_nonce>_<n>` in `hg_rstage`, one source part per scratch part, from the first available source (§8.6).
+4. `ScanParts` every scratch part. A part whose row hash is in Need is kept once. A scratch with zero rows is a rename race and is retried once from a clean scratch. Scratch parts whose sum equals a needed hash are a split and fall back to the next source. A retried INSERT that doubled the rows is dropped and retried once from clean. Anything else is Foreign: the scratch is kept for forensics, the table is quarantined locally and an alert fires.
+5. The kept parts are installed with `ATTACH PARTITION p FROM` the scratch, which appends, retires nothing and keeps `hash_of_all_files`.
+6. Closure is checked arithmetically, Σ(L) + Σ(kept) = R, and the table's local partition set must equal S's; a full partition scan runs only in the rate-limited self-audit.
+7. The member journals (S, `track_frontiers[O]`) per group and may sign a checkpoint (§9.1).
+
+At startup the member drops every `hg_rstage` table carrying its node-id prefix. The replay materializer takes a database and a prefix, so replay scratch tables also live in `hg_rstage` under the member's prefix.
+
+### 8.6 Byte sources
+
+- **Own `hg_member_unsafe` (primary once members hold replicas and the floor holds cleanup).** The verify member already holds the owner's candidate parts, byte-identical to what it scanned. The installer attaches the needed parts from there into the scratch, drops the unneeded ones inside the scratch, and continues at step 4.
+- **Owner pull.** `INSERT INTO hg_rstage.<scratch> SELECT * FROM remote(<owner_collection>, database = 'hg_safe', table = '<table>') WHERE _part = '<name>'` with the no-split settings of §2, where the current name is resolved by `system.parts.hash_of_all_files` = the manifest's `PartPhysHash` (REPLACE keeps the hash). The filter is on `_part` only, never on the manifest's logical partition id. When the hash lookup is empty (the owner's parts were rebuilt), the installer resolves by row hash over candidate parts of the same partition and row count. The owner's reader user has `SELECT` on `hg_safe.*` and on `hg_unsafe.*` (the latter for P2's shadow pull and for the unsafe pull while the owner is reachable before cleanup), and `SHOW COLUMNS` and `SELECT(database, table, name, active, rows, partition_id, hash_of_all_files)` on `system.parts`; the collection's host, port, user and password are `NOT OVERRIDABLE`; the member's `READ ON REMOTE` is verified through `system.grants` (READ present, WRITE absent) and by a probe that an `INSERT INTO FUNCTION remote(...)` is refused.
+- **Peer unsafe pull.** When the owner's ClickHouse is unreachable before cleanup, the same pull from a network verifier's `hg_unsafe` or another member's `hg_member_unsafe` serves, through a reader user on that ClickHouse with `SELECT` on its unsafe database and the same `system.parts` grants.
+- **Object-store restore.** Bootstrap, large gaps and rebuilds restore the owner's verified backup (P1) with `RESTORE TABLE ... AS hg_rstage.<scratch> PARTITIONS ...` and continue at step 4, keeping only needed parts.
+- **DA rematerialisation** (P8): the pinned executor materialises statements into a scratch with the real DDL, one INSERT per (statement, partition); it is the only source when no ClickHouse copy survives.
+
+### 8.7 Startup audit
+
+Before a member signs a checkpoint or serves a database it audits each copy as a multiset: twins with equal row hash and `hash_of_all_files` keep one part and drop the rest with a local `DROP PART`, which writes a covering part, and any remaining mismatch is Diverged. The audit reruns when the ClickHouse uptime regresses.
+
+### 8.8 Purge
+
+- From the `purge` switch (§10.4), every chain incarnation recorded after the switch uses the incarnation-scoped Keeper path `/sentio/<shard>/unsafe_inc/<db__table>/<incarnation_seq>`. No scoped path is ever a descendant of a legacy `/sentio/<shard>/unsafe/<db__table>` path, because ClickHouse removes every child of a table's path when its last replica is dropped. The registry view marks each incarnation `scoped_keeper_path`, so every reconciler derives the same path; `ddl.ZooKeeperPath`, the replica listings and the sweeps cover both roots. A recreated name therefore never joins, or loses its metadata to, a replica of an earlier incarnation, and the purge set below only collects garbage on the scoped root.
+- For an incarnation on the unscoped path, the purge-required set is the owner's SNode, every non-evicted network-pool verifier (the pool keeps a replica of every SI table), and every non-evicted node that has been a member of its group at any generation since the incarnation was recorded, whatever its flags or class. Such a node leaves the set only through `EvictNode`, after which the owner's sweep and `clearDecommissioned` drop its Keeper replica before the name can be reused. A member reports at once the purge of any Purging incarnation it never held.
+- For an incarnation on a scoped path, the purge-required set is the same.
+- A member stops serving and drops a copy from Retiring on. It drops its `hg_member_unsafe` replica and reports only at Purging, after its quiescence hook confirms that no unresolved block of its verify sets references the table.
+- Copies never delay a purge: they are incarnation-scoped and on no Keeper path.
+
+### 8.9 Mutation pre-state
+
+When bounded UPDATE/DELETE land, a mutation block's verify set is drawn only from replicate members whose copy equals the block's `PrevSafeSnapshotID` manifest; the 07-01 canonical publication cut is decided with that design.
+
+## 9. Copy floor and checkpoints
+
+### 9.1 Checkpoints
+
+A replicate member signs `MemberCheckpoint{node_id, owner, groups: [{database, group_generation, excluded}], snapshot_id, entry}` with its `replica_signer`, where `entry` is `track_frontiers[O]` of `snapshot_id` and `excluded` lists tables it has not installed, with reasons. Apply accepts it from a non-evicted current member of each listed group, for a manifest on the watermark chain whose `track_frontiers[O]` equals `entry` and that is not earlier on the chain than the member's previous checkpoint. A second checkpoint at the same entry is accepted only if some group's generation is higher or its excluded set is a strict subset. Apply keeps the latest checkpoint per (member, group) with its signature and epoch. Restore re-verifies each signature under that epoch's `replica_signer` and does not re-check node status. `MemberCheckpoint`, `MemberReady`, `MarkMemberLagging`, `ReselectVerifiers` and `RebalanceGroup` are commands outside `ConsensusParamsUpdate`.
+
+### 9.2 Member classes
+
+Classes are stored per (member, group): Bootstrapping (no accepted checkpoint since the member joined the group; a checkpoint taken at an earlier generation at which the node was already a member keeps its class, and the same-entry re-checkpoint of §9.1 only refreshes the stored generation), CaughtUp (checkpoint entry equals O's latest published entry), Behind, Lagging and Leaving. An entry *reflects* promotion P when `entry.safe_block_seq ≥ maxBlock(P)` and `entry.applied_promotion_seq ≥ P.seq`. Lag is counted in published advances of O, not in promotions: a member becomes Lagging when it is more than `max_lag_publications` advances behind, recording the entry it was behind as its observed entry, or by an authority-signed `MarkMemberLagging{node_id, owner, database, observed_entry}` that the orchestrator proposes after a timeout and Apply re-checks against committed state. It returns to Behind only when its checkpoint advances past the observed entry and its lag is below `lag_low`. A quarantined owner accrues no lag. Restore requires every stored class to be consistent with the stored checkpoint and the published entries.
+
+### 9.3 The floor
+
+Cleanup of promotion P of owner O requires, in Apply (`applyScheduleUnsafeCleanup`) and in the WorkSet alike:
+- **base(P):** P was acknowledged Applied; the latest published manifest S has `maxBlock(P) ≤ S.track_frontiers[O].safe_block_seq` and `P.seq ≤ S.track_frontiers[O].applied_promotion_seq`; O is not quarantined. The quarantine clause already exists in Apply; the publication clauses are new in Apply, behind the `checkpoints` switch; the cutoff clause is implied by the block clause and kept as a check.
+- **and one of:**
+  - P's incarnation is not Active (purge exemption, so the arbiter-core#49 purge hold never waits on members);
+  - the partition or table is above `max_uncleaned_parts_per_partition` / `max_uncleaned_parts_per_table` (pressure bypass; in strict mode replaced by admission backpressure below);
+  - at least min(k − 1, |E|) members of E have checkpoints whose entry reflects P and whose groups do not exclude P's table, where E is the set of listed, non-evicted, counting replicate members of P's group whose class is CaughtUp or Behind, in distinct failure domains from each other and from O. Eviction or delisting removes a member from E in the same Apply.
+
+Every escape, and E shrinking below k − 1, raises an `under_replicated` event. Rejected-part cleanups (promotion seq 0, C4) are never gated. Cleanups scheduled before the `checkpoints` switch are not re-checked.
+
+**Strict mode** (`strict_copies`): the count clause requires k − 1 reflecting members, not min(k − 1, |E|); Lagging members stay in E; and the pressure bypass becomes backpressure — the owner's statements for a table whose cleanup the floor holds above the uncleaned-parts bound get a retryable refusal until the floor is met — so durability is kept at the cost of that table's write liveness. The purge exemption remains.
+
+**Raising k** to a value requires, for every Active incarnation, k − 1 counting members whose latest checkpoint equals O's latest published entry and excludes nothing.
+
+**Failure independence.** The FSM counts declared failure domains (`failure_domain`, `indexer_failure_domains`); declared domains match the deployment only through anti-affinity, which P4 establishes and step 10 of §10.4 requires, and `safe_copies` is reported per distinct Kubernetes node.
+
+## 10. Drain gate and activation
+
+### 10.1 Drain gate
+
+- An update touches track T when it changes T's `si_indexers` entry, because T's acknowledgements would then be verified under another signer. Changes to `verifiers` and `stage3` touch no track. An authority-set change touches no track but requires every SNode's allowlist to list the new authority first (C12).
+- After the `narrowed_drain` switch, the drain gate refuses an update only for in-flight work of the tracks it touches. A promoted unsafe part whose cleanup Apply holds only because of the copy floor is not in-flight work; unacknowledged promotions, scheduled cleanups (dispatched or not), rejected-part cleanups (C4), and promoted unsafe parts that wait for anything other than the copy floor still are.
+- Restore needs no new rule: after the tracks activation it already accepts unacknowledged promotions and pending cleanups of earlier epochs and verifies their authority proofs under their own epochs (C14), and no restore validator reads `PromotedUnsafe`.
+- Every update stays bound to an exact `expected_promotion_seq`. Before signing, `arbiter-admin` asks the leader for an issuance hold: the leader stops proposing `RecordPromotionIssued` on every track while acknowledgements and cleanups continue, returns the frozen `PromotionSeq` the update is signed with, and lifts the hold when the update commits or is refused, after a bounded timeout, or on a leadership change.
+
+### 10.2 Leader drain mode
+
+For updates that still need a drained track (P0 onward, and every update before the `narrowed_drain` switch), the leader records each affected track's promotion frontier block, keeps issuing promotions, re-issues and cleanups for blocks at or below it, and refuses only the first promotion of a later block, until the update commits, a bounded timeout passes, or leadership changes. It reports the blocks still in flight. The timeout is at least the measured p99 of promotion → acknowledgement → publication → cleanup acknowledgement for work the copy floor does not hold. A stuck track with in-flight work cannot drain; the runbook quarantines it first, and an SNode whose track has in-flight work is quarantined before it is evicted.
+
+### 10.3 Activation
+
+The v21 activation is one authority-signed update that sets `stage3` with every switch off. It requires the stage-2 drain gate, reached with §10.2 (a stuck track with in-flight work is quarantined first); it does not require an empty open block or a global prefix at the sealed tip. It also requires the leader's voter probe over the exact raft voter set (C15) and every registered, non-evicted data-plane node not on a quarantined track advertising `stage3_v1`. Snapshot v21 is written once `stage3` is committed and refused by older binaries.
+
+The v21 container holds either an interned body (§13.2) or a plain body (the full state as v20 lays it out); every v21 binary reads both. In `Persist`, outside the FSM lock, the writer encodes interned, decodes and rehydrates it, and compares a canonical digest with one captured under the read lock in `Snapshot()`; on a mismatch it persists the plain body, raises `arbiter_snapshot_encoding_fallback_total` and pages. It never cancels a snapshot. An operational writer setting, outside the one-way switches, can force the plain body and be turned off again. The activation is rehearsed on a disposable three-voter cluster restored from a copy of the live state, including voter restarts from v21 snapshots and a forced-mismatch run.
+
+### 10.4 Switches and order
+
+Switches are one-way fields of `stage3`; each requires every earlier switch in this list, and Apply refuses a switch-on whose prerequisites are off. From the activation, entries with a `host_indexer_id` enter no eligible ring until step 6. The order, each switch step an authority-signed update needing explicit confirmation:
+1. `purge` (§8.8): incarnation-scoped Keeper paths for new incarnations and the member-aware purge-required set. On before any member registers.
+2. `eviction_voiding` (§14): on before any member can be selected.
+3. `owner_aware_selection` (§7.3): a database without a group gets a pool-only ring, and entries whose `host_indexer_id` is the block's owner are excluded.
+4. *Non-switch step:* member entries with consents and failure domains are listed in `verifiers`; the si-member nodes register and mark active; they enter no ring yet.
+5. `placement` (§6.3, §7.1), which also turns on the seal key: the switch-on update places every existing database, seals the open block, and records the cutover block.
+6. *Non-switch step:* members create their `hg_member_unsafe` replicas and send `MemberReady`; from then on they enter eligible rings.
+7. `reselection` (§7.4).
+8. `checkpoints` (§9.1–§9.3): checkpoints, member classes and the floor's Apply clauses.
+9. `narrowed_drain` (§10.1).
+10. *Parameter:* raise k (§9.3), after its precondition, P4's hardening (anti-affinity verified) and the Keeper capacity check of §16.
+
+## 11. Reads from members
+
+A member host H serves the SI tables of database d from its copy only while all of these hold:
+- O is quarantined, or O's HouseGate has been unreachable for `t_unreach` (si-member host configuration, measured by si-member's own probe of O's HouseGate);
+- every SI table of d on H equals `track_frontiers[O]` of the latest published manifest read from the arbiter in the same poll, and that entry has been unchanged over two polls (this applies to both triggers, because a quarantined owner's entry can still advance through late acknowledgements);
+- the startup audit and self-audit are clean, and no table of d is Foreign, Diverged or excluded;
+- the peer-trusted guard (§14) and the ClickHouse lockdown are live;
+- the host flag is on.
+
+While d is served, installs of d pause. When `track_frontiers[O]` changes, H stops serving d, installs, and serves again only once the conditions hold for the new entry. Serving is a lease the member grants the host per database; before any install the member revokes it and waits until the host has released it or it has expired.
+
+- **Host status.** si-member exposes an authenticated local status endpoint per database (entry, audit state, serving lease). sentio-node's table state polls it and answers those tables with a new read-only status, `Replica`, instead of Ordinary, failing closed (not served) when the endpoint is unreachable. `sitable.Table` gains the copy's physical table name; `Snapshot` gains `Served()`; `sitablestate` gets explicit rows for `Replica` (its `decide` falls through to allow for unknown statuses); writes and DDL are refused with 392 naming the owner. Status RPCs gain additive fields only (`replica_of`, `served_from`, `owner_entry`, `frozen_since`, and per database `replica_hosts`: until placement is on, the P2 static group configuration (every other SI indexer) advertised by each host's status RPC; from placement on, the registry's `DatabaseGroup` plus each host's advertised readiness).
+- **Routing.** `forward.Plugin` takes a table-state port and keeps sessions whose hello database or `USE` target is replica-served local instead of pivoting them to the owner; when a database stops being replica-served, queries on such sessions get a retryable refusal asking the client to reconnect. The database keeps its remote mapping so its ordinary tables still go to O. `buildStorageIntegrityArgs` adds Replica tables with `SafeTable` = `UnsafeTable` = the copy (both engines refuse an empty unsafe table) and housegate refuses `unsafe_latest` for them before the engine runs; both engines resolve SI tables before remote mapping. Ordinary tables of d are not served while O is down.
+- **Read modes.** Safe reads are answered from the copy. `unsafe_latest` (devnet2's default) is refused with a message naming safe mode. Answering it from the published state while O is quarantined needs a per-table read mode in rewriter-proto and both engines, an amendment to Spec G D2, and a host flag that is off outside devnet2.
+- **Agent.** The agent fails reads over, never writes, to a host in `replica_hosts` when the owner answers 392 `indexer_quarantined` or is unreachable. On devnet2 this needs the agent sidecar of every SI host upgraded in one planned window, which also brings the deferred-lane behaviour the stage-1 runbook's sidecar rule requires to be planned on its own.
+- **Rejection-caused quarantine.** Copies never hold rejected rows (S8), so members may serve a quarantine caused by a rejected block; the P2 integration test that pins this is an entry criterion of P3. This holds while no promoted statement can be challenged (§2, case (a)); the v22 revert must remove such rows before any challenger can open challenges (§14).
+
+## 12. Independence and third-party members
+
+While every SI indexer is self-operated, a peer member is as trustworthy as a network verifier and verifies and counts. With third parties, two colluding peers could reject a competitor's honest block — QuorumFailed is resolved as Rejected at once and quarantines the track — and two peers with the source could pass bad data, with no challenge window in v1. A third party's member may verify or count only after all of these exist: an `operator_id` binding with Sybil resistance; QuorumFailed sent to adjudication by a fresh verify set instead of immediate rejection; a challenge window with an independent challenger and a reachable ChallengeReplay→Safe path; at least one network-operated member or challenger per group; a per-operator byte transport for members with `shared_rmt = false`, whose pulled bytes also feed check 3 so that such members may verify; and the umbrella §17 gate. Until `operator_id` exists, listing a third party's member is refused.
+
+## 13. Consensus state growth
+
+### 13.1 Guards (P0, no consensus change)
+
+- Gauges of the snapshot doc size and of the in-memory state size, measured as the uncompacted canonical encoding length, per component, and of restore and snapshot-install time.
+- With L = min(read cap, voter memory / 4, voter PVC / 4) — 512 MiB today — warn at L/4 (128 MiB), page at L/2 (256 MiB), and act before 3L/4 (384 MiB). The memory alert uses the in-memory gauge; the PVC alert uses doc plus trailing log.
+- The stopgap is a production PR sizing voter memory and PVC to at least four times the measured state plus the trailing log; raising the 1 GiB read cap matters only once voters exceed 4 GiB.
+- The writer never refuses a snapshot for size; it alarms.
+- devnet2 drills get a promotion budget; churn drills run in integration or on a partitioned throwaway table.
+
+### 13.2 Lossless encoding (v21)
+
+The interned body keeps one table of distinct LtHash accumulators and distinct part triples (row hash, name, physical hash) and references them by index from manifests, acknowledgement records, `SafeParts`, statements and verifications; an unchanged partition entry is one reference. Restore rehydrates the state byte-exactly, so every existing validator, including the C17 re-verification of full acknowledgement bodies, runs unchanged. Estimated on the measured doc: 11.4 MB to about 1.4 MB. The remaining super-linear term comes from parts renamed by every `REPLACE PARTITION`; history pruning (v22) and verified `hg_safe` merges (06-22 §12.4) bound it.
+
+## 14. Hazards fixed first
+
+- **Peer-trusted guard (P0).** `ReservedDatabases` gains `hg_member_unsafe`, `hg_replica` and `hg_rstage` (and reserves `hg_xfer`). On peer-trusted, non-forwarded sessions HouseGate refuses every mention of a reserved database or of the reserved row-id column, string literals included (the `sireserved` namespace rule), regression-tested against every rewriter peer-leg form.
+- **Owner `hg_safe` audit (P0).** Before building each promotion's shadow, and whenever the ClickHouse uptime regresses, the owner SNode compares its partitions with the newer of its own last acknowledged inventory and the FSM's stored acknowledgement. Of equal-hash twins it keeps the part whose name is in that inventory and drops the others with a local `DROP PART`; if no twin carries an acknowledged name, or the FSM is ahead, the audit is unclean and the SNode does not proceed. The audit runs after promotion-intent convergence and ships report-only first; while it is unclean the host answers the owner's SI tables Pending (733, retryable).
+- **ClickHouse lockdown (before P1).** ClickHouse credentials for every protocol client ship first (the SNode DSN, the verifier and arbiter startup path, si-member); then, one CHI at a time and each with a staging proof that nothing restarts, the `default` user gets a password and network restriction on every SI ClickHouse; reader and member users get exactly the grants of §8.2 and §8.6; named collections are `NOT OVERRIDABLE` and restricted with `GRANT NAMED COLLECTION`; the devnet2 posture comment (production#735) is amended to admit member pulls on 9000 and member fetches on 9009 from peer source ClickHouses.
+- **Network hardening (P4, before k is raised).** Interserver credentials in two rolling steps (credentials with `allow_empty: true` everywhere, then `allow_empty: false`); NetworkPolicies that are ingress-only or enumerate every egress (DNS, Keeper, inter-ClickHouse, object store), probed from every pod first; an ingress allowlist on the shared Keeper ensemble; anti-affinity or node pins so every SI source CHI and the verifiers land on distinct nodes. Moving SI to a dedicated Keeper ensemble is its own design (a one-window cutover of every SI ClickHouse with every track paused) and is not a prerequisite of this stage.
+- **Eviction voiding (v21).** Result claims, verifier attestations and byte-side scans, promotion, cleanup and rejected-cleanup acknowledgements, `MemberReady` and checkpoints from an Evicted node are refused. Evidence an Evicted verifier recorded before its eviction leaves the block's verdict unless quorum has already latched. Restore does not re-apply the check to stored records. Registration and activation keep their current checks. Voiding parks a node and is not a key fence: a re-registration with a higher `registration_seq` restores it.
+- **Exits from the release refusals (not in v21).** The settle request for lost acknowledgements is a non-consensus orchestrator and SNode feature (P4), because the FSM already accepts late acknowledgements under quarantine. The subtractive revert of promoted rejected parts needs its own design and v22, and must be active before any independent challenger can open challenges.
+
+## 15. Changes by repository
+
+- **arbiter-proto:** `VerifierEntry` host fields, flags and consent; `stage3` parameters; `DatabaseGroup` in registry views; header `group_key`; commands `RebalanceGroup`, `ReselectVerifiers`, `MemberReady`, `MemberCheckpoint`, `MarkMemberLagging`; admission code `VERIFIERS_UNAVAILABLE`; the read RPCs `GetPartitionStates`, `GetPromotionOutcomes` and `GetBlockVerification(block_seq)` and the leader issuance-hold RPC; feature `stage3_v1`; status fields.
+- **arbiter-core:** the `si-member` role (verifier plus installer) with the member DDL intent set and group-scoped reconciler, incarnation-scoped Keeper paths, the install gate and byte sources, checkpoint and readiness signing, the local status endpoint, prefixed replay scratch; the owner audit; wire converters; the v21 container codec if it lives in shared code; ClickHouse credentials in every DSN.
+- **arbiter:** placement and backfill, group records, seal key and grouping window, owner-aware selection and admission refusal, re-selection, member readiness, checkpoints and classes, the floor in Apply and WorkSet, the narrowed drain gate and issuance hold, eviction voiding, purge sets, snapshot v21 with both bodies and write-then-verify, leader drain mode, read RPCs (`GetPartitionStates`, `GetPromotionOutcomes`, `GetBlockVerification(block_seq)` returning the replay job, each statement's candidate parts, the verify set and each evidence outcome, for shadow verification), metrics, `arbiter-admin`; ClickHouse credentials in the startup path.
+- **housegate:** the peer-trusted guard and reserved databases; `sitable` `Replica` status, the copy's table name and `Served()`; `sitablestate` rows; `forward.Plugin` with a table-state port; `buildStorageIntegrityArgs` for Replica tables; `pkg/replay` helpers (`OwnerEntry`, partition scan, an exported ledger check); a materializer that takes a database and prefix; agent read failover and status fields.
+- **rewriter-proto, rewriter-go, rewriter (optional):** a per-table read mode, only if `unsafe_latest` is to be answered from copies.
+- **sentio-node:** run `si-member` next to the SNode with its own identity, keys, ClickHouse user and disk; the `Replica` status from the member's endpoint; consent, readiness and checkpoint key handling; credentials for the SI ClickHouse DSN; pins.
+- **production:** voter sizing; alert rules (`VMRule` / `VMServiceScrape` in `charts/storage-integrity`) for tracks, members, floor, copies, disks, snapshot size and encoding fallback; the object-store bucket and backup jobs; member processes, users, grants, collections and disks in every indexer overlay; the lockdown, NetworkPolicies and interserver credentials; anti-affinity; indexer-c; runbooks with the operator playbook of §16.
+
+## 16. Phases and devnet2 rollout
+
+| Phase | Content | Consensus | Tracks paused | Exit criteria |
+|---|---|---|---|---|
+| P0 | §13.1 guards and voter sizing; peer-trusted guard; owner audit (report-only, then repair); ClickHouse mechanics pinned in CI on the deployed image; read RPCs; issuance hold and leader drain mode; alert rules | none | one track per SNode restart | guards and alerts live; audit clean on both owners; mechanics green on the deployed image |
+| L | ClickHouse lockdown (§14), credentials first | none | per-CHI change on the network CHI pauses verification on every track for seconds | `default` locked on every SI ClickHouse; grants probed |
+| E | Enrol indexer-c (below) | parameter update; irreversible | tracks a and b drained through P0 drain mode | a signed INSERT into a database assigned to indexer-c reaches safe |
+| P1 | Verified object-store backups per owner (versioned GCS bucket; backup keys may list, read and create on their own prefix but not delete; restore keys read-only) and the restore-and-gate library | none | none | one restore drill per owner verified against a manifest |
+| P2 | si-member on every host for the other owners, off consensus and without Keeper replicas: copies from owner pull and restore only; shadow verification that replays from DA and scans each candidate part after pulling it from the owner's `hg_unsafe` into `hg_rstage`; static group config = every other indexer; measured disk headroom | none | none | zero shadow mismatches over at least 500 blocks per owner (missed scans counted apart); copies equal to the latest entry for 24 h; member disks below 50 %; the integration test that copies never hold rows of a Rejected statement passes |
+| P3 | Reads from members (§11), agent sidecar upgrade in one window | none | none | a client of a quarantined owner's database reads safe from a member through the upgraded agent |
+| P4 | Settle for lost acknowledgements; same-identity owner rebuild (signer rotation plus a Keeper fence: old pod and PV destroyed or isolated, `SYSTEM DROP REPLICA` succeeding, `is_active` checked); network hardening (§14) | parameter update (rotation) | the rebuilt track | rebuild RTO recorded; hardening probed from every pod |
+| P5 | v21 activation with every switch off (§10.3) | v21, irreversible | every track drained for the activation | every voter writes v21; rehearsal passed |
+| P6 | The order of §10.4; before step 6, the measured znode count, memory and request latency of `clickhouse-keeper-extra` at the projected replica count (owner, pool and members per table) leave headroom against its limits; then raise k to 2 | parameter updates | none beyond each update's drain | k = 2 for 7 days with bounded held-cleanup age; anti-affinity re-checked; `safe_copies` ≥ 2 on distinct nodes |
+| P7 | v22: owner rebase and takeover with a cold governance key, history pruning, O(1) acknowledgement records, the case (a) revert | v22 | per design | per design |
+| P8 | DA rematerialisation; per-operator transport; retire the network pool per group once each has three peer verify members on distinct hosts | as needed | none | per design |
+
+**Enrolling indexer-c (E).** Enrolment is irreversible: `si_indexers` is append-only (`arbiter:fsm/signed_claims.go:131`). Steps: a new signer key funded on L2; its source CHI with the umbrella §8 source profile (as amended by §20) and the member disk of §8.1; its stage-2 sentio-node with SNode `snode-3` (the next id in the stage-1 runbook's ledger), `tableIDs: []` and the empty-set schema root, started only right before the enrolment, because its start registers it on chain (`EnsureRegistered`) and adds it to `createUserDatabase`'s round-robin over active indexers; record the contract-assigned indexer id; the enrolment update with `max_writers` 3 and an activation block about 1800 L2 blocks past the safe head, through drain mode over tracks a and b; the seed at activation. Indexer-c needs no database of its own to act as a member host. Acceptance: create databases until one is assigned to indexer-c, create a table in it after activation, and take a signed INSERT to safe.
+
+**Steady state on devnet2 after P6.** The members are {b, c} for owner a, {a, c} for owner b and {a, b} for owner c; every block draws three of five eligible verifiers; every table has three copies in steady state and at least two under k = 2 on distinct nodes outside the alerted escapes of §9.3 (strict mode removes the pressure escape and requires k − 1 reflecting members). One indexer down stops only its own track and costs the other two owners one verifier of margin.
+
+**Operator playbook.** A down member: wait for or issue `MarkMemberLagging`, then `EvictNode` or `RebalanceGroup`. A lagging member: restore from the object store. Diverged: automatic rebuild, page if it repeats. Foreign: stop serving, keep the scratch, rebuild from the owner pull or restore, investigate the transport. From P6 on, restart indexers strictly one at a time, because each restart removes a verifier from two other owners' rings. Every live step needs explicit confirmation in chat.
+
+## 17. Testing
+
+- **FSM:** placement determinism with weights, salts, failure domains and host uniqueness, and auditor re-derivation; the placement backfill at switch-on; the seal key, including databases with identical keys sharing blocks and parameter updates that change a key; the grouping window; selection excluding owner-hosted verifiers and automatic fill; `VERIFIERS_UNAVAILABLE`; re-selection on a quiet track and its restore checks; `MemberReady`; checkpoint acceptance and restore re-verification; member classes and hysteresis; the floor, each escape and strict mode; the raise precondition; the narrowed drain gate and the issuance hold; drain mode with a multi-partition frontier block and with an `Applied:false` re-issue; activation with a quarantined track; v21 interned and plain bodies, the forced fallback and an offline digest replay of the devnet2 log; eviction voiding including evidence; purge sets on scoped and unscoped paths.
+- **Data plane:** the install gate (sub-multiset, closure, Diverged repair with a reload inside the outdated window, Foreign, split, rename race, doubled retry); hardlink install from `hg_member_unsafe`; pull grants refusing writes; the restore source; startup audit; member purge, including a dead member followed by a purge and a same-name re-create on both path kinds, and a stale last replica on the unscoped path dropped after a scoped re-create leaving the scoped table's Keeper tree and writes intact; the member user unable to change an owner's replicas; the owner audit across a ClickHouse-only restart.
+- **housegate:** the peer-trusted guard against every peer-leg form; `Replica` status rows; `forward.Plugin` keeping replica-served sessions local; SI tables resolved before remote mapping.
+- **Integration (`chpipeline`):** three SNodes with members and the network pool on one Keeper; concurrent writes to every owner; killing one member mid-stream; quarantining an owner while its tables are read from members; one indexer down stalling only its own track.
+
+## 18. Risks
+
+- v21 is the third irreversible format, and its encoding is live at activation even with every switch off; the plain-body fallback keeps compaction alive but the format itself cannot be rolled back.
+- Indexer-c's enrolment is irreversible; it becomes a permanent track that every later gated activation must upgrade or quarantine.
+- Members compete with their host's SNode for CPU, server memory and fetch threads; placement and profiles must stay capacity-aware.
+- Declared failure domains count only if the deployment enforces them.
+- Until a dedicated Keeper with per-path ACLs exists, the shared production Keeper carries the members' replicas from P6 step 6 on; P4's ingress allowlist limits which pods reach it, but any SI ClickHouse can still write its paths, and an `OPTIMIZE` on any replica merges the owner's candidates.
+- During the hybrid period a network-pool outage still affects every track.
+- An owner's track is only as live as its weakest group, and overlapping groups couple tracks locally: two failed members stall the owners whose groups contain both.
+- Divergent groups split blocks and add anchors and replays.
+- A checkpoint proves agreement with a manifest, not possession of the data; the self-audit and, later, the 06-22 §13 serving audit cover the gap.
+
+## 19. Open questions
+
+- Placement weights: the capacity unit and who sets it.
+- Whether every verify member also replicates (1 + r copies, default) or only k − 1 of them.
+- The network pool's end state: fill-in only, a mandatory member of every group, or a challenger only.
+- The default of `exclude_quarantined_hosts`.
+- Whether `unsafe_latest` is ever answered from copies.
+- The mutation-era publication cut (07-01).
+- The dedicated Keeper ensemble's migration design.
+
+## 20. Changes to earlier decisions
+
+- **Umbrella D7 and §6.1:** `verifiers` entries gain host binding, keys, weight, failure domain and flags (§6.1).
+- **Umbrella §6.5:** "the selection floor of three active non-source verifiers is unchanged" becomes per group (§7.3), with owner-hosted verifiers excluded.
+- **Umbrella D8 and §6.6:** "other SNodes do not hold the table" still holds for SNodes; members, which are not SNodes, hold manifest-gated copies outside the promotion and cleanup path, and their checkpoints are never source acknowledgements. §6.6's purge rule is replaced by §8.8.
+- **Umbrella D9 and §7.1:** after the `placement` switch, blocks seal on (owner, `group_key`), the grouping window keys on the same pair, and transition blocks are per key with at most one unpublished per track.
+- **Umbrella §7.4:** S11 narrows the drain gate.
+- **Umbrella §7.7** (Spec D compatibility): members follow published manifests, so no promotion cursor exists and Spec D's scalar-cursor obligation is discharged.
+- **Umbrella §7.8:** verifier liveness becomes per group, with the network pool shared during the hybrid period.
+- **Umbrella §8:** "verifiers keep an `hg_unsafe` replica of every SI table" holds for the network pool only; members hold their groups' tables; the source ClickHouse profile adds interserver reachability from every member ClickHouse of the owner's groups. The dedicated verifiers' `hg_safe` stays empty.
+- **Umbrella §9, §10 and C13:** a member host answers a quarantined or unreachable owner's tables `Replica` (§11) instead of Ordinary.
+- **Umbrella §3, §16 and §17:** verifier sharding is in scope through groups; a leaked `replica_signer` can only lower its owners' copy floor; object storage is a replica transport, not the §17 transport item, which remains source Keeper isolation and authenticated interserver fetch.
+- **Umbrella §18:** the every-node rule applies to the network pool only.
+- **Spec D:** D2–D7 are superseded (fan-out and per-node acknowledgements by S8, D5 by §8.6, D6 by §9.2, D7 by §8.4); D1 is restated as "the members of a database group both verify and hold manifest-gated copies"; D8 is replaced by §11, which serves only while the owner is quarantined or unreachable.
+- **Umbrella D11; dynamic SI table set D9 and its create rule; 06-22 §6:** from the `purge` switch, new incarnations' `hg_unsafe` and `hg_member_unsafe` replicas use incarnation-scoped Keeper paths under a separate root (§8.8), and copies are `hg_replica.<db__table>__i<seq>`. The `hg_safe` / `hg_unsafe` / `hg_promote` table names, `_hg_row_id` derivation and the signed target id are unchanged, so D9's reason for rejecting per-incarnation names does not apply.
+- **Umbrella D2 and §11:** the agent gains read-only failover to `replica_hosts` (§11); writes, discovery, signing and lanes are unchanged.
+- **06-22:** unchanged except the Keeper path of §6. This stage realises §9, §10 and §12.5 with manifest-gated installs; the engine split of §12.1 stays, and served copies are never on a Keeper path.
+- **Arbiter design §7.1 / §7.4:** selection stays deterministic and 2-of-3, now over a group's eligible ring.
