@@ -6200,20 +6200,35 @@ Then the budget, local only:
 
 ```bash
 python3 -I - "$si_backup/state-samples.tsv" 536870912 <<'EOF'
-import sys
+import math, sys
 rows = [line.rstrip("\n").split("\t") for line in open(sys.argv[1]) if line.strip()]
 limit = int(sys.argv[2])
-first, last = rows[0], rows[-1]
-state, seq = int(last[1]), int(last[3])
-grown, promoted = state - int(first[1]), seq - int(first[3])
-per = grown / promoted if grown > 0 and promoted > 0 else state / max(seq, 1)
-budget = int((limit // 4 - state) / per) if per > 0 else 0
-print("state %d bytes at promotion %d; %.0f bytes per promotion (%s); budget to L/4: %d promotions; a drill spends at most %d"
-      % (state, seq, per, "measured" if grown > 0 and promoted > 0 else "the whole state over every promotion", budget, budget // 2))
+target = limit // 4
+samples = sorted({int(r[3]): int(r[1]) for r in rows}.items())
+seq, state = samples[-1]
+# The state grows about quadratically in the promotion count (spec §2: 11.4 MB at promotion 53), so the
+# marginal cost of a promotion is about twice the average: never divide the headroom by an average.
+estimates = []
+if seq > 0:  # pure quadratic through the origin: S = a*n^2 (overstates a, so it understates the budget)
+    a0 = state / seq ** 2
+    estimates.append(("quadratic through the latest sample", math.isqrt(int(target / a0)) - seq))
+if len(samples) >= 2:  # S = c + a*n^2 through the first and the latest sample
+    (n1, s1), (n2, s2) = samples[0], samples[-1]
+    if n2 > n1 and s2 > s1:
+        a = (s2 - s1) / (n2 ** 2 - n1 ** 2)
+        c = s2 - a * n2 ** 2
+        if target > c:
+            estimates.append(("quadratic fit of the first and latest samples", math.isqrt(int((target - c) / a)) - seq))
+if not estimates or state >= target:
+    print("state %d bytes at promotion %d: no promotion budget left before L/4; stop" % (state, seq)); sys.exit(1)
+how, budget = min(estimates, key=lambda e: e[1])
+budget = max(budget, 0)
+print("state %d bytes at promotion %d; budget to L/4 (%d bytes): %d promotions (%s, the smaller estimate); a drill spends at most %d"
+      % (state, seq, target, budget, how, budget // 2))
 EOF
 ```
 
-Expected: one line with the budget. With a single sample the estimate charges the whole state to the promotions so far, which overstates the growth per promotion and so understates the budget; take a second sample after the drill and keep the file.
+Expected: one line with the budget. Both estimates are quadratic and the smaller one is used: a single sample assumes the state grew from zero as a·n², which overstates the growth and so understates the budget; a second sample, taken at least one snapshot later, fits the constant term too. Take a second sample after the drill and keep the file. At devnet2's measured point (about 11.4 MB at promotion 53) this gives about 128 promotions to L/4, where a linear estimate would give about 570.
 
 ### 13.5 Holds
 
