@@ -20944,7 +20944,7 @@ Filled in while the plan runs; never edited afterwards.
 
 | Name | Value | Recorded by |
 |---|---|---|
-| `HG_TAG` |  | Task 2 |
+| `HG_TAG` | `v0.20.0` (commit `bc92f91309c7752c848cc0d0e41b37e5d4ae8bae`, housegate PR #238, cut 2026-10-15T11:07:04Z, release run 38725035601) | Task 2 |
 | `PROTO_TAG` | `v0.12.0` (commit `7a73f256865c333332f0ac28b17806b1e2bfcbd1`, arbiter-proto PR #20, cut 2026-10-15T10:54:20Z, run 38723475510; dry run 38723353237) | Task 3 |
 | `CORE_TAG` |  | Task 6 |
 | `ARBITER_TAG` |  | Task 11 |
