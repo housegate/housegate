@@ -20951,3 +20951,5 @@ Filled in while the plan runs; never edited afterwards.
 | `ARBITER_DIGEST` |  | Task 11 |
 
 Run records (date, command, outcome): the deployed-image mechanics run (Task 6), the offline devnet2 log replay (Task 11).
+
+- 2026-10-15, Task 6 Step 16, deployed image `us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16` (digest `sha256:2304b1530b1e87b0f8571d1bdd7d976e12ac2bb1efd82c695f1c988ff59dfb31`, linux/amd64 under emulation on Apple Silicon): `env ARBITER_CH_PLATFORM=linux/amd64 bash scripts/ci/clickhouse-mechanics.sh <image> 26.3.` from arbiter-core `v0.15.0` content; three servers report ClickHouse 26.3.12.1; `mechanics: 13 test(s) passed`; `snode: TestOwnerAuditRepairsResurrectedPartsAcrossAClickHouseRestart passed`; exit 0.
