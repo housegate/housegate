@@ -20945,7 +20945,7 @@ Filled in while the plan runs; never edited afterwards.
 | Name | Value | Recorded by |
 |---|---|---|
 | `HG_TAG` |  | Task 2 |
-| `PROTO_TAG` |  | Task 3 |
+| `PROTO_TAG` | `v0.12.0` (commit `7a73f256865c333332f0ac28b17806b1e2bfcbd1`, arbiter-proto PR #20, cut 2026-10-15T10:54:20Z, run 38723475510; dry run 38723353237) | Task 3 |
 | `CORE_TAG` |  | Task 6 |
 | `ARBITER_TAG` |  | Task 11 |
 | `ARBITER_DIGEST` |  | Task 11 |
