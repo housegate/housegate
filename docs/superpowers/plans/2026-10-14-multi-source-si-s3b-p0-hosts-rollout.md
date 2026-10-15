@@ -6189,7 +6189,7 @@ Expected before a restart: `480 s` and no row. After an unplanned restart, read 
 
 ### 13.4 Promotion budget for drills
 
-Every promotion grows the consensus state (spec §13.1; the super-linear term comes from the parts each `REPLACE PARTITION` renames). Before a drill that writes in a loop, compute its promotion budget and spend at most half of it; churn drills (many promotions of one partition) run only in the integration environment or on a partitioned throwaway table. One sample per run, read-only (time, the leader's state bytes, its snapshot document bytes and the promotion sequence; the gauges are from the last snapshot, so take samples at least one snapshot apart):
+Every promotion grows the consensus state (spec §13.1; the super-linear term comes from the parts each `REPLACE PARTITION` renames). Before a drill that writes in a loop, compute its promotion budget and spend at most half of it; churn drills (many promotions of one partition) run only in the integration environment or on a partitioned throwaway table. `arbiter_state_bytes` is refreshed only when the leader persists or restores a snapshot, while `promotion_seq` is live, so a size and a sequence read together do not describe the same state. Take read-only samples (time, the leader's state bytes, its snapshot document bytes and the live promotion sequence) every few minutes until the state bytes change between two consecutive samples: that snapshot was taken between those two samples, so the earlier sample's sequence is a lower bound on the snapshot's own sequence.
 
 ```bash
 l="$(si_leader)"
@@ -6204,31 +6204,27 @@ import math, sys
 rows = [line.rstrip("\n").split("\t") for line in open(sys.argv[1]) if line.strip()]
 limit = int(sys.argv[2])
 target = limit // 4
-samples = sorted({int(r[3]): int(r[1]) for r in rows}.items())
-seq, state = samples[-1]
+samples = [(int(r[1]), int(r[3])) for r in rows]  # (state bytes of the last snapshot, live promotion seq)
+now_state, now_seq = samples[-1]
+# The newest change of the state bytes brackets a snapshot: it was taken after sample k-1 and before sample k,
+# so its own promotion sequence is at least seq[k-1].
+k = next((i for i in range(len(samples) - 1, 0, -1) if samples[i][0] != samples[i - 1][0]), None)
+if k is None:
+    print("no snapshot bracketed yet: keep sampling until arbiter_state_bytes changes between two samples"); sys.exit(1)
+snap_state, snap_seq_lower = samples[k][0], max(samples[k - 1][1], 1)
+if max(snap_state, now_state) >= target:
+    print("state %d bytes: no promotion budget left before L/4; stop" % max(snap_state, now_state)); sys.exit(1)
 # The state grows about quadratically in the promotion count (spec §2: 11.4 MB at promotion 53), so the
 # marginal cost of a promotion is about twice the average: never divide the headroom by an average.
-estimates = []
-if seq > 0:  # pure quadratic through the origin: S = a*n^2 (overstates a, so it understates the budget)
-    a0 = state / seq ** 2
-    estimates.append(("quadratic through the latest sample", math.isqrt(int(target / a0)) - seq))
-if len(samples) >= 2:  # S = c + a*n^2 through the first and the latest sample
-    (n1, s1), (n2, s2) = samples[0], samples[-1]
-    if n2 > n1 and s2 > s1:
-        a = (s2 - s1) / (n2 ** 2 - n1 ** 2)
-        c = s2 - a * n2 ** 2
-        if target > c:
-            estimates.append(("quadratic fit of the first and latest samples", math.isqrt(int((target - c) / a)) - seq))
-if not estimates or state >= target:
-    print("state %d bytes at promotion %d: no promotion budget left before L/4; stop" % (state, seq)); sys.exit(1)
-how, budget = min(estimates, key=lambda e: e[1])
-budget = max(budget, 0)
-print("state %d bytes at promotion %d; budget to L/4 (%d bytes): %d promotions (%s, the smaller estimate); a drill spends at most %d"
-      % (state, seq, target, budget, how, budget // 2))
+# S = a*n^2 through the origin with n a lower bound overstates a, so the budget is understated.
+a = snap_state / snap_seq_lower ** 2
+budget = max(math.isqrt(int(target / a)) - now_seq, 0)  # minus every promotion spent since that snapshot
+print("snapshot of %d bytes at promotion >= %d; live promotion %d; budget to L/4 (%d bytes): %d promotions; a drill spends at most %d"
+      % (snap_state, snap_seq_lower, now_seq, target, budget, budget // 2))
 EOF
 ```
 
-Expected: one line with the budget. Both estimates are quadratic and the smaller one is used: a single sample assumes the state grew from zero as a·n², which overstates the growth and so understates the budget; a second sample, taken at least one snapshot later, fits the constant term too. Take a second sample after the drill and keep the file. At devnet2's measured point (about 11.4 MB at promotion 53) this gives about 128 promotions to L/4, where a linear estimate would give about 570.
+Expected: one line with the budget, or the line asking for more samples. The budget charges the whole bracketed snapshot to a pure quadratic from zero at the lowest sequence it can have been taken at, and subtracts every promotion made since, so it errs low. At devnet2's measured point (about 11.4 MB at promotion 53, read at promotion 53) this gives about 128 promotions to L/4, where a linear estimate would give about 570; read at live promotion 100 with the same snapshot, it gives about 81. Re-sample after the drill and keep the file.
 
 ### 13.5 Holds
 
