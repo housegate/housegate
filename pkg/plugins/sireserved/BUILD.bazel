@@ -7,9 +7,12 @@ go_test(
     deps = [
         "//pkg/chproto",
         "//pkg/chsession",
+        "//pkg/log",
         "//pkg/plugin",
         "//pkg/sitable",
+        "//pkg/sqlsurface",
         "@com_github_clickhouse_ch_go//proto",
+        "@com_github_prometheus_client_golang//prometheus/testutil",
     ],
 )
 
@@ -19,7 +22,10 @@ go_library(
     importpath = "github.com/housegate/housegate/pkg/plugins/sireserved",
     visibility = ["//visibility:public"],
     deps = [
+        "//pkg/chproto",
+        "//pkg/log",
         "//pkg/plugin",
         "//pkg/sqlsurface",
+        "@com_github_prometheus_client_golang//prometheus",
     ],
 )
