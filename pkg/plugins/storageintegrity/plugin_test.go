@@ -719,6 +719,11 @@ func TestIngressRefusesReservedDatabaseDropTable(t *testing.T) {
 		{"DROP TABLE IF EXISTS phys.`db1.t`, `hg_promote`.`z` SYNC", "hg_promote.z"},
 		{`DROP TABLE phys."db1.t", "hg_safe"."db1__t"`, "hg_safe.db1__t"},
 		{"drop table HG_SAFE . x", "HG_SAFE.x"},
+		// Spec 2026-10-14 §14: the stage-3 member databases are reserved too.
+		{"DROP TABLE hg_replica.x", "hg_replica.x"},
+		{"DROP TABLE a.b, hg_member_unsafe.y", "hg_member_unsafe.y"},
+		{"DROP TABLE IF EXISTS `hg_rstage`.`s1_0` SYNC", "hg_rstage.s1_0"},
+		{"drop table HG_XFER . t", "HG_XFER.t"},
 	} {
 		t.Run(tc.sql, func(t *testing.T) {
 			p, signer := newSignedIngress(t)

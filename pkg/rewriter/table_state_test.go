@@ -60,7 +60,7 @@ func TestSentioRewriter_SendsV2WithEmptyTableMap(t *testing.T) {
 	if si == nil || si.GetContractVersion() != StorageIntegrityContractV2 || len(si.GetTables()) != 0 {
 		t.Fatalf("args = %v, want V2 with an empty table map", si)
 	}
-	if strings.Join(si.GetReservedDatabases(), ",") != "hg_safe,hg_unsafe,hg_promote" {
+	if strings.Join(si.GetReservedDatabases(), ",") != "hg_safe,hg_unsafe,hg_promote,hg_member_unsafe,hg_replica,hg_rstage,hg_xfer" {
 		t.Fatalf("reserved databases = %v, want them on a request with no Active table", si.GetReservedDatabases())
 	}
 }
@@ -111,7 +111,7 @@ func TestSentioRewriter_UnsafeLatestFetchesPartsForAccessedTablesOnly(t *testing
 	}
 	// Spec 2026-09-26 T1/T3: the protected namespace rides on every pass,
 	// the unsafe_latest rewrite pass included.
-	wantProtected := []string{"phys", "hg_safe", "hg_unsafe", "hg_promote"}
+	wantProtected := []string{"phys", "hg_safe", "hg_unsafe", "hg_promote", "hg_member_unsafe", "hg_replica", "hg_rstage", "hg_xfer"}
 	for i, req := range be.requests {
 		if got := req.GetOptions()[0].GetTableNameArgs().GetDynamicArgs().GetProtectedDatabases(); !slices.Equal(got, wantProtected) {
 			t.Fatalf("pass %d protected_databases = %v, want %v", i+1, got, wantProtected)

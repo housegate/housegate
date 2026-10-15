@@ -94,10 +94,18 @@ func TestStatusNamesRoundTrip(t *testing.T) {
 	}
 }
 
+// TestReservedDatabasesIsACopy pins the reserved list and its order (spec
+// 2026-10-14 §14): the SNode's three databases first, then the four stage-3
+// member databases, so every message that joins the list still starts with
+// hg_safe.
 func TestReservedDatabasesIsACopy(t *testing.T) {
 	got := ReservedDatabases()
-	if strings.Join(got, ",") != "hg_safe,hg_unsafe,hg_promote" {
+	if strings.Join(got, ",") != "hg_safe,hg_unsafe,hg_promote,hg_member_unsafe,hg_replica,hg_rstage,hg_xfer" {
 		t.Fatalf("ReservedDatabases() = %v", got)
+	}
+	if MemberUnsafeDatabase != "hg_member_unsafe" || ReplicaDatabase != "hg_replica" ||
+		ReplicaStageDatabase != "hg_rstage" || TransferDatabase != "hg_xfer" {
+		t.Fatalf("stage-3 constants = %q / %q / %q / %q", MemberUnsafeDatabase, ReplicaDatabase, ReplicaStageDatabase, TransferDatabase)
 	}
 	got[0] = "mutated"
 	if ReservedDatabases()[0] != SafeDatabase {

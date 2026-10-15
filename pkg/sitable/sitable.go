@@ -129,21 +129,38 @@ type TableState interface {
 	Changed() <-chan struct{}
 }
 
-// Protocol-owned storage-integrity databases (Spec C D2 naming freeze). They
-// equal config.StorageIntegritySafeDatabase / UnsafeDatabase /
-// PromoteDatabase; this leaf package cannot import pkg/config (which imports
-// pkg/rewriter), and a pkg/config test pins the equality.
+// Protocol-owned storage-integrity databases (Spec C D2 naming freeze). The
+// first three are the SNode's and equal config.StorageIntegritySafeDatabase /
+// UnsafeDatabase / PromoteDatabase; this leaf package cannot import
+// pkg/config (which imports pkg/rewriter), and a pkg/config test pins the
+// equality. The last four are the stage-3 member databases (spec 2026-10-14
+// §8.1, §14), owned by the si-member process rather than the SNode: a
+// member's ReplicatedMergeTree replicas of an owner's unsafe tables, its
+// verified copies, its install and replay scratch tables, and a name reserved
+// for a later transfer phase. HouseGate never creates any of them; it only
+// keeps every session from addressing them.
 const (
-	SafeDatabase    = "hg_safe"
-	UnsafeDatabase  = "hg_unsafe"
-	PromoteDatabase = "hg_promote"
+	SafeDatabase         = "hg_safe"
+	UnsafeDatabase       = "hg_unsafe"
+	PromoteDatabase      = "hg_promote"
+	MemberUnsafeDatabase = "hg_member_unsafe"
+	ReplicaDatabase      = "hg_replica"
+	ReplicaStageDatabase = "hg_rstage"
+	TransferDatabase     = "hg_xfer"
 )
 
-// ReservedDatabases returns the protocol-owned databases HouseGate sends as
-// StorageIntegrityArgs.reserved_databases on every enabled request, so the
-// engines protect them even while no table is Active.
+// ReservedDatabases returns the protocol-owned databases in this fixed order,
+// the SNode's three first: HouseGate sends them as
+// StorageIntegrityArgs.reserved_databases on every enabled request (so the
+// engines protect them even while no table is Active) and inside
+// protected_databases on every request, and tablerefguard, sireserved, the
+// exception scrubber and the ingress DROP TABLE check refuse or redact them.
+// Every call returns a fresh slice.
 func ReservedDatabases() []string {
-	return []string{SafeDatabase, UnsafeDatabase, PromoteDatabase}
+	return []string{
+		SafeDatabase, UnsafeDatabase, PromoteDatabase,
+		MemberUnsafeDatabase, ReplicaDatabase, ReplicaStageDatabase, TransferDatabase,
+	}
 }
 
 // PhysicalTable maps a logical table id to its hg_safe / hg_unsafe table name
