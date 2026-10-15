@@ -233,11 +233,15 @@ func validateStorageIntegrityRuntimeTableSchemas(tables []string, schemas []payl
 
 // tableStateSchemaResolver resolves journal-recovery and cleanup schemas from
 // the current snapshot, which answers Active and Gone tables (spec 2026-09-24
-// §9.2), so statements admitted before a retirement still finish, and a Refused
+// §9.2), so statements admitted before a retirement still finish; a Refused
 // table that carries a schema (a quarantined indexer's, spec 2026-10-10 §10),
 // so statements admitted before a quarantine still recover and clean up while
-// the host refuses the table. Under sitable.Static it answers the startup
-// schema set, exactly as before.
+// the host refuses the table; and a Pending table that carries one (an Active
+// incarnation its host holds back, not ready on its SNode or with an unclean
+// owner hg_safe audit, spec 2026-10-14 §14), so a record admitted while the
+// table was Active still recovers when a restart finds it held. A table
+// without a schema never resolves. Under sitable.Static it answers the
+// startup schema set, exactly as before.
 func tableStateSchemaResolver(state sitable.TableState) StorageIntegrityTableSchemaResolver {
 	return StorageIntegrityTableSchemaResolverFunc(func(tableID string) (payloadexec.TableSchema, bool) {
 		table, ok := state.Current().Schema(tableID)

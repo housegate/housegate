@@ -24,7 +24,14 @@ const (
 	// host, if any, governs it.
 	Ordinary Status = iota
 	// Pending includes default deny: a table of a database this host's
-	// enrolled SI indexer hosts that the registry has not recorded.
+	// enrolled SI indexer hosts that the registry has not recorded. A host
+	// also reports Pending for an Active incarnation it holds back: not yet
+	// ready on its SNode, or, in the owner audit's repair mode, while the
+	// owner's hg_safe audit is unclean (spec 2026-10-14 §14). Such a held
+	// entry may keep the table's Schema and SchemaHash (Schema.TableID set),
+	// so journal recovery and cleanup still resolve it; reads and writes are
+	// still refused retryably, and the signed lane still admits only Active
+	// tables.
 	Pending
 	// Refused carries the arbiter's refused_code and refused_reason, or the
 	// host-synthesized code "indexer_quarantined" for each table the host would
@@ -83,7 +90,7 @@ type Table struct {
 	Status        Status
 	RefusedCode   string // Refused only; the arbiter's refused_code vocabulary or the host's "indexer_quarantined"
 	RefusedReason string
-	Schema        payloadexec.TableSchema // set for Active and Gone, and for a Refused table whose indexer is quarantined
+	Schema        payloadexec.TableSchema // set for Active and Gone, for a Refused table whose indexer is quarantined, and for a Pending table its host holds back
 	SchemaHash    string
 }
 
@@ -110,15 +117,17 @@ func cloneTable(t Table) Table {
 // Snapshot is immutable; every method is in-memory and performs no I/O.
 //
 // Schema is how journal recovery and cleanup resolve a table's schema. It
-// answers an Active or Gone table and a Refused table that carries a schema (a
-// quarantined indexer's, code "indexer_quarantined"; NewSnapshot, Static and
-// Fake do), and misses for every other table, including a Refused one without
-// a schema.
+// answers an Active or Gone table, a Refused table that carries a schema (a
+// quarantined indexer's, code "indexer_quarantined") and a Pending table that
+// carries one (an Active incarnation its host holds back, spec 2026-10-14
+// §14); NewSnapshot, Static and Fake do. It misses for every other table,
+// including a Refused or Pending one without a schema (an admission refusal,
+// default deny) and an Ordinary one.
 type Snapshot interface {
 	Version() uint64
 	Lookup(database, table string) Table // answers for any table
 	Active() []Table                     // sorted by ID
-	Schema(id string) (Table, bool)      // Active or Gone, or Refused with a schema (an indexer quarantine)
+	Schema(id string) (Table, bool)      // Active or Gone, or Refused or Pending with a schema
 }
 
 // TableState hands out snapshots. Changed returns a channel that is closed at
@@ -231,12 +240,15 @@ func (s *snapshot) Active() []Table {
 	return out
 }
 
-// Schema answers an Active or Gone table, and a Refused table that carries a
-// schema: a host keeps the schema of each table it reports Refused because its
-// SI indexer is quarantined (code "indexer_quarantined", spec 2026-10-10 §10),
-// so journal recovery and cleanup still resolve it. A Refused table without a
-// schema (the arbiter's admission refusal), a Pending or Ordinary one and an
-// unlisted one all miss.
+// Schema answers an Active or Gone table, and a Refused or Pending table that
+// carries a schema: a host keeps the schema of each table it reports Refused
+// because its SI indexer is quarantined (code "indexer_quarantined", spec
+// 2026-10-10 §10) and of each Active incarnation it reports Pending while it
+// holds it back (not ready on its SNode, or an unclean owner hg_safe audit in
+// repair mode, spec 2026-10-14 §14), so journal recovery and cleanup still
+// resolve it. A Refused table without a schema (the arbiter's admission
+// refusal), a Pending one without a schema (default deny), an Ordinary one and
+// an unlisted one all miss.
 func (s *snapshot) Schema(id string) (Table, bool) {
 	t, ok := s.byID[id]
 	if !ok {
@@ -244,7 +256,7 @@ func (s *snapshot) Schema(id string) (Table, bool) {
 	}
 	switch t.Status {
 	case Active, Gone:
-	case Refused:
+	case Refused, Pending:
 		if t.Schema.TableID == "" {
 			return Table{}, false
 		}
