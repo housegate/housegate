@@ -76,7 +76,7 @@ func (p *Plugin) OnQuery(ctx context.Context, qctx *plugin.QueryContext) error {
 	if !snap.IsPeerTrusted || snap.IsForwardedFromPeer {
 		return nil
 	}
-	surfaces, err := sqlsurface.ScanWith(qctx.Query.Body, sqlsurface.Options{DecodeStringEscapes: true, DecodeIdentifierEscapes: true})
+	surfaces, err := sqlsurface.ScanWith(qctx.Query.Body, sireserved.PeerScanOptions)
 	if err != nil {
 		refusals.Inc()
 		logRefusal(ctx, snap.PeerAddress, "statement_unscannable", nil, qctx.Query.Body)

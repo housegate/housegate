@@ -94,10 +94,18 @@ func TestStatusNamesRoundTrip(t *testing.T) {
 	}
 }
 
+// TestReservedDatabasesIsACopy pins the reserved list and its order (spec
+// 2026-10-14 §14): the SNode's three databases first, then the four stage-3
+// member databases, so every message that joins the list still starts with
+// hg_safe.
 func TestReservedDatabasesIsACopy(t *testing.T) {
 	got := ReservedDatabases()
-	if strings.Join(got, ",") != "hg_safe,hg_unsafe,hg_promote" {
+	if strings.Join(got, ",") != "hg_safe,hg_unsafe,hg_promote,hg_member_unsafe,hg_replica,hg_rstage,hg_xfer" {
 		t.Fatalf("ReservedDatabases() = %v", got)
+	}
+	if MemberUnsafeDatabase != "hg_member_unsafe" || ReplicaDatabase != "hg_replica" ||
+		ReplicaStageDatabase != "hg_rstage" || TransferDatabase != "hg_xfer" {
+		t.Fatalf("stage-3 constants = %q / %q / %q / %q", MemberUnsafeDatabase, ReplicaDatabase, ReplicaStageDatabase, TransferDatabase)
 	}
 	got[0] = "mutated"
 	if ReservedDatabases()[0] != SafeDatabase {
@@ -162,7 +170,7 @@ func TestSnapshotSchemaAnswersARefusedTableOnlyWhenItCarriesOne(t *testing.T) {
 	snap := NewFake(Pending,
 		quarantined,
 		Table{ID: "db1.refused", Status: Refused, RefusedCode: "SCHEMA_INVALID", RefusedReason: "bad column"},
-		Table{ID: "db1.pending", Status: Pending, Schema: testSchema("db1.pending")},
+		Table{ID: "db1.pending", Status: Pending}, // default deny carries no schema; a held Pending table with one is TestSnapshotSchemaAnswersAHeldPendingTable's
 		Table{ID: "db1.ordinary", Status: Ordinary, Schema: testSchema("db1.ordinary")},
 		Table{ID: "db1.active", Status: Active, Schema: testSchema("db1.active")},
 		Table{ID: "db1.gone", Status: Gone, Schema: testSchema("db1.gone")},
@@ -196,6 +204,53 @@ func TestSnapshotSchemaAnswersARefusedTableOnlyWhenItCarriesOne(t *testing.T) {
 	got.Schema.Columns[0].Name = "mutated"
 	if again, _ := snap.Schema("db1.quarantined"); again.Schema.Columns[0].Name != "a" {
 		t.Fatalf("mutating a Schema()-returned Refused Table's Columns leaked into the snapshot: %+v", again.Schema.Columns)
+	}
+}
+
+// TestSnapshotSchemaAnswersAHeldPendingTable is spec 2026-10-14 §14: a host
+// reports an Active incarnation it holds back (not ready on its SNode, or an
+// unclean owner hg_safe audit in repair mode) as Pending and keeps its schema
+// and hash, so journal recovery and cleanup still resolve it. A default-deny
+// Pending table carries no schema and stays unanswered, and answering Schema
+// makes neither table usable.
+func TestSnapshotSchemaAnswersAHeldPendingTable(t *testing.T) {
+	held := Table{
+		ID: "db1.held", Status: Pending,
+		Schema: testSchema("db1.held"), SchemaHash: payloadexec.TableSchemaHash("net", testSchema("db1.held")),
+	}
+	f := NewFake(Pending, held, Table{ID: "db1.denied", Status: Pending})
+	snap := f.Current()
+
+	got, ok := snap.Schema("db1.held")
+	if !ok || !reflect.DeepEqual(got, held) {
+		t.Fatalf("Schema(db1.held) = %+v ok=%v, want the Pending entry with its schema and hash", got, ok)
+	}
+	for _, id := range []string{"db1.denied", "db1.unlisted"} {
+		if table, ok := snap.Schema(id); ok {
+			t.Fatalf("Schema(%s) = %+v, want a miss: a default-deny Pending table has no schema", id, table)
+		}
+	}
+	if lookup := snap.Lookup("db1", "held"); lookup.Status != Pending || lookup.SchemaHash != held.SchemaHash {
+		t.Fatalf("Lookup(db1, held) = %+v, want it still Pending with its hash", lookup)
+	}
+	if active := snap.Active(); len(active) != 0 {
+		t.Fatalf("Active() = %+v, want none: a held table is not Active", active)
+	}
+
+	// The answer is a fresh copy, like every other.
+	got.Schema.Columns[0].Name = "mutated"
+	if again, _ := snap.Schema("db1.held"); again.Schema.Columns[0].Name != "a" {
+		t.Fatalf("mutating a Schema()-returned Pending Table's Columns leaked into the snapshot: %+v", again.Schema.Columns)
+	}
+
+	// The Fake carries the hold across versions: Active, then held.
+	f.Set(Table{ID: "db1.held", Status: Active, Schema: testSchema("db1.held"), SchemaHash: held.SchemaHash})
+	f.Set(held)
+	if table, ok := f.Current().Schema("db1.held"); !ok || table.Status != Pending || table.SchemaHash != held.SchemaHash {
+		t.Fatalf("after the hold Schema(db1.held) = %+v ok=%v, want the held Pending entry", table, ok)
+	}
+	if len(f.Current().Active()) != 0 {
+		t.Fatal("a held table must leave the Active set")
 	}
 }
 

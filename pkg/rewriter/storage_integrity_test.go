@@ -62,7 +62,7 @@ func TestBuildStorageIntegrityArgs(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.GetReadMode() != pb.StorageIntegrityArgs_READ_MODE_SAFE || got.GetReservedRowIdColumn() != "_hg_row_id" ||
-		got.GetContractVersion() != StorageIntegrityContractV2 || len(got.GetReservedDatabases()) != 3 {
+		got.GetContractVersion() != StorageIntegrityContractV2 || len(got.GetReservedDatabases()) != 7 {
 		t.Fatalf("args = %v", got)
 	}
 	tbl := got.GetTables()["db1.t"]
@@ -101,8 +101,8 @@ func TestBuildStorageIntegrityArgs_EmptyTableMapStillSendsV2(t *testing.T) {
 	}
 	// With no Active table the engines learn the protected databases only
 	// from reserved_databases, so they must be sent anyway.
-	if strings.Join(got.GetReservedDatabases(), ",") != "hg_safe,hg_unsafe,hg_promote" {
-		t.Fatalf("reserved databases = %v, want hg_safe, hg_unsafe, hg_promote", got.GetReservedDatabases())
+	if strings.Join(got.GetReservedDatabases(), ",") != "hg_safe,hg_unsafe,hg_promote,hg_member_unsafe,hg_replica,hg_rstage,hg_xfer" {
+		t.Fatalf("reserved databases = %v, want the three SNode databases and the four stage-3 member databases", got.GetReservedDatabases())
 	}
 }
 
@@ -212,5 +212,27 @@ func TestStorageIntegrityScrubber_RedactsPromoteDatabase(t *testing.T) {
 	s := NewStorageIntegrityScrubber(sitable.NewFake(sitable.Pending).Current())
 	if got := s.Scrub("Table hg_promote.db1__t does not exist"); strings.Contains(got, "hg_promote") {
 		t.Fatalf("Scrub = %q, want hg_promote redacted", got)
+	}
+}
+
+// TestStorageIntegrityScrubber_RedactsStage3Databases is spec 2026-10-14 §14:
+// the stage-3 member databases are reserved, so an upstream message naming one
+// reaches no client, even with no Active table. hg_member_unsafe is redacted
+// whole, and with an Active table the qualified hg_unsafe name of that table
+// still maps back to its logical id while its member-database name does not.
+func TestStorageIntegrityScrubber_RedactsStage3Databases(t *testing.T) {
+	s := NewStorageIntegrityScrubber(sitable.NewFake(sitable.Pending).Current())
+	for _, tc := range []struct{ in, want string }{
+		{"Table hg_replica.db1__t__i3 does not exist in hg_rstage", "Table <storage-integrity>.db1__t__i3 does not exist in <storage-integrity>"},
+		{"Table hg_member_unsafe.db1__t does not exist", "Table <storage-integrity>.db1__t does not exist"},
+		{"Database hg_xfer does not exist", "Database <storage-integrity> does not exist"},
+	} {
+		if got := s.Scrub(tc.in); got != tc.want {
+			t.Errorf("Scrub(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+	active := NewStorageIntegrityScrubber(siSnap())
+	if got := active.Scrub("hg_unsafe.db1__t and hg_member_unsafe.db1__t"); got != "db1.t and <storage-integrity>.db1__t" {
+		t.Fatalf("Scrub with an Active table = %q, want the unsafe name mapped back and the member name redacted", got)
 	}
 }

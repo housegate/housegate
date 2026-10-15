@@ -14,9 +14,11 @@ const (
 
 // TableStatus is one answer of sentio_getStorageIntegrityTableStatus, with the
 // semantics of sitable.Snapshot.Lookup on the serving node. SchemaJSON and
-// SchemaHash are set for active (and gone) tables, and for a refused table
-// whose schema the host keeps (refused_code "indexer_quarantined": the host's
-// SI indexer is quarantined).
+// SchemaHash are set for active (and gone) tables, for a refused table whose
+// schema the host keeps (refused_code "indexer_quarantined": the host's SI
+// indexer is quarantined), and may be set for a pending table that is an
+// Active incarnation the host holds back (spec 2026-10-14 §14). The agent
+// claims only an active table, whatever schema another status carries.
 type TableStatus struct {
 	Status          string `json:"status"`
 	RefusedCode     string `json:"refused_code"`

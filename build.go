@@ -156,16 +156,18 @@ func tableRefGuardPhysicalDatabaseWarning(cfg *config.Config) string {
 // neither applies.
 //
 // A peer-trusted remote() loopback carries SQL already rewritten by its origin;
-// running the rewriter again could double-prefix physical names. The bypass is
-// therefore deliberate, and network isolation of the internal port is the
-// corresponding control.
+// running the rewriter again could double-prefix physical names, so the
+// rewrite bypass is deliberate. sireserved's peer rules refuse every mention
+// of a reserved name there (spec 2026-10-14 §14), but not a name computed by a
+// table-function argument, so network isolation of the internal port remains
+// the corresponding control.
 func storageIntegrityInternalListenWarning(cfg *config.Config) string {
 	if !cfg.StorageIntegrity.IsEnabled() {
 		return ""
 	}
 	var warnings []string
 	if cfg.InternalListen != "" {
-		warnings = append(warnings, "storage_integrity: peer-trusted sessions arriving on internal_listen bypass storage-integrity rewrite and can address the "+reservedDatabaseNames()+" namespaces directly; internal_listen MUST be reachable only from trusted peer subnets")
+		warnings = append(warnings, "storage_integrity: peer-trusted sessions arriving on internal_listen bypass storage-integrity rewrite; the reserved-name guard refuses any mention of the "+reservedDatabaseNames()+" databases and of "+rewriter.DefaultReservedRowIDColumn+" there, string literals included, but not names built by computed table-function arguments, so internal_listen MUST still be reachable only from trusted peer subnets")
 	}
 	if count := len(cfg.Auth.PlatformOperatorAddresses); count > 0 {
 		warnings = append(warnings, fmt.Sprintf("storage_integrity: %d platform-operator addresses use the raw-SQL bypass for SI tables; the operator guard conservatively rejects every %s / _hg_row_id mention (including ordinary columns and string literals), Identifier placeholders, any backslash-bearing literal or quoted identifier, and local-catalog object-carrier callables regardless of arguments; use a direct ClickHouse connection for physical access",

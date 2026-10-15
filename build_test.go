@@ -199,8 +199,20 @@ func TestStorageIntegrityInternalListenWarning(t *testing.T) {
 
 	cfg.InternalListen = "0.0.0.0:9001"
 	got := storageIntegrityInternalListenWarning(cfg)
-	if !strings.Contains(got, "peer-trusted") || !strings.Contains(got, "internal_listen") {
-		t.Fatalf("warning = %q, want it to name the peer-trust bypass and the internal port", got)
+	// Spec 2026-10-14 §14: the peer rules refuse every literal mention of a
+	// reserved name, but not one computed by a table-function argument, so the
+	// network control stays.
+	for _, want := range []string{
+		"peer-trusted", "internal_listen",
+		"the reserved-name guard refuses any mention of the hg_safe / hg_unsafe / hg_promote / hg_member_unsafe / hg_replica / hg_rstage / hg_xfer databases and of _hg_row_id",
+		"computed table-function arguments", "trusted peer subnets",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("warning = %q, want %q", got, want)
+		}
+	}
+	if strings.Contains(got, "can address the") {
+		t.Fatalf("warning = %q still claims peers can address the reserved namespaces directly", got)
 	}
 
 	cfg.InternalListen = ""

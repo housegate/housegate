@@ -61,13 +61,13 @@ func TestProbeStorageIntegrityBuild(t *testing.T) {
 		for i, req := range be.requests {
 			dyn := req.GetOptions()[0].GetTableNameArgs().GetDynamicArgs()
 			si := dyn.GetStorageIntegrity()
-			if strings.Join(si.GetReservedDatabases(), ",") != "hg_safe,hg_unsafe,hg_promote" {
+			if strings.Join(si.GetReservedDatabases(), ",") != "hg_safe,hg_unsafe,hg_promote,hg_member_unsafe,hg_replica,hg_rstage,hg_xfer" {
 				t.Fatalf("probe request %d reserved databases = %v, want the production list", i, si.GetReservedDatabases())
 			}
 			// Production requests carry the protected namespace whatever
 			// storage_integrity.enabled says; the probe must prove the
 			// engine's answers under that same request shape.
-			if got := strings.Join(dyn.GetProtectedDatabases(), ","); got != "phys,hg_safe,hg_unsafe,hg_promote" {
+			if got := strings.Join(dyn.GetProtectedDatabases(), ","); got != "phys,hg_safe,hg_unsafe,hg_promote,hg_member_unsafe,hg_replica,hg_rstage,hg_xfer" {
 				t.Fatalf("probe request %d protected_databases = %s, want the production list", i, got)
 			}
 		}
@@ -409,7 +409,7 @@ func TestProbeTableReferencePolicy(t *testing.T) {
 			}
 			for i, req := range be.requests {
 				dyn := req.GetOptions()[0].GetTableNameArgs().GetDynamicArgs()
-				if got := strings.Join(dyn.GetProtectedDatabases(), ","); got != "phys,hg_safe,hg_unsafe,hg_promote" {
+				if got := strings.Join(dyn.GetProtectedDatabases(), ","); got != "phys,hg_safe,hg_unsafe,hg_promote,hg_member_unsafe,hg_replica,hg_rstage,hg_xfer" {
 					t.Fatalf("request %d protected_databases = %s", i, got)
 				}
 				if dyn.GetStorageIntegrity() != nil {
