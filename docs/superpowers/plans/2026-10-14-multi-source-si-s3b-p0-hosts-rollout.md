@@ -6203,19 +6203,45 @@ Then the budget, local only:
 
 ```bash
 python3 -I - "$si_backup/budget-snapshots.tgz" "$(cat "$si_backup/budget-live-seq")" 536870912 <<'EOF'
-import json, math, struct, sys, tarfile
+import base64, json, math, struct, sys, tarfile
 archive, live, limit = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
 target = limit // 4
-best = None
+# hashicorp/raft FileSnapshotStore: a snapshot being written lives in "<id>.tmp" and is renamed to
+# "<id>" only once state.bin is complete and meta.json carries its final Size and CRC (crc64 ECMA,
+# big-endian, base64). Only finished snapshots whose bytes match their metadata are used.
+POLY = 0xC96C5795D7870F42
+TAB = []
+for i in range(256):
+    c = i
+    for _ in range(8):
+        c = (c >> 1) ^ POLY if c & 1 else c >> 1
+    TAB.append(c)
+def crc64(b):
+    crc = 0xFFFFFFFFFFFFFFFF
+    for x in b:
+        crc = TAB[(crc ^ x) & 0xFF] ^ (crc >> 8)
+    return (crc ^ 0xFFFFFFFFFFFFFFFF).to_bytes(8, "big")
+finished = []
 with tarfile.open(archive) as t:
-    for m in t.getmembers():
-        if m.name.endswith("/meta.json"):
-            meta = json.load(t.extractfile(m))
-            if best is None or (meta["Term"], meta["Index"]) > (best[1]["Term"], best[1]["Index"]):
-                best = (m.name.rsplit("/", 1)[0], meta)
-    if best is None:
-        print("no snapshot in the leader's store; stop"); sys.exit(1)
-    data = t.extractfile(best[0] + "/state.bin").read()
+    members = {m.name: m for m in t.getmembers()}
+    for name in members:
+        parts = name.split("/")
+        if len(parts) != 3 or parts[0] != "snapshots" or parts[2] != "meta.json":
+            continue
+        if parts[1].endswith(".tmp"):
+            continue  # unfinished, never used
+        meta = json.load(t.extractfile(members[name]))
+        state_name = "snapshots/%s/state.bin" % parts[1]
+        if state_name not in members:
+            print("snapshot %s has no state.bin; stop" % parts[1]); sys.exit(1)
+        blob = t.extractfile(members[state_name]).read()
+        if len(blob) != meta.get("Size") or not meta.get("CRC") or crc64(blob) != base64.b64decode(meta["CRC"]):
+            print("snapshot %s does not match its metadata (size %d, meta size %s); stop" % (parts[1], len(blob), meta.get("Size"))); sys.exit(1)
+        finished.append(((meta["Term"], meta["Index"]), parts[1], meta, blob))
+if not finished:
+    print("no finished snapshot in the leader's store; stop"); sys.exit(1)
+_, snap_id, meta, data = max(finished, key=lambda f: f[0])
+best = ("snapshots/" + snap_id, meta)
 if data[:4] != b"AFSM":
     print("not an arbiter snapshot container; stop"); sys.exit(1)
 (doc_len,) = struct.unpack(">Q", data[5:13])
@@ -6235,7 +6261,7 @@ print("snapshot %s (index %d): %d bytes at promotion %d; live promotion %d; budg
 EOF
 ```
 
-Expected: one line with the budget, or a line ending `stop`. Size and sequence come from the same snapshot, the live sequence is read after it and every promotion since is subtracted, so the budget errs low. On the copy of devnet2 voter `arbiter-0` taken after the tracks activation (snapshot `10-8192-…`: 11,385,700 bytes at promotion 53) this gives 128 promotions to L/4 read at promotion 53, where a linear estimate would give about 570, and 81 read at promotion 100. Run it again after the drill.
+Expected: one line with the budget, or a line ending `stop`. Only a finished snapshot is read (never a `.tmp` directory Raft is still writing), and only if its `state.bin` matches the size and CRC its metadata records. Size and sequence come from the same snapshot, the live sequence is read after it and every promotion since is subtracted, so the budget errs low. On the copy of devnet2 voter `arbiter-0` taken after the tracks activation (snapshot `10-8192-…`: 11,385,700 bytes at promotion 53) this gives 128 promotions to L/4 read at promotion 53, where a linear estimate would give about 570, and 81 read at promotion 100. Run it again after the drill.
 
 ### 13.5 Holds
 
