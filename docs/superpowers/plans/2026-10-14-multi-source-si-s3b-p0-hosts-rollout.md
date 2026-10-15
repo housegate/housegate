@@ -5410,13 +5410,13 @@ Then the read-only checks:
   si_images
   l="$(si_leader)"; echo "leader arbiter-$l"
   for i in 0 1 2; do si_capability "$i"; echo "arbiter-$i"; si_state_size "$i"; si_hold_metrics "$i"; done
-  [ -s "$si_backup/state-samples.tsv" ] || printf '%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(si_state_size "$l" | si_series_value arbiter_state_bytes)" "$(si_state_size "$l" | si_series_value arbiter_snapshot_doc_bytes)" "$(si_show | jq -r .promotion_seq)" > "$si_backup/state-samples.tsv"
-  cat "$si_backup/state-samples.tsv"
+  [ -s "$si_backup/state-baseline.tsv" ] || printf '%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(si_state_size "$l" | si_series_value arbiter_state_bytes)" "$(si_state_size "$l" | si_series_value arbiter_snapshot_doc_bytes)" "$(si_show | jq -r .promotion_seq)" > "$si_backup/state-baseline.tsv"
+  cat "$si_backup/state-baseline.tsv"
   for x in a b; do echo "indexer-$x after the leader replacement:"; cat "$si_backup/audit-$x-after-leader.txt"; done
 } 2>&1 | tee "$si_backup/verify-voters.txt"
 ```
 
-Expected: all six arbiter pods on `<ARBITER_DIGEST>`; every capability line names its own `node_id` with `protocol_version` `1`, `updates_enabled` `true` and `features` `["client_lanes_v1","signed_claims_v1","track_manifests_v1"]`; on every voter `arbiter_snapshot_doc_read_cap_bytes 1.073741824e+09`, `arbiter_state_bytes`, `arbiter_snapshot_doc_bytes` and `arbiter_snapshot_bytes` around `1.2e+07` (the measured state, about 2 % of L/4), `arbiter_raft_log_store_bytes` and `arbiter_raft_snapshot_store_bytes` above zero, `arbiter_snapshot_restore_seconds{trigger="startup"}`, the four `arbiter_snapshot_failures_total{operation=…}` at `0`, `arbiter_consensus_hold_active{mode="drain"} 0`, `arbiter_consensus_hold_active{mode="issuance"} 0` and `arbiter_consensus_hold_held_promotions_total 0`; the first line of `state-samples.tsv` (time, state bytes, document bytes, promotion sequence; §13.4); both owners' audit series as §5 left them.
+Expected: all six arbiter pods on `<ARBITER_DIGEST>`; every capability line names its own `node_id` with `protocol_version` `1`, `updates_enabled` `true` and `features` `["client_lanes_v1","signed_claims_v1","track_manifests_v1"]`; on every voter `arbiter_snapshot_doc_read_cap_bytes 1.073741824e+09`, `arbiter_state_bytes`, `arbiter_snapshot_doc_bytes` and `arbiter_snapshot_bytes` around `1.2e+07` (the measured state, about 2 % of L/4), `arbiter_raft_log_store_bytes` and `arbiter_raft_snapshot_store_bytes` above zero, `arbiter_snapshot_restore_seconds{trigger="startup"}`, the four `arbiter_snapshot_failures_total{operation=…}` at `0`, `arbiter_consensus_hold_active{mode="drain"} 0`, `arbiter_consensus_hold_active{mode="issuance"} 0` and `arbiter_consensus_hold_held_promotions_total 0`; the first line of `state-baseline.tsv` (time, state bytes, document bytes, live promotion sequence: a gauge baseline only; the gauges describe the last snapshot, so §13.4 never uses this line for a budget); both owners' audit series as §5 left them.
 
 Then the first promotion under the new leader, indexer-a's acceptance INSERT:
 
@@ -6189,46 +6189,79 @@ Expected before a restart: `480 s` and no row. After an unplanned restart, read 
 
 ### 13.4 Promotion budget for drills
 
-Every promotion grows the consensus state (spec §13.1; the super-linear term comes from the parts each `REPLACE PARTITION` renames). Before a drill that writes in a loop, compute its promotion budget and spend at most half of it; churn drills (many promotions of one partition) run only in the integration environment or on a partitioned throwaway table. One sample per run, read-only (time, the leader's state bytes, its snapshot document bytes and the promotion sequence; the gauges are from the last snapshot, so take samples at least one snapshot apart):
+Every promotion grows the consensus state (spec §13.1; the super-linear term comes from the parts each `REPLACE PARTITION` renames). Before a drill that writes in a loop, compute its promotion budget and spend at most half of it; churn drills (many promotions of one partition) run only in the integration environment or on a partitioned throwaway table. The size and the promotion sequence must describe the same state: `arbiter_state_bytes` is refreshed only when a snapshot is persisted or restored, after the state was captured, so neither it nor a size change can be paired with a live sequence. The budget therefore reads both from one captured snapshot, the newest one in the leader's snapshot store, and only then the live sequence, which it subtracts. Read-only:
 
 ```bash
 l="$(si_leader)"
-printf '%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(si_state_size "$l" | si_series_value arbiter_state_bytes)" "$(si_state_size "$l" | si_series_value arbiter_snapshot_doc_bytes)" "$(si_show | jq -r .promotion_seq)" | tee -a "$si_backup/state-samples.tsv"
+echo "$l" > "$si_backup/budget-voter"
+si_kubectl exec "storage-integrity-si-v2-arbiter-$l" -c arbiter -- tar -C /data/raft -czf - snapshots > "$si_backup/budget-snapshots.tgz"
+si_show | jq -r .promotion_seq > "$si_backup/budget-live-seq"
+ls -l "$si_backup/budget-snapshots.tgz"; cat "$si_backup/budget-live-seq"
 ```
 
 Then the budget, local only:
 
 ```bash
-python3 -I - "$si_backup/state-samples.tsv" 536870912 <<'EOF'
-import math, sys
-rows = [line.rstrip("\n").split("\t") for line in open(sys.argv[1]) if line.strip()]
-limit = int(sys.argv[2])
+python3 -I - "$si_backup/budget-snapshots.tgz" "$(cat "$si_backup/budget-live-seq")" 536870912 <<'EOF'
+import base64, json, math, struct, sys, tarfile
+archive, live, limit = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
 target = limit // 4
-samples = sorted({int(r[3]): int(r[1]) for r in rows}.items())
-seq, state = samples[-1]
+# hashicorp/raft FileSnapshotStore: a snapshot being written lives in "<id>.tmp" and is renamed to
+# "<id>" only once state.bin is complete and meta.json carries its final Size and CRC (crc64 ECMA,
+# big-endian, base64). Only finished snapshots whose bytes match their metadata are used.
+POLY = 0xC96C5795D7870F42
+TAB = []
+for i in range(256):
+    c = i
+    for _ in range(8):
+        c = (c >> 1) ^ POLY if c & 1 else c >> 1
+    TAB.append(c)
+def crc64(b):
+    crc = 0xFFFFFFFFFFFFFFFF
+    for x in b:
+        crc = TAB[(crc ^ x) & 0xFF] ^ (crc >> 8)
+    return (crc ^ 0xFFFFFFFFFFFFFFFF).to_bytes(8, "big")
+finished = []
+with tarfile.open(archive) as t:
+    members = {m.name: m for m in t.getmembers()}
+    for name in members:
+        parts = name.split("/")
+        if len(parts) != 3 or parts[0] != "snapshots" or parts[2] != "meta.json":
+            continue
+        if parts[1].endswith(".tmp"):
+            continue  # unfinished, never used
+        meta = json.load(t.extractfile(members[name]))
+        state_name = "snapshots/%s/state.bin" % parts[1]
+        if state_name not in members:
+            print("snapshot %s has no state.bin; stop" % parts[1]); sys.exit(1)
+        blob = t.extractfile(members[state_name]).read()
+        if len(blob) != meta.get("Size") or not meta.get("CRC") or crc64(blob) != base64.b64decode(meta["CRC"]):
+            print("snapshot %s does not match its metadata (size %d, meta size %s); stop" % (parts[1], len(blob), meta.get("Size"))); sys.exit(1)
+        finished.append(((meta["Term"], meta["Index"]), parts[1], meta, blob))
+if not finished:
+    print("no finished snapshot in the leader's store; stop"); sys.exit(1)
+_, snap_id, meta, data = max(finished, key=lambda f: f[0])
+best = ("snapshots/" + snap_id, meta)
+if data[:4] != b"AFSM":
+    print("not an arbiter snapshot container; stop"); sys.exit(1)
+(doc_len,) = struct.unpack(">Q", data[5:13])
+state = len(data) - 13  # the document plus the spent-ids dump, as arbiter_state_bytes counts it
+seq = json.loads(data[13:13 + doc_len]).get("promotion_seq", 0)
+if seq <= 0 or live < seq:
+    print("snapshot promotion_seq %d, live %d: not a usable pair; stop" % (seq, live)); sys.exit(1)
+if state >= target:
+    print("state %d bytes at promotion %d: no promotion budget left before L/4; stop" % (state, seq)); sys.exit(1)
 # The state grows about quadratically in the promotion count (spec §2: 11.4 MB at promotion 53), so the
 # marginal cost of a promotion is about twice the average: never divide the headroom by an average.
-estimates = []
-if seq > 0:  # pure quadratic through the origin: S = a*n^2 (overstates a, so it understates the budget)
-    a0 = state / seq ** 2
-    estimates.append(("quadratic through the latest sample", math.isqrt(int(target / a0)) - seq))
-if len(samples) >= 2:  # S = c + a*n^2 through the first and the latest sample
-    (n1, s1), (n2, s2) = samples[0], samples[-1]
-    if n2 > n1 and s2 > s1:
-        a = (s2 - s1) / (n2 ** 2 - n1 ** 2)
-        c = s2 - a * n2 ** 2
-        if target > c:
-            estimates.append(("quadratic fit of the first and latest samples", math.isqrt(int((target - c) / a)) - seq))
-if not estimates or state >= target:
-    print("state %d bytes at promotion %d: no promotion budget left before L/4; stop" % (state, seq)); sys.exit(1)
-how, budget = min(estimates, key=lambda e: e[1])
-budget = max(budget, 0)
-print("state %d bytes at promotion %d; budget to L/4 (%d bytes): %d promotions (%s, the smaller estimate); a drill spends at most %d"
-      % (state, seq, target, budget, how, budget // 2))
+# S = a*n^2 through the origin overstates a (it ignores the constant term), so the budget is understated.
+a = state / seq ** 2
+budget = max(math.isqrt(int(target / a)) - live, 0)  # minus every promotion made since that snapshot
+print("snapshot %s (index %d): %d bytes at promotion %d; live promotion %d; budget to L/4 (%d bytes): %d promotions; a drill spends at most %d"
+      % (best[0].rsplit("/", 1)[-1], best[1]["Index"], state, seq, live, target, budget, budget // 2))
 EOF
 ```
 
-Expected: one line with the budget. Both estimates are quadratic and the smaller one is used: a single sample assumes the state grew from zero as a·n², which overstates the growth and so understates the budget; a second sample, taken at least one snapshot later, fits the constant term too. Take a second sample after the drill and keep the file. At devnet2's measured point (about 11.4 MB at promotion 53) this gives about 128 promotions to L/4, where a linear estimate would give about 570.
+Expected: one line with the budget, or a line ending `stop`. Only a finished snapshot is read (never a `.tmp` directory Raft is still writing), and only if its `state.bin` matches the size and CRC its metadata records. Size and sequence come from the same snapshot, the live sequence is read after it and every promotion since is subtracted, so the budget errs low. On the copy of devnet2 voter `arbiter-0` taken after the tracks activation (snapshot `10-8192-…`: 11,385,700 bytes at promotion 53) this gives 128 promotions to L/4 read at promotion 53, where a linear estimate would give about 570, and 81 read at promotion 100. Run it again after the drill.
 
 ### 13.5 Holds
 
@@ -7804,7 +7837,7 @@ Expected: §5.2's (`indexer-b runs the stage-3 image` and the pod Ready; the res
 
 - [ ] **Step 10: Voters one at a time, followers first, the leader last (requires explicit user confirmation for each deletion, and again for the acceptance write)** — runbook §6.
 
-Run §6's read-only order block first: three lines in `voter-order`, the current leader last. Then, for each of its three lines in order, this step needs explicit user confirmation in chat before the deletion. Gate: "delete voter storage-integrity-si-v2-arbiter-<i> (OnDelete) to move it to `<ARBITER_TAG>`; the other two keep a quorum, and the next deletion waits until all three report one sealed tip" (for the third line add: "this is the leader; the block also records leader-replaced-at and both owners' audit series right after it"). After each yes, run that line's confirmed `si_replace_voter` block (it waits up to 15 minutes: run it with `run_in_background: true` and read its output). Expected after each: the voter's capability line with its own `node_id`, `updates_enabled` `true` and `features` `["client_lanes_v1","signed_claims_v1","track_manifests_v1"]` (stage 3 P0 adds no feature string), and three equal `arbiter_sealed_block_seq` lines; `sealed tips still differ after 5 minutes; stop` stops the procedure. After the third: `$si_backup/leader-replaced-at` and `audit-a-after-leader.txt`, `audit-b-after-leader.txt` written. Then §6's read-only checks. Expected: all six arbiter pods on `ARBITER_DIGEST`; on every voter `arbiter_snapshot_doc_read_cap_bytes 1.073741824e+09` and the state gauges §6 names (`si_state_size <i>`), with `arbiter_state_bytes` and `arbiter_snapshot_doc_bytes` around `1.2e+07`, far below L/4 = 134217728, and the four `arbiter_snapshot_failures_total{operation=…}` at `0`; `si_hold_metrics <i>` with `arbiter_consensus_hold_active{mode="issuance"} 0` and `{mode="drain"} 0`; the first line of `state-samples.tsv`.
+Run §6's read-only order block first: three lines in `voter-order`, the current leader last. Then, for each of its three lines in order, this step needs explicit user confirmation in chat before the deletion. Gate: "delete voter storage-integrity-si-v2-arbiter-<i> (OnDelete) to move it to `<ARBITER_TAG>`; the other two keep a quorum, and the next deletion waits until all three report one sealed tip" (for the third line add: "this is the leader; the block also records leader-replaced-at and both owners' audit series right after it"). After each yes, run that line's confirmed `si_replace_voter` block (it waits up to 15 minutes: run it with `run_in_background: true` and read its output). Expected after each: the voter's capability line with its own `node_id`, `updates_enabled` `true` and `features` `["client_lanes_v1","signed_claims_v1","track_manifests_v1"]` (stage 3 P0 adds no feature string), and three equal `arbiter_sealed_block_seq` lines; `sealed tips still differ after 5 minutes; stop` stops the procedure. After the third: `$si_backup/leader-replaced-at` and `audit-a-after-leader.txt`, `audit-b-after-leader.txt` written. Then §6's read-only checks. Expected: all six arbiter pods on `ARBITER_DIGEST`; on every voter `arbiter_snapshot_doc_read_cap_bytes 1.073741824e+09` and the state gauges §6 names (`si_state_size <i>`), with `arbiter_state_bytes` and `arbiter_snapshot_doc_bytes` around `1.2e+07`, far below L/4 = 134217728, and the four `arbiter_snapshot_failures_total{operation=…}` at `0`; `si_hold_metrics <i>` with `arbiter_consensus_hold_active{mode="issuance"} 0` and `{mode="drain"} 0`; the first line of `state-baseline.tsv`.
 
 This step needs explicit user confirmation in chat again before the acceptance write. Gate: "one acceptance INSERT, value 3002, into devnet101.swap_new2 through indexer-a's sidecar (runbook §6, `si_accept_a_track 3002`): the first promotion under the new leader". After a yes, run §6's last block. Expected: `track 0 published <x> -> <y>` and `1`. The voter-rollout freeze ends with Step 11.
 
@@ -18973,7 +19006,7 @@ The contract carries each decision; the list says why the tasks read as they do.
 - charts/sentio-node releases: sentio-node-devnet2-indexer-a/-b (SI helmfile), sentio-node-devnet2-observer (devnet2 helmfile), sentio-node-observer, sentio-node-testnet-v2-indexer-a/-b (testnet-v2 helmfile); plus storage-integrity-si-v2 = the seven inertness releases.
 - Stage-2 pins file $HOME/si-devnet2-multisource-tracks/pins holds v0.12.0, sha256:14ac6403…, 5d2f1695…, sha256:be730c40… (read locally); $HOME/si-devnet2-multisource-s3a-rehearsal does not exist yet (Plan S3-A Task 11 creates it).
 - GitHub anchors for the 29 headings follow the github-slugger rule; production already links #211-rollback-only-before-29, consistent with the rule (the /markdown API does not emit anchors, so it could not be used to check).
-- Names added while drafting: R_P0 (= $HOME/si-devnet2-stage3-p0-rehearsal, the variable for contract §9's rebuild directory); si_stage3_image; si_previous_image; si_stage2_image (refusing stub, as stage 2 stubbed si_stage1_image); si_host a|b <cmd>; si_host_started a|b; si_epoch <rfc3339>; si_host_series a|b <regexp>; si_series_value <series>; si_voter_series <ordinal> <regexp>; si_partstates_build (local; extracts the runbook's only go block into a git archive of CORE_TAG, CGO_ENABLED=0 GOOS=linux GOARCH=amd64); si_partstates_run <tool args> (copies the tool into the leader's arbiter container at /tmp/partstates when missing or stale, runs it with -peers of all three voters on :7080); si_registry_names (partstates -registry); si_vm_query <promql> / si_vm_value <promql> (vmsingle-vm.monitoring.svc:8429 from arbiter-0); si_vmalert_groups (vmalert-vm.monitoring.svc:8080/api/v1/rules); si_head_is <files...> (HEAD is one commit on origin/main changing exactly these files); si_revert_stage3 <commit file> <release> [rollout target] (revert, test, push, sync, wait; writes <commit file>.reverted so a re-run only syncs); partstates tool flags -peers, -indexer, -registry, -timeout; JSON fields indexer_id, table_id, database_id, table, incarnation, status, promotion_seq, safe_block_seq, partitions[] {partition_id, base_safe_snapshot_id, base_partition_root, publish_seq, safe_parts, promoted_unsafe_parts, unacked_promotion_seq, last_acked_promotion_seq, inventory_unrefreshed}; registry lines {incarnation, database_id, table, status, origin, owner}; si_partstates takes a|b (a = SI indexer 0, b = 1); runbook §13 subsections: 13.1 State size and voter resize, 13.2 The unresolved-intent step, 13.3 ClickHouse restarts, 13.4 Promotion budget for drills, 13.5 Holds (anchors 131-…, 132-…, 133-…, 134-…, 135-holds); soak table devuser1.s3_p0 (created by the devuser1 owner in §9, rows 1-3, dropped in §11); acceptance values 3001 (§5.1), 3002 (§6), 3003 (§9), 3004 (§10.2); evidence: pins (7 lines: ARBITER_TAG, ARBITER_DIGEST, SN_COMMIT, SN_DIGEST, CORE_TAG, HG_TAG, PROTO_TAG), previous-pins, repos, mechanics-record.txt, s3a-appendix-c.md, baseline.txt, registry-names.jsonl, preflight-reserved-registry.tsv, replay-bin, replay.txt, written-<i>-{old,new}.container, restart-<x>, leader-replaced-at, audit-<x>-after-leader.txt, state-samples.tsv, monitoring-synced-at, monitoring-render-diff.txt, vmrule-selectors.txt, vmrule-series.txt, vmalert-groups.txt, grafana-rule-uid, delivery-probe.yaml, delivery-probe-permalinks.txt, partstates-<x>-soak-start.jsonl, partstates-<x>-soak.jsonl, partstates-<x>-repair.jsonl, repair-preconditions-<x>.txt, verify-repair-<x>.txt, repair-b-promotion.txt, voter-order-rollback, k4-intent/parts/twins/dropped-<tag>, clickhouse-restart-check-<ts>.txt; local files beside the worktree: $W.ledger, $W.runbook-check.py, $W.render-monitoring.yaml, $W.runbook-blocks.sh, $W.pr-body.md; stage-2 runbook pointer: stage row 9 after the stage-8 row; PR title: storage-integrity: multi-source SI stage 3 P0 (monitoring, voter budget, owner audit, runbook)
+- Names added while drafting: R_P0 (= $HOME/si-devnet2-stage3-p0-rehearsal, the variable for contract §9's rebuild directory); si_stage3_image; si_previous_image; si_stage2_image (refusing stub, as stage 2 stubbed si_stage1_image); si_host a|b <cmd>; si_host_started a|b; si_epoch <rfc3339>; si_host_series a|b <regexp>; si_series_value <series>; si_voter_series <ordinal> <regexp>; si_partstates_build (local; extracts the runbook's only go block into a git archive of CORE_TAG, CGO_ENABLED=0 GOOS=linux GOARCH=amd64); si_partstates_run <tool args> (copies the tool into the leader's arbiter container at /tmp/partstates when missing or stale, runs it with -peers of all three voters on :7080); si_registry_names (partstates -registry); si_vm_query <promql> / si_vm_value <promql> (vmsingle-vm.monitoring.svc:8429 from arbiter-0); si_vmalert_groups (vmalert-vm.monitoring.svc:8080/api/v1/rules); si_head_is <files...> (HEAD is one commit on origin/main changing exactly these files); si_revert_stage3 <commit file> <release> [rollout target] (revert, test, push, sync, wait; writes <commit file>.reverted so a re-run only syncs); partstates tool flags -peers, -indexer, -registry, -timeout; JSON fields indexer_id, table_id, database_id, table, incarnation, status, promotion_seq, safe_block_seq, partitions[] {partition_id, base_safe_snapshot_id, base_partition_root, publish_seq, safe_parts, promoted_unsafe_parts, unacked_promotion_seq, last_acked_promotion_seq, inventory_unrefreshed}; registry lines {incarnation, database_id, table, status, origin, owner}; si_partstates takes a|b (a = SI indexer 0, b = 1); runbook §13 subsections: 13.1 State size and voter resize, 13.2 The unresolved-intent step, 13.3 ClickHouse restarts, 13.4 Promotion budget for drills, 13.5 Holds (anchors 131-…, 132-…, 133-…, 134-…, 135-holds); soak table devuser1.s3_p0 (created by the devuser1 owner in §9, rows 1-3, dropped in §11); acceptance values 3001 (§5.1), 3002 (§6), 3003 (§9), 3004 (§10.2); evidence: pins (7 lines: ARBITER_TAG, ARBITER_DIGEST, SN_COMMIT, SN_DIGEST, CORE_TAG, HG_TAG, PROTO_TAG), previous-pins, repos, mechanics-record.txt, s3a-appendix-c.md, baseline.txt, registry-names.jsonl, preflight-reserved-registry.tsv, replay-bin, replay.txt, written-<i>-{old,new}.container, restart-<x>, leader-replaced-at, audit-<x>-after-leader.txt, state-baseline.tsv, monitoring-synced-at, monitoring-render-diff.txt, vmrule-selectors.txt, vmrule-series.txt, vmalert-groups.txt, grafana-rule-uid, delivery-probe.yaml, delivery-probe-permalinks.txt, partstates-<x>-soak-start.jsonl, partstates-<x>-soak.jsonl, partstates-<x>-repair.jsonl, repair-preconditions-<x>.txt, verify-repair-<x>.txt, repair-b-promotion.txt, voter-order-rollback, k4-intent/parts/twins/dropped-<tag>, clickhouse-restart-check-<ts>.txt; local files beside the worktree: $W.ledger, $W.runbook-check.py, $W.render-monitoring.yaml, $W.runbook-blocks.sh, $W.pr-body.md; stage-2 runbook pointer: stage row 9 after the stage-8 row; PR title: storage-integrity: multi-source SI stage 3 P0 (monitoring, voter budget, owner audit, runbook)
 - Review: arbiter origin/main fb42260: SafeState and TableRegistry are registered by RegisterDataPlane on grpc_listen. startGRPC serves it with grpc.NewServer() and no credentials or interceptors. With no consensus_admin.listen, RegisterAll puts administration on the same listener (cmd/arbiter/grpc.go).
 - Review: arbiter-admin main prints 'error: <err>'. S3-A Task 8's hold-status returns holdRPCError('read consensus hold', address, err), which gives 'error: read consensus hold at <addr>: rpc error: code = NotFound desc = unknown consensus hold'.
 - Review: production k8s-common/_roles/editor-clusterrole.yaml grants pods/exec and pods/log but not pods/portforward or pods/attach, and grants operator.victoriametrics.com resources.
