@@ -159,6 +159,7 @@ The spec and the earlier plans leave these P3 details open. Each is resolved her
   - *Gap:* HouseGate takes one table-state snapshot per query, so a query that started under a Replica snapshot keeps reading the copy after the host stops answering Replica. The scoping proposal bounded this by "lease TTL ≥ si_gateway `max_execution_time` plus a margin". That bound does not exist: no SI ClickHouse or chart at origin/main sets `max_execution_time` (`git grep max_execution_time` over `charts/storage-integrity`, `charts/sentio-node` and `k8s-sea/sentio-network-devnet2` finds nothing), and setting it on `si_gateway` would limit every tenant query on the host.
   - *Resolution:* HouseGate counts in-flight replica reads per database. `sitable.ReplicaReads` is fed by `sitablestate` on `OnQuery`, `OnQueryComplete` and `OnClose`. The host releases a database's lease only once both hold: it has published a snapshot without that database's Replica entries, and `ReplicaReads.InFlight(database)` is 0. The member installs on that release or on the lease's expiry (`lease_ttl`, default 30 s, renewed every `lease_ttl/3`). The host stops answering Replica `serve.HostDeadlineMargin` (3 s) before its own deadline.
   - *Resolution — read admission (review round 1):* HouseGate takes a query's snapshot in rewrite, before `sitablestate` counts the read, and a rewrite can outlast a lease poll. So `sitablestate` counts a replica read first and then admits it only while its `TableState.Current()` still answers every accessed Replica table from the copy and owner the query was planned against; otherwise it uncounts the read and refuses it with the retryable 733 before anything reaches ClickHouse. The host reads `InFlight` only after its `Refresh` published the snapshot that drops the database, so either the host sees the count and waits, or the gate sees that snapshot and refuses. No grace poll is needed.
+  - *Resolution — admission fence (review round 2):* the published snapshot cannot carry the lease deadline, because a refresh blocked in its chain-state read holds the table state's refresh lock and keeps a Replica snapshot published past the deadline and the TTL. So `sitable.ReplicaReads` also holds the host's fence per database (`ServeUntil`): the lease client sets it to its local deadline minus `serve.HostDeadlineMargin` at every acquire and renew, and closes it at every drop. `sitablestate` admits a read only through `Admit`, which checks the fence on the counter's clock and counts in one critical section, before its current-snapshot check. No refresh, chain-state read or member request can delay the fence, and a host that closes a fence before it reads `InFlight` either sees an admitted read counted or makes `Admit` refuse it. Every database is closed until first opened. `Refresh` asks the lease client after its chain-state read, so a refresh that blocked never publishes an expired entry.
   - *Resolution — member restarts (review round 1):* the member records every lease in `serve-leases.json` in its state directory before it grants or renews one, and a restarted member restores the leases that have not expired, revoked. Its installs of those databases (the startup audit's included) wait for the host's release or the lease's expiry, as before the restart.
   - *Residual (recorded, Follow-ups):* a host that loses the member endpoint stops answering at its deadline, but its queries already running can overlap a later install. Each MergeTree read keeps its own parts snapshot, so such a query reads, per table, the verified rows of one of two consecutive published entries.
   - *Why:* this ties the lease to the reads that actually hold the copy, without an unenforced server limit or a tenant-visible one.
@@ -240,10 +241,10 @@ Every produced value is written into this plan's Appendix C by the task that mak
 1. **A member installs while its host still reads the copy (K44).**
    - *Lease:* before any install of a served database, the member revokes the lease, and renew answers 409 from then on. The host drops the database's Replica entries from the next snapshot. It releases the lease only once that snapshot is published and `sitable.ReplicaReads.InFlight(database)` is 0.
    - *Install:* the member installs on the release, or on the lease's expiry when the host is silent, and never while a lease is held.
-   - *Failing closed:* a host that cannot reach the member stops answering Replica `serve.HostDeadlineMargin` before its local deadline, even when its chain-state read is failing.
+   - *Failing closed:* a host that cannot reach the member admits no new read of the copy from `serve.HostDeadlineMargin` before its local deadline (the admission fence), even while its chain-state read is failing or blocked, and drops its Replica entries at the next refresh.
    - *A query planned before the drop:* a query whose rewrite took the Replica snapshot and outlasted the host's drop and release is refused 733 at `sitablestate`, never read from the copy.
    - *A member restart:* a restarted member restores its leases from its state directory, revoked, and installs nothing of their databases before their release or expiry.
-   - Tests: Task 45 `TestBeforeInstallRevokesAndWaitsForTheRelease`, `TestBeforeInstallWaitsForExpiryWhenTheHostIsSilent`, `TestRenewAfterRevokeIsRefused`, `TestServeHoldsInstallsOfAServedDatabase`, `TestARestartedMemberWaitsForTheLeasesItsPreviousProcessGranted`, `TestLeasesAreRecordedBeforeTheyAreGrantedOrRenewed`; Task 46 `TestLeaseIsReleasedOnlyAfterTheSnapshotDropsTheDatabaseAndReadsDrain`, `TestLeaseIsReleasedRightAfterTheSnapshotThatDropsTheDatabase`, `TestReplicaEntriesFailClosedWhenTheMemberEndpointIsUnreachable`, `TestReplicaEntriesDropAtTheLeaseDeadlineEvenWhenTheChainReadFails`; Task 42 `TestReplicaReadsCountsInFlightQueriesPerDatabase`, `TestOnClose_EndsAnInFlightReplicaRead`, `TestOnQuery_AReplicaReadPlannedBeforeServingEndedIsRefused`, `TestReplicaReadAdmissionNeverOverlapsARelease`.
+   - Tests: Task 45 `TestBeforeInstallRevokesAndWaitsForTheRelease`, `TestBeforeInstallWaitsForExpiryWhenTheHostIsSilent`, `TestRenewAfterRevokeIsRefused`, `TestServeHoldsInstallsOfAServedDatabase`, `TestARestartedMemberWaitsForTheLeasesItsPreviousProcessGranted`, `TestLeasesAreRecordedBeforeTheyAreGrantedOrRenewed`; Task 46 `TestLeaseIsReleasedOnlyAfterTheSnapshotDropsTheDatabaseAndReadsDrain`, `TestLeaseIsReleasedRightAfterTheSnapshotThatDropsTheDatabase`, `TestReplicaEntriesFailClosedWhenTheMemberEndpointIsUnreachable`, `TestReplicaEntriesDropAtTheLeaseDeadlineEvenWhenTheChainReadFails`; Task 42 `TestReplicaReadsCountsInFlightQueriesPerDatabase`, `TestOnClose_EndsAnInFlightReplicaRead`, `TestOnQuery_AReplicaReadPlannedBeforeServingEndedIsRefused`, `TestReplicaReadAdmissionNeverOverlapsARelease`, `TestReplicaReadsAdmitsOnlyBeforeTheServingFence`, `TestOnQuery_AFreshReplicaReadAfterTheLeaseDeadlineIsRefused`; Task 46 `TestLeaseClientFencesReplicaReadsAtItsLocalDeadline`, `TestAFreshReplicaReadIsRefusedAfterTheLeaseDeadlineWhileTheChainReadBlocks`.
 2. **A quarantined owner's entry keeps moving, or a copy is not what the registry says.**
    - *Trigger:* serving needs the owner to be quarantined, or unreachable from the member for `t_unreach`.
    - *Entry:* serving needs O's entry unchanged over two polls. A late acknowledgement that advances it stops serving, lets the install run and restarts the two-poll count.
@@ -403,7 +404,7 @@ Line anchors in the tasks refer to the base revisions of the header. Paths marke
 
 Spec §11 (Host status), contract §29.1, clarifications K44 and K45. A member host H serves another SI indexer O's database from its member's copies while O is quarantined or unreachable. HouseGate learns this only through its table-state port: the host answers each served table with a new read-only status, `Replica`, which carries the copy's table name in `hg_replica` and the owner, and `Snapshot.Served()` lists those tables. Today `sitable.Status` stops at `Gone` (`pkg/sitable/sitable.go:20-50`), and `sitablestate`'s `decide` falls through to allow for any status it does not name (`pkg/plugins/sitablestate/plugin.go:137`), so a new status would let writes and DDL through. This task gives `Replica` explicit rows: reads and metadata pass, and every write, DDL and data-carrying creation is refused 392 naming the owner.
 
-K44 adds the in-flight counter. HouseGate takes one table-state snapshot per query, so a query that started under a Replica snapshot keeps reading the copy after the host stops answering Replica. `sitable.ReplicaReads` counts, per database, the allowed queries that access a Replica table: `sitablestate` begins a read in `OnQuery` and ends it in `OnQueryComplete` or `OnClose`. The host (Task 46) releases a serving lease only once its published snapshot dropped the database and `InFlight(database)` is 0.
+K44 adds the in-flight counter and its admission fence. HouseGate takes one table-state snapshot per query, so a query that started under a Replica snapshot keeps reading the copy after the host stops answering Replica. `sitable.ReplicaReads` counts, per database, the allowed queries that access a Replica table: `sitablestate` admits a read in `OnQuery` and ends it in `OnQueryComplete` or `OnClose`. The host (Task 46) releases a serving lease only once its published snapshot dropped the database and `InFlight(database)` is 0. The counter also holds, per database, the host's fence (`ServeUntil`): its local lease deadline minus `serve.HostDeadlineMargin`, closed at once when the host stops serving the database. `Admit` counts a read only while the fence is open, so no read of a copy starts after its member may install on the lease's expiry, even while the host's table-state refresh is blocked and the published snapshot still answers Replica (review round 2).
 
 K45 adds the wire side. `pkg/registry` gains `TableStatusReplica` and the four additive status fields (`replica_of`, `served_from`, `owner_entry`, `frozen_since`), omitted for every other status, and `RpcNetworkState` accepts the name `replica`, which it refuses today (`pkg/network/rpc.go:370-376`).
 
@@ -447,36 +448,39 @@ Nothing here produces a Replica entry. Only a host-injected table state can (sen
     - `Snapshot.Served() []Table` (`// every Replica table, sorted by ID`). `NewSnapshot` collects Replica tables the way it collects `active`, cloned in and out; `Static` serves none; `Fake` serves what `Set` is given. `Schema` misses a Replica table.
     - `func ServedDatabases(s Snapshot) []string` (sorted, unique; nil for a nil snapshot or one that serves nothing).
     - `type ReplicaReads struct`, `func NewReplicaReads() *ReplicaReads`, `func (r *ReplicaReads) Begin(databases []string) (end func())`, `func (r *ReplicaReads) InFlight(database string) int`, `func (r *ReplicaReads) Counts() map[string]int`.
+    - The admission fence (review round 2): `func NewReplicaReadsWithClock(now func() time.Time) *ReplicaReads` (`NewReplicaReads` reads the wall clock), `func (r *ReplicaReads) ServeUntil(database string, until time.Time)` (the zero time closes the fence; every database is closed until it is first opened) and `func (r *ReplicaReads) Admit(databases []string) (end func(), closed string)`: `Begin` behind the fences, counting nothing and returning a nil `end` and the first closed database unless the clock is before every listed database's fence. A nil counter admits nothing.
   - `pkg/plugins/sitablestate`:
     - `Plugin.ReplicaReads *sitable.ReplicaReads` and `Plugin.TableState sitable.TableState` (the state rewrite takes the query's snapshot from; `build.go` sets it with the counter).
     - The Replica rows and the refusal `storage_integrity: table %s is served read-only from a copy of indexer %d's published data; write through its owner` (392).
-    - The read admission (K44): a counted replica read is admitted only while `TableState.Current()` answers every accessed Replica table Replica with the same `ID`, `CopyTable` and `ReplicaOf` as the query's snapshot; otherwise it is uncounted at once and refused with `storage_integrity: table %s is no longer served from the copy this query was planned against; retry the query (retryable)` (733, `CodeRetryable`). A nil `TableState` admits no replica read.
+    - The read admission (K44): a replica read is admitted only through `ReplicaReads.Admit`, which counts it only while the host's fence of every database it reads is open, and, after that count, only while `TableState.Current()` answers every accessed Replica table Replica with the same `ID`, `CopyTable` and `ReplicaOf` as the query's snapshot; otherwise it is uncounted at once and refused with `storage_integrity: table %s is no longer served from the copy this query was planned against; retry the query (retryable)` (733, `CodeRetryable`). A nil `TableState` admits no replica read.
     - `(*Plugin).OnQueryComplete` and `(*Plugin).OnClose`, which make it a `plugin.QueryCompletePlugin` and a `plugin.ClosePlugin`.
   - `pkg/registry`: `TableStatusReplica = "replica"`; `TableStatus.ReplicaOf *uint64`, `ServedFrom string`, `OwnerEntry *OwnerEntry`, `FrozenSince int64` (all `omitempty`); `type OwnerEntry struct{ IndexerID, SafeBlockSeq, AppliedPromotionSeq uint64 }` with the JSON tags of `replay.TrackFrontier`.
   - `pkg/network`: `RpcNetworkState.StorageIntegrityTableStatus` accepts `replica`.
   - Root package: `Options.StorageIntegrityReplicaReads *sitable.ReplicaReads`; the refusal `Options.StorageIntegrityReplicaReads requires Options.StorageIntegrityTableState`; the `build.go` wiring.
-  - Tests (contract §29.1 names): `TestStatusReplicaRoundTrips`, `TestSnapshotServedListsReplicaTablesSortedAndCloned`, `TestServedDatabasesAreSortedAndUnique`, `TestSnapshotSchemaMissesAReplicaTable`, `TestFakeServesReplicaTables`, `TestStaticServesNoReplicaTable`, `TestReplicaReadsCountsInFlightQueriesPerDatabase`, `TestReplicaReadsEndIsIdempotent`, `TestReplicaReadsNilIsANoOp`, `TestDecide_ReplicaRows`, `TestOnQuery_ReplicaReadBeginsAndCompletesAnInFlightRead`, `TestOnClose_EndsAnInFlightReplicaRead`, `TestOnQuery_OperatorSessionsAreNotCounted`, `TestOnQuery_AReplicaReadPlannedBeforeServingEndedIsRefused`, `TestReplicaReadAdmissionNeverOverlapsARelease`, `TestTableStatusReplicaFieldsAreOmittedForOtherStatuses`, `TestRpcNetworkStateAcceptsReplicaStatus`, `TestRpcNetworkStateStillRefusesAnUnknownStatus`, `TestSnapshotSchemaRefusesAReplicaTable`, `TestBuildRefusesReplicaReadsWithoutATableState`, `TestBuildWiresReplicaReadsIntoSitablestate`. Two existing tests gain the new status: `TestPlugin_SignsActiveTablesOnly` (sistatement, `replica`) and `TestGuardRefusesGovernedTablesOnPeerSessions` (sipeerguard, `sitable.Replica`).
+  - Tests (contract §29.1 names): `TestStatusReplicaRoundTrips`, `TestSnapshotServedListsReplicaTablesSortedAndCloned`, `TestServedDatabasesAreSortedAndUnique`, `TestSnapshotSchemaMissesAReplicaTable`, `TestFakeServesReplicaTables`, `TestStaticServesNoReplicaTable`, `TestReplicaReadsCountsInFlightQueriesPerDatabase`, `TestReplicaReadsEndIsIdempotent`, `TestReplicaReadsNilIsANoOp`, `TestReplicaReadsAdmitsOnlyBeforeTheServingFence`, `TestDecide_ReplicaRows`, `TestOnQuery_ReplicaReadBeginsAndCompletesAnInFlightRead`, `TestOnClose_EndsAnInFlightReplicaRead`, `TestOnQuery_OperatorSessionsAreNotCounted`, `TestOnQuery_AReplicaReadPlannedBeforeServingEndedIsRefused`, `TestOnQuery_AFreshReplicaReadAfterTheLeaseDeadlineIsRefused`, `TestReplicaReadAdmissionNeverOverlapsARelease`, `TestTableStatusReplicaFieldsAreOmittedForOtherStatuses`, `TestRpcNetworkStateAcceptsReplicaStatus`, `TestRpcNetworkStateStillRefusesAnUnknownStatus`, `TestSnapshotSchemaRefusesAReplicaTable`, `TestBuildRefusesReplicaReadsWithoutATableState`, `TestBuildWiresReplicaReadsIntoSitablestate`. Two existing tests gain the new status: `TestPlugin_SignsActiveTablesOnly` (sistatement, `replica`) and `TestGuardRefusesGovernedTablesOnPeerSessions` (sipeerguard, `sitable.Replica`).
 - Consumed by:
   - Task 43 (same branch): `ServedDatabases`, `Snapshot.Served()`, `Table.CopyTable`, `Table.ReplicaOf`.
   - Task 44 (same branch): the Refused row's text, which it rebuilds through `chproto.TableRefusedMessage` byte-identically; the Replica row stays as written here.
   - Task 46 (sentio-node):
     - its `*tablestate.Snapshot` implements `Served()` (K47), fills the Replica entries and sets the four status fields from `registry.OwnerEntry`;
     - `standalone` creates `sitable.NewReplicaReads()` for `Options.StorageIntegrityReplicaReads`;
-    - `replicalease` reads `InFlight`, and the metric `sentio_node_storage_integrity_replica_reads_in_flight{database}` reads `Counts()`, where a database whose reads have all ended is absent (it reports 0 for it).
+    - `standalone` creates `sitable.NewReplicaReads()` (the wall clock, the lease client's clock); `replicalease` sets each database's fence with `ServeUntil` (at every acquire and renew its local lease deadline minus `serve.HostDeadlineMargin`, at every drop the zero time) and reads `InFlight`, and the metric `sentio_node_storage_integrity_replica_reads_in_flight{database}` reads `Counts()`, where a database whose reads have all ended is absent (it reports 0 for it).
     - A query takes its snapshot in `rewrite`, which runs before `sitablestate` counts it, so `InFlight` can read 0 for a query that holds the last Replica snapshot of a database but has not reached `sitablestate` yet, however long its rewrite takes. `sitablestate` therefore counts a replica read first and then checks it against `TableState.Current()`, refusing it (733) once the current snapshot no longer serves the copy. So the lease client may read `InFlight` as soon as its `Refresh` has published the snapshot that drops the database, in the same poll: a read counted before that publish keeps `InFlight` above 0, and one that reaches the gate after it is refused (Review fix of AgentConnect round 1, which replaced Task 46's one-poll grace).
+    - The published snapshot cannot carry the lease's deadline: a refresh that blocks in its chain-state read holds the table state's refresh lock, so the snapshot can keep answering Replica past the deadline and past the TTL, when the member may install on the lease's expiry. So the gate admits a read only through `Admit`, against the fence the lease client keeps in the counter, which only the clock and the lease client move, never a refresh or a member request (Review fix of AgentConnect round 2).
 
 Notes:
 - **`Served()` breaks every outside implementation of `sitable.Snapshot`.** In housegate that is only the test type `governedDatabaseState`. arbiter, arbiter-core and sentio-core implement none: `git grep -n 'Active() \[\]sitable.Table' origin/main` finds only sentio-node's `storageintegrityadapter/tablestate/snapshot.go:298`. This is why K47 makes `HG_TAG_P3` and `SN_COMMIT_P3` land together.
 - **The counter is wired only when set.** With `Options.StorageIntegrityReplicaReads` nil, `build.go` registers `sitablestate` as a query plugin only, exactly as today. It becomes a complete and close plugin only with a counter. The chain filters of `OnQueryComplete` equal those of `OnQuery` (the plugin opts out of peer-trusted and origin-side forwarding sessions and is not route-aware), so a skipped `OnQuery` never leaves an end behind. `OnClose` runs unconditionally, as the safety net for a client that disconnects mid-query, and a new counted read first ends an end the session still holds.
 - **What is counted.** An allowed query whose accessed tables include a Replica table counts one read per database. Metadata statements are counted too, since a `DESCRIBE` of a copy also reads `hg_replica` once Task 43 rewrites it. A refused query counts nothing, and maintenance and platform-operator sessions return before the matrix.
 - **Read admission (K44).** The count alone cannot hold a lease: rewrite takes the query's snapshot before `sitablestate` runs (`pkg/plugins/rewrite/rewriter.go:147`), and a rewrite can take seconds (an engine call, the gRPC rewriter), long enough for the host to publish a snapshot without the database, read `InFlight` 0 and release. So `beginReplicaRead` counts first and then reads `TableState.Current()`; a read whose current snapshot no longer answers each accessed table Replica from the same copy and owner is uncounted and refused with the retryable 733 before anything reaches ClickHouse. Both sides synchronize through the counter's mutex and the table state's publish: either the host's `InFlight` read sees the count, or the gate's `Current()` sees the dropping snapshot (`TestOnQuery_AReplicaReadPlannedBeforeServingEndedIsRefused` pins a rewriter blocked across both of the host's polls, `TestReplicaReadAdmissionNeverOverlapsARelease` the race). The second snapshot read only refuses: the query is still answered from its one snapshot (spec 2026-09-24 H1) or not at all. A copy served again under another incarnation's name, or by another owner, refuses the old plan the same way.
+- **The admission fence (K44, review round 2).** The current-snapshot check trusts the table state to have published the drop, and a refresh can be blocked: Task 46's `Refresh` holds its refresh lock across the chain-state read, so neither the lease client's nor the table state's own refresh can publish while that read hangs, and the snapshot keeps answering Replica after the host's lease deadline and after the lease's TTL, when the member may install. So `ReplicaReads` also holds the host's fence per database (`ServeUntil`): the lease client sets it to its local lease deadline minus `serve.HostDeadlineMargin` at every acquire and renew, and to the zero time when it drops the lease. `beginReplicaRead` admits through `Admit`, which checks every fence on the counter's clock and counts in one critical section, so the fence closes on time whatever a refresh or a member request does, and a host that closes a fence before it reads `InFlight` either sees an admitted read counted or makes `Admit` refuse it. The fence refuses with the same retryable 733. Every database is closed until the host first opens it, so a host that injects the counter but never sets a fence serves no read of a copy (fail closed). A query admitted before the fence and still running at the lease's expiry is K44's recorded residual. `TestOnQuery_AFreshReplicaReadAfterTheLeaseDeadlineIsRefused` keeps the snapshot answering Replica across the fence and the TTL; `TestReplicaReadAdmissionNeverOverlapsARelease` races sessions against a host that releases after closing the fence while its snapshot still serves the copy, and against one that only publishes the drop (each mechanism alone).
 - **The ingress needs no change.** `snapshotSchema` switches on `Lookup`'s status and refuses every non-Active one with its existing text, so `TestSnapshotSchemaRefusesAReplicaTable` is a pin, red only because `sitable.Replica` does not exist yet. The agent's `sistatement` claims only `status == "active"`, so an INSERT into a replica table passes through unsigned and the host refuses it 392.
 - **`registry.TableStatus` stays comparable.** The new fields are a pointer, a string, a pointer and an int, so the existing `got != want` comparison of `TestRpcNetworkState_TableStatusWireShape` still compiles; `ReplicaOf` is a pointer because indexer 0 is a valid owner.
 - **No push, PR or release here.** Tasks 43 and 44 continue on the same branch, and Task 44 opens the PR and cuts `HG_TAG_P3` / `HG_DIGEST_P3`. The only remote contact of this task is Step 1's read-only fetch.
 - **Verified while drafting** (2026-10-16) on a `git archive` of housegate `origin/main` (`862a7a8`) with S3-C1 Task 22's `CopyTable`, its two tests and its `CLAUDE.md:163` sentence applied exactly as Task 22 writes them, committed and tagged as a stand-in for `HG_TAG_P1`, with the repository's Go 1.26.3 (`GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local`):
   - Step 1's checks printed `descends`, `pkg/sitable/sitable.go:3` and an empty diff. Against the local housegate clone, `s3-ledger.py get … HG_TAG` printed `HG_TAG=v0.20.0`, and `get … HG_TAG_P1` stopped with `s3-ledger: not a row of any plan's Appendix C: ['HG_TAG_P1']; stop`, since Plan S3-C1 is not on a ledger copy yet.
   - This task's text, applied mechanically step by step from its code blocks (new files, the hunks at their anchors, the eight doc replacements), made every new test fail first with exactly the compile errors Steps 3, 8, 13 and 18 state. With the Replica rows taken out of `decide`, `TestDecide_ReplicaRows` fails with `write: err = <nil>, want ClientError code 392`.
-  - Every step's checks then passed (`-race` where the steps say so, `go vet` clean, `gofmt -l` empty). The five commit blocks left the five commits of Step 24 and ` 24 files changed, 1017 insertions(+), 41 deletions(-)`, the same as an earlier replay on `994128b`, whose code is byte-identical. Review round 1's read admission adds 176 net lines inside this task's own lines (Step 24 now expects 1193 insertions); it was verified on a partial replay (sitable, sitablestate and the root option), not by a full 24-file replay (Appendix B).
+  - Every step's checks then passed (`-race` where the steps say so, `go vet` clean, `gofmt -l` empty). The five commit blocks left the five commits of Step 24 and ` 24 files changed, 1017 insertions(+), 41 deletions(-)`, the same as an earlier replay on `994128b`, whose code is byte-identical. Review round 1's read admission adds 176 net lines inside this task's own lines and review round 2's admission fence 315 more (Step 24 now expects 1508 insertions); both were verified on partial replays (sitable, sitablestate, registry, network and the root option), not by a full 24-file replay (Appendix B).
   - `bazel run //:gazelle` changed nothing, `bazel build //...` passed, and `bazel test //... --nocache_test_results` ran and passed all 67 targets (`Executed 67 out of 67 tests: 67 tests pass.`), every external repository coming from the local caches. `//pkg/replay/snapshotquery:snapshotquery_test` took 27 s of its 60 s context here; on a loaded machine an earlier run ran out of it (Step 24 says what to do).
   - `go test` of every package but the three ClickHouse-container packages under `pkg/integration` passed, except `pkg/storageintegrity`, which stops on Go's vet note `intake_test.go:1802:5: suspect or` in a file this task does not touch. It stops the same way at the base, Bazel does not run that vet pass, and the package passes with `-vet=off`.
   - Nineteen mutations were each caught by the named test meant for them: no de-duplication in `Begin`, no `sync.Once`, no clone or no sort in `Served`, no `Compact` in `ServedDatabases`, `NewSnapshot` not collecting Replica tables (`TestFakeServesReplicaTables`), `Schema` answering Replica, no `omitempty`, `RpcNetworkState` still refusing `replica`, the Replica rows removed, `DROP` of a copy allowed, reads of a copy refused, counting a refused query, not ending a lost end, `OnClose` not ending, counting an operator session, the hooks registered without a counter, the counter not passed to the gate, and the option's refusal removed.
@@ -497,6 +501,15 @@ Expected:
 - one JSON object with `"action": "created"`, whose `path` is `~/src/remotesrc/claude/housegate/multi-source-s3c4` (expanded), on branch `urwt/claude/multi-source-s3c4` from `origin/main`.
 
 `W` below is that path, and `P1` is the tag the ledger printed. The Bash tool keeps no variables between calls, so prefix every command with `W=<that path>; P1=<that tag>;`. If stderr says `needs approval to execute`, ask the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/housegate config approvals add` themselves; never pass `--yes` or `--clobber`.
+
+Before the first commit, give the worktree the commit identity (user rule: GitHub never shows the global identity as author or co-author):
+
+```bash
+W=<worktree path>
+git -C "$W" config extensions.worktreeConfig true && git -C "$W" config --worktree user.name poetry && git -C "$W" config --worktree user.email chen@sentio.xyz && git -C "$W" config user.name && git -C "$W" config user.email
+```
+
+Expected: `poetry`, then `chen@sentio.xyz`. Every commit of this task is then authored `poetry <chen@sentio.xyz>` and carries only the Claude `Co-Authored-By` line.
 
 Run: `W=<worktree path>; P1=<HG_TAG_P1>; git -C "$W" merge-base --is-ancestor "$P1" HEAD && echo descends && git -C "$W" grep -c -e 'func CopyTable(id string, incarnationSeq uint64) string' -e 'ReplicaDatabase      = "hg_replica"' -e 'case Refused, Pending:' -- pkg/sitable/sitable.go && git -C "$W" diff --stat "$P1" HEAD -- pkg/sitable pkg/plugins/sitablestate pkg/plugins/sipeerguard/plugin_test.go pkg/plugins/sistatement/table_status_test.go pkg/plugins/storageintegrity/table_state_test.go pkg/registry/table_status.go pkg/registry/table_status_test.go pkg/network/rpc.go pkg/network/rpc_table_status_test.go proxy.go build.go storage_integrity_table_state.go storage_integrity_table_state_test.go README.md CLAUDE.md pkg/plugins/AGENTS.md`
 
@@ -670,6 +683,7 @@ import (
 	"reflect"
 	"sync"
 	"testing"
+	"time"
 )
 
 // TestReplicaReadsCountsInFlightQueriesPerDatabase is clarification K44 of
@@ -747,7 +761,7 @@ func TestReplicaReadsEndIsIdempotent(t *testing.T) {
 }
 
 // TestReplicaReadsNilIsANoOp: a host that serves nothing from copies passes
-// no counter, and every method of a nil counter is safe.
+// no counter, and every method of a nil counter is safe; it admits nothing.
 func TestReplicaReadsNilIsANoOp(t *testing.T) {
 	var r *ReplicaReads
 	end := r.Begin([]string{"db2"})
@@ -758,6 +772,97 @@ func TestReplicaReadsNilIsANoOp(t *testing.T) {
 	}
 	if got := r.Counts(); len(got) != 0 {
 		t.Fatalf("nil Counts() = %v, want empty", got)
+	}
+	r.ServeUntil("db2", time.Now().Add(time.Hour))
+	if end, closed := r.Admit([]string{"db2"}); end != nil || closed != "db2" {
+		t.Fatalf("nil Admit = (end %v, closed %q), want db2 refused", end != nil, closed)
+	}
+}
+
+// TestReplicaReadsAdmitsOnlyBeforeTheServingFence is clarification K44 of
+// Plan S3-C4 (review round 2): every database is closed until the host opens
+// its fence with ServeUntil (its local lease deadline minus
+// serve.HostDeadlineMargin); Admit then counts a read only while the
+// counter's clock is before the fence, and from the fence on, or once the
+// host closed it with the zero time, it refuses and counts nothing. Nothing
+// but the clock and ServeUntil moves a fence. A join is admitted or refused
+// as a whole, a renewal moves the fence, and a closing fence leaves the reads
+// it already admitted counted until they end.
+func TestReplicaReadsAdmitsOnlyBeforeTheServingFence(t *testing.T) {
+	granted := time.Unix(1_760_000_000, 0)
+	var mu sync.Mutex
+	now := granted
+	at := func(d time.Duration) {
+		mu.Lock()
+		defer mu.Unlock()
+		now = granted.Add(d)
+	}
+	r := NewReplicaReadsWithClock(func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return now
+	})
+	if end, closed := r.Admit([]string{"db2"}); end != nil || closed != "db2" {
+		t.Fatalf("Admit before any fence = (end %v, closed %q), want db2 refused", end != nil, closed)
+	}
+	r.ServeUntil("db2", granted.Add(27*time.Second))
+	r.ServeUntil("db3", granted.Add(time.Hour))
+
+	end, closed := r.Admit([]string{"db3", "db2", "db3"})
+	if end == nil || closed != "" || !reflect.DeepEqual(r.Counts(), map[string]int{"db2": 1, "db3": 1}) {
+		t.Fatalf("Admit of a join = (end %v, closed %q), in flight %v; want one read of db2 and one of db3", end != nil, closed, r.Counts())
+	}
+	end()
+	at(27*time.Second - time.Nanosecond)
+	if end, closed := r.Admit([]string{"db2"}); end == nil || closed != "" {
+		t.Fatalf("Admit just before the fence = (end %v, closed %q), want admitted", end != nil, closed)
+	} else {
+		end()
+	}
+	at(27 * time.Second)
+	for _, databases := range [][]string{{"db2"}, {"db3", "db2"}} {
+		if end, closed := r.Admit(databases); end != nil || closed != "db2" {
+			t.Fatalf("Admit(%v) at the fence = (end %v, closed %q), want db2 refused", databases, end != nil, closed)
+		}
+		if got := r.Counts(); len(got) != 0 {
+			t.Fatalf("Admit(%v) at the fence counted %v, want nothing", databases, got)
+		}
+	}
+
+	// A renewal moves the fence; closing it refuses at once, before its time.
+	r.ServeUntil("db2", granted.Add(37*time.Second))
+	end, closed = r.Admit([]string{"db2"})
+	if end == nil || closed != "" {
+		t.Fatalf("Admit after the renewal = (end %v, closed %q), want admitted", end != nil, closed)
+	}
+	r.ServeUntil("db2", time.Time{})
+	if again, closed := r.Admit([]string{"db2"}); again != nil || closed != "db2" {
+		t.Fatalf("Admit after the fence was closed = (end %v, closed %q), want db2 refused", again != nil, closed)
+	}
+	if r.InFlight("db2") != 1 {
+		t.Fatalf("db2 in flight = %d after its fence closed, want the read admitted before it", r.InFlight("db2"))
+	}
+	end()
+	if got := r.Counts(); len(got) != 0 {
+		t.Fatalf("Counts() = %v, want empty", got)
+	}
+
+	// A read of no database is admitted and counts nothing.
+	if end, closed := r.Admit(nil); end == nil || closed != "" || len(r.Counts()) != 0 {
+		t.Fatalf("Admit(nil) = (end %v, closed %q), want a no-op admission", end != nil, closed)
+	}
+
+	// NewReplicaReads reads the wall clock.
+	w := NewReplicaReads()
+	w.ServeUntil("db2", time.Now().Add(time.Hour))
+	if end, closed := w.Admit([]string{"db2"}); end == nil || closed != "" {
+		t.Fatalf("wall-clock Admit before the fence = (end %v, closed %q), want admitted", end != nil, closed)
+	} else {
+		end()
+	}
+	w.ServeUntil("db2", time.Now().Add(-time.Millisecond))
+	if end, closed := w.Admit([]string{"db2"}); end != nil || closed != "db2" {
+		t.Fatalf("wall-clock Admit after the fence = (end %v, closed %q), want db2 refused", end != nil, closed)
 	}
 }
 ```
@@ -810,7 +915,7 @@ In `pkg/plugins/sipeerguard/plugin_test.go` replace the first line of the loop o
 Run: `W=<worktree path>; cd "$W" && go test ./pkg/sitable/ ./pkg/plugins/storageintegrity/ ./pkg/plugins/sipeerguard/ -run 'TestStatusReplicaRoundTrips|TestSnapshotServedListsReplicaTablesSortedAndCloned|TestServedDatabasesAreSortedAndUnique|TestSnapshotSchemaMissesAReplicaTable|TestFakeServesReplicaTables|TestStaticServesNoReplicaTable|TestReplicaReads|TestSnapshotSchemaRefusesAReplicaTable|TestGuardRefusesGovernedTablesOnPeerSessions'`
 
 Expected: the three packages FAIL to compile:
-- `pkg/sitable`: `replica_reads_test.go`: `undefined: NewReplicaReads` and `undefined: ReplicaReads`; `sitable_test.go`: `undefined: Replica`, `unknown field CopyTable in struct literal of type Table` and `unknown field ReplicaOf in struct literal of type Table`;
+- `pkg/sitable`: `replica_reads_test.go`: `undefined: NewReplicaReads`, `undefined: ReplicaReads` and `undefined: NewReplicaReadsWithClock`; `sitable_test.go`: `undefined: Replica`, `unknown field CopyTable in struct literal of type Table` and `unknown field ReplicaOf in struct literal of type Table`;
 - `pkg/plugins/storageintegrity`: `table_state_test.go`: `undefined: sitable.Replica`, `unknown field CopyTable in struct literal of type sitable.Table` and `unknown field ReplicaOf in struct literal of type sitable.Table`;
 - `pkg/plugins/sipeerguard`: `plugin_test.go`: `undefined: sitable.Replica`.
 
@@ -1008,53 +1113,137 @@ package sitable
 import (
 	"slices"
 	"sync"
+	"time"
 )
 
 // ReplicaReads counts, per database, the queries in flight that read a
-// replica-served database (spec 2026-10-14 §11). HouseGate takes one
-// table-state snapshot per query, so a query that started while a database
-// was answered Replica keeps reading its copy after the host stops answering
-// it. sitablestate begins one read for every allowed query that touches a
-// Replica table and ends it when the query completes or its session closes.
-// The host releases a database's serving lease only once its published
-// snapshot no longer serves the database and InFlight is 0, so its member
-// never installs under a running read. It is safe for concurrent use, and a
-// nil *ReplicaReads counts nothing.
+// replica-served database, and fences their admission at the host's lease
+// deadline (spec 2026-10-14 §11). HouseGate takes one table-state snapshot
+// per query, so a query that started while a database was answered Replica
+// keeps reading its copy after the host stops answering it. sitablestate
+// admits every allowed query that touches a Replica table through Admit and
+// ends it when the query completes or its session closes. The host releases a
+// database's serving lease only once its published snapshot no longer serves
+// the database and InFlight is 0, so its member never installs under a
+// running read; and it keeps each database's fence (ServeUntil) at its local
+// lease deadline minus serve.HostDeadlineMargin, closing it when it stops
+// serving the database, so no read of a copy starts after its member may
+// install on the lease's expiry, however long the host's table state takes to
+// publish that the database is no longer served. It is safe for concurrent
+// use, and a nil *ReplicaReads counts nothing and admits nothing.
 type ReplicaReads struct {
 	mu       sync.Mutex
+	now      func() time.Time
 	inFlight map[string]int
+	until    map[string]time.Time
 }
 
-// NewReplicaReads returns an empty counter.
+// NewReplicaReads returns an empty counter whose fences are read on the wall
+// clock. Every database is closed until ServeUntil opens it.
 func NewReplicaReads() *ReplicaReads {
-	return &ReplicaReads{inFlight: map[string]int{}}
+	return NewReplicaReadsWithClock(time.Now)
+}
+
+// NewReplicaReadsWithClock returns an empty counter whose fences are read on
+// now: the clock the host computes its lease deadlines on. A nil now is the
+// wall clock.
+func NewReplicaReadsWithClock(now func() time.Time) *ReplicaReads {
+	if now == nil {
+		now = time.Now
+	}
+	return &ReplicaReads{now: now, inFlight: map[string]int{}, until: map[string]time.Time{}}
+}
+
+// ServeUntil sets database's admission fence: Admit admits a read of it only
+// while the counter's clock is before until. The host calls it with its local
+// lease deadline minus serve.HostDeadlineMargin whenever it acquires or renews
+// the database's lease, and with the zero time, which closes the fence at
+// once, when it stops serving the database. Reads already admitted stay
+// counted until they end. It does nothing on a nil receiver or for an empty
+// database.
+func (r *ReplicaReads) ServeUntil(database string, until time.Time) {
+	if r == nil || database == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if until.IsZero() {
+		delete(r.until, database)
+		return
+	}
+	if r.until == nil {
+		r.until = map[string]time.Time{}
+	}
+	r.until[database] = until
 }
 
 // Begin counts one in-flight read for each distinct, non-empty database
-// listed and returns the function that ends it. end is idempotent: only its
-// first call uncounts. On a nil receiver, or with no database, Begin counts
-// nothing and end is a no-op.
+// listed and returns the function that ends it, whatever the fences say.
+// end is idempotent: only its first call uncounts. On a nil receiver, or with
+// no database, Begin counts nothing and end is a no-op.
 func (r *ReplicaReads) Begin(databases []string) (end func()) {
-	if r == nil {
+	counted := distinctDatabases(databases)
+	if r == nil || len(counted) == 0 {
 		return func() {}
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.countLocked(counted)
+}
+
+// Admit is Begin behind the fences: when the counter's clock is before the
+// fence of every distinct, non-empty database listed, it counts one in-flight
+// read of each and returns the function that ends it, and closed is empty.
+// Otherwise it counts nothing, end is nil and closed is the first listed
+// database whose fence is closed. The check and the count are one critical
+// section with ServeUntil and InFlight, so a host that closes a fence and then
+// reads InFlight either sees an admitted read counted or makes Admit refuse
+// it. With no database Admit admits with a no-op end; a nil receiver admits
+// nothing.
+func (r *ReplicaReads) Admit(databases []string) (end func(), closed string) {
+	counted := distinctDatabases(databases)
+	if len(counted) == 0 {
+		return func() {}, ""
+	}
+	if r == nil {
+		return nil, counted[0]
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	clock := r.now
+	if clock == nil {
+		clock = time.Now
+	}
+	now := clock()
+	for _, database := range counted {
+		if until, open := r.until[database]; !open || !now.Before(until) {
+			return nil, database
+		}
+	}
+	return r.countLocked(counted), ""
+}
+
+// distinctDatabases returns the distinct, non-empty databases listed, in
+// their first order.
+func distinctDatabases(databases []string) []string {
 	counted := make([]string, 0, len(databases))
 	for _, database := range databases {
 		if database != "" && !slices.Contains(counted, database) {
 			counted = append(counted, database)
 		}
 	}
-	if len(counted) == 0 {
-		return func() {}
-	}
-	r.mu.Lock()
+	return counted
+}
+
+// countLocked counts one in-flight read of each database and returns its
+// idempotent end. r.mu is held.
+func (r *ReplicaReads) countLocked(counted []string) func() {
 	if r.inFlight == nil {
 		r.inFlight = map[string]int{}
 	}
 	for _, database := range counted {
 		r.inFlight[database]++
 	}
-	r.mu.Unlock()
 	var once sync.Once
 	return func() {
 		once.Do(func() {
@@ -1099,7 +1288,7 @@ func (r *ReplicaReads) Counts() map[string]int {
 }
 ```
 
-Replace `pkg/sitable/BUILD.bazel` with (the two new files; no new dependency, since `slices` and `sync` are standard library):
+Replace `pkg/sitable/BUILD.bazel` with (the two new files; no new dependency, since `slices`, `sync` and `time` are standard library):
 
 ```
 load("@rules_go//go:def.bzl", "go_library", "go_test")
@@ -1437,6 +1626,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/housegate/housegate/pkg/chproto"
 	"github.com/housegate/housegate/pkg/chsession"
@@ -1469,6 +1659,17 @@ func replicaSnapshot() sitable.Snapshot {
 // port sitablestate checks a counted replica read against.
 func replicaState() *sitable.Fake {
 	return sitable.NewFake(sitable.Ordinary, replicaTables()...)
+}
+
+// servingReads is the host's counter while it holds the leases of db2 and
+// db3: their fences are open for the next hour, so the snapshot checks alone
+// decide.
+func servingReads() *sitable.ReplicaReads {
+	reads := sitable.NewReplicaReads()
+	until := time.Now().Add(time.Hour)
+	reads.ServeUntil("db2", until)
+	reads.ServeUntil("db3", until)
+	return reads
 }
 
 func replicaQuery(sess chsession.Session, typ sqlmeta.StatementType, sql string, tables []sqlmeta.AccessedTable) *plugin.QueryContext {
@@ -1558,7 +1759,7 @@ func TestDecide_ReplicaRows(t *testing.T) {
 // chain as Relay drives it. A refused query, or one that touches no Replica
 // table, counts nothing, and two sessions count separately.
 func TestOnQuery_ReplicaReadBeginsAndCompletesAnInFlightRead(t *testing.T) {
-	reads := sitable.NewReplicaReads()
+	reads := servingReads()
 	gate := &Plugin{ReplicaReads: reads, TableState: replicaState()}
 	chain := &plugin.PluginChain{
 		QueryPlugins:         []plugin.QueryPlugin{gate},
@@ -1632,7 +1833,7 @@ func TestOnQuery_ReplicaReadBeginsAndCompletesAnInFlightRead(t *testing.T) {
 // never reaches OnQueryComplete, so the session's close ends its read, and a
 // late complete after the close changes nothing.
 func TestOnClose_EndsAnInFlightReplicaRead(t *testing.T) {
-	reads := sitable.NewReplicaReads()
+	reads := servingReads()
 	gate := &Plugin{ReplicaReads: reads, TableState: replicaState()}
 	sess := newSession(t, 43)
 	if err := gate.OnQuery(context.Background(), replicaQuery(sess, sqlmeta.StatementTypeSelect, "SELECT * FROM db3.c", accessed("db3.c"))); err != nil {
@@ -1657,7 +1858,7 @@ func TestOnClose_EndsAnInFlightReplicaRead(t *testing.T) {
 // forwarding sessions skip the gate in the chain, so none of them counts a
 // read of a copy.
 func TestOnQuery_OperatorSessionsAreNotCounted(t *testing.T) {
-	reads := sitable.NewReplicaReads()
+	reads := servingReads()
 	gate := &Plugin{ReplicaReads: reads, TableState: replicaState()}
 	chain := &plugin.PluginChain{
 		QueryPlugins:         []plugin.QueryPlugin{gate},
@@ -1694,7 +1895,7 @@ func TestOnQuery_OperatorSessionsAreNotCounted(t *testing.T) {
 func TestOnQuery_AReplicaReadPlannedBeforeServingEndedIsRefused(t *testing.T) {
 	ctx := context.Background()
 	state := replicaState()
-	reads := sitable.NewReplicaReads()
+	reads := servingReads()
 	gate := &Plugin{ReplicaReads: reads, TableState: state}
 	sess := newSession(t, 48)
 	stale := replicaQuery(sess, sqlmeta.StatementTypeSelect, "SELECT * FROM db2.a JOIN db3.c USING (k)", accessed("db2.a", "db3.c"))
@@ -1740,49 +1941,142 @@ func TestOnQuery_AReplicaReadPlannedBeforeServingEndedIsRefused(t *testing.T) {
 	}
 }
 
+// TestOnQuery_AFreshReplicaReadAfterTheLeaseDeadlineIsRefused is
+// clarification K44 of Plan S3-C4 with the host's table-state refresh blocked
+// (review round 2): the host cannot reach its member, so db2's lease is not
+// renewed and its fence stays at the local deadline minus
+// serve.HostDeadlineMargin, while a refresh blocked in its chain-state read
+// keeps the published snapshot answering db2 Replica past that fence and past
+// the lease's TTL, when the member may install. A fresh query planned on that
+// snapshot is admitted before the fence and refused with the retryable 733
+// from the fence on, counting nothing, although the current snapshot still
+// serves the copy. db3, whose fence is open, still reads, a join of both is
+// refused as a whole, a fence the host closes (a dropped lease) refuses at
+// once, and a renewal that moves the fence admits again.
+func TestOnQuery_AFreshReplicaReadAfterTheLeaseDeadlineIsRefused(t *testing.T) {
+	const ttl, margin = 30 * time.Second, 3 * time.Second
+	granted := time.Unix(1_760_000_000, 0)
+	var mu sync.Mutex
+	now := granted
+	at := func(d time.Duration) {
+		mu.Lock()
+		defer mu.Unlock()
+		now = granted.Add(d)
+	}
+	reads := sitable.NewReplicaReadsWithClock(func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return now
+	})
+	reads.ServeUntil("db2", granted.Add(ttl-margin))
+	reads.ServeUntil("db3", granted.Add(time.Hour))
+	// The published snapshot never changes below: the refresh that would
+	// publish the end of db2's lease is blocked.
+	state := replicaState()
+	gate := &Plugin{ReplicaReads: reads, TableState: state}
+	ctx := context.Background()
+	sess := newSession(t, 49)
+	fresh := func(sql string, ids ...string) *plugin.QueryContext {
+		qctx := replicaQuery(sess, sqlmeta.StatementTypeSelect, sql, accessed(ids...))
+		qctx.TableSnapshot = state.Current()
+		return qctx
+	}
+	refused := func(id string) outcome {
+		return outcome{733, fmt.Sprintf("storage_integrity: table %s is no longer served from the copy this query was planned against; retry the query (retryable)", id)}
+	}
+
+	at(ttl - margin - time.Second)
+	check(t, "a fresh read before the fence", gate.OnQuery(ctx, fresh("SELECT * FROM db2.a", "db2.a")), ok)
+	if reads.InFlight("db2") != 1 {
+		t.Fatalf("db2 in flight = %d, want the admitted read", reads.InFlight("db2"))
+	}
+	gate.OnQueryComplete(ctx, sess)
+
+	for _, d := range []time.Duration{ttl - margin, ttl, ttl + 500*time.Millisecond} {
+		at(d)
+		if got := state.Current().Lookup("db2", "a").Status; got != sitable.Replica {
+			t.Fatalf("%v after the grant the published snapshot answers db2.a %v, want Replica", d, got)
+		}
+		check(t, fmt.Sprintf("a fresh read %v after the grant while the refresh is blocked", d), gate.OnQuery(ctx, fresh("SELECT * FROM db2.a", "db2.a")), refused("db2.a"))
+		if got := reads.Counts(); len(got) != 0 {
+			t.Fatalf("%v after the grant in flight = %v, want nothing counted", d, got)
+		}
+		gate.OnQueryComplete(ctx, sess)
+	}
+
+	check(t, "db3 under its open fence", gate.OnQuery(ctx, fresh("SELECT * FROM db3.c", "db3.c")), ok)
+	gate.OnQueryComplete(ctx, sess)
+	check(t, "a join of db3 and db2", gate.OnQuery(ctx, fresh("SELECT * FROM db3.c JOIN db2.b USING (k)", "db3.c", "db2.b")), refused("db2.b"))
+	if got := reads.Counts(); len(got) != 0 {
+		t.Fatalf("after the refused join in flight = %v, want nothing counted", got)
+	}
+	gate.OnQueryComplete(ctx, sess)
+
+	reads.ServeUntil("db3", time.Time{})
+	check(t, "db3 after its fence was closed", gate.OnQuery(ctx, fresh("SELECT * FROM db3.c", "db3.c")), refused("db3.c"))
+	gate.OnQueryComplete(ctx, sess)
+	reads.ServeUntil("db2", granted.Add(2*ttl-margin))
+	check(t, "db2 after a renewal moved its fence", gate.OnQuery(ctx, fresh("SELECT * FROM db2.a", "db2.a")), ok)
+	gate.OnQueryComplete(ctx, sess)
+	if got := reads.Counts(); len(got) != 0 {
+		t.Fatalf("in flight = %v, want empty", got)
+	}
+}
+
 // TestReplicaReadAdmissionNeverOverlapsARelease is clarification K44 under
 // concurrency: sessions plan against the current snapshot, yield, and then
-// reach the gate, while a host publishes a snapshot without db2's Replica
-// entries, waits until no read of db2 is in flight and releases the lease.
-// No read planned on a snapshot that serves db2 is admitted after that
-// release (a read planned later finds db2 Ordinary, which the rewriter sends
-// to its owner); run it with -race.
+// reach the gate, while a host stops serving db2, waits until no read of db2
+// is in flight and releases the lease. No read planned on a snapshot that
+// serves db2 is admitted after that release. Each of the host's two signals
+// is raced alone: a host that publishes a snapshot without db2's Replica
+// entries and leaves db2's fence open (a read planned later finds db2
+// Ordinary, which the rewriter sends to its owner), and a host whose refresh
+// is blocked, so its snapshot keeps serving db2, that closes db2's fence
+// (review round 2). Run it with -race.
 func TestReplicaReadAdmissionNeverOverlapsARelease(t *testing.T) {
 	ctx := context.Background()
-	for round := range 50 {
-		state := replicaState()
-		reads := sitable.NewReplicaReads()
-		gate := &Plugin{ReplicaReads: reads, TableState: state}
-		var released atomic.Bool
-		var late atomic.Int64
-		var wg sync.WaitGroup
-		for i := range 8 {
-			sess := newSession(t, int64(1000+round*8+i))
-			wg.Go(func() {
-				for range 20 {
-					qctx := replicaQuery(sess, sqlmeta.StatementTypeSelect, "SELECT * FROM db2.a", accessed("db2.a"))
-					qctx.TableSnapshot = state.Current()
-					fromCopy := qctx.TableSnapshot.Lookup("db2", "a").Status == sitable.Replica
-					runtime.Gosched()
-					if gate.OnQuery(ctx, qctx) == nil && fromCopy {
-						if released.Load() {
-							late.Add(1)
-						}
+	for _, host := range []struct {
+		name string
+		stop func(state *sitable.Fake, reads *sitable.ReplicaReads)
+	}{
+		{"publishes the drop", func(state *sitable.Fake, _ *sitable.ReplicaReads) { state.Set(replicaTables()[0], replicaTables()[3]) }},
+		{"closes the fence", func(_ *sitable.Fake, reads *sitable.ReplicaReads) { reads.ServeUntil("db2", time.Time{}) }},
+	} {
+		for round := range 50 {
+			state := replicaState()
+			reads := servingReads()
+			gate := &Plugin{ReplicaReads: reads, TableState: state}
+			var released atomic.Bool
+			var late atomic.Int64
+			var wg sync.WaitGroup
+			for i := range 8 {
+				sess := newSession(t, int64(1000+round*8+i))
+				wg.Go(func() {
+					for range 20 {
+						qctx := replicaQuery(sess, sqlmeta.StatementTypeSelect, "SELECT * FROM db2.a", accessed("db2.a"))
+						qctx.TableSnapshot = state.Current()
+						fromCopy := qctx.TableSnapshot.Lookup("db2", "a").Status == sitable.Replica
 						runtime.Gosched()
+						if gate.OnQuery(ctx, qctx) == nil && fromCopy {
+							if released.Load() {
+								late.Add(1)
+							}
+							runtime.Gosched()
+						}
+						gate.OnQueryComplete(ctx, sess)
 					}
-					gate.OnQueryComplete(ctx, sess)
-				}
-			})
-		}
-		runtime.Gosched()
-		state.Set(replicaTables()[0], replicaTables()[3])
-		for reads.InFlight("db2") != 0 {
+				})
+			}
 			runtime.Gosched()
-		}
-		released.Store(true)
-		wg.Wait()
-		if n := late.Load(); n != 0 {
-			t.Fatalf("round %d: %d reads of db2 admitted after the host released its lease", round, n)
+			host.stop(state, reads)
+			for reads.InFlight("db2") != 0 {
+				runtime.Gosched()
+			}
+			released.Store(true)
+			wg.Wait()
+			if n := late.Load(); n != 0 {
+				t.Fatalf("%s, round %d: %d reads of db2 admitted after the host released its lease", host.name, round, n)
+			}
 		}
 	}
 }
@@ -1790,7 +2084,7 @@ func TestReplicaReadAdmissionNeverOverlapsARelease(t *testing.T) {
 
 - [ ] **Step 13: Run the tests and see them fail**
 
-Run: `W=<worktree path>; cd "$W" && go test ./pkg/plugins/sitablestate/ -run 'TestDecide_ReplicaRows|TestOnQuery_ReplicaReadBeginsAndCompletesAnInFlightRead|TestOnClose_EndsAnInFlightReplicaRead|TestOnQuery_OperatorSessionsAreNotCounted|TestOnQuery_AReplicaReadPlannedBeforeServingEndedIsRefused|TestReplicaReadAdmissionNeverOverlapsARelease'`
+Run: `W=<worktree path>; cd "$W" && go test ./pkg/plugins/sitablestate/ -run 'TestDecide_ReplicaRows|TestOnQuery_ReplicaReadBeginsAndCompletesAnInFlightRead|TestOnClose_EndsAnInFlightReplicaRead|TestOnQuery_OperatorSessionsAreNotCounted|TestOnQuery_AReplicaReadPlannedBeforeServingEndedIsRefused|TestOnQuery_AFreshReplicaReadAfterTheLeaseDeadlineIsRefused|TestReplicaReadAdmissionNeverOverlapsARelease'`
 
 Expected: FAIL to compile, with `unknown field ReplicaReads in struct literal of type Plugin`, `unknown field TableState in struct literal of type Plugin`, `cannot use gate (variable of type *Plugin) as plugin.QueryCompletePlugin value in array or slice literal: *Plugin does not implement plugin.QueryCompletePlugin (missing method OnQueryComplete)`, the same for `plugin.ClosePlugin (missing method OnClose)`, and `(&Plugin{}).OnQueryComplete undefined (type *Plugin has no field or method OnQueryComplete)`. Before the fix `TestDecide_ReplicaRows` would also fail on its own: `decide` falls through to allow for Replica, so its write rows would report `err = <nil>, want ClientError code 392`.
 
@@ -1827,11 +2121,14 @@ replace `Plugin` (`:32-34`) with:
 // Plugin is the server-mode table-state QueryPlugin. It is registered only
 // when storage_integrity.enabled.
 type Plugin struct {
-	// ReplicaReads, when set, counts every allowed query that accesses a
-	// Replica table, once per database, from OnQuery until OnQueryComplete or
-	// OnClose (spec 2026-10-14 §11): the host releases a database's serving
-	// lease only once none is in flight. build.go then also registers the
-	// plugin as a QueryCompletePlugin and a ClosePlugin. Nil counts nothing.
+	// ReplicaReads, when set, admits and counts every allowed query that
+	// accesses a Replica table, once per database, from OnQuery until
+	// OnQueryComplete or OnClose (spec 2026-10-14 §11), and only while the
+	// host's fence of each such database is open (ReplicaReads.Admit): the
+	// host releases a database's serving lease only once none is in flight,
+	// and no read starts once its lease's local deadline minus
+	// serve.HostDeadlineMargin passed. build.go then also registers the plugin
+	// as a QueryCompletePlugin and a ClosePlugin. Nil counts nothing.
 	ReplicaReads *sitable.ReplicaReads
 	// TableState is the port rewrite took the query's snapshot from. With
 	// ReplicaReads, a read is admitted only once it is counted and
@@ -1854,8 +2151,9 @@ replace the doc of `OnQuery` (`:66-73`) with:
 // over a retryable one; ties keep the first accessed table. With ReplicaReads
 // set, an allowed statement that accesses a Replica table begins one
 // in-flight read of each such database, which OnQueryComplete or OnClose
-// ends, and is admitted only while the current snapshot still serves its
-// Replica tables from the copies it was planned against (733 otherwise).
+// ends, and is admitted only while the host's fence of each such database is
+// open and the current snapshot still serves its Replica tables from the
+// copies it was planned against (733 otherwise).
 //
 // A missing snapshot fails closed. The plugin is registered only when storage
 // integrity is enabled, and rewrite, which runs first under the same chain
@@ -1893,26 +2191,43 @@ type servedAccess struct {
 	planned         sitable.Table
 }
 
-// beginReplicaRead counts the session's query as one in-flight read of each
-// replica-served database it accesses, then admits it only if the current
-// snapshot still serves every such table from the copy and owner the query
-// was planned against (clarification K44). rewrite took the query's snapshot
-// before this count, so a query that waited there while the host published a
-// snapshot without the database, found no read in flight and released the
-// lease could otherwise read the copy during its member's install. Counting
-// first and checking the current snapshot second closes that gap: the host
-// reads InFlight only after it published the snapshot that drops the
-// database, so either it sees this read counted and waits, or this check sees
-// that snapshot and refuses, retryably, before anything reaches ClickHouse.
-// A refused read is uncounted at once. An end the session still holds is
-// ended first, so a lost complete never leaves a database counted.
+// beginReplicaRead admits the session's query as one in-flight read of each
+// replica-served database it accesses, or refuses it, retryably, before
+// anything reaches ClickHouse (clarification K44). Two checks guard the copy:
+//   - ReplicaReads.Admit counts the read only while the host's fence of each
+//     database is open. The host keeps it at its local lease deadline minus
+//     serve.HostDeadlineMargin and closes it when it stops serving the
+//     database, so no read starts once the member may install on the lease's
+//     expiry, even while a blocked table-state refresh leaves a published
+//     snapshot that still answers the database Replica.
+//   - After that count, the current snapshot must still serve every such
+//     table from the copy and owner the query was planned against. rewrite
+//     took the query's snapshot before this count, so a query that waited
+//     there while the host published a snapshot without the database, found
+//     no read in flight and released the lease could otherwise read the copy
+//     during its member's install.
+//
+// The host reads InFlight only after it closed the fence and published the
+// snapshot that drops the database, so either it sees this read counted and
+// waits, or one of the checks refuses it. A refused read is uncounted at
+// once, and an end the session still holds is ended either way, so a lost
+// complete never leaves a database counted.
 func (p *Plugin) beginReplicaRead(sess chsession.Session, served []servedAccess) error {
 	databases := make([]string, 0, len(served))
 	for _, s := range served {
 		databases = append(databases, s.database)
 	}
 	slices.Sort(databases)
-	end := p.ReplicaReads.Begin(slices.Compact(databases))
+	end, closed := p.ReplicaReads.Admit(slices.Compact(databases))
+	if end == nil {
+		p.endReplicaRead(sess)
+		for _, s := range served {
+			if s.database == closed {
+				return notServed(s.planned.ID)
+			}
+		}
+		return notServed(served[0].planned.ID)
+	}
 	if previous, loaded := p.replicaReadEnds.Swap(sess.ID(), end); loaded {
 		previous.(func())()
 	}
@@ -1923,10 +2238,17 @@ func (p *Plugin) beginReplicaRead(sess chsession.Session, served []servedAccess)
 	for _, s := range served {
 		if current == nil || !sameCopy(current.Lookup(s.database, s.table), s.planned) {
 			p.endReplicaRead(sess)
-			return refuse(CodeRetryable, "storage_integrity: table %s is no longer served from the copy this query was planned against; retry the query (retryable)", s.planned.ID)
+			return notServed(s.planned.ID)
 		}
 	}
 	return nil
+}
+
+// notServed refuses a read of a copy that is no longer served to the query:
+// the host's fence of its database is closed, or the current snapshot no
+// longer serves the copy and owner the query was planned against.
+func notServed(id string) error {
+	return refuse(CodeRetryable, "storage_integrity: table %s is no longer served from the copy this query was planned against; retry the query (retryable)", id)
 }
 
 // sameCopy reports whether now answers a table Replica from the same copy
@@ -2003,12 +2325,13 @@ Run: `W=<worktree path>; cd "$W" && gofmt -l pkg/plugins/sitablestate && go vet 
 
 Expected:
 - `gofmt` and `go vet` print nothing: the `sync.Map` field sits behind pointer receivers and no `Plugin` is copied, so `copylocks` is satisfied;
-- `ok  	github.com/housegate/housegate/pkg/plugins/sitablestate`, including the six new tests (`TestReplicaReadAdmissionNeverOverlapsARelease` races 8 sessions per round against a release in 50 rounds, under `-race`) and the unchanged `TestDecisionMatrix`, `TestRefusalPrecedence`, `TestBypassRules`, `TestNoSnapshotFailsClosed` and the snapshot tests of `snapshot_test.go`;
+- `ok  	github.com/housegate/housegate/pkg/plugins/sitablestate`, including the seven new tests (`TestReplicaReadAdmissionNeverOverlapsARelease` races 8 sessions per round against a release in 50 rounds for each of the host's two signals, under `-race`) and the unchanged `TestDecisionMatrix`, `TestRefusalPrecedence`, `TestBypassRules`, `TestNoSnapshotFailsClosed` and the snapshot tests of `snapshot_test.go`;
 - `ok  	github.com/housegate/housegate` for the root package: `build.go` still builds `&sitablestate.Plugin{}`.
 
 - [ ] **Step 16: Commit the Replica rows**
 
 ```bash
+W=<worktree path>
 git -C "$W" add pkg/plugins/sitablestate/plugin.go pkg/plugins/sitablestate/plugin_test.go pkg/plugins/sitablestate/BUILD.bazel
 git -C "$W" commit -m "feat(sitablestate): Replica rows and the in-flight replica-read count
 
@@ -2028,12 +2351,20 @@ still serves its Replica tables from the copies the query was planned
 against; otherwise it is uncounted and refused with the retryable 733.
 rewrite takes the query's snapshot before this count, so without the
 check a query that waited in rewrite across the host's release could
-read a copy its member is installing. The plugin is then also a
+read a copy its member is installing. The read is counted through
+ReplicaReads.Admit, which also refuses it once the host's fence of the
+database (its local lease deadline minus serve.HostDeadlineMargin, or
+closed when it stopped serving) has passed, so a table-state refresh
+that blocks and keeps a Replica snapshot published past the lease's
+expiry admits no new read of the copy. The plugin is then also a
 complete and close plugin; without a counter it decides and counts
 exactly as before.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git -C "$W" log -1 --format='%an <%ae>'
 ```
+
+Expected: `poetry <chen@sentio.xyz>`.
 
 - [ ] **Step 17: Write the failing tests for `Options.StorageIntegrityReplicaReads`**
 
@@ -2045,6 +2376,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/housegate/housegate/pkg/chproto"
 	"github.com/housegate/housegate/pkg/chsession"
@@ -2088,9 +2420,10 @@ func TestBuildRefusesReplicaReadsWithoutATableState(t *testing.T) {
 
 // TestBuildWiresReplicaReadsIntoSitablestate is clarification K44 of Plan
 // S3-C4: the host's counter and its table state reach the table-state gate,
-// which then admits a read of a copy the current snapshot still serves and
-// ends it at query completion and at session close. Without a counter the
-// chain is today's: the gate is a query plugin only.
+// which then admits a read of a copy whose fence the host opened and the
+// current snapshot still serves, and ends it at query completion and at
+// session close. Without a counter the chain is today's: the gate is a query
+// plugin only.
 func TestBuildWiresReplicaReadsIntoSitablestate(t *testing.T) {
 	reads := sitable.NewReplicaReads()
 	for _, tc := range []struct {
@@ -2154,6 +2487,7 @@ func TestBuildWiresReplicaReadsIntoSitablestate(t *testing.T) {
 			defer client.Close()
 			defer server.Close()
 			sess := chsession.New(77, client)
+			reads.ServeUntil("db2", time.Now().Add(time.Hour)) // the host holds db2's lease
 			state.Set(sitable.Table{ID: "db2.a", Status: sitable.Replica, CopyTable: sitable.CopyTable("db2.a", 4), ReplicaOf: 2})
 			snap := state.Current()
 			qctx := &plugin.QueryContext{
@@ -2189,8 +2523,10 @@ In `proxy.go` add after `StorageIntegrityTableState sitable.TableState` (`:133`)
 	// StorageIntegrityReplicaReads is the host-injected in-flight counter of
 	// replica-served reads (spec 2026-10-14 §11). sitablestate counts every
 	// allowed query that accesses a Replica table, once per database, until
-	// the query completes or its session closes; the host releases a
-	// database's serving lease only once none is in flight. It requires
+	// the query completes or its session closes, and admits it only while the
+	// host's fence of each such database (ServeUntil: its local lease deadline
+	// minus serve.HostDeadlineMargin) is open; the host releases a database's
+	// serving lease only once none is in flight. It requires
 	// Options.StorageIntegrityTableState, the only source of Replica tables.
 	// Nil counts nothing.
 	StorageIntegrityReplicaReads *sitable.ReplicaReads
@@ -2223,9 +2559,10 @@ func resolveStorageIntegrityTableState(opts Options, reg registry.Registry) (sit
 	// sitablestate reads the rewriter's classification and the query's
 	// snapshot, so it runs right after rewrite and before the SI ingress and
 	// commitgate (spec 2026-09-24 §7.1). With the host's replica-read counter
-	// it also checks each counted read against the current snapshot of the
-	// state rewrite took the query's snapshot from, and ends it when the
-	// query completes or its session closes (spec 2026-10-14 §11).
+	// it also admits each read only before the host's fence and checks it
+	// against the current snapshot of the state rewrite took the query's
+	// snapshot from, and ends it when the query completes or its session
+	// closes (spec 2026-10-14 §11).
 	if siOptions.Enabled {
 		gate := &sitablestate.Plugin{ReplicaReads: opts.StorageIntegrityReplicaReads}
 		queryPlugins = append(queryPlugins, gate)
@@ -2259,20 +2596,25 @@ ok  	github.com/housegate/housegate	<time>
 - [ ] **Step 21: Commit the option**
 
 ```bash
+W=<worktree path>
 git -C "$W" add proxy.go build.go storage_integrity_table_state.go storage_integrity_table_state_test.go
 git -C "$W" commit -m "feat(storage-integrity): Options.StorageIntegrityReplicaReads
 
 The host injects the in-flight counter of replica-served reads (spec
 2026-10-14 §11, clarification K44), and build.go hands it to
 sitablestate together with the table state rewrite reads, which the
-gate checks every counted read against, registering the gate's
+gate checks every counted read against after the counter's fence
+admitted it, registering the gate's
 complete and close hooks only then. Only an injected table state
 answers Replica, so the option is
 refused with the static table set or with storage integrity off.
 Unset, the chain is exactly today's.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git -C "$W" log -1 --format='%an <%ae>'
 ```
+
+Expected: `poetry <chen@sentio.xyz>`.
 
 - [ ] **Step 22: Document the Replica status and the counter**
 
@@ -2283,10 +2625,10 @@ Each paragraph and bullet stays one line.
 - `:163` (`pkg/sitable` bullet):
   - replace "`Active`, `Gone` = Retiring/Purging), immutable versioned `Snapshot`" with "`Active`, `Gone` = Retiring/Purging, `Replica` = another SI indexer's table this host serves read-only from its member's copy `hg_replica.<CopyTable>` while that owner is quarantined or unreachable (spec 2026-10-14 §11; the entry carries the owner's registry schema and hash, `CopyTable` and `ReplicaOf`, and `Schema(id)` misses it)), immutable versioned `Snapshot`";
   - replace "`Active()` sorted," with "`Active()` sorted, `Served()` the Replica tables sorted (`ServedDatabases` gives their databases; `Static` serves none),";
-  - replace "`TableState{Current, Changed}`, `sitable.Static`" with "`TableState{Current, Changed}`, `ReplicaReads` (the host-injected per-database count of in-flight queries that read a copy: `Begin` with an idempotent end, `InFlight`, `Counts`; a nil counter counts nothing), `sitable.Static`".
+  - replace "`TableState{Current, Changed}`, `sitable.Static`" with "`TableState{Current, Changed}`, `ReplicaReads` (the host-injected per-database count of in-flight queries that read a copy: `Begin` with an idempotent end, `InFlight`, `Counts`, and the host's admission fence per database, `ServeUntil` its local lease deadline minus `serve.HostDeadlineMargin` or the zero time to close it, which `Admit` checks and counts under one lock; a database is closed until first opened; a nil counter counts and admits nothing), `sitable.Static`".
 - `:172` (`pkg/plugins/` bullet):
   - in the `sistatement` clause replace "`{status, refused_code, refused_reason, schema_json, schema_hash, registry_version}`" with "`{status, refused_code, refused_reason, schema_json, schema_hash, registry_version}` (and, for status `replica` only, `replica_of`, `served_from`, `owner_entry`, `frozen_since`)";
-  - in the `sitablestate` clause replace "metadata statements, `DROP TABLE` and same-name `CREATE` pass for Pending and Refused tables." with "metadata statements, `DROP TABLE` and same-name `CREATE` pass for Pending and Refused tables. A Replica table (spec 2026-10-14 §11) admits reads and metadata only: every write, same-name `CREATE`, data-carrying creation, `DROP`, `ALTER`/`RENAME` and materialized-view `TO` target is refused with code 392 `storage_integrity: table <id> is served read-only from a copy of indexer <n>'s published data; write through its owner`. With `ReplicaReads` set (then also a complete and close plugin), each allowed query that accesses a Replica table counts one in-flight read per database until its `OnQueryComplete` or `OnClose`, and is admitted only while the gate's `TableState` still serves its Replica tables from the copies it was planned against (otherwise 733 `storage_integrity: table <id> is no longer served from the copy this query was planned against; retry the query (retryable)`), so the host releases a serving lease only once the database's reads have drained and no read of the copy can start.".
+  - in the `sitablestate` clause replace "metadata statements, `DROP TABLE` and same-name `CREATE` pass for Pending and Refused tables." with "metadata statements, `DROP TABLE` and same-name `CREATE` pass for Pending and Refused tables. A Replica table (spec 2026-10-14 §11) admits reads and metadata only: every write, same-name `CREATE`, data-carrying creation, `DROP`, `ALTER`/`RENAME` and materialized-view `TO` target is refused with code 392 `storage_integrity: table <id> is served read-only from a copy of indexer <n>'s published data; write through its owner`. With `ReplicaReads` set (then also a complete and close plugin), each allowed query that accesses a Replica table counts one in-flight read per database until its `OnQueryComplete` or `OnClose`, and is admitted only through `ReplicaReads.Admit` while the host's fence of each such database is open and then only while the gate's `TableState` still serves its Replica tables from the copies it was planned against (otherwise 733 `storage_integrity: table <id> is no longer served from the copy this query was planned against; retry the query (retryable)`), so the host releases a serving lease only once the database's reads have drained and no read of the copy can start.".
 
 `README.md:195` (Dynamic table state):
 - replace "`Active` (reads served from `hg_safe` / `hg_unsafe`, writes only through the signed lane) and `Gone` (retiring or being purged)." with "`Active` (reads served from `hg_safe` / `hg_unsafe`, writes only through the signed lane), `Gone` (retiring or being purged) and `Replica` (a table another SI indexer of the network owns that this host serves read-only from its member's verified copy while that owner is quarantined or unreachable; reads and metadata only, spec 2026-10-14 §11).";
@@ -2356,7 +2698,7 @@ Expected: the five commits of Steps 6, 11, 16, 21 and 23, newest first:
 <hash> feat(sitable): the Replica status, Served() and the replica-read counter
 ```
 
-and the summary line ` 24 files changed, 1193 insertions(+), 41 deletions(-)` (the nine files of Step 6, five of Step 11, three of Step 16, four of Step 21 and three of Step 23; the drafted 1017 insertions plus the 176 net lines of review round 1's read admission in Steps 12, 14, 17 and 19, all inside lines this task adds; the counts hold when `HG_TAG_P1` has exactly the base this task was drafted on, see Base and anchors). Do not push: Task 43 continues on this branch.
+and the summary line ` 24 files changed, 1508 insertions(+), 41 deletions(-)` (the nine files of Step 6, five of Step 11, three of Step 16, four of Step 21 and three of Step 23; the drafted 1017 insertions plus the 176 net lines of review round 1's read admission in Steps 12, 14, 17 and 19 and the 315 net lines of review round 2's admission fence in Steps 2, 4, 12, 14, 17 and 19, all inside lines this task adds; the counts hold when `HG_TAG_P1` has exactly the base this task was drafted on, see Base and anchors). Do not push: Task 43 continues on this branch.
 
 ---
 
@@ -14221,13 +14563,13 @@ Expected: `CORE_TAG_P3=<the value written>`. Anything else (for example the plan
 
 ## Task 46: sentio-node — pin HG_TAG_P3 and CORE_TAG_P3; Replica entries, the serving-lease client and the info fields on the host; the si-member serving endpoint; `storage-integrity member-serving`; release SN_COMMIT_P3 / SN_DIGEST_P3 (S3-C4)
 
-Contract §31 (binding), §29.1 and §29.3 (the housegate names this task consumes), §30 (the arbiter-core names), §32.7 (ledger); spec §11 (serving conditions, the lease, host status, the agent's `replica_hosts`), §15 (sentio-node: the `Replica` status from the member's endpoint), §16 P3; clarifications K44 (the lease and in-flight reads), K45 (what a Replica entry and its status carry), K47 (the lockstep pins), K50 (`replica_hosts` before placement); decision D29 (the member-status token has its own Secret and is never read from a file). sentio-node pins Tasks 44's and 45's releases and becomes both sides of P3: the host that answers a peer owner's tables `replica` while its member serves them, and the si-member that serves them. (1) **Pins:** housegate `HG_TAG_P3` and arbiter-core `CORE_TAG_P3` three times each (`go.mod`, `bazel_dep`, `git_override` with its `# Resolved …` comment), in one commit with the table state's `Snapshot.Served()`, which `HG_TAG_P3`'s `sitable.Snapshot` requires; arbiter-proto unchanged. (2) **Host config:** `storage_integrity.replica_reads.member_status_url` (an `http://host:port`; empty is today's host), the token only from `STORAGE_INTEGRITY_MEMBER_STATUS_TOKEN`, a `member_status_token` key refused whatever its value. (3) **Member config:** `storage_integrity.member.serve` in the si-member's own file (Plan S3-C2 Task 35's `config/si_member.go`), every zero value taking `member/serve`'s default; `serve.token` refused; the endpoint exists whenever the token is set and `enabled` only turns serving on. (4) **Table state:** a database the member serves under a lease answers `replica` for exactly the registry's Active incarnations of it, all or nothing, never in a governed database; every refresh reads the lease client, failing chain read included, so a lease past its deadline ends its entries on time; the status method's four K45 fields; `ReplicaHosts`; the replica series. (5) **Lease client** `storageintegrityadapter/replicalease`: poll, acquire, renew at a third of the TTL, stop answering `serve.HostDeadlineMargin` before the local deadline, release only after a published snapshot no longer serves the database and HouseGate has no replica read of it in flight. (6) **Wiring:** `standalone` builds the member client, HouseGate's `sitable.ReplicaReads` and the lease client; `sentio_getStorageIntegrityInfo` answers `replica_databases` and `replica_hosts`; `sentio-node storage-integrity member-serving`; the si-member serves its role's endpoint on `serve.listen`. (7) **Acceptance:** two ClickHouse-gated tests run a real `member/serve` endpoint, this host's lease client and table state and the embedded HouseGate over a real `hg_replica` copy, and CI's acceptance step runs them. Then the release `SN_COMMIT_P3` / `SN_DIGEST_P3`, which Task 47 allowlists as `DEVNET2_P3_HOST_IMAGE` and Task 48 rolls as both the host image and the member image.
+Contract §31 (binding), §29.1 and §29.3 (the housegate names this task consumes), §30 (the arbiter-core names), §32.7 (ledger); spec §11 (serving conditions, the lease, host status, the agent's `replica_hosts`), §15 (sentio-node: the `Replica` status from the member's endpoint), §16 P3; clarifications K44 (the lease and in-flight reads), K45 (what a Replica entry and its status carry), K47 (the lockstep pins), K50 (`replica_hosts` before placement); decision D29 (the member-status token has its own Secret and is never read from a file). sentio-node pins Tasks 44's and 45's releases and becomes both sides of P3: the host that answers a peer owner's tables `replica` while its member serves them, and the si-member that serves them. (1) **Pins:** housegate `HG_TAG_P3` and arbiter-core `CORE_TAG_P3` three times each (`go.mod`, `bazel_dep`, `git_override` with its `# Resolved …` comment), in one commit with the table state's `Snapshot.Served()`, which `HG_TAG_P3`'s `sitable.Snapshot` requires; arbiter-proto unchanged. (2) **Host config:** `storage_integrity.replica_reads.member_status_url` (an `http://host:port`; empty is today's host), the token only from `STORAGE_INTEGRITY_MEMBER_STATUS_TOKEN`, a `member_status_token` key refused whatever its value. (3) **Member config:** `storage_integrity.member.serve` in the si-member's own file (Plan S3-C2 Task 35's `config/si_member.go`), every zero value taking `member/serve`'s default; `serve.token` refused; the endpoint exists whenever the token is set and `enabled` only turns serving on. (4) **Table state:** a database the member serves under a lease answers `replica` for exactly the registry's Active incarnations of it, all or nothing, never in a governed database; every refresh reads the lease client after its chain-state read, failing or not, so a lease past its deadline ends its entries and a refresh that blocked never publishes them; the status method's four K45 fields; `ReplicaHosts`; the replica series. (5) **Lease client** `storageintegrityadapter/replicalease`: poll, acquire, renew at a third of the TTL, stop answering `serve.HostDeadlineMargin` before the local deadline, keep HouseGate's admission fence (`sitable.ReplicaReads.ServeUntil`) at that moment and close it at every drop, release only after a published snapshot no longer serves the database and HouseGate has no replica read of it in flight. (6) **Wiring:** `standalone` builds the member client, HouseGate's `sitable.ReplicaReads` and the lease client; `sentio_getStorageIntegrityInfo` answers `replica_databases` and `replica_hosts`; `sentio-node storage-integrity member-serving`; the si-member serves its role's endpoint on `serve.listen`. (7) **Acceptance:** two ClickHouse-gated tests run a real `member/serve` endpoint, this host's lease client and table state and the embedded HouseGate over a real `hg_replica` copy, and CI's acceptance step runs them. Then the release `SN_COMMIT_P3` / `SN_DIGEST_P3`, which Task 47 allowlists as `DEVNET2_P3_HOST_IMAGE` and Task 48 rolls as both the host image and the member image.
 
 Nothing changes until it is configured (contract §29 "Inert by default"): without `member_status_url` there is no member client, no lease client, no in-flight counter for HouseGate, no replica series and no Replica entry; without the token the si-member builds `member.Config` with `Serve` nil and opens no serving listener. The only visible differences on an unconfigured host are additive: the label value `replica` of `sentio_node_storage_integrity_tables` (exported at 0) and the two always-present fields of `sentio_getStorageIntegrityInfo` (`replica_databases: []`, `replica_hosts` from the registry). Merging runs CI's `docker-push` only (`latest` and `sha-<SN_COMMIT_P3>`); this task never dispatches `Release Devnet` or `Release Testnet`, and neither may run on a commit containing `SN_COMMIT_P3` during this plan (the floating `:devnet` tag that the devnet2 observer and the testnet-v2 releases follow with `pullPolicy: Always` would move pods no runbook covers). Nothing on devnet2 changes in this task.
 
 **Files:**
 - Modify: `go.mod` (the housegate and arbiter-core requires, base `:9`, `:14`, at `HG_TAG_P1` and `CORE_TAG_P2` since Plan S3-C2 Task 35), `go.sum`, `MODULE.bazel` (`bazel_dep` `arbiter_core` and `housegate`, base `:12-19`; `git_override` `housegate` and `arbiter_core` with their `# Resolved …` comments, base `:29-41`), `MODULE.bazel.lock`
-- Modify: `storageintegrityadapter/tablestate/snapshot.go` (`Snapshot` base `:270-274`, `newSnapshot` `:278-287`, `Served` after `Active` `:298-304`; then `content` `:24-33`, the `build` doc `:46-52`, its end `:142-147`, `equal` `:248-267`), `model.go` (imports `:8-12`; `Inputs` `:202-218`; the new types after it), `state.go` (`Config` `:47-67`, `registryInput` `:69-74`, `Refresh` `:183-216`, `buildAndPublish` `:218-228`, `applyRegistryWithoutChain` `:230-259`), `status.go` (`:10-34`), `metrics.go` (`:11-80`, new methods after `Register`), `BUILD.bazel` (`go_library` srcs `:10-11`; `go_test` srcs and deps `:30-45`), each as Plan S3-B Task 12 left it (K11: a held Active table keeps its schema)
+- Modify: `storageintegrityadapter/tablestate/snapshot.go` (`Snapshot` base `:270-274`, `newSnapshot` `:278-287`, `Served` after `Active` `:298-304`; then `content` `:24-33`, the `build` doc `:46-52`, its end `:142-147`, `equal` `:248-267`), `model.go` (imports `:8-12`; `Inputs` `:202-218`; the new types after it), `state.go` (`Config` `:47-67`, `registryInput` `:69-74`, `Refresh` `:184-217` and a helper after it, `buildAndPublish` `:218-228`, `applyRegistryWithoutChain` `:230-259`), `status.go` (`:10-34`), `metrics.go` (`:11-80`, new methods after `Register`), `BUILD.bazel` (`go_library` srcs `:10-11`; `go_test` srcs and deps `:30-45`), each as Plan S3-B Task 12 left it (K11: a held Active table keeps its schema)
 - Create: `storageintegrityadapter/tablestate/replica.go`
 - Test: `storageintegrityadapter/tablestate/replica_test.go` (new, package `tablestate`), `storageintegrityadapter/tablestate/replica_lease_test.go` (new, package `tablestate_test`)
 - Create: `storageintegrityadapter/replicalease/client.go`, `storageintegrityadapter/replicalease/BUILD.bazel`, `storageintegrityadapter/replicalease/replicaleasetest/member.go`, `storageintegrityadapter/replicalease/replicaleasetest/BUILD.bazel`
@@ -14250,21 +14592,22 @@ Nothing changes until it is configured (contract §29 "Inert by default"): witho
 - Leave unchanged: `commands/BUILD.bazel` (no new import), `main.go`, `Dockerfile`, the drift step and the `@arbiter_core//snode:snode_test` step of `ci.yml`, Plan S3-C2 Task 35's `si-member install acceptance` step, `storageintegrityadapter/tablestate/arbitercore.go` (the registry mapping is unchanged: Replica comes from the lease client, not the registry), `standalone`'s source-shape allowlist `storageIntegrityReadOnlyMethods` (`Run` reads `si.ReplicaReads.MemberStatusURL`, a field, and calls no new method on `si`)
 
 **Interfaces:**
-- Consumes (`HG_TAG_P3`, contract §29.1 and §29.3, verbatim): `sitable.Replica` (`String()` `"replica"`), `sitable.Table.CopyTable string` and `ReplicaOf uint64`, `Snapshot.Served() []Table` in the `sitable.Snapshot` interface, `func sitable.ServedDatabases(s Snapshot) []string`, `func sitable.CopyTable(id string, incarnationSeq uint64) string` (S3-C1 §16), `sitable.ReplicaDatabase` (`"hg_replica"`, S3-A); `type sitable.ReplicaReads`, `func sitable.NewReplicaReads() *ReplicaReads`, `(*ReplicaReads).Begin(databases []string) (end func())`, `InFlight(database string) int`, `Counts() map[string]int`; `registry.TableStatusReplica = "replica"`, `registry.TableStatus.ReplicaOf *uint64`, `ServedFrom string`, `OwnerEntry *registry.OwnerEntry`, `FrozenSince int64` (all `omitempty`), `type registry.OwnerEntry struct{ IndexerID, SafeBlockSeq, AppliedPromotionSeq uint64 }`; `registry.StorageIntegrityInfo.ReplicaDatabases []string` and `ReplicaHosts map[string][]uint64` (Task 44, used by the RPC test's decode); `housegate.Options.StorageIntegrityReplicaReads *sitable.ReplicaReads`, refused without `StorageIntegrityTableState`; `sitablestate`'s Replica rows (the write refusal `storage_integrity: table %s is served read-only from a copy of indexer %d's published data; write through its owner`, 392) and in-flight counting, which the ClickHouse tests observe through the embedded HouseGate. `HG_TAG_P3`'s `go.mod` keeps arbiter-proto at or below `PROTO_TAG`.
+- Consumes (`HG_TAG_P3`, contract §29.1 and §29.3, verbatim): `sitable.Replica` (`String()` `"replica"`), `sitable.Table.CopyTable string` and `ReplicaOf uint64`, `Snapshot.Served() []Table` in the `sitable.Snapshot` interface, `func sitable.ServedDatabases(s Snapshot) []string`, `func sitable.CopyTable(id string, incarnationSeq uint64) string` (S3-C1 §16), `sitable.ReplicaDatabase` (`"hg_replica"`, S3-A); `type sitable.ReplicaReads`, `func sitable.NewReplicaReads() *ReplicaReads`, `func sitable.NewReplicaReadsWithClock(now func() time.Time) *ReplicaReads`, `(*ReplicaReads).Begin(databases []string) (end func())`, `InFlight(database string) int`, `Counts() map[string]int`, `ServeUntil(database string, until time.Time)`, `Admit(databases []string) (end func(), closed string)` (the admission fence of review round 2); `registry.TableStatusReplica = "replica"`, `registry.TableStatus.ReplicaOf *uint64`, `ServedFrom string`, `OwnerEntry *registry.OwnerEntry`, `FrozenSince int64` (all `omitempty`), `type registry.OwnerEntry struct{ IndexerID, SafeBlockSeq, AppliedPromotionSeq uint64 }`; `registry.StorageIntegrityInfo.ReplicaDatabases []string` and `ReplicaHosts map[string][]uint64` (Task 44, used by the RPC test's decode); `housegate.Options.StorageIntegrityReplicaReads *sitable.ReplicaReads`, refused without `StorageIntegrityTableState`; `sitablestate`'s Replica rows (the write refusal `storage_integrity: table %s is served read-only from a copy of indexer %d's published data; write through its owner`, 392) and in-flight counting, which the ClickHouse tests observe through the embedded HouseGate; `sitablestate.Plugin{ReplicaReads, TableState}`, its `OnQuery`/`OnQueryComplete`, `sitablestate.CodeRetryable` and the read-admission refusal `storage_integrity: table %s is no longer served from the copy this query was planned against; retry the query (retryable)` (733), which the table-state regression of review round 2 drives directly, with `chsession.New`, `plugin.QueryContext`, `chproto.Query`, `chproto.ClientError` and `sqlmeta.AccessedTable`. `HG_TAG_P3`'s `go.mod` keeps arbiter-proto at or below `PROTO_TAG`.
 - Consumes (`CORE_TAG_P3`, contract §30, verbatim): package `github.com/sentioxyz/arbiter-core/member/serve` (Bazel `@arbiter_core//member/serve`): `type Config struct{ Enabled bool; Token string; OwnerUnreachableAfter, OwnerProbeInterval, LeaseTTL, PollInterval time.Duration; OwnerHouseGate map[uint64]string }`, `DefaultOwnerUnreachableAfter`, `MinOwnerUnreachableAfter`, `DefaultOwnerProbeInterval`, `DefaultLeaseTTL`, `MinLeaseTTL`, `HostDeadlineMargin` (3 s), `DefaultListen` (`":9096"`); `type Deps struct{ Registry dataplane.RegistryView; Published Published; Copies Copies; Dial …; Now func() time.Time; Metrics *Metrics; Logger *slog.Logger }` (Task 45 also gives it `NodeID string`, answered as `ServingView.NodeID`; the acceptance leaves it empty), `Published`, `Copies`, `OwnerDatabase`, `DatabaseCopy`, `TableCopy`, `TableCondition` with `ConditionInstalled`, `type Reason string` (the closed set of §30.2, used here only as string values), `func New(cfg Config, deps Deps) (*Server, error)`, `(*Server).Run`, `Handler`, `Serving`; `ServingView`, `DatabaseView`, `ServedTable`, `LeaseView` with the JSON tags of §30.3; `func NewClient(baseURL, token string, httpClient *http.Client) (*Client, error)`, `(*Client).Serving`, `Acquire`, `Renew`, `Release`, `type Lease struct{ ID string; TTL time.Duration }`, `ErrLeaseRevoked`, `ErrNotServed`, `ErrUnauthorized`; `func NewMetrics() *Metrics`, `(*Metrics).Register(prometheus.Registerer) error` (series `sentio_node_si_member_serve_*`). Package `member`: `Config.Serve *serve.Config`, `(*Role).ServeHandler() http.Handler`, `Serving() serve.ServingView`, `ServeMetrics() *serve.Metrics` (nil handler and nil metrics without `Config.Serve`). `CORE_TAG_P3`'s `go.mod` requires housegate `HG_TAG_P1` and arbiter-proto `PROTO_TAG` (contract §30.1), and `TestHandlePromote_PostReplaceFailureRestartRetryConverges`, which this repository's CI runs from `@arbiter_core//snode:snode_test`, still exists.
 - Consumes (sentio-node at `SN_COMMIT_P2`): Plan S3-B Task 12's `StorageIntegrityClickhousePasswordEnv`, `validateClickhouseLogin`, `refuseStorageIntegrityClickhousePasswordKey`, `yamlMappingValues(node *yaml.Node, key string) []*yaml.Node`, the K11 table state (a held Active table answers Pending with its schema), the owner-audit runtime field `ownerAudit` and its registration in `registerMetrics`; Plan S3-C1 Task 25's `StorageIntegrityConfig.Backup`, `refuseStorageIntegrityBackupKeys`, `newBackupCommand`, `newRestoreDrillCommand`; Plan S3-C2 Task 35's `config.SIMemberConfig`, `StorageIntegrityMemberConfig`, `LoadSIMemberConfig`, `loadSIMemberConfig`, `refuseSIMemberSecretKeys`, `(SIMemberConfig).Validate`, `(SIMemberConfig).MemberConfig`, the test helpers `siMemberMinimalYAML`, `loadSIMemberText`, `clearSIMemberEnv`, package `simember` with `run`, `runDeps{openClickHouse, newRole, listen, started}`, `siMemberRole`, `defaultRunDeps`, `newSIMemberCollector`, and its test helpers `fakeSIMemberRole`, `newFakeSIMemberRole`, `startDisabledTableRegistry`, `loadSIMemberRunTestConfig`, `httpGet`; existing table-state test helpers `outageRegistry`, `outageDatabases`, `newOutageHost`, `newFakeRegistry`, `capturingLogger`, `testLogger`, `schemaFor`, `chainInc`, `activeIDs`, `siDatabase`, `activation`, `testNetwork`; standalone fixtures `newScriptedRegistryFollower`, `scriptedRegistryFollower`, `activeTenantRegistry`, `testTableStateDeps`, `newTestTableStateRuntime`, `fixedDatabaseInfos`, `newStartupTransaction`, `gatheredMetricNames`, `storageIntegrityHostMetricNames`, the AST helpers `readStandaloneSource`, `namedFunction`, `identifierCall`, `nodeContains`, `nestedSelectorExpression`, `selectorCall`, `compositeFieldValues`, `identifierExpression`, and the acceptance harness `requireStorageIntegrityCHAcceptance`, `openStorageIntegrityAcceptanceConn`, `startStorageIntegrityAcceptanceProxy`, `storageIntegrityAcceptanceProxyConfig`, `storageIntegrityAcceptanceRewriter`, `dialStorageIntegritySession`, `quoteSmokeIdentifier`, `throttlingSNodeRole`, `acceptanceStatementSubmitter`, `acceptanceStatusQuerier`, `acceptancePayloadWriter`, `acceptanceMergeGuard`; rpc test helpers `fixedStorageIntegrityInfo`, `getInfo`, `serveForTest`, `callStorageRPC`.
-- Produces (contract §31, verbatim): `config.StorageIntegrityConfig.ReplicaReads StorageIntegrityReplicaReads` (`yaml:"replica_reads"`), `type config.StorageIntegrityReplicaReads struct{ MemberStatusURL string \`yaml:"member_status_url"\` }`, `const config.StorageIntegrityMemberStatusTokenEnv = "STORAGE_INTEGRITY_MEMBER_STATUS_TOKEN"` and the four host refusals of §31.2; `StorageIntegrityMemberConfig.Serve StorageIntegrityMemberServe` (`yaml:"serve"`), `type config.StorageIntegrityMemberServe struct{ Enabled bool; Listen string; OwnerUnreachableAfter, OwnerProbeInterval, LeaseTTL time.Duration; OwnerHouseGate map[uint64]string }` with the YAML keys of §31.3 and its seven refusals; `simember.siMemberServe(cfg config.StorageIntegrityMemberServe, token string, role siMemberRole) (*http.Server, error)` (contract issue: its role parameter is the `siMemberRole` interface, not `*member.Role`, see the Notes); `tablestate.ReplicaTable`, `ReplicaDatabase`, `ReplicaSource`, `Inputs.Replicas`, `Config.Replicas`, `(*Snapshot).Served`, `func tablestate.ReplicaHosts(r Registry) map[string][]uint64`, the series `sentio_node_storage_integrity_tables{status="replica"}`, `sentio_node_storage_integrity_replica_serving{database}`, `sentio_node_storage_integrity_member_status_up`, `sentio_node_storage_integrity_replica_reads_in_flight{database}`, `sentio_node_storage_integrity_replica_lease_releases_total{outcome}` (`released`, `expired`); `replicalease.Config{Member, InFlight, Refresh, Now, PollInterval, Metrics, Logger}`, `DefaultPollInterval = time.Second`, `func New(cfg Config) (*Client, error)`, `(*Client).Run`, `(*Client).Serving`; `rpc.StorageIntegrityInfo.ReplicaDatabases` (`json:"replica_databases"`) and `ReplicaHosts` (`json:"replica_hosts"`), always present; `sentio-node storage-integrity member-serving` (`newMemberServingCommand`) and its refusal `storage_integrity.replica_reads.member_status_url is not set: this host has no member to ask`; the 24 named tests of §31.8; the CI filter and count; release `SN_COMMIT_P3`, `SN_DIGEST_P3` (the rows `` | `SN_COMMIT_P3` | `<40 hex>` | Task 46 | `` and `` | `SN_DIGEST_P3` | `sha256:<64 hex>` | Task 46 | `` and the run record `sentio-node release` of this plan's Appendix C, Step 23).
-- Produces (added here, Appendix B): package `config`: `(StorageIntegrityReplicaReads).validate(token string) error`, `isHTTPHostPortURL`, `refuseStorageIntegrityMemberStatusTokenKey(data []byte) error`, `(StorageIntegrityMemberServe).ListenAddr() string`, `(StorageIntegrityMemberServe).ServeConfig(token string) *serve.Config` (nil without a token; every default applied; its own copy of the owner map), unexported `validate`, `ownerUnreachableAfter`, `ownerProbeInterval`, `leaseTTL`, `isListenAddress`, `isHostPort`, `refuseSIMemberServeTokenKey(data []byte) error`, the file `config/si_member_serve.go`. Package `tablestate`: `const LeaseReleased = "released"`, `LeaseExpired = "expired"`, `(*Metrics).RegisterReplicaReads(reg prometheus.Registerer) error`, `ObserveMemberStatus(up bool)`, `ObserveLeaseRelease(outcome string)`, unexported `leaseOutcomes`, `replicaEntries`, `replicasEqual`, `sortReplicaTables`, `content.replicas`, `registryInput.replicas`, `Snapshot.served`, the Issue reasons `not served from the member's copy: …` (this host governs the database; the member names this host's own indexer %d as the owner; the member lists no table; table %s is owned by indexer %d, not %d; the member lists %s, which has no Active incarnation of indexer %d in the registry; the member lists %s twice; the member's copy of %s is incarnation %d, the registry's Active one is %d; … has schema hash %s, the registry's is %s; … is %s, not %s; the member does not list %s, an Active table of indexer %d; table %s: %v), the log line `storage-integrity table state applied a replica-serving change to the last chain-state read because the chain-state read is failing`, the file `replica.go`. Package `replicalease`: `type Client`, the refusals `replicalease: the member status client is required`, `replicalease: the in-flight replica-read counter is required`, `replicalease: the table-state refresh is required`, the log lines `storage-integrity member serving endpoint is unreachable; replica leases end at their deadline`, `storage-integrity member serving endpoint answers again`, `storage-integrity replica lease acquired; serving the database from the member's copy`, `storage-integrity replica lease not acquired`, `storage-integrity replica lease renew failed; serving until its deadline`, `storage-integrity replica lease dropped; the database is no longer answered from the member's copy` (reasons `lease deadline`, `no longer served`, `lease unknown to the member`, `lease revoked`), `storage-integrity replica lease release failed; retrying until its deadline`, `storage-integrity replica lease ended`, `storage-integrity replica leases refreshed the table state, which reported an error`; the test-support package `replicaleasetest` (`Member`, `NewMember(t testing.TB, token string, ttl time.Duration) *Member`, `URL`, `Serve`, `StopServing`, `Forget`, `Close`, `Calls`, `Held`). Package `standalone`: deps field `replicaMember *serve.Client`, runtime fields `replicaReads` and `leases`, `(*storageIntegrityTableStateRuntime).replicaReadsCounter() *sitable.ReplicaReads`, `newStorageIntegrityMemberClient(memberStatusURL string) (*serve.Client, error)`, `storageIntegrityMemberClientTimeout` (5 s), `func PrintStorageIntegrityMemberServing(ctx context.Context, cfg *config.Config, out io.Writer) error`, `storageIntegrityReplicaCollector`, `newStorageIntegrityReplicaCollector`, the task name `storage integrity replica leases`, the errors `storage integrity member status client: %w`, `storage-integrity replica leases: %w`, `register storage-integrity replica-read metrics: %w`, `member-serving requires a config`, `member-serving: %w`, `member-serving: read the serving view of %s: %w`, the help texts of the two collector series. Package `commands`: the command's `Short` and `Long`. Package `simember`: `siMemberRole` gains `ServeHandler() http.Handler` and `ServeMetrics() *serve.Metrics`, `runDeps.serving func(addr net.Addr)`, `prepareSIMemberServing`, the errors `si-member serve: STORAGE_INTEGRITY_MEMBER_STATUS_TOKEN is empty`, `si-member serve: the member role has no serving endpoint`, `si-member serve metrics: %w`, `si-member serving listener %s: %w`, the exit part `serving endpoint`, the log lines `si-member serving endpoint listening` and `shut down the si-member serving endpoint`. Tests beyond §31.8: `TestLeaseIsReleasedRightAfterTheSnapshotThatDropsTheDatabase`, `TestNewRefusesAnIncompleteConfig` (replicalease), `TestStorageIntegrityCommandOffersMemberServing` (commands). Test-only names: `fakeReplicas`, `replicaFrozenSince`, `replicaOf`, `replicaHost` (tablestate); `leaseNetwork`, `leaseToken`, `leaseOwner`, `leaseSelf`, `leaseDatabase`, `leaseTTL`, `leaseRegistry`, `leaseChain`, `leaseReadiness`, `leaseClock`, `leaseSchema`, `leaseRegistryView`, `leaseHost`, `startLeaseHost` (tablestate_test); `testToken`, `testDatabase`, `testSnapshot`, `testClock`, `testHost`, `newTestHost`, `servingView` (replicalease); `replicaTestToken`, `replicaTestDatabase`, `replicaTenantRegistry`, `replicaTestView`, `replicaTestDeps`, `storageIntegrityReplicaMetricNames`, `replicaSeries`, the acceptance harness fields `replicaState` and `replicaReads` with `replicaStateOf` and `(*storageIntegrityAcceptanceRewriter).replicaCopy`, `(*scriptedRegistryFollower).publish`, `replicaCHNetwork`, `replicaCHSelf`, `replicaCHOwner`, `replicaCHSeq`, `replicaCHToken`, `replicaCHSigner`, `replicaCHFeed`, `replicaCHCopies`, `replicaCHDatabase`, `replicaCHClock`, `replicaCHHost`, `startReplicaCHHost`, `createReplicaCHCopy` (standalone); `servingTestHandler`, `servingRun`, `startServingRun` and the fake role's fields `handler` and `serveMetrics` (simember). CI: the step name suffix `, replica reads`, the patterns `Test(StorageIntegrity|SIMember)`. The README subsection `### Storage-integrity replica reads (stage 3 P3)`. Local: the container `sn-s3c4-t46-ch`. The PR body file `~/src/remotesrc/claude/sentio-node/multi-source-s3c4.pr-body.md`; the run record `$HOME/.cache/s3-ledger/record-s3c4-46.md` and its state file `$HOME/.cache/s3-ledger/record-s3c4-46` (the ledger tool, the worktree `multi-source-s3c4-ledger-46` and the record commit are contract §32.7's).
+- Produces (contract §31, verbatim): `config.StorageIntegrityConfig.ReplicaReads StorageIntegrityReplicaReads` (`yaml:"replica_reads"`), `type config.StorageIntegrityReplicaReads struct{ MemberStatusURL string \`yaml:"member_status_url"\` }`, `const config.StorageIntegrityMemberStatusTokenEnv = "STORAGE_INTEGRITY_MEMBER_STATUS_TOKEN"` and the four host refusals of §31.2; `StorageIntegrityMemberConfig.Serve StorageIntegrityMemberServe` (`yaml:"serve"`), `type config.StorageIntegrityMemberServe struct{ Enabled bool; Listen string; OwnerUnreachableAfter, OwnerProbeInterval, LeaseTTL time.Duration; OwnerHouseGate map[uint64]string }` with the YAML keys of §31.3 and its seven refusals; `simember.siMemberServe(cfg config.StorageIntegrityMemberServe, token string, role siMemberRole) (*http.Server, error)` (contract issue: its role parameter is the `siMemberRole` interface, not `*member.Role`, see the Notes); `tablestate.ReplicaTable`, `ReplicaDatabase`, `ReplicaSource`, `Inputs.Replicas`, `Config.Replicas`, `(*Snapshot).Served`, `func tablestate.ReplicaHosts(r Registry) map[string][]uint64`, the series `sentio_node_storage_integrity_tables{status="replica"}`, `sentio_node_storage_integrity_replica_serving{database}`, `sentio_node_storage_integrity_member_status_up`, `sentio_node_storage_integrity_replica_reads_in_flight{database}`, `sentio_node_storage_integrity_replica_lease_releases_total{outcome}` (`released`, `expired`); `replicalease.Config{Member, InFlight, ServeUntil, Refresh, Now, PollInterval, Metrics, Logger}` (`ServeUntil func(database string, until time.Time)`, HouseGate's `sitable.ReplicaReads.ServeUntil`, added by review round 2), `DefaultPollInterval = time.Second`, `func New(cfg Config) (*Client, error)`, `(*Client).Run`, `(*Client).Serving`; `rpc.StorageIntegrityInfo.ReplicaDatabases` (`json:"replica_databases"`) and `ReplicaHosts` (`json:"replica_hosts"`), always present; `sentio-node storage-integrity member-serving` (`newMemberServingCommand`) and its refusal `storage_integrity.replica_reads.member_status_url is not set: this host has no member to ask`; the 24 named tests of §31.8; the CI filter and count; release `SN_COMMIT_P3`, `SN_DIGEST_P3` (the rows `` | `SN_COMMIT_P3` | `<40 hex>` | Task 46 | `` and `` | `SN_DIGEST_P3` | `sha256:<64 hex>` | Task 46 | `` and the run record `sentio-node release` of this plan's Appendix C, Step 23).
+- Produces (added here, Appendix B): package `config`: `(StorageIntegrityReplicaReads).validate(token string) error`, `isHTTPHostPortURL`, `refuseStorageIntegrityMemberStatusTokenKey(data []byte) error`, `(StorageIntegrityMemberServe).ListenAddr() string`, `(StorageIntegrityMemberServe).ServeConfig(token string) *serve.Config` (nil without a token; every default applied; its own copy of the owner map), unexported `validate`, `ownerUnreachableAfter`, `ownerProbeInterval`, `leaseTTL`, `isListenAddress`, `isHostPort`, `refuseSIMemberServeTokenKey(data []byte) error`, the file `config/si_member_serve.go`. Package `tablestate`: `const LeaseReleased = "released"`, `LeaseExpired = "expired"`, `(*Metrics).RegisterReplicaReads(reg prometheus.Registerer) error`, `ObserveMemberStatus(up bool)`, `ObserveLeaseRelease(outcome string)`, unexported `leaseOutcomes`, `replicaEntries`, `replicasEqual`, `sortReplicaTables`, `content.replicas`, `registryInput.replicas`, `Snapshot.served`, `(*State).replicaServing`, the Issue reasons `not served from the member's copy: …` (this host governs the database; the member names this host's own indexer %d as the owner; the member lists no table; table %s is owned by indexer %d, not %d; the member lists %s, which has no Active incarnation of indexer %d in the registry; the member lists %s twice; the member's copy of %s is incarnation %d, the registry's Active one is %d; … has schema hash %s, the registry's is %s; … is %s, not %s; the member does not list %s, an Active table of indexer %d; table %s: %v), the log line `storage-integrity table state applied a replica-serving change to the last chain-state read because the chain-state read is failing`, the file `replica.go`. Package `replicalease`: `type Client`, the refusals `replicalease: the member status client is required`, `replicalease: the in-flight replica-read counter is required`, `replicalease: the replica-read admission fence is required`, `replicalease: the table-state refresh is required`, the log lines `storage-integrity member serving endpoint is unreachable; replica leases end at their deadline`, `storage-integrity member serving endpoint answers again`, `storage-integrity replica lease acquired; serving the database from the member's copy`, `storage-integrity replica lease not acquired`, `storage-integrity replica lease renew failed; serving until its deadline`, `storage-integrity replica lease dropped; the database is no longer answered from the member's copy` (reasons `lease deadline`, `no longer served`, `lease unknown to the member`, `lease revoked`), `storage-integrity replica lease release failed; retrying until its deadline`, `storage-integrity replica lease ended`, `storage-integrity replica leases refreshed the table state, which reported an error`; the test-support package `replicaleasetest` (`Member`, `NewMember(t testing.TB, token string, ttl time.Duration) *Member`, `URL`, `Serve`, `StopServing`, `Forget`, `Close`, `Calls`, `Held`). Package `standalone`: deps field `replicaMember *serve.Client`, runtime fields `replicaReads` and `leases`, `(*storageIntegrityTableStateRuntime).replicaReadsCounter() *sitable.ReplicaReads`, `newStorageIntegrityMemberClient(memberStatusURL string) (*serve.Client, error)`, `storageIntegrityMemberClientTimeout` (5 s), `func PrintStorageIntegrityMemberServing(ctx context.Context, cfg *config.Config, out io.Writer) error`, `storageIntegrityReplicaCollector`, `newStorageIntegrityReplicaCollector`, the task name `storage integrity replica leases`, the errors `storage integrity member status client: %w`, `storage-integrity replica leases: %w`, `register storage-integrity replica-read metrics: %w`, `member-serving requires a config`, `member-serving: %w`, `member-serving: read the serving view of %s: %w`, the help texts of the two collector series. Package `commands`: the command's `Short` and `Long`. Package `simember`: `siMemberRole` gains `ServeHandler() http.Handler` and `ServeMetrics() *serve.Metrics`, `runDeps.serving func(addr net.Addr)`, `prepareSIMemberServing`, the errors `si-member serve: STORAGE_INTEGRITY_MEMBER_STATUS_TOKEN is empty`, `si-member serve: the member role has no serving endpoint`, `si-member serve metrics: %w`, `si-member serving listener %s: %w`, the exit part `serving endpoint`, the log lines `si-member serving endpoint listening` and `shut down the si-member serving endpoint`. Tests beyond §31.8: `TestLeaseIsReleasedRightAfterTheSnapshotThatDropsTheDatabase`, `TestLeaseClientFencesReplicaReadsAtItsLocalDeadline`, `TestNewRefusesAnIncompleteConfig` (replicalease), `TestAFreshReplicaReadIsRefusedAfterTheLeaseDeadlineWhileTheChainReadBlocks` (tablestate, review round 2), `TestStorageIntegrityCommandOffersMemberServing` (commands). Test-only names: `fakeReplicas`, `replicaFrozenSince`, `replicaOf`, `replicaHost` (tablestate); `leaseNetwork`, `leaseToken`, `leaseOwner`, `leaseSelf`, `leaseDatabase`, `leaseTTL`, `leaseRegistry`, `leaseChain` (with `hang`), `leaseReadiness`, `leaseClock`, `leaseSchema`, `leaseRegistryView`, `leaseHost` (with the fields `reads` and `stopLeases` and the method `read`), `startLeaseHost` (tablestate_test); `testToken`, `testDatabase`, `testSnapshot`, `testClock`, `testHost` (with the field `reads` and the method `admitted`), `newTestHost`, `servingView` (replicalease); `replicaTestToken`, `replicaTestDatabase`, `replicaTenantRegistry`, `replicaTestView`, `replicaTestDeps`, `storageIntegrityReplicaMetricNames`, `replicaSeries`, the acceptance harness fields `replicaState` and `replicaReads` with `replicaStateOf` and `(*storageIntegrityAcceptanceRewriter).replicaCopy`, `(*scriptedRegistryFollower).publish`, `replicaCHNetwork`, `replicaCHSelf`, `replicaCHOwner`, `replicaCHSeq`, `replicaCHToken`, `replicaCHSigner`, `replicaCHFeed`, `replicaCHCopies`, `replicaCHDatabase`, `replicaCHClock`, `replicaCHHost`, `startReplicaCHHost`, `createReplicaCHCopy` (standalone); `servingTestHandler`, `servingRun`, `startServingRun` and the fake role's fields `handler` and `serveMetrics` (simember). CI: the step name suffix `, replica reads`, the patterns `Test(StorageIntegrity|SIMember)`. The README subsection `### Storage-integrity replica reads (stage 3 P3)`. Local: the container `sn-s3c4-t46-ch`. The PR body file `~/src/remotesrc/claude/sentio-node/multi-source-s3c4.pr-body.md`; the run record `$HOME/.cache/s3-ledger/record-s3c4-46.md` and its state file `$HOME/.cache/s3-ledger/record-s3c4-46` (the ledger tool, the worktree `multi-source-s3c4-ledger-46` and the record commit are contract §32.7's).
 
 Notes:
 - **Lockstep pins (K47).** `HG_TAG_P3`'s `sitable.Snapshot` gains `Served()`, which only sentio-node's table state implements outside housegate, so after the pin `go build` fails with `*Snapshot does not implement sitable.Snapshot (missing method Served)` until Step 3 adds it; Steps 2–3 are therefore one commit. Go's MVS keeps `HG_TAG_P3` over `CORE_TAG_P3`'s own `HG_TAG_P1` require, and the `housegate` `git_override` does the same for Bazel. arbiter-proto is not pinned here: both tags require at most `PROTO_TAG`, so its require stays.
 - **All or nothing per database (K45).** `replicaEntries` takes the member's view of one database and the registry's live incarnations, and answers Replica only when the database is not governed here, the view's owner is not this host's indexer, the view lists at least one table, every live Active incarnation of the database is the view's owner's, and the view lists exactly those incarnations, each with the registry's seq, schema hash and `sitable.CopyTable(id, seq)`, and each schema passes `resolveSchema`'s self-check. Any disagreement keeps every table of the database as it was (Ordinary: a peer's table) and logs one Issue that names the database. Tables of the database whose live incarnation is Pending, Retiring or Purging are not compared and stay Ordinary, as before P3. Readiness does not matter: the member verified the copy. `Snapshot.Schema` keeps missing a Replica table (journal recovery and cleanup never run for a peer's table), so the signed ingress refuses it through its existing not-active refusal (contract §29.1). A governed database is refused first: if the registry wrongly attributed every table of a database this host hosts to another indexer, the owner checks alone would pass (`TestBuildNeverAnswersReplicaInAGovernedDatabase` covers that case).
-- **The refresh rule (K44).** `Refresh` asks the replica source before anything else, with the state's clock, and `applyRegistryWithoutChain` applies a change of the serving views the same way it applies a registry change, on the chain state of the last successful read. So the deadline rule holds even while the chain-state read fails, and the table state's own `Run` (every `RefreshInterval`, 1 s) republishes within a second of a lease crossing its deadline minus `serve.HostDeadlineMargin`, even when the lease client is stuck in a slow request. `content.equal` compares the serving views field by field (owner, snapshot id, entry, frozen-since, tables), so an unchanged view publishes nothing and a copy that moved to another snapshot is a new version; it also compares each table's `CopyTable` and `ReplicaOf` (contract §31.4), which the view comparison already implies.
-- **The lease client (K44).** A poll is: `GET /v1/serving`; drop every held lease whose local deadline minus `serve.HostDeadlineMargin` passed, whose database the view no longer lists as serving from the lease's snapshot, or that the view no longer lists as the database's lease (it expired, or the member lost its state directory; a restarted member lists its restored leases as `revoking`, Task 45 F45.14); renew the others that are due (TTL/3 after the last grant or renew, the deadline the send time plus the TTL answered, so it is never later than the member's own expiry); acquire a lease for every serving database without one (a dropped lease not yet released blocks a new one, so two never overlap); when anything was dropped or acquired, `Refresh` the table state; then release every dropped lease whose database a snapshot published by this poll's `Refresh` or an earlier one no longer serves and that has no replica read in flight. No grace poll is needed (Review fix of AgentConnect round 1): a query that captured the previous snapshot in rewrite may reach `sitablestate` any time later, but `sitablestate` counts it first and then refuses it (733) because the current snapshot no longer serves the copy (Task 42, contract §29.1), so `InFlight` read after the publish covers every read that can still reach the copy. A lease the member still lists (held or revoking) is released with `POST /v1/serving/release` and counts `released`; one it no longer lists, or whose deadline passed while the member could not be reached, has expired on the member and counts `expired` without a call. A renew answering 409 or 404 (`errors.Is(err, serve.ErrLeaseRevoked)`) drops the lease; any other renew failure keeps serving until the deadline.
+- **The refresh rule (K44).** `Refresh` asks the replica source right after its chain-state read, failing or not, with the state's clock, and `applyRegistryWithoutChain` applies a change of the serving views the same way it applies a registry change, on the chain state of the last successful read. So the deadline rule holds even while the chain-state read fails, the table state's own `Run` (every `RefreshInterval`, 1 s) republishes within a second of a lease crossing its deadline minus `serve.HostDeadlineMargin` even when the lease client is stuck in a slow request, and a refresh whose chain-state read blocked past a lease's deadline does not publish that lease's entries when it returns (review round 2: the drafted `Refresh` sampled the source before the chain-state read).
+- **The admission fence (K44, review round 2).** The published snapshot is not what keeps a copy from being read after its lease: `Refresh` holds `refreshMu` across the chain-state read, so while that read hangs neither the lease client's nor the table state's own refresh can publish the drop, and the snapshot keeps answering Replica past the deadline and past the TTL, when the member may install. The lease client therefore also keeps HouseGate's admission fence per database in the same `sitable.ReplicaReads` that counts in-flight reads (`Config.ServeUntil`): at every acquire and renew it sets the fence to the new local deadline minus `serve.HostDeadlineMargin` (the moment `Serving` stops listing the lease), and at every drop it closes it (the zero time) before the `Refresh` that publishes the drop. `sitablestate` admits a read of a copy only through `ReplicaReads.Admit`, which checks the fence on the counter's clock and counts in one critical section (Task 42), so no read of the copy starts from the fence on, whatever a refresh, a chain-state read or a member request does. `standalone` builds the counter with `sitable.NewReplicaReads()` (the wall clock), the lease client's clock. A read admitted before the fence and still running at the lease's expiry is K44's residual. `TestAFreshReplicaReadIsRefusedAfterTheLeaseDeadlineWhileTheChainReadBlocks` runs the real lease client, table state and HouseGate gate with a chain-state read blocked across the margin and the TTL. `content.equal` compares the serving views field by field (owner, snapshot id, entry, frozen-since, tables), so an unchanged view publishes nothing and a copy that moved to another snapshot is a new version; it also compares each table's `CopyTable` and `ReplicaOf` (contract §31.4), which the view comparison already implies.
+- **The lease client (K44).** A poll is: `GET /v1/serving`; drop every held lease whose local deadline minus `serve.HostDeadlineMargin` passed, whose database the view no longer lists as serving from the lease's snapshot, or that the view no longer lists as the database's lease (it expired, or the member lost its state directory; a restarted member lists its restored leases as `revoking`, Task 45 F45.14); renew the others that are due (TTL/3 after the last grant or renew, the deadline the send time plus the TTL answered, so it is never later than the member's own expiry); acquire a lease for every serving database without one (a dropped lease not yet released blocks a new one, so two never overlap); when anything was dropped or acquired, `Refresh` the table state; then release every dropped lease whose database a snapshot published by this poll's `Refresh` or an earlier one no longer serves and that has no replica read in flight. No grace poll is needed (Review fix of AgentConnect round 1): a query that captured the previous snapshot in rewrite may reach `sitablestate` any time later, but `sitablestate` counts it first and then refuses it (733) because the current snapshot no longer serves the copy (Task 42, contract §29.1), so `InFlight` read after the publish covers every read that can still reach the copy. A lease the member still lists (held or revoking) is released with `POST /v1/serving/release` and counts `released`; one it no longer lists, or whose deadline passed while the member could not be reached, has expired on the member and counts `expired` without a call. A renew answering 409 or 404 (`errors.Is(err, serve.ErrLeaseRevoked)`) drops the lease; any other renew failure keeps serving until the deadline. Every acquire and renew moves HouseGate's admission fence to the new local deadline minus `serve.HostDeadlineMargin`, and every drop closes it before the poll's `Refresh` (see the admission fence above).
 - **`expired` without a 404 (contract clarification).** Contract §31.5 counts `expired` "when the member answered 404". The member answers 404 only to a renew of an unknown lease (§30.3; a release of an unknown id answers 200), and contract §30.4 gives the client no error that tells 404 from 409. The client therefore reads the same fact from the serving view: a lease the view no longer lists is one a renew would answer 404 for. Recorded in Appendix B.
 - **`siMemberServe` takes the role interface (contract issue).** Contract §31.3 writes `siMemberServe(cfg config.StorageIntegrityMemberServe, token string, role *member.Role) (*http.Server, error)`. Plan S3-C2 Task 35's `run` holds the role as the `siMemberRole` interface (its `newRole` seam returns it), and a real `*member.Role` cannot be built in a unit test without ClickHouse, an arbiter and a DA store (`member.New` refuses nil deps). So `siMemberRole` gains `ServeHandler()` and `ServeMetrics()`, which `*member.Role` implements, and `siMemberServe` takes `siMemberRole`; Task 35's fake role gains the two methods (nil, a role without `Config.Serve`). Recorded in Appendix B.
 - **The member's endpoint (D29, K47).** `MemberConfig` sets `member.Config.Serve` from `serve.ServeConfig(token)` only when `STORAGE_INTEGRITY_MEMBER_STATUS_TOKEN` is set; `run` then registers the role's serving series on the process's own registry, builds the endpoint and binds `serve.listen` (default `:9096`, S3-C3's `siMember.statusPort`) before the role runs, so a busy port fails the start, serves it as a fourth part beside the metrics server, the follower and the role, and shuts it down with the others. The bearer check is `member/serve`'s own handler; sentio-node never reads the token beyond passing it. `serve.enabled` without the token is refused at load. `poll_interval` has no YAML key (the strict decoder refuses it); `member/serve` uses its default 5 s. `owner_housegate` keys are YAML integers (`map[uint64]string`): a quoted key such as `"0":` is refused by the decoder, so Task 47 renders each key bare and each duration as a quoted string (`owner_unreachable_after: "60s"`); `TestStorageIntegrityMemberServeValidation` loads exactly that form.
-- **Host wiring.** `Run` reads `si.ReplicaReads.MemberStatusURL`, a field of the canonical snapshot, which the source-shape audits allow (only method calls on `si` count as writes, Plan S3-B Task 12); with a URL it builds `serve.NewClient(url, os.Getenv(STORAGE_INTEGRITY_MEMBER_STATUS_TOKEN), &http.Client{Timeout: 5 * time.Second})` (contract §31.7) and hands it to the runtime, which builds `sitable.NewReplicaReads()` for `housegate.Options.StorageIntegrityReplicaReads` and the lease client with `Refresh: state.Refresh` and `InFlight: replicaReads.InFlight`. The first snapshot (inside the startup transaction, before `housegate.New`) holds no Replica entry; the lease client is a task that starts at commit. `member_status_up` and both lease outcomes are registered only on a host with a URL, so `StorageIntegrityMemberStatusUnreachable` (Task 47) sees no series elsewhere; `replica_serving` and `replica_reads_in_flight` are scrape-time series for every database that is served or has a read in flight.
+- **Host wiring.** `Run` reads `si.ReplicaReads.MemberStatusURL`, a field of the canonical snapshot, which the source-shape audits allow (only method calls on `si` count as writes, Plan S3-B Task 12); with a URL it builds `serve.NewClient(url, os.Getenv(STORAGE_INTEGRITY_MEMBER_STATUS_TOKEN), &http.Client{Timeout: 5 * time.Second})` (contract §31.7) and hands it to the runtime, which builds `sitable.NewReplicaReads()` for `housegate.Options.StorageIntegrityReplicaReads` and the lease client with `Refresh: state.Refresh`, `InFlight: replicaReads.InFlight` and `ServeUntil: replicaReads.ServeUntil`. The first snapshot (inside the startup transaction, before `housegate.New`) holds no Replica entry; the lease client is a task that starts at commit. `member_status_up` and both lease outcomes are registered only on a host with a URL, so `StorageIntegrityMemberStatusUnreachable` (Task 47) sees no series elsewhere; `replica_serving` and `replica_reads_in_flight` are scrape-time series for every database that is served or has a read in flight.
 - **`replica_hosts` (K50).** `ReplicaHosts` takes every database with a live physical SI incarnation (Pending, Active, Retiring or Purging) and lists the enrolled SI indexers other than any owner of its live incarnations, ascending; before the signed-claims activation only the founding indexer is enrolled, so every list is empty. The RPC always renders both fields, `[]` and `{}` when none, and an empty host list as `[]`, never `null`.
 - **The two YAML refusals (D29).** Both read the YAML nodes (through aliases and merge keys, Plan S3-B Task 12's `yamlMappingValues`), so an empty or null value is refused too: the host's in `decodeConfigYAML` after Plans S3-B's and S3-C1's refusals, whether or not storage integrity is enabled; the member's in `loadSIMemberConfig` right after Task 35's `refuseSIMemberSecretKeys`, before the strict decode, so its own text and not `field token not found` names the key. The member test keeps the contract's name `TestDecodeConfigYAMLRefusesAMemberServeTokenKey` although the member's decoder is `LoadSIMemberConfig`.
 - **The CI count.** The acceptance step counts `--- PASS: TestStorageIntegrity` lines, which the two new tests (`TestSIMember…`) do not match, so the SKIP check and the count become `Test(StorageIntegrity|SIMember)` patterns (`grep -E`), and the expected count goes from 6 to 8. Neither new test has subtests, so no indented PASS line is counted twice.
@@ -14281,6 +14624,15 @@ bash ~/.agents/skills/urwt/scripts/urwt-create.sh /Users/uranuswch/Dev/projects/
 ```
 
 Expected: one JSON object with `"action": "created"` whose `path` is `~/src/remotesrc/claude/sentio-node/multi-source-s3c4` (expanded) on branch `urwt/claude/multi-source-s3c4` from `origin/main`. `W` below is that path; the Bash tool keeps no variables between calls, so prefix every command with `W=<that path>;` and the ledger values the next block prints. If stderr says `needs approval to execute`, ask the user to run `wt -C /Users/uranuswch/Dev/projects/sentio-network/sentio-node config approvals add` themselves; never pass `--yes` or `--clobber`.
+
+Before the first commit, give the worktree the commit identity (user rule: GitHub never shows the global identity as author or co-author):
+
+```bash
+W=<worktree path>
+git -C "$W" config extensions.worktreeConfig true && git -C "$W" config --worktree user.name poetry && git -C "$W" config --worktree user.email chen@sentio.xyz && git -C "$W" config user.name && git -C "$W" config user.email
+```
+
+Expected: `poetry`, then `chen@sentio.xyz`. Every commit of this task is then authored `poetry <chen@sentio.xyz>` and carries only the Claude `Co-Authored-By` line.
 
 The ledger lives in Appendix C of the plan files on their ledger copies, never a plans worktree or a pending PR (contract §32.7, Plan S3-C1 contract §19, decisions D23 and D34). First run `mkdir -p -m 700 "$HOME/.cache/s3-ledger"` and write `$HOME/.cache/s3-ledger/s3-ledger.py` with the Write tool: the ledger tool at the end of Plan S3-C1 contract §19, verbatim (an earlier copy holds the same text and is overwritten). Remote read (housegate fetch), then local reads: needs explicit user confirmation in chat before running.
 
@@ -15891,7 +16243,7 @@ type registryInput struct {
 }
 ```
 
-In `storageintegrityadapter/tablestate/state.go` (`State.Refresh`, base `:183-191`), replace:
+In `storageintegrityadapter/tablestate/state.go` (`State.Refresh`, base `:184-188`), replace:
 
 ```go
 // Refresh rebuilds the snapshot from the current inputs and publishes it when
@@ -15899,10 +16251,6 @@ In `storageintegrityadapter/tablestate/state.go` (`State.Refresh`, base `:183-19
 // and the previous snapshot stays in place, except for the registry change
 // that applyRegistryWithoutChain applies.
 func (s *State) Refresh(ctx context.Context) error {
-	s.refreshMu.Lock()
-	defer s.refreshMu.Unlock()
-	view, enabled := s.cfg.Registry.View()
-	// Stored before the chain read so a failing chain read does not hide
 ```
 
 with:
@@ -15913,35 +16261,61 @@ with:
 // and the previous snapshot stays in place, except for the registry or
 // replica-serving change that applyRegistryWithoutChain applies. Every
 // Refresh asks the replica source, failing chain read or not, so a lease that
-// ended or reached its deadline ends its Replica entries now.
+// ended or reached its deadline ends its Replica entries now. It asks after
+// the chain-state read, which may block for long while refreshMu is held, so
+// a refresh never publishes the entries of a lease whose deadline passed
+// while it waited. What keeps a copy from being read past that deadline is
+// HouseGate's admission fence, which the lease client keeps in
+// sitable.ReplicaReads, not this snapshot (Plan S3-C4 clarification K44).
 func (s *State) Refresh(ctx context.Context) error {
-	s.refreshMu.Lock()
-	defer s.refreshMu.Unlock()
-	var replicas map[string]ReplicaDatabase
-	if s.cfg.Replicas != nil {
-		replicas = s.cfg.Replicas.Serving(s.cfg.Now())
-	}
-	view, enabled := s.cfg.Registry.View()
-	// Stored before the chain read so a failing chain read does not hide
 ```
 
-In `storageintegrityadapter/tablestate/state.go` (`Refresh`, base `:199-202`), replace:
+In `storageintegrityadapter/tablestate/state.go` (`Refresh`, base `:205-217`), replace:
 
 ```go
-		NetworkID:       s.cfg.NetworkID,
-		Self:            s.cfg.Self,
+	if enabled {
+		chain, err := s.cfg.Chain.Databases(ctx)
+		if err != nil {
+			s.applyRegistryWithoutChain(in, err)
+			return err
+		}
+		in.Chain = chain
+		s.chain, s.chainRead = chain, true
 	}
-	// The follower metrics describe the follower, not the snapshot, so they
+	s.buildAndPublish(in)
+	return nil
+}
 ```
 
 with:
 
 ```go
-		NetworkID:       s.cfg.NetworkID,
-		Self:            s.cfg.Self,
-		Replicas:        replicas,
+	var chainErr error
+	if enabled {
+		in.Chain, chainErr = s.cfg.Chain.Databases(ctx)
 	}
-	// The follower metrics describe the follower, not the snapshot, so they
+	// Asked after the chain-state read: what the member serves is read at
+	// the moment the snapshot is built.
+	in.Replicas = s.replicaServing()
+	if chainErr != nil {
+		s.applyRegistryWithoutChain(in, chainErr)
+		return chainErr
+	}
+	if enabled {
+		s.chain, s.chainRead = in.Chain, true
+	}
+	s.buildAndPublish(in)
+	return nil
+}
+
+// replicaServing is what the replica source serves at the state's clock now;
+// nil without a source.
+func (s *State) replicaServing() map[string]ReplicaDatabase {
+	if s.cfg.Replicas == nil {
+		return nil
+	}
+	return s.cfg.Replicas.Serving(s.cfg.Now())
+}
 ```
 
 In `storageintegrityadapter/tablestate/state.go` (`buildAndPublish`, base `:225-228`), replace:
@@ -16663,6 +17037,7 @@ import (
 
 	hgregistry "github.com/housegate/housegate/pkg/registry"
 	"github.com/housegate/housegate/pkg/replay"
+	"github.com/housegate/housegate/pkg/sitable"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sentioxyz/arbiter-core/member/serve"
 	"github.com/stretchr/testify/require"
@@ -16692,8 +17067,10 @@ func (c *testClock) advance(d time.Duration) {
 	c.now = c.now.Add(d)
 }
 
-// testHost is the host side around one lease client: its in-flight counter
-// and the Refresh that records what each published snapshot would serve.
+// testHost is the host side around one lease client: its in-flight counter,
+// HouseGate's admission fences (a real sitable.ReplicaReads on the test's
+// clock) and the Refresh that records what each published snapshot would
+// serve.
 type testHost struct {
 	t        *testing.T
 	clock    *testClock
@@ -16701,6 +17078,7 @@ type testHost struct {
 	client   *Client
 	metrics  *tablestate.Metrics
 	registry *prometheus.Registry
+	reads    *sitable.ReplicaReads
 
 	mu        sync.Mutex
 	inFlight  map[string]int
@@ -16714,16 +17092,18 @@ func newTestHost(t *testing.T, ttl time.Duration) *testHost {
 	t.Helper()
 	h := &testHost{t: t, clock: &testClock{now: time.Unix(1_760_000_000, 0)}, inFlight: map[string]int{},
 		metrics: tablestate.NewMetrics(), registry: prometheus.NewRegistry()}
+	h.reads = sitable.NewReplicaReadsWithClock(h.clock.Now)
 	require.NoError(t, h.metrics.RegisterReplicaReads(h.registry))
 	h.member = replicaleasetest.NewMember(t, testToken, ttl)
 	member, err := serve.NewClient(h.member.URL(), testToken, &http.Client{Timeout: time.Second})
 	require.NoError(t, err)
 	h.client, err = New(Config{
-		Member:   member,
-		InFlight: h.inFlightOf,
-		Refresh:  h.refresh,
-		Now:      h.clock.Now,
-		Metrics:  h.metrics,
+		Member:     member,
+		InFlight:   h.inFlightOf,
+		ServeUntil: h.reads.ServeUntil,
+		Refresh:    h.refresh,
+		Now:        h.clock.Now,
+		Metrics:    h.metrics,
 	})
 	require.NoError(t, err)
 	return h
@@ -16769,6 +17149,17 @@ func (h *testHost) refreshCount() int {
 }
 
 func (h *testHost) step() { h.client.step(context.Background()) }
+
+// admitted reports whether HouseGate's fence admits a read of testDatabase
+// now; an admitted read is ended at once.
+func (h *testHost) admitted() bool {
+	end, _ := h.reads.Admit([]string{testDatabase})
+	if end == nil {
+		return false
+	}
+	end()
+	return true
+}
 
 func (h *testHost) releases(outcome string) float64 {
 	h.t.Helper()
@@ -16998,19 +17389,72 @@ func TestLeaseClientStopsServingWhenRenewIsRefused(t *testing.T) {
 	})
 }
 
+// TestLeaseClientFencesReplicaReadsAtItsLocalDeadline pins HouseGate's
+// admission fence of clarification K44 (contract §31.5, review round 2): the
+// client opens a database's fence when it acquires the lease, at the local
+// deadline minus serve.HostDeadlineMargin, the moment Serving stops listing
+// it; every renewal moves it, and every drop closes it before the Refresh
+// that publishes the drop. The fence closes on time with no poll at all, so
+// neither a member request nor a table-state refresh that blocks keeps a
+// read of the copy starting after the member may install.
+func TestLeaseClientFencesReplicaReadsAtItsLocalDeadline(t *testing.T) {
+	t.Run("deadline", func(t *testing.T) {
+		h := newTestHost(t, 30*time.Second)
+		require.False(t, h.admitted(), "closed before any lease")
+		h.member.Serve(servingView())
+		h.step()
+		require.True(t, h.admitted(), "the acquired lease opens the fence")
+		h.clock.advance(30*time.Second - serve.HostDeadlineMargin - time.Millisecond)
+		require.True(t, h.admitted())
+		require.Contains(t, h.client.Serving(h.clock.Now()), testDatabase)
+		h.clock.advance(time.Millisecond)
+		require.False(t, h.admitted(), "the fence closes at HostDeadlineMargin before the deadline, with no poll since the grant")
+		require.NotContains(t, h.client.Serving(h.clock.Now()), testDatabase, "the fence and Serving end together")
+	})
+	t.Run("renewal", func(t *testing.T) {
+		h := newTestHost(t, 30*time.Second)
+		h.member.Serve(servingView())
+		h.step()
+		h.clock.advance(10 * time.Second)
+		h.step()
+		require.Equal(t, 1, h.member.Calls("renew"))
+		h.clock.advance(30*time.Second - serve.HostDeadlineMargin - time.Millisecond)
+		require.True(t, h.admitted(), "the renewal moved the fence to its own deadline minus the margin")
+		h.clock.advance(time.Millisecond)
+		require.False(t, h.admitted())
+	})
+	t.Run("drop", func(t *testing.T) {
+		h := newTestHost(t, 30*time.Second)
+		h.member.Serve(servingView())
+		h.step()
+		var admittedAtRefresh []bool
+		h.mu.Lock()
+		h.onRefresh = func() { admittedAtRefresh = append(admittedAtRefresh, h.admitted()) }
+		h.mu.Unlock()
+		h.member.StopServing(testDatabase, serve.Reason("installing"))
+		h.clock.advance(time.Second)
+		h.step()
+		require.Equal(t, []bool{false}, admittedAtRefresh, "the drop closed the fence before the Refresh that publishes it")
+		require.False(t, h.admitted())
+	})
+}
+
 // TestNewRefusesAnIncompleteConfig pins the constructor's refusals.
 func TestNewRefusesAnIncompleteConfig(t *testing.T) {
 	member, err := serve.NewClient("http://127.0.0.1:9096", testToken, nil)
 	require.NoError(t, err)
 	refresh := func(context.Context) error { return nil }
 	inFlight := func(string) int { return 0 }
-	_, err = New(Config{InFlight: inFlight, Refresh: refresh})
+	serveUntil := func(string, time.Time) {}
+	_, err = New(Config{InFlight: inFlight, ServeUntil: serveUntil, Refresh: refresh})
 	require.EqualError(t, err, "replicalease: the member status client is required")
-	_, err = New(Config{Member: member, Refresh: refresh})
+	_, err = New(Config{Member: member, ServeUntil: serveUntil, Refresh: refresh})
 	require.EqualError(t, err, "replicalease: the in-flight replica-read counter is required")
-	_, err = New(Config{Member: member, InFlight: inFlight})
+	_, err = New(Config{Member: member, InFlight: inFlight, Refresh: refresh})
+	require.EqualError(t, err, "replicalease: the replica-read admission fence is required")
+	_, err = New(Config{Member: member, InFlight: inFlight, ServeUntil: serveUntil})
 	require.EqualError(t, err, "replicalease: the table-state refresh is required")
-	client, err := New(Config{Member: member, InFlight: inFlight, Refresh: refresh})
+	client, err := New(Config{Member: member, InFlight: inFlight, ServeUntil: serveUntil, Refresh: refresh})
 	require.NoError(t, err)
 	require.Equal(t, DefaultPollInterval, client.cfg.PollInterval)
 	require.Empty(t, client.Serving(time.Now()))
@@ -17026,6 +17470,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"sync"
 	"testing"
@@ -17035,10 +17480,15 @@ import (
 	"compute-network-node/storageintegrityadapter/replicalease/replicaleasetest"
 	"compute-network-node/storageintegrityadapter/tablestate"
 
+	"github.com/housegate/housegate/pkg/chproto"
+	"github.com/housegate/housegate/pkg/chsession"
 	"github.com/housegate/housegate/pkg/lthash"
+	"github.com/housegate/housegate/pkg/plugin"
+	"github.com/housegate/housegate/pkg/plugins/sitablestate"
 	"github.com/housegate/housegate/pkg/replay"
 	"github.com/housegate/housegate/pkg/replay/payloadexec"
 	"github.com/housegate/housegate/pkg/sitable"
+	"github.com/housegate/housegate/pkg/sqlmeta"
 	"github.com/sentioxyz/arbiter-core/member/serve"
 	"github.com/stretchr/testify/require"
 )
@@ -17046,7 +17496,9 @@ import (
 // These tests run the real lease client against a fake member endpoint and
 // the real table state: the deadline rule of contract §31.5 and the refresh
 // rule of §31.4 together are what keeps a host from answering Replica after
-// its member may have started an install.
+// its member may have started an install, and HouseGate's admission fence,
+// which the lease client keeps, is what keeps a read of the copy from
+// starting then even while the table state cannot publish.
 
 const (
 	leaseNetwork  = "devnet2"
@@ -17066,9 +17518,24 @@ func (leaseRegistry) Connected() bool                     { return true }
 type leaseChain struct {
 	mu  sync.Mutex
 	err error
+	// block and entered, while set, make the next read hang (a chain-state
+	// read that blocks): it closes entered and waits until block is closed.
+	block, entered chan struct{}
 }
 
-func (c *leaseChain) Databases(context.Context) (map[string]tablestate.ChainDatabase, error) {
+func (c *leaseChain) Databases(ctx context.Context) (map[string]tablestate.ChainDatabase, error) {
+	c.mu.Lock()
+	block, entered := c.block, c.entered
+	c.block, c.entered = nil, nil
+	c.mu.Unlock()
+	if block != nil {
+		close(entered)
+		select {
+		case <-block:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.err != nil {
@@ -17084,6 +17551,16 @@ func (c *leaseChain) fail(err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.err = err
+}
+
+// hang makes the next chain-state read block: entered is closed once a read
+// waits, and release lets it return.
+func (c *leaseChain) hang() (entered <-chan struct{}, release func()) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.block, c.entered = make(chan struct{}), make(chan struct{})
+	block := c.block
+	return c.entered, func() { close(block) }
 }
 
 type leaseReadiness struct{}
@@ -17143,6 +17620,10 @@ type leaseHost struct {
 	member *replicaleasetest.Member
 	state  *tablestate.State
 	start  time.Time
+	// reads is HouseGate's in-flight counter and admission fence on the
+	// host's clock; stopLeases stops the lease client's poll loop.
+	reads      *sitable.ReplicaReads
+	stopLeases func()
 }
 
 // startLeaseHost serves devuser3 from a fake member and runs the lease client
@@ -17151,6 +17632,7 @@ func startLeaseHost(t *testing.T) *leaseHost {
 	t.Helper()
 	h := &leaseHost{clock: &leaseClock{now: time.Unix(1_760_000_000, 0)}, chain: &leaseChain{}}
 	h.start = h.clock.Now()
+	h.reads = sitable.NewReplicaReadsWithClock(h.clock.Now)
 	h.member = replicaleasetest.NewMember(t, leaseToken, leaseTTL)
 	id := leaseDatabase + ".t"
 	h.member.Serve(serve.DatabaseView{
@@ -17165,7 +17647,8 @@ func startLeaseHost(t *testing.T) *leaseHost {
 	var state *tablestate.State
 	leases, err := replicalease.New(replicalease.Config{
 		Member:       member,
-		InFlight:     func(string) int { return 0 },
+		InFlight:     h.reads.InFlight,
+		ServeUntil:   h.reads.ServeUntil,
 		Refresh:      func(ctx context.Context) error { return state.Refresh(ctx) },
 		Now:          h.clock.Now,
 		PollInterval: 10 * time.Millisecond,
@@ -17185,10 +17668,14 @@ func startLeaseHost(t *testing.T) *leaseHost {
 		defer close(done)
 		_ = leases.Run(ctx)
 	}()
-	t.Cleanup(func() {
-		cancel()
-		<-done
-	})
+	var stop sync.Once
+	h.stopLeases = func() {
+		stop.Do(func() {
+			cancel()
+			<-done
+		})
+	}
+	t.Cleanup(h.stopLeases)
 	require.Eventually(t, func() bool { return h.replica() }, 5*time.Second, 5*time.Millisecond,
 		"the lease client acquires the lease and publishes the Replica entry")
 	return h
@@ -17201,6 +17688,28 @@ func (h *leaseHost) replica() bool {
 // deadline is the local lease deadline of the first grant: the clock does not
 // move, so no renew is due before it.
 func (h *leaseHost) deadline() time.Time { return h.start.Add(leaseTTL) }
+
+// read plans a fresh query of devuser3.t on the published snapshot, as
+// HouseGate's rewrite does, and runs it through HouseGate's table-state gate,
+// which admits it or refuses it before anything reaches ClickHouse.
+func (h *leaseHost) read(t *testing.T, gate *sitablestate.Plugin) error {
+	t.Helper()
+	client, server := net.Pipe()
+	t.Cleanup(func() {
+		_ = client.Close()
+		_ = server.Close()
+	})
+	sess := chsession.New(1, client)
+	sql := "SELECT * FROM " + leaseDatabase + ".t"
+	qctx := &plugin.QueryContext{
+		Session: sess, OriginalSQL: sql, Query: &chproto.Query{Body: sql},
+		StatementType: sqlmeta.StatementTypeSelect, TableSnapshot: h.state.Current(),
+		AccessedTables: []sqlmeta.AccessedTable{{OriginalDatabase: leaseDatabase, OriginalTable: "t", LogicalDatabase: leaseDatabase}},
+	}
+	err := gate.OnQuery(context.Background(), qctx)
+	gate.OnQueryComplete(context.Background(), sess)
+	return err
+}
 
 // TestReplicaEntriesFailClosedWhenTheMemberEndpointIsUnreachable pins
 // clarification K44 and contract §31.4–§31.5: a host that loses its member
@@ -17243,6 +17752,49 @@ func TestReplicaEntriesDropAtTheLeaseDeadlineEvenWhenTheChainReadFails(t *testin
 	require.False(t, h.replica())
 	require.Equal(t, sitable.Active, h.state.Current().Lookup("devnet101", "t").Status)
 }
+
+// TestAFreshReplicaReadIsRefusedAfterTheLeaseDeadlineWhileTheChainReadBlocks
+// pins HouseGate's admission fence of clarification K44 (contract §29.1,
+// §31.4–§31.5; AgentConnect review round 2). The member cannot be reached and
+// the lease client is stuck, so the lease is never renewed and no lease poll
+// refreshes; a table-state refresh blocks in its chain-state read, holding
+// the refresh lock, so the published snapshot keeps answering devuser3.t
+// Replica past HostDeadlineMargin before the deadline and past the lease's
+// TTL, when the member may install. A fresh query planned on that snapshot
+// is still refused by HouseGate's table-state gate from the margin on,
+// before anything reaches ClickHouse, and the refresh publishes no Replica
+// entry when its chain-state read returns.
+func TestAFreshReplicaReadIsRefusedAfterTheLeaseDeadlineWhileTheChainReadBlocks(t *testing.T) {
+	h := startLeaseHost(t)
+	gate := &sitablestate.Plugin{ReplicaReads: h.reads, TableState: h.state}
+	h.member.Close()
+	h.stopLeases()
+
+	h.clock.set(h.deadline().Add(-serve.HostDeadlineMargin - time.Second))
+	entered, release := h.chain.hang()
+	refreshed := make(chan error, 1)
+	go func() { refreshed <- h.state.Refresh(context.Background()) }()
+	<-entered
+	require.NoError(t, h.read(t, gate), "before HostDeadlineMargin a fresh read of the copy is admitted")
+
+	const refused = "storage_integrity: table " + leaseDatabase + ".t is no longer served from the copy this query was planned against; retry the query (retryable)"
+	for _, at := range []time.Time{h.deadline().Add(-serve.HostDeadlineMargin), h.deadline(), h.deadline().Add(500 * time.Millisecond)} {
+		h.clock.set(at)
+		require.True(t, h.replica(), "the blocked refresh keeps the published snapshot answering Replica")
+		err := h.read(t, gate)
+		var ce *chproto.ClientError
+		require.ErrorAs(t, err, &ce, "a fresh replica read was admitted %v after the grant while the chain-state read blocked", at.Sub(h.start))
+		require.EqualValues(t, sitablestate.CodeRetryable, ce.Code)
+		require.Equal(t, refused, ce.Message)
+		require.Zero(t, h.reads.InFlight(leaseDatabase), "a refused read is not counted")
+	}
+
+	release()
+	require.NoError(t, <-refreshed)
+	require.False(t, h.replica(), "the refresh that blocked publishes no Replica entry past the deadline")
+	require.Empty(t, h.state.Current().Served())
+	require.Equal(t, sitable.Active, h.state.Current().Lookup("devnet101", "t").Status, "the host's own tables are untouched")
+}
 ```
 
 Run: `W=<worktree path>; cd "$W" && GOWORK=off go test ./storageintegrityadapter/replicalease/ ./storageintegrityadapter/tablestate/ -count=1 2>&1 | head -8`
@@ -17263,7 +17815,11 @@ Create `storageintegrityadapter/replicalease/client.go`:
 // database, refreshes the table state so the published snapshot no longer
 // answers it Replica, and releases the lease once no replica read of it is in
 // flight. A host that cannot reach its member stops answering Replica
-// serve.HostDeadlineMargin before its local lease deadline.
+// serve.HostDeadlineMargin before its local lease deadline. HouseGate's
+// admission fence (sitable.ReplicaReads.ServeUntil) follows each lease: the
+// client sets it to that moment at every acquire and renew and closes it at
+// every drop, so no read of a copy starts after the member may install, even
+// while a table-state refresh is blocked and cannot publish the drop.
 package replicalease
 
 import (
@@ -17292,6 +17848,10 @@ type Config struct {
 	Member *serve.Client
 	// InFlight is sitable.ReplicaReads.InFlight of the embedded HouseGate.
 	InFlight func(database string) int
+	// ServeUntil is sitable.ReplicaReads.ServeUntil of the same counter:
+	// HouseGate admits a read of a database's copy only before the time it
+	// was last given, and never after the zero time.
+	ServeUntil func(database string, until time.Time)
 	// Refresh is the table state's Refresh; once it returns, the published
 	// snapshot answers what Serving answers.
 	Refresh      func(ctx context.Context) error
@@ -17339,6 +17899,8 @@ func New(cfg Config) (*Client, error) {
 		return nil, errors.New("replicalease: the member status client is required")
 	case cfg.InFlight == nil:
 		return nil, errors.New("replicalease: the in-flight replica-read counter is required")
+	case cfg.ServeUntil == nil:
+		return nil, errors.New("replicalease: the replica-read admission fence is required")
 	case cfg.Refresh == nil:
 		return nil, errors.New("replicalease: the table-state refresh is required")
 	}
@@ -17461,6 +18023,7 @@ func (c *Client) dropAndRenew(ctx context.Context, view serve.ServingView, viewE
 		case err == nil:
 			l.deadline = now.Add(renewed.TTL)
 			l.renewAt = now.Add(renewed.TTL / 3)
+			c.cfg.ServeUntil(database, l.deadline.Add(-serve.HostDeadlineMargin))
 		case errors.Is(err, serve.ErrLeaseRevoked):
 			c.dropLocked(database, l, "lease revoked")
 			changed = true
@@ -17492,13 +18055,15 @@ func (c *Client) acquire(ctx context.Context, view serve.ServingView) bool {
 			c.cfg.Logger.Info("storage-integrity replica lease not acquired", "database", db.Database, "error", err)
 			continue
 		}
+		deadline := start.Add(granted.TTL)
 		c.mu.Lock()
 		c.leases[db.Database] = &lease{
 			id:       granted.ID,
 			view:     replicaDatabase(db),
-			deadline: start.Add(granted.TTL),
+			deadline: deadline,
 			renewAt:  start.Add(granted.TTL / 3),
 		}
+		c.cfg.ServeUntil(db.Database, deadline.Add(-serve.HostDeadlineMargin))
 		c.mu.Unlock()
 		c.cfg.Logger.Info("storage-integrity replica lease acquired; serving the database from the member's copy",
 			"database", db.Database, "owner", db.Owner, "snapshot_id", db.SnapshotID, "ttl", granted.TTL)
@@ -17561,11 +18126,15 @@ func (c *Client) release(ctx context.Context, view serve.ServingView, viewErr er
 	}
 }
 
+// dropLocked stops serving database: Serving no longer lists it and
+// HouseGate's admission fence closes at once, before the Refresh that
+// publishes the drop.
 func (c *Client) dropLocked(database string, l *lease, reason string) {
 	if l.dropped {
 		return
 	}
 	l.dropped = true
+	c.cfg.ServeUntil(database, time.Time{})
 	c.cfg.Logger.Info("storage-integrity replica lease dropped; the database is no longer answered from the member's copy",
 		"database", database, "reason", reason)
 }
@@ -17674,6 +18243,7 @@ go_test(
         "@com_github_stretchr_testify//require",
         "@housegate//pkg/registry",
         "@housegate//pkg/replay",
+        "@housegate//pkg/sitable",
     ],
 )
 ```
@@ -17735,11 +18305,16 @@ In `storageintegrityadapter/tablestate/BUILD.bazel` (the end of the `go_test` de
 with:
 
 ```starlark
+        "@housegate//pkg/chproto",
+        "@housegate//pkg/chsession",
         "@housegate//pkg/lthash",
+        "@housegate//pkg/plugin",
+        "@housegate//pkg/plugins/sitablestate",
         "@housegate//pkg/registry",
         "@housegate//pkg/replay",
         "@housegate//pkg/replay/payloadexec",
         "@housegate//pkg/sitable",
+        "@housegate//pkg/sqlmeta",
         "@sentio-core//network/state",
     ],
 )
@@ -17749,7 +18324,7 @@ rules_go compiles the external `tablestate_test` files against the test archive 
 
 Run: `W=<worktree path>; cd "$W" && test -z "$(gofmt -l storageintegrityadapter)" && GOWORK=off go vet ./storageintegrityadapter/... && GOWORK=off go test ./storageintegrityadapter/... -count=1 -v 2>&1 | grep -E -- '^(--- |    --- |ok|FAIL)' | grep -E 'Lease|ReplicaEntries|ok|FAIL' && GOWORK=off go test -race ./storageintegrityadapter/replicalease/ ./storageintegrityadapter/tablestate/ -count=3`
 
-Expected: `--- PASS:` for `TestLeaseIsReleasedOnlyAfterTheSnapshotDropsTheDatabaseAndReadsDrain`, `TestLeaseIsReleasedRightAfterTheSnapshotThatDropsTheDatabase`, `TestLeaseClientRenewsAtAThirdOfTheTTL`, `TestLeaseClientStopsServingWhenRenewIsRefused` (with `revoked`, `unknown_lease` and `unreachable`), `TestReplicaEntriesFailClosedWhenTheMemberEndpointIsUnreachable` and `TestReplicaEntriesDropAtTheLeaseDeadlineEvenWhenTheChainReadFails`, `ok` for `replicalease` and `tablestate` (`replicaleasetest` has no tests); the race run is `ok` three times.
+Expected: `--- PASS:` for `TestLeaseIsReleasedOnlyAfterTheSnapshotDropsTheDatabaseAndReadsDrain`, `TestLeaseIsReleasedRightAfterTheSnapshotThatDropsTheDatabase`, `TestLeaseClientRenewsAtAThirdOfTheTTL`, `TestLeaseClientStopsServingWhenRenewIsRefused` (with `revoked`, `unknown_lease` and `unreachable`), `TestLeaseClientFencesReplicaReadsAtItsLocalDeadline` (with `deadline`, `renewal` and `drop`), `TestReplicaEntriesFailClosedWhenTheMemberEndpointIsUnreachable`, `TestReplicaEntriesDropAtTheLeaseDeadlineEvenWhenTheChainReadFails` and `TestAFreshReplicaReadIsRefusedAfterTheLeaseDeadlineWhileTheChainReadBlocks`, `ok` for `replicalease` and `tablestate` (`replicaleasetest` has no tests); the race run is `ok` three times.
 
 ```bash
 W=<worktree path>
@@ -17766,13 +18341,18 @@ replica read of it is in flight, counted released, or expired when the
 member no longer held it (Plan S3-C4 contract §31.5, K44). No grace
 poll: sitablestate admits a read of a copy only after counting it and
 finding the current snapshot still serving that copy, so a read whose
-rewrite outlived the release is refused. replicaleasetest fakes the
-member endpoint for the tests.
+rewrite outlived the release is refused. HouseGate's admission fence
+follows each lease: every acquire and renew moves it to the local
+deadline minus serve.HostDeadlineMargin and every drop closes it, so a
+table-state refresh blocked in its chain-state read, which keeps a
+Replica snapshot published past the lease's expiry, admits no new read
+of the copy. replicaleasetest fakes the member endpoint for the tests.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+git -C "$W" log -1 --format='%an <%ae>'
 ```
 
-Expected: `git status --short` lists `A storageintegrityadapter/replicalease/BUILD.bazel`, `A …/client.go`, `A …/client_test.go`, `A …/replicaleasetest/BUILD.bazel`, `A …/replicaleasetest/member.go`, `M storageintegrityadapter/tablestate/BUILD.bazel` and `A storageintegrityadapter/tablestate/replica_lease_test.go` before the commit.
+Expected: `git status --short` lists `A storageintegrityadapter/replicalease/BUILD.bazel`, `A …/client.go`, `A …/client_test.go`, `A …/replicaleasetest/BUILD.bazel`, `A …/replicaleasetest/member.go`, `M storageintegrityadapter/tablestate/BUILD.bazel` and `A storageintegrityadapter/tablestate/replica_lease_test.go` before the commit. The last line is `poetry <chen@sentio.xyz>`.
 
 - [ ] **Step 10: Write the failing RPC test**
 
@@ -18536,10 +19116,13 @@ with:
 		err          error
 	)
 	if deps.replicaMember != nil {
+		// The counter reads its fences on the wall clock, the lease client's
+		// clock (Now is left at time.Now).
 		replicaReads = sitable.NewReplicaReads()
 		leases, err = replicalease.New(replicalease.Config{
-			Member:   deps.replicaMember,
-			InFlight: replicaReads.InFlight,
+			Member:     deps.replicaMember,
+			InFlight:   replicaReads.InFlight,
+			ServeUntil: replicaReads.ServeUntil,
 			// The lease client starts at commit, after state is built.
 			Refresh: func(ctx context.Context) error { return state.Refresh(ctx) },
 			Metrics: metrics,
@@ -20713,8 +21296,6 @@ python3 -I "$L/s3-ledger.py" get "$h" SN_COMMIT_P3 SN_DIGEST_P3
 ```
 
 Expected: `SN_COMMIT_P3=<the value written>`, `SN_DIGEST_P3=<the value written>`. Anything else (for example the stage-3 plans PR merged after R1, so the record went to a branch that is no longer the ledger copy): stop and ask. This task is done only once R4 prints both. Task 47 reads them from there only: it allowlists `ghcr.io/sentioxyz/sentio-node:sha-<SN_COMMIT_P3>@<SN_DIGEST_P3>` as `DEVNET2_P3_HOST_IMAGE` (in `REPLICA_READ_HOST_IMAGES`), and Task 48 rolls it as the member image (`siMember.image`) and the host image of the agent window.
-
----
 
 ---
 
@@ -27652,7 +28233,10 @@ Names this plan consumes from earlier contracts are listed with their source in 
 - **`ServedDatabases`:** `func ServedDatabases(s Snapshot) []string` returns the sorted, de-duplicated databases of `s.Served()`; a nil snapshot gives nil.
 - **`Schema`** keeps missing a Replica table. The rule stays: Active, Gone, Refused with a schema, and S3-A's Pending with a schema.
 - **In-flight counter** (`replica_reads.go`):
-  - `type ReplicaReads struct` (mutex and `map[string]int`, unexported) and `func NewReplicaReads() *ReplicaReads`.
+  - `type ReplicaReads struct` (mutex, clock and two unexported maps: in-flight counts and fences) and `func NewReplicaReads() *ReplicaReads` (the wall clock).
+  - `func NewReplicaReadsWithClock(now func() time.Time) *ReplicaReads`.
+  - `func (r *ReplicaReads) ServeUntil(database string, until time.Time)`: the zero time closes the fence, and every database is closed until first opened (review fix 246-5).
+  - `func (r *ReplicaReads) Admit(databases []string) (end func(), closed string)`: `Begin` behind the fences, in one critical section; a refusal counts nothing and returns nil and the first closed database; a nil counter admits nothing (review fix 246-5).
   - `func (r *ReplicaReads) Begin(databases []string) (end func())` counts one in-flight read per listed database. `end` is idempotent; a nil receiver returns a no-op `end`.
   - `func (r *ReplicaReads) InFlight(database string) int` (0 on a nil receiver).
   - `func (r *ReplicaReads) Counts() map[string]int` (a copy, for metrics).
@@ -27664,7 +28248,7 @@ Names this plan consumes from earlier contracts are listed with their source in 
   - `classWrite`, `classCreate`, `classCreateData`, `classDrop`, `classOtherDDL` and `classViewTarget` give `nonRetryable` with `CodeNonRetryable` (392) and the message (verbatim, `%s` = table id, `%d` = `ReplicaOf`): `storage_integrity: table %s is served read-only from a copy of indexer %d's published data; write through its owner`.
   - `classUnreadable` keeps its earlier refusal.
 - **In-flight tracking:**
-  - When `OnQuery` allows a statement and at least one accessed table answers Replica, it calls `p.ReplicaReads.Begin(<sorted unique databases of those tables>)` and keeps `end` per session.
+  - When `OnQuery` allows a statement and at least one accessed table answers Replica, it admits the read through `p.ReplicaReads.Admit(<sorted unique databases of those tables>)` and keeps `end` per session; a closed fence refuses it with the 733 below (review fix 246-5).
   - **Read admission (K44).** Only after that count, `OnQuery` reads `p.TableState.Current()`. Unless it answers every accessed table that the query's snapshot answers Replica with status Replica and the same `ID`, `CopyTable` and `ReplicaOf`, the read is uncounted at once and refused with `CodeRetryable` (733) and the message (verbatim, `%s` = table id): `storage_integrity: table %s is no longer served from the copy this query was planned against; retry the query (retryable)`. A nil `TableState` with a counter admits no replica read. So a read whose snapshot rewrite took before the host published a snapshot without the database never starts after the host read `InFlight` 0 (§31.5).
   - The plugin implements `plugin.QueryCompletePlugin` (`OnQueryComplete` calls the session's `end`) and `plugin.ClosePlugin` (`OnClose` calls it).
   - Maintenance and platform-operator sessions, which return before the matrix, are not counted.
@@ -27920,7 +28504,7 @@ New file `simember/serve.go` (S3-C2's package `simember`, §24.3):
 
 `state.go`:
 - `Config` gains `Replicas ReplicaSource`. Nil means no Replica entries.
-- Every `Refresh` reads `Replicas.Serving(now)`, including one whose chain read fails. When the Replica side changed, `Refresh` republishes on the last successful chain read, as `applyRegistryWithoutChain` does for a registry change.
+- Every `Refresh` reads `Replicas.Serving(now)` after its chain-state read, including one whose chain read fails (review fix 246-5). When the Replica side changed, `Refresh` republishes on the last successful chain read, as `applyRegistryWithoutChain` does for a registry change.
 
 `snapshot.go`, in `build`:
 - For each served database `d` that this host does not govern, every `foreign` key of `d` gets `sitable.Table{Status: sitable.Replica, Schema, SchemaHash, CopyTable, ReplicaOf: view.Owner}`, with the schema through `resolveSchema`. The conditions: its live incarnation is Active with `Registry.Owner == view.Owner`, and the view lists it with the same seq, schema hash and `CopyTable == sitable.CopyTable(id, seq)`.
@@ -27946,13 +28530,14 @@ Metrics (on the embedded HouseGate registry, `:9091`):
 - `sentio_node_storage_integrity_replica_lease_releases_total{outcome}`, with `outcome` ∈ {`released`, `expired`} and both exported at 0.
 
 **31.5 Lease client** (new package `storageintegrityadapter/replicalease`).
-- `type Config struct{ Member *serve.Client; InFlight func(database string) int; Refresh func(ctx context.Context) error; Now func() time.Time; PollInterval time.Duration; Metrics *tablestate.Metrics; Logger *slog.Logger }`, with `DefaultPollInterval = time.Second`.
+- `type Config struct{ Member *serve.Client; InFlight func(database string) int; ServeUntil func(database string, until time.Time); Refresh func(ctx context.Context) error; Now func() time.Time; PollInterval time.Duration; Metrics *tablestate.Metrics; Logger *slog.Logger }`, with `DefaultPollInterval = time.Second`; `ServeUntil` is HouseGate's `ReplicaReads.ServeUntil`, and `New` refuses it missing with `replicalease: the replica-read admission fence is required` (review fix 246-5).
 - `func New(cfg Config) (*Client, error)`, `(*Client) Run(ctx) error`, and `(*Client) Serving(now time.Time) map[string]tablestate.ReplicaDatabase`, which implements `tablestate.ReplicaSource`.
 
 Its loop:
 - **Poll:** `GET /v1/serving` every `PollInterval`.
 - **Acquire:** for each `serving` database without a lease.
 - **Renew:** at a third of the TTL.
+- **Fence:** every acquire and renew sets `ServeUntil(database, deadline − serve.HostDeadlineMargin)`; every drop sets the zero time, before that poll's `Refresh` (review fix 246-5).
 - **Revoked or failing:** on `ErrLeaseRevoked`, or on any failure past the local deadline, it drops the database from `Serving` and calls `Refresh`.
 - **Release:** `Release` runs only after the published snapshot no longer serves the database and `InFlight(database) == 0`, read after that snapshot was published: on the poll whose `Refresh` dropped the database or a later one, with no grace poll, because `sitablestate` refuses a read whose snapshot no longer matches the current one (§29.1's read admission). It counts `released`, or `expired` when the member answered 404.
 
@@ -27962,7 +28547,7 @@ Its loop:
 - `sentio_getStorageIntegrityTableStatus` is unchanged in shape apart from §29.1's additive fields.
 
 **31.7 Wiring and command.**
-- `standalone/standalone.go`: when `storage_integrity.replica_reads.member_status_url` is set, it creates `sitable.NewReplicaReads()` and passes it as `housegate.Options.StorageIntegrityReplicaReads`. It builds `serve.NewClient(url, os.Getenv(config.StorageIntegrityMemberStatusTokenEnv), &http.Client{Timeout: 5 * time.Second})` and the lease client (with `Refresh: state.Refresh` and `InFlight: replicaReads.InFlight`), and runs it with the table-state runtime.
+- `standalone/standalone.go`: when `storage_integrity.replica_reads.member_status_url` is set, it creates `sitable.NewReplicaReads()` and passes it as `housegate.Options.StorageIntegrityReplicaReads`. It builds `serve.NewClient(url, os.Getenv(config.StorageIntegrityMemberStatusTokenEnv), &http.Client{Timeout: 5 * time.Second})` and the lease client (with `Refresh: state.Refresh`, `InFlight: replicaReads.InFlight` and `ServeUntil: replicaReads.ServeUntil`), and runs it with the table-state runtime.
 - `commands/storage_integrity.go` gains `sentio-node storage-integrity member-serving --config-path <file>` (`newMemberServingCommand`). It prints the member's `ServingView` JSON to stdout, read with the token from the environment, never printed. It refuses without `member_status_url` (`storage_integrity.replica_reads.member_status_url is not set: this host has no member to ask`).
 
 **31.8 Named tests (Task 46).**
@@ -28149,6 +28734,17 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 - Names added while drafting: sitablestate.Plugin.replicaReadEnds (unexported sync.Map: session id to the end func of its in-flight replica read); (*sitablestate.Plugin).beginReplicaRead and endReplicaRead (unexported helpers); (*sitablestate.Plugin).OnQueryComplete and OnClose (the QueryCompletePlugin/ClosePlugin methods §29.1 requires); test helpers replicaTable (pkg/sitable), replicaSnapshot, replicaQuery, replicaErr (pkg/plugins/sitablestate)
 - Verified while drafting: Fresh git archive of housegate origin/main 862a7a8 in work/c4/task-42-r3, with S3-C1 Task 22's CopyTable, its two tests and its CLAUDE.md sentence applied verbatim, tagged as the HG_TAG_P1 stand-in. Step 1's checks printed 'descends', 'pkg/sitable/sitable.go:3' and an empty diff. / The task text was applied mechanically from its code blocks with Go 1.26.3 (GOWORK=off GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local). Steps 3, 8, 13 and 18 failed with exactly the compile errors the task states, and every pass step, -race run, vet and gofmt check passed. The five commits and '24 files changed, 1017 insertions(+), 41 deletions(-)' matched. A second full replay of the final text gave an identical git tree (35c82d7). / go test passed on every package except the three under pkg/integration that need ClickHouse containers. pkg/storageintegrity needed -vet=off for a vet note that is also present at the base. / bazel run //:gazelle changed nothing, bazel build //... passed, and bazel test //... --nocache_test_results gave 'Executed 67 out of 67 tests: 67 tests pass.' All external repositories came from local caches. / 19 mutations were each caught by their named test: dedup, sync.Once, Served clone/sort, Compact, NewSnapshot collecting Replica, Schema answering Replica, omitempty, rpc refusing replica, the Replica rows, DROP allowed, reads refused, a refused query counted, a lost end kept, OnClose not ending, an operator session counted, hooks always registered, the counter not passed, the option refusal removed. / Read-only ledger lookups against the local housegate clone (no fetch): s3-ledger get HG_TAG printed 'HG_TAG=v0.20.0'. s3-ledger get HG_TAG_P1 stopped with "not a row of any plan's Appendix C: ['HG_TAG_P1']; stop"; Step 1 now states this stop. / All 7 bash blocks and 11 Run lines pass bash -n with the placeholders filled. shellcheck reports only SC2016 on Step 22's check, whose literal backticks are intended. The markdown has no hard-wrapped prose and no TBD or TODO.
 - Review fixes (AgentConnect round 1), finding 2 (read admission, with Task 46): rewrite takes a query's snapshot before sitablestate counts the read, so a query whose rewrite outlasted the host's dropping snapshot and its InFlight == 0 release check was admitted and read the copy while the member installed (reproduced on the Task 42 stand-in: after the drop and a 0 InFlight, OnQuery returned nil and counted the read). sitablestate now counts first and then checks TableState.Current() (new Plugin.TableState, set by build.go with the counter), uncounting and refusing with the retryable 733 `storage_integrity: table %s is no longer served from the copy this query was planned against; retry the query (retryable)` when a Replica table is no longer served from the same copy and owner. New tests TestOnQuery_AReplicaReadPlannedBeforeServingEndedIsRefused (a rewriter blocked across both host polls) and TestReplicaReadAdmissionNeverOverlapsARelease (50 rounds of 8 racing sessions); the existing gate tests and TestBuildWiresReplicaReadsIntoSitablestate give the gate a table state. Verified on a git archive of housegate origin/main 862a7a8 with a CopyTable stand-in and Task 42's sitable, sitablestate and root-option blocks applied from the plan text: Step 13 fails to compile as stated, Steps 15 and 20 pass (sitablestate under -race, three counts), gofmt and go vet clean; mutations each caught: no current-snapshot check (both new tests), the check before the count with a yield between (the race test), build.go not setting TableState (the root test). Step 24's stat moves from 1017 to 1193 insertions (41 deletions unchanged): computed from the per-file line deltas of the four changed files (+45, +119, +2, +10), all inside lines Task 42 adds, not measured on a full 24-file replay.
+- Review fixes (AgentConnect round 2), the P1 (lease expiry independent of table-state refresh, with Task 46).
+  - **The defect.** The read admission checked a counted read only against `TableState.Current()`. The published snapshot carries no deadline, and Task 46's `Refresh` holds its refresh lock across the chain-state read, so a blocked chain read kept a Replica snapshot published past the host's lease deadline and the TTL. Fresh reads of the copy were admitted while the member could install. On the replay, the drafted gate admitted a read 27 s after a 30 s grant (`err = <nil>, want ClientError code 733`, `in flight = map[db2:1]`).
+  - **The fix.** `sitable.ReplicaReads` gains the admission fence: `NewReplicaReadsWithClock`, `ServeUntil` (the zero time closes it; a database is closed until first opened) and `Admit` (Begin behind the fences, in one critical section; a nil counter admits nothing). `beginReplicaRead` admits through `Admit` (the same 733 text, ending any end the session still holds), then keeps round 1's current-snapshot check.
+  - **Tests.** New `TestReplicaReadsAdmitsOnlyBeforeTheServingFence` and `TestOnQuery_AFreshReplicaReadAfterTheLeaseDeadlineIsRefused` (the snapshot stays Replica across the fence, the TTL and TTL+0.5 s). `TestReplicaReadAdmissionNeverOverlapsARelease` races each host signal alone: publish the drop, or close the fence with the snapshot still serving. The earlier gate tests use an open-fence `servingReads()`, and `TestBuildWiresReplicaReadsIntoSitablestate` opens db2's fence.
+  - **Verification.** On a `git archive` of housegate `origin/main` `ed24705` (code = `862a7a8`) with an S3-C1 Task 22 stand-in, with Steps 2, 4, 9, 12, 14, 17 and 19 applied from the plan text:
+    - Steps 3, 13 and 18 fail as stated; Step 3 now also lists `undefined: NewReplicaReadsWithClock`.
+    - With the drafted gate the two new gate tests fail (`closes the fence, round 0: 82 reads of db2 admitted after the host released its lease`).
+    - `go test -race` passes three times on sitablestate, and on sitable, sipeerguard, registry, network and the root package. gofmt and vet are clean.
+    - Mutations killed: `Admit` ignoring the time, a closed database admitted, and no current-snapshot check.
+  - **Step 24** expects 1508 insertions (+315 net lines inside this task's own lines, from per-file deltas of a 15-file partial replay).
+  - **Commit identity.** Step 1 sets the worktree commit identity (`poetry <chen@sentio.xyz>`), and Steps 16 and 21 check it.
 
 ### Task 43
 
@@ -28213,6 +28809,24 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 - Names added while drafting: config: (StorageIntegrityReplicaReads).validate(token), isHTTPHostPortURL, refuseStorageIntegrityMemberStatusTokenKey(data), (StorageIntegrityMemberServe).ListenAddr(), (StorageIntegrityMemberServe).ServeConfig(token) *serve.Config (nil without a token), unexported validate/ownerUnreachableAfter/ownerProbeInterval/leaseTTL/isListenAddress/isHostPort, refuseSIMemberServeTokenKey(data); new file config/si_member_serve.go; tablestate: const LeaseReleased = "released", LeaseExpired = "expired"; (*Metrics).RegisterReplicaReads(reg), ObserveMemberStatus(up), ObserveLeaseRelease(outcome); unexported replicaEntries, replicasEqual, sortReplicaTables, content.replicas, registryInput.replicas, Snapshot.served; Issue reasons 'not served from the member's copy: ...'; the warn log 'storage-integrity table state applied a replica-serving change to the last chain-state read because the chain-state read is failing'; new file replica.go; replicalease: type Client; refusals 'replicalease: the member status client is required', '... the in-flight replica-read counter is required', '... the table-state refresh is required'; its log lines (acquired, not acquired, renew failed, dropped with reasons lease deadline / no longer served / lease unknown to the member / lease revoked, release failed, ended, endpoint unreachable / answers again); replicalease/replicaleasetest (test support): Member, NewMember(t, token, ttl), URL, Serve, StopServing, Forget, Close, Calls, Held; standalone: deps field replicaMember *serve.Client; runtime fields replicaReads and leases; (*storageIntegrityTableStateRuntime).replicaReadsCounter(); newStorageIntegrityMemberClient(url); storageIntegrityMemberClientTimeout (5 s); PrintStorageIntegrityMemberServing(ctx, cfg, out); storageIntegrityReplicaCollector / newStorageIntegrityReplicaCollector; task name 'storage integrity replica leases'; errors 'storage integrity member status client: %w', 'storage-integrity replica leases: %w', 'register storage-integrity replica-read metrics: %w', 'member-serving requires a config', 'member-serving: %w', 'member-serving: read the serving view of %s: %w'; files storage_integrity_member_serving.go, storage_integrity_replica_metrics.go; simember: siMemberRole gains ServeHandler() http.Handler and ServeMetrics() *serve.Metrics; runDeps.serving func(net.Addr); prepareSIMemberServing; siMemberServe(cfg, token, role siMemberRole); errors 'si-member serve: STORAGE_INTEGRITY_MEMBER_STATUS_TOKEN is empty', 'si-member serve: the member role has no serving endpoint', 'si-member serve metrics: %w', 'si-member serving listener %s: %w'; exit part 'serving endpoint'; logs 'si-member serving endpoint listening', 'shut down the si-member serving endpoint'; new file simember/serve.go; commands: newMemberServingCommand with its Short and Long; tests beyond contract §31.8: TestLeaseIsReleasedRightAfterTheSnapshotThatDropsTheDatabase, TestNewRefusesAnIncompleteConfig (replicalease), TestStorageIntegrityCommandOffersMemberServing (commands); CI: acceptance step name suffix ', replica reads', SKIP/PASS patterns 'Test(StorageIntegrity|SIMember)', expected count 8; README subsection '### Storage-integrity replica reads (stage 3 P3)'; local names: container sn-s3c4-t46-ch, PR body ~/src/remotesrc/claude/sentio-node/multi-source-s3c4.pr-body.md, run record $HOME/.cache/s3-ledger/record-s3c4-46.md and state file record-s3c4-46
 - Verified while drafting: Fresh scratch <scratch> stand-ins hg-p1 (housegate v0.20.0 + S3-C1 Task 22 CopyTable/OwnerEntry), hg (Task 42's verified tree + OwnerEntry + Task 44's si_info.go hunks applied from its markdown), core-p2 (arbiter-core v0.15.0 + S3-C2 member stand-ins + Task 29's ManifestOwner), core (core-p2 + Task 45's member/serve sources verbatim, whose own tests pass, + a member.Role stand-in with Config.Serve and the three methods). / sentio-node prior state: git archive origin/main 5d2f169 with the markdown of S3-B Task 12, S3-C1 Task 25 and S3-C2 Task 35 applied mechanically by a hunk applier (pins emulated with go.mod replaces and the tasks' MODULE.bazel scripts); Task 25's standalone backup code stubbed and Task 35's simember/install_ch_test.go left out; prior state gofmt-clean, go vet and go test ./... green. / Replayed the task markdown step by step (GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go): Step 2's pin script changed exactly 6 lines (six -, six +) and was idempotent; build failed with 'missing method Served' as stated; every Expected FAIL (Steps 4, 6, 8, 10, 12, 14, 16) showed the stated messages; every implementation step passed; Step 5/7/9/11/13/15/17/18 git status lists matched. / All 24 contract §31.8 tests plus the three extra tests pass; go test -race on config, storageintegrityadapter/..., rpc, standalone, commands, simember; gofmt clean; go vet ./... clean. / Offline Bazel 9.1.0 (--repository_disable_download, --override_module housegate/arbiter_core to the P3 stand-ins): bazel build //... and bazel test //... (18 tests) passed; bazel run //:gazelle changed no line this task writes (only stand-in artifacts of the stubbed Task 25/35 files). / ClickHouse 25.8.32.4 with Keeper: Step 18's block printed nine PASS lines incl. TestSIMemberServesAQuarantinedOwnersDatabaseThroughTheHost (3.0 s) and TestSIMemberServesAnUnreachableOwnersDatabaseThroughTheHost (4.0 s); the new ci.yml acceptance step run through Bazel passed with 8 PASS markers. / Step 19's CI-script check printed 'step script ok', 'eight passes accepted', 'storage-integrity acceptance skipped', 'expected 8 ... saw 7'; Step 21's binary block printed exactly its 7 expected lines, no LEAK; Step 22's PR-body block printed 0 and 1. / Step 1's ledger reads and Step 23's R1/R2/R4 blocks ran against a local bare origin (real S3-A plan on main, stub C2/C4 plans on the -cf branch; git worktree add in place of urwt-create.sh): ref, get, empty, set and the push printed the expected lines and filled the two rows and the 'sentio-node release' item. / Step 1's contract greps run against git repos of the hg/core stand-ins gave the stated counts (6 sitable, 4 ReplicaReads, 6 table_status, 2 si_info, 1 proxy, sitablestate 1, 6 serve constants, 5 client/error/metrics, 4 member, snode 1). / 28 mutations: 27 killed by named tests, 1 equivalent survives (CopyTable/ReplicaOf dropped from content.equal). / All 30 bash blocks and 19 Run lines pass bash -n and shellcheck with placeholders filled (Step 21's gofmt Run line rewritten to xargs -0 to clear SC2046); buildifier -mode=check -lint=warn passes on the 7 BUILD files; actionlint reports only the pre-existing SC2046 at ci.yml:35; fences balanced, no hard-wrapped prose.
 - Review fixes (AgentConnect round 1), finding 2 (with Task 42): the one-poll grace did not bound the gap between rewrite's snapshot and sitablestate's count, so a slow rewrite could reach the copy after the release. Task 42's read admission closes it, and the lease client now releases a dropped lease on the poll whose Refresh published the dropping snapshot (after that Refresh) or later, at InFlight == 0, without a grace poll; release lost its poll parameter. TestLeaseIsReleasedOnAPollAfterTheDropEvenWithoutReads became TestLeaseIsReleasedRightAfterTheSnapshotThatDropsTheDatabase, which checks through a refresh hook that nothing is released before the dropping snapshot is published. Verified in a stub module (the plan's replicalease client, its tests and replicaleasetest over Task 45's member/serve from the plan, a tablestate stand-in of the plan's ReplicaDatabase/Metrics names, housegate stand-ins): the new test fails first (`the same poll releases the lease once the snapshot is published`: expected 1, actual 0), then the package passes with -race; releasing before the Refresh fails it.
+- Review fixes (AgentConnect round 2), the P1 (with Task 42).
+  - **The defects.** `Refresh` sampled `Replicas.Serving(now)` before its chain-state read and held `refreshMu` across it, so a refresh blocked from t=26 s published that view when it returned after the lease's expiry. Nothing outside the snapshot stopped HouseGate from admitting fresh replica reads meanwhile.
+  - **The fixes.**
+    - `Refresh` asks the replica source after the chain-state read, failing or not (new helper `replicaServing`). The hunks are now anchored at base `:184-188` and `:205-217`.
+    - `replicalease.Config` gains the required `ServeUntil` (HouseGate's `ReplicaReads.ServeUntil`; refusal `replicalease: the replica-read admission fence is required`). Every acquire and renew sets it to the local deadline minus `serve.HostDeadlineMargin`, and every drop closes it before the poll's `Refresh`.
+    - `standalone` wires `ServeUntil: replicaReads.ServeUntil` (the wall clock, the lease client's clock).
+  - **Tests.**
+    - `TestAFreshReplicaReadIsRefusedAfterTheLeaseDeadlineWhileTheChainReadBlocks` runs the real lease client, table state and HouseGate `sitablestate` gate. The member is closed and the lease client stopped, and a chain-state read is blocked across the margin and the TTL. A fresh read is admitted at t=26 s and refused 733 at 27 s, 30 s and 30.5 s while the snapshot still answers Replica, with nothing counted. Once the read returns, the refresh publishes no Replica entry.
+    - `TestLeaseClientFencesReplicaReadsAtItsLocalDeadline` has the subtests `deadline` (closes with no poll), `renewal` and `drop` (closed before the `Refresh`).
+    - `TestNewRefusesAnIncompleteConfig` gains the fence refusal.
+    - `leaseChain.hang`, `leaseHost.reads`, `stopLeases` and `read`, and `testHost.reads` and `admitted` are new test-only names. The `tablestate_test` Bazel deps gain chproto, chsession, plugin, plugins/sitablestate and sqlmeta; `replicalease_test` gains sitable.
+  - **Verification.** On sentio-node `origin/main` `0828f21`, with housegate and arbiter-core replaced by scratch modules (the round-2 Task 42 replay; arbiter-core `cfd4f42` with Task 45's `member/serve` from the plan and an S3-C2 Task 29 `ManifestOwner` stand-in), Steps 3 and 6–9 were applied from the plan text:
+    - Step 8 fails as stated; Step 9 passes vet, gofmt and `-race -count=3`.
+    - The regression fails with the drafted gate (`a fresh replica read was admitted 27s after the grant while the chain-state read blocked`) and with the drafted sampling order (`the refresh that blocked publishes no Replica entry past the deadline`).
+    - Mutations killed: no fence on renew, a drop that leaves the fence open, and a fence without the margin.
+    - The `standalone` hunk was type-checked in isolation. Bazel and the ClickHouse acceptance were not run.
+  - **Commit identity.** Step 1 sets the worktree commit identity, and Step 9's commit checks it.
+  - **Format.** The part's stray trailing `---` (a doubled separator before Task 47) was dropped.
 
 ### Task 47
 
