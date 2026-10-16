@@ -41,6 +41,7 @@ Every plan file has its front matter (header, Global Constraints, clarifications
   - S3-C4 (fix 246-3): `serve.Deps.StateDir` is required, and leases are recorded before they are granted. An unreadable lease record stops the si-member from starting (fail closed).
   - S3-C4 (fix 246-2): a lease is released right after the Refresh that drops the database, with no grace poll. sitablestate's read admission carries the guarantee.
   - S3-C4 (fix 246-4): when every candidate takes the read but none serves it, the client gets the owner's original error and the session stays on the last candidate.
+  - S3-C4 (fix 246-5, AgentConnect round 2): the lease deadline is enforced by an admission fence in housegate's `sitable.ReplicaReads`, set by sentio-node's lease client; a database is closed until its lease opens it (fail closed); `sitablestate` without a counter is unchanged (only host-injected states produce Replica entries).
   - S3-E1 (fix 248-3): the owner Keeper audit derives the network pool on the data plane (`wire.TableRegistrySnapshot.NetworkPool`). The arbiter does not serve the pool's node ids.
   - S3-E1 (fix 248-2): a consensus-mode member's startup accepts its own id in the purge node set. SNode ids and ids that another host governs are still refused.
   - S3-E4 and S3-F (fix 249-2): after placement, `replica_hosts` lists every current group member's host, never filtered by `MemberReady`.
