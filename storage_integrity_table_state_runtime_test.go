@@ -87,6 +87,18 @@ func refusedState() sitable.TableState {
 	})
 }
 
+// heldPendingState reports net1.events the way a host reports an Active
+// incarnation it holds back (spec 2026-10-14 §14: not ready on its SNode, or
+// an unclean owner hg_safe audit in repair mode): Pending, its schema and
+// hash kept.
+func heldPendingState() sitable.TableState {
+	schema := bpSchemas()[0]
+	return sitable.NewFake(sitable.Pending, sitable.Table{
+		ID: "net1.events", Status: sitable.Pending,
+		Schema: schema, SchemaHash: payloadexec.TableSchemaHash("testnet-v2", schema),
+	})
+}
+
 func TestRecoveryUsesJournaledPartitionsWithoutASchema(t *testing.T) {
 	journal := leavePendingRecord(t, []string{"p_eu"})
 	pressure, err := recoverWith(t, journal, purgedState())
@@ -154,6 +166,44 @@ func TestTableStateSchemaResolverAnswersAQuarantinedTable(t *testing.T) {
 	}
 	if _, ok := tableStateSchemaResolver(refusedState()).StorageIntegrityTableSchema("net1.events"); ok {
 		t.Fatal("a table refused at admission has no schema to resolve")
+	}
+}
+
+// TestTableStateSchemaResolverResolvesAHeldPendingTable pins the resolver that
+// journal recovery and cleanup share (contract §2, spec 2026-10-14 §14): it
+// answers a Pending table that carries a schema, an Active incarnation its
+// host holds back, and still misses a default-deny Pending table, listed or
+// not, which carries none.
+func TestTableStateSchemaResolverResolvesAHeldPendingTable(t *testing.T) {
+	want := bpSchemas()[0]
+	got, ok := tableStateSchemaResolver(heldPendingState()).StorageIntegrityTableSchema("net1.events")
+	if !ok || got.TableID != want.TableID || got.PartitionBy != want.PartitionBy || !slices.Equal(got.Columns, want.Columns) {
+		t.Fatalf("resolver = %+v ok=%v, want the held table's schema", got, ok)
+	}
+	denied := sitable.NewFake(sitable.Pending, sitable.Table{ID: "net1.events", Status: sitable.Pending})
+	if _, ok := tableStateSchemaResolver(denied).StorageIntegrityTableSchema("net1.events"); ok {
+		t.Fatal("a listed default-deny Pending table has no schema to resolve")
+	}
+	if _, ok := tableStateSchemaResolver(purgedState()).StorageIntegrityTableSchema("net1.events"); ok {
+		t.Fatal("an unrecorded (Pending by default) table has no schema to resolve")
+	}
+}
+
+// TestRecoveryOfAHeldPendingTableResolvesItsSchema closes the legacy-record
+// gap the owner audit's hold would open (spec 2026-10-14 §14): a record
+// without journaled partitions, admitted while the table was Active, still
+// recovers after a restart that finds the table held Pending by its host.
+// Without the schema recovery would call the table purged and fail closed.
+func TestRecoveryOfAHeldPendingTableResolvesItsSchema(t *testing.T) {
+	journal := leavePendingRecord(t, nil)
+	pressure, err := recoverWith(t, journal, heldPendingState())
+	if errors.Is(err, ErrStorageIntegrityRecoverySchemaPurged) {
+		t.Fatalf("a held Pending table keeps its schema in the table state: %v", err)
+	}
+	pressure.mu.Lock()
+	defer pressure.mu.Unlock()
+	if pressure.restored != 1 {
+		t.Fatalf("restored = %d, want 1", pressure.restored)
 	}
 }
 

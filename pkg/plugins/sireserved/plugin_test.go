@@ -1,17 +1,24 @@
 package sireserved
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"log/slog"
 	"net"
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/ClickHouse/ch-go/proto"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/housegate/housegate/pkg/chproto"
 	"github.com/housegate/housegate/pkg/chsession"
+	"github.com/housegate/housegate/pkg/log"
 	"github.com/housegate/housegate/pkg/plugin"
 	"github.com/housegate/housegate/pkg/sitable"
+	"github.com/housegate/housegate/pkg/sqlsurface"
 )
 
 func newSessionForTest(t *testing.T, id int64) chsession.Session {
@@ -213,14 +220,19 @@ func TestOnQuery_IdentifierPlaceholderTransportAndDecoyRules(t *testing.T) {
 	}
 }
 
-func TestOnQuery_IdentifierPlaceholderLeavesOrdinaryPeerBypassAlone(t *testing.T) {
+// TestOnQuery_IdentifierPlaceholderLeavesOrdinarySessionsAlone: an ordinary
+// session and a session forwarded from a peer keep the D6 boundary; the
+// receiving host's tablerefguard (G4) and the engines own their placeholders.
+// A plain peer loopback is no longer exempt (spec 2026-10-14 §14):
+// TestOnQuery_PeerSessionsRefuseIdentifierPlaceholders.
+func TestOnQuery_IdentifierPlaceholderLeavesOrdinarySessionsAlone(t *testing.T) {
 	p := &Plugin{ReservedDatabases: []string{"hg_safe", "hg_unsafe"}, ReservedRowIDColumn: "_hg_row_id"}
 	for _, tc := range []struct {
 		name string
 		set  func(*chsession.SessionState)
 	}{
 		{name: "ordinary", set: func(*chsession.SessionState) {}},
-		{name: "ordinary peer", set: func(state *chsession.SessionState) { state.SetPeerTrust("10.0.0.7:9000") }},
+		{name: "forwarded from a peer", set: func(state *chsession.SessionState) { state.SetPeerTrustForwarded("10.0.0.7:9000", true) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sess := newSessionForTest(t, 22)
@@ -232,7 +244,7 @@ func TestOnQuery_IdentifierPlaceholderLeavesOrdinaryPeerBypassAlone(t *testing.T
 			}}
 			chain := &plugin.PluginChain{QueryPlugins: []plugin.QueryPlugin{p}}
 			if err := chain.OnQuery(context.Background(), qctx); err != nil {
-				t.Fatalf("non-operator D6 peer behavior must remain unchanged: %v", err)
+				t.Fatalf("non-operator, non-loopback sessions must stay out of scope: %v", err)
 			}
 		})
 	}
@@ -361,7 +373,12 @@ func TestOnQuery_ObjectCarrierScanAvoidsNonCallableFalsePositives(t *testing.T) 
 	}
 }
 
-func TestOnQuery_LeavesOrdinaryAndNonOperatorSessionsAlone(t *testing.T) {
+// TestOnQuery_LeavesOrdinarySessionsAlone: an operator session reading an
+// ordinary table passes, and an ordinary session or one forwarded from a peer
+// is out of scope even when it names a reserved database (tablerefguard and
+// the engines refuse it there). A plain peer loopback naming one is refused:
+// TestOnQuery_PeerSessionsRefuseReservedNamespace.
+func TestOnQuery_LeavesOrdinarySessionsAlone(t *testing.T) {
 	p := &Plugin{ReservedDatabases: []string{"hg_safe"}, ReservedRowIDColumn: "_hg_row_id"}
 
 	sess := newSessionForTest(t, 3)
@@ -372,13 +389,16 @@ func TestOnQuery_LeavesOrdinaryAndNonOperatorSessionsAlone(t *testing.T) {
 		t.Fatalf("ordinary table must pass: %v", err)
 	}
 
-	peer := newSessionForTest(t, 4)
-	peer.State().SetPeerTrust("10.0.0.7:9000")
 	const reserved = "SELECT * FROM hg_safe.db1__t"
-	pctx := &plugin.QueryContext{Session: peer, OriginalSQL: reserved, Query: &chproto.Query{Body: reserved}}
-	chain := &plugin.PluginChain{QueryPlugins: []plugin.QueryPlugin{p}}
-	if err := chain.OnQuery(context.Background(), pctx); err != nil {
-		t.Fatalf("a plain peer session is out of scope for the operator guard: %v", err)
+	plain := newSessionForTest(t, 4)
+	forwarded := newSessionForTest(t, 5)
+	forwarded.State().SetPeerTrustForwarded("10.0.0.7:9000", true)
+	for name, s := range map[string]chsession.Session{"ordinary": plain, "forwarded from a peer": forwarded} {
+		pctx := &plugin.QueryContext{Session: s, OriginalSQL: reserved, Query: &chproto.Query{Body: reserved}}
+		chain := &plugin.PluginChain{QueryPlugins: []plugin.QueryPlugin{p}}
+		if err := chain.OnQuery(context.Background(), pctx); err != nil {
+			t.Fatalf("%s session is out of scope for sireserved: %v", name, err)
+		}
 	}
 }
 
@@ -848,9 +868,11 @@ func TestOnQuery_UnicodeWhitespaceCannotHideACarrier(t *testing.T) {
 	}
 }
 
-// TestOnQuery_RefusesEveryReservedDatabase is spec 2026-09-26 T11: the guard,
-// built from sitable.ReservedDatabases() as build.go does, refuses each
-// reserved database including hg_promote.
+// TestOnQuery_RefusesEveryReservedDatabase is spec 2026-09-26 T11 and spec
+// 2026-10-14 §14: the guard, built from sitable.ReservedDatabases() as build.go
+// does, refuses each reserved database, hg_promote and the stage-3 member
+// databases included, on an operator session (the operator message) and on a
+// peer loopback (the peer 392).
 func TestOnQuery_RefusesEveryReservedDatabase(t *testing.T) {
 	p := &Plugin{ReservedDatabases: sitable.ReservedDatabases(), ReservedRowIDColumn: "_hg_row_id"}
 	for _, db := range sitable.ReservedDatabases() {
@@ -865,5 +887,400 @@ func TestOnQuery_RefusesEveryReservedDatabase(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), db) {
 			t.Errorf("%s: err = %v, want a refusal naming the database", sql, err)
 		}
+		var ce *chproto.ClientError
+		if errors.As(err, &ce) {
+			t.Errorf("%s: the operator refusal must stay a plain error (403), got %+v", sql, ce)
+		}
+		err = runChain(context.Background(), p, peerQuery(t, sql, false))
+		if !errors.As(err, &ce) || ce.Code != chproto.CodeQueryIsProhibited || ce.Message != peerReservedMessage(db) {
+			t.Errorf("%s on a peer loopback: err = %v, want the 392 naming %s", sql, err, db)
+		}
+	}
+}
+
+// peerGuard is the guard as build.go wires it.
+func peerGuard() *Plugin {
+	return &Plugin{ReservedDatabases: sitable.ReservedDatabases(), ReservedRowIDColumn: "_hg_row_id"}
+}
+
+// peerQuery returns a query context on a peer-trusted session: a rewriter
+// remote() loopback when forwarded is false, a forward pivot otherwise.
+func peerQuery(t *testing.T, sql string, forwarded bool) *plugin.QueryContext {
+	t.Helper()
+	sess := newSessionForTest(t, 40)
+	sess.State().SetPeerTrustForwarded("10.0.0.7:9000", forwarded)
+	return &plugin.QueryContext{Session: sess, OriginalSQL: sql, Query: &chproto.Query{Body: sql}}
+}
+
+// runChain runs p through a one-plugin chain so its marker methods decide.
+func runChain(ctx context.Context, p *Plugin, qctx *plugin.QueryContext) error {
+	return (&plugin.PluginChain{QueryPlugins: []plugin.QueryPlugin{p}}).OnQuery(ctx, qctx)
+}
+
+func peerReservedMessage(name string) string {
+	return "storage_integrity: reserved name " + name + " is not addressable on a peer connection; the peer guard refuses any mention, string literals included"
+}
+
+func requirePeerRefusal(t *testing.T, err error, message string) {
+	t.Helper()
+	var ce *chproto.ClientError
+	if !errors.As(err, &ce) || ce.Code != chproto.CodeQueryIsProhibited || ce.Message != message {
+		t.Fatalf("err = %v, want 392 %q", err, message)
+	}
+}
+
+func captureLogs(t *testing.T) (context.Context, *bytes.Buffer) {
+	t.Helper()
+	var buf bytes.Buffer
+	return log.WithContext(context.Background(), log.New(slog.NewTextHandler(&buf, nil))), &buf
+}
+
+// peerLegForms is the regression corpus of the SQL a storage-integrity host
+// receives on a legitimate rewriter remote() loopback (peer-trusted, not
+// forwarded): ClickHouse's secondary queries for the legs the origin's
+// rewriter emits — rewriter-go nodes.go ActionRemote in FROM/JOIN and
+// IN-operand position, dblevel.go SHOW TABLES of a remote logical database,
+// and the structure probe ClickHouse sends because rewriter-go never passes a
+// structure argument. Rows marked (measured) are ClickHouse 26.8.1 output
+// pinned in sipeerguard's tests, rows marked (measured 25.8) are ClickHouse
+// 25.8.28.1 output, and the others follow the same formatting.
+// TestPeerReservedGuard_MeasuredRemoteSecondaryQueriesPass captures from
+// ClickHouse itself every class one server emits; it cannot see the
+// structure probe (ClickHouse reads a local shard's structure without
+// sending it) or the bare IN-operand form (ClickHouse refuses it at the
+// initiator). Every row except the system.tables probe names the physical
+// database phys, and no other word contains "phys", so
+// TestOnQuery_PeerLegFormsWithAReservedNameAreRefused can put a reserved
+// database in its place.
+var peerLegForms = map[string]string{
+	// (a) The remote() structure probe; 25.8.28.1 writes the database bare
+	// (measured against a second server).
+	"structure probe":                 "DESC TABLE `phys`.`db1.t`",
+	"structure probe (measured 25.8)": "DESC TABLE phys.`db1.t`",
+	// (b) A table read pushed down to the leg.
+	"pushed-down count (measured)":        "SELECT count() AS `count()` FROM `phys`.`db1.t` AS `__table1`",
+	"bare physical database (measured)":   "SELECT `__table1`.`value` AS `value` FROM phys.`db1.t` AS `__table1`",
+	"pushed-down filter":                  "SELECT `__table1`.`id` AS `id`, `__table1`.`s` AS `s` FROM `phys`.`db1.t` AS `__table1` WHERE `__table1`.`id` IN (1, 2)",
+	"aggregation with GROUP BY and LIMIT": "SELECT `__table1`.`s` AS `s`, sum(`__table1`.`x`) AS `sum(x)` FROM `phys`.`db1.t` AS `__table1` GROUP BY `__table1`.`s` ORDER BY `__table1`.`s` ASC LIMIT 10",
+	"uniq intermediate state":             "SELECT uniq(`__table1`.`s`) AS `uniq(s)` FROM `phys`.`db1.t` AS `__table1`",
+	"FINAL and PREWHERE":                  "SELECT `__table1`.`id` AS `id` FROM `phys`.`db1.t` AS `__table1` FINAL PREWHERE `__table1`.`x` > 0.5",
+	"pre-analyzer formatting":             "SELECT count() FROM phys.`db1.t`",
+	"backslash alias (measured)":          "SELECT extract(`__table1`.`s`, '\\\\d+') AS `extract(s, '\\\\\\\\d+')` FROM `phys`.`db1.t` AS `__table1`",
+	"newline alias (measured)":            "SELECT concat(`__table1`.`s`, '\\n') AS `concat(s, '\\\\n')` FROM `phys`.`db1.t` AS `__table1`",
+	"quote alias (measured)":              "SELECT concat(`__table1`.`s`, 'it\\'s') AS `concat(s, 'it\\\\'s')` FROM `phys`.`db1.t` AS `__table1`",
+	"decimal alias (measured)":            "SELECT avg(`__table1`.`x` * 1.5) AS `avg(multiply(x, 1.5))` FROM `phys`.`db1.t` AS `__table1`",
+	"countIf alias (measured)":            "SELECT countIf(`__table1`.`x` > 0.5) AS `countIf(greater(x, 0.5))` FROM `phys`.`db1.t` AS `__table1`",
+	"Nested column (measured)":            "SELECT `__table1`.`n.a` AS `n.a` FROM `phys`.`db1.t` AS `__table1`",
+	"dotted alias (measured)":             "SELECT `__table1`.`s` AS `db1.alias` FROM `phys`.`db1.t` AS `__table1`",
+	// A client literal the origin's tablerefguard G4 admits becomes alias text.
+	"Identifier-shaped literal in an alias": "SELECT concat(`__table1`.`s`, '{p:Identifier}') AS `concat(s, '{p:Identifier}')` FROM `phys`.`db1.t` AS `__table1`",
+	// (c) SHOW TABLES of a remote logical database.
+	"SHOW TABLES structure probe": "DESC TABLE `system`.`tables`",
+	"SHOW TABLES filtered read":   "SELECT `__table1`.`name` AS `name` FROM `system`.`tables` AS `__table1` WHERE (`__table1`.`database` = 'phys') AND startsWith(`__table1`.`name`, 'db1.')",
+	// (d) GLOBAL IN / GLOBAL JOIN: the origin computes the local side, hg_safe
+	// reads included, and ships it as an external table.
+	"GLOBAL IN external table (analyzer)":     "SELECT count() AS `count()` FROM `phys`.`db1.t` AS `__table1` WHERE `__table1`.`id` GLOBAL IN (`_data_7020342823616227185_10950398713282440232`)",
+	"GLOBAL IN external table (pre-analyzer)": "SELECT count() FROM phys.`db1.t` WHERE id GLOBAL IN _data1",
+	"GLOBAL JOIN external table":              "SELECT `__table1`.`id` AS `id`, `__table2`.`v` AS `v` FROM `phys`.`db1.t` AS `__table1` GLOBAL ALL INNER JOIN `_data_7020342823616227185_10950398713282440232` AS `__table2` USING (`id`)",
+	// The 25.8.28.1 analyzer aliases the external table and writes LIMIT as a
+	// typed cast.
+	"GLOBAL IN external table with an alias (measured 25.8)": "SELECT count() AS `count()` FROM `phys`.`db1.t` AS `__table1` WHERE `__table1`.`id` GLOBAL IN (`_data_12979155211854796489_16094174518441047580` AS `__table2`)",
+	"LIMIT as a typed cast (measured 25.8)":                  "SELECT `__table1`.`s` AS `s`, sum(`__table1`.`x`) AS `sum(x)` FROM `phys`.`db1.t` AS `__table1` GROUP BY `__table1`.`s` ORDER BY `__table1`.`s` ASC LIMIT _CAST(10, 'UInt64')",
+	// (e) A nested remote() carrier, whose literals name another host, the
+	// physical database and the peer envelope: ClickHouse pushes a
+	// remote()-left JOIN of another remote() and an IN subquery over another
+	// remote() into the leg (measured on 25.8.28.1, arguments as the
+	// rewriter renders them). rewriter-go's bare IN-operand form is refused by
+	// ClickHouse 25.8 and 26.3 at the initiator; it stays admitted here so the
+	// rule never depends on that refusal.
+	"remote JOIN pushed into the leg (measured 25.8)":        "SELECT count() AS `count()` FROM `phys`.`db1.t` AS `__table1` ALL INNER JOIN remote('10.0.0.5:9000', 'phys', 'db1.u', '__route__|10.0.0.5:9000|__peer__|0x5a1f0e07c3e5d2b6a7f8e9d0c1b2a3f4e5d6c7b8', 'eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJzdWIiOiJwZWVyLWhlbGxvIn0.c2lnbmF0dXJlX2J5dGVz') AS `__table2` ON `__table1`.`id` = `__table2`.`id`",
+	"remote IN subquery pushed into the leg (measured 25.8)": "SELECT count() AS `count()` FROM `phys`.`db1.t` AS `__table1` WHERE `__table1`.`id` IN (SELECT `__table1`.`id` AS `id` FROM remote('10.0.0.5:9000', 'phys', 'db1.u', '__route__|10.0.0.5:9000|__peer__|0x5a1f0e07c3e5d2b6a7f8e9d0c1b2a3f4e5d6c7b8', 'eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJzdWIiOiJwZWVyLWhlbGxvIn0.c2lnbmF0dXJlX2J5dGVz') AS `__table1`)",
+	"remote IN operand inside a remote outer":                "SELECT count() AS `count()` FROM `phys`.`db1.t` AS `__table1` WHERE `__table1`.`id` IN remote('127.0.0.1:19001', 'phys', 'db1.l', '__route__|10.0.0.5:9000|__peer__|0x5a1f0e07c3e5d2b6a7f8e9d0c1b2a3f4e5d6c7b8', 'eyJhbGciOiJFUzI1NksiLCJ0eXAiOiJKV1QifQ.eyJzdWIiOiJwZWVyLWhlbGxvIn0.c2lnbmF0dXJlX2J5dGVz')",
+}
+
+// TestOnQuery_PeerLegFormsPass is spec 2026-10-14 §14's regression rule: every
+// legitimate peer leg passes the peer rules, through the chain and through
+// PeerReservedNamespaceViolation.
+func TestOnQuery_PeerLegFormsPass(t *testing.T) {
+	p := peerGuard()
+	for name, sql := range peerLegForms {
+		t.Run(name, func(t *testing.T) {
+			if err := runChain(context.Background(), p, peerQuery(t, sql, false)); err != nil {
+				t.Fatalf("legitimate peer leg %q refused: %v", sql, err)
+			}
+			if got, err := PeerReservedNamespaceViolation(sql, sitable.ReservedDatabases(), "_hg_row_id"); err != nil || got != "" {
+				t.Fatalf("PeerReservedNamespaceViolation(%q) = %q, %v; want no violation", sql, got, err)
+			}
+		})
+	}
+}
+
+// TestOnQuery_PeerLegFormsWithAReservedNameAreRefused: the same shapes with a
+// reserved database in the physical database's place, as identifier or as
+// literal, and with the reserved row-id column, are refused with the 392 that
+// names it.
+func TestOnQuery_PeerLegFormsWithAReservedNameAreRefused(t *testing.T) {
+	p := peerGuard()
+	var withoutPhysical []string
+	for name, sql := range peerLegForms {
+		if !strings.Contains(sql, "phys") {
+			withoutPhysical = append(withoutPhysical, name)
+			continue
+		}
+		for _, db := range sitable.ReservedDatabases() {
+			reserved := strings.ReplaceAll(sql, "phys", db)
+			t.Run(name+"/"+db, func(t *testing.T) {
+				requirePeerRefusal(t, runChain(context.Background(), p, peerQuery(t, reserved, false)), peerReservedMessage(db))
+			})
+		}
+	}
+	sort.Strings(withoutPhysical)
+	if strings.Join(withoutPhysical, ",") != "SHOW TABLES structure probe" {
+		t.Fatalf("corpus rows without the physical database = %v; every other row must name phys", withoutPhysical)
+	}
+	for _, sql := range []string{
+		"SELECT `__table1`.`_hg_row_id` AS `_hg_row_id` FROM `phys`.`db1.t` AS `__table1`",
+		"SELECT count() AS `count()` FROM `phys`.`db1.t` AS `__table1` WHERE `__table1`.`_hg_row_id` > 0",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			requirePeerRefusal(t, runChain(context.Background(), p, peerQuery(t, sql, false)), peerReservedMessage("_hg_row_id"))
+		})
+	}
+}
+
+// TestOnQuery_PeerSessionsRefuseReservedNamespace is the mention rule on a peer
+// loopback for every reserved database, in every surface but comments: plain,
+// quoted and upper-case identifiers, table-function literals, heredocs, an IN
+// subquery, metadata literals, and escapes ClickHouse decodes.
+func TestOnQuery_PeerSessionsRefuseReservedNamespace(t *testing.T) {
+	p := peerGuard()
+	for _, db := range sitable.ReservedDatabases() {
+		escaped := strings.ReplaceAll(db, "_", `\x5F`)
+		escapedLower := strings.ReplaceAll(db, "_", `\x5f`)
+		for _, tc := range []struct{ name, sql string }{
+			{"qualifier", "SELECT * FROM " + db + ".db1__t"},
+			{"pushed-down leg", "SELECT count() AS `count()` FROM `" + db + "`.`db1__t` AS `__table1`"},
+			{"double-quoted qualifier", `SELECT * FROM "` + db + `"."db1__t"`},
+			{"upper case", "SELECT * FROM " + strings.ToUpper(db) + ".db1__t"},
+			{"remote database literal", "SELECT count() FROM remote('127.0.0.1:9000', '" + db + "', 'db1__t')"},
+			{"merge database literal", "SELECT * FROM merge('" + db + "', '^db1__t$')"},
+			{"heredoc", "SELECT * FROM merge($$" + db + "$$, '^db1__t$')"},
+			{"IN subquery", "SELECT count() FROM `phys`.`db1.t` WHERE id IN (SELECT id FROM " + db + ".db1__t)"},
+			{"metadata literal", "SELECT name FROM system.tables WHERE database = '" + db + "'"},
+			{"escaped literal", "SELECT * FROM merge('" + escaped + "', '^db1__t$')"},
+			{"escaped quoted identifier", "SELECT * FROM `" + escapedLower + "`.db1__t"},
+			{"USE", "USE " + db},
+			{"INSERT", "INSERT INTO " + db + ".db1__t VALUES (1)"},
+		} {
+			t.Run(db+"/"+tc.name, func(t *testing.T) {
+				requirePeerRefusal(t, runChain(context.Background(), p, peerQuery(t, tc.sql, false)), peerReservedMessage(db))
+			})
+		}
+	}
+	for _, sql := range []string{
+		"SELECT `__table1`.`_hg_row_id` FROM `phys`.`db1.t` AS `__table1`",
+		"SELECT '_hg_row_id'",
+		`SELECT '\x5Fhg\x5Frow\x5Fid'`,
+	} {
+		requirePeerRefusal(t, runChain(context.Background(), p, peerQuery(t, sql, false)), peerReservedMessage("_hg_row_id"))
+	}
+	// ClickHouse reads \N as nothing, so 'hg_\Nsafe' is hg_safe.
+	requirePeerRefusal(t, runChain(context.Background(), p, peerQuery(t, `SELECT * FROM t WHERE s = 'hg_\Nsafe'`, false)), peerReservedMessage("hg_safe"))
+}
+
+// TestOnQuery_PeerSessionsRefuseIdentifierPlaceholders: every {name:Identifier}
+// placeholder ClickHouse would parse is refused on a peer loopback, and text
+// that only looks like one — a value placeholder, a literal, a heredoc, a
+// quoted identifier (where ClickHouse writes projection aliases) or a
+// comment — is not.
+func TestOnQuery_PeerSessionsRefuseIdentifierPlaceholders(t *testing.T) {
+	p := peerGuard()
+	const want = "storage_integrity: a peer statement may not carry ClickHouse Identifier placeholders"
+	for _, sql := range []string{
+		"SELECT * FROM {db:Identifier}.db1__t",
+		"SELECT * FROM { db : identifier }",
+		"SELECT {c:Identifier} FROM `phys`.`db1.t`",
+		"SELECT * FROM {db/* c */:Identifier}.t",
+		"SELECT * FROM `phys`.{t:Identifier}",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			requirePeerRefusal(t, runChain(context.Background(), p, peerQuery(t, sql, false)), want)
+		})
+	}
+	for _, sql := range []string{
+		"SELECT count() FROM `phys`.`db1.t` WHERE id = {v:UInt64}",
+		"SELECT '{p:Identifier}'",
+		"SELECT $${p:Identifier}$$",
+		"SELECT 1 AS `{p:Identifier}`",
+		"SELECT 1 /* {p:Identifier} */",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			if err := runChain(context.Background(), p, peerQuery(t, sql, false)); err != nil {
+				t.Fatalf("%q is no placeholder: %v", sql, err)
+			}
+		})
+	}
+}
+
+// TestOnQuery_PeerUnscannableStatementIsRefused: a statement the peer scan
+// cannot model fails closed with the scan error in the message.
+func TestOnQuery_PeerUnscannableStatementIsRefused(t *testing.T) {
+	p := peerGuard()
+	for _, sql := range []string{
+		"SELECT 'x",
+		"SELECT $ FROM `phys`.`db1.t`",
+		`SELECT '\x4g'`,
+		"SELECT * FROM `phys`.`db1\\x4gt`",
+		"SELECT 1 #x\n",
+		"SELECT 1 AS physé",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, scanErr := sqlsurface.ScanWith(sql, PeerScanOptions)
+			if scanErr == nil {
+				t.Fatalf("fixture %q must not scan", sql)
+			}
+			requirePeerRefusal(t, runChain(context.Background(), p, peerQuery(t, sql, false)),
+				"storage_integrity: a peer statement that cannot be checked for reserved names is refused: "+scanErr.Error())
+		})
+	}
+}
+
+// TestOnQuery_ForwardedFromPeerSessionsAreNotPeerChecked: a forward pivot
+// carries the client's own SQL, which the receiving host's tablerefguard and
+// engines check; the peer rules do not apply to it.
+func TestOnQuery_ForwardedFromPeerSessionsAreNotPeerChecked(t *testing.T) {
+	p := peerGuard()
+	for _, sql := range []string{
+		"SELECT * FROM hg_safe.db1__t",
+		"SELECT * FROM hg_replica.db1__t__i3",
+		"SELECT * FROM {db:Identifier}.t",
+		"SELECT 'x",
+	} {
+		if err := runChain(context.Background(), p, peerQuery(t, sql, true)); err != nil {
+			t.Fatalf("forwarded-from-peer %q: %v, want nil", sql, err)
+		}
+	}
+}
+
+// TestOnQuery_PeerSessionWithAnOperatorFlagKeepsTheOperatorRules: the operator
+// branch is checked first, so a peer session that also carries an operator
+// flag gets the stricter operator rules and their plain (403) errors, which
+// also refuse what the peer rules admit: a backslash-bearing alias and a
+// carrier.
+func TestOnQuery_PeerSessionWithAnOperatorFlagKeepsTheOperatorRules(t *testing.T) {
+	p := peerGuard()
+	for _, tc := range []struct{ name, sql, want string }{
+		{"reserved name", "SELECT * FROM hg_replica.db1__t", `storage-integrity reserved name "hg_replica" is not addressable through the proxy`},
+		{"measured backslash alias", peerLegForms["backslash alias (measured)"], "backslash"},
+		{"carrier", "SELECT * FROM remote('h', 'other', 'u')", `object-carrier callable "remote"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sess := newSessionForTest(t, 41)
+			sess.State().SetPeerTrust("10.0.0.7:9000")
+			sess.State().SetPlatformOperator(true)
+			err := runChain(context.Background(), p, &plugin.QueryContext{Session: sess, OriginalSQL: tc.sql, Query: &chproto.Query{Body: tc.sql}})
+			var ce *chproto.ClientError
+			if err == nil || errors.As(err, &ce) || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want the operator refusal containing %q, not the peer 392", err, tc.want)
+			}
+		})
+	}
+	if err := runChain(context.Background(), p, peerQuery(t, "SELECT * FROM remote('h', 'other', 'u')", false)); err != nil {
+		t.Fatalf("a carrier naming no reserved database must pass the peer rules: %v", err)
+	}
+}
+
+// TestOnQuery_PeerRefusalCountsAndLogs: each refusal increments its reason
+// once and writes exactly one warn line with the contract's fields, the
+// statement cut to 512 bytes; an admitted leg counts and logs nothing.
+func TestOnQuery_PeerRefusalCountsAndLogs(t *testing.T) {
+	p := peerGuard()
+	long := "SELECT 'x" + strings.Repeat("数据", 400) + "' FROM hg_replica.db1__t"
+	for _, tc := range []struct{ reason, sql, reservedField string }{
+		{"reserved_name", long, "reserved_name=hg_replica"},
+		{"identifier_placeholder", "SELECT * FROM {db:Identifier}.t", `reserved_name=""`},
+		{"statement_unscannable", "SELECT 'x", `reserved_name=""`},
+	} {
+		t.Run(tc.reason, func(t *testing.T) {
+			ctx, buf := captureLogs(t)
+			before := testutil.ToFloat64(peerRefusals.WithLabelValues(tc.reason))
+			err := runChain(ctx, p, peerQuery(t, tc.sql, false))
+			var ce *chproto.ClientError
+			if !errors.As(err, &ce) || ce.Code != chproto.CodeQueryIsProhibited {
+				t.Fatalf("err = %v, want a 392", err)
+			}
+			if got := testutil.ToFloat64(peerRefusals.WithLabelValues(tc.reason)) - before; got != 1 {
+				t.Fatalf("storage_integrity_peer_reserved_name_refusals_total{reason=%q} grew by %v, want 1", tc.reason, got)
+			}
+			out := buf.String()
+			if strings.Count(out, "\n") != 1 {
+				t.Fatalf("want exactly one log line, got %q", out)
+			}
+			for _, want := range []string{
+				"level=WARN",
+				"peer statement refused by storage-integrity reserved-name guard",
+				"plugin=sireserved",
+				"code=392",
+				"reason=" + tc.reason,
+				tc.reservedField,
+				"peer_address=10.0.0.7:9000",
+			} {
+				if !strings.Contains(out, want) {
+					t.Errorf("log line missing %q: %s", want, out)
+				}
+			}
+			if tc.sql == long && (!strings.Contains(out, "…(truncated)") || strings.Contains(out, "FROM hg_replica")) {
+				t.Errorf("the statement must be cut at 512 bytes: %s", out)
+			}
+		})
+	}
+	ctx, buf := captureLogs(t)
+	before := testutil.ToFloat64(peerRefusals.WithLabelValues("reserved_name"))
+	if err := runChain(ctx, p, peerQuery(t, peerLegForms["pushed-down count (measured)"], false)); err != nil {
+		t.Fatalf("admitted leg refused: %v", err)
+	}
+	if buf.Len() != 0 || testutil.ToFloat64(peerRefusals.WithLabelValues("reserved_name")) != before {
+		t.Fatalf("an admitted leg logged %q or counted a refusal", buf.String())
+	}
+}
+
+// TestPeerReservedNamespaceViolation_DecodesEscapes is the function the
+// integration tests share: names are compared after ClickHouse's decoding, an
+// escape ClickHouse keeps as written is not a reserved name, heredoc bodies are
+// raw, and scan errors are returned as is.
+func TestPeerReservedNamespaceViolation_DecodesEscapes(t *testing.T) {
+	dbs := sitable.ReservedDatabases()
+	for _, tc := range []struct{ sql, want string }{
+		{`SELECT * FROM merge('hg\x5Freplica', '^t$')`, "hg_replica"},
+		{"SELECT * FROM `hg\\x5frstage`.t", "hg_rstage"},
+		{`SELECT 'hg_\Nxfer'`, "hg_xfer"},
+		{`SELECT 'HG_MEMBER\x5FUNSAFE'`, "hg_member_unsafe"},
+		{peerLegForms["backslash alias (measured)"], ""},
+		{`SELECT * FROM t WHERE s LIKE 'hg\_safe'`, ""},
+		{`SELECT $$hg\x5Fsafe$$`, ""},
+	} {
+		got, err := PeerReservedNamespaceViolation(tc.sql, dbs, "_hg_row_id")
+		if err != nil || got != tc.want {
+			t.Errorf("PeerReservedNamespaceViolation(%q) = %q, %v; want %q", tc.sql, got, err, tc.want)
+		}
+	}
+	if _, err := PeerReservedNamespaceViolation(`SELECT '\x4g'`, dbs, "_hg_row_id"); !errors.Is(err, sqlsurface.ErrUndecodableStringEscape) {
+		t.Fatalf("err = %v, want ErrUndecodableStringEscape", err)
+	}
+	// The strict twin still refuses what the peer variant decodes.
+	if _, err := ReservedNamespaceViolation(`SELECT * FROM merge('hg\x5Freplica', '^t$')`, dbs, "_hg_row_id"); err == nil {
+		t.Fatal("ReservedNamespaceViolation must keep refusing backslash-bearing literals")
+	}
+}
+
+// TestPeerScanOptionsDecodeBothEscapeKinds pins the options sipeerguard shares
+// and why the peer rules never use the strict operator scan: it refuses a
+// measured, legitimate leg.
+func TestPeerScanOptionsDecodeBothEscapeKinds(t *testing.T) {
+	if PeerScanOptions != (sqlsurface.Options{DecodeStringEscapes: true, DecodeIdentifierEscapes: true}) {
+		t.Fatalf("PeerScanOptions = %+v", PeerScanOptions)
+	}
+	if _, err := sqlsurface.Scan(peerLegForms["backslash alias (measured)"]); err == nil {
+		t.Fatal("the strict scan must refuse the measured backslash alias; the peer rules would then refuse a legitimate leg")
 	}
 }

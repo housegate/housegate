@@ -4,7 +4,9 @@ import "sync"
 
 // Fake is a TableState whose version tests switch explicitly. Every Set
 // publishes a new snapshot with the next version and wakes every Changed
-// waiter. It is safe for concurrent use.
+// waiter. Its snapshots are NewSnapshot's, so Schema answers exactly what
+// NewSnapshot does, including a Refused or Pending table that carries a
+// schema. It is safe for concurrent use.
 type Fake struct {
 	mu       sync.Mutex
 	fallback Status

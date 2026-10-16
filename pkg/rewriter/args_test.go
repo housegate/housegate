@@ -13,9 +13,12 @@ func TestProtectedDatabases(t *testing.T) {
 		physical string
 		want     []string
 	}{
-		{"phys", []string{"phys", "hg_safe", "hg_unsafe", "hg_promote"}},
-		{"", []string{"hg_safe", "hg_unsafe", "hg_promote"}},
-		{"hg_safe", []string{"hg_safe", "hg_unsafe", "hg_promote"}},
+		{"phys", []string{"phys", "hg_safe", "hg_unsafe", "hg_promote", "hg_member_unsafe", "hg_replica", "hg_rstage", "hg_xfer"}},
+		{"", []string{"hg_safe", "hg_unsafe", "hg_promote", "hg_member_unsafe", "hg_replica", "hg_rstage", "hg_xfer"}},
+		{"hg_safe", []string{"hg_safe", "hg_unsafe", "hg_promote", "hg_member_unsafe", "hg_replica", "hg_rstage", "hg_xfer"}},
+		// A physical database named after a member database is deduplicated
+		// the same way (spec 2026-10-14 §14).
+		{"hg_replica", []string{"hg_replica", "hg_safe", "hg_unsafe", "hg_promote", "hg_member_unsafe", "hg_rstage", "hg_xfer"}},
 	} {
 		if got := protectedDatabases(tc.physical); !slices.Equal(got, tc.want) {
 			t.Errorf("protectedDatabases(%q) = %v, want %v", tc.physical, got, tc.want)
@@ -32,7 +35,7 @@ func TestRewriteSendsProtectedDatabases(t *testing.T) {
 	if _, err := rw.Rewrite(context.Background(), "SELECT 1", ""); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"phys", "hg_safe", "hg_unsafe", "hg_promote"}
+	want := []string{"phys", "hg_safe", "hg_unsafe", "hg_promote", "hg_member_unsafe", "hg_replica", "hg_rstage", "hg_xfer"}
 	if got := be.lastReq.GetOptions()[0].GetTableNameArgs().GetDynamicArgs().GetProtectedDatabases(); !slices.Equal(got, want) {
 		t.Fatalf("Rewrite protected_databases = %v, want %v", got, want)
 	}

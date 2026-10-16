@@ -3,6 +3,7 @@ package tablerefguard
 import (
 	"context"
 	"net"
+	"slices"
 	"strings"
 	"testing"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/housegate/housegate/pkg/chproto"
 	"github.com/housegate/housegate/pkg/chsession"
 	"github.com/housegate/housegate/pkg/plugin"
+	"github.com/housegate/housegate/pkg/sitable"
 )
 
 var reserved = []string{"hg_safe", "hg_unsafe", "hg_promote"}
@@ -221,6 +223,39 @@ func TestCheck(t *testing.T) {
 				t.Fatalf("rule %q with detail %q: a hit needs a detail and a pass none", rule, detail)
 			}
 		})
+	}
+}
+
+// TestCheck_RefusesEveryReservedDatabase is spec 2026-10-14 §14: G1 built from
+// sitable.ReservedDatabases(), as build.go wires it, refuses the stage-3 member
+// databases on ordinary sessions in every surface but comments, as it refuses
+// hg_safe. A longer word that merely contains a reserved name is not a mention.
+func TestCheck_RefusesEveryReservedDatabase(t *testing.T) {
+	reservedNow := sitable.ReservedDatabases()
+	for _, db := range []string{"hg_member_unsafe", "hg_replica", "hg_rstage", "hg_xfer"} {
+		if !slices.Contains(reservedNow, db) {
+			t.Fatalf("sitable.ReservedDatabases() = %v lacks %s", reservedNow, db)
+		}
+	}
+	for _, db := range reservedNow {
+		for _, sql := range []string{
+			"SELECT * FROM " + db + ".x",
+			"SELECT * FROM `" + db + "`.`x`",
+			"SELECT * FROM " + strings.ToUpper(db) + ".x",
+			"SELECT * FROM db1.o WHERE s = '" + db + "'",
+			"SELECT * FROM merge('" + db + "', 'x')",
+			"SELECT $$" + db + "$$",
+		} {
+			rule, detail := Check(sql, "phys", reservedNow)
+			if rule != RuleReservedName || detail != "reserved database "+db+" is not addressable" {
+				t.Errorf("Check(%q) = %q, %q; want %q naming %s", sql, rule, detail, RuleReservedName, db)
+			}
+		}
+		for _, sql := range []string{"SELECT 1 /* " + db + " */", "SELECT " + db + "_count FROM db1.o"} {
+			if rule, detail := Check(sql, "phys", reservedNow); rule != "" {
+				t.Errorf("Check(%q) = %q, %q; want a pass", sql, rule, detail)
+			}
+		}
 	}
 }
 
