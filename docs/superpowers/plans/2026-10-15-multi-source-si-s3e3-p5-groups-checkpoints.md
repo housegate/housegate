@@ -142,6 +142,7 @@ The spec and Plans S3-E1 and S3-E2 leave these details open. Each is resolved he
   - *Gap 2:* §9.2 counts lag "in published advances of O". The scoping proposal's "parent walk of at most `max_lag_publications + 1` steps" bounds manifests visited, not O's advances. A quiet owner's advances can sit behind any number of other owners' publications, so the walk would undercount.
   - *Resolution:*
     - A manifest is on the watermark chain iff it is in `State.Manifests`, because every publication's parent is the current watermark (`arbiter:fsm/manifest_validation.go:51`, `:111`).
+    - Restore checks the same binding again: every stored checkpoint, a Leaving record's included, names a manifest of `State.Manifests` whose `track_frontiers` entry for its owner is its entry, and every recent advance is an entry such a manifest carries for its owner (contract §52.3). No Apply removes a manifest (both writes to `State.Manifests` add one: `arbiter:fsm/apply.go:945`, `arbiter:fsm/apply_snapshot_query_abort.go:248`), and restore keeps every track-aware manifest on the watermark's chain (`validateRestoredTrackChain`, `arbiter:fsm/genesis_validation.go`), so a bound entry is never past the published one.
     - "Not earlier" is decided on the entry: the new entry must not precede the member's previous checkpoint entry for O in the order (`safe_block_seq`, `applied_promotion_seq`). Every consumer of a checkpoint (classes, E, the floor) reads only its entry, and entries never decrease along the chain.
     - Lag is kept per owner in `Stage3State.OwnerAdvances`: the last `max_lag_publications + 1` distinct entries O's published entry advanced to while O was not quarantined, appended by `applyPublishSafeSnapshot` from the `checkpoints` switch on, oldest dropped.
     - A member's lag in a group is the number of those entries after its checkpoint entry, so it saturates at `max_lag_publications + 1`.
@@ -214,8 +215,9 @@ This plan produces no ledger value. Task 71 Step 1 reads the four names above on
      - A Lagging member returns to Behind only once it is past its observed entry with lag below `lag_low`.
      - `MarkMemberLagging` re-checks committed state.
      - Every stored checkpoint is re-verified under its own epoch's `replica_signer` on restore.
+     - Restore binds every stored checkpoint, a Leaving record's included, to a published manifest whose `track_frontiers` entry for its owner is its entry, as Apply's refusals 12 and 13 do, so a member-signed checkpoint naming an unpublished manifest or a future entry cannot satisfy the copy floor or a Leaving release; every recent advance must be an entry a published manifest carries for its owner.
    - *Tests:*
-     - Task 75: `TestAReplayedOrLowerCheckpointSeqIsRefused`, `TestASameEntryCheckpointReplacesOnlyItsListedGroups`, `TestASameEntryCheckpointMayShrinkOrGrowExcluded`, `TestCheckpointSeqIsDurableAcrossGroupRemovalLeavingAndReregistration`, `TestCheckpointSeqRestartsWhenTheReplicaSignerRotates`, `TestAMemberThatLostItsStateResumesAboveThePublishedSeq`, `TestLagIsCountedInPublishedAdvancesOfTheOwner`, `TestAQuarantinedOwnerAccruesNoLag`, `TestLaggingReturnsToBehindOnlyPastTheObservedEntryBelowLagLow`, `TestOwnerAdvancesStayBoundedByMaxLagPublications`, `TestRegistryViewLagAdvancesSaturatesAtMaxLagPublicationsPlusOne`, `TestPublicationBumpsTheRegistryVersionWhenAMemberHoldsACheckpoint`, `TestMarkMemberLaggingRefusals`, `TestRestoreReverifiesCheckpointSignaturesUnderEachEpochsReplicaSigner`, `TestRestoreRefusesAClassInconsistentWithItsCheckpoint`.
+     - Task 75: `TestAReplayedOrLowerCheckpointSeqIsRefused`, `TestASameEntryCheckpointReplacesOnlyItsListedGroups`, `TestASameEntryCheckpointMayShrinkOrGrowExcluded`, `TestCheckpointSeqIsDurableAcrossGroupRemovalLeavingAndReregistration`, `TestCheckpointSeqRestartsWhenTheReplicaSignerRotates`, `TestAMemberThatLostItsStateResumesAboveThePublishedSeq`, `TestLagIsCountedInPublishedAdvancesOfTheOwner`, `TestAQuarantinedOwnerAccruesNoLag`, `TestLaggingReturnsToBehindOnlyPastTheObservedEntryBelowLagLow`, `TestOwnerAdvancesStayBoundedByMaxLagPublications`, `TestRegistryViewLagAdvancesSaturatesAtMaxLagPublicationsPlusOne`, `TestPublicationBumpsTheRegistryVersionWhenAMemberHoldsACheckpoint`, `TestMarkMemberLaggingRefusals`, `TestRestoreReverifiesCheckpointSignaturesUnderEachEpochsReplicaSigner`, `TestRestoreRefusesAClassInconsistentWithItsCheckpoint`, `TestRestoreRefusesACheckpointOffItsPublishedManifest`.
 
 ## Task order and dependencies
 
@@ -285,11 +287,11 @@ Line anchors in the tasks refer to the base revisions above and are re-anchored 
 | §7.2 grouping window on (owner, `GroupKey`), `arbiter_block_seal_reason{reason="group_switch"}` | 72 (alert: Plan S3-E4 Task 80) |
 | §7.3 eligible ring group half, `VERIFIERS_UNAVAILABLE` with the same filter, unmarkable blocks | 73 (pool half: Plan S3-E2 Task 70) |
 | §7.4 `ReselectVerifiers` (replacement rules, cursor timeout, ring walk, limit, latched refusal and latch count, stored proof, restore checks) | 74 (K75) |
-| §9.1 `MemberCheckpoint` acceptance, per-group replacement, durable `checkpoint_seq`, restart on `replica_signer` rotation, per-epoch restore re-verification | 75 (K76); signer side: Plan S3-E1 Task 63 |
+| §9.1 `MemberCheckpoint` acceptance, per-group replacement, durable `checkpoint_seq`, restart on `replica_signer` rotation, per-epoch restore re-verification, the published-manifest binding of every stored checkpoint and advance on restore | 75 (K76); signer side: Plan S3-E1 Task 63 |
 | §9.2 classes, same-entry re-checkpoint, lag in published advances, quarantine accrues no lag, hysteresis, `MarkMemberLagging`; the served `lag_advances`, saturating at `max_lag_publications + 1` (D31) | 75 (K76, K77) |
 | §9.3 E (listed, non-evicted, counting replicate members in `caught_up`/`behind`, domain other than O's, counted by domain) | 71 (`copyFloorSetLocked`); floor, strict mode, k raise: Plan S3-E4 Task 76 |
 | §10.4 switches 5 (`placement`), 7 (`reselection`), 8 (`checkpoints`, FSM commands and classes) and step 6 (`MemberReady`) | 71–75; floor clauses of switch 8: Plan S3-E4 Task 76; turned on by Plan S3-F |
-| §11 `replica_hosts` from placement on: the registry's `DatabaseGroup` with each member's served `host_indexer_id` (D27) and `ready_generation` | 71, 73 (served); host side: Plan S3-E4 Task 79 |
+| §11 `replica_hosts` from placement on: the registry's `DatabaseGroup` with each current member's served `host_indexer_id` (D27); the host lists every current member, never filtered by `ready_generation` (`MemberReady`, Plan S3-E4 contract §56) | 71, 73 (served); host side: Plan S3-E4 Task 79 |
 | §14 eviction voiding for `MemberReady` and checkpoints | 73, 75 (placement implies `eviction_voiding`; Plan S3-E2 Task 68) |
 | §15 arbiter: placement and backfill, group records, seal key and grouping window, re-selection, member readiness, checkpoints and classes, metrics, `arbiter-admin` | 71–75 |
 | §16 operator playbook: "wait for or issue `MarkMemberLagging`, then `EvictNode` or `RebalanceGroup`" | 71, 75 (commands); runbook: Plan S3-F Task 84 |
@@ -13394,14 +13396,14 @@ Spec §9.1, §9.2 and §10.4 step 8 make `checkpoints` the eighth stage-3 switch
 - `MarkMemberLagging` (Raft tag 42), its leader-local timeout proposal (`dispatch.member_lagging_timeout`, default `30m`, `0` disables) through the new `WorkSet.MemberLag` row, `ConsensusAdmin.MarkMemberLagging` and `arbiter-admin member lagging`;
 - `VerifierGateway.SubmitMemberCheckpoint`;
 - the served `checkpoint`, `observed_entry`, saturating `lag_advances` (D31) and `member_checkpoint_seqs`, with the registry-version bump of a publication that can change a served lag (§50);
-- the restore rule `validateStage3Checkpoints`, the per-epoch `replica_signer` re-verification `validateMemberCheckpointProofs`, and the interned-body round trip of the whole group layer (`TestInternedBodyKeepsTheGroupLayer`).
+- the restore rule `validateStage3Checkpoints`, which also binds every stored checkpoint, a Leaving record's included, to a published manifest whose `track_frontiers` entry for its owner is its entry (refusals 12 and 13 again) and every recent advance to an entry a published manifest carries for its owner, the per-epoch `replica_signer` re-verification `validateMemberCheckpointProofs`, and the interned-body round trip of the whole group layer (`TestInternedBodyKeepsTheGroupLayer`).
 
 With the switch off nothing of it runs: both Apply arms refuse first with the K67 texts, the WorkSet row is nil, `recordOwnerAdvanceLocked` is never called, and every new field is `omitempty`, so each Apply, snapshot and chain hash stays byte for byte Task 74's.
 
 Worktree (contract §49): `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e`, branch `urwt/claude/multi-source-s3e`, with `HEAD` at Task 74's commit `fsm: ReselectVerifiers with latched refusal (S3-E3 Task 74)`; every command below starts with `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e;` in its own Bash call. Line anchors of base files are arbiter `fb42260` (v0.12.0, the plan's base revision); the files and functions of Plans S3-E2 and S3-E3 Tasks 64–74 are named by function. Apply every hunk on top of Tasks 64–74 under the hunk rule (Global Constraints): the quoted text and the contract bind, the line numbers guide. The task ends with one local commit (contract §49) and the push of the branch, which needs explicit user confirmation in chat; nothing else in it is remote or live.
 
 **Files:**
-- Create: `fsm/member_checkpoint.go` (the state records `MemberCheckpointRecord`, `MemberCheckpointSeq`, `OwnerAdvances`; `entryCompare`, `memberLagLocked`, `classifyMemberLocked`, `recordOwnerAdvanceLocked`, `trimOwnerAdvancesLocked`, `storedCheckpointSeqLocked`, `applyMemberCheckpoint`, `MemberCheckpointRecorded`)
+- Create: `fsm/member_checkpoint.go` (the state records `MemberCheckpointRecord`, `MemberCheckpointSeq`, `OwnerAdvances`; `entryCompare`, `memberLagLocked`, `classifyMemberLocked`, `recordOwnerAdvanceLocked`, `trimOwnerAdvancesLocked`, `storedCheckpointSeqLocked`, `applyMemberCheckpoint`, `MemberCheckpointRecorded`; Step 14 adds the restore halves `checkpointOnPublishedManifest` and `publishedTrackFrontiers` after `manifestTrackFrontier`)
 - Create: `fsm/mark_member_lagging.go` (`applyMarkMemberLagging`, `memberLagWorkLocked`, `MemberLagWork`)
 - Create: `orchestrator/member_lagging.go` (`memberLagKey`, `memberLagTimer`, `handleMemberLagging`)
 - Modify: `fsm/stage3.go` (Task 64's `Stage3State`: two fields after Task 72's `PlacementCutoverBlock`)
@@ -13432,12 +13434,12 @@ Worktree (contract §49): `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e
   - This plan's Tasks 71–74 (contract §50–§52): Task 71's `DatabaseGroup`, `GroupMember`, `LeavingMember`, `MemberClass` and its constants, `placementOnLocked`/`checkpointsOnLocked`/`CheckpointsOn`, `groupLocked`, `groupMemberIndex`, `groupsChangedLocked`, `authorityCommandRefusalLocked`, `cloneDatabaseGroup`, `GroupView`/`GroupMemberView{HostIndexerID; LagAdvances}`, `groupsToPB`, `ConsensusAdmin.RebalanceGroup`'s handler (`quarantineAuthority`, `applyRefusalAsFailedPrecondition`), `runGroup`, `parseGroupFlags`, `requireFlags`, `checkHostPort`, `groupRPCError`; its test fixtures `groupsFSM` (G(0, db0) = {member-1, member-2, member-3}, G(1, db) = {member-0, member-2, member-3}), `mustGroup`, `rebalanceCmd`, `registryVersion`, `rejectGroupCommand`, `registerMember`, `memberPurged`, `evictCmd`, `addGroupTable`, `purgeByOwnerAndPool`, `updateStage3`, `groupMemberEntry`, `listGroupMembers`, `groupHostSigner`, `forgedGroupsSnapshot` (`fsm/stage3_groups_test.go`), `placementServer` and `applyServerStage3Update` (`server/groups_admin_test.go`: G(1, db) = {member-2}, whose ed25519 key and replica signer are derived from `sha256("server member-2")`), `groupsAdmin`, `groupsFixture` and `serveGroupsAdmin` (`cmd/arbiter-admin/groups_test.go`); Task 72's `GroupKey` seals (statements and transitions after placement seal under their group keys); Task 73's `MemberReady` arm, `VerifierGateway.SubmitMemberReady` in `server/member_gateway.go`, `validateMemberReadyProofs` and the group half of the eligible ring (a ready, Active verify member joins its group's rings); Task 74's `ReselectVerifiers` arm, `validateStage3Reselections`, `validateReselectionProofs` and `(*Loop).handleReselections`.
   - Base (`fb42260`): `publishedTrackFrontierLocked`, `trackBaseFrontierLocked`, `indexerQuarantinedLocked` (`fsm/tracks.go`), `messageContextLocked`, `registryChangedLocked`, `splitTableKey`, `incarnationOwnerLocked`, `hasPhysicalTables`, `findVerifierEntry`; the test helpers `mustApply`, `testAccount`, `passTrackBlock`, `publishManifestInputs`, `cleanTrackPromotion`, `admitTrack`, `mustSeal`, `bindTrackClaim`, `verifyBlock`, `anchorFinal`, `promoteTrack`, `ackTrackPromotion`, `quarantineQ`, `messageContextFor`, `authorityContextFor`, `mustGenesisID`, `mustWorkSet`, `snapshotBytes`, `restoreInto`, `restoreErr`; server `newRecordingNode`, `lastProposalIs`, `evictionAdmin`, `mustDirectApply`, `addServerTableOfIndexer2`, `serverVerifierKey`, `serverMessageContext`, `serverAuthorityContext`, `serverTestAuthority`, `testServerNetworkID`; orchestrator `tracksHarnessO`, `fakeNode.rejectApply`.
 - Produces (contract §52.3 names verbatim; exported to Plan S3-E4: `memberLagLocked`, `entryCompare`, the classes):
-  - `fsm`: `MemberCheckpointRecord{Checkpoint arbiter.MemberCheckpoint; ReplicaJWS string; Epoch uint64}`, `MemberCheckpointSeq{NodeID string; OwnerIndexerID uint64; CheckpointSeq uint64; ReplicaSigner string}`, `OwnerAdvances{Owner uint64; Recent []replay.TrackFrontier}`; `Stage3State.CheckpointSeqs []MemberCheckpointSeq` (`checkpoint_seqs,omitempty`) and `Stage3State.OwnerAdvances []OwnerAdvances` (`owner_advances,omitempty`); `GroupMember.Checkpoint *MemberCheckpointRecord` (`checkpoint,omitempty`) and `GroupMember.ObservedEntry *replay.TrackFrontier` (`observed_entry,omitempty`); `func entryCompare(a, b replay.TrackFrontier) int`; `func (f *FSM) memberLagLocked(owner uint64, entry replay.TrackFrontier) uint32`; `func (f *FSM) classifyMemberLocked(owner uint64, m *GroupMember)`; `func (f *FSM) recordOwnerAdvanceLocked(parent, manifest *replay.SafeSnapshotManifest)`; `func (f *FSM) trimOwnerAdvancesLocked()`; `func (f *FSM) storedCheckpointSeqLocked(nodeID string, owner uint64, replicaSigner string) uint64`; `func (f *FSM) MemberCheckpointRecorded(cp arbiter.MemberCheckpoint) bool`; `func (f *FSM) applyMemberCheckpoint(c *wire.MemberCheckpoint) any`; `func (f *FSM) applyMarkMemberLagging(c *wire.MarkMemberLagging) any`; `type MemberLagWork struct{NodeID string; Owner uint64; DatabaseID string; Class MemberClass; Checkpoint, Published replay.TrackFrontier}`, `WorkSet.MemberLag []MemberLagWork`, `func (f *FSM) MemberLagWork() []MemberLagWork`; `TableRegistryView.MemberCheckpointSeqs []MemberCheckpointSeq`; `GroupMemberView.LagAdvances` filled; `func validateStage3Checkpoints(st *State) error`; `func validateMemberCheckpointProofs(st *State, paramsByEpoch []Params, genesisID string) error`; this task's own helpers `ownerAdvancesIndex`, `appendOwnerAdvanceLocked`, `ownerHoldsCheckpointLocked`, `checkpointSeqIndex`, `compareCheckpointSeqKey`, `setCheckpointSeqLocked`, `cloneMemberCheckpoint`, `memberCheckpointsEqual`, `checkpointGroupsSorted`, `checkpointExclusionsValidLocked`, `manifestTrackFrontier`, `memberLagWorkLocked`, `cloneGroupMember`, `checkpointStatePresent`, `checkpointNamesGroup` and the constants `memberCheckpointsBeforeSwitchReason`, `markMemberLaggingBeforeSwitchReason`, `checkpointExclusionReasons`.
+  - `fsm`: `MemberCheckpointRecord{Checkpoint arbiter.MemberCheckpoint; ReplicaJWS string; Epoch uint64}`, `MemberCheckpointSeq{NodeID string; OwnerIndexerID uint64; CheckpointSeq uint64; ReplicaSigner string}`, `OwnerAdvances{Owner uint64; Recent []replay.TrackFrontier}`; `Stage3State.CheckpointSeqs []MemberCheckpointSeq` (`checkpoint_seqs,omitempty`) and `Stage3State.OwnerAdvances []OwnerAdvances` (`owner_advances,omitempty`); `GroupMember.Checkpoint *MemberCheckpointRecord` (`checkpoint,omitempty`) and `GroupMember.ObservedEntry *replay.TrackFrontier` (`observed_entry,omitempty`); `func entryCompare(a, b replay.TrackFrontier) int`; `func (f *FSM) memberLagLocked(owner uint64, entry replay.TrackFrontier) uint32`; `func (f *FSM) classifyMemberLocked(owner uint64, m *GroupMember)`; `func (f *FSM) recordOwnerAdvanceLocked(parent, manifest *replay.SafeSnapshotManifest)`; `func (f *FSM) trimOwnerAdvancesLocked()`; `func (f *FSM) storedCheckpointSeqLocked(nodeID string, owner uint64, replicaSigner string) uint64`; `func (f *FSM) MemberCheckpointRecorded(cp arbiter.MemberCheckpoint) bool`; `func (f *FSM) applyMemberCheckpoint(c *wire.MemberCheckpoint) any`; `func (f *FSM) applyMarkMemberLagging(c *wire.MarkMemberLagging) any`; `type MemberLagWork struct{NodeID string; Owner uint64; DatabaseID string; Class MemberClass; Checkpoint, Published replay.TrackFrontier}`, `WorkSet.MemberLag []MemberLagWork`, `func (f *FSM) MemberLagWork() []MemberLagWork`; `TableRegistryView.MemberCheckpointSeqs []MemberCheckpointSeq`; `GroupMemberView.LagAdvances` filled; `func validateStage3Checkpoints(st *State) error`; `func validateMemberCheckpointProofs(st *State, paramsByEpoch []Params, genesisID string) error`; this task's own helpers `ownerAdvancesIndex`, `appendOwnerAdvanceLocked`, `ownerHoldsCheckpointLocked`, `checkpointSeqIndex`, `compareCheckpointSeqKey`, `setCheckpointSeqLocked`, `cloneMemberCheckpoint`, `memberCheckpointsEqual`, `checkpointGroupsSorted`, `checkpointExclusionsValidLocked`, `manifestTrackFrontier`, `memberLagWorkLocked`, `cloneGroupMember`, `checkpointStatePresent`, `checkpointNamesGroup`, `checkpointOnPublishedManifest`, `publishedTrackFrontiers` and the constants `memberCheckpointsBeforeSwitchReason`, `markMemberLaggingBeforeSwitchReason`, `checkpointExclusionReasons`.
   - `server`: `func (svc *verifierGatewayService) SubmitMemberCheckpoint(ctx context.Context, req *pb.MemberCheckpointCmd) (*pb.Ack, error)`, `func (svc *consensusAdminService) MarkMemberLagging(ctx context.Context, req *pb.MarkMemberLaggingCmd) (*pb.Ack, error)`, `memberCheckpointsBeforeSwitchMessage`, `memberLaggingRefusedMessage`, `func memberCheckpointSeqsToPB(seqs []fsm.MemberCheckpointSeq) []*pb.MemberCheckpointSeq`; `groupsToPB` serves `checkpoint`, `observed_entry` and `lag_advances`, `tableRegistryToPB` serves `member_checkpoint_seqs`.
   - `orchestrator`: `Config.MemberLaggingTimeout time.Duration`; `type memberLagKey struct{node string; owner uint64; database string}`, `type memberLagTimer struct{checkpoint replay.TrackFrontier; since time.Time}`, `Loop.lagSince map[memberLagKey]memberLagTimer`, `func (o *Loop) handleMemberLagging(ctx context.Context, ws fsm.WorkSet) error`.
   - `config`: `DispatchConfig.MemberLaggingTimeout Duration` (`yaml:"member_lagging_timeout"`, raw default `30m`, `0` disables, negative refused with `dispatch.member_lagging_timeout must not be negative`); `cmd/arbiter/services.go` maps it.
   - `cmd/arbiter-admin`: `arbiter-admin member lagging` (`runMember`, `runMemberLagging`) and its usage line.
-  - Tests: the 22 fsm tests of contract §52.3; server `TestSubmitMemberCheckpointAnswersFailedPreconditionBeforeTheSwitch`, `TestSubmitMemberCheckpointIsIdempotentForTheStoredCheckpoint`, `TestMarkMemberLaggingRPCAuthorizesAndProposes` and this task's `TestTableRegistryToPBCarriesCheckpointsAndLag`; orchestrator `TestOrchestratorProposesMarkMemberLaggingAfterTheTimeout`, `TestOrchestratorMemberLaggingTimerRestartsOnANewCheckpoint`, `TestOrchestratorMemberLaggingTimeoutZeroDisablesProposals`; config `TestLoadConfigReadsDispatchMemberLaggingTimeout`, `TestDispatchMemberLaggingTimeoutDefaultsToThirtyMinutes`; arbiter-admin `TestMemberLaggingSignsTheCanonicalCommand`, `TestMemberLaggingFlagRefusals`; test helpers `checkpointsFSM`, `publishOwnerBlock`, `frontierOf`, `cpGroup`, `memberCheckpointAt`, `signedCheckpoint`, `memberCheckpointCmd`, `memberOf`, `requireClass`, `storedSeq`, `rotateReplicaSigner`, `reregisterMember`, `setLagBounds`, `ownerRecent`, `servedLag`, `markLaggingCmd`, `behindMember`, `mustManifest` (fsm); `serverMemberSeed`, `serverMemberReplica`, `registerServerMember`, `addServerTable`, `publishServerTransition`, `checkpointServer`, `serverCheckpointRequest`, `memberGateway` (server); `memberLagHarness`, `newMemberLagHarness`, `lagRow` (orchestrator).
+  - Tests: the 23 fsm tests of contract §52.3; server `TestSubmitMemberCheckpointAnswersFailedPreconditionBeforeTheSwitch`, `TestSubmitMemberCheckpointIsIdempotentForTheStoredCheckpoint`, `TestMarkMemberLaggingRPCAuthorizesAndProposes` and this task's `TestTableRegistryToPBCarriesCheckpointsAndLag`; orchestrator `TestOrchestratorProposesMarkMemberLaggingAfterTheTimeout`, `TestOrchestratorMemberLaggingTimerRestartsOnANewCheckpoint`, `TestOrchestratorMemberLaggingTimeoutZeroDisablesProposals`; config `TestLoadConfigReadsDispatchMemberLaggingTimeout`, `TestDispatchMemberLaggingTimeoutDefaultsToThirtyMinutes`; arbiter-admin `TestMemberLaggingSignsTheCanonicalCommand`, `TestMemberLaggingFlagRefusals`; test helpers `checkpointsFSM`, `publishOwnerBlock`, `frontierOf`, `cpGroup`, `memberCheckpointAt`, `signedCheckpoint`, `memberCheckpointCmd`, `memberOf`, `requireClass`, `storedSeq`, `rotateReplicaSigner`, `reregisterMember`, `setLagBounds`, `ownerRecent`, `servedLag`, `markLaggingCmd`, `behindMember`, `mustManifest` (fsm); `serverMemberSeed`, `serverMemberReplica`, `registerServerMember`, `addServerTable`, `publishServerTransition`, `checkpointServer`, `serverCheckpointRequest`, `memberGateway` (server); `memberLagHarness`, `newMemberLagHarness`, `lagRow` (orchestrator).
 
 Notes:
 - **Switch-off identity.** Every field this task adds is `omitempty` or a nil pointer, the WorkSet row is nil before the switch, and the publication hook runs only while `checkpointsOnLocked()`, so no pre-switch Apply, snapshot, registry version or chain hash changes: the existing goldens (`TestStage3V21PlainContainerGolden`, `TestStage3V21InternedContainerGolden`, the pre-tracks and L3 track goldens) pass untouched in Step 16. The `checkpoints` switch-on itself needs no hook in `onStage3SwitchOnLocked`: the advances start empty and the first publication after it appends the first entry, so a member's lag counts only advances published from the switch on (K76).
@@ -13445,7 +13447,7 @@ Notes:
 - **Lag and versions.** `memberLagLocked` counts the owner's recorded advances after the entry, so it never exceeds `max_lag_publications + 1` (D31), and a member becomes `lagging` only when that count exceeds `max_lag_publications`, which means saturated. A publication with an append bumps the registry version once when the owner's groups hold a checkpoint, through `groupsChangedLocked` when a class moved and through `registryChangedLocked` alone otherwise. One case cannot be folded: a publication that also flips a table in `applyPublishedTrackTransitionsLocked` (which bumps on its own, before this hook) bumps twice. Versions only need to increase and no content is served under two versions, so followers are unaffected; recorded in Appendix B with the S3-E2 Task 69 precedent.
 - **Beyond the contract's lists** (each recorded in Appendix B): the restore refusal `checkpoint state exists while the checkpoints switch is off` (Apply never writes any of it before the switch, so a container that carries some is forged); a missing `CheckpointSeqs` entry counts as `checkpoint_seq 0` in `validateMemberCheckpointProofs`, because Apply sets the entry with every stored checkpoint and never removes it; a Leaving record's checkpoint must name a generation in `[JoinedGeneration, RemovedGeneration − 1]`; the config refusal `dispatch.member_lagging_timeout must not be negative`; `SubmitMemberCheckpoint` answers `checkpoint is required` before `checkpoint.node_id is required` (in the contract's order the first text could never be returned, since a missing checkpoint has no node id), refuses an unknown exclusion reason as `InvalidArgument` with the wire decoder's text, and re-answers `Ack` when a refusal raced the same checkpoint (the `SubmitTablePurged` and `SubmitMemberReady` pattern); `TestTableRegistryToPBCarriesCheckpointsAndLag`; the server tests live in the new `server/member_checkpoint_test.go` rather than Task 73's `server/member_gateway_test.go` and Task 71's `server/groups_admin_test.go`, so neither file's imports need merging.
 - **Fixture facts.** `checkpointsFSM` is `groupsFSM` with member-2 registered and the `reselection` and `checkpoints` switches on (switch 7 must precede switch 8). Its manifests published before the switches carry no track frontiers, so every test first passes and publishes one block (`publishOwnerBlock`, which also cleans the block's promoted part so the drain gate lets later consensus updates through). An owner-1 block advances only owner 1's entry; each published manifest still names every enrolled indexer's frontier. The quarantine test promotes a block before `QuarantineIndexer` and acknowledges it during the quarantine (amendment A7), which is how an owner's published entry advances while it is quarantined. The server fixture publishes table-set transition blocks (`publishServerTransition`), which need no statements: indexer 2's `db.b` gives a manifest with frontiers, and indexer 1's `dbc.c` later moves indexer 1's published entry.
-- **Checked while drafting.** Every code block of this task was applied, in step order, to a `git archive` export of a scratch arbiter tree: origin/main `526a721` with stand-ins of Plan S3-E2 Tasks 64–70 and of this plan's Tasks 71–74 (the drafters' working copies of 2026-10-16, Task 74's reduced to its Apply arm, state fields, latch and restore hooks), against arbiter-core and arbiter-proto stubs built from Plan S3-E1's contract (the Task 60 check tree) through `replace` directives. Every failing run below printed what it states, `go vet` is clean, the five touched packages pass under `-race`, and `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test ./...` of the export passes (2026-10-16). Forty single-point mutations (the lagging threshold, the quarantine exemption in the append and in the class rule, the hysteresis bounds, the signer-scoped seq, refusals 9, 10, 13 and 14, the same-entry rule, both bump paths, the trim, the view's lag and copies, each restore and proof rule, the WorkSet row, the gateway's idempotence, the RPC's authority check, the orchestrator's restart, zero and pruning rules, the config default and refusal, the CLI's entry fields) are each caught by at least one named test. `bazel run //:gazelle` ran offline on the export: for this task's files it adds exactly the srcs listed under Files and no deps line (it also relabels arbiter-core, an artefact of the export's `replace` directives that the branch's pins do not have); Bazel build and test were not run (no offline module cache for the stubbed modules).
+- **Checked while drafting.** Every code block of this task was applied, in step order, to a `git archive` export of a scratch arbiter tree: origin/main `526a721` with stand-ins of Plan S3-E2 Tasks 64–70 and of this plan's Tasks 71–74 (the drafters' working copies of 2026-10-16, Task 74's reduced to its Apply arm, state fields, latch and restore hooks), against arbiter-core and arbiter-proto stubs built from Plan S3-E1's contract (the Task 60 check tree) through `replace` directives. Every failing run below printed what it states, `go vet` is clean, the five touched packages pass under `-race`, and `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test ./...` of the export passes (2026-10-16). Forty single-point mutations (the lagging threshold, the quarantine exemption in the append and in the class rule, the hysteresis bounds, the signer-scoped seq, refusals 9, 10, 13 and 14, the same-entry rule, both bump paths, the trim, the view's lag and copies, each restore and proof rule, the WorkSet row, the gateway's idempotence, the RPC's authority check, the orchestrator's restart, zero and pruning rules, the config default and refusal, the CLI's entry fields) are each caught by at least one named test. `bazel run //:gazelle` ran offline on the export: for this task's files it adds exactly the srcs listed under Files and no deps line (it also relabels arbiter-core, an artefact of the export's `replace` directives that the branch's pins do not have); Bazel build and test were not run (no offline module cache for the stubbed modules). The published-manifest binding of Step 14 and `TestRestoreRefusesACheckpointOffItsPublishedManifest` were added after this check, in review; what was run for them is in Appendix B (Task 75, review fixes).
 
 - [ ] **Step 1: Check the worktree, the branch head and the seams this task builds on**
 
@@ -14012,6 +14014,114 @@ func TestRestoreRefusesAClassInconsistentWithItsCheckpoint(t *testing.T) {
 	}
 }
 
+// TestRestoreRefusesACheckpointOffItsPublishedManifest: restore binds every
+// stored checkpoint, a Leaving record's included, to a published manifest
+// whose track_frontiers entry for its owner is its entry, as
+// MemberCheckpoint's refusals 12 and 13 bind it at Apply, and every recent
+// advance of an owner to an entry a published manifest carries for it (plan
+// S3-E3 contract §52.3). Each forged checkpoint is signed again by its node's
+// replica signer under its stored epoch and keeps its checkpoint_seq and a
+// class that agrees with its entry, so the proofs and the class rules pass
+// and only the binding can refuse it; the class rules alone would take a
+// checkpoint ahead of the published entry for behind.
+func TestRestoreRefusesACheckpointOffItsPublishedManifest(t *testing.T) {
+	f, a := checkpointsFSM(t)
+	registerMember(t, f, "member-3")
+	m0 := publishOwnerBlock(t, f, a, 1)
+	mustApply(t, f, memberCheckpointCmd(t, f, memberCheckpointAt(t, m0, "member-2", 1, 1, cpGroup("db", 1))))
+	mustApply(t, f, memberCheckpointCmd(t, f, memberCheckpointAt(t, m0, "member-3", 1, 1, cpGroup("db", 1))))
+	// member-2 leaves G(1, db) and keeps its checkpoint in its Leaving record.
+	mustApply(t, f, rebalanceCmd(t, f, a, 1, "db", 1, nil, []string{"member-2"}, true))
+	m1 := publishOwnerBlock(t, f, a, 1)
+	requireClass(t, f, 1, "db", "member-3", MemberBehind)
+	// Checkpoints on published manifests, a Leaving record's included, and
+	// the advances publications appended restore unchanged.
+	if !bytes.Equal(snapshotBytes(t, restoreInto(t, snapshotBytes(t, f))), snapshotBytes(t, f)) {
+		t.Fatal("checkpoints on published manifests do not round-trip")
+	}
+	group := func(st *State) *DatabaseGroup {
+		for _, g := range st.Stage3.Groups {
+			if g.Owner == 1 && g.DatabaseID == "db" {
+				return g
+			}
+		}
+		t.Fatal("no G(1, db)")
+		return nil
+	}
+	current := func(st *State) *MemberCheckpointRecord {
+		g := group(st)
+		return g.Members[groupMemberIndex(g, "member-3")].Checkpoint
+	}
+	leaving := func(st *State) *MemberCheckpointRecord {
+		for _, l := range group(st).Leaving {
+			if l.Member.NodeID == "member-2" {
+				return l.Member.Checkpoint
+			}
+		}
+		t.Fatal("member-2 is not Leaving G(1, db)")
+		return nil
+	}
+	// resign edits rec's checkpoint and signs it again with its node's
+	// replica signer, keeping its epoch and checkpoint_seq.
+	resign := func(rec *MemberCheckpointRecord, edit func(cp *arbiter.MemberCheckpoint)) {
+		edit(&rec.Checkpoint)
+		jws, err := stage3ReplicaSigner(t, rec.Checkpoint.NodeID).SignMemberCheckpointAt(messageContextFor(t, f), rec.Checkpoint, authoritytest.Iat)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec.ReplicaJWS = jws
+	}
+	recent := func(st *State) []replay.TrackFrontier {
+		i, found := ownerAdvancesIndex(st.Stage3.OwnerAdvances, 1)
+		if !found || len(st.Stage3.OwnerAdvances[i].Recent) != 2 {
+			t.Fatalf("owner advances %+v, want m0's and m1's entries of indexer 1", st.Stage3.OwnerAdvances)
+		}
+		return st.Stage3.OwnerAdvances[i].Recent
+	}
+	ahead := frontierOf(t, m1, 1)
+	ahead.SafeBlockSeq++
+	offManifest := func(node, snapshot string) string {
+		return fmt.Sprintf(`checkpoint of member %s in group of indexer 1 database "db" names snapshot %s, which is not a published manifest, or an entry other than its track_frontiers entry for the indexer`, node, snapshot)
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(st *State)
+		want   string
+	}{
+		{"an unpublished snapshot", func(st *State) {
+			resign(current(st), func(cp *arbiter.MemberCheckpoint) { cp.SnapshotID = "0xnope" })
+		}, offManifest("member-3", "0xnope")},
+		{"an entry ahead of the published one", func(st *State) {
+			resign(current(st), func(cp *arbiter.MemberCheckpoint) { cp.Entry = ahead })
+		}, offManifest("member-3", m0.SnapshotID)},
+		{"another published manifest's snapshot", func(st *State) {
+			resign(current(st), func(cp *arbiter.MemberCheckpoint) { cp.SnapshotID = m1.SnapshotID })
+		}, offManifest("member-3", m1.SnapshotID)},
+		{"a Leaving record on an unpublished snapshot", func(st *State) {
+			resign(leaving(st), func(cp *arbiter.MemberCheckpoint) { cp.SnapshotID = "0xnope" })
+		}, offManifest("member-2", "0xnope")},
+		{"a Leaving record ahead of the published entry", func(st *State) {
+			resign(leaving(st), func(cp *arbiter.MemberCheckpoint) { cp.Entry = ahead })
+		}, offManifest("member-2", m0.SnapshotID)},
+		// Indexer 0's entry of m0, which m0 carries for indexer 0 only and
+		// which sorts before m1's entry of indexer 1.
+		{"another indexer's published entry", func(st *State) {
+			recent(st)[0] = frontierOf(t, m0, 0)
+		}, "owner advances of indexer 1 hold an entry that no published manifest carries for the indexer"},
+		// m0's block with one more applied promotion: still below m1's
+		// later block, so ascending and not past the published entry, but
+		// no manifest carries it.
+		{"an advance no publication made", func(st *State) {
+			recent(st)[0].AppliedPromotionSeq++
+		}, "owner advances of indexer 1 hold an entry that no published manifest carries for the indexer"},
+	} {
+		want := "snapshot stage3 checkpoints: " + tc.want
+		if err := restoreErr(t, forgedGroupsSnapshot(t, f, tc.mutate)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("%s: restore = %v, want %q", tc.name, err, want)
+		}
+	}
+}
+
 // TestInternedBodyKeepsTheGroupLayer: plan S3-E2 contract §46's interned body
 // round-trips a state holding every part of the group layer, built through
 // Apply: groups and a Leaving record (Task 71), blocks sealed under group
@@ -14516,7 +14626,7 @@ func TestMarkMemberLaggingRecordsTheObservedEntry(t *testing.T) {
 
 - [ ] **Step 5: Run the FSM tests and see them fail**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && GOWORK=off go test ./fsm/ -run '^(TestMemberCheckpointRefusals|TestAReplayedOrLowerCheckpointSeqIsRefused|TestASameEntryCheckpointReplacesOnlyItsListedGroups|TestASameEntryCheckpointMayShrinkOrGrowExcluded|TestCheckpointSeqIsDurableAcrossGroupRemovalLeavingAndReregistration|TestCheckpointSeqRestartsWhenTheReplicaSignerRotates|TestAMemberThatLostItsStateResumesAboveThePublishedSeq|TestRegistryViewPublishesTheCheckpointSeq|TestMemberClassesBootstrappingCaughtUpBehind|TestAnEarlierGenerationCheckpointKeepsTheClass|TestLagIsCountedInPublishedAdvancesOfTheOwner|TestAQuarantinedOwnerAccruesNoLag|TestLaggingReturnsToBehindOnlyPastTheObservedEntryBelowLagLow|TestOwnerAdvancesStayBoundedByMaxLagPublications|TestRegistryViewLagAdvancesSaturatesAtMaxLagPublicationsPlusOne|TestPublicationBumpsTheRegistryVersionWhenAMemberHoldsACheckpoint|TestMarkMemberLaggingRefusals|TestMarkMemberLaggingRecordsTheObservedEntry|TestRestoreReverifiesCheckpointSignaturesUnderEachEpochsReplicaSigner|TestRestoreRefusesACheckpointSeqBelowAStoredCheckpoint|TestRestoreRefusesAClassInconsistentWithItsCheckpoint|TestInternedBodyKeepsTheGroupLayer)$' -count=1 2>&1 | head -12`
+Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && GOWORK=off go test ./fsm/ -run '^(TestMemberCheckpointRefusals|TestAReplayedOrLowerCheckpointSeqIsRefused|TestASameEntryCheckpointReplacesOnlyItsListedGroups|TestASameEntryCheckpointMayShrinkOrGrowExcluded|TestCheckpointSeqIsDurableAcrossGroupRemovalLeavingAndReregistration|TestCheckpointSeqRestartsWhenTheReplicaSignerRotates|TestAMemberThatLostItsStateResumesAboveThePublishedSeq|TestRegistryViewPublishesTheCheckpointSeq|TestMemberClassesBootstrappingCaughtUpBehind|TestAnEarlierGenerationCheckpointKeepsTheClass|TestLagIsCountedInPublishedAdvancesOfTheOwner|TestAQuarantinedOwnerAccruesNoLag|TestLaggingReturnsToBehindOnlyPastTheObservedEntryBelowLagLow|TestOwnerAdvancesStayBoundedByMaxLagPublications|TestRegistryViewLagAdvancesSaturatesAtMaxLagPublicationsPlusOne|TestPublicationBumpsTheRegistryVersionWhenAMemberHoldsACheckpoint|TestMarkMemberLaggingRefusals|TestMarkMemberLaggingRecordsTheObservedEntry|TestRestoreReverifiesCheckpointSignaturesUnderEachEpochsReplicaSigner|TestRestoreRefusesACheckpointSeqBelowAStoredCheckpoint|TestRestoreRefusesAClassInconsistentWithItsCheckpoint|TestRestoreRefusesACheckpointOffItsPublishedManifest|TestInternedBodyKeepsTheGroupLayer)$' -count=1 2>&1 | head -12`
 
 Expected: the fsm test binary does not build: `# github.com/sentioxyz/arbiter/fsm [github.com/sentioxyz/arbiter/fsm.test]`, then errors such as `fsm/member_checkpoint_test.go:60:11: undefined: manifestTrackFrontier`, `fsm/member_checkpoint_test.go:118:65: undefined: MemberCheckpointSeq`, `fsm/member_checkpoint_test.go:120:45: f.st.Stage3.CheckpointSeqs undefined (type *Stage3State has no field or method CheckpointSeqs)` and `fsm/mark_member_lagging_test.go:107:15: f.MemberLagWork undefined (type *FSM has no field or method MemberLagWork)`, ending with `too many errors` (`head -12` cuts the `[build failed]` line).
 
@@ -15358,9 +15468,9 @@ with:
 
 - [ ] **Step 13: Run the FSM tests again**
 
-Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && GOWORK=off go test ./fsm/ -run '^(TestMemberCheckpointRefusals|TestAReplayedOrLowerCheckpointSeqIsRefused|TestASameEntryCheckpointReplacesOnlyItsListedGroups|TestASameEntryCheckpointMayShrinkOrGrowExcluded|TestCheckpointSeqIsDurableAcrossGroupRemovalLeavingAndReregistration|TestCheckpointSeqRestartsWhenTheReplicaSignerRotates|TestAMemberThatLostItsStateResumesAboveThePublishedSeq|TestRegistryViewPublishesTheCheckpointSeq|TestMemberClassesBootstrappingCaughtUpBehind|TestAnEarlierGenerationCheckpointKeepsTheClass|TestLagIsCountedInPublishedAdvancesOfTheOwner|TestAQuarantinedOwnerAccruesNoLag|TestLaggingReturnsToBehindOnlyPastTheObservedEntryBelowLagLow|TestOwnerAdvancesStayBoundedByMaxLagPublications|TestRegistryViewLagAdvancesSaturatesAtMaxLagPublicationsPlusOne|TestPublicationBumpsTheRegistryVersionWhenAMemberHoldsACheckpoint|TestMarkMemberLaggingRefusals|TestMarkMemberLaggingRecordsTheObservedEntry|TestRestoreReverifiesCheckpointSignaturesUnderEachEpochsReplicaSigner|TestRestoreRefusesACheckpointSeqBelowAStoredCheckpoint|TestRestoreRefusesAClassInconsistentWithItsCheckpoint|TestInternedBodyKeepsTheGroupLayer)$' -race -count=1 -v 2>&1 | grep -E '^(--- |    [a-z_]+_test[.]go:|ok|FAIL)'`
+Run: `W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" && GOWORK=off go test ./fsm/ -run '^(TestMemberCheckpointRefusals|TestAReplayedOrLowerCheckpointSeqIsRefused|TestASameEntryCheckpointReplacesOnlyItsListedGroups|TestASameEntryCheckpointMayShrinkOrGrowExcluded|TestCheckpointSeqIsDurableAcrossGroupRemovalLeavingAndReregistration|TestCheckpointSeqRestartsWhenTheReplicaSignerRotates|TestAMemberThatLostItsStateResumesAboveThePublishedSeq|TestRegistryViewPublishesTheCheckpointSeq|TestMemberClassesBootstrappingCaughtUpBehind|TestAnEarlierGenerationCheckpointKeepsTheClass|TestLagIsCountedInPublishedAdvancesOfTheOwner|TestAQuarantinedOwnerAccruesNoLag|TestLaggingReturnsToBehindOnlyPastTheObservedEntryBelowLagLow|TestOwnerAdvancesStayBoundedByMaxLagPublications|TestRegistryViewLagAdvancesSaturatesAtMaxLagPublicationsPlusOne|TestPublicationBumpsTheRegistryVersionWhenAMemberHoldsACheckpoint|TestMarkMemberLaggingRefusals|TestMarkMemberLaggingRecordsTheObservedEntry|TestRestoreReverifiesCheckpointSignaturesUnderEachEpochsReplicaSigner|TestRestoreRefusesACheckpointSeqBelowAStoredCheckpoint|TestRestoreRefusesAClassInconsistentWithItsCheckpoint|TestRestoreRefusesACheckpointOffItsPublishedManifest|TestInternedBodyKeepsTheGroupLayer)$' -race -count=1 -v 2>&1 | grep -E '^(--- |    [a-z_]+_test[.]go:|ok|FAIL)'`
 
-Expected: the package builds; nineteen of the 22 tests PASS, and the three restore tests FAIL because restore accepts every forged container while nothing checks the new state: `TestRestoreReverifiesCheckpointSignaturesUnderEachEpochsReplicaSigner` with `old record under the rotated signer's epoch: restore = <nil>, want "snapshot member member-2 checkpoint 1 of indexer 0: "`, `TestRestoreRefusesACheckpointSeqBelowAStoredCheckpoint` with `restore = <nil>, want "snapshot member member-2 checkpoint_seq 2 of indexer 1 is below a stored checkpoint 3"`, and `TestRestoreRefusesAClassInconsistentWithItsCheckpoint` with `restore = <nil>, want "snapshot stage3 checkpoints: member member-0 of group of indexer 1 database \"db\" is behind without a checkpoint, or bootstrapping with one"`; then `FAIL	github.com/sentioxyz/arbiter/fsm`.
+Expected: the package builds; nineteen of the 23 tests PASS, and the four restore tests FAIL because restore accepts every forged container while nothing checks the new state: `TestRestoreReverifiesCheckpointSignaturesUnderEachEpochsReplicaSigner` with `old record under the rotated signer's epoch: restore = <nil>, want "snapshot member member-2 checkpoint 1 of indexer 0: "`, `TestRestoreRefusesACheckpointSeqBelowAStoredCheckpoint` with `restore = <nil>, want "snapshot member member-2 checkpoint_seq 2 of indexer 1 is below a stored checkpoint 3"`, `TestRestoreRefusesAClassInconsistentWithItsCheckpoint` with `restore = <nil>, want "snapshot stage3 checkpoints: member member-0 of group of indexer 1 database \"db\" is behind without a checkpoint, or bootstrapping with one"`, and `TestRestoreRefusesACheckpointOffItsPublishedManifest` with `an unpublished snapshot: restore = <nil>, want "snapshot stage3 checkpoints: checkpoint of member member-3 in group of indexer 1 database \"db\" names snapshot 0xnope, which is not a published manifest, or an entry other than its track_frontiers entry for the indexer"` (its round trip of the unforged state passes); then `FAIL	github.com/sentioxyz/arbiter/fsm`.
 
 - [ ] **Step 14: Add the restore rule**
 
@@ -15429,14 +15539,20 @@ func checkpointNamesGroup(rec *MemberCheckpointRecord, node string, owner uint64
 // lag state (housegate spec 2026-10-14 §9.1, §9.2; plan S3-E3 contract
 // §52.3): none of it before the checkpoints switch; stored checkpoint seqs
 // sorted by (node, owner) and owners' recent advances sorted by owner, each
-// strictly ascending, at most max_lag_publications + 1 long and never past
-// the owner's published entry; every current member bootstrapping exactly
-// while it has no checkpoint, caught_up exactly at the owner's published
-// entry and behind before it, and holding an observed entry, at or before the
-// published entry, exactly while lagging; and every stored checkpoint, a
-// Leaving record's included, naming its node, its group's owner and database
-// at a generation the member held. validateMemberCheckpointProofs re-verifies
-// the signatures; node status is never read.
+// strictly ascending, at most max_lag_publications + 1 long, never past the
+// owner's published entry and each an entry a published manifest carries for
+// the owner; every current member bootstrapping exactly while it has no
+// checkpoint, caught_up exactly at the owner's published entry and behind
+// before it, and holding an observed entry, at or before the published entry,
+// exactly while lagging; and every stored checkpoint, a Leaving record's
+// included, naming its node, its group's owner and database at a generation
+// the member held, and a published manifest whose track_frontiers entry for
+// the owner is its entry, as MemberCheckpoint's refusals 12 and 13 require at
+// Apply. No Apply prunes State.Manifests, so the manifest every stored
+// checkpoint and advance was accepted against is still there, and on the
+// watermark chain (validateRestoredTrackChain), so a bound entry is never
+// past the published one. validateMemberCheckpointProofs re-verifies the
+// signatures; node status is never read.
 func validateStage3Checkpoints(st *State) error {
 	s3 := st.Stage3
 	if s3 == nil {
@@ -15444,6 +15560,12 @@ func validateStage3Checkpoints(st *State) error {
 	}
 	refuse := func(format string, args ...any) error {
 		return fmt.Errorf("snapshot stage3 checkpoints: "+format, args...)
+	}
+	// offManifest refuses a stored checkpoint that MemberCheckpoint's
+	// refusal 12 or 13 would have refused at Apply.
+	offManifest := func(node string, g *DatabaseGroup, rec *MemberCheckpointRecord) error {
+		return refuse("checkpoint of member %s in group of indexer %d database %q names snapshot %s, which is not a published manifest, or an entry other than its track_frontiers entry for the indexer",
+			node, g.Owner, g.DatabaseID, rec.Checkpoint.SnapshotID)
 	}
 	if !stage3SwitchValue(st.Params.Stage3, Stage3SwitchCheckpoints) {
 		if checkpointStatePresent(s3) {
@@ -15463,6 +15585,7 @@ func validateStage3Checkpoints(st *State) error {
 	}
 	view := &FSM{st: st}
 	limit := int(st.Params.Stage3.MaxLagPublications) + 1
+	carried := publishedTrackFrontiers(st)
 	for _, adv := range s3.OwnerAdvances {
 		published := view.publishedTrackFrontierLocked(adv.Owner)
 		ok := len(adv.Recent) <= limit
@@ -15473,6 +15596,13 @@ func validateStage3Checkpoints(st *State) error {
 		}
 		if !ok {
 			return refuse("owner advances of indexer %d are not strictly ascending, exceed %d entries or pass its published entry", adv.Owner, limit)
+		}
+		// recordOwnerAdvanceLocked appends only the owner's entry of the
+		// manifest it publishes.
+		for _, e := range adv.Recent {
+			if e.IndexerID != adv.Owner || !carried[e] {
+				return refuse("owner advances of indexer %d hold an entry that no published manifest carries for the indexer", adv.Owner)
+			}
 		}
 	}
 	for _, g := range s3.Groups {
@@ -15493,17 +15623,59 @@ func validateStage3Checkpoints(st *State) error {
 			if m.Checkpoint != nil && !checkpointNamesGroup(m.Checkpoint, m.NodeID, g.Owner, g.DatabaseID, m.JoinedGeneration, g.Generation) {
 				return refuse("checkpoint of member %s in group of indexer %d database %q names another node, owner or database, or a generation outside [%d, %d]", m.NodeID, g.Owner, g.DatabaseID, m.JoinedGeneration, g.Generation)
 			}
+			if m.Checkpoint != nil && !checkpointOnPublishedManifest(st, m.Checkpoint) {
+				return offManifest(m.NodeID, g, m.Checkpoint)
+			}
 		}
 		// A Leaving record keeps the checkpoint it held as a member, taken at
-		// a generation before the one that removed it.
+		// a generation before the one that removed it, against a published
+		// manifest like any other: the copy floor and the Leaving release
+		// read its entry.
 		for _, l := range g.Leaving {
 			m := l.Member
 			if m.Checkpoint != nil && !checkpointNamesGroup(m.Checkpoint, m.NodeID, g.Owner, g.DatabaseID, m.JoinedGeneration, l.RemovedGeneration-1) {
 				return refuse("checkpoint of member %s in group of indexer %d database %q names another node, owner or database, or a generation outside [%d, %d]", m.NodeID, g.Owner, g.DatabaseID, m.JoinedGeneration, l.RemovedGeneration-1)
 			}
+			if m.Checkpoint != nil && !checkpointOnPublishedManifest(st, m.Checkpoint) {
+				return offManifest(m.NodeID, g, m.Checkpoint)
+			}
 		}
 	}
 	return nil
+}
+```
+
+In `fsm/member_checkpoint.go` (Step 7's file), right after `manifestTrackFrontier`, insert the two state-only halves the rule reads (the file already imports `replay`, which `fsm/stage3_restore.go` does not):
+
+```go
+// checkpointOnPublishedManifest reports whether rec's checkpoint names a
+// published manifest (State.Manifests, which no Apply prunes) whose
+// track_frontiers entry for its owner is its entry: MemberCheckpoint's
+// refusals 12 and 13 at Apply, checked again on restore.
+func checkpointOnPublishedManifest(st *State, rec *MemberCheckpointRecord) bool {
+	cp := rec.Checkpoint
+	manifest := st.Manifests[cp.SnapshotID]
+	if manifest == nil {
+		return false
+	}
+	frontier, ok := manifestTrackFrontier(manifest, cp.OwnerIndexerID)
+	return ok && frontier == cp.Entry
+}
+
+// publishedTrackFrontiers is the set of track_frontiers entries the published
+// manifests carry. recordOwnerAdvanceLocked appends only such an entry to an
+// owner's recent advances, so restore requires each recent advance to be one.
+func publishedTrackFrontiers(st *State) map[replay.TrackFrontier]bool {
+	carried := map[replay.TrackFrontier]bool{}
+	for _, manifest := range st.Manifests {
+		if manifest == nil {
+			continue
+		}
+		for _, e := range manifest.TrackFrontiers {
+			carried[e] = true
+		}
+	}
+	return carried
 }
 ```
 
@@ -15590,7 +15762,7 @@ func validateMemberCheckpointProofs(st *State, paramsByEpoch []Params, genesisID
 ```bash
 W=$HOME/src/remotesrc/claude/arbiter/multi-source-s3e; cd "$W" || exit 1
 test -z "$(gofmt -l fsm)" && echo gofmt-clean
-GOWORK=off go test ./fsm/ -run '^(TestMemberCheckpointRefusals|TestAReplayedOrLowerCheckpointSeqIsRefused|TestASameEntryCheckpointReplacesOnlyItsListedGroups|TestASameEntryCheckpointMayShrinkOrGrowExcluded|TestCheckpointSeqIsDurableAcrossGroupRemovalLeavingAndReregistration|TestCheckpointSeqRestartsWhenTheReplicaSignerRotates|TestAMemberThatLostItsStateResumesAboveThePublishedSeq|TestRegistryViewPublishesTheCheckpointSeq|TestMemberClassesBootstrappingCaughtUpBehind|TestAnEarlierGenerationCheckpointKeepsTheClass|TestLagIsCountedInPublishedAdvancesOfTheOwner|TestAQuarantinedOwnerAccruesNoLag|TestLaggingReturnsToBehindOnlyPastTheObservedEntryBelowLagLow|TestOwnerAdvancesStayBoundedByMaxLagPublications|TestRegistryViewLagAdvancesSaturatesAtMaxLagPublicationsPlusOne|TestPublicationBumpsTheRegistryVersionWhenAMemberHoldsACheckpoint|TestMarkMemberLaggingRefusals|TestMarkMemberLaggingRecordsTheObservedEntry|TestRestoreReverifiesCheckpointSignaturesUnderEachEpochsReplicaSigner|TestRestoreRefusesACheckpointSeqBelowAStoredCheckpoint|TestRestoreRefusesAClassInconsistentWithItsCheckpoint|TestInternedBodyKeepsTheGroupLayer)$' -race -count=1 -v 2>&1 | grep -E '^(--- |ok|FAIL)'
+GOWORK=off go test ./fsm/ -run '^(TestMemberCheckpointRefusals|TestAReplayedOrLowerCheckpointSeqIsRefused|TestASameEntryCheckpointReplacesOnlyItsListedGroups|TestASameEntryCheckpointMayShrinkOrGrowExcluded|TestCheckpointSeqIsDurableAcrossGroupRemovalLeavingAndReregistration|TestCheckpointSeqRestartsWhenTheReplicaSignerRotates|TestAMemberThatLostItsStateResumesAboveThePublishedSeq|TestRegistryViewPublishesTheCheckpointSeq|TestMemberClassesBootstrappingCaughtUpBehind|TestAnEarlierGenerationCheckpointKeepsTheClass|TestLagIsCountedInPublishedAdvancesOfTheOwner|TestAQuarantinedOwnerAccruesNoLag|TestLaggingReturnsToBehindOnlyPastTheObservedEntryBelowLagLow|TestOwnerAdvancesStayBoundedByMaxLagPublications|TestRegistryViewLagAdvancesSaturatesAtMaxLagPublicationsPlusOne|TestPublicationBumpsTheRegistryVersionWhenAMemberHoldsACheckpoint|TestMarkMemberLaggingRefusals|TestMarkMemberLaggingRecordsTheObservedEntry|TestRestoreReverifiesCheckpointSignaturesUnderEachEpochsReplicaSigner|TestRestoreRefusesACheckpointSeqBelowAStoredCheckpoint|TestRestoreRefusesAClassInconsistentWithItsCheckpoint|TestRestoreRefusesACheckpointOffItsPublishedManifest|TestInternedBodyKeepsTheGroupLayer)$' -race -count=1 -v 2>&1 | grep -E '^(--- |ok|FAIL)'
 GOWORK=off go test ./fsm/ -race -count=1
 GOWORK=off go test ./fsm/ -run 'TestPreActivationHistoryIsByteIdenticalAcrossSignedClaims|TestPreActivationHistoryIsByteIdenticalAcrossTracks|TestL3TrackHeaderPreimagesAreFrozen|TestL3TransitionHeaderPreimageIsFrozen|TestStage3V21PlainContainerGolden|TestStage3V21InternedContainerGolden|TestStage3ActivationWithEverySwitchOffChangesNoBehaviour' -count=1 -v 2>&1 | grep -E '^(--- |ok|FAIL)'
 GOWORK=off go vet ./fsm/
@@ -15598,7 +15770,7 @@ grep -rn 'time\.Now' fsm/ | grep -v _test.go
 git status --porcelain fsm/testdata
 ```
 
-Expected: `gofmt-clean`; `--- PASS:` for each of the 22 tests and `ok`; `ok  	github.com/sentioxyz/arbiter/fsm` for the whole package under `-race` (every earlier task's tests included); `--- PASS:` for the seven golden and switch-off tests and `ok`; `go vet` prints nothing; the `time.Now` grep prints nothing (Apply reads no clock); `git status --porcelain fsm/testdata` prints nothing (no golden was rewritten: `stage3V21GoldenFSM` turns no switch on, so the frozen v21 containers hold no group state). A failing golden or switch-off test means a new branch runs with its switch off: stop and find it.
+Expected: `gofmt-clean`; `--- PASS:` for each of the 23 tests and `ok`; `ok  	github.com/sentioxyz/arbiter/fsm` for the whole package under `-race` (every earlier task's tests included); `--- PASS:` for the seven golden and switch-off tests and `ok`; `go vet` prints nothing; the `time.Now` grep prints nothing (Apply reads no clock); `git status --porcelain fsm/testdata` prints nothing (no golden was rewritten: `stage3V21GoldenFSM` turns no switch on, so the frozen v21 containers hold no group state). A failing golden or switch-off test means a new branch runs with its switch off: stop and find it.
 
 - [ ] **Step 17: Write the failing gateway, RPC and transport tests**
 
@@ -17971,10 +18143,13 @@ Effects: set `Class = MemberLagging` and `ObservedEntry = &c.ObservedEntry`, the
   - `checkpoint seqs are not sorted by (node_id, owner_indexer_id) without duplicates`
   - `owner advances are not sorted by owner without duplicates`
   - `owner advances of indexer %d are not strictly ascending, exceed %d entries or pass its published entry`
+  - `owner advances of indexer %d hold an entry that no published manifest carries for the indexer` (each recent advance must equal a `track_frontiers` entry of its owner in some manifest of `State.Manifests`, which is all `recordOwnerAdvanceLocked` appends)
   - `member %s of group of indexer %d database %q is %s without a checkpoint, or bootstrapping with one`
   - `member %s of group of indexer %d database %q is caught_up at an entry other than the published one, or behind at it`
   - `member %s of group of indexer %d database %q has an observed entry without being lagging, or lagging without one, or one past the published entry`
   - `checkpoint of member %s in group of indexer %d database %q names another node, owner or database, or a generation outside [%d, %d]`
+  - `checkpoint of member %s in group of indexer %d database %q names snapshot %s, which is not a published manifest, or an entry other than its track_frontiers entry for the indexer` (refusals 12 and 13 again, for every stored checkpoint, a Leaving record's included: `State.Manifests[cp.SnapshotID]` exists and its `track_frontiers` entry for `cp.OwnerIndexerID` equals `cp.Entry`; helper `checkpointOnPublishedManifest(st *State, rec *MemberCheckpointRecord) bool`, beside `publishedTrackFrontiers(st *State) map[replay.TrackFrontier]bool` in `fsm/member_checkpoint.go`)
+- Both manifest bindings (the advances and the stored checkpoints) need every manifest a stored checkpoint or advance names to stay in `State.Manifests`. No Apply through v21 removes a manifest; a later history pruning (P7, v22) must keep those manifests or change this rule in the same release.
 - `func validateMemberCheckpointProofs(st *State, paramsByEpoch []Params, genesisID string) error`, called at the end of `validateConsensusHistory`:
   - It re-verifies every stored record, in `Members` and `Leaving`, with `authority.VerifyMemberCheckpoint` under the `replica_signer` that `paramsByEpoch[rec.Epoch].Verifiers` lists for the node (error `snapshot member %s checkpoint %d of indexer %d: %w`).
   - When that signer equals the `CheckpointSeqs` entry's `ReplicaSigner`, it requires the stored `CheckpointSeq` to be at least the record's (error `snapshot member %s checkpoint_seq %d of indexer %d is below a stored checkpoint %d`).
@@ -17987,7 +18162,7 @@ Effects: set `Class = MemberLagging` and `ObservedEntry = &c.ObservedEntry`, the
   - classes: `TestMemberClassesBootstrappingCaughtUpBehind`, `TestAnEarlierGenerationCheckpointKeepsTheClass`;
   - lag: `TestLagIsCountedInPublishedAdvancesOfTheOwner`, `TestAQuarantinedOwnerAccruesNoLag`, `TestLaggingReturnsToBehindOnlyPastTheObservedEntryBelowLagLow`, `TestOwnerAdvancesStayBoundedByMaxLagPublications`, `TestRegistryViewLagAdvancesSaturatesAtMaxLagPublicationsPlusOne` (D31), `TestPublicationBumpsTheRegistryVersionWhenAMemberHoldsACheckpoint` (§50's version rule: one bump with or without a class change, none for an owner whose groups hold no checkpoint);
   - `MarkMemberLagging`: `TestMarkMemberLaggingRefusals`, `TestMarkMemberLaggingRecordsTheObservedEntry`;
-  - restore and encoding: `TestRestoreReverifiesCheckpointSignaturesUnderEachEpochsReplicaSigner`, `TestRestoreRefusesACheckpointSeqBelowAStoredCheckpoint`, `TestRestoreRefusesAClassInconsistentWithItsCheckpoint`, `TestInternedBodyKeepsTheGroupLayer` (S3-E2 §46's interned round trip over a state with groups, Leaving, readiness, seal fields, re-selections and checkpoints).
+  - restore and encoding: `TestRestoreReverifiesCheckpointSignaturesUnderEachEpochsReplicaSigner`, `TestRestoreRefusesACheckpointSeqBelowAStoredCheckpoint`, `TestRestoreRefusesAClassInconsistentWithItsCheckpoint`, `TestRestoreRefusesACheckpointOffItsPublishedManifest` (a re-signed checkpoint on an unpublished snapshot, ahead of the published entry or naming another manifest's snapshot, for a current member and a Leaving record; another indexer's published entry or an entry no publication made among an owner's advances), `TestInternedBodyKeepsTheGroupLayer` (S3-E2 §46's interned round trip over a state with groups, Leaving, readiness, seal fields, re-selections and checkpoints).
 - `server`: `TestSubmitMemberCheckpointAnswersFailedPreconditionBeforeTheSwitch`, `TestSubmitMemberCheckpointIsIdempotentForTheStoredCheckpoint`, `TestMarkMemberLaggingRPCAuthorizesAndProposes`.
 - `orchestrator`: `TestOrchestratorProposesMarkMemberLaggingAfterTheTimeout`, `TestOrchestratorMemberLaggingTimerRestartsOnANewCheckpoint`, `TestOrchestratorMemberLaggingTimeoutZeroDisablesProposals`.
 - `config`: `TestLoadConfigReadsDispatchMemberLaggingTimeout`, `TestDispatchMemberLaggingTimeoutDefaultsToThirtyMinutes`.
@@ -18082,6 +18257,11 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 - Line anchors use the plan's base fb42260 (contract's numbers); origin/main is now 526a721.
 - Names added while drafting: fsm helpers beyond the contract: ownerAdvancesIndex, appendOwnerAdvanceLocked, ownerHoldsCheckpointLocked, checkpointSeqIndex, compareCheckpointSeqKey, setCheckpointSeqLocked, cloneMemberCheckpoint, memberCheckpointsEqual, checkpointGroupsSorted, checkpointExclusionsValidLocked, manifestTrackFrontier, memberLagWorkLocked, cloneGroupMember, checkpointStatePresent, checkpointNamesGroup; fsm constants: memberCheckpointsBeforeSwitchReason, markMemberLaggingBeforeSwitchReason, checkpointExclusionReasons; server: memberCheckpointsBeforeSwitchMessage, memberLaggingRefusedMessage, memberCheckpointSeqsToPB; orchestrator: Loop.lagSince (map[memberLagKey]memberLagTimer), reset in New and in Run per term; cmd/arbiter-admin: runMember, runMemberLagging; groupsAdmin test fake gains laggingFn, laggings and a MarkMemberLagging method; refusal (restore, added): snapshot stage3 checkpoints: checkpoint state exists while the checkpoints switch is off; proof errors (added): snapshot member %s checkpoint %d of indexer %d: epoch %d is beyond the consensus epoch %d / ...: epoch %d lists no replica_signer for the node; config refusal (added): dispatch.member_lagging_timeout must not be negative; test (added): server TestTableRegistryToPBCarriesCheckpointsAndLag; test file (new, instead of the contract's member_gateway_test.go / groups_admin_test.go): server/member_checkpoint_test.go with helpers serverMemberSeed, serverMemberReplica, registerServerMember, addServerTable, publishServerTransition, checkpointServer, serverCheckpointRequest, memberGateway; fsm test helpers: checkpointsFSM, publishOwnerBlock, frontierOf, cpGroup, memberCheckpointAt, signedCheckpoint, memberCheckpointCmd, memberOf, requireClass, storedSeq, rotateReplicaSigner, reregisterMember, setLagBounds, ownerRecent, servedLag, markLaggingCmd, behindMember, mustManifest; orchestrator test helpers: memberLagHarness, newMemberLagHarness, lagRow
 - Verified while drafting: Scratch base: git archive-style tree of arbiter origin/main 526a721 + stand-ins of S3-E2 Tasks 64-70 and S3-E3 Tasks 71-72 (task-73-r2 snapshot), Task 67 codec/persist (task-67-r2, interned golden recaptured for the scratch), Task 73 WIP and a reduced Task 74 stand-in, against arbiter-core (E1 Task 60 check tree) and arbiter-proto stubs via replace directives; work in <scratch> / The markdown is generated from the verified files (tools/gen.py + edits.py + text.py); an independent parser (tools/check_md.py) applies all 45 Create/replace/Append blocks of the final markdown to a fresh base and reproduces all 30 changed files byte-for-byte. / Full replay of all 37 steps in step order on a fresh export (replay/arb): every failing run printed the stated compile errors / test failures (quoted verbatim in Expected), every passing run passed; the commit step staged exactly the 30 non-BUILD files (2856 insertions, 3 deletions). / GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test ./... passes on the scratch tree; go test -race passes for fsm, server, orchestrator, config, cmd/arbiter-admin; go vet ./... clean; gofmt clean. / 40 single-point mutations of the new code are each caught by at least one named test (initial run found 2 survivors; the quarantine test was strengthened until both were caught). / bazel run //:gazelle ran offline on the scratch tree: for this task's files it adds only the srcs listed under Files and no deps (it also relabels arbiter-core due to the scratch replace). Bazel build/test not run (no offline cache for stubbed modules). / Every bash block and Run: command passes bash -n and shellcheck -S warning; the fish push block passes fish -n. / Markdown sanity: 37 steps, no TBD/placeholder, no hard-wrapped prose lines; remote push step marked as needing explicit user confirmation; user-facing command in fish.
+- Review fixes (AgentConnect round 1), finding 1 (P1, bind restored checkpoints to a published manifest): `validateStage3Checkpoints` checked a stored checkpoint's class only against equality with the published entry, so a member-signed checkpoint naming an unpublished snapshot, or a future entry with a matching stored `checkpoint_seq`, restored as `behind` and could then satisfy the copy floor or a Leaving release, although `applyMemberCheckpoint` refuses both (refusals 12 and 13). Step 14 now refuses every stored checkpoint, a Leaving record's included, unless `State.Manifests[cp.SnapshotID]` exists and its `track_frontiers` entry for the owner equals `cp.Entry` (`checkpointOnPublishedManifest`), and, the sibling of the same class, every recent owner advance that no published manifest carries for that owner (`publishedTrackFrontiers`; `recordOwnerAdvanceLocked` appends only such entries, and the old rule ignored the entry's `IndexerID`). Both helpers go into `fsm/member_checkpoint.go`, which imports `replay`. New test `TestRestoreRefusesACheckpointOffItsPublishedManifest` (Step 2, in the Step 5, 13 and 16 runs; Step 13 now expects four restore tests to fail); contract §52.3's restore list and named tests, K76, Review Focus 5, the coverage map and the Files and Interfaces lists say so. The rule relies on no Apply removing a manifest (true through v21: both writes to `State.Manifests` at `526a721` add one); contract §52.3 makes a later history pruning (P7) keep those manifests or change the rule. Leaving records' own `Entry` was considered and left alone: Apply sets it from `publishedTrackFrontierLocked`, which can be a tracks initial frontier no manifest carries, so there is no manifest to bind it to. Verified in `<scratch>`: the Step 14 code blocks of this plan (old and new) extracted verbatim into a stub `fsm` package (stub state types of contract §50 and §52.3, `publishedTrackFrontierLocked` reduced to the watermark manifest's entry) and run with `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test` on Go 1.27.1: the old rule accepted all nine forged states (unpublished snapshot, entry ahead of the published one, another manifest's snapshot, the frontier-less genesis manifest, the two Leaving cases, another indexer's published entry, an entry naming another indexer, an entry no publication made), the new rule refuses each with the contract text and accepts the unforged state, and each of seven single-point mutations of the new checks is caught; `gofmt -l` is silent on the three edited Go blocks, and the new test type-checks (`go vet`) against stubs with the fixture helpers' signatures. The full Task 75 replay on the S3-E2/S3-E3 scratch tree was not rerun.
+
+### Review fixes (AgentConnect round 1): cross-plan
+
+- the spec-coverage row for §11 `replica_hosts` no longer pairs the host side with `ready_generation`: Plan S3-E4 contract §56 (its review finding 2) lists every current member's served `host_indexer_id`, never filtered by `MemberReady`. This plan still serves `ready_generation`; nothing else changes.
 
 ## Appendix C: execution record
 
