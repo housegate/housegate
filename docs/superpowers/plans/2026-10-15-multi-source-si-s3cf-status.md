@@ -1,5 +1,7 @@
 # Multi-source SI stage 3, Plans S3-C1 … S3-F: status and remaining work (2026-10-16)
 
+> **Start here:** `2026-10-16-multi-source-si-stage3-handoff.md` is the operational handoff for all of stage 3. It covers what is done (spec, S3-A executed, S3-B written), what comes next (executing S3-B; finishing these plans) and how to do it. This file holds the detail it refers to.
+
 Plans S3-C1 … S3-F carry stage 3 from P1 to P6 (spec `docs/superpowers/specs/2026-10-14-multi-source-si-stage3-database-groups-design.md`, §16) after Plans S3-A (P0 code) and S3-B (P0 hosts, the ClickHouse lockdown L and the enrolment of indexer-c E). They were drafted on 2026-10-15/16 in a multi-agent run that stopped repeatedly at usage limits; this file records what exists, what remains and the context needed to finish it. **No S3-C1 … S3-F plan is ready to execute**: every drafted task still needs its adversarial review, and every plan its consistency pass.
 
 ## 1. Status by plan
