@@ -19250,8 +19250,8 @@ Filled in while the plan runs, never edited afterwards. Each recording task fill
 
 | Name | Value | Recorded by |
 |---|---|---|
-| `SN_COMMIT` |  | Task 12 |
-| `SN_DIGEST` |  | Task 12 |
+| `SN_COMMIT` | `0828f212c9ff6fee311701f9b14d8df8c7817a64` | Task 12 |
+| `SN_DIGEST` | `sha256:3663f8f92df476b3a31dd9b3ab42583d046767549e5961749d0b7094decf298e` | Task 12 |
 | `P0_PR` |  | Task 14 |
 | `P0_END` |  | Task 15 |
 | `L_PR` |  | Task 17 |
@@ -19268,7 +19268,7 @@ Filled in while the plan runs, never edited afterwards. Each recording task fill
 
 Run records (date, command, outcome), one per recording task, written in the same commit as that task's rows:
 
-- sentio-node release (Task 12):
+- sentio-node release (Task 12): `sentioxyz/sentio-node#197` squash-merged as `0828f212c9ff6fee311701f9b14d8df8c7817a64` on 2026-10-16 UTC; `CI Build` run `38873867944` with `docker-push` `success`; `ghcr.io/sentioxyz/sentio-node:sha-0828f212c9ff6fee311701f9b14d8df8c7817a64`, index digest `sha256:3663f8f92df476b3a31dd9b3ab42583d046767549e5961749d0b7094decf298e`, revision label `0828f212c9ff6fee311701f9b14d8df8c7817a64`; `go.mod` at `0828f212c9ff6fee311701f9b14d8df8c7817a64` requires housegate `v0.20.0`, arbiter-core `v0.15.0` and arbiter-proto `v0.12.0`.
 - P0 PR (Task 14):
 - P0 run (Task 15):
 - L PR (Task 17):
