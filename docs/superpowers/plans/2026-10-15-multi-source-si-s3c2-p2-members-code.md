@@ -35,7 +35,7 @@
 
 The spec and Plans S3-A, S3-B and S3-C1 leave these P2 code details open; each is resolved here and binding for Plans S3-C2 through S3-F.
 
-- **K29 — Member ids (spec §8.5 line 192, §6.1 line 104).** The spec names scratch tables `<node_id>_<boot_nonce>_<n>` and requires a member's `node_id` to be unused by every SNode and verifier, but a P2 member has no consensus identity yet. Resolution: the ids are pinned now and never reused: `member-a` (host indexer-a, indexer id 0), `member-b` (host indexer-b, indexer id 1), `member-c` (host indexer-c, `INDEXER_C_ID`); none is, or ever becomes, an SNode, verifier or voter id; the P2 id is the member's P6 VERIFIER node id and its Keeper replica name. Plan S3-C3 records them as `MEMBER_IDS` in the multi-source runbook's §1.2 ledger. Code: a node id must match `^[a-z][a-z0-9-]{0,30}[a-z0-9]$`; at startup the member refuses an id that is in the arbiter's purge node set or equals an `si_indexers` entry's `snode_node_id` (`copyset.ErrNodeIDInUse`, contract §21.6). Why: no re-keying at P6, stable scratch prefixes, and a collision would make the reconcilers of P6 treat the member's replica as another node's.
+- **K29 — Member ids (spec §8.5 line 192, §6.1 line 104).** The spec names scratch tables `<node_id>_<boot_nonce>_<n>` and requires a member's `node_id` to be unused by every SNode and verifier, but a P2 member has no consensus identity yet. Resolution: the ids are pinned now and never reused: `member-a` (host indexer-a, indexer id 0), `member-b` (host indexer-b, indexer id 1), `member-c` (host indexer-c, `INDEXER_C_ID`); none is, or ever becomes, an SNode, verifier or voter id; the P2 id is the member's P6 VERIFIER node id and its Keeper replica name. Plan S3-C3 records them as `MEMBER_IDS` in the multi-source runbook's §1.2 ledger. Code: a node id must match `^[a-z][a-z0-9-]{0,30}[a-z0-9]$`; at startup the member refuses an id that is in the arbiter's purge node set or equals an `si_indexers` entry's `snode_node_id` (`copyset.ErrNodeIDInUse`, contract §21.6). Plan S3-E1 Task 63 refines step (6) for a member with `Config.Consensus`: its own id in the purge node set (its own VERIFIER registration) is accepted; an SNode's id and an id the registry serves as another host's group member are still refused. Why: no re-keying at P6, stable scratch prefixes, and a collision would make the reconcilers of P6 treat the member's replica as another node's.
 - **K30 — Process layout (spec §8.1 "separate from the SNode", §8.2 "its password is mounted only into the reconciler", §11 "authenticated local status endpoint").** Resolution: the si-member gets its own StatefulSet, never a container of the host pod; its container `si-member` runs `sentio-node si-member --config-path <file>` and connects as `si_member` only; the pod reserves a second container slot `si-member-reconciler` (the `hg_member_unsafe` reconciler as `si_member_ddl`, Plans S3-E1 and S3-F) that stays empty until §10.4 step 6; the process reads its own file through `config.LoadSIMemberConfig`, never the host's `LoadConfig` (which validates the node config and needs `PRIVATE_KEY`); the authenticated status endpoint is a Service with a bearer token, implemented by Plan S3-C4 (Tasks 45–46); the token has its own Secret `<release>-si-member-status-token`, never the Secret that holds the `si_member` password, and on the host side only the host's sentio-node mounts it (decision D29); P2's binary serves only Prometheus metrics and `GET /readyz` on `metrics_listen` and reads no token. Why: the host pod's checksum (production `charts/sentio-node/templates/node.yaml:486`) hashes the host values, so a member container there would restart the SNode, and with it the owner's track, on every member change; a separate pod keeps the member's crashes and memory away from the SNode (§8.1); deciding the reconciler slot now means Plan S3-F does not re-architect the pod.
 - **K31 — The copy reconciler is a new package (spec §8.3).** The spec says the member's reconciler "takes the set of groups it belongs to … instead of the stage-1 `Owner` filter". Resolution: `member/copyset` is a new package, not a mode of `dataplane/tableset`: it keeps exactly one MergeTree copy per Pending or Active incarnation owned by an owner in its scope (P2: the static `peers` list, every enrolled SI indexer but the host), drops a copy from Retiring on, and drops every other table of `hg_replica` (Purged, Refused, unknown comment, foreign owner); it never opens a protocol database and never reports a purge. Why: tableset's three-table shape, `ensurePresent`, sweep and decommission logic (`arbiter-core:dataplane/tableset/reconciler.go:533-587`, `:672-842`) are SNode- and Keeper-specific, while a copy is regenerable local state.
 - **K32 — Database creation (spec §8.2 line 171–172, amended in housegate#236).** The original grant lists gave `si_member` no `CREATE DATABASE` on `hg_replica.*` and `si_member_ddl` none on `hg_member_unsafe.*`. Resolution (spec amended): `si_member` holds `CREATE DATABASE` on `hg_replica.*` and `hg_rstage.*`, and the member creates both with `CREATE DATABASE IF NOT EXISTS` without `ENGINE` (`ddl.EnsureMemberDatabases`); `hg_member_unsafe` is never created by `si_member` (Plan S3-E1's reconciler creates it as `si_member_ddl`, whose amended grants include `CREATE DATABASE` on `hg_member_unsafe.*`); Task 34's confinement suite measures both users' grants on 26.3. Why: no admin runbook step is needed, and 26.3 checks a database `ENGINE` as `TABLE ENGINE ON <engine>`, which `GRANT` cannot name.
@@ -65,8 +65,8 @@ Every produced value is written into Appendix C by the task that makes it, with 
 ## Review Focus
 
 1. **A manifest that lies, or a feed that falls far behind.** Expected: the follower accepts a manifest only when its `snapshot_id` is the requested id and its own recomputed root, every partition root equals the sum of its listed parts, and it descends from the last accepted manifest; it refuses a watermark manifest without `track_frontiers` and any owner entry that goes back; nothing is installed from a refused manifest; a gap of more than 64 publications ends in a full fetch of the verified watermark manifest, counted; `GetManifestByBlock` is never called; the replay store still serves a pre-tracks base manifest. Tests: Task 29 `TestVerifyAcceptsOnlyTheRequestedIDThatIsItsOwnRoot`, `TestVerifyRefusesPartitionRootsThatDoNotSumToTheirParts`, `TestFollowerRefusesAWatermarkThatDoesNotDescend`, `TestFollowerRefusesAnOwnerEntryThatGoesBack`, `TestFollowerRefusesAManifestWithoutTrackFrontiers`, `TestFollowerFallsBackToAFullFetchBeyondMaxWalk`, `TestFollowerNeverCallsGetManifestByBlock`, `TestStoreKeepsOnlyVerifiedManifests`, `TestStoreServesAPreTracksManifest`.
-2. **A partition the gate cannot simply append to.** A local copy that is not a sub-multiset of the manifest, a scratch that holds a split, a doubled insert, a zero-row rename race or a foreign part, a pull refused by the memory limit, an owner that is unreachable or already cleaned the part, a full member disk. Expected: Diverged is rebuilt in a fresh scratch and repaired with `DROP PARTITION` then `ATTACH PARTITION … FROM`, never `REPLACE PARTITION`, and the repair holds across a ClickHouse reload inside the outdated-part window; a split moves to the next source; a rename race or a doubled insert is retried once from a clean scratch; Foreign quarantines the whole table locally, keeps the scratch and is cleared only offline; a closure or partition-set mismatch installs nothing; a refused, missed or unreachable source moves to the next one and a part no source delivers is deferred with a backoff, never retried in a loop; installs pause above the disk budget while audits and the shadow continue. Tests: Task 32 `TestInstallDivergedPartitionIsRebuiltWithDropAndAttach`, `TestInstallDivergedRepairSurvivesAReloadInsideTheOutdatedWindow`, `TestInstallNeverIssuesReplacePartition`, `TestInstallForeignScratchQuarantinesTheTableAndKeepsTheScratch`, `TestInstallSplitFallsBackToTheNextSource`, `TestInstallRenameRaceRetriesOnceFromACleanScratch`, `TestInstallDoubledRetryIsDroppedAndRetriedOnce`, `TestInstallClosureFailureInstallsNothing`, `TestInstallPartitionSetMismatchInstallsNothing`, `TestInstallRefusedPullFallsBackToRestoreAndDefers`, `TestInstallsPauseAboveTheDiskBudget`; Task 31 `TestOwnerPullMemoryLimitIsRefusedNotRetried`, `TestUnsafePullOfACleanedPartIsMissed`, `TestPullFromAnUnreachableOwnerIsUnreachable`, `TestOwnerPullFallsBackToTheRowHashWhenTheOwnerRebuiltItsParts`.
-3. **A crash, a kill or a ClickHouse restart in the middle of an install.** Expected: a part attached but not journaled is adopted only if the journaled target still needs its row hash, else its partition is Diverged and repaired; equal-hash twins (same row hash and `hash_of_all_files`) keep the journaled name and the others are dropped with `DROP PART`; the audit reruns when the ClickHouse uptime regresses and gates readiness until clean; startup drops exactly this node's `hg_rstage` tables; a second process on the same state directory is refused; a member killed mid-stream converges to the latest manifest on restart. Tests: Task 32 `TestInstallRecoversAPartAttachedBeforeTheJournalWrite`, `TestStartupAuditDropsEqualHashTwinsWithDropPart`, `TestStartupAuditMarksAnyOtherMismatchDiverged`, `TestAuditRerunsWhenClickHouseUptimeRegresses`, `TestStartupDropsOnlyThisNodesStageTables`; Task 34 `TestRoleRefusesASecondProcessOnTheStateDir`, `TestRoleIsReadyOnlyAfterACleanAuditAndAManifest`; Task 36 `TestPipeline_MemberKilledMidStreamResumesFromItsJournal`.
+2. **A partition the gate cannot simply append to.** A local copy that is not a sub-multiset of the manifest, a scratch that holds a split, a doubled insert, a zero-row rename race or a foreign part, a pull refused by the memory limit, an owner that is unreachable or already cleaned the part, an owner that rebuilt its parts in a partition behind more than eight other partitions (or among more than eight parts) of the same row count, a bootstrapping owner, a full member disk. Expected: Diverged is rebuilt in a fresh scratch and repaired with `DROP PARTITION` then `ATTACH PARTITION … FROM`, never `REPLACE PARTITION`, and the repair holds across a ClickHouse reload inside the outdated-part window; a split moves to the next source; a rename race or a doubled insert is retried once from a clean scratch; Foreign quarantines the whole table locally, keeps the scratch and is cleared only offline; a closure or partition-set mismatch installs nothing; a refused, missed or unreachable source moves to the next one and a part no source delivers is deferred with a backoff, never retried in a loop; the row-hash fallback lists only the needed partition (ClickHouse's `partition_id`, computed on the member's server) before its bound and continues after its last candidate on the next fetch (review fix 245-3); while an owner has no journaled entry each copy's first fetch tries the restore before the owner pull, once per copy and process (review fix 245-4); installs pause above the disk budget while audits and the shadow continue. Tests: Task 32 `TestInstallDivergedPartitionIsRebuiltWithDropAndAttach`, `TestInstallDivergedRepairSurvivesAReloadInsideTheOutdatedWindow`, `TestInstallNeverIssuesReplacePartition`, `TestInstallForeignScratchQuarantinesTheTableAndKeepsTheScratch`, `TestInstallSplitFallsBackToTheNextSource`, `TestInstallRenameRaceRetriesOnceFromACleanScratch`, `TestInstallDoubledRetryIsDroppedAndRetriedOnce`, `TestInstallClosureFailureInstallsNothing`, `TestInstallPartitionSetMismatchInstallsNothing`, `TestInstallRefusedPullFallsBackToRestoreAndDefers`, `TestInstallBootstrapProbesTheRestoreOncePerCopy`, `TestInstallsPauseAboveTheDiskBudget`; Task 31 `TestOwnerPullMemoryLimitIsRefusedNotRetried`, `TestUnsafePullOfACleanedPartIsMissed`, `TestPullFromAnUnreachableOwnerIsUnreachable`, `TestOwnerPullFallsBackToTheRowHashWhenTheOwnerRebuiltItsParts`, `TestOwnerPullFallbackScopesTheNeededPartition`, `TestOwnerPullFallbackListsAfterItsCursor`.
+3. **A crash, a kill or a ClickHouse restart in the middle of an install.** Expected: a part attached but not journaled is adopted only if the journaled target still needs its row hash, else its partition is Diverged and repaired; equal-hash twins (same row hash and `hash_of_all_files`) keep the journaled name and the others are dropped with `DROP PART`; the audit reruns when the ClickHouse uptime regresses and gates readiness until clean; the startup audit runs after the first copyset pass, and a copy the copyset makes ready later (one it created again empty while the journal is at the watermark) is audited before any pass may skip it as current (review fix 245-1); a Diverged partition or unjournaled part an audit records is repaired by re-applying the last update, without waiting for a new manifest (review fix 245-2); startup drops exactly this node's `hg_rstage` tables; a second process on the same state directory is refused; a member killed mid-stream converges to the latest manifest on restart. Tests: Task 32 `TestInstallRecoversAPartAttachedBeforeTheJournalWrite`, `TestStartupAuditDropsEqualHashTwinsWithDropPart`, `TestStartupAuditMarksAnyOtherMismatchDiverged`, `TestAStartWithACurrentJournalAuditsTheCopiesItFindsLater`, `TestAnAuditThatFindsDamageAsksForAPass`, `TestAuditRerunsWhenClickHouseUptimeRegresses`, `TestStartupDropsOnlyThisNodesStageTables`; Task 34 `TestRoleRefusesASecondProcessOnTheStateDir`, `TestRoleIsReadyOnlyAfterACleanAuditAndAManifest`, `TestRoleAuditsTheCopiesTheFirstCopysetPassMadeReady`, `TestRoleRepairsWhatAnAuditFoundWithoutANewManifest`; Task 36 `TestPipeline_MemberKilledMidStreamResumesFromItsJournal`.
 4. **A member that could write where it must not.** Expected: the member refuses to start when its server accepts an ungranted engine (the fence is off), when `remote()` is writable for its user, when its node id is an SNode's or in the purge node set, when its databases intersect the protocol databases, when a peer is not enrolled or is the host, when a YAML password or restore key is present or no username is set; as `si_member` on `26.3.37.3` and on the deployed image, each of the eight `Replicated*MergeTree` engines and `Buffer`/`Distributed`/`Merge`/`Alias` in `hg_rstage` and `hg_replica`, a `Replicated` database, `ATTACH PARTITION FROM` / `MOVE PARTITION TO TABLE` / a materialized view into `hg_member_unsafe`, a dictionary, a view with another definer or with `SQL SECURITY NONE`, and a `SYSTEM` command in `hg_rstage` or `hg_replica` (the explicit `hg_rstage` list, never `ALL`, decision D36; plain views there stay possible through 26.3's implicit `CREATE VIEW`, which the suite measures and records), a write through `remote()`, a collection override and `SYSTEM DROP REPLICA` are refused with 497 while every right the role needs works; `si_member_ddl`'s profile refuses a replica created with merges allowed; the role calls only the read RPCs of contract §20.1. Tests: Task 34 `TestConfinement_SIMemberCreatesNoReplicatedEngine`, `TestConfinement_SIMemberCreatesNoBufferDistributedMergeOrAlias`, `TestConfinement_SIMemberCreatesNoReplicatedDatabase`, `TestConfinement_SIMemberCannotMoveDataIntoMemberUnsafe`, `TestConfinement_SIMemberCannotWriteThroughRemote`, `TestConfinement_SIMemberCannotOverrideACollection`, `TestConfinement_SIMemberCannotDropAReplica`, `TestConfinement_SIMemberHasNoDictionarySystemOrDefinerRight`, `TestConfinement_SIMemberHoldsEveryRightItsRoleNeeds`, `TestConfinement_SIMemberDDLProfileRefusesAMergesAllowedReplica`, `TestRoleRefusesToStartWithoutTheEngineFence`, `TestRoleRefusesAWritableRemote`, `TestRoleRefusesANodeIDInUse`, `TestRoleRefusesAPeerThatIsNotEnrolled`, `TestRoleCallsOnlyReadRPCs`; Task 30 `TestCopysetRefusesMemberDatabasesThatIntersectTheSNodes`, `TestCheckNodeIDUnusedRefusesAnSNodeOrVerifierID`; Task 35 `TestSIMemberConfigRefusesAClickhousePasswordKey`, `TestSIMemberConfigRefusesRestoreKeysInYAML`, `TestSIMemberConfigRequiresAUsername`, `TestSIMemberConfigNeverPrintsASecret`.
 5. **Shadow verification of a fraud block, a cleaned candidate or a verdict that never comes.** Expected: a Rejected block (a lying candidate part hash or partition sum) reproduces every honest verifier's receipt and scans and counts zero mismatches; a `claim` mismatch arises only on a block whose quorum passed; evidence recorded after the latch is compared by its recorded body; a candidate already cleaned from the owner's `hg_unsafe` is a missed scan, never a mismatch; a block without a verdict after `VerdictWait` is compared and counted `unverdicted`; blocks of the host, of other owners and transition blocks are skipped; the cursor survives a restart and the shadow never submits; in `chpipeline` at least 500 blocks of the owner are shadow-verified with zero mismatches in the dispatched full soak (50 in every `ci.yml` run, decision D38) and the copies never hold a Rejected statement's rows. Tests: Task 33 `TestShadowReproducesARejectedBlocksReceipts`, `TestShadowClaimMismatchOnlyForAQuorumPassBlock`, `TestShadowComparesEvidenceRecordedAfterTheLatchAsRecorded`, `TestShadowCountsACleanedCandidateAsAMissedScan`, `TestShadowCountsAnUnverdictedBlockAfterVerdictWait`, `TestShadowSkipsBlocksOfItsHostOtherOwnersAndTransitions`, `TestShadowCursorSurvivesARestart`, `TestShadowNeverSubmitsAnything`; Task 36 `TestPipeline_MemberCopiesNeverHoldRowsOfARejectedStatement`, `TestPipeline_MemberShadowSoak`.
 
@@ -118,7 +118,7 @@ Line anchors in the tasks refer to the base revisions above.
 | §8.3 member intent set, copies incarnation-scoped, group-scoped reconciler, startup refusal of intersecting databases | 30 (`MemberUnsafeIntent` defined; its reconciler: Plan S3-E1 Task 62) |
 | §8.4 manifest feed (`ParentSnapshotID` walk, id and root checks, ledger check, attribution by the registry, bounded LRU) | 29, 36 (`ManifestOwner` equals the FSM rule) |
 | §8.5 install gate (steps 1–7, scratch names, startup drop, replay scratch in `hg_rstage` under the prefix) | 32 (with Plan S3-C1's `member/gate`), 33 (replay prefix) |
-| §8.6 byte sources (owner pull, peer unsafe pull, object-store restore, grants verified through `system.grants` and a refused `INSERT INTO FUNCTION remote`) | 31; own `hg_member_unsafe`: Plan S3-E1 Task 63; DA rematerialisation: P8 |
+| §8.6 byte sources (owner pull with the row-hash fallback over candidates of the same partition and row count, peer unsafe pull, object-store restore as the bootstrap source, grants verified through `system.grants` and a refused `INSERT INTO FUNCTION remote`) | 31; 32 (the bootstrap restore probe, review fix 245-4); own `hg_member_unsafe`: Plan S3-E1 Task 63; DA rematerialisation: P8 |
 | §8.7 startup audit, rerun on uptime regression | 32 |
 | §8.8 a member drops a copy from Retiring on; copies never delay a purge | 30; member purge reports: Plan S3-E1 |
 | §11 entry criterion of P3 (copies never hold rows of a Rejected statement) | 36 |
@@ -5587,19 +5587,19 @@ Line anchors refer to arbiter-core `8f0bc43` (v0.14.1). The branch is the one of
 
 **Interfaces:**
 - Consumes (Task 30, same branch): `ddl.MemberPinned{MemberUnsafeDB, ReplicaDB, StageDB, NodeID, StoragePolicy string; KeeperShardID uint32}` and `ddl.ScratchIntent(m ddl.MemberPinned, t payloadexec.TableSchema, name string) (ddl.TableIntent, error)` (the tests create every scratch with it, as the installer does).
-- Consumes (Plan S3-C1 contract §17, at this branch's base): `chparts.EscapeSQLString(s string) string`; `objstore.ParseBucket(raw string) (objstore.Bucket, error)` (`http(s)://<host>[:port]/<bucket>`), `objstore.Credentials{AccessKeyID, SecretAccessKey string}`, `objstore.ReadIndexes(ctx context.Context, conn clickhouse.Conn, b objstore.Bucket, owner uint64, c objstore.Credentials) ([]objstore.BackupIndex, error)` (sorted by name; `SELECT _file, * FROM s3('<IndexGlob>', '<id>', '<secret>', 'RawBLOB')`), `objstore.BackupIndex{OwnerIndexerID uint64; Name string; Tables []objstore.BackupIndexTable; …}`, `objstore.BackupIndexTable{PhysicalTable string; Parts []objstore.BackupIndexPart; …}`, `objstore.BackupIndexPart{Name, PartitionID, PhysHash string; Rows uint64}`, `objstore.PartitionClause(sch payloadexec.TableSchema, partitionID string) (string, error)`, `objstore.RestoreSQL(b objstore.Bucket, owner uint64, name, physicalTable, partitionClause string, s objstore.Scratch, c objstore.Credentials) string`, `objstore.Scratch{Database, Table string}`; tests also `objstore.BackupSQL`, `objstore.BackupName`, `objstore.BackupFull`, `objstore.BackupIndexFormat`, `(objstore.Bucket).IndexURL`.
+- Consumes (Plan S3-C1 contract §17, at this branch's base): `chparts.EscapeSQLString(s string) string`, `chparts.QuotePartition(sch payloadexec.TableSchema, partitionID string) (string, error)` (the fallback's partition value, review fix 245-3); `objstore.ParseBucket(raw string) (objstore.Bucket, error)` (`http(s)://<host>[:port]/<bucket>`), `objstore.Credentials{AccessKeyID, SecretAccessKey string}`, `objstore.ReadIndexes(ctx context.Context, conn clickhouse.Conn, b objstore.Bucket, owner uint64, c objstore.Credentials) ([]objstore.BackupIndex, error)` (sorted by name; `SELECT _file, * FROM s3('<IndexGlob>', '<id>', '<secret>', 'RawBLOB')`), `objstore.BackupIndex{OwnerIndexerID uint64; Name string; Tables []objstore.BackupIndexTable; …}`, `objstore.BackupIndexTable{PhysicalTable string; Parts []objstore.BackupIndexPart; …}`, `objstore.BackupIndexPart{Name, PartitionID, PhysHash string; Rows uint64}`, `objstore.PartitionClause(sch payloadexec.TableSchema, partitionID string) (string, error)`, `objstore.RestoreSQL(b objstore.Bucket, owner uint64, name, physicalTable, partitionClause string, s objstore.Scratch, c objstore.Credentials) string`, `objstore.Scratch{Database, Table string}`; tests also `objstore.BackupSQL`, `objstore.BackupName`, `objstore.BackupFull`, `objstore.BackupIndexFormat`, `(objstore.Bucket).IndexURL`.
 - Consumes (Plan S3-C1 contract §16, housegate `HG_TAG_P1`): `chexec.ScanAllParts(ctx context.Context, conn clickhouse.Conn, qualifiedTable string, schema payloadexec.TableSchema) ([]chexec.PartScanResult, error)` (the fallback's candidate scan; the tests' scans).
 - Consumes (Plan S3-A contract §3, Task 4): `chtest.Options(addr string) *clickhouse.Options`, `chtest.Open(t testing.TB, addr string) clickhouse.Conn`, `chtest.OpenAs(t testing.TB, addr, user, password string) clickhouse.Conn` (`CH_USER` / `CH_PASSWORD`); `scripts/ci/clickhouse-default-password.xml` (Step 11's CI-shaped pair).
 - Consumes (Plan S3-B contract §11, contract §20.2): the `si_reader` grants every member collection logs in as (`SELECT ON hg_safe.*`, `SELECT ON hg_unsafe.*`, `SELECT(database, table, name, active, rows, partition_id, hash_of_all_files) ON system.parts`), plus `SHOW COLUMNS ON system.parts`, which spec §8.6 lists and `remote()` needs (Notes).
 - Consumes (existing at `8f0bc43`): `ddl.CHTableName` (`dataplane/ddl/naming.go:22`), the quoting rules of `quoteIdent` / `quoteLiteral` (`:48-58`, mirrored by this package's unexported `ident` and `literal`), `ddl.Intents`, `ddl.Pinned`, `ddl.RowIDColumn`, `ddl.TableIntent.SQL` (tests); `arbiter.CandidatePart` (`types.go:204-212`); housegate `replay.PartManifestEntry` (`pkg/replay/types.go:68-77`), `chexec.PartScanResult{PartName, RowLtHash string; RowCount uint64}`, `payloadexec.TableSchema`, `lthash.Column`; clickhouse-go `clickhouse.Conn`, `clickhouse.Exception{Code, Message}`, `clickhouse.Context`, `clickhouse.WithSettings`, `clickhouse.Settings`, `lib/driver` (tests).
 - Produces (contract §22.1, verbatim): `type Outcome string` with `OutcomeFetched = "fetched"`, `OutcomeMissed = "missed"`, `OutcomeRefused = "refused"`, `OutcomeUnreachable = "unreachable"`; `type Need struct { TableKey, Table, PartitionID, PartName, PartPhysHash, PartRowLtHash string; RowCount uint64 }`; `type Scratch struct { Database, Table string }`; `type Result struct { Source string; Outcome Outcome; Parts []string; Err error }`; `type Source interface { Name() string; Fetch(ctx context.Context, need Need, schema payloadexec.TableSchema, scratch Scratch) Result }`; source names `owner_pull`, `peer_unsafe_pull`, `restore`, `owner_unsafe_pull`; `type RemotePull struct { Conn clickhouse.Conn; SourceName, Collection, Database string; MaxFallbackCandidates int }` (0 → 8); `func NewOwnerPull(conn clickhouse.Conn, collection, safeDatabase string) *RemotePull`, `func NewOwnerUnsafePull(conn clickhouse.Conn, collection, unsafeDatabase string) *RemotePull`, `func NewPeerUnsafePull(conn clickhouse.Conn, collection string) *RemotePull` (database `hg_unsafe`); `func NoSplitSettings(rows uint64) clickhouse.Settings`; `type RestoreConfig struct { Endpoint, Bucket, AccessKeyID, Secret string }` with redacting `String()` and `LogValue()`; `func NewRestore(conn clickhouse.Conn, cfg RestoreConfig, owner uint64) *RestoreSource`; `var ErrRemoteWritable`, `func CheckRemoteIsReadOnly(ctx context.Context, conn clickhouse.Conn, collection string) error`; `var ErrEngineFenceOff`, `func CheckEngineFence(ctx context.Context, conn clickhouse.Conn, stageDB, probeTable string) error`; `var ErrGrantsUnreadable`, `type Grant struct { AccessType, Database, Table string; … }`, `func ReadOwnGrants(ctx context.Context, conn clickhouse.Conn) ([]Grant, error)`, `func CheckRemoteGrants(grants []Grant) error`; the refusals of contract §22.1 verbatim; the fifteen contract tests `TestOwnerPullResolvesTheCurrentNameByHashOfAllFiles`, `TestOwnerPullFallsBackToTheRowHashWhenTheOwnerRebuiltItsParts`, `TestOwnerPullFiltersOnPartOnly`, `TestOwnerPullUsesTheNoSplitSettings`, `TestOwnerPullOfALargePartYieldsOnePart`, `TestOwnerPullMemoryLimitIsRefusedNotRetried`, `TestUnsafePullOfACleanedPartIsMissed`, `TestPullFromAnUnreachableOwnerIsUnreachable`, `TestPeerUnsafePullReadsTheNamedPoolCollection`, `TestRestoreSourceKeepsOnlyTheNeededPart`, `TestRestoreConfigNeverPrintsItsKeys`, `TestCheckRemoteIsReadOnlyRefusesWriteOnRemote`, `TestCheckEngineFenceRefusesAServerWithoutTheFence`, `TestReadOwnGrantsNeverRunsShowGrants`, `TestCheckRemoteGrantsNeedsReadAndNoWrite`.
-- Produces (beyond the contract; Appendix B, Task 31): `func Outcomes() []Outcome` and `func SourceNames() []string` (every label in export order, for Tasks 34–35's zero-filled series); the constants `SourceOwnerPull = "owner_pull"`, `SourcePeerUnsafePull = "peer_unsafe_pull"`, `SourceRestore = "restore"`, `SourceOwnerUnsafePull = "owner_unsafe_pull"`; `func NeedOfManifestPart(p replay.PartManifestEntry) Need` and `func NeedOfCandidatePart(c arbiter.CandidatePart) Need` (`Table` = `ddl.CHTableName(TableID)`); `const DefaultMaxFallbackCandidates = 8` and `NoFallback = -1` (the value the two unsafe pulls set); `const RestoreIndexTimeout = 2 * time.Minute` and the field `RestoreSource.IndexTimeout time.Duration` (0 → `RestoreIndexTimeout`; the deadline of the index read); `Grant`'s fields `AccessObject string` and `PartialRevoke bool` after the contract's three, read by `SELECT access_type, database, table, access_object, is_partial_revoke FROM system.grants WHERE user_name = currentUser()` (contract §22.1 left the rendering of source grants to this task's measurement); ClickHouse code 519 (`NO_REMOTE_SHARD_AVAILABLE`) mapped to `unreachable` next to 210, 209 and 279; the temporary tables `<scratch>_c<k>` (fallback candidates, k = 1, 2, …) and `<scratch>_r` (restore staging), both dropped by the fetch and both under the scratch's node prefix; failure texts `sources: <source>: <step>: <ClickHouse error>`; refusals (verbatim) `sources: %s: collection %q must be one ClickHouse identifier ([A-Za-z_][A-Za-z0-9_]*)`, `sources: %s: a pull needs a source database and table, got %q.%q`, `sources: scratch needs a database and a table, got %q.%q`, `sources: collection %q must be one ClickHouse identifier ([A-Za-z_][A-Za-z0-9_]*)` (`CheckRemoteIsReadOnly`), `sources: drop a leftover engine fence probe %s.%s: %w`, `sources: the engine fence probe CREATE TABLE %s.%s ... ENGINE = Log failed without the TABLE ENGINE refusal: %w`, `sources: read system.grants: %w`; extension tests `TestNeedsOfManifestAndCandidateParts`, `TestOutcomeOfClickHouseErrors`; test helpers `statementLog`, `fakeConn`, `fakeRows`, `recordingConn`, `memberServer`, `pair`, `requirePair`, `randomHex`, `suffix`, `mustExec`, `cleanup`, `testSchema`, `sourceDatabase`, `createSourceTable`, `insertPart`, `partRow`, `partsOf`, `scanOf`, `createUser`, `createReader`, `createCollection`, `ownerCollection`, `memberUser`, `newScratch`, `tablesIn`, `clickHouseCode`, `queryLog`, `requireOnePart`, `pullSchema`, `stripLiterals`, `siMemberGrantRows`, `s3Env`, `requireS3`, `ptr`, `largeRows`, `readerPartsColumns`; test env `ARBITER_CH_INTEGRATION`, `CH_ADDR`, `CH_PEER_ADDR`, `CH_PEER_ADDR_FROM_SERVER`, `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET` (contract §23.3's names and meanings).
+- Produces (beyond the contract; Appendix B, Task 31): `func Outcomes() []Outcome` and `func SourceNames() []string` (every label in export order, for Tasks 34–35's zero-filled series); the constants `SourceOwnerPull = "owner_pull"`, `SourcePeerUnsafePull = "peer_unsafe_pull"`, `SourceRestore = "restore"`, `SourceOwnerUnsafePull = "owner_unsafe_pull"`; `func NeedOfManifestPart(p replay.PartManifestEntry) Need` and `func NeedOfCandidatePart(c arbiter.CandidatePart) Need` (`Table` = `ddl.CHTableName(TableID)`); `const DefaultMaxFallbackCandidates = 8` and `NoFallback = -1` (the value the two unsafe pulls set); `const RestoreIndexTimeout = 2 * time.Minute` and the field `RestoreSource.IndexTimeout time.Duration` (0 → `RestoreIndexTimeout`; the deadline of the index read); `Grant`'s fields `AccessObject string` and `PartialRevoke bool` after the contract's three, read by `SELECT access_type, database, table, access_object, is_partial_revoke FROM system.grants WHERE user_name = currentUser()` (contract §22.1 left the rendering of source grants to this task's measurement); ClickHouse code 519 (`NO_REMOTE_SHARD_AVAILABLE`) mapped to `unreachable` next to 210, 209 and 279; the temporary tables `<scratch>_c<k>` (fallback candidates, k = 1, 2, …) and `<scratch>_r` (restore staging), both dropped by the fetch and both under the scratch's node prefix; failure texts `sources: <source>: <step>: <ClickHouse error>`; refusals (verbatim) `sources: %s: collection %q must be one ClickHouse identifier ([A-Za-z_][A-Za-z0-9_]*)`, `sources: %s: a pull needs a source database and table, got %q.%q`, `sources: scratch needs a database and a table, got %q.%q`, `sources: collection %q must be one ClickHouse identifier ([A-Za-z_][A-Za-z0-9_]*)` (`CheckRemoteIsReadOnly`), `sources: drop a leftover engine fence probe %s.%s: %w`, `sources: the engine fence probe CREATE TABLE %s.%s ... ENGINE = Log failed without the TABLE ENGINE refusal: %w`, `sources: read system.grants: %w`; the fallback's partition-id query `SELECT partitionId(<chparts.QuotePartition value>)` on the member's own server (`all` without a query for an unpartitioned table) and its per-need cursor (`AND name > '<cursor>'` after a full window that kept nothing, at most `maxFallbackCursors` = 1024 remembered; review fix 245-3), the failure steps `resolve the partition id of <id>` and `list the parts of the needed partition and row count`; extension tests `TestNeedsOfManifestAndCandidateParts`, `TestOutcomeOfClickHouseErrors`, `TestOwnerPullFallbackListsAfterItsCursor` (pure) and `TestOwnerPullFallbackScopesTheNeededPartition` (ClickHouse-gated); test helpers `statementLog`, `fakeConn`, `fakeRows`, `recordingConn`, `memberServer`, `pair`, `requirePair`, `randomHex`, `suffix`, `mustExec`, `cleanup`, `testSchema`, `sourceDatabase`, `createSourceTable`, `insertPart`, `partRow`, `partsOf`, `scanOf`, `createUser`, `createReader`, `createCollection`, `ownerCollection`, `memberUser`, `newScratch`, `tablesIn`, `clickHouseCode`, `queryLog`, `requireOnePart`, `pullSchema`, `stripLiterals`, `siMemberGrantRows`, `s3Env`, `requireS3`, `ptr`, `largeRows`, `readerPartsColumns`; test env `ARBITER_CH_INTEGRATION`, `CH_ADDR`, `CH_PEER_ADDR`, `CH_PEER_ADDR_FROM_SERVER`, `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET` (contract §23.3's names and meanings).
 
 Notes:
 - **No transport is trusted (spec §8.5–§8.6).** A source writes only into the scratch it is given and lists that scratch's active parts afterwards; it never scans to decide, never attaches into a copy and never retries. The installer (Task 32) creates each scratch with `ddl.ScratchIntent` before `Fetch`, classifies what arrived with Plan S3-C1's `gate.Classify`, and gives the next source a fresh scratch after a `refused` or `unreachable` fetch, which may have left rows of a partial insert (a `missed` fetch writes nothing). The one exception is the owner pull's row-hash fallback, which must scan to choose among candidates and therefore pulls each candidate into its own temporary table first.
-- **The SQL (contract §22.1).** Resolve: `SELECT name, rows FROM remote(<collection>, database = 'system', table = 'parts') WHERE database = '<db>' AND table = '<table>' AND active AND hash_of_all_files = '<phys>'`; fallback: `SELECT name FROM remote(<collection>, database = 'system', table = 'parts') WHERE database = '<db>' AND table = '<table>' AND active AND rows = <rows> ORDER BY name LIMIT <max>`; pull: `INSERT INTO <stage>.<scratch> SELECT * FROM remote(<collection>, database = '<db>', table = '<table>') WHERE _part = '<name>'` under `NoSplitSettings` of the resolved part's rows. The collection is backquoted (ClickHouse accepts a quoted collection name in `remote()`, measured) and must be one identifier, so no `host`, `port`, `user` or `password` key can follow it; the collection itself is `NOT OVERRIDABLE` (contract §23.2). Only the seven `system.parts` columns of `si_reader`'s grant are named, and the pull filters on `_part` only, never on the manifest's logical partition id (`p_<value>` is not ClickHouse's `partition_id`). Of equal-hash twins on the source (resurrected parts, equal bytes) the resolve takes the smallest name.
+- **The SQL (contract §22.1).** Resolve: `SELECT name, rows FROM remote(<collection>, database = 'system', table = 'parts') WHERE database = '<db>' AND table = '<table>' AND active AND hash_of_all_files = '<phys>'`; fallback: `SELECT partitionId('<partition value>')` on the member's own server (no table read; skipped for an unpartitioned table, whose partition id is `all`), then `SELECT name FROM remote(<collection>, database = 'system', table = 'parts') WHERE database = '<db>' AND table = '<table>' AND active AND partition_id = '<partition id>' AND rows = <rows>[ AND name > '<cursor>'] ORDER BY name LIMIT <max>`; pull: `INSERT INTO <stage>.<scratch> SELECT * FROM remote(<collection>, database = '<db>', table = '<table>') WHERE _part = '<name>'` under `NoSplitSettings` of the resolved part's rows. The collection is backquoted (ClickHouse accepts a quoted collection name in `remote()`, measured) and must be one identifier, so no `host`, `port`, `user` or `password` key can follow it; the collection itself is `NOT OVERRIDABLE` (contract §23.2). Only the seven `system.parts` columns of `si_reader`'s grant are named, and the pull filters on `_part` only, never on the manifest's logical partition id (`p_<value>` is not ClickHouse's `partition_id`); the fallback's listing names ClickHouse's `partition_id`, one of the seven, computed from that logical id. Of equal-hash twins on the source (resurrected parts, equal bytes) the resolve takes the smallest name.
 - **The reader needs `SHOW COLUMNS ON system.parts` (measured).** `remote()` describes the remote table before it reads it; for `system.parts` that needs `SHOW COLUMNS ON system.parts`, which the column grant does not imply: as a reader with only Plan S3-B's three `si_reader` grants, the resolve is refused with 497 `Not enough privileges. To execute this query, it's necessary to have the grant SHOW COLUMNS ON system.parts` on 25.8.28.1 and 26.3.51.7, while the data pull from `hg_safe` works (its `SELECT` implies `SHOW COLUMNS`). Spec §8.6 lists the grant ("`SHOW COLUMNS` and `SELECT(...)` on `system.parts`") and Plan S3-A's M6 reader holds it; Plan S3-B's `si_reader` does not. The tests' reader (`createReader`) holds the four; Plan S3-C3 adds the grant to `si_reader` on every installation a member collection names, and Tasks 34–36 add it wherever their harnesses create `si_reader` (Appendix B, recorded for those tasks).
-- **The row-hash fallback (spec §8.6 "when the hash lookup is empty").** Only the owner pull falls back. It lists at most `MaxFallbackCandidates` active parts with the needed row count, pulls each into its own fresh `<scratch>_c<k>` (`CREATE TABLE … AS` the scratch, so the copy's structure, settings and storage policy; never `AS` a replicated table), scans it with `chexec.ScanAllParts`, and attaches the first candidate whose one part has the needed row hash and row count into the scratch with `ALTER TABLE … ATTACH PARTITION ID '<id>' FROM <candidate>` (a hardlink on the scratch's disk); every candidate table is dropped. It does not filter on the partition: the manifest's id is not ClickHouse's, the reader may not read the `partition` column, and a row hash covers every column, the partition key included. The unsafe pulls set `NoFallback`: `hg_unsafe` parts are never rebuilt (merges pinned off, no `REPLACE` there), so a vanished hash means a cleaned part, and pulling other parts of the same row count would only cost reads.
+- **The row-hash fallback (spec §8.6 "when the hash lookup is empty": candidates of the same partition and row count).** Only the owner pull falls back. It lists, in name order, at most `MaxFallbackCandidates` active parts of the needed partition with the needed row count, pulls each into its own fresh `<scratch>_c<k>` (`CREATE TABLE … AS` the scratch, so the copy's structure, settings and storage policy; never `AS` a replicated table), scans it with `chexec.ScanAllParts`, and attaches the first candidate whose one part has the needed row hash and row count into the scratch with `ALTER TABLE … ATTACH PARTITION ID '<id>' FROM <candidate>` (a hardlink on the scratch's disk); every candidate table is dropped. The listing is scoped to the partition before the bound applies (review fix 245-3): the manifest's id `p_<value>` is not ClickHouse's and the reader may not read the `partition` column, so the member's own server computes ClickHouse's `partition_id` with `SELECT partitionId('<value>')` (the partition key is one bare `String` column, `ddl`'s partition freeze; `all` for an unpartitioned table without a query), which the listing filters on through the granted `partition_id` column; measured on 25.8.28.1 and 26.3.51.7, `partitionId(partition) = partition_id` for every part, quotes and backslashes included, and a user without any grant may run it. Unscoped, nine parts of the row count in other partitions whose names sort first would fill the window of eight on every attempt and the needed part would never be pulled (reproduced: the unscoped listing of ten one-part partitions never reaches the tenth). A partition can still hold more equal-row-count parts than the window, so a Fetch whose full window kept nothing leaves the last name it pulled as the need's cursor (per table, partition id, row hash and row count, at most 1024 remembered), the next Fetch of that need lists after it (`AND name > '<cursor>'`), and a short window (the partition's end) or a kept part clears it, so every candidate is pulled within a bounded number of fetches, at most `MaxFallbackCandidates` per Fetch. The unsafe pulls set `NoFallback`: `hg_unsafe` parts are never rebuilt (merges pinned off, no `REPLACE` there), so a vanished hash means a cleaned part, and pulling other parts of the same row count would only cost reads.
 - **Outcomes (K35), measured.** An empty resolve, an empty fallback and a fallback whose candidates all scan wrong are `missed`. ClickHouse 241 (`MEMORY_LIMIT_EXCEEDED`, the member profile's `max_memory_usage` bounding the largest pullable part), 202 and 159 are `refused`; 210, 209 and 279 are `unreachable`, and so is 519 (`NO_REMOTE_SHARD_AVAILABLE`, `All attempts to get table structure failed`), which is what `remote()` answers on 25.8.28.1 and 26.3.51.7 when the collection's server refuses connections (it also answers 519 for a table the reachable server lacks, which only a table dropped between resolve and pull can hit); anything else is `refused` with `Err` set. Every failure is wrapped as `sources: <source>: <step>: <error>` and keeps the `*clickhouse.Exception` reachable through `errors.As`, except where the restore scrubbed a key out of it (below).
 - **The restore (K23, K33; spec §8.6 "continue at step 4, keeping only needed parts").** `Fetch` reads the owner's index objects under `owner-<owner>/` with `objstore.ReadIndexes` under a deadline (`IndexTimeout`, by default `RestoreIndexTimeout`, 2 minutes), picks the newest backup whose index lists a part of the needed physical table with the needed `hash_of_all_files` (`missed` when none does), restores that partition with `objstore.RestoreSQL` into `<scratch>_r`, finds the restored part by its `hash_of_all_files` (RESTORE keeps it, Plan S3-C1's M12), copies it into the scratch with a local no-split `INSERT … SELECT … WHERE _part = '<name>'` and drops `<scratch>_r`. The copy keeps the scratch's storage policy for `ATTACH PARTITION … FROM` into the copy and the needed row hash (a content hash); its `hash_of_all_files` is the copy's own. `<scratch>_r` is created by RESTORE from the backed-up `CREATE`, so it lives on the server's default policy while it exists; it counts in Task 32's disk budget (which sums `hg_rstage`).
 - **Why a deadline, and why a synchronous RESTORE (measured on 26.3.51.7).** An object store that refuses connections keeps the index read retrying: 26.3 defaults `s3_retry_attempts` to 500, and the read was still listing after 45 s. A caller cannot lower that setting for `objstore.ReadIndexes`, because it sets its own query settings with `clickhouse.WithSettings`, which replaces the whole settings map of the context (clickhouse-go `context.go`); a context deadline survives, because clickhouse-go turns it into the query's `max_execution_time` (the deadline plus 5 s), which stops the server's retries too (with `max_execution_time = 20` the same read failed after 21 s with `S3_ERROR` 499). So a store that is down costs one `refused` fetch of `IndexTimeout`, and Task 32's pass stops at the first part no source delivered and defers it. The RESTORE gets no deadline of its own (the store answered the index read just before, and a partition restore may be long), so the caller's context and the connection's read timeout (clickhouse-go's 5-minute default, unless the context has a deadline) bound it, and a fetch cut by either is `refused`. It runs synchronously: `objstore.RestoreAndGate` restores with `ASYNC` and polls `system.backups`, which `si_member` may not read (contract §23.2 grants no `SELECT ON system.backups`, and the stock `select_from_system_db_requires_grant` refuses it with 497), and it gates against a manifest, which is the installer's job here (Plan S3-C2 Appendix B, recorded for Plan S3-C1).
@@ -6232,7 +6232,9 @@ func pullSchema() payloadexec.TableSchema {
 // logical partition id, which is not ClickHouse's partition id), the
 // collection is the only way to the owner (no host, user or password in
 // SQL), only si_reader's system.parts columns are named, and a miss falls
-// back to the row count with the bound; the unsafe pulls never fall back.
+// back to the parts of the needed partition (ClickHouse's partition_id,
+// computed on the member's own server by a query that reads no table) and
+// row count with the bound; the unsafe pulls never fall back.
 func TestOwnerPullFiltersOnPartOnly(t *testing.T) {
 	need := Need{
 		TableKey: "dex.swaps", Table: "dex__swaps", PartitionID: "p_2026", PartName: "d589_1_1_0",
@@ -6240,7 +6242,10 @@ func TestOwnerPullFiltersOnPartOnly(t *testing.T) {
 	}
 	scratch := Scratch{Database: "hg_rstage", Table: "member-a_0011aabb_7"}
 	resolve := "SELECT name, rows FROM remote(`si_owner_0`, database = 'system', table = 'parts') WHERE database = 'hg_safe' AND table = 'dex__swaps' AND active AND hash_of_all_files = '4adff322bb8fd41ea3d90f10b04424fb'"
-	fallback := "SELECT name FROM remote(`si_owner_0`, database = 'system', table = 'parts') WHERE database = 'hg_safe' AND table = 'dex__swaps' AND active AND rows = 3 ORDER BY name LIMIT 8"
+	// partitionId('2026') is 3897267c32bd78b1a745b8b101ea06f3 on 25.8 and 26.3
+	// (measured), the partition_id of every part whose partition value is 2026.
+	partitionID := "SELECT partitionId('2026')"
+	fallback := "SELECT name FROM remote(`si_owner_0`, database = 'system', table = 'parts') WHERE database = 'hg_safe' AND table = 'dex__swaps' AND active AND partition_id = '3897267c32bd78b1a745b8b101ea06f3' AND rows = 3 ORDER BY name LIMIT 8"
 	pull := "INSERT INTO `hg_rstage`.`member-a_0011aabb_7` SELECT * FROM remote(`si_owner_0`, database = 'hg_safe', table = 'dex__swaps') WHERE _part = 'd589_4_4_0'"
 
 	t.Run("resolved_by_hash", func(t *testing.T) {
@@ -6267,13 +6272,30 @@ func TestOwnerPullFiltersOnPartOnly(t *testing.T) {
 		}
 	})
 	t.Run("missed_then_bounded_fallback", func(t *testing.T) {
-		conn := &fakeConn{}
+		conn := &fakeConn{rows: func(query string, _ []any) ([][]any, error) {
+			if query == partitionID {
+				return [][]any{{"3897267c32bd78b1a745b8b101ea06f3"}}, nil
+			}
+			return nil, nil
+		}}
 		res := NewOwnerPull(conn, "si_owner_0", "hg_safe").Fetch(context.Background(), need, pullSchema(), scratch)
 		if res.Outcome != OutcomeMissed || res.Err != nil || len(res.Parts) != 0 {
 			t.Fatalf("Fetch = %+v, want missed", res)
 		}
-		if got, want := conn.all(), []string{"query " + resolve, "query " + fallback}; !slices.Equal(got, want) {
+		if got, want := conn.all(), []string{"query " + resolve, "query " + partitionID, "query " + fallback}; !slices.Equal(got, want) {
 			t.Fatalf("statements %q, want %q", got, want)
+		}
+	})
+	t.Run("unpartitioned_fallback_reads_partition_all", func(t *testing.T) {
+		conn := &fakeConn{}
+		flat := pullSchema()
+		flat.PartitionBy = ""
+		unpartitioned := need
+		unpartitioned.PartitionID = "all"
+		res := NewOwnerPull(conn, "si_owner_0", "").Fetch(context.Background(), unpartitioned, flat, scratch)
+		want := []string{"query " + resolve, "query " + strings.Replace(fallback, "'3897267c32bd78b1a745b8b101ea06f3'", "'all'", 1)}
+		if res.Outcome != OutcomeMissed || !slices.Equal(conn.all(), want) {
+			t.Fatalf("Fetch = %+v after %q, want missed after %q", res, conn.all(), want)
 		}
 	})
 	t.Run("unsafe_pulls_never_fall_back", func(t *testing.T) {
@@ -6307,6 +6329,9 @@ func TestOwnerPullFiltersOnPartOnly(t *testing.T) {
 				}
 			}
 		}
+		if strings.Contains(partitionID, " FROM ") || strings.Contains(partitionID, "remote(") {
+			t.Fatalf("the partition id query reads a table: %s", partitionID)
+		}
 	})
 	t.Run("refuses_a_collection_that_is_not_one_identifier", func(t *testing.T) {
 		conn := &fakeConn{}
@@ -6315,6 +6340,51 @@ func TestOwnerPullFiltersOnPartOnly(t *testing.T) {
 			t.Fatalf("Fetch = %+v after %q, want refused before any statement", res, conn.all())
 		}
 	})
+}
+
+// TestOwnerPullFallbackListsAfterItsCursor pins how the row-hash fallback
+// makes progress across fetches of one need (Plan S3-C2 Appendix B, review
+// fix 245-3): a window of MaxFallbackCandidates that kept nothing leaves its
+// last name as the need's cursor, the next listing starts after it (name >
+// '<last>'), a short window (the partition's end) or a kept part clears the
+// cursor so the next listing starts from the first candidate again, and
+// each need, keyed by table, partition id, row hash and row count, keeps its
+// own cursor.
+func TestOwnerPullFallbackListsAfterItsCursor(t *testing.T) {
+	pull := NewOwnerPull(&fakeConn{}, "si_owner_0", "")
+	need := Need{TableKey: "dex.swaps", Table: "dex__swaps", PartitionID: "p_2026", PartRowLtHash: "0x01", RowCount: 3}
+	from := "SELECT name FROM remote(`si_owner_0`, database = 'system', table = 'parts') WHERE database = 'hg_safe' AND table = 'dex__swaps' AND active AND partition_id = 'abc' AND rows = 3"
+	if got, want := pull.fallbackQuery(need, "abc", "", 2), from+" ORDER BY name LIMIT 2"; got != want {
+		t.Fatalf("first listing = %s, want %s", got, want)
+	}
+	if got, want := pull.fallbackQuery(need, "abc", "abc_4_4_0", 2), from+" AND name > 'abc_4_4_0' ORDER BY name LIMIT 2"; got != want {
+		t.Fatalf("listing after the cursor = %s, want %s", got, want)
+	}
+	for _, tc := range []struct {
+		listed []string
+		limit  int
+		want   string
+	}{
+		{[]string{"abc_1_1_0", "abc_4_4_0"}, 2, "abc_4_4_0"},
+		{[]string{"abc_7_7_0"}, 2, ""},
+		{nil, 2, ""},
+	} {
+		if got := nextFallbackCursor(tc.listed, tc.limit); got != tc.want {
+			t.Fatalf("nextFallbackCursor(%v, %d) = %q, want %q", tc.listed, tc.limit, got, tc.want)
+		}
+	}
+	key, other := fallbackKey(need, "abc"), fallbackKey(Need{Table: "dex__swaps", PartRowLtHash: "0x02", RowCount: 3}, "abc")
+	pull.setCursor(key, "abc_4_4_0")
+	if got := pull.cursor(key); got != "abc_4_4_0" {
+		t.Fatalf("cursor = %q after a full window, want abc_4_4_0", got)
+	}
+	if got := pull.cursor(other); got != "" {
+		t.Fatalf("another need's cursor = %q, want none", got)
+	}
+	pull.setCursor(key, "")
+	if got := pull.cursor(key); got != "" {
+		t.Fatalf("cursor = %q after the listing ended, want none", got)
+	}
 }
 
 // stripLiterals removes single-quoted literals from a statement.
@@ -6613,10 +6683,11 @@ func TestOwnerPullResolvesTheCurrentNameByHashOfAllFiles(t *testing.T) {
 
 // TestOwnerPullFallsBackToTheRowHashWhenTheOwnerRebuiltItsParts: no active
 // part has the manifest's hash_of_all_files (the owner rebuilt its parts), so
-// the pull lists the parts of the needed row count, pulls each into its own
-// fresh <scratch>_c<k>, keeps the one whose scan is the needed row hash and
-// drops every candidate table; a bound below that candidate's position
-// misses.
+// the pull lists the parts of the needed partition and row count, pulls each
+// into its own fresh <scratch>_c<k>, keeps the one whose scan is the needed
+// row hash and drops every candidate table; the decoy of another partition
+// is never pulled; a bound below that candidate's position misses, and the
+// next fetch of the same need continues after the last candidate it pulled.
 func TestOwnerPullFallsBackToTheRowHashWhenTheOwnerRebuiltItsParts(t *testing.T) {
 	p := requirePair(t)
 	sfx := suffix(t)
@@ -6633,9 +6704,20 @@ func TestOwnerPullFallsBackToTheRowHashWhenTheOwnerRebuiltItsParts(t *testing.T)
 			needed = part
 		}
 	}
-	position := slices.IndexFunc(parts, func(r partRow) bool { return r.Name == needed.Name })
-	if position < 1 {
-		t.Fatalf("the needed part %s is first in %+v; the decoy must sort before it", needed.Name, parts)
+	// The candidates are the needed partition's parts of the row count, in
+	// name order; the decoy of partition b is none of them.
+	var candidates []partRow
+	var decoyB partRow
+	for _, part := range parts {
+		if part.PartitionID == needed.PartitionID {
+			candidates = append(candidates, part)
+		} else {
+			decoyB = part
+		}
+	}
+	position := slices.IndexFunc(candidates, func(r partRow) bool { return r.Name == needed.Name })
+	if position < 1 || decoyB.Name == "" {
+		t.Fatalf("the needed part %s is first among its partition's %+v, or partition b holds no part (%+v); the partition a decoy must sort before it", needed.Name, candidates, parts)
 	}
 	need := Need{
 		TableKey: schema.TableID, Table: table, PartitionID: "p_a", PartName: needed.Name,
@@ -6661,14 +6743,18 @@ func TestOwnerPullFallsBackToTheRowHashWhenTheOwnerRebuiltItsParts(t *testing.T)
 			if want := fmt.Sprintf("exec INSERT INTO %s.%s ", ident(stage), ident(fmt.Sprintf("%s_c%d", scratch.Table, k+1))); !strings.HasPrefix(pull, want) {
 				t.Fatalf("candidate pull %d is %s, want its own scratch (%s...)", k+1, pull, want)
 			}
+			if strings.Contains(pull, decoyB.Name) {
+				t.Fatalf("candidate pull %d reads %s of another partition: %s", k+1, decoyB.Name, pull)
+			}
 		}
 		if got := tablesIn(t, p.Member, stage); !slices.Equal(got, []string{scratch.Table}) {
 			t.Fatalf("%s holds %v after the fetch, want only the scratch", stage, got)
 		}
 	})
-	t.Run("a_bound_below_the_candidate_misses", func(t *testing.T) {
+	t.Run("a_bound_below_the_candidate_misses_and_the_next_fetch_continues", func(t *testing.T) {
 		scratch := newScratch(t, member, stage, "member-test_"+sfx+"_2", schema)
-		pull := NewOwnerPull(member, collection, db)
+		rec := &recordingConn{Conn: member}
+		pull := NewOwnerPull(rec, collection, db)
 		pull.MaxFallbackCandidates = position
 		res := pull.Fetch(context.Background(), need, schema, scratch)
 		if res.Outcome != OutcomeMissed || res.Err != nil {
@@ -6677,7 +6763,75 @@ func TestOwnerPullFallsBackToTheRowHashWhenTheOwnerRebuiltItsParts(t *testing.T)
 		if parts := partsOf(t, member, stage, scratch.Table); len(parts) != 0 {
 			t.Fatalf("a missed fetch wrote %+v", parts)
 		}
+		before := len(rec.matching("exec INSERT INTO"))
+		next := newScratch(t, member, stage, "member-test_"+sfx+"_3", schema)
+		res = pull.Fetch(context.Background(), need, schema, next)
+		if res.Outcome != OutcomeFetched || res.Err != nil {
+			t.Fatalf("the next Fetch of the same need = %+v, want fetched after the cursor", res)
+		}
+		requireOnePart(t, member, res, next, schema, need.PartRowLtHash, 3)
+		if got := len(rec.matching("exec INSERT INTO")) - before; got != 1 {
+			t.Fatalf("the next Fetch pulled %d candidates, want 1: it lists after the last candidate the first one pulled", got)
+		}
 	})
+}
+
+// TestOwnerPullFallbackScopesTheNeededPartition: nine other partitions each
+// hold one part of the needed row count whose name sorts before the needed
+// one, so a listing bounded before it is scoped would never reach the needed
+// part (housegate spec 2026-10-14 §8.6: candidates of the same partition and
+// row count; Plan S3-C2 review fix 245-3). The member's server computes
+// ClickHouse's partition_id of every partition as the owner's server assigns
+// it, and the fallback lists the needed partition alone and pulls its part
+// first.
+func TestOwnerPullFallbackScopesTheNeededPartition(t *testing.T) {
+	p := requirePair(t)
+	sfx := suffix(t)
+	db, schema := "src_"+sfx, testSchema("dex_"+sfx)
+	table := createSourceTable(t, p.Peer, p.PeerAddr, db, schema)
+	values := []string{"p0", "p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9"}
+	ids := map[string]string{}
+	for k, v := range values {
+		insertPart(t, p.Peer, db, table, v, uint64(100*k), 3)
+		var id string
+		if err := p.Member.QueryRow(context.Background(), partitionIDQuery(literal(v))).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		ids[v] = id
+	}
+	parts := partsOf(t, p.Peer, db, table)
+	for _, v := range values {
+		if !slices.ContainsFunc(parts, func(r partRow) bool { return r.PartitionID == ids[v] }) {
+			t.Fatalf("partitionId(%q) is %s on the member's server, and no part of the owner has it: %+v", v, ids[v], parts)
+		}
+	}
+	// The needed partition is the one whose id sorts last, so the part of
+	// every other partition sorts before its part.
+	needed := slices.MaxFunc(values, func(a, b string) int { return strings.Compare(ids[a], ids[b]) })
+	position := slices.IndexFunc(parts, func(r partRow) bool { return r.PartitionID == ids[needed] })
+	if position < DefaultMaxFallbackCandidates {
+		t.Fatalf("the needed partition's part sorts at %d of %+v, want at least %d", position, parts, DefaultMaxFallbackCandidates)
+	}
+	target := parts[position]
+	scans := scanOf(t, p.Peer, db, table, schema)
+	need := Need{
+		TableKey: schema.TableID, Table: table, PartitionID: "p_" + needed, PartName: target.Name,
+		PartPhysHash: strings.Repeat("0", 32), PartRowLtHash: scans[target.Name].RowLtHash, RowCount: 3,
+	}
+	collection := ownerCollection(t, p, "si_owner_", db)
+	stage := "hg_rstage_" + sfx
+	member := memberUser(t, p, stage, "", []string{collection})
+	scratch := newScratch(t, member, stage, "member-test_"+sfx+"_1", schema)
+	rec := &recordingConn{Conn: member}
+	res := NewOwnerPull(rec, collection, db).Fetch(context.Background(), need, schema, scratch)
+	if res.Outcome != OutcomeFetched || res.Err != nil {
+		t.Fatalf("Fetch = %+v, want fetched from the needed partition", res)
+	}
+	requireOnePart(t, member, res, scratch, schema, need.PartRowLtHash, 3)
+	if pulls := rec.matching("exec INSERT INTO"); len(pulls) != 1 {
+		t.Fatalf("%d candidate pulls %q, want 1: the listing holds the needed partition only", len(pulls), pulls)
+	}
+	t.Logf("needed partition %s (partition_id %s) sorts at %d of %d parts of 3 rows", needed, ids[needed], position, len(parts))
 }
 
 // TestOwnerPullUsesTheNoSplitSettings: the pull runs under NoSplitSettings of
@@ -7437,16 +7591,20 @@ package sources
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 
 	"github.com/housegate/housegate/pkg/replay/chexec"
 	"github.com/housegate/housegate/pkg/replay/payloadexec"
+
+	"github.com/sentioxyz/arbiter-core/dataplane/chparts"
 )
 
 const (
 	// DefaultMaxFallbackCandidates bounds the row-hash fallback of the owner
-	// pull: at most this many parts with the needed row count are pulled.
+	// pull: at most this many parts of the needed partition and row count
+	// are pulled by one Fetch.
 	DefaultMaxFallbackCandidates = 8
 	// NoFallback as MaxFallbackCandidates turns the row-hash fallback off.
 	// The unsafe pulls use it: an hg_unsafe part is never rebuilt (merges
@@ -7454,6 +7612,10 @@ const (
 	// hash_of_all_files is gone was cleaned, and pulling other parts of the
 	// same row count could only cost reads.
 	NoFallback = -1
+	// maxFallbackCursors bounds the fallback positions a RemotePull
+	// remembers; beyond it they are forgotten, and each need's next fallback
+	// starts from the first candidate of its partition again.
+	maxFallbackCursors = 1024
 
 	defaultSafeDatabase   = "hg_safe"
 	defaultUnsafeDatabase = "hg_unsafe"
@@ -7467,20 +7629,29 @@ const (
 // appears in SQL. The part's current name is resolved on the source by
 // hash_of_all_files (a REPLACE PARTITION renames parts and keeps the hash);
 // when no active part has that hash, the owner pull falls back to the parts
-// of the needed row count, pulls each into its own fresh scratch
-// <scratch>_c<k> and keeps the first whose scan is the needed row hash. The
-// filter is on _part only, never on the manifest's logical partition id, and
-// only the system.parts columns the reader user is granted are named. The
-// fallback does not filter on the partition either: the manifest's logical
-// id is not ClickHouse's partition_id, the reader may not read the partition
-// column, and the row hash a kept candidate must scan to covers every column,
-// the partition key included.
+// of the needed partition and row count (housegate spec 2026-10-14 §8.6),
+// pulls each into its own fresh scratch <scratch>_c<k> and keeps the first
+// whose scan is the needed row hash. The pull filters on _part only, never
+// on the manifest's logical partition id, and only the system.parts columns
+// the reader user is granted are named. The fallback scopes its listing to
+// ClickHouse's partition_id of the need's partition, which the member's own
+// server computes from the logical id with partitionId() (the reader may not
+// read the partition column, and the logical id is not ClickHouse's), before
+// it applies MaxFallbackCandidates; a Fetch that pulled a full window
+// without keeping a part leaves a cursor, and the next Fetch of that need
+// lists the candidates after it, so every candidate of the partition is
+// pulled within a bounded number of fetches.
 type RemotePull struct {
 	Conn                  clickhouse.Conn
 	SourceName            string
 	Collection            string
 	Database              string
 	MaxFallbackCandidates int // 0: DefaultMaxFallbackCandidates; NoFallback: none
+
+	// mu guards after: per need (fallbackKey), the name of the last
+	// candidate a full fallback window pulled without keeping it.
+	mu    sync.Mutex
+	after map[string]string
 }
 
 // NewOwnerPull pulls from the owner's hg_safe (safeDatabase; "" is hg_safe).
@@ -7534,9 +7705,14 @@ func (p *RemotePull) Fetch(ctx context.Context, need Need, schema payloadexec.Ta
 		res.Outcome = OutcomeMissed
 		return res
 	}
-	candidates, err := p.candidatesByRows(ctx, need, limit)
+	partitionID, err := p.partitionIDOf(ctx, need, schema)
 	if err != nil {
-		return failure(res, "list the parts of the needed row count", err)
+		return failure(res, "resolve the partition id of "+need.PartitionID, err)
+	}
+	key := fallbackKey(need, partitionID)
+	candidates, err := p.candidatesByRows(ctx, need, partitionID, p.cursor(key), limit)
+	if err != nil {
+		return failure(res, "list the parts of the needed partition and row count", err)
 	}
 	for k, name := range candidates {
 		candidate := Scratch{Database: scratch.Database, Table: fmt.Sprintf("%s_c%d", scratch.Table, k+1)}
@@ -7545,11 +7721,85 @@ func (p *RemotePull) Fetch(ctx context.Context, need Need, schema payloadexec.Ta
 			return failure(res, "pull candidate part "+name, err)
 		}
 		if kept {
+			p.setCursor(key, "")
 			return p.fetched(ctx, res, scratch)
 		}
 	}
+	p.setCursor(key, nextFallbackCursor(candidates, limit))
 	res.Outcome = OutcomeMissed
 	return res
+}
+
+// nextFallbackCursor is where the next fallback of a need lists from after a
+// window of candidates that kept nothing: after its last name when the window
+// was full, else (the partition's listing ended) from the first again.
+func nextFallbackCursor(candidates []string, limit int) string {
+	if len(candidates) < limit || len(candidates) == 0 {
+		return ""
+	}
+	return candidates[len(candidates)-1]
+}
+
+// fallbackKey identifies one need's fallback: the physical table, ClickHouse's
+// partition id, the row hash and the row count.
+func fallbackKey(need Need, partitionID string) string {
+	return fmt.Sprintf("%s\x00%s\x00%s\x00%d", need.Table, partitionID, need.PartRowLtHash, need.RowCount)
+}
+
+func (p *RemotePull) cursor(key string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.after[key]
+}
+
+func (p *RemotePull) setCursor(key, after string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if after == "" {
+		delete(p.after, key)
+		return
+	}
+	if p.after == nil || len(p.after) >= maxFallbackCursors {
+		p.after = map[string]string{}
+	}
+	p.after[key] = after
+}
+
+// partitionIDOf is ClickHouse's partition_id of the need's logical partition
+// (chparts.LogicalPartitionID): "all" for an unpartitioned table; else
+// partitionId() over the partition value, computed by the member's own
+// server as every server computes it for a part (the partition key is one
+// bare String column, ddl's partition freeze; measured equal to
+// system.parts.partition_id on 25.8.28.1 and 26.3.51.7, Appendix B). The
+// query reads no table, so it needs no grant.
+func (p *RemotePull) partitionIDOf(ctx context.Context, need Need, schema payloadexec.TableSchema) (string, error) {
+	value, err := chparts.QuotePartition(schema, need.PartitionID)
+	if err != nil {
+		return "", err
+	}
+	if schema.PartitionBy == "" {
+		return "all", nil
+	}
+	rows, err := p.Conn.Query(ctx, partitionIDQuery(value))
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return "", err
+		}
+		return "", fmt.Errorf("%s returned no row", partitionIDQuery(value))
+	}
+	var id string
+	if err := rows.Scan(&id); err != nil {
+		return "", err
+	}
+	return id, rows.Err()
+}
+
+func partitionIDQuery(quotedValue string) string {
+	return "SELECT partitionId(" + quotedValue + ")"
 }
 
 func (p *RemotePull) check(need Need, scratch Scratch) error {
@@ -7584,9 +7834,16 @@ func (p *RemotePull) resolveQuery(need Need) string {
 		" AND active AND hash_of_all_files = " + literal(need.PartPhysHash)
 }
 
-func (p *RemotePull) fallbackQuery(need Need, limit int) string {
-	return fmt.Sprintf("SELECT name FROM %s WHERE database = %s AND table = %s AND active AND rows = %d ORDER BY name LIMIT %d",
-		p.partsTable(), literal(p.Database), literal(need.Table), need.RowCount, limit)
+// fallbackQuery lists, in name order, at most limit active parts of the
+// source table in ClickHouse partition partitionID with the needed row
+// count, after the part name after ("" lists from the first).
+func (p *RemotePull) fallbackQuery(need Need, partitionID, after string, limit int) string {
+	q := fmt.Sprintf("SELECT name FROM %s WHERE database = %s AND table = %s AND active AND partition_id = %s AND rows = %d",
+		p.partsTable(), literal(p.Database), literal(need.Table), literal(partitionID), need.RowCount)
+	if after != "" {
+		q += " AND name > " + literal(after)
+	}
+	return q + fmt.Sprintf(" ORDER BY name LIMIT %d", limit)
 }
 
 func (p *RemotePull) pullQuery(into Scratch, table, part string) string {
@@ -7621,8 +7878,8 @@ func (p *RemotePull) resolveByHash(ctx context.Context, need Need) (string, uint
 	return name, count, found, rows.Err()
 }
 
-func (p *RemotePull) candidatesByRows(ctx context.Context, need Need, limit int) ([]string, error) {
-	rows, err := p.Conn.Query(ctx, p.fallbackQuery(need, limit))
+func (p *RemotePull) candidatesByRows(ctx context.Context, need Need, partitionID, after string, limit int) ([]string, error) {
+	rows, err := p.Conn.Query(ctx, p.fallbackQuery(need, partitionID, after, limit))
 	if err != nil {
 		return nil, err
 	}
@@ -8162,7 +8419,7 @@ go_test(
 )
 ```
 
-then `//member/sources:sources_test PASSED` twice (plain and race). Without ClickHouse the five pure tests pass and the twelve ClickHouse-gated tests SKIP. A dependency list that differs means a consumed package moved: compare it with Plan S3-C1's and Task 30's BUILD files before editing anything; gazelle's output is committed unedited.
+then `//member/sources:sources_test PASSED` twice (plain and race). Without ClickHouse the six pure tests pass and the thirteen ClickHouse-gated tests SKIP. A dependency list that differs means a consumed package moved: compare it with Plan S3-C1's and Task 30's BUILD files before editing anything; gazelle's output is committed unedited.
 
 - [ ] **Step 11: Run the ClickHouse-gated tests on 25.8 and on a fenced 26.3.37.3 with MinIO**
 
@@ -8253,7 +8510,7 @@ grep -E 'fenced (true|false)|unreachable: code|refusing connections|memory refus
 EOF
 ```
 
-Expected, in order: `25.8.<patch>`, `//member/sources:sources_test PASSED`, `25.8: 16 passed, 1 skipped, 0 failed` (the restore test skips without an object store); `26.3.37.3`, `//member/sources:sources_test PASSED`, `26.3: 17 passed, 0 skipped, 0 failed`; then the measurement lines of the second run, among them `127.0.0.1:<member port>: fenced true, CheckEngineFence = <nil>`, `127.0.0.1:<peer port>: fenced false, CheckEngineFence = sources: ClickHouse accepted ENGINE = Log for this user: …`, `memory refusal: sources: owner_pull: pull part …: code: 241, …`, `owner_pull unreachable: code 519`, `peer_unsafe_pull unreachable: code 519` and `endpoint refusing connections: refused after <about 5>s: sources: restore: read the backup indexes of indexer <n>: objstore: read the indexes of indexer <n>: context deadline exceeded`. Go prints the PASS lines only under `-test.v`, and a filter or gate that matched nothing would pass silently, hence the counts. Stop and ask before changing code if: the unreachable code is not one of 519, 279, 210 or 209 (the mapping of K35 would have to change); the fenced server reports `fenced false` (the access-control file did not load); the memory refusal is not 241; the index read of the endpoint that refuses connections outlives its 5 s deadline (then the deadline no longer bounds the server's retries); or the restore leaves `<scratch>_r` behind or copies more than the needed part.
+Expected, in order: `25.8.<patch>`, `//member/sources:sources_test PASSED`, `25.8: 18 passed, 1 skipped, 0 failed` (the restore test skips without an object store); `26.3.37.3`, `//member/sources:sources_test PASSED`, `26.3: 19 passed, 0 skipped, 0 failed`; then the measurement lines of the second run, among them `127.0.0.1:<member port>: fenced true, CheckEngineFence = <nil>`, `127.0.0.1:<peer port>: fenced false, CheckEngineFence = sources: ClickHouse accepted ENGINE = Log for this user: …`, `memory refusal: sources: owner_pull: pull part …: code: 241, …`, `owner_pull unreachable: code 519`, `peer_unsafe_pull unreachable: code 519` and `endpoint refusing connections: refused after <about 5>s: sources: restore: read the backup indexes of indexer <n>: objstore: read the indexes of indexer <n>: context deadline exceeded`. Go prints the PASS lines only under `-test.v`, and a filter or gate that matched nothing would pass silently, hence the counts. Stop and ask before changing code if: the unreachable code is not one of 519, 279, 210 or 209 (the mapping of K35 would have to change); the fenced server reports `fenced false` (the access-control file did not load); the memory refusal is not 241; the index read of the endpoint that refuses connections outlives its 5 s deadline (then the deadline no longer bounds the server's retries); or the restore leaves `<scratch>_r` behind or copies more than the needed part.
 
 - [ ] **Step 12: Commit the package**
 
@@ -8388,35 +8645,36 @@ Expected: no boundary violation, no unformatted file, no BUILD change left after
 
 ## Task 32: arbiter-core — `member/install`, the install gate executor (S3-C2)
 
-Spec §8.5–§8.7 and §8.1's free-space stop, as clarifications K35 and K36 resolve them, with contract §22.2–§22.3's names: the si-member brings every ready copy of every owner in its scope to the validated manifest the feed accepted, only with parts that manifest lists, through Plan S3-C1's pure `member/gate`. Each needed part is fetched into its own fresh scratch table `<node_id>_<boot_nonce>_<n>` of `hg_rstage` from the owner's byte sources in order, scanned and classified (kept, rename race, split, doubled, Foreign), checked arithmetically (Σ(L) + Σ(kept) = R and the partition set) and installed with `ATTACH PARTITION … FROM`; a Diverged partition is rebuilt with `DROP PARTITION` followed by `ATTACH PARTITION … FROM`, never with the replacing statement. The installer journals what every copy holds per owner, recovers a part attached before the journal write, audits the copies at startup, after every ClickHouse restart and on a slow self-audit cadence (equal-hash twins dropped with a local `DROP PART`), drops the node's stale scratch tables at startup, pauses installs above the member disk budget, and quarantines a table whose scratch held a foreign part until an operator clears it offline. The package is consumed by Task 33's shadow (`ScratchPrefix`, the startup drop of its `…r` tables), Task 34's `member.Role` (startup steps 7–9: `DropStaleScratch`, `Audit`, `Apply`, the restart watcher and the self-audit ticker), Task 35's `si-member clear-foreign` and metrics, Task 36's kill-mid-stream test (`Deps.AfterAttach`), Plan S3-C4's serving lease (`Deps.BeforeInstall`, `Tables`) and Plan S3-E1's hardlink source (another `sources.Source` in front of the owner pull).
+Spec §8.5–§8.7 and §8.1's free-space stop, as clarifications K35 and K36 resolve them, with contract §22.2–§22.3's names: the si-member brings every ready copy of every owner in its scope to the validated manifest the feed accepted, only with parts that manifest lists, through Plan S3-C1's pure `member/gate`. Each needed part is fetched into its own fresh scratch table `<node_id>_<boot_nonce>_<n>` of `hg_rstage` from the owner's byte sources in order (while the owner bootstraps, each copy's first part tries the restore first: the P1 backups are the bootstrap source), scanned and classified (kept, rename race, split, doubled, Foreign), checked arithmetically (Σ(L) + Σ(kept) = R and the partition set) and installed with `ATTACH PARTITION … FROM`; a Diverged partition is rebuilt with `DROP PARTITION` followed by `ATTACH PARTITION … FROM`, never with the replacing statement. The installer journals what every copy holds per owner, recovers a part attached before the journal write, audits the copies at startup, after every ClickHouse restart and on a slow self-audit cadence (equal-hash twins dropped with a local `DROP PART`), drops the node's stale scratch tables at startup, pauses installs above the member disk budget, and quarantines a table whose scratch held a foreign part until an operator clears it offline. The package is consumed by Task 33's shadow (`ScratchPrefix`, the startup drop of its `…r` tables), Task 34's `member.Role` (startup steps 7–9: `DropStaleScratch`, `Audit`, `Apply`, the restart watcher and the self-audit ticker), Task 35's `si-member clear-foreign` and metrics, Task 36's kill-mid-stream test (`Deps.AfterAttach`), Plan S3-C4's serving lease (`Deps.BeforeInstall`, `Tables`) and Plan S3-E1's hardlink source (another `sources.Source` in front of the owner pull).
 
 **Files:**
 - Create: `member/install/installer.go` (contract §22.3's constants and types, `New`, `Apply` with the owner pass: reconcile, plan, fetch, classify, verify, commit, journal; the deferral, the disk budget, `Entry`, `Tables`, `Stats`), `member/install/journal.go` (`JournalFile`, the journal types of §22.2, the atomic write), `member/install/audit.go` (`Audit`, the reconciliation with `system.parts` shared with `Apply`, the self-audit's full scan), `member/install/scratch.go` (`NewBootNonce`, `NodePrefix`, `ScratchPrefix`, `ScratchName`, the scratch tables, `DropStaleScratch`), `member/install/foreign.go` (`ClearForeign`, `LockFile`, the quarantine reads)
 - Create: `member/install/BUILD.bazel` (gazelle's output plus one `data` line on the `go_test`, Step 12)
-- Test: `member/install/fixture_ch_test.go` (the ClickHouse fixture: an owner database standing in for `hg_safe`, scripted sources, a recording connection, a clock), `member/install/installer_ch_test.go` (the twelve install tests), `member/install/audit_ch_test.go` (the five audit tests), `member/install/restart_ch_test.go` (the restart test), `member/install/scratch_test.go`, `member/install/foreign_test.go`, `member/install/installer_test.go` (no ClickHouse)
+- Test: `member/install/fixture_ch_test.go` (the ClickHouse fixture: an owner database standing in for `hg_safe`, scripted sources, a recording connection, a clock), `member/install/installer_ch_test.go` (the thirteen install tests), `member/install/audit_ch_test.go` (the seven audit tests), `member/install/restart_ch_test.go` (the restart test), `member/install/scratch_test.go`, `member/install/foreign_test.go`, `member/install/installer_test.go` (no ClickHouse)
 - Modify: `.github/workflows/ci.yml` (job `integration-clickhouse`, step `data-plane integration`, its `bazel test` target list, base `8f0bc43` `:97-102`: `//member/install:install_test` inserted in sorted position, at the base right after `//dataplane/tableset:tableset_test \` `:99`, at Plan S3-A's merge `cfd4f42` right after the same line at `:111`; Tasks 30, 31 and 33 insert their targets into the same list, hunk rule)
 - Modify: `scripts/ci/clickhouse-mechanics.sh` (Plan S3-A Task 6's runner, absent at the base, on `main` since Plan S3-A's merge `cfd4f42` with that line at `:181`, extended by Plan S3-C1 Task 24): the restart test runs inside its unfiltered block, right after the SNode restart test's line `echo "snode: ${snode_test} passed on ${image}"`
 
 **Interfaces:**
 - Consumes (Task 29, same branch): `manifestfeed.Update{SnapshotID, ParentSnapshotID string; SafeBlockSeq uint64; Manifest replay.SafeSnapshotManifest; Entries map[uint64]replay.TrackFrontier; Changed []uint64; FullFetch bool; Walked int}` (the installer reads `SnapshotID`, `Manifest` and `Entries`).
 - Consumes (Task 30): `ddl.MemberPinned{MemberUnsafeDB, ReplicaDB, StageDB, NodeID, StoragePolicy string; KeeperShardID uint32}`, `ddl.ScratchIntent(m ddl.MemberPinned, t payloadexec.TableSchema, name string) (ddl.TableIntent, error)`, `ddl.ListStageTables(ctx context.Context, conn clickhouse.Conn, m ddl.MemberPinned, prefix string) ([]string, error)`; tests: `ddl.DefaultMemberPinned`, `ddl.EnsureMemberDatabases`, `ddl.EnsureCopy`, `ddl.CopyTableName`; `copyset.Copy{Owner uint64; TableKey string; IncarnationSeq uint64; Table string; Status wire.TableIncarnationStatus; Schema payloadexec.TableSchema; Ready bool}` and `*copyset.Reconciler`'s `Copies() []copyset.Copy` (ready copies, sorted by `TableKey`) and `Copy(tableKey string) (copyset.Copy, bool)`, which `CopySet` names.
-- Consumes (Task 31): `sources.Source` (`Name() string`; `Fetch(ctx context.Context, need sources.Need, schema payloadexec.TableSchema, scratch sources.Scratch) sources.Result`), `sources.Need{TableKey, Table, PartitionID, PartName, PartPhysHash, PartRowLtHash string; RowCount uint64}`, `sources.Scratch{Database, Table string}`, `sources.Result{Source string; Outcome sources.Outcome; Parts []string; Err error}`, `sources.OutcomeFetched`, `sources.OutcomeMissed`, `sources.OutcomeRefused`, `sources.OutcomeUnreachable`, and the source names `owner_pull`, `peer_unsafe_pull`, `restore` (contract §22.1); the caller creates the scratch before `Fetch`, and a restore copies the needed part into it from its own `<scratch>_r`, which it drops.
+- Consumes (Task 31): `sources.Source` (`Name() string`; `Fetch(ctx context.Context, need sources.Need, schema payloadexec.TableSchema, scratch sources.Scratch) sources.Result`), `sources.Need{TableKey, Table, PartitionID, PartName, PartPhysHash, PartRowLtHash string; RowCount uint64}`, `sources.Scratch{Database, Table string}`, `sources.Result{Source string; Outcome sources.Outcome; Parts []string; Err error}`, `sources.OutcomeFetched`, `sources.OutcomeMissed`, `sources.OutcomeRefused`, `sources.OutcomeUnreachable`, and the source names `owner_pull`, `peer_unsafe_pull`, `restore` (contract §22.1; `sources.SourceOwnerPull` names the owner pull for the bootstrap probe's order); the caller creates the scratch before `Fetch`, and a restore copies the needed part into it from its own `<scratch>_r`, which it drops.
 - Consumes (Plan S3-C1 contract §17, Task 23, released in `CORE_TAG_P1`): `chparts.Part{Name, PartitionID, PartitionValue, PhysHash, Path string; Rows, Bytes uint64}`, `chparts.ActiveParts`, `chparts.LogicalPartitionID`, `chparts.PartsInLogicalPartition`, `chparts.QuotePartition`, `chparts.PartitionContentScan`; `gate.PlanPartition(manifest []string, root string, local []string) (gate.Plan, error)` with `gate.Plan{Diverged bool; Need []string; Root string}`, `gate.Classify(f gate.Fetch, scratch []gate.ScratchPart) (gate.Classification, error)` with `gate.Fetch{Need []string; Single *gate.Expected}`, `gate.Expected{RowLtHash string; Rows uint64}`, `gate.ScratchPart{Name, RowLtHash string; Rows uint64}`, `gate.Classification{Outcome gate.Outcome; Keep, Drop, Kept []string}` and `gate.OutcomeKept`, `gate.OutcomeRenameRace`, `gate.OutcomeSplit`, `gate.OutcomeDoubled`, `gate.OutcomeForeign`, `gate.Closure(root string, local, kept []string) error`, `gate.PartitionSet(manifest, local []string) error`.
 - Consumes (Plan S3-C1 contract §16, housegate `HG_TAG_P1`, pinned since `CORE_TAG_P1`): `chexec.ScanAllParts(ctx context.Context, conn clickhouse.Conn, qualifiedTable string, schema payloadexec.TableSchema) ([]chexec.PartScanResult, error)`, `payloadexec.SumPartRowLtHashes(hashes []string) (string, error)`; existing `chexec.ScanParts`, `chexec.PartScanResult{PartName, RowLtHash string; RowCount uint64}`, `payloadexec.TableSchemaHash`, `payloadexec.TableSchema`, `replay.TableManifest`, `replay.PartManifestEntry`, `replay.PartitionCommitment`, `replay.TrackFrontier`.
 - Consumes (Plan S3-A contract §3): `chtest.Open(t testing.TB, addr string) clickhouse.Conn`; tests: `chrestart.Watcher{Interval, Skew time.Duration; Now func() time.Time; OnRestart func(ctx context.Context, previous, current time.Time); Baseline time.Time}`, `(*chrestart.Watcher).Run`, `chrestart.StartedAt` (its probe is `SELECT toUInt64(uptime())`), `chrestart.DefaultRestartSkew`; the restart gate `ARBITER_CH_RESTART=1` with `CH_RESTART_ADDR` and the runner `scripts/ci/clickhouse-mechanics.sh` (node B with `--restart always`, `env_flags`, the block that runs only without `ARBITER_CH_MECHANICS_FILTER`).
 - Consumes (existing): `ddl.CHTableName`; tests: `ddl.Intents`, `ddl.Pinned`, `ddl.RowIDColumn`, `wire.TableStatusActive`, `lthash.Column`, clickhouse-go `lib/driver`.
-- Produces (contract §22.2–§22.3, verbatim): `func NewBootNonce() (string, error)`; `func NodePrefix(nodeID string) string`; `func ScratchPrefix(nodeID, bootNonce string) string`; `func ScratchName(nodeID, bootNonce string, n uint64) string`; `const JournalFile = "install-journal.json"`; `type Journal`, `type OwnerJournal`, `type TableJournal`, `type JournalPart` with the JSON tags of §22.2; `const DefaultStopInstallsRatio = 0.8`, `DefaultSelfAuditInterval = 6 * time.Hour`, `MinSelfAuditInterval = 10 * time.Minute`, `DefaultDeferBackoffMin = time.Minute`, `DefaultDeferBackoffMax = 30 * time.Minute`; `type Config struct { Pinned ddl.MemberPinned; NetworkID, StateDir, BootNonce string; DiskBudgetBytes uint64; StopInstallsRatio float64; SelfAuditInterval time.Duration }`; `type CopySet interface { Copies() []copyset.Copy; Copy(tableKey string) (copyset.Copy, bool) }`; `type Deps struct { Conn clickhouse.Conn; Copies CopySet; Sources func(owner uint64) []sources.Source; BeforeInstall func(ctx context.Context, owner uint64, database string) error; AfterAttach func(tableKey, partitionID string) error; Logger *slog.Logger; Now func() time.Time }`; `type Outcome string` with `OutcomeKept`, `OutcomeRenameRace`, `OutcomeSplit`, `OutcomeDoubled`, `OutcomeForeign`, `OutcomeMissed`, `OutcomeRefused`, `OutcomeUnreachable`; `type TableState struct { Owner uint64; TableKey string; IncarnationSeq uint64; Copy, SchemaHash string; Entry replay.TrackFrontier; SnapshotID string; Diverged, Foreign bool }`; `type Stats struct { Outcomes map[Outcome]uint64; Installs map[string]uint64; DivergedPartitions map[uint64]uint64; AuditRuns map[string]uint64; AuditDroppedTwins uint64; AuditClean, InstallsPaused bool; DiskUsedBytes, DiskBudgetBytes uint64 }`; `func New(cfg Config, d Deps) (*Installer, error)`; `func (i *Installer) Apply(ctx context.Context, u manifestfeed.Update) error`; `func (i *Installer) Audit(ctx context.Context, trigger string) error`; `func (i *Installer) DropStaleScratch(ctx context.Context) error`; `func (i *Installer) Entry(owner uint64) (OwnerJournal, bool)`; `func (i *Installer) Tables(owner uint64) []TableState`; `func (i *Installer) Stats() Stats`; `func ClearForeign(stateDir, tableKey string) error`; the sentinels `ErrClosure`, `ErrPartitionSet`, `ErrNoSourceSucceeded`, `ErrForeign`, `ErrInstallsPaused`, each wrapped (`errors.Is`) by an error carrying §22.3's text verbatim: `install: partition %s of %s does not close: local %s + kept %s != root %s`, `install: %s has partitions %v, manifest %s lists %v`, `install: no source delivered part %s of %s (%v); deferred until %s`, `install: scratch %s holds a part manifest %s does not list; %s is quarantined locally`, `install: member disk budget exceeded (%d of %d bytes); installs paused`, and `install: state dir %s is locked by a running si-member` from `ClearForeign`; the disk query `SELECT sum(bytes_on_disk) FROM system.parts WHERE database IN ('<ReplicaDB>', '<StageDB>')`; the statements `ALTER TABLE <ReplicaDB>.<copy> ATTACH PARTITION <p> FROM <StageDB>.<scratch>`, `ALTER TABLE <ReplicaDB>.<copy> DROP PARTITION <p>`, `ALTER TABLE <StageDB>.<scratch> DROP PART '<name>'`, `ALTER TABLE <ReplicaDB>.<copy> DROP PART '<name>'` (identifiers backquoted); the twenty tests of §22.3.
-- Produces (beyond the contract; Appendix B, Task 32): the trigger constants `TriggerStartup = "startup"`, `TriggerClickHouseRestart = "clickhouse_restart"`, `TriggerSelfAudit = "self_audit"` (Task 34's watcher and ticker pass them); `const LockFile = "LOCK"` (Task 34's `member.LockFile` must equal it; defining it as `install.LockFile` keeps them one name) and `var ErrStateDirLocked` (wrapped by the lock refusal, for Task 35's `clear-foreign`); `New`'s refusals (verbatim) `install: node id %q must match ^[a-z][a-z0-9-]{0,30}[a-z0-9]$`, `install: Pinned needs distinct ReplicaDB and StageDB`, `install: boot nonce %q must be 8 lowercase hex characters (NewBootNonce)`, `install: NetworkID and StateDir are required`, `install: disk budget is required`, `install: stop_installs_ratio must satisfy 0 < ratio < 1, got %v` (0 → 0.8), `install: self_audit_interval must be at least 10m, got %s` (0 → 6h), `install: Deps needs Conn, Copies and Sources`, `install: state dir %s is not a directory (%v)`, `install: journal %s belongs to node %q, not %q`, and the journal's `install: read journal %s: %w`, `install: journal %s: %w`, `install: journal %s has version %d, want 1`, `install: journal %s has a bad owner entry %q`, `install: journal %s has an empty entry for table %s`; `Apply`'s and `Audit`'s other errors `install: an update needs a snapshot id`, `install: the %s audit must pass before installs: %w`, `install: manifest %s has no track frontier for owner %d`, `install: manifest %s lists %s with schema hash %s, but copy %s was created from schema hash %s`, `install: manifest %s, %s partition %s: %w` (around `gate.PlanPartition`), `install: %s of owner %d is quarantined locally (foreign scratch %s.%s); clear it offline with sentio-node si-member clear-foreign --table %s` (wraps `ErrForeign`), `install: ATTACH into %s partition %s gave parts %v, want %d with the kept parts' hash_of_all_files`, `install: before changing the copies of %s of owner %d: %w` (around `BeforeInstall`), `install: unknown audit trigger %q (want startup, clickhouse_restart, self_audit)`, `install: scratch %s.%s holds %v after the drops, want the kept parts %v`, `ClearForeign`'s `install: no install journal in %s`, `install: %s is not quarantined as foreign in %s`, and the wrapped errors `install: <action>: %w` around each ClickHouse statement and file operation, which name the statement, table or path (for example `install: %s: %w` around an `ALTER TABLE`, `install: create scratch %s.%s: %w`, `install: write journal: %w`); the semantics stated in the Notes (owners, the owner pass, recovery, the audit wait, the self-audit pacing, the quarantine's scope); slog messages (error) `install: a scratch holds a part the manifest does not list; the table is quarantined locally` (fields `owner`, `table`, `copy`, `scratch`, `snapshot`), `install: a scratch changed after its classification`, `install: the attached parts do not match the kept scratch parts; the partition is Diverged`, `install: a journaled part's content changed; the partition is Diverged`, `install: audit failed; installs wait for the next one`; (warn) `install: dropped a Diverged partition to rebuild it`, `install: the copy holds a part the manifest does not need; the partition is Diverged`, `install: the journal lists parts the manifest does not; the partition is Diverged`, `install: a journaled part is missing or changed; the partition is Diverged`, `install: dropped an equal-hash twin from a copy`, `install: the copy holds a part the journal does not list; the next install adopts or repairs it`, `install: no source delivered a part; deferred` (fields `table`, `partition`, `part`, `results`, `until`), `install: member disk budget exceeded; installs paused`, `install: keeping a foreign scratch for forensics`, `install: dropping a scratch table failed; the next start drops it`; (info) `install: copy brought to the manifest`, `install: adopted a part the journal did not list`, `install: retrying a fetch once from a clean scratch`, `install: dropped a stale scratch table`, `install: audit completed` (fields `trigger`, `clean`), `install: skipping a self-audit that follows the last one too closely`; the unexported seam `Installer.beforeVerify` (tests change a scratch through it); extension tests `TestNewRefusesAnInvalidConfig`, `TestSelfAuditRunsAtMostOncePerHalfInterval`; test helpers `requireCH`, `recordingConn`, `fakeCopies`, `row`, `fixture`, `newFixture`, `testSchema`, `rowID`, `frontier`, `manifestHashes`, `scripted`, `fetchFunc`, `outcome`, `errMemoryLimit`, `requireRefusal`, `uptimeConn`, `uptimeRow`, `requireRestartableCH`, `waitUptime`, `killClickHouse`, `noCopies`, `noSources`.
+- Produces (contract §22.2–§22.3, verbatim): `func NewBootNonce() (string, error)`; `func NodePrefix(nodeID string) string`; `func ScratchPrefix(nodeID, bootNonce string) string`; `func ScratchName(nodeID, bootNonce string, n uint64) string`; `const JournalFile = "install-journal.json"`; `type Journal`, `type OwnerJournal`, `type TableJournal`, `type JournalPart` with the JSON tags of §22.2; `const DefaultStopInstallsRatio = 0.8`, `DefaultSelfAuditInterval = 6 * time.Hour`, `MinSelfAuditInterval = 10 * time.Minute`, `DefaultDeferBackoffMin = time.Minute`, `DefaultDeferBackoffMax = 30 * time.Minute`; `type Config struct { Pinned ddl.MemberPinned; NetworkID, StateDir, BootNonce string; DiskBudgetBytes uint64; StopInstallsRatio float64; SelfAuditInterval time.Duration }`; `type CopySet interface { Copies() []copyset.Copy; Copy(tableKey string) (copyset.Copy, bool) }`; `type Deps struct { Conn clickhouse.Conn; Copies CopySet; Sources func(owner uint64) []sources.Source; BeforeInstall func(ctx context.Context, owner uint64, database string) error; AfterAttach func(tableKey, partitionID string) error; Logger *slog.Logger; Now func() time.Time }`; `type Outcome string` with `OutcomeKept`, `OutcomeRenameRace`, `OutcomeSplit`, `OutcomeDoubled`, `OutcomeForeign`, `OutcomeMissed`, `OutcomeRefused`, `OutcomeUnreachable`; `type TableState struct { Owner uint64; TableKey string; IncarnationSeq uint64; Copy, SchemaHash string; Entry replay.TrackFrontier; SnapshotID string; Diverged, Foreign bool }`; `type Stats struct { Outcomes map[Outcome]uint64; Installs map[string]uint64; DivergedPartitions map[uint64]uint64; AuditRuns map[string]uint64; AuditDroppedTwins uint64; AuditClean, InstallsPaused bool; DiskUsedBytes, DiskBudgetBytes uint64 }`; `func New(cfg Config, d Deps) (*Installer, error)`; `func (i *Installer) Apply(ctx context.Context, u manifestfeed.Update) error`; `func (i *Installer) Audit(ctx context.Context, trigger string) error`; `func (i *Installer) DropStaleScratch(ctx context.Context) error`; `func (i *Installer) Entry(owner uint64) (OwnerJournal, bool)`; `func (i *Installer) Tables(owner uint64) []TableState`; `func (i *Installer) Stats() Stats`; `func (i *Installer) NeedsPass() bool` (review fix 245-2); `func ClearForeign(stateDir, tableKey string) error`; the sentinels `ErrClosure`, `ErrPartitionSet`, `ErrNoSourceSucceeded`, `ErrForeign`, `ErrInstallsPaused`, each wrapped (`errors.Is`) by an error carrying §22.3's text verbatim: `install: partition %s of %s does not close: local %s + kept %s != root %s`, `install: %s has partitions %v, manifest %s lists %v`, `install: no source delivered part %s of %s (%v); deferred until %s`, `install: scratch %s holds a part manifest %s does not list; %s is quarantined locally`, `install: member disk budget exceeded (%d of %d bytes); installs paused`, and `install: state dir %s is locked by a running si-member` from `ClearForeign`; the disk query `SELECT sum(bytes_on_disk) FROM system.parts WHERE database IN ('<ReplicaDB>', '<StageDB>')`; the statements `ALTER TABLE <ReplicaDB>.<copy> ATTACH PARTITION <p> FROM <StageDB>.<scratch>`, `ALTER TABLE <ReplicaDB>.<copy> DROP PARTITION <p>`, `ALTER TABLE <StageDB>.<scratch> DROP PART '<name>'`, `ALTER TABLE <ReplicaDB>.<copy> DROP PART '<name>'` (identifiers backquoted); the twenty-three tests of §22.3.
+- Produces (beyond the contract; Appendix B, Task 32): the trigger constants `TriggerStartup = "startup"`, `TriggerClickHouseRestart = "clickhouse_restart"`, `TriggerSelfAudit = "self_audit"` (Task 34's watcher and ticker pass them); `const LockFile = "LOCK"` (Task 34's `member.LockFile` must equal it; defining it as `install.LockFile` keeps them one name) and `var ErrStateDirLocked` (wrapped by the lock refusal, for Task 35's `clear-foreign`); `New`'s refusals (verbatim) `install: node id %q must match ^[a-z][a-z0-9-]{0,30}[a-z0-9]$`, `install: Pinned needs distinct ReplicaDB and StageDB`, `install: boot nonce %q must be 8 lowercase hex characters (NewBootNonce)`, `install: NetworkID and StateDir are required`, `install: disk budget is required`, `install: stop_installs_ratio must satisfy 0 < ratio < 1, got %v` (0 → 0.8), `install: self_audit_interval must be at least 10m, got %s` (0 → 6h), `install: Deps needs Conn, Copies and Sources`, `install: state dir %s is not a directory (%v)`, `install: journal %s belongs to node %q, not %q`, and the journal's `install: read journal %s: %w`, `install: journal %s: %w`, `install: journal %s has version %d, want 1`, `install: journal %s has a bad owner entry %q`, `install: journal %s has an empty entry for table %s`; `Apply`'s and `Audit`'s other errors `install: an update needs a snapshot id`, `install: the %s audit must pass before installs: %w`, `install: audit the copies the last audit did not cover: %w` (review fix 245-1), `install: manifest %s has no track frontier for owner %d`, `install: manifest %s lists %s with schema hash %s, but copy %s was created from schema hash %s`, `install: manifest %s, %s partition %s: %w` (around `gate.PlanPartition`), `install: %s of owner %d is quarantined locally (foreign scratch %s.%s); clear it offline with sentio-node si-member clear-foreign --table %s` (wraps `ErrForeign`), `install: ATTACH into %s partition %s gave parts %v, want %d with the kept parts' hash_of_all_files`, `install: before changing the copies of %s of owner %d: %w` (around `BeforeInstall`), `install: unknown audit trigger %q (want startup, clickhouse_restart, self_audit)`, `install: scratch %s.%s holds %v after the drops, want the kept parts %v`, `ClearForeign`'s `install: no install journal in %s`, `install: %s is not quarantined as foreign in %s`, and the wrapped errors `install: <action>: %w` around each ClickHouse statement and file operation, which name the statement, table or path (for example `install: %s: %w` around an `ALTER TABLE`, `install: create scratch %s.%s: %w`, `install: write journal: %w`); the semantics stated in the Notes (owners, the owner pass, recovery, the audit wait, the self-audit pacing, the quarantine's scope); slog messages (error) `install: a scratch holds a part the manifest does not list; the table is quarantined locally` (fields `owner`, `table`, `copy`, `scratch`, `snapshot`), `install: a scratch changed after its classification`, `install: the attached parts do not match the kept scratch parts; the partition is Diverged`, `install: a journaled part's content changed; the partition is Diverged`, `install: audit failed; installs wait for the next one`; (warn) `install: dropped a Diverged partition to rebuild it`, `install: the copy holds a part the manifest does not need; the partition is Diverged`, `install: the journal lists parts the manifest does not; the partition is Diverged`, `install: a journaled part is missing or changed; the partition is Diverged`, `install: dropped an equal-hash twin from a copy`, `install: the copy holds a part the journal does not list; the next install adopts or repairs it`, `install: no source delivered a part; deferred` (fields `table`, `partition`, `part`, `results`, `until`), `install: member disk budget exceeded; installs paused`, `install: keeping a foreign scratch for forensics`, `install: dropping a scratch table failed; the next start drops it`; (info) `install: copy brought to the manifest`, `install: adopted a part the journal did not list`, `install: auditing a copy the last audit did not cover` (fields `trigger`, `table`, `copy`; review fix 245-1), `install: retrying a fetch once from a clean scratch`, `install: dropped a stale scratch table`, `install: audit completed` (fields `trigger`, `clean`), `install: skipping a self-audit that follows the last one too closely`; the unexported seam `Installer.beforeVerify` (tests change a scratch through it); the unexported helpers of the review fixes `auditUncovered`, `auditKey`, `markAudited` (245-1), `sourcesFor`, `restoreBeforeOwnerPull` (245-4); extension tests `TestNewRefusesAnInvalidConfig`, `TestSelfAuditRunsAtMostOncePerHalfInterval`, `TestRestoreBeforeOwnerPullKeepsTheOtherSourcesInOrder`; test helpers `requireCH`, `recordingConn`, `fakeCopies`, `namedSource`, `row`, `fixture`, `newFixture`, `testSchema`, `rowID`, `frontier`, `manifestHashes`, `scripted`, `fetchFunc`, `outcome`, `errMemoryLimit`, `requireRefusal`, `uptimeConn`, `uptimeRow`, `requireRestartableCH`, `waitUptime`, `killClickHouse`, `noCopies`, `noSources`.
 
 Notes:
-- **One owner pass (spec §8.5 steps 1–7, contract §22.3).** `Apply` serves the owners of the ready copies and the owners the journal already holds (an owner without a copy is never journaled, which is what Task 34's readiness expects), ascending. It skips an owner whose journal is at `u.SnapshotID` with every ready copy journaled at its incarnation, without a Diverged partition, an unjournaled part or a quarantine. Otherwise, per ready copy in table-key order: reconcile the copy with `system.parts` (next note), plan every partition the manifest, the journal or the copy knows with `gate.PlanPartition` over (M, R, L), L the journal's row hashes for the partition, fetch each needed part (one fresh scratch per fetch, `ddl.ScratchIntent`) through `Deps.Sources(owner)` in order and classify it; then verify every copy (closure, placement, partition set); then commit every copy (`BeforeInstall` once per database before its first change, a repair's `DROP PARTITION`, one `ATTACH PARTITION … FROM` per scratch, `AfterAttach` after each); then one journal write holds every copy's parts and the owner's new entry (`u.SnapshotID`, `u.Entries[owner]`). A partition the manifest does not list has the zero root (`SumPartRowLtHashes(nil)`), so a journaled part there makes it Diverged and its repair is a `DROP PARTITION` alone; the manifest's partition set is the set of partitions it lists parts in. A copy whose table the manifest does not list (an incarnation not yet in a table set) must stay empty; one it lists must carry the manifest's `schema_hash` (`TableSchemaHash(NetworkID, copy.Schema)`), else the owner's pass fails with the schema-hash refusal.
+- **One owner pass (spec §8.5 steps 1–7, contract §22.3).** `Apply` serves the owners of the ready copies and the owners the journal already holds (an owner without a copy is never journaled, which is what Task 34's readiness expects), ascending. It skips an owner whose journal is at `u.SnapshotID` with every ready copy journaled at its incarnation, without a Diverged partition, an unjournaled part or a quarantine. Otherwise, per ready copy in table-key order: reconcile the copy with `system.parts` (next note), plan every partition the manifest, the journal or the copy knows with `gate.PlanPartition` over (M, R, L), L the journal's row hashes for the partition, fetch each needed part (one fresh scratch per fetch, `ddl.ScratchIntent`) through `Deps.Sources(owner)` in order (the bootstrap probe below aside) and classify it; then verify every copy (closure, placement, partition set); then commit every copy (`BeforeInstall` once per database before its first change, a repair's `DROP PARTITION`, one `ATTACH PARTITION … FROM` per scratch, `AfterAttach` after each); then one journal write holds every copy's parts and the owner's new entry (`u.SnapshotID`, `u.Entries[owner]`). A partition the manifest does not list has the zero root (`SumPartRowLtHashes(nil)`), so a journaled part there makes it Diverged and its repair is a `DROP PARTITION` alone; the manifest's partition set is the set of partitions it lists parts in. A copy whose table the manifest does not list (an incarnation not yet in a table set) must stay empty; one it lists must carry the manifest's `schema_hash` (`TableSchemaHash(NetworkID, copy.Schema)`), else the owner's pass fails with the schema-hash refusal.
 - **An owner's copies move together (refines contract §22.3, Appendix B).** The journal holds one (snapshot, entry) per owner and no snapshot per table (§22.2 fixes the shape), and Plan S3-C4 serves a database only while every table of it equals the owner's entry, so a table committed alone would be ahead of the entry `TableState` reports for it. Nothing of an owner therefore changes before every ready copy of it verified, and one deferred part delays the owner's other tables; this is the contract's "an owner's journal entry advances only once every ready copy of that owner closes", applied to the parts as well. A failure after the first change (an `ATTACH` error, `AfterAttach`, a crash) leaves parts the journal does not list; `TableState.Diverged` and `Stats.AuditClean` report them until a pass adopts them.
 - **Reconciliation and recovery (spec §8.7, K36).** Per copy, a journaled part whose name is gone or whose `hash_of_all_files` or rows changed marks its partition Diverged; the parts the journal does not list are scanned by name (`chexec.ScanParts`, one query, never a full scan), one equal in (row hash, `hash_of_all_files`) to a present journaled part is a twin and is dropped with `ALTER TABLE <ReplicaDB>.<copy> DROP PART '<name>'` (after `BeforeInstall`), of unjournaled twins the smallest name stays, and what remains is a candidate. The journal names no in-flight target, so K36's "journaled target manifest" is the manifest of the next `Apply`: an audit only counts the candidates (the copy is unclean), and `Apply` adopts each candidate whose row hash the target still needs (M − L, once per occurrence) or marks its partition Diverged. `Apply` reconciles each copy it touches too (one `system.parts` read per copy and pass), so a journal behind its copy never makes a pass attach a part twice; adoptions are journaled only with the pass, Diverged marks at once.
 - **Diverged repair.** A Diverged partition is rebuilt from every part the manifest lists for it, each in its own scratch; after the verification, `ALTER TABLE <ReplicaDB>.<copy> DROP PARTITION <p>` (only when the copy has a part in p) and one `ALTER TABLE <ReplicaDB>.<copy> ATTACH PARTITION <p> FROM <StageDB>.<scratch>` per scratch; the other partitions keep their parts. The replacing statement is never issued: `TestInstallNeverIssuesReplacePartition` reads the package's sources (the `go_test` carries them as `data`), and every ClickHouse-gated test's `recordingConn` fails the test on it and on any `OPTIMIZE`, `TRUNCATE` or `SYSTEM` statement (Global Constraints). Measured while drafting on `clickhouse/clickhouse-server:26.3` (26.3.51.7): a MergeTree table of two good parts and one foreign part, repaired by the replacing statement from a two-part scratch, held 5 rows after `SYSTEM KILL` and the restart, and the same repair with `DROP PARTITION` and `ATTACH PARTITION … FROM` kept 2 (Appendix B, mechanics M3 and M4); `TestInstallDivergedRepairSurvivesAReloadInsideTheOutdatedWindow` measures the member's own path, on 26.3.37.3 in CI.
+- **Bootstrap restore probe (spec §8.6: the P1 backups are the bootstrap source; review fix 245-4).** While an owner's journal holds no entry for it (`SnapshotID` empty: its copies are filled for the first time), the first fetch of each of its copies tries the source named `restore` right before the one named `owner_pull` (`restoreBeforeOwnerPull`: any source in front of the owner pull, such as Plan S3-E1's hard-link source, stays in front; without a restore source nothing changes), once per copy and process, also when the pass fails after it and runs again; every other part, and every part once the owner is journaled, keeps the P2 order. The probe installs that part from the newest backup that lists it and proves the member's restore path (its key, `READ ON S3`, the bucket) on every bootstrap, so Plan S3-C3's bootstrap shows installs from the backups beside the owner pull's; it costs one partition restore per copy, because Task 31's restore copies one needed part per `RESTORE` and restoring every part of a bootstrap would restore each partition once per part. A probe that misses, is refused or unreachable is counted and moves to the next source like any fetch.
 - **Scratch classification and fallback (spec §8.5 step 4, K35).** A pull is classified with `Single` set to the need's (row hash, rows); the source named `restore` in restore mode (`Single` nil): the needed parts stay and every other part is dropped inside the scratch with `ALTER TABLE <StageDB>.<scratch> DROP PART '<name>'`, and a restore that keeps nothing counts as `missed`. `rename_race` and `doubled` drop the scratch and retry once from a clean one, then move on; `split` moves to the next source at once; `missed`, `refused` and `unreachable` (and a `fetched` result with `Err` set, counted `refused`) move on and are never retried within the pass. A part no source delivered is deferred, in memory, per (owner, table, partition, row hash), 1 m doubling to 30 m; until the deadline no source runs for it and the owner's pass fails at once with `ErrNoSourceSucceeded`; a restart retries at once. Every attempt counts one outcome in `Stats.Outcomes`; `Stats.Installs` counts the kept parts a committed pass installed, per source.
 - **The closure is over what the scratches hold.** `verify` lists every scratch again; a scratch that no longer holds exactly its kept parts (name, `hash_of_all_files`, rows) is scanned again and the closure is computed over its content, so a scratch changed after its classification fails Σ(L) + Σ(kept) = R and nothing is attached (`TestInstallClosureFailureInstallsNothing` changes one through the unexported `beforeVerify` seam; with a correct gate the arithmetic cannot fail otherwise). A kept part that ClickHouse placed in another partition than the manifest lists fails the partition-set check, because `ATTACH PARTITION` of the listed partition would attach nothing.
 - **Foreign (K36).** A Foreign classification journals the table `foreign` with its `foreign_scratch` (the `StageDB` table name, kept for forensics; `DropStaleScratch` keeps it) and fails the pass with §22.3's text. The quarantine belongs to the table key whatever its incarnation: every later pass of that owner refuses at once with the clear-foreign hint and fetches nothing, the audits skip the table, and the owner's entry stays where it is (every ready copy must close) until an operator runs `sentio-node si-member clear-foreign --table <db.table>` with the si-member stopped. `ClearForeign` takes the state directory's `LOCK` with a non-blocking `flock` (the running role holds it, contract §23.1), clears the mark and the scratch name, and marks every partition the table's journal lists Diverged: the next start drops the scratch, and the next pass rebuilds those partitions through the gate, trusting none of the copy's parts.
-- **Audits (spec §8.7).** `Audit` with `startup` or `clickhouse_restart` makes `Stats.AuditClean` false until it completes; it reconciles every ready copy (quarantined tables skipped) without adopting. `self_audit` also scans every journaled, non-Diverged partition in full with `chparts.PartitionContentScan` and marks one whose journaled part's row hash changed; it runs at most once per half `SelfAuditInterval` (Task 34 ticks at the interval, so every tick runs, and a caller cannot loop the full scan). A startup or restart audit that failed leaves installs waiting: `Apply` runs it first. Task 34 drives `clickhouse_restart` from its `chrestart.Watcher`'s `OnRestart` and `self_audit` from its ticker; `TestAuditRerunsWhenClickHouseUptimeRegresses` wires a real `Watcher` to an uptime the test moves. `AuditClean` is true once an audit completed since the start or the last restart and no ready copy has a Diverged partition or an unjournaled part; a quarantine is reported apart (`TableState.Foreign`).
+- **Audits (spec §8.7).** `Audit` with `startup` or `clickhouse_restart` makes `Stats.AuditClean` false until it completes; it reconciles every ready copy (quarantined tables skipped) without adopting. `self_audit` also scans every journaled, non-Diverged partition in full with `chparts.PartitionContentScan` and marks one whose journaled part's row hash changed; it runs at most once per half `SelfAuditInterval` (Task 34 ticks at the interval, so every tick runs, and a caller cannot loop the full scan). A startup or restart audit that failed leaves installs waiting: `Apply` runs it first. An audit covers the copies that are ready when it runs; the copyset may make a copy ready later (its first pass after the audit, a copy it could not create at first, a new incarnation), and such a copy is unaudited until `Apply` audits it under the same trigger before its pass (`auditUncovered`, review fix 245-1), so a copy the copyset created again empty while the journal still lists its parts is compared with its journal, marked Diverged and rebuilt instead of being skipped as current. `NeedsPass` reports what a pass of the last update would do without a new manifest (a pending audit, an unaudited copy, a Diverged partition, an unjournaled part, outside an owner with a quarantined table); Task 34's copy watch re-applies the last update while it holds (review fix 245-2). Task 34 drives `clickhouse_restart` from its `chrestart.Watcher`'s `OnRestart` and `self_audit` from its ticker; `TestAuditRerunsWhenClickHouseUptimeRegresses` wires a real `Watcher` to an uptime the test moves. `AuditClean` is true once an audit completed since the start or the last restart, every ready copy was audited since then, and no ready copy has a Diverged partition or an unjournaled part; a quarantine is reported apart (`TableState.Foreign`).
 - **Disk budget (K35).** Before each pass's first fetch `Apply` reads `SELECT sum(bytes_on_disk) FROM system.parts WHERE database IN ('<ReplicaDB>', '<StageDB>')` (every part, active or not, the shadow's and other nodes' scratch included); at or above `StopInstallsRatio × DiskBudgetBytes` it returns `ErrInstallsPaused` with §22.3's text and changes nothing, while `Audit` and the shadow continue. `Stats.DiskUsedBytes` and `InstallsPaused` keep the last reading. The code default stays 0.8; Plan S3-C3 configures 0.5 over the member disk's total on devnet2 (D28).
 - **Startup drop and names (spec §8.5 last paragraph).** `DropStaleScratch` drops every `StageDB` table that starts with `NodePrefix(NodeID)` except a journaled `foreign_scratch`: the install scratch of every earlier boot, Task 31's restore (`…_r`) and fallback tables, and Task 33's `…_r…` replay and candidate scratch. The role calls it at startup step (7), before the audit and before anything of this boot creates a scratch. A node id holds no underscore (K29), so `member-a_` never matches `member-ab_…`. A boot nonce is 8 lowercase hex characters from `crypto/rand`; the install scratch counter starts at 1 per process.
 - **Reach and grants.** ClickHouse only, as `si_member`, within contract §23.2: `CREATE TABLE`, `DROP TABLE`, `ALTER … DROP PART` and `SELECT` on `hg_rstage` (the sources `INSERT` there); `ATTACH PARTITION … FROM` (`SELECT` on the scratch, `ALTER DELETE` and `INSERT` on the copy), `DROP PARTITION` and `DROP PART` (`ALTER DELETE`) and `SELECT` on `hg_replica`; `SELECT` on `system.parts` and `system.tables`. It never names `hg_safe`, `hg_unsafe`, `hg_promote` or `hg_member_unsafe`, and makes no RPC: no consensus format, no Raft-reachable call (contract §20.1).
@@ -9328,6 +9586,10 @@ func TestInstallRefusedPullFallsBackToRestoreAndDefers(t *testing.T) {
 	f.setSources(0, refused, restore)
 	inst := f.newInstaller(nil)
 	f.start(inst)
+	// The owner is journaled first (its table empty at s0), so s1 is no
+	// bootstrap and the sources run in the P2 order; the bootstrap's restore
+	// probe is TestInstallBootstrapProbesTheRestoreOncePerCopy's.
+	f.mustApply(inst, f.update("s0", 9, c))
 	f.promote(c, row{"", 1})
 	s1 := f.update("s1", 10, c)
 	f.conn.reset()
@@ -9367,6 +9629,67 @@ func TestInstallRefusedPullFallsBackToRestoreAndDefers(t *testing.T) {
 	}
 	if j, _ := inst.Entry(0); j.SnapshotID != "s1" {
 		t.Fatalf("Entry(0) = %s, want s1 while the part is deferred", j.SnapshotID)
+	}
+}
+
+// TestInstallBootstrapProbesTheRestoreOncePerCopy (housegate spec 2026-10-14
+// §8.6, the P1 backups are the bootstrap source; Plan S3-C2 review fix 245-4):
+// while an owner has no journaled entry, the first part each of its copies
+// fetches tries the restore before the owner pull, once per copy and process;
+// every other part, and every part of a journaled owner, keeps the P2 order. A
+// probe that misses costs that attempt, and a pass that fails after it does not
+// probe again when it runs anew.
+func TestInstallBootstrapProbesTheRestoreOncePerCopy(t *testing.T) {
+	f := newFixture(t, requireCH(t))
+	pools := f.table(0, "dex.pools", 4, false)
+	swaps := f.table(0, "dex.swaps", 3, false)
+	pull := f.source("owner_pull", f.pull(1))
+	restore := f.source("restore", f.pull(1))
+	f.setSources(0, pull, restore)
+	inst := f.newInstaller(nil)
+	f.start(inst)
+	f.promote(pools, row{"", 1})
+	f.promote(swaps, row{"", 2})
+	f.promote(swaps, row{"", 3})
+	s1 := f.update("s1", 10, pools, swaps)
+	f.mustApply(inst, s1)
+	f.requireCopyEqualsManifest(pools, s1)
+	f.requireCopyEqualsManifest(swaps, s1)
+	if restore.calls() != 2 || pull.calls() != 1 {
+		t.Fatalf("calls: restore %d, owner pull %d; want 2 and 1 (each copy's first part from the restore, the rest by owner pull)", restore.calls(), pull.calls())
+	}
+	if s := inst.Stats(); s.Installs["restore"] != 2 || s.Installs["owner_pull"] != 1 {
+		t.Fatalf("installs = %v, want 2 from the restore and 1 by owner pull", s.Installs)
+	}
+
+	// The owner is journaled now: its next part keeps the P2 order.
+	f.promote(swaps, row{"", 4})
+	s2 := f.update("s2", 11, pools, swaps)
+	f.mustApply(inst, s2)
+	f.requireCopyEqualsManifest(swaps, s2)
+	if restore.calls() != 2 || pull.calls() != 2 {
+		t.Fatalf("calls after s2: restore %d, owner pull %d; want 2 and 2", restore.calls(), pull.calls())
+	}
+
+	// Owner 2's backups hold nothing and its owner pull misses once: the
+	// probe costs one restore attempt, the pass fails and defers the part,
+	// and its next run takes both parts by owner pull without probing again.
+	mints := f.table(2, "nft.mints", 5, false)
+	pull2 := f.source("owner_pull", outcome(sources.OutcomeMissed, nil), f.pull(1))
+	restore2 := f.source("restore", outcome(sources.OutcomeMissed, nil))
+	f.setSources(2, pull2, restore2)
+	f.promote(mints, row{"", 5})
+	f.promote(mints, row{"", 6})
+	s3 := f.update("s3", 12, pools, swaps, mints)
+	requireRefusal(t, inst.Apply(context.Background(), s3), ErrNoSourceSucceeded, "of nft.mints ([restore: missed owner_pull: missed])")
+	f.advance(61 * time.Second)
+	f.mustApply(inst, s3)
+	f.requireCopyEqualsManifest(mints, s3)
+	if restore2.calls() != 1 || pull2.calls() != 3 {
+		t.Fatalf("owner 2 calls: restore %d, owner pull %d; want 1 and 3", restore2.calls(), pull2.calls())
+	}
+	if s := inst.Stats(); s.Installs["restore"] != 2 || s.Installs["owner_pull"] != 4 {
+		t.Fatalf("installs = %v, want 2 from the restore and 4 by owner pull", s.Installs)
 	}
 }
 
@@ -9550,6 +9873,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/sentioxyz/arbiter-core/dataplane/chrestart"
+	"github.com/sentioxyz/arbiter-core/dataplane/ddl"
 )
 
 // TestStartupAuditDropsEqualHashTwinsWithDropPart: a second part with the
@@ -9634,6 +9958,101 @@ func TestStartupAuditMarksAnyOtherMismatchDiverged(t *testing.T) {
 	}
 	if !inst.Stats().AuditClean {
 		t.Fatal("the audit is not clean after the repair")
+	}
+}
+
+// TestAStartWithACurrentJournalAuditsTheCopiesItFindsLater (Plan S3-C2 review
+// fix 245-1): the member restarts with its journal at the watermark, and its
+// copyset makes the copies ready only after the startup audit ran: one copy was
+// lost and its first pass created it again empty, the other lost a journaled
+// part. The audit covered neither, so the audit is unclean, both copies report
+// Diverged and NeedsPass holds until Apply of the very manifest the journal is
+// at audits them and rebuilds what they lost.
+func TestAStartWithACurrentJournalAuditsTheCopiesItFindsLater(t *testing.T) {
+	f := newFixture(t, requireCH(t))
+	lost := f.table(0, "dex.swaps", 3, false)
+	altered := f.table(0, "dex.pools", 4, false)
+	f.setSources(0, f.source("owner_pull", f.pull(1)))
+	inst := f.newInstaller(nil)
+	f.start(inst)
+	f.promote(lost, row{"", 1})
+	f.promote(altered, row{"", 2})
+	f.promote(altered, row{"", 3})
+	s1 := f.update("s1", 10, lost, altered)
+	f.mustApply(inst, s1)
+
+	// While the member is down: one copy is gone (the copyset's first pass
+	// creates it again, empty), the other loses a journaled part.
+	f.exec("DROP TABLE " + qualified(f.pinned.ReplicaDB, lost.Table) + " SYNC")
+	if err := ddl.EnsureCopy(context.Background(), f.raw, f.pinned, lost.Schema, lost.IncarnationSeq); err != nil {
+		t.Fatal(err)
+	}
+	f.exec("ALTER TABLE " + qualified(f.pinned.ReplicaDB, altered.Table) + " DROP PART '" + f.copyParts(altered)[0].Name + "'")
+
+	// The new process audits while its copyset reports no ready copy yet.
+	ready := f.copies.Copies()
+	f.copies.mu.Lock()
+	f.copies.list = nil
+	f.copies.mu.Unlock()
+	inst = f.newInstaller(nil)
+	f.start(inst)
+	if !inst.Stats().AuditClean {
+		t.Fatalf("stats = %+v, want a clean audit while no copy is ready", inst.Stats())
+	}
+	f.copies.mu.Lock()
+	f.copies.list = ready
+	f.copies.mu.Unlock()
+	if inst.Stats().AuditClean || !inst.NeedsPass() {
+		t.Fatalf("AuditClean %v, NeedsPass %v with ready copies the audit never covered; want false and true", inst.Stats().AuditClean, inst.NeedsPass())
+	}
+	for _, st := range inst.Tables(0) {
+		if !st.Diverged || st.SnapshotID != "s1" {
+			t.Fatalf("Tables(0) = %+v, want every copy Diverged at s1 until it is audited", inst.Tables(0))
+		}
+	}
+	f.mustApply(inst, s1)
+	f.requireCopyEqualsManifest(lost, s1)
+	f.requireCopyEqualsManifest(altered, s1)
+	if s := inst.Stats(); !s.AuditClean || s.AuditRuns[TriggerStartup] != 1 || inst.NeedsPass() {
+		t.Fatalf("stats = %+v, NeedsPass %v; want clean after the pass, one startup run and nothing left", s, inst.NeedsPass())
+	}
+}
+
+// TestAnAuditThatFindsDamageAsksForAPass (Plan S3-C2 review fix 245-2): with the
+// journal at the manifest and the copy set unchanged, a self-audit and then a
+// restart audit that find a journaled part gone persist Diverged; NeedsPass
+// holds until Apply of the same manifest rebuilds the partition, so the role
+// repairs the copy while the watermark stands still.
+func TestAnAuditThatFindsDamageAsksForAPass(t *testing.T) {
+	f := newFixture(t, requireCH(t))
+	c := f.table(0, "dex.swaps", 3, false)
+	f.setSources(0, f.source("owner_pull", f.pull(1)))
+	inst := f.newInstaller(nil)
+	f.start(inst)
+	f.promote(c, row{"", 1})
+	f.promote(c, row{"", 2})
+	s1 := f.update("s1", 10, c)
+	f.mustApply(inst, s1)
+	if inst.NeedsPass() {
+		t.Fatal("NeedsPass = true with every copy at the manifest")
+	}
+	ctx := context.Background()
+	for _, trigger := range []string{TriggerSelfAudit, TriggerClickHouseRestart} {
+		f.exec("ALTER TABLE " + qualified(f.pinned.ReplicaDB, c.Table) + " DROP PART '" + f.copyParts(c)[0].Name + "'")
+		if err := inst.Audit(ctx, trigger); err != nil {
+			t.Fatalf("Audit(%s): %v", trigger, err)
+		}
+		if !inst.NeedsPass() || inst.Stats().AuditClean {
+			t.Fatalf("after the %s audit: NeedsPass %v, AuditClean %v; want true and false", trigger, inst.NeedsPass(), inst.Stats().AuditClean)
+		}
+		f.mustApply(inst, s1)
+		f.requireCopyEqualsManifest(c, s1)
+		if inst.NeedsPass() || !inst.Stats().AuditClean {
+			t.Fatalf("after repairing the %s audit's finding: NeedsPass %v, AuditClean %v; want false and true", trigger, inst.NeedsPass(), inst.Stats().AuditClean)
+		}
+	}
+	if j, _ := inst.Entry(0); j.SnapshotID != "s1" {
+		t.Fatalf("Entry(0) = %s, want s1: the repairs needed no new manifest", j.SnapshotID)
 	}
 }
 
@@ -10044,12 +10463,16 @@ Create `member/install/installer_test.go`:
 package install
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/housegate/housegate/pkg/replay/payloadexec"
 
 	"github.com/sentioxyz/arbiter-core/dataplane/ddl"
 	"github.com/sentioxyz/arbiter-core/member/copyset"
@@ -10090,6 +10513,42 @@ func TestInstallNeverIssuesReplacePartition(t *testing.T) {
 	}
 	if checked != 5 {
 		t.Fatalf("checked %d source files, want the package's 5 (installer, journal, audit, scratch, foreign)", checked)
+	}
+}
+
+// namedSource is a source that only has a name.
+type namedSource string
+
+func (n namedSource) Name() string { return string(n) }
+
+func (namedSource) Fetch(context.Context, sources.Need, payloadexec.TableSchema, sources.Scratch) sources.Result {
+	return sources.Result{}
+}
+
+// TestRestoreBeforeOwnerPullKeepsTheOtherSourcesInOrder: the bootstrap probe's
+// order (Plan S3-C2 review fix 245-4) moves the restore right before the owner
+// pull and changes nothing else; a source in front of the owner pull stays in
+// front, and a list without a restore or without an owner pull, or with the
+// restore already in front, is returned as it is.
+func TestRestoreBeforeOwnerPullKeepsTheOtherSourcesInOrder(t *testing.T) {
+	for _, tc := range []struct{ in, want []string }{
+		{[]string{"owner_pull", "peer_unsafe_pull", "restore"}, []string{"restore", "owner_pull", "peer_unsafe_pull"}},
+		{[]string{"member_unsafe_hardlink", "owner_pull", "peer_unsafe_pull", "restore"}, []string{"member_unsafe_hardlink", "restore", "owner_pull", "peer_unsafe_pull"}},
+		{[]string{"owner_pull", "peer_unsafe_pull"}, []string{"owner_pull", "peer_unsafe_pull"}},
+		{[]string{"peer_unsafe_pull", "restore"}, []string{"peer_unsafe_pull", "restore"}},
+		{[]string{"restore", "owner_pull"}, []string{"restore", "owner_pull"}},
+	} {
+		in := make([]sources.Source, 0, len(tc.in))
+		for _, name := range tc.in {
+			in = append(in, namedSource(name))
+		}
+		var got []string
+		for _, s := range restoreBeforeOwnerPull(in) {
+			got = append(got, s.Name())
+		}
+		if !slices.Equal(got, tc.want) {
+			t.Fatalf("restoreBeforeOwnerPull(%v) = %v, want %v", tc.in, got, tc.want)
+		}
 	}
 }
 
@@ -10783,8 +11242,9 @@ var outcomes = []Outcome{OutcomeKept, OutcomeRenameRace, OutcomeSplit, OutcomeDo
 // TableState is one ready copy as the journal sees it. Entry and SnapshotID
 // are the owner's journal entry once the copy holds exactly that manifest's
 // parts, and empty before its first install. Diverged is true while a
-// partition awaits a rebuild or the copy holds parts the journal does not
-// list yet; Foreign while the table is quarantined.
+// partition awaits a rebuild, the copy holds parts the journal does not list
+// yet, or the copy was not audited since the start or the last ClickHouse
+// restart; Foreign while the table is quarantined.
 type TableState struct {
 	Owner             uint64
 	TableKey          string
@@ -10865,6 +11325,13 @@ type Installer struct {
 	lastSelfAudit time.Time
 	paused        bool
 	diskUsed      uint64
+	// audited holds the ready copies (auditKey) that the audit since the
+	// start or the last ClickHouse restart covered; a ready copy outside it
+	// is unaudited until Apply audits it (Plan S3-C2 review fix 245-1).
+	audited map[string]bool
+	// probed holds the copies (auditKey) whose bootstrap restore probe ran in
+	// this process (Plan S3-C2 review fix 245-4).
+	probed map[string]bool
 }
 
 // New validates cfg and reads the journal from cfg.StateDir, which must
@@ -10928,19 +11395,22 @@ func New(cfg Config, d Deps) (*Installer, error) {
 		cfg: cfg, d: d, path: path, zeroRoot: zeroRoot, journal: j,
 		pending: map[string]int{}, deferred: map[string]*deferral{},
 		counts: map[Outcome]uint64{}, installs: map[string]uint64{}, diverged: map[uint64]uint64{}, auditRuns: map[string]uint64{},
-		auditTrigger: TriggerStartup,
+		auditTrigger: TriggerStartup, audited: map[string]bool{}, probed: map[string]bool{},
 	}, nil
 }
 
 // Apply brings every ready copy of every owner whose journal is not at
 // u.SnapshotID to u.Manifest and then sets that owner's journal entry to
-// (u.SnapshotID, u.Entries[owner]). The owners are those of the ready copies
-// and those the journal already holds. Apply is idempotent: an owner whose
-// journal is at u.SnapshotID and whose ready copies are all journaled, clean
-// and quarantine-free is skipped, so the role may offer the same update again
-// whenever the copy set changes. Before its first pass after the start or a
-// ClickHouse restart it runs the audit the copies are waiting for. The error
-// joins every owner's failure; the caller offers the update again later.
+// (u.SnapshotID, u.Entries[owner]). The owners are those of the ready copies and
+// those the journal already holds. Apply is idempotent: an owner whose journal
+// is at u.SnapshotID and whose ready copies are all journaled, clean and
+// quarantine-free is skipped, so the role may offer the same update again
+// whenever the copy set changes or NeedsPass holds. Before its first pass after
+// the start or a ClickHouse restart it runs the audit the copies are waiting
+// for, and before every pass it audits each ready copy that audit did not cover
+// (a copy the copyset made ready afterwards, Plan S3-C2 review fix 245-1), so no
+// copy is skipped as current without having been compared with its journal. The
+// error joins every owner's failure; the caller offers the update again later.
 func (i *Installer) Apply(ctx context.Context, u manifestfeed.Update) error {
 	i.work.Lock()
 	defer i.work.Unlock()
@@ -10952,11 +11422,15 @@ func (i *Installer) Apply(ctx context.Context, u manifestfeed.Update) error {
 			return fmt.Errorf("install: the %s audit must pass before installs: %w", trigger, err)
 		}
 	}
+	ready := i.readyCopies()
+	if err := i.auditUncovered(ctx, ready); err != nil {
+		return fmt.Errorf("install: audit the copies the last audit did not cover: %w", err)
+	}
 	if err := i.checkDiskBudget(ctx); err != nil {
 		return err
 	}
 	byOwner := map[uint64][]copyset.Copy{}
-	for _, c := range i.readyCopies() {
+	for _, c := range ready {
 		byOwner[c.Owner] = append(byOwner[c.Owner], c)
 	}
 	tables := make(map[string]*replay.TableManifest, len(u.Manifest.Tables))
@@ -11268,7 +11742,7 @@ func (i *Installer) fetchPart(ctx context.Context, owner uint64, c copyset.Copy,
 		PartName: need.PartName, PartPhysHash: need.PartPhysHash, PartRowLtHash: need.PartRowLtHash, RowCount: need.RowCount,
 	}
 	var results []string
-	for _, src := range i.d.Sources(owner) {
+	for _, src := range i.sourcesFor(owner, c) {
 		for attempt := 0; attempt < 2; attempt++ {
 			scratch, err := i.newScratch(ctx, c.Schema)
 			if err != nil {
@@ -11319,6 +11793,56 @@ func (i *Installer) fetchPart(ctx context.Context, owner uint64, c copyset.Copy,
 	d := i.deferAgain(dkey, results)
 	i.d.Logger.Warn("install: no source delivered a part; deferred", "table", c.TableKey, "partition", need.PartitionID, "part", need.PartName, "results", results, "until", d.until)
 	return sources.Scratch{}, nil, false, refuse(ErrNoSourceSucceeded, "install: no source delivered part %s of %s (%v); deferred until %s", need.PartName, c.TableKey, results, d.until.UTC().Format(time.RFC3339))
+}
+
+// sourcesFor is the order fetchPart tries owner's sources in for copy c: the P2
+// order of Deps.Sources, except for the first fetch of each copy while its owner
+// bootstraps (the journal holds no entry for it yet), which tries the restore
+// right before the owner pull (Plan S3-C2 review fix 245-4; housegate spec
+// 2026-10-14 §8.6: the P1 backups are the bootstrap source). The probe runs once
+// per copy and process, also when its pass fails afterwards: it installs that
+// part from the newest backup that lists it and proves the member's restore path
+// (its key, READ ON S3, the bucket) on every bootstrap, at the cost of one
+// partition restore per copy; the restore copies one needed part per RESTORE, so
+// restoring every part would restore each partition once per part. A probe that
+// misses, is refused or unreachable costs that attempt, and the part comes from
+// the next source.
+func (i *Installer) sourcesFor(owner uint64, c copyset.Copy) []sources.Source {
+	list := i.d.Sources(owner)
+	key := auditKey(c)
+	i.mu.Lock()
+	oj := i.journal.Owners[ownerKey(owner)]
+	probe := (oj == nil || oj.SnapshotID == "") && !i.probed[key]
+	if probe {
+		i.probed[key] = true
+	}
+	i.mu.Unlock()
+	if !probe {
+		return list
+	}
+	return restoreBeforeOwnerPull(list)
+}
+
+// restoreBeforeOwnerPull moves the source named restore right before the
+// source named owner_pull and keeps every other source in its place, so a
+// source in front of the owner pull (Plan S3-E1's hard-link source) stays in
+// front. A list without either, or with the restore already in front of the
+// owner pull, is returned as it is.
+func restoreBeforeOwnerPull(list []sources.Source) []sources.Source {
+	at := slices.IndexFunc(list, func(s sources.Source) bool { return s.Name() == sources.SourceOwnerPull })
+	from := slices.IndexFunc(list, func(s sources.Source) bool { return s.Name() == restoreSource })
+	if at < 0 || from < at {
+		return list
+	}
+	out := make([]sources.Source, 0, len(list))
+	out = append(out, list[:at]...)
+	out = append(out, list[from])
+	for k := at; k < len(list); k++ {
+		if k != from {
+			out = append(out, list[k])
+		}
+	}
+	return out
 }
 
 // classify scans one fetched scratch and runs gate.Classify over it. For a
@@ -11730,15 +12254,16 @@ func (i *Installer) Tables(owner uint64) []TableState {
 				}
 			}
 		}
-		st.Diverged = st.Diverged || i.pending[pendingKey(owner, c.TableKey)] > 0
+		st.Diverged = st.Diverged || i.pending[pendingKey(owner, c.TableKey)] > 0 || !i.audited[auditKey(c)]
 		out = append(out, st)
 	}
 	return out
 }
 
 // Stats returns the counters and gauges. AuditClean is true once an audit
-// completed since the start or the last ClickHouse restart and no ready copy
-// has a partition awaiting a rebuild or a part awaiting adoption.
+// completed since the start or the last ClickHouse restart, covered every
+// ready copy (a copy made ready later counts once Apply audited it), and no
+// ready copy has a partition awaiting a rebuild or a part awaiting adoption.
 func (i *Installer) Stats() Stats {
 	copies := i.readyCopies()
 	i.mu.Lock()
@@ -11767,7 +12292,7 @@ func (i *Installer) Stats() Stats {
 	clean := i.auditDone
 	for _, c := range copies {
 		s.DivergedPartitions[c.Owner] = 0
-		if i.pending[pendingKey(c.Owner, c.TableKey)] > 0 {
+		if i.pending[pendingKey(c.Owner, c.TableKey)] > 0 || !i.audited[auditKey(c)] {
 			clean = false
 		}
 		if oj := i.journal.Owners[ownerKey(c.Owner)]; oj != nil {
@@ -11781,6 +12306,46 @@ func (i *Installer) Stats() Stats {
 	}
 	s.AuditClean = clean
 	return s
+}
+
+// NeedsPass reports whether Apply of the last update has work that waits for no
+// new manifest (Plan S3-C2 review fix 245-2): the audit the copies wait for has
+// not completed, a ready copy was not audited since the start or the last
+// ClickHouse restart, or a ready copy has a partition awaiting a rebuild or a
+// part the journal does not list. An owner with a quarantined table is left out:
+// every pass of it is refused until an operator clears the quarantine offline.
+// The role re-applies its last update while NeedsPass holds, so the damage a
+// startup, restart or self-audit records is repaired while the watermark stands
+// still.
+func (i *Installer) NeedsPass() bool {
+	copies := i.readyCopies()
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if !i.auditDone {
+		return true
+	}
+	quarantined := map[uint64]bool{}
+	for _, c := range copies {
+		if oj := i.journal.Owners[ownerKey(c.Owner)]; oj != nil {
+			if tj := oj.Tables[c.TableKey]; tj != nil && tj.Foreign {
+				quarantined[c.Owner] = true
+			}
+		}
+	}
+	for _, c := range copies {
+		if quarantined[c.Owner] {
+			continue
+		}
+		if !i.audited[auditKey(c)] || i.pending[pendingKey(c.Owner, c.TableKey)] > 0 {
+			return true
+		}
+		if oj := i.journal.Owners[ownerKey(c.Owner)]; oj != nil {
+			if tj := oj.Tables[c.TableKey]; tj != nil && tj.IncarnationSeq == c.IncarnationSeq && tj.Copy == c.Table && len(tj.Diverged) > 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // update applies fn to a copy of the journal and, when fn reports a change,
@@ -12030,16 +12595,19 @@ import (
 )
 
 // Audit audits every ready copy against its journal as a multiset (housegate
-// spec 2026-10-14 §8.7): of parts with equal row hash and hash_of_all_files
-// it keeps the journaled name (else the smallest) and drops the others with a
-// local DROP PART; a journaled part that is missing or changed marks its
-// partition Diverged; a part the journal does not list is scanned by name and
-// left for the next Apply to adopt or repair (Plan S3-C2 K36). Trigger
-// self_audit also scans every partition of every copy in full, and runs at
-// most once per half SelfAuditInterval. Triggers startup and
-// clickhouse_restart make Stats.AuditClean false until the audit completes;
-// Apply runs a pending one itself before it installs anything. A quarantined
-// table is not audited.
+// spec 2026-10-14 §8.7): of parts with equal row hash and hash_of_all_files it
+// keeps the journaled name (else the smallest) and drops the others with a local
+// DROP PART; a journaled part that is missing or changed marks its partition
+// Diverged; a part the journal does not list is scanned by name and left for the
+// next Apply to adopt or repair (Plan S3-C2 K36). Trigger self_audit also scans
+// every partition of every copy in full, and runs at most once per half
+// SelfAuditInterval. Triggers startup and clickhouse_restart make
+// Stats.AuditClean false until the audit completes; Apply runs a pending one
+// itself before it installs anything. The audit covers the copies that are ready
+// when it runs; a copy the copyset makes ready afterwards is unaudited
+// (Stats.AuditClean false, TableState.Diverged, NeedsPass) until Apply audits it
+// before its pass (Plan S3-C2 review fix 245-1). A quarantined table is not
+// audited.
 func (i *Installer) Audit(ctx context.Context, trigger string) error {
 	if !slices.Contains(triggers, trigger) {
 		return fmt.Errorf("install: unknown audit trigger %q (want %s)", trigger, strings.Join(triggers, ", "))
@@ -12060,6 +12628,7 @@ func (i *Installer) audit(ctx context.Context, trigger string) error {
 	}
 	if trigger != TriggerSelfAudit {
 		i.auditDone, i.auditTrigger = false, trigger
+		i.audited = map[string]bool{}
 	}
 	i.auditRuns[trigger]++
 	i.mu.Unlock()
@@ -12071,7 +12640,9 @@ func (i *Installer) audit(ctx context.Context, trigger string) error {
 		}
 		if err := i.auditCopy(ctx, trigger, c); err != nil {
 			errs = append(errs, err)
+			continue
 		}
+		i.markAudited(c)
 	}
 	if err := errors.Join(errs...); err != nil {
 		i.d.Logger.Error("install: audit failed; installs wait for the next one", "trigger", trigger, "err", err)
@@ -12085,6 +12656,49 @@ func (i *Installer) audit(ctx context.Context, trigger string) error {
 	i.mu.Unlock()
 	i.d.Logger.Info("install: audit completed", "trigger", trigger, "clean", i.Stats().AuditClean)
 	return nil
+}
+
+// auditUncovered audits, before an install pass, each ready copy that the audit
+// since the start or the last ClickHouse restart did not cover: a copy the
+// copyset made ready after that audit, such as one its first pass created again
+// empty while the journal still lists its parts (Plan S3-C2 review fix 245-1).
+// Each is reconciled as that audit would have (auditCopy under its trigger); the
+// audit's run count does not change.
+func (i *Installer) auditUncovered(ctx context.Context, ready []copyset.Copy) error {
+	i.mu.Lock()
+	trigger := i.auditTrigger
+	var todo []copyset.Copy
+	for _, c := range ready {
+		if !i.audited[auditKey(c)] {
+			todo = append(todo, c)
+		}
+	}
+	i.mu.Unlock()
+	var errs []error
+	for _, c := range todo {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		i.d.Logger.Info("install: auditing a copy the last audit did not cover", "trigger", trigger, "table", c.TableKey, "copy", c.Table)
+		if err := i.auditCopy(ctx, trigger, c); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		i.markAudited(c)
+	}
+	return errors.Join(errs...)
+}
+
+// auditKey identifies one ready copy for the audit's coverage and the
+// bootstrap probe: its owner, table key, incarnation and copy name.
+func auditKey(c copyset.Copy) string {
+	return fmt.Sprintf("%d/%s#%d/%s", c.Owner, c.TableKey, c.IncarnationSeq, c.Table)
+}
+
+func (i *Installer) markAudited(c copyset.Copy) {
+	i.mu.Lock()
+	i.audited[auditKey(c)] = true
+	i.mu.Unlock()
 }
 
 func (i *Installer) auditCopy(ctx context.Context, trigger string, c copyset.Copy) error {
@@ -12318,7 +12932,7 @@ W=<worktree path>; cd "$W" && test -z "$(gofmt -l member/install)" && bazel test
   && bazel test --build_tests_only --@rules_go//go/config:race //member/install:install_test --test_output=errors
 ```
 
-Expected: `gazelle keeps member/install/BUILD.bazel`; `//member/install:install_test PASSED`; `4` (`TestClearForeignRefusesWhileTheStateDirIsLocked`, `TestInstallNeverIssuesReplacePartition`, `TestNewRefusesAnInvalidConfig`, `TestScratchNamesCarryTheNodeIDAndBootNonce`); `18` (the seventeen tests gated on `ARBITER_CH_INTEGRATION` and the restart test); PASSED again under the race detector.
+Expected: `gazelle keeps member/install/BUILD.bazel`; `//member/install:install_test PASSED`; `5` (`TestClearForeignRefusesWhileTheStateDirIsLocked`, `TestInstallNeverIssuesReplacePartition`, `TestNewRefusesAnInvalidConfig`, `TestRestoreBeforeOwnerPullKeepsTheOtherSourcesInOrder`, `TestScratchNamesCarryTheNodeIDAndBootNonce`); `21` (the twenty tests gated on `ARBITER_CH_INTEGRATION` and the restart test); PASSED again under the race detector.
 
 - [ ] **Step 13: Run the ClickHouse-gated tests on 25.8 and 26.3.37.3**
 
@@ -12343,7 +12957,7 @@ for image in clickhouse/clickhouse-server:25.8 clickhouse/clickhouse-server:26.3
 done
 ```
 
-Expected, per image: the server version (`25.8.…`, then `26.3.37.3`), `PASSED`, `21`, and the one line `--- SKIP: TestInstallDivergedRepairSurvivesAReloadInsideTheOutdatedWindow (0.00s)` (Step 14 runs it). The test log shows, among others, `install: dropped a Diverged partition to rebuild it`, `install: dropped an equal-hash twin from a copy`, `install: adopted a part the journal did not list` and `install: a scratch holds a part the manifest does not list; the table is quarantined locally`. A failure of `TestInstallAppendsNeededPartsWithAttachPartitionFrom` on the `hash_of_all_files` comparison means `ATTACH PARTITION … FROM` rewrote the part on that server: compare with Plan S3-A's mechanics M2 before changing anything here.
+Expected, per image: the server version (`25.8.…`, then `26.3.37.3`), `PASSED`, `25`, and the one line `--- SKIP: TestInstallDivergedRepairSurvivesAReloadInsideTheOutdatedWindow (0.00s)` (Step 14 runs it). The test log shows, among others, `install: dropped a Diverged partition to rebuild it`, `install: dropped an equal-hash twin from a copy`, `install: adopted a part the journal did not list`, `install: auditing a copy the last audit did not cover` and `install: a scratch holds a part the manifest does not list; the table is quarantined locally`. A failure of `TestInstallAppendsNeededPartsWithAttachPartitionFrom` on the `hash_of_all_files` comparison means `ATTACH PARTITION … FROM` rewrote the part on that server: compare with Plan S3-A's mechanics M2 before changing anything here.
 
 - [ ] **Step 14: Run the restart test against a restartable server**
 
@@ -14963,7 +15577,7 @@ Spec §8.1 (the si-member, separate from the SNode, with its own users and datab
 
 **Files:**
 - Create: `member/config.go` (the constants, `Peer`, `Config`, `Deps`, defaults and validation), `member/lock.go` (the state-directory flock), `member/role.go` (package doc, `Role`, `New`, `Run`, `Ready`, the composition), `member/stats.go` (`OwnerStats`, `Stats`, `Role.Stats`), `member/BUILD.bazel` (gazelle's output plus one `data` line on the `go_test`, Step 8)
-- Test: `member/fake_arbiter_test.go` (a fake data-plane listener and DA data address that fails on any method outside contract §20.1, and the fixtures), `member/role_test.go` (the eleven tests of contract §23.1 and eleven beyond it)
+- Test: `member/fake_arbiter_test.go` (a fake data-plane listener and DA data address that fails on any method outside contract §20.1, and the fixtures), `member/role_test.go` (the eleven tests of contract §23.1 and thirteen beyond it)
 - Create: `member/confinement/doc.go` (package doc only), `member/confinement/confinement_test.go` (the fourteen tests: the thirteen of contract §23.3 and `TestConfinement_SIMemberHasNothingOnTheProtocolDatabases`), `member/confinement/BUILD.bazel` (gazelle's output)
 - Create: `scripts/ci/clickhouse-member-access-control.xml` (contract §23.4, verbatim), `scripts/ci/clickhouse-member-confinement.sh`. Reused unchanged: `scripts/ci/clickhouse-keeper.xml` (the single-node embedded Keeper, base `8f0bc43` `:1-25`) and `scripts/ci/clickhouse-mechanics-users.xml` (Plan S3-A Task 6: `default` with `access_management` and `named_collection_control`)
 - Modify: `.github/workflows/ci.yml` (append the job `member-confinement` after Plan S3-A Task 6's `clickhouse-mechanics`, the last job of the file on this branch); `.github/workflows/cut-release.yml` (two steps after Plan S3-A Task 6's `stop the mechanics pair`, before `compute next version`, base `:121`)
@@ -14978,16 +15592,16 @@ Line anchors refer to arbiter-core `8f0bc43` (v0.14.1). The worktree is Tasks 29
 - Consumes (Task 29): `(*dataplane.Client).GetSafeWatermark(ctx context.Context) (arbiter.SafeWatermark, error)`, `(*dataplane.Client).GetManifest(ctx context.Context, snapshotID string) (replay.SafeSnapshotManifest, error)`, `(*dataplane.Client).GetBlockVerification(ctx context.Context, blockSeq uint64) (wire.BlockVerification, error)`, `dataplane.ErrBlockNotSealed`; `manifestfeed.NewStore(src Source, entries int) *Store`, `(*manifestfeed.Store).GetSafeSnapshot(ctx context.Context, snapshotID string) (replay.SafeSnapshotManifest, error)`, `manifestfeed.Config{MaxWalk int; CacheEntries int; PollInterval time.Duration}`, `manifestfeed.Update{SnapshotID, ParentSnapshotID string; SafeBlockSeq uint64; Manifest replay.SafeSnapshotManifest; Entries map[uint64]replay.TrackFrontier; Changed []uint64; FullFetch bool; Walked int}`, `manifestfeed.NewFollower(cfg Config, src Source, store *Store, last string, lastEntries map[uint64]replay.TrackFrontier) (*Follower, error)`, `(*manifestfeed.Follower).Run(ctx context.Context, onUpdate func(context.Context, Update) error) error` (an update is accepted only after `onUpdate` returns nil, contract §21.4), `manifestfeed.ErrManifestRefused`; beyond contract §21.4 (Task 29's Appendix B), `manifestfeed.FollowerStats{Accepted, Refused, FullFetches, UpdateFailures uint64; Last string}` and `(*manifestfeed.Follower).Stats() FollowerStats`, the counters behind `member.Stats.FeedAccepted`, `FeedRefused` and `FeedFullFetches`.
 - Consumes (Task 30): `ddl.MemberPinned{MemberUnsafeDB, ReplicaDB, StageDB, NodeID, StoragePolicy string; KeeperShardID uint32}`, `ddl.DefaultMemberPinned(nodeID string, keeperShardID uint32, storagePolicy string) ddl.MemberPinned`, `ddl.ValidateMemberPinned(m ddl.MemberPinned, protocol ddl.Pinned) error`, `ddl.EnsureMemberDatabases(ctx context.Context, conn clickhouse.Conn, m ddl.MemberPinned) error`, `ddl.StageDatabase`, `ddl.ReplicaDatabase`; the suite also `ddl.EnsureCopy`, `ddl.CopyTableName`, `ddl.ScratchIntent`, `ddl.DropCopy`, `ddl.ListMemberTables`, `ddl.ListStageTables`; `copyset.Config{Pinned, Protocol, NetworkID, Genesis, Owners, HostIndexerID, Interval}`, `copyset.Deps{Conn, Registry, Logger, Dropped}`, `copyset.Copy{Owner, TableKey, IncarnationSeq, Table, Status, Schema, Ready}`, `copyset.New(cfg Config, d Deps) (*Reconciler, error)`, `(*copyset.Reconciler).Reconcile`, `Run`, `Copies`, `Copy`, `copyset.CheckNodeIDUnused(snap wire.TableRegistrySnapshot, purgeNodeSet []string, nodeID string) error`, `copyset.ErrNodeIDInUse`.
 - Consumes (Task 31): `sources.Source`, `sources.Need`, `sources.Scratch`, `sources.Result`, `sources.OutcomeFetched`, `sources.NewOwnerPull(conn clickhouse.Conn, collection, safeDatabase string) *RemotePull`, `sources.NewOwnerUnsafePull(conn clickhouse.Conn, collection, unsafeDatabase string) *RemotePull`, `sources.NewPeerUnsafePull(conn clickhouse.Conn, collection string) *RemotePull`, `sources.RestoreConfig`, `sources.NewRestore(conn clickhouse.Conn, cfg RestoreConfig, owner uint64) *RestoreSource`, `sources.CheckEngineFence(ctx context.Context, conn clickhouse.Conn, stageDB, probeTable string) error`, `sources.CheckRemoteIsReadOnly(ctx context.Context, conn clickhouse.Conn, collection string) error`, `sources.ReadOwnGrants(ctx context.Context, conn clickhouse.Conn) ([]Grant, error)`, `sources.CheckRemoteGrants(grants []Grant) error`, `sources.Grant`, `sources.ErrEngineFenceOff`, `sources.ErrRemoteWritable`, `sources.ErrGrantsUnreadable`; the ClickHouse tests of `member/sources/*_ch_test.go`, gated on `ARBITER_CH_INTEGRATION=1` and the confinement environment (`CH_ADDR`, `CH_PEER_ADDR`, `CH_PEER_ADDR_FROM_SERVER`, `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET`), which the runner runs after the suite (contract §22.1: the restore test runs only inside the confinement script).
-- Consumes (Task 32): `install.Config{Pinned, NetworkID, StateDir, BootNonce, DiskBudgetBytes, StopInstallsRatio, SelfAuditInterval}`, `install.Deps{Conn, Copies, Sources, BeforeInstall, AfterAttach, Logger, Now}`, `install.CopySet`, `install.New(cfg Config, d Deps) (*Installer, error)`, `(*install.Installer).Apply`, `Audit`, `DropStaleScratch`, `Entry(owner uint64) (OwnerJournal, bool)`, `Tables(owner uint64) []TableState`, `Stats() Stats`, `install.Outcome`, `install.OwnerJournal`, `install.TableState{… Diverged, Foreign bool}`, `install.Stats{Outcomes, Installs, DivergedPartitions, AuditRuns, AuditDroppedTwins, AuditClean, InstallsPaused, DiskUsedBytes, DiskBudgetBytes}`, `install.NewBootNonce() (string, error)`, `install.NodePrefix(nodeID string) string`, `install.ClearForeign(stateDir, tableKey string) error` (refuses with `install: state dir %s is locked by a running si-member` while `<state dir>/LOCK` is held), `install.DefaultStopInstallsRatio`, `install.DefaultSelfAuditInterval`, `install.MinSelfAuditInterval`, the outcome constants `install.OutcomeKept`, `OutcomeRenameRace`, `OutcomeSplit`, `OutcomeDoubled`, `OutcomeForeign`, `OutcomeMissed`, `OutcomeRefused`, `OutcomeUnreachable` (Task 32's names for contract §22.3's values); beyond contract §22.3 (Task 32's Appendix B), `install.LockFile` (`"LOCK"`, which `member.LockFile` is defined as, so the role's lock and `ClearForeign`'s are one name) and the audit triggers `install.TriggerStartup`, `install.TriggerClickHouseRestart`, `install.TriggerSelfAudit`. Task 32's `Apply` journals the owners of the ready copies and the owners its journal holds (an owner without a copy is never journaled), and it ignores the journal of a dropped copy, so `copyset.Deps.Dropped` stays nil (Task 32's Notes, "One owner pass" and "State directory").
+- Consumes (Task 32): `install.Config{Pinned, NetworkID, StateDir, BootNonce, DiskBudgetBytes, StopInstallsRatio, SelfAuditInterval}`, `install.Deps{Conn, Copies, Sources, BeforeInstall, AfterAttach, Logger, Now}`, `install.CopySet`, `install.New(cfg Config, d Deps) (*Installer, error)`, `(*install.Installer).Apply`, `Audit`, `DropStaleScratch`, `Entry(owner uint64) (OwnerJournal, bool)`, `Tables(owner uint64) []TableState`, `Stats() Stats`, `NeedsPass() bool` (review fix 245-2), `install.Outcome`, `install.OwnerJournal`, `install.TableState{… Diverged, Foreign bool}`, `install.Stats{Outcomes, Installs, DivergedPartitions, AuditRuns, AuditDroppedTwins, AuditClean, InstallsPaused, DiskUsedBytes, DiskBudgetBytes}`, `install.NewBootNonce() (string, error)`, `install.NodePrefix(nodeID string) string`, `install.ClearForeign(stateDir, tableKey string) error` (refuses with `install: state dir %s is locked by a running si-member` while `<state dir>/LOCK` is held), `install.DefaultStopInstallsRatio`, `install.DefaultSelfAuditInterval`, `install.MinSelfAuditInterval`, the outcome constants `install.OutcomeKept`, `OutcomeRenameRace`, `OutcomeSplit`, `OutcomeDoubled`, `OutcomeForeign`, `OutcomeMissed`, `OutcomeRefused`, `OutcomeUnreachable` (Task 32's names for contract §22.3's values); beyond contract §22.3 (Task 32's Appendix B), `install.LockFile` (`"LOCK"`, which `member.LockFile` is defined as, so the role's lock and `ClearForeign`'s are one name) and the audit triggers `install.TriggerStartup`, `install.TriggerClickHouseRestart`, `install.TriggerSelfAudit`. Task 32's `Apply` journals the owners of the ready copies and the owners its journal holds (an owner without a copy is never journaled), and it ignores the journal of a dropped copy, so `copyset.Deps.Dropped` stays nil (Task 32's Notes, "One owner pass" and "State directory").
 - Consumes (Task 33): `shadow.Config{NodeID, BootNonce, NetworkID, StateDir, Pinned, Genesis, Owners, HostIndexerID, PollMin, PollMax, VerdictWait}`, `shadow.Deps{Blocks, Watermark, Snapshots, Payloads, Conn, UnsafePull, Logger, Now}`, `shadow.New(cfg Config, d Deps) (*Verifier, error)`, `(*shadow.Verifier).Run`, `Stats`, `shadow.Stats{Blocks, MissedScans, Unverdicted, Mismatches, NextBlockSeq}`, `shadow.MismatchKind`, `shadow.MismatchReceipt`, `MismatchScan`, `MismatchClaim`, and, beyond contract §22.4 (Task 33's Appendix B), `shadow.MismatchKinds() []MismatchKind`.
 - Consumes (Plan S3-A, Plan S3-C1 and the base): `chrestart.StartedAt(ctx context.Context, conn clickhouse.Conn, now time.Time) (time.Time, error)`, `chrestart.Watcher{Interval, Skew time.Duration; Now func() time.Time; OnRestart func(ctx context.Context, previous, current time.Time); Baseline time.Time}`, `(*chrestart.Watcher).Run(ctx context.Context, conn clickhouse.Conn)`, `chrestart.DefaultRestartSkew`; `chtest.Open(t testing.TB, addr string) clickhouse.Conn`, `chtest.OpenAs(t testing.TB, addr, user, password string) clickhouse.Conn`; `dataplane.RegistryView`, `dataplane.WaitReady`, `dataplane.DefaultRegistryStartupTimeout`, `dataplane.NewRegistryFollower`, `dataplane.TableRegistryDisabledMessage`, `(*dataplane.Client).PurgeNodeSet` (`dataplane/registry_follower.go:23-121`, `dataplane/table_purge.go:76-89`), `dastore.New(dastore.Config{DataAddr})` and `(*dastore.Client).GetPayload` (`dataplane/dastore/fetch.go:17-40`); `wire.TableRegistrySnapshot.SIIndexer` (`wire/table_registry_snapshot.go:169`), `wire.TableRegistrySnapshotToPB`, `wire.ManifestToPB`; `arbiter.LocalNodeFeatures()` (`consensus.go:35-38`); housegate `replay.OwnerEntry`, `payloadexec.TableSchemaHash`, `payloadexec.New(...).GenesisSnapshot`, `chexec.ScanParts`; the scripts `scripts/ci/clickhouse-keeper.xml`, `scripts/ci/clickhouse-mechanics-users.xml`, the mechanics job and Cut Release steps of Plan S3-A Task 6.
 - Produces (contract §23.1, verbatim): `const DefaultPollInterval = 5 * time.Second`, `MinPollInterval = time.Second`, `LockFile = "LOCK"` (defined as `install.LockFile`); `type Peer struct { IndexerID uint64; Collection, SafeDatabase, UnsafeDatabase string }`; `type Config struct { NodeID string; HostIndexerID uint64; NetworkID, GenesisSnapshotID string; Genesis []payloadexec.TableSchema; Pinned ddl.MemberPinned; Protocol ddl.Pinned; StateDir string; Peers []Peer; PoolCollections []string; Restore *sources.RestoreConfig; Shadow bool; PollInterval time.Duration; DiskBudgetBytes uint64; StopInstallsRatio float64; SelfAuditInterval time.Duration; FeedMaxWalk, FeedCacheEntries int }`; `type Deps struct { Client *dataplane.Client; Conn clickhouse.Conn; Registry dataplane.RegistryView; Payloads replay.PayloadStore; AfterAttach func(tableKey, partitionID string) error; Logger *slog.Logger; Now func() time.Time }`; `type OwnerStats struct { Copies int; Entry, PublishedEntry replay.TrackFrontier; BehindSince time.Time; DivergedPartitions uint64; DivergedTables, ForeignTables int; ShadowBlocks, ShadowMissedScans, ShadowUnverdicted uint64; ShadowMismatches map[shadow.MismatchKind]uint64 }`; `type Stats struct { NodeID string; HostIndexerID uint64; Ready bool; Owners map[uint64]OwnerStats; InstallOutcomes map[install.Outcome]uint64; Installs map[string]uint64; FeedAccepted, FeedRefused, FeedFullFetches uint64; AuditRuns map[string]uint64; AuditDroppedTwins uint64; AuditClean, InstallsPaused, GrantsUnreadable bool; DiskUsedBytes, DiskBudgetBytes uint64; UnconfiguredOwners []uint64; ShadowNextBlockSeq uint64 }`; `func New(cfg Config, d Deps) (*Role, error)`; `func (r *Role) Run(ctx context.Context) error`; `func (r *Role) Ready() bool`; `func (r *Role) Stats() Stats`; the refusals `member: state dir %s is locked by a running si-member`, `member: %d is the host's own indexer; a member never copies its host`, `member: peer indexer %d is not enrolled in si_indexers`, `member: node id %q must match ^[a-z][a-z0-9-]{0,30}[a-z0-9]$`, `member: poll interval %s is below 1s`, `member: stop_installs_ratio must satisfy 0 < ratio < 1, got %v`, `member: disk budget is required`, `member: genesis table %s schema hashes to %s, the genesis manifest records %s`, `member: genesis tables %v differ from the genesis manifest's %v`; the engine probe table `install.NodePrefix(NodeID) + "engine_probe"` in `StageDB`; the tests `TestRoleRefusesToStartWithoutTheEngineFence`, `TestRoleRefusesAWritableRemote`, `TestRoleRefusesANodeIDInUse`, `TestRoleRefusesAPeerThatIsNotEnrolled`, `TestRoleRefusesGenesisTablesThatDifferFromTheGenesisManifest`, `TestRoleRefusesASecondProcessOnTheStateDir`, `TestRoleCallsOnlyReadRPCs`, `TestRoleStatsExportEveryKeyIncludingZeros`, `TestRoleListsUnconfiguredOwners`, `TestRoleIsReadyOnlyAfterACleanAuditAndAManifest`, `TestLocalNodeFeaturesAreUnchangedThroughP2`.
 - Produces (contract §23.2–§23.4, verbatim): the suite's grant lists `siMemberGrants` (`SI_MEMBER_GRANTS`, with this suite's two collection grants `GRANT NAMED COLLECTION ON si_owner_0` and `… ON si_peer_verifier_1` in their place) and `siMemberDDLGrants` (`SI_MEMBER_DDL_GRANTS`) with the profile setting `merge_tree_max_bytes_to_merge_at_max_space_in_pool = 0 CONST`; the test target `//member/confinement:confinement_test` with `TestConfinement_ServerIsTheExpectedImage`, `TestConfinement_SIMemberCreatesNoReplicatedEngine`, `TestConfinement_SIMemberCreatesNoBufferDistributedMergeOrAlias`, `TestConfinement_SIMemberCreatesNoReplicatedDatabase`, `TestConfinement_SIMemberCannotMoveDataIntoMemberUnsafe`, `TestConfinement_SIMemberCannotWriteThroughRemote`, `TestConfinement_SIMemberCannotOverrideACollection`, `TestConfinement_SIMemberCannotDropAReplica`, `TestConfinement_SIMemberHasNoDictionarySystemOrDefinerRight`, `TestConfinement_SIMemberHoldsEveryRightItsRoleNeeds`, `TestConfinement_SIMemberRestoreNeedsReadOnS3`, `TestConfinement_SIMemberDDLProfileRefusesAMergesAllowedReplica`, `TestConfinement_SIMemberDDLCannotWriteAlterOrOptimize`, opt-in with `ARBITER_CH_MEMBER_CONFINEMENT=1` and failing with `ARBITER_CH_MEMBER_CONFINEMENT=1 requires <the missing ones of CH_ADDR, CH_PEER_ADDR, CH_PEER_ADDR_FROM_SERVER, ARBITER_CH_EXPECT_VERSION_PREFIX, ARBITER_CH_IMAGE, S3_ENDPOINT, S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET>`; `scripts/ci/clickhouse-member-access-control.xml`; `bash scripts/ci/clickhouse-member-confinement.sh <image> <version-prefix>`, which prints `confinement: <n> test(s) passed on <image>`; the CI job `member-confinement` and the Cut Release step, both on `clickhouse/clickhouse-server:26.3.37.3 26.3.37.3`; README § Member role (stage 3 P2); the release `CORE_TAG_P2` and the ledger value `P2_CONFINEMENT`.
-- Produces (beyond the contract; Appendix B, Task 34): the refusals `member: Pinned.NodeID %q differs from NodeID %q`, `member: NetworkID is required`, `member: GenesisSnapshotID is required`, `member: StateDir is required`, `member: self-audit interval %s is below %s`, `member: at least one peer is required`, `member: peer %d collection %q is not a ClickHouse identifier`, `member: pool collection %q is not a ClickHouse identifier`, `member: Deps.Client, Deps.Conn and Deps.Registry are required`, `member: shadow verification needs Deps.Payloads`, `member: peer indexer %d is listed twice`; the wrapped errors `member: create state dir %s: %w`, `member: open %s: %w`, `member: lock state dir %s: %w`, `member: create the member databases: %w`, `member: read this user's grants: %w`, `member: table registry: %w`, `member: read the purge node set: %w`, `member: read the genesis manifest %s: %w`, `member: boot nonce: %w`, `member: copyset: %w`, `member: installer: %w`, `member: shadow: %w`, `member: drop this node's stage tables: %w`, `member: read the ClickHouse start time: %w`, `member: startup audit: %w`, and `member: <part>: %w` for a part that fails while running (`copyset`, `feed`, `copy watch`, `restart watcher`, `self-audit`, `shadow`); the slog lines (logger attributes `role=si-member`, `node_id`) info `member: started` (`host_indexer_id`, `peers`, `shadow`, `boot_nonce`), warn `member: system.grants is not readable by this user; the behavioural remote() probe stands alone`, warn `member: first copyset pass failed; the copyset retries`, warn `member: the journaled manifest is not readable; the feed starts from the watermark` (`snapshot_id`, `err`), warn `member: install pass for changed copies failed; the next check retries` (`snapshot_id`, `err`), warn `member: ClickHouse restarted; auditing the copies` (`previous_start`, `current_start`), warn `member: restart audit failed; the next restart or self-audit reruns it`, warn `member: self-audit failed; the next interval reruns it`; the unexported seams (`seams`: `ensureDatabases`, `checkEngineFence`, `checkRemoteIsReadOnly`, `readOwnGrants`, `startedAt`, `watchRestarts`, `newCopySet`, `newInstaller`, `newShadow`) and part interfaces (`copySet`, `installer`, `shadowVerifier`) the unit tests replace; the tests `TestNewRefusesAnInvalidConfig`, `TestRoleRunsTheStartupStepsInOrder`, `TestClearForeignRefusesWhileTheRoleHoldsTheStateDir`, `TestRoleRefusesTheHostAsAPeer`, `TestRoleToleratesUnreadableGrants`, `TestRoleRefusesUnreadableGrantsForAnyOtherReason`, `TestRoleOffersAFailedUpdateAgain`, `TestRoleReappliesTheLastUpdateWhenCopiesChange`, `TestRoleResumesFromTheJournaledManifest`, `TestRoleCountsRefusedManifests`, `TestRoleAuditsAfterAClickHouseRestart` and `TestConfinement_SIMemberHasNothingOnTheProtocolDatabases`; the suite's log lines for the run record `confinement server <CH_ADDR|CH_PEER_ADDR>: image <image>, ClickHouse <version>, up <n>s` and `confinement: <what>: accepted` / `confinement: <what>: refused (<code>)` (measured: `CREATE DATABASE <db> ENGINE = Memory as si_member`, `remote() with an explicit address and login as si_member`, `CREATE VIEW in <db> as si_member`, `RESTORE FROM S3 without READ ON S3`) and `confinement: system.grants as si_member: unreadable` / `readable (<n> rows)`; the runner's `--cleanup` mode, its environment `ARBITER_CH_MEMBER_CONFINEMENT_FILTER` and `ARBITER_CH_PLATFORM`, its containers `arbiter-core-member-{confined,peer,minio}-<run id>-<attempt>` (network aliases `si-confined`, `si-peer`, `si-minio`) on the network `arbiter-core-member-<run id>-<attempt>`, the MinIO image `minio/minio:RELEASE.2024-12-18T13-15-44Z` (Plan S3-C1's pin), the bucket `si-confinement`, and its second gate line `sources: <n> ClickHouse test(s) passed on <image>`; the CI step names `member confinement on upstream 26.3.37.3` and `stop the confinement servers`, the Cut Release step names `validate member confinement` and `stop the confinement servers`.
+- Produces (beyond the contract; Appendix B, Task 34): the refusals `member: Pinned.NodeID %q differs from NodeID %q`, `member: NetworkID is required`, `member: GenesisSnapshotID is required`, `member: StateDir is required`, `member: self-audit interval %s is below %s`, `member: at least one peer is required`, `member: peer %d collection %q is not a ClickHouse identifier`, `member: pool collection %q is not a ClickHouse identifier`, `member: Deps.Client, Deps.Conn and Deps.Registry are required`, `member: shadow verification needs Deps.Payloads`, `member: peer indexer %d is listed twice`; the wrapped errors `member: create state dir %s: %w`, `member: open %s: %w`, `member: lock state dir %s: %w`, `member: create the member databases: %w`, `member: read this user's grants: %w`, `member: table registry: %w`, `member: read the purge node set: %w`, `member: read the genesis manifest %s: %w`, `member: boot nonce: %w`, `member: copyset: %w`, `member: installer: %w`, `member: shadow: %w`, `member: drop this node's stage tables: %w`, `member: read the ClickHouse start time: %w`, `member: startup audit: %w`, and `member: <part>: %w` for a part that fails while running (`copyset`, `feed`, `copy watch`, `restart watcher`, `self-audit`, `shadow`); the slog lines (logger attributes `role=si-member`, `node_id`) info `member: started` (`host_indexer_id`, `peers`, `shadow`, `boot_nonce`), warn `member: system.grants is not readable by this user; the behavioural remote() probe stands alone`, warn `member: first copyset pass failed; the copyset retries`, warn `member: the journaled manifest is not readable; the feed starts from the watermark` (`snapshot_id`, `err`), warn `member: install pass for changed copies or outstanding repairs failed; the next check retries` (`snapshot_id`, `err`), warn `member: ClickHouse restarted; auditing the copies` (`previous_start`, `current_start`), warn `member: restart audit failed; the next restart or self-audit reruns it`, warn `member: self-audit failed; the next interval reruns it`; the unexported seams (`seams`: `ensureDatabases`, `checkEngineFence`, `checkRemoteIsReadOnly`, `readOwnGrants`, `startedAt`, `watchRestarts`, `newCopySet`, `newInstaller`, `newShadow`) and part interfaces (`copySet`, `installer`, `shadowVerifier`) the unit tests replace; the tests `TestNewRefusesAnInvalidConfig`, `TestRoleRunsTheStartupStepsInOrder`, `TestClearForeignRefusesWhileTheRoleHoldsTheStateDir`, `TestRoleRefusesTheHostAsAPeer`, `TestRoleToleratesUnreadableGrants`, `TestRoleRefusesUnreadableGrantsForAnyOtherReason`, `TestRoleOffersAFailedUpdateAgain`, `TestRoleReappliesTheLastUpdateWhenCopiesChange`, `TestRoleResumesFromTheJournaledManifest`, `TestRoleCountsRefusedManifests`, `TestRoleAuditsAfterAClickHouseRestart`, `TestRoleAuditsTheCopiesTheFirstCopysetPassMadeReady` (review fix 245-1), `TestRoleRepairsWhatAnAuditFoundWithoutANewManifest` (review fix 245-2) and `TestConfinement_SIMemberHasNothingOnTheProtocolDatabases`; the suite's log lines for the run record `confinement server <CH_ADDR|CH_PEER_ADDR>: image <image>, ClickHouse <version>, up <n>s` and `confinement: <what>: accepted` / `confinement: <what>: refused (<code>)` (measured: `CREATE DATABASE <db> ENGINE = Memory as si_member`, `remote() with an explicit address and login as si_member`, `CREATE VIEW in <db> as si_member`, `RESTORE FROM S3 without READ ON S3`) and `confinement: system.grants as si_member: unreadable` / `readable (<n> rows)`; the runner's `--cleanup` mode, its environment `ARBITER_CH_MEMBER_CONFINEMENT_FILTER` and `ARBITER_CH_PLATFORM`, its containers `arbiter-core-member-{confined,peer,minio}-<run id>-<attempt>` (network aliases `si-confined`, `si-peer`, `si-minio`) on the network `arbiter-core-member-<run id>-<attempt>`, the MinIO image `minio/minio:RELEASE.2024-12-18T13-15-44Z` (Plan S3-C1's pin), the bucket `si-confinement`, and its second gate line `sources: <n> ClickHouse test(s) passed on <image>`; the CI step names `member confinement on upstream 26.3.37.3` and `stop the confinement servers`, the Cut Release step names `validate member confinement` and `stop the confinement servers`.
 
 Notes:
-- **Startup, in the binding order of contract §23.1.** (1) `lockStateDir` creates `StateDir` (mode 700) and takes `LOCK` with a non-blocking exclusive `flock`, held until `Run` returns or the process dies, so a crashed member leaves no lock and `install.ClearForeign` fails while a member runs (K36). (2) `ddl.ValidateMemberPinned` against the host SNode's `Protocol`, then the peers: never the host, never twice. (3) `ddl.EnsureMemberDatabases` (no `ENGINE`, K32). (4) `sources.CheckEngineFence` with the probe table `<node_id>_engine_probe` in `hg_rstage`. (5) `sources.CheckRemoteIsReadOnly` through every peer collection, then every pool collection, then `ReadOwnGrants`: `ErrGrantsUnreadable` is tolerated and exported as `Stats.GrantsUnreadable`, any other error stops the start, and readable rows must pass `CheckRemoteGrants`. (6) `dataplane.WaitReady` (two minutes), `copyset.CheckNodeIDUnused` against the registry snapshot and `Client.PurgeNodeSet`, every peer in `si_indexers`, and the genesis set against the genesis manifest read through the feed's `Store` (so it passes `manifestfeed.Verify` first). (7) The boot nonce, the copyset, the installer and the shadow (constructors write nothing), then `DropStaleScratch`. (8) `chrestart.StartedAt` as the watcher's baseline, then `Audit(ctx, "startup")`. (9) The first `copyset.Reconcile`, then, concurrently, the copyset's `Run`, the feed, the copy watch, the restart watcher, the self-audit ticker and, with `Shadow`, the shadow. A refusal in (1)–(6) touches no table (`TestRoleRunsTheStartupStepsInOrder` and the refusal tests check the recorded steps), and nothing before (9) writes a copy.
-- **The feed and the installer.** The role runs Task 29's `Follower.Run`, whose callback calls `Installer.Apply` under one install mutex shared with every `Audit`, so an install pass and an audit never overlap. A failed `Apply` returns its error to the follower, which keeps its last accepted manifest and offers the update again at the next poll (`TestRoleOffersAFailedUpdateAgain`). The copy watch ticks every `PollInterval` and re-applies the last applied update whenever the set of ready copies differs from the one it was applied to (contract §22.3: `Apply` is idempotent), so a copy that becomes ready between publications is filled without waiting for the next manifest (`TestRoleReappliesTheLastUpdateWhenCopiesChange`); it reads the last update under the install mutex, so it never re-applies an older manifest after a newer one. Task 30 also offers `copyset.Reconciler.Changed()`; the role polls instead, which costs nothing (it compares in memory) and needs no name beyond the contract.
+- **Startup, in the binding order of contract §23.1.** (1) `lockStateDir` creates `StateDir` (mode 700) and takes `LOCK` with a non-blocking exclusive `flock`, held until `Run` returns or the process dies, so a crashed member leaves no lock and `install.ClearForeign` fails while a member runs (K36). (2) `ddl.ValidateMemberPinned` against the host SNode's `Protocol`, then the peers: never the host, never twice. (3) `ddl.EnsureMemberDatabases` (no `ENGINE`, K32). (4) `sources.CheckEngineFence` with the probe table `<node_id>_engine_probe` in `hg_rstage`. (5) `sources.CheckRemoteIsReadOnly` through every peer collection, then every pool collection, then `ReadOwnGrants`: `ErrGrantsUnreadable` is tolerated and exported as `Stats.GrantsUnreadable`, any other error stops the start, and readable rows must pass `CheckRemoteGrants`. (6) `dataplane.WaitReady` (two minutes), `copyset.CheckNodeIDUnused` against the registry snapshot and `Client.PurgeNodeSet`, every peer in `si_indexers`, and the genesis set against the genesis manifest read through the feed's `Store` (so it passes `manifestfeed.Verify` first). (7) The boot nonce, the copyset, the installer and the shadow (constructors write nothing), then `DropStaleScratch`. (8) `chrestart.StartedAt` as the watcher's baseline, the first `copyset.Reconcile`, then `Audit(ctx, "startup")` over the copies that pass made ready (review fix 245-1: a fresh reconciler reports no copy before its first pass, so an audit ahead of it covered nothing, and a copy the pass created again empty while the journal was at the watermark was skipped as current; `TestRoleAuditsTheCopiesTheFirstCopysetPassMadeReady`). (9) Concurrently, the copyset's `Run`, the feed, the copy watch, the restart watcher, the self-audit ticker and, with `Shadow`, the shadow. A refusal in (1)–(6) touches no table (`TestRoleRunsTheStartupStepsInOrder` and the refusal tests check the recorded steps), and nothing before (9) installs a part (step (8)'s pass only creates and drops copy tables).
+- **The feed and the installer.** The role runs Task 29's `Follower.Run`, whose callback calls `Installer.Apply` under one install mutex shared with every `Audit`, so an install pass and an audit never overlap. A failed `Apply` returns its error to the follower, which keeps its last accepted manifest and offers the update again at the next poll (`TestRoleOffersAFailedUpdateAgain`). The copy watch ticks every `PollInterval` and re-applies the last applied update whenever the set of ready copies differs from the one it was applied to or `Installer.NeedsPass` holds (contract §22.3: `Apply` is idempotent), so a copy that becomes ready between publications is filled without waiting for the next manifest (`TestRoleReappliesTheLastUpdateWhenCopiesChange`), and the Diverged partitions and unjournaled parts a startup, restart or self-audit records are repaired while the watermark stands still (review fix 245-2: before it, a repair waited for the next publication, which a quiet network never sends; `TestRoleRepairsWhatAnAuditFoundWithoutANewManifest`); a pass that fails is retried at the next tick, as the follower retries a failed update at its next poll; it reads the last update under the install mutex, so it never re-applies an older manifest after a newer one. Task 30 also offers `copyset.Reconciler.Changed()`; the role polls instead, which costs nothing (it compares in memory) and needs no name beyond the contract.
 - **Restart point.** When every peer's journal entry names one manifest, the follower starts from it (`last` = that snapshot, `lastEntries` = the journaled entries), so it walks the `ParentSnapshotID` chain and counts no full fetch; that manifest, read through the store, is the first update the copy watch re-applies (once: it brings any copy created while the member was down to the journaled manifest). Otherwise (no journal, or owners journaled at different manifests after a partly failed pass) the follower starts with `last` "" and the journaled entries, so it accepts the verified watermark manifest alone (a full fetch) and still refuses an owner entry that goes back (Task 29's Notes, "Accepting an update"; `TestRoleResumesFromTheJournaledManifest`).
 - **Readiness and stats.** `Ready` is true once the startup audit ran, `install.Stats().AuditClean` holds and every peer has a journal entry; a peer without a ready copy also counts once an update was applied in this process (Task 32's installer journals only owners with a ready copy). `Stats` never takes the install mutex, so a scrape never waits for an install pass; every peer, every install outcome (`kept`, `rename_race`, `split`, `doubled`, `foreign`, `missed`, `refused`, `unreachable`), every source (`owner_pull`, `peer_unsafe_pull`, `restore`), every audit trigger (`startup`, `clickhouse_restart`, `self_audit`) and every mismatch kind (`shadow.MismatchKinds()`) is present with zeros, before `Run` too (`TestRoleStatsExportEveryKeyIncludingZeros`); the feed counters are the follower's `Stats()`; `UnconfiguredOwners` lists enrolled SI indexers that are neither a peer nor the host. `BehindSince` starts when a peer's journaled entry first differs from the newest entry a manifest published for it and clears when they agree again.
 - **Reach (contract §20.1).** `TestRoleCallsOnlyReadRPCs` runs the role against a fake that serves `SafeState`, `TableRegistry` and `PayloadStore` on one port and whose unary and stream interceptors fail the test on any other method; the registry is a real `dataplane.RegistryFollower` and the payloads a real `dastore` client on the fake, and the shadow is a stand-in that calls every client the role hands it once, so all seven reads of contract §20.1 are called and nothing else is. The test also parses the package's non-test sources (the `go_test` carries them as `data`, as Task 33's does) and refuses an import of `google.golang.org/grpc` or `arbiter-proto` and a call of `WithLeaderRetry`, `LeaderConn`, `RunVerifierSubscription`, `RunPromotionSubscription`, `SubmitTablePurged` or `SubmitTablePurgedReport`: the role reaches the arbiter only through the typed reads of `dataplane.Client`.
@@ -14997,7 +15611,7 @@ Notes:
 - **`si_reader` needs `SHOW COLUMNS ON system.parts`.** `remote()` describes the remote `system.parts` before it reads it, so the owner pull's resolve step fails for a login with only Plan S3-B contract §11's three grants (497 `SHOW COLUMNS ON system.parts`, measured; Task 31's Appendix B). The suite's `si_reader` holds the three grants and `GRANT SHOW COLUMNS ON system.parts`; Plan S3-C3 grants the same to every `si_reader` a member collection logs in as.
 - **Topology.** The fenced server mounts the access-control file, Plan S3-A's single-node Keeper `scripts/ci/clickhouse-keeper.xml` (the admin-made replicated table of `TestConfinement_SIMemberCannotDropAReplica`, `si_member_ddl`'s replicas and `system.zookeeper` need one) and Plan S3-A Task 6's `scripts/ci/clickhouse-mechanics-users.xml` (on 26.3, `CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1` alone gives `default` access management but not `CREATE NAMED COLLECTION`: measured 497); the peer runs the same image without the access-control file (Task 31's engine-fence test needs one unfenced server) and with the same users file; MinIO holds one bucket made with its bundled `mc`. The bucket key is generated per run and reaches docker (`-e NAME`), `mc` (`MC_HOST_local` in docker exec's environment) and Bazel (`--test_env=NAME`) only through the environment, never as an argument. After the suite, the runner runs `//member/sources:sources_test` on the same servers and gates on every `func Test` of `member/sources/*_ch_test.go`: contract §22.1 places the restore test there, and Task 31's two-server tests need this topology.
 - **One script, three callers.** CI's `member-confinement` job, Cut Release and the manual deployed-image run call the same script, so the deployed image is measured on CI's topology. CI and Cut Release use the exact upstream patch `clickhouse/clickhouse-server:26.3.37.3` with the prefix `26.3.37.3` (Plan S3-A K9: never the floating `26.3` tag); the deployed image `us-west1-docker.pkg.dev/sentio-352722/sentio/clickhouse-server:26.3-lts-decimal512-release-2026-09-16` sits in Sentio's private registry, so the user runs it by hand with the prefix `26.3.` (Step 17), before the release, on the branch head that the release then carries unchanged (Step 19 checks it). Its date is `P2_CONFINEMENT`; Tasks 35–36 start only once it and `CORE_TAG_P2` are recorded.
-- **Verified while drafting** on an export of arbiter-core `8f0bc43` with stubs written from contract §20–§22 and the current drafts of Tasks 29–33 (Task 29's `member/manifestfeed` verbatim, housegate `66d4df7` with `replay.OwnerEntry` and `payloadexec.VerifyLedger` stubbed from Plan S3-C1 §16, arbiter-proto `1c6ae67` with Plan S3-A's `GetBlockVerification`, a contract-faithful `sources.RemotePull.Fetch`, an installer stub with Task 32's journaling rule, `LockFile`, triggers and outcome constants, `shadow.MismatchKinds`) and with Plan S3-A Task 6's CI job, Cut Release steps and users file applied: `gofmt` and `go vet` clean; `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test` and Bazel 9.1.0 offline (housegate and arbiter-proto through local overrides in the scratch `MODULE.bazel` and `go.mod` only) both passed `//member:member_test` (22 tests, with and without the race detector) and `//member/confinement:confinement_test` (14 skips by default; the opted-in failure of Step 10; 14 passes against the servers), `bazel run //:gazelle` kept both BUILD files, and `bazel test //...` passed all 17 targets; the member tests failed to build before the implementation with `undefined: Config`; the runner ran with real Bazel and docker, a `docker` wrapper on `PATH` replacing only the image pulls (no download) and the MinIO container (by a TCP proxy to a local fake S3, the MinIO image not being on the host): the wrong prefix failed with Bazel's exit 3 and the message of Step 12, the right one printed the lines of Step 13, a skipped test in `member/sources` failed the run with `a member/sources test was skipped:`, and every run removed every container and the network; `bash -n` (also under macOS `/bin/bash` 3.2) is clean for the runner and every bash block of this task, and `fish -n` for the fish block; `shellcheck` is clean for the runner and reports on the task's blocks only notes on intended constructs (SC2016 for the literal backquotes of two `grep` patterns, SC2046 for contract §20.4's `gofmt -l $(git ls-files '*.go')`, SC2086 for Step 16's split target list); `actionlint` and a YAML parse are clean for both workflows; the record step's `s3-ledger.py set` was run on a scratch copy of this plan's Appendix C. Step 13's run on `26.3.37.3`, the CI and Cut Release runs and Step 17's deployed-image run are the execution's.
+- **Verified while drafting** on an export of arbiter-core `8f0bc43` with stubs written from contract §20–§22 and the current drafts of Tasks 29–33 (Task 29's `member/manifestfeed` verbatim, housegate `66d4df7` with `replay.OwnerEntry` and `payloadexec.VerifyLedger` stubbed from Plan S3-C1 §16, arbiter-proto `1c6ae67` with Plan S3-A's `GetBlockVerification`, a contract-faithful `sources.RemotePull.Fetch`, an installer stub with Task 32's journaling rule, `LockFile`, triggers and outcome constants, `shadow.MismatchKinds`) and with Plan S3-A Task 6's CI job, Cut Release steps and users file applied: `gofmt` and `go vet` clean; `GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test` and Bazel 9.1.0 offline (housegate and arbiter-proto through local overrides in the scratch `MODULE.bazel` and `go.mod` only) both passed `//member:member_test` (22 tests at drafting, with and without the race detector; the review fixes of AgentConnect round 1 add two, Appendix B) and `//member/confinement:confinement_test` (14 skips by default; the opted-in failure of Step 10; 14 passes against the servers), `bazel run //:gazelle` kept both BUILD files, and `bazel test //...` passed all 17 targets; the member tests failed to build before the implementation with `undefined: Config`; the runner ran with real Bazel and docker, a `docker` wrapper on `PATH` replacing only the image pulls (no download) and the MinIO container (by a TCP proxy to a local fake S3, the MinIO image not being on the host): the wrong prefix failed with Bazel's exit 3 and the message of Step 12, the right one printed the lines of Step 13, a skipped test in `member/sources` failed the run with `a member/sources test was skipped:`, and every run removed every container and the network; `bash -n` (also under macOS `/bin/bash` 3.2) is clean for the runner and every bash block of this task, and `fish -n` for the fish block; `shellcheck` is clean for the runner and reports on the task's blocks only notes on intended constructs (SC2016 for the literal backquotes of two `grep` patterns, SC2046 for contract §20.4's `gofmt -l $(git ls-files '*.go')`, SC2086 for Step 16's split target list); `actionlint` and a YAML parse are clean for both workflows; the record step's `s3-ledger.py set` was run on a scratch copy of this plan's Appendix C. Step 13's run on `26.3.37.3`, the CI and Cut Release runs and Step 17's deployed-image run are the execution's.
 
 - [ ] **Step 1: Base check and the evidence directory**
 
@@ -15392,11 +16006,13 @@ func (s *steps) list() []string {
 
 func (s *steps) has(step string) bool { return slices.Contains(s.list(), step) }
 
-// fakeCopies is the copyset of the unit tests.
+// fakeCopies is the copyset of the unit tests; onReconcile, when set, runs
+// at each Reconcile (a test sets it before Run).
 type fakeCopies struct {
-	steps  *steps
-	mu     sync.Mutex
-	copies []copyset.Copy
+	steps       *steps
+	mu          sync.Mutex
+	copies      []copyset.Copy
+	onReconcile func()
 }
 
 func (c *fakeCopies) set(copies ...copyset.Copy) {
@@ -15420,7 +16036,13 @@ func (c *fakeCopies) Copy(tableKey string) (copyset.Copy, bool) {
 	return copyset.Copy{}, false
 }
 
-func (c *fakeCopies) Reconcile(context.Context) error { c.steps.add("copyset reconcile"); return nil }
+func (c *fakeCopies) Reconcile(context.Context) error {
+	c.steps.add("copyset reconcile")
+	if c.onReconcile != nil {
+		c.onReconcile()
+	}
+	return nil
+}
 
 func (c *fakeCopies) Run(ctx context.Context) error {
 	c.steps.add("copyset run")
@@ -15431,18 +16053,21 @@ func (c *fakeCopies) Run(ctx context.Context) error {
 // fakeInstaller journals, at each applied update, the owners of the ready
 // copies and the owners it journaled before, as install.Installer does once
 // every ready copy of an owner closes: an owner without a copy is never
-// journaled.
+// journaled. NeedsPass reports needsPass, which a successful Apply clears;
+// auditSaw records how many ready copies each Audit saw.
 type fakeInstaller struct {
-	steps    *steps
-	copies   *fakeCopies
-	mu       sync.Mutex
-	entries  map[uint64]install.OwnerJournal
-	applied  []string
-	audits   []string
-	failNext int
-	clean    bool
-	stats    install.Stats
-	tables   map[uint64][]install.TableState
+	steps     *steps
+	copies    *fakeCopies
+	mu        sync.Mutex
+	entries   map[uint64]install.OwnerJournal
+	applied   []string
+	audits    []string
+	auditSaw  []int
+	failNext  int
+	clean     bool
+	needsPass bool
+	stats     install.Stats
+	tables    map[uint64][]install.TableState
 }
 
 func (i *fakeInstaller) Apply(_ context.Context, u manifestfeed.Update) error {
@@ -15466,6 +16091,7 @@ func (i *fakeInstaller) Apply(_ context.Context, u manifestfeed.Update) error {
 	for owner := range owners {
 		i.entries[owner] = install.OwnerJournal{SnapshotID: u.SnapshotID, Entry: u.Entries[owner]}
 	}
+	i.needsPass = false
 	return nil
 }
 
@@ -15474,6 +16100,7 @@ func (i *fakeInstaller) Audit(_ context.Context, trigger string) error {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.audits = append(i.audits, trigger)
+	i.auditSaw = append(i.auditSaw, len(i.copies.Copies()))
 	return nil
 }
 
@@ -15519,6 +16146,24 @@ func (i *fakeInstaller) setClean(clean bool) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.clean = clean
+}
+
+func (i *fakeInstaller) NeedsPass() bool {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.needsPass
+}
+
+func (i *fakeInstaller) setNeedsPass(v bool) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.needsPass = v
+}
+
+func (i *fakeInstaller) auditSawList() []int {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return slices.Clone(i.auditSaw)
 }
 
 // fakeShadow is the shadow of the unit tests; run, when set, replaces Run.
@@ -15603,7 +16248,10 @@ func (h *harness) role() *Role {
 		},
 		readOwnGrants: func(context.Context, clickhouse.Conn) ([]sources.Grant, error) {
 			h.steps.add("read own grants")
-			return nil, h.grantsErr
+			// The rows a confined si_member reads when system.grants is
+			// readable: READ ON REMOTE and no WRITE (Task 31's
+			// sources.CheckRemoteGrants refuses an empty list).
+			return []sources.Grant{{AccessType: "READ", AccessObject: "REMOTE"}}, h.grantsErr
 		},
 		startedAt: func(_ context.Context, _ clickhouse.Conn, now time.Time) (time.Time, error) {
 			h.steps.add("clickhouse started at")
@@ -15777,8 +16425,8 @@ func TestRoleRunsTheStartupStepsInOrder(t *testing.T) {
 		"new shadow owners [0 2]",
 		"drop stale scratch",
 		"clickhouse started at",
-		"audit startup",
 		"copyset reconcile",
+		"audit startup",
 	}
 	if len(got) < len(want) || !slices.Equal(got[:len(want)], want) {
 		t.Fatalf("startup steps:\n%s\nwant first:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
@@ -16169,6 +16817,48 @@ func TestRoleIsReadyOnlyAfterACleanAuditAndAManifest(t *testing.T) {
 	h.installer.setClean(false)
 	if r.Ready() {
 		t.Fatal("still ready after an audit found the copies unclean")
+	}
+}
+
+// TestRoleAuditsTheCopiesTheFirstCopysetPassMadeReady (Plan S3-C2 review fix
+// 245-1): a fresh reconciler reports no copy until its first pass, so the
+// startup audit runs after that pass and covers the copies it made ready.
+func TestRoleAuditsTheCopiesTheFirstCopysetPassMadeReady(t *testing.T) {
+	h := newHarness(t)
+	h.copies.onReconcile = func() { h.copies.set(copyOf(0, "devuser1.t0", 7), copyOf(2, "devuser1.t2", 9)) }
+	r := h.role()
+	h.start(r)
+	waitFor(t, "the startup audit", func() bool { return h.steps.has("audit startup") })
+	if got := h.installer.auditSawList(); len(got) == 0 || got[0] != 2 {
+		t.Fatalf("the startup audit saw %v ready copies, want 2: the copies of the first copyset pass", got)
+	}
+}
+
+// TestRoleRepairsWhatAnAuditFoundWithoutANewManifest (Plan S3-C2 review fix
+// 245-2): the watermark stands still and the copies do not change, yet an audit
+// recorded damage the installer reports through NeedsPass; the copy watch
+// re-applies the last update until the installer has nothing left, and not
+// after.
+func TestRoleRepairsWhatAnAuditFoundWithoutANewManifest(t *testing.T) {
+	h := newHarness(t)
+	h.copies.set(copyOf(0, "devuser1.t0", 7))
+	m := child(t, h.genesis, 2, 0, 1, 2)
+	h.arbiter.publish(m)
+	r := h.role()
+	h.start(r)
+	waitFor(t, "the first install pass", func() bool { return len(h.installer.appliedList()) == 1 })
+	time.Sleep(1500 * time.Millisecond)
+	if got := h.installer.appliedList(); len(got) != 1 {
+		t.Fatalf("install passes %v while nothing changed, want one", got)
+	}
+	h.installer.setNeedsPass(true)
+	waitFor(t, "a repair pass of the last update", func() bool { return len(h.installer.appliedList()) == 2 })
+	if got := h.installer.appliedList(); got[1] != m.SnapshotID {
+		t.Fatalf("passes %v, want the last update re-applied", got)
+	}
+	time.Sleep(1500 * time.Millisecond)
+	if got := h.installer.appliedList(); len(got) != 2 {
+		t.Fatalf("install passes %v once the repair left nothing, want two", got)
 	}
 }
 
@@ -16568,8 +17258,8 @@ type copySet interface {
 	Run(ctx context.Context) error
 }
 
-// installer is what the role uses of *install.Installer. Entry, Tables and
-// Stats are read while Apply or Audit runs.
+// installer is what the role uses of *install.Installer. Entry, Tables,
+// Stats and NeedsPass are read while Apply or Audit runs.
 type installer interface {
 	Apply(ctx context.Context, u manifestfeed.Update) error
 	Audit(ctx context.Context, trigger string) error
@@ -16577,6 +17267,7 @@ type installer interface {
 	Entry(owner uint64) (install.OwnerJournal, bool)
 	Tables(owner uint64) []install.TableState
 	Stats() install.Stats
+	NeedsPass() bool
 }
 
 // shadowVerifier is what the role uses of *shadow.Verifier.
@@ -16649,7 +17340,8 @@ type Role struct {
 	grantsUnreadable bool
 	// lastApplied is the newest update the installer applied, and
 	// appliedCopies the ready copies it saw; the copy watch re-applies
-	// lastApplied whenever the ready copies differ.
+	// lastApplied whenever the ready copies differ or the installer reports
+	// work that needs no new manifest (NeedsPass, Plan S3-C2 review fix 245-2).
 	lastApplied   *manifestfeed.Update
 	appliedCopies string
 	published     map[uint64]replay.TrackFrontier
@@ -16684,7 +17376,8 @@ func New(cfg Config, d Deps) (*Role, error) {
 // Run performs the startup of contract §23.1 in its binding order and then
 // runs the copyset, the feed into the installer, the copy watch, the
 // ClickHouse restart watcher, the self-audit ticker and, when configured,
-// the shadow verifier. No step before (9) writes a copy. Run returns ctx's
+// the shadow verifier. No step before (9) installs a part; step (8)'s first
+// copyset pass only creates and drops copy tables. Run returns ctx's
 // error when ctx ends, else the first startup refusal or the first failure
 // of a part.
 func (r *Role) Run(ctx context.Context) error {
@@ -16779,11 +17472,23 @@ func (r *Role) Run(ctx context.Context) error {
 		return fmt.Errorf("member: drop this node's stage tables: %w", err)
 	}
 
-	// (8) The startup audit. The ClickHouse start time is read first, so a
-	// restart during the audit reruns it.
+	// (8) The first copyset pass, then the startup audit over the copies it made
+	// ready (Plan S3-C2 review fix 245-1): the reconciler reports no copy before
+	// its first pass, so an audit ahead of it would cover nothing, and a copy
+	// the pass creates again empty would never meet its journal. The pass
+	// creates and drops copy tables and installs no part; a copy it cannot make
+	// ready yet is audited by the installer before the pass that first sees it.
+	// The ClickHouse start time is read first, so a restart during the pass or
+	// the audit reruns the audit.
 	baseline, err := r.env.startedAt(ctx, r.d.Conn, r.now())
 	if err != nil {
 		return fmt.Errorf("member: read the ClickHouse start time: %w", err)
+	}
+	if err := p.copies.Reconcile(ctx); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		r.log.Warn("member: first copyset pass failed; the copyset retries", "err", err)
 	}
 	if err := r.audit(ctx, p, install.TriggerStartup); err != nil {
 		return fmt.Errorf("member: startup audit: %w", err)
@@ -16909,15 +17614,9 @@ func (r *Role) audit(ctx context.Context, p *parts, trigger string) error {
 	return p.installer.Audit(ctx, trigger)
 }
 
-// runParts is startup step (9). The first copyset pass runs before the feed,
-// so the first install pass sees every copy the registry asks for.
+// runParts is startup step (9). Step (8) ran the first copyset pass, so the
+// first install pass sees every copy the registry asks for.
 func (r *Role) runParts(parent context.Context, p *parts, store *manifestfeed.Store, baseline time.Time) error {
-	if err := p.copies.Reconcile(parent); err != nil {
-		if parent.Err() != nil {
-			return parent.Err()
-		}
-		r.log.Warn("member: first copyset pass failed; the copyset retries", "err", err)
-	}
 	follower, err := r.newFollower(parent, p, store)
 	if err != nil {
 		return err
@@ -17038,9 +17737,12 @@ func (r *Role) onUpdate(ctx context.Context, p *parts, u manifestfeed.Update) er
 }
 
 // watchCopies re-applies the last applied update whenever the ready copies
-// differ from those it was applied to (Apply is idempotent, contract §22.3),
-// so a copy that becomes ready between publications is filled, and keeps the
-// peers' behind clocks.
+// differ from those it was applied to or the installer reports work that needs
+// no new manifest (NeedsPass: a pending or uncovered audit, a Diverged
+// partition, an unjournaled part; Plan S3-C2 review fix 245-2), so a copy that
+// becomes ready between publications is filled and the damage a startup, restart
+// or self-audit found is repaired while the watermark stands still (Apply is
+// idempotent, contract §22.3), and keeps the peers' behind clocks.
 func (r *Role) watchCopies(ctx context.Context, p *parts) error {
 	t := time.NewTicker(r.cfg.PollInterval)
 	defer t.Stop()
@@ -17065,12 +17767,12 @@ func (r *Role) reapply(ctx context.Context, p *parts) {
 		return
 	}
 	copies := copiesKey(p.copies.Copies())
-	if copies == applied {
+	if copies == applied && !p.installer.NeedsPass() {
 		return
 	}
 	if err := p.installer.Apply(ctx, *u); err != nil {
 		if ctx.Err() == nil {
-			r.log.Warn("member: install pass for changed copies failed; the next check retries", "snapshot_id", u.SnapshotID, "err", err)
+			r.log.Warn("member: install pass for changed copies or outstanding repairs failed; the next check retries", "snapshot_id", u.SnapshotID, "err", err)
 		}
 		return
 	}
@@ -17424,7 +18126,7 @@ W=<worktree path>; cd "$W" && test -z "$(gofmt -l member)" && bazel test //membe
   && bazel test --build_tests_only --@rules_go//go/config:race //member:member_test --test_output=errors
 ```
 
-Expected: `gazelle keeps member/BUILD.bazel`; `//member:member_test PASSED` (about 10 s: the feed, copy-watch and retry tests wait on one-second polls); `22` (the eleven tests of contract §23.1 and the eleven beyond it); no SKIP or FAIL line; PASSED again under the race detector. Without the `data` line, `TestRoleCallsOnlyReadRPCs` fails with `parsed 0 non-test source files of the package, want config.go, lock.go, role.go and stats.go`.
+Expected: `gazelle keeps member/BUILD.bazel`; `//member:member_test PASSED` (about 13 s: the feed, copy-watch, repair and retry tests wait on one-second polls); `24` (the eleven tests of contract §23.1 and the thirteen beyond it); no SKIP or FAIL line; PASSED again under the race detector. Without the `data` line, `TestRoleCallsOnlyReadRPCs` fails with `parsed 0 non-test source files of the package, want config.go, lock.go, role.go and stats.go`.
 
 ```bash
 W=<worktree path>
@@ -18776,7 +19478,7 @@ Insert before `## Releases` (base `:117`; after Plan S3-A Task 6's `### ClickHou
 ````markdown
 ### Member role (stage 3 P2)
 
-`member.Role` is the stage-3 si-member (housegate spec 2026-10-14 §8): a process separate from the SNode, run by `sentio-node si-member`, that keeps one incarnation-scoped copy in `hg_replica` of every SI table of every peer owner and fills it only with parts a verified manifest lists, through the install gate. It has a node id and no keys: it never registers, and it calls only `SafeState.GetSafeWatermark`, `GetManifest` and `GetBlockVerification`, `TableRegistry.GetTableRegistry`, `WatchTableRegistry` and `GetPurgeNodeSet`, and the DA's `PayloadStore.FetchPayloads`. At startup, in this order, it locks `<state dir>/LOCK`, refuses member databases that meet the host SNode's and a peer that is its host, creates `hg_replica` and `hg_rstage` without `ENGINE`, refuses to start unless ClickHouse refuses it an ungranted table engine (`table_engines_require_grant`) and refuses `INSERT INTO FUNCTION remote` through each of its named collections, refuses a node id an SNode or verifier uses, a peer that is not enrolled in `si_indexers` and genesis tables that differ from the genesis manifest, drops its own stale `hg_rstage` tables and audits its copies. It then runs the copy reconciler (`member/copyset`), the manifest feed (`member/manifestfeed`) into the installer (`member/install`, fed by `member/sources`), an audit after every ClickHouse restart and every self-audit interval and, when configured, the shadow verifier (`member/shadow`). `Role.Ready` is true once the startup audit is clean and every peer's copies reached a manifest; `Role.Stats` carries every series sentio-node exports, with zeros.
+`member.Role` is the stage-3 si-member (housegate spec 2026-10-14 §8): a process separate from the SNode, run by `sentio-node si-member`, that keeps one incarnation-scoped copy in `hg_replica` of every SI table of every peer owner and fills it only with parts a verified manifest lists, through the install gate. It has a node id and no keys: it never registers, and it calls only `SafeState.GetSafeWatermark`, `GetManifest` and `GetBlockVerification`, `TableRegistry.GetTableRegistry`, `WatchTableRegistry` and `GetPurgeNodeSet`, and the DA's `PayloadStore.FetchPayloads`. At startup, in this order, it locks `<state dir>/LOCK`, refuses member databases that meet the host SNode's and a peer that is its host, creates `hg_replica` and `hg_rstage` without `ENGINE`, refuses to start unless ClickHouse refuses it an ungranted table engine (`table_engines_require_grant`) and refuses `INSERT INTO FUNCTION remote` through each of its named collections, refuses a node id an SNode or verifier uses, a peer that is not enrolled in `si_indexers` and genesis tables that differ from the genesis manifest, drops its own stale `hg_rstage` tables, runs the copy reconciler's first pass and audits the copies it made ready. It then runs the copy reconciler (`member/copyset`), the manifest feed (`member/manifestfeed`) into the installer (`member/install`, fed by `member/sources`; while an owner bootstraps, each copy's first part tries the object-store restore first), a copy watch that re-applies the last manifest when the copies change or an audit found something to repair, an audit after every ClickHouse restart and every self-audit interval and, when configured, the shadow verifier (`member/shadow`). `Role.Ready` is true once the startup audit is clean, every ready copy was audited since the start or the last restart, and every peer's copies reached a manifest; `Role.Stats` carries every series sentio-node exports, with zeros.
 
 The member's ClickHouse users are confined by their grants, not by the role's code. `member/confinement` is a test-only suite that proves it on a real server with `access_control_improvements.table_engines_require_grant` (`scripts/ci/clickhouse-member-access-control.xml`): as `si_member`, every `Replicated*MergeTree` engine, `Buffer`, `Distributed`, `Merge` and `Alias`, a `Replicated` database, `ATTACH PARTITION … FROM`, `MOVE PARTITION … TO TABLE`, a materialized view or an `INSERT` into `hg_member_unsafe`, a write through `remote()` or to S3, a named collection override, `SYSTEM DROP REPLICA`, a dictionary, a view with another definer or with `SQL SECURITY NONE`, `SYSTEM STOP MERGES` and anything on `hg_safe`, `hg_unsafe` or `hg_promote` are refused, while every statement the role issues works; `si_member_ddl`'s settings profile refuses a replica created with merges allowed, and that user can neither write, alter nor optimize. Run it with:
 
@@ -25453,9 +26155,9 @@ func BlockVerificationToPB(v BlockVerification) *pb.BlockVerification // fakes a
 - `type Source interface { Name() string; Fetch(ctx context.Context, need Need, schema payloadexec.TableSchema, scratch Scratch) Result }`.
 - Source names (metric label `source`): `owner_pull`, `peer_unsafe_pull`, `restore`; the shadow's pull is `owner_unsafe_pull`.
 - `type RemotePull struct { Conn clickhouse.Conn; SourceName, Collection, Database string; MaxFallbackCandidates int }` (0 → 8); constructors `NewOwnerPull(conn clickhouse.Conn, collection, safeDatabase string) *RemotePull`, `NewOwnerUnsafePull(conn clickhouse.Conn, collection, unsafeDatabase string) *RemotePull`, `NewPeerUnsafePull(conn clickhouse.Conn, collection string) *RemotePull` (database `hg_unsafe`).
-- SQL (verbatim forms; identifiers backquoted, literals quoted by `ddl`'s rules): resolve `SELECT name, rows FROM remote(<collection>, database = 'system', table = 'parts') WHERE database = '<db>' AND table = '<table>' AND active AND hash_of_all_files = '<phys>'`; fallback `SELECT name FROM remote(<collection>, database = 'system', table = 'parts') WHERE database = '<db>' AND table = '<table>' AND active AND rows = <rows> ORDER BY name LIMIT <max>` (each candidate pulled into its own fresh scratch and kept only if its scan equals `PartRowLtHash`); pull `INSERT INTO <stage>.<scratch> SELECT * FROM remote(<collection>, database = '<db>', table = '<table>') WHERE _part = '<name>'`. The filter is on `_part` only, never on the manifest's logical partition id. Only the seven `system.parts` columns of `si_reader`'s grant are named.
+- SQL (verbatim forms; identifiers backquoted, literals quoted by `ddl`'s rules): resolve `SELECT name, rows FROM remote(<collection>, database = 'system', table = 'parts') WHERE database = '<db>' AND table = '<table>' AND active AND hash_of_all_files = '<phys>'`; fallback `SELECT name FROM remote(<collection>, database = 'system', table = 'parts') WHERE database = '<db>' AND table = '<table>' AND active AND partition_id = '<partition id>' AND rows = <rows>[ AND name > '<cursor>'] ORDER BY name LIMIT <max>`, scoped to the need's partition before the bound (spec §8.6: candidates of the same partition and row count), `<partition id>` being ClickHouse's, computed on the member's own server with `SELECT partitionId('<partition value>')` (`all` for an unpartitioned table), and `<cursor>` the last candidate a full window of the same need pulled without keeping it, cleared when a window ends short or keeps a part (each candidate pulled into its own fresh scratch and kept only if its scan equals `PartRowLtHash`; review fix 245-3); pull `INSERT INTO <stage>.<scratch> SELECT * FROM remote(<collection>, database = '<db>', table = '<table>') WHERE _part = '<name>'`. The filter is on `_part` only, never on the manifest's logical partition id. Only the seven `system.parts` columns of `si_reader`'s grant are named.
 - `func NoSplitSettings(rows uint64) clickhouse.Settings` = `{min_insert_block_size_rows: max(rows, 1), min_insert_block_size_bytes: 0, max_threads: 1, max_insert_threads: 1}`.
-- Outcome mapping: an empty resolve and an empty or unmatched fallback → `missed`; ClickHouse 241, 202, 159 → `refused` (K35); 210 `NETWORK_ERROR`, 209 `SOCKET_TIMEOUT`, 279 `ALL_CONNECTION_TRIES_FAILED` → `unreachable`; anything else → `Err` set, outcome `refused`.
+- Outcome mapping: an empty resolve and an empty or unmatched fallback window → `missed` (the next fetch of the need continues after its cursor); ClickHouse 241, 202, 159 → `refused` (K35); 210 `NETWORK_ERROR`, 209 `SOCKET_TIMEOUT`, 279 `ALL_CONNECTION_TRIES_FAILED` → `unreachable`; anything else → `Err` set, outcome `refused`.
 - `type RestoreConfig struct { Endpoint, Bucket, AccessKeyID, Secret string }` with redacting `String()` and `LogValue()`; `func NewRestore(conn clickhouse.Conn, cfg RestoreConfig, owner uint64) *RestoreSource` — restores, through Plan S3-C1's `dataplane/objstore` builder under `owner-<owner>/`, the owner's newest backup whose index object lists the need, into `<stage>.<scratch>_r`, then copies the needed part into the scratch with the local no-split `INSERT INTO <stage>.<scratch> SELECT * FROM <stage>.<scratch>_r WHERE _part = '<name>'` and drops `<scratch>_r` (so the scratch keeps the copy's storage policy for `ATTACH PARTITION … FROM`; row hashes are content hashes and survive the rewrite). A need no backup lists → `missed`.
 - Posture probes (`member/sources/posture.go`): `var ErrRemoteWritable = errors.New("sources: this user can write through remote()")`; `func CheckRemoteIsReadOnly(ctx context.Context, conn clickhouse.Conn, collection string) error` — `INSERT INTO FUNCTION remote(<collection>, database = 'hg_safe', table = 'si_member_write_probe') SELECT 1` must fail with 497 (`ACCESS_DENIED`); anything else wraps `ErrRemoteWritable` in `sources: INSERT INTO FUNCTION remote(%s) was not refused with ACCESS_DENIED (got %v): WRITE ON REMOTE must be absent`. `var ErrEngineFenceOff = errors.New("sources: the engine fence is off")`; `func CheckEngineFence(ctx context.Context, conn clickhouse.Conn, stageDB, probeTable string) error` — `CREATE TABLE <stageDB>.<probeTable> (x UInt8) ENGINE = Log` must fail with 497; on success the probe table is dropped and `ErrEngineFenceOff` is wrapped in `sources: ClickHouse accepted ENGINE = Log for this user: access_control_improvements.table_engines_require_grant is off or the user holds every engine`. `var ErrGrantsUnreadable = errors.New("sources: system.grants is not readable by this user")`; `type Grant struct { AccessType, Database, Table string }`; `func ReadOwnGrants(ctx context.Context, conn clickhouse.Conn) ([]Grant, error)` — `SELECT access_type, database, table FROM system.grants WHERE user_name = currentUser()`, never `SHOW GRANTS`; 497 wraps `ErrGrantsUnreadable`; `func CheckRemoteGrants(grants []Grant) error` — refuses `sources: system.grants shows no READ ON REMOTE for this user` and `sources: system.grants shows WRITE ON REMOTE for this user` (rows read as Task 31's ClickHouse test observes 26.3.37.3 rendering source grants; recorded in Appendix B).
 - Tests: `TestOwnerPullResolvesTheCurrentNameByHashOfAllFiles`, `TestOwnerPullFallsBackToTheRowHashWhenTheOwnerRebuiltItsParts`, `TestOwnerPullFiltersOnPartOnly`, `TestOwnerPullUsesTheNoSplitSettings`, `TestOwnerPullOfALargePartYieldsOnePart`, `TestOwnerPullMemoryLimitIsRefusedNotRetried`, `TestUnsafePullOfACleanedPartIsMissed`, `TestPullFromAnUnreachableOwnerIsUnreachable`, `TestPeerUnsafePullReadsTheNamedPoolCollection`, `TestRestoreSourceKeepsOnlyTheNeededPart` (MinIO; skipped without `S3_ENDPOINT` outside the confinement script), `TestRestoreConfigNeverPrintsItsKeys`, `TestCheckRemoteIsReadOnlyRefusesWriteOnRemote`, `TestCheckEngineFenceRefusesAServerWithoutTheFence`, `TestReadOwnGrantsNeverRunsShowGrants`, `TestCheckRemoteGrantsNeedsReadAndNoWrite` (all but the pure ones ClickHouse-gated).
@@ -25501,13 +26203,14 @@ Plan S3-E1 Task 63 keeps the member's `checkpoint_seq` in its own file `checkpoi
 - `type Outcome string` (metric label `outcome`): `kept`, `rename_race`, `split`, `doubled`, `foreign` (from Plan S3-C1's scratch classifier) and `missed`, `refused`, `unreachable` (from §22.1); every value always exported.
 - `type TableState struct { Owner uint64; TableKey string; IncarnationSeq uint64; Copy, SchemaHash string; Entry replay.TrackFrontier; SnapshotID string; Diverged, Foreign bool }`.
 - `type Stats struct { Outcomes map[Outcome]uint64; Installs map[string]uint64; DivergedPartitions map[uint64]uint64; AuditRuns map[string]uint64; AuditDroppedTwins uint64; AuditClean, InstallsPaused bool; DiskUsedBytes, DiskBudgetBytes uint64 }`.
-- `func New(cfg Config, d Deps) (*Installer, error)`; `func (i *Installer) Apply(ctx context.Context, u manifestfeed.Update) error` (every ready copy of every configured owner whose journal is not at `u.SnapshotID` is brought to `u.Manifest`, then that owner's journal entry becomes (`u.SnapshotID`, `u.Entries[owner]`)); `func (i *Installer) Audit(ctx context.Context, trigger string) error` (triggers `startup`, `clickhouse_restart`, `self_audit`); `func (i *Installer) DropStaleScratch(ctx context.Context) error`; `func (i *Installer) Entry(owner uint64) (OwnerJournal, bool)`; `func (i *Installer) Tables(owner uint64) []TableState`; `func (i *Installer) Stats() Stats`; `func ClearForeign(stateDir, tableKey string) error` (offline: refuses while the state directory is locked, §23.1).
-- `Apply` is idempotent: the role re-runs it with the last accepted update whenever the copyset changes, so a copy that becomes ready between publications is brought to the latest manifest; an owner's journal entry advances only once every ready copy of that owner closes at `u.Manifest`.
+- `func New(cfg Config, d Deps) (*Installer, error)`; `func (i *Installer) Apply(ctx context.Context, u manifestfeed.Update) error` (every ready copy of every configured owner whose journal is not at `u.SnapshotID` is brought to `u.Manifest`, then that owner's journal entry becomes (`u.SnapshotID`, `u.Entries[owner]`)); `func (i *Installer) Audit(ctx context.Context, trigger string) error` (triggers `startup`, `clickhouse_restart`, `self_audit`); `func (i *Installer) DropStaleScratch(ctx context.Context) error`; `func (i *Installer) Entry(owner uint64) (OwnerJournal, bool)`; `func (i *Installer) Tables(owner uint64) []TableState`; `func (i *Installer) Stats() Stats`; `func (i *Installer) NeedsPass() bool` (the audit the copies wait for has not completed, a ready copy is unaudited, or a ready copy of an owner without a quarantine has a Diverged partition or an unjournaled part: Apply of the last update has work without a new manifest; review fix 245-2); `func ClearForeign(stateDir, tableKey string) error` (offline: refuses while the state directory is locked, §23.1).
+- `Apply` is idempotent: the role re-runs it with the last accepted update whenever the copyset changes or `NeedsPass` holds, so a copy that becomes ready between publications is brought to the latest manifest and the damage an audit records is repaired while the watermark stands still (review fix 245-2); an owner's journal entry advances only once every ready copy of that owner closes at `u.Manifest`. Before every pass `Apply` audits each ready copy the last startup or restart audit did not cover (a copy the copyset made ready afterwards), and until then that copy is unaudited: `Stats.AuditClean` is false and its `TableState.Diverged` true (review fix 245-1).
+- Bootstrap restore probe (spec §8.6, the P1 backups are the bootstrap source; review fix 245-4): while an owner's journal holds no entry (`OwnerJournal.SnapshotID` empty), the first fetch of each of its copies tries the source named `restore` right before the one named `owner_pull` (a source in front of the owner pull stays in front), once per copy and process; every other fetch keeps the order of `Deps.Sources`. A probe that misses, is refused or unreachable moves to the next source like any other fetch.
 - Per partition p of copy T of owner O at target manifest S (spec §8.5): the needed set comes from Plan S3-C1's `member/gate` plan over (M, R, L) with L from the journal; Diverged → rebuild every part of M for p in a fresh scratch, then `ALTER TABLE <ReplicaDB>.<copy> DROP PARTITION <p>` and `ALTER TABLE <ReplicaDB>.<copy> ATTACH PARTITION <p> FROM <StageDB>.<scratch>`; Need → one fresh scratch per needed part (`ScratchIntent`), sources tried in order until the scratch classifier keeps it; unkept scratch parts dropped inside the scratch with `ALTER TABLE <StageDB>.<scratch> DROP PART '<name>'`; kept parts installed with `ALTER TABLE <ReplicaDB>.<copy> ATTACH PARTITION <p> FROM <StageDB>.<scratch>`; closure Σ(L) + Σ(kept) = R with `payloadexec.SumPartRowLtHashes`, and T's local partition set must equal S's. `REPLACE PARTITION` is never issued (`TestInstallNeverIssuesReplacePartition` greps the package and its SQL builders).
 - Refusals (verbatim): `install: partition %s of %s does not close: local %s + kept %s != root %s` (`ErrClosure`); `install: %s has partitions %v, manifest %s lists %v` (`ErrPartitionSet`); `install: no source delivered part %s of %s (%v); deferred until %s` (`ErrNoSourceSucceeded`, K35); `install: scratch %s holds a part manifest %s does not list; %s is quarantined locally` (`ErrForeign`, K36); `install: member disk budget exceeded (%d of %d bytes); installs paused` (`ErrInstallsPaused`, K35); `install: state dir %s is locked by a running si-member` (from `ClearForeign`).
 - Disk budget (K35): `SELECT sum(bytes_on_disk) FROM system.parts WHERE database IN ('<ReplicaDB>', '<StageDB>')` before each install pass; at or above `StopInstallsRatio × DiskBudgetBytes` installs pause. `DefaultStopInstallsRatio` stays 0.8; on devnet2 Plan S3-C3 configures `disk_budget_bytes` = the member disk's total and `stop_installs_ratio` 0.5, the P2 exit's 50 % (decision D28).
 - Startup audit and self-audit (spec §8.7): per copy, equal-(row hash, `hash_of_all_files`) twins keep the journaled name (else the smallest name) and drop the others with `ALTER TABLE <ReplicaDB>.<copy> DROP PART '<name>'`; any other mismatch with the journal marks the partition Diverged; unjournaled parts are adopted only under K36's rule; the self-audit additionally scans every partition in full through Plan S3-C1's partition content scan, at most once per `SelfAuditInterval`; `Audit(ctx, "clickhouse_restart")` runs from a `chrestart.Watcher`.
-- Tests: `TestInstallAppendsNeededPartsWithAttachPartitionFrom`, `TestInstallClosureFailureInstallsNothing`, `TestInstallPartitionSetMismatchInstallsNothing`, `TestInstallDivergedPartitionIsRebuiltWithDropAndAttach`, `TestInstallDivergedRepairSurvivesAReloadInsideTheOutdatedWindow` (`ARBITER_CH_RESTART`), `TestInstallNeverIssuesReplacePartition`, `TestInstallForeignScratchQuarantinesTheTableAndKeepsTheScratch`, `TestInstallRenameRaceRetriesOnceFromACleanScratch`, `TestInstallSplitFallsBackToTheNextSource`, `TestInstallDoubledRetryIsDroppedAndRetriedOnce`, `TestInstallRefusedPullFallsBackToRestoreAndDefers`, `TestInstallJournalsTheEntryPerOwner`, `TestInstallRecoversAPartAttachedBeforeTheJournalWrite`, `TestStartupAuditDropsEqualHashTwinsWithDropPart`, `TestStartupAuditMarksAnyOtherMismatchDiverged`, `TestAuditRerunsWhenClickHouseUptimeRegresses`, `TestStartupDropsOnlyThisNodesStageTables`, `TestInstallsPauseAboveTheDiskBudget`, `TestScratchNamesCarryTheNodeIDAndBootNonce`, `TestClearForeignRefusesWhileTheStateDirIsLocked`.
+- Tests: `TestInstallAppendsNeededPartsWithAttachPartitionFrom`, `TestInstallClosureFailureInstallsNothing`, `TestInstallPartitionSetMismatchInstallsNothing`, `TestInstallDivergedPartitionIsRebuiltWithDropAndAttach`, `TestInstallDivergedRepairSurvivesAReloadInsideTheOutdatedWindow` (`ARBITER_CH_RESTART`), `TestInstallNeverIssuesReplacePartition`, `TestInstallForeignScratchQuarantinesTheTableAndKeepsTheScratch`, `TestInstallRenameRaceRetriesOnceFromACleanScratch`, `TestInstallSplitFallsBackToTheNextSource`, `TestInstallDoubledRetryIsDroppedAndRetriedOnce`, `TestInstallRefusedPullFallsBackToRestoreAndDefers`, `TestInstallJournalsTheEntryPerOwner`, `TestInstallRecoversAPartAttachedBeforeTheJournalWrite`, `TestStartupAuditDropsEqualHashTwinsWithDropPart`, `TestStartupAuditMarksAnyOtherMismatchDiverged`, `TestAuditRerunsWhenClickHouseUptimeRegresses`, `TestStartupDropsOnlyThisNodesStageTables`, `TestInstallsPauseAboveTheDiskBudget`, `TestScratchNamesCarryTheNodeIDAndBootNonce`, `TestClearForeignRefusesWhileTheStateDirIsLocked`, `TestAStartWithACurrentJournalAuditsTheCopiesItFindsLater` (245-1), `TestAnAuditThatFindsDamageAsksForAPass` (245-2), `TestInstallBootstrapProbesTheRestoreOncePerCopy` (245-4).
 
 **22.4 `member/shadow` (Task 33, new package).**
 - `type MismatchKind string` with `MismatchReceipt = "receipt"`, `MismatchScan = "scan"`, `MismatchClaim = "claim"` (K34); metric label `kind`; every value always exported.
@@ -25531,8 +26234,8 @@ Plan S3-E1 Task 63 keeps the member's `checkpoint_seq` in its own file `checkpoi
 - `type Deps struct { Client *dataplane.Client; Conn clickhouse.Conn; Registry dataplane.RegistryView; Payloads replay.PayloadStore; AfterAttach func(tableKey, partitionID string) error; Logger *slog.Logger; Now func() time.Time }` — `AfterAttach` is passed to `install.Deps.AfterAttach` (a fault-injection seam for tests, nil in production).
 - `type OwnerStats struct { Copies int; Entry, PublishedEntry replay.TrackFrontier; BehindSince time.Time; DivergedPartitions uint64; DivergedTables, ForeignTables int; ShadowBlocks, ShadowMissedScans, ShadowUnverdicted uint64; ShadowMismatches map[shadow.MismatchKind]uint64 }` — `BehindSince` zero while the copy's entry equals the latest published one.
 - `type Stats struct { NodeID string; HostIndexerID uint64; Ready bool; Owners map[uint64]OwnerStats; InstallOutcomes map[install.Outcome]uint64; Installs map[string]uint64; FeedAccepted, FeedRefused, FeedFullFetches uint64; AuditRuns map[string]uint64; AuditDroppedTwins uint64; AuditClean, InstallsPaused, GrantsUnreadable bool; DiskUsedBytes, DiskBudgetBytes uint64; UnconfiguredOwners []uint64; ShadowNextBlockSeq uint64 }` — every configured peer, outcome, source, trigger and mismatch kind is present with zeros.
-- `func New(cfg Config, d Deps) (*Role, error)`; `func (r *Role) Run(ctx context.Context) error`; `func (r *Role) Ready() bool` (true once the startup audit is clean and every peer's copies reached a manifest); `func (r *Role) Stats() Stats`.
-- Startup, in this order (binding): (1) take an exclusive `flock` on `<StateDir>/LOCK` (`member: state dir %s is locked by a running si-member`); (2) `ddl.ValidateMemberPinned`, and the host never a peer (`member: %d is the host's own indexer; a member never copies its host`); (3) `ddl.EnsureMemberDatabases` (so the probe below has its database; creating an engine-less database is harmless); (4) `sources.CheckEngineFence` (probe table `NodePrefix(NodeID) + "engine_probe"` in `StageDB`); (5) `sources.CheckRemoteIsReadOnly` for every peer and pool collection, then `ReadOwnGrants` / `CheckRemoteGrants` (`ErrGrantsUnreadable` tolerated and exported); (6) `dataplane.WaitReady` on the registry, `copyset.CheckNodeIDUnused` against the snapshot and `Client.PurgeNodeSet`, every peer enrolled in `si_indexers` (`member: peer indexer %d is not enrolled in si_indexers`), and the genesis check below; (7) `DropStaleScratch`; (8) `Audit(ctx, "startup")`; (9) run the copyset, the follower feeding `Installer.Apply`, the `chrestart.Watcher`, the self-audit ticker and, when `Shadow`, the shadow verifier. No step before (9) writes a copy. Enrolled owners that are neither peers nor the host are listed in `Stats.UnconfiguredOwners`.
+- `func New(cfg Config, d Deps) (*Role, error)`; `func (r *Role) Run(ctx context.Context) error`; `func (r *Role) Ready() bool` (true once the startup audit is clean, every ready copy was audited, and every peer's copies reached a manifest); `func (r *Role) Stats() Stats`.
+- Startup, in this order (binding): (1) take an exclusive `flock` on `<StateDir>/LOCK` (`member: state dir %s is locked by a running si-member`); (2) `ddl.ValidateMemberPinned`, and the host never a peer (`member: %d is the host's own indexer; a member never copies its host`); (3) `ddl.EnsureMemberDatabases` (so the probe below has its database; creating an engine-less database is harmless); (4) `sources.CheckEngineFence` (probe table `NodePrefix(NodeID) + "engine_probe"` in `StageDB`); (5) `sources.CheckRemoteIsReadOnly` for every peer and pool collection, then `ReadOwnGrants` / `CheckRemoteGrants` (`ErrGrantsUnreadable` tolerated and exported); (6) `dataplane.WaitReady` on the registry, `copyset.CheckNodeIDUnused` against the snapshot and `Client.PurgeNodeSet`, every peer enrolled in `si_indexers` (`member: peer indexer %d is not enrolled in si_indexers`), and the genesis check below (Plan S3-E1 Task 63 refines step (6) for a member with `Config.Consensus`: its own id in the purge node set (its own VERIFIER registration) is accepted; an SNode's id and an id the registry serves as another host's group member are still refused); (7) `DropStaleScratch`; (8) the first `copyset.Reconcile` (it creates and drops copy tables, never installs a part), then `Audit(ctx, "startup")` over the copies it made ready (review fix 245-1); (9) run the copyset, the follower feeding `Installer.Apply`, the copy watch (it re-applies the last update when the ready copies change or `Installer.NeedsPass` holds, review fix 245-2), the `chrestart.Watcher`, the self-audit ticker and, when `Shadow`, the shadow verifier. No step before (9) installs a part. Enrolled owners that are neither peers nor the host are listed in `Stats.UnconfiguredOwners`.
 - Refusals (verbatim, besides those of §21–§22): `member: node id %q must match ^[a-z][a-z0-9-]{0,30}[a-z0-9]$`; `member: poll interval %s is below 1s`; `member: stop_installs_ratio must satisfy 0 < ratio < 1, got %v`; `member: disk budget is required`; `member: genesis table %s schema hashes to %s, the genesis manifest records %s` and `member: genesis tables %v differ from the genesis manifest's %v` (the genesis set checked at startup against the genesis manifest read through the feed's `Store`, `TableSchemaHash(NetworkID, t)` against each `TableManifest.SchemaHash`).
 - Tests: `TestRoleRefusesToStartWithoutTheEngineFence`, `TestRoleRefusesAWritableRemote`, `TestRoleRefusesANodeIDInUse`, `TestRoleRefusesAPeerThatIsNotEnrolled`, `TestRoleRefusesGenesisTablesThatDifferFromTheGenesisManifest`, `TestRoleRefusesASecondProcessOnTheStateDir`, `TestRoleCallsOnlyReadRPCs`, `TestRoleStatsExportEveryKeyIncludingZeros`, `TestRoleListsUnconfiguredOwners`, `TestRoleIsReadyOnlyAfterACleanAuditAndAManifest`, `TestLocalNodeFeaturesAreUnchangedThroughP2`.
 
@@ -25688,7 +26391,7 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 - Stock clickhouse-server users.xml (25.8 and 26.3) gives default access_management and named_collection_control, so CLICKHOUSE_SKIP_USER_SETUP=1 servers can create users and collections in the tests.
 - Bazel BUILD for member/sources generated by gazelle offline; library deps //:arbiter-core, //dataplane/chparts, //dataplane/ddl, //dataplane/objstore, clickhouse-go, @housegate//pkg/replay, /chexec, /payloadexec.
 - The member's sources reach only ClickHouse (own server, and through it the owner's, a verifier's or the object store), never the arbiter; nothing Raft-reachable.
-- Names added while drafting: sources.Outcomes() []Outcome; sources.SourceNames() []string; sources.SourceOwnerPull = "owner_pull"; sources.SourcePeerUnsafePull = "peer_unsafe_pull"; sources.SourceRestore = "restore"; sources.SourceOwnerUnsafePull = "owner_unsafe_pull"; sources.NeedOfManifestPart(p replay.PartManifestEntry) Need; sources.NeedOfCandidatePart(c arbiter.CandidatePart) Need; sources.DefaultMaxFallbackCandidates = 8; sources.NoFallback = -1 (set by NewOwnerUnsafePull and NewPeerUnsafePull); sources.RestoreIndexRetryAttempts = 3 (s3_retry_attempts of the restore's index read); sources.Grant fields AccessObject string and PartialRevoke bool (after the contract's AccessType, Database, Table); ReadOwnGrants query: SELECT access_type, database, table, access_object, is_partial_revoke FROM system.grants WHERE user_name = currentUser(); outcome mapping: ClickHouse 519 NO_REMOTE_SHARD_AVAILABLE -> unreachable (besides 210, 209, 279); temporary tables <scratch>_c<k> (row-hash fallback candidates) and <scratch>_r (restore staging), both dropped by the fetch; RestoreConfig.GoString and RestoreSource String/GoString/LogValue (redacting); failure text form: sources: <source>: <step>: <error>; refusal: sources: %s: collection %q must be one ClickHouse identifier ([A-Za-z_][A-Za-z0-9_]*); refusal: sources: %s: a pull needs a source database and table, got %q.%q; refusal: sources: scratch needs a database and a table, got %q.%q; refusal: sources: collection %q must be one ClickHouse identifier ([A-Za-z_][A-Za-z0-9_]*) (CheckRemoteIsReadOnly); refusal: sources: drop a leftover engine fence probe %s.%s: %w; refusal: sources: the engine fence probe CREATE TABLE %s.%s ... ENGINE = Log failed without the TABLE ENGINE refusal: %w; refusal: sources: read system.grants: %w; extension tests TestNeedsOfManifestAndCandidateParts, TestOutcomeOfClickHouseErrors; test helpers statementLog, fakeConn, fakeRows, recordingConn, memberServer, pair, requirePair, randomHex, suffix, mustExec, cleanup, testSchema, sourceDatabase, createSourceTable, insertPart, partRow, partsOf, scanOf, createUser, createReader, createCollection, ownerCollection, memberUser, newScratch, tablesIn, clickHouseCode, queryLog, requireOnePart, pullSchema, stripLiterals, siMemberGrantRows, s3Env, requireS3, ptr, largeRows, readerPartsColumns; CI: integration-clickhouse exports CH_PEER_ADDR=127.0.0.1:${port_b} and CH_PEER_ADDR_FROM_SERVER=${ch_b}:9000, target //member/sources:sources_test, --test_env=CH_PEER_ADDR --test_env=CH_PEER_ADDR_FROM_SERVER; commit subjects: feat(member/sources): byte sources and startup posture probes of the si-member; ci: run the member byte sources' ClickHouse tests in integration-clickhouse
+- Names added while drafting: sources.Outcomes() []Outcome; sources.SourceNames() []string; sources.SourceOwnerPull = "owner_pull"; sources.SourcePeerUnsafePull = "peer_unsafe_pull"; sources.SourceRestore = "restore"; sources.SourceOwnerUnsafePull = "owner_unsafe_pull"; sources.NeedOfManifestPart(p replay.PartManifestEntry) Need; sources.NeedOfCandidatePart(c arbiter.CandidatePart) Need; sources.DefaultMaxFallbackCandidates = 8; sources.NoFallback = -1 (set by NewOwnerUnsafePull and NewPeerUnsafePull); sources.RestoreIndexRetryAttempts = 3 (s3_retry_attempts of the restore's index read); sources.Grant fields AccessObject string and PartialRevoke bool (after the contract's AccessType, Database, Table); ReadOwnGrants query: SELECT access_type, database, table, access_object, is_partial_revoke FROM system.grants WHERE user_name = currentUser(); outcome mapping: ClickHouse 519 NO_REMOTE_SHARD_AVAILABLE -> unreachable (besides 210, 209, 279); temporary tables <scratch>_c<k> (row-hash fallback candidates) and <scratch>_r (restore staging), both dropped by the fetch; RestoreConfig.GoString and RestoreSource String/GoString/LogValue (redacting); failure text form: sources: <source>: <step>: <error>; refusal: sources: %s: collection %q must be one ClickHouse identifier ([A-Za-z_][A-Za-z0-9_]*); refusal: sources: %s: a pull needs a source database and table, got %q.%q; refusal: sources: scratch needs a database and a table, got %q.%q; refusal: sources: collection %q must be one ClickHouse identifier ([A-Za-z_][A-Za-z0-9_]*) (CheckRemoteIsReadOnly); refusal: sources: drop a leftover engine fence probe %s.%s: %w; refusal: sources: the engine fence probe CREATE TABLE %s.%s ... ENGINE = Log failed without the TABLE ENGINE refusal: %w; refusal: sources: read system.grants: %w; fallback partition-id query SELECT partitionId(<chparts.QuotePartition value>) and its per-need cursor (name > '<cursor>', maxFallbackCursors = 1024; review fix 245-3); extension tests TestNeedsOfManifestAndCandidateParts, TestOutcomeOfClickHouseErrors, TestOwnerPullFallbackListsAfterItsCursor, TestOwnerPullFallbackScopesTheNeededPartition; test helpers statementLog, fakeConn, fakeRows, recordingConn, memberServer, pair, requirePair, randomHex, suffix, mustExec, cleanup, testSchema, sourceDatabase, createSourceTable, insertPart, partRow, partsOf, scanOf, createUser, createReader, createCollection, ownerCollection, memberUser, newScratch, tablesIn, clickHouseCode, queryLog, requireOnePart, pullSchema, stripLiterals, siMemberGrantRows, s3Env, requireS3, ptr, largeRows, readerPartsColumns; CI: integration-clickhouse exports CH_PEER_ADDR=127.0.0.1:${port_b} and CH_PEER_ADDR_FROM_SERVER=${ch_b}:9000, target //member/sources:sources_test, --test_env=CH_PEER_ADDR --test_env=CH_PEER_ADDR_FROM_SERVER; commit subjects: feat(member/sources): byte sources and startup posture probes of the si-member; ci: run the member byte sources' ClickHouse tests in integration-clickhouse
 - Verified while drafting: Applied every Create block of task-31.md to a fresh git-archive export (origin/main 8f0bc43 plus contract stubs for chtest (S3-A T4), chparts and objstore (S3-C1 T23/T24), ddl.MemberPinned/ScratchIntent (T30) and housegate chexec.ScanAllParts (HG_TAG_P1) via a scratch replace module): the 13 files are byte-identical to the verified sources; gofmt clean, go vet clean, GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go test (plain and -race) pass. / ClickHouse-gated run on a fenced 26.3.51.7 member (contract §23.4 access-control file) + unfenced 26.3.51.7 owner + a local path-style S3 stand-in: 17/17 tests PASS, 0 SKIP. / CI-shaped run on two unfenced 25.8.28.1 servers with S3-A Task 4's default password overlay and CH_USER/CH_PASSWORD: 16 PASS, 1 SKIP (restore, no S3), 0 FAIL. / Bazel offline: bazel run //:gazelle generated the BUILD.bazel embedded in Step 10 exactly; bazel test //member/sources:sources_test PASSED, also with --@rules_go//go/config:race (housegate via --override_module to the stubbed copy); the red phase (tests without sources) FAILED TO BUILD with undefined: ident, NoSplitSettings, literal, Scratch, Grant, Result, too many errors, as Step 5 states. / Step 11 runner executed end to end (bash -s, own docker network, cleanup trap) with only two substitutions (local 26.3 tag for 26.3.37.3, host S3 stand-in for MinIO): printed '25.8: 16 passed, 1 skipped, 0 failed' and '26.3: 17 passed, 0 skipped, 0 failed', removed every container and the network. / Step 13's ci.yml script run against base ci.yml, the S3-A Task 4 version reconstructed from the S3-A plan, and a later version with chparts/copyset/shadow targets and the mechanics job: inserts at lines 102/114/117, 5 insertions, refuses a second run, YAML parses, actionlint clean. / bash -n on all six bash blocks (placeholders substituted) and shellcheck clean on them, including the Step 11 inner script; markdown check: fences balanced, no hard-wrapped prose, no TODO/TBD/placeholder text.
 
 ### Task 32
@@ -25735,7 +26438,7 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 - Against a server without the access-control file the suite fails as it should: ServerIsTheExpectedImage, the three engine tests, HoldsEveryRightItsRoleNeeds (CheckEngineFence reports the fence off) and both si_member_ddl tests.
 - The task schedules the deployed-image run (Step 17) before the PR and release. Step 19 then checks the release tag carries exactly the member/ tree and runner files the deployed run passed on.
 - Cross-task names beyond the contract that the role consumes, each checked in Step 1 and present in the sibling drafts: manifestfeed.FollowerStats and (*Follower).Stats (Task 29), install.LockFile, install.TriggerStartup / TriggerClickHouseRestart / TriggerSelfAudit and the eight install.Outcome* constants (Task 32), shadow.MismatchKinds (Task 33). copyset.Deps.Dropped stays nil because Task 32 ignores a dropped copy's journal.
-- Names added while drafting: Refusals beyond contract §23.1: `member: Pinned.NodeID %q differs from NodeID %q`, `member: NetworkID is required`, `member: GenesisSnapshotID is required`, `member: StateDir is required`, `member: self-audit interval %s is below %s`, `member: at least one peer is required`, `member: peer %d collection %q is not a ClickHouse identifier`, `member: pool collection %q is not a ClickHouse identifier`, `member: Deps.Client, Deps.Conn and Deps.Registry are required`, `member: shadow verification needs Deps.Payloads`, `member: peer indexer %d is listed twice`; Wrapped errors: `member: create state dir %s: %w`, `member: open %s: %w`, `member: lock state dir %s: %w`, `member: create the member databases: %w`, `member: read this user's grants: %w`, `member: table registry: %w`, `member: read the purge node set: %w`, `member: read the genesis manifest %s: %w`, `member: boot nonce: %w`, `member: copyset: %w`, `member: installer: %w`, `member: shadow: %w`, `member: drop this node's stage tables: %w`, `member: read the ClickHouse start time: %w`, `member: startup audit: %w`, `member: <part>: %w` (copyset, feed, copy watch, restart watcher, self-audit, shadow); slog lines (attrs role=si-member, node_id): `member: started`, `member: system.grants is not readable by this user; the behavioural remote() probe stands alone`, `member: first copyset pass failed; the copyset retries`, `member: the journaled manifest is not readable; the feed starts from the watermark`, `member: install pass for changed copies failed; the next check retries`, `member: ClickHouse restarted; auditing the copies`, `member: restart audit failed; the next restart or self-audit reruns it`, `member: self-audit failed; the next interval reruns it`; Unexported test seams `seams` (ensureDatabases, checkEngineFence, checkRemoteIsReadOnly, readOwnGrants, startedAt, watchRestarts, newCopySet, newInstaller, newShadow) and part interfaces copySet, installer, shadowVerifier; `member.LockFile` defined as `install.LockFile`; Tests beyond contract §23.1: TestNewRefusesAnInvalidConfig, TestRoleRunsTheStartupStepsInOrder, TestClearForeignRefusesWhileTheRoleHoldsTheStateDir, TestRoleRefusesTheHostAsAPeer, TestRoleToleratesUnreadableGrants, TestRoleRefusesUnreadableGrantsForAnyOtherReason, TestRoleOffersAFailedUpdateAgain, TestRoleReappliesTheLastUpdateWhenCopiesChange, TestRoleResumesFromTheJournaledManifest, TestRoleCountsRefusedManifests, TestRoleAuditsAfterAClickHouseRestart (22 member tests in all); Confinement test beyond contract §23.3: TestConfinement_SIMemberHasNothingOnTheProtocolDatabases (so the runner counts 14, not 13); the suite's Go lists siMemberGrants / siMemberDDLGrants; the opt-in failure `ARBITER_CH_MEMBER_CONFINEMENT=1 requires <missing env>` and the skip message `set ARBITER_CH_MEMBER_CONFINEMENT=1 and run scripts/ci/clickhouse-member-confinement.sh <image> <version prefix>`; Suite log lines for the run record: `confinement server <CH_ADDR|CH_PEER_ADDR>: image <image>, ClickHouse <version>, up <n>s`, `confinement: <what>: accepted|refused (<code>)` (CREATE DATABASE <db> ENGINE = Memory as si_member; remote() with an explicit address and login as si_member; CREATE VIEW in <db> as si_member; RESTORE FROM S3 without READ ON S3), `confinement: system.grants as si_member: unreadable|readable (<n> rows)`; Runner extras: `--cleanup` mode, env ARBITER_CH_MEMBER_CONFINEMENT_FILTER and ARBITER_CH_PLATFORM, containers arbiter-core-member-{confined,peer,minio}-<run id>-<attempt> (aliases si-confined, si-peer, si-minio) on network arbiter-core-member-<run id>-<attempt>, MinIO image minio/minio:RELEASE.2024-12-18T13-15-44Z, bucket si-confinement, a second run of //member/sources:sources_test with the gate line `sources: <n> ClickHouse test(s) passed on <image>`; CI step names `member confinement on upstream 26.3.37.3` and `stop the confinement servers`; Cut Release step names `validate member confinement` and `stop the confinement servers`; Evidence files beyond contract §20.4: confinement-deployed.head, confinement-deployed.date (with confinement-ci.log and confinement-deployed.log)
+- Names added while drafting: Refusals beyond contract §23.1: `member: Pinned.NodeID %q differs from NodeID %q`, `member: NetworkID is required`, `member: GenesisSnapshotID is required`, `member: StateDir is required`, `member: self-audit interval %s is below %s`, `member: at least one peer is required`, `member: peer %d collection %q is not a ClickHouse identifier`, `member: pool collection %q is not a ClickHouse identifier`, `member: Deps.Client, Deps.Conn and Deps.Registry are required`, `member: shadow verification needs Deps.Payloads`, `member: peer indexer %d is listed twice`; Wrapped errors: `member: create state dir %s: %w`, `member: open %s: %w`, `member: lock state dir %s: %w`, `member: create the member databases: %w`, `member: read this user's grants: %w`, `member: table registry: %w`, `member: read the purge node set: %w`, `member: read the genesis manifest %s: %w`, `member: boot nonce: %w`, `member: copyset: %w`, `member: installer: %w`, `member: shadow: %w`, `member: drop this node's stage tables: %w`, `member: read the ClickHouse start time: %w`, `member: startup audit: %w`, `member: <part>: %w` (copyset, feed, copy watch, restart watcher, self-audit, shadow); slog lines (attrs role=si-member, node_id): `member: started`, `member: system.grants is not readable by this user; the behavioural remote() probe stands alone`, `member: first copyset pass failed; the copyset retries`, `member: the journaled manifest is not readable; the feed starts from the watermark`, `member: install pass for changed copies or outstanding repairs failed; the next check retries` (text widened by review fix 245-2), `member: ClickHouse restarted; auditing the copies`, `member: restart audit failed; the next restart or self-audit reruns it`, `member: self-audit failed; the next interval reruns it`; Unexported test seams `seams` (ensureDatabases, checkEngineFence, checkRemoteIsReadOnly, readOwnGrants, startedAt, watchRestarts, newCopySet, newInstaller, newShadow) and part interfaces copySet, installer, shadowVerifier; `member.LockFile` defined as `install.LockFile`; Tests beyond contract §23.1: TestNewRefusesAnInvalidConfig, TestRoleRunsTheStartupStepsInOrder, TestClearForeignRefusesWhileTheRoleHoldsTheStateDir, TestRoleRefusesTheHostAsAPeer, TestRoleToleratesUnreadableGrants, TestRoleRefusesUnreadableGrantsForAnyOtherReason, TestRoleOffersAFailedUpdateAgain, TestRoleReappliesTheLastUpdateWhenCopiesChange, TestRoleResumesFromTheJournaledManifest, TestRoleCountsRefusedManifests, TestRoleAuditsAfterAClickHouseRestart (22 member tests in all); Confinement test beyond contract §23.3: TestConfinement_SIMemberHasNothingOnTheProtocolDatabases (so the runner counts 14, not 13); the suite's Go lists siMemberGrants / siMemberDDLGrants; the opt-in failure `ARBITER_CH_MEMBER_CONFINEMENT=1 requires <missing env>` and the skip message `set ARBITER_CH_MEMBER_CONFINEMENT=1 and run scripts/ci/clickhouse-member-confinement.sh <image> <version prefix>`; Suite log lines for the run record: `confinement server <CH_ADDR|CH_PEER_ADDR>: image <image>, ClickHouse <version>, up <n>s`, `confinement: <what>: accepted|refused (<code>)` (CREATE DATABASE <db> ENGINE = Memory as si_member; remote() with an explicit address and login as si_member; CREATE VIEW in <db> as si_member; RESTORE FROM S3 without READ ON S3), `confinement: system.grants as si_member: unreadable|readable (<n> rows)`; Runner extras: `--cleanup` mode, env ARBITER_CH_MEMBER_CONFINEMENT_FILTER and ARBITER_CH_PLATFORM, containers arbiter-core-member-{confined,peer,minio}-<run id>-<attempt> (aliases si-confined, si-peer, si-minio) on network arbiter-core-member-<run id>-<attempt>, MinIO image minio/minio:RELEASE.2024-12-18T13-15-44Z, bucket si-confinement, a second run of //member/sources:sources_test with the gate line `sources: <n> ClickHouse test(s) passed on <image>`; CI step names `member confinement on upstream 26.3.37.3` and `stop the confinement servers`; Cut Release step names `validate member confinement` and `stop the confinement servers`; Evidence files beyond contract §20.4: confinement-deployed.head, confinement-deployed.date (with confinement-ci.log and confinement-deployed.log)
 - Verified while drafting: Re-applied the final task-34.md mechanically (tools/apply_plan.py) to a fresh git archive of the scratch base 3ecbdc0. That base is arbiter-core 8f0bc43 plus stubs of Tasks 29–33 and S3-A Task 6; it was built by the interrupted run, and I did not rebuild it. The result is byte-identical (diff -r) to the tree that run had verified, `Task 34 verified tree v3`. / gofmt clean; GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go vet ./member/... clean; go test ./member/ passed all 22 tests, and again with -race; ./member/confinement skipped all 14 by default. / TDD red: with only the test files present, go test ./member/ fails with `member/role_test.go:213:13: undefined: Config` (plus undefined Peer, Role, New, Deps), matching Step 4. / Bazel 9.1.0, offline: `bazel run //:gazelle` leaves member/BUILD.bazel and member/confinement/BUILD.bazel unchanged, and both equal the task text. `bazel test //member:member_test //member/confinement:confinement_test` passed. The earlier run's `bazel test //...` passed all 17 targets. / Ran the runner again for real (bazel and docker) on clickhouse/clickhouse-server:26.3 with prefix 26.3. Only the image pulls and the MinIO container were swapped out, through a PATH docker shim and a local fake S3 on :18977. Exit 0, 14 PASS lines, the measured lines above, `confinement: 14 test(s) passed on clickhouse/clickhouse-server:26.3`, `sources: 1 ClickHouse test(s) passed …`; no container or network left behind. / Extracted all 30 bash/fish blocks from the final file and substituted the placeholders. bash -n and macOS /bin/bash 3.2 -n are clean for every bash block, and fish -n is clean for the fish block. shellcheck flags only the intended constructs listed in the task's Notes: SC2016 twice, SC2046, SC2086. / The runner passes bash -n, /bin/bash -n and shellcheck with no findings. The access-control XML passes xmllint and is verbatim to contract §23.4. Both modified workflows load with PyYAML and pass actionlint. / Ran Step 20's `s3-ledger.py set <plan> 34 <record> CORE_TAG_P2=… P2_CONFINEMENT=…` on a fresh scratch copy of Appendix C: it filled the two rows and the run-record item with its sub-items. / Text checks: no TBD, TODO or 'similar to Task'; no hard-wrapped prose; 5 commit messages, each ending with the Co-Authored-By trailer; every remote read or write, download, push, PR, merge, release workflow and ledger push is preceded by a line saying it needs explicit user confirmation in chat; the forbidden production clickhouse YAML files are never referenced.
 
 ### Task 35
@@ -25768,6 +26471,15 @@ Facts the drafters recorded while drafting and verifying each task in scratch ex
 - Script timeout 1800+15*blocks s: 1875 (5), 2550 (50), 9300 (500); CI job 60 min, member-soak.yml 180 min; gh workflow run --ref takes a branch, so Step 14 stops if the run's headSha is not the merge commit.
 - Names added while drafting: TestPipeline_TracksActivationOnTheHarnessSNode (new file integration/chpipeline/tracks_activation_test.go; also runs in the existing 25.8 integration-clickhouse job); startTracksHarness(t, conn clickhouse.Conn) *harness; harness fields authorityKeyHex string, claimSigner *authority.Signer, verifierRoles []*verifier.Role (harness_test.go); startVerifiers keeps roles and startSNode passes ClaimSigner (harness_roles_test.go); registerRC signs manual RCs when claimSigner is set (harness_fraud_test.go); constants tracksRegistryChainID, tracksRegistryDatabasesContract, tracksRegistryActivationBlock, tracksOwnerIndexerID, tracksOwnerSNodeID; type ownerWrite; helpers tracksL2Block, pollBarriered, isNotLeader, applyWithin, ownerEntryOf; (*harness) waitConsensusGenesis, leaderConsensusParams, leaderAdmin, tryConsensusUpdate, consensusUpdate, gatedConsensusUpdate, reregisterDataPlane, voterAdminAddresses, proposeRegistry, leaderApp, restartSNode, ownerEnrolment, verifierEntries, authorityContext, trackState, ownerTrack, waitOwnerTrack, waitTrackPublished, registrySnapshot, leaderFSM, writeOwnerStatement, blockOfStatement, requireOwnerBlock, latestManifest, releaseOwnerTrack; member harness: memberIntegrationEnv, memberAddrEnv, memberOwnerFromMemberEnv, memberSoakBlocksEnv, memberDefaultSoakBlocks (500), memberNodeID (member-test), memberHostIndexerID (1), memberOwnerCollection (si_owner_0), memberUser, memberReaderUser, memberDiskBudgetBytes, memberPublishTimeout (3m), memberSoakWindow (4), errMemberKilled, siMemberGrants, siReaderGrants, memberEnv, requireMemberCH, memberSoakBlocks, memberTestPassword, mustExecMember, openMemberCH, memberLogger, memberRun, memberHandle methods start/afterAttach/current/requireRunning/waitMember/patience/waitReady/waitKilled/waitShadowPast/copyTable/copyPartNames/copyRowHashes/journaledParts/requireCopyEqualsLatestManifest, requireNoShadowMismatches, requireHealthyMember, shortHashes, writeAndPublish; fsm test helpers wireIncarnationStatus, wireIncarnationOrigin, wireRetireReason, wireRegistrySnapshot, requireManifestOwnersAgree; script env ARBITER_CH_MEMBER_IMAGE (local override, default clickhouse/clickhouse-server:26.3.37.3; CI never sets it) and the users.d file zz-si-member-admin.xml (named_collection_control for the member server's default user), copied into the container with docker cp; script refusal 'test-clickhouse-member: <binary> is not an executable chpipeline test binary' and output lines 'test-clickhouse-member: 4 member tests passed on <image>' / 'test-clickhouse-member: member soak: ...'; CI step names 'build data-plane test binary' and 'member copies, fraud, kill and the 50-block shadow soak' (500 in member-soak.yml)
 - Verified while drafting: Scratch exports under work/c2/task-36: arbiter origin/main with replace to arbiter-core origin/main plus ManifestOwner (Task 29's text) and a simulation stub of member/install/shadow/sources and ddl member names (owner-pull installs with ATTACH PARTITION ID FROM, journal in the contract shape, startup adoption, a shadow that only counts sealed owner blocks); GOWORK=off GOFLAGS=-mod=mod GOPROXY=off go vet/test. / Red states observed as written: fsm/manifest_owner_wire_test.go:82:27 'snap.ManifestOwner undefined'; tracks_activation_test.go:17:7 'undefined: startTracksHarness'; member_test.go:46:2 'undefined: requireMemberCH'. / TestManifestTableOwnerMatchesWireManifestOwner passes (5 subtests); six mutations of the ported rule (no Refused skip, any origin, nil owner as 0, oldest first, genesis needing add block, Active instead of add block) each fail it. / Whole chpipeline package + fsm package on clickhouse/clickhouse-server:25.8 (25.8.28.1): all existing tests PASS unchanged, TestPipeline_TracksActivationOnTheHarnessSNode PASS, the four member tests SKIP. / scripts/test-clickhouse-member.sh end to end with ARBITER_CH_MEMBER_IMAGE=clickhouse/clickhouse-server:26.3 (26.3.51.7) and the stub member: 5 blocks and 50 blocks (three runs), four PASS lines and 'member soak: owner 0: 50 blocks, 0 mismatches, 0 missed scans, 0 unverdicted', no containers left; 50-block soak took 5-10 min on a laptop at load average 20-55 (other drafters' containers). / Harness mutations with the stub: journaling before the AfterAttach hook fails the kill test ('every attached part ... is journaled'); copying hg_unsafe rows into the copy fails the fraud test ('the copy holds the Rejected statement's row 901'); a missing startup adoption failed the kill test (duplicate part). / Script gates checked with fake binaries: missing PASS line and a soak below the requested count both fail; argument refusals exit 2 with the contract text; bash -n and shellcheck clean on the script and on all 28 bash blocks of the task (placeholders substituted). / actionlint clean on ci.yml and member-soak.yml; buildifier -mode=check clean on both BUILD.bazel files; gofmt -l empty; the generated markdown re-applied to a fresh git archive of arbiter origin/main reproduces every scratch file byte for byte and compiles. / s3-ledger.py (verbatim from Plan S3-C1 §19) set dry-run on a synthetic S3-C2 Appendix C records ARBITER_PIN_P2 (40 hex) and P2_INTEGRATION_SOAK and the run-record item with sub-items starting '--- PASS'. / Not run: Bazel and gazelle (offline registries, tags not yet cut); the real member.Role of Tasks 29-34 (not built yet; Step 10 is its first run); docker image 26.3.37.3 was not pulled.
+
+### Review fixes (AgentConnect round 1)
+
+- **245-1, the startup audit covered no copy (Task 34 `member/role.go`, Task 32 `member/install`).** A fresh `copyset.Reconciler` reports no copy before its first pass, and the role ran that pass only in step (9), after `Audit(ctx, "startup")`; the audit iterated zero ready copies and set `auditDone`. On a restart with the journal at the watermark, the first pass then created a missing copy again empty (or kept an altered one), `ownerCurrent` skipped it because its journal entry matched, and `AuditClean`, `Ready` and the entry metrics reported success. Fixed: step (8) runs `chrestart.StartedAt`, the first `copyset.Reconcile` (it creates and drops copy tables, installs no part) and then the startup audit over the copies it made ready; the installer keeps the set of copies the last startup or restart audit covered (`audited`, reset by those triggers, filled per copy that audited cleanly), and `Apply` audits every ready copy outside it before its pass (`auditUncovered`, error `install: audit the copies the last audit did not cover: %w`, info `install: auditing a copy the last audit did not cover`), while `Stats.AuditClean` is false and `TableState.Diverged` true for such a copy. Contract §22.3, §23.1 (step (8), "no step before (9) installs a part"), Task 32's and 34's Notes and Review Focus 3 changed with it. Tests: `TestAStartWithACurrentJournalAuditsTheCopiesItFindsLater` (a restart with a current journal, one copy recreated empty and one with a journaled part dropped, both reported Diverged and rebuilt by `Apply` of the journaled manifest), `TestRoleAuditsTheCopiesTheFirstCopysetPassMadeReady`, and `TestRoleRunsTheStartupStepsInOrder` with `copyset reconcile` before `audit startup`. Verified on a scratch export of arbiter-core `cfd4f42` with Plan S3-C1's `chparts` and `member/gate`, Task 29's feed, Task 30's `ddl` member intents and copyset, Task 31's sources and stubs of `objstore`, `shadow` and Plan S3-C1's housegate helpers: `go vet` clean; `//member/install` 25 PASS and 1 SKIP (the restart test) on ClickHouse 26.3.51.7 with `-race` and on 25.8.28.1, the restart test PASS against a `--restart always` 26.3 server; `//member` 24 PASS with `-race`; against the original `installer.go`, `audit.go` and `role.go` the new tests fail (`AuditClean true, NeedsPass false with ready copies the audit never covered`, `the startup audit saw [0] ready copies`, the startup steps).
+- **245-2, an audit's Diverged mark waited for a publication (Task 34 `member/role.go`, Task 32).** The copy watch re-applied the last update only when the ready copies changed, and the follower offers nothing while the watermark stands still, so a partition a startup, restart or self-audit marked Diverged was rebuilt only at the next publication. Fixed: `Installer.NeedsPass()` (a pending audit, an unaudited ready copy, a Diverged partition or an unjournaled part, outside an owner with a quarantined table) and the copy watch re-applies the last update when the copies changed or `NeedsPass` holds; the warn line became `member: install pass for changed copies or outstanding repairs failed; the next check retries`; a failing pass is retried at the next tick, the follower's own cadence for a failed update. Contract §22.3 (`NeedsPass`, the idempotence rule) and §23.1, Task 34's Notes and Review Focus 3 changed with it. Tests: `TestAnAuditThatFindsDamageAsksForAPass` (a self-audit and then a restart audit each find a journaled part gone; `NeedsPass` holds until `Apply` of the same manifest rebuilds the partition, and the journal stays at that manifest) and `TestRoleRepairsWhatAnAuditFoundWithoutANewManifest` (one repair pass of the last update with a fixed watermark and copy set, none after it). Verified in the exports of 245-1; both fail against the original code (`NeedsPass` shimmed to false; `timed out waiting for a repair pass of the last update`).
+- **245-3, the row-hash fallback ignored the partition (Task 31 `member/sources/remote_pull.go`).** Spec §8.6 asks for candidates of the same partition and row count; the listing filtered on the row count only and applied `LIMIT 8` in name order, so nine parts of the row count in partitions whose `partition_id` sorts first hid the needed part on every fetch. Reproduced on 25.8.28.1 and 26.3.51.7 through a `NOT OVERRIDABLE` collection as a reader with `si_reader`'s grants: of ten one-part partitions the unscoped listing never reached the tenth. Fixed: the fallback computes ClickHouse's `partition_id` of the need's logical partition on the member's own server (`SELECT partitionId('<value>')`, `all` without a query for an unpartitioned table; measured `partitionId(partition) = partition_id` for every part, quotes and backslashes included, and runnable without any grant) and filters on the granted `partition_id` column before the bound; within a partition a fetch whose full window kept nothing leaves its last name as the need's cursor and the next fetch lists after it (`AND name > '<cursor>'`, cleared by a short window or a kept part, at most 1024 remembered). Contract §22.1's fallback SQL, Task 31's Notes, Interfaces and counts (six pure, thirteen ClickHouse-gated tests) changed with it. Tests: `TestOwnerPullFallbackScopesTheNeededPartition` (ten partitions, the needed one sorting last, fetched with one candidate pull), `TestOwnerPullFallbackListsAfterItsCursor` (pure), `TestOwnerPullFallsBackToTheRowHashWhenTheOwnerRebuiltItsParts` now counting candidates within the partition, never pulling partition b's decoy, and continuing after its cursor, and `TestOwnerPullFiltersOnPartOnly` pinning the partition id query and the scoped listing. Verified on a scratch export (arbiter-core `cfd4f42`, stubs of `chparts.QuotePartition`, `chexec.ScanAllParts` and Task 30's `ScratchIntent`): `go vet` clean, every `member/sources` test of the export passes on a 26.3.51.7 pair and, with `-race`, on a 25.8.28.1 pair; the two ClickHouse tests fail against the original `remote_pull.go` (`want fetched from the needed partition`, `want fetched after the cursor`).
+- **245-4, Plan S3-C3's bootstrap required a restore the install order never made (Task 32 `member/install`, Plan S3-C3 runbook §9).** The P2 order tries the owner pull first, so with healthy owners every part came by owner pull and Plan S3-C3's mandatory `installs_total{source="restore"} > 0` stopped a successful rollout. Fixed with a bounded initial restore policy, spec §8.6's bootstrap source: while an owner's journal holds no entry, the first fetch of each of its copies tries the source named `restore` right before the one named `owner_pull` (`sourcesFor`, `restoreBeforeOwnerPull`; a source in front of the owner pull stays in front), once per copy and process; every other part keeps the P2 order. One probe per copy costs one partition restore (Task 31's restore copies one part per `RESTORE`; restoring every part of a bootstrap would restore each partition once per part), installs that part from the newest backup that lists it and proves the member's restore path; a probe that misses, is refused or unreachable moves on like any fetch. Contract §22.3, Task 32's Notes and Review Focus 2 changed with it, and Plan S3-C3's runbook §9, §14.1 and contract §27.6 say where the restore installs come from. Tests: `TestInstallBootstrapProbesTheRestoreOncePerCopy` (two copies: two restore installs and one owner pull; a journaled owner keeps the P2 order; a probe that misses and a pass that then fails do not probe again) and `TestRestoreBeforeOwnerPullKeepsTheOtherSourcesInOrder` (pure); `TestInstallRefusedPullFallsBackToRestoreAndDefers` journals its owner at an empty `s0` first, so its passes keep the P2 order. Verified in the exports of 245-1 (both fail against the original installer: `restore 0, owner pull 3`); Plan S3-C3's §9 validator, run on a sample with probe installs, prints `bootstrap ok`, and on an owner-pull-only sample still fails.
+- **Found while verifying the review fixes (Task 34 `member/role_test.go`).** The harness's `readOwnGrants` seam returned no rows and no error, which the real `sources.CheckRemoteGrants` refuses (`sources: system.grants shows no READ ON REMOTE for this user`), so fifteen role tests that start the role failed against Task 31's code (the drafting run used a stub). The seam now returns the confined `si_member`'s readable row `READ ON REMOTE`; with it all 24 role tests pass.
+- **Cross-plan (Plan S3-E1's review fix, its finding 2).** K29 and contract §23.1 step (6) note that Plan S3-E1 Task 63 refines step (6) for a member with `Config.Consensus`: its own id in the purge node set (its own VERIFIER registration) is accepted, and an SNode's id and an id the registry serves as another host's group member are still refused. Without `Config.Consensus` step (6) is this plan's; no code here changes.
 
 ## Appendix C: execution record
 
